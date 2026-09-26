@@ -127,7 +127,7 @@ def bootstrap_interval(
     return (mean - q * scale, mean + q * scale)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Verdict:
     """One test's outcome after its family's multiplicity correction. Only ``label`` is a finding;
     ``pvalue`` is raw and ``adjusted`` corrected, both NaN when no test was performed."""
@@ -148,7 +148,7 @@ def correct_family(pvalues: Sequence[float], *, alpha: float = ALPHA) -> list[Ve
     return out
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Ratio:
     """One arm-vs-arm ratio: two parameters, each with its own point and interval.
 
@@ -212,7 +212,7 @@ class Ratio:
         return self.change.method == "underpowered"
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Efficacy:
     """An intervention as a point ``(rho_S, rho_C)`` in the score-cost plane, plus the ranking proxy
     ``Q = w_S ln rho_S + w_C ln rho_C``: 0 at no effect, ``exp(Q)`` one multiplicative effect, negated

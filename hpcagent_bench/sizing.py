@@ -814,7 +814,7 @@ def derive_ladder(
 TIME_UNIT_BYTES: int = 1 << 30
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class KernelCost:
     """What one kernel is predicted to cost at one preset, or why nothing can be predicted.
 

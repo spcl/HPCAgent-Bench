@@ -81,7 +81,7 @@ def family_members(family: str) -> tuple[str, ...]:
     return tuple(name for name in KNOWN_BACKENDS if SPELLINGS[name].family == family)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class WrapperSpelling:
     """How one backend spells its launch flags (one row of the file).
 

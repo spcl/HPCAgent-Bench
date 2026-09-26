@@ -33,14 +33,14 @@ if TYPE_CHECKING:
     from crawl4ai import AsyncWebCrawler, CrawlerRunConfig
 
 
-@dataclass
+@dataclass(slots=True)
 class SearchResult:
     title: str
     url: str
     snippet: str
 
 
-@dataclass
+@dataclass(slots=True)
 class CrawledPage:
     title: str
     url: str

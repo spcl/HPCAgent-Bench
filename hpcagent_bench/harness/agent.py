@@ -371,7 +371,7 @@ class AnthropicOptions(TypedDict, total=False):
     top_p: float
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Sampling:
     """The decoding knobs of a model-backed agent -- one object instead of a kwarg per backend.
 

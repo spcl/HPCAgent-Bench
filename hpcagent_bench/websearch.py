@@ -84,7 +84,7 @@ class WebSearchError(RuntimeError):
     """A configuration or transport failure in a web-search call."""
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class WebSearchConfig:
     """How to search -- a config object, never a bag of positional strings.
 
@@ -105,7 +105,7 @@ class WebSearchConfig:
             raise ValueError(f"max_results must be >= 1, got {self.max_results!r}")
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class SearchResult:
     """One normalized hit."""
 
@@ -114,7 +114,7 @@ class SearchResult:
     content: str = ""
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class SearchResponse:
     """A provider-independent search result set."""
 

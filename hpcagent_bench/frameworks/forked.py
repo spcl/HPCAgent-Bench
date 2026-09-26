@@ -153,7 +153,7 @@ def is_core_dumping(pid: int) -> bool:
     return False
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class RunResult[ResultT]:
     """Outcome of a forked run (frozen, so a RunResult of a concrete payload type reads as one of any
     wider type, as forked_failure_reason and the OOM classifier do): ``ok`` is the success signal; on failure ``signal``/``error`` name the

@@ -2604,7 +2604,7 @@ def explicit_fill(kind: str | None) -> str | None:
     return None if (kind is None or kind in ("empty", "empty_like", "ndarray")) else kind
 
 
-@dataclasses.dataclass
+@dataclasses.dataclass(slots=True)
 class LocalGroups:
     """A kernel's zeros locals by where they are declared."""
 

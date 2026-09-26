@@ -623,7 +623,7 @@ def cache_levels(expressions: Sequence[str]) -> tuple[str, ...]:
     return tuple(sorted({level for expr in expressions for level in CACHE_LEVEL.findall(expr)}))
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Ratio:
     """One derived number: what it divides by what, the metrics it needs, how to read it. The formula
     ships with the value.
@@ -795,7 +795,7 @@ class CounterScope:
     fallback: str | None
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class CountedRun:
     """What one counted run saw, per thread and per event. :func:`counting_worker` sums it,
     :func:`count_per_thread` keeps the rows: both read the same measurement. ``per_thread`` holds the
@@ -1511,7 +1511,7 @@ VENDOR_DEVICES: dict[str, pathlib.Path] = {"nvidia": NVIDIA_DEVICE, "amd": AMD_D
 VENDOR_COMPONENTS: dict[str, tuple[str, ...]] = {"nvidia": ("cuda", "nvml"), "amd": ("rocm", "rocm_smi")}
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class GpuEvent:
     """One vendor's answer to a metric: component, event name, and the event's unit (vendors differ:
     bytes vs kilobytes, milliwatts vs microwatts)."""
@@ -1521,7 +1521,7 @@ class GpuEvent:
     unit: str
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class GpuMetric:
     """One question, answered per vendor or explicitly not. ``candidates`` maps vendor -> its event
     ladder (spellings or generations of the same quantity), resolved against :func:`native_events`;

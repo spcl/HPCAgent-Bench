@@ -16,7 +16,7 @@ price table so a report can be re-priced without re-running.
 from dataclasses import dataclass
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class TokenUsage:
     """Cumulative token counts for one agent over a task (or a whole run).
 

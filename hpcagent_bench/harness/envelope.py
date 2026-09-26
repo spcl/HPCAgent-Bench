@@ -104,7 +104,7 @@ def validate_distribution(dist: object) -> None:
         )
 
 
-@dataclass
+@dataclass(slots=True)
 class Submission:
     """One agent answer for a task."""
 

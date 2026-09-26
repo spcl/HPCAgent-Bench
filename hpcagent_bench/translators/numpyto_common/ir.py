@@ -68,7 +68,7 @@ def apply_precision(kir: "KernelIR", precision: str | None) -> "KernelIR":
 SYMBOL_ASSUMPTIONS = ("", "nonnegative", "positive")
 
 
-@dataclass
+@dataclass(slots=True)
 class SymbolDesc:
     """One scalar shape / scale parameter (always integer-typed).
 
@@ -96,7 +96,7 @@ class SymbolDesc:
             raise ValueError(f"symbol {self.name!r}: {self.assumption!r} is not one of {SYMBOL_ASSUMPTIONS}")
 
 
-@dataclass
+@dataclass(slots=True)
 class ArrayDesc:
     """One array parameter.
 
@@ -129,7 +129,7 @@ class ArrayDesc:
             raise ValueError(f"array {self.name!r}: {self.dtype!r} is not a known dtype") from None
 
 
-@dataclass
+@dataclass(slots=True)
 class ScalarDesc:
     """One scalar (non-shape) parameter -- e.g. ``alpha`` in GEMM."""
 
@@ -147,7 +147,7 @@ class ScalarDesc:
         self.dtype = dtypes.canonical(self.dtype)
 
 
-@dataclass
+@dataclass(slots=True)
 class SparseArrayDesc:
     """A logical sparse array that expands into physical buffer arrays.
 
@@ -170,7 +170,7 @@ class SparseArrayDesc:
     buffers: dict[str, str]
 
 
-@dataclass
+@dataclass(slots=True)
 class KernelIR:
     """The full kernel: function-def AST + parameter tables.
 

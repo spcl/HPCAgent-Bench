@@ -125,7 +125,7 @@ def pick_dirs(given: dict[str, PromptField], key: str) -> tuple[str, ...]:
     return tuple(str(d) for d in as_list(raw))
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True, slots=True)
 class PromptConfig:
     """How a prompt is assembled: every knob is a ``prompt.*`` config key with a default, read once by
     :func:`from_config`. Covers all three override levels (template dirs, these knobs, a full
@@ -364,7 +364,7 @@ def prompt_env(prompt_config: "PromptConfig | None" = None) -> jinja2.Environmen
 #: trigger.
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True, slots=True)
 class Skill:
     """One ``skills/<name>/SKILL.md``: YAML frontmatter (``name``, ``description``, optional ``when``)
     and body. ``when`` is the trigger for opening the page; it falls back to ``description``."""
@@ -899,7 +899,7 @@ def _load_generator(spec: str) -> PromptGenerator:
     return vars(importlib.import_module(module_name))[func_name]
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True, slots=True)
 class RunPrompt:
     """One run's prompt: the static body rendered once, finished per attempt (:meth:`attempt` appends
     the feedback, strips host paths and adds the debug footer). A ``prompt.generator`` is instead

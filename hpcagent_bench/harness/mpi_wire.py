@@ -82,7 +82,7 @@ def _read_scalar8(raw: bytes, type_code: int):
     return float(struct.unpack_from("<d", raw)[0])
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class PtrPlan:
     """One pointer array's per-rank partition (the driver's view of an infile array)."""
 
@@ -94,7 +94,7 @@ class PtrPlan:
     tiles: list[np.ndarray]  # the nranks owned tiles, dtype-typed, local-shaped
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class ParsedInfile:
     """The infile decoded for the mpi4py driver -- fully self-describing (no binding needed)."""
 

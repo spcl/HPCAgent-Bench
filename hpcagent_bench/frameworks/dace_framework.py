@@ -379,7 +379,7 @@ class PipelineContext:
     symbols: dict[str, int] = field(default_factory=dict[str, int])
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class SdfgPipeline:
     """One SDFG optimizer: it transforms a copy of the parsed SDFG, selects library implementations
     and, on GPU, offloads it."""

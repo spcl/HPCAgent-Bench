@@ -29,7 +29,7 @@ RAY_PORT = 6379
 POLL_INTERVAL = 5.0
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class RankRole:
     """The role a single rank plays: endpoint index, and this endpoint's head rank.
 

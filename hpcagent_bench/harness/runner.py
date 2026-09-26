@@ -235,7 +235,7 @@ def optional_float(dotted: str) -> float | None:
     return None if config.get(dotted, None) is None else config.get_float(dotted)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class AttemptBudget:
     """What ends the attempt loop: a round cap, a wall-clock cap, or both (``None`` = not applied);
     whichever binds first. Checked before starting an attempt, so a running attempt finishes and is

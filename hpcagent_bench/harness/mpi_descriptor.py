@@ -19,7 +19,7 @@ if TYPE_CHECKING:  # hints only; the math core stays free of binding/envelope im
 AXIS_SCHEMES = ("block", "block_cyclic", "cyclic")
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class AxisDist:
     """How ONE array axis is laid out: replicated (grid_dim=None) or split by scheme; no ghost cells."""
 
@@ -28,7 +28,7 @@ class AxisDist:
     block_size: int = 1
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class ArrayDist:
     """One logical array's distribution: one AxisDist per dimension, or replicated=True for the whole array."""
 
@@ -36,7 +36,7 @@ class ArrayDist:
     replicated: bool = False
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Grid:
     """The processor grid (math.prod(dims) == rank count); N-D generalization of ScaLAPACK's BLACS grid."""
 
@@ -383,7 +383,7 @@ def _symbol_axes_from_binding(binding: "Binding") -> dict[str, list[tuple[str, i
     return out
 
 
-@dataclass
+@dataclass(slots=True)
 class Descriptor:
     """The resolved MPI distribution for one (submission, binding) pair: an N-D, per-array ScaLAPACK DESCA analog."""
 

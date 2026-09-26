@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class DTypeInfo:
     """All representations of one canonical dtype."""
 
