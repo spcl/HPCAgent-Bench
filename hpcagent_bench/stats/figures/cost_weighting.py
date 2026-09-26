@@ -116,15 +116,14 @@ DODGE_SPAN: float = 0.6
 
 TYPE: plotstyle.TypeScale = plotstyle.PRINT_SCALE
 WIDTH_IN: float = plotstyle.ICLR_WRAP_WIDTH_IN
-#: A quarter under 0.735 (user, 2026-09-26: the figure sits beside a paragraph, not in its own row);
-#: earlier 0.735 was 50% taller than a too-short 0.49.
-BODY_HEIGHT_IN: float = 0.55 * plotstyle.PRINT_BODY_HEIGHT_IN
+#: One row per weighting (user, 2026-09-26: vertical weight ticks were unreadable in the wrap), so the
+#: body grows with the rows it stacks.
+ROW_IN: float = 0.36
 
-#: Slot ticks by the weighting's name in the paper; the text gives each weight vector.
-TICKS: dict[Card, str] = {Card.EFFECTIVE: "eff", Card.BILLED: "bill", Card.TOTAL: "tot", Card.USD: r"\$"}
-#: The paper's name for rho_C = C_control / C_treated; above 1 the treated setup is cheaper.
-YLABEL: str = "Cost ratio"
-XLABEL: str = "Weighting"
+#: Row labels: the weighting's name in the paper, whose text gives each weight vector.
+TICKS: dict[Card, str] = {Card.EFFECTIVE: "Effective", Card.BILLED: "Billed", Card.TOTAL: "Total", Card.USD: "USD"}
+#: The paper's name for rho_C = C_control / C_treated; right of 1 the treated setup is cheaper.
+XLABEL: str = "Cost ratio"
 
 
 def arm_tokens(observations: pd.DataFrame, card: cost.CostModel, repeats: population.RepeatPolicy) -> dict:
@@ -205,13 +204,13 @@ def pair_styles(arms: Sequence[str]) -> dict[str, tuple[str, str]]:
     return styles
 
 
-def mark(ax: matplotlib.axes.Axes, x: float, row: object, hue: str, shape: str) -> None:
+def mark(ax: matplotlib.axes.Axes, y: float, row: object, hue: str, shape: str) -> None:
     """One estimate with its 95% interval, the interval omitted when too few kernels support one."""
     ok = math.isfinite(row.ci_low) and math.isfinite(row.ci_high)
     ax.errorbar(
-        x,
         row.rho_c,
-        yerr=[[row.rho_c - row.ci_low], [row.ci_high - row.rho_c]] if ok else None,
+        y,
+        xerr=[[row.rho_c - row.ci_low], [row.ci_high - row.rho_c]] if ok else None,
         color=hue,
         marker=shape,
         markersize=TYPE.marker_size,
@@ -223,13 +222,13 @@ def mark(ax: matplotlib.axes.Axes, x: float, row: object, hue: str, shape: str) 
 
 
 def ratio_axis(ax: matplotlib.axes.Axes) -> None:
-    """The log2 ratio Y axis at print type sizes, with the no-change line."""
-    ax.axhline(1.0, color=plotstyle.REFERENCE, linewidth=1.0, linestyle=(0, (4, 3)), zorder=2)
-    ax.set_yscale("log", base=2)
-    plotstyle.value_axis(ax, "y", log_base=2.0)
-    ax.yaxis.set_major_formatter(FuncFormatter(plotstyle.ratio_tick))
+    """The log2 ratio X axis at print type sizes, with the no-change line."""
+    ax.axvline(1.0, color=plotstyle.REFERENCE, linewidth=1.0, linestyle=(0, (4, 3)), zorder=2)
+    ax.set_xscale("log", base=2)
+    plotstyle.value_axis(ax, "x", log_base=2.0)
+    ax.xaxis.set_major_formatter(FuncFormatter(plotstyle.ratio_tick))
     ax.tick_params(axis="both", labelsize=TYPE.tick_pt)
-    ax.set_ylabel(YLABEL, fontsize=TYPE.label_pt)
+    ax.set_xlabel(XLABEL, fontsize=TYPE.label_pt)
     plotstyle.despine(ax)
 
 
@@ -263,17 +262,16 @@ def figure_cost_points(
     arms = list(dict.fromkeys(drawn.arm_a))
     cards = list(dict.fromkeys(drawn.card))
     styles = pair_styles(arms)
-    body_in = BODY_HEIGHT_IN
+    body_in = ROW_IN * (len(cards) + 1)
     fig, ax = plt.subplots(figsize=(width, body_in))
     step = DODGE_SPAN / max(1, len(arms))
     for i, arm in enumerate(arms):
         hue, shape = styles[arm]
         for row in drawn[drawn.arm_a == arm].itertuples():
             mark(ax, cards.index(row.card) + (i - (len(arms) - 1) / 2) * step, row, hue, shape)
-    ax.set_xticks(range(len(cards)))
-    ax.set_xticklabels([TICKS[Card(card)] for card in cards])
-    ax.set_xlim(-0.6, len(cards) - 0.4)
-    ax.set_xlabel(XLABEL, fontsize=TYPE.label_pt)
+    ax.set_yticks(range(len(cards)))
+    ax.set_yticklabels([TICKS[Card(card)] for card in cards])
+    ax.set_ylim(len(cards) - 0.4, -0.6)
     ratio_axis(ax)
     handles: list = [
         Line2D([], [], color=styles[a][0], marker=styles[a][1], linestyle="", label=labels.get(a, a)) for a in arms

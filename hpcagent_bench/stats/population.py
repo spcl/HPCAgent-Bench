@@ -23,8 +23,8 @@ left the baseline standing and that is a real outcome of the arm. Both are legit
 answer different questions, so :class:`ArmAggregate` stores which one it is and :func:`ratio`
 refuses to divide one by the other.
 
-The ``served`` roster is the kernels the arm has a RECORDED observation for, never the full roster:
-an unserved kernel is a scheduling fact, not a failure, and entering one at 1.0 would score an arm
+The ``served`` roster is the kernels the arm RAN (:func:`ran_rows`), never the full roster: a
+kernel it never ran is a scheduling fact, not a failure, and entering one at 1.0 would score an arm
 on how long its job ran. A snapshot of an unfinished campaign therefore reports both columns.
 """
 
@@ -244,7 +244,27 @@ def condition_rows(frame: "pd.DataFrame") -> "pd.DataFrame":
     if "arm" not in frame.columns:
         raise MixedPopulationError("cannot select the conditions of a frame without an arm column")
     labels = frame["arm"].fillna("").astype(str).str.strip()
-    return frame[~labels.isin(PSEUDO_ARMS)]
+    return ran_rows(frame[~labels.isin(PSEUDO_ARMS)])
+
+
+#: Records that show an arm RAN a kernel: a graded answer, accepted or not, or a judge call. The call
+#: is the score route on a scored arm; a blind arm has no score tool and calls submit or verify.
+RAN_RECORDS: frozenset[str] = frozenset({"submission", ATTEMPT_RECORD, "call"})
+
+
+def ran_rows(frame: "pd.DataFrame") -> "pd.DataFrame":
+    """The rows of every ``(arm, kernel)`` the arm RAN: at least one :data:`RAN_RECORDS` row.
+
+    A kernel with no graded answer and no judge call (its job hit the time limit first, or it is
+    still queued; only a ``task`` row) is left out of that arm's population, tokens included, rather
+    than entered as a failure (user, 2026-09-26). One the arm ran and never solved stays, at 1x
+    under ``served`` and unsolved under ``solved``. The rows stay in the database.
+    """
+    if not {"record", "arm", "benchmark"} <= set(frame.columns):
+        return frame
+    key = frame["arm"].fillna("").astype(str) + "\x1f" + frame["benchmark"].fillna("").astype(str)
+    ran = set(key[frame["record"].isin(RAN_RECORDS)])
+    return frame[key.isin(ran)]
 
 
 def complete_arms(frame: "pd.DataFrame", roster: Sequence[str]) -> tuple[list[str], dict[str, int]]:
@@ -1177,11 +1197,14 @@ def align(aggregates: Sequence[ArmAggregate]) -> list[ArmAggregate]:
     return [item.restricted_to(shared) for item in aggregates]
 
 
-def coverage(left: ArmAggregate, right: ArmAggregate, roster: Collection[str] = ()) -> Coverage:
+def coverage(
+    left: ArmAggregate, right: ArmAggregate, roster: Collection[str] = (), within: Collection[str] | None = None
+) -> Coverage:
     """What restricting ``left`` and ``right`` to their shared kernels keeps and drops.
 
     ``roster`` is the set both arms were asked for, which is what makes ``n_neither`` -- the kernels
-    neither reached -- a number rather than an assumption. Without it that count is 0.
+    neither reached -- a number rather than an assumption. Without it that count is 0. ``within``
+    is the kernels BOTH arms ran (:func:`ran_rows`): one only a single arm ran pairs with nothing.
 
     Over the kernels each arm DELIVERED, not over its population. Under ``served`` the two
     populations are both the whole roster and comparing them would report perfect agreement on every
@@ -1189,6 +1212,8 @@ def coverage(left: ArmAggregate, right: ArmAggregate, roster: Collection[str] = 
     did not.
     """
     lhs, rhs = set(left.delivered_kernels()), set(right.delivered_kernels())
+    if within is not None:
+        lhs, rhs = lhs & set(within), rhs & set(within)
     return Coverage(
         n_both=len(lhs & rhs),
         n_only_left=len(lhs - rhs),
