@@ -91,11 +91,6 @@ def build_parser() -> argparse.ArgumentParser:
         "--kernels", nargs="+", default=[], help="per-kernel figure: the kernels that get a panel, in order"
     )
     parser.add_argument(
-        "--geomean-panel",
-        action="store_true",
-        help="per-kernel figure: add a last panel with each setup's geomean over all its kernels",
-    )
-    parser.add_argument(
         "--no-torch-dist", action="store_true", help="leave out the torch.distributed baseline curve (arm torch_dist)"
     )
     parser.add_argument("--out", type=pathlib.Path, default=pathlib.Path("figures/scaling"))
@@ -145,8 +140,7 @@ def draw(curves: list[scaling.Curve], args: argparse.Namespace) -> list[pathlib.
     for name in wanted:
         if name == "per-kernel":
             fig = scaling.figure_per_kernel(
-                curves, args.mode, args.quantity, width=width, type_=type_, kernels=args.kernels,
-                geomean_panel=args.geomean_panel,
+                curves, args.mode, args.quantity, width=width, type_=type_, kernels=args.kernels
             )  # fmt: skip
             stem = args.out.with_name(f"{args.out.name}-per-kernel-{args.mode}")
         elif name == "mode-grid":

@@ -657,7 +657,7 @@ def llr40_rows(
 
 
 #: A panel's height in the llr-focus40 compiler figure, inches: what 40 kernels need to read at the
-#: text width the figure prints at, not what the canvas can spare (``--panel-height`` overrides it).
+#: text width the figure prints at, not what the canvas can spare.
 LLR40_PANEL_HEIGHT_IN: float = 1.5
 
 

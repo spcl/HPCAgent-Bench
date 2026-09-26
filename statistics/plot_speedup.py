@@ -69,10 +69,7 @@ import matplotlib.pyplot as plt  # noqa: E402 -- must follow plotting's backend 
 #: and strokes are the shared print scale.
 DENSE: style.TypeScale = style.PRINT_SCALE
 
-#: The square embed is placed at a fraction of its natural size, so it keeps the author scale.
-SQUARE: style.TypeScale = style.AUTHOR_SCALE
-
-#: The bare/mini/square embed variants are read at a fraction of their natural size, so they keep a
+#: The bare/mini embed variants are read at a fraction of their natural size, so they keep a
 #: larger share of the shared scale than the dense multi-panel figure above does.
 EMBED_SCALE: float = 0.85
 
@@ -637,50 +634,6 @@ def mini_figure(points: Sequence[Point], kernels: Sequence[str], output: str, bo
     return plotting.save_figure(output, fig)
 
 
-#: How many boxes the square figure shows in total. Four is what fits one small square panel while
-#: each still reads as a distribution rather than a bar; past that the boxes narrow faster than the
-#: figure gains meaning. With two frameworks that is two kernels, grouped.
-SQUARE_CELLS: int = 4
-
-#: The square figure's side, in inches. Sized for an embed (a slide corner, a README header), which
-#: is why what is dropped is dropped rather than shrunk -- text that has to be scaled down to fit is
-#: text that will not be read at this size.
-SQUARE_SIDE: float = 3.3
-
-#: Frame weight. Heavier than a default axes spine on purpose: this figure is placed at a fraction
-#: of its natural size, and a hairline frame is the first thing to vanish there -- before the boxes,
-#: which is the wrong order for the element that tells a reader where the panel ends.
-SQUARE_BORDER: float = 1.8
-
-
-def square_kernels(points: Sequence[Point], cells: int = SQUARE_CELLS) -> tuple[list[str], list[str]]:
-    """The kernels and frameworks the square figure shows: one band, complete groups.
-
-    Two constraints. **One band**, because a single ``> 10x`` cell sets a y range in which every
-    other box collapses to a line -- the same "one outlier flattens everything" problem the banded
-    layout exists to solve, except a square panel has no second band to move it to.
-
-    **Complete groups**, because the figure's claim is a comparison: a kernel where only one
-    framework has a box invites reading the gap as a result rather than as missing data. So a kernel
-    ships only if every plotted framework has a cell for it, and the kernel count is whatever fits
-    ``cells`` boxes at that group size.
-
-    Selection then ALTERNATES between speedups and slow-downs, so a two-kernel figure cannot show
-    only wins while the band it came from also holds losses. At this size the figure is the summary
-    somebody actually reads, and one that quietly drops the regressions is the wrong summary.
-    """
-    frameworks = sorted({point.framework for point in points})
-    if not frameworks:
-        return [], []
-    want = max(1, cells // len(frameworks))
-    for band in (BAND_MID, BAND_LOW, BAND_HIGH):
-        inside = [point for point in points if point.band == band]
-        complete = complete_kernels(inside, set(frameworks))
-        if complete:
-            return alternate_signs(inside, complete, want), frameworks
-    return [], frameworks
-
-
 def complete_kernels(points: Sequence[Point], frameworks: set[str]) -> list[str]:
     """The kernels, in first-seen order, that hold a cell for every one of ``frameworks``."""
     by_kernel: dict[str, set[str]] = {}
@@ -710,85 +663,6 @@ def group_change(points: Sequence[Point], kernel: str) -> float:
     """
     changes = [point.change for point in points if point.kernel == kernel]
     return sum(changes) / len(changes) if changes else 0.0
-
-
-def square_ticks(low: float, high: float) -> list[float]:
-    """Y ticks for the square panel: the axis's LANDMARKS, plus the extremes they do not reach.
-
-    ``-1``, ``0`` and ``+1`` are not arbitrary round numbers on this axis -- they are 2x slower,
-    unchanged, and 2x faster. A generic locator picks whatever is round in the data's range and
-    routinely omits them: on a -1.6 .. 4.3 panel it chose ``0.0`` and ``2.5``, which left the figure
-    unable to say whether a box below zero was a small regression or a catastrophic one.
-
-    So the landmarks inside the range are always ticked, and the outermost whole numbers are added
-    only where the landmarks stop short -- few enough labels to stay readable at embed size.
-    """
-    ticks = [value for value in (-1.0, 0.0, 1.0) if low <= value <= high]
-    if not ticks:
-        return [round(low), round(high)]
-    top = float(math.floor(high))
-    if top > max(ticks):
-        ticks.append(top)
-    bottom = float(math.ceil(low))
-    if bottom < min(ticks):
-        ticks.insert(0, bottom)
-    return ticks
-
-
-def square_figure(points: Sequence[Point], output: str, cells: int = SQUARE_CELLS) -> str:
-    """One square panel: both frameworks on ONE axis, grouped and dodged per kernel.
-
-    Mirrors the banded figure's reading -- same hue per framework, same dodge, same signed-change
-    axis -- with the band machinery removed, since a square panel shows one band. Keeps the three
-    things the figure cannot be read without: the kernel names, a ``Speedup`` y label, and a legend
-    naming the frameworks. Drops the band title, which a single-band panel does not need.
-
-    Sized for the figure being SMALL: three y ticks rather than matplotlib's seven (at 120 px seven
-    labels are a grey smear), larger type than the banded figure, and wide boxes, since a box
-    thinner than its own outline stops reading as a distribution.
-    """
-    kernels, frameworks = square_kernels(points, cells)
-    if not kernels:
-        raise RuntimeError("the square figure needs at least one kernel with a cell for every framework")
-    colors = framework_colors(points)
-    offsets = framework_offsets(frameworks, 0.78)
-    width = 0.78 / len(frameworks)
-    x_of = {kernel: i for i, kernel in enumerate(kernels)}
-    style.apply()
-    fig, ax = plt.subplots(figsize=(SQUARE_SIDE, SQUARE_SIDE))
-    for framework in frameworks:
-        mine = [p for p in points if p.framework == framework and p.kernel in x_of]
-        artists = ax.boxplot(
-            [list(p.samples) or [p.change] for p in mine],
-            positions=[x_of[p.kernel] + offsets[framework] for p in mine],
-            widths=width * 0.92,
-            patch_artist=True,
-            manage_ticks=False,
-            showfliers=False,
-            medianprops=dict(color=style.INK, linewidth=SQUARE.line_width),
-        )
-        paint_boxes(artists, colors[framework], 0.7, SQUARE.line_width)
-    square_axes(ax, kernels)
-    style.legend_below(fig, box_handles(colors, 0.7), ncol=len(frameworks), y=-0.02, fontsize=SQUARE.legend_pt)
-    return plotting.save_figure(output, fig)
-
-
-def square_axes(ax, kernels: Sequence[str]) -> None:
-    """The square panel's chrome: zero line, kernel names, ``Speedup`` label, landmark y ticks, frame."""
-    ax.axhline(0.0, color=style.REFERENCE, linewidth=SQUARE.line_width)
-    ax.set_xticks(range(len(kernels)))
-    ax.set_xticklabels(kernels, fontsize=SQUARE.tick_pt)
-    ax.set_xlim(-0.55, len(kernels) - 0.45)
-    ax.set_ylabel("Speedup", fontsize=SQUARE.label_pt, labelpad=-1.0)
-    ax.set_yticks(square_ticks(*ax.get_ylim()))
-    ax.tick_params(axis="y", labelsize=SQUARE.tick_pt, length=3, width=SQUARE.line_width, pad=1.0)
-    ax.tick_params(axis="x", length=0, pad=2.0)
-    ax.grid(axis="y")
-    # All four spines kept, matching the violin panel this figure sits beside in the overview
-    # diagram -- the two are read together, so a frame on one and none on the other reads as two
-    # unrelated charts. Heavy, because at embed size a hairline frame disappears before the boxes do.
-    for spine in ax.spines.values():
-        spine.set_linewidth(SQUARE_BORDER)
 
 
 def variant_output(output: str, variant: str) -> str:
@@ -888,14 +762,8 @@ DEMO_SEED: int = 20260804
 #: Kernels are named generically for the same reason the frameworks below are: the numbers come out
 #: of a seeded generator, and a real short_name on synthetic data is an invitation to quote it.
 #: ``reporting_order`` groups unknown names under ``other``, which is the honest bucket for them.
-#: Ordered so the two the SQUARE figure selects -- the first mid-band win and the first mid-band
-#: slow-down -- are the ones named "kernel one" and "kernel two". A small embed labelled with
-#: "kernel four" and "kernel six" reads as an excerpt of something larger that is not shown.
 DEMO_CELLS: tuple[tuple[str, float, float, int], ...] = (
     ("kernel one", 2.2, 3.2, +1),
-    # Kept just past the 2x edge so the mirrored slow-down lands near -1 rather than deep in the
-    # band: the square figure shows these two together, and a loss of -7 would set a range in which
-    # the win beside it is a sliver.
     ("kernel two", 2.05, 2.5, -1),
     ("kernel three", 5.0, 9.5, +1),
     ("kernel four", 12.0, 45.0, +1),
@@ -955,7 +823,6 @@ def plot_demo(
     seed: int = DEMO_SEED,
     boxes: bool = False,
     compact: bool = False,
-    square: bool = False,
     bare: bool = False,
 ) -> list[str]:
     """Render the three figures from :func:`demo_points`; returns the paths written.
@@ -966,8 +833,6 @@ def plot_demo(
     """
     plotting.set_usetex(usetex)
     points = demo_points(seed)
-    if square:
-        return [square_figure(points, output)]
     kernels = plotted_kernels(points, order)
     return [
         banded_figure(points, kernels, output, boxes=boxes, compact=compact),
@@ -1034,13 +899,6 @@ def build_parser() -> argparse.ArgumentParser:
         "figure no longer states that it shows one band of several -- put that in the caption",
     )
     p.add_argument(
-        "--square",
-        action="store_true",
-        default=False,
-        help=f"write ONLY a square {SQUARE_SIDE}x{SQUARE_SIDE}in panel of {SQUARE_CELLS} boxes with no "
-        "title, legend or kernel names, for an embed. Implies --boxplot",
-    )
-    p.add_argument(
         "--output",
         default=PLOTS_DIR + "/speedup.pdf",
         help=f"PDF path family for the banded figure (default {PLOTS_DIR}/speedup.pdf); the two SVG "
@@ -1057,9 +915,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.output,
             order=args.order,
             usetex=not args.no_usetex,
-            boxes=args.boxplot or args.square,
+            boxes=args.boxplot,
             compact=args.compact,
-            square=args.square,
             bare=args.bare,
         ):
             print(path)

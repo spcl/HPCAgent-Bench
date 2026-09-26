@@ -3,7 +3,6 @@
 """The canon speedup figure: baseline selection, missing-kernel reporting, and reproducibility."""
 
 import contextlib
-import csv
 import importlib.util
 import pathlib
 import sqlite3
@@ -17,6 +16,7 @@ matplotlib.use("Agg")  # before any pyplot import -- a headless test must never 
 import matplotlib.pyplot as plt  # noqa: E402
 
 from hpcagent_bench import experiment_tags, paths
+from hpcagent_bench.stats import canon
 
 SPEC = importlib.util.spec_from_file_location("plot_canon_speedup", paths.ROOT / "statistics" / "plot_canon_speedup.py")
 plot_canon_speedup = importlib.util.module_from_spec(SPEC)
@@ -103,7 +103,7 @@ def test_a_rerun_of_the_plot_writes_byte_identical_png_pdf_and_table(
 
     for epoch, folder in (("0", "first"), ("86400", "second")):
         monkeypatch.setenv("SOURCE_DATE_EPOCH", epoch)
-        rc = plot_canon_speedup.run(db_path, tmp_path / folder, "numba", False)
+        rc = plot_canon_speedup.run(db_path, tmp_path / folder, "numba")
         assert rc == 0
 
     for name in ("canon_speedup.pdf", "canon_speedup.png", "canon_speedup.csv"):
@@ -118,7 +118,7 @@ def test_baseline_cc_works_on_a_native_only_db_with_no_numba_or_dace(tmp_path: p
     db_path = tmp_path / "canon.db"
     make_db(db_path, [row("cc", "k1", 200.0), row("cc", "k2", 25.0), row("cpp", "k1", 150.0), row("cpp", "k2", 20.0)])
 
-    rc = plot_canon_speedup.run(db_path, tmp_path / "out", "cc", False)
+    rc = plot_canon_speedup.run(db_path, tmp_path / "out", "cc")
 
     assert rc == 0
     table = (tmp_path / "out" / "canon_speedup.csv").read_text()
@@ -131,7 +131,7 @@ def test_the_default_baseline_missing_fails_clearly_instead_of_crashing(tmp_path
     db_path = tmp_path / "canon.db"
     make_db(db_path, [row("cc", "k1", 200.0), row("cpp", "k1", 150.0)])
 
-    rc = plot_canon_speedup.run(db_path, tmp_path / "out", "numba", False)
+    rc = plot_canon_speedup.run(db_path, tmp_path / "out", "numba")
 
     assert rc == 1
     assert not (tmp_path / "out").exists()
@@ -143,7 +143,7 @@ def test_the_written_table_names_the_baseline_row_as_the_baseline(tmp_path: path
     db_path = tmp_path / "canon.db"
     make_db(db_path, [row("numba", "k1", 100.0), row("cc", "k1", 200.0)])
 
-    plot_canon_speedup.run(db_path, tmp_path / "out", "numba", False)
+    plot_canon_speedup.run(db_path, tmp_path / "out", "numba")
 
     table = (tmp_path / "out" / "canon_speedup.csv").read_text().splitlines()
     assert any("numba" in line and "baseline" in line for line in table)
@@ -156,7 +156,7 @@ def test_read_status_keeps_an_unvalidated_row_as_false_not_dropped() -> None:
         [row("dace_cpu", "k1", 10.0), row("dace_cpu", "k2", 0.0, validated="False")], columns=CANON_FIELDS
     )
 
-    status = plot_canon_speedup.read_status(frame)
+    status = canon.read_status(frame)
 
     assert status["dace_cpu"] == {"k1": True, "k2": False}
 
@@ -167,7 +167,7 @@ def test_columns_option_draws_a_column_not_in_the_default_draw_set(tmp_path: pat
     db_path = tmp_path / "canon.db"
     make_db(db_path, [row("numba", "k1", 100.0), row("dace_cpu", "k1", 25.0)])
 
-    rc = plot_canon_speedup.run(db_path, tmp_path / "out", "numba", False, columns=["dace_cpu"])
+    rc = plot_canon_speedup.run(db_path, tmp_path / "out", "numba", columns=["dace_cpu"])
 
     assert rc == 0
     table = (tmp_path / "out" / "canon_speedup.csv").read_text()
@@ -178,63 +178,21 @@ def test_stem_option_renames_every_output_file(tmp_path: pathlib.Path) -> None:
     db_path = tmp_path / "canon.db"
     make_db(db_path, [row("numba", "k1", 100.0), row("cc", "k1", 200.0)])
 
-    rc = plot_canon_speedup.run(db_path, tmp_path / "out", "numba", False, stem="llr_full_speedup")
+    rc = plot_canon_speedup.run(db_path, tmp_path / "out", "numba", stem="llr_full_speedup")
 
     assert rc == 0
     assert (tmp_path / "out" / "llr_full_speedup.csv").exists()
     assert (tmp_path / "out" / "llr_full_speedup.png").exists()
 
 
-def test_per_kernel_csv_option_reports_validated_failed_counts_and_a_failed_kernel_row(
-    tmp_path: pathlib.Path,
-) -> None:
-    """A column that failed a kernel the baseline validated must show up as 'failed' in the
-    per-kernel csv and counted in the aggregate table's failed_n, never silently dropped."""
-    db_path = tmp_path / "canon.db"
-    make_db(
-        db_path,
-        [
-            row("numba", "k1", 100.0),
-            row("numba", "k2", 50.0),
-            row("cc", "k1", 200.0),
-            row("cc", "k2", 0.0, validated="False"),
-        ],
-    )
-
-    rc = plot_canon_speedup.run(db_path, tmp_path / "out", "numba", False, columns=["cc"], per_kernel_csv=True)
-
-    assert rc == 0
-    aggregate = list(csv.reader((tmp_path / "out" / "canon_speedup.csv").read_text().splitlines()))
-    header, cc_row = aggregate[0], aggregate[1]
-    assert header[-2:] == ["validated_n", "failed_n"]
-    assert cc_row[header.index("validated_n")] == "1"
-    assert cc_row[header.index("failed_n")] == "1"
-    per_kernel = (tmp_path / "out" / "canon_speedup_per_kernel.csv").read_text().splitlines()
-    header, *lines = per_kernel
-    assert header == "kernel,cc"
-    assert "k1,0.500000" in lines  # numba(baseline)/cc: 100/200
-    assert "k2,failed" in lines
-
-
-def test_the_default_title_is_the_canon_llr40_headline() -> None:
-    """Every reproduce.sh that never passes --title (every one committed so far) must keep drawing
-    exactly this string -- the byte-identical-rerun test only catches a change on canon's own db."""
+def test_the_title_is_the_canon_llr40_headline() -> None:
+    """Every reproduce.sh draws exactly this string; the byte-identical-rerun test only catches a
+    change on canon's own db."""
     rows = plot_canon_speedup.rows_for({"numba": {"k1": 1.0}, "cc": {"k1": 2.0}}, "numba", ["cc"])
 
-    fig, ax = plot_canon_speedup.draw(rows, "numba", False)
+    fig, ax = plot_canon_speedup.draw(rows, "numba")
 
     assert ax.get_title(loc="left") == plot_canon_speedup.DEFAULT_TITLE
-    plt.close(fig)
-
-
-def test_a_custom_title_replaces_the_default() -> None:
-    """A 248-kernel sweep must not draw the 40-kernel canon headline -- --title exists so a caller
-    with a different kernel count or sweep name can say so."""
-    rows = plot_canon_speedup.rows_for({"numba": {"k1": 1.0}, "cc": {"k1": 2.0}}, "numba", ["cc"])
-
-    fig, ax = plot_canon_speedup.draw(rows, "numba", False, title="Speedup over Numba, llr-full (248 kernels)")
-
-    assert ax.get_title(loc="left") == "Speedup over Numba, llr-full (248 kernels)"
     plt.close(fig)
 
 
@@ -248,7 +206,7 @@ def test_distribution_gives_a_compiler_baseline_a_different_color_than_a_dace_co
         "dace_cpu_canonicalize": {"k1": 40.0, "k2": 5.0},
     }
 
-    fig, ax = plot_canon_speedup.draw_distribution(times, "numba", ["cc", "dace_cpu_canonicalize"], False)
+    fig, ax = plot_canon_speedup.draw_distribution(times, "numba", ["cc", "dace_cpu_canonicalize"])
 
     lines_by_label = {
         line.get_label().split(" ")[0]: line.get_color() for line in ax.lines if not line.get_label().startswith("_")
@@ -263,7 +221,7 @@ def test_columns_option_draws_dace_gpu_with_its_own_label(tmp_path: pathlib.Path
     db_path = tmp_path / "canon.db"
     make_db(db_path, [row("numba", "k1", 100.0), row("dace_gpu", "k1", 10.0)])
 
-    rc = plot_canon_speedup.run(db_path, tmp_path / "out", "numba", False, columns=["dace_gpu"])
+    rc = plot_canon_speedup.run(db_path, tmp_path / "out", "numba", columns=["dace_gpu"])
 
     assert rc == 0
     label = experiment_tags.framework_name("dace_gpu")
@@ -277,7 +235,7 @@ def test_the_measured_speedup_is_on_the_y_axis_not_the_x_axis() -> None:
     CATEGORY (the compiler/framework column), which is why it is linear and ticked with names."""
     rows = plot_canon_speedup.rows_for({"numba": {"k1": 1.0, "k2": 1.0}, "cc": {"k1": 2.0, "k2": 0.5}}, "numba", ["cc"])
 
-    fig, ax = plot_canon_speedup.draw(rows, "numba", False)
+    fig, ax = plot_canon_speedup.draw(rows, "numba")
 
     try:
         assert ax.get_yscale() == "log"
@@ -295,8 +253,8 @@ def test_both_figures_draw_one_figure_legend_and_the_shared_minor_grid() -> None
     rows = plot_canon_speedup.rows_for({"numba": {"k1": 1.0}, "cc": {"k1": 2.0}}, "numba", ["cc"])
     times = {"numba": {"k1": 1.0, "k2": 1.0}, "cc": {"k1": 2.0, "k2": 0.5}}
 
-    bar_fig, bar_ax = plot_canon_speedup.draw(rows, "numba", False)
-    dist_fig, dist_ax = plot_canon_speedup.draw_distribution(times, "numba", ["cc"], False)
+    bar_fig, bar_ax = plot_canon_speedup.draw(rows, "numba")
+    dist_fig, dist_ax = plot_canon_speedup.draw_distribution(times, "numba", ["cc"])
     try:
         for fig, ax in ((bar_fig, bar_ax), (dist_fig, dist_ax)):
             assert ax.get_legend() is None
@@ -314,7 +272,7 @@ def test_distribution_option_draws_a_second_figure(tmp_path: pathlib.Path) -> No
         db_path, [row("numba", "k1", 100.0), row("numba", "k2", 50.0), row("cc", "k1", 200.0), row("cc", "k2", 25.0)]
     )
 
-    rc = plot_canon_speedup.run(db_path, tmp_path / "out", "numba", False, columns=["cc"], distribution=True)
+    rc = plot_canon_speedup.run(db_path, tmp_path / "out", "numba", columns=["cc"], distribution=True)
 
     assert rc == 0
     assert (tmp_path / "out" / "canon_speedup_distribution.png").exists()

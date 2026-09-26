@@ -751,39 +751,30 @@ def figure_per_kernel(
     width: float = plotstyle.DOUBLE_COLUMN_WIDTH,
     type_: plotstyle.TypeScale = plotstyle.AUTHOR_SCALE,
     kernels: Sequence[str] = (),
-    geomean_panel: bool = False,
 ) -> matplotlib.figure.Figure | None:
     """One small panel per kernel of ``mode``, every model overlaid. None when nothing is drawable.
 
     NOT restricted to the common kernels: the point of the small multiples is to see WHICH kernels
     one model solved and another did not, so a kernel with a single model's curve draws that curve
     alone in its own panel rather than vanishing from the figure. ``kernels`` picks the panels and
-    their order (default: every drawable kernel, alphabetical). ``geomean_panel`` adds a last panel
-    with each series' geomean over ALL its kernels of ``mode`` (not only the picked ones) at every P,
-    with its 95% interval as a band.
+    their order (default: every drawable kernel, alphabetical).
     """
     drawn = [curve for curve in drawable(curves_) if curve.mode == mode]
     if not drawn:
         return None
     kernels = panel_kernels(drawn, kernels)
     ranks = rank_axis(drawn)
-    panels = kernel_panels(drawn, kernels, geomean_panel)
+    panels = kernel_panels(drawn, kernels, False)
     fig, axes = small_multiples(len(panels), width, type_)
     flat = [ax for row in axes for ax in row][: len(panels)]
-    # Only the geomean panel carries a band: one kernel's line is one measurement per P.
-    ideals = [
-        panel_curves(ax, part, quantity, ranks, i >= len(kernels), type_)
-        for i, (ax, part) in enumerate(zip(flat, panels))
-    ]
-    title_panels(
-        flat, [panel_title(k, kernels) for k in kernels] + [f"{GEOMEAN_LABEL} (all kernels)"] * geomean_panel, type_
-    )
+    ideals = [panel_curves(ax, part, quantity, ranks, False, type_) for ax, part in zip(flat, panels)]
+    title_panels(flat, [panel_title(k, kernels) for k in kernels], type_)
     for ax in axes[-1]:
         ax.set_xlabel("Ranks $P$", fontsize=type_.label_pt)
     for row in axes:
         row[0].set_ylabel(axis_label(quantity, mode), fontsize=type_.label_pt)
     fig.tight_layout()
-    place_legend(fig, [ideals[0], *series_handles(drawn, type_.line_width, counted=geomean_panel)], flat, type_)
+    place_legend(fig, [ideals[0], *series_handles(drawn, type_.line_width, counted=False)], flat, type_)
     return fig
 
 

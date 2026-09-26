@@ -102,7 +102,7 @@ PRINT_MIN_PT: float = 5.5
 SAVE_DPI: float = 200.0
 
 #: The full text width of a double-column A4 paper, in inches: the width of a paper figure (the
-#: per-kernel and efficacy figures), exposed by scripts as ``--double-column``.
+#: per-kernel and efficacy figures).
 DOUBLE_COLUMN_WIDTH: float = 7.0
 
 #: Per-paper page budgets, in inches, so a figure drops in at scale 1.0 instead of being shrunk by
