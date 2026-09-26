@@ -40,7 +40,7 @@ COMMON_VARS = (
 #: lands on 1800000 ms, the CLI's ceiling for it -- see test_stream_idle_timeout.py.
 LAUNCHER_DEFAULTS = {
     "API_TIMEOUT_MS": "3600000",
-    "CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS": '$(python3 "${SCRIPT_DIR}/stream_idle_timeout.py")',
+    "CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS": '$("${HPCAGENT_BENCH_IMAGE_PYTHON}" "${SCRIPT_DIR}/stream_idle_timeout.py")',
     # The byte watchdog above is installed only for api.anthropic.com. Against SGLang/vLLM the walls
     # that fire are the SSE-event watchdog (floor 300 s) and Bun's own ~300 s fetch socket timeout,
     # which the CLI lifts only when API_FORCE_IDLE_TIMEOUT is falsy -- both unset cut qwen38 streams
@@ -187,6 +187,7 @@ def test_every_cli_idle_wall_resolves_to_the_one_derived_value() -> None:
         env={
             "PATH": "/usr/bin:/bin",
             "SCRIPT_DIR": str(EXPERIMENTS),
+            "HPCAGENT_BENCH_IMAGE_PYTHON": sys.executable,  # the image interpreter the EDF names
             "CONTEXT_LENGTH": "262144",
             "AGENTS_PER_NODE": "40",
         },

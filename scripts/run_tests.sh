@@ -26,9 +26,11 @@ fi
 # The site layer, the interpreter, PYTHONHASHSEED and ulimit -c 0.
 . "${REPO}/experiments/env.sh"
 # The checkout under test first on the import path, for pytest and every child it starts. An image's
-# EDF sets PYTHONSAFEPATH=1, which drops the CWD, so without this a child `python -m hpcagent_bench...`
-# imports the image's installed copy instead of this tree.
+# EDF sets PYTHONSAFEPATH=1, which drops the CWD and a script's own directory, so without this a child
+# `python -m hpcagent_bench...` imports the image's installed copy instead of this tree, and an
+# experiments/ script cannot import its siblings. Tests run as CI runs them: with neither.
 export PYTHONPATH="${REPO}${PYTHONPATH:+:${PYTHONPATH}}"
+unset PYTHONSAFEPATH
 
 # The dace MPI prefix minus OMP_NUM_THREADS=1, which would serialize the threaded and timed tests.
 export OMPI_MCA_pml=ob1 OMPI_MCA_btl=self,vader,tcp PMIX_MCA_gds=hash

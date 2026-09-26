@@ -260,10 +260,10 @@ def ran_rows(frame: "pd.DataFrame") -> "pd.DataFrame":
     than entered as a failure (user, 2026-09-26). One the arm ran and never solved stays, at 1x
     under ``served`` and unsolved under ``solved``. The rows stay in the database.
     """
-    if not {"record", "arm", "benchmark"} <= set(frame.columns):
+    if not {"row_kind", "arm", "benchmark"} <= set(frame.columns):
         return frame
     key = frame["arm"].fillna("").astype(str) + "\x1f" + frame["benchmark"].fillna("").astype(str)
-    ran = set(key[frame["record"].isin(RAN_RECORDS)])
+    ran = set(key[frame["row_kind"].isin(RAN_RECORDS)])
     return frame[key.isin(ran)]
 
 

@@ -162,7 +162,7 @@ def test_build_rows_uses_select_keys_not_stem_select(monkeypatch: pytest.MonkeyP
     def _poison(*_a, **_k) -> None:
         raise AssertionError("build_rows must use select_keys (path-keys), not select")
 
-    monkeypatch.setattr(KERNELS, "select", _poison)
+    monkeypatch.setattr(type(KERNELS), "select", _poison)  # the registry has __slots__: patch the class
     rows = hf_export.build_rows("loop_level_reasoning", commit="")
     assert rows  # resolved purely through select_keys; select was never called
 
