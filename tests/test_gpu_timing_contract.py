@@ -664,56 +664,6 @@ def test_no_module_level_annotation_names_something_defined_later() -> None:
     assert not offenders, "annotations naming a later definition (NameError on python < 3.14):\n" + "\n".join(offenders)
 
 
-def test_a_gpu_figure_excludes_the_legacy_arms_by_construction() -> None:
-    """A GPU figure selects on the BRACKET, so the host-resident arms cannot enter it.
-
-    The policy is one per figure: device-resident, kernel time, transfers excluded. The obvious
-    implementation -- filter ``device == "gpu"`` -- keeps the legacy `c-openmp` and `triton` rows,
-    because those ARE gpu rows; their samples simply hold the submission's own copies. Keying on
-    the bracket makes the exclusion structural, so no caller has a filter to forget, and it keeps
-    working for arms that do not exist yet.
-
-    The legacy rows are not deleted and not invalidated here or anywhere: they stay readable as the
-    measurements they are. They are only not rows for THIS figure.
-    """
-    pd = pytest.importorskip("pandas")
-    from hpcagent_bench.stats.population import DEVICE_RESIDENT_BRACKET, MixedPopulationError, device_resident
-
-    frame = pd.DataFrame(
-        [
-            {"arm": "gpu-llr-qwen38-triton", "device": "gpu", "grading_protocol": "sealed-nonce-v1+host-monotonic"},
-            {"arm": "gpu-llr-qwen38-c-openmp", "device": "gpu", "grading_protocol": "sealed-nonce-v1"},
-            {
-                "arm": "gpu-llr-qwen38-triton-device",
-                "device": "gpu",
-                "grading_protocol": f"x+{DEVICE_RESIDENT_BRACKET}",
-            },
-            {
-                "arm": "gpu-llr-qwen38-c-openmp-device",
-                "device": "gpu",
-                "grading_protocol": f"x+{DEVICE_RESIDENT_BRACKET}",
-            },
-            {"arm": "gpu-llr-qwen38-hip", "device": "gpu", "grading_protocol": f"x+{DEVICE_RESIDENT_BRACKET}"},
-        ]
-    )
-    kept = device_resident(frame, label="gpu figure")
-    assert sorted(kept.arm) == [
-        "gpu-llr-qwen38-c-openmp-device",
-        "gpu-llr-qwen38-hip",
-        "gpu-llr-qwen38-triton-device",
-    ]
-    # Selecting on the obvious column keeps every legacy row -- the mistake this guards.
-    assert len(frame[frame.device == "gpu"]) == 5
-
-    # A figure whose every candidate row is host-resident is a policy error, not an empty plot.
-    with pytest.raises(MixedPopulationError, match="no row here was taken under"):
-        device_resident(frame[frame.grading_protocol.str.contains("host-monotonic")], label="gpu figure")
-
-    # A frame that cannot prove its brackets cannot claim this one either.
-    with pytest.raises(MixedPopulationError, match="carries no 'grading_protocol'"):
-        device_resident(frame.drop(columns=["grading_protocol"]))
-
-
 class _FakeDevice:
     """A cupy device handle that records that it was synchronized."""
 

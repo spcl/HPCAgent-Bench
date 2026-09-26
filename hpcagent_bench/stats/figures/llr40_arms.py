@@ -23,8 +23,7 @@ ARM_PATTERN: re.Pattern[str] = re.compile(r"^cpf-llr-focus40-(?P<model>[a-z0-9]+
 #: Draw order within one model's own slot, control first.
 CONDITION_ORDER: tuple[str, ...] = ("", "cpf", "cpfsrc")
 
-#: The canon column this figure draws by default, and what it is measured against.
-CANON_COLUMN: str = "dace_cpu_canonicalize"
+#: What every canon column is measured against.
 CANON_BASELINE: str = "numba"
 
 

@@ -84,37 +84,9 @@ TYPE: style.TypeScale = style.PRINT_SCALE
 #: dependence is a Python loop, too slow to time at XL, so most llr-focus40 kernels have no numpy
 #: XL row.
 #:
-#: The default is ``numba``, the loop-level tracks' graded denominator. Prefer :func:`baseline_of`,
-#: which reads the denominator the judge RECORDED, over this constant; this is only the fallback for
-#: a frame that does not carry one. Every function that divides takes a ``baseline`` argument rather than
-#: reading a global: which framework is the denominator is a property of the figure being drawn,
-#: not of the process drawing it, and two figures in one process may want different ones.
+#: The default is ``numba``, the loop-level tracks' graded denominator. Every function that divides
+#: takes a ``baseline`` argument: the denominator is a property of the figure, not the process.
 DEFAULT_BASELINE: str = "numba"
-
-
-def baseline_of(frame: pd.DataFrame, default: str = DEFAULT_BASELINE) -> str:
-    """The denominator a slice of observations was actually GRADED against.
-
-    The baseline is a property of the track and the campaign, not of the figure, so this reads the
-    ``baseline`` column the judge stamped on each row rather than letting the caller assume.
-
-    The MODE, not the unique value: a few rows with a stale denominator must not block the plot. A
-    mixed slice is warned about and its majority used.
-    """
-    if "baseline" not in frame.columns:
-        return default
-    named = frame["baseline"].dropna().astype(str).str.strip()
-    counts = named[named != ""].value_counts()
-    if bool(counts.empty):
-        return default
-    winner = str(counts.index[0])
-    if len(counts) > 1 and counts.iloc[1] > 0.05 * counts.iloc[0]:
-        LOG.warning(
-            "baseline_of: this slice mixes denominators %s; using %r. Split it by campaign instead.",
-            dict(counts),
-            winner,
-        )
-    return winner
 
 
 def set_usetex(usetex: bool) -> None:

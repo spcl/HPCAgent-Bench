@@ -54,8 +54,8 @@ names (first stepped down to the pitch) plus the key under them. A fixed band is
 width and one label length; on any other it wastes the page or prints the key over the names. A
 figure is drawn at :data:`~hpcagent_bench.stats.style.DOUBLE_COLUMN_WIDTH` at authoring size
 (:data:`AUTHOR_TYPE`), at a stated ``width_in`` at print size
-(:data:`~hpcagent_bench.stats.style.PRINT_SCALE`), or as wide as a stated kernel pitch needs
-(:func:`roomy_pitch_in`); each panel is :data:`PANEL_HEIGHT_IN` tall.
+(:data:`~hpcagent_bench.stats.style.PRINT_SCALE`), or as wide as a stated kernel pitch needs;
+each panel is :data:`PANEL_HEIGHT_IN` tall.
 """
 
 import enum
@@ -442,22 +442,6 @@ def column_pitch_in(ax: matplotlib.axes.Axes) -> float:
     return float(ax.bbox.width) / ax.figure.dpi / (high - low)
 
 
-#: Inches per kernel column for a figure whose WIDTH follows its kernels rather than the page (a
-#: standalone render): the floor rotated names need at authoring size, the ceiling past which a
-#: figure with many series stops printing at a readable scale, and what each extra dodged series
-#: asks for in between.
-MIN_PITCH_IN: float = 0.22
-MAX_PITCH_IN: float = 0.34
-SERIES_PITCH_IN: float = 0.05
-
-
-def roomy_pitch_in(n_series: int, span: float = DODGE_SPAN) -> float:
-    """The column pitch a standalone figure asks for: :data:`SERIES_PITCH_IN` between dodged
-    neighbours, clamped to the name floor and the printable ceiling."""
-    wanted = (n_series - 1) * SERIES_PITCH_IN / span if span > 0.0 else 0.0
-    return min(MAX_PITCH_IN, max(MIN_PITCH_IN, wanted))
-
-
 #: Drawn under the marks' white halos (:data:`~hpcagent_bench.stats.style.FILL_Z`), never over them:
 #: the "connector under fill" order :func:`~hpcagent_bench.stats.style.point_mark` documents.
 INTERVAL_Z: float = 2.0
@@ -807,24 +791,6 @@ def draw_marks(
         cells = [cell for cell in one.cells if cell.kernel in x_of]
         x = summary_slot_x(len(kernels), slot)
         draw_summary_mark(ax, cells, x, one, metric, type_, summary_size, summary_values)
-
-
-def draw_panel(
-    ax: matplotlib.axes.Axes,
-    metric: Metric,
-    kernels: Sequence[str],
-    style_: Style,
-    summary_column: bool,
-    label_ticks: bool,
-    type_: plotstyle.TypeScale = AUTHOR_TYPE,
-    span: float = DODGE_SPAN,
-) -> None:
-    """One metric's panel on an axes the caller laid out: its chrome (:func:`style_panel`), then its
-    marks sized to the pitch the axes has now (:func:`draw_marks`). :func:`figure_panels` measures
-    the canvas between the two instead, which is what a figure to be saved wants."""
-    style_panel(ax, metric, kernels, summary_column, label_ticks, type_)
-    size = mark_size(column_pitch_in(ax), len(metric.series), span)
-    draw_marks(ax, metric, kernels, style_, summary_column, size, span, type_)
 
 
 #: Marker size of a key entry, in points: sized to the key's own text, not to a figure's marks.

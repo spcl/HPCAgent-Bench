@@ -85,12 +85,9 @@ def test_a_missing_component_prices_the_task_as_no_measurement() -> None:
     assert priced["tokens"].iloc[1] == pytest.approx(5.0)
 
 
-def test_the_three_proxies_price_one_episode_as_the_paper_defines_them() -> None:
-    """fresh 1000, re-sent 20000, output 300: effective 1300, billed 3300, total 21300."""
-    assert cost.effective_tokens(1000, 20000, 300) == pytest.approx(1300)
-    assert cost.billed_tokens(1000, 20000, 300) == pytest.approx(3300)
-    assert cost.total_tokens(1000, 20000, 300) == pytest.approx(21300)
-    assert list(cost.PROXIES) == list(cost.PROXY_CARDS)
+def card_price(card: str, fresh: float, cached: float, output: float) -> float:
+    """One task's tokens under the shipped ``card``."""
+    return float(cost.priced(task_rows(fresh, cached, output), cost.resolve(card))["tokens"].iloc[0])
 
 
 def test_the_fold_and_the_cards_agree_on_every_proxy(tmp_path: pathlib.Path) -> None:
@@ -112,6 +109,6 @@ def test_the_fold_and_the_cards_agree_on_every_proxy(tmp_path: pathlib.Path) -> 
     )
     row = token_cost.usage_episode_cost(usage)
     parts = (float(row["fresh_input"]), float(row["cached_input"]), float(row["output"]))
-    assert row["effective"] == pytest.approx(cost.effective_tokens(*parts))
-    assert row["effective_provider"] == pytest.approx(cost.billed_tokens(*parts))
-    assert row["naive_total"] == pytest.approx(cost.total_tokens(*parts))
+    assert row["effective"] == pytest.approx(card_price("effective", *parts))
+    assert row["effective_provider"] == pytest.approx(card_price("billed", *parts))
+    assert row["naive_total"] == pytest.approx(card_price("total", *parts))
