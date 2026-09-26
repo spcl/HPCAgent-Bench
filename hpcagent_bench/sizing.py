@@ -559,7 +559,7 @@ def kernel_memory_gb(
     return max((MEMORY_COPIES * arrays + request) / BYTES_PER_GB, floor)
 
 
-@functools.lru_cache(maxsize=1)
+@functools.lru_cache(maxsize=1, typed=True)
 def rank_memory_share_bytes() -> int:
     """This process's share of the node's physical memory: RAM x (physical cores in its affinity /
     physical cores online).

@@ -105,7 +105,7 @@ def range_of(value: FuzzValue) -> Sequence[int | float] | None:
     return None
 
 
-@functools.lru_cache(maxsize=8)
+@functools.lru_cache(maxsize=8, typed=True)
 def smooth_numbers(bound: int, limit: int) -> tuple[int, ...]:
     """Every ``bound``-smooth integer in ``[1, limit]`` (no prime factor above ``bound``), ascending.
 

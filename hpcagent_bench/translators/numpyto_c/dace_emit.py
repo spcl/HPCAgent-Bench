@@ -3682,7 +3682,7 @@ def body_allocated_shape(body: list[ast.stmt], hret: str, values: set[str]) -> l
     # A kept axis reduction (lenet's ``np.max(split, axis=(2, 4))``) writes its operand's shape
     # with the reduced axes dropped, so the operand's allocation sizes the store.
     value = stores[0].value
-    reduced: Optional[ast.expr] = None
+    reduced: ast.expr | None = None
     if isinstance(value, ast.Call) and not any(k.arg == "keepdims" for k in value.keywords):
         parts = reduce_call_parts(value, {k.arg: k.value for k in value.keywords})
         if parts is not None and parts[0] in DACE_NATIVE_REDUCE_FNS and isinstance(parts[1], ast.Name):

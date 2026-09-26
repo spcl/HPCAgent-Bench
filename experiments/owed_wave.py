@@ -653,7 +653,7 @@ def model_layer(opt: str, model: str) -> tuple[tuple[str, str], ...]:
     return rendered_env(opt, pathlib.Path(opt) / "experiments" / "layers" / f"model-{model}.env")
 
 
-@functools.cache
+@functools.lru_cache(maxsize=None, typed=True)
 def track_budget(opt: str, track: str) -> Budget:
     """Campaign ``track`` (arms.yaml) rendered without a model: its 1x agent budget."""
     env = dict(rendered_env(opt, track))

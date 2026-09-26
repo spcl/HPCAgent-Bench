@@ -376,7 +376,7 @@ def oklab(rgb: "object") -> "object":
     )
 
 
-@functools.lru_cache(maxsize=1)
+@functools.lru_cache(maxsize=1, typed=True)
 def combined_ramp(slots: int = COMBINED_SLOTS) -> tuple[str, ...]:
     """``slots`` hues, GENERATED rather than picked from a shipped palette.
 

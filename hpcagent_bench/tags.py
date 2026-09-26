@@ -82,7 +82,7 @@ def members(tag: str) -> list[str]:
     return split_names(path.read_text(encoding="utf-8"))
 
 
-@functools.lru_cache(maxsize=1)
+@functools.lru_cache(maxsize=1, typed=True)
 def index() -> dict[str, tuple[str, ...]]:
     """Kernel name -> the tags whose files list it, sorted. Cached: clear it after editing a file."""
     found: dict[str, list[str]] = collections.defaultdict(list)

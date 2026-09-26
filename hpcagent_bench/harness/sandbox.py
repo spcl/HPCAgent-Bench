@@ -193,7 +193,7 @@ def imported_modules(source: str) -> frozenset[str]:
     return frozenset(names)
 
 
-@lru_cache(maxsize=1)
+@lru_cache(maxsize=1, typed=True)
 def module_distributions() -> dict[str, list[str]]:
     """Importable top-level module -> the installed distributions providing it (``cupy`` ships as
     ``cupy-rocm-*`` or ``cupy-cuda*``). Cached: it scans every installed distribution."""
@@ -575,7 +575,6 @@ class Sandbox:
                 kernel_sources,
                 driver_src,
                 exe,
-                mode=mode,
                 cc_override=cc_override,
                 extra_compile=extra_compile,
                 extra_link=extra_link,

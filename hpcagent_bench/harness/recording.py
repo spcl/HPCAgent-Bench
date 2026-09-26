@@ -763,7 +763,7 @@ def upsert_run(conn: sqlite3.Connection, run_id: str, language: str | None = Non
     )
 
 
-@lru_cache(maxsize=1)
+@lru_cache(maxsize=1, typed=True)
 def canonical_columns() -> dict[str, tuple[tuple[str, str], ...]]:
     """``table -> ((column, declared type), ...)`` of a fresh DB, read off an in-memory one so it
     cannot drift from :data:`TABLES`."""

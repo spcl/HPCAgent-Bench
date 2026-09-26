@@ -764,7 +764,7 @@ def thin_rules(ax: Axes, config: FigureConfig) -> None:
 CHANNELS: tuple[str, ...] = ("model-packet", "pair-packet")
 
 
-@functools.lru_cache(maxsize=1)
+@functools.lru_cache(maxsize=1, typed=True)
 def delivery_order() -> tuple[str, ...]:
     """Every delivery a figure can draw, in SHAPE-assignment order: the registry's languages in
     their own order, then the offload delivery, which is a device plus a language
@@ -787,7 +787,7 @@ def delivery_order() -> tuple[str, ...]:
 EXTRA_MARKERS: tuple[str, ...] = ("<", ">", "p", "h", "8")
 
 
-@functools.lru_cache(maxsize=1)
+@functools.lru_cache(maxsize=1, typed=True)
 def delivery_markers() -> tuple[str, ...]:
     """The shape table deliveries draw from: the registry's, then :data:`EXTRA_MARKERS`."""
     return (*palette.markers(), *EXTRA_MARKERS)
