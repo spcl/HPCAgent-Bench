@@ -6,10 +6,10 @@ import re
 from collections.abc import Sequence
 
 from hpcagent_bench.translators.numpyto_common import dtypes
+from hpcagent_bench.translators.numpyto_common.emit_helpers.tokens import IDENT_RE
 from hpcagent_bench.translators.numpyto_common.frontend import names_used_as_int
 from hpcagent_bench.translators.numpyto_common.ir import KernelIR, SymbolDesc
 from hpcagent_bench.translators.numpyto_common.lowering.mathfuncs import MATH_INTRINSIC_NAMES
-from hpcagent_bench.translators.numpyto_common.emit_helpers.tokens import IDENT_RE
 
 __all__ = [
     "BUILTIN_NAMES",
@@ -338,7 +338,7 @@ def detect_output_and_index_arrays(kir: KernelIR, helpers: Sequence[KernelIR] = 
         # bool array subscripting another is a MASK, not an index set: retyping it to int64 would
         # lose that (``collect_bool_names`` reads the array dtype) and contradict the binding,
         # which still says bool -- a 1-byte buffer read back as int64_t*.
-        dt = str(vars(a).get("dtype") or "")
+        dt = str(a.dtype or "")
         if dtypes.is_integer(dt) or dt in ("bool", "bool_"):
             continue
         a.dtype = "int64"
@@ -455,10 +455,10 @@ def promote_free_names_to_params(kir: KernelIR) -> None:
     # into physical buffer params by the frontend; their bare names must
     # never be promoted to scalar int params even if a residual
     # reference survives lowering. The matmul hoister consumes them.
-    declared.update(vars(kir).get("sparse") or {})
+    declared.update(kir.sparse)
     # Non-inlinable helpers emitted as their own native functions: their names
     # appear as CALL funcs (``classify(x[i])``), never as scalar parameters.
-    declared.update(h.kernel_name for h in vars(kir).get("helpers") or [])
+    declared.update(h.kernel_name for h in kir.helpers)
     # A Name used as a call function is never a scalar parameter either.
     for node in ast.walk(kir.tree):
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
@@ -545,7 +545,7 @@ def foldable_shape_aliases(kir: KernelIR) -> dict[str, ast.expr]:
     # carry the alias (``H: (M + 1, N + 1)``) -- scanning it would re-add ``M``
     # to scope and veto its own folding.
     for arr in kir.arrays:
-        if vars(arr).get("is_output", False):
+        if arr.is_output:
             continue
         for tok in arr.shape:
             in_scope.update(IDENT_RE.findall(str(tok)))

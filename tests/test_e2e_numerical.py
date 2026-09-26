@@ -542,7 +542,9 @@ def test_the_full_ci_sweep_runs_numba_over_every_kernel() -> None:
     job = workflow["jobs"]["e2e"]
     sweeps = [s for s in job["steps"] if "tests/test_e2e_numerical.py" in str(s.get("run", ""))]
     assert sweeps, "the e2e job no longer runs tests/test_e2e_numerical.py"
-    assert any((s.get("env") or {}).get("HPCAGENT_BENCH_E2E_BACKENDS") == "numba" for s in sweeps)
+    legs = job["strategy"]["matrix"]["leg"]
+    assert "numba" in {leg["backend"] for leg in legs}, legs
+    assert all((s.get("env") or {}).get("HPCAGENT_BENCH_E2E_BACKENDS") == "${{ matrix.leg.backend }}" for s in sweeps)
     for step in sweeps:
         env = step.get("env") or {}
         assert "workflow_dispatch' && '0'" in str(env.get("HPCAGENT_BENCH_E2E_SUBSET")), (

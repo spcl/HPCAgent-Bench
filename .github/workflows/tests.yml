@@ -150,10 +150,18 @@ jobs:
 
   e2e:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
-    # One runner, one backend per step: each sweep takes ~6 min, well inside the unit shards'
-    # critical path, and three legs held three runners mostly for setup.
-    name: e2e[numba, jax, pythran] (numerical sweep @ S)
+    # One leg per backend: numba+jax measured 26.6 min together and pythran 18.1, so one runner
+    # cannot hold all three under the 45-minute ceiling.
+    name: e2e[${{ matrix.leg.backend }}] (numerical sweep @ S)
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        leg:
+          - { backend: numba, workers: auto }
+          - { backend: jax, workers: auto }
+          # One pythran compile peaks at ~7 GB: two at once exhaust the 16 GB runner.
+          - { backend: pythran, workers: 1 }
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
@@ -161,41 +169,22 @@ jobs:
           submodules: recursive
       - uses: ./.github/actions/setup
         with:
-          ccache: e2e
+          ccache: e2e-${{ matrix.leg.backend }}
       # --timeout stays above numerical_oracle.PY_FORK_TIMEOUT_S (600) so the oracle's own
       # SIGKILL reports skip:too-long first.
-      - name: Phase 5 -- e2e numerical sweep [numba] @ S
+      - name: Phase 5 -- e2e numerical sweep @ S
         if: ${{ !cancelled() }}
-        timeout-minutes: 12
+        timeout-minutes: 35
         env:
-          HPCAGENT_BENCH_E2E_BACKENDS: "numba"
+          HPCAGENT_BENCH_E2E_BACKENDS: ${{ matrix.leg.backend }}
           HPCAGENT_BENCH_E2E_SUBSET: ${{ github.event_name == 'workflow_dispatch' && '0' || '1' }}
         run: |
-          python -m pytest -p no:cacheprovider -rfEs -n auto --dist loadgroup --durations=25 \
+          python -m pytest -p no:cacheprovider -rfEs -n ${{ matrix.leg.workers }} --dist loadgroup --durations=25 \
             --timeout=900 tests/test_e2e_numerical.py
-      - name: Phase 5 -- e2e numerical sweep [jax] @ S
-        if: ${{ !cancelled() }}
-        timeout-minutes: 12
-        env:
-          HPCAGENT_BENCH_E2E_BACKENDS: "jax"
-          HPCAGENT_BENCH_E2E_SUBSET: ${{ github.event_name == 'workflow_dispatch' && '0' || '1' }}
-        run: |
-          python -m pytest -p no:cacheprovider -rfEs -n auto --dist loadgroup --durations=25 \
-            --timeout=900 tests/test_e2e_numerical.py
-      # One pythran compile peaks at ~7 GB: two at once exhaust the 16 GB runner.
-      - name: Phase 5 -- e2e numerical sweep [pythran] @ S
-        if: ${{ !cancelled() }}
-        timeout-minutes: 12
-        env:
-          HPCAGENT_BENCH_E2E_BACKENDS: "pythran"
-          HPCAGENT_BENCH_E2E_SUBSET: ${{ github.event_name == 'workflow_dispatch' && '0' || '1' }}
-        run: |
-          python -m pytest -p no:cacheprovider -rfEs -n 1 --dist loadgroup --durations=25 \
-            --timeout=600 tests/test_e2e_numerical.py
       - uses: ./.github/actions/finish
         if: always()
         with:
-          coverage: e2e
+          coverage: e2e-${{ matrix.leg.backend }}
 
   # The @pytest.mark.integration tests under tests/ (build and run real artifacts). The translator
   # tree's half of the marker runs in `translators`. Two shards: the one Phase 6 step measured

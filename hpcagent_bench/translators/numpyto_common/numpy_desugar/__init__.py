@@ -6,9 +6,9 @@ Entry point: :func:`desugar_for_python_backend`. Each submodule owns one family 
 import ast
 
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import (
-    DesugarError,
-    REDUCE_FNS,
     AUG_OP_SRC,
+    REDUCE_FNS,
+    DesugarError,
     const_int,
     eigh_alias_names,
     eigh_call_ab,
@@ -54,21 +54,21 @@ from hpcagent_bench.translators.numpyto_common.numpy_desugar.guards import (
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.hoist import HoistTables, ValueHoist
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.indexing import (
     FANCY_GATHER_HOIST,
-    IxWriteToLoop,
     DecomposeRollSlice,
     FancySliceStoreToLoop,
+    IxWriteToLoop,
     MaskedAssignToLoop,
     MgridInline,
 )
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.kinds import (
-    CallKinds,
     NO_CALLS,
+    CallKinds,
     dtype_kind,
     dtype_table_,
-    kind_of_dtype_str,
-    promote_kind,
     infer_param_kinds,
+    kind_of_dtype_str,
     module_kind_tables,
+    promote_kind,
 )
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.linalg import (
     LINALG_HOIST,
@@ -88,20 +88,20 @@ from hpcagent_bench.translators.numpyto_common.numpy_desugar.matmul import (
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.numba import (
     NdimFold,
     NumbaDtypeFixups,
+    OuterBroadcastPeel,
     ReshapeFortranOrderInline,
     SliceObjectInline,
-    OuterBroadcastPeel,
 )
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.pad import PadInline
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.ranks import (
-    infer_param_ranks,
-    param_body_rank_evidence,
     agreed_param_ranks,
     expr_rank,
     extent_tokens,
     helper_return_ranks,
+    infer_param_ranks,
     name_binding_index,
     name_value_pairs,
+    param_body_rank_evidence,
     rank_table,
     shape_table,
 )
@@ -208,11 +208,11 @@ def desugar_for_python_backend(source: str, kir, backend: str | None = None) -> 
             changed = changed or inline.changed
     kir_seed: dict[str, int] = {a.name: len(a.shape) for a in kir.arrays}
     kir_dtype_seed: dict[str, str] = {
-        a.name: kind_of_dtype_str(vars(a).get("dtype")) for a in kir.arrays if kind_of_dtype_str(vars(a).get("dtype"))
+        a.name: kind_of_dtype_str(a.dtype) for a in kir.arrays if kind_of_dtype_str(a.dtype)
     }
     # Exact dtypes (not just kind) for passes that need a width, e.g. FftInline's complex64/128 cast.
     # Read through ``vars()``: rank-only callers pass KIR arrays without a dtype attribute.
-    kir_array_dtypes: dict[str, str] = {a.name: vars(a)["dtype"] for a in kir.arrays if "dtype" in vars(a)}
+    kir_array_dtypes: dict[str, str] = {a.name: a.dtype for a in kir.arrays}
     param_ranks = infer_param_ranks(all_funcs, kir.kernel_name, kir_seed)
     param_kinds = infer_param_kinds(all_funcs, kir.kernel_name, kir_dtype_seed) if backend == "numba" else {}
     return_ranks = (

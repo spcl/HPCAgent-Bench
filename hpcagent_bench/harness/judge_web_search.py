@@ -16,6 +16,7 @@ A later HTTP service can either spawn this file per request or import run_web_se
 import argparse
 import asyncio
 import contextlib
+import dataclasses
 import inspect
 import json
 import os
@@ -25,8 +26,8 @@ import textwrap
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass
 from collections.abc import Iterable
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 __all__ = [
@@ -453,8 +454,8 @@ def result_dict(query: str, answer: str, results: list[SearchResult], pages: lis
         "sources": [
             {"title": page.title, "url": page.url, "success": page.success, "error": page.error} for page in pages
         ],
-        "search_results": [result.__dict__ for result in results],
-        "crawled_pages": [page.__dict__ for page in pages],
+        "search_results": [dataclasses.asdict(result) for result in results],
+        "crawled_pages": [dataclasses.asdict(page) for page in pages],
     }
 
 

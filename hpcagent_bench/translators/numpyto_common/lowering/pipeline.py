@@ -2,6 +2,7 @@
 
 import ast
 import copy
+import operator
 import os
 import re
 from collections.abc import Callable
@@ -16,6 +17,7 @@ from hpcagent_bench.translators.numpyto_common.ir import KernelIR, stamp_symbol_
 from hpcagent_bench.translators.numpyto_common.lib_nodes.array_methods import ArrayMethodRewriter
 from hpcagent_bench.translators.numpyto_common.lib_nodes.dims import DIM_IDENT_RE
 from hpcagent_bench.translators.numpyto_common.lib_nodes.fft import FFT_LIBRARY_MARKER, FFTN_LIBRARY_MARKER
+from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import const_or_name
 from hpcagent_bench.translators.numpyto_common.lib_nodes.linalg import reset_temp_counters
 from hpcagent_bench.translators.numpyto_common.lib_nodes.rewriter import LibNodeRewriter
 from hpcagent_bench.translators.numpyto_common.lowering.calls import (
@@ -64,11 +66,11 @@ from hpcagent_bench.translators.numpyto_common.lowering.masks import (
 from hpcagent_bench.translators.numpyto_common.lowering.mathfuncs import MathRewriter
 from hpcagent_bench.translators.numpyto_common.lowering.reshape_attr import ShapeAttrToReshape
 from hpcagent_bench.translators.numpyto_common.lowering.scatter import ScatterAtRewriter
-from hpcagent_bench.translators.numpyto_common.lowering.shape_harvest import harvest_local_shapes, collect_dim_aliases
+from hpcagent_bench.translators.numpyto_common.lowering.shape_harvest import collect_dim_aliases, harvest_local_shapes
 from hpcagent_bench.translators.numpyto_common.lowering.shape_reads import (
-    fold_shape_reads_in_table,
     ResolveArrShape,
     ShapeMidExpressionRewriter,
+    fold_shape_reads_in_table,
 )
 from hpcagent_bench.translators.numpyto_common.lowering.signature import (
     detect_output_and_index_arrays,
@@ -77,7 +79,7 @@ from hpcagent_bench.translators.numpyto_common.lowering.signature import (
     promote_shape_symbols_to_params,
     retype_int_helper_scalars,
 )
-from hpcagent_bench.translators.numpyto_common.lowering.slice_fusion import SliceFusion, LiftFreshArrayFromSlices
+from hpcagent_bench.translators.numpyto_common.lowering.slice_fusion import LiftFreshArrayFromSlices, SliceFusion
 from hpcagent_bench.translators.numpyto_common.lowering.ssa import ssa_rename_reassigned
 from hpcagent_bench.translators.numpyto_common.lowering.sugar import (
     DaceMapRewriter,
@@ -91,14 +93,13 @@ from hpcagent_bench.translators.numpyto_common.lowering.tuples import (
 )
 from hpcagent_bench.translators.numpyto_common.lowering.views import (
     EllipsisExpander,
+    PadImplicitTrailingSlices,
     fold_slice_view_aliases,
     fold_subarray_aliases,
-    PadImplicitTrailingSlices,
 )
 from hpcagent_bench.translators.numpyto_common.lowering.whole_array import WholeArrayAssignRewriter
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
 from hpcagent_bench.translators.numpyto_common.statement_desugar import DesugarArrayIteration, SplitChainedAssign
-from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import const_or_name
 
 __all__ = [
     "INL_RE",
@@ -1154,7 +1155,7 @@ def assert_lowering_invariants(phase_name: str, ctx: LoweringContext) -> None:
         ("scalar_call_temps", list),
         ("reassign_shapes", dict),
     ):
-        val_ = vars(kir)[fld]
+        val_ = operator.attrgetter(fld)(kir)
         if not isinstance(val_, typ):
             raise AssertionError(
                 f"lowering invariant after '{phase_name}': kir.{fld} is {type(val_).__name__}, expected {typ.__name__}"
