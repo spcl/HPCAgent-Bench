@@ -271,8 +271,8 @@ def test_generated_source_only_reads_never_builds(backend) -> None:
 def test_native_framework_generated_source_hook_dumps_the_input(backend, monkeypatch) -> None:
     """The NativeFramework hook resolves its own cpp_backend + base and returns the emitted source."""
     cc = generate_framework("cc")
-    monkeypatch.setattr(cc, "_cpp_backend", lambda bench: backend)
-    monkeypatch.setattr(cc, "_native_base", lambda bench: "probe")
+    monkeypatch.setattr(type(cc), "_cpp_backend", lambda self, bench: backend)
+    monkeypatch.setattr(type(cc), "_native_base", lambda self, bench: "probe")
     text = cc.generated_source(object(), object())
     assert text is not None and "void probe_fp64" in text
 
