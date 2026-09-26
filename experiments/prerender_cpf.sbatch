@@ -11,18 +11,21 @@
 #SBATCH --output=%x-%j.out
 #SBATCH --error=%x-%j.out
 #
-# THE preparation job for canonical parallel forms. Renders a roster's read forms and drop-ins into
-# the content-addressed cache (hpcagent_bench/cpf_cache.py) and pins a VIEW, the one directory an arm
-# names in HPCAGENT_BENCH_SERVICE_CANONICAL_PARALLEL_FORM_DIR and CPF_DROPIN_DIR. Nothing renders
-# after this job: the judge, the drop-in staging and the launch gates only read the cache. A hit
-# renders nothing, so a rerun renders only what changed.
+# An OPTIONAL WARM-UP for canonical parallel forms. Renders a roster's read forms and drop-ins into
+# the content-addressed cache (hpcagent_bench/cpf_cache.py, default HPCAGENT_BENCH_CPF_CACHE) and
+# pins a VIEW, the one directory an arm names in HPCAGENT_BENCH_SERVICE_CANONICAL_PARALLEL_FORM_DIR
+# and CPF_DROPIN_DIR. A read form this job did not render is rendered by the judge on the kernel's
+# first request, with the same code (cpf_prerender.render_kernel), so this job only saves those first
+# requests their wait. A drop-in view still needs it: the agent starts from a drop-in, so it is
+# rendered here and verified (verify_cpf.sbatch) before the arm. A hit renders nothing, so a rerun
+# renders only what changed.
 #
 #   VIEW=<dir> TAG=scicomp-focus40 sbatch prerender_cpf.sbatch
 #   VIEW=<dir> TAG=llr-focus40 TARGET=gpu sbatch prerender_cpf.sbatch
 #   VIEW=<dir> TAG=llr-focus40 CPF_POOL=1 sbatch prerender_cpf.sbatch   # one rank, per-core kernel pool
 #
-# dace is the image's /opt/dace, moved to HPCAGENT_BENCH_DACE_REF (default: the tip of
-# spcl/dace@extended) by containers/images/dace_refresh.sh; DACE_TREE names a dace git checkout to
+# dace is the image's /opt/dace, moved to HPCAGENT_BENCH_DACE_REF (default: the release pin,
+# like the judge) by containers/images/dace_refresh.sh; DACE_TREE names a dace git checkout to
 # render with instead, used as it is. Every key holds the dace HEAD commit, and a commit that moves
 # during the run withdraws what the run rendered. OPT may name a frozen snapshot.
 #
@@ -104,7 +107,7 @@ fi
 # that never sources it still lands the cache under the same root every submit script's VIEW default
 # points into (experiments/submit-cpf-llr40.sh, submit-scicomp-dc.sh).
 . "${OPT}/scripts/cache_env.sh"
-CPF_CACHE=${CPF_CACHE:-${HPCAGENT_BENCH_CPF_PRERENDER_DIR}/cache}
+CPF_CACHE=${CPF_CACHE:-${HPCAGENT_BENCH_CPF_CACHE}}
 TARGET=${TARGET:-cpu}
 VIEW=${VIEW:?set VIEW to the directory the arms will point at}
 trap 'rm -rf "${CPF_CACHE}/.scratch/${SLURM_JOB_ID:-local}-"*' EXIT
