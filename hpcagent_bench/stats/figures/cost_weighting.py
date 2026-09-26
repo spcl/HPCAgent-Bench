@@ -115,15 +115,18 @@ COLUMNS: tuple[str, ...] = ("arm_a", "arm_b", "card", "n", "rho_c", "ci_low", "c
 DODGE_SPAN: float = 0.6
 
 TYPE: plotstyle.TypeScale = plotstyle.PRINT_SCALE
+#: The treatment shapes in the key carry no model, so they are drawn in a neutral grey.
+KEY_GREY: str = "#6b6b6b"
 WIDTH_IN: float = plotstyle.ICLR_WRAP_WIDTH_IN
-#: One row per weighting (user, 2026-09-26: vertical weight ticks were unreadable in the wrap), so the
-#: body grows with the rows it stacks.
-ROW_IN: float = 0.36
+#: A fifth under the 1.8in body of the row layout (user, 2026-09-26), with the vertical axis restored.
+BODY_HEIGHT_IN: float = 0.76 * plotstyle.PRINT_BODY_HEIGHT_IN
 
-#: Row labels: the weighting's name in the paper, whose text gives each weight vector.
-TICKS: dict[Card, str] = {Card.EFFECTIVE: "Effective", Card.BILLED: "Billed", Card.TOTAL: "Total", Card.USD: "USD"}
-#: The paper's name for rho_C = C_control / C_treated; right of 1 the treated setup is cheaper.
-XLABEL: str = "Cost ratio"
+#: Slot ticks: each weighting's vector (in, cached, out); the USD slot prices each model at its own
+#: list price, which the caption states.
+TICKS: dict[Card, str] = {Card.EFFECTIVE: "1,0,1", Card.BILLED: "1,.1,1", Card.TOTAL: "1,1,1", Card.USD: "USD"}
+#: The paper's name for rho_C = C_control / C_treated; above 1 the treated setup is cheaper.
+YLABEL: str = "Cost ratio"
+XLABEL: str = "Weights $w$ (in, cached, out)"
 
 
 def arm_tokens(observations: pd.DataFrame, card: cost.CostModel, repeats: population.RepeatPolicy) -> dict:
@@ -204,13 +207,13 @@ def pair_styles(arms: Sequence[str]) -> dict[str, tuple[str, str]]:
     return styles
 
 
-def mark(ax: matplotlib.axes.Axes, y: float, row: object, hue: str, shape: str) -> None:
+def mark(ax: matplotlib.axes.Axes, x: float, row: object, hue: str, shape: str) -> None:
     """One estimate with its 95% interval, the interval omitted when too few kernels support one."""
     ok = math.isfinite(row.ci_low) and math.isfinite(row.ci_high)
     ax.errorbar(
+        x,
         row.rho_c,
-        y,
-        xerr=[[row.rho_c - row.ci_low], [row.ci_high - row.rho_c]] if ok else None,
+        yerr=[[row.rho_c - row.ci_low], [row.ci_high - row.rho_c]] if ok else None,
         color=hue,
         marker=shape,
         markersize=TYPE.marker_size,
@@ -222,13 +225,13 @@ def mark(ax: matplotlib.axes.Axes, y: float, row: object, hue: str, shape: str) 
 
 
 def ratio_axis(ax: matplotlib.axes.Axes) -> None:
-    """The log2 ratio X axis at print type sizes, with the no-change line."""
-    ax.axvline(1.0, color=plotstyle.REFERENCE, linewidth=1.0, linestyle=(0, (4, 3)), zorder=2)
-    ax.set_xscale("log", base=2)
-    plotstyle.value_axis(ax, "x", log_base=2.0)
-    ax.xaxis.set_major_formatter(FuncFormatter(plotstyle.ratio_tick))
+    """The log2 ratio Y axis at print type sizes, with the no-change line."""
+    ax.axhline(1.0, color=plotstyle.REFERENCE, linewidth=1.0, linestyle=(0, (4, 3)), zorder=2)
+    ax.set_yscale("log", base=2)
+    plotstyle.value_axis(ax, "y", log_base=2.0)
+    ax.yaxis.set_major_formatter(FuncFormatter(plotstyle.ratio_tick))
     ax.tick_params(axis="both", labelsize=TYPE.tick_pt)
-    ax.set_xlabel(XLABEL, fontsize=TYPE.label_pt)
+    ax.set_ylabel(YLABEL, fontsize=TYPE.label_pt)
     plotstyle.despine(ax)
 
 
@@ -262,22 +265,25 @@ def figure_cost_points(
     arms = list(dict.fromkeys(drawn.arm_a))
     cards = list(dict.fromkeys(drawn.card))
     styles = pair_styles(arms)
-    body_in = ROW_IN * (len(cards) + 1)
+    body_in = BODY_HEIGHT_IN
     fig, ax = plt.subplots(figsize=(width, body_in))
     step = DODGE_SPAN / max(1, len(arms))
     for i, arm in enumerate(arms):
         hue, shape = styles[arm]
         for row in drawn[drawn.arm_a == arm].itertuples():
             mark(ax, cards.index(row.card) + (i - (len(arms) - 1) / 2) * step, row, hue, shape)
-    ax.set_yticks(range(len(cards)))
-    ax.set_yticklabels([TICKS[Card(card)] for card in cards])
-    ax.set_ylim(len(cards) - 0.4, -0.6)
+    ax.set_xticks(range(len(cards)))
+    ax.set_xticklabels([TICKS[Card(card)] for card in cards])
+    ax.set_xlim(-0.6, len(cards) - 0.4)
+    ax.set_xlabel(XLABEL, fontsize=TYPE.label_pt)
     ratio_axis(ax)
+    # The key names the model by its hue and the treatment by its shape, so a reader needs no caption
+    # to tell the models apart.
+    models = list(dict.fromkeys(experiment_tags.model_of(a) for a in arms))
     handles: list = [
-        Line2D([], [], color=styles[a][0], marker=styles[a][1], linestyle="", label=labels.get(a, a)) for a in arms
-    ]
-    # The model is the hue (a lighter shade per further pair), named in the caption: a swatch row
-    # per model would double the key.
+        Line2D([], [], color=palette.model_shade(m, 0), marker="s", linestyle="", label=experiment_tags.model_name(m))
+        for m in models
+    ] + [Line2D([], [], color=KEY_GREY, marker=styles[a][1], linestyle="", label=labels.get(a, a)) for a in arms]
     fig.tight_layout()
     fit_xlabel(fig, ax, width)
     below = plotstyle.below_protrusion_in(fig, ax) + 0.04

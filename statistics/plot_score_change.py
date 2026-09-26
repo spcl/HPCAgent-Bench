@@ -282,6 +282,10 @@ def treated_harness(arm: str) -> str:
     if packet:
         return experiment_tags.packet_name(packet)
     tokens = arm.split("-")
+    # A packet named mid-arm ("harness20-caveman-qwen38-c") still names the column.
+    for key in experiment_tags.order("packets"):
+        if key and key in tokens:
+            return experiment_tags.packet_name(key)
     for harness in experiment_tags.order("harnesses"):
         if harness and harness in tokens:
             return experiment_tags.harness_name(harness)

@@ -199,10 +199,10 @@ models:
     name: Qwen3.8-27B
     serves: Qwen/Qwen3.8-27B-FP8
   oss120b:
-    name: GPT-OSS-120B
+    name: OSS-120B
     serves: openai/gpt-oss-120b
   kimi27sglang:
-    name: Kimi-K2.7-Code
+    name: Kimi-K2.7
     serves: moonshotai/Kimi-K2.7-Code
   glm53:
     name: GLM-5.3

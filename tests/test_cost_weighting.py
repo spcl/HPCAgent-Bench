@@ -51,9 +51,9 @@ def test_the_cost_figure_is_as_wide_as_its_wrap_and_prints_on_the_shared_scale()
         plt.close(fig)
 
 
-def test_the_key_lists_one_row_per_pair_and_no_model_swatches() -> None:
-    """USER 2026-09-25: the model is the hue and the caption names it; a swatch row per model
-    doubled a key that sits in a 2.1in wrap."""
+def test_the_key_names_each_model_by_its_hue_and_each_pair_by_its_shape() -> None:
+    """USER 2026-09-26: a reader has to tell the models apart from the key itself (short names:
+    OSS-120B, Kimi-K2.7), then find each pair by its shape."""
     extra = ("cpf-llr-focus40-qwen38-c-cpfsrc-v2", "cpf-llr-focus40-qwen38-c")
     table = pd.concat([points(), points().assign(arm_a=extra[0], arm_b=extra[1])], ignore_index=True)
     labels = {PAIRS[0][0]: "OpenHands", PAIRS[1][0]: "HIP skills", extra[0]: "CPF"}
@@ -61,19 +61,19 @@ def test_the_key_lists_one_row_per_pair_and_no_model_swatches() -> None:
     assert fig is not None
     try:
         texts = [text.get_text() for legend in fig.legends for text in legend.get_texts()]
-        assert sorted(texts) == ["CPF", "HIP skills", "OpenHands"], texts
+        assert texts == ["Qwen3.8-27B", "OSS-120B", "OpenHands", "HIP skills", "CPF"], texts
     finally:
         plt.close(fig)
 
 
-def test_every_slot_is_ticked_by_its_weighting_name() -> None:
-    """Short weight ticks were unreadable in the wrap; one row per weighting carries its full name, and
-    the paper text gives each weight vector, so the figure carries no note."""
+def test_token_slots_are_ticked_by_their_weights_and_the_dollar_slot_by_usd() -> None:
+    """Each token slot is ticked by its weight vector and the dollar slot by USD alone: each model is
+    priced at its own list price, which the caption states, so the figure carries no note."""
     fig = cost_weighting.figure_cost_points(points(), {})
     assert fig is not None
     try:
-        ticks = [label.get_text() for label in fig.axes[0].get_yticklabels()]
-        assert ticks == ["Effective", "Billed", "Total", "USD"][: len(ticks)], ticks
+        ticks = [label.get_text() for label in fig.axes[0].get_xticklabels()]
+        assert ticks == ["1,0,1", "1,.1,1", "1,1,1", "USD"][: len(ticks)], ticks
         assert fig.texts == []
     finally:
         plt.close(fig)
@@ -113,7 +113,7 @@ def test_a_three_slot_figure_has_no_usd_tick() -> None:
     fig = cost_weighting.figure_cost_points(table, {})
     assert fig is not None
     try:
-        ticks = [label.get_text() for label in fig.axes[0].get_yticklabels()]
+        ticks = [label.get_text() for label in fig.axes[0].get_xticklabels()]
         assert cost_weighting.TICKS[cost_weighting.Card.USD] not in ticks and len(ticks) == 3, ticks
     finally:
         plt.close(fig)
