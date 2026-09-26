@@ -101,11 +101,21 @@ jobs:
         run: |
           python - <<'PY'
           import importlib, pkgutil, hpcagent_bench
+          # GPU-only packages: the amd/nvidia extras (and the ROCm base image) ship them, the CPU
+          # install this leg runs does not. A module that needs one is skipped by name, never
+          # silently: any other missing module still fails the leg.
+          GPU_ONLY = {"triton", "cupy"}
           names = [m.name for m in pkgutil.walk_packages(hpcagent_bench.__path__, "hpcagent_bench.")
                    if ".benchmarks." not in m.name]
+          skipped = []
           for name in names:
-              importlib.import_module(name)
-          print(f"imported {len(names)} modules")
+              try:
+                  importlib.import_module(name)
+              except ModuleNotFoundError as exc:
+                  if (exc.name or "").split(".")[0] not in GPU_ONLY:
+                      raise
+                  skipped.append(f"{name} (needs {exc.name})")
+          print(f"imported {len(names) - len(skipped)} modules; skipped {skipped}")
           PY
           python -m pytest -p no:cacheprovider -q --collect-only tests > collected.txt
           tail -1 collected.txt
