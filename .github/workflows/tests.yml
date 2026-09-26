@@ -198,11 +198,27 @@ jobs:
           coverage: e2e
 
   # The @pytest.mark.integration tests under tests/ (build and run real artifacts). The translator
-  # tree's half of the marker runs in `translators`.
+  # tree's half of the marker runs in `translators`. Two shards: the one Phase 6 step measured
+  # 30m05s (kernelbench_translation 904 s, the from-source OpenBLAS test 556 s, the rest < 40 s
+  # each). Shard 0 names test_kernelbench_translation.py and carries the container and agent-bench
+  # steps; shard 1 sweeps tests/ with that file --ignore'd and builds OpenBLAS
+  # (test_ci_coverage.py::test_the_integration_shards_partition_tests_dir).
   integration:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
-    name: integration + agent-bench + container launch (build/run real artifacts, sudoless Apptainer)
+    name: integration + agent-bench + container launch (build/run real artifacts) [${{ matrix.shard.id }}]
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard:
+          - id: 0
+            openblas: false
+            select: >-
+              tests/test_kernelbench_translation.py
+          - id: 1
+            openblas: true
+            select: >-
+              --ignore=tests/test_kernelbench_translation.py tests/
     timeout-minutes: 45
     env:
       # tests/test_dace_openblas_link.py builds a pinned OpenBLAS (USE_OPENMP=1) unless cached.
@@ -213,12 +229,13 @@ jobs:
           submodules: recursive
       - uses: ./.github/actions/setup
         with:
-          ccache: integration
+          ccache: integration-${{ matrix.shard.id }}
           # test_parallelism_dispatch.py's integration cases need icpx; the nvc++ ones run in unit.
           vendor-compilers: oneapi
       # Keyed by CPU_KEY: the build is not DYNAMIC_ARCH.
       - name: Setup -- restore the from-source OpenBLAS
         id: openblas
+        if: ${{ matrix.shard.openblas }}
         uses: actions/cache/restore@v4
         with:
           path: ${{ github.workspace }}/.openblas-cache/openblas-openmp/install
@@ -232,16 +249,17 @@ jobs:
         run: |
           python -m pytest -p no:cacheprovider -rfEs --timeout=1500 --timeout-method=thread --durations=25 \
             --ignore=tests/test_dace_numeric_agreement.py --ignore=tests/translators \
-            -m integration tests/
+            -m integration ${{ matrix.shard.select }}
 
       - name: Save the from-source OpenBLAS
-        if: ${{ always() && steps.openblas.outputs.cache-hit != 'true' }}
+        if: ${{ always() && matrix.shard.openblas && steps.openblas.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v4
         with:
           path: ${{ github.workspace }}/.openblas-cache/openblas-openmp/install
           key: openblas-openmp-v0.3.29-${{ runner.os }}-${{ env.CPU_KEY }}
 
       - name: Setup -- Apptainer (sudoless install script)
+        if: ${{ matrix.shard.id == 0 }}
         run: |
           # The rootless path HPC targets use, through the shipped hpcagent-bench-install-apptainer.
           sudo apt-get install -y rpm2cpio cpio uidmap
@@ -252,7 +270,7 @@ jobs:
           fi
 
       - name: Phase 6 -- container launch (sudoless launch script, unprivileged Apptainer)
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && matrix.shard.id == 0 }}
         timeout-minutes: 3
         run: |
           # The two-container e2e needs a judge SIF, which no runner builds.
@@ -260,7 +278,7 @@ jobs:
             --deselect tests/test_container_launch.py::test_two_containers_judge_and_agent_via_tools
 
       - name: Phase 3 -- agent-bench (tools + no-op/BLAS optimizers, both modes, in-proc judge)
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && matrix.shard.id == 0 }}
         timeout-minutes: 8
         run: |
           python -m pytest -q -p no:cacheprovider -rfEs --timeout=600 \
@@ -277,7 +295,7 @@ jobs:
       - uses: ./.github/actions/finish
         if: always()
         with:
-          coverage: integration
+          coverage: integration-${{ matrix.shard.id }}
 
   # The numpy-translator tree: its op suite, then its `-m integration` half. The leg matrix makes a
   # re-split over HPCAGENT_BENCH_TRANSLATOR_CORPUS_SHARD a matrix edit; test_ci_coverage.py checks

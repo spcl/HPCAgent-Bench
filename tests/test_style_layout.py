@@ -274,3 +274,22 @@ def test_minors_follow_majors_and_limits_set_after_the_axis_was_ruled() -> None:
     ax.set_ylim(1.0, 16.0)
     assert list(ax.yaxis.get_minorticklocs()) == pytest.approx([2.0, 8.0])
     plt.close(fig)
+
+
+def test_a_triangle_mark_is_drawn_larger_than_a_square_at_the_same_nominal_size() -> None:
+    """At one ``s`` a triangle inks about half a square, so a blind row read smaller than the CPF
+    row beside it; the mark compensates by shape."""
+    import matplotlib.pyplot as plt
+
+    from hpcagent_bench.stats import style
+
+    fig, ax = plt.subplots()
+    try:
+        style.point_mark(ax, 0.0, 1.0, "#000000", "<", True, size=100.0)
+        style.point_mark(ax, 1.0, 1.0, "#000000", "s", True, size=100.0)
+        triangle, square = ax.collections[1].get_sizes()[0], ax.collections[3].get_sizes()[0]
+        assert triangle == 100.0 * style.MARKER_AREA_SCALE["<"]
+        assert square == 100.0 * style.MARKER_AREA_SCALE["s"]
+        assert triangle > square
+    finally:
+        plt.close(fig)

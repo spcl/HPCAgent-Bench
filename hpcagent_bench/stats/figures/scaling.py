@@ -197,6 +197,14 @@ class Curve:
         return summary.geomean(values) if values else math.nan
 
 
+#: An LLM series' line width relative to the type scale's: the model curves overlap in most panels, and
+#: a thinner line keeps the ones underneath visible; the torch.distributed baseline keeps full width.
+AGENT_LINE_SCALE: float = 0.9
+
+#: The geomean column's width relative to an operator column: it carries three series with bands.
+GEOMEAN_WIDTH_RATIO: float = 1.3
+
+
 def panel_title(kernel: str, kernels: Sequence[str]) -> str:
     """A kernel name with the prefix every panel shares removed: ``dist_sdpa`` -> ``sdpa``.
 
@@ -221,7 +229,10 @@ def packet_of(curve: "Curve") -> str:
 
 
 def series_label(packet: str, model: str) -> str:
-    """The legend spelling of one (packet, model) series."""
+    """The legend spelling of one (packet, model) series; the torch.distributed baseline runs no
+    packet, so it is named alone."""
+    if model == TORCH_DIST_ARM:
+        return label_of(model)
     return f"{label_of(model)}, {experiment_tags.packet_name(packet)}"
 
 
@@ -245,7 +256,7 @@ def series_handles(
     kernels = {key: {c.kernel for c in curves_ if (packet_of(c), c.model) == key} for key in keys}
     return [
         Line2D(
-            [], [], linewidth=line_width, **series_style(*key),
+            [], [], linewidth=line_width * (1.0 if key[1] == TORCH_DIST_ARM else AGENT_LINE_SCALE), **series_style(*key),
             label=series_label(*key) + (f" (n={len(kernels[key])})" if counted else ""),
         )
         for key in keys
@@ -626,10 +637,11 @@ def panel_curves(
     baseline dashed. Returns the ideal's legend handle; the series' are :func:`series_handles`'."""
     ideal = ideal_mark(ax, quantity, ranks)
     agents = [curve for curve in curves_ if curve.model != TORCH_DIST_ARM]
+    agent_type = dataclasses.replace(type_, line_width=type_.line_width * AGENT_LINE_SCALE)
     for packet, model in series_keys((packet_of(curve), curve.model) for curve in agents):
         part = [curve for curve in agents if curve.model == model and packet_of(curve) == packet]
         style, label = series_style(packet, model), series_label(packet, model)
-        draw_series(ax, series(part, quantity), style, label, band=band, type_=type_)
+        draw_series(ax, series(part, quantity), style, label, band=band, type_=agent_type)
     baseline = [curve for curve in curves_ if curve.model == TORCH_DIST_ARM]
     draw_series(ax, series(baseline, quantity), torch_dist_style(), TORCH_DIST_LABEL, band, type_, "--")
     rank_ticks(ax, ranks)
@@ -783,10 +795,30 @@ def figure_per_kernel(
 
 def decade_ticks(ax: matplotlib.axes.Axes) -> None:
     """A log10 Y ruled at 1 and 3 per decade (2 and 5 as unlabelled minors): a 1-2-5 ruling crowds a
-    one-inch panel, decades alone leave it bare."""
-    ax.yaxis.set_major_locator(LogLocator(base=10.0, subs=(1.0, 3.0)))
-    ax.yaxis.set_minor_locator(LogLocator(base=10.0, subs=(2.0, 5.0)))
+    one-inch panel, decades alone leave it bare. A panel whose fitted range (:func:`fit_y`) holds
+    fewer than two of those gets the 1-2-5 ruling labelled instead, so every panel reads a scale."""
+    # numticks set: the default ("auto") yields no ticks at all on a short panel spanning 4+ decades
+    ax.yaxis.set_major_locator(LogLocator(base=10.0, subs=(1.0, 3.0), numticks=40))
+    ax.yaxis.set_minor_locator(LogLocator(base=10.0, subs=(2.0, 5.0), numticks=40))
     ax.yaxis.set_minor_formatter(NullFormatter())
+    low, high = ax.get_ylim()
+    if sum(low <= tick <= high for tick in ax.yaxis.get_majorticklocs()) < 2:
+        ax.yaxis.set_major_locator(LogLocator(base=10.0, subs=(1.0, 2.0, 5.0), numticks=40))
+        ax.yaxis.set_minor_locator(LogLocator(base=10.0, subs=(1.5, 3.0, 7.0), numticks=40))
+
+
+#: Headroom around a panel's fitted Y range, as a factor on a log axis: the extreme marks stay whole.
+Y_FIT_PAD: float = 1.12
+
+
+def fit_y(ax: matplotlib.axes.Axes) -> None:
+    """Fit ``ax``'s log Y to what it draws: every line and band, padded by :data:`Y_FIT_PAD`, instead
+    of the whole decades autoscaling rounds out to, which leave a small-range panel mostly empty."""
+    values = [float(y) for line in ax.get_lines() for y in line.get_ydata() if math.isfinite(float(y)) and y > 0]
+    for band in ax.collections:
+        values += [float(v) for path in band.get_paths() for v in path.vertices[:, 1] if math.isfinite(v) and v > 0]
+    if values:
+        ax.set_ylim(min(values) / Y_FIT_PAD, max(values) * Y_FIT_PAD)
 
 
 def shared_ylabel(
@@ -820,8 +852,10 @@ def figure_mode_grid(
     ranks = rank_axis(drawn)
     columns = len(kernels) + int(geomean_panel)
     height = GRID_PANEL_HEIGHT_IN * len(present) + PRINT_CHROME_IN
+    ratios = [1.0] * len(kernels) + [GEOMEAN_WIDTH_RATIO] * int(geomean_panel)
     fig, axes = plt.subplots(
-        len(present), columns, figsize=(width, height), squeeze=False, sharex=True
+        len(present), columns, figsize=(width, height), squeeze=False, sharex=True,
+        gridspec_kw={"width_ratios": ratios},
     )  # fmt: skip
     ideals: list[Line2D] = []
     for row, mode in zip(axes, present):
@@ -837,11 +871,12 @@ def figure_mode_grid(
         type_,
     )
     for ax in axes.flat:
+        fit_y(ax)
         decade_ticks(ax)
     # Room for the shared label's one line and no more: tight_layout's own pad would sit between it
     # and the row labels.
     ylabel_in = type_.label_pt * 1.25 / 72.0
-    fig.tight_layout(pad=0.2, w_pad=1.2, h_pad=0.8, rect=(ylabel_in / width, 0.0, 1.0, 1.0))
+    fig.tight_layout(pad=0.2, w_pad=0.15, h_pad=0.3, rect=(ylabel_in / width, 0.0, 1.0, 1.0))
     handles = [ideals[0], *series_handles(drawn, type_.line_width, counted=geomean_panel)]
     place_legend(fig, handles, list(axes[-1]), type_, xlabel="GPUs $P$")
     shared_ylabel(fig, list(axes[:, 0]), SPEEDUP_LABEL, type_)
@@ -956,9 +991,9 @@ def figure_summary(
     return fig
 
 
-#: One panel's height in :func:`figure_mode_grid`: 0.72 of the print panel, so two rows
+#: One panel's height in :func:`figure_mode_grid`: 0.65 of the print panel, so two rows
 #: of narrow panels stay a strip under the text rather than a quarter page.
-GRID_PANEL_HEIGHT_IN: float = 0.72 * PRINT_PANEL_HEIGHT_IN
+GRID_PANEL_HEIGHT_IN: float = 0.65 * PRINT_PANEL_HEIGHT_IN
 
 #: The one Y label of :func:`figure_mode_grid`, shared by both rows.
 SPEEDUP_LABEL: str = "Speedup over PyTorch (1 GPU)"

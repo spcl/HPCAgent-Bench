@@ -2173,7 +2173,7 @@ def dot_row_legend(columns: Sequence[DotColumn], channels: str, config: FigureCo
 
 #: The narrowest a column may be, in categories. A stub column has none, and at a width ratio of
 #: one beside a nine-category neighbour it collapsed to a sliver its own name could not sit over.
-MIN_COLUMN_CATEGORIES: int = 3
+MIN_COLUMN_CATEGORIES: int = 2
 
 
 def dot_row_widths(columns: Sequence[DotColumn], config: FigureConfig = DEFAULT_CONFIG) -> list[float]:

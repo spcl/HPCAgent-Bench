@@ -331,3 +331,66 @@ def test_no_test_module_imports_an_optional_extra_at_module_scope() -> None:
         if name in extras
     ]
     assert not offenders, "module-level import of an optional extra under tests/:\n  " + "\n  ".join(offenders)
+
+
+def integration_shards() -> list[dict]:
+    """The ``integration`` job's shard matrix, as YAML rather than as text."""
+    return list(workflow_jobs()["integration"]["strategy"]["matrix"]["shard"])
+
+
+def test_the_integration_shards_partition_tests_dir() -> None:
+    """``-m integration tests/`` was ONE step until it measured 30m05s against its 30-minute cap
+    with every test passing; it is now dealt over shards by naming files on some shards and
+    ``--ignore``-ing exactly those files on the one shard that sweeps ``tests/``.
+
+    The union has to be exactly what the single step ran: a named file the sweeping shard forgot
+    to ignore runs twice (the 903 s kernelbench port sweep, paid twice), and an --ignore no shard
+    names is a file that silently stops running while every shard goes green. The shard ids have to
+    be 0..N-1 and the step has to actually select by the matrix value, or a shard runs nothing new.
+    """
+    shards = integration_shards()
+    ids = [int(shard["id"]) for shard in shards]
+    assert sorted(ids) == list(range(len(shards))), f"integration runs shards {ids}; expected 0..{len(shards) - 1}"
+    named: list[str] = []
+    ignored: list[str] = []
+    roots: list[str] = []
+    for shard in shards:
+        for token in str(shard["select"]).split():
+            if token.startswith("--ignore="):
+                ignored.append(token.split("=", 1)[1])
+            elif token.endswith("/"):
+                roots.append(token)
+            else:
+                named.append(token)
+    assert roots == ["tests/"], (
+        f"the shards sweep {roots}; exactly one of them has to name tests/, or the files no shard "
+        "names are the ones nothing runs"
+    )
+    assert len(named) == len(set(named)), f"a file is named on two shards and runs twice: {sorted(named)}"
+    assert sorted(named) == sorted(ignored), (
+        f"shards name {sorted(named)} but the sweeping shard ignores {sorted(ignored)}. "
+        "A file on both sides runs once; on one side only it runs twice or not at all."
+    )
+    missing = [path for path in named if not (REPO / path).is_file()]
+    assert not missing, (
+        f"the matrix names files that do not exist: {missing} -- an --ignore that misses ignores nothing"
+    )
+    unmarked = [path for path in named if "pytest.mark.integration" not in (REPO / path).read_text()]
+    assert not unmarked, f"shards name files with no integration test, so -m integration runs nothing there: {unmarked}"
+    step = next(
+        cmd for cmd in pytest_invocations() if "-m integration" in cmd and "--ignore=tests/test_dace_numeric" in cmd
+    )
+    assert step.endswith("-m integration ${{ matrix.shard.select }}"), (
+        f"Phase 6 no longer selects by the shard matrix, so every shard runs the same thing: {step}"
+    )
+
+
+def test_every_integration_shard_keeps_its_own_coverage_and_ccache() -> None:
+    """Both shards upload coverage and save a ccache; one name for both is a collision where the second
+    upload fails and the shards overwrite each other's cache. The finish/setup inputs carry the shard,
+    and the combine job waits for the whole matrix."""
+    job = workflow_jobs()["integration"]
+    uses = {step.get("uses", ""): step.get("with", {}) for step in job["steps"]}
+    assert uses["./.github/actions/finish"]["coverage"] == "integration-${{ matrix.shard.id }}"
+    assert "matrix.shard.id" in uses["./.github/actions/setup"]["ccache"]
+    assert "integration" in workflow_jobs()["coverage"]["needs"], "coverage does not wait for the integration shards"

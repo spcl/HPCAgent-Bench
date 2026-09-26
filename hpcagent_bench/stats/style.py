@@ -588,6 +588,12 @@ def edge_width(size: float, widest: float) -> float:
     return min(widest, 0.2 * math.sqrt(size))
 
 
+#: Size factors that give matplotlib's filled markers about the ink of a circle at one ``s``: at equal
+#: ``s`` a triangle covers roughly half a square, so a blind-submission row read smaller than a
+#: CPF row beside it. Shapes not listed (the circle, crosses, stars given as paths) keep ``s``.
+MARKER_AREA_SCALE: dict[str, float] = {"s": 0.8, "D": 0.85, "d": 1.0, "<": 1.3, ">": 1.3, "^": 1.3, "v": 1.3, "*": 1.5}
+
+
 def point_mark(
     ax: Axes,
     x: float,
@@ -615,6 +621,7 @@ def point_mark(
     ``clip`` False lets a mark on the axis limit print whole across the frame instead of halved.
     """
     filled = filled and delivered
+    size *= MARKER_AREA_SCALE.get(marker, 1.0) if isinstance(marker, str) else 1.0
     ax.scatter(  # pyright: ignore[reportUnknownMemberType]
         x, y, s=size, marker=marker, color="white", edgecolor="none", zorder=FILL_Z, clip_on=clip
     )
