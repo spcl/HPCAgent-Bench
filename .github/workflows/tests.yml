@@ -19,10 +19,10 @@ env:
 # quietly becoming the run's critical path. EVERY job in this file is now under it, with no
 # exceptions and no jobs carrying an "over budget, owned elsewhere" note, and
 # tests/test_ci_coverage.py::test_no_job_budgets_itself_past_the_container_ceiling is what keeps
-# the next edit from quietly raising one. Nothing was deleted or deselected to get there: four jobs
+# the next edit from quietly raising one. Nothing was deleted or deselected to get there: five jobs
 # became MATRICES over a slice knob (unit over the discovered file list, port-fidelity over the
 # corpus, integration_translators over the registry per whole-corpus sweep, ports-cegterg over the
-# configuration list), and each carries a test asserting that its shards PARTITION what the single
+# configuration list, integration over the test files under tests/), and each carries a test asserting that its shards PARTITION what the single
 # job used to run and that CI runs every shard it splits into. A silent coverage drop is the
 # failure mode a split has, so it is gated rather than trusted.
 #
@@ -31,7 +31,9 @@ env:
 # two runs disagree), and what was done about each:
 #   75.2m  port-fidelity Phase 8        (a 69.7)  -> 3 shards over the corpus, ~29m each
 #   70.5m  integration Phase 6          (a 52.4)  -> split by tree: tests/ (23m37s) + the
-#                                                    translator tree, itself now 5 legs
+#                                                    translator tree, itself now 5 legs;
+#                                                    tests/ then grew to 30m05s (2026-09-26) ->
+#                                                    2 shards, kernelbench file alone vs the rest
 #   50.2m  mpi "dace corpus vs numpy"   (a 50.2)  -> its own job (dace-numeric); the 50m was a COLD
 #                                                    ccache (45.81% hits) off a stale prefix key
 #   35.8m  unit Phase 1                 (a 28.1)  -> Phase 2 (0.5) went to e2e-native and Phase 3
@@ -142,7 +144,8 @@ env:
 #   e2e-pythran             e2e[pythran]        (pythran isolated -- ~7 GB/compile, -n 2)
 #   e2e-numba-jax           e2e[numba, jax]
 #   container-image         build + smoke-launch the agent-bench cpu image, + the agent-bench suite
-#   integration             -m integration under tests/
+#   integration             -m integration under tests/                    (MATRIX: 2 shards,
+#                           test_kernelbench_translation.py alone vs the rest of tests/)
 #   integration_translators -m integration under the numpy-translator tree      (one leg; the
 #                           registry shard knob is kept at 0/1)
 #   port-fidelity           the DaCe frontend over the generated corpus         (MATRIX: 3 shards
@@ -628,13 +631,40 @@ jobs:
   #
   # Deliberately NOT `needs: [unit]`: a Phase 1 unit failure must not hide what the integration
   # tests would have said. Only the PUBLISH step is gated on both (see the hf-export steps in coverage).
+  #
+  # 2026-09-26: a MATRIX of two shards. On main this Phase 6 grew from 23m37s to 30m05s and died on
+  # its own 30-minute step cap with all 75 selected tests PASSING -- a budget a measurement grew
+  # past, so re-shard rather than raise. Two tests were the whole cost:
+  # test_kernelbench_translation.py::test_at_least_the_pinned_number_of_ports_translate 903.7 s,
+  # test_dace_openblas_link.py::test_source_built_openblas_is_openmp_threaded 555.9 s (it builds
+  # OpenBLAS from source), every other test under 40 s. The kernelbench file alone is ~15 min and
+  # everything else ~15 min (1805 - 904 s), so shard 0 names that one file and shard 1 sweeps
+  # tests/ with it --ignore'd; test_the_integration_shards_partition_tests_dir pins the pair.
   # ===========================================================================================
   integration:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
-    name: integration (build/run real artifacts)
+    name: integration (build/run real artifacts) [${{ matrix.shard.id }}]
     runs-on: ubuntu-latest
+    strategy:
+      # fail-fast: false -- the two shards are unrelated tests; one red must not cancel the other.
+      fail-fast: false
+      matrix:
+        shard:
+          # A file NAMED on one shard is --ignore'd on the shard that sweeps the directory, and the
+          # union is exactly the `-m integration tests/` the single step ran. `openblas` gates the
+          # from-source OpenBLAS cache to the one shard whose test builds it: two shards saving one
+          # fixed key race, and the loser is a "Cache save failed" annotation.
+          - id: 0
+            openblas: false
+            select: >-
+              tests/test_kernelbench_translation.py
+          - id: 1
+            openblas: true
+            select: >-
+              --ignore=tests/test_kernelbench_translation.py tests/
     # Phase 6 (30) + the OpenBLAS build and setup steps above it, ~12 on a cold BLAS cache.
-    # 23m37s measured for the phase; 45 is the per-container ceiling.
+    # ~15 min measured per shard (the 30m05s of run on main, halved as above); 45 is the
+    # per-container ceiling.
     timeout-minutes: 45
     env:
       PYTEST_ADDOPTS: "--cov=hpcagent_bench --cov-append --cov-report="
@@ -678,12 +708,14 @@ jobs:
       # spelling of this fix; actions/cache carries a deprecationMessage on it saying it "does not
       # work as intended", will be removed, and that a separate actions/cache/restore step is what
       # to use instead -- which is this.
+      # The key carries the MATRIX value too: both shards share one `github.job`, so without it
+      # they write the same key and one shard restores objects the other compiled.
       - name: Setup -- restore the compile cache
         uses: actions/cache/restore@v4
         with:
           path: ~/.ccache
-          key: ccache-${{ github.job }}-${{ env.CPU_KEY }}-${{ github.run_id }}
-          restore-keys: ccache-${{ github.job }}-${{ env.CPU_KEY }}-
+          key: ccache-${{ github.job }}-${{ matrix.shard.id }}-${{ env.CPU_KEY }}-${{ github.run_id }}
+          restore-keys: ccache-${{ github.job }}-${{ matrix.shard.id }}-${{ env.CPU_KEY }}-
       - name: Setup -- reset the ccache counters
         run: ccache --zero-stats
 
@@ -696,6 +728,7 @@ jobs:
       # earn a "cache already exists" warning.
       - name: Setup -- restore the from-source OpenBLAS (USE_OPENMP=1)
         id: openblas
+        if: ${{ matrix.shard.openblas }}
         uses: actions/cache/restore@v4
         with:
           path: ${{ github.workspace }}/.openblas-cache/openblas-openmp/install
@@ -757,11 +790,14 @@ jobs:
         #
         # 105 -> 30: with the translator tree split off this half measured 23m37s end to end (run
         # 33626484866), and its own slowest file is tests/test_kernelbench_translation.py at 13m56s.
+        # Then 30m05s on main (2026-09-26), all 75 passing, killed by this cap: kernelbench 903.7 s
+        # + the OpenBLAS build test 555.9 s. Sharded (see the job banner), each shard is ~15 min
+        # against this unchanged 30, which is the headroom the whole step no longer had.
         timeout-minutes: 30
         run: |
           python -m pytest -p no:cacheprovider -rfEs --timeout=1500 --timeout-method=thread --durations=25 \
             --ignore=tests/test_dace_numeric_agreement.py \
-            -m integration tests/
+            -m integration ${{ matrix.shard.select }}
 
       - name: ccache statistics
         if: always()
@@ -775,10 +811,10 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: ~/.ccache
-          key: ccache-${{ github.job }}-${{ env.CPU_KEY }}-${{ github.run_id }}
+          key: ccache-${{ github.job }}-${{ matrix.shard.id }}-${{ env.CPU_KEY }}-${{ github.run_id }}
 
       - name: Save the from-source OpenBLAS
-        if: ${{ always() && steps.openblas.outputs.cache-hit != 'true' }}
+        if: ${{ always() && matrix.shard.openblas && steps.openblas.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v4
         with:
           path: ${{ github.workspace }}/.openblas-cache/openblas-openmp/install
@@ -788,7 +824,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-integration
+          name: coverage-integration-${{ matrix.shard.id }}
           path: .coverage*
           include-hidden-files: true
           if-no-files-found: ignore
