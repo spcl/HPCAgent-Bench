@@ -187,6 +187,15 @@ runs:
         # shellcheck disable=SC2086 -- pip-args is a flag list
         pip_retry -e ".[cpu]" ${{ inputs.pip-args }}
         echo "dace @ $(git -C "${RUNNER_TEMP}/dace" rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+        # A dependency that caps dace (gt4py 1.2.2 did) makes pip swap the pinned checkout for a PyPI
+        # release without an error; every dace test would then grade the wrong compiler.
+        python - "${RUNNER_TEMP}/dace" <<'PY'
+        import pathlib, sys
+        import dace
+        where = pathlib.Path(dace.__file__).resolve()
+        if pathlib.Path(sys.argv[1]).resolve() not in where.parents:
+            sys.exit(f"dace imports from {where}, not the pinned checkout {sys.argv[1]}")
+        PY
         # No DACE_compiler_build_mode here: a DACE_* env var outranks Config.set and would defeat
         # dace_framework.BUILD_CACHE_PINS (tests/test_dace_flavors.py).
 

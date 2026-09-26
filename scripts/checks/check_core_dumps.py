@@ -54,6 +54,8 @@ GUARDED = re.compile(r"\bulimit\s+(?:-S\s+)?-c\s+0\b")
 def guarded(text: str) -> bool:
     """Whether ``text`` floors the core limit (:data:`GUARDED`)."""
     return GUARDED.search(text) is not None
+
+
 BLOCK = """# A core dump lands in the crashing process's CWD (the checkout) and Slurm propagates the
 # SUBMITTER's core limit, so the floor has to be set here.
 ulimit -c 0

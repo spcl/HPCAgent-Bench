@@ -22,7 +22,6 @@ import subprocess
 import sqlite3
 import sys
 import textwrap
-from typing import List
 
 import numpy as np
 import pytest
@@ -73,7 +72,7 @@ def _native_env(cwd: pathlib.Path) -> dict:
     return env
 
 
-def _capped(argv: List[str]) -> List[str]:
+def capped(argv: list[str]) -> list[str]:
     """Wrap ``argv`` in an 8GB systemd memory cap when systemd-run is available (the run
     discipline for native builds); otherwise run uncapped."""
     if shutil.which("systemd-run"):
@@ -81,7 +80,7 @@ def _capped(argv: List[str]) -> List[str]:
     return argv
 
 
-def _db_has_validated(db: pathlib.Path, frameworks: List[str]) -> bool:
+def db_has_validated(db: pathlib.Path, frameworks: list[str]) -> bool:
     """True iff ``db`` holds >= 1 validated preset-S row for every named framework."""
     from hpcagent_bench.harness import recording
 
@@ -119,12 +118,12 @@ def _attempt_native(work: pathlib.Path) -> bool:
         run_benchmark_sweep({_NATIVE_KERNEL_STEM!r}, "numba",    "S", True, 5, 120.0, "float64")
         run_benchmark_sweep({_NATIVE_KERNEL_STEM!r}, "dace_cpu", "S", True, 5, 120.0, "float64")
     """)
-    argv = _capped([sys.executable, "-c", script])
+    argv = capped([sys.executable, "-c", script])
     try:
         subprocess.run(argv, cwd=str(work), env=_native_env(work), timeout=360, capture_output=True, text=True)
     except (subprocess.TimeoutExpired, OSError):
         return False
-    return _db_has_validated(db, ["numpy", "numba", "dace_cpu"])
+    return db_has_validated(db, ["numpy", "numba", "dace_cpu"])
 
 
 def _clean_native_leftovers(db: pathlib.Path) -> None:
@@ -132,7 +131,7 @@ def _clean_native_leftovers(db: pathlib.Path) -> None:
     beside ``db``, plus ``db`` itself if that partial run already got aggregated into it.
 
     ``_attempt_native`` can write real-hostname rows into a shard and even build ``db`` as their
-    aggregate before ``_db_has_validated`` decides the run does not count. Leaving the shard on
+    aggregate before ``db_has_validated`` decides the run does not count. Leaving the shard on
     disk means the next ``ensure_aggregated`` call (``load_results`` / ``plot_*`` both make one)
     re-merges those real rows into the synthetic DB we are about to write -- two machines instead
     of one."""

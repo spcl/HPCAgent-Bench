@@ -136,7 +136,9 @@ def test_the_run_root_scan_skips_the_extractions_own_output(tmp_path: pathlib.Pa
     """A database under the output directory is never read back as a judge record."""
     judge = make_db(tmp_path / "camp" / "123" / "judge" / "hpcagent_bench0.db")
     make_db(tmp_path / "camp" / "123" / "observations" / "sources" / "copied.db")
-    found = observations_extract.discover_databases([str(tmp_path / "camp")], [tmp_path / "camp" / "123" / "observations"])
+    found = observations_extract.discover_databases(
+        [str(tmp_path / "camp")], [tmp_path / "camp" / "123" / "observations"]
+    )
     assert [db.path for db in found] == [judge.resolve()]
 
 
