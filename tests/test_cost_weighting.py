@@ -169,6 +169,8 @@ def test_each_card_prices_the_same_tasks_into_its_own_rho_c() -> None:
         for arm, cached in (("harness20-qwen38-openhands", 0.0), ("harness20-qwen38-claude", 1000.0))
         for kernel in ("k1", "k2", "k3")
     ]
+    # each kernel was run: a score call beside its task row (population.ran_rows)
+    rows += [{**row, "record": "call", "route": "score", "tokens": math.nan} for row in rows]
 
     table = cost_weighting.pair_cost_ratios(pd.DataFrame(rows), [PAIRS[0]], cards=("billed", "effective", "total"))
 

@@ -154,11 +154,12 @@ def corrected(rows: Sequence[dict[str, float | str | int]]) -> pd.DataFrame:
 def load_all(paths: Sequence[pathlib.Path], card: cost.CostModel = cost.resolve()) -> pd.DataFrame:
     """Every observations file as one frame, tokens priced by ``card``. A comparison whose two sides
     are two CAMPAIGNS has them in two extracted files, and a run never copies one into the other's."""
-    return cost.priced(pd.concat([experiments.read_observations(path) for path in paths], ignore_index=True), card)
+    frame = pd.concat([experiments.read_observations(path) for path in paths], ignore_index=True)
+    return population.condition_rows(cost.priced(frame, card))
 
 
 def load(path: pathlib.Path, prefix: str, card: cost.CostModel = cost.resolve()) -> pd.DataFrame:
-    frame = cost.priced(experiments.read_observations(path), card)
+    frame = population.condition_rows(cost.priced(experiments.read_observations(path), card))
     if prefix:
         frame = frame[frame["arm"].astype(str).str.startswith(prefix)]
     # NO filter on speedup or tokens here. The two axes come off DIFFERENT record types -- the score
