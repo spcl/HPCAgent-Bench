@@ -1,5 +1,5 @@
 # EDF template for the MI250X (gfx90a) SGLang image on partition mi200. install_edfs.sh renders it as
-# hpcagent-bench-sglang-mi200-latest and rewrites the `image` line. Fabric settings match ../sglang/edf.toml.example,
+# hpcagent-bench-sglang-mi200-latest and rewrites the `image` line. Fabric settings match ../sglang/edf.toml.in,
 # whose comments carry the reason behind each one.
 image = "${SCRATCH}/ce-images/hpcagent-bench-sglang-mi200.sqsh"
 
@@ -47,7 +47,7 @@ NCCL_DEBUG_SUBSYS = "INIT,NET"
 [annotations]
 # netstack: the CSCS artifact (libfabric, libcxi, RCCL plugin); cxi: provider and /dev/cxi*;
 # aws_ofi_nccl: the RCCL net plugin. Version and name pinned so a CSCS bump cannot move the fabric.
-# The same artifact as ../sglang/edf.toml.example, whose comments carry the reasons. NOT "host":
+# The same artifact as ../sglang/edf.toml.in, whose comments carry the reasons. NOT "host":
 # host mode's plugin (/opt/cscs/aws-ofi-ccl-plugin/rocm6) needs libamdhip64.so.6 and this image is
 # ROCm 7.2, so RCCL logs "NET/Plugin: libamdhip64.so.6: cannot open shared object file", finds no
 # "ofi" plugin, and with NCCL_NET pinned in [env] tp8 init dies "NCCL error: invalid usage".

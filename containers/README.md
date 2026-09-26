@@ -8,7 +8,8 @@ containers/
   images/            one directory per image, plus the scripts that build, verify, promote and publish them
     images.env         the image registry: one row per image; every script here reads it
     build_common.sh    sourced by every build.sh / build.sbatch
-    <image>/           Dockerfile, build.sh, build.sbatch, edf.toml.example (CSCS Container Engine)
+    <image>/           Dockerfile, build.sh, build.sbatch and the EDF template(s) install_edfs.sh renders
+                       into ~/.edf: edf.toml.in, or agent.edf.toml.in + judge.edf.toml.in for a pair
   lib/               build steps the Dockerfiles COPY (HPTT, tblis, Pluto, git retry, image gates)
   inference/         serving jobs, weight fetch, serving smokes and gates, tuned MoE configs
   agent/             prompt fragments, MCP tools, method packets and harness pins, bound read-only into
@@ -275,7 +276,7 @@ alternatives. `perf` comes from `linux-perf` where the base packages it, else fr
 ## Adding a container
 
 1. Create `images/<name>/` with `Dockerfile`, `build.sh`, `build.sbatch` and
-   `edf.toml.example`. Copy the closest existing directory: `sglang/` or `vllm-cuda/` for a
+   the EDF template (`edf.toml.in`; `agent.edf.toml.in` + `judge.edf.toml.in` for a pair). Copy the closest existing directory: `sglang/` or `vllm-cuda/` for a
    single-target image, `judge-agent-cuda/` for an agent+judge pair. `build.sh` sources
    `../build_common.sh` and `../images.env`, builds from the repository root and ends with
    `ce_export_image <tag> <candidate path>`; `build.sbatch` sources `../build_common.sh` too and

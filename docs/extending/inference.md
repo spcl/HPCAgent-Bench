@@ -90,12 +90,12 @@ python -m pytest --maxfail=10 tests/test_display_names.py tests/test_palette.py 
 
 | File | Change |
 |---|---|
-| `containers/images/<engine>/` | `Dockerfile`, `build.sh`, `build.sbatch`, `edf.toml.example` (copy `sglang/`) |
+| `containers/images/<engine>/` | `Dockerfile`, `build.sh`, `build.sbatch`, `edf.toml.in` (copy `sglang/`) |
 | `containers/images/images.env` | `INFERENCE_<ENGINE>_SQSH`, `_EDF_LATEST`, `_TEMPLATE`, `_REPO`, `_TAG` |
 | `containers/images/install_edfs.sh` | render the new EDF beside the sglang one |
 | `experiments/run_cluster.sh` `run_vllm_node` | interpreter (`engine_python`) and a `command=(...)` branch |
 
-`edf.toml.example` keeps the `PLACEHOLDER.sqsh` image line, a multi-line `mounts = [` block, absolute
+`edf.toml.in` keeps the `PLACEHOLDER.sqsh` image line, a multi-line `mounts = [` block, absolute
 `PATH` and `LD_LIBRARY_PATH` under `[env]` (the CE drops the image's ENV) and the fabric hook
 annotations. The engine name also goes in the profiles of `verify_image.py` and the role lists
 of `promote_image.sh`, `pull_image.sh` and `experiments/smoke-new-images.sh` (`SMOKE`).

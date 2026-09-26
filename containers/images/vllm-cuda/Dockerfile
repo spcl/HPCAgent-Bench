@@ -16,7 +16,7 @@
 # engine version, a CUDA torch, and each parser name by the registry the server resolves it from --
 # a misnamed parser starts the server and fails the first request (verify-tools-reasoning.py).
 #
-# No fabric software: the CE hooks inject libfabric/CXI and the NCCL net plugin (edf.toml.example).
+# No fabric software: the CE hooks inject libfabric/CXI and the NCCL net plugin (edf.toml.in).
 #
 # PINNED BY DIGEST: vllm/vllm-openai:v0.28.0-aarch64-cu129, the arm64-only CUDA 12.9 build of the
 # v0.28.0 release. The digest is the tag's manifest digest, resolved from the

@@ -50,7 +50,7 @@ case "${PROFILE}" in
     sglang|sglang-mi200|vllm) ce_fi_provider='FI_PROVIDER = "cxi"' ;;
     *)                        ce_fi_provider='' ;;
 esac
-# CC/CXX/FC and LD_LIBRARY_PATH carried over from judge-agent-amd/edf.toml.example, the production
+# CC/CXX/FC and LD_LIBRARY_PATH carried over from judge-agent-amd/agent.edf.toml.in, the production
 # template, so this generated EDF describes the same running image. LD_PRELOAD and PMIX_MCA_psec
 # are left out: neither affects the compile/link legs mpi_gpu_check.sh exercises.
 case "${PROFILE}" in
@@ -82,7 +82,7 @@ mounts = [$(hpcagent_bench_edf_mounts)${ce_agent_mount}]
 workdir = "/"
 
 [annotations]
-# Matches judge-agent-amd/edf.toml.example. "host" mode does not work here: libcxi wants versioned
+# Matches judge-agent-amd/agent.edf.toml.in. "host" mode does not work here: libcxi wants versioned
 # libnl_3 symbols the base image's libnl-3.so.200 lacks, and host+rocm6 needs libamdhip64.so.6
 # which this image (ROCm 7.2) does not ship. "artifact" carries a matching, self-consistent bundle.
 # version/name are pinned so a campaign never silently straddles two fabric stacks.

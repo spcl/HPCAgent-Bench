@@ -135,7 +135,7 @@ def test_the_mi200_image_ships_no_aiter_prebuild_and_serves_with_aiter_off() -> 
     # GPU_ARCHS appears only as the override of the base's gfx942 ENV, never as an aiter arch setting.
     assert re.findall(r"GPU_ARCHS=\S+", code) == ["GPU_ARCHS=${ROCM_ARCH}"]
     assert "SGLANG_USE_AITER=0" in code
-    env = tomllib.loads((MI200 / "edf.toml.example").read_text(encoding="utf-8"))["env"]
+    env = tomllib.loads((MI200 / "edf.toml.in").read_text(encoding="utf-8"))["env"]
     assert env["SGLANG_USE_AITER"] == "0"
     assert [name for name in env if name.startswith("AITER_")] == []
 
@@ -194,7 +194,7 @@ def images_env() -> list[str]:
 
 def test_images_env_names_the_mi200_live_image_edf_and_template() -> None:
     sqsh, edf, template = images_env()[:3]
-    assert (sqsh, edf, template) == (LIVE, "hpcagent-bench-sglang-mi200-latest", "sglang-mi200/edf.toml.example")
+    assert (sqsh, edf, template) == (LIVE, "hpcagent-bench-sglang-mi200-latest", "sglang-mi200/edf.toml.in")
     assert (CE / template).is_file()
 
 
@@ -296,7 +296,7 @@ def test_install_edfs_renders_sglang_mi200_latest_onto_the_mi200_image(tmp_path:
     # The mi300 sglang EDF's pinned netstack artifact, not "host": host mode's rocm6 RCCL plugin needs
     # libamdhip64.so.6, which a ROCm 7.2 image lacks, so tp8 init dies with no NET plugin (649811).
     hooks = edf["annotations"]["com"]["hooks"]
-    mi300 = tomllib.loads((CE / "sglang" / "edf.toml.example").read_text(encoding="utf-8"))["annotations"]
+    mi300 = tomllib.loads((CE / "sglang" / "edf.toml.in").read_text(encoding="utf-8"))["annotations"]
     assert hooks == mi300["com"]["hooks"]
     assert (hooks["netstack"]["source"], hooks["cxi"]["enabled"], hooks["aws_ofi_nccl"]["enabled"]) == (
         "artifact",

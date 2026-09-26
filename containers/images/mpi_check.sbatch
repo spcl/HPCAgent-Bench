@@ -28,7 +28,7 @@ IMAGE="${IMAGE:-${CE_IMAGES}/${JUDGE_AGENT_AMD_SQSH}}"
 [ -f "${IMAGE}" ] || { echo "no image at ${IMAGE}" >&2; exit 2; }
 
 # Generated, not taken from ~/.edf, so a candidate image can be checked before any EDF names it.
-# All FIVE hook annotations, matching judge-agent-amd/edf.toml.example: any subset leaves libfabric
+# All FIVE hook annotations, matching judge-agent-amd/agent.edf.toml.in: any subset leaves libfabric
 # or the RCCL plugin unresolved. FI_PROVIDER is deliberately unset: setting it aborts MPI_Init.
 # logs/ is mounted so the provenance probe's raw output survives the check script's own cleanup.
 EDF="${SCRATCH}/.tmp/mpicheck-${SLURM_JOB_ID}.toml"
