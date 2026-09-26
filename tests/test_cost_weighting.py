@@ -29,7 +29,7 @@ def points() -> pd.DataFrame:
                 {
                     "arm_a": treated,
                     "arm_b": control,
-                    "card": card,
+                    "card": card.value,
                     "n": 20,
                     "rho_c": 1.1,
                     "ci_low": low,
@@ -109,7 +109,7 @@ def test_the_usd_slot_is_drawn_only_when_every_model_has_a_price_card(tmp_path: 
 def test_a_three_slot_figure_has_no_usd_tick() -> None:
     """The ``w_m`` tick goes with the USD slot."""
     table = points()
-    table = table[table.card != cost_weighting.Card.USD]
+    table = table[table.card != cost_weighting.Card.USD.value]
     fig = cost_weighting.figure_cost_points(table, {})
     assert fig is not None
     try:

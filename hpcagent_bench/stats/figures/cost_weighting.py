@@ -38,7 +38,7 @@ from hpcagent_bench.stats import cost, palette, population, summary
 from hpcagent_bench.stats import style as plotstyle
 
 
-class Card(enum.StrEnum):
+class Card(enum.Enum):
     """One X slot of the figure, in slot order: the three token weightings, then list-price dollars.
     ``USD`` is a pseudo-card: each pair is priced with ``usd-<model>``, its own model's card, since
     dollars depend on the model and the token weightings do not."""
@@ -68,7 +68,7 @@ class Pair:
 
 def usd_card_name(model: str) -> str:
     """The price card of ``model``: ``usd-<model>``."""
-    return f"{Card.USD}-{model}"
+    return f"{Card.USD.value}-{model}"
 
 
 def figure_cards(pairs: Sequence[Pair], extra: pathlib.Path | None = None) -> tuple[Card, ...]:
@@ -132,7 +132,7 @@ def ratio_row(tokens: dict, pair: Pair, card: str) -> dict[str, object]:
 def pair_cost_ratios(
     observations: pd.DataFrame,
     pairs: Sequence[Pair | tuple[str, str]],
-    cards: Sequence[str] = (*TOKEN_CARDS, Card.USD),
+    cards: Sequence[Card | str] = (*TOKEN_CARDS, Card.USD),
     repeats: population.RepeatPolicy = population.RepeatPolicy.LATEST,
     extra: pathlib.Path | None = None,
 ) -> pd.DataFrame:
@@ -143,11 +143,12 @@ def pair_cost_ratios(
     priced: dict[str, dict] = {}
     rows: list[dict[str, object]] = []
     for key in cards:
+        card = key.value if isinstance(key, Card) else key
         for pair in pairs:
-            name = usd_card_name(pair.model) if key == Card.USD else str(key)
+            name = usd_card_name(pair.model) if card == Card.USD.value else card
             if name not in priced:
                 priced[name] = arm_tokens(observations, cost.resolve(name, extra), repeats)
-            rows.append(ratio_row(priced[name], pair, str(key)))
+            rows.append(ratio_row(priced[name], pair, card))
     return pd.DataFrame(rows, columns=list(COLUMNS))
 
 
@@ -178,7 +179,7 @@ def pair_styles(arms: Sequence[str]) -> dict[str, tuple[str, str]]:
 
 def short_tick(card: str) -> str:
     """A compact weight-vector tick, ``1,.1,1``; the axis label names the three components."""
-    if card == Card.USD:
+    if card == Card.USD.value:
         return USD_TICK
     model = cost.resolve(card)
     return ",".join(f"{w:g}".replace("0.", ".") for w in (model.fresh_input, model.cached_input, model.output))

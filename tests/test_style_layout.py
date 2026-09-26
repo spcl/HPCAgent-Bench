@@ -166,23 +166,23 @@ def log2_of(*ratios: float) -> list[float]:
 #: (kind, majors, view, the minors drawn): one row per ratio, log2, token and count axis a figure
 #: rules, all placed by :class:`~hpcagent_bench.stats.style.MinorLocator`.
 MINOR_CASES = [
-    pytest.param("ratio", FixedLocator([1.0, 2.0, 4.0, 8.0]), (1.0, 8.0),
+    pytest.param(style.MinorKind.RATIO, FixedLocator([1.0, 2.0, 4.0, 8.0]), (1.0, 8.0),
                  [1.25, 1.5, 1.75, 2.5, 3.0, 3.5, 5.0, 6.0, 7.0], id="log2-one-octave"),
-    pytest.param("ratio", FixedLocator([1.0, 2.0]), (1.0, 2.6), [1.25, 1.5, 1.75, 2.5], id="log2-past-the-last-major"),
-    pytest.param("ratio", FixedLocator([1.0, 4.0, 16.0]), (1.0, 16.0), [2.0, 8.0], id="log2-two-octaves"),
-    pytest.param("ratio", FixedLocator([0.125, 1.0, 8.0]), (0.1, 10.0), [0.25, 0.5, 2.0, 4.0], id="log2-three-octaves"),
-    pytest.param("log2", MultipleLocator(1.0), (0.0, 2.0), log2_of(1.25, 1.5, 1.75, 2.5, 3.0, 3.5),
+    pytest.param(style.MinorKind.RATIO, FixedLocator([1.0, 2.0]), (1.0, 2.6), [1.25, 1.5, 1.75, 2.5], id="log2-past-the-last-major"),
+    pytest.param(style.MinorKind.RATIO, FixedLocator([1.0, 4.0, 16.0]), (1.0, 16.0), [2.0, 8.0], id="log2-two-octaves"),
+    pytest.param(style.MinorKind.RATIO, FixedLocator([0.125, 1.0, 8.0]), (0.1, 10.0), [0.25, 0.5, 2.0, 4.0], id="log2-three-octaves"),
+    pytest.param(style.MinorKind.LOG2, MultipleLocator(1.0), (0.0, 2.0), log2_of(1.25, 1.5, 1.75, 2.5, 3.0, 3.5),
                  id="linear-log2-one-octave"),
-    pytest.param("log2", MultipleLocator(2.0), (-2.0, 4.0), log2_of(0.5, 2.0, 8.0), id="linear-log2-two-octaves"),
-    pytest.param("token", LogLocator(base=10.0, subs=(1.0, 2.0, 5.0)), (1e5, 1e6),
+    pytest.param(style.MinorKind.LOG2, MultipleLocator(2.0), (-2.0, 4.0), log2_of(0.5, 2.0, 8.0), id="linear-log2-two-octaves"),
+    pytest.param(style.MinorKind.TOKEN, LogLocator(base=10.0, subs=(1.0, 2.0, 5.0)), (1e5, 1e6),
                  [3e5, 4e5, 6e5, 7e5, 8e5, 9e5], id="token-1-2-5"),
-    pytest.param("token", LogLocator(base=10.0, subs=(1.0, 1.5, 2.0, 3.0, 5.0, 7.0)), (1e5, 1e6),
+    pytest.param(style.MinorKind.TOKEN, LogLocator(base=10.0, subs=(1.0, 1.5, 2.0, 3.0, 5.0, 7.0)), (1e5, 1e6),
                  [4e5, 6e5, 8e5, 9e5], id="token-config-subs"),
-    pytest.param("count", FixedLocator([0.0, 20.0, 40.0]), (-2.0, 42.0), [5.0, 10.0, 15.0, 25.0, 30.0, 35.0],
+    pytest.param(style.MinorKind.COUNT, FixedLocator([0.0, 20.0, 40.0]), (-2.0, 42.0), [5.0, 10.0, 15.0, 25.0, 30.0, 35.0],
                  id="count-40"),
-    pytest.param("count", FixedLocator([0.0, 5.0, 10.0]), (-0.5, 10.5), [1.0, 2.0, 3.0, 4.0, 6.0, 7.0, 8.0, 9.0],
+    pytest.param(style.MinorKind.COUNT, FixedLocator([0.0, 5.0, 10.0]), (-0.5, 10.5), [1.0, 2.0, 3.0, 4.0, 6.0, 7.0, 8.0, 9.0],
                  id="count-10"),
-    pytest.param("count", FixedLocator([0.0, 9.0]), (-0.5, 9.5), [3.0, 6.0], id="count-9-in-thirds"),
+    pytest.param(style.MinorKind.COUNT, FixedLocator([0.0, 9.0]), (-0.5, 9.5), [3.0, 6.0], id="count-9-in-thirds"),
 ]  # fmt: skip
 
 

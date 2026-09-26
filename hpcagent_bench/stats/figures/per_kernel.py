@@ -82,7 +82,7 @@ LOG = logging.getLogger(__name__)
 
 
 #: The two drawing modes: the median (+ bootstrap CI) or the raw per-episode boxplot.
-class Style(enum.StrEnum):
+class Style(enum.Enum):
     CI = "ci"
     BOX = "box"
 

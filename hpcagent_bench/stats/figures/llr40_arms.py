@@ -59,7 +59,7 @@ def arm_tokens(
     subset = frame[frame["arm"].astype(str) == arm]
     totals = population.kernel_tokens(subset, ("arm", "benchmark"), repeats=repeats)
     values = {str(kernel): float(value) for kernel, value in totals.droplevel(0).items() if value > 0}
-    if repeats != population.RepeatPolicy.MEDIAN or not values:
+    if population.repeat_policy(repeats) != population.RepeatPolicy.MEDIAN or not values:
         return values, {}, {}
     episodes = population.episode_tokens(subset, ("arm", "benchmark"))
     grouped = episodes.groupby("benchmark").tokens

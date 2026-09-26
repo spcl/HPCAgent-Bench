@@ -118,8 +118,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument(
         "--repeats",
+        type=population.RepeatPolicy,
         choices=population.REPEAT_POLICIES,
-        default="latest",
+        default=population.RepeatPolicy.LATEST,
         help="a kernel run more than once: latest run counts (reruns, default) or median over runs (designed repeats)",
     )
     ap.add_argument("--label", default="", help="figure title; default none, the caption names the figure")

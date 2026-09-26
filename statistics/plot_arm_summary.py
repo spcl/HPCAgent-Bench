@@ -325,8 +325,9 @@ def main() -> None:
     )
     parser.add_argument(
         "--repeats",
+        type=population.RepeatPolicy,
         choices=population.REPEAT_POLICIES,
-        default="latest",
+        default=population.RepeatPolicy.LATEST,
         help="a kernel run more than once: latest run counts (reruns, default) or median over runs (designed repeats)",
     )
     cost.add_arguments(parser)

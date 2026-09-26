@@ -370,7 +370,7 @@ def ratio_label(value: float) -> str:
 #: axis in ratio units, majors at powers of two. ``log2``: a LINEAR axis holding ``log2(ratio)``
 #: (the efficacy speedup axes), majors at whole exponents. ``token``: a log10 token axis.
 #: ``count``: a linear count from 0 to N (the efficacy success row).
-class MinorKind(enum.StrEnum):
+class MinorKind(enum.Enum):
     RATIO = "ratio"
     LOG2 = "log2"
     TOKEN = "token"

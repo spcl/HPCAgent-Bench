@@ -331,7 +331,7 @@ def usable_ratios(values: Samples, label: str = "", warn: bool = True) -> FloatA
     return x[keep]
 
 
-class Unusable(enum.StrEnum):
+class Unusable(enum.Enum):
     """What :func:`geomean` does with a zero, negative or non-finite entry."""
 
     RAISE = "raise"

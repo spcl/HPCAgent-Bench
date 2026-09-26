@@ -92,8 +92,8 @@ def test_weak_efficiency_divides_by_p_over_the_realized_work_ratio() -> None:
     assert point.ideal_speedup == pytest.approx(1.0)  # P / r = 4 / 4
     assert point.efficiency == pytest.approx(0.8)  # (1000/1250) / 1.0
     # the work-SCALED speedup is what the speedup panel draws, and its ideal is P
-    assert point.value("speedup") == pytest.approx(3.2)  # 4 * 1000 / 1250
-    assert point.value("efficiency") == pytest.approx(0.8)
+    assert point.value(scaling.Quantity.SPEEDUP) == pytest.approx(3.2)  # 4 * 1000 / 1250
+    assert point.value(scaling.Quantity.EFFICIENCY) == pytest.approx(0.8)
 
 
 def test_a_weak_row_without_a_work_ratio_is_read_as_exact_growth() -> None:
@@ -351,7 +351,7 @@ def test_the_band_at_a_rank_count_is_the_log_t_interval_of_the_kernels_geomean()
         for p in RANKS
     ]
 
-    band = scaling.series(scaling.curves(frame(rows)), "efficiency")[2]
+    band = scaling.series(scaling.curves(frame(rows)), scaling.Quantity.EFFICIENCY)[2]
 
     assert (band.point, band.low, band.high) == pytest.approx((0.5, 0.2608615520422396, 0.958362771526864))
     assert band.method == "log-t"
