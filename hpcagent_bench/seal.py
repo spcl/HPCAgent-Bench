@@ -354,16 +354,18 @@ def _cached_cache_root(view: str) -> str:
 
 
 def cpf_paths(view: str) -> tuple[str, ...]:
-    """``view`` and its ``cache_root``; just ``view`` when it names no readable cache."""
+    """``view``, its ``cache_root``, and the configured cache an on-demand render writes to (the
+    judge creates a missing view there on a kernel's first request, so it is covered before it exists)."""
     if not view:
         return ()
-    from hpcagent_bench import cpf_cache
+    from hpcagent_bench import config, cpf_cache
 
     try:
         root = _cached_cache_root(view)
     except cpf_cache.CacheMiss:
         root = ""
-    return tuple(path for path in (view, root) if path)
+    configured = str(config.get(cpf_cache.CACHE_CONFIG_KEY, "") or "").strip()
+    return tuple(dict.fromkeys(path for path in (view, root, configured) if path))
 
 
 def job_tmpdir(roots: Sequence[str]) -> str:
