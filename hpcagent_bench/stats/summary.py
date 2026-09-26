@@ -44,6 +44,39 @@ import numpy.typing as npt
 
 from hpcagent_bench.stats import signed_rank
 
+__all__ = [
+    "DEFAULT_ALPHA",
+    "DEFAULT_CI_METHOD",
+    "DEFAULT_CONFIDENCE",
+    "DEFAULT_MAD_Z",
+    "DEFAULT_RESAMPLES",
+    "MAD_TO_SIGMA",
+    "MEANAD_TO_SIGMA",
+    "MIN_INTERVAL_SAMPLES",
+    "MIN_PAIRS_FOR_INTERVAL",
+    "FloatArray",
+    "Interval",
+    "PairedChange",
+    "Samples",
+    "Statistic",
+    "Unusable",
+    "bootstrap_ci",
+    "drop_outliers",
+    "geomean",
+    "geomean_ci",
+    "geomean_interval",
+    "hodges_lehmann",
+    "log2_change",
+    "median_ci",
+    "paired_change",
+    "paired_geomean",
+    "rank_sum_test",
+    "signed_change",
+    "signed_rank_test",
+    "usable_ratios",
+    "walsh_averages",
+]
+
 # scipy and pandas are imported INSIDE the three functions that need them, not here. The grading
 # path takes its geometric mean from this module and already pays for numpy; making it pay for
 # scipy as well would put a second of import into every judge process to reach ten lines of

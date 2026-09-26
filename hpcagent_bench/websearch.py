@@ -49,6 +49,23 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import cast
 
+__all__ = [
+    "Provider",
+    "SearchResponse",
+    "SearchResult",
+    "WebSearchConfig",
+    "WebSearchError",
+    "available_providers",
+    "json_answer",
+    "json_array",
+    "json_object",
+    "json_text",
+    "main",
+    "post_request",
+    "resolve_provider",
+    "search",
+]
+
 
 class Provider(Enum):
     """A web-search backend. Declaration order is the auto-detect priority."""

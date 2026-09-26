@@ -9,6 +9,22 @@ from hpcagent_bench.translators.numpyto_common.numpy_desugar.hoist import HoistF
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.kinds import dtype_kind
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.ranks import newaxis_singletons, expr_rank
 
+__all__ = [
+    "FANCY_GATHER_HOIST",
+    "DecomposeRollSlice",
+    "FancySliceStoreToLoop",
+    "IxWriteToLoop",
+    "MaskedAssignToLoop",
+    "MgridInline",
+    "ScalarizeMask",
+    "SubstituteName",
+    "fancy_gather_lines",
+    "hoist_fancy_gather",
+    "ix_unpack_scatters",
+    "ix_vectors",
+    "mgrid_inline_stmts",
+]
+
 
 def mgrid_inline_stmts(tnames: list[str], slices: list[ast.AST]) -> list[ast.stmt] | None:
     """``i, j = np.mgrid[a0:b0, a1:b1]`` -> per-axis ``arange`` reshaped onto its axis and
@@ -35,6 +51,8 @@ def mgrid_inline_stmts(tnames: list[str], slices: list[ast.AST]) -> list[ast.stm
 
 class MgridInline(RewritePass):
     """Replace ``i, j = np.mgrid[s0, s1]`` with explicit ``arange`` broadcasts."""
+
+    __slots__ = ("changed",)
 
     def visit_Assign(self, node: ast.Assign):
         self.generic_visit(node)

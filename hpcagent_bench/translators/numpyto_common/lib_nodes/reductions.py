@@ -20,6 +20,35 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
     wrap_for_loops,
 )
 
+__all__ = [
+    "expand_all",
+    "expand_any",
+    "expand_arg_reduction",
+    "expand_argmax",
+    "expand_argmin",
+    "expand_axis_reduction",
+    "expand_count_nonzero",
+    "expand_max",
+    "expand_mean",
+    "expand_min",
+    "expand_prod",
+    "expand_std",
+    "expand_sum",
+    "expand_var",
+    "expand_var_or_std",
+    "full_reduction",
+    "init_for",
+    "nan_reduce_op",
+    "normalized_axes",
+    "reduction_elem_is_integer",
+    "reduction_output_index",
+    "reduction_output_refs",
+    "reduction_source_index",
+    "refuse_dropped_reduction_kwargs",
+    "refuse_unreadable_axis",
+    "reject_zero_size_reduction",
+]
+
 
 def reduction_source_index(
     n_dim: int,

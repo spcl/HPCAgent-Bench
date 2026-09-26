@@ -21,6 +21,35 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.registry import ELEMENT
 from hpcagent_bench.translators.numpyto_common.lib_nodes.repeat import diff_operand
 from hpcagent_bench.translators.numpyto_common.subscripts import has_slice_subscript
 
+__all__ = [
+    "AXIS_REDUCTIONS",
+    "FFT_TRANSFORMS",
+    "OUTPUT_SHAPE_RULES",
+    "SCALAR_RESULT_OPS",
+    "SHAPE_PRESERVING_OPS",
+    "SPILL_FIRST_OPERAND",
+    "UNHANDLED",
+    "CallHoister",
+    "allocator_shape",
+    "bincount_shape",
+    "concatenate_shape",
+    "diagonal_shape",
+    "diff_shape",
+    "elementwise_shape",
+    "fromfunction_shape",
+    "hstack_shape",
+    "leading_count_shape",
+    "named_operand_shape",
+    "numpy_call_key",
+    "outer_shape",
+    "permuted_shape",
+    "reduction_shape",
+    "reshape_name_shape",
+    "reshape_tuple_shape",
+    "routed_extent",
+    "values_operand_shape",
+]
+
 
 def numpy_call_key(call: ast.Call) -> tuple[str, str] | None:
     """The expander registry key for a call: ``np.<name>`` -> ``("np", name)``, ``np.linalg.<name>`` ->

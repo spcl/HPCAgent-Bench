@@ -29,6 +29,18 @@ from hpcagent_bench.translators.numpyto_common import dtypes, narrow_int
 from hpcagent_bench.translators.numpyto_common.ir import KernelIR, numpy_origin
 from hpcagent_bench.translators.numpyto_common.statement_desugar import Spelled, SplitTupleUnpack
 
+__all__ = [
+    "FP8_NON_ARITH_OPS",
+    "BaseEmitter",
+    "Fp8Fns",
+    "TupleTargetSplitter",
+    "fp8_dtypes_used",
+    "fp8_function_names",
+    "fp8_functions",
+    "index_rank_error",
+    "tuple_element",
+]
+
 
 def index_rank_error(name: str, shape: Sequence[str] | None, n_indices: int) -> str:
     """The one diagnostic both backends raise for an index the target cannot express.
@@ -121,6 +133,8 @@ class TupleTargetSplitter(SplitTupleUnpack):
     A racing statement stays whole: python binds every target from the OLD values, and a temp minted
     here would reach the emitter after its locals are harvested, undeclared.
     """
+
+    __slots__ = ()
 
     def values(self, targets: list[ast.expr], value: ast.expr) -> Spelled | None:
         if isinstance(value, ast.Tuple):

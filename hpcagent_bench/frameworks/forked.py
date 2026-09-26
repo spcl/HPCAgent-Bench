@@ -28,6 +28,38 @@ from hpcagent_bench import osinfo
 from hpcagent_bench.isolation import pause_openmp_pools
 from hpcagent_bench.seal import SealPlan, enter
 
+__all__ = [
+    "ABANDONED",
+    "ABANDON_POLL_S",
+    "ARM_GRACE_S",
+    "CONCRETE_CONTEXTS",
+    "COREDUMP_GRACE_S",
+    "DRAIN_S",
+    "ERROR_BYTES",
+    "EXCEPTION_HEADER",
+    "PR_SET_PDEATHSIG",
+    "TERM_GRACE_S",
+    "RunResult",
+    "abandoned_by",
+    "child_main",
+    "die_with_parent",
+    "drain_progress",
+    "exception_header",
+    "finished_result",
+    "forked_failure_reason",
+    "is_core_dumping",
+    "kill_group",
+    "poll_queue",
+    "process_context",
+    "reparented",
+    "report_without_a_thread",
+    "run_command",
+    "run_forked",
+    "stop_child",
+    "take_error",
+    "take_result",
+]
+
 #: One message on the result queue: the start stamp that arms the parent's deadline, the child's
 #: return value (``None`` when the queue could not take the real one), or its traceback text. ``R`` is
 #: whatever the callable returns; a progress snapshot stands in for that return value (the best-so-far a

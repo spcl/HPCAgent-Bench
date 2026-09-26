@@ -15,6 +15,19 @@ import pandas as pd
 from hpcagent_bench import experiment_tags, packets
 from hpcagent_bench.stats import population
 
+__all__ = [
+    "ARM_PATTERN",
+    "CANON_BASELINE",
+    "CANON_COLUMN",
+    "CONDITION_ORDER",
+    "arm_tokens",
+    "candidate_arms",
+    "condition_label",
+    "parse_arm",
+    "rank_condition",
+    "roster_of",
+]
+
 #: An arm an llr-focus40 figure may draw, and its (model, condition) in one match: ``-c`` is the control
 #: (condition ``""``), ``-c-cpf`` the CPF page, ``-c-cpfsrc`` CPF as source. C only -- Fortran has no
 #: CPF spelling (mpr-artifacts/experiments/llr-focus40-cpf/README.md).

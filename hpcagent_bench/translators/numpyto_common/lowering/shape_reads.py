@@ -7,6 +7,18 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.dims import NP_ZEROS_AL
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of, extent_is_scalar
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import const_or_name
 
+__all__ = [
+    "ResolveArrShape",
+    "ShapeMidExpressionRewriter",
+    "const_int_index",
+    "fold_shape_reads_in_table",
+    "is_newaxis",
+    "is_newaxis_result_axis",
+    "negative_literal_offset",
+    "resolve_arr_shape_subscript",
+    "resolve_shape_token",
+]
+
 
 def negative_literal_offset(node: ast.AST) -> int | None:
     """``K`` for a negative integer literal ``-K`` -- a signed ``Constant`` or ``UnaryOp(USub, Constant)``, the

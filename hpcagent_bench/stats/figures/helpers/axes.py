@@ -4,6 +4,8 @@
 
 from collections.abc import Iterable
 
+__all__ = ["CHAR_EM", "EMPTY_LABEL_CHARS", "rotated_labels_in"]
+
 #: Advance of one character, as a fraction of its type size: a proportional face averages ~0.6 em.
 CHAR_EM: float = 0.6
 

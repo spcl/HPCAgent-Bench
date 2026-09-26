@@ -22,6 +22,18 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
 from hpcagent_bench.translators.numpyto_common.lib_nodes.matmul_hoist import MatmulHoister
 from hpcagent_bench.translators.numpyto_common.lib_nodes.registry import NP_CALL_EXPANDERS
 
+__all__ = [
+    "ELEMENT_WRITE_EXPANDERS",
+    "SLICE_TARGET_EXPANDERS",
+    "LibNodeRewriter",
+    "accumulation_addend",
+    "call_expander",
+    "canonicalize_call_assign",
+    "index_axes",
+    "reduction_misses_target",
+    "retarget_scalar_accumulator",
+]
+
 if TYPE_CHECKING:
     pass
 

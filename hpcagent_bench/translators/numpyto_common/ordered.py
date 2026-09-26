@@ -23,6 +23,8 @@ directly there; this type is for the cases that must keep source order.
 
 from collections.abc import Iterable, Iterator
 
+__all__ = ["OrderedSet"]
+
 
 class OrderedSet[T]:
     """A ``set`` that iterates in insertion order. Only the operations the translators

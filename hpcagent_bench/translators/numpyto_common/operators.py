@@ -8,6 +8,8 @@ unparses Python operators directly.
 
 import ast
 
+__all__ = ["BINOP", "BOOLOP", "CMPOP", "FORTRAN_FN_EXPR", "FORTRAN_INTRINSICS"]
+
 #: AST binary-op type -> target operator string.
 BINOP: dict[str, dict[type[ast.AST], str]] = {
     "c": {

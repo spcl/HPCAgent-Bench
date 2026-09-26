@@ -62,6 +62,55 @@ from hpcagent_bench.frameworks.framework import (
 from hpcagent_bench.frameworks.test import njit_reference, tolerance_datatype, tolerances_for
 from hpcagent_bench.spec import as_block, as_list
 
+__all__ = [
+    "BUILD_CACHE_PINS",
+    "CLASSIC_CODEGEN",
+    "DACE_FAMILY_ENV",
+    "DACE_PIPELINES",
+    "DACE_SUPPLIED_FLAGS",
+    "DEFAULT_PIPELINES",
+    "GPU_RESIDENT_STORAGE",
+    "LOOP2MAP_FUSION_ROUNDS",
+    "OUTPUT_ARGS",
+    "PARALLEL_FUSION_ROUNDS",
+    "PIPELINES_BY_NAME",
+    "RANK_ENV",
+    "READABLE_CODEGEN",
+    "SINGLE_STREAM",
+    "STRICT_FP_FLAG",
+    "DaceFramework",
+    "DeviceStagingModule",
+    "PipelineContext",
+    "SdfgPipeline",
+    "TimedCompiledSDFG",
+    "apply_pipeline_config",
+    "bind_closure_arrays",
+    "bind_free_symbols",
+    "dc_complex_float",
+    "dc_float",
+    "device_staging_module",
+    "enforce_gpu_residency",
+    "local_gpu_arch",
+    "mpi_rank",
+    "pin_build_caching",
+    "pin_cpp_standard",
+    "pin_gpu_toolchain",
+    "pin_host_compiler",
+    "pin_per_rank_build_dirs",
+    "pin_single_stream",
+    "pipeline_auto_opt",
+    "pipeline_canonicalize",
+    "pipeline_loop2map",
+    "pipeline_named",
+    "pipeline_parallel",
+    "recorded_compiles",
+    "report_flags_for",
+    "row_major_copy",
+    "stage_device_arguments",
+    "stage_to_device",
+    "strip_output_args",
+]
+
 dc_float: dace_dtypes.typeclass | None = None
 dc_complex_float: dace_dtypes.typeclass | None = None
 
@@ -668,6 +717,8 @@ class TimedCompiledSDFG:
 
 class DaceFramework(Framework):
     """DaCe adapter; the flavor decides which SDFG pipelines it searches."""
+
+    __slots__ = ("_pipeline_errors", "datatype")
 
     def __init__(self, fname: str) -> None:
         warnings.filterwarnings("ignore")

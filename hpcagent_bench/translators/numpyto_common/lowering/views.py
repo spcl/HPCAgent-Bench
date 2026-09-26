@@ -15,6 +15,27 @@ from hpcagent_bench.translators.numpyto_common.lowering.shape_reads import is_ne
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
 from hpcagent_bench.translators.numpyto_common.subscripts import is_full_slice
 
+__all__ = [
+    "AliasFold",
+    "EllipsisExpander",
+    "PadImplicitTrailingSlices",
+    "SliceViewFold",
+    "SubarrayAliasFold",
+    "aliases_with_rebound_base",
+    "child_blocks_of",
+    "composable_view_aliases",
+    "flatten_view_chains",
+    "fold_slice_view_aliases",
+    "fold_subarray_aliases",
+    "is_rank_preserving_slice_view",
+    "names_stored_in",
+    "names_written_in",
+    "refuse_scalarising_a_contraction",
+    "reject_view_writes_between_bind_and_use",
+    "subarray_alias_candidates",
+    "view_alias_candidates",
+]
+
 
 class EllipsisExpander(ast.NodeTransformer):
     """Replace ``...`` (Ellipsis) in a subscript with the explicit full slices
@@ -231,6 +252,8 @@ class AliasFold(ast.NodeTransformer):
 
 class SubarrayAliasFold(AliasFold):
     """``alias[k]`` -> ``A[i, j, k]``."""
+
+    __slots__ = ()
 
     def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
         self.generic_visit(node)
@@ -449,6 +472,8 @@ def refuse_scalarising_a_contraction(value: ast.expr) -> None:
 class SliceViewFold(AliasFold):
     """``view[use]`` -> ``base[composed]``: each kept view axis composed with the use's entry
     (:func:`compose_kept_axis`), dropped view axes passing through."""
+
+    __slots__ = ()
 
     def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
         self.generic_visit(node)

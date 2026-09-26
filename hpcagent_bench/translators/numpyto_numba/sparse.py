@@ -4,6 +4,21 @@ import ast
 
 from hpcagent_bench.translators.numpyto_common.ir import KernelIR, SparseArrayDesc
 
+__all__ = [
+    "RANK_RAISING_CALLS",
+    "SHAPED_CTOR_CALLS",
+    "TRANSPOSE_DUAL_FORMAT",
+    "SparseLoweringRefused",
+    "SparseMatmulRewriter",
+    "call_leaf",
+    "dense_operands_are_vectors",
+    "prange_row_loop",
+    "rewrite_sparse_matmuls",
+    "sparse_operand",
+    "symbol_readbacks",
+    "transposed_desc",
+]
+
 #: A CSR matrix's buffers ARE its transpose's CSC buffers, and back -- so ``A.T @ x`` needs the dual
 #: format name over the SAME buffers, never a second loop nest. Same relabelling the C path applies
 #: in ``lib_nodes.matmul_hoist.transpose_sparse_desc``.

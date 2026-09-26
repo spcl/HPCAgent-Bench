@@ -35,6 +35,44 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 from hpcagent_bench import config, osinfo
 from hpcagent_bench.frameworks.schema import KernelMetric
 
+__all__ = [
+    "BUCKETS",
+    "DEFAULT_RATE",
+    "METRIC_PREFIX",
+    "NEUTRAL_ALWAYS",
+    "PARALLEL_BUCKETS",
+    "RATE_DEFINITIONS",
+    "SEQUENTIAL_BUCKETS",
+    "BenchmarkClass",
+    "BenchmarkCounts",
+    "LoopDetail",
+    "ParallelismRecord",
+    "RateDefinition",
+    "all_loop_regions",
+    "benchmark_counts",
+    "bucket_for_loop",
+    "classify",
+    "classify_benchmark",
+    "column_name",
+    "dace_root_for_tests",
+    "describe_loop",
+    "enabled",
+    "import_dace_tests_corpus",
+    "is_timestep_loop_region",
+    "load_predicates",
+    "loop_bound_symbols",
+    "measure_sweep",
+    "normalize_flavor",
+    "rate",
+    "rates",
+    "read_records",
+    "record_from_counts",
+    "record_term",
+    "report_lines",
+    "rows",
+    "totals",
+]
+
 if TYPE_CHECKING:
     import pandas as pd
     from dace import SDFG

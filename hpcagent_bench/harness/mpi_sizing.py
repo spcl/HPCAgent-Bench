@@ -27,6 +27,19 @@ symbol to keep weak scaling proportional to ``R``.
 
 from collections.abc import Iterable
 
+__all__ = [
+    "MAX_GRADED_RANKS",
+    "RANK_BLOCK_QUANTUM",
+    "aligned_multiple",
+    "aligned_symbols",
+    "integer_kth_root",
+    "sized_params",
+    "strong",
+    "weak",
+    "weak_rounding_note",
+    "work_ratio",
+]
+
 #: Every rank's block of an ALIGNED split size symbol is a multiple of this many elements, at every
 #: rank count a curve is graded at: wavefront- and bf16-vector-friendly tiles, and
 #: no rank ever holds a ragged remainder. See :func:`aligned_symbols` for which symbols it binds.

@@ -7,6 +7,8 @@ from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import np_at
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.hoist import HoistForm, ValueHoist
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.kinds import KIND_RANK, dtype_kind
 
+__all__ = ["EINSUM_HOIST", "einsum_inline_stmts", "hoist_einsum"]
+
 
 def einsum_inline_stmts(subs: str, operands: list[str], ctr: int, dtype_of: str):
     """``(stmts, temp)`` computing ``np.einsum(subs, *operands)`` as a contraction loop nest.

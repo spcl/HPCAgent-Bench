@@ -10,6 +10,19 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
     store_,
 )
 
+__all__ = [
+    "axis_stride",
+    "decoded_source_axes",
+    "expand_reshape",
+    "flat_copy",
+    "flat_index",
+    "product_str",
+    "reshape_axis_groups",
+    "reshape_grouped_copy",
+    "reshape_order",
+    "token_product",
+]
+
 
 def product_str(tokens: list[str]) -> str:
     """``["a", "b"]`` -> ``"(a) * (b)"``; the empty group is the unit extent."""

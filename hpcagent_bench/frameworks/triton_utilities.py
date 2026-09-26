@@ -13,6 +13,30 @@ import torch
 import triton
 import triton.language as tl
 
+__all__ = [
+    "complex_div",
+    "complex_matmul2",
+    "complex_mul",
+    "complex_mul2",
+    "derive_launch_arguments",
+    "get_1d_tile_offsets",
+    "get_2d_tile_offsets",
+    "get_4d_tile_offsets",
+    "get_6d_tile_offsets",
+    "grid_sync",
+    "kernel_compute_stddev",
+    "kernel_mean_and_sumsq",
+    "matmul",
+    "matmul_float32",
+    "matmul_float64",
+    "matmul_kernel_float32",
+    "matmul_kernel_float64",
+    "micro_matmul",
+    "powers_of_2",
+    "unary_noop",
+    "use_grid",
+]
+
 
 def powers_of_2(start, end=None):
     if end is None:
@@ -73,6 +97,8 @@ def derive_launch_arguments(extra_kw: Callable):
 
         class Wrapper:
             # Allow using [] syntax as triton does.
+            __slots__ = ()
+
             def __getitem__(self, launch_args):
 
                 def wrapper(*args, **kwargs):

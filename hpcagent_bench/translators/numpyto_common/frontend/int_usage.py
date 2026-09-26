@@ -2,6 +2,17 @@
 
 import ast
 
+__all__ = [
+    "BITWISE_OPS",
+    "INT_TRANSPARENT",
+    "IntUses",
+    "index_slots",
+    "integer_positions",
+    "names_used_as_int",
+    "pure_int_arith",
+    "shape_arguments",
+]
+
 
 def pure_int_arith(n: ast.AST) -> bool:
     """True when ``n`` is a value-preserving integer computation over Names
@@ -42,6 +53,8 @@ def index_slots(node: ast.Subscript) -> list[ast.expr]:
 
 class IntUses:
     """Collects the names an expression feeds into an integer position, through arithmetic."""
+
+    __slots__ = ("names",)
 
     def __init__(self) -> None:
         self.names: set[str] = set()

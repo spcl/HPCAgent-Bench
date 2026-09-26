@@ -14,6 +14,8 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
     store_,
 )
 
+__all__ = ["diff_operand", "expand_repeat", "expand_repeat_prefix_sum"]
+
 
 def diff_operand(expr: ast.expr) -> ast.Name | None:
     """``np.diff(p)`` -> ``p``, else ``None``.

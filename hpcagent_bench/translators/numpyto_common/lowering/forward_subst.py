@@ -8,6 +8,18 @@ from hpcagent_bench.translators.numpyto_common.lowering.ssa import live_on_loop_
 from hpcagent_bench.translators.numpyto_common.lowering.tuples import fill_empty_blocks
 from hpcagent_bench.translators.numpyto_common.statement_desugar import written_name
 
+__all__ = [
+    "FWD_SUBST_MAX_NODES",
+    "FWD_SUBST_MAX_SUBSCRIPTS",
+    "FWD_SUBST_NODES",
+    "FWD_SUBST_PURE_CALLS",
+    "CandidateSearch",
+    "ForwardSubstituteInvariantScalars",
+    "SelfAssignDropper",
+    "fwd_subst_is_pure",
+    "stmt_exprs_by_depth",
+]
+
 
 class SelfAssignDropper(ast.NodeTransformer):
     """Delete a tautological ``X = X`` scalar statement.
@@ -158,6 +170,8 @@ class CandidateSearch:
     """One search of a function for the next scalar :class:`ForwardSubstituteInvariantScalars` may
     replay: the store / for-target / written-base census of ``fn``, the deepest depth each name is
     read at, and the first qualifying assign found."""
+
+    __slots__ = ("array_names", "deepest", "for_targets", "found", "params", "store_counts", "written")
 
     def __init__(self, fn: ast.FunctionDef, array_names: set[str], params: set[str]) -> None:
         self.array_names = array_names

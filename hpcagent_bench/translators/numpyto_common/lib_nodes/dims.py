@@ -5,6 +5,20 @@ import re
 from functools import lru_cache
 from typing import TYPE_CHECKING
 
+__all__ = [
+    "DIM_EXPAND_ROUNDS",
+    "DIM_IDENT_RE",
+    "DIM_PROBE_POINTS",
+    "NP_ZEROS_ALIASES",
+    "SHAPE_READ_RE",
+    "dims_agree",
+    "shape_exprs_differ_numerically",
+    "shape_exprs_equal",
+    "static_shape_of",
+    "substitute_dim_aliases",
+    "sympify_shape",
+]
+
 if TYPE_CHECKING:
     import sympy
 

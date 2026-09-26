@@ -20,6 +20,27 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
 from hpcagent_bench.translators.numpyto_common.lib_nodes.reductions import expand_axis_reduction
 from hpcagent_bench.translators.numpyto_common.lib_nodes.scalarize import scalarize_at_iters
 
+__all__ = [
+    "LINALG_AW",
+    "SolveRhs",
+    "classify_norm_ord",
+    "expand_cholesky",
+    "expand_linalg_det",
+    "expand_linalg_inv",
+    "expand_linalg_norm",
+    "expand_linalg_solve",
+    "expand_lstsq",
+    "guarded_div",
+    "lstsq_array_base",
+    "lstsq_first_axis_size",
+    "lstsq_index1d",
+    "lstsq_index2d",
+    "materialize_solve_operands",
+    "publish_solve_workspace",
+    "reset_temp_counters",
+    "solve_operand_dtype",
+]
+
 
 def classify_norm_ord(node: ast.expr | None) -> str | None:
     """Classify a ``np.linalg.norm`` ``ord`` argument.
@@ -862,6 +883,8 @@ def publish_solve_workspace(
 class SolveRhs:
     """The right-hand side ``b`` of a Gauss-Jordan solve, held in the target: its row operations,
     over every column for a 2-D ``b`` and on the single element of a 1-D one."""
+
+    __slots__ = ("b_shape", "is_2d", "target_id")
 
     def __init__(self, target_id: str, b_shape: tuple[str, ...]) -> None:
         self.target_id = target_id

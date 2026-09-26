@@ -24,6 +24,30 @@ from typing import Any, ClassVar, Self, cast
 
 import yaml
 
+__all__ = [
+    "SCOPED_ENVIRONMENT",
+    "AttemptSettings",
+    "ConfigValue",
+    "PromptSettings",
+    "Section",
+    "Settings",
+    "clear_override",
+    "env_value",
+    "environment",
+    "get",
+    "get_bool",
+    "get_float",
+    "get_int",
+    "get_str",
+    "overridden",
+    "override_snapshot",
+    "reload",
+    "restore_overrides",
+    "scoped_environment",
+    "set_override",
+    "settings",
+]
+
 _PATH = pathlib.Path(__file__).parent / "config.yaml"
 
 #: What a config value can be once coerced. A key holding anything else is a config bug, not a type

@@ -49,6 +49,49 @@ import matplotlib.colors
 from hpcagent_bench import packets
 from hpcagent_bench.experiment_tags import Registry, canonical, order, registry
 
+__all__ = [
+    "COMBINED_GRID",
+    "COMBINED_L",
+    "COMBINED_MIN_CHROMA",
+    "COMBINED_SLOTS",
+    "CONTROL_MARKER",
+    "CONTROL_SHADE",
+    "LOG",
+    "TAB20",
+    "TAB20B",
+    "TAB20B_ORDER",
+    "TAB20_ORDER",
+    "color",
+    "colormap_slot",
+    "colors",
+    "combined_ramp",
+    "combined_slot",
+    "control_color",
+    "fixed_packet_markers",
+    "framework_color",
+    "framework_colors",
+    "harness_marker",
+    "hue_order",
+    "hues",
+    "in_order",
+    "language_marker",
+    "lighten",
+    "marker",
+    "markers",
+    "model_color",
+    "model_language_color",
+    "model_markers",
+    "model_shade",
+    "oklab",
+    "ordered_color",
+    "packet_marker",
+    "shape_table",
+    "slot_color",
+    "tab20_slot",
+    "treatment_shape",
+    "warn_on_collision",
+]
+
 LOG = logging.getLogger(__name__)
 
 #: The colormap every figure in this repo draws from. The user's global palette decision.

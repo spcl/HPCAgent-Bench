@@ -3,6 +3,25 @@
 import ast
 import copy
 
+__all__ = [
+    "as_store",
+    "base_name",
+    "deep_copy",
+    "definite_writes",
+    "has_break",
+    "is_assignable",
+    "is_identity_test",
+    "is_np_attr",
+    "load",
+    "names_loaded",
+    "names_stored",
+    "reads_before_write",
+    "stmt_rhs_loads",
+    "store_target_names",
+    "tuple_expr",
+    "upward_exposed",
+]
+
 
 def names_loaded(node: ast.AST) -> set[str]:
     """Names read (Load context) anywhere under ``node``."""

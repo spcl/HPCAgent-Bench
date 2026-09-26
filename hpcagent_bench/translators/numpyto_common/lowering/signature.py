@@ -11,6 +11,30 @@ from hpcagent_bench.translators.numpyto_common.ir import KernelIR, SymbolDesc
 from hpcagent_bench.translators.numpyto_common.lowering.mathfuncs import MATH_INTRINSIC_NAMES
 from hpcagent_bench.translators.numpyto_common.emit_helpers.tokens import IDENT_RE
 
+__all__ = [
+    "BUILTIN_NAMES",
+    "INT_PRESERVING_OPS",
+    "ArrayUseScan",
+    "assignment_counts",
+    "body_defined_locals",
+    "bound_names",
+    "detect_output_and_index_arrays",
+    "fold_shape_aliases",
+    "foldable_shape_aliases",
+    "helper_returns_int",
+    "integer_bindings",
+    "integer_candidates",
+    "integer_valued_expression",
+    "integer_valued_locals",
+    "promote_free_names_to_params",
+    "promote_shape_symbols_to_params",
+    "provably_integer",
+    "retype_int_helper_scalars",
+    "settle_helper_forwarding",
+    "target_names",
+    "written_through_helpers",
+]
+
 #: Python builtins / harness identifiers that may appear in the body
 #: but are not parameter candidates.
 BUILTIN_NAMES: set[str] = {
@@ -341,6 +365,8 @@ class ArrayUseScan:
     """What a kernel body does with its parameter arrays: which it writes, which index another array,
     and -- for indirect indexing -- which scalar takes its value from which array (``k = ip[i]``
     makes ip an index array once ``k`` is used inside a subscript index)."""
+
+    __slots__ = ("arrays", "index_arrays", "scalar_src", "scalars_used_as_index", "written")
 
     def __init__(self, arrays: set[str]) -> None:
         self.arrays = arrays

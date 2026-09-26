@@ -100,6 +100,37 @@ from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
 from hpcagent_bench.translators.numpyto_common.statement_desugar import DesugarArrayIteration, SplitChainedAssign
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import const_or_name
 
+__all__ = [
+    "INL_RE",
+    "INVARIANT_ENV",
+    "LOWER_PHASES",
+    "LoweringContext",
+    "assert_lowering_invariants",
+    "dtype_verdict",
+    "elementwise_store_base",
+    "fix_real_scalar_dtypes",
+    "fold_local_shape_attr_tokens",
+    "lower",
+    "lp_forward_substitute_invariant_scalars",
+    "lp_libnode_expand",
+    "lp_lower_helpers",
+    "lp_normalize_calls",
+    "lp_normalize_index_access",
+    "lp_pre_libnode_normalize",
+    "lp_promote_params",
+    "lp_promote_true_division",
+    "lp_resolve_inlined_shapes",
+    "lp_scalarized_math_rename",
+    "lp_scatter_at",
+    "lp_seed_dtypes_and_harvest",
+    "lp_seed_shape_table",
+    "lp_slice_fusion_and_resolve",
+    "lp_slice_normalize_and_lift",
+    "lp_whole_array_and_zeros",
+    "scalar_return_helpers",
+    "tag_complex_locals",
+]
+
 #: Matches a residual inlined-scalar token (``__inl3_N``) or an unresolved
 #: ``arr.shape[`` attribute access -- the never-worse guard in the inl resolver
 #: keeps the original token whenever expansion would leave one of these behind.
@@ -115,6 +146,32 @@ class LoweringContext:
     straight onto :attr:`kir` -- typed :class:`KernelIR` fields the emitter reads
     directly, not attributes monkey-patched onto ``tree.__dict__``.
     """
+
+    __slots__ = (
+        "arrays_shapes",
+        "blas",
+        "bool_names",
+        "dim_aliases",
+        "fft_library",
+        "fft_library_nd",
+        "inl_defs",
+        "iter_rewriter",
+        "kir",
+        "lib_rewriter",
+        "lib_shape_table",
+        "local_dtypes",
+        "native_call",
+        "original_kir",
+        "param_seed",
+        "resolve_inl_table",
+        "scalar_temps",
+        "shapes",
+        "sibling_scalar_helpers",
+        "tree",
+        "wa_rewriter",
+        "zeros",
+        "zeros_locals",
+    )
 
     def __init__(self, original_kir: KernelIR, lowered: KernelIR) -> None:
         #: The un-lowered input IR -- source of ``.sparse`` and ``.helpers``.

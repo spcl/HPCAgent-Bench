@@ -11,6 +11,8 @@ from hpcagent_bench.translators.numpyto_common.frontend.inlining import (
 )
 from hpcagent_bench.translators.numpyto_common.frontend.none_folding import none_toggle_op
 
+__all__ = ["SpliceNoneGuardedCalls", "collect_none_guarded_helpers", "find_none_guard", "is_none_sentinel"]
+
 
 def is_none_sentinel(value: ast.expr | None) -> bool:
     """``True`` for a literal ``None``, or a non-empty tuple/list whose elements are all ``None``
@@ -89,6 +91,8 @@ class SpliceNoneGuardedCalls:
     direct assignment to the caller's own unpack targets, both inline in the caller's block, with no
     helper function and no intermediate name surviving at all).
     """
+
+    __slots__ = ("_counter", "fn_", "helpers")
 
     def __init__(self, helpers: dict[str, ast.FunctionDef], counter: list[int]) -> None:
         self.helpers = helpers

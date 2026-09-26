@@ -9,6 +9,19 @@ from hpcagent_bench.translators.numpyto_common.numpy_desugar.kinds import dtype_
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.linalg import cholesky_lines
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.ranks import expr_rank
 
+__all__ = [
+    "EighCallHoister",
+    "EighInline",
+    "EighLoopRewriter",
+    "eigh_c_stmts",
+    "eigh_jacobi_lines",
+    "eigh_operand_is_real",
+    "eigh_stmts",
+    "eigh_w_dtype",
+    "operand_names",
+    "subset_bounds",
+]
+
 
 def eigh_w_dtype(is_real: bool, names, array_dtypes: dict[str, str]) -> str | None:
     """Eigenvalue dtype for an ``eigh`` lowering, or ``None`` to use the input's own ``.dtype``.

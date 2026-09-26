@@ -15,6 +15,8 @@ price table so a report can be re-priced without re-running.
 
 from dataclasses import dataclass
 
+__all__ = ["TokenUsage"]
+
 
 @dataclass(frozen=True, slots=True)
 class TokenUsage:

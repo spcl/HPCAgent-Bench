@@ -12,6 +12,17 @@ interpreter.
 from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
+__all__ = [
+    "CANON_FIELDS",
+    "COLUMN_ALIASES",
+    "NUMERIC_COLUMNS",
+    "OBSERVATION_FIELDS",
+    "SOURCE_FIELDS",
+    "current_name",
+    "upgrade_frame",
+    "upgrade_row",
+]
+
 if TYPE_CHECKING:
     import pandas as pd
 

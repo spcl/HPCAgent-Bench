@@ -16,6 +16,8 @@ so no seed is ever invented.
 import hashlib
 import os
 
+__all__ = ["SALTED_SEED_BITS", "fresh_nonce", "salted", "secret_seed_first", "secret_seed_harden", "secret_seed_second"]
+
 #: Salted seeds stay below 2**31, so ``seed + fuzz_iteration`` fits every numpy seeding API.
 SALTED_SEED_BITS = 31
 

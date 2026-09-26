@@ -11,6 +11,29 @@ from hpcagent_bench.translators.numpyto_common.numpy_desugar import REDUCE_FNS, 
 from hpcagent_bench.translators.numpyto_common.frontend.manifest import preset_constant_symbols
 from hpcagent_bench.translators.numpyto_common.frontend.shape_arith import const_int
 
+__all__ = [
+    "AXIS_INSERTS",
+    "AXIS_POSITION",
+    "AXIS_STRUCTURAL_FNS",
+    "MAX_DISPATCH_RANK",
+    "AxisChoice",
+    "AxisReshapeToIndexing",
+    "FoldConstantSymbols",
+    "RenameLocals",
+    "SubstituteAxisLiteral",
+    "axis_argument",
+    "axis_index_spaces",
+    "is_literal_axis",
+    "np_attr_name",
+    "rebound_names",
+    "reject_symbolic_axis",
+    "reject_unsupported_slices",
+    "runtime_axis_dispatch",
+    "sequence_length",
+    "specialize_runtime_axis",
+    "structural_constants",
+]
+
 
 class AxisReshapeToIndexing(ast.NodeTransformer):
     """``np.expand_dims`` / ``np.swapaxes`` -> indexing forms the pipeline already lowers.

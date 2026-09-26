@@ -32,6 +32,22 @@ import pathlib
 import subprocess
 from typing import TYPE_CHECKING
 
+__all__ = [
+    "dace_tree_fingerprint",
+    "fingerprint_bytes",
+    "kernel_cache_dir",
+    "load_generated",
+    "load_sdfg",
+    "save_generated",
+    "save_sdfg",
+    "sdfg_cache_path",
+    "sidecar_path",
+    "source_fingerprint",
+    "stored_fingerprint",
+    "translator_fingerprint",
+    "write_atomic",
+]
+
 if TYPE_CHECKING:
     import dace
 

@@ -111,6 +111,8 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.triangular import (
     expand_triu,
 )
 
+__all__ = ["DEG_PER_RAD", "ELEMENTWISE_SHAPE_OPS", "NON_ELEMENTWISE_SHAPE_OPS", "NP_CALL_EXPANDERS", "RAD_PER_DEG"]
+
 #: Map of ``("np", attr) -> expander``. The expander signature is
 #: ``(assign_target, call_args, shape_table) -> list[stmt]``.
 NP_CALL_EXPANDERS: dict[tuple[str, str], Callable] = {

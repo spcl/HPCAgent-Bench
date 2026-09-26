@@ -17,6 +17,17 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
     slice_axes,
 )
 
+__all__ = [
+    "SubscriptIndexer",
+    "scalarize_at_iters",
+    "scalarize_children",
+    "scalarize_name",
+    "scalarize_subscript",
+    "slice_start",
+    "strided_index",
+    "subscript_result_rank",
+]
+
 
 def slice_start(ax: ast.Slice, axis_len: ast.expr | None, step: int | ast.expr | None) -> ast.expr | None:
     """First SOURCE index a slice reads. ``lower`` when given (negative resolved
@@ -193,6 +204,8 @@ class SubscriptIndexer:
     result-axis set and SHARES its iters: ``u2[q, r, s]`` -> ``u2[q[m], r[m], s[m]]`` (one iter
     ``m``, not three), consumed at the first index-array axis and reused after.
     """
+
+    __slots__ = ("axes", "group_iters", "iter_idx", "iters", "shape", "shape_table", "src_axis")
 
     def __init__(
         self,

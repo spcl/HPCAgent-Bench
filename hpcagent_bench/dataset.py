@@ -25,6 +25,26 @@ from hpcagent_bench import campaigns, experiments, frozen_observations, observat
 from hpcagent_bench.observation_columns import OBSERVATION_FIELDS
 from hpcagent_bench.stats import population
 
+__all__ = [
+    "EXPERIMENT_COLUMN",
+    "EXTRACTED_AT",
+    "LOG",
+    "PROVENANCE",
+    "Provenance",
+    "build",
+    "check_columns",
+    "extract",
+    "fuse",
+    "keep_owned",
+    "keep_roster",
+    "load",
+    "main",
+    "now",
+    "stamp",
+    "write_csv",
+    "write_db",
+]
+
 if TYPE_CHECKING:
     import pandas as pd
 

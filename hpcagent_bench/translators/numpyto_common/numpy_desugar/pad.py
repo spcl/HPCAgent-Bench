@@ -6,6 +6,8 @@ import copy
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import const_int, np_attr
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.ranks import expr_rank
 
+__all__ = ["PadInline", "const_pair_widths", "pad_constant_inline_stmts", "pad_inline_stmts", "widths_all_literal"]
+
 
 def const_pair_widths(pad_width: ast.AST, rank: int):
     """Per-axis ``(lo, hi)`` exprs from a scalar ``R`` or a ``((lo, hi), ...)`` ``pad_width``, else None."""

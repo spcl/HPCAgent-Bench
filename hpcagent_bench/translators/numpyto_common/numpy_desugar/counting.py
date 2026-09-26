@@ -15,6 +15,20 @@ from hpcagent_bench.translators.numpyto_common.numpy_desugar.hoist import HoistF
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.ranks import expr_rank
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.ufuncs import ufunc_method_op
 
+__all__ = [
+    "AT_OPS",
+    "HISTOGRAM_HOIST",
+    "REPEAT_AXIS_HOIST",
+    "AddAtInline",
+    "BincountInline",
+    "DiffToSliceDifference",
+    "RepeatCountsInline",
+    "SearchsortedMaterialize",
+    "StripAstypeCopyKwarg",
+    "hoist_histogram",
+    "hoist_repeat_axis",
+]
+
 
 AT_OPS = {"add": "+=", "subtract": "-=", "multiply": "*="}
 
@@ -26,6 +40,8 @@ class DiffToSliceDifference(RewritePass):
     callback for the whole program. Only the single-argument form: ``n``/``axis``/``prepend`` compute
     something else and are left standing.
     """
+
+    __slots__ = ("changed",)
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
         self.generic_visit(node)
@@ -53,6 +69,8 @@ class StripAstypeCopyKwarg(RewritePass):
     the value is the same. dace's astype replacement rejects the keyword.
     """
 
+    __slots__ = ("changed",)
+
     def visit_Call(self, node: ast.Call) -> ast.AST:
         self.generic_visit(node)
         if (
@@ -73,6 +91,8 @@ class RepeatCountsInline(RankedRewritePass):
     telescopes to ``p[-1] - p[0]``. That is the only form claimed; any other per-element count is
     left standing.
     """
+
+    __slots__ = ("_ctr", "changed")
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST:
         self.generic_visit(node)
@@ -120,6 +140,8 @@ class BincountInline(RankedRewritePass):
     the result into an M-sized buffer already requires.
     """
 
+    __slots__ = ("_ctr", "changed")
+
     def visit_Assign(self, node: ast.Assign) -> ast.AST:
         self.generic_visit(node)
         calls = [n for n in ast.walk(node.value) if np_attr(n) == "bincount" and n.args]
@@ -158,6 +180,8 @@ class AddAtInline(RankedRewritePass):
     no ufunc.at; a sequential ``+=`` loop keeps its defining property -- duplicate indices accumulate
     (unlike ``A[idx] += vals``). ``idx`` is one index array or a tuple of index arrays and scalar
     indices; the first index array drives the loop, scalars ride each iteration."""
+
+    __slots__ = ("_ctr", "changed")
 
     def visit_Expr(self, node: ast.Expr):
         self.generic_visit(node)
@@ -233,6 +257,8 @@ class SearchsortedMaterialize(RewritePass):
     searchsorted walks it backwards (g++: no ``operator--`` on a numpy_expr_iterator). Materialising
     is a no-op for an already-contiguous array.
     """
+
+    __slots__ = ("_ctr", "changed")
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST:
         self.generic_visit(node)

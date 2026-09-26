@@ -2,6 +2,8 @@
 
 import ast
 
+__all__ = ["SSA_SUFFIX", "ZEROS_MARKER", "SsaRename", "ssa_versionable", "store_root", "top_level_plain_bindings"]
+
 
 #: The lowering's allocation-site marker. Its dace expansion looks targets up by name
 #: (``zeros_locals``) and drops unknown ones, so a marker-bound name must not be renamed.

@@ -2,6 +2,8 @@
 
 import ast
 
+__all__ = ["base_name", "has_slice_subscript", "index_slot", "is_ellipsis", "is_full_slice", "is_newaxis"]
+
 
 def is_full_slice(e: ast.AST) -> bool:
     """A bare ``:`` entry: a whole-axis selection, the same as omitting the axis."""

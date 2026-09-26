@@ -3,6 +3,8 @@
 import ast
 from collections.abc import Iterable
 
+__all__ = ["ARRAY_METHOD_REDUCTIONS", "ARRAY_METHOD_SHAPE_OPS", "ArrayMethodRewriter"]
+
 #: Array methods whose numpy function twin takes the array first and means the same thing, so the
 #: method spelling can be routed to it instead of growing a second branch. ``reshape`` is absent on
 #: purpose: it has a method branch of its own that resolves a ``-1`` against the receiver.

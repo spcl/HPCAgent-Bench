@@ -7,6 +7,15 @@ from collections.abc import Mapping, Sequence
 from hpcagent_bench.translators.numpyto_common.statement_desugar import Spelled, SplitTupleUnpack
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import const_or_name
 
+__all__ = [
+    "BLOCK_STMT_TYPES",
+    "ShapeTableTupleSplit",
+    "TupleLocalPropagator",
+    "TupleSubscriptFolder",
+    "fill_empty_blocks",
+    "is_int_constant",
+]
+
 
 class TupleSubscriptFolder(ast.NodeTransformer):
     """Fold ``(t1, t2, ..., tn)[K]`` to ``tk`` at lowering time so
@@ -159,6 +168,8 @@ class ShapeTableTupleSplit(SplitTupleUnpack):
     (``n, m = n, m`` after shape resolution) stays a plain binding, which keeps promote-params seeing
     ``n`` / ``m`` as scalar parameters; :class:`SelfAssignDropper` deletes it at the end of the phase.
     """
+
+    __slots__ = ("arrays_shapes", "int_locals")
 
     TARGETS = (ast.Name, ast.Subscript)
 

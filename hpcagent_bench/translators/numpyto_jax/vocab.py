@@ -1,5 +1,7 @@
 """numpy call and attribute vocabularies the JAX passes classify expressions by."""
 
+__all__ = ["ARRAY_ATTRS", "BOOL_FUNCS", "LEADING_DATA_FUNCS", "SHAPE_FUNCS", "STATIC_BUILTINS"]
+
 BOOL_FUNCS = (
     "logical_and",
     "logical_or",

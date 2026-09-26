@@ -10,6 +10,8 @@ from numpy's, so a kernel that consumes random values is not bit-exact with its 
 
 import re
 
+__all__ = ["SUBS", "emit_cupy"]
+
 #: Rewrites applied in order: ``\b`` guards partial matches (``snap_np_foo``), and the aliased import
 #: goes first so ``import numpy`` does not consume it.
 SUBS = [

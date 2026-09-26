@@ -4,6 +4,8 @@ import ast
 
 from hpcagent_bench.translators.numpyto_common.lowering.mathfuncs import METHOD_TO_NP
 
+__all__ = ["ComputedIndexCallHoister", "MethodCallRewriter", "StmtHoister"]
+
 
 class StmtHoister(ast.NodeTransformer):
     """Base for rewriters that must lift a sub-expression into a fresh temp
@@ -72,6 +74,8 @@ class MethodCallRewriter(StmtHoister):
     on a bare Name -- the reduction expanders and backends never accept an
     inline sub-expression receiver.
     """
+
+    __slots__ = ()
 
     MODULE_NAMES = frozenset({"np", "numpy", "math", "scipy"})
 
@@ -144,6 +148,8 @@ class ComputedIndexCallHoister(StmtHoister):
     (a whole-array copy the later lift lowers), so the reduction reaches its
     expander with a Name operand.
     """
+
+    __slots__ = ()
 
     #: Scalar builtins each backend renders inline in index position -- left in
     #: place so a plain ``hist[int(x)]`` does not gain a needless spill temp.

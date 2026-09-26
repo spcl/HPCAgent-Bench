@@ -9,6 +9,33 @@ from collections.abc import Callable, Iterator, Sequence
 from hpcagent_bench.translators.numpyto_common import dtypes
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import const_int, name_store_counts
 
+__all__ = [
+    "BINARY_OPS",
+    "COMPARE_OPS",
+    "CONST_BUILTINS",
+    "DEFAULT_FOLDING_BACKENDS",
+    "UNARY_OPS",
+    "UNROLL_MAX",
+    "ConstComprehensionFold",
+    "ConstEvaluator",
+    "FinfoEpsFold",
+    "ListCompUnroll",
+    "SubstConstName",
+    "const_iterable",
+    "const_literal_ast",
+    "const_name_values",
+    "constant_parameters",
+    "fd_step",
+    "fold_constant_helper_arguments",
+    "fold_finfo_eps",
+    "fold_kernel_defaults",
+    "has_defaulted_parameters",
+    "helper_call_sites",
+    "substitutable_helper",
+    "substitute_loads",
+    "working_float_dtype",
+]
+
 
 def fd_step(precision: str | None = None) -> str:
     """``sqrt(machine epsilon)`` of the working float type, as a source literal.
@@ -249,6 +276,8 @@ class ConstEvaluator:
     literals, displays, operators, conditionals, calls to ``CONST_BUILTINS`` and comprehensions,
     over names bound in ``names``. A comprehension runs in its own scope, a generator expression
     stays lazy, and any other node raises, which the caller reads as "not foldable"."""
+
+    __slots__ = ("names",)
 
     def __init__(self, names: dict[str, object]) -> None:
         self.names = names

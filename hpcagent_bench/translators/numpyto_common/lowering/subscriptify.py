@@ -15,6 +15,8 @@ from hpcagent_bench.translators.numpyto_common.lowering.indexing import advanced
 from hpcagent_bench.translators.numpyto_common.lowering.shape_reads import is_newaxis
 from hpcagent_bench.translators.numpyto_common.subscripts import is_full_slice
 
+__all__ = ["UNHANDLED", "SubscriptifyNames", "resolve_neg_index"]
+
 
 def resolve_neg_index(idx: ast.expr, axis_len: ast.expr) -> ast.expr:
     """Resolve a negative constant array index to ``axis_len - K``.

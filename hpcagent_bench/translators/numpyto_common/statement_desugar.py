@@ -18,6 +18,34 @@ from collections.abc import Callable, Collection, Mapping
 from hpcagent_bench.translators.numpyto_common.numpy_desugar import expr_rank, rank_table
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
 
+__all__ = [
+    "STATEMENT_FIELDS",
+    "STATEMENT_LISTS",
+    "DesugarArrayIteration",
+    "Spelled",
+    "SplitChainedAssign",
+    "SplitTupleUnpack",
+    "StatementTransformer",
+    "assign",
+    "bind",
+    "binding_names",
+    "element_read",
+    "indexed_loop",
+    "is_plain_rebinding",
+    "is_scalar_literal",
+    "is_self_copy",
+    "leaves_block",
+    "load",
+    "pair_names",
+    "placed",
+    "races",
+    "read_name",
+    "rebound_names",
+    "rename_names",
+    "statement_blocks",
+    "written_name",
+]
+
 
 def is_scalar_literal(node: ast.AST) -> bool:
     """True iff the expression is numeric literals only -- provably a scalar, and folded by dace's frontend."""
@@ -91,6 +119,8 @@ class DesugarArrayIteration(StatementTransformer):
     array's leading extent, or ``None`` to leave the loop alone; ``index_name`` names the index from
     the loop target and the number of loops rewritten before it.
     """
+
+    __slots__ = ("extent_of", "index_name", "rewritten", "var_to_array")
 
     def __init__(self, extent_of: Callable[[str], ast.expr | None], index_name: Callable[[str, int], str]) -> None:
         self.extent_of = extent_of
@@ -201,6 +231,8 @@ class SplitChainedAssign(StatementTransformer):
 
     ``seed_ranks`` seeds the rank table that tells a scalar from an array.
     """
+
+    __slots__ = ("ranks", "repeat_literals", "scope", "seed_ranks", "temp_name", "temps")
 
     def __init__(
         self,
@@ -378,6 +410,8 @@ class SplitTupleUnpack(StatementTransformer):
 
     Per-backend hooks: :attr:`TARGETS`, :meth:`values` and :meth:`temp_name`.
     """
+
+    __slots__ = ("racing", "temps")
 
     #: Target node types a split may bind; any other target leaves the statement whole.
     TARGETS: tuple[type[ast.expr], ...] = (ast.Name,)

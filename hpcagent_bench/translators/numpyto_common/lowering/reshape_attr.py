@@ -3,6 +3,8 @@
 import ast
 import copy
 
+__all__ = ["ShapeAttrToReshape"]
+
 
 class ShapeAttrToReshape(ast.NodeTransformer):
     """Rewrite in-place shape mutation ``x.shape = expr`` to

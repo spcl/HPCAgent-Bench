@@ -21,6 +21,32 @@ import io
 import re
 import tokenize
 
+__all__ = [
+    "ATTRIBUTION_RE",
+    "COMMENT_STARTS",
+    "C_FAMILY",
+    "TS_GRAMMAR",
+    "block_comment_end",
+    "carries_attribution",
+    "leading_license_block",
+    "line_end",
+    "normalize_lang",
+    "strip_c_family",
+    "strip_comments",
+    "strip_dispatch",
+    "strip_python_line_scan",
+    "strip_python_tokenize",
+    "strip_with_tree_sitter",
+    "tree_sitter_available",
+    "ts_attr",
+    "ts_children",
+    "ts_get_parser",
+    "ts_parse",
+    "ts_root",
+    "ts_span",
+    "ts_type",
+]
+
 # Languages handled by the C-family block-and-line comment scanner.
 C_FAMILY = frozenset({"c", "cpp", "c++", "cuda", "hip"})
 

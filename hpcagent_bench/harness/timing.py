@@ -22,6 +22,41 @@ from dataclasses import dataclass, replace
 
 from hpcagent_bench import config
 
+__all__ = [
+    "AA_REDUCTION",
+    "FINAL_GRADE_ALIASES",
+    "FINAL_GRADE_REDUCTION",
+    "FINAL_GRADE_REDUCTIONS",
+    "FINAL_GRADE_REDUCTION_V1",
+    "LOCAL_BACKEND",
+    "REDUCTIONS",
+    "REDUCTIONS_FINAL",
+    "REDUCTIONS_VARIED",
+    "TIMING_BRACKETS",
+    "ReducedTiming",
+    "active_backend",
+    "canonical_reduction",
+    "central_ns",
+    "clocks_agree",
+    "local_repeat",
+    "measurement_baseline",
+    "measurement_repeat",
+    "parse_cpu_list",
+    "physical_core_affinity",
+    "physical_floor_ns",
+    "pin_threads",
+    "quiescence_residual_limit",
+    "quiescent",
+    "reduce",
+    "reduce_mannwhitney_delta",
+    "reduce_min_of_k",
+    "required_repeat",
+    "sampled_reps",
+    "timing_bracket",
+    "validate_repeat",
+    "warmup_count",
+]
+
 #: Backend -> the version stamp of its reduction (``timing_reduction``). Changed arithmetic means a
 #: new stamp; the older ``mwd-v1`` rows predate the stamp and read NULL.
 REDUCTIONS: dict[str, str] = {"min_of_k": "mok-v1", "mannwhitney_delta": "mwd-v2"}

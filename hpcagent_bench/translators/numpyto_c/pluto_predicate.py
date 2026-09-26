@@ -29,6 +29,23 @@ from collections.abc import Callable, Iterable
 
 from hpcagent_bench.translators.numpyto_common.subscripts import base_name
 
+__all__ = [
+    "FLAG_PREFIX",
+    "Flagger",
+    "IfConverter",
+    "conj",
+    "convert",
+    "convertible",
+    "if_convert",
+    "inline",
+    "load",
+    "names_read",
+    "negate",
+    "predicated",
+    "tests_read",
+    "written",
+]
+
 #: Prefix of the flag locals the FLAGGED form introduces; a counter makes each name unique.
 FLAG_PREFIX = "pluto_pred"
 
@@ -122,6 +139,8 @@ def inline(stmts: Iterable[ast.stmt], guard: ast.expr) -> list[ast.stmt]:
 
 class Flagger:
     """FLAGGED form: one integer flag per test, set where its ``if`` stood, guarding by flags alone."""
+
+    __slots__ = ("flags", "fresh")
 
     def __init__(self, fresh: Callable[[], str]) -> None:
         self.fresh = fresh

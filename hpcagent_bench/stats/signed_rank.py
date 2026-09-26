@@ -43,6 +43,8 @@ import functools
 import math
 from collections.abc import Sequence
 
+__all__ = ["EXACT_MAX_N", "average_ranks", "exact_p", "normal_p", "null_counts", "signed_rank_p", "use_exact"]
+
 #: Sample sizes up to this get the EXACT null; above it the tie-corrected normal approximation.
 #: Measured, not inherited -- see the module docstring for the timings and the error curve. Both
 #: implementations read this one name, so the cutoff cannot drift apart again.

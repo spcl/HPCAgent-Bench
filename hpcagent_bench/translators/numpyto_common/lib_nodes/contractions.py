@@ -21,6 +21,18 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
 )
 from hpcagent_bench.translators.numpyto_common.lib_nodes.scalarize import scalarize_at_iters
 
+__all__ = [
+    "OP_SPILL_TEMP",
+    "einsum_letter_extents",
+    "expand_einsum",
+    "expand_einsum_ellipsis",
+    "expand_inner",
+    "expand_tensordot",
+    "expand_vdot",
+    "explicit_einsum_spec",
+    "materialize_operands",
+]
+
 
 def expand_einsum_ellipsis(spec: str, ranks: list[int]) -> str:
     """Rewrite ``...`` in an einsum spec to explicit index letters using each

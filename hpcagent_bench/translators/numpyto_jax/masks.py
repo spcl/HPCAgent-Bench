@@ -16,6 +16,27 @@ from hpcagent_bench.translators.numpyto_jax.loops import (
 )
 from hpcagent_bench.translators.numpyto_jax.names import deep_copy, is_np_attr, names_loaded, names_stored
 
+__all__ = [
+    "MaskToWhere",
+    "axis_mask",
+    "boolean_mask_transform",
+    "dyn_slice_info",
+    "dynamic_window_slices",
+    "for_is_unrolled",
+    "inline_masked_subsets",
+    "loop_index_tainted",
+    "mask_dynamic_writes",
+    "mask_reduction_slices",
+    "mask_slice_reads",
+    "maybe_mask",
+    "np_call",
+    "reject_dynamic_slices",
+    "rewrite_flip_prefix",
+    "rolled_loop_writes",
+    "widen_dynamic_slices",
+    "widen_to_full",
+]
+
 
 def boolean_mask_transform(fn: ast.FunctionDef) -> None:
     """Lower boolean-mask indexing (no static shape under jit) to ``where``:

@@ -13,6 +13,33 @@ from hpcagent_bench.translators.numpyto_common.frontend.manifest import parse_sh
 from hpcagent_bench.translators.numpyto_common.frontend.shape_arith import const_int, literal_axis
 from hpcagent_bench.translators.numpyto_common.emit_helpers.tokens import IDENT_RE
 
+__all__ = [
+    "RETURN_REDUCTIONS",
+    "alloc_call_shape",
+    "apply_subscript_axes",
+    "assigns_to",
+    "base_shape_tokens",
+    "bound_token",
+    "conflicting_rebind_shapes",
+    "ctor_dtype_tag",
+    "expr_array_dtype",
+    "fold_dtype_aliases",
+    "fold_extent_locals",
+    "local_array_def",
+    "resolve_array_ref",
+    "resolve_extent_of",
+    "resolve_shape_reads",
+    "shape_from_dot_shape",
+    "shape_from_expression",
+    "shape_from_iter_extent",
+    "shape_from_linspace_or_arange",
+    "shape_from_reduction",
+    "shape_from_transpose",
+    "shape_tuple_string",
+    "sliced_extent",
+    "transpose_operands",
+]
+
 
 def shape_from_iter_extent(node: ast.AST, known: dict[str, str], route_calls: bool = False) -> str | None:
     """Fall back to ``iter_extent_of`` to derive a shape for an

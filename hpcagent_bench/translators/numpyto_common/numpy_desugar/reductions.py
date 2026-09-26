@@ -14,6 +14,34 @@ from hpcagent_bench.translators.numpyto_common.numpy_desugar.hoist import HoistF
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.kinds import dtype_kind
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.ranks import expr_rank
 
+__all__ = [
+    "AXIS_ADDING_OPS",
+    "AXIS_PRESERVING_OPS",
+    "DACE_NATIVE_REDUCE_FNS",
+    "DACE_REDUCE_AXIS_HOIST",
+    "MASKED_REDUCE_HOIST",
+    "MASKED_REDUCE_OPS",
+    "REDUCE_AXIS_HOIST",
+    "UFUNC_REDUCE_TO_CALL",
+    "KeepdimsToNewaxis",
+    "NormalizeNegativeAxis",
+    "UfuncReduceToReducer",
+    "axis_list",
+    "drops_masked_select",
+    "has_masked_selects",
+    "hoist_masked_reduce",
+    "hoist_reduce_axis",
+    "hoist_reduce_axis_unless_native",
+    "is_bool_mask",
+    "keepdims_index",
+    "masked_reduce_lines",
+    "masked_reduce_map",
+    "masked_reduce_of",
+    "reduce_axis_stmts",
+    "reduce_call_parts",
+    "reduce_ddof",
+]
+
 
 def axis_list(ax: ast.AST | None, rank: int) -> list[int] | None:
     """An ``axis=k`` / ``axis=(1, 2)`` node -> sorted non-negative axis indices, or None when it is not all
@@ -279,6 +307,8 @@ class KeepdimsToNewaxis(RewritePass):
     Left alone: no axis (every axis kept needs the rank), a non-constant or mixed-sign axis, the
     ``x.sum(...)`` method form, and a ``keepdims`` that is not a literal ``True``."""
 
+    __slots__ = ("changed",)
+
     def visit_Call(self, node: ast.Call) -> ast.AST:
         self.generic_visit(node)
         kw = next((k for k in node.keywords if k.arg == "keepdims"), None)
@@ -443,6 +473,8 @@ class NormalizeNegativeAxis(RankedRewritePass):
     the first operand's rank, plus one for an axis-ADDING op; an unknown rank is left verbatim. Only the
     ``axis=`` keyword is normalized: the positional slot differs per op (``np.roll``'s second is the shift)."""
 
+    __slots__ = ("changed",)
+
     def operand_rank(self, node: ast.Call) -> int | None:
         # A sequence operand (``np.stack((a, b))``) takes its first element's rank.
         if not node.args:
@@ -493,6 +525,8 @@ class UfuncReduceToReducer(RewritePass):
 
     ``ufunc.reduce`` defaults to ``axis=0``, the reducer to a full reduction, so a missing axis becomes an
     explicit ``axis=0``. Runs before the elementwise-ufunc desugars, which would read ``np.add`` as an add."""
+
+    __slots__ = ("changed",)
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
         self.generic_visit(node)

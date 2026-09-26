@@ -26,6 +26,14 @@ from hpcagent_bench.translators.numpyto_common.lowering.slice_scalarize import S
 from hpcagent_bench.translators.numpyto_common.lowering.views import refuse_scalarising_a_contraction
 from hpcagent_bench.translators.numpyto_common.subscripts import has_slice_subscript
 
+__all__ = [
+    "INVARIANT_SELF_READ_PREFIX",
+    "HoistInvariantSelfReads",
+    "LiftFreshArrayFromSlices",
+    "SliceFusion",
+    "strided_trip_count",
+]
+
 
 def strided_trip_count(start: ast.expr, stop: ast.expr, step) -> ast.expr:
     """Element count of ``start:stop:step`` for a POSITIVE step: ``ceil((stop - start) / step)``.

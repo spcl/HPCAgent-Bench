@@ -36,6 +36,8 @@ import importlib
 import sys
 from collections.abc import Sequence
 
+__all__ = ["ISOPAR_TARGETS", "PARALLEL_TARGETS", "TARGETS", "main"]
+
 #: target name -> backend CLI module exposing ``main(argv)``. The C backend
 #: backs three targets -- ``c`` / ``polly`` / ``pluto`` -- because one emit
 #: produces the whole C-family (C, C++, and the Pluto ``#pragma scop`` input).

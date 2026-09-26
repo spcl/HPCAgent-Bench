@@ -4,6 +4,8 @@ from collections.abc import Callable
 
 from hpcagent_bench.translators.numpyto_common.ir import KernelIR
 
+__all__ = ["pinned_knobs"]
+
 
 def pinned_knobs[T](kir: KernelIR, type_of: Callable[[str], T]) -> list[tuple[str, T, object]]:
     """``(name, type, value)`` per pinned knob, sorted by name. ``type_of`` maps a dtype to the

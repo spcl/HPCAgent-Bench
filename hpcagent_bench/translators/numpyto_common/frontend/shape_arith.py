@@ -5,6 +5,26 @@ import re
 from functools import lru_cache
 from collections.abc import Callable
 
+__all__ = [
+    "FOLD_OPS",
+    "IDENT_RE",
+    "ShapeArithFolder",
+    "binding_counts",
+    "collect_inlined_scalar_defs",
+    "combine_like_terms",
+    "const_int",
+    "divide_multiple_term",
+    "exact_multiple_factor",
+    "exact_quotient_with_remainder",
+    "fold_shape_expr",
+    "gather_add_chain",
+    "is_scalar_dim_rhs",
+    "literal_axis",
+    "resolve_shape_attr_tokens",
+    "scaled_term",
+    "substitute_inlined_scalar_defs",
+]
+
 
 def resolve_shape_attr_tokens(tokens: tuple[str, ...], parsed_seed: dict[str, tuple[str, ...]]) -> tuple[str, ...]:
     """Replace ``arr.shape[i]`` occurrences in each shape token with the

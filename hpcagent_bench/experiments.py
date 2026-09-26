@@ -34,6 +34,50 @@ from hpcagent_bench.observation_columns import upgrade_frame
 from hpcagent_bench.spec import Track
 from hpcagent_bench.stats import population
 
+__all__ = [
+    "ANSWER_RECORDS",
+    "DB_SKIP_NAMES",
+    "FALLTHROUGH_REASONS",
+    "FILLABLE_IDENTITY",
+    "FINAL_GRADE_DIRNAME",
+    "FIRST_SUBMISSION_TRACKS",
+    "GRADED_RECORDS",
+    "IDENTITY",
+    "LOG",
+    "NAME_FIRST",
+    "NAME_READERS",
+    "OBSERVATIONS_TABLE",
+    "RECORD_TABLES",
+    "RENAMED_ARM_PREFIXES",
+    "TASK_KEY",
+    "Database",
+    "agent_indices",
+    "arm_of",
+    "arm_value",
+    "discover_databases",
+    "drop_adhoc_rows",
+    "drop_cancelled_task_rows",
+    "drop_foreign_kernel_rows",
+    "drop_pre_relaunch_rows",
+    "drop_resubmissions",
+    "fill_arm_identity",
+    "fold_clean_arms",
+    "fold_renamed_arms",
+    "group_answer",
+    "is_blank",
+    "judge_database",
+    "kernel_track",
+    "main",
+    "observations",
+    "read_database",
+    "read_observations",
+    "read_table",
+    "renamed_arm",
+    "selects",
+    "task_labels",
+    "task_rows",
+]
+
 if TYPE_CHECKING:
     import pandas as pd
 

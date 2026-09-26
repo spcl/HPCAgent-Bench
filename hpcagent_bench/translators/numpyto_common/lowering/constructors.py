@@ -8,6 +8,20 @@ from hpcagent_bench.translators.numpyto_common.lowering.hoisting import StmtHois
 from hpcagent_bench.translators.numpyto_common.lowering.shape_harvest import ctor_shape_arg
 from hpcagent_bench.translators.numpyto_common.lowering.shape_reads import resolve_shape_token
 
+__all__ = [
+    "CopyToAllocAndFill",
+    "EyeCallHoister",
+    "EyeToZerosDiagonal",
+    "FullCallHoister",
+    "FullLikeRewriter",
+    "MgridLowering",
+    "ZerosRewriter",
+    "copied_name",
+    "ctor_dtype_literal",
+    "ctor_dtype_src",
+    "shape_from_ast",
+]
+
 
 class FullCallHoister(StmtHoister):
     """Materialise a nested ``np.full(...)`` / ``np.full_like(...)`` call into its own
@@ -21,6 +35,8 @@ class FullCallHoister(StmtHoister):
     without this the whole ``np.triu`` reaches the emitter unlowered. Mirrors
     :class:`EyeCallHoister`; a call already the direct RHS of an assignment is left
     for :class:`FullLikeRewriter` to consume."""
+
+    __slots__ = ()
 
     @staticmethod
     def is_full_call(v: ast.AST) -> bool:
@@ -104,6 +120,8 @@ class EyeCallHoister(StmtHoister):
     ``s_sub = 0.5 * (...) + 1.0e-12 * np.eye(k)`` -- where ``np.eye`` is buried in an
     expression, not a standalone assignment. A call that is already the direct RHS of
     an assignment is left in place for the diagonal rewriter to consume."""
+
+    __slots__ = ()
 
     @staticmethod
     def is_eye_call(v: ast.AST) -> bool:

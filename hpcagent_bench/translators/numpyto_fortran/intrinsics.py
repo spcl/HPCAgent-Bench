@@ -21,6 +21,23 @@ import ast
 
 from hpcagent_bench.translators.numpyto_common.lib_nodes import iter_extent_of, shape_exprs_equal
 
+__all__ = [
+    "AXIS_REDUCTIONS",
+    "ELEMENTWISE_INTRINSICS",
+    "EXTENT_OPS",
+    "FLOAT_KINDS",
+    "FLOAT_SLOTS",
+    "SHAPE_INTRINSICS",
+    "WHOLE_ARRAY_REDUCTIONS",
+    "conformable_operands",
+    "is_extent_expr",
+    "literal_axis",
+    "operand_is_float",
+    "renders_natively",
+    "reshape_dims",
+    "slot_is_float",
+]
+
 #: ``(module, attr)`` keys whose Fortran intrinsic reduces the whole array to a scalar AND agrees
 #: with numpy on a FLOATING operand. The set is short on purpose -- each name kept out is a
 #: measured disagreement, not an unwritten rendering:

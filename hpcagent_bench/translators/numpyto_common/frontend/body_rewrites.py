@@ -24,6 +24,35 @@ from hpcagent_bench.translators.numpyto_common.frontend.none_folding import (
 )
 from hpcagent_bench.translators.numpyto_common.frontend.shape_arith import const_int, literal_axis
 
+__all__ = [
+    "ArrayLiteralToFill",
+    "FoldParamNoneGuard",
+    "FoldSliceLocals",
+    "FoldTupleLocals",
+    "ListRepeatToFull",
+    "NewaxisToNone",
+    "NonFiniteNormalizer",
+    "SubstituteParamAliases",
+    "UnpackedOpenMeshToGrid",
+    "array_literal",
+    "bare_index_list",
+    "drop_dead_slice_bindings",
+    "is_num_literal",
+    "list_mutated_names",
+    "literal_elt_dtype",
+    "native_desugar",
+    "np_ix_operands",
+    "reads_only_as_index",
+    "rename_rebound_parameters",
+    "shape_subject",
+    "single_element_repeat",
+    "slice_bound_names",
+    "slice_call_args",
+    "slice_from_call",
+    "strip_framework_dtype_rebinding",
+    "version_rebound_locals",
+]
+
 
 def native_desugar(fn: ast.FunctionDef) -> None:
     """Apply the native-backend AST desugars to ``fn`` in place.
@@ -100,6 +129,8 @@ class FoldSliceLocals:
     with no reader are dropped: the backends have no slice object, so a survivor emits as a call to
     an undeclared ``slice``.
     """
+
+    __slots__ = ()
 
     def apply(self, fn: ast.FunctionDef) -> None:
         folded = self.walk_(fn.body, {})

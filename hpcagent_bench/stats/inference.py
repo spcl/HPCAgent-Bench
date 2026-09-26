@@ -44,6 +44,44 @@ from scipy.stats import t  # pyright: ignore[reportMissingTypeStubs, reportUnkno
 from hpcagent_bench.stats import summary
 from hpcagent_bench.stats.summary import DEFAULT_CONFIDENCE, DEFAULT_RESAMPLES, Interval, Statistic
 
+__all__ = [
+    "DEFAULT_ALPHA",
+    "DEFAULT_SEED",
+    "MAX_ABS_EXCESS_KURTOSIS",
+    "MAX_ABS_SKEW",
+    "MIN_NORMALITY_N",
+    "SHAPIRO_MAX_N",
+    "Comparison",
+    "CorpusComparison",
+    "Equivalence",
+    "FloatArray",
+    "NormalityVerdict",
+    "SampleSummary",
+    "Samples",
+    "TestResult",
+    "adjust_pvalues",
+    "anderson_darling_pvalue",
+    "anderson_darling_statistic",
+    "benjamini_hochberg",
+    "check_normality",
+    "clean",
+    "cliffs_delta",
+    "compare",
+    "compare_corpus",
+    "fieller_ratio_ci",
+    "holm_bonferroni",
+    "interval_for",
+    "mann_whitney",
+    "mean_ci_t",
+    "median_rank_ci",
+    "min_of_k_ci",
+    "qq_departure",
+    "speedup_ci",
+    "summarize",
+    "tost_equivalence",
+    "wilcoxon_signed_rank",
+]
+
 #: One timing sample per element. float64 is what ``np.asarray(..., dtype=float)`` produces.
 FloatArray = npt.NDArray[np.float64]
 

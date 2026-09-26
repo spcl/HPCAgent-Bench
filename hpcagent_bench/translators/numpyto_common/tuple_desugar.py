@@ -33,6 +33,42 @@ from typing import Any
 from hpcagent_bench.translators.numpyto_common.numpy_desugar import expr_rank
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
 
+__all__ = [
+    "CAST_KINDS",
+    "EXACT_COMPARE",
+    "FOLDED_TUPLE",
+    "INT_OPS",
+    "KIND_TYPES",
+    "NO_VALUE",
+    "NUMPY_CAST_KINDS",
+    "NUMPY_MODULES",
+    "TYPE_ACCEPTS",
+    "Env",
+    "Folder",
+    "TupleDesugar",
+    "as_slice",
+    "assigned_names",
+    "collapse_capture_aliases",
+    "const_int",
+    "const_value",
+    "decide_isinstance",
+    "desugar_tuples",
+    "drop_dead_none_bindings",
+    "fold_int_arithmetic",
+    "is_capture_bind",
+    "is_index_element",
+    "none_bind_targets",
+    "none_sentinel_uses",
+    "own_targets",
+    "rebinds_name",
+    "slice_calls_to_slices",
+    "static_bool",
+    "substitute",
+    "target_names",
+    "type_names",
+    "written_after_capture",
+]
+
 #: Module aliases a kernel may spell numpy as.
 NUMPY_MODULES = frozenset({"np", "numpy"})
 
@@ -103,6 +139,8 @@ def decide_isinstance(kind: str, names: list[str]) -> bool | None:
 class Env:
     """Names bound to a compile-time tuple, plus the names known to be bound at all (so
     ``x is None`` decides). Copied per branch; never shared across a loop body."""
+
+    __slots__ = ("bound", "kinds", "tuples")
 
     def __init__(
         self,
@@ -232,6 +270,8 @@ def type_names(node: ast.AST) -> list[str] | None:
 class TupleDesugar:
     """The forward interpreter. ``int_scalars`` / ``float_scalars`` / ``arrays`` are the kernel's
     declared parameters, which is what makes an ``isinstance`` guard on a knob decidable."""
+
+    __slots__ = ("aliases", "arrays", "captured", "float_scalars", "int_scalars", "ranks")
 
     def __init__(
         self,

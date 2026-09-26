@@ -29,6 +29,21 @@ from hpcagent_bench.translators.numpyto_common.lowering.subscriptify import Subs
 from hpcagent_bench.translators.numpyto_common.lowering.views import is_rank_preserving_slice_view
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
 
+__all__ = [
+    "UNCHANGED",
+    "IndexArraysAtIter",
+    "WholeArrayAssignRewriter",
+    "bare_index_arrays",
+    "has_index_array",
+    "is_bool_expr",
+    "is_constructor_call",
+    "is_plain_unit_slice",
+    "ix_call_args",
+    "nest_at_iters",
+    "normalise_shape",
+    "np_func_call",
+]
+
 
 def is_constructor_call(node: ast.Call) -> bool:
     """``True`` for ``np.zeros / np.empty / np.ones / np.full /

@@ -6,6 +6,32 @@ import ast
 from hpcagent_bench.translators.numpyto_common.parallelism import loop_is_parallel_safe
 from hpcagent_bench.translators.numpyto_common.subscripts import base_name
 
+__all__ = [
+    "MUTATING_METHODS",
+    "PARFOR_UNSAFE_CALLS",
+    "REORDERING_OPS",
+    "abs_offset",
+    "calls_a_mutating_helper",
+    "calls_a_parfor_unsafe_op",
+    "handed_to_written_params",
+    "has_inplace_slice_self_dependency",
+    "index_tuple",
+    "is_reshape_call",
+    "names_written_by_call",
+    "names_written_in",
+    "parallelize_one_range_loop",
+    "provably_disjoint",
+    "reordered",
+    "reshape_bound_names",
+    "reshape_operand",
+    "root_name",
+    "same_sign_const",
+    "spell_out_reshape_augassigns",
+    "spelled_out_augassign",
+    "unit_step",
+    "written_parameters",
+]
+
 #: Whole-array numpy calls numba's parfor rewriter -- what ``parallel=True`` turns on -- answers
 #: differently from numpy, each measured on numba 0.65.1: ``max`` / ``min`` (also spelled ``amax`` /
 #: ``amin``) SUPPRESS NaN where numpy propagates it, and a rectangular ``eye(m, n)`` fused with a

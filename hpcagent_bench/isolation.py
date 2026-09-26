@@ -12,6 +12,16 @@ import ctypes
 import os
 import warnings
 
+__all__ = [
+    "KMP_PAUSE_SYMBOL",
+    "OMP_PAUSE_HARD",
+    "OMP_PAUSE_MODES",
+    "OMP_PAUSE_SOFT",
+    "OMP_RUNTIME_SONAMES",
+    "exports",
+    "pause_openmp_pools",
+]
+
 #: OpenMP runtimes whose thread pool must be torn down before a fork (see
 #: :func:`pause_openmp_pools`). Probed by the sonames a linked node library actually records
 #: in DT_NEEDED.

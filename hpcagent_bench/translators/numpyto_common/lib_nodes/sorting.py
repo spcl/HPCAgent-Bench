@@ -15,6 +15,8 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
 )
 from hpcagent_bench.translators.numpyto_common.lib_nodes.scalarize import scalarize_at_iters
 
+__all__ = ["expand_median", "expand_searchsorted", "expand_sort", "make_sort_routine"]
+
 
 def make_sort_routine(buf: str, n: ast.expr, prefix: str) -> list[ast.stmt]:
     """In-place ascending insertion sort over ``buf[0:n]`` (rendered as plain

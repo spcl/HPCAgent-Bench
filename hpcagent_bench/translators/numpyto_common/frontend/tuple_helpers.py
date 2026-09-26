@@ -15,6 +15,17 @@ from hpcagent_bench.translators.numpyto_common.frontend.helper_specialize import
 from hpcagent_bench.translators.numpyto_common.frontend.inlining import strip_docstrings_
 from hpcagent_bench.translators.numpyto_common.frontend.module_constants import inline_module_constants
 
+__all__ = [
+    "InlineTupleHelperCalls",
+    "desugar_helper_tuples",
+    "fold_call_arg_constant",
+    "folded_straight_line",
+    "return_expression",
+    "rewrite_helper_axes",
+    "tuple_leaves",
+    "tuple_template_for_call",
+]
+
 
 def desugar_helper_tuples(
     hfn: ast.FunctionDef, arrays: list[ArrayDesc], scalars: list[ScalarDesc], symbols: Sequence[SymbolDesc] = ()

@@ -25,6 +25,41 @@ from hpcagent_bench.translators.numpyto_jax.names import (
 from hpcagent_bench.translators.numpyto_jax.state import STATE
 from hpcagent_bench.translators.numpyto_jax.vocab import LEADING_DATA_FUNCS, SHAPE_FUNCS
 
+__all__ = [
+    "ROW_REDUCE_FUNCS",
+    "SCATTER_AT_METHOD",
+    "LoopKind",
+    "broadcast_astype",
+    "carried_vars",
+    "classify_for",
+    "devectorize_index",
+    "emit_body",
+    "emit_for",
+    "emit_fori",
+    "emit_if",
+    "emit_iterable_for",
+    "emit_vectorized",
+    "emit_while",
+    "emit_while_break",
+    "expand_parallel_assigns",
+    "functionalize_stmt",
+    "index_in_shape",
+    "is_const_literal",
+    "is_index_i",
+    "is_return_only",
+    "is_static_iterable",
+    "local_const_seq_names",
+    "loop_vars",
+    "parse_range",
+    "range_args_static",
+    "range_covers_full_extent",
+    "row_reduce_rewrite",
+    "row_reduce_target",
+    "scatter_at_assign",
+    "split_on_break",
+    "unroll_loop_vars",
+]
+
 
 class LoopKind(enum.Enum):
     """How a jit-mode ``for`` loop lowers."""

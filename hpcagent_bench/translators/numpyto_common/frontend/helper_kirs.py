@@ -53,6 +53,18 @@ from hpcagent_bench.translators.numpyto_common.frontend.tuple_helpers import (
     tuple_template_for_call,
 )
 
+__all__ = [
+    "ArraySpec",
+    "HelperKirBuilder",
+    "Scope",
+    "Site",
+    "abi_hostile_arguments",
+    "build_helper_kirs",
+    "collect_called_helper_defs",
+    "helper_call_sites",
+    "helpers_callers_first",
+]
+
 
 def collect_called_helper_defs(tree: ast.Module, kernel_fn: ast.FunctionDef) -> list[ast.FunctionDef]:
     """Top-level helper ``FunctionDef``s still CALLED after inlining -- the ones
@@ -237,6 +249,19 @@ class HelperKirBuilder:
     Helpers are visited callers-first, so a helper called only from a sibling resolves its arguments
     against that sibling's descriptors (registered in ``scopes`` once the sibling is built).
     """
+
+    __slots__ = (
+        "callsite_rewrites",
+        "generation",
+        "helper_defs",
+        "keep_helpers",
+        "kernel_fn",
+        "local_arrays",
+        "out",
+        "parent",
+        "scopes",
+        "tree",
+    )
 
     def __init__(self, tree: ast.Module, kernel_fn: ast.FunctionDef, parent: KernelIR, keep_helpers: bool) -> None:
         self.tree = tree

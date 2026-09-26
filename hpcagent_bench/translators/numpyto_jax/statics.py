@@ -7,6 +7,21 @@ from hpcagent_bench.translators.numpyto_jax.names import names_loaded
 from hpcagent_bench.translators.numpyto_jax.state import STATE
 from hpcagent_bench.translators.numpyto_jax.vocab import ARRAY_ATTRS, LEADING_DATA_FUNCS, SHAPE_FUNCS, STATIC_BUILTINS
 
+__all__ = [
+    "array_like_params",
+    "concrete_bound_want",
+    "concrete_params",
+    "is_static_expr",
+    "propagate_param_flow",
+    "static_arguments",
+    "static_ctx",
+    "static_params",
+    "static_want",
+    "transitive_array_like",
+    "transitive_static",
+    "value_names",
+]
+
 
 def static_want(fn: ast.FunctionDef, params: list[str]) -> set[str]:
     """Params ``fn`` needs CONCRETE at trace time: those feeding a ``range()``

@@ -38,6 +38,36 @@ from collections.abc import Iterable, Iterator, Sequence
 
 from hpcagent_bench import campaigns, data_guard, frozen_observations, paths
 
+__all__ = [
+    "DB_SUFFIXES",
+    "FROZEN_SUFFIXES",
+    "RUN_FILE_GLOBS",
+    "SKIP_DIRS",
+    "SKIP_DIR_GLOBS",
+    "SOURCES",
+    "SUMS",
+    "DataSource",
+    "Root",
+    "archive",
+    "build_parser",
+    "check_roots",
+    "copy",
+    "copy_db",
+    "copy_file",
+    "env_script",
+    "files_of",
+    "is_db",
+    "main",
+    "quick_check",
+    "roots_of",
+    "sha256",
+    "skipped_dir",
+    "verify",
+    "walk",
+    "wanted",
+    "write_sums",
+]
+
 
 class DataSource(enum.Enum):
     """Which kind of source a collected root is; the value is its directory under ``<out>``."""

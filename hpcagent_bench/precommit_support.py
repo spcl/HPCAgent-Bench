@@ -9,6 +9,8 @@ standalone run, or ``--all-files``).
 import pathlib
 import subprocess
 
+__all__ = ["git_tracked", "is_generated_source"]
+
 
 def git_tracked(pattern: str | None = None, cwd: pathlib.Path | None = None) -> list[str]:
     """Tracked file paths, optionally filtered by a ``git ls-files`` pathspec/glob.

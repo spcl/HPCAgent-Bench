@@ -15,6 +15,19 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
 )
 from hpcagent_bench.translators.numpyto_common.subscripts import is_full_slice
 
+__all__ = [
+    "edge_clamp",
+    "expand_pad",
+    "floor_mod",
+    "fold_high",
+    "pad_fill",
+    "pad_mode_str",
+    "pad_remap",
+    "pad_src_base_and_lead",
+    "reflect_remap",
+    "symmetric_remap",
+]
+
 
 def pad_src_base_and_lead(src_node: ast.expr) -> tuple[str, list[ast.expr]] | None:
     """Split an ``np.pad`` source into ``(base_name, lead_scalar_indices)``. A

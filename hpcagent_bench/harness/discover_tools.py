@@ -16,9 +16,30 @@ import shutil
 import subprocess
 import sys
 from collections.abc import Callable
-from typing import TypeAlias, TypedDict, cast
+from typing import TypedDict, cast
 
 import yaml
+
+__all__ = [
+    "DETECTORS",
+    "TARGETS",
+    "TOOLSET",
+    "DetectResult",
+    "Evidence",
+    "PlatformInfo",
+    "Report",
+    "ToolEntry",
+    "ToolSpec",
+    "as_block",
+    "detect_binary",
+    "detect_header",
+    "detect_library",
+    "detect_platform",
+    "discover",
+    "main",
+    "missing_for_target",
+    "print_human",
+]
 
 _PKG = pathlib.Path(__file__).resolve().parent.parent  # the hpcagent_bench/ package dir
 TOOLSET = _PKG / "envs" / "toolset.yaml"
@@ -27,7 +48,7 @@ _VERSION_RE = re.compile(r"\d+(?:\.\d+)+")
 
 #: One ``toolset.yaml`` tool entry as the loader hands it over. A YAML mapping proves nothing about
 #: its values, so they stay ``object`` until :func:`_as_list` converts the one being read.
-ToolSpec: TypeAlias = "dict[str, object]"
+type ToolSpec = dict[str, object]
 
 
 class PlatformInfo(TypedDict):
@@ -55,11 +76,15 @@ class Evidence(TypedDict, total=False):
 class DetectResult(Evidence):
     """One detector's answer: whether the tool is here, plus its evidence."""
 
+    __slots__ = ()
+
     found: bool
 
 
 class ToolEntry(DetectResult):
     """One detection filed under its tool name, with the requirement the toolset declares."""
+
+    __slots__ = ()
 
     required_on: list[str]
     optional: bool

@@ -7,6 +7,24 @@ from hpcagent_bench.translators.numpyto_common.frontend import dtype_from_constr
 from hpcagent_bench.translators.numpyto_common.ir import COMPLEX_FOR_FLOAT
 from hpcagent_bench.translators.numpyto_common.lib_nodes.array_methods import ARRAY_METHOD_SHAPE_OPS
 
+__all__ = [
+    "DTYPE_PRESERVING_FUNCS",
+    "DTYPE_PRESERVING_METHODS",
+    "REAL_FOR_COMPLEX",
+    "REAL_FROM_COMPLEX",
+    "ComplexWorkSeed",
+    "PromoteMixedComplexIfExp",
+    "RealConjDropper",
+    "call_complex",
+    "ctor_complex_tag",
+    "dtype_carrying_operands",
+    "infer_complex_dtype",
+    "is_conj_call",
+    "scalar_expr_complex",
+    "seed_complex_work_dtypes",
+    "walk_complex",
+]
+
 #: numpy functions / accessors that return a REAL value even from a COMPLEX
 #: operand. The complex-detection walk must NOT descend into their arguments --
 #: else ``np.abs(z)`` / ``np.real(z)`` / ``z.real`` read as complex and mis-drive
@@ -290,6 +308,8 @@ def seed_complex_work_dtypes(
 class ComplexWorkSeed:
     """The complex (or matching real) dtype :func:`seed_complex_work_dtypes` gives a local from the
     value it is bound to."""
+
+    __slots__ = ("array_dtypes", "local_dtypes")
 
     def __init__(self, local_dtypes: dict[str, str], array_dtypes: dict[str, str]) -> None:
         self.local_dtypes = local_dtypes

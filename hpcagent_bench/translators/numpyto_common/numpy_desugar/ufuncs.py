@@ -8,6 +8,22 @@ from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import Ranke
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.hoist import HoistForm, ValueHoist
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.ranks import expr_rank
 
+__all__ = [
+    "OUTER_OPS",
+    "UFUNC_OUTER_HOIST",
+    "UFUNC_OUT_CALLS",
+    "UFUNC_OUT_OPS",
+    "CallFixups",
+    "ComplexAccessorToFunc",
+    "ElementalUfuncToPrimitive",
+    "FillDiagonalInline",
+    "UfuncOutInline",
+    "cmp_zero",
+    "hoist_ufunc_outer",
+    "np_multi_call",
+    "ufunc_method_op",
+]
+
 
 class CallFixups(RankedRewritePass):
     """Small call-form fixups for the narrower numba/pythran numpy surface, among them
@@ -16,6 +32,8 @@ class CallFixups(RankedRewritePass):
     ``np.linspace(a, b, n).astype(D)`` (numba's linspace takes no dtype kwarg);
     builtin ``abs(<array>)`` -> ``np.abs(<array>)`` (numba's builtin ``abs``
     types scalars only)."""
+
+    __slots__ = ("changed",)
 
     def visit_Call(self, node: ast.Call):
         self.generic_visit(node)
@@ -332,6 +350,8 @@ class ElementalUfuncToPrimitive(RewritePass):
       * ``np.heaviside(a, b)`` -> ``np.where(a < 0, 0.0, np.where(a == 0, b, 1.0))``.
 
     Reused operands are deep-copied so no AST node is shared between two positions."""
+
+    __slots__ = ("changed",)
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
         self.generic_visit(node)

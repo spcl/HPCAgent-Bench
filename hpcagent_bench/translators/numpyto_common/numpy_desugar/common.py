@@ -2,6 +2,29 @@
 
 import ast
 
+__all__ = [
+    "AUG_OP_SRC",
+    "LIKE_CTORS",
+    "REDUCE_FNS",
+    "SHAPE_CTORS",
+    "DesugarError",
+    "RankedRewritePass",
+    "RewritePass",
+    "as_stmts",
+    "const_int",
+    "eigh_alias_names",
+    "eigh_call_ab",
+    "eigh_call_kind",
+    "expr_of",
+    "is_eigh_assign_target",
+    "name_store_counts",
+    "np_attr",
+    "np_submodule_attr",
+    "reachable_functions",
+    "replace_call_with_name",
+    "tuple_len",
+]
+
 
 class DesugarError(NotImplementedError):
     """A pass matched a construct it owns but cannot lower this variant of it.
@@ -20,6 +43,8 @@ class RewritePass(ast.NodeTransformer):
 
 class RankedRewritePass(RewritePass):
     """A :class:`RewritePass` that reads the scope's name -> rank table."""
+
+    __slots__ = ("ranks",)
 
     def __init__(self, ranks: dict[str, int]) -> None:
         super().__init__()

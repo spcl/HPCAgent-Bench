@@ -16,6 +16,17 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
 )
 from hpcagent_bench.translators.numpyto_common.lib_nodes.scalarize import scalarize_at_iters
 
+__all__ = [
+    "MatmulHoister",
+    "hoist_matmul",
+    "matmul_result_shape",
+    "matvec_matmul",
+    "named_batched_matmul",
+    "scalar_dot_matmul",
+    "scalarised_batched_matmul",
+    "scalarised_matmul",
+]
+
 
 def matmul_result_shape(
     a_shape: tuple[str, ...],

@@ -8,6 +8,24 @@ from hpcagent_bench.translators.numpyto_common.numpy_desugar.hoist import HoistF
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.kinds import dtype_kind
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.ranks import expr_rank
 
+__all__ = [
+    "INT_MATMUL_HOIST",
+    "BatchedMatmulToLoop",
+    "IndexLeadingAxis",
+    "ReshapeContiguousInline",
+    "ReshapeMatmulInline",
+    "as_matmul",
+    "as_reshape",
+    "hoist_int_matmul",
+    "int_matmul_acc_dtype",
+    "int_matmul_stmts",
+    "int_matmul_temp",
+    "is_transpose_expr",
+    "matmul_operands",
+    "matmul_pairs",
+    "noncontig_names",
+]
+
 
 def matmul_pairs(node: ast.AST) -> list[ast.AST]:
     """Every matmul (``@`` BinOp or ``np.matmul`` call) under ``node``."""
@@ -50,6 +68,8 @@ class IndexLeadingAxis(ast.NodeTransformer):
 class BatchedMatmulToLoop(RankedRewritePass):
     """``Q[:] = Q + I @ S`` (I rank-3) -> a loop over the batch axis doing a 2-D GEMM per
     element. numba / pythran / Fortran have 2-D matmul but no stacked (>=3-D) form."""
+
+    __slots__ = ("_ctr", "changed")
 
     def batch_source(self, value: ast.AST) -> ast.Name | None:
         """First rank > 2 Name feeding a batched matmul; its leading axis is the batch extent."""
@@ -306,6 +326,8 @@ class ReshapeMatmulInline(RankedRewritePass):
     numba cannot type the reshape-wrapped batched ``@``. Fires only on the unit-dim insertion
     (``mid[-2] == 1``, ``len(mid) == X.ndim + 1``); other reshapes stay verbatim. A matched
     form with Y not 2-D or X below 2-D raises DesugarError rather than miscompiling."""
+
+    __slots__ = ("_ctr", "changed")
 
     def visit_Assign(self, node: ast.Assign):
         self.generic_visit(node)

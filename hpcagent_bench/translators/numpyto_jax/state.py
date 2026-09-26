@@ -6,6 +6,8 @@ function, so the emitted text never depends on what was emitted before.
 
 import dataclasses
 
+__all__ = ["STATE", "EmitState"]
+
 
 @dataclasses.dataclass(slots=True)
 class EmitState:

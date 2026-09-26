@@ -20,6 +20,23 @@ from hpcagent_bench.translators.numpyto_common.lowering.mathfuncs import NP_ELEM
 from hpcagent_bench.translators.numpyto_common.lowering.shape_reads import resolve_shape_token
 from hpcagent_bench.translators.numpyto_common.numpy_desugar import np_submodule_attr
 
+__all__ = [
+    "UNHANDLED",
+    "branch_pin_",
+    "collect_dim_aliases",
+    "counted_constructor_shape",
+    "ctor_shape_arg",
+    "harvest_assign",
+    "harvest_local_shapes",
+    "harvest_np_call",
+    "harvest_transpose",
+    "harvest_zeros_like",
+    "is_scalar_helper_call",
+    "optional_constructor",
+    "shapes_agree_under",
+    "substitute_ints",
+]
+
 
 def branch_pin_(stmt: ast.stmt) -> tuple[dict[str, int], bool]:
     """The zero-pin an ``if`` puts on one of its two sides, and whether that side is the TAKEN one.

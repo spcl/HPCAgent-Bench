@@ -10,6 +10,27 @@ from typing import Any
 
 from hpcagent_bench.translators.numpyto_common import dtypes
 
+__all__ = [
+    "COMPLEX_DTYPES",
+    "COMPLEX_FOR_FLOAT",
+    "FLOAT_DTYPES",
+    "NUMPY_NOTE",
+    "NUMPY_NOTE_CHARS",
+    "SYMBOL_ASSUMPTIONS",
+    "ArrayDesc",
+    "KernelIR",
+    "ScalarDesc",
+    "SparseArrayDesc",
+    "SymbolDesc",
+    "apply_precision",
+    "apply_precision_",
+    "is_alloc_marker",
+    "numpy_origin",
+    "shape_dimension_symbols",
+    "stamp_symbol_assumptions",
+    "tag_numpy_origin",
+]
+
 #: Float/complex dtypes a precision sweep remaps; int/uint/bool keep
 #: their own dtype so index arrays in a mixed kernel stay integer.
 FLOAT_DTYPES = frozenset({"float64", "float32", "float16", "float128", "double", "float8_e4m3", "float8_e5m2"})

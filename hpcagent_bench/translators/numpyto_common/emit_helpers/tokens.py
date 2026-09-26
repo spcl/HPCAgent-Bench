@@ -4,6 +4,8 @@ import ast
 import re
 from collections.abc import Collection, Iterable
 
+__all__ = ["IDENT_RE", "is_word_char", "loop_target_names", "mentions_ident", "mentions_word"]
+
 #: One C / Fortran / Python identifier. ASCII only: that is what every target language accepts.
 IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 

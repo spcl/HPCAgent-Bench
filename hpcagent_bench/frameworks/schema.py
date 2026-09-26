@@ -12,6 +12,17 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.exc import OperationalError
 from sqlmodel import Field, SQLModel, create_engine
 
+__all__ = [
+    "CONCURRENT_SCHEMA_RACE",
+    "KERNEL_METRICS_TABLE",
+    "RESULTS_TABLE",
+    "KernelMetric",
+    "Result",
+    "add_missing_columns",
+    "is_concurrent_schema_race",
+    "results_engine",
+]
+
 #: The table name; SQLModel's default would be the class name lowercased, which is not it.
 RESULTS_TABLE = "results"
 

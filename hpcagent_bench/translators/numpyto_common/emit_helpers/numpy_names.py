@@ -2,6 +2,8 @@
 
 import ast
 
+__all__ = ["CONJ_ATTRS", "NUMPY_MODULE_NAMES", "REAL_IMAG_ATTRS", "is_numpy_module"]
+
 #: The names a kernel binds numpy to.
 NUMPY_MODULE_NAMES = ("np", "numpy")
 

@@ -11,6 +11,18 @@ from hpcagent_bench.translators.numpyto_common.lowering.shape_harvest import (
     collect_dim_aliases,
 )
 
+__all__ = [
+    "SsaRenamer",
+    "SsaScope",
+    "apply_renames",
+    "binds_name",
+    "live_on_loop_reentry",
+    "read_in",
+    "rebinds",
+    "rename_reads",
+    "ssa_rename_reassigned",
+]
+
 
 def read_in(name: str, blocks: "tuple[list[ast.stmt], ...]") -> bool:
     """True when ``name`` is READ anywhere in ``blocks`` (the code that runs after a nested block).
@@ -148,6 +160,8 @@ class SsaRenamer:
     being reassigned; sharing ``version`` across nested scopes mints a fresh version for each shape
     change even when the assignments live in different loop bodies.
     """
+
+    __slots__ = ("dim_aliases", "shape_rank", "shape_toks_of", "shapes")
 
     def __init__(self, arrays_shapes: dict[str, list[str]], dim_aliases: dict[str, str]) -> None:
         self.shapes: dict[str, tuple[str, ...]] = {name: tuple(shape) for name, shape in arrays_shapes.items()}

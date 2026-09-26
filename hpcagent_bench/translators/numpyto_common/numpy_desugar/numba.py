@@ -15,6 +15,21 @@ from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import (
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.kinds import dtype_kind
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.ranks import expr_rank
 
+__all__ = [
+    "ONE",
+    "NdimFold",
+    "NumbaDtypeFixups",
+    "OuterBroadcastPeel",
+    "ReshapeFortranOrderInline",
+    "SliceObjectInline",
+    "bcast_tokens",
+    "cast_like",
+    "one_slice_index",
+    "scalar_index",
+    "slice_extent_token",
+    "without_leading_newaxis",
+]
+
 
 #: Extent token for an axis pinned to one element (a newaxis or a 1-long slice).
 ONE = "1"
@@ -97,6 +112,8 @@ class OuterBroadcastPeel(RankedRewritePass):
 
     Extents are ``<name>.shape[k]`` tokens from the rank table, since manifest shape symbols are
     not bound in the kernel. An operand whose axes cannot be placed declines the whole statement."""
+
+    __slots__ = ("_ctr", "changed")
 
     def operands_(self, node: ast.AST) -> list[ast.expr] | None:
         """The operands an elementwise node broadcasts together, or None when it is not one."""
@@ -414,6 +431,8 @@ class ReshapeFortranOrderInline(RewritePass):
 
     numba's ``reshape`` takes no keyword. Fortran order is C order on the axis-reversed array, so
     the transposed spelling is exact. A shape passed as one name cannot be reversed and stays verbatim."""
+
+    __slots__ = ("changed",)
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
         self.generic_visit(node)

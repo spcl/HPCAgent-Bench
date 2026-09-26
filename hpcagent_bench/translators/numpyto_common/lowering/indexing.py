@@ -13,6 +13,28 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
 from hpcagent_bench.translators.numpyto_common.lowering.mathfuncs import MATH_BUILTINS
 from hpcagent_bench.translators.numpyto_common.lowering.shape_reads import const_int_index, is_newaxis
 
+__all__ = [
+    "LOWERED_ELEMENTWISE",
+    "advanced_runs",
+    "basic_axis_count",
+    "binop",
+    "compose_kept_axis",
+    "gather_slice_offset",
+    "has_any_slice",
+    "has_negative_step",
+    "is_fancy_dim",
+    "is_scalar_index",
+    "iter_var_name",
+    "name_of_subscript",
+    "np_func_name",
+    "rebases_onto_view_axis",
+    "shift_index",
+    "slice_dims",
+    "slice_free_gather_layout",
+    "view_offset",
+    "view_scale",
+]
+
 
 def slice_dims(node: ast.Subscript) -> list[ast.AST]:
     """Return per-axis slice entries (either ``Slice`` or non-slice index)."""

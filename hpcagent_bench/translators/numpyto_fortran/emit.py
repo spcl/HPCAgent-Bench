@@ -40,6 +40,116 @@ from hpcagent_bench.translators.numpyto_common.lowering import (
     integer_valued_locals,
 )
 
+__all__ = [
+    "ABS_ATTRS",
+    "BINOP_",
+    "BITWISE_BINOPS",
+    "BITWISE_INT_CALL_NAMES",
+    "BOOLOP_",
+    "CMPOP_",
+    "DIM_REDUCTION_INTRINSICS",
+    "FFT_MARKER_NAMES",
+    "FORTRAN_FN_EXPR_",
+    "FORTRAN_FP8_NAMES",
+    "FORTRAN_INTRINSICS",
+    "FORTRAN_NAME_LIMIT",
+    "FP8_HELPER_SRC",
+    "HELPER_RET",
+    "INT_CALLS_ARGDEP",
+    "INT_CONV_INTRINSIC",
+    "INT_EXTRACTING_CALLS",
+    "INT_RETURNING_CALLS",
+    "MAX_CALL_NAMES",
+    "MAX_LINE_COLS",
+    "MINMAX_CALL_NAMES",
+    "NUMPY_INT_CASTS",
+    "ONE_OPERAND_CALLS",
+    "PURE_INT_CASTS",
+    "PURE_VIEW_FNS",
+    "REAL_ARG_INTRINSICS",
+    "SHAPE_TOKEN_INTRINSICS",
+    "SYMBOL_INT_TAG",
+    "TWO_OPERAND_CALLS",
+    "UNARY_MATH_ATTRS",
+    "WHOLE_ARRAY_REDUCTIONS",
+    "WRAP_COL",
+    "ZEROS_MARKER_NAMES",
+    "FortranBodyEmitter",
+    "FortranRenameTemps",
+    "HoistHelperCallVisitor",
+    "HoistIfExpVisitor",
+    "LocalArrayDecls",
+    "LocalTyping",
+    "add_bitwise_operands",
+    "array_decl",
+    "assigned_bool_literal",
+    "case_safe_name",
+    "coerce_to_fortran_type",
+    "collect_for_targets",
+    "collect_implicit_locals",
+    "complex_tag_for",
+    "constant_tuple_element",
+    "contained_procedures",
+    "copied_element_dtypes",
+    "double_kind",
+    "emit_fortran",
+    "emit_fortran_helper",
+    "emit_fortran_omp",
+    "fftw_interface",
+    "floordiv_int_helper",
+    "floordiv_real_helper",
+    "format_subroutine",
+    "fortran_case_map",
+    "fortran_literal",
+    "fortran_safe",
+    "fortran_safe_token",
+    "fortran_shape_binop",
+    "fortran_shape_expr",
+    "fortran_type",
+    "fp8_contained",
+    "helper_abi_order",
+    "helper_dummy_decls",
+    "helper_local_array_decls",
+    "hoist_ifexp",
+    "hoist_ifexp_stmts",
+    "hoist_nested_helper_calls",
+    "implicit_int_kinds",
+    "index_aliases",
+    "int_cast_operand",
+    "int_literal_or_none",
+    "int_literal_value",
+    "is_scalar_access",
+    "kinded_shape_operand",
+    "libm_interface",
+    "logical_locals_",
+    "merge_used_procedures",
+    "nan_minmax_helper",
+    "peel_int_casts",
+    "pinned_const_decls",
+    "prepared_body_emitter",
+    "produces_bool",
+    "produces_logical",
+    "pure_index_root",
+    "rebind_loop_tokens",
+    "record_helper_call_shapes",
+    "record_ifexp_temp_dtypes",
+    "rename_helper_to_fortran_safe",
+    "renamed_descriptors",
+    "renamed_side_tables",
+    "reprime_before_continue",
+    "round_even_helper",
+    "scalar_decl",
+    "shape_token_uses_unknown",
+    "sign_helper",
+    "signature_decls",
+    "supplies_no_values",
+    "symbol_decl",
+    "to_fortran_shape_token",
+    "value_assignments",
+    "wrap_fortran_line",
+    "wrap_fortran_text",
+]
+
 # Fortran intrinsic / fn-expr tables live in numpyto_common.operators, aliased here
 # so existing call sites (and the public FORTRAN_INTRINSICS name) are unchanged.
 FORTRAN_INTRINSICS = operators.FORTRAN_INTRINSICS
@@ -849,6 +959,39 @@ def is_scalar_access(n: ast.AST) -> bool:
 
 class FortranBodyEmitter(BaseEmitter):
     """Walk the Python AST and emit Fortran statements, adjusting subscripts from 0-based to 1-based indexing."""
+
+    __slots__ = (
+        "_bool_scalar_names_cache",
+        "_helper_out",
+        "_helper_param_types",
+        "_helper_ret_slot",
+        "_int_array_names",
+        "_int_kinds",
+        "_int_scalar_names",
+        "_int_uses_cache",
+        "_local_elem_dtypes",
+        "_logical_array_locals",
+        "_loop_iter_names",
+        "_own_scalar_types",
+        "_rk",
+        "_size1_arrays",
+        "_used_fftw",
+        "_used_floordiv_int",
+        "_used_floordiv_real",
+        "_used_ieee",
+        "_used_libm",
+        "_used_nan_minmax",
+        "_used_round_even",
+        "_used_sign",
+        "array_shapes",
+        "index_arrays",
+        "inline_alloc_locals",
+        "kir",
+        "local_arrays",
+        "parallel",
+        "parallel_active",
+        "return_mode",
+    )
 
     STMT_TERM = ""
     KW_BREAK = "exit"
@@ -3175,6 +3318,17 @@ class LocalArrayDecls:
     top, or at its ``__hpcagent_bench_zeros__`` marker when a bound names a loop iterator or a scalar
     the body computes (undefined at the function top)."""
 
+    __slots__ = (
+        "allowed_bound_names",
+        "body_emitter",
+        "computed_scalars",
+        "inferred_local_dtypes",
+        "kir",
+        "loop_iter_names",
+        "param_names_ci",
+        "seen_ci",
+    )
+
     def __init__(
         self, kir: KernelIR, body_emitter: "FortranBodyEmitter", seen_ci: set[str], param_names_ci: set[str]
     ) -> None:
@@ -3419,6 +3573,21 @@ class LocalTyping:
     """The facts :func:`collect_implicit_locals` types an undeclared scalar local from: the dtypes the
     lowering recorded, the logical / integer / int64 / real-assigned roles its uses imply, and
     whether every assignment to it is integer-valued."""
+
+    __slots__ = (
+        "complex_names",
+        "complex_t",
+        "float_assigned",
+        "int64_kind",
+        "int64_uses",
+        "int_uses",
+        "int_valued",
+        "logical_uses",
+        "real_t",
+        "recorded_ftype",
+        "recorded_int64_local",
+        "recorded_real_local",
+    )
 
     def __init__(self, kir: KernelIR) -> None:
         # Float locals follow the kernel's precision (real(c_float) at fp32), as the C emitter's do.

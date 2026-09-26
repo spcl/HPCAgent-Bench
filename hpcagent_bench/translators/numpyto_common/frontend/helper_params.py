@@ -8,6 +8,24 @@ from typing import Literal
 from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc, ScalarDesc, SymbolDesc
 from hpcagent_bench.translators.numpyto_common.frontend.shapes import resolve_array_ref
 
+__all__ = [
+    "ConstArg",
+    "DescEntry",
+    "DescKey",
+    "ParamKind",
+    "boolean_valued_argument",
+    "constant_param",
+    "infer_helper_params",
+    "infer_param_desc",
+    "integer_valued_argument",
+    "mark_written_outputs",
+    "name_param",
+    "reject_subscripted_scalar_params",
+    "resolved_array_param",
+    "subscript_param",
+    "widen_counting_scalar_params",
+]
+
 
 #: Value of an ``ast.Constant``, spelled as the ast module itself types it. A call site in the
 #: corpus passes int, float, str, bool or None; the rest of the union is what ast admits.

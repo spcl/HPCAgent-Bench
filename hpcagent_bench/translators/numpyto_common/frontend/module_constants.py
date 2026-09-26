@@ -11,6 +11,31 @@ from hpcagent_bench.translators.numpyto_common import dtypes
 from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc
 from hpcagent_bench.translators.numpyto_common.frontend.shape_arith import IDENT_RE
 
+__all__ = [
+    "ARITH_OPS",
+    "ARRAY_LITERAL_DTYPES",
+    "BIT_OPS",
+    "DTYPE_ATTRS",
+    "MODULE_NUMBERS",
+    "ModuleConst",
+    "SubstituteModuleConsts",
+    "default_const",
+    "dtype_module_consts",
+    "find_function",
+    "fold_const_binop",
+    "fold_const_expr",
+    "fold_consts_into_shapes",
+    "fold_default_args",
+    "inline_module_constants",
+    "materialize_const_arrays",
+    "numeric_const",
+    "numeric_module_consts",
+    "parse_array_literal",
+    "sequence_module_consts",
+    "shadowed_names",
+    "single_name_assigns",
+]
+
 
 #: Value of a module-level numeric constant :func:`inline_module_constants` folds into the body.
 #: Complex is reachable: a constant expression over ``np.pi`` and a complex literal folds here.

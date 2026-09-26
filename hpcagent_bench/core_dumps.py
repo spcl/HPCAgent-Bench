@@ -17,6 +17,8 @@ import.
 import os
 import resource
 
+__all__ = ["ALLOW", "JUDGE", "disable", "keep_for_judge"]
+
 #: Set to ``1`` to keep core dumps: a debugger session that wants the dump, in a directory that
 #: can hold it. Anything else (unset included) means the limit is dropped.
 ALLOW = "HPCAGENT_BENCH_CORE_DUMPS"

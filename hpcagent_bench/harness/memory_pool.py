@@ -24,6 +24,8 @@ place, without pretending to a pooling it does not do.
 
 import pathlib
 
+__all__ = ["GB", "MEMINFO", "MEMINFO_KEY", "host_available_bytes", "reserve", "reserve_device", "reserve_host"]
+
 GB = 1 << 30
 
 #: ``/proc/meminfo`` key naming what a new allocation can actually get: free pages PLUS the

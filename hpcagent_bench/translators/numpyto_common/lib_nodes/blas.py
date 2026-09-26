@@ -12,6 +12,16 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
 )
 from hpcagent_bench.translators.numpyto_common.lib_nodes.scalarize import scalarize_at_iters
 
+__all__ = [
+    "BLAS_GEMM_MARKER",
+    "BLAS_INELIGIBLE_DTYPES",
+    "expand_add_outer",
+    "expand_dot",
+    "expand_dot_2d",
+    "expand_matmul",
+    "expand_outer",
+]
+
 #: Pseudo-call a BLAS-capable target's emitter renders as its gemm. Emitted ONLY when the caller
 #: asked for ``blas``; every other target keeps the loop nest, so this name never reaches them.
 #: Args are ``(a, b, out, m, n, k)`` on row-major C-contiguous operands.

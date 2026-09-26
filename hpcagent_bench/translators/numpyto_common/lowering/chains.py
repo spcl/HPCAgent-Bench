@@ -16,6 +16,23 @@ from hpcagent_bench.translators.numpyto_common.lowering.shape_reads import is_ne
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
 from hpcagent_bench.translators.numpyto_common.subscripts import index_slot, is_ellipsis, is_full_slice
 
+__all__ = [
+    "CHAINED_VIEW",
+    "LEAF_TYPES",
+    "AxisLabel",
+    "ChainFold",
+    "ChainedSubscriptFlattener",
+    "IndexEntry",
+    "compose_onto_view",
+    "counts_from_end",
+    "entry_model",
+    "flat_entries",
+    "index_rank",
+    "outermost_chains",
+    "reads_a_mask",
+    "result_axes",
+]
+
 #: Base name a chained view's own axes are scalarized under before they compose onto the real base.
 CHAINED_VIEW = "__chained_view__"
 

@@ -20,6 +20,8 @@ from collections.abc import Sequence
 
 import pandas as pd
 
+__all__ = ["ESCAPES", "booktabs", "column_spec", "escape", "row", "write"]
+
 #: The characters LaTeX reads as markup, and what they are written as. ``\\`` is not among them: a
 #: caller that wants a macro in a cell has to be able to write one.
 ESCAPES: dict[str, str] = {"&": r"\&", "%": r"\%", "$": r"\$", "#": r"\#", "_": r"\_"}
