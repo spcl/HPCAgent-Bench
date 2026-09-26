@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 IMPL_POSTFIXES = ("_dace_gpu", "_dace_cpu", "_dace")
 
 #: ``DACE_*`` variables that name locations rather than behaviour, left out of every key.
-DACE_PATH_VARIABLES = frozenset({"DACE_TREE", "DACE_default_build_folder", "DACE_BUILD_CACHE_DIR"})
+DACE_PATH_VARIABLES = frozenset({"DACE_default_build_folder", "DACE_BUILD_CACHE_DIR"})
 
 
 def program_name(path: pathlib.Path) -> str:

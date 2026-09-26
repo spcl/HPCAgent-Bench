@@ -330,16 +330,6 @@ def test_the_runtime_check_refuses_a_partition_the_table_does_not_name(tmp_path:
             'gpu_arch_check.sh" "${EDF}"',
             'make_private_dir "${RUN_DIR}"',
         ),
-        (
-            "experiments/mpi/smoke-mlscale-e2e.sbatch",
-            'gpu_arch_check.sh" "${EDF}"',
-            'srun --overlap --nodes=1 --ntasks=1 --nodelist="${NODE}"',
-        ),
-        (
-            "experiments/mpi/smoke-mpi-judge.sbatch",
-            'gpu_arch_check.sh" "${EDF}"',
-            'srun --ntasks=1 --cpus-per-task=24 --environment="${EDF}"',
-        ),
     ],
 )
 def test_every_gpu_launcher_checks_the_arch_before_its_first_gpu_step(

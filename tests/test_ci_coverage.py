@@ -287,7 +287,6 @@ def test_ruff_and_pyright_target_the_python_floor() -> None:
 #: Distributions in ``[project.optional-dependencies]`` whose module name differs from the PyPI name.
 EXTRA_IMPORT_NAMES = {
     "apache-tvm": "tvm",
-    "apache-tvm-ffi": "tvm_ffi",
     "cupy-cuda13x": "cupy",
     "py-cpuinfo": "cpuinfo",
     "z3-solver": "z3",
