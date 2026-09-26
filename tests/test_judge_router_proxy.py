@@ -304,7 +304,7 @@ def test_search_still_runs_locally(client: "TestClient", service: ModuleType, mo
         seen.update(query=query, limit=limit)
         return {"answer": "use LDS"}
 
-    monkeypatch.setattr(service.web_search, "run_web_search", fake_search)
+    monkeypatch.setattr(service.judge_web_search, "run_web_search", fake_search)
     response = client.post("/search", json={"query": "MI300 LDS", "context": "gemm", "limit": 3})
     assert response.status_code == 200
     assert response.json() == {"answer": "use LDS"}
@@ -319,7 +319,7 @@ def test_search_failure_is_a_bad_gateway(
     def boom(query: str, limit: int | None) -> dict[str, Any]:
         raise RuntimeError("serpapi down")
 
-    monkeypatch.setattr(service.web_search, "run_web_search", boom)
+    monkeypatch.setattr(service.judge_web_search, "run_web_search", boom)
     assert client.post("/search", json={"query": "x"}).status_code == 502
 
 
@@ -333,7 +333,7 @@ def test_search_not_provisioned_is_a_distinct_service_unavailable(
     def unprovisioned(query: str, limit: int | None) -> dict[str, Any]:
         raise service.judge_web_search.NotProvisionedError("SERPAPI_API_KEY must be set")
 
-    monkeypatch.setattr(service.web_search, "run_web_search", unprovisioned)
+    monkeypatch.setattr(service.judge_web_search, "run_web_search", unprovisioned)
     response = client.post("/search", json={"query": "x"})
     assert response.status_code == service.SEARCH_NOT_PROVISIONED == 503
     assert response.json()["detail"]["cause"] == "not_provisioned"

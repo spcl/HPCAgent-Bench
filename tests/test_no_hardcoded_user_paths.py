@@ -145,6 +145,7 @@ ALLOW = {
     "tests/test_fused_owed_wave.py": "fixtures of legacy recorded keys",
     "tests/test_extract_llr40_task_rows.py": "fixtures of legacy recorded keys",
     "tests/test_ablation_stats.py": "fixtures of legacy recorded keys",
+    "tests/test_harbor_images.py": "asserts a generated Harbor task names no storage mount",
     "containers/inference/serve-private.sbatch::PRESET_PARTITION=mi300": (
         "MI300A serving recipe: the preset is the hardware profile, checked against its partition"
     ),

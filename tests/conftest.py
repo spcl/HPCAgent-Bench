@@ -355,6 +355,17 @@ def restore_config_overrides() -> Iterator[None]:
     config.restore_overrides(snapshot)
 
 
+@pytest.fixture(scope="module", autouse=True)
+def restore_module_config_overrides() -> Iterator[None]:
+    """The same restore around each MODULE: a module-scoped fixture (a judge started with
+    ``service.preset=S``) sets its overrides before any per-test snapshot is taken, so the per-test
+    restore keeps them as the starting state, and without this they outlive the module into the
+    next one on that worker (timed shapes drawn around ``S``: ``{"N": 4}``, ``{"N": 3}``, ...)."""
+    snapshot = config.override_snapshot()
+    yield
+    config.restore_overrides(snapshot)
+
+
 @pytest.fixture(autouse=True)
 def _restore_cpu_affinity() -> Iterator[None]:
     """Give every test back the CPU affinity it started with.

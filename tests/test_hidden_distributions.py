@@ -231,7 +231,7 @@ def test_a_structural_array_keeps_its_generator_through_the_wiring(variant) -> N
 
 
 @pytest.mark.parametrize("declared", ["positive", (-1.0, 1.0)], ids=["sign", "interval"])
-def test_an_empty_array_passes_through_any_domain(declared) -> None:
+def test_an_empty_array_passes_through_any_domain(declared: str | tuple[float, float]) -> None:
     """A stacked-layer weight with zero extra layers (num_layers = 1) is empty; folding it must not
     fail, or every such draw of the kernel dies in its initializer."""
     empty = np.empty((0, 4))

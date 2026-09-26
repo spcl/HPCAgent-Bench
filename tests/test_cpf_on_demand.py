@@ -45,7 +45,7 @@ class FakeRenderer:
 
     def __call__(
         self,
-        spec: Any,
+        spec: object,
         cache_root: pathlib.Path,
         *,
         languages: tuple[str, ...],
