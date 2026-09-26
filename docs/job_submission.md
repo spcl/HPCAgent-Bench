@@ -1,8 +1,7 @@
 # Design: job submission
 
 A run reaches a cluster in one of three shapes, one per thing being distributed. How the work
-list is split is in [DESIGN_static_workload_distribution.md](DESIGN_static_workload_distribution.md);
-runnable campaign examples (submit, resubmit, regrade, inspect) are in
+list is split is described below; runnable campaign examples (submit, resubmit, regrade, inspect) are in
 [experiments/LAUNCH.md](../experiments/LAUNCH.md).
 
 | shape | distributed | ranks talk | script |

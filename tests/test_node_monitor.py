@@ -69,7 +69,12 @@ def run_monitor(tmp_path: Path, path_dirs: list[Path], interval: str = "0.2", ro
     env["INTERVAL"] = interval
     proc = subprocess.Popen([BASH, str(SCRIPT)], env=env)
     try:
-        time.sleep(float(interval) * 2 + 0.5)
+        # Wait for the first sample row, not a fixed time: a loaded node can take seconds to start.
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline and not any(
+            len(f.read_text().splitlines()) >= 2 for f in out_dir.glob("*.csv")
+        ):
+            time.sleep(float(interval))
         proc.send_signal(signal.SIGTERM)
         proc.wait(timeout=10)
     finally:

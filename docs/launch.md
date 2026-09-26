@@ -1,8 +1,8 @@
 # Launching HPCAgent-Bench on a cluster
 
 The site-independent deployment. The Beverin campaign runbook is
-[`SUBMITTING.md`](../SUBMITTING.md) and [`experiments/LAUNCH.md`](../experiments/LAUNCH.md); the
-full specification is [DESIGN_job_submission.md](DESIGN_job_submission.md).
+[`SUBMITTING.md`](../experiments/SUBMITTING.md) and [`experiments/LAUNCH.md`](../experiments/LAUNCH.md); the
+full specification is [job_submission.md](job_submission.md).
 
 Every container is single-node, one per rank, wired by static assignment. There are three shapes:
 
