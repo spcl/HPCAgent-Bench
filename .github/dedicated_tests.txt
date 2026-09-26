@@ -64,4 +64,3 @@ tests/test_dace_port_lowering.py
 tests/test_dace_numeric_agreement.py
 tests/test_dace_openblas_link.py
 tests/test_njit_reference.py
-tests/test_input_finiteness.py
