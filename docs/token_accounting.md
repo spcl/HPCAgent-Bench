@@ -26,10 +26,9 @@ A weight vector `w` (a "card") defines the cost:
 | `total` | 1 | 1 | 1 | every prompt in full on every turn |
 | `api-priced` | 1 | 0.1 | 5 | list-price shape, output at 5x |
 
-`cost.DEFAULT_COST_MODEL = "billed"`. The paper reports the three proxies in
-`cost.PROXY_CARDS = ("effective", "billed", "total")`; `cost.effective_tokens`, `cost.billed_tokens`
-and `cost.total_tokens` price one task's components directly. Every card is a weighted sum of the same
-three counts, so a result under one card converts exactly to any other.
+`cost.DEFAULT_COST_MODEL = "billed"`. The paper reports `effective`, `billed` and `total` side by
+side. Every card is a weighted sum of the same three counts, so a result under one card converts
+exactly to any other.
 
 ## Where the counts come from
 

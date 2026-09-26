@@ -14,7 +14,7 @@ import numpy as np
 import pytest
 from scipy.stats import wilcoxon
 
-from hpcagent_bench.stats import inference, summary
+from hpcagent_bench.stats import summary
 
 
 @pytest.mark.parametrize(
@@ -228,13 +228,11 @@ def test_paired_geomean_over_no_pairs_has_no_estimate() -> None:
     assert math.isnan(change.estimate)
 
 
-def test_a_timing_comparison_and_a_paired_change_report_one_signed_rank_p() -> None:
-    """Two call sites into scipy chose exact-or-approximate independently and disagreed on tied data;
-    both now read the one test, so the same differences give the same p wherever they are tested."""
+def test_a_paired_change_reports_the_shared_signed_rank_p() -> None:
+    """On tied data the paired change reads the one signed-rank test, not its own scipy call."""
     before = np.array([10.0, 12.0, 9.0, 14.0, 11.0, 13.0, 10.5, 12.5, 9.5, 15.0])
     after = np.array([9.0, 11.0, 9.5, 12.0, 10.0, 12.0, 9.5, 12.0, 9.0, 13.0])
     expected = summary.signed_rank_test(after - before)[1]
-    assert inference.compare(after, before, paired=True).pvalue == expected
     assert summary.paired_change(after - before).pvalue == expected
 
 

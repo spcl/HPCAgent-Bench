@@ -2,10 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The benchmarking rules a figure in this repo has to obey, as checks rather than as prose.
 
-Rules 4, 5, 7 and 12 of T. Hoefler and R. Belli, "Scientific Benchmarking of Parallel Computing
-Systems", SC15, quoted in :data:`RULE_TEXT`. A check raises :class:`RuleViolation`, naming the rule,
-at the point the figure is built, and takes only what the figure already has: its data table, its
-interval columns, its x values.
+Rules 4, 5, 7 and 12 of Hoefler and Belli, "Scientific Benchmarking of Parallel Computing Systems",
+SC15 (see :data:`RULE_TEXT`). A check raises :class:`RuleViolation` at the point the figure is built.
 """
 
 from collections.abc import Sequence
@@ -46,20 +44,14 @@ class RuleViolation(ValueError):
 
 
 def require_costs(table: pd.DataFrame, ratio: str, costs: Sequence[str]) -> pd.DataFrame:
-    """Rule 4. A table carrying a ratio column must carry the costs the ratio was taken over.
-
-    A speedup alone is uninterpretable: 1.4x on a kernel that runs for 3 ms and 1.4x on one that
-    runs for 3 s are different results, and the reader cannot tell them apart from the ratio. So
-    the numerator and denominator travel with it, in the SAME table the figure emits, and a figure
-    that cannot supply them has to say so rather than ship the ratio on its own.
-    """
+    """Rule 4: a table carrying a ratio column must also carry the costs the ratio was taken over."""
     if ratio not in table.columns:
         raise RuleViolation(4, f"the table has no {ratio!r} column to check")
     missing = [c for c in costs if c not in table.columns]
     if missing:
         raise RuleViolation(4, f"{ratio!r} is summarized with no costs behind it; add {missing}")
     if table.empty:
-        return table  # nothing was summarized, so no ratio is standing without its costs
+        return table
     empty = [c for c in costs if not table[c].notna().any()]
     if empty:
         raise RuleViolation(4, f"{ratio!r} has cost columns {empty} that are entirely missing")
@@ -67,16 +59,9 @@ def require_costs(table: pd.DataFrame, ratio: str, costs: Sequence[str]) -> pd.D
 
 
 def require_interval(table: pd.DataFrame, point: str, low: str, high: str, deterministic: bool = False) -> pd.DataFrame:
-    """Rules 5 and 7. A nondeterministic measurement is reported with an interval, or declared.
-
-    ``deterministic=True`` is the escape hatch the paper allows, and it is an ASSERTION about the
-    data rather than a way past the check: the caller is saying the values do not vary between
-    runs, which the figure's caption then has to say too. Anything else must carry ``low`` and
-    ``high`` beside ``point``, because two point estimates without intervals cannot be compared --
-    which is Rule 7, and is the comparison every figure here is actually making.
-
-    A row whose interval is absent is named, not silently dropped: the missing interval is
-    usually a cell with too few repetitions, and that is a fact about the run.
+    """Rules 5 and 7: a nondeterministic measurement is reported with an interval, or declared
+    ``deterministic``. Raises naming rows with a missing or inverted interval, rather than
+    dropping them silently.
     """
     if deterministic:
         return table

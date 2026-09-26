@@ -47,14 +47,13 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("paper", type=pathlib.Path, help="the paper's root (holds sections/ and figures/)")
     parser.add_argument("--text-width", type=float, default=style.ICLR_TEXT_WIDTH_IN, help="\\textwidth, inches")
-    parser.add_argument("--figures", default="figures", help="the graphics path, relative to the paper root")
     parser.add_argument("--ignore", action="append", default=[], help="a figure not drawn by this API")
     args = parser.parse_args(argv)
     failed = 0
     for where, fraction, name in placements(args.paper):
         if name in args.ignore:
             continue
-        path = args.paper / args.figures / name
+        path = args.paper / "figures" / name
         placed = fraction * args.text_width
         scale = placed / pdf_width_in(path)
         ok = abs(scale - 1.0) <= style.PLACED_WIDTH_RTOL

@@ -529,59 +529,6 @@ def test_the_demo_draws_enough_repetitions_for_a_box() -> None:
     assert speedup.demo_points() == points, "the demo seed must keep the boxes reproducible too"
 
 
-# the square embed figure
-
-
-def two_framework_points(kernels, band: str, magnitude: float = 3.0):
-    """Both demo frameworks on every kernel in ``kernels`` -- the complete groups the figure wants."""
-    return [
-        speedup.Point(kernel, framework, magnitude, magnitude - 1.0, band, tuple([magnitude - 1.0] * 12))
-        for kernel in kernels
-        for framework in speedup.DEMO_FRAMEWORKS
-    ]
-
-
-def test_the_square_figure_keeps_its_kernels_on_one_order_of_magnitude() -> None:
-    """A single ``> 10x`` cell would set a y range that collapses every other box to a line -- the
-    same problem the banded layout exists to solve, except a square panel has no second band to
-    move the outlier to. So the kernels must come from ONE band, never a mix."""
-    points = two_framework_points(["k0", "k1"], speedup.BAND_MID)
-    points += two_framework_points(["huge"], speedup.BAND_HIGH, magnitude=90.0)
-    kernels, frameworks = speedup.square_kernels(points)
-    assert frameworks == sorted(speedup.DEMO_FRAMEWORKS)
-    assert "huge" not in kernels, "the outlier would flatten the others"
-    assert kernels == ["k0", "k1"]
-
-
-def test_a_kernel_missing_one_framework_is_not_drawn_as_a_half_group() -> None:
-    """The figure's claim is a comparison. A kernel where only one agent has a box invites reading
-    the gap as a result rather than as data that was never collected."""
-    points = two_framework_points(["paired"], speedup.BAND_MID)
-    points.append(speedup.Point("lonely", speedup.DEMO_FRAMEWORKS[0], 3.0, 2.0, speedup.BAND_MID, tuple([2.0] * 12)))
-    kernels, _frameworks = speedup.square_kernels(points)
-    assert kernels == ["paired"], "a group with a missing agent must be left out entirely"
-
-
-def test_the_square_figure_groups_both_agents_on_one_axis(tmp_path: pathlib.Path) -> None:
-    """It mimics the banded figure: kernel names on x, a speedup label, a legend naming the agents,
-    and one hue per agent -- so the two are read against each other rather than in two panels."""
-    out = tmp_path / "square.svg"
-    written = speedup.square_figure(speedup.demo_points(), str(out))
-    assert pathlib.Path(written).exists()
-    body = out.read_text()
-    for band in speedup.BANDS:
-        assert band not in body, f"band title {band!r} leaked into a single-band panel"
-    for framework in speedup.DEMO_FRAMEWORKS:
-        assert framework in body, f"the legend must name {framework!r}"
-    assert "Speedup" in body, "the y axis must say what it measures"
-
-
-def test_the_square_figure_is_square() -> None:
-    """It is specified as a square panel; a drifting aspect would quietly become a wide strip."""
-    assert speedup.SQUARE_SIDE > 0
-    assert speedup.SQUARE_CELLS == 4
-
-
 def test_the_bare_simple_figure_clears_the_LEFT_title_not_just_the_centre(tmp_path: pathlib.Path) -> None:
     """Regression. ``draw_band`` sets the band label with ``loc="left"``, which matplotlib keeps as
     a DIFFERENT artist from the centre title -- so ``set_title("")`` cleared nothing visible and the
@@ -610,35 +557,9 @@ def test_the_unbare_simple_figure_still_states_what_it_hides(tmp_path: pathlib.P
     assert "not shown" in out.read_text(), "the simplification must be stated on the default figure"
 
 
-def test_the_square_ticks_always_show_the_axis_landmarks() -> None:
-    """-1, 0 and +1 are not round numbers on this axis, they are 2x slower / unchanged / 2x faster.
-    A generic locator omits them routinely -- on a -1.6..4.3 panel it chose 0.0 and 2.5, leaving the
-    figure unable to say whether a box below zero was a small regression or a catastrophic one."""
-    assert speedup.square_ticks(-1.8, 4.4) == [-1.0, 0.0, 1.0, 4.0]
-    # A bottom the landmarks do not reach gets one whole number; -1.8 above did not need one,
-    # because ceil(-1.8) is -1 and the landmark already sits there.
-    assert speedup.square_ticks(-2.4, 4.4) == [-2.0, -1.0, 0.0, 1.0, 4.0]
-    assert -1.0 in speedup.square_ticks(-1.2, 6.0)
-    assert 0.0 in speedup.square_ticks(-3.0, 3.0)
-    # A range that misses every landmark still gets ticks rather than an empty axis.
-    assert speedup.square_ticks(20.0, 40.0) == [20, 40]
-
-
-def test_the_square_figure_shows_a_slow_down_when_its_band_has_one() -> None:
-    """At this size the figure IS the summary somebody reads. One that shows only wins while the
-    band it came from also holds losses is the wrong summary."""
-    kernels, _frameworks = speedup.square_kernels(speedup.demo_points())
-    points = {(p.kernel, p.framework): p for p in speedup.demo_points()}
-    changes = [points[(k, f)].change for k in kernels for f in speedup.DEMO_FRAMEWORKS]
-    assert any(change < 0.0 for change in changes), "no regression is shown"
-    assert any(change > 0.0 for change in changes), "no speedup is shown"
-
-
-def test_neither_the_square_nor_the_banded_figure_draws_an_axes_legend(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
-) -> None:
-    """One legend on the FIGURE, never ``ax.legend`` (rule five): both figures share a framework
-    key, and a key drawn per axes invites reading two panels as two different sets of series."""
+def test_the_banded_figure_draws_no_axes_legend(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
+    """One legend on the FIGURE, never ``ax.legend`` (rule five): a key drawn per axes invites
+    reading two panels as two different sets of series."""
     import matplotlib.pyplot as plt
     from matplotlib.figure import Figure
 
@@ -651,11 +572,10 @@ def test_neither_the_square_nor_the_banded_figure_draws_an_axes_legend(
     monkeypatch.setattr(plotting, "save_figure", spy)
     points = speedup.demo_points()
     kernels = speedup.plotted_kernels(points)
-    speedup.square_figure(points, str(tmp_path / "square.svg"))
     speedup.banded_figure(points, kernels, str(tmp_path / "banded.svg"))
 
     try:
-        assert len(captured) == 2
+        assert len(captured) == 1
         for fig in captured:
             assert all(ax.get_legend() is None for ax in fig.axes)
             assert len(fig.legends) == 1

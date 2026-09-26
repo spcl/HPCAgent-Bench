@@ -2,60 +2,21 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Per-kernel figures: one column per kernel, one mark per series, one summary slot per series.
 
-THE ONE PER-KERNEL DRAWING API. Every figure with a kernel axis draws through this module -- the
-compiler figure (:func:`hpcagent_bench.stats.figures.signed.llr40_figure`) and the per-kernel
-figures of the paper artifact -- so a column, a placeholder, a summary slot, a tick and a margin
-mean the same thing in all of them. Two copies of this geometry drifted before: one
-printed short names and one full names, one thinned its ticks and one did not, one summary sat in a
-slot per series and one crammed every series into one column. A caller turns its own data into
-:class:`KernelCell` s (:func:`kernel_cells` from a ``kernel -> value`` map), groups them into
-:class:`Series`, picks one :class:`Metric` per panel and calls :func:`figure_panels`.
+The one per-kernel drawing API: the compiler figure
+(:func:`hpcagent_bench.stats.figures.signed.llr40_figure`) and the paper's per-kernel figures both
+draw through this module, so a column, a mark, a summary slot and a margin mean the same thing
+everywhere. A caller turns its data into :class:`KernelCell` s (:func:`kernel_cells`), groups them
+into :class:`Series`, picks one :class:`Metric` per panel and calls :func:`figure_panels`.
 
-A CELL IS ONE KERNEL'S VALUES FOR ONE SERIES, and its status decides its mark:
+A cell's status decides its mark: measured (a point with an interval), undelivered (hollow,
+crossed, at the value the failure left, 1x when it delivered nothing), pending ("?" at 1x) or
+flagged (a disowned answer's cross with a ``*``). Undelivered and pending cells enter no summary.
 
-* measured -- the series' own shape at the value, with an interval when there is one: the cell's
-  own (a repeat interval, a min/max over tasks) or, in the ``ci`` style, a bootstrap median CI over
-  its episodes, which collapses to the point below
-  :data:`~hpcagent_bench.stats.summary.MIN_INTERVAL_SAMPLES` (5) -- so a one-episode-per-kernel
-  experiment draws plain points, and git-scicomp's 3 episodes stay a point in ``ci`` and become a
-  real box in ``box`` (:data:`MIN_EPISODES_FOR_SPREAD`), where three raw quartiles still mean
-  something and a bootstrap interval of three does not;
-* undelivered -- served and never verified (it still scores 1x and its tokens
-  are still spent): the shape HOLLOW and CROSSED (:func:`~hpcagent_bench.stats.style.point_mark`)
-  at the value the cell carries, the 1x placeholder for a missing answer or the ratio a one-sided
-  failure left, so a reader never takes it for a measured 1x;
-* pending -- not attempted yet: a "?" at 1x, so "not run" never reads as "failed";
-* flagged -- disowned by the judge or an audit: a cross with a ``*`` at the value it claimed.
-
-Every mark carries a white halo and is sized to the column pitch (:func:`mark_size`): a crowded
-column shrinks its marks rather than merging them into one blot, down to the size at which the
-undelivered cross still reads.
-
-THE SPEEDUP AXIS IS LOG2. A ratio axis on a linear scale reads a 2x slow-down as a small event and
-a 2x speedup as a large one; log2 puts them the same distance from the 1x line, and the ticks are
-labelled back into ratios (:func:`~hpcagent_bench.stats.style.ratio_tick_label`) at powers of two,
-thinned to at most :data:`MAX_SPEEDUP_TICKS` (:func:`speedup_yticks`). Tokens are a magnitude, so
-their axis is log10 with 1-2-5 majors (:func:`token_limits`). Both limits come from the cells, not
-from autoscaling, so the chrome can be measured before a single mark is drawn.
-
-THE SUMMARY COLUMN sits past a dashed separator, ONE SLOT PER SERIES (:func:`summary_slot_x`):
-summaries that agree to a few percent, drawn in one column, hid all but the top mark. Each slot
-carries the series' overall value with its interval and prints the value (tagged
-:data:`~hpcagent_bench.stats.style.CLEAR_GID`, settled clear of the marks at save), over the
-SOLVED kernels only (:func:`kernel_medians`): an undelivered placeholder's 1x and a disowned claim
-are drawn, but neither is a measured speedup. Speedup is a ratio, so its overall
-value is the GEOMETRIC MEAN (:func:`summary_geomean`) -- never a median, which equals the
-geomean only when the values happen to be symmetric; tokens take the same geomean (paper rule). The statistic is named ABOVE the panel, never as an x tick,
-which a stacked figure's shared axis would hand to the wrong panel (:func:`draw_summary_column`).
-
-THE CANVAS IS MEASURED (:func:`fit_canvas`): the left margin from the Y labels, the top band and
-the stack gap from what each panel prints above its frame, the bottom band from the rotated kernel
-names (first stepped down to the pitch) plus the key under them. A fixed band is right for one
-width and one label length; on any other it wastes the page or prints the key over the names. A
-figure is drawn at :data:`~hpcagent_bench.stats.style.DOUBLE_COLUMN_WIDTH` at authoring size
-(:data:`AUTHOR_TYPE`), at a stated ``width_in`` at print size
-(:data:`~hpcagent_bench.stats.style.PRINT_SCALE`), or as wide as a stated kernel pitch needs
-(:func:`roomy_pitch_in`); each panel is :data:`PANEL_HEIGHT_IN` tall.
+The value axis is log2 for a speedup (:func:`style_speedup_axis`) and log10 for a token count
+(:func:`style_token_axis`), both sized from the cells before a mark is drawn. The summary column
+sits past a dashed separator, one slot per series (:func:`summary_slot_x`), each showing the
+geometric mean over the solved kernels (:func:`summary_geomean`). The canvas is measured, not
+fixed (:func:`fit_canvas`): margins come from what the chrome actually prints.
 """
 
 import enum
@@ -169,15 +130,13 @@ __all__ = [
 LOG = logging.getLogger(__name__)
 
 
-#: The two drawing modes: the median (+ bootstrap CI) or the raw per-episode boxplot.
+#: The two drawing modes: the median (+ bootstrap CI), or the raw per-episode boxplot.
 class Style(enum.Enum):
     CI = "ci"
     BOX = "box"
 
 
-#: Episodes per kernel at or above which ``box`` draws an actual box instead of a point. 3 is
-#: git-scicomp's own episode count -- the smallest population a quartile spread still means
-#: something for, as opposed to being the two endpoints wearing quartile marks.
+#: Episodes per kernel at or above which ``box`` draws an actual box instead of a point.
 MIN_EPISODES_FOR_SPREAD: int = 3
 
 #: A single panel's height, inches, for a figure authored at double-column width.
@@ -186,8 +145,7 @@ PANEL_HEIGHT_IN: float = 1.8
 PRINT_PANEL_HEIGHT_IN: float = 1.12
 
 
-#: Authoring sizes, for a figure drawn at the double-column width and placed near scale 1.0: the
-#: authoring scale's type cut to about half, kernel names and key at half its tick size, print weights.
+#: Authoring scale: type cut to about half, kernel names and key at half tick size, print weights.
 AUTHOR_TYPE: plotstyle.TypeScale = dataclasses.replace(
     plotstyle.AUTHOR_SCALE,
     tick_pt=plotstyle.AUTHOR_SCALE.tick_pt * 0.55,
@@ -202,14 +160,12 @@ MIN_NAME_SCALE: float = 0.6
 
 
 def min_text_pt(type_: plotstyle.TypeScale, size: float) -> float:
-    """The smallest a fitted text of ``size`` may get: the shared print floor at print size, where
-    every figure of a page must agree, and :data:`MIN_NAME_SCALE` of it at authoring size."""
+    """The smallest a fitted text of ``size`` may get: the shared print floor at print size,
+    :data:`MIN_NAME_SCALE` of it at authoring size."""
     return plotstyle.PRINT_MIN_PT if type_ == plotstyle.PRINT_SCALE else size * MIN_NAME_SCALE
 
 
-#: Line weights in points beside the scale's own ``line_width`` (kernel intervals, box medians, the
-#: summary separator): the 1x reference, the major grid, a box's outline, a summary's interval, and
-#: the edges of the undelivered key cross and of a flagged mark.
+#: Line weights in points beside the scale's own ``line_width``.
 REFERENCE_LINE_WIDTH: float = 0.9
 GRID_LINE_WIDTH: float = 0.7
 BOX_LINE_WIDTH: float = 0.6
@@ -223,29 +179,17 @@ CHROME_PAD_IN: float = 0.04
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class KernelCell:
-    """One kernel's values for one series, sorted, and the status that decides its mark.
-
-    ``delivered`` False: a kernel the arm was SERVED and never verified an
-    answer for still scores 1x and its tokens are still spent. Dropping it instead would report the
-    arm's speedup over the kernels it happened to solve, which is a different and always kinder
-    number -- a 28-of-40 arm would read like a 40-of-40 one. Such a cell carries the value its
-    failure left (the 1x placeholder, or a ratio one side of which is that placeholder) and draws
-    hollow and crossed; it never enters a summary (:func:`kernel_medians`).
-    """
+    """One kernel's values for one series, sorted, and the status that decides its mark."""
 
     kernel: str
     episodes: tuple[float, ...]
+    #: False: served but never verified. Still scores 1x, still spends tokens, enters no summary.
     delivered: bool = True
-    #: The judge or a source audit disowned this answer, so its value is drawn but not believed
-    #: (:func:`draw_flagged`). Distinct from ``delivered`` False: there IS a number here, and the
-    #: point of showing it is that it is large.
+    #: Disowned by the judge or an audit: the value is drawn but not believed (:func:`draw_flagged`).
     flagged: bool = False
-    #: A (low, high) the caller already has for this kernel -- a confidence interval over its own
-    #: repetitions, or the minimum and maximum over its tasks. ``None`` lets the ``ci`` style
-    #: bootstrap one from ``episodes`` instead.
+    #: A (low, high) the caller already has for this kernel. ``None`` lets ``ci`` bootstrap one.
     interval: tuple[float, float] | None = None
-    #: Served but not attempted yet: drawn as a "?" at 1x, so "not run" never reads as "failed".
-    #: A pending cell is also undelivered, so it enters no summary either.
+    #: Served but not attempted yet: drawn as a "?" at 1x. Also undelivered, so no summary either.
     pending: bool = False
 
     @property
@@ -277,13 +221,10 @@ def kernel_cells(
 ) -> tuple[KernelCell, ...]:
     """One single-value cell per kernel of ``kernels`` from a caller's own ``kernel -> value`` map.
 
-    A kernel with no usable value is FILLED at :data:`~hpcagent_bench.stats.population.NOT_DELIVERED`
-    as an undelivered cell under ``fill`` -- a speedup, where "no verified answer" has a natural
-    place -- and left out otherwise: no token count is a neutral cost, and a mark at the axis edge
-    would read as the smallest spend. ``delivered`` marks the PRESENT values that are placeholders
-    all the same (a ratio whose one side never delivered is a number, not a measurement). ``low``
-    and ``high`` give a kernel its own interval where both are usable and ``low < high``.
-    ``pending`` kernels become pending cells whatever ``values`` says.
+    A kernel with no usable value is filled at :data:`~hpcagent_bench.stats.population.NOT_DELIVERED`
+    as an undelivered cell under ``fill``, else left out. ``delivered`` marks present values that are
+    placeholders all the same. ``low``/``high`` give a kernel its own interval where usable and
+    ``low < high``. ``pending`` kernels become pending cells whatever ``values`` says.
     """
     delivered = delivered or {}
     low, high = low or {}, high or {}
@@ -301,14 +242,8 @@ def kernel_cells(
 
 
 def ordered_kernels(cells: Sequence[KernelCell]) -> list[str]:
-    """Kernels ascending by median, each named ONCE.
-
-    A panel may carry several series over one kernel axis, so a kernel appears in ``cells`` once
-    per series. Ordering the cells directly would then emit that kernel once per series and the
-    axis would grow to the CELL count -- six series over forty kernels drew 201 columns. A kernel
-    is ranked by the median of its cells' medians, which for one series is its own median and
-    leaves a single-series panel in exactly the order it had.
-    """
+    """Kernels ascending by median, each named once (a panel may carry several series over one
+    kernel axis, so a kernel appears in ``cells`` once per series)."""
     grouped: dict[str, list[float]] = {}
     for cell in cells:
         value = cell.median()
@@ -355,9 +290,8 @@ def cell_point(cell: KernelCell, log2_space: bool) -> tuple[float, float, float]
 
 
 def kernel_medians(cells: Sequence[KernelCell]) -> np.ndarray:
-    """The plotted kernels' own per-kernel medians -- what the summary column reduces one level
-    up -- over the SOLVED kernels only: an undelivered placeholder's 1x, a pending kernel and a
-    disowned answer's claim are drawn, but none is a measured value, so none enters the summary."""
+    """The plotted kernels' own per-kernel medians over the solved kernels only: undelivered,
+    pending and flagged cells are drawn but never enter a summary."""
     return np.array(
         [cell.median() for cell in cells if cell.delivered and not cell.flagged and math.isfinite(cell.median())],
         dtype=np.float64,
@@ -365,9 +299,8 @@ def kernel_medians(cells: Sequence[KernelCell]) -> np.ndarray:
 
 
 def summary_geomean(cells: Sequence[KernelCell]) -> tuple[float, float, float]:
-    """``(geomean, low, high)`` over the plotted kernels' own medians, speedup and tokens alike: the
-    geometric mean with its 95% log-t interval (:func:`hpcagent_bench.stats.summary.geomean_interval`),
-    as :func:`hpcagent_bench.stats.population.kernel_medians` reports an arm."""
+    """``(geomean, low, high)`` over the plotted kernels' own medians, with its 95% log-t interval
+    (:func:`hpcagent_bench.stats.summary.geomean_interval`)."""
     interval = summary.geomean_interval(kernel_medians(cells))
     return interval.point, interval.low, interval.high
 
@@ -377,19 +310,16 @@ SummaryReducer = Callable[[Sequence["KernelCell"]], tuple[float, float, float]]
 
 
 def drawn_values(cells: Sequence[KernelCell]) -> list[float]:
-    """Every usable value ``cells`` draw a mark at -- the values a value axis has to span. Never an
-    interval end: an interval is read against the axis the values set and is cut by the frame where
-    it runs past it, since a two-repeat t-interval spans thirty octaves and pinning the axis to it
-    flattened every mark onto one line."""
+    """Every usable value ``cells`` draw a mark at -- never an interval end, since a two-repeat
+    t-interval can span tens of octaves and pinning the axis to it flattens every mark."""
     return [v for cell in cells for v in cell.episodes if usable(v)]
 
 
-#: The most labelled powers of two a speedup axis carries. A wider range labels every second (or
-#: third) octave instead: twelve octaves on a 1.8in panel printed their labels on top of each other.
+#: The most labelled powers of two a speedup axis carries; a wider range labels every second (or
+#: third) octave instead.
 MAX_SPEEDUP_TICKS: int = 7
 
-#: Octaves of air past the outermost speedup ticks, so a mark sitting on one is never cut by the
-#: frame.
+#: Octaves of air past the outermost speedup ticks, so a mark sitting on one is never cut by the frame.
 VALUE_PAD_OCTAVES: float = 0.35
 
 
@@ -421,8 +351,7 @@ def grid_125(low: float, high: float) -> list[float]:
 
 def token_limits(cells: Sequence[KernelCell]) -> tuple[float, float]:
     """Every plotted token value with a little air, widened to the next 1-2-5 values outward when
-    that window would label fewer than two ticks: one number on an axis is nothing to read a value
-    against. Whole decades instead left most of a one-decade panel empty."""
+    that window would label fewer than two ticks."""
     values = drawn_values(cells)
     if not values:
         return 1.0, 10.0
@@ -440,9 +369,7 @@ def style_speedup_axis(
     reference_color: str = plotstyle.REFERENCE,
 ) -> None:
     """Powers of two, read back as ratios, over limits pinned just past them, with a major grid and
-    the shared minor ruling (:func:`plotstyle.minor_ticks`, read off these majors) on the value axis
-    and nothing on the kernel axis -- the ticks are pinned here, so the grid is drawn beside them
-    rather than through ``plotstyle.value_axis``, which would relocate them."""
+    the shared minor ruling on the value axis and nothing on the kernel axis."""
     ax.set_yscale("log", base=2)
     ticks = speedup_yticks(cells)
     ax.set_yticks(ticks)
@@ -469,11 +396,9 @@ def style_token_axis(
 class Series:
     """One drawn population inside a panel: a model, a language, a device, a condition, a column.
 
-    Colour is a SERIES property, because the question "is this kernel hard, or is this model bad at it" needs
-    several populations over one kernel axis to answer. A series with no cells still holds its
-    dodge offset and its summary slot, so a series that has nothing to show on one panel of a
-    stacked figure (a compiler on the token panel) leaves every other series where the panel
-    above put it.
+    Colour is a series property, so several populations can share one kernel axis. A series with
+    no cells still holds its dodge offset and summary slot, so it leaves every other series where a
+    panel above it put them.
     """
 
     label: str
@@ -483,42 +408,29 @@ class Series:
     filled: bool = True
 
 
-#: Total x width one kernel column's series are spread over by default. Below ~0.8 the intervals of
-#: adjacent kernels stay apart and the reader keeps which column a mark belongs to.
+#: Total x width one kernel column's series are spread over by default.
 DODGE_SPAN: float = 0.62
 
 
 def dodge_offsets(count: int, span: float = DODGE_SPAN) -> list[float]:
     """Evenly spaced x offsets for ``count`` series sharing one kernel column, centred on it, the
-    outermost two ``span`` apart (0 stacks every series on the column).
-
-    One series draws ON the column, not beside it; no series gets no offset, so a panel with no
-    series zips against an equally empty list.
-    """
+    outermost two ``span`` apart (0 stacks every series on the column)."""
     if count < 2:
         return [0.0] * count
     step = span / (count - 1)
     return [-span / 2.0 + i * step for i in range(count)]
 
 
-#: A mark's diameter in points where it has room, the smallest a crowded column may shrink it to
-#: (below which the undelivered cross stops reading), and how much of the gap to its neighbour a
-#: mark may cover. Marks OVERLAP slightly by design: each carries a white halo, so a mark drawn over
-#: its neighbour still shows its own edge.
+#: A mark's diameter in points where it has room, the smallest a crowded column may shrink it to,
+#: and how much of the gap to its neighbour a mark may cover.
 MARK_PT: float = 4.5
 MIN_MARK_PT: float = 2.6
 MARK_GAP_RATIO: float = 1.7
 
 
 def mark_size(pitch_in: float, n_series: int, span: float = DODGE_SPAN) -> float:
-    """A mark's AREA in points squared: :data:`MARK_PT` across where the marks have room, shrinking
-    with the gap to the nearest neighbour down to :data:`MIN_MARK_PT` where they do not.
-
-    The neighbour is the next dodged series when the column is dodged, and the next column when it
-    is not (``span`` 0 stacks the series and they differ by shape alone). A fixed size merged a
-    crowded column into one blob and left the reader no colour edges to count series by, which is
-    the one thing the dodge is for.
-    """
+    """A mark's area in points squared: :data:`MARK_PT` across where the marks have room, shrinking
+    with the gap to the nearest neighbour down to :data:`MIN_MARK_PT` where they do not."""
     dodged = n_series > 1 and span > 0.0
     gap_pt = 72.0 * pitch_in * (span / (n_series - 1) if dodged else 1.0)
     return max(MIN_MARK_PT, min(MARK_PT, MARK_GAP_RATIO * gap_pt)) ** 2
@@ -530,24 +442,7 @@ def column_pitch_in(ax: matplotlib.axes.Axes) -> float:
     return float(ax.bbox.width) / ax.figure.dpi / (high - low)
 
 
-#: Inches per kernel column for a figure whose WIDTH follows its kernels rather than the page (a
-#: standalone render): the floor rotated names need at authoring size, the ceiling past which a
-#: figure with many series stops printing at a readable scale, and what each extra dodged series
-#: asks for in between.
-MIN_PITCH_IN: float = 0.22
-MAX_PITCH_IN: float = 0.34
-SERIES_PITCH_IN: float = 0.05
-
-
-def roomy_pitch_in(n_series: int, span: float = DODGE_SPAN) -> float:
-    """The column pitch a standalone figure asks for: :data:`SERIES_PITCH_IN` between dodged
-    neighbours, clamped to the name floor and the printable ceiling."""
-    wanted = (n_series - 1) * SERIES_PITCH_IN / span if span > 0.0 else 0.0
-    return min(MAX_PITCH_IN, max(MIN_PITCH_IN, wanted))
-
-
-#: Drawn under the marks' white halos (:data:`~hpcagent_bench.stats.style.FILL_Z`), never over them:
-#: the "connector under fill" order :func:`~hpcagent_bench.stats.style.point_mark` documents.
+#: Drawn under the marks' white halos (:data:`~hpcagent_bench.stats.style.FILL_Z`), never over them.
 INTERVAL_Z: float = 2.0
 
 #: The mark for a disowned answer, the superscript that separates it from an unanswered one, and the
@@ -560,13 +455,8 @@ FLAGGED_MARK_PT: float = 5.0
 def draw_flagged(
     ax: matplotlib.axes.Axes, x: float, value: float, color: str, annotation_pt: float = AUTHOR_TYPE.annotation_pt
 ) -> None:
-    """A disowned answer at the value it claimed: a filled cross carrying a ``*``.
-
-    An unanswered kernel is already a crossed mark at 1x, so a reader who has learnt that mark reads
-    this one as its neighbour: no credit. The ``*`` is what says the two are not the same, and the
-    value is drawn where it landed because the claim being far above the honest ceiling is the whole
-    observation.
-    """
+    """A disowned answer at the value it claimed: a filled cross carrying a ``*`` so it is never
+    read as an unanswered kernel's plain cross."""
     ax.plot(
         [x], [value], marker=FLAGGED_MARKER, markersize=FLAGGED_MARK_PT, markeredgewidth=FLAGGED_EDGE_WIDTH,
         color=color, linestyle="none", zorder=4,
@@ -581,8 +471,7 @@ def draw_status(
     ax: matplotlib.axes.Axes, cell: KernelCell, x: float, one: Series, size: float, type_: plotstyle.TypeScale
 ) -> bool:
     """Draw ``cell`` as the mark its status calls for (pending, undelivered, flagged) and say so; a
-    measured cell is left to the caller's style. One place decides these marks, so the ``ci`` and
-    the ``box`` style cannot disagree about what a failure looks like."""
+    measured cell is left to the caller's style."""
     if cell.pending:
         plotstyle.pending_mark(ax, x, population.NOT_DELIVERED, one.color, size=size)
     elif not cell.delivered:
@@ -624,8 +513,7 @@ def draw_box(
     size: float = MARK_PT**2,
     type_: plotstyle.TypeScale = AUTHOR_TYPE,
 ) -> None:
-    """A real box for a kernel with :data:`MIN_EPISODES_FOR_SPREAD`+ episodes; a point otherwise --
-    mixing the two in one panel is deliberate (see the module docstring)."""
+    """A real box for a kernel with :data:`MIN_EPISODES_FOR_SPREAD`+ episodes; a point otherwise."""
     boxed: list[KernelCell] = []
     for cell in one.cells:
         if cell.kernel not in x_of or draw_status(ax, cell, x_of[cell.kernel], one, size, type_):
@@ -665,8 +553,7 @@ def box_cells(
 #: separator and the summary column.
 SUMMARY_GAP: float = 0.7
 
-#: X distance between consecutive series' summary marks, in kernel columns. Each series gets a slot
-#: of its own: summaries that agree to a few percent, drawn in one column, hid all but the top mark.
+#: X distance between consecutive series' summary marks, in kernel columns.
 SUMMARY_SLOT: float = 1.0
 
 
@@ -693,14 +580,12 @@ def draw_summary_column(
     type_: plotstyle.TypeScale,
     annotate: bool = True,
 ) -> None:
-    """The dashed separator and a small label ABOVE the column's slots naming its own statistic.
+    """The dashed separator and a small label above the column's slots naming its own statistic.
 
-    The label is an annotation, never an x-axis TICK label: a stacked figure shares one x axis
-    between its panels (:func:`figure_panels`) and matplotlib shares the same tick label text for
-    every row sharing that axis, so a per-panel tick label silently loses whichever panel drew first
-    -- the top panel's "Geomean" was overwritten by the bottom panel's "Median". An annotation
-    anchored to the panel's own data coordinates has no such sharing. Where every panel's statistic
-    is the same, :func:`style_panel` names it once as an x tick instead and ``annotate`` is off.
+    The label is an annotation, never an x-axis tick label: a stacked figure shares one x axis
+    between its panels, and matplotlib would drop a per-panel tick label to whichever panel drew
+    last. Where every panel's statistic is the same, :func:`style_panel` names it once as a shared
+    x tick instead and ``annotate`` is off.
     """
     ax.axvline(
         summary_separator_x(n_kernels),
@@ -729,10 +614,9 @@ def draw_summary_mark(
     value: bool = True,
 ) -> None:
     """One series' summary: the reducer's point with its interval, and -- when ``value`` -- the
-    point's own value printed above the interval in the series' colour, so the number a caption
-    quotes is on the figure. The value settles clear of the marks and inside the frame at save time
-    (:func:`~hpcagent_bench.stats.style.settle_clear_labels`). Six or more series overprint their
-    values in the narrow summary column; such a figure gives the numbers in its caption instead."""
+    point's own value printed above it (settled clear of the marks at save time). Six or more
+    series overprint their values in the narrow column; such a figure gives the numbers in its
+    caption instead."""
     point, low, high = metric.summary_reducer(cells)
     if not math.isfinite(point):
         return
@@ -749,11 +633,8 @@ def draw_summary_mark(
 
 
 def kernel_tick_label(kernel: str) -> str:
-    """The kernel's short manifest name (:func:`experiment_tags.kernel_short_display_name`). A kernel
-    with no short name falls back to its full name, folded at the short-name limit onto as many
-    lines as it needs -- never cut: a truncated name ("2-D Jacobi stencil..") no longer names one
-    kernel, and the band under the panel is measured from whatever depth the names take
-    (:func:`fit_canvas`). A word longer than the limit keeps its own line whole."""
+    """The kernel's short manifest name (:func:`experiment_tags.kernel_short_display_name`), folded
+    at the short-name limit onto as many lines as it needs, never cut."""
     name = experiment_tags.kernel_short_display_name(kernel)
     return "\n".join(textwrap.wrap(name, experiment_tags.SHORT_NAME_MAX, break_long_words=False))
 
@@ -768,11 +649,7 @@ def compact_tick_label(kernel: str) -> str:
 @dataclasses.dataclass(frozen=True, slots=True)
 class Metric:
     """One panel's identity: its series, axis kind, label and summary reducer -- everything
-    :func:`style_panel` and :func:`draw_marks` need besides the shared kernel order.
-
-    ``summary_reducer`` and ``summary_label`` carry the statistic the SUMMARY COLUMN is under: the
-    the geomean on both axes -- see :func:`summary_geomean`.
-    """
+    :func:`style_panel` and :func:`draw_marks` need besides the shared kernel order."""
 
     series: tuple[Series, ...]
     log2_space: bool
@@ -781,8 +658,7 @@ class Metric:
     summary_label: str
     #: How a summary point's own value is printed beside it.
     value_label: Callable[[float], str] = plotstyle.ratio_label
-    #: The 1x line's colour on a ratio axis: neutral, or the baseline's own colour where the line IS
-    #: a named baseline.
+    #: The 1x line's colour on a ratio axis: neutral, or a named baseline's own colour.
     reference_color: str = plotstyle.REFERENCE
 
     @property
@@ -812,27 +688,22 @@ def style_panel(
     tick_label: Callable[[str], str] = kernel_tick_label,
     summary_tick: bool = False,
 ) -> None:
-    """Every piece of ``ax``'s chrome and none of its data: the kernel axis over ``kernels`` (a FIXED
-    order, so a stacked figure's panels share x), the summary column's separator and statistic, and
-    the value axis with limits taken from the cells. Drawn before any mark so :func:`fit_canvas` can
-    measure the chrome and the marks can then be sized to the pitch it leaves.
+    """Every piece of ``ax``'s chrome and none of its data: the kernel axis over ``kernels`` (a
+    fixed order shared by a stacked figure's panels), the summary column and the value axis, sized
+    from the cells. Drawn before any mark so :func:`fit_canvas` can measure the chrome first.
 
-    ``slots`` reserves that many summary slots (default: one per series), so every panel of a
-    stacked figure ends at the same x even when one carries fewer series. ``tick_label`` spells a
-    kernel's tick (default :func:`kernel_tick_label`). ``summary_tick`` names the summary column
-    with an x tick under it (horizontal, e.g. "Geomean") instead of an annotation above it: right
-    only when every panel sharing the x axis reports the same statistic (:func:`figure_panels`).
+    ``slots`` reserves that many summary slots (default: one per series). ``summary_tick`` names
+    the summary column with a shared x tick instead of a per-panel annotation: right only when
+    every panel sharing the x axis reports the same statistic.
     """
     n = len(kernels)
     slots = slots or len(metric.series)
     ax.set_xlim(-0.6, summary_slot_x(n, slots - 1) + 0.6 if summary_column else n - 0.4)
-    # A shared stacked x axis hands one panel's tick labels to all of them (draw_summary_column's
-    # docstring), so the summary tick is only drawn when every panel's statistic is the same.
+    # A shared stacked x axis hands one panel's tick labels to all of them, so the summary tick is
+    # only drawn when every panel's statistic is the same (see draw_summary_column).
     named_summary = summary_column and summary_tick
     ax.set_xticks([*range(n), summary_centre_x(n, slots)] if named_summary else list(range(n)))
     if label_ticks:
-        # The tick is the kernel's short NAME; ``kernels`` are the identifiers the columns and the
-        # results table are keyed by.
         names = [tick_label(kernel) for kernel in kernels]
         label_kernel_ticks(ax, names, metric.summary_label if named_summary else "", type_)
     else:
@@ -879,9 +750,7 @@ def draw_marks(
     summary_values: bool = True,
 ) -> None:
     """Every series' cells over ``kernels``, spread by :func:`dodge_offsets`, plus each series'
-    summary in its own slot (its value printed when ``summary_values``). One series keeps the column's exact x, so a single-series panel reads
-    as the plain strip it always was. Summary marks sit alone in their slots, so they take the
-    roomiest size a mark gets, never smaller than the kernel marks."""
+    summary in its own slot, sized no smaller than the kernel marks."""
     x_of = {kernel: i for i, kernel in enumerate(kernels)}
     for one, offset in zip(metric.series, dodge_offsets(len(metric.series), span), strict=True):
         if style_ == Style.BOX and len(metric.series) == 1:
@@ -897,36 +766,13 @@ def draw_marks(
         draw_summary_mark(ax, cells, x, one, metric, type_, summary_size, summary_values)
 
 
-def draw_panel(
-    ax: matplotlib.axes.Axes,
-    metric: Metric,
-    kernels: Sequence[str],
-    style_: Style,
-    summary_column: bool,
-    label_ticks: bool,
-    type_: plotstyle.TypeScale = AUTHOR_TYPE,
-    span: float = DODGE_SPAN,
-) -> None:
-    """One metric's panel on an axes the caller laid out: its chrome (:func:`style_panel`), then its
-    marks sized to the pitch the axes has now (:func:`draw_marks`). :func:`figure_panels` measures
-    the canvas between the two instead, which is what a figure to be saved wants."""
-    style_panel(ax, metric, kernels, summary_column, label_ticks, type_)
-    size = mark_size(column_pitch_in(ax), len(metric.series), span)
-    draw_marks(ax, metric, kernels, style_, summary_column, size, span, type_)
-
-
 #: Marker size of a key entry, in points: sized to the key's own text, not to a figure's marks.
 LEGEND_MARK_PT: float = 5.0
 
 
 def status_handles(metrics: Sequence[Metric]) -> list[matplotlib.artist.Artist]:
-    """The key entries for the status marks ``metrics`` actually draw: the undelivered cross, and the
-    pending "?", each only when some cell draws one -- an entry for a mark that is not on the figure
-    is one more thing to read and find nowhere.
-
-    The entry shows the CROSS, not the hollow shape the mark also has: hollow is this repo's
-    spelling for a control, so an entry that showed only that would name the wrong thing.
-    """
+    """The key entries for the status marks ``metrics`` actually draw: the undelivered cross and the
+    pending "?", each only when some cell draws one."""
     cells = [cell for metric in metrics for cell in metric.cells]
     handles: list[matplotlib.artist.Artist] = []
     if any(not cell.delivered and not cell.pending for cell in cells):
@@ -980,19 +826,12 @@ def figure_panels(
     tick_label: Callable[[str], str] | None = None,
     summary_values: bool = True,
 ) -> matplotlib.figure.Figure:
-    """``metrics`` as panels stacked top to bottom on ONE kernel axis, names under the last.
+    """``metrics`` as panels stacked top to bottom on one kernel axis, names under the last.
 
-    ``width_in`` draws at that width at print size (:data:`~hpcagent_bench.stats.style.PRINT_SCALE`), to
-    be placed at scale 1.0;
-    without it the figure is authored at :data:`~hpcagent_bench.stats.style.DOUBLE_COLUMN_WIDTH`
-    (:data:`AUTHOR_TYPE`), or -- given ``pitch_in`` -- as wide as that many inches per column plus
-    its measured chrome. ``legend`` is a key drawn under the names; ``span`` is the dodge
-    (:func:`dodge_offsets`). Every panel reserves the same number of summary slots, so a panel with
-    fewer series still ends where the others do. ``tick_label`` spells the kernel names; when every
-    panel reports the same summary statistic, it is named once as an x tick under its column.
-
-    At print size the panels default to :data:`PRINT_PANEL_HEIGHT_IN` and the names to
-    :func:`compact_tick_label`; authored, to :data:`PANEL_HEIGHT_IN` and :func:`kernel_tick_label`.
+    ``width_in`` draws at that width at print size, to be placed at scale 1.0; without it the
+    figure is authored at double-column width, or -- given ``pitch_in`` -- as wide as that many
+    inches per column plus its measured chrome. Every panel reserves the same number of summary
+    slots, so a panel with fewer series still ends where the others do.
     """
     type_, width, panel_height_in, tick_label = size_defaults(width_in, panel_height_in, tick_label)
     fig, grid = plt.subplots(
@@ -1043,9 +882,8 @@ def fit_ylabels(
     type_: plotstyle.TypeScale = AUTHOR_TYPE,
 ) -> None:
     """Keep every Y label within its own panel's height: broken onto two lines, then stepped down
-    to its floor (:func:`min_text_pt`). A rotated label taller than its panel runs past both ends
-    of the frame, and in a stack the two panels' labels printed over each other in the gap. A label
-    still too tall at the floor is reported: the caller has to shorten it."""
+    to its floor (:func:`min_text_pt`). A label still too tall at the floor is logged; the caller
+    has to shorten it."""
     renderer = fig.canvas.get_renderer()
     for ax in axes:
         label = ax.yaxis.label
@@ -1067,8 +905,8 @@ def fit_ylabels(
 #: lower panel prints above its frame (its summary statistic).
 STACK_GAP_IN: float = 0.2
 
-#: The band above and below the panels while :func:`fit_canvas` measures, in inches: room for the
-#: chrome to be drawn and read, replaced by the measured bands afterwards.
+#: The band above and below the panels while :func:`fit_canvas` measures, in inches, replaced by
+#: the measured bands afterwards.
 PROBE_BAND_IN: float = 0.5
 
 
@@ -1081,20 +919,14 @@ def fit_canvas(
     panel_height_in: float = PANEL_HEIGHT_IN,
     pitch_in: float | None = None,
 ) -> None:
-    """Size the canvas around panels of ``panel_height_in`` each, every band MEASURED: the left
-    margin from the Y labels (first fitted to the panel height, :func:`fit_ylabels`), the right one from the text past the last column (the summary's
-    statistic, centred on its slots), the gap and top band from what each panel prints above its frame, the
-    bottom band from the kernel names (stepped down to the column pitch first) and the key under
-    them. Fixed fractions put the names over the key on a narrow page and wasted columns beside a
-    short Y label. ``pitch_in`` makes the canvas as wide as the kernel axis at that pitch plus the
-    measured left margin, instead of fitting the axis into the canvas.
-
-    The value labels a summary prints are not measured: they settle inside the frame at save
-    (:func:`~hpcagent_bench.stats.style.settle_clear_labels`) and need no band of their own.
+    """Size the canvas around panels of ``panel_height_in`` each, every band measured: the left
+    margin from the Y labels, the right one from the summary text, the gap and top band from what
+    each panel prints above its frame, the bottom band from the kernel names and the key under
+    them. ``pitch_in`` makes the canvas as wide as the kernel axis at that pitch plus the measured
+    left margin, instead of fitting the axis into the canvas.
     """
     # Measure with every panel already at its final height: a rotated Y label is centred on its
-    # frame, so on the shorter frame subplots() starts with it reached past both ends and was billed
-    # as a band the final panel never draws.
+    # frame, so a shorter probe frame would bill it for a band the final panel never draws.
     probe = len(axes) * panel_height_in + (len(axes) - 1) * STACK_GAP_IN + 2.0 * PROBE_BAND_IN
     fig.set_size_inches(float(fig.get_size_inches()[0]), probe)
     fig.subplots_adjust(

@@ -13,7 +13,6 @@ import dataclasses
 import functools
 import math
 import pathlib
-from collections.abc import Callable
 
 import pandas as pd  # pyright: ignore[reportMissingTypeStubs] -- pandas ships none
 import yaml
@@ -48,15 +47,12 @@ COST_MODELS = pathlib.Path(__file__).resolve().parents[1] / "envs" / "cost_model
 #: The card a figure prices with when none is named: the paper's default reading, cache reads at 0.1.
 DEFAULT_COST_MODEL: str = "billed"
 
-#: The three cost proxies the paper reports, in report order.
-PROXY_CARDS: tuple[str, ...] = ("effective", "billed", "total")
-
 #: The weight names a card declares, in the order an inline spec may give them.
 WEIGHTS: tuple[str, ...] = ("fresh_input", "cached_input", "output")
 
-#: The observations columns holding each weighted component of a task's FINAL attempt, in
-#: :data:`WEIGHTS` order. Recorded as components, never recovered by subtraction: ``tokens_billed``
-#: sums per-turn usage, whose output reads 0 on these endpoints, so it is not fresh + cached + output.
+#: The observations columns holding each weighted component of a task's final attempt, in
+#: :data:`WEIGHTS` order. Recorded as components, not recovered by subtraction: ``tokens_billed``
+#: sums per-turn usage and does not equal fresh + cached + output.
 COMPONENT_COLUMNS: tuple[str, ...] = ("tokens_fresh_input", "tokens_cached_input", "tokens_output")
 
 
@@ -138,36 +134,6 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--cost-models", type=pathlib.Path, default=None, help="a YAML file of extra cost cards")
 
 
-def price(model: CostModel, fresh_input: float, cached_input: float, output: float) -> float:
-    """One task's cost under ``model``, from its three components."""
-    return model.fresh_input * fresh_input + model.cached_input * cached_input + model.output * output
-
-
-def effective_tokens(fresh_input: float, cached_input: float, output: float) -> float:
-    """COST PROXY 1, the efficacy axis: every context token once, when it first entered, plus output.
-    A re-read prefix is charged nothing: it costs the model no forward pass."""
-    return price(shipped_cards()["effective"], fresh_input, cached_input, output)
-
-
-def billed_tokens(fresh_input: float, cached_input: float, output: float) -> float:
-    """COST PROXY 2, API-equivalent: :func:`effective_tokens` plus every re-read prefix at a tenth,
-    the cache-read rate hosted providers bill. Grows with turn count, as a bill does."""
-    return price(shipped_cards()["billed"], fresh_input, cached_input, output)
-
-
-def total_tokens(fresh_input: float, cached_input: float, output: float) -> float:
-    """COST PROXY 3, the literature's meter: every prompt in full on every turn, plus output."""
-    return price(shipped_cards()["total"], fresh_input, cached_input, output)
-
-
-#: The proxies by card name, for a caller that loops over all three.
-PROXIES: dict[str, Callable[[float, float, float], float]] = {
-    "effective": effective_tokens,
-    "billed": billed_tokens,
-    "total": total_tokens,
-}
-
-
 def components(frame: pd.DataFrame) -> tuple[pd.Series, pd.Series, pd.Series]:
     """``(fresh_input, cached_input, output)`` per row, read off :data:`COMPONENT_COLUMNS`."""
     fresh, cached, output = (
@@ -180,17 +146,16 @@ def components(frame: pd.DataFrame) -> tuple[pd.Series, pd.Series, pd.Series]:
 def priced(frame: pd.DataFrame, model: CostModel) -> pd.DataFrame:
     """``frame`` with every task row's ``tokens`` replaced by ``model``'s cost of its components.
 
-    The shipped ``effective`` card returns the frame unchanged, and so does a frame with no
-    ``tokens`` column (nothing to price). A card that weights a component the frame does not carry
-    (an extraction older than ``tokens_output``) raises instead of pricing a task at a wrong number;
-    a task row missing a component gets NaN, which :mod:`population` drops as no measurement (R7).
-    A non-task row (a judge call's running count) keeps its own ``tokens``: it is never a cost (T4)."""
+    The shipped ``effective`` card, or a frame with no ``tokens`` column, is returned unchanged. A
+    card that weights a component the frame does not carry raises rather than pricing at a wrong
+    number. A non-task row (a judge call's running count) keeps its own ``tokens``.
+    """
     if (model.fresh_input, model.cached_input, model.output) == (1.0, 0.0, 1.0) or "tokens" not in frame.columns:
         return frame
     needed = [column for column in COMPONENT_COLUMNS if column not in frame.columns]
     if needed:
         raise ValueError(f"cost model {model.key!r} needs column(s) {needed}; re-extract the observations")
     fresh, cached, output = components(frame)
-    cost = model.fresh_input * fresh + model.cached_input * cached + model.output * output  # price(), per row
+    cost = model.fresh_input * fresh + model.cached_input * cached + model.output * output
     task = frame["row_kind"].astype(str) == TASK_RECORD if "row_kind" in frame.columns else pd.Series(True, frame.index)
     return frame.assign(tokens=cost.where(task, frame["tokens"]))

@@ -1,20 +1,10 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""MI300A -> GH200 transfer of the LLR40 final answers: speedup on each machine, per answer
-(:mod:`hpcagent_bench.stats.figures.transfer`).
+"""MI300A -> GH200 transfer of the LLR40 final answers: speedup on each machine, per answer.
 
-Reads either the observations with GH200 rows beside the MI300A ones (``--observations``, extracted
-with ``--platform-regrades gh200=<glob>``) or the Daint join table (``--paired-csv``, written by
-``experiments/daint-transfer/collect.py``). Writes both designs, the geomean strips
-(``<out>-geomean``) and the per-answer scatter (``<out>-scatter``), as PDF and PNG, the per-answer table
-(``--table``), the per-panel counts (``<table>-summary.csv``) and the per-slot geomeans
-(``<table>-geomean.csv``) beside it.
-
-Usage::
-
-    python statistics/plot_transfer.py --paired-csv data/transfer.csv \\
-        --out figures/transfer --table tables/transfer.csv
-    python statistics/plot_transfer.py --observations data/llr40.db --out figures/transfer
+Reads either observations with GH200 rows beside the MI300A ones (``--observations``) or the Daint
+join table (``--paired-csv``). Writes the geomean strip and per-answer scatter figures, plus the
+per-answer, per-panel-count and per-slot-geomean tables.
 """
 
 import argparse

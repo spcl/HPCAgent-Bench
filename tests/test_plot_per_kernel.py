@@ -129,20 +129,6 @@ def test_the_token_summary_is_the_geomean_over_the_plotted_kernels_own_medians()
     assert point == pytest.approx(58.480354764)
 
 
-def test_draw_panel_labels_the_summary_column_with_its_own_statistic() -> None:
-    """The annotation above the summary marker names the statistic it draws (Geomean for
-    speedup, Median for tokens), so a reader is not left to assume it matches the per-kernel
-    style."""
-    speed = speed_metric([pk.KernelCell("k1", (2.0,))])
-    fig, ax = plt.subplots()
-    try:
-        pk.draw_panel(ax, speed, ["k1"], pk.Style.CI, True, True)
-        labels = [text.get_text() for text in ax.texts]
-    finally:
-        plt.close(fig)
-    assert "Geomean" in labels
-
-
 def test_a_figure_with_one_summary_statistic_names_it_as_a_horizontal_x_tick() -> None:
     """User, 2026-09-22: "Geomean" belongs on the x axis under its column, read like a kernel name,
     not floating above the frame."""

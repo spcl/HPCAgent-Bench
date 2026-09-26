@@ -3,16 +3,8 @@
 """rho_C of each (treated, control) pair under every cost weighting: effective, billed, total, and
 list-price USD when every model in the figure has a price card.
 
-Drawn by :mod:`hpcagent_bench.stats.figures.cost_weighting`; writes the PDF, the PNG and the CSV behind
-the marks. Token counts only: no grade is read. Pairs come from repeated ``--pair`` and/or a TOML file:
-
-    [[pair]]
-    treated = "harness20-qwen38-openhands"
-    control = "harness20-qwen38-claude"
-    label = "OpenHands (Harness20)"
-
-    python statistics/plot_cost_weighting.py harness20.db llr-focus40.db --pairs pairs.toml \
-        --out figures/cost-weighting
+Token counts only: no grade is read. Writes the PDF, the PNG and the CSV behind the marks. Pairs
+come from repeated ``--pair`` and/or a TOML file of ``[[pair]]`` tables (treated, control, label).
 """
 
 import argparse
