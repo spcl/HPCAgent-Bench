@@ -88,15 +88,15 @@ DODGE_SPAN: float = 0.6
 
 TYPE: plotstyle.TypeScale = plotstyle.PRINT_SCALE
 WIDTH_IN: float = plotstyle.ICLR_WRAP_WIDTH_IN
-#: Three quarters of the shared print body height: at half it was too short to read (user, 2026-09-26: 50% taller);
-#: earlier the wrap ran taller than its paragraph (2026-09-25: 28%, then another 32% shorter).
-BODY_HEIGHT_IN: float = 0.735 * plotstyle.PRINT_BODY_HEIGHT_IN
+#: A quarter under 0.735 (user, 2026-09-26: the figure sits beside a paragraph, not in its own row);
+#: earlier 0.735 was 50% taller than a too-short 0.49.
+BODY_HEIGHT_IN: float = 0.55 * plotstyle.PRINT_BODY_HEIGHT_IN
 
-#: The USD slot's tick: each model's own list-price vector, which the caption states.
-USD_TICK: str = "$w_m$"
-#: The caption defines rho_C = C_control / C_treated; the label keeps the reading direction.
-YLABEL: str = "$\\rho_C$"
-XLABEL: str = "Weights $w$ (in, cached, out)"
+#: Slot ticks by the weighting's name in the paper; the text gives each weight vector.
+TICKS: dict[Card, str] = {Card.EFFECTIVE: "eff", Card.BILLED: "bill", Card.TOTAL: "tot", Card.USD: r"\$"}
+#: The paper's name for rho_C = C_control / C_treated; above 1 the treated setup is cheaper.
+YLABEL: str = "Cost ratio"
+XLABEL: str = "Weighting"
 
 
 def arm_tokens(observations: pd.DataFrame, card: cost.CostModel, repeats: population.RepeatPolicy) -> dict:
@@ -177,14 +177,6 @@ def pair_styles(arms: Sequence[str]) -> dict[str, tuple[str, str]]:
     return styles
 
 
-def short_tick(card: str) -> str:
-    """A compact weight-vector tick, ``1,.1,1``; the axis label names the three components."""
-    if card == Card.USD.value:
-        return USD_TICK
-    model = cost.resolve(card)
-    return ",".join(f"{w:g}".replace("0.", ".") for w in (model.fresh_input, model.cached_input, model.output))
-
-
 def mark(ax: matplotlib.axes.Axes, x: float, row: object, hue: str, shape: str) -> None:
     """One estimate with its 95% interval, the interval omitted when too few kernels support one."""
     ok = math.isfinite(row.ci_low) and math.isfinite(row.ci_high)
@@ -251,7 +243,7 @@ def figure_cost_points(
         for row in drawn[drawn.arm_a == arm].itertuples():
             mark(ax, cards.index(row.card) + (i - (len(arms) - 1) / 2) * step, row, hue, shape)
     ax.set_xticks(range(len(cards)))
-    ax.set_xticklabels([short_tick(card) for card in cards])
+    ax.set_xticklabels([TICKS[Card(card)] for card in cards])
     ax.set_xlim(-0.6, len(cards) - 0.4)
     ax.set_xlabel(XLABEL, fontsize=TYPE.label_pt)
     ratio_axis(ax)

@@ -66,14 +66,14 @@ def test_the_key_lists_one_row_per_pair_and_no_model_swatches() -> None:
         plt.close(fig)
 
 
-def test_the_usd_slot_is_ticked_as_the_per_model_weight() -> None:
-    """The USD slot is each model's own price vector ``w_m``, not one weight triple; the caption
-    says whose prices, so the tick carries no note."""
+def test_every_slot_is_ticked_by_its_weighting_name() -> None:
+    """A weight triple per tick overran the narrow wrap figure; the paper names each weighting and
+    gives its vector in the text, so the tick is the name and the figure carries no note."""
     fig = cost_weighting.figure_cost_points(points(), {})
     assert fig is not None
     try:
         ticks = [label.get_text() for label in fig.axes[0].get_xticklabels()]
-        assert ticks[-1] == cost_weighting.USD_TICK, ticks
+        assert ticks == ["eff", "bill", "tot", r"\$"][: len(ticks)], ticks
         assert fig.texts == []
     finally:
         plt.close(fig)
@@ -107,14 +107,14 @@ def test_the_usd_slot_is_drawn_only_when_every_model_has_a_price_card(tmp_path: 
 
 
 def test_a_three_slot_figure_has_no_usd_tick() -> None:
-    """The ``w_m`` tick goes with the USD slot."""
+    """The dollar tick goes with the USD slot."""
     table = points()
     table = table[table.card != cost_weighting.Card.USD.value]
     fig = cost_weighting.figure_cost_points(table, {})
     assert fig is not None
     try:
         ticks = [label.get_text() for label in fig.axes[0].get_xticklabels()]
-        assert cost_weighting.USD_TICK not in ticks and len(ticks) == 3, ticks
+        assert cost_weighting.TICKS[cost_weighting.Card.USD] not in ticks and len(ticks) == 3, ticks
     finally:
         plt.close(fig)
 
