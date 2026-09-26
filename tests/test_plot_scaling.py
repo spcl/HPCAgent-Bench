@@ -376,3 +376,73 @@ def test_each_mode_grid_panel_scales_its_own_y_axis() -> None:
         assert first.get_ylim() != second.get_ylim(), (first.get_ylim(), second.get_ylim())
     finally:
         plt.close(fig)
+
+
+def test_a_panels_y_range_hugs_what_it_draws() -> None:
+    """Autoscaling rounded a 1x-16x panel out to whole decades and left it mostly empty; the range
+    must end exactly one pad factor beyond the extreme values drawn (curves and the ideal line)."""
+    import matplotlib.pyplot as plt
+
+    fig = scaling.figure_mode_grid(
+        scaling.curves(frame(perfect_strong("mlscale-strong-qwen38-hip", "dist_softmax"))), ["dist_softmax"],
+        geomean_panel=False,
+    )  # fmt: skip
+    assert fig is not None
+    try:
+        ax = fig.axes[0]
+        drawn = [float(y) for line in ax.get_lines() for y in line.get_ydata() if float(y) > 0]
+        assert ax.get_ylim() == pytest.approx((min(drawn) / scaling.Y_FIT_PAD, max(drawn) * scaling.Y_FIT_PAD))
+        assert max(drawn) < 16.0 * 2  # no decade rounding: the top is the data, not 100x
+    finally:
+        plt.close(fig)
+
+
+def test_a_panel_spanning_four_decades_still_labels_its_ticks() -> None:
+    """The default log locator returned no tick at all on a short panel over 0.001x-20x, leaving
+    the SDPA panel without a scale."""
+    import matplotlib.pyplot as plt
+
+    rows = [
+        row("mlscale-strong-qwen38-hip", "dist_sdpa", "strong", p, 4096.0 * 1000 / p, single_rank_ns=4096.0)
+        for p in RANKS
+    ]
+    rows += [
+        row("mlscale-strong-oss120b-hip", "dist_sdpa", "strong", p, 4096.0 / (20 * p), single_rank_ns=4096.0)
+        for p in RANKS
+    ]
+    fig = scaling.figure_mode_grid(scaling.curves(frame(rows)), ["dist_sdpa"], geomean_panel=False)
+    assert fig is not None
+    try:
+        fig.canvas.draw()
+        low, high = fig.axes[0].get_ylim()
+        shown = [t for t in fig.axes[0].yaxis.get_majorticklocs() if low <= t <= high]
+        assert len(shown) >= 2, (low, high, shown)
+    finally:
+        plt.close(fig)
+
+
+def test_the_baseline_is_named_without_a_packet_it_never_ran() -> None:
+    assert scaling.series_label("", scaling.TORCH_DIST_ARM) == scaling.TORCH_DIST_LABEL
+
+
+def test_model_lines_are_thinner_than_the_baseline_and_the_geomean_column_is_wider() -> None:
+    """Overlapping model curves hid each other at full width; the geomean column holds three
+    banded series and needs more room than an operator column."""
+    import matplotlib.pyplot as plt
+
+    rows = perfect_strong("mlscale-strong-qwen38-hip", "dist_softmax") + perfect_strong(
+        scaling.TORCH_DIST_ARM, "dist_softmax"
+    )
+    for index, entry in enumerate(rows):
+        entry["run_id"] = f"run-{index // len(RANKS)}"
+    fig = scaling.figure_mode_grid(scaling.curves(frame(rows)), ["dist_softmax"], geomean_panel=True)
+    assert fig is not None
+    try:
+        panel, geomean = fig.axes[0], fig.axes[1]
+        widths = {line.get_label(): line.get_linewidth() for line in panel.get_lines()}
+        model = next(w for label, w in widths.items() if label.startswith("Qwen"))
+        base = widths[scaling.TORCH_DIST_LABEL]
+        assert model == pytest.approx(base * scaling.AGENT_LINE_SCALE), widths
+        assert geomean.get_position().width > panel.get_position().width * 1.2
+    finally:
+        plt.close(fig)

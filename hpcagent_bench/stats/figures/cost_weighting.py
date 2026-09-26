@@ -88,9 +88,9 @@ DODGE_SPAN: float = 0.6
 
 TYPE: plotstyle.TypeScale = plotstyle.PRINT_SCALE
 WIDTH_IN: float = plotstyle.ICLR_WRAP_WIDTH_IN
-#: About half the shared print body height: the wrap beside the text ran taller than its paragraph
-#: (user, 2026-09-25: 28%, then another 32% shorter).
-BODY_HEIGHT_IN: float = 0.49 * plotstyle.PRINT_BODY_HEIGHT_IN
+#: Three quarters of the shared print body height: at half it was too short to read (user, 2026-09-26: 50% taller);
+#: earlier the wrap ran taller than its paragraph (2026-09-25: 28%, then another 32% shorter).
+BODY_HEIGHT_IN: float = 0.735 * plotstyle.PRINT_BODY_HEIGHT_IN
 
 #: The USD slot's tick: each model's own list-price vector, which the caption states.
 USD_TICK: str = "$w_m$"
