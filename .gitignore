@@ -237,7 +237,3 @@ experiments/mwd-final-*/
 
 # anonymous.4open.science replacement terms (identifying, never committed)
 .anonymize-terms.txt
-
-# The paper's reproducibility folder ships its own helpers and result tables.
-!/reproducibility/paper/lib/
-!/reproducibility/paper/**/*.csv
