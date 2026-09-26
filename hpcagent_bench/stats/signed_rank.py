@@ -1,51 +1,26 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""The Wilcoxon signed-rank null: the one rule deciding exact vs approximate, and a stdlib
+"""The Wilcoxon signed-rank null: one rule deciding exact vs approximate, and a stdlib
 implementation of the exact distribution.
 
-TWO IMPLEMENTATIONS, ONE RULE. This repo computes the signed-rank p twice, and it has to: the
-figures take it from scipy, and ``statistics/ablation_stats.py`` is deliberately stdlib-only
-because it runs on a login node from a shell that never activated the benchmark environment. Two
-implementations are fine. Two independently chosen CUTOFFS are not -- one module switched to the
-normal approximation above n = 25 while the other inherited scipy's ``auto`` heuristic and stayed
-exact through n = 50, so the same test on the same 40 kernels returned p = 0.18329 in one published
-table and p = 0.18762 in another, with the approximation on the anti-conservative side.
+This repo computes the signed-rank p twice: figures take it from scipy, and
+``statistics/ablation_stats.py`` is stdlib-only because it runs on a login node whose shell never
+activated the benchmark environment. :data:`EXACT_MAX_N` and :func:`use_exact` are the single rule
+both paths obey, so the cutoff cannot drift apart between them; :mod:`hpcagent_bench.stats.summary`
+passes scipy the method this rule chose explicitly, so a scipy release cannot move it under us.
+``tests/test_signed_rank.py`` checks the two implementations agree wherever both are exact.
 
-So :data:`EXACT_MAX_N` and :func:`use_exact` live here, and both paths obey them. The stdlib module
-loads this file BY PATH (stdlib ``importlib``), which needs no environment and no third-party
-import; :mod:`hpcagent_bench.stats.summary` imports it normally and passes scipy the method this
-rule chose, EXPLICITLY, so a scipy release cannot move the cutoff under us.
-``tests/test_signed_rank.py`` proves the two implementations agree wherever both are exact.
-
-THE CUTOFF IS MEASURED, not inherited. The exact null is a subset-sum count over the ranks
-``1..n``: ``n * n(n+1)/2`` states of unbounded-integer addition. Timed in this interpreter:
-
-    n         25     40     50    100    150     200     300     578
-    DP     0.5ms  3.0ms  6.5ms   58ms  200ms   474ms   1.60s  11.79s
-
-and the continuity-corrected normal approximation's worst absolute error against the exact p, over
-effects spanning p = 0.001 to 0.9:
-
-    n          25       40      100      200      578
-    max|dp|  6.6e-3   4.1e-3   1.7e-3   8.3e-4   2.9e-4
-
-200 is where the DP stops being free -- it is the last size under half a second, and the cost grows
-as n^3 with big-integer coefficients past it. It also covers every paired-kernel count these tables
-reach: the llr focus roster is 40 kernels and the largest campaign roster is 242 problems, of which
-a PAIR covers fewer. Above 200 the approximation is within 8.3e-4 absolute of the exact p, which is
-a fifth of the 4.3e-3 discrepancy that made this rule necessary, and it keeps shrinking.
-
-The count for one ``n`` is cached, so a table comparing many arm pairs at the same ``n`` pays the
-DP once.
+200 is the largest ``n`` where the exact subset-sum DP stays fast (cost grows as n^3 past it) and
+covers every paired-kernel count these tables reach; above it the tie-corrected normal
+approximation is close enough not to matter. The count for one ``n`` is cached, so a table
+comparing many arm pairs at the same ``n`` pays the DP once.
 """
 
 import functools
 import math
 from collections.abc import Sequence
 
-#: Sample sizes up to this get the EXACT null; above it the tie-corrected normal approximation.
-#: Measured, not inherited -- see the module docstring for the timings and the error curve. Both
-#: implementations read this one name, so the cutoff cannot drift apart again.
+#: Sample sizes up to this get the exact null; above it the tie-corrected normal approximation.
 EXACT_MAX_N: int = 200
 
 
@@ -67,13 +42,8 @@ def average_ranks(values: Sequence[float]) -> list[float]:
 
 
 def use_exact(absolute: Sequence[float]) -> bool:
-    """THE RULE. Is the exact null both affordable and VALID for these ``|d|`` values?
-
-    Two conditions, and the second is the one a size check alone misses. The exact distribution
-    counts subsets of the DISTINCT ranks ``1..n``; with a tie the ranks are midranks, the lattice
-    the count is over no longer holds, and the resulting p is wrong rather than merely imprecise.
-    Neither implementation may claim exactness there, so a tied sample takes the tie-corrected
-    normal approximation in both.
+    """Whether the exact null is affordable (``n <= EXACT_MAX_N``) and valid (no ties in
+    ``absolute``): a tie breaks the rank lattice the exact count assumes.
     """
     n = len(absolute)
     return 0 < n <= EXACT_MAX_N and len(set(absolute)) == n
@@ -81,12 +51,7 @@ def use_exact(absolute: Sequence[float]) -> bool:
 
 @functools.lru_cache(maxsize=64, typed=True)
 def null_counts(n: int) -> tuple[int, ...]:
-    """How many of the ``2**n`` sign assignments give each possible ``W+``, by subset-sum DP.
-
-    Under the null every rank 1..n is added to ``W+`` or not with probability 1/2 independently, so
-    the exact distribution is the number of subsets of ``{1..n}`` summing to each total. Cached by
-    ``n``: a pairs table comparing many arms at one kernel count pays this once.
-    """
+    """How many of the ``2**n`` sign assignments give each possible ``W+``, by subset-sum DP."""
     counts = [0] * (n * (n + 1) // 2 + 1)
     counts[0] = 1
     for rank in range(1, n + 1):
@@ -98,8 +63,7 @@ def null_counts(n: int) -> tuple[int, ...]:
 def exact_p(statistic: float, n: int) -> float:
     """Two-sided exact p for the signed-rank statistic ``min(W+, W-)`` at sample size ``n``.
 
-    ``statistic`` is rounded UP: it can land half way between two lattice points, and rounding up
-    is the conservative choice (a larger p) rather than one that could manufacture significance.
+    ``statistic`` is rounded up, the conservative choice when it lands between two lattice points.
     """
     counts = null_counts(n)
     cutoff = min(len(counts) - 1, math.ceil(statistic - 1e-12))
@@ -108,18 +72,8 @@ def exact_p(statistic: float, n: int) -> float:
 
 def normal_p(w_plus: float, n: int, absolute: Sequence[float]) -> float:
     """Two-sided normal-approximation p, tie-corrected on the variance and continuity-corrected on
-    the deviation.
-
-    Tied ``|d|`` values share a midrank, which makes ``W+`` less variable than the tie-free formula
-    assumes; without the correction the test would be anti-conservative exactly on the data where
-    ties are common (many kernels landing on the same speedup).
-
-    ``W+`` is a lattice variable of spacing 1 and the normal density is continuous, so the tail it
-    stands in for runs to the lattice point's outer EDGE: the deviation loses the half step. Both
-    reference implementations subtract it (scipy ``correction=True``, R ``wilcox.test`` correct) and
-    :mod:`hpcagent_bench.stats.summary` asks scipy for it, so the two paths stay one test. Measured
-    over the whole lattice at exact p <= 0.10, it cuts the worst anti-conservative gap against the
-    exact null by 5x to 11x: 1.7e-3 to 3.2e-4 at n = 40, 2.0e-4 to 7.5e-5 at n = 200.
+    the deviation, matching scipy's ``correction=True`` / R's ``wilcox.test correct`` so both paths
+    stay one test.
     """
     mean = n * (n + 1) / 4.0
     variance = n * (n + 1) * (2 * n + 1) / 24.0

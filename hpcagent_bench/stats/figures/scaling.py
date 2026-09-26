@@ -2,47 +2,20 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Weak- and strong-scaling figures for the distributed track: efficiency, speedup, per kernel.
 
-The judge grades a distributed submission at several rank counts P and turns each into a
-:class:`~hpcagent_bench.harness.metric.ScalingPoint`. This module draws those points. It reads the
-EXTRACTED observations table (:func:`hpcagent_bench.experiments.read_observations`), the same file
-every other figure reads, never a judge database: one row per (arm, kernel, P) under
-``record == "scaling"``, carrying ``ranks``, ``ranked_ns`` (T(P)), ``single_rank_ns`` (T(1)) and --
-for weak scaling -- ``work_ratio`` (r = W(N_P)/W(N_1)). ``docs/plotting.md`` lists the columns.
+Reads the observations table's per-(arm, kernel, P) scaling rows (``record == "scaling"``). Every
+point is scored through :func:`hpcagent_bench.harness.metric.scaling_point`, the same function the
+grader uses, so a figure cannot drift from the leaderboard; a recorded ``efficiency`` is checked
+against it rather than trusted (:func:`disagreements`).
 
-ETA IS NOT REDEFINED HERE. Every point goes through
-:func:`hpcagent_bench.harness.metric.scaling_point`, the function the grader itself scores with, so
-a figure and a leaderboard number cannot drift apart; this module only chooses what to draw. A row
-that also carries a recorded ``efficiency`` is checked against it rather than trusted
-(:func:`disagreements`).
+Four figures, in the repo's shared ink and colour: :func:`figure_efficiency` (eta(P), weak/strong
+panels), :func:`figure_speedup` (sigma(P), work-scaled for weak), :func:`figure_per_kernel` (one
+panel per kernel, every model overlaid) and :func:`figure_summary` (geomean eta per arm). The
+torch.distributed baseline draws as the pseudo-arm :data:`TORCH_DIST_ARM`, its points spread over
+several grade DBs and its P=1 anchor joined by :func:`baseline_anchored`.
 
-Four figures, all in the repo's shared ink (:mod:`hpcagent_bench.stats.style`) and colour
-(:mod:`hpcagent_bench.stats.palette`):
-
-* :func:`figure_efficiency` -- eta(P) against P, weak and strong as two panels, ideal at 1.0.
-* :func:`figure_speedup` -- sigma(P) = T(1)/T(P) (strong) and the WORK-SCALED r * T(1)/T(P) (weak),
-  which is the quantity whose ideal is P in both panels, so one dashed y = P line reads for both.
-* :func:`figure_per_kernel` -- one small panel per kernel, every model overlaid.
-* :func:`figure_summary` -- the geomean eta per arm with its interval, weak beside strong.
-
-THE TORCH.DISTRIBUTED BASELINE CURVE rides in the same rows under the pseudo-arm
-:data:`TORCH_DIST_ARM`: the kernel's own ``reference_dist`` timed by the grade job at every (law, P)
-point the agents were (``hpcagent_bench.harness.torch_dist_curve``). Its points are spread over
-the grade job's per-chunk DBs, so its P=1 anchor is joined here (:func:`baseline_anchored`), and
-every overlay panel draws it as one more series in the control's grey, dashed, beside the setups.
-
-A series is one (packet, model) pair: COLOUR is the model and SHAPE the packet, the repo-wide
-channel rule; the control is a hollow circle in its model's colour. Weak against strong is never a colour:
-the two measure different things and are drawn as different panels.
-
-THE MEASURED AXIS IS Y and carries the grid; P is a parameter the experiment set, so its axis gets
-fixed ticks at the rank counts actually run (1, 2, 4, 8, 16) on a log2 scale and no grid of its own.
-Efficiency is drawn LINEAR from 0: it is a fraction of the ideal, a reader places 0.5 against 1.0 by
-eye, and a log axis would spend its resolution on the region a curve reaches only when it has
-already failed. Speedup is a ratio and keeps this repo's log2 ratio axis.
-
-An aggregate line is the GEOMEAN over the arm's kernels at that P with its 95% interval as a band
-(:func:`hpcagent_bench.stats.summary.geomean_interval`) -- never a mean and never a median, the same
-rule every ratio in this repo is summarized under.
+A series is (packet, model): colour is the model, shape the packet. Efficiency is drawn linear from
+0 (it is a fraction of an ideal at 1.0); speedup keeps the repo's log2 ratio axis. Aggregate lines
+are geomeans over the arm's kernels with a 95% interval (:func:`hpcagent_bench.stats.summary.geomean_interval`).
 """
 
 import enum
@@ -64,48 +37,41 @@ from hpcagent_bench.stats import palette, summary
 from hpcagent_bench.stats import style as plotstyle
 from hpcagent_bench.stats.figures.helpers.series import TORCH_DIST_ARM, series_style, torch_dist_style
 
-#: ``record`` value of a per-P scaling row in the observations table. A judge grade row keeps its
-#: own ``record`` ("submission" / "attempt"), so the two never mix in one selection.
+#: ``record`` value of a per-P scaling row in the observations table.
 SCALING_RECORD: str = "scaling"
 
-#: The two scaling laws, in panel order. Weak first: it is the one the track's ideal (eta = 1 at
-#: every P) is stated for, and a reader meets the harder claim second.
+#: The two scaling laws, in panel order (weak first).
 MODES: tuple[str, ...] = ("weak", "strong")
 
-#: Columns a scaling row cannot be read without. ``work_ratio`` is optional (absent means the weak
-#: problem grew EXACTLY, r = P, which is :func:`metric.ideal_speedup`'s own ``None``), and so are
-#: ``nodes``, ``scaling_mode`` and ``scaling_note``.
+#: Columns a scaling row cannot be read without; ``work_ratio``, ``nodes``, ``scaling_mode`` and
+#: ``scaling_note`` are optional.
 REQUIRED_COLUMNS: tuple[str, ...] = ("record", "arm", "benchmark", "ranks", "ranked_ns", "single_rank_ns")
 
 #: The torch.distributed baseline curve's legend label; its pseudo-arm and look are
 #: :mod:`hpcagent_bench.stats.figures.helpers.series`'s.
 TORCH_DIST_LABEL: str = "PyTorch Distributed"
 
-#: Ranks per node on the track's machine (MI300A: 4 GPUs, 1 rank each). Used ONLY to fill a
-#: ``nodes`` a row did not record; a recorded value always wins, because how ranks were spread over
-#: machines is the allocation's decision and not arithmetic anyone may redo.
+#: Ranks per node on the track's machine (MI300A: 4 GPUs, 1 rank each); fills a missing ``nodes``
+#: only, a recorded value always wins.
 RANKS_PER_NODE: int = 4
 
-#: What a curve with fewer than this many points can support. One point is a measurement, not a
-#: curve: it has no slope, so it is counted and named (:func:`single_point_curves`) and drawn by
-#: nothing.
+#: Fewest points a curve needs to have a slope; fewer is counted (:func:`single_point_curves`) but
+#: never drawn.
 MIN_CURVE_POINTS: int = 2
 
 #: A single panel's height in inches, and the extra the chrome (ticks, axis labels, legend) needs.
 PANEL_HEIGHT_IN: float = 2.4
 CHROME_IN: float = 1.35
-#: The same at print size (:data:`~hpcagent_bench.stats.style.PRINT_SCALE`): one row is exactly the
-#: shared print body height, so a scaling figure and a cost figure wrapped on one page match.
+#: The same at print size: one row is exactly the shared print body height, so a scaling figure and
+#: a cost figure wrapped on one page match.
 PRINT_PANEL_HEIGHT_IN: float = 1.1
 PRINT_CHROME_IN: float = plotstyle.PRINT_BODY_HEIGHT_IN - PRINT_PANEL_HEIGHT_IN
 
 #: The small-multiple grid's columns. Ten kernels land as two rows of five across a paper's width.
 SMALL_MULTIPLE_COLUMNS: int = 5
 
-#: Point size of a small multiple's kernel name at authoring size. Below the rest of the scale on
-#: purpose: five panels across a paper's width leave ~1.4in per title, and at
-#: :data:`style.ANNOTATION_PT` two neighbouring kernel names overprint each other. At print size the
-#: name is tick size.
+#: Kernel-name point size at authoring scale, below :data:`style.ANNOTATION_PT` so neighbouring
+#: titles do not overprint; at print scale the name is tick size.
 SMALL_MULTIPLE_TITLE_PT: float = 9.0
 
 
@@ -121,8 +87,8 @@ def small_title_pt(type_: plotstyle.TypeScale) -> float:
     return type_.tick_pt if type_ == plotstyle.PRINT_SCALE else SMALL_MULTIPLE_TITLE_PT
 
 
-#: How close a recorded ``efficiency`` must sit to the one :func:`metric.scaling_point` computes
-#: before :func:`disagreements` reports the row. A relative tolerance, because eta is a ratio.
+#: Relative tolerance for a recorded ``efficiency`` against :func:`metric.scaling_point`'s own,
+#: before :func:`disagreements` reports the row.
 EFFICIENCY_RTOL: float = 1e-6
 
 
@@ -152,11 +118,8 @@ class Point:
     def value(self, quantity: Quantity) -> float:
         """The number a figure of ``quantity`` puts on Y.
 
-        The speedup of a WEAK point is the work-scaled one, r * T(1)/T(P): the plain ratio of a
-        weak run is bounded by 1 by construction (the same work per rank takes the same time), so
-        drawing it against an ideal of P would show every honest arm as a total failure. Scaled by
-        the realized work ratio it is Gustafson's speedup and its ideal IS P, which is the line
-        the panel draws.
+        A weak point's speedup is work-scaled (r * T(1)/T(P), Gustafson's speedup, ideal P); the
+        plain ratio is bounded by 1 and would show every honest arm as a failure.
         """
         if quantity == Quantity.EFFICIENCY:
             return self.efficiency
@@ -167,9 +130,8 @@ class Point:
 class Curve:
     """One (arm, kernel, mode) scaling curve: the P that were measured, and why the others were not.
 
-    ``dropped`` is ``(P, reason)`` for a rank count the sweep refused or failed at -- the judge's
-    own ``scaling_notes`` line. A dropped P is a HOLE in the curve and never a zero: a figure that
-    filled it would draw a collapse the experiment never measured.
+    ``dropped`` is ``(P, reason)`` for a rank count the sweep refused or failed at; a dropped P is a
+    hole in the curve and never a zero.
     """
 
     arm: str
@@ -189,8 +151,8 @@ class Curve:
         return summary.geomean(values) if values else math.nan
 
 
-#: An LLM series' line width relative to the type scale's: the model curves overlap in most panels, and
-#: a thinner line keeps the ones underneath visible; the torch.distributed baseline keeps full width.
+#: An LLM series' line width relative to the type scale's, thinner so overlapping curves stay
+#: visible; the torch.distributed baseline keeps full width.
 AGENT_LINE_SCALE: float = 0.9
 
 #: The geomean column's width relative to an operator column: it carries three series with bands.
@@ -200,9 +162,7 @@ GEOMEAN_WIDTH_RATIO: float = 1.3
 def panel_title(kernel: str, kernels: Sequence[str]) -> str:
     """A kernel name with the prefix every panel shares removed: ``dist_sdpa`` -> ``sdpa``.
 
-    The prefix is on every panel of the figure, so it separates nothing and costs the width the
-    part that does separate them needs. Stripped only when EVERY name carries it, and only at an
-    underscore, so a name is never cut mid-word.
+    Stripped only when every name carries it, and only at an underscore.
     """
     head = kernel.split("_")[0] + "_"
     if len(kernels) > 1 and all(name.startswith(head) for name in kernels):
@@ -239,11 +199,10 @@ def series_keys(pairs: Iterable[tuple[str, str]]) -> list[tuple[str, str]]:
 def series_handles(
     curves_: Sequence["Curve"], line_width: float = plotstyle.AUTHOR_SCALE.line_width, counted: bool = False
 ) -> list[Line2D]:
-    """One legend entry per (packet, model) over EVERY panel's curves, in draw order.
+    """One legend entry per (packet, model) over every panel's curves, in draw order.
 
-    Built from all curves rather than from the last panel drawn, which would drop any series that
-    panel happens not to hold. ``counted`` appends each series' kernel count, which a geomean panel
-    needs: series solved different kernels, so each geomean is over its own n (SC15 Rule 2)."""
+    ``counted`` appends each series' kernel count: series solved different kernels, so each geomean
+    is over its own n."""
     keys = series_keys((packet_of(curve), curve.model) for curve in curves_)
     kernels = {key: {c.kernel for c in curves_ if (packet_of(c), c.model) == key} for key in keys}
     return [
@@ -262,9 +221,8 @@ def place_legend(
     type_: plotstyle.TypeScale = plotstyle.AUTHOR_SCALE,
     xlabel: str = "",
 ) -> None:
-    """The shared legend under the figure. The canvas GROWS by the legend's height, so the panels keep
-    their size, and the bottom margin is what the lowest axes' tick labels and axis label measure.
-    ``xlabel`` is one X label for every column, set between the tick labels and the legend."""
+    """The shared legend under the figure. The canvas grows by the legend's height so the panels keep
+    their size. ``xlabel`` is one X label for every column, set between the tick labels and the legend."""
     width, body = (float(value) for value in fig.get_size_inches())
     below = max(plotstyle.below_protrusion_in(fig, ax) for ax in axes) + 0.04
     label_in = type_.label_pt * 1.5 / 72.0 if xlabel else 0.0
@@ -285,10 +243,8 @@ def type_axes(ax: matplotlib.axes.Axes, type_: plotstyle.TypeScale) -> None:
 def mode_of(arm: str, recorded: object = "") -> str:
     """The scaling law a row was graded under: what it recorded, else what its arm name says.
 
-    The arm name is the fallback and not the source: ``submit-mlscale.sh`` keys weak and strong as
-    two different arms precisely because they are two different contracts, so ``mlscale-weak-...``
-    is a reliable last resort for a CSV extracted before the column existed -- but a row that
-    states its own mode is believed over its name.
+    The name is a fallback for a CSV extracted before the column existed; a row that states its own
+    mode is trusted over its name.
     """
     text = str(recorded).strip().lower()
     if text in MODES:
@@ -324,11 +280,10 @@ def text_cell(row: pd.Series, name: str) -> str:
 
 
 def scaling_rows(frame: pd.DataFrame) -> pd.DataFrame:
-    """The frame's per-P scaling rows, one grade per (arm, kernel, mode): the LATEST.
+    """The frame's per-P scaling rows, one grade per (arm, kernel, mode): the latest.
 
-    An arm graded twice (a resubmission, a re-grade) holds two curves for one kernel, and pooling
-    them would average a fixed submission with the one it replaced. The latest ``ts_ms`` wins, the
-    same any-run rule the per-kernel figures take their episode under.
+    A resubmission or re-grade holds two curves for one kernel; the latest ``ts_ms`` wins rather
+    than pooling them with what they replaced.
     """
     if frame.empty or not set(REQUIRED_COLUMNS) <= set(frame.columns):
         return frame.iloc[0:0]
@@ -342,8 +297,7 @@ def scaling_rows(frame: pd.DataFrame) -> pd.DataFrame:
     if rows.empty or "ts_ms" not in rows.columns:
         return rows
     rows = baseline_anchored(rows)
-    # A stamp that will not parse sorts oldest rather than dropping the row: an unstamped grade is
-    # still a measurement, and it only loses to one that says it is newer.
+    # An unparseable stamp sorts oldest rather than dropping the row.
     rows["scaling_ts"] = pd.to_numeric(rows["ts_ms"], errors="coerce").fillna(0)
     newest = rows.groupby(["arm", "benchmark", "scaling_mode"])["scaling_ts"].transform("max")
     return rows[rows["scaling_ts"] == newest].drop(columns=["scaling_ts"])
@@ -351,10 +305,9 @@ def scaling_rows(frame: pd.DataFrame) -> pd.DataFrame:
 
 def baseline_anchored(rows: pd.DataFrame) -> pd.DataFrame:
     """``rows`` with each torch.distributed baseline curve made whole: one curve is one
-    (``run_id`` = stack, kernel, law) group, whose points several grade DBs may hold. Every point
-    gets the group's P=1 time as ``single_rank_ns`` (blank when P=1 was not timed: no anchor, every
-    point a hole) and the group's newest stamp as ``ts_ms``, so the latest-curve rule keeps or drops
-    the curve whole."""
+    (``run_id``, kernel, law) group whose points several grade DBs may hold. Every point gets the
+    group's P=1 time as ``single_rank_ns`` (blank when P=1 was not timed) and the group's newest
+    stamp as ``ts_ms``, so the latest-curve rule keeps or drops the curve whole."""
     if not (rows["arm"].astype(str) == TORCH_DIST_ARM).any():
         return rows
     rows = rows.copy()
@@ -393,8 +346,7 @@ def number(value: object) -> float:
 def point_of(row: pd.Series, mode: str) -> Point | None:
     """One :class:`Point` from a scaling row, or None when it holds no usable measurement.
 
-    The arithmetic is :func:`metric.scaling_point`'s and not this module's, so the number a figure
-    plots is the number the grade was scored on.
+    The arithmetic is :func:`metric.scaling_point`'s, not this module's own.
     """
     ranks = int(cell(row, "ranks", 0.0))
     t1, tp = cell(row, "single_rank_ns", 0.0), cell(row, "ranked_ns", 0.0)
@@ -426,8 +378,7 @@ def drop_reason(row: pd.Series) -> str:
 def curves(frame: pd.DataFrame) -> list[Curve]:
     """Every (arm, kernel, mode) curve in the frame, ascending in P, with its dropped points.
 
-    An empty or column-less frame yields an empty list rather than raising: a campaign that has not
-    run its scaling sweep yet is a normal state of the table, not a broken one.
+    An empty or column-less frame yields an empty list rather than raising.
     """
     rows = scaling_rows(frame)
     if rows.empty:
@@ -480,9 +431,7 @@ def disagreements(frame: pd.DataFrame, tolerance: float = EFFICIENCY_RTOL) -> li
     """``(arm, kernel, P, recorded, recomputed)`` wherever a recorded ``efficiency`` is not the one
     :func:`metric.scaling_point` gives for the same row's times.
 
-    A disclosure column and the formula behind it must agree; where they do not, the extractor or
-    the grader is wrong and no figure drawn from either is worth reading. Empty when the column is
-    absent, which is the normal case today.
+    Empty when the column is absent, the normal case today.
     """
     rows = scaling_rows(frame)
     if rows.empty or "efficiency" not in rows.columns:

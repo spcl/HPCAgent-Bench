@@ -1,25 +1,15 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""The signed-change figures: one row per arm, and the paired comparison of two tools.
+"""Signed-change figures: one row per arm, and the paired comparison of two tools.
 
-TWO QUESTIONS, TWO FIGURES, ONE READER. :func:`arms_figure` puts several arms on a COMMON
-denominator and answers "how fast is each arm". :func:`paired_figure` answers the different
-question an ablation is about: on a kernel BOTH tools compiled, which is faster -- so its
-denominator is the other TOOL, per kernel, and each row is a paired comparison rather than an
-independent arm. Dividing two geomeans taken over different kernel sets is not a speedup of
-anything: an arm that fails on the kernels it is bad at comes out ahead by attrition.
+:func:`arms_figure` puts several arms on a common denominator to compare how fast each arm is.
+:func:`paired_figure` compares two tools directly, per kernel, on the kernels both compiled --
+dividing geomeans taken over different kernel sets is not a speedup of anything.
 
-THE AXIS is the signed relative change (:func:`hpcagent_bench.stats.summary.signed_change`), not
-the ratio: 2x faster sits at +1 and 2x slower at -1, equidistant and odd about zero.
-
-THE RULES this figure is built to keep, from Hoefler and Belli (SC15), checked by
-:mod:`hpcagent_bench.stats.rules` rather than by review:
-
-* Rule 4 -- the emitted table carries the MILLISECONDS behind every ratio, not the ratio alone.
-* Rules 5 and 7 -- every row's geomean carries its log-space t-interval, and the per-kernel cloud
-  is drawn beside it, so a reader sees the spread the interval summarizes.
-* Rule 12 -- nothing is joined by a line. The rows are arms, which have no order, so a line
-  between them would claim a trend across an axis that has none.
+The axis is the signed relative change (:func:`hpcagent_bench.stats.summary.signed_change`), not
+the ratio: 2x faster sits at +1, 2x slower at -1. Follows Hoefler and Belli (SC15) rules 4 (report
+costs), 5/7 (report intervals) and 12 (no line between unordered rows), checked by
+:mod:`hpcagent_bench.stats.rules`.
 
 Usage::
 
@@ -57,20 +47,15 @@ ARMS: dict[str, str] = {
     "cc_llvm_autopar": "llvm + polly",
 }
 
-#: The speedup DENOMINATOR: a SERIAL optimizing compile, not the interpreted reference.
-#:
-#: cc, not numpy, and not the llvm+polly arm either. numpy flatters an auto-parallelizer for reasons
-#: that have nothing to do with parallelization, and polly is not defined on every kernel -- a
-#: non-affine loop is outside a polyhedral tool, so using it as the divisor would drop exactly the
-#: kernels it cannot handle and measure the others on its home ground. cc exists for every kernel,
-#: so every arm keeps full n, and llvm+polly stays visible as an ARM instead of hiding in the
-#: denominator.
+#: The speedup denominator: a serial optimizing compile, not the interpreted reference. cc exists
+#: for every kernel (unlike llvm+polly, undefined on a non-affine loop), so every arm keeps full n
+#: and llvm+polly stays visible as an arm instead of hiding in the denominator.
 BASELINE: str = "cc"
 
 #: Kernels these figures are about. tsvc_2_5* sources are already under this prefix.
 TSVC_PREFIX: str = "tsvc_2"
 
-#: The NUMERATOR of every ratio on the paired figure: the arm the ablation is about.
+#: The numerator of every ratio on the paired figure: the arm the ablation is about.
 REFERENCE: str = "dace_cpu_canonicalize"
 
 #: Denominator -> the row label, for the paired figure. Insertion order is the order on the axis.
@@ -93,19 +78,9 @@ class Arm:
 class Row:
     """One drawn row: its ratios per kernel, the costs behind them, and what it excluded.
 
-    ``color``/``marker`` and the trailing five fields are used only by the llr-focus40 compiler
-    figure (:func:`llr40_rows`, :func:`llr40_figure`): the TSVC rows :func:`arm_rows` and
-    :func:`paired_rows` build never set them, so ``draw()`` keeps colouring by
-    :func:`~hpcagent_bench.stats.palette.framework_colors` and every mark keeps the plain circle it
-    always drew. ``ratios_low``/``ratios_high`` are a per-kernel confidence bound on ``ratios`` OVER
-    THE KERNEL'S OWN REPETITIONS (SC15 rules 5/7) -- empty for a deterministic column, which has
-    none to bound. ``tokens`` is the per-kernel spend a canon column has none of. ``delivered`` says
-    which of ``ratios`` are real measurements versus the :data:`~hpcagent_bench.stats.population.
-    NOT_DELIVERED` 1x placeholder (:func:`~hpcagent_bench.stats.canon.roster_speedups`) -- empty for
-    an agent row, whose ``ratios`` only ever holds delivered kernels already (``policy="solved"``),
-    so every present value there reads as delivered by the same default an empty dict gives it.
-    ``pending`` names the kernels the row has not attempted yet (only under ``mark_pending``): they
-    carry no ratio, enter no summary, and draw as :data:`~hpcagent_bench.stats.style.PENDING_MARKER`.
+    ``color``/``marker`` and the trailing five fields are set only by the llr-focus40 compiler
+    figure rows (:func:`canon_kernel_row`, :func:`agent_kernel_row`); plain TSVC rows leave them
+    at their defaults.
     """
 
     framework: str
@@ -116,11 +91,11 @@ class Row:
     excluded: str
     color: str | None = None
     marker: str = "o"
-    ratios_low: dict[str, float] = dataclasses.field(default_factory=dict)
+    ratios_low: dict[str, float] = dataclasses.field(default_factory=dict)  # per-kernel CI, SC15 5/7
     ratios_high: dict[str, float] = dataclasses.field(default_factory=dict)
-    tokens: dict[str, float] = dataclasses.field(default_factory=dict)
-    delivered: dict[str, bool] = dataclasses.field(default_factory=dict)
-    pending: frozenset[str] = frozenset()
+    tokens: dict[str, float] = dataclasses.field(default_factory=dict)  # per-kernel token spend
+    delivered: dict[str, bool] = dataclasses.field(default_factory=dict)  # ratio vs 1x placeholder
+    pending: frozenset[str] = frozenset()  # kernels not attempted yet (mark_pending only)
 
 
 def shard_paths(root: pathlib.Path, framework: str) -> list[pathlib.Path]:
@@ -132,11 +107,8 @@ def shard_paths(root: pathlib.Path, framework: str) -> list[pathlib.Path]:
 def read_arm(root: pathlib.Path, framework: str) -> Arm:
     """Concatenate the framework's shards into ``kernel -> ms``, tallying every rejected TSVC row.
 
-    A row that crashed, that the harness did not validate, or that carries no timing is NOT a data
-    point. Those rows are counted and reported, never plotted as 1.0 -- a miscompile scored as "no
-    change" is the one failure mode that would flatter every arm equally. Only TSVC rows are
-    counted as rejects: a non-TSVC row is out of SCOPE, not excluded, and mixing the two would
-    report the corpus size as an exclusion count.
+    A crashed, unvalidated, or untimed row is not a data point and is counted, never plotted as
+    1.0. Only TSVC rows count as rejects; a non-TSVC row is out of scope, not excluded.
     """
     times: dict[str, float] = {}
     rejected: collections.Counter[str] = collections.Counter()
@@ -153,8 +125,7 @@ def read_arm(root: pathlib.Path, framework: str) -> Arm:
                 elif not row["median_ms"] or float(row["median_ms"]) <= 0:
                     rejected["no timing"] += 1
                 else:
-                    # A kernel can appear twice across shards only if a rank was re-run; the fastest
-                    # of the two is the one the sweep itself would report, so keep the minimum.
+                    # A kernel repeated across shards (a re-run rank) keeps its fastest time.
                     ms = float(row["median_ms"])
                     times[kernel] = min(times.get(kernel, ms), ms)
     return Arm(framework, times, rejected)
@@ -171,11 +142,7 @@ def against_baseline(arm: Arm, baseline: Mapping[str, float]) -> dict[str, float
 
 
 def paired(reference: Mapping[str, float], other: Mapping[str, float]) -> dict[str, float]:
-    """``kernel -> other_ms / reference_ms`` over the kernels BOTH timed; above 1 the reference wins.
-
-    Restricted to the intersection so every point is one kernel measured twice. A kernel only one
-    of the two tools compiled leaves the comparison entirely, in both directions.
-    """
+    """``kernel -> other_ms / reference_ms`` over the kernels both timed; above 1 the reference wins."""
     return {k: other[k] / ms for k, ms in sorted(reference.items()) if k in other}
 
 
@@ -187,11 +154,7 @@ def sign_test(ratios: Mapping[str, float]) -> tuple[int, int]:
 
 
 def table(rows: Sequence[Row]) -> pd.DataFrame:
-    """The figure's DATA TABLE: one record per (row, kernel), ratio and both costs.
-
-    Rule 4 is kept here rather than asserted in a caption -- the ratio ships with the milliseconds
-    it was taken over, so a reader can see that a 1.4x on a 3 ms kernel is not a 1.4x on a 3 s one.
-    """
+    """The figure's data table: one record per (row, kernel), ratio and both costs (SC15 rule 4)."""
     records = [
         {
             "row": row.label,
@@ -222,20 +185,19 @@ TABLE_COLUMNS: tuple[str, ...] = (
 
 
 def solved_ratios(row: Row) -> dict[str, float]:
-    """``row``'s ratios over the kernels it SOLVED: a compiler's 1x placeholder (``delivered``
-    False) is a row of the per-kernel table and a crossed mark on the figure, but no measurement,
-    so no summary takes it. A row with no ``delivered`` flags (every TSVC row, every
-    agent row) solved every kernel it has a ratio for."""
+    """``row``'s ratios over the kernels it solved: excludes 1x placeholders (``delivered`` False).
+
+    A row with no ``delivered`` flags (every TSVC or agent row) solved every kernel it has a ratio
+    for.
+    """
     return {kernel: ratio for kernel, ratio in row.ratios.items() if row.delivered.get(kernel, True)}
 
 
 def summary_table(rows: Sequence[Row]) -> pd.DataFrame:
-    """One record per drawn row, over the kernels it solved (:func:`solved_ratios`): the geomean,
-    its interval, the median, n and the sign test -- the geomean and interval the figure's summary
-    slot draws, so the two cannot disagree.
+    """One record per drawn row, over the kernels it solved (:func:`solved_ratios`): geomean,
+    interval, median, n and the sign test.
 
-    :func:`hpcagent_bench.stats.rules.require_interval` gates it, so a row that reached the figure
-    without an interval fails here (Rules 5 and 7) instead of being drawn as a bare point.
+    Gated by :func:`hpcagent_bench.stats.rules.require_interval` (SC15 rules 5/7).
     """
     records: list[dict[str, object]] = []
     for row in rows:
@@ -279,8 +241,7 @@ SUMMARY_COLUMNS: tuple[str, ...] = (
 )
 
 
-#: The signed figure's mark and line sizes, in points: a cloud kernel's AREA and its key entry's
-#: size, the geomean mark, its interval's weight and cap, and the median tick and zero line.
+#: The signed figure's mark and line sizes, in points.
 CLOUD_MARK_AREA: float = 11.0
 CLOUD_KEY_MARK_PT: float = 3.5
 GEOMEAN_MARK_PT: float = 5.5
@@ -292,9 +253,7 @@ RULE_LINE_WIDTH: float = 1.0
 def draw_row(ax: Axes, index: int, row: Row, color: str, jitter: random.Random) -> None:
     """One arm's cloud of kernels, its geomean with interval, and its median tick.
 
-    The cloud is Rule 12 read the other way: the individual kernels are plotted because they are
-    what the interval summarizes, and they are NOT joined to anything -- a kernel axis has no
-    order, so there is no trend for a line to indicate.
+    Rule 12: no line joins the kernels, since a kernel axis has no order.
     """
     values = usable_ratios(list(row.ratios.values()), label=row.label)
     if values.size == 0:
@@ -336,8 +295,7 @@ def draw(rows: Sequence[Row], title: str, xlabel: str, stem: pathlib.Path) -> pa
     tall = 1.35 + 0.62 * len(rows)
     fig, ax = plt.subplots(figsize=(6.8, tall))
     fig.subplots_adjust(left=0.20, right=0.885, top=1.0 - 0.86 / tall, bottom=1.30 / tall)
-    # Seeded, so the same CSVs draw the same cloud: an unseeded jitter makes two renders of one
-    # dataset look like two measurements.
+    # Seeded, so the same CSVs draw the same cloud instead of faking two measurements.
     jitter = random.Random(0)
     style.row_axis(ax, [row.label for row in rows])
     ax.set_xlabel(xlabel)
@@ -421,18 +379,15 @@ def paired_rows(
     return rows
 
 
-#: The baseline every llr-focus40 compiler row is measured against
-#: (:data:`llr40_arms.CANON_BASELINE`).
+#: The baseline every llr-focus40 compiler row is measured against.
 LLR40_BASELINE: str = llr40_arms.CANON_BASELINE
 
-#: The two canon-sweep columns this figure draws as their OWN rows, in draw order: DaCe's
-#: parallel-CPU backend, then its canonicalizing pass over the same backend. The LIBRARY default --
-#: a caller wanting the polyhedral compiler baselines too (Pluto, PPCG-on-AMD) passes its own
-#: ``canon_columns`` (as :data:`statistics.plot_llr40_compilers`'s CLI default does).
+#: The two canon-sweep columns this figure draws as their own rows: DaCe's parallel-CPU backend,
+#: then its canonicalizing pass. A caller wanting the polyhedral baselines too (Pluto, PPCG-on-AMD)
+#: passes its own ``canon_columns`` (as :data:`statistics.plot_llr40_compilers`'s CLI default does).
 LLR40_CANON_COLUMNS: tuple[str, ...] = ("dace_cpu", "dace_cpu_canonicalize")
 
-#: The two CPF conditions this figure draws, per model -- never the no-packet control, which
-#: answers a different question.
+#: The two CPF conditions this figure draws, per model -- never the no-packet control.
 LLR40_CONDITIONS: tuple[str, ...] = ("cpf", "cpfsrc")
 
 #: Column order of the emitted token summary table.
@@ -449,28 +404,14 @@ def canon_kernel_row(
     mark_pending: bool = False,
     baseline_fallback: str = "",
 ) -> Row:
-    """One canon-sweep column's row against ``baseline``, ROSTER-COMPLETE: a single deterministic
-    ``median_ms`` per kernel (:func:`hpcagent_bench.stats.canon.read_times`), so ``ratios_low``/
-    ``ratios_high`` and ``tokens`` stay empty -- a canon sweep has no repetition to bound and runs
-    no agent to cost. A canon sweep commonly spans MORE kernels than one figure's roster
-    (:data:`llr40_arms.CANON_COLUMN` sweeps 40); restricting to ``roster`` keeps the summary
-    column from geomeaning a population the panel never drew.
+    """One canon-sweep column's row against ``baseline``, roster-complete (restricted to
+    ``roster``, since a canon sweep commonly spans more kernels than one figure's).
 
-    A roster kernel ``column`` produced no validated result for -- declined, crashed, or never
-    attempted -- is FILLED at 1x, never dropped (:func:`hpcagent_bench.stats.canon.roster_speedups`):
-    a compiler baseline that cannot handle a kernel is no different from
-    an agent that never delivered one, and ``delivered`` flags it the same way
-    :data:`~hpcagent_bench.stats.population.DELIVERED_COLUMN` flags that placeholder for an agent
-    row, so ``llr40_figure`` draws it crossed at 1x under the one existing convention. The figure's
-    summary slot leaves it out (solved kernels only, :func:`per_kernel.kernel_medians`); the
-    ``-summary.csv`` :func:`summary_table` writes leaves it out the same way.
-
-    ``mark_pending`` separates a kernel with NO canon row yet for ``column`` or ``baseline`` (never
-    attempted) from one that ran and failed: it leaves the ratios and the summary and lands in
-    ``pending``.
-
-    ``baseline_fallback`` times a kernel ``baseline`` did not verify by that column instead
-    (:func:`hpcagent_bench.stats.canon.with_fallback`); the row's ``excluded`` names how many did.
+    A roster kernel ``column`` produced no validated result for is filled at 1x, never dropped
+    (:func:`hpcagent_bench.stats.canon.roster_speedups`), flagged via ``delivered`` so the figure
+    draws it crossed; the summary slot leaves it out. ``mark_pending`` instead sets aside a kernel
+    with no canon row yet for ``column`` or ``baseline``, landing in ``pending``. ``baseline_fallback``
+    times a kernel ``baseline`` did not verify against that column instead.
     """
     times, substituted = canon.with_fallback(canon.read_times(canon_frame), baseline, baseline_fallback)
     substituted = substituted & set(roster)
@@ -520,14 +461,12 @@ def pending_note(pending: frozenset[str]) -> str:
 
 
 def distinct_canon_labels(rows: Sequence[Row]) -> list[Row]:
-    """``rows`` with every label that two of them SHARE replaced by the framework's own name.
+    """``rows`` with every label two of them share replaced by the framework's own name.
 
     A canon column is labelled by its optimizer, and the registry aliases both device variants of
-    one optimizer to one name on purpose (``dace_cpu_canonicalize`` and ``dace_gpu_canonicalize``
-    are both "Canonical Parallel Form"). A figure drawing both then shows two rows under one legend
-    entry with nothing to say which device is which. Only then does the label fall back to the
-    ``frameworks`` name, which carries the device; a figure drawing one variant keeps the optimizer
-    name it always had.
+    one optimizer to one name (``dace_cpu_canonicalize`` and ``dace_gpu_canonicalize`` are both
+    "Canonical Parallel Form"). Only a shared label falls back to the ``frameworks`` name, which
+    carries the device.
     """
     counts: dict[str, int] = {}
     for row in rows:
@@ -547,10 +486,8 @@ def agent_kernel_row(
     repeats: population.RepeatPolicy = population.RepeatPolicy.LATEST,
     pending: frozenset[str] = frozenset(),
 ) -> Row:
-    """One CPF arm's row, restricted to ``roster``: its final answer per kernel (Rule 4's costs
-    behind the ratio), plus each kernel's OWN confidence interval over every graded episode that
-    kernel ran (rules 5/7) -- the geomean of that kernel's repetitions, degenerate to a point below
-    two samples (:func:`~hpcagent_bench.stats.summary.geomean_ci`)."""
+    """One CPF arm's row, restricted to ``roster``: its final answer per kernel, plus each kernel's
+    own confidence interval over every graded episode it ran (SC15 rules 5/7)."""
     subset = frame.loc[frame["arm"].astype(str) == arm]
     answers = population.kernel_answers(subset, repeats=repeats, policy=population.KernelPolicy.SOLVED)
     kernels = set(roster)

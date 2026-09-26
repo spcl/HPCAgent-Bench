@@ -28,9 +28,9 @@ DEFAULT_COST_MODEL: str = "billed"
 #: The weight names a card declares, in the order an inline spec may give them.
 WEIGHTS: tuple[str, ...] = ("fresh_input", "cached_input", "output")
 
-#: The observations columns holding each weighted component of a task's FINAL attempt, in
-#: :data:`WEIGHTS` order. Recorded as components, never recovered by subtraction: ``tokens_billed``
-#: sums per-turn usage, whose output reads 0 on these endpoints, so it is not fresh + cached + output.
+#: The observations columns holding each weighted component of a task's final attempt, in
+#: :data:`WEIGHTS` order. Recorded as components, not recovered by subtraction: ``tokens_billed``
+#: sums per-turn usage and does not equal fresh + cached + output.
 COMPONENT_COLUMNS: tuple[str, ...] = ("tokens_fresh_input", "tokens_cached_input", "tokens_output")
 
 
@@ -124,17 +124,16 @@ def components(frame: pd.DataFrame) -> tuple[pd.Series, pd.Series, pd.Series]:
 def priced(frame: pd.DataFrame, model: CostModel) -> pd.DataFrame:
     """``frame`` with every task row's ``tokens`` replaced by ``model``'s cost of its components.
 
-    The shipped ``effective`` card returns the frame unchanged, and so does a frame with no
-    ``tokens`` column (nothing to price). A card that weights a component the frame does not carry
-    (an extraction older than ``tokens_output``) raises instead of pricing a task at a wrong number;
-    a task row missing a component gets NaN, which :mod:`population` drops as no measurement (R7).
-    A non-task row (a judge call's running count) keeps its own ``tokens``: it is never a cost (T4)."""
+    The shipped ``effective`` card, or a frame with no ``tokens`` column, is returned unchanged. A
+    card that weights a component the frame does not carry raises rather than pricing at a wrong
+    number. A non-task row (a judge call's running count) keeps its own ``tokens``.
+    """
     if (model.fresh_input, model.cached_input, model.output) == (1.0, 0.0, 1.0) or "tokens" not in frame.columns:
         return frame
     needed = [column for column in COMPONENT_COLUMNS if column not in frame.columns]
     if needed:
         raise ValueError(f"cost model {model.key!r} needs column(s) {needed}; re-extract the observations")
     fresh, cached, output = components(frame)
-    cost = model.fresh_input * fresh + model.cached_input * cached + model.output * output  # price(), per row
+    cost = model.fresh_input * fresh + model.cached_input * cached + model.output * output
     task = frame["record"].astype(str) == TASK_RECORD if "record" in frame.columns else pd.Series(True, frame.index)
     return frame.assign(tokens=cost.where(task, frame["tokens"]))

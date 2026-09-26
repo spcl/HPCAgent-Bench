@@ -1,15 +1,7 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""The one visual style every figure in this repo is drawn in.
-
-Figures from one project that do not look like one project make a reader work out, per figure,
-what is ink and what is data. This fixes the parts that are never data -- type sizes, tick and
-spine weight, grid colour, the neutral inks -- so a plot only has to decide what it is actually
-showing. Colour is NOT here: it belongs to the entity, and :mod:`hpcagent_bench.stats.palette`
-owns it.
-
-Neutrals carry a slight cool bias rather than being a pure grey, so they sit under the palette's
-blues without looking like a different rendering of the page.
+"""Shared visual style for every figure: type sizes, tick and spine weight, grid colour, neutral
+inks. Colour belongs to the entity and lives in :mod:`hpcagent_bench.stats.palette`.
 """
 
 import enum
@@ -39,30 +31,26 @@ LOG = logging.getLogger(__name__)
 
 # matplotlib's drawing calls end in an untyped ``**kwargs``: every call below suppresses that report.
 
-#: Ink, in decreasing emphasis. EVERY PIECE OF TEXT IS :data:`INK` (never a series colour, never
-#: grey: grey text goes illegible at column width); MUTED is for non-text marks (a neutral legend
-#: swatch, a tick dash, an interval that would compete with the data).
+#: Ink, in decreasing emphasis. Every text uses INK; MUTED is for non-text marks (legend swatch,
+#: tick dash, an interval that would compete with the data).
 INK: str = "#1c1c1e"
 MUTED: str = "#6b6b70"
 RULE: str = "#d6d6da"
-#: For text that labels the CHART rather than the data -- quadrant captions and the like. Lighter
-#: than MUTED so it sits behind the marks in the reading order instead of competing with them.
+#: Text that labels the chart rather than the data (quadrant captions and the like).
 FAINT: str = "#a8a8ae"
-#: The zero/parity reference. Darker than the grid because it is a statement, not a guide.
+#: The zero/parity reference line, darker than the grid because it is a statement.
 REFERENCE: str = "#3a3a3e"
-#: The MINOR grid's colour and line weight (:func:`minor_ticks`): lighter and thinner than the major
-#: grid (:data:`RULE` at 0.7pt), so it reads as a finer ruling of the same reference and never as a
-#: second one.
+#: Minor grid colour and line weight (:func:`minor_ticks`), lighter and thinner than the major grid.
 MINOR_RULE: str = "#e8e8ea"
 MINOR_GRID_WIDTH: float = 0.25
-#: A minor tick MARK against a major one, as fractions of the major's length and line width.
+#: A minor tick mark against a major one, as fractions of the major's length and line width.
 MINOR_TICK_LENGTH: float = 0.55
 MINOR_TICK_WIDTH: float = 0.6
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class StatInk:
-    """Colours of STATISTICS and states, never of entities (palette.py owns those)."""
+    """Colours of statistics and states, never of entities (palette.py owns those)."""
 
     median: str = "#3b6fd4"  # median bar; blue so the geomean tick reads against it
     geomean: str = "#d4772a"  # geomean tick; orange, far from the median blue
@@ -70,60 +58,45 @@ class StatInk:
 
 STAT_INK = StatInk()
 
-#: TEXT CASE, for every label a figure shows: Title Case, except articles, coordinating conjunctions
-#: and prepositions ("and", "or", "of", "per", "over", "to", "vs") inside the label. Identifiers
-#: (``numba``, ``oss120b``, ``lang-c``) and mathtext keep their own spelling, so no function enforces it.
+# Every label uses Title Case, except articles/conjunctions/prepositions inside it; identifiers
+# and mathtext keep their own spelling. Not enforced in code.
 
-#: Type scale, in points, sized for PRINT: a paper reproduces a figure at about half width, so 13pt
-#: ticks reach the page around 6.5pt.
+#: Type scale, in points, sized for print: a paper reproduces a figure at about half width, so
+#: 13pt ticks reach the page around 6.5pt.
 TITLE_PT: float = 20.0
-#: Floor for the shrink in :func:`title`: below this the title is smaller than the tick labels.
+#: Floor for the shrink in :func:`title`.
 MIN_TITLE_PT: float = 8.0
 SUBTITLE_PT: float = 13.0
 LABEL_PT: float = 16.0
 TICK_PT: float = 14.0
 ANNOTATION_PT: float = 13.0
 
-#: Type sizes of a figure drawn at the width it is placed at (scale 1.0), in points: what the page
-#: prints. Every figure module's paper mode starts from these, so two figures of one page agree.
-#: Ticks, point labels and category names print at PRINT_TICK_PT, axis labels and panel names at
-#: PRINT_LABEL_PT, legends at PRINT_LEGEND_PT (a two-column key must fit a 2.5in wrap figure).
+#: Type sizes at placed width (scale 1.0): ticks/category names at PRINT_TICK_PT, axis/panel
+#: labels at PRINT_LABEL_PT, legends at PRINT_LEGEND_PT.
 PRINT_TICK_PT: float = 7.0
 PRINT_LABEL_PT: float = 8.0
 PRINT_LEGEND_PT: float = 6.0
-#: The floor any print-size fitting (crowded category names, a legend squeezed into its band) may
-#: shrink text to. Below it a figure changes its layout instead: text that shrinks per figure is
-#: exactly what makes two figures on one page print at different sizes.
+#: Floor for shrinking print text to fit; below it, change the layout instead.
 PRINT_MIN_PT: float = 5.5
 
-#: The dpi every figure is written at (:func:`save`'s default). FreeType hints tighter at a low dpi,
-#: so ``get_window_extent`` at matplotlib's default 100 dpi UNDERSTATES text width: a caller that
-#: measures text against a figure sets the figure to this dpi first.
+#: Default dpi for :func:`save`. Text measurement should set the figure to this dpi first: FreeType
+#: hints differently at matplotlib's default 100 dpi.
 SAVE_DPI: float = 200.0
 
-#: The full text width of a double-column A4 paper, in inches: the width of a paper figure (the
-#: per-kernel and efficacy figures).
+#: Full text width of a double-column A4 page, in inches.
 DOUBLE_COLUMN_WIDTH: float = 7.0
 
-#: Per-paper page budgets, in inches, so a figure drops in at scale 1.0 instead of being shrunk by
-#: ``\includegraphics`` -- shrinking a figure shrinks its type below what this module sets.
-#: ``ICLR_TEXT_WIDTH_IN``: ``agentbench-paper/iclr2027_conference.sty`` line 49,
-#: ``\textwidth 5.5 true in`` (single column, so this is the whole row's budget).
-#: ``ACM_COLUMN_WIDTH_IN``/``ACM_TEXT_WIDTH_IN``: the mpr paper's ``acmart.cls`` (``sigconf``,
-#: two columns) documented defaults -- confirm against that class file before a real figure there
-#: is sized to it.
+#: Per-paper page width budgets, in inches, so a figure drops in at scale 1.0 instead of being
+#: rescaled by ``\includegraphics`` (ICLR: iclr2027_conference.sty; ACM: acmart.cls sigconf).
 ICLR_TEXT_WIDTH_IN: float = 5.5
 ACM_COLUMN_WIDTH_IN: float = 3.33
 ACM_TEXT_WIDTH_IN: float = 7.0
 
-#: A figure wrapped beside the text (``wrapfigure`` at ``0.45\textwidth``), and the height of its
-#: plot body including the axis chrome; its legend adds its own height below. Every wrap figure uses
-#: both, so two of them on one page have the same box.
+#: A wrapfigure's body width/height including axis chrome; shared so wrap figures share one box.
 ICLR_WRAP_WIDTH_IN: float = 0.45 * ICLR_TEXT_WIDTH_IN
 PRINT_BODY_HEIGHT_IN: float = 1.9
 
-#: How far a saved paper figure's width may differ from the width it is placed at. Beyond it the
-#: ``\includegraphics`` width rescales the type set here.
+#: Allowed drift between a saved paper figure's width and its placed width.
 PLACED_WIDTH_RTOL: float = 0.01
 
 
@@ -131,9 +104,8 @@ PLACED_WIDTH_RTOL: float = 0.01
 class TypeScale:
     """One figure's type sizes (points) and the mark and line weights that go with them.
 
-    Type size and figure size are one decision: a figure drawn to be shrunk to half width needs
-    twice the type of one drawn at its placed width. :data:`AUTHOR_SCALE` is the first,
-    :data:`PRINT_SCALE` the second; a figure module picks one and never mixes them.
+    :data:`AUTHOR_SCALE` is for a figure meant to be shrunk; :data:`PRINT_SCALE` for one drawn at
+    its placed width. A figure module picks one and never mixes them.
     """
 
     tick_pt: float
@@ -184,13 +156,13 @@ def apply() -> None:
             "axes.labelsize": LABEL_PT,
             "axes.titlesize": LABEL_PT + 1,
             "axes.titlecolor": INK,
-            "axes.grid": False,  # each plot opts in on ONE axis; a full grid is noise
+            "axes.grid": False,  # each plot opts in on one axis; a full grid is noise
             "axes.axisbelow": True,  # data over guides, never the reverse
             "grid.color": RULE,
-            "grid.linewidth": 0.4,  # thinner than 0.6 (user, 2026-09-25): the grid is a guide, not a mark
-            "xtick.color": MUTED,  # the tick DASH stays a guide
+            "grid.linewidth": 0.4,  # the grid is a guide, not a mark
+            "xtick.color": MUTED,  # the tick dash stays a guide
             "ytick.color": MUTED,
-            "xtick.labelcolor": INK,  # its NUMBER is text, and text is ink
+            "xtick.labelcolor": INK,  # its number is text, and text is ink
             "ytick.labelcolor": INK,
             "xtick.labelsize": TICK_PT,
             "ytick.labelsize": TICK_PT,
@@ -212,8 +184,8 @@ def despine(ax: Axes, keep: tuple[str, ...] = ("top", "right", "left", "bottom")
             ax.spines[side].set_color(RULE)
 
 
-#: Where :func:`title` puts a figure title: its top edge this far below the canvas top, and the plot
-#: area this much further down. A figure that reserves room for a title reserves TITLE_BAND_IN.
+#: Where :func:`title` puts a figure title: top edge below the canvas top, plot area further down
+#: by TITLE_BAND_IN.
 TITLE_TOP_IN: float = 0.34
 TITLE_GAP_IN: float = 0.30
 TITLE_BAND_IN: float = TITLE_TOP_IN + TITLE_GAP_IN
@@ -251,33 +223,13 @@ def legend_below(
     columnspacing: float = 1.6,
     handlelength: float = 2.0,
 ) -> float:
-    """One legend, under the whole figure, centred, wrapped to the figure width. Never inside the
-    axes. Returns the legend's height in inches, which the caller adds to its bottom margin.
+    """One legend, centred under the whole figure and wrapped to its width; never inside the axes.
+    Returns the legend's height in inches, for the caller's bottom margin.
 
-    An in-axes legend has to be placed, and every placement is a bet that one corner stays empty.
-    That bet loses whenever the data changes: the score-vs-cost figure put its key in the corner
-    two points later occupied, and the per-kernel figures have data in every row by construction.
-    Below the figure there is no corner to lose, and the legend is in the same place in every
-    figure, which is the point of a shared style.
-
-    The requested column count is a ceiling, not a promise: a row of long labels that does not fit
-    the canvas is wrapped onto more rows until it does. A legend wider than the figure survives a
-    ``bbox_inches="tight"`` save by widening the saved page, which is how the llr-focus40 PDF came
-    out 13.7 inches wide and was then shrunk to the column by the includegraphics width, halving its
-    type while the paper template's own width was the number the figure was built for.
-
-    ``fontsize`` overrides :data:`LABEL_PT` for a figure whose height cannot afford it -- several
-    SQUARE panels joined into one short row still budget the same fixed pixels for the legend as a
-    full-height figure, and LABEL_PT alone would not fit. ``markerscale`` is the swatch's own size
-    against the handle's: the 1.4 default enlarges a swatch so it reads beside authoring-scale type,
-    and at 6.5pt type the same 1.4 makes the swatch taller than the row it sits in.
-
-    ``columnspacing`` and ``handlelength`` (in font sizes) default to a full-width key; a wrap
-    figure passes :data:`COMPACT_KEY` to fit two columns in 2.5in.
-
-    ``span``, the plot body's (left, right) in figure fractions, centres the legend on the body
-    instead of the canvas and makes the BODY's width the limit: a key never runs out past the panels
-    under the Y labels, it drops a column first.
+    The requested column count is a ceiling: a row too wide for the canvas drops a column until it
+    fits. ``fontsize``/``markerscale`` override the defaults for a figure too short to afford them.
+    ``span``, the plot body's (left, right) in figure fractions, makes the body's width the limit
+    instead of the canvas, and centres the legend on it.
     """
     columns = ncol if ncol != 0 else min(len(handles), 5)
     left, right = span if span is not None else (0.0, 1.0)
@@ -295,12 +247,12 @@ def legend_below(
             columnspacing=columnspacing,
             handlelength=handlelength,
             borderaxespad=0.0,
-            # matplotlib's 0.4 pads the key box and read as a blank band under the ticks.
+            # matplotlib's default 0.4 padding reads as a blank band under the ticks.
             borderpad=0.1,
         )
         box = legend.get_window_extent(fig.canvas.get_renderer()).transformed(fig.dpi_scale_trans.inverted())
         if columns <= 1 or box.width <= limit:
-            # FILL the box: the fewest columns that give this many rows (12 entries: 4, not 5).
+            # Fill the box: the fewest columns that give this many rows (12 entries: 4, not 5).
             full = -(-len(handles) // max(1, -(-len(handles) // columns)))
             if full < columns:
                 legend.remove()
@@ -314,13 +266,8 @@ def legend_below(
 def decade_label(value: float, position: int = 0) -> str:
     """A log-axis major as a plain number with a magnitude suffix: 500K, 1M, 2.5M.
 
-    NOT scientific notation. A token count is a quantity a reader compares and quotes, and
-    "$5\\times10^{5}$" makes them do the arithmetic before they can do either -- while
-    matplotlib's own scientific formatter additionally declines to label anything but 1x and 2x of
-    a decade, leaving a rule with a blank where its label belongs.
-
-    Falls back to the plain number below a thousand, so an axis in units of seconds or ratios is
-    not given a suffix it does not want.
+    Not scientific notation: matplotlib's own formatter also declines to label anything but 1x/2x
+    of a decade. Falls back to a plain number below a thousand.
     """
     if value <= 0:
         return ""
@@ -333,10 +280,7 @@ def decade_label(value: float, position: int = 0) -> str:
 
 
 def ratio_tick_label(value: float) -> str:
-    """A ratio tick at full precision: ``0.25 -> "0.25x"``, ``1.0 -> "1x"``, ``4.0 -> "4x"``.
-
-    A ratio below 1 prints as a decimal, so a half-octave tick (0.707) reads correctly.
-    """
+    """A ratio tick at full precision: ``0.25 -> "0.25x"``, ``1.0 -> "1x"``, ``4.0 -> "4x"``."""
     if value == 1.0:
         return "1x"
     if value > 1.0:
@@ -357,19 +301,16 @@ def log2_ratio_tick(value: float, position: int = 0) -> str:
 
 
 def ratio_label(value: float) -> str:
-    """A measured ratio printed beside its mark, to one decimal: ``6.3x``, ``32.5x``, ``0.9x``
-    -- one decimal is what a reader quotes; below 0.1x it would print a real
-    slowdown as ``0.0x``, so those keep one significant figure (``0.04x``). The tick spelling keeps
-    full precision, which beside a mark reads ``6.34919x``."""
+    """A measured ratio to one decimal (``6.3x``, ``32.5x``), or one significant figure below
+    0.1x so a real slowdown does not print as ``0.0x``."""
     if not math.isfinite(value) or value <= 0.0:
         return ""
     return f"{value:.1f}x" if value >= 0.1 else f"{value:.1g}x"
 
 
-#: What a value axis holds, as far as its minor ticks care (:func:`minor_ticks`). ``ratio``: a log2
-#: axis in ratio units, majors at powers of two. ``log2``: a LINEAR axis holding ``log2(ratio)``
-#: (the efficacy speedup axes), majors at whole exponents. ``token``: a log10 token axis.
-#: ``count``: a linear count from 0 to N (the efficacy success row).
+#: What a value axis holds, for minor-tick purposes (:func:`minor_ticks`): ``ratio`` (log2 axis in
+#: ratio units, majors at powers of two), ``log2`` (linear ``log2(ratio)`` axis, majors at whole
+#: exponents), ``token`` (log10 axis), ``count`` (linear count 0..N).
 class MinorKind(enum.Enum):
     RATIO = "ratio"
     LOG2 = "log2"
@@ -377,24 +318,22 @@ class MinorKind(enum.Enum):
     COUNT = "count"
 
 
-#: Where the minors of a ONE-octave ratio axis sit inside each octave, as multiples of its lower
-#: major: the quarters, i.e. the integers 5x, 6x, 7x between 4x and 8x.
+#: Minor positions inside one octave of a ratio axis, as multiples of the lower major (the
+#: integers 5x, 6x, 7x between 4x and 8x).
 OCTAVE_SUBS: tuple[float, ...] = (1.25, 1.5, 1.75)
 
-#: How close, in octaves, two exponents are to count as one: majors come back from a locator as
-#: floats, and a minor landing a rounding error off a major is still that major.
+#: Float tolerance for treating a minor as landing on a major.
 OCTAVE_TOLERANCE: float = 1e-6
 
 
 def ratio_minor_exponents(majors: Sequence[float], low: float, high: float) -> list[float]:
-    """The minor ticks of a ratio axis inside ``[low, high]``; majors, limits and result all in log2
-    units (exponents).
+    """Minor ticks of a ratio axis inside ``[low, high]`` (majors, limits and result all in log2
+    exponent units).
 
-    The spacing is read off ``majors``, never assumed: majors more than an octave apart get a minor
-    at every octave between them (1x, 4x, 16x -> 2x, 8x); majors one octave apart get
-    :data:`OCTAVE_SUBS` inside each octave (1x, 2x -> 1.25x, 1.5x, 1.75x). Fewer than two majors
-    leave no spacing to read, and majors under an octave apart no power of two between them: both
-    get no minors. A minor never lands on a major."""
+    Spacing is read off ``majors``: more than an octave apart gets a minor at every octave between
+    them; one octave apart gets :data:`OCTAVE_SUBS` inside it. Fewer than two majors, or majors
+    under an octave apart, get none.
+    """
     exponents = sorted(set(majors))
     if len(exponents) < 2:
         return []
@@ -408,8 +347,7 @@ def ratio_minor_exponents(majors: Sequence[float], low: float, high: float) -> l
 
 
 def ratio_minor_candidates(step: float, octaves: range) -> list[float]:
-    """Minor exponents over ``octaves`` for majors ``step`` octaves apart: every octave when the
-    majors skip some, :data:`OCTAVE_SUBS` inside each when they are one apart, none when closer."""
+    """Minor exponents over ``octaves`` for majors ``step`` octaves apart."""
     if step > 1.0 + OCTAVE_TOLERANCE:
         return [float(octave) for octave in octaves]
     if step > 1.0 - OCTAVE_TOLERANCE:
@@ -418,8 +356,8 @@ def ratio_minor_candidates(step: float, octaves: range) -> list[float]:
 
 
 def token_minor_values(majors: Sequence[float], low: float, high: float) -> list[float]:
-    """The minor ticks of a log10 token axis inside ``[low, high]``: every whole multiple 1..9 of a
-    power of ten that is not a major (majors 100K, 200K, 500K, 1M -> 300K, 400K, 600K ... 900K)."""
+    """Minor ticks of a log10 token axis inside ``[low, high]``: whole multiples of a power of ten
+    that are not majors."""
     if low <= 0.0 or high <= 0.0:
         return []
     decades = range(math.floor(math.log10(low)), math.ceil(math.log10(high)) + 1)
@@ -429,15 +367,14 @@ def token_minor_values(majors: Sequence[float], low: float, high: float) -> list
     ]  # fmt: skip
 
 
-#: The parts a count axis' major step is split into, first whole-number step wins: quarters, then
-#: fifths, thirds, halves (0/20/40 -> every 5, 0/5/10 -> every 1, 0/9 -> every 3).
+#: Divisions tried for a count axis' major step, first whole-number division wins (quarters,
+#: fifths, thirds, halves).
 COUNT_DIVISIONS: tuple[int, ...] = (4, 5, 3, 2)
 
 
 def count_minor_values(majors: Sequence[float], low: float, high: float) -> list[float]:
-    """The minor ticks of a linear count axis inside ``[low, high]``: the major step split into the
-    first of :data:`COUNT_DIVISIONS` that gives a WHOLE step. A count is a whole number of tasks, so
-    a line at 4.5 of them marks nothing; a step no division splits evenly (a prime N) gets none."""
+    """Minor ticks of a linear count axis inside ``[low, high]``: the major step split into the
+    first of :data:`COUNT_DIVISIONS` that gives a whole step; none if no division is whole."""
     values = sorted(set(majors))
     if len(values) < 2:
         return []
@@ -451,10 +388,7 @@ def count_minor_values(majors: Sequence[float], low: float, high: float) -> list
 
 
 def minor_positions(kind: MinorKind, majors: Sequence[float], low: float, high: float) -> list[float]:
-    """The minors of a ``kind`` axis inside ``[low, high]``, majors and limits in the axis' own
-    units: :func:`ratio_minor_exponents` on the exponents of a ``ratio`` axis (mapped back to
-    ratios) or directly on a ``log2`` one, :func:`token_minor_values` on a ``token`` one,
-    :func:`count_minor_values` on a ``count`` one."""
+    """The minors of a ``kind`` axis inside ``[low, high]``, majors and limits in the axis' own units."""
     if kind == MinorKind.COUNT:
         return count_minor_values(majors, low, high)
     if kind == MinorKind.TOKEN:
@@ -468,9 +402,8 @@ def minor_positions(kind: MinorKind, majors: Sequence[float], low: float, high: 
 
 
 class MinorLocator(Locator):
-    """:func:`minor_positions` as a matplotlib locator, derived at every draw from the axis' CURRENT
-    majors and view: a caller that pins its majors or moves its limits after the axis was styled
-    still gets minors that fit them."""
+    """:func:`minor_positions` as a matplotlib locator, derived fresh from the axis' current majors
+    and view on every draw."""
 
     def __init__(self, kind: MinorKind) -> None:
         self.kind: MinorKind = kind
@@ -490,19 +423,10 @@ class MinorLocator(Locator):
 
 
 def minor_ticks(axis: Axis, kind: MinorKind, color: str = MINOR_RULE, width: float = MINOR_GRID_WIDTH) -> None:
-    """Unlabelled minor ticks and a light minor grid on the VALUE axis ``axis``, by the one rule every
-    figure shares.
+    """Unlabelled minor ticks and a light minor grid on the value axis ``axis``.
 
-    ``ratio``/``log2``: by the spacing of the majors actually set (:func:`ratio_minor_exponents`).
-    ``token``: every whole multiple of a power of ten that is not a major
-    (:func:`token_minor_values`). ``count``: whole-number steps only (:func:`count_minor_values`;
-    majors 0/20/40 -> every 5, 0/5/10 -> every 1).
-
-    The marks point the way the majors do, shorter and thinner (:data:`MINOR_TICK_LENGTH`,
-    :data:`MINOR_TICK_WIDTH` of the major's), and carry NO label: a number at every minor doubles
-    the axis' text, and matplotlib's own log minor formatter prints a scientific-notation 3x10^n
-    beside plain majors. The grid is :data:`MINOR_RULE` at ``width``, under everything. A category
-    axis never takes this: a line between two names measures nothing.
+    Marks point the way majors do, shorter and thinner (:data:`MINOR_TICK_LENGTH`,
+    :data:`MINOR_TICK_WIDTH`), and carry no label. Never used on a category axis.
     """
     axis.set_minor_locator(MinorLocator(kind))
     axis.set_minor_formatter(NullFormatter())
@@ -516,40 +440,23 @@ def minor_ticks(axis: Axis, kind: MinorKind, color: str = MINOR_RULE, width: flo
 
 
 def value_axis(ax: Axes, axis: Literal["x", "y"] = "y", log_base: float = 10.0, major: bool = True) -> None:
-    """Ticks and a major grid for the axis carrying the MEASURED quantity, plus, on a log axis, the
+    """Ticks and a major grid for the axis carrying the measured quantity; on a log axis, also the
     shared minor ruling (:func:`minor_ticks`).
 
-    A LOG axis gets unlabelled minor ticks and a light minor grid: a ratio (log2) axis by its majors'
-    octave spacing, a token (log10)
-    axis at every whole multiple of a power of ten. The majors stay the only labelled reference; the minors are shorter,
-    lighter and unlabelled, so a reader places a mark between two labels without the panel turning
-    into a texture. A LINEAR axis keeps its majors alone: whether it holds ``log2`` units or a
-    0..N count is the caller's to say, to :func:`minor_ticks`. Applied to the value axis only -- the other axis
-    carries names, where a guide line per category measures nothing.
-
-    ``log_base`` is passed rather than sniffed off the axis: matplotlib keeps it on the scale
-    object under a private name, and a wrong guess puts the lines at the wrong ratios -- which
-    looks like a grid and reads as a lie.
+    ``log_base`` is passed rather than read off the axis: matplotlib keeps it under a private name,
+    and a wrong guess puts gridlines at the wrong ratios.
     """
     target: Axis = ax.yaxis if axis == "y" else ax.xaxis
     scale: str = ax.get_yscale() if axis == "y" else ax.get_xscale()
     if scale == "log":
-        # Majors go at 1, 2 and 5 per decade rather than at the decades alone. A panel spanning
-        # less than two decades -- which most token axes here do -- gets exactly ONE labelled tick
-        # under the default locator, and a single number on an axis is nothing to read a value
-        # against. ``log_base`` other than 10 keeps the locator matplotlib gives a base-2 axis,
-        # because a caller on one has usually pinned landmarks of its own that these would
-        # overwrite.
         if major:
-            # A decade gets 1, 2, 5, more than one labelled tick even under two decades. A base-2
-            # (ratio) axis gets 1 ONLY: a 1.5 sub would label 1.5x, 3x, 6x, 0.75x, ... -- ticks a
-            # reader cannot place on a log2 grid by eye (:func:`ratio_tick_label`). The caller widens its own limits (SC15 speedup/ratio axes always
-            # do) so a narrow window still gets more than the one tick this alone would leave it.
+            # A decade gets 1, 2, 5 (more than one labelled tick even under two decades). A base-2
+            # (ratio) axis gets 1 only: a 1.5 sub would label ticks a reader cannot place on a log2
+            # grid by eye (:func:`ratio_tick_label`).
             subs = (1.0, 2.0, 5.0) if log_base == 10.0 else (1.0,)
             target.set_major_locator(LogLocator(base=log_base, subs=subs, numticks=20))
         if log_base == 10.0 and major:
-            # NOT LogFormatterSciNotation: it returns "" for a 5x10^n tick even with
-            # labelOnlyBase=False. This labels every major it is given.
+            # Not LogFormatterSciNotation: it blanks a 5x10^n tick even with labelOnlyBase=False.
             target.set_major_formatter(FuncFormatter(decade_label))
         minor_ticks(target, MinorKind.RATIO if log_base == 2.0 else MinorKind.TOKEN)
     else:
@@ -559,38 +466,35 @@ def value_axis(ax: Axes, axis: Literal["x", "y"] = "y", log_base: float = 10.0, 
     ax.set_axisbelow(True)
 
 
-#: The three layers a paired point mark occupies: fill, then the connector between two conditions
-#: (so it runs through an unfilled mark's white centre, unbroken), then the outline on top.
+#: Draw order for a paired point mark: fill, then the connector between two conditions (through an
+#: unfilled mark's white centre, unbroken), then the outline on top.
 FILL_Z: float = 3.0
 CONNECTOR_Z: float = 4.0
 MARK_Z: float = 5.0
 
-#: How much of a mark's area the NOT-DELIVERED cross covers: the model shape still reads first.
+#: Fraction of a mark's area the not-delivered cross covers; the model shape still reads first.
 CROSS_SCALE: float = 0.45
 
-#: What the cross means, wherever a figure draws one: a 1x placeholder, not a measurement. How a
-#: summary treats it differs by figure, so the legend does not say.
+#: What the cross means, wherever a figure draws one: a 1x placeholder, not a measurement.
 NOT_DELIVERED_LABEL: str = "No Verified Answer (Drawn at 1x)"
 
-#: The PENDING mark: an entry that has not been attempted yet, as opposed to one that ran and failed
-#: (the cross). Drawn only when a figure is asked to (``--mark-pending``); it enters no summary.
+#: An entry not yet attempted (vs. one that ran and failed). Drawn only with ``--mark-pending``;
+#: enters no summary.
 PENDING_MARKER: str = "$?$"
 PENDING_LABEL: str = "Pending"
-#: A glyph fills less of its box than a shape does; this makes a "?" read at a shape's size.
+#: A glyph fills less of its box than a shape does; scales the "?" up to a shape's size.
 PENDING_SCALE: float = 2.2
-#: The artist id every pending mark carries, so a caller can find what was drawn as pending.
+#: The artist gid every pending mark carries, so a caller can find what was drawn as pending.
 PENDING_GID: str = "pending"
 
 
 def edge_width(size: float, widest: float) -> float:
-    """A mark's line width in points: ``widest`` on a full-size mark, thinner on a small one, where a
-    fixed edge fills a hollow mark and swallows its cross."""
+    """A mark's edge line width in points: ``widest`` at full size, thinner on a small one."""
     return min(widest, 0.2 * math.sqrt(size))
 
 
-#: Size factors that give matplotlib's filled markers about the ink of a circle at one ``s``: at equal
-#: ``s`` a triangle covers roughly half a square, so a blind-submission row read smaller than a
-#: CPF row beside it. Shapes not listed (the circle, crosses, stars given as paths) keep ``s``.
+#: Size factors so matplotlib's filled markers match a circle's ink at equal ``s`` (a triangle
+#: otherwise covers about half a square's area). Shapes not listed keep ``s``.
 MARKER_AREA_SCALE: dict[str, float] = {"s": 0.8, "D": 0.85, "d": 1.0, "<": 1.3, ">": 1.3, "^": 1.3, "v": 1.3, "*": 1.5}
 
 
@@ -605,20 +509,12 @@ def point_mark(
     delivered: bool = True,
     clip: bool = True,
 ) -> None:
-    """One point of a two-condition pair, drawn as a white disc plus the mark itself.
+    """One point of a two-condition pair: a white disc under the mark (masks the grid and any
+    connector), then the mark itself.
 
-    The white disc is drawn under a FILLED mark too. It masks the grid and every connector that
-    does not end here, so the only line a reader sees inside a mark is that mark's own -- with a
-    transparent centre, three models' connectors crossing one point read as a mesh.
-
-    ``delivered`` False overlays a small cross on the model's own shape: the point is the 1x
-    placeholder an episode that never verified an answer leaves behind, not a measured 1x. The
-    SHAPE still names the model and the colour still names the intervention -- replacing the shape
-    outright would cost the figure the one channel that survives greyscale. The placeholder is
-    always drawn HOLLOW: a cross in the series' own colour laid over a FILLED mark of that colour
-    is invisible, which drew 34 of 40 PPCG placeholders as if they were measured 1x results.
-
-    ``clip`` False lets a mark on the axis limit print whole across the frame instead of halved.
+    ``delivered=False`` overlays a small cross on the model's own shape, always hollow: a cross in
+    the series' own colour over a filled mark of that colour is invisible. ``clip=False`` lets a
+    mark on the axis limit print whole instead of halved.
     """
     filled = filled and delivered
     size *= MARKER_AREA_SCALE.get(marker, 1.0) if isinstance(marker, str) else 1.0
@@ -652,8 +548,8 @@ def point_mark(
 def pending_mark(
     ax: Axes, x: float, y: float, color: str, size: float = 110.0, transform: Transform | None = None
 ) -> None:
-    """A :data:`PENDING_MARKER` in the series' own colour at ``(x, y)``, in data coordinates unless
-    ``transform`` says otherwise (a row with no value axis centres it on the axes)."""
+    """A :data:`PENDING_MARKER` in ``color`` at ``(x, y)``; data coordinates unless ``transform``
+    says otherwise."""
     extra = {} if transform is None else {"transform": transform}
     ax.scatter(  # pyright: ignore[reportUnknownMemberType]
         x,
@@ -676,11 +572,9 @@ def pending_legend_mark(markersize: float) -> Line2D:
 
 
 def row_axis(ax: Axes, labels: Sequence[str]) -> None:
-    """A categorical y axis with one named row per series, top row first.
+    """A categorical y axis with one named row per series, top row first, no grid.
 
-    The rows are NAMES, so the axis carries no grid and no minor ticks: a guide line per category
-    measures nothing. Limits are set with half a row of air at each end so the topmost and
-    bottommost marks are not clipped by the frame.
+    Limits keep half a row of air at each end so the topmost and bottommost marks are not clipped.
     """
     ax.set_yticks(range(len(labels)))  # pyright: ignore[reportUnknownMemberType]
     ax.set_yticklabels(list(labels), fontsize=LABEL_PT, color=INK)  # pyright: ignore[reportUnknownMemberType]
@@ -690,11 +584,8 @@ def row_axis(ax: Axes, labels: Sequence[str]) -> None:
 
 
 def right_label(ax: Axes, row: int, text: str, color: str = MUTED) -> None:
-    """A short annotation just outside the right edge of ``row`` -- the n a reader needs at the mark.
-
-    Outside the frame rather than inside it: an n printed among the points is one more thing on the
-    value axis, and a reader who is estimating a position has to decide it is not data.
-    """
+    """A short annotation just outside the right edge of ``row`` (e.g. an n), outside the frame so
+    it is never mistaken for data on the value axis."""
     ax.annotate(  # pyright: ignore[reportUnknownMemberType]
         text,
         xy=(1.006, 1.0 - (row + 0.5) / max(len(ax.get_yticks()), 1)),
@@ -707,8 +598,8 @@ def right_label(ax: Axes, row: int, text: str, color: str = MUTED) -> None:
     )
 
 
-#: Per suffix, the metadata that keeps a written figure a function of the figure alone: PDF and SVG
-#: otherwise stamp the time of the write, so two renders of one table differ in every file.
+#: Per-suffix metadata that keeps a written figure a pure function of its content; otherwise PDF
+#: and SVG stamp the time of the write.
 UNDATED: dict[str, dict[str, None]] = {"pdf": {"CreationDate": None}, "svg": {"Date": None}}
 
 #: SVG element ids are hashed with a random salt unless one is fixed.
@@ -720,9 +611,11 @@ PLACED_SIDE_PAD_IN: float = 0.02
 
 
 def fill_width(fig: Figure, pad_in: float = PLACED_SIDE_PAD_IN, rounds: int = 3) -> None:
-    """Stretch the axes horizontally so their ink (tick labels and axis labels included) spans the
-    canvas less ``pad_in`` per side. Figure-level artists (legends, figure texts) stay put, so a
-    figure that places a figure-level label beside its axes must not call this."""
+    """Stretch the axes horizontally so their ink spans the canvas less ``pad_in`` per side.
+
+    Figure-level artists (legends, figure texts) stay put; a figure with a figure-level label
+    beside its axes must not call this.
+    """
     width = float(fig.get_size_inches()[0])
     axes = [ax for ax in fig.axes if ax.get_visible()]
     for _ in range(rounds):

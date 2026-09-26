@@ -13,10 +13,10 @@ FloatArray = npt.NDArray[np.float64]
 
 
 def holm_bonferroni(pvalues: Sequence[float]) -> list[float]:
-    """Holm-Bonferroni step-down ADJUSTED p-values (input order preserved).
+    """Holm-Bonferroni step-down adjusted p-values (input order preserved).
 
-    Controls the family-wise error rate: the probability of even ONE false claim across the
-    family. Uniformly more powerful than plain Bonferroni and assumption-free."""
+    Controls the family-wise error rate (probability of any false claim across the family).
+    """
     p: FloatArray = np.asarray(pvalues, dtype=np.float64)
     n = int(p.size)
     if n == 0:
@@ -30,8 +30,7 @@ def holm_bonferroni(pvalues: Sequence[float]) -> list[float]:
 
 
 def benjamini_hochberg(pvalues: Sequence[float]) -> list[float]:
-    """Benjamini-Hochberg FDR-adjusted p-values (input order preserved), via
-    :func:`scipy.stats.false_discovery_control`."""
+    """Benjamini-Hochberg FDR-adjusted p-values (input order preserved)."""
     p: FloatArray = np.asarray(pvalues, dtype=np.float64)
     if p.size == 0:
         return []
@@ -39,16 +38,9 @@ def benjamini_hochberg(pvalues: Sequence[float]) -> list[float]:
 
 
 def adjust_pvalues(pvalues: Sequence[float], method: str = "fdr_bh") -> list[float]:
-    """Multiplicity-adjusted p-values. ``fdr_bh`` (default) or ``holm``.
-
-    WARNING: The corpus is ~578 kernels. Testing each at alpha=0.05 manufactures ~29 false positives by
-    construction, so an unadjusted per-kernel p-value is not a finding.
-
-    BH FDR is the DEFAULT because the corpus question is a screening one -- "which kernels sped
-    up?" -- where controlling the expected PROPORTION of false discoveries among the claims keeps
-    almost all the power. Holm controls the probability of ANY false claim and is the right
-    choice for a single family-wide assertion ("no kernel regressed"), at a large cost in power
-    over ~578 tests."""
+    """Multiplicity-adjusted p-values: ``fdr_bh`` (default, screening power) or ``holm`` (strict
+    family-wise control). An unadjusted per-kernel p-value over a large corpus is not a finding.
+    """
     if method == "holm":
         return holm_bonferroni(pvalues)
     if method == "fdr_bh":

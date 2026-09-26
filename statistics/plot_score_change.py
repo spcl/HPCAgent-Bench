@@ -1,28 +1,17 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Did an intervention buy speedup, and what did it cost in tokens? One mark per arm, paired
-against its own control.
+"""Did an intervention buy speedup, and what did it cost in tokens? One mark per arm, paired against
+its own control: treated arms against the no-packet arms of the same campaign, or an explicit pair
+list (``--pairs-csv``) for llrblind or git-scicomp style comparisons. Both routes feed the same raw
+tagged frame :mod:`hpcagent_bench.stats.figures.efficacy` draws from.
 
-ONE experiment, split by its own treatment: the treated arms against the no-packet arms of the same
-campaign, or an EXPLICIT pair list (``--pairs-csv``) for a comparison that is not a packet suffix at
-all -- llrblind against its scored arms (two campaigns), or git-scicomp (a kernel/repo scope). Both
-routes end in the same RAW tagged frame :mod:`hpcagent_bench.stats.figures.efficacy` draws from:
-stacked 1-D rows (speedup, solved rate, token cost), one column per (LLM, delivery), each arm's
-mark over the kernels it shares with its own control, with its 95% interval (SC15 Rules 4, 5, 7,
-12 -- see that module's docstring).
+Significance is corrected once per figure: :func:`points` tests every (model, leg) on both axes via
+:func:`hpcagent_bench.stats.summary.paired_geomean`, the p values are Benjamini-Hochberg adjusted
+across the whole family, and the star is gated on the adjusted value.
 
-THE MARKS ARE CORRECTED. One figure is not one test: three models x two languages x two axes is
-twelve paired tests, and twelve uncorrected 5% thresholds paint at least one star on 46% of figures
-where nothing happened. The family is declared once (:func:`points` tests every (model, leg) on both
-axes via :func:`hpcagent_bench.stats.summary.paired_geomean`), the p values are Benjamini-Hochberg
-adjusted across it, and the star is gated on the ADJUSTED value. A leg whose pairing is too small for
-the test to run at all reads ``underpowered`` and is never starred.
-
-Several comparisons join as ONE ROW of columns in one call: repeat ``--treatment``, or give
-several ``--comparison`` specs (``title=...;intervention=...;treatment=...`` or
-``title=...;intervention=...;pairs=<csv>[;control-label=...][;observations=a.csv,b.csv]``) to mix a
-packet-suffix comparison and an explicit-pairs one in the same row. ``comparators=<csv>`` with
-``comparator-set=pluto:C,jax_cpu:C`` adds compiler/framework marks beside a delivery's models.
+Several comparisons join as one row of columns: repeat ``--treatment``, or give several
+``--comparison`` specs (``title=...;intervention=...;treatment=...`` or
+``title=...;intervention=...;pairs=<csv>[;control-label=...][;observations=a.csv,b.csv]``).
 """
 
 import argparse
@@ -40,9 +29,7 @@ from hpcagent_bench.harness import efficacy
 from hpcagent_bench.stats import cost, population, score_rule, style as plotstyle, summary
 from hpcagent_bench.stats.figures import efficacy as efficacy_figures
 
-#: :func:`points`' row shape, so an empty family is an empty DataFrame carrying these columns
-#: rather than one with none at all -- ``pd.DataFrame([])`` has no columns, and ``.dropna(subset=...)``
-#: on THAT raises a bare ``KeyError`` instead of reading as "no (model, leg) pair to draw".
+#: :func:`points`' row shape, so an empty family still carries these columns for ``.dropna`` to use.
 POINT_COLUMNS: tuple[str, ...] = (
     "model",
     "language",
@@ -65,16 +52,8 @@ def compare_slice(
     over: population.KernelPolicy = efficacy_figures.SPEEDUP_OVER,
     card: cost.CostModel | None = None,
 ) -> dict[str, float | str | int] | None:  # fmt: skip
-    """ONE comparison's two geomean ratios (treated over control) and their raw significance p
-    values, over the kernels :func:`~hpcagent_bench.stats.figures.efficacy.paired_kernels` covers --
-    the SAME population the drawn mark's interval is taken over.
-
-    The significance test is :func:`~hpcagent_bench.stats.summary.paired_geomean` on the per-kernel
-    log ratios, which is DIFFERENT from the drawn interval
-    (:func:`~hpcagent_bench.stats.summary.geomean_ci`): the test withholds itself below
-    :data:`~hpcagent_bench.stats.summary.MIN_PAIRS_FOR_INTERVAL` pairs and reports a p value the
-    plain CI does not, which is what the family correction below needs.
-    """
+    """One comparison's two geomean ratios (treated over control) and their raw significance p
+    values, over the kernels :func:`~hpcagent_bench.stats.figures.efficacy.paired_kernels` covers."""
     graded = pd.concat([control, treated])
     graded = graded[graded.record == "submission"]
     population.one_denominator(graded.baseline.tolist(), label=f"{model}/{leg}")
@@ -92,9 +71,7 @@ def compare_slice(
         "score": math.exp(score.estimate) if math.isfinite(score.estimate) else math.nan,
         "cost": math.exp(cost.estimate) if math.isfinite(cost.estimate) else math.nan,
         "kernels": int(timed.sum()),
-        # The raw test. The verdict columns below are what may be read as a finding, and they come
-        # from the whole family at once -- reading a threshold off one row is the multiplicity error
-        # this table exists to avoid.
+        # Raw p values; the corrected verdict columns come from the whole family at once.
         "score_p": score.pvalue,
         "cost_p": cost.pvalue,
     }
@@ -107,12 +84,8 @@ def points(
     over: population.KernelPolicy = efficacy_figures.SPEEDUP_OVER,
     card: cost.CostModel | None = None,
 ) -> pd.DataFrame:
-    """One row per (model, language) present in both sides, with the flags corrected.
-
-    THE FAMILY IS THIS TABLE: every (model, language) the two sides share, on both axes. A leg is a
-    (model, language) BOTH sides landed a GRADED answer for -- an arm that ran and never had a
-    submission persisted is absent rather than entered at zero.
-    """
+    """One row per (model, language) present in both sides, with the flags corrected. An arm that ran
+    but never had a graded submission is absent rather than entered at zero."""
     graded_control, graded_treated = control[control.record == "submission"], treated[treated.record == "submission"]
     keys = sorted(
         set(map(tuple, graded_control[["model", "language"]].drop_duplicates().to_numpy()))
@@ -152,8 +125,7 @@ def corrected(rows: Sequence[dict[str, float | str | int]]) -> pd.DataFrame:
 
 
 def load_all(paths: Sequence[pathlib.Path], card: cost.CostModel = cost.resolve()) -> pd.DataFrame:
-    """Every observations file as one frame, tokens priced by ``card``. A comparison whose two sides
-    are two CAMPAIGNS has them in two extracted files, and a run never copies one into the other's."""
+    """Every observations file as one frame, tokens priced by ``card``."""
     frame = pd.concat([experiments.read_observations(path) for path in paths], ignore_index=True)
     return population.condition_rows(cost.priced(frame, card))
 
@@ -162,15 +134,11 @@ def load(path: pathlib.Path, prefix: str, card: cost.CostModel = cost.resolve())
     frame = population.condition_rows(cost.priced(experiments.read_observations(path), card))
     if prefix:
         frame = frame[frame["arm"].astype(str).str.startswith(prefix)]
-    # NO filter on speedup or tokens here. The two axes come off DIFFERENT record types -- the score
-    # from the graded submissions, the cost from the task rows that carry a token count
-    # (population.kernel_tokens) -- and one predicate over both columns keeps only the rows that have
-    # both, which is neither. That silently dropped every graded submission.
+    # No filter on speedup or tokens here: score and cost come from different record types, and a
+    # predicate over both columns would drop every graded submission.
     #
-    # ``packet`` is the row's RECORDED identity, canonicalized through packets.canonical (aliases
-    # included); blank for a row written before that column existed, which reads as the control --
-    # the arm name is provenance, never parsed for this. ``has_part`` catches a composite too
-    # (``lang-skills+no-score-tool`` still counts as skilled).
+    # ``packet`` is canonicalized through packets.canonical; blank (pre-dating the column) reads as
+    # the control. ``has_part`` also catches a composite like ``lang-skills+no-score-tool``.
     if "packet" not in frame:
         frame = frame.assign(packet="")
     packet = frame["packet"].fillna("").astype(str).map(packets.canonical)
@@ -183,12 +151,7 @@ def load(path: pathlib.Path, prefix: str, card: cost.CostModel = cost.resolve())
 
 
 def control_rows(frame_all: pd.DataFrame) -> pd.DataFrame:
-    """The control side: the arm recording NO packet at all -- canonical packet ``""``.
-
-    NEVER "every arm not carrying a KNOWN treatment": ``packet`` is already
-    :func:`hpcagent_bench.packets.canonical`, which resolves "" for the control from the registry
-    itself, so this needs no list of treatment names at all.
-    """
+    """The control side: the arm recording no packet at all (canonical packet ``""``)."""
     return frame_all[frame_all.packet == ""]
 
 
@@ -224,9 +187,8 @@ def one_treatment_panel(
     over: population.KernelPolicy = efficacy_figures.SPEEDUP_OVER,
     card: cost.CostModel | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame] | None:
-    """``(stats, frame)`` for ONE treatment against ``control``; ``None`` when either side is empty
-    (before or after the roster-completeness gate) or the two share no (model, language). ``frame``
-    is the RAW tagged rows the figure draws from."""
+    """``(stats, frame)`` for one treatment against ``control``; ``None`` when either side is empty
+    or the two share no (model, language)."""
     treated = frame_all[frame_all.packet.map(lambda p: packets.has_part(p, treatment))]
     if control.empty or treated.empty:
         return None

@@ -3,34 +3,20 @@
 
     python3 ablation_stats.py --arm base=a.db --arm profile=b.db --problems 242 --out abl
 
-Every arm ran the SAME kernel set, so the arms are PAIRED by ``submissions.benchmark`` and the
-comparison is a within-kernel one -- a between-arm t-test over unpaired means would throw away the
-pairing and be dominated by the (enormous) between-kernel variance.
+Every arm ran the same kernel set, so arms are paired by ``submissions.benchmark``: did the arm
+solve the kernel at all (paired binary outcome -> exact McNemar), and given both arms solved it,
+how much faster (paired log(speedup) -> Wilcoxon signed-rank)?
 
-Two things are measured, and they are different questions:
+A kernel missing from an arm is a failure there (success = 0, speedup blank), never a zero speedup
+or a dropped row -- which is also why the success denominator is ``--problems``, not the row count.
+Rows flagged ``suspect`` (recording.py: an otherwise verified submission with an implausible
+speedup) are excluded from every dedup mode and counted to stderr.
 
-- did the arm SOLVE the kernel at all (a verified ``submissions`` row exists)? Paired binary
-  outcome -> exact McNemar on the discordant pairs.
-- given both arms solved it, how much FASTER? Paired continuous outcome on log(speedup) -- log
-  because a speedup is a ratio and its log is the symmetric quantity -> Wilcoxon signed-rank.
+Deliberately stdlib-only (no scipy, no numpy): runs on a login node without the benchmark's venv.
+Needs python3.12+.
 
-Censoring is the subtle part: an agent killed by the wall clock leaves NO row at all, so a kernel
-missing from an arm is a FAILURE there (success = 0, speedup blank), never a zero speedup and never
-a dropped row. That is also why the success denominator is ``--problems`` rather than the number of
-rows the DB happens to hold.
-
-Rows the judge flagged as SUSPECT (recording.py: an otherwise verified submission whose speedup is
-implausible, > 1000x or non-finite) are excluded from every dedup mode and counted to stderr. They
-are measurement failures, not results -- one of them taken as an arm's ``best`` would decide the
-comparison by itself.
-
-Deliberately stdlib-only (no scipy, no numpy): this runs on a login node from a shell that never
-activated the benchmark's environment. The two tests are small and implemented exactly. Needs
-python3.12+; the repo venv's python is the recommended interpreter.
-
-Writes ``<prefix>-per-problem.csv`` (one row per kernel, one column pair per arm) and
-``<prefix>-pairs.csv`` (one row per arm pair per test). A single arm is legal: the per-problem CSV
-is still written and the pairs CSV holds just its header.
+Writes ``<prefix>-per-problem.csv`` (one row per kernel) and ``<prefix>-pairs.csv`` (one row per
+arm pair per test); a single arm still writes both, the pairs CSV with just its header.
 """
 
 import argparse
@@ -47,15 +33,10 @@ import sys
 PER_PROBLEM_SUFFIX = "-per-problem.csv"
 PAIRS_SUFFIX = "-pairs.csv"
 
-#: The pairs CSV, grouped so that reading ACROSS never crosses two parameters.
-#:
-#: ``p_value`` and ``q_value`` test exactly one quantity, and ``parameter`` names it: the paired
-#: Hodges-Lehmann log ratio, whose point and interval sit immediately before them. Everything after
-#: ``rho_score`` is a SECOND quantity -- ratios of geometric means, that is ``exp`` of the MEAN of
-#: the same logs -- with its own bootstrap interval and no test of its own. The two are not
-#: interchangeable: on the pooled C/Fortran set (n = 97, skew -0.49) they land on opposite sides of
-#: 1.0, so a row that let a reader take the effect from one and the significance from the other
-#: would state something neither supports.
+#: The pairs CSV, grouped so reading across a row never crosses two different tested parameters.
+#: ``p_value``/``q_value`` test the Hodges-Lehmann log ratio named by ``parameter``; everything
+#: from ``rho_score`` on is a second, untested quantity (a ratio of geometric means) with its own
+#: bootstrap interval.
 PAIR_COLUMNS = (
     "arm_a",
     "arm_b",
@@ -98,16 +79,13 @@ PAIR_COLUMNS = (
 HL_PARAMETER = "hl_log_speedup_ratio"
 SUCCESS_PARAMETER = "success_discordance"
 
-#: The columns that describe the SPEED and COST effect. Blank on the success row: its p value tests
-#: the discordant counts, and an effect repeated beside it is an effect a reader can quote with the
-#: wrong test attached.
+#: The speed/cost effect columns. Blank on the success row, whose p_value tests the discordant
+#: counts and would otherwise sit beside an effect it says nothing about.
 EFFECT_COLUMNS = PAIR_COLUMNS[PAIR_COLUMNS.index("rho_score") :]
 
-#: Resamples for the paired bootstrap interval, its confidence level, and the seed that makes it
-#: reproducible. FIXED seed: these bounds go in a paper, so the same DBs must give the same interval
-#: on a rerun. Mirrors hpcagent_bench.harness.efficacy, which is the definition of record --
-#: test_ablation_stats.py cross-checks the two, because this file cannot import it (see the module
-#: docstring: stdlib-only, it runs on a login node from a shell that has no venv).
+#: Resamples, confidence level, and a fixed seed for the paired bootstrap interval, so the same DBs
+#: give the same interval on a rerun. Mirrors hpcagent_bench.harness.efficacy (this file cannot
+#: import it; stdlib-only, see the module docstring).
 BOOTSTRAP_RESAMPLES = 10000
 CONFIDENCE = 0.95
 BOOTSTRAP_SEED = 20260908
@@ -130,42 +108,27 @@ def parse_arm(spec: str) -> tuple[str, str]:
 
 
 def table_exists(conn: sqlite3.Connection, table: str) -> bool:
-    """``sqlite3.connect`` CREATES an absent file, so a reader pointed at a path no writer ever
-    touched gets a valid empty connection and only learns one query later, as ``no such table``,
-    with neither the path nor the missing writer named. Ask first and the caller can say so."""
+    """Whether ``table`` exists. ``sqlite3.connect`` silently creates an absent file, so this turns
+    a bare later ``no such table`` into an error that names the path."""
     row = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()
     return row is not None
 
 
 def column_exists(conn: sqlite3.Connection, table: str, column: str) -> bool:
-    """Same courtesy as :func:`table_exists`, one level down: a DB written before a column existed
-    would fail the query with ``no such column`` and name neither the DB nor the missing writer."""
+    """Whether ``column`` exists on ``table``, same courtesy as :func:`table_exists` one level down."""
     return any(row[1] == column for row in conn.execute(f"PRAGMA table_info({table})"))
 
 
 def load_arm(name: str, path: str, dedup: str) -> tuple[dict[str, float], set[str]]:
     """One arm's ``(benchmark -> speedup, benchmarks seen)``.
 
-    ``submissions`` rows are verified by construction (recording.py writes a row only after the
-    independent rebuild + re-run passes), so no correctness filter is needed here -- the row's
-    EXISTENCE is the success. One exception: ``suspect`` marks a row the judge verified but whose
-    speedup is implausible (recording.py:118). Such a row is a broken MEASUREMENT, so it is dropped
-    from BOTH dedup modes -- left in, a single 1e6 would win every ``best`` it touched and move the
-    arm's median -- and the count is reported to stderr rather than dropped silently. Its kernel
-    still counts as SEEN: the evidence exists, it just cannot be believed, so the kernel reads as
-    censored (success 0) instead of vanishing from the universe.
-
-    A kernel is deduped to one number by one of three rules. ``final`` (the default) is the
-    reduction the published tables use: the LAST submission of each episode, then the max over the
-    arm's episodes -- the agent's own final answer, best over the arm's agents. ``best`` takes the
-    fastest verified submission anywhere in the arm, which scores best-of-N and pays out by how often
-    an agent resubmitted. ``last`` takes the final row per kernel across ALL agents, which is
-    whichever agent submitted last. The last two are sensitivity analyses, and neither is the number
-    ``scripts/collect_campaign.py`` publishes.
-
-    The second return value is every kernel the arm has any evidence for -- a verified submission OR
-    a failed ``attempts`` row -- which is how a kernel that no arm ever solved still gets a name in
-    the per-problem CSV instead of vanishing.
+    A ``submissions`` row's existence is the success (rows are pre-verified); ``suspect`` rows
+    (implausible speedup, recording.py) are dropped from every dedup mode but still count as seen,
+    so the kernel reads as censored rather than vanishing. ``dedup`` picks the reduction: ``final``
+    (default, what published tables use) is the last submission per episode maxed over the arm's
+    episodes; ``best`` is the fastest verified submission anywhere; ``last`` is the last row per
+    kernel across all agents. ``seen`` is every kernel with any evidence, verified or a failed
+    ``attempts`` row, so an unsolved kernel still gets a name in the per-problem CSV.
     """
     conn = sqlite3.connect(f"file:{pathlib.Path(path).resolve()}?mode=ro", uri=True)
     try:
@@ -197,12 +160,8 @@ def load_arm(name: str, path: str, dedup: str) -> tuple[dict[str, float], set[st
                 f"WHERE speedup IS NOT NULL{suspect_filter} GROUP BY benchmark"
             ).fetchall()
         elif dedup == "final":
-            # The agent's own final answer, then the best of the arm's agents. Ordered ascending and
-            # folded per EPISODE, so the last row of each agent wins and the agents are then maxed --
-            # `last` folds per kernel across agents instead, which returns whichever agent happened
-            # to submit last. The episode is (run_id, benchmark) because one DB is one JOB;
-            # run_id is derived from the rank layout and repeats across jobs, so a DB merged from
-            # several jobs cannot identify an episode and must be split before it reaches here.
+            # Folded per episode (run_id, benchmark) so the last row of each agent wins, then maxed
+            # over episodes. run_id repeats across jobs, so a multi-job DB must be split beforehand.
             episodes: dict[tuple[str, str], float] = {}
             for run_id, bench, value in conn.execute(
                 "SELECT run_id, benchmark, speedup FROM submissions "
@@ -214,8 +173,7 @@ def load_arm(name: str, path: str, dedup: str) -> tuple[dict[str, float], set[st
                 per_kernel[bench] = max(value, per_kernel.get(bench, value))
             rows = list(per_kernel.items())
         else:
-            # ordered ascending and folded into a dict, so the LAST row per kernel wins; id breaks a
-            # ts tie deterministically (two submissions can land in the same millisecond).
+            # Folded into a dict ordered by (ts, id), so the last row per kernel wins; id breaks ties.
             rows = conn.execute(
                 f"SELECT benchmark, speedup FROM submissions WHERE speedup IS NOT NULL{suspect_filter} ORDER BY ts, id"
             ).fetchall()
@@ -229,22 +187,15 @@ def load_arm(name: str, path: str, dedup: str) -> tuple[dict[str, float], set[st
 
 
 def load_arm_costs(name: str, path: str) -> dict[str, float]:
-    """One arm's ``benchmark -> total tokens`` in BILLED tokens, the COST half of the efficacy pair.
+    """One arm's ``benchmark -> total billed tokens``, the cost half of the efficacy pair.
 
-    ``calls.tokens`` is CUMULATIVE through a call, so an episode's spend is its own maximum and a
-    kernel's is the sum of its episodes' -- summing the rows would count every earlier call again,
-    once per later one, and inflate a long repair loop quadratically. A DB written before the calls
-    table, or one whose agent never reported tokens, yields an empty mapping and the pair simply
-    reports no cost half rather than a fabricated one.
+    ``calls.tokens`` is cumulative through a call, so an episode's spend is its own maximum and a
+    kernel's is the sum over its episodes; summing the raw rows would double-count. A DB with no
+    ``calls`` table, or an agent that never reported tokens, yields an empty mapping rather than a
+    fabricated cost.
 
-    BILLED, not effective, and the two differ by ~40x with a 2.7x spread that tracks turn count
-    (docs/token_accounting.md). The effective total lives on the extraction's ``task`` rows, which
-    this script never sees: a merged RESULTS database holds ``submissions``/``attempts``/``calls``
-    and nothing else, and reading the observations table instead is a change to what ``--arm`` means.
-    ``statistics/paired_arms.py`` is the comparison that costs a kernel in effective tokens
-    (``population.kernel_tokens``); prefer it wherever both arms have been extracted. With
-    ``--observations`` this script reads that same definition instead (:func:`load_effective_costs`)
-    and ``rho_cost`` is an effective-token ratio; without it, read ``rho_cost`` as billed.
+    Billed, not effective (the two differ by roughly 40x). With ``--observations``,
+    :func:`load_effective_costs` is used instead and ``rho_cost`` is an effective-token ratio.
     """
     conn = sqlite3.connect(f"file:{pathlib.Path(path).resolve()}?mode=ro", uri=True)
     try:
@@ -265,17 +216,13 @@ def load_arm_costs(name: str, path: str) -> dict[str, float]:
 def load_effective_costs(
     names: list[str], observations: str, cost_model: str | None = None
 ) -> dict[str, dict[str, float]]:
-    """Every arm's ``benchmark -> tokens`` off an extracted observations file, priced with the
-    ``cost_model`` card (``hpcagent_bench.stats.cost``, ``DEFAULT_COST_MODEL`` when None) under the ONE definition every
-    published token figure uses (``population.kernel_tokens``: the task row's final-attempt total, a
-    rerun reduced to the latest run).
+    """Every arm's ``benchmark -> tokens`` off an extracted observations file, priced with
+    ``cost_model`` (``hpcagent_bench.stats.cost``, default when None) under the same definition
+    every published token figure uses (``population.kernel_tokens``).
 
-    The rest of this file is stdlib-only on purpose; this branch is the one that needs pandas, so the
-    imports are local to it and a run without ``--observations`` never pays for them. An arm named
-    by ``--arm`` that the observations file does not carry costs nothing, and the pair reports no
-    cost half rather than a fabricated one.
+    Needs pandas, so the imports are local to this branch; a run without ``--observations`` never
+    pays for them.
     """
-    # Local imports: only this code path needs pandas, see the docstring.
     from hpcagent_bench import experiments as bench_experiments
     from hpcagent_bench.stats import cost, population
 
@@ -303,15 +250,12 @@ def standard_error(values: list[float]) -> float:
 
 
 def bootstrap_interval(deltas: list[float], seed: int = BOOTSTRAP_SEED) -> tuple[float, float]:
-    """Symmetric studentized bootstrap interval for ``mean(deltas)``, in LOG space.
+    """Symmetric studentized bootstrap interval for ``mean(deltas)``, in log space.
 
-    Resampling the per-kernel ``d_i`` is what makes it paired: a kernel enters a resample with both
-    arms' numbers together, so the correlation between two answers to the same question is carried.
-    Each resample's mean is studentized by that resample's own standard error, and the interval is
-    ``mean +- q * se`` with ``q`` the ``CONFIDENCE`` quantile of ``|t*|``. A resample with no spread
-    has an unbounded ``|t*|``, so a few tied kernels widen the interval to infinity instead of
-    narrowing it. No spread at all returns a degenerate interval at the mean. Draw for draw the same
-    as hpcagent_bench.harness.efficacy.bootstrap_interval.
+    Resampling the per-kernel ``d_i`` together keeps the pairing. Each resample's mean is
+    studentized by its own standard error (``mean +- q * se``, ``q`` the ``CONFIDENCE`` quantile of
+    ``|t*|``), so a tied resample has an unbounded ``|t*|`` and widens the interval rather than
+    narrowing it. No spread at all returns a degenerate interval at the mean.
     """
     if not deltas:
         return (float("nan"), float("nan"))
@@ -343,15 +287,11 @@ def log_to_pct(value: float) -> float:
 def ratio_columns(prefix: str, deltas: list[float]) -> dict[str, object]:
     """The geometric-mean columns for one quantity, from its per-kernel log deltas.
 
-    ``d_i`` is oriented so positive always means the intervention HELPED, for a cost as for a score,
-    which is why one code path serves both. ``rho`` is ``exp(mean(d))`` -- the ratio of the two
-    geometric means -- and the median and the win/loss counts are the heavy-tail checks a mean of
-    logs cannot make on its own: one kernel that moved 40x can carry an arm whose others did not.
-
-    These columns carry NO test. The bootstrap interval here bounds the mean and nothing else; it
-    covers a zero-mean null with this repo's delta shape on 0.95-0.99 of samples over n = 4..40, and
-    at n = 4 about a fifth of its intervals are unbounded. The tested quantity is the Hodges-Lehmann
-    ratio, which has its own point, its own interval and the ``p_value`` beside them.
+    ``d_i`` is oriented so positive always means the intervention helped, for cost as for score, so
+    one code path serves both. ``rho`` is ``exp(mean(d))``; the median and win/loss counts are the
+    heavy-tail check a mean of logs cannot make alone. These columns carry no test -- the bootstrap
+    interval bounds the mean only, while the tested quantity is the Hodges-Lehmann ratio reported
+    beside ``p_value``.
     """
     if not deltas:
         keys = ("pct", "ci_low_pct", "ci_high_pct", "median_delta", "wins", "losses")

@@ -2,21 +2,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Weak- and strong-scaling figures for the distributed ML-op track.
 
-Reads one selection of observations (``--experiment`` for an arm prefix, ``--arm`` for a further
-regex) and draws its scaling curves (:mod:`hpcagent_bench.stats.figures.scaling`): parallel
-efficiency eta(P), speedup sigma(P), the per-kernel small multiples, and the per-arm geomean eta
-with its interval. Every figure writes a PDF, a PNG and the CSV behind the marks, plus a second CSV
-naming every point the sweep did not measure and every curve too short to draw.
-
-Usage::
-
-    python statistics/plot_scaling.py obs.csv --experiment mlscale
-    python statistics/plot_scaling.py obs.csv --experiment mlscale --figure efficiency
-    python statistics/plot_scaling.py obs.csv --experiment mlscale --figure per-kernel --mode weak
-    python statistics/plot_scaling.py obs.csv --arm 'mlscale-(weak|strong)-qwen38-hip'
-
-The torch.distributed baseline curve (arm ``torch_dist``, read off the grade job's
-``baseline_points`` rows) is drawn beside the selected arms; ``--no-torch-dist`` leaves it out.
+Selects observations by ``--experiment`` prefix and ``--arm`` regex, then draws parallel
+efficiency, speedup, per-kernel small multiples, and per-arm geomean curves. Each figure writes a
+PDF, a PNG, and the CSV behind the marks plus one listing points the sweep never measured.
 """
 
 import argparse
@@ -29,7 +17,7 @@ from hpcagent_bench import experiments
 from hpcagent_bench.stats import style as plotstyle
 from hpcagent_bench.stats.figures import scaling
 
-#: ``--figure`` choices. ``all`` draws every one of them in a single pass over the frame.
+#: ``--figure`` choices; ``all`` draws every one in a single pass.
 FIGURES: tuple[str, ...] = (
     "all",
     "efficiency",
@@ -41,9 +29,8 @@ FIGURES: tuple[str, ...] = (
 
 
 def load(path: pathlib.Path, prefix: str, arm: str, torch_dist: bool = True) -> pd.DataFrame:
-    """The observations frame, narrowed to one experiment prefix and one arm regex. The
-    torch.distributed baseline curve's rows (arm ``torch_dist``: no experiment's arm) are kept
-    beside the selection unless ``torch_dist`` is False."""
+    """The observations frame, narrowed to one experiment prefix and one arm regex; keeps the
+    torch.distributed baseline rows (arm ``torch_dist``) unless ``torch_dist`` is False."""
     frame = experiments.read_observations(path)
     names = frame["arm"].astype(str)
     keep = pd.Series(True, index=frame.index)
@@ -163,8 +150,7 @@ def main() -> None:
     if not curves:
         raise SystemExit(f"no scaling rows for experiment={args.experiment!r} arm={args.arm!r}")
 
-    # A recorded eta that disagrees with the formula behind it means one of the two is wrong, and
-    # no figure drawn from either is worth reading -- so this refuses rather than drawing it.
+    # a recorded eta that disagrees with the formula behind it means one of them is wrong
     mismatched = scaling.disagreements(frame)
     if mismatched:
         lines = "\n".join(
