@@ -540,12 +540,11 @@ def test_the_full_ci_sweep_runs_numba_over_every_kernel() -> None:
     beside the whole gated corpus."""
     workflow = yaml.safe_load((paths.ROOT / ".github" / "workflows" / "tests.yml").read_text())
     job = workflow["jobs"]["e2e"]
-    assert any(leg["backend"] == "numba" for leg in job["strategy"]["matrix"]["include"])
     sweeps = [s for s in job["steps"] if "tests/test_e2e_numerical.py" in str(s.get("run", ""))]
     assert sweeps, "the e2e job no longer runs tests/test_e2e_numerical.py"
+    assert any((s.get("env") or {}).get("HPCAGENT_BENCH_E2E_BACKENDS") == "numba" for s in sweeps)
     for step in sweeps:
         env = step.get("env") or {}
-        assert env.get("HPCAGENT_BENCH_E2E_BACKENDS") == "${{ matrix.backend }}"
         assert "workflow_dispatch' && '0'" in str(env.get("HPCAGENT_BENCH_E2E_SUBSET")), (
             "a dispatched run must sweep the whole corpus, not the per-push slice"
         )

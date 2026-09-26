@@ -11,7 +11,7 @@ scripts/ci_mi200.sbatch). Legs run concurrently, each step under ``timeout``; th
 line per step plus the failing test ids, in ``<out>/summary.txt``.
 
     python scripts/ci_replay.py --list
-    python scripts/ci_replay.py --out ci-out --parallel 8 --skip lint,coverage,container-image/6a
+    python scripts/ci_replay.py --out ci-out --parallel 8 --skip lint,coverage,integration/Phase 6 -- container launch
     python scripts/ci_replay.py --jobs unit --matrix shard=0
 
 A leg with a ``python`` matrix value runs only on that interpreter (the one running this script).

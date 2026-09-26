@@ -148,18 +148,10 @@ jobs:
 
   e2e:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
-    name: e2e[${{ matrix.backend }}] (numerical sweep @ S)
+    # One runner, one backend per step: each sweep takes ~6 min, well inside the unit shards'
+    # critical path, and three legs held three runners mostly for setup.
+    name: e2e[numba, jax, pythran] (numerical sweep @ S)
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # --timeout stays above numerical_oracle.PY_FORK_TIMEOUT_S (600) so the oracle's own
-          # SIGKILL reports skip:too-long first.
-          - { backend: numba, workers: auto, timeout: 900 }
-          - { backend: jax, workers: auto, timeout: 900 }
-          # One pythran compile peaks at ~7 GB: two at once exhaust the 16 GB runner.
-          - { backend: pythran, workers: 1, timeout: 600 }
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
@@ -167,26 +159,47 @@ jobs:
           submodules: recursive
       - uses: ./.github/actions/setup
         with:
-          ccache: e2e-${{ matrix.backend }}
-      - name: Phase 5 -- e2e numerical sweep [${{ matrix.backend }}] @ S
+          ccache: e2e
+      # --timeout stays above numerical_oracle.PY_FORK_TIMEOUT_S (600) so the oracle's own
+      # SIGKILL reports skip:too-long first.
+      - name: Phase 5 -- e2e numerical sweep [numba] @ S
         if: ${{ !cancelled() }}
-        timeout-minutes: 38
+        timeout-minutes: 12
         env:
-          HPCAGENT_BENCH_E2E_BACKENDS: "${{ matrix.backend }}"
+          HPCAGENT_BENCH_E2E_BACKENDS: "numba"
           HPCAGENT_BENCH_E2E_SUBSET: ${{ github.event_name == 'workflow_dispatch' && '0' || '1' }}
         run: |
-          python -m pytest -p no:cacheprovider -rfEs -n ${{ matrix.workers }} --dist loadgroup --durations=25 \
-            --timeout=${{ matrix.timeout }} tests/test_e2e_numerical.py
+          python -m pytest -p no:cacheprovider -rfEs -n auto --dist loadgroup --durations=25 \
+            --timeout=900 tests/test_e2e_numerical.py
+      - name: Phase 5 -- e2e numerical sweep [jax] @ S
+        if: ${{ !cancelled() }}
+        timeout-minutes: 12
+        env:
+          HPCAGENT_BENCH_E2E_BACKENDS: "jax"
+          HPCAGENT_BENCH_E2E_SUBSET: ${{ github.event_name == 'workflow_dispatch' && '0' || '1' }}
+        run: |
+          python -m pytest -p no:cacheprovider -rfEs -n auto --dist loadgroup --durations=25 \
+            --timeout=900 tests/test_e2e_numerical.py
+      # One pythran compile peaks at ~7 GB: two at once exhaust the 16 GB runner.
+      - name: Phase 5 -- e2e numerical sweep [pythran] @ S
+        if: ${{ !cancelled() }}
+        timeout-minutes: 12
+        env:
+          HPCAGENT_BENCH_E2E_BACKENDS: "pythran"
+          HPCAGENT_BENCH_E2E_SUBSET: ${{ github.event_name == 'workflow_dispatch' && '0' || '1' }}
+        run: |
+          python -m pytest -p no:cacheprovider -rfEs -n 1 --dist loadgroup --durations=25 \
+            --timeout=600 tests/test_e2e_numerical.py
       - uses: ./.github/actions/finish
         if: always()
         with:
-          coverage: e2e-${{ matrix.backend }}
+          coverage: e2e
 
   # The @pytest.mark.integration tests under tests/ (build and run real artifacts). The translator
   # tree's half of the marker runs in `translators`.
   integration:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
-    name: integration (build/run real artifacts)
+    name: integration + agent-bench + container launch (build/run real artifacts, sudoless Apptainer)
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -211,7 +224,7 @@ jobs:
 
       - name: Phase 6 -- integration-marked tests under tests/
         if: ${{ !cancelled() }}
-        timeout-minutes: 30
+        timeout-minutes: 25
         # test_dace_numeric_agreement.py has no integration test, but collecting it emits the whole
         # corpus at import time; dace-numeric runs it. tests/translators/ is the `translators` job's.
         run: |
@@ -225,6 +238,40 @@ jobs:
         with:
           path: ${{ github.workspace }}/.openblas-cache/openblas-openmp/install
           key: openblas-openmp-v0.3.29-${{ runner.os }}-${{ env.CPU_KEY }}
+
+      - name: Setup -- Apptainer (sudoless install script)
+        run: |
+          # The rootless path HPC targets use, through the shipped hpcagent-bench-install-apptainer.
+          sudo apt-get install -y rpm2cpio cpio uidmap
+          hpcagent-bench-install-apptainer "$HOME/apptainer"
+          echo "$HOME/apptainer/bin" >> "$GITHUB_PATH"
+          if ! unshare --user --map-root-user true 2>/dev/null; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+
+      - name: Phase 6 -- container launch (sudoless launch script, unprivileged Apptainer)
+        if: ${{ !cancelled() }}
+        timeout-minutes: 3
+        run: |
+          # The two-container e2e needs a judge SIF, which no runner builds.
+          python -m pytest -v -p no:cacheprovider -rfEs --timeout=300 tests/test_container_launch.py \
+            --deselect tests/test_container_launch.py::test_two_containers_judge_and_agent_via_tools
+
+      - name: Phase 3 -- agent-bench (tools + no-op/BLAS optimizers, both modes, in-proc judge)
+        if: ${{ !cancelled() }}
+        timeout-minutes: 8
+        run: |
+          python -m pytest -q -p no:cacheprovider -rfEs --timeout=600 \
+            tests/test_agent_tools.py \
+            tests/test_noop_optimizer.py \
+            tests/test_blas_optimizer.py \
+            tests/test_agent_service.py \
+            tests/test_token_usage.py \
+            tests/test_harbor.py \
+            tests/test_packaging.py \
+            tests/test_optimizer_plugin.py \
+            tests/test_agent_bench.py
+
       - uses: ./.github/actions/finish
         if: always()
         with:
@@ -285,7 +332,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [ 0 ]
+        shard: [ 0, 1 ]
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
@@ -294,9 +341,9 @@ jobs:
       - uses: ./.github/actions/setup
       - name: Phase 8 -- the DaCe frontend still reads what the generator emits
         if: ${{ !cancelled() }}
-        timeout-minutes: 18
+        timeout-minutes: 20
         env:
-          HPCAGENT_BENCH_DACE_PARSE_SHARD: "${{ matrix.shard }}/1"
+          HPCAGENT_BENCH_DACE_PARSE_SHARD: "${{ matrix.shard }}/2"
         run: |
           lscpu | grep -E "^(Model name|CPU\(s\)|Thread|Core)" || true
           python -m pytest -q -p no:cacheprovider -rfsxX -m dace_frontend \
@@ -307,7 +354,7 @@ jobs:
         # Emit once (prewarm) before xdist forks.
         timeout-minutes: 25
         env:
-          HPCAGENT_BENCH_DACE_PARSE_SHARD: "${{ matrix.shard }}/1"
+          HPCAGENT_BENCH_DACE_PARSE_SHARD: "${{ matrix.shard }}/2"
           # The work runs in spawned children that coverage does not measure.
           PYTEST_ADDOPTS: ""
         run: |
@@ -451,53 +498,6 @@ jobs:
   # is built here: every image under containers/images/ takes longer than a runner allows and gates
   # itself at build time (build_and_verify.sbatch); the unit sweep holds their recipes to the
   # contract statically (tests/test_firewall.py, tests/test_image_*.py).
-  container-image:
-    if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
-    name: agent-bench + container launch (sudoless Apptainer)
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-      - uses: ./.github/actions/setup
-
-      - name: Setup -- Apptainer (sudoless install script)
-        run: |
-          # The rootless path HPC targets use, through the shipped hpcagent-bench-install-apptainer.
-          sudo apt-get install -y rpm2cpio cpio uidmap
-          hpcagent-bench-install-apptainer "$HOME/apptainer"
-          echo "$HOME/apptainer/bin" >> "$GITHUB_PATH"
-          if ! unshare --user --map-root-user true 2>/dev/null; then
-            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          fi
-
-      - name: Phase 6 -- container launch (sudoless launch script, unprivileged Apptainer)
-        if: ${{ !cancelled() }}
-        timeout-minutes: 3
-        run: |
-          # The two-container e2e needs a judge SIF, which no runner builds.
-          python -m pytest -v -p no:cacheprovider -rfEs --timeout=300 tests/test_container_launch.py \
-            --deselect tests/test_container_launch.py::test_two_containers_judge_and_agent_via_tools
-
-      - name: Phase 3 -- agent-bench (tools + no-op/BLAS optimizers, both modes, in-proc judge)
-        if: ${{ !cancelled() }}
-        timeout-minutes: 8
-        run: |
-          python -m pytest -q -p no:cacheprovider -rfEs --timeout=600 \
-            tests/test_agent_tools.py \
-            tests/test_noop_optimizer.py \
-            tests/test_blas_optimizer.py \
-            tests/test_agent_service.py \
-            tests/test_token_usage.py \
-            tests/test_harbor.py \
-            tests/test_packaging.py \
-            tests/test_optimizer_plugin.py \
-            tests/test_agent_bench.py
-
-      - uses: ./.github/actions/finish
-        if: always()
-        with:
-          coverage: container-image
-
   # The MPI track (OpenMPI + a source-built mpi4py), plus port fidelity, the benchmark reference
   # validators, the torch agreement sweeps and the sealed grading child.
   mpi:
@@ -693,10 +693,12 @@ jobs:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
     name: njit-oracle (the compiled numpy reference vs the interpreted one)
     runs-on: ubuntu-latest
+    # One runner deals both halves ("0,1" of 2): each takes ~6 min. Split the hands again here if
+    # the file outgrows one runner.
     strategy:
       fail-fast: false
       matrix:
-        shard: [ "0", "1" ]
+        shard: [ "0,1" ]
     timeout-minutes: 45
     env:
       # Read by tests/test_njit_reference.py::shard (an index list over a count).
@@ -716,7 +718,7 @@ jobs:
       - uses: ./.github/actions/finish
         if: always()
         with:
-          coverage: njit-oracle-${{ matrix.shard }}
+          coverage: njit-oracle
 
   # Hardware-marked tests and the GPU codegen columns on a real GPU. Manual only: a self-hosted
   # GPU runner is not always attached. scripts/ci_mi200.sbatch runs the same steps on a cluster node.
@@ -757,7 +759,7 @@ jobs:
     if: ${{!cancelled()}}
     name: coverage (combined total)
     # Every job that uploads coverage data, or the total is built from a subset.
-    needs: [ unit, e2e, integration, translators, native, container-image, mpi, dace-numeric,
+    needs: [ unit, e2e, integration, translators, native, mpi, dace-numeric,
              dace-frontend, njit-oracle ]
     runs-on: ubuntu-latest
     timeout-minutes: 30

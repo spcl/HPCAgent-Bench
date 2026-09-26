@@ -35,7 +35,7 @@ trap 'rm -rf "${tmp}"' EXIT
 
 if [[ $# -eq 0 ]]; then
     set -- --ci --out "${CI_OUT:-${SCRATCH}/ci-replay/${job}}" --parallel "${CI_PARALLEL:-12}" \
-        --skip "coverage,container-image/Phase 6a,container-image/Phase 6b"
+        --skip "coverage,integration/Phase 6 -- container launch"
 fi
 
 # dace: the image's /opt/dace at the job's commit (containers/images/dace_refresh.sh).
