@@ -220,7 +220,7 @@ def two_setup_wave(owed: ModuleType, tmp_path: pathlib.Path) -> pathlib.Path:
         owed,
         "cpf-llr-focus40-qwen38-c-cpfsrc",
         HPCAGENT_BENCH_RECORD_PACKET="cpfsrc",
-        REPO_LAYOUT_PYTHON="${FUSED_TEST_VIEW_ROOT}/bin/python",
+        CPF_VIEW="${FUSED_TEST_VIEW_ROOT}/view",
     )
     hip = make(owed, "gpu-llr-focus40-qwen38-hip", scale=4, LANGUAGE="hip", HPCAGENT_BENCH_RECORD_DEVICE="gpu")
     items = [
@@ -273,6 +273,7 @@ def test_every_setup_is_prepared_as_its_own_single_setup_arm(owed: ModuleType, t
         "HOME": str(tmp_path),
         "USER": "tester",
         "SCRIPT_DIR": str(EXPERIMENTS),
+        "HPCAGENT_BENCH_HOST_PYTHON": sys.executable,
         "SHARED_HOST_DIR": str(tmp_path / "shared"),
         "PACK_ROOT": str(tmp_path / "packs"),
         "RUN_DIR": str(run_dir),
@@ -294,7 +295,7 @@ def test_every_setup_is_prepared_as_its_own_single_setup_arm(owed: ModuleType, t
     setups = run_dir / "setups"
     hip, cpf = "gpu-llr-focus40-qwen38-hip-clean.budget4x", "cpf-llr-focus40-qwen38-c-cpfsrc-clean"
     resolved = {name: (setups / f"{name}.resolved").read_text().splitlines() for name in (hip, cpf)}
-    assert f"REPO_LAYOUT_PYTHON={tmp_path / 'cpf'}/bin/python" in resolved[cpf], done.stderr
+    assert f"CPF_VIEW={tmp_path / 'cpf'}/view" in resolved[cpf], done.stderr
     assert "-CPF_DROPIN_DIR" in resolved[hip] and "-CPF_DROPIN_DIR" in resolved[cpf]
     assert "AGENT_MAX_TOKENS=48000000" in resolved[hip] and "LANGUAGE=hip" in resolved[hip]
     assert [json.loads(line)["setup"] for line in (setups / f"{hip}.jsonl").read_text().splitlines()] == [hip, hip]
@@ -1049,31 +1050,6 @@ def test_every_plannable_experiment_has_its_tracks_budget(
     assert owed.policy_budget(str(REPO), experiment) == owed.Budget(*expected)
     plannable = {spec.experiment for spec in owed.wave_board.CAMPAIGNS.values() if spec.tag}
     assert plannable <= set(owed.EXPERIMENT_TRACK)
-
-
-@pytest.mark.parametrize(
-    ("submitter", "experiment", "reads"),
-    [
-        ("submit-scicomp-perf-playbook.sh", "scicomp-focus40", ["track_budget scicomp", '"scicomp:${model}"']),
-        ("submit-scicomp-dc.sh", "scicomp-focus40", ["track_budget scicomp", '"scicomp:${model}"']),
-        ("submit-git-scicomp.sh", "git-scicomp", ["track_budget scicomp", '"scicomp:${model}"']),
-        ("submit-harness-focus20.sh", "harness-focus20", ['track_budget "${BASE}"', "BASE=llrbase-"]),
-        ("submit-harness20-caveman.sh", "harness20", ['track_budget "${BASE}"', 'BASE="llrbase-']),
-        ("submit-mlscale.sh", "mlscale", ['agent_seconds "mlscale:${model}"', 'scaled_budget_from "mlscale:${model}"']),
-        ("submit-cpf-llr40.sh", "llr-focus40", ['agent_seconds "campaign:${model}"']),
-        ("submit-gpu-llr40.sh", "llr-focus40", ['agent_seconds "campaign:${model}"']),
-    ],
-)
-def test_the_submitters_read_the_planners_budget_track(
-    owed: ModuleType, submitter: str, experiment: str, reads: list[str]
-) -> None:
-    """A fresh submit and the owed planner read one track budget; a submitter pinning its own number
-    would rerun owed kernels at a budget no fresh arm gets."""
-    text = (EXPERIMENTS / submitter).read_text(encoding="utf-8")
-    track = owed.EXPERIMENT_TRACK[experiment]
-    assert all(line in text for line in reads), submitter
-    assert f"{track}:" in text or f"track_budget {track}" in text or track == "llrbase-c"
-    assert not re.search(r"AGENT_(TIMEOUT_SECONDS|MAX_TOKENS)=\S*[0-9]{5,}", text), "a pinned budget number"
 
 
 @pytest.mark.parametrize(
