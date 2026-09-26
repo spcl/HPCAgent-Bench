@@ -427,8 +427,7 @@ def write_dot_rows(
     args.out.parent.mkdir(parents=True, exist_ok=True)
     return efficacy_figures.figure_arm_dots(
         frame, stats, treatment, args.out, control_name=args.control_label, repeats=args.repeats,
-        config=config, channels=args.channels, panel_labels=args.dots_panel_labels,
-        differences=args.difference, over=args.speedup_over, measures=dot_measures(args), card=card,
+        config=config, differences=args.difference, over=args.speedup_over, measures=dot_measures(args), card=card,
         **({"row_height_in": args.dots_row_height} if args.dots_row_height else {}),
         labels={
             "speedup": efficacy_figures.speedup_row_label(args.speedup_over),
@@ -450,8 +449,8 @@ def write_row(
     """Several comparisons to ``--out`` as one row of columns; ``columns`` are
     :func:`~hpcagent_bench.stats.figures.efficacy.figure_dot_row`'s per-column lists."""
     return efficacy_figures.figure_dot_row(
-        panels, args.out, repeats=repeats, config=config, channels=args.channels,
-        row_width_in=row_width or plotstyle.ACM_TEXT_WIDTH_IN, panel_labels=args.panel_labels,
+        panels, args.out, repeats=repeats, config=config,
+        row_width_in=row_width or plotstyle.ACM_TEXT_WIDTH_IN,
         **({"row_height_in": args.dots_row_height} if args.dots_row_height else {}),
         over=args.speedup_over, measures=dot_measures(args), card=card, comparators=comparators,
         labels={
@@ -747,27 +746,12 @@ def build_parser() -> argparse.ArgumentParser:
         "draw an arm even without a row for every roster kernel (default: dropped, named on stderr)",
     )  # fmt: skip
     parser.add_argument(
-        "--channels",
-        default="model-packet",
-        choices=efficacy_figures.CHANNELS,
-        help="how the two channels are spent: model-packet gives colour to the model and shape to "
-        "the packet; pair-packet gives colour to the (model, language) pair, which is what varies "
-        "when one packet is compared across delivery languages",
-    )
-    parser.add_argument(
         "--speedup-over",
         default=efficacy_figures.SPEEDUP_OVER,
         type=population.KernelPolicy,
         choices=population.POLICIES,
         help="solved (default): speedup over the kernels both arms answered correctly, failures shown as "
         "the success-rate row; served: every kernel, a failure at 1x (the fallback reading)",
-    )
-    parser.add_argument(
-        "--panel-labels",
-        default="subtitle",
-        choices=efficacy_figures.PANEL_LABELS,
-        help="how a JOINED ROW names its columns: none, outside/inside (a bold 'i)'), or subtitle "
-        "('i) <name>' above each column)",
     )
     parser.add_argument(
         "--difference",
@@ -781,13 +765,6 @@ def build_parser() -> argparse.ArgumentParser:
         default="dots",
         choices=("dots",),
         help="the figure form: stacked 1-D rows, the only one (accepted so recorded commands still run)",
-    )
-    parser.add_argument(
-        "--dots-panel-labels",
-        default="outside",
-        choices=efficacy_figures.PANEL_LABELS,
-        help="how a single comparison names its rows: none (Y labels alone), outside/inside (a bold 'a)'), or "
-        "subtitle ('a) Geomean Speedup ...' on one line above the row, no rotated Y label)",
     )
     parser.add_argument(
         "--success-row",
@@ -804,18 +781,6 @@ def build_parser() -> argparse.ArgumentParser:
         "gets a tall row, a joined row of comparisons a short one, since the joined figure spends "
         "its height on two rows across the whole page",
     )
-    parser.add_argument(
-        "--mark-size",
-        type=float,
-        default=None,
-        help="override FigureConfig.mark_size (summary mark area, pt^2); default: the library's own",
-    )
-    parser.add_argument(
-        "--legend-ncol", type=int, default=None, help="override FigureConfig.legend_ncol (column ceiling)"
-    )
-    parser.add_argument(
-        "--legend-pt", type=float, default=None, help="override FigureConfig.legend_pt (legend text size, points)"
-    )
     parser.add_argument("--out", type=pathlib.Path, default=pathlib.Path("figures/score_change.pdf"))
     parser.add_argument("--table", type=pathlib.Path, default=pathlib.Path("data/score_change.csv"))
     parser.add_argument(
@@ -826,14 +791,7 @@ def build_parser() -> argparse.ArgumentParser:
         help=
         "a kernel run more than once: latest run counts (reruns, default) or median over runs (designed repeats)",
     )  # fmt: skip
-    parser.add_argument(
-        "--cost-model",
-        default=cost.DEFAULT_COST_MODEL,
-        help=
-        "the cost card the Y axis is priced with: a name in envs/cost_models.yaml or --cost-models, or "
-        "inline weights fresh_input=1,cached_input=0.1,output=5; must match a --pairs-csv's own card",
-    )  # fmt: skip
-    parser.add_argument("--cost-models", type=pathlib.Path, default=None, help="a YAML file of extra cost cards")
+    cost.add_arguments(parser)
     return parser
 
 
@@ -849,22 +807,9 @@ ROW_WIDTHS: dict[str, float | None] = {
 
 def figure_config(args: argparse.Namespace, row_width: float | None) -> efficacy_figures.FigureConfig:
     """The figure's config from the command line. A ``--row-width`` is a promise to drop the figure
-    in at scale 1.0, so it is drawn at the size it will be PRINTED at and its type follows the
-    two-column convention rather than the authored-large-then-shrunk default. Explicit
-    ``--mark-size``/``--legend-pt`` still win."""
-    overrides = {
-        name: value
-        for name, value in (
-            ("mark_size", args.mark_size),
-            ("legend_ncol", args.legend_ncol),
-            ("mark_pending", args.mark_pending or None),
-        )
-        if value is not None
-    }
+    in at scale 1.0, so it is drawn at its printed size under the two-column type convention."""
     config = efficacy_figures.PAPER_CONFIG if row_width is not None else efficacy_figures.DEFAULT_CONFIG
-    if args.legend_pt is not None:
-        config = efficacy_figures.retyped(config, legend_pt=args.legend_pt)
-    return dataclasses.replace(config, **overrides) if overrides else config
+    return dataclasses.replace(config, mark_pending=True) if args.mark_pending else config
 
 
 def comparison_panel(

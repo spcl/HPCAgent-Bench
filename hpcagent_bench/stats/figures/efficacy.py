@@ -23,7 +23,7 @@ Benjamini-Hochberg-adjusted 5% threshold for that (model, leg), ``+`` the same o
 row, over the figure's own family of tests. The key spells each symbol once.
 
 NO FIGURE DRAWS A WHOLE-FIGURE TITLE: a paper's caption is the title; a joined row names its
-columns ``i) <name>`` above each one (:func:`draw_panel_label`).
+columns ``i) <name>`` above each one (:func:`draw_panel_subtitle`).
 
 Type sizes come from one :class:`~hpcagent_bench.stats.style.TypeScale` (:attr:`FigureConfig.type_`:
 :data:`~hpcagent_bench.stats.style.AUTHOR_SCALE` by default, :data:`~hpcagent_bench.stats.style.
@@ -756,14 +756,6 @@ def thin_rules(ax: Axes, config: FigureConfig) -> None:
         spine.set_linewidth(config.spine_width)
 
 
-#: How a panel spends its two channels. ``model-packet`` gives COLOUR to the model and SHAPE to the
-#: packet, which leaves shape carrying nothing on a panel that holds one packet. ``pair-packet``
-#: gives colour to the (model, language) PAIR -- the thing that actually varies when one packet is
-#: compared across delivery languages -- and keeps shape for the packet, so two packets can still
-#: share a panel.
-CHANNELS: tuple[str, ...] = ("model-packet", "pair-packet")
-
-
 @functools.lru_cache(maxsize=1)
 def delivery_order() -> tuple[str, ...]:
     """Every delivery a figure can draw, in SHAPE-assignment order: the registry's languages in
@@ -792,17 +784,6 @@ def delivery_markers() -> tuple[str, ...]:
     """The shape table deliveries draw from: the registry's, then :data:`EXTRA_MARKERS`."""
     return (*palette.markers(), *EXTRA_MARKERS)
 
-
-def series_colour(model: str, leg: str, channels: str) -> str:
-    """The colour one mark wears under ``channels``."""
-    if channels == "pair-packet":
-        return palette.model_language_color(model, leg)
-    return palette.model_color(model)
-
-
-#: The top padding of a row drawn without panel names, in INCHES: a band costs the same inches
-#: whatever the row's width, where a FRACTION of the figure would not.
-ROW_TITLE_IN: float = 0.05
 
 #: Clearance added past a measurement, inches -- the same margin :func:`~hpcagent_bench.stats.style.
 #: title` and :func:`~hpcagent_bench.stats.style.legend_below` leave past their own measured boxes.
@@ -836,7 +817,7 @@ PANEL_NAME_GID: str = "efficacy-panel-name"
 
 
 def panel_name_artist(ax: Axes) -> Annotation | None:
-    """The panel-name annotation :func:`draw_panel_label` drew on ``ax``, if it drew one."""
+    """The panel-name annotation :func:`draw_panel_subtitle` drew on ``ax``, if it drew one."""
     found = [text for text in ax.texts if isinstance(text, Annotation) and text.get_gid() == PANEL_NAME_GID]
     return found[-1] if found else None
 
@@ -951,7 +932,6 @@ class ArmRow:
 def arm_rows(
     frame: pd.DataFrame,
     repeats: population.RepeatPolicy = population.RepeatPolicy.LATEST,
-    channels: str = "pair-packet",
     over: population.KernelPolicy = SPEEDUP_OVER,
     card: cost_models.CostModel | None = None,
 ) -> list[ArmRow]:
@@ -968,7 +948,7 @@ def arm_rows(
         if points is None:
             continue
         rows.append(
-            ArmRow(str(model), str(leg), series_colour(str(model), str(leg), channels), points[0], points[1])
+            ArmRow(str(model), str(leg), palette.model_color(str(model)), points[0], points[1])
         )  # fmt: skip
     return column_order(rows)
 
@@ -1147,12 +1127,6 @@ def wrapped_label(text: str, width: int = 18, hyphens: bool = False) -> str:
 
 
 #: How a stacked figure names its own panels, so a caption can refer to one of them.
-#: ``none`` leaves the naming to the Y labels. ``outside`` puts a bold ``a)`` just ABOVE the
-#: panel's left edge and ``inside`` puts it in the plot area's top-left corner; both keep the Y
-#: label. ``subtitle`` puts ``a) <measure>`` on one left-aligned line above the panel and drops the
-#: rotated Y label, which buys back the whole left margin.
-PANEL_LABELS: tuple[str, ...] = ("none", "outside", "inside", "subtitle")
-
 #: The two numbering schemes, so a paper can carry a stacked figure's ``a)`` rows and a joined
 #: row's ``i)`` panels at once and a caption referring to "(ii)" cannot mean either.
 PANEL_LETTERS: tuple[str, ...] = ("a", "b", "c", "d", "e", "f", "g", "h")
@@ -1210,46 +1184,27 @@ def name_layout(
     return size, folds
 
 
-def draw_panel_label(
-    ax: Axes,
-    index: int,
-    name: str,
-    placement: str,
-    config: FigureConfig,
-    numbering: str = "letter",
-    wrap: int = 0,
-    pad: float = 0.0,
-) -> str:
-    """Name one panel of a stacked figure under ``placement``; returns the Y label that panel should
-    still carry (blank under ``subtitle``, which has already said it)."""
-    if placement == "none":
-        return name
-    letter = panel_tag(index, numbering)
-    if placement == "subtitle":
-        # Folded with the tag ATTACHED: folding the name alone and prepending "iv) " afterwards
-        # pushed the first line four characters past the panel's own right edge. Never past TWO
-        # lines: a third steals the band from the panel, so the type shrinks to fit instead.
-        whole = f"{letter} {name}"
-        # ``wrap`` is the EXACT fold width the caller settled on, at the type it also settled on.
-        # Recomputing it here against a scaled width is what folded one name onto a third line.
-        previous = panel_name_artist(ax)
-        if previous is not None:
-            previous.remove()
-        drawn = ax.annotate(
-            wrapped_label(whole, wrap) if wrap else whole, xy=(0.0, 1.0), xycoords="axes fraction",
-            xytext=(0.0, pad), textcoords="offset points", ha="left", va="bottom",
-            fontsize=config.type_.title_pt, color=style.INK, annotation_clip=False, zorder=style.MARK_Z + 3.0,
-        )  # fmt: skip
-        drawn.set_gid(PANEL_NAME_GID)
-        return ""
-    # Above the panel's own left edge, not out in the margin: the margin is where the rotated Y
-    # label is, and a letter placed there printed on top of it.
-    x, y, va = (0.0, 1.02, "bottom") if placement == "outside" else (0.012, 0.98, "top")
-    ax.text(
-        x, y, letter, transform=ax.transAxes, ha="left", va=va, fontsize=config.type_.label_pt, fontweight="bold",
-        color=style.INK, clip_on=False, zorder=style.MARK_Z + 3.0,
+def draw_panel_subtitle(ax: Axes, index: int, name: str, config: FigureConfig, wrap: int, pad: float) -> None:
+    """``i) <name>`` above panel ``index``, folded at ``wrap`` with the tag attached."""
+    whole = f"{panel_tag(index, 'roman')} {name}"
+    previous = panel_name_artist(ax)
+    if previous is not None:
+        previous.remove()
+    drawn = ax.annotate(
+        wrapped_label(whole, wrap) if wrap else whole, xy=(0.0, 1.0), xycoords="axes fraction",
+        xytext=(0.0, pad), textcoords="offset points", ha="left", va="bottom",
+        fontsize=config.type_.title_pt, color=style.INK, annotation_clip=False, zorder=style.MARK_Z + 3.0,
     )  # fmt: skip
-    return name
+    drawn.set_gid(PANEL_NAME_GID)
+
+
+def draw_panel_letter(ax: Axes, index: int, config: FigureConfig) -> None:
+    """A bold ``a)`` just above panel ``index``'s left edge, clear of the rotated Y label."""
+    ax.text(
+        0.0, 1.02, panel_tag(index), transform=ax.transAxes, ha="left", va="bottom",
+        fontsize=config.type_.label_pt, fontweight="bold", color=style.INK, clip_on=False,
+        zorder=style.MARK_Z + 3.0,
+    )  # fmt: skip
 
 
 #: One comparison an arrow is drawn across, as ``(model tag, delivery)``.
@@ -1700,25 +1655,9 @@ def widen_y_axis_linear(ax: Axes, config: FigureConfig) -> None:
         ax.set_ylim(centre - config.min_span / 2.0, centre + config.min_span / 2.0)
 
 
-def colour_legend_marks(rows: Sequence[ArmRow], channels: str, config: FigureConfig) -> list[Line2D]:
-    """One neutral circle per colour ``rows`` spent: per (model, delivery) under ``pair-packet``,
-    else per model (:func:`model_legend_marks`). A comparator's key row is its own
-    (:func:`comparator_legend_marks`)."""
-    rows = [row for row in rows if not row.comparator]
-    if channels != "pair-packet":
-        return model_legend_marks(sorted({row.model for row in rows}), config)
-    return [
-        Line2D(
-            [],
-            [],
-            marker="o",
-            linestyle="none",
-            color=row.colour,
-            markersize=config.legend_marker_pt,
-            label=f"{experiment_tags.model_name(row.model)} / {row.leg}",
-        )  # fmt: skip
-        for row in {(r.model, r.leg): r for r in rows}.values()
-    ]
+def colour_legend_marks(rows: Sequence[ArmRow], config: FigureConfig) -> list[Line2D]:
+    """One neutral circle per model ``rows`` drew; a comparator's key row is its own."""
+    return model_legend_marks(sorted({row.model for row in rows if not row.comparator}), config)
 
 
 def dot_rows_legend(
@@ -1726,12 +1665,11 @@ def dot_rows_legend(
     rows: Sequence[ArmRow],
     control_name: str,
     symbols: Significance,
-    channels: str,
     config: FigureConfig = DEFAULT_CONFIG,
 ) -> list[Line2D]:
     """A dot-row figure's key: one swatch per colour the figure actually spent, the packet's own
     shape, the control's hollow :data:`CONTROL_MARKER`, and one row per superscript drawn."""
-    handles = colour_legend_marks(rows, channels, config)
+    handles = colour_legend_marks(rows, config)
     handles.append(packet_legend_mark(treatment, config))
     handles.append(control_legend_mark([treatment], control_name, config))
     return handles + legend_tail(symbols) + alias_footnotes([row.leg for row in rows])
@@ -1745,12 +1683,10 @@ def figure_arm_dots(
     control_name: str = "",
     repeats: population.RepeatPolicy = population.RepeatPolicy.LATEST,
     config: FigureConfig = DEFAULT_CONFIG,
-    channels: str = "pair-packet",
     measures: Sequence[str] = MEASURES,
     width_in: float = style.DOUBLE_COLUMN_WIDTH,
     row_height_in: float = 1.5,
     labels: dict[str, str] | None = None,
-    panel_labels: str = "outside",
     reference_name: str = "",
     differences: str = "",
     over: population.KernelPolicy = SPEEDUP_OVER,
@@ -1767,7 +1703,7 @@ def figure_arm_dots(
     """
     import matplotlib.pyplot as plt
 
-    rows = arm_rows(frame, repeats, channels, over, card)
+    rows = arm_rows(frame, repeats, over, card)
     if not rows:
         raise ValueError("no (model, leg) pair draws a point")
     texts = {**MEASURE_LABELS, **(labels or {})}
@@ -1781,19 +1717,19 @@ def figure_arm_dots(
     # other. 0.12in even with neither: a two-line rotated Y label is taller than the axes box it is
     # centred on, and clipped off the canvas without it.
     note_pad = config.type_.annotation_pt * 1.7
-    band = text_band(config.type_.title_pt) + note_pad / 72.0 if panel_labels in ("subtitle", "outside") else 0.12
+    band = text_band(config.type_.title_pt) + note_pad / 72.0
     category_band = text_band(config.type_.tick_pt, 2) + text_band(config.type_.label_pt)
     height = row_height_in * len(measures) + category_band + band * len(measures)
     fig, axes = plt.subplots(len(measures), 1, figsize=(width_in, height), squeeze=False, sharex=True)
     fig.set_dpi(style.SAVE_DPI)  # measure the legend and the labels at the dpi save() writes
     for index, (ax, measure) in enumerate(zip(axes[:, 0], measures, strict=True)):
-        name = draw_panel_label(ax, index, texts.get(measure, measure), panel_labels, config, "letter", 0, note_pad)
+        draw_panel_letter(ax, index, config)
         draw_measure_row(
-            ax, rows, measure, shape, significance, rows_config, name, reference_name,
+            ax, rows, measure, shape, significance, rows_config, texts.get(measure, measure), reference_name,
             differences=parse_differences(differences),
         )  # fmt: skip
     draw_category_axis(axes[-1, 0], rows, config)
-    handles = dot_rows_legend(treatment, rows, control_text, drawn_symbols(stats), channels, config)
+    handles = dot_rows_legend(treatment, rows, control_text, drawn_symbols(stats), config)
     fig.subplots_adjust(
         left=0.1, right=0.99, top=1.0 - (band + MEASURE_PAD_IN) / height, bottom=0.01,
         hspace=0.14 + band / row_height_in,
@@ -1837,12 +1773,12 @@ class DotColumn:
 EMPTY_POINT = ArmPoint(math.nan, math.nan, math.nan, math.nan, math.nan, math.nan, 0, 0)
 
 
-def placeholder_rows(rows: Sequence[ArmRow], deliveries: Sequence[str], channels: str) -> list[ArmRow]:
+def placeholder_rows(rows: Sequence[ArmRow], deliveries: Sequence[str]) -> list[ArmRow]:
     """``rows`` plus one empty category per (model already drawn, delivery in ``deliveries``)."""
     if not deliveries:
         return list(rows)
     extra = [
-        ArmRow(model, leg, series_colour(model, leg, channels), EMPTY_POINT, EMPTY_POINT)
+        ArmRow(model, leg, palette.model_color(model), EMPTY_POINT, EMPTY_POINT)
         for model in dict.fromkeys(row.model for row in rows)
         for leg in deliveries
         if (model, leg) not in {(r.model, r.leg) for r in rows}
@@ -1850,7 +1786,7 @@ def placeholder_rows(rows: Sequence[ArmRow], deliveries: Sequence[str], channels
     return column_order([*rows, *extra])
 
 
-def pending_rows(rows: Sequence[ArmRow], models: Sequence[str], channels: str, leg: str = "") -> list[ArmRow]:
+def pending_rows(rows: Sequence[ArmRow], models: Sequence[str], leg: str = "") -> list[ArmRow]:
     """``rows`` plus one empty category per model of ``models`` not drawn yet, under the delivery the
     drawn models use, or ``leg`` in a stub panel (its placeholder delivery), in the registry's model
     order. A stub category with no delivery would be named by its model, which the colour already
@@ -1858,7 +1794,7 @@ def pending_rows(rows: Sequence[ArmRow], models: Sequence[str], channels: str, l
     drawn = {row.model for row in rows}
     leg = rows[0].leg if rows else leg
     extra = [
-        ArmRow(model, leg, series_colour(model, leg, channels), EMPTY_POINT, EMPTY_POINT)
+        ArmRow(model, leg, palette.model_color(model), EMPTY_POINT, EMPTY_POINT)
         for model in dict.fromkeys(models)
         if model not in drawn
     ]
@@ -1880,13 +1816,12 @@ def comma_list(spec: str) -> list[str]:
 def panel_rows(
     frame: pd.DataFrame | dict[str, pd.DataFrame],
     repeats: population.RepeatPolicy,
-    channels: str,
     over: population.KernelPolicy,
     card: cost_models.CostModel | None = None,
 ) -> list[ArmRow]:
     """A panel's drawn categories; none for a STUB panel (an empty frame)."""
     if isinstance(frame, pd.DataFrame) and not frame.empty:
-        return arm_rows(frame, repeats, channels, over, card)
+        return arm_rows(frame, repeats, over, card)
     return []
 
 
@@ -1914,7 +1849,6 @@ def column_shape(treatment: str) -> str:
 def dot_columns(
     panels: Sequence[Panel],
     repeats: Sequence[population.RepeatPolicy],
-    channels: str,
     references: Sequence[str],
     control_names: Sequence[str] = (),
     differences: Sequence[str] = (),
@@ -1929,11 +1863,11 @@ def dot_columns(
     for index, (title, treatment, stats, frame) in enumerate(panels):
         key = str(treatment if isinstance(treatment, str) else (flat_treatments(treatment) or [""])[0])
         table = stats if isinstance(stats, pd.DataFrame) else pd.concat(stats.values(), ignore_index=True)
-        rows = panel_rows(frame, repeats[index], channels, over, card)
+        rows = panel_rows(frame, repeats[index], over, card)
         named = comma_list(str(nth(placeholders, index)))
         stub_leg = named[0] if named and not rows else ""
-        rows = placeholder_rows(rows, named, channels) if rows else rows
-        rows = pending_rows(rows, comma_list(str(nth(pending, index))), channels, stub_leg)
+        rows = placeholder_rows(rows, named) if rows else rows
+        rows = pending_rows(rows, comma_list(str(nth(pending, index))), stub_leg)
         if key in PER_COLUMN_TREATMENTS:
             rows = per_column_rows(rows, key)
         columns.append(
@@ -2154,12 +2088,12 @@ def first_per_label(handles: Sequence[Line2D]) -> list[Line2D]:
     return list(kept.values())
 
 
-def dot_row_legend(columns: Sequence[DotColumn], channels: str, config: FigureConfig = DEFAULT_CONFIG) -> list[Line2D]:
+def dot_row_legend(columns: Sequence[DotColumn], config: FigureConfig = DEFAULT_CONFIG) -> list[Line2D]:
     """One key for the whole row: every colour it spent, then each packet's own filled shape beside
     its control's hollow :data:`CONTROL_MARKER`."""
     rows = [row for column in columns for row in column.rows]
     drawn = [column for column in columns if column.rows]
-    handles = colour_legend_marks(rows, channels, config) + treatment_legend_marks(drawn, config)
+    handles = colour_legend_marks(rows, config) + treatment_legend_marks(drawn, config)
     handles += comparator_legend_marks(rows, config)
     # A packet drawn in two panels (a mixed panel's column and a one-packet panel) keeps one row.
     handles = first_per_label(handles)
@@ -2214,7 +2148,6 @@ def fit_panel_names(
     names: Sequence[str],
     spans: Sequence[float],
     config: FigureConfig,
-    placement: str,
     drawn_pt: float,
 ) -> None:
     """Redraw the row's names at the largest type that MEASURES inside each panel's span.
@@ -2224,7 +2157,7 @@ def fit_panel_names(
     the difference between two names overlapping, the last one running off the canvas, and both
     fitting on one line.
     """
-    if placement == "none" or not top:
+    if not top:
         return
     fig.canvas.draw()
     # Measured against the size the titles were ACTUALLY drawn at, not the config's ceiling: the
@@ -2234,15 +2167,13 @@ def fit_panel_names(
     # A name that fills its span to the last glyph runs straight into the next one ("(LLR)ii)").
     spans = [span - NAME_CLEARANCE_IN for span in spans[:-1]] + list(spans[-1:])
     size, folds = name_layout(tagged, spans, config.type_.title_pt, config.max_name_lines, em)
-    draw_column_names(top, names, placement, retyped(config, title_pt=size), folds)
+    draw_column_names(top, names, retyped(config, title_pt=size), folds)
 
 
-def draw_column_names(
-    top: Sequence[Axes], names: Sequence[str], placement: str, config: FigureConfig, folds: Sequence[int]
-) -> None:
+def draw_column_names(top: Sequence[Axes], names: Sequence[str], config: FigureConfig, folds: Sequence[int]) -> None:
     """Each column's roman-numbered name above its top panel, folded at ``folds``."""
     for index, ax in enumerate(top):
-        draw_panel_label(ax, index, names[index], placement, config, "roman", folds[index], MEASURE_PAD_IN * 72.0)
+        draw_panel_subtitle(ax, index, names[index], config, folds[index], MEASURE_PAD_IN * 72.0)
 
 
 def fit_legend(
@@ -2280,7 +2211,6 @@ def figure_dot_row(
     out: pathlib.Path,
     repeats: population.RepeatPolicy | Sequence[population.RepeatPolicy] = population.RepeatPolicy.LATEST,
     config: FigureConfig = PAPER_CONFIG,
-    channels: str = "model-packet",
     measures: Sequence[str] = MEASURES,
     row_width_in: float = style.ACM_TEXT_WIDTH_IN,
     row_height_in: float = 0.98,
@@ -2289,7 +2219,6 @@ def figure_dot_row(
     control_names: Sequence[str] = (),
     differences: Sequence[str] = (),
     placeholders: Sequence[str] = (),
-    panel_labels: str = "subtitle",
     over: population.KernelPolicy = SPEEDUP_OVER,
     pending: Sequence[str] = (),
     comparators: Sequence[Sequence["Comparator"]] = (),
@@ -2304,13 +2233,13 @@ def figure_dot_row(
     """
     n = len(panels)
     columns = dot_columns(
-        panels, resolve_row_repeats(repeats, n), channels, references, control_names, differences, placeholders, over,
-        pending, card,
+        panels, resolve_row_repeats(repeats, n), references, control_names, differences, placeholders, over, pending,
+        card,
     )  # fmt: skip
     columns = with_comparators(columns, comparators)
     texts = {**MEASURE_LABELS, "speedup": speedup_row_label(over), **(labels or {})}
     rows_config = measure_row_config(config, row_height_in)
-    title_band = text_band(config.type_.title_pt, 2) if panel_labels != "none" else ROW_TITLE_IN
+    title_band = text_band(config.type_.title_pt, 2)
     category_band = text_band(config.type_.tick_pt, 2)
     heights, data_height, hspace = dot_row_heights(measures, row_height_in, config)
     # The key gets a fixed band, and grows it only when it cannot fit at its smallest type.
@@ -2324,10 +2253,10 @@ def figure_dot_row(
     size, folds = name_layout(tagged, name_spans(widths, config), config.type_.title_pt, config.max_name_lines)
     name_config = retyped(config, title_pt=size)
     draw_grid_rows(axes, columns, measures, texts, rows_config)
-    draw_column_names(axes[0], names, panel_labels, name_config, folds)
+    draw_column_names(axes[0], names, name_config, folds)
     for ax, column in zip(axes[-1], columns, strict=True):
         draw_category_axis(ax, column.rows, config)
-    handles = dot_row_legend(columns, channels, config)
+    handles = dot_row_legend(columns, config)
     fig.subplots_adjust(
         left=config.left_chrome_in / row_width_in, right=0.995,
         top=1.0 - (title_band + MEASURE_PAD_IN) / height, bottom=0.01, hspace=hspace, wspace=0.0,
@@ -2337,7 +2266,7 @@ def figure_dot_row(
     fig.subplots_adjust(left=max(required_left_margin(fig, ax) for ax in axes[:, 0]) / row_width_in)
     fit_column_gaps(fig, axes)
     # The names are fitted to the columns as finally placed: a widened gap narrows every column.
-    fit_panel_names(fig, list(axes[0]), tagged, names, placed_spans(axes, row_width_in), config, panel_labels, size)
+    fit_panel_names(fig, list(axes[0]), tagged, names, placed_spans(axes, row_width_in), config, size)
     body = (axes[0][0].get_position().x0, axes[0][-1].get_position().x1)
     stagger_crowded_ticks(fig, axes[-1], config)
     # The canvas grows by the key's own height, not the reserve: a two-line key left a blank band.

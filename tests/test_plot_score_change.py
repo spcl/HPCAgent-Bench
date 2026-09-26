@@ -996,8 +996,6 @@ def test_the_pairs_csv_route_draws_its_marks_under_the_repeat_policy_it_was_aske
         repeats="median",
         out=tmp_path / "f.pdf",
         table=tmp_path / "f.csv",
-        channels="model-packet",
-        dots_panel_labels="outside",
         difference="",
         success_row=True,
         dots_row_height=2.3,
@@ -1323,7 +1321,7 @@ def test_a_per_column_panel_never_asks_the_registry_for_its_pseudo_intervention(
     stub = ("Per Column", intervention, pd.DataFrame(), pd.DataFrame())
     config = dataclasses.replace(efficacy_figures.PAPER_CONFIG, mark_pending=True)
     with caplog.at_level("WARNING", logger=palette.__name__):
-        (column,) = efficacy_figures.dot_columns([stub], ["latest"], "model-packet", [], placeholders=[leg],
+        (column,) = efficacy_figures.dot_columns([stub], ["latest"], [], placeholders=[leg],
                                                  pending=["qwen38"])  # fmt: skip
         efficacy_figures.figure_dot_row([stub], tmp_path / "dots.pdf", config=config, placeholders=[leg],
                                         pending=["qwen38"])  # fmt: skip
@@ -1337,10 +1335,10 @@ def test_a_pending_model_gets_an_empty_category_in_registry_order() -> None:
     drawn = efficacy_figures.ArmRow(
         "qwen38", "C", "#000000", efficacy_figures.EMPTY_POINT, efficacy_figures.EMPTY_POINT
     )  # fmt: skip
-    rows = efficacy_figures.pending_rows([drawn], ["kimi27sglang", "qwen38", "oss120b"], "model-packet")
+    rows = efficacy_figures.pending_rows([drawn], ["kimi27sglang", "qwen38", "oss120b"])
     assert [row.model for row in rows] == palette.in_order(["qwen38", "kimi27sglang", "oss120b"])
     assert {row.leg for row in rows} == {"C"}
-    assert efficacy_figures.pending_rows([], [], "model-packet") == []
+    assert efficacy_figures.pending_rows([], []) == []
 
 
 def pending_dot_row(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, mark: bool) -> Figure:
