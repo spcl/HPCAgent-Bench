@@ -953,18 +953,16 @@ def read_db(
                         "native_ns": column(row, keys, "native_ns"),
                         "tokens": column(row, keys, "tokens"),
                         "baseline": column(row, keys, "baseline"),
-                        "compiler": column(row, keys, "compiler"),
+                        "build_commands": column(row, keys, "build_commands"),
                         "route": column(row, keys, "route"),
                         "timing_suspect": (
                             rederived_row_suspect(row, shapes.get((stored, bench, int(row["ts"] or 0)), ""))
                             if table == "submissions"
                             else column(row, keys, "suspect")
                         ),
-                        "execution": column(row, keys, "execution"),
                         "timing_reduction": column(row, keys, "timing_reduction"),
                         "baseline_policy": column(row, keys, "baseline_policy"),
                         "cpu": column(row, keys, "cpu"),
-                        "node": column(row, keys, "node"),
                         "commit_sha": column(row, keys, "commit_sha"),
                         "ts_ms": row["ts"],
                         "source_blob": blob["path"] if blob is not None else "",
