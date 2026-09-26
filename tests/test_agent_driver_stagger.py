@@ -8,7 +8,6 @@ with mcp_servers status "failed", and an agent without its MCP server has no sub
 
 import importlib
 import pathlib
-import sys
 
 EXAMPLE = pathlib.Path(__file__).resolve().parents[1] / "experiments"
 
@@ -16,12 +15,7 @@ EXAMPLE = pathlib.Path(__file__).resolve().parents[1] / "experiments"
 def load_driver(monkeypatch, **env):
     for key, value in env.items():
         monkeypatch.setenv(key, value)
-    sys.path.insert(0, str(EXAMPLE))
-    try:
-        module = importlib.import_module("agent_driver")
-        return importlib.reload(module)
-    finally:
-        sys.path.remove(str(EXAMPLE))
+    return importlib.reload(importlib.import_module("agent_driver"))
 
 
 def test_the_stagger_is_on_by_default(monkeypatch) -> None:

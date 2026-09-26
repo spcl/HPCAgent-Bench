@@ -3,7 +3,7 @@
 """Collect one canon sweep's per-rank CSVs into a SQLite ``canon`` table.
 
 Ported from the reproducibility artifact's ``collect_canon.py``. A canon sweep
-(``experiments/submit-canon-llr40.sh``) shards its output by rank (``<column>.rank<N>.csv``,
+(``experiments/submit-canon.sh``) shards its output by rank (``<column>.rank<N>.csv``,
 written by ``experiments/canon_column.sh``) because two ranks appending to one file interleave
 partial lines. The shards of one column are disjoint kernel sets, so concatenating them is the
 whole merge.
@@ -21,6 +21,8 @@ import csv
 import pathlib
 import sqlite3
 import sys
+
+from hpcagent_bench import data_guard
 
 #: The canon-llr40 sweep's columns, in their historical figure order. cc is the baseline the
 #: others are divided by with --baseline cc, and it stays in the table (as a constant 1.0 there)
@@ -128,6 +130,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{args.run_dir} holds no <column>.rank*.csv shards", file=sys.stderr)
         return 1
 
+    data_guard.check_output(args.db, [args.run_dir])
     write_db(rows, args.db)
     per = {c: sum(1 for row in rows if row["column"] == c) for c in columns}
     print(f"{args.db}: {len(rows)} rows  " + "  ".join(f"{c}={n}" for c, n in per.items() if n))

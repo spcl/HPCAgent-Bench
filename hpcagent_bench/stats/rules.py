@@ -10,6 +10,8 @@ from collections.abc import Sequence
 
 import pandas as pd  # pyright: ignore[reportMissingTypeStubs] -- pandas ships none
 
+__all__ = ["CITATION", "RULE_TEXT", "RuleViolation", "require_costs", "require_interval"]
+
 #: Paper and rule text this module enforces, for a caption or an error message.
 CITATION: str = 'Hoefler and Belli, "Scientific Benchmarking of Parallel Computing Systems", SC15'
 

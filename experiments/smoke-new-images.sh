@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Container acceptance: points the EXISTING inference smokes at a candidate .sqsh (per-candidate
+# Container acceptance: points the EXISTING inference smoke at a candidate .sqsh (per-candidate
 # EDF, smoke unchanged) instead of the deployed image, since build gates prove import not serving.
-#   ./smoke-new-images.sh   ./smoke-new-images.sh sglang
+# Only SGLang has a serving smoke here. A vLLM candidate is smoked with experiments/serve-only.sbatch
+# (the campaign's own serving path) pointed at a candidate EDF; containers/README.md, "Build, verify,
+# promote", has the recipe.
+#   ./smoke-new-images.sh
 set -euo pipefail
 
-# Beverin's core_pattern is the machine-global `core_%h_%p` and a dump lands in the crashing
-# process's CWD, littering the checkout with core_<host>_<pid> files on a filesystem whose
-# quota is inodes. Slurm propagates the SUBMITTER's core limit, so the floor has to be set here.
+# A core dump lands in the crashing process's CWD (the checkout) and Slurm propagates the
+# SUBMITTER's core limit, so the floor has to be set here.
 ulimit -c 0
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 
@@ -16,24 +18,21 @@ SCRATCH="${SCRATCH:?}"
 . ../scripts/cache_env.sh
 IMAGES="${SCRATCH}/ce-images"
 EDF_DIR="${HOME}/.edf"
-SMOKES="../containers/cluster/ce-images/inference"
+SMOKES="../containers/inference"
 mkdir -p "${EDF_DIR}"
 
 declare -A SMOKE=(
   [sglang]="${SMOKES}/smoke-kimi-sglang.sbatch"
-  [vllm]="${SMOKES}/smoke-kimi-eager-pg.sbatch"
 )
 declare -A SQSH=(
   [sglang]="${IMAGES}/hpcagent-bench-sglang-candidate.sqsh"
-  [vllm]="${IMAGES}/hpcagent-bench-vllm-candidate.sqsh"
 )
 # sglang is 4 nodes not 2: pp=2 halves the per-stage weights, and sglang refuses the campaign's
 # mem-fraction outright at that ratio
-declare -A NODES=([sglang]=4 [vllm]=1)
-declare -A MODEL=([vllm]=openai/gpt-oss-120b)
+declare -A NODES=([sglang]=4)
 
 candidates=("$@")
-[[ ${#candidates[@]} -eq 0 ]] && candidates=(sglang vllm)
+[[ ${#candidates[@]} -eq 0 ]] && candidates=(sglang)
 for name in "${candidates[@]}"; do
   sqsh="${SQSH[${name}]:-}"
   smoke="${SMOKE[${name}]:-}"
@@ -51,37 +50,21 @@ for name in "${candidates[@]}"; do
     printf 'mounts = [\n  %s\n]\n' "$(hpcagent_bench_edf_mounts)"
     # PATH declared not inherited: the CE does not preserve the image's own PATH reliably
     printf '\n[env]\n'
-    # per image: rocm/pytorch ships /opt/venv, vLLM images install into /opt/pytorch211
-    case "${name}" in
-      sglang)          img_path="/opt/venv/bin" ;;
-      vllm)            img_path="/opt/pytorch211/bin" ;;
-      *)               img_path="/opt/venv/bin" ;;
-    esac
-    printf 'PATH = "%s:/opt/rocm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"\n' "${img_path}"
+    # the rocm/pytorch base of the SGLang image ships /opt/venv
+    printf 'PATH = "/opt/venv/bin:/opt/rocm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"\n'
   } > "${edf}"
   printf '%-12s EDF=%s\n' "${name}" "${edf}"
-  # PG_PATCH_DIR satisfies eager-PG's baked-in sitecustomize.py precondition; without it, exits fast
-  oss=()
-  if [[ -n "${MODEL[${name}]:-}" ]]; then
-    oss=(MODEL_REPO="${MODEL[${name}]}" TOOL_PARSER=openai REASONING_PARSER=openai_gptoss
-         EXTRA_SERVE_ARGS="--dtype bfloat16")
-  fi
   # matches the CAMPAIGN's serving knobs, not the smoke's own aiter recipe (defaults, overridable)
-  sgl=()
-  if [[ "${name}" == sglang ]]; then
-    sgl=(CONTEXT_LEN="${CONTEXT_LEN:-262144}"
-         MEM_FRACTION="${MEM_FRACTION:-0.42}"
-         SGLANG_EXTRA_ARGS="${SGLANG_EXTRA_ARGS:---attention-backend triton --cuda-graph-max-bs-decode 64}")
-  fi
+  sgl=(CONTEXT_LEN="${CONTEXT_LEN:-262144}"
+       MEM_FRACTION="${MEM_FRACTION:-0.42}"
+       SGLANG_EXTRA_ARGS="${SGLANG_EXTRA_ARGS:---attention-backend triton --cuda-graph-max-bs-decode 64}")
   # both EDF names set: INFERENCE_EDF otherwise defaults to the deployed image. DEPEND_ON keeps
   # this under beverin's 36-node cap. NOTE: no comment may sit inside the command below.
   dep=()
   [[ -n "${DEPEND_ON:-}" ]] && dep=(--dependency="afterany:${DEPEND_ON}")
-  env "${oss[@]}" "${sgl[@]}" \
-  TUNED_MOE_DIR="${PWD}/../ce-images/inference/moe-configs" \
-  PG_PATCH_DIR="${PWD}/../ce-images/inference/external-eager-pg-patch" \
+  env "${sgl[@]}" \
   EDF="${edf}" INFERENCE_EDF="${edf}" sbatch --job-name="smoke-candidate-${name}" \
-    "${dep[@]}" \
+    "${dep[@]}" --nice="${NICE:-${HPCAGENT_BENCH_NICE}}" \
     --nodes="${NODES[${name}]}" \
     --output="${SCRATCH}/ce-images/logs/smoke-candidate-${name}-%j.out" \
     --error="${SCRATCH}/ce-images/logs/smoke-candidate-${name}-%j.out" "${smoke}"

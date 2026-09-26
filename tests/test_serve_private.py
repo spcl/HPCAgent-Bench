@@ -15,9 +15,12 @@ import subprocess
 
 import pytest
 
+from tests.env_render import rendered
+
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-LAUNCHER = ROOT / "containers" / "cluster" / "ce-images" / "inference" / "serve-private.sbatch"
-CAMPAIGN_ENV = ROOT / "experiments" / ".env.llrbase-qwen38-c"
+LAUNCHER = ROOT / "containers" / "inference" / "serve-private.sbatch"
+#: The qwen38 campaign base whose serving flags the mi300 preset mirrors.
+CAMPAIGN_BASE = "llrbase-c:qwen38"
 KEY = "0123456789abcdef" * 4
 PRESETS = ("mi300", "mi200")
 #: The partition each preset must refuse.
@@ -82,8 +85,8 @@ def flags(words: list[str]) -> dict[str, str]:
 
 def campaign_sglang_flags() -> dict[str, str]:
     """SGLANG_EXTRA_ARGS of the qwen38 campaign, with ${SCRIPT_DIR} expanded as sourcing does."""
-    found = re.findall(r'^SGLANG_EXTRA_ARGS="([^"]*)"$', CAMPAIGN_ENV.read_text(encoding="utf-8"), re.MULTILINE)
-    assert len(found) == 1, CAMPAIGN_ENV
+    found = re.findall(r'^SGLANG_EXTRA_ARGS="([^"]*)"$', rendered(CAMPAIGN_BASE), re.MULTILINE)
+    assert len(found) == 1, CAMPAIGN_BASE
     return flags(found[0].replace("${SCRIPT_DIR}", str(ROOT / "experiments")).split())
 
 
@@ -232,13 +235,21 @@ def test_the_mi200_preset_serves_bf16_weights_with_triton_attention_aiter_off_an
 def test_serve_mode_starts_one_server_and_prints_a_loopback_tunnel_but_never_the_key(
     tmp_path: pathlib.Path, preset: str
 ) -> None:
-    done = launch(tmp_path, preset, MODE="serve", API_PORT="30123")
+    done = launch(
+        tmp_path,
+        preset,
+        MODE="serve",
+        API_PORT="30123",
+        HPCAGENT_BENCH_SSH_JUMP="jumphost",
+        HPCAGENT_BENCH_LOGIN_HOST="loginhost",
+    )
     assert done.returncode == 0, done.stderr
     assert len(argv_lines(done.stdout)) == 1
-    tunnels = [line.strip() for line in done.stdout.splitlines() if "ssh -N -J ela,beverin" in line]
+    # The hosts come from the site layer (experiments/layers/site-*.env), never from the script.
+    tunnels = [line.strip() for line in done.stdout.splitlines() if "ssh -N -J jumphost,loginhost" in line]
     assert len(tunnels) == 1
     assert "-L 127.0.0.1:30123:127.0.0.1:30123 serve-private-test-user@" in tunnels[0]
-    assert f"scp beverin:{tmp_path}/endpoint.key " in done.stdout
+    assert f"scp loginhost:{tmp_path}/endpoint.key " in done.stdout
     assert "Authorization: Bearer %s" in done.stdout
     assert KEY not in done.stdout + done.stderr
     (run_dir,) = (tmp_path / "runs").iterdir()
@@ -297,9 +308,7 @@ def test_alps_serve_mode_publishes_the_url_model_and_key_path_but_never_the_key(
         "job_id": "dry-run",
     }
     (run_dir,) = (tmp_path / "runs").iterdir()
-    assert (
-        f"source {ROOT}/containers/cluster/ce-images/inference/alps-endpoint.sh {run_dir}/endpoint.json" in done.stdout
-    )
+    assert f"source {ROOT}/containers/inference/alps-endpoint.sh {run_dir}/endpoint.json" in done.stdout
     assert "ssh -N -J" not in done.stdout
     assert KEY not in done.stdout + done.stderr
 

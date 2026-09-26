@@ -26,9 +26,66 @@ import shlex
 import shutil
 import subprocess
 import sys
-from typing import Dict, List, Optional, Sequence, Tuple
+from collections.abc import Sequence
 
 from hpcagent_bench import flags
+
+__all__ = [
+    "CLANG",
+    "CLANG_KINDS",
+    "CLANG_LINE",
+    "CLANG_NOLOC",
+    "CLANG_TAG",
+    "CLANG_VEC",
+    "COMMENT_START",
+    "CXX_SUFFIXES",
+    "DEBUG_FLAG",
+    "DEFAULT_CFLAGS",
+    "GCC",
+    "GCC_LINE",
+    "GCC_OPT_NOTE",
+    "GCC_VEC",
+    "LOOP_START",
+    "MISSED_PREFIXES",
+    "NON_REMARK",
+    "NO_REASON",
+    "REPORT_SUFFIX",
+    "SNIPPET",
+    "TAB_WIDTH",
+    "UNPARSED_DETAIL",
+    "VECTOR_PASSES",
+    "Grouped",
+    "Loop",
+    "Nest",
+    "Parsed",
+    "Remark",
+    "VectorDetail",
+    "Verdict",
+    "body_end",
+    "build_summary",
+    "clang_remark",
+    "classify",
+    "compiler_family",
+    "counted",
+    "display_path",
+    "group",
+    "indent_of",
+    "loop_lines",
+    "main",
+    "merge",
+    "missed_reason",
+    "owning_loop",
+    "parse_clang",
+    "parse_gcc",
+    "parse_report",
+    "pragma_start",
+    "render_vector",
+    "report_command",
+    "resolve_compiler",
+    "scan_nests",
+    "strip_roots",
+    "vector_detail",
+]
 
 GCC = "gcc"
 CLANG = "clang"
@@ -85,7 +142,7 @@ COMMENT_START = ("//", "*", "/*", "#")
 TAB_WIDTH = 4
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True, slots=True)
 class Remark:
     """``line == 0``: the compiler gave no source location."""
 
@@ -97,13 +154,13 @@ class Remark:
     text: str
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True, slots=True)
 class Parsed:
-    remarks: Tuple[Remark, ...]
+    remarks: tuple[Remark, ...]
     unparsed: int
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True, slots=True)
 class VectorDetail:
     """``parsed`` False: label said success, wording unknown -- numbers 0, ``raw`` is the sentence."""
 
@@ -116,15 +173,15 @@ class VectorDetail:
     raw: str
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True, slots=True)
 class Verdict:
-    vectorized: Tuple[VectorDetail, ...]
-    missed: Tuple[str, ...]
-    notes: Tuple[str, ...]
-    others: Tuple[Tuple[str, int], ...]
+    vectorized: tuple[VectorDetail, ...]
+    missed: tuple[str, ...]
+    notes: tuple[str, ...]
+    others: tuple[tuple[str, int], ...]
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True, slots=True)
 class Loop:
     """``start``: the first line charged to the loop -- its header, or the ``#pragma`` block directing it, which is
     where clang places an OpenMP loop's remarks."""
@@ -135,17 +192,17 @@ class Loop:
     start: int
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True, slots=True)
 class Nest:
     start: int
-    loops: Tuple[Loop, ...]
+    loops: tuple[Loop, ...]
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True, slots=True)
 class Grouped:
-    nests: Dict[str, Tuple[Nest, ...]]
-    by_loop: Dict[Tuple[str, int, int], Verdict]
-    outside: Dict[str, Verdict]
+    nests: dict[str, tuple[Nest, ...]]
+    by_loop: dict[tuple[str, int, int], Verdict]
+    outside: dict[str, Verdict]
     unlocated: int
 
 
@@ -160,7 +217,7 @@ def display_path(name: str) -> str:
     return str(path.relative_to(cwd)) if cwd in path.parents else path.name
 
 
-def clang_remark(match: Optional[re.Match], body: str) -> Remark:
+def clang_remark(match: re.Match | None, body: str) -> Remark:
     tag = CLANG_TAG.search(body)
     kind = CLANG_KINDS[tag.group("flavor")] if tag else "remark"
     pass_name = tag.group("pass") if tag else ""
@@ -178,7 +235,7 @@ def clang_remark(match: Optional[re.Match], body: str) -> Remark:
 
 
 def parse_clang(lines: Sequence[str]) -> Parsed:
-    remarks: List[Remark] = []
+    remarks: list[Remark] = []
     unparsed = 0
     index = 0
     while index < len(lines):
@@ -204,7 +261,7 @@ def parse_clang(lines: Sequence[str]) -> Parsed:
 
 
 def parse_gcc(lines: Sequence[str]) -> Parsed:
-    remarks: List[Remark] = []
+    remarks: list[Remark] = []
     unparsed = 0
     for raw in lines:
         if not raw.strip() or SNIPPET.match(raw):
@@ -245,7 +302,7 @@ def merge(parsed: Sequence[Parsed]) -> Parsed:
 # Classification
 
 
-def vector_detail(text: str) -> Optional[VectorDetail]:
+def vector_detail(text: str) -> VectorDetail | None:
     gcc = GCC_VEC.match(text)
     if gcc is not None:
         kind = " ".join(part.strip() for part in (gcc.group("epilogue"), gcc.group("masked")) if part)
@@ -281,10 +338,10 @@ def missed_reason(text: str) -> str:
 
 def classify(remarks: Sequence[Remark]) -> Verdict:
     """One loop's remarks sorted by the compiler's own label; wording only fills in detail."""
-    vectorized: List[VectorDetail] = []
-    misses: List[str] = []
-    notes: List[str] = []
-    others: Dict[str, int] = {}
+    vectorized: list[VectorDetail] = []
+    misses: list[str] = []
+    notes: list[str] = []
+    others: dict[str, int] = {}
     for remark in remarks:
         if remark.pass_name and remark.pass_name not in VECTOR_PASSES:
             others[remark.pass_name] = others.get(remark.pass_name, 0) + 1
@@ -342,22 +399,22 @@ def pragma_start(lines: Sequence[str], header: int) -> int:
     return start if start == header or lines[start - 1].strip().startswith("#pragma") else header
 
 
-def scan_nests(text: str) -> Tuple[Nest, ...]:
+def scan_nests(text: str) -> tuple[Nest, ...]:
     """Nests from for/while/do headers and INDENTATION only -- no braces, no functions.
 
     Allman braces truncate a body, a loop inside an ``if`` can read one level too deep, and a
     one-line ``for (...) x++;`` has no body. Each moves a remark between blocks; none loses one.
     """
     lines = text.splitlines()
-    headers: List[Tuple[int, int]] = []
+    headers: list[tuple[int, int]] = []
     for number, raw in enumerate(lines, start=1):
         stripped = raw.strip()
         if stripped and not stripped.startswith(COMMENT_START) and LOOP_START.match(stripped):
             headers.append((number, indent_of(raw)))
 
-    nests: List[Nest] = []
-    current: List[Loop] = []
-    stack: List[Tuple[int, Loop]] = []
+    nests: list[Nest] = []
+    current: list[Loop] = []
+    stack: list[tuple[int, Loop]] = []
     for line, indent in headers:
         # A header past the body of the loop above it is not inside it, however deep it is indented: a
         # shallow loop in one function is followed by a deeper one in the next.
@@ -374,8 +431,8 @@ def scan_nests(text: str) -> Tuple[Nest, ...]:
     return tuple(nests)
 
 
-def owning_loop(nests: Sequence[Nest], line: int) -> Optional[Tuple[int, Loop]]:
-    best: Optional[Tuple[int, Loop]] = None
+def owning_loop(nests: Sequence[Nest], line: int) -> tuple[int, Loop] | None:
+    best: tuple[int, Loop] | None = None
     for nest in nests:
         for loop in nest.loops:
             if loop.start <= line <= loop.end and (best is None or loop.depth >= best[1].depth):
@@ -383,15 +440,15 @@ def owning_loop(nests: Sequence[Nest], line: int) -> Optional[Tuple[int, Loop]]:
     return best
 
 
-def group(parsed: Parsed, sources: Dict[str, str]) -> Grouped:
+def group(parsed: Parsed, sources: dict[str, str]) -> Grouped:
     """Located remarks placed on their innermost loop and classified: the queryable report."""
     located = sorted(
         (r for r in parsed.remarks if r.line), key=lambda r: (r.file, r.line, r.col, r.kind, r.pass_name, r.text)
     )
     nests = {name: scan_nests(text) for name, text in sorted(sources.items())}
 
-    per_loop: Dict[Tuple[str, int, int], List[Remark]] = {}
-    per_file: Dict[str, List[Remark]] = {}
+    per_loop: dict[tuple[str, int, int], list[Remark]] = {}
+    per_file: dict[str, list[Remark]] = {}
     for remark in located:
         owner = owning_loop(nests.get(remark.file, ()), remark.line)
         if owner is None:
@@ -426,15 +483,15 @@ def render_vector(detail: VectorDetail) -> str:
     return " ".join(parts)
 
 
-def counted(items: Sequence[str]) -> List[str]:
-    tally: Dict[str, int] = {}
+def counted(items: Sequence[str]) -> list[str]:
+    tally: dict[str, int] = {}
     for item in items:
         tally[item] = tally.get(item, 0) + 1
     return [item if n == 1 else f"{item} x{n}" for item, n in tally.items()]
 
 
-def loop_lines(prefix: str, verdict: Verdict) -> List[str]:
-    out: List[str] = []
+def loop_lines(prefix: str, verdict: Verdict) -> list[str]:
+    out: list[str] = []
     if verdict.vectorized:
         out.append(f"{prefix} vec: " + "; ".join(counted([render_vector(d) for d in verdict.vectorized])))
     out.extend(f"{prefix} missed: {reason}" for reason in counted(verdict.missed))
@@ -445,7 +502,7 @@ def loop_lines(prefix: str, verdict: Verdict) -> List[str]:
 
 
 def build_summary(
-    parsed: Parsed, sources: Dict[str, str], report_paths: Sequence[str], compiler: str, family: str
+    parsed: Parsed, sources: dict[str, str], report_paths: Sequence[str], compiler: str, family: str
 ) -> str:
     grouped = group(parsed, sources)
     out = [f"loop-nest summary: compiler={compiler} family={family} remarks={len(parsed.remarks)}", ""]
@@ -453,7 +510,7 @@ def build_summary(
         for nest in grouped.nests[name]:
             depth = max(loop.depth for loop in nest.loops)
             head = f"{name}:{nest.start}  nest depth {depth}  function unknown"
-            body: List[str] = []
+            body: list[str] = []
             for loop in sorted(nest.loops, key=lambda loop: loop.line):
                 verdict = grouped.by_loop.get((name, nest.start, loop.line))
                 if verdict is not None:
@@ -492,12 +549,12 @@ def resolve_compiler(choice: str, sources: Sequence[pathlib.Path]) -> str:
     raise SystemExit("no gcc or clang on PATH -- pass --compiler")
 
 
-def report_command(compiler: str, family: str, cflags: Sequence[str], source: pathlib.Path) -> List[str]:
+def report_command(compiler: str, family: str, cflags: Sequence[str], source: pathlib.Path) -> list[str]:
     report = flags.GCC_OPT_REPORT if family == GCC else flags.CLANG_OPT_REPORT
     return [compiler, *cflags, *report.split(), DEBUG_FLAG[family], "-c", str(source), "-o", os.devnull]
 
 
-def main(argv: Optional[Sequence[str]] = None) -> int:
+def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("sources", nargs="+", type=pathlib.Path, help="C/C++ sources to compile and report on")
     parser.add_argument("--compiler", default="auto", help="gcc/clang/g++/clang++ or a path ('auto': first on PATH)")
@@ -515,10 +572,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     cflags = shlex.split(args.cflags)
     args.report_dir.mkdir(parents=True, exist_ok=True)
 
-    parsed: List[Parsed] = []
-    sources: Dict[str, str] = {}
-    report_paths: List[str] = []
-    failed: List[str] = []
+    parsed: list[Parsed] = []
+    sources: dict[str, str] = {}
+    report_paths: list[str] = []
+    failed: list[str] = []
     for source in args.sources:
         command = report_command(compiler, family, cflags, source)
         proc = subprocess.run(command, capture_output=True, text=True, check=False)

@@ -36,7 +36,6 @@ import pathlib
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
-from typing import Dict, List
 
 import pytest
 
@@ -65,49 +64,49 @@ FULL_ENV = "HPCAGENT_BENCH_DETERMINISM_FULL"
 #: Two seeds that differ; any pair does, 0 vs 1 keeps the failure message readable.
 SEEDS = ("0", "1")
 
-TRANSLATORS_PRESENT = importlib.util.find_spec("numpyto_c.emit") is not None
+TRANSLATORS_PRESENT = importlib.util.find_spec("hpcagent_bench.translators.numpyto_c.emit") is not None
 
 
 def emit_text(target: str, kernel_py: pathlib.Path, bench_info: pathlib.Path, func_name: str) -> str:
     """The source ``target`` emits for one kernel. Each call re-parses, exactly as a fresh
     CLI invocation would, so nothing is carried between the two emits of a comparison."""
-    from numpyto_common.frontend import parse_kernel
-    from numpyto_common.lowering import lower
+    from hpcagent_bench.translators.numpyto_common.frontend import parse_kernel
+    from hpcagent_bench.translators.numpyto_common.lowering import lower
 
     if target in ("c", "cpp", "pluto"):
-        from numpyto_c.emit import emit_c, emit_cpp, emit_pluto
+        from hpcagent_bench.translators.numpyto_c.emit import emit_c, emit_cpp, emit_pluto
 
         kir = lower(parse_kernel(kernel_py, bench_info))
         return {"c": emit_c, "cpp": emit_cpp, "pluto": emit_pluto}[target](kir, fn_name="k")
     if target == "fortran":
-        from numpyto_fortran.emit import emit_fortran
+        from hpcagent_bench.translators.numpyto_fortran.emit import emit_fortran
 
         return emit_fortran(lower(parse_kernel(kernel_py, bench_info)), fn_name="k")
     if target == "dace":
         # Takes the PARSED kir, not the lowered one -- it runs its own python-backend desugar
         # (matching hpcagent_bench.autogen), so it exercises a lowering path no other target does.
-        from numpyto_c.dace_emit import emit_dace
+        from hpcagent_bench.translators.numpyto_c.dace_emit import emit_dace
 
         return emit_dace(parse_kernel(kernel_py, bench_info))
     src = kernel_py.read_text()
     if target == "jax":
-        from numpyto_jax.core import emit_jax
+        from hpcagent_bench.translators.numpyto_jax.core import emit_jax
 
         return emit_jax(src, func_name)
     if target == "cupy":
-        from numpyto_cupy.emit import emit_cupy
+        from hpcagent_bench.translators.numpyto_cupy.emit import emit_cupy
 
         return emit_cupy(src)
     if target == "pythran":
-        from numpyto_pythran.emit import emit_pythran
+        from hpcagent_bench.translators.numpyto_pythran.emit import emit_pythran
 
         return emit_pythran(src, parse_kernel(kernel_py, bench_info))
-    from numpyto_numba.emit import emit_numba
+    from hpcagent_bench.translators.numpyto_numba.emit import emit_numba
 
     return emit_numba(src, kir=parse_kernel(kernel_py, bench_info))
 
 
-def digest_kernel(key: str) -> Dict[str, str]:
+def digest_kernel(key: str) -> dict[str, str]:
     """``{target: sha256}`` for one kernel. A refusal is digested as ``refused:<Exc>``: an
     emitter that declines a kernel must decline it the same way every run, and folding
     refusals in keeps kernel choice free of "does every target support this one"."""
@@ -120,7 +119,7 @@ def digest_kernel(key: str) -> Dict[str, str]:
     if not kernel_py.exists():
         return {}
     func_name = spec.func_name or spec.module_name
-    out: Dict[str, str] = {}
+    out: dict[str, str] = {}
     with bench_info_tempfile(spec) as bench_info:
         bench_info = pathlib.Path(bench_info)
         for target in TARGETS:
@@ -133,11 +132,11 @@ def digest_kernel(key: str) -> Dict[str, str]:
     return out
 
 
-def digest_all(keys: List[str]) -> Dict[str, Dict[str, str]]:
+def digest_all(keys: list[str]) -> dict[str, dict[str, str]]:
     return {key: digest_kernel(key) for key in keys}
 
 
-def kernels_under_test() -> List[str]:
+def kernels_under_test() -> list[str]:
     if os.environ.get(FULL_ENV):
         from hpcagent_bench.spec import KERNELS as REGISTRY
 
@@ -145,7 +144,7 @@ def kernels_under_test() -> List[str]:
     return list(KERNELS)
 
 
-def first_difference(left: Dict[str, Dict[str, str]], right: Dict[str, Dict[str, str]]) -> str:
+def first_difference(left: dict[str, dict[str, str]], right: dict[str, dict[str, str]]) -> str:
     """The first ``kernel/target`` whose digest differs, for the assertion message."""
     for key in sorted(set(left) | set(right)):
         a, b = left.get(key, {}), right.get(key, {})
@@ -155,7 +154,7 @@ def first_difference(left: Dict[str, Dict[str, str]], right: Dict[str, Dict[str,
     return ""
 
 
-def child_digests(seed: str, keys: List[str]) -> Dict[str, Dict[str, Dict[str, str]]]:
+def child_digests(seed: str, keys: list[str]) -> dict[str, dict[str, dict[str, str]]]:
     """Run this file as a script under ``PYTHONHASHSEED=seed``; read back both of its passes."""
     env = {**os.environ, "PYTHONHASHSEED": seed}
     proc = subprocess.run(
@@ -170,7 +169,7 @@ def child_digests(seed: str, keys: List[str]) -> Dict[str, Dict[str, Dict[str, s
 
 
 @functools.lru_cache(maxsize=None, typed=True)
-def seeded_runs() -> Dict[str, Dict[str, Dict[str, Dict[str, str]]]]:
+def seeded_runs() -> dict[str, dict[str, dict[str, dict[str, str]]]]:
     """``{seed: {"first": digests, "second": digests}}``. Both children do the same work and
     neither reads the other, so they run at the same time; every test below reads this one
     result rather than re-emitting."""

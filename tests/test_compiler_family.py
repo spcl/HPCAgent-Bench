@@ -310,7 +310,7 @@ def test_gcc_has_no_offload_path_left() -> None:
     box it could not offload even if it were trusted to.)"""
     assert not [family for family, _ in languages.OFFLOAD_REFS if family == "gcc"]
     assert "gcc" not in languages.OFFLOAD_FAMILY.values()
-    drivers = {name for name in languages.OFFLOAD_DRIVER.values()}
+    drivers = set(languages.OFFLOAD_BUILD_DRIVER.values())
     assert not drivers & {"gcc", "g++", "gfortran"}, f"a gcc driver is wired as an offload leg: {drivers}"
     leftovers = [name for name in vars(flags) if "GCC" in name and ("OMP_TARGET" in name or "OPENACC" in name)]
     assert not leftovers, f"gcc offload flag sets still present: {leftovers}"

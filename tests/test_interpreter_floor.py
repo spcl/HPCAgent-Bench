@@ -25,12 +25,7 @@ FLOOR = (3, 12)
 
 #: Constructs newer than FLOOR, each with the version that introduced it. A plain grep, because the
 #: point is to catch them on an interpreter that CANNOT parse them.
-TOO_NEW = (
-    (re.compile(r"TypeVar\([^)]*\bdefault="), "3.13", "PEP 696 TypeVar default"),
-    (re.compile(r"^type\s+[A-Za-z_]\w*\s*=", re.MULTILINE), "3.12", "PEP 695 type alias statement"),
-    (re.compile(r"^class\s+[A-Za-z_]\w*\[", re.MULTILINE), "3.12", "PEP 695 class type parameters"),
-    (re.compile(r"^def\s+[A-Za-z_]\w*\[", re.MULTILINE), "3.12", "PEP 695 function type parameters"),
-)
+TOO_NEW = ((re.compile(r"TypeVar\([^)]*\bdefault="), "3.13", "PEP 696 TypeVar default"),)
 
 
 #: Names the typing module gained after FLOOR. Importing one parses and compiles everywhere and is
@@ -170,10 +165,12 @@ def scope_faults(body: list[ast.stmt], bound: set[str], starred: bool, aliases: 
     """Walk one scope in execution order, checking each eager annotation against what is bound."""
     faults: list[str] = []
     for stmt in body:
+        # PEP 695: a generic def/class binds its type parameters for its own annotations and body
+        params = {param.name for param in getattr(stmt, "type_params", ())}
         for annotation in annotations_of(stmt):
-            faults.extend(annotation_faults(annotation, bound, starred, aliases))
+            faults.extend(annotation_faults(annotation, bound | params, starred, aliases))
         if isinstance(stmt, ast.ClassDef):
-            faults.extend(scope_faults(stmt.body, set(bound), starred, aliases))
+            faults.extend(scope_faults(stmt.body, bound | params, starred, aliases))
         for block in blocks(stmt):
             faults.extend(scope_faults(block, set(bound), starred, aliases))
         bound.update(bindings(stmt))
@@ -197,6 +194,14 @@ FLOOR_DEFECTS = (
     ),
     ("_OVERRIDES: dict[str, ConfigValue] = {}\nConfigValue = bool | int | str | None\n", eager_annotation_faults, True),
     ("def lookup(key: str) -> 'Entry' | None:\n    return None\n", eager_annotation_faults, True),
+    # a PEP 695 alias is lazy and unions at runtime; a PEP 695 parameter is bound in its own scope
+    (
+        "type Entry = dict[str, 'Later']\ndef lookup(key: str) -> Entry | None:\n    return None\n",
+        eager_annotation_faults,
+        False,
+    ),
+    ("class Box[T]:\n    def get(self) -> T | None:\n        return None\n", eager_annotation_faults, False),
+    ("def first[T](items: list[T]) -> T | None:\n    return None\n", eager_annotation_faults, False),
     (
         "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    import pandas as pd\ndef rows(f: pd.DataFrame) -> None: ...\n",
         eager_annotation_faults,
@@ -219,6 +224,13 @@ FLOOR_DEFECTS = (
     ),
     ("ConfigValue = int\n_OVERRIDES: dict[str, ConfigValue] = {}\n", eager_annotation_faults, False),
 )
+
+
+def test_the_too_new_lists_name_only_what_the_floor_cannot_run() -> None:
+    """A construct at or below FLOOR is allowed (PEP 695 once the floor reached 3.12)."""
+    at_floor = [what for _, version, what in TOO_NEW if tuple(map(int, version.split("."))) <= FLOOR]
+    at_floor += [name for name, version in TYPING_TOO_NEW.items() if tuple(map(int, version.split("."))) <= FLOOR]
+    assert not at_floor, f"listed as newer than the {FLOOR} floor but not: {at_floor}"
 
 
 @pytest.mark.parametrize("pattern, version, what", TOO_NEW, ids=[t[2] for t in TOO_NEW])
@@ -297,6 +309,9 @@ def test_no_module_postpones_annotations() -> None:
         "typeis-guarded",
         "forward-name",
         "string-union",
+        "pep695-alias-union",
+        "pep695-generic-class",
+        "pep695-generic-def",
         "type-checking-only",
         "type-checking-quoted",
         "string-alias-union",

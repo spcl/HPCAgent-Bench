@@ -1088,7 +1088,7 @@ def test_the_amd_occupancy_note_promises_no_agent_report_column_the_payload_does
 def test_the_amd_counter_note_gives_the_papi_this_image_builds_as_the_reason() -> None:
     """The AMD image builds PAPI 7.2.0 without rocp_sdk. Calling the component newer than that PAPI
     sends a reader after a PAPI upgrade that would not add it."""
-    dockerfile = pathlib.Path(__file__).resolve().parents[1] / "containers/cluster/ce-images/judge-agent-amd/Dockerfile"
+    dockerfile = pathlib.Path(__file__).resolve().parents[1] / "containers/images/judge-agent-amd/Dockerfile"
     built = re.search(r'--with-components="([^"]+)"', dockerfile.read_text())
     assert built, "the AMD image no longer names its PAPI components in one --with-components list"
     components = built.group(1).split()

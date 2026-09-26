@@ -20,7 +20,7 @@ import threading
 from collections.abc import Callable, Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import ModuleType
-from typing import TYPE_CHECKING, Any, Dict, List, Tuple
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
 import pytest
@@ -66,14 +66,14 @@ TASK = {
 class StubJudge(BaseHTTPRequestHandler):
     """Records what reached it and answers the configured (status, payload)."""
 
-    calls: List[Dict[str, Any]] = []
-    reply: Tuple[int, Dict[str, Any]] = (200, GRADE)
+    calls: list[dict[str, Any]] = []
+    reply: tuple[int, dict[str, Any]] = (200, GRADE)
     protocol_version = "HTTP/1.1"
 
     def log_message(self, *args: object) -> None:
         pass
 
-    def record(self, body: Dict[str, Any]) -> None:
+    def record(self, body: dict[str, Any]) -> None:
         url = urlparse(self.path)
         StubJudge.calls.append({"method": self.command, "path": url.path, "query": url.query, "body": body})
 
@@ -298,13 +298,13 @@ def test_an_upstream_failure_names_its_exception_type(
 
 def test_search_still_runs_locally(client: "TestClient", service: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
     """/search is this container's own tool and is unchanged: same context join, same limit."""
-    seen: Dict[str, Any] = {}
+    seen: dict[str, Any] = {}
 
-    def fake_search(query: str, limit: int | None) -> Dict[str, Any]:
+    def fake_search(query: str, limit: int | None) -> dict[str, Any]:
         seen.update(query=query, limit=limit)
         return {"answer": "use LDS"}
 
-    monkeypatch.setattr(service.web_search, "run_web_search", fake_search)
+    monkeypatch.setattr(service.judge_web_search, "run_web_search", fake_search)
     response = client.post("/search", json={"query": "MI300 LDS", "context": "gemm", "limit": 3})
     assert response.status_code == 200
     assert response.json() == {"answer": "use LDS"}
@@ -316,10 +316,10 @@ def test_search_failure_is_a_bad_gateway(
     client: "TestClient", service: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
 
-    def boom(query: str, limit: int | None) -> Dict[str, Any]:
+    def boom(query: str, limit: int | None) -> dict[str, Any]:
         raise RuntimeError("serpapi down")
 
-    monkeypatch.setattr(service.web_search, "run_web_search", boom)
+    monkeypatch.setattr(service.judge_web_search, "run_web_search", boom)
     assert client.post("/search", json={"query": "x"}).status_code == 502
 
 
@@ -330,10 +330,10 @@ def test_search_not_provisioned_is_a_distinct_service_unavailable(
     search infra hiccuped' -- ``NotProvisionedError`` must answer 503 with a machine-readable
     ``cause``, never the same status a real SerpAPI/crawl/LLM failure gets."""
 
-    def unprovisioned(query: str, limit: int | None) -> Dict[str, Any]:
-        raise service.web_search.NotProvisionedError("SERPAPI_API_KEY must be set")
+    def unprovisioned(query: str, limit: int | None) -> dict[str, Any]:
+        raise service.judge_web_search.NotProvisionedError("SERPAPI_API_KEY must be set")
 
-    monkeypatch.setattr(service.web_search, "run_web_search", unprovisioned)
+    monkeypatch.setattr(service.judge_web_search, "run_web_search", unprovisioned)
     response = client.post("/search", json={"query": "x"})
     assert response.status_code == service.SEARCH_NOT_PROVISIONED == 503
     assert response.json()["detail"]["cause"] == "not_provisioned"
@@ -372,7 +372,7 @@ def arm_language() -> Iterator[str]:
         config.clear_override("record.language")
 
 
-def logged_calls(db: str) -> List[Dict[str, Any]]:
+def logged_calls(db: str) -> list[dict[str, Any]]:
     import sqlite3
 
     conn = sqlite3.connect(db)
@@ -383,7 +383,7 @@ def logged_calls(db: str) -> List[Dict[str, Any]]:
         conn.close()
 
 
-def run_languages(db: str) -> List[Any]:
+def run_languages(db: str) -> list[Any]:
     """The language of every run in ``db``, which is where a logged call's language lives."""
     import sqlite3
 

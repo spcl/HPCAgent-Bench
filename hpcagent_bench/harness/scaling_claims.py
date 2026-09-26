@@ -27,6 +27,28 @@ import sys
 import time
 from collections.abc import Iterator, Sequence
 
+__all__ = [
+    "BASELINE_DB",
+    "CLAIM_DB",
+    "CLAIM_DDL",
+    "HEARTBEAT_S",
+    "MIN_HISTORY",
+    "STALE_S",
+    "Claimer",
+    "Key",
+    "beat",
+    "beat_loop",
+    "claim",
+    "claimed_by_job",
+    "connection",
+    "finish",
+    "heartbeat",
+    "held_keys",
+    "item_estimate",
+    "main",
+    "release",
+]
+
 #: The claim DB's file name in the out dir. Not ``scaling-grade-*.db``: graded_keys globs those.
 CLAIM_DB: str = "scaling-claims.db"
 CLAIM_DDL: str = (

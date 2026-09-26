@@ -20,9 +20,10 @@ wrapper (``python -I seal.py ... -- true``) in a subprocess and reports what the
 costs one process, memoized for the session, and it is the same call the judge itself makes at
 startup (``harness/service.py``).
 
-Unprivileged user namespaces are off on a stock GitHub-hosted runner, so CI covers this surface in
-the ``mpi-sealed`` job instead (``.github/workflows/tests.yml``); see CONTRIBUTING.md for what that
-environment needs and how to reproduce it locally.
+Unprivileged user namespaces are off on a stock GitHub-hosted runner until the setup action turns
+AppArmor's restriction off; CI covers this surface in the ``mpi`` job's sealed phase
+(``.github/workflows/tests.yml``), which fails when this probe refuses. See CONTRIBUTING.md for
+what that environment needs and how to reproduce it locally.
 """
 
 import functools

@@ -23,8 +23,10 @@ import pathlib
 import re
 import subprocess
 
+from tests.env_render import BASES, rendered
+
 REPO = pathlib.Path(__file__).resolve().parents[1]
-IMAGES_ENV = REPO / "containers" / "cluster" / "ce-images" / "images.env"
+IMAGES_ENV = REPO / "containers" / "images" / "images.env"
 
 #: Hand-rendered EDFs that exist outside images.env, and why. An entry here is an EXEMPTION, so
 #: each one states what it is and what state it is in -- an allowlist that merely lists names
@@ -35,8 +37,8 @@ KNOWN_ONE_OFFS = {
     # time, while every other sglang EDF reaches the same patch through a PYTHONPATH under
     # $SCRATCH that role_mounts drops for the inference role, so the loader dies before the model
     # is up. It is not installer-managed, so install_edfs.sh never repoints it, and its rendered
-    # copy pointed at a /capstor image that the Sep 2026 migration removed; it was taken out of
-    # ~/.edf on 2026-09-16 rather than left there resolving to nothing.
+    # copy pointed at an image a storage migration removed; it was taken out of ~/.edf rather
+    # than left there resolving to nothing.
     #
     # CONSEQUENCE: the 11 arms that set INFERENCE_CE_ENV=sglang-candidate -- the glm53 baseline,
     # llr40/focus40 and llrblind families -- CANNOT RUN until that image is rebuilt and the EDF
@@ -66,14 +68,16 @@ def test_every_arm_names_an_installed_container_environment() -> None:
     assert installed, "images.env defined no *_EDF_LATEST names at all"
 
     offenders: list[str] = []
-    for env_file in sorted((REPO / "experiments").glob(".env.*")):
-        for line in env_file.read_text().splitlines():
+    sources = {base: rendered(base) for base in BASES}
+    sources |= {path.name: path.read_text() for path in sorted((REPO / "experiments").glob(".env.*"))}
+    for source, text in sources.items():
+        for line in text.splitlines():
             m = re.match(r"\s*(" + "|".join(CE_ENV_KEYS) + r")=(\S+)", line)
             if not m:
                 continue
             name = m.group(2).strip().strip("\"'")
             if name and name not in installed and name not in KNOWN_ONE_OFFS:
-                offenders.append(f"{env_file.name}: {m.group(1)}={name}")
+                offenders.append(f"{source}: {m.group(1)}={name}")
 
     assert not offenders, (
         "arms name container environments that images.env does not install, so the job dies "

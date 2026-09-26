@@ -36,7 +36,7 @@ score_change = load_script("plot_score_change")
 def test_read_observations_reads_the_extracted_db_the_same_shape_as_a_csv() -> None:
     frame = experiments.read_observations(FIXTURE)
     assert not frame.empty
-    assert {"arm", "packet", "benchmark", "record", "speedup", "tokens"} <= set(frame.columns)
+    assert {"arm", "packet", "benchmark", "row_kind", "speedup", "tokens"} <= set(frame.columns)
     assert set(frame.packet.unique()) == {"", "skills", "cpfsrc", "perf-playbook-cpu"}
 
 

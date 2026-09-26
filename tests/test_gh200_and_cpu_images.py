@@ -19,30 +19,30 @@ from types import ModuleType
 import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-CE = ROOT / "containers" / "cluster" / "ce-images"
-SERVE = CE / "inference" / "serve-daint.sbatch"
+CE = ROOT / "containers" / "images"
+SERVE = ROOT / "containers" / "inference" / "serve-daint.sbatch"
 ARCH = os.uname().machine
 
 #: Platform -> (EDF name, template, image) it renders, as images.env names them.
 RENDERED = {
     "gh200": [
-        ("hpcagent-bench-agent-gh200-latest", "judge-agent-cuda/edf.toml.example", "hpcagent-bench-agent-gh200.sqsh"),
+        ("hpcagent-bench-agent-gh200-latest", "judge-agent-cuda/agent.edf.toml.in", "hpcagent-bench-agent-gh200.sqsh"),
         (
             "hpcagent-bench-judge-gh200-latest",
-            "judge-agent-cuda/edf.judge.toml.example",
+            "judge-agent-cuda/judge.edf.toml.in",
             "hpcagent-bench-judge-gh200.sqsh",
         ),
-        ("hpcagent-bench-vllm-gh200-latest", "vllm-cuda/edf.toml.example", "hpcagent-bench-vllm-gh200.sqsh"),
+        ("hpcagent-bench-vllm-gh200-latest", "vllm-cuda/edf.toml.in", "hpcagent-bench-vllm-gh200.sqsh"),
     ],
     "cpu": [
         (
             f"hpcagent-bench-agent-cpu-{ARCH}-latest",
-            "judge-agent-cpu/edf.toml.example",
+            "judge-agent-cpu/agent.edf.toml.in",
             f"hpcagent-bench-agent-cpu-{ARCH}.sqsh",
         ),
         (
             f"hpcagent-bench-judge-cpu-{ARCH}-latest",
-            "judge-agent-cpu/edf.judge.toml.example",
+            "judge-agent-cpu/judge.edf.toml.in",
             f"hpcagent-bench-judge-cpu-{ARCH}.sqsh",
         ),
     ],
@@ -50,13 +50,13 @@ RENDERED = {
 
 #: judge-agent template -> the prefixes its PATH must put ahead of /usr/bin, and the toolchain it names.
 TOOLCHAIN_EDFS = {
-    "judge-agent-cuda/edf.toml.example": (("/opt/gcc/bin", "/opt/view/bin", "/usr/local/cuda/bin"), "/opt/gcc/bin/"),
-    "judge-agent-cuda/edf.judge.toml.example": (
+    "judge-agent-cuda/agent.edf.toml.in": (("/opt/gcc/bin", "/opt/view/bin", "/usr/local/cuda/bin"), "/opt/gcc/bin/"),
+    "judge-agent-cuda/judge.edf.toml.in": (
         ("/opt/gcc/bin", "/opt/view/bin", "/usr/local/cuda/bin"),
         "/opt/gcc/bin/",
     ),
-    "judge-agent-cpu/edf.toml.example": (("/opt/venv/bin", "/usr/local/bin", "/usr/lib/llvm-22/bin"), "/usr/bin/"),
-    "judge-agent-cpu/edf.judge.toml.example": (
+    "judge-agent-cpu/agent.edf.toml.in": (("/opt/venv/bin", "/usr/local/bin", "/usr/lib/llvm-22/bin"), "/usr/bin/"),
+    "judge-agent-cpu/judge.edf.toml.in": (
         ("/opt/venv/bin", "/usr/local/bin", "/usr/lib/llvm-22/bin"),
         "/usr/bin/",
     ),
@@ -140,7 +140,7 @@ def test_a_judge_agent_edf_resolves_the_image_toolchain_before_the_distro(templa
     assert env["PYTHONSAFEPATH"] == "1"
 
 
-@pytest.mark.parametrize("template", ["judge-agent-cuda/edf.toml.example", "judge-agent-cuda/edf.judge.toml.example"])
+@pytest.mark.parametrize("template", ["judge-agent-cuda/agent.edf.toml.in", "judge-agent-cuda/judge.edf.toml.in"])
 def test_the_gh200_edfs_keep_the_base_images_open_mpi_off_path(template: str) -> None:
     """The NGC base ships HPC-X Open MPI in /usr/local/mpi/bin; on PATH it pairs an Open MPI mpicc
     with an MPICH mpiexec, and P ranks each come up as their own COMM_WORLD of size 1."""

@@ -20,7 +20,7 @@ and in `docs/serving/<tag>.md`; copy them from there.
 layout. Success prints `WEIGHTS READY`.
 
 ```bash
-MODELS="org/Name" sbatch containers/cluster/ce-images/inference/fetch_weights.sbatch
+MODELS="org/Name" sbatch containers/inference/fetch_weights.sbatch
 ```
 
 **2. Write the env files.** Copy the pair with the same engine and node shape (`qwen38`, `oss120b`:
@@ -66,7 +66,7 @@ MODEL=<tag> ./serve-only.sbatch            # serve; the log reaches "endpoint is
 ```
 
 For tool-call, reasoning and long-context accuracy gates, run the smokes in
-`containers/cluster/ce-images/inference/` from that directory: `smoke-kimi-sglang.sbatch` takes
+`containers/inference/` from that directory: `smoke-kimi-sglang.sbatch` takes
 `MODEL_REPO`, `SERVED_MODEL`, `TOOL_PARSER`, `REASONING_PARSER`, `MEM_FRACTION`, `CONTEXT_LEN`;
 `smoke-kimi-eager-pg.sbatch` (vLLM) takes `MODEL_REPO`, `TOOL_PARSER`, `REASONING_PARSER`,
 `EXTRA_SERVE_ARGS`. A failure prints `SMOKE FAILED`.
@@ -90,12 +90,12 @@ python -m pytest --maxfail=10 tests/test_display_names.py tests/test_palette.py 
 
 | File | Change |
 |---|---|
-| `containers/cluster/ce-images/<engine>/` | `Dockerfile`, `build.sh`, `build.sbatch`, `edf.toml.example` (copy `sglang/`) |
-| `containers/cluster/ce-images/images.env` | `INFERENCE_<ENGINE>_SQSH`, `_EDF_LATEST`, `_TEMPLATE`, `_REPO`, `_TAG` |
-| `containers/cluster/ce-images/install_edfs.sh` | render the new EDF beside the sglang one |
+| `containers/images/<engine>/` | `Dockerfile`, `build.sh`, `build.sbatch`, `edf.toml.in` (copy `sglang/`) |
+| `containers/images/images.env` | `INFERENCE_<ENGINE>_SQSH`, `_EDF_LATEST`, `_TEMPLATE`, `_REPO`, `_TAG` |
+| `containers/images/install_edfs.sh` | render the new EDF beside the sglang one |
 | `experiments/run_cluster.sh` `run_vllm_node` | interpreter (`engine_python`) and a `command=(...)` branch |
 
-`edf.toml.example` keeps the `PLACEHOLDER.sqsh` image line, a multi-line `mounts = [` block, absolute
+`edf.toml.in` keeps the `PLACEHOLDER.sqsh` image line, a multi-line `mounts = [` block, absolute
 `PATH` and `LD_LIBRARY_PATH` under `[env]` (the CE drops the image's ENV) and the fabric hook
 annotations. The engine name also goes in the profiles of `verify_image.py` and the role lists
 of `promote_image.sh`, `pull_image.sh` and `experiments/smoke-new-images.sh` (`SMOKE`).
@@ -107,8 +107,8 @@ The endpoint must answer `GET /v1/models`, `POST /v1/chat/completions` and, in t
 `AGENT_LLM_MODE=direct`, Anthropic `POST /v1/messages` (`AGENT_LLM_MODE=litellm` fronts it with a proxy).
 
 ```bash
-REPO=$PWD IMAGE_DIR=containers/cluster/ce-images/<engine> sbatch containers/cluster/ce-images/build_and_verify.sbatch
-containers/cluster/ce-images/promote_image.sh <engine>   # after the verify job passes
+REPO=$PWD IMAGE_DIR=containers/images/<engine> sbatch containers/images/build_and_verify.sbatch
+containers/images/promote_image.sh <engine>   # after the verify job passes
 experiments/smoke-new-images.sh <engine>
 python -m pytest --maxfail=10 tests/test_vllm_pp_serve_args.py tests/test_derived_edf.py
 ```

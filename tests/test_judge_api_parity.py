@@ -11,7 +11,6 @@ looks like a judge fault. Both drifts are silent, so they are pinned here rather
 import dataclasses
 import inspect
 import re
-from typing import Set
 
 from hpcagent_bench.harness import service, tools
 from hpcagent_bench.harness.envelope import Submission
@@ -22,7 +21,7 @@ from hpcagent_bench.harness.envelope import Submission
 ALIAS_ROUTES = {"oracle"}
 
 
-def post_routes() -> Set[str]:
+def post_routes() -> set[str]:
     """The POST routes the handler accepts, read from ``serve_post``'s own guard tuple (``do_POST`` only
     wraps it in the abandoned-client watcher)."""
     source = inspect.getsource(service.JudgeHandler.serve_post)
@@ -31,11 +30,12 @@ def post_routes() -> Set[str]:
     return set(re.findall(r"\"([a-z]+)\"", match.group(1)))
 
 
-def client_paths() -> Set[str]:
+def client_paths() -> set[str]:
     """The first path segment of every route :class:`JudgeClient` posts or gets."""
     source = inspect.getsource(tools.JudgeClient)
     return {
-        path.strip("/").split("/")[0].split("{")[0] for path in re.findall(r"_(?:post|get)\(f?\"([^\"]+)\"", source)
+        path.strip("/").split("/")[0].split("{")[0]
+        for path in re.findall(r"self\.(?:post|get)\(f?\"([^\"]+)\"", source)
     }
 
 

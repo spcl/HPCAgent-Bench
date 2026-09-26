@@ -10,16 +10,18 @@ them has been wrong in some campaign already:
 * the treatment key RESOLVES for the arm shape the launcher submits (hip / amd / multinode),
   since a packet that raises does so after the allocation is held;
 * it stages the RCCL page and nothing else, because every further page is a second variable;
-* the two arms are TOLD APART in the recorded identity -- ``runs.packet`` plus the ``packets`` row
-  holding the resolved definition -- or the DB cannot separate them after the fact.
+* the two arms are TOLD APART in the recorded identity -- ``runs.packet``, whose key the registry
+  resolves to one definition -- or the DB cannot separate them after the fact.
 """
+
+import dataclasses
+import json
 
 import pytest
 
 from hpcagent_bench import packets
-from hpcagent_bench.harness import recording
 
-#: The arm shape experiments/submit-mlscale.sh submits: HIP on the AMD image, spanning nodes.
+#: The mlscale arm shape: HIP on the AMD image, spanning nodes.
 ARM = {"language": "hip", "image": "amd", "multinode": True}
 
 #: The control stages nothing; the treatment stages the RCCL hints page and only that.
@@ -62,22 +64,16 @@ def test_the_treatment_refuses_a_language_its_device_never_runs() -> None:
         packets.resolve(TREATMENT, "c", {}, fill=False, image="cpu", multinode=True)
 
 
-def test_the_two_arms_are_distinct_in_the_recorded_identity(tmp_path) -> None:
-    """``runs.packet`` groups a query and the ``packets`` table holds what the key MEANT when it was
-    recorded. Two arms whose key or whose definition coincided would pool into one population."""
-    db = str(tmp_path / "runs.db")
-    conn = recording.connect(db)
-    try:
-        for key in PAGES:
-            recording.record_packet_definition(conn, key, ARM["language"], 1)
-        conn.commit()
-        rows = dict(conn.execute("SELECT packet, definition FROM packets").fetchall())
-    finally:
-        conn.close()
-    assert set(rows) == set(PAGES), sorted(rows)
-    assert len(set(rows.values())) == len(rows), "the two arms recorded the same definition"
-    for key, definition in rows.items():
-        assert '"error"' not in definition, f"{key!r} recorded an unresolvable definition: {definition}"
+def test_the_two_arms_are_distinct_in_the_recorded_identity() -> None:
+    """``runs.packet`` groups a query, and the registry holds what each key MEANS. Two arms whose key
+    or whose resolved definition coincided would pool into one population."""
+    definitions = {
+        key: json.dumps(
+            dataclasses.asdict(packets.resolve(key, ARM["language"], environ={}, fill=False)), sort_keys=True
+        )
+        for key in PAGES
+    }
+    assert len(set(definitions.values())) == len(definitions), "the two arms resolve to the same definition"
 
 
 def test_the_control_is_the_registered_no_packet_key() -> None:

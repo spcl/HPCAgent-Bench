@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Pin the pass/fail BEHAVIOR of the two pre-commit YAML gates on crafted fixtures --
 ``tests/check_yaml_style.py`` (house style, hook id ``hpcagent_bench-yaml-style``) and
-``scripts/check_manifest_structure.py`` (manifest schema, hook id
+``scripts/checks/check_manifest_structure.py`` (manifest schema, hook id
 ``hpcagent_bench-manifest-structure``, reusing ``hpcagent_bench.spec.BenchSpec``).
 
 ``tests/test_yaml_style.py`` already pins that the CURRENT tree conforms; this file pins
@@ -11,11 +11,11 @@ a deliberately good fixture passes, a deliberately bad one is caught with a clea
 """
 
 import importlib.util
+import os
 import subprocess
 import sys
-import textwrap
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any
 
 import pytest
 
@@ -25,10 +25,10 @@ REPO = Path(__file__).resolve().parent.parent
 
 
 def load_check_manifest_structure() -> Any:
-    """Import ``scripts/check_manifest_structure.py`` as a module (it is not an installed
+    """Import ``scripts/checks/check_manifest_structure.py`` as a module (it is not an installed
     package, same technique ``test_header_hook.py`` uses for ``check_headers.py``)."""
     spec = importlib.util.spec_from_file_location(
-        "check_manifest_structure", REPO / "scripts" / "check_manifest_structure.py"
+        "check_manifest_structure", REPO / "scripts" / "checks" / "check_manifest_structure.py"
     )
     module = importlib.util.module_from_spec(spec)
     # Registered BEFORE exec: dataclasses resolves a string annotation through
@@ -65,7 +65,7 @@ def test_yaml_style_catches_a_tab_and_trailing_whitespace(tmp_path: Path) -> Non
     assert any("trailing whitespace" in p for p in probs)
 
 
-# hpcagent_bench-manifest-structure (scripts/check_manifest_structure.py)
+# hpcagent_bench-manifest-structure (scripts/checks/check_manifest_structure.py)
 
 GOOD_NUMPY = "def kern(a, out):\n    out[0] = a[0]\n    return out\n"
 
@@ -105,7 +105,7 @@ def make_kernel(
     return manifest_path
 
 
-def violations_of(module: Any, path: Path) -> Optional[List[str]]:
+def violations_of(module: Any, path: Path) -> list[str] | None:
     return module.violations(str(path))
 
 
@@ -149,40 +149,21 @@ def test_manifest_structure_fails_on_a_kernel_rule_the_schema_accepts(
     assert "kern_nolevel: kernel without an explicit level" in capsys.readouterr().out
 
 
-def test_manifest_hook_bootstraps_its_own_path(tmp_path: Path) -> None:
-    """The hook must run on an interpreter that has NEVER installed the package.
+def test_manifest_hook_imports_the_checkout_through_run_hook() -> None:
+    """The hook must run on an interpreter that has never installed the package.
 
-    It is wired ``language: system``, so pre-commit hands it the ambient interpreter -- which is
-    not required to have ``hpcagent_bench`` importable. This checkout carries an editable install,
-    so a plain run cannot tell the difference; the driver below drops that install's finder to
-    expose the real dependency. Two roots have to be bootstrapped, not one: ``hpcagent_bench``
-    itself, and ``numpyto_common`` under the translators, which ``hpcagent_bench.dtypes`` imports.
+    It is wired ``language: system``, so pre-commit hands it the ambient interpreter. The entry is
+    ``scripts/checks/run_hook.sh``, which sources ``experiments/env.sh`` and runs the check on
+    ``HPCAGENT_BENCH_HOST_PYTHON``; run exactly that way with no PYTHONPATH, the check imports.
     """
+    config = (REPO / ".pre-commit-config.yaml").read_text(encoding="utf-8")
+    assert "entry: bash scripts/checks/run_hook.sh scripts/checks/check_manifest_structure.py" in config
     manifest = load_check_manifest_structure().tracked_manifests()[0]
-    driver = tmp_path / "no_install.py"
-    # The REPO is dropped by path, not by substring. `"hpcagent-bench" not in p` also deleted the
-    # interpreter's own site-packages whenever the venv is named after the project
-    # (venv-hpcagent-bench-314), so the hook failed on a missing `yaml` -- a dependency the ambient
-    # interpreter genuinely had -- and the test reported a bootstrap bug that was its own.
-    driver.write_text(
-        textwrap.dedent(f"""
-        import runpy, sys
-
-        REPO = {str(REPO)!r}
-
-        def owns(finder):
-            mod = finder.__module__ if isinstance(finder, type) else type(finder).__module__
-            return "hpcagent_bench" in mod or "numpyto" in mod
-
-        sys.meta_path = [m for m in sys.meta_path if not owns(m)]
-        sys.path = [p for p in sys.path if p not in ("", ".") and p.rstrip("/") != REPO.rstrip("/")]
-        sys.argv = sys.argv[1:]
-        runpy.run_path(sys.argv[0], run_name="__main__")
-        """)
-    )
+    env = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
     proc = subprocess.run(
-        [sys.executable, str(driver), str(REPO / "scripts" / "check_manifest_structure.py"), manifest],
+        ["bash", "scripts/checks/run_hook.sh", "scripts/checks/check_manifest_structure.py", manifest],
         cwd=REPO,
+        env=env,
         capture_output=True,
         text=True,
     )

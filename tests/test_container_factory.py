@@ -103,7 +103,6 @@ def test_native_is_a_supported_backend_not_a_missing_one() -> None:
     assert spellings["native"].kind == "none"
     assert spellings["native"].image_form == ""
     assert containers.local_run_command(["hpcagent-bench", "run"], backend="native") == ["hpcagent-bench", "run"]
-    assert containers.srun_container_flags("native") == []
     with pytest.raises(ValueError, match="consumes no image"):
         containers.default_image("native")
 
@@ -117,17 +116,6 @@ def test_a_sif_is_never_the_distributed_artifact() -> None:
     assert unconverted == {"docker", "podman"}
     assert spellings["apptainer"].image_form == "sif"
     assert spellings["ce"].image_form == "edf"
-
-
-def test_ce_contributes_an_srun_flag_and_refuses_to_be_silent_without_one() -> None:
-    """On Alps a step without --environment runs OUTSIDE the image, on the bare node, which
-    looks like a broken environment rather than a missing flag. So a missing EDF raises."""
-    assert containers.srun_container_flags("ce", edf="/scratch/loop_level_reasoning.toml") == [
-        "--environment=/scratch/loop_level_reasoning.toml"
-    ]
-    assert containers.srun_container_flags("podman") == []  # an exec wrapper needs no srun flag
-    with pytest.raises(ValueError, match="HPCAGENT_BENCH_EDF"):
-        containers.srun_container_flags("ce")
 
 
 def test_ce_has_no_image_reference_of_its_own() -> None:
@@ -222,14 +210,14 @@ def test_local_run_command_docker_nvidia_uses_the_docker_gpu_spelling() -> None:
     assert argv[-2:] == ["hpcagent_bench:nvidia", "run"]
 
 
-def test_harbor_provider_names_docker_and_singularity() -> None:
-    """Harbor drives docker and singularity. podman and ce have no provider, so they must raise
+def test_harbor_provider_names_docker_podman_and_singularity() -> None:
+    """Harbor (>= 0.23) drives docker, podman and singularity. ce has no provider, so it must raise
     rather than emit one Harbor would reject."""
     assert containers.harbor_env_for("docker") == "docker"
+    assert containers.harbor_env_for("podman") == "podman"
     assert containers.harbor_env_for("apptainer") == "singularity"
-    for without in ("podman", "ce"):
-        with pytest.raises(ValueError, match="Harbor"):
-            containers.harbor_env_for(without)
+    with pytest.raises(ValueError, match="Harbor"):
+        containers.harbor_env_for("ce")
 
 
 def test_default_image_sif_tag_and_overrides(monkeypatch) -> None:
@@ -262,7 +250,7 @@ def test_collect_env_rejects_a_newline_value(monkeypatch) -> None:
 def test_harbor_env_for_maps_and_raises() -> None:
     assert containers.harbor_env_for("apptainer") == "singularity"
     with pytest.raises(ValueError):
-        containers.harbor_env_for("podman")  # podman is launched directly, not via Harbor
+        containers.harbor_env_for("ce")  # the CSCS container engine is launched directly, not via Harbor
 
 
 # install_apptainer retry: both fetches are live-network; subprocess/sleep stubbed, stays pure-unit
@@ -380,17 +368,3 @@ def test_ce_stays_its_own_family_even_though_it_is_podman_underneath() -> None:
     assert all(spellings[name].kind == "exec" for name in containers.family_members("oci"))
     # The safety property itself: asking for the OCI family never lands on the Slurm-only one.
     assert containers.resolve_backend("oci") in containers.family_members("oci")
-
-
-def test_the_alps_script_reads_the_ce_flag_from_the_spelling_file() -> None:
-    """``--environment`` is declared once, in container_backends.txt. The Alps submission script
-    derives it from there rather than spelling it again, so a change to how CE is invoked cannot
-    leave the cluster path behind."""
-    script = pathlib.Path(__file__).resolve().parents[1] / "scripts/cscs/submit_loop_level_reasoning_alps.sbatch"
-    text = script.read_text()
-    assert "ce.srun_flag" in text, "the Alps script must derive the flag from the spelling file"
-    launches = [line for line in text.splitlines() if line.lstrip().startswith(("srun ", 'eval "$(srun '))]
-    assert launches, "no srun steps found"
-    for line in launches:
-        assert '"${CE[@]}"' in line, f"srun step does not carry the derived CE flag: {line.strip()}"
-        assert "--environment=" not in line, f"CE flag hardcoded instead of derived: {line.strip()}"

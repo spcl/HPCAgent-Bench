@@ -1,6 +1,6 @@
 # Private Qwen3.8 endpoint on Beverin
 
-`containers/cluster/ce-images/inference/serve-private.sbatch` starts a keyed, OpenAI-compatible
+`containers/inference/serve-private.sbatch` starts a keyed, OpenAI-compatible
 Qwen3.8 SGLang server on one Beverin node that only you can use. `experiments/serve-only.sbatch`, by
 contrast, serves every interface without a key ([`README.md`](README.md)). Contributors:
 [`extending-private-inference.md`](extending-private-inference.md).
@@ -43,7 +43,7 @@ Both pass `--context-length 262144 --max-running-requests 128 --mamba-full-memor
   to 0.26 by aiter; move it only with the backend and mamba ratio ([`qwen38.md`](qwen38.md)).
 - `mi200`: MI250X has neither FP8 nor aiter kernels, so BF16, triton attention,
   `--disable-custom-all-reduce`, `SGLANG_USE_AITER=0`. Its fraction is per 64 GiB GPU; mi300
-  values do not transfer. Image: `containers/cluster/ce-images/sglang-mi200/README.md`.
+  values do not transfer. Image: `containers/images/sglang-mi200/README.md`.
 
 Measured per leg (401/200 check, tool and reasoning gate, 16 concurrent 256-token requests):
 
@@ -69,7 +69,7 @@ openssl rand -hex 32 > ~/.config/hpcagent-bench/mi300-endpoint.key     # or mi20
 - `KEY_FILE` defaults to `~/.config/hpcagent-bench/<preset>-endpoint.key`. Refused unless mode 600,
   owned by you, at least 32 characters, and only `[A-Za-z0-9._~+/=-]`.
 - Weights must already be in `$HF_HOME/hub` (default from `scripts/cache_env.sh`); the server runs
-  with `HF_HUB_OFFLINE=1`. Fetch with `containers/cluster/ce-images/inference/fetch_weights.sbatch`.
+  with `HF_HUB_OFFLINE=1`. Fetch with `containers/inference/fetch_weights.sbatch`.
 - To rotate the key, overwrite the file and restart the job.
 
 On your laptop (`ACCESS=tunnel`), `~/.ssh/config`:
@@ -104,7 +104,7 @@ both on every submission:
 
 ```bash
 cd "$REPO"
-L=containers/cluster/ce-images/inference/serve-private.sbatch
+L=containers/inference/serve-private.sbatch
 
 PRESET=mi300 MODE=serve sbatch --partition=mi300 --gpus-per-node=4 --time=08:00:00 "$L"               # laptop
 PRESET=mi300 MODE=serve ACCESS=alps sbatch --partition=mi300 --gpus-per-node=4 --time=08:00:00 "$L"   # Daint jobs
@@ -174,7 +174,7 @@ endpoint.json: {"url": "http://172.28.9.16:30000/v1", "served_model": "hpcagent-
 In your Daint job, before the client starts:
 
 ```bash
-source "$REPO"/containers/cluster/ce-images/inference/alps-endpoint.sh <run dir>/endpoint.json || exit 1
+source "$REPO"/containers/inference/alps-endpoint.sh <run dir>/endpoint.json || exit 1
 ```
 
 `alps-endpoint.sh` reads `url`, `served_model` and `key_file` from `endpoint.json` (a path, not the

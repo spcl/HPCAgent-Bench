@@ -22,7 +22,28 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 from hpcagent_bench import campaigns, experiments, frozen_observations, observations_extract, paths
+from hpcagent_bench.observation_columns import OBSERVATION_FIELDS
 from hpcagent_bench.stats import population
+
+__all__ = [
+    "EXPERIMENT_COLUMN",
+    "EXTRACTED_AT",
+    "LOG",
+    "PROVENANCE",
+    "Provenance",
+    "build",
+    "check_columns",
+    "extract",
+    "fuse",
+    "keep_owned",
+    "keep_roster",
+    "load",
+    "main",
+    "now",
+    "stamp",
+    "write_csv",
+    "write_db",
+]
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -110,8 +131,8 @@ def extract(selection: campaigns.Selection, frozen: pathlib.Path | None = None, 
     rows of jobs whose directories are gone or unreadable.
 
     One extractor (:mod:`hpcagent_bench.observations_extract`), because there were two and they
-    disagreed: the other wrote the plural table name into ``record`` and no ``task`` rows at all,
-    so a frame from it carried no token cost and every ``record == "task"`` rule silently did
+    disagreed: the other wrote the plural table name into its row kind and no ``task`` rows at all,
+    so a frame from it carried no token cost and every ``row_kind == "task"`` rule silently did
     nothing."""
     import pandas as pd
 
@@ -119,7 +140,6 @@ def extract(selection: campaigns.Selection, frozen: pathlib.Path | None = None, 
         observations_extract.Options(
             runs=selection.run_globs(),
             benchmarks=paths.BENCHMARKS,
-            focus_tag=selection.tag,
             frozen_dir=frozen,
             **options,  # type: ignore[arg-type]
         )
@@ -191,7 +211,7 @@ def write_db(frame: "pd.DataFrame", path: pathlib.Path) -> pathlib.Path:
     comparison against a number raises. The extractor already declares each column's type, and a
     file written here has to be indistinguishable from one it wrote.
     """
-    names = [name for name in observations_extract.OBSERVATION_FIELDS if name in frame.columns]
+    names = [name for name in OBSERVATION_FIELDS if name in frame.columns]
     extra = [name for name in frame.columns if name not in names]
     rows = frame.to_dict("records")
     return observations_extract.write_db(path, [*names, *extra], rows) and path

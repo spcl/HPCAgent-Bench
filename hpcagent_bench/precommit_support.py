@@ -1,6 +1,6 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Shared helpers for the scripts/check_*.py pre-commit hooks.
+"""Shared helpers for the scripts/checks/check_*.py pre-commit hooks.
 
 Each hook falls back to scanning the tracked tree when pre-commit hands it no positional files (a
 standalone run, or ``--all-files``).
@@ -8,6 +8,8 @@ standalone run, or ``--all-files``).
 
 import pathlib
 import subprocess
+
+__all__ = ["git_tracked", "is_generated_source"]
 
 
 def git_tracked(pattern: str | None = None, cwd: pathlib.Path | None = None) -> list[str]:

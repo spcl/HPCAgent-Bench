@@ -27,6 +27,63 @@ import yaml
 from hpcagent_bench import spec
 from hpcagent_bench.spec import as_list
 
+__all__ = [
+    "CLEAN_SUFFIX",
+    "COMPACT_NAMES",
+    "COMPACT_NAME_MAX",
+    "OFFLOAD_ARM_TOKEN",
+    "OFFLOAD_DELIVERY_NAME",
+    "REGISTRY",
+    "SHORT_NAME_MAX",
+    "SUITE_PREFIXES",
+    "BaselineSpec",
+    "CampaignEntry",
+    "Marker",
+    "ModelEntry",
+    "Names",
+    "PacketDef",
+    "Registry",
+    "aliased_arm",
+    "arm_aliases_of",
+    "arm_delivery_name",
+    "arm_suffix",
+    "as_block",
+    "baseline_arms_of",
+    "baselines_of",
+    "campaigns_of",
+    "canonical",
+    "display_name",
+    "framework_name",
+    "harness_name",
+    "kernel_compact_display_name",
+    "kernel_display_name",
+    "kernel_names",
+    "kernel_short_display_name",
+    "language_name",
+    "language_of",
+    "language_spellings",
+    "manifest_names",
+    "marker_of",
+    "model_checkpoint",
+    "model_name",
+    "model_of",
+    "model_spellings",
+    "models_of",
+    "names",
+    "names_of",
+    "optimizer_name",
+    "order",
+    "owed_run_roots_of",
+    "packet_defs_of",
+    "packet_name",
+    "packet_of",
+    "packet_parts",
+    "packet_short_name",
+    "packet_spellings",
+    "registry",
+    "split_record_language",
+]
+
 REGISTRY = pathlib.Path(__file__).resolve().parent / "envs" / "registry.yaml"
 
 #: A clean re-run's arm-name suffix; every ``-clean`` arm folds into its base identity. Clean is a
@@ -460,7 +517,7 @@ def split_record_language(value: str) -> tuple[str, str]:
     is dropped here, not returned. A value naming no registered language token passes through
     unchanged with no packet -- the normal unregistered-tag fallback.
     """
-    text = value[: -len(CLEAN_SUFFIX)] if value.endswith(CLEAN_SUFFIX) else value
+    text = value.removesuffix(CLEAN_SUFFIX)
     for language, spellings in language_spellings():
         for spelling in spellings:
             token = spelling.strip("-")
@@ -522,7 +579,7 @@ def manifest_names() -> tuple[Names, Names]:
     broken to parse must not stop a figure from drawing -- it falls back to its stem."""
     found: Names = {}
     short: Names = {}
-    for key in spec.KERNELS.keys():
+    for key in spec.KERNELS:
         path = spec.KERNELS[key]
         stem = key.rsplit("/", 1)[-1]
         try:

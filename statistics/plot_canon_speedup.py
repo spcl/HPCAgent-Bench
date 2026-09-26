@@ -258,7 +258,7 @@ def run(
         print(f"{db} holds none of the drawn columns", file=sys.stderr)
         return 1
 
-    fig, _ax = draw(rows, baseline)
+    fig = draw(rows, baseline)[0]
     out_dir.mkdir(parents=True, exist_ok=True)
     out_stem = style.save(fig, out_dir / stem)
     table_path = out_stem.with_suffix(".csv")
@@ -270,7 +270,7 @@ def run(
         print(f"  {row.label:<28} median {row.median:>7.2f}x   geomean {row.geomean:>7.2f}x   n={row.n}")
 
     if distribution:
-        dist_fig, _dist_ax = draw_distribution(times, baseline, draw_columns)
+        dist_fig = draw_distribution(times, baseline, draw_columns)[0]
         dist_stem = style.save(dist_fig, out_dir / f"{stem}_distribution")
         print(f"{dist_stem}.pdf / .png")
     return 0

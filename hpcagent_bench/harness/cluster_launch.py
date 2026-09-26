@@ -10,7 +10,38 @@ import sys
 import time
 import urllib.parse
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Sequence, Tuple
+from collections.abc import Callable, Sequence
+from typing import TYPE_CHECKING
+
+__all__ = [
+    "JUDGE",
+    "OPTIMIZER",
+    "POLL_INTERVAL",
+    "RAY_PORT",
+    "VLLM_HEAD",
+    "VLLM_WORKER",
+    "RankRole",
+    "assemble_urls",
+    "drive",
+    "endpoint_hostport",
+    "expected_traditional_world",
+    "expected_world",
+    "launch",
+    "plan_roles",
+    "plan_traditional_roles",
+    "popen",
+    "rank_status",
+    "settle",
+    "settle_rounds",
+    "start_inference",
+    "start_judge",
+    "teardown",
+    "vllm_command",
+    "wait_ready",
+]
+
+if TYPE_CHECKING:
+    from mpi4py import MPI
 
 VLLM_HEAD = "vllm_head"
 VLLM_WORKER = "vllm_worker"
@@ -25,7 +56,7 @@ RAY_PORT = 6379
 POLL_INTERVAL = 5.0
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class RankRole:
     """The role a single rank plays: endpoint index, and this endpoint's head rank.
 
@@ -49,7 +80,7 @@ def expected_traditional_world(optimizer_nodes: int, judge_nodes: int) -> int:
     return optimizer_nodes + judge_nodes
 
 
-def plan_traditional_roles(world_size: int, optimizer_nodes: int, judge_nodes: int) -> List[RankRole]:
+def plan_traditional_roles(world_size: int, optimizer_nodes: int, judge_nodes: int) -> list[RankRole]:
     """Per-rank roles for the TRADITIONAL track: O optimizer ranks then J judge ranks, no inference.
 
     A deterministic optimizer emits the same artifact every run, so there is no model to serve --
@@ -65,7 +96,7 @@ def plan_traditional_roles(world_size: int, optimizer_nodes: int, judge_nodes: i
             f"+ judge_nodes={judge_nodes}); allocate exactly {need} nodes "
             f"(srun -N {need} --ntasks-per-node=1)"
         )
-    roles: List[RankRole] = []
+    roles: list[RankRole] = []
     for r in range(world_size):
         if r < optimizer_nodes:
             roles.append(RankRole(OPTIMIZER, -1, -1, is_driver=(r == 0)))
@@ -74,7 +105,7 @@ def plan_traditional_roles(world_size: int, optimizer_nodes: int, judge_nodes: i
     return roles
 
 
-def plan_roles(world_size: int, inference_endpoints: int, nodes_per_vllm: int, judge_nodes: int) -> List[RankRole]:
+def plan_roles(world_size: int, inference_endpoints: int, nodes_per_vllm: int, judge_nodes: int) -> list[RankRole]:
     """The per-rank role table for the whole allocation; raises ValueError on a bad shape or size mismatch."""
     if inference_endpoints < 1 or nodes_per_vllm < 1 or judge_nodes < 1:
         raise ValueError(
@@ -90,7 +121,7 @@ def plan_roles(world_size: int, inference_endpoints: int, nodes_per_vllm: int, j
             f"(srun -N {need} --ntasks-per-node=1)"
         )
     vllm_total = inference_endpoints * nodes_per_vllm
-    roles: List[RankRole] = []
+    roles: list[RankRole] = []
     for r in range(world_size):
         if r < vllm_total:
             endpoint = r // nodes_per_vllm
@@ -102,7 +133,7 @@ def plan_roles(world_size: int, inference_endpoints: int, nodes_per_vllm: int, j
     return roles
 
 
-def assemble_urls(gathered: Sequence[dict], vllm_port: int, judge_port: int) -> Tuple[List[str], List[str]]:
+def assemble_urls(gathered: Sequence[dict], vllm_port: int, judge_port: int) -> tuple[list[str], list[str]]:
     """Build the ordered (vllm_urls, judge_urls) from the allgathered rank identities.
 
     ``judge_urls`` is in MPI-rank order, which is exactly the ``endpoint`` index
@@ -117,7 +148,7 @@ def assemble_urls(gathered: Sequence[dict], vllm_port: int, judge_port: int) -> 
 
 def vllm_command(
     model: str, port: int, tensor_parallel: int, pipeline_parallel: int, extra: Sequence[str]
-) -> List[str]:
+) -> list[str]:
     """The vllm serve argv for an endpoint head; pipeline_parallel > 1 turns on the ray executor."""
     cmd = [
         "vllm",
@@ -135,7 +166,7 @@ def vllm_command(
     return cmd + list(extra)
 
 
-def endpoint_hostport(url: str) -> Tuple[str, int]:
+def endpoint_hostport(url: str) -> tuple[str, int]:
     """``(host, port)`` from a base URL, defaulting the scheme so a bare ``host:port`` parses."""
     parsed = urllib.parse.urlparse(url if "//" in url else "http://" + url)
     return parsed.hostname, parsed.port
@@ -146,7 +177,7 @@ def wait_ready(urls: Sequence[str], timeout: float, log: Callable[[str], None]) 
     deadline = time.monotonic() + timeout
     pending = list(urls)
     while pending and time.monotonic() < deadline:
-        still: List[str] = []
+        still: list[str] = []
         for url in pending:
             host, port = endpoint_hostport(url)
             try:
@@ -175,9 +206,9 @@ def start_inference(
     head_host: str,
     vllm_extra: Sequence[str],
     log: Callable[[str], None],
-) -> List[subprocess.Popen]:
+) -> list[subprocess.Popen]:
     """Bring this inference rank up: vllm serve alone for K==1, else ray head/workers then vllm serve over ray."""
-    procs: List[subprocess.Popen] = []
+    procs: list[subprocess.Popen] = []
     use_ray = nodes_per_vllm > 1
     if use_ray and me.role == VLLM_WORKER:
         # --block keeps this process (and its ray node) alive until teardown kills it
@@ -255,7 +286,7 @@ def settle_rounds(ready_timeout: float, poll_interval: float = POLL_INTERVAL) ->
 
 def rank_status(
     me: RankRole, procs: Sequence[subprocess.Popen], vllm_port: int, judge_port: int, hostname: str, rank: int
-) -> Dict[str, str]:
+) -> dict[str, str]:
     """This rank's {"kind", "detail"} for the settle loop: dead / ready / pending, probed locally."""
     for proc in procs:
         rc = proc.poll()
@@ -273,6 +304,64 @@ def rank_status(
         return {"kind": "pending", "detail": f"rank {rank} ({me.role}) on {hostname}: port {port} not bound yet"}
 
 
+def settle(
+    comm: "MPI.Comm", rounds_budget: int, probe: Callable[[], dict[str, str]], is_driver: bool
+) -> tuple[list[str], list[str]]:
+    """``(failures, pending)`` once every rank is up, one has died, or ``rounds_budget`` is spent.
+
+    Each round every rank allgathers its state, so all break on the same round; bounded by a round
+    count (not a per-rank clock) so nobody strands the others in the next allgather."""
+    failures: list[str] = []
+    pending: list[str] = []
+    for attempt in range(rounds_budget):
+        if attempt:
+            time.sleep(POLL_INTERVAL)
+        statuses = comm.allgather(probe())
+        failures = [s["detail"] for s in statuses if s["kind"] == "dead"]
+        pending = [s["detail"] for s in statuses if s["kind"] == "pending"]
+        if failures or not pending:
+            break
+        if is_driver:
+            print(
+                f"[launch] waiting on {len(pending)}/{len(statuses)} rank(s) (round {attempt + 1}/{rounds_budget})..."
+            )
+    return failures, pending
+
+
+def drive(
+    gathered: Sequence[dict],
+    failures: Sequence[str],
+    pending: Sequence[str],
+    *,
+    run_driver: Callable[[list[str], list[str]], int],
+    vllm_port: int,
+    judge_port: int,
+    ready_timeout: float,
+    shape: str,
+) -> int:
+    """The driver rank's run: abort on a dead (rc 4) or unready (rc 3) rank, else hand the assembled
+    URLs to ``run_driver`` once the driver itself reaches every endpoint."""
+    if failures:
+        print(f"[launch] {len(failures)} rank(s) failed to start their server; aborting:")
+        for err in failures:
+            print(f"  {err}")
+        return 4
+    if pending:
+        print(f"[launch] {len(pending)} rank(s) not ready within {ready_timeout:.0f}s; aborting:")
+        for stuck in pending:
+            print(f"  {stuck}")
+        return 3
+    vllm_urls, judge_urls = assemble_urls(gathered, vllm_port, judge_port)
+    print(f"[launch] {shape}")
+    print(f"[launch] vllm_urls={vllm_urls}")
+    print(f"[launch] judge_urls={judge_urls}")
+    # confirm the driver can reach each endpoint across the fabric (bound != reachable)
+    if not wait_ready(vllm_urls + judge_urls, min(60.0, ready_timeout), print):
+        print("[launch] endpoints bound but not reachable from the driver; aborting")
+        return 3
+    return run_driver(vllm_urls, judge_urls) or 0
+
+
 def launch(
     *,
     inference_endpoints: int,
@@ -280,14 +369,13 @@ def launch(
     judge_nodes: int,
     model: str,
     optimizer_nodes: int = 0,
-    run_driver: Callable[[List[str], List[str]], int],
+    run_driver: Callable[[list[str], list[str]], int],
     vllm_port: int = 8000,
     judge_port: int = 8800,
     gpus_per_node: int = 4,
     ready_timeout: float = 1800.0,
     vllm_extra: Sequence[str] = (),
     serve_extra: Sequence[str] = (),
-    log: Callable[[str], None] = print,
 ) -> int:
     """Bootstrap the whole allocation and drive one run (collective across all ranks); rc broadcast from rank 0."""
     from mpi4py import MPI
@@ -298,87 +386,57 @@ def launch(
     # ``inference_endpoints == 0`` selects the TRADITIONAL track: optimizer ranks instead of vLLM
     # ranks, judge role unchanged. Everything downstream -- the allgather, the settle loop, the
     # driver's rc broadcast, teardown -- is shared with the agent track rather than duplicated.
-    traditional = inference_endpoints == 0
     try:
         roles = (
             plan_traditional_roles(world, optimizer_nodes, judge_nodes)
-            if traditional
+            if inference_endpoints == 0
             else plan_roles(world, inference_endpoints, nodes_per_vllm, judge_nodes)
         )
     except ValueError as exc:
         if rank == 0:
-            log(f"[launch] bad allocation shape: {exc}")
+            print(f"[launch] bad allocation shape: {exc}")
         return 2
     me = roles[rank]
     hostname = socket.gethostname()
     gathered = comm.allgather({"rank": rank, "role": me.role, "endpoint": me.endpoint, "hostname": hostname})
 
     # a spawn failure must not skip the collectives below and deadlock the others
-    procs: List[subprocess.Popen] = []
+    procs: list[subprocess.Popen] = []
     spawn_error = ""
     try:
         if me.role in (VLLM_HEAD, VLLM_WORKER):
             head_host = next(g["hostname"] for g in gathered if g["rank"] == me.head_rank)
-            procs = start_inference(me, nodes_per_vllm, model, vllm_port, gpus_per_node, head_host, vllm_extra, log)
+            procs = start_inference(me, nodes_per_vllm, model, vllm_port, gpus_per_node, head_host, vllm_extra, print)
         elif me.role == JUDGE:
-            procs = [start_judge(judge_port, me.endpoint, serve_extra, log)]
+            procs = [start_judge(judge_port, me.endpoint, serve_extra, print)]
     except BaseException as exc:  # noqa: BLE001 -- a spawn failure must NOT skip the collectives below and deadlock
         spawn_error = f"rank {rank} ({me.role}) on {hostname}: {exc}"
-        log(f"[launch] {spawn_error}")
+        print(f"[launch] {spawn_error}")
 
-    # each round every rank allgathers its state, so all break on the same round; bounded by a
-    # round count (not a per-rank clock) so nobody strands the others in the next allgather
-    rounds_budget = settle_rounds(ready_timeout)
-    failures: List[str] = []
-    pending: List[str] = []
-    for attempt in range(rounds_budget):
-        if attempt:
-            time.sleep(POLL_INTERVAL)
-        mine = (
-            {"kind": "dead", "detail": spawn_error}
-            if spawn_error
-            else rank_status(me, procs, vllm_port, judge_port, hostname, rank)
-        )
-        statuses = comm.allgather(mine)
-        failures = [s["detail"] for s in statuses if s["kind"] == "dead"]
-        pending = [s["detail"] for s in statuses if s["kind"] == "pending"]
-        if failures or not pending:
-            break
-        if me.is_driver:
-            log(f"[launch] waiting on {len(pending)}/{len(statuses)} rank(s) (round {attempt + 1}/{rounds_budget})...")
+    def probe() -> dict[str, str]:
+        if spawn_error:
+            return {"kind": "dead", "detail": spawn_error}
+        return rank_status(me, procs, vllm_port, judge_port, hostname, rank)
 
+    failures, pending = settle(comm, settle_rounds(ready_timeout), probe, me.is_driver)
     rc = 0
     try:
         if me.is_driver:
-            if failures:
-                log(f"[launch] {len(failures)} rank(s) failed to start their server; aborting:")
-                for err in failures:
-                    log(f"  {err}")
-                rc = 4
-            elif pending:
-                log(f"[launch] {len(pending)} rank(s) not ready within {ready_timeout:.0f}s; aborting:")
-                for stuck in pending:
-                    log(f"  {stuck}")
-                rc = 3
-            else:
-                vllm_urls, judge_urls = assemble_urls(gathered, vllm_port, judge_port)
-                log(
-                    f"[launch] {inference_endpoints} vLLM endpoint(s) x {nodes_per_vllm} node(s), "
-                    f"{judge_nodes} judge(s)"
-                )
-                log(f"[launch] vllm_urls={vllm_urls}")
-                log(f"[launch] judge_urls={judge_urls}")
-                # confirm the driver can reach each endpoint across the fabric (bound != reachable)
-                if wait_ready(vllm_urls + judge_urls, min(60.0, ready_timeout), log):
-                    rc = run_driver(vllm_urls, judge_urls) or 0
-                else:
-                    log("[launch] endpoints bound but not reachable from the driver; aborting")
-                    rc = 3
+            rc = drive(
+                gathered,
+                failures,
+                pending,
+                run_driver=run_driver,
+                vllm_port=vllm_port,
+                judge_port=judge_port,
+                ready_timeout=ready_timeout,
+                shape=f"{inference_endpoints} vLLM endpoint(s) x {nodes_per_vllm} node(s), {judge_nodes} judge(s)",
+            )
     except BaseException as exc:  # noqa: BLE001 -- a driver crash must still reach the barrier + release the servers
-        log(f"[launch] driver failed: {exc}")
+        print(f"[launch] driver failed: {exc}")
         rc = 1
     finally:
         comm.Barrier()  # driver done (or crashed/aborted) -> release the server ranks so nobody hangs
-        teardown(procs, me, nodes_per_vllm, log)
+        teardown(procs, me, nodes_per_vllm, print)
     # reached by all ranks: guards above catch everything, so nobody skips this final collective
     return comm.bcast(rc, root=0)

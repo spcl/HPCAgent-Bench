@@ -1,0 +1,57 @@
+# CSCS Container Engine EDF for the image vllm-cuda/Dockerfile builds, on Daint (GH200).
+#
+# `CE_PLATFORM=gh200 install_edfs.sh` renders it into ~/.edf as hpcagent-bench-vllm-gh200-latest:
+# it fills ${SCRATCH}, the mount list and the `image` line. inference/serve-daint.sbatch serves
+# through it.
+image = "${SCRATCH}/ce-images/hpcagent-bench-vllm-gh200.sqsh"
+
+mounts = [
+  # install_edfs.sh replaces this item with hpcagent_bench_edf_mounts (scripts/cache_env.sh):
+  # the filesystems of $SCRATCH and $FAST_SCRATCH, which hold HF_HOME and the checkout.
+  "<hpcagent_bench_edf_mounts>"
+]
+
+workdir = "${SCRATCH}"
+writable = true
+# The base's ENTRYPOINT is `vllm serve`; the serve script spells the whole command instead.
+entrypoint = false
+
+[annotations]
+# The fabric comes from the node, never from the image (IMAGE_REQUIREMENTS.md):
+#   cxi           the Slingshot NIC for libfabric
+#   aws_ofi_nccl  the NCCL net plugin over libfabric/CXI. Without it NCCL does not fail -- it falls
+#                 back to TCP sockets over hsn* and multi-node serving is merely slow.
+#                 Single-node serving never loads a net plugin.
+# The image is CUDA 12.9 so this cuda12 plugin matches its runtime major; serve-daint.sbatch forces
+# NCCL_NET for a multi-node serve, so a plugin that does not load fails init loudly.
+com.hooks.cxi.enabled = "true"
+com.hooks.aws_ofi_nccl.enabled = "true"
+com.hooks.aws_ofi_nccl.variant = "cuda12"
+
+[env]
+# The interpreter every hpcagent-bench step in this image runs (run_cluster.sh).
+HPCAGENT_BENCH_IMAGE_PYTHON = "/usr/bin/python3"
+# Declared, not inherited: the CE does not reliably keep the image's own ENV. The vLLM image has no
+# venv; python3 and vllm live in the system prefix.
+PATH = "/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+# CSCS's documented NCCL-over-libfabric settings for GH200.
+FI_PROVIDER = "cxi"
+FI_CXI_RX_MATCH_MODE = "software"
+FI_CXI_DISABLE_HOST_REGISTER = "1"
+FI_CXI_DEFAULT_CQ_SIZE = "131072"
+FI_CXI_DEFAULT_TX_SIZE = "32768"
+FI_MR_CACHE_MONITOR = "userfaultfd"
+NCCL_CROSS_NIC = "1"
+NCCL_NET_GDR_LEVEL = "PHB"
+NCCL_SOCKET_IFNAME = "hsn"
+GLOO_SOCKET_IFNAME = "hsn0"
+NCCL_DEBUG = "INFO"
+NCCL_DEBUG_SUBSYS = "INIT,NET"
+TORCH_NCCL_ASYNC_ERROR_HANDLING = "1"
+# vLLM's symmetric-memory all-reduce paths are not reliable on aarch64/GH200.
+VLLM_ALLREDUCE_USE_SYMM_MEM = "0"
+VLLM_NCCL_USE_SYMM_MEM = "0"
+# hwloc's GL/OpenCL probes hang the topology probe inside a container.
+HWLOC_COMPONENTS = "-opencl,-levelzero,-gl"
+CUDA_CACHE_DISABLE = "1"
+TOKENIZERS_PARALLELISM = "false"

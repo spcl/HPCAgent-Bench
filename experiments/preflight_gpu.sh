@@ -16,12 +16,11 @@ ulimit -c 0
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 
 OPT=${OPT:-$(dirname "${PWD}")}
-PY=${SCRATCH:?}/venv-hpcagent-bench-314/bin/python
-export PYTHONPATH="${OPT}:${OPT}/hpcagent_bench/numpy_translators/src${PYTHONPATH:+:${PYTHONPATH}}"
+. "${OPT}/experiments/env.sh"
 CE_ENV=${CE_ENV:-hpcagent-bench-agent-mi300-latest}
 source ./roster.sh
 TAG=${TAG:-llr-focus40}
-#: Keyed by target AND roster, the same name submit-cpf-llr40.sh gates on. A directory
+#: Keyed by target AND roster, the view name submit.sh defaults CPF_VIEW to. A directory
 #: keyed by target alone was shared by a 5-kernel smoke and the 40-kernel campaign, and the
 #: judge answers a missing form `unavailable` with HTTP 200 -- so 35 of 40 kernels went
 #: untreated and the arm collapsed into its own control without one failure to show for it.
@@ -44,7 +43,7 @@ else
     img=$(awk -F'"' '/^image *=/{print $2; exit}' "${edf}")
     if [[ -f "${img}" ]]; then
         # An image OLDER than the newest Dockerfile is one built before the current fixes.
-        newer=$(find "${OPT}/containers/cluster/ce-images/judge-agent-amd" -name Dockerfile -newer "${img}" | wc -l)
+        newer=$(find "${OPT}/containers/images/judge-agent-amd" -name Dockerfile -newer "${img}" | wc -l)
         [[ "${newer}" == 0 ]] \
             && check "image freshness" PASS "$(basename "${img}") newer than its Dockerfile" \
             || check "image freshness" FAIL "$(basename "${img}") is OLDER than judge-agent-amd/Dockerfile -- rebuild"
@@ -54,7 +53,7 @@ else
 fi
 
 echo "== build flags (from the judge config, never spelled here) =="
-"${PY}" - <<'PY'
+"${HPCAGENT_BENCH_HOST_PYTHON}" - <<'PY'
 import sys
 from hpcagent_bench import languages
 name, blk = languages._compiler_for_lang(languages._load_compilers(), "hip")
@@ -96,7 +95,7 @@ echo "== skill packets (one variable per arm) =="
 # The control must carry NO packet and the treated arm EXACTLY the page under test. An arm that
 # ships lang-<language> beside the page measures three treatments against a control carrying none,
 # which is the confound this campaign exists to avoid.
-"${PY}" ./preflight_packets.py
+"${HPCAGENT_BENCH_HOST_PYTHON}" ./preflight_packets.py
 [[ $? -ne 0 ]] && fails=$((fails + 1))
 
 echo

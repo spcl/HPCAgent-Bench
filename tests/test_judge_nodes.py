@@ -8,10 +8,10 @@ import sys
 
 import pytest
 
-REPO = pathlib.Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO / "experiments"))
 
 import judge_nodes  # noqa: E402
+
+REPO = pathlib.Path(__file__).resolve().parents[1]
 
 
 @pytest.mark.parametrize(

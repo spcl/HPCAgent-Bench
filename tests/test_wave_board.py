@@ -72,18 +72,6 @@ def test_an_arm_name_splits_into_its_campaign_model_and_variant(
     assert board.split_arm(arm, MODELS) == expected
 
 
-def test_the_harness_smoke_is_back_on_the_board(board: types.ModuleType) -> None:
-    """Agent Harness Comparison@20's smoke (CAMPAIGNS 2026-09-18) is reported again: it disappeared
-    only because no CAMPAIGNS entry matched harness-focus20-smoke-<model>-<harness>, not because it
-    was meant to stay off the board."""
-    assert board.campaign_of("harness-focus20-smoke-qwen38-claude-autokernel") == "harness-focus20-smoke"
-    assert board.split_arm("harness-focus20-smoke-oss120b-optimas", MODELS) == (
-        "harness-focus20-smoke",
-        "oss120b",
-        "optimas",
-    )
-
-
 def test_scicomp_perf_playbook_gpu_wins_over_its_cpu_prefix(board: types.ModuleType) -> None:
     """campaign_of takes the LONGEST matching prefix: "scicomp-perf-playbook-gpu" must win over
     "scicomp-perf-playbook", or a GPU arm's rest-of-name would start "gpu-<model>-..." and the model

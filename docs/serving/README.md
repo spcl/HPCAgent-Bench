@@ -21,8 +21,8 @@ Once per account, register the EDFs (container definitions) and resolve your Slu
 
 ```bash
 cd "$REPO"
-containers/cluster/ce-images/install_edfs.sh          # renders into ~/.edf
-sbatch containers/cluster/ce-images/pull_images.sbatch  # only if install_edfs.sh reports a missing image
+containers/images/install_edfs.sh          # renders into ~/.edf
+sbatch containers/images/pull_images.sbatch  # only if install_edfs.sh reports a missing image
 . scripts/cscs/account_env.sh                          # Beverin rejects jobs without an account
 ```
 
@@ -50,11 +50,10 @@ followed by a ready-to-paste `curl`. The job output is `serve-only-<jobid>.out`;
 `$SCRATCH/inference-server/<jobid>/server-<rank>.log`, and `serve.env` there is the merged env that
 actually ran.
 
-**Runtime caveat.** `serve-only.sbatch` always launches through the CE (`srun --environment=`). Under
-the CE, a single-node server (qwen38, oss120b) can fail building its tensor-parallel group with
-`Failed to initialize any NET plugin`, and pyxis needs the site `ENROOT_CACHE_PATH` to be creatable.
-The campaign launcher avoids both through `enroot`; see
-[`experiments/README.md`](../../experiments/README.md#container-runtimes).
+**Runtime caveat.** `serve-only.sbatch` launches the registered EDF as is. A single-node server
+(qwen38, oss120b) can fail building its tensor-parallel group with `Failed to initialize any NET
+plugin` when the EDF forces the fabric plugin; the campaign launcher switches the hooks off for a
+single-node server, see [`experiments/README.md`](../../experiments/README.md#container-runtimes).
 
 ## 2. Images (EDFs)
 
@@ -80,7 +79,7 @@ plugin, multi-node RCCL silently falls back to TCP.
 | `--mem=0` | otherwise the step's memory cgroup follows its CPU share and the server dies in weight load |
 | `--gpus-per-node=4`, `--ntasks-per-node=1` | every recipe is `tp=4` inside a node |
 | `--cpus-per-task="${SLURM_CPUS_ON_NODE}"` on the server step | see below |
-| `ulimit -c 0` | machine-global `core_pattern` drops multi-GB core files in the CWD; `scripts/check_core_dumps.py` enforces it |
+| `ulimit -c 0` | machine-global `core_pattern` drops multi-GB core files in the CWD; `scripts/checks/check_core_dumps.py` enforces it |
 
 **The CPU trap.** `--exclusive` gives the job the node, not the step its CPUs. A step without
 `--cpus-per-task` gets one core plus its SMT sibling (2 of 192). A starved server does not crash, it
@@ -184,7 +183,7 @@ registered EDF as-is. A model that serves here and fails in a campaign run: susp
 
 - `experiments/serve-only.sbatch`, `experiments/serve-only.env`: the launcher on this page.
 - `experiments/layers/model-<m>.env`, `experiments/.env.base-<m>`: per-model launch lines with inline reasons.
-- `containers/cluster/ce-images/inference/`: `smoke-kimi-sglang.sbatch` (serving smoke with accuracy
+- `containers/inference/`: `smoke-kimi-sglang.sbatch` (serving smoke with accuracy
   gate and concurrency sweep), `agentlike-probe.py` (multi-stream load), `accuracy-gate.py`,
   `verify-tools-reasoning.py`.
 

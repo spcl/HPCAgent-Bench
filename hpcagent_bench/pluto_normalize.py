@@ -24,6 +24,21 @@ subset :func:`normalize_ppcg_input`. The file on disk is the build's freshness k
 
 import re
 
+__all__ = [
+    "OPAQUE_PREFIX",
+    "externalize_scop_scalars",
+    "floord_subscripts",
+    "fold_constant_sign_ternaries",
+    "forward_substitute_scalars",
+    "inline_pinned_constants",
+    "normalize_ppcg_input",
+    "normalize_scop_input",
+    "normalize_strided_loops",
+    "opaque_helper_calls",
+    "restore_output",
+    "substitute_induction_scalars",
+]
+
 #: A scalar declaration the emitter writes at function top (``_emit_body``'s int/implicit locals).
 _SCALAR_DECL_RE = re.compile(
     r"^(?P<indent>[ \t]+)(?P<ctype>(?:double|float) _Complex|double|float|_Float16|bool|u?int(?:8|16|32|64)_t)"
@@ -34,7 +49,7 @@ _SCALAR_DECL_RE = re.compile(
 #: The emitted entry point: ``void <symbol>(<params>) {`` on one line, closed by ``}`` in column 0.
 _FUNC_RE = re.compile(r"^void (?P<name>\w+)\((?P<params>[^\n]*)\) \{\n(?P<body>.*?)^\}\n", re.MULTILINE | re.DOTALL)
 
-#: A for header the emitter writes for a literal step other than +1 (``_CBodyEmitter._emit_for``):
+#: A for header the emitter writes for a literal step other than +1 (``CBodyEmitter.emit_for``):
 #: ``i += s`` or the reverse ``--i``.
 _STRIDED_FOR_RE = re.compile(
     r"^(?P<indent>[ \t]*)for \(int64_t (?P<var>\w+) = (?P<lo>[^;\n]+); (?P=var) (?P<op>[<>]) (?P<hi>[^;\n]+); "
@@ -265,6 +280,55 @@ _UNIT_FOR_RE = re.compile(
 _STEP_ASSIGN_RE = re.compile(r"^(?P<var>\w+) = \(?(?P<src>\w+)(?: (?P<op>[-+]) (?P<c>\d+))?\)?;$")
 
 
+def _step_delta(sm: "re.Match[str]") -> tuple[str, int]:
+    """``(source variable, signed literal)`` of a :data:`_STEP_ASSIGN_RE` match."""
+    return sm.group("src"), int(sm.group("c") or 0) * (-1 if sm.group("op") == "-" else 1)
+
+
+def _step_state(lines: list[str], inner: str, ints: set[str]) -> dict[str, tuple[str, int]]:
+    """``{var: (base, offset)}`` over the loop body's top-level literal-step assignments of integer
+    locals; empty when one steps from a non-integer source."""
+    state: dict[str, tuple[str, int]] = {}
+    for line in lines:
+        if not line.startswith(inner) or line.startswith(inner + " "):
+            continue
+        sm = _STEP_ASSIGN_RE.match(line.strip())
+        if sm is None or sm.group("var") not in ints:
+            continue
+        src, c = _step_delta(sm)
+        if src not in ints:
+            return {}
+        base, off = state.get(src, (src, 0))
+        state[sm.group("var")] = (base, off + c)
+    return state
+
+
+def _closed_form_body(
+    lines: list[str], step_lines: list[str], cands: set[str], steps: dict[str, tuple[str, int]], trip: str
+) -> list[str] | None:
+    """The body with the step lines dropped and each use of a candidate replaced by its closed form
+    ``init + step * trip + offset`` at that point of the body; ``None`` when a candidate is read
+    before any value is known for it. ``steps`` maps each base to ``(init literal, per-iteration step)``."""
+    cur: dict[str, tuple[str, int]] = {b: (b, 0) for b in steps}
+    new_lines: list[str] = []
+    for line in lines:
+        sm = _STEP_ASSIGN_RE.match(line.strip())
+        if sm is not None and sm.group("var") in cands and line in step_lines:
+            src, c = _step_delta(sm)
+            b, off = cur[src]
+            cur[sm.group("var")] = (b, off + c)
+            continue
+        for v in cands:
+            if _ident_re(v).search(line):
+                if v not in cur:
+                    return None
+                b, off = cur[v]
+                init, step = steps[b]
+                line = _ident_re(v).sub(f"({init} + ({step}) * {trip} + ({off}))", line)
+        new_lines.append(line)
+    return new_lines
+
+
 def substitute_induction_scalars(text: str) -> str:
     """POLYCC-017: integer locals a unit-step loop only ever advances by literals (``k = (j + 1);
     j = (k + 1);``) become closed forms of the loop counter (``-1 + 2 * (i - lo) + 1``).
@@ -281,23 +345,8 @@ def substitute_induction_scalars(text: str) -> str:
         lines = body.split("\n")
         inner = indent + "  "
         ints = {d.group("name") for d in _INT_DECL_RE.finditer(text)}
-        state: dict[str, tuple[str, int]] = {}
-        order: list[str] = []
-        ok = True
-        for line in lines:
-            if not line.startswith(inner) or line.startswith(inner + " "):
-                continue
-            sm = _STEP_ASSIGN_RE.match(line.strip())
-            if sm is None or sm.group("var") not in ints:
-                continue
-            src, c = sm.group("src"), int(sm.group("c") or 0) * (-1 if sm.group("op") == "-" else 1)
-            if src not in ints:
-                ok = False
-                break
-            base, off = state.get(src, (src, 0))
-            state[sm.group("var")] = (base, off + c)
-            order.append(sm.group("var"))
-        if not ok or not state:
+        state = _step_state(lines, inner, ints)
+        if not state:
             continue
         cands = set(state)
         # every assignment of a candidate inside the loop must be one of the step lines above
@@ -323,26 +372,9 @@ def substitute_induction_scalars(text: str) -> str:
             continue
         if any(_ident_re(v).search(head[inits[b].end() :]) for v in cands for b in inits):
             continue
-        # symbolic walk: each use takes the value its variable has at that point of the body
-        cur: dict[str, tuple[str, int]] = {b: (b, 0) for b in bases}
-        new_lines: list[str] = []
-        for line in lines:
-            sm = _STEP_ASSIGN_RE.match(line.strip())
-            if sm is not None and sm.group("var") in cands and line in step_lines:
-                src, c = sm.group("src"), int(sm.group("c") or 0) * (-1 if sm.group("op") == "-" else 1)
-                b, off = cur[src]
-                cur[sm.group("var")] = (b, off + c)
-                continue
-            for v in cands:
-                if _ident_re(v).search(line):
-                    if v not in cur:
-                        ok = False
-                        break
-                    b, off = cur[v]
-                    expr = f"({inits[b].group('lit')} + ({state[b][1]}) * ({var} - ({lo})) + ({off}))"
-                    line = _ident_re(v).sub(expr, line)
-            new_lines.append(line)
-        if not ok:
+        steps = {b: (inits[b].group("lit"), state[b][1]) for b in bases}
+        new_lines = _closed_form_body(lines, step_lines, cands, steps, f"({var} - ({lo}))")
+        if new_lines is None:
             continue
         new_head = head
         for b in sorted(bases, key=lambda n: inits[n].start(), reverse=True):

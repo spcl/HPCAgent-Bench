@@ -11,8 +11,8 @@ cd experiments && MODEL=glm53 ./serve-only.sbatch
 
 **Image prerequisite.** GLM-5.3 needs the `sglang-candidate` EDF, and that EDF currently has no
 image: `install_edfs.sh` does not render it. Rebuild the sglang role
-(`containers/cluster/ce-images/sglang/build.sbatch`, output `hpcagent-bench-sglang-candidate.sqsh`),
-then render the EDF. See "Known traps" in [`SUBMITTING.md`](../../SUBMITTING.md#known-traps).
+(`containers/images/sglang/build.sbatch`, output `hpcagent-bench-sglang-candidate.sqsh`),
+then render the EDF. See "Known traps" in [`SUBMITTING.md`](../../experiments/SUBMITTING.md#known-traps).
 The image must bake in a guard keeping `torch.Tensor.format_ue8m0` false and
 `HIPCC_COMPILE_FLAGS_APPEND=-U__HIP_NO_HALF_CONVERSIONS__ -U__HIP_NO_HALF_OPERATORS__`. The other
 sglang EDFs reach that patch through a `PYTHONPATH` under `$SCRATCH`, which the inference role's

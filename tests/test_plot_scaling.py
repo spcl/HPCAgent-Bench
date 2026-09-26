@@ -37,15 +37,15 @@ def row(
 ) -> dict[str, object]:
     """One per-P scaling row in the shape the extractor is required to write."""
     return {
-        "record": scaling.SCALING_RECORD,
+        "row_kind": scaling.SCALING_RECORD,
         "arm": arm,
         "benchmark": kernel,
         "scaling_mode": mode,
-        "ranks": ranks,
-        "nodes": -(-ranks // scaling.RANKS_PER_NODE),
-        "ranked_ns": ranked_ns,
-        "single_rank_ns": single_rank_ns,
-        "work_ratio": work_ratio,
+        "scaling_ranks": ranks,
+        "scaling_nodes": -(-ranks // scaling.RANKS_PER_NODE),
+        "scaling_ranked_ns": ranked_ns,
+        "scaling_single_rank_ns": single_rank_ns,
+        "scaling_work_ratio": work_ratio,
         "scaling_note": note,
         "ts_ms": ts_ms,
     }
@@ -130,7 +130,7 @@ def test_a_failed_p_is_dropped_with_its_reason_and_leaves_a_hole_not_a_zero() ->
     """A P the sweep could not measure has no point, is named with the judge's note, and is counted."""
     arm = "mlscale-strong-qwen38-hip"
     rows = perfect_strong(arm, "dist_moe_dispatch")
-    rows = [r for r in rows if r["ranks"] != 8]
+    rows = [r for r in rows if r["scaling_ranks"] != 8]
     rows.append(row(arm, "dist_moe_dispatch", "strong", 8, 0.0, note="P=8: mpi build failed"))
     curve = only(scaling.curves(frame(rows)))
     assert curve.ranks == (1, 2, 4, 16)  # the hole is a hole
@@ -266,10 +266,10 @@ def test_a_recorded_efficiency_that_the_times_do_not_give_is_reported() -> None:
     """The disclosure column is CHECKED against metric.scaling_point, never trusted over it."""
     rows = [row("mlscale-strong-qwen38-hip", "dist_softmax", "strong", 4, 500.0)]
     good = frame(rows)
-    good["efficiency"] = [0.5]
+    good["scaling_point_efficiency"] = [0.5]
     assert scaling.disagreements(good) == []
     bad = frame(rows)
-    bad["efficiency"] = [0.9]
+    bad["scaling_point_efficiency"] = [0.9]
     assert scaling.disagreements(bad) == [("mlscale-strong-qwen38-hip", "dist_softmax", 4, 0.9, 0.5)]
 
 
@@ -289,7 +289,7 @@ def test_an_empty_frame_draws_nothing_and_raises_nothing() -> None:
 def test_a_frame_of_grade_rows_alone_holds_no_scaling_rows() -> None:
     """The per-P rows are selected by ``record``, so an ordinary observations CSV yields no curves."""
     grades = pd.DataFrame(
-        [{"record": "submission", "arm": "mlscale-weak-qwen38-hip", "benchmark": "dist_softmax", "speedup": 2.0}]
+        [{"row_kind": "submission", "arm": "mlscale-weak-qwen38-hip", "benchmark": "dist_softmax", "speedup": 2.0}]
     )
     assert scaling.curves(grades) == []
 

@@ -9,6 +9,7 @@ import ctypes
 import multiprocessing
 import multiprocessing.connection
 import multiprocessing.context
+import multiprocessing.process
 import multiprocessing.queues
 import os
 import queue
@@ -21,47 +22,69 @@ import time
 import traceback
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Generic, Literal, ParamSpec, TypeAlias, TypeVar
+from typing import Literal
 
 from hpcagent_bench import osinfo
 from hpcagent_bench.isolation import pause_openmp_pools
 from hpcagent_bench.seal import SealPlan, enter
 
-P = ParamSpec("P")
-
-#: What the child hands back: whatever the callable returns. A progress snapshot stands in for that
-#: return value (the best-so-far a killed child would have returned), so it is the same type.
-# No PEP 696 default: that is 3.13+, and the interpreter materialize_shared picks inside a
-# container can be older, where it raises TypeError at import and takes the whole arm down.
-# Covariant: a RunResult is read, never written, so one of a concrete payload type is usable
-# wherever a helper reads any of them (forked_failure_reason, the OOM classifier).
-ResultT = TypeVar("ResultT", covariant=True)
+__all__ = [
+    "ABANDONED",
+    "ABANDON_POLL_S",
+    "ARM_GRACE_S",
+    "CONCRETE_CONTEXTS",
+    "COREDUMP_GRACE_S",
+    "DRAIN_S",
+    "ERROR_BYTES",
+    "EXCEPTION_HEADER",
+    "PR_SET_PDEATHSIG",
+    "TERM_GRACE_S",
+    "RunResult",
+    "abandoned_by",
+    "child_main",
+    "die_with_parent",
+    "drain_progress",
+    "exception_header",
+    "finished_result",
+    "forked_failure_reason",
+    "is_core_dumping",
+    "kill_group",
+    "poll_queue",
+    "process_context",
+    "reparented",
+    "report_without_a_thread",
+    "run_command",
+    "run_forked",
+    "stop_child",
+    "take_error",
+    "take_result",
+]
 
 #: One message on the result queue: the start stamp that arms the parent's deadline, the child's
-#: return value (``None`` when the queue could not take the real one), or its traceback text.
-ChildMessage: TypeAlias = (
-    tuple[Literal["started"], None] | tuple[Literal["ok"], ResultT | None] | tuple[Literal["error"], str]
-)
+#: return value (``None`` when the queue could not take the real one), or its traceback text. ``R`` is
+#: whatever the callable returns; a progress snapshot stands in for that return value (the best-so-far a
+#: killed child would have returned), so it is the same type.
+type ChildMessage[R] = tuple[Literal["started"], None] | tuple[Literal["ok"], R | None] | tuple[Literal["error"], str]
 
 #: The subset of :data:`ChildMessage` that ENDS a run; ``started`` is a clock signal, not an outcome.
-ResultMessage: TypeAlias = tuple[Literal["ok"], ResultT | None] | tuple[Literal["error"], str]
+type ResultMessage[R] = tuple[Literal["ok"], R | None] | tuple[Literal["error"], str]
 
-ChildQueue: TypeAlias = "multiprocessing.queues.Queue[ChildMessage[ResultT]]"
-ProgressQueue: TypeAlias = "multiprocessing.queues.Queue[ResultT]"
+type ChildQueue[R] = multiprocessing.queues.Queue[ChildMessage[R]]
+type ProgressQueue[R] = multiprocessing.queues.Queue[R]
 
 #: The child's LAST-RESORT report channel: a raw pipe, not a queue. Queue.put needs a feeder
 #: thread, and a child after a refused seal (user namespace, no id map, uid 65534 at its
 #: RLIMIT_NPROC) cannot start one. ``Connection.send_bytes`` writes straight to the fd with no
 #: thread and survives being passed to a spawned child.
-ErrorWriter: TypeAlias = "multiprocessing.connection.Connection"
-ErrorReader: TypeAlias = "multiprocessing.connection.Connection"
+type ErrorWriter = multiprocessing.connection.Connection
+type ErrorReader = multiprocessing.connection.Connection
 
 #: Cap on that report, so a runaway traceback cannot fill the pipe and block the dying child.
 ERROR_BYTES = 64 * 1024
 
 #: A start-method context that can fork a process. ``get_context(method)`` is typed as the BaseContext
 #: those three derive from, which declares no ``Process``.
-ProcessContext: TypeAlias = (
+type ProcessContext = (
     multiprocessing.context.ForkContext
     | multiprocessing.context.SpawnContext
     | multiprocessing.context.ForkServerContext
@@ -153,7 +176,7 @@ def is_core_dumping(pid: int) -> bool:
     """True when the kernel reports ``pid`` is writing a core image (Linux >= 4.15); False when
     that is not knowable (another OS, a reaped pid, a hidepid mount), so the caller escalates."""
     try:
-        with open(f"/proc/{pid}/status", "r") as fh:
+        with open(f"/proc/{pid}/status") as fh:
             for line in fh:
                 if line.startswith("CoreDumping:"):
                     return line.split(":", 1)[1].strip() == "1"
@@ -162,9 +185,10 @@ def is_core_dumping(pid: int) -> bool:
     return False
 
 
-@dataclass
-class RunResult(Generic[ResultT]):
-    """Outcome of a forked run: ``ok`` is the success signal; on failure ``signal``/``error`` name the
+@dataclass(frozen=True, slots=True)
+class RunResult[ResultT]:
+    """Outcome of a forked run (frozen, so a RunResult of a concrete payload type reads as one of any
+    wider type, as forked_failure_reason and the OOM classifier do): ``ok`` is the success signal; on failure ``signal``/``error`` name the
     cause (see :func:`forked_failure_reason`); ``result`` carries the picklable return value, or the
     last streamed progress snapshot when the child was killed before returning."""
 
@@ -246,7 +270,7 @@ def process_context(method: str) -> ProcessContext:
     return ctx
 
 
-def report_without_a_thread(err_w: "ErrorWriter | None", text: str) -> None:
+def report_without_a_thread(err_w: ErrorWriter | None, text: str) -> None:
     """Write ``text`` to the raw error pipe (no queue, no feeder thread). The only reporting path
     after a REFUSED seal (see :data:`ErrorWriter`); never raises, so the real cause is not replaced
     by a failure to report it."""
@@ -258,13 +282,13 @@ def report_without_a_thread(err_w: "ErrorWriter | None", text: str) -> None:
         pass
 
 
-def child_main(
+def child_main[ResultT](
     fn: Callable[..., ResultT],
     args: tuple[object, ...],
     kwargs: dict[str, object],
-    q: "ChildQueue[ResultT]",
+    q: ChildQueue[ResultT],
     seal: SealPlan | None = None,
-    err_w: "ErrorWriter | None" = None,
+    err_w: ErrorWriter | None = None,
 ) -> None:
     die_with_parent()
     try:
@@ -305,7 +329,7 @@ def child_main(
 _child = child_main
 
 
-def take_result(q: "ChildQueue[ResultT]", timeout: float) -> ResultMessage[ResultT] | None:
+def take_result[ResultT](q: ChildQueue[ResultT], timeout: float) -> ResultMessage[ResultT] | None:
     """Next item from ``q`` that is a RESULT, or None within ``timeout``; steps past ``started``,
     which a child that starts and finishes inside one poll leaves queued."""
     end = time.monotonic() + timeout
@@ -318,7 +342,7 @@ def take_result(q: "ChildQueue[ResultT]", timeout: float) -> ResultMessage[Resul
             return item
 
 
-def take_error(err_r: "ErrorReader", timeout: float) -> str:
+def take_error(err_r: ErrorReader, timeout: float) -> str:
     """The child's raw-pipe report, or ``""`` when it wrote none within ``timeout``.
 
     ``poll`` before ``recv_bytes`` because the child may have died without writing, and a bare
@@ -331,7 +355,7 @@ def take_error(err_r: "ErrorReader", timeout: float) -> str:
         return ""
 
 
-def drain_progress(progress_q: "ProgressQueue[ResultT]", current: ResultT | None) -> ResultT | None:
+def drain_progress[ResultT](progress_q: ProgressQueue[ResultT], current: ResultT | None) -> ResultT | None:
     """Return the last item pushed to ``progress_q`` (or ``current``), so a kill preserves the last progress."""
     try:
         while True:
@@ -341,7 +365,70 @@ def drain_progress(progress_q: "ProgressQueue[ResultT]", current: ResultT | None
     return current
 
 
-def run_forked(
+def poll_queue[ResultT](q: ChildQueue[ResultT], timeout: float) -> ChildMessage[ResultT] | None:
+    """The next message on ``q``, or ``None`` when none arrives within ``timeout``."""
+    try:
+        return q.get(timeout=timeout)
+    except queue.Empty:
+        return None
+
+
+def stop_child(p: multiprocessing.process.BaseProcess) -> None:
+    """SIGTERM ``p``, then SIGKILL it once the grace period passes: a child that ignores or blocks
+    SIGTERM would hang the parent on an unbounded join. A child the kernel says is dumping core already
+    took a fatal signal, so it gets the core-dump grace instead of a kill that would relabel the crash."""
+    p.terminate()
+    p.join(TERM_GRACE_S)
+    if p.is_alive() and p.pid is not None and is_core_dumping(p.pid):
+        p.join(COREDUMP_GRACE_S)
+    if p.is_alive():
+        p.kill()
+        p.join()
+
+
+def finished_result[ResultT](
+    ec: int | None,
+    q: ChildQueue[ResultT],
+    err_r: ErrorReader,
+    tag: str,
+    result_item: ResultMessage[ResultT] | None,
+    last_progress: ResultT | None,
+) -> RunResult[ResultT]:
+    """The outcome of a child that exited with code ``ec``: its fatal signal, else its result message
+    (drained here when the loop did not see it), else its raw-pipe report, else "no result"."""
+    if ec is not None and ec < 0:  # killed by a fatal signal (segfault, abort, ...)
+        try:
+            sig = signal.Signals(-ec).name
+        except ValueError:
+            sig = f"signal {-ec}"
+        msg = f"{tag}child killed by {sig}"
+        sys.stdout.write(msg + "\n")
+        sys.stdout.flush()
+        return RunResult(ok=False, exit_code=ec, signal=sig, error=msg, result=last_progress)
+    if result_item is None:  # not drained in-loop -- covers the clean-exit race window
+        result_item = take_result(q, DRAIN_S)
+    if result_item is None:
+        # The raw pipe first: a child that could not use the queue (a refused seal, see ErrorWriter)
+        # reported there, and native_call routes seal faults by the SealError name.
+        reported = take_error(err_r, DRAIN_S)
+        if reported:
+            return RunResult(ok=False, exit_code=ec, error=f"{tag}{reported}", result=last_progress)
+        return RunResult(
+            ok=False,
+            exit_code=ec,
+            error=(
+                f"{tag}child exited {ec} with no result "
+                "(a payload the queue feeder could not deliver -- oversized or "
+                "unpicklable -- dies exactly this way)"
+            ),
+            result=last_progress,
+        )
+    if result_item[0] == "ok":
+        return RunResult(ok=True, exit_code=ec, result=result_item[1])
+    return RunResult(ok=False, exit_code=ec, error=result_item[1], result=last_progress)
+
+
+def run_forked[**P, ResultT](
     fn: Callable[P, ResultT],
     *args: P.args,
     label: str = "",
@@ -377,9 +464,9 @@ def run_forked(
     err_w.close()
     last_progress: ResultT | None = None
     # The deadline measures the CHILD'S runtime: the child arms it by reporting that it started,
-    # so fork/spawn latency is not billed to the callee.
-    started_at = time.monotonic()
-    deadline: float | None = None
+    # so fork/spawn latency is not billed to the callee. Until it reports in, the ceiling is its own
+    # timeout plus the arming grace, so a child that never runs at all still ends.
+    limit = None if timeout is None else time.monotonic() + timeout + ARM_GRACE_S
     # Poll so the result queue drains while the child is alive -- a payload bigger than the OS
     # pipe buffer would otherwise block the child's feeder thread forever (join-then-read deadlocks).
     poll = 0.1
@@ -392,21 +479,10 @@ def run_forked(
             return RunResult(ok=False, signal="ABANDONED", error=f"{tag}abandoned: nobody reads its result")
         if progress_q is not None:
             last_progress = drain_progress(progress_q, last_progress)
-        # Until the child reports in, the ceiling is its own timeout plus the arming grace, so a
-        # child that never runs at all still ends rather than hanging the parent forever.
-        limit = (
-            None if timeout is None else (deadline if deadline is not None else (started_at + timeout + ARM_GRACE_S))
-        )
         if limit is not None and time.monotonic() >= limit:
             if result_item is not None:
                 break  # child actually finished (payload already drained) -- not a timeout
-            p.terminate()  # SIGTERM
-            p.join(TERM_GRACE_S)
-            if p.is_alive() and p.pid is not None and is_core_dumping(p.pid):
-                p.join(COREDUMP_GRACE_S)  # already dying of its own signal -- wait, do not relabel it
-            if p.is_alive():  # a child that ignores/blocks SIGTERM would hang the
-                p.kill()  # parent on an unbounded join -- escalate to SIGKILL
-                p.join()
+            stop_child(p)
             if progress_q is not None:
                 last_progress = drain_progress(progress_q, last_progress)
             # The child can die of its OWN fatal signal between the deadline check and terminate();
@@ -418,48 +494,14 @@ def run_forked(
             sys.stdout.write(msg + "\n")
             sys.stdout.flush()
             return RunResult(ok=False, signal="TIMEOUT", error=msg, result=last_progress)
-        if result_item is None:
-            item: ChildMessage[ResultT] | None = None
-            try:
-                item = q.get(timeout=poll)
-            except queue.Empty:
-                item = None
-            if item is not None and item[0] == "started":
-                deadline = time.monotonic() + timeout if timeout is not None else None
-            elif item is not None:
-                result_item = item
-        else:
+        if result_item is not None:
             p.join(poll)
+            continue
+        item = poll_queue(q, poll)
+        if item is not None and item[0] == "started":
+            limit = None if timeout is None else time.monotonic() + timeout
+        elif item is not None:
+            result_item = item
     if progress_q is not None:
         last_progress = drain_progress(progress_q, last_progress)
-    ec = p.exitcode
-    if ec is not None and ec < 0:  # killed by a fatal signal (segfault, abort, ...)
-        try:
-            sig = signal.Signals(-ec).name
-        except ValueError:
-            sig = f"signal {-ec}"
-        msg = f"{tag}child killed by {sig}"
-        sys.stdout.write(msg + "\n")
-        sys.stdout.flush()
-        return RunResult(ok=False, exit_code=ec, signal=sig, error=msg, result=last_progress)
-    if result_item is None:  # not drained in-loop -- covers the clean-exit race window
-        result_item = take_result(q, DRAIN_S)
-        if result_item is None:
-            # The raw pipe first: a child that could not use the queue (a refused seal, see
-            # ErrorWriter) reported there, and native_call routes seal faults by the SealError name.
-            reported = take_error(err_r, DRAIN_S)
-            if reported:
-                return RunResult(ok=False, exit_code=ec, error=f"{tag}{reported}", result=last_progress)
-            return RunResult(
-                ok=False,
-                exit_code=ec,
-                error=(
-                    f"{tag}child exited {ec} with no result "
-                    "(a payload the queue feeder could not deliver -- oversized or "
-                    "unpicklable -- dies exactly this way)"
-                ),
-                result=last_progress,
-            )
-    if result_item[0] == "ok":
-        return RunResult(ok=True, exit_code=ec, result=result_item[1])
-    return RunResult(ok=False, exit_code=ec, error=result_item[1], result=last_progress)
+    return finished_result(p.exitcode, q, err_r, tag, result_item, last_progress)

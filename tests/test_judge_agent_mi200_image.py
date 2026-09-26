@@ -4,8 +4,7 @@
 
 The mi300 images cannot start on mi200: their spack stack is zen4 and the preloaded mimalloc dies on
 SIGILL. These pin the partition parameter of the build (candidate names, spack target, pip cache),
-the mi300 inputs staying what they were, the mi200 EDF renders and promotion, and the smokes' EDF
-override. The GPU arch table and the runtime check are tests/test_gpu_arch_table.py.
+the mi300 inputs staying what they were, and the mi200 EDF renders and promotion. The GPU arch table and the runtime check are tests/test_gpu_arch_table.py.
 """
 
 import pathlib
@@ -18,7 +17,7 @@ from typing import Any
 import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-CE = ROOT / "containers" / "cluster" / "ce-images"
+CE = ROOT / "containers" / "images"
 RECIPE = CE / "judge-agent-amd"
 SHELL_PATH = "/usr/bin:/bin"
 #: The candidate names every mi300 build wrote before the partition became a parameter.
@@ -78,7 +77,7 @@ def test_every_cpu_target_row_names_a_partition_the_gpu_table_knows() -> None:
 
 
 def test_ce_spack_target_refuses_a_value_that_is_not_a_spack_target(tmp_path: pathlib.Path) -> None:
-    for name in ("build_common.sh", "gpu_arch.env"):
+    for name in ("build_common.sh", "images.env", "gpu_arch.env"):
         shutil.copy2(CE / name, tmp_path / name)
     (tmp_path / "cpu_target.env").write_text("SPACK_TARGET_mi200=zen3 target=zen4\n", encoding="ascii")
     done = common(
@@ -105,18 +104,16 @@ def test_ce_amd_candidate_refuses_an_unknown_target() -> None:
     assert done.returncode == 2 and "unknown build target 'sglang'" in done.stderr
 
 
-def test_no_script_spells_a_judge_agent_amd_candidate_name_outside_build_common() -> None:
-    """Four scripts spelled the mi300 names by hand; one that stays literal writes an mi200 build
-    over the mi300 candidate or verifies the wrong file."""
-    for rel in (
-        "judge-agent-amd/build.sh",
-        "judge-agent-amd/build.sbatch",
-        "build_and_verify.sbatch",
-        "promote_image.sh",
-    ):
-        text = (CE / rel).read_text(encoding="utf-8")
-        assert "ce_amd_candidate" in text, rel
-        assert not re.search(r"hpcagent-bench-ce-(judge-)?amd-mi[0-9]+-candidate", text), rel
+def test_no_script_spells_a_judge_agent_amd_candidate_name_outside_images_env() -> None:
+    """A script that spells a candidate by hand writes an mi200 build over the mi300 candidate or
+    verifies the wrong file: images.env is the one place the names are spelled."""
+    literal = re.compile(r"hpcagent-bench-ce-(judge-)?amd-mi[0-9]+-candidate")
+    for path in sorted(CE.rglob("*")):
+        if path.is_file() and path.suffix in {".sh", ".sbatch", ".env", ""} and path.name != "images.env":
+            assert not literal.search(path.read_text(encoding="utf-8", errors="replace")), path
+    for rel in ("judge-agent-amd/build.sh", "judge-agent-amd/build.sbatch"):
+        assert "ce_amd_candidate" in (CE / rel).read_text(encoding="utf-8"), rel
+    assert len(literal.findall((CE / "images.env").read_text(encoding="utf-8"))) == 4
 
 
 def spack_target_block(spack_target: str, tmp_path: pathlib.Path) -> str:
@@ -147,7 +144,7 @@ def test_the_spack_target_reaches_the_build_only_as_an_optional_build_arg() -> N
     build = (RECIPE / "build.sh").read_text(encoding="utf-8")
     assert re.search(r"^ce_spack_target$", build, re.MULTILINE)
     assert '[[ -z "${SPACK_TARGET}" ]] || SPACK_TARGET_ARGS=(--build-arg "SPACK_TARGET=${SPACK_TARGET}")' in build
-    assert '      "${SPACK_TARGET_ARGS[@]}" \\\n' in build
+    assert '\n  "${SPACK_TARGET_ARGS[@]}"\n)\n' in build, "the spack target left BUILD_ARGS"
     docker = (RECIPE / "Dockerfile").read_text(encoding="utf-8")
     assert re.findall(r"^ARG SPACK_TARGET\b.*$", docker, re.MULTILINE) == ["ARG SPACK_TARGET="]
     assert 'grep -vx -e bin -e "linux-${SPACK_TARGET}"' in docker, "the stray-target gate is gone"
@@ -155,7 +152,7 @@ def test_the_spack_target_reaches_the_build_only_as_an_optional_build_arg() -> N
 
 def test_the_pip_wheel_cache_is_per_gpu_arch() -> None:
     """pip keys a built cupy wheel by its sdist, not by HCC_AMDGPU_TARGET."""
-    assert 'PIP_CACHE="${PIP_CACHE:-${SCRATCH:?}/pip-cache/${ROCM_ARCH}}"' in (RECIPE / "build.sh").read_text(
+    assert 'ce_cache_args spack-buildcache "pip-cache/${ROCM_ARCH}"' in (RECIPE / "build.sh").read_text(
         encoding="utf-8"
     )
 
@@ -189,7 +186,7 @@ def test_images_env_names_the_mi200_pair_apart_from_every_mi300_name() -> None:
         "JUDGE_AGENT_AMD_MI200_EDF_LATEST",
         "JUDGE_AMD_MI200_SQSH",
         "JUDGE_AMD_MI200_EDF_LATEST",
-        "JUDGE_AMD_MI200_MLSCALE_EDF",
+        "JUDGE_AMD_MI200_MLSCALE_EDF_LATEST",
     )
     assert names == [
         MI200_LIVE["agent"],
@@ -236,6 +233,7 @@ def test_without_mi200_images_install_edfs_writes_exactly_the_mi300_set(tmp_path
     assert sorted(path.stem for path in edf_dir.glob("*.toml")) == [
         "hpcagent-bench-agent-mi300-latest",
         "hpcagent-bench-judge-mi300-latest",
+        "hpcagent-bench-judge-mi300-mlscale",
         "hpcagent-bench-sglang-mi300-latest",
         "hpcagent-bench-vllm-mi300-latest",
     ]
@@ -273,40 +271,13 @@ def test_promote_image_keeps_the_mi300_candidates_and_live_names(tmp_path: pathl
     ]
 
 
-OVERRIDE = re.compile(
-    r'^caller_judge_ce_env="\$\{JUDGE_CE_ENV:-\}"\n.*?^JUDGE_CE_ENV="\$\{caller_judge_ce_env:-\$\{JUDGE_CE_ENV\}\}"\n',
-    re.MULTILINE | re.DOTALL,
-)
-
-
-@pytest.mark.parametrize(
-    ("caller", "want"),
-    [
-        ("", "hpcagent-bench-judge-mi300-mlscale"),
-        ("hpcagent-bench-judge-mi200-mlscale", "hpcagent-bench-judge-mi200-mlscale"),
-    ],
-)
-def test_the_e2e_smoke_takes_the_arms_judge_edf_unless_the_caller_names_one(
-    tmp_path: pathlib.Path, caller: str, want: str
-) -> None:
-    """The arm pins the mi300 EDF, which cannot start on mi200; a smoke there has to be able to swap it."""
-    block = OVERRIDE.search((ROOT / "experiments" / "mpi" / "smoke-mlscale-e2e.sbatch").read_text(encoding="utf-8"))
-    assert block, "smoke-mlscale-e2e.sbatch lost its JUDGE_CE_ENV caller override"
-    arm = tmp_path / "arm.env"
-    arm.write_text("JUDGE_CE_ENV=hpcagent-bench-judge-mi300-mlscale\nLANGUAGE=hip\n", encoding="utf-8")
-    env = {"ARM_ENV": str(arm), **({"JUDGE_CE_ENV": caller} if caller else {})}
-    done = run(["bash", "-c", f'{block.group(0)}echo "EDF=${{JUDGE_CE_ENV}} LANG=${{LANGUAGE}}"'], env)
-    assert done.returncode == 0, done.stderr
-    assert done.stdout.splitlines() == [f"EDF={want} LANG=hip"]
-
-
 def test_verify_only_reverifies_the_partitions_candidates_without_building(tmp_path: pathlib.Path) -> None:
     """A verifier fix must not cost a 4 h rebuild: VERIFY_ONLY=1 re-runs stage 2 on what is there."""
     repo, scratch = tmp_path / "repo", tmp_path / "scratch"
-    ce = repo / "containers" / "cluster" / "ce-images"
+    ce = repo / "containers" / "images"
     (ce / "judge-agent-amd").mkdir(parents=True)
     (scratch / "ce-images").mkdir(parents=True)
-    for name in ("build_common.sh", "gpu_arch.env", "cpu_target.env"):
+    for name in ("build_common.sh", "images.env", "gpu_arch.env", "cpu_target.env"):
         shutil.copy2(CE / name, ce / name)
     (ce / "judge-agent-amd" / "build.sbatch").write_text(f'touch "{tmp_path}/built"\n', encoding="utf-8")
     (ce / "verify_image.sbatch").write_text(f'echo "$PROFILE $IMAGE" >> "{tmp_path}/verified"\n', encoding="utf-8")
@@ -316,7 +287,7 @@ def test_verify_only_reverifies_the_partitions_candidates_without_building(tmp_p
     env = {
         "SCRATCH": str(scratch),
         "REPO": str(repo),
-        "IMAGE_DIR": "containers/cluster/ce-images/judge-agent-amd",
+        "IMAGE_DIR": "containers/images/judge-agent-amd",
         "SLURM_JOB_PARTITION": "mi200",
         "SLURM_JOB_ID": "7",
         "VERIFY_ONLY": "1",

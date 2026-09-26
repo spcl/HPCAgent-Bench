@@ -159,7 +159,7 @@ def test_each_card_prices_the_same_tasks_into_its_own_rho_c() -> None:
             "run_id": f"{arm}-{kernel}",
             "arm": arm,
             "benchmark": kernel,
-            "record": "task",
+            "row_kind": "task",
             "ts_ms": 1,
             "tokens": 100.0,
             "tokens_fresh_input": 100.0,
@@ -170,7 +170,7 @@ def test_each_card_prices_the_same_tasks_into_its_own_rho_c() -> None:
         for kernel in ("k1", "k2", "k3")
     ]
     # each kernel was run: a score call beside its task row (population.ran_rows)
-    rows += [{**row, "record": "call", "route": "score", "tokens": math.nan} for row in rows]
+    rows += [{**row, "row_kind": "call", "route": "score", "tokens": math.nan} for row in rows]
 
     table = cost_weighting.pair_cost_ratios(pd.DataFrame(rows), [PAIRS[0]], cards=("billed", "effective", "total"))
 

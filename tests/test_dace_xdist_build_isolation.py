@@ -4,7 +4,7 @@
 
 CI runs both suites under ``pytest -n auto`` and DaCe's build folder is keyed by SDFG NAME, so two
 workers compiling the same kernel share a directory that is not written atomically.
-:mod:`dace_build_isolation`, called from the root conftest, splits it per worker; what is under
+:mod:`tests.dace_build_isolation`, called from tests/conftest.py, splits it per worker; what is under
 test here is that the split happens and that DaCe actually reads the channel it is written
 through. Imported from that module and NOT from ``conftest``: both test trees have a ``conftest``
 and CI collects them together, so the bare name resolves to whichever was imported first -- a
@@ -17,7 +17,7 @@ import pathlib
 import dace
 import pytest
 
-from dace_build_isolation import pin_per_worker_dace_build_folder
+from tests.dace_build_isolation import pin_per_worker_dace_build_folder
 
 BUILD_FOLDER_ENV = "DACE_default_build_folder"
 
@@ -57,16 +57,14 @@ def test_the_split_does_not_nest_on_a_second_call(clean_env: pytest.MonkeyPatch)
     assert os.environ[BUILD_FOLDER_ENV] == str(pathlib.Path(".dacecache/gw2"))
 
 
-def test_the_pin_binds_when_dace_was_loaded_first(clean_env: pytest.MonkeyPatch) -> None:
-    """The claim the whole fix rests on: the pin binds however late dace was first imported.
-
-    dace reads ``DACE_*`` only when its configuration loads (spcl/dace#2602), and this module
-    imported dace long before the call below, so the environment alone would be read too late.
-    """
+def test_an_already_imported_dace_gets_the_pin_too(clean_env: pytest.MonkeyPatch) -> None:
+    """dace reads ``DACE_*`` once, when its configuration loads; this module imported it before the
+    pin, so the pin must reach the loaded configuration as well as the environment."""
     shipped = dace.Config.get("default_build_folder")
     clean_env.setenv("PYTEST_XDIST_WORKER", "gw5")
+    clean_env.setenv(BUILD_FOLDER_ENV, "/scratch/pinned")
     try:
         pin_per_worker_dace_build_folder()
-        assert dace.Config.get("default_build_folder") == str(pathlib.Path(".dacecache/gw5"))
+        assert dace.Config.get("default_build_folder") == str(pathlib.Path("/scratch/pinned/gw5"))
     finally:
         dace.Config.set("default_build_folder", value=shipped)

@@ -30,7 +30,7 @@ def submission_rows(arm: str, benchmark_speedups: dict[str, float], baseline: st
                 "job": "j1",
                 "run_id": run,
                 "arm": arm,
-                "record": "submission",
+                "row_kind": "submission",
                 "benchmark": benchmark,
                 "speedup": speedup,
                 "baseline_ns": 1000.0,
@@ -57,7 +57,7 @@ def call_rows(arm: str, benchmark_tokens: dict[str, float]) -> list[dict[str, ob
                 "job": "j1",
                 "run_id": run,
                 "arm": arm,
-                "record": "call",
+                "row_kind": "call",
                 "benchmark": benchmark,
                 "tokens": tokens,
                 "ts_ms": 1,
@@ -70,7 +70,7 @@ def call_rows(arm: str, benchmark_tokens: dict[str, float]) -> list[dict[str, ob
 def task_rows(
     arm: str, benchmark_tokens: dict[str, float], ts_ms: int = 1, run_suffix: str = ""
 ) -> list[dict[str, object]]:
-    """One ``record=task`` row per (arm, kernel): the columns ``population.kernel_tokens`` needs
+    """One ``row_kind=task`` row per (arm, kernel): the columns ``population.kernel_tokens`` needs
     (T2-T4) -- one row per worker directory, ``tokens`` the task's own effective total.
     ``run_suffix`` distinguishes several tasks of the same kernel (a rerun or a designed repeat)."""
     rows = []
@@ -82,7 +82,7 @@ def task_rows(
                 "job": f"j1{run_suffix}",
                 "run_id": run,
                 "arm": arm,
-                "record": "task",
+                "row_kind": "task",
                 "benchmark": benchmark,
                 "tokens": tokens,
                 # the task total as fresh input alone, so every cost card prices it at ``tokens``

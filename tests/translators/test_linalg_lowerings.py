@@ -1,0 +1,105 @@
+# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""Numerical validation of the np.linalg.{norm,lstsq} lowerings.
+
+Both expanders emit a numpy-style loop nest; exec it against numpy
+buffers and compare to numpy's reference (the same single-source-of-
+truth approach as ``test_sparse_matvec``).
+"""
+
+import ast
+from typing import Any
+from collections.abc import Callable
+
+import numpy as np
+
+from hpcagent_bench.translators.numpyto_common import lib_nodes as ln
+from tests.translators.source_module import run_source
+
+
+def is_alloc_marker(s: ast.stmt) -> bool:
+    """``X = __hpcagent_bench_zeros__()`` -- a C deferred-malloc directive, not
+    executable Python. The tests pre-allocate these buffers in ``scope``,
+    so the marker is stripped before exec."""
+    return (
+        isinstance(s, ast.Assign)
+        and isinstance(s.value, ast.Call)
+        and isinstance(s.value.func, ast.Name)
+        and s.value.func.id == "__hpcagent_bench_zeros__"
+    )
+
+
+def run_(stmts: list[ast.stmt], scope: dict[str, Any]) -> dict[str, Any]:
+    body = [s for s in stmts if not is_alloc_marker(s)]
+    mod = ast.Module(body=body, type_ignores=[])
+    ast.fix_missing_locations(mod)
+    scope.update({"range": range})
+    run_source(mod, scope, "<linalg>")
+    return scope
+
+
+def test_linalg_norm_vector_2norm() -> None:
+    fn = ln.NP_CALL_EXPANDERS[("np", "linalg.norm")]
+    M = 9
+    r = np.random.default_rng(1).random(M)
+    stmts = fn(ast.Name(id="nrm", ctx=ast.Store()), [ast.Name(id="r", ctx=ast.Load())], {"r": ("M",)})
+    sc = run_(stmts, {"r": r.copy(), "nrm": 0.0, "M": M, "sqrt": np.sqrt})
+    assert np.isclose(sc["nrm"], np.linalg.norm(r))
+
+
+def solve_(
+    M: int, b_node_builder: Callable[[], ast.expr], scope_extra: dict[str, Any]
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, tuple[str, ...]]]:
+    """Build + exec ``y = lstsq(A, <b>)`` and return (y, A, b)."""
+    rng = np.random.default_rng(0)
+    A = rng.random((M, M)) + M * np.eye(M)  # well-conditioned
+    b = rng.random(M)
+    b_node = b_node_builder()
+    fla = {}
+    stmts = ln.expand_lstsq(
+        ast.Name(id="y", ctx=ast.Store()),
+        [ast.Name(id="A", ctx=ast.Load()), b_node],
+        {"A": ("M", "M"), "b": ("M",), "y": ("M",)},
+        fresh_local_allocs=fla,
+    )
+    scope = {"A": A.copy(), "b": b.copy(), "y": np.zeros(M), "M": M}
+    scope.update(scope_extra)
+    run_(stmts, scope)
+    return scope["y"], A, b, fla
+
+
+def test_lstsq_square_bare_name_b() -> None:
+    y, A, b, unused = solve_(6, lambda: ast.Name(id="b", ctx=ast.Load()), {})
+    assert np.allclose(y, np.linalg.solve(A, b))
+
+
+def test_lstsq_square_binop_b_materialized() -> None:
+    """gmres passes ``beta * e1[:m]`` -- a BinOp b is materialized to a
+    fresh temp vector (registered in fresh_local_allocs) before the solve."""
+    beta = 2.5
+    bnode = lambda: ast.BinOp(
+        left=ast.Name(id="beta", ctx=ast.Load()), op=ast.Mult(), right=ast.Name(id="b", ctx=ast.Load())
+    )
+    y, A, b, fla = solve_(6, bnode, {"beta": beta, "__lq_b": np.zeros(6)})
+    assert np.allclose(y, np.linalg.solve(A, beta * b))
+    assert "__lq_b" in fla  # temp vector was registered for alloc
+
+
+def det_(M: int) -> tuple[float, np.ndarray, dict[str, tuple[str, ...]]]:
+    """Build + exec ``d = np.linalg.det(A)`` and return (d, A)."""
+    rng = np.random.default_rng(2)
+    A = rng.random((M, M)) + M * np.eye(M)  # well-conditioned
+    fla = {}
+    stmts = ln.expand_linalg_det(
+        ast.Name(id="d", ctx=ast.Store()), [ast.Name(id="A", ctx=ast.Load())], {"A": ("M", "M")}, fresh_local_allocs=fla
+    )
+    scope = {"A": A.copy(), "d": 0.0, "M": M, "__det_aw": np.zeros((M, M)), "abs": abs}
+    run_(stmts, scope)
+    return scope["d"], A, fla
+
+
+def test_linalg_det_matches_numpy() -> None:
+    for M in (2, 3, 4, 5):
+        d, A, fla = det_(M)
+        assert np.isclose(d, np.linalg.det(A))
+        assert "__det_aw" in fla  # working buffer registered for alloc

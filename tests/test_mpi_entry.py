@@ -14,7 +14,12 @@ ENTRY = pathlib.Path(mpi_call.__file__).with_name("mpi_entry.py")
 
 
 def test_the_entry_imports_mpi4py_and_nothing_of_the_package_before_it() -> None:
-    nodes = [node for node in ast.parse(ENTRY.read_text()).body if isinstance(node, (ast.Import, ast.ImportFrom))]
+    # Every import in source order, including the ``__main__`` guard's: the module imports without
+    # MPI, and as the rank entry mpi4py is still the first thing it loads.
+    nodes = sorted(
+        (node for node in ast.walk(ast.parse(ENTRY.read_text())) if isinstance(node, (ast.Import, ast.ImportFrom))),
+        key=lambda node: node.lineno,
+    )
     modules = [node.module if isinstance(node, ast.ImportFrom) else node.names[0].name for node in nodes]
     assert modules == ["importlib", "sys", "mpi4py"]
 

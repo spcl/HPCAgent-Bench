@@ -38,7 +38,7 @@ confirm a per-request prefix-cache hit rate of 0.98 or better.
 
 - **Use vLLM 0.23.0.** On one pinned node with the same probe and parsers, 0.23.0 serves 3013 tok/s
   against 2405 for 0.27.1 (about 25% slower, all in decode: 3187 against 2540 steady state; prefill
-  within 0.3%). The image pins 0.23.0 (`containers/cluster/ce-images/vllm/Dockerfile`).
+  within 0.3%). The image pins 0.23.0 (`containers/images/vllm/Dockerfile`).
 - **Keep `VLLM_PLUGINS` an allowlist, set only in the EDF.** A value exported by an env file would
   override the EDF silently; no `experiments/` env sets it.
 - **Pass all three tool flags**: `--enable-auto-tool-choice`, `--tool-call-parser openai`,

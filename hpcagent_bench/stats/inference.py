@@ -9,6 +9,8 @@ import numpy as np
 import numpy.typing as npt
 from scipy.stats import false_discovery_control  # pyright: ignore[reportMissingTypeStubs, reportUnknownVariableType]
 
+__all__ = ["FloatArray", "adjust_pvalues", "benjamini_hochberg", "holm_bonferroni"]
+
 FloatArray = npt.NDArray[np.float64]
 
 

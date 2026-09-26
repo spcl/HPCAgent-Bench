@@ -1,6 +1,6 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""The scripts/check_*.py pre-commit hooks share these two helpers rather than each copying them.
+"""The scripts/checks/check_*.py pre-commit hooks share these two helpers rather than each copying them.
 
 git_tracked used to be a `git ls-files` subprocess call rewritten, byte for byte, in three of the
 hooks; is_generated_source was rewritten in two.

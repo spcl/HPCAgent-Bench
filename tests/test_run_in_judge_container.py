@@ -2,17 +2,11 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The cluster launcher's ``run_in_judge_container``, and what calls it.
 
-Every job that reached the "freezing token record" step used to pick its extractor interpreter
-with ``command -v python3.11 || command -v python3`` -- the BATCH HOST's bare interpreter, outside
-any container. extract_llr40.py imports hpcagent_bench (-> experiment_tags -> spec -> fuzz ->
-numpy), and the host interpreter has never carried numpy. 644320 (extraction before the import
-chain grew this dependency) froze fine; 644322 and 643373 (after) both died with
-``ModuleNotFoundError: No module named 'numpy'`` on the SAME nodes, same interpreter, and left
-their token record unfrozen. This pins two things: the freeze block never again resolves the
-extractor through a bare ``command -v python3*``, and ``run_in_judge_container`` -- the function
-that replaced it -- actually composes a container invocation for every CONTAINER_RUNTIME the rest
-of the script supports, using the SAME mount policy (role_mounts/agent_ro_binds/derived_edf) the
-judge's own step is built from.
+The token-record freeze runs hpcagent_bench.observations_extract, which imports numpy; only the judge
+image carries it, so the freeze block runs the extractor through ``run_in_judge_container`` and never
+on the batch host's interpreter. The function composes a container invocation for every
+CONTAINER_RUNTIME the script supports, with the same mount policy
+(role_mounts/agent_ro_binds/derived_edf) the judge's own step is built from.
 
 ``run_cluster.sh`` cannot be sourced to reach the function for the same reason
 ``tests/test_derived_edf.py`` cuts derived_edf out rather than sourcing the file: the top level
@@ -104,15 +98,13 @@ def run_in_judge_container(
     return proc, argv_captured
 
 
-def test_the_freeze_block_no_longer_resolves_a_bare_host_python() -> None:
-    """Pins the regression directly: whatever extracts the token record must not go back to
-    ``command -v python3.11``, the pattern that put every post-644320 job's extraction on a
-    python with no numpy. token_report.py/recoverable_report.py are pure stdlib and correctly
-    keep using the host interpreter -- only the freeze block's own invocation is asserted here."""
+def test_the_freeze_block_runs_the_extractor_in_the_judge_container() -> None:
+    """The freeze block's extractor goes through ``run_in_judge_container``, never a bare host
+    ``python3``; token_report.py/recoverable_report.py are pure stdlib and stay on the host."""
     start = SCRIPT_TEXT.index('echo "===== freezing token record')
     end = SCRIPT_TEXT.index('exit "${agent_status}"', start)
     freeze_block = SCRIPT_TEXT[start:end]
-    assert "command -v python3.11" not in freeze_block, freeze_block
+    assert "command -v" not in freeze_block, freeze_block
     assert "run_in_judge_container" in freeze_block, freeze_block
 
 
@@ -146,9 +138,8 @@ def test_ce_runtime_runs_the_extractor_inside_the_judges_environment(tmp_path) -
 
 
 def test_ce_runtime_falls_back_to_an_agent_node_with_no_judge_node(tmp_path) -> None:
-    """serve-only-style configs aside (JUDGE_NODES=0 there never reaches this code path at all --
-    it re-enters run_cluster.sh with --vllm-node before the freeze block exists), a defensive
-    fallback keeps this from targeting an empty --nodelist if JUDGE_NODELIST is ever empty here."""
+    """With JUDGE_NODELIST empty, the step lands on an agent node rather than an empty
+    ``--nodelist``."""
     edf_dir = tmp_path / "edf"
     write_edf(edf_dir, "bench-judge", MULTILINE_EDF)
     env = {

@@ -111,9 +111,11 @@ def test_reload_drops_runtime_changes() -> None:
     assert config.get("prompt.strategy") == "default"
 
 
-def test_non_field_attribute_does_not_register_an_override() -> None:
-    """Only declared config fields are config; scratch attributes are not."""
-    settings().prompt.scratch = 1
+def test_non_field_attribute_is_refused_and_registers_no_override() -> None:
+    """Only declared config fields exist: a section is slotted, so a stray attribute is an error
+    rather than a silent scratch value, and nothing reaches the config."""
+    with pytest.raises(AttributeError):
+        settings().prompt.scratch = 1  # type: ignore[attr-defined]
     assert config.get("prompt.scratch") is None
 
 

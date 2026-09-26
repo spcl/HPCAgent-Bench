@@ -15,7 +15,7 @@ import sys
 import pytest
 
 ROOT: pathlib.Path = pathlib.Path(__file__).resolve().parents[1]
-CE_IMAGES: pathlib.Path = ROOT / "containers" / "cluster" / "ce-images"
+CE_IMAGES: pathlib.Path = ROOT / "containers" / "images"
 JUDGE_AGENT_DOCKERFILES: tuple[str, ...] = (
     "judge-agent-amd/Dockerfile",
     "judge-agent-cuda/Dockerfile",
@@ -25,7 +25,7 @@ LAUNCH_CHECK: pathlib.Path = CE_IMAGES / "tools_launch_check.py"
 #: Image paths the tool scripts are bound at; no recipe may create or read them.
 TOOL_MOUNTS: tuple[str, ...] = ("/opt/hpcagent-bench-agent", "/opt/hpcagent-bench-judge")
 HARNESS_BUILD_INPUT: re.Pattern[str] = re.compile(
-    r"containers/agent/harness/(?:pins\.env|install_tools\.sh|requirements-[a-z]+\.txt|node/package(?:-lock)?\.json)"
+    r"containers/agent/harness/(?:pins\.env|install_tools\.sh|node/package(?:-lock)?\.json)"
 )
 
 
@@ -75,7 +75,7 @@ def test_a_judge_agent_image_copies_only_harness_build_inputs_from_containers_ag
             "COPY containers/agent/harness/pins.env \\\n     containers/agent/harness/run_miniswe.py /h/\n",
             ["containers/agent/harness/run_miniswe.py"],
         ),
-        ("COPY containers/agent/harness/requirements-miniswe.txt containers/agent/harness/node/package.json /h/\n", []),
+        ("COPY containers/agent/harness/install_tools.sh containers/agent/harness/node/package.json /h/\n", []),
     ],
 )
 def test_the_copy_scan_flags_each_agent_tree_copy_that_is_not_a_build_input(text: str, flagged: list[str]) -> None:
@@ -86,7 +86,7 @@ def test_verify_image_binds_the_checkout_agent_tree_and_runs_its_checks_from_rep
     text = (CE_IMAGES / "verify_image.sbatch").read_text(encoding="utf-8")
     assert 'REPO="${REPO:-${S}/hpcagent-bench}"' in text
     assert '"${REPO}/containers/agent:/opt/hpcagent-bench-agent"' in text
-    assert 'python3 "${REPO}/containers/cluster/ce-images/tools_launch_check.py"' in text
+    assert 'python3 "${REPO}/containers/images/tools_launch_check.py"' in text
     assert "exit $(( rc + sc + tools_rc ))" in text
     hardcoded = [line for line in text.splitlines() if "${S}/hpcagent-bench" in line and not line.startswith("REPO=")]
     assert hardcoded == []
@@ -94,34 +94,33 @@ def test_verify_image_binds_the_checkout_agent_tree_and_runs_its_checks_from_rep
 
 def test_build_and_verify_hands_its_checkout_to_verify_image() -> None:
     text = (CE_IMAGES / "build_and_verify.sbatch").read_text(encoding="utf-8")
-    assert re.search(
-        r'REPO="\$\{REPO\}" \\\n\s+bash "\$\{REPO\}/containers/cluster/ce-images/verify_image\.sbatch"', text
+    assert re.search(r'REPO="\$\{REPO\}" \\\n\s+bash "\$\{REPO\}/containers/images/verify_image\.sbatch"', text)
+
+
+def launch_check(agent_dir: pathlib.Path, web_search: pathlib.Path) -> subprocess.CompletedProcess[str]:
+    command = [sys.executable, "-W", "error", str(LAUNCH_CHECK), "--agent-dir", str(agent_dir)]
+    return subprocess.run(
+        [*command, "--judge-web-search", str(web_search)], capture_output=True, text=True, check=False
     )
 
 
-def launch_check(agent_dir: pathlib.Path, judge_tools: pathlib.Path) -> subprocess.CompletedProcess[str]:
-    command = [sys.executable, "-W", "error", str(LAUNCH_CHECK), "--agent-dir", str(agent_dir)]
-    return subprocess.run([*command, "--judge-tools", str(judge_tools)], capture_output=True, text=True, check=False)
-
-
 def fake_checkout(root: pathlib.Path, registry: str) -> tuple[pathlib.Path, pathlib.Path]:
-    agent_dir, judge_tools = root / "agent", root / "judge-tools"
+    agent_dir, web_search = root / "agent", root / "judge_web_search.py"
     (agent_dir / "tools").mkdir(parents=True)
-    judge_tools.mkdir()
     (agent_dir / "tools" / "mcp_server.py").write_text(registry, encoding="utf-8")
-    (judge_tools / "web_search.py").write_text("QUERY_LIMIT = 1\n", encoding="utf-8")
-    return agent_dir, judge_tools
+    web_search.write_text("QUERY_LIMIT = 1\n", encoding="utf-8")
+    return agent_dir, web_search
 
 
 def test_the_launch_check_passes_when_the_bound_registry_lists_a_tool(tmp_path: pathlib.Path) -> None:
-    agent_dir, judge_tools = fake_checkout(tmp_path, 'ALLOWED_TOOLS = ("score",)\n')
-    result = launch_check(agent_dir, judge_tools)
+    agent_dir, web_search = fake_checkout(tmp_path, 'ALLOWED_TOOLS = ("score",)\n')
+    result = launch_check(agent_dir, web_search)
     assert result.returncode == 0, result.stderr
     assert "agent tools: score" in result.stdout
 
 
 def test_the_launch_check_fails_naming_the_registry_that_has_no_allowed_tools(tmp_path: pathlib.Path) -> None:
-    agent_dir, judge_tools = fake_checkout(tmp_path, "REGISTRY = {}\n")
-    result = launch_check(agent_dir, judge_tools)
+    agent_dir, web_search = fake_checkout(tmp_path, "REGISTRY = {}\n")
+    result = launch_check(agent_dir, web_search)
     assert result.returncode != 0
     assert str(agent_dir / "tools" / "mcp_server.py") in result.stderr and "ALLOWED_TOOLS" in result.stderr

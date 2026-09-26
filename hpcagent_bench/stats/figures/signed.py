@@ -13,7 +13,7 @@ costs), 5/7 (report intervals) and 12 (no line between unordered rows), checked 
 
 Usage::
 
-    python -m hpcagent_bench.stats.figures.signed <sweep-directory> [--out DIR]
+    python -m hpcagent_bench.stats.figures.signed <sweep-directory> --out DIR
 """
 
 import argparse
@@ -39,6 +39,64 @@ from hpcagent_bench import experiment_tags, flags
 from hpcagent_bench.stats import canon, palette, population, rules, style
 from hpcagent_bench.stats.figures import llr40_arms, per_kernel
 from hpcagent_bench.stats.summary import DEFAULT_CONFIDENCE, geomean_ci, signed_change, usable_ratios
+
+__all__ = [
+    "ARMS",
+    "BASELINE",
+    "CLOUD_KEY_MARK_PT",
+    "CLOUD_MARK_AREA",
+    "COMPARISONS",
+    "DEAD_BAND",
+    "GEOMEAN_MARK_PT",
+    "INTERVAL_CAP_PT",
+    "INTERVAL_LINE_WIDTH",
+    "LLR40_BASELINE",
+    "LLR40_CANON_COLUMNS",
+    "LLR40_CONDITIONS",
+    "LLR40_PANEL_HEIGHT_IN",
+    "REFERENCE",
+    "RULE_LINE_WIDTH",
+    "SUMMARY_COLUMNS",
+    "TABLE_COLUMNS",
+    "TOKEN_SUMMARY_COLUMNS",
+    "TSVC_PREFIX",
+    "Arm",
+    "Row",
+    "against_baseline",
+    "agent_kernel_row",
+    "answer_ratios",
+    "arm_rows",
+    "arms_figure",
+    "canon_kernel_row",
+    "canon_label",
+    "distinct_canon_labels",
+    "draw",
+    "draw_row",
+    "fallback_note",
+    "kernel_intervals",
+    "legend_handles",
+    "llr40_baseline_label",
+    "llr40_figure",
+    "llr40_metrics",
+    "llr40_rows",
+    "llr40_two_row_figure",
+    "main",
+    "paired",
+    "paired_figure",
+    "paired_rows",
+    "pending_note",
+    "read_arm",
+    "row_color",
+    "shard_paths",
+    "sign_test",
+    "solved_ratios",
+    "summary_table",
+    "table",
+    "tally",
+    "token_summary_table",
+    "unattempted_kernels",
+    "write_tables",
+]
 
 #: Framework -> the name a reader knows it by. Insertion order is the order on the axis.
 ARMS: dict[str, str] = {
@@ -529,7 +587,7 @@ def kernel_intervals(
     """Each of ``kernels``' geomean-speedup CI over every graded episode of ``arm``, as (low, high)."""
     ratios_low: dict[str, float] = {}
     ratios_high: dict[str, float] = {}
-    graded = subset.loc[subset["record"] == "submission"] if "record" in subset.columns else subset
+    graded = subset.loc[subset["row_kind"] == "submission"] if "row_kind" in subset.columns else subset
     episodes = population.graded_episode_rows(graded, population.SUBMISSION_ORDER)
     if episodes.empty:
         return ratios_low, ratios_high
@@ -814,12 +872,12 @@ def write_tables(rows: Sequence[Row], stem: pathlib.Path) -> tuple[pathlib.Path,
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Signed-change TSVC figures for one sweep directory.")
     parser.add_argument("sweep", type=pathlib.Path, help="directory of <framework>[.rank<N>].csv files")
-    parser.add_argument("--out", type=pathlib.Path, default=None, help="directory for the figures and tables")
+    parser.add_argument("--out", type=pathlib.Path, required=True, help="directory for the figures and tables")
     args = parser.parse_args(argv)
     # The source directory is in the file name: two sweeps of the same three arms are two
     # measurements, and one silently overwriting the other is how a stale figure reaches a paper.
     name = args.sweep.resolve().name
-    out = args.out if args.out is not None else pathlib.Path("reproducibility/canon/figures")
+    out = args.out
     print(arms_figure(args.sweep, out / f"tsvc_signed_speedup_{name}"))
     print(paired_figure(args.sweep, out / f"tsvc_canon_paired_{name}"))
     return 0

@@ -17,6 +17,7 @@ import subprocess
 import pytest
 
 from hpcagent_bench import cpf_bridge, cpf_cache, cpf_canonical, cpf_prerender
+from tests.dace_checkout import stub_opt
 
 SBATCH = pathlib.Path(__file__).resolve().parent.parent / "experiments" / "prerender_cpf.sbatch"
 
@@ -65,7 +66,7 @@ def test_a_shard_with_a_load_failure_and_a_render_failure_still_exits_zero(
     monkeypatch.setattr(cpf_bridge, "prerender_kernel", fake_prerender_kernel)
 
     args = args_for(cache, view, "missing_kernel,broken_render,ok_kernel")
-    assert cpf_prerender.prerender(args, package, before) == 0
+    assert cpf_prerender.prerender(args, package, before, tmp_path / "scratch") == 0
 
     assert cpf_cache.missing(view, ["ok_kernel"], "c", "fp64", "form", "cpu") == []
     assert cpf_cache.missing(view, ["missing_kernel"], "c", "fp64", "form", "cpu") != []
@@ -90,7 +91,7 @@ def test_a_dace_commit_that_moves_mid_run_withdraws_and_fails_the_rank(
     monkeypatch.setattr(cpf_bridge, "prerender_kernel", fake_prerender_kernel)
 
     args = args_for(cache, view, "ok_kernel")
-    assert cpf_prerender.prerender(args, package, before) == 3
+    assert cpf_prerender.prerender(args, package, before, tmp_path / "scratch") == 3
 
 
 @pytest.mark.parametrize(("language", "mode"), [("c++", "form"), ("hip", "dropin")])
@@ -130,7 +131,7 @@ def test_a_gpu_prerender_records_hip_entries_the_launch_gates_accept(
     monkeypatch.setattr(cpf_bridge, "prerender_kernel", fake_prerender_kernel)
     args = args_for(cache, view, "gpu_kernel")
     args.target = "gpu"
-    assert cpf_prerender.prerender(args, package, before) == 0
+    assert cpf_prerender.prerender(args, package, before, tmp_path / "scratch") == 0
     assert sorted(path.name for path in (view / cpf_cache.ENTRIES_NAME).iterdir()) == ["gpu_kernel_fp64_cpf.hip.json"]
     capsys.readouterr()
     check = ["check", "--view", str(view), "--kernels", "gpu_kernel", "--language", language, "--mode", mode]
@@ -138,17 +139,11 @@ def test_a_gpu_prerender_records_hip_entries_the_launch_gates_accept(
     assert cpf_cache.main(check) == 0, capsys.readouterr().out
 
 
-def test_every_launch_path_carries_kill_on_bad_exit_0() -> None:
-    """A rank exiting nonzero (an internal error) must never take the other shards down with it,
-    whichever container launcher (enroot directly, or `srun --environment=` once pyxis is fixed)
-    scripts/cscs/container_runtime.sh picked for this job."""
+def test_the_launch_carries_kill_on_bad_exit_0() -> None:
+    """A rank exiting nonzero (an internal error) must never take the other shards down with it."""
     text = SBATCH.read_text()
-    enroot_at = text.index('"${OPT}/scripts/cscs/enroot_srun.sh"')
     ce_at = text.index('srun --environment="${CPF_CE_ENV}"')
-    assert ce_at > enroot_at, "the enroot branch is tried first, the ce branch is the else"
-    fi_at = text.index("\nfi\n", ce_at)
-    assert "--kill-on-bad-exit=0" in text[enroot_at - 200 : ce_at], "enroot branch"
-    assert "--kill-on-bad-exit=0" in text[ce_at:fi_at], "ce branch"
+    assert "--kill-on-bad-exit=0" in text[ce_at : text.index("|| status=$?", ce_at)]
 
 
 def test_the_roster_check_runs_once_after_the_render_launch_not_inside_a_rank() -> None:
@@ -245,9 +240,9 @@ def test_shard_assigns_by_position_deterministically() -> None:
     """A rerun (a job that lost a rank and resubmits) must land each kernel on the SAME rank as the
     first run, so a partially-published cache from the first attempt is a hit for the second one
     rather than being re-rendered by a different rank under the same key."""
-    kernels = ["cloudsc", "sw4_rhs4sg", "lulesh", "dbcsr", "minres"]
+    kernels = ["cloudsc", "fv3_dycore", "lulesh", "dbcsr", "minres"]
     assert cpf_prerender.shard(kernels, 0, 2) == ["cloudsc", "lulesh", "minres"]
-    assert cpf_prerender.shard(kernels, 1, 2) == ["sw4_rhs4sg", "dbcsr"]
+    assert cpf_prerender.shard(kernels, 1, 2) == ["fv3_dycore", "dbcsr"]
 
 
 def stub(path: pathlib.Path, body: str) -> None:
@@ -261,10 +256,12 @@ def test_inner_pool_renders_every_kernel_once_as_its_own_single_rank_process(tmp
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     calls = tmp_path / "calls"
-    stub(bin_dir / "python3", f'[[ "$1" == -c ]] && exit 0\necho "$*" >> {calls}')
-    env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "SLURM_PROCID": "3", "SLURM_NTASKS": "4"}
+    stub(bin_dir / "python3", f'echo "$*" >> {calls}')
+    opt, image = stub_opt(tmp_path, "")
+    env = {"PATH": "/usr/bin:/bin", "SLURM_PROCID": "3", "SLURM_NTASKS": "4", **image}
+    env["HPCAGENT_BENCH_IMAGE_PYTHON"] = str(bin_dir / "python3")
     run = subprocess.run(
-        ["bash", str(SBATCH), "inner-pool", "C", "V", "k1,k2,k3", "cpu", str(tmp_path), str(tmp_path), "2"],
+        ["bash", str(SBATCH), "inner-pool", "C", "V", "k1,k2,k3", "cpu", str(opt), "2"],
         env=env,
         capture_output=True,
         text=True,
@@ -289,19 +286,19 @@ def test_the_kernels_whose_render_never_finishes_are_started_first(tmp_path: pat
     bin_dir.mkdir()
     launched = tmp_path / "launched"
     stub(bin_dir / "srun", f'echo "$*" >> {launched}')
-    stub(bin_dir / "python3.11", "exit 0")
+    stub(bin_dir / "host-python", "exit 0")
     stub(bin_dir / "lscpu", 'printf "# CORE\\n0\\n1\\n"')
     repo = SBATCH.parent.parent
-    roster = "atax,warpx_field_gather,lulesh,gromacs_nbnxm,cloudsc,sw4_rhs4sg"
+    roster = "atax,warpx_field_gather,lulesh,gromacs_nbnxm,cloudsc,fv3_dycore"
     env = {
         "PATH": f"{bin_dir}:/usr/bin:/bin",
         "SCRATCH": str(tmp_path),
         "OPT": str(repo),
-        "DACE_TREE": str(tmp_path),
+        "HPCAGENT_BENCH_HOST_PYTHON": str(bin_dir / "host-python"),
+        "HPCAGENT_BENCH_DACE_REF": "0" * 40,
         "VIEW": str(tmp_path / "view"),
         "KERNELS": roster,
         "CPF_POOL": "1",
-        "CPF_LAUNCH": "pyxis",
     }
     run = subprocess.run(["bash", str(SBATCH)], env=env, capture_output=True, text=True, check=False)
     assert run.returncode == 0, run.stdout + run.stderr
@@ -320,23 +317,23 @@ def test_cpf_pool_launches_one_rank_over_every_core_and_keeps_the_roster_check(t
     launched = tmp_path / "launched"
     checked = tmp_path / "checked"
     stub(bin_dir / "srun", f'echo "$*" >> {launched}')
-    stub(bin_dir / "python3.11", f'echo "$*" >> {checked}')
+    stub(bin_dir / "host-python", f'[[ "$1" == -c ]] && exit 0\necho "$*" >> {checked}')
     stub(bin_dir / "lscpu", 'printf "# CORE\\n0\\n1\\n2\\n3\\n4\\n5\\n"')
     repo = SBATCH.parent.parent
     env = {
         "PATH": f"{bin_dir}:/usr/bin:/bin",
         "SCRATCH": str(tmp_path),
         "OPT": str(repo),
-        "DACE_TREE": str(tmp_path),
+        "HPCAGENT_BENCH_HOST_PYTHON": str(bin_dir / "host-python"),
+        "HPCAGENT_BENCH_DACE_REF": "0" * 40,
         "VIEW": str(tmp_path / "view"),
         "KERNELS": "k1,k2",
         "CPF_POOL": "1",
-        "CPF_LAUNCH": "pyxis",
     }
     run = subprocess.run(["bash", str(SBATCH)], env=env, capture_output=True, text=True, check=False)
     assert run.returncode == 0, run.stdout + run.stderr
     [line] = launched.read_text().splitlines()
     assert "--ntasks=1 --cpus-per-task=6 " in line, line
     assert line.split(" bash ", 1)[1].split()[1] == "inner-pool", line
-    assert line.endswith(f"{tmp_path} {repo} 6"), line
+    assert line.endswith(f"cpu {repo} 6"), line
     assert len(checked.read_text().splitlines()) == 4  # c/c++ x form/dropin

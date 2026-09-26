@@ -1,0 +1,72 @@
+# CSCS Container Engine EDF for the AGENT target of judge-agent-cuda/Dockerfile, on Daint (GH200).
+#
+# `CE_PLATFORM=gh200 install_edfs.sh` renders it into ~/.edf as hpcagent-bench-agent-gh200-latest:
+# it fills ${SCRATCH}, the mount list and the `image` line. The image DIGEST (the .digest sidecar)
+# identifies the build; quote that in a results table, never this name.
+#
+# THE PATH IS LOAD-BEARING, for the reasons judge-agent-amd/agent.edf.toml.in and
+# tests/test_edf_contract.py record: the CE does not reliably keep the image's own ENV, so PATH is
+# restated absolutely, and a prefix left out here is silently gone at run time.
+#   /opt/gcc/bin    the pinned gcc 16 (a bare c++ otherwise finds the distro gcc 13)
+#   /opt/view/bin   the spack MPICH built +cuda netmod=ofi, and llvm 22 (clang/flang, OpenMP offload)
+#   /opt/papi/bin   PAPI with the cuda and nvml components
+#   /usr/local/cuda/bin  nvcc, cuobjdump; ncu/nsys/nvc/nvfortran are symlinked into /usr/local/bin
+# and deliberately NOT /usr/local/mpi/bin: the NGC base's HPC-X Open MPI. Ahead of /opt/view it would
+# pair an Open MPI mpicc with an MPICH mpiexec -- P ranks each their own COMM_WORLD of size 1.
+# There is no venv: the NGC base installs into its system python3, which is what /usr/bin names.
+image = "${SCRATCH}/ce-images/hpcagent-bench-agent-gh200.sqsh"
+mounts = [
+    # install_edfs.sh replaces this item with hpcagent_bench_edf_mounts (scripts/cache_env.sh):
+    # the filesystems of $SCRATCH and $FAST_SCRATCH.
+    "<hpcagent_bench_edf_mounts>",
+    "${SCRATCH}:${SCRATCH}",
+]
+workdir = "${SCRATCH}"
+writable = true
+entrypoint = false
+
+[env]
+# The interpreter every hpcagent-bench step in this image runs (run_cluster.sh).
+HPCAGENT_BENCH_IMAGE_PYTHON = "/usr/bin/python3"
+LC_ALL = "C"
+# The image's dace (and, in the judge, its hpcagent_bench) must win over a same-named DIRECTORY in
+# the workdir; see judge-agent-amd/agent.edf.toml.in.
+PYTHONSAFEPATH = "1"
+PATH = "/opt/gcc/bin:/opt/view/bin:/opt/papi/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+# CUDA first; the distro libdir last but present, as on judge-agent-amd. The base's
+# /usr/local/cuda/compat/lib is left OUT: that forward-compat libcuda is for drivers older than the
+# toolkit and loses to a newer host driver. The image is CUDA 12.9, which any driver >= 525 runs by
+# minor-version compatibility; build.sbatch's nvidia-smi / torch.cuda probe is where that shows.
+LD_LIBRARY_PATH = "/usr/local/cuda/lib64:/opt/gcc/lib64:/opt/gcc/lib:/opt/view/lib:/opt/view/lib64:/opt/papi/lib:/usr/lib/aarch64-linux-gnu"
+# Named, not left to PATH: a stale configure cache beats PATH.
+CC = "/opt/gcc/bin/gcc"
+CXX = "/opt/gcc/bin/g++"
+FC = "/opt/gcc/bin/gfortran"
+# The BLAS root a CPF render requires (cpf_prerender.require_toolchain); the same view OPENBLAS_ROOT names.
+OPENBLAS_DIR = "/opt/view"
+DACE_compiler_cpu_executable = "/opt/gcc/bin/g++"
+CUDA_HOME = "/usr/local/cuda"
+# gcc 16 is newer than CUDA 12.9 whitelists; the image gates prove the pair compiles and links.
+NVCC_PREPEND_FLAGS = "-allow-unsupported-compiler"
+# nvc/nvfortran build against the image's CUDA 12.9, not the newer CUDA the SDK bundles.
+NVHPC_CUDA_HOME = "/usr/local/cuda"
+OPENMPI_ROOT = "/opt/openmpi"
+PMIX_MCA_psec = "native"
+# The hwloc GPU probe hangs a containerized MPI launcher.
+HWLOC_COMPONENTS = "-opencl,-levelzero,-gl"
+# CSCS's libfabric settings for GH200. FI_PROVIDER is deliberately NOT set: this image runs MPICH,
+# which inherits it and aborts MPI_Init.
+FI_CXI_RX_MATCH_MODE = "software"
+FI_MR_CACHE_MONITOR = "userfaultfd"
+LD_PRELOAD = "/usr/local/lib/libmimalloc.so"
+
+[annotations]
+# The Slingshot NIC (libfabric cxi provider, /dev/cxi*), for MPICH across nodes.
+com.hooks.cxi.enabled = "true"
+# NCCL over libfabric/CXI instead of TCP sockets. Without it NCCL does not fail, it falls back to
+# sockets over hsn* and is merely slow. The image is CUDA 12.9 so that
+# this cuda12 plugin matches its runtime major -- a plugin one major behind (rocm6 against
+# ROCm 7) failed to load and fell back silently. The check is still an NCCL_DEBUG=INFO log naming
+# "NET/OFI" and not "NET/Socket" (inference/serve-daint.sbatch MODE=smoke).
+com.hooks.aws_ofi_nccl.enabled = "true"
+com.hooks.aws_ofi_nccl.variant = "cuda12"

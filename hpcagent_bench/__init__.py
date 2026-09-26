@@ -14,8 +14,14 @@ these names is first touched::
 """
 
 import os
+from importlib import metadata
 
 from hpcagent_bench import core_dumps
+
+try:
+    __version__ = metadata.version("hpcagent-bench")
+except metadata.PackageNotFoundError:  # a checkout on PYTHONPATH, not installed
+    __version__ = "0+unknown"
 
 #: Importing mpi4py must not call ``MPI_Init``. Every ``@dace.program`` parse calls dace's
 #: ``mpi4py_is_usable()``, which does ``from mpi4py import MPI``; with auto-init on, that import
@@ -33,9 +39,9 @@ from hpcagent_bench import core_dumps
 #: conftests that want them.
 os.environ.setdefault("MPI4PY_RC_INITIALIZE", "0")
 
-#: A segfaulting dace/sympy parse writes its whole address space to the crashing process's CWD --
-#: beverin's core_pattern is machine-global -- on a filesystem whose quota is inodes. The shell
-#: entry points carry `ulimit -c 0` (scripts/check_core_dumps.py), an ad-hoc login-node script does
+#: A segfaulting dace/sympy parse writes its whole address space to the crashing process's CWD, on
+#: a filesystem whose quota may be inodes. The shell
+#: entry points carry `ulimit -c 0` (scripts/checks/check_core_dumps.py), an ad-hoc login-node script does
 #: not. Set at PACKAGE import so one line covers every entry point. Soft limit only, and
 #: HPCAGENT_BENCH_CORE_DUMPS=1 opts out.
 core_dumps.disable()

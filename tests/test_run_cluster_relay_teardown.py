@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """``run_cluster.sh`` must end promptly with the gang relay running.
 
-The relay (``scripts/cscs/gang_relay.py``) runs as a background child of the batch shell and exits only
+The relay (``experiments/gang_relay.py``) runs as a background child of the batch shell and exits only
 once that shell is gone. ``cleanup_steps_on_exit`` / ``cleanup_steps_on_signal`` end in a bare
 ``wait``, which reaps every child, the relay included: without stopping the relay first the two wait
 on each other and the job idles to its time limit (mlscale jobs 649109-649111 and 649795, 2.5-5 h).
@@ -45,8 +45,8 @@ def build(tmp_path: pathlib.Path, tail: str) -> pathlib.Path:
 
 
 def relay_env() -> dict[str, str]:
-    """``python3`` on PATH for the relay, as on the batch host."""
-    return {"PATH": f"{pathlib.Path(sys.executable).parent}:/usr/bin:/bin"}
+    """The batch host's interpreter for the relay."""
+    return {"PATH": "/usr/bin:/bin", "HPCAGENT_BENCH_HOST_PYTHON": sys.executable}
 
 
 def wait_for_relay(tmp_path: pathlib.Path) -> None:

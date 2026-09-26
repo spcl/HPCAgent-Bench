@@ -40,6 +40,61 @@ from hpcagent_bench.harness.timing import FINAL_GRADE_REDUCTIONS
 from hpcagent_bench.stats import palette, population, style, summary
 from hpcagent_bench.stats.figures.efficacy import GROUP_STEP
 
+__all__ = [
+    "BODY_IN",
+    "CORRECT",
+    "DODGE",
+    "ERRORED",
+    "FAILED",
+    "FAILED_OUTCOMES",
+    "FINAL_GRADE",
+    "GEOMEAN_COLUMNS",
+    "LEFT_IN",
+    "LIVE_GRADE",
+    "MAX_EVERY_DECADE",
+    "MIN_CORRELATED",
+    "NOT_PORTABLE",
+    "PAIRED_COLUMNS",
+    "PANELS",
+    "PANEL_TITLES",
+    "PAPER_MODELS",
+    "PLATFORMS",
+    "PLATFORM_FILLED",
+    "PLATFORM_LABELS",
+    "RIGHT_IN",
+    "SCATTER_BODY_IN",
+    "TICKS_IN",
+    "TITLE_IN",
+    "XLABEL_IN",
+    "PanelStats",
+    "answer_ids",
+    "answer_table",
+    "decade_ticks",
+    "device_of",
+    "draw_panel",
+    "draw_scatter_panel",
+    "geomean_figure",
+    "geomean_table",
+    "kept_arms",
+    "legend_handles",
+    "models_of",
+    "paired_from_csv",
+    "paired_from_observations",
+    "panel_languages",
+    "panel_rows",
+    "panel_stats",
+    "ratio_axis",
+    "scatter_figure",
+    "scatter_handles",
+    "scatter_limits",
+    "scatter_title",
+    "scored",
+    "slot_x",
+    "solved_on_both",
+    "span",
+    "summary_table",
+]
+
 #: One row per answer: its kernel, arm, model and language, its speedup on each machine, which
 #: MI300A grade it carries (:data:`FINAL_GRADE` / :data:`LIVE_GRADE`) and its GH200 outcome.
 PAIRED_COLUMNS: tuple[str, ...] = (
@@ -122,7 +177,7 @@ def paired_from_csv(frame: pd.DataFrame) -> pd.DataFrame:
     unsolved there (:data:`FAILED`)."""
     frame = kept_arms(frame)
     final = pd.to_numeric(frame["s_bar_mi300a"], errors="coerce")
-    live = pd.to_numeric(frame["original_speedup"], errors="coerce")
+    live = pd.to_numeric(frame["grade_live_speedup"], errors="coerce")
     unsolved = final.isna() & (frame["status_mi300a"].astype(str) == "graded")
     gh200 = pd.to_numeric(frame["s_bar_gh200"], errors="coerce")
     status = frame["status_gh200"].astype(str)
@@ -165,14 +220,14 @@ def paired_from_observations(mi300a: pd.DataFrame, gh200: pd.DataFrame) -> pd.Da
     left unsolved :data:`FAILED`, a ``regrade_status`` error :data:`ERRORED`."""
     if gh200.empty:
         return pd.DataFrame(columns=list(PAIRED_COLUMNS))
-    answers = mi300a[(mi300a["record"] == "submission") & (pd.to_numeric(mi300a["speedup"], errors="coerce") > 0)]
+    answers = mi300a[(mi300a["row_kind"] == "submission") & (pd.to_numeric(mi300a["speedup"], errors="coerce") > 0)]
     stamp = answers[population.REDUCTION_COLUMN].astype(str).isin(FINAL_GRADE_REDUCTIONS)
     answers = answers.assign(
         key=answer_ids(answers), x=scored(answers), grade=stamp.map({True: FINAL_GRADE, False: LIVE_GRADE})
     ).drop_duplicates("key")
-    status = gh200["regrade_status"].astype(str)
+    status = gh200["grade_final_status"].astype(str)
     outcome = status.map({ERRORED: ERRORED}).fillna(
-        (gh200["record"] == "submission").map({True: CORRECT, False: FAILED})
+        (gh200["row_kind"] == "submission").map({True: CORRECT, False: FAILED})
     )
     rows = gh200.assign(key=answer_ids(gh200), y=scored(gh200), outcome=outcome)
     both = kept_arms(rows[["key", "y", "outcome"]].merge(answers, on="key", how="inner"))

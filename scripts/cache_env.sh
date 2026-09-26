@@ -13,32 +13,31 @@
 # IN-IMAGE prebuild at /opt/aiter-jit, and job 628077 measured what happens when a host directory
 # wins instead: module_aiter_core loads from the host and the image's prebuilt copy goes unused.
 #
-# TWO ROOTS, because the two kinds of data have opposite shapes -- this split is measured, not
-# stylistic:
+# TWO ROOTS, because the two kinds of data have opposite shapes:
 #
-#   WEIGHTS -> iopsstor (Lustre). Read once per rank at load, by many ranks at once; that
-#              filesystem is 11x faster at 16 concurrent readers.
+#   WEIGHTS -> FAST_SCRATCH (default $SCRATCH; the site layer names a flash tier when there is
+#              one). Read once per rank at load, by many ranks at once.
 #   JIT     -> the general scratch. Small, many, written. Also keyed by inference EDF downstream,
 #              because these artefacts are compiled against ONE ROCm/aiter build and a rank that
 #              loads a mismatched .so fails late or silently.
 #
-# The JIT root is moved OUT of the repo. run_cluster.sh's fallback is
-# ${HPCAGENT_BENCH_REPO}/.cache/jit, which grows build output inside a git checkout; the default
-# below keeps the general-scratch placement that was chosen deliberately while leaving the tree
-# clean. Set JIT_CACHE_ROOT yourself to override.
+# The JIT root is kept OUT of the repo when $SCRATCH exists. Set JIT_CACHE_ROOT yourself to override.
 
-# Beverin's core_pattern is the machine-global `core_%h_%p` and a dump lands in the crashing
-# process's CWD, littering the checkout with core_<host>_<pid> files on a filesystem whose
-# quota is inodes. Slurm propagates the SUBMITTER's core limit, so the floor has to be set here.
-ulimit -c 0
-: "${FAST_SCRATCH:=/iopsstor/scratch/cscs/${USER:-$(id -un)}}"
-: "${HPCAGENT_BENCH_CACHE:=${FAST_SCRATCH}/.hpcagentbench-cache}"
-export FAST_SCRATCH HPCAGENT_BENCH_CACHE
+. "$(dirname -- "${BASH_SOURCE[0]}")/site_env.sh" || return 1 2>/dev/null || exit 1
+
+# A dump lands in the crashing process's CWD (the checkout) and Slurm propagates the SUBMITTER's
+# core limit, so the floor has to be set here.
+ulimit -S -c 0  # sourced: the soft limit only, so a judge-core arm can still raise it
+: "${FAST_SCRATCH:=${SCRATCH:-${HPCAGENT_BENCH_REPO:+${HPCAGENT_BENCH_REPO}/.cache}}}"
+if [[ -n "${FAST_SCRATCH}" ]]; then
+    : "${HPCAGENT_BENCH_CACHE:=${FAST_SCRATCH}/.hpcagentbench-cache}"
+    export FAST_SCRATCH HPCAGENT_BENCH_CACHE
+fi
 
 # Weights. HF_HOME is HuggingFace's own contract and the hub is always $HF_HOME/hub, so this is
 # the ONLY name for them -- a separate "weights dir" variable would be a second spelling of the
 # same path, free to drift from the one the server loads from.
-export HF_HOME="${HF_HOME:-${HPCAGENT_BENCH_CACHE}/hf}"
+[[ -z "${HPCAGENT_BENCH_CACHE:-}" ]] || export HF_HOME="${HF_HOME:-${HPCAGENT_BENCH_CACHE}/hf}"
 
 # JIT build artefacts. run_cluster.sh appends /${INFERENCE_CE_ENV} and derives the seven knobs.
 # An unset SCRATCH falls back to HPCAGENT_BENCH_REPO -- the checkout's own root, which every caller
@@ -47,7 +46,7 @@ export HF_HOME="${HF_HOME:-${HPCAGENT_BENCH_CACHE}/hf}"
 # fires when HPCAGENT_BENCH_REPO is itself set: a bare `. cache_env.sh` with neither var configured
 # still aborts here rather than landing caches under $HOME or /tmp where no later job would look --
 # a container-run pytest suite (scripts/run_tests.sh --container) is the case this exists for. A
-# caller with no scratch AND no repo (the pre-commit hooks, via scripts/run_hook.sh) passes
+# caller with no scratch AND no repo (the pre-commit hooks, via scripts/checks/run_hook.sh) passes
 # JIT_CACHE_ROOT directly instead.
 if [[ -z "${JIT_CACHE_ROOT:-}" ]]; then
     if [[ -n "${SCRATCH:-}" ]]; then
@@ -62,6 +61,9 @@ export JIT_CACHE_ROOT
 # Prerendered Canonical Parallel Form. Not a JIT artefact: it is device-independent text, reused
 # across arms and engines, so it is neither keyed by EDF nor purged with the JIT tree.
 export HPCAGENT_BENCH_CPF_PRERENDER_DIR="${HPCAGENT_BENCH_CPF_PRERENDER_DIR:-${JIT_CACHE_ROOT}/.cpf-prerender}"
+# Its content-addressed cache: where prerender_cpf.sbatch warms forms and the judge renders a kernel
+# on its first request (hpcagent_bench.cpf_cache, config key cpf.cache).
+export HPCAGENT_BENCH_CPF_CACHE="${HPCAGENT_BENCH_CPF_CACHE:-${HPCAGENT_BENCH_CPF_PRERENDER_DIR}/cache}"
 
 # Build tools not (yet) baked into the agent/judge image -- e.g. ppcg, whose only runtime
 # dependency the image ships (see hpcagent_bench/ppcg_transform.py) is the `ppcg` binary itself.
@@ -73,8 +75,8 @@ export HPCAGENT_BENCH_TOOLS_DIR="${HPCAGENT_BENCH_TOOLS_DIR:-${JIT_CACHE_ROOT}/t
 
 # Deterministic-framework job work dirs (canon compiler-baseline columns and siblings: smoke sweeps,
 # opt-report passes). Same shape as jit/ -- small-ish, many, WRITTEN by the job, one tree per job --
-# so it sits beside jit/ under JIT_CACHE_ROOT rather than under HPCAGENT_BENCH_CACHE (the iopsstor
-# weights root a job only READS from). Before this existed, submit-canon-llr40.sh defaulted
+# so it sits beside jit/ under JIT_CACHE_ROOT rather than under HPCAGENT_BENCH_CACHE (the FAST_SCRATCH
+# weights root a job only READS from). Before this existed, submit-canon.sh defaulted
 # out_root to ${SCRATCH}/canon-<tag>-<stamp> directly: a bare-scratch directory nothing ever swept,
 # accumulating one DaCe build tree (dacecache-<column>[_rank<N>]) per column forever. A submitter
 # derives its own job dir under this root as ${HPCAGENT_BENCH_RUNS_ROOT}/<job-kind>/<name>-<stamp>
@@ -94,7 +96,7 @@ export HPCAGENT_BENCH_RESULTS_DIR="${HPCAGENT_BENCH_RESULTS_DIR:-${JIT_CACHE_ROO
 
 # Container bind mounts, DERIVED from the roots above: the top-level filesystem of SCRATCH and of
 # FAST_SCRATCH, deduplicated. An EDF writer mounts these instead of naming a filesystem, so moving
-# scratch (/ritom <-> /capstor) changes $SCRATCH and nothing else.
+# scratch changes $SCRATCH and nothing else.
 hpcagent_bench_fs_root() {  # hpcagent_bench_fs_root <absolute path> -> /<first component>
     local rest=${1#/}
     printf '/%s\n' "${rest%%/*}"
@@ -116,7 +118,7 @@ hpcagent_bench_edf_mounts() {  # TOML array items for HPCAGENT_BENCH_DATA_ROOTS:
 }
 
 hpcagent_bench_cache_mkdirs() {
-    mkdir -p "${HF_HOME}" "${JIT_CACHE_ROOT}" "${HPCAGENT_BENCH_CPF_PRERENDER_DIR}" "${HPCAGENT_BENCH_TOOLS_DIR}" \
+    mkdir -p ${HF_HOME:+"${HF_HOME}"} "${JIT_CACHE_ROOT}" "${HPCAGENT_BENCH_CPF_PRERENDER_DIR}" "${HPCAGENT_BENCH_TOOLS_DIR}" \
         "${HPCAGENT_BENCH_RUNS_ROOT}" "${HPCAGENT_BENCH_RESULTS_DIR}" \
         2>/dev/null || true
 }

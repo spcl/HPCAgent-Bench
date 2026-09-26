@@ -7,7 +7,7 @@ leaves proactive compaction off while that window's source is "auto", and waits 
 "prompt is too long" to compact reactively -- vLLM and SGLang say "maximum context length" instead,
 so Qwen episodes grew to 230674 input tokens and died on the 400. agent_driver.claude_context_env
 names the window (CLAUDE_CODE_MAX_CONTEXT_TOKENS, CLAUDE_CODE_AUTO_COMPACT_WINDOW) and places the
-trigger (CLAUDE_AUTOCOMPACT_PCT_OVERRIDE); scripts/claude_compaction_stub.py proves it on the binary.
+trigger (CLAUDE_AUTOCOMPACT_PCT_OVERRIDE).
 
 USER 2026-09-22: the limit L is min(served window, 262144) for every model; the reply reserve R is
 min(CLAUDE_CODE_MAX_OUTPUT_TOKENS, L // 8) and is exported as the reply cap; the trigger leaves R plus
@@ -24,11 +24,10 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
-from tests.env_render import rendered
+from tests.env_render import BASES, rendered
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 EXPERIMENTS = REPO / "experiments"
-ARM_ENVS = sorted(EXPERIMENTS.glob(".env.*"))
 
 #: The window each model is served with (the engine's argument, or the provider's published one).
 SERVED = {
@@ -83,7 +82,7 @@ def driver_fixture() -> ModuleType:
     return load("agent_driver")
 
 
-def env_values(path: pathlib.Path) -> dict[str, str]:
+def env_values(path: str) -> dict[str, str]:
     """The flat KEY=VALUE environment a job sources for ``path``, quotes stripped."""
     values: dict[str, str] = {}
     for line in rendered(path).splitlines():
@@ -92,11 +91,9 @@ def env_values(path: pathlib.Path) -> dict[str, str]:
     return values
 
 
-def model_of(path: pathlib.Path) -> str:
-    """The model an arm env serves, read off its file name (.env.base-<m>, .env.llrbase-<m>-<lang>, ...)."""
-    names = [name for name in SERVED if f"-{name}" in path.name]
-    assert len(names) == 1, f"{path.name}: cannot tell its model from {names}"
-    return names[0]
+def model_of(path: str) -> str:
+    """The model a ``<campaign>:<model>`` base serves."""
+    return path.split(":", 1)[1]
 
 
 def cli_trigger(environment: dict[str, str]) -> int:
@@ -108,9 +105,9 @@ def cli_trigger(environment: dict[str, str]) -> int:
     return min(math.floor(effective * (percent / 100)), effective - 13000)
 
 
-@pytest.mark.parametrize("path", ARM_ENVS, ids=lambda path: path.name)
-def test_every_arm_env_gives_claude_its_models_window_capped_at_256k(driver: ModuleType, path: pathlib.Path) -> None:
-    """Each committed arm, rendered the way a snapshot is: the window is the model's own, never the
+@pytest.mark.parametrize("path", BASES)
+def test_every_arm_env_gives_claude_its_models_window_capped_at_256k(driver: ModuleType, path: str) -> None:
+    """Each base, rendered the way a snapshot is: the window is the model's own, never the
     cap standing in for a window the arm forgot to name, and never above 262144."""
     values = env_values(path)
     values["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = "32768"  # the launcher's export (run_cluster.sh)

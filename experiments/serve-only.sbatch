@@ -4,11 +4,10 @@
 # Inference only: one OpenAI-compatible endpoint and nothing else. The payload is run_cluster.sh's
 # own --vllm-node role, so this serves what a campaign serves, without the judge and agent roles.
 #   ./serve-only.sbatch                      qwen38 on the nodes its env file asks for
-#   MODEL=kimi27sglang ./serve-only.sbatch   another model (any .env.base-<MODEL>)
+#   MODEL=kimi27sglang ./serve-only.sbatch   another model (any layers/model-<MODEL>.env)
 #   SUBMIT=0 ./serve-only.sbatch             print what would be submitted, submit nothing
 # Run it from experiments/. It derives --nodes from the env file, so never pass --nodes yourself.
 #SBATCH --job-name=serve-only
-#SBATCH --partition=mi300
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=4
 #SBATCH --mem=0
@@ -20,7 +19,8 @@
 
 set -euo pipefail
 
-# Beverin's core_pattern is machine-global and drops a stub in the crashing process's CWD.
+# A core dump lands in the crashing process's CWD (the checkout) and Slurm propagates the
+# SUBMITTER's core limit, so the floor has to be set here.
 ulimit -c 0
 
 # Under sbatch BASH_SOURCE is the spooled copy in /var/spool/slurmd, not this file.
@@ -31,14 +31,13 @@ fi
 export SCRIPT_DIR
 
 MODEL="${MODEL:-qwen38}"
-BASE_ENV="${SERVE_BASE_ENV:-${SCRIPT_DIR}/.env.base-${MODEL}}"
+# <campaign>:<model> (arms.yaml) or an env file
+BASE_ENV="${SERVE_BASE_ENV:-campaign:${MODEL}}"
 SERVE_ENV="${SERVE_ENV_FILE:-${SCRIPT_DIR}/serve-only.env}"
-for env_file in "${BASE_ENV}" "${SERVE_ENV}"; do
-    [[ -f "${env_file}" ]] || { echo "missing env file ${env_file}" >&2; exit 2; }
-done
+[[ -f "${SERVE_ENV}" ]] || { echo "missing env file ${SERVE_ENV}" >&2; exit 2; }
 
 # Campaign values first, role split second: last assignment wins, as the submit scripts do it.
-# The base is layered (env_layers.sh): flatten it once, source and record the flat form.
+# Flatten the base once, source and record the flat form.
 . "${SCRIPT_DIR}/env_layers.sh"
 BASE_FLAT="$(render_env "${BASE_ENV}")" || exit 2
 set -a
@@ -58,7 +57,8 @@ READY_TIMEOUT="${VLLM_READY_TIMEOUT_SECONDS:-${AGENT_READY_TIMEOUT_SECONDS:-7200
 RUN_ROOT="${RUN_ROOT:?RUN_ROOT must name a writable directory}"
 
 if [[ -z "${SLURM_JOB_ID:-}" ]]; then
-    submit=(sbatch --nodes="${INFERENCE_NODES}"
+    . "${SCRIPT_DIR}/../scripts/site_env.sh"
+    submit=(sbatch --nodes="${INFERENCE_NODES}" --nice="${NICE:-${HPCAGENT_BENCH_NICE}}"
         --export=ALL,MODEL="${MODEL}",CLUSTER_SCRIPT_DIR="${SCRIPT_DIR}"
         "${SCRIPT_DIR}/serve-only.sbatch")
     if [[ "${SUBMIT:-1}" != 1 ]]; then

@@ -8,7 +8,7 @@ two thirds of the whole suite. Most of that is not coverage: the corpus holds 15
 TRANSLATOR test the 140th exercises the same emitter lines as the 10th.
 
 So measure it rather than guess from names. For every kernel, emit it to every target under
-coverage and record which lines of numpy_translators/src it touched; then greedily pick kernels
+coverage and record which lines of the translators it touched; then greedily pick kernels
 until the union is covered. What comes out is a per-push set whose emit coverage equals the full
 corpus, with the remainder left for a scheduled run.
 
@@ -24,20 +24,20 @@ import multiprocessing as mp
 import pathlib
 import sys
 import traceback
-from typing import Dict, List, Set, Tuple
 
 CHUNK = 20
 TIMEOUT_S = 180.0
 
 
-def emit_under_coverage(key: str) -> Tuple[str, List[Tuple[str, int]], str]:
-    """Emit one kernel to every target; return the numpy_translators/src lines it executed."""
+def emit_under_coverage(key: str) -> tuple[str, list[tuple[str, int]], str]:
+    """Emit one kernel to every target; return the translator lines it executed."""
     import coverage
+
     from hpcagent_bench import paths
     from hpcagent_bench.emit_bridge import bench_info_tempfile
     from hpcagent_bench.spec import BenchSpec
 
-    root = str(pathlib.Path(paths.BENCHMARKS).parent / "numpy_translators" / "src")
+    root = str(pathlib.Path(paths.BENCHMARKS).parent / "translators")
     # source=, not include=: the repo's own coverage config sets source, and coverage then drops an
     # include= as redundant ("--include is ignored because --source is set") -- measuring the whole
     # package instead of the translators.
@@ -45,8 +45,9 @@ def emit_under_coverage(key: str) -> Tuple[str, List[Tuple[str, int]], str]:
     status = "ok"
     cov.start()
     try:
-        from numpyto_c import dace_emit, emit as c_emit  # noqa: F401 -- imported for its side effects
-        from numpyto_common.frontend import emit_with_inline_fallback, parse_kernel
+        from hpcagent_bench.translators.numpyto_c import dace_emit
+        from hpcagent_bench.translators.numpyto_c import emit as c_emit  # noqa: F401 -- imported for its side effects
+        from hpcagent_bench.translators.numpyto_common.frontend import emit_with_inline_fallback, parse_kernel
 
         spec = BenchSpec.load(key)
         kdir = paths.BENCHMARKS / spec.relative_path
@@ -62,7 +63,7 @@ def emit_under_coverage(key: str) -> Tuple[str, List[Tuple[str, int]], str]:
     finally:
         cov.stop()
     data = cov.get_data()
-    lines: List[Tuple[str, int]] = []
+    lines: list[tuple[str, int]] = []
     for filename in data.measured_files():
         if not filename.startswith(root):
             continue  # a line outside the translators says nothing about which kernels to keep
@@ -71,7 +72,7 @@ def emit_under_coverage(key: str) -> Tuple[str, List[Tuple[str, int]], str]:
     return key, lines, status
 
 
-def worker(keys: List[str], out: "mp.Queue") -> None:
+def worker(keys: list[str], out: "mp.Queue") -> None:
     for key in keys:
         try:
             name, lines, status = emit_under_coverage(key)
@@ -88,7 +89,7 @@ def worker(keys: List[str], out: "mp.Queue") -> None:
     out.put(None)
 
 
-def measure(keys: List[str], destination: pathlib.Path) -> None:
+def measure(keys: list[str], destination: pathlib.Path) -> None:
     ctx = mp.get_context("spawn")
     with destination.open("w") as handle:
         for start in range(0, len(keys), CHUNK):
@@ -112,14 +113,14 @@ def measure(keys: List[str], destination: pathlib.Path) -> None:
             print(f"{start + seen}/{len(keys)}", flush=True)
 
 
-def select(records: List[dict]) -> Tuple[List[str], int, int]:
+def select(records: list[dict]) -> tuple[list[str], int, int]:
     """Greedy set cover: repeatedly take the kernel adding the most uncovered lines."""
-    coverage_by_kernel: Dict[str, Set[Tuple[str, int]]] = {
+    coverage_by_kernel: dict[str, set[tuple[str, int]]] = {
         r["kernel"]: {tuple(line) for line in r["lines"]} for r in records if r["lines"]
     }
-    universe: Set[Tuple[str, int]] = set().union(*coverage_by_kernel.values()) if coverage_by_kernel else set()
+    universe: set[tuple[str, int]] = set().union(*coverage_by_kernel.values()) if coverage_by_kernel else set()
     remaining = set(universe)
-    chosen: List[str] = []
+    chosen: list[str] = []
     while remaining:
         best = max(coverage_by_kernel, key=lambda k: len(coverage_by_kernel[k] & remaining))
         gain = coverage_by_kernel[best] & remaining
