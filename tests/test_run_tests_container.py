@@ -22,20 +22,12 @@ def stub_sbatch(bin_dir: pathlib.Path, marker: pathlib.Path) -> None:
     stub(bin_dir, "sbatch", f'printf \'%s\\n\' "$@" > "{marker}"\nexit 0')
 
 
-def stub_account(bin_dir: pathlib.Path) -> None:
-    """A one-association sacctmgr: account_env.sh runs for real (scripts/cscs/account_env.sh),
-    just against a fixed placeholder answer instead of this user's actual (ambiguous)
-    associations -- a made-up name on purpose, so this fixture is never mistaken for a real one."""
-    stub(bin_dir, "sacctmgr", "printf 'placeholder-acct\n'")
-
-
 def run_container(
     tmp_path: pathlib.Path, *args: str, scratch: str | None = "/nonexistent-scratch"
 ) -> tuple[subprocess.CompletedProcess[str], pathlib.Path]:
     bin_dir = tmp_path / "bin"
     marker = tmp_path / "sbatch-argv.txt"
     stub_sbatch(bin_dir, marker)
-    stub_account(bin_dir)
     env = {
         "PATH": f"{bin_dir}:/usr/bin:/bin",
         "HOME": str(tmp_path / "home"),
@@ -56,8 +48,7 @@ def run_container(
 
 
 def test_container_flag_submits_with_the_partition_and_sbatch_script(tmp_path: pathlib.Path) -> None:
-    """The account is NOT a literal here -- account_env.sh hands it to sbatch through
-    SBATCH_ACCOUNT, exercised for real against the stub sacctmgr above."""
+    """The account is not an argument: sbatch reads SBATCH_ACCOUNT from the site layer."""
     proc, marker = run_container(tmp_path)
     assert proc.returncode == 0, proc.stderr
     argv = marker.read_text().splitlines()

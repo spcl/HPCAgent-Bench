@@ -73,7 +73,7 @@ export HPCAGENT_BENCH_TOOLS_DIR="${HPCAGENT_BENCH_TOOLS_DIR:-${JIT_CACHE_ROOT}/t
 # Deterministic-framework job work dirs (canon compiler-baseline columns and siblings: smoke sweeps,
 # opt-report passes). Same shape as jit/ -- small-ish, many, WRITTEN by the job, one tree per job --
 # so it sits beside jit/ under JIT_CACHE_ROOT rather than under HPCAGENT_BENCH_CACHE (the FAST_SCRATCH
-# weights root a job only READS from). Before this existed, submit-canon-llr40.sh defaulted
+# weights root a job only READS from). Before this existed, submit-canon.sh defaulted
 # out_root to ${SCRATCH}/canon-<tag>-<stamp> directly: a bare-scratch directory nothing ever swept,
 # accumulating one DaCe build tree (dacecache-<column>[_rank<N>]) per column forever. A submitter
 # derives its own job dir under this root as ${HPCAGENT_BENCH_RUNS_ROOT}/<job-kind>/<name>-<stamp>

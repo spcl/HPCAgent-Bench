@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """``run_cluster.sh`` must end promptly with the gang relay running.
 
-The relay (``scripts/cscs/gang_relay.py``) runs as a background child of the batch shell and exits only
+The relay (``experiments/gang_relay.py``) runs as a background child of the batch shell and exits only
 once that shell is gone. ``cleanup_steps_on_exit`` / ``cleanup_steps_on_signal`` end in a bare
 ``wait``, which reaps every child, the relay included: without stopping the relay first the two wait
 on each other and the job idles to its time limit (mlscale jobs 649109-649111 and 649795, 2.5-5 h).

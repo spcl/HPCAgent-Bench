@@ -3,7 +3,7 @@
 """Collect one canon sweep's per-rank CSVs into a SQLite ``canon`` table.
 
 Ported from the reproducibility artifact's ``collect_canon.py``. A canon sweep
-(``experiments/submit-canon-llr40.sh``) shards its output by rank (``<column>.rank<N>.csv``,
+(``experiments/submit-canon.sh``) shards its output by rank (``<column>.rank<N>.csv``,
 written by ``experiments/canon_column.sh``) because two ranks appending to one file interleave
 partial lines. The shards of one column are disjoint kernel sets, so concatenating them is the
 whole merge.

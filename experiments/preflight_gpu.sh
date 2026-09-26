@@ -21,7 +21,7 @@ PY=${SCRATCH:?}/venv-hpcagent-bench-314/bin/python
 CE_ENV=${CE_ENV:-hpcagent-bench-agent-mi300-latest}
 source ./roster.sh
 TAG=${TAG:-llr-focus40}
-#: Keyed by target AND roster, the same name submit-cpf-llr40.sh gates on. A directory
+#: Keyed by target AND roster, the view name submit.sh defaults CPF_VIEW to. A directory
 #: keyed by target alone was shared by a 5-kernel smoke and the 40-kernel campaign, and the
 #: judge answers a missing form `unavailable` with HTTP 200 -- so 35 of 40 kernels went
 #: untreated and the arm collapsed into its own control without one failure to show for it.

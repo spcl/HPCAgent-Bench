@@ -667,9 +667,9 @@ jobs:
         timeout-minutes: 38
         env:
           # Not /tmp (tmpfs): a full tmpfs fails builds in a way that reads as a kernel defect.
-          HPCAGENT_BENCH_DACE_BUILD_ROOT: ${{ runner.temp }}/dace_numeric
+          JIT_CACHE_ROOT: ${{ runner.temp }}/jit
         run: |
-          rm -rf "$HPCAGENT_BENCH_DACE_BUILD_ROOT"
+          rm -rf "$JIT_CACHE_ROOT/dace_numeric"
           python -c "from tests.test_dace_numeric_agreement import prewarm; \
             print(prewarm(), 'dace programs ready')"
           python -m pytest -q -p no:cacheprovider -rfEs -n 4 -m dace_numeric \

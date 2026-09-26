@@ -3,7 +3,7 @@
 """``experiments/run_cluster.sh``'s FROZEN TREE block: a batch step copies the checkout once and
 re-executes from the copy, so a commit landing mid-run never reaches the job (643369: every /score
 died on "cannot import name 'decline_kind'"). The block is lifted from the real file and run in a
-throwaway git checkout (with the real scripts/cscs/code_snapshot.sh) whose run_cluster.sh stops
+throwaway git checkout (with the real experiments/code_snapshot.sh) whose run_cluster.sh stops
 right after it. What the copy holds is tests/test_code_snapshot.py's subject.
 
 The FROZEN TREE REMOVAL block deletes that copy at teardown. Its tests run the freeze, the removal
@@ -112,8 +112,7 @@ def checkout(live: pathlib.Path, commit: bool = True, teardown: bool = False) ->
     else:
         body = SCRIPT_DIR_LINE + BLOCK + REPORT
     script.write_text("#!/usr/bin/env bash\nset -euo pipefail\n" + body)
-    (live / "scripts" / "cscs").mkdir(parents=True)
-    shutil.copy2(REPO / "scripts" / "cscs" / "code_snapshot.sh", live / "scripts" / "cscs" / "code_snapshot.sh")
+    shutil.copy2(REPO / "experiments" / "code_snapshot.sh", live / "experiments" / "code_snapshot.sh")
     (live / "hpcagent_bench").mkdir()
     (live / "hpcagent_bench" / "module.py").write_text("OLD = 1\n")
     (live / ".gitignore").write_text("core_*\n")
