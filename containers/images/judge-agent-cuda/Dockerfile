@@ -271,6 +271,10 @@ RUN set -eux; \
 #
 # libfabric is the stage-0 stub, declared external and required in the environment too, so spack
 # never builds or links its own.
+#
+# A one-package overlay repo, ahead of builtin, adds slurm@25-05-9-1 (Daint's Slurm): no
+# spack-packages commit carries it yet, and the PMI gate below wants the host version exactly.
+# The checksum is the GitHub tag archive's, the URL the builtin package derives.
 COPY --from=ofi-builder /opt/ofi-sdk /opt/ofi-sdk
 RUN set -eux; \
     "/opt/ofi-sdk/bin/fi_info" --version 2>/dev/null | head -1 \
@@ -292,8 +296,21 @@ RUN set -eux; \
     gitretry -C /opt/spack-packages fetch -q --depth 1 origin "${SPACK_PACKAGES_REF}"; \
     git -C /opt/spack-packages checkout -q FETCH_HEAD; \
     test -f /opt/spack-packages/repos/spack_repo/builtin/repo.yaml; \
+    overlay=/opt/spack-overlay/spack_repo/hpcagent; \
+    mkdir -p "${overlay}/packages/slurm"; \
+    printf '%s\n' 'repo:' '  namespace: hpcagent' '  api: v2.2' > "${overlay}/repo.yaml"; \
+    printf '%s\n' \
+      'from spack_repo.builtin.packages.slurm.package import Slurm as BuiltinSlurm' \
+      '' \
+      'from spack.package import *' \
+      '' \
+      '' \
+      'class Slurm(BuiltinSlurm):' \
+      '    version("25-05-9-1", sha256="55678d04efa91cc919277f290f9f50d84ded1185b0ea93125ac304e8a0270a73")' \
+      > "${overlay}/packages/slurm/package.py"; \
     printf '%s\n' \
       'repos:' \
+      "  hpcagent: ${overlay}" \
       '  builtin: /opt/spack-packages/repos/spack_repo/builtin' \
       > "${SPACK_ROOT}/etc/spack/repos.yaml"; \
     printf '%s\n' \
