@@ -172,7 +172,7 @@ class Benchmark:
         init = self.info["init"]
         if init.get("func_name"):
             # A custom initialize() has no per-array spec surface, so a hidden variant does not reach it.
-            self.call_initializer(data, init, datatype, np.random.default_rng(seed), dist_name, variant_spec)
+            self.call_initializer(data, init, datatype, seed, dist_name, variant_spec)
         else:
             values = auto_initialize(
                 spec,
@@ -199,15 +199,20 @@ class Benchmark:
         data: dict[str, Any],
         init: dict[str, Any],
         datatype: str | None,
-        rng: np.random.Generator,
+        seed: int,
         dist_name: str,
         variant_spec: dict[str, Any] | None,
     ) -> None:
         """Call the kernel module's ``init.func_name`` and bind its return value(s) to ``init.output_args``.
 
-        ``datatype``/``rng``/``dist``/``variant_spec`` are passed by keyword only when the function declares
-        them (or ``**kwargs``); an explicit Generator, since a global ``np.random.seed()`` would couple
-        every kernel to draw order."""
+        ``datatype``/``rng``/``dist``/``variant_spec``/``perturbation`` are passed by keyword only when the
+        function declares them (or ``**kwargs``). ``rng`` is an explicit Generator seeded with ``seed``,
+        since a global ``np.random.seed()`` would couple every kernel to draw order; ``perturbation`` is
+        the draw's :class:`~hpcagent_bench.support.distributions.perturbation.Perturbation` (its scenario
+        from ``init.scenarios`` and its error distribution), which is what lets a deterministic
+        initializer still yield distinct timed inputs."""
+        from hpcagent_bench.support.distributions.perturbation import Perturbation
+
         init_func = vars(importlib.import_module(self.impl_module()))[init["func_name"]]
         # Declared init scalars seed the data; an existing value wins.
         for name, value in (init.get("scalars") or {}).items():
@@ -222,7 +227,11 @@ class Benchmark:
             elif accepts_positional_dtype(params, len(init_inputs)):
                 init_inputs.append(data["datatype"])  # legacy positional dtype
         if "rng" in params or has_kwargs:
-            extras["rng"] = rng
+            extras["rng"] = np.random.default_rng(seed)
+        if "perturbation" in params or has_kwargs:
+            extras["perturbation"] = Perturbation.for_seed(
+                seed, tuple(self.spec.init.scenarios) if self.spec.init else ()
+            )
         if "dist" in params or has_kwargs:
             extras["dist"] = dist_name
         if variant_spec is not None and ("variant_spec" in params or has_kwargs):
