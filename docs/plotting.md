@@ -84,8 +84,8 @@ Further conventions:
 - **Names come from the registry** through `hpcagent_bench.experiment_tags` (`display_name`,
   `model_name`, `packet_name`, `framework_name`), never literals. Serving details (`sglang`, `-FP8`)
   stay out of names.
-- **Baseline is a property of the data**: `figures.results.baseline_of(frame)` reads the column the
-  judge stamped; `DEFAULT_BASELINE` (`numba`) is only the fallback.
+- **Baseline is a property of the data**: `population.one_denominator` reads the column the judge
+  stamped and refuses a mix; `DEFAULT_BASELINE` (`numba`) is only the fallback.
 - **Costs.** A kernel's tokens come from its task row (`population.kernel_tokens`), priced with the
   `billed` card unless `--cost-model` names another (`stats.cost.add_arguments`). A summary over
   kernels is the geometric mean, never a median, and never over episodes in a cell.
@@ -144,7 +144,6 @@ tokens). A predicate over both columns at once keeps neither record type.
 | `plot_canon_speedup.py` | median speedup per framework from one canon sweep (`--db`) | `stats.canon` |
 | `plot_speedup.py`, `plot_results.py` | corpus figures from the results DB | see [measurement_statistics.md](measurement_statistics.md) |
 
-`table_solve_rate.py` writes the solve-rate LaTeX table that goes beside the efficacy figure.
 Run any script with `-h` for its flags.
 
 Quick looks at one campaign:
@@ -272,14 +271,6 @@ python statistics/plot_score_change.py scored.csv blind.csv \
 
 `--row-width {natural,iclr,iclr-wrap,acm-column,acm-text}` sizes a joined row to a page budget.
 `--no-success-row` drops the solved row.
-
-The solve-rate table from the same pair tables:
-
-```bash
-python statistics/table_solve_rate.py "$AR/experiments/llr-cpu/data/llr-cpu.db" \
-    --pairs-csv "$AR/experiments/llr-cpu/tables/skills_billed.csv" --intervention lang-skills \
-    --out tables/solve-rate.tex
-```
 
 ## Transfer figure and the platform column
 
