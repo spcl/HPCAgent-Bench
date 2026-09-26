@@ -33,7 +33,7 @@ import sys
 
 from hpcagent_bench.experiments import read_observations, read_table
 from hpcagent_bench.stats import cost, population
-from hpcagent_bench.stats.figures import kernel_comparison, signed
+from hpcagent_bench.stats.figures import llr40_arms, signed
 
 #: The polyhedral compiler baselines (2026-09-20 decision), appended to
 #: :data:`~hpcagent_bench.stats.figures.signed.LLR40_CANON_COLUMNS`' two DaCe columns for THIS
@@ -46,7 +46,7 @@ def load_roster(roster_file: pathlib.Path | None, canon_frame: "object") -> list
     """The roster kernel names: ``--roster-file`` (one per line) or every kernel the canon db names."""
     if roster_file is not None:
         return [line.strip() for line in roster_file.read_text().splitlines() if line.strip()]
-    return kernel_comparison.roster_of(canon_frame)
+    return llr40_arms.roster_of(canon_frame)
 
 
 def run(
@@ -114,12 +114,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument("--conditions", default=",".join(signed.LLR40_CONDITIONS), help="CPF conditions to draw, per model")
     ap.add_argument(
-        "--arm-pattern", default=kernel_comparison.ARM_PATTERN.pattern, help="regex with named groups model, condition"
+        "--arm-pattern", default=llr40_arms.ARM_PATTERN.pattern, help="regex with named groups model, condition"
     )
     ap.add_argument(
         "--repeats",
+        type=population.RepeatPolicy,
         choices=population.REPEAT_POLICIES,
-        default="latest",
+        default=population.RepeatPolicy.LATEST,
         help="a kernel run more than once: latest run counts (reruns, default) or median over runs (designed repeats)",
     )
     ap.add_argument("--label", default="", help="figure title; default none, the caption names the figure")

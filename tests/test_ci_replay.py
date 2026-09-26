@@ -3,6 +3,7 @@
 """scripts/ci_replay.py renders tests.yml the way GitHub does for a push and runs its test steps."""
 
 import pathlib
+import re
 import subprocess
 import sys
 
@@ -57,7 +58,7 @@ def test_the_workflow_expands_into_legs_with_rendered_steps(tmp_path: pathlib.Pa
     legs = list(ci_replay.legs(workflow, tmp_path, 1.0))
     labels = {leg.label for leg in legs}
     unit = sorted(leg.label for leg in legs if leg.job == "unit")
-    assert len(unit) == len(workflow["jobs"]["unit"]["strategy"]["matrix"]["python"]) * 3
+    assert len(unit) == len(ci_replay.matrix_combinations(workflow["jobs"]["unit"]["strategy"]))
     assert "coverage" not in {leg.job for leg in legs}, "the coverage job has no test step"
     assert "mpi" in labels
     for leg in legs:
@@ -66,7 +67,7 @@ def test_the_workflow_expands_into_legs_with_rendered_steps(tmp_path: pathlib.Pa
             assert "pytest" in step.script or "python -c" in step.script
             assert step.timeout_s > 0
     shard_one = next(leg for leg in legs if leg.label.startswith("unit[") and "[shard=1]" in leg.label)
-    assert "awk 'NR % 3 == 1'" in shard_one.steps[-1].script
+    assert re.search(r"awk 'NR % \d+ == 1'", shard_one.steps[-1].script), "shard 1 is not dealt its slice"
 
 
 def test_list_mode_runs_nothing_and_honours_skip() -> None:

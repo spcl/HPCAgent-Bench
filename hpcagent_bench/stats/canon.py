@@ -66,14 +66,6 @@ def speedups(times: dict[str, dict[str, float]], baseline: str, column: str) -> 
     return [base[k] / cur[k] for k in sorted(base) if k in cur]
 
 
-def kernel_speedups(times: dict[str, dict[str, float]], baseline: str, column: str) -> dict[str, float]:
-    """Per-kernel baseline/column ratios KEYED BY KERNEL, over the kernels both measured. Silent
-    about a missing kernel, unlike :func:`speedups`: the caller reports roster gaps itself."""
-    base = times.get(baseline, {})
-    cur = times.get(column, {})
-    return {kernel: base[kernel] / cur[kernel] for kernel in sorted(base) if kernel in cur}
-
-
 def roster_speedups(
     times: dict[str, dict[str, float]], baseline: str, column: str, roster: Sequence[str]
 ) -> tuple[dict[str, float], dict[str, bool]]:

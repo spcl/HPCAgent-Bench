@@ -47,7 +47,7 @@ from matplotlib.lines import Line2D
 
 from hpcagent_bench import experiment_tags, flags
 from hpcagent_bench.stats import canon, palette, population, rules, style
-from hpcagent_bench.stats.figures import kernel_comparison, per_kernel
+from hpcagent_bench.stats.figures import llr40_arms, per_kernel
 from hpcagent_bench.stats.summary import DEFAULT_CONFIDENCE, geomean_ci, signed_change, usable_ratios
 
 #: Framework -> the name a reader knows it by. Insertion order is the order on the axis.
@@ -422,8 +422,8 @@ def paired_rows(
 
 
 #: The baseline every llr-focus40 compiler row is measured against
-#: (:data:`kernel_comparison.CANON_BASELINE`).
-LLR40_BASELINE: str = kernel_comparison.CANON_BASELINE
+#: (:data:`llr40_arms.CANON_BASELINE`).
+LLR40_BASELINE: str = llr40_arms.CANON_BASELINE
 
 #: The two canon-sweep columns this figure draws as their OWN rows, in draw order: DaCe's
 #: parallel-CPU backend, then its canonicalizing pass over the same backend. The LIBRARY default --
@@ -432,8 +432,7 @@ LLR40_BASELINE: str = kernel_comparison.CANON_BASELINE
 LLR40_CANON_COLUMNS: tuple[str, ...] = ("dace_cpu", "dace_cpu_canonicalize")
 
 #: The two CPF conditions this figure draws, per model -- never the no-packet control, which
-#: answers a different question and which :mod:`hpcagent_bench.stats.figures.kernel_comparison`
-#: already draws on its own axis.
+#: answers a different question.
 LLR40_CONDITIONS: tuple[str, ...] = ("cpf", "cpfsrc")
 
 #: Column order of the emitted token summary table.
@@ -454,7 +453,7 @@ def canon_kernel_row(
     ``median_ms`` per kernel (:func:`hpcagent_bench.stats.canon.read_times`), so ``ratios_low``/
     ``ratios_high`` and ``tokens`` stay empty -- a canon sweep has no repetition to bound and runs
     no agent to cost. A canon sweep commonly spans MORE kernels than one figure's roster
-    (:data:`kernel_comparison.CANON_COLUMN` sweeps 40); restricting to ``roster`` keeps the summary
+    (:data:`llr40_arms.CANON_COLUMN` sweeps 40); restricting to ``roster`` keeps the summary
     column from geomeaning a population the panel never drew.
 
     A roster kernel ``column`` produced no validated result for -- declined, crashed, or never
@@ -545,7 +544,7 @@ def agent_kernel_row(
     model: str,
     condition: str,
     roster: Sequence[str],
-    repeats: population.RepeatPolicy = "latest",
+    repeats: population.RepeatPolicy = population.RepeatPolicy.LATEST,
     pending: frozenset[str] = frozenset(),
 ) -> Row:
     """One CPF arm's row, restricted to ``roster``: its final answer per kernel (Rule 4's costs
@@ -553,14 +552,14 @@ def agent_kernel_row(
     kernel ran (rules 5/7) -- the geomean of that kernel's repetitions, degenerate to a point below
     two samples (:func:`~hpcagent_bench.stats.summary.geomean_ci`)."""
     subset = frame.loc[frame["arm"].astype(str) == arm]
-    answers = population.kernel_answers(subset, repeats=repeats, policy="solved")
+    answers = population.kernel_answers(subset, repeats=repeats, policy=population.KernelPolicy.SOLVED)
     kernels = set(roster)
     ratios, numerator_ms, denominator_ms = answer_ratios(answers, kernels)
     ratios_low, ratios_high = kernel_intervals(subset, ratios.keys(), arm)
-    raw_tokens, tokens_low, tokens_high = kernel_comparison.arm_tokens(subset, arm, repeats)
+    raw_tokens, tokens_low, tokens_high = llr40_arms.arm_tokens(subset, arm, repeats)
     del tokens_low, tokens_high  # under "latest" both are empty; a repeat's own range is not this figure's concern
     tokens = {k: v for k, v in raw_tokens.items() if k in kernels}
-    label = f"{experiment_tags.model_name(model)} - {kernel_comparison.condition_label(condition)}"
+    label = f"{experiment_tags.model_name(model)} - {llr40_arms.condition_label(condition)}"
     return Row(
         arm, label, ratios, numerator_ms, denominator_ms, pending_note(pending),
         palette.color(condition), palette.marker(model), ratios_low, ratios_high, tokens, pending=pending,
@@ -617,8 +616,8 @@ def llr40_rows(
     baseline: str = LLR40_BASELINE,
     canon_columns: Sequence[str] = LLR40_CANON_COLUMNS,
     conditions: Sequence[str] = LLR40_CONDITIONS,
-    pattern: re.Pattern[str] = kernel_comparison.ARM_PATTERN,
-    repeats: population.RepeatPolicy = "latest",
+    pattern: re.Pattern[str] = llr40_arms.ARM_PATTERN,
+    repeats: population.RepeatPolicy = population.RepeatPolicy.LATEST,
     mark_pending: bool = False,
     baseline_fallback: str = "",
 ) -> list[Row]:
@@ -638,7 +637,7 @@ def llr40_rows(
     )
     if observations is None:
         return rows
-    candidates = kernel_comparison.candidate_arms(observations, pattern)
+    candidates = llr40_arms.candidate_arms(observations, pattern)
     frame = observations[observations["arm"].astype(str).isin(candidates)]
     kept, dropped = population.complete_arms(frame, roster)
     if mark_pending:
@@ -649,7 +648,7 @@ def llr40_rows(
         if condition in conditions:
             by_model.setdefault(model, []).append(arm)
     for model in palette.in_order(by_model.keys(), "models"):
-        for arm in sorted(by_model[model], key=lambda a: kernel_comparison.rank_condition(candidates[a][1])):
+        for arm in sorted(by_model[model], key=lambda a: llr40_arms.rank_condition(candidates[a][1])):
             model_tag, condition = candidates[arm]
             served = set(frame.loc[frame["arm"].astype(str) == arm, "benchmark"].astype(str))
             pending = frozenset(k for k in roster if k not in served)
@@ -752,7 +751,7 @@ def llr40_figure(
     return per_kernel.figure_panels(
         metrics,
         sorted(roster),
-        "ci",
+        per_kernel.Style.CI,
         True,
         title,
         width_in=style.DOUBLE_COLUMN_WIDTH,
@@ -797,8 +796,8 @@ def llr40_two_row_figure(
     baseline: str = LLR40_BASELINE,
     canon_columns: Sequence[str] = LLR40_CANON_COLUMNS,
     conditions: Sequence[str] = LLR40_CONDITIONS,
-    pattern: re.Pattern[str] = kernel_comparison.ARM_PATTERN,
-    repeats: population.RepeatPolicy = "latest",
+    pattern: re.Pattern[str] = llr40_arms.ARM_PATTERN,
+    repeats: population.RepeatPolicy = population.RepeatPolicy.LATEST,
     title: str = "",
     dpi: float = 150.0,
     labels: Mapping[str, str] | None = None,

@@ -238,8 +238,11 @@ def test_config_names_absent_keeps_legacy_default_branch_behavior() -> None:
 
 
 def test_config_names_keep_the_declared_value_across_fuzz_iterations() -> None:
-    for it in range(20):
-        p = fuzz.sample_params(CONFIG_AND_DIM_PARAMS, iteration=it, config_names=CONFIG_NAMES)
+    # The bounds below are the XL band, so the draw is pinned to the XL anchor rather than read from
+    # whatever ``fuzz.anchor`` the process holds (``spec.resolve_preset`` sets it per preset token).
+    with config.overridden("fuzz.anchor", "XL"):
+        draws = [fuzz.sample_params(CONFIG_AND_DIM_PARAMS, iteration=it, config_names=CONFIG_NAMES) for it in range(20)]
+    for p in draws:
         assert p["seed"] == 7
         assert p["multrec_limit"] == 512
         # Anchored on XL (100000 here), not spanning S..XL. Bounds come from the SAME config the

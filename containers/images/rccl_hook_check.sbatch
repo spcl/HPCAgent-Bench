@@ -18,10 +18,12 @@ set -Eeuo pipefail
 ulimit -c 0
 SCRATCH="${SCRATCH:?set SCRATCH}"
 # Any image: none ships a fabric library, the hooks supply it.
-#   IMAGE=${SCRATCH}/ce-images/hpcagent-bench-sglang-mi300.sqsh sbatch rccl_hook_check.sbatch
-IMAGE="${IMAGE:-${SCRATCH}/ce-images/hpcagent-bench-agent-mi300.sqsh}"
+#   IMAGE=${CE_IMAGES}/hpcagent-bench-sglang-mi300.sqsh sbatch rccl_hook_check.sbatch
+# shellcheck source=images.env
+source "${REPO:-${SCRATCH}/hpcagent-bench}/containers/images/images.env"
+IMAGE="${IMAGE:-${CE_IMAGES}/${JUDGE_AGENT_AMD_SQSH}}"
 WORK="${SCRATCH}/.tmp/rcclhook-${SLURM_JOB_ID}"
-mkdir -p "${WORK}" "${SCRATCH}/ce-images/logs"
+mkdir -p "${WORK}" "${CE_IMAGES}/logs"
 
 EDF="${WORK}/e.toml"
 cat > "${EDF}" <<TOML
@@ -128,7 +130,7 @@ grep -E "^MAPPED|^RESULT" "${WORK}/r.log" || true
 s=$(( rc + tv ))
 # Preserve logs only on failure, when they are wanted for diagnosis.
 for f in "${WORK}"/*.log; do
-    if [ -e "${f}" ]; then cp -f "${f}" "${SCRATCH}/ce-images/logs/rccl-hook-${SLURM_JOB_ID}-$(basename "${f}")"; fi
+    if [ -e "${f}" ]; then cp -f "${f}" "${CE_IMAGES}/logs/rccl-hook-${SLURM_JOB_ID}-$(basename "${f}")"; fi
 done
 if [ "${s}" -eq 0 ]; then rm -rf "${WORK}"; fi
 [ "${s}" -eq 0 ] || exit 1

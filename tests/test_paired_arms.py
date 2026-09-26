@@ -176,7 +176,7 @@ def test_designed_repeats_score_the_median_run(paired_arms: ModuleType) -> None:
         graded("a", "k1", 3.0, job="j1", ts=2000) | {"run_id": "a.n0.p0.w1"},
         graded("a", "k1", 9.0, job="j1", ts=3000) | {"run_id": "a.n0.p0.w2"},
     ]
-    assert paired_arms.best_by_arm_kernel(frame(rows), "median").speedup.tolist() == [5.0]
+    assert paired_arms.best_by_arm_kernel(frame(rows), population.RepeatPolicy.MEDIAN).speedup.tolist() == [5.0]
 
 
 def test_the_score_leg_keeps_a_kernel_that_has_no_call_row(paired_arms: ModuleType, tmp_path: pathlib.Path) -> None:
@@ -230,7 +230,7 @@ def test_usage_counts_every_call_of_the_selected_tasks_per_task(paired_arms: Mod
         graded("a", "k2", 2.0, job="j1", ts=1300),
         call("a", "k1", 50.0, job="j2", ts=5000) | {"route": "submit"},
     ]
-    usage = paired_arms.task_usage(frame(rows), "latest").loc["a"]
+    usage = paired_arms.task_usage(frame(rows), population.RepeatPolicy.LATEST).loc["a"]
     assert usage.tasks == 2
     assert usage.score_calls_per_task == pytest.approx(1.0)
     assert usage.submit_calls_per_task == pytest.approx(1.0)
@@ -331,7 +331,7 @@ def test_a_pair_reports_what_the_intersection_dropped(paired_arms: ModuleType, t
     obs = paired_arms.load_observations([path])
     graded_rows = paired_arms.graded_rows(obs, ["a", "b"])
     best = paired_arms.best_by_arm_kernel(graded_rows)
-    table = paired_arms.arm_aggregates(best, paired_arms.served_by_arm(obs), "numba", "served")
+    table = paired_arms.arm_aggregates(best, paired_arms.served_by_arm(obs), "numba", population.KernelPolicy.SERVED)
     reported = paired_arms.pair_rows([("a", "b")], table, paired_arms.tokens_by_arm_kernel(obs), list(KERNELS), "f")
 
     speed = next(row for row in reported if row["leg"] == "speedup")
@@ -459,7 +459,9 @@ def test_a_teardown_harvest_does_not_make_the_agent_a_non_submitter(
     served = paired_arms.served_by_arm(obs)
     table = paired_arms.arm_aggregates(best, served, "numba")
     tokens = paired_arms.tokens_by_arm_kernel(obs)
-    row = paired_arms.arm_rows(best, graded_frame, table, served, tokens, paired_arms.task_usage(obs, "latest"))[0]
+    row = paired_arms.arm_rows(
+        best, graded_frame, table, served, tokens, paired_arms.task_usage(obs, population.RepeatPolicy.LATEST)
+    )[0]
 
     assert row["n_solved"] == 3
     assert row["n_final_harvest"] == 2
@@ -483,7 +485,9 @@ def test_a_promoted_row_is_not_a_submission_either(paired_arms: ModuleType, tmp_
     served = paired_arms.served_by_arm(obs)
     table = paired_arms.arm_aggregates(best, served, "numba")
     tokens = paired_arms.tokens_by_arm_kernel(obs)
-    row = paired_arms.arm_rows(best, graded_frame, table, served, tokens, paired_arms.task_usage(obs, "latest"))[0]
+    row = paired_arms.arm_rows(
+        best, graded_frame, table, served, tokens, paired_arms.task_usage(obs, population.RepeatPolicy.LATEST)
+    )[0]
 
     assert (row["n_final_harvest"], row["n_never_submitted"]) == (0, 1)
 
@@ -599,7 +603,7 @@ def test_usage_reports_how_many_tasks_were_relaunched_and_what_the_crashes_spent
     ]
     for task_row, attempts, crashed in zip(rows[2::3], (1, 2, 3, 1), (0, 40, 90, 0), strict=True):
         task_row |= {"task_attempts": attempts, "tokens_crashed": crashed}
-    usage = paired_arms.task_usage(frame(rows), "latest").loc["a"]
+    usage = paired_arms.task_usage(frame(rows), population.RepeatPolicy.LATEST).loc["a"]
     assert usage.tasks == 4
     assert usage.attempts_per_task == pytest.approx(1.75)
     assert usage.relaunched_tasks == 2
@@ -682,8 +686,10 @@ def test_a_kernel_the_arm_never_delivered_scores_one_and_still_costs_its_tokens(
     rows.append(task("a", "k5", 100.0))
     obs = paired_arms.load_observations([observations(rows, tmp_path)])
     best = paired_arms.best_by_arm_kernel(paired_arms.graded_rows(obs, ["a"]))
-    aggregate = paired_arms.arm_aggregates(best, paired_arms.served_by_arm(obs), "numba", "served")["a"]
-    assert aggregate.policy == "served"
+    aggregate = paired_arms.arm_aggregates(
+        best, paired_arms.served_by_arm(obs), "numba", population.KernelPolicy.SERVED
+    )["a"]
+    assert aggregate.policy == population.KernelPolicy.SERVED
     assert (aggregate.n, aggregate.n_solved) == (5, 4)
     assert aggregate.geomean() == pytest.approx(4.0 ** (4.0 / 5.0))
     assert paired_arms.tokens_by_arm_kernel(obs)[("a", "k5")] == pytest.approx(100.0)
@@ -702,7 +708,7 @@ def test_by_default_a_wrong_answer_is_left_out_of_the_speedup_and_still_costs_it
     obs = paired_arms.load_observations([observations(rows, tmp_path)])
     best = paired_arms.best_by_arm_kernel(paired_arms.graded_rows(obs, ["a"]))
     aggregate = paired_arms.arm_aggregates(best, paired_arms.served_by_arm(obs), "numba")["a"]
-    assert aggregate.policy == "solved"
+    assert aggregate.policy == population.KernelPolicy.SOLVED
     assert (aggregate.n, aggregate.n_solved) == (4, 4)
     assert aggregate.geomean() == pytest.approx(4.0)
     assert paired_arms.tokens_by_arm_kernel(obs)[("a", "k5")] == pytest.approx(100.0)
@@ -723,7 +729,7 @@ def test_the_arm_row_counts_what_the_arm_delivered_not_the_size_of_its_populatio
     best = paired_arms.best_by_arm_kernel(paired_arms.graded_rows(obs, ["a"]))
     served = paired_arms.served_by_arm(obs)
     table = paired_arms.arm_aggregates(best, served, "numba")
-    usage = paired_arms.task_usage(obs, "latest")
+    usage = paired_arms.task_usage(obs, population.RepeatPolicy.LATEST)
     row = paired_arms.arm_rows(best, paired_arms.graded_rows(obs, ["a"]), table, served, {}, usage)[0]
     assert (row["n_served"], row["n_solved"]) == (8, 5)
     assert row["coverage"] == pytest.approx(5 / 8)
@@ -757,7 +763,13 @@ def test_no_submit_rate_is_over_every_episode_not_the_kernels_final_one(
     table = paired_arms.arm_aggregates(best, served, "numba")
     tokens = paired_arms.tokens_by_arm_kernel(obs)
     row = paired_arms.arm_rows(
-        best, graded_frame, table, served, tokens, paired_arms.task_usage(obs, "latest"), no_submit=rate
+        best,
+        graded_frame,
+        table,
+        served,
+        tokens,
+        paired_arms.task_usage(obs, population.RepeatPolicy.LATEST),
+        no_submit=rate,
     )[0]
     assert row["n_never_submitted"] == 0
     assert row["no_submit_rate"] == pytest.approx(0.5)
@@ -934,3 +946,19 @@ def test_a_served_kernel_without_a_task_token_total_is_dropped_loudly(
         )
 
     assert next(row for row in reported if row["leg"] == "tokens")["n_pairs"] == 6
+
+
+@pytest.mark.parametrize(
+    ("arm", "recorded", "want"),
+    [
+        ("harness20-qwen38-claude", ["", "c", "c"], "c"),
+        ("harness20-caveman-qwen38-c", ["", "fortran"], "c"),
+        ("harness20-qwen38-claude", ["", ""], ""),
+    ],
+)
+def test_an_arm_named_without_a_language_takes_the_language_its_rows_recorded(
+    paired_arms: ModuleType, arm: str, recorded: list[str], want: str
+) -> None:
+    """A harness arm's name carries no language token; its rows do, so it pairs with its ``-c`` treatment."""
+    observations = pd.DataFrame({"arm": [arm] * len(recorded), "language": recorded})
+    assert paired_arms.arm_language(observations, arm) == want

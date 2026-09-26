@@ -14,6 +14,8 @@
 #     sbatch --partition=mi200 --cpus-per-task=64 --gpus-per-node=8 containers/images/build_and_verify.sbatch
 #
 # One job builds and verifies, so a build that cannot pass verification never reports success.
+# The build pulls first and keeps its caches by default (CE_PULL, CE_BUILD_CACHE in build_common.sh);
+# a pulled image is verified exactly like a built one.
 # Every target of IMAGE_DIR built on this partition (images.env rows with that dir and partition)
 # is verified under its own profile and marked .verified for promote_image.sh.
 #
@@ -46,7 +48,7 @@ if [[ "${VERIFY_ONLY:-0}" == 1 ]]; then
     echo "=== stage 1/2: build SKIPPED (VERIFY_ONLY=1)"
 else
 echo "=== stage 1/2: build  (${IMAGE_DIR})"
-build_out="${SCRATCH}/ce-images/logs/build-inner-${SLURM_JOB_ID}.log"
+build_out="${CE_IMAGES:?}/logs/build-inner-${SLURM_JOB_ID}.log"
 mkdir -p "$(dirname "${build_out}")"
 # build.sbatch is plain bash below its #SBATCH block: run it inside this allocation.
 IMAGE_DIR="${IMAGE_DIR}" bash "${IMAGE_DIR}/build.sbatch" 2>&1 | tee "${build_out}"
@@ -61,7 +63,7 @@ for role in $(ce_roles); do
     [[ "$(ce_image "${role}" partition 2>/dev/null)" == "${PARTITION}" ]] || continue
     candidate="$(ce_image "${role}" candidate 2>/dev/null)" || continue
     prof="$(ce_image "${role}" profile)"
-    TARGET_SQSH[${prof}]="${SCRATCH}/ce-images/${candidate}"
+    TARGET_SQSH[${prof}]="${CE_IMAGES}/${candidate}"
     targets="${targets:+${targets} }${prof}"
 done
 # An unknown profile is an error: a skip would report success having verified nothing.

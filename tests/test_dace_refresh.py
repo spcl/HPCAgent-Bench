@@ -13,6 +13,8 @@ import shutil
 import subprocess
 import tomllib
 
+import pytest
+
 from hpcagent_bench import paths
 
 SCRIPT = paths.ROOT / "containers" / "images" / "dace_refresh.sh"
@@ -68,7 +70,7 @@ def test_a_job_moves_the_checkout_to_the_branch_tip_and_records_it(tmp_path: pat
     script, checkout, (first, second) = setup(tmp_path)
     assert git("rev-parse", "HEAD", cwd=checkout) == first
 
-    done = refresh(tmp_path, script, checkout)
+    done = refresh(tmp_path, script, checkout, ref="extended")
 
     assert done.returncode == 0, done.stderr
     assert git("rev-parse", "HEAD", cwd=checkout) == second
@@ -78,11 +80,15 @@ def test_a_job_moves_the_checkout_to_the_branch_tip_and_records_it(tmp_path: pat
     assert "-m pip install --no-cache-dir --no-deps -q -e" in (tmp_path / "stub.log").read_text()
 
 
-def test_pinned_stays_on_the_pin_file_commit_with_no_fetch(tmp_path: pathlib.Path) -> None:
+@pytest.mark.parametrize("ref", ["pinned", None])
+def test_pinned_is_the_default_and_stays_on_the_pin_file_commit_with_no_fetch(
+    tmp_path: pathlib.Path, ref: str | None
+) -> None:
+    """A job with no HPCAGENT_BENCH_DACE_REF runs the release pin, not the moving extended tip."""
     script, checkout, commits = setup(tmp_path)
     first = commits[0]
 
-    done = refresh(tmp_path, script, checkout, ref="pinned")
+    done = refresh(tmp_path, script, checkout, ref=ref)
 
     assert done.returncode == 0, done.stderr
     assert git("rev-parse", "HEAD", cwd=checkout) == first
@@ -105,7 +111,7 @@ def test_an_unreachable_pin_fails_but_an_unreachable_branch_keeps_the_baked_comm
     first = commits[0]
     git("remote", "set-url", "origin", f"file://{tmp_path / 'gone'}", cwd=checkout)
 
-    branch = refresh(tmp_path, script, checkout)
+    branch = refresh(tmp_path, script, checkout, ref="extended")
     pin = refresh(tmp_path, script, checkout, ref="0" * 40)
 
     assert branch.returncode == 0, branch.stderr
@@ -134,7 +140,8 @@ def test_without_a_checkout_it_is_a_no_op_unless_a_commit_is_pinned(tmp_path: pa
     script, first = made[0], made[2][0]
     missing = tmp_path / "no-dace"
 
-    assert refresh(tmp_path, script, missing).returncode == 0
+    assert refresh(tmp_path, script, missing, ref="extended").returncode == 0
+    assert refresh(tmp_path, script, missing).returncode == 1
     assert refresh(tmp_path, script, missing, ref="pinned").returncode == 1
     assert refresh(tmp_path, script, missing, ref=first).returncode == 1
 

@@ -14,7 +14,7 @@ REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../../.." && pwd)"
 source "${SCRIPT_DIR}/../build_common.sh"
 
 IMAGE_TAG="${IMAGE_TAG:-hpcagent-bench-sglang-mi200:latest}"
-OUTPUT_SQSH="${OUTPUT_SQSH:-${SCRATCH:?SCRATCH must be set on CSCS}/ce-images/hpcagent-bench-sglang-mi200.sqsh}"
+OUTPUT_SQSH="${OUTPUT_SQSH:-${CE_IMAGES:?set SCRATCH or CE_IMAGES}/${INFERENCE_SGLANG_MI200_CANDIDATE}}"
 # Pinned by DIGEST, and it MUST track the Dockerfile's ARG BASE_IMAGE: passing it overrides that default.
 BASE_REPO="docker.io/lmsysorg/sglang-rocm:v0.5.19-rocm724-mi30x-20260908"
 BASE_DIGEST="sha256:0405baaf36945fa8164c57d4f1b6b178bae5804fae606ff2db3816a6cab6dafc"
@@ -27,18 +27,11 @@ ce_gpu_arch
 
 ce_podman_env
 
-cd "${REPO_ROOT}"
+BUILD_ARGS=(--build-arg "ROCM_ARCH=${ROCM_ARCH}")
+ce_pull_first "${SCRIPT_DIR}/Dockerfile" "sglang-mi200||${IMAGE_TAG}|${OUTPUT_SQSH}" -- "${BUILD_ARGS[@]}"
+[[ "${CE_PULLED}" == 0 ]] || exit 0
+
 ce_mirror_args
 ce_gpu_args
 ce_cache_base_image
-
-# cgroupfs: with the systemd manager a dying logind session reaps podman mid-pull (silent rc=1).
-podman --cgroup-manager=cgroupfs build "${MIRROR_ARGS[@]}" "${GPU_ARGS[@]}" \
-  --build-arg "BASE_IMAGE=${BASE_IMAGE}" \
-  --build-arg "BASE_IMAGE_REF=${BASE_IMAGE_REF:-${BASE_IMAGE}}" \
-  --build-arg "ROCM_ARCH=${ROCM_ARCH}" \
-  -f "${SCRIPT_DIR}/Dockerfile" \
-  -t "${IMAGE_TAG}" \
-  .
-
-ce_export_image "${IMAGE_TAG}" "${OUTPUT_SQSH}"
+ce_build "${SCRIPT_DIR}/Dockerfile" "" "${IMAGE_TAG}" "${OUTPUT_SQSH}" "${MIRROR_ARGS[@]}" "${GPU_ARGS[@]}" "${BUILD_ARGS[@]}"

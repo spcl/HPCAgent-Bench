@@ -27,7 +27,7 @@ from matplotlib.collections import LineCollection, PathCollection
 from matplotlib.figure import Figure
 
 from hpcagent_bench.harness import efficacy
-from hpcagent_bench.stats import cost, palette, score_rule
+from hpcagent_bench.stats import cost, palette, population, score_rule
 from hpcagent_bench.stats import style as plotstyle
 from hpcagent_bench.stats.figures import efficacy as efficacy_figures
 
@@ -551,7 +551,7 @@ def test_an_undelivered_kernel_still_counts_in_the_served_geomean() -> None:
     control = pd.DataFrame(control_rows_list)
     treated = pd.DataFrame(treated_rows_list)
 
-    series = efficacy_figures.reduce_pair(control, treated, over="served")
+    series = efficacy_figures.reduce_pair(control, treated, over=population.KernelPolicy.SERVED)
 
     assert series is not None
     assert series.delivered < series.kernels
@@ -574,7 +574,7 @@ def family_csv(pairs: list[tuple[str, str]], score_verdict: str, cost_verdict: s
                 "family": "demo",
                 "score_rule": score_rule.SCORE_RULE,
                 "cost_model": cost.DEFAULT_COST_MODEL,
-                "kernel_policy": efficacy_figures.SPEEDUP_OVER,
+                "kernel_policy": efficacy_figures.SPEEDUP_OVER.value,
                 "arm_a": treated,
                 "arm_b": control,
                 "leg": leg,
@@ -675,8 +675,9 @@ def test_pair_frame_tags_each_arm_by_name_and_which_side_of_the_pair_it_is() -> 
 def test_resolve_row_repeats_broadcasts_a_bare_policy_and_checks_a_sequences_length() -> None:
     """A joined row's comparisons need not share ONE repeat policy: git-scicomp's designed-3x-repeats
     median and llr-focus40's reruns-take-latest sit in the same row."""
-    assert efficacy_figures.resolve_row_repeats("median", 3) == ["median", "median", "median"]
-    assert efficacy_figures.resolve_row_repeats(["latest", "median"], 2) == ["latest", "median"]
+    latest, median = population.RepeatPolicy.LATEST, population.RepeatPolicy.MEDIAN
+    assert efficacy_figures.resolve_row_repeats(median, 3) == [median, median, median]
+    assert efficacy_figures.resolve_row_repeats([latest, median], 2) == [latest, median]
     with pytest.raises(ValueError, match="panels 3"):
         efficacy_figures.resolve_row_repeats(["latest"], 3)
 
@@ -712,7 +713,7 @@ def test_a_comparison_specs_own_repeats_overrides_the_row_default(
         plot.main()
     finally:
         sys.argv = old_argv
-    assert seen_repeats == [["median"]]
+    assert seen_repeats == [[population.RepeatPolicy.MEDIAN]]
 
 
 # ---------------------------------------------------------------------------
@@ -953,7 +954,7 @@ def test_the_pairs_csv_route_draws_its_marks_under_the_repeat_policy_it_was_aske
                 "family": "f",
                 "cost_model": "effective",
                 "score_rule": score_rule.SCORE_RULE,
-                "kernel_policy": efficacy_figures.SPEEDUP_OVER,
+                "kernel_policy": efficacy_figures.SPEEDUP_OVER.value,
                 "arm_a": "git-repo",
                 "arm_b": "git-kernel",
                 "leg": leg,
@@ -1032,7 +1033,7 @@ def test_by_default_a_wrong_answer_is_no_speedup_and_counts_against_the_success_
 
 def test_the_fallback_reading_scores_the_wrong_answer_at_one() -> None:
     """``served`` keeps the old reading: every kernel, a failure at 1x."""
-    points = efficacy_figures.arm_points(*solved_and_failed_pair(), over="served")
+    points = efficacy_figures.arm_points(*solved_and_failed_pair(), over=population.KernelPolicy.SERVED)
     assert points is not None
     control, treated = points
     assert 2.0**control.x == pytest.approx(2.0 ** (4.0 / 5.0))

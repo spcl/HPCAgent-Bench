@@ -16,7 +16,6 @@ import types
 from tests.conftest import script_path
 
 from hpcagent_bench import experiments
-from hpcagent_bench.stats.figures import per_kernel
 
 FIXTURE = pathlib.Path(__file__).with_name("data") / "observations-mini.db"
 
@@ -70,10 +69,3 @@ def test_three_treatments_against_the_fixtures_control_all_produce_a_panel() -> 
     assert score_change.one_treatment_panel(frame_all, control, "skills", unreachable_roster) is None, (
         "a roster kernel with zero coverage must fail complete_side_arms for every arm"
     )
-
-
-def test_per_kernel_cells_read_off_the_fixture_cover_every_kernel_an_arm_ran() -> None:
-    frame = experiments.read_observations(FIXTURE)
-    one_arm = frame[frame.arm == "cpf-llr-focus40-qwen38-c"]
-    cells = {cell.kernel for cell in per_kernel.speedup_cells(one_arm)}
-    assert cells == {"argmax_with_index", "tsvc_2_s116", "tsvc_2_s119", "jacobi_1d", "gemver"}

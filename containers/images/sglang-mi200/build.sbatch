@@ -36,7 +36,7 @@ source "${IMAGE_DIR}/../build_common.sh"
 # shellcheck source=../images.env
 source "${IMAGE_DIR}/../images.env"
 ce_require_partition sglang-mi200 || exit 2
-export OUTPUT_SQSH="${OUTPUT_SQSH:-${SCRATCH:?}/ce-images/${INFERENCE_SGLANG_MI200_CANDIDATE}}"
+export OUTPUT_SQSH="${OUTPUT_SQSH:-${CE_IMAGES:?}/${INFERENCE_SGLANG_MI200_CANDIDATE}}"
 
 ce_refuse_mounted "${OUTPUT_SQSH}" || exit 2
 

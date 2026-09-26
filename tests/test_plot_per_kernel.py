@@ -1,16 +1,12 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""``hpcagent_bench.stats.figures.per_kernel`` and ``statistics/plot_per_kernel.py`` -- the per-kernel
+"""``hpcagent_bench.stats.figures.per_kernel`` -- the per-kernel
 speedup and tokens figure: ci/box style, the log2 speedup axis, the summary column and the
 separate/stacked layout.
 """
 
-import argparse
-import importlib.util
 import math
 import pathlib
-import sys
-import types
 
 import matplotlib
 import pandas as pd
@@ -30,84 +26,18 @@ from hpcagent_bench.stats.figures import per_kernel as pk
 REPO = pathlib.Path(__file__).resolve().parents[1]
 
 
-def load_script() -> types.ModuleType:
-    """Import ``statistics/plot_per_kernel.py`` as a module (scripts/ is not a package)."""
-    spec = importlib.util.spec_from_file_location("plot_per_kernel", REPO / "statistics" / "plot_per_kernel.py")
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-plot = load_script()
-
-
 def speed_metric(cells: list[pk.KernelCell], color: str = "#1155cc") -> pk.Metric:
-    """A one-series speedup panel, the shape ``statistics/plot_per_kernel.py`` builds."""
+    """A one-series speedup panel."""
     return pk.speedup_series_metric([pk.Series("", tuple(cells), color)], "Speedup")
 
 
 def token_metric(cells: list[pk.KernelCell], color: str = "#cc5511") -> pk.Metric:
-    """A one-series token panel, the shape ``statistics/plot_per_kernel.py`` builds."""
+    """A one-series token panel."""
     return pk.token_series_metric([pk.Series("", tuple(cells), color)], "Tokens")
-
-
-def episode(kernel: str, run: str, speedup: float, tokens: float) -> list[dict]:
-    """One episode as the judge records it: a graded row and a call row, the shape
-    :func:`hpcagent_bench.stats.population.graded_episode_rows`/``episode_tokens`` read."""
-    common = {
-        "arm": "demo-arm",
-        "benchmark": kernel,
-        "run_root": run,
-        "job": run,
-        "run_id": run,
-        "attempt_index": 1,
-        "ts_ms": 1,
-        "timing_suspect": 0,
-        "timing_reduction": "mwd-v2",
-    }
-    return [
-        {**common, "row_kind": "submission", "speedup": speedup, "tokens": None},
-        {
-            **common,
-            "row_kind": "task",
-            "speedup": None,
-            "tokens": tokens,
-            "tokens_fresh_input": tokens,
-            "tokens_cached_input": 0.0,
-            "tokens_output": 0.0,
-        },
-    ]
-
-
-def frame_of(cells: dict[str, list[tuple[float, float]]]) -> pd.DataFrame:
-    """``{kernel: [(speedup, tokens), ...]}`` -> one row set, one episode per pair."""
-    rows: list[dict] = []
-    for kernel, pairs in cells.items():
-        for index, (speedup, tokens) in enumerate(pairs):
-            rows += episode(kernel, f"{kernel}-w{index}", speedup, tokens)
-    return pd.DataFrame(rows)
 
 
 # ---------------------------------------------------------------------------
 # Reduction: which population speedup_cells / token_cells read.
-
-
-def test_speedup_cells_keeps_every_episodes_own_final_speedup() -> None:
-    """A kernel run by 3 episodes (git-scicomp) must carry all 3 values in its cell, not the best
-    or the mean of them -- the box style draws their raw spread."""
-    frame = frame_of({"k1": [(1.0, 10.0)], "k2": [(1.5, 20.0), (3.0, 30.0), (2.2, 25.0)]})
-    cells = {cell.kernel: cell for cell in pk.speedup_cells(frame)}
-    assert cells["k1"].episodes == (1.0,)
-    assert sorted(cells["k2"].episodes) == [1.5, 2.2, 3.0]
-
-
-def test_token_cells_keeps_every_episodes_own_total_not_the_kernel_sum() -> None:
-    frame = frame_of({"k1": [(1.0, 10.0)], "k2": [(1.5, 20.0), (3.0, 30.0), (2.2, 25.0)]})
-    cells = {cell.kernel: cell for cell in pk.token_cells(frame)}
-    assert cells["k1"].episodes == (10.0,)
-    assert sorted(cells["k2"].episodes) == [20.0, 25.0, 30.0]
 
 
 # ---------------------------------------------------------------------------
@@ -206,7 +136,7 @@ def test_draw_panel_labels_the_summary_column_with_its_own_statistic() -> None:
     speed = speed_metric([pk.KernelCell("k1", (2.0,))])
     fig, ax = plt.subplots()
     try:
-        pk.draw_panel(ax, speed, ["k1"], "ci", True, True)
+        pk.draw_panel(ax, speed, ["k1"], pk.Style.CI, True, True)
         labels = [text.get_text() for text in ax.texts]
     finally:
         plt.close(fig)
@@ -217,7 +147,7 @@ def test_a_figure_with_one_summary_statistic_names_it_as_a_horizontal_x_tick() -
     """User, 2026-09-22: "Geomean" belongs on the x axis under its column, read like a kernel name,
     not floating above the frame."""
     speed = speed_metric([pk.KernelCell("k1", (2.0,)), pk.KernelCell("k2", (4.0,))])
-    fig = pk.figure_one(speed, ["k1", "k2"], "ci", True, "")
+    fig = pk.figure_one(speed, ["k1", "k2"], pk.Style.CI, True, "")
     try:
         (ax,) = fig.axes
         ticks = ax.get_xticklabels()
@@ -232,7 +162,7 @@ def test_a_caller_spells_the_kernel_ticks() -> None:
     """A text-width figure of forty kernels needs names shorter than the manifest's, and those are
     the caller's to choose; the library's own spelling is only the default."""
     speed = speed_metric([pk.KernelCell("tsvc_2_s115", (2.0,))])
-    fig = pk.figure_one(speed, ["tsvc_2_s115"], "ci", True, "", tick_label=lambda kernel: kernel.split("_")[-1])
+    fig = pk.figure_one(speed, ["tsvc_2_s115"], pk.Style.CI, True, "", tick_label=lambda kernel: kernel.split("_")[-1])
     try:
         assert fig.axes[0].get_xticklabels()[0].get_text() == "s115"
     finally:
@@ -244,7 +174,7 @@ def test_a_stacked_speedup_and_token_figure_names_its_one_summary_statistic_once
     shared axis' summary tick, and no panel annotates a median."""
     speed = speed_metric([pk.KernelCell("k1", (2.0,))])
     tokens = token_metric([pk.KernelCell("k1", (100.0,))])
-    fig = pk.figure_panels([speed, tokens], ["k1"], "ci", True, "demo")
+    fig = pk.figure_panels([speed, tokens], ["k1"], pk.Style.CI, True, "demo")
     try:
         top_ax, bottom_ax = fig.axes
         texts = [text.get_text() for ax in (top_ax, bottom_ax) for text in ax.texts]
@@ -258,75 +188,8 @@ def test_a_stacked_speedup_and_token_figure_names_its_one_summary_statistic_once
 # --layout separate vs stacked, and which files a run writes.
 
 
-def build_metrics(frame: pd.DataFrame) -> tuple[pk.Metric, pk.Metric, list[pk.KernelCell], list[pk.KernelCell]]:
-    speed_cells = pk.speedup_cells(frame)
-    token_cells = pk.token_cells(frame)
-    return speed_metric(speed_cells), token_metric(token_cells), speed_cells, token_cells
-
-
-def render_args(tmp_path: pathlib.Path, layout: str, style_: str = "ci", summary: bool = False) -> argparse.Namespace:
-    return argparse.Namespace(layout=layout, style=style_, summary=summary, out=tmp_path / "figures" / "per_kernel.pdf")
-
-
-def test_layout_separate_writes_one_file_per_metric(tmp_path: pathlib.Path) -> None:
-    frame = frame_of({"k1": [(2.0, 100.0)], "k2": [(0.5, 200.0)]})
-    speed, tokens, speed_cells, token_cells = build_metrics(frame)
-    written = plot.render(speed, tokens, speed_cells, token_cells, render_args(tmp_path, "separate"), "demo")
-    names = sorted(p.name for p in written)
-    assert names == ["per_kernel-speedup", "per_kernel-tokens"]
-
-
-def test_layout_stacked_writes_one_file_for_both_metrics(tmp_path: pathlib.Path) -> None:
-    frame = frame_of({"k1": [(2.0, 100.0)], "k2": [(0.5, 200.0)]})
-    speed, tokens, speed_cells, token_cells = build_metrics(frame)
-    written = plot.render(speed, tokens, speed_cells, token_cells, render_args(tmp_path, "stacked"), "demo")
-    assert [p.name for p in written] == ["per_kernel"]
-
-
-def test_layout_stacked_refuses_when_one_metric_has_no_cells(tmp_path: pathlib.Path) -> None:
-    """A stacked figure shares one kernel axis between two panels; with only one metric present
-    there is nothing for the second panel to share it with."""
-    frame = frame_of({"k1": [(2.0, 100.0)]})
-    frame.loc[frame.row_kind == "task", "tokens"] = None  # drop every token cell
-    speed, tokens, speed_cells, token_cells = build_metrics(frame)
-    assert token_cells == []
-    with pytest.raises(SystemExit, match="stacked"):
-        plot.render(speed, tokens, speed_cells, token_cells, render_args(tmp_path, "stacked"), "demo")
-
-
-def test_stacked_layouts_two_panels_share_the_kernel_axis() -> None:
-    """Column ``i`` must name the SAME kernel in both panels, even when one metric is missing a
-    kernel the other has -- an empty slot at that column, never a re-packed one."""
-    speed_cells = [pk.KernelCell("a", (2.0,)), pk.KernelCell("b", (1.0,))]
-    token_cells = [pk.KernelCell("b", (50.0,)), pk.KernelCell("c", (80.0,))]
-    kernels = pk.shared_kernel_order(speed_cells, token_cells)
-    assert kernels == ["b", "a", "c"]  # speedup's own order (b before a), then tokens-only "c"
-
-    speed = speed_metric(speed_cells)
-    tokens = token_metric(token_cells)
-    fig = pk.figure_panels([speed, tokens], kernels, "ci", False, "demo")
-    try:
-        top_ax, bottom_ax = fig.axes
-        assert top_ax.get_xlim() == bottom_ax.get_xlim()
-        assert list(top_ax.get_xticks()) == list(bottom_ax.get_xticks())
-    finally:
-        plt.close(fig)
-
-
 # ---------------------------------------------------------------------------
 # Reproducibility.
-
-
-def test_a_rerun_writes_byte_identical_png_and_pdf(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    speed_cells = [pk.KernelCell("k1", (1.0, 2.0, 4.0)), pk.KernelCell("k2", (0.5,))]
-    speed = speed_metric(speed_cells)
-    for epoch, folder in (("0", "first"), ("86400", "second")):
-        monkeypatch.setenv("SOURCE_DATE_EPOCH", epoch)
-        fig = pk.figure_one(speed, pk.ordered_kernels(speed_cells), "box", True, "demo")
-        pk.save(fig, tmp_path / folder / "figure.pdf")
-    for name in ("figure.pdf", "figure.png"):
-        first, second = (tmp_path / folder / name for folder in ("first", "second"))
-        assert first.read_bytes() == second.read_bytes(), f"{name} depends on when it was saved"
 
 
 def test_the_speedup_panel_carries_a_major_grid_and_a_minor_one_on_the_value_axis_only() -> None:
@@ -540,7 +403,7 @@ def three_series_metric() -> pk.Metric:
 def test_every_series_gets_one_summary_slot_and_one_settled_value_label() -> None:
     """Summaries that agree to a few percent, drawn in one column, hid all but the top mark; and the
     value a caption quotes has to be on the figure, tagged so it settles clear of the marks."""
-    fig = pk.figure_one(three_series_metric(), ["k1", "k2"], "ci", True, "")
+    fig = pk.figure_one(three_series_metric(), ["k1", "k2"], pk.Style.CI, True, "")
     try:
         (ax,) = fig.axes
         separator = pk.summary_separator_x(2)
@@ -558,7 +421,7 @@ def test_every_series_gets_one_summary_slot_and_one_settled_value_label() -> Non
 def test_a_summary_value_label_prints_the_geomean_over_solved_kernels_only() -> None:
     """Series b solved k1 at 3x and failed k2: its printed value is 3x, not the geomean with the
     placeholder's 1x (1.7x)."""
-    fig = pk.figure_one(three_series_metric(), ["k1", "k2"], "ci", True, "")
+    fig = pk.figure_one(three_series_metric(), ["k1", "k2"], pk.Style.CI, True, "")
     try:
         texts = [t.get_text() for t in fig.axes[0].texts if t.get_gid() == style.CLEAR_GID]
     finally:
@@ -600,8 +463,8 @@ def test_a_key_grows_the_canvas_and_never_overprints_the_kernel_names() -> None:
     kernels = [f"k{i}" for i in range(12)]
     metric = speed_metric([pk.KernelCell(k, (2.0,)) for k in kernels])
     key = [matplotlib.lines.Line2D([], [], marker="o", linestyle="none", label=f"series {i}") for i in range(9)]
-    bare = pk.figure_one(metric, kernels, "ci", False, "", width_in=3.3)
-    keyed = pk.figure_one(metric, kernels, "ci", False, "", width_in=3.3, legend=key)
+    bare = pk.figure_one(metric, kernels, pk.Style.CI, False, "", width_in=3.3)
+    keyed = pk.figure_one(metric, kernels, pk.Style.CI, False, "", width_in=3.3, legend=key)
     try:
         assert keyed.get_size_inches()[1] > bare.get_size_inches()[1]
         keyed.canvas.draw()
@@ -620,7 +483,7 @@ def test_every_panel_of_a_stack_ends_where_the_widest_summary_does() -> None:
     above it, or the shared axis clips the upper panel's last summary slot."""
     speed = three_series_metric()
     tokens = pk.token_series_metric([pk.Series("a", (pk.KernelCell("k1", (100.0,)),), "#1155cc")], "Tokens")
-    fig = pk.figure_panels([speed, tokens], ["k1", "k2"], "ci", True, "")
+    fig = pk.figure_panels([speed, tokens], ["k1", "k2"], pk.Style.CI, True, "")
     try:
         top, bottom = fig.axes
         assert top.get_xlim() == bottom.get_xlim()
@@ -634,7 +497,7 @@ def test_a_stated_pitch_sizes_the_canvas_to_the_kernel_axis() -> None:
     forty names into a page width."""
     kernels = [f"k{i}" for i in range(40)]
     metric = speed_metric([pk.KernelCell(k, (2.0,)) for k in kernels])
-    fig = pk.figure_panels([metric], kernels, "ci", True, "", pitch_in=0.3)
+    fig = pk.figure_panels([metric], kernels, pk.Style.CI, True, "", pitch_in=0.3)
     try:
         assert pk.column_pitch_in(fig.axes[0]) == pytest.approx(0.3)
     finally:
@@ -685,7 +548,7 @@ def test_a_y_label_taller_than_its_panel_is_fitted_to_the_panel() -> None:
     two panels' labels printed over each other in the gap."""
     long = "Speedup Ratio (Repository Formulation / Bare Kernel)"
     metric = pk.speedup_series_metric([pk.Series("", (pk.KernelCell("k1", (2.0,)),), "#1155cc")], long)
-    fig = pk.figure_panels([metric, metric], ["k1"], "ci", True, "")
+    fig = pk.figure_panels([metric, metric], ["k1"], pk.Style.CI, True, "")
     try:
         fig.canvas.draw()
         renderer = fig.canvas.get_renderer()
@@ -701,7 +564,7 @@ def test_a_print_size_figure_gets_the_short_print_panel() -> None:
     """User, 2026-09-22: a paper figure of forty kernels is a strip 30% shorter than the authored
     panel, and the height is the library's to set, not each caller's."""
     speed = speed_metric([pk.KernelCell("k1", (2.0,))])
-    fig = pk.figure_one(speed, ["k1"], "ci", True, "", width_in=5.5)
+    fig = pk.figure_one(speed, ["k1"], pk.Style.CI, True, "", width_in=5.5)
     try:
         height = fig.axes[0].get_position().height * fig.get_size_inches()[1]
         assert height == pytest.approx(pk.PRINT_PANEL_HEIGHT_IN, abs=1e-3)
@@ -724,3 +587,15 @@ def test_a_print_size_tick_is_the_compact_kernel_name(kernel: str, want: str) ->
 
 def test_every_compact_name_fits_the_compact_limit() -> None:
     assert all(len(name) <= experiment_tags.COMPACT_NAME_MAX for name in experiment_tags.COMPACT_NAMES.values())
+
+
+def test_a_rerun_writes_byte_identical_png_and_pdf(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    speed_cells = [pk.KernelCell("k1", (1.0, 2.0, 4.0)), pk.KernelCell("k2", (0.5,))]
+    speed = speed_metric(speed_cells)
+    for epoch, folder in (("0", "first"), ("86400", "second")):
+        monkeypatch.setenv("SOURCE_DATE_EPOCH", epoch)
+        fig = pk.figure_one(speed, pk.ordered_kernels(speed_cells), pk.Style.BOX, True, "demo")
+        pk.save(fig, tmp_path / folder / "figure.pdf")
+    for name in ("figure.pdf", "figure.png"):
+        first, second = (tmp_path / folder / name for folder in ("first", "second"))
+        assert first.read_bytes() == second.read_bytes(), f"{name} depends on when it was saved"

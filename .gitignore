@@ -188,7 +188,7 @@ id_ecdsa*
 *.pfx
 
 # --- Local-only notes, drafts and scratch ---
-paper/
+/paper/
 HANDOFF_ISSUES/
 BACKLOG*.md
 dmidecode_output

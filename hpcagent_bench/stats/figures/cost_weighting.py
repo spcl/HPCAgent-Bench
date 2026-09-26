@@ -133,7 +133,7 @@ def pair_cost_ratios(
     observations: pd.DataFrame,
     pairs: Sequence[Pair | tuple[str, str]],
     cards: Sequence[Card | str] = (*TOKEN_CARDS, Card.USD),
-    repeats: population.RepeatPolicy = "latest",
+    repeats: population.RepeatPolicy = population.RepeatPolicy.LATEST,
     extra: pathlib.Path | None = None,
 ) -> pd.DataFrame:
     """One row per (pair, card): rho_C of TREATED ``arm_a`` against CONTROL ``arm_b`` and its interval.

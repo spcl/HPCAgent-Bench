@@ -2,12 +2,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Per-kernel figures: one column per kernel, one mark per series, one summary slot per series.
 
-THE ONE PER-KERNEL DRAWING API. Every figure with a kernel axis draws through this module --
-``statistics/plot_per_kernel.py``, the llr-focus40 comparison
-(:mod:`hpcagent_bench.stats.figures.kernel_comparison`), the compiler figure
-(:func:`hpcagent_bench.stats.figures.signed.llr40_figure`) and the repo-against-kernel ratios
-(``statistics/plot_repo_vs_kernel.py``) -- so a column, a placeholder, a summary slot, a tick and
-a margin mean the same thing in all of them. Two copies of this geometry drifted before: one
+THE ONE PER-KERNEL DRAWING API. Every figure with a kernel axis draws through this module -- the
+compiler figure (:func:`hpcagent_bench.stats.figures.signed.llr40_figure`) and the per-kernel
+figures of the paper artifact -- so a column, a placeholder, a summary slot, a tick and a margin
+mean the same thing in all of them. Two copies of this geometry drifted before: one
 printed short names and one full names, one thinned its ticks and one did not, one summary sat in a
 slot per series and one crammed every series into one column. A caller turns its own data into
 :class:`KernelCell` s (:func:`kernel_cells` from a ``kernel -> value`` map), groups them into
@@ -60,13 +58,13 @@ figure is drawn at :data:`~hpcagent_bench.stats.style.DOUBLE_COLUMN_WIDTH` at au
 (:func:`roomy_pitch_in`); each panel is :data:`PANEL_HEIGHT_IN` tall.
 """
 
+import enum
 import dataclasses
 import logging
 import math
 import pathlib
 import textwrap
 from collections.abc import Callable, Mapping, Sequence
-from typing import Literal
 
 import matplotlib.artist
 import matplotlib.axes
@@ -82,8 +80,12 @@ from hpcagent_bench.stats import style as plotstyle
 
 LOG = logging.getLogger(__name__)
 
+
 #: The two drawing modes: the median (+ bootstrap CI) or the raw per-episode boxplot.
-Style = Literal["ci", "box"]
+class Style(enum.Enum):
+    CI = "ci"
+    BOX = "box"
+
 
 #: Episodes per kernel at or above which ``box`` draws an actual box instead of a point. 3 is
 #: git-scicomp's own episode count -- the smallest population a quartile spread still means
@@ -210,51 +212,6 @@ def kernel_cells(
     return tuple(cells)
 
 
-def speedup_cells(frame: pd.DataFrame, served: bool = True) -> list[KernelCell]:
-    """One cell per kernel: every episode's own final speedup
-    (:func:`population.graded_episode_rows`), plus -- under ``served`` -- one placeholder cell at
-    :data:`~hpcagent_bench.stats.population.NOT_DELIVERED` for every kernel the frame was served and
-    never answered.
-
-    ``served=False`` draws the solved kernels alone, which is the right population only when the
-    caller has already said so somewhere else on the page.
-    """
-    graded = frame[frame.row_kind == "submission"]
-    episodes = population.graded_episode_rows(graded)
-    cells: list[KernelCell] = []
-    for kernel, group in episodes.groupby("benchmark"):
-        values = sorted(float(v) for v in group.speedup if v > 0)
-        if values:
-            cells.append(KernelCell(str(kernel), tuple(values)))
-    if not served:
-        return cells
-    answered = {cell.kernel for cell in cells}
-    unanswered = sorted(set(frame["benchmark"].dropna().astype(str)) - answered)
-    return cells + [KernelCell(kernel, (population.NOT_DELIVERED,), False) for kernel in unanswered]
-
-
-def answer_cells(frame: pd.DataFrame, repeats: population.RepeatPolicy = "latest") -> list[KernelCell]:
-    """One single-value cell per SOLVED kernel: its final answer under ``repeats``
-    (:func:`population.kernel_answers`), the policy the tables score a kernel by. :func:`speedup_cells`
-    keeps every episode instead, which is what the box style's spread needs and what a rerun kernel's
-    stale first run must not contribute to."""
-    answers = population.kernel_answers(frame, repeats=repeats, policy="solved")
-    if "speedup" not in answers.columns:
-        return []
-    return [KernelCell(str(kernel), (float(value),)) for kernel, value in answers["speedup"].items() if value > 0]
-
-
-def token_cells(frame: pd.DataFrame) -> list[KernelCell]:
-    """One cell per kernel: every episode's own token total (:func:`population.episode_tokens`)."""
-    episodes = population.episode_tokens(frame, by=("benchmark",))
-    cells: list[KernelCell] = []
-    for kernel, group in episodes.groupby("benchmark"):
-        values = sorted(float(v) for v in group.tokens if v > 0)
-        if values:
-            cells.append(KernelCell(str(kernel), tuple(values)))
-    return cells
-
-
 def ordered_kernels(cells: Sequence[KernelCell]) -> list[str]:
     """Kernels ascending by median, each named ONCE.
 
@@ -274,13 +231,15 @@ def ordered_kernels(cells: Sequence[KernelCell]) -> list[str]:
     return sorted(grouped, key=lambda kernel: float(np.median(grouped[kernel])) if grouped[kernel] else math.inf)
 
 
-def shared_kernel_order(speed: Sequence[KernelCell], tokens: Sequence[KernelCell]) -> list[str]:
-    """One kernel order for BOTH panels of a stacked figure: speedup's order, then any kernel
-    tokens has and speedup does not, appended -- so column ``i`` names one kernel in both panels."""
-    primary = ordered_kernels(speed)
-    seen = set(primary)
-    extra = [kernel for kernel in ordered_kernels(tokens) if kernel not in seen]
-    return primary + extra
+def answer_cells(
+    frame: pd.DataFrame, repeats: population.RepeatPolicy = population.RepeatPolicy.LATEST
+) -> list[KernelCell]:
+    """One single-value cell per SOLVED kernel: its final answer under ``repeats``
+    (:func:`population.kernel_answers`), the policy the tables score a kernel by."""
+    answers = population.kernel_answers(frame, repeats=repeats, policy=population.KernelPolicy.SOLVED)
+    if "speedup" not in answers.columns:
+        return []
+    return [KernelCell(str(kernel), (float(value),)) for kernel, value in answers["speedup"].items() if value > 0]
 
 
 def exp2_or_nan(value: float) -> float:
@@ -400,7 +359,7 @@ def style_speedup_axis(
     ticks = speedup_yticks(cells)
     ax.set_yticks(ticks)
     ax.set_yticklabels([plotstyle.ratio_tick_label(tick) for tick in ticks], fontsize=tick_pt)
-    plotstyle.minor_ticks(ax.yaxis, "ratio")
+    plotstyle.minor_ticks(ax.yaxis, plotstyle.MinorKind.RATIO)
     pad = 2.0**VALUE_PAD_OCTAVES
     ax.set_ylim(ticks[0] / pad, ticks[-1] * pad)
     ax.axhline(1.0, color=reference_color, linewidth=REFERENCE_LINE_WIDTH, zorder=1)
@@ -837,7 +796,7 @@ def draw_marks(
     roomiest size a mark gets, never smaller than the kernel marks."""
     x_of = {kernel: i for i, kernel in enumerate(kernels)}
     for one, offset in zip(metric.series, dodge_offsets(len(metric.series), span), strict=True):
-        if style_ == "box" and len(metric.series) == 1:
+        if style_ == Style.BOX and len(metric.series) == 1:
             draw_box(ax, one, x_of, size, type_)
         else:
             draw_ci(ax, one, x_of, metric.log2_space, offset, size, type_)
@@ -1079,21 +1038,6 @@ def fit_canvas(
     fig.subplots_adjust(top=1.0 - top / height, bottom=bottom / height, hspace=gap / panel_height_in)
     if title:
         plotstyle.title(fig, title)
-
-
-def cells_table(cells: Sequence[KernelCell], metric: str) -> pd.DataFrame:
-    """The data table behind one metric's panel: one row per kernel, its n, median and episodes."""
-    rows = [
-        {
-            "benchmark": cell.kernel,
-            "metric": metric,
-            "n": cell.n,
-            "median": cell.median(),
-            "episodes": list(cell.episodes),
-        }
-        for cell in cells
-    ]
-    return pd.DataFrame(rows, columns=["benchmark", "metric", "n", "median", "episodes"])
 
 
 def save(fig: matplotlib.figure.Figure, out: pathlib.Path, print_size: bool = False) -> pathlib.Path:

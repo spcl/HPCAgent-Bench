@@ -10,7 +10,7 @@ values come from environment variables, each with one default place:
 | `scripts/host_python.sh` | the interpreter of every host-side step (`HPCAGENT_BENCH_HOST_PYTHON`), checked to be Python >= 3.10 |
 | each image's EDF | the interpreter of every step inside that image (`HPCAGENT_BENCH_IMAGE_PYTHON`) and `PYTHONHASHSEED=0` |
 | `experiments/env.sh` | the checkout; sources `cache_env.sh` and `host_python.sh` |
-| `pyproject.toml` (`[tool.hpcagent-bench] dace-pin`) | the dace commit a release installs and bakes into its images; jobs refresh to the latest extended ([below](#dace)) |
+| `pyproject.toml` (`[tool.hpcagent-bench] dace-pin`) | the dace commit a release installs and bakes into its images and runs in every job ([below](#dace)) |
 | `hpcagent_bench/paths.py` | the Python side of the same roots (`scratch_root`, `fast_scratch_root`) |
 
 `cache_env.sh` loads the site layer, so every submitter and every job sees it. Campaign knobs (models, agents, judges, budgets) are not site values; they live in
@@ -109,6 +109,24 @@ job meant for other hardware passes `--partition=` on the command line, which wi
 | `CONTAINER_RUNTIME` | `ce` | how `beverin.sbatch` starts containers: `ce`, `apptainer`, `podman` or `docker` |
 | `HPCAGENT_BENCH_HOST` | `SLURMD_NODENAME`, else the host name | the node name recorded with each result |
 
+### Container image builds
+
+`containers/images/images.env` and `build_common.sh` hold these defaults; IMAGE_REQUIREMENTS.md
+"Build defaults" says what the build knobs do.
+
+| Variable | Default | Controls |
+|---|---|---|
+| `CE_IMAGES` | `$SCRATCH/ce-images` | squashfs images, their sidecars and build logs |
+| `CE_TMPFS` | `/dev/shm/$USER` | per-user tmpfs for podman stores and enroot unpacks (Lustre cannot hold them) |
+| `CE_BUILD_CACHE` | `1` | keep the node's podman layer store and mount the spack and pip caches; `0` builds cold |
+| `CE_PULL` | `1` | pull a registry image whose build-inputs label matches instead of building; `only`, `0` |
+| `PULL_REPO` | `PUSH_REPO`, else `REGISTRY_REPO` | the registry repository pull-first reads |
+| `REGISTRY_REPO` | `docker.io/spcleth/hpcagent-bench` | the published image repository |
+| `SPACK_BUILDCACHE` | `$SCRATCH/spack-buildcache[-<arch>]` | spack binary buildcache mounted into judge/agent builds |
+| `PIP_CACHE` | `$SCRATCH/pip-cache[/<gpu arch>]` | pip wheel cache mounted into judge/agent builds |
+| `BASE_CACHE` | `$SCRATCH/base-images` | digest-pinned base images copied out of the registry |
+| `GIT_MIRRORS` | `$SCRATCH/git-mirrors` | local git mirrors the builds clone from when present |
+
 ### dace
 
 DaCe comes from the spcl/dace `extended` branch. It is not a PyPI dependency (PyPI rejects
@@ -117,7 +135,7 @@ direct-URL requirements) and `pyproject.toml` names no version of it.
 | Variable | Default | Controls |
 |---|---|---|
 | `dace-pin` (`pyproject.toml`, `[tool.hpcagent-bench]`) | the one place it is written | the extended commit a release is tested with |
-| `HPCAGENT_BENCH_DACE_REF` | installs and image builds: `pinned`; jobs: `extended` | which dace: `pinned` (the pin), a branch (its tip) or a full 40-character commit sha |
+| `HPCAGENT_BENCH_DACE_REF` | `pinned` | which dace: `pinned` (the pin), a branch (its tip) or a full 40-character commit sha |
 | `DACE_DIR` | `/opt/dace` | the image's editable dace checkout that `dace_refresh.sh` moves |
 
 - **Install**: `scripts/install_dace.sh` installs the pin (`pip install "dace @
@@ -125,8 +143,8 @@ direct-URL requirements) and `pyproject.toml` names no version of it.
   CONTRIBUTING, CI, `scripts/rebuild_venv.sh` and the release smoke all use it, and the judge/agent
   image builds bake the pin, so a release install is reproducible.
 - **Every job**: `containers/images/dace_refresh.sh` moves the image's `/opt/dace` to
-  `HPCAGENT_BENCH_DACE_REF` before anything imports dace: by default the latest extended, with
-  `HPCAGENT_BENCH_DACE_REF=pinned` to stay on the pin. A job that spans several containers
+  `HPCAGENT_BENCH_DACE_REF` before anything imports dace: the pin by default, so a failure
+  reproduces from run to run; `HPCAGENT_BENCH_DACE_REF=extended` tries the latest extended. A job that spans several containers
   resolves the ref to one sha on the batch host first (`dace_refresh.sh --resolve`), so every rank
   runs the same commit. A branch that cannot be fetched keeps the baked commit; a commit that
   cannot be reached fails the job. Bare metal (no `/opt/dace` checkout) runs the installed dace.
@@ -134,7 +152,8 @@ direct-URL requirements) and `pyproject.toml` names no version of it.
   `/opt/dace.commit`; canon columns stamp `dace <sha>` into `record.build` and `canon.db`'s `build`
   column; CPF prerender keys carry the dace commit.
 
-To stay on the pin: `HPCAGENT_BENCH_DACE_REF=pinned sbatch ...`.
+To try the latest extended: `HPCAGENT_BENCH_DACE_REF=extended sbatch ...`. Move the pin (one line in
+`pyproject.toml`) only to an extended commit whose CI is green.
 
 ### Submitting nicely
 
