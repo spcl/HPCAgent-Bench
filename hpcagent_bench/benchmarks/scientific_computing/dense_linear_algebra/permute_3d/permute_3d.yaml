@@ -6,9 +6,9 @@ parameters:
   S:
     N: 128
   M:
-    N: 576
+    N: 506
   L:
-    N: 606
+    N: 571
   XL:
     N: 645
 init:

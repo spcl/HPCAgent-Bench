@@ -6,9 +6,9 @@ parameters:
   S:
     LEN_1D: 512
   M:
-    LEN_1D: 100000000
+    LEN_1D: 86794130
   L:
-    LEN_1D: 131752898
+    LEN_1D: 122745436
   XL:
     LEN_1D: 173588261
 init:

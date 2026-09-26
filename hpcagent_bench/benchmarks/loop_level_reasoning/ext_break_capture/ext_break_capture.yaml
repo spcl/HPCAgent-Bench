@@ -7,9 +7,9 @@ parameters:
   S:
     LEN_1D: 512
   M:
-    LEN_1D: 268435456
+    LEN_1D: 260382390
   L:
-    LEN_1D: 373887325
+    LEN_1D: 368236308
   XL:
     LEN_1D: 520764782
 config:

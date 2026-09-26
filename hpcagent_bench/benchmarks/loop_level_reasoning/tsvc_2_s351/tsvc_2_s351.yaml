@@ -6,9 +6,9 @@ parameters:
   S:
     NBLK: 128
   M:
-    NBLK: 32500000
+    NBLK: 21698532
   L:
-    NBLK: 37555354
+    NBLK: 30686359
   XL:
     NBLK: 43397065
 init:

@@ -11,7 +11,7 @@ parameters:
     features: 4
     num_features: 4
   M:
-    batch_size: 64
+    batch_size: 32
     dim1: 224
     dim2: 224
     features: 64

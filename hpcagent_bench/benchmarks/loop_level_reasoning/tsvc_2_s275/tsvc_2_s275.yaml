@@ -6,9 +6,9 @@ parameters:
   S:
     LEN_2D: 64
   M:
-    LEN_2D: 12289
+    LEN_2D: 9316
   L:
-    LEN_2D: 12728
+    LEN_2D: 11082
   XL:
     LEN_2D: 13183
 init:
