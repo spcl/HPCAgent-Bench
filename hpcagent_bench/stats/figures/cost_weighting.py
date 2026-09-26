@@ -132,7 +132,7 @@ def ratio_row(tokens: dict, pair: Pair, card: str) -> dict[str, object]:
 def pair_cost_ratios(
     observations: pd.DataFrame,
     pairs: Sequence[Pair | tuple[str, str]],
-    cards: Sequence[Card] = (*TOKEN_CARDS, Card.USD),
+    cards: Sequence[Card | str] = (*TOKEN_CARDS, Card.USD),
     repeats: population.RepeatPolicy = population.RepeatPolicy.LATEST,
     extra: pathlib.Path | None = None,
 ) -> pd.DataFrame:

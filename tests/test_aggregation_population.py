@@ -125,8 +125,8 @@ def test_a_recoverable_blank_denominator_is_not_read_as_a_second_reference() -> 
 def test_two_arms_graded_against_different_references_do_not_divide() -> None:
     """The ratio of two arms is a statement about the arms. Divided across denominators it is partly
     a statement about which reference each was measured against, and nothing in the number says so."""
-    left = population.aggregate_arm("a", "c", {"k": 90.0}, ["k"], "solved")
-    right = population.aggregate_arm("b", "numba", {"k": 2.0}, ["k"], "solved")
+    left = population.aggregate_arm("a", "c", {"k": 90.0}, ["k"], population.KernelPolicy.SOLVED)
+    right = population.aggregate_arm("b", "numba", {"k": 2.0}, ["k"], population.KernelPolicy.SOLVED)
     with pytest.raises(population.MixedPopulationError, match="mixes baseline denominators"):
         population.ratio(left, right)
 
@@ -161,8 +161,12 @@ def test_an_arm_comparison_is_computed_over_one_kernel_set() -> None:
     """Each arm's geomean was over whatever it solved, so ranking the arms ranked coverage too:
     across the 21 llr40 arms ``corr(log geomean, n_kernels)`` was -0.30, meaning solving more
     kernels LOWERED the score. Two aggregates over different sets must not divide at all."""
-    left = population.aggregate_arm("a", "c", {"k1": 2.0, "k2": 8.0}, ["k1", "k2", "k3"], "solved")
-    right = population.aggregate_arm("b", "c", {"k1": 4.0, "k3": 3.0}, ["k1", "k2", "k3"], "solved")
+    left = population.aggregate_arm(
+        "a", "c", {"k1": 2.0, "k2": 8.0}, ["k1", "k2", "k3"], population.KernelPolicy.SOLVED
+    )
+    right = population.aggregate_arm(
+        "b", "c", {"k1": 4.0, "k3": 3.0}, ["k1", "k2", "k3"], population.KernelPolicy.SOLVED
+    )
     with pytest.raises(population.MixedPopulationError, match="different kernel sets"):
         population.ratio(left, right)
     matched_left, matched_right = population.align([left, right])
@@ -174,7 +178,9 @@ def test_a_served_policy_scores_a_non_delivery_at_one_rather_than_dropping_it() 
     """Non-delivery is a real outcome of the arm: the agent died or never verified anything and the
     baseline stands. Dropping it makes the geomean an average over the kernels the arm happened to
     manage, which is why an arm that reached the hard kernels scored lower for doing so."""
-    arm = population.aggregate_arm("a", "c", {"k1": 4.0, "k2": 4.0}, ["k1", "k2", "k3", "k4"], "served")
+    arm = population.aggregate_arm(
+        "a", "c", {"k1": 4.0, "k2": 4.0}, ["k1", "k2", "k3", "k4"], population.KernelPolicy.SERVED
+    )
     assert arm.kernels == ("k1", "k2", "k3", "k4")
     assert arm.values == (4.0, 4.0, 1.0, 1.0)
     assert arm.n_solved == 2
@@ -185,14 +191,14 @@ def test_the_served_roster_is_what_the_arm_was_given_not_the_full_roster() -> No
     """A kernel the arm never saw is a scheduling fact. Entering one at 1.0 would score an arm on
     how long its job ran: the llr40v9 arms were served 1 to 6 of the 40 kernels before being cut."""
     with pytest.raises(population.MixedPopulationError, match="never served"):
-        population.aggregate_arm("a", "c", {"k1": 4.0, "k9": 2.0}, ["k1", "k2"], "served")
+        population.aggregate_arm("a", "c", {"k1": 4.0, "k9": 2.0}, ["k1", "k2"], population.KernelPolicy.SERVED)
 
 
 def test_a_solved_and_a_served_aggregate_do_not_divide() -> None:
     """ "How good when it works" and "how good overall" are different questions. A table may report
     both and must never form one number from one of each."""
-    solved = population.aggregate_arm("a", "c", {"k1": 4.0}, ["k1", "k2"], "solved")
-    overall = population.aggregate_arm("b", "c", {"k1": 4.0}, ["k1", "k2"], "served")
+    solved = population.aggregate_arm("a", "c", {"k1": 4.0}, ["k1", "k2"], population.KernelPolicy.SOLVED)
+    overall = population.aggregate_arm("b", "c", {"k1": 4.0}, ["k1", "k2"], population.KernelPolicy.SERVED)
     with pytest.raises(population.MixedPopulationError, match="not comparable"):
         population.ratio(solved, overall)
 
@@ -200,7 +206,9 @@ def test_a_solved_and_a_served_aggregate_do_not_divide() -> None:
 def test_an_aggregate_states_the_population_behind_its_number() -> None:
     """A headline number with no n and no denominator cannot be checked, and the published per-arm
     table had neither: a reader could not tell 36 kernels against numba from 19 against C."""
-    arm = population.aggregate_arm("a", "numba", {"k1": 4.0, "k2": 1.0}, ["k1", "k2", "k3"], "served")
+    arm = population.aggregate_arm(
+        "a", "numba", {"k1": 4.0, "k2": 1.0}, ["k1", "k2", "k3"], population.KernelPolicy.SERVED
+    )
     assert arm.label() == "geomean over 3 kernels vs numba (served; 2 solved)"
 
 
@@ -208,8 +216,8 @@ def test_an_intersection_reports_what_it_dropped() -> None:
     """``efficacy`` intersects four mappings and counts only what it kept, and the survivors are not
     a fair sample: on one llr40 skills pair the two kernels that survive carry a before-geomean 181%
     above the arm's own four, so the pairing reported the easy half as the whole."""
-    left = population.aggregate_arm("a", "c", {"k1": 2.0, "k2": 2.0}, ["k1", "k2"], "solved")
-    right = population.aggregate_arm("b", "c", {"k2": 2.0, "k3": 2.0}, ["k2", "k3"], "solved")
+    left = population.aggregate_arm("a", "c", {"k1": 2.0, "k2": 2.0}, ["k1", "k2"], population.KernelPolicy.SOLVED)
+    right = population.aggregate_arm("b", "c", {"k2": 2.0, "k3": 2.0}, ["k2", "k3"], population.KernelPolicy.SOLVED)
     gap = population.coverage(left, right, roster=["k1", "k2", "k3", "k4"])
     assert (gap.n_both, gap.n_only_left, gap.n_only_right, gap.n_neither) == (1, 1, 1, 1)
     assert gap.only_left == ("k1",) and gap.only_right == ("k3",)
@@ -431,7 +439,7 @@ def test_a_suspect_final_submission_scores_one_not_an_earlier_answer() -> None:
     served = population.kernel_answers(rows)
     assert served.speedup.tolist() == [1.0]
     assert served[population.SOLVED_COLUMN].tolist() == [False]
-    assert population.kernel_answers(rows, policy="solved").empty
+    assert population.kernel_answers(rows, policy=population.KernelPolicy.SOLVED).empty
 
 
 def rerun(first: dict[str, object], second: dict[str, object]) -> pd.DataFrame:
@@ -461,7 +469,7 @@ def test_a_rerun_that_verified_nothing_leaves_the_kernel_unanswered() -> None:
     served = population.kernel_answers(rows)
     assert served.speedup.tolist() == [population.NOT_DELIVERED]
     assert served[population.DELIVERED_COLUMN].tolist() == [False]
-    assert population.kernel_answers(rows, policy="solved").empty
+    assert population.kernel_answers(rows, policy=population.KernelPolicy.SOLVED).empty
 
 
 FINAL = {"timing_reduction": timing.FINAL_GRADE_REDUCTION}
@@ -642,7 +650,7 @@ def test_designed_repeats_answer_with_the_median_and_carry_one_real_runs_row(
             for i, value in enumerate(speedups)
         ]
     )
-    answers = population.arm_kernel_answers(rows, repeats="median")
+    answers = population.arm_kernel_answers(rows, repeats=population.RepeatPolicy.MEDIAN)
     assert (answers.speedup.tolist(), answers.source_path.tolist()) == ([median], [carrier])
 
 
@@ -1002,7 +1010,7 @@ def test_designed_repeats_charge_a_kernel_its_median_run() -> None:
             {"row_kind": "task", "run_id": "w2", "tokens": 250.0, "ts_ms": 12},
         ]
     )
-    assert population.kernel_tokens(rows, repeats="median").to_dict() == {"k": 250.0}
+    assert population.kernel_tokens(rows, repeats=population.RepeatPolicy.MEDIAN).to_dict() == {"k": 250.0}
 
 
 def test_an_unknown_repeat_policy_is_refused() -> None:

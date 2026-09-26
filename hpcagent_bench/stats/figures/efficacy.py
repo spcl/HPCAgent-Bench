@@ -236,7 +236,7 @@ SPEEDUP_OVER: population.KernelPolicy = population.KernelPolicy.SOLVED
 
 def speedup_mask(paired: pd.DataFrame, over: population.KernelPolicy = SPEEDUP_OVER) -> "np.ndarray":
     """The rows of :func:`paired_kernels`' frame a speedup aggregate is taken over."""
-    if over == "served":
+    if over == population.KernelPolicy.SERVED:
         return np.ones(len(paired), dtype=bool)
     return (paired.control_solved.astype(bool) & paired.treated_solved.astype(bool)).to_numpy(dtype=bool)
 
@@ -879,9 +879,9 @@ def resolve_row_repeats(
     already have length ``n`` -- a git-scicomp panel (designed 3x repeats, median) and an
     llr-focus40 panel (reruns, latest) share no policy, so ONE row's panels are never forced onto
     ONE value."""
-    if isinstance(repeats, str):
-        return [repeats] * n
-    resolved = list(repeats)
+    if isinstance(repeats, (str, population.RepeatPolicy)):
+        return [population.repeat_policy(repeats)] * n
+    resolved = [population.repeat_policy(policy) for policy in repeats]
     if len(resolved) != n:
         raise ValueError(f"repeats names {len(resolved)} polic{'y' if len(resolved) == 1 else 'ies'}, panels {n}")
     return resolved
@@ -910,7 +910,7 @@ SERVED_SPEEDUP_LABEL: str = "Speedup (1x Fallback)"
 
 def speedup_row_label(over: population.KernelPolicy) -> str:
     """The speedup row's Y label under ``over``."""
-    return SERVED_SPEEDUP_LABEL if over == "served" else MEASURE_LABELS["speedup"]
+    return SERVED_SPEEDUP_LABEL if over == population.KernelPolicy.SERVED else MEASURE_LABELS["speedup"]
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -2513,7 +2513,7 @@ def pairs_table(
                 "native_ns": series.native_ns,
                 "control_tokens": series.control_tokens,
                 "treated_tokens": series.treated_tokens,
-                "speedup_over": over,
+                "speedup_over": population.KernelPolicy(over).value,
                 "served": arms[0].served,
                 "control_solved": arms[0].solved,
                 "treated_solved": arms[1].solved,

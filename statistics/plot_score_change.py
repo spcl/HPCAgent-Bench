@@ -339,10 +339,10 @@ def same_policy(table: pd.DataFrame, source: pathlib.Path, over: population.Kern
     would test failures-at-1x while the marks leave failures out, or the reverse. A CSV written
     before the column existed was taken over every served kernel."""
     recorded = set(table[KERNEL_POLICY_COLUMN].dropna().astype(str)) if KERNEL_POLICY_COLUMN in table else set()
-    if (recorded or {"served"}) != {over}:
+    if (recorded or {"served"}) != {over.value}:
         raise SystemExit(
-            f"{source} took its speedup over {sorted(recorded or {'served'})}, the figure over {over!r}; "
-            f"rebuild it with statistics/paired_arms.py --policy {over}"
+            f"{source} took its speedup over {sorted(recorded or {'served'})}, the figure over {over.value!r}; "
+            f"rebuild it with statistics/paired_arms.py --policy {over.value}"
         )
 
 
@@ -753,6 +753,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--speedup-over",
         default=efficacy_figures.SPEEDUP_OVER,
+        type=population.KernelPolicy,
         choices=population.POLICIES,
         help="solved (default): speedup over the kernels both arms answered correctly, failures shown as "
         "the success-rate row; served: every kernel, a failure at 1x (the fallback reading)",
@@ -815,8 +816,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--table", type=pathlib.Path, default=pathlib.Path("data/score_change.csv"))
     parser.add_argument(
         "--repeats",
+        type=population.RepeatPolicy,
         choices=population.REPEAT_POLICIES,
-        default="latest",
+        default=population.RepeatPolicy.LATEST,
         help=
         "a kernel run more than once: latest run counts (reruns, default) or median over runs (designed repeats)",
     )  # fmt: skip
@@ -868,9 +870,12 @@ def comparison_panel(
     stdout) when it draws nothing. A spec's own ``repeats=`` overrides ``--repeats``: git-scicomp's
     designed-3x-repeats median sits beside llr-focus40's reruns-take-latest in one row."""
     spec = parse_spec(raw)
-    repeats = spec.get("repeats", args.repeats)
-    if repeats not in population.REPEAT_POLICIES:
-        raise SystemExit(f"comparison {raw!r}: repeats={repeats!r} not in {population.REPEAT_POLICIES}")
+    try:
+        repeats = population.RepeatPolicy(spec.get("repeats", args.repeats))
+    except ValueError:
+        raise SystemExit(
+            f"comparison {raw!r}: repeats={spec['repeats']!r} not in {[p.value for p in population.REPEAT_POLICIES]}"
+        ) from None
     built = build_comparison(
         spec, args.observations, args.experiment, repeats, args.include_incomplete, card, args.speedup_over
     )

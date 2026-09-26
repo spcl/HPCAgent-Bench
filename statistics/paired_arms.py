@@ -558,7 +558,11 @@ def task_usage(observations: pd.DataFrame, repeats: population.RepeatPolicy) -> 
     of ANY status counted: a rejected submit is still an attempt the agent made.
     """
     key = ["arm", *population.EPISODE_KEY]
-    selected = population.latest_runs(observations) if repeats == population.RepeatPolicy.LATEST else observations
+    selected = (
+        population.latest_runs(observations)
+        if population.repeat_policy(repeats) == population.RepeatPolicy.LATEST
+        else observations
+    )
     route = selected["route"].astype(str) if "route" in selected.columns else pd.Series("", index=selected.index)
     is_task = selected.row_kind == population.TASK_RECORD
     recorded = (
@@ -777,14 +781,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     ap.add_argument(
         "--repeats",
+        type=population.RepeatPolicy,
         choices=population.REPEAT_POLICIES,
-        default="latest",
+        default=population.RepeatPolicy.LATEST,
         help="a kernel run more than once: latest run counts (reruns, default) or median over runs (designed repeats)",
     )
     cost.add_arguments(ap)
     ap.add_argument(
         "--policy",
         default=POLICY,
+        type=population.KernelPolicy,
         choices=population.POLICIES,
         help="the speedup leg's kernels: solved (both arms answered correctly; the default) or served "
         "(every kernel, a failure at 1.0)",
@@ -871,7 +877,7 @@ def main(argv: list[str]) -> int:
     )
     pair_frame = (
         pd.DataFrame(pair_rows(pairs, table, tokens, roster, args.family, served))
-        .assign(cost_model=card.key, score_rule=score_rule.SCORE_RULE, kernel_policy=args.policy)
+        .assign(cost_model=card.key, score_rule=score_rule.SCORE_RULE, kernel_policy=args.policy.value)
         .reindex(columns=list(PAIR_COLUMNS))
     )
     # spec N1: the tables keep full float64; only the printed copy is rounded

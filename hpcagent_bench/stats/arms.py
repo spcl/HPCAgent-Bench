@@ -178,7 +178,7 @@ def arm_ranking(best: pd.DataFrame, served: dict[tuple[str, str], frozenset[str]
             for item in sorted(aligned, key=lambda item: item.geomean(), reverse=True):
                 rows.append(
                     {
-                        "policy": policy,
+                        "policy": policy.value,
                         "baseline": baseline,
                         "campaign": campaign,
                         "arm": item.arm,
