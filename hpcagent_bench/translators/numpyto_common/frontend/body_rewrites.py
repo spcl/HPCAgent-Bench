@@ -8,7 +8,9 @@ from hpcagent_bench.translators.numpyto_common.ast_build import (
     NESTED_BLOCK_FIELDS,
     const_int,
     map_blocks,
+    name_,
     numpy_attribute,
+    store_,
 )
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.frontend.initialize import FRAMEWORK_DTYPE_ALIASES
@@ -371,7 +373,7 @@ class ArrayLiteralToFill(ast.NodeTransformer):
                 return node
             dtype = numpy_attribute(attr)
         alloc = ast.Assign(
-            targets=[ast.Name(id=name, ctx=ast.Store())],
+            targets=[store_(name)],
             value=ast.Call(
                 func=numpy_attribute("empty"),
                 args=[ast.Tuple(elts=[ast.Constant(value=len(elts))], ctx=ast.Load())],
@@ -380,9 +382,7 @@ class ArrayLiteralToFill(ast.NodeTransformer):
         )
         stores = [
             ast.Assign(
-                targets=[
-                    ast.Subscript(value=ast.Name(id=name, ctx=ast.Load()), slice=ast.Constant(value=k), ctx=ast.Store())
-                ],
+                targets=[ast.Subscript(value=name_(name), slice=ast.Constant(value=k), ctx=ast.Store())],
                 value=elt,
             )
             for k, elt in enumerate(elts)
@@ -789,7 +789,7 @@ class UnpackedOpenMeshToGrid(ast.NodeTransformer):
         ):
             names = tuple(e.id for e in target.elts)
             grid = self.grids.setdefault(names, "_".join(names))
-            return ast.copy_location(ast.Assign(targets=[ast.Name(id=grid, ctx=ast.Store())], value=node.value), node)
+            return ast.copy_location(ast.Assign(targets=[store_(grid)], value=node.value), node)
         return self.generic_visit(node)
 
     def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
@@ -798,7 +798,7 @@ class UnpackedOpenMeshToGrid(ast.NodeTransformer):
         if isinstance(index, ast.Tuple) and all(isinstance(e, ast.Name) for e in index.elts):
             grid = self.grids.get(tuple(e.id for e in index.elts))
             if grid is not None:
-                node.slice = ast.Name(id=grid, ctx=ast.Load())
+                node.slice = name_(grid)
         return node
 
 

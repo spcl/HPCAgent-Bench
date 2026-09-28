@@ -3,7 +3,7 @@
 import ast
 import copy
 
-from hpcagent_bench.translators.numpyto_common.ast_build import const_int, range_for
+from hpcagent_bench.translators.numpyto_common.ast_build import const_int, name_, range_for
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import broadcast_extents, iter_extent_of
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import const_or_name
@@ -167,7 +167,7 @@ class ScatterAtRewriter(ast.NodeTransformer):
             # elementwise at the SAME iters the index uses (edge_laplacian's
             # ``flux``, whose shape this rewriter never needed to know).
             slot = iters[0] if len(iters) == 1 else ast.Tuple(elts=list(iters), ctx=ast.Load())
-            return ast.Subscript(value=ast.Name(id=peeled.id, ctx=ast.Load()), slice=slot, ctx=ast.Load())
+            return ast.Subscript(value=name_(peeled.id), slice=slot, ctx=ast.Load())
         raise NotImplementedError(
             "np.<op>.at value must be an array name, its negation, a scalar constant, or a resolvable array expression"
         )
@@ -200,11 +200,11 @@ class ScatterAtRewriter(ast.NodeTransformer):
         (a scalar like ``ii``) passes through unchanged. For a bare-Name
         target this is just ``target[idx_expr]``."""
         if isinstance(target, ast.Name):
-            return ast.Subscript(value=ast.Name(id=target.id, ctx=ast.Load()), slice=copy.deepcopy(idx_expr), ctx=ctx)
+            return ast.Subscript(value=name_(target.id), slice=copy.deepcopy(idx_expr), ctx=ctx)
         lead = list(target.slice.elts) if isinstance(target.slice, ast.Tuple) else [target.slice]
         new_lead = [copy.deepcopy(idx_expr) if is_full_slice(e) else copy.deepcopy(e) for e in lead]
         slot = new_lead[0] if len(new_lead) == 1 else ast.Tuple(elts=new_lead, ctx=ast.Load())
-        return ast.Subscript(value=ast.Name(id=target.value.id, ctx=ast.Load()), slice=slot, ctx=ctx)
+        return ast.Subscript(value=name_(target.value.id), slice=slot, ctx=ctx)
 
     def visit_Expr(self, node: ast.Expr) -> ast.AST:
         call = node.value
@@ -239,7 +239,7 @@ class ScatterAtRewriter(ast.NodeTransformer):
         # case); a multi-D index (lulesh nodelist, or a flattened ``.reshape(-1)``
         # peeled back to its 2-D base) suffixes one iter per axis.
         iters = [f"__sat{self._n}"] if len(bound) == 1 else [f"__sat{self._n}_{d}" for d in range(len(bound))]
-        iter_nodes = [ast.Name(id=i, ctx=ast.Load()) for i in iters]
+        iter_nodes = [name_(i) for i in iters]
         # A scatter whose target rows are BLOCKS rather than scalars: the index picks ONE leading
         # axis and every remaining axis belongs to the target and the value alike. Iterated over the
         # index alone, the body is a whole-block assignment that the emitters scalarise from the
@@ -253,7 +253,7 @@ class ScatterAtRewriter(ast.NodeTransformer):
             if len(tshape) > 1 and val_ext is not None and len(val_ext) == len(bound) + len(tshape) - 1:
                 trail = tuple(str(t) for t in tshape[1:])
         trail_iters = [f"__sat{self._n}_t{d}" for d in range(len(trail))]
-        trail_nodes = [ast.Name(id=i, ctx=ast.Load()) for i in trail_iters]
+        trail_nodes = [name_(i) for i in trail_iters]
         idx_k = scalarize_at_iters(idx_peeled, iter_nodes, self.shapes)
         val_k = self.val_at(vals, iter_nodes + trail_nodes)
 
@@ -263,18 +263,14 @@ class ScatterAtRewriter(ast.NodeTransformer):
                 return base
             lead = list(base.slice.elts) if isinstance(base.slice, ast.Tuple) else [base.slice]
             elts = [copy.deepcopy(e) for e in lead] + [copy.deepcopy(t) for t in trail_nodes]
-            return ast.Subscript(
-                value=ast.Name(id=base.value.id, ctx=ast.Load()), slice=ast.Tuple(elts=elts, ctx=ast.Load()), ctx=ctx
-            )
+            return ast.Subscript(value=name_(base.value.id), slice=ast.Tuple(elts=elts, ctx=ast.Load()), ctx=ctx)
 
         if op in self.AUG:
             stmt: ast.stmt = ast.AugAssign(target=cell(ast.Store()), op=self.AUG[op](), value=val_k)
         else:  # maximum / minimum -> t[i] = fn(t[i], v)
             stmt = ast.Assign(
                 targets=[cell(ast.Store())],
-                value=ast.Call(
-                    func=ast.Name(id=self.FOLD[op], ctx=ast.Load()), args=[cell(ast.Load()), val_k], keywords=[]
-                ),
+                value=ast.Call(func=name_(self.FOLD[op]), args=[cell(ast.Load()), val_k], keywords=[]),
             )
         body: list[ast.stmt] = [stmt]
         for it, ext in zip(reversed(iters + trail_iters), reversed(tuple(bound) + trail)):  # nest deepest-last
@@ -318,22 +314,22 @@ class ScatterAtRewriter(ast.NodeTransformer):
             raise NotImplementedError("multi-index np.<op>.at: cannot determine scatter extent")
         self._n += 1
         iters = [f"__sat{self._n}_{d}" for d in range(len(ext))]
-        iter_nodes = [ast.Name(id=i, ctx=ast.Load()) for i in iters]
+        iter_nodes = [name_(i) for i in iters]
         idx_scalars = [scalarize_at_iters(c, iter_nodes, self.shapes) for c in idx_p]
         val_s = scalarize_at_iters(vals_p, iter_nodes, self.shapes)
         slot = ast.Tuple(elts=idx_scalars, ctx=ast.Load())
-        lhs = ast.Subscript(value=ast.Name(id=target.id, ctx=ast.Load()), slice=slot, ctx=ast.Store())
+        lhs = ast.Subscript(value=name_(target.id), slice=slot, ctx=ast.Store())
         if op in self.AUG:
             stmt: ast.stmt = ast.AugAssign(target=lhs, op=self.AUG[op](), value=val_s)
         else:  # maximum / minimum -> t[i] = fn(t[i], v)
             cur = ast.Subscript(
-                value=ast.Name(id=target.id, ctx=ast.Load()),
+                value=name_(target.id),
                 slice=ast.Tuple(elts=list(idx_scalars), ctx=ast.Load()),
                 ctx=ast.Load(),
             )
             stmt = ast.Assign(
                 targets=[lhs],
-                value=ast.Call(func=ast.Name(id=self.FOLD[op], ctx=ast.Load()), args=[cur, val_s], keywords=[]),
+                value=ast.Call(func=name_(self.FOLD[op]), args=[cur, val_s], keywords=[]),
             )
         body: list[ast.stmt] = [stmt]
         for d in reversed(range(len(ext))):

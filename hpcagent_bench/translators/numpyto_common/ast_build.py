@@ -14,10 +14,22 @@ __all__ = [
     "literal_loads",
     "map_blocks",
     "map_statement_lists",
+    "name_",
     "numpy_attribute",
     "numpy_call",
     "range_for",
+    "store_",
 ]
+
+
+def name_(name: str) -> ast.Name:
+    """Build a load of ``name``."""
+    return ast.Name(id=name, ctx=ast.Load())
+
+
+def store_(name: str) -> ast.Name:
+    """Build a store to ``name``."""
+    return ast.Name(id=name, ctx=ast.Store())
 
 
 def expr_of(src: str) -> ast.expr:
@@ -27,7 +39,7 @@ def expr_of(src: str) -> ast.expr:
 
 def numpy_attribute(attr: str) -> ast.Attribute:
     """Build ``np.<attr>``."""
-    return ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr=attr, ctx=ast.Load())
+    return ast.Attribute(value=name_("np"), attr=attr, ctx=ast.Load())
 
 
 def numpy_call(fn: str, args: list[ast.expr]) -> ast.Call:
@@ -86,8 +98,8 @@ class RenameNames(ast.NodeTransformer):
 def range_for(var: str, bounds: list[ast.expr], body: list[ast.stmt]) -> ast.For:
     """Build ``for <var> in range(*bounds): <body>``."""
     return ast.For(
-        target=ast.Name(id=var, ctx=ast.Store()),
-        iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=bounds, keywords=[]),
+        target=store_(var),
+        iter=ast.Call(func=name_("range"), args=bounds, keywords=[]),
         body=body,
         orelse=[],
     )

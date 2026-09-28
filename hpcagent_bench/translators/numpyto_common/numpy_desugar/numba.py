@@ -3,7 +3,7 @@
 import ast
 import copy
 
-from hpcagent_bench.translators.numpyto_common.ast_build import const_int, expr_of
+from hpcagent_bench.translators.numpyto_common.ast_build import const_int, expr_of, name_, store_
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module, numpy_call_attr
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import (
     RankedRewritePass,
@@ -354,7 +354,7 @@ class OuterBroadcastPeel(RankedRewritePass):
         if isinstance(target, ast.Name):
             # A bare Name is a binding, so allocate it. The probe row carries the promoted dtype
             # (``X + Y[:, None] * 1j`` is complex though neither operand is); only its dtype is read.
-            out.append(ast.Assign(targets=[ast.Name(id=temp, ctx=ast.Store())], value=probe))
+            out.append(ast.Assign(targets=[store_(temp)], value=probe))
             out.append(ast.parse(f"{dest} = np.empty(({shape},), {temp}.dtype)").body[0])
         elif not direct and isinstance(target, ast.Subscript):
             # The store casts into the target's dtype, so the temp takes it.
@@ -365,7 +365,7 @@ class OuterBroadcastPeel(RankedRewritePass):
         loop.body = [store]
         out.append(loop)
         if not direct:
-            out.append(ast.Assign(targets=[target], value=ast.Name(id=dest, ctx=ast.Load())))
+            out.append(ast.Assign(targets=[target], value=name_(dest)))
         for s in out:
             ast.copy_location(s, node)
             ast.fix_missing_locations(s)

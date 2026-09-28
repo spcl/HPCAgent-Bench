@@ -2,13 +2,9 @@
 
 import ast
 
-from hpcagent_bench.translators.numpyto_common.ast_build import range_for
+from hpcagent_bench.translators.numpyto_common.ast_build import name_, range_for
 from hpcagent_bench.translators.numpyto_common.lib_nodes.dims import dims_agree
-from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
-    const_or_name,
-    name_,
-    shape_total_product,
-)
+from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import const_or_name, shape_total_product
 
 __all__ = [
     "axis_stride",

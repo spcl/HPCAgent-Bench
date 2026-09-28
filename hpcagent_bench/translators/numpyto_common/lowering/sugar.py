@@ -4,7 +4,7 @@ import ast
 import copy
 import itertools
 
-from hpcagent_bench.translators.numpyto_common.ast_build import const_int, literal_loads
+from hpcagent_bench.translators.numpyto_common.ast_build import const_int, literal_loads, name_
 
 __all__ = [
     "DaceMapRewriter",
@@ -108,7 +108,5 @@ class DaceMapRewriter(ast.NodeTransformer):
                 ]
                 if sl.step is not None:
                     args.append(sl.step)
-                node.iter = ast.Call(
-                    func=ast.Name(id="range", ctx=ast.Load()), args=[a for a in args if a is not None], keywords=[]
-                )
+                node.iter = ast.Call(func=name_("range"), args=[a for a in args if a is not None], keywords=[])
         return node

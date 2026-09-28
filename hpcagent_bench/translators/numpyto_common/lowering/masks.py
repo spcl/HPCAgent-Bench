@@ -3,7 +3,7 @@
 import ast
 import copy
 
-from hpcagent_bench.translators.numpyto_common.ast_build import map_blocks, range_for
+from hpcagent_bench.translators.numpyto_common.ast_build import map_blocks, name_, range_for, store_
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import const_, wrap_for_loops
@@ -90,11 +90,7 @@ class BooleanMaskRewriter(ast.NodeTransformer):
             # broadcasts across it elementwise.
             return None
         iters = [f"__bm{i}" for i in range(len(shape))]
-        idx = (
-            ast.Name(id=iters[0], ctx=ast.Load())
-            if len(iters) == 1
-            else ast.Tuple(elts=[ast.Name(id=i, ctx=ast.Load()) for i in iters], ctx=ast.Load())
-        )
+        idx = name_(iters[0]) if len(iters) == 1 else ast.Tuple(elts=[name_(i) for i in iters], ctx=ast.Load())
         mask_iters = iters if mask_axes is None else [iters[a] for a in mask_axes]
         mask_scalar = SubscriptifyNames(self.shape_table, mask_iters).visit(copy.deepcopy(mask_expr))
         # ``arr[mask_name]`` on the RHS reads a bool-masked slice in numpy, but
@@ -102,7 +98,7 @@ class BooleanMaskRewriter(ast.NodeTransformer):
         # keep the original ``mask_name`` only on the mask check itself.
         rhs_clean = strip_mask_subscripts(copy.deepcopy(value), mask_names=mask_names_(mask_expr), mask_expr=mask_expr)
         rhs_scalar = SubscriptifyNames(self.shape_table, iters).visit(rhs_clean)
-        lhs_sub = ast.Subscript(value=ast.Name(id=arr_name, ctx=ast.Load()), slice=idx, ctx=ast.Store())
+        lhs_sub = ast.Subscript(value=name_(arr_name), slice=idx, ctx=ast.Store())
         if aug_op is None:
             inner = ast.Assign(targets=[lhs_sub], value=rhs_scalar)
         else:
@@ -373,9 +369,7 @@ class BooleanMaskReductionRewriter(ast.NodeTransformer):
                     scratch = f"__msk_res_{i}"
                     replacement = self.emit_masked(scratch, arr, mask, op)
                     if replacement is not None:
-                        replacement = list(replacement) + [
-                            ast.Assign(targets=[tgt], value=ast.Name(id=scratch, ctx=ast.Load()))
-                        ]
+                        replacement = list(replacement) + [ast.Assign(targets=[tgt], value=name_(scratch))]
                         ast.fix_missing_locations(replacement[-1])
                 if replacement is not None:
                     out.extend(replacement)
@@ -436,7 +430,7 @@ class BooleanMaskReductionRewriter(ast.NodeTransformer):
         emitted = self.emit_masked(scratch, arr, mask, op)
         if emitted is None:
             return None
-        value = ast.Name(id=scratch, ctx=ast.Load())
+        value = name_(scratch)
         if cast is not None:
             value = ast.Call(func=cast, args=[value], keywords=[])
         tail = ast.Assign(targets=[tgt], value=value)
@@ -454,15 +448,9 @@ class BooleanMaskReductionRewriter(ast.NodeTransformer):
         """
         if isinstance(arr, str):
             shape = self.shape_table.get(arr) or self.shape_table.get(mask)
-            n_expr = (
-                self.tok_to_ast(shape[0])
-                if shape
-                else ast.Call(
-                    func=ast.Name(id="len", ctx=ast.Load()), args=[ast.Name(id=arr, ctx=ast.Load())], keywords=[]
-                )
-            )
+            n_expr = self.tok_to_ast(shape[0]) if shape else ast.Call(func=name_("len"), args=[name_(arr)], keywords=[])
             return (
-                lambda idx: ast.Subscript(value=ast.Name(id=arr, ctx=ast.Load()), slice=idx, ctx=ast.Load()),
+                lambda idx: ast.Subscript(value=name_(arr), slice=idx, ctx=ast.Load()),
                 n_expr,
             )
         if not (isinstance(arr, ast.Subscript) and isinstance(arr.value, ast.Name)):
@@ -486,7 +474,7 @@ class BooleanMaskReductionRewriter(ast.NodeTransformer):
             composed = [copy.deepcopy(e) for e in elts]
             composed[axis] = view_offset(view.lower, view.step, idx)
             return ast.Subscript(
-                value=ast.Name(id=arr.value.id, ctx=ast.Load()),
+                value=name_(arr.value.id),
                 slice=ast.Tuple(elts=composed, ctx=ast.Load()),
                 ctx=ast.Load(),
             )
@@ -588,32 +576,30 @@ class BooleanMaskReductionRewriter(ast.NodeTransformer):
         if source is None:
             return None
         load, n_expr = source
-        mask_load = ast.Subscript(
-            value=ast.Name(id=mask, ctx=ast.Load()), slice=ast.Name(id=i_name, ctx=ast.Load()), ctx=ast.Load()
-        )
-        arr_load = load(ast.Name(id=i_name, ctx=ast.Load()))
+        mask_load = ast.Subscript(value=name_(mask), slice=name_(i_name), ctx=ast.Load())
+        arr_load = load(name_(i_name))
         out: list[ast.stmt] = []
         if op == "mean":
-            out.append(ast.Assign(targets=[ast.Name(id=sum_name, ctx=ast.Store())], value=ast.Constant(value=0.0)))
-            out.append(ast.Assign(targets=[ast.Name(id=cnt_name, ctx=ast.Store())], value=ast.Constant(value=0)))
+            out.append(ast.Assign(targets=[store_(sum_name)], value=ast.Constant(value=0.0)))
+            out.append(ast.Assign(targets=[store_(cnt_name)], value=ast.Constant(value=0)))
             body = [
-                ast.AugAssign(target=ast.Name(id=sum_name, ctx=ast.Store()), op=ast.Add(), value=arr_load),
-                ast.AugAssign(target=ast.Name(id=cnt_name, ctx=ast.Store()), op=ast.Add(), value=ast.Constant(value=1)),
+                ast.AugAssign(target=store_(sum_name), op=ast.Add(), value=arr_load),
+                ast.AugAssign(target=store_(cnt_name), op=ast.Add(), value=ast.Constant(value=1)),
             ]
             out.append(range_for(i_name, [n_expr], [ast.If(test=mask_load, body=body, orelse=[])]))
             out.append(
                 ast.Assign(
-                    targets=[ast.Name(id=res_name, ctx=ast.Store())],
+                    targets=[store_(res_name)],
                     value=ast.BinOp(
-                        left=ast.Name(id=sum_name, ctx=ast.Load()),
+                        left=name_(sum_name),
                         op=ast.Div(),
-                        right=ast.Name(id=cnt_name, ctx=ast.Load()),
+                        right=name_(cnt_name),
                     ),
                 )
             )
         elif op == "sum":
-            out.append(ast.Assign(targets=[ast.Name(id=res_name, ctx=ast.Store())], value=ast.Constant(value=0.0)))
-            body = [ast.AugAssign(target=ast.Name(id=res_name, ctx=ast.Store()), op=ast.Add(), value=arr_load)]
+            out.append(ast.Assign(targets=[store_(res_name)], value=ast.Constant(value=0.0)))
+            body = [ast.AugAssign(target=store_(res_name), op=ast.Add(), value=arr_load)]
             out.append(range_for(i_name, [n_expr], [ast.If(test=mask_load, body=body, orelse=[])]))
         elif op in {"max", "min"}:
             # The FIRST masked hit seeds the accumulator; subsequent hits
@@ -621,26 +607,24 @@ class BooleanMaskReductionRewriter(ast.NodeTransformer):
             # be wrong when index 0 is masked out and more extreme than every
             # masked value -- so a ``seen`` flag guards the seed instead.
             cmp = ast.Gt() if op == "max" else ast.Lt()
-            out.append(ast.Assign(targets=[ast.Name(id=res_name, ctx=ast.Store())], value=load(ast.Constant(value=0))))
-            out.append(ast.Assign(targets=[ast.Name(id=cnt_name, ctx=ast.Store())], value=ast.Constant(value=0)))
+            out.append(ast.Assign(targets=[store_(res_name)], value=load(ast.Constant(value=0))))
+            out.append(ast.Assign(targets=[store_(cnt_name)], value=ast.Constant(value=0)))
             update = ast.If(
                 test=ast.BoolOp(
                     op=ast.Or(),
                     values=[
                         ast.Compare(
-                            left=ast.Name(id=cnt_name, ctx=ast.Load()),
+                            left=name_(cnt_name),
                             ops=[ast.Eq()],
                             comparators=[ast.Constant(value=0)],
                         ),
-                        ast.Compare(
-                            left=copy.deepcopy(arr_load), ops=[cmp], comparators=[ast.Name(id=res_name, ctx=ast.Load())]
-                        ),
+                        ast.Compare(left=copy.deepcopy(arr_load), ops=[cmp], comparators=[name_(res_name)]),
                     ],
                 ),
-                body=[ast.Assign(targets=[ast.Name(id=res_name, ctx=ast.Store())], value=copy.deepcopy(arr_load))],
+                body=[ast.Assign(targets=[store_(res_name)], value=copy.deepcopy(arr_load))],
                 orelse=[],
             )
-            body = [update, ast.Assign(targets=[ast.Name(id=cnt_name, ctx=ast.Store())], value=ast.Constant(value=1))]
+            body = [update, ast.Assign(targets=[store_(cnt_name)], value=ast.Constant(value=1))]
             out.append(range_for(i_name, [n_expr], [ast.If(test=mask_load, body=body, orelse=[])]))
         else:
             return None
@@ -653,7 +637,7 @@ class BooleanMaskReductionRewriter(ast.NodeTransformer):
         try:
             return ast.parse(str(tok), mode="eval").body
         except SyntaxError:
-            return ast.Name(id=str(tok), ctx=ast.Load())
+            return name_(str(tok))
 
     def visit_FunctionDef(self, node):
         node.body = self.walk_body(node.body)

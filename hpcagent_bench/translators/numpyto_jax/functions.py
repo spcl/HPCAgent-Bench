@@ -2,6 +2,7 @@
 
 import ast
 
+from hpcagent_bench.translators.numpyto_common.ast_build import store_
 from hpcagent_bench.translators.numpyto_jax.errors import EmitError
 from hpcagent_bench.translators.numpyto_jax.jnp import np_to_jnp, unparse_jnp
 from hpcagent_bench.translators.numpyto_jax.loops import (
@@ -200,7 +201,7 @@ def functionalize_bare_expr(call: ast.AST) -> ast.Assign | None:
     for kw in call.keywords:  # explicit out= keyword wins
         if kw.arg == "out" and isinstance(kw.value, ast.Name):
             new = ast.Call(func=call.func, args=call.args, keywords=[k for k in call.keywords if k.arg != "out"])
-            return ast.Assign(targets=[ast.Name(id=kw.value.id, ctx=ast.Store())], value=new)
+            return ast.Assign(targets=[store_(kw.value.id)], value=new)
     # Positional out: an np/jnp ufunc whose last positional arg is a Name (a
     # bare ufunc statement has no other observable effect).
     if (
@@ -212,7 +213,7 @@ def functionalize_bare_expr(call: ast.AST) -> ast.Assign | None:
     ):
         out = call.args[-1]
         new = ast.Call(func=call.func, args=call.args[:-1], keywords=call.keywords)
-        return ast.Assign(targets=[ast.Name(id=out.id, ctx=ast.Store())], value=new)
+        return ast.Assign(targets=[store_(out.id)], value=new)
     return None
 
 

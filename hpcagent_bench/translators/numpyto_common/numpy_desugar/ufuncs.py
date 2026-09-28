@@ -3,7 +3,7 @@
 import ast
 import copy
 
-from hpcagent_bench.translators.numpyto_common.ast_build import numpy_attribute, numpy_call, range_for
+from hpcagent_bench.translators.numpyto_common.ast_build import name_, numpy_attribute, numpy_call, range_for
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module, numpy_call_attr
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import RankedRewritePass, RewritePass
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.hoist import HoistForm, ValueHoist
@@ -155,7 +155,7 @@ def hoist_ufunc_outer(node: ast.AST, hoist: ValueHoist) -> ast.expr | None:
             f"{p} = {na}.reshape({na}.shape[0], 1) {sym} {nb}.reshape(1, {nb}.shape[0])",
         ]
     )
-    return ast.Name(id=p, ctx=ast.Load())
+    return name_(p)
 
 
 UFUNC_OUTER_HOIST = HoistForm(frozenset({"outer"}), (), hoist_ufunc_outer)
@@ -204,19 +204,17 @@ class FillDiagonalInline(ast.NodeTransformer):
 
         def axis(k: int) -> ast.expr:
             return ast.Subscript(
-                value=ast.Attribute(value=ast.Name(id=arr.id, ctx=ast.Load()), attr="shape", ctx=ast.Load()),
+                value=ast.Attribute(value=name_(arr.id), attr="shape", ctx=ast.Load()),
                 slice=ast.Constant(value=k),
                 ctx=ast.Load(),
             )
 
-        bound = ast.Call(func=ast.Name(id="min", ctx=ast.Load()), args=[axis(0), axis(1)], keywords=[])
+        bound = ast.Call(func=name_("min"), args=[axis(0), axis(1)], keywords=[])
         store = ast.Assign(
             targets=[
                 ast.Subscript(
-                    value=ast.Name(id=arr.id, ctx=ast.Load()),
-                    slice=ast.Tuple(
-                        elts=[ast.Name(id=it, ctx=ast.Load()), ast.Name(id=it, ctx=ast.Load())], ctx=ast.Load()
-                    ),
+                    value=name_(arr.id),
+                    slice=ast.Tuple(elts=[name_(it), name_(it)], ctx=ast.Load()),
                     ctx=ast.Store(),
                 )
             ],

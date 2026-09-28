@@ -6,7 +6,7 @@ import inspect
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
-from hpcagent_bench.translators.numpyto_common.ast_build import const_int
+from hpcagent_bench.translators.numpyto_common.ast_build import const_int, store_
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.ir import tag_numpy_origin
 from hpcagent_bench.translators.numpyto_common.lib_nodes.call_hoist import CallHoister, numpy_call_key
@@ -759,7 +759,7 @@ def canonicalize_call_assign(node: ast.Assign) -> None:
         and isinstance(node.value, ast.Call)
         and numpy_call_key(node.value) in NP_CALL_EXPANDERS
     ):
-        node.targets[0] = ast.Name(id=node.targets[0].value.id, ctx=ast.Store())
+        node.targets[0] = store_(node.targets[0].value.id)
     if (
         len(node.targets) == 1
         and isinstance(node.value, ast.Subscript)

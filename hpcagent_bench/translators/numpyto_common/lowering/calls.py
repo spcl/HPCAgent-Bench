@@ -4,7 +4,7 @@ import ast
 import copy
 from collections.abc import Callable
 
-from hpcagent_bench.translators.numpyto_common.ast_build import numpy_attribute, range_for
+from hpcagent_bench.translators.numpyto_common.ast_build import name_, numpy_attribute, range_for, store_
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.statement_desugar import bind, element_read, indexed_loop, pair_names
 
@@ -301,21 +301,17 @@ class ScalarTimesMatmulRewriter(ast.NodeTransformer):
                     self.shape_table[temp] = shape
                     iters = [f"__si{i}" for i in range(len(shape))]
                     idx = (
-                        ast.Name(id=iters[0], ctx=ast.Load())
+                        name_(iters[0])
                         if len(iters) == 1
-                        else ast.Tuple(elts=[ast.Name(id=i, ctx=ast.Load()) for i in iters], ctx=ast.Load())
+                        else ast.Tuple(elts=[name_(i) for i in iters], ctx=ast.Load())
                     )
                     body = [
                         ast.Assign(
-                            targets=[
-                                ast.Subscript(value=ast.Name(id=temp, ctx=ast.Load()), slice=idx, ctx=ast.Store())
-                            ],
+                            targets=[ast.Subscript(value=name_(temp), slice=idx, ctx=ast.Store())],
                             value=ast.BinOp(
                                 left=scalar,
                                 op=ast.Mult(),
-                                right=ast.Subscript(
-                                    value=ast.Name(id=scaled_name.id, ctx=ast.Load()), slice=idx, ctx=ast.Load()
-                                ),
+                                right=ast.Subscript(value=name_(scaled_name.id), slice=idx, ctx=ast.Load()),
                             ),
                         )
                     ]
@@ -324,13 +320,13 @@ class ScalarTimesMatmulRewriter(ast.NodeTransformer):
                         out = [
                             range_for(
                                 v,
-                                [ast.Name(id=b, ctx=ast.Load()) if not b.isdigit() else ast.Constant(value=int(b))],
+                                [name_(b) if not b.isdigit() else ast.Constant(value=int(b))],
                                 out,
                             )
                         ]
                     self.pre_stmts.extend(out)
                     # Replace ``alpha * A`` in this MatMult with the temp.
-                    node.left = ast.Name(id=temp, ctx=ast.Load())
+                    node.left = name_(temp)
         return node
 
 
@@ -374,13 +370,11 @@ class EnumerateZipRewriter(ast.NodeTransformer):
                 for i, elt in enumerate(it.args[0].elts):
                     out.append(
                         ast.Assign(
-                            targets=[ast.Name(id=idx_name.id, ctx=ast.Store())],
+                            targets=[store_(idx_name.id)],
                             value=ast.BinOp(left=copy.deepcopy(start), op=ast.Add(), right=ast.Constant(value=i)),
                         )
                     )
-                    out.append(
-                        ast.Assign(targets=[ast.Name(id=val_name.id, ctx=ast.Store())], value=copy.deepcopy(elt))
-                    )
+                    out.append(ast.Assign(targets=[store_(val_name.id)], value=copy.deepcopy(elt)))
                     out.extend(copy.deepcopy(stmt) for stmt in node.body)
                 return out
             pair = pair_names(node.target)
@@ -392,7 +386,7 @@ class EnumerateZipRewriter(ast.NodeTransformer):
                     position = ast.BinOp(
                         left=copy.deepcopy(self.enumerate_start(it)),
                         op=ast.Add(),
-                        right=ast.Name(id="__ei", ctx=ast.Load()),
+                        right=name_("__ei"),
                     )
                     binds = [bind(pair[0], position), bind(pair[1], element_read(sequence, "__ei"))]
                     return indexed_loop(node, "__ei", extent, binds)

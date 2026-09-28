@@ -2,6 +2,7 @@
 
 import ast
 
+from hpcagent_bench.translators.numpyto_common.ast_build import name_, store_
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 
 __all__ = ["OBJMODE_FFT_FUNCS", "FftObjmodeRewriter", "rewrite_fft_to_objmode"]
@@ -44,16 +45,16 @@ class FftObjmodeRewriter(ast.NodeTransformer):
             items=[
                 ast.withitem(
                     context_expr=ast.Call(
-                        func=ast.Name(id="objmode", ctx=ast.Load()),
+                        func=name_("objmode"),
                         args=[],
                         keywords=[ast.keyword(arg=tmp, value=ast.Constant(value="complex128[:]"))],
                     ),
                     optional_vars=None,
                 )
             ],
-            body=[ast.Assign(targets=[ast.Name(id=tmp, ctx=ast.Store())], value=call)],
+            body=[ast.Assign(targets=[store_(tmp)], value=call)],
         )
-        assign_back = ast.Assign(targets=[node.targets[0]], value=ast.Name(id=tmp, ctx=ast.Load()))
+        assign_back = ast.Assign(targets=[node.targets[0]], value=name_(tmp))
         return [with_block, assign_back]
 
 

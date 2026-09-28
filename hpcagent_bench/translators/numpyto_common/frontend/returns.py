@@ -3,6 +3,7 @@
 import ast
 from collections.abc import Callable
 
+from hpcagent_bench.translators.numpyto_common.ast_build import name_, store_
 from hpcagent_bench.translators.numpyto_common.frontend.initialize import dtype_from_constructor, shape_from_constructor
 from hpcagent_bench.translators.numpyto_common.frontend.manifest import parse_shape_expression
 from hpcagent_bench.translators.numpyto_common.frontend.shape_arith import (
@@ -61,9 +62,9 @@ def synthesize_return_temps(fn: ast.FunctionDef) -> tuple[list[str], Callable[[]
             new_elts.append(elt)
             continue
         tname = f"ret_arr{len(new_stmts)}"
-        new_stmts.append(ast.Assign(targets=[ast.Name(id=tname, ctx=ast.Store())], value=elt))
+        new_stmts.append(ast.Assign(targets=[store_(tname)], value=elt))
         names.append(tname)
-        new_elts.append(ast.Name(id=tname, ctx=ast.Load()))
+        new_elts.append(name_(tname))
         changed = True
     if not changed:
         return names, noop
@@ -102,10 +103,8 @@ def promote_scalar_returns(fn: ast.FunctionDef, names: list[str]) -> list[str]:
         buf = f"hpcagent_bench_ret{i}"  # distinct from the ``ret_arr`` array-synthesis temps
         writes.append(
             ast.Assign(
-                targets=[
-                    ast.Subscript(value=ast.Name(id=buf, ctx=ast.Load()), slice=ast.Constant(value=0), ctx=ast.Store())
-                ],
-                value=ast.Name(id=nm, ctx=ast.Load()),
+                targets=[ast.Subscript(value=name_(buf), slice=ast.Constant(value=0), ctx=ast.Store())],
+                value=name_(nm),
             )
         )
         out_names.append(buf)

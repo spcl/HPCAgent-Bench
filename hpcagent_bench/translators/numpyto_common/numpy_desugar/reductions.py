@@ -2,7 +2,7 @@
 
 import ast
 
-from hpcagent_bench.translators.numpyto_common.ast_build import const_int, numpy_attribute
+from hpcagent_bench.translators.numpyto_common.ast_build import const_int, name_, numpy_attribute
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module, numpy_call_attr
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import REDUCE_FNS, RankedRewritePass, RewritePass
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.hoist import HoistForm, HoistTables, ValueHoist
@@ -229,7 +229,7 @@ def hoist_reduce_axis(node: ast.AST, hoist: ValueHoist) -> ast.expr | None:
         reduce_axis_stmts(temp, sname, op, axes, rank, hoist.ctr, keepdims, elem_kind == "float", ddof, elem_kind)
     )
     hoist.ctr += 1
-    return ast.Name(id=temp, ctx=ast.Load())
+    return name_(temp)
 
 
 REDUCE_AXIS_HOIST = HoistForm(frozenset(REDUCE_FNS), (), hoist_reduce_axis)
@@ -413,7 +413,7 @@ def hoist_masked_reduce(node: ast.AST, hoist: ValueHoist) -> ast.expr | None:
     hoist.ctr += 1
     temp = f"{p}_o"
     hoist.queue(masked_reduce_lines(temp, a.id, ast.unparse(mask), expr_rank(a, hoist.tables.ranks), op, p))
-    return ast.Name(id=temp, ctx=ast.Load())
+    return name_(temp)
 
 
 def has_masked_selects(tables: HoistTables) -> bool:
@@ -538,7 +538,7 @@ class UfuncReduceToReducer(RewritePass):
             return ast.copy_location(
                 ast.Call(
                     func=ast.Attribute(
-                        value=ast.Name(id="np", ctx=ast.Load()),
+                        value=name_("np"),
                         attr=UFUNC_REDUCE_TO_CALL[f.value.attr],
                         ctx=ast.Load(),
                     ),

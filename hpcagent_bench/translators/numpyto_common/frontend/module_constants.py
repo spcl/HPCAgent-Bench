@@ -8,7 +8,7 @@ from collections.abc import Callable, Iterator
 from typing import Any
 
 from hpcagent_bench.translators.numpyto_common import dtypes
-from hpcagent_bench.translators.numpyto_common.ast_build import numpy_attribute
+from hpcagent_bench.translators.numpyto_common.ast_build import name_, numpy_attribute, store_
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.frontend.shape_arith import IDENT_RE
 from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc
@@ -269,9 +269,7 @@ class SubstituteModuleConsts(ast.NodeTransformer):
         if node.id in self.seqs:
             return ast.copy_location(copy.deepcopy(self.seqs[node.id]), node)
         if node.id in self.dtype_attrs:
-            np_attr = ast.Attribute(
-                value=ast.Name(id="np", ctx=ast.Load()), attr=self.dtype_attrs[node.id], ctx=ast.Load()
-            )
+            np_attr = ast.Attribute(value=name_("np"), attr=self.dtype_attrs[node.id], ctx=ast.Load())
             return ast.copy_location(np_attr, node)
         return node
 
@@ -423,7 +421,7 @@ def materialize_const_arrays(tree: ast.Module, fn: ast.FunctionDef, input_args: 
         shape_tuple = ast.Tuple(elts=[ast.Constant(value=d) for d in shape], ctx=ast.Load())
         prelude.append(
             ast.Assign(
-                targets=[ast.Name(id=name, ctx=ast.Store())],
+                targets=[store_(name)],
                 value=ast.Call(
                     func=numpy_attribute("zeros"),
                     args=[shape_tuple],
@@ -445,7 +443,7 @@ def materialize_const_arrays(tree: ast.Module, fn: ast.FunctionDef, input_args: 
             )
             prelude.append(
                 ast.Assign(
-                    targets=[ast.Subscript(value=ast.Name(id=name, ctx=ast.Load()), slice=sl, ctx=ast.Store())],
+                    targets=[ast.Subscript(value=name_(name), slice=sl, ctx=ast.Store())],
                     value=ast.Constant(value=val),
                 )
             )

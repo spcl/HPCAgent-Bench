@@ -3,7 +3,7 @@
 import ast
 import copy
 
-from hpcagent_bench.translators.numpyto_common.ast_build import numpy_attribute, range_for
+from hpcagent_bench.translators.numpyto_common.ast_build import name_, numpy_attribute, range_for
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import numpy_call_attr
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import DesugarError, RankedRewritePass
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.hoist import HoistForm, ValueHoist
@@ -58,8 +58,8 @@ class IndexLeadingAxis(ast.NodeTransformer):
         if isinstance(node.ctx, ast.Load) and (self.ranks.get(node.id, 0) or 0) > 2:
             return ast.copy_location(
                 ast.Subscript(
-                    value=ast.Name(id=node.id, ctx=ast.Load()),
-                    slice=ast.Name(id=self.bv, ctx=ast.Load()),
+                    value=name_(node.id),
+                    slice=name_(self.bv),
                     ctx=ast.Load(),
                 ),
                 node,
@@ -105,14 +105,12 @@ class BatchedMatmulToLoop(RankedRewritePass):
             and target.slice.upper is None
         ):
             return ast.Subscript(
-                value=ast.Name(id=target.value.id, ctx=ast.Load()),
-                slice=ast.Name(id=bv, ctx=ast.Load()),
+                value=name_(target.value.id),
+                slice=name_(bv),
                 ctx=ast.Store(),
             )
         if isinstance(target, ast.Name) and (self.ranks.get(target.id, 0) or 0) > 2:
-            return ast.Subscript(
-                value=ast.Name(id=target.id, ctx=ast.Load()), slice=ast.Name(id=bv, ctx=ast.Load()), ctx=ast.Store()
-            )
+            return ast.Subscript(value=name_(target.id), slice=name_(bv), ctx=ast.Store())
         return None
 
     def allocation(self, name: str, value: ast.AST) -> ast.stmt | None:
@@ -153,7 +151,7 @@ class BatchedMatmulToLoop(RankedRewritePass):
         new_target = self.index_target(node.targets[0], bv)
         new_value = IndexLeadingAxis(bv, self.ranks).visit(copy.deepcopy(node.value))
         extent = ast.Subscript(
-            value=ast.Attribute(value=ast.Name(id=bsrc.id, ctx=ast.Load()), attr="shape", ctx=ast.Load()),
+            value=ast.Attribute(value=name_(bsrc.id), attr="shape", ctx=ast.Load()),
             slice=ast.Constant(value=0),
             ctx=ast.Load(),
         )
@@ -225,7 +223,7 @@ def int_matmul_temp(a: ast.expr, b: ast.expr, hoist: ValueHoist) -> ast.expr | N
     acc = int_matmul_acc_dtype(aid, bid, ka, kb)
     hoist.queue(pre + int_matmul_stmts(temp, aid, bid, ra, rb, hoist.ctr, acc))
     hoist.ctr += 1
-    return ast.Name(id=temp, ctx=ast.Load())
+    return name_(temp)
 
 
 def hoist_int_matmul(node: ast.AST, hoist: ValueHoist) -> ast.expr | None:
@@ -375,6 +373,6 @@ class ReshapeMatmulInline(RankedRewritePass):
         lines.append(f"{deep}for {p}_n in range({Y.id}.shape[1]):")
         lines.append(f"{deep}    for {p}_k in range({X.id}.shape[{rX - 1}]):")
         lines.append(f"{deep}        {temp}[{bidx}, {p}_n] += {X.id}[{bidx}, {p}_k] * {Y.id}[{p}_k, {p}_n]")
-        node.value = ast.Name(id=temp, ctx=ast.Load())
+        node.value = name_(temp)
         self.changed = True
         return [ast.copy_location(s, node) for s in ast.parse("\n".join(lines)).body] + [node]

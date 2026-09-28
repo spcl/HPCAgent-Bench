@@ -5,7 +5,7 @@ import ast
 import copy
 import enum
 
-from hpcagent_bench.translators.numpyto_common.ast_build import numpy_attribute
+from hpcagent_bench.translators.numpyto_common.ast_build import name_, numpy_attribute, store_
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.parallelism import is_timestep_loop
 from hpcagent_bench.translators.numpyto_common.subscripts import is_full_slice
@@ -239,11 +239,11 @@ def functionalize_stmt(s: ast.stmt) -> list[ast.stmt]:
     ):
         name = s.targets[0].value
         call = ast.Call(
-            func=ast.Attribute(value=ast.Name(id=name.id, ctx=ast.Load()), attr="reshape", ctx=ast.Load()),
+            func=ast.Attribute(value=name_(name.id), attr="reshape", ctx=ast.Load()),
             args=[s.value],
             keywords=[],
         )
-        new = ast.Assign(targets=[ast.Name(id=name.id, ctx=ast.Store())], value=call)
+        new = ast.Assign(targets=[store_(name.id)], value=call)
         return [ast.copy_location(new, s)]
     if isinstance(s, ast.Assign) and len(s.targets) == 1 and isinstance(s.targets[0], ast.Subscript):
         tgt = s.targets[0]
@@ -259,15 +259,15 @@ def functionalize_stmt(s: ast.stmt) -> list[ast.stmt]:
         arr = base
         arr_name = base_name(arr)
         sl = indices[0] if len(indices) == 1 else ast.Tuple(elts=indices, ctx=ast.Load())
-        name = ast.Name(id=arr_name, ctx=ast.Store())
+        name = store_(arr_name)
         if is_full_slice(sl):
             # a[:] = <scalar> fills every element; a plain a = <scalar> would
             # rebind a to a SCALAR. jnp.full_like keeps a's shape/dtype
             # (edge_laplacian's ``Lx[:] = 0.0``).
             if isinstance(s.value, ast.Constant) and not isinstance(s.value.value, str):
                 fill = ast.Call(
-                    func=ast.Attribute(value=ast.Name(id="jnp", ctx=ast.Load()), attr="full_like", ctx=ast.Load()),
-                    args=[ast.Name(id=arr_name, ctx=ast.Load()), s.value],
+                    func=ast.Attribute(value=name_("jnp"), attr="full_like", ctx=ast.Load()),
+                    args=[name_(arr_name), s.value],
                     keywords=[],
                 )
                 new = ast.Assign(targets=[name], value=fill)
@@ -312,7 +312,7 @@ def scatter_at_assign(call: ast.Call) -> ast.Assign | None:
     rebind = ast.Call(
         func=ast.Attribute(value=at, attr=SCATTER_AT_METHOD[op], ctx=ast.Load()), args=[vals], keywords=[]
     )
-    return ast.copy_location(ast.Assign(targets=[ast.Name(id=base_name(target), ctx=ast.Store())], value=rebind), call)
+    return ast.copy_location(ast.Assign(targets=[store_(base_name(target))], value=rebind), call)
 
 
 def broadcast_astype(arr: ast.AST, value: ast.expr) -> ast.Call:
@@ -320,13 +320,13 @@ def broadcast_astype(arr: ast.AST, value: ast.expr) -> ast.Call:
     lowering of ``arr[:] = value`` (broadcasts + casts to ``arr``'s shape/dtype,
     inferred from the live array, never hardcoded)."""
     name = base_name(arr)
-    shape = ast.Attribute(value=ast.Name(id=name, ctx=ast.Load()), attr="shape", ctx=ast.Load())
+    shape = ast.Attribute(value=name_(name), attr="shape", ctx=ast.Load())
     bcast = ast.Call(
-        func=ast.Attribute(value=ast.Name(id="jnp", ctx=ast.Load()), attr="broadcast_to", ctx=ast.Load()),
+        func=ast.Attribute(value=name_("jnp"), attr="broadcast_to", ctx=ast.Load()),
         args=[value, shape],
         keywords=[],
     )
-    dtype = ast.Attribute(value=ast.Name(id=name, ctx=ast.Load()), attr="dtype", ctx=ast.Load())
+    dtype = ast.Attribute(value=name_(name), attr="dtype", ctx=ast.Load())
     return ast.Call(func=ast.Attribute(value=bcast, attr="astype", ctx=ast.Load()), args=[dtype], keywords=[])
 
 
@@ -688,12 +688,10 @@ def expand_parallel_assigns(stmts: list[ast.stmt]) -> list[ast.stmt]:
         ):
             STATE.tuple_ctr += 1
             tmp = f"__pa{STATE.tuple_ctr}"
-            out.append(ast.Assign(targets=[ast.Name(id=tmp, ctx=ast.Store())], value=s.value))
+            out.append(ast.Assign(targets=[store_(tmp)], value=s.value))
             for k, e in enumerate(s.targets[0].elts):
-                item = ast.Subscript(
-                    value=ast.Name(id=tmp, ctx=ast.Load()), slice=ast.Constant(value=k), ctx=ast.Load()
-                )
-                out.append(ast.Assign(targets=[ast.Name(id=e.id, ctx=ast.Store())], value=item))
+                item = ast.Subscript(value=name_(tmp), slice=ast.Constant(value=k), ctx=ast.Load())
+                out.append(ast.Assign(targets=[store_(e.id)], value=item))
         else:
             out.append(s)
     return [ast.fix_missing_locations(x) for x in out]
@@ -813,10 +811,10 @@ def row_reduce_rewrite(node: ast.AST, i: str) -> ast.expr | None:
     if extra_args or node.keywords:
         return None
     axis = ast.Call(
-        func=ast.Name(id="tuple", ctx=ast.Load()),
+        func=name_("tuple"),
         args=[
             ast.Call(
-                func=ast.Name(id="range", ctx=ast.Load()),
+                func=name_("range"),
                 args=[ast.Constant(value=1), ast.Attribute(value=copy.deepcopy(base), attr="ndim", ctx=ast.Load())],
                 keywords=[],
             )

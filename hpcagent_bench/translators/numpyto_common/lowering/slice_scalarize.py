@@ -2,20 +2,22 @@
 
 import ast
 import copy
-from typing import Any
 from collections.abc import Sequence
+from typing import Any
 
-from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of, extent_is_scalar
+from hpcagent_bench.translators.numpyto_common.ast_build import name_
+from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import extent_is_scalar, iter_extent_of
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
+    const_,
     slice_step_any,
     step_is_negative,
     step_node,
-    const_,
 )
 from hpcagent_bench.translators.numpyto_common.lowering.chains import CHAINED_VIEW, counts_from_end
 from hpcagent_bench.translators.numpyto_common.lowering.indexing import (
     LOWERED_ELEMENTWISE,
     advanced_runs,
+    basic_axis_count,
     binop,
     gather_slice_offset,
     is_scalar_index,
@@ -23,7 +25,6 @@ from hpcagent_bench.translators.numpyto_common.lowering.indexing import (
     np_func_name,
     shift_index,
     slice_dims,
-    basic_axis_count,
     slice_free_gather_layout,
 )
 from hpcagent_bench.translators.numpyto_common.lowering.mathfuncs import NP_ELEMENTWISE
@@ -137,7 +138,7 @@ class SliceToScalarRewriter(ast.NodeTransformer):
             if str(dim).strip() == "1":
                 elts.append(const_(0))
                 continue
-            ivar = ast.Name(id=iv, ctx=ast.Load())
+            ivar = name_(iv)
             if isinstance(start, ast.Constant) and start.value == 0:
                 elts.append(ivar)
             else:
@@ -241,7 +242,7 @@ class SliceToScalarRewriter(ast.NodeTransformer):
         """The LOCAL result position ``iter - lhs_start`` (or just ``iter`` when the
         LHS slice starts at 0). A gather-index array / trailing source axis reads at
         its 0-based position within the slice, not the absolute destination index."""
-        iv = ast.Name(id=iter_name.id, ctx=ast.Load())
+        iv = name_(iter_name.id)
         if isinstance(start, ast.Constant) and start.value == 0:
             return iv
         # Copy ``start``: it is the SAME node object as the loop-header ``range``
@@ -515,7 +516,7 @@ class SliceToScalarRewriter(ast.NodeTransformer):
                 ivar_node, unused = lhs_slice_iters[rhs_slice_idx]
                 rhs_slice_idx += 1
                 source_axes_consumed += 1
-                idx_nodes.append(ast.Name(id=ivar_node.id, ctx=ast.Load()))
+                idx_nodes.append(name_(ivar_node.id))
         new_slice = idx_nodes[0] if len(idx_nodes) == 1 else ast.Tuple(elts=idx_nodes, ctx=ast.Load())
         return ast.Subscript(value=node.value, slice=new_slice, ctx=node.ctx)
 
@@ -528,7 +529,7 @@ class SliceToScalarRewriter(ast.NodeTransformer):
         at ``axis_len - 1``), else the iter shifted by ``rhs_start - lhs_start``."""
         step = slice_step_any(d)
         rhs_start = self.resolve_bound(d.lower, rhs_name, axis, default=const_(0))
-        ivar = ast.Name(id=ivar_node.id, ctx=ast.Load())
+        ivar = name_(ivar_node.id)
         # numpy KEEPS an axis a slice produced even at length 1, and then BROADCASTS it: every
         # result position along that axis reads the SAME source element. Advancing it with the
         # iter var instead reads a whole row -- ``out[:, :] = a[:, 0:1] + b`` came out as
@@ -553,9 +554,7 @@ class SliceToScalarRewriter(ast.NodeTransformer):
             if step_is_negative(step) and d.lower is None:
                 ss = self.array_shapes.get(rhs_name)
                 if ss and axis < len(ss):
-                    al_ = (
-                        const_(int(ss[axis])) if str(ss[axis]).isdigit() else ast.Name(id=str(ss[axis]), ctx=ast.Load())
-                    )
+                    al_ = const_(int(ss[axis])) if str(ss[axis]).isdigit() else name_(str(ss[axis]))
                     rhs_start = binop(al_, ast.Sub(), const_(1))
                 else:
                     # Without the axis length we cannot seed the reverse start at
@@ -631,7 +630,7 @@ class SliceToScalarRewriter(ast.NodeTransformer):
             return None
         shapes = {**self.array_shapes, CHAINED_VIEW: tuple(ast.unparse(axis) for axis in extent)}
         rewriter = SliceToScalarRewriter(shapes, self.iter_vars, self.lhs_ranges, self.lhs_name, self.lhs_dims)
-        view_name = ast.Name(id=CHAINED_VIEW, ctx=ast.Load())
+        view_name = name_(CHAINED_VIEW)
         read = rewriter.visit(ast.Subscript(value=view_name, slice=copy.deepcopy(node.slice), ctx=ast.Load()))
         return self.scalar_view_read(read, len(extent))
 
@@ -731,11 +730,7 @@ class SliceToScalarRewriter(ast.NodeTransformer):
         shape = self.array_shapes.get(array_name) if array_name else None
         val = negative_literal_offset(idx)
         if val is not None and shape and axis < len(shape):
-            axis_len = (
-                const_(int(shape[axis]))
-                if str(shape[axis]).isdigit()
-                else ast.Name(id=str(shape[axis]), ctx=ast.Load())
-            )
+            axis_len = const_(int(shape[axis])) if str(shape[axis]).isdigit() else name_(str(shape[axis]))
             return binop(axis_len, ast.Sub(), const_(val))
         return idx
 
@@ -753,7 +748,7 @@ class SliceToScalarRewriter(ast.NodeTransformer):
         shape = self.array_shapes.get(array_name) if array_name else None
         k = negative_literal_offset(bound)
         if k is not None and shape and axis < len(shape):
-            axis_len = const_(int(shape[axis])) if shape[axis].isdigit() else ast.Name(id=shape[axis], ctx=ast.Load())
+            axis_len = const_(int(shape[axis])) if shape[axis].isdigit() else name_(shape[axis])
             return binop(axis_len, ast.Sub(), const_(k))
         return bound
 

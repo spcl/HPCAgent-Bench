@@ -3,18 +3,12 @@
 import ast
 import copy
 
-from hpcagent_bench.translators.numpyto_common.ast_build import range_for
+from hpcagent_bench.translators.numpyto_common.ast_build import name_, range_for, store_
 from hpcagent_bench.translators.numpyto_common.ir import SparseArrayDesc
 from hpcagent_bench.translators.numpyto_common.lib_nodes.blas import BLAS_GEMM_MARKER, BLAS_INELIGIBLE_DTYPES
 from hpcagent_bench.translators.numpyto_common.lib_nodes.dims import dims_agree, static_shape_of
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of
-from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
-    alloc_marker,
-    const_,
-    const_or_name,
-    name_,
-    store_,
-)
+from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import alloc_marker, const_, const_or_name
 from hpcagent_bench.translators.numpyto_common.lib_nodes.scalarize import scalarize_at_iters
 
 __all__ = [
@@ -608,7 +602,7 @@ class MatmulHoister(ast.NodeTransformer):
             if sp is not None:
                 temp, stmts = sp
                 self.pre_stmts.extend(self.prepend_alloc_markers(stmts))
-                return ast.Name(id=temp, ctx=ast.Load())
+                return name_(temp)
             node = self.materialise_call_operands(node)
             temp, stmts = hoist_matmul(
                 node,
@@ -633,7 +627,7 @@ class MatmulHoister(ast.NodeTransformer):
                         if dt and dt.startswith("complex"):
                             self.local_dtypes[temp] = "complex128"
                             break
-                return ast.Name(id=temp, ctx=ast.Load())
+                return name_(temp)
         return node
 
     def blas_eligible(self, node: ast.BinOp) -> bool:

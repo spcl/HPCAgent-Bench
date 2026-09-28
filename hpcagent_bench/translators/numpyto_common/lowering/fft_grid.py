@@ -2,8 +2,8 @@
 
 import ast
 
+from hpcagent_bench.translators.numpyto_common.ast_build import expr_of, name_, numpy_attribute, store_
 from hpcagent_bench.translators.numpyto_common.lowering.calls import match_fft, match_reshape
-from hpcagent_bench.translators.numpyto_common.ast_build import expr_of, numpy_attribute
 
 __all__ = ["FftGridReshapeRewriter"]
 
@@ -105,22 +105,22 @@ class FftGridReshapeRewriter(ast.NodeTransformer):
             return ast.Tuple(elts=[expr_of(t) for t in toks], ctx=ast.Load())
 
         reshape_g = ast.Assign(
-            targets=[ast.Name(id=g, ctx=ast.Store())],
+            targets=[store_(g)],
             value=ast.Call(
                 func=numpy_attribute("reshape"),
-                args=[ast.Name(id=src_name, ctx=ast.Load()), tuple_(grid_shape)],
+                args=[name_(src_name), tuple_(grid_shape)],
                 keywords=[],
             ),
         )
         fft_call = ast.Assign(
-            targets=[ast.Name(id=f, ctx=ast.Store())],
+            targets=[store_(f)],
             value=ast.Call(
                 func=ast.Attribute(
                     value=numpy_attribute("fft"),
                     attr=fn_name,
                     ctx=ast.Load(),
                 ),
-                args=[ast.Name(id=g, ctx=ast.Load())],
+                args=[name_(g)],
                 keywords=fft_kw,
             ),
         )
@@ -133,17 +133,17 @@ class FftGridReshapeRewriter(ast.NodeTransformer):
         else:
             out_shape = (M, C)
         reshape_o = ast.Assign(
-            targets=[ast.Name(id=o, ctx=ast.Store())],
+            targets=[store_(o)],
             value=ast.Call(
                 func=numpy_attribute("reshape"),
-                args=[ast.Name(id=f, ctx=ast.Load()), tuple_(out_shape)],
+                args=[name_(f), tuple_(out_shape)],
                 keywords=[],
             ),
         )
         for nm, shp in ((g, grid_shape), (f, grid_shape), (o, out_shape)):
             self.shape_table[nm] = shp
             self.local_dtypes[nm] = "complex128"
-        node.value = ast.Name(id=o, ctx=ast.Load())
+        node.value = name_(o)
         for s in (reshape_g, fft_call, reshape_o, node):
             ast.copy_location(s, node) if isinstance(s, ast.stmt) else None
         ast.fix_missing_locations(reshape_g)

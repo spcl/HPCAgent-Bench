@@ -4,7 +4,7 @@ import ast
 import copy
 from collections.abc import Callable, Collection, Mapping, Sequence
 
-from hpcagent_bench.translators.numpyto_common.ast_build import range_for
+from hpcagent_bench.translators.numpyto_common.ast_build import name_, range_for, store_
 from hpcagent_bench.translators.numpyto_common.lib_nodes.call_args import eval_axes, read_axis_keepdims, read_kwarg
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
     const_,
@@ -12,10 +12,8 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
     falsy,
     if_set,
     make_iter_name,
-    name_,
     resolve_shape,
     shape_total_product,
-    store_,
     truthy,
     wrap_for_loops,
 )
@@ -217,7 +215,7 @@ def full_reduction(
         slice=(name_(iters[0]) if n_dim == 1 else ast.Tuple(elts=[name_(i) for i in iters], ctx=ast.Load())),
         ctx=ast.Load(),
     )
-    target_load = ast.Name(id=target.id, ctx=ast.Load())
+    target_load = name_(target.id)
     body = [
         update_fn(target, target_load, subscript)
         if update_fn
@@ -249,7 +247,7 @@ def reduction_output_refs(target: ast.expr, out_elts: list[ast.expr]) -> tuple[a
     """The (store, load) references of the reduction result: the target itself when no axis is kept
     and keepdims is off (a scalar result), else the target subscripted at ``out_elts``."""
     if len(out_elts) == 0:
-        return target, ast.Name(id=target.id, ctx=ast.Load())
+        return target, name_(target.id)
     if len(out_elts) == 1:
         return (
             ast.Subscript(value=name_(target.id), slice=out_elts[0], ctx=ast.Store()),
@@ -740,7 +738,7 @@ def expand_var_or_std(
     is_scalar_target = len(out_elts) == 0
     if is_scalar_target:
         out_sub: ast.expr = target
-        out_load: ast.expr = ast.Name(id=target.id, ctx=ast.Load())
+        out_load: ast.expr = name_(target.id)
     elif len(out_elts) == 1:
         out_sub = ast.Subscript(value=name_(target.id), slice=out_elts[0], ctx=ast.Store())
         out_load = ast.Subscript(value=name_(target.id), slice=out_elts[0], ctx=ast.Load())

@@ -15,6 +15,7 @@ import ast
 import copy
 from collections.abc import Callable, Collection, Mapping
 
+from hpcagent_bench.translators.numpyto_common.ast_build import name_, store_
 from hpcagent_bench.translators.numpyto_common.numpy_desugar import expr_rank, rank_table
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
 from hpcagent_bench.translators.numpyto_common.subscripts import base_name
@@ -59,12 +60,12 @@ def is_scalar_literal(node: ast.AST) -> bool:
 
 
 def load(name: str) -> ast.Name:
-    return ast.Name(id=name, ctx=ast.Load())
+    return name_(name)
 
 
 def bind(name: str, value: ast.expr) -> ast.Assign:
     """``name = value``."""
-    return ast.Assign(targets=[ast.Name(id=name, ctx=ast.Store())], value=value)
+    return ast.Assign(targets=[store_(name)], value=value)
 
 
 def element_read(array: str, index: str) -> ast.Subscript:
@@ -84,7 +85,7 @@ def pair_names(target: ast.expr) -> tuple[str, str] | None:
 def indexed_loop(node: ast.For, index: str, extent: ast.expr, binds: list[ast.stmt]) -> ast.For:
     """``node`` respelled ``for index in range(extent): *binds; *node.body``, its ``else`` kept."""
     loop = ast.For(
-        target=ast.Name(id=index, ctx=ast.Store()),
+        target=store_(index),
         iter=ast.Call(func=load("range"), args=[extent], keywords=[]),
         body=[*binds, *node.body],
         orelse=node.orelse,

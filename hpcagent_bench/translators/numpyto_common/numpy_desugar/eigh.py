@@ -4,6 +4,7 @@ import ast
 from collections.abc import Mapping
 
 from hpcagent_bench.translators.numpyto_common import dtypes
+from hpcagent_bench.translators.numpyto_common.ast_build import name_, store_
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import eigh_call_kind, is_eigh_assign_target
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.kinds import dtype_kind, dtype_table_
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.linalg import cholesky_lines
@@ -390,8 +391,8 @@ class EighCallHoister(ast.NodeTransformer):
             return node
         self._ctr += 1
         name = f"__eigv{self._ctr}"
-        self.pre.append(ast.Assign(targets=[ast.Name(id=name, ctx=ast.Store())], value=node))
-        return ast.Name(id=name, ctx=ast.Load())
+        self.pre.append(ast.Assign(targets=[store_(name)], value=node))
+        return name_(name)
 
     def flush(self, node: ast.stmt):
         # Descending into a direct eigh-assign would hoist its own RHS and hide it from the rewriter.

@@ -3,6 +3,7 @@
 import ast
 from collections.abc import Callable
 
+from hpcagent_bench.translators.numpyto_common.ast_build import name_
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import numpy_submodule_attr
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import DesugarError
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.hoist import HoistForm, HoistTables, ValueHoist
@@ -106,7 +107,7 @@ def hoist_cholesky(node: ast.Call, hoist: ValueHoist) -> ast.expr | None:
     temp = f"{p}_o"
     hermitian = dtype_kind(a, hoist.tables.dtypes) == "complex"
     hoist.queue(cholesky_lines(temp, an, f"{an}.shape[0]", p, hermitian=hermitian))
-    return ast.Name(id=temp, ctx=ast.Load())
+    return name_(temp)
 
 
 def hoist_solve(node: ast.Call, hoist: ValueHoist) -> ast.expr | None:
@@ -133,7 +134,7 @@ def hoist_solve(node: ast.Call, hoist: ValueHoist) -> ast.expr | None:
         [f"{p}_aw = {an}.copy()", f"{temp} = {bn}.copy()"]
         + gauss_jordan_lines(f"{p}_aw", temp, f"{an}.shape[0]", (f"{bn}.shape[1]" if rb == 2 else None), p)
     )
-    return ast.Name(id=temp, ctx=ast.Load())
+    return name_(temp)
 
 
 def hoist_inv(node: ast.Call, hoist: ValueHoist) -> ast.expr | None:
@@ -156,7 +157,7 @@ def hoist_inv(node: ast.Call, hoist: ValueHoist) -> ast.expr | None:
         ]
         + gauss_jordan_lines(f"{p}_aw", temp, n, n, p)
     )
-    return ast.Name(id=temp, ctx=ast.Load())
+    return name_(temp)
 
 
 LINALG_LOWERINGS: dict[str, Callable[[ast.Call, ValueHoist], ast.expr | None]] = {

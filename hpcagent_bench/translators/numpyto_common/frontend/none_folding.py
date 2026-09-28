@@ -2,6 +2,7 @@
 
 import ast
 
+from hpcagent_bench.translators.numpyto_common.ast_build import name_, store_
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
 
 __all__ = [
@@ -146,11 +147,11 @@ def flag_guard(flag: str, seed_when_none: bool) -> ast.Compare:
     is 0 exactly while the accumulator would still have read as ``None``, so either comparison keeps
     the ORIGINAL branch taken on the very first pass and its mirror on every later one."""
     op: ast.cmpop = ast.Eq() if seed_when_none else ast.NotEq()
-    return ast.Compare(left=ast.Name(id=flag, ctx=ast.Load()), ops=[op], comparators=[ast.Constant(value=0)])
+    return ast.Compare(left=name_(flag), ops=[op], comparators=[ast.Constant(value=0)])
 
 
 def flag_set_stmt(flag: str) -> ast.Assign:
-    return ast.Assign(targets=[ast.Name(id=flag, ctx=ast.Store())], value=ast.Constant(value=1))
+    return ast.Assign(targets=[store_(flag)], value=ast.Constant(value=1))
 
 
 def rewrite_none_toggle(stmts: list[ast.stmt], start: int, name: str, flag: str, in_loop: bool) -> bool:
@@ -200,8 +201,8 @@ def rewrite_none_toggle(stmts: list[ast.stmt], start: int, name: str, flag: str,
                 # if/else spelling already produces and compiles clean).
                 new_if = ast.If(
                     test=flag_guard(flag, seed_when_none),
-                    body=[ast.Assign(targets=[ast.Name(id=name, ctx=ast.Store())], value=stmt.value.body)],
-                    orelse=[ast.Assign(targets=[ast.Name(id=name, ctx=ast.Store())], value=stmt.value.orelse)],
+                    body=[ast.Assign(targets=[store_(name)], value=stmt.value.body)],
+                    orelse=[ast.Assign(targets=[store_(name)], value=stmt.value.orelse)],
                 )
                 ast.copy_location(new_if, stmt)
                 ast.fix_missing_locations(new_if)

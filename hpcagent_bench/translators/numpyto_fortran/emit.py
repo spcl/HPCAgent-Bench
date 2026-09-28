@@ -9,7 +9,7 @@ from collections.abc import Callable
 from typing import Optional
 
 from hpcagent_bench.translators.numpyto_common import dtypes, operators, parallelism
-from hpcagent_bench.translators.numpyto_common.ast_build import map_blocks
+from hpcagent_bench.translators.numpyto_common.ast_build import map_blocks, name_, store_
 from hpcagent_bench.translators.numpyto_common.emit_helpers import fftw
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import (
     CONJ_ATTRS,
@@ -2826,7 +2826,7 @@ class HoistIfExpVisitor(ast.NodeTransformer):
         self.generic_visit(node)  # hoist a NESTED IfExp (in test/body/orelse) before this one
         name = f"__ifexp{self.counter}"
         self.counter += 1
-        store, load = ast.Name(id=name, ctx=ast.Store()), ast.Name(id=name, ctx=ast.Load())
+        store, load = store_(name), name_(name)
         branch = ast.If(
             test=node.test,
             body=[ast.copy_location(ast.Assign(targets=[store], value=node.body), node)],
@@ -3130,19 +3130,19 @@ def emit_fortran(kir: KernelIR, fn_name: str | None = None, parallel: bool = Fal
     # identifier as parameter N, so skip its lowercase declaration entirely.
     param_names_ci = {p.lower() for p in param_names}
     seen_ci: set[str] = set(param_names_ci)
-    for name_ in kir.int_locals:
-        if name_.lower() in seen_ci:
+    for local in kir.int_locals:
+        if local.lower() in seen_ci:
             continue
-        seen_ci.add(name_.lower())
-        locals_block.append(f"    {fortran_type('int')} :: {name_}")
+        seen_ci.add(local.lower())
+        locals_block.append(f"    {fortran_type('int')} :: {local}")
     implicit = collect_implicit_locals(kir)
     # A name -> int-dtype-tag map for the body emitter's bitwise pair-kind matching.
     body_emitter._int_kinds = implicit_int_kinds(implicit)
-    for name_, ftype in implicit:
-        if name_.lower() in seen_ci:
+    for local, ftype in implicit:
+        if local.lower() in seen_ci:
             continue
-        seen_ci.add(name_.lower())
-        locals_block.append(f"    {ftype} :: {name_}")
+        seen_ci.add(local.lower())
+        locals_block.append(f"    {ftype} :: {local}")
     allocatable_locals = LocalArrayDecls(kir, body_emitter, seen_ci, param_names_ci).declare(locals_block)
 
     # Now that every side-table is set, emit the body: the np.zeros/slice-copy
@@ -3357,47 +3357,47 @@ class LocalArrayDecls:
         inline_alloc_locals: dict[str, tuple[list[str], str]] = {}
         # RESOLVED element dtype of each local array, for expr_is_real / name_int_kind.
         local_elem_dtypes: dict[str, str] = {}
-        for name_, shape in body_emitter.local_arrays.items():
-            if name_.lower() in seen_ci:
+        for local, shape in body_emitter.local_arrays.items():
+            if local.lower() in seen_ci:
                 # A param-array re-harvested into local_arrays is the same entity, so
                 # skipping its declaration is correct. But a lowercase clash with an
                 # already-declared SCALAR/other-case array is a genuine conflict
                 # (Fortran is case-insensitive) -- fail loudly rather than miscompile.
-                if name_.lower() not in param_names_ci:
+                if local.lower() not in param_names_ci:
                     raise NotImplementedError(
-                        f"local array {name_!r} clashes case-insensitively with an "
+                        f"local array {local!r} clashes case-insensitively with an "
                         "already-declared name; rename it (Fortran is case-insensitive)"
                     )
                 continue
-            seen_ci.add(name_.lower())
+            seen_ci.add(local.lower())
             # REVERSED shape for col-major/row-major interop -- see array_decl.
             rev_shape = [to_fortran_shape_token(s) for s in reversed(shape)] if shape else ["1"]
             local_dtypes = kir.local_dtypes
             # A float temp with no recorded dtype defaults to the KERNEL's float
             # precision, not a hard-coded float64, so fp32-mode locals don't mix kinds.
             default_float = kir.float_precision or "float64"
-            dt = local_dtypes.get(name_, self.inferred_local_dtypes.get(name_, default_float))
+            dt = local_dtypes.get(local, self.inferred_local_dtypes.get(local, default_float))
             # Bool-typed locals declare as logical(c_bool) -- the 1-byte C-ABI logical,
             # matching C's 1-byte _Bool (a bare logical is the 4-byte default kind).
-            if dt in ("bool", "bool_") or name_ in logical_array_locals:
+            if dt in ("bool", "bool_") or local in logical_array_locals:
                 ftype = fortran_type("bool")
-                local_elem_dtypes[name_] = local_elem_dtypes[fortran_safe(name_)] = "bool"
+                local_elem_dtypes[local] = local_elem_dtypes[fortran_safe(local)] = "bool"
             else:
                 ftype = fortran_type(dt)
-                local_elem_dtypes[name_] = local_elem_dtypes[fortran_safe(name_)] = dt
+                local_elem_dtypes[local] = local_elem_dtypes[fortran_safe(local)] = dt
             # If any shape token references a Name that is not a symbol or dummy int
             # arg, the declaration-time bound is illegal -- fall back to allocatable.
             needs_alloc = any(shape_token_uses_unknown(tok, self.allowed_bound_names) for tok in rev_shape)
             if needs_alloc:
                 colons = ", ".join(":" for unused in rev_shape)
-                locals_block.append(f"    {ftype}, allocatable :: {name_}({colons})")
+                locals_block.append(f"    {ftype}, allocatable :: {local}({colons})")
                 if mentions_word(rev_shape, self.loop_iter_names) or mentions_ident(rev_shape, self.computed_scalars):
-                    inline_alloc_locals[name_] = (rev_shape, ftype)
+                    inline_alloc_locals[local] = (rev_shape, ftype)
                 else:
-                    allocatable_locals.append((name_, rev_shape, ftype))
+                    allocatable_locals.append((local, rev_shape, ftype))
             else:
                 dims = ", ".join(rev_shape)
-                locals_block.append(f"    {ftype} :: {name_}({dims})")
+                locals_block.append(f"    {ftype} :: {local}({dims})")
         body_emitter.inline_alloc_locals = inline_alloc_locals
         body_emitter._local_elem_dtypes = local_elem_dtypes
         return allocatable_locals
@@ -3822,8 +3822,8 @@ class HoistHelperCallVisitor(ast.NodeTransformer):
         self.counter[0] += 1
         temp = f"__fhoist{self.counter[0]}"
         self.temps[temp] = node.func.id
-        self.pre_stmts.append(ast.Assign(targets=[ast.Name(id=temp, ctx=ast.Store())], value=node))
-        return ast.Name(id=temp, ctx=ast.Load())
+        self.pre_stmts.append(ast.Assign(targets=[store_(temp)], value=node))
+        return name_(temp)
 
 
 def hoist_nested_helper_calls(

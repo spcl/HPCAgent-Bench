@@ -3,13 +3,14 @@
 import ast
 from collections.abc import Callable
 
+from hpcagent_bench.translators.numpyto_common.ast_build import name_
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import (
     all_integer_operands,
     as_float64,
     broadcast_extents,
     iter_extent_of,
 )
-from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import cmp_, name_, wrap_for_loops
+from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import cmp_, wrap_for_loops
 from hpcagent_bench.translators.numpyto_common.lib_nodes.scalarize import scalarize_at_iters
 
 __all__ = [

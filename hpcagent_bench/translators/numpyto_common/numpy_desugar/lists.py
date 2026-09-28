@@ -4,7 +4,7 @@ import ast
 import copy
 from dataclasses import dataclass
 
-from hpcagent_bench.translators.numpyto_common.ast_build import const_int
+from hpcagent_bench.translators.numpyto_common.ast_build import const_int, name_
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
 
 __all__ = [
@@ -56,7 +56,7 @@ class SubstituteLen(ast.NodeTransformer):
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
         self.generic_visit(node)
-        return ast.Name(id=self.index, ctx=ast.Load()) if is_len_of(node, self.name) else node
+        return name_(self.index) if is_len_of(node, self.name) else node
 
 
 def appended_elts(stmt: ast.stmt, name: str) -> list[ast.expr] | None:

@@ -3,6 +3,7 @@
 import ast
 import copy
 
+from hpcagent_bench.translators.numpyto_common.ast_build import name_
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of
 from hpcagent_bench.translators.numpyto_common.lowering.indexing import (
     compose_kept_axis,
@@ -262,9 +263,7 @@ class SubarrayAliasFold(AliasFold):
             more = list(node.slice.elts) if isinstance(node.slice, ast.Tuple) else [node.slice]
             new_idx = [copy.deepcopy(b) for b in base] + more
             sl = ast.Tuple(elts=new_idx, ctx=ast.Load()) if len(new_idx) > 1 else new_idx[0]
-            return ast.copy_location(
-                ast.Subscript(value=ast.Name(id=aname, ctx=ast.Load()), slice=sl, ctx=node.ctx), node
-            )
+            return ast.copy_location(ast.Subscript(value=name_(aname), slice=sl, ctx=node.ctx), node)
         return node
 
 
@@ -489,9 +488,7 @@ class SliceViewFold(AliasFold):
         for pos, u in zip(kept_positions, use_elts):
             composed[pos] = compose_kept_axis(view_elts[pos], u)
         sl = ast.Tuple(elts=composed, ctx=ast.Load()) if len(composed) > 1 else composed[0]
-        return ast.copy_location(
-            ast.Subscript(value=ast.Name(id=base_name, ctx=ast.Load()), slice=sl, ctx=node.ctx), node
-        )
+        return ast.copy_location(ast.Subscript(value=name_(base_name), slice=sl, ctx=node.ctx), node)
 
 
 def view_alias_candidates(tree: ast.AST, array_shapes: dict[str, list[str]]) -> dict[str, tuple[str, list[ast.expr]]]:

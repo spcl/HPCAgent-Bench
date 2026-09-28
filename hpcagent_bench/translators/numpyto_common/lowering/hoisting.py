@@ -2,7 +2,7 @@
 
 import ast
 
-from hpcagent_bench.translators.numpyto_common.ast_build import numpy_attribute
+from hpcagent_bench.translators.numpyto_common.ast_build import name_, numpy_attribute, store_
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.lowering.mathfuncs import METHOD_TO_NP
 
@@ -39,8 +39,8 @@ class StmtHoister(ast.NodeTransformer):
         """Stage ``<prefix><n> = <expr>`` and return a Load Name for the temp."""
         self._hoist_ctr[0] += 1
         name = f"{prefix}{self._hoist_ctr[0]}"
-        self.pre_stmts.append(ast.Assign(targets=[ast.Name(id=name, ctx=ast.Store())], value=expr))
-        return ast.Name(id=name, ctx=ast.Load())
+        self.pre_stmts.append(ast.Assign(targets=[store_(name)], value=expr))
+        return name_(name)
 
     def flush(self, node: ast.stmt):
         saved = self.pre_stmts

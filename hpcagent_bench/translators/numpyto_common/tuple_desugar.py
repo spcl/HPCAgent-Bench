@@ -31,7 +31,7 @@ import copy
 import functools
 from typing import Any
 
-from hpcagent_bench.translators.numpyto_common.ast_build import SubstituteLoads, map_statement_lists
+from hpcagent_bench.translators.numpyto_common.ast_build import SubstituteLoads, map_statement_lists, name_, store_
 from hpcagent_bench.translators.numpyto_common.numpy_desugar import expr_rank
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
 
@@ -536,10 +536,8 @@ class TupleDesugar:
         self.aliases += 1
         alias = f"__ta{self.aliases}_{name}"
         self.captured.append((alias, name))
-        captured = [substitute(copy.deepcopy(e), name, ast.Name(id=alias, ctx=ast.Load())) for e in elements]
-        bind = ast.copy_location(
-            ast.Assign(targets=[ast.Name(id=alias, ctx=ast.Store())], value=ast.Name(id=name, ctx=ast.Load())), at
-        )
+        captured = [substitute(copy.deepcopy(e), name, name_(alias)) for e in elements]
+        bind = ast.copy_location(ast.Assign(targets=[store_(alias)], value=name_(name)), at)
         env.bound.add(alias)
         if name in env.kinds:
             env.kinds[alias] = env.kinds[name]

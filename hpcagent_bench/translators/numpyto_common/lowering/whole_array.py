@@ -6,7 +6,7 @@ from types import NotImplementedType
 from typing import Any
 
 from hpcagent_bench.translators.numpyto_common import dtypes
-from hpcagent_bench.translators.numpyto_common.ast_build import numpy_attribute, range_for
+from hpcagent_bench.translators.numpyto_common.ast_build import name_, numpy_attribute, range_for, store_
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.frontend import fold_shape_expr, substitute_inlined_scalar_defs
 from hpcagent_bench.translators.numpyto_common.lib_nodes.constructors import MESHGRID_AXIS_KW, expand_meshgrid
@@ -275,12 +275,8 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
         if not shape:
             return []
         iters = [f"__w{i}" for i in range(len(shape))]
-        idx = (
-            ast.Name(id=iters[0], ctx=ast.Load())
-            if len(iters) == 1
-            else ast.Tuple(elts=[ast.Name(id=i, ctx=ast.Load()) for i in iters], ctx=ast.Load())
-        )
-        lhs_sub = ast.Subscript(value=ast.Name(id=target.id, ctx=ast.Load()), slice=idx, ctx=ast.Store())
+        idx = name_(iters[0]) if len(iters) == 1 else ast.Tuple(elts=[name_(i) for i in iters], ctx=ast.Load())
+        lhs_sub = ast.Subscript(value=name_(target.id), slice=idx, ctx=ast.Store())
         # A slice- or newaxis-bearing RHS (``delta = xi[None, :, None, :] - x[aj][:, None, :, :]``)
         # has no Name to subscriptify: the operands are already Subscripts, and left alone they
         # reach the emitter as whole-array slices. Scalarise them against the nest first, with the
@@ -288,7 +284,7 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
         # is a full slice starting at 0.
         rhs = copy.deepcopy(value)
         if any(isinstance(n, ast.Slice) or is_newaxis(n) for n in ast.walk(rhs)):
-            iter_nodes = [ast.Name(id=i, ctx=ast.Load()) for i in iters]
+            iter_nodes = [name_(i) for i in iters]
             full_dims = [ast.Slice(lower=None, upper=None, step=None) for unused in iters]
             zero_ranges = [(const_(0), const_(0)) for unused in iters]
             rewriter = SliceToScalarRewriter(self.shape_table, iter_nodes, zero_ranges, target.id, full_dims)
@@ -322,9 +318,9 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
         if op is None:
             self_ref = any(isinstance(n, ast.Name) and n.id == target.id for n in ast.walk(value))
             marker = ast.Assign(
-                targets=[ast.Name(id=target.id, ctx=ast.Store())],
+                targets=[store_(target.id)],
                 value=ast.Call(
-                    func=ast.Name(id="__hpcagent_bench_zeros__", ctx=ast.Load()),
+                    func=name_("__hpcagent_bench_zeros__"),
                     args=[
                         ast.Constant(value="__reassign__"),
                         ast.Constant(value=self_ref),
@@ -360,10 +356,8 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
         if not rhs_shape or len(rhs_shape) != len(remaining):
             return []
         iters = [f"__w{i}" for i in range(len(remaining))]
-        full_idx = list(given) + [ast.Name(id=i, ctx=ast.Load()) for i in iters]
-        lhs_sub = ast.Subscript(
-            value=ast.Name(id=name, ctx=ast.Load()), slice=ast.Tuple(elts=full_idx, ctx=ast.Load()), ctx=ast.Store()
-        )
+        full_idx = list(given) + [name_(i) for i in iters]
+        lhs_sub = ast.Subscript(value=name_(name), slice=ast.Tuple(elts=full_idx, ctx=ast.Load()), ctx=ast.Store())
         rhs = SubscriptifyNames(self.shape_table, iters).visit(copy.deepcopy(value))
         return wrap_for_loops(iters, remaining, [ast.Assign(targets=[lhs_sub], value=rhs)])
 
@@ -398,12 +392,12 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
             self.local_dtypes[gname] = self.local_dtypes[name]
 
         def g_index() -> ast.expr:
-            names = [ast.Name(id=i, ctx=ast.Load()) for i in iters]
+            names = [name_(i) for i in iters]
             return names[0] if len(names) == 1 else ast.Tuple(elts=names, ctx=ast.Load())
 
-        g_store = ast.Subscript(value=ast.Name(id=gname, ctx=ast.Load()), slice=g_index(), ctx=ast.Store())
-        g_load = ast.Subscript(value=ast.Name(id=gname, ctx=ast.Load()), slice=g_index(), ctx=ast.Load())
-        a_load = ast.Subscript(value=ast.Name(id=name, ctx=ast.Load()), slice=copy.deepcopy(lhs_slice), ctx=ast.Load())
+        g_store = ast.Subscript(value=name_(gname), slice=g_index(), ctx=ast.Store())
+        g_load = ast.Subscript(value=name_(gname), slice=g_index(), ctx=ast.Load())
+        a_load = ast.Subscript(value=name_(name), slice=copy.deepcopy(lhs_slice), ctx=ast.Load())
         gather = loop_(ast.Assign(targets=[g_store], value=a_load))
         store = loop_(ast.Assign(targets=[copy.deepcopy(lhs)], value=ast.BinOp(left=g_load, op=op, right=rhs)))
         out = [gather, store]
@@ -436,7 +430,7 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
                 n_sliced += 1
                 hi = e.upper if e.upper is not None else const_or_name(self.shape_table[name][k])
                 bound = hi if e.lower is None else ast.BinOp(left=hi, op=ast.Sub(), right=copy.deepcopy(e.lower))
-                pos: ast.expr = ast.Name(id=ivar, ctx=ast.Load())
+                pos: ast.expr = name_(ivar)
                 if e.lower is not None:
                     pos = ast.BinOp(left=pos, op=ast.Add(), right=copy.deepcopy(e.lower))
                 new_lead.append(pos)
@@ -516,7 +510,7 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
         iters = [i for i, unused in plan]
         bounds = [b for unused, b in plan]
         lhs_slice = new_lead[0] if len(new_lead) == 1 else ast.Tuple(elts=new_lead, ctx=ast.Load())
-        lhs = ast.Subscript(value=ast.Name(id=name, ctx=ast.Load()), slice=lhs_slice, ctx=ast.Store())
+        lhs = ast.Subscript(value=name_(name), slice=lhs_slice, ctx=ast.Store())
         # The RHS reads the same index arrays at the same iter. An index EXPRESSION
         # (``src[ia - 1, :]``) reaches emit with the array name still bare otherwise, which is
         # the invalid pointer arithmetic this rewriter exists to avoid; substituting first
@@ -563,7 +557,7 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
         :attr:`local_dtypes`."""
         shape_tuple = ast.Tuple(elts=[copy.deepcopy(d) for d in dims], ctx=ast.Load())
         return ast.Assign(
-            targets=[ast.Name(id=name, ctx=ast.Store())],
+            targets=[store_(name)],
             value=ast.Call(
                 func=numpy_attribute("empty"),
                 args=[shape_tuple],
@@ -585,18 +579,11 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
             return None
         k = len(ops)
         iters = self.ix_iters("__ixg", k)
-        read = [
-            scalarize_at_iters(copy.deepcopy(op), [ast.Name(id=it, ctx=ast.Load())], self.shape_table)
-            for op, it in zip(ops, iters)
-        ]
+        read = [scalarize_at_iters(copy.deepcopy(op), [name_(it)], self.shape_table) for op, it in zip(ops, iters)]
         read_slot = read[0] if k == 1 else ast.Tuple(elts=read, ctx=ast.Load())
-        src = ast.Subscript(value=ast.Name(id=arr.id, ctx=ast.Load()), slice=read_slot, ctx=ast.Load())
-        out_slot = (
-            ast.Name(id=iters[0], ctx=ast.Load())
-            if k == 1
-            else ast.Tuple(elts=[ast.Name(id=it, ctx=ast.Load()) for it in iters], ctx=ast.Load())
-        )
-        store = ast.Subscript(value=ast.Name(id=target.id, ctx=ast.Load()), slice=out_slot, ctx=ast.Store())
+        src = ast.Subscript(value=name_(arr.id), slice=read_slot, ctx=ast.Load())
+        out_slot = name_(iters[0]) if k == 1 else ast.Tuple(elts=[name_(it) for it in iters], ctx=ast.Load())
+        store = ast.Subscript(value=name_(target.id), slice=out_slot, ctx=ast.Store())
         body: list[ast.stmt] = [ast.Assign(targets=[store], value=src)]
         for it, dim in zip(reversed(iters), reversed(dims)):
             body = [range_for(it, [copy.deepcopy(dim)], body)]
@@ -622,12 +609,9 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
             return None
         k = len(ops)
         iters = self.ix_iters("__ixs", k)
-        lhs_idx = [
-            scalarize_at_iters(copy.deepcopy(o), [ast.Name(id=it, ctx=ast.Load())], self.shape_table)
-            for o, it in zip(ops, iters)
-        ]
+        lhs_idx = [scalarize_at_iters(copy.deepcopy(o), [name_(it)], self.shape_table) for o, it in zip(ops, iters)]
         lhs_slot = lhs_idx[0] if k == 1 else ast.Tuple(elts=lhs_idx, ctx=ast.Load())
-        lhs = ast.Subscript(value=ast.Name(id=arr.id, ctx=ast.Load()), slice=lhs_slot, ctx=ast.Store())
+        lhs = ast.Subscript(value=name_(arr.id), slice=lhs_slot, ctx=ast.Store())
         rhs = SubscriptifyNames(self.shape_table, iters).visit(copy.deepcopy(value))
         stmt: ast.stmt = (
             ast.Assign(targets=[lhs], value=rhs) if op is None else ast.AugAssign(target=lhs, op=op, value=rhs)
@@ -683,9 +667,7 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
                 ast.keyword(arg="indexing", value=ast.Constant(value=indexing)),
                 ast.keyword(arg=MESHGRID_AXIS_KW, value=ast.Constant(value=d)),
             ]
-            loops = expand_meshgrid(
-                ast.Name(id=gname, ctx=ast.Store()), [copy.deepcopy(a) for a in args], self.shape_table, kwargs=kwargs
-            )
+            loops = expand_meshgrid(store_(gname), [copy.deepcopy(a) for a in args], self.shape_table, kwargs=kwargs)
             out_stmts.append(self.empty_alloc(gname, out_dims))
             out_stmts.extend(loops)
         for s in out_stmts:
@@ -800,7 +782,7 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
             if isinstance(node.value, ast.Call) and is_constructor_call(node.value):
                 return node
             name = target.value.id
-            expanded = self.expand_(ast.Name(id=name, ctx=ast.Store()), node.value, None)
+            expanded = self.expand_(store_(name), node.value, None)
             if expanded:
                 return expanded
         # ``A[i] = B`` -- partial-subscript LHS (a row / sub-array) assigned a
@@ -1209,8 +1191,8 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
             return []  # full index -> scalar; nothing to loop
         iters = [f"__w{i}" for i in range(n_trailing)]
         trailing = shape[-n_trailing:]
-        lhs_idx = ast.Tuple(elts=list(lead) + [ast.Name(id=i, ctx=ast.Load()) for i in iters], ctx=ast.Load())
-        lhs_sub = ast.Subscript(value=ast.Name(id=name, ctx=ast.Load()), slice=lhs_idx, ctx=ast.Store())
+        lhs_idx = ast.Tuple(elts=list(lead) + [name_(i) for i in iters], ctx=ast.Load())
+        lhs_sub = ast.Subscript(value=name_(name), slice=lhs_idx, ctx=ast.Store())
         rhs = SubscriptifyNames(self.shape_table, iters).visit(copy.deepcopy(value))
         # ``op is None`` -> a plain ``arr[lead] = rhs`` store (stencil_4d's
         # ``out_grid[b] = w_dist[-1] * padded[...]`` slice-expression RHS);
@@ -1264,8 +1246,8 @@ class IndexArraysAtIter(ast.NodeTransformer):
     def visit_Name(self, node: ast.Name) -> ast.AST:
         if node.id in self.idx_names:
             return ast.Subscript(
-                value=ast.Name(id=node.id, ctx=ast.Load()),
-                slice=ast.Name(id=self.it, ctx=ast.Load()),
+                value=name_(node.id),
+                slice=name_(self.it),
                 ctx=ast.Load(),
             )
         return node

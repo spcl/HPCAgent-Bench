@@ -3,6 +3,7 @@ every call site rebinds them."""
 
 import ast
 
+from hpcagent_bench.translators.numpyto_common.ast_build import name_
 from hpcagent_bench.translators.numpyto_jax.names import as_store, base_name, is_assignable
 
 __all__ = [
@@ -121,7 +122,7 @@ def augment_returns(fn: ast.FunctionDef, mutated: list[str]) -> None:
         present = {e.id for e in cur if isinstance(e, ast.Name)}
         extra = [m for m in mutated if m not in present]
         if extra:
-            stmt.value = ast.Tuple(elts=cur + [ast.Name(id=m, ctx=ast.Load()) for m in extra], ctx=ast.Load())
+            stmt.value = ast.Tuple(elts=cur + [name_(m) for m in extra], ctx=ast.Load())
 
 
 def own_returns(fn: ast.FunctionDef) -> list[ast.Return]:

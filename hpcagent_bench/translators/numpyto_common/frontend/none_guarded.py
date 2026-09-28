@@ -3,6 +3,7 @@
 import ast
 import copy
 
+from hpcagent_bench.translators.numpyto_common.ast_build import name_, store_
 from hpcagent_bench.translators.numpyto_common.frontend.inlining import (
     SubstNames,
     collect_assigned_names,
@@ -277,7 +278,7 @@ class SpliceNoneGuardedCalls:
         prefix = f"__inl{self._counter[0]}_"
         reassigned_params = []
         for ln in local_names:
-            rename[ln] = ast.Name(id=f"{prefix}{ln}", ctx=ast.Load())
+            rename[ln] = name_(f"{prefix}{ln}")
             if ln in arg_map:
                 reassigned_params.append(ln)
         renamer = SubstNames(rename)
@@ -297,7 +298,7 @@ class SpliceNoneGuardedCalls:
         new_stmts: list[ast.stmt] = []
         for pn in reassigned_params:
             init = ast.Assign(
-                targets=[ast.Name(id=f"{prefix}{pn}", ctx=ast.Store())],
+                targets=[store_(f"{prefix}{pn}")],
                 value=ast.parse(ast.unparse(arg_map[pn]), mode="eval").body,
             )
             ast.fix_missing_locations(init)

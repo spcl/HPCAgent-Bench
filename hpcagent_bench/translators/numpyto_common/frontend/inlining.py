@@ -3,6 +3,7 @@
 import ast
 import copy
 
+from hpcagent_bench.translators.numpyto_common.ast_build import name_, store_
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
 
 __all__ = [
@@ -664,8 +665,8 @@ class HoistMultiStmtHelpers(ast.NodeTransformer):
                         self._counter[0] += 1
                         temp = f"__hcall{self._counter[0]}"
                     self._taken.add(temp)
-                    self._pending.append(ast.Assign(targets=[ast.Name(id=temp, ctx=ast.Store())], value=call))
-                    return ast.Name(id=temp, ctx=ast.Load())
+                    self._pending.append(ast.Assign(targets=[store_(temp)], value=call))
+                    return name_(temp)
                 return call
 
         return Replacer().visit(expr)
@@ -741,7 +742,7 @@ class InlineHelpers(ast.NodeTransformer):
                 # caller's argument array is never mutated by the rebind.
                 reassigned_params: list[str] = []
                 for ln in local_names:
-                    rename[ln] = ast.Name(id=f"{prefix}{ln}", ctx=ast.Load())
+                    rename[ln] = name_(f"{prefix}{ln}")
                     if ln in arg_map:
                         reassigned_params.append(ln)
                 # Substitute throughout the helper body and the return
@@ -750,7 +751,7 @@ class InlineHelpers(ast.NodeTransformer):
                 new_body: list[ast.stmt] = []
                 for pn_ in reassigned_params:
                     init_ = ast.Assign(
-                        targets=[ast.Name(id=f"{prefix}{pn_}", ctx=ast.Store())],
+                        targets=[store_(f"{prefix}{pn_}")],
                         value=ast.parse(ast.unparse(arg_map[pn_]), mode="eval").body,
                     )
                     ast.fix_missing_locations(init_)
@@ -828,7 +829,7 @@ class InlineHelpers(ast.NodeTransformer):
                 # arg -- which is what we want for ``pn`` to remain a
                 # distinct local through the inlined body.
                 continue
-            rename[ln] = ast.Name(id=f"{prefix}{ln}", ctx=ast.Load())
+            rename[ln] = name_(f"{prefix}{ln}")
         renamer = SubstNames(rename)
         new_body: list[ast.stmt] = []
         for stmt in body:

@@ -3,7 +3,7 @@
 import ast
 import copy
 
-from hpcagent_bench.translators.numpyto_common.ast_build import SubstituteLoads, expr_of
+from hpcagent_bench.translators.numpyto_common.ast_build import SubstituteLoads, expr_of, name_, store_
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module, numpy_call_attr
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import AUG_OP_SRC, RewritePass
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.hoist import HoistForm, ValueHoist
@@ -144,7 +144,7 @@ def hoist_fancy_gather(node: ast.AST, hoist: ValueHoist) -> ast.expr | None:
     p = f"__gather{hoist.ctr}"
     hoist.ctr += 1
     hoist.queue(fancy_gather_lines(arr, elts, elt_ranks, arrs[0], p))
-    return ast.Name(id=f"{p}_o", ctx=ast.Load())
+    return name_(f"{p}_o")
 
 
 FANCY_GATHER_HOIST = HoistForm(frozenset(), (ast.Tuple,), hoist_fancy_gather)
@@ -269,14 +269,14 @@ class DecomposeRollSlice(ast.NodeTransformer):
         out: list[ast.stmt] = []
         if not op_bare:  # snapshot a sliced operand into a bare-name temp
             src = self.fresh_()
-            out.append(ast.Assign(targets=[ast.Name(id=src, ctx=ast.Store())], value=v.args[0]))
-            v.args[0] = ast.Name(id=src, ctx=ast.Load())
+            out.append(ast.Assign(targets=[store_(src)], value=v.args[0]))
+            v.args[0] = name_(src)
         if tgt_bare:
             out.append(node)  # target bare -> roll writes it directly
         else:  # roll into a bare temp, then copy back to the sliced target
             dst = self.fresh_()
-            out.append(ast.Assign(targets=[ast.Name(id=dst, ctx=ast.Store())], value=v))
-            out.append(ast.Assign(targets=[target], value=ast.Name(id=dst, ctx=ast.Load())))
+            out.append(ast.Assign(targets=[store_(dst)], value=v))
+            out.append(ast.Assign(targets=[target], value=name_(dst)))
         for s in out:
             ast.copy_location(s, node)
         self.changed = True

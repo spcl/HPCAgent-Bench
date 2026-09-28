@@ -3,7 +3,7 @@
 import ast
 import copy
 
-from hpcagent_bench.translators.numpyto_common.ast_build import const_int
+from hpcagent_bench.translators.numpyto_common.ast_build import const_int, name_, store_
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import numpy_call_attr
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import (
     DesugarError,
@@ -167,7 +167,7 @@ class BincountInline(RankedRewritePass):
                 f"    {name}[{idx}[{it}]] += {rhs}",
             ]
             pre.extend(ast.parse("\n".join(lines)).body)
-            call.func = ast.Name(id="__bincount_result__", ctx=ast.Load())
+            call.func = name_("__bincount_result__")
             replace_call_with_name(node, call, name)
         self.changed = True
         out = pre + [node]
@@ -278,17 +278,15 @@ class SearchsortedMaterialize(RewritePass):
             self._ctr += 1
             pre.append(
                 ast.Assign(
-                    targets=[ast.Name(id=tmp, ctx=ast.Store())],
+                    targets=[store_(tmp)],
                     value=ast.Call(
-                        func=ast.Attribute(
-                            value=ast.Name(id="np", ctx=ast.Load()), attr="ascontiguousarray", ctx=ast.Load()
-                        ),
+                        func=ast.Attribute(value=name_("np"), attr="ascontiguousarray", ctx=ast.Load()),
                         args=[call.args[0]],
                         keywords=[],
                     ),
                 )
             )
-            call.args[0] = ast.Name(id=tmp, ctx=ast.Load())
+            call.args[0] = name_(tmp)
         self.changed = True
         out = pre + [node]
         for stmt in out:
@@ -370,7 +368,7 @@ def hoist_histogram(node: ast.AST, hoist: ValueHoist) -> ast.expr | None:
         f"        {temp}[{p}_b] += {add}",
     ]
     hoist.queue(lines)
-    return ast.Name(id=temp, ctx=ast.Load())
+    return name_(temp)
 
 
 HISTOGRAM_HOIST = HoistForm(frozenset({"histogram"}), (), hoist_histogram)
@@ -413,7 +411,7 @@ def hoist_repeat_axis(node: ast.AST, hoist: ValueHoist) -> ast.expr | None:
     src_idx = ", ".join((f"{iters[k]} // {ms}" if d == k else iters[d]) for d in range(rank))
     lines.append(f"{deep}{out}[{', '.join(iters)}] = {xid}[{src_idx}]")
     hoist.queue(lines)
-    return ast.Name(id=out, ctx=ast.Load())
+    return name_(out)
 
 
 REPEAT_AXIS_HOIST = HoistForm(frozenset({"repeat"}), (), hoist_repeat_axis)
