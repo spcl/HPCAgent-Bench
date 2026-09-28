@@ -105,17 +105,6 @@ Re-verify a candidate without rebuilding with `VERIFY_ONLY=1` on `build_and_veri
 IMAGE=$SCRATCH/ce-images/<candidate>.sqsh PROFILE=<profile> sbatch verify_image.sbatch
 ```
 
-Fabric checks after a judge-agent build (name the candidate: the live names still hold the old image):
-
-| job | nodes | answers |
-|---|---|---|
-| `mpi_multinode_check.sbatch` | 2 | a cross-node MPI transfer rides cxi |
-| `rccl_hook_check.sbatch` | 2 | RCCL selects the OFI plugin, not its TCP fallback (any role) |
-
-```bash
-IMAGE=$SCRATCH/ce-images/hpcagent-bench-ce-amd-mi300-candidate.sqsh sbatch --dependency=afterok:<build job> mpi_multinode_check.sbatch
-```
-
 ### NVIDIA GH200 (daint)
 
 The scripts write no account or partition; sbatch reads both from the environment. A podman
