@@ -3,6 +3,7 @@
 import ast
 import copy
 
+from hpcagent_bench.translators.numpyto_common.ast_build import SubstituteLoads, expr_of
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module, numpy_call_attr
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import AUG_OP_SRC, RewritePass
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.hoist import HoistForm, ValueHoist
@@ -378,7 +379,7 @@ class FancySliceStoreToLoop(ast.NodeTransformer):
         self._ctr += 1
         it = f"{p}_i"
         idx_name = next(n.id for n in ast.walk(lead[k]) if isinstance(n, ast.Name) and self.ranks.get(n.id) == 1)
-        at_iter = SubstituteName(idx_name, f"{idx_name}[{it}]").visit(copy.deepcopy(lead[k]))
+        at_iter = SubstituteLoads({idx_name: expr_of(f"{idx_name}[{it}]")}).visit(copy.deepcopy(lead[k]))
         new_lead = [ast.unparse(e) if j != k else ast.unparse(at_iter) for j, e in enumerate(lead)]
         lines = [
             f"{p}_v = {ast.unparse(value)}",
@@ -398,17 +399,6 @@ class FancySliceStoreToLoop(ast.NodeTransformer):
         self.generic_visit(node)
         op = AUG_OP_SRC.get(type(node.op))
         return node if op is None else self.lower_(node, node.target, node.value, op)
-
-
-class SubstituteName(ast.NodeTransformer):
-    """Replace bare ``name`` with the parsed ``text``."""
-
-    def __init__(self, name: str, text: str) -> None:
-        self.name = name
-        self.repl = ast.parse(text, mode="eval").body
-
-    def visit_Name(self, node: ast.Name) -> ast.AST:
-        return copy.deepcopy(self.repl) if node.id == self.name else node
 
 
 class IxWriteToLoop(ast.NodeTransformer):

@@ -5,6 +5,7 @@ from collections.abc import Callable
 from types import NotImplementedType
 
 from hpcagent_bench.translators.numpyto_common import dtypes
+from hpcagent_bench.translators.numpyto_common.ast_build import const_int
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.lib_nodes.call_args import const_axis, kwarg_or_pos, read_axis_keepdims
 from hpcagent_bench.translators.numpyto_common.lib_nodes.constructors import arange_count
@@ -16,7 +17,7 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import (
     iter_extent_of,
     sum_width_tokens,
 )
-from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import attr_call, const_int, reads_complex
+from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import attr_call, reads_complex
 from hpcagent_bench.translators.numpyto_common.lib_nodes.matmul_hoist import MatmulHoister
 from hpcagent_bench.translators.numpyto_common.lib_nodes.registry import ELEMENTWISE_SHAPE_OPS, NP_CALL_EXPANDERS
 from hpcagent_bench.translators.numpyto_common.lib_nodes.repeat import diff_operand

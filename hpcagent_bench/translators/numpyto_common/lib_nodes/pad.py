@@ -3,11 +3,11 @@
 import ast
 import copy
 
+from hpcagent_bench.translators.numpyto_common.ast_build import const_int
 from hpcagent_bench.translators.numpyto_common.lib_nodes.call_args import kwarg_or_pos, pad_widths
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of, pad_output_extent
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
     const_,
-    const_int,
     const_or_name,
     name_,
     store_,

@@ -2,8 +2,10 @@
 
 import ast
 import re
-from functools import lru_cache
 from collections.abc import Callable
+from functools import lru_cache
+
+from hpcagent_bench.translators.numpyto_common.ast_build import const_int
 
 __all__ = [
     "FOLD_OPS",
@@ -12,7 +14,6 @@ __all__ = [
     "binding_counts",
     "collect_inlined_scalar_defs",
     "combine_like_terms",
-    "const_int",
     "divide_multiple_term",
     "exact_multiple_factor",
     "exact_quotient_with_remainder",
@@ -167,17 +168,6 @@ FOLD_OPS: dict[type[ast.operator], Callable[[int, int], int]] = {
     ast.Sub: lambda a, b: a - b,
     ast.Mult: lambda a, b: a * b,
 }
-
-
-def const_int(node: ast.expr) -> int | None:
-    """``node`` as a Python int, or None. Accepts a negated literal (``-1`` parses as a UnaryOp)."""
-    if isinstance(node, ast.Constant) and isinstance(node.value, int) and not isinstance(node.value, bool):
-        return node.value
-    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
-        inner = const_int(node.operand)
-        if inner is not None:
-            return -inner if isinstance(node.op, ast.USub) else inner
-    return None
 
 
 def exact_multiple_factor(numerator: ast.expr, denominator: ast.expr) -> int | None:

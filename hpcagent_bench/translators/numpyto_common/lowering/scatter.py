@@ -3,9 +3,10 @@
 import ast
 import copy
 
+from hpcagent_bench.translators.numpyto_common.ast_build import const_int
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import broadcast_extents, iter_extent_of
-from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import const_int, const_or_name
+from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import const_or_name
 from hpcagent_bench.translators.numpyto_common.lib_nodes.scalarize import scalarize_at_iters
 from hpcagent_bench.translators.numpyto_common.subscripts import is_full_slice
 

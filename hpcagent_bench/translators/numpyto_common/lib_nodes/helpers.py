@@ -1,10 +1,10 @@
 """AST builders and small shape/slice predicates shared by every expander."""
 
 import ast
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from typing import Any
-from collections.abc import Callable
 
+from hpcagent_bench.translators.numpyto_common.ast_build import const_int
 from hpcagent_bench.translators.numpyto_common.subscripts import is_full_slice
 
 __all__ = [
@@ -14,7 +14,6 @@ __all__ = [
     "attr_call",
     "cmp_",
     "const_",
-    "const_int",
     "const_or_name",
     "falsy",
     "flat_index_",
@@ -373,21 +372,6 @@ def alloc_marker(name: str) -> ast.Assign:
 def cmp_(op: type[ast.cmpop]) -> Callable[[ast.expr, ast.expr], ast.expr]:
     """Return an op_fn that builds ``ast.Compare(left=x, ops=[op], comparators=[y])``."""
     return lambda x, y: ast.Compare(left=x, ops=[op()], comparators=[y])
-
-
-def const_int(node: ast.expr | None) -> int | None:
-    """A plain (possibly negative) int constant, or ``None``. A negative literal parses as
-    ``UnaryOp(USub, Constant(n))`` -- not ``Constant(-n)`` -- so handle both."""
-    if (
-        isinstance(node, ast.UnaryOp)
-        and isinstance(node.op, ast.USub)
-        and isinstance(node.operand, ast.Constant)
-        and isinstance(node.operand.value, int)
-    ):
-        return -node.operand.value
-    if isinstance(node, ast.Constant) and isinstance(node.value, int):
-        return node.value
-    return None
 
 
 def mul_exts(exprs: Iterable[ast.expr]) -> ast.expr:

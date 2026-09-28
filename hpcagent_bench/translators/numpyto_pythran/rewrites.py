@@ -3,10 +3,10 @@
 import ast
 import copy
 
+from hpcagent_bench.translators.numpyto_common.ast_build import RenameNames, numpy_attribute
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.ir import KernelIR
 from hpcagent_bench.translators.numpyto_common.numpy_desugar import expr_rank
-from hpcagent_bench.translators.numpyto_common.ast_build import numpy_attribute
 from hpcagent_bench.translators.numpyto_common.subscripts import is_ellipsis, is_newaxis
 
 __all__ = [
@@ -47,19 +47,6 @@ class SubstitutePrecisionGlobals(ast.NodeTransformer):
 PYTHRAN_RESERVED_PARAMS = {"res"}
 
 
-class RenameName(ast.NodeTransformer):
-    """Rename every ``Name`` load/store of ``old`` to ``new`` within a scope."""
-
-    def __init__(self, old: str, new: str) -> None:
-        self.old = old
-        self.new = new
-
-    def visit_Name(self, node: ast.Name) -> ast.Name:
-        if node.id == self.old:
-            node.id = self.new
-        return node
-
-
 def rename_reserved_params(tree: ast.Module, kernel_name: str) -> None:
     """Rename any kernel parameter colliding with a pythran wrapper identifier
     (``res``) to a fresh ``<name>_`` (signature and body). In-place."""
@@ -73,7 +60,7 @@ def rename_reserved_params(tree: ast.Module, kernel_name: str) -> None:
             while new in taken:
                 new += "_"
             taken.add(new)
-            RenameName(arg.arg, new).visit(fn)
+            RenameNames({arg.arg: new}).visit(fn)
             arg.arg = new
 
 

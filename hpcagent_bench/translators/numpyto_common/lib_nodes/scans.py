@@ -2,14 +2,14 @@
 
 import ast
 import copy
-from typing import Any
 from collections.abc import Callable
+from typing import Any
 
+from hpcagent_bench.translators.numpyto_common.ast_build import const_int
 from hpcagent_bench.translators.numpyto_common.lib_nodes.call_args import const_axis, kwarg_or_pos, read_axis_keepdims
 from hpcagent_bench.translators.numpyto_common.lib_nodes.elementwise import args_one_name
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
     const_,
-    const_int,
     const_or_name,
     name_,
     store_,

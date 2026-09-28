@@ -85,7 +85,6 @@ __all__ = [
     "assigned_bool_literal",
     "case_safe_name",
     "coerce_to_fortran_type",
-    "collect_for_targets",
     "collect_implicit_locals",
     "complex_tag_for",
     "constant_tuple_element",
@@ -3157,7 +3156,7 @@ def emit_fortran(kir: KernelIR, fn_name: str | None = None, parallel: bool = Fal
 
     # Loop iter var declarations (Fortran needs explicit declaration), at the
     # int64 ABI width (same as the size symbols) so they don't clash under -std=f2018.
-    iter_vars = collect_for_targets(kir.tree.body)
+    iter_vars = loop_target_names(kir.tree)
     iter_decls = [f"    {fortran_type('int')} :: " + ", ".join(sorted(iter_vars))] if iter_vars else []
 
     # ALLOCATE / DEALLOCATE around the body for any allocatable locals.
@@ -3502,10 +3501,8 @@ def collect_implicit_locals(kir: KernelIR) -> list[tuple[str, str]]:
     declared.update(kir.input_args)
     declared.update(kir.int_locals)
     declared.update(kir.zeros_locals.keys())
-    # Loop iter vars are declared separately via collect_for_targets.
-    for s in ast.walk(kir.tree):
-        if isinstance(s, ast.For) and isinstance(s.target, ast.Name):
-            declared.add(s.target.id)
+    # Loop iter vars are declared separately (see emit_fortran).
+    declared.update(loop_target_names(kir.tree))
     seen: set[str] = set(declared)
     out: list[tuple[str, str]] = []
     for node in ast.walk(kir.tree):
@@ -3763,14 +3760,6 @@ class LocalTyping:
         return self.real_t
 
 
-def collect_for_targets(stmts: list[ast.stmt]) -> set[str]:
-    found: set[str] = set()
-    for s in ast.walk(ast.Module(body=stmts, type_ignores=[])):
-        if isinstance(s, ast.For) and isinstance(s.target, ast.Name):
-            found.add(s.target.id)
-    return found
-
-
 #: Dummy that carries a scalar-returning helper's result back (Fortran has no by-value return here).
 HELPER_RET = "hret_"
 
@@ -3983,7 +3972,7 @@ def emit_fortran_helper(
     local_arr_decls, helper_inline_alloc, helper_elem_dtypes = helper_local_array_decls(hkir, helper_logicals)
     implicit = collect_implicit_locals(hkir)
     local_decls = local_arr_decls + [f"{ft} :: {nm}" for nm, ft in implicit]
-    iter_vars = collect_for_targets(hkir.tree.body)
+    iter_vars = loop_target_names(hkir.tree)
     iter_decls = [f"{fortran_type('int')} :: " + ", ".join(sorted(iter_vars))] if iter_vars else []
     be = FortranBodyEmitter(hkir)
     # A helper may call its SIBLINGS (they are all contained in the same host), so its body needs the

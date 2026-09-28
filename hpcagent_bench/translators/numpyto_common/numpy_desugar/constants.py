@@ -7,8 +7,9 @@ import operator
 from collections.abc import Callable, Iterator, Sequence
 
 from hpcagent_bench.translators.numpyto_common import dtypes
+from hpcagent_bench.translators.numpyto_common.ast_build import SubstituteLoads, const_int, literal_loads
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
-from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import const_int, name_store_counts
+from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import name_store_counts
 
 __all__ = [
     "BINARY_OPS",
@@ -414,19 +415,6 @@ def const_iterable(node: ast.expr, consts: dict[str, object]) -> Sequence[object
     return None
 
 
-class SubstConstName(ast.NodeTransformer):
-    """Every LOAD of ``name`` -> ``value`` (one unrolled comprehension iteration)."""
-
-    def __init__(self, name: str, value: ast.expr) -> None:
-        self.name = name
-        self.value = value
-
-    def visit_Name(self, node: ast.Name) -> ast.AST:
-        if node.id != self.name or not isinstance(node.ctx, ast.Load):
-            return node
-        return ast.copy_location(copy.deepcopy(self.value), node)
-
-
 class ListCompUnroll(ast.NodeTransformer):
     """``[f(x, i) for i in range(3)]`` -> ``[f(x, 0), f(x, 1), f(x, 2)]``.
 
@@ -464,7 +452,7 @@ class ListCompUnroll(ast.NodeTransformer):
             lit = const_literal_ast(v)
             if lit is None:
                 return node
-            elts.append(SubstConstName(name, lit).visit(copy.deepcopy(node.elt)))
+            elts.append(SubstituteLoads({name: lit}).visit(copy.deepcopy(node.elt)))
         self.changed = True
         return ast.copy_location(ast.List(elts=elts, ctx=ast.Load()), node)
 
@@ -562,15 +550,6 @@ def constant_parameters(fn: ast.FunctionDef, calls: list[ast.Call]) -> dict[str,
 
 def substitute_loads(fn: ast.FunctionDef, subst: dict[str, object]) -> bool:
     """Replace every load of a name in ``subst`` inside ``fn`` by its literal. True when one was replaced."""
-    changed = False
-    for node in ast.walk(fn):
-        for field, value in ast.iter_fields(node):
-            if isinstance(value, ast.Name) and isinstance(value.ctx, ast.Load) and value.id in subst:
-                setattr(node, field, ast.copy_location(ast.Constant(value=subst[value.id]), value))
-                changed = True
-            elif isinstance(value, list):
-                for k, item in enumerate(value):
-                    if isinstance(item, ast.Name) and isinstance(item.ctx, ast.Load) and item.id in subst:
-                        value[k] = ast.copy_location(ast.Constant(value=subst[item.id]), item)
-                        changed = True
+    changed = any(isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load) and n.id in subst for n in ast.walk(fn))
+    literal_loads(subst).visit(fn)
     return changed

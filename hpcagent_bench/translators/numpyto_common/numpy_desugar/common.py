@@ -13,7 +13,6 @@ __all__ = [
     "RankedRewritePass",
     "RewritePass",
     "as_stmts",
-    "const_int",
     "eigh_alias_names",
     "eigh_call_ab",
     "eigh_call_kind",
@@ -66,17 +65,6 @@ def tuple_len(node: ast.AST) -> int | None:
 #: numpy reductions that take an ``axis`` (drops the reduced axes; no axis ->
 #: scalar). Used only for ndim propagation, not rewriting.
 REDUCE_FNS = {"sum", "prod", "mean", "std", "var", "min", "max", "amin", "amax", "argmin", "argmax", "any", "all"}
-
-
-def const_int(node: ast.AST) -> int | None:
-    """A constant integer literal, including a negated one (``axis=-1`` parses as
-    ``UnaryOp(USub, Constant(1))``, NOT ``Constant(-1)``)."""
-    if isinstance(node, ast.Constant) and isinstance(node.value, int) and not isinstance(node.value, bool):
-        return node.value
-    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
-        v = const_int(node.operand)
-        return None if v is None else -v
-    return None
 
 
 def replace_call_with_name(root: ast.AST, target: ast.Call, name: str) -> None:

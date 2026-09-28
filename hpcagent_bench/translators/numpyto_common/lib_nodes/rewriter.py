@@ -6,6 +6,7 @@ import inspect
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
+from hpcagent_bench.translators.numpyto_common.ast_build import const_int
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.ir import tag_numpy_origin
 from hpcagent_bench.translators.numpyto_common.lib_nodes.call_hoist import CallHoister, numpy_call_key
@@ -15,7 +16,6 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import is_integ
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
     alloc_marker,
     const_,
-    const_int,
     is_full_slice_subscript,
     is_shape_scalar,
     reads_complex,

@@ -12,11 +12,19 @@ from typing import NamedTuple, cast
 
 from hpcagent_bench.translators.numpyto_common import dtypes
 from hpcagent_bench.translators.numpyto_common import frontend as common_frontend
+from hpcagent_bench.translators.numpyto_common.ast_build import (
+    RenameNames,
+    SubstituteLoads,
+    expr_of,
+    literal_loads,
+    numpy_attribute,
+)
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.emit_helpers.tokens import IDENT_RE
 from hpcagent_bench.translators.numpyto_common.frontend import PinnedValue, field_nodes, fold_shape_expr
 from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc, KernelIR, ScalarDesc, shape_dimension_symbols
 from hpcagent_bench.translators.numpyto_common.lib_nodes import shape_exprs_equal, sympify_shape
+from hpcagent_bench.translators.numpyto_common.lib_nodes.call_args import np_call_attr
 from hpcagent_bench.translators.numpyto_common.lowering import lower
 from hpcagent_bench.translators.numpyto_common.numpy_desugar import (
     AUG_OP_SRC,
@@ -30,7 +38,6 @@ from hpcagent_bench.translators.numpyto_common.numpy_desugar import (
     promote_kind,
     rank_table,
 )
-from hpcagent_bench.translators.numpyto_common.ast_build import expr_of, numpy_attribute
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.reductions import DACE_NATIVE_REDUCE_FNS, reduce_call_parts
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
 from hpcagent_bench.translators.numpyto_common.parallelism import load_names
@@ -179,7 +186,6 @@ __all__ = [
     "names_rebound",
     "negative_step",
     "nested_in_one_view_region",
-    "np_call_name",
     "once_bound_locals",
     "ordered_reshape_source",
     "output_write_extents",
@@ -1019,7 +1025,7 @@ def fresh_binding_index(block: list[ast.stmt], at: int, name: str) -> int | None
             continue
         if not any(isinstance(target, ast.Name) and target.id == name for target in stmt.targets):
             continue
-        fresh = isinstance(stmt.value, ast.Call) and np_call_name(stmt.value) in FRESH_ARRAY_CALLS
+        fresh = isinstance(stmt.value, ast.Call) and np_call_attr(stmt.value.func) in FRESH_ARRAY_CALLS
         return index if fresh and len(stmt.targets) == 1 else None
     return None
 
@@ -1726,18 +1732,6 @@ def dace_chained_assign_split(seed_ranks: dict[str, int] | None = None) -> Split
     return SplitChainedAssign(lambda ordinal: f"__hpcagent_bench_chain{ordinal}", True, seed_ranks)
 
 
-class SubstituteNames_(ast.NodeTransformer):
-    """Replace every load of a name in ``mapping`` with a copy of its expression."""
-
-    def __init__(self, mapping: dict[str, ast.AST]) -> None:
-        self.mapping = mapping
-
-    def visit_Name(self, node: ast.Name):
-        if isinstance(node.ctx, ast.Load) and node.id in self.mapping:
-            return ast.copy_location(copy.deepcopy(self.mapping[node.id]), node)
-        return node
-
-
 class DropAliasAssign(ast.NodeTransformer):
     """Drop ``<name> = ...`` for each inlined alias name (its uses are substituted)."""
 
@@ -2373,7 +2367,7 @@ class ResolveShapeReads(ast.NodeTransformer):
             tree = ast.parse(token, mode="eval")
         except SyntaxError:
             return token
-        return fold_shape_expr(ast.unparse(SubstituteNames_(self.aliases).visit(tree).body))
+        return fold_shape_expr(ast.unparse(SubstituteLoads(self.aliases).visit(tree).body))
 
     def note_alias(self, name: str, value: ast.AST) -> None:
         """Record ``name = <integer expression>`` so :meth:`canon` can substitute it away."""
@@ -2387,8 +2381,8 @@ class ResolveShapeReads(ast.NodeTransformer):
             return
         self.alias_seen.add(name)
         # Folded on the way in: without it alias N carries alias N-1's whole expansion, so the AST
-        # deepens once per layer and resnet101's 101 layers overflow the deepcopy in SubstituteNames_.
-        self.aliases[name] = fold_expr(SubstituteNames_(self.aliases).visit(copy.deepcopy(value)))
+        # deepens once per layer and resnet101's 101 layers overflow the deepcopy in SubstituteLoads.
+        self.aliases[name] = fold_expr(SubstituteLoads(self.aliases).visit(copy.deepcopy(value)))
 
     def cumulative_axis(self, node: ast.Call) -> tuple[ast.expr, int] | None:
         """``(operand, axis)`` of an ``np.cumsum``/``np.cumprod`` written with a literal axis, else
@@ -3057,18 +3051,6 @@ def shape_reaching_names(body: ast.AST, direct: set[str]) -> set[str]:
     return reaching
 
 
-class SubstituteScalarValues(ast.NodeTransformer):
-    """Replace every READ of a named scalar with its literal value."""
-
-    def __init__(self, values: dict[str, int]) -> None:
-        self.values = values
-
-    def visit_Name(self, node: ast.Name):
-        if isinstance(node.ctx, ast.Load) and node.id in self.values:
-            return ast.copy_location(ast.Constant(value=self.values[node.id]), node)
-        return node
-
-
 def freeze_pinned_extent_scalars(kir: KernelIR) -> KernelIR:
     """Substitute the value of every manifest-pinned integer scalar that reaches an EXTENT.
 
@@ -3130,7 +3112,7 @@ def freeze_pinned_extent_scalars(kir: KernelIR) -> KernelIR:
             frozen[name] = desc.value
     if not frozen:
         return kir
-    tree = SubstituteScalarValues(frozen).visit(copy.deepcopy(kir.tree))
+    tree = literal_loads(frozen).visit(copy.deepcopy(kir.tree))
     ast.fix_missing_locations(tree)
     return dataclasses.replace(kir, tree=tree)
 
@@ -3158,7 +3140,7 @@ def freeze_shape_only_parameters(kir: KernelIR) -> KernelIR:
     # The body too: once helpers are kept, the buffer the kernel allocates for a helper argument is
     # spelled off the same declared extent, and freezing only the declaration left mlp's ``w1`` at
     # ``[C_in, 30000]`` against a ``[N, S0]`` argument buffer dace could not relate to it.
-    tree = ast.fix_missing_locations(SubstituteScalarValues(values).visit(copy.deepcopy(kir.tree)))
+    tree = ast.fix_missing_locations(literal_loads(values).visit(copy.deepcopy(kir.tree)))
     return dataclasses.replace(kir, arrays=arrays, tree=tree)
 
 
@@ -3168,7 +3150,7 @@ def frozen_extent(dim: str, values: dict[str, int]) -> str:
     if not any(ident in values for ident in IDENT_RE.findall(text)):
         return text
     try:
-        tree = SubstituteScalarValues(values).visit(ast.parse(text, mode="eval"))
+        tree = literal_loads(values).visit(ast.parse(text, mode="eval"))
     except SyntaxError:
         return text
     return ast.unparse(ast.fix_missing_locations(tree))
@@ -3359,18 +3341,6 @@ def fold_expr(node: ast.AST) -> ast.AST:
         return node
 
 
-def np_call_name(node: ast.AST) -> str | None:
-    """``np.take`` -> ``"take"``, ``np.linalg.norm`` -> ``"linalg.norm"``, else None."""
-    if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
-        return None
-    base = node.func.value
-    if is_numpy_module(base):
-        return node.func.attr
-    if isinstance(base, ast.Attribute) and is_numpy_module(base.value):
-        return f"{base.attr}.{node.func.attr}"
-    return None
-
-
 def kwarg_value(node: ast.Call, name: str, position: int) -> ast.expr | None:
     """The argument bound to ``name``, whether it was passed by keyword or at ``position``."""
     for kw in node.keywords:
@@ -3492,7 +3462,7 @@ class LowerCallsDaceCannotReplace(ast.NodeTransformer):
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
         self.generic_visit(node)
-        name = np_call_name(node)
+        name = np_call_attr(node.func)
         handlers: dict[str, Callable[[ast.Call], ast.expr | None]] = {
             "take": self.take,
             "round": self.round_half_to_even,
@@ -3674,7 +3644,7 @@ def spell_aranges_with_named_lengths(fn_ast: ast.FunctionDef, known: set[str]) -
                 call = assign.value if assign is not None else None
                 if assign is None or not (
                     isinstance(call, ast.Call)
-                    and np_call_name(call) == "arange"
+                    and np_call_attr(call.func) == "arange"
                     and len(call.args) == 2
                     and not call.keywords
                 ):
@@ -3742,7 +3712,7 @@ def splice_before_rebind(block: list[ast.stmt], start: int, nm: str, rhs: ast.ex
     before, and either way the store has already run."""
     boundary = rebind_boundary(block, start, sources)
     for idx in range(start, boundary):
-        block[idx] = SubstituteNames_({nm: rhs}).visit(block[idx])
+        block[idx] = SubstituteLoads({nm: rhs}).visit(block[idx])
         ast.fix_missing_locations(block[idx])
 
 
@@ -3779,7 +3749,7 @@ def inline_symbol_aliases(fn_ast: ast.FunctionDef, symbols: set[str], known: set
             continue
         # Folded at every splice, or a deep net nests one layer's extent inside the next until the
         # expression is hundreds of terms and dace's sympy stops finishing the parse.
-        rhs = fold_expr(SubstituteNames_(alias).visit(copy.deepcopy(first_rhs[nm])))
+        rhs = fold_expr(SubstituteLoads(alias).visit(copy.deepcopy(first_rhs[nm])))
         sources = {sub.id for sub in ast.walk(first_rhs[nm]) if isinstance(sub, ast.Name) and sub.id in rebound}
         if not sources:
             alias[nm] = rhs
@@ -3790,7 +3760,7 @@ def inline_symbol_aliases(fn_ast: ast.FunctionDef, symbols: set[str], known: set
             splice_before_rebind(block, idx + 1, nm, rhs, sources)
             flow_spliced.append(nm)
     if alias:
-        fn_ast = SubstituteNames_(alias).visit(fn_ast)
+        fn_ast = SubstituteLoads(alias).visit(fn_ast)
         fn_ast = DropAliasAssign(alias).visit(fn_ast)
     fully_spliced = {nm for nm in flow_spliced if not name_loaded(fn_ast, nm)}
     if fully_spliced:
@@ -3969,10 +3939,10 @@ def inline_slice_only_extents(fn_ast: ast.FunctionDef, symbols: set[str], known:
         if nm in reassigned or names_a_clamp(first_rhs[nm]):
             continue
         if is_symbol_expr(first_rhs[nm], atoms | set(alias)):
-            alias[nm] = fold_expr(SubstituteNames_(alias).visit(copy.deepcopy(first_rhs[nm])))
+            alias[nm] = fold_expr(SubstituteLoads(alias).visit(copy.deepcopy(first_rhs[nm])))
     if not alias:
         return fn_ast
-    fn_ast = SubstituteNames_(alias).visit(fn_ast)
+    fn_ast = SubstituteLoads(alias).visit(fn_ast)
     fn_ast = DropAliasAssign(alias).visit(fn_ast)
     ast.fix_missing_locations(fn_ast)
     return fn_ast
@@ -3995,7 +3965,7 @@ def inline_transient_shape_scalars(fn_ast: ast.FunctionDef, known: set[str]) -> 
             alias[nm] = copy.deepcopy(first_rhs[nm])
     if not alias:
         return fn_ast
-    fn_ast = SubstituteNames_(alias).visit(fn_ast)
+    fn_ast = SubstituteLoads(alias).visit(fn_ast)
     fn_ast = DropAliasAssign(alias).visit(fn_ast)
     ast.fix_missing_locations(fn_ast)
     return fn_ast
@@ -4120,34 +4090,6 @@ def sympy_reserved(name: str) -> bool:
     except Exception:  # noqa: BLE001 -- any sympify failure means the name is unusable as a symbol
         return True
     return not any(str(s) == name for s in expr.free_symbols)
-
-
-class RenameNames(ast.NodeTransformer):
-    """Rewrite renamed identifiers wherever they appear -- loads, stores and arguments alike."""
-
-    def __init__(self, renames: dict[str, str]) -> None:
-        self.renames = renames
-
-    def visit_Name(self, node: ast.Name):
-        node.id = self.renames.get(node.id, node.id)
-        return node
-
-    def visit_arg(self, node: ast.arg):
-        node.arg = self.renames.get(node.arg, node.arg)
-        return node
-
-
-class SubstituteNames(ast.NodeTransformer):
-    """Replace each Name in ``values`` by its literal. Used on a symbol RECIPE, which the caller
-    evaluates in its own namespace -- a name that only exists inside the emitted module has to be
-    gone by then, not merely defined here."""
-
-    def __init__(self, values: dict[str, ast.expr]) -> None:
-        self.values = values
-
-    def visit_Name(self, node: ast.Name) -> ast.AST:
-        replacement = self.values.get(node.id)
-        return ast.copy_location(copy.deepcopy(replacement), node) if replacement is not None else node
 
 
 def bound_names(body: list[ast.stmt]) -> OrderedSet[str]:
@@ -4851,7 +4793,7 @@ def without_pinned_symbols(
     symbol_names = [n for n in symbol_names if n not in pinned]
     literals: dict[str, ast.expr] = {n: ast.Constant(value=v) for n, v in pinned.items()}
     symbol_defs = [
-        (n, ast.unparse(SubstituteNames(literals).visit(ast.parse(e, mode="eval")).body)) for n, e in symbol_defs
+        (n, ast.unparse(SubstituteLoads(literals).visit(ast.parse(e, mode="eval")).body)) for n, e in symbol_defs
     ]
     named = {node.id for stmt in body for node in ast.walk(stmt) if isinstance(node, ast.Name)}
     named |= {ident for param in params for ident in IDENT_RE.findall(param)}
@@ -5418,7 +5360,7 @@ def bind_helper_call(node: ast.Call, hkir: KernelIR, rendered: RenderedProgram) 
     # dependency order, so each is resolved against the ones already bound.
     bound: dict[str, ast.expr] = dict(arg_of)
     for sym, recipe in rendered.symbol_defs:
-        bound.setdefault(sym, SubstituteNames(bound).visit(ast.parse(recipe, mode="eval")).body)
+        bound.setdefault(sym, SubstituteLoads(bound).visit(ast.parse(recipe, mode="eval")).body)
     keywords: list[ast.keyword] = []
     for sym in rendered.symbol_names:
         if sym in inferred:

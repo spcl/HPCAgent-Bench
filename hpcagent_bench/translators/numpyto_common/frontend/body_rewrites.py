@@ -4,7 +4,7 @@ import ast
 import copy
 from collections.abc import Iterable
 
-from hpcagent_bench.translators.numpyto_common.ast_build import numpy_attribute
+from hpcagent_bench.translators.numpyto_common.ast_build import const_int, numpy_attribute
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.frontend.initialize import FRAMEWORK_DTYPE_ALIASES
 from hpcagent_bench.translators.numpyto_common.frontend.manifest import field_nodes
@@ -13,7 +13,7 @@ from hpcagent_bench.translators.numpyto_common.frontend.none_folding import (
     PeelNoneSeededAccumulators,
     none_compare,
 )
-from hpcagent_bench.translators.numpyto_common.frontend.shape_arith import const_int, literal_axis
+from hpcagent_bench.translators.numpyto_common.frontend.shape_arith import literal_axis
 from hpcagent_bench.translators.numpyto_common.numpy_desugar import (
     ComplexAccessorToFunc,
     DecomposeRollSlice,

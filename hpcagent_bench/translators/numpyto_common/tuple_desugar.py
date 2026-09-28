@@ -30,6 +30,7 @@ import ast
 import copy
 from typing import Any
 
+from hpcagent_bench.translators.numpyto_common.ast_build import SubstituteLoads
 from hpcagent_bench.translators.numpyto_common.numpy_desugar import expr_rank
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
 
@@ -877,13 +878,7 @@ def as_slice(node: ast.AST) -> ast.Slice | None:
 def substitute(node: ast.expr, name: str, value: ast.expr) -> ast.expr:
     """``node`` with every load of ``name`` replaced by ``value`` (the comprehension unroll)."""
 
-    class Sub_(ast.NodeTransformer):
-        def visit_Name(self, inner: ast.Name) -> ast.AST:
-            if inner.id == name and isinstance(inner.ctx, ast.Load):
-                return ast.copy_location(copy.deepcopy(value), inner)
-            return inner
-
-    return ast.fix_missing_locations(Sub_().visit(node))
+    return ast.fix_missing_locations(SubstituteLoads({name: value}).visit(node))
 
 
 def desugar_tuples(

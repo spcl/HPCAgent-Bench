@@ -3,11 +3,12 @@
 import ast
 import copy
 
-from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc
+from hpcagent_bench.translators.numpyto_common.ast_build import SubstituteLoads
 from hpcagent_bench.translators.numpyto_common.frontend.helper_params import ConstArg
 from hpcagent_bench.translators.numpyto_common.frontend.inlining import collect_assigned_names, fold_constant_branches
 from hpcagent_bench.translators.numpyto_common.frontend.none_folding import FoldStaticNoneBranches
 from hpcagent_bench.translators.numpyto_common.frontend.shapes import resolve_array_ref
+from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc
 
 __all__ = [
     "bind_call_constants",
@@ -99,13 +100,7 @@ def substitute_names(node: ast.Expression, consts: dict[str, ast.expr]) -> ast.E
 
     Returns the (possibly replaced) root so a bare-Name ``node`` is not lost."""
 
-    class Sub_(ast.NodeTransformer):
-        def visit_Name(self, n: ast.Name) -> ast.expr:
-            if isinstance(n.ctx, ast.Load) and n.id in consts:
-                return ast.copy_location(copy.deepcopy(consts[n.id]), n)
-            return n
-
-    return Sub_().visit(node)
+    return SubstituteLoads(consts).visit(node)
 
 
 def drop_unreachable_after_return(stmts: list[ast.stmt]) -> list[ast.stmt]:

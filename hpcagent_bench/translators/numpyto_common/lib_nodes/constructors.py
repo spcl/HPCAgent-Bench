@@ -3,11 +3,11 @@
 import ast
 import copy
 
+from hpcagent_bench.translators.numpyto_common.ast_build import RenameNames, const_int
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
     alloc_marker,
     const_,
-    const_int,
     name_,
     store_,
     wrap_for_loops,
@@ -191,19 +191,6 @@ def expand_arange(target: ast.expr, args: list[ast.expr], shape_table: dict[str,
             target=store_("__i"), iter=ast.Call(func=name_("range"), args=[count], keywords=[]), body=body, orelse=[]
         )
     ]
-
-
-class RenameNames(ast.NodeTransformer):
-    """Rename bare ``Name`` ids per a mapping (used to bind a fromfunction
-    lambda's parameters to the loop iteration variables)."""
-
-    def __init__(self, mapping: dict[str, str]) -> None:
-        self.mapping = mapping
-
-    def visit_Name(self, node: ast.Name) -> ast.AST:
-        if node.id in self.mapping:
-            return ast.copy_location(ast.Name(id=self.mapping[node.id], ctx=node.ctx), node)
-        return node
 
 
 def expand_fromfunction(

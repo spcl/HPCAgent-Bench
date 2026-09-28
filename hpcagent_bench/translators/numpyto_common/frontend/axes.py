@@ -4,12 +4,12 @@ import ast
 import copy
 from collections.abc import Callable, Mapping, Sequence
 
+from hpcagent_bench.translators.numpyto_common.ast_build import RenameNames, const_int, literal_loads
+from hpcagent_bench.translators.numpyto_common.frontend.manifest import preset_constant_symbols
 from hpcagent_bench.translators.numpyto_common.lib_nodes import slice_axes
+from hpcagent_bench.translators.numpyto_common.numpy_desugar import REDUCE_FNS, expr_rank
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
 from hpcagent_bench.translators.numpyto_common.subscripts import index_slot, is_full_slice, is_newaxis
-from hpcagent_bench.translators.numpyto_common.numpy_desugar import REDUCE_FNS, expr_rank
-from hpcagent_bench.translators.numpyto_common.frontend.manifest import preset_constant_symbols
-from hpcagent_bench.translators.numpyto_common.frontend.shape_arith import const_int
 
 __all__ = [
     "AXIS_INSERTS",
@@ -626,9 +626,9 @@ def specialize_runtime_axis(
     branches: list[list[ast.stmt]] = []
     for axis in range(rank):
         clone = copy.deepcopy(fn)
-        SubstituteAxisLiteral(name, axis).visit(clone)
+        literal_loads({name: axis}).visit(clone)
         rename = {n: f"__ax{axis}_{n}" for n in rebound_names(clone) - params}
-        RenameLocals(rename).visit(clone)
+        RenameNames(rename).visit(clone)
         ast.fix_missing_locations(clone)
         resolve(clone)
         branches.append(clone.body)
@@ -647,28 +647,3 @@ def specialize_runtime_axis(
         chain = [ast.If(test=test, body=branches[axis], orelse=chain)]
     fn.body = chain
     ast.fix_missing_locations(fn)
-
-
-class SubstituteAxisLiteral(ast.NodeTransformer):
-    """Replace every read of the dispatched axis with the literal that branch stands for."""
-
-    def __init__(self, name: str, axis: int) -> None:
-        self.name = name
-        self.axis = axis
-
-    def visit_Name(self, node: ast.Name) -> ast.AST:
-        if node.id != self.name or not isinstance(node.ctx, ast.Load):
-            return node
-        return ast.copy_location(ast.Constant(value=self.axis), node)
-
-
-class RenameLocals(ast.NodeTransformer):
-    """Give one branch's locals their own names, so two branches can size the same source-level
-    temp differently."""
-
-    def __init__(self, rename: dict[str, str]) -> None:
-        self.rename = rename
-
-    def visit_Name(self, node: ast.Name) -> ast.AST:
-        new = self.rename.get(node.id)
-        return node if new is None else ast.copy_location(ast.Name(id=new, ctx=node.ctx), node)

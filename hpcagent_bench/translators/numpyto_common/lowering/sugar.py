@@ -4,7 +4,7 @@ import ast
 import copy
 import itertools
 
-from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import const_int
+from hpcagent_bench.translators.numpyto_common.ast_build import const_int, literal_loads
 
 __all__ = [
     "DaceMapRewriter",
@@ -63,7 +63,7 @@ class UnrollConstRangeComprehension(ast.NodeTransformer):
         elts: list[ast.expr] = []
         for combo in itertools.product(*(range(n) for n in ranges)):
             bound = dict(zip(names, combo))
-            elts.append(SubstituteConstNames(bound).visit(copy.deepcopy(node.elt)))
+            elts.append(literal_loads(bound).visit(copy.deepcopy(node.elt)))
         return ast.copy_location(ast.List(elts=elts, ctx=ast.Load()), node)
 
 
@@ -75,18 +75,6 @@ def const_range_len(gen: ast.comprehension) -> int | None:
     if not (isinstance(it, ast.Call) and isinstance(it.func, ast.Name) and it.func.id == "range" and len(it.args) == 1):
         return None
     return const_int(it.args[0])
-
-
-class SubstituteConstNames(ast.NodeTransformer):
-    """Replace each bound Name READ with its integer value."""
-
-    def __init__(self, values: dict[str, int]) -> None:
-        self.values = values
-
-    def visit_Name(self, node: ast.Name) -> ast.AST:
-        if isinstance(node.ctx, ast.Load) and node.id in self.values:
-            return ast.copy_location(ast.Constant(value=self.values[node.id]), node)
-        return node
 
 
 class DaceMapRewriter(ast.NodeTransformer):
