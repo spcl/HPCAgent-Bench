@@ -22,42 +22,19 @@ cd experiments && MODEL=oss120b ./serve-only.sbatch
 
 EDF environment: `VLLM_PLUGINS=lora_filesystem_resolver,lora_hf_hub_resolver`.
 
-| Argument | Role |
+| Setting | Why |
 |---|---|
+| vLLM 0.23.0 (pinned in `containers/images/vllm/Dockerfile`) | 3013 tok/s against 2405 for 0.27.1, all in decode |
+| `VLLM_PLUGINS` allowlist, EDF only | unset, `quark_online_quant` closes an import cycle (`cannot import name 'SamplingParams'`) once aiter settings change the import graph; an env file would override the EDF silently |
 | `--dtype bfloat16` | compute dtype; the checkpoint is pre-quantized mxfp4 |
-| `--generation-config auto` | keeps the model's own `generation_config.json` sampling |
-| `--max-model-len 131072` | served window; a longer request is an error, not a truncation |
-| `--gpu-memory-utilization 0.70` | node-wide on the APU, like SGLang's `--mem-fraction-static` |
-| `--max-num-seqs 128` | scheduler concurrency cap; reserves no memory |
+| `--generation-config auto` | keeps the model's sampling defaults (`vllm` discards them silently) |
+| all three tool flags | SGLang has no `--enable-auto-tool-choice`, so a line ported from SGLang fails at the first tool call |
+| `--max-model-len 131072` | a longer request is an error, not a truncation |
+| `--gpu-memory-utilization 0.70` | node-wide on the APU; do not raise it by discrete-GPU analogy |
+| `--safetensors-load-strategy prefetch` | with `HF_HOME` on `iopsstor` |
+| one server per node, no `pp` | extra nodes are replicas the client balances; `pp=4` loses about 42% of engine time to stalls |
 
-The KV pool is in `grep -aE "KV cache|Available KV cache memory" server-0.log`. This model's pool
-has not been measured against a working set; size it above conversations x largest prompt and
-confirm a per-request prefix-cache hit rate of 0.98 or better.
-
-## DO
-
-- **Use vLLM 0.23.0.** On one pinned node with the same probe and parsers, 0.23.0 serves 3013 tok/s
-  against 2405 for 0.27.1 (about 25% slower, all in decode: 3187 against 2540 steady state; prefill
-  within 0.3%). The image pins 0.23.0 (`containers/images/vllm/Dockerfile`).
-- **Keep `VLLM_PLUGINS` an allowlist, set only in the EDF.** A value exported by an env file would
-  override the EDF silently; no `experiments/` env sets it.
-- **Pass all three tool flags**: `--enable-auto-tool-choice`, `--tool-call-parser openai`,
-  `--reasoning-parser openai_gptoss`. SGLang has no `--enable-auto-tool-choice`, so a line ported
-  from an SGLang model fails at the first tool call.
-- **Keep `--safetensors-load-strategy prefetch` with `HF_HOME` on `iopsstor`.**
-- **Run one server per node**; extra nodes are independent replicas the client balances.
-- **Re-measure after an image rebuild.** The EDF names an unversioned image.
-
-## DO NOT
-
-- **Do not leave `VLLM_PLUGINS` unset.** vLLM then loads every plugin, and `quark_online_quant`
-  closes an import cycle in the model-registry subprocess:
-  ```
-  ImportError: cannot import name 'SamplingParams' from 'vllm' (unknown location)
-  ```
-  A bare smoke may start fine; the cycle closes once the full deployment's aiter settings change the
-  import graph.
-- **Do not pass `--generation-config vllm`.** It discards the model's sampling defaults silently.
-- **Do not pipeline across nodes.** It fits one node; `pp=4` costs about 42% of engine time to stalls.
-- **Do not raise `--gpu-memory-utilization` by discrete-GPU analogy.** It is node-wide here.
-- **Do not run the server step without `--cpus-per-task`** ([README](README.md#3-slurm-shape)).
+The KV pool is in `grep -aE "KV cache|Available KV cache memory" server-0.log`; it has not been
+measured against a working set, so size it above conversations x largest prompt and confirm a
+prefix-cache hit rate of 0.98 or better. Re-measure after an image rebuild (the EDF names an
+unversioned image), and run the server step with `--cpus-per-task` ([README](README.md#3-slurm-shape)).

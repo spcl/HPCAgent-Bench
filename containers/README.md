@@ -14,8 +14,7 @@ containers/
   inference/         serving jobs, weight fetch, serving smokes and gates, tuned MoE configs
   agent/             prompt fragments, MCP tools, method packets and harness pins, bound read-only into
                      the agent container at launch, never copied into an image
-  judge/             the web-search tool's dependencies and .env.example
-                     (the tool is hpcagent_bench/harness/judge_web_search.py)
+  judge/             .env.example for the web-search tool (hpcagent_bench/harness/judge_web_search.py)
 ```
 
 The images (`images/<image>/`) serve AMD MI300A/MI250X (beverin), NVIDIA GH200 (daint) and
@@ -24,22 +23,10 @@ CPU-only nodes. Off CSCS the same Dockerfiles build with plain podman or docker
 gates itself (`build_and_verify.sbatch`), and the unit tests hold the recipes to their contract.
 The CI runners' oneAPI/NVHPC install is `.github/scripts/install-extra-toolchains.sh`.
 
-## Where skills come from
-
-There is one copy of every skill page: `hpcagent_bench/skills/<name>/SKILL.md`. No image and no
-file under `containers/` carries another.
-
-* The judge image installs the package (`COPY hpcagent_bench` in each `judge` stage), so its
-  skills are the package's.
-* The agent image carries no `hpcagent_bench` (it holds the references agents are graded against).
-  A campaign stages the pages a problems file names into `/shared/skills/` at launch
-  (`experiments/make_problems.py --stage-skills`, called by `experiments/materialize_shared.sh`),
-  from the submitting checkout.
-* `containers/agent/` holds the prompt fragments and MCP tools (bound at launch as
-  `/opt/hpcagent-bench-agent`) and the method packets (`agent/packets/<name>/`), which are served
-  as tools, not skills.
-
-Adding a skill therefore touches no container file; see [Adding a skill](#adding-a-skill).
+Skill pages have one copy, `hpcagent_bench/skills/<name>/SKILL.md`: the judge image installs the
+package, and a campaign stages the pages a problems file names into `/shared/skills/` at launch
+(`make_problems.py --stage-skills`). Adding a skill touches no container file
+([docs/extending/skills-and-tools.md](../docs/extending/skills-and-tools.md)).
 
 ## The image registry
 
@@ -166,7 +153,7 @@ checks the endpoint and exports `VLLM_BASE_URL`, `VLLM_API_KEY` and `VLLM_MODEL`
 endpoint is a service arm (`experiments/inference_service.py`) with
 `AMD_CE_ENV=hpcagent-bench-agent-gh200-latest` and `JUDGE_CE_ENV=hpcagent-bench-judge-gh200-latest`.
 `experiments/run_cluster.sh`, `experiments/beverin.sbatch` and the `experiments/layers/*.env` model
-layers are still beverin-shaped.
+layers are beverin-shaped.
 
 ### CPU only (any node, x86_64 or aarch64)
 
@@ -208,14 +195,12 @@ host that uses it tags a judge target that way (or names it with `HPCAGENT_BENCH
 
 The MI300A serving recipes (these jobs, the `images/sglang/` and `images/vllm/` Dockerfiles and EDF
 templates, `moe-configs/`) carry the reasoning for each tuned value in their comments; keep it
-when editing. vLLM stays at 0.23.0 for oss120b: 0.27.1 (branch `parked/vllm-0271`) served 2405
-tok/s against 3013 on one pinned node with the same probe, dtype, quantization, MoE and attention
-backends -- 25% slower, all of it in decode (steady state 2540 vs 3187; prefill within 0.3%).
+when editing. Per-model settings: [docs/serving/](../docs/serving/README.md).
 
 | file | does |
 |---|---|
 | `fetch_weights.sbatch` | downloads into `$HF_HOME` inside an image, restripes on the host, fails unless every large blob is wide-striped |
-| `serve-private.sbatch` | a private Qwen3.8 endpoint on one beverin node (`docs/serving/private-endpoint.md`) |
+| `serve-private.sbatch` | a private Qwen3.8 endpoint on one beverin node ([private-endpoint.md](../docs/serving/private-endpoint.md)) |
 | `serve-daint.sbatch`, `alps-endpoint.sh` | GH200 serving and the client-side endpoint check |
 | `smoke-kimi-sglang.sbatch`, `submit-glm53-sglang.sh` | multi-node SGLang serving smokes (GLM-5.3 through the second) |
 | `verify-tools-reasoning.py`, `accuracy-gate.py` | tool-call/reasoning, long-context accuracy and throughput gates against a live server |
@@ -279,16 +264,6 @@ launched by `experiments/run_cluster.sh` (`docs/extending/inference.md`).
 
 Every package added to a Dockerfile gets a probe that uses it (compile, import, link) in the same
 `RUN`, so a broken install fails the build rather than a campaign.
-
-## Adding a skill
-
-1. Create `hpcagent_bench/skills/<name>/SKILL.md` (frontmatter `name`, `description`, optional
-   `when`; optional helper `*.py` beside it). Discovery (`load_skills`), packaging (`pyproject.toml`
-   ships `skills/*/SKILL.md` and `skills/*/*.py`), the judge image and agent staging pick it up.
-2. To hand it to an arm, name it in a packet: one entry under `packets:` in
-   `hpcagent_bench/envs/registry.yaml` (`docs/extending/packets.md`).
-
-Nothing under `containers/` changes, and no image is rebuilt. Details: `docs/extending/skills-and-tools.md`.
 
 ## Agent harness pins
 

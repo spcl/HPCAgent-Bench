@@ -69,9 +69,6 @@ ANTHROPIC_VERSION = "2023-06-01"
 #: What the run records about its inference, beside the judge databases.
 RECORD_NAME = "inference.json"
 
-#: The example service models that ship with the repo, as ``layers/model-<name>.env``.
-EXAMPLE_ARMS = ("musespark", "fable51", "gpt6astra")
-
 #: Every variable through which the claude CLI picks a model on its own: the small/fast model for
 #: its side requests (titles, summaries), the model each tier alias resolves to, and the subagent
 #: model. Unset, the CLI asks the endpoint for a Claude model by its own name. A self-served engine

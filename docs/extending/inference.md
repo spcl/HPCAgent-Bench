@@ -9,7 +9,7 @@ and in `docs/serving/<tag>.md`; copy them from there.
 | File | Change |
 |---|---|
 | `experiments/layers/model-<tag>.env` | serving block (extends `layers/common.env`) |
-| `experiments/.env.base-<tag>` | `# extends: layers/model-<tag>.env`, plus effort, context and engine args |
+| `experiments/arms.yaml` `<campaign>.models.<tag>` | effort ladder, context and engine args (a model with a layer renders in any campaign; add an entry only for what differs) |
 | `hpcagent_bench/envs/registry.yaml` `models:` | `<tag>: {name: <Display Name>, serves: org/Name}`, appended at the end |
 | `docs/serving/<tag>.md` | the measurements behind the recipe |
 
@@ -25,7 +25,7 @@ MODELS="org/Name" sbatch containers/inference/fetch_weights.sbatch
 
 **2. Write the env files.** Copy the pair with the same engine and node shape (`qwen38`, `oss120b`:
 one node; `kimi27sglang`, `glm53`: four nodes in `pp` mode). From `layers/model-qwen38.env` and
-`.env.base-qwen38`, trimmed:
+`arms.yaml` `campaign.models.qwen38`, trimmed:
 
 ```bash
 # layers/model-qwen38.env
@@ -36,11 +36,16 @@ INFERENCE_ENGINE=sglang
 VLLM_MODEL=Qwen/Qwen3.8-27B-FP8
 VLLM_SERVED_MODEL=hpcagent-bench-vllm
 HPCAGENT_BENCH_OPTIMIZER=Qwen/Qwen3.8-27B-FP8
-# .env.base-qwen38
-# extends: layers/model-qwen38.env
-EFFORT_LADDER="low medium xhigh"
-CONTEXT_LENGTH=262144
-SGLANG_EXTRA_ARGS="--chat-template ${SCRIPT_DIR}/chat-template-qwen38.jinja --context-length 262144 --mem-fraction-static 0.306 --reasoning-parser qwen3 --tool-call-parser qwen3_coder --enable-metrics"
+```
+
+```yaml
+# arms.yaml
+campaign:
+  models:
+    qwen38:
+      EFFORT_LADDER: '"low medium xhigh"'
+      CONTEXT_LENGTH: 262144
+      SGLANG_EXTRA_ARGS: '"--chat-template ${SCRIPT_DIR}/chat-template-qwen38.jinja --context-length 262144 --mem-fraction-static 0.306 --reasoning-parser qwen3 --tool-call-parser qwen3_coder --enable-metrics"'
 ```
 
 | Key | Meaning |
@@ -67,14 +72,11 @@ MODEL=<tag> ./serve-only.sbatch            # serve; the log reaches "endpoint is
 
 For tool-call, reasoning and long-context accuracy gates, run the smokes in
 `containers/inference/` from that directory: `smoke-kimi-sglang.sbatch` takes
-`MODEL_REPO`, `SERVED_MODEL`, `TOOL_PARSER`, `REASONING_PARSER`, `MEM_FRACTION`, `CONTEXT_LEN`;
-`smoke-kimi-eager-pg.sbatch` (vLLM) takes `MODEL_REPO`, `TOOL_PARSER`, `REASONING_PARSER`,
-`EXTRA_SERVE_ARGS`. A failure prints `SMOKE FAILED`.
+`MODEL_REPO`, `SERVED_MODEL`, `TOOL_PARSER`, `REASONING_PARSER`, `MEM_FRACTION`, `CONTEXT_LEN`.
+A failure prints `SMOKE FAILED`.
 
-**4. Name it in launchers.** `submit-cpf-llr40.sh` and `submit-gpu-llr40.sh` read
-`.env.base-${model}`, so `MODELS=<tag>` suffices. `submit-scicomp-dc.sh`, `submit-git-scicomp.sh`
-(`BASE_ENV`) and `submit-llrblind.sh` (`MAX_TOKENS_BY_MODEL`) keep per-model maps. `make_model_arm.py --to-model <tag>`
-re-targets a rendered arm file (needs a `MODELS` entry).
+**4. Name it in launchers.** `experiments/submit.sh` renders `<campaign>:<tag>`, so
+`MODELS=<tag>` suffices.
 
 **In-process models.** The Python harness ignores env files. An OpenAI-shaped endpoint is one
 `ModelSpec` in `MODELS` (`hpcagent_bench/harness/baselines.py`): `backend="openai"`, `model`,

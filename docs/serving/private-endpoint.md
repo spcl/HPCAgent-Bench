@@ -27,30 +27,19 @@ contrast, serves every interface without a key ([`README.md`](README.md)). Contr
   On exit the launcher deletes `endpoint.json` first, then `sglang-auth.yaml`, `api.key`,
   `auth.header`.
 
-### Presets
+### Preset
 
-| `PRESET` | Hardware | EDF | Weights | Attention | Default `LEGS` | Serve with |
-|---|---|---|---|---|---|---|
-| `mi300` | 4x MI300A | `hpcagent-bench-sglang-mi300-latest` | `Qwen/Qwen3.8-27B-FP8` | aiter | `tp4:0.306` | `tp4:0.306` |
-
-It passes `--context-length 262144 --max-running-requests 128 --mamba-full-memory-ratio 0.5
+`PRESET=mi300` (the only one): 4x MI300A, EDF `hpcagent-bench-sglang-mi300-latest`,
+`Qwen/Qwen3.8-27B-FP8`, aiter attention, `LEGS=tp4:0.306`. It passes `--context-length 262144 --max-running-requests 128 --mamba-full-memory-ratio 0.5
 --reasoning-parser qwen3 --tool-call-parser qwen3_coder`, the chat template
 `experiments/chat-template-qwen38.jinja`, and serve as `hpcagent-bench-vllm`.
 
-- `mi300` matches `SGLANG_EXTRA_ARGS` in `experiments/.env.llrbase-qwen38-c`
-  (`tests/test_serve_private.py` fails if they diverge). 0.306 is node-wide on the APU and derated
-  to 0.26 by aiter; move it only with the backend and mamba ratio ([`qwen38.md`](qwen38.md)).
-
-Measured per leg (401/200 check, tool and reasoning gate, 16 concurrent 256-token requests):
-
-| Preset, leg | KV pool | Max running | Load probe |
-|---|---|---|---|
-| mi300 `tp4:0.306` | 3.36 M tokens, 714 Mamba slots | not recorded | 84 tok/s, cold (first leg, warm-up included) |
-| mi200 `tp4:0.88` | 1.86 M | 78 | 315 tok/s |
-| mi200 `tp8:0.80` | 1.91 M | 128 | 322 tok/s |
-
-Each leg writes SGLang's KV and Mamba allocation lines to `<leg dir>/memory.txt`. A clearly different
-pool: compare the job's `argv:` line with section 3.
+These match `SGLANG_EXTRA_ARGS` of `llrbase-c:qwen38` in `experiments/arms.yaml` (`tests/test_serve_private.py`
+fails if they diverge). 0.306 is node-wide on the APU and derated to 0.26 by aiter; move it only with
+the backend and mamba ratio ([`qwen38.md`](qwen38.md)). Measured: KV pool 3.36 M tokens, 714 Mamba
+slots, 84 tok/s cold on the 16-request load probe. Each leg writes SGLang's KV and Mamba allocation
+lines to `<leg dir>/memory.txt`; a clearly different pool means compare the job's `argv:` line with
+section 3.
 
 ## 2. One-time setup
 
@@ -59,7 +48,7 @@ On Beverin:
 ```bash
 umask 077
 mkdir -p ~/.config/hpcagent-bench
-openssl rand -hex 32 > ~/.config/hpcagent-bench/mi300-endpoint.key     # or mi200-endpoint.key
+openssl rand -hex 32 > ~/.config/hpcagent-bench/mi300-endpoint.key
 ```
 
 - `KEY_FILE` defaults to `~/.config/hpcagent-bench/<preset>-endpoint.key`. Refused unless mode 600,
@@ -95,7 +84,7 @@ day). `ssh beverin hostname` should print a Beverin login node.
 
 ## 3. Start the server
 
-The script sets neither partition nor GPU count, and each preset refuses the other partition, so pass
+The script sets neither partition nor GPU count, and the preset refuses another partition, so pass
 both on every submission:
 
 ```bash
@@ -104,17 +93,16 @@ L=containers/inference/serve-private.sbatch
 
 PRESET=mi300 MODE=serve sbatch --partition=mi300 --gpus-per-node=4 --time=08:00:00 "$L"               # laptop
 PRESET=mi300 MODE=serve ACCESS=alps sbatch --partition=mi300 --gpus-per-node=4 --time=08:00:00 "$L"   # Daint jobs
-PRESET=mi200 MODE=serve LEGS=tp8:0.80 sbatch --partition=mi200 --gpus-per-node=8 --time=08:00:00 "$L"
-PRESET=mi200 sbatch --partition=mi200 --gpus-per-node=8 "$L"                  # smoke every LEGS entry
+PRESET=mi300 sbatch --partition=mi300 --gpus-per-node=4 "$L"                  # smoke every LEGS entry
 PRESET=mi300 MODE=serve DRY_RUN=1 bash "$L"                                   # checks + argv, starts nothing
 ```
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `PRESET` | required | `mi300` or `mi200` |
+| `PRESET` | required | `mi300` |
 | `MODE` | `smoke` | `smoke`: start, check (401/200, tool gate, load probe) and stop each leg. `serve`: first leg only, held until the job ends |
 | `ACCESS` | `tunnel` | `tunnel` or `alps` |
-| `LEGS` | per preset | `tp<N>:<mem-fraction-static>` entries, N in 1, 2, 4, 8; entry i listens on `API_PORT + i` |
+| `LEGS` | per preset | `tp<N>:<mem-fraction-static>` entries, N up to the node's GPUs; entry i listens on `API_PORT + i` |
 | `API_PORT` | `30000` | first entry's port |
 | `KEY_FILE` | `~/.config/hpcagent-bench/<preset>-endpoint.key` | key file |
 | `SERVED_MODEL` | `hpcagent-bench-vllm` | name clients send |

@@ -238,18 +238,3 @@ def model_for_run(run_dir: pathlib.Path) -> str:
         if value:
             return value
     return ""
-
-
-def counter_for(worker_dir: pathlib.Path) -> Callable[[list[dict[str, object]]], int | None] | None:
-    """The retokenizing counter for whichever model served this worker's job, or None.
-
-    None at every step that cannot be answered -- no launch env, an unknown model, no tokenizer in
-    the cache -- because a missing fallback must leave ``output_source: "none"`` standing rather
-    than invent a count.
-    """
-    if len(worker_dir.parents) < 3:
-        return None
-    model = model_for_run(worker_dir.parents[2])
-    if not model or counter(model) is None:
-        return None
-    return output_counter(model)

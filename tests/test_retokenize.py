@@ -123,4 +123,3 @@ def test_a_run_whose_launch_env_was_not_kept_names_no_model(retokenize: ModuleTy
     worker.mkdir(parents=True)
 
     assert retokenize.model_for_run(run_dir) == ""
-    assert retokenize.counter_for(worker) is None

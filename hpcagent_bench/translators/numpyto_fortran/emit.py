@@ -3998,11 +3998,7 @@ def emit_fortran_helper(
     # integer local is untyped here, so ``(h + 2 * padding - 1) // stride`` took the REAL floor-div
     # path: a real-valued bound assigned to an integer, which is a deleted feature as a DO end
     # expression and a silent truncation everywhere else.
-    be._int_kinds = {
-        nm: ("int64" if ft == "integer(c_int64_t)" else "int32")
-        for nm, ft in implicit
-        if ft.startswith("integer(c_int")
-    }
+    be._int_kinds = implicit_int_kinds(implicit)
     body = be.emit_block(hkir.tree.body, indent="            ")
     if parent is not None:
         merge_used_procedures(parent, be)

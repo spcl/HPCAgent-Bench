@@ -39,13 +39,13 @@ A preset is one partition + image + weights combination.
 2. `server_argv` hard-codes Qwen3.8 flags for every preset (chat template, `--reasoning-parser qwen3`,
    `--tool-call-parser qwen3_coder`, `--mamba-full-memory-ratio 0.5`, `--context-length 262144`,
    `--language-only`). Another model family moves these into `PRESET_FLAGS`; the mi300 test against
-   `.env.llrbase-qwen38-c` must still pass.
+   `llrbase-c:qwen38` must still pass.
 3. A new partition needs `GPU_ARCH_<partition>` in `containers/images/gpu_arch.env`, and
    its image built on that partition (SGLang's `setup_rocm.py` and cupy compile for the visible GPU).
 4. Fetch weights with `MODELS=<repo> sbatch containers/inference/fetch_weights.sbatch`
    and check the Lustre striping it reports.
 5. Tests: add the preset to `PRESETS`, `OTHER_PARTITION`, `DEFAULT_LEG_COUNT`, its weights repo to the
-   loop in `launch()`, and a flags test modeled on the mi200 one.
+   loop in `launch()`, and a flags test modeled on the mi300 one.
 6. Run `MODE=smoke` with several `LEGS` on one node and add KV pool, max running requests and load
    throughput per leg to the table in `private-endpoint.md`. The fraction is node-wide on MI300A and
    per GPU on discrete GPUs, so values never carry across partitions.
@@ -89,15 +89,7 @@ Engine-specific launcher parts: `server_argv`, the key writer (the YAML `--confi
 `auth_checks`, `tools_gate` (`verify-tools-reasoning.py`) and `load_probe` use the OpenAI API and work
 for both.
 
-## 6. Another partition in one job
-
-Beverin (Slurm 25.05) accepts a heterogeneous job, e.g. `sbatch --partition=mi300 ... : --partition=mi200 ...`
-(command-line `--time` applies to both components). The batch env sets `SLURM_HET_SIZE` and
-`SLURM_JOB_{NODELIST,PARTITION,ID}_HET_GROUP_<n>`; inside `srun --het-group=1`, `SLURM_JOB_ID` is the
-leader's. `srun --het-group=1 --exclusive` sees all 8 MI250X devices, and HTTP from the mi300 node to
-a server on the mi200 node over `hsn` works.
-
-## 7. Testing
+## 6. Testing
 
 ```bash
 scripts/run_tests.sh -W error tests/test_serve_private.py tests/test_alps_endpoint.py
@@ -110,7 +102,6 @@ scripts/run_tests.sh -W error tests/test_serve_private.py tests/test_alps_endpoi
 - Only a job tests the 401/200 check, the tool and reasoning gate, KV pool size and `hsn`
   reachability. Run `MODE=smoke` before `MODE=serve`.
 
-## 8. Known limits
+## 7. Known limits
 
 - `#SBATCH --output`/`--error` are `%x-%j.out` in the submit directory (`#SBATCH` cannot expand `$SCRATCH`).
-- MI250X (gfx90a) has no FP8 kernels in hipBLASLt and no aiter kernels: mi200 serves BF16 with triton.

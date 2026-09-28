@@ -137,8 +137,8 @@ direct-URL requirements) and `pyproject.toml` names no version of it.
 | `dace-pin` (`pyproject.toml`, `[tool.hpcagent-bench]`) | the one place it is written | the extended commit a release is tested with |
 
 - **Install**: `scripts/install_dace.sh` installs the pin (`pip install "dace @
-  git+https://github.com/spcl/dace.git@<pin>"`; `--editable DIR` for a checkout). README,
-  CONTRIBUTING, CI, `scripts/rebuild_venv.sh` and the release smoke all use it, and the judge/agent
+  git+https://github.com/spcl/dace.git@<pin>"`; `--editable DIR` for a checkout). CONTRIBUTING,
+  CI and the release smoke use it, and the judge/agent
   image builds bake the pin, so a release install is reproducible.
 - **Every job** runs the image's dace as baked. Another dace means another image: move the pin
   (one line in `pyproject.toml`, only to an extended commit whose CI is green) and rebuild.
@@ -178,4 +178,4 @@ partitions (`--partition=`, `-p`, `*PARTITION=`), one campaign's run directories
 paths) and the site image registry, in live code (comments and docstrings may name a site to
 explain it). Files, or single hits in a file, that legitimately carry such a value are allowlisted
 in the test with one reason each: the CSCS site layer, the hardware-profile layer, this page, and
-the MI300A/MI200 serving recipe's partition check.
+the MI300A serving recipe's partition check.

@@ -3684,14 +3684,10 @@ def c_family_source(
     header: str,
     *,
     cpp: bool,
-    pinned: bool = True,
     parallel: bool = False,
     isopar: bool = False,
 ) -> str:
-    """One C or C++ translation unit: header, includes the body needs, helpers, then the kernel.
-
-    ``pinned`` places the pinned-constant block before the helpers (the OpenMP variants omit it).
-    """
+    """One C or C++ translation unit: header, includes the body needs, pinned constants, helpers, then the kernel."""
     kir = c_spelling(kir)
     helpers = emit_c_helpers(kir, cpp=cpp, isopar=isopar)
     signature = emit_signature(kir, name)
@@ -3699,7 +3695,7 @@ def c_family_source(
         # restrict is a C99 keyword; C++ accepts it as __restrict__, so rewrite it for the C++ output.
         signature = signature.replace("*restrict ", "*__restrict__ ")
     body = emit_body(kir, indent="        ", parallel=parallel, isopar=isopar)
-    consts = pinned_const_block(kir) if pinned else ""
+    consts = pinned_const_block(kir)
     prelude, epilogue, footer = (CPP_PRELUDE, CPP_EPILOGUE, CPP_FOOTER) if cpp else (C_PRELUDE, C_EPILOGUE, "")
     return (
         f"{header}{blas_include(body)}{fftw_include(body)}{fp8_prelude(kir)}\n{consts}{helpers}{signature} {{\n"
@@ -3755,13 +3751,13 @@ def emit_cpp_isopar(kir: KernelIR, fn_name: str | None = None) -> str:
 def emit_c_omp(kir: KernelIR, fn_name: str | None = None) -> str:
     """C99 with OpenMP #pragma omp parallel for on each outermost independent/reduction loop; same symbol as emit_c."""
     parallelism.require_parallelizable(kir)
-    return c_family_source(kir, fn_name or f"{kir.kernel_name}_d_c", C_HEADER, cpp=False, pinned=False, parallel=True)
+    return c_family_source(kir, fn_name or f"{kir.kernel_name}_d_c", C_HEADER, cpp=False, parallel=True)
 
 
 def emit_cpp_omp(kir: KernelIR, fn_name: str | None = None) -> str:
     """C++ counterpart of :func:`emit_c_omp` (see it); same symbol as :func:`emit_cpp`."""
     parallelism.require_parallelizable(kir)
-    return c_family_source(kir, fn_name or f"{kir.kernel_name}_d", CPP_HEADER, cpp=True, pinned=False, parallel=True)
+    return c_family_source(kir, fn_name or f"{kir.kernel_name}_d", CPP_HEADER, cpp=True, parallel=True)
 
 
 def pluto_multidim_array_signature(arr: ArrayDesc) -> str:

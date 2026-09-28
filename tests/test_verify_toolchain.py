@@ -47,6 +47,8 @@ def fake_toolchain(tmp_path, monkeypatch):
     both say yes -- the link rows have their own test below."""
     for name in FAKE_PATH_ENTRIES:
         write_executable(tmp_path / name, "#!/bin/sh\nexit 0\n")
+    for name in ("gcc", "gfortran"):  # -dumpversion: the graded major
+        write_executable(tmp_path / name, "#!/bin/sh\necho 16\n")
     write_executable(tmp_path / "pkg-config", "#!/bin/sh\necho -lopenblas\n")
     monkeypatch.setenv("PATH", str(tmp_path))
     monkeypatch.setattr(languages, "library_linkable", lambda soname: True)
@@ -89,3 +91,12 @@ def test_an_unlinkable_runtime_fails_loudly(fake_toolchain, monkeypatch, capsys)
     monkeypatch.setattr(languages, "library_linkable", lambda soname: soname != "omp")
     assert load_script().main() == 1
     assert "MISS  -lomp" in capsys.readouterr().out
+
+
+def test_a_gcc_older_than_the_graded_one_fails_loudly(
+    fake_toolchain: pathlib.Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """GCC 13 rejects -std=c23: every C build would fail as a test, so the gate refuses it first."""
+    write_executable(fake_toolchain / "gcc", "#!/bin/sh\necho 13\n")
+    assert load_script().main() == 1
+    assert "MISS  gcc>=15" in capsys.readouterr().out

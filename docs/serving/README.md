@@ -12,18 +12,19 @@ carry to MI300X.
 | [`private-endpoint.md`](private-endpoint.md) | a keyed Qwen3.8 server only you can use, from your laptop or your own Daint jobs |
 | [`extending-private-inference.md`](extending-private-inference.md) | contributors: the private launcher's security contract, new presets, access paths, engines |
 
-The authoritative launch line per model is the rendered `experiments/.env.base-<model>`. If a page
-here and that file disagree, the file wins.
+The authoritative launch line per model is the render of `campaign:<model>`
+(`experiments/env_layers.sh render campaign:<model>`). If a page here and the render disagree, the
+render wins.
 
 ## 1. Shortest path
 
-Once per account, register the EDFs (container definitions) and resolve your Slurm account:
+Once per account, register the EDFs (container definitions) and set your Slurm account:
 
 ```bash
 cd "$REPO"
 containers/images/install_edfs.sh          # renders into ~/.edf
 sbatch containers/images/pull_images.sbatch  # only if install_edfs.sh reports a missing image
-. scripts/cscs/account_env.sh                          # Beverin rejects jobs without an account
+export SBATCH_ACCOUNT=<project>; . experiments/env.sh    # Beverin rejects jobs without an account
 ```
 
 Then, from `experiments/`:
@@ -31,11 +32,11 @@ Then, from `experiments/`:
 ```bash
 SUBMIT=0 ./serve-only.sbatch                  # print what would be submitted
 ./serve-only.sbatch                           # Qwen3.8 (default MODEL)
-MODEL=kimi27sglang ./serve-only.sbatch        # any .env.base-<MODEL>: qwen38, kimi27sglang, glm53, oss120b
+MODEL=kimi27sglang ./serve-only.sbatch        # any layers/model-<MODEL>.env: qwen38, kimi27sglang, glm53, oss120b
 SBATCH_TIMELIMIT=08:00:00 ./serve-only.sbatch # longer than the 4 h default
 ```
 
-`serve-only.sbatch` renders `.env.base-<MODEL>`, reads the node count from it, submits itself with
+`serve-only.sbatch` renders `campaign:<MODEL>` (`SERVE_BASE_ENV` overrides), reads the node count from it, submits itself with
 that `--nodes`, starts the server, polls `/v1/models`, then prints:
 
 ```
@@ -74,8 +75,8 @@ plugin, multi-node RCCL silently falls back to TCP.
 
 | Setting | Why |
 |---|---|
-| `--partition=mi300` | default partition is `mi200`, different hardware |
-| no `-A` | `scripts/cscs/account_env.sh` exports `SBATCH_ACCOUNT`; naming one yourself splits identical jobs across accounts |
+| `--partition=mi300` | every recipe here is MI300A-only |
+| no `-A` | Slurm reads `SBATCH_ACCOUNT`; naming one yourself splits identical jobs across accounts |
 | `--mem=0` | otherwise the step's memory cgroup follows its CPU share and the server dies in weight load |
 | `--gpus-per-node=4`, `--ntasks-per-node=1` | every recipe is `tp=4` inside a node |
 | `--cpus-per-task="${SLURM_CPUS_ON_NODE}"` on the server step | see below |
@@ -120,7 +121,7 @@ collapses above concurrency 1.
 ## 5. Healthy or sick
 
 **Readiness.** `serve-only.sbatch` waits `VLLM_READY_TIMEOUT_SECONDS`, else
-`AGENT_READY_TIMEOUT_SECONDS`, else 7200 s. Each `.env.base-*` sets one high enough for that model
+`AGENT_READY_TIMEOUT_SECONDS`, else 7200 s. Each model layer sets one high enough for that model
 (GLM-5.3: 10800 s). Both keys are set inside the model file, so a value on the command line is
 overwritten when the file is sourced. To override, copy `experiments/serve-only.env`, add the key,
 and pass `SERVE_ENV_FILE=<copy>` (sourced last, so it wins). The same applies to
@@ -169,9 +170,9 @@ colon-dash):
 Deleting a key turns the default **on**. To omit a flag, assign it empty (GLM-5.3 does this). When
 templating a flag, use the dash form.
 
-**Layers, last assignment wins.** `layers/common.env` < `layers/model-<m>.env` < `.env.base-<m>`
+**Layers, last assignment wins.** `layers/common.env` < `arms.yaml` campaign < `layers/model-<m>.env` < `arms.yaml` `models.<m>`
 ([Env layers](../../experiments/README.md#env-layers)); a layer can override a key, never unset it.
-Render one with `./env_layers.sh render .env.base-<m>`. `serve-only.sbatch` sources the render, then
+Render one with `./env_layers.sh render campaign:<m>`. `serve-only.sbatch` sources the render, then
 `serve-only.env` (zero judge and agent nodes, `RUN_ROOT`), under `set -a`.
 
 **Arm `.env.<arm>` files are renders.** Fix the layer that owns a key, never the render.
@@ -182,7 +183,7 @@ registered EDF as-is. A model that serves here and fails in a campaign run: susp
 ## 7. Where the numbers live
 
 - `experiments/serve-only.sbatch`, `experiments/serve-only.env`: the launcher on this page.
-- `experiments/layers/model-<m>.env`, `experiments/.env.base-<m>`: per-model launch lines with inline reasons.
+- `experiments/layers/model-<m>.env`, `experiments/arms.yaml`: per-model launch lines with inline reasons.
 - `containers/inference/`: `smoke-kimi-sglang.sbatch` (serving smoke with accuracy
   gate and concurrency sweep), `accuracy-gate.py`,
   `verify-tools-reasoning.py`.
