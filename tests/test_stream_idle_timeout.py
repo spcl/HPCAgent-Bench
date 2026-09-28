@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """stream_idle_timeout.py: the byte-stream idle timeout, derived instead of copied.
 
-qwen38 lost 9/9 attempts of job 641738 and 16/40 episodes of 641748 to "API Error: The
+qwen38 lost 9/9 attempts of one job and 16/40 episodes of another to "API Error: The
 operation timed out." with CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS already pinned to the CLI's 30-minute
 ceiling -- so raising it further is not possible, only checking that the ceiling is really what the
 installed CLI enforces, and that the arithmetic which justifies sitting at it is right.

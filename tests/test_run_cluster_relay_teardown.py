@@ -5,7 +5,7 @@
 The relay (``experiments/gang_relay.py``) runs as a background child of the batch shell and exits only
 once that shell is gone. ``cleanup_steps_on_exit`` / ``cleanup_steps_on_signal`` end in a bare
 ``wait``, which reaps every child, the relay included: without stopping the relay first the two wait
-on each other and the job idles to its time limit (mlscale jobs 649109-649111 and 649795, 2.5-5 h).
+on each other and the job idles to its time limit (2.5-5 h).
 
 The script cannot be sourced, so the relay start block and both cleanup handlers are lifted from its
 shipped text and run against the real relay, the way ``test_run_cluster_job_env_trap.py`` does.

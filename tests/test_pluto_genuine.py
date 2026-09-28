@@ -1100,7 +1100,7 @@ def test_ppcg_run_env_puts_its_own_lib_dir_ahead_of_ld_library_path(
     include ``/usr/lib/x86_64-linux-gnu``, where Ubuntu packages an OLDER ``libisl23`` (a gcc
     build dependency) under the SAME soname as the isl ppcg was built against. Left alone, that
     shadows the correct isl and ppcg dies at startup with ``undefined symbol: isl_id_set_alloc``
-    (job 640113) -- so ``_ppcg_run_env`` has to WIN the race by prepending ppcg's own lib dir,
+    -- so ``_ppcg_run_env`` has to WIN the race by prepending ppcg's own lib dir,
     not merely appending it or leaving RPATH to sort it out."""
     from hpcagent_bench import ppcg_transform
 
@@ -1160,7 +1160,7 @@ def test_ppcg_run_env_is_a_noop_with_no_lib_dir_beside_the_exe(
     assert ppcg_transform._ppcg_run_env(str(lone)) is None
 
 
-# A MISSING TOOL IS NOT A KERNEL VERDICT. Job 640520 shipped 248 ppcg rows and no ppcg: 193 of them
+# A MISSING TOOL IS NOT A KERNEL VERDICT. One sweep shipped 248 ppcg rows and no ppcg: 193 of them
 # read "ppcg is not installed on this host" and 55 read "the translator emitted no #pragma scop",
 # and every one of them reached the results DB as the same `unsupported` decline a kernel outside
 # the polyhedral model gets. The tests below pin the three things that stop that repeating: the
@@ -1197,7 +1197,7 @@ def test_the_ppcg_column_asks_about_its_tool_before_it_asks_about_the_kernel(tmp
     """With no ppcg on the host, EVERY kernel's reason is the missing tool -- including the ones
     that also have no scop.
 
-    This is the exact conflation job 640520 published: 55 of its rows blamed the kernels ("the
+    This is the exact conflation one ppcg sweep published: 55 of its rows blamed the kernels ("the
     translator emitted no #pragma scop") on a node where the one true answer, which the other 193
     rows gave, was that the image shipped no ppcg. A host without the compiler has nothing to say
     about any kernel, so the tool question comes first."""
@@ -1216,7 +1216,7 @@ def test_a_broken_ppcg_is_walked_past_rather_than_shadowing_a_working_one(tmp_pa
     image carries and take the whole column down. Measured, and not hypothetical: the cache build
     left over from a scratch migration still has its executable bit and still fails with
     ``libLLVM-17.so.1: cannot open shared object file``, and ppcg has a standing reason to die this
-    way anyway (job 640113's ``undefined symbol: isl_id_set_alloc``, an isl the EDF's
+    way anyway (``undefined symbol: isl_id_set_alloc``, an isl the EDF's
     LD_LIBRARY_PATH wins). So the lookup runs each candidate and takes the first that answers."""
     broken = tmp_path / "tools" / "ppcg" / "bin" / "ppcg"
     broken.parent.mkdir(parents=True)
@@ -1372,8 +1372,8 @@ def test_the_transform_publishes_from_a_scratch_dir_beside_the_scop(tmp_path, mo
     ppcg has no ``-o`` for the pair it writes, so it runs in a throwaway cwd and the results are
     moved next to the scop. ``os.replace`` is atomic and therefore cannot cross a filesystem
     boundary, and ``$TMPDIR`` on a cluster node is node-local while the checkout is on Lustre: with
-    the default temporary directory every kernel died with ``Invalid cross-device link`` (job
-    644285, eight affine kernels, eight ``runtime_error`` rows). Pinned on the MECHANISM -- the cwd
+    the default temporary directory every kernel died with ``Invalid cross-device link`` (eight
+    affine kernels, eight ``runtime_error`` rows). Pinned on the MECHANISM -- the cwd
     is a sibling of the scop -- because a tmp_path test has only one filesystem and could not
     reproduce the EXDEV itself.
     """
@@ -1412,14 +1412,14 @@ def test_a_validation_that_could_not_run_is_not_recorded_as_validated(tmp_path, 
     ``valid`` starts optimistic so an unvalidated run still produces timings, and under
     ``ignore_errors`` -- which every canon column runs with -- the except branch used to leave it
     that way: the row said ``validated=True`` about a comparison that never completed. Measured on
-    job 644305, where two ``ppcg_hip`` kernels whose own ``np.allclose`` raised
+    a sweep where two ``ppcg_hip`` kernels whose own ``np.allclose`` raised
     ``ArrayMemoryError`` (the per-kernel RLIMIT_AS cap, on arrays that size) came out of the sweep
     marked validated -- a compiler column publishing agreement with NumPy that was never checked.
 
     Driven through NUMBA with the numpy oracle handed in as the third constructor argument --
     the shape ``collect.sweep`` uses. Both halves are load-bearing and both were measured: numpy
-    alone IS the reference and never reaches the comparison (job 644317), and a Test built without
-    the oracle sets ``validate = False`` outright (job 644325), so either one passes this vacuously.
+    alone IS the reference and never reaches the comparison, and a Test built without
+    the oracle sets ``validate = False`` outright, so either one passes this vacuously.
     The ``called`` flag is what refuses to let it. The DB override is the pair
     ``test_framework_datatype_resync`` uses, so the run's rows land in ``tmp_path`` instead of the
     checkout's results DB."""

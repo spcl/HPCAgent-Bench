@@ -422,7 +422,7 @@ def test_adding_compiler_columns_does_not_change_any_agent_rows_ratios(
     """Wiring Pluto/ppcg_hip into the figure (``statistics/plot_llr40_compilers.py``'s own
     ``--canon-columns`` default) only ADDS rows -- it must never change an agent arm's
     own per-kernel speedup (its S_i). ``pluto``/``ppcg_hip`` are absent from ``llr40_canon`` here
-    (never a validated row, exactly the historical ppcg canon sweep, job 640520), so every roster
+    (never a validated row, exactly the historical ppcg canon sweep), so every roster
     kernel on those two rows fills at 1x -- and every agent row's ratios must be BIT-IDENTICAL to
     the two-column baseline."""
     columns_2 = signed.LLR40_CANON_COLUMNS

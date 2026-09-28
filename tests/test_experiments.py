@@ -236,7 +236,7 @@ def test_a_frame_without_a_cancelled_column_is_left_alone() -> None:
 
 
 def adhoc_frame() -> pd.DataFrame:
-    """Job 640078's shape: worker w4 graded under its own run id, a curl without one filed two
+    """The production shape: worker w4 graded under its own run id, a curl without one filed two
     ``tsvc_2_s323`` grades under the judge's ``adhoc`` default, and a ``--retags`` extraction moved
     a third adhoc grade onto worker w5."""
     common = {"run_root": "r", "job": "640078", "row_kind": "submission"}

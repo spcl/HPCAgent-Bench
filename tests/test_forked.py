@@ -149,7 +149,7 @@ def test_a_childs_own_signal_beats_the_timeout_it_raced() -> None:
     # SIGTERM lands 2s into the CHILD'S life rather than 2s after p.start() -- the handler is
     # installed by then no matter how slow the box was to schedule the fork. Widening the headroom
     # was the earlier answer to this and it does not converge: the same race took CI down again
-    # (jobs 96804297562 and 97244593783) after the deadline had already gone 0.5s -> 2s.
+    # after the deadline had already gone 0.5s -> 2s.
     r = run_forked(_ignore_sigterm_then_segfault, timeout=2.0, label="race")
     assert not r.ok
     assert r.signal == "SIGSEGV", f"child's own signal must win over the timeout, got {r.signal}"

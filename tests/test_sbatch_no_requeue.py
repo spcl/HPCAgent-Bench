@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """CI lint: every Slurm batch script this repo submits carries ``#SBATCH --no-requeue``.
 
-The standing rule is jobs never self-resubmit or requeue: a NODE_FAIL auto-requeue reran job
-637040 into the SAME run directory under the same id and stacked duplicate rows on top of the
+The standing rule is jobs never self-resubmit or requeue: a NODE_FAIL auto-requeue reran a job
+into the SAME run directory under the same id and stacked duplicate rows on top of the
 partial ones the failed attempt had already written. ``#SBATCH --no-requeue`` is the one-line fix,
 and it is checked on every ``*.sbatch`` file and on any other tracked, shell-shebanged file that
 embeds a literal ``#SBATCH`` directive line.

@@ -231,7 +231,7 @@ def test_the_streamed_thinking_estimate_is_reported_but_never_added_to_the_effec
 ) -> None:
     """Both engines' ``/v1/messages`` fills ``output_tokens`` with EVERY generated token -- reasoning,
     answer text and tool arguments alike -- so adding the client's ``estimated_tokens_delta`` on top
-    charged the same reasoning twice (13/F8). Measured on job 636540 problem-0 the estimate was
+    charged the same reasoning twice (13/F8). Measured on one episode the estimate was
     34,517 against a server output of 24,153, which is why the old effective ran ~1.4x high.
 
     The property CHANGED here: before this, ``effective`` was ``fresh + output + thinking``.

@@ -430,7 +430,7 @@ def test_arm_row_forwards_opt_so_a_stale_pre_resize_row_stays_owed(
 ) -> None:
     """arm_row's ``opt`` argument must actually reach remaining_kernels.touched, not get dropped on
     the way down through kernel_status -- a submissions row graded before the kernel's own manifest
-    last changed (manifest-epoch fix, job 641739) must leave the board reporting it owed,
+    last changed (manifest-epoch fix) must leave the board reporting it owed,
     not done, exactly like remaining_kernels.py's own report would."""
     repo, kernel, changed_ts_ms = make_git_repo_with_manifest(tmp_path)
     arm = "cpf-llr-focus40-oss120b-c-cpfsrc"
@@ -532,7 +532,7 @@ def test_a_declined_kernel_is_not_counted_done(board: types.ModuleType, tmp_path
     """canon.db carries no decline REASON, only ``validated`` -- a DECLINED kernel (run-framework ran
     it and answered "no result", e.g. a non-affine loop pluto/ppcg refuses) reads validated=False the
     same as a crash, and both land in ``failed``, never counted done (measured against the real ppcg
-    canon sweep, job 640520: the pre-fix CSV-``status``-only version read 40/40 "done", 0 real
+    canon sweep: the pre-fix CSV-``status``-only version read 40/40 "done", 0 real
     results)."""
     db = tmp_path / "canon.db"
     canon_db_rows(db, "canon-llr-focus40-20260920", "ppcg", [("a", "False"), ("b", "True")])
@@ -614,7 +614,7 @@ def test_a_clean_rerun_folds_into_one_board_row(
 def test_a_smoke_job_that_reused_a_real_arms_name_is_excluded(
     board: types.ModuleType, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Job 641175: a smoke sanity check submitted under a REAL arm's name, with nothing
+    """In one job, a smoke sanity check submitted under a REAL arm's name, with nothing
     in ``runs.arm`` or the job name telling it apart. Its rows must not count as that arm's coverage,
     or an arm the smoke run never really covered reads as further along than its real jobs show."""
     arm = "harness20-qwen38-claude"
@@ -639,7 +639,7 @@ def test_a_smoke_job_that_reused_a_real_arms_name_is_excluded(
 def test_a_numbered_smoke_named_job_does_not_leak_into_a_real_campaign(
     board: types.ModuleType, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Job 642813: "harness20-caveman-qwen38-c-clean-kernels-harness20-caveman-smoke2"
+    """In one job, "harness20-caveman-qwen38-c-clean-kernels-harness20-caveman-smoke2"
     is a re-submitted smoke run (SMOKE_ARM's numbered ``-smoke2``), but no CAMPAIGNS entry is a
     prefix of its exact name, so ``campaign_of`` folded it into "harness20" and it showed up there
     as a phantom arm. It must be excluded before ``by_arm`` ever sees it, the same as a job whose id

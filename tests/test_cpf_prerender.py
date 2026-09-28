@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """A shard's rank must finish and record a verdict for every kernel it owns, never kill its siblings.
 
-Job 633849 died because a rank returned nonzero for a per-kernel render failure inside its own
+A job died because a rank returned nonzero for a per-kernel render failure inside its own
 shard; srun's kill-on-bad-exit took the other ranks down mid-render, and the roster-wide check that
 ran afterward mistook their unfinished kernels for misses. The fix moves failure reporting to the
 recorded verdict (:mod:`hpcagent_bench.cpf_cache`) and leaves the rank's own exit status to signal

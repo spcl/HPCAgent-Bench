@@ -119,7 +119,7 @@ def test_two_roles_get_two_files(tmp_path) -> None:
     """The reason the role is in the path at all. Judge and agent are launched from the same
     AMD_CE_ENV, and role_srun backgrounds the judge's srun before the agent's rewrite starts -- so a
     name-only path had the agent truncating the file the judge's srun was still reading, the step
-    ran on the bare host, and the arm was lost (589512, 590356)."""
+    ran on the bare host, and the arm was lost."""
     edf_dir = tmp_path / "edf"
     write_edf(edf_dir, "bench", MULTILINE_EDF)
 

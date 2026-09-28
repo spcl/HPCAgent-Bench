@@ -280,7 +280,7 @@ def test_install_edfs_renders_sglang_mi200_latest_onto_the_mi200_image(tmp_path:
     assert edf["env"]["SGLANG_USE_AITER"] == "0"
     # Unquoted dotted TOML keys nest: com.hooks.aws_ofi_nccl.enabled is com -> hooks -> aws_ofi_nccl.
     # The mi300 sglang EDF's pinned netstack artifact, not "host": host mode's rocm6 RCCL plugin needs
-    # libamdhip64.so.6, which a ROCm 7.2 image lacks, so tp8 init dies with no NET plugin (649811).
+    # libamdhip64.so.6, which a ROCm 7.2 image lacks, so tp8 init dies with no NET plugin.
     hooks = edf["annotations"]["com"]["hooks"]
     mi300 = tomllib.loads((CE / "sglang" / "edf.toml.in").read_text(encoding="utf-8"))["annotations"]
     assert hooks == mi300["com"]["hooks"]

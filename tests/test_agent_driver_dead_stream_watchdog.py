@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """agent_driver.py: the watchdog for a stream that dies mid ``tool_use`` and never says so.
 
-Job 641748: 23 of 40 agents sat with an open
+In one job, 23 of 40 agents sat with an open
 Bash ``tool_use`` content block and zero new bytes for 4+ hours -- CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS
 (the CLI's own idle timer) never fired, and the driver's only other backstop is the PROBLEM's wall
 clock (AGENT_TIMEOUT_SECONDS=72000, 20h), shared across every crash-relaunch attempt. Nothing killed
@@ -103,7 +103,7 @@ def test_a_missing_or_garbage_env_value_falls_back_to_the_clis_own_ceiling(
 
 
 def test_a_stream_stale_past_the_threshold_is_killed(driver: ModuleType, tmp_path: pathlib.Path) -> None:
-    """The exact 641748 shape: open tool_use, already stale on the watchdog's first poll."""
+    """The exact production shape: open tool_use, already stale on the watchdog's first poll."""
     log = age_log(tmp_path, OPEN_TOOL_USE_TAIL, age_s=999)
     process = subprocess.Popen(["sleep", "300"])
     state: driver.AgentState = {"tokens": 0, "exceeded": False, "submitted": False}

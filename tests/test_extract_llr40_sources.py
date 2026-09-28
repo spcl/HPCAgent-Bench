@@ -5,7 +5,7 @@
 
 A job can run more than one arm at once, each arm claiming a disjoint slice of the job's worker
 indices (this is how the ``owed-llr-focus40`` waves pack several conditions into one Slurm
-allocation). Job 644349 is the real instance this reproduces: a HIP worker (index 17) whose every
+allocation). A real job is the instance this reproduces: a HIP worker (index 17) whose every
 attempt failed to build or graded ``incorrect`` -- so it never reached ``submit`` -- left its last
 saved file in ``shared/agent-17/``, and the extractor filed that file under the job's OTHER arm,
 a C arm, because it picked ONE arm for the whole job rather than one per worker.
@@ -79,7 +79,7 @@ def write_manifest(benchmarks_root: pathlib.Path, kernel: str) -> None:
 
 
 def build_two_arm_job(job_dir: pathlib.Path, benchmarks_root: pathlib.Path) -> None:
-    """The 644349 shape: arm A (worker 0, graded) and arm B (worker 17, never graded, a saved
+    """The production shape: arm A (worker 0, graded) and arm B (worker 17, never graded, a saved
     HIP file left behind) in ONE job, arm A's judge row sorting first so the old job-level map
     picked it for every worker of the job, including w17's."""
     run_a = f"{ARM_A}.n0.p0.w0"
@@ -98,7 +98,7 @@ def build_two_arm_job(job_dir: pathlib.Path, benchmarks_root: pathlib.Path) -> N
 
 
 def test_a_multi_arm_job_files_a_workers_last_saved_source_under_its_own_arm(tmp_path: pathlib.Path) -> None:
-    """The 644349 regression: worker 17's last-saved file must land under ARM_B, never under ARM_A
+    """The regression: worker 17's last-saved file must land under ARM_B, never under ARM_A
     just because ARM_A's row was the job's first."""
     job_dir = tmp_path / "644349"
     benchmarks_root = tmp_path / "benchmarks"
