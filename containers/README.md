@@ -208,35 +208,50 @@ when editing. Per-model settings: [docs/serving/](../docs/serving/README.md).
 
 ## Running outside CSCS
 
-The judge and agent images carry MPICH built against libfabric. On Alps the CE's netstack hook
-supplies the host's libfabric (with the Slingshot `cxi` provider) and the EDF's `[env]` replaces the
-image's environment. Anywhere else -- docker, podman, apptainer, another site -- the image's own
-`LD_LIBRARY_PATH` reaches `/opt/ofi-fallback/lib`, a libfabric with the `tcp` and `sockets`
-providers, so MPI runs over TCP with no host library at all:
+The published images are the same everywhere; what is CSCS-specific lives only in the EDFs, whose
+`com.hooks.*` annotations mount the host's Slingshot libfabric, CXI and RCCL network plugin. Any
+other runtime gets the image as built.
+
+The judge and agent images carry a GPU-aware MPICH 4.3 (`ch4:ofi`) that loads `libfabric.so.1` at
+run time. With no hook, the image's own `LD_LIBRARY_PATH` reaches `/opt/ofi-fallback/lib`, a
+libfabric with the `tcp` and `sockets` providers, so MPI runs over TCP with nothing from the host:
 
 ```bash
 podman run --rm --device /dev/kfd --device /dev/dri <image> fi_info -p tcp -l
 ```
 
-To use a faster fabric (InfiniBand verbs, EFA, ...), bind that site's libfabric over the fallback and
-name its provider, e.g. `-v /opt/site/libfabric/lib:/opt/ofi-fallback/lib:ro -e FI_PROVIDER=verbs`.
+For a fast fabric there are two ways in, lightest first:
 
-The CE hooks are Alps-only; elsewhere the user supplies MPI integration by hand. Two common ways:
+1. **The site's libfabric.** Bind it over the fallback and name its provider; the image's MPICH
+   stays. No RPATH names a libfabric, so this is all it takes:
+   `-v /opt/site/libfabric/lib:/opt/ofi-fallback/lib:ro -e FI_PROVIDER=verbs` (or `efa`, `cxi`, ...).
+2. **The site's MPI.** MPICH, Cray MPICH, Intel MPI and MVAPICH share the `libmpi.so.12` ABI, so a
+   host build of one of them can stand in for the image's; Open MPI cannot (take option 1 or TCP).
+   `libmpi` and mpi4py are linked with RPATH, which `LD_LIBRARY_PATH` does not override, so bind the
+   host library over the image's file rather than prepending a directory, and bind its own
+   dependencies too:
+   ```bash
+   apptainer exec --bind /opt/cray/pe/mpich/default/ofi/gnu/lib/libmpi.so.12:/opt/view/lib/libmpi.so.12 \
+     --bind /opt/cray/libfabric/lib64:/opt/ofi-fallback/lib image.sif ./app
+   ```
+   The device tests need the host MPI to be GPU-aware for the same GPU.
 
-- **Swap the fabric** (above): the image's MPICH, the site's libfabric. Works with any host MPI.
-- **Swap the MPI library** (Apptainer's "bind model"): MPICH, Cray MPICH, Intel MPI and MVAPICH
-  share the `libmpi.so.12` ABI, so the host's library can stand in for the image's. Open MPI
-  hosts cannot do this; use the fabric swap or TCP.
+**Launching across nodes.** The image's MPICH speaks PMI-1 and PMI-2, not PMIx. Under Slurm, start
+one container per rank with `srun --mpi=pmi2` (Pyxis/Enroot `--container-image`, or `srun apptainer
+exec`). The image links no Slurm library, so any Slurm release that offers `--mpi=pmi2` works. On
+one node, `mpiexec -launcher fork` inside a single container needs no scheduler at all.
 
-  ```bash
-  apptainer exec --bind /opt/site/mpich/lib:/host-mpi --env LD_LIBRARY_PATH=/host-mpi:$LD_LIBRARY_PATH <image> ./app
-  ```
+| runtime | MPI and fabric |
+|---|---|
+| CSCS CE | the EDF hooks do both options automatically |
+| Enroot/Pyxis | `srun --mpi=pmi2 --container-image=...`; mount the libfabric or MPI yourself |
+| Apptainer | bind model, by hand as above |
+| Docker/Podman | `-v` binds as above, or the TCP fallback |
 
-Multi-node launch is separate from either swap: the GPU images' MPICH has Slurm PMI-1/PMI-2 (no
-PMIx) and link no Slurm library, so `srun --mpi=pmi2` launches them under any Slurm release.
-On one node `mpiexec -launcher fork` needs no host PMI.
-The CPU image carries the distro MPICH and targets single-node grading.
-The inference images need no MPI: RCCL falls back to sockets without a network plugin.
+The CPU image carries the distro MPICH and targets single-node grading. The inference images
+(`sglang`, `vllm`) need no MPI. Their GPUs talk over RCCL, which with no network plugin falls back
+to TCP sockets across nodes (pin the interface with `NCCL_SOCKET_IFNAME`); within a node it uses
+xGMI regardless.
 
 ## Publishing
 
