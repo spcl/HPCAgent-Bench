@@ -14,7 +14,7 @@ from hpcagent_bench import containers
 def clean_backend_env(monkeypatch):
     """Drop every ambient container/runtime var so a developer's shell cannot skew the argv assertions."""
     for key in list(os.environ):
-        if key.startswith("HPCAGENT_BENCH_") or key in ("OLLAMA_HOST", "ANTHROPIC_API_KEY"):
+        if key.startswith("HPCAGENT_BENCH_") or key == "ANTHROPIC_API_KEY":
             monkeypatch.delenv(key, raising=False)
     yield
 
