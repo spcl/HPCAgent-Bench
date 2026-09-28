@@ -298,11 +298,10 @@ class HoistInvariantSelfReads(ast.NodeTransformer):
         self.staged: list[ast.stmt] = []
         self._by_source: dict[str, str] = {}
 
-    def visit_IfExp(self, node: ast.IfExp) -> ast.AST:
+    def visit_IfExp(self, node: ast.IfExp | ast.BoolOp) -> ast.AST:
         return node
 
-    def visit_BoolOp(self, node: ast.BoolOp) -> ast.AST:
-        return node
+    visit_BoolOp = visit_IfExp
 
     def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
         self.generic_visit(node)

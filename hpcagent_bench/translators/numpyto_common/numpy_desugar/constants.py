@@ -219,21 +219,13 @@ class ConstComprehensionFold(ast.NodeTransformer):
         self.changed = True
         return ast.copy_location(lit, node)
 
-    def visit_ListComp(self, node: ast.ListComp) -> ast.AST:
+    def visit_ListComp(self, node: ast.ListComp | ast.SetComp | ast.DictComp | ast.GeneratorExp) -> ast.AST:
         self.generic_visit(node)
         return self.fold_(node)
 
-    def visit_SetComp(self, node: ast.SetComp) -> ast.AST:
-        self.generic_visit(node)
-        return self.fold_(node)
-
-    def visit_DictComp(self, node: ast.DictComp) -> ast.AST:
-        self.generic_visit(node)
-        return self.fold_(node)
-
-    def visit_GeneratorExp(self, node: ast.GeneratorExp) -> ast.AST:
-        self.generic_visit(node)
-        return self.fold_(node)
+    visit_SetComp = visit_ListComp
+    visit_DictComp = visit_ListComp
+    visit_GeneratorExp = visit_ListComp
 
 
 BINARY_OPS: dict[type[ast.operator], Callable[[object, object], object]] = {

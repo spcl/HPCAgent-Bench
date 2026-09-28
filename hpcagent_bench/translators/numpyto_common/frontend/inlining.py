@@ -581,15 +581,12 @@ class HoistMultiStmtHelpers(ast.NodeTransformer):
         node.body = self.rewrite_stmt_list(node.body)
         return node
 
-    def visit_For(self, node: ast.For) -> ast.AST:
+    def visit_For(self, node: ast.For | ast.While) -> ast.AST:
         node.body = self.rewrite_stmt_list(node.body)
         node.orelse = self.rewrite_stmt_list(node.orelse)
         return node
 
-    def visit_While(self, node: ast.While) -> ast.AST:
-        node.body = self.rewrite_stmt_list(node.body)
-        node.orelse = self.rewrite_stmt_list(node.orelse)
-        return node
+    visit_While = visit_For
 
     def visit_If(self, node: ast.If) -> ast.AST:
         node.test = self.rewrite_expr(node.test)

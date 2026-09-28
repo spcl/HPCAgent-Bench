@@ -721,20 +721,13 @@ class DesugarTernary(ast.NodeTransformer):
         node.body = self.process_body_(node.body)
         return node
 
-    def visit_For(self, node: ast.For):
+    def visit_For(self, node: ast.For | ast.While | ast.If):
         node.body = self.process_body_(node.body)
         node.orelse = self.process_body_(node.orelse)
         return node
 
-    def visit_While(self, node: ast.While):
-        node.body = self.process_body_(node.body)
-        node.orelse = self.process_body_(node.orelse)
-        return node
-
-    def visit_If(self, node: ast.If):
-        node.body = self.process_body_(node.body)
-        node.orelse = self.process_body_(node.orelse)
-        return node
+    visit_While = visit_For
+    visit_If = visit_For
 
     def process_body_(self, stmts: list[ast.stmt]) -> list[ast.stmt]:
         out: list[ast.stmt] = []
@@ -804,20 +797,13 @@ class BindMethodReceiver(ast.NodeTransformer):
         node.body = self.process_body(node.body)
         return node
 
-    def visit_For(self, node: ast.For):
+    def visit_For(self, node: ast.For | ast.While | ast.If):
         node.body = self.process_body(node.body)
         node.orelse = self.process_body(node.orelse)
         return node
 
-    def visit_While(self, node: ast.While):
-        node.body = self.process_body(node.body)
-        node.orelse = self.process_body(node.orelse)
-        return node
-
-    def visit_If(self, node: ast.If):
-        node.body = self.process_body(node.body)
-        node.orelse = self.process_body(node.orelse)
-        return node
+    visit_While = visit_For
+    visit_If = visit_For
 
     def process_body(self, stmts: list[ast.stmt]) -> list[ast.stmt]:
         out: list[ast.stmt] = []
@@ -1342,20 +1328,13 @@ class MaterializeDynamicFlip(ast.NodeTransformer):
         ast.fix_missing_locations(node)
         return node
 
-    def visit_For(self, node: ast.For):
+    def visit_For(self, node: ast.For | ast.While | ast.If):
         node.body = self.process_body_(node.body)
         node.orelse = self.process_body_(node.orelse)
         return node
 
-    def visit_While(self, node: ast.While):
-        node.body = self.process_body_(node.body)
-        node.orelse = self.process_body_(node.orelse)
-        return node
-
-    def visit_If(self, node: ast.If):
-        node.body = self.process_body_(node.body)
-        node.orelse = self.process_body_(node.orelse)
-        return node
+    visit_While = visit_For
+    visit_If = visit_For
 
     def process_body_(self, stmts: list[ast.stmt]) -> list[ast.stmt]:
         out: list[ast.stmt] = []
@@ -3460,15 +3439,12 @@ class LowerCallsDaceCannotReplace(ast.NodeTransformer):
         node.body, node.orelse = self.block(node.body), self.block(node.orelse)
         return node
 
-    def visit_While(self, node: ast.While) -> ast.AST:
+    def visit_While(self, node: ast.While | ast.If) -> ast.AST:
         node.test = self.visit(node.test)
         node.body, node.orelse = self.block(node.body), self.block(node.orelse)
         return node
 
-    def visit_If(self, node: ast.If) -> ast.AST:
-        node.test = self.visit(node.test)
-        node.body, node.orelse = self.block(node.body), self.block(node.orelse)
-        return node
+    visit_If = visit_While
 
     def scatter_loop(self, stmt: ast.stmt) -> list[ast.stmt] | None:
         """``np.add.at(a, idx, v)`` -> the loop nest it is defined as, or None if not one.

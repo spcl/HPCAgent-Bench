@@ -490,8 +490,5 @@ class EighInline(ast.NodeTransformer):
     def visit_AugAssign(self, node):
         return node
 
-    def visit_Return(self, node):
-        return node
-
-    def visit_Expr(self, node):
-        return node
+    visit_Return = visit_AugAssign
+    visit_Expr = visit_AugAssign

@@ -54,13 +54,11 @@ class DropGuards(RewritePass):
 
     __slots__ = ("changed",)
 
-    def visit_Raise(self, node: ast.Raise):
+    def visit_Raise(self, node: ast.Raise | ast.Assert):
         self.changed = True
         return ast.copy_location(ast.Pass(), node)
 
-    def visit_Assert(self, node: ast.Assert):
-        self.changed = True
-        return ast.copy_location(ast.Pass(), node)
+    visit_Assert = visit_Raise
 
 
 class DropValidationGuards(ast.NodeTransformer):
