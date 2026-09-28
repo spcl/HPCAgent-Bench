@@ -125,7 +125,7 @@ td.num .owed { color: var(--incomplete); }
     <div>A <b>placeholder</b> is a roster kernel the agent never delivered an answer for (self-exit or context overflow): scored 1x, and OWED -- it gets one rerun at normal budget (2026-09-20). It counts inside the "N owed" breakdown, never as a separate "complete" kernel.</div>
     <div><span class="pill rerun">rerun</span> the setup's job directories were deleted (2026-09-19, <code>experiments/rerun-lost.tsv</code>); its coverage is read from the frozen observations (dashed job chips) until the rerun is done.</div>
     <div>Rows that measured a broken treatment are deleted with their run directories, so an arm rerun from scratch starts at 0.</div>
-    <div><b>Finalize grade</b> "a/b mw4x5": of the b roster kernels whose newest episode holds a credited /submit, a were re-timed under the final grade mw4x5 (a v1-only re-time is named separately); regrade and finalize-grade jobs whose worklist names the arm are listed after it. Canon and ML scaling rows have no finalize grade.</div>
+    <div><b>Finalize grade</b> "a/b mw4x5": of the b roster kernels whose newest episode holds a credited /submit, a were re-timed under the final grade mw4x5; regrade and finalize-grade jobs whose worklist names the arm are listed after it. Canon and ML scaling rows have no finalize grade.</div>
     <div><b>Running / Queued / Owed</b>: owed kernels a RUNNING job grades, only a PENDING job will grade, or no job holds.</div>
     <div>Job chips: green COMPLETED, amber FAILED or TIMEOUT, struck-through CANCELLED. A kimi arm labelled FAILED with every agent finished is the rc 123-125 teardown, not a crash. Smoke arms have no roster.</div>
   </div>
@@ -207,7 +207,7 @@ function renderTally() {
   const need = sum(graded, a => a.final_needed), done = sum(graded, a => a.final_graded);
   tally.append(el("div", { class: "tile " + (done >= need ? "complete" : "incomplete") },
     el("span", { class: "l" }, "finalize grade mw4x5"), el("span", { class: "n" }, `${done}/${need}`),
-    el("span", { class: "d" }, `credited kernels re-timed, ${sum(graded, a => a.final_v1)} v1 only, ${DATA.regrade_jobs.length} regrade jobs active`)));
+    el("span", { class: "d" }, `credited kernels re-timed, ${DATA.regrade_jobs.length} regrade jobs active`)));
 }
 
 function renderFilters() {
@@ -259,11 +259,11 @@ function visible(arm) {
 function regradeText(list) {
   const graded = list.filter(a => a.final_needed !== undefined);
   if (!graded.length) return "";
-  const need = sum(graded, a => a.final_needed), done = sum(graded, a => a.final_graded), v1 = sum(graded, a => a.final_v1);
+  const need = sum(graded, a => a.final_needed), done = sum(graded, a => a.final_graded);
   const jobs = new Set(graded.flatMap(a => (a.regrade_jobs || []).map(j => j.id)));
   if (!need) return "finalize grade: no credited /submit to re-time";
-  const state = done >= need ? "done" : done + v1 >= need ? "done (v1 fallback on some)" : "not done";
-  return `finalize grade ${state}: ${done}/${need} mw4x5${v1 ? `, ${v1} v1 only` : ""}${jobs.size ? `, ${jobs.size} regrade jobs active` : ""}`;
+  const state = done >= need ? "done" : "not done";
+  return `finalize grade ${state}: ${done}/${need} mw4x5${jobs.size ? `, ${jobs.size} regrade jobs active` : ""}`;
 }
 
 function countsText(list) {
@@ -277,7 +277,6 @@ function regradeCell(arm) {
   if (arm.final_needed === undefined) { cell.append(el("span", { class: "empty" }, "n/a")); return cell; }
   const complete = arm.final_graded >= arm.final_needed;
   cell.append(el("span", { class: complete ? "regrade-done" : "regrade-part" }, `${arm.final_graded}/${arm.final_needed} mw4x5`));
-  if (arm.final_v1) cell.append(" ", el("span", { class: "owed" }, `+${arm.final_v1} v1`));
   if ((arm.regrade_jobs || []).length) cell.append(chips(arm.regrade_jobs));
   return cell;
 }

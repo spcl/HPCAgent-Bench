@@ -943,15 +943,13 @@ def add_regrade_status(
     regrade_jobs: list[Job],
 ) -> None:
     """Per agent row: how many roster kernels hold a credited /submit (``final_needed``), how many
-    of those the final grade re-timed under mw4x5 (``final_graded``) or only under the v1 fallback
-    (``final_v1``), and the running or queued regrade jobs whose worklist names the arm."""
+    of those the final grade re-timed under mw4x5 (``final_graded``), and the running or queued regrade jobs whose worklist names the arm."""
     job_arms = {job.id: regrade_job_arms(job.id) for job in regrade_jobs}
     for row in rows:
         kernels = [key for key in latest if key[0] == row["arm"]]
         stamps = [final.get((latest[key][0], latest[key][1], key[1]), "") for key in kernels]
         row["final_needed"] = len(kernels)
         row["final_graded"] = stamps.count(timing.FINAL_GRADE_REDUCTION)
-        row["final_v1"] = stamps.count(timing.FINAL_GRADE_REDUCTION_V1)
         row["regrade_jobs"] = [dataclasses.asdict(job) for job in regrade_jobs if row["arm"] in job_arms[job.id]]
 
 

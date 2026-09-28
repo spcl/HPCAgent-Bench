@@ -450,7 +450,7 @@ def one_reduction(values: Iterable[object], label: str = "", *, allow_unstamped:
     pooled, not pooled as a silent third reduction. Pass ``allow_unstamped=True`` only for a
     deliberate legacy-only analysis -- never as a script's default.
 
-    The final grade's stamps (:data:`FINAL_GRADE_REDUCTIONS`: v2 and its v1 fallback) are ONE
+    The final grade's stamps (:data:`FINAL_GRADE_REDUCTIONS`: the rule and its older spelling) are ONE
     reduction here: the extractor keeps one of them per submission and never
     averages the two, so a slice mixing submissions of each is returned as their ``+``-join, and
     each answer keeps its own stamp (:func:`kernel_answers`).
@@ -613,8 +613,7 @@ def repeat_policy(repeats: RepeatPolicy | str) -> RepeatPolicy:
 
 def valid_submission_rows(frame: "pd.DataFrame") -> "pd.Series":
     """True for a row that is a VALID graded answer under the final rule: a submission the final
-    re-timing stamped (``timing_reduction`` in :data:`FINAL_GRADE_REDUCTIONS`: v2, or its v1 row
-    until v2 re-times it), or one it graded UNSOLVED (the extractor turns those into attempts with
+    re-timing stamped (``timing_reduction`` in :data:`FINAL_GRADE_REDUCTIONS`), or one it graded UNSOLVED (the extractor turns those into attempts with
     ``grade_final_status`` "unsolved") -- a loss is still an answer. A submission whose re-timing
     errored, or that was never re-timed, is not."""
     import pandas as pd
