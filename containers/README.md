@@ -158,8 +158,8 @@ layers are beverin-shaped.
 ### CPU only (any node, x86_64 or aarch64)
 
 The light judge+agent pair: gcc 16, clang/flang 22 with Polly, OpenBLAS/BLIS/FFTW/ScaLAPACK/HDF5/
-SuiteSparse/SuperLU/METIS/Scotch/ARPACK/MUMPS-seq, the distro MPICH, tblis, HPTT, Pluto, numba,
-dace and the harnesses; no GPU stack, about an hour to build.
+SuiteSparse/SuperLU/METIS/Scotch/ARPACK/MUMPS-seq, a spack MPICH (no Open MPI from apt), tblis,
+HPTT, Pluto, numba, dace and the harnesses; no GPU stack, about an hour to build.
 
 ```bash
 export SBATCH_ACCOUNT=<project> SBATCH_PARTITION=<partition of the target architecture>
@@ -248,7 +248,7 @@ one node, `mpiexec -launcher fork` inside a single container needs no scheduler 
 | Apptainer | bind model, by hand as above |
 | Docker/Podman | `-v` binds as above, or the TCP fallback |
 
-The CPU image carries the distro MPICH and targets single-node grading. The inference images
+The CPU image carries the same spack MPICH (CPU-only) and targets single-node grading. The inference images
 (`sglang`, `vllm`) need no MPI. Their GPUs talk over RCCL, which with no network plugin falls back
 to TCP sockets across nodes (pin the interface with `NCCL_SOCKET_IFNAME`); within a node it uses
 xGMI regardless.

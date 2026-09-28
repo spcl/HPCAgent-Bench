@@ -60,8 +60,8 @@ it. Running needs none of that: `module load apptainer` then `apptainer run imag
 
 ## MPI
 
-The images ship MPICH (`mpich`, `libmpich-dev`, `libscalapack-mpich-dev`) with `mpi4py` built
-against it. MPICH is ABI-compatible with cray-mpich and runs under the Slingshot/CXI libfabric on
+The images ship a spack-built MPICH (with ScaLAPACK, in `/opt/view`) and `mpi4py` built against
+it. MPICH is ABI-compatible with cray-mpich and runs under the Slingshot/CXI libfabric on
 Alps, so one image runs single-node locally and multi-node on the cluster. The approach follows
 [spcl/xaas-containers-artifact](https://github.com/spcl/xaas-containers-artifact).
 
