@@ -58,7 +58,7 @@ ARG BASE_IMAGE
 # local dir: path, and that must not become the published base.name.
 ARG BASE_IMAGE_REF="${BASE_IMAGE}"
 LABEL org.opencontainers.image.title="hpcagent-bench-vllm" \
-      org.opencontainers.image.description="vLLM ${VLLM_VERSION} inference for MI300A: ROCm 7.2, CSCS netstack fabric, aiter ${AITER_REF}" \
+      org.opencontainers.image.description="vLLM ${VLLM_VERSION} inference for MI300A: ROCm 7.2, host-supplied fabric, aiter ${AITER_REF}" \
       org.opencontainers.image.version="${VLLM_VERSION}" \
       org.opencontainers.image.source="https://github.com/spcl/HPCAgent-Bench" \
       org.opencontainers.image.licenses="GPL-3.0-or-later" \
@@ -482,7 +482,7 @@ RUN set -eux; \
     [ -z "${found}" ] \
       || { echo "this image ships a fabric library in a prefix it controls:" >&2; \
            echo "${found}" >&2; \
-           echo "RPATH would bind to it and shadow the CSCS netstack artifact" >&2; exit 1; }; \
+           echo "RPATH would bind to it and shadow the host fabric library (a CE hook or a bind)" >&2; exit 1; }; \
     echo "no fabric library in /opt/ofi-sdk, /opt/ofi or /opt/aws-ofi-nccl -- the artifact supplies them"
 
 WORKDIR /workspace
