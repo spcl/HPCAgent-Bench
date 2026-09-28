@@ -42,11 +42,12 @@ from hpcagent_bench.spec import (
 
 __all__ = [
     "DRIVER",
+    "TRANSLATOR_FORMAT_NAMES",
     "RawBench",
     "RawBenchHead",
     "RawBenchInfo",
-    "RawDistribution",
     "RawInit",
+    "RawLayout",
     "RawSparseBuffer",
     "RawSparseLayout",
     "RawSparseVariant",
@@ -55,7 +56,9 @@ __all__ = [
     "emit_kernel",
     "emitter_config",
     "layouts_to_raw",
+    "layouts_to_manifest",
     "legacy_bench_info_dict",
+    "translator_format",
 ]
 
 
@@ -82,11 +85,14 @@ class RawSparseLayout(TypedDict):
     variants: dict[str, RawSparseVariant]
 
 
-class RawDistribution(TypedDict):
-    """A named (configuration, data distribution) pair."""
+class RawLayout(TypedDict):
+    """One manifest ``layouts.<A>`` entry, as :func:`hpcagent_bench.spec.parse_one_layout` reads it back."""
 
-    configuration: str
-    distribution: str
+    logical_shape: list[str]
+    nnz: str
+    offered: list[str]
+    default: str
+    dtype: str
 
 
 class RawInit(TypedDict, total=False):
@@ -123,11 +129,10 @@ class RawBench(TypedDict):
     config_values: NotRequired[dict[str, list[FuzzValue]]]
     dwarf: NotRequired[str]
     init: NotRequired[RawInit]
-    variants: NotRequired[dict[str, dict[str, str]]]
     fuzz: NotRequired[dict[str, list[str]]]
+    layouts: NotRequired[dict[str, RawLayout]]
     sparse_layouts: NotRequired[dict[str, RawSparseLayout]]
     configurations: NotRequired[dict[str, dict[str, LayoutChoice]]]
-    distributions: NotRequired[dict[str, RawDistribution]]
 
 
 class RawBenchHead(TypedDict, total=False):
@@ -148,16 +153,26 @@ class RawBenchInfo(TypedDict):
     precisions: list[str]
 
 
+#: The emitter's name for a format where it differs from the ABI's: the translators call block CSR
+#: ``bcsr``. The configuration KEY keeps the ABI name, so the symbol reads ``cg_bsr_fp64``.
+TRANSLATOR_FORMAT_NAMES = {"bsr": "bcsr"}
+
+
+def translator_format(fmt: LayoutChoice) -> LayoutChoice:
+    """``fmt`` as the translators spell it (:data:`TRANSLATOR_FORMAT_NAMES`)."""
+    return TRANSLATOR_FORMAT_NAMES.get(fmt, fmt) if isinstance(fmt, str) else fmt
+
+
 def layouts_to_raw(layouts: dict[str, SparseLayout]) -> dict[str, RawSparseLayout]:
-    """Invert ``spec._parse_sparse_layouts`` back to the JSON-native shape
-    (dict-of-dict-of-list), preserving buffer order."""
+    """The derived per-format buffers in the emitter's JSON shape (dict-of-dict-of-list), buffer
+    order preserved, formats in the translators' spelling."""
     out: dict[str, RawSparseLayout] = {}
     for name, lay in layouts.items():
         out[name] = {
             "logical_shape": list(lay.logical_shape),
             "default_dtype": lay.default_dtype,
             "variants": {
-                fmt: {
+                str(translator_format(fmt)): {
                     "buffers": [
                         {"role": b.role, "name": b.name, "shape": list(b.shape), "dtype": b.dtype} for b in var.buffers
                     ]
@@ -166,6 +181,20 @@ def layouts_to_raw(layouts: dict[str, SparseLayout]) -> dict[str, RawSparseLayou
             },
         }
     return out
+
+
+def layouts_to_manifest(layouts: dict[str, SparseLayout]) -> dict[str, RawLayout]:
+    """The ``layouts`` block as a manifest spells it, so :meth:`BenchSpec.from_dict` reads it back."""
+    return {
+        name: {
+            "logical_shape": list(lay.logical_shape),
+            "nnz": lay.nnz,
+            "offered": list(lay.offered),
+            "default": lay.default,
+            "dtype": lay.default_dtype,
+        }
+        for name, lay in layouts.items()
+    }
 
 
 def _flatten_buffer_style_sparse(bench: RawBench, spec: BenchSpec, config: str) -> None:
@@ -186,6 +215,18 @@ def _flatten_buffer_style_sparse(bench: RawBench, spec: BenchSpec, config: str) 
     if cfg is None:
         return
     input_set = set(spec.input_args)
+    buffer_style = [
+        logical
+        for logical, lay in spec.sparse_layouts.items()
+        if all(b.name in input_set for b in lay.variants[lay.default].buffers)
+    ]
+    if buffer_style and config != spec.default_layout:
+        # A buffer-style reference IS its default layout's algorithm: another layout reuses some
+        # buffer names (csc's A_indptr) with another meaning, so it has no translation.
+        raise ValueError(
+            f"{spec.short_name}: the reference takes {buffer_style}'s {spec.default_layout} buffers directly; "
+            f"there is no {config} translation of it"
+        )
     new_array_args: list[str] = list(bench["array_args"])
     shapes = dict(bench.get("init", {}).get("shapes", {}))
     dtypes = dict(bench.get("init", {}).get("dtypes", {}))
@@ -222,7 +263,6 @@ def _flatten_buffer_style_sparse(bench: RawBench, spec: BenchSpec, config: str) 
     # re-expand (a partially-flattened kernel keeps the remainder).
     bench.pop("sparse_layouts", None)
     bench.pop("configurations", None)
-    bench.pop("distributions", None)
 
 
 def bench_head(spec: BenchSpec) -> RawBenchHead:
@@ -308,8 +348,6 @@ def legacy_bench_info_dict(spec: BenchSpec, config: str | None = None) -> RawBen
     }
     if spec.init is not None:
         bench["init"] = _init_raw(spec.init)
-    if spec.variants and spec.variants != {"default": {}}:
-        bench["variants"] = spec.variants
     # The ``fuzz`` block (config space + residual constraints + data distributions)
     # must survive the round-trip so ``get_data`` can sample configs x shapes and
     # cycle the data distributions. Omitted when it is just the default (keeps a
@@ -317,12 +355,11 @@ def legacy_bench_info_dict(spec: BenchSpec, config: str | None = None) -> RawBen
     if spec.fuzz and spec.fuzz != DEFAULT_FUZZ:
         bench["fuzz"] = spec.fuzz
     if spec.sparse_layouts:
+        bench["layouts"] = layouts_to_manifest(spec.sparse_layouts)
         bench["sparse_layouts"] = layouts_to_raw(spec.sparse_layouts)
     if spec.configurations:
-        bench["configurations"] = {k: dict(c.arrays) for k, c in spec.configurations.items()}
-    if spec.distributions:
-        bench["distributions"] = {
-            k: {"configuration": d.configuration, "distribution": d.distribution} for k, d in spec.distributions.items()
+        bench["configurations"] = {
+            k: {arr: translator_format(fmt) for arr, fmt in c.arrays.items()} for k, c in spec.configurations.items()
         }
     if config is not None and config != "dense" and spec.configurations:
         _flatten_buffer_style_sparse(bench, spec, config)
@@ -341,9 +378,7 @@ def emitter_config(spec: BenchSpec, config: str | None = None) -> str | None:
     ``<short>_<config>_fp64`` -- a clean build that fails to dlopen on a missing symbol, which is
     what made fv3_dycore unscoreable for every agent that submitted it.
     """
-    if config is not None:
-        return config
-    return next(iter(spec.configurations)) if spec.configurations else None
+    return config if config is not None else spec.default_layout
 
 
 @contextlib.contextmanager

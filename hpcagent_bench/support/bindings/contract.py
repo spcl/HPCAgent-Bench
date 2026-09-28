@@ -14,7 +14,8 @@ from hpcagent_bench.translators.numpyto_common.naming import entry_symbol
 
 from hpcagent_bench.dtypes import c_type, canonical, is_storage_only
 from hpcagent_bench.languages import LANG_EXT
-from hpcagent_bench.spec import BenchSpec, Preset, declares_storage_precision, track_datatype
+from hpcagent_bench.spec import BenchSpec, LayoutChoice, Preset, declares_storage_precision, track_datatype
+from hpcagent_bench.support.helpers.sparse.abi import FORMAT_SPECS, layout_scalars
 
 __all__ = [
     "ABI_TAG",
@@ -37,6 +38,8 @@ __all__ = [
     "dense_shape",
     "graded_datatype",
     "index_base",
+    "layout_scalar_names",
+    "physical_names",
     "restrict_kw",
     "sparse_format",
     "workspace_c_params",
@@ -196,26 +199,27 @@ class Binding:
 _IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
-def _shape_identifiers(spec: BenchSpec) -> set[str]:
+def _shape_identifiers(spec: BenchSpec, config: str) -> set[str]:
     """Every identifier in a declared array shape expression (``init.shapes``, which absorbs
-    ``init.arrays[*].shape``), tokenized like the translator. Sparse arrays' ``sparse_layouts`` shapes
-    are read too (they carry ``nnz``). Empty when the manifest declares no shapes (a hand-written
-    ``initialize()``), which :func:`_symbol_names` treats as no evidence."""
+    ``init.arrays[*].shape``), tokenized like the translator, plus the logical shapes and the
+    ``config`` layout's buffer shapes of the sparse arrays (they carry ``nnz``; a format that does
+    not size a buffer by it does not pass it). Empty when the manifest declares no shapes (a
+    hand-written ``initialize()``), which :func:`_symbol_names` treats as no evidence."""
     idents: set[str] = set()
     if spec.init is not None:
         for shape_expr in spec.init.shapes.values():
             idents.update(_IDENT_RE.findall(str(shape_expr)))
-    for layout in spec.sparse_layouts.values():
+    for name, layout in spec.sparse_layouts.items():
         for token in layout.logical_shape:
             idents.update(_IDENT_RE.findall(str(token)))
-        for variant in layout.variants.values():
-            for buf in variant.buffers:
-                for token in buf.shape:
-                    idents.update(_IDENT_RE.findall(str(token)))
+        fmt = sparse_format(spec, config, name)
+        for buf in layout.variants[fmt].buffers if isinstance(fmt, str) and fmt in layout.variants else ():
+            for token in buf.shape:
+                idents.update(_IDENT_RE.findall(str(token)))
     return idents
 
 
-def _symbol_names(spec: BenchSpec) -> tuple[str, ...]:
+def _symbol_names(spec: BenchSpec, config: str) -> tuple[str, ...]:
     """Size-symbol names the kernel ABI consumes (abi_contract.md Sec. 2): ``parameters`` keys across the
     real size classes (not ``fuzzed``), kept when named in ``input_args`` or in a declared shape, so
     init-only knobs (``seed``, ``density``) do not become phantom scalars.
@@ -228,11 +232,29 @@ def _symbol_names(spec: BenchSpec) -> tuple[str, ...]:
         if size_class_name == Preset.FUZZED.value:
             continue
         names.update(size_class.keys())
-    shape_idents = _shape_identifiers(spec)
+    shape_idents = _shape_identifiers(spec, config)
     if not shape_idents:
         return tuple(sorted(names))
     input_arg_set = set(spec.input_args)
     return tuple(sorted(n for n in names if n in input_arg_set or n in shape_idents))
+
+
+def layout_scalar_names(spec: BenchSpec, config: str) -> tuple[str, ...]:
+    """The format scalars (``A_bs``, ``A_ndiag`` ...) the ``config`` layout adds to the ABI."""
+    out: list[str] = []
+    for name in spec.sparse_layouts:
+        fmt = sparse_format(spec, config, name)
+        if isinstance(fmt, str) and fmt in FORMAT_SPECS:
+            out.extend(layout_scalars(fmt, name))
+    return tuple(out)
+
+
+def physical_names(spec: BenchSpec) -> frozenset[str]:
+    """Every buffer name any layout of any sparse array uses: a buffer-style reference lists one
+    layout's buffers in ``input_args``, and none of them is ever a scalar of another layout."""
+    return frozenset(
+        buf.name for lay in spec.sparse_layouts.values() for var in lay.variants.values() for buf in var.buffers
+    )
 
 
 def _symbol_dtype(spec: BenchSpec, sym: str) -> str:
@@ -250,7 +272,7 @@ def _symbol_dtype(spec: BenchSpec, sym: str) -> str:
     return DEFAULT_SYMBOL_DTYPE
 
 
-def sparse_format(spec: BenchSpec, config: str, logical: str) -> str | None:
+def sparse_format(spec: BenchSpec, config: str, logical: str) -> LayoutChoice | None:
     """Resolve the format chosen for ``logical`` under ``config`` (or None)."""
     cfg = spec.configurations.get(config)
     if cfg is None:
@@ -317,13 +339,16 @@ def dense_shape(spec: BenchSpec, name: str) -> tuple[str, ...] | None:
 
 
 def binding_from_spec(spec: BenchSpec, config: str | None = None) -> Binding:
-    """Derive the canonical :class:`Binding` for ``spec`` (Sec. 2-8); ``config`` defaults to the first
-    declared sparse configuration ("dense" for dense kernels)."""
+    """Derive the canonical :class:`Binding` for ``spec`` (Sec. 2-8); ``config`` defaults to
+    :attr:`BenchSpec.default_layout` ("dense" for dense kernels). A sparse kernel's ``config`` is the
+    requested layout: its buffers replace the logical array and its format scalars join the symbols."""
     is_sparse = bool(spec.configurations)
     if is_sparse and config is None:
-        config = next(iter(spec.configurations))
-    if not is_sparse:
+        config = spec.default_layout
+    if not is_sparse or config is None:
         config = "dense"
+    if spec.sparse_layouts and config not in spec.configurations:
+        raise ValueError(f"{spec.short_name}: no layout {config!r}; offered: {list(spec.configurations)}")
 
     array_set = set(spec.array_args)
     output_set = set(spec.output_args)
@@ -377,12 +402,13 @@ def binding_from_spec(spec: BenchSpec, config: str | None = None) -> Binding:
     # Plain scalars: input_args minus arrays, phantoms, size symbols (added below) and emitted pointer
     # names. A pinned knob (:attr:`BenchSpec.pinned_config`) is a compile-time constant, not a parameter.
     pinned = set(spec.pinned_config)
-    symbol_names = tuple(n for n in _symbol_names(spec) if n not in pinned)
+    symbol_names = tuple(n for n in _symbol_names(spec, config) if n not in pinned)
     symbol_set = set(symbol_names)
-    ptr_names = {a.name for a in pointers}
+    skipped = set(PHANTOM_ARG_NAMES) | array_set | symbol_set | {a.name for a in pointers} | pinned
+    skipped |= physical_names(spec)
     scalars: list[Arg] = []
     for name in spec.input_args:
-        if name in PHANTOM_ARG_NAMES or name in array_set or name in symbol_set or name in ptr_names or name in pinned:
+        if name in skipped:
             continue
         scalars.append(
             Arg(
@@ -405,6 +431,12 @@ def binding_from_spec(spec: BenchSpec, config: str | None = None) -> Binding:
                 role="symbol",
             )
         )
+
+    # A layout's own scalars (docs/sparse_abi.md): the block edge, the stored diagonals, the ELL width.
+    scalars.extend(
+        Arg(name=name, kind="scalar", dtype=DEFAULT_SYMBOL_DTYPE, is_const=True, role="symbol")
+        for name in layout_scalar_names(spec, config)
+    )
 
     # Sec. 4 canonical order: pointers sorted by name, then scalars sorted by name.
     pointers.sort(key=lambda a: a.name)
