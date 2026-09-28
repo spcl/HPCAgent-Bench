@@ -478,6 +478,11 @@ class IsoparRef(NamedTuple):
     const: int  # integer part of the fastest-varying offset
     dtype: str  # element dtype
 
+    @property
+    def identity(self) -> tuple[str, str, int]:
+        """What makes two references the SAME element range: array, symbolic start, constant offset."""
+        return (self.name, self.key, self.const)
+
 
 def isopar_elem_ok(dtype: str | None) -> bool:
     """True when an element of ``dtype`` READS as its own stored value.
@@ -965,21 +970,21 @@ class CBodyEmitter(BaseEmitter):
         free = {n.id for n in ast.walk(new) if isinstance(n, ast.Name)} - set(param_dtypes) - called
         return f"[{'&' if free else ''}]({params}) {{ return static_cast<{cast_to}>({body}); }}"
 
-    @staticmethod
-    def isopar_params(found, distinct) -> tuple[dict[int, str], dict[str, str]]:
-        """``(node id -> parameter name, parameter name -> dtype)`` for one callable's elements."""
-        pos = {(r.name, r.key, r.const): k for k, r in enumerate(distinct)}
-        by_id = {id(nd): f"__v{pos[(r.name, r.key, r.const)]}" for nd, r in found}
-        return by_id, {f"__v{k}": r.dtype for k, r in enumerate(distinct)}
+    def isopar_callable(
+        self, expr: ast.AST, found: list[tuple[ast.Subscript, IsoparRef]], distinct: list[IsoparRef], cast_to: str
+    ) -> str | None:
+        """:meth:`isopar_lambda` over ``expr`` with parameter ``__v<k>`` standing for ``distinct[k]``."""
+        pos = {r.identity: k for k, r in enumerate(distinct)}
+        by_id = {id(nd): f"__v{pos[r.identity]}" for nd, r in found}
+        return self.isopar_lambda(expr, by_id, {f"__v{k}": r.dtype for k, r in enumerate(distinct)}, cast_to)
 
     @staticmethod
-    def isopar_distinct(found) -> list[IsoparRef]:
+    def isopar_distinct(found: list[tuple[ast.Subscript, IsoparRef]]) -> list[IsoparRef]:
         """The distinct ranges among ``found``, first appearance first (the callable's parameter order)."""
-        out: list[IsoparRef] = []
+        first: dict[tuple[str, str, int], IsoparRef] = {}
         for nd_, r in found:
-            if all((r.name, r.key, r.const) != (d.name, d.key, d.const) for d in out):
-                out.append(r)
-        return out
+            first.setdefault(r.identity, r)
+        return list(first.values())
 
     def isopar_map(self, target: ast.Subscript, rhs: ast.AST, idx: str, indent: str, lo: str, hi: str) -> str | None:
         """One store per iteration over a contiguous range: fill / copy / transform, or a scan when
@@ -1001,7 +1006,7 @@ class CBodyEmitter(BaseEmitter):
                 if isinstance(base, ast.Name) and base.id == dst.name:
                     return None
         alias = [r for nd_, r in found if r.name == dst.name]
-        if any((r.key, r.const) != (dst.key, dst.const) for r in alias):
+        if any(r.identity != dst.identity for r in alias):
             # The destination reads a DIFFERENT element of itself: a recurrence. Only the scan shape
             # has an algorithm; a shifted map (``a[i] = a[i+1]``) would be overlapping ranges, which
             # std::transform leaves undefined.
@@ -1027,8 +1032,7 @@ class CBodyEmitter(BaseEmitter):
             and c_type_(src.dtype) == dst_ct
         ):
             return f"{decl}\n{indent}std::copy({ISOPAR_POLICY}, {src.ptr}, {src.ptr} + {count}, {dst.ptr});"
-        by_id, param_dtypes = self.isopar_params(found, distinct)
-        lam = self.isopar_lambda(rhs, by_id, param_dtypes, dst_ct)
+        lam = self.isopar_callable(rhs, found, distinct, dst_ct)
         if lam is None:
             return None
         second = f", {distinct[1].ptr}" if len(distinct) == 2 else ""
@@ -1048,7 +1052,7 @@ class CBodyEmitter(BaseEmitter):
             return None
         operands = {id(rhs.left), id(rhs.right)}
         for (prev_node, prev), (src_node, src) in (found, found[::-1]):
-            if (prev.name, prev.key, prev.const) != (dst.name, dst.key, dst.const - 1):
+            if prev.identity != (dst.name, dst.key, dst.const - 1):
                 continue
             if src.name == dst.name or c_type_(src.dtype) != c_type_(dst.dtype):
                 continue
@@ -1117,8 +1121,7 @@ class CBodyEmitter(BaseEmitter):
                 f"{decl}\n{indent}{acc_lvalue} = std::transform_reduce({ISOPAR_POLICY}, {first}, {last}, "
                 f"{distinct[1].ptr}, {acc_lvalue});"
             )
-        by_id, param_dtypes = self.isopar_params(found, distinct)
-        lam = self.isopar_lambda(other, by_id, param_dtypes, acc_ct)
+        lam = self.isopar_callable(other, found, distinct, acc_ct)
         if lam is None:
             return None
         second = f"{distinct[1].ptr}, " if len(distinct) == 2 else ""
