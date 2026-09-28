@@ -112,10 +112,8 @@ experiments:
 
 # ---------------------------------------------------------------------------------------------
 # Campaigns: the JOB-NAME PREFIX a launcher used -> the experiment its arms belong to, the device
-# they ran on, and the roster tag they were served. This is the one place that mapping lives; it
-# used to be a literal dict in wave_board.py, a second differently-typed one in scripts/migrate_db.py
-# and a hardcoded f-string in stats/figures/kernel_comparison.py (since removed), with nothing checking the three
-# agreed. `name` is the board's own label, finer than the experiment's: llr-focus40 runs on CPU and
+# they ran on, and the roster tag they were served. This is the one place that mapping lives.
+# `name` is the campaign's own label, finer than the experiment's: llr-focus40 runs on CPU and
 # GPU under one experiment but two campaign names. Resolution takes the LONGEST matching prefix, so
 # a specific key beats its own stem (scicomp-dc-gpu over scicomp-dc); an empty `tag` means no roster.
 # ---------------------------------------------------------------------------------------------
@@ -135,8 +133,8 @@ campaigns:
 # Run roots a FUSED OWED WAVE writes: <prefix>-<experiment>-<date>,
 # one job serving many arms of one experiment, so no campaign prefix above matches the root. The rows
 # inside carry their real arm names; only the root is named after the experiment. The glob is
-# <prefix>-<digit>*, so owed-llr-focus40 does not swallow owed-llr-focus40-blind. The wave board reads
-# every root under the runs directory; an experiment's selection reads these beside its campaigns'.
+# <prefix>-<digit>*, so owed-llr-focus40 does not swallow owed-llr-focus40-blind. An experiment's
+# selection reads these beside its campaigns'.
 owed_run_roots:
   llr-focus40: [owed-llr-focus40]
   llr-focus40-blind: [owed-llr-focus40-blind]
@@ -152,8 +150,8 @@ dropped_arms: "unionalpha|^scicomp-dc-cpp-|^scicomp-dc-gpu-.*-c-openmp-(?!device
 
 # Arm names that are ONE arm under two spellings, as {regex: replacement} applied to an arm name with
 # re.sub (\1 = a captured group; an unmatched optional group is empty). The left spelling's rows, jobs
-# and owed kernels count as the right one's everywhere: remaining_kernels.base_arm (owed planning,
-# the wave board) and experiments.renamed_arm (extraction/analysis) both read it, so coverage is the
+# and owed kernels count as the right one's everywhere: remaining_kernels.base_arm (owed planning)
+# and experiments.renamed_arm (extraction/analysis) both read it, so coverage is the
 # union and the latest run per kernel wins between them. The scicomp-focus40 CPU C control ran
 # as scicomp-perf-playbook-<model>-plain and later as scicomp-dc-<model>-plain, same model,
 # language, device, empty packet, prompt and budget. Only that plain CPU C arm has both spellings; no other dc arm aliases.

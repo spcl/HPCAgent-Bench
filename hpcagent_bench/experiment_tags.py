@@ -343,7 +343,7 @@ def registry() -> Registry:
 
 def aliased_arm(arm: str) -> str:
     """``arm`` under the ONE arm the registry's ``arm_aliases`` says it is; itself when no alias
-    matches. The single fold owed planning, the wave board and extraction share."""
+    matches. The single fold owed planning and extraction share."""
     for pattern, target in registry().arm_aliases:
         arm = pattern.sub(target, arm)
     return arm

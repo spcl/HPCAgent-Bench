@@ -1,15 +1,13 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Frozen observations (data loss): the extracted rows of job dirs whose judge DBs were
-deleted join the live rows everywhere a reader walks judge DBs -- the extractor, remaining_kernels.py
-and the wave board -- and the live DB wins, job by job. A setup listed in rerun-lost.tsv shows as
-``rerun`` on the board until its rerun is done."""
+deleted join the live rows everywhere a reader walks judge DBs -- the extractor and
+remaining_kernels.py -- and the live DB wins, job by job."""
 
 import csv
 import importlib.util
 import json
 import pathlib
-import re
 import sqlite3
 import sys
 import types
@@ -29,7 +27,7 @@ def load(name: str, path: pathlib.Path) -> types.ModuleType:
     return module
 
 
-#: Registered under its import name, so remaining_kernels / wave_board / the extractor share this object.
+#: Registered under its import name, so remaining_kernels and the extractor share this object.
 from hpcagent_bench import frozen_observations  # noqa: E402
 
 MODELS = ("kimi27sglang", "oss120b", "qwen38", "glm53")
@@ -57,11 +55,6 @@ FIELDS = (
 @pytest.fixture(name="kernels", scope="module")
 def kernels_fixture() -> types.ModuleType:
     return load("remaining_kernels", EXPERIMENTS / "remaining_kernels.py")
-
-
-@pytest.fixture(name="board", scope="module")
-def board_fixture() -> types.ModuleType:
-    return load("wave_board", EXPERIMENTS / "wave_board.py")
 
 
 def frozen_row(
@@ -295,71 +288,3 @@ def test_the_extractor_adds_a_deleted_jobs_frozen_rows_and_marks_them(tmp_path: 
     assert tasks == [(f"{ARM}.n0.p0.w0", "7", "0"), (f"{ARM}.n0.p1.w1", "555", "1"), (f"{ARM}.n0.p2.w2", "3", "1")]
     cut = next(row for row in rows if row["row_kind"] == "task" and row["run_id"] == f"{ARM}.n0.p2.w2")
     assert cut["ts_ms"] == "1234"  # the snapshot's start, not the cut dir's tokens.json mtime
-
-
-# --- wave_board.py ----------------------------------------------------------------------------
-
-
-def test_rerun_setups_reads_every_setup_not_yet_done_under_its_identity(
-    board: types.ModuleType, tmp_path: pathlib.Path
-) -> None:
-    listing = tmp_path / "rerun-lost.tsv"
-    listing.write_text(
-        "# comment\narm\tdeleted_jobs\treason\tstatus\n"
-        f"{ARM}-clean\t1\tDBs deleted\tpending\n"
-        "llrblind-kimi27sglang-c\t2\tDBs deleted\trerun-submitted\n"
-        "gpu-llr-focus40-kimi27sglang-hip\t3\tDBs deleted\tdone\n",
-        encoding="utf-8",
-    )
-    assert board.rerun_setups(listing) == {ARM: "pending", "llrblind-cmp-kimi27sglang-c": "rerun-submitted"}
-
-
-def test_the_tracked_rerun_list_names_every_lost_setup_pending(board: types.ModuleType) -> None:
-    """Experiments/rerun-lost.tsv is the tracked record: 19 setups, none rerun yet; four
-    host-resident GPU triton/c-openmp setups left it with their arms' retirement."""
-    with board.RERUN_LOST.open(newline="", encoding="utf-8") as handle:
-        rows = list(csv.DictReader((line for line in handle if not line.startswith("#")), delimiter="\t"))
-    assert len(rows) == 15
-    assert {row["status"] for row in rows} <= {"pending", "rerun-submitted", "done"}
-    assert all(row["deleted_jobs"] and row["reason"] for row in rows)
-
-
-def test_a_setup_listed_for_rerun_is_yellow_with_its_frozen_coverage(
-    board: types.ModuleType, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A dropped arm listed for rerun stays on the board as ``rerun``; its deleted job (no sacct
-    record, no directory) still contributes its frozen coverage. The arm is dropped here, whatever
-    the registry drops."""
-    monkeypatch.setattr(board, "DROPPED_ARMS", re.compile(re.escape(DROPPED_ARM)))
-    runs = tmp_path / "runs"
-    live_job(runs / ROOT, "200", ["b"], arm=DROPPED_ARM)
-    frozen = write_frozen(tmp_path, [frozen_row("100", "submission", "a", arm=DROPPED_ARM)])
-    listing = tmp_path / "rerun-lost.tsv"
-    listing.write_text(
-        f"arm\tdeleted_jobs\treason\tstatus\n{DROPPED_ARM}\t100\tDBs deleted\tpending\n", encoding="utf-8"
-    )
-    monkeypatch.setattr(board, "RERUN_LOST", listing)
-    # Only this synthetic list names reruns: the repo's own rerun-kernels.tsv is live state.
-    monkeypatch.setattr(board.remaining_kernels, "RERUN_KERNELS", tmp_path / "rerun-kernels.tsv")
-    monkeypatch.setattr(board, "slurm_jobs", lambda ids: [board.Job("200", DROPPED_ARM, "COMPLETED", 1, "", "")])
-    monkeypatch.setattr(board, "queued_ids", list)
-    monkeypatch.setattr(board.remaining_kernels, "roster", lambda tag, opt: ["a", "b", "c"])
-
-    rows = board.arm_rows(runs, str(REPO), MODELS, frozen)
-
-    assert [(row["arm"], row["status"], row["rerun"], row["done"]) for row in rows] == [
-        (DROPPED_ARM, "rerun", "pending", 2)
-    ]
-    assert rows[0]["frozen_jobs"] == ["100"]
-    assert {job["id"]: job["state"] for job in rows[0]["jobs"]} == {"100": board.DELETED_STATE, "200": "COMPLETED"}
-
-    listing.write_text(f"arm\tdeleted_jobs\treason\tstatus\n{DROPPED_ARM}\t100\tDBs deleted\tdone\n", encoding="utf-8")
-    assert board.arm_rows(runs, str(REPO), MODELS, frozen) == []  # rerun done: the drop rule applies again
-
-
-def test_the_page_draws_the_rerun_status_yellow(board: types.ModuleType) -> None:
-    page = board.render({"generated": "", "cluster": "", "arms": [{"status": "rerun"}]})
-    assert '"rerun"' in page
-    assert "tr.rerun td { background: var(--rerun-soft); }" in page
-    assert ".pill.rerun" in page and "--rerun:" in page
-    assert json.loads(page.split('id="data">')[1].split("</script>")[0])["arms"] == [{"status": "rerun"}]

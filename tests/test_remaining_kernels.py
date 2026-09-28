@@ -511,7 +511,7 @@ def test_the_caveman_smoke_642813_is_no_coverage_for_the_arm_it_recorded(
     module: types.ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
 ) -> None:
     """One smoke job recorded ``runs.arm = harness20-caveman-qwen38-c-clean``; only its sacct name says
-    smoke, which wave_board reads and this script never does. The two must still agree."""
+    smoke, which this script never reads."""
     arm = "harness20-caveman-qwen38-c-clean"
     assert module.is_smoke("642813", arm)
     assert module.SMOKE_ARM.search("harness20-caveman-qwen38-c-clean-kernels-harness20-caveman-smoke2")
@@ -990,7 +990,7 @@ def test_comparable_since_ms_falls_back_to_counting_when_git_is_unavailable(
 def test_comparable_since_ms_shells_out_only_on_the_first_call(
     module: types.ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
 ) -> None:
-    """Cached per (kernel, opt): a wave board redraw or a report over many jobs must not re-shell to
+    """Cached per (kernel, opt): a report over many jobs must not re-shell to
     git once per row -- see the module docstring's ``comparable_since_ms``. The backward walk over a
     manifest's own history (semantic-hash fix) makes more than one call on the FIRST
     lookup (one ``log`` plus one ``show`` per commit walked); the property this test protects is that

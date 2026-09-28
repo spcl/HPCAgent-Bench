@@ -4,7 +4,7 @@
 
 Their rows survive in a read-only extraction (``hpcagent_bench.observations_extract`` output, one
 ``<group>/llr40_observations.csv`` per campaign group). That frozen copy IS the record for those jobs
-until their setups are rerun (``experiments/rerun-lost.tsv``).
+until their setups are rerun.
 
 Every reader that walks judge DBs joins these rows the same way: a job is read from its LIVE
 directory when that directory exists, and from the frozen rows only when it does not (the live DB
