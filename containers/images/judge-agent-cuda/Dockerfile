@@ -648,9 +648,10 @@ RUN set -eux; \
 # OpenMPI collides with mpich over `mpi`, so it stays out of the environment and is reached through
 # OPENMPI_ROOT; its bin is NOT on PATH. The base's HPC-X Open MPI is not used for this: it is the
 # base's, it moves with the base, and it is not built +cuda against this toolchain.
-# tblis v1.3.0 and HPTT come from the repo's own scripts, as on judge-agent-amd; ska_sort is a
+# tblis and HPTT come from the repo's own scripts, as on judge-agent-amd; ska_sort is a
 # single header pinned to an observed commit.
-ARG TBLIS_REF=v1.3.0
+# Empty: build-tblis.sh picks the ref per architecture (v1.3.0 is x86-only).
+ARG TBLIS_REF=
 ARG SKA_SORT_REF=2c14d4bf7b667032ed28a481065f721385e33849
 COPY containers/lib/build-hptt.sh /build-hptt.sh
 COPY containers/lib/build-tblis.sh /build-tblis.sh

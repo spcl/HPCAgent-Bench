@@ -23,7 +23,14 @@ REPO="${TBLIS_REPO:-https://github.com/devinamatthews/tblis.git}"
 # carries its own kernels, has no submodules and no vendored BLIS; only its knl config touches
 # %rbp, and the config list below never selects knl. Verified to build under the image's gcc 16.2
 # in 621508.
-REF="${TBLIS_REF:-v1.3.0}"
+# v1.3.0 is x86-only: marray includes <x86intrin.h> unconditionally. Elsewhere take develop at a
+# pinned commit, whose vendored BLIS builds its armsve kernels under gcc 16 (the haswell problem
+# above does not arise off x86).
+case "$(uname -m)" in
+    x86_64) default_ref="v1.3.0" ;;
+    *) default_ref="555320c710f04ae8e2554c6f1c9c3f3691a3a621" ;;
+esac
+REF="${TBLIS_REF:-${default_ref}}"
 CXX="${CXX:-g++}"
 # Named, not left to CMake's default. TBLIS vendors BLIS, whose config/*/make_defs.mk derives a
 # vendor from `$(CC) --version` and hard-errors on anything but gcc/icc/clang/nvc. CMake picks
