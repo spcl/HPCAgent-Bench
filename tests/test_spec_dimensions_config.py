@@ -2,10 +2,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """SIZE DIMENSIONS vs CONFIG KNOBS manifest schema (see hpcagent_bench/spec.py's module docstring).
 
-Locks the additive, backward-compatible split: a manifest still declaring the legacy flat
-``parameters:`` block loads unchanged, while one declaring the new ``dimensions:`` (+ optional
-``config:``/``constraints:``) keeps ``BenchSpec.parameters`` as the same merged
-``{preset: {symbol: value}}`` view every existing consumer reads.
+Locks the split: a manifest declares its size symbols under ``parameters:`` (+ optional
+``config:``/``constraints:``), and ``BenchSpec.parameters`` is the merged
+``{preset: {symbol: value}}`` view every consumer reads.
 """
 
 from typing import Any
@@ -33,9 +32,9 @@ def _raw(short_name: str = "dimtest", **overrides: Any) -> dict[str, Any]:
     return base
 
 
-def test_old_style_manifest_still_loads_and_exposes_parameters() -> None:
-    """A manifest with only the legacy 'parameters:' block loads unchanged: 'dimensions' mirrors
-    it verbatim and 'config' stays empty."""
+def test_a_manifest_without_config_exposes_parameters() -> None:
+    """A manifest with only a 'parameters:' block: 'dimensions' mirrors it verbatim and 'config'
+    stays empty."""
     raw = _raw(parameters={"S": {"N": 16}, "M": {"N": 32}})
     spec = BenchSpec.from_dict(raw, source="<test>")
     assert spec.parameters == {"S": {"N": 16}, "M": {"N": 32}}
@@ -44,12 +43,12 @@ def test_old_style_manifest_still_loads_and_exposes_parameters() -> None:
     assert spec.constraints == ()
 
 
-def test_new_style_separates_dimensions_and_config() -> None:
-    """A manifest declaring 'dimensions:' + 'config:' keeps them apart in .dimensions/.config,
+def test_parameters_and_config_stay_apart() -> None:
+    """A manifest declaring 'parameters:' + 'config:' keeps them apart in .dimensions/.config,
     while .parameters merges each config knob's representative value into every preset -- the
     view frameworks/benchmark.py, support/bindings/contract.py, and initialize.py already read."""
     raw = _raw(
-        dimensions={"S": {"N": 16}, "M": {"N": 32}},
+        parameters={"S": {"N": 16}, "M": {"N": 32}},
         config={
             "lvn_only": {"domain": [0, 1], "selects": "branch"},
             "max_iter": {"value": 200, "selects": "iteration"},
@@ -68,41 +67,24 @@ def test_new_style_separates_dimensions_and_config() -> None:
     }
 
 
-def test_both_parameters_and_dimensions_raises() -> None:
-    """Declaring both the legacy and the new size-symbol block is an ambiguity error, not a
-    silent 'one wins' resolution."""
-    raw = _raw(parameters={"S": {"N": 16}}, dimensions={"S": {"N": 16}})
-    with pytest.raises(ValueError, match="both 'parameters'"):
-        BenchSpec.from_dict(raw, source="<test>")
-
-
 def test_config_domain_and_value_raises() -> None:
     """A config entry declaring BOTH 'domain' and 'value' is ambiguous: is it an axis or pinned?"""
-    raw = _raw(dimensions={"S": {"N": 16}}, config={"lvn": {"domain": [32, 64], "value": 32}})
+    raw = _raw(parameters={"S": {"N": 16}}, config={"lvn": {"domain": [32, 64], "value": 32}})
     with pytest.raises(ValueError, match="both 'domain' and 'value'"):
         BenchSpec.from_dict(raw, source="<test>")
 
 
 def test_config_neither_domain_nor_value_raises() -> None:
     """A config entry declaring NEITHER 'domain' nor 'value' has no concrete or fuzzable value."""
-    raw = _raw(dimensions={"S": {"N": 16}}, config={"lvn": {"selects": "tile"}})
+    raw = _raw(parameters={"S": {"N": 16}}, config={"lvn": {"selects": "tile"}})
     with pytest.raises(ValueError, match="neither 'domain'"):
         BenchSpec.from_dict(raw, source="<test>")
 
 
-def test_mismatched_preset_key_sets_raises() -> None:
-    """Every preset in 'dimensions:' must declare the SAME symbol set -- a symbol missing from one
-    preset used to silently union away (spec.py's old 'parameters' handling) and explode at run
-    time; the new schema catches it at load."""
-    raw = _raw(dimensions={"S": {"N": 16}, "M": {"N": 32, "K": 2}})
-    with pytest.raises(ValueError, match="same symbol set"):
-        BenchSpec.from_dict(raw, source="<test>")
-
-
 def test_dimension_and_config_overlap_raises() -> None:
-    """A symbol cannot be declared in BOTH 'dimensions' and 'config' -- the merge in .parameters
+    """A symbol cannot be declared in BOTH 'parameters' and 'config' -- the merge in .parameters
     would let the config value silently clobber the dimension value."""
-    raw = _raw(dimensions={"S": {"N": 16}}, config={"N": {"value": 16}})
+    raw = _raw(parameters={"S": {"N": 16}}, config={"N": {"value": 16}})
     with pytest.raises(ValueError, match="declared in BOTH"):
         BenchSpec.from_dict(raw, source="<test>")
 
@@ -111,7 +93,7 @@ def test_violated_constraint_raises() -> None:
     """A 'constraints:' expression is evaluated at LOAD against every preset's merged dimension +
     config-representative values; a violated one raises immediately, naming the expression."""
     raw = _raw(
-        dimensions={"S": {"nproma": 16}},
+        parameters={"S": {"nproma": 16}},
         config={"lvn": {"value": 32}},
         constraints=["lvn <= nproma"],
     )
@@ -122,7 +104,7 @@ def test_violated_constraint_raises() -> None:
 def test_satisfied_constraint_loads() -> None:
     """A constraint that holds for every preset is a no-op at load time and survives on the spec."""
     raw = _raw(
-        dimensions={"S": {"nproma": 64}},
+        parameters={"S": {"nproma": 64}},
         config={"lvn": {"value": 32}},
         constraints=["lvn <= nproma"],
     )
@@ -160,7 +142,7 @@ def test_a_knob_only_in_init_scalars_loads() -> None:
 def test_a_mapping_config_crosses_its_domains_into_a_product() -> None:
     spec = BenchSpec.from_dict(
         _raw(
-            dimensions={"S": {"N": 16}},
+            parameters={"S": {"N": 16}},
             config={
                 "lower": {"domain": [False, True]},
                 "mode": {"domain": [0, 1]},
@@ -178,7 +160,7 @@ def test_constraints_filter_the_product_they_do_not_just_assert_on_it() -> None:
     """The impossible corner is carved out of the space, not merely rejected at load."""
     spec = BenchSpec.from_dict(
         _raw(
-            dimensions={"S": {"N": 16}},
+            parameters={"S": {"N": 16}},
             config={
                 "okvan": {"domain": [False, True]},
                 "okpaw": {"domain": [False, True]},
@@ -194,7 +176,7 @@ def test_constraints_filter_the_product_they_do_not_just_assert_on_it() -> None:
 def test_a_list_config_is_a_curated_space_taken_verbatim() -> None:
     """A curated list is NOT a product: two flags, three rows, and no fourth row invented."""
     rows = [{"a": 0, "b": 0}, {"a": 1, "b": 0}, {"a": 1, "b": 1}]
-    spec = BenchSpec.from_dict(_raw(dimensions={"S": {"N": 16}}, config=rows), source="<test>")
+    spec = BenchSpec.from_dict(_raw(parameters={"S": {"N": 16}}, config=rows), source="<test>")
     assert list(spec.config_space) == rows
     assert spec.config == {}
     assert spec.config_names == {"a", "b"}
@@ -203,7 +185,7 @@ def test_a_list_config_is_a_curated_space_taken_verbatim() -> None:
 def test_a_curated_row_missing_a_symbol_is_rejected() -> None:
     """A short row would leave that symbol bound to whatever the preset carried."""
     with pytest.raises(ValueError, match="same symbols"):
-        BenchSpec.from_dict(_raw(dimensions={"S": {"N": 16}}, config=[{"a": 0, "b": 0}, {"a": 1}]), source="<test>")
+        BenchSpec.from_dict(_raw(parameters={"S": {"N": 16}}, config=[{"a": 0, "b": 0}, {"a": 1}]), source="<test>")
 
 
 def test_a_curated_row_violating_a_constraint_is_rejected_not_dropped() -> None:
@@ -212,7 +194,7 @@ def test_a_curated_row_violating_a_constraint_is_rejected_not_dropped() -> None:
     with pytest.raises(ValueError, match="violates constraint"):
         BenchSpec.from_dict(
             _raw(
-                dimensions={"S": {"N": 16}},
+                parameters={"S": {"N": 16}},
                 config=[{"okvan": False, "okpaw": False}, {"okvan": False, "okpaw": True}],
                 constraints=["okpaw <= okvan"],
             ),
@@ -223,7 +205,7 @@ def test_a_curated_row_violating_a_constraint_is_rejected_not_dropped() -> None:
 def test_a_curated_config_pins_a_representative_into_every_preset() -> None:
     """A plain ``-p M`` run still has a concrete value for every knob."""
     spec = BenchSpec.from_dict(
-        _raw(dimensions={"S": {"N": 16}, "M": {"N": 32}}, config=[{"a": 7}, {"a": 9}]), source="<test>"
+        _raw(parameters={"S": {"N": 16}, "M": {"N": 32}}, config=[{"a": 7}, {"a": 9}]), source="<test>"
     )
     assert spec.parameters == {"S": {"N": 16, "a": 7}, "M": {"N": 32, "a": 7}}
     assert spec.dimensions == {"S": {"N": 16}, "M": {"N": 32}}
@@ -232,7 +214,7 @@ def test_a_curated_config_pins_a_representative_into_every_preset() -> None:
 def test_the_config_space_does_not_depend_on_the_size_preset() -> None:
     """Configs are orthogonal to size: S and XL evaluate the SAME space."""
     spec = BenchSpec.from_dict(
-        _raw(dimensions={"S": {"N": 16}, "XL": {"N": 4096}}, config={"mode": {"domain": [0, 1, 2]}}), source="<test>"
+        _raw(parameters={"S": {"N": 16}, "XL": {"N": 4096}}, config={"mode": {"domain": [0, 1, 2]}}), source="<test>"
     )
     assert len(spec.config_space) == 3
     assert set(spec.dimensions) == {"S", "XL"}
@@ -253,7 +235,7 @@ def test_a_pinned_knob_is_a_compile_time_constant_a_fuzzed_one_is_not() -> None:
     unroll a loop whose trip count it is only handed at run time. A knob with a ``domain:`` is a
     real axis the harness varies, so it stays a parameter."""
     spec = BenchSpec.from_dict(
-        _raw(dimensions={"S": {"N": 16}}, config={"max_iter": {"value": 100}, "mode": {"domain": [0, 1]}}),
+        _raw(parameters={"S": {"N": 16}}, config={"max_iter": {"value": 100}, "mode": {"domain": [0, 1]}}),
         source="<test>",
     )
     assert spec.pinned_config == {"max_iter": 100}
@@ -265,6 +247,6 @@ def test_a_curated_config_list_pins_nothing() -> None:
     """A curated list is a SPACE the harness picks a row from, so no member is a constant --
     even though each row states one value, the next row states a different one."""
     spec = BenchSpec.from_dict(
-        _raw(dimensions={"S": {"N": 16}}, config=[{"mode": 0, "tile": 32}, {"mode": 1, "tile": 64}]), source="<test>"
+        _raw(parameters={"S": {"N": 16}}, config=[{"mode": 0, "tile": 32}, {"mode": 1, "tile": 64}]), source="<test>"
     )
     assert spec.pinned_config == {}

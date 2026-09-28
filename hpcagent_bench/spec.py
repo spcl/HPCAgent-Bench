@@ -123,10 +123,10 @@ __all__ = [
     "parse_config_list",
     "parse_config_space",
     "parse_configurations",
-    "parse_dimensions",
     "parse_distributions",
     "parse_init",
     "parse_mpi",
+    "parse_parameters",
     "parse_preset",
     "parse_scenarios",
     "parse_sparse_buffer",
@@ -161,8 +161,8 @@ __all__ = [
 #: fuzzer resolves its draws with (:func:`hpcagent_bench.fuzz.safe_eval`).
 ConfigRow = dict[str, FuzzValue]
 
-#: ``{preset: {symbol: value}}`` -- the size table a manifest declares under ``dimensions:`` /
-#: ``parameters:``. A concrete rung holds numbers; the ``fuzzed`` preset holds the ``[lo, hi]`` /
+#: ``{preset: {symbol: value}}`` -- the size table a manifest declares under ``parameters:``.
+#: A concrete rung holds numbers; the ``fuzzed`` preset holds the ``[lo, hi]`` /
 #: ``{set: ...}`` / ``{construct: ...}`` specs the fuzzer resolves, which is why the value type is
 #: the fuzz vocabulary and not ``int``.
 PresetTable = dict[str, dict[str, FuzzValue]]
@@ -766,7 +766,7 @@ CONFIG_KNOB_KEYS = frozenset({"domain", "value", "selects"})
 class ConfigKnob:
     """One execution-path selector declared under a manifest's ``config:`` block -- a branch flag,
     a tile size, an iteration cap, ... NEVER scaled by a size preset; that is what distinguishes it
-    from a ``dimensions:`` entry (see the module docstring's motivation).
+    from a ``parameters:`` entry (see the module docstring's motivation).
 
     :ivar domain: The knob's fuzzable value set (e.g. tile sizes ``[32, 64]``), or ``None`` when the
         knob is pinned. Mutually exclusive with :attr:`value`.
@@ -918,7 +918,7 @@ def _validate_constraints(constraints: tuple[str, ...], parameters_view: PresetT
             except NameError as exc:
                 raise ValueError(
                     f"{source}: {kernel}: constraint {expr!r} references undeclared name "
-                    f"{exc} (preset {preset!r}); every name must be a 'dimensions'/'parameters' "
+                    f"{exc} (preset {preset!r}); every name must be a 'parameters' "
                     f"or 'config' symbol"
                 ) from exc
             if not ok:
@@ -993,7 +993,7 @@ def _validate_shape_identifiers(
     has actually produced by call time -- so ``cpp_runtime`` never has anything to pass for it and
     every later positional argument reads out of the wrong register.
 
-    An identifier resolves when it is a declared ``parameters``/``dimensions``/``config`` symbol,
+    An identifier resolves when it is a declared ``parameters``/``config`` symbol,
     an ``input_args`` or ``array_args`` name, or a module-level constant in the kernel's numpy
     reference (``nclv`` in cloudsc) -- the same sources :func:`_shape_identifiers`-driven binding
     assembly and the translator's own promotion pass can resolve. The module-level-constant lookup
@@ -1019,7 +1019,7 @@ def _validate_shape_identifiers(
                 f"input_args or array_args entry, nor a module-level constant in the kernel's "
                 f"numpy reference -- nothing can ever pass a value for it, so the emitted C "
                 f"signature would carry a phantom argument that shifts every later scalar "
-                f"(abi_contract.md Sec. 4). Declare {ident!r} in 'parameters'/'dimensions', or "
+                f"(abi_contract.md Sec. 4). Declare {ident!r} in 'parameters', or "
                 f"express the shape using an already-declared symbol."
             )
 
@@ -1208,7 +1208,6 @@ KNOWN_MANIFEST_KEYS = frozenset(
         "module_name",
         "func_name",
         "parameters",
-        "dimensions",
         "config",
         "constraints",
         "input_args",
@@ -1666,24 +1665,17 @@ def parse_scenarios(init_raw: dict[str, object], source: str) -> dict[str, str]:
     return scenarios
 
 
-def parse_dimensions(dims_raw: object, key: str, enforce_equal: bool, source: str) -> PresetTable:
-    """The ``dimensions:`` (or legacy ``parameters:``) block -> ``{preset: {symbol: value}}``.
-
-    Only ``dimensions`` (``enforce_equal``) requires every preset to declare the same symbol set."""
-    if not isinstance(dims_raw, dict) or not dims_raw:
-        raise ValueError(f"{source}: {key!r} must be a non-empty mapping of preset -> {{symbol: value}}")
-    dimensions_map: PresetTable = {}
-    for preset, raw_values in as_block(dims_raw).items():
-        preset_field = f"{key}.{preset}"
-        dimensions_map[preset] = {
-            sym: value_of(v, f"{preset_field}.{sym}", source)
-            for sym, v in block_of(raw_values, preset_field, source).items()
+def parse_parameters(params_raw: object, source: str) -> PresetTable:
+    """The ``parameters:`` block -> ``{preset: {symbol: value}}``."""
+    if not isinstance(params_raw, dict) or not params_raw:
+        raise ValueError(f"{source}: 'parameters' must be a non-empty mapping of preset -> {{symbol: value}}")
+    return {
+        preset: {
+            sym: value_of(v, f"parameters.{preset}.{sym}", source)
+            for sym, v in block_of(raw_values, f"parameters.{preset}", source).items()
         }
-    key_sets = {preset: frozenset(values) for preset, values in dimensions_map.items()}
-    if enforce_equal and len(set(key_sets.values())) > 1:
-        detail = ", ".join(f"{p}={sorted(ks)}" for p, ks in sorted(key_sets.items()))
-        raise ValueError(f"{source}: every preset in 'dimensions' must declare the same symbol set; got {detail}")
-    return dimensions_map
+        for preset, raw_values in as_block(params_raw).items()
+    }
 
 
 def parse_config_space(
@@ -1918,9 +1910,8 @@ class BenchSpec:
     # manifest -- see :class:`BaselineSpec` and ``harness.grading.resolve_baseline``.
     baseline: BaselineSpec | None = None
 
-    # SIZE DIMENSIONS vs CONFIG KNOBS (optional; absent => the legacy 'parameters:' block populates
-    # 'dimensions' and 'config' stays empty -- see :meth:`from_dict`). 'dimensions' is what a size
-    # preset actually scales: {preset: {symbol: value}}, every preset carrying the SAME symbol set.
+    # SIZE DIMENSIONS vs CONFIG KNOBS. 'dimensions' is the manifest's 'parameters:' block as
+    # declared: what a size preset actually scales, {preset: {symbol: value}}.
     # 'config' is the execution-path selectors a preset must NEVER scale (branch flags, tile sizes,
     # iteration caps, ...), keyed by symbol -> :class:`ConfigKnob`. 'parameters' above stays the
     # merged {preset: {symbol: value}} view every existing consumer reads, config knobs included at
@@ -1971,9 +1962,7 @@ class BenchSpec:
             inner ``benchmark`` block; both are accepted).
         :param source: Path or label used in error messages.
         :raises ValueError: When a required field is missing or an
-            unknown field is present; also when both ``parameters`` and
-            ``dimensions`` are declared, a ``dimensions`` preset's symbol
-            set diverges from the others, a ``config`` entry is malformed,
+            unknown field is present; also when a ``config`` entry is malformed,
             a symbol is both a dimension and a config knob, or a
             ``constraints`` expression is violated (see :func:`_validate_constraints`).
         """
@@ -1990,18 +1979,8 @@ class BenchSpec:
             bench["short_name"] = pathlib.PurePosixPath(str(declared_path)).name
         required = ("short_name", "name", "relative_path", "module_name", "func_name", "output_args")
         missing = [k for k in required if k not in bench]
-        # Size symbols come as legacy flat 'parameters' or as 'dimensions' (+ optional 'config'),
-        # never both.
-        has_old_params = "parameters" in bench
-        has_new_dims = "dimensions" in bench
-        if has_old_params and has_new_dims:
-            raise ValueError(
-                f"{source}: manifest declares both 'parameters' (legacy) and 'dimensions' "
-                f"(new schema) -- declare exactly one: 'dimensions' (+ optional 'config') for "
-                f"the size/knob split, or 'parameters' for the legacy single-block form."
-            )
-        if not has_old_params and not has_new_dims:
-            missing.append("parameters (or its replacement, 'dimensions')")
+        if "parameters" not in bench:
+            missing.append("parameters")
         if missing:
             raise ValueError(f"{source}: missing required field(s) {missing}")
         short_name = str(bench["short_name"])
@@ -2022,8 +2001,7 @@ class BenchSpec:
         input_args = resolve_input_args(bench, relative_path, module_name, func_name, source)
         # 'parameters' below keeps its one meaning for every consumer, {preset: {symbol: value}},
         # with each config knob's representative value merged in.
-        key = "dimensions" if has_new_dims else "parameters"
-        dimensions_map = parse_dimensions(bench[key], key, has_new_dims, source)
+        dimensions_map = parse_parameters(bench["parameters"], source)
         config_knobs, config_valid = parse_config_space(bench.get("config") or {}, short_name, source)
         config_syms = set(config_knobs) | (set(config_valid[0]) if config_valid else set[str]())
         all_dim_syms = {sym for symbols in dimensions_map.values() for sym in symbols}
@@ -2031,7 +2009,7 @@ class BenchSpec:
         if dim_config_overlap:
             raise ValueError(
                 f"{source}: symbol(s) {dim_config_overlap} are declared in BOTH "
-                f"'dimensions'/'parameters' and 'config' -- a symbol is a size dimension or "
+                f"'parameters' and 'config' -- a symbol is a size dimension or "
                 f"a config knob, never both."
             )
         # Every preset carries ONE concrete config (pinned value / first domain entry, or the first
