@@ -41,7 +41,7 @@ mkdir -p "$(dirname "${EDF}")"
 # naming both prefixes would probe the wrong venv first.
 case "${PROFILE}" in
     sglang|sglang-mi200) ce_path="/opt/venv/bin" ;;
-    vllm)                ce_path="/opt/pytorch211/bin" ;;
+    vllm)                ce_path="/usr/local/bin:/usr/bin" ;;
     *)                   ce_path="/opt/gcc/bin:/opt/view/bin:/opt/papi/bin:/opt/venv/bin" ;;
 esac
 # FI_PROVIDER on inference profiles only: setting it globally aborts MPI_Init on images that also

@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 # Build the vLLM inference image on a compute node.
 #
-# It asks for no GPUs, but the mi300 node exposes /dev/kfd anyway and build.sh hands it to podman,
-# so a RUN step sees gfx942. It still proves less than a serve: an import and a JIT build are not a
-# kernel launch. See LIMITATION in the Dockerfile.
+# The image is the official vLLM ROCm release plus gates, so the job is a pull, one short RUN step
+# and a squashfs import. An import is not a serve: smoke-test oss120b before promoting.
 #
-# Cost: one mi300 node; 8 h is the safe request and roughly 4-6 h the expectation.
+# Cost: one mi300 node, well under an hour.
 #
 #   sbatch --chdir=containers/images/vllm build.sbatch
 #   OUTPUT_SQSH=$SCRATCH/ce-images/hpcagent-bench-vllm-candidate.sqsh sbatch ... build.sbatch
@@ -18,7 +17,7 @@
 #SBATCH --cpus-per-task=96
 #SBATCH --hint=nomultithread
 #SBATCH --mem=0
-#SBATCH --time=03:00:00
+#SBATCH --time=01:30:00
 #SBATCH --output=%x-%j.out
 #SBATCH --error=%x-%j.err
 #SBATCH --no-requeue
@@ -47,5 +46,4 @@ ce_refuse_mounted "${OUTPUT_SQSH}" || exit 2
 ls -lh "${OUTPUT_SQSH}"
 sha256sum "${OUTPUT_SQSH}" | tee "${OUTPUT_SQSH}.sha256"
 echo "VLLM IMAGE READY: ${OUTPUT_SQSH}"
-echo "NOT VERIFIED: the GPU gates (device_count, allreduce, one-rank RCCL over CXI, MLA prefill"
-echo "selector) need a serving job. Smoke-test before promoting."
+echo "NOT VERIFIED: RCCL over CXI and a real serve need a serving job. Smoke-test before promoting."

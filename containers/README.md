@@ -98,7 +98,7 @@ which serves what a campaign serves: copy `~/.edf/hpcagent-bench-vllm-mi300-late
 run `SERVE_ENV_FILE=<copy of serve-only.env plus INFERENCE_CE_ENV=candidate-vllm> MODEL=oss120b
 ./serve-only.sbatch` from `experiments/` and query the endpoint it prints.
 
-Engine versions are build args: `EXTRA_BUILD_ARGS="VLLM_VERSION=0.28.0 AITER_REF=..." sbatch vllm/build.sbatch`.
+One vLLM release everywhere: `vllm` and `vllm-cuda` both pin v0.28.0 by base-image digest.
 Re-verify a candidate without rebuilding with `VERIFY_ONLY=1` on `build_and_verify.sbatch`, or:
 
 ```bash

@@ -46,7 +46,7 @@ com.hooks.aws_ofi_nccl.enabled = "true"
 com.hooks.aws_ofi_nccl.variant = "rocm6"
 [env]
 # The interpreter every hpcagent-bench step in this image runs (run_cluster.sh).
-HPCAGENT_BENCH_IMAGE_PYTHON = "/opt/pytorch211/bin/python3"
+HPCAGENT_BENCH_IMAGE_PYTHON = "/usr/bin/python3"
 # quark_online_quant is registered as a vllm general plugin, and load_general_plugins() runs it
 # from `python -m vllm.model_executor.models.registry` -- a subprocess where vllm/__init__ is
 # still executing. The plugin does `from vllm.engine.arg_utils import EngineArgs`, which reaches
@@ -70,10 +70,12 @@ HSA_ENABLE_IPC_MODE_LEGACY = "1"
 SAFETENSORS_FAST_GPU = "1"
 HIP_FORCE_DEV_KERNARG = "1"
 TOKENIZERS_PARALLELISM = "false"
+# Carried over from the base image ENV, which the CE does not reliably keep.
+HSA_NO_SCRATCH_RECLAIM = "1"
 
 NCCL_NET_PLUGIN = "ofi"
 NCCL_NET = "AWS Libfabric"
-LD_LIBRARY_PATH = "/opt/rocm/lib:/opt/rocm/lib64"
+LD_LIBRARY_PATH = "/opt/rocm/lib:/usr/local/lib"
 FI_PROVIDER = "cxi"
 
 NCCL_SOCKET_IFNAME = "hsn0,hsn1,hsn2,hsn3"
@@ -86,21 +88,4 @@ OFI_NCCL_DISABLE_DMABUF = "1"
 NCCL_DEBUG = "INFO"
 NCCL_DEBUG_SUBSYS = "INIT,NET"
 
-VIRTUAL_ENV = "/opt/pytorch211"
-PATH = "/opt/pytorch211/bin:/opt/rocm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-
-# Needed at RUNTIME, not only when flash-attn was installed. flash_attn_interface.py:11 reads it
-# at IMPORT: TRUE picks .flash_attn_triton_amd, FALSE imports flash_attn_2_cuda, the compiled CK
-# extension a triton-only install does not have. vLLM wraps that import in try/except ImportError
-# and just reports the backend unavailable: "No valid MLA prefill backend", with the package
-# installed and looking fine.
-FLASH_ATTENTION_TRITON_AMD_ENABLE = "TRUE"
-# DECLARED, not inherited, for the same reason PATH is: the CE does not preserve the image's
-# own ENV, so the Dockerfile's ENV AITER_JIT_DIR=/opt/aiter-jit never arrives and
-# run_cluster.sh's ${AITER_JIT_DIR:-<scratch>} default wins -- which loads module_aiter_core
-# from a HOST directory and leaves the image's prebuilt copy unused (measured; declaring it moves
-# the load to /opt/aiter-jit).
-AITER_JIT_DIR = "/opt/aiter-jit"
-# aiter's TEMPLATE ops ignore AITER_JIT_DIR and default to $HOME/.aiter, where they build at 77 s
-# per serve. Pinned into the image, nothing lands in HOME and the artefact hashes match.
-AITER_ROOT_DIR = "/opt/aiter-root"
+PATH = "/opt/rocm/llvm/bin:/opt/rocm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"

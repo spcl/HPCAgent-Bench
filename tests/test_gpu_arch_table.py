@@ -36,6 +36,8 @@ NOT_AMD = {
     "judge-agent-cpu": "CPU-only image with no GPU code at all, built on whichever host architecture",
 }
 #: The arch variables an image ENV sets and an EDF template may restate.
+#: AMD images that compile no device code: the vendor base's fat binary must CONTAIN the arch.
+VENDOR_DEVICE_CODE = frozenset({"vllm"})
 ARCH_VARS = ("HCC_AMDGPU_TARGET", "PYTORCH_ROCM_ARCH", "GPU_ARCHS", "GPU_ARCH_LIST")
 #: Non-comment gfx literals that must stay, keyed by (file, stripped line), with the reason.
 LITERAL_EXCEPTIONS = {
@@ -163,7 +165,8 @@ def test_every_amd_image_takes_rocm_arch_from_the_table_refuses_none_stamps_it_a
         values = {value.strip('"') for value in re.findall(rf"\b{var}=(\S+)", docker)}
         assert values == {"${ROCM_ARCH}"}, (image, var, values)
     assert "COPY containers/lib/device_arch_gate.sh /usr/local/bin/device_arch_gate.sh" in docker
-    assert '/usr/local/bin/device_arch_gate.sh --exact "${ROCM_ARCH}"' in docker
+    mode = "--contains" if image in VENDOR_DEVICE_CODE else "--exact"
+    assert f'/usr/local/bin/device_arch_gate.sh {mode} "${{ROCM_ARCH}}"' in docker
 
 
 def test_no_dockerfile_gives_rocm_arch_a_default() -> None:
