@@ -61,8 +61,18 @@ printf 'libfabric     %s @ %s\n' "${LIBFABRIC_REF}" "${LIBFABRIC_COMMIT}"
 
 cd "${REPO_ROOT}"
 
+# The PUBLISHED image is portable: built for its architecture's baseline, not this build node's CPU
+# (the Dockerfile's own default, native, is for building locally). SPACK_TARGET= MARCH=native here
+# gives a native build instead.
+case "$(uname -m)" in
+    aarch64) SPACK_TARGET="${SPACK_TARGET-armv8.2a}"; MARCH="${MARCH-armv8.2-a}" ;;
+    x86_64)  SPACK_TARGET="${SPACK_TARGET-x86_64_v3}"; MARCH="${MARCH-x86-64-v3}" ;;
+esac
+printf 'cpu target: spack %s, -march=%s\n' "${SPACK_TARGET:-<host>}" "${MARCH:-native}"
 BUILD_ARGS=(
   --build-arg "IMAGE_VERSION=${IMAGE_VERSION}"
+  --build-arg "SPACK_TARGET=${SPACK_TARGET:-}"
+  --build-arg "MARCH=${MARCH:-native}"
   --build-arg "DACE_COMMIT=${DACE_COMMIT}"
   --build-arg "LIBFABRIC_REF=${LIBFABRIC_REF}"
   --build-arg "LIBFABRIC_COMMIT=${LIBFABRIC_COMMIT}"
