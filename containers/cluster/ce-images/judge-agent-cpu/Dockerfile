@@ -8,15 +8,16 @@
 # TWO targets from ONE file, the same firewall as judge-agent-amd: `agent` carries NO hpcagent_bench,
 # `judge` is `FROM agent` plus the library.
 #
-# LIGHTWEIGHT means minutes, not hours: every compiler and numerical library is a BINARY package.
-#   compilers  gcc/g++/gfortran 16 (a pinned snapshot from the ubuntu-toolchain-r PPA: the major
-#              judge-agent-amd builds with spack) and clang/flang ${LLVM_MAJOR} with Polly (apt.llvm.org,
-#              the same LLVM 22.1.x judge-agent-amd builds). HOST OpenMP only.
-#   numerics   OpenBLAS (openmp flavour) + LAPACKE, BLIS, FFTW, ScaLAPACK, HDF5, SuiteSparse,
-#              SuperLU, METIS, Scotch, ARPACK, MUMPS (sequential), GSL, TBB, Eigen, mimalloc
-#   MPI        the distro MPICH (single-node grading; it is not GPU-aware and nothing here needs it)
-#   built      tblis and HPTT (repo scripts, ~2 min each) and Pluto (polycc, the `pluto` column)
-#   absent     ROCm, CUDA, GPU libraries, spack, GPU-aware MPI, PETSc/SLEPc/hypre/MAGMA and the
+# LIGHTWEIGHT means minutes, not hours: every compiler and numerical library is a BINARY package,
+# except the MPI stack (step 1c), which spack builds once into the shared buildcache.
+#   compilers  gcc/g++/gfortran 16 (ubuntu-toolchain-r PPA) and clang/flang ${LLVM_MAJOR} with Polly
+#              (apt.llvm.org). HOST OpenMP only.
+#   numerics   OpenBLAS (openmp flavour) + LAPACKE, BLIS, FFTW, SuiteSparse, SuperLU, METIS,
+#              ARPACK, GSL, TBB, Eigen, mimalloc
+#   MPI        spack MPICH ~slurm (built-in PMI-1/2) with ScaLAPACK, HDF5, Scotch, MUMPS in /opt/view:
+#              Ubuntu's -dev packages for these pull Open MPI (mpi-default) in beside any MPICH
+#   built      tblis and HPTT (repo scripts) and Pluto (polycc, the `pluto` column)
+#   absent     ROCm, CUDA, GPU libraries, GPU-aware MPI, PETSc/SLEPc/hypre/MAGMA and the
 #              other distributed solvers, NVHPC, ppcg (GPU-only), cupy, triton
 #
 # The CPU baselines are gcc 16's, the major judge-agent-amd grades with -- but a pre-release snapshot
@@ -101,9 +102,10 @@ RUN set -eux; \
 # ---------------------------------------------------------------------------------------------
 # 1. Everything from the distribution, in one layer.
 #
-# MPICH-flavoured packages ONLY (libscalapack-mpich-dev, libhdf5-mpich-dev), never the -mpi- ones:
-# Debian's default MPI is Open MPI, and a second MPI puts an Open MPI mpicc beside an MPICH mpiexec --
-# P ranks each their own COMM_WORLD of size 1 (IMAGE_REQUIREMENTS.md, v5). Asserted below.
+# No MPI and nothing MPI-linked from apt: Debian's default MPI is Open MPI, and libscotch-dev,
+# libmumps-seq-dev and even libscalapack-mpich-dev pull it in (mpi-default-*). A second MPI puts an
+# Open MPI mpicc beside an MPICH mpiexec, giving each rank its own COMM_WORLD of size 1. Step 1c
+# builds the MPI stack with spack; the Open MPI check is asserted below.
 # linux-perf is a Debian name; Ubuntu's perf resolves through the HOST kernel's uname -r, so the
 # versioned binary is symlinked onto PATH, exactly as on judge-agent-amd.
 RUN set -eux; \
@@ -118,10 +120,8 @@ RUN set -eux; \
       libgmp-dev libyaml-dev libssl-dev zlib1g-dev libcurl4-openssl-dev libxml2-dev uuid-dev \
       libnuma-dev libhwloc-dev pciutils \
       make cmake ninja-build pkg-config \
-      mpich libmpich-dev \
       libopenblas-openmp-dev liblapacke-dev libblis-openmp-dev libfftw3-dev \
-      libscalapack-mpich-dev libhdf5-mpich-dev libsuitesparse-dev libsuperlu-dev libmetis-dev \
-      libscotch-dev libarpack2-dev libmumps-seq-dev libgsl-dev \
+      libsuitesparse-dev libsuperlu-dev libmetis-dev libarpack2-dev libgsl-dev \
       libtbb-dev libeigen3-dev libmimalloc-dev \
       papi-tools libpapi-dev; \
     case "${TARGETARCH:-$(dpkg --print-architecture)}" in \
@@ -135,13 +135,9 @@ RUN set -eux; \
     done; \
     rm -rf /var/lib/apt/lists/*; \
     command -v perf; \
-    if dpkg -l | grep -qE '^ii +(libopenmpi|openmpi-bin)'; then \
-      echo "Open MPI was pulled in beside MPICH; find the -mpi- package that did it" >&2; exit 1; \
-    fi; \
-    case "$(readlink -f "$(command -v mpicc)")" in \
-      *mpich*) ;; \
-      *) echo "mpicc is $(readlink -f "$(command -v mpicc)"), not MPICH" >&2; exit 1;; \
-    esac
+    if dpkg -l | grep -qE '^ii +(libopenmpi|openmpi-bin|mpich|libmpich)'; then \
+      echo "apt pulled in an MPI; find the package that did it (step 1c owns MPI)" >&2; exit 1; \
+    fi
 
 # ---------------------------------------------------------------------------------------------
 # 1b. gcc 16 from the ubuntu-toolchain-r PPA, pinned to one package version, bare names onto it.
@@ -175,10 +171,107 @@ RUN set -eux; \
     done
 
 # ---------------------------------------------------------------------------------------------
-# 2. clang, flang and libomp from apt.llvm.org -- binary packages of the LLVM release judge-agent-amd
-# builds from source. Ubuntu's own llvm-18 is too old for the Fortran column: flang lowers
-# `do concurrent` to OpenMP only from LLVM 20 (flags.DO_CONCURRENT_FLANG). Polly is linked into this
-# libLLVM, which is what makes the `polly` column real; parallelizer-gate.sh proves it outlines.
+# 1c. The MPI stack from spack, built by the gcc above into /opt/view (link: roots, so only these
+# specs are in the view; their dependencies stay rpath'd under /opt/spack-install). MPICH has no
+# +slurm: its built-in PMI-1/2 client serves any host srun --mpi=pmi2, and netmod=ofi lets a site
+# bind its own libfabric (containers/README.md, "Running outside CSCS"). OpenBLAS is the apt one,
+# declared external, so the view adds no second BLAS. Pins match judge-agent-cuda.
+ARG SPACK_REF=66ff2229e4ff1fbae9006dddd067e45120a5cba8
+ARG SPACK_PACKAGES_REF=3936d6c1796a095cd29f24f3082a5f32f4b5f938
+ARG SPACK_BUILD_JOBS=64
+ENV SPACK_ROOT=/opt/spack \
+    SPACK_ENV_DIR=/opt/spack-env \
+    SPACK_DISABLE_LOCAL_CONFIG=true \
+    SPACK_USER_CACHE_PATH=/opt/spack-cache
+RUN set -eux; \
+    spack="${SPACK_ROOT}/bin/spack"; \
+    git init -q "${SPACK_ROOT}"; \
+    git -C "${SPACK_ROOT}" remote add origin https://github.com/spack/spack.git; \
+    gitretry -C "${SPACK_ROOT}" fetch -q --depth 1 origin "${SPACK_REF}"; \
+    git -C "${SPACK_ROOT}" checkout -q FETCH_HEAD; \
+    git init -q /opt/spack-packages; \
+    git -C /opt/spack-packages remote add origin https://github.com/spack/spack-packages.git; \
+    gitretry -C /opt/spack-packages fetch -q --depth 1 origin "${SPACK_PACKAGES_REF}"; \
+    git -C /opt/spack-packages checkout -q FETCH_HEAD; \
+    mkdir -p "${SPACK_ROOT}/etc/spack" /var/spack-stage "${SPACK_USER_CACHE_PATH}" "${SPACK_ENV_DIR}"; \
+    build_jobs="$(nproc)"; \
+    if [ "${build_jobs}" -gt "${SPACK_BUILD_JOBS}" ]; then build_jobs="${SPACK_BUILD_JOBS}"; fi; \
+    printf '%s\n' 'repos:' '  builtin: /opt/spack-packages/repos/spack_repo/builtin' \
+      > "${SPACK_ROOT}/etc/spack/repos.yaml"; \
+    printf '%s\n' 'config:' '  install_tree:' '    root: /opt/spack-install' \
+      '  build_stage: /var/spack-stage' "  build_jobs: ${build_jobs}" '  connect_timeout: 60' \
+      > "${SPACK_ROOT}/etc/spack/config.yaml"; \
+    openblas_version="$(dpkg-query -W -f='${Version}' libopenblas0-openmp | sed 's/[+-].*//')"; \
+    printf '%s\n' 'packages:' \
+      '  c:' "    prefer: [gcc@${GCC_MAJOR}]" '  cxx:' "    prefer: [gcc@${GCC_MAJOR}]" \
+      '  fortran:' "    prefer: [gcc@${GCC_MAJOR}]" \
+      '  blas:' '    require: [openblas]' '  lapack:' '    require: [openblas]' \
+      '  openblas:' '    externals:' \
+      "    - spec: \"openblas@${openblas_version} threads=openmp\"" \
+      '      prefix: /usr' \
+      '    buildable: false' \
+      > "${SPACK_ROOT}/etc/spack/packages.yaml"; \
+    "${spack}" external find --scope site \
+      cmake ninja pkgconf perl m4 autoconf automake libtool gmake git curl openssl python \
+      bison flex texinfo diffutils findutils gawk tar gzip bzip2 xz zlib || true; \
+    "${spack}" compiler find --scope site; \
+    "${spack}" compiler list; \
+    if [ -d /spack-buildcache ] && [ -n "$(ls -A /spack-buildcache 2>/dev/null)" ]; then \
+      "${spack}" mirror add --scope site --unsigned localcache /spack-buildcache; \
+    fi; \
+    printf '%s\n' 'spack:' \
+      '  concretizer:' '    unify: true' \
+      '  specs:' \
+      '  - mpich@4 +fortran +hwloc ~slurm device=ch4 netmod=ofi' \
+      '  - netlib-scalapack' \
+      '  - hdf5 +mpi +fortran +hl' \
+      '  - scotch ~mpi' \
+      '  - mumps ~mpi +shared' \
+      '  view:' '    default:' '      root: /opt/view' '      link: roots' '      link_type: symlink' \
+      > "${SPACK_ENV_DIR}/spack.yaml"; \
+    "${spack}" -e "${SPACK_ENV_DIR}" concretize -f | tail -60; \
+    python3 -c "import json, sys; specs = json.load(open(sys.argv[1]))['concrete_specs'].values(); \
+bad = sorted({n['name'] for n in specs if n['name'] in ('armpl-gcc', 'openblas', 'curl', 'perl', 'cmake') \
+and not n.get('external')}); sys.exit(f'spack would build {bad}: a second BLAS or a tool apt provides' if bad else 0)" \
+      "${SPACK_ENV_DIR}/spack.lock"; \
+    "${spack}" -e "${SPACK_ENV_DIR}" install --fail-fast; \
+    if [ -d /spack-buildcache ]; then \
+      "${spack}" -e "${SPACK_ENV_DIR}" buildcache push --unsigned --update-index /spack-buildcache || true; \
+    fi; \
+    "${spack}" clean -a; \
+    "${spack}" mirror remove --scope site localcache 2>/dev/null || true; \
+    for wrapper in mpicc mpicxx mpifort mpiexec; do \
+      test -x "/opt/view/bin/${wrapper}"; \
+      ln -sf "/opt/view/bin/${wrapper}" "/usr/local/bin/${wrapper}.mpich"; \
+    done; \
+    ln -sf /opt/view/bin/hydra_pmi_proxy /usr/local/bin/hydra_pmi_proxy; \
+    ! ls -d /opt/spack-install/*/slurm-* 2>/dev/null \
+      || { echo "spack built a Slurm: the image must launch under any host Slurm" >&2; exit 1; }; \
+    ! readelf -d /opt/view/lib/libmpi.so | grep 'NEEDED.*libslurm' \
+      || { echo "libmpi links libslurm: the image must launch under any host Slurm" >&2; exit 1; }; \
+    strings /opt/view/lib/libmpi.so | grep -qx 'fullinit' \
+      || { echo "no built-in PMI-2 client (wire cmd fullinit): srun --mpi=pmi2 cannot launch it" >&2; exit 1; }; \
+    ! ls -d /opt/spack-install/*/openblas-* 2>/dev/null \
+      || { echo "spack built its own OpenBLAS beside the apt one" >&2; exit 1; }; \
+    printf '%s\n' '#include <mpi.h>' 'int main(int argc, char **argv) {' \
+      '  int size = 0; MPI_Init(&argc, &argv); MPI_Comm_size(MPI_COMM_WORLD, &size);' \
+      '  MPI_Finalize(); return size == 2 ? 0 : 1; }' > /tmp/mpi_probe.c; \
+    mpicc.mpich /tmp/mpi_probe.c -o /tmp/mpi_probe; \
+    timeout 120 mpiexec.mpich -launcher fork -n 2 /tmp/mpi_probe \
+      || { echo "mpiexec.mpich -n 2 did not give one COMM_WORLD of size 2" >&2; exit 1; }; \
+    rm -f /tmp/mpi_probe.c /tmp/mpi_probe
+ENV PATH=/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/opt/view/bin:/usr/lib/llvm-${LLVM_MAJOR}/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    LD_LIBRARY_PATH=/opt/view/lib \
+    LIBRARY_PATH=/opt/view/lib \
+    CPATH=/opt/view/include \
+    CMAKE_PREFIX_PATH=/opt/view \
+    PKG_CONFIG_PATH=/opt/view/lib/pkgconfig:/opt/view/share/pkgconfig
+
+# ---------------------------------------------------------------------------------------------
+# 2. clang, flang and libomp from apt.llvm.org. Ubuntu's own llvm-18 is too old for the Fortran
+# column: flang lowers `do concurrent` to OpenMP only from LLVM 20 (flags.DO_CONCURRENT_FLANG).
+# Polly is linked into this libLLVM, which is what makes the `polly` column real;
+# parallelizer-gate.sh proves it outlines.
 RUN set -eux; \
     wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | gpg --dearmor > /etc/apt/trusted.gpg.d/apt.llvm.org.gpg; \
     codename="$(. /etc/os-release; echo "${VERSION_CODENAME}")"; \
@@ -292,7 +385,7 @@ RUN set -eux; \
     python3 -m venv /opt/venv; \
     python3 -m pip install --no-cache-dir --upgrade pip setuptools wheel; \
     python3 -m pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch; \
-    MPICC=/usr/bin/mpicc.mpich python3 -m pip install --no-cache-dir --no-binary=mpi4py -r "/${PYTHON_REQUIREMENTS}"; \
+    MPICC=/usr/local/bin/mpicc.mpich python3 -m pip install --no-cache-dir --no-binary=mpi4py -r "/${PYTHON_REQUIREMENTS}"; \
     python3 -m pip install --no-cache-dir -r /requirements/optional.txt; \
     python3 -c "import torch; assert torch.version.cuda is None and torch.version.hip is None, 'not a CPU torch'; \
       print('torch', torch.__version__)"; \
@@ -472,8 +565,8 @@ RUN set -eux; \
       command -v "${tool}" >/dev/null || { echo "${tool} is missing from the image" >&2; exit 1; }; \
     done; \
     printf '%s\n' 'int main(void){return 0;}' > /tmp/l.c; \
-    for lib in -lopenblas -llapack -llapacke -lblis -lscalapack-mpich -lfftw3 -ltbb -lhptt -ltblis \
-               -lmetis -lscotch -lsuperlu -ldmumps_seq -lumfpack -larpack -lgsl -lmimalloc -lpapi -lmvec; do \
+    for lib in -lopenblas -llapack -llapacke -lblis -lscalapack -lhdf5 -lfftw3 -ltbb -lhptt -ltblis \
+               -lmetis -lscotch -lsuperlu -ldmumps -lmumps_common -lpord -lumfpack -larpack -lgsl -lmimalloc -lpapi -lmvec; do \
       gcc /tmp/l.c -o /tmp/l.out "${lib}" || { echo "trial link failed for ${lib}" >&2; exit 1; }; \
     done; \
     rm -f /tmp/l.c /tmp/l.out; \

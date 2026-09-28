@@ -624,12 +624,12 @@ def vendor_checks(profile: str) -> list[Check]:
 
 def solver_checks(platform: str) -> list[Check]:
     """Sparse-direct, iterative and partitioning libraries. The CPU image carries the sequential ones
-    its distribution ships and none of the distributed or GPU solvers."""
+    (MUMPS and Scotch from its spack step) and none of the distributed or GPU solvers."""
     if platform == "cpu":
         return [
             Check("solver", "SuiteSparse (UMFPACK)", "lib", "libumfpack.so"),
             Check("solver", "SuperLU", "lib", "libsuperlu.so"),
-            Check("solver", "MUMPS (sequential)", "lib", "libdmumps_seq"),
+            Check("solver", "MUMPS (sequential)", "lib", "libdmumps.so"),
             Check("solver", "ARPACK", "lib", "libarpack.so"),
             Check("partitioner", "METIS", "lib", "libmetis.so"),
             Check("partitioner", "Scotch", "lib", "libscotch"),
