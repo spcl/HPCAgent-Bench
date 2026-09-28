@@ -11,6 +11,9 @@
 #
 # Requires: git, make, a C++ compiler (g++). Override TBLIS_REPO / TBLIS_REF / CXX via env.
 set -eu
+# A failed fetch must fail, not prompt: under `if clone_pinned` set -e is off, so the clone steps
+# are chained with && and the retry loop sees the failure.
+export GIT_TERMINAL_PROMPT=0
 
 # A core dump lands in the crashing process's CWD (the checkout) and Slurm propagates the
 # SUBMITTER's core limit, so the floor has to be set here.
@@ -44,9 +47,9 @@ TBLIS_CLONE_BACKOFF="${TBLIS_CLONE_BACKOFF:-5}"
 
 SRC="$(mktemp -d)"
 clone_pinned() {
-    git init -q "$SRC"
-    git -C "$SRC" fetch -q --depth 1 "$REPO" "$REF"
-    git -C "$SRC" checkout -q FETCH_HEAD
+    git init -q "$SRC" &&
+    git -C "$SRC" fetch -q --depth 1 "$REPO" "$REF" &&
+    git -C "$SRC" checkout -q FETCH_HEAD &&
     # A no-op at v1.3.0, which has no .gitmodules -- kept for an overridden TBLIS_REF, where the
     # 2.x line vendors MArray, TCI and stl_ext and aborts on the first with "MArray not found".
     # Inside the retry loop, not after it: those are three more anonymous fetches and throttling
