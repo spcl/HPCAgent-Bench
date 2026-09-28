@@ -29,29 +29,28 @@ contrast, serves every interface without a key ([`README.md`](README.md)). Contr
 
 ### Preset
 
-| `PRESET` | Hardware | EDF | Weights | Attention | Default `LEGS` | Serve with |
+| `PRESET` | Hardware | Engine | EDF | Weights | Default `LEGS` | Serve with |
 |---|---|---|---|---|---|---|
-| `mi300` | 4x MI300A | `hpcagent-bench-sglang-mi300-latest` | `Qwen/Qwen3.8-27B-FP8` | aiter | `tp4:0.306` | `tp4:0.306` |
-| `mi200` | 8x MI250X, 64 GiB each | `hpcagent-bench-sglang-mi200-latest` | `Qwen/Qwen3.8-27B` (BF16) | triton | `tp4:0.80 tp4:0.88 tp8:0.80` | `tp8:0.80` |
+| `mi300` | 4x MI300A | SGLang | `hpcagent-bench-sglang-mi300-latest` | `Qwen/Qwen3.8-27B-FP8` | `tp4:0.306` | `tp4:0.306` |
+| `mi200` | 8x MI250X, 64 GiB each | vLLM 0.28 | `hpcagent-bench-vllm-mi200-latest` | `Qwen/Qwen3.8-27B` (BF16) | `tp8:0.85` | `tp8:0.85` |
 
-Both pass `--context-length 262144 --max-running-requests 128 --mamba-full-memory-ratio 0.5
---reasoning-parser qwen3 --tool-call-parser qwen3_coder`, the chat template
-`experiments/chat-template-qwen38.jinja`, and serve as `hpcagent-bench-vllm`.
+Both serve a 262144-token context and 128 running requests with the qwen3 reasoning and qwen3_coder
+tool parsers and the chat template `experiments/chat-template-qwen38.jinja`, as `hpcagent-bench-vllm`.
 
 - `mi300` matches `SGLANG_EXTRA_ARGS` of `llrbase-c:qwen38` in `experiments/arms.yaml`
   (`tests/test_serve_private.py` fails if they diverge). 0.306 is node-wide on the APU and derated
   to 0.26 by aiter; move it only with the backend and mamba ratio ([`qwen38.md`](qwen38.md)).
-- `mi200`: MI250X has neither FP8 nor aiter kernels, so BF16, triton attention,
-  `--disable-custom-all-reduce`, `SGLANG_USE_AITER=0`. Its fraction is per 64 GiB GPU; mi300
-  values do not transfer. Image: `containers/images/sglang-mi200/README.md`.
+- `mi200`: MI250X has neither FP8 nor aiter kernels, so BF16 on the AMD vLLM image (the same one
+  that serves oss120b on mi300), `VLLM_ROCM_USE_AITER=0`. The fraction is vLLM's
+  `--gpu-memory-utilization`, per 64 GiB GPU. vLLM checks the key only under `/v1`, `/v2`,
+  `/inference` and `/cohere`, so the mi200 preset is tunnel-only (`ACCESS=alps` refuses).
 
 Measured per leg (401/200 check, tool and reasoning gate, 16 concurrent 256-token requests):
 
 | Preset, leg | KV pool | Max running | Load probe |
 |---|---|---|---|
 | mi300 `tp4:0.306` | 3.36 M tokens, 714 Mamba slots | not recorded | 84 tok/s, cold (first leg, warm-up included) |
-| mi200 `tp4:0.88` | 1.86 M | 78 | 315 tok/s |
-| mi200 `tp8:0.80` | 1.91 M | 128 | 322 tok/s |
+| mi200 `tp8:0.85` (vLLM 0.28) | not recorded | 128 | 421 tok/s |
 
 Each leg writes SGLang's KV and Mamba allocation lines to `<leg dir>/memory.txt`. A clearly different
 pool: compare the job's `argv:` line with section 3.

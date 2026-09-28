@@ -6,11 +6,11 @@ Security design, key handling and every launcher variable: [`private-endpoint.md
 
 | | |
 |---|---|
-| Image | `hpcagent-bench-sglang-mi200-latest` ([`containers/images/sglang-mi200/`](../../containers/images/sglang-mi200/README.md)) |
+| Image | `hpcagent-bench-vllm-mi200-latest`: the AMD vLLM 0.28 image ([`containers/images/vllm/`](../../containers/images/vllm/Dockerfile)), the one that serves oss120b on mi300 |
 | Weights | `Qwen/Qwen3.8-27B`, BF16 (MI250X has no FP8), in `$HF_HOME/hub` |
-| Shape | `tp8:0.80`: tensor parallel over all 8 GCDs, 0.80 of each GCD's 64 GiB for weights and KV |
-| Measured | KV pool 1.91 M tokens, 128 concurrent requests, 322 tok/s on 16 concurrent 256-token requests, about 35 tok/s for one request |
-| Binds | `127.0.0.1:30000` on the node; every request but `/health` needs the key |
+| Shape | `tp8:0.85`: tensor parallel over all 8 GCDs, 0.85 of each GCD's 64 GiB (`--gpu-memory-utilization`) |
+| Measured | 128 concurrent requests, 421 tok/s on 16 concurrent 256-token requests, about 26 tok/s for one request |
+| Binds | `127.0.0.1:30000` on the node; every `/v1` request needs the key (vLLM leaves `/health` and `/metrics` open, so this endpoint is tunnel-only) |
 
 ## 1. One-time setup
 
@@ -29,7 +29,7 @@ The weights must already be in `$HF_HOME/hub` (`scripts/cache_env.sh` sets `HF_H
 From a checkout on Beverin:
 
 ```bash
-PRESET=mi200 MODE=serve LEGS=tp8:0.80 sbatch --partition=mi200 --gpus-per-node=8 --time=08:00:00 \
+PRESET=mi200 MODE=serve sbatch --partition=mi200 --gpus-per-node=8 --time=08:00:00 \
     containers/inference/serve-private.sbatch
 ```
 
