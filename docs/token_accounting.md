@@ -42,9 +42,7 @@ therefore change no card. The measured engine hit rate is a diagnostic only.
   through `$HPCAGENT_BENCH_USAGE_PATH`. Contract: [extending/agent-harness.md](extending/agent-harness.md).
 - **Output tiers.** Per-turn assistant events report `output_tokens: 0` on these endpoints, so output
   comes from the first tier that has it, recorded in `output_source`: the per-request `message_delta`
-  usage, else the final `result` record, else the model's tokenizer over the transcript
-  (`retokenized`, 2-4% low, used for killed processes). Rows whose result record looks short are
-  flagged `output_suspect`.
+  usage, else the final `result` record; a killed process with neither has output source `none`.
 - **Reasoning is already in output.** The engines fill `output_tokens` with every generated token.
   The client's streamed thinking estimate is kept as `thinking_estimate` and added to nothing.
 
