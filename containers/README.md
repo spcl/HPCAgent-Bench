@@ -220,6 +220,22 @@ podman run --rm --device /dev/kfd --device /dev/dri <image> fi_info -p tcp -l
 
 To use a faster fabric (InfiniBand verbs, EFA, ...), bind that site's libfabric over the fallback and
 name its provider, e.g. `-v /opt/site/libfabric/lib:/opt/ofi-fallback/lib:ro -e FI_PROVIDER=verbs`.
+
+The CE hooks are Alps-only; elsewhere the user supplies MPI integration by hand. Two common ways:
+
+- **Swap the fabric** (above): the image's MPICH, the site's libfabric. Works with any host MPI.
+- **Swap the MPI library** (Apptainer's "bind model"): MPICH, Cray MPICH, Intel MPI and MVAPICH
+  share the `libmpi.so.12` ABI, so the host's library can stand in for the image's. Open MPI
+  hosts cannot do this; use the fabric swap or TCP.
+
+  ```bash
+  apptainer exec --bind /opt/site/mpich/lib:/host-mpi --env LD_LIBRARY_PATH=/host-mpi:$LD_LIBRARY_PATH <image> ./app
+  ```
+
+Multi-node launch is separate from either swap: the GPU images' MPICH has Slurm PMI-1/PMI-2 (no
+PMIx), so launch with `srun --mpi=pmi2`. Its Slurm is pinned to Daint's release; a far-off site
+Slurm may need the MPI swap instead. On one node `mpiexec -launcher fork` needs no host PMI.
+The CPU image carries the distro MPICH and targets single-node grading.
 The inference images need no MPI: RCCL falls back to sockets without a network plugin.
 
 ## Publishing
