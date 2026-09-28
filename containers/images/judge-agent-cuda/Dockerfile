@@ -1,15 +1,15 @@
 # syntax=docker/dockerfile:1
 #
-# hpcagent-bench-judge-agent-cuda: the judge and agent images for NVIDIA GH200 (aarch64 Grace +
-# H100, CSCS Daint). Context is the repository root; build with judge-agent-cuda/build.sh.
+# hpcagent-bench-judge-agent-cuda: the judge and agent images for NVIDIA GPUs sm_70..sm_120 on
+# aarch64 hosts (built and first run on CSCS Daint's GH200, Grace + H100). Context is the repository root; build with judge-agent-cuda/build.sh.
 #
 # Two targets: `agent` is the toolchain without hpcagent_bench, so an agent cannot read the
 # references it is graded against; `judge` is `agent` plus the installed package.
 #
 #   base        NGC PyTorch 25.06 (CUDA 12.9.1, Ubuntu 24.04, python 3.12, NCCL 2.27.3)
 #   vendor      CUDA toolkit, cuTENSOR, NCCL, Nsight Compute/Systems, NVHPC (the only OpenACC path)
-#   offload     LLVM OpenMP -> nvptx sm_90; GCC is built without +nvptx
-#   GPU-aware   mpich/superlu-dist/strumpack/magma/petsc/sundials +cuda cuda_arch=${CUDA_ARCH}
+#   offload     LLVM OpenMP -> nvptx sm_{${CUDA_ARCHS}}; GCC is built without +nvptx
+#   GPU-aware   mpich/superlu-dist/strumpack/magma/petsc/sundials +cuda cuda_arch=${CUDA_ARCHS}
 #   python      the base's torch, the cupy wheel, jax, all for the base's CUDA major
 #   absent      Intel MKL, likwid, msr-tools (x86 only), rocprof, PAPI rocm components
 #
@@ -81,15 +81,17 @@ ARG BASE_IMAGE
 ARG BASE_IMAGE_REF="${BASE_IMAGE}"
 ARG IMAGE_VERSION=dev
 LABEL org.opencontainers.image.title="hpcagent-bench-judge-agent-cuda" \
-      org.opencontainers.image.description="HPCAgent-Bench judge+agent for GH200: gcc 16, llvm 22, NVHPC, GPU-aware MPICH, PETSc/MAGMA, Nsight" \
+      org.opencontainers.image.description="HPCAgent-Bench judge+agent for NVIDIA sm_70-sm_120 (aarch64): gcc 16, llvm 22, NVHPC, GPU-aware MPICH, PETSc/MAGMA, Nsight" \
       org.opencontainers.image.source="https://github.com/spcl/HPCAgent-Bench" \
       org.opencontainers.image.licenses="GPL-3.0-or-later" \
       org.opencontainers.image.version="${IMAGE_VERSION}" \
       org.opencontainers.image.base.name="${BASE_IMAGE_REF}"
 
 ARG DEBIAN_FRONTEND=noninteractive
-# GH200 is Hopper, compute capability 9.0. The offload gate below decides whether it was honoured.
-ARG CUDA_ARCH=90
+# One SASS per GPU generation, sm_70 (Volta) to sm_120 (Blackwell): a GPU runs the SASS of an older
+# minor of its own major (sm_80 on sm_86/89, sm_70 on sm_75, sm_120 on sm_121), so five cover the
+# range and the image is not tied to GH200. Spack's comma spelling; the gates check every one.
+ARG CUDA_ARCHS=70,80,90,100,120
 # The known-good pairing already in service on judge-agent-amd, same full versions.
 ARG GCC_VERSION=16.2.0
 ARG LLVM_VERSION=22.1.8
@@ -361,7 +363,7 @@ RUN set -eux; \
       '    buildable: false' \
       '  libfabric:' \
       '    externals:' \
-      "    - spec: \"libfabric@$(cat /opt/ofi-sdk/VERSION) +cuda +cuda_dlopen cuda_arch=${CUDA_ARCH}\"" \
+      "    - spec: \"libfabric@$(cat /opt/ofi-sdk/VERSION) +cuda +cuda_dlopen cuda_arch=${CUDA_ARCHS}\"" \
       '      prefix: /opt/ofi-sdk' \
       '    buildable: false' \
       > "${SPACK_ROOT}/etc/spack/packages.yaml"; \
@@ -410,7 +412,7 @@ RUN set -eux; \
       '    all:' \
       "      prefer: [\"%gcc@${GCC_VERSION}\"]" \
       '    yaksa:' \
-      "      require: [\"cuda_arch=${CUDA_ARCH}\"]" \
+      "      require: [\"cuda_arch=${CUDA_ARCHS}\"]" \
       '    # The base toolkit, restated at environment scope beside libfabric for the same reason.' \
       '    cuda:' \
       '      externals:' \
@@ -421,7 +423,7 @@ RUN set -eux; \
       '    libfabric:' \
       "      require: [\"@$(cat /opt/ofi-sdk/VERSION) +cuda\"]" \
       '      externals:' \
-      "      - spec: \"libfabric@$(cat /opt/ofi-sdk/VERSION) +cuda +cuda_dlopen cuda_arch=${CUDA_ARCH}\"" \
+      "      - spec: \"libfabric@$(cat /opt/ofi-sdk/VERSION) +cuda +cuda_dlopen cuda_arch=${CUDA_ARCHS}\"" \
       '        prefix: /opt/ofi-sdk' \
       '      buildable: false' \
       '  specs:' \
@@ -429,7 +431,7 @@ RUN set -eux; \
       '  # GPU-aware MPICH, no +slurm (its built-in PMI-1/2 client serves any srun); every variant is' \
       '  # judge-agent-amd step 4 with +cuda in place of +rocm. device=ch4 netmod=ofi reaches the' \
       '  # fabric through libfabric: the site supplies the provider (cxi on Alps via the CE hook).' \
-      "  - mpich@4 +cuda cuda_arch=${CUDA_ARCH} +fortran +hwloc ~slurm device=ch4 netmod=ofi" \
+      "  - mpich@4 +cuda cuda_arch=${CUDA_ARCHS} +fortran +hwloc ~slurm device=ch4 netmod=ofi" \
       '  - openblas threads=openmp +fortran' \
       '  - netlib-scalapack' \
       '  - fftw +mpi +openmp precision=float,double,long_double' \
@@ -440,16 +442,16 @@ RUN set -eux; \
       '  - scotch +mpi +esmumps' \
       '  - suite-sparse +openmp' \
       '  - superlu' \
-      "  - superlu-dist +openmp +parmetis +cuda cuda_arch=${CUDA_ARCH}" \
+      "  - superlu-dist +openmp +parmetis +cuda cuda_arch=${CUDA_ARCHS}" \
       '  - mumps +mpi +metis +parmetis +scotch +ptscotch +openmp +shared' \
-      "  - strumpack +mpi +openmp +parmetis +scotch ~rocm +cuda cuda_arch=${CUDA_ARCH}" \
+      "  - strumpack +mpi +openmp +parmetis +scotch ~rocm +cuda cuda_arch=${CUDA_ARCHS}" \
       '  # hypre stays host-only, as on judge-agent-amd: hypre@3 GPU builds require umpire.' \
       '  - hypre +mpi +openmp' \
       '  - arpack-ng +mpi +shared' \
-      "  - magma ~rocm +cuda cuda_arch=${CUDA_ARCH} +fortran" \
-      "  - petsc +mpi +metis +hypre +mumps +superlu-dist +strumpack +suite-sparse +scalapack +hdf5 +fftw +cuda cuda_arch=${CUDA_ARCH} +shared" \
+      "  - magma ~rocm +cuda cuda_arch=${CUDA_ARCHS} +fortran" \
+      "  - petsc +mpi +metis +hypre +mumps +superlu-dist +strumpack +suite-sparse +scalapack +hdf5 +fftw +cuda cuda_arch=${CUDA_ARCHS} +shared" \
       '  - slepc +arpack' \
-      "  - sundials +openmp ~rocm +cuda cuda_arch=${CUDA_ARCH}" \
+      "  - sundials +openmp ~rocm +cuda cuda_arch=${CUDA_ARCHS}" \
       '  view:' \
       '    default:' \
       '      root: /opt/view' \
@@ -507,10 +509,10 @@ ENV PATH=/opt/gcc/bin:/opt/view/bin:/opt/papi/bin:/usr/local/cuda/bin:${PATH} \
 # Toolchain gate, before six more hours of libraries. judge-agent-amd step 4's gate for the parts
 # that carry over, with the NVIDIA offload claims in place of amdgcn:
 #   * bare gcc/clang/flang ARE the pinned spack builds, Graphite really runs;
-#   * clang -fopenmp --offload-arch=sm_${CUDA_ARCH} LINKS a binary carrying an sm_${CUDA_ARCH}
+#   * clang -fopenmp --offload-arch=sm_{${CUDA_ARCHS}} LINKS a binary carrying an sm_{${CUDA_ARCHS}}
 #     image. HARD: spack llvm is the only OpenMP-offload clang here (no amdclang counterpart), and a
 #     clang without its nvptx plugin accepts the flags and emits a host-only binary;
-#   * nvc -acc -gpu=cc${CUDA_ARCH} reports GPU code for the loop (-Minfo=accel). HARD: NVHPC is the
+#   * nvc -acc -gpu=cc{${CUDA_ARCHS}} reports GPU code for the loop (-Minfo=accel). HARD: NVHPC is the
 #     only OpenACC path on this platform (IMAGE_REQUIREMENTS.md offload matrix).
 # The ncu/nsys symlinks name the pinned version directories: the NGC base ships its own Nsight too,
 # and a glob would pick whichever sorts last.
@@ -542,15 +544,19 @@ RUN set -eux; \
       '#pragma omp target teams distribute parallel for map(from: a[0:256])' \
       '  for (int i = 0; i < 256; i++) a[i] = (double)i;' \
       '  return a[255] == 255.0 ? 0 : 1; }' > "${work}/omp.c"; \
-    clang -fopenmp --offload-arch="sm_${CUDA_ARCH}" -O2 "${work}/omp.c" -o "${work}/omp"; \
-    { llvm-objdump --offloading "${work}/omp" 2>/dev/null || strings "${work}/omp"; } \
-      | grep -q "sm_${CUDA_ARCH}" \
-      || { echo "clang -fopenmp --offload-arch=sm_${CUDA_ARCH} linked no sm_${CUDA_ARCH} image" >&2; exit 1; }; \
+    archs="$(echo "${CUDA_ARCHS}" | tr , ' ')"; \
+    clang -fopenmp $(for a in ${archs}; do printf -- '--offload-arch=sm_%s ' "${a}"; done) \
+      -O2 "${work}/omp.c" -o "${work}/omp"; \
+    { llvm-objdump --offloading "${work}/omp" 2>/dev/null || strings "${work}/omp"; } > "${work}/omp.images"; \
+    for a in ${archs}; do \
+      grep -q "sm_${a}" "${work}/omp.images" \
+        || { echo "clang -fopenmp linked no sm_${a} image (CUDA_ARCHS=${CUDA_ARCHS})" >&2; exit 1; }; \
+    done; \
     printf '%s\n' 'int main(void) { double a[256];' \
       '#pragma acc parallel loop copyout(a[0:256])' \
       '  for (int i = 0; i < 256; i++) a[i] = (double)i;' \
       '  return a[255] == 255.0 ? 0 : 1; }' > "${work}/acc.c"; \
-    nvc -acc=gpu -gpu="cc${CUDA_ARCH}" -Minfo=accel -O2 "${work}/acc.c" -o "${work}/acc" 2>&1 \
+    nvc -acc=gpu -gpu="cc$(echo "${CUDA_ARCHS}" | sed 's/,/,cc/g')" -Minfo=accel -O2 "${work}/acc.c" -o "${work}/acc" 2>&1 \
       | tee "${work}/acc.log"; \
     grep -q 'Generating NVIDIA GPU code' "${work}/acc.log" \
       || { echo "nvc -acc generated no GPU code: OpenACC offload is not working" >&2; exit 1; }; \
@@ -563,8 +569,8 @@ RUN set -eux; \
       "flang $(flang --version | head -1)" \
       "nvc $(nvc --version 2>&1 | sed -n 2p)" \
       "cuda $(nvcc --version | sed -n 's/.*release //p' | head -1)" \
-      "openmp-offload nvptx: sm_${CUDA_ARCH} linked (llvm)" \
-      "openacc: sm_${CUDA_ARCH} (nvc); gcc host-only -- ${acc_targets}" \
+      "openmp-offload nvptx: sm_{${CUDA_ARCHS}} linked (llvm)" \
+      "openacc: cc{${CUDA_ARCHS}} (nvc); gcc host-only -- ${acc_targets}" \
       > /usr/local/share/toolchain-provenance; \
     cat /usr/local/share/toolchain-provenance; \
     rm -rf "${work}"
@@ -658,7 +664,7 @@ COPY containers/lib/build-tblis.sh /build-tblis.sh
 RUN set -eux; \
     spack="${SPACK_ROOT}/bin/spack"; \
     "${spack}" install --fail-fast \
-      "openmpi@5 +cuda cuda_arch=${CUDA_ARCH} +openshmem fabrics=ucx %gcc@${GCC_VERSION} ^ucx +cuda cuda_arch=${CUDA_ARCH}"; \
+      "openmpi@5 +cuda cuda_arch=${CUDA_ARCHS} +openshmem fabrics=ucx %gcc@${GCC_VERSION} ^ucx +cuda cuda_arch=${CUDA_ARCHS}"; \
     "${spack}" clean --stage; \
     ln -sfn "$("${spack}" location -i openmpi)" /opt/openmpi; \
     test -x /opt/openmpi/bin/mpicc; \
@@ -984,7 +990,8 @@ RUN set -eux; \
       { echo "#include <${hdr}>"; \
         echo '__global__ void k(double *a) { a[threadIdx.x] = 1.0; }'; \
         echo 'int main(void) { double *a = 0; k<<<1, 1>>>(a); return 0; }'; } > /tmp/h.cu; \
-      nvcc -x cu -arch="sm_${CUDA_ARCH}" /tmp/h.cu -o /tmp/h.out \
+      nvcc -x cu $(for a in $(echo "${CUDA_ARCHS}" | tr , ' '); do printf -- '-gencode arch=compute_%s,code=sm_%s ' "${a}" "${a}"; done) \
+        /tmp/h.cu -o /tmp/h.out \
         -lcublas -lcufft -lcusolver -lcusparse -lcurand -lcutensor -lnccl \
         || { echo "nvcc cannot build a kernel including ${hdr} against the bare gcc" >&2; exit 1; }; \
     done; \
