@@ -32,7 +32,9 @@ __all__ = [
     "holds_database",
     "holds_judge_database",
     "protected_roots",
+    "real",
     "safe_rmtree",
+    "within",
 ]
 
 #: Extra protected roots, ``os.pathsep`` separated.
@@ -57,14 +59,14 @@ def protected_roots() -> tuple[pathlib.Path, ...]:
     if frozen is not None:
         roots.append(frozen)
     roots.extend(pathlib.Path(p) for p in os.environ.get(ENV, "").split(os.pathsep) if p)
-    return tuple(_real(r) for r in roots)
+    return tuple(real(r) for r in roots)
 
 
-def _real(path: PathLike) -> pathlib.Path:
+def real(path: PathLike) -> pathlib.Path:
     return pathlib.Path(path).expanduser().resolve()
 
 
-def _within(path: pathlib.Path, root: pathlib.Path) -> bool:
+def within(path: pathlib.Path, root: pathlib.Path) -> bool:
     return path == root or root in path.parents
 
 
@@ -77,15 +79,15 @@ def check_output(dest: PathLike, sources: Iterable[PathLike], *, unscanned: Iter
     output directory): a ``dest`` inside one of them, strictly inside a source, is not an input and
     is allowed, unless that directory holds a ``*.db`` -- a judge database the skip would hide.
     """
-    out = _real(dest)
-    skipped = [_real(path) for path in unscanned]
+    out = real(dest)
+    skipped = [real(path) for path in unscanned]
     for source in sources:
-        src = _real(source)
-        nested = _within(out, src) and any(
-            _within(out, skip) and _within(skip, src) and skip != src and not holds_judge_database(skip)
+        src = real(source)
+        nested = within(out, src) and any(
+            within(out, skip) and within(skip, src) and skip != src and not holds_judge_database(skip)
             for skip in skipped
         )
-        if _within(src, out) or (_within(out, src) and not nested):
+        if within(src, out) or (within(out, src) and not nested):
             raise ProtectedPathError(f"output {out} overlaps source {src}; write it outside the sources")
     return out
 
@@ -104,12 +106,12 @@ def holds_database(path: pathlib.Path) -> bool:
 
 def check_removable(path: PathLike, *, allow: Iterable[PathLike] = ()) -> pathlib.Path:
     """``path`` resolved when :func:`safe_rmtree` may remove it; raises :class:`ProtectedPathError`."""
-    target = _real(path)
-    allowed = [_real(a) for a in allow]
+    target = real(path)
+    allowed = [real(a) for a in allow]
     for root in protected_roots():
-        if _within(root, target):
+        if within(root, target):
             raise ProtectedPathError(f"refusing to remove {target}: it is (or holds) protected root {root}")
-        if _within(target, root) and not any(_within(target, a) for a in allowed):
+        if within(target, root) and not any(within(target, a) for a in allowed):
             raise ProtectedPathError(f"refusing to remove {target}: it lies under protected root {root}")
     if target.exists() and holds_database(target):
         raise ProtectedPathError(f"refusing to remove {target}: it holds a SQLite database")

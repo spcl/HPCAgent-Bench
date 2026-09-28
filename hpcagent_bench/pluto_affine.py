@@ -20,7 +20,14 @@ looks. Both are consumed the same way: import from here, never restate.
 import re
 from dataclasses import dataclass
 
-__all__ = ["KNOWN_POLYCC_ISSUES", "PolyccIssue", "body_nonaffine_reason", "has_scop", "scop_nonaffine_reason"]
+__all__ = [
+    "KNOWN_POLYCC_ISSUES",
+    "TRANS_TESTS",
+    "PolyccIssue",
+    "body_nonaffine_reason",
+    "has_scop",
+    "scop_nonaffine_reason",
+]
 
 
 def has_scop(scop_c: str) -> bool:
@@ -111,7 +118,7 @@ class PolyccIssue:
 
 
 _BENCH = "hpcagent_bench/benchmarks/scientific_computing"
-_TRANS_TESTS = "tests/translators"
+TRANS_TESTS = "tests/translators"
 
 #: Insertion-ordered registry of measured polycc/pet/Pluto defects (``POLYCC-nnn``) followed by the
 #: standing caveats (``C-nnn``). Keyed by id. Every entry states what was OBSERVED; an entry with an
@@ -143,7 +150,7 @@ KNOWN_POLYCC_ISSUES: dict[str, PolyccIssue] = {
                 "A scop-external scalar used as an accumulator carries false WAW/WAR dependences "
                 "and stays SHARED across threads under --parallel (symm, trmm)."
             ),
-            repro=f"{_TRANS_TESTS}/test_scalar_accumulator_retarget.py",
+            repro=f"{TRANS_TESTS}/test_scalar_accumulator_retarget.py",
             avoided_by="hpcagent_bench.translators.numpyto_common.lib_nodes.retarget_scalar_accumulator",
             upstream="not filed",
         ),
@@ -157,7 +164,7 @@ KNOWN_POLYCC_ISSUES: dict[str, PolyccIssue] = {
                 "condition (pet_to_pluto.cpp:565) and aborts on an isl assert "
                 "(constraints_isl.c:429) -- a core dump, not a refusal."
             ),
-            repro=f"{_TRANS_TESTS}/test_no_self_assign_in_scop.py",
+            repro=f"{TRANS_TESTS}/test_no_self_assign_in_scop.py",
             avoided_by="hpcagent_bench.translators.numpyto_common.lowering.forward_subst.SelfAssignDropper",
             upstream="not filed",
         ),
@@ -249,7 +256,7 @@ KNOWN_POLYCC_ISSUES: dict[str, PolyccIssue] = {
                 "divisions the SOURCE writes -- tsvc_2_s128's floord(LEN_1D, 2) bound transforms "
                 "clean, and int_floor there would abort pet the same way."
             ),
-            repro=f"{_TRANS_TESTS}/test_pluto_named_div_builtins.py",
+            repro=f"{TRANS_TESTS}/test_pluto_named_div_builtins.py",
             avoided_by="hpcagent_bench.translators.numpyto_c.emit.pluto_floordiv",
             upstream="n/a",
         ),
@@ -301,7 +308,7 @@ KNOWN_POLYCC_ISSUES: dict[str, PolyccIssue] = {
                 "value call) reach polycc through pluto_normalize.floord_subscripts and "
                 "opaque_helper_calls (tsvc_2_s4117, tsvc_2_s315)."
             ),
-            repro=f"{_TRANS_TESTS}/test_pluto_no_helper_calls_in_scop.py",
+            repro=f"{TRANS_TESTS}/test_pluto_no_helper_calls_in_scop.py",
             avoided_by="hpcagent_bench.translators.numpyto_c.emit.pluto_call_free",
             upstream="not filed",
         ),
@@ -362,7 +369,7 @@ KNOWN_POLYCC_ISSUES: dict[str, PolyccIssue] = {
                 "so excluding the nest that holds it costs nothing and recovers its neighbours -- "
                 "correlation goes from no transform at all to rc 0 with 9 parallel loops."
             ),
-            repro=f"{_TRANS_TESTS}/test_pluto_scope_aware_regions.py -- "
+            repro=f"{TRANS_TESTS}/test_pluto_scope_aware_regions.py -- "
             "test_an_unmodellable_nest_does_not_cost_its_scopable_neighbours",
             avoided_by="hpcagent_bench.translators.numpyto_c.emit.pluto_scop_regions",
             upstream="not filed",
@@ -438,7 +445,7 @@ KNOWN_POLYCC_ISSUES: dict[str, PolyccIssue] = {
                 "--parallel privatizes only Pluto's own tile counters -- any scalar live across the "
                 "scop stays shared between threads."
             ),
-            repro=f"{_TRANS_TESTS}/test_scalar_accumulator_retarget.py -- POLYCC-002 is this caveat's instance",
+            repro=f"{TRANS_TESTS}/test_scalar_accumulator_retarget.py -- POLYCC-002 is this caveat's instance",
             avoided_by="",
             upstream="n/a",
         ),

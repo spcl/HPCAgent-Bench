@@ -60,6 +60,7 @@ __all__ = [
     "generate_scaled",
     "matrix_format",
     "parse_shape",
+    "select_variant",
     "shape_dims",
 ]
 
@@ -377,7 +378,7 @@ def expand_sparse_arrays(
         matrix = data.get(name)
         if matrix is None or isinstance(matrix, np.ndarray):
             continue  # absent, or already a dense buffer: nothing to expand
-        variant = _select_variant(spec, layout, name, matrix, variant_spec)
+        variant = select_variant(spec, layout, name, matrix, variant_spec)
         if variant is None:
             continue
         produced[name] = tuple(buf.name for buf in variant.buffers)
@@ -402,7 +403,7 @@ def expand_sparse_arrays(
     return added
 
 
-def _select_variant(
+def select_variant(
     spec: "BenchSpec", layout: "SparseLayout", name: str, matrix: object, variant_spec: "SpecBlock | None"
 ) -> "SparseLayoutVariant | None":
     """The layout variant this run expands ``name`` into.

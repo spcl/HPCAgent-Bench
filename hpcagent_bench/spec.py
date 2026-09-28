@@ -49,7 +49,9 @@ from hpcagent_bench.support.distributions import domain as domain_mod
 
 __all__ = [
     "ARRAY_ENTRY_KEYS",
+    "BARE_LEVEL",
     "COMPREHENSION_NODES",
+    "CONFIG_KNOB_KEYS",
     "CONFIG_SELECTS",
     "CPP_KEYWORDS",
     "C_KEYWORDS",
@@ -61,6 +63,7 @@ __all__ = [
     "KERNELS",
     "KNOWN_MANIFEST_KEYS",
     "LEVELS",
+    "MANIFEST_DERIVED_CACHES",
     "PRESET_CHOICES",
     "REQUIRED_BUFFER_ROLES",
     "RESERVED_BACKEND_NAMES",
@@ -97,6 +100,7 @@ __all__ = [
     "bound_names",
     "choice_of",
     "collect_loop_var_reads",
+    "constraint_holds",
     "defines_function",
     "derive_array_args",
     "derive_func_name",
@@ -114,12 +118,23 @@ __all__ = [
     "number_of",
     "numpy_reference_path",
     "outside_nested_scopes",
+    "parse_array_entries",
     "parse_baseline",
+    "parse_config_list",
+    "parse_config_space",
+    "parse_configurations",
+    "parse_dimensions",
+    "parse_distributions",
+    "parse_init",
     "parse_mpi",
     "parse_preset",
     "parse_scenarios",
+    "parse_sparse_buffer",
+    "parse_workspace_bytes",
     "preset_arg",
     "register_manifest_cache",
+    "resolve_array_args",
+    "resolve_input_args",
     "resolve_preset",
     "scenarios_without_perturbation",
     "select_short_names",
@@ -127,10 +142,12 @@ __all__ = [
     "shape_dims",
     "shape_identifiers",
     "shape_reads_init_scalars",
+    "stem_aliases",
     "str_block_of",
     "target_names",
     "unimportable_module_path",
     "validate_dwarf",
+    "validate_init_kinds",
     "validate_kernel",
     "validate_level",
     "validate_min_precision",
@@ -364,7 +381,7 @@ def resolve_preset(preset: str) -> str:
     return base
 
 
-def _parse_sparse_buffer(raw: object, field_name: str, source: str) -> "SparseBuffer":
+def parse_sparse_buffer(raw: object, field_name: str, source: str) -> "SparseBuffer":
     """One ``buffers:`` entry of a sparse-layout variant."""
     buf = block_of(raw, field_name, source)
     return SparseBuffer(
@@ -403,7 +420,7 @@ def _parse_sparse_layouts(raw: dict[str, object], source: str) -> dict[str, "Spa
         for fmt_name, raw_variant in block_of(lay_raw.get("variants"), variants_field, source).items():
             buffers_field = f"{variants_field}.{fmt_name}.buffers"
             var_raw = block_of(raw_variant, f"{variants_field}.{fmt_name}", source)
-            buffers = tuple(_parse_sparse_buffer(b, buffers_field, source) for b in as_list(var_raw.get("buffers")))
+            buffers = tuple(parse_sparse_buffer(b, buffers_field, source) for b in as_list(var_raw.get("buffers")))
             variants[fmt_name] = SparseLayoutVariant(format=fmt_name, buffers=buffers)
         out[arr_name] = SparseLayout(
             logical_shape=tuple(str(s) for s in as_list(lay_raw.get("logical_shape"))),
@@ -413,7 +430,7 @@ def _parse_sparse_layouts(raw: dict[str, object], source: str) -> dict[str, "Spa
     return out
 
 
-def _parse_configurations(raw: dict[str, object], source: str) -> dict[str, "SparseConfiguration"]:
+def parse_configurations(raw: dict[str, object], source: str) -> dict[str, "SparseConfiguration"]:
     """Parse the ``configurations`` block: ``{config_key: {array: format}}``."""
     out: dict[str, SparseConfiguration] = {}
     for cfg_name, raw_mapping in raw.items():
@@ -425,7 +442,7 @@ def _parse_configurations(raw: dict[str, object], source: str) -> dict[str, "Spa
     return out
 
 
-def _parse_distributions(raw: dict[str, object], source: str) -> dict[str, "SparseDistribution"]:
+def parse_distributions(raw: dict[str, object], source: str) -> dict[str, "SparseDistribution"]:
     """Parse the ``distributions`` block.
 
     Accepts both the new explicit form
@@ -742,7 +759,7 @@ def init_arrays_raw(init: "InitSpec") -> dict[str, ArrayEntry]:
 CONFIG_SELECTS = frozenset({"branch", "tile", "iteration", "tolerance", "seed", "physical"})
 
 #: Keys a single ``config:`` entry may declare (see :func:`_parse_config_knob`).
-_CONFIG_KNOB_KEYS = frozenset({"domain", "value", "selects"})
+CONFIG_KNOB_KEYS = frozenset({"domain", "value", "selects"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -784,10 +801,10 @@ def _parse_config_knob(raw: object, kernel: str, sym: str, source: str) -> Confi
     blk = as_block(raw)
     if not isinstance(raw, dict):
         raise ValueError(f"{source}: {kernel}: config.{sym} must be a mapping (got {type(raw).__name__})")
-    unknown = sorted(set(blk) - _CONFIG_KNOB_KEYS)
+    unknown = sorted(set(blk) - CONFIG_KNOB_KEYS)
     if unknown:
         raise ValueError(
-            f"{source}: {kernel}: config.{sym} has unknown key(s) {unknown}; allowed: {sorted(_CONFIG_KNOB_KEYS)}"
+            f"{source}: {kernel}: config.{sym} has unknown key(s) {unknown}; allowed: {sorted(CONFIG_KNOB_KEYS)}"
         )
     domain_raw = as_list(blk.get("domain"))
     has_domain = len(domain_raw) > 0
@@ -815,7 +832,7 @@ def _parse_config_knob(raw: object, kernel: str, sym: str, source: str) -> Confi
     )
 
 
-def _parse_config_list(raw: list[object], kernel: str, source: str) -> tuple[ConfigRow, ...]:
+def parse_config_list(raw: list[object], kernel: str, source: str) -> tuple[ConfigRow, ...]:
     """Parse + validate the CURATED composition of ``config:`` -- a list of complete configs.
 
     Use it when the space is hand-picked (a baseline row, one-hot rows, the key combinations), NOT
@@ -870,10 +887,10 @@ def _config_product(knobs: dict[str, ConfigKnob], constraints: tuple[str, ...]) 
     ]
     # A constraint naming a symbol this row does not bind (a size dimension) cannot filter the config
     # space -- it is a cross-preset invariant, already checked by _validate_constraints.
-    return tuple(row for row in rows if all(_constraint_holds(expr, row) for expr in constraints))
+    return tuple(row for row in rows if all(constraint_holds(expr, row) for expr in constraints))
 
 
-def _constraint_holds(expr: str, row: ConfigRow) -> bool:
+def constraint_holds(expr: str, row: ConfigRow) -> bool:
     """``expr`` evaluated over one config row; True when the row does not bind every name it uses."""
     try:
         return bool(safe_eval(expr, row))
@@ -1505,7 +1522,7 @@ class ResolvedBench:
     distribution: str | None = None
 
 
-def _parse_array_entries(
+def parse_array_entries(
     init_raw: dict[str, object], dtypes: dict[str, str], dists: dict[str, str], source: str
 ) -> tuple[dict[str, str], dict[str, domain_mod.RawDomain], list[str]]:
     """``init.arrays`` -> ``(shapes, domains, index_arrays)``; array dtypes/dists land in ``dtypes``/``dists``.
@@ -1558,7 +1575,7 @@ def _parse_array_entries(
     return shapes, domains, index_arrays
 
 
-def _parse_workspace_bytes(init_raw: dict[str, object], source: str) -> int | None:
+def parse_workspace_bytes(init_raw: dict[str, object], source: str) -> int | None:
     """``init.workspace.bytes``: an optional scratch-memory floor, a non-negative int when declared."""
     workspace_raw = init_raw.get("workspace")
     if workspace_raw is None:
@@ -1572,7 +1589,7 @@ def _parse_workspace_bytes(init_raw: dict[str, object], source: str) -> int | No
     return declared_bytes
 
 
-def _parse_init(raw: object, source: str) -> InitSpec:
+def parse_init(raw: object, source: str) -> InitSpec:
     """The ``init:`` block -> :class:`InitSpec`.
 
     ``init.arrays`` declares each array once (shape, dtype?, dist?, domain?, index_array?);
@@ -1591,7 +1608,7 @@ def _parse_init(raw: object, source: str) -> InitSpec:
             )
     dtypes = {sym: str(dt) for sym, dt in block_of(init_raw.get("dtypes"), "init.dtypes", source).items()}
     dists = {sym: str(d) for sym, d in block_of(init_raw.get("dists"), "init.dists", source).items()}
-    shapes, domains, index_arrays = _parse_array_entries(init_raw, dtypes, dists, source)
+    shapes, domains, index_arrays = parse_array_entries(init_raw, dtypes, dists, source)
     if "generate" in init_raw:
         raise ValueError(
             f"{source}: init.generate is not a valid key; use init.func_name "
@@ -1603,7 +1620,7 @@ def _parse_init(raw: object, source: str) -> InitSpec:
     }
     declared_out = init_raw.get("output_args")
     init_out = list(shapes) + list(scalars) if declared_out is None else [str(a) for a in as_list(declared_out)]
-    workspace_bytes = _parse_workspace_bytes(init_raw, source)
+    workspace_bytes = parse_workspace_bytes(init_raw, source)
     scenarios = parse_scenarios(init_raw, source)
     return InitSpec(
         func_name=str(init_raw.get("func_name", "")),
@@ -1649,7 +1666,7 @@ def parse_scenarios(init_raw: dict[str, object], source: str) -> dict[str, str]:
     return scenarios
 
 
-def _parse_dimensions(dims_raw: object, key: str, enforce_equal: bool, source: str) -> PresetTable:
+def parse_dimensions(dims_raw: object, key: str, enforce_equal: bool, source: str) -> PresetTable:
     """The ``dimensions:`` (or legacy ``parameters:``) block -> ``{preset: {symbol: value}}``.
 
     Only ``dimensions`` (``enforce_equal``) requires every preset to declare the same symbol set."""
@@ -1669,13 +1686,13 @@ def _parse_dimensions(dims_raw: object, key: str, enforce_equal: bool, source: s
     return dimensions_map
 
 
-def _parse_config_space(
+def parse_config_space(
     config_raw: object, short_name: str, source: str
 ) -> tuple[dict[str, ConfigKnob], tuple[ConfigRow, ...]]:
     """The ``config:`` block -> ``(knobs, curated rows)``. YAML shape decides: a mapping is per-knob
     axes, a list is curated whole configs, so one manifest can never declare both."""
     if isinstance(config_raw, list):
-        return {}, _parse_config_list(as_list(config_raw), short_name, source)
+        return {}, parse_config_list(as_list(config_raw), short_name, source)
     if isinstance(config_raw, dict):
         knobs = {sym: _parse_config_knob(entry, short_name, sym, source) for sym, entry in as_block(config_raw).items()}
         return knobs, ()
@@ -1686,7 +1703,7 @@ def _parse_config_space(
     )
 
 
-def _resolve_input_args(
+def resolve_input_args(
     bench: dict[str, object], relative_path: str, module_name: str, func_name: str, source: str
 ) -> tuple[str, ...]:
     """``input_args`` as declared, else read from the reference function's signature."""
@@ -1704,7 +1721,7 @@ def _resolve_input_args(
     return derived_inputs
 
 
-def _resolve_array_args(
+def resolve_array_args(
     declared_arrays: object, input_args: tuple[str, ...], init_spec: InitSpec | None, param_syms: set[str], source: str
 ) -> tuple[str, ...]:
     """``array_args`` as declared (trusted as-is), else inferred from ``init.arrays``.
@@ -1732,7 +1749,7 @@ def _resolve_array_args(
     return derived_arrays
 
 
-def _validate_init_kinds(init_spec: InitSpec | None, param_syms: set[str], source: str) -> None:
+def validate_init_kinds(init_spec: InitSpec | None, param_syms: set[str], source: str) -> None:
     """A name is exactly one kind: not both a preset dimension and an ``init.scalars`` value (the
     preset copy would win and be down-scaled as a size), nor both an array and a scalar."""
     if init_spec is None:
@@ -1992,22 +2009,22 @@ class BenchSpec:
         module_name = str(bench["module_name"])
         func_name = str(bench["func_name"])
 
-        init_spec = _parse_init(bench["init"], source) if bench.get("init") else None
+        init_spec = parse_init(bench["init"], source) if bench.get("init") else None
 
         # Sparse blocks may sit at the outer or the inner level.
         sl_raw = block_of(ext.get("sparse_layouts") or bench.get("sparse_layouts"), "sparse_layouts", source)
         cfg_raw = block_of(ext.get("configurations") or bench.get("configurations"), "configurations", source)
         dist_raw = block_of(ext.get("distributions") or bench.get("distributions"), "distributions", source)
         sparse_layouts = _parse_sparse_layouts(sl_raw, source)
-        configurations = _parse_configurations(cfg_raw, source)
-        distributions = _parse_distributions(dist_raw, source)
+        configurations = parse_configurations(cfg_raw, source)
+        distributions = parse_distributions(dist_raw, source)
 
-        input_args = _resolve_input_args(bench, relative_path, module_name, func_name, source)
+        input_args = resolve_input_args(bench, relative_path, module_name, func_name, source)
         # 'parameters' below keeps its one meaning for every consumer, {preset: {symbol: value}},
         # with each config knob's representative value merged in.
         key = "dimensions" if has_new_dims else "parameters"
-        dimensions_map = _parse_dimensions(bench[key], key, has_new_dims, source)
-        config_knobs, config_valid = _parse_config_space(bench.get("config") or {}, short_name, source)
+        dimensions_map = parse_dimensions(bench[key], key, has_new_dims, source)
+        config_knobs, config_valid = parse_config_space(bench.get("config") or {}, short_name, source)
         config_syms = set(config_knobs) | (set(config_valid[0]) if config_valid else set[str]())
         all_dim_syms = {sym for symbols in dimensions_map.values() for sym in symbols}
         dim_config_overlap = sorted(all_dim_syms & config_syms)
@@ -2030,12 +2047,12 @@ class BenchSpec:
             _validate_constraints(constraints, parameters_view, short_name, source)
             # A curated row violating a constraint is an authoring bug, not a row to drop.
             for i, row in enumerate(config_valid):
-                bad = [e for e in constraints if not _constraint_holds(e, row)]
+                bad = [e for e in constraints if not constraint_holds(e, row)]
                 if bad:
                     raise ValueError(f"{source}: {short_name}: config[{i}] {row} violates constraint(s) {bad}")
         param_syms = {sym for values in parameters_view.values() for sym in values}
-        array_args = _resolve_array_args(bench.get("array_args"), input_args, init_spec, param_syms, source)
-        _validate_init_kinds(init_spec, param_syms, source)
+        array_args = resolve_array_args(bench.get("array_args"), input_args, init_spec, param_syms, source)
+        validate_init_kinds(init_spec, param_syms, source)
 
         output_args = tuple(str(a) for a in as_list(bench["output_args"]))
         # Keys and values must both name graded outputs, or the extent resolves to nothing at grade
@@ -2458,7 +2475,7 @@ def _safe_level(path_key: str) -> int | None:
 
 
 @functools.lru_cache(maxsize=1, typed=True)
-def _stem_aliases() -> dict[str, str]:
+def stem_aliases() -> dict[str, str]:
     """Kernel name (manifest stem) -> its path-key."""
     return {key.rsplit("/", 1)[-1]: key for key in _scan_kernels()}
 
@@ -2504,7 +2521,7 @@ class KernelRegistry:
 
         :raises KeyError: no manifest has that stem; the message lists the closest names.
         """
-        names = _stem_aliases()
+        names = stem_aliases()
         if name in names:
             return names[name]
         near = difflib.get_close_matches(name, names, n=5)
@@ -2515,7 +2532,7 @@ class KernelRegistry:
         scan = _scan_kernels()
         if name in scan:
             return name
-        alias = _stem_aliases().get(name)
+        alias = stem_aliases().get(name)
         if alias is not None:
             return alias
         hits = [k for k in scan if k.rsplit("/", 1)[0] == name]
@@ -2608,7 +2625,7 @@ class KernelRegistry:
         key = self.path_key(selector)
         if key is not None:
             return [key]
-        near = difflib.get_close_matches(s, _stem_aliases(), n=5)
+        near = difflib.get_close_matches(s, stem_aliases(), n=5)
         hint = f"; did you mean: {', '.join(near)}?" if near else ""
         raise KeyError(f"no benchmark, track, or dwarf matches {selector!r}{hint}")
 
@@ -2636,10 +2653,10 @@ class KernelRegistry:
         """Drop every manifest-derived cache (after a migration writes new ones). A cache left
         behind keeps serving pre-migration data with nothing to show it is stale."""
         _scan_kernels.cache_clear()
-        _stem_aliases.cache_clear()
+        stem_aliases.cache_clear()
         _key_to_short_name.cache_clear()
         load_spec.cache_clear()
-        for clear in _MANIFEST_DERIVED_CACHES:
+        for clear in MANIFEST_DERIVED_CACHES:
             clear()
 
 
@@ -2647,14 +2664,14 @@ class KernelRegistry:
 KERNELS = KernelRegistry()
 
 #: ``cache_clear`` callbacks for data memoized on a manifest, run by :meth:`KernelRegistry.refresh`.
-_MANIFEST_DERIVED_CACHES: list[Callable[[], None]] = []
+MANIFEST_DERIVED_CACHES: list[Callable[[], None]] = []
 
 
 def register_manifest_cache(cache_clear: Callable[[], None]) -> None:
     """Register a cache to drop on :meth:`KernelRegistry.refresh`. The owner registers itself
     so ``refresh()`` need not import it -- pulling ``harness.agent`` in here would cost 0.5s
     and invert the layering (``harness`` imports ``spec``, not the reverse)."""
-    _MANIFEST_DERIVED_CACHES.append(cache_clear)
+    MANIFEST_DERIVED_CACHES.append(cache_clear)
 
 
 @functools.lru_cache(maxsize=None, typed=True)
@@ -2909,7 +2926,7 @@ def validate_kernel(spec: BenchSpec) -> list[str]:
     return problems
 
 
-_BARE_LEVEL = re.compile(r"l(?:vl|evel)?_?(\d)$", re.IGNORECASE)
+BARE_LEVEL = re.compile(r"l(?:vl|evel)?_?(\d)$", re.IGNORECASE)
 
 
 def select_short_names(selector: str) -> list[str]:
@@ -2926,7 +2943,7 @@ def select_short_names(selector: str) -> list[str]:
     selection to zero rows. A selector that is itself a short_name the user copied from the
     DB (``heat_3d``) is honoured directly."""
     sel = selector.strip()
-    bare = _BARE_LEVEL.fullmatch(sel)
+    bare = BARE_LEVEL.fullmatch(sel)
     if bare:
         sel = f"all@lvl{bare.group(1)}"
     else:

@@ -63,6 +63,7 @@ from hpcagent_bench.frameworks.test import njit_reference, tolerance_datatype, t
 from hpcagent_bench.spec import as_block, as_list
 
 __all__ = [
+    "ABSENT_PINS_REPORTED",
     "BUILD_CACHE_PINS",
     "CLASSIC_CODEGEN",
     "DACE_FAMILY_ENV",
@@ -71,6 +72,7 @@ __all__ = [
     "DEFAULT_PIPELINES",
     "GPU_RESIDENT_STORAGE",
     "LOOP2MAP_FUSION_ROUNDS",
+    "NEW_GPU_OFFLOADING",
     "OUTPUT_ARGS",
     "PARALLEL_FUSION_ROUNDS",
     "PIPELINES_BY_NAME",
@@ -289,7 +291,7 @@ BUILD_CACHE_PINS = (
 )
 
 #: Pins already reported absent (one notice per process).
-_ABSENT_PINS_REPORTED: set[tuple[str, ...]] = set()
+ABSENT_PINS_REPORTED: set[tuple[str, ...]] = set()
 
 #: Where each MPI launcher publishes this process's rank, most specific first. Must stay a superset
 #: of DaCe's ``LAUNCHER_RANK_VARS``, or the PCH cache stays shared while the build folder splits.
@@ -395,8 +397,8 @@ def pin_build_caching() -> None:
         try:
             current = dace.Config.get(*key)
         except KeyError:
-            if tuple(key) not in _ABSENT_PINS_REPORTED:
-                _ABSENT_PINS_REPORTED.add(tuple(key))
+            if tuple(key) not in ABSENT_PINS_REPORTED:
+                ABSENT_PINS_REPORTED.add(tuple(key))
                 print(
                     f"dace: this DaCe declares no '{'.'.join(key)}' config key; leaving it "
                     f"unpinned (wanted {value!r}). Expected on upstream spcl/dace@main, which "
@@ -588,14 +590,14 @@ def enforce_gpu_residency(sdfg: dace.SDFG) -> None:
 #: explicit-copy lift off (byte-identical to upstream); ``canon`` uses the experimental generators.
 #: Both tuples set the same keys, because ``apply_pipeline_config`` writes process-global config and
 #: an omitted key would be inherited. ``optimizer.new_gpu_offloading_pass`` is true for all.
-_NEW_GPU_OFFLOADING: tuple[tuple[str, ...], bool] = (("optimizer", "new_gpu_offloading_pass"), True)
+NEW_GPU_OFFLOADING: tuple[tuple[str, ...], bool] = (("optimizer", "new_gpu_offloading_pass"), True)
 
 CLASSIC_CODEGEN: tuple[tuple[tuple[str, ...], str | bool], ...] = (
     (("compiler", "cpu", "implementation"), "legacy"),
     (("compiler", "cuda", "implementation"), "legacy"),
     (("compiler", "emit_tree_reductions"), False),
     (("compiler", "cpu", "explicit_copy"), False),
-    _NEW_GPU_OFFLOADING,
+    NEW_GPU_OFFLOADING,
 )
 #: Stated for canon too (the experimental generators ignore them) to keep the key sets identical.
 READABLE_CODEGEN: tuple[tuple[tuple[str, ...], str | bool], ...] = (
@@ -603,7 +605,7 @@ READABLE_CODEGEN: tuple[tuple[tuple[str, ...], str | bool], ...] = (
     (("compiler", "cuda", "implementation"), "experimental"),
     (("compiler", "emit_tree_reductions"), True),
     (("compiler", "cpu", "explicit_copy"), True),
-    _NEW_GPU_OFFLOADING,
+    NEW_GPU_OFFLOADING,
 )
 
 

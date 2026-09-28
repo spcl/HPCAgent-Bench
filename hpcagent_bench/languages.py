@@ -101,7 +101,9 @@ __all__ = [
     "PYTHON_HOST_COPY_METHODS",
     "REPORT_REFS",
     "ROCM_LLVM_BIN",
+    "STDPAR_PROBE_TIMEOUT_S",
     "TOOLSET_YAML",
+    "VECLIB_PROBE",
     "VECT_COST_MODELS",
     "VECT_UNLIMITED_REFS",
     "XNACK_SUFFIX",
@@ -110,6 +112,7 @@ __all__ = [
     "agent_offload_flags",
     "annotate_generated",
     "available_libraries",
+    "backend_dir",
     "balanced_clause_bodies",
     "base_report_flags",
     "baseline_flags",
@@ -971,7 +974,7 @@ def compiler_names() -> tuple[str, ...]:
     return tuple(sorted(_load_compilers()))
 
 
-def _backend_dir(spec: BenchSpec) -> pathlib.Path:
+def backend_dir(spec: BenchSpec) -> pathlib.Path:
     """The kernel's ``cpp_backend`` directory (where emits + builds live)."""
     return paths.BENCHMARKS / spec.relative_path / "cpp_backend"
 
@@ -985,7 +988,7 @@ def discover_variants(spec: BenchSpec) -> list[tuple[str, pathlib.Path]]:
     accept all discovered ones, the back-compat default). Results are sorted by
     ``(lang, filename)`` for determinism.
     """
-    backend = _backend_dir(spec)
+    backend = backend_dir(spec)
     allowed = set(spec.languages) if spec.languages else None
     found: list[tuple[str, pathlib.Path]] = []
     if not backend.exists():
@@ -1388,7 +1391,7 @@ def _stdpar_backend_is_tbb(cc: str) -> bool:
     exe = resolve_compiler(cc) or cc
     try:
         r = subprocess.run(
-            [exe, "-x", "c++", "-E", "-"], input=probe, capture_output=True, text=True, timeout=_STDPAR_PROBE_TIMEOUT_S
+            [exe, "-x", "c++", "-E", "-"], input=probe, capture_output=True, text=True, timeout=STDPAR_PROBE_TIMEOUT_S
         )
     except (OSError, subprocess.SubprocessError):
         return False
@@ -1396,7 +1399,7 @@ def _stdpar_backend_is_tbb(cc: str) -> bool:
 
 
 #: Seconds allowed for the one-shot ``__has_include`` preprocess above (cached per compiler).
-_STDPAR_PROBE_TIMEOUT_S = 30
+STDPAR_PROBE_TIMEOUT_S = 30
 
 
 def _stdpar_link_for_block(block: dict[str, Any]) -> tuple[str, ...]:
@@ -1456,7 +1459,7 @@ def driver_library_dir(cc: str, sonames: tuple[str, ...]) -> str:
     for soname in sonames:
         try:
             probe = subprocess.run(
-                [exe, f"-print-file-name={soname}"], capture_output=True, text=True, timeout=_STDPAR_PROBE_TIMEOUT_S
+                [exe, f"-print-file-name={soname}"], capture_output=True, text=True, timeout=STDPAR_PROBE_TIMEOUT_S
             )
         except (OSError, subprocess.TimeoutExpired):
             return ""
@@ -1511,7 +1514,7 @@ def probe_succeeds(argv: Sequence[str], source: str | None = None, env: dict[str
             input=source,
             capture_output=True,
             text=True,
-            timeout=_STDPAR_PROBE_TIMEOUT_S,
+            timeout=STDPAR_PROBE_TIMEOUT_S,
             env=env,
             check=False,
         )
@@ -1521,7 +1524,7 @@ def probe_succeeds(argv: Sequence[str], source: str | None = None, env: dict[str
 
 
 #: Probe sources per compiler-block language: the smallest translation unit each front end accepts.
-_VECLIB_PROBE: dict[str, tuple[str, str]] = {
+VECLIB_PROBE: dict[str, tuple[str, str]] = {
     Language.FORTRAN.value: (".f90", "end\n"),
     Language.C.value: (".c", "int main(void){return 0;}\n"),
     Language.CPP.value: (".cpp", "int main(){return 0;}\n"),
@@ -1536,7 +1539,7 @@ def _veclib_accepted(cc: str, flag: str, lang: str) -> bool:
     A temp file rather than stdin: the Fortran front ends infer free vs fixed form from the
     suffix, and ``-x`` is spelled differently (or absent) across them.
     """
-    probe = _VECLIB_PROBE.get(lang)
+    probe = VECLIB_PROBE.get(lang)
     if not flag or probe is None:
         return False
     suffix, source = probe
@@ -1764,7 +1767,7 @@ def pkg_config_answer(pkgs: tuple[str, ...], what: str) -> tuple[str, ...] | Non
     if not pkgs:
         return None
     try:
-        r = subprocess.run(["pkg-config", what, *pkgs], capture_output=True, text=True, timeout=_STDPAR_PROBE_TIMEOUT_S)
+        r = subprocess.run(["pkg-config", what, *pkgs], capture_output=True, text=True, timeout=STDPAR_PROBE_TIMEOUT_S)
     except (OSError, subprocess.SubprocessError):
         return None
     if r.returncode != 0:
@@ -1810,7 +1813,7 @@ def library_compiles(lang: str, compile_tokens: tuple[str, ...], header: str) ->
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
             text=True,
-            timeout=_STDPAR_PROBE_TIMEOUT_S,
+            timeout=STDPAR_PROBE_TIMEOUT_S,
         )
     except (OSError, subprocess.SubprocessError):
         return False
@@ -2167,12 +2170,12 @@ def compile_variant(
     if src is None:
         variants = [p for (vl, p) in discover_variants(spec) if vl == lang]
         if not variants:
-            raise FileNotFoundError(f"{spec.short_name}: no {lang} variant under {_backend_dir(spec)}")
+            raise FileNotFoundError(f"{spec.short_name}: no {lang} variant under {backend_dir(spec)}")
         src = variants[0]
 
     baseline = _resolve_baseline(block, mode)
     obj = src.with_suffix(".o")
-    lib = _backend_dir(spec) / f"lib{spec.short_name}.so"
+    lib = backend_dir(spec) / f"lib{spec.short_name}.so"
 
     subst = subst_map(block["cc"], baseline=baseline, src=src, obj=obj, objs=obj, lib=lib)
 

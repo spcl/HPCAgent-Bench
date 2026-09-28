@@ -410,21 +410,21 @@ ADAPTATIONS: dict[str, Adaptation] = {
 }
 
 #: A top-level definition: leading qualifiers, a return type, a name, a parenthesised list, ``{``.
-_DEFN_RE = re.compile(
+DEFN_RE = re.compile(
     r"^[ \t]*((?:static[ \t]+|inline[ \t]+)*)((?:const[ \t]+)?[A-Za-z_][\w:]*[ \t]*\*?)[ \t]+"
     r"([A-Za-z_]\w*)[ \t]*\(",
     re.MULTILINE,
 )
-_CHRONO_NOW = re.compile(r"[ \t]*auto[ \t]+\w+[ \t]*=[ \t]*clock_highres::now\(\);[ \t]*\n?")
-_CHRONO_CAST = re.compile(
+CHRONO_NOW = re.compile(r"[ \t]*auto[ \t]+\w+[ \t]*=[ \t]*clock_highres::now\(\);[ \t]*\n?")
+CHRONO_CAST = re.compile(
     r"[ \t]*(?:std::int64_t[ \t]+(\w+)[ \t]*=[ \t]*)?[^;{}]*std::chrono::duration_cast"
     r"[^;]*;[ \t]*\n?",
     re.DOTALL,
 )
-_TIME_STORE = re.compile(r"[ \t]*time_ns\[0\][ \t]*=[ \t]*\w+;[ \t]*\n?")
-_STATIC_CAST = re.compile(r"\bstatic_cast[ \t]*<[ \t]*([\w ]+?)[ \t]*>[ \t]*\(")
+TIME_STORE = re.compile(r"[ \t]*time_ns\[0\][ \t]*=[ \t]*\w+;[ \t]*\n?")
+STATIC_CAST = re.compile(r"\bstatic_cast[ \t]*<[ \t]*([\w ]+?)[ \t]*>[ \t]*\(")
 #: A write through a pointer parameter: ``p[...] =``, ``p[...] +=``, ``++p[...]``, ...
-_WRITE_TMPL = r"(?:\+\+|--)[ \t]*{n}[ \t]*\[|\b{n}[ \t]*\[[^\]]*\][ \t]*(?:\+\+|--|[-+*/%&|^]?=(?!=))"
+WRITE_TMPL = r"(?:\+\+|--)[ \t]*{n}[ \t]*\[|\b{n}[ \t]*\[[^\]]*\][ \t]*(?:\+\+|--|[-+*/%&|^]?=(?!=))"
 
 
 class Refusal(Exception):
@@ -485,7 +485,7 @@ def parse_functions(text: str) -> list[Function]:
     """Every top-level function definition in ``text``, in source order."""
     scan = blank_comments(text)
     found: list[Function] = []
-    for m in _DEFN_RE.finditer(scan):
+    for m in DEFN_RE.finditer(scan):
         open_paren = scan.index("(", m.end() - 1)
         close_paren = scan.index(")", open_paren)
         brace = scan.find("{", close_paren)
@@ -523,7 +523,7 @@ def to_c23(text: str) -> str:
     if leftover:
         raise Refusal(f"no C spelling for {leftover}")
     while True:
-        m = _STATIC_CAST.search(text)
+        m = STATIC_CAST.search(text)
         if m is None:
             break
         close = matching_paren(text, m.end() - 1)
@@ -550,13 +550,13 @@ def matching_paren(text: str, open_at: int) -> int:
 
 def strip_timing(body: str) -> str:
     """``body`` with the self-timing removed. Refuses if any of it survives."""
-    body = _CHRONO_NOW.sub("", body)
-    named = _CHRONO_CAST.search(body)
+    body = CHRONO_NOW.sub("", body)
+    named = CHRONO_CAST.search(body)
     carrier = named.group(1) if named else None
-    body = _CHRONO_CAST.sub("", body)
+    body = CHRONO_CAST.sub("", body)
     if carrier:
         body = re.sub(rf"[ \t]*time_ns\[0\][ \t]*=[ \t]*{re.escape(carrier)};[ \t]*\n?", "", body)
-    body = _TIME_STORE.sub("", body)
+    body = TIME_STORE.sub("", body)
     leftover = [tok for tok in ("time_ns", "chrono", "clock_highres") if tok in body]
     if leftover:
         raise Refusal(f"timing survived the strip: {leftover}")
@@ -670,7 +670,7 @@ def check_const(body: str, binding: Binding) -> None:
     offenders = [
         a.name
         for a in binding.args
-        if a.kind == "ptr" and a.is_const and re.search(_WRITE_TMPL.format(n=re.escape(a.name)), scan)
+        if a.kind == "ptr" and a.is_const and re.search(WRITE_TMPL.format(n=re.escape(a.name)), scan)
     ]
     if offenders:
         raise Refusal(

@@ -63,29 +63,29 @@ def _run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True, check=False)
 
 
-def _git_lines(args: list[str]) -> list[str]:
+def git_lines(args: list[str]) -> list[str]:
     out = _run(["git", *args])
     return [ln for ln in out.stdout.splitlines() if ln.strip()] if out.returncode == 0 else []
 
 
-def _ref_exists(ref: str) -> bool:
+def ref_exists(ref: str) -> bool:
     return _run(["git", "rev-parse", "--verify", "--quiet", ref]).returncode == 0
 
 
 def changed_files(base: str) -> set[str]:
     """Files changed vs ``base`` (merge-base form) plus staged + working-tree edits."""
     files = set()
-    if base and _ref_exists(base):
-        files.update(_git_lines(["diff", "--name-only", "--diff-filter=ACMRT", f"{base}...HEAD"]))
+    if base and ref_exists(base):
+        files.update(git_lines(["diff", "--name-only", "--diff-filter=ACMRT", f"{base}...HEAD"]))
     else:
         print(f"note: base ref {base!r} not found; checking working-tree + staged changes only", file=sys.stderr)
-    files.update(_git_lines(["diff", "--name-only", "--diff-filter=ACMRT", "HEAD"]))
-    files.update(_git_lines(["diff", "--name-only", "--diff-filter=ACMRT", "--cached"]))
+    files.update(git_lines(["diff", "--name-only", "--diff-filter=ACMRT", "HEAD"]))
+    files.update(git_lines(["diff", "--name-only", "--diff-filter=ACMRT", "--cached"]))
     return files
 
 
 def all_tracked_files() -> set[str]:
-    return set(_git_lines(["ls-files"]))
+    return set(git_lines(["ls-files"]))
 
 
 def is_skipped(rel: str, lang: str) -> bool:
@@ -111,14 +111,14 @@ def classify(rel: str) -> str | None:
 # fix=True it additionally applies the formatter in place -- so the caller's count
 # of "True"s is accurate in both modes (check: how many fail; fix: how many were
 # reformatted).
-def _needs_format_cpp(path: str, fix: bool) -> bool:
+def needs_format_cpp(path: str, fix: bool) -> bool:
     needs = _run(["clang-format", "--dry-run", "-Werror", path]).returncode != 0
     if fix and needs:
         _run(["clang-format", "-i", path])
     return needs
 
 
-def _needs_format_fortran(path: str, fix: bool) -> bool:
+def needs_format_fortran(path: str, fix: bool) -> bool:
     cfg = str(REPO_ROOT / ".fprettify.rc")
     needs = bool(_run(["fprettify", "--config", cfg, "--diff", path]).stdout.strip())
     if fix and needs:
@@ -127,8 +127,8 @@ def _needs_format_fortran(path: str, fix: bool) -> bool:
 
 
 CHECKERS: dict[str, tuple[Callable[[str, bool], bool], str]] = {
-    "cpp": (_needs_format_cpp, "clang-format"),
-    "fortran": (_needs_format_fortran, "fprettify"),
+    "cpp": (needs_format_cpp, "clang-format"),
+    "fortran": (needs_format_fortran, "fprettify"),
 }
 
 #: The formatter each language is gated by, for the "missing tool" check and the offender report.

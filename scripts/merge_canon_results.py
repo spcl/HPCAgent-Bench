@@ -90,7 +90,7 @@ def rows_for(run_dir: pathlib.Path, column: str, run: str, build: str | None = N
     return out
 
 
-def _ensure_schema(conn: sqlite3.Connection) -> None:
+def ensure_schema(conn: sqlite3.Connection) -> None:
     """Create ``canon`` if it does not exist, else add any :data:`SCHEMA` column an EXISTING table
     predates -- the idempotent migration a canon.db written before ``build`` existed needs, without
     which every reader that names ``build`` explicitly would fail on an old database, and without
@@ -117,7 +117,7 @@ def merge(rows: list[dict[str, object]], db_path: pathlib.Path) -> int:
     placeholders = ", ".join(f":{name}" for name in names)
     with contextlib.closing(sqlite3.connect(db_path, timeout=30.0)) as conn:
         conn.execute("PRAGMA journal_mode = WAL")
-        _ensure_schema(conn)
+        ensure_schema(conn)
         conn.execute(
             f"CREATE UNIQUE INDEX IF NOT EXISTS ux_{TABLE}_row ON {TABLE}(run, column, kernel, preset, datatype)"
         )
