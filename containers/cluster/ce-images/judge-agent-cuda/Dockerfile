@@ -77,6 +77,9 @@ RUN apt-get update \
       libhwloc-dev libnuma-dev libtool make patchelf pkg-config \
  && rm -rf /var/lib/apt/lists/*
 
+# Built WITH cuda (dlopen, so no hard libcuda link): spack's mpich carries
+# depends_on("libfabric+cuda", when="+cuda netmod=ofi"), and the spack external below is
+# declared +cuda to match. A ~cuda SDK left mpich unconcretizable (job 4789637).
 WORKDIR /tmp/build
 RUN set -eux; \
     gitretry clone --branch "${LIBFABRIC_REF}" --depth 1 https://github.com/ofiwg/libfabric.git libfabric; \
@@ -90,7 +93,10 @@ RUN set -eux; \
     ./autogen.sh; \
     ./configure --prefix=/opt/ofi-sdk --without-curl \
         --disable-verbs --disable-psm3 --disable-efa --disable-usnic \
-        --disable-opx --disable-shm --enable-sockets --enable-tcp; \
+        --disable-opx --disable-shm --enable-sockets --enable-tcp \
+        --with-cuda=/usr/local/cuda --enable-cuda-dlopen; \
+    grep -q '^#define HAVE_CUDA 1' config.h \
+      || { echo "libfabric configure dropped CUDA: mpich +cuda needs libfabric+cuda" >&2; exit 1; }; \
     make -j"$(nproc)"; \
     make install; \
     test -e /opt/ofi-sdk/lib/libfabric.so.1; \
@@ -323,6 +329,12 @@ RUN set -eux; \
 # A one-package overlay repo, ahead of builtin, adds slurm@25-05-9-1 (Daint's Slurm): no
 # spack-packages commit carries it yet, and the PMI gate below wants the host version exactly.
 # The checksum is the GitHub tag archive's, the URL the builtin package derives.
+#
+# The overlay also carries llvm: the builtin recipe builds no nvptx OpenMP device runtime for
+# LLVM 20+ (it never sets LLVM_RUNTIME_TARGETS; its +cuda path drives the pre-20
+# LIBOMPTARGET_NVPTX_* options). Without it clang -fopenmp --offload-arch=sm_90 cannot link
+# ("no library 'libomptarget-nvptx.bc' found", job 4812087), and the toolchain gate below fails.
+# The subclass adds the upstream-documented runtime target and nothing else.
 COPY --from=ofi-builder /opt/ofi-sdk /opt/ofi-sdk
 RUN set -eux; \
     "/opt/ofi-sdk/bin/fi_info" --version 2>/dev/null | head -1 \
@@ -345,7 +357,7 @@ RUN set -eux; \
     git -C /opt/spack-packages checkout -q FETCH_HEAD; \
     test -f /opt/spack-packages/repos/spack_repo/builtin/repo.yaml; \
     overlay=/opt/spack-overlay/spack_repo/hpcagent; \
-    mkdir -p "${overlay}/packages/slurm"; \
+    mkdir -p "${overlay}/packages/slurm" "${overlay}/packages/llvm"; \
     printf '%s\n' 'repo:' '  namespace: hpcagent' '  api: v2.2' > "${overlay}/repo.yaml"; \
     printf '%s\n' \
       'from spack_repo.builtin.packages.slurm.package import Slurm as BuiltinSlurm' \
@@ -356,6 +368,20 @@ RUN set -eux; \
       'class Slurm(BuiltinSlurm):' \
       '    version("25-05-9-1", sha256="55678d04efa91cc919277f290f9f50d84ded1185b0ea93125ac304e8a0270a73")' \
       > "${overlay}/packages/slurm/package.py"; \
+    printf '%s\n' \
+      'from spack_repo.builtin.packages.llvm.package import Llvm as BuiltinLlvm' \
+      '' \
+      'from spack.package import *' \
+      '' \
+      '' \
+      'class Llvm(BuiltinLlvm):' \
+      '    def cmake_args(self):' \
+      '        args = super().cmake_args()' \
+      '        if self.spec.satisfies("+libomptarget openmp=runtime targets=nvptx"):' \
+      '            args.append(self.define("LLVM_RUNTIME_TARGETS", ["default", "nvptx64-nvidia-cuda"]))' \
+      '            args.append(self.define("RUNTIMES_nvptx64-nvidia-cuda_LLVM_ENABLE_RUNTIMES", ["openmp"]))' \
+      '        return args' \
+      > "${overlay}/packages/llvm/package.py"; \
     printf '%s\n' \
       'repos:' \
       "  hpcagent: ${overlay}" \
@@ -383,7 +409,7 @@ RUN set -eux; \
       '    buildable: false' \
       '  libfabric:' \
       '    externals:' \
-      "    - spec: \"libfabric@$(cat /opt/ofi-sdk/VERSION)\"" \
+      "    - spec: \"libfabric@$(cat /opt/ofi-sdk/VERSION) +cuda +cuda_dlopen cuda_arch=${CUDA_ARCH}\"" \
       '      prefix: /opt/ofi-sdk' \
       '    buildable: false' \
       > "${SPACK_ROOT}/etc/spack/packages.yaml"; \
@@ -444,9 +470,9 @@ RUN set -eux; \
       '      buildable: false' \
       '    # libfabric: OURS -- external here AND required, see judge-agent-amd step 4 (630049, 630267).' \
       '    libfabric:' \
-      "      require: [\"@$(cat /opt/ofi-sdk/VERSION)\"]" \
+      "      require: [\"@$(cat /opt/ofi-sdk/VERSION) +cuda\"]" \
       '      externals:' \
-      "      - spec: \"libfabric@$(cat /opt/ofi-sdk/VERSION)\"" \
+      "      - spec: \"libfabric@$(cat /opt/ofi-sdk/VERSION) +cuda +cuda_dlopen cuda_arch=${CUDA_ARCH}\"" \
       '        prefix: /opt/ofi-sdk' \
       '      buildable: false' \
       '  specs:' \
