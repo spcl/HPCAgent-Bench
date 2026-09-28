@@ -174,7 +174,7 @@ RUN set -eux; \
 # 1c. The MPI stack from spack, built by the gcc above into /opt/view (link: roots, so only these
 # specs are in the view; their dependencies stay rpath'd under /opt/spack-install). MPICH has no
 # +slurm: its built-in PMI-1/2 client serves any host srun --mpi=pmi2, and netmod=ofi lets a site
-# bind its own libfabric (containers/README.md, "Running outside CSCS"). OpenBLAS is the apt one,
+# bind its own libfabric over the one spack built. OpenBLAS is the apt one,
 # declared external, so the view adds no second BLAS. Pins match judge-agent-cuda.
 ARG SPACK_REF=66ff2229e4ff1fbae9006dddd067e45120a5cba8
 ARG SPACK_PACKAGES_REF=3936d6c1796a095cd29f24f3082a5f32f4b5f938
