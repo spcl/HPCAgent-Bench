@@ -201,6 +201,18 @@ apply_partition() {
     }
 }
 
+# apply_flavor <env> -- CE_IMAGE_FLAVOR=native (containers/images/images.env) renames every agent and
+# judge *_CE_ENV of <env> from its -latest EDF to the -native one install_edfs.sh renders for a native
+# build. The serving EDFs stay -latest: those images are prebuilt engines, the same either way.
+apply_flavor() {
+    local env="$1"
+    case "${CE_IMAGE_FLAVOR:-latest}" in
+        latest) return 0 ;;
+        native) sed -i -E '/^INFERENCE_[A-Z_]*CE_ENV=/!s/^([A-Z_]*CE_ENV=.*)-latest$/\1-native/' "${env}" ;;
+        *) echo "apply_flavor: CE_IMAGE_FLAVOR is latest or native, got '${CE_IMAGE_FLAVOR}'" >&2; return 2 ;;
+    esac
+}
+
 # partition_sbatch_args -- the sbatch words that move a job off the default partition, one per line.
 partition_sbatch_args() {
     partition_is_default && return 0
@@ -208,12 +220,13 @@ partition_sbatch_args() {
     printf '%s\n' "--partition=${PARTITION}" "--gpus-per-node=$(sed -n 's/^GPUS_PER_NODE=//p' "${layer}")"
 }
 
-# finalize_staged_env <staged> <env> -- the partition layers, then the rename. A bailed gate leaves
-# neither a staged nor a final file looking complete.
+# finalize_staged_env <staged> <env> -- the partition layers, the image flavor, then the rename. A
+# bailed gate leaves neither a staged nor a final file looking complete.
 finalize_staged_env() {
     local staged="$1" env="$2"
     apply_partition "${staged}" "$(sed -n 's/^HPCAGENT_BENCH_RECORD_MODEL=//p' "${staged}" | tail -1)" \
         || { rm -f "${staged}"; return 2; }
+    apply_flavor "${staged}" || { rm -f "${staged}"; return 2; }
     mv -- "${staged}" "${env}"
 }
 

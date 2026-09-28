@@ -43,7 +43,7 @@ printf 'dace @ %s\n' "${DACE_COMMIT}"
 cd "${REPO_ROOT}"
 
 # The PUBLISHED image is portable: cpu_target.env's baseline for this CPU family, not the build
-# node's CPU (CE_CPU_TARGET=native gives a native build instead). MARCH follows the spack target.
+# node's CPU (CE_IMAGE_FLAVOR=native gives a native build instead). MARCH follows the spack target.
 ce_spack_target
 case "${SPACK_TARGET}" in
     "") MARCH=native ;;

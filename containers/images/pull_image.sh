@@ -15,6 +15,9 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/images.env"
 
 ROLE="${1:?usage: pull_image.sh <role> [sha256:<digest>]   (roles: $(ce_roles | tr '\n' ' '))}"
+# The registry holds only the generic images; a native one is built on the machine that runs it.
+[[ "${CE_IMAGE_FLAVOR}" == latest ]] \
+    || { echo "pull_image.sh: the registry has latest images only; build a native one (containers/README.md)" >&2; exit 2; }
 sqsh="$(ce_image "${ROLE}" sqsh)"
 if [[ -n "${2:-}" ]]; then
     [[ "$2" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "pin a digest (sha256:<64 hex>), got '$2'" >&2; exit 2; }

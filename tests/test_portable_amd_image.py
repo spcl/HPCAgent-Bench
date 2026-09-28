@@ -22,8 +22,11 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 CE = ROOT / "containers" / "images"
 RECIPE = CE / "judge-agent-amd"
 SHELL_PATH = "/usr/bin:/bin"
-CANDIDATES = {"agent": "hpcagent-bench-agent-amd-candidate.sqsh", "judge": "hpcagent-bench-judge-amd-candidate.sqsh"}
-LIVE = {"agent": "hpcagent-bench-agent-amd.sqsh", "judge": "hpcagent-bench-judge-amd.sqsh"}
+CANDIDATES = {
+    "agent": "hpcagent-bench-agent-amd-latest-candidate.sqsh",
+    "judge": "hpcagent-bench-judge-amd-latest-candidate.sqsh",
+}
+LIVE = {"agent": "hpcagent-bench-agent-amd-latest.sqsh", "judge": "hpcagent-bench-judge-amd-latest.sqsh"}
 HWLOC = "/usr/lib/x86_64-linux-gnu/libhwloc.so.15"
 ARCH_VARS = ("HCC_AMDGPU_TARGET", "PYTORCH_ROCM_ARCH")
 AMD_ROLES = ("JUDGE_AGENT_AMD_SQSH", "JUDGE_AMD_SQSH", "INFERENCE_SGLANG_SQSH", "INFERENCE_VLLM_SQSH")
@@ -33,9 +36,11 @@ def run(argv: list[str], env: dict[str, str]) -> subprocess.CompletedProcess[str
     return subprocess.run(argv, capture_output=True, text=True, check=False, env={"PATH": SHELL_PATH, **env})
 
 
-def common(snippet: str, build_common: pathlib.Path = CE / "build_common.sh") -> subprocess.CompletedProcess[str]:
+def common(
+    snippet: str, build_common: pathlib.Path = CE / "build_common.sh", env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
     """Run ``snippet`` in bash with build_common.sh sourced."""
-    return run(["bash", "-c", f'source "$1"; {snippet}', "bash", str(build_common)], {})
+    return run(["bash", "-c", f'source "$1"; {snippet}', "bash", str(build_common)], env or {})
 
 
 def env_value(name: str, key: str) -> str:
@@ -101,7 +106,7 @@ def test_ce_amd_candidate_refuses_an_unknown_target() -> None:
 
 def test_no_script_spells_a_judge_agent_amd_candidate_name_outside_images_env() -> None:
     """images.env is the one place the names are spelled; a script spelling one by hand drifts."""
-    literal = re.compile(r"hpcagent-bench-(agent|judge)-amd-candidate")
+    literal = re.compile(r"hpcagent-bench-(agent|judge)-amd-(?:\$\{CE_IMAGE_FLAVOR\}-|latest-|native-)?candidate")
     for path in sorted(CE.rglob("*")):
         if path.is_file() and path.suffix in {".sh", ".sbatch", ".env", ""} and path.name != "images.env":
             assert not literal.search(path.read_text(encoding="utf-8", errors="replace")), path
@@ -176,7 +181,7 @@ def edf(edf_dir: pathlib.Path, name: str) -> dict[str, Any]:
 def test_images_env_points_every_amd_partition_edf_at_the_one_image() -> None:
     assert images_env("JUDGE_AGENT_AMD_SQSH", "JUDGE_AGENT_AMD_MI200_SQSH") == [LIVE["agent"]] * 2
     assert images_env("JUDGE_AMD_SQSH", "JUDGE_AMD_MI200_SQSH") == [LIVE["judge"]] * 2
-    assert images_env("INFERENCE_VLLM_SQSH", "INFERENCE_VLLM_MI200_SQSH") == ["hpcagent-bench-vllm-amd.sqsh"] * 2
+    assert images_env("INFERENCE_VLLM_SQSH", "INFERENCE_VLLM_MI200_SQSH") == ["hpcagent-bench-vllm-amd-latest.sqsh"] * 2
 
 
 def test_install_edfs_renders_each_partition_edf_with_its_own_arch(tmp_path: pathlib.Path) -> None:
@@ -187,7 +192,7 @@ def test_install_edfs_renders_each_partition_edf_with_its_own_arch(tmp_path: pat
         for name, image in (
             (f"hpcagent-bench-agent-{partition}-latest", LIVE["agent"]),
             (f"hpcagent-bench-judge-{partition}-latest", LIVE["judge"]),
-            (f"hpcagent-bench-judge-{partition}-mlscale", LIVE["judge"]),
+            (f"hpcagent-bench-judge-{partition}-mlscale-latest", LIVE["judge"]),
         ):
             rendered = edf(edf_dir, name)
             assert rendered["image"] == str(tmp_path / "ce" / image), name
@@ -198,7 +203,7 @@ def test_the_mlscale_edf_is_the_judge_edf_plus_the_hwloc_preload(tmp_path: pathl
     done, edf_dir = install_edfs(tmp_path, images_env(*AMD_ROLES))
     assert done.returncode == 0, done.stderr
     judge = (edf_dir / "hpcagent-bench-judge-mi200-latest.toml").read_text(encoding="utf-8").splitlines()
-    mlscale = (edf_dir / "hpcagent-bench-judge-mi200-mlscale.toml").read_text(encoding="utf-8").splitlines()
+    mlscale = (edf_dir / "hpcagent-bench-judge-mi200-mlscale-latest.toml").read_text(encoding="utf-8").splitlines()
     differ = [(a, b) for a, b in zip(judge, mlscale, strict=True) if a != b]
     preload = str(edf(edf_dir, "hpcagent-bench-judge-mi200-latest")["env"]["LD_PRELOAD"])
     assert differ == [(f'LD_PRELOAD = "{preload}"', f'LD_PRELOAD = "{preload}:{HWLOC}"')], differ
@@ -264,7 +269,7 @@ def test_verify_stage_carries_the_any_host_cpu_rows_on_a_gpu_partition(tmp_path:
     (ce / "verify_image.sbatch").write_text(f'echo "$PROFILE $IMAGE" >> "{tmp_path}/verified"\n', encoding="utf-8")
     arch = platform.machine()
     images = {
-        profile: scratch / "ce-images" / f"hpcagent-bench-{role}-cpu-{arch}-candidate.sqsh"
+        profile: scratch / "ce-images" / f"hpcagent-bench-{role}-cpu-{arch}-latest-candidate.sqsh"
         for profile, role in (("judge-agent-cpu", "agent"), ("judge-cpu", "judge"))
     }
     for image in images.values():
@@ -292,15 +297,49 @@ def test_a_native_build_is_asked_for_by_name_and_otherwise_refused() -> None:
             "bash",
             str(CE / "build_common.sh"),
         ],
-        {"CE_CPU_TARGET": "native"},
+        {"CE_IMAGE_FLAVOR": "native"},
     )
     assert native.returncode == 0, native.stderr
     assert native.stdout.endswith("[]"), "native is spack's host detection: an empty SPACK_TARGET"
     other = run(
-        ["bash", "-c", 'source "$1"; ce_spack_target', "bash", str(CE / "build_common.sh")], {"CE_CPU_TARGET": "zen4"}
+        ["bash", "-c", 'source "$1"; ce_spack_target', "bash", str(CE / "build_common.sh")], {"CE_IMAGE_FLAVOR": "zen4"}
     )
     assert other.returncode == 2
-    assert "native or unset" in other.stderr
+    assert "latest or native" in other.stderr
+
+
+@pytest.mark.parametrize("flavor", ["latest", "native"])
+def test_the_flavor_names_agent_and_judge_images_and_edfs_but_not_the_serving_ones(flavor: str) -> None:
+    names = common(
+        'printf "%s\\n" "${JUDGE_AGENT_AMD_SQSH}" "${JUDGE_AMD_EDF_LATEST}" "${JUDGE_AMD_MLSCALE_EDF_LATEST}"'
+        ' "${JUDGE_AGENT_AMD_CANDIDATE}" "${INFERENCE_VLLM_SQSH}" "${INFERENCE_VLLM_EDF_LATEST}" "${JUDGE_AMD_TAG}"',
+        env={"CE_IMAGE_FLAVOR": flavor},
+    )
+    assert names.returncode == 0, names.stderr
+    assert names.stdout.split() == [
+        f"hpcagent-bench-agent-amd-{flavor}.sqsh",
+        f"hpcagent-bench-judge-mi300-{flavor}",
+        f"hpcagent-bench-judge-mi300-mlscale-{flavor}",
+        f"hpcagent-bench-agent-amd-{flavor}-candidate.sqsh",
+        "hpcagent-bench-vllm-amd-latest.sqsh",
+        "hpcagent-bench-vllm-mi300-latest",
+        "judge-amd-latest",
+    ]
+
+
+def test_every_registry_tag_is_a_latest_tag() -> None:
+    tags = common('for r in $(ce_roles); do ce_image "$r" tag 2>/dev/null || true; done')
+    assert tags.returncode == 0, tags.stderr
+    assert tags.stdout.split(), "images.env publishes nothing"
+    assert all(tag.endswith("-latest") for tag in tags.stdout.split()), tags.stdout
+
+
+def test_pull_refuses_the_native_flavor() -> None:
+    done = run(
+        ["bash", str(CE / "pull_image.sh"), "judge-agent-amd"], {"CE_IMAGE_FLAVOR": "native", "HOME": "/nonexistent"}
+    )
+    assert done.returncode == 2
+    assert "latest images only" in done.stderr
 
 
 @pytest.mark.parametrize("recipe", ["judge-agent-amd", "judge-agent-cpu"])

@@ -170,16 +170,19 @@ ce_amd_targets() {
 }
 
 # Exports SPACK_TARGET, cpu_target.env's portable baseline for this CPU family (uname -m), which the
-# published images use. CE_CPU_TARGET=native exports it empty instead: spack's host detection, an
-# image tuned for this machine's CPU that push_image.sh refuses to publish.
+# latest images use. CE_IMAGE_FLAVOR=native (images.env) exports it empty instead: spack's host
+# detection, an image tuned for this machine's CPU, written under the -native names and never pushed.
 ce_spack_target() {
     local family
-    if [[ "${CE_CPU_TARGET:-}" == native ]]; then
-        export SPACK_TARGET=""
-        printf 'spack target native (this machine; not publishable)\n'
-        return 0
-    fi
-    [[ -z "${CE_CPU_TARGET:-}" ]] || { echo "CE_CPU_TARGET is native or unset, got '${CE_CPU_TARGET}'" >&2; return 2; }
+    case "${CE_IMAGE_FLAVOR:-latest}" in
+        latest) ;;
+        native)
+            export SPACK_TARGET=""
+            printf 'spack target native (this machine; not publishable)\n'
+            return 0
+            ;;
+        *) echo "CE_IMAGE_FLAVOR is latest or native, got '${CE_IMAGE_FLAVOR}'" >&2; return 2 ;;
+    esac
     family="$(uname -m)"
     SPACK_TARGET="$(sed -n "s/^SPACK_TARGET_${family}=//p" "${CE_IMAGES_DIR}/cpu_target.env")"
     if [[ ! "${SPACK_TARGET}" =~ ^[a-z0-9_.]+$ ]]; then
