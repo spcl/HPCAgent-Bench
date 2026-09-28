@@ -56,7 +56,9 @@ declare -A TARGET_SQSH=()
 targets=""
 for role in $(ce_roles); do
     [[ "$(ce_image "${role}" dir 2>/dev/null)" == "${PROFILE}" ]] || continue
-    [[ "$(ce_image "${role}" partition 2>/dev/null)" == "${PARTITION}" ]] || continue
+    # No partition ("-", which ce_image reports as exit 2): built on any host, the CPU images.
+    row_partition="$(ce_image "${role}" partition 2>/dev/null)" || row_partition=""
+    [[ -z "${row_partition}" || "${row_partition}" == "${PARTITION}" ]] || continue
     candidate="$(ce_image "${role}" candidate 2>/dev/null)" || continue
     prof="$(ce_image "${role}" profile)"
     TARGET_SQSH[${prof}]="${CE_IMAGES}/${candidate}"

@@ -9,6 +9,7 @@ tests/test_gpu_arch_table.py.
 """
 
 import pathlib
+import platform
 import re
 import shutil
 import subprocess
@@ -250,6 +251,36 @@ def test_verify_only_reverifies_the_candidates_without_building(tmp_path: pathli
     for target, profile in (("agent", "judge-agent-amd"), ("judge", "judge")):
         marker = pathlib.Path(f"{images[target]}.verified").read_text(encoding="utf-8")
         assert marker == f"verified profile={profile} job=7 digest=sha256:abc\n", target
+
+
+def test_verify_stage_carries_the_any_host_cpu_rows_on_a_gpu_partition(tmp_path: pathlib.Path) -> None:
+    """The CPU rows' partition is "-": a CPU build on an mi300 allocation still verifies both images."""
+    repo, scratch = tmp_path / "repo", tmp_path / "scratch"
+    ce = repo / "containers" / "images"
+    (ce / "judge-agent-cpu").mkdir(parents=True)
+    (scratch / "ce-images").mkdir(parents=True)
+    for name in ("build_common.sh", "images.env", "gpu_arch.env", "cpu_target.env"):
+        shutil.copy2(CE / name, ce / name)
+    (ce / "verify_image.sbatch").write_text(f'echo "$PROFILE $IMAGE" >> "{tmp_path}/verified"\n', encoding="utf-8")
+    arch = platform.machine()
+    images = {
+        profile: scratch / "ce-images" / f"hpcagent-bench-{role}-cpu-{arch}-candidate.sqsh"
+        for profile, role in (("judge-agent-cpu", "agent"), ("judge-cpu", "judge"))
+    }
+    for image in images.values():
+        image.write_bytes(b"sqsh")
+    env = {
+        "SCRATCH": str(scratch),
+        "REPO": str(repo),
+        "IMAGE_DIR": "containers/images/judge-agent-cpu",
+        "SLURM_JOB_PARTITION": "mi300",
+        "SLURM_JOB_ID": "7",
+        "VERIFY_ONLY": "1",
+    }
+    done = run(["bash", str(CE / "build_and_verify.sbatch")], env)
+    assert done.returncode == 0, done.stderr
+    verified = (tmp_path / "verified").read_text(encoding="utf-8").splitlines()
+    assert verified == [f"{profile} {image}" for profile, image in images.items()]
 
 
 def test_a_native_build_is_asked_for_by_name_and_otherwise_refused() -> None:
