@@ -327,7 +327,8 @@ RUN set -eux; \
 # 16, whose headers a clang that old is not guaranteed to parse.
 COPY containers/build-hptt.sh /build-hptt.sh
 COPY containers/build-tblis.sh /build-tblis.sh
-ARG TBLIS_REF=v1.3.0
+# Empty: build-tblis.sh picks the ref per architecture (v1.3.0 is x86-only).
+ARG TBLIS_REF=
 ARG PLUTO_COMMIT=dc462163c8b4fc97d378a4d245d1a64741cb4111
 ARG PLUTO_CLANG_MAJOR=17
 RUN set -eux; \
