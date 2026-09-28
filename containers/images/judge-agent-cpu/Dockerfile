@@ -154,6 +154,12 @@ RUN set -eux; \
 ARG SPACK_REF=66ff2229e4ff1fbae9006dddd067e45120a5cba8
 ARG SPACK_PACKAGES_REF=3936d6c1796a095cd29f24f3082a5f32f4b5f938
 ARG SPACK_BUILD_JOBS=64
+# CPU tuning. Default: the build host's own CPU -- spack detects it, and MARCH=native reaches every
+# source build and the image's default CFLAGS/CXXFLAGS/FFLAGS -- so a from-scratch build is as fast
+# as its machine allows (the published aarch64 images are built on Grace: neoverse_v2). A portable
+# image instead: --build-arg SPACK_TARGET=armv8.2a --build-arg MARCH=armv8.2-a (Neoverse N1 and newer).
+ARG SPACK_TARGET=
+ARG MARCH=native
 ENV SPACK_ROOT=/opt/spack \
     SPACK_ENV_DIR=/opt/spack-env \
     SPACK_DISABLE_LOCAL_CONFIG=true \
@@ -186,6 +192,9 @@ RUN set -eux; \
       '      prefix: /usr' \
       '    buildable: false' \
       > "${SPACK_ROOT}/etc/spack/packages.yaml"; \
+    if [ -n "${SPACK_TARGET}" ]; then \
+      printf '%s\n' '  all:' "    require: [\"target=${SPACK_TARGET}\"]" >> "${SPACK_ROOT}/etc/spack/packages.yaml"; \
+    fi; \
     "${spack}" external find --scope site \
       cmake ninja pkgconf perl m4 autoconf automake libtool gmake git curl openssl python \
       bison flex texinfo diffutils findutils gawk tar gzip bzip2 xz zlib || true; \
@@ -226,6 +235,10 @@ and not n.get('external')}); sys.exit(f'spack would build {bad}: a second BLAS o
       || { echo "libmpi links libslurm: the image must launch under any host Slurm" >&2; exit 1; }; \
     strings /opt/view/lib/libmpi.so | grep -qx 'fullinit' \
       || { echo "no built-in PMI-2 client (wire cmd fullinit): srun --mpi=pmi2 cannot launch it" >&2; exit 1; }; \
+    if [ -n "${SPACK_TARGET}" ]; then \
+      stray="$(ls /opt/spack-install | grep -vx -e bin -e "linux-${SPACK_TARGET}" || true)"; \
+      [ -z "${stray}" ] || { echo "spack built outside target ${SPACK_TARGET}: ${stray}" >&2; exit 2; }; \
+    fi; \
     ! ls -d /opt/spack-install/*/openblas-* 2>/dev/null \
       || { echo "spack built its own OpenBLAS beside the apt one" >&2; exit 1; }; \
     printf '%s\n' '#include <mpi.h>' 'int main(int argc, char **argv) {' \
@@ -304,8 +317,8 @@ COPY containers/lib/build-pluto.sh /build-pluto.sh
 # Empty: build-tblis.sh picks the ref per architecture (v1.3.0 is x86-only).
 ARG TBLIS_REF=
 RUN set -eux; \
-    sh /build-hptt.sh; \
-    TBLIS_REF="${TBLIS_REF}" sh /build-tblis.sh; \
+    CFLAGS="-march=${MARCH}" CXXFLAGS="-march=${MARCH}" sh /build-hptt.sh; \
+    CFLAGS="-march=${MARCH}" CXXFLAGS="-march=${MARCH}" TBLIS_REF="${TBLIS_REF}" sh /build-tblis.sh; \
     ldconfig; \
     test -f /usr/local/include/hptt.h; \
     test -f /usr/local/include/tblis/tblis.h; \
@@ -541,6 +554,10 @@ RUN sh /tmp/git_mirror.sh drop && rm -f /tmp/git_mirror.sh
 WORKDIR /work
 
 # LD_PRELOAD and PYTHONSAFEPATH set last, after every RUN, so no build step runs under them.
+# The image's default tuning for whatever is compiled in it, matching the libraries (MARCH above).
+ENV CFLAGS="-march=${MARCH}" \
+    CXXFLAGS="-march=${MARCH}" \
+    FFLAGS="-march=${MARCH}"
 ENV LD_PRELOAD=/usr/local/lib/libmimalloc.so
 ENV PYTHONSAFEPATH=1
 

@@ -92,6 +92,12 @@ ARG DEBIAN_FRONTEND=noninteractive
 # minor of its own major (sm_80 on sm_86/89, sm_70 on sm_75, sm_120 on sm_121), so five cover the
 # range and the image is not tied to GH200. Spack's comma spelling; the gates check every one.
 ARG CUDA_ARCHS=70,80,90,100,120
+# CPU tuning. Default: the build host's own CPU -- spack detects it, and MARCH=native reaches every
+# source build and the image's default CFLAGS/CXXFLAGS/FFLAGS -- so a from-scratch build is as fast
+# as its machine allows (the published aarch64 images are built on Grace: neoverse_v2). A portable
+# image instead: --build-arg SPACK_TARGET=armv8.2a --build-arg MARCH=armv8.2-a (Neoverse N1 and newer).
+ARG SPACK_TARGET=
+ARG MARCH=native
 # The known-good pairing already in service on judge-agent-amd, same full versions.
 ARG GCC_VERSION=16.2.0
 ARG LLVM_VERSION=22.1.8
@@ -367,6 +373,9 @@ RUN set -eux; \
       '      prefix: /opt/ofi-sdk' \
       '    buildable: false' \
       > "${SPACK_ROOT}/etc/spack/packages.yaml"; \
+    if [ -n "${SPACK_TARGET}" ]; then \
+      printf '%s\n' '  all:' "    require: [\"target=${SPACK_TARGET}\"]" >> "${SPACK_ROOT}/etc/spack/packages.yaml"; \
+    fi; \
     "${SPACK_ROOT}/bin/spack" external find --scope site \
       cmake ninja pkgconf perl m4 autoconf automake libtool gmake git curl openssl python \
       bison flex texinfo diffutils findutils gawk tar gzip bzip2 xz || true; \
@@ -666,10 +675,14 @@ RUN set -eux; \
     "${spack}" install --fail-fast \
       "openmpi@5 +cuda cuda_arch=${CUDA_ARCHS} +openshmem fabrics=ucx %gcc@${GCC_VERSION} ^ucx +cuda cuda_arch=${CUDA_ARCHS}"; \
     "${spack}" clean --stage; \
+    if [ -n "${SPACK_TARGET}" ]; then \
+      stray="$(ls /opt/spack-install | grep -vx -e bin -e "linux-${SPACK_TARGET}" || true)"; \
+      [ -z "${stray}" ] || { echo "spack built outside target ${SPACK_TARGET}: ${stray}" >&2; exit 2; }; \
+    fi; \
     ln -sfn "$("${spack}" location -i openmpi)" /opt/openmpi; \
     test -x /opt/openmpi/bin/mpicc; \
-    sh /build-hptt.sh; \
-    TBLIS_REF="${TBLIS_REF}" sh /build-tblis.sh; \
+    CFLAGS="-march=${MARCH}" CXXFLAGS="-march=${MARCH}" sh /build-hptt.sh; \
+    CFLAGS="-march=${MARCH}" CXXFLAGS="-march=${MARCH}" TBLIS_REF="${TBLIS_REF}" sh /build-tblis.sh; \
     git init -q /tmp/ska; \
     gitretry -C /tmp/ska fetch -q --depth 1 https://github.com/skarupke/ska_sort "${SKA_SORT_REF}"; \
     git -C /tmp/ska checkout -q FETCH_HEAD; \
@@ -1070,6 +1083,10 @@ RUN set -eux; \
 
 # LD_PRELOAD and PYTHONSAFEPATH last, after every RUN, for the reasons judge-agent-amd gives: the
 # first would preload mimalloc into the build's own steps, the second changes python's import path.
+# The image's default tuning for whatever is compiled in it, matching the libraries (MARCH above).
+ENV CFLAGS="-march=${MARCH}" \
+    CXXFLAGS="-march=${MARCH}" \
+    FFLAGS="-march=${MARCH}"
 ENV LD_PRELOAD=/usr/local/lib/libmimalloc.so
 ENV PYTHONSAFEPATH=1
 
