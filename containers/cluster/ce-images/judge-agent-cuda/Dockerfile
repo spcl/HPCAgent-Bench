@@ -133,10 +133,6 @@ ARG LLVM_VERSION=22.1.8
 # spack and its package repository, pinned to the pair judge-agent-amd builds with.
 ARG SPACK_REF=66ff2229e4ff1fbae9006dddd067e45120a5cba8
 ARG SPACK_PACKAGES_REF=3936d6c1796a095cd29f24f3082a5f32f4b5f938
-# Must equal the HOST Slurm exactly: PMI is a versioned wire protocol. No default -- build.sh reads
-# it off the build node's `srun --version`, and the spack bootstrap below refuses a version the
-# pinned spack-packages does not carry, in seconds rather than after the compiler build.
-ARG SLURM_VERSION=
 # NVIDIA HPC SDK from the arm64 repo; cuTENSOR and Nsight from the CUDA sbsa repo. Nsight is the
 # CUDA 12.9 generation: ncu 2025.2.1 is the one CUDA 12.9.1 ships, nsys 2025.3.2 the repo's nearest to
 # the base's 2025.3.1 -- a 2026 Nsight would outrun the driver CUDA 12.9 was chosen for.
@@ -330,12 +326,8 @@ RUN set -eux; \
 # libfabric is OURS (the stage-0 stub), external AND required in the environment below -- the two
 # mechanisms judge-agent-amd step 4 records (630049, 630267) both have to be closed here too.
 #
-# A one-package overlay repo, ahead of builtin, adds slurm@25-05-9-1 (Daint's Slurm): no
-# spack-packages commit carries it yet, and the PMI gate below wants the host version exactly.
-# The checksum is the GitHub tag archive's, the URL the builtin package derives.
-#
-# The overlay also carries llvm: the builtin recipe builds no nvptx OpenMP device runtime for
-# LLVM 20+ (it never sets LLVM_RUNTIME_TARGETS; its +cuda path drives the pre-20
+# An overlay repo, ahead of builtin, carries llvm: the builtin recipe builds no nvptx OpenMP
+# device runtime for LLVM 20+ (it never sets LLVM_RUNTIME_TARGETS; its +cuda path drives the pre-20
 # LIBOMPTARGET_NVPTX_* options). Without it clang -fopenmp --offload-arch=sm_90 cannot link
 # ("no library 'libomptarget-nvptx.bc' found", job 4812087), and the toolchain gate below fails.
 # The subclass adds the upstream-documented runtime target and nothing else.
@@ -350,7 +342,6 @@ RUN set -eux; \
     echo "libfabric SDK $(cat /opt/ofi-sdk/VERSION) -- link target only, the node provides runtime"
 
 RUN set -eux; \
-    test -n "${SLURM_VERSION}" || { echo "SLURM_VERSION is unset: build with build.sh, which reads the host Slurm" >&2; exit 2; }; \
     git init -q "${SPACK_ROOT}"; \
     git -C "${SPACK_ROOT}" remote add origin https://github.com/spack/spack.git; \
     gitretry -C "${SPACK_ROOT}" fetch -q --depth 1 origin "${SPACK_REF}"; \
@@ -364,17 +355,8 @@ RUN set -eux; \
     git -C /opt/spack-packages checkout -q FETCH_HEAD; \
     test -f /opt/spack-packages/repos/spack_repo/builtin/repo.yaml; \
     overlay=/opt/spack-overlay/spack_repo/hpcagent; \
-    mkdir -p "${overlay}/packages/slurm" "${overlay}/packages/llvm" "${overlay}/packages/strumpack"; \
+    mkdir -p "${overlay}/packages/llvm" "${overlay}/packages/strumpack"; \
     printf '%s\n' 'repo:' '  namespace: hpcagent' '  api: v2.2' > "${overlay}/repo.yaml"; \
-    printf '%s\n' \
-      'from spack_repo.builtin.packages.slurm.package import Slurm as BuiltinSlurm' \
-      '' \
-      'from spack.package import *' \
-      '' \
-      '' \
-      'class Slurm(BuiltinSlurm):' \
-      '    version("25-05-9-1", sha256="55678d04efa91cc919277f290f9f50d84ded1185b0ea93125ac304e8a0270a73")' \
-      > "${overlay}/packages/slurm/package.py"; \
     printf '%s\n' \
       'from spack_repo.builtin.packages.llvm.package import Llvm as BuiltinLlvm' \
       '' \
@@ -435,10 +417,7 @@ RUN set -eux; \
       cmake ninja pkgconf perl m4 autoconf automake libtool gmake git curl openssl python \
       bison flex texinfo diffutils findutils gawk tar gzip bzip2 xz || true; \
     "${SPACK_ROOT}/bin/spack" compiler find --scope site; \
-    "${SPACK_ROOT}/bin/spack" compiler list; \
-    "${SPACK_ROOT}/bin/spack" versions --safe slurm | tr -s ' ' '\n' | grep -qx "${SLURM_VERSION}" \
-      || { echo "slurm@${SLURM_VERSION} (the host Slurm) is not in spack-packages@${SPACK_PACKAGES_REF}" >&2; \
-           echo "   known: $("${SPACK_ROOT}/bin/spack" versions --safe slurm | tr -s ' \n' ' ')" >&2; exit 2; }
+    "${SPACK_ROOT}/bin/spack" compiler list
 
 # Binary buildcache on scratch, so a rebuild downloads gcc/llvm instead of compiling them again.
 # Both halves no-op when build.sh mounted nothing. judge-agent-amd step 3, unchanged.
@@ -495,9 +474,10 @@ RUN set -eux; \
       '      buildable: false' \
       '  specs:' \
       "  - llvm@${LLVM_VERSION} +clang +flang +mlir +polly +lld +offload +libomptarget targets=aarch64,nvptx" \
-      '  # GPU-aware MPICH, pinned to the host Slurm; every variant is judge-agent-amd step 4 with' \
-      '  # +cuda in place of +rocm. device=ch4 netmod=ofi reaches Slingshot through the cxi hook.' \
-      "  - mpich@4 +cuda cuda_arch=${CUDA_ARCH} +fortran +hwloc +slurm device=ch4 netmod=ofi ^slurm@${SLURM_VERSION}" \
+      '  # GPU-aware MPICH, no +slurm (its built-in PMI-1/2 client serves any srun); every variant is' \
+      '  # judge-agent-amd step 4 with +cuda in place of +rocm. device=ch4 netmod=ofi reaches the' \
+      '  # fabric through libfabric: the site supplies the provider (cxi on Alps via the CE hook).' \
+      "  - mpich@4 +cuda cuda_arch=${CUDA_ARCH} +fortran +hwloc device=ch4 netmod=ofi" \
       '  - openblas threads=openmp +fortran' \
       '  - netlib-scalapack' \
       '  - fftw +mpi +openmp precision=float,double,long_double' \
@@ -652,7 +632,7 @@ RUN set -eux; \
 # GPU-aware MPI gate, judge-agent-amd step 5 with CUDA in place of ROCm. The three questions two
 # of which a wrong MPI can pass: wrappers resolve into /opt/view (not the distro MPICH, not the
 # base's HPC-X Open MPI), mpichversion names CUDA in its configure line, and libmpi LINKS the CUDA
-# runtime. Plus which libfabric it links (never spack's own, 629812) and the Slurm/hydra variants.
+# runtime. Plus which libfabric it links (never spack's own, 629812), no host Slurm/PMI library, and hydra.
 RUN set -eux; \
     for wrapper in mpicc mpicxx mpifort mpiexec; do \
       case "$(command -v "${wrapper}")" in \
@@ -670,8 +650,12 @@ RUN set -eux; \
     esac; \
     grep -qi 'cuda' /tmp/mpichversion.txt \
       || { echo "mpichversion shows no CUDA in its configure line -- this MPICH is not GPU-aware" >&2; exit 1; }; \
-    grep -q -- '--with-slurm=yes' /tmp/mpichversion.txt \
-      || { echo "mpichversion shows --with-slurm=no -- the +slurm variant did not take" >&2; exit 1; }; \
+    ! ls -d /opt/spack-install/*/slurm-* 2>/dev/null \
+      || { echo "spack built a Slurm: the image must launch under any host Slurm" >&2; exit 1; }; \
+    ! readelf -d /opt/view/lib/libmpi.so | grep 'NEEDED.*libslurm' \
+      || { echo "libmpi links libslurm: the image must launch under any host Slurm" >&2; exit 1; }; \
+    nm -D /opt/view/lib/libmpi.so /opt/view/lib/libpmi*.so 2>/dev/null | grep -q ' T PMI2_Init$' \
+      || { echo "no built-in PMI-2 client: srun --mpi=pmi2 cannot launch this MPICH" >&2; exit 1; }; \
     command -v mpiexec >/dev/null \
       || { echo "no mpiexec: hydra was dropped; mpiexec -launcher fork keeps ranks in the container" >&2; exit 1; }; \
     libmpi="$(ls /opt/view/lib/libmpi.so* 2>/dev/null | head -1)"; \

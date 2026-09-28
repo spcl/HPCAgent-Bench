@@ -780,9 +780,8 @@ The AMD recipe with CUDA in place of ROCm; every AMD layer's fix carries over. W
   `conflicts("%gcc@16:", when="%cuda@:13.3")` unless the cuda node carries that variant, so no `+cuda`
   spec concretizes with gcc 16 otherwise. `NVCC_PREPEND_FLAGS=-allow-unsupported-compiler` is the same
   waiver at nvcc's end, set before the spack layers so MAGMA and PETSc build under it.
-* **`SLURM_VERSION` is the build host's**, read by `build.sh` off `srun --version` in spack's spelling
-  (`25-05-8-1`); the spack bootstrap refuses a version the pinned spack-packages does not list, in
-  seconds rather than after the compiler build.
+* **No `+slurm` on MPICH**: its built-in PMI-1/2 client serves any host `srun --mpi=pmi2`, so no
+  site's Slurm release is baked into the image.
 * **NVHPC, cuTENSOR and Nsight** come from NVIDIA's arm64/sbsa apt repos at pinned versions, Nsight
   of the CUDA 12.9 generation (ncu 2025.2.1, nsys 2025.3.2); the `ncu`/`nsys` symlinks name the pinned
   version directories rather than whichever the base also ships.

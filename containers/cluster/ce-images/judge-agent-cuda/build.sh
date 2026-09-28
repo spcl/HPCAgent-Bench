@@ -11,7 +11,7 @@
 #   BUILD_TARGETS=agent OUTPUT_SQSH=$SCRATCH/ce-images/x.sqsh .../build.sh
 #
 # Overrides: BUILD_TARGETS, OUTPUT_SQSH (single target only), BASE_IMAGE, DACE_COMMIT,
-# LIBFABRIC_REF, SLURM_VERSION, SPACK_BUILDCACHE, PIP_CACHE, CE_DIR.
+# LIBFABRIC_REF, SPACK_BUILDCACHE, PIP_CACHE, CE_DIR.
 set -euo pipefail
 
 # Beverin's core_pattern is the machine-global `core_%h_%p` and a dump lands in the crashing
@@ -48,14 +48,6 @@ target_sqsh() {
 BASE_IMAGE="${BASE_IMAGE:-nvcr.io/nvidia/pytorch:25.06-py3@sha256:6d46ebd64cfbc74c84e11678c0c5ae298ca97c26171c17a23fd04d23fec5123e}"
 IMAGE_VERSION="${IMAGE_VERSION:-dev}"
 mkdir -p "${CE_DIR}"
-
-# The HOST Slurm, in spack's version spelling: `slurm 25.05.8` -> 25-05-8-1. PMI is a versioned
-# wire protocol, so mpich +slurm must be built against exactly this; the Dockerfile refuses a
-# version the pinned spack-packages does not carry before it builds anything.
-SLURM_VERSION="${SLURM_VERSION:-$(srun --version 2>/dev/null | awk '{print $2}' | tr . -)-1}"
-[[ "${SLURM_VERSION}" =~ ^[0-9]+-[0-9]+-[0-9]+-[0-9]+$ ]] \
-    || { echo "could not read the host Slurm version (got '${SLURM_VERSION}'); set SLURM_VERSION" >&2; exit 2; }
-printf 'slurm %s\n' "${SLURM_VERSION}"
 
 ce_podman_env
 
@@ -111,7 +103,6 @@ for target in ${BUILD_TARGETS}; do
       --build-arg "DACE_COMMIT=${DACE_COMMIT}" \
       --build-arg "LIBFABRIC_REF=${LIBFABRIC_REF}" \
       --build-arg "LIBFABRIC_COMMIT=${LIBFABRIC_COMMIT}" \
-      --build-arg "SLURM_VERSION=${SLURM_VERSION}" \
       --target "${target}" \
       -f "${SCRIPT_DIR}/Dockerfile" \
       -t "${tag}" \

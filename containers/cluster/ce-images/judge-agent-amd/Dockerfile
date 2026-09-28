@@ -206,8 +206,6 @@ ARG LLVM_VERSION=22.1.8
 # SPACK_REF is the HEAD of the house tree at $SCRATCH/spack (spack 1.3.0.dev0).
 ARG SPACK_REF=66ff2229e4ff1fbae9006dddd067e45120a5cba8
 ARG SPACK_PACKAGES_REF=3936d6c1796a095cd29f24f3082a5f32f4b5f938
-# Must equal the HOST Slurm (srun --version) exactly; PMI is a versioned wire protocol.
-ARG SLURM_VERSION=25-05-8-1
 # The spack CPU target every spack build is pinned to. build.sh passes it from ../cpu_target.env
 # for the build job's partition (zen3 on mi200); empty -- mi300 -- leaves spack on host detection.
 ARG SPACK_TARGET=
@@ -582,9 +580,7 @@ RUN set -eux; \
       '      buildable: false' \
       '  specs:' \
       "  - llvm@${LLVM_VERSION} +clang +flang +mlir +polly +lld +offload +libomptarget targets=amdgpu,nvptx,x86" \
-      '  # +slurm links Slurm PMI directly and is pinned to the HOST Slurm exactly: PMI is a' \
-      '  # versioned wire protocol, so a container-built Slurm of a different release talking to' \
-      '  # the hosts srun is a mismatch that shows up as a launch failure, not a build one. NOT' \
+      '  # No +slurm: that links one Slurm release, and the image must launch under any. NOT' \
       '  # pmi=pmix, which spack conflicts with +hydra: that would set --with-pm=no and remove' \
       '  # mpiexec, and mpiexec -launcher fork is what keeps single-node ranks INSIDE the CE' \
       '  # container. pmi stays default, which on MPICH 4.2+ already builds BOTH the PMI-1 and' \
@@ -597,7 +593,7 @@ RUN set -eux; \
       "  # enables the CE's CXI hook for exactly this); spack's default netmod would build against" \
       '  # UCX instead, and the distro MPICH already demonstrates where that ends -- a ch4:ucx' \
       '  # build whose UCX has no ROCm transport at all.' \
-      "  - mpich@4 +rocm amdgpu_target=${ROCM_ARCH} +fortran +hwloc +slurm device=ch4 netmod=ofi ^slurm@${SLURM_VERSION}" \
+      "  - mpich@4 +rocm amdgpu_target=${ROCM_ARCH} +fortran +hwloc device=ch4 netmod=ofi" \
       '  - openblas threads=openmp +fortran' \
       '  - netlib-scalapack' \
       '  - fftw +mpi +openmp precision=float,double,long_double' \
@@ -844,8 +840,12 @@ RUN set -eux; \
     esac; \
     grep -qiE 'rocm|hip' /tmp/mpichversion.txt \
       || { echo "mpichversion shows no ROCm/HIP in its configure line -- this MPICH is not GPU-aware" >&2; exit 1; }; \
-    grep -q -- '--with-slurm=yes' /tmp/mpichversion.txt \
-      || { echo "mpichversion shows --with-slurm=no -- the +slurm variant did not take" >&2; exit 1; }; \
+    ! ls -d /opt/spack-install/*/slurm-* 2>/dev/null \
+      || { echo "spack built a Slurm: the image must launch under any host Slurm" >&2; exit 1; }; \
+    ! readelf -d /opt/view/lib/libmpi.so | grep 'NEEDED.*libslurm' \
+      || { echo "libmpi links libslurm: the image must launch under any host Slurm" >&2; exit 1; }; \
+    nm -D /opt/view/lib/libmpi.so /opt/view/lib/libpmi*.so 2>/dev/null | grep -q ' T PMI2_Init$' \
+      || { echo "no built-in PMI-2 client: srun --mpi=pmi2 cannot launch this MPICH" >&2; exit 1; }; \
     command -v mpiexec >/dev/null \
       || { echo "no mpiexec: hydra was dropped, and mpiexec -launcher fork is what keeps single-node" >&2; \
            echo "   ranks inside the CE container -- pmi=pmix conflicts with +hydra, check the spec" >&2; exit 1; }; \
