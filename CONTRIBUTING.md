@@ -45,7 +45,7 @@ Conventions the hooks do not catch:
 
 ```sh
 python -m pytest -q -n 4 tests/test_framework_flavors.py          # a targeted selection, login node
-scripts/run_tests.sh -q -n 4 tests/test_metrics_autovec.py        # same, with the derived env (BLAS, MPI, PATH)
+scripts/run_tests.sh -q -n 4 tests/test_opt_reports.py            # same, with the derived env (BLAS, MPI, PATH)
 ```
 
 The login node runs targeted selections only (at most `-n 4`). Anything that compiles many kernels,
@@ -114,15 +114,6 @@ The vocabulary and every upstream are in `third_party/upstreams.yaml`. A new ups
 there (and its license text in `third_party/licenses/` if missing); then
 `python scripts/render_attribution.py --write` refreshes CONTRIBUTORS.md and NOTICE
 (`tests/test_attribution.py` fails while they are stale).
-
-### A sweep metric
-
-A per-kernel quantity recorded beside the timings as long-format `kernel_metrics` rows
-(`metric = "<name>.<count>"`). Add `hpcagent_bench/metrics/<name>.py` defining `enabled()`,
-`measure_sweep(frmwrk, impl, bench, reports, datatype)` and `rows(measured, **stamp)`, and a
-`metrics.<name>` switch (default `false`) in `hpcagent_bench/config.yaml`. `metrics.sweep_metrics()`
-finds it; `autovec.py` and `parallelism.py` are the examples. Check:
-`python -m pytest -q tests/test_metrics_registry.py tests/test_metrics_<name>.py`.
 
 ### A language
 

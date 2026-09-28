@@ -8,10 +8,6 @@ import pathlib
 
 PACKAGE = pathlib.Path(__file__).resolve().parents[1] / "hpcagent_bench"
 
-#: Modules that import DaCe's own ``tests.corpus`` (not this repository's), swapping ``tests`` in
-#: ``sys.modules`` for the span of that import (:func:`hpcagent_bench.metrics.parallelism.import_dace_tests_corpus`).
-DACE_TESTS_IMPORTERS = frozenset({"metrics/parallelism.py"})
-
 
 def is_test_file(path: pathlib.Path) -> bool:
     """Test modules that live inside the package tree; pytest collects them, the package never imports them."""
@@ -32,7 +28,7 @@ def imported_modules(tree: ast.AST) -> list[str]:
 def test_no_package_module_imports_the_repository_tests_package() -> None:
     offenders = []
     for path in sorted(PACKAGE.rglob("*.py")):
-        if is_test_file(path) or path.relative_to(PACKAGE).as_posix() in DACE_TESTS_IMPORTERS:
+        if is_test_file(path):
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         bad = [name for name in imported_modules(tree) if name == "tests" or name.startswith("tests.")]
