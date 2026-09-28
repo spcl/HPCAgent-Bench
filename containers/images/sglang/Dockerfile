@@ -415,7 +415,7 @@ WORKDIR /workspace
 # the build if that ever stops working. What the build has no access to is a Slingshot NIC:
 #
 #   * the transport a cross-node collective chooses is only visible in an NCCL_DEBUG=INFO log from
-#     a real two-node run (rccl_hook_check.sbatch): NET/OFI is the goal, NET/Socket is the silent
+#     a real two-node run: NET/OFI is the goal, NET/Socket is the silent
 #     fallback.
 #   * whether SGLang SERVES is a separate question from whether it imports. Run
 #     inference/smoke-kimi-sglang.sbatch before promoting a rebuild.
