@@ -9,7 +9,7 @@ Security design, key handling and every launcher variable: [`private-endpoint.md
 | Image | `hpcagent-bench-vllm-mi200-latest`: the AMD vLLM 0.28 image ([`containers/images/vllm/`](../../containers/images/vllm/Dockerfile)), the one that serves oss120b on mi300 |
 | Weights | `Qwen/Qwen3.8-27B`, BF16 (MI250X has no FP8), in `$HF_HOME/hub` |
 | Shape | `tp8:0.85`: tensor parallel over all 8 GCDs, 0.85 of each GCD's 64 GiB (`--gpu-memory-utilization`) |
-| Measured | 128 concurrent requests, 421 tok/s on 16 concurrent 256-token requests, about 26 tok/s for one request |
+| Measured | 128 concurrent requests, 300-420 tok/s on 16 concurrent 256-token requests, about 60 tok/s for one request |
 | Binds | `127.0.0.1:30000` on the node; every `/v1` request needs the key (vLLM leaves `/health` and `/metrics` open, so this endpoint is tunnel-only) |
 
 ## 1. One-time setup
@@ -56,7 +56,7 @@ second. Exit 0 means the endpoint works:
 health                     200 (want 200)
 POST without the key       401 (want 401)
 chat completion with key   200 (want 200)
-completion                 56 tokens in 1.59 s = 35.1 tok/s
+completion                 63 tokens in 1.00 s = 62.7 tok/s
 A stencil kernel is ...
 ```
 
