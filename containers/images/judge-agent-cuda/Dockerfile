@@ -123,9 +123,9 @@ ARG ASTUNPARSE_VERSION=1.6.3
 # whitelists, and nvcc refuses on the version check alone -- in magma's and petsc's builds as much
 # as in a graded one. The final gate compiles and links real kernels, so "the check was waived" is
 # never mistaken for "the pair works". The waiver is not enough: nvcc 12.9's front end cannot parse
-# gcc 16's libstdc++ (char8_t, __is_pointer; yaksa, job 4813145), so NVCC_CCBIN makes the base's
-# g++-13 nvcc's default host compiler; the objects still link against gcc 16's libstdc++. An
-# explicit -ccbin wins over it. NVHPC_CUDA_HOME points nvc/nvfortran at the base's CUDA 12.9
+# gcc 16's libstdc++ (char8_t, __is_pointer; yaksa, job 4813145), so NVCC_CCBIN makes g++-14 (the
+# newest host CUDA 12.9 supports; nvcc itself stops at -std=c++20) nvcc's default host compiler; the
+# objects still link against gcc 16's libstdc++. An explicit -ccbin wins over it. NVHPC_CUDA_HOME points nvc/nvfortran at the base's CUDA 12.9
 # instead of the newer CUDA the SDK bundles, so an OpenACC binary needs the same driver as the rest.
 ENV LC_ALL=C \
     PLAYWRIGHT_BROWSERS_PATH=/opt/playwright \
@@ -133,7 +133,7 @@ ENV LC_ALL=C \
     NVIDIA_DRIVER_CAPABILITIES=compute,utility,profiler \
     CUDA_HOME=/usr/local/cuda \
     NVCC_PREPEND_FLAGS=-allow-unsupported-compiler \
-    NVCC_CCBIN=/usr/bin/g++-13 \
+    NVCC_CCBIN=/usr/bin/g++-14 \
     NVHPC_CUDA_HOME=/usr/local/cuda \
     SPACK_ROOT=/opt/spack \
     SPACK_ENV_DIR=/opt/spack-env \
@@ -159,7 +159,7 @@ RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
       python3 python3-pip python3-venv python3-dev \
-      build-essential gcc g++ gfortran \
+      build-essential gcc g++ gfortran g++-14 \
       gdb valgrind util-linux hwloc numactl heaptrack strace ltrace binutils patch \
       libgoogle-perftools-dev libmimalloc-dev libtbb-dev libeigen3-dev \
       ca-certificates git curl wget openssh-client gnupg ripgrep fd-find jq less tree htop \
@@ -293,7 +293,7 @@ RUN set -eux; \
 # The subclass adds the upstream-documented runtime target and nothing else.
 #
 # strumpack passes -DCMAKE_CUDA_HOST_COMPILER=$SPACK_CXX (gcc 16), which overrides NVCC_CCBIN; its
-# subclass points that one flag at g++-13 instead.
+# subclass points that one flag at g++-14 instead.
 COPY --from=ofi-builder /opt/ofi-sdk /opt/ofi-sdk
 RUN set -eux; \
     "/opt/ofi-sdk/bin/fi_info" --version 2>/dev/null | head -1 \
@@ -349,7 +349,7 @@ RUN set -eux; \
       '' \
       'class Strumpack(BuiltinStrumpack):' \
       '    def cmake_args(self):' \
-      '        return [a if not a.startswith("-DCMAKE_CUDA_HOST_COMPILER=") else "-DCMAKE_CUDA_HOST_COMPILER=/usr/bin/g++-13"' \
+      '        return [a if not a.startswith("-DCMAKE_CUDA_HOST_COMPILER=") else "-DCMAKE_CUDA_HOST_COMPILER=/usr/bin/g++-14"' \
       '                for a in super().cmake_args()]' \
       > "${overlay}/packages/strumpack/package.py"; \
     printf '%s\n' \
