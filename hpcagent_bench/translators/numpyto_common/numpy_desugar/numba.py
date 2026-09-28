@@ -4,11 +4,11 @@ import ast
 import copy
 
 from hpcagent_bench.translators.numpyto_common.subscripts import is_full_slice, is_newaxis
+from hpcagent_bench.translators.numpyto_common.ast_build import expr_of
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import (
     RankedRewritePass,
     RewritePass,
     const_int,
-    expr_of,
     np_attr,
     name_store_counts,
 )

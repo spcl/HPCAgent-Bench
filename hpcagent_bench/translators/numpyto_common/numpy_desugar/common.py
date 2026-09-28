@@ -2,6 +2,7 @@
 
 import ast
 
+
 __all__ = [
     "AUG_OP_SRC",
     "LIKE_CTORS",
@@ -15,7 +16,6 @@ __all__ = [
     "eigh_alias_names",
     "eigh_call_ab",
     "eigh_call_kind",
-    "expr_of",
     "is_eigh_assign_target",
     "name_store_counts",
     "np_attr",
@@ -203,10 +203,6 @@ AUG_OP_SRC = {
     ast.LShift: "<<=",
     ast.RShift: ">>=",
 }
-
-
-def expr_of(src: str) -> ast.expr:
-    return ast.parse(src, mode="eval").body
 
 
 def name_store_counts(fn: ast.FunctionDef) -> dict[str, int]:

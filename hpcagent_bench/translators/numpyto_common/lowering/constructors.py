@@ -7,6 +7,7 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.dims import NP_ZEROS_AL
 from hpcagent_bench.translators.numpyto_common.lowering.hoisting import StmtHoister
 from hpcagent_bench.translators.numpyto_common.lowering.shape_harvest import ctor_shape_arg
 from hpcagent_bench.translators.numpyto_common.lowering.shape_reads import resolve_shape_token
+from hpcagent_bench.translators.numpyto_common.ast_build import numpy_attribute
 
 __all__ = [
     "CopyToAllocAndFill",
@@ -89,7 +90,7 @@ class FullLikeRewriter(ast.NodeTransformer):
         alloc = ast.Assign(
             targets=[ast.Name(id=tgt.id, ctx=ast.Store())],
             value=ast.Call(
-                func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr=alloc_attr, ctx=ast.Load()),
+                func=numpy_attribute(alloc_attr),
                 args=[v.args[0]],
                 keywords=dtype_kw,
             ),
@@ -169,7 +170,7 @@ class CopyToAllocAndFill(ast.NodeTransformer):
         alloc = ast.Assign(
             targets=[copy.deepcopy(node.targets[0])],
             value=ast.Call(
-                func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="empty_like", ctx=ast.Load()),
+                func=numpy_attribute("empty_like"),
                 args=[copy.deepcopy(src)],
                 keywords=[],
             ),
@@ -298,7 +299,7 @@ class EyeToZerosDiagonal(ast.NodeTransformer):
         zeros = ast.Assign(
             targets=[ast.Name(id=tgt, ctx=ast.Store())],
             value=ast.Call(
-                func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="zeros", ctx=ast.Load()),
+                func=numpy_attribute("zeros"),
                 args=[ast.Tuple(elts=[copy.deepcopy(rows), cols], ctx=ast.Load())],
                 keywords=dtype_kw,
             ),
@@ -509,7 +510,7 @@ class MgridLowering(ast.NodeTransformer):
                 ast.Assign(
                     targets=[ast.Name(id=tgt.id, ctx=ast.Store())],
                     value=ast.Call(
-                        func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="empty", ctx=ast.Load()),
+                        func=numpy_attribute("empty"),
                         args=[shape_tuple],
                         keywords=[
                             ast.keyword(

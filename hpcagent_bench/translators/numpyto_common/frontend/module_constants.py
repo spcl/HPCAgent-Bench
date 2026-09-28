@@ -4,12 +4,13 @@ import ast
 import copy
 import itertools
 import operator
-from typing import Any
 from collections.abc import Callable, Iterator
+from typing import Any
 
 from hpcagent_bench.translators.numpyto_common import dtypes
-from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc
 from hpcagent_bench.translators.numpyto_common.frontend.shape_arith import IDENT_RE
+from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc
+from hpcagent_bench.translators.numpyto_common.ast_build import numpy_attribute
 
 __all__ = [
     "ARITH_OPS",
@@ -428,12 +429,12 @@ def materialize_const_arrays(tree: ast.Module, fn: ast.FunctionDef, input_args: 
             ast.Assign(
                 targets=[ast.Name(id=name, ctx=ast.Store())],
                 value=ast.Call(
-                    func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="zeros", ctx=ast.Load()),
+                    func=numpy_attribute("zeros"),
                     args=[shape_tuple],
                     keywords=[
                         ast.keyword(
                             arg="dtype",
-                            value=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr=dtype, ctx=ast.Load()),
+                            value=numpy_attribute(dtype),
                         )
                     ],
                 ),

@@ -7,30 +7,31 @@ import functools
 import itertools
 import logging
 import re
-from typing import NamedTuple, cast
 from collections.abc import Callable, Iterable, Sequence
+from typing import NamedTuple, cast
 
 from hpcagent_bench.translators.numpyto_common import dtypes
 from hpcagent_bench.translators.numpyto_common import frontend as common_frontend
-from hpcagent_bench.translators.numpyto_common.frontend import PinnedValue, field_nodes, fold_shape_expr
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.emit_helpers.tokens import IDENT_RE
+from hpcagent_bench.translators.numpyto_common.frontend import PinnedValue, field_nodes, fold_shape_expr
 from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc, KernelIR, ScalarDesc, shape_dimension_symbols
 from hpcagent_bench.translators.numpyto_common.lib_nodes import shape_exprs_equal, sympify_shape
 from hpcagent_bench.translators.numpyto_common.lowering import lower
-from hpcagent_bench.translators.numpyto_common.numpy_desugar.reductions import DACE_NATIVE_REDUCE_FNS, reduce_call_parts
 from hpcagent_bench.translators.numpyto_common.numpy_desugar import (
     AUG_OP_SRC,
     axis_list,
+    desugar_for_python_backend,
     dtype_kind,
     dtype_table_,
-    kind_of_dtype_str,
-    promote_kind,
-    desugar_for_python_backend,
     expr_rank,
+    kind_of_dtype_str,
     name_binding_index,
+    promote_kind,
     rank_table,
 )
+from hpcagent_bench.translators.numpyto_common.ast_build import expr_of, numpy_attribute
+from hpcagent_bench.translators.numpyto_common.numpy_desugar.reductions import DACE_NATIVE_REDUCE_FNS, reduce_call_parts
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
 from hpcagent_bench.translators.numpyto_common.parallelism import load_names
 from hpcagent_bench.translators.numpyto_common.statement_desugar import (
@@ -182,7 +183,6 @@ __all__ = [
     "once_bound_locals",
     "ordered_reshape_source",
     "output_write_extents",
-    "parse_expr",
     "plan_size_promotion",
     "program_symbols",
     "read_outside",
@@ -711,7 +711,7 @@ class DesugarTernary(ast.NodeTransformer):
             value
             if kind == join
             else ast.Call(
-                func=ast.Attribute(value=value, attr="astype", ctx=ast.Load()), args=[parse_expr(dtype)], keywords=[]
+                func=ast.Attribute(value=value, attr="astype", ctx=ast.Load()), args=[expr_of(dtype)], keywords=[]
             )
             for value, kind in zip((body, orelse), kinds)
         ]
@@ -1077,7 +1077,7 @@ class MaterializeWrittenReshape(ast.NodeTransformer):
         rebound = any(isinstance(use.ctx, ast.Store) for use in name_uses(block[start + 1 : at + 1], source))
         if rebound or len(name_uses(block[start : at + 1], source)) != len(name_uses([fn], source)):
             return
-        stmt.value = ast.copy_location(ast.Call(func=parse_expr("np.copy"), args=[stmt.value], keywords=[]), stmt.value)
+        stmt.value = ast.copy_location(ast.Call(func=expr_of("np.copy"), args=[stmt.value], keywords=[]), stmt.value)
 
 
 class DesugarUnreplacedCalls(ast.NodeTransformer):
@@ -1178,7 +1178,7 @@ class DesugarReverseSlice(ast.NodeTransformer):
             # ``axis=0`` is not decoration: ``x[::-1]`` reverses the FIRST axis only, while a bare
             # ``np.flip`` reverses every one of them. The two agree at rank 1 and diverge above it.
             flip = ast.Call(
-                func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="flip", ctx=ast.Load()),
+                func=numpy_attribute("flip"),
                 args=[node.value],
                 keywords=[ast.keyword(arg="axis", value=ast.Constant(value=0))],
             )
@@ -1625,7 +1625,7 @@ class DesugarAugAssign(ast.NodeTransformer):
         first = next(part for part, rank in zip(arrays, ranks) if rank == 1)
         return ast.For(
             target=ast.Name(id=at, ctx=ast.Store()),
-            iter=parse_expr(f"range({ast.unparse(first)}.shape[0])"),
+            iter=expr_of(f"range({ast.unparse(first)}.shape[0])"),
             body=[ast.Assign(targets=[write], value=ast.BinOp(left=read, op=node.op, right=value))],
             orelse=[],
         )
@@ -1924,7 +1924,7 @@ def copy_view_bindings(fn: ast.FunctionDef, names: set[str], symbols: frozenset[
         for stmt in block:
             if isinstance(stmt, ast.Assign) and view_binding(stmt, symbols) in names:
                 copied = ast.Call(
-                    func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="copy", ctx=ast.Load()),
+                    func=numpy_attribute("copy"),
                     args=[stmt.value],
                     keywords=[],
                 )
@@ -3400,11 +3400,6 @@ def kwarg_value(node: ast.Call, name: str, position: int) -> ast.expr | None:
     return node.args[position] if len(node.args) > position else None
 
 
-def parse_expr(text: str) -> ast.expr:
-    """One expression, parsed. The lowerings below are clearer written out than built node by node."""
-    return ast.parse(text, mode="eval").body
-
-
 class LowerCallsDaceCannotReplace(ast.NodeTransformer):
     """Rewrite the calls the DaCe frontend has no replacement for into something dace replaces.
 
@@ -3556,7 +3551,7 @@ class LowerCallsDaceCannotReplace(ast.NodeTransformer):
             leading = axis.value
         else:
             return None
-        return parse_expr(f"{ast.unparse(source)}[{', '.join([':'] * leading + [ast.unparse(index)])}]")
+        return expr_of(f"{ast.unparse(source)}[{', '.join([':'] * leading + [ast.unparse(index)])}]")
 
     def round_half_to_even(self, node: ast.Call) -> ast.expr | None:
         """``np.round(x)`` -> floor-and-correct. numpy rounds a HALF to the EVEN neighbour.
@@ -3567,8 +3562,8 @@ class LowerCallsDaceCannotReplace(ast.NodeTransformer):
         if len(node.args) != 1 or node.keywords:
             return None
         value = self.bind("round_x", node.args[0])
-        up = self.bind("round_up", parse_expr(f"np.floor({ast.unparse(value)} + 0.5)"))
-        return parse_expr(
+        up = self.bind("round_up", expr_of(f"np.floor({ast.unparse(value)} + 0.5)"))
+        return expr_of(
             f"np.where(({ast.unparse(up)} - {ast.unparse(value)} == 0.5) & "
             f"(np.mod({ast.unparse(up)}, 2.0) != 0.0), {ast.unparse(up)} - 1.0, {ast.unparse(up)})"
         )
@@ -3589,8 +3584,8 @@ class LowerCallsDaceCannotReplace(ast.NodeTransformer):
             return None
         name = node.args[0].id
         if self.ranks.get(name) == 1 and name not in self.complex_arrays:
-            return parse_expr(f"np.sqrt(np.dot({name}, {name}))")
-        return parse_expr(f"np.sqrt(np.sum(np.abs({name}) ** 2))")
+            return expr_of(f"np.sqrt(np.dot({name}, {name}))")
+        return expr_of(f"np.sqrt(np.sum(np.abs({name}) ** 2))")
 
     def fftfreq(self, node: ast.Call) -> ast.expr | None:
         """``np.fft.fftfreq(n, d)`` -> its closed form: a frequency ladder, not a transform.
@@ -3603,9 +3598,9 @@ class LowerCallsDaceCannotReplace(ast.NodeTransformer):
         count = ast.unparse(node.args[0])
         spacing = kwarg_value(node, "d", 1)
         step = "1.0" if spacing is None else ast.unparse(spacing)
-        ladder = self.bind("fftfreq_k", parse_expr(f"np.arange({count})"))
+        ladder = self.bind("fftfreq_k", expr_of(f"np.arange({count})"))
         k = ast.unparse(ladder)
-        return parse_expr(f"np.where({k} < ({count} + 1) // 2, {k}, {k} - {count}) / ({count} * {step})")
+        return expr_of(f"np.where({k} < ({count} + 1) // 2, {k}, {k} - {count}) / ({count} * {step})")
 
     def searchsorted(self, node: ast.Call) -> ast.expr | None:
         """``np.searchsorted(a, v, side)`` -> a binary search per element of ``v``.

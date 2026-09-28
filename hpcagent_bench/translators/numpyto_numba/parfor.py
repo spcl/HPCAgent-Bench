@@ -3,7 +3,8 @@
 
 import ast
 
-from hpcagent_bench.translators.numpyto_common.parallelism import loop_is_parallel_safe
+from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import const_int
+from hpcagent_bench.translators.numpyto_common.parallelism import index_exprs, loop_is_parallel_safe
 from hpcagent_bench.translators.numpyto_common.subscripts import base_name
 
 __all__ = [
@@ -15,7 +16,6 @@ __all__ = [
     "calls_a_parfor_unsafe_op",
     "handed_to_written_params",
     "has_inplace_slice_self_dependency",
-    "index_tuple",
     "is_reshape_call",
     "names_written_by_call",
     "names_written_in",
@@ -24,7 +24,6 @@ __all__ = [
     "reordered",
     "reshape_bound_names",
     "reshape_operand",
-    "same_sign_const",
     "spell_out_reshape_augassigns",
     "spelled_out_augassign",
     "unit_step",
@@ -55,22 +54,6 @@ def calls_a_parfor_unsafe_op(src: str) -> bool:
 REORDERING_OPS = frozenset({"flip", "fliplr", "flipud", "roll", "rot90", "transpose", "sort", "argsort"})
 
 
-def index_tuple(node: ast.Subscript) -> list[ast.AST]:
-    """The subscript's per-axis index expressions, as a flat list."""
-    index = node.slice
-    return list(index.elts) if isinstance(index, ast.Tuple) else [index]
-
-
-def same_sign_const(node: ast.AST) -> int | None:
-    """``node`` as an integer constant (``2``, ``-1``), else ``None``."""
-    if isinstance(node, ast.Constant) and isinstance(node.value, int) and not isinstance(node.value, bool):
-        return node.value
-    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
-        inner = same_sign_const(node.operand)
-        return None if inner is None else -inner
-    return None
-
-
 def provably_disjoint(lhs: ast.Subscript, rhs: ast.Subscript) -> bool:
     """True when the two subscripts cannot name a common element.
 
@@ -78,9 +61,9 @@ def provably_disjoint(lhs: ast.Subscript, rhs: ast.Subscript) -> bool:
     are integer constants that differ. ``p[-1, :]`` against ``p[-2, :]`` is the boundary-condition
     copy every stencil ends with, and it touches disjoint rows. Signs must match -- ``a[0]`` and
     ``a[-1]`` are the SAME element on a length-1 axis, so mixing them decides nothing."""
-    left, right = index_tuple(lhs), index_tuple(rhs)
+    left, right = index_exprs(lhs), index_exprs(rhs)
     for a, b in zip(left, right):
-        ca, cb = same_sign_const(a), same_sign_const(b)
+        ca, cb = const_int(a), const_int(b)
         if ca is None or cb is None:
             continue
         if (ca < 0) != (cb < 0):
@@ -100,7 +83,7 @@ def reordered(stmt: ast.AST, target: ast.Subscript) -> bool:
             if name in REORDERING_OPS and any(child is target for child in ast.walk(node)):
                 return True
     for node in ast.walk(target):
-        if isinstance(node, ast.Slice) and node.step is not None and (same_sign_const(node.step) or 0) < 0:
+        if isinstance(node, ast.Slice) and node.step is not None and (const_int(node.step) or 0) < 0:
             return True
     return False
 

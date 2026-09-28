@@ -3,6 +3,7 @@
 import ast
 
 from hpcagent_bench.translators.numpyto_common.lowering.mathfuncs import METHOD_TO_NP
+from hpcagent_bench.translators.numpyto_common.ast_build import numpy_attribute
 
 __all__ = ["ComputedIndexCallHoister", "MethodCallRewriter", "StmtHoister"]
 
@@ -93,7 +94,7 @@ class MethodCallRewriter(StmtHoister):
             and func.value.id not in self.MODULE_NAMES
         ):
             return ast.Call(
-                func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="reshape", ctx=ast.Load()),
+                func=numpy_attribute("reshape"),
                 args=[func.value, ast.Tuple(elts=[ast.Constant(value=-1)], ctx=ast.Load())],
                 keywords=[],
             )
@@ -121,7 +122,7 @@ class MethodCallRewriter(StmtHoister):
         ):
             return node
         return ast.Call(
-            func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr=METHOD_TO_NP[func.attr], ctx=ast.Load()),
+            func=numpy_attribute(METHOD_TO_NP[func.attr]),
             args=[recv] + list(node.args),
             keywords=node.keywords,
         )

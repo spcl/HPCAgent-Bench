@@ -3,6 +3,7 @@
 import ast
 
 from hpcagent_bench.translators.numpyto_common.lowering.calls import match_fft, match_reshape
+from hpcagent_bench.translators.numpyto_common.ast_build import expr_of, numpy_attribute
 
 __all__ = ["FftGridReshapeRewriter"]
 
@@ -100,16 +101,13 @@ class FftGridReshapeRewriter(ast.NodeTransformer):
         self.counter[0] += 3
         g, f, o = f"__fg{n}", f"__ff{n}", f"__fo{n}"
 
-        def tok_(t):
-            return ast.parse(t, mode="eval").body
-
         def tuple_(toks):
-            return ast.Tuple(elts=[tok_(t) for t in toks], ctx=ast.Load())
+            return ast.Tuple(elts=[expr_of(t) for t in toks], ctx=ast.Load())
 
         reshape_g = ast.Assign(
             targets=[ast.Name(id=g, ctx=ast.Store())],
             value=ast.Call(
-                func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="reshape", ctx=ast.Load()),
+                func=numpy_attribute("reshape"),
                 args=[ast.Name(id=src_name, ctx=ast.Load()), tuple_(grid_shape)],
                 keywords=[],
             ),
@@ -118,7 +116,7 @@ class FftGridReshapeRewriter(ast.NodeTransformer):
             targets=[ast.Name(id=f, ctx=ast.Store())],
             value=ast.Call(
                 func=ast.Attribute(
-                    value=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="fft", ctx=ast.Load()),
+                    value=numpy_attribute("fft"),
                     attr=fn_name,
                     ctx=ast.Load(),
                 ),
@@ -137,7 +135,7 @@ class FftGridReshapeRewriter(ast.NodeTransformer):
         reshape_o = ast.Assign(
             targets=[ast.Name(id=o, ctx=ast.Store())],
             value=ast.Call(
-                func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="reshape", ctx=ast.Load()),
+                func=numpy_attribute("reshape"),
                 args=[ast.Name(id=f, ctx=ast.Load()), tuple_(out_shape)],
                 keywords=[],
             ),

@@ -4,6 +4,7 @@ import ast
 import copy
 from collections.abc import Callable
 
+from hpcagent_bench.translators.numpyto_common.ast_build import numpy_attribute
 from hpcagent_bench.translators.numpyto_common.statement_desugar import bind, element_read, indexed_loop, pair_names
 
 __all__ = [
@@ -87,7 +88,7 @@ class AstypeRewriter(ast.NodeTransformer):
                 return recv
         return ast.copy_location(
             ast.Call(
-                func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr=name, ctx=ast.Load()),
+                func=numpy_attribute(name),
                 args=[recv],
                 keywords=[],
             ),
@@ -138,7 +139,7 @@ class ReshapeMethodRewriter(ast.NodeTransformer):
         keep = [kw for kw in node.keywords if kw.arg == "order"]
         return ast.copy_location(
             ast.Call(
-                func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="reshape", ctx=ast.Load()),
+                func=numpy_attribute("reshape"),
                 args=[base, ast.Tuple(elts=elts, ctx=ast.Load())],
                 keywords=keep,
             ),
@@ -470,7 +471,7 @@ class TransposeRewriter(ast.NodeTransformer):
         # ``expand_transpose`` lowers it, so the transpose never survives as an
         # attribute the per-element scalarizer would misapply.
         return ast.Call(
-            func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="transpose", ctx=ast.Load()),
+            func=numpy_attribute("transpose"),
             args=[base],
             keywords=[],
         )
@@ -493,7 +494,7 @@ class TransposeRewriter(ast.NodeTransformer):
             args = [base]  # x.transpose() -- full reverse
         return ast.copy_location(
             ast.Call(
-                func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="transpose", ctx=ast.Load()),
+                func=numpy_attribute("transpose"),
                 args=args,
                 keywords=[],
             ),

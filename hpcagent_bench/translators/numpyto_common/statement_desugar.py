@@ -17,6 +17,7 @@ from collections.abc import Callable, Collection, Mapping
 
 from hpcagent_bench.translators.numpyto_common.numpy_desugar import expr_rank, rank_table
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
+from hpcagent_bench.translators.numpyto_common.subscripts import base_name
 
 __all__ = [
     "STATEMENT_FIELDS",
@@ -43,7 +44,6 @@ __all__ = [
     "rebound_names",
     "rename_names",
     "statement_blocks",
-    "written_name",
 ]
 
 
@@ -385,16 +385,9 @@ def is_self_copy(target: ast.expr, value: ast.expr) -> bool:
     return isinstance(target, ast.Name) and isinstance(value, ast.Name) and value.id == target.id
 
 
-def written_name(target: ast.expr) -> str | None:
-    """The name a target writes: itself, or the array a subscript stores into."""
-    while isinstance(target, ast.Subscript):
-        target = target.value
-    return target.id if isinstance(target, ast.Name) else None
-
-
 def races(targets: list[ast.expr], values: list[ast.expr], changed: list[int]) -> bool:
     """A changed value reads a name a changed target writes, so a sequential split could read it updated."""
-    written = OrderedSet(written_name(targets[position]) for position in changed)
+    written = OrderedSet(base_name(targets[position]) for position in changed)
     return any(
         isinstance(sub, ast.Name) and sub.id in written for position in changed for sub in ast.walk(values[position])
     )

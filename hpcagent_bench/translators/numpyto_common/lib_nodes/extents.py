@@ -15,10 +15,10 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.call_args import (
     np_call_attr,
     np_fft_attr,
     pad_widths,
-    stack_axis,
-    tensordot_axes,
     parse_einsum_subscripts,
     read_axis_keepdims,
+    stack_axis,
+    tensordot_axes,
 )
 from hpcagent_bench.translators.numpyto_common.lib_nodes.dims import NP_ZEROS_ALIASES
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
@@ -33,10 +33,11 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
     name_,
     name_id,
     simplify_sub,
+    slice_axes,
     slice_step_any,
     step_is_negative,
-    slice_axes,
 )
+from hpcagent_bench.translators.numpyto_common.ast_build import numpy_attribute
 
 __all__ = [
     "BROADCASTING_UFUNCS",
@@ -479,7 +480,7 @@ def method_extent(method: str, expr: ast.Call, shape_table: ShapeTable) -> CallS
         return None if base is None else (mul_exts(base),)
     if method in ARRAY_METHOD_SHAPE_OPS:
         routed = ast.Call(
-            func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr=method, ctx=ast.Load()),
+            func=numpy_attribute(method),
             args=[expr.func.value] + list(expr.args),
             keywords=list(expr.keywords),
         )

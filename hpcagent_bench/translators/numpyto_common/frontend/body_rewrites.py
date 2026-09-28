@@ -4,7 +4,14 @@ import ast
 import copy
 from collections.abc import Iterable
 
-from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
+from hpcagent_bench.translators.numpyto_common.frontend.initialize import FRAMEWORK_DTYPE_ALIASES
+from hpcagent_bench.translators.numpyto_common.frontend.manifest import field_nodes
+from hpcagent_bench.translators.numpyto_common.frontend.none_folding import (
+    FoldStaticNoneBranches,
+    PeelNoneSeededAccumulators,
+    none_compare,
+)
+from hpcagent_bench.translators.numpyto_common.frontend.shape_arith import const_int, literal_axis
 from hpcagent_bench.translators.numpyto_common.numpy_desugar import (
     ComplexAccessorToFunc,
     DecomposeRollSlice,
@@ -15,14 +22,9 @@ from hpcagent_bench.translators.numpyto_common.numpy_desugar import (
     UfuncOutInline,
     UfuncReduceToReducer,
 )
-from hpcagent_bench.translators.numpyto_common.frontend.initialize import FRAMEWORK_DTYPE_ALIASES
-from hpcagent_bench.translators.numpyto_common.frontend.manifest import field_nodes
-from hpcagent_bench.translators.numpyto_common.frontend.none_folding import (
-    FoldStaticNoneBranches,
-    PeelNoneSeededAccumulators,
-    none_compare,
-)
-from hpcagent_bench.translators.numpyto_common.frontend.shape_arith import const_int, literal_axis
+from hpcagent_bench.translators.numpyto_common.ast_build import numpy_attribute
+from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
+from hpcagent_bench.translators.numpyto_common.subscripts import base_name
 
 __all__ = [
     "ArrayLiteralToFill",
@@ -44,7 +46,6 @@ __all__ = [
     "np_ix_operands",
     "reads_only_as_index",
     "rename_rebound_parameters",
-    "shape_subject",
     "single_element_repeat",
     "slice_bound_names",
     "slice_call_args",
@@ -302,12 +303,12 @@ class ListRepeatToFull(ast.NodeTransformer):
         # -- rejected by gcc, and meaningless if it had compiled.
         dtype = "int64" if isinstance(elt.value, int) else "float64"
         node.value = ast.Call(
-            func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="full", ctx=ast.Load()),
+            func=numpy_attribute("full"),
             args=[ast.Tuple(elts=[count], ctx=ast.Load()), elt],
             keywords=[
                 ast.keyword(
                     arg="dtype",
-                    value=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr=dtype, ctx=ast.Load()),
+                    value=numpy_attribute(dtype),
                 )
             ],
         )
@@ -367,11 +368,11 @@ class ArrayLiteralToFill(ast.NodeTransformer):
                 attr = "int64"
             if attr is None:
                 return node
-            dtype = ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr=attr, ctx=ast.Load())
+            dtype = numpy_attribute(attr)
         alloc = ast.Assign(
             targets=[ast.Name(id=name, ctx=ast.Store())],
             value=ast.Call(
-                func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="empty", ctx=ast.Load()),
+                func=numpy_attribute("empty"),
                 args=[ast.Tuple(elts=[ast.Constant(value=len(elts))], ctx=ast.Load())],
                 keywords=[ast.keyword(arg="dtype", value=dtype)],
             ),
@@ -526,20 +527,6 @@ def rename_rebound_parameters(fn: ast.FunctionDef, inputs: frozenset[str]) -> No
     ast.fix_missing_locations(fn)
 
 
-def shape_subject(node: ast.expr) -> str | None:
-    """The name a ``.shape`` read ultimately asks about, through any subscript chain.
-
-    Inlining substitutes a parameter with the ARGUMENT EXPRESSION, so a helper's own ``x.shape[2]``
-    arrives spelled ``y[:, 0:c].shape[2]`` whenever the caller passed a slice. Reading only a bare
-    Name there missed every one of those, and a name whose shape is asked for only through a slice
-    is exactly the one that most needs separating: densenet passes each dense block's running
-    buffer to its layers as ``y[:, 0:c]``.
-    """
-    while isinstance(node, ast.Subscript):
-        node = node.value
-    return node.id if isinstance(node, ast.Name) else None
-
-
 def version_rebound_locals(fn: ast.FunctionDef, skip: frozenset[str]) -> None:
     """Give each TOP-LEVEL rebinding of a local its own name, so one name never carries two shapes.
 
@@ -574,7 +561,7 @@ def version_rebound_locals(fn: ast.FunctionDef, skip: frozenset[str]) -> None:
     shape_read = {
         base
         for node in ast.walk(fn)
-        if isinstance(node, ast.Attribute) and node.attr == "shape" and (base := shape_subject(node.value))
+        if isinstance(node, ast.Attribute) and node.attr == "shape" and (base := base_name(node.value))
     }
     # A name a local ALLOCATION is sized by needs separating for the same reason, one step further
     # out. ``resolve_array_ref`` answers a local array's shape with the SOURCE TEXT of its
@@ -633,14 +620,10 @@ class NonFiniteNormalizer(ast.NodeTransformer):
     trips the ``literal 'inf'`` guard.
     """
 
-    @staticmethod
-    def np_const(attr: str) -> ast.Attribute:
-        return ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr=attr, ctx=ast.Load())
-
     def visit_Attribute(self, node: ast.Attribute) -> ast.AST:
         self.generic_visit(node)
         if isinstance(node.value, ast.Name) and node.value.id == "math" and node.attr in ("inf", "nan"):
-            return ast.copy_location(self.np_const(node.attr), node)
+            return ast.copy_location(numpy_attribute(node.attr), node)
         return node
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
@@ -655,11 +638,11 @@ class NonFiniteNormalizer(ast.NodeTransformer):
             return node
         s = node.args[0].value.strip().lower()
         if s in ("inf", "+inf", "infinity", "+infinity"):
-            return ast.copy_location(self.np_const("inf"), node)
+            return ast.copy_location(numpy_attribute("inf"), node)
         if s in ("-inf", "-infinity"):
-            return ast.copy_location(ast.UnaryOp(op=ast.USub(), operand=self.np_const("inf")), node)
+            return ast.copy_location(ast.UnaryOp(op=ast.USub(), operand=numpy_attribute("inf")), node)
         if s == "nan":
-            return ast.copy_location(self.np_const("nan"), node)
+            return ast.copy_location(numpy_attribute("nan"), node)
         return node
 
 

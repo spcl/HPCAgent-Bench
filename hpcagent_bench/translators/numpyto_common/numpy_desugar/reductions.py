@@ -2,7 +2,7 @@
 
 import ast
 
-from hpcagent_bench.translators.numpyto_common.subscripts import is_newaxis
+from hpcagent_bench.translators.numpyto_common.ast_build import numpy_attribute
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import (
     REDUCE_FNS,
     RankedRewritePass,
@@ -13,6 +13,7 @@ from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import (
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.hoist import HoistForm, HoistTables, ValueHoist
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.kinds import dtype_kind
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.ranks import expr_rank
+from hpcagent_bench.translators.numpyto_common.subscripts import is_newaxis
 
 __all__ = [
     "AXIS_ADDING_OPS",
@@ -268,7 +269,7 @@ def hoist_reduce_axis_unless_native(node: ast.AST, hoist: ValueHoist) -> ast.exp
             if len(node.args) <= 1:
                 others = [k for k in node.keywords if k.arg != "axis"]
                 call = ast.Call(
-                    func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr=op, ctx=ast.Load()),
+                    func=numpy_attribute(op),
                     args=[operand],
                     keywords=[ast.keyword(arg="axis", value=axis), *others],
                 )

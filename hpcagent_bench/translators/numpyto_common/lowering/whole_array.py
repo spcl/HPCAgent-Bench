@@ -6,15 +6,15 @@ from types import NotImplementedType
 from typing import Any
 
 from hpcagent_bench.translators.numpyto_common import dtypes
-from hpcagent_bench.translators.numpyto_common.frontend import substitute_inlined_scalar_defs, fold_shape_expr
+from hpcagent_bench.translators.numpyto_common.frontend import fold_shape_expr, substitute_inlined_scalar_defs
 from hpcagent_bench.translators.numpyto_common.lib_nodes.constructors import MESHGRID_AXIS_KW, expand_meshgrid
 from hpcagent_bench.translators.numpyto_common.lib_nodes.dims import shape_exprs_equal
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import (
+    extent_is_scalar,
     is_integer_expr,
     iter_extent_of,
-    extent_is_scalar,
 )
-from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import slice_step_any, const_, const_or_name
+from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import const_, const_or_name, slice_step_any
 from hpcagent_bench.translators.numpyto_common.lib_nodes.scalarize import scalarize_at_iters
 from hpcagent_bench.translators.numpyto_common.lowering.complex import (
     ctor_complex_tag,
@@ -27,6 +27,7 @@ from hpcagent_bench.translators.numpyto_common.lowering.shape_reads import is_ne
 from hpcagent_bench.translators.numpyto_common.lowering.slice_scalarize import SliceToScalarRewriter
 from hpcagent_bench.translators.numpyto_common.lowering.subscriptify import SubscriptifyNames
 from hpcagent_bench.translators.numpyto_common.lowering.views import is_rank_preserving_slice_view
+from hpcagent_bench.translators.numpyto_common.ast_build import numpy_attribute
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
 
 __all__ = [
@@ -580,7 +581,7 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
         return ast.Assign(
             targets=[ast.Name(id=name, ctx=ast.Store())],
             value=ast.Call(
-                func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="empty", ctx=ast.Load()),
+                func=numpy_attribute("empty"),
                 args=[shape_tuple],
                 keywords=[],
             ),
