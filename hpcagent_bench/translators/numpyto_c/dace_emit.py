@@ -32,6 +32,7 @@ from hpcagent_bench.translators.numpyto_common.numpy_desugar import (
     rank_table,
 )
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
+from hpcagent_bench.translators.numpyto_common.parallelism import load_names
 from hpcagent_bench.translators.numpyto_common.statement_desugar import (
     DesugarArrayIteration,
     Spelled,
@@ -164,7 +165,6 @@ __all__ = [
     "is_shape_subscript",
     "is_symbol_expr",
     "kwarg_value",
-    "loaded_names",
     "loop_induction_symbols",
     "loop_target_ranks",
     "materialize_strided_helper_args",
@@ -1957,7 +1957,7 @@ def views_of_written_bases(fn: ast.FunctionDef) -> set[str]:
                 continue
             if not stores:
                 stores = [written_through(later) for later in block]
-                reads = [loaded_names(later) for later in block]
+                reads = [load_names(later) for later in block]
             base = stmt.value.value.id
             tail = range(index + 1, len(block))
             store = next((i for i in tail if base in stores[i]), None)
@@ -1967,11 +1967,6 @@ def views_of_written_bases(fn: ast.FunctionDef) -> set[str]:
             if read < store:
                 names.add(name)
     return names
-
-
-def loaded_names(node: ast.AST) -> set[str]:
-    """Every name READ in the subtree."""
-    return {n.id for n in ast.walk(node) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
 
 
 def mixed_view_names(fn: ast.FunctionDef, symbols: frozenset[str] = frozenset()) -> set[str]:

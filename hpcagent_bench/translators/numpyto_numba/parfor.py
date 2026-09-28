@@ -24,7 +24,6 @@ __all__ = [
     "reordered",
     "reshape_bound_names",
     "reshape_operand",
-    "root_name",
     "same_sign_const",
     "spell_out_reshape_augassigns",
     "spelled_out_augassign",
@@ -170,19 +169,12 @@ def unit_step(call: ast.Call) -> bool:
 MUTATING_METHODS = frozenset({"fill", "sort", "put", "partition", "itemset"})
 
 
-def root_name(node: ast.AST) -> str | None:
-    """The array ``node`` names or views: ``a`` for ``a``, ``a[i]``, ``a[i][:, j]``; else ``None``."""
-    while isinstance(node, ast.Subscript):
-        node = node.value
-    return node.id if isinstance(node, ast.Name) else None
-
-
 def handed_to_written_params(call: ast.Call, params: list[str], written: frozenset[str]) -> set[str]:
     """Names of the arrays ``call`` hands to a helper parameter in ``written``, positionally or by
     keyword."""
     handed = [(params[i], a) for i, a in enumerate(call.args) if i < len(params)]
     handed += [(k.arg, k.value) for k in call.keywords if k.arg is not None]
-    return {name for p, a in handed if p in written and (name := root_name(a)) is not None}
+    return {name for p, a in handed if p in written and (name := base_name(a)) is not None}
 
 
 def names_written_by_call(call: ast.Call, mutates: dict[str, frozenset[str]], params: dict[str, list[str]]) -> set[str]:
@@ -191,8 +183,8 @@ def names_written_by_call(call: ast.Call, mutates: dict[str, frozenset[str]], pa
     fn = call.func
     if isinstance(fn, ast.Name) and fn.id in mutates:
         return handed_to_written_params(call, params[fn.id], mutates[fn.id])
-    names = {name for k in call.keywords if k.arg == "out" and (name := root_name(k.value)) is not None}
-    if isinstance(fn, ast.Attribute) and fn.attr in MUTATING_METHODS and (name := root_name(fn.value)) is not None:
+    names = {name for k in call.keywords if k.arg == "out" and (name := base_name(k.value)) is not None}
+    if isinstance(fn, ast.Attribute) and fn.attr in MUTATING_METHODS and (name := base_name(fn.value)) is not None:
         names.add(name)
     return names
 
@@ -205,7 +197,7 @@ def names_written_in(fn: ast.FunctionDef, mutates: dict[str, frozenset[str]], pa
         for n in ast.walk(fn)
         if isinstance(n, (ast.Assign, ast.AugAssign))
         for t in (n.targets if isinstance(n, ast.Assign) else [n.target])
-        if isinstance(t, ast.Subscript) and (name := root_name(t)) is not None
+        if isinstance(t, ast.Subscript) and (name := base_name(t)) is not None
     }
     for n in ast.walk(fn):
         if isinstance(n, ast.Call):
@@ -213,7 +205,7 @@ def names_written_in(fn: ast.FunctionDef, mutates: dict[str, frozenset[str]], pa
     views = [
         (t.id, base)
         for n in ast.walk(fn)
-        if isinstance(n, ast.Assign) and (base := root_name(n.value)) is not None
+        if isinstance(n, ast.Assign) and (base := base_name(n.value)) is not None
         for t in n.targets
         if isinstance(t, ast.Name)
     ]
