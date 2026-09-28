@@ -9,12 +9,9 @@ Background: [`knobs.md`](knobs.md).
 cd experiments && MODEL=glm53 ./serve-only.sbatch
 ```
 
-**Image prerequisite.** GLM-5.3 needs the `sglang-candidate` EDF, which `install_edfs.sh` does not
-render. Rebuild the sglang role (`containers/images/sglang/build.sbatch`, output
-`hpcagent-bench-sglang-candidate.sqsh`), then render the EDF. The image must bake in a guard keeping
-`torch.Tensor.format_ue8m0` false and
-`HIPCC_COMPILE_FLAGS_APPEND=-U__HIP_NO_HALF_CONVERSIONS__ -U__HIP_NO_HALF_OPERATORS__`; a patch
-reached through a `PYTHONPATH` under `$SCRATCH` is dropped by the inference role's mounts.
+**Image.** The same `hpcagent-bench-sglang-mi300-latest` as Qwen3.8 and Kimi K2.7: the sglang image
+bakes in what GLM-5.3 needs (`torch.Tensor.format_ue8m0` kept false, and
+`HIPCC_COMPILE_FLAGS_APPEND=-U__HIP_NO_HALF_CONVERSIONS__ -U__HIP_NO_HALF_OPERATORS__`).
 
 ## Configuration
 

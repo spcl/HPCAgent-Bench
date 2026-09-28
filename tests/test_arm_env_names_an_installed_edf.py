@@ -32,19 +32,6 @@ IMAGES_ENV = REPO / "containers" / "images" / "images.env"
 #: each one states what it is and what state it is in -- an allowlist that merely lists names
 #: hides exactly the breakage this test exists to catch.
 KNOWN_ONE_OFFS = {
-    # GLM-5.3 only, and currently HAS NO IMAGE. It is the one sglang build whose image can load
-    # GLM-5.3: the DeepSeek weight loader's format_ue8m0 reads are patched in the package at build
-    # time, while every other sglang EDF reaches the same patch through a PYTHONPATH under
-    # $SCRATCH that role_mounts drops for the inference role, so the loader dies before the model
-    # is up. It is not installer-managed, so install_edfs.sh never repoints it, and its rendered
-    # copy pointed at an image a storage migration removed; it was taken out of ~/.edf rather
-    # than left there resolving to nothing.
-    #
-    # CONSEQUENCE: the 11 arms that set INFERENCE_CE_ENV=sglang-candidate -- the glm53 baseline,
-    # llr40/focus40 and llrblind families -- CANNOT RUN until that image is rebuilt and the EDF
-    # re-rendered. Rebuilding is the only fix; re-rendering alone would point at bytes that do not
-    # exist. No other model is affected.
-    "sglang-candidate",
     # hpcagent-bench-agent-mi300-candidate: the pre-promotion agent image, hand-rendered into
     # ~/.edf (not by install_edfs.sh -- there is no *_EDF_LATEST for it in
     # images.env). The harness-focus20 smoke arms for miniswe/openhands run on it deliberately,
