@@ -124,7 +124,7 @@ def test_a_budget_class_row_reruns_at_the_scaled_budget_not_as_infra(
     module: types.ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
 ) -> None:
     """A kernel whose last valid episode hit its budget still owes the owed rule's scaled rerun when
-    the scaled rerun itself was voided (647228: the judge refused Triton); INFRA would run it at 1x."""
+    the scaled rerun itself was voided (the judge refused Triton); INFRA would run it at 1x."""
     job_with_coverage(tmp_path / "runs", "641799", ARM, ROSTER)
     monkeypatch.setattr(module, "RERUN_KERNELS", classed_table(tmp_path / "t.tsv", "budget"))
     jobs = [("641799", str(tmp_path / "runs" / "641799"), ARM)]

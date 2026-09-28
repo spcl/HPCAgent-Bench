@@ -68,6 +68,6 @@ def test_every_sbatch_entry_point_never_requeues() -> None:
     missing = [p for p in sbatch_entry_points() if GUARD not in p.read_text(encoding="utf-8", errors="ignore")]
     assert not missing, (
         f"sbatch entry point(s) without `{GUARD}` (a NODE_FAIL requeue reruns the job id into the "
-        f"same RUN_DIR and stacks rows -- see job 637040): "
+        f"same RUN_DIR and stacks rows): "
         f"{sorted(str(p.relative_to(REPO)) for p in missing)}"
     )

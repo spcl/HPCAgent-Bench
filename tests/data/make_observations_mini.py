@@ -8,7 +8,7 @@ portable to another checkout or CI. ``experiments.read_observations`` reads eith
 extracted ``.db`` (table ``observations``), so a tiny committed ``.db`` exercises the SAME reader a
 real campaign's artifact does, without the tree depending on a path outside it.
 
-NOT A LITERAL SLICE OF cpf-llr-focus40. The real ``observations.csv`` extracted on 2026-09-14
+NOT A LITERAL SLICE OF cpf-llr-focus40. The real ``observations.csv`` extract
 predates both the ``packet`` and ``timing_reduction`` columns -- it carries only a 0/1 ``skills``
 flag -- so there is no real row to cut that already carries ``packet="perf-playbook-cpu"``. This
 fixture is instead hand-built to the shape a fresher extraction produces: the real column names,

@@ -503,7 +503,7 @@ def test_an_image_whose_cli_lacks_a_flag_launches_without_it_rather_than_dying(
 ) -> None:
     """The agent images install the CLI unpinned, so two images carry two CLIs, and an unknown
     option makes claude exit 1 before it connects anything -- 160 agents died that way on
-    --autocompact (625302-625305). Every optional flag is probed, so an older image simply runs
+    --autocompact. Every optional flag is probed, so an older image simply runs
     without --include-partial-messages and falls back to the result record for its output."""
     monkeypatch.setenv("HARNESS", "")
     launches = launcher(monkeypatch, driver, claude_run)

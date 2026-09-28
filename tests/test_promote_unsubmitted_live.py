@@ -355,7 +355,7 @@ def busy_judge_fixture() -> Iterator[str]:
 def test_a_promotion_queued_behind_the_killed_agents_request_still_lands(
     promoter: ModuleType, busy_judge: str, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """633871's shape on a job with wall clock left: the grade waits its turn on the one slot and lands."""
+    """A job with wall clock left: the grade waits its turn on the one slot and lands."""
     monkeypatch.setenv("SLURM_JOB_END_TIME", str(int(time.time() + promoter.TEARDOWN_MARGIN_S + 60)))
     rank_dir = tmp_path / "judge" / "rank-0"
     rank_dir.mkdir(parents=True)

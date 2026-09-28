@@ -201,7 +201,7 @@ Measured on this box, ROCm 7.2.3 / AMD clang 22.0.0git, MI300A: the host-fallbac
 `MANDATORY` non-fire, the four-way xnack matrix (622425), the wrong-arch fatal error, the 3.1x hoisting result,
 the single-pass offload LOSS (raw 0.83x, measured through the judge), and the `num_teams` null result.
 
-Re-checked (job 626529, same image) by compiling and RUNNING every sample and every testable claim
+Re-checked on the same image by compiling and RUNNING every sample and every testable claim
 on this page: 22 cases, 21 held. The two that did not are corrected above -- `declare target` is implicit for a
 same-translation-unit callee, and `requires unified_shared_memory` faults at run time rather than being
 rejected for the XNACK mode. The map-clause rules, the enter/exit map-type restrictions, the unmapped-scalar
