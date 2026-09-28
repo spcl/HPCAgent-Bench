@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 #
-# vLLM inference on AMD Instinct (MI300A gfx942; the base also carries gfx90a). Serves oss120b;
-# qwen38, kimi and GLM-5.3 are on SGLang. Build context is the repository root:
+# vLLM inference on AMD Instinct, one image for every gpu_arch.env AMD target (MI250X, MI300, MI355X).
+# Serves oss120b on mi300 and Qwen3.8 on mi200; qwen38, kimi and GLM-5.3 on mi300 are on SGLang. Build context is the repository root:
 #
 #   containers/images/vllm/build.sh
 #
@@ -39,12 +39,12 @@ ARG ROCM_ARCH
 RUN set -eu; \
     test -n "${ROCM_ARCH:-}" || { echo "ROCM_ARCH is unset: build with build.sh, which reads gpu_arch.env" >&2; exit 2; }; \
     printf '%s\n' "${ROCM_ARCH}" > /opt/gpu-arch
-# The base names every arch it was built for; a JIT build (triton, aiter) here needs only this one.
+# The image's arch list; an EDF narrows these to its partition's arch for run-time JIT builds.
 ENV HCC_AMDGPU_TARGET=${ROCM_ARCH} \
     PYTORCH_ROCM_ARCH=${ROCM_ARCH} \
     GPU_ARCHS=${ROCM_ARCH} \
     GPU_ARCH_LIST=${ROCM_ARCH}
-# vLLM's compiled ops are a fat binary: the partition's arch has to be one of its device targets.
+# vLLM's compiled ops are a fat binary: every listed arch has to be one of its device targets.
 COPY containers/lib/device_arch_gate.sh /usr/local/bin/device_arch_gate.sh
 RUN /usr/local/bin/device_arch_gate.sh --contains "${ROCM_ARCH}" "$(python3 -c 'import os, vllm; print(os.path.dirname(vllm.__file__))')" >/dev/null
 

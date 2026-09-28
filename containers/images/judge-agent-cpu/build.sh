@@ -42,18 +42,19 @@ printf 'dace @ %s\n' "${DACE_COMMIT}"
 
 cd "${REPO_ROOT}"
 
-# The PUBLISHED image is portable: built for its architecture's baseline, not this build node's CPU
-# (the Dockerfile's own default, native, is for building locally). SPACK_TARGET= MARCH=native here
-# gives a native build instead.
-case "$(uname -m)" in
-    aarch64) SPACK_TARGET="${SPACK_TARGET-armv8.2a}"; MARCH="${MARCH-armv8.2-a}" ;;
-    x86_64)  SPACK_TARGET="${SPACK_TARGET-x86_64_v3}"; MARCH="${MARCH-x86-64-v3}" ;;
+# The PUBLISHED image is portable: cpu_target.env's baseline for this CPU family, not the build
+# node's CPU (CE_CPU_TARGET=native gives a native build instead). MARCH follows the spack target.
+ce_spack_target
+case "${SPACK_TARGET}" in
+    "") MARCH=native ;;
+    x86_64_v3) MARCH=x86-64-v3 ;;
+    armv8.2a) MARCH=armv8.2-a ;;
+    *) echo "no -march known for spack target ${SPACK_TARGET}" >&2; exit 2 ;;
 esac
-printf 'cpu target: spack %s, -march=%s\n' "${SPACK_TARGET:-<host>}" "${MARCH:-native}"
 BUILD_ARGS=(
   --build-arg "IMAGE_VERSION=${IMAGE_VERSION}"
-  --build-arg "SPACK_TARGET=${SPACK_TARGET:-}"
-  --build-arg "MARCH=${MARCH:-native}"
+  --build-arg "SPACK_TARGET=${SPACK_TARGET}"
+  --build-arg "MARCH=${MARCH}"
   --build-arg "DACE_COMMIT=${DACE_COMMIT}"
 )
 for kv in ${EXTRA_BUILD_ARGS:-}; do BUILD_ARGS+=(--build-arg "${kv}"); done

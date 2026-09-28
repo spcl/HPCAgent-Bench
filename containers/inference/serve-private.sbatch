@@ -1,27 +1,31 @@
 #!/usr/bin/env bash
-# Private SGLang serving of Qwen3.8-27B on one beverin node. PRESET picks the hardware:
+# Private serving of Qwen3.8-27B on one beverin node. PRESET picks the hardware and the engine:
 #
-#   PRESET  partition  GPUs       EDF                  weights               attention  default LEGS
-#   mi300   mi300      4x MI300A  hpcagent-bench-sglang-mi300-latest        Qwen3.8-27B-FP8       aiter      tp4:0.306
-#   mi200   mi200      8x MI250X  hpcagent-bench-sglang-mi200-latest  Qwen3.8-27B (BF16)    triton     tp4:0.80 tp4:0.88 tp8:0.80
+#   PRESET  partition  GPUs       engine  EDF                                 weights             default LEGS
+#   mi300   mi300      4x MI300A  SGLang  hpcagent-bench-sglang-mi300-latest  Qwen3.8-27B-FP8     tp4:0.306
+#   mi200   mi200      8x MI250X  vLLM    hpcagent-bench-vllm-mi200-latest    Qwen3.8-27B (BF16)  tp8:0.85
 #
-# MODE=smoke (default): one fresh server per LEGS spec "tp<N>:<mem-fraction-static>". Per leg: wait on
-#   /health (auth-exempt), record the KV/Mamba allocator lines, assert 401 without the key and 200 with
-#   it, run verify-tools-reasoning.py and a concurrent load probe with the key, stop.
+# MODE=smoke (default): one fresh server per LEGS spec "tp<N>:<memory fraction>" (SGLang
+#   --mem-fraction-static, vLLM --gpu-memory-utilization). Per leg: wait on /health (auth-exempt),
+#   record the KV allocator lines, assert 401 without the key and 200 with it, run
+#   verify-tools-reasoning.py and a concurrent load probe with the key, stop.
 # MODE=serve: the first LEGS spec only. Wait, record, assert 401/200, print how to connect, then hold
 #   the server until the job ends or is cancelled.
 #
 # ACCESS picks the bind address; the key is required either way:
 #   tunnel (default): --host 127.0.0.1. Only an ssh -L through ela reaches it: your laptop.
-#   alps: --host <this node's hsn0 address>, no --enable-metrics. Your own jobs on other Alps clusters
-#     (Daint) connect with the key; MODE=serve writes endpoint.json for alps-endpoint.sh.
+#   alps (SGLang presets only): --host <this node's hsn0 address>, no --enable-metrics. Your own jobs on
+#     other Alps clusters (Daint) connect with the key; MODE=serve writes endpoint.json for
+#     alps-endpoint.sh. vLLM checks the key only under /v1, /v2, /inference and /cohere and serves
+#     /metrics and its other routes open, so a vLLM preset stays on the loopback.
 #
 # PRIVATE BY CONSTRUCTION, both presets, both ACCESS values:
 #   * Never the wildcard address. --host is last on the command line.
 #   * sglang checks the key on every path except /health* and /metrics*, and only with one tokenizer
 #     worker: EXTRA_ARGS may not set --tokenizer-worker-num or --enable-metrics.
 #   * The API key comes from KEY_FILE (default ~/.config/hpcagent-bench/<preset>-endpoint.key), refused unless
-#     mode 600 and owned by you. It reaches sglang only through --config <yaml>, never argv.
+#     mode 600 and owned by you. It reaches sglang only through --config <yaml> and vLLM only through
+#     VLLM_API_KEY, set inside the server step from the run dir's key file; never argv.
 #   * The run dir is mode 700 with scratch's default ACLs stripped. It holds the yaml, the curl header
 #     file, the in-container key file and sglang's server log, which prints server_args incl. api_key.
 #   * The key is never printed; the three secret files are deleted when the script exits.
@@ -57,14 +61,16 @@ refuse() {
 use_preset() {  # sets the PRESET_* values; key file, triton cache and run root derive from the name
     case "${PRESET:-}" in
         mi300)  # the qwen38 campaign line (llrbase-c:qwen38, experiments/arms.yaml); 0.306 is node-wide on the APU
-            PRESET_PARTITION=mi300 PRESET_GPUS=4 PRESET_EDF=hpcagent-bench-sglang-mi300-latest PRESET_MODEL=Qwen/Qwen3.8-27B-FP8
-            PRESET_LEGS="tp4:0.306" PRESET_AITER=1
+            PRESET_PARTITION=mi300 PRESET_GPUS=4 PRESET_ENGINE=sglang PRESET_MODEL=Qwen/Qwen3.8-27B-FP8
+            PRESET_EDF=hpcagent-bench-sglang-mi300-latest PRESET_LEGS="tp4:0.306"
             PRESET_FLAGS=(--attention-backend aiter)
+            PRESET_ENV=(SGLANG_USE_AITER=1 SGLANG_SET_CPU_AFFINITY=0)
             ;;
-        mi200)  # MI250X: no aiter gfx90a kernels, no FP8
-            PRESET_PARTITION=mi200 PRESET_GPUS=8 PRESET_EDF=hpcagent-bench-sglang-mi200-latest PRESET_MODEL=Qwen/Qwen3.8-27B
-            PRESET_LEGS="tp4:0.80 tp4:0.88 tp8:0.80" PRESET_AITER=0
-            PRESET_FLAGS=(--attention-backend triton --disable-custom-all-reduce)
+        mi200)  # MI250X: no aiter gfx90a kernels, no FP8; the AMD vLLM image (layers/partition-mi200-qwen38.env)
+            PRESET_PARTITION=mi200 PRESET_GPUS=8 PRESET_ENGINE=vllm PRESET_MODEL=Qwen/Qwen3.8-27B
+            PRESET_EDF=hpcagent-bench-vllm-mi200-latest PRESET_LEGS="tp8:0.85"
+            PRESET_FLAGS=(--dtype bfloat16)
+            PRESET_ENV=(VLLM_ROCM_USE_AITER=0)
             ;;
         *) refuse "PRESET must be mi300 or mi200, got '${PRESET:-}'" ;;
     esac
@@ -76,6 +82,8 @@ use_preset
 [[ "${MODE}" == smoke || "${MODE}" == serve ]] || refuse "MODE must be smoke or serve, got '${MODE}'"
 ACCESS="${ACCESS:-tunnel}"
 [[ "${ACCESS}" == tunnel || "${ACCESS}" == alps ]] || refuse "ACCESS must be tunnel or alps, got '${ACCESS}'"
+[[ "${ACCESS}" == tunnel || "${PRESET_ENGINE}" == sglang ]] \
+    || refuse "ACCESS=alps: ${PRESET_ENGINE} serves /metrics and other routes without the key; use the tunnel"
 [[ -n "${SLURM_JOB_ID:-}" || "${DRY_RUN}" == 1 ]] \
     || refuse "submit with sbatch, or DRY_RUN=1 to check without launching"
 [[ -z "${SLURM_JOB_ID:-}" || "${SLURM_JOB_PARTITION:-}" == "${PRESET_PARTITION}" ]] \
@@ -104,6 +112,9 @@ SERVE_CPUS="${SLURM_CPUS_ON_NODE:-$(nproc)}"
 NODE="${SLURMD_NODENAME:-${HOSTNAME%%.*}}"
 SERVER_PID=""
 MONITOR_PID=""
+# The interpreter of the preset's image, which runs the tools gate.
+declare -A IMAGE_PYTHON=([sglang]=/opt/venv/bin/python3 [vllm]=/usr/bin/python3)
+ENGINE_PYTHON="${IMAGE_PYTHON[${PRESET_ENGINE}]}"
 
 # Sets API_KEY, unexported, so srun --export=ALL never carries it.
 read_key_file() {
@@ -167,7 +178,7 @@ write_secret() {  # write_secret <file> <line>: printf is a builtin, so the cont
     [[ "$(stat -c %a -- "$1")" == 600 ]] || refuse "$1 is not mode 600"
 }
 
-server_argv() {  # server_argv <tp> <fraction> <port>: sets SERVER_ARGV
+sglang_argv() {  # sglang_argv <tp> <fraction> <port>: sets SERVER_ARGV
     # shellcheck disable=SC2206 # EXTRA_ARGS is an operator word list
     SERVER_ARGV=(/opt/venv/bin/python3 -m sglang.launch_server
         --config "${RUN_DIR}/sglang-auth.yaml"
@@ -178,6 +189,25 @@ server_argv() {  # server_argv <tp> <fraction> <port>: sets SERVER_ARGV
         "${METRICS_FLAGS[@]}" --reasoning-parser qwen3 --tool-call-parser qwen3_coder --enable-cache-report
         ${EXTRA_ARGS}
         --host "${BIND_HOST}" --port "$3")
+}
+
+vllm_argv() {  # vllm_argv <tp> <fraction> <port>: sets SERVER_ARGV
+    # The key enters the environment inside the server step, read from the run dir's mode-600 file;
+    # argv carries only that file's path.
+    # shellcheck disable=SC2016,SC2206 # single quotes: expanded by the inner bash; EXTRA_ARGS is a word list
+    SERVER_ARGV=(bash -c 'VLLM_API_KEY="$(cat "$1")"; export VLLM_API_KEY; shift; exec "$@"' key-loader
+        "${RUN_DIR}/api.key"
+        /usr/bin/python3 -m vllm.entrypoints.cli.main serve "${MODEL_REPO}" --served-model-name "${SERVED_MODEL}"
+        --tensor-parallel-size "$1" --gpu-memory-utilization "$2" "${PRESET_FLAGS[@]}"
+        --chat-template "${REPO}/experiments/chat-template-qwen38.jinja" --trust-remote-code
+        --max-model-len 262144 --max-num-seqs 128
+        --enable-auto-tool-choice --tool-call-parser qwen3_coder --reasoning-parser qwen3
+        ${EXTRA_ARGS}
+        --host "${BIND_HOST}" --port "$3")
+}
+
+server_argv() {  # server_argv <tp> <fraction> <port>: sets SERVER_ARGV for the preset's engine
+    "${PRESET_ENGINE}_argv" "$@"
 }
 
 without_key() {  # filter stdin: drop any line carrying the key (sglang logs server_args)
@@ -204,7 +234,8 @@ wait_ready() {  # wait_ready <port> <dir>
 }
 
 record_memory() {  # record_memory <dir>
-    grep -aE 'KV Cache is allocated|max_total_num_tokens|Mamba Cache' "$1/server.log" 2>/dev/null \
+    grep -aE 'KV Cache is allocated|max_total_num_tokens|Mamba Cache|GPU KV cache size|Maximum concurrency' \
+        "$1/server.log" 2>/dev/null \
         | without_key > "$1/memory.txt" || true
     cat "$1/memory.txt"
 }
@@ -228,7 +259,7 @@ auth_checks() {  # auth_checks <port> <dir>
 tools_gate() {  # tools_gate <port> <dir>
     local rc=0
     srun --overlap --ntasks=1 --cpus-per-task=4 --export=ALL --environment="${EDF}" \
-        /opt/venv/bin/python3 "${GATE}" --base "http://${BIND_HOST}:$1" --model "${SERVED_MODEL}" \
+        "${ENGINE_PYTHON}" "${GATE}" --base "http://${BIND_HOST}:$1" --model "${SERVED_MODEL}" \
         --api-key-file "${RUN_DIR}/api.key" --reasoning-effort "${REASONING_EFFORT}" \
         > "$2/tools-reasoning.out" 2>&1 || rc=$?
     cat "$2/tools-reasoning.out"
@@ -274,14 +305,14 @@ start_leg() {  # start_leg <index> <spec>: sets LEG_PORT and LEG_DIR, prints arg
     LEG_DIR="${RUN_DIR}/leg$1-${2/:/-}"
     mkdir -p -- "${LEG_DIR}"
     server_argv "${LEG_TP}" "${LEG_FRAC}" "${LEG_PORT}"
-    printf '\n===== leg %s: %s tp=%s mem-fraction-static=%s port=%s =====\n' \
+    printf '\n===== leg %s: %s tp=%s memory fraction=%s port=%s =====\n' \
         "$1" "$2" "${LEG_TP}" "${LEG_FRAC}" "${LEG_PORT}"
     printf 'argv: %s\n' "${SERVER_ARGV[*]}"
     [[ "${DRY_RUN}" != 1 ]] || return 0
     srun --ntasks=1 --cpus-per-task="${SERVE_CPUS}" --export=ALL --environment="${EDF}" \
         --output="${LEG_DIR}/server.log" --error="${LEG_DIR}/server.log" \
-        env "SGLANG_USE_AITER=${PRESET_AITER}" SGLANG_SET_CPU_AFFINITY=0 HF_HUB_OFFLINE=1 "HF_HOME=${HF_HOME}" \
-        "TRITON_CACHE_DIR=${FAST_SCRATCH}/triton-cache-sglang-${PRESET}" "${SERVER_ARGV[@]}" &
+        env "${PRESET_ENV[@]}" HF_HUB_OFFLINE=1 "HF_HOME=${HF_HOME}" \
+        "TRITON_CACHE_DIR=${FAST_SCRATCH}/triton-cache-${PRESET_ENGINE}-${PRESET}" "${SERVER_ARGV[@]}" &
     SERVER_PID=$!
 }
 
@@ -381,7 +412,7 @@ make_private_dir "${RUN_DIR}"
 trap cleanup EXIT
 # scancel sends TERM: leave through the EXIT trap so the secret files go.
 trap 'exit 143' TERM INT
-write_secret "${RUN_DIR}/sglang-auth.yaml" "api-key: \"${API_KEY}\""
+[[ "${PRESET_ENGINE}" != sglang ]] || write_secret "${RUN_DIR}/sglang-auth.yaml" "api-key: \"${API_KEY}\""
 write_secret "${RUN_DIR}/api.key" "${API_KEY}"
 write_secret "${RUN_DIR}/auth.header" "Authorization: Bearer ${API_KEY}"
 printf '{"model": "%s", "messages": [{"role": "user", "content": "Say hi."}], "max_tokens": 16}\n' \
@@ -395,11 +426,10 @@ job:      ${SLURM_JOB_ID:-dry run}
 preset:   ${PRESET} (partition ${PRESET_PARTITION}), mode ${MODE}
 model:    ${MODEL_REPO} as "${SERVED_MODEL}" (HF_HOME=${HF_HOME})
 image:    ${EDF}
-env:      SGLANG_USE_AITER=${PRESET_AITER} SGLANG_SET_CPU_AFFINITY=0
+engine:   ${PRESET_ENGINE}, env ${PRESET_ENV[*]}
 access:   ${ACCESS}, --host ${BIND_HOST}
 legs:     ${LEG_SPECS[*]}
 run dir:  ${RUN_DIR} (mode $(stat -c %a -- "${RUN_DIR}"))
-config:   ${RUN_DIR}/sglang-auth.yaml (mode $(stat -c %a -- "${RUN_DIR}/sglang-auth.yaml"))
 EOF
 
 if [[ "${DRY_RUN}" != 1 ]]; then

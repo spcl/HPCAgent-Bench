@@ -741,28 +741,29 @@ def detect_sm() -> str:
 #: Seconds ``rocminfo`` gets to enumerate. It is a probe, not the measurement.
 ROCMINFO_TIMEOUT = 30.0
 
-#: The AMD GPU arch an image was built for, one line. Every AMD image Dockerfile writes it from the
-#: partition table containers/images/gpu_arch.env; a file, because the CE drops image ENV.
+#: The AMD GPU archs an image carries device code for, one ;-separated line. Every AMD image
+#: Dockerfile writes it from containers/images/gpu_arch.env; a file, because the CE drops image ENV.
 IMAGE_GPU_ARCH = pathlib.Path("/opt/gpu-arch")
 
 #: A GPU agent's name line in ``rocminfo`` output; CPU agents are named by their model.
 ROCMINFO_GFX_NAME = re.compile(r"^\s*Name:\s+(gfx[0-9a-f]+)\s*$", re.MULTILINE)
 
 
-def image_gpu_arch() -> str:
-    """The arch stamped into this image at build time, or ``""`` outside such an image."""
+def image_gpu_arch() -> tuple[str, ...]:
+    """The archs stamped into this image at build time, or ``()`` outside such an image."""
     try:
-        return IMAGE_GPU_ARCH.read_text(encoding="ascii").strip()
+        text = IMAGE_GPU_ARCH.read_text(encoding="ascii")
     except FileNotFoundError:
-        return ""
+        return ()
+    return tuple(arch for arch in (part.strip() for part in text.split(";")) if arch)
 
 
 def detect_gfx() -> str:
     """Return the AMD GPU GFX target of the first GPU agent ``rocminfo`` reports.
 
     ``HPCAGENT_BENCH_GFX`` overrides the probe. Raises :class:`RuntimeError` when no GPU agent
-    answers, and when the GPU disagrees with :data:`IMAGE_GPU_ARCH`: device code built for another
-    arch compiles and links, then fails at its first launch.
+    answers, and when the GPU is not one of :data:`IMAGE_GPU_ARCH`'s archs: device code built for
+    another arch compiles and links, then fails at its first launch.
     """
     env = os.environ.get("HPCAGENT_BENCH_GFX")
     if env:
@@ -776,8 +777,8 @@ def detect_gfx() -> str:
         raise RuntimeError("cannot detect the AMD GPU arch: rocminfo lists no gfx GPU agent; set HPCAGENT_BENCH_GFX")
     probed = match.group(1)
     stamped = image_gpu_arch()
-    if stamped and stamped != probed:
-        raise RuntimeError(f"this image was built for {stamped} ({IMAGE_GPU_ARCH}) but the GPU is {probed}")
+    if stamped and probed not in stamped:
+        raise RuntimeError(f"this image was built for {';'.join(stamped)} ({IMAGE_GPU_ARCH}) but the GPU is {probed}")
     return probed
 
 

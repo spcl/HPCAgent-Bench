@@ -5,13 +5,9 @@
 #     sbatch containers/images/build_and_verify.sbatch
 #
 # The partition is SBATCH_PARTITION (site layer) unless the command line names one.
-# judge-agent-amd builds for the partition it runs on; the mi200 pair (gfx90a, spack target zen3):
-#   REPO=$PWD IMAGE_DIR=containers/images/judge-agent-amd \
-#     sbatch --partition=mi200 --cpus-per-task=64 --gpus-per-node=8 containers/images/build_and_verify.sbatch
-#
-# sglang-mi200 builds and verifies on mi200 (64 physical cores); override the directives below:
-#   REPO=$PWD IMAGE_DIR=containers/images/sglang-mi200 \
-#     sbatch --partition=mi200 --cpus-per-task=64 --gpus-per-node=8 containers/images/build_and_verify.sbatch
+# An AMD image is portable (every gpu_arch.env target, cpu_target.env's baseline CPU), so it builds
+# once, on the partition its images.env row names, and verify_image.sbatch then checks it on the
+# other partitions.
 #
 # One job builds and verifies, so a build that cannot pass verification never reports success.
 # The build pulls first and keeps its caches by default (CE_PULL, CE_BUILD_CACHE in build_common.sh);

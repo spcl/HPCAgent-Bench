@@ -17,7 +17,7 @@ Exit status is the count of failed REQUIRED checks. Optional entries report but 
 
     python3 verify_image.py [--profile PROFILE] [--verbose]
 
-PROFILE selects an image's contract (judge-agent-amd, judge, sglang, sglang-mi200, vllm,
+PROFILE selects an image's contract (judge-agent-amd, judge, sglang, vllm,
 judge-agent-cuda, judge-cuda, vllm-cuda, judge-agent-cpu, judge-cpu).
 """
 
@@ -508,7 +508,10 @@ def library_registry(platform: str) -> tuple[bool, str]:
 
 
 #: Inference profile -> the engine package it serves with.
-INFERENCE_ENGINE = {"vllm": "vllm", "sglang": "sglang", "sglang-mi200": "sglang", "vllm-cuda": "vllm"}
+INFERENCE_ENGINE = {"vllm": "vllm", "sglang": "sglang", "vllm-cuda": "vllm"}
+
+#: The profiles of judge images: the agent image plus the installed hpcagent_bench package.
+JUDGE_PROFILES = frozenset({"judge", "judge-cuda", "judge-cpu"})
 
 #: Profile -> the platform whose vendor stack it carries and whose library record it is held to.
 #: A judge profile is its agent image's contract: the one layer it adds is gated in its own build.
@@ -516,7 +519,6 @@ PLATFORM = {
     "judge-agent-amd": "amd",
     "judge": "amd",
     "sglang": "amd",
-    "sglang-mi200": "amd",
     "vllm": "amd",
     "judge-agent-cuda": "cuda",
     "judge-cuda": "cuda",
@@ -535,9 +537,6 @@ def serving_checks(profile: str) -> list[Check]:
     fabric = [Check("fabric", "libfabric", "lib", "libfabric.so"), Check("fabric", "libcxi", "lib", "libcxi.so")]
     if profile == "vllm-cuda":
         return [serve, triton, *fabric]
-    if profile == "sglang-mi200":
-        # aiter has no gfx90a kernels: this image serves with SGLANG_USE_AITER=0 and sgl_kernel instead.
-        return [serve, triton, Check("serving", "sgl_kernel", "py", "sgl_kernel"), *fabric]
     aiter = Check("serving", "aiter", "py", "aiter")
     flydsl = Check("serving", "flydsl", "py", "flydsl", required=(profile == "sglang"))
     return [serve, aiter, triton, *fabric, flydsl]
@@ -626,9 +625,6 @@ def toolchain_checks(platform: str) -> list[Check]:
         # blas-link check below is the one that decides, by building and reading the closure.
         Check("blas", "OpenBLAS", "lib", "libopenblas.so"),
         Check("blas", "DaCe BLAS+LAPACK link closure", "blas-link", "openblas"),
-        # Driven FROM libraries.yaml, so a library added to the registry cannot go unverified. Held
-        # to a record only where one was measured; elsewhere it reports what links, to be recorded.
-        Check("blas", "libraries.yaml registry", "library-registry", platform, required=platform in REGISTRY_RECORDS),
         Check("blas", "cblas.h", "header", "cblas.h"),
         Check("blas", "lapacke.h", "header", "lapacke.h"),
         Check("blas", "ScaLAPACK", "lib", "libscalapack.so"),
@@ -730,7 +726,18 @@ def checks(profile: str) -> list[Check]:
     ]
     if profile in INFERENCE_ENGINE:
         return common + serving_checks(profile)
-    return common + toolchain_checks(PLATFORM[profile])
+    platform = PLATFORM[profile]
+    found = common + toolchain_checks(platform)
+    if profile in JUDGE_PROFILES:
+        # Driven FROM libraries.yaml through the harness's own resolver, which only a judge image
+        # installs, so a library added to the registry cannot go unverified. Held to a record only
+        # where one was measured; elsewhere it reports what links, to be recorded.
+        found.append(
+            Check(
+                "blas", "libraries.yaml registry", "library-registry", platform, required=platform in REGISTRY_RECORDS
+            )
+        )
+    return found
 
 
 def dace_solver_gate(gate: str) -> tuple[bool, str]:

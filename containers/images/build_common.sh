@@ -136,7 +136,8 @@ ce_partition_arch() {
     printf '%s\n' "${arch}"
 }
 
-# Exports ROCM_ARCH and CE_PARTITION for this job's partition (ROCM_PARTITION outside Slurm).
+# Exports ROCM_ARCH and CE_PARTITION for this job's partition (ROCM_PARTITION outside Slurm): the
+# one arch of an image whose base supports only that partition's GPU (sglang).
 ce_gpu_arch() {
     local partition="${SLURM_JOB_PARTITION:-${ROCM_PARTITION:-}}" arch
     if [[ -z "${partition}" ]]; then
@@ -156,20 +157,33 @@ ce_gpu_arch() {
     printf 'gpu arch %s for partition %s\n' "${ROCM_ARCH}" "${partition}"
 }
 
-# Exports SPACK_TARGET for CE_PARTITION (set by ce_gpu_arch) from cpu_target.env; empty for a
-# partition with no row, whose build keeps spack's host detection.
+# Exports ROCM_ARCH as gpu_arch.env's AMD_GPU_TARGETS: the ;-separated list a portable AMD image
+# carries device code for, whichever node builds it.
+ce_amd_targets() {
+    ROCM_ARCH="$(sed -n 's/^AMD_GPU_TARGETS=//p' "${CE_IMAGES_DIR}/gpu_arch.env")"
+    if [[ ! "${ROCM_ARCH}" =~ ^gfx[0-9a-f]+(\;gfx[0-9a-f]+)*$ ]]; then
+        echo "gpu_arch.env: AMD_GPU_TARGETS='${ROCM_ARCH}' is not a ;-separated list of gfx archs" >&2
+        return 2
+    fi
+    export ROCM_ARCH
+    printf 'gpu targets %s\n' "${ROCM_ARCH}"
+}
+
+# Exports SPACK_TARGET, cpu_target.env's portable baseline for this CPU family (uname -m).
 ce_spack_target() {
-    SPACK_TARGET="$(sed -n "s/^SPACK_TARGET_${CE_PARTITION:?run ce_gpu_arch first}=//p" "${CE_IMAGES_DIR}/cpu_target.env")"
-    if [[ -n "${SPACK_TARGET}" && ! "${SPACK_TARGET}" =~ ^[a-z0-9_]+$ ]]; then
-        echo "cpu_target.env: '${SPACK_TARGET}' is not a spack target for partition ${CE_PARTITION}" >&2
+    local family
+    family="$(uname -m)"
+    SPACK_TARGET="$(sed -n "s/^SPACK_TARGET_${family}=//p" "${CE_IMAGES_DIR}/cpu_target.env")"
+    if [[ ! "${SPACK_TARGET}" =~ ^[a-z0-9_.]+$ ]]; then
+        echo "cpu_target.env names no spack target for CPU family ${family}" >&2
         return 2
     fi
     export SPACK_TARGET
-    printf 'spack target %s for partition %s\n' "${SPACK_TARGET:-<host>}" "${CE_PARTITION}"
+    printf 'spack target %s for %s\n' "${SPACK_TARGET}" "${family}"
 }
 
-# ce_amd_role <agent|judge> <partition>: the images.env role a judge-agent-amd build target writes
-# on that partition; ce_amd_candidate prints that role's candidate squashfs name.
+# ce_amd_role <agent|judge>: the images.env role a judge-agent-amd build target writes;
+# ce_amd_candidate prints that role's candidate squashfs name.
 ce_amd_role() {
     local profile role
     case "$1" in
@@ -177,9 +191,8 @@ ce_amd_role() {
         judge) profile=judge ;;
         *) echo "unknown build target '$1'" >&2; return 2 ;;
     esac
-    role="$(awk -v p="${profile}" -v part="${2:?partition}" \
-        '$4 == "judge-agent-amd" && $5 == part && $6 == p {print $1}' <<<"${CE_IMAGE_TABLE}")"
-    [[ -n "${role}" ]] || { echo "images.env has no judge-agent-amd ${1} row for partition ${2}" >&2; return 2; }
+    role="$(awk -v p="${profile}" '$4 == "judge-agent-amd" && $6 == p {print $1}' <<<"${CE_IMAGE_TABLE}")"
+    [[ -n "${role}" ]] || { echo "images.env has no judge-agent-amd ${1} row" >&2; return 2; }
     printf '%s' "${role}"
 }
 ce_amd_candidate() {

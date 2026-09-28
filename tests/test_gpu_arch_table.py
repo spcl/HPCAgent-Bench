@@ -1,9 +1,9 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""One partition table names the AMD GPU arch; builds, gates, EDF templates and the harness take it from there.
+"""One table names the AMD GPU archs; builds, gates, EDF templates and the harness take them from there.
 
-containers/images/gpu_arch.env maps a Slurm partition to the gfx arch of its GPUs. These pin
-the table and its shell lookup, the absence of gfx literals wherever an arch could be spelled instead,
+containers/images/gpu_arch.env maps a Slurm partition to the gfx arch of its GPUs and lists the
+targets a portable AMD image carries. These pin the table and its shell lookups, the absence of gfx literals wherever an arch could be spelled instead,
 the rendered EDF arch variables, the runtime three-way check on a stub srun, the device-code gate on
 stand-in binaries, and detect_gfx refusing to guess.
 """
@@ -28,7 +28,10 @@ SHELL_PATH = "/usr/bin:/bin"
 #: A gfx arch spelled out.
 GFX_LITERAL = re.compile(r"\bgfx[0-9a-f]{3,4}\b")
 #: The AMD image directories; each builds with ROCM_ARCH from the table.
-AMD_IMAGES = ("judge-agent-amd", "sglang", "sglang-mi200", "vllm")
+AMD_IMAGES = ("judge-agent-amd", "sglang", "vllm")
+#: Portable AMD images: every AMD_GPU_TARGETS arch (ce_amd_targets). The others carry their build
+#: partition's arch only (ce_gpu_arch), because their base supports no other.
+PORTABLE = frozenset({"judge-agent-amd", "vllm"})
 #: Image directories outside the table, with the reason.
 NOT_AMD = {
     "judge-agent-cuda": "GH200 image built on another Alps cluster; its arch is a CUDA capability",
@@ -40,12 +43,7 @@ NOT_AMD = {
 VENDOR_DEVICE_CODE = frozenset({"vllm"})
 ARCH_VARS = ("HCC_AMDGPU_TARGET", "PYTORCH_ROCM_ARCH", "GPU_ARCHS", "GPU_ARCH_LIST")
 #: Non-comment gfx literals that must stay, keyed by (file, stripped line), with the reason.
-LITERAL_EXCEPTIONS = {
-    (
-        "containers/images/sglang-mi200/Dockerfile",
-        r"""ALLOW = 'if amdgpu_target not in ["gfx942", "gfx950", "gfx1250"]:\n'""",
-    ): "upstream setup_rocm.py allow-list line, matched verbatim so the edit fails when upstream changes it",
-}
+LITERAL_EXCEPTIONS: dict[tuple[str, str], str] = {}
 #: rocminfo with a CPU agent first and one GPU agent, whose arch is filled in.
 ROCMINFO = """\
 *******
@@ -74,16 +72,29 @@ esac
 
 
 def table() -> dict[str, str]:
-    """gpu_arch.env as {partition: arch}."""
+    """gpu_arch.env's partition rows as {partition: arch}."""
     rows: dict[str, str] = {}
     for line in TABLE.read_text(encoding="ascii").splitlines():
         if not line or line.startswith("#"):
             continue
         key, sep, value = line.partition("=")
-        assert sep and key.startswith("GPU_ARCH_"), f"not a GPU_ARCH_<partition>=<arch> row: {line!r}"
+        assert sep and (key.startswith("GPU_ARCH_") or key == "AMD_GPU_TARGETS"), f"not a table row: {line!r}"
+        if key == "AMD_GPU_TARGETS":
+            continue
         assert key.removeprefix("GPU_ARCH_") not in rows, f"partition named twice: {line!r}"
         rows[key.removeprefix("GPU_ARCH_")] = value
     return rows
+
+
+def targets() -> str:
+    """gpu_arch.env's AMD_GPU_TARGETS: the ;-separated archs a portable AMD image carries."""
+    found = [
+        line.split("=", 1)[1]
+        for line in TABLE.read_text(encoding="ascii").splitlines()
+        if line.startswith("AMD_GPU_TARGETS=")
+    ]
+    assert len(found) == 1, found
+    return found[0]
 
 
 def build_partitions(image: str) -> list[str]:
@@ -155,14 +166,17 @@ def test_every_amd_image_takes_rocm_arch_from_the_table_refuses_none_stamps_it_a
     image: str,
 ) -> None:
     build = code_lines(CE / image / "build.sh")
-    assert re.search(r"^ce_gpu_arch$", build, re.M), f"{image}/build.sh never looks the arch up"
+    lookup = "ce_amd_targets" if image in PORTABLE else "ce_gpu_arch"
+    assert re.search(rf"^{lookup}$", build, re.M), f"{image}/build.sh never looks the arch up with {lookup}"
     assert '--build-arg "ROCM_ARCH=${ROCM_ARCH}"' in build
     docker = code_lines(CE / image / "Dockerfile")
     assert re.findall(r"^ARG ROCM_ARCH\b.*$", docker, re.M) == ["ARG ROCM_ARCH"]
     assert 'test -n "${ROCM_ARCH:-}" ||' in docker
     assert "printf '%s\\n' \"${ROCM_ARCH}\" > /opt/gpu-arch" in docker
+    # spack, clang and cupy take the list ,-separated: that derivation IS the table's value.
+    comma_list = docker.replace('$(echo "${ROCM_ARCH}" | tr ";" ",")', "${ROCM_ARCH}")
     for var in ARCH_VARS:
-        values = {value.strip('"') for value in re.findall(rf"\b{var}=(\S+)", docker)}
+        values = {value.strip('"') for value in re.findall(rf"\b{var}=(\S+)", comma_list)}
         assert values == {"${ROCM_ARCH}"}, (image, var, values)
     assert "COPY containers/lib/device_arch_gate.sh /usr/local/bin/device_arch_gate.sh" in docker
     mode = "--contains" if image in VENDOR_DEVICE_CODE else "--exact"
@@ -230,40 +244,34 @@ def test_no_gfx_arch_is_spelled_outside_the_table_in_builds_launchers_scripts_or
     assert not found, "gfx arch literals outside gpu_arch.env:\n" + "\n".join(found)
 
 
-def rendered_edfs(tmp_path: pathlib.Path) -> dict[str, dict[str, str]]:
-    """install_edfs.sh run on stand-in images, as {template: rendered [env]}."""
-    roles = ("JUDGE_AGENT_AMD", "JUDGE_AMD", "INFERENCE_SGLANG", "INFERENCE_VLLM", "INFERENCE_SGLANG_MI200")
-    names = 'source "$1"; shift; for r in "$@"; do for s in SQSH EDF_LATEST TEMPLATE; do n="${r}_${s}"; echo "${!n}"; done; done'
-    listed = run(["bash", "-c", names, "bash", str(CE / "images.env"), *roles], {})
-    assert listed.returncode == 0, listed.stderr
-    fields = listed.stdout.splitlines()
+def amd_rows() -> list[list[str]]:
+    """images.env's AMD rows, as their whitespace-split columns."""
+    done = run(["bash", "-c", 'source "$1"; printf "%s\\n" "${CE_IMAGE_TABLE}"', "bash", str(CE / "images.env")], {})
+    assert done.returncode == 0, done.stderr
+    return [row for row in (line.split() for line in done.stdout.splitlines()) if row and row[2] == "amd"]
+
+
+def test_rendered_edf_arch_variables_equal_the_table_arch_of_their_partition(tmp_path: pathlib.Path) -> None:
+    rows = amd_rows()
     ce, edf_dir = tmp_path / "ce", tmp_path / "edf"
     ce.mkdir()
-    for sqsh in fields[0::3]:
-        (ce / sqsh).write_bytes(b"sqsh")
+    for row in rows:
+        (ce / row[7]).write_bytes(b"sqsh")
     env = {"HOME": str(tmp_path), "SCRATCH": str(tmp_path), "CE_IMAGES": str(ce), "EDF_DIR": str(edf_dir)}
     done = run(["bash", str(CE / "install_edfs.sh")], env)
     assert done.returncode == 0, done.stderr
-    return {
-        template: tomllib.loads((edf_dir / f"{edf}.toml").read_text(encoding="utf-8"))["env"]
-        for edf, template in zip(fields[1::3], fields[2::3])
-    }
-
-
-def test_rendered_edf_arch_variables_equal_the_table_arch_of_the_partition_their_image_builds_on(
-    tmp_path: pathlib.Path,
-) -> None:
-    rows = table()
+    archs = table()
     checked = 0
-    for template, env in rendered_edfs(tmp_path).items():
+    for row in rows:
+        edf, template, partition = row[8], row[9], row[4]
+        rendered = tomllib.loads((edf_dir / f"{edf}.toml").read_text(encoding="utf-8"))["env"]
         source = (CE / template).read_text(encoding="utf-8")
-        arch = rows[build_partitions(template.split("/")[0])[0]]
         for var in ARCH_VARS:
-            if var in env:
+            if var in rendered:
                 assert f'{var} = "${{GPU_ARCH}}"' in source, (template, var)
-                assert env[var] == arch, (template, var, env[var])
+                assert rendered[var] == archs[partition], (edf, var, rendered[var])
                 checked += 1
-    assert checked >= 4, "no rendered EDF restates an arch variable; the test checks nothing"
+    assert checked >= 8, "no rendered EDF restates an arch variable; the test checks nothing"
 
 
 def run_check(tmp_path: pathlib.Path, partition: str, stamp: str, gpu: str) -> subprocess.CompletedProcess[str]:
@@ -281,9 +289,11 @@ def run_check(tmp_path: pathlib.Path, partition: str, stamp: str, gpu: str) -> s
     return subprocess.run(["bash", str(CHECK), "the-edf"], capture_output=True, text=True, check=False, env=env)
 
 
-def test_the_runtime_check_passes_when_table_stamp_and_gpu_agree(tmp_path: pathlib.Path) -> None:
+def test_the_runtime_check_passes_when_the_gpu_is_the_partition_arch_and_one_of_the_image_targets(
+    tmp_path: pathlib.Path,
+) -> None:
     arch = table()["mi200"]
-    done = run_check(tmp_path, "mi200", arch, arch)
+    done = run_check(tmp_path, "mi200", targets(), arch)
     assert done.returncode == 0, done.stderr
     assert f"the-edf on mi200: {arch}" in done.stdout
     calls = (tmp_path / "srun.log").read_text(encoding="utf-8").splitlines()
@@ -459,6 +469,16 @@ def test_detect_gfx_returns_the_first_gpu_agent_with_no_stamp_or_a_matching_one(
     stamp.write_text(f"{arch}\n", encoding="ascii")
     assert flags.detect_gfx() == arch
     assert calls == [["rocminfo"], ["rocminfo"]]
+
+
+def test_detect_gfx_accepts_any_arch_of_a_multi_arch_stamp(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    stamp = tmp_path / "gpu-arch"
+    stamp.write_text(f"{targets()}\n", encoding="ascii")
+    for arch in table().values():
+        fake_rocminfo(monkeypatch, ROCMINFO.format(arch=arch), stamp)
+        assert flags.detect_gfx() == arch
 
 
 def test_detect_gfx_raises_when_the_gpu_is_not_the_arch_the_image_was_built_for(

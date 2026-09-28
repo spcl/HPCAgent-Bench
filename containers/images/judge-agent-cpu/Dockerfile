@@ -154,10 +154,10 @@ RUN set -eux; \
 ARG SPACK_REF=66ff2229e4ff1fbae9006dddd067e45120a5cba8
 ARG SPACK_PACKAGES_REF=3936d6c1796a095cd29f24f3082a5f32f4b5f938
 ARG SPACK_BUILD_JOBS=64
-# CPU tuning. Default: the build host's own CPU -- spack detects it, and MARCH=native reaches every
-# source build and the image's default CFLAGS/CXXFLAGS/FFLAGS -- so a from-scratch build is as fast
-# as its machine allows (the published aarch64 images are built on Grace: neoverse_v2). A portable
-# image instead: --build-arg SPACK_TARGET=armv8.2a --build-arg MARCH=armv8.2-a (Neoverse N1 and newer).
+# CPU tuning. Empty SPACK_TARGET + MARCH=native -- a plain `podman build` from scratch -- tunes spack
+# and every source build to the build host's own CPU, as fast as its machine allows. build.sh passes
+# cpu_target.env's portable baseline (and the matching -march), so a published image runs on every
+# CPU of its family.
 ARG SPACK_TARGET=
 ARG MARCH=native
 ENV SPACK_ROOT=/opt/spack \

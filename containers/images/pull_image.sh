@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Fetch one published image (images.env role) into the live squashfs its EDF mounts.
 #
-#   ./pull_image.sh judge-agent-amd                  # the role's moving tag
-#   ./pull_image.sh judge-agent-amd sha-<digest>     # pinned: cite this one
+#   ./pull_image.sh judge-agent-amd                        # the role's one tag
+#   ./pull_image.sh judge-agent-amd sha256:<manifest digest>  # pinned: the digest a result row cites
 #
 # Run on a compute node: enroot unpacks every layer (60+ GB for judge-agent-amd) into tmpfs, since
 # rootless layer extraction fails on Lustre. Private repositories need
@@ -14,10 +14,16 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=images.env
 source "${SCRIPT_DIR}/images.env"
 
-ROLE="${1:?usage: pull_image.sh <role> [tag]   (roles: $(ce_roles | tr '\n' ' '))}"
+ROLE="${1:?usage: pull_image.sh <role> [sha256:<digest>]   (roles: $(ce_roles | tr '\n' ' '))}"
 sqsh="$(ce_image "${ROLE}" sqsh)"
-TAG="${2:-$(ce_image "${ROLE}" tag || true)}"
-[[ -n "${TAG}" ]] || { echo "${ROLE} has no published tag in images.env; name one or build it" >&2; exit 2; }
+if [[ -n "${2:-}" ]]; then
+    [[ "$2" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "pin a digest (sha256:<64 hex>), got '$2'" >&2; exit 2; }
+    REF="${REGISTRY_REPO}@$2"
+else
+    TAG="$(ce_image "${ROLE}" tag || true)"
+    [[ -n "${TAG}" ]] || { echo "${ROLE} has no published tag in images.env; pin a digest or build it" >&2; exit 2; }
+    REF="${REGISTRY_REPO}:${TAG}"
+fi
 
 : "${SCRATCH:?set SCRATCH}"
 : "${CE_IMAGES:?set SCRATCH or CE_IMAGES}"
@@ -39,9 +45,9 @@ export ENROOT_TEMP_PATH="${ENROOT_TEMP_PATH:-${CE_TMPFS}/enroot-tmp}"
 export ENROOT_CACHE_PATH="${ENROOT_CACHE_PATH:-${SCRATCH}/.enroot}"
 mkdir -p "${ENROOT_TEMP_PATH}" "${ENROOT_CACHE_PATH}"
 
-echo "pulling ${REGISTRY_REPO}:${TAG}"
+echo "pulling ${REF}"
 echo "     -> ${OUT}"
-enroot import -x mount -o "${OUT}" "docker://${REGISTRY_REPO}:${TAG}"
+enroot import -x mount -o "${OUT}" "docker://${REF}"
 
 sha256sum "${OUT}" | tee "${OUT}.sha256"
 echo "PULLED: ${OUT}"

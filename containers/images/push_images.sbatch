@@ -4,7 +4,6 @@
 #
 #   DRY_RUN=1 sbatch containers/images/push_images.sbatch            # default roles
 #   REGISTRY_USER=<user> REGISTRY_TOKEN=<token> DRY_RUN=0 ROLES="sglang vllm" sbatch ...
-#   ROLES=judge-release JUDGE_AMD_RELEASE_TAG=judge-mi300-<sha12> DRY_RUN=0 sbatch ...
 #
 #SBATCH --job-name=push-images
 #SBATCH --nodes=1
@@ -46,7 +45,7 @@ failed=""
 for role in ${ROLES}; do
     sqsh="$(ce_image "${role}" sqsh)" || { failed="${failed} ${role}"; continue; }
     tag="$(ce_image "${role}" tag 2>/dev/null)" || {
-        echo "=== ${role}: no tag; set <PREFIX>_TAG (build-judge-release.sh prints the release one)" >&2
+        echo "=== ${role}: images.env gives it no registry tag" >&2
         failed="${failed} ${role}"
         continue
     }

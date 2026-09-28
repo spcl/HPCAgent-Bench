@@ -7,7 +7,7 @@ kebab-case strings in images.env, one line apart, and a rename that walked the t
 names also rewrote two tags. The pull then asked the registry for a tag nobody ever pushed and
 got a 404 -- after a compute node had already spent twenty minutes fetching the other three.
 
-Published tags are role- and partition-scoped (`agent-mi300-latest`, `judge-mi300-latest`, `sglang-mi200-latest`, `vllm-mi300-latest`);
+Published tags name one image each (`agent-amd`, `judge-amd`, `sglang-mi300`, `vllm-amd`);
 EDF names carry the project prefix. So a tag that begins with the project prefix is the signature
 of exactly this mistake.
 """
@@ -40,7 +40,7 @@ def test_registry_tags_do_not_carry_the_edf_prefix() -> None:
     assert not wrong, (
         "these are registry tags, not EDF names, and no such tag is published:\n  "
         + "\n  ".join(f"{k}={v}" for k, v in sorted(wrong.items()))
-        + "\nPublished tags are role-scoped, e.g. agent-mi300-latest."
+        + "\nPublished tags name one image each, e.g. agent-amd."
     )
 
 

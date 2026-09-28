@@ -79,12 +79,12 @@ done
 cd "$SRC"
 
 # NAMED configs, not `auto`. `auto` builds EVERY x86 config and dispatches at run time, and one of
-# them is knl, whose kernels ask for -mavx512pf -- a flag gcc dropped after 13, so the build dies
-# on a target this machine cannot run anyway (621500). zen covers the Zen host and haswell is the
-# AVX2 fallback beneath it; runtime dispatch still picks between them.
+# them is knl, whose kernels ask for -mavx512pf -- a flag gcc dropped after 13, so the build dies.
+# skx is the AVX-512 kernel set, zen and haswell the AVX2 ones; run-time dispatch picks the best one
+# the CPU supports, so one library serves AVX2 and AVX-512 hosts alike.
 # v1.3.0 ships x86 kernels only; any other architecture builds the portable reference config.
 case "$(uname -m)" in
-    x86_64) default_configs="zen,haswell" ;;
+    x86_64) default_configs="skx,zen,haswell" ;;
     *) default_configs="reference" ;;
 esac
 TBLIS_CONFIGS="${TBLIS_CONFIGS:-${default_configs}}"

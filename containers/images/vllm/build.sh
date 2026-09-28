@@ -18,8 +18,8 @@ BASE_IMAGE="${BASE_IMAGE:-$(ce_dockerfile_base "${SCRIPT_DIR}/Dockerfile")}"
 
 mkdir -p "$(dirname "${OUTPUT_SQSH}")"
 
-# ROCM_ARCH from gpu_arch.env for this job's partition; an unknown partition stops before any pull.
-ce_gpu_arch
+# ROCM_ARCH: gpu_arch.env's AMD target list; the base carries device code for every one of them.
+ce_amd_targets
 
 ce_podman_env
 

@@ -284,14 +284,14 @@ def test_a_hosted_model_arm_lands_on_mi200_without_a_serving_layer(tmp_path: pat
 
 def test_a_served_model_arm_on_mi200_takes_its_serving_layer(tmp_path: pathlib.Path) -> None:
     """A self-served model runs on mi200 through layers/partition-mi200-<model>.env, pinned over the
-    arm after the partition layer. No model ships one today, so the test writes the layer."""
+    arm after the partition layer. The test writes its own layer, so it holds whatever ships."""
     root = tree(tmp_path)
     layer = root / "experiments" / "layers" / "partition-mi200-qwen38.env"
-    layer.write_text("INFERENCE_CE_ENV=hpcagent-bench-sglang-mi200-bf16\nSGLANG_USE_AITER=0\n")
+    layer.write_text("INFERENCE_ENGINE=vllm\nINFERENCE_CE_ENV=hpcagent-bench-vllm-mi200-latest\n")
     done = submit_mi200(root, "qwen38")
     assert done.returncode == 0, done.stderr
     env = arm_env(root, "x-mi200-qwen38-c")
-    assert env["INFERENCE_CE_ENV"] == "hpcagent-bench-sglang-mi200-bf16" and env["SGLANG_USE_AITER"] == "0"
+    assert env["INFERENCE_CE_ENV"] == "hpcagent-bench-vllm-mi200-latest" and env["INFERENCE_ENGINE"] == "vllm"
     assert_on_mi200(root, env)
 
 

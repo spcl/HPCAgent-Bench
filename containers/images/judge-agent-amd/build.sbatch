@@ -11,9 +11,8 @@
 #
 #   IMAGE_DIR=containers/images/judge-agent-amd sbatch "${IMAGE_DIR}/build.sbatch"
 #
-# The PARTITION is a parameter: SBATCH_PARTITION (site layer) builds the mi300 images, and
-# `sbatch --partition=mi200 --cpus-per-task=64 ...` builds the mi200 ones (gfx90a from
-# gpu_arch.env, spack target zen3 from cpu_target.env) to their own candidate names.
+# One portable image for every AMD partition: device code for gpu_arch.env's AMD_GPU_TARGETS and
+# cpu_target.env's baseline CPU target, whichever partition (SBATCH_PARTITION) builds it.
 #
 #SBATCH --job-name=build-judge-agent-amd
 #SBATCH --nodes=1
@@ -43,8 +42,7 @@ test -x "${IMAGE_DIR}/build.sh"
 # shellcheck source=../build_common.sh
 source "${IMAGE_DIR}/../build_common.sh"
 mkdir -p "${CE_IMAGES:?set SCRATCH or CE_IMAGES}/logs"
-PARTITION="${SLURM_JOB_PARTITION:-${ROCM_PARTITION:?set ROCM_PARTITION outside Slurm}}"
-export OUTPUT_SQSH="${OUTPUT_SQSH:-${CE_IMAGES}/$(ce_amd_candidate agent "${PARTITION}")}"
+export OUTPUT_SQSH="${OUTPUT_SQSH:-${CE_IMAGES}/$(ce_amd_candidate agent)}"
 export BUILD_TARGETS="${BUILD_TARGETS:-agent judge}"
 
 # WHICH FILES build.sh WILL ACTUALLY WRITE.
@@ -53,7 +51,7 @@ export BUILD_TARGETS="${BUILD_TARGETS:-agent judge}"
 # mean both -- and otherwise writes each target's own candidate name. This mirrors that rule.
 target_sqsh() {
     local name
-    name="$(ce_amd_candidate "$1" "${PARTITION}")" || return 2
+    name="$(ce_amd_candidate "$1")" || return 2
     printf '%s/%s' "${CE_IMAGES}" "${name}"
 }
 built_paths() {

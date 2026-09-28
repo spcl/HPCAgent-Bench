@@ -28,11 +28,11 @@ source "${SCRIPT_DIR}/../build_common.sh"
 BUILD_TARGETS="${BUILD_TARGETS:-agent judge}"
 : "${CE_IMAGES:?set SCRATCH or CE_IMAGES}"
 
-# Per-target output name, per partition (ce_amd_candidate): nothing points at a candidate until
-# promote_image.sh renames it over a live name.
+# Per-target output name (ce_amd_candidate): nothing points at a candidate until promote_image.sh
+# renames it over a live name.
 target_sqsh() {
     local name
-    name="$(ce_amd_candidate "$1" "${CE_PARTITION}")" || return 2
+    name="$(ce_amd_candidate "$1")" || return 2
     printf '%s/%s' "${CE_IMAGES}" "${name}"
 }
 
@@ -44,13 +44,10 @@ OUTPUT_SQSH="${OUTPUT_SQSH:-${CE_IMAGES}/hpcagent-bench-judge-agent-amd.sqsh}"
 BASE_REPO="docker.io/rocm/pytorch:rocm7.2_ubuntu24.04_py3.12_pytorch_release_2.9.1"
 BASE_DIGEST="sha256:a3b65813621095e3389269417e963725b59310184588c9d2490d44e6e83fa01c"
 BASE_IMAGE="${BASE_IMAGE:-${BASE_REPO}@${BASE_DIGEST}}"
-# ROCM_ARCH from gpu_arch.env for this job's partition; an unknown partition stops before any pull.
-ce_gpu_arch
-# The spack CPU target from cpu_target.env; passed only when the partition pins one, so an mi300
-# build gets exactly the build args it always had.
+# Portable: device code for every gpu_arch.env AMD target and a baseline CPU target, whichever
+# partition builds it.
+ce_amd_targets
 ce_spack_target
-SPACK_TARGET_ARGS=()
-[[ -z "${SPACK_TARGET}" ]] || SPACK_TARGET_ARGS=(--build-arg "SPACK_TARGET=${SPACK_TARGET}")
 
 # The version the LABEL records. Taken from the output name -- ...-v7.sqsh is v7 --
 # so the label and the artifact cannot disagree.
@@ -100,7 +97,7 @@ BUILD_ARGS=(
   --build-arg "LIBFABRIC_REF=${LIBFABRIC_REF}"
   --build-arg "LIBFABRIC_COMMIT=${LIBFABRIC_COMMIT}"
   --build-arg "ROCM_ARCH=${ROCM_ARCH}"
-  "${SPACK_TARGET_ARGS[@]}"
+  --build-arg "SPACK_TARGET=${SPACK_TARGET}"
 )
 
 # Per-target output path: OUTPUT_SQSH is honoured ONLY for a single-target build -- with two targets
@@ -118,7 +115,7 @@ target_out() {
 # spending the multi-hour build (build_common.sh ce_pull_first).
 SPECS=()
 for target in ${BUILD_TARGETS}; do
-    SPECS+=("$(ce_amd_role "${target}" "${CE_PARTITION}")|${target}|hpcagent-bench-ce-${target}-amd:latest|$(target_out "${target}")")
+    SPECS+=("$(ce_amd_role "${target}")|${target}|hpcagent-bench-ce-${target}-amd:latest|$(target_out "${target}")")
 done
 ce_pull_first "${SCRIPT_DIR}/Dockerfile" "${SPECS[@]}" -- "${BUILD_ARGS[@]}"
 [[ "${CE_PULLED}" == 0 ]] || exit 0
@@ -137,9 +134,9 @@ ce_cache_base_image
 # repeatedly, every time to fail at something after them. The Dockerfile pushes here after each
 # install and registers it as a mirror when non-empty; both halves no-op without the mount.
 # Wheels survive between jobs in the pip cache, OUTSIDE the image, so a retry does not rebuild cupy
-# from its sdist. One pip cache per GPU arch: pip keys a built wheel by its sdist, not by
-# HCC_AMDGPU_TARGET, so a shared cache hands one arch's cupy to the other's build.
-ce_cache_args spack-buildcache "pip-cache/${ROCM_ARCH}"
+# from its sdist. The cache is keyed by the target list: pip keys a built wheel by its sdist, not by
+# HCC_AMDGPU_TARGET, so a shared cache would hand one target set's cupy to another's build.
+ce_cache_args spack-buildcache "pip-cache/${ROCM_ARCH//;/-}"
 
 # Order matters: `agent` first so the judge build finds those layers already built. Each target
 # is exported before the next is built, so a judge failure still leaves a usable agent image.

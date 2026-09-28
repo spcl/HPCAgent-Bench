@@ -2,13 +2,14 @@
 # Push one image to a registry, from the build's podman store or from its saved OCI archive.
 #
 #   REGISTRY_USER=<user> REGISTRY_TOKEN=<token> PUSH_REPO=docker.io/<user>/hpcagent-bench \
-#     ./push_image.sh <local-tag> [extra-tag...]
-#   PUSH_REPO=... ./push_image.sh --from-archive $SCRATCH/ce-images/<name>.oci.tar [extra-tag...]
+#     ./push_image.sh <local-tag> <tag>
+#   PUSH_REPO=... ./push_image.sh --from-archive $SCRATCH/ce-images/<name>.oci.tar <tag>
 #   ./push_image.sh --check-only --from-archive <archive>    # every gate, no login, no upload
 #
 # --from-archive unpacks into an isolated tmpfs graphroot (Lustre cannot hold one), so the node
 # needs RAM for the decompressed image. Credentials come from the environment only; with none set
-# an existing login in the ambient auth file is used. Every push also tags sha-<digest>.
+# an existing login in the ambient auth file is used. An image has exactly ONE tag (images.env);
+# its digest, recorded beside the squashfs and in every result row, is the immutable identity.
 set -Eeuo pipefail
 
 ulimit -c 0
@@ -45,7 +46,7 @@ if [[ -n "${ARCHIVE}" ]]; then
     LOCAL_TAG="$("${PODMAN[@]}" pull "oci-archive:${ARCHIVE}" | tail -1)"
     [[ -n "${LOCAL_TAG}" ]] || { echo "loaded nothing from ${ARCHIVE}" >&2; exit 2; }
 else
-    LOCAL_TAG="${1:?usage: push_image.sh <local-tag> [extra-tag...]}"
+    LOCAL_TAG="${1:?usage: push_image.sh <local-tag> <tag>}"
     shift || true
 fi
 
@@ -107,26 +108,18 @@ if [[ -n "${REGISTRY_USER:-}" && -n "${REGISTRY_TOKEN:-}" ]]; then
     printf '%s' "${REGISTRY_TOKEN}" | "${PODMAN[@]}" login --username "${REGISTRY_USER}" --password-stdin "${registry}"
 fi
 
-# sha-<digest> is the immutable tag to cite. --format oci: podman otherwise follows the source
-# manifest type, which BUILDAH_FORMAT can flip to docker v2s2.
+# --format oci: podman otherwise follows the source manifest type, which BUILDAH_FORMAT can flip to
+# docker v2s2.
 manifest="$("${PODMAN[@]}" image inspect --format '{{.ManifestType}}' "${LOCAL_TAG}")"
 printf 'source manifest: %s\n' "${manifest}"
 printf 'pushing as:      application/vnd.oci.image.manifest.v1+json (forced with --format oci)\n'
 
-digest="$("${PODMAN[@]}" image inspect --format '{{.Digest}}' "${LOCAL_TAG}")"
-short="sha-${digest#sha256:}"; short="${short:0:16}"
+(($# == 1)) || { echo "push_image.sh: exactly one tag, got $#: $*" >&2; exit 2; }
+target="${PUSH_REPO}:$1"
+echo "pushing ${target} ($("${PODMAN[@]}" image inspect --format '{{.Digest}}' "${LOCAL_TAG}"))"
+"${PODMAN[@]}" tag "${LOCAL_TAG}" "${target}"
+"${PODMAN[@]}" push --format oci "${target}"
 
-pushed=()
-for tag in "${short}" "$@"; do
-    target="${PUSH_REPO}:${tag}"
-    echo "pushing ${target}"
-    "${PODMAN[@]}" tag "${LOCAL_TAG}" "${target}"
-    "${PODMAN[@]}" push --format oci "${target}"
-    pushed+=("${target}")
-done
-
-printf '\npushed:\n'
-printf '  %s\n' "${pushed[@]}"
-printf 'pull with:\n  podman pull %s:%s\n' "${PUSH_REPO}" "${short}"
-printf 'or import straight to squashfs:\n  enroot import -x mount -o <name>.sqsh docker://%s:%s\n' \
-    "${PUSH_REPO}" "${short}"
+printf '\npushed %s\n' "${target}"
+printf 'pull with:\n  podman pull %s\n' "${target}"
+printf 'or import straight to squashfs:\n  enroot import -x mount -o <name>.sqsh docker://%s\n' "${target}"

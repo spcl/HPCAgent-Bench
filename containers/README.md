@@ -40,18 +40,28 @@ A build writes `candidate`; `promote_image.sh` renames it over `sqsh` once it ca
 marker; `install_edfs.sh` renders `~/.edf/<edf>.toml` from `template`; `pull_image.sh` and
 `push_images.sbatch` move `sqsh` to and from `REGISTRY_REPO:<tag>`. Sourcing `images.env` also
 defines `<PREFIX>_SQSH`, `_EDF_LATEST`, `_TEMPLATE`, `_CANDIDATE` and `_TAG`, which `experiments/`
-reads. The `.digest` sidecar is the build's identity: cite it (or the `sha-<digest>` tag), never a
-moving tag or EDF name.
+reads. The `.digest` sidecar is the build's identity: cite it, never a moving tag or EDF name.
 
-| role | platform | image directory | EDF |
+ONE image and ONE registry tag per thing we run. An AMD image carries device code for every
+`gpu_arch.env` target (`AMD_GPU_TARGETS`: MI250X, MI300, MI355X) and a portable CPU baseline
+(`cpu_target.env`), so it runs on every AMD partition; what differs per partition is only the EDF,
+which renders that partition's arch for run-time JIT builds. Rows with a `-` directory are such
+EDF-only views of another row's image.
+
+| image (tag) | build directory | CPU / GPU targets | EDFs |
 |---|---|---|---|
-| `judge-agent-amd`, `judge` | amd | `judge-agent-amd` (targets `agent`, `judge`) | `hpcagent-bench-{agent,judge}-mi300-latest` |
-| `judge-agent-amd-mi200`, `judge-mi200` | amd | `judge-agent-amd`, built on mi200 | `hpcagent-bench-{agent,judge}-mi200-latest` (+ `judge-mi200-mlscale`) |
-| `sglang`, `vllm` | amd | `sglang`, `vllm` | `hpcagent-bench-{sglang,vllm}-mi300-latest` |
-| `sglang-mi200` | amd | `sglang-mi200` | `hpcagent-bench-sglang-mi200-latest` |
-| `judge-agent-cuda`, `judge-cuda` | gh200 | `judge-agent-cuda` (targets `agent`, `judge`) | `hpcagent-bench-{agent,judge}-gh200-latest` |
-| `vllm-cuda` | gh200 | `vllm-cuda` | `hpcagent-bench-vllm-gh200-latest` |
-| `judge-agent-cpu`, `judge-cpu` | cpu | `judge-agent-cpu` (targets `agent`, `judge`) | `hpcagent-bench-{agent,judge}-cpu-<arch>-latest` |
+| `agent-amd`, `judge-amd` | `judge-agent-amd` (targets `agent`, `judge`) | x86-64-v3; gfx90a, gfx942, gfx950 | `hpcagent-bench-{agent,judge}-{mi300,mi200}-latest`, `judge-{mi300,mi200}-mlscale` |
+| `sglang-mi300` | `sglang` | gfx942 (the upstream base is MI300-only) | `hpcagent-bench-sglang-mi300-latest` |
+| `vllm-amd` | `vllm` | gfx90a, gfx942, gfx950 | `hpcagent-bench-vllm-{mi300,mi200}-latest` |
+| `agent-gh200-latest`, `judge-gh200-latest` | `judge-agent-cuda` (targets `agent`, `judge`) | aarch64; sm_90 | `hpcagent-bench-{agent,judge}-gh200-latest` |
+| `vllm-gh200-latest` | `vllm-cuda` | aarch64; the official build | `hpcagent-bench-vllm-gh200-latest` |
+| `agent-cpu-<arch>`, `judge-cpu-<arch>` | `judge-agent-cpu` (targets `agent`, `judge`) | x86-64-v3 or armv8.2-a | `hpcagent-bench-{agent,judge}-cpu-<arch>-latest` |
+
+CPU targets. A published image pins the portable baseline; AVX-512 still runs where it pays, through
+the libraries that pick their kernels at run time (OpenBLAS `+dynamic_dispatch`, MKL, TBLIS), and
+code an agent compiles is built on the node with `-march=native`. A plain `podman build` of a
+Dockerfile, without `build.sh`, leaves the spack target empty: host detection, the build machine's
+full ISA.
 
 The `agent` target is the whole toolchain without `hpcagent_bench`; `judge` is `agent` plus the
 installed package. Held-out tests are in neither: the judge reads them from the host checkout.
@@ -71,7 +81,7 @@ Pull the published images (the default: same bytes as published), then render th
 
 ```bash
 sbatch pull_images.sbatch                               # judge-agent-amd judge sglang vllm
-./pull_image.sh judge-agent-amd sha-<digest>            # one role, pinned
+./pull_image.sh judge-agent-amd sha256:<digest>         # one role, pinned to a digest
 ./install_edfs.sh
 ```
 
@@ -80,12 +90,10 @@ Build when changing an image (partition `mi300` is in each `build.sbatch`):
 ```bash
 IMAGE_DIR=$PWD/judge-agent-amd sbatch build_and_verify.sbatch   # both targets, ~2 h warm
 IMAGE_DIR=$PWD/sglang          sbatch build_and_verify.sbatch   # ~1 h
-IMAGE_DIR=$PWD/vllm            sbatch build_and_verify.sbatch   # ~4 h
-# the mi200 pair and sglang-mi200 (gfx90a, spack target zen3)
-REPO=$PWD/../.. IMAGE_DIR=$PWD/judge-agent-amd \
-  sbatch --partition=mi200 --cpus-per-task=64 --gpus-per-node=8 build_and_verify.sbatch
-REPO=$PWD/../.. IMAGE_DIR=$PWD/sglang-mi200 \
-  sbatch --partition=mi200 --cpus-per-task=64 --gpus-per-node=8 build_and_verify.sbatch
+IMAGE_DIR=$PWD/vllm            sbatch build_and_verify.sbatch   # < 1 h, the official base
+# the same AMD images on the other partition, before promotion
+IMAGE=$CE_IMAGES/<candidate> PROFILE=judge-agent-amd \
+  sbatch --partition=mi200 --gpus-per-node=8 verify_image.sbatch
 
 DRY_RUN=1 ./promote_image.sh --all      # what would move
 ./promote_image.sh --all                # rename + sidecars + EDFs
@@ -94,7 +102,7 @@ DRY_RUN=1 ./promote_image.sh --all      # what would move
 Build gates prove that an engine imports, not that it serves, so a serving candidate is smoked
 before promotion: an SGLang candidate through `inference/smoke-kimi-sglang.sbatch`. A vLLM candidate is smoked with `experiments/serve-only.sbatch`,
 which serves what a campaign serves: copy `~/.edf/hpcagent-bench-vllm-mi300-latest.toml` to
-`~/.edf/candidate-vllm.toml` with `image` pointing at `hpcagent-bench-vllm-candidate.sqsh`, then
+`~/.edf/candidate-vllm.toml` with `image` pointing at the vllm role's candidate squashfs, then
 run `SERVE_ENV_FILE=<copy of serve-only.env plus INFERENCE_CE_ENV=candidate-vllm> MODEL=oss120b
 ./serve-only.sbatch` from `experiments/` and query the endpoint it prints.
 
@@ -257,15 +265,14 @@ xGMI regardless.
 
 ## Publishing
 
-`push_images.sbatch` publishes `<sqsh>.oci.tar` under each role's tag in `REGISTRY_REPO`
-(`docker.io/spcleth/hpcagent-bench`); `push_image.sh` adds an immutable `sha-<digest>` tag. The
+`push_images.sbatch` publishes `<sqsh>.oci.tar` under each role's one tag in `REGISTRY_REPO`
+(`docker.io/spcleth/hpcagent-bench`); a push replaces the tag, and the digest pins a version. The
 default `DRY_RUN=1` runs every registry gate (10 GB per layer, 100 GB per image) and sends nothing.
 Credentials come only from the environment.
 
 ```bash
 DRY_RUN=1 sbatch push_images.sbatch
 REGISTRY_USER=<user> REGISTRY_TOKEN=<token> DRY_RUN=0 ROLES="sglang vllm" sbatch push_images.sbatch
-judge-agent-amd/build-judge-release.sh <git-ref>     # release judge: agent archive + package at <ref>
 ```
 
 ## Numeric libraries

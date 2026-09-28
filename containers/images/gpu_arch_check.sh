@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Fails a job whose AMD GPU arch disagrees across its three sources: gpu_arch.env for this job's
-# partition, the image's /opt/gpu-arch stamp, and the first GPU agent rocminfo reports in the image.
+# partition, the image's /opt/gpu-arch stamp (the ;-separated archs it carries device code for),
+# and the first GPU agent rocminfo reports in the image. The partition's arch must be the GPU's and
+# one of the image's.
 #
 #   gpu_arch_check.sh <edf name or path>        (inside a Slurm allocation)
 #
@@ -26,7 +28,7 @@ main() {
     fi
     info="$(in_image "${edf}" /opt/rocm/bin/rocminfo)" || { echo "gpu_arch_check: rocminfo failed in ${edf}" >&2; exit 2; }
     probe="$(sed -nE 's/^[[:space:]]*Name:[[:space:]]+(gfx[0-9a-f]+)[[:space:]]*$/\1/p' <<< "${info}" | sed -n 1p)"
-    if [[ "${table}" == "${stamp}" && "${stamp}" == "${probe}" ]]; then
+    if [[ ";${stamp};" == *";${table};"* && "${table}" == "${probe}" ]]; then
         printf 'gpu_arch_check: %s on %s: %s\n' "${edf}" "${SLURM_JOB_PARTITION}" "${table}"
         return 0
     fi
