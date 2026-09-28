@@ -489,7 +489,8 @@ RUN set -eux; \
       '      buildable: false' \
       '  specs:' \
       "  - llvm@${LLVM_VERSION} +clang +flang +mlir +polly +lld +offload +libomptarget targets=amdgpu,nvptx,x86" \
-      '  # No +slurm: that links one Slurm release, and the image must launch under any. NOT' \
+      '  # ~slurm spelled out: left open, the concretizer reuses a cached +slurm build (654075),' \
+      '  # which links one Slurm release, and the image must launch under any. NOT' \
       '  # pmi=pmix, which spack conflicts with +hydra: that would set --with-pm=no and remove' \
       '  # mpiexec, and mpiexec -launcher fork is what keeps single-node ranks INSIDE the CE' \
       '  # container. pmi stays default, which on MPICH 4.2+ already builds BOTH the PMI-1 and' \
@@ -502,7 +503,7 @@ RUN set -eux; \
       "  # enables the CE's CXI hook for exactly this); spack's default netmod would build against" \
       '  # UCX instead, and the distro MPICH already demonstrates where that ends -- a ch4:ucx' \
       '  # build whose UCX has no ROCm transport at all.' \
-      "  - mpich@4 +rocm amdgpu_target=${ROCM_ARCH} +fortran +hwloc device=ch4 netmod=ofi" \
+      "  - mpich@4 +rocm amdgpu_target=${ROCM_ARCH} +fortran +hwloc ~slurm device=ch4 netmod=ofi" \
       '  - openblas threads=openmp +fortran' \
       '  - netlib-scalapack' \
       '  - fftw +mpi +openmp precision=float,double,long_double' \

@@ -429,7 +429,7 @@ RUN set -eux; \
       '  # GPU-aware MPICH, no +slurm (its built-in PMI-1/2 client serves any srun); every variant is' \
       '  # judge-agent-amd step 4 with +cuda in place of +rocm. device=ch4 netmod=ofi reaches the' \
       '  # fabric through libfabric: the site supplies the provider (cxi on Alps via the CE hook).' \
-      "  - mpich@4 +cuda cuda_arch=${CUDA_ARCH} +fortran +hwloc device=ch4 netmod=ofi" \
+      "  - mpich@4 +cuda cuda_arch=${CUDA_ARCH} +fortran +hwloc ~slurm device=ch4 netmod=ofi" \
       '  - openblas threads=openmp +fortran' \
       '  - netlib-scalapack' \
       '  - fftw +mpi +openmp precision=float,double,long_double' \
