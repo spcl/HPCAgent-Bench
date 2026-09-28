@@ -98,7 +98,8 @@ def check_tool_call(base: str, model: str, timeout: int, api_key: str | None = N
 
 
 def check_reasoning(base: str, model: str, effort: str, timeout: int, api_key: str | None = None) -> tuple[bool, str]:
-    """Reasoning must surface as reasoning_content, and the requested effort must be accepted."""
+    """Reasoning must surface as a message field, and the requested effort must be accepted. SGLang
+    returns it as reasoning_content, vLLM (0.28) as reasoning; LiteLLM reads either."""
     body = {
         "model": model,
         "messages": [
@@ -118,13 +119,13 @@ def check_reasoning(base: str, model: str, effort: str, timeout: int, api_key: s
         return False, f"request failed (effort={effort!r}): {exc}"
 
     message = data["choices"][0]["message"]
-    reasoning = message.get("reasoning_content") or ""
+    reasoning = message.get("reasoning_content") or message.get("reasoning") or ""
     content = message.get("content") or ""
     if not reasoning:
-        return False, f"no reasoning_content returned (effort={effort!r}); content={content[:200]!r}"
+        return False, f"no reasoning_content or reasoning returned (effort={effort!r}); content={content[:200]!r}"
     if "10" not in content:
         return False, f"wrong answer; expected 10, content={content[:200]!r}"
-    return True, f"reasoning_content={len(reasoning)} chars, answer ok (effort={effort!r})"
+    return True, f"reasoning={len(reasoning)} chars, answer ok (effort={effort!r})"
 
 
 def main() -> int:
