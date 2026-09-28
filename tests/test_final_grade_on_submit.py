@@ -1,6 +1,6 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""The judge's in-job FINAL grade (``grading.final_grade_on_submit``, hpcagent_bench/harness/final_grade.py).
+"""The judge's in-job FINAL grade (hpcagent_bench/harness/final_grade.py).
 
 An LLR arm's submissions reach the paper only through their final grade (mw4x5). The judge
 that recorded a correct /submit runs ``regrade finalize`` on it itself, so the rows it writes
@@ -138,7 +138,6 @@ def judge_fixture(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Judge]:
         env.setenv("HPCAGENT_BENCH_RECORD_ARM", ARM)
         env.setenv("HPCAGENT_BENCH_SERVICE_PRESET", "S")
         env.setenv("HPCAGENT_BENCH_SERVICE_SUBMIT_FEEDBACK", "full")
-        env.setenv(final_grade.ENV_KEY, "1")
         srv = service.make_server("127.0.0.1", 0, service.from_config(), slots=[DeviceSlot("cpu", 0)])
         threading.Thread(target=srv.serve_forever, daemon=True).start()
         try:
@@ -223,15 +222,6 @@ def test_the_in_job_final_grade_is_the_row_regrade_finalize_writes_for_the_same_
     )
 
 
-def test_with_the_flag_off_a_correct_submit_owes_no_final_grade(judge: Judge, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv(final_grade.ENV_KEY, "0")
-    run_id = f"{ARM}.n0.p1.w0"
-    submitted = judge.submit(correct_source(), run_id)
-    assert submitted["recorded"]["table"] == "submission", submitted["recorded"]
-    assert judge.pending(run_id) == []
-    assert not list((judge.final_dir / final_grade.LOG_DIRNAME).glob(f"*-{run_id}-*"))
-
-
 def test_an_incorrect_submit_owes_no_final_grade(judge: Judge) -> None:
     """Only a correct submission is credited, so only it is owed a final grade."""
     run_id = f"{ARM}.n0.p2.w0"
@@ -268,7 +258,7 @@ def test_the_extractor_reads_a_jobs_in_job_final_grade_exactly_as_a_regrade_wave
 
 
 def test_the_regrade_loops_default_globs_count_an_in_job_final_grade(graded: Graded, tmp_path: pathlib.Path) -> None:
-    """finalize_grade_owed.py and wave_board.py plan and report from these globs: a job's own final grade
+    """wave_board.py reports from these globs: a job's own final grade
     missing from them is re-graded by a wave for nothing and shown as owed."""
     import wave_board
 
