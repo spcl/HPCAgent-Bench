@@ -155,7 +155,10 @@ ARG ASTUNPARSE_VERSION=1.6.3
 # NVCC_PREPEND_FLAGS is set BEFORE the spack layers: gcc 16 is newer than any host compiler CUDA 12.9
 # whitelists, and nvcc refuses on the version check alone -- in magma's and petsc's builds as much
 # as in a graded one. The final gate compiles and links real kernels, so "the check was waived" is
-# never mistaken for "the pair works". NVHPC_CUDA_HOME points nvc/nvfortran at the base's CUDA 12.9
+# never mistaken for "the pair works". The waiver is not enough: nvcc 12.9's front end cannot parse
+# gcc 16's libstdc++ (char8_t, __is_pointer; yaksa, job 4813145), so NVCC_CCBIN makes the base's
+# g++-13 nvcc's default host compiler; the objects still link against gcc 16's libstdc++. An
+# explicit -ccbin wins over it. NVHPC_CUDA_HOME points nvc/nvfortran at the base's CUDA 12.9
 # instead of the newer CUDA the SDK bundles, so an OpenACC binary needs the same driver as the rest.
 ENV LC_ALL=C \
     PLAYWRIGHT_BROWSERS_PATH=/opt/playwright \
@@ -163,6 +166,7 @@ ENV LC_ALL=C \
     NVIDIA_DRIVER_CAPABILITIES=compute,utility,profiler \
     CUDA_HOME=/usr/local/cuda \
     NVCC_PREPEND_FLAGS=-allow-unsupported-compiler \
+    NVCC_CCBIN=/usr/bin/g++-13 \
     NVHPC_CUDA_HOME=/usr/local/cuda \
     SPACK_ROOT=/opt/spack \
     SPACK_ENV_DIR=/opt/spack-env \
@@ -335,6 +339,9 @@ RUN set -eux; \
 # LIBOMPTARGET_NVPTX_* options). Without it clang -fopenmp --offload-arch=sm_90 cannot link
 # ("no library 'libomptarget-nvptx.bc' found", job 4812087), and the toolchain gate below fails.
 # The subclass adds the upstream-documented runtime target and nothing else.
+#
+# strumpack passes -DCMAKE_CUDA_HOST_COMPILER=$SPACK_CXX (gcc 16), which overrides NVCC_CCBIN; its
+# subclass points that one flag at g++-13 instead.
 COPY --from=ofi-builder /opt/ofi-sdk /opt/ofi-sdk
 RUN set -eux; \
     "/opt/ofi-sdk/bin/fi_info" --version 2>/dev/null | head -1 \
@@ -357,7 +364,7 @@ RUN set -eux; \
     git -C /opt/spack-packages checkout -q FETCH_HEAD; \
     test -f /opt/spack-packages/repos/spack_repo/builtin/repo.yaml; \
     overlay=/opt/spack-overlay/spack_repo/hpcagent; \
-    mkdir -p "${overlay}/packages/slurm" "${overlay}/packages/llvm"; \
+    mkdir -p "${overlay}/packages/slurm" "${overlay}/packages/llvm" "${overlay}/packages/strumpack"; \
     printf '%s\n' 'repo:' '  namespace: hpcagent' '  api: v2.2' > "${overlay}/repo.yaml"; \
     printf '%s\n' \
       'from spack_repo.builtin.packages.slurm.package import Slurm as BuiltinSlurm' \
@@ -382,6 +389,17 @@ RUN set -eux; \
       '            args.append(self.define("RUNTIMES_nvptx64-nvidia-cuda_LLVM_ENABLE_RUNTIMES", ["openmp"]))' \
       '        return args' \
       > "${overlay}/packages/llvm/package.py"; \
+    printf '%s\n' \
+      'from spack_repo.builtin.packages.strumpack.package import Strumpack as BuiltinStrumpack' \
+      '' \
+      'from spack.package import *' \
+      '' \
+      '' \
+      'class Strumpack(BuiltinStrumpack):' \
+      '    def cmake_args(self):' \
+      '        return [a if not a.startswith("-DCMAKE_CUDA_HOST_COMPILER=") else "-DCMAKE_CUDA_HOST_COMPILER=/usr/bin/g++-13"' \
+      '                for a in super().cmake_args()]' \
+      > "${overlay}/packages/strumpack/package.py"; \
     printf '%s\n' \
       'repos:' \
       "  hpcagent: ${overlay}" \
