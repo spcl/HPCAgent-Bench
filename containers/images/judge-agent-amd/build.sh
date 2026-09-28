@@ -97,6 +97,7 @@ BUILD_ARGS=(
   --build-arg "LIBFABRIC_REF=${LIBFABRIC_REF}"
   --build-arg "LIBFABRIC_COMMIT=${LIBFABRIC_COMMIT}"
   --build-arg "ROCM_ARCH=${ROCM_ARCH}"
+  --build-arg "ROCM_ARCH_CSV=${ROCM_ARCH_CSV}"
   --build-arg "SPACK_TARGET=${SPACK_TARGET}"
 )
 

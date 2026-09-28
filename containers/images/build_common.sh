@@ -165,7 +165,9 @@ ce_amd_targets() {
         echo "gpu_arch.env: AMD_GPU_TARGETS='${ROCM_ARCH}' is not a ;-separated list of gfx archs" >&2
         return 2
     fi
-    export ROCM_ARCH
+    # hipcc splices HCC_AMDGPU_TARGET into a shell command line: it takes the list comma-separated.
+    ROCM_ARCH_CSV="${ROCM_ARCH//;/,}"
+    export ROCM_ARCH ROCM_ARCH_CSV
     printf 'gpu targets %s\n' "${ROCM_ARCH}"
 }
 

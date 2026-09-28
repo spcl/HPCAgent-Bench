@@ -24,7 +24,7 @@ ce_amd_targets
 ce_podman_env
 
 # Pass-through for Dockerfile ARGs (a BASE_IMAGE of another release names its VLLM_VERSION too).
-BUILD_ARGS=(--build-arg "ROCM_ARCH=${ROCM_ARCH}")
+BUILD_ARGS=(--build-arg "ROCM_ARCH=${ROCM_ARCH}" --build-arg "ROCM_ARCH_CSV=${ROCM_ARCH_CSV}")
 for kv in ${EXTRA_BUILD_ARGS:-}; do BUILD_ARGS+=(--build-arg "${kv}"); done
 ce_pull_first "${SCRIPT_DIR}/Dockerfile" "vllm||${IMAGE_TAG}|${OUTPUT_SQSH}" -- "${BUILD_ARGS[@]}"
 [[ "${CE_PULLED}" == 0 ]] || exit 0

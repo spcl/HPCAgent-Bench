@@ -131,6 +131,8 @@ ARG DEBIAN_FRONTEND=noninteractive
 # build.sh passes gpu_arch.env's AMD_GPU_TARGETS, so one image runs on every listed arch; there is
 # no default.
 ARG ROCM_ARCH
+# The same list comma-separated, for hipcc's HCC_AMDGPU_TARGET (it splices it into a shell line).
+ARG ROCM_ARCH_CSV
 ARG ROCM_VERSION=7.2.0
 ARG ROCM_APT_CHANNEL=7.2
 
@@ -159,7 +161,7 @@ ENV LC_ALL=C \
     ROCM_PATH=/opt/rocm \
     HIP_PATH=/opt/rocm \
     PYTORCH_ROCM_ARCH=${ROCM_ARCH} \
-    HCC_AMDGPU_TARGET=${ROCM_ARCH} \
+    HCC_AMDGPU_TARGET=${ROCM_ARCH_CSV} \
     GPU_ARCHS=${ROCM_ARCH} \
     GPU_ARCH_LIST=${ROCM_ARCH} \
     SPACK_ROOT=/opt/spack \
@@ -170,6 +172,8 @@ ENV LC_ALL=C \
 # /opt/gpu-arch records the ROCM_ARCH list as a FILE, because the CE does not reliably keep image ENV.
 RUN set -eu; \
     test -n "${ROCM_ARCH:-}" || { echo "ROCM_ARCH is unset: build with build.sh, which reads gpu_arch.env" >&2; exit 2; }; \
+    test "${ROCM_ARCH_CSV}" = "$(echo "${ROCM_ARCH}" | tr ";" ",")" \
+      || { echo "ROCM_ARCH_CSV '${ROCM_ARCH_CSV}' is not ROCM_ARCH '${ROCM_ARCH}' comma-separated" >&2; exit 2; }; \
     printf '%s\n' "${ROCM_ARCH}" > /opt/gpu-arch
 COPY containers/lib/device_arch_gate.sh /usr/local/bin/device_arch_gate.sh
 

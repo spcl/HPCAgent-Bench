@@ -36,11 +36,15 @@ LABEL org.opencontainers.image.title="hpcagent-bench-vllm" \
 # /opt/gpu-arch records it as a FILE (gpu_arch_check.sh reads it at launch), because the CE does not
 # reliably keep image ENV.
 ARG ROCM_ARCH
+# The same list comma-separated, for hipcc's HCC_AMDGPU_TARGET (it splices it into a shell line).
+ARG ROCM_ARCH_CSV
 RUN set -eu; \
     test -n "${ROCM_ARCH:-}" || { echo "ROCM_ARCH is unset: build with build.sh, which reads gpu_arch.env" >&2; exit 2; }; \
+    test "${ROCM_ARCH_CSV}" = "$(echo "${ROCM_ARCH}" | tr ";" ",")" \
+      || { echo "ROCM_ARCH_CSV '${ROCM_ARCH_CSV}' is not ROCM_ARCH '${ROCM_ARCH}' comma-separated" >&2; exit 2; }; \
     printf '%s\n' "${ROCM_ARCH}" > /opt/gpu-arch
 # The image's arch list; an EDF narrows these to its partition's arch for run-time JIT builds.
-ENV HCC_AMDGPU_TARGET=${ROCM_ARCH} \
+ENV HCC_AMDGPU_TARGET=${ROCM_ARCH_CSV} \
     PYTORCH_ROCM_ARCH=${ROCM_ARCH} \
     GPU_ARCHS=${ROCM_ARCH} \
     GPU_ARCH_LIST=${ROCM_ARCH}

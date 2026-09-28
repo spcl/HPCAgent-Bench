@@ -173,8 +173,16 @@ def test_every_amd_image_takes_rocm_arch_from_the_table_refuses_none_stamps_it_a
     assert re.findall(r"^ARG ROCM_ARCH\b.*$", docker, re.M) == ["ARG ROCM_ARCH"]
     assert 'test -n "${ROCM_ARCH:-}" ||' in docker
     assert "printf '%s\\n' \"${ROCM_ARCH}\" > /opt/gpu-arch" in docker
-    # spack, clang and cupy take the list ,-separated: that derivation IS the table's value.
+    # spack, clang, cupy and hipcc take the list ,-separated: that derivation IS the table's value.
     comma_list = docker.replace('$(echo "${ROCM_ARCH}" | tr ";" ",")', "${ROCM_ARCH}")
+    if image in PORTABLE:
+        # A list has a ';' hipcc would hand to sh: build.sh passes the ,-form, which the image gates.
+        assert '--build-arg "ROCM_ARCH_CSV=${ROCM_ARCH_CSV}"' in build
+        assert 'test "${ROCM_ARCH_CSV}" = "$(echo "${ROCM_ARCH}" | tr ";" ",")"' in docker
+        assert not re.search(r"HCC_AMDGPU_TARGET=\$\{ROCM_ARCH\}(\s|$)", docker, re.M), (
+            "HCC_AMDGPU_TARGET takes the ,-form"
+        )
+        comma_list = comma_list.replace("${ROCM_ARCH_CSV}", "${ROCM_ARCH}")
     for var in ARCH_VARS:
         values = {value.strip('"') for value in re.findall(rf"\b{var}=(\S+)", comma_list)}
         assert values == {"${ROCM_ARCH}"}, (image, var, values)
