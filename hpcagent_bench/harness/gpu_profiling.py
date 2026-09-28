@@ -71,7 +71,6 @@ __all__ = [
     "KERNEL_STATS_CSV",
     "KERNEL_TRACE_CSV",
     "KFD_DEVICE",
-    "LEGACY_STATS_CSV",
     "MARKER_STATS_CSV",
     "MEMORY_STATS_CSV",
     "MEM_SIZE_REPORT",
@@ -89,7 +88,7 @@ __all__ = [
     "ROCPROF_CHILD_ENV",
     "ROCPROF_OUTDIR",
     "ROCPROF_REPORTS",
-    "ROCPROF_TOOLS",
+    "ROCPROF_TOOL",
     "ROCPROF_TRACE",
     "ROCTX_HEADER",
     "ROCTX_LIBRARY",
@@ -192,8 +191,8 @@ NVIDIA_DEVICE = papi.NVIDIA_DEVICE
 #: Threads per warp on every NVIDIA architecture; AMD's width is measured (:func:`wavefront_size`).
 WARP_SIZE = 32
 
-#: The AMD profilers, preferred first (``rocprof`` v1 is deprecated).
-ROCPROF_TOOLS = ("rocprofv3", "rocprof")
+#: The AMD profiler.
+ROCPROF_TOOL = "rocprofv3"
 
 #: What the AMD path traces, as reported (rocprofv3 takes domains as flags).
 ROCPROF_TRACE = "kernel,memory-copy,marker"
@@ -220,9 +219,6 @@ ROCPROF_REPORTS = (KERNEL_STATS_CSV, MEMORY_STATS_CSV, KERNEL_TRACE_CSV, AGENT_I
 #: The ROCTX header and library, relative to the ROCm root holding the profiler.
 ROCTX_HEADER = pathlib.PurePath("rocprofiler-sdk-roctx") / "roctx.h"
 ROCTX_LIBRARY = "rocprofiler-sdk-roctx"
-
-#: Legacy ``rocprof`` v1's single output: kernel totals only.
-LEGACY_STATS_CSV = ".stats.csv"
 
 #: Set on every AMD traced child: the rocprofv3 tool library, started as an OMPT tool, crashes
 #: offload builds linking OpenBLAS during dlopen. Traces do not need OMPT.
@@ -545,7 +541,7 @@ def nsys_stats(report: pathlib.Path, *, language: str, timeout: float) -> dict[s
 
 
 def rocprof_check() -> tuple[str, str]:
-    """``(tool, executable)`` for the AMD path (``rocprofv3`` or the deprecated ``rocprof``), or
+    """``(tool, executable)`` for the AMD path (``rocprofv3``), or
     :class:`GpuProfilerUnavailable` with its own cause per missing piece: the binary
     (``rocprof_missing``), a visible GPU (``no_amd_gpu``), access (``kfd_permission_denied``), the
     runtime (``rocminfo_missing``). Cheapest checks first."""
@@ -553,16 +549,12 @@ def rocprof_check() -> tuple[str, str]:
         raise GpuProfilerUnavailable(
             "not_linux", "ROCm ships for Linux only; there is no AMD GPU to trace on macOS or Windows"
         )
-    for name in ROCPROF_TOOLS:
-        exe = shutil.which(name)
-        if exe is not None:
-            break
-    else:
+    exe = shutil.which(ROCPROF_TOOL)
+    if exe is None:
         raise GpuProfilerUnavailable(
             "rocprof_missing",
-            f"none of {list(ROCPROF_TOOLS)} is on PATH; install ROCm's profiler "
-            "('apt install rocprofiler-sdk' from AMD's ROCm repo, or source /opt/rocm/bin in PATH). "
-            "rocprofv3 is the supported tool -- rocprof is v1 and deprecated",
+            f"{ROCPROF_TOOL} is not on PATH; install ROCm's profiler "
+            "('apt install rocprofiler-sdk' from AMD's ROCm repo, or source /opt/rocm/bin in PATH)",
         )
     if not KFD_DEVICE.exists():
         raise GpuProfilerUnavailable(
@@ -581,7 +573,7 @@ def rocprof_check() -> tuple[str, str]:
             "CAP_SYS_ADMIN -- dispatch tracing needs device access, not a capability",
         )
     rocm_agents()
-    return name, exe
+    return ROCPROF_TOOL, exe
 
 
 def rocm_agents() -> list[str]:
@@ -614,26 +606,23 @@ def rocm_agents() -> list[str]:
     return agents
 
 
-def rocprof_command(tool: str, exe: str, argv: list[str], outdir: pathlib.Path) -> list[str]:
-    """The command line for ``tool``: ``rocprofv3`` takes domain flags, writes a CSV per report into a
-    directory and ends its options with ``--``; ``rocprof`` takes neither and writes one ``.stats.csv``."""
-    if tool == "rocprofv3":
-        return [
-            exe,
-            "--kernel-trace",
-            "--memory-copy-trace",
-            "--marker-trace",
-            "--stats",
-            "--output-format",
-            "csv",
-            "--output-directory",
-            str(outdir),
-            "--output-file",
-            REPORT_STEM,
-            "--",
-            *argv,
-        ]
-    return [exe, "--stats", "--timestamp", "on", "-o", str(outdir / (REPORT_STEM + ".csv")), *argv]
+def rocprof_command(exe: str, argv: list[str], outdir: pathlib.Path) -> list[str]:
+    """The ``rocprofv3`` command line: domain flags, a CSV per report into ``outdir``, options ended by ``--``."""
+    return [
+        exe,
+        "--kernel-trace",
+        "--memory-copy-trace",
+        "--marker-trace",
+        "--stats",
+        "--output-format",
+        "csv",
+        "--output-directory",
+        str(outdir),
+        "--output-file",
+        REPORT_STEM,
+        "--",
+        *argv,
+    ]
 
 
 def roctx_build_flags(profiler: tuple[str, str]) -> tuple[list[str], list[str]]:
@@ -671,15 +660,14 @@ def rocprof_record(
     *,
     cwd: pathlib.Path,
     timeout: float,
-    tool: str,
     exe: str,
     plan: seal.SealPlan | None,
 ) -> subprocess.CompletedProcess[str]:
-    """Trace ``argv`` under ``tool``, writing reports into ``outdir``; returns the completed process. The
+    """Trace ``argv`` under ``rocprofv3`` (``exe``), writing reports into ``outdir``; returns the completed process. The
     environment is inherited plus :data:`ROCPROF_CHILD_ENV`; the caller decides the verdict. ``plan``
     seals the whole command, tracer included (:func:`child_argv`); ``outdir`` must be in its work area."""
     outdir.mkdir(parents=True, exist_ok=True)
-    cmd = seal.wrap(plan, rocprof_command(tool, exe, argv, outdir))
+    cmd = seal.wrap(plan, rocprof_command(exe, argv, outdir))
     return run_command(cmd, env={**os.environ, **ROCPROF_CHILD_ENV}, cwd=str(cwd), timeout=timeout)
 
 
@@ -692,14 +680,9 @@ def rocprof_csv(outdir: pathlib.Path, suffix: str) -> pathlib.Path | None:
 def rocprof_reports(
     outdir: pathlib.Path, *, tool: str, proc: subprocess.CompletedProcess[str]
 ) -> dict[str, list[CsvRow]]:
-    """What ``tool`` left in ``outdir`` as ``{report suffix: rows}`` keyed by :data:`ROCPROF_REPORTS`
-    (legacy ``rocprof`` fills only the kernel entry). ``proc`` distinguishes a refusal from an empty
-    answer (``rocprof_report_missing``)."""
-    if tool == "rocprofv3":
-        found: dict[str, pathlib.Path | None] = {suffix: rocprof_csv(outdir, suffix) for suffix in ROCPROF_REPORTS}
-    else:
-        found = {suffix: None for suffix in ROCPROF_REPORTS}
-        found[KERNEL_STATS_CSV] = rocprof_csv(outdir, LEGACY_STATS_CSV)
+    """What ``tool`` left in ``outdir`` as ``{report suffix: rows}`` keyed by :data:`ROCPROF_REPORTS`.
+    ``proc`` distinguishes a refusal from an empty answer (``rocprof_report_missing``)."""
+    found: dict[str, pathlib.Path | None] = {suffix: rocprof_csv(outdir, suffix) for suffix in ROCPROF_REPORTS}
     if found[KERNEL_STATS_CSV] is None:
         raise rocprof_failure(proc, tool)
     return {suffix: parse_csv(path.read_text()) if path else [] for suffix, path in found.items()}
@@ -719,12 +702,10 @@ def rocprof_failure(proc: subprocess.CompletedProcess[str], tool: str) -> GpuPro
         return GpuProfilerUnavailable(
             "rocprof_failed", f"{tool} exited {proc.returncode} without a kernel report: {detail or 'no output'}"
         )
-    expected = KERNEL_STATS_CSV if tool == "rocprofv3" else LEGACY_STATS_CSV
     return GpuProfilerUnavailable(
         "rocprof_report_missing",
-        f"{tool} exited 0 but wrote no '*{expected}': this build does not support "
-        "'--stats' in the form asked for. rocprofv3 (ROCm >= 6.2) is the supported tool; rocprof v1 is "
-        f"deprecated and writes only '*{LEGACY_STATS_CSV}'",
+        f"{tool} exited 0 but wrote no '*{KERNEL_STATS_CSV}': this build does not support "
+        "'--stats' in the form asked for (rocprofv3 needs ROCm >= 6.2)",
     )
 
 
@@ -1080,7 +1061,7 @@ def profile_nvidia_once(
 def profile_amd_once(
     root: pathlib.Path, request_file: pathlib.Path, *, profiler: tuple[str, str], timeout: float, min_percent: float
 ) -> GpuRun:
-    """Trace one run under ``rocprofv3`` (or ``rocprof``) and read its CSVs. ``profiler`` is from
+    """Trace one run under ``rocprofv3`` and read its CSVs. ``profiler`` is from
     :func:`rocprof_check`. The workload's own failure is reported first. Copy volume is ``null``."""
     tool, exe = profiler
     outdir = root / ROCPROF_OUTDIR
@@ -1090,7 +1071,6 @@ def profile_amd_once(
         outdir,
         cwd=root,
         timeout=timeout,
-        tool=tool,
         exe=exe,
         plan=plan,
     )
