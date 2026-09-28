@@ -76,12 +76,12 @@ The `alps` URL uses the IP address because Daint resolving Beverin node names is
 
 ## 5. Adding an engine: vLLM
 
-Facts from the vLLM 0.23.0 image:
+Facts from the vLLM 0.28.0 image:
 
 - The key comes from `--api-key` or `VLLM_API_KEY` (`vllm/entrypoints/openai/api_server.py`). Set the
   variable inside the server step, e.g. `bash -c 'VLLM_API_KEY="$(cat <file>)" exec vllm serve ...'`;
   `srun ... env VLLM_API_KEY=<key>` would put it on argv.
-- Auth covers only paths under `/v1`, `/v2`, `/inference` (`GUARDED_PREFIX` in
+- Auth covers only paths under `/v1`, `/v2`, `/inference`, `/cohere` (`GUARDED_PREFIX` in
   `vllm/entrypoints/serve/utils/server_utils.py`); `/health` and every other route are open. A vLLM
   preset stays `tunnel`-only until those routes are listed and judged.
 
