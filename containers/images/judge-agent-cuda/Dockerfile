@@ -608,8 +608,8 @@ RUN set -eux; \
       || { echo "spack built a Slurm: the image must launch under any host Slurm" >&2; exit 1; }; \
     ! readelf -d /opt/view/lib/libmpi.so | grep 'NEEDED.*libslurm' \
       || { echo "libmpi links libslurm: the image must launch under any host Slurm" >&2; exit 1; }; \
-    nm -D /opt/view/lib/libmpi.so /opt/view/lib/libpmi*.so 2>/dev/null | grep -q ' T PMI2_Init$' \
-      || { echo "no built-in PMI-2 client: srun --mpi=pmi2 cannot launch this MPICH" >&2; exit 1; }; \
+    strings /opt/view/lib/libmpi.so | grep -qx 'fullinit' \
+      || { echo "no built-in PMI-2 client (wire cmd fullinit): srun --mpi=pmi2 cannot launch it" >&2; exit 1; }; \
     command -v mpiexec >/dev/null \
       || { echo "no mpiexec: hydra was dropped; mpiexec -launcher fork keeps ranks in the container" >&2; exit 1; }; \
     libmpi="$(ls /opt/view/lib/libmpi.so* 2>/dev/null | head -1)"; \
@@ -917,6 +917,7 @@ RUN set -eux; \
       esac; \
       ln -sf "${target}" "/usr/local/bin/${wrapper}.mpich"; \
     done; \
+    ln -sf /opt/view/bin/hydra_pmi_proxy /usr/local/bin/hydra_pmi_proxy; \
     printf '%s\n' '#include <mpi.h>' 'int main(int argc, char **argv) {' \
       '  int size = 0; MPI_Init(&argc, &argv); MPI_Comm_size(MPI_COMM_WORLD, &size);' \
       '  MPI_Finalize(); return size > 0 ? 0 : 1; }' > /tmp/mpi_probe.c; \
