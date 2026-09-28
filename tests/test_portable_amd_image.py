@@ -250,3 +250,38 @@ def test_verify_only_reverifies_the_candidates_without_building(tmp_path: pathli
     for target, profile in (("agent", "judge-agent-amd"), ("judge", "judge")):
         marker = pathlib.Path(f"{images[target]}.verified").read_text(encoding="utf-8")
         assert marker == f"verified profile={profile} job=7 digest=sha256:abc\n", target
+
+
+def test_a_native_build_is_asked_for_by_name_and_otherwise_refused() -> None:
+    native = run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; ce_spack_target && printf "[%s]" "${SPACK_TARGET}"',
+            "bash",
+            str(CE / "build_common.sh"),
+        ],
+        {"CE_CPU_TARGET": "native"},
+    )
+    assert native.returncode == 0, native.stderr
+    assert native.stdout.endswith("[]"), "native is spack's host detection: an empty SPACK_TARGET"
+    other = run(
+        ["bash", "-c", 'source "$1"; ce_spack_target', "bash", str(CE / "build_common.sh")], {"CE_CPU_TARGET": "zen4"}
+    )
+    assert other.returncode == 2
+    assert "native or unset" in other.stderr
+
+
+@pytest.mark.parametrize("recipe", ["judge-agent-amd", "judge-agent-cpu"])
+def test_every_spack_image_labels_its_cpu_target_after_declaring_it(recipe: str) -> None:
+    docker = (CE / recipe / "Dockerfile").read_text(encoding="utf-8")
+    label = 'LABEL org.hpcagent-bench.cpu-target="${SPACK_TARGET:-native}"'
+    assert label in docker
+    assert docker.index("ARG SPACK_TARGET=") < docker.index(label), "the label reads SPACK_TARGET before it is declared"
+
+
+def test_push_image_refuses_a_native_build() -> None:
+    push = (CE / "push_image.sh").read_text(encoding="utf-8")
+    assert '{{ index .Labels "org.hpcagent-bench.cpu-target" }}' in push
+    assert '[[ "${cpu_target}" != native ]]' in push
+    assert push.index("cpu_target=") < push.index('"${PODMAN[@]}" push'), "the check runs after the upload"

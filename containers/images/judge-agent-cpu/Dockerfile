@@ -160,6 +160,8 @@ ARG SPACK_BUILD_JOBS=64
 # CPU of its family.
 ARG SPACK_TARGET=
 ARG MARCH=native
+# What a registry reader needs to know before pulling: the CPU baseline, or native (not publishable).
+LABEL org.hpcagent-bench.cpu-target="${SPACK_TARGET:-native}"
 ENV SPACK_ROOT=/opt/spack \
     SPACK_ENV_DIR=/opt/spack-env \
     SPACK_DISABLE_LOCAL_CONFIG=true \

@@ -151,6 +151,8 @@ ARG SPACK_PACKAGES_REF=3936d6c1796a095cd29f24f3082a5f32f4b5f938
 # cpu_target.env's portable baseline instead, so a published image runs on every CPU of its family
 # and takes AVX-512 through the libraries that dispatch at run time.
 ARG SPACK_TARGET=
+# What a registry reader needs to know before pulling: the CPU baseline, or native (not publishable).
+LABEL org.hpcagent-bench.cpu-target="${SPACK_TARGET:-native}"
 
 ENV LC_ALL=C \
     PLAYWRIGHT_BROWSERS_PATH=/opt/playwright \

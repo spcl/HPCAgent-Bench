@@ -115,6 +115,10 @@ printf 'source manifest: %s\n' "${manifest}"
 printf 'pushing as:      application/vnd.oci.image.manifest.v1+json (forced with --format oci)\n'
 
 (($# == 1)) || { echo "push_image.sh: exactly one tag, got $#: $*" >&2; exit 2; }
+# A native build (CE_CPU_TARGET=native) runs only on CPUs like the one that built it.
+cpu_target="$("${PODMAN[@]}" image inspect --format '{{ index .Labels "org.hpcagent-bench.cpu-target" }}' "${LOCAL_TAG}")"
+[[ "${cpu_target}" != native ]] \
+    || { echo "push_image.sh: ${LOCAL_TAG} is a native build; publish only the portable baseline" >&2; exit 2; }
 target="${PUSH_REPO}:$1"
 echo "pushing ${target} ($("${PODMAN[@]}" image inspect --format '{{.Digest}}' "${LOCAL_TAG}"))"
 "${PODMAN[@]}" tag "${LOCAL_TAG}" "${target}"

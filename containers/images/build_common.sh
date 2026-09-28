@@ -169,9 +169,17 @@ ce_amd_targets() {
     printf 'gpu targets %s\n' "${ROCM_ARCH}"
 }
 
-# Exports SPACK_TARGET, cpu_target.env's portable baseline for this CPU family (uname -m).
+# Exports SPACK_TARGET, cpu_target.env's portable baseline for this CPU family (uname -m), which the
+# published images use. CE_CPU_TARGET=native exports it empty instead: spack's host detection, an
+# image tuned for this machine's CPU that push_image.sh refuses to publish.
 ce_spack_target() {
     local family
+    if [[ "${CE_CPU_TARGET:-}" == native ]]; then
+        export SPACK_TARGET=""
+        printf 'spack target native (this machine; not publishable)\n'
+        return 0
+    fi
+    [[ -z "${CE_CPU_TARGET:-}" ]] || { echo "CE_CPU_TARGET is native or unset, got '${CE_CPU_TARGET}'" >&2; return 2; }
     family="$(uname -m)"
     SPACK_TARGET="$(sed -n "s/^SPACK_TARGET_${family}=//p" "${CE_IMAGES_DIR}/cpu_target.env")"
     if [[ ! "${SPACK_TARGET}" =~ ^[a-z0-9_.]+$ ]]; then

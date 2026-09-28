@@ -51,7 +51,7 @@ inference, agent and judge node counts; the allocation must equal their sum.
 cp experiments/layers/site-cscs.env experiments/layers/site.env   # once: partition, scratch roots
 export SBATCH_ACCOUNT=<project>
 . experiments/env.sh
-sbatch containers/images/pull_images.sbatch                       # once per cluster
+sbatch containers/images/pull_images.sbatch                       # once per cluster: download (portable)
 containers/images/install_edfs.sh
 
 cd experiments
@@ -60,6 +60,8 @@ TAG=llr-focus40 SUBMIT=1 ./submit.sh
 squeue -u "$USER" -o "%.10i %.30j %.9T %.10M %.5D %R"
 ```
 
+The download is the default. To build the images natively for your CPU instead (faster libraries,
+not portable), see [containers/README.md](containers/README.md#getting-the-images-download-default-or-build-natively).
 Never pass `--account` (every job bills `SBATCH_ACCOUNT`) or `--nodes` by hand. Sizing, watching
 a run and traps: [`experiments/SUBMITTING.md`](experiments/SUBMITTING.md).
 
