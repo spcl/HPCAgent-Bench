@@ -3,7 +3,7 @@
 import ast
 import copy
 
-from hpcagent_bench.translators.numpyto_common.ast_build import const_int
+from hpcagent_bench.translators.numpyto_common.ast_build import const_int, range_for
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import broadcast_extents, iter_extent_of
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import const_or_name
@@ -278,14 +278,7 @@ class ScatterAtRewriter(ast.NodeTransformer):
             )
         body: list[ast.stmt] = [stmt]
         for it, ext in zip(reversed(iters + trail_iters), reversed(tuple(bound) + trail)):  # nest deepest-last
-            body = [
-                ast.For(
-                    target=ast.Name(id=it, ctx=ast.Store()),
-                    iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[const_or_name(ext)], keywords=[]),
-                    body=body,
-                    orelse=[],
-                )
-            ]
+            body = [range_for(it, [const_or_name(ext)], body)]
         return ast.copy_location(body[0], node)
 
     def multi_index_scatter(self, node, op, target: ast.Name, idx_tuple: ast.Tuple, vals: ast.expr) -> ast.AST:
@@ -347,12 +340,5 @@ class ScatterAtRewriter(ast.NodeTransformer):
             # ``iter_extent_of`` already returns each extent as an AST node
             # (a Name like ``nproma`` or a computed length), so it is the
             # loop's ``range`` bound directly.
-            body = [
-                ast.For(
-                    target=ast.Name(id=iters[d], ctx=ast.Store()),
-                    iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[copy.deepcopy(ext[d])], keywords=[]),
-                    body=body,
-                    orelse=[],
-                )
-            ]
+            body = [range_for(iters[d], [copy.deepcopy(ext[d])], body)]
         return ast.copy_location(body[0], node)

@@ -4,7 +4,7 @@ import ast
 from collections.abc import Callable, Iterable, Sequence
 from typing import Any
 
-from hpcagent_bench.translators.numpyto_common.ast_build import const_int
+from hpcagent_bench.translators.numpyto_common.ast_build import const_int, range_for
 from hpcagent_bench.translators.numpyto_common.subscripts import is_full_slice
 
 __all__ = [
@@ -82,14 +82,7 @@ def wrap_for_loops(iters: list[str], bounds: Sequence[str | ast.expr], body: lis
     out = body
     for var, bound in zip(reversed(iters), reversed(bounds)):
         bound_node = const_or_name(bound) if isinstance(bound, str) else bound
-        out = [
-            ast.For(
-                target=store_(var),
-                iter=ast.Call(func=name_("range"), args=[bound_node], keywords=[]),
-                body=out,
-                orelse=[],
-            )
-        ]
+        out = [range_for(var, [bound_node], out)]
     return out
 
 

@@ -4,10 +4,14 @@ import ast
 import copy
 from collections.abc import Iterable
 
-from hpcagent_bench.translators.numpyto_common.ast_build import const_int, numpy_attribute
+from hpcagent_bench.translators.numpyto_common.ast_build import (
+    NESTED_BLOCK_FIELDS,
+    const_int,
+    map_blocks,
+    numpy_attribute,
+)
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.frontend.initialize import FRAMEWORK_DTYPE_ALIASES
-from hpcagent_bench.translators.numpyto_common.frontend.manifest import field_nodes
 from hpcagent_bench.translators.numpyto_common.frontend.none_folding import (
     FoldStaticNoneBranches,
     PeelNoneSeededAccumulators,
@@ -248,11 +252,7 @@ def drop_dead_slice_bindings(fn: ast.FunctionDef, folds: set[str]) -> None:
     def prune(body: list[ast.stmt]) -> list[ast.stmt]:
         out: list[ast.stmt] = []
         for stmt in body:
-            # An ast node keeps its fields in ``__dict__``, and most node types carry none of these.
-            for field in ("body", "orelse", "finalbody"):
-                nested: list[object] = field_nodes(vars(stmt).get(field))
-                if nested:
-                    setattr(stmt, field, prune([n for n in nested if isinstance(n, ast.stmt)]))
+            map_blocks(stmt, prune, (*NESTED_BLOCK_FIELDS, "finalbody"))
             if (
                 isinstance(stmt, ast.Assign)
                 and len(stmt.targets) == 1

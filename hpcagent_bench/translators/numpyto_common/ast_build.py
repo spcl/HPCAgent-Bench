@@ -3,16 +3,20 @@
 
 import ast
 import copy
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 
 __all__ = [
+    "NESTED_BLOCK_FIELDS",
     "RenameNames",
     "SubstituteLoads",
     "const_int",
     "expr_of",
     "literal_loads",
+    "map_blocks",
+    "map_statement_lists",
     "numpy_attribute",
     "numpy_call",
+    "range_for",
 ]
 
 
@@ -77,3 +81,34 @@ class RenameNames(ast.NodeTransformer):
     def visit_arg(self, node: ast.arg) -> ast.AST:
         node.arg = self.renames.get(node.arg, node.arg)
         return node
+
+
+def range_for(var: str, bounds: list[ast.expr], body: list[ast.stmt]) -> ast.For:
+    """Build ``for <var> in range(*bounds): <body>``."""
+    return ast.For(
+        target=ast.Name(id=var, ctx=ast.Store()),
+        iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=bounds, keywords=[]),
+        body=body,
+        orelse=[],
+    )
+
+
+#: The fields a compound statement keeps its nested statement lists in (``try`` adds ``finalbody``).
+NESTED_BLOCK_FIELDS = ("body", "orelse")
+
+
+def map_blocks(
+    stmt: ast.AST, rewrite: Callable[[list[ast.stmt]], list[ast.stmt]], fields: tuple[str, ...] = NESTED_BLOCK_FIELDS
+) -> None:
+    """Replace each statement list ``stmt`` holds under ``fields`` by ``rewrite`` of it, in place."""
+    for field, value in ast.iter_fields(stmt):
+        if field in fields and isinstance(value, list):
+            setattr(stmt, field, rewrite(value))
+
+
+def map_statement_lists(root: ast.AST, rewrite: Callable[[list[ast.stmt]], list[ast.stmt]]) -> None:
+    """Replace every statement list anywhere under ``root`` (bodies, branches, handlers) by ``rewrite`` of it."""
+    for node in ast.walk(root):
+        for field, value in ast.iter_fields(node):
+            if isinstance(value, list) and any(isinstance(v, ast.stmt) for v in value):
+                setattr(node, field, rewrite(value))

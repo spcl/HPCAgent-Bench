@@ -3,7 +3,7 @@
 import ast
 import copy
 
-from hpcagent_bench.translators.numpyto_common.ast_build import SubstituteLoads
+from hpcagent_bench.translators.numpyto_common.ast_build import SubstituteLoads, map_blocks
 from hpcagent_bench.translators.numpyto_common.frontend.helper_params import ConstArg
 from hpcagent_bench.translators.numpyto_common.frontend.inlining import collect_assigned_names, fold_constant_branches
 from hpcagent_bench.translators.numpyto_common.frontend.none_folding import FoldStaticNoneBranches
@@ -118,10 +118,7 @@ def drop_unreachable_after_return(stmts: list[ast.stmt]) -> list[ast.stmt]:
     """
     out: list[ast.stmt] = []
     for stmt in stmts:
-        for field in ("body", "orelse"):
-            value = vars(stmt).get(field)
-            if isinstance(value, list):
-                setattr(stmt, field, drop_unreachable_after_return(value))
+        map_blocks(stmt, drop_unreachable_after_return)
         out.append(stmt)
         if isinstance(stmt, ast.Return):
             break

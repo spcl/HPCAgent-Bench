@@ -3,9 +3,10 @@
 import ast
 import copy
 
+from hpcagent_bench.translators.numpyto_common.ast_build import map_blocks, range_for
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of
-from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import const_, const_or_name
+from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import const_, wrap_for_loops
 from hpcagent_bench.translators.numpyto_common.lowering.indexing import has_negative_step, is_scalar_index, view_offset
 from hpcagent_bench.translators.numpyto_common.lowering.slice_fusion import strided_trip_count
 from hpcagent_bench.translators.numpyto_common.lowering.subscriptify import SubscriptifyNames
@@ -107,16 +108,7 @@ class BooleanMaskRewriter(ast.NodeTransformer):
         else:
             inner = ast.AugAssign(target=lhs_sub, op=aug_op, value=rhs_scalar)
         guarded = ast.If(test=mask_scalar, body=[inner], orelse=[])
-        out: list[ast.stmt] = [guarded]
-        for var, bound in zip(reversed(iters), reversed(list(shape))):
-            out = [
-                ast.For(
-                    target=ast.Name(id=var, ctx=ast.Store()),
-                    iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[const_or_name(bound)], keywords=[]),
-                    body=out,
-                    orelse=[],
-                )
-            ]
+        out = wrap_for_loops(iters, list(shape), [guarded])
         return out
 
     def axis_mask(self, tup, lhs_shape, lhs_name):
@@ -424,9 +416,7 @@ class BooleanMaskReductionRewriter(ast.NodeTransformer):
                     i = j
                     continue
             # Recurse into nested compound bodies.
-            for attr in ("body", "orelse"):
-                if isinstance(vars(stmt).get(attr), list):
-                    setattr(stmt, attr, self.walk_body(vars(stmt)[attr]))
+            map_blocks(stmt, self.walk_body)
             out.append(stmt)
             i += 1
         return out
@@ -610,14 +600,7 @@ class BooleanMaskReductionRewriter(ast.NodeTransformer):
                 ast.AugAssign(target=ast.Name(id=sum_name, ctx=ast.Store()), op=ast.Add(), value=arr_load),
                 ast.AugAssign(target=ast.Name(id=cnt_name, ctx=ast.Store()), op=ast.Add(), value=ast.Constant(value=1)),
             ]
-            out.append(
-                ast.For(
-                    target=ast.Name(id=i_name, ctx=ast.Store()),
-                    iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[n_expr], keywords=[]),
-                    body=[ast.If(test=mask_load, body=body, orelse=[])],
-                    orelse=[],
-                )
-            )
+            out.append(range_for(i_name, [n_expr], [ast.If(test=mask_load, body=body, orelse=[])]))
             out.append(
                 ast.Assign(
                     targets=[ast.Name(id=res_name, ctx=ast.Store())],
@@ -631,14 +614,7 @@ class BooleanMaskReductionRewriter(ast.NodeTransformer):
         elif op == "sum":
             out.append(ast.Assign(targets=[ast.Name(id=res_name, ctx=ast.Store())], value=ast.Constant(value=0.0)))
             body = [ast.AugAssign(target=ast.Name(id=res_name, ctx=ast.Store()), op=ast.Add(), value=arr_load)]
-            out.append(
-                ast.For(
-                    target=ast.Name(id=i_name, ctx=ast.Store()),
-                    iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[n_expr], keywords=[]),
-                    body=[ast.If(test=mask_load, body=body, orelse=[])],
-                    orelse=[],
-                )
-            )
+            out.append(range_for(i_name, [n_expr], [ast.If(test=mask_load, body=body, orelse=[])]))
         elif op in {"max", "min"}:
             # The FIRST masked hit seeds the accumulator; subsequent hits
             # compare and update. Seeding from ``arr[0]`` unconditionally would
@@ -665,14 +641,7 @@ class BooleanMaskReductionRewriter(ast.NodeTransformer):
                 orelse=[],
             )
             body = [update, ast.Assign(targets=[ast.Name(id=cnt_name, ctx=ast.Store())], value=ast.Constant(value=1))]
-            out.append(
-                ast.For(
-                    target=ast.Name(id=i_name, ctx=ast.Store()),
-                    iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[n_expr], keywords=[]),
-                    body=[ast.If(test=mask_load, body=body, orelse=[])],
-                    orelse=[],
-                )
-            )
+            out.append(range_for(i_name, [n_expr], [ast.If(test=mask_load, body=body, orelse=[])]))
         else:
             return None
         for s in out:

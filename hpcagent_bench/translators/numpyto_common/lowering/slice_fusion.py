@@ -3,14 +3,15 @@
 import ast
 import copy
 
+from hpcagent_bench.translators.numpyto_common.ast_build import range_for
 from hpcagent_bench.translators.numpyto_common.lib_nodes.dims import shape_exprs_equal
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of, span_multiple_of
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
+    const_,
+    const_or_name,
     slice_step_any,
     step_is_negative,
     step_node,
-    const_,
-    const_or_name,
 )
 from hpcagent_bench.translators.numpyto_common.lowering.complex import infer_complex_dtype
 from hpcagent_bench.translators.numpyto_common.lowering.indexing import (
@@ -192,14 +193,7 @@ class SliceFusion(ast.NodeTransformer):
                 continue
             lo, hi = ranges[axis][0], ranges[axis][1]
             ivar = iter_vars[axis]
-            body = [
-                ast.For(
-                    target=ast.Name(id=ivar.id, ctx=ast.Store()),
-                    iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[lo, hi], keywords=[]),
-                    body=body,
-                    orelse=[],
-                )
-            ]
+            body = [range_for(ivar.id, [lo, hi], body)]
         if hoister.staged:
             return [*hoister.staged, *body]
         return body[0] if len(body) == 1 else body

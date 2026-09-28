@@ -3,7 +3,7 @@
 import ast
 import copy
 
-from hpcagent_bench.translators.numpyto_common.ast_build import const_int
+from hpcagent_bench.translators.numpyto_common.ast_build import const_int, map_statement_lists
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.emit_helpers.tokens import IDENT_RE
 from hpcagent_bench.translators.numpyto_common.frontend.body_rewrites import FoldTupleLocals
@@ -513,10 +513,7 @@ def fold_dtype_aliases(fn: ast.FunctionDef) -> None:
             value = aliases.get(node.id) if isinstance(node.ctx, ast.Load) else None
             return ast.copy_location(copy.deepcopy(value), node) if value is not None else node
 
-    for node in ast.walk(fn):
-        for field, seq in ast.iter_fields(node):
-            if isinstance(seq, list) and any(isinstance(s, ast.stmt) for s in seq):
-                setattr(node, field, [s for s in seq if bind_of(s) is None])
+    map_statement_lists(fn, lambda block: [s for s in block if bind_of(s) is None])
     Fold().visit(fn)
     ast.fix_missing_locations(fn)
 

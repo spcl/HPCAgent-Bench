@@ -28,9 +28,10 @@ Entry point: :func:`desugar_tuples`.
 
 import ast
 import copy
+import functools
 from typing import Any
 
-from hpcagent_bench.translators.numpyto_common.ast_build import SubstituteLoads
+from hpcagent_bench.translators.numpyto_common.ast_build import SubstituteLoads, map_statement_lists
 from hpcagent_bench.translators.numpyto_common.numpy_desugar import expr_rank
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
 
@@ -925,13 +926,15 @@ def collapse_capture_aliases(fn: ast.FunctionDef, captured: list[tuple[str, str]
         # Two captures of one name would chain through each other; leave both alone.
         if minted[name] != 1 or written_after_capture(fn, alias, name):
             continue
-        for node in ast.walk(fn):
-            for field, value in ast.iter_fields(node):
-                if isinstance(value, list) and any(isinstance(v, ast.stmt) for v in value):
-                    setattr(node, field, [s for s in value if not is_capture_bind(s, alias, name)])
+        map_statement_lists(fn, functools.partial(without_capture_binds, alias=alias, name=name))
         for node in ast.walk(fn):
             if isinstance(node, ast.Name) and node.id == alias:
                 node.id = name
+
+
+def without_capture_binds(block: list[ast.stmt], alias: str, name: str) -> list[ast.stmt]:
+    """``block`` minus its ``alias = name`` capture binds."""
+    return [s for s in block if not is_capture_bind(s, alias, name)]
 
 
 def is_capture_bind(stmt: ast.stmt, alias: str, name: str) -> bool:
@@ -1007,10 +1010,7 @@ def drop_dead_none_bindings(fn: ast.FunctionDef) -> None:
             out.append(stmt)
         return out
 
-    for node in ast.walk(fn):
-        for field, value in ast.iter_fields(node):
-            if isinstance(value, list) and any(isinstance(v, ast.stmt) for v in value):
-                setattr(node, field, prune(value))
+    map_statement_lists(fn, prune)
 
 
 def none_sentinel_uses(fn: ast.FunctionDef) -> tuple[OrderedSet, OrderedSet]:

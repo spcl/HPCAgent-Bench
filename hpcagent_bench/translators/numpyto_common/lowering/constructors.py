@@ -3,7 +3,7 @@
 import ast
 import copy
 
-from hpcagent_bench.translators.numpyto_common.ast_build import numpy_attribute
+from hpcagent_bench.translators.numpyto_common.ast_build import numpy_attribute, range_for
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.lib_nodes.dims import NP_ZEROS_ALIASES
 from hpcagent_bench.translators.numpyto_common.lowering.hoisting import StmtHoister
@@ -301,10 +301,10 @@ class EyeToZerosDiagonal(ast.NodeTransformer):
                 keywords=dtype_kw,
             ),
         )
-        loop = ast.For(
-            target=ast.Name(id=it, ctx=ast.Store()),
-            iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[count], keywords=[]),
-            body=[
+        loop = range_for(
+            it,
+            [count],
+            [
                 ast.Assign(
                     targets=[
                         ast.Subscript(
@@ -316,7 +316,6 @@ class EyeToZerosDiagonal(ast.NodeTransformer):
                     value=ast.Constant(value=1.0),
                 )
             ],
-            orelse=[],
         )
         for s in (zeros, loop):
             ast.copy_location(s, node)
@@ -545,13 +544,6 @@ class MgridLowering(ast.NodeTransformer):
                     if isinstance(ax_lo, ast.Constant) and ax_lo.value == 0
                     else ast.BinOp(left=ax_hi, op=ast.Sub(), right=ax_lo)
                 )
-                stmt = [
-                    ast.For(
-                        target=ast.Name(id=it.id, ctx=ast.Store()),
-                        iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[bound], keywords=[]),
-                        body=stmt,
-                        orelse=[],
-                    )
-                ]
+                stmt = [range_for(it.id, [bound], stmt)]
             out.extend(stmt)
         return out

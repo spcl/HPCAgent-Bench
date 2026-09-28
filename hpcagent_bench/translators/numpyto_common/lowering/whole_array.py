@@ -6,7 +6,7 @@ from types import NotImplementedType
 from typing import Any
 
 from hpcagent_bench.translators.numpyto_common import dtypes
-from hpcagent_bench.translators.numpyto_common.ast_build import numpy_attribute
+from hpcagent_bench.translators.numpyto_common.ast_build import numpy_attribute, range_for
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.frontend import fold_shape_expr, substitute_inlined_scalar_defs
 from hpcagent_bench.translators.numpyto_common.lib_nodes.constructors import MESHGRID_AXIS_KW, expand_meshgrid
@@ -16,7 +16,12 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import (
     is_integer_expr,
     iter_extent_of,
 )
-from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import const_, const_or_name, slice_step_any
+from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
+    const_,
+    const_or_name,
+    slice_step_any,
+    wrap_for_loops,
+)
 from hpcagent_bench.translators.numpyto_common.lib_nodes.scalarize import scalarize_at_iters
 from hpcagent_bench.translators.numpyto_common.lowering.complex import (
     ctor_complex_tag,
@@ -301,16 +306,7 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
             body = [ast.Assign(targets=[lhs_sub], value=rhs)]
         else:
             body = [ast.AugAssign(target=lhs_sub, op=op, value=rhs)]
-        out = body
-        for var, bound in zip(reversed(iters), reversed(shape)):
-            out = [
-                ast.For(
-                    target=ast.Name(id=var, ctx=ast.Store()),
-                    iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[const_or_name(bound)], keywords=[]),
-                    body=out,
-                    orelse=[],
-                )
-            ]
+        out = wrap_for_loops(iters, shape, body)
         # Prepend a ``Name = __hpcagent_bench_zeros__("__reassign__", self_ref)`` marker so
         # the source-order shape resolver (``ResolveArrShape``) can pick
         # up the THEN-current shape of the LHS. The marker is a no-op at
@@ -369,17 +365,7 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
             value=ast.Name(id=name, ctx=ast.Load()), slice=ast.Tuple(elts=full_idx, ctx=ast.Load()), ctx=ast.Store()
         )
         rhs = SubscriptifyNames(self.shape_table, iters).visit(copy.deepcopy(value))
-        out: list[ast.stmt] = [ast.Assign(targets=[lhs_sub], value=rhs)]
-        for var, bound in zip(reversed(iters), reversed(remaining)):
-            out = [
-                ast.For(
-                    target=ast.Name(id=var, ctx=ast.Store()),
-                    iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[const_or_name(bound)], keywords=[]),
-                    body=out,
-                    orelse=[],
-                )
-            ]
-        return out
+        return wrap_for_loops(iters, remaining, [ast.Assign(targets=[lhs_sub], value=rhs)])
 
     def buffered_scatter(
         self,
@@ -613,14 +599,7 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
         store = ast.Subscript(value=ast.Name(id=target.id, ctx=ast.Load()), slice=out_slot, ctx=ast.Store())
         body: list[ast.stmt] = [ast.Assign(targets=[store], value=src)]
         for it, dim in zip(reversed(iters), reversed(dims)):
-            body = [
-                ast.For(
-                    target=ast.Name(id=it, ctx=ast.Store()),
-                    iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[copy.deepcopy(dim)], keywords=[]),
-                    body=body,
-                    orelse=[],
-                )
-            ]
+            body = [range_for(it, [copy.deepcopy(dim)], body)]
         self.shape_table[target.id] = tuple(ast.unparse(d) for d in dims)
         dt = self.local_dtypes.get(arr.id)
         if dt is not None:
@@ -655,14 +634,7 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
         )
         body: list[ast.stmt] = [stmt]
         for it, dim in zip(reversed(iters), reversed(dims)):
-            body = [
-                ast.For(
-                    target=ast.Name(id=it, ctx=ast.Store()),
-                    iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[copy.deepcopy(dim)], keywords=[]),
-                    body=body,
-                    orelse=[],
-                )
-            ]
+            body = [range_for(it, [copy.deepcopy(dim)], body)]
         for s in body:
             ast.fix_missing_locations(s)
         return body
@@ -1246,17 +1218,7 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
         leaf: ast.stmt = (
             ast.Assign(targets=[lhs_sub], value=rhs) if op is None else ast.AugAssign(target=lhs_sub, op=op, value=rhs)
         )
-        out: list[ast.stmt] = [leaf]
-        for var, bound in zip(reversed(iters), reversed(trailing)):
-            out = [
-                ast.For(
-                    target=ast.Name(id=var, ctx=ast.Store()),
-                    iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[const_or_name(bound)], keywords=[]),
-                    body=out,
-                    orelse=[],
-                )
-            ]
-        return out
+        return wrap_for_loops(iters, trailing, [leaf])
 
 
 def is_plain_unit_slice(e: ast.Slice) -> bool:
@@ -1312,10 +1274,5 @@ class IndexArraysAtIter(ast.NodeTransformer):
 def nest_at_iters(body_stmt: ast.stmt, iters: list[str], bounds: list[ast.expr]) -> ast.stmt:
     """``body_stmt`` in ``for iter in range(bound)`` loops, the first iter outermost."""
     for ivar, bound in zip(reversed(iters), reversed(bounds)):
-        body_stmt = ast.For(
-            target=ast.Name(id=ivar, ctx=ast.Store()),
-            iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[copy.deepcopy(bound)], keywords=[]),
-            body=[body_stmt],
-            orelse=[],
-        )
+        body_stmt = range_for(ivar, [copy.deepcopy(bound)], [body_stmt])
     return body_stmt

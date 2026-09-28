@@ -4,7 +4,7 @@ import ast
 import copy
 from collections.abc import Callable
 
-from hpcagent_bench.translators.numpyto_common.ast_build import numpy_attribute
+from hpcagent_bench.translators.numpyto_common.ast_build import numpy_attribute, range_for
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.statement_desugar import bind, element_read, indexed_loop, pair_names
 
@@ -322,19 +322,10 @@ class ScalarTimesMatmulRewriter(ast.NodeTransformer):
                     out = body
                     for v, b in zip(reversed(iters), reversed(shape)):
                         out = [
-                            ast.For(
-                                target=ast.Name(id=v, ctx=ast.Store()),
-                                iter=ast.Call(
-                                    func=ast.Name(id="range", ctx=ast.Load()),
-                                    args=[
-                                        ast.Name(id=b, ctx=ast.Load())
-                                        if not b.isdigit()
-                                        else ast.Constant(value=int(b))
-                                    ],
-                                    keywords=[],
-                                ),
-                                body=out,
-                                orelse=[],
+                            range_for(
+                                v,
+                                [ast.Name(id=b, ctx=ast.Load()) if not b.isdigit() else ast.Constant(value=int(b))],
+                                out,
                             )
                         ]
                     self.pre_stmts.extend(out)

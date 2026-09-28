@@ -3,7 +3,7 @@
 import ast
 import copy
 
-from hpcagent_bench.translators.numpyto_common.ast_build import numpy_attribute, numpy_call
+from hpcagent_bench.translators.numpyto_common.ast_build import numpy_attribute, numpy_call, range_for
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module, numpy_call_attr
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import RankedRewritePass, RewritePass
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.hoist import HoistForm, ValueHoist
@@ -222,12 +222,7 @@ class FillDiagonalInline(ast.NodeTransformer):
             ],
             value=val,
         )
-        loop = ast.For(
-            target=ast.Name(id=it, ctx=ast.Store()),
-            iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[bound], keywords=[]),
-            body=[store],
-            orelse=[],
-        )
+        loop = range_for(it, [bound], [store])
         return ast.fix_missing_locations(ast.copy_location(loop, node))
 
 

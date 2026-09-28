@@ -9,6 +9,7 @@ from collections.abc import Callable
 from typing import Optional
 
 from hpcagent_bench.translators.numpyto_common import dtypes, operators, parallelism
+from hpcagent_bench.translators.numpyto_common.ast_build import map_blocks
 from hpcagent_bench.translators.numpyto_common.emit_helpers import fftw
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import (
     CONJ_ATTRS,
@@ -2859,10 +2860,7 @@ def hoist_ifexp_stmts(stmts: list[ast.stmt], hoister: HoistIfExpVisitor) -> list
     """
     out: list[ast.stmt] = []
     for stmt in stmts:
-        for field in ("body", "orelse"):
-            value = vars(stmt).get(field)
-            if isinstance(value, list):
-                setattr(stmt, field, hoist_ifexp_stmts(value, hoister))
+        map_blocks(stmt, lambda block: hoist_ifexp_stmts(block, hoister))
         if isinstance(stmt, ast.While):
             stmt.test = hoister.visit(stmt.test)
             primer, hoister.pre = hoister.pre, []
@@ -2895,10 +2893,7 @@ def reprime_before_continue(stmts: list[ast.stmt], primer: list[ast.stmt]) -> li
         if isinstance(stmt, (ast.For, ast.While)):
             out.append(stmt)
             continue
-        for field in ("body", "orelse"):
-            value = vars(stmt).get(field)
-            if isinstance(value, list):
-                setattr(stmt, field, reprime_before_continue(value, primer))
+        map_blocks(stmt, lambda block: reprime_before_continue(block, primer))
         if isinstance(stmt, ast.Continue):
             out.extend(copy.deepcopy(s) for s in primer)
         out.append(stmt)

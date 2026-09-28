@@ -2,6 +2,7 @@
 
 import ast
 
+from hpcagent_bench.translators.numpyto_common.ast_build import range_for
 from hpcagent_bench.translators.numpyto_common.lib_nodes.call_args import stack_axis
 from hpcagent_bench.translators.numpyto_common.lib_nodes.contractions import materialize_operands
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import concat_operands_axis
@@ -10,7 +11,6 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
     const_or_name,
     make_iter_name,
     name_,
-    store_,
     wrap_for_loops,
 )
 
@@ -59,14 +59,7 @@ def expand_hstack(target: ast.expr, args: list[ast.expr], shape_table: dict[str,
                     value=ast.Subscript(value=name_(nm), slice=name_("__hsj"), ctx=ast.Load()),
                 )
             ]
-            out.append(
-                ast.For(
-                    target=store_("__hsj"),
-                    iter=ast.Call(func=name_("range"), args=[k_ast], keywords=[]),
-                    body=body,
-                    orelse=[],
-                )
-            )
+            out.append(range_for("__hsj", [k_ast], body))
             offset_tok = f"({offset_tok}) + ({s[0]})" if offset_tok != "0" else str(s[0])
         return out
     # rank == 2
@@ -95,17 +88,8 @@ def expand_hstack(target: ast.expr, args: list[ast.expr], shape_table: dict[str,
                 ),
             )
         ]
-        inner = ast.For(
-            target=store_("__hsj"), iter=ast.Call(func=name_("range"), args=[k_ast], keywords=[]), body=body, orelse=[]
-        )
-        out.append(
-            ast.For(
-                target=store_("__hsi"),
-                iter=ast.Call(func=name_("range"), args=[const_or_name(n_tok)], keywords=[]),
-                body=[inner],
-                orelse=[],
-            )
-        )
+        inner = range_for("__hsj", [k_ast], body)
+        out.append(range_for("__hsi", [const_or_name(n_tok)], [inner]))
         offset_tok = f"({offset_tok}) + ({s[1]})" if offset_tok != "0" else str(s[1])
     return out
 

@@ -3,6 +3,7 @@
 import ast
 import copy
 
+from hpcagent_bench.translators.numpyto_common.ast_build import range_for
 from hpcagent_bench.translators.numpyto_common.lib_nodes.call_args import read_axis_keepdims
 from hpcagent_bench.translators.numpyto_common.lib_nodes.contractions import OP_SPILL_TEMP
 from hpcagent_bench.translators.numpyto_common.lib_nodes.elementwise import args_one_name
@@ -192,11 +193,8 @@ def expand_linalg_norm(
             outer_it, outer_bound, inner_it, inner_bound = j_it, n_ext, i_it, m_ext
         else:  # inf: outer over rows i, inner over columns j
             outer_it, outer_bound, inner_it, inner_bound = i_it, m_ext, j_it, n_ext
-        inner_loop = ast.For(
-            target=store_(inner_it),
-            iter=ast.Call(func=name_("range"), args=[copy.deepcopy(inner_bound)], keywords=[]),
-            body=[ast.AugAssign(target=store_(csum), op=ast.Add(), value=elem)],
-            orelse=[],
+        inner_loop = range_for(
+            inner_it, [copy.deepcopy(inner_bound)], [ast.AugAssign(target=store_(csum), op=ast.Add(), value=elem)]
         )
         keep_max = ast.Assign(
             targets=[store_(target.id)],
@@ -206,11 +204,10 @@ def expand_linalg_norm(
                 orelse=name_(target.id),
             ),
         )
-        outer_loop = ast.For(
-            target=store_(outer_it),
-            iter=ast.Call(func=name_("range"), args=[copy.deepcopy(outer_bound)], keywords=[]),
-            body=[ast.Assign(targets=[store_(csum)], value=const_(0.0)), inner_loop, keep_max],
-            orelse=[],
+        outer_loop = range_for(
+            outer_it,
+            [copy.deepcopy(outer_bound)],
+            [ast.Assign(targets=[store_(csum)], value=const_(0.0)), inner_loop, keep_max],
         )
         return [ast.Assign(targets=[store_(target.id)], value=const_(0.0)), outer_loop]
     raise NotImplementedError("np.linalg.norm: ord=1/inf supported for a 1-D or 2-D operand")
@@ -280,15 +277,14 @@ def expand_lstsq(
         )
         elem_ = scalarize_at_iters(b_node, [name_(bi_)], shape_table)
         pre.append(
-            ast.For(
-                target=store_(bi_),
-                iter=ast.Call(func=name_("range"), args=[a_size], keywords=[]),
-                body=[
+            range_for(
+                bi_,
+                [a_size],
+                [
                     ast.Assign(
                         targets=[ast.Subscript(value=name_(b_name), slice=name_(bi_), ctx=ast.Store())], value=elem_
                     )
                 ],
-                orelse=[],
             )
         )
         if fresh_local_allocs is not None:
@@ -328,31 +324,17 @@ def expand_lstsq(
             value=ast.BinOp(left=name_(factor), op=ast.Mult(), right=a_pc),
         )
     ]
-    inner_c_for = ast.For(
-        target=store_(c_iter),
-        iter=ast.Call(
-            func=name_("range"), args=[ast.BinOp(left=p_name, op=ast.Add(), right=const_(1)), a_size], keywords=[]
-        ),
-        body=inner_c,
-        orelse=[],
-    )
+    inner_c_for = range_for(c_iter, [ast.BinOp(left=p_name, op=ast.Add(), right=const_(1)), a_size], inner_c)
     factor_assign = ast.Assign(targets=[store_(factor)], value=guarded_div(a_rp, a_pp))
     b_aug = ast.AugAssign(
         target=ast.Subscript(value=name_(b_name), slice=r_name, ctx=ast.Store()),
         op=ast.Sub(),
         value=ast.BinOp(left=name_(factor), op=ast.Mult(), right=b_p),
     )
-    inner_r = ast.For(
-        target=store_(r_iter),
-        iter=ast.Call(
-            func=name_("range"), args=[ast.BinOp(left=p_name, op=ast.Add(), right=const_(1)), a_size], keywords=[]
-        ),
-        body=[factor_assign, inner_c_for, b_aug],
-        orelse=[],
+    inner_r = range_for(
+        r_iter, [ast.BinOp(left=p_name, op=ast.Add(), right=const_(1)), a_size], [factor_assign, inner_c_for, b_aug]
     )
-    fwd = ast.For(
-        target=store_(p_iter), iter=ast.Call(func=name_("range"), args=[a_size], keywords=[]), body=[inner_r], orelse=[]
-    )
+    fwd = range_for(p_iter, [a_size], [inner_r])
     # Back substitution:
     #   for r in M-1..0 (reverse):
     #     sum = b[r]
@@ -363,26 +345,14 @@ def expand_lstsq(
     bs_inner = [
         ast.AugAssign(target=store_(sum_v), op=ast.Sub(), value=ast.BinOp(left=a_rcol, op=ast.Mult(), right=y_c))
     ]
-    bs_inner_for = ast.For(
-        target=store_(c_iter),
-        iter=ast.Call(
-            func=name_("range"), args=[ast.BinOp(left=r_name, op=ast.Add(), right=const_(1)), a_size], keywords=[]
-        ),
-        body=bs_inner,
-        orelse=[],
-    )
+    bs_inner_for = range_for(c_iter, [ast.BinOp(left=r_name, op=ast.Add(), right=const_(1)), a_size], bs_inner)
     bs_sum_init = ast.Assign(targets=[store_(sum_v)], value=b_r)
     bs_y_assign = ast.Assign(targets=[y_r], value=guarded_div(name_(sum_v), a_rr))
     # Reverse iteration via ``range(M-1, -1, -1)``.
-    bs = ast.For(
-        target=store_(r_iter),
-        iter=ast.Call(
-            func=name_("range"),
-            args=[ast.BinOp(left=a_size, op=ast.Sub(), right=const_(1)), const_(-1), const_(-1)],
-            keywords=[],
-        ),
-        body=[bs_sum_init, bs_inner_for, bs_y_assign],
-        orelse=[],
+    bs = range_for(
+        r_iter,
+        [ast.BinOp(left=a_size, op=ast.Sub(), right=const_(1)), const_(-1), const_(-1)],
+        [bs_sum_init, bs_inner_for, bs_y_assign],
     )
     return pre + [fwd, bs]
 
@@ -528,10 +498,10 @@ def expand_cholesky(
                 value=name_(a.id), slice=ast.Tuple(elts=[name_("__i"), name_("__j")], ctx=ast.Load()), ctx=ast.Load()
             ),
         ),
-        ast.For(
-            target=store_("__k"),
-            iter=ast.Call(func=name_("range"), args=[name_("__j")], keywords=[]),
-            body=[
+        range_for(
+            "__k",
+            [name_("__j")],
+            [
                 ast.AugAssign(
                     target=store_("__s"),
                     op=ast.Sub(),
@@ -556,7 +526,6 @@ def expand_cholesky(
                     ),
                 )
             ],
-            orelse=[],
         ),
         ast.Assign(
             targets=[
@@ -584,12 +553,7 @@ def expand_cholesky(
                 value=name_(a.id), slice=ast.Tuple(elts=[name_("__j"), name_("__j")], ctx=ast.Load()), ctx=ast.Load()
             ),
         ),
-        ast.For(
-            target=store_("__k"),
-            iter=ast.Call(func=name_("range"), args=[name_("__j")], keywords=[]),
-            body=inner_k,
-            orelse=[],
-        ),
+        range_for("__k", [name_("__j")], inner_k),
         ast.Assign(
             targets=[
                 ast.Subscript(
@@ -600,33 +564,20 @@ def expand_cholesky(
             ],
             value=ast.Call(func=name_("sqrt"), args=[name_("__s")], keywords=[]),
         ),
-        ast.For(
-            target=store_("__i"),
-            iter=ast.Call(
-                func=name_("range"),
-                args=[ast.BinOp(left=name_("__j"), op=ast.Add(), right=const_(1)), n_ast],
-                keywords=[],
-            ),
-            body=inner_i,
-            orelse=[],
-        ),
+        range_for("__i", [ast.BinOp(left=name_("__j"), op=ast.Add(), right=const_(1)), n_ast], inner_i),
     ]
     # numpy's cholesky returns 0 in the strict upper triangle, but the
     # Banachiewicz loop below only writes the lower triangle + diagonal.
     # Pre-zero the upper triangle so unwritten cells aren't malloc garbage;
     # ``target`` is a fresh temp (!= ``a``), so this can't corrupt the source.
-    zero_upper = ast.For(
-        target=store_("__zi"),
-        iter=ast.Call(func=name_("range"), args=[n_ast], keywords=[]),
-        body=[
-            ast.For(
-                target=store_("__zj"),
-                iter=ast.Call(
-                    func=name_("range"),
-                    args=[ast.BinOp(left=name_("__zi"), op=ast.Add(), right=const_(1)), n_ast],
-                    keywords=[],
-                ),
-                body=[
+    zero_upper = range_for(
+        "__zi",
+        [n_ast],
+        [
+            range_for(
+                "__zj",
+                [ast.BinOp(left=name_("__zi"), op=ast.Add(), right=const_(1)), n_ast],
+                [
                     ast.Assign(
                         targets=[
                             ast.Subscript(
@@ -638,16 +589,12 @@ def expand_cholesky(
                         value=const_(0.0),
                     )
                 ],
-                orelse=[],
             )
         ],
-        orelse=[],
     )
     return [
         zero_upper,
-        ast.For(
-            target=store_("__j"), iter=ast.Call(func=name_("range"), args=[n_ast], keywords=[]), body=j_body, orelse=[]
-        ),
+        range_for("__j", [n_ast], j_body),
     ]
 
 
@@ -698,14 +645,14 @@ def expand_linalg_solve(
     # Init: copy A into __sol_aw and b into target.
     copy_inner = rhs.copy_row(b.id)
     out.append(
-        ast.For(
-            target=store_("__sol_i"),
-            iter=ast.Call(func=name_("range"), args=[n_ast], keywords=[]),
-            body=[
-                ast.For(
-                    target=store_("__sol_j"),
-                    iter=ast.Call(func=name_("range"), args=[n_ast], keywords=[]),
-                    body=[
+        range_for(
+            "__sol_i",
+            [n_ast],
+            [
+                range_for(
+                    "__sol_j",
+                    [n_ast],
+                    [
                         ast.Assign(
                             targets=[aw_store(name_("__sol_i"), name_("__sol_j"))],
                             value=ast.Subscript(
@@ -715,11 +662,9 @@ def expand_linalg_solve(
                             ),
                         )
                     ],
-                    orelse=[],
                 ),
                 copy_inner,
             ],
-            orelse=[],
         )
     )
     # Gauss-Jordan on (__sol_aw | target).
@@ -731,10 +676,10 @@ def expand_linalg_solve(
     T = name_("__sol_tmp")
     # Pivot search.
     pivot_init = ast.Assign(targets=[store_("__sol_p")], value=K)
-    pivot_scan = ast.For(
-        target=store_("__sol_r"),
-        iter=ast.Call(func=name_("range"), args=[ast.BinOp(left=K, op=ast.Add(), right=const_(1)), n_ast], keywords=[]),
-        body=[
+    pivot_scan = range_for(
+        "__sol_r",
+        [ast.BinOp(left=K, op=ast.Add(), right=const_(1)), n_ast],
+        [
             ast.If(
                 test=ast.Compare(
                     left=ast.Call(func=name_("abs"), args=[aw(R, K)], keywords=[]),
@@ -745,7 +690,6 @@ def expand_linalg_solve(
                 orelse=[],
             )
         ],
-        orelse=[],
     )
     # Swap row p and row k in __sol_aw.
     swap_aw = [
@@ -753,57 +697,41 @@ def expand_linalg_solve(
         ast.Assign(targets=[aw_store(K, C)], value=aw(P, C)),
         ast.Assign(targets=[aw_store(P, C)], value=T),
     ]
-    swap_aw_loop = ast.For(
-        target=store_("__sol_c"), iter=ast.Call(func=name_("range"), args=[n_ast], keywords=[]), body=swap_aw, orelse=[]
-    )
+    swap_aw_loop = range_for("__sol_c", [n_ast], swap_aw)
     swap_b_loop = rhs.swap_rows(K, P, C, T)
     # Divide pivot row by aw[k, k]. Stash divisor.
     pivot_div_stash = ast.Assign(targets=[store_("__sol_factor")], value=aw(K, K))
     pivot_div_aw_body = [
         ast.Assign(targets=[aw_store(K, C)], value=ast.BinOp(left=aw(K, C), op=ast.Div(), right=F)),
     ]
-    pivot_div_aw = ast.For(
-        target=store_("__sol_c"),
-        iter=ast.Call(func=name_("range"), args=[n_ast], keywords=[]),
-        body=pivot_div_aw_body,
-        orelse=[],
-    )
+    pivot_div_aw = range_for("__sol_c", [n_ast], pivot_div_aw_body)
     pivot_div_b = rhs.divide_row(K, C, F)
     # Eliminate other rows.
     elim_factor = ast.Assign(targets=[store_("__sol_factor")], value=aw(R, K))
-    elim_aw_inner = ast.For(
-        target=store_("__sol_c"),
-        iter=ast.Call(func=name_("range"), args=[n_ast], keywords=[]),
-        body=[
+    elim_aw_inner = range_for(
+        "__sol_c",
+        [n_ast],
+        [
             ast.Assign(
                 targets=[aw_store(R, C)],
                 value=ast.BinOp(left=aw(R, C), op=ast.Sub(), right=ast.BinOp(left=F, op=ast.Mult(), right=aw(K, C))),
             )
         ],
-        orelse=[],
     )
     elim_b_inner = rhs.eliminate_row(R, K, C, F)
-    elim_outer = ast.For(
-        target=store_("__sol_r"),
-        iter=ast.Call(func=name_("range"), args=[n_ast], keywords=[]),
-        body=[
+    elim_outer = range_for(
+        "__sol_r",
+        [n_ast],
+        [
             ast.If(
                 test=ast.Compare(left=R, ops=[ast.NotEq()], comparators=[K]),
                 body=[elim_factor, elim_aw_inner, elim_b_inner],
                 orelse=[],
             )
         ],
-        orelse=[],
     )
     k_body = [pivot_init, pivot_scan, swap_aw_loop, swap_b_loop, pivot_div_stash, pivot_div_aw, pivot_div_b, elim_outer]
-    out.append(
-        ast.For(
-            target=store_("__sol_k"),
-            iter=ast.Call(func=name_("range"), args=[n_ast], keywords=[]),
-            body=k_body,
-            orelse=[],
-        )
-    )
+    out.append(range_for("__sol_k", [n_ast], k_body))
     return out
 
 
@@ -906,12 +834,7 @@ class SolveRhs:
         return ast.Subscript(value=name_(self.target_id), slice=r, ctx=ast.Store())
 
     def columns(self, body: list[ast.stmt]) -> ast.For:
-        return ast.For(
-            target=store_("__sol_c"),
-            iter=ast.Call(func=name_("range"), args=[const_or_name(self.b_shape[1])], keywords=[]),
-            body=body,
-            orelse=[],
-        )
+        return range_for("__sol_c", [const_or_name(self.b_shape[1])], body)
 
     def copy_row(self, b_id: str) -> ast.stmt:
         """Row ``__sol_i`` of ``b`` copied into the target."""
@@ -920,10 +843,10 @@ class SolveRhs:
                 targets=[self.store(name_("__sol_i"))],
                 value=ast.Subscript(value=name_(b_id), slice=name_("__sol_i"), ctx=ast.Load()),
             )
-        return ast.For(
-            target=store_("__sol_j"),
-            iter=ast.Call(func=name_("range"), args=[const_or_name(self.b_shape[1])], keywords=[]),
-            body=[
+        return range_for(
+            "__sol_j",
+            [const_or_name(self.b_shape[1])],
+            [
                 ast.Assign(
                     targets=[self.store(name_("__sol_i"), name_("__sol_j"))],
                     value=ast.Subscript(
@@ -933,7 +856,6 @@ class SolveRhs:
                     ),
                 )
             ],
-            orelse=[],
         )
 
     def swap_rows(self, k: ast.expr, p: ast.expr, c: ast.expr, tmp: ast.expr) -> ast.stmt:
@@ -1067,14 +989,14 @@ def expand_linalg_inv(
     # Copy A to a working buffer ``__inv_aw[i, j]``; initialise target
     # as the identity I[i, j].
     out.append(
-        ast.For(
-            target=store_("__inv_i"),
-            iter=ast.Call(func=name_("range"), args=[n_ast], keywords=[]),
-            body=[
-                ast.For(
-                    target=store_("__inv_j"),
-                    iter=ast.Call(func=name_("range"), args=[n_ast], keywords=[]),
-                    body=[
+        range_for(
+            "__inv_i",
+            [n_ast],
+            [
+                range_for(
+                    "__inv_j",
+                    [n_ast],
+                    [
                         ast.Assign(
                             targets=[
                                 ast.Subscript(
@@ -1104,10 +1026,8 @@ def expand_linalg_inv(
                             ),
                         ),
                     ],
-                    orelse=[],
                 )
             ],
-            orelse=[],
         )
     )
     # Outer loop over pivot column k = 0..n:
@@ -1136,12 +1056,10 @@ def expand_linalg_inv(
     nm = lambda tag: name_(f"__inv_{tag}")
     # Pivot search.
     pivot_init = ast.Assign(targets=[store_("__inv_p")], value=nm("k"))
-    pivot_scan = ast.For(
-        target=store_("__inv_r"),
-        iter=ast.Call(
-            func=name_("range"), args=[ast.BinOp(left=nm("k"), op=ast.Add(), right=const_(1)), n_ast], keywords=[]
-        ),
-        body=[
+    pivot_scan = range_for(
+        "__inv_r",
+        [ast.BinOp(left=nm("k"), op=ast.Add(), right=const_(1)), n_ast],
+        [
             ast.If(
                 test=ast.Compare(
                     left=ast.Call(func=name_("abs"), args=[aw(nm("r"), nm("k"))], keywords=[]),
@@ -1152,7 +1070,6 @@ def expand_linalg_inv(
                 orelse=[],
             )
         ],
-        orelse=[],
     )
     # Swap row p and row k in both aw and target.
     swap_body = [
@@ -1163,12 +1080,7 @@ def expand_linalg_inv(
         ast.Assign(targets=[tgt_store(nm("k"), nm("c"))], value=tgt(nm("p"), nm("c"))),
         ast.Assign(targets=[tgt_store(nm("p"), nm("c"))], value=nm("tmp")),
     ]
-    swap_loop = ast.For(
-        target=store_("__inv_c"),
-        iter=ast.Call(func=name_("range"), args=[n_ast], keywords=[]),
-        body=swap_body,
-        orelse=[],
-    )
+    swap_loop = range_for("__inv_c", [n_ast], swap_body)
     # Divide pivot row by aw[k, k] -- stash it first since the loop overwrites
     # aw[k, k] itself before every use.
     pivot_div_stash = ast.Assign(targets=[store_("__inv_factor")], value=aw(nm("k"), nm("k")))
@@ -1184,12 +1096,7 @@ def expand_linalg_inv(
     ]
     pivot_div = [
         pivot_div_stash,
-        ast.For(
-            target=store_("__inv_c"),
-            iter=ast.Call(func=name_("range"), args=[n_ast], keywords=[]),
-            body=pivot_div_body_safe,
-            orelse=[],
-        ),
+        range_for("__inv_c", [n_ast], pivot_div_body_safe),
     ]
     # Eliminate other rows.
     elim_factor = ast.Assign(targets=[store_("__inv_factor")], value=aw(nm("r"), nm("k")))
@@ -1211,34 +1118,21 @@ def expand_linalg_inv(
             ),
         ),
     ]
-    elim_inner_loop = ast.For(
-        target=store_("__inv_c"),
-        iter=ast.Call(func=name_("range"), args=[n_ast], keywords=[]),
-        body=elim_body_inner,
-        orelse=[],
-    )
-    elim_outer = ast.For(
-        target=store_("__inv_r"),
-        iter=ast.Call(func=name_("range"), args=[n_ast], keywords=[]),
-        body=[
+    elim_inner_loop = range_for("__inv_c", [n_ast], elim_body_inner)
+    elim_outer = range_for(
+        "__inv_r",
+        [n_ast],
+        [
             ast.If(
                 test=ast.Compare(left=nm("r"), ops=[ast.NotEq()], comparators=[nm("k")]),
                 body=[elim_factor, elim_inner_loop],
                 orelse=[],
             )
         ],
-        orelse=[],
     )
     # K-loop body.
     k_body = [pivot_init, pivot_scan, swap_loop] + pivot_div + [elim_outer]
-    out.append(
-        ast.For(
-            target=store_("__inv_k"),
-            iter=ast.Call(func=name_("range"), args=[n_ast], keywords=[]),
-            body=k_body,
-            orelse=[],
-        )
-    )
+    out.append(range_for("__inv_k", [n_ast], k_body))
     return out
 
 
@@ -1300,14 +1194,14 @@ def expand_linalg_det(
     )
     # Copy A into the working buffer.
     out.append(
-        ast.For(
-            target=store_("__det_i"),
-            iter=ast.Call(func=name_("range"), args=[n_ast], keywords=[]),
-            body=[
-                ast.For(
-                    target=store_("__det_j"),
-                    iter=ast.Call(func=name_("range"), args=[n_ast], keywords=[]),
-                    body=[
+        range_for(
+            "__det_i",
+            [n_ast],
+            [
+                range_for(
+                    "__det_j",
+                    [n_ast],
+                    [
                         ast.Assign(
                             targets=[aw_store(name_("__det_i"), name_("__det_j"))],
                             value=ast.Subscript(
@@ -1317,10 +1211,8 @@ def expand_linalg_det(
                             ),
                         )
                     ],
-                    orelse=[],
                 )
             ],
-            orelse=[],
         )
     )
     # Accumulator starts at 1 (product of pivots * swap sign).
@@ -1333,10 +1225,10 @@ def expand_linalg_det(
     T = name_("__det_tmp")
     # Pivot search: p = argmax_{r >= k} |aw[r, k]|.
     pivot_init = ast.Assign(targets=[store_("__det_p")], value=K)
-    pivot_scan = ast.For(
-        target=store_("__det_r"),
-        iter=ast.Call(func=name_("range"), args=[ast.BinOp(left=K, op=ast.Add(), right=const_(1)), n_ast], keywords=[]),
-        body=[
+    pivot_scan = range_for(
+        "__det_r",
+        [ast.BinOp(left=K, op=ast.Add(), right=const_(1)), n_ast],
+        [
             ast.If(
                 test=ast.Compare(
                     left=ast.Call(func=name_("abs"), args=[aw(R, K)], keywords=[]),
@@ -1347,7 +1239,6 @@ def expand_linalg_det(
                 orelse=[],
             )
         ],
-        orelse=[],
     )
     # Swap rows p and k (when distinct) and flip the running sign.
     swap_body = [
@@ -1355,12 +1246,7 @@ def expand_linalg_det(
         ast.Assign(targets=[aw_store(K, C)], value=aw(P, C)),
         ast.Assign(targets=[aw_store(P, C)], value=T),
     ]
-    swap_loop = ast.For(
-        target=store_("__det_c"),
-        iter=ast.Call(func=name_("range"), args=[n_ast], keywords=[]),
-        body=swap_body,
-        orelse=[],
-    )
+    swap_loop = range_for("__det_c", [n_ast], swap_body)
     sign_flip = ast.Assign(targets=[store_(target.id)], value=ast.UnaryOp(op=ast.USub(), operand=name_(target.id)))
     swap_if = ast.If(
         test=ast.Compare(left=P, ops=[ast.NotEq()], comparators=[K]), body=[swap_loop, sign_flip], orelse=[]
@@ -1374,22 +1260,18 @@ def expand_linalg_det(
     elim_factor = ast.Assign(
         targets=[store_("__det_factor")], value=ast.BinOp(left=aw(R, K), op=ast.Div(), right=aw(K, K))
     )
-    elim_inner = ast.For(
-        target=store_("__det_c"),
-        iter=ast.Call(func=name_("range"), args=[ast.BinOp(left=K, op=ast.Add(), right=const_(1)), n_ast], keywords=[]),
-        body=[
+    elim_inner = range_for(
+        "__det_c",
+        [ast.BinOp(left=K, op=ast.Add(), right=const_(1)), n_ast],
+        [
             ast.Assign(
                 targets=[aw_store(R, C)],
                 value=ast.BinOp(left=aw(R, C), op=ast.Sub(), right=ast.BinOp(left=F, op=ast.Mult(), right=aw(K, C))),
             )
         ],
-        orelse=[],
     )
-    elim_outer = ast.For(
-        target=store_("__det_r"),
-        iter=ast.Call(func=name_("range"), args=[ast.BinOp(left=K, op=ast.Add(), right=const_(1)), n_ast], keywords=[]),
-        body=[elim_factor, elim_inner],
-        orelse=[],
+    elim_outer = range_for(
+        "__det_r", [ast.BinOp(left=K, op=ast.Add(), right=const_(1)), n_ast], [elim_factor, elim_inner]
     )
     elim_guard = ast.If(
         test=ast.Compare(
@@ -1399,12 +1281,5 @@ def expand_linalg_det(
         orelse=[],
     )
     k_body = [pivot_init, pivot_scan, swap_if, pivot_mul, elim_guard]
-    out.append(
-        ast.For(
-            target=store_("__det_k"),
-            iter=ast.Call(func=name_("range"), args=[n_ast], keywords=[]),
-            body=k_body,
-            orelse=[],
-        )
-    )
+    out.append(range_for("__det_k", [n_ast], k_body))
     return out

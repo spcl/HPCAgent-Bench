@@ -3,6 +3,7 @@
 import ast
 import copy
 
+from hpcagent_bench.translators.numpyto_common.ast_build import range_for
 from hpcagent_bench.translators.numpyto_common.lib_nodes.call_args import kwarg_or_pos, read_axis_keepdims
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
@@ -63,14 +64,7 @@ def make_sort_routine(buf: str, n: ast.expr, prefix: str) -> list[ast.stmt]:
             value=name_(key),
         ),
     ]
-    return [
-        ast.For(
-            target=store_(i),
-            iter=ast.Call(func=name_("range"), args=[const_(1), n], keywords=[]),
-            body=inner,
-            orelse=[],
-        )
-    ]
+    return [range_for(i, [const_(1), n], inner)]
 
 
 def expand_median(

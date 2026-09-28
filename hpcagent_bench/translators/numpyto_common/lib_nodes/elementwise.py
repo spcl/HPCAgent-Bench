@@ -9,7 +9,7 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import (
     broadcast_extents,
     iter_extent_of,
 )
-from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import cmp_, name_, store_, wrap_for_loops
+from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import cmp_, name_, wrap_for_loops
 from hpcagent_bench.translators.numpyto_common.lib_nodes.scalarize import scalarize_at_iters
 
 __all__ = [
@@ -97,14 +97,7 @@ def expand_elementwise(
     body = [
         ast.Assign(targets=[ast.Subscript(value=name_(target.id), slice=idx, ctx=ast.Store())], value=op_fn(sa, sb))
     ]
-    out = body
-    for var, bound in zip(reversed([i.id for i in iters]), reversed(extent)):
-        out = [
-            ast.For(
-                target=store_(var), iter=ast.Call(func=name_("range"), args=[bound], keywords=[]), body=out, orelse=[]
-            )
-        ]
-    return out
+    return wrap_for_loops([i.id for i in iters], extent, body)
 
 
 def expand_minimum(t: ast.expr, a: list[ast.expr], s: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
@@ -254,14 +247,7 @@ def unary_elementwise(
     sa = scalarize_at_iters(a, iters, shape_table)
     idx = iters[0] if len(iters) == 1 else ast.Tuple(elts=list(iters), ctx=ast.Load())
     body = [ast.Assign(targets=[ast.Subscript(value=name_(target.id), slice=idx, ctx=ast.Store())], value=op_fn(sa))]
-    out = body
-    for var, bound in zip(reversed([i.id for i in iters]), reversed(extent)):
-        out = [
-            ast.For(
-                target=store_(var), iter=ast.Call(func=name_("range"), args=[bound], keywords=[]), body=out, orelse=[]
-            )
-        ]
-    return out
+    return wrap_for_loops([i.id for i in iters], extent, body)
 
 
 def expand_clip(target: ast.expr, args: list[ast.expr], shape_table: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
