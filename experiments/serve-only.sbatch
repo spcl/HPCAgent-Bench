@@ -103,6 +103,10 @@ image:   ${INFERENCE_CE_ENV:-unset}
 logs:    ${RUN_DIR}
 EOF
 
+# The image's GPU arch against this partition's, before hours of weight loading: without a site.env
+# naming the partition, Slurm's default can place the job on GPUs the image was not built for.
+bash "${HPCAGENT_BENCH_REPO}/containers/images/gpu_arch_check.sh" "${INFERENCE_CE_ENV:?INFERENCE_CE_ENV must name a registered EDF}"
+
 # Without --cpus-per-task the step claims ONE core of 192 and the engine's host-side work degrades
 # with load rather than failing. --environment takes the registered EDF by name.
 srun --nodes="${INFERENCE_NODES}" --ntasks="${INFERENCE_NODES}" --ntasks-per-node=1 \
@@ -117,12 +121,12 @@ deadline=$(( $(date +%s) + READY_TIMEOUT ))
 until curl -sf "${BASE_URL}/v1/models" -o "${RUN_DIR}/models.json"; do
     if ! kill -0 "${SERVER_PID}" 2>/dev/null; then
         echo "FAIL: the serving step exited before the API came up" >&2
-        tail -40 "${RUN_DIR}"/server-*.log >&2 || true
+        tail -n 40 "${RUN_DIR}"/server-*.log >&2 || true
         exit 1
     fi
     if (( $(date +%s) > deadline )); then
         echo "FAIL: API not ready within ${READY_TIMEOUT}s" >&2
-        tail -40 "${RUN_DIR}"/server-*.log >&2 || true
+        tail -n 40 "${RUN_DIR}"/server-*.log >&2 || true
         exit 1
     fi
     sleep 15

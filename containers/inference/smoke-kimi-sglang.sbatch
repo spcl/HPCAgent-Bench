@@ -166,12 +166,12 @@ deadline=$(( $(date +%s) + READY_TIMEOUT ))
 until curl -sf "http://${MASTER}:${API_PORT}/v1/models" -o "${RUN_DIR}/models.json"; do
     if ! kill -0 "${SERVER_PID}" 2>/dev/null; then
         echo "FAIL: server step exited before the API came up"
-        tail -40 "${RUN_DIR}"/sglang-node*.log || true
+        tail -n 40 "${RUN_DIR}"/sglang-node*.log || true
         exit 1
     fi
     if (( $(date +%s) > deadline )); then
         echo "FAIL: API not ready within ${READY_TIMEOUT}s"
-        tail -40 "${RUN_DIR}"/sglang-node*.log || true
+        tail -n 40 "${RUN_DIR}"/sglang-node*.log || true
         exit 1
     fi
     sleep 15
