@@ -3,7 +3,7 @@
 import ast
 import copy
 
-from hpcagent_bench.translators.numpyto_common.ast_build import name_, store_
+from hpcagent_bench.translators.numpyto_common.ast_build import name_, nested_blocks, store_
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
 
 __all__ = [
@@ -44,13 +44,10 @@ def has_loop_control(body: list[ast.stmt]) -> bool:
                 return True
             if isinstance(s, (ast.For, ast.While, ast.FunctionDef)):
                 continue  # a nested loop captures its own break/continue
-            for f in ("body", "orelse", "finalbody"):
-                sub = vars(s).get(f)
-                if isinstance(sub, list) and walk_(sub):
-                    return True
-            for h in vars(s).get("handlers") or []:
-                if walk_(h.body):
-                    return True
+            if any(walk_(sub) for sub in nested_blocks(s)):
+                return True
+            if isinstance(s, ast.Try) and any(walk_(h.body) for h in s.handlers):
+                return True
         return False
 
     return walk_(body)

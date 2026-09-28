@@ -3,7 +3,7 @@
 import ast
 import copy
 
-from hpcagent_bench.translators.numpyto_common.ast_build import SubstituteLoads, expr_of, name_, store_
+from hpcagent_bench.translators.numpyto_common.ast_build import SubstituteLoads, expr_of, name_, nested_blocks, store_
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module, numpy_call_attr
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import AUG_OP_SRC, RewritePass
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.hoist import HoistForm, ValueHoist
@@ -300,10 +300,7 @@ def ix_unpack_scatters(fn: ast.AST) -> dict[int, list[ast.expr]]:
     """
     found: dict[int, list[ast.expr]] = {}
     for parent in ast.walk(fn):
-        for field in ("body", "orelse", "finalbody"):
-            block = vars(parent).get(field)
-            if not isinstance(block, list):
-                continue
+        for block in nested_blocks(parent):
             for index, stmt in enumerate(block):
                 if not (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1):
                     continue

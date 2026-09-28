@@ -5,10 +5,11 @@ import copy
 from collections.abc import Iterable
 
 from hpcagent_bench.translators.numpyto_common.ast_build import (
-    NESTED_BLOCK_FIELDS,
+    ALL_BLOCK_FIELDS,
     const_int,
     map_blocks,
     name_,
+    nested_blocks,
     numpy_attribute,
     store_,
 )
@@ -159,17 +160,13 @@ class FoldSliceLocals:
                 binding = (stmt.targets[0].id, slice_from_call(stmt.value))
             else:
                 folded |= self.rewrite_uses(stmt, live)
-            nested_blocks = [
-                vars(stmt).get(field)
-                for field in ("body", "orelse", "finalbody")
-                if isinstance(vars(stmt).get(field), list)
-            ]
-            for nested in nested_blocks:
+            blocks = nested_blocks(stmt)
+            for nested in blocks:
                 folded |= self.walk_(nested, dict(live))
             # A window bound inside a branch or loop body may or may not be the one live after it,
             # so forget the name entirely rather than fold the enclosing binding into a use the
             # inner one would have owned.
-            for nested in nested_blocks:
+            for nested in blocks:
                 for name in slice_bound_names(nested):
                     live.pop(name, None)
             if binding is not None:
@@ -254,7 +251,7 @@ def drop_dead_slice_bindings(fn: ast.FunctionDef, folds: set[str]) -> None:
     def prune(body: list[ast.stmt]) -> list[ast.stmt]:
         out: list[ast.stmt] = []
         for stmt in body:
-            map_blocks(stmt, prune, (*NESTED_BLOCK_FIELDS, "finalbody"))
+            map_blocks(stmt, prune, ALL_BLOCK_FIELDS)
             if (
                 isinstance(stmt, ast.Assign)
                 and len(stmt.targets) == 1

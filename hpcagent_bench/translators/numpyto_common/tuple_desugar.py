@@ -622,11 +622,11 @@ class TupleDesugar:
         env.invalidate(assigned_names(stmt))
         return [stmt]
 
-    def loop(self, stmt: ast.stmt, env: Env) -> list[ast.stmt]:
-        for field in ("iter", "test"):
-            value = vars(stmt).get(field)
-            if isinstance(value, ast.expr):
-                setattr(stmt, field, self.fold(value, env))
+    def loop(self, stmt: ast.For | ast.While, env: Env) -> list[ast.stmt]:
+        if isinstance(stmt, ast.For):
+            stmt.iter = self.fold(stmt.iter, env)
+        elif isinstance(stmt, ast.While):
+            stmt.test = self.fold(stmt.test, env)
         # A body read can come from the PREVIOUS iteration, so kill what the body rebinds first.
         inner = env.copy()
         inner.invalidate(assigned_names(stmt))

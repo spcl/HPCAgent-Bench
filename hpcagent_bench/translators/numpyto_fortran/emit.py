@@ -9,7 +9,7 @@ from collections.abc import Callable
 from typing import Optional
 
 from hpcagent_bench.translators.numpyto_common import dtypes, operators, parallelism
-from hpcagent_bench.translators.numpyto_common.ast_build import map_blocks, name_, store_
+from hpcagent_bench.translators.numpyto_common.ast_build import ALL_BLOCK_FIELDS, map_blocks, name_, store_
 from hpcagent_bench.translators.numpyto_common.emit_helpers import fftw
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import (
     CONJ_ATTRS,
@@ -3844,10 +3844,7 @@ def hoist_nested_helper_calls(
     """
     out: list[ast.stmt] = []
     for stmt in stmts:
-        for attr in ("body", "orelse", "finalbody"):
-            block = vars(stmt).get(attr)
-            if isinstance(block, list) and block and isinstance(block[0], ast.stmt):
-                setattr(stmt, attr, hoist_nested_helper_calls(block, helper_names, counter, temps))
+        map_blocks(stmt, lambda block: hoist_nested_helper_calls(block, helper_names, counter, temps), ALL_BLOCK_FIELDS)
         # A while TEST re-runs every iteration; priming a temp once before the loop would leave
         # every later check reading a stale value, so refuse rather than silently loop forever.
         if isinstance(stmt, ast.While):

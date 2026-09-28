@@ -35,7 +35,7 @@ def matmul_pairs(node: ast.AST) -> list[ast.AST]:
     for n in ast.walk(node):
         if isinstance(n, ast.BinOp) and isinstance(n.op, ast.MatMult):
             out.append(n)
-        elif numpy_call_attr(n) == "matmul" and len(vars(n).get("args") or []) == 2:
+        elif isinstance(n, ast.Call) and numpy_call_attr(n) == "matmul" and len(n.args) == 2:
             out.append(n)
     return out
 
@@ -294,7 +294,7 @@ def as_matmul(node: ast.AST):
     """``a @ b`` / ``np.matmul(a, b)`` / ``np.dot(a, b)`` -> ``(a, b)`` else None."""
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.MatMult):
         return node.left, node.right
-    if numpy_call_attr(node) in ("matmul", "dot") and len(vars(node).get("args") or []) == 2:
+    if isinstance(node, ast.Call) and numpy_call_attr(node) in ("matmul", "dot") and len(node.args) == 2:
         return node.args[0], node.args[1]
     return None
 

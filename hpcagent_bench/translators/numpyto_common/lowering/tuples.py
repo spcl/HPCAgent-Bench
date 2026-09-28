@@ -4,8 +4,8 @@ import ast
 import copy
 from collections.abc import Mapping, Sequence
 
-from hpcagent_bench.translators.numpyto_common.statement_desugar import Spelled, SplitTupleUnpack
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import const_or_name
+from hpcagent_bench.translators.numpyto_common.statement_desugar import Spelled, SplitTupleUnpack
 
 __all__ = [
     "BLOCK_STMT_TYPES",
@@ -66,8 +66,7 @@ def fill_empty_blocks(tree: ast.AST) -> None:
     clause) is left as-is; only the primary body must be non-empty."""
     for node in ast.walk(tree):
         if isinstance(node, BLOCK_STMT_TYPES):
-            body = vars(node).get("body")
-            if isinstance(body, list) and not body:
+            if not node.body:
                 filler = ast.Pass()
                 ast.copy_location(filler, node)
                 node.body = [filler]

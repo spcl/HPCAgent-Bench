@@ -8,7 +8,7 @@ import itertools
 import logging
 import re
 from collections.abc import Callable, Iterable, Sequence
-from typing import NamedTuple, cast
+from typing import NamedTuple
 
 from hpcagent_bench.translators.numpyto_common import dtypes
 from hpcagent_bench.translators.numpyto_common import frontend as common_frontend
@@ -18,6 +18,7 @@ from hpcagent_bench.translators.numpyto_common.ast_build import (
     expr_of,
     literal_loads,
     name_,
+    nested_blocks,
     numpy_attribute,
     store_,
 )
@@ -119,7 +120,6 @@ __all__ = [
     "allocation_binding",
     "allocation_shapes",
     "array_annotation",
-    "as_stmt_block",
     "bare_alias_binding",
     "bind_caller_expressions",
     "bind_helper_call",
@@ -1033,10 +1033,7 @@ def fresh_binding_index(block: list[ast.stmt], at: int, name: str) -> int | None
 def statement_blocks(root: ast.AST) -> Iterable[list[ast.stmt]]:
     """Every statement list under ``root``: bodies, else branches and finally blocks."""
     for node in ast.walk(root):
-        for field in ("body", "orelse", "finalbody"):
-            block = vars(node).get(field)
-            if isinstance(block, list) and block and isinstance(block[0], ast.stmt):
-                yield block
+        yield from (block for block in nested_blocks(node) if block)
 
 
 class MaterializeWrittenReshape(ast.NodeTransformer):
@@ -1783,24 +1780,9 @@ def view_binding(node: ast.stmt, symbols: frozenset[str] = frozenset()) -> str |
     return view_slice_binding(node) or bare_alias_binding(node, symbols)
 
 
-def as_stmt_block(raw: object) -> list[ast.stmt]:
-    """One non-empty statement list off an ast node's field dict; anything else reads as empty.
-
-    ``isinstance(raw, list)`` proves a sequence and nothing about its members, so the first member
-    is the evidence that decides -- an ast field holding a list holds one node type throughout."""
-    return cast("list[ast.stmt]", raw) if isinstance(raw, list) and raw and isinstance(raw[0], ast.stmt) else []
-
-
 def statement_lists(root: ast.AST) -> list[list[ast.stmt]]:
     """Every statement list in the subtree -- the blocks a name's live range can be confined to."""
-    blocks: list[list[ast.stmt]] = []
-    for parent in ast.walk(root):
-        # An ast node keeps its fields in ``__dict__``, and most node types carry none of these.
-        for field in ("body", "orelse", "finalbody"):
-            block = as_stmt_block(vars(parent).get(field))
-            if block:
-                blocks.append(block)
-    return blocks
+    return [block for parent in ast.walk(root) for block in nested_blocks(parent) if block]
 
 
 #: numpy calls that build a FRESH buffer, so the name they bind is a new array rather than a rebind

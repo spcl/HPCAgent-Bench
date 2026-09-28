@@ -3,7 +3,7 @@
 import ast
 import copy
 
-from hpcagent_bench.translators.numpyto_common.ast_build import name_, store_
+from hpcagent_bench.translators.numpyto_common.ast_build import NESTED_BLOCK_FIELDS, name_, nested_blocks, store_
 from hpcagent_bench.translators.numpyto_common.frontend.inlining import (
     SubstNames,
     collect_assigned_names,
@@ -113,10 +113,8 @@ class SpliceNoneGuardedCalls:
         def walk(block: list[ast.stmt]) -> None:
             for st in block:
                 out.append(st)
-                for field in ("body", "orelse", "finalbody"):
-                    nested = vars(st).get(field)
-                    if isinstance(nested, list):
-                        walk(nested)
+                for nested in nested_blocks(st):
+                    walk(nested)
 
         walk(self.fn_.body)
         return out
@@ -190,9 +188,8 @@ class SpliceNoneGuardedCalls:
                 changed = True
                 i += len(new_stmts)
                 continue
-            for field in ("body", "orelse"):
-                nested = vars(stmts[i]).get(field)
-                if isinstance(nested, list) and self.rewrite_block(nested):
+            for nested in nested_blocks(stmts[i], NESTED_BLOCK_FIELDS):
+                if self.rewrite_block(nested):
                     changed = True
             i += 1
         return changed

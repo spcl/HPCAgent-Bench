@@ -6,6 +6,7 @@ import copy
 from collections.abc import Callable, Mapping
 
 __all__ = [
+    "ALL_BLOCK_FIELDS",
     "NESTED_BLOCK_FIELDS",
     "RenameNames",
     "SubstituteLoads",
@@ -15,6 +16,7 @@ __all__ = [
     "map_blocks",
     "map_statement_lists",
     "name_",
+    "nested_blocks",
     "numpy_attribute",
     "numpy_call",
     "range_for",
@@ -107,6 +109,14 @@ def range_for(var: str, bounds: list[ast.expr], body: list[ast.stmt]) -> ast.For
 
 #: The fields a compound statement keeps its nested statement lists in (``try`` adds ``finalbody``).
 NESTED_BLOCK_FIELDS = ("body", "orelse")
+
+#: Every field that holds a statement list directly on a statement.
+ALL_BLOCK_FIELDS = (*NESTED_BLOCK_FIELDS, "finalbody")
+
+
+def nested_blocks(node: ast.AST, fields: tuple[str, ...] = ALL_BLOCK_FIELDS) -> list[list[ast.stmt]]:
+    """The statement lists ``node`` holds directly under ``fields``; none for a simple statement."""
+    return [value for field, value in ast.iter_fields(node) if field in fields and isinstance(value, list)]
 
 
 def map_blocks(
