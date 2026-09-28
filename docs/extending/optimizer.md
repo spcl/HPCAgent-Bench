@@ -7,8 +7,7 @@ Two seams. LLM agents have their own page, [writing_an_agent.md](../writing_an_a
 | a tool that emits C/C++/Fortran source or a C-ABI `.so` per kernel | optimizer (`Agent.solve`) | `agent <name>` | JSONL `agent`, DB `optimizer` |
 | a Python-callable backend `<module>_<postfix>.py` | framework column (`Framework`) | `run`, `run-benchmark`, `run-framework`, `run-sparse` | DB `framework` + `flavor` |
 
-A new PyPI dependency goes in a `pyproject.toml` extra, then `python scripts/sync_requirements.py`
-(`--check` diffs). Images install the `pyproject.toml` hardware extra, so rebuild them after.
+A new PyPI dependency goes in a `pyproject.toml` extra, the only dependency list. Images install the `pyproject.toml` hardware extra, so rebuild them after.
 
 ## A. Optimizer
 
