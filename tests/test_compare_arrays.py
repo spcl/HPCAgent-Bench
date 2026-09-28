@@ -91,7 +91,7 @@ def test_finite_against_inf_is_infinite_error_not_zero(ref: float, val: float) -
 
 def test_finite_against_nan_is_infinite_error_not_zero() -> None:
     ok, err, detail = compare_arrays(_arr(1.0), _arr(np.nan))
-    assert (ok, err, detail) == (False, INF, "NaN position mismatch")
+    assert (ok, err, detail) == (False, INF, "NaN position mismatch: expected 0 NaN, got 1, first at (0,)")
 
 
 def test_opposite_inf_signs_are_caught() -> None:
@@ -434,7 +434,10 @@ def test_nonfinite_mismatch_names_which_position_check_failed() -> None:
     """The check compare_arrays and the run-to-run comparator now share; a regression here would
     let a NaN-vs-number disagreement be filtered out of its own residual."""
     assert nonfinite_mismatch(np.array([1.0, 2.0]), np.array([1.0, 2.0])) is None
-    assert nonfinite_mismatch(np.array([np.nan, 2.0]), np.array([1.0, 2.0])) == "NaN position mismatch"
+    assert (
+        nonfinite_mismatch(np.array([np.nan, 2.0]), np.array([1.0, 2.0]))
+        == "NaN position mismatch: expected 1 NaN, got 0, first at (0,)"
+    )
     assert nonfinite_mismatch(np.array([np.inf, 2.0]), np.array([1.0, 2.0])) == "Inf position mismatch"
     assert nonfinite_mismatch(np.array([np.inf]), np.array([-np.inf])) == "+-Inf sign mismatch"
 
