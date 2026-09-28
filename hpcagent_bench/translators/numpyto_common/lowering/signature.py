@@ -6,6 +6,7 @@ import re
 from collections.abc import Sequence
 
 from hpcagent_bench.translators.numpyto_common import dtypes
+from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.emit_helpers.tokens import IDENT_RE
 from hpcagent_bench.translators.numpyto_common.frontend import names_used_as_int
 from hpcagent_bench.translators.numpyto_common.ir import KernelIR, SymbolDesc
@@ -424,11 +425,7 @@ class ArrayUseScan:
     def note_index_call(self, node: ast.Call) -> None:
         """``np.take(a, idx[, axis])`` and ``np.ix_(a, b, c)`` take index arrays before they are
         expanded into the subscript forms :meth:`note_subscript` keys on."""
-        if not (
-            isinstance(node.func, ast.Attribute)
-            and isinstance(node.func.value, ast.Name)
-            and node.func.value.id in ("np", "numpy")
-        ):
+        if not (isinstance(node.func, ast.Attribute) and is_numpy_module(node.func.value)):
             return
         if node.func.attr == "take" and len(node.args) >= 2:
             if isinstance(node.args[1], ast.Name) and node.args[1].id in self.arrays:

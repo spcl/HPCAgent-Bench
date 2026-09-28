@@ -4,7 +4,8 @@ import ast
 import copy
 
 from hpcagent_bench.translators.numpyto_common.ast_build import numpy_attribute, numpy_call
-from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import RankedRewritePass, RewritePass, np_attr
+from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module, numpy_call_attr
+from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import RankedRewritePass, RewritePass
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.hoist import HoistForm, ValueHoist
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.ranks import expr_rank
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
@@ -52,7 +53,7 @@ class CallFixups(RankedRewritePass):
             # arrays, and numba/pythran cannot type scipy.sparse, so the sparse branch must go.
             self.changed = True
             return ast.copy_location(ast.Constant(value=False), node)
-        attr = np_attr(node)
+        attr = numpy_call_attr(node)
         # numba/pythran want a tuple shape, not a list literal. ``array`` is not in this set: its
         # list is data, not a shape.
         shape_pos = {"zeros": 0, "ones": 0, "empty": 0, "full": 0, "reshape": 1}.get(attr)
@@ -125,8 +126,7 @@ def ufunc_method_op(node: ast.AST, method: str) -> str | None:
         and isinstance(node.func, ast.Attribute)
         and node.func.attr == method
         and isinstance(node.func.value, ast.Attribute)
-        and isinstance(node.func.value.value, ast.Name)
-        and node.func.value.value.id in ("np", "numpy")
+        and is_numpy_module(node.func.value.value)
     ):
         return node.func.value.attr
     return None
@@ -193,8 +193,7 @@ class FillDiagonalInline(ast.NodeTransformer):
         if not (
             isinstance(call, ast.Call)
             and isinstance(call.func, ast.Attribute)
-            and isinstance(call.func.value, ast.Name)
-            and call.func.value.id in ("np", "numpy")
+            and is_numpy_module(call.func.value)
             and call.func.attr == "fill_diagonal"
         ):
             return node
@@ -245,14 +244,13 @@ class UfuncOutInline(ast.NodeTransformer):
         # kept and only the ``out=`` becomes a target.
         outer_form = (
             isinstance(call.func.value, ast.Attribute)
-            and isinstance(call.func.value.value, ast.Name)
-            and call.func.value.value.id in ("np", "numpy")
+            and is_numpy_module(call.func.value.value)
             and call.func.attr == "outer"
         )
         if outer_form:
             op = None
         else:
-            if not (isinstance(call.func.value, ast.Name) and call.func.value.id in ("np", "numpy")):
+            if not is_numpy_module(call.func.value):
                 return None
             attr = call.func.attr
             op = UFUNC_OUT_OPS.get(attr)
@@ -318,7 +316,7 @@ class ComplexAccessorToFunc(ast.NodeTransformer):
             not self.conjugate_only
             and isinstance(node.ctx, ast.Load)
             and node.attr in ("real", "imag")
-            and not (isinstance(node.value, ast.Name) and node.value.id in ("np", "numpy"))
+            and not is_numpy_module(node.value)
         ):
             return self.np_call(node.attr, node.value)
         return node
@@ -350,11 +348,7 @@ class ElementalUfuncToPrimitive(RewritePass):
         self.generic_visit(node)
         f = node.func
         if not (
-            isinstance(f, ast.Attribute)
-            and isinstance(f.value, ast.Name)
-            and f.value.id in ("np", "numpy")
-            and len(node.args) == 2
-            and not node.keywords
+            isinstance(f, ast.Attribute) and is_numpy_module(f.value) and len(node.args) == 2 and not node.keywords
         ):
             return node
         a, b = node.args

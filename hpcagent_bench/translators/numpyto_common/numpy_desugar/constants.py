@@ -7,6 +7,7 @@ import operator
 from collections.abc import Callable, Iterator, Sequence
 
 from hpcagent_bench.translators.numpyto_common import dtypes
+from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import const_int, name_store_counts
 
 __all__ = [
@@ -70,8 +71,7 @@ class FinfoEpsFold(ast.NodeTransformer):
             and isinstance(call, ast.Call)
             and isinstance(call.func, ast.Attribute)
             and call.func.attr == "finfo"
-            and isinstance(call.func.value, ast.Name)
-            and call.func.value.id in ("np", "numpy")
+            and is_numpy_module(call.func.value)
         ):
             return ast.copy_location(ast.Constant(value=self.eps), node)
         return node

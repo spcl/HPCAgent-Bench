@@ -3,6 +3,7 @@
 import ast
 import copy
 
+from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import broadcast_extents, iter_extent_of
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import const_int, const_or_name
 from hpcagent_bench.translators.numpyto_common.lib_nodes.scalarize import scalarize_at_iters
@@ -66,8 +67,7 @@ class ScatterAtRewriter(ast.NodeTransformer):
             isinstance(func, ast.Attribute)
             and func.attr == "at"
             and isinstance(func.value, ast.Attribute)
-            and isinstance(func.value.value, ast.Name)
-            and func.value.value.id in ("np", "numpy")
+            and is_numpy_module(func.value.value)
         ):
             return func.value.attr
         return None
@@ -84,7 +84,7 @@ class ScatterAtRewriter(ast.NodeTransformer):
         before this rewriter runs (see :func:`lp_scatter_at`)."""
         if not (isinstance(expr, ast.Call) and isinstance(expr.func, ast.Attribute) and not expr.keywords):
             return None
-        is_np = isinstance(expr.func.value, ast.Name) and expr.func.value.id in ("np", "numpy")
+        is_np = is_numpy_module(expr.func.value)
         if expr.func.attr == "reshape":
             if is_np and len(expr.args) == 2:
                 base, shape_arg = expr.args

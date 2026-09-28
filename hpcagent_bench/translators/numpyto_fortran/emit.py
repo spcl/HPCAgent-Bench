@@ -5,11 +5,9 @@ import copy
 import dataclasses
 import functools
 import math
-from typing import Optional
 from collections.abc import Callable
+from typing import Optional
 
-from hpcagent_bench.translators.numpyto_fortran.intrinsics import literal_axis, reshape_dims
-from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc, KernelIR, is_alloc_marker
 from hpcagent_bench.translators.numpyto_common import dtypes, operators, parallelism
 from hpcagent_bench.translators.numpyto_common.emit_helpers import fftw
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import (
@@ -24,7 +22,6 @@ from hpcagent_bench.translators.numpyto_common.emit_helpers.tokens import (
     mentions_ident,
     mentions_word,
 )
-from hpcagent_bench.translators.numpyto_common.lib_nodes import FFT_LIBRARY_MARKER
 from hpcagent_bench.translators.numpyto_common.emitter import (
     BaseEmitter,
     TupleTargetSplitter,
@@ -33,12 +30,15 @@ from hpcagent_bench.translators.numpyto_common.emitter import (
     index_rank_error,
 )
 from hpcagent_bench.translators.numpyto_common.frontend import names_used_as_int
+from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc, KernelIR, is_alloc_marker
+from hpcagent_bench.translators.numpyto_common.lib_nodes import FFT_LIBRARY_MARKER
 from hpcagent_bench.translators.numpyto_common.lowering import (
     MATH_INTRINSIC_NAMES,
-    walk_complex,
     helper_returns_int,
     integer_valued_locals,
+    walk_complex,
 )
+from hpcagent_bench.translators.numpyto_fortran.intrinsics import literal_axis, reshape_dims
 
 __all__ = [
     "ABS_ATTRS",
@@ -2240,7 +2240,7 @@ class FortranBodyEmitter(BaseEmitter):
         if attr in ("maximum", "minimum") and len(node.args) >= 2:
             return self.emit_minmax(node.args, attr == "maximum")
         args_e = [self.emit_expr(a) for a in node.args]
-        if isinstance(node.func.value, ast.Name) and node.func.value.id == "np" and len(node.args) == 1:
+        if is_numpy_module(node.func.value) and len(node.args) == 1:
             cast = self.emit_dtype_cast(node, attr, args_e[0])
             if cast is not None:
                 return cast
@@ -3679,8 +3679,7 @@ class LocalTyping:
                 and isinstance(node.targets[0], ast.Name)
                 and isinstance(node.value, ast.Call)
                 and isinstance(node.value.func, ast.Attribute)
-                and isinstance(node.value.func.value, ast.Name)
-                and node.value.func.value.id == "np"
+                and is_numpy_module(node.value.func.value)
             ):
                 key = node.value.func.attr
                 key = key[:-1] if key.endswith("_") else key

@@ -6,6 +6,7 @@ import copy
 import enum
 
 from hpcagent_bench.translators.numpyto_common.ast_build import numpy_attribute
+from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.parallelism import is_timestep_loop
 from hpcagent_bench.translators.numpyto_common.subscripts import is_full_slice
 from hpcagent_bench.translators.numpyto_jax.errors import EmitError
@@ -297,8 +298,7 @@ def scatter_at_assign(call: ast.Call) -> ast.Assign | None:
         isinstance(f, ast.Attribute)
         and f.attr == "at"
         and isinstance(f.value, ast.Attribute)
-        and isinstance(f.value.value, ast.Name)
-        and f.value.value.id in ("np", "numpy")
+        and is_numpy_module(f.value.value)
         and f.value.attr in SCATTER_AT_METHOD
         and len(call.args) >= 2
     ):

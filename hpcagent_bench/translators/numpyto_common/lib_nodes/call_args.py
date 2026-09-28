@@ -3,6 +3,7 @@
 import ast
 from typing import Any
 
+from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import const_, const_int
 
 __all__ = [
@@ -13,7 +14,6 @@ __all__ = [
     "eval_axes",
     "kwarg_or_pos",
     "np_call_attr",
-    "np_fft_attr",
     "pad_widths",
     "parse_einsum_subscripts",
     "read_axis_keepdims",
@@ -23,29 +23,13 @@ __all__ = [
 ]
 
 
-def np_fft_attr(call: ast.Call) -> str | None:
-    """The ``<name>`` of an ``np.fft.<name>(...)`` / ``numpy.fft.<name>(...)`` call,
-    else ``None``. ``np.fft.*`` is a two-level attribute (``func.value`` is the
-    ``np.fft`` attribute), which the single-level ``np.<attr>`` matchers miss."""
-    f = call.func
-    if (
-        isinstance(f, ast.Attribute)
-        and isinstance(f.value, ast.Attribute)
-        and f.value.attr == "fft"
-        and isinstance(f.value.value, ast.Name)
-        and f.value.value.id in ("np", "numpy")
-    ):
-        return f.attr
-    return None
-
-
 def np_call_attr(func: ast.expr) -> str | None:
     """``np.foo`` -> ``"foo"``, ``np.foo.bar`` -> ``"foo.bar"``, anything else -> ``None``."""
     if not isinstance(func, ast.Attribute):
         return None
-    if isinstance(func.value, ast.Name) and func.value.id == "np":
+    if is_numpy_module(func.value):
         return func.attr
-    if isinstance(func.value, ast.Attribute) and isinstance(func.value.value, ast.Name) and func.value.value.id == "np":
+    if isinstance(func.value, ast.Attribute) and is_numpy_module(func.value.value):
         return f"{func.value.attr}.{func.attr}"
     return None
 

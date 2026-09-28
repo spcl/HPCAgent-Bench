@@ -6,6 +6,8 @@ from types import NotImplementedType
 from typing import Any
 
 from hpcagent_bench.translators.numpyto_common import dtypes
+from hpcagent_bench.translators.numpyto_common.ast_build import numpy_attribute
+from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.frontend import fold_shape_expr, substitute_inlined_scalar_defs
 from hpcagent_bench.translators.numpyto_common.lib_nodes.constructors import MESHGRID_AXIS_KW, expand_meshgrid
 from hpcagent_bench.translators.numpyto_common.lib_nodes.dims import shape_exprs_equal
@@ -27,7 +29,6 @@ from hpcagent_bench.translators.numpyto_common.lowering.shape_reads import is_ne
 from hpcagent_bench.translators.numpyto_common.lowering.slice_scalarize import SliceToScalarRewriter
 from hpcagent_bench.translators.numpyto_common.lowering.subscriptify import SubscriptifyNames
 from hpcagent_bench.translators.numpyto_common.lowering.views import is_rank_preserving_slice_view
-from hpcagent_bench.translators.numpyto_common.ast_build import numpy_attribute
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
 
 __all__ = [
@@ -52,9 +53,7 @@ def is_constructor_call(node: ast.Call) -> bool:
     semantics is allocation, NOT a shape-preserving elementwise op.
     Used by the whole-array rewriter to refuse expanding these
     forms into per-element loops."""
-    if not (
-        isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name) and node.func.value.id == "np"
-    ):
+    if not (isinstance(node.func, ast.Attribute) and is_numpy_module(node.func.value)):
         return False
     return node.func.attr in {
         "zeros",
@@ -165,8 +164,7 @@ def np_func_call(value: ast.AST, name: str) -> ast.Call | None:
         isinstance(value, ast.Call)
         and isinstance(value.func, ast.Attribute)
         and value.func.attr == name
-        and isinstance(value.func.value, ast.Name)
-        and value.func.value.id in ("np", "numpy")
+        and is_numpy_module(value.func.value)
     ):
         return value
     return None

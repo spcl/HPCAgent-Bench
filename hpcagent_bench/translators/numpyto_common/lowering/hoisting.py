@@ -2,8 +2,9 @@
 
 import ast
 
-from hpcagent_bench.translators.numpyto_common.lowering.mathfuncs import METHOD_TO_NP
 from hpcagent_bench.translators.numpyto_common.ast_build import numpy_attribute
+from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
+from hpcagent_bench.translators.numpyto_common.lowering.mathfuncs import METHOD_TO_NP
 
 __all__ = ["ComputedIndexCallHoister", "MethodCallRewriter", "StmtHoister"]
 
@@ -170,12 +171,7 @@ class ComputedIndexCallHoister(StmtHoister):
 
     def is_arg_reduction(self, call: ast.Call) -> bool:
         f = call.func
-        return (
-            isinstance(f, ast.Attribute)
-            and f.attr in self.ARG_REDUCTIONS
-            and isinstance(f.value, ast.Name)
-            and f.value.id in ("np", "numpy")
-        )
+        return isinstance(f, ast.Attribute) and f.attr in self.ARG_REDUCTIONS and is_numpy_module(f.value)
 
     def hoist_index(self, e: ast.Call) -> ast.Name:
         """Spill index Call ``e`` to a fresh Name. For an argmax / argmin over a

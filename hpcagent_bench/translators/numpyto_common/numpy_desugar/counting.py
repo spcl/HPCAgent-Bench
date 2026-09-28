@@ -3,12 +3,12 @@
 import ast
 import copy
 
+from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import numpy_call_attr
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import (
     DesugarError,
     RankedRewritePass,
     RewritePass,
     const_int,
-    np_attr,
     replace_call_with_name,
 )
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.hoist import HoistForm, ValueHoist
@@ -45,7 +45,7 @@ class DiffToSliceDifference(RewritePass):
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
         self.generic_visit(node)
-        if np_attr(node) != "diff" or len(node.args) != 1 or node.keywords:
+        if numpy_call_attr(node) != "diff" or len(node.args) != 1 or node.keywords:
             return node
         base = node.args[0]
         self.changed = True
@@ -96,11 +96,13 @@ class RepeatCountsInline(RankedRewritePass):
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST:
         self.generic_visit(node)
-        calls = [n for n in ast.walk(node.value) if np_attr(n) == "repeat" and len(n.args) == 2 and not n.keywords]
+        calls = [
+            n for n in ast.walk(node.value) if numpy_call_attr(n) == "repeat" and len(n.args) == 2 and not n.keywords
+        ]
         pre: list[ast.stmt] = []
         for call in calls:
             counts = call.args[1]
-            if np_attr(counts) != "diff" or len(counts.args) != 1:
+            if numpy_call_attr(counts) != "diff" or len(counts.args) != 1:
                 continue  # scalar count, or a sum we cannot derive -- not ours
             if (expr_rank(call.args[1], self.ranks) or 0) < 1 and not isinstance(counts, ast.Call):
                 continue
@@ -144,7 +146,7 @@ class BincountInline(RankedRewritePass):
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST:
         self.generic_visit(node)
-        calls = [n for n in ast.walk(node.value) if np_attr(n) == "bincount" and n.args]
+        calls = [n for n in ast.walk(node.value) if numpy_call_attr(n) == "bincount" and n.args]
         if not calls:
             return node
         pre: list[ast.stmt] = []
@@ -262,7 +264,11 @@ class SearchsortedMaterialize(RewritePass):
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST:
         self.generic_visit(node)
-        calls = [n for n in ast.walk(node.value) if isinstance(n, ast.Call) and np_attr(n) == "searchsorted" and n.args]
+        calls = [
+            n
+            for n in ast.walk(node.value)
+            if isinstance(n, ast.Call) and numpy_call_attr(n) == "searchsorted" and n.args
+        ]
         if not calls:
             return node
         pre: list[ast.stmt] = []
@@ -300,7 +306,7 @@ def hoist_histogram(node: ast.AST, hoist: ValueHoist) -> ast.expr | None:
     if not (isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Constant) and node.slice.value == 0):
         return None
     call = node.value
-    if not (isinstance(call, ast.Call) and np_attr(call) == "histogram" and len(call.args) >= 2):
+    if not (isinstance(call, ast.Call) and numpy_call_attr(call) == "histogram" and len(call.args) >= 2):
         return None
     a, bins = ast.unparse(call.args[0]), ast.unparse(call.args[1])
     kw = {k.arg: k.value for k in call.keywords}
@@ -373,7 +379,7 @@ HISTOGRAM_HOIST = HoistForm(frozenset({"histogram"}), (), hoist_histogram)
 def hoist_repeat_axis(node: ast.AST, hoist: ValueHoist) -> ast.expr | None:
     """``np.repeat(x, m, axis=k)`` (literal axis, scalar count) -> the temp its gather loop ``out[..., j, ...] =
     x[..., j // m, ...]`` fills. numba rejects ``axis=`` on np.repeat."""
-    if not isinstance(node, ast.Call) or np_attr(node) != "repeat" or len(node.args) < 2:
+    if not isinstance(node, ast.Call) or numpy_call_attr(node) != "repeat" or len(node.args) < 2:
         return None
     kw = {k.arg: k.value for k in node.keywords}
     ax = kw.get("axis") or (node.args[2] if len(node.args) > 2 else None)

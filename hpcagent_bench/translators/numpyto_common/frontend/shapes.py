@@ -3,15 +3,16 @@
 import ast
 import copy
 
-from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc
-from hpcagent_bench.translators.numpyto_common.lib_nodes import iter_extent_of, read_axis_keepdims
-from hpcagent_bench.translators.numpyto_common.subscripts import is_newaxis
-from hpcagent_bench.translators.numpyto_common.numpy_desugar import extent_tokens, name_value_pairs, shape_table
+from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
+from hpcagent_bench.translators.numpyto_common.emit_helpers.tokens import IDENT_RE
 from hpcagent_bench.translators.numpyto_common.frontend.body_rewrites import FoldTupleLocals
 from hpcagent_bench.translators.numpyto_common.frontend.initialize import SHAPE_FIRST_ARG, dtype_from_dtype_arg
 from hpcagent_bench.translators.numpyto_common.frontend.manifest import parse_shape_expression
 from hpcagent_bench.translators.numpyto_common.frontend.shape_arith import const_int, literal_axis
-from hpcagent_bench.translators.numpyto_common.emit_helpers.tokens import IDENT_RE
+from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc
+from hpcagent_bench.translators.numpyto_common.lib_nodes import iter_extent_of, read_axis_keepdims
+from hpcagent_bench.translators.numpyto_common.numpy_desugar import extent_tokens, name_value_pairs, shape_table
+from hpcagent_bench.translators.numpyto_common.subscripts import is_newaxis
 
 __all__ = [
     "RETURN_REDUCTIONS",
@@ -105,8 +106,7 @@ def shape_from_reduction(node: ast.AST, known: dict[str, str]) -> str | None:
         isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
         and node.func.attr in RETURN_REDUCTIONS
-        and isinstance(node.func.value, ast.Name)
-        and node.func.value.id in ("np", "numpy")
+        and is_numpy_module(node.func.value)
         and node.args
     ):
         return None
@@ -156,7 +156,7 @@ def transpose_operands(node: ast.AST) -> tuple[ast.AST | None, ast.AST | None]:
     if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "transpose"):
         return None, None
     f = node.func
-    if isinstance(f.value, ast.Name) and f.value.id in ("np", "numpy") and node.args:
+    if is_numpy_module(f.value) and node.args:
         return node.args[0], node.args[1] if len(node.args) > 1 else None
     if len(node.args) == 1 and isinstance(node.args[0], (ast.Tuple, ast.List)):
         return f.value, node.args[0]

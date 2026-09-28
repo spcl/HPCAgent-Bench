@@ -4,11 +4,12 @@ import ast
 import copy
 from collections.abc import Sequence
 
+from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
+    const_,
     const_int,
     slice_step_any,
     step_is_negative,
-    const_,
 )
 from hpcagent_bench.translators.numpyto_common.lowering.mathfuncs import MATH_BUILTINS
 from hpcagent_bench.translators.numpyto_common.lowering.shape_reads import const_int_index, is_newaxis
@@ -113,7 +114,7 @@ LOWERED_ELEMENTWISE: set[str] = set(MATH_BUILTINS.values()) | {"max", "min"}
 def np_func_name(func: ast.AST) -> str | None:
     """The elementwise function a call names, either spelling: ``np.maximum`` before lowering,
     a bare ``fmax`` after it. ``None`` when the callee is neither."""
-    if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name) and func.value.id in ("np", "numpy"):
+    if isinstance(func, ast.Attribute) and is_numpy_module(func.value):
         return func.attr
     if isinstance(func, ast.Name):
         return func.id

@@ -3,11 +3,12 @@
 import ast
 import copy
 
-from hpcagent_bench.translators.numpyto_common.subscripts import is_ellipsis, is_newaxis
-from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import AUG_OP_SRC, RewritePass, np_attr
+from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module, numpy_call_attr
+from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import AUG_OP_SRC, RewritePass
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.hoist import HoistForm, ValueHoist
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.kinds import dtype_kind
-from hpcagent_bench.translators.numpyto_common.numpy_desugar.ranks import newaxis_singletons, expr_rank
+from hpcagent_bench.translators.numpyto_common.numpy_desugar.ranks import expr_rank, newaxis_singletons
+from hpcagent_bench.translators.numpyto_common.subscripts import is_ellipsis, is_newaxis
 
 __all__ = [
     "FANCY_GATHER_HOIST",
@@ -61,8 +62,7 @@ class MgridInline(RewritePass):
             isinstance(val, ast.Subscript)
             and isinstance(val.value, ast.Attribute)
             and val.value.attr == "mgrid"
-            and isinstance(val.value.value, ast.Name)
-            and val.value.value.id in ("np", "numpy")
+            and is_numpy_module(val.value.value)
         ):
             return node
         if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Tuple):
@@ -255,8 +255,7 @@ class DecomposeRollSlice(ast.NodeTransformer):
             isinstance(v, ast.Call)
             and isinstance(v.func, ast.Attribute)
             and v.func.attr == "roll"
-            and isinstance(v.func.value, ast.Name)
-            and v.func.value.id in ("np", "numpy")
+            and is_numpy_module(v.func.value)
             and len(v.args) >= 2
             and len(node.targets) == 1
         ):
@@ -285,7 +284,7 @@ class DecomposeRollSlice(ast.NodeTransformer):
 
 def ix_vectors(node: ast.AST) -> list[ast.expr] | None:
     """``np.ix_(i, j, k)`` call -> its index vectors, else None."""
-    if np_attr(node) == "ix_" and node.args and not node.keywords:
+    if numpy_call_attr(node) == "ix_" and node.args and not node.keywords:
         return list(node.args)
     return None
 

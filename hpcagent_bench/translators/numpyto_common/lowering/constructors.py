@@ -3,11 +3,12 @@
 import ast
 import copy
 
+from hpcagent_bench.translators.numpyto_common.ast_build import numpy_attribute
+from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.lib_nodes.dims import NP_ZEROS_ALIASES
 from hpcagent_bench.translators.numpyto_common.lowering.hoisting import StmtHoister
 from hpcagent_bench.translators.numpyto_common.lowering.shape_harvest import ctor_shape_arg
 from hpcagent_bench.translators.numpyto_common.lowering.shape_reads import resolve_shape_token
-from hpcagent_bench.translators.numpyto_common.ast_build import numpy_attribute
 
 __all__ = [
     "CopyToAllocAndFill",
@@ -45,8 +46,7 @@ class FullCallHoister(StmtHoister):
             isinstance(v, ast.Call)
             and isinstance(v.func, ast.Attribute)
             and v.func.attr in ("full", "full_like")
-            and isinstance(v.func.value, ast.Name)
-            and v.func.value.id in ("np", "numpy")
+            and is_numpy_module(v.func.value)
             and len(v.args) >= 2
         )
 
@@ -79,8 +79,7 @@ class FullLikeRewriter(ast.NodeTransformer):
             and isinstance(v, ast.Call)
             and isinstance(v.func, ast.Attribute)
             and v.func.attr in ("full_like", "full")
-            and isinstance(v.func.value, ast.Name)
-            and v.func.value.id in ("np", "numpy")
+            and is_numpy_module(v.func.value)
             and len(v.args) >= 2
         ):
             return node
@@ -130,8 +129,7 @@ class EyeCallHoister(StmtHoister):
             isinstance(v, ast.Call)
             and isinstance(v.func, ast.Attribute)
             and v.func.attr in ("eye", "identity")
-            and isinstance(v.func.value, ast.Name)
-            and v.func.value.id in ("np", "numpy")
+            and is_numpy_module(v.func.value)
             and bool(v.args)
         )
 
@@ -193,7 +191,7 @@ def copied_name(node: ast.Assign) -> ast.Name | None:
     ):
         return None
     receiver = value.func.value
-    if isinstance(receiver, ast.Name) and receiver.id in ("np", "numpy"):
+    if is_numpy_module(receiver):
         return value.args[0] if len(value.args) == 1 and isinstance(value.args[0], ast.Name) else None
     return receiver if isinstance(receiver, ast.Name) and not value.args else None
 
@@ -224,8 +222,7 @@ class EyeToZerosDiagonal(ast.NodeTransformer):
             and isinstance(v, ast.Call)
             and isinstance(v.func, ast.Attribute)
             and v.func.attr in ("eye", "identity")
-            and isinstance(v.func.value, ast.Name)
-            and v.func.value.id in ("np", "numpy")
+            and is_numpy_module(v.func.value)
             and v.args
         ):
             return node
@@ -367,8 +364,7 @@ class ZerosRewriter(ast.NodeTransformer):
             and isinstance(node.targets[0], ast.Name)
             and isinstance(node.value, ast.Call)
             and isinstance(node.value.func, ast.Attribute)
-            and isinstance(node.value.func.value, ast.Name)
-            and node.value.func.value.id == "np"
+            and is_numpy_module(node.value.func.value)
             and node.value.func.attr in self.aliases
         ):
             name = node.targets[0].id
@@ -480,8 +476,7 @@ class MgridLowering(ast.NodeTransformer):
         if not (
             isinstance(rhs, ast.Subscript)
             and isinstance(rhs.value, ast.Attribute)
-            and isinstance(rhs.value.value, ast.Name)
-            and rhs.value.value.id == "np"
+            and is_numpy_module(rhs.value.value)
             and rhs.value.attr == "mgrid"
         ):
             return node

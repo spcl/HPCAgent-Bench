@@ -3,17 +3,17 @@
 import ast
 import copy
 
-from hpcagent_bench.translators.numpyto_common.subscripts import is_full_slice, is_newaxis
 from hpcagent_bench.translators.numpyto_common.ast_build import expr_of
+from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module, numpy_call_attr
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import (
     RankedRewritePass,
     RewritePass,
     const_int,
-    np_attr,
     name_store_counts,
 )
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.kinds import dtype_kind
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.ranks import expr_rank
+from hpcagent_bench.translators.numpyto_common.subscripts import is_full_slice, is_newaxis
 
 __all__ = [
     "ONE",
@@ -123,7 +123,7 @@ class OuterBroadcastPeel(RankedRewritePass):
             return [node.left, *node.comparators]
         if isinstance(node, ast.BoolOp):
             return list(node.values)
-        if np_attr(node) == "where" and len(node.args) == 3 and not node.keywords:
+        if numpy_call_attr(node) == "where" and len(node.args) == 3 and not node.keywords:
             return list(node.args)
         return None
 
@@ -439,7 +439,7 @@ class ReshapeFortranOrderInline(RewritePass):
         f = node.func
         if not (isinstance(f, ast.Attribute) and f.attr == "reshape" and node.args and len(node.keywords) == 1):
             return node
-        if isinstance(f.value, ast.Name) and f.value.id in ("np", "numpy"):
+        if is_numpy_module(f.value):
             return node  # function form ``np.reshape(x, shape, order=...)``
         kw = node.keywords[0]
         if kw.arg != "order" or not (isinstance(kw.value, ast.Constant) and kw.value.value == "F"):
@@ -473,7 +473,7 @@ class NumbaDtypeFixups(ast.NodeTransformer):
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
         self.generic_visit(node)
-        attr = np_attr(node)
+        attr = numpy_call_attr(node)
         if attr is None:
             return node
         for kw in node.keywords:

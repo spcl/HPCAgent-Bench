@@ -6,14 +6,12 @@ import dataclasses
 import math
 import pathlib
 import re
+from collections.abc import Callable
 from functools import lru_cache
 from typing import NamedTuple
-from collections.abc import Callable
 
-from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc, KernelIR
+from hpcagent_bench.translators.numpyto_c.pluto_predicate import if_convert
 from hpcagent_bench.translators.numpyto_common import dtypes, operators, parallelism
-from hpcagent_bench.translators.numpyto_common.subscripts import is_full_slice
-from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
 from hpcagent_bench.translators.numpyto_common.emit_helpers import fftw
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import (
     CONJ_ATTRS,
@@ -37,14 +35,16 @@ from hpcagent_bench.translators.numpyto_common.emitter import (
     index_rank_error,
 )
 from hpcagent_bench.translators.numpyto_common.frontend import names_used_as_int
+from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc, KernelIR
 from hpcagent_bench.translators.numpyto_common.lib_nodes import (
     BLAS_GEMM_MARKER,
     FFT_LIBRARY_MARKER,
     FFTN_LIBRARY_MARKER,
 )
-from hpcagent_bench.translators.numpyto_common.lowering import walk_complex, helper_returns_int, integer_valued_locals
+from hpcagent_bench.translators.numpyto_common.lowering import helper_returns_int, integer_valued_locals, walk_complex
+from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
 from hpcagent_bench.translators.numpyto_common.statement_desugar import binding_names
-from hpcagent_bench.translators.numpyto_c.pluto_predicate import if_convert
+from hpcagent_bench.translators.numpyto_common.subscripts import is_full_slice
 
 __all__ = [
     "ARITH_BODY",
@@ -1775,7 +1775,7 @@ class CBodyEmitter(BaseEmitter):
     def emit_attribute_call(self, node: ast.Call, attr: str) -> str | None:
         """``np.X(...)`` / ``arr.X(...)`` in scalar context; None when unsupported."""
         # np.<dtype>(x) scalar constructor is a typecast; emit the C cast via the registry (np.bool_ needs stripping).
-        if isinstance(node.func.value, ast.Name) and node.func.value.id == "np" and len(node.args) == 1:
+        if is_numpy_module(node.func.value) and len(node.args) == 1:
             key = attr[:-1] if attr.endswith("_") else attr
             if key in dtypes.REGISTRY or key in dtypes.SCALAR_KINDS:
                 return f"(({dtypes.c_type(key)})({self.emit_expr(node.args[0])}))"

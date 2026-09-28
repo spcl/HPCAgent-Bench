@@ -12,7 +12,6 @@ from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import (
     const_int,
     eigh_alias_names,
     eigh_call_ab,
-    np_submodule_attr,
 )
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.constants import (
     DEFAULT_FOLDING_BACKENDS,
@@ -169,7 +168,6 @@ __all__ = [
     "module_kind_tables",
     "name_binding_index",
     "name_value_pairs",
-    "np_submodule_attr",
     "rank_table",
     "rewrite_curve_fit",
     "shape_table",

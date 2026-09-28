@@ -4,7 +4,8 @@ import ast
 import copy
 
 from hpcagent_bench.translators.numpyto_common.ast_build import numpy_attribute
-from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import DesugarError, RankedRewritePass, np_attr
+from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import numpy_call_attr
+from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import DesugarError, RankedRewritePass
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.hoist import HoistForm, ValueHoist
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.kinds import dtype_kind
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.ranks import expr_rank
@@ -34,7 +35,7 @@ def matmul_pairs(node: ast.AST) -> list[ast.AST]:
     for n in ast.walk(node):
         if isinstance(n, ast.BinOp) and isinstance(n.op, ast.MatMult):
             out.append(n)
-        elif np_attr(n) == "matmul" and len(vars(n).get("args") or []) == 2:
+        elif numpy_call_attr(n) == "matmul" and len(vars(n).get("args") or []) == 2:
             out.append(n)
     return out
 
@@ -237,7 +238,7 @@ def hoist_int_matmul(node: ast.AST, hoist: ValueHoist) -> ast.expr | None:
     numba's ``@`` is BLAS-backed and float-only; float matmul is left for it. >2-D operands raise DesugarError."""
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.MatMult):
         return int_matmul_temp(node.left, node.right, hoist)
-    if isinstance(node, ast.Call) and np_attr(node) in ("matmul", "dot") and len(node.args) == 2:
+    if isinstance(node, ast.Call) and numpy_call_attr(node) in ("matmul", "dot") and len(node.args) == 2:
         return int_matmul_temp(node.args[0], node.args[1], hoist)
     return None
 
@@ -248,7 +249,7 @@ INT_MATMUL_HOIST = HoistForm(frozenset({"matmul", "dot"}), (ast.MatMult,), hoist
 def is_transpose_expr(v: ast.AST) -> bool:
     """``np.transpose(x, ...)`` / ``x.transpose(...)`` / ``x.T``: a non-contiguous view."""
     return (
-        np_attr(v) == "transpose"
+        numpy_call_attr(v) == "transpose"
         or (isinstance(v, ast.Attribute) and v.attr == "T")
         or (isinstance(v, ast.Call) and isinstance(v.func, ast.Attribute) and v.func.attr == "transpose")
     )
@@ -289,7 +290,7 @@ class ReshapeContiguousInline(ast.NodeTransformer):
 
     def visit_Call(self, node: ast.Call):
         self.generic_visit(node)
-        if np_attr(node) == "reshape" and node.args and self.noncontig_(node.args[0]):
+        if numpy_call_attr(node) == "reshape" and node.args and self.noncontig_(node.args[0]):
             node.args[0] = self.wrap(node.args[0])
         elif isinstance(node.func, ast.Attribute) and node.func.attr == "reshape" and self.noncontig_(node.func.value):
             node.func.value = self.wrap(node.func.value)
@@ -300,14 +301,14 @@ def as_matmul(node: ast.AST):
     """``a @ b`` / ``np.matmul(a, b)`` / ``np.dot(a, b)`` -> ``(a, b)`` else None."""
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.MatMult):
         return node.left, node.right
-    if np_attr(node) in ("matmul", "dot") and len(vars(node).get("args") or []) == 2:
+    if numpy_call_attr(node) in ("matmul", "dot") and len(vars(node).get("args") or []) == 2:
         return node.args[0], node.args[1]
     return None
 
 
 def as_reshape(node: ast.AST):
     """``np.reshape(x, shape)`` / ``x.reshape(shape)`` -> ``(x, shape_node)`` else None."""
-    if np_attr(node) == "reshape" and len(node.args) >= 2:
+    if numpy_call_attr(node) == "reshape" and len(node.args) >= 2:
         return node.args[0], node.args[1]
     if (
         isinstance(node, ast.Call)

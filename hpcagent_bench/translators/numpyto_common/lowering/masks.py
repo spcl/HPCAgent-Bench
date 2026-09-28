@@ -3,11 +3,12 @@
 import ast
 import copy
 
+from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of
+from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import const_, const_or_name
 from hpcagent_bench.translators.numpyto_common.lowering.indexing import has_negative_step, is_scalar_index, view_offset
 from hpcagent_bench.translators.numpyto_common.lowering.slice_fusion import strided_trip_count
 from hpcagent_bench.translators.numpyto_common.lowering.subscriptify import SubscriptifyNames
-from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import const_, const_or_name
 
 __all__ = [
     "BOOLEAN_NP_FUNCS",
@@ -296,7 +297,7 @@ def is_bool_call(e: ast.Call, bn: set[str]) -> bool:
     BOTH branches are boolean (it selects between them); an ``np`` constructor with ``dtype=bool``."""
     if isinstance(e.func, ast.Attribute) and e.func.attr in ("any", "all"):
         return True
-    if not (isinstance(e.func, ast.Attribute) and isinstance(e.func.value, ast.Name) and e.func.value.id == "np"):
+    if not (isinstance(e.func, ast.Attribute) and is_numpy_module(e.func.value)):
         return False
     if e.func.attr in BOOLEAN_NP_FUNCS:
         return True
@@ -523,8 +524,7 @@ class BooleanMaskReductionRewriter(ast.NodeTransformer):
         # Form ``np.<op>(arr[mask])``.
         if (
             isinstance(func, ast.Attribute)
-            and isinstance(func.value, ast.Name)
-            and func.value.id == "np"
+            and is_numpy_module(func.value)
             and func.attr in {"mean", "sum", "max", "min"}
             and len(call.args) == 1
             and not call.keywords
@@ -574,8 +574,7 @@ class BooleanMaskReductionRewriter(ast.NodeTransformer):
         # Form 1: np.<op>(...)
         if (
             isinstance(func, ast.Attribute)
-            and isinstance(func.value, ast.Name)
-            and func.value.id == "np"
+            and is_numpy_module(func.value)
             and func.attr in {"mean", "sum", "max", "min"}
             and len(call.args) == 1
         ):

@@ -3,7 +3,8 @@
 import ast
 from collections.abc import Callable
 
-from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import DesugarError, np_submodule_attr
+from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import numpy_submodule_attr
+from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import DesugarError
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.hoist import HoistForm, HoistTables, ValueHoist
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.kinds import dtype_kind
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.ranks import expr_rank
@@ -172,7 +173,7 @@ def hoist_linalg(node: ast.AST, hoist: ValueHoist) -> ast.expr | None:
     raises :class:`DesugarError`; an unknown-rank operand is left verbatim."""
     if not isinstance(node, ast.Call) or not node.args:
         return None
-    op = np_submodule_attr(node, "linalg")
+    op = numpy_submodule_attr(node, "linalg")
     if op == "solve":
         return hoist_solve(node, hoist)
     if op is None or op not in hoist.tables.lower_ops:

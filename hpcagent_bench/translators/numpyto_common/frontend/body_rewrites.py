@@ -4,6 +4,8 @@ import ast
 import copy
 from collections.abc import Iterable
 
+from hpcagent_bench.translators.numpyto_common.ast_build import numpy_attribute
+from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.frontend.initialize import FRAMEWORK_DTYPE_ALIASES
 from hpcagent_bench.translators.numpyto_common.frontend.manifest import field_nodes
 from hpcagent_bench.translators.numpyto_common.frontend.none_folding import (
@@ -22,7 +24,6 @@ from hpcagent_bench.translators.numpyto_common.numpy_desugar import (
     UfuncOutInline,
     UfuncReduceToReducer,
 )
-from hpcagent_bench.translators.numpyto_common.ast_build import numpy_attribute
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
 from hpcagent_bench.translators.numpyto_common.subscripts import base_name
 
@@ -399,8 +400,7 @@ def array_literal(value: ast.expr) -> tuple[list[ast.expr], ast.expr | None] | N
         isinstance(value, ast.Call)
         and isinstance(value.func, ast.Attribute)
         and value.func.attr == "array"
-        and isinstance(value.func.value, ast.Name)
-        and value.func.value.id in ("np", "numpy")
+        and is_numpy_module(value.func.value)
     ):
         return None
     if len(value.args) != 1 or not isinstance(value.args[0], (ast.List, ast.Tuple)) or not value.args[0].elts:
@@ -761,7 +761,7 @@ class NewaxisToNone(ast.NodeTransformer):
 
     def visit_Attribute(self, node: ast.Attribute) -> ast.AST:
         self.generic_visit(node)
-        if isinstance(node.value, ast.Name) and node.value.id == "np" and node.attr == "newaxis":
+        if is_numpy_module(node.value) and node.attr == "newaxis":
             return ast.Constant(value=None)
         return node
 
@@ -808,8 +808,7 @@ def np_ix_operands(value: ast.AST) -> list[ast.expr] | None:
         isinstance(value, ast.Call)
         and isinstance(value.func, ast.Attribute)
         and value.func.attr == "ix_"
-        and isinstance(value.func.value, ast.Name)
-        and value.func.value.id in ("np", "numpy")
+        and is_numpy_module(value.func.value)
         and value.args
         and not value.keywords
     ):

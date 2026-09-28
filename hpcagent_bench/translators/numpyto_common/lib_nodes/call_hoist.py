@@ -5,6 +5,7 @@ from collections.abc import Callable
 from types import NotImplementedType
 
 from hpcagent_bench.translators.numpyto_common import dtypes
+from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.lib_nodes.call_args import const_axis, kwarg_or_pos, read_axis_keepdims
 from hpcagent_bench.translators.numpyto_common.lib_nodes.constructors import arange_count
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import (
@@ -58,11 +59,7 @@ def numpy_call_key(call: ast.Call) -> tuple[str, str] | None:
     if isinstance(func, ast.Attribute):
         if isinstance(func.value, ast.Name):
             return ("np" if func.value.id == "np" else func.value.id, func.attr)
-        if (
-            isinstance(func.value, ast.Attribute)
-            and isinstance(func.value.value, ast.Name)
-            and func.value.value.id == "np"
-        ):
+        if isinstance(func.value, ast.Attribute) and is_numpy_module(func.value.value):
             return ("np", f"{func.value.attr}.{func.attr}")
     return None
 

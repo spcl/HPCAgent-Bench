@@ -3,8 +3,9 @@
 import ast
 import copy
 
+from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.lib_nodes.dims import NP_ZEROS_ALIASES
-from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of, extent_is_scalar
+from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import extent_is_scalar, iter_extent_of
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import const_or_name
 
 __all__ = [
@@ -412,8 +413,7 @@ class ResolveArrShape(ast.NodeTransformer):
         if (
             isinstance(rhs, ast.Call)
             and isinstance(rhs.func, ast.Attribute)
-            and isinstance(rhs.func.value, ast.Name)
-            and rhs.func.value.id == "np"
+            and is_numpy_module(rhs.func.value)
             and self.update_constructor_shape(target, rhs)
         ):
             return

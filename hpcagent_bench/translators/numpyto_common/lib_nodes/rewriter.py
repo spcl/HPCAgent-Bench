@@ -3,9 +3,10 @@
 import ast
 import copy
 import inspect
-from typing import TYPE_CHECKING
 from collections.abc import Callable
+from typing import TYPE_CHECKING
 
+from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.ir import tag_numpy_origin
 from hpcagent_bench.translators.numpyto_common.lib_nodes.call_hoist import CallHoister, numpy_call_key
 from hpcagent_bench.translators.numpyto_common.lib_nodes.dims import NP_ZEROS_ALIASES
@@ -437,10 +438,7 @@ class LibNodeRewriter(ast.NodeTransformer):
             return
         np_attr = (
             rhs.func.attr
-            if isinstance(rhs, ast.Call)
-            and isinstance(rhs.func, ast.Attribute)
-            and isinstance(rhs.func.value, ast.Name)
-            and rhs.func.value.id == "np"
+            if isinstance(rhs, ast.Call) and isinstance(rhs.func, ast.Attribute) and is_numpy_module(rhs.func.value)
             else None
         )
         if np_attr in NP_ZEROS_ALIASES:

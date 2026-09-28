@@ -3,12 +3,12 @@
 import ast
 
 from hpcagent_bench.translators.numpyto_common.ast_build import numpy_attribute
+from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module, numpy_call_attr
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import (
     REDUCE_FNS,
     RankedRewritePass,
     RewritePass,
     const_int,
-    np_attr,
 )
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.hoist import HoistForm, HoistTables, ValueHoist
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.kinds import dtype_kind
@@ -177,15 +177,11 @@ def reduce_axis_stmts(
 
 def reduce_call_parts(node: ast.Call, kw: dict[str | None, ast.expr]) -> tuple[str, ast.expr, ast.expr | None] | None:
     """``(op, operand, axis)`` of ``np.<op>(x, axis=k)`` or of the method form ``x.<op>(axis=k)``, else None."""
-    npop = np_attr(node)
+    npop = numpy_call_attr(node)
     if npop is not None and npop in REDUCE_FNS and node.args:
         return npop, node.args[0], kw.get("axis") or (node.args[1] if len(node.args) > 1 else None)
     func = node.func
-    if (
-        isinstance(func, ast.Attribute)
-        and func.attr in REDUCE_FNS
-        and not (isinstance(func.value, ast.Name) and func.value.id in ("np", "numpy"))
-    ):
+    if isinstance(func, ast.Attribute) and func.attr in REDUCE_FNS and not is_numpy_module(func.value):
         return func.attr, func.value, kw.get("axis") or (node.args[0] if node.args else None)
     return None
 
@@ -264,7 +260,7 @@ def hoist_reduce_axis_unless_native(node: ast.AST, hoist: ValueHoist) -> ast.exp
             and dtype_kind(parts[1], hoist.tables.dtypes) == "float"
         ):
             op, operand, axis = parts
-            if np_attr(node) is not None or axis is None:
+            if numpy_call_attr(node) is not None or axis is None:
                 return None
             if len(node.args) <= 1:
                 others = [k for k in node.keywords if k.arg != "axis"]
@@ -313,7 +309,7 @@ class KeepdimsToNewaxis(RewritePass):
     def visit_Call(self, node: ast.Call) -> ast.AST:
         self.generic_visit(node)
         kw = next((k for k in node.keywords if k.arg == "keepdims"), None)
-        if kw is None or not node.args or np_attr(node) not in REDUCE_FNS:
+        if kw is None or not node.args or numpy_call_attr(node) not in REDUCE_FNS:
             return node
         if not (isinstance(kw.value, ast.Constant) and kw.value.value is True):
             return node
@@ -351,12 +347,12 @@ def masked_reduce_of(node: ast.AST, gathers: dict[str, tuple]):
     ):
         return f.attr, f.value.id
     if (
-        np_attr(node) in MASKED_REDUCE_OPS
+        numpy_call_attr(node) in MASKED_REDUCE_OPS
         and len(node.args) == 1
         and isinstance(node.args[0], ast.Name)
         and node.args[0].id in gathers
     ):
-        return np_attr(node), node.args[0].id
+        return numpy_call_attr(node), node.args[0].id
     return None
 
 
@@ -487,7 +483,7 @@ class NormalizeNegativeAxis(RankedRewritePass):
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
         self.generic_visit(node)
-        op = np_attr(node)
+        op = numpy_call_attr(node)
         adding = op in AXIS_ADDING_OPS
         if not adding and op not in AXIS_PRESERVING_OPS:
             return node
@@ -536,8 +532,7 @@ class UfuncReduceToReducer(RewritePass):
             isinstance(f, ast.Attribute)
             and f.attr == "reduce"
             and isinstance(f.value, ast.Attribute)
-            and isinstance(f.value.value, ast.Name)
-            and f.value.value.id in ("np", "numpy")
+            and is_numpy_module(f.value.value)
             and f.value.attr in UFUNC_REDUCE_TO_CALL
         ):
             self.changed = True

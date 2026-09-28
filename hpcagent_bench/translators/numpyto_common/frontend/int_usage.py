@@ -2,6 +2,8 @@
 
 import ast
 
+from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
+
 __all__ = [
     "BITWISE_OPS",
     "INT_TRANSPARENT",
@@ -95,7 +97,7 @@ def shape_arguments(node: ast.Call) -> list[ast.expr]:
         shape_args = [node.args[0]]
     elif attr == "reshape":
         base = node.func.value
-        if isinstance(base, ast.Name) and base.id in ("np", "numpy"):
+        if is_numpy_module(base):
             if len(node.args) >= 2:  # np.reshape(a, newshape)
                 shape_args = [node.args[1]]
         else:  # a.reshape(N, M)

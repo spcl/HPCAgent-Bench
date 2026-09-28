@@ -6,6 +6,8 @@ from collections.abc import Callable, Sequence
 from types import NotImplementedType
 
 from hpcagent_bench.translators.numpyto_common import dtypes
+from hpcagent_bench.translators.numpyto_common.ast_build import numpy_attribute
+from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module, numpy_submodule_attr
 from hpcagent_bench.translators.numpyto_common.lib_nodes.array_methods import ARRAY_METHOD_SHAPE_OPS
 from hpcagent_bench.translators.numpyto_common.lib_nodes.call_args import (
     axes_kwarg,
@@ -13,7 +15,6 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.call_args import (
     const_axis,
     kwarg_or_pos,
     np_call_attr,
-    np_fft_attr,
     pad_widths,
     parse_einsum_subscripts,
     read_axis_keepdims,
@@ -37,7 +38,6 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
     slice_step_any,
     step_is_negative,
 )
-from hpcagent_bench.translators.numpyto_common.ast_build import numpy_attribute
 
 __all__ = [
     "BROADCASTING_UFUNCS",
@@ -77,7 +77,6 @@ __all__ = [
     "ifexp_extent",
     "index_array_extent",
     "is_integer_expr",
-    "is_numpy_receiver",
     "iter_extent_of",
     "matmul_extent",
     "method_extent",
@@ -363,18 +362,14 @@ def attribute_extent(expr: ast.Attribute, shape_table: ShapeTable) -> Extent | N
     return None
 
 
-def is_numpy_receiver(node: ast.expr) -> bool:
-    return isinstance(node, ast.Name) and node.id in ("np", "numpy")
-
-
 def call_extent(expr: ast.Call, shape_table: ShapeTable) -> Extent | None:
     """A call's result extent: the ``np.fft`` family, the method and function spellings of the
     shape-changing ops, reductions over an axis, then a broadcasting binary ufunc, then any
     elementwise function (the first operand whose extent resolves)."""
-    fft = np_fft_attr(expr)
+    fft = numpy_submodule_attr(expr, "fft")
     if fft is not None:
         return fft_extent(fft, expr, shape_table)
-    method = expr.func.attr if isinstance(expr.func, ast.Attribute) and not is_numpy_receiver(expr.func.value) else None
+    method = expr.func.attr if isinstance(expr.func, ast.Attribute) and not is_numpy_module(expr.func.value) else None
     if method == "reshape" and expr.args:
         return method_reshape_extent(expr, shape_table)
     if is_reduction_call(expr):
@@ -1190,11 +1185,7 @@ CTOR_FILL: dict[str, float] = {"zeros": 0.0, "zeros_like": 0.0, "ones": 1.0, "on
 def ctor_fill_element(expr: ast.Call) -> ast.expr | None:
     """The scalar every element of ``np.zeros(...)`` / ``np.ones_like(...)`` / ``np.full(...)``
     holds, or ``None`` when the call is not such a constructor."""
-    if not (
-        isinstance(expr.func, ast.Attribute)
-        and isinstance(expr.func.value, ast.Name)
-        and expr.func.value.id in ("np", "numpy")
-    ):
+    if not (isinstance(expr.func, ast.Attribute) and is_numpy_module(expr.func.value)):
         return None
     attr = expr.func.attr
     if attr in ("full", "full_like") and len(expr.args) >= 2:

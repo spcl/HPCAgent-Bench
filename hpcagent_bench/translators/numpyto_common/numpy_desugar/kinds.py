@@ -4,12 +4,11 @@ import ast
 from collections.abc import Mapping
 from typing import NamedTuple
 
+from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import numpy_call_attr, numpy_submodule_attr
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import (
     LIKE_CTORS,
     SHAPE_CTORS,
     eigh_call_kind,
-    np_attr,
-    np_submodule_attr,
     reachable_functions,
 )
 
@@ -195,9 +194,9 @@ def call_kind(value: ast.Call, dtypes: dict[str, str], calls: CallKinds = NO_CAL
             kinds = {dtype_kind(arg, dtypes, calls) for arg in value.args}
             return kinds.pop() if len(kinds) == 1 else None
         return None
-    if np_submodule_attr(value, "linalg") in ("norm", "eigvalsh"):
+    if numpy_submodule_attr(value, "linalg") in ("norm", "eigvalsh"):
         return "float"
-    attr = np_attr(value)
+    attr = numpy_call_attr(value)
     if attr == "tensordot" and len(value.args) >= 2:
         return promote_kind(dtype_kind(value.args[0], dtypes, calls), dtype_kind(value.args[1], dtypes, calls))
     if attr == "eye":
@@ -258,10 +257,10 @@ def dtype_kind(value: ast.AST, dtypes: dict[str, str], calls: CallKinds = NO_CAL
 def call_expr_kind(value: ast.Call, dtypes: dict[str, str], calls: CallKinds) -> str | None:
     """Kind of a call: ``np.fft`` / ``np.linalg`` first, then ``.astype`` and kind-keeping methods, then
     :func:`np_function_kind`."""
-    fft = np_submodule_attr(value, "fft")
+    fft = numpy_submodule_attr(value, "fft")
     if fft is not None:
         return FFT_RESULT_KINDS.get(fft)
-    linalg = np_submodule_attr(value, "linalg")
+    linalg = numpy_submodule_attr(value, "linalg")
     if linalg in ("cholesky", "inv") and value.args:
         return dtype_kind(value.args[0], dtypes, calls)  # a factor/inverse keeps the operand's kind
     if linalg == "solve" and len(value.args) >= 2:
@@ -269,7 +268,7 @@ def call_expr_kind(value: ast.Call, dtypes: dict[str, str], calls: CallKinds) ->
     f = value.func
     if isinstance(f, ast.Attribute) and f.attr == "astype" and value.args:
         return dtype_arg_kind(value.args[0])
-    attr = np_attr(value)
+    attr = numpy_call_attr(value)
     if attr is None and isinstance(f, ast.Attribute) and f.attr in KIND_KEEPING_METHODS:
         return dtype_kind(f.value, dtypes, calls)
     return np_function_kind(attr, value, dtypes, calls)

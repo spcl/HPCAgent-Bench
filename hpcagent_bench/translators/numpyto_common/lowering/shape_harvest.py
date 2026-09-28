@@ -3,6 +3,7 @@
 import ast
 from types import NotImplementedType
 
+from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module, numpy_submodule_attr
 from hpcagent_bench.translators.numpyto_common.frontend import collect_inlined_scalar_defs, dtype_from_constructor
 from hpcagent_bench.translators.numpyto_common.lib_nodes.dims import (
     DIM_IDENT_RE,
@@ -13,12 +14,11 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.dims import (
 )
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import (
     broadcast_children,
-    iter_extent_of,
     extent_is_scalar,
+    iter_extent_of,
 )
 from hpcagent_bench.translators.numpyto_common.lowering.mathfuncs import NP_ELEMENTWISE
 from hpcagent_bench.translators.numpyto_common.lowering.shape_reads import resolve_shape_token
-from hpcagent_bench.translators.numpyto_common.numpy_desugar import np_submodule_attr
 
 __all__ = [
     "UNHANDLED",
@@ -210,7 +210,7 @@ def harvest_assign(
     # ``np.linalg.<op>`` is a TWO-level attribute the single-level ``np.<attr>`` gate below never
     # matches: register what the solve / inv / cholesky expanders write -- ``solve`` returns x with
     # b's shape (not the square A's); ``inv`` / ``cholesky`` are shape-preserving.
-    linalg_op = np_submodule_attr(rhs, "linalg")
+    linalg_op = numpy_submodule_attr(rhs, "linalg")
     if linalg_op in ("solve", "inv", "cholesky"):
         source_arg = rhs.args[1] if linalg_op == "solve" and len(rhs.args) >= 2 else (rhs.args[0] if rhs.args else None)
         if isinstance(source_arg, ast.Name):
@@ -218,12 +218,7 @@ def harvest_assign(
             if linalg_source_shape:
                 shape_table[target_id] = tuple(linalg_source_shape)
         return
-    if (
-        isinstance(rhs, ast.Call)
-        and isinstance(rhs.func, ast.Attribute)
-        and isinstance(rhs.func.value, ast.Name)
-        and rhs.func.value.id == "np"
-    ):
+    if isinstance(rhs, ast.Call) and isinstance(rhs.func, ast.Attribute) and is_numpy_module(rhs.func.value):
         harvest_np_call(target_id, rhs, shape_table, dtype_table)
         return
     if is_scalar_helper_call(rhs, scalar_helpers):

@@ -8,9 +8,10 @@ from collections.abc import Callable, Iterator
 from typing import Any
 
 from hpcagent_bench.translators.numpyto_common import dtypes
+from hpcagent_bench.translators.numpyto_common.ast_build import numpy_attribute
+from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.frontend.shape_arith import IDENT_RE
 from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc
-from hpcagent_bench.translators.numpyto_common.ast_build import numpy_attribute
 
 __all__ = [
     "ARITH_OPS",
@@ -250,11 +251,7 @@ def dtype_module_consts(tree: ast.Module, shadowed: set[str]) -> dict[str, str]:
     return {
         name: v.attr
         for name, v in single_name_assigns(tree)
-        if isinstance(v, ast.Attribute)
-        and isinstance(v.value, ast.Name)
-        and v.value.id in ("np", "numpy")
-        and v.attr in DTYPE_ATTRS
-        and name not in shadowed
+        if isinstance(v, ast.Attribute) and is_numpy_module(v.value) and v.attr in DTYPE_ATTRS and name not in shadowed
     }
 
 
@@ -354,8 +351,7 @@ def parse_array_literal(call: ast.Call):
     if not (
         isinstance(call.func, ast.Attribute)
         and call.func.attr == "array"
-        and isinstance(call.func.value, ast.Name)
-        and call.func.value.id in ("np", "numpy")
+        and is_numpy_module(call.func.value)
         and call.args
     ):
         return None

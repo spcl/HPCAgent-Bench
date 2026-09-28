@@ -3,7 +3,8 @@
 import ast
 import copy
 
-from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import const_int, np_attr
+from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import numpy_call_attr
+from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import const_int
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.ranks import expr_rank
 
 __all__ = ["PadInline", "const_pair_widths", "pad_constant_inline_stmts", "pad_inline_stmts", "widths_all_literal"]
@@ -81,7 +82,7 @@ class PadInline(ast.NodeTransformer):
 
     def visit_Assign(self, node: ast.Assign):
         self.generic_visit(node)
-        if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Name) or np_attr(node.value) != "pad":
+        if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Name) or numpy_call_attr(node.value) != "pad":
             return node
         call = node.value
         kw = {k.arg: k.value for k in call.keywords}
