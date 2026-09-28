@@ -11,6 +11,7 @@ from collections.abc import Sequence
 import numpy as np
 
 __all__ = [
+    "MAX_CHECKED_RANKS",
     "AXIS_SCHEMES",
     "ArrayDist",
     "AxisDist",
@@ -53,6 +54,8 @@ if TYPE_CHECKING:  # hints only; the math core stays free of binding/envelope im
 
 #: The per-axis SPLIT schemes; replication is structural (unbound grid_dim, not a scheme here).
 AXIS_SCHEMES = ("block", "block_cyclic", "cyclic")
+#: The largest graded rank count the even-split check covers.
+MAX_CHECKED_RANKS = 16
 
 
 @dataclass(frozen=True, slots=True)
@@ -719,7 +722,7 @@ def layout_divisibility_refusal(
                 continue
             n = int(shape[axis_index])
             width = effective_block_size(axis)
-            for p in sorted({int(r) for r in graded_ranks if 1 <= int(r) <= 16}):
+            for p in sorted({int(r) for r in graded_ranks if 1 <= int(r) <= MAX_CHECKED_RANKS}):
                 if n % p != 0 or n % width != 0:
                     return (
                         f"distribution.arrays[{name!r}].axes[{axis_index}] declares scheme "

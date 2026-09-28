@@ -61,6 +61,10 @@ from hpcagent_bench.spec import select_short_names  # noqa: E402
 from hpcagent_bench.stats import palette, style  # noqa: E402
 
 __all__ = [
+    "MS_PER_S",
+    "PALE_RATIO_MAX",
+    "THOUSAND",
+    "WHOLE_LABEL_ABOVE",
     "CELL_COLUMNS",
     "CI_SEED",
     "DEFAULT_BASELINE",
@@ -128,6 +132,15 @@ TYPE: style.TypeScale = style.PRINT_SCALE
 #: takes a ``baseline`` argument: the denominator is a property of the figure, not the process.
 DEFAULT_BASELINE: str = "numba"
 
+#: A speedup label above this drops its fraction.
+WHOLE_LABEL_ABOVE: float = 100.0
+#: A speedup label above this is written in thousands ("1.2k").
+THOUSAND: float = 1000.0
+#: Runtimes are stored in milliseconds; a label at or above one second switches unit.
+MS_PER_S: float = 1000.0
+#: A cell whose ratio (or its inverse) is below this is pale, so its text is ink, not white.
+PALE_RATIO_MAX: float = 1.3
+
 
 def set_usetex(usetex: bool) -> None:
     """Toggle LaTeX text rendering for the process. ``False`` keeps mathtext (``$...$``)
@@ -172,10 +185,10 @@ def abbreviate_speedup(x: float) -> str:
         return ""
     prefix = "^" if x < 1 else ("v" if x > 1 else "")
     value = 1 / x if x < 1 else x
-    if value > 100:
-        value = float(int(value))  # above 100x the fraction is noise, so the label drops it
-    if value > 1000:
-        return prefix + format_fixed(value / 1000, 1) + "k"
+    if value > WHOLE_LABEL_ABOVE:
+        value = float(int(value))  # above this the fraction is noise, so the label drops it
+    if value > THOUSAND:
+        return prefix + format_fixed(value / THOUSAND, 1) + "k"
     return prefix + format_fixed(value, 1)
 
 
@@ -183,8 +196,8 @@ def abbreviate_runtime(x: float) -> str:
     """Short runtime label; DB times are in milliseconds."""
     if math.isnan(x):
         return ""
-    if x >= 1000:
-        return format_fixed(x / 1000, 2) + " s"
+    if x >= MS_PER_S:
+        return format_fixed(x / MS_PER_S, 2) + " s"
     return format_fixed(x, 2) + " ms"
 
 
@@ -475,7 +488,7 @@ def plot_heatmap(
 def ink_for(ratio: float) -> str:
     """Cell text colour: ink inside the pale middle of the ramp, white on its saturated ends."""
     magnitude = 1 / ratio if ratio < 1 else ratio
-    return style.INK if magnitude < 1.3 else "white"
+    return style.INK if magnitude < PALE_RATIO_MAX else "white"
 
 
 def ci_superscript(summary: pd.DataFrame, benchmark: str, framework: str) -> str:

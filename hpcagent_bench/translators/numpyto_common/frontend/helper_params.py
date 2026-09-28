@@ -9,6 +9,7 @@ from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc, ScalarDesc, 
 from hpcagent_bench.translators.numpyto_common.frontend.shapes import resolve_array_ref
 
 __all__ = [
+    "MAX_ARG_DEPTH",
     "ConstArg",
     "DescEntry",
     "DescKey",
@@ -25,6 +26,9 @@ __all__ = [
     "subscript_param",
     "widen_counting_scalar_params",
 ]
+
+#: How deep the argument classifiers recurse before answering no.
+MAX_ARG_DEPTH = 8
 
 
 #: Value of an ``ast.Constant``, spelled as the ast module itself types it. A call site in the
@@ -137,7 +141,7 @@ def boolean_valued_argument(
     Deliberately narrow -- only what is a predicate by construction, never a value that merely
     happens to be 0 or 1.
     """
-    if depth > 8:
+    if depth > MAX_ARG_DEPTH:
         return False
     if isinstance(arg, ast.Constant):
         return isinstance(arg.value, bool)
@@ -180,7 +184,7 @@ def integer_valued_argument(
     REAL array index" in Fortran. Deliberately narrow -- ``/`` is excluded, since true division of
     two integers is a float in numpy too.
     """
-    if depth > 8:
+    if depth > MAX_ARG_DEPTH:
         return False
     if isinstance(arg, ast.Constant):
         return isinstance(arg.value, int) and not isinstance(arg.value, bool)

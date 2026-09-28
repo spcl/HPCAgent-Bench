@@ -87,6 +87,7 @@ __all__ = [
     "SCORE_SIG_MARK",
     "SERVED_SPEEDUP_LABEL",
     "SHORT_NAMES",
+    "SHORT_ROW_IN",
     "SHORT_ROW_TOKEN_SUBS",
     "SIG_MEASURE_NAMES",
     "SNAP_PAD",
@@ -2305,6 +2306,8 @@ def dot_row_widths(columns: Sequence[DotColumn], config: FigureConfig = DEFAULT_
 #: A short row's token ticks: 1-2-5 per decade, each one labelled. 1 and 3 left a decade two grid
 #: lines, too few to read a mark's cost off.
 SHORT_ROW_TOKEN_SUBS: tuple[float, ...] = (1.0, 2.0, 5.0)
+#: A row lower than this (inches) is short: it takes :data:`SHORT_ROW_TOKEN_SUBS`.
+SHORT_ROW_IN: float = 1.6
 
 
 def measure_row_config(config: FigureConfig, row_height_in: float) -> FigureConfig:
@@ -2315,7 +2318,7 @@ def measure_row_config(config: FigureConfig, row_height_in: float) -> FigureConf
     return dataclasses.replace(
         retyped(config, label_pt=min(config.type_.label_pt, max(6.0, row_height_in * 8.0))),
         max_ticks=max(4, int(row_height_in * 7.0)),
-        token_subs=config.token_subs if row_height_in >= 1.6 else SHORT_ROW_TOKEN_SUBS,
+        token_subs=config.token_subs if row_height_in >= SHORT_ROW_IN else SHORT_ROW_TOKEN_SUBS,
     )
 
 
