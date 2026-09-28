@@ -318,7 +318,9 @@ COPY containers/lib/build-pluto.sh /build-pluto.sh
 ARG TBLIS_REF=
 RUN set -eux; \
     CFLAGS="-march=${MARCH}" CXXFLAGS="-march=${MARCH}" sh /build-hptt.sh; \
-    CFLAGS="-march=${MARCH}" CXXFLAGS="-march=${MARCH}" TBLIS_REF="${TBLIS_REF}" sh /build-tblis.sh; \
+    # No MARCH for tblis: its bundled BLIS builds every kernel family with that family's own -march
+    # (SVE, AVX-512) and dispatches at run time; a later -march overrides those and breaks the build.
+    TBLIS_REF="${TBLIS_REF}" sh /build-tblis.sh; \
     ldconfig; \
     test -f /usr/local/include/hptt.h; \
     test -f /usr/local/include/tblis/tblis.h; \

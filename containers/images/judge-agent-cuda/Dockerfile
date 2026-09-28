@@ -682,7 +682,9 @@ RUN set -eux; \
     ln -sfn "$("${spack}" location -i openmpi)" /opt/openmpi; \
     test -x /opt/openmpi/bin/mpicc; \
     CFLAGS="-march=${MARCH}" CXXFLAGS="-march=${MARCH}" sh /build-hptt.sh; \
-    CFLAGS="-march=${MARCH}" CXXFLAGS="-march=${MARCH}" TBLIS_REF="${TBLIS_REF}" sh /build-tblis.sh; \
+    # No MARCH for tblis: its bundled BLIS builds every kernel family with that family's own -march
+    # (SVE, AVX-512) and dispatches at run time; a later -march overrides those and breaks the build.
+    TBLIS_REF="${TBLIS_REF}" sh /build-tblis.sh; \
     git init -q /tmp/ska; \
     gitretry -C /tmp/ska fetch -q --depth 1 https://github.com/skarupke/ska_sort "${SKA_SORT_REF}"; \
     git -C /tmp/ska checkout -q FETCH_HEAD; \
