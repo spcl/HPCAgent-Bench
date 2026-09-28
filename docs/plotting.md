@@ -249,7 +249,7 @@ verdicts are the stars; the figure recomputes only the drawn point through
 | `placeholders=Fortran` | empty column for a leg with no data yet |
 | `pending=kimi27sglang,qwen38` | empty column per model with no pair yet; `?` with `--mark-pending` |
 | `difference=HIP:qwen38,...` | grey bar between a named pair's two marks, with its factor |
-| `comparators=<csv>` | compiler/framework marks from a `kernel,comparator,device,numba_ms,ms,speedup` table (one row per roster kernel, `speedup` blank where invalid; the artifact's `experiments/paper/comparators.py` writes it from the canon DB) |
+| `comparators=<csv>` | compiler/framework marks from a `kernel,comparator,device,numba_ms,ms,speedup` table (one row per roster kernel, `speedup` blank where invalid) |
 | `comparator-set=pluto:C,jax_cpu:C` | which comparators the panel draws and under which delivery; no `:group` = the panel's first delivery. One mark each: geomean of `speedup` over the valid kernels, 95% log-t interval from `summary.MIN_PAIRS_FOR_INTERVAL` kernels; solved row = valid / roster; nothing on the cost row. Numbers go to `<table>-comparators.csv` |
 
 A single comparison can also use top-level flags:
