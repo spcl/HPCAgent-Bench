@@ -7,7 +7,7 @@
 #   BUILD_TARGETS=agent OUTPUT_SQSH=$SCRATCH/ce-images/x.sqsh .../build.sh
 #
 # Overrides: BUILD_TARGETS, OUTPUT_SQSH (single target only), BASE_IMAGE,
-# LIBFABRIC_REF, SLURM_VERSION, SPACK_BUILDCACHE, SPACK_BUILD_JOBS, PIP_CACHE, CE_IMAGES, CE_BUILD_CACHE, CE_PULL.
+# LIBFABRIC_REF, SPACK_BUILDCACHE, SPACK_BUILD_JOBS, PIP_CACHE, CE_IMAGES, CE_BUILD_CACHE, CE_PULL.
 set -euo pipefail
 
 ulimit -c 0
@@ -40,12 +40,6 @@ BASE_IMAGE="${BASE_IMAGE:-nvcr.io/nvidia/pytorch:25.06-py3@sha256:6d46ebd64cfbc7
 IMAGE_VERSION="${IMAGE_VERSION:-dev}"
 mkdir -p "${CE_IMAGES}"
 
-# The host Slurm in spack's spelling (`slurm 25.05.8` -> 25-05-8-1): mpich +slurm must match its PMI.
-SLURM_VERSION="${SLURM_VERSION:-$(srun --version 2>/dev/null | awk '{print $2}' | tr . -)-1}"
-[[ "${SLURM_VERSION}" =~ ^[0-9]+-[0-9]+-[0-9]+-[0-9]+$ ]] \
-    || { echo "could not read the host Slurm version (got '${SLURM_VERSION}'); set SLURM_VERSION" >&2; exit 2; }
-printf 'slurm %s\n' "${SLURM_VERSION}"
-
 ce_podman_env
 
 # The release's dace pin (pyproject.toml dace-pin), which every job runs as baked.
@@ -72,7 +66,6 @@ BUILD_ARGS=(
   --build-arg "DACE_COMMIT=${DACE_COMMIT}"
   --build-arg "LIBFABRIC_REF=${LIBFABRIC_REF}"
   --build-arg "LIBFABRIC_COMMIT=${LIBFABRIC_COMMIT}"
-  --build-arg "SLURM_VERSION=${SLURM_VERSION}"
   --build-arg "SPACK_BUILD_JOBS=${SPACK_BUILD_JOBS:-64}"
 )
 # OUTPUT_SQSH names the output of a single-target build only.

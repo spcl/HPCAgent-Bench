@@ -31,7 +31,7 @@ run a newer Python: a result that differs between host and container can be the 
 | compilers | gcc 16 with Graphite (host C/C++/Fortran; not an offload compiler), LLVM 22 with MLIR, Polly, flang and OpenMP offload; `CC`/`CXX`/`FC` set explicitly (a stale configure cache beats `PATH`) |
 | vendor compiler | `amdclang` on AMD; NVHPC (`nvc`, `nvc++`, `nvfortran`) on CUDA, the only OpenACC path |
 | BLAS | spack OpenBLAS `threads=openmp` owns `libblas.so.3`/`liblapack.so.3`/`libcblas`/`liblapacke`, asserted by a real link (the scipy wheel's renamed symbols never resolve; BLIS on the generic names breaks LAPACKE) |
-| MPI | spack MPICH, GPU-aware for the platform, `device=ch4 netmod=ofi +slurm`, wrappers in `/opt/view/bin` ahead of every other MPI; Open MPI 5 beside it under `OPENMPI_ROOT`, not on `PATH` |
+| MPI | spack MPICH, GPU-aware for the platform, `device=ch4 netmod=ofi` (no `+slurm`: built-in PMI-1/2, any host Slurm), wrappers in `/opt/view/bin` ahead of every other MPI; Open MPI 5 beside it under `OPENMPI_ROOT`, not on `PATH` |
 | collectives | RCCL (`librccl.so` + `libnccl.so` alias) on AMD, NCCL on CUDA; no net plugin (see Fabric) |
 | polyhedral | `polycc` (Pluto `dc46216`, clang 17) and `ppcg` (`7cbf785`, own prefix `/opt/ppcg-install` so its isl never replaces Pluto's `libisl.so.23`); ppcg emits CUDA only, so AMD also needs `hipify-perl` |
 | profilers | `perf`; PAPI with `perf_event` (+ `cuda`/`nvml` on CUDA, `rocm`/`rocm_smi` on AMD); AMD `rocprofv3`, `rocprof-sys`, `rocprof-compute`; CUDA `ncu`, `nsys` |
@@ -183,9 +183,8 @@ Each rebuilt inference image is smoked against the campaign's serving arguments 
 
 **judge-agent-cuda.** CUDA is a spack external with `+allow-unsupported-compilers` (spack otherwise
 refuses gcc 16 with CUDA 12.9) and `NVCC_PREPEND_FLAGS=-allow-unsupported-compiler` is set before the
-spack layers. `SLURM_VERSION` is read from the build host (`srun --version`, spack spelling
-`25-05-8-1`) because MPICH's PMI must match; the build stops early if the pinned spack-packages lacks
-it. NVHPC, cuTENSOR and Nsight (ncu 2025.2.1, nsys 2025.3.2) come from NVIDIA's arm64/sbsa apt repos;
+spack layers. MPICH has no `+slurm`: its built-in PMI-1/2 client serves any host `srun --mpi=pmi2`,
+so no site's Slurm release is baked in. NVHPC, cuTENSOR and Nsight (ncu 2025.2.1, nsys 2025.3.2) come from NVIDIA's arm64/sbsa apt repos;
 `NVHPC_CUDA_HOME` keeps nvc on the base's CUDA. The NGC base's HPC-X Open MPI stays off `PATH`. No
 MKL, likwid or msr-tools (x86 only).
 
