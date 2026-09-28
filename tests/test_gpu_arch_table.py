@@ -28,7 +28,7 @@ SHELL_PATH = "/usr/bin:/bin"
 #: A gfx arch spelled out.
 GFX_LITERAL = re.compile(r"\bgfx[0-9a-f]{3,4}\b")
 #: The AMD image directories; each builds with ROCM_ARCH from the table.
-AMD_IMAGES = ("judge-agent-amd", "sglang", "vllm")
+AMD_IMAGES = ("judge-agent-amd", "sglang", "sglang-mi200", "vllm")
 #: Image directories outside the table, with the reason.
 NOT_AMD = {
     "judge-agent-cuda": "GH200 image built on another Alps cluster; its arch is a CUDA capability",
@@ -38,7 +38,12 @@ NOT_AMD = {
 #: The arch variables an image ENV sets and an EDF template may restate.
 ARCH_VARS = ("HCC_AMDGPU_TARGET", "PYTORCH_ROCM_ARCH", "GPU_ARCHS", "GPU_ARCH_LIST")
 #: Non-comment gfx literals that must stay, keyed by (file, stripped line), with the reason.
-LITERAL_EXCEPTIONS: dict[tuple[str, str], str] = {}
+LITERAL_EXCEPTIONS = {
+    (
+        "containers/images/sglang-mi200/Dockerfile",
+        r"""ALLOW = 'if amdgpu_target not in ["gfx942", "gfx950", "gfx1250"]:\n'""",
+    ): "upstream setup_rocm.py allow-list line, matched verbatim so the edit fails when upstream changes it",
+}
 #: rocminfo with a CPU agent first and one GPU agent, whose arch is filled in.
 ROCMINFO = """\
 *******
@@ -224,7 +229,7 @@ def test_no_gfx_arch_is_spelled_outside_the_table_in_builds_launchers_scripts_or
 
 def rendered_edfs(tmp_path: pathlib.Path) -> dict[str, dict[str, str]]:
     """install_edfs.sh run on stand-in images, as {template: rendered [env]}."""
-    roles = ("JUDGE_AGENT_AMD", "JUDGE_AMD", "INFERENCE_SGLANG", "INFERENCE_VLLM")
+    roles = ("JUDGE_AGENT_AMD", "JUDGE_AMD", "INFERENCE_SGLANG", "INFERENCE_VLLM", "INFERENCE_SGLANG_MI200")
     names = 'source "$1"; shift; for r in "$@"; do for s in SQSH EDF_LATEST TEMPLATE; do n="${r}_${s}"; echo "${!n}"; done; done'
     listed = run(["bash", "-c", names, "bash", str(CE / "images.env"), *roles], {})
     assert listed.returncode == 0, listed.stderr

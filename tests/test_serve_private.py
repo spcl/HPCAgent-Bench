@@ -22,11 +22,11 @@ LAUNCHER = ROOT / "containers" / "inference" / "serve-private.sbatch"
 #: The qwen38 campaign base whose serving flags the mi300 preset mirrors.
 CAMPAIGN_BASE = "llrbase-c:qwen38"
 KEY = "0123456789abcdef" * 4
-PRESETS = ("mi300",)
+PRESETS = ("mi300", "mi200")
 #: The partition each preset must refuse.
-OTHER_PARTITION = {"mi300": "mi200"}
+OTHER_PARTITION = {"mi300": "mi200", "mi200": "mi300"}
 #: How many servers each preset's default LEGS start in smoke mode.
-DEFAULT_LEG_COUNT = {"mi300": 1}
+DEFAULT_LEG_COUNT = {"mi300": 1, "mi200": 3}
 SECRETS = {"sglang-auth.yaml", "api.key", "auth.header"}
 HSN0_ADDRESS = "172.28.9.16"
 #: `ip -4 -o addr show dev hsn0` on a beverin node, verbatim.
@@ -93,7 +93,7 @@ def campaign_sglang_flags() -> dict[str, str]:
 def test_the_launcher_refuses_to_start_without_a_preset(tmp_path: pathlib.Path) -> None:
     done = launch(tmp_path, None)
     assert done.returncode == 2
-    assert "PRESET must be mi300" in done.stderr
+    assert "PRESET must be mi300 or mi200" in done.stderr
     assert_untouched(tmp_path, done)
 
 
@@ -179,15 +179,15 @@ def test_the_launcher_refuses_extra_args_that_name_the_host_port_key_config_toke
     tmp_path: pathlib.Path, extra: str
 ) -> None:
     """sglang enforces the key only with one tokenizer worker and never on /metrics."""
-    done = launch(tmp_path, "mi300", EXTRA_ARGS=extra)
+    done = launch(tmp_path, "mi200", EXTRA_ARGS=extra)
     assert done.returncode == 2
     assert "EXTRA_ARGS may not set" in done.stderr
 
 
 def test_the_launcher_refuses_a_malformed_leg(tmp_path: pathlib.Path) -> None:
-    done = launch(tmp_path, "mi300", LEGS="tp4:0.306 tp3:0.306")
+    done = launch(tmp_path, "mi200", LEGS="tp4:0.80 tp3:0.80")
     assert done.returncode == 2
-    assert "leg 'tp3:0.306'" in done.stderr
+    assert "leg 'tp3:0.80'" in done.stderr
 
 
 def test_the_mi300_preset_refuses_a_leg_wider_than_its_four_gpus(tmp_path: pathlib.Path) -> None:
@@ -209,6 +209,26 @@ def test_the_mi300_preset_serves_the_qwen38_campaign_flags_on_fp8_weights_with_a
     assert "--disable-custom-all-reduce" not in served
     assert "image:    hpcagent-bench-sglang-mi300-latest\n" in done.stdout
     assert "env:      SGLANG_USE_AITER=1 SGLANG_SET_CPU_AFFINITY=0\n" in done.stdout
+
+
+def test_the_mi200_preset_serves_bf16_weights_with_triton_attention_aiter_off_and_no_custom_all_reduce(
+    tmp_path: pathlib.Path,
+) -> None:
+    done = launch(tmp_path, "mi200")
+    assert done.returncode == 0, done.stderr
+    served = flags(argv_lines(done.stdout)[0].split())
+    assert served["--attention-backend"] == "triton"
+    assert "--disable-custom-all-reduce" in served
+    assert (served["--model-path"], served["--tp-size"], served["--mem-fraction-static"]) == (
+        "Qwen/Qwen3.8-27B",
+        "4",
+        "0.80",
+    )
+    shared = {name: value for name, value in campaign_sglang_flags().items() if name != "--mem-fraction-static"}
+    shared.pop("--attention-backend")
+    assert {name: served.get(name) for name in shared} == shared
+    assert "image:    hpcagent-bench-sglang-mi200-latest\n" in done.stdout
+    assert "env:      SGLANG_USE_AITER=0 SGLANG_SET_CPU_AFFINITY=0\n" in done.stdout
 
 
 @pytest.mark.parametrize("preset", PRESETS)
@@ -238,7 +258,7 @@ def test_serve_mode_starts_one_server_and_prints_a_loopback_tunnel_but_never_the
 
 
 def test_the_launcher_refuses_an_unknown_access(tmp_path: pathlib.Path) -> None:
-    done = launch(tmp_path, "mi300", ACCESS="public")
+    done = launch(tmp_path, "mi200", ACCESS="public")
     assert done.returncode == 2
     assert "ACCESS must be tunnel or alps, got 'public'" in done.stderr
     assert_untouched(tmp_path, done)
@@ -266,7 +286,7 @@ def test_alps_access_serves_no_metrics(tmp_path: pathlib.Path, preset: str) -> N
 
 
 def test_alps_access_refuses_a_node_without_an_hsn0_address_before_touching_anything(tmp_path: pathlib.Path) -> None:
-    done = launch(tmp_path, "mi300", ACCESS="alps", HSN0_LINE="", SLURMD_NODENAME="nid002536")
+    done = launch(tmp_path, "mi200", ACCESS="alps", HSN0_LINE="", SLURMD_NODENAME="nid002536")
     assert done.returncode == 2
     assert "ACCESS=alps: nid002536 has no hsn0 IPv4 address" in done.stderr
     assert_untouched(tmp_path, done)
@@ -295,7 +315,7 @@ def test_alps_serve_mode_publishes_the_url_model_and_key_path_but_never_the_key(
 
 def test_alps_serve_mode_deletes_endpoint_json_with_the_secrets_when_the_job_exits(tmp_path: pathlib.Path) -> None:
     """A Daint job that finds endpoint.json must be able to trust the server behind it is still there."""
-    done = launch(tmp_path, "mi300", ACCESS="alps", MODE="serve")
+    done = launch(tmp_path, "mi200", ACCESS="alps", MODE="serve")
     assert done.returncode == 0, done.stderr
     assert "endpoint.json: {" in done.stdout
     (run_dir,) = (tmp_path / "runs").iterdir()
@@ -303,7 +323,7 @@ def test_alps_serve_mode_deletes_endpoint_json_with_the_secrets_when_the_job_exi
 
 
 def test_alps_serve_mode_refuses_a_served_model_that_would_break_endpoint_json(tmp_path: pathlib.Path) -> None:
-    done = launch(tmp_path, "mi300", ACCESS="alps", MODE="serve", SERVED_MODEL='qwen"38')
+    done = launch(tmp_path, "mi200", ACCESS="alps", MODE="serve", SERVED_MODEL='qwen"38')
     assert done.returncode == 2
     assert "may not contain a quote or a backslash" in done.stderr
     assert_untouched(tmp_path, done)

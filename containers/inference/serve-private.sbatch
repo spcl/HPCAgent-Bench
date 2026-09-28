@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Private SGLang serving of Qwen3.8-27B on one beverin node:
+# Private SGLang serving of Qwen3.8-27B on one beverin node. PRESET picks the hardware:
 #
 #   PRESET  partition  GPUs       EDF                  weights               attention  default LEGS
 #   mi300   mi300      4x MI300A  hpcagent-bench-sglang-mi300-latest        Qwen3.8-27B-FP8       aiter      tp4:0.306
+#   mi200   mi200      8x MI250X  hpcagent-bench-sglang-mi200-latest  Qwen3.8-27B (BF16)    triton     tp4:0.80 tp4:0.88 tp8:0.80
 #
 # MODE=smoke (default): one fresh server per LEGS spec "tp<N>:<mem-fraction-static>". Per leg: wait on
 #   /health (auth-exempt), record the KV/Mamba allocator lines, assert 401 without the key and 200 with
@@ -28,7 +29,9 @@
 #   umask 077; mkdir -p ~/.config/hpcagent-bench; openssl rand -hex 32 > ~/.config/hpcagent-bench/mi300-endpoint.key
 #   cd <hpcagent-bench checkout or worktree>
 #   PRESET=mi300 sbatch --partition=mi300 --gpus-per-node=4 containers/inference/serve-private.sbatch
+#   PRESET=mi200 sbatch --partition=mi200 --gpus-per-node=8 containers/inference/serve-private.sbatch
 #   PRESET=mi300 MODE=serve sbatch --partition=mi300 --gpus-per-node=4 --time=08:00:00 <same path>
+#   PRESET=mi200 ACCESS=alps MODE=serve sbatch --partition=mi200 --gpus-per-node=8 --time=08:00:00 <same path>
 #   PRESET=mi300 MODE=serve DRY_RUN=1 bash containers/inference/serve-private.sbatch
 #
 # The header names no partition or GPU count; pass both, the preset refuses a wrong partition.
@@ -58,7 +61,12 @@ use_preset() {  # sets the PRESET_* values; key file, triton cache and run root 
             PRESET_LEGS="tp4:0.306" PRESET_AITER=1
             PRESET_FLAGS=(--attention-backend aiter)
             ;;
-        *) refuse "PRESET must be mi300, got '${PRESET:-}'" ;;
+        mi200)  # MI250X: no aiter gfx90a kernels, no FP8
+            PRESET_PARTITION=mi200 PRESET_GPUS=8 PRESET_EDF=hpcagent-bench-sglang-mi200-latest PRESET_MODEL=Qwen/Qwen3.8-27B
+            PRESET_LEGS="tp4:0.80 tp4:0.88 tp8:0.80" PRESET_AITER=0
+            PRESET_FLAGS=(--attention-backend triton --disable-custom-all-reduce)
+            ;;
+        *) refuse "PRESET must be mi300 or mi200, got '${PRESET:-}'" ;;
     esac
 }
 

@@ -48,6 +48,7 @@ moving tag or EDF name.
 | `judge-agent-amd`, `judge` | amd | `judge-agent-amd` (targets `agent`, `judge`) | `hpcagent-bench-{agent,judge}-mi300-latest` |
 | `judge-agent-amd-mi200`, `judge-mi200` | amd | `judge-agent-amd`, built on mi200 | `hpcagent-bench-{agent,judge}-mi200-latest` (+ `judge-mi200-mlscale`) |
 | `sglang`, `vllm` | amd | `sglang`, `vllm` | `hpcagent-bench-{sglang,vllm}-mi300-latest` |
+| `sglang-mi200` | amd | `sglang-mi200` | `hpcagent-bench-sglang-mi200-latest` |
 | `judge-agent-cuda`, `judge-cuda` | gh200 | `judge-agent-cuda` (targets `agent`, `judge`) | `hpcagent-bench-{agent,judge}-gh200-latest` |
 | `vllm-cuda` | gh200 | `vllm-cuda` | `hpcagent-bench-vllm-gh200-latest` |
 | `judge-agent-cpu`, `judge-cpu` | cpu | `judge-agent-cpu` (targets `agent`, `judge`) | `hpcagent-bench-{agent,judge}-cpu-<arch>-latest` |
@@ -80,8 +81,10 @@ Build when changing an image (partition `mi300` is in each `build.sbatch`):
 IMAGE_DIR=$PWD/judge-agent-amd sbatch build_and_verify.sbatch   # both targets, ~2 h warm
 IMAGE_DIR=$PWD/sglang          sbatch build_and_verify.sbatch   # ~1 h
 IMAGE_DIR=$PWD/vllm            sbatch build_and_verify.sbatch   # ~4 h
-# the mi200 pair (gfx90a, spack target zen3)
+# the mi200 pair and sglang-mi200 (gfx90a, spack target zen3)
 REPO=$PWD/../.. IMAGE_DIR=$PWD/judge-agent-amd \
+  sbatch --partition=mi200 --cpus-per-task=64 --gpus-per-node=8 build_and_verify.sbatch
+REPO=$PWD/../.. IMAGE_DIR=$PWD/sglang-mi200 \
   sbatch --partition=mi200 --cpus-per-task=64 --gpus-per-node=8 build_and_verify.sbatch
 
 DRY_RUN=1 ./promote_image.sh --all      # what would move
@@ -102,6 +105,16 @@ Re-verify a candidate without rebuilding with `VERIFY_ONLY=1` on `build_and_veri
 IMAGE=$SCRATCH/ce-images/<candidate>.sqsh PROFILE=<profile> sbatch verify_image.sbatch
 ```
 
+Fabric checks after a judge-agent build (name the candidate: the live names still hold the old image):
+
+| job | nodes | answers |
+|---|---|---|
+| `mpi_multinode_check.sbatch` | 2 | a cross-node MPI transfer rides cxi |
+| `rccl_hook_check.sbatch` | 2 | RCCL selects the OFI plugin, not its TCP fallback (any role) |
+
+```bash
+IMAGE=$SCRATCH/ce-images/hpcagent-bench-ce-amd-mi300-candidate.sqsh sbatch --dependency=afterok:<build job> mpi_multinode_check.sbatch
+```
 
 ### NVIDIA GH200 (daint)
 

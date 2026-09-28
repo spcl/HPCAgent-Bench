@@ -9,6 +9,10 @@
 #   REPO=$PWD IMAGE_DIR=containers/images/judge-agent-amd \
 #     sbatch --partition=mi200 --cpus-per-task=64 --gpus-per-node=8 containers/images/build_and_verify.sbatch
 #
+# sglang-mi200 builds and verifies on mi200 (64 physical cores); override the directives below:
+#   REPO=$PWD IMAGE_DIR=containers/images/sglang-mi200 \
+#     sbatch --partition=mi200 --cpus-per-task=64 --gpus-per-node=8 containers/images/build_and_verify.sbatch
+#
 # One job builds and verifies, so a build that cannot pass verification never reports success.
 # The build pulls first and keeps its caches by default (CE_PULL, CE_BUILD_CACHE in build_common.sh);
 # a pulled image is verified exactly like a built one.

@@ -39,9 +39,7 @@ sbatch --partition=mi300 --no-requeue \
 
 **mi200 (overflow, never paper data).** `PARTITION=mi200` swaps every `*_CE_ENV` to its `-mi200-`
 EDF, pins `layers/partition-mi200*.env` and requests 8 GCDs per node. The recorded experiment must
-name `mi200`. A hosted model needs nothing more; a model served on our nodes also needs its own
-`layers/partition-mi200-<model>.env`, and none ships today (there is no mi200 serving image), so a
-served arm is refused until one is added.
+name `mi200`; only qwen38 has an mi200 serving layer.
 
 ```bash
 PARTITION=mi200 EXPERIMENT=harness20-mi200 BASE=harness TAG=harness20 HARNESSES=claude SUBMIT=1 ./submit.sh

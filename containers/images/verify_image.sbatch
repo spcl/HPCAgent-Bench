@@ -13,7 +13,10 @@
 #          containers/images/verify_image.sbatch
 #
 # A standalone submission runs on SBATCH_PARTITION (site layer); build_and_verify.sbatch runs this
-# body inside its own allocation, on the build job's partition.
+# body inside its own allocation, on the build job's partition. mi200 example:
+#
+#   REPO=$PWD IMAGE=$SCRATCH/ce-images/hpcagent-bench-sglang-mi200-candidate.sqsh PROFILE=sglang-mi200 \
+#     sbatch --partition=mi200 --gpus-per-node=8 containers/images/verify_image.sbatch
 #
 # EDF generated here, not kept in ~/.edf: this runs against a CANDIDATE image no campaign mounts
 # yet, and a checked-in EDF pointing at one is how a candidate becomes live by accident.
@@ -37,14 +40,14 @@ mkdir -p "$(dirname "${EDF}")"
 # Per profile, not one combined PATH: each image has exactly one interpreter that matters, and
 # naming both prefixes would probe the wrong venv first.
 case "${PROFILE}" in
-    sglang) ce_path="/opt/venv/bin" ;;
+    sglang|sglang-mi200) ce_path="/opt/venv/bin" ;;
     vllm)                ce_path="/opt/pytorch211/bin" ;;
     *)                   ce_path="/opt/gcc/bin:/opt/view/bin:/opt/papi/bin:/opt/venv/bin" ;;
 esac
 # FI_PROVIDER on inference profiles only: setting it globally aborts MPI_Init on images that also
 # run MPI, so judge-agent EDFs leave it unset. This generated EDF must match production.
 case "${PROFILE}" in
-    sglang|vllm) ce_fi_provider='FI_PROVIDER = "cxi"' ;;
+    sglang|sglang-mi200|vllm) ce_fi_provider='FI_PROVIDER = "cxi"' ;;
     *)                        ce_fi_provider='' ;;
 esac
 # CC/CXX/FC and LD_LIBRARY_PATH carried over from judge-agent-amd/agent.edf.toml.in, the production
@@ -58,6 +61,11 @@ FC = "/opt/gcc/bin/gfortran"
 LD_LIBRARY_PATH = "/opt/rocm/lib:/opt/rocm/lib64:/opt/gcc/lib64:/opt/gcc/lib:/opt/view/lib:/opt/view/lib64:/opt/papi/lib:/usr/lib/x86_64-linux-gnu"'
         ;;
     *) ce_toolchain_env='' ;;
+esac
+# sglang-mi200 serves with aiter off, as its EDF template does.
+case "${PROFILE}" in
+    sglang-mi200) ce_aiter='SGLANG_USE_AITER = "0"' ;;
+    *)            ce_aiter='' ;;
 esac
 # The image carries no tool scripts: judge-agent roles get the checkout's agent tree bound where
 # run_cluster.sh binds it.
@@ -93,6 +101,7 @@ HWLOC_COMPONENTS = "-opencl,-levelzero,-gl"
 FI_CXI_RX_MATCH_MODE = "software"
 FI_MR_CACHE_MONITOR = "disabled"
 ${ce_fi_provider}
+${ce_aiter}
 ${ce_toolchain_env}
 TOML
 
@@ -110,6 +119,7 @@ rc=$?
 echo "=== self-containment: nothing may resolve outside the image ==="
 case "${PROFILE}" in
     sglang)        sc_modules="numpy,torch,sglang,flydsl,triton,cupy" ;;
+    sglang-mi200)  sc_modules="numpy,torch,sglang,sgl_kernel,triton,cupy" ;;
     vllm)          sc_modules="numpy,torch,vllm,triton" ;;
     *)             sc_modules="" ;;   # judge-agent-amd: the checker's own default list
 esac
@@ -142,10 +152,30 @@ case "${PROFILE}" in
     *) echo "=== tools check skipped for profile=${PROFILE} (no agent tools in image role) ==="; ;;
 esac
 
+# An import loads device code without launching it; this launches sgl_kernel/triton ops against
+# torch on the visible GPU. Counted for sglang-mi200; reported only for sglang.
+launch_rc=0
+case "${PROFILE}" in
+    sglang|sglang-mi200)
+        echo "=== kernel launch: sgl_kernel and triton ops against torch on the visible GPU ==="
+        srun --environment="${EDF}" python3 \
+             "${REPO}/containers/inference/sglang_kernel_launch_check.py" || launch_rc=$?
+        if [ "${PROFILE}" = sglang ]; then
+            echo "=== sglang: launch check rc=${launch_rc} reported, not counted ==="
+            launch_rc=0
+        fi
+        ;;
+    *) echo "=== kernel launch check skipped for profile=${PROFILE} ==="; ;;
+esac
+
 rm -f "${EDF}"
-echo "=== required-failure count: ${rc}; resolving outside the image: ${sc}; mpi: ${mpi_rc}; tools: ${tools_rc} ==="
+echo "=== required-failure count: ${rc}; resolving outside the image: ${sc}; mpi: ${mpi_rc}; tools: ${tools_rc}; launch: ${launch_rc} ==="
 if [ "${mpi_rc}" -ne 0 ]; then
     echo "MPI/GPU capability check FAILED -- image is not acceptable" >&2
+    exit 1
+fi
+if [ "${launch_rc}" -ne 0 ]; then
+    echo "kernel launch check FAILED -- device code does not run on this GPU" >&2
     exit 1
 fi
 # Any is disqualifying; the status says which dominated.

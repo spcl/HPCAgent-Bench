@@ -29,17 +29,32 @@ contrast, serves every interface without a key ([`README.md`](README.md)). Contr
 
 ### Preset
 
-`PRESET=mi300` (the only one): 4x MI300A, EDF `hpcagent-bench-sglang-mi300-latest`,
-`Qwen/Qwen3.8-27B-FP8`, aiter attention, `LEGS=tp4:0.306`. It passes `--context-length 262144 --max-running-requests 128 --mamba-full-memory-ratio 0.5
+| `PRESET` | Hardware | EDF | Weights | Attention | Default `LEGS` | Serve with |
+|---|---|---|---|---|---|---|
+| `mi300` | 4x MI300A | `hpcagent-bench-sglang-mi300-latest` | `Qwen/Qwen3.8-27B-FP8` | aiter | `tp4:0.306` | `tp4:0.306` |
+| `mi200` | 8x MI250X, 64 GiB each | `hpcagent-bench-sglang-mi200-latest` | `Qwen/Qwen3.8-27B` (BF16) | triton | `tp4:0.80 tp4:0.88 tp8:0.80` | `tp8:0.80` |
+
+Both pass `--context-length 262144 --max-running-requests 128 --mamba-full-memory-ratio 0.5
 --reasoning-parser qwen3 --tool-call-parser qwen3_coder`, the chat template
 `experiments/chat-template-qwen38.jinja`, and serve as `hpcagent-bench-vllm`.
 
-These match `SGLANG_EXTRA_ARGS` of `llrbase-c:qwen38` in `experiments/arms.yaml` (`tests/test_serve_private.py`
-fails if they diverge). 0.306 is node-wide on the APU and derated to 0.26 by aiter; move it only with
-the backend and mamba ratio ([`qwen38.md`](qwen38.md)). Measured: KV pool 3.36 M tokens, 714 Mamba
-slots, 84 tok/s cold on the 16-request load probe. Each leg writes SGLang's KV and Mamba allocation
-lines to `<leg dir>/memory.txt`; a clearly different pool means compare the job's `argv:` line with
-section 3.
+- `mi300` matches `SGLANG_EXTRA_ARGS` of `llrbase-c:qwen38` in `experiments/arms.yaml`
+  (`tests/test_serve_private.py` fails if they diverge). 0.306 is node-wide on the APU and derated
+  to 0.26 by aiter; move it only with the backend and mamba ratio ([`qwen38.md`](qwen38.md)).
+- `mi200`: MI250X has neither FP8 nor aiter kernels, so BF16, triton attention,
+  `--disable-custom-all-reduce`, `SGLANG_USE_AITER=0`. Its fraction is per 64 GiB GPU; mi300
+  values do not transfer. Image: `containers/images/sglang-mi200/README.md`.
+
+Measured per leg (401/200 check, tool and reasoning gate, 16 concurrent 256-token requests):
+
+| Preset, leg | KV pool | Max running | Load probe |
+|---|---|---|---|
+| mi300 `tp4:0.306` | 3.36 M tokens, 714 Mamba slots | not recorded | 84 tok/s, cold (first leg, warm-up included) |
+| mi200 `tp4:0.88` | 1.86 M | 78 | 315 tok/s |
+| mi200 `tp8:0.80` | 1.91 M | 128 | 322 tok/s |
+
+Each leg writes SGLang's KV and Mamba allocation lines to `<leg dir>/memory.txt`. A clearly different
+pool: compare the job's `argv:` line with section 3.
 
 ## 2. One-time setup
 
@@ -115,6 +130,9 @@ PRESET=mi300 MODE=serve DRY_RUN=1 bash "$L"                                   # 
 Job output: `serve-private-<jobid>.out` in the submit directory. Node:
 `squeue -u "$USER" -n serve-private -o '%i %T %N'`. In `serve` mode the connection block follows
 `unauthenticated POST: 401` and `authenticated POST: 200`; it names the key file, never the key.
+
+To check a running server from anywhere, `containers/inference/ping-endpoint.sh <node> <preset>`
+([`mi200-endpoint.md`](mi200-endpoint.md), section 3).
 
 ## 4. Connect from your laptop (`ACCESS=tunnel`)
 
