@@ -7,7 +7,6 @@ be missing from another."""
 
 import pathlib
 
-import pathlib
 
 import pytest
 

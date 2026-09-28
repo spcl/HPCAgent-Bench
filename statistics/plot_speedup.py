@@ -44,7 +44,6 @@ A cell with too few cleaned repetitions keeps its marker and is counted in a war
 """
 
 import argparse
-import itertools
 import math
 import pathlib
 import warnings
