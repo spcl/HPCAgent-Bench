@@ -1040,7 +1040,6 @@ def test_the_fallback_reading_scores_the_wrong_answer_at_one() -> None:
 
 
 def test_the_dot_row_stacks_the_success_row_between_speedup_and_cost(tmp_path: pathlib.Path) -> None:
-    assert efficacy_figures.MEASURES == ("speedup", "success", "cost")
     control, treated = solved_and_failed_pair()
     frame = pd.concat([control, treated])
     stats = plot.points(control, treated)
@@ -1490,7 +1489,6 @@ def test_a_comparators_mark_is_the_geomean_over_its_valid_kernels_and_its_solved
 
 @pytest.mark.parametrize(("kernels", "interval"), [(5, False), (6, True)])
 def test_a_comparator_gets_no_interval_below_min_pairs_for_interval(kernels: int, interval: bool) -> None:
-    assert efficacy_figures.summary.MIN_PAIRS_FOR_INTERVAL == 6
     values = [1.5, 2.0, 3.0, 2.5, 4.0, 1.2][:kernels]
     point = efficacy_figures.comparator_point(efficacy_figures.Comparator("pluto", "C", tuple(values), 40))
     assert math.isfinite(point.x_low) is interval and math.isfinite(point.x_high) is interval

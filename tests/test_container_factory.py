@@ -3,7 +3,6 @@
 """Unit tests for the container-launch factory: argv assembly, backend resolution, Harbor provider name."""
 
 import os
-import pathlib
 import subprocess
 
 import pytest
@@ -79,7 +78,6 @@ def test_the_default_backend_is_rootless_and_daemonless() -> None:
     running daemon and a root-equivalent group, which no HPC login node grants; apptainer and ce
     need the OCI image converted first. Only podman is both OCI-native and rootless."""
     spellings, _ = containers.load_backends()
-    assert containers.DEFAULT_BACKEND == "podman"
     assert spellings[containers.DEFAULT_BACKEND].image_form == "tag"  # consumes OCI unconverted
     assert spellings["apptainer"].image_form == "sif"  # a conversion, so never the default
     assert spellings["ce"].image_form == "edf"

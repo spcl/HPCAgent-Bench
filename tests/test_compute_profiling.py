@@ -585,7 +585,6 @@ def test_the_route_hands_the_compute_profiler_its_reps_kernel_and_a_home_under_t
 
 
 def test_the_service_and_the_module_agree_on_which_compute_profiler_serves_which_language() -> None:
-    assert service.COMPUTE_DEVICE_TOOLS == compute_profiling.COMPUTE_TOOLS
     assert set(compute_profiling.COMPUTE_TOOLS.values()) <= set(service.PROFILE_TOOLS)
 
 

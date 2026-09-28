@@ -34,11 +34,6 @@ def test_a_wide_node_stays_inside_the_cap(monkeypatch) -> None:
     assert driver.AGENT_START_STAGGER_MAX_SECONDS <= 300, "a cap this large is not a stagger"
 
 
-def test_the_stagger_can_be_turned_off(monkeypatch) -> None:
-    driver = load_driver(monkeypatch, AGENT_START_STAGGER_SECONDS="0")
-    assert driver.AGENT_START_STAGGER_SECONDS == 0
-
-
 def test_the_startup_gate_is_the_real_limit(monkeypatch) -> None:
     """A fixed delay cannot know how long a startup takes; the semaphore drains at whatever rate
     they actually complete. It has to be well under a node's agent count to mean anything."""

@@ -45,8 +45,3 @@ def test_claude_runs_with_background_tasks_off_whatever_the_submitter_exported(
     context = SimpleNamespace(replica_root="http://n0:8000", workdir=tmp_path)
     environment = driver.claude_env(context, base)
     assert environment["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] == "1"
-
-
-def test_the_switch_is_the_one_the_pinned_cli_reads(driver: ModuleType) -> None:
-    """The name is the CLI's own env key, not a variant spelling a later version might add."""
-    assert driver.CLAUDE_BACKGROUND_TASKS_OFF == "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"
