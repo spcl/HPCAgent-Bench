@@ -1,6 +1,6 @@
 # Serving gpt-oss-120b on MI300A
 
-`openai/gpt-oss-120b` on **vLLM 0.23.0**, one node, `tp=4`: the only model here served by vLLM.
+`openai/gpt-oss-120b` on **vLLM 0.28.0**, one node, `tp=4`: the only model here served by vLLM.
 Source of truth: `experiments/layers/model-oss120b.env`, plus the `hpcagent-bench-vllm-mi300-latest`
 EDF, which owns `VLLM_PLUGINS`. Background: [`knobs.md`](knobs.md).
 
@@ -24,7 +24,7 @@ EDF environment: `VLLM_PLUGINS=lora_filesystem_resolver,lora_hf_hub_resolver`.
 
 | Setting | Why |
 |---|---|
-| vLLM 0.23.0 (pinned in `containers/images/vllm/Dockerfile`) | 3013 tok/s against 2405 for 0.27.1, all in decode |
+| vLLM 0.28.0 (pinned in `containers/images/vllm/Dockerfile`), the one release every vLLM image uses | not yet timed on mi300; 0.23.0 did 3013 tok/s against 2405 for 0.27.1, all in decode |
 | `VLLM_PLUGINS` allowlist, EDF only | unset, `quark_online_quant` closes an import cycle (`cannot import name 'SamplingParams'`) once aiter settings change the import graph; an env file would override the EDF silently |
 | `--dtype bfloat16` | compute dtype; the checkpoint is pre-quantized mxfp4 |
 | `--generation-config auto` | keeps the model's sampling defaults (`vllm` discards them silently) |

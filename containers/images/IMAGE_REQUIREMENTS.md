@@ -173,8 +173,9 @@ Each rebuilt inference image is smoked against the campaign's serving arguments 
   prebuilt into `/opt/aiter-jit` (each op called, not imported), the ROCm triton attention backend,
   the tuned `moe-configs/`, and both `--reasoning-parser` and `--tool-call-parser` for kimi (with only
   one, turn 1 returns 400).
-* **vLLM (beverin):** vLLM 0.23.0 for oss120b; later releases route gpt-oss through
-  `triton_kernels.matmul_ogs`, which AMD's `triton_kernels` build lacks. `--generation-config auto`,
+* **vLLM (beverin):** vLLM 0.28.0, the same release as GH200. It routes gpt-oss through
+  `triton_kernels.matmul_ogs`, so AMD's site-packages `triton_kernels` (which renamed it) is removed
+  and vLLM's vendored copy serves the import; the build asserts it. `--generation-config auto`,
   never `vllm` (which discards the model's sampling defaults).
 * **vLLM (GH200):** the official arm64 image; its build asserts the engine version, a CUDA 12.9 torch
   built for `sm_90`, every parser name the serving configs use, and that no NCCL net plugin ships.
