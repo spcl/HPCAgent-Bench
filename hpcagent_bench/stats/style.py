@@ -97,7 +97,6 @@ __all__ = [
     "despine",
     "edge_width",
     "fallback_places",
-    "fill_width",
     "left_protrusion_in",
     "legend_below",
     "line_marker_boxes",
@@ -714,28 +713,6 @@ SVG_HASH_SALT: str = "hpcagent-bench"
 
 #: The white margin a placed figure keeps left and right of its ink, in inches.
 PLACED_SIDE_PAD_IN: float = 0.02
-
-
-def fill_width(fig: Figure, pad_in: float = PLACED_SIDE_PAD_IN, rounds: int = 3) -> None:
-    """Stretch the axes horizontally so their ink spans the canvas less ``pad_in`` per side.
-
-    Figure-level artists (legends, figure texts) stay put; a figure with a figure-level label
-    beside its axes must not call this.
-    """
-    width = float(fig.get_size_inches()[0])
-    axes = [ax for ax in fig.axes if ax.get_visible()]
-    for _ in range(rounds):
-        renderer = fig.canvas.get_renderer()
-        ink = Bbox.union([ax.get_tightbbox(renderer) for ax in axes])
-        left, right = ink.x0 / fig.dpi, ink.x1 / fig.dpi
-        if abs(left - pad_in) < 0.005 and abs(width - pad_in - right) < 0.005:
-            return
-        scale = (width - 2.0 * pad_in) / (right - left)
-        for ax in axes:
-            box = ax.get_position()
-            x0 = (pad_in + (box.x0 * width - left) * scale) / width
-            x1 = (pad_in + (box.x1 * width - left) * scale) / width
-            ax.set_position((x0, box.y0, x1 - x0, box.height))
 
 
 def placed_box(fig: Figure, width_in: float) -> Bbox:

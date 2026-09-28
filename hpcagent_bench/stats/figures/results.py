@@ -72,7 +72,6 @@ __all__ = [
     "NoBaselineRows",
     "abbreviate_runtime",
     "abbreviate_speedup",
-    "baseline_of",
     "cell_summary",
     "ci_superscript",
     "column_geomean",
