@@ -5,7 +5,6 @@ import contextlib
 import fcntl
 import functools
 import hashlib
-import importlib.util
 import json
 import math
 import os
@@ -23,7 +22,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from types import ModuleType
-from typing import TYPE_CHECKING, NamedTuple, TextIO, TypedDict, cast
+from typing import TYPE_CHECKING, Any, NamedTuple, TextIO, TypedDict, cast
 
 if TYPE_CHECKING:
     from harnesses import Closing, Context, Harness
@@ -851,27 +850,27 @@ def agent_runtime() -> pathlib.Path:
 
 
 @functools.lru_cache(maxsize=1, typed=True)
-def tool_registry() -> ModuleType:
-    """``tools/mcp_server.py`` of the runtime mcp.json starts: the tool names, their orders and their prompt
-    bullets. Loaded on first use, not at import, so a driver copied away from its runtime still imports."""
+def tool_registry() -> dict[str, Any]:
+    """What the runtime's ``tools/mcp_server.py`` offers this arm (``--describe``, under this process's
+    environment): ``allowed_tools``, ``prompt`` and ``prompt_cli``. Asked on first use, not at import,
+    so a driver copied away from its runtime still imports."""
     path = agent_runtime() / "tools" / "mcp_server.py"
     if not path.is_file():
         raise SystemExit(
             f"agent_driver: no tool registry at {path}; {AGENT_DIR_ENV} must name the bound containers/agent"
         )
-    spec = importlib.util.spec_from_file_location("hpcagent_bench_tool_registry", path)
-    if spec is None or spec.loader is None:
-        raise SystemExit(f"agent_driver: cannot load the tool registry {path}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    if "ALLOWED_TOOLS" not in vars(module):
-        raise SystemExit(f"agent_driver: {path} defines no ALLOWED_TOOLS")
-    return module
+    environment = {key: value for key, value in os.environ.items() if key != "PYTHONSAFEPATH"}
+    done = subprocess.run(
+        [sys.executable, str(path), "--describe"], capture_output=True, text=True, env=environment, check=False
+    )
+    if done.returncode != 0:
+        raise SystemExit(f"agent_driver: {path} --describe failed: {done.stderr.strip()[-500:]}")
+    return cast("dict[str, Any]", json.loads(done.stdout))
 
 
 def agent_tools() -> tuple[str, ...]:
     """Claude Code's ``--allowedTools``. A served tool left out is invisible to the model and nothing fails."""
-    return tuple(str(name) for name in tool_registry().ALLOWED_TOOLS)
+    return tuple(str(name) for name in tool_registry()["allowed_tools"])
 
 
 def packet_dir() -> pathlib.Path | None:
@@ -1337,11 +1336,7 @@ def budget_note(seconds: float, tokens: int, task_text: str = "") -> str:
 
 def token_cost_module() -> ModuleType:
     """``token_cost.py`` from beside this file, imported on first use. Same reason ``harness_module``
-    is not a top-level import: tests load this file by path with nothing on ``sys.path``, and the
-    agent image runs it as a script from the checkout."""
-    here = str(pathlib.Path(__file__).resolve().parent)
-    if here not in sys.path:
-        sys.path.insert(0, here)
+    is not a top-level import: the sibling loads only when the driver needs it."""
     import token_cost
 
     return token_cost
@@ -2098,11 +2093,7 @@ def open_tool_use_index(tail: str) -> int | None:
 
 def stream_idle_timeout_module() -> ModuleType:
     """``stream_idle_timeout.py`` from beside this file, imported on first use. Same reason
-    ``harness_module`` is not a top-level import: tests load this file by path with nothing on
-    ``sys.path``, and the agent image runs it as a script from the checkout."""
-    here = str(pathlib.Path(__file__).resolve().parent)
-    if here not in sys.path:
-        sys.path.insert(0, here)
+    ``harness_module`` is not a top-level import: the sibling loads only when the driver needs it."""
     import stream_idle_timeout
 
     return stream_idle_timeout
@@ -2304,7 +2295,6 @@ def promote_at_agent_exit(run_id: str, judge_url: str, kernel: str = "", since_m
     if not run_dir or not judge_url:
         return ""
     try:
-        sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
         import promote_unsubmitted
 
         return promote_unsubmitted.promote_one_worker(
@@ -2317,12 +2307,9 @@ def promote_at_agent_exit(run_id: str, judge_url: str, kernel: str = "", since_m
 def harness_module() -> ModuleType:
     """``harnesses.py`` from beside this file, imported on first use.
 
-    Not a top-level import, for the reason ``token_cost`` is not one either: tests load this file by
-    path with nothing on ``sys.path``, and the agent image runs it as a script from the checkout.
+    The driver runs as a script (run_cluster.sh starts it without PYTHONSAFEPATH), so its own
+    directory is on ``sys.path`` and its siblings import by name.
     """
-    here = str(pathlib.Path(__file__).resolve().parent)
-    if here not in sys.path:
-        sys.path.insert(0, here)
     import harnesses
 
     return harnesses
@@ -2563,8 +2550,8 @@ def render_prompt(problem: Problem, runtime: pathlib.Path, shared_note: str, tim
     )
     policy_tool, policy_closing = submission_policy_text()
     prompt = (
-        prompt_template.replace("{{TOOLS}}", str(tool_registry().prompt_tool_list()))
-        .replace("{{TOOLS_CLI}}", str(tool_registry().prompt_tool_list(cli=True)))
+        prompt_template.replace("{{TOOLS}}", str(tool_registry()["prompt"]))
+        .replace("{{TOOLS_CLI}}", str(tool_registry()["prompt_cli"]))
         .replace("{{HINTS}}", hints_text())
         .replace("{{TASK}}", task_block)
         .replace("{{SUBMISSION_POLICY_TOOL}}", policy_tool)
@@ -2593,8 +2580,14 @@ def write_mcp_config(
             {
                 "mcpServers": {
                     MCP_SERVER_NAME: {
-                        "command": "python3",
-                        "args": [str((runtime / "tools" / "mcp_server.py").resolve())],
+                        # A script, run as one: its own directory heads sys.path (not under PYTHONSAFEPATH).
+                        "command": "env",
+                        "args": [
+                            "-u",
+                            "PYTHONSAFEPATH",
+                            "python3",
+                            str((runtime / "tools" / "mcp_server.py").resolve()),
+                        ],
                         "env": identity_env(problem_index, worker_index),
                     }
                 }

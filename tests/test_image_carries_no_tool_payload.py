@@ -113,14 +113,14 @@ def fake_checkout(root: pathlib.Path, registry: str) -> tuple[pathlib.Path, path
 
 
 def test_the_launch_check_passes_when_the_bound_registry_lists_a_tool(tmp_path: pathlib.Path) -> None:
-    agent_dir, web_search = fake_checkout(tmp_path, 'ALLOWED_TOOLS = ("score",)\n')
+    agent_dir, web_search = fake_checkout(tmp_path, 'import json\nprint(json.dumps({"allowed_tools": ["score"]}))\n')
     result = launch_check(agent_dir, web_search)
     assert result.returncode == 0, result.stderr
     assert "agent tools: score" in result.stdout
 
 
-def test_the_launch_check_fails_naming_the_registry_that_has_no_allowed_tools(tmp_path: pathlib.Path) -> None:
-    agent_dir, web_search = fake_checkout(tmp_path, "REGISTRY = {}\n")
+def test_the_launch_check_fails_naming_the_registry_that_offers_no_tools(tmp_path: pathlib.Path) -> None:
+    agent_dir, web_search = fake_checkout(tmp_path, 'import json\nprint(json.dumps({"allowed_tools": []}))\n')
     result = launch_check(agent_dir, web_search)
     assert result.returncode != 0
-    assert str(agent_dir / "tools" / "mcp_server.py") in result.stderr and "ALLOWED_TOOLS" in result.stderr
+    assert str(agent_dir / "tools" / "mcp_server.py") in result.stderr and "offers no tools" in result.stderr

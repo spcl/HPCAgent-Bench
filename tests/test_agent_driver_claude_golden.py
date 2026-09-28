@@ -64,6 +64,11 @@ into ``launches.json``'s ``env`` right after ``CLAUDE_CODE_MAX_OUTPUT_TOKENS``, 
 and nowhere else. Under --print the CLI kills a Bash ``run_in_background`` task when the session
 ends, so the "you'll be notified" promise it makes is false there
 (tests/test_agent_driver_claude_background_tasks.py). Nothing else in the capture moved.
+
+A NINTH DELIBERATE EXCEPTION: ``mcp.json``'s server command became ``env -u PYTHONSAFEPATH python3
+<AGENT_RUNTIME>/tools/mcp_server.py`` (was ``python3 <...>``), in all three scenarios and nowhere else.
+The server runs as a script under Python's default path rule, so its sibling tools import from its own
+directory and no file edits ``sys.path``. Nothing else in the capture moved.
 """
 
 import importlib.util

@@ -51,8 +51,7 @@ keeps earlier records as `<stem>.attempt<N><suffix>`.
 ## Example: `run_miniswe.py`, trimmed
 
 ```python
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))  # PYTHONSAFEPATH=1 drops it
-import runner_common
+import runner_common  # the driver starts runners without PYTHONSAFEPATH: their own directory heads sys.path
 
 def run_episode(args: runner_common.RunnerArgs, usage_log: runner_common.UsageLog) -> tuple[str, str]:
     from minisweagent.agents.default import DefaultAgent
@@ -116,7 +115,7 @@ runner script is bound from the checkout at launch; only a new pin needs an imag
 
 ```bash
 python -m pytest --maxfail=10 tests/test_harness_dispatch.py tests/test_harness_runners.py \
-  tests/test_harness_episode.py tests/test_harness_identity.py tests/test_harness_pins.py
-PYTHONPATH=experiments python -c 'import harnesses; print(harnesses.HARNESSES, sorted(harnesses.RUNNERS))'
-PYTHONSAFEPATH=1 PYTHONPATH=containers/agent/harness python -c 'import run_myagent'
+  tests/test_harness_identity.py tests/test_harness_pins.py
+(cd experiments && python -c 'import harnesses; print(harnesses.HARNESSES, sorted(harnesses.RUNNERS))')
+(cd containers/agent/harness && python -c 'import run_myagent')
 ```
