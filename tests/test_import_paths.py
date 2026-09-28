@@ -37,12 +37,6 @@ ALLOWED: dict[str, str] = {
     "containers/agent/tools/mcp_server.py": "image script: own-directory insert (PYTHONSAFEPATH=1)",
     "experiments/agent_driver.py": "agent-image script: own-directory insert for its staged siblings",
     "experiments/harnesses.py": "agent-image module: own-directory insert",
-    "containers/images/selfcontained_check.py": "REMOVES its own directory from sys.path to "
-    "prove the image imports without the checkout",
-    # Third-party runtimes, not this repository's code.
-    "containers/images/judge-agent-amd/Dockerfile": "rocprof-compute's wrapper names its "
-    "own install dir, which PYTHONSAFEPATH=1 would otherwise hide",
-    "containers/inference/tune-moe-int4-mi300a.sbatch": "vendored deps (pydeps) of the MoE tuning script",
     # Tests: a child process or a temp module, given its own path.
     "tests/test_dace_helper_programs.py": "temp module written under tmp_path",
     "tests/test_harness_runners.py": "child mimics the image: runner/tool dir on the path, PYTHONSAFEPATH=1",

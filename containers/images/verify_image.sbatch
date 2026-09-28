@@ -113,7 +113,7 @@ case "${PROFILE}" in
     vllm)          sc_modules="numpy,torch,vllm,triton" ;;
     *)             sc_modules="" ;;   # judge-agent-amd: the checker's own default list
 esac
-srun --environment="${EDF}" python3 \
+srun --environment="${EDF}" python3 -P \
      "${REPO}/containers/images/selfcontained_check.py" \
      ${sc_modules:+--modules "${sc_modules}"}
 sc=$?

@@ -204,7 +204,7 @@ when editing. Per-model settings: [docs/serving/](../docs/serving/README.md).
 | `serve-daint.sbatch`, `alps-endpoint.sh` | GH200 serving and the client-side endpoint check |
 | `smoke-kimi-sglang.sbatch`, `submit-glm53-sglang.sh` | multi-node SGLang serving smokes (GLM-5.3 through the second) |
 | `verify-tools-reasoning.py`, `accuracy-gate.py` | tool-call/reasoning, long-context accuracy and throughput gates against a live server |
-| `tune-moe-int4-mi300a.sbatch`, `merge_moe_configs.py`, `moe-configs/` | MoE tuning; `moe-configs/` is build input for `sglang/` and `vllm/` |
+| `moe-configs/` | tuned fused-MoE kernel configs, build input for `sglang/` and `vllm/` |
 
 ## Running outside CSCS
 

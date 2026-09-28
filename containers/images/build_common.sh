@@ -402,7 +402,7 @@ ce_verify_candidate() {
         vllm-*) modules="numpy,torch,vllm,triton" ;;
         *)      modules="" ;;
     esac
-    srun "$@" --environment="${edf}" python3 "${CE_IMAGES_DIR}/selfcontained_check.py" \
+    srun "$@" --environment="${edf}" python3 -P "${CE_IMAGES_DIR}/selfcontained_check.py" \
         ${modules:+--modules "${modules}"} || rc=$((rc + 1))
     case "${profile}" in
         judge*)

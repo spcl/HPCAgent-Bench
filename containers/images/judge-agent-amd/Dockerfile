@@ -1082,7 +1082,7 @@ RUN set -eux; \
     /opt/rocprof-compute-venv/bin/pip install --no-cache-dir \
       "pandas==${ROCPROF_COMPUTE_PANDAS}" "numpy<2.3" -r "${rc}/requirements.txt"; \
     mv /opt/rocm/bin/rocprof-compute /opt/rocm/bin/rocprof-compute.image; \
-    printf '#!/bin/sh\nexec env PYTHONPATH="%s${PYTHONPATH:+:$PYTHONPATH}" /opt/rocprof-compute-venv/bin/python %s/rocprof-compute "$@"\n' "${rc}" "${rc}" \
+    printf '#!/bin/sh\nexec env -u PYTHONSAFEPATH /opt/rocprof-compute-venv/bin/python %s/rocprof-compute "$@"\n' "${rc}" \
       > /opt/rocm/bin/rocprof-compute; \
     chmod +x /opt/rocm/bin/rocprof-compute; \
     /opt/rocprof-compute-venv/bin/python -c "import pandas, tabulate, plotext, dash; \

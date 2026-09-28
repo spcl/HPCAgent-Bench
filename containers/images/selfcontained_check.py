@@ -5,7 +5,7 @@ Run inside a container. Mounted host filesystems are fine as DATA, but nothing t
 needs to run may resolve to one: that makes the image's behaviour depend on a host scratch
 directory instead of its digest.
 
-  python3 selfcontained_check.py [--modules numpy,torch,...]
+  python3 -P selfcontained_check.py [--modules numpy,torch,...]   # -P: its sibling sglang/ and vllm/ dirs must not shadow
 
 Exit status is the number of things resolving outside, so a gate can use it directly.
 """
@@ -30,17 +30,6 @@ OUTSIDE = (*DATA_ROOTS, "/users", "/home")
 BINARIES = ("python3", "gcc", "g++", "gfortran", "mpicc", "mpiexec", "hipcc", "cmake", "ninja")
 
 DEFAULT_MODULES = "numpy,scipy,pandas,sympy,networkx,torch,cupy,dace,mpi4py,islpy,z3,numba"
-
-
-def drop_own_directory_from_path() -> None:
-    """Take this script's own directory off sys.path before importing anything.
-
-    Python puts the script's directory at sys.path[0], and it lives beside directories named
-    `sglang` and `vllm` -- without this, `import sglang` would shadow to a namespace package here,
-    exactly the failure mode this check exists to detect.
-    """
-    own = str(pathlib.Path(__file__).resolve().parent)
-    sys.path[:] = [p for p in sys.path if p not in ("", ".", own)]
 
 
 def outside(path: str) -> bool:
@@ -118,7 +107,6 @@ def main() -> int:
     print(f"PYTHONSAFEPATH {os.environ.get('PYTHONSAFEPATH', '(unset)')}")
     print(f"cwd          {os.getcwd()}\n")
 
-    drop_own_directory_from_path()
     bad = check_modules([m for m in args.modules.split(",") if m])
     bad += check_binaries()
     bad += check_loader()
