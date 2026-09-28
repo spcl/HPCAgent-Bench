@@ -206,6 +206,22 @@ when editing. Per-model settings: [docs/serving/](../docs/serving/README.md).
 | `verify-tools-reasoning.py`, `accuracy-gate.py` | tool-call/reasoning, long-context accuracy and throughput gates against a live server |
 | `tune-moe-int4-mi300a.sbatch`, `merge_moe_configs.py`, `moe-configs/` | MoE tuning; `moe-configs/` is build input for `sglang/` and `vllm/` |
 
+## Running outside CSCS
+
+The judge and agent images carry MPICH built against libfabric. On Alps the CE's netstack hook
+supplies the host's libfabric (with the Slingshot `cxi` provider) and the EDF's `[env]` replaces the
+image's environment. Anywhere else -- docker, podman, apptainer, another site -- the image's own
+`LD_LIBRARY_PATH` reaches `/opt/ofi-fallback/lib`, a libfabric with the `tcp` and `sockets`
+providers, so MPI runs over TCP with no host library at all:
+
+```bash
+podman run --rm --device /dev/kfd --device /dev/dri <image> fi_info -p tcp -l
+```
+
+To use a faster fabric (InfiniBand verbs, EFA, ...), bind that site's libfabric over the fallback and
+name its provider, e.g. `-v /opt/site/libfabric/lib:/opt/ofi-fallback/lib:ro -e FI_PROVIDER=verbs`.
+The inference images need no MPI: RCCL falls back to sockets without a network plugin.
+
 ## Publishing
 
 `push_images.sbatch` publishes `<sqsh>.oci.tar` under each role's tag in `REGISTRY_REPO`
