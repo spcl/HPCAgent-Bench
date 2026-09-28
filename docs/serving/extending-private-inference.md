@@ -76,7 +76,7 @@ The `alps` URL uses the IP address because Daint resolving Beverin node names is
 
 ## 5. Adding an engine: vLLM
 
-Facts from the vLLM 0.23.0 image (the pin is now 0.28.0; re-check on the rebuilt image):
+Facts from the vLLM 0.23.0 image:
 
 - The key comes from `--api-key` or `VLLM_API_KEY` (`vllm/entrypoints/openai/api_server.py`). Set the
   variable inside the server step, e.g. `bash -c 'VLLM_API_KEY="$(cat <file>)" exec vllm serve ...'`;

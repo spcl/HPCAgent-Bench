@@ -8,13 +8,11 @@
 # build.sh does that with the right podman flags; build.sbatch runs build.sh on a compute node.
 # Read LIMITATION at the bottom: some gates need a serving job, not a build.
 #
-# vLLM is PINNED to 0.28.0, the one version every vLLM image here uses (vllm-cuda is the same
-# release), so there is one serving stack to reason about. Measured history: 0.27.1 served oss120b
-# about 25% slower than 0.23.0 on one pinned node (2405 against 3013 tok/s, all of it in decode;
-# docs/serving/oss120b.md); 0.28.0 on mi300 is not yet timed against that. Newer vLLM routes gpt-oss
-# through its mxfp4 path regardless of --dtype bfloat16, which imports triton_kernels.matmul_ogs;
-# AMD's site-packages triton_kernels shadows vLLM's vendored copy, so it is removed below (the
-# note at the end of this file has the measurement).
+# vLLM is PINNED to 0.23.0: 0.27.1 serves oss120b about 25% slower on one pinned node (2405 against
+# 3013 tok/s, all of it in decode; docs/serving/oss120b.md). 0.27.1 also routes gpt-oss through its
+# mxfp4 path in process_weights_after_loading regardless of --dtype bfloat16, and that path imports
+# triton_kernels.matmul_ogs (fused_moe/oracle/mxfp4.py:1137), which AMD's triton_kernels does not
+# carry under that name; see the note at the end of this file.
 ARG BASE_IMAGE=docker.io/rocm/pytorch:rocm7.2_ubuntu24.04_py3.12_pytorch_release_2.9.1\
 @sha256:a3b65813621095e3389269417e963725b59310184588c9d2490d44e6e83fa01c
 
@@ -33,13 +31,13 @@ ARG BASE_IMAGE=docker.io/rocm/pytorch:rocm7.2_ubuntu24.04_py3.12_pytorch_release
 # reaches the fabric through RCCL, not MPI, so unlike judge-agent-amd there is not even a
 # compile-time link target left to produce.
 #
-# PyTorch 2.11 + vLLM 0.28.0 + flash-attn + aiter live in their own venv at /opt/pytorch211,
+# PyTorch 2.11 + vLLM 0.23.0 + flash-attn + aiter live in their own venv at /opt/pytorch211,
 # separate from the base image's /opt/venv (torch 2.9.1), which stays intact as a control.
 # ------------------------------------------------------------------------------------------------
 FROM ${BASE_IMAGE} AS final
 USER root
 
-ARG VLLM_VERSION=0.28.0
+ARG VLLM_VERSION=0.23.0
 ARG TORCH_VERSION=2.11.0+rocm7.2
 ARG TORCHVISION_VERSION=0.26.0+rocm7.2
 ARG TORCHAUDIO_VERSION=2.11.0+rocm7.2
@@ -208,18 +206,6 @@ RUN set -eux; \
     ! /opt/pytorch211/bin/python -m pip show triton 2>/dev/null | grep -qx 'Name: triton'; \
     /opt/pytorch211/bin/python -c "import triton, triton.backends; \
       assert 'amd' in triton.backends.backends, sorted(triton.backends.backends)"
-
-# vLLM's vendored triton_kernels, not AMD's: import_triton_kernels prefers site-packages, where
-# AMD's snapshot has renamed matmul_ogs away, so the gpt-oss mxfp4 imports fail until it is gone.
-# Nothing else here imports the top-level package (aiter vendors its own).
-RUN set -eux; \
-    /opt/pytorch211/bin/python -m pip uninstall -y triton_kernels triton-kernels || true; \
-    /opt/pytorch211/bin/python -c "from vllm.utils.import_utils import has_triton_kernels; \
-assert has_triton_kernels(), 'no triton_kernels at all'; \
-import triton_kernels; assert 'vllm/third_party' in triton_kernels.__file__, triton_kernels.__file__; \
-from triton_kernels.matmul_ogs import FlexCtx, PrecisionConfig; \
-import triton_kernels.matmul_ogs_details.opt_flags; from triton_kernels.numerics import InFlexData; \
-print('gpt-oss mxfp4 imports resolve to', triton_kernels.__file__)"
 
 
 # aiter's JIT, built HERE instead of on the first request.

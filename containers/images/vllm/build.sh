@@ -27,7 +27,7 @@ ce_gpu_arch
 ce_podman_env
 
 # Pass-through for the ARGs a CANDIDATE image varies (VLLM_VERSION, AITER_REF). Empty by default.
-#   EXTRA_BUILD_ARGS="VLLM_VERSION=0.29.0 AITER_REF=v0.1.13.post1" ./build.sh
+#   EXTRA_BUILD_ARGS="VLLM_VERSION=0.28.0 AITER_REF=v0.1.13.post1" ./build.sh
 BUILD_ARGS=(--build-arg "ROCM_ARCH=${ROCM_ARCH}")
 for kv in ${EXTRA_BUILD_ARGS:-}; do BUILD_ARGS+=(--build-arg "${kv}"); done
 ce_pull_first "${SCRIPT_DIR}/Dockerfile" "vllm||${IMAGE_TAG}|${OUTPUT_SQSH}" -- "${BUILD_ARGS[@]}"
