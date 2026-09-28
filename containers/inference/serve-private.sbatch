@@ -35,7 +35,7 @@
 #   PRESET=mi300 sbatch --partition=mi300 --gpus-per-node=4 containers/inference/serve-private.sbatch
 #   PRESET=mi200 sbatch --partition=mi200 --gpus-per-node=8 containers/inference/serve-private.sbatch
 #   PRESET=mi300 MODE=serve sbatch --partition=mi300 --gpus-per-node=4 --time=08:00:00 <same path>
-#   PRESET=mi200 ACCESS=alps MODE=serve sbatch --partition=mi200 --gpus-per-node=8 --time=08:00:00 <same path>
+#   PRESET=mi300 ACCESS=alps MODE=serve sbatch --partition=mi300 --gpus-per-node=4 --time=08:00:00 <same path>
 #   PRESET=mi300 MODE=serve DRY_RUN=1 bash containers/inference/serve-private.sbatch
 #
 # The header names no partition or GPU count; pass both, the preset refuses a wrong partition.
