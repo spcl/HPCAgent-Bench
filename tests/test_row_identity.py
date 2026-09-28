@@ -462,12 +462,9 @@ def test_the_submitting_commit_comes_from_the_launcher_env(
     assert commits_of(db) == [("c4227a166",)]
 
 
-def test_the_job_code_snapshot_commit_wins_over_the_planned_one(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A queued job runs the checkout as it stands when the job STARTS (experiments/code_snapshot.sh),
-    so the arm env's stamp names the commit it was planned at and the snapshot names the code that
-    ran. The snapshot is read raw: an all-digit short sha must not come back as an int."""
+def test_the_job_commit_wins_over_the_planned_one(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A queued job runs the checkout as it stands when the job STARTS (its HEAD, run_cluster.sh), so
+    the arm env's stamp names the commit it was planned at and the snapshot names the code that ran. The snapshot is read raw: an all-digit short sha must not come back as an int."""
     db = str(tmp_path / "r.db")
     monkeypatch.setenv("HPCAGENT_BENCH_RECORD_COMMIT", "c4227a166")
     monkeypatch.setenv(recording.SNAPSHOT_COMMIT_ENV, "012345678")
@@ -476,7 +473,7 @@ def test_the_job_code_snapshot_commit_wins_over_the_planned_one(
 
 
 def test_an_empty_snapshot_commit_falls_back_to_the_planned_one(monkeypatch: pytest.MonkeyPatch) -> None:
-    """regrade.sbatch exports an EMPTY snapshot commit when it grades on the live tree."""
+    """A checkout with no git HEAD exports an EMPTY snapshot commit."""
     monkeypatch.setenv("HPCAGENT_BENCH_RECORD_COMMIT", "c4227a166")
     monkeypatch.setenv(recording.SNAPSHOT_COMMIT_ENV, " ")
     assert recording.snapshot_commit() is None

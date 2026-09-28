@@ -21,7 +21,6 @@ import time
 REPO = pathlib.Path(__file__).resolve().parents[1]
 TEXT = (REPO / "experiments" / "run_cluster.sh").read_text()
 
-TEARDOWN_BLOCK = TEXT[TEXT.index("# FROZEN TREE REMOVAL.") : TEXT.index(': "${SLURM_JOB_ID:?')]
 CLEANUP_END = "trap cleanup_steps_on_signal INT TERM\n"
 CLEANUP_BLOCK = TEXT[TEXT.index("step_pids=()\n") : TEXT.index(CLEANUP_END) + len(CLEANUP_END)]
 RELAY_START = "if gang_judge; then\n    export HPCAGENT_BENCH_GANG_RELAY_DIR="
@@ -37,7 +36,7 @@ def build(tmp_path: pathlib.Path, tail: str) -> pathlib.Path:
     script.write_text(
         "#!/usr/bin/env bash\nset -euo pipefail\n"
         f"SCRIPT_DIR={REPO / 'experiments'}\nRUN_DIR={tmp_path}\ngang_judge() {{ true; }}\n"
-        f'{TEARDOWN_BLOCK}{CLEANUP_BLOCK}sleep 300 & step_pids+=("$!")\n{RELAY_BLOCK}'
+        f'{CLEANUP_BLOCK}sleep 300 & step_pids+=("$!")\n{RELAY_BLOCK}'
         'echo "relay ${gang_relay_pid}"\n'
         f"{tail}\n"
     )

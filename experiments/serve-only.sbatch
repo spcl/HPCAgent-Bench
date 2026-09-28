@@ -82,6 +82,9 @@ if (( ${#nodes[@]} != INFERENCE_NODES )); then
     exit 2
 fi
 
+# The cache roots (FAST_SCRATCH, JIT_CACHE_ROOT, HF_HOME, ...) every role step reads, as run_cluster.sh's
+# batch shell resolves them for a campaign job.
+. "${SCRIPT_DIR}/env.sh"
 RUN_DIR="${RUN_ROOT}/${SLURM_JOB_ID}"
 mkdir -p "${RUN_DIR}"
 # The one file run_cluster.sh re-reads in the container, and the record of what this job served.
