@@ -1,6 +1,6 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Directive #4 sanitize pass: strip comments/docstrings (+ optional mangle)
+"""Directive #4 sanitize pass: strip comments/docstrings
 for the Python-emitting backends before container handoff. Pure-logic unit
 test."""
 
@@ -25,14 +25,6 @@ def test_strips_docstrings_by_default() -> None:
 def test_keeps_docstrings_when_asked() -> None:
     out = sanitize('"""keep me"""\nx = 1\n', strip_docstrings=False)
     assert "keep me" in out
-
-
-def test_mangle_renames_bound_names_not_attribute_members() -> None:
-    src = "import cupy as cp\ndef k(a):\n    t = cp.zeros(3)\n    return t + a\n"
-    out = sanitize(src, name_registry={"t": "_v0", "a": "_a0", "k": "_k"})
-    assert "_v0" in out and "_a0" in out and "def _k(" in out
-    assert "cp.zeros" in out  # attribute member NOT mangled
-    assert "\n    t " not in out  # original local gone
 
 
 def test_output_is_valid_python() -> None:
