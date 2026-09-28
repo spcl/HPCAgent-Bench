@@ -34,8 +34,8 @@ import sys
 FLOOR_MS = 10_000
 CEILING_MS = 1_800_000
 
-#: Node-aggregate prompt throughput, tokens/s, measured on job 641738 (qwen38, sglang, mi300,
-#: peak_running=5): 11,029,217 prompt tokens over 6917.5s of wall time. The floor a single request
+#: Node-aggregate prompt throughput, tokens/s, measured on one mi300 node serving qwen38 with SGLang
+#: at peak_running=5: 11,029,217 prompt tokens over 6917.5s of wall time. The floor a single request
 #: is promised under full contention -- divide by the arm's AGENTS_PER_NODE for its per-request share.
 MEASURED_NODE_PROMPT_TOK_S = 1594.39
 

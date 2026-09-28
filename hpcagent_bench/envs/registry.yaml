@@ -154,10 +154,9 @@ dropped_arms: "unionalpha|^scicomp-dc-cpp-|^scicomp-dc-gpu-.*-c-openmp-(?!device
 # re.sub (\1 = a captured group; an unmatched optional group is empty). The left spelling's rows, jobs
 # and owed kernels count as the right one's everywhere: remaining_kernels.base_arm (owed planning,
 # the wave board) and experiments.renamed_arm (extraction/analysis) both read it, so coverage is the
-# union and the latest run per kernel wins between them. "dc should be an alias for
-# perf playbook": the scicomp-focus40 CPU C control ran as scicomp-perf-playbook-<model>-plain
-# (09-13..) and again as scicomp-dc-<model>-plain (09-15..), same model, language, device, empty
-# packet, prompt and budget. Only that plain CPU C arm has both spellings; no other dc arm aliases.
+# union and the latest run per kernel wins between them. The scicomp-focus40 CPU C control ran
+# as scicomp-perf-playbook-<model>-plain and later as scicomp-dc-<model>-plain, same model,
+# language, device, empty packet, prompt and budget. Only that plain CPU C arm has both spellings; no other dc arm aliases.
 arm_aliases:
   '^scicomp-dc-([^-]+)-plain(-clean)?$': 'scicomp-perf-playbook-\1-plain\2'
 

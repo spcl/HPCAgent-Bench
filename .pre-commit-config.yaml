@@ -38,7 +38,7 @@ repos:
         entry: python scripts/checks/check_large_files.py
         language: system
       # The gate at the end of an image Dockerfile is python in a heredoc, so no python hook sees
-      # it and a name typed once and never bound costs the whole build (620855, 43 minutes).
+      # it and a name typed once and never bound costs the whole build.
       - id: hpcagent_bench-dockerfile-python
         name: no unbound names in embedded Dockerfile python
         entry: python scripts/checks/check_dockerfile_python.py
