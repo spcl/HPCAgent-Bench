@@ -13,6 +13,7 @@ the SAME table the emitters do -- one place to change a dtype.
 # registry itself stays numpy-free; this module is the harness's door to it, so importing here
 # means no caller can reach a bfloat16 row before numpy knows the name.
 import ml_dtypes  # noqa: F401
+import numpy as np
 from hpcagent_bench.translators.numpyto_common.dtypes import (
     REGISTRY,
     SCALAR_KINDS,
@@ -42,11 +43,13 @@ __all__ = [
     "c_type",
     "canonical",
     "compute_dtype",
+    "compute_view",
     "ctype_for",
     "ctype_for_scalar_kind",
     "fortran_kind",
     "info",
     "info_for_kind",
+    "is_float_dtype",
     "is_storage_only",
     "numpy_for_kind",
     "ptr_kind",
@@ -54,5 +57,30 @@ __all__ = [
     "scalar_kind",
     "size_multiple",
     "storage_dtype",
+    "storage_typedef",
     "value_range",
 ]
+
+
+def is_float_dtype(dtype: "np.typing.DTypeLike") -> bool:
+    """Whether ``dtype`` is a floating format: numpy's floats AND the storage-only ``ml_dtypes`` ones.
+    ``bfloat16`` and ``float8_e4m3fn`` report numpy kind ``V``, so a ``kind == "f"`` test silently
+    treats their arrays as opaque (no value domain, no tolerance floor)."""
+    resolved = np.dtype(dtype)
+    return resolved.kind == "f" or is_storage_only(resolved.name)
+
+
+def compute_view(array: "np.ndarray") -> "np.ndarray":
+    """``array`` in the dtype arithmetic on it is done in: a storage-only float as a copy in its compute
+    dtype (numpy has no bf16/fp8 arithmetic of its own), anything else unchanged."""
+    if is_storage_only(array.dtype.name):
+        return array.astype(np.dtype(compute_dtype(array.dtype.name)))
+    return array
+
+
+def storage_typedef(dtype: str) -> str:
+    """The C declaration a storage-only format crosses an ABI as: a same-width unsigned integer named by
+    its C type (``typedef uint16_t __npb_bf16;``) -- the caller only moves the bytes, the kernel widens
+    them to compute."""
+    width = 8 * int(np.dtype(storage_dtype(dtype)).itemsize)
+    return f"typedef uint{width}_t {c_type(dtype)};"

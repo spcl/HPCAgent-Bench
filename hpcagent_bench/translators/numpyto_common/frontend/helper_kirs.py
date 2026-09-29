@@ -5,6 +5,7 @@ import copy
 import dataclasses
 from collections.abc import Sequence
 
+from hpcagent_bench.translators.numpyto_common import dtypes
 from hpcagent_bench.translators.numpyto_common.ast_build import name_
 from hpcagent_bench.translators.numpyto_common.frontend.axes import reject_symbolic_axis, reject_unsupported_slices
 from hpcagent_bench.translators.numpyto_common.frontend.body_rewrites import native_desugar
@@ -562,8 +563,13 @@ class HelperKirBuilder:
 
     def build_array_return(self, site: Site, hret_shape: list[str], hret_dtype: str | None) -> None:
         """An array-returning helper: specialised on the first site's literal arguments, unused params
-        dropped, the return written into an out-param (or into the argument it already updates)."""
+        dropped, the return written into an out-param (or into the argument it already updates).
+
+        A fresh out-param is a TEMPORARY, and temporaries live in the compute dtype: a helper returning
+        into a bf16 / fp8 target returns float, and the caller demotes on its copy into the target."""
         hfn, hdef = site.hfn, site.hdef
+        if hret_dtype is not None:
+            hret_dtype = dtypes.compute_dtype(hret_dtype)
         call_consts = {pn: a for pn, a in zip(site.pnames, site.call.args) if literal_call_arg(a)}
         # Also prunes what the substitution makes dead, so ``used`` below sees no dead reads.
         bind_call_constants(hfn, call_consts)

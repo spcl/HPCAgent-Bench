@@ -33,7 +33,10 @@ from hpcagent_bench.translators.numpyto_common.lowering.shape_harvest import is_
 from hpcagent_bench.translators.numpyto_common.lowering.shape_reads import is_newaxis
 from hpcagent_bench.translators.numpyto_common.lowering.slice_scalarize import SliceToScalarRewriter
 from hpcagent_bench.translators.numpyto_common.lowering.subscriptify import SubscriptifyNames
-from hpcagent_bench.translators.numpyto_common.lowering.views import is_rank_preserving_slice_view
+from hpcagent_bench.translators.numpyto_common.lowering.views import (
+    is_rank_preserving_slice_view,
+    refuse_scalarising_a_contraction,
+)
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
 
 __all__ = [
@@ -274,6 +277,9 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
         shape = self.shape_table.get(target.id)
         if not shape:
             return []
+        # A matmul the hoister declined would be scalarised here into an elementwise product of its
+        # operands at the target's indices: refused, as slice fusion refuses it.
+        refuse_scalarising_a_contraction(value)
         iters = [f"__w{i}" for i in range(len(shape))]
         idx = name_(iters[0]) if len(iters) == 1 else ast.Tuple(elts=[name_(i) for i in iters], ctx=ast.Load())
         lhs_sub = ast.Subscript(value=name_(target.id), slice=idx, ctx=ast.Store())

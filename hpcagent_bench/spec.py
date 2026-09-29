@@ -152,7 +152,7 @@ __all__ = [
     "resolve_array_args",
     "resolve_input_args",
     "resolve_preset",
-    "scaled_xl",
+    "scale_axes_of",
     "scenarios_without_perturbation",
     "select_short_names",
     "selector_slug",
@@ -166,7 +166,6 @@ __all__ = [
     "str_block_of",
     "target_names",
     "track_datatype",
-    "track_scaled",
     "unimportable_module_path",
     "validate_dwarf",
     "validate_init_kinds",
@@ -175,7 +174,6 @@ __all__ = [
     "validate_min_precision",
     "validate_scale",
     "value_of",
-    "xl_size_scale",
 ]
 
 #: One complete config: every ``config:`` symbol bound to one value. What
@@ -336,7 +334,7 @@ PRESET_CHOICES = tuple(p.value for p in Preset)
 #: ``sizing`` imports this module.
 RUNGS = tuple(p.value for p in Preset if p is not Preset.FUZZED)
 
-#: The track whose kernels take a configured datatype (``ml.datatype``) and XL scale (``ml.xl_size_scale``).
+#: The track whose kernels take a configured datatype (``ml.datatype``).
 TRACK_DATATYPE_TRACK = "machine_learning"
 
 
@@ -353,32 +351,6 @@ def track_datatype(track: str, precisions: tuple[str, ...]) -> str:
     if track != TRACK_DATATYPE_TRACK or declares_storage_precision(precisions):
         return ""
     return config.get_str("ml.datatype", "")
-
-
-def xl_size_scale(track: str, precisions: tuple[str, ...]) -> int:
-    """The factor every size symbol of the kernel's XL rung is multiplied by: ``ml.xl_size_scale`` of its
-    track datatype (:func:`track_datatype`), else 1."""
-    datatype = track_datatype(track, precisions)
-    table = config.get("ml.xl_size_scale", {}) or {}
-    factor = table.get(datatype, 1) if datatype and isinstance(table, dict) else 1
-    if not isinstance(factor, int) or isinstance(factor, bool) or factor < 1:
-        raise ValueError(f"ml.xl_size_scale[{datatype!r}] must be a positive integer, got {factor!r}")
-    return factor
-
-
-def scaled_xl(dimensions: "PresetTable", factor: int) -> "PresetTable":
-    """``dimensions`` with each SIZE symbol of the XL rung multiplied by ``factor``: an integer the preset
-    ladder moves (a value identical in every rung is a knob, not a size); every other rung unchanged."""
-    xl = dimensions.get(Preset.XL.value)
-    if factor == 1 or xl is None:
-        return dimensions
-    scaled = {
-        name: value * factor
-        if isinstance(value, int) and not isinstance(value, bool) and not fuzz.constant_across_presets(dimensions, name)
-        else value
-        for name, value in xl.items()
-    }
-    return {**dimensions, Preset.XL.value: scaled}
 
 
 #: The one preset MODIFIER: ``<rung>+fuzz`` samples sizes around ``<rung>``.
@@ -1008,18 +980,14 @@ def constraint_holds(expr: str, row: ConfigRow) -> bool:
         return True
 
 
-def track_scaled(
-    dimensions: PresetTable, factor: int, constraints: tuple[str, ...], config_row: ConfigRow
-) -> PresetTable:
-    """The track's XL rule applied (:func:`scaled_xl`), unless the scaled rung breaks one of the manifest's
-    own ``constraints:`` -- then the manifest's XL stands, since a rung the kernel declares impossible
-    would refuse the whole kernel at load (``tests/test_ml_track_datatype.py`` names every such kernel)."""
-    scaled = scaled_xl(dimensions, factor)
-    xl = scaled.get(Preset.XL.value)
-    if scaled is dimensions or xl is None:
-        return dimensions
-    row = {**xl, **config_row}
-    return scaled if all(constraint_holds(expr, row) for expr in constraints) else dimensions
+def scale_axes_of(raw: object, parameters: PresetTable, config_syms: set[str], source: str) -> tuple[str, ...]:
+    """The manifest's ``scale_axes``: size symbols the XL rung declares, never ``config:`` knobs."""
+    axes = tuple(str(name) for name in as_list(raw))
+    xl = parameters.get(Preset.XL.value, {})
+    bad = [name for name in axes if name in config_syms or not isinstance(xl.get(name), int)]
+    if bad:
+        raise ValueError(f"{source}: scale_axes {bad} are not integer size symbols of the XL rung")
+    return axes
 
 
 def _validate_constraints(constraints: tuple[str, ...], parameters_view: PresetTable, kernel: str, source: str) -> None:
@@ -1353,6 +1321,7 @@ KNOWN_MANIFEST_KEYS = frozenset(
         "memory_cap_gb",
         "floor_bytes_fraction",
         "min_precision",
+        "scale_axes",
     }
 )
 
@@ -1980,6 +1949,10 @@ class BenchSpec:
     #: differs by O(1) -- not a translator bug, and not fixable by loosening a tolerance).
     #: ``None`` => no floor; the kernel sweeps every precision its own ``precisions`` list allows.
     min_precision: str | None = None
+    #: The size symbols the XL rung grows along when the kernel is graded in a narrower datatype than
+    #: the fp64 its XL is authored at (:func:`hpcagent_bench.sizing.datatype_rung`: constant bytes). Empty =>
+    #: the leading (batch) dimension of its first array.
+    scale_axes: tuple[str, ...] = ()
 
     track: str = Track.LOOP_LEVEL_REASONING.value
     precisions: tuple[str, ...] = ("fp64", "fp32")
@@ -2106,7 +2079,7 @@ class BenchSpec:
         # with each config knob's representative value merged in.
         dimensions_map = parse_parameters(bench["parameters"], source)
         # Defaults: track loop_level_reasoning (a from_dict caller with no path to derive it from),
-        # precisions = fp64 + fp32. Read here because the track's datatype rescales the XL rung.
+        # precisions = fp64 + fp32.
         track = str(ext.get("track", bench.get("track", Track.LOOP_LEVEL_REASONING.value)))
         declared_precisions = ext.get("precisions", bench.get("precisions"))
         precisions = (
@@ -2131,7 +2104,6 @@ class BenchSpec:
         )
         constraints = tuple(str(c) for c in as_list(bench.get("constraints")))
         constraints += tuple(c for c in sparse_alignment_constraints(sparse_layouts) if c not in constraints)
-        dimensions_map = track_scaled(dimensions_map, xl_size_scale(track, precisions), constraints, config_reps)
         parameters_view: PresetTable = {preset: {**values, **config_reps} for preset, values in dimensions_map.items()}
         if constraints:
             _validate_constraints(constraints, parameters_view, short_name, source)
@@ -2241,6 +2213,7 @@ class BenchSpec:
             timeout_s=None if timeout_s is None else number_of(timeout_s, "timeout_s", source),
             memory_cap_gb=None if memory_cap_gb is None else number_of(memory_cap_gb, "memory_cap_gb", source),
             floor_bytes_fraction=float(floor_fraction),
+            scale_axes=scale_axes_of(bench.get("scale_axes"), parameters_view, config_syms, source),
             min_precision=None if min_precision is None else str(min_precision),
             track=track,
             precisions=precisions,
@@ -2716,7 +2689,9 @@ def load_spec(short_name: str) -> BenchSpec:
     path = KERNELS.get(short_name)
     if path is None:
         raise KeyError(f"unknown benchmark {short_name!r} (no co-located YAML manifest)")
-    return BenchSpec.from_yaml(load_yaml(path.read_text()), source=str(path))
+    from hpcagent_bench.sizing import datatype_sized  # cycle: sizing imports this module
+
+    return datatype_sized(BenchSpec.from_yaml(load_yaml(path.read_text()), source=str(path)))
 
 
 #: C and C++ reserved words no backend emitter renames, so a kernel variable spelled like one is a hard

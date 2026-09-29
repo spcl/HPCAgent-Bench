@@ -40,6 +40,7 @@ from hpcagent_bench.spec import (
     init_arrays_raw,
 )
 from hpcagent_bench.support.helpers.sparse.abi import FORMAT_SPECS, scalar_name
+from hpcagent_bench.support.distributions.domain import RawDomain
 
 __all__ = [
     "DRIVER",
@@ -58,6 +59,7 @@ __all__ = [
     "bench_info_tempfile",
     "buffer_style_arrays",
     "emit_kernel",
+    "emitter_bench_info",
     "emitter_config",
     "flatten_buffer_style",
     "layouts_to_raw",
@@ -65,6 +67,7 @@ __all__ = [
     "legacy_bench_info_dict",
     "replace_buffers",
     "translator_format",
+    "typed_entry",
 ]
 
 
@@ -418,17 +421,55 @@ def emitter_config(spec: BenchSpec, config: str | None = None) -> str | None:
     return config if config is not None else spec.default_layout
 
 
+def emitter_bench_info(spec: BenchSpec, config: str | None) -> RawBenchInfo:
+    """:func:`legacy_bench_info_dict` with every array that declares no dtype of its own stamped with the
+    float dtype the kernel crosses the ABI in (:func:`~hpcagent_bench.support.bindings.contract.declared_float_dtype`:
+    its lone storage precision, or its track's datatype -- bf16 on the machine_learning track). The
+    binding the harness calls reads that same function, so the emitted signature and the binding
+    cannot disagree; the emitter's default for an undeclared array is the fp64 leg. Only the
+    emitter's copy is stamped: ``Benchmark`` materializes data at whatever datatype it is asked for."""
+    from hpcagent_bench.support.bindings.contract import DEFAULT_FLOAT_DTYPE, declared_float_dtype  # cycle
+
+    info = legacy_bench_info_dict(spec, config=config)
+    dtype = declared_float_dtype(spec)
+    init = info["benchmark"].get("init")
+    if dtype == DEFAULT_FLOAT_DTYPE or init is None or "arrays" not in init:
+        return info
+    init["arrays"] = {name: typed_entry(entry, dtype) for name, entry in init["arrays"].items()}
+    return info
+
+
+def typed_entry(entry: ArrayEntry, dtype: str) -> ArrayEntry:
+    """An ``init.arrays`` entry with ``dtype`` as its element type unless it declares its own."""
+    block: dict[str, str | bool | RawDomain] = {"shape": entry} if isinstance(entry, str) else dict(entry)
+    block.setdefault("dtype", dtype)
+    return block
+
+
 @contextlib.contextmanager
-def bench_info_tempfile(spec: BenchSpec, config: str | None = None) -> Generator[pathlib.Path, None, None]:
+def bench_info_tempfile(
+    spec: BenchSpec, config: str | None = None, *, abi: bool = False
+) -> Generator[pathlib.Path, None, None]:
     """Write ``spec`` as a legacy bench_info JSON to a temp file (unlinked on
     exit), for the layout ``config`` names (:func:`emitter_config` resolves ``None``).
     The emitter's ``--bench-info <path>`` contract is honoured exactly: it expands each
-    logical sparse array itself, and a buffer-style one arrives flattened."""
+    logical sparse array itself, and a buffer-style one arrives flattened.
+
+    ``abi``: the emit is the reference the harness calls through its binding, so every array is
+    typed as the binding types it (:func:`emitter_bench_info`: bf16 on the machine_learning track).
+    Without it the arrays keep the manifest's own dtypes (fp64 unless declared): the framework
+    siblings and the native columns' precision legs pick their precision themselves."""
+    resolved_config = emitter_config(spec, config)
     fd, path = tempfile.mkstemp(suffix=".json", prefix=f"{spec.short_name}_bi_")
     p = pathlib.Path(path)
     try:
         with os.fdopen(fd, "w") as f:
-            json.dump(legacy_bench_info_dict(spec, config=emitter_config(spec, config)), f)
+            info = (
+                emitter_bench_info(spec, resolved_config)
+                if abi
+                else legacy_bench_info_dict(spec, config=resolved_config)
+            )
+            json.dump(info, f)
         yield p
     finally:
         p.unlink(missing_ok=True)
@@ -448,6 +489,7 @@ def emit_kernel(
     config: str | None = None,
     precision: str = "",
     extra_env: dict[str, str] | None = None,
+    abi: bool = False,
 ) -> int:
     """Emit ``spec``'s kernel to ``target`` via the unified ``numpyto --target``
     driver, feeding it a transient bench_info JSON synthesized from the co-located
@@ -463,7 +505,8 @@ def emit_kernel(
     whole C-family (``.c`` + ``.cpp`` + the Pluto input) in one run, so ``cpp``
     callers also use ``target="c"``. Each emitted source is named canonically
     (``<short>[_<sparse>]_<fptype>``); there is no symbol suffix. Returns the
-    driver exit code.
+    driver exit code. ``abi``: emit the reference the harness calls, typed as its binding
+    (:func:`bench_info_tempfile`).
 
     ``<short>`` there is ``naming.short_for(kernel_py)`` -- the numpy reference's
     STEM, not ``spec.short_name`` and not the registry key the spec was loaded by.
@@ -472,7 +515,7 @@ def emit_kernel(
     ``bicg_solvers_..._binding.json`` that no emit ever wrote.
     """
     resolved_config = emitter_config(spec, config)
-    with bench_info_tempfile(spec, config=resolved_config) as bi:
+    with bench_info_tempfile(spec, config=resolved_config, abi=abi) as bi:
         cmd = [
             sys.executable,
             "-m",
