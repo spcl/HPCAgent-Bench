@@ -130,6 +130,8 @@ cpu = [
 ]
 amd = ["hpcagent_bench[cpu]"]
 nvidia = ["hpcagent_bench[cpu]", "jax[cuda13]", "cupy-cuda13x", "triton"]
+# The Sphinx build of docs/ (`sphinx-build -W -b html docs docs/_build`).
+docs = ["sphinx", "myst-parser", "furo"]
 # Tests and formatters, also part of every hardware extra so the suite runs inside each image.
 dev = [
     "pytest",
