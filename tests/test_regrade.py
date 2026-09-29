@@ -426,7 +426,6 @@ def test_regrade_grades_a_real_kernel_end_to_end(tmp_path: pathlib.Path) -> None
     scorer=/verifier= override) calls the real scoring.score and scoring.independent_verify, so a
     signature or behavior change in the judge API this migration depends on breaks THIS test, not
     only a mocked one."""
-    import shutil
 
     from hpcagent_bench import config
     from hpcagent_bench.harness.optimizers import NoOpOptimizer
@@ -460,7 +459,6 @@ def test_regrade_grades_a_real_kernel_end_to_end(tmp_path: pathlib.Path) -> None
 def test_the_final_env_re_stamps_mwd_final_on_a_real_kernel(tmp_path: pathlib.Path) -> None:
     """final_env's env forced onto a real score() call re-stamps the row mwd-final -- proof the
     pool_size wiring, not just the flag, actually reaches the measurement."""
-    import shutil
 
     from hpcagent_bench import config
     from hpcagent_bench.harness.optimizers import NoOpOptimizer
@@ -893,7 +891,7 @@ def test_a_plain_regrade_is_never_read_as_a_promotion() -> None:
 def test_a_regrade_hides_every_campaign_db_and_its_own_shards_from_the_replayed_submission(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """regrade.sbatch sets neither RUN_ROOT nor RUN_DIR, and the seal hides only what those name: a
+    """A regrade job sets neither RUN_ROOT nor RUN_DIR, and the seal hides only what those name: a
     replayed submission could otherwise write the campaign DBs and the shard DBs promote-apply reads."""
     from hpcagent_bench import seal
 
@@ -909,7 +907,7 @@ def test_a_regrade_hides_every_campaign_db_and_its_own_shards_from_the_replayed_
 def test_hide_campaign_data_overrides_an_inherited_run_root_and_run_dir(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """regrade.sbatch runs under sbatch --export=ALL from a shell that may have sourced an arm's
+    """A regrade job runs under sbatch --export=ALL from a shell that may have sourced an arm's
     .env first, so RUN_ROOT/RUN_DIR can already be non-empty (an arm's own run dir) -- or an
     inherited empty string -- in this process's environment before hide_campaign_data runs. A
     setdefault would leave that value in place and hide the WRONG directory (or nothing, for an
@@ -926,8 +924,8 @@ def test_hide_campaign_data_overrides_an_inherited_run_root_and_run_dir(
 def test_hide_campaign_data_hides_every_item_directory_when_scratch_is_unset(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """SCRATCH is not guaranteed to reach the regrade container: experiments/regrade.sbatch's own
-    ``srun --environment=`` step carries no ``--export=ALL``, unlike every other CE step in this
+    """SCRATCH is not guaranteed to reach the regrade container: a ``job regrade`` step
+    (docs/jobs/regrade.sbatch) carries no ``--export=ALL``, unlike every other CE step in this
     repo that needs host env vars (serve-only.sbatch, serve-private.sbatch, run_cluster.sh's
     role_srun) -- because pyxis starts a CE container from a SPANK plugin with a sanitised
     environment that does not reliably forward it. With SCRATCH
@@ -1235,7 +1233,6 @@ def test_aa_is_a_finalize_option_only(tmp_path: pathlib.Path) -> None:
 def real_kernel_item(tmp_path: pathlib.Path, wrong: bool = False) -> regrade.Item:
     """A worklist item holding the NoOp C of ``scaled_add`` (the C reference itself), or a copy
     that adds 1.0 to every output (``wrong``)."""
-    import shutil
 
     from hpcagent_bench.harness.optimizers import NoOpOptimizer
     from hpcagent_bench.harness.task import Task
@@ -1421,54 +1418,6 @@ def test_the_untimed_canonical_call_still_fails_an_incorrect_kernel(tmp_path: pa
     assert (task["s_i"], task["s_bar"]) == (1.0, None)
 
 
-def add_job_scripts(repo: pathlib.Path) -> None:
-    """The scripts regrade.sbatch runs from the tree it grades with: the experiments/env.sh layer
-    that resolves the host interpreter."""
-    for rel in (
-        "experiments/env.sh",
-        "scripts/cache_env.sh",
-        "scripts/host_python.sh",
-        "scripts/site_env.sh",
-    ):
-        (repo / rel).parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(REPO / rel, repo / rel)
-
-
-def test_the_regrade_job_compiles_the_tree_with_the_hosts_python311(tmp_path: pathlib.Path) -> None:
-    """The syntax gate runs on the bare batch host, whose python3 is SLES 3.6 (the login node's too
-    since): it cannot parse the package, so a job whose PATH lacked the venv refused
-    every tree as "does not compile" and graded nothing."""
-    repo = tmp_path / "repo"
-    (repo / "hpcagent_bench" / "harness").mkdir(parents=True)
-    (repo / "hpcagent_bench" / "harness" / "modern.py").write_text("match 1:\n    case _:\n        pass\n")
-    (repo / "scripts").mkdir()
-    (repo / "scripts" / "regrade.py").write_text("")
-    add_job_scripts(repo)
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    for name, body in (("python3", "echo 'SyntaxError under 3.6' >&2; exit 1"), ("srun", 'echo srun > "$STUB_SRUN"')):
-        (bin_dir / name).write_text(f"#!/bin/sh\n{body}\n")
-        (bin_dir / name).chmod(0o755)
-    worklist = tmp_path / "w.jsonl"
-    worklist.write_text("")
-    env = {
-        "PATH": f"{bin_dir}{os.pathsep}/usr/bin{os.pathsep}/bin",
-        "HOME": str(tmp_path),
-        "SCRATCH": str(tmp_path / "scratch"),
-        "HPCAGENT_BENCH_REPO": str(repo),
-        "SLURM_JOB_ID": "1",
-        "SLURM_SUBMIT_DIR": str(repo),
-        "STUB_SRUN": str(tmp_path / "srun-ran"),
-        "HPCAGENT_BENCH_HOST_PYTHON": sys.executable,  # the site layer's host interpreter
-    }
-    script = REPO / "experiments" / "regrade.sbatch"
-    done = subprocess.run(
-        ["bash", str(script), str(worklist), str(tmp_path / "out")], env=env, capture_output=True, text=True
-    )
-    assert done.returncode == 0, done.stderr
-    assert (tmp_path / "srun-ran").is_file(), done.stderr
-
-
 def test_a_regrade_on_a_checkout_stamps_its_head(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("HPCAGENT_BENCH_SNAPSHOT_COMMIT", raising=False)
     head = subprocess.run(
@@ -1478,55 +1427,6 @@ def test_a_regrade_on_a_checkout_stamps_its_head(monkeypatch: pytest.MonkeyPatch
         check=True,
     ).stdout.strip()
     assert regrade.shard_provenance()[1] == head
-
-
-def test_the_regrade_job_tells_its_ranks_the_checkout_and_its_commit(tmp_path: pathlib.Path) -> None:
-    """The ranks run the checkout the job was submitted from and stamp every row with its HEAD."""
-    repo, scratch, bin_dir = tmp_path / "repo", tmp_path / "scratch", tmp_path / "bin"
-    (repo / "hpcagent_bench" / "harness").mkdir(parents=True)
-    (repo / "hpcagent_bench" / "harness" / "ok.py").write_text("OK = 1\n")
-    (repo / "experiments").mkdir(parents=True)
-    add_job_scripts(repo)
-    git_env = {
-        "GIT_AUTHOR_NAME": "t",
-        "GIT_AUTHOR_EMAIL": "t@t",
-        "GIT_COMMITTER_NAME": "t",
-        "GIT_COMMITTER_EMAIL": "t@t",
-    }
-    for args in (["init", "-q"], ["add", "-A"], ["commit", "-q", "-m", "c"]):
-        subprocess.run(["git", "-C", str(repo), *args], env={"PATH": "/usr/bin:/bin", **git_env}, check=True)
-    head = subprocess.run(
-        ["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True, check=True
-    ).stdout.strip()
-    bin_dir.mkdir()
-    # The stub srun records its argv and whether the tree it was handed exists while it runs.
-    (bin_dir / "srun").write_text(
-        '#!/bin/bash\nprintf "%s\\n" "$@" > "$STUB_SRUN"; [[ -f "${@: -6:1}/hpcagent_bench/harness/ok.py" ]]\n'
-    )
-    (bin_dir / "srun").chmod(0o755)
-    worklist = tmp_path / "w.jsonl"
-    worklist.write_text("")
-    env = {
-        "PATH": f"{bin_dir}{os.pathsep}/usr/bin{os.pathsep}/bin",
-        "HOME": str(tmp_path),
-        "SCRATCH": str(scratch),
-        "HPCAGENT_BENCH_REPO": str(repo),
-        "SLURM_JOB_ID": "7",
-        "SLURM_SUBMIT_DIR": str(repo),
-        "STUB_SRUN": str(tmp_path / "srun-args"),
-        "HPCAGENT_BENCH_HOST_PYTHON": sys.executable,
-        **git_env,
-    }
-    done = subprocess.run(
-        ["bash", str(REPO / "experiments" / "regrade.sbatch"), str(worklist), str(tmp_path / "out")],
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert done.returncode == 0, done.stderr
-    args = (tmp_path / "srun-args").read_text().splitlines()
-    assert args[-6:] == [str(repo), str(worklist), str(tmp_path / "out"), "run", str(scratch), head], args
 
 
 def test_the_worklist_carries_the_scratch_request_the_shard_recorded(tmp_path: pathlib.Path) -> None:
