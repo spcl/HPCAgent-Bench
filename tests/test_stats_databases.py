@@ -10,7 +10,7 @@ import sqlite3
 
 import pytest
 
-from hpcagent_bench import dataset
+from hpcagent_bench import dataset, observations_extract, paths
 from hpcagent_bench.harness import results_db
 from hpcagent_bench.stats import databases
 from tests import results_seed
@@ -93,3 +93,12 @@ def test_the_loader_reads_the_cpf_arms_only_when_the_archive_is_passed(tmp_path:
     both, _ = dataset.build("llr40", tmp_path / "both.db", frozen=None, root=tmp_path, dbs=(core, archive))
     assert set(alone["arm"]) == {CORE_ARM}
     assert set(both["arm"]) == {CORE_ARM, CPF_ARM}
+
+
+def test_the_extractor_refuses_two_named_databases_that_disagree_on_an_arm(tmp_path: pathlib.Path) -> None:
+    core, other = tmp_path / "core.db", tmp_path / "other.db"
+    seed(core, CORE_ARM, (2.0,))
+    seed(other, CORE_ARM, (5.0,))
+    options = observations_extract.Options(runs=(str(core), str(other)), benchmarks=paths.BENCHMARKS)
+    with pytest.raises(databases.ArmConflict, match=CORE_ARM):
+        observations_extract.extract(options)
