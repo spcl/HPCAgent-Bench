@@ -2,8 +2,9 @@
 
 import ast
 
-from hpcagent_bench.translators.numpyto_common.ast_build import name_
+from hpcagent_bench.translators.numpyto_common.ast_build import name_, store_
 from hpcagent_bench.translators.numpyto_common.ir import KernelIR, SparseArrayDesc
+from hpcagent_bench.translators.numpyto_common.numpy_desugar import expr_rank, rank_table
 
 __all__ = [
     "RANK_RAISING_CALLS",
@@ -122,10 +123,17 @@ class SparseMatmulRewriter(ast.NodeTransformer):
     hoisted above it.
     """
 
-    def __init__(self, sparse: dict[str, SparseArrayDesc], symbol_exprs: dict[str, str], vectors_only: bool) -> None:
+    def __init__(
+        self,
+        sparse: dict[str, SparseArrayDesc],
+        symbol_exprs: dict[str, str],
+        vectors_only: bool,
+        ranks: dict[str, int] | None = None,
+    ) -> None:
         self.sparse = sparse
         self.symbol_exprs = symbol_exprs
         self.vectors_only = vectors_only
+        self.ranks = ranks or {}
         self.counter = 0
         self.bounds: dict[str, str] = {}
         self.pre: list[ast.stmt] = []
@@ -209,21 +217,33 @@ class SparseMatmulRewriter(ast.NodeTransformer):
             for loop in stmts:
                 prange_row_loop(loop)
             return [self.alloc(temp, desc.buffers["data"], (rows, out_cols)), *stmts]
-        if not isinstance(rhs, ast.Name):
-            raise SparseLoweringRefused("sparse @ <expression>: the dense operand must be a name")
-        if not self.vectors_only:
-            raise SparseLoweringRefused("dense operand is not proven to be a vector")
+        # An integer-indexed axis of a matrix (``Q[:, k]``) is a rank-1 VIEW: numpy drops the axis an
+        # integer index selects and keeps the one a slice spans. The rank table proves it; the view is
+        # bound to a temp because the loop nests read the dense operand by name.
+        vector_rank = expr_rank(rhs, self.ranks) == 1
+        view: list[ast.stmt] = []
+        if isinstance(rhs, ast.Name):
+            if not (self.vectors_only or vector_rank):
+                raise SparseLoweringRefused("dense operand is not proven to be a vector")
+            rhs_name = rhs.id
+        elif isinstance(rhs, ast.Subscript) and vector_rank:
+            rhs_name = f"{temp}_x"
+            view.append(ast.Assign(targets=[store_(rhs_name)], value=rhs, lineno=0))
+        else:
+            raise SparseLoweringRefused(
+                "sparse @ <expression>: the dense operand is not a name or a proven vector slice"
+            )
         target = name_(temp)
         if desc.format == "csr":
-            stmts = SPARSE_MATMUL_DISPATCH[("csr", "dense", "matmul_vec")](target, desc.buffers, rhs.id, rows)
+            stmts = SPARSE_MATMUL_DISPATCH[("csr", "dense", "matmul_vec")](target, desc.buffers, rhs_name, rows)
             prange_row_loop(stmts[0])
         elif desc.format == "csc":
             # CSC scatter-adds into y[indices[k]], a data-dependent row, so this one stays serial.
             cols = self.bound(desc.logical_shape[1])
-            stmts = SPARSE_MATMUL_DISPATCH[("csc", "dense", "matmul_vec")](target, desc.buffers, rhs.id, rows, cols)
+            stmts = SPARSE_MATMUL_DISPATCH[("csc", "dense", "matmul_vec")](target, desc.buffers, rhs_name, rows, cols)
         else:
             raise SparseLoweringRefused(f"no matvec lowering wired for format {desc.format!r}")
-        return [self.alloc(temp, desc.buffers["data"], (rows,)), *stmts]
+        return [*view, self.alloc(temp, desc.buffers["data"], (rows,)), *stmts]
 
 
 def rewrite_sparse_matmuls(numpy_source: str, kir: KernelIR) -> str | None:
@@ -259,8 +279,12 @@ def rewrite_sparse_matmuls(numpy_source: str, kir: KernelIR) -> str | None:
     if expanded != list(kir.input_args):
         return None
     buffers = {name for desc in kir.sparse.values() for name in desc.buffers.values()}
+    seed = {arr.name: len(arr.shape) for arr in kir.arrays if arr.name not in buffers}
     rewriter = SparseMatmulRewriter(
-        kir.sparse, symbol_readbacks(kir, set(expanded)), dense_operands_are_vectors(fn, kir, buffers)
+        kir.sparse,
+        symbol_readbacks(kir, set(expanded)),
+        dense_operands_are_vectors(fn, kir, buffers),
+        rank_table(fn, seed),
     )
     try:
         rewriter.visit(fn)
