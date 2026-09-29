@@ -69,6 +69,7 @@ __all__ = [
     "SUPPORTED_DWARFS",
     "SUPPORTED_SCALES",
     "SUPPORTED_SPARSE_FORMATS",
+    "TRACK_DATATYPE_TRACK",
     "VENDORED_BASELINE_KIND",
     "VENDORED_BASELINE_LANGUAGES",
     "VENDORED_BASELINE_MODES",
@@ -97,6 +98,7 @@ __all__ = [
     "bound_names",
     "choice_of",
     "collect_loop_var_reads",
+    "declares_storage_precision",
     "defines_function",
     "derive_array_args",
     "derive_func_name",
@@ -121,6 +123,7 @@ __all__ = [
     "preset_arg",
     "register_manifest_cache",
     "resolve_preset",
+    "scaled_xl",
     "scenarios_without_perturbation",
     "select_short_names",
     "selector_slug",
@@ -129,6 +132,8 @@ __all__ = [
     "shape_reads_init_scalars",
     "str_block_of",
     "target_names",
+    "track_datatype",
+    "track_scaled",
     "unimportable_module_path",
     "validate_dwarf",
     "validate_kernel",
@@ -136,6 +141,7 @@ __all__ = [
     "validate_min_precision",
     "validate_scale",
     "value_of",
+    "xl_size_scale",
 ]
 
 #: One complete config: every ``config:`` symbol bound to one value. What
@@ -295,6 +301,51 @@ PRESET_CHOICES = tuple(p.value for p in Preset)
 #: attach to. Derived from :class:`Preset` rather than imported from ``sizing`` because
 #: ``sizing`` imports this module.
 RUNGS = tuple(p.value for p in Preset if p is not Preset.FUZZED)
+
+#: The track whose kernels take a configured datatype (``ml.datatype``) and XL scale (``ml.xl_size_scale``).
+TRACK_DATATYPE_TRACK = "machine_learning"
+
+
+def declares_storage_precision(precisions: tuple[str, ...]) -> bool:
+    """Whether a kernel declares exactly one precision and it is storage-only (``bf16``): it crosses the
+    ABI in its own precision, whatever the track's datatype says (the distributed ML operators)."""
+    return len(precisions) == 1 and dtype_registry.is_storage_only(precisions[0])
+
+
+def track_datatype(track: str, precisions: tuple[str, ...]) -> str:
+    """The datatype a kernel of ``track`` declaring ``precisions`` is graded in by its TRACK: ``ml.datatype``
+    for a machine_learning kernel with no storage precision of its own, else ``""`` (the grade's configured
+    datatype stands)."""
+    if track != TRACK_DATATYPE_TRACK or declares_storage_precision(precisions):
+        return ""
+    return config.get_str("ml.datatype", "")
+
+
+def xl_size_scale(track: str, precisions: tuple[str, ...]) -> int:
+    """The factor every size symbol of the kernel's XL rung is multiplied by: ``ml.xl_size_scale`` of its
+    track datatype (:func:`track_datatype`), else 1."""
+    datatype = track_datatype(track, precisions)
+    table = config.get("ml.xl_size_scale", {}) or {}
+    factor = table.get(datatype, 1) if datatype and isinstance(table, dict) else 1
+    if not isinstance(factor, int) or isinstance(factor, bool) or factor < 1:
+        raise ValueError(f"ml.xl_size_scale[{datatype!r}] must be a positive integer, got {factor!r}")
+    return factor
+
+
+def scaled_xl(dimensions: "PresetTable", factor: int) -> "PresetTable":
+    """``dimensions`` with each SIZE symbol of the XL rung multiplied by ``factor``: an integer the preset
+    ladder moves (a value identical in every rung is a knob, not a size); every other rung unchanged."""
+    xl = dimensions.get(Preset.XL.value)
+    if factor == 1 or xl is None:
+        return dimensions
+    scaled = {
+        name: value * factor
+        if isinstance(value, int) and not isinstance(value, bool) and not fuzz.constant_across_presets(dimensions, name)
+        else value
+        for name, value in xl.items()
+    }
+    return {**dimensions, Preset.XL.value: scaled}
+
 
 #: The one preset MODIFIER: ``<rung>+fuzz`` samples sizes around ``<rung>``.
 FUZZ_SUFFIX = "fuzz"
@@ -879,6 +930,20 @@ def _constraint_holds(expr: str, row: ConfigRow) -> bool:
         return bool(safe_eval(expr, row))
     except NameError:
         return True
+
+
+def track_scaled(
+    dimensions: PresetTable, factor: int, constraints: tuple[str, ...], config_row: ConfigRow
+) -> PresetTable:
+    """The track's XL rule applied (:func:`scaled_xl`), unless the scaled rung breaks one of the manifest's
+    own ``constraints:`` -- then the manifest's XL stands, since a rung the kernel declares impossible
+    would refuse the whole kernel at load (``tests/test_ml_track_datatype.py`` names every such kernel)."""
+    scaled = scaled_xl(dimensions, factor)
+    xl = scaled.get(Preset.XL.value)
+    if scaled is dimensions or xl is None:
+        return dimensions
+    row = {**xl, **config_row}
+    return scaled if all(_constraint_holds(expr, row) for expr in constraints) else dimensions
 
 
 def _validate_constraints(constraints: tuple[str, ...], parameters_view: PresetTable, kernel: str, source: str) -> None:
@@ -2007,6 +2072,13 @@ class BenchSpec:
         # with each config knob's representative value merged in.
         key = "dimensions" if has_new_dims else "parameters"
         dimensions_map = _parse_dimensions(bench[key], key, has_new_dims, source)
+        # Defaults: track loop_level_reasoning (a from_dict caller with no path to derive it from),
+        # precisions = fp64 + fp32. Read here because the track's datatype rescales the XL rung.
+        track = str(ext.get("track", bench.get("track", Track.LOOP_LEVEL_REASONING.value)))
+        declared_precisions = ext.get("precisions", bench.get("precisions"))
+        precisions = (
+            ("fp64", "fp32") if declared_precisions is None else tuple(str(p) for p in as_list(declared_precisions))
+        )
         config_knobs, config_valid = _parse_config_space(bench.get("config") or {}, short_name, source)
         config_syms = set(config_knobs) | (set(config_valid[0]) if config_valid else set[str]())
         all_dim_syms = {sym for symbols in dimensions_map.values() for sym in symbols}
@@ -2024,8 +2096,9 @@ class BenchSpec:
             if not config_valid
             else dict(config_valid[0])
         )
-        parameters_view: PresetTable = {preset: {**values, **config_reps} for preset, values in dimensions_map.items()}
         constraints = tuple(str(c) for c in as_list(bench.get("constraints")))
+        dimensions_map = track_scaled(dimensions_map, xl_size_scale(track, precisions), constraints, config_reps)
+        parameters_view: PresetTable = {preset: {**values, **config_reps} for preset, values in dimensions_map.items()}
         if constraints:
             _validate_constraints(constraints, parameters_view, short_name, source)
             # A curated row violating a constraint is an authoring bug, not a row to drop.
@@ -2083,9 +2156,7 @@ class BenchSpec:
         baseline_raw = ext.get("baseline", bench.get("baseline"))
         baseline_spec = None if baseline_raw is None else parse_baseline(baseline_raw, relative_path, source)
 
-        # Defaults: track loop_level_reasoning (a from_dict caller with no path to derive it from),
-        # fuzz = DEFAULT_FUZZ, precisions = fp64 + fp32.
-        track = str(ext.get("track", bench.get("track", Track.LOOP_LEVEL_REASONING.value)))
+        # fuzz = DEFAULT_FUZZ when the manifest names none.
         llr_raw = ext.get("loop_level_reasoning", bench.get("loop_level_reasoning"))
         loop_level_blk = {k: str(v) for k, v in block_of(llr_raw, "loop_level_reasoning", source).items()}
         fuzz_blk: dict[str, list[str]] = list_block_of(ext.get("fuzz", bench.get("fuzz")), "fuzz", source) or dict(
@@ -2107,7 +2178,6 @@ class BenchSpec:
                 f"re-sampled as a size (it overwrites the chosen config). "
                 f"Declare {clash} in 'config' only."
             )
-        declared_precisions = ext.get("precisions", bench.get("precisions"))
         dwarf, scale = bench.get("dwarf"), bench.get("scale")
         level, timeout_s = ext.get("level", bench.get("level")), ext.get("timeout_s", bench.get("timeout_s"))
         memory_cap_gb = ext.get("memory_cap_gb", bench.get("memory_cap_gb"))
@@ -2141,9 +2211,7 @@ class BenchSpec:
             floor_bytes_fraction=float(floor_fraction),
             min_precision=None if min_precision is None else str(min_precision),
             track=track,
-            precisions=(
-                ("fp64", "fp32") if declared_precisions is None else tuple(str(p) for p in as_list(declared_precisions))
-            ),
+            precisions=precisions,
             sparse_layouts=sparse_layouts,
             configurations=configurations,
             distributions=distributions,
