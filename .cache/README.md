@@ -7,7 +7,7 @@ an image, so deleting the directory costs time, never correctness.
       generated/       emitted reference lowerings (numpyto_* output)
       packs/           one manifest per prepared job
 
-`experiments/prepare_job.sh` writes both (`run_cluster.sh` calls it first in each arm); nothing else
+`hpcagent_bench/cluster/prepare_job.sh` writes both (`run_cluster.sh` calls it first in each arm); nothing else
 should. `generated/` is deliberately not image-keyed: a lowering is text derived from
 `<module>_numpy.py` and its filename carries that source's sha256, so an edited kernel misses rather
 than serving stale code.
@@ -22,7 +22,7 @@ default `${SCRATCH}/.hpcagentbench-cache` (`scripts/cache_env.sh`), as `jit/<ima
 - **`jit/` is keyed by image; never flatten it.** Artefacts are compiled against one ROCm/aiter
   build, and a mismatched `.so` fails late or silently.
 - **Node-local write layer.** Engines compiling into the same shared files on NFS hit
-  `Stale file handle`, so `experiments/jit_cache_layer.sh` seeds a node-local copy
+  `Stale file handle`, so `hpcagent_bench/cluster/jit_cache_layer.sh` seeds a node-local copy
   (`${TMPDIR:-/tmp}/hpcagent-bench-jit-<job>-<rank>`), the engine compiles there, and new entries are
   published back add-only once `/health` answers and every
   `HPCAGENT_BENCH_JIT_PUBLISH_INTERVAL_SECONDS` (1800). `HPCAGENT_BENCH_JIT_LOCAL=0` writes the shared
@@ -34,13 +34,13 @@ default `${SCRATCH}/.hpcagentbench-cache` (`scripts/cache_env.sh`), as `jit/<ima
 Pre-rendered canonical parallel forms are an experiment input, not a cache: they live under
 `${HPCAGENT_BENCH_CPF_PRERENDER_DIR}` (default `${SCRATCH}/.hpcagentbench-cache/.cpf-prerender`),
 content-addressed in `cache/` and read through `views/<name>`, filled by
-`experiments/prerender_cpf.sbatch` (`hpcagent_bench/cpf_cache.py`).
+`python -m hpcagent_bench.cpf_prerender` (`hpcagent_bench/cpf_cache.py`).
 
 ## Job work dirs
 
-A deterministic-framework submitter (`experiments/submit-canon.sh`) works under
+A deterministic-framework sweep (`hpcagent-bench job baseline`, `docs/jobs/baseline.sbatch`) works under
 `${HPCAGENT_BENCH_RUNS_ROOT}/<job-kind>/<name>-<stamp>` (default root `${JIT_CACHE_ROOT}/runs`), never
-a bare `${SCRATCH}/<name>`. `experiments/canon_column.sh` then points each column's shard DB at
+a bare `${SCRATCH}/<name>`. `job baseline` then points each column's shard DB at
 `<out_root>/db/<column>/`, merges the column's CSV rows into `${HPCAGENT_BENCH_RESULTS_DIR}/canon.db`
 (default `${JIT_CACHE_ROOT}/results`; `scripts/merge_canon_results.py`), and deletes the column's
 `dacecache-<column>*` build tree and shard DB only when the merged row count matches an independent

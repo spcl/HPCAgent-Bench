@@ -20,9 +20,9 @@ import pytest
 from hpcagent_bench import campaigns
 from tests import results_seed
 
-EXPERIMENTS = pathlib.Path(__file__).resolve().parents[1] / "experiments"
-SCRIPT = EXPERIMENTS / "remaining_kernels.py"
-TABLE = EXPERIMENTS / "rerun-kernels.tsv"
+REPO = pathlib.Path(__file__).resolve().parents[1]
+SCRIPT = REPO / "hpcagent_bench" / "cluster" / "remaining_kernels.py"
+TABLE = REPO / "experiments" / "rerun-kernels.tsv"
 ARM = "scicomp-perf-playbook-kimi27sglang-plain"
 ROSTER = ["a", "b", "c"]
 FAR_FUTURE_TS_MS = 10**13
@@ -64,8 +64,8 @@ def test_a_listed_kernel_is_owed_although_its_rows_say_done(
     job_with_coverage(tmp_path / "runs", "641799", ARM, ROSTER)
     monkeypatch.setattr(module, "RERUN_KERNELS", write_table(tmp_path / "t.tsv", [(ARM, "b", "pending")]))
     jobs = [("641799", str(tmp_path / "runs" / "641799"), ARM)]
-    assert module.owed_names(jobs, ROSTER, str(EXPERIMENTS.parent)) == ["b"]
-    assert module.owed_classes(jobs, ROSTER, str(EXPERIMENTS.parent))["b"] == module.ExitClass.INFRA
+    assert module.owed_names(jobs, ROSTER, str(REPO)) == ["b"]
+    assert module.owed_classes(jobs, ROSTER, str(REPO))["b"] == module.ExitClass.INFRA
 
 
 def test_a_kernel_marked_done_is_not_owed_again(
@@ -75,7 +75,7 @@ def test_a_kernel_marked_done_is_not_owed_again(
     job_with_coverage(tmp_path / "runs", "641799", ARM, ROSTER)
     monkeypatch.setattr(module, "RERUN_KERNELS", write_table(tmp_path / "t.tsv", [(ARM, "b", "done")]))
     jobs = [("641799", str(tmp_path / "runs" / "641799"), ARM)]
-    assert module.owed_names(jobs, ROSTER, str(EXPERIMENTS.parent)) == []
+    assert module.owed_names(jobs, ROSTER, str(REPO)) == []
 
 
 def test_a_clean_rerun_of_a_listed_arm_owes_the_same_kernels(
@@ -85,7 +85,7 @@ def test_a_clean_rerun_of_a_listed_arm_owes_the_same_kernels(
     job_with_coverage(tmp_path / "runs", "641800", f"{ARM}-clean", ROSTER)
     monkeypatch.setattr(module, "RERUN_KERNELS", write_table(tmp_path / "t.tsv", [(ARM, "c", "pending")]))
     jobs = [("641800", str(tmp_path / "runs" / "641800"), f"{ARM}-clean")]
-    assert module.owed_names(jobs, ROSTER, str(EXPERIMENTS.parent)) == ["c"]
+    assert module.owed_names(jobs, ROSTER, str(REPO)) == ["c"]
 
 
 def test_another_arms_rows_are_untouched(
@@ -96,7 +96,7 @@ def test_another_arms_rows_are_untouched(
     job_with_coverage(tmp_path / "runs", "641801", other, ROSTER)
     monkeypatch.setattr(module, "RERUN_KERNELS", write_table(tmp_path / "t.tsv", [(ARM, "b", "pending")]))
     jobs = [("641801", str(tmp_path / "runs" / "641801"), other)]
-    assert module.owed_names(jobs, ROSTER, str(EXPERIMENTS.parent)) == []
+    assert module.owed_names(jobs, ROSTER, str(REPO)) == []
 
 
 def classed_table(path: pathlib.Path, label: str) -> pathlib.Path:
@@ -113,7 +113,7 @@ def test_a_budget_class_row_reruns_at_the_scaled_budget_not_as_infra(
     job_with_coverage(tmp_path / "runs", "641799", ARM, ROSTER)
     monkeypatch.setattr(module, "RERUN_KERNELS", classed_table(tmp_path / "t.tsv", "budget"))
     jobs = [("641799", str(tmp_path / "runs" / "641799"), ARM)]
-    assert module.owed_classes(jobs, ROSTER, str(EXPERIMENTS.parent)) == {"b": module.ExitClass.BUDGET}
+    assert module.owed_classes(jobs, ROSTER, str(REPO)) == {"b": module.ExitClass.BUDGET}
 
 
 def test_a_class_the_planner_cannot_rerun_is_refused(module: types.ModuleType, tmp_path: pathlib.Path) -> None:
@@ -137,7 +137,7 @@ def test_the_shipped_table_names_real_arms_and_real_roster_kernels(module: types
     # scicomp40 rows, and a roster dict scoped to one tag silently let the other arms' kernels
     # through unchecked.
     tags = {entry.tag for row in rows if (entry := campaigns.campaign_of(row["arm"]))}
-    rosters = {tag: set(module.roster(tag, str(EXPERIMENTS.parent))) for tag in tags}
+    rosters = {tag: set(module.roster(tag, str(REPO))) for tag in tags}
     for row in rows:
         entry = campaigns.campaign_of(row["arm"])
         assert entry, row["arm"]

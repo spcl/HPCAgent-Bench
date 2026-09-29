@@ -105,7 +105,6 @@ from hpcagent_bench import experiment_tags, frozen_observations
 #: agent_driver.py is imported for its own exit-code constants and CANCELLED_MARKER name, the one
 #: place that assigns them, so this script's classification cannot desync from what actually wrote
 #: tokens.json. Stdlib-only module (see its own imports), safe to import outside a container.
-HERE = pathlib.Path(__file__).resolve().parent
 
 #: The only table that means a kernel is DONE outright: see the module docstring for why ``attempts``
 #: alone does not count -- MOST ``attempts`` rows don't. :func:`genuine_attempts` names the ones
@@ -149,7 +148,7 @@ def records(table: str) -> str:
 #: it -- so no rule over the databases can tell that work apart from work that finished. This file
 #: is where that judgement is written down, and it is the ONLY way a kernel is forced back into a
 #: wave; rows are never deleted to make a kernel owed.
-RERUN_KERNELS = HERE / "rerun-kernels.tsv"
+RERUN_KERNELS = pathlib.Path(__file__).resolve().parents[2] / "experiments" / "rerun-kernels.tsv"
 
 #: ``rerun-kernels.tsv``'s status once the rerun has landed. Any other status keeps the kernel owed.
 RERUN_DONE = "done"
@@ -659,7 +658,7 @@ def roster(tag: str, opt: str) -> list:
     several CAMPAIGNS entries can name the same tag, and each uncached call re-runs roster.sh's
     recursive manifest glob (~450 ms). roster.sh runs ``HPCAGENT_BENCH_HOST_PYTHON``, set to THIS
     interpreter: the one whose packages (yaml, the bench) the caller already imports."""
-    script = f'OPT="{opt}"; . "$OPT/experiments/roster.sh"; roster_for "{tag}"'
+    script = f'OPT="{opt}"; . "$OPT/hpcagent_bench/cluster/roster.sh"; roster_for "{tag}"'
     env = {**os.environ, "HPCAGENT_BENCH_HOST_PYTHON": sys.executable}
     out = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=True, env=env)
     return sorted(name for name in out.stdout.strip().split(",") if name)
@@ -1003,7 +1002,7 @@ def main() -> int:
         help="write only this owed class's kernels to <identity>.txt (default: every owed kernel)",
     )
     args = ap.parse_args()
-    opt = args.opt or str(pathlib.Path(__file__).resolve().parents[1])
+    opt = args.opt or str(pathlib.Path(__file__).resolve().parents[2])
 
     full = roster(args.tag, opt)
     if not full:

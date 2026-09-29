@@ -16,7 +16,7 @@ import types
 
 import pytest
 
-SCRIPT = pathlib.Path(__file__).resolve().parents[1] / "experiments" / "stream_idle_timeout.py"
+SCRIPT = pathlib.Path(__file__).resolve().parents[1] / "hpcagent_bench" / "cluster" / "stream_idle_timeout.py"
 
 
 @pytest.fixture(name="module", scope="module")

@@ -143,8 +143,10 @@ def test_the_run_root_scan_skips_the_extractions_own_output(tmp_path: pathlib.Pa
 
 
 def test_merge_results_refuses_to_overwrite_a_shard(tmp_path: pathlib.Path) -> None:
-    """experiments/merge_results.py rebuilds --out from scratch, so --out naming a shard is refused."""
-    spec = importlib.util.spec_from_file_location("merge_results", REPO / "experiments" / "merge_results.py")
+    """hpcagent_bench/cluster/merge_results.py rebuilds --out from scratch, so --out naming a shard is refused."""
+    spec = importlib.util.spec_from_file_location(
+        "merge_results", REPO / "hpcagent_bench" / "cluster" / "merge_results.py"
+    )
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module

@@ -153,7 +153,7 @@ def test_manifest_hook_imports_the_checkout_through_run_hook() -> None:
     """The hook must run on an interpreter that has never installed the package.
 
     It is wired ``language: system``, so pre-commit hands it the ambient interpreter. The entry is
-    ``scripts/checks/run_hook.sh``, which sources ``experiments/env.sh`` and runs the check on
+    ``scripts/checks/run_hook.sh``, which sources ``hpcagent_bench/cluster/env.sh`` and runs the check on
     ``HPCAGENT_BENCH_HOST_PYTHON``; run exactly that way with no PYTHONPATH, the check imports.
     """
     config = (REPO / ".pre-commit-config.yaml").read_text(encoding="utf-8")

@@ -24,7 +24,7 @@ import pytest
 
 from hpcagent_bench.stats import population, summary
 
-EXPERIMENTS = pathlib.Path(__file__).resolve().parents[1] / "experiments"
+EXPERIMENTS = pathlib.Path(__file__).resolve().parents[1] / "hpcagent_bench" / "cluster"
 #: paired_arms.py moved to statistics/ (a12a5881); promote_unsubmitted.py stays in experiments/.
 STATISTICS = pathlib.Path(__file__).resolve().parents[1] / "statistics"
 

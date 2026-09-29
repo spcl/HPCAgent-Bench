@@ -5,7 +5,7 @@ not fit fewer). Source of truth: `experiments/layers/model-kimi27sglang.env` (re
 `campaign:kimi27sglang`). Background: [`knobs.md`](knobs.md).
 
 ```bash
-cd experiments && MODEL=kimi27sglang ./serve-only.sbatch
+MODEL=kimi27sglang hpcagent_bench/cluster/serve-only.sbatch
 ```
 
 ## Configuration

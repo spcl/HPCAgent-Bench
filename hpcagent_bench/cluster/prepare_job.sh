@@ -21,9 +21,9 @@
 # node that will report the number. Nothing about that can be rendered in advance, which is why
 # the judge still needs hpcagent_bench and pre-generation does not remove it.
 set -Eeuo pipefail
-# SCRIPT_DIR FIRST, own directory only as a fallback. Everything below is relative to the
-# experiments directory -- ./materialize_shared.sh, .. for the repo
-# root, and the bare PROBLEMS_FILE name the submit scripts write. run_cluster.sh runs a COPY of
+# SCRIPT_DIR FIRST, own directory only as a fallback. The helper scripts (./materialize_shared.sh,
+# ./fused_split.py) sit beside this file, the repo root is two levels up, and the bare PROBLEMS_FILE
+# name the submit scripts write is relative to experiments/. run_cluster.sh runs a COPY of
 # this file from RUN_DIR (so an edit of the checkout cannot shift the byte offsets of a script a
 # job is already executing), and a copy that located itself by $0 would resolve every one of
 # those against RUN_DIR.
@@ -39,27 +39,27 @@ ENV_FILE="${1:?usage: prepare_job.sh <.env file>}"
 # the same names, and drop -u for the source only: an env file is configuration, and a value it
 # leaves unset is a default, not an error.
 export SCRIPT_DIR="${SCRIPT_DIR:-$PWD}"
-export HPCAGENT_BENCH_REPO="${HPCAGENT_BENCH_REPO:-$(cd .. && pwd)}"
+export HPCAGENT_BENCH_REPO="${HPCAGENT_BENCH_REPO:-$(cd ../.. && pwd)}"
+EXPERIMENTS_DIR="${HPCAGENT_BENCH_REPO}/experiments"
 # shellcheck disable=SC1090
 case "${ENV_FILE}" in
     /*) ;;
-    *)  ENV_FILE="${PWD}/${ENV_FILE#./}" ;;
+    *)  ENV_FILE="${EXPERIMENTS_DIR}/${ENV_FILE#./}" ;;
 esac
 set +u; set -a; . "${ENV_FILE}"; set +a; set -u
 
-REPO="${HPCAGENT_BENCH_REPO:-$(cd .. && pwd)}"
+REPO="${HPCAGENT_BENCH_REPO}"
 ARM="${CAMPAIGN_ARM:?the env file must set CAMPAIGN_ARM}"
 PROBLEMS="${PROBLEMS_FILE:?the env file must set PROBLEMS_FILE}"
 LANG_="${LANGUAGE:-c}"
 # materialize_shared.sh stages signatures and drop-ins in the arm's language, from a view of its target
 case "${LANG_}" in hip|cuda) CPF_TARGET=gpu ;; *) CPF_TARGET=cpu ;; esac
 export AGENT_LANGUAGE="${LANG_}" CPF_TARGET
-# PROBLEMS_FILE is written as a bare name because run_cluster.sh reads it with this directory as
-# the cwd. Every container step below runs with the EDF's workdir instead, so resolve it HERE --
-# once -- rather than letting each step guess.
+# PROBLEMS_FILE is written as a bare name, relative to experiments/. Every container step below runs
+# with the EDF's workdir instead, so resolve it HERE -- once -- rather than letting each step guess.
 case "${PROBLEMS}" in
     /*) ;;
-    *)  PROBLEMS="${PWD}/${PROBLEMS#./}" ;;
+    *)  PROBLEMS="${EXPERIMENTS_DIR}/${PROBLEMS#./}" ;;
 esac
 [[ -s "${PROBLEMS}" ]] || { echo "FATAL: no problems file at ${PROBLEMS}" >&2; exit 2; }
 # Host steps run the batch shell's interpreter (run_cluster.sh exports it); container steps (ce_run)
@@ -76,7 +76,7 @@ host_python="${HPCAGENT_BENCH_HOST_PYTHON:?prepare_job.sh: HPCAGENT_BENCH_HOST_P
 if [[ -n "${SETUPS_FILE:-}" ]]; then
     case "${SETUPS_FILE}" in
         /*) ;;
-        *)  SETUPS_FILE="${PWD}/${SETUPS_FILE#./}" ;;
+        *)  SETUPS_FILE="${EXPERIMENTS_DIR}/${SETUPS_FILE#./}" ;;
     esac
     [[ -s "${SETUPS_FILE}" ]] || { echo "FATAL: no setups file at ${SETUPS_FILE}" >&2; exit 2; }
     FUSED_DIR="${FUSED_SETUPS_OUT:-${RUN_DIR:?a fused wave is prepared inside its job (RUN_DIR)}/setups}"
@@ -250,11 +250,11 @@ fi
 #
 # The READ FORM view (the canonical_parallel_form tool) need not be filled in advance: the judge
 # renders a kernel the view lacks on its first request and caches it (cpf_prerender.render_on_demand),
-# and prerender_cpf.sbatch is only a warm-up. This step lists what the judge will render and refuses
+# and `python -m hpcagent_bench.cpf_prerender` is only a warm-up. This step lists what the judge will render and refuses
 # only a view no render can land in: pinned to another target, cache or dace commit than the judge's.
 #
 # The DROP-IN view stays strict: a drop-in is the agent's starting source, staged before the agent
-# starts, and it must have graded correct first (verify_cpf.sbatch). Neither the render nor that grade
+# starts, and it must have graded correct first (`python -m hpcagent_bench.cpf_verify`). Neither the render nor that grade
 # can happen on demand, because no request comes before the agent reads its task directory.
 cpf_check() {  # cpf_check <view> <mode> <language> [check flags...]
     "${host_python}" -m hpcagent_bench.cpf_cache check --view "$1" \
@@ -269,7 +269,7 @@ cpf_form_gate() {  # cpf_form_gate <view> <language>
         || rc=$?
     if (( rc != 0 )); then
         echo "FATAL: this arm's form view ${1} cannot take the judge's renders (check exit ${rc});" >&2
-        echo "  point the arm at a new view, or render it with: VIEW=${1} sbatch prerender_cpf.sbatch" >&2
+        echo "  point the arm at a new view, or render it with: python -m hpcagent_bench.cpf_prerender --view ${1} --cache <cache> --kernels <roster>" >&2
         [[ -z "${plan}" ]] || sed 's/^/  /' <<<"${plan}" >&2
         exit 3
     fi
@@ -285,7 +285,7 @@ cpf_dropin_gate() {  # cpf_dropin_gate <view> <language>
     absent="$(cpf_check "$1" dropin "$2" --verified)" || rc=$?
     if (( rc != 0 )); then
         echo "FATAL: this arm's dropin view ${1} cannot serve every kernel (check exit ${rc}). Render" >&2
-        echo "  them first: VIEW=${1} sbatch prerender_cpf.sbatch" >&2
+        echo "  them first: python -m hpcagent_bench.cpf_prerender --view ${1} --cache <cache> --kernels <roster>" >&2
         [[ -z "${absent}" ]] || sed 's/^/  /' <<<"${absent}" >&2
         exit 3
     fi

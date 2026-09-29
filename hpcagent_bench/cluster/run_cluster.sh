@@ -8,9 +8,14 @@ set -euo pipefail
 {
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-ENV_FILE="${CLUSTER_ENV_FILE:-${SCRIPT_DIR}/.env}"
+# The checkout, and its experiments/ (the arm configs and the operator's generated .env.<arm>, problems
+# files and .rendered/ snapshots). An agent step runs a copy from its launch directory, where
+# HPCAGENT_BENCH_REPO is already exported.
+REPO_DIR="${HPCAGENT_BENCH_REPO:-$(cd -- "${SCRIPT_DIR}/../.." && pwd)}"
+EXPERIMENTS_DIR="${REPO_DIR}/experiments"
+ENV_FILE="${CLUSTER_ENV_FILE:-${EXPERIMENTS_DIR}/.env}"
 
-# No core dumps: core_pattern `core_%h_%p` lands in CWD (SCRIPT_DIR). Slurm propagates this to steps.
+# No core dumps: core_pattern `core_%h_%p` lands in CWD. Slurm propagates this to steps.
 # HPCAGENT_BENCH_JUDGE_CORE_DUMPS=1 (a crash-diagnosis arm) floors the SOFT limit only, so the judge
 # can keep its own dump (core_dumps.keep_for_judge); every process still starts at 0.
 if [[ "${HPCAGENT_BENCH_JUDGE_CORE_DUMPS:-0}" == 1 ]]; then ulimit -S -c 0; else ulimit -c 0; fi
@@ -42,7 +47,7 @@ fi
 # The commit every graded row records (recording.commit_sha, the disk cache key): the checkout's
 # HEAD at job start, resolved once in the batch step and inherited by every role step.
 if [[ -n "${SLURM_JOB_ID:-}" && -z "${HPCAGENT_BENCH_SNAPSHOT_COMMIT:-}" ]]; then
-    HPCAGENT_BENCH_SNAPSHOT_COMMIT="$(git -C "${SCRIPT_DIR}/.." rev-parse HEAD 2>/dev/null || true)"
+    HPCAGENT_BENCH_SNAPSHOT_COMMIT="$(git -C "${REPO_DIR}" rev-parse HEAD 2>/dev/null || true)"
     export HPCAGENT_BENCH_SNAPSHOT_COMMIT
 fi
 
@@ -153,7 +158,7 @@ JUDGE_CE_ENV="${JUDGE_CE_ENV:-hpcagent-bench-judge-mi300-${CE_IMAGE_FLAVOR:-late
 AGENT_CE_ENV="${AGENT_CE_ENV:-${AMD_CE_ENV}}"
 # Weights only under FAST_SCRATCH (HF_HOME, cache_env.sh): the site's fast tier for many readers.
 # Build artefacts live on the general scratch under JIT_CACHE_ROOT -- see run_vllm_node.
-HPCAGENT_BENCH_REPO="${HPCAGENT_BENCH_REPO:-$(cd -- "${SCRIPT_DIR}/.." && pwd)}"
+HPCAGENT_BENCH_REPO="${REPO_DIR}"
 RUN_ROOT="${RUN_ROOT:-${HPCAGENT_BENCH_REPO}/results/cluster}"
 RUN_DIR="${RUN_ROOT}/${SLURM_JOB_ID:-local}"
 # The one folder the agent and the judge both see: host side under RUN_DIR (one path on every node),
@@ -214,7 +219,7 @@ run_vllm_node() {
     # Named explicitly rather than trusting the image ENV -- the CE does not preserve it reliably.
     local moe_configs_dir="/opt/moe-configs"
     if [[ ! -d "${moe_configs_dir}" ]]; then
-        moe_configs_dir="${SCRIPT_DIR}/../containers/inference/moe-configs"
+        moe_configs_dir="${REPO_DIR}/containers/inference/moe-configs"
     fi
     if [[ -d "${moe_configs_dir}" ]]; then
         export VLLM_TUNED_CONFIG_FOLDER="${VLLM_TUNED_CONFIG_FOLDER:-${moe_configs_dir}}"
@@ -585,6 +590,12 @@ run_judge_node() {
     if [[ -n "${JUDGE_INPUT_MODE:-}" ]]; then
         serve+=(--input-mode "${JUDGE_INPUT_MODE}")
     fi
+    # A crash-diagnosis arm keeps the judge's core dump: it lands in the CWD, so the judge runs from the
+    # scratch directory's core/ rather than from wherever the step started.
+    if [[ "${HPCAGENT_BENCH_JUDGE_CORE_DUMPS:-0}" == 1 ]]; then
+        mkdir -p -- "${HPCAGENT_BENCH_SCRATCH:-${REPO_DIR}/.scratch}/core"
+        cd -- "${HPCAGENT_BENCH_SCRATCH:-${REPO_DIR}/.scratch}/core"
+    fi
     # Through judge_upstream.py, never bare: a bare child that dies takes the rank with it for the
     # rest of the run, because the router in front of it keeps answering /health and turns every
     # grade into a 502. The supervisor restarts it and still ends non-zero on a crash loop, which
@@ -779,11 +790,11 @@ if command -v lfs >/dev/null 2>&1; then
 fi
 
 # Read-only per-kernel material + the prompt template, once per run, before any role starts.
-# submit.sh writes the problems file next to this script, so a bare name from .env is relative
-# to SCRIPT_DIR, not to whatever directory the job was submitted from.
+# submit.sh writes the problems file into experiments/, so a bare name from .env is relative
+# to EXPERIMENTS_DIR, not to whatever directory the job was submitted from.
 problems_file="${PROBLEMS_FILE:-}"
 if [[ -n "${problems_file}" && ! -f "${problems_file}" ]]; then
-    problems_file="${SCRIPT_DIR}/${problems_file}"
+    problems_file="${EXPERIMENTS_DIR}/${problems_file}"
 fi
 # ONE preparation step, FIRST. prepare_job.sh stages the agent material (still via
 # materialize_shared.sh), fills the generated-source cache, pre-renders CPF when the arm enables
@@ -1001,7 +1012,8 @@ role_mounts() {
                 mkdir -p "${jit_root}/${jit_category}" 2>/dev/null &&
                     printf '%s\n' "${jit_root}/${jit_category}"
             done
-            printf '%s\n' "${HF_HOME:-${FAST_SCRATCH}/hf}" "${RUN_ROOT}" "${SCRIPT_DIR}" ;;
+            printf '%s\n' "${HF_HOME:-${FAST_SCRATCH}/hf}" "${RUN_ROOT}" "${SCRIPT_DIR}" \
+                "${HPCAGENT_BENCH_REPO}/containers/inference" ;;
         # The judge needs the TREE: hidden_tests is deliberately absent from the judge image (it would
         # be published with it) and its router scripts live in experiments/. RUN_ROOT is where the shards are written. SCRIPT_DIR lives inside the repo, so
         # naming the repo covers it. What this DROPS is the base EDF's wholesale filesystem
@@ -1400,7 +1412,7 @@ role_srun() {
 # its exit status. <label> tags the derived EDF/mount policy (role_mounts, agent_ro_binds), so it
 # must differ from judge-node/agent-node/vllm-node or it clobbers a file a still-running step reads.
 #
-# For the results-DB fold below: experiments/merge_results.py imports hpcagent_bench, which the batch
+# For the results-DB fold below: hpcagent_bench/cluster/merge_results.py imports hpcagent_bench, which the batch
 # host's bare python3.11 does not carry. Reuses derived_edf / role_mounts / agent_ro_binds, the SAME primitives
 # role_srun composes the judge's own container from.
 #
@@ -1523,7 +1535,7 @@ if [[ "${INFERENCE_SOURCE}" != "service" ]]; then
 fi
 
 # The gang relay: the gang judges' ONLY way to start rank steps. It runs HERE, in the batch shell
-# outside any container (experiments/gang_relay.py), because an srun inside the judge container
+# outside any container (hpcagent_bench/cluster/gang_relay.py), because an srun inside the judge container
 # cannot reach the host Slurm. It must be up before the judge step, and it exits with this shell.
 if gang_judge; then
     export HPCAGENT_BENCH_GANG_RELAY_DIR="${RUN_DIR}/gang-relay"
@@ -1552,7 +1564,7 @@ fi
 # actually succeeds (below) means every exit from here -- this branch, a TERM mid-merge, a plain
 # crash -- leaves the run either merged or visibly marked for a re-merge; nothing depends on
 # catching the signal that ends it.
-echo "results DB not yet merged for this run (started $(date -Is)); rerun experiments/merge_results.py if this file is still here after the job ends" \
+echo "results DB not yet merged for this run (started $(date -Is)); rerun hpcagent_bench/cluster/merge_results.py if this file is still here after the job ends" \
     >"${RUN_DIR}/MERGE_FAILED"
 
 # Supervise ALL THREE steps, not just the agent one. Waiting on the agent alone means a dead
@@ -1629,7 +1641,7 @@ if kill -0 "${agent_step_pid}" 2>/dev/null; then
     echo "       Stopping the agents now -- they cannot make progress without it -- then extracting" >&2
     echo "       what they already produced before this job ends." >&2
     # Stop the agents FIRST, and with a real TERM their own step's SIGTERM handler
-    # (note_job_cancellation, experiments/agent_driver.py) can act on: it writes each agent's
+    # (note_job_cancellation, hpcagent_bench/cluster/agent_driver.py) can act on: it writes each agent's
     # cancelled marker and deliberately does not exit on its own, so the TASKS need the signal
     # delivered through Slurm -- `kill`ing the srun frontend never reaches them, it forces an
     # immediate SIGKILL instead (see signal_step above). Extraction below reads
@@ -1702,14 +1714,6 @@ echo "===== node utilization report (${RUN_DIR}/monitor) ====="
 "${HPCAGENT_BENCH_HOST_PYTHON}" "${SCRIPT_DIR}/monitor_report.py" "${RUN_DIR}/monitor" 2>&1 \
     || echo "monitor_report failed; run it manually on the login node"
 
-# Thinking tokens are the ones no endpoint here reports: usage.output_tokens_details.thinking_tokens
-# comes back 0 from vLLM and SGLang alike, so a report that prints output_tokens alone
-# understates a reasoning arm (about half for qwen38). Same guard as above: best-effort, and a
-# report that fails must never fail a run that already finished its work.
-echo "===== token report (${RUN_DIR}/agents) ====="
-"${HPCAGENT_BENCH_HOST_PYTHON}" "${SCRIPT_DIR}/token_report.py" "${RUN_DIR}" 2>&1 \
-    || echo "token_report failed; run it manually on the login node"
-
 # Kernels the judge verified correct and faster that no submission recorded (a timeout discards
 # proven work). Reads sqlite only, writes nothing.
 "${HPCAGENT_BENCH_HOST_PYTHON}" "${SCRIPT_DIR}/recoverable_report.py" "${RUN_DIR}" 2>&1 \
@@ -1719,7 +1723,7 @@ echo "===== token report (${RUN_DIR}/agents) ====="
 #
 # Every judge rank wrote its own shard, the judges' final grades sit in final-grade/, and every agent
 # episode's cost record (decomposed tokens, attempts, the final attempt's start) is a tokens.json in
-# its worker directory. experiments/merge_results.py folds all of them into ONE results DB,
+# its worker directory. hpcagent_bench/cluster/merge_results.py folds all of them into ONE results DB,
 # ${RUN_DIR}/results.db (docs/results_db.md): the job's record from here on.
 #
 # It runs HERE, while the run directory is still on disk and the allocation is still alive: a lost

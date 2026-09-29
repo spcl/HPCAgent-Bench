@@ -1,6 +1,6 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""experiments/jit_cache_layer.sh: engines compile node-locally and publish add-only to the shared cache.
+"""hpcagent_bench/cluster/jit_cache_layer.sh: engines compile node-locally and publish add-only to the shared cache.
 
 The shared cache is NFS; engines writing it concurrently turned each other's rewrites into ESTALE
 (640074/640075/640090). These tests pin the contract that makes the layer safe to share.
@@ -12,7 +12,7 @@ import subprocess
 import pytest
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-LAYER = REPO / "experiments" / "jit_cache_layer.sh"
+LAYER = REPO / "hpcagent_bench" / "cluster" / "jit_cache_layer.sh"
 STAGE_PREFIX = ".jit-layer-staging"
 
 
@@ -92,7 +92,7 @@ def test_seed_of_a_cache_that_does_not_exist_yet_creates_an_empty_layer(tmp_path
 def test_the_engine_is_pointed_at_the_local_layer_before_it_starts(variable: str) -> None:
     """Static: the redirect has to happen in run_vllm_node before its exec, or the engine writes
     NFS directly again."""
-    text = (REPO / "experiments" / "run_cluster.sh").read_text()
+    text = (REPO / "hpcagent_bench" / "cluster" / "run_cluster.sh").read_text()
     body = text[text.index("run_vllm_node() {") :]
     body = body[: body.index('exec "${command[@]}"')]
     redirect = body.index('export TRITON_CACHE_DIR="${local_dirs[0]}"')

@@ -3,10 +3,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Inference only: one OpenAI-compatible endpoint and nothing else. The payload is run_cluster.sh's
 # own --vllm-node role, so this serves what a campaign serves, without the judge and agent roles.
-#   ./serve-only.sbatch                      qwen38 on the nodes its env file asks for
-#   MODEL=kimi27sglang ./serve-only.sbatch   another model (any layers/model-<MODEL>.env)
-#   SUBMIT=0 ./serve-only.sbatch             print what would be submitted, submit nothing
-# Run it from experiments/. It derives --nodes from the env file, so never pass --nodes yourself.
+#   hpcagent_bench/cluster/serve-only.sbatch                      qwen38 on the nodes its env file asks for
+#   MODEL=kimi27sglang hpcagent_bench/cluster/serve-only.sbatch   another model (any experiments/layers/model-<MODEL>.env)
+#   SUBMIT=0 hpcagent_bench/cluster/serve-only.sbatch             print what would be submitted, submit nothing
+# It derives --nodes from the env file, so never pass --nodes yourself.
 #SBATCH --job-name=serve-only
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=4
@@ -26,14 +26,15 @@ ulimit -c 0
 # Under sbatch BASH_SOURCE is the spooled copy in /var/spool/slurmd, not this file.
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 if [[ -n "${SLURM_JOB_ID:-}" ]]; then
-    SCRIPT_DIR="${CLUSTER_SCRIPT_DIR:-${SLURM_SUBMIT_DIR}}"
+    SCRIPT_DIR="${CLUSTER_SCRIPT_DIR:-${HPCAGENT_BENCH_REPO:-${SLURM_SUBMIT_DIR}}/hpcagent_bench/cluster}"
 fi
 export SCRIPT_DIR
+REPO_DIR="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 
 MODEL="${MODEL:-qwen38}"
 # <campaign>:<model> (arms.yaml) or an env file
 BASE_ENV="${SERVE_BASE_ENV:-campaign:${MODEL}}"
-SERVE_ENV="${SERVE_ENV_FILE:-${SCRIPT_DIR}/serve-only.env}"
+SERVE_ENV="${SERVE_ENV_FILE:-${REPO_DIR}/experiments/serve-only.env}"
 [[ -f "${SERVE_ENV}" ]] || { echo "missing env file ${SERVE_ENV}" >&2; exit 2; }
 
 # Campaign values first, role split second: last assignment wins, as the submit scripts do it.
@@ -57,7 +58,7 @@ READY_TIMEOUT="${VLLM_READY_TIMEOUT_SECONDS:-${AGENT_READY_TIMEOUT_SECONDS:-7200
 RUN_ROOT="${RUN_ROOT:?RUN_ROOT must name a writable directory}"
 
 if [[ -z "${SLURM_JOB_ID:-}" ]]; then
-    . "${SCRIPT_DIR}/../scripts/site_env.sh"
+    . "${REPO_DIR}/scripts/site_env.sh"
     submit=(sbatch --nodes="${INFERENCE_NODES}" --nice="${NICE:-${HPCAGENT_BENCH_NICE}}"
         --export=ALL,MODEL="${MODEL}",CLUSTER_SCRIPT_DIR="${SCRIPT_DIR}"
         "${SCRIPT_DIR}/serve-only.sbatch")
@@ -78,7 +79,7 @@ fi
 mapfile -t nodes < <(scontrol show hostnames "${SLURM_JOB_NODELIST}")
 if (( ${#nodes[@]} != INFERENCE_NODES )); then
     echo "allocation has ${#nodes[@]} nodes; ${BASE_ENV##*/} asks for ${INFERENCE_NODES}" >&2
-    echo "submit with ./serve-only.sbatch, which derives --nodes from that file" >&2
+    echo "submit with hpcagent_bench/cluster/serve-only.sbatch, which derives --nodes from that file" >&2
     exit 2
 fi
 
@@ -91,7 +92,7 @@ mkdir -p "${RUN_DIR}"
 { printf '%s\n' "${BASE_FLAT}"; cat -- "${SERVE_ENV}"; } >"${RUN_DIR}/serve.env"
 
 export CLUSTER_ENV_FILE="${RUN_DIR}/serve.env"
-export HPCAGENT_BENCH_REPO="${HPCAGENT_BENCH_REPO:-$(cd -- "${SCRIPT_DIR}/.." && pwd)}"
+export HPCAGENT_BENCH_REPO="${HPCAGENT_BENCH_REPO:-${REPO_DIR}}"
 export VLLM_MASTER_HOST="${nodes[0]}"
 BASE_URL="http://${VLLM_MASTER_HOST}:${VLLM_PORT}"
 

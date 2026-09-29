@@ -10,7 +10,7 @@ agent/harness: pins.env (uv, node, the harness python) and node/package.json wit
 
 The second half is the same question about PATHS rather than versions. A pinned venv the driver
 cannot exec is worth as little as an unpinned one, so /opt/harness/<name> is held across the three
-files that spell it: the Dockerfiles that build it, experiments/harnesses.py that execs it, and
+files that spell it: the Dockerfiles that build it, hpcagent_bench/cluster/harnesses.py that execs it, and
 verify_image.py, which is the only gate a PULLED image passes through.
 """
 
@@ -254,8 +254,8 @@ def module(path: pathlib.Path, name: str) -> object:
 
 @functools.lru_cache(maxsize=1)
 def harnesses() -> object:
-    """experiments/harnesses.py, which puts its own directory on sys.path for ``import effort``."""
-    return module(ROOT / "experiments" / "harnesses.py", "harness_pins_harnesses")
+    """hpcagent_bench/cluster/harnesses.py, which puts its own directory on sys.path for ``import effort``."""
+    return module(ROOT / "hpcagent_bench" / "cluster" / "harnesses.py", "harness_pins_harnesses")
 
 
 @functools.lru_cache(maxsize=1)
@@ -265,8 +265,8 @@ def verifier() -> object:
 
 @functools.lru_cache(maxsize=1)
 def submitter_harnesses() -> tuple[str, ...]:
-    """The harness names experiments/submit.sh accepts: claude plus the keys of its HARNESS_PROMPT map."""
-    text = (ROOT / "experiments" / "submit.sh").read_text(encoding="utf-8")
+    """The harness names hpcagent_bench/cluster/submit.sh accepts: claude plus the keys of its HARNESS_PROMPT map."""
+    text = (ROOT / "hpcagent_bench" / "cluster" / "submit.sh").read_text(encoding="utf-8")
     declared = re.search(r"declare -A HARNESS_PROMPT=\(([^)]*)\)", text)
     assert declared is not None, "submit.sh declares no HARNESS_PROMPT map"
     return tuple(sorted({"claude", *re.findall(r"\[([^\]]+)\]=", declared.group(1))}))

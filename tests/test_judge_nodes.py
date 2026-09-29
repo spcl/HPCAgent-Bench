@@ -1,6 +1,6 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""experiments/judge_nodes.py: judges are sized by concurrent agents, one rank per five."""
+"""hpcagent_bench/cluster/judge_nodes.py: judges are sized by concurrent agents, one rank per five."""
 
 import pathlib
 import subprocess
@@ -37,7 +37,7 @@ def test_the_cli_counts_roster_names_times_repeat_and_ignores_notes(tmp_path: pa
     roster = tmp_path / "kernels.txt"
     roster.write_text("# header\n" + "".join(f"k{i}  # note\n" for i in range(15)) + "\n")
     out = subprocess.run(
-        [sys.executable, str(REPO / "experiments" / "judge_nodes.py"), str(roster), "--repeat", "3"],
+        [sys.executable, str(REPO / "hpcagent_bench" / "cluster" / "judge_nodes.py"), str(roster), "--repeat", "3"],
         check=True,
         capture_output=True,
         text=True,

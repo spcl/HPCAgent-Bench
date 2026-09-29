@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run pytest (or the CI replay) under experiments/env.sh (import path, site layer, host interpreter)
+# Run pytest (or the CI replay) under hpcagent_bench/cluster/env.sh (import path, site layer, host interpreter)
 # with the MPI knobs the suite needs.
 #
 #   scripts/run_tests.sh [pytest args...]            pytest (default: -q --maxfail=20 tests/)
@@ -24,7 +24,7 @@ if [[ "${1:-}" == --container ]]; then
         --job-name=ci-mi200 "${REPO}/scripts/ci_mi200.sbatch" "$@"
 fi
 # The site layer, the interpreter, PYTHONHASHSEED and ulimit -c 0.
-. "${REPO}/experiments/env.sh"
+. "${REPO}/hpcagent_bench/cluster/env.sh"
 # An image's EDF sets PYTHONSAFEPATH=1, which drops a script's own directory from sys.path, so an
 # experiments/ script could not import its siblings. Tests run as CI runs them: without it.
 unset PYTHONSAFEPATH

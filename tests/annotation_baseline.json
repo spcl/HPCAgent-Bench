@@ -1,5 +1,5 @@
 {
- "experiments/gang_relay.py": 24,
+ "hpcagent_bench/cluster/gang_relay.py": 24,
  "hpcagent_bench/api.py": 8,
  "hpcagent_bench/cli.py": 6,
  "hpcagent_bench/config.py": 2,

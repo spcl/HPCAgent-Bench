@@ -25,9 +25,10 @@ from typing import Annotated
 import yaml
 from pydantic import BaseModel, ConfigDict, StrictInt, StrictStr, StringConstraints, TypeAdapter
 
-HERE = pathlib.Path(__file__).resolve().parent
-SPEC = HERE / "arms.yaml"
-LAYERS = HERE / "layers"
+#: The checkout's ``experiments/``: the arm specification and its env layers.
+EXPERIMENTS = pathlib.Path(__file__).resolve().parents[2] / "experiments"
+SPEC = EXPERIMENTS / "arms.yaml"
+LAYERS = EXPERIMENTS / "layers"
 COMMON = LAYERS / "common.env"
 ASSIGNMENT = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$")
 EXTENDS = re.compile(r"^# extends: (.+)$", re.MULTILINE)

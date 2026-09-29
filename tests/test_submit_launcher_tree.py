@@ -16,10 +16,10 @@ import subprocess
 
 import pytest
 
-EXPERIMENTS = pathlib.Path(__file__).resolve().parents[1] / "experiments"
+EXPERIMENTS = pathlib.Path(__file__).resolve().parents[1] / "hpcagent_bench" / "cluster"
 
-#: The two lines every launcher resolves its tree with: the cd into its own directory, then OPT.
-TREE_LINES = re.compile(r"^(cd -- .*|OPT=.*)$", re.MULTILINE)
+#: The lines every launcher resolves its tree with: its own directory, then OPT, then the cd into experiments/.
+TREE_LINES = re.compile(r"^(CLUSTER_DIR=.*|OPT=.*|cd -- .*)$", re.MULTILINE)
 
 LAUNCHERS = sorted(
     path.name for path in EXPERIMENTS.glob("*.sh") if re.search(r"^OPT=", path.read_text(), re.MULTILINE)
@@ -29,8 +29,9 @@ LAUNCHERS = sorted(
 def resolved_opt(tmp_path: pathlib.Path, launcher: str, env: dict[str, str]) -> str:
     """OPT as ``launcher``'s own tree lines leave it, run from a copy of the launcher in a fresh tree."""
     lines = TREE_LINES.findall((EXPERIMENTS / launcher).read_text())
-    probe = tmp_path / "repo" / "experiments" / launcher
+    probe = tmp_path / "repo" / "hpcagent_bench" / "cluster" / launcher
     probe.parent.mkdir(parents=True)
+    (tmp_path / "repo" / "experiments").mkdir()
     probe.write_text("\n".join(["set -eu", *lines, 'printf "%s" "${OPT}"']) + "\n")
     bash = shutil.which("bash")
     assert bash is not None

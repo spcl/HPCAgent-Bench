@@ -9,7 +9,12 @@
 # SUBMITTER's core limit, so the floor has to be set here.
 ulimit -c 0
 # render_env (a <campaign>:<model> base, flattened) and snapshot_env (the per-submission copy a job reads).
-. "$(dirname -- "${BASH_SOURCE[0]}")/env_layers.sh"
+CLUSTER_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# The arm configs (arms.yaml, layers/) and the operator's generated files (.env.<arm>, .rendered/).
+EXPERIMENTS_DIR="$(cd -- "${CLUSTER_DIR}/../../experiments" && pwd)"
+# Slurm output of the jobs this file submits: <scratch>/logs (hpcagent_bench.paths.scratch_dir).
+HPCAGENT_BENCH_SCRATCH="${HPCAGENT_BENCH_SCRATCH:-$(cd -- "${CLUSTER_DIR}/../.." && pwd)/.scratch}"
+. "${CLUSTER_DIR}/env_layers.sh"
 
 # symbolic_path <root-var-name> <resolved-absolute-path> -- the path with the CURRENT value of
 # ${<root-var-name>} rewritten back to a literal "${<root-var-name>}" prefix, for a value written into
@@ -184,7 +189,7 @@ partition_is_default() { [[ -z "${PARTITION:-}" || "${PARTITION}" == mi300 ]]; }
 apply_partition() {
     local env="$1" model="$2" layer kv experiment
     partition_is_default && return 0
-    local dir; dir="$(dirname -- "${BASH_SOURCE[0]}")/layers"
+    local dir="${EXPERIMENTS_DIR}/layers"
     local layers=("${dir}/partition-${PARTITION}.env")
     grep -qx 'INFERENCE_SOURCE=service' "${env}" || layers+=("${dir}/partition-${PARTITION}-${model}.env")
     sed -i -E "s/^([A-Z_]*CE_ENV=.*)-mi300-/\1-${PARTITION}-/" "${env}"
@@ -216,7 +221,7 @@ apply_flavor() {
 # partition_sbatch_args -- the sbatch words that move a job off the default partition, one per line.
 partition_sbatch_args() {
     partition_is_default && return 0
-    local layer; layer="$(dirname -- "${BASH_SOURCE[0]}")/layers/partition-${PARTITION}.env"
+    local layer="${EXPERIMENTS_DIR}/layers/partition-${PARTITION}.env"
     printf '%s\n' "--partition=${PARTITION}" "--gpus-per-node=$(sed -n 's/^GPUS_PER_NODE=//p' "${layer}")"
 }
 
@@ -230,8 +235,18 @@ finalize_staged_env() {
     mv -- "${staged}" "${env}"
 }
 
+# The step a grade-pending job runs: four one-socket tasks in the judge image, each final-grading its share
+# of what <jid>'s judges left pending (hpcagent-bench job grade-pending; docs/jobs/grade-pending.sbatch is the
+# same step as a script). Single-quoted on purpose: the job's own shell expands it, on its node, where HOME and
+# the EDF directory are the ones the step resolves the image against.
+# shellcheck disable=SC2016
+GRADE_PENDING_STEP='srun --ntasks-per-node=4 --cpus-per-task=24 --hint=nomultithread --mem=0 \
+    --environment="${JUDGE_EDF:-${HOME}/.edf/${JUDGE_CE_ENV:-hpcagent-bench-judge-mi300-${CE_IMAGE_FLAVOR:-latest}}.toml}" \
+    env SCRATCH="${SCRATCH}" HPCAGENT_BENCH_REPO="${HPCAGENT_BENCH_REPO}" \
+    bash -c '"'"'exec "${HPCAGENT_BENCH_IMAGE_PYTHON}" -m hpcagent_bench job grade-pending "$1"'"'"' _'
+
 # submit_grade_pending <agent-jid> <label>
-# grade_pending.sbatch chained on the agent job with afterany: it grades the final grades the job's
+# The grade-pending job chained on the agent job with afterany: it grades the final grades the job's
 # judges left pending. None for a smoke or off the default partition. An empty <agent-jid> (a dry run)
 # only reports it.
 submit_grade_pending() {
@@ -244,9 +259,13 @@ submit_grade_pending() {
         echo "  pending final grades of ${label}: chained on it (afterany) when it is submitted"
         return 0
     fi
+    local logs="${HPCAGENT_BENCH_SCRATCH}/logs"
+    mkdir -p -- "${logs}"
     pending_jid=$(sbatch --parsable --dependency="afterany:${jid}" --nice=0 \
         ${HPCAGENT_BENCH_EXCLUDE_NODES:+--exclude="${HPCAGENT_BENCH_EXCLUDE_NODES}"} \
-        --job-name="grade-pending-${jid}" grade_pending.sbatch "${jid}") || return 2
+        --nodes=1 --ntasks-per-node=4 --cpus-per-task=24 --hint=nomultithread --gpus-per-node=4 --mem=0 \
+        --time=03:00:00 --no-requeue --output="${logs}/grade-pending-%j.out" \
+        --job-name="grade-pending-${jid}" --wrap "${GRADE_PENDING_STEP} ${jid}") || return 2
     echo "  pending final grades of ${label} -> ${pending_jid} (afterany:${jid})"
 }
 
@@ -266,7 +285,10 @@ submit_arm_job() {
     [[ -n "${SBATCH_ACCOUNT:-}" && "${SBATCH_ACCOUNT}" != root ]] \
         || { echo "set SBATCH_ACCOUNT (site layer or shell) to a project account" >&2; return 2; }
     snapshot=$(snapshot_env "${env}" "${arm}") || return 2
+    local logs="${HPCAGENT_BENCH_SCRATCH}/logs"
+    mkdir -p -- "${logs}"
     local -a args=(--parsable --no-requeue --nodes="${nodes}" --time="${walltime}" --job-name="${arm}"
+        --output="${logs}/beverin-services-%j.out" --error="${logs}/beverin-services-%j.err"
         --nice="${NICE:-${HPCAGENT_BENCH_NICE:-0}}")
     [[ -z "${dep_ids}" ]] || args+=(--dependency="afterany:${dep_ids}")
     [[ -z "${begin}" ]] || args+=(--begin="${begin}")
@@ -277,8 +299,10 @@ submit_arm_job() {
         mapfile -t -O "${#args[@]}" args < <(partition_sbatch_args)
     fi
     # The env file pins any CPF view an arm's packet asks for; the caller's own must not leak into others.
+    # CLUSTER_SCRIPT_DIR: under sbatch BASH_SOURCE is a spooled copy, so the job finds run_cluster.sh through this.
     jid=$(env -u CPF_DROPIN_DIR -u CPF_FORMS_DIR -u HPCAGENT_BENCH_SERVICE_CANONICAL_PARALLEL_FORM_DIR \
-        sbatch "${args[@]}" --export=ALL,CLUSTER_ENV_FILE="${PWD}/${snapshot}" beverin.sbatch) || return 2
+        CLUSTER_SCRIPT_DIR="${CLUSTER_DIR}" \
+        sbatch "${args[@]}" --export=ALL,CLUSTER_ENV_FILE="${PWD}/${snapshot}" "${CLUSTER_DIR}/beverin.sbatch") || return 2
     echo "submitted ${arm} -> ${jid} (${nodes} nodes${detail}) env ${snapshot}"
     submit_grade_pending "${jid}" "${arm}"
 }

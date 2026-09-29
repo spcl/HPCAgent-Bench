@@ -17,7 +17,7 @@ scripts/install_dace.sh                    # dace: the pinned spcl/dace@extended
 pre-commit install
 ```
 
-On a cluster, source `experiments/env.sh`: it loads the site layer, names the host interpreter
+On a cluster, source `hpcagent_bench/cluster/env.sh`: it loads the site layer, names the host interpreter
 (`HPCAGENT_BENCH_HOST_PYTHON`) and sets `PYTHONHASHSEED=0` ([docs/configuration.md](docs/configuration.md)).
 
 ## Lint and format
@@ -53,7 +53,7 @@ and the full suite, runs on a compute node inside the judge image (its gcc 16 ac
 about 720 translator cases fail outside it for that reason alone):
 
 ```sh
-. experiments/env.sh
+. hpcagent_bench/cluster/env.sh
 P=--partition="$HPCAGENT_BENCH_CI_PARTITION"
 sbatch $P scripts/ci_mi200.sbatch                                  # every CI job, about 3 hours
 sbatch $P scripts/ci_mi200.sbatch --ci --jobs unit,mpi             # chosen CI jobs

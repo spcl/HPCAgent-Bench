@@ -111,7 +111,7 @@ cpu = [
     # load_back reads the dataset card's `configs:` metadata.
     "datasets>=2.17",
     "huggingface_hub",
-    # The judge: experiments/judge_service.py's router (starlette's TestClient needs httpx2), the bound
+    # The judge: hpcagent_bench/cluster/judge_service.py's router (starlette's TestClient needs httpx2), the bound
     # judge tools' crawl/browser stack. The proxy the arms talk through is the judge-proxy group below.
     "fastapi",
     "httpx",
@@ -189,6 +189,9 @@ include = ["hpcagent_bench*"]
 hpcagent_bench = [
     "config.yaml",
     "container_backends.txt",
+    # The campaign launchers and the sample sbatch a job's steps re-enter (hpcagent_bench.cluster).
+    "cluster/*.sh",
+    "cluster/*.sbatch",
     "envs/*.yaml",
     # -include'd on every gcc/g++ compile (CPU_BASELINE_GCC).
     "envs/vecmath.h",
@@ -213,7 +216,7 @@ hpcagent_bench = [
     "harness/baseline_leaders.yaml",
     # Kernels whose grading changed after final grades were recorded (regrade.stale_final).
     "harness/grading_cuts.yaml",
-    # The results database schema v1 (scripts/migrate_db.py builds the one database from it).
+    # The results database schema v1 (hpcagent_bench/cluster/migrate_db.py builds the one database from it).
     "harness/schema.sql",
     "skills/*/SKILL.md",
     "skills/*/*.py",
@@ -226,7 +229,7 @@ hpcagent_bench = [
 [tool.pytest.ini_options]
 # The ONE place tests get their import path: the checkout under test (not whatever tree an editable
 # install points at), plus the script directories whose modules run as scripts beside each other.
-pythonpath = [".", "experiments", "experiments/mpi", "scripts", "agent/tools", "agent/harness"]
+pythonpath = [".", "hpcagent_bench/cluster", "scripts", "agent/tools", "agent/harness"]
 filterwarnings = [
     # starlette's TestClient portal teardown, inside anyio/starlette.
     "ignore:.*BlockingPortal.*:DeprecationWarning:anyio",

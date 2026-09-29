@@ -1,6 +1,6 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""experiments/submit.sh: every arm of a wave is staged from one arms.yaml base and differs from its
+"""hpcagent_bench/cluster/submit.sh: every arm of a wave is staged from one arms.yaml base and differs from its
 siblings only in the arm's own keys.
 
 The submitter runs from a temp copy of the experiments files it reads, generating problems from this
@@ -20,19 +20,23 @@ import pytest
 from tests.env_render import SPEC_INPUTS
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-EXPERIMENTS = REPO / "experiments"
 
-#: What submit.sh reads from experiments/.
+#: What submit.sh reads from the checkout, relative to it.
 INPUTS = (
     *SPEC_INPUTS,
-    "submit.sh",
-    "submit_common.sh",
-    "make_problems.py",
-    "packet_env.py",
-    "judge_nodes.py",
-    "arm_nodes.sh",
-    "pin_env_kv.sh",
-    "record_identity.sh",
+    *(
+        f"hpcagent_bench/cluster/{name}"
+        for name in (
+            "submit.sh",
+            "submit_common.sh",
+            "make_problems.py",
+            "packet_env.py",
+            "judge_nodes.py",
+            "arm_nodes.sh",
+            "pin_env_kv.sh",
+            "record_identity.sh",
+        )
+    ),
 )
 
 #: Keys that name the arm itself; two arms of one wave may differ in these and in nothing else.
@@ -76,10 +80,10 @@ def stub(directory: pathlib.Path, name: str, body: str) -> None:
 
 
 def tree(root: pathlib.Path) -> pathlib.Path:
-    """A temp experiments/ with the submitter's inputs, and the stub sbatch."""
+    """A temp checkout holding the submitter's inputs, and the stub sbatch."""
     for name in INPUTS:
-        (root / "experiments" / name).parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(EXPERIMENTS / name, root / "experiments" / name)
+        (root / name).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(REPO / name, root / name)
     (root / "experiments" / "subset.txt").write_text("\n".join(SUBSET) + "\n")
     stub(root / "bin", "sbatch", SBATCH)
     return root
@@ -98,7 +102,7 @@ def submit(root: pathlib.Path, **knobs: str) -> subprocess.CompletedProcess[str]
     )
     env.update({"MODELS": "qwen38", "TAG": "llr-focus40", "EXPERIMENT": "wave", **knobs})
     return subprocess.run(
-        ["bash", str(root / "experiments" / "submit.sh")],
+        ["bash", str(root / "hpcagent_bench" / "cluster" / "submit.sh")],
         env=env,
         capture_output=True,
         text=True,
@@ -245,8 +249,8 @@ def test_a_submitted_arm_reads_a_snapshot_and_chains_its_finalize_grade(tmp_path
     assert problems.parent.name == ".rendered"
     assert problems.read_text() == (root / "experiments" / arm["PROBLEMS_FILE"]).read_text()
     assert "CPF_DROPIN_DIR" not in (root / "sbatch.env").read_text()
-    calls = (root / "sbatch.calls").read_text().splitlines()
-    assert any("--dependency=afterany:4242" in call and "grade_pending.sbatch" in call for call in calls), calls
+    calls = (root / "sbatch.calls").read_text()
+    assert "--dependency=afterany:4242" in calls and "hpcagent_bench job grade-pending" in calls, calls
 
 
 def submit_mi200(root: pathlib.Path, model: str, **knobs: str) -> subprocess.CompletedProcess[str]:
@@ -275,9 +279,9 @@ def assert_on_mi200(root: pathlib.Path, env: dict[str, str]) -> None:
 def test_a_hosted_model_arm_lands_on_mi200_without_a_serving_layer(tmp_path: pathlib.Path) -> None:
     """A model behind a provider API runs no engine on the node, so the partition layer alone moves it."""
     root = tree(tmp_path)
-    done = submit_mi200(root, "fable51")
+    done = submit_mi200(root, "musespark")
     assert done.returncode == 0, done.stderr
-    env = arm_env(root, "x-mi200-fable51-c")
+    env = arm_env(root, "x-mi200-musespark-c")
     assert env["INFERENCE_SOURCE"] == "service"
     assert_on_mi200(root, env)
 
@@ -306,6 +310,6 @@ def test_a_served_model_with_no_mi200_serving_layer_is_refused(tmp_path: pathlib
 
 def test_an_mi200_arm_needs_an_experiment_naming_mi200(tmp_path: pathlib.Path) -> None:
     root = tree(tmp_path)
-    done = submit_mi200(root, "fable51", EXPERIMENT="wave", SUBMIT="0")
+    done = submit_mi200(root, "musespark", EXPERIMENT="wave", SUBMIT="0")
     assert done.returncode == 2 and "does not name mi200" in done.stderr, done.stderr
     assert not list((root / "experiments").glob(".env.*"))
