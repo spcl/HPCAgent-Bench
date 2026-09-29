@@ -899,10 +899,12 @@ def owed_classes(jobs: list, full: list, opt: str, frozen_dir: pathlib.Path | No
 def arm_selected(identity: str, prefixes: list[str]) -> bool:
     """Whether a ``--arm-prefix`` names ``identity``: the whole identity (a ``-clean`` spelling folds
     into it, as the report does) or its leading ``<prefix>-``. No prefixes selects every arm. A bare
-    ``startswith(prefix + "-")`` printed nothing for an arm named in full."""
+    ``startswith(prefix + "-")`` printed nothing for an arm named in full. A prefix matches as written
+    and as folded: a legacy ``cpf-`` prefix still selects the CPF arms, which keep that spelling."""
     if not prefixes:
         return True
-    return any(identity == name or identity.startswith(f"{name}-") for name in map(base_arm, prefixes))
+    names = {spelling for prefix in prefixes for spelling in (prefix, base_arm(prefix))}
+    return any(identity == name or identity.startswith(f"{name}-") for name in names)
 
 
 def report_arm(

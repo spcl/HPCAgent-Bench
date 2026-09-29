@@ -112,11 +112,11 @@ def canon_frame(rows: list[tuple[str, str, float, str]]) -> pd.DataFrame:
 @pytest.mark.parametrize(
     ("arm", "expected"),
     [
-        ("cpf-llr-focus40-qwen38-c", ("qwen38", "")),
+        ("llr-focus40-qwen38-c", ("qwen38", "")),
         ("cpf-llr-focus40-qwen38-c-cpf", ("qwen38", "cpf")),
         ("cpf-llr-focus40-oss120b-c-cpfsrc", ("oss120b", "cpfsrc")),
-        ("cpf-llr-focus40-qwen38-fortran", None),
-        ("cpf-llr-focus40-qwen38-c-skills", None),
+        ("llr-focus40-qwen38-fortran", None),
+        ("llr-focus40-qwen38-c-skills", None),
     ],
 )
 def test_parse_arm_reads_model_and_condition_from_the_arm_name_only(arm: str, expected: tuple[str, str] | None) -> None:
@@ -128,12 +128,12 @@ def test_parse_arm_reads_model_and_condition_from_the_arm_name_only(arm: str, ex
 def test_candidate_arms_keeps_only_arms_the_pattern_names() -> None:
     frame = observations(
         [
-            *submission_rows("cpf-llr-focus40-qwen38-c", {"k1": 2.0}),
-            *submission_rows("cpf-llr-focus40-qwen38-fortran", {"k1": 2.0}),
-            *submission_rows("cpf-llr-focus40-qwen38-c-skills", {"k1": 2.0}),
+            *submission_rows("llr-focus40-qwen38-c", {"k1": 2.0}),
+            *submission_rows("llr-focus40-qwen38-fortran", {"k1": 2.0}),
+            *submission_rows("llr-focus40-qwen38-c-skills", {"k1": 2.0}),
         ]
     )
-    assert llr40_arms.candidate_arms(frame) == {"cpf-llr-focus40-qwen38-c": ("qwen38", "")}
+    assert llr40_arms.candidate_arms(frame) == {"llr-focus40-qwen38-c": ("qwen38", "")}
 
 
 def test_arm_tokens_reads_one_tasks_total_never_a_sum() -> None:
@@ -141,11 +141,11 @@ def test_arm_tokens_reads_one_tasks_total_never_a_sum() -> None:
     rows -- a kernel with one task simply reports that task's own total."""
     frame = observations(
         [
-            *submission_rows("cpf-llr-focus40-qwen38-c", {"k1": 2.0}),
-            *task_rows("cpf-llr-focus40-qwen38-c", {"k1": 100.0}),
+            *submission_rows("llr-focus40-qwen38-c", {"k1": 2.0}),
+            *task_rows("llr-focus40-qwen38-c", {"k1": 100.0}),
         ]
     )
-    values, low, high = llr40_arms.arm_tokens(frame, "cpf-llr-focus40-qwen38-c")
+    values, low, high = llr40_arms.arm_tokens(frame, "llr-focus40-qwen38-c")
     assert values == {"k1": 100.0}
     assert low == {} and high == {}
 
@@ -153,7 +153,7 @@ def test_arm_tokens_reads_one_tasks_total_never_a_sum() -> None:
 def test_arm_tokens_reads_a_rerun_kernels_latest_task_total_not_the_sum_of_both() -> None:
     """A rerun kernel's token cell is the LATEST task's own total (R4): summing both tasks would
     bill an arm twice for being resubmitted, which the earlier reduction did (spec F1)."""
-    arm = "cpf-llr-focus40-qwen38-c"
+    arm = "llr-focus40-qwen38-c"
     frame = observations(
         [
             *submission_rows(arm, {"k1": 2.0}),
@@ -172,12 +172,12 @@ def test_arm_tokens_refuses_a_frame_with_call_rows_and_no_task_records() -> None
     silently reading a partial total."""
     frame = observations(
         [
-            *submission_rows("cpf-llr-focus40-qwen38-c", {"k1": 2.0}),
-            *call_rows("cpf-llr-focus40-qwen38-c", {"k1": 900.0}),
+            *submission_rows("llr-focus40-qwen38-c", {"k1": 2.0}),
+            *call_rows("llr-focus40-qwen38-c", {"k1": 900.0}),
         ]
     )
     with pytest.raises(population.MixedPopulationError, match="no task records"):
-        llr40_arms.arm_tokens(frame, "cpf-llr-focus40-qwen38-c")
+        llr40_arms.arm_tokens(frame, "llr-focus40-qwen38-c")
 
 
 def test_the_control_condition_reads_no_packet_not_the_registry_skill_wording() -> None:

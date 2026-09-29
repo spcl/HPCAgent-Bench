@@ -34,10 +34,10 @@ def load(name: str, path: pathlib.Path) -> types.ModuleType:
 from hpcagent_bench import frozen_observations  # noqa: E402
 
 MODELS = ("kimi27sglang", "oss120b", "qwen38", "glm53")
-ARM = "cpf-llr-focus40-qwen38-fortran"
+ARM = "llr-focus40-qwen38-fortran"
 #: An arm the registry's dropped_arms still names (cpfsrc v1, out since).
 DROPPED_ARM = "cpf-llr-focus40-qwen38-c-cpfsrc"
-ROOT = "cpf-llr-focus40-20260917"
+ROOT = "llr-focus40-20260917"
 #: After any real manifest commit, so comparable_since_ms never gates these fake kernels out.
 FAR_FUTURE_TS_MS = 10**13
 FIELDS = (
@@ -258,7 +258,7 @@ def test_the_extractor_adds_a_deleted_jobs_frozen_rows_and_marks_them(tmp_path: 
     out = tmp_path / "out"
 
     rc = extract.main(
-        ["--runs", str(tmp_path / "runs" / "cpf-llr-focus40-2026*"), "--benchmarks", str(benchmarks), "--out",
+        ["--runs", str(tmp_path / "runs" / "llr-focus40-2026*"), "--benchmarks", str(benchmarks), "--out",
          str(out), "--no-sources", "--frozen-observations", str(frozen)]
     )  # fmt: skip
 

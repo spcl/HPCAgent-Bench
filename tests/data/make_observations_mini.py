@@ -8,11 +8,12 @@ portable to another checkout or CI. ``experiments.read_observations`` reads eith
 extracted ``.db`` (table ``observations``), so a tiny committed ``.db`` exercises the SAME reader a
 real campaign's artifact does, without the tree depending on a path outside it.
 
-NOT A LITERAL SLICE OF cpf-llr-focus40. The real ``observations.csv`` extract
+NOT A LITERAL SLICE OF llr-focus40. The real ``observations.csv`` extract
 predates both the ``packet`` and ``timing_reduction`` columns -- it carries only a 0/1 ``skills``
 flag -- so there is no real row to cut that already carries ``packet="perf-playbook-cpu"``. This
 fixture is instead hand-built to the shape a fresher extraction produces: the real column names,
-the real arm-naming convention (``cpf-llr-focus40-<model>-<language>[-<packet suffix>]``), real
+the real arm-naming convention (``llr-focus40-<model>-<language>[-<packet suffix>]``, a CPF arm
+prefixed ``cpf-``), real
 kernel short-names and plausible speedup/token magnitudes, covering the four packets this
 session's multi-treatment work needs -- the no-packet control, ``skills``, ``cpfsrc`` and
 ``perf-playbook-cpu`` -- across two models and a handful of kernels.
@@ -42,7 +43,7 @@ MODELS: tuple[str, ...] = ("qwen38", "oss120b")
 #: The four packets this fixture exists to cover: the no-packet control, then three treatments.
 PACKETS: tuple[str, ...] = ("", "skills", "cpfsrc", "perf-playbook-cpu")
 
-#: Real cpf-llr-focus40 short names, kept small on purpose but AT or ABOVE
+#: Real llr-focus40 short names, kept small on purpose but AT or ABOVE
 #: summary.MIN_INTERVAL_SAMPLES (5): population.kernel_medians withholds its interval below that
 #: floor, and rules.require_interval refuses a table whose every row is bare.
 KERNELS: tuple[str, ...] = ("argmax_with_index", "tsvc_2_s116", "tsvc_2_s119", "jacobi_1d", "gemver")
@@ -66,7 +67,7 @@ PACKET_SUFFIX: dict[str, str] = {
 
 
 def arm_name(model: str, packet: str) -> str:
-    return f"cpf-llr-focus40-{model}-c{PACKET_SUFFIX[packet]}"
+    return f"{'cpf-' if packet == 'cpfsrc' else ''}llr-focus40-{model}-c{PACKET_SUFFIX[packet]}"
 
 
 def episode_rows(run_root: str, arm: str, packet: str, kernel: str, index: int, ts: int) -> list[tuple[object, ...]]:

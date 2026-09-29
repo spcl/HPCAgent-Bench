@@ -24,7 +24,9 @@ REPO = pathlib.Path(__file__).resolve().parents[1]
     ("arm", "prefix"),
     [
         ("git-scicomp-qwen38-repo", "git-scicomp"),
-        ("cpf-llr-focus40-qwen38-c", "cpf-llr-focus40"),
+        ("llr-focus40-qwen38-c", "llr-focus40"),
+        ("cpf-llr-focus40-qwen38-c-cpf", "cpf-llr-focus40"),
+        ("llr-focus40-mi200-smoke-qwen38-claude", "llr-focus40-mi200-smoke"),
         ("gpu-llr-focus40-oss120b-hip", "gpu-llr-focus40"),
         # The trap this rule exists for: the stem also matches, and the longer key must win or the
         # GPU arm resolves to the CPU campaign with "gpu" read as its model.
@@ -53,9 +55,9 @@ def test_a_campaign_prefix_only_matches_on_a_hyphen_boundary() -> None:
         # Only cpfsrc-v2 counts, so the v2 arm must survive the same regex.
         ("cpf-llr-focus40-qwen38-c-cpfsrc-v2", False),
         # The LLR CPU Fortran arms are back in the LLR plots.
-        ("cpf-llr-focus40-qwen38-fortran", False),
-        ("cpf-llr-focus40-oss120b-fortran-skills", False),
-        ("cpf-llr-focus40-qwen38-c", False),
+        ("llr-focus40-qwen38-fortran", False),
+        ("llr-focus40-oss120b-fortran-skills", False),
+        ("llr-focus40-qwen38-c", False),
         ("git-scicomp-qwen38-repo", False),
     ],
 )
@@ -74,7 +76,7 @@ def test_one_experiment_collects_every_campaign_that_feeds_it() -> None:
     """llr-focus40 ran under two launchers, CPU and GPU; a selection that took only one would
     silently halve the experiment."""
     selection = campaigns.resolve("llr-focus40")
-    assert set(selection.prefixes) == {"cpf-llr-focus40", "gpu-llr-focus40"}
+    assert set(selection.prefixes) == {"llr-focus40", "cpf-llr-focus40", "gpu-llr-focus40"}
     assert set(selection.devices) == {"CPU", "GPU"}
 
 
@@ -92,7 +94,7 @@ def test_an_owed_wave_root_is_read_under_its_arms_real_key(
     rows must still reach the experiment, under the arm that ran them. The blind experiment's owed
     root shares the stem and must not be read as llr-focus40's."""
     for root, experiment, arm in (
-        ("owed-llr-focus40-20260922", "llr-focus40", "cpf-llr-focus40-qwen38-c"),
+        ("owed-llr-focus40-20260922", "llr-focus40", "llr-focus40-qwen38-c"),
         ("owed-llr-focus40-blind-20260922", "llr-focus40-blind", "llrblind-qwen38-c"),
     ):
         monkeypatch.setenv("HPCAGENT_BENCH_RECORD_EXPERIMENT", experiment)
@@ -117,7 +119,7 @@ def test_an_owed_wave_root_is_read_under_its_arms_real_key(
     selection = campaigns.resolve("llr-focus40", root=tmp_path)
     frame = dataset.extract(selection)
     graded = frame[frame["row_kind"] == "submission"]
-    assert graded["arm"].tolist() == ["cpf-llr-focus40-qwen38-c"]
+    assert graded["arm"].tolist() == ["llr-focus40-qwen38-c"]
     assert set(frame["run_root"]) == {"owed-llr-focus40-20260922"}
 
 

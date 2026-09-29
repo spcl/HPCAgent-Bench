@@ -28,9 +28,11 @@ __all__ = [
 ]
 
 #: An arm an llr-focus40 figure may draw, and its (model, condition) in one match: ``-c`` is the control
-#: (condition ``""``), ``-c-cpf`` the CPF page, ``-c-cpfsrc`` CPF as source. C only -- Fortran has no
-#: CPF spelling (mpr-artifacts/experiments/llr-focus40-cpf/README.md).
-ARM_PATTERN: re.Pattern[str] = re.compile(r"^cpf-llr-focus40-(?P<model>[a-z0-9]+)-c(?:-(?P<condition>cpf|cpfsrc))?$")
+#: (condition ``""``), ``-c-cpf`` the CPF page, ``-c-cpfsrc`` CPF as source; only a CPF arm keeps the
+#: ``cpf-`` prefix. C only -- Fortran has no CPF spelling (mpr-artifacts/experiments/llr-focus40-cpf/README.md).
+ARM_PATTERN: re.Pattern[str] = re.compile(
+    r"^(?:cpf-)?llr-focus40-(?P<model>[a-z0-9]+)-c(?:-(?P<condition>cpf|cpfsrc))?$"
+)
 
 #: Draw order within one model's own slot, control first.
 CONDITION_ORDER: tuple[str, ...] = ("", "cpf", "cpfsrc")
