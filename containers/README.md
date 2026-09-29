@@ -99,7 +99,7 @@ EDF-only views of another row's image.
 | `agent-amd-latest`, `judge-amd-latest` | `judge-agent-amd` (targets `agent`, `judge`) | x86-64-v3; gfx90a, gfx942, gfx950 | `hpcagent-bench-{agent,judge}-{mi300,mi200}-<flavor>`, `judge-{mi300,mi200}-mlscale-<flavor>` |
 | `sglang-mi300-latest` | `sglang` | gfx942 (the upstream base is MI300-only) | `hpcagent-bench-sglang-mi300-latest` |
 | `vllm-amd-latest` | `vllm` | gfx90a, gfx942, gfx950 | `hpcagent-bench-vllm-{mi300,mi200}-latest` |
-| `agent-nvidia-latest`, `judge-nvidia-latest` | `judge-agent-cuda` (targets `agent`, `judge`) | armv8.2-a; sm_70, sm_80, sm_90, sm_100, sm_120 | `hpcagent-bench-{agent,judge}-gh200-<flavor>` |
+| `agent-nvidia-latest`, `judge-nvidia-latest` | `judge-agent-cuda` (targets `agent`, `judge`) | armv8.2-a; sm_80, sm_90, sm_100, sm_120 | `hpcagent-bench-{agent,judge}-gh200-<flavor>` |
 | `vllm-gh200-latest` | `vllm-cuda` | aarch64; the official build | `hpcagent-bench-vllm-gh200-latest` |
 | `agent-cpu-<arch>-latest`, `judge-cpu-<arch>-latest` | `judge-agent-cpu` (targets `agent`, `judge`) | x86-64-v3 or armv8.2-a | `hpcagent-bench-{agent,judge}-cpu-<arch>-<flavor>` |
 
@@ -172,8 +172,10 @@ CE_PLATFORM=gh200 ./registry.sh promote --all     # renders the gh200 EDFs
 `judge-agent-cuda` carries the CUDA counterparts of `judge-agent-amd`: nvcc, cuBLAS/cuFFT/cuSOLVER/
 cuSPARSE/cuRAND/cuTENSOR/NCCL, NVHPC (OpenACC), LLVM OpenMP offload to `sm_90`, CUDA-aware MPICH
 (netmod=ofi, host Slurm PMI), PETSc/MAGMA/SuperLU_DIST/STRUMPACK/SUNDIALS `+cuda`, PAPI cuda/nvml,
-Nsight, cupy, jax, Pluto, ppcg, dace and every agent harness. Both GPU images are CUDA 12.9 so the
-CE's `aws_ofi_nccl` plugin (variant `cuda12`) matches; the serving smoke checks it loads.
+Nsight, cupy, jax, Pluto, ppcg, dace and every agent harness. Its base is NGC PyTorch 26.09 (CUDA 13.4.1),
+so the CE's `aws_ofi_nccl` plugin variant is `cuda13`; `vllm-cuda` is CUDA 12.9 and keeps `cuda12`. The
+serving smoke checks the plugin loads. nvcc uses the image's own gcc 16 and LLVM 22 as its host compilers
+(CUDA 13.4 supports GCC 6-16 and Clang 7-22), with no compiler waiver.
 
 Weights and serving (`containers/inference/serve-daint.sbatch`; same served name, window and parsers
 as beverin):
