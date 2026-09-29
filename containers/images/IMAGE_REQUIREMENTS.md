@@ -8,7 +8,7 @@ anything outside the image is invisible to its digest.
 | image | base | serves |
 |---|---|---|
 | `judge-agent-amd` (targets `agent`, `judge`) | `rocm/pytorch` ROCm 7.2, py3.12, x86_64 | judge and agent on MI250X, MI300 and MI355X, one image |
-| `judge-agent-cuda` (targets `agent`, `judge`) | NGC PyTorch 25.06 (CUDA 12.9.1, py3.12), aarch64 | judge and agent on GH200 |
+| `judge-agent-cuda` (targets `agent`, `judge`) | NGC PyTorch 26.09 (CUDA 13.4.1, py3.12), aarch64 | judge and agent on GH200 |
 | `judge-agent-cpu` (targets `agent`, `judge`) | `ubuntu:24.04`, x86_64 or aarch64 | judge and agent on any CPU node |
 | `sglang` | vendor SGLang ROCm 7.2 (MI300) | qwen38, kimi, GLM-5.3 on beverin mi300 |
 | `vllm` | official vLLM 0.28.0 ROCm | oss120b on mi300, qwen38 on mi200 |
@@ -109,8 +109,9 @@ in a prefix the Dockerfile controls (a copy in the image would be found first).
   `com.hooks.cxi.enabled`, `com.hooks.aws_ofi_nccl.enabled = "true"` and `variant = "rocm6"`
   (read only in host mode). Host mode (the MPI/aiter check scripts) grafts host libraries built
   against glibc 2.38, so the images must keep glibc >= 2.38.
-* GH200 EDFs: `com.hooks.cxi.enabled`, `com.hooks.aws_ofi_nccl.enabled`, `variant = "cuda12"`,
-  which is why both GPU images are CUDA 12.9.
+* GH200 EDFs: `com.hooks.cxi.enabled`, `com.hooks.aws_ofi_nccl.enabled`, `variant = "cuda13"` for
+  `judge-agent-cuda` (CUDA 13.4.1) and `"cuda12"` for `vllm-cuda` (CUDA 12.9): a numbered variant
+  must match the image's CUDA major.
 * `judge-agent-*` build a providerless libfabric only for MPICH to link against, and delete it
   before the image ships: bound by RPATH it would win over the node's and abort `MPI_Init`.
 * `FI_PROVIDER=cxi` goes on inference EDFs only; MPICH inherits it and aborts.
@@ -181,12 +182,14 @@ Each rebuilt inference image is smoked against the campaign's serving arguments 
 
 ## Platform notes
 
-**judge-agent-cuda.** CUDA is a spack external with `+allow-unsupported-compilers` (spack otherwise
-refuses gcc 16 with CUDA 12.9) and `NVCC_PREPEND_FLAGS=-allow-unsupported-compiler` is set before the
-spack layers. MPICH has no `+slurm`: its built-in PMI-1/2 client serves any host `srun --mpi=pmi2`,
-so no site's Slurm release is baked in. NVHPC, cuTENSOR and Nsight (ncu 2025.2.1, nsys 2025.3.2) come from NVIDIA's arm64/sbsa apt repos;
-`NVHPC_CUDA_HOME` keeps nvc on the base's CUDA. The NGC base's HPC-X Open MPI stays off `PATH`. No
-MKL, likwid or msr-tools (x86 only).
+**judge-agent-cuda.** CUDA is a spack external, the base's 13.4.1. It supports host GCC 6-16 and Clang
+7-22, so the image's gcc 16 and LLVM 22 are nvcc's host compilers with no waiver (no
+`-allow-unsupported-compiler`, no `NVCC_CCBIN`, no spack `+allow-unsupported-compilers`). CUDA 13 dropped
+Volta, so the image's targets are sm_80, sm_90, sm_100 and sm_120. MPICH has no `+slurm`: its built-in
+PMI-1/2 client serves any host `srun --mpi=pmi2`, so no site's Slurm release is baked in. NVHPC 26.9 and
+cuTENSOR come from NVIDIA's arm64/sbsa apt repos; NVHPC compiles against the CUDA 13.3 it bundles. Nsight
+Compute 2026.3.0 is installed to match the toolkit; Nsight Systems 2026.5.1 is the base's. The NGC base's
+HPC-X Open MPI stays off `PATH`. No MKL, likwid or msr-tools (x86 only).
 
 **judge-agent-cpu.** Binary packages only (about an hour). gcc 16 from the ubuntu-toolchain-r PPA
 snapshot `16-20260315-1ubuntu1~24~ppa1`; clang/flang 22 from apt.llvm.org with Polly; Debian's
