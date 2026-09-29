@@ -136,7 +136,7 @@ def findings() -> CorpusFindings:
         if short.rsplit("/", 1)[-1] in TOO_SLOW_TO_LOWER:
             continue
         try:
-            kir = kir_for(short, do_lower=True)
+            kir = kir_for(short, do_lower=True, abi=True)
         except NotImplementedError:
             kir = None
         kind = classify(short, kir)
@@ -195,7 +195,7 @@ def test_the_gate_can_actually_detect_a_shift() -> None:
     """Self-test: a comparison that cannot fail proves nothing. gemm agrees today, so perturb it
     and confirm the checker notices -- guards against the pairs being compared as unordered sets,
     or the dtype being silently dropped from the tuple."""
-    good = emitted_abi(kir_for("gemm", do_lower=True))
+    good = emitted_abi(kir_for("gemm", do_lower=True, abi=True))
     assert good == binding_abi(BenchSpec.load("gemm"))
     assert good != good[:-1], "a dropped argument must not compare equal"
     assert good != list(reversed(good)), "order must participate in the comparison"

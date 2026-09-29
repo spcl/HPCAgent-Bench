@@ -101,3 +101,34 @@ def test_the_conv_transpose2d_family_gets_past_the_matmul(kernel) -> None:
     from tests.translators.bench_yaml import kir_for
 
     assert kir_for(kernel, do_lower=True) is not None
+
+
+#: A batched matmul whose contracted extents cannot be proven equal (``KK`` against ``LL``): the
+#: hoister declines it, as it must when it cannot tell the contraction apart from a mismatch.
+UNPROVEN_SRC = (
+    "import numpy as np\n"
+    "def bmu(x, w, out):\n"
+    "    acc = np.zeros((x.shape[0], x.shape[1], w.shape[1]))\n"
+    "    acc += x @ w\n"
+    "    out[:] = acc\n"
+)
+
+
+def test_a_declined_batched_matmul_is_refused_not_scalarised(tmp_path) -> None:
+    """The whole-array lowering used to scalarise the declined ``@`` into ``x[i, j, k] * w[j, k]`` --
+    an elementwise product that compiled and returned wrong numbers (the corpus conv tap, whose
+    ``in_per_group`` no alias ties to the weight's ``in_channels // groups``). It is refused instead."""
+    import json
+
+    from hpcagent_bench.translators.numpyto_common.frontend import parse_kernel
+    from hpcagent_bench.translators.numpyto_common.lowering import lower
+    from tests.translators.op_oracle import bench_info_
+
+    npy = tmp_path / "bmu_numpy.py"
+    npy.write_text(UNPROVEN_SRC, encoding="utf-8")
+    shapes = {"x": "(NB, MM, KK)", "w": "(LL, NN)", "out": "(NB, MM, NN)"}
+    info = bench_info_("bmu", ["x", "w"], ["out"], shapes, {"NB": 2, "MM": 3, "KK": 4, "LL": 4, "NN": 2})
+    bi = tmp_path / "bench_info.json"
+    bi.write_text(json.dumps(info), encoding="utf-8")
+    with pytest.raises(NotImplementedError, match="drop the contraction"):
+        lower(parse_kernel(npy, bi))

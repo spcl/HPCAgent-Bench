@@ -22,8 +22,10 @@ __all__ = [
 #: Args are ``(a, b, out, m, n, k)`` on row-major C-contiguous operands.
 BLAS_GEMM_MARKER = "__blas_gemm"
 
-#: Element dtypes a real BLAS gemm cannot take, so they keep the loop nest.
-BLAS_INELIGIBLE_DTYPES = ("complex", "int", "uint", "bool")
+#: Element dtypes a real BLAS gemm cannot take, so they keep the loop nest: CBLAS's real gemms take
+#: float32 / float64 only, so half and the storage-only formats (bfloat16, fp8) compute in the
+#: loop nest, where every read promotes and every write demotes.
+BLAS_INELIGIBLE_DTYPES = ("complex", "int", "uint", "bool", "float16", "bfloat16", "float8")
 
 
 def expand_matmul(

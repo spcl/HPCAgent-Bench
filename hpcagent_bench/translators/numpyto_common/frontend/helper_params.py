@@ -5,8 +5,10 @@ import dataclasses
 import types
 from typing import Literal
 
+from hpcagent_bench.translators.numpyto_common import dtypes
 from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc, ScalarDesc, SymbolDesc
 from hpcagent_bench.translators.numpyto_common.frontend.shapes import resolve_array_ref
+from hpcagent_bench.translators.numpyto_common.lib_nodes.dims import DIM_IDENT_RE
 
 __all__ = [
     "MAX_ARG_DEPTH",
@@ -15,13 +17,16 @@ __all__ = [
     "DescKey",
     "ParamKind",
     "boolean_valued_argument",
+    "bound_names",
     "constant_param",
     "infer_helper_params",
     "infer_param_desc",
     "integer_valued_argument",
+    "is_temporary",
     "mark_written_outputs",
     "name_param",
     "reject_subscripted_scalar_params",
+    "rename_dims",
     "resolved_array_param",
     "subscript_param",
     "widen_counting_scalar_params",
@@ -224,14 +229,47 @@ def infer_helper_params(
     fn: ast.FunctionDef | None = None,
 ) -> tuple[list[ArrayDesc], list[ScalarDesc], list[SymbolDesc]]:
     """Split a helper's (param, call-arg) pairs into array / scalar / symbol
-    descriptors inferred from each call-site argument."""
+    descriptors inferred from each call-site argument.
+
+    An array argument that is not one of the calling function's own parameters is a TEMPORARY the
+    caller allocated, and temporaries live in the compute dtype (a bf16 / fp8 local is emitted as
+    float): the helper's parameter takes that dtype, so the pointer types agree."""
+    formal = {a.arg for a in fn.args.args} if fn is not None else None
     arrays: list[ArrayDesc] = []
     scalars: list[ScalarDesc] = []
     symbols: list[SymbolDesc] = []
     for pname, arg in zip(pnames, args):
         kind, desc = infer_param_desc(arg, pname, arr_by, sca_by, sym_by, fn)
+        if kind == "array" and isinstance(desc, ArrayDesc) and is_temporary(arg, formal) and desc.dtype:
+            desc = dataclasses.replace(desc, dtype=dtypes.compute_dtype(desc.dtype))
         (arrays if kind == "array" else symbols if kind == "symbol" else scalars).append(desc)
+    renamed = bound_names(pnames, args, {d.name for d in (*scalars, *symbols)})
+    arrays = [dataclasses.replace(a, shape=tuple(rename_dims(dim, renamed) for dim in a.shape)) for a in arrays]
     return arrays, scalars, symbols
+
+
+def bound_names(pnames: list[str], args: list[ast.expr], params: set[str]) -> dict[str, str]:
+    """Caller name -> the helper's scalar or symbol parameter bound to it at this call site (``c_in``
+    for ``in_channels``). An array argument's shape arrives in the CALLER's vocabulary, so a helper
+    computing ``c_in // groups`` could not prove it equal to its weight's ``in_channels //
+    conv2d_groups``; renamed, both sides speak the helper's."""
+    renamed: dict[str, str] = {}
+    for pname, arg in zip(pnames, args):
+        if pname in params and isinstance(arg, ast.Name) and arg.id != pname:
+            renamed.setdefault(arg.id, pname)
+    return renamed
+
+
+def rename_dims(dim: str, renamed: dict[str, str]) -> str:
+    """``dim`` with every identifier ``renamed`` maps replaced (a shape token is an expression)."""
+    if not renamed:
+        return dim
+    return DIM_IDENT_RE.sub(lambda m: renamed.get(m.group(0), m.group(0)), str(dim))
+
+
+def is_temporary(arg: ast.expr, formal: set[str] | None) -> bool:
+    """Whether a call argument names a caller local rather than one of the caller's parameters."""
+    return formal is not None and isinstance(arg, ast.Name) and arg.id not in formal
 
 
 def reject_subscripted_scalar_params(hfn: ast.FunctionDef, scalars: list[ScalarDesc], name: str) -> None:

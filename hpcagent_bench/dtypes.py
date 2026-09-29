@@ -43,6 +43,7 @@ __all__ = [
     "c_type",
     "canonical",
     "compute_dtype",
+    "compute_view",
     "ctype_for",
     "ctype_for_scalar_kind",
     "fortran_kind",
@@ -56,6 +57,7 @@ __all__ = [
     "scalar_kind",
     "size_multiple",
     "storage_dtype",
+    "storage_typedef",
     "value_range",
 ]
 
@@ -74,3 +76,11 @@ def compute_view(array: "np.ndarray") -> "np.ndarray":
     if is_storage_only(array.dtype.name):
         return array.astype(np.dtype(compute_dtype(array.dtype.name)))
     return array
+
+
+def storage_typedef(dtype: str) -> str:
+    """The C declaration a storage-only format crosses an ABI as: a same-width unsigned integer named by
+    its C type (``typedef uint16_t __npb_bf16;``) -- the caller only moves the bytes, the kernel widens
+    them to compute."""
+    width = 8 * int(np.dtype(storage_dtype(dtype)).itemsize)
+    return f"typedef uint{width}_t {c_type(dtype)};"
