@@ -14,7 +14,7 @@
 #          copy to). view -> the image view. The image's own environment IS this context; the directory
 #          exists so every context is inspected the same way.
 #   llvm   lib/libomp.so[.N] -> the libomp the image's clang drivers resolve (hipcc and amdclang first, then
-#          clang); libgomp.so.1, libgomp.so.1.0.0, libgomp.so, libiomp5.so and every hashed wheel copy name
+#          clang); libgomp.so.1, libgomp.so.1.0.0, libgomp.so and every hashed wheel copy name
 #          (libgomp-<hash>.so.1*) are links to it INSIDE this directory only: numba's OpenMP pool and any
 #          other GOMP-ABI client resolve to libomp here, and nowhere else. lib/ also links every shared
 #          library of <llvm view>, the spack variants of the OpenMP-linking libraries built with clang
@@ -124,12 +124,12 @@ echo "omp_contexts: gnu -> ${gomp}"
 # ---- write: llvm ------------------------------------------------------------------------------------------
 if [ -n "${libomp}" ]; then
     mkdir -p "${root}/llvm/lib"
-    for name in "${soname}" libomp.so libgomp.so.1 libgomp.so.1.0.0 libgomp.so libiomp5.so; do
+    for name in "${soname}" libomp.so libgomp.so.1 libgomp.so.1.0.0 libgomp.so; do
         link "${libomp}" "${root}/llvm/lib/${name}"
     done
     # A wheel may name its own hashed copy in DT_NEEDED (libgomp-<hash>.so.1.0.0): the same link, so a wheel
     # imported in this context maps libomp and not the gnu copy beside it.
-    find /usr /opt /root /home -xdev \( -name 'libgomp-*.so*' -o -name 'libomp-*.so*' -o -name 'libiomp5-*.so*' \) \
+    find /usr /opt /root /home -xdev \( -name 'libgomp-*.so*' -o -name 'libomp-*.so*' \) \
         \( -type f -o -type l \) -not -path "${root}/*" 2>/dev/null | while read -r copy; do
         link "${libomp}" "${root}/llvm/lib/$(basename "${copy}")"
     done
@@ -139,7 +139,7 @@ if [ -n "${libomp}" ]; then
         for dir in "${llvm_view}/lib" "${llvm_view}/lib64"; do
             [ -d "${dir}" ] || continue
             find "${dir}" -maxdepth 1 \( -type f -o -type l \) -name '*.so*' | while read -r file; do
-                case "$(basename "${file}")" in libomp*|libgomp*|libiomp5*) continue ;; esac
+                case "$(basename "${file}")" in libomp*|libgomp*) continue ;; esac
                 link "$(readlink -f "${file}")" "${root}/llvm/lib/$(basename "${file}")"
             done
         done

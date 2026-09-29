@@ -11,7 +11,7 @@
 #   offload     LLVM OpenMP -> nvptx sm_{${CUDA_ARCHS}}; GCC is built without +nvptx
 #   GPU-aware   mpich/superlu-dist/strumpack/magma/petsc/sundials +cuda cuda_arch=${CUDA_ARCHS}
 #   python      the base's torch, the cupy wheel, jax, all for the base's CUDA major
-#   absent      Intel MKL, likwid, msr-tools (x86 only), rocprof, PAPI rocm components
+#   absent      likwid, msr-tools (x86 only), rocprof, PAPI rocm components
 #
 # CUDA 13.4.1: it runs on any driver >= 580 (minor-version compatibility inside CUDA 13), and the CE's
 # NCCL net plugin (com.hooks.aws_ofi_nccl.variant = "cuda13") must match the runtime major. Its
@@ -742,7 +742,7 @@ RUN set -eux; \
     ls /opt/omp/llvm/view/lib/libopenblas.so
 
 # ---------------------------------------------------------------------------------------------
-# 9. OpenMPI standalone, and the source-built libraries. judge-agent-amd step 8 minus MKL.
+# 9. OpenMPI standalone, and the source-built libraries. judge-agent-amd step 8.
 #
 # OpenMPI collides with mpich over `mpi`, so it stays out of the environment and is reached through
 # OPENMPI_ROOT; its bin is NOT on PATH. The base's HPC-X Open MPI is not used for this: it is the

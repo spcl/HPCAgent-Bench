@@ -20,7 +20,7 @@
 #   6  PETSc + SLEPc                its OWN layer -- it pulls hypre/METIS/ParMETIS/Scotch and
 #                                   builds against the vendor stack, so nothing downstream of it
 #                                   may invalidate it
-#   7  OpenMPI, MKL, tblis, HPTT, PAPI, Pluto
+#   7  OpenMPI, tblis, HPTT, PAPI, Pluto
 #   8  python frameworks            moves with pyproject.toml (the `amd` extra)
 #   9  dace @ extended              moves whenever the branch moves
 #  10  node, claude-code, harness venvs, final gate (tool scripts are bound at launch)
@@ -605,7 +605,6 @@ ENV PATH=/opt/gcc/bin:/opt/view/bin:/opt/papi/bin:/opt/rocm/bin:${PATH} \
     OPENBLAS_DIR=/opt/view \
     HPTT_ROOT=/usr/local \
     TBLIS_ROOT=/usr/local \
-    MKLROOT=/opt/intel-mkl \
     OPENMPI_ROOT=/opt/openmpi \
     PAPI_ROCM_ROOT=/opt/rocm \
     PAPI_ROCMSMI_ROOT=/opt/rocm
@@ -908,16 +907,15 @@ RUN set -eux; \
     ls /opt/omp/llvm/view/lib/libopenblas.so
 
 # ---------------------------------------------------------------------------------------------
-# 8. The two stacks that must stay OUT of that environment, plus the two source-built libraries.
+# 8. The stack that must stay OUT of that environment, plus the two source-built libraries.
 #
-# OpenMPI and Intel MKL each collide with something the environment already provides -- OpenMPI
-# with mpich over `mpi`, MKL with OpenBLAS over `blas`/`lapack` -- so under `unify: true` they
-# cannot share it. They are installed standalone and reached through a fixed symlink. OpenMPI's
-# bin deliberately does NOT go on PATH, so bare `mpicc` stays mpich; the `ref_openmpi` and
-# `intel_mkl_openmpi` environments find it through OPENMPI_ROOT.
+# OpenMPI collides with mpich over `mpi`, so under `unify: true` it cannot share the environment. It is
+# installed standalone and reached through a fixed symlink. Its bin deliberately does NOT go on PATH, so
+# bare `mpicc` stays mpich; the `ref_openmpi` environment finds it through OPENMPI_ROOT.
 #
-# MKL ships because intel_mkl / intel_mkl_mpich / intel_mkl_openmpi exist and this is x86_64.
-# OpenBLAS stays the SELECTED BLAS.
+# Intel MKL is NOT shipped: its threading layer is Intel's libiomp5, a second OpenMP runtime that no
+# context of this image runs on (docs/anti_cheat.md, "Judge fault: a second OpenMP runtime"). OpenBLAS is the
+# BLAS.
 #
 # `+openshmem` is not a request for OpenSHMEM. Spack only ever ADDS `--enable-oshmem`, never
 # `--disable-oshmem`, and OpenMPI 5 builds OSHMEM whenever an SPML is present -- `fabrics=ucx`
@@ -928,14 +926,9 @@ RUN set -eux; \
     spack="${SPACK_ROOT}/bin/spack"; \
     "${spack}" install --fail-fast \
       "openmpi@5 +rocm +openshmem amdgpu_target=$(echo "${ROCM_ARCH}" | tr ";" ",") fabrics=ucx %gcc@${GCC_VERSION} ^ucx +rocm"; \
-    "${spack}" install --fail-fast "intel-oneapi-mkl %gcc@${GCC_VERSION}"; \
     "${spack}" clean --stage; \
     ln -sfn "$("${spack}" location -i openmpi)" /opt/openmpi; \
-    mkl_root="$(ls -d "$("${spack}" location -i intel-oneapi-mkl)"/mkl/* | tail -1)"; \
-    ln -sfn "${mkl_root}" /opt/intel-mkl; \
     test -x /opt/openmpi/bin/mpicc; \
-    test -f /opt/intel-mkl/include/mkl.h; \
-    ls /opt/intel-mkl/lib/libmkl_core.so*; \
     # Gate, the last spack install above: with a pinned target every prefix sits in its dir.
     if [ -n "${SPACK_TARGET}" ]; then \
       stray="$(ls /opt/spack-install | grep -vx -e bin -e "linux-${SPACK_TARGET}" || true)"; \

@@ -697,8 +697,6 @@ def toolchain_checks(platform: str) -> list[Check]:
         Check("blas", "tblis", "lib", "libtblis.so"),
         Check("blas", "HPTT", "lib", "libhptt.so", required=False),
     ]
-    if amd:
-        found.append(Check("blas", "Intel MKL", "lib", "libmkl_core.so", required=False))
     # numba, OpenBLAS, torch and every wheel that bundles libgomp share ONE runtime file.
     found.append(Check("openmp", "one runtime across numba/torch/wheels", "one-openmp", "gate"))
     # One context per toolchain family, each proven in its own process; then no library on disk maps another.

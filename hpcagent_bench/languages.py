@@ -262,7 +262,6 @@ COMPILER_FAMILIES = {
     "gcc": "gcc",
     "llvm": "llvm",
     "nvhpc": "nvhpc",
-    "oneapi": "intel-oneapi-compilers",
 }
 
 #: ``config.yaml`` key an arm pins a language's toolchain family with.
@@ -1927,7 +1926,6 @@ REPORT_REFS: Mapping[str, str] = types.MappingProxyType(
         "gcc": "GCC_OPT_REPORT",
         "llvm": "CLANG_OPT_REPORT",
         "nvhpc": "NVHPC_OPT_REPORT",
-        "oneapi": "ICX_OPT_REPORT",
     }
 )
 

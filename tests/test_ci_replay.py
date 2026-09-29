@@ -20,7 +20,7 @@ REPO = pathlib.Path(__file__).resolve().parents[1]
     ("expression", "expected"),
     [
         ("github.event_name == 'workflow_dispatch' && '0' || '1'", "1"),
-        ("matrix.shard == 0 && 'all' || 'oneapi'", "all"),
+        ("matrix.shard == 0 && 'all' || 'nvhpc'", "all"),
         ("!cancelled()", True),
         ("matrix.leg.select", "tree/"),
         ("contains('a b', 'b')", True),

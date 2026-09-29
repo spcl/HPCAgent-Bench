@@ -508,7 +508,11 @@ frameworks:
   cc_llvm_autopar: Clang (autopar)
   cc_nvhpc: NVHPC
   cc_nvhpc_autopar: NVHPC (autopar)
-  cc_oneapi: oneAPI
+  # RETIRED. No oneAPI arm exists any more (the Intel compilers are in no image and no compilers.yaml block), but
+  # the key keeps its hue slot: this list is append-only and a removal would repaint every entry after it, in
+  # every figure already drawn (tests/test_palette.py). It also keeps a recorded `cc_oneapi` row resolvable to a
+  # name, so analysis and plots over an old results DB draw it instead of failing on an unregistered column.
+  cc_oneapi: oneAPI (retired)
   flang: Flang
   fortran_autopar: gfortran (autopar)
   dace_gpu: DaCe (GPU)

@@ -49,7 +49,7 @@ def variant(root: pathlib.Path, context: str, module: str) -> pathlib.Path:
 
 @pytest.mark.parametrize(
     ("family", "expected"),
-    [("gcc", "gnu"), ("llvm", "llvm"), ("oneapi", "llvm"), ("nvhpc", "nvhpc")],
+    [("gcc", "gnu"), ("llvm", "llvm"), ("nvhpc", "nvhpc")],
 )
 def test_every_toolchain_family_has_one_context(family: str, expected: str) -> None:
     assert omp_context.context_for_family(family) == expected

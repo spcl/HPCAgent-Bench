@@ -133,7 +133,7 @@ under `/opt/omp` (`runtime.omp_context_root`), built by `containers/lib/omp_cont
 
 * **Layout.** `<context>/lib/` holds what a process of that family must load first: its runtime, the
   sonames it answers (in `llvm`, `libgomp.so.1`, `libgomp.so.1.0.0`, every wheel's hashed
-  `libgomp-<hash>.so.1*` and `libiomp5.so` are links to libomp INSIDE that directory only, so numba's
+  `libgomp-<hash>.so.1*` are links to libomp INSIDE that directory only, so numba's
   GOMP-ABI pool and any wheel resolve to libomp there and nowhere else), and a link to every shared
   library of the context's own view, so numpy and scipy (built once, `libopenblas.so.0` by soname,
   no absolute RPATH: `numpy_on_openblas.sh` checks) run on that family's OpenBLAS.

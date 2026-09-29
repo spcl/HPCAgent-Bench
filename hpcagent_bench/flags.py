@@ -13,7 +13,7 @@ The matrix splits along three axes:
 * :class:`Mode` -- the four evaluation modes a kernel can run in.
   Drives both the autopar selection on the CPU side and the choice of
   GPU backend.
-* CPU compiler -- baseline flags per ``clang``, ``gcc``, ``icpx``.
+* CPU compiler -- baseline flags per ``clang``, ``gcc``, ``nvc``.
 * Autopar delta -- additional flag bundle to append for
   :attr:`Mode.MULTI_CORE` (Polly / GCC autopar / Pluto / NVHPC Mconcur).
 
@@ -43,7 +43,6 @@ __all__ = [
     "CPU_BASELINE_CLANG_PLUTO",
     "CPU_BASELINE_GCC",
     "CPU_BASELINE_GFORTRAN",
-    "CPU_BASELINE_ICPX",
     "CPU_BASELINE_NVCXX",
     "CPU_BASELINE_NVHPC",
     "CUDA_BASELINE",
@@ -59,7 +58,6 @@ __all__ = [
     "GCC_OPT_REPORT",
     "GCC_VECT_UNLIMITED",
     "HIP_BASELINE",
-    "ICX_OPT_REPORT",
     "IMAGE_GPU_ARCH",
     "LINK_MIMALLOC",
     "NO_OUTLINE_PATTERN",
@@ -138,7 +136,7 @@ _FP_RELAX = "-fno-math-errno -fno-trapping-math -fno-signed-zeros"
 #: ``$HPCAGENT_BENCH_FLAGS_FP_ASSOCIATIVE=1``; ``config.set_override`` comes too late to change it.
 _FP_ASSOC = "-fassociative-math" if config.get("flags.fp_associative", False) else ""
 
-#: FP contraction pinned to ``fast``: gcc and icx default to it, clang to ``on`` (one expression only),
+#: FP contraction pinned to ``fast``: gcc defaults to it, clang to ``on`` (one expression only),
 #: so unpinned compiler columns, and a DaCe kernel that splits an expression across statements, would
 #: differ in fma fusion. IEEE sanctions it (fma is correctly rounded); it does not imply -ffast-math.
 _FP_CONTRACT = "-ffp-contract=fast"
@@ -210,15 +208,6 @@ STDPAR_LINK_NVHPC = "-stdpar=multicore"
 #: nvhpc's optimization report. `-Minfo=all` covers vectorization, inlining and, on an offload
 #: build, the `accel` channel that says which loops became kernels and which were refused.
 NVHPC_OPT_REPORT = "-Minfo=all"
-
-#: icx defaults to fp-model=fast; precise must come first (last spelling wins over _FP_RELAX).
-#: ``-qopenmp`` is Intel's spelling of ``-fopenmp``, which it accepts with ``-Wrecommended-option``.
-#: ``-Wno-overriding-option`` silences the per-TU notice that ``-ffp-contract=fast`` overrides the
-#: contraction half of ``-fp-model=precise``; that override is intended (see ``_FP_CONTRACT``).
-CPU_BASELINE_ICPX = (
-    f"-O3 -xHost -fp-model=precise -qopenmp {_FP_RELAX} {_FP_ASSOC} {_FP_CONTRACT} "
-    f"-Wno-overriding-option -fPIC -qopt-zmm-usage=high"
-)
 
 #: Appended to a PROFILED build (``Sandbox.build(debug=True)``, the /profile endpoint) so perf can
 #: name the symbols it samples. Only ``-g``: it emits DWARF beside the code without changing it, so
@@ -306,8 +295,6 @@ GCC_AUTOPAR = "-ftree-parallelize-loops={n} -floop-parallelize-all -fgraphite-id
 #:   "experimental" warning is normal). Needs LLVM >= 20.
 #: - gfortran: parloops. Also threads any other loop it proves independent, identically on every
 #:   arm. Thread count is FIXED at compile time from ``{n}``, sized like GCC_AUTOPAR.
-#: - ifx: no extra flag; it threads ``do concurrent`` under the OpenMP flag in CPU_BASELINE_ICPX
-#:   (Intel-documented, unverified here).
 #: - nvfortran: ``-stdpar=multicore``. No compilers.yaml block references it until the opt-in
 #:   NVIDIA HPC SDK layer is baked into the images.
 DO_CONCURRENT_FLANG = "-fdo-concurrent-to-openmp=host"
@@ -522,12 +509,6 @@ def nvhpc_autopar_capability() -> AutoparProbe:
     return probe_autopar("nvc", composed, NO_OUTLINE_PATTERN, runtime_pattern=NVHPC_RUNTIME_CALL_PATTERN)
 
 
-# Intel oneAPI has NO auto-parallelizer column: the LLVM-based icx accepts icc-classic's
-# ``-parallel`` with warning #10430 and exit code 0, and emits no OpenMP runtime reference. An
-# ``ICX_AUTOPAR`` constant would publish serial numbers under an auto-parallelizer's name, so the
-# oneAPI arm is baseline-only (``cc_oneapi``).
-
-
 def pluto_capability() -> AutoparProbe:
     """The measured :class:`AutoparProbe` for THIS host's clang at the Pluto column's REAL build
     flags (:data:`CPU_BASELINE_CLANG_PLUTO` + :data:`PLUTO_PAR`).
@@ -568,11 +549,6 @@ CLANG_OPT_REPORT = (
 #: and, like a vectorize pragma, also license FP reassociation, which is ``flags.fp_associative``'s decision.
 GCC_VECT_UNLIMITED = "-fvect-cost-model=unlimited -fsimd-cost-model=unlimited"
 CLANG_VECT_UNLIMITED = "-mllvm -force-target-instruction-cost=1 -mllvm -slp-threshold=-10000"
-
-#: Intel oneAPI (icx / icpx / ifx) vectorization + parallelization report. Both phases are named:
-#: ``vec`` is the counterpart of the two above, and ``par`` says what the OpenMP layer did, which
-#: is the only route to threads this vendor has (see the note on the absent ``ICX_AUTOPAR``).
-ICX_OPT_REPORT = "-qopt-report=3 -qopt-report-phase=par,vec"
 
 # GPU baselines. The arch suffix (``-arch=sm_<SM>`` / ``--offload-arch=<gfx>``)
 # is appended by the framework after :func:`detect_sm` / :func:`detect_gfx`.
