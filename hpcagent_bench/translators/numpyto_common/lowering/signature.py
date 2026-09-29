@@ -28,9 +28,11 @@ __all__ = [
     "integer_candidates",
     "integer_valued_expression",
     "integer_valued_locals",
+    "is_real_float",
     "promote_free_names_to_params",
     "promote_shape_symbols_to_params",
     "provably_integer",
+    "retype_helper_temporaries",
     "retype_int_helper_scalars",
     "settle_helper_forwarding",
     "target_names",
@@ -271,6 +273,43 @@ def retype_int_helper_scalars(helper: KernelIR) -> None:
         dtype = str(sca.dtype)
         if sca.name in int_uses and not dtypes.is_integer(dtype) and dtype not in ("bool", "bool_"):
             sca.dtype = "int64"
+
+
+def is_real_float(dtype: str) -> bool:
+    """Whether ``dtype`` is a real floating format (fp64 .. fp8, bf16), by its canonical registry name."""
+    try:
+        return dtypes.canonical(dtype).startswith(("float", "bfloat"))
+    except KeyError:
+        return False
+
+
+def retype_helper_temporaries(helper: KernelIR, caller: KernelIR) -> None:
+    """Type a helper's float array parameter as the caller's LOCAL it is handed, once the caller is lowered.
+
+    A helper's array dtypes are read off the call site's arguments by the frontend, before the
+    caller's locals are typed; lowering then types ``x2 = x1 * scaling_factor`` float64 (a float64
+    scalar joins the product), while the helper took ``x3``'s parameter from ``x1``'s float32. The
+    emitted call passed a ``double *`` to a ``const float *``, and C refused it. The lowered caller
+    decides, as the call passes that buffer; a parameter its call sites hand locals of different
+    dtypes is left alone, as is any argument that is one of the caller's own arrays.
+    """
+    order = helper.abi_param_order()
+    params = {a.name: a for a in helper.arrays}
+    caller_arrays = {a.name for a in caller.arrays}
+    seen: dict[str, set[str]] = {}
+    for node in ast.walk(caller.tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == helper.kernel_name):
+            continue
+        if len(node.args) != len(order):
+            continue
+        for pname, arg in zip(order, node.args):
+            if pname in params and isinstance(arg, ast.Name) and arg.id not in caller_arrays:
+                local = caller.local_dtypes.get(arg.id)
+                if local and is_real_float(local):
+                    seen.setdefault(pname, set()).add(local)
+    for pname, locals_ in seen.items():
+        if len(locals_) == 1 and is_real_float(str(params[pname].dtype)):
+            params[pname].dtype = locals_.pop()
 
 
 def written_through_helpers(tree: ast.AST, helpers: Sequence[KernelIR]) -> set[str]:

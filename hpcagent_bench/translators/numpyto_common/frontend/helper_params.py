@@ -232,8 +232,9 @@ def infer_helper_params(
     descriptors inferred from each call-site argument.
 
     An array argument that is not one of the calling function's own parameters is a TEMPORARY the
-    caller allocated, and temporaries live in the compute dtype (a bf16 / fp8 local is emitted as
-    float): the helper's parameter takes that dtype, so the pointer types agree."""
+    caller allocates (:func:`is_temporary`), and temporaries live in the compute dtype
+    (a bf16 / fp8 local is emitted as float): the helper's parameter takes that dtype, so the pointer
+    types agree."""
     formal = {a.arg for a in fn.args.args} if fn is not None else None
     arrays: list[ArrayDesc] = []
     scalars: list[ScalarDesc] = []
@@ -268,8 +269,11 @@ def rename_dims(dim: str, renamed: dict[str, str]) -> str:
 
 
 def is_temporary(arg: ast.expr, formal: set[str] | None) -> bool:
-    """Whether a call argument names a caller local rather than one of the caller's parameters."""
-    return formal is not None and isinstance(arg, ast.Name) and arg.id not in formal
+    """Whether a call argument is a buffer the caller allocates -- a local, or anything but a bare name,
+    which the call site materialises into one (``relu(input @ w1 + b1)``, a slice ``w[0]``:
+    :func:`~hpcagent_bench.translators.numpyto_common.frontend.callsite.build_callsite_stmts`) --
+    rather than one of the caller's own parameters, passed through in its storage dtype."""
+    return formal is not None and not (isinstance(arg, ast.Name) and arg.id in formal)
 
 
 def reject_subscripted_scalar_params(hfn: ast.FunctionDef, scalars: list[ScalarDesc], name: str) -> None:

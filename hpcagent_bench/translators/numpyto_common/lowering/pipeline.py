@@ -77,6 +77,7 @@ from hpcagent_bench.translators.numpyto_common.lowering.signature import (
     fold_shape_aliases,
     promote_free_names_to_params,
     promote_shape_symbols_to_params,
+    retype_helper_temporaries,
     retype_int_helper_scalars,
 )
 from hpcagent_bench.translators.numpyto_common.lowering.slice_fusion import LiftFreshArrayFromSlices, SliceFusion
@@ -1089,6 +1090,7 @@ def lp_lower_helpers(ctx: LoweringContext) -> None:
     return-extraction is a parse_kernel step, not a lowering pass)."""
     for helper in ctx.original_kir.helpers:
         retype_int_helper_scalars(helper)
+        retype_helper_temporaries(helper, ctx.kir)
     # A helper body calls its SIBLINGS, and its own IR lists none of them; hand the by-value
     # scalar ones down so the shape passes read such a call as rank 0 rather than elementwise.
     siblings = scalar_return_helpers(ctx)
