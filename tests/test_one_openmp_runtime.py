@@ -87,6 +87,12 @@ def test_libraries_that_are_not_an_openmp_runtime_are_not_counted(tmp_path: path
     assert openmp_runtimes.runtimes_in_maps(maps_line(touch(tmp_path / name))) == ()
 
 
+def test_the_nvhpc_runtime_counts_beside_the_others(tmp_path: pathlib.Path) -> None:
+    gomp, nvomp = touch(tmp_path / "libgomp.so.1.0.0"), touch(tmp_path / "nvhpc" / "libnvomp.so")
+    found = openmp_runtimes.runtimes_in_maps("\n".join(maps_line(p) for p in (gomp, nvomp)))
+    assert found == tuple(sorted((str(gomp), str(nvomp))))
+
+
 def test_iomp5_counts_and_anonymous_and_deleted_mappings_are_handled(tmp_path: pathlib.Path) -> None:
     iomp = touch(tmp_path / "libiomp5.so")
     maps = "\n".join(

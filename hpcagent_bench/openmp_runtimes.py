@@ -30,8 +30,9 @@ __all__ = [
 ]
 
 #: Runtime library files by basename: GNU ``libgomp`` (wheels bundle it as ``libgomp-<hash>.so.1.0.0``),
-#: LLVM ``libomp``, Intel ``libiomp5``. ``libomptarget`` and ``libompd`` are LLVM plugins, not runtimes.
-RUNTIME_FILE = re.compile(r"(?:libgomp|libomp|libiomp5)(?:-[0-9a-f]+)?\.so(?:\.\d+)*")
+#: LLVM ``libomp``, Intel ``libiomp5``, NVHPC ``libnvomp`` (``nvc -mp``). ``libomptarget`` and ``libompd``
+#: are LLVM plugins, not runtimes.
+RUNTIME_FILE = re.compile(r"(?:libgomp|libomp|libiomp5|libnvomp)(?:-[0-9a-f]+)?\.so(?:\.\d+)*")
 
 MAPS_PATH = "/proc/self/maps"
 
