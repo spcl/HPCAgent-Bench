@@ -44,7 +44,7 @@ from typing import Any
 
 import yaml
 
-from hpcagent_bench import config, flags, osinfo, paths, seal
+from hpcagent_bench import config, flags, omp_context, osinfo, paths, seal
 from hpcagent_bench.flags import Mode
 from hpcagent_bench.spec import BenchSpec
 
@@ -114,6 +114,7 @@ __all__ = [
     "baseline_flags",
     "baseline_flags_for_block",
     "block_family",
+    "block_omp_context",
     "build_kernel_lib_commands",
     "build_mpi_executable_commands",
     "build_shared_lib_commands",
@@ -1656,8 +1657,14 @@ def load_libraries() -> dict[str, dict]:
 
 
 @functools.lru_cache(maxsize=None, typed=True)
-def library_tokens(name: str, lang: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
+def library_tokens(name: str, lang: str, context: str = "") -> tuple[tuple[str, ...], tuple[str, ...]]:
     """``(compile_tokens, link_tokens)`` for one requestable library, or ``((), ())``.
+
+    ``context`` (:mod:`hpcagent_bench.omp_context`, ``""`` = the image default) is the OpenMP context
+    the build targets: its view is searched ahead of the image's own, so a library that links an
+    OpenMP runtime resolves to that family's variant and its ``-L`` and rpath name the variant's
+    directory. A library the context has no variant of resolves to the default's, and
+    :func:`library_served` is what says whether the context may use it.
 
     Empty means "this host cannot build against it", and every caller treats that as the library
     not being on offer rather than as an error: advertising a library the container lacks turns
@@ -1686,7 +1693,7 @@ def library_tokens(name: str, lang: str) -> tuple[tuple[str, ...], tuple[str, ..
         # /usr/include/eigen3, so a bare `#include <Eigen/Dense>` does not compile without it. When
         # the headers are on the default include path this correctly yields no tokens at all;
         # library_offered, not emptiness, is what says whether the library is available.
-        cflags = pkg_config_answer(pkg_modules(entry), "--cflags")
+        cflags = pkg_config_answer(pkg_modules(entry), "--cflags", context)
         include = tuple(f"-I{d}" for d in entry.get("include") or ())
         if cflags is None:
             return include, ()
@@ -1706,8 +1713,8 @@ def library_tokens(name: str, lang: str) -> tuple[tuple[str, ...], tuple[str, ..
         if not link_tokens:
             return (), ()
     else:
-        cflags = pkg_config_answer(pkg_modules(entry), "--cflags")
-        libs = pkg_config_answer(pkg_modules(entry), "--libs")
+        cflags = pkg_config_answer(pkg_modules(entry), "--cflags", context)
+        libs = pkg_config_answer(pkg_modules(entry), "--libs", context)
         if libs is None or cflags is None:
             # No .pc file: a library built into the image's own prefix (hptt, tblis) is on the
             # compiler's default search path already, so a bare -l is the whole answer. The trial
@@ -1715,6 +1722,10 @@ def library_tokens(name: str, lang: str) -> tuple[tuple[str, ...], tuple[str, ..
             if not entry.get("link"):
                 return (), ()
             compile_tokens, link_tokens = (), tuple(entry["link"])
+            view_lib = context_view_lib(entry, context)
+            if view_lib:  # the context's own variant: named by -L and rpath, not left to the search path
+                link_tokens = (f"-L{view_lib}", *link_tokens)
+                link_tokens += rpath_tokens(link_tokens)
         else:
             compile_tokens = tuple(t for t in cflags if t.startswith(LIBRARY_COMPILE_PREFIXES))
             link_tokens = tuple(t for t in libs if t.startswith(LIBRARY_LINK_PREFIXES))
@@ -1751,16 +1762,20 @@ def pkg_modules(entry: dict[str, object]) -> tuple[str, ...]:
 
 
 @functools.lru_cache(maxsize=None, typed=True)
-def pkg_config_answer(pkgs: tuple[str, ...], what: str) -> tuple[str, ...] | None:
+def pkg_config_answer(pkgs: tuple[str, ...], what: str, context: str = "") -> tuple[str, ...] | None:
     """``pkg-config <what> <pkgs...>`` split into tokens, or None when pkg-config cannot answer.
 
     Every module is asked in ONE invocation, so pkg-config merges and de-duplicates the flags
     itself; a single missing module fails the whole answer, which is the intended reading (see
-    :func:`pkg_modules`)."""
+    :func:`pkg_modules`). ``context``'s view leads ``PKG_CONFIG_PATH``
+    (:func:`hpcagent_bench.omp_context.context_build_env`)."""
     if not pkgs:
         return None
+    env = {**os.environ, **omp_context.context_build_env(context)} if context else None
     try:
-        r = subprocess.run(["pkg-config", what, *pkgs], capture_output=True, text=True, timeout=STDPAR_PROBE_TIMEOUT_S)
+        r = subprocess.run(
+            ["pkg-config", what, *pkgs], capture_output=True, text=True, timeout=STDPAR_PROBE_TIMEOUT_S, env=env
+        )
     except (OSError, subprocess.SubprocessError):
         return None
     if r.returncode != 0:
@@ -1813,39 +1828,63 @@ def library_compiles(lang: str, compile_tokens: tuple[str, ...], header: str) ->
     return r.returncode == 0
 
 
-def library_offered(name: str, lang: str) -> bool:
-    """Is ``name`` on offer for ``lang`` here?
+def context_view_lib(entry: dict[str, object], context: str) -> str:
+    """The context view's library directory holding every ``-l`` library of a pkg-config-less catalog
+    ``entry`` (an OpenMP-linking one built into ``<context>/view``), or ``""``: no context, no view, or
+    a library the view does not hold."""
+    view = omp_context.context_view(context) if context else None
+    if view is None:
+        return ""
+    wanted = [str(t)[2:] for t in entry.get("link") or () if str(t).startswith("-l")]
+    for libdir in (view / "lib", view / "lib64"):
+        if wanted and all(any(libdir.glob(f"lib{name}.so*")) for name in wanted):
+            return str(libdir)
+    return ""
+
+
+def library_served(name: str, context: str = "") -> str:
+    """``""`` when catalog library ``name`` may be linked by a ``context`` build, else the reason it may not:
+    the image's record of the OpenMP runtimes its build maps in that context
+    (:func:`hpcagent_bench.omp_context.library_refusal`)."""
+    return omp_context.library_refusal(name, context)
+
+
+def library_offered(name: str, lang: str, context: str = "") -> bool:
+    """Is ``name`` on offer for ``lang`` here (in ``context``, ``""`` = the image default)?
 
     NOT ``any(library_tokens(...))``. A header-only library whose headers sit on the compiler's
     default include path resolves to no tokens at all and is still perfectly usable, so emptiness
     cannot be the availability signal for one. It still is for every other entry, where empty means
-    the pkg-config lookup or the trial link failed.
+    the pkg-config lookup or the trial link failed. A library whose build maps an OpenMP runtime other than
+    the ``context``'s (:func:`library_served`) is not on offer there.
     """
     entry = load_libraries().get(name)
     if not entry or lang not in entry.get("langs", ()):
         return False
+    if library_served(name, context):
+        return False
     if not entry.get("header_only"):
-        return any(library_tokens(name, lang))
-    compile_tokens, _link = library_tokens(name, lang)
+        return any(library_tokens(name, lang, context))
+    compile_tokens, _link = library_tokens(name, lang, context)
     headers = entry.get("headers") or ()
     return bool(headers) and library_compiles(lang, compile_tokens, headers[0])
 
 
-def available_libraries(lang: str) -> tuple[str, ...]:
-    """The library names ``lang`` can really build against here, in table order."""
-    return tuple(name for name in load_libraries() if library_offered(name, lang))
+def available_libraries(lang: str, context: str = "") -> tuple[str, ...]:
+    """The library names ``lang`` can really build against here (in ``context``), in table order."""
+    return tuple(name for name in load_libraries() if library_offered(name, lang, context))
 
 
-def library_build_flags(lang: str, names: Sequence[str]) -> tuple[tuple[str, ...], tuple[str, ...]]:
+def library_build_flags(lang: str, names: Sequence[str], context: str = "") -> tuple[tuple[str, ...], tuple[str, ...]]:
     """``(compile, link)`` tokens for every requested library, de-duplicated, order preserved.
 
     blas and lapack are one ``.so`` here, so requesting both must not put ``-lopenblas`` on the
-    link line twice.
+    link line twice. ``context`` picks the OpenMP context's variants (:func:`library_tokens`).
     """
     compile_out: list[str] = []
     link_out: list[str] = []
     for name in names:
-        got_compile, got_link = library_tokens(name, lang)
+        got_compile, got_link = library_tokens(name, lang, context)
         compile_out += [t for t in got_compile if t not in compile_out]
         link_out += [t for t in got_link if t not in link_out]
     return tuple(compile_out), tuple(link_out)
@@ -1904,6 +1943,13 @@ def block_family(block: dict[str, Any]) -> str:
         if name == spack:
             return family
     return DEVICE_DRIVER_FAMILY.get(block.get("cc", ""), "")
+
+
+def block_omp_context(block: dict[str, Any]) -> str:
+    """The OpenMP context (:mod:`hpcagent_bench.omp_context`) of a ``compilers.yaml`` block: its
+    driver's family (``hipcc`` is ROCm's clang), the default context for a driver outside every family."""
+    family = block_family(block)
+    return omp_context.context_for_family(family) if family else omp_context.DEFAULT_CONTEXT
 
 
 #: Report family -> the flags that switch its vectorizer cost model off (``perf_reports.vect_cost_model``).
