@@ -87,6 +87,18 @@ docker run --rm --privileged -v "$PWD:/repo" -w /repo ubuntu:24.04 bash -c '
   /venv/bin/python -m pytest -q -rfEs -m sealed tests/'
 ```
 
+## Docs
+
+`docs/` is Markdown built with Sphinx, MyST and Furo; `docs/index.md` holds the toctree, so a new
+page is added there. CI (the `docs` job) fails on any warning and on a Markdown link to a repo path
+that does not exist:
+
+```bash
+pip install -e ".[docs]"
+python scripts/checks/check_doc_links.py
+sphinx-build -W --keep-going -b html docs docs/_build
+```
+
 ## Adding things
 
 | Addition | Guide |

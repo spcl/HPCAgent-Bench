@@ -762,6 +762,29 @@ jobs:
           python -m pytest -p no:cacheprovider -rfEs --timeout=1500 \
             tests/test_agent_bench.py tests/test_frameworks.py tests/test_fp16.py
 
+  # docs/ builds with warnings as errors, and no Markdown link points at a repo path that is gone.
+  docs:
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
+    name: docs (sphinx -W build + repo-path link check)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PYTEST_ADDOPTS: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Setup -- the docs extra
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ".[docs]"
+      - name: Markdown links resolve to existing repo paths
+        run: python scripts/checks/check_doc_links.py
+      - name: Sphinx build (warnings are errors)
+        if: ${{ !cancelled() }}
+        run: sphinx-build -W --keep-going -b html docs docs/_build
+
   # The one combined coverage total, then the HuggingFace dataset export (published only from a
   # green push to main).
   coverage:
