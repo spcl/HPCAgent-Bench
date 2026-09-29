@@ -295,7 +295,8 @@ RUN set -eux; \
 # The subclass adds the upstream-documented runtime target and nothing else.
 #
 # strumpack passes -DCMAKE_CUDA_HOST_COMPILER=$SPACK_CXX (gcc 16), which overrides NVCC_CCBIN; its
-# subclass points that one flag at g++-14 instead.
+# subclass points that one flag at g++-14 instead. yaksa's configure does the same with -ccbin $CC
+# unless NVCC is given (job 4866838), so its subclass passes NVCC with -ccbin g++-14.
 COPY --from=ofi-builder /opt/ofi-sdk /opt/ofi-sdk
 RUN set -eux; \
     "/opt/ofi-sdk/bin/fi_info" --version 2>/dev/null | head -1 \
@@ -321,7 +322,7 @@ RUN set -eux; \
     git -C /opt/spack-packages checkout -q FETCH_HEAD; \
     test -f /opt/spack-packages/repos/spack_repo/builtin/repo.yaml; \
     overlay=/opt/spack-overlay/spack_repo/hpcagent; \
-    mkdir -p "${overlay}/packages/llvm" "${overlay}/packages/strumpack"; \
+    mkdir -p "${overlay}/packages/llvm" "${overlay}/packages/strumpack" "${overlay}/packages/yaksa"; \
     test -f "${overlay}/repo.yaml"; \
     printf '%s\n' \
       'from spack_repo.builtin.packages.llvm.package import Llvm as BuiltinLlvm' \
@@ -348,6 +349,20 @@ RUN set -eux; \
       '        return [a if not a.startswith("-DCMAKE_CUDA_HOST_COMPILER=") else "-DCMAKE_CUDA_HOST_COMPILER=/usr/bin/g++-14"' \
       '                for a in super().cmake_args()]' \
       > "${overlay}/packages/strumpack/package.py"; \
+    printf '%s\n' \
+      'from spack_repo.builtin.packages.yaksa.package import Yaksa as BuiltinYaksa' \
+      '' \
+      'from spack.package import *' \
+      '' \
+      '' \
+      'class Yaksa(BuiltinYaksa):' \
+      '    def configure_args(self):' \
+      '        args = super().configure_args()' \
+      '        if self.spec.satisfies("+cuda"):' \
+      '            nvcc = join_path(self.spec["cuda"].prefix.bin, "nvcc")' \
+      '            args.append(f"NVCC={nvcc} -ccbin /usr/bin/g++-14 -allow-unsupported-compiler")' \
+      '        return args' \
+      > "${overlay}/packages/yaksa/package.py"; \
     printf '%s\n' \
       'repos:' \
       "  hpcagent: ${overlay}" \
