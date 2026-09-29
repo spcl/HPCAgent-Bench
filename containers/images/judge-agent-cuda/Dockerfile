@@ -1171,13 +1171,11 @@ COPY containers/lib/one_openmp.sh containers/lib/one_openmp_gate.py containers/l
 # scanned so that no library on disk maps another family's runtime. verify_image.py runs the same again.
 RUN set -eux; \
     sh /tmp/one-openmp/one_openmp.sh /opt/view; \
-    sh /tmp/one-openmp/omp_contexts.sh /opt/view /opt/omp/llvm/view; \
+    OMP_REQUIRE_NVHPC=1 sh /tmp/one-openmp/omp_contexts.sh /opt/view /opt/omp/llvm/view; \
     python3 /tmp/one-openmp/omp_context_scan.py; \
     python3 /tmp/one-openmp/omp_context_gate.py --context gnu --wheels --torch; \
     python3 /tmp/one-openmp/omp_context_gate.py --context llvm --blas-in-context; \
-    if [ -d /opt/omp/nvhpc ]; then \
-      python3 /tmp/one-openmp/omp_context_gate.py --context nvhpc --blas-in-context; \
-    fi; \
+    python3 /tmp/one-openmp/omp_context_gate.py --context nvhpc --blas-in-context; \
     rm -rf /tmp/one-openmp
 
 # Drop the build-time mirror rewrite from the SHIPPED image.

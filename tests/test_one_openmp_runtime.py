@@ -166,6 +166,9 @@ def test_every_image_builds_the_contexts_gates_them_and_scans_them_in_its_last_o
     assert "omp_context_gate.py --context gnu --wheels --torch" in last
     assert "omp_context_gate.py --context llvm --blas-in-context" in last
     assert ("omp_context_gate.py --context nvhpc --blas-in-context" in last) == (image == "judge-agent-cuda")
+    # nvc is asserted on the CUDA image's PATH, so a missing nvhpc context is a bug: required, never conditional
+    assert ("OMP_REQUIRE_NVHPC=1 sh /tmp/one-openmp/omp_contexts.sh" in last) == (image == "judge-agent-cuda")
+    assert "/opt/omp/nvhpc ]" not in last
 
 
 @pytest.mark.parametrize("image", IMAGES)
