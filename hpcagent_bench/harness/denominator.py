@@ -71,7 +71,10 @@ FALLBACK: Denominator = Denominator.BEST_OF_NUMBA_C
 
 #: The versioned stamps of earlier builds, by policy name.
 SINGLE_STAMP = "single-v1"
-BEST_OF_STAMPS = ("best-of-v1", "best-of-v2", "best-of-v3")
+BEST_OF_STAMPS = ("best-of-v1", "best-of-v2", "best-of-v3", "best-of-v4")
+#: Stamps whose set alone names the denominator: ``best-of-v1`` raced autopar openly, ``best-of-v4``
+#: never times it.
+SET_STAMPS = frozenset({"best-of-v1", "best-of-v4"})
 #: The reference ``best-of-v2`` / ``best-of-v3`` timed when numba produced no time.
 AUTOPAR = "c-autopar"
 #: The stored torch kinds, one per device, that name the ``torch-autotune`` denominator.
@@ -114,9 +117,10 @@ def of_grade(stamp: object, raced: Iterable[object] = (), winner: object = "") -
     references its inputs raced (``grade_cells.baseline_candidates``, '+'-joined) and its winner.
 
     ``single-v1:<kind>`` is ``<kind>``; ``best-of-v1:c-autopar+c+numba`` is ``best-of(numba,c,c-autopar)``;
-    ``best-of-v2`` / ``best-of-v3`` over c and numba is ``best-of(numba,c)`` only when the grade shows
-    c-autopar never stood in for numba -- none of its inputs raced it and it did not win. A stamp that
-    names no candidate set, or a grade that cannot show, is None: no value, never credited."""
+    ``best-of-v4:c+numba`` (the leader-first race) is ``best-of(numba,c)``; ``best-of-v2`` /
+    ``best-of-v3`` over c and numba is ``best-of(numba,c)`` only when the grade shows c-autopar never
+    stood in for numba -- none of its inputs raced it and it did not win. A stamp that names no
+    candidate set, or a grade that cannot show, is None: no value, never credited."""
     policy, sep, listed = str(stamp or "").strip().partition(":")
     if not sep or not listed:
         return None
@@ -126,7 +130,7 @@ def of_grade(stamp: object, raced: Iterable[object] = (), winner: object = "") -
     if policy not in BEST_OF_STAMPS:
         return None
     named = of_kinds(kinds)
-    if named != Denominator.BEST_OF_NUMBA_C or policy == BEST_OF_STAMPS[0]:
+    if named != Denominator.BEST_OF_NUMBA_C or policy in SET_STAMPS:
         return named
     seen = [str(entry) for entry in raced if entry]
     if not seen:
