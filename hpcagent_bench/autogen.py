@@ -230,19 +230,20 @@ def wrapper_path(spec: BenchSpec) -> pathlib.Path:
 
 
 def _native_targets(spec: BenchSpec) -> list[tuple]:
-    """``[(config_or_None, native_base)]`` -- one entry per emit-distinct layout.
+    """``[(config_or_None, native_base)]`` -- one entry per emit-distinct layout the framework
+    baselines run.
 
-    A dense kernel yields ``[(None, <module>)]``; a sparse kernel yields one
-    ``(<config>, <module>_<config>)`` per configuration (the layout IS the
-    sub-benchmark -- each is a full kernel with its own source / symbol / lib).
-    Distributions sharing one configuration collapse to a single native source
-    (they differ only in runtime data), so the list is deduped by base.
+    A dense kernel yields ``[(None, <module>)]``; a knob kernel one ``(<config>, <module>_<config>)``
+    per configuration (each is a full kernel with its own source / symbol / lib). A sparse kernel
+    yields its default layout alone: every baseline reads the default layout (docs/sparse_abi.md).
 
     :meth:`BenchSpec.native_base` is the single source of truth for the stem (it
     matches what the emitter derives from the reference filename)."""
     seen: set = set()
     out: list[tuple] = []
     for rb in spec.expand_layouts():
+        if spec.sparse_layouts and rb.config_key != spec.default_layout:
+            continue
         cfg = None if rb.config_key == "dense" else rb.config_key
         base = spec.native_base(rb.config_key)
         if base in seen:

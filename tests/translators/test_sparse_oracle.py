@@ -29,22 +29,14 @@ IDS = [k.short for k in KERNELS]
 def kernel_configs() -> list[tuple["so.SparseKernel", str]]:
     """(kernel, config_key) pairs enumerated from the registration source
     of truth, ``BenchSpec.expand_layouts()`` (deduped to the emit-distinct
-    configuration; runtime distributions don't change the emitted code).
-    A kernel whose bench_info fails sparse validation (e.g. spmv's
-    physical-buffer ``array_args``) falls back to its raw ``configurations``
-    so its emit failure still surfaces."""
+    configuration; runtime distributions don't change the emitted code)."""
     pairs = []
     for k in KERNELS:
-        try:
-            resolved = BenchSpec.load(k.short).expand_layouts()
-            cfgs, seen = [], set()
-            for rb in resolved:
-                if rb.config_key != "dense" and rb.config_key not in seen:
-                    seen.add(rb.config_key)
-                    cfgs.append(rb.config_key)
-        except Exception:
-            cfgs = list(k.info.get("configurations", {}))
-        pairs.extend((k, cfg) for cfg in cfgs)
+        seen: list[str] = []
+        for rb in BenchSpec.load(k.short).expand_layouts():
+            if rb.config_key != "dense" and rb.config_key not in seen:
+                seen.append(rb.config_key)
+        pairs.extend((k, cfg) for cfg in seen)
     return pairs
 
 
@@ -66,8 +58,7 @@ def test_sparse_kernel_matches_scipy(kernel: "so.SparseKernel", config: str, see
 @pytest.mark.parametrize("seed", [0, 1])
 def test_sparse_kernel_jax_matches_scipy(kernel: "so.SparseKernel", seed: int) -> None:
     """Every sparse kernel also validates under JAX. jax runs EAGERLY, so the
-    data-dependent CSR slice + gather (spmv/spmm) and the dense ``A @ p`` (the Krylov
-    solvers) execute directly on concrete arrays -- no sparse-specific desugaring
+    sparse products execute directly on concrete arrays -- no sparse-specific desugaring
     needed. The physical storage layout is a C-ABI concern jax never sees, so jax
     validates once per kernel, not once per layout."""
     pytest.importorskip("jax")
@@ -79,11 +70,7 @@ def test_sparse_kernel_jax_matches_scipy(kernel: "so.SparseKernel", seed: int) -
 @pytest.mark.parametrize("kernel", KERNELS, ids=IDS)
 def test_sparse_kernel_dace_matches_scipy(kernel: "so.SparseKernel") -> None:
     """dace validates -- via a real SDFG build + run -- every sparse kernel, incl. gmres.
-    Buffer-style CSR (spmv) builds from the UN-lowered kir: dace's SYMBOLIC array shapes
-    make the data-dependent slice ``A_indices[A_indptr[i]:A_indptr[i+1]]`` expressible,
-    once the emit declares the shape symbols and drops the ``.shape`` recompute (the
-    dace_emit symbolic-shape fix). The logical-matrix kernels (spmm + the Krylov solvers
-    cg / bicgstab / minres / gmres) build from the LOWERED kir: a logical ``A @ x`` is
+    Every kernel builds from the LOWERED kir: a logical ``A @ x`` is
     flattened to CSR buffer loops, and the ``__hpcagent_bench_zeros__`` allocation markers
     resolve to np.zeros / np.ones (allocate-once, matching the C emit -- a re-marked local
     is an in-place reuse, not a re-zero). gmres additionally needs its body-computed

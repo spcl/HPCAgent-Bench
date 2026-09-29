@@ -2,6 +2,7 @@
 
 import ast
 import copy
+from typing import TYPE_CHECKING
 
 from hpcagent_bench.translators.numpyto_common.ast_build import name_, range_for, store_
 from hpcagent_bench.translators.numpyto_common.ir import SparseArrayDesc
@@ -11,7 +12,11 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_ext
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import alloc_marker, const_, const_or_name
 from hpcagent_bench.translators.numpyto_common.lib_nodes.scalarize import scalarize_at_iters
 
+if TYPE_CHECKING:
+    from hpcagent_bench.translators.numpyto_common.sparse_emit import EntryExtents
+
 __all__ = [
+    "ACCESS_TRANSPOSED_FORMATS",
     "MatmulHoister",
     "hoist_matmul",
     "matmul_result_shape",
@@ -21,6 +26,10 @@ __all__ = [
     "scalarised_batched_matmul",
     "scalarised_matmul",
 ]
+
+#: Sparse formats whose transpose has no dual descriptor over the same buffers: ``A.T @ x``
+#: transposes the ACCESS instead (:meth:`MatmulHoister.transpose_sparse_desc`).
+ACCESS_TRANSPOSED_FORMATS = frozenset({"dia", "bcsr", "ell"})
 
 
 def matmul_result_shape(
@@ -779,22 +788,22 @@ class MatmulHoister(ast.NodeTransformer):
         from hpcagent_bench.translators.numpyto_common import sparse_emit as se
 
         lfmt, rfmt = la.format, ra.format
+        ni = la.logical_shape[0] if la.logical_shape else "0"
+        nj = ra.logical_shape[1] if len(ra.logical_shape) > 1 else (ra.logical_shape[0] if ra.logical_shape else "0")
+        temp = self.fresh_temp("__mm", (ni, nj))
         if lfmt == "csr" and rfmt == "csr":
-            self.temp_counter[0] += 1
-            temp = f"__mm{self.temp_counter[0]}"
-            ni = la.logical_shape[0] if la.logical_shape else "0"
-            nj = (
-                ra.logical_shape[1] if len(ra.logical_shape) > 1 else (ra.logical_shape[0] if ra.logical_shape else "0")
+            return temp, pre + se.expand_matmul_csr_csr_dense(temp, la.buffers, ra.buffers, ni, nj)
+        if lfmt not in se.ENTRY_WALKERS or rfmt not in se.ENTRY_WALKERS:
+            raise NotImplementedError(
+                f"sparse @ sparse has no lowering for {lfmt} @ {rfmt} ({node.left.id} @ {node.right.id})."
             )
-            self.temp_arrays[temp] = (ni, nj)
-            self.shape_table[temp] = (ni, nj)
-            stmts = se.expand_matmul_csr_csr_dense(temp, la.buffers, ra.buffers, ni, nj)
-            return temp, pre + stmts
-        raise NotImplementedError(
-            f"sparse @ sparse only supports csr @ csr; got "
-            f"{lfmt} @ {rfmt} ({node.left.id} @ {node.right.id}). "
-            "Convert operands to CSR or split the kernel."
-        )
+        # Any other pairing: the right operand is densified into a temp, then every stored entry of
+        # the left one scales a row of it -- a reference, correct for every layout, not a fast path.
+        rhs_ext = self.entry_extents(ra)
+        dense_rhs = self.fresh_temp("__spd", (rhs_ext.rows, rhs_ext.cols))
+        stmts = se.densify(dense_rhs, rfmt, ra.buffers, rhs_ext)
+        stmts += se.entry_matmat(temp, lfmt, la.buffers, self.entry_extents(la), dense_rhs, nj)
+        return temp, pre + stmts
 
     def sparse_dense_matmul(
         self,
@@ -826,16 +835,15 @@ class MatmulHoister(ast.NodeTransformer):
             self.shape_table[temp] = (n_rows,)
             stmts = self.sparse_matvec(sp_desc, dense_name, temp)
             return temp, pre + stmts
-        # matmat sparse @ dense (2-D) -> dense -- CSR only for now.
-        if rank == 2 and sp_on_left and sp_desc.format == "csr":
-            self.temp_counter[0] += 1
-            temp = f"__mm{self.temp_counter[0]}"
+        # matmat sparse @ dense (2-D) -> dense: csr's own loop nest, the stored-entry walk elsewhere.
+        if rank == 2 and sp_on_left and sp_desc.format in se.ENTRY_WALKERS:
             n_rows = sp_desc.logical_shape[0] if sp_desc.logical_shape else "0"
             n_cols = dense_shape[1]
-            self.temp_arrays[temp] = (n_rows, n_cols)
-            self.shape_table[temp] = (n_rows, n_cols)
-            stmts = se.expand_matmul_csr_dense_mat(temp, sp_desc.buffers, dense_name, n_rows, n_cols)
-            return temp, pre + stmts
+            temp = self.fresh_temp("__mm", (n_rows, n_cols))
+            if sp_desc.format == "csr":
+                return temp, pre + se.expand_matmul_csr_dense_mat(temp, sp_desc.buffers, dense_name, n_rows, n_cols)
+            ext = self.entry_extents(sp_desc)
+            return temp, pre + se.entry_matmat(temp, sp_desc.format, sp_desc.buffers, ext, dense_name, n_cols)
         raise NotImplementedError(
             f"sparse @ dense for format {sp_desc.format} with dense rank "
             f"{rank} not supported ({node.left.id} @ {node.right.id})."
@@ -918,9 +926,44 @@ class MatmulHoister(ast.NodeTransformer):
             if "row" in b and "col" in b:
                 b["row"], b["col"] = d.buffers["col"], d.buffers["row"]
             return SparseArrayDesc(name=d.name, format="coo", logical_shape=swapped, buffers=b), False
-        if d.format in ("dia", "bcsr"):
+        if d.format in ACCESS_TRANSPOSED_FORMATS:
             return SparseArrayDesc(name=d.name, format=d.format, logical_shape=swapped, buffers=dict(d.buffers)), True
         return None
+
+    def fresh_temp(self, prefix: str, shape: tuple[str, ...]) -> str:
+        """A new temp array of ``shape``, registered so the emitter allocates it."""
+        self.temp_counter[0] += 1
+        temp = f"{prefix}{self.temp_counter[0]}"
+        self.temp_arrays[temp] = shape
+        self.shape_table[temp] = shape
+        return temp
+
+    def buffer_extent(self, bufs: dict[str, str], role: str, axis: int) -> str | None:
+        """The shape token of ``role``'s buffer at ``axis`` (physical buffers are declared arrays)."""
+        phys = bufs.get(role)
+        shape = self.shape_table.get(phys) if phys else None
+        return shape[axis] if shape and axis < len(shape) else None
+
+    def entry_extents(self, desc: SparseArrayDesc) -> "EntryExtents":
+        """The extents :func:`sparse_emit.entry_loops` walks ``desc``'s stored entries with, read off
+        its logical shape and its buffers' declared shapes."""
+        from hpcagent_bench.translators.numpyto_common.sparse_emit import EntryExtents
+
+        rows = desc.logical_shape[0] if desc.logical_shape else "0"
+        cols = desc.logical_shape[1] if len(desc.logical_shape) > 1 else "0"
+        bufs = desc.buffers
+        if desc.format == "bcsr":
+            indptr_len = self.buffer_extent(bufs, "indptr", 0) or "1"
+            return EntryExtents(
+                rows,
+                cols,
+                f"({indptr_len}) - 1",
+                self.buffer_extent(bufs, "data", 1) or "1",
+                self.buffer_extent(bufs, "data", 2) or "1",
+            )
+        count_axis = {"coo": ("data", 0), "dia": ("data", 0), "ell": ("data", 1)}.get(desc.format)
+        count = self.buffer_extent(bufs, *count_axis) if count_axis else None
+        return EntryExtents(rows, cols, count or "0")
 
     def sparse_matvec(self, sp_desc: object, dense_name: str, temp: str, transposed: bool = False) -> list[ast.stmt]:
         """Build the per-format matvec loop nest filling 1-D ``temp``.
@@ -968,6 +1011,10 @@ class MatmulHoister(ast.NodeTransformer):
                 return se.expand_matmul_dia_t_dense_vec(tgt, bufs, dense_name, n_cols, n_rows, ndiag)
             return se.expand_matmul_dia_dense_vec(tgt, bufs, dense_name, n_rows, n_cols, ndiag)
         if fmt == "ell":
+            if transposed:
+                # The descriptor's shape is reversed: A's own extents are (n_cols, n_rows) here.
+                own = SparseArrayDesc(name=sp_desc.name, format=fmt, logical_shape=(n_cols, n_rows), buffers=bufs)
+                return se.entry_matvec_t(temp, fmt, bufs, self.entry_extents(own), dense_name)
             maxnz = buf_shape("data", 1) or "0"
             return se.expand_matmul_ell_dense_vec(tgt, bufs, dense_name, n_rows, maxnz)
         if fmt == "jds":
