@@ -35,8 +35,8 @@ import sqlite3
 import sys
 from collections.abc import Callable, Iterable, Iterator
 
-from hpcagent_bench import experiment_tags
-from hpcagent_bench.harness import denominator, episodes, results_db
+from hpcagent_bench import campaigns, experiment_tags
+from hpcagent_bench.harness import denominator, episodes, regrade, results_db
 from hpcagent_bench.spec import BenchSpec, declares_storage_precision
 
 #: The schema this migration writes.
@@ -68,6 +68,9 @@ VOID_ARM = re.compile(r"cpf-llr-focus40-kimi27sglang-.*")
 CPF_ARM = re.compile(r"-cpf$|-cpf-|cpfsrc")
 #: The prefix a legacy name carries; only an arm (or experiment) that used CPF keeps it.
 CPF_PREFIX = "cpf-"
+#: Why an episode's final submission, and every submission it superseded, left the leaderboard.
+NO_SOURCE_REASON = "no source: the episode's final submission was never archived (dropped from v0.1)"
+SUPERSEDED_REASON = "superseded by the episode's final submission, whose source was never archived"
 #: The provisional kind of a call recorded before ``route`` existed: ``submit`` once an outcome row
 #: pairs with it, ``score`` otherwise (:func:`settle_unrouted`).
 UNROUTED = "unrouted"
@@ -1049,6 +1052,92 @@ def rename_experiments(conn: sqlite3.Connection) -> int:
     return renamed
 
 
+def first_ts(conn: sqlite3.Connection, arm: str) -> int:
+    """When ``arm``'s first grade was recorded (0 for an arm with none)."""
+    row = conn.execute("SELECT min(g.ts_ms) FROM grades g JOIN runs r ON r.id = g.run_id WHERE r.arm = ?", (arm,))
+    return int(row.fetchone()[0] or 0)
+
+
+def arm_identity(conn: sqlite3.Connection, arm: str) -> tuple[str, ...]:
+    """What ``arm`` recorded about its configuration: model, language, device, harness and packet."""
+    row = conn.execute("SELECT model, language, device, harness, packet FROM arms WHERE arm = ?", (arm,)).fetchone()
+    return tuple("" if value is None else str(value) for value in row)
+
+
+def experiment_of(name: str, recorded: str | None) -> str | None:
+    """The experiment the folded arm ``name`` belongs to: its campaign's (the registry), or the one
+    it recorded when no campaign owns it or it is retired (a smoke run)."""
+    campaign = campaigns.campaign_of(name)
+    return recorded if campaign is None or campaigns.dropped(name) else campaign.experiment
+
+
+def fold_arm(conn: sqlite3.Connection, arm: str, name: str) -> None:
+    """Fold ``arm`` into the arm ``name``: its identity must be ``name``'s (a blank packet is an
+    unrecorded one), its runs move under ``name`` and a label ``name`` already holds with no job
+    becomes its next ``rep``."""
+    identity = arm_identity(conn, arm)
+    if conn.execute("SELECT 1 FROM arms WHERE arm = ?", (name,)).fetchone() is None:
+        columns = "model, language, device, packet, harness"
+        conn.execute(f"INSERT INTO arms (arm, {columns}) SELECT ?, {columns} FROM arms WHERE arm = ?", (name, arm))
+        recorded = conn.execute("SELECT experiment FROM arms WHERE arm = ?", (arm,)).fetchone()[0]
+        conn.execute("UPDATE arms SET experiment = ? WHERE arm = ?", (experiment_of(name, recorded), name))
+    target = arm_identity(conn, name)
+    packets = {packet for packet in (identity[-1], target[-1]) if packet}
+    if identity[:-1] != target[:-1] or len(packets) > 1:
+        raise ValueError(f"arm_renames folds {arm} {identity} into {name} {target}: split it")
+    conn.execute("UPDATE arms SET packet = ? WHERE arm = ? AND packet = ''", (identity[-1], name))
+    for run, job, label in conn.execute("SELECT id, job, label FROM runs WHERE arm = ?", (arm,)).fetchall():
+        moved = name + label[len(arm) :]
+        taken = conn.execute(
+            "SELECT max(rep) FROM runs WHERE coalesce(job, -1) = coalesce(?, -1) AND label = ?", (job, moved)
+        ).fetchone()[0]
+        conn.execute(
+            "UPDATE runs SET arm = ?, label = ?, rep = ? WHERE id = ?", (name, moved, int(taken or 0) + 1, run)
+        )
+    conn.execute("DELETE FROM arms WHERE arm = ?", (arm,))
+
+
+def merge_arms(conn: sqlite3.Connection) -> dict[str, str]:
+    """Name every arm by its configuration (:func:`hpcagent_bench.experiment_tags.aliased_arm`, the
+    committed ``envs/arm_renames.yaml``), folding the arms that recorded one configuration under
+    several names; the earliest first, so a folded label's episodes number in the order they ran.
+    Returns the old -> new map applied."""
+    renamed = sorted(
+        arms_where(conn, lambda arm: experiment_tags.aliased_arm(arm) != arm), key=lambda arm: first_ts(conn, arm)
+    )
+    applied: dict[str, str] = {}
+    for arm in renamed:
+        applied[arm] = experiment_tags.aliased_arm(arm)
+        fold_arm(conn, arm, applied[arm])
+    return dict(sorted(applied.items()))
+
+
+def drop_sourceless(db: pathlib.Path) -> list[str]:
+    """Take off the leaderboard every episode whose final submission no archive kept the source of
+    and no credited final grade answers: it can be neither credited nor regraded, so the episode
+    has no answer (its earlier submissions were superseded by that one). Returns the dropped
+    finals, one ``arm, run, job, kernel, ts`` line each."""
+    rows = regrade.credited_rows(db)
+    last = {(row["job"], row["run_id"], row["benchmark"]): row for row in rows}
+    answered = regrade.final_graded(db)
+    episodes = {key: row for key, row in last.items() if not row["hash"] and int(row["grade_id"]) not in answered}
+    with contextlib.closing(connect(db)) as conn:
+        for row in rows:
+            final = episodes.get((row["job"], row["run_id"], row["benchmark"]))
+            if final is None:
+                continue
+            reason = NO_SOURCE_REASON if row is final else SUPERSEDED_REASON
+            conn.execute(
+                "INSERT OR IGNORE INTO disqualifications (grade_id, reason, ts_ms) VALUES (?, ?, ?)",
+                (int(row["grade_id"]), reason, int(row["ts_ms"])),
+            )
+        conn.commit()
+    return [
+        f"{row['arm']}\t{row['run_id']}\t{row['job'] or ''}\t{row['benchmark']}\t{row['ts_ms']}"
+        for row in episodes.values()
+    ]
+
+
 def set_aside(out: pathlib.Path, archive: pathlib.Path | None) -> dict[str, int]:
     """Apply the void, CPF and naming rules to the written ``out`` (module docstring); with
     ``archive``, first copy the CPF arms there. Returns what each rule touched."""
@@ -1184,6 +1273,9 @@ def main(argv: list[str] | None = None) -> int:
         help="write the sha256 of every source a grade names that no archive holds",
     )
     parser.add_argument("--cpf-archive", type=pathlib.Path, help="the database to hold the CPF arms")
+    parser.add_argument(
+        "--dropped-finals", type=pathlib.Path, help="list every episode final dropped for want of a source"
+    )
     args = parser.parse_args(argv)
     for path in (args.out, args.cpf_archive):
         if path is not None and path.exists():
@@ -1193,12 +1285,25 @@ def main(argv: list[str] | None = None) -> int:
         args.missing_texts.write_text("".join(f"{digest}\n" for digest in missing_texts(data)), encoding="utf-8")
     write(data, args.out)
     aside = set_aside(args.out, args.cpf_archive)
+    with contextlib.closing(connect(args.out)) as conn:
+        arm_map = merge_arms(conn)
+        conn.commit()
+        conn.execute("VACUUM")
+    sourceless = {"core": drop_sourceless(args.out)}
+    if args.cpf_archive is not None:
+        sourceless["cpf archive"] = drop_sourceless(args.cpf_archive)
+    if args.dropped_finals is not None:
+        lines = [f"{where}\t{line}\n" for where, listed in sourceless.items() for line in listed]
+        args.dropped_finals.write_text("database\tarm\trun\tjob\tkernel\tts_ms\n" + "".join(lines), encoding="utf-8")
     with contextlib.closing(sqlite3.connect(args.out)) as conn:
         written = {table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] for table in results_db.TABLES}
     verdict = checks(data)
     report = {
         "written": written,
         "set aside": aside,
+        "arm map": arm_map,
+        "arms folded": {"from": len(arm_map), "into": len(set(arm_map.values()))},
+        "dropped finals without a source": {where: len(listed) for where, listed in sourceless.items()},
         "recovered": dict(data.recovered),
         "dropped": dict(data.dropped),
         "checks": verdict,

@@ -249,7 +249,8 @@ def env_files(arm: str, env_dirs: Iterable[pathlib.Path]) -> Iterator[pathlib.Pa
     """The env files that describe ``arm``, best first: those named for it (:func:`env_names`), then a
     launch's own render ``.env.<name>-<list>`` when it records one of those names as ``CAMPAIGN_ARM``
     (``.env.<arm>-skills`` shares the prefix but is another arm), then one named for an older spelling
-    of it (the registry's arm aliases, :func:`experiment_tags.aliased_arm`: ``.env.cpf-llr-focus40-*``)."""
+    of it, by name or by the ``CAMPAIGN_ARM`` it records (:func:`experiment_tags.aliased_arm`:
+    ``.env.cpf-llr-focus40-*`` for ``llr40-*``), the latest wave's (``-clean``) first."""
     dirs = list(env_dirs)
     names = env_names(arm)
     for directory in dirs:
@@ -262,10 +263,16 @@ def env_files(arm: str, env_dirs: Iterable[pathlib.Path]) -> Iterator[pathlib.Pa
             for path in sorted(directory.glob(f".env.{name}-*")):
                 if path.is_file() and recorded_arm(path) in names:
                     yield path
+    known = {experiment_tags.aliased_arm(name) for name in names}
     for directory in dirs:
-        for path in sorted(directory.glob(".env.*")):
+        for path in sorted(directory.glob(".env.*"), reverse=True):
             spelled = path.name.removeprefix(".env.")
-            if spelled not in names and experiment_tags.aliased_arm(spelled) in names and path.is_file():
+            if spelled in names or not path.is_file():
+                continue
+            if (
+                experiment_tags.aliased_arm(spelled) in known
+                or experiment_tags.aliased_arm(recorded_arm(path)) in known
+            ):
                 yield path
 
 

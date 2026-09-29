@@ -634,8 +634,12 @@ RENAMED_ARM_PREFIXES: tuple[tuple[str, str], ...] = (("llrblind-", "llrblind-cmp
 
 
 def renamed_arm(arm: str) -> str:
-    """``arm`` under the name its campaign runs under now, then under the registry's arm alias
-    (``experiment_tags.aliased_arm``); itself when it was never renamed or aliased."""
+    """``arm`` under the arm it is (``experiment_tags.aliased_arm``: the registry's aliases and every
+    recorded arm's configuration name); a spelling no record names first takes the name its campaign
+    runs under now; itself when it was never renamed or aliased."""
+    known = experiment_tags.aliased_arm(arm)
+    if known != arm:
+        return known
     for old, new in RENAMED_ARM_PREFIXES:
         if arm.startswith(old) and not arm.startswith(new):
             arm = new + arm.removeprefix(old)

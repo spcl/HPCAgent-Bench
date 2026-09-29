@@ -51,11 +51,19 @@ def campaigns() -> dict[str, CampaignEntry]:
 
 
 def prefix_of(arm: str) -> str:
-    """The longest campaign prefix ``arm`` starts with, or "" when no campaign owns it.
+    """The campaign that owns ``arm`` (its key), or "" when none does: the longest prefix ``arm``
+    starts with, and of those a campaign whose suffix token ``arm`` carries
+    (``llr40-qwen38-c-blind`` is the blind campaign's, not ``llr40``'s).
 
     Longest wins so a specific key beats its own stem: ``scicomp-dc-gpu-qwen38-hip-plain`` must
     resolve to the GPU campaign, not to ``scicomp-dc`` with ``gpu`` read as the model."""
-    return max((p for p in campaigns() if arm.startswith(p + "-")), key=len, default="")
+    tokens = arm.split("-")
+    owners = [
+        (len(entry.prefix), bool(entry.suffix), key)
+        for key, entry in campaigns().items()
+        if arm.startswith(entry.prefix + "-") and (not entry.suffix or entry.suffix in tokens[1:])
+    ]
+    return max(owners, default=(0, False, ""))[2]
 
 
 def campaign_of(arm: str) -> CampaignEntry | None:

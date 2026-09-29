@@ -34,7 +34,8 @@ CREATE TABLE runs (
     arm                 TEXT NOT NULL REFERENCES arms (arm),
     job                 INTEGER,               -- Slurm job id; NULL = recovered from a merged database
     label               TEXT NOT NULL,         -- <arm>.n<node>.p<problem>.w<worker>
-    rep                 INTEGER NOT NULL DEFAULT 1 CHECK (rep >= 1),
+    rep                 INTEGER NOT NULL DEFAULT 1 CHECK (rep >= 1), -- the n-th episode under this label
+                                               -- with no recorded job (arms folded into one); else 1
     benchmark           TEXT,                  -- the kernel assigned (a grade may name another)
     result              TEXT,                  -- how the episode ended: success, timeout, budget, ...
     returncode          INTEGER,
@@ -213,7 +214,7 @@ CREATE TABLE reference_scaling_points (
 CREATE INDEX grades_run ON grades (run_id, benchmark);
 CREATE INDEX grades_of ON grades (of_grade_id);
 CREATE INDEX grade_sources_hash ON grade_sources (hash);
-CREATE UNIQUE INDEX runs_key ON runs (coalesce(job, -1), label);
+CREATE UNIQUE INDEX runs_key ON runs (coalesce(job, -1), label, rep);
 
 CREATE VIEW grades_flat AS
 SELECT a.experiment, a.model, a.language, a.device, a.packet, a.harness, r.arm, r.job, r.label, r.rep, g.*

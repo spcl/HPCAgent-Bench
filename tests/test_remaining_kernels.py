@@ -367,7 +367,7 @@ def test_a_pre_cmp_llrblind_run_folds_into_its_cmp_successor(
     job_dir_with_rows(tmp_path / "runs", "100", "llrblind-qwen38-c", ["a"])
     job_dir_with_rows(tmp_path / "runs", "200", "llrblind-cmp-qwen38-c", ["b"])
     owed = owed_lists(module, monkeypatch, tmp_path)
-    assert owed == {"llrblind-cmp-qwen38-c": ["c"]}
+    assert owed == {"llr40-qwen38-c-blind": ["c"]}
 
 
 def test_a_pre_cmp_llrblind_clean_rerun_folds_through_both(
@@ -378,7 +378,7 @@ def test_a_pre_cmp_llrblind_clean_rerun_folds_through_both(
     job_dir_with_rows(tmp_path / "runs", "100", "llrblind-cmp-qwen38-c", ["a"])
     job_dir_with_rows(tmp_path / "runs", "200", "llrblind-qwen38-c-clean", ["b"])
     owed = owed_lists(module, monkeypatch, tmp_path)
-    assert owed == {"llrblind-cmp-qwen38-c": ["c"]}
+    assert owed == {"llr40-qwen38-c-blind": ["c"]}
 
 
 def test_an_unrelated_arm_starting_with_llrblind_cmp_is_never_double_folded(
@@ -386,10 +386,11 @@ def test_an_unrelated_arm_starting_with_llrblind_cmp_is_never_double_folded(
 ) -> None:
     """base_arm must not rewrite an arm that already carries the -cmp identity into
     llrblind-cmp-cmp-... -- the prefix check has to skip an arm that already starts with the
-    replacement, not just the bare prefix."""
-    job_dir_with_rows(tmp_path / "runs", "100", "llrblind-cmp-qwen38-c", ["a", "b"])
+    replacement, not just the bare prefix. An arm no record names (glm53 never ran blind) takes that
+    legacy path."""
+    job_dir_with_rows(tmp_path / "runs", "100", "llrblind-cmp-glm53-c", ["a", "b"])
     owed = owed_lists(module, monkeypatch, tmp_path)
-    assert owed == {"llrblind-cmp-qwen38-c": ["c"]}
+    assert owed == {"llrblind-cmp-glm53-c": ["c"]}
 
 
 def test_the_scicomp_dc_and_perf_playbook_plain_arms_are_one_arm(
@@ -401,21 +402,22 @@ def test_the_scicomp_dc_and_perf_playbook_plain_arms_are_one_arm(
     job_dir_with_rows(tmp_path / "runs", "100", "scicomp-perf-playbook-qwen38-plain", ["a"])
     job_dir_with_rows(tmp_path / "runs", "200", "scicomp-dc-qwen38-plain-clean", ["b"])
     owed = owed_lists(module, monkeypatch, tmp_path)
-    assert owed == {"scicomp-perf-playbook-qwen38-plain": ["c"]}
+    assert owed == {"scicomp40-qwen38-c": ["c"]}
 
 
 @pytest.mark.parametrize(
     ("arm", "identity"),
     [
-        ("scicomp-dc-oss120b-plain", "scicomp-perf-playbook-oss120b-plain"),
-        ("scicomp-dc-oss120b-plain-clean", "scicomp-perf-playbook-oss120b-plain"),
-        ("scicomp-perf-playbook-oss120b-plain-clean", "scicomp-perf-playbook-oss120b-plain"),
-        # only the plain CPU C arm has two spellings: the dc GPU, Fortran and C++ arms stay
-        ("scicomp-dc-gpu-oss120b-hip-plain", "scicomp-dc-gpu-oss120b-hip-plain"),
-        ("scicomp-dc-fortran-qwen38-plain", "scicomp-dc-fortran-qwen38-plain"),
-        ("scicomp-dc-cpp-oss120b-plain", "scicomp-dc-cpp-oss120b-plain"),
+        ("scicomp-dc-oss120b-plain", "scicomp40-oss120b-c"),
+        ("scicomp-dc-oss120b-plain-clean", "scicomp40-oss120b-c"),
+        ("scicomp-perf-playbook-oss120b-plain-clean", "scicomp40-oss120b-c"),
+        # every recorded arm under its configuration name (envs/arm_renames.yaml)
+        ("scicomp-dc-gpu-oss120b-hip-plain", "scicomp40-oss120b-hip"),
+        ("scicomp-dc-fortran-qwen38-plain", "scicomp40-qwen38-fortran"),
+        ("scicomp-dc-cpp-oss120b-plain", "scicomp40-oss120b-cpp"),
+        ("git-scicomp-qwen38-kernel", "gitscicomp10-qwen38-c"),
+        # a spelling no record names stays itself
         ("scicomp-dc-qwen38-cpfsrc", "scicomp-dc-qwen38-cpfsrc"),
-        ("git-scicomp-qwen38-kernel", "git-scicomp-qwen38-kernel"),
     ],
 )
 def test_base_arm_folds_only_the_registered_alias(module: types.ModuleType, arm: str, identity: str) -> None:

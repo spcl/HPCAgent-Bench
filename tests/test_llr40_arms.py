@@ -219,3 +219,9 @@ def test_rank_condition_sorts_an_axis_outside_the_declared_order_alphabetically(
     order = ("", "cpf", "cpfsrc")
     ranked = sorted(("repo", "kernel"), key=lambda condition: llr40_arms.rank_condition(condition, order))
     assert ranked == ["kernel", "repo"]
+
+
+def test_the_control_is_read_under_its_configuration_name_and_its_recorded_one() -> None:
+    assert llr40_arms.parse_arm("llr40-qwen38-c") == ("qwen38", "")
+    assert llr40_arms.parse_arm("llr-focus40-qwen38-c") == ("qwen38", "")
+    assert llr40_arms.parse_arm("cpf-llr-focus40-qwen38-c-cpfsrc") == ("qwen38", "cpfsrc")

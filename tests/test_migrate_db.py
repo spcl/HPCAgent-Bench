@@ -17,6 +17,7 @@ import pathlib
 import sqlite3
 from typing import Any
 
+import arm_renames
 import migrate_db
 import pytest
 
@@ -487,3 +488,113 @@ def test_the_void_cpf_and_naming_rules_shape_the_written_database(tmp_path: path
         "renamed arms": 1,
         "renamed experiment arms": 2,
     }
+
+
+def test_arms_of_one_configuration_fold_into_one_and_a_jobless_label_numbers_its_waves(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """X and X-clean, and an earlier wave's X, are one arm: every run moves under it, and the two
+    runs a merged database left without a job under one label become rep 1 and 2, earliest first."""
+    db = tmp_path / "v1.db"
+    results_seed.submission(db, "llr40v11-qwen38-c.n0.p0.w0", "gemm", 1)
+    results_seed.submission(db, "llr-focus40-qwen38-c.n0.p0.w0", "gemm", 5)
+    results_seed.submission(db, "llr-focus40-qwen38-c-clean.n0.p1.w1", "gemm", 9, job=7)
+    renames = {
+        arm: "llr40-qwen38-c" for arm in ("llr40v11-qwen38-c", "llr-focus40-qwen38-c", "llr-focus40-qwen38-c-clean")
+    }
+    monkeypatch.setattr(migrate_db.experiment_tags, "arm_renames", lambda: renames)
+    with contextlib.closing(migrate_db.connect(db)) as conn:
+        applied = migrate_db.merge_arms(conn)
+        conn.commit()
+        arms = conn.execute("SELECT arm, experiment FROM arms").fetchall()
+        rows = conn.execute("SELECT label, job, rep FROM runs ORDER BY rep, label").fetchall()
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+    assert applied == renames
+    assert arms == [("llr40-qwen38-c", "llr40")]
+    assert rows == [
+        ("llr40-qwen38-c.n0.p0.w0", None, 1),
+        ("llr40-qwen38-c.n0.p1.w1", 7, 1),
+        ("llr40-qwen38-c.n0.p0.w0", None, 2),
+    ]
+
+
+def test_a_fold_of_two_configurations_is_refused(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    db = tmp_path / "v1.db"
+    results_seed.submission(
+        db,
+        "gpu-llr-focus40-qwen38-hip.n0.p0.w0",
+        "gemm",
+        1,
+        arm=results_db.Arm("gpu-llr-focus40-qwen38-hip", "hip", "gpu"),
+    )
+    results_seed.submission(
+        db, "gpuv2-llr40-qwen38-hip.n0.p0.w0", "gemm", 2, arm=results_db.Arm("gpuv2-llr40-qwen38-hip", "hip", "cpu")
+    )
+    renames = {"gpu-llr-focus40-qwen38-hip": "llr40-qwen38-hip", "gpuv2-llr40-qwen38-hip": "llr40-qwen38-hip"}
+    monkeypatch.setattr(migrate_db.experiment_tags, "arm_renames", lambda: renames)
+    with contextlib.closing(migrate_db.connect(db)) as conn, pytest.raises(ValueError, match="split it"):
+        migrate_db.merge_arms(conn)
+
+
+def test_arm_renames_splits_a_group_whose_recorded_configurations_differ() -> None:
+    """The table the migration applies folds a group only when every member recorded one identity;
+    the other part keeps the campaign it ran under."""
+
+    def row(arm: str, device: str, packet: str = "") -> dict[str, str]:
+        return {
+            "arm": arm,
+            "model": "Qwen/Qwen3.8-27B-FP8",
+            "language": "hip",
+            "device": device,
+            "packet": packet,
+            "harness": "claude",
+        }
+
+    arms = {
+        "gpu-llr-focus40-qwen38-hip": row("gpu-llr-focus40-qwen38-hip", "gpu"),
+        "gpu-llr-focus40-qwen38-hip-clean": row("gpu-llr-focus40-qwen38-hip-clean", "gpu"),
+        "gpuv2-llr40-qwen38-hip": row("gpuv2-llr40-qwen38-hip", "cpu"),
+    }
+    renames, splits = arm_renames.fold(arms)  # type: ignore[arg-type]
+    assert renames == {
+        "gpu-llr-focus40-qwen38-hip": "llr40-qwen38-hip",
+        "gpu-llr-focus40-qwen38-hip-clean": "llr40-qwen38-hip",
+        "gpuv2-llr40-qwen38-hip": "llr40-qwen38-hip-gpuv2",
+    }
+    assert len(splits) == 1
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        ("llr-focus40-qwen38-c-skills-clean", "llr40-qwen38-c-skills"),
+        ("llrblind-cmp-oss120b-hip-skills-clean", "llr40-oss120b-hip-skills-blind"),
+        ("scicomp-perf-playbook-gpu-qwen38-hip-perf-playbook-amd-clean", "scicomp40-qwen38-hip-perf-playbook-amd"),
+        ("scicomp-dc-fortran-oss120b-plain", "scicomp40-oss120b-fortran"),
+        ("harness20-oss120b-claude-autokernel-clean", "harness20-oss120b-c-autokernel"),
+        ("harness20-qwen38-miniswe-clean", "harness20-qwen38-c-miniswe"),
+        ("gpuv4-llr40-qwen38-pytriton", "llr40-qwen38-triton"),
+        ("mlscale-part2-qwen38-hip-gemmhint", "mlscale20-qwen38-hip-gemmhint"),
+        ("llr-focus40-mi200-smoke-qwen38-claude", "llr40-qwen38-c-smoke"),
+        ("git-scicomp-kimi27sglang-repo-clean", "gitscicomp10-kimi27sglang-c-repo"),
+    ],
+)
+def test_an_old_arm_name_reads_as_its_configuration_name(old: str, new: str) -> None:
+    assert arm_renames.parse(old).name == new
+
+
+def test_an_episode_whose_final_submission_has_no_source_has_no_answer(tmp_path: pathlib.Path) -> None:
+    """Neither credited nor owed: its final submission and the ones it superseded leave the
+    leaderboard, and the episode with a stored source stays."""
+    db = tmp_path / "v1.db"
+    early = results_seed.submission(db, f"{ARM}.n0.p0.w0", "gemm", TS, source="void gemm(void) { /* early */ }")
+    final = results_seed.submission(db, f"{ARM}.n0.p0.w0", "gemm", TS + 1)
+    kept = results_seed.submission(db, f"{ARM}.n0.p1.w1", "gemm", TS + 2, source="void gemm(void) { /* kept */ }")
+    with contextlib.closing(sqlite3.connect(db)) as conn:
+        conn.execute("PRAGMA journal_mode = DELETE")
+    dropped = migrate_db.drop_sourceless(db)
+    with contextlib.closing(sqlite3.connect(db)) as conn:
+        reasons = dict(conn.execute("SELECT grade_id, reason FROM disqualifications").fetchall())
+    assert reasons == {final: migrate_db.NO_SOURCE_REASON, early: migrate_db.SUPERSEDED_REASON}
+    assert kept not in reasons
+    assert [line.split("\t")[1] for line in dropped] == [f"{ARM}.n0.p0.w0"]

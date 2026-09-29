@@ -426,20 +426,25 @@ def test_a_column_no_row_in_the_table_ever_recorded_still_fills_from_the_arm_nam
 @pytest.mark.parametrize(
     ("arm", "folded"),
     [
-        ("llrblind-qwen38-c", "llrblind-cmp-qwen38-c"),
-        ("llrblind-oss120b-fortran-skills", "llrblind-cmp-oss120b-fortran-skills"),
-        ("llrblind-cmp-qwen38-c", "llrblind-cmp-qwen38-c"),
-        ("llr-focus40-qwen38-c", "llr-focus40-qwen38-c"),
+        # envs/arm_renames.yaml: every recorded arm under its configuration name
+        ("llrblind-qwen38-c", "llr40-qwen38-c-blind"),
+        ("llrblind-oss120b-fortran-skills", "llr40-oss120b-fortran-skills-blind"),
+        ("llrblind-cmp-qwen38-c", "llr40-qwen38-c-blind"),
+        ("llrblind-kimi27sglang-c", "llr40-kimi27sglang-c-blind"),
+        ("llr-focus40-qwen38-c", "llr40-qwen38-c"),
+        ("llr40v11-qwen38-c", "llr40-qwen38-c"),
         # registry arm_aliases: a legacy cpf- spelling that used no CPF is the arm without it
-        ("cpf-llr-focus40-qwen38-c", "llr-focus40-qwen38-c"),
-        ("cpf-llr-focus40-qwen38-c-skills-clean", "llr-focus40-qwen38-c-skills-clean"),
+        ("cpf-llr-focus40-qwen38-c", "llr40-qwen38-c"),
+        ("cpf-llr-focus40-qwen38-c-skills-clean", "llr40-qwen38-c-skills"),
         ("cpf-llr-focus40-qwen38-c-cpf", "cpf-llr-focus40-qwen38-c-cpf"),
         ("cpf-llr-focus40-qwen38-c-cpf-clean", "cpf-llr-focus40-qwen38-c-cpf-clean"),
         ("cpf-llr-focus40-qwen38-c-cpfsrc-v2-clean", "cpf-llr-focus40-qwen38-c-cpfsrc-v2-clean"),
-        # registry arm_aliases: the dc plain CPU arm is the perf-playbook plain arm
-        ("scicomp-dc-qwen38-plain", "scicomp-perf-playbook-qwen38-plain"),
-        ("scicomp-dc-qwen38-plain-clean", "scicomp-perf-playbook-qwen38-plain-clean"),
-        ("scicomp-dc-gpu-qwen38-hip-plain", "scicomp-dc-gpu-qwen38-hip-plain"),
+        # the dc plain CPU arm is the perf-playbook plain arm
+        ("scicomp-dc-qwen38-plain", "scicomp40-qwen38-c"),
+        ("scicomp-dc-qwen38-plain-clean", "scicomp40-qwen38-c"),
+        ("scicomp-dc-gpu-qwen38-hip-plain", "scicomp40-qwen38-hip"),
+        # a configuration name is already the arm
+        ("llr40-qwen38-c", "llr40-qwen38-c"),
     ],
 )
 def test_a_renamed_blind_arm_reads_under_its_current_name(arm: str, folded: str) -> None:
@@ -455,12 +460,14 @@ def test_the_dc_and_perf_playbook_spellings_read_as_one_arm() -> None:
         {"arm": ["scicomp-dc-oss120b-plain-clean", "scicomp-perf-playbook-oss120b-plain"], "benchmark": ["a", "a"]}
     )
     folded = experiments.fold_clean_arms(experiments.fold_renamed_arms(frame))
-    assert set(folded.arm) == {"scicomp-perf-playbook-oss120b-plain"}
+    assert set(folded.arm) == {"scicomp40-oss120b-c"}
 
 
 def test_both_waves_of_a_renamed_arm_become_one_arm() -> None:
-    frame = pd.DataFrame({"arm": ["llrblind-kimi27sglang-c", "llrblind-cmp-kimi27sglang-c"], "benchmark": ["a", "b"]})
-    assert set(experiments.fold_renamed_arms(frame).arm) == {"llrblind-cmp-kimi27sglang-c"}
+    frame = pd.DataFrame(
+        {"arm": ["llrblind-kimi27sglang-c", "llrblind-cmp-kimi27sglang-c-clean"], "benchmark": ["a", "b"]}
+    )
+    assert set(experiments.fold_renamed_arms(frame).arm) == {"llr40-kimi27sglang-c-blind"}
 
 
 def graded_episode(benchmark: str, graded: list[tuple[str, str]]) -> pd.DataFrame:
