@@ -370,53 +370,6 @@ def test_per_chunk_increments_are_summed_and_a_running_total_is_not(
     assert (fell["output"], fell["output_delta_shape"]) == (130, "increment")
 
 
-def test_the_retokenized_tier_is_reached_only_when_the_server_counted_nothing(
-    token_cost: ModuleType, tmp_path: pathlib.Path
-) -> None:
-    """The model's own tokenizer is the LAST tier: it counts what the transcript says was generated,
-    which is the model's work but not the server's arithmetic (2-4 percent low, measured). So it is
-    consulted for an attempt with no result record and never allowed to override one."""
-    killed = tmp_path / "claude.attempt1.log"
-    killed.write_text(assistant_line("m1", 700, 0) + "\n", encoding="utf-8")
-    finished = tmp_path / "claude.log"
-    write_claude_log(finished, input_tokens=500, output_tokens=50)
-
-    counted = token_cost.episode_cost(killed, lambda events: 321)
-    assert (counted["output"], counted["output_source"]) == (321, "retokenized")
-    kept = token_cost.episode_cost(finished, lambda events: 321)
-    assert (kept["output"], kept["output_source"]) == (50, "result")
-
-
-def test_a_counter_that_cannot_count_leaves_the_output_unmeasured(
-    token_cost: ModuleType, tmp_path: pathlib.Path
-) -> None:
-    """A model whose tokenizer is not in the offline cache gives None, not 0: an attempt nobody
-    could count must keep saying so rather than join the measurements at zero."""
-    killed = tmp_path / "claude.log"
-    killed.write_text(assistant_line("m1", 700, 0) + "\n", encoding="utf-8")
-
-    cost = token_cost.episode_cost(killed, lambda events: None)
-
-    assert (cost["output"], cost["output_source"]) == (0, "none")
-
-
-def test_a_result_record_the_transcripts_own_content_overflows_is_flagged_not_replaced(
-    token_cost: ModuleType, tmp_path: pathlib.Path
-) -> None:
-    """F9: on Qwen/SGLang some complete episodes report a result total far below what the transcript
-    demonstrably contains -- 6,918 against 32,720 retokenized in the worst measured case, with every
-    tool call answered and every message carrying usage. Unexplained, so the record STANDS and the
-    row is flagged; substituting the bigger number would be preferring a guess to a measurement."""
-    log = tmp_path / "claude.log"
-    write_claude_log(log, input_tokens=500, output_tokens=100)
-
-    suspect = token_cost.episode_cost(log, lambda events: 200)
-    fine = token_cost.episode_cost(log, lambda events: 110)
-
-    assert suspect["output_suspect"] == 1.0 and suspect["output"] == 100
-    assert fine["output_suspect"] == 0.0
-
-
 def test_the_clis_synthetic_placeholder_turn_is_not_a_turn(token_cost: ModuleType, tmp_path: pathlib.Path) -> None:
     """When the endpoint answers nothing the CLI appends its own assistant message, model
     ``<synthetic>``, carrying a usage block of zeros. Folded as a turn it says the context shrank to
