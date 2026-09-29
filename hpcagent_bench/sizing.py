@@ -62,7 +62,7 @@ from hpcagent_bench.spec import (
     module_level_constants,
     shape_dims,
 )
-from hpcagent_bench.support.helpers.sparse.abi import ResolvedLayout, fill_ratio_key, scalar_name
+from hpcagent_bench.support.helpers.sparse.abi import ResolvedLayout, scalar_name
 
 __all__ = [
     "AUTHORED",
@@ -492,20 +492,19 @@ def variant_bytes(variant: SparseLayoutVariant, namespace: Mapping[str, object])
 
 
 def layout_bound_namespace(
-    spec: BenchSpec, namespace: Mapping[str, object], fmt: str, block_size: int
+    spec: BenchSpec, namespace: Mapping[str, object], block_size: int
 ) -> dict[str, object] | None:
-    """``namespace`` plus an UPPER BOUND on every format scalar of layout ``fmt`` (``A_nnzb``,
-    ``A_ndiag``, ``A_width``, ...), so a padded format's buffers size to their worst case: the judge
-    refuses a padded layout storing more than ``sparse.<fmt>_max_fill_ratio`` values per nonzero,
-    and the matrix stores at most its count symbol plus one diagonal. ``None`` when an extent does
-    not resolve."""
+    """``namespace`` plus an UPPER BOUND on every padded-format scalar (``A_nnzb``,
+    ``A_ndiag``, ``A_width``, ...) sized by the entries the matrix stores (its count symbol plus one
+    diagonal), not by padding: a padded layout is never refused, and one whose padding outgrows the
+    memory cap is the requester's choice. ``None`` when an extent does not resolve."""
     out = dict(namespace)
     for logical, layout in spec.sparse_layouts.items():
         try:
             rows, cols, nnz = (int(safe_eval(str(e), namespace)) for e in (*layout.logical_shape, layout.nnz))
         except EVAL_ERRORS:
             return None
-        stored = config.get_float(fill_ratio_key(fmt), 0.0) * (nnz + max(rows, cols))
+        stored = nnz + max(rows, cols)
         edge = max(1, block_size)
         out.update(
             {
@@ -541,7 +540,7 @@ def sparse_bytes(
     if fmt is None or fmt not in spec.configurations:
         return None
     edge = max((lay.block_size for unused, lay in layout.arrays), default=1) if layout is not None else 1
-    bounded = layout_bound_namespace(spec, namespace, fmt, edge)
+    bounded = layout_bound_namespace(spec, namespace, edge)
     return configuration_bytes(spec, spec.configurations[fmt].arrays, bounded, dense, wanted) if bounded else None
 
 

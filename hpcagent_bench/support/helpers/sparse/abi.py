@@ -37,7 +37,6 @@ __all__ = [
     "MASK_ROLE",
     "ResolvedLayout",
     "array_layout",
-    "fill_ratio_key",
     "format_buffers",
     "layout_buffers",
     "layout_scalars",
@@ -55,8 +54,8 @@ DEFAULT_FORMAT = "csr"
 #: The block format: its block edge is a runtime scalar the request names.
 BLOCK_FORMAT = "bsr"
 
-#: Formats that store padding: their size is not bounded by nnz, so a request is guarded
-#: (``sparse.<format>_max_fill_ratio``): a block, a diagonal or a row slot is stored whole.
+#: Formats that store padding (a block, a diagonal or a row slot is stored whole): their size is not
+#: bounded by nnz, and picking one that fits the matrix is the submission's choice.
 PADDED_FORMATS = frozenset({"bsr", "dia", "ell"})
 
 #: Element type of every index buffer, in every format and language.
@@ -184,11 +183,6 @@ class LayoutBuffer:
     shape: tuple[str, ...]
     index: bool
     mask: bool = False
-
-
-def fill_ratio_key(fmt: str) -> str:
-    """The config key bounding a padded format's stored values per nonzero (``sparse.dia_max_fill_ratio``)."""
-    return f"sparse.{fmt}_max_fill_ratio"
 
 
 def scalar_name(logical: str, suffix: str) -> str:

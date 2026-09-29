@@ -75,8 +75,8 @@ init:
   func_name: initialize
   # A timed repeat keeps the operator's pattern and rescales its values with this function.
   revalue: revalue
-  # One scenario (the operator is the physics); `layouts`: the formats it fits within
-  # sparse.<format>_max_fill_ratio (docs/sparse_abi.md).
+  # One scenario (the operator is the physics); `layouts`: the formats it is offered in
+  # (docs/sparse_abi.md).
   scenarios:
     poisson:
       description: the 7-point Dirichlet Laplacian on the grid

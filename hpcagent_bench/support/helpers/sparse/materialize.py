@@ -9,9 +9,8 @@ same entries. The initializer's matrix becomes that canonical CSR (:func:`expand
 NumPy reference and every baseline read it in the default layout, and a submission that requests
 another layout gets its buffers from :func:`apply_layout`, outside the timed region.
 
-A padded format is guarded before anything is allocated: ``dia`` stores ``ndiag x ncols`` values
-and ``ell`` ``nrows x width``; a matrix whose padding would exceed ``sparse.dia_max_fill_ratio`` /
-``sparse.ell_max_fill_ratio`` times its nonzeros is refused (:class:`LayoutRefused`)."""
+A padded format (``dia`` stores ``ndiag x ncols`` values, ``ell`` ``nrows x width``) is never
+refused for its padding: choosing a layout that fits the matrix is the submission's job."""
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -21,7 +20,6 @@ import numpy as np
 import numpy.typing as npt
 import scipy.sparse as sp
 
-from hpcagent_bench import config
 from hpcagent_bench.fuzz import safe_eval
 from hpcagent_bench.support.helpers.sparse.abi import (
     BLOCK_FORMAT,
@@ -36,7 +34,6 @@ from hpcagent_bench.support.helpers.sparse.abi import (
     SPARSE_LAYOUT_KEY,
     ResolvedLayout,
     LayoutRefused,
-    fill_ratio_key,
     scalar_name,
 )
 
@@ -48,7 +45,6 @@ __all__ = [
     "SPARSE_LAYOUT_KEY",
     "Materialized",
     "Plan",
-    "PaddingLimits",
     "apply_layout",
     "block_count",
     "buffer_map",
@@ -63,7 +59,6 @@ __all__ = [
     "fill",
     "indices",
     "layout_refusal",
-    "padding_refusal",
     "pattern_of",
     "plan",
     "realize",
@@ -88,23 +83,6 @@ class Materialized:
 
     buffers: dict[str, Buffer]
     scalars: dict[str, int]
-
-
-@dataclass(frozen=True, slots=True)
-class PaddingLimits:
-    """How much a padded format may store, as stored values per nonzero (``sparse.<fmt>_max_fill_ratio``)."""
-
-    bsr: float
-    dia: float
-    ell: float
-
-    @classmethod
-    def from_config(cls) -> "PaddingLimits":
-        return cls(
-            bsr=config.get_float(fill_ratio_key("bsr"), 0.0),
-            dia=config.get_float(fill_ratio_key("dia"), 0.0),
-            ell=config.get_float(fill_ratio_key("ell"), 0.0),
-        )
 
 
 def indices(values: npt.ArrayLike) -> npt.NDArray[np.int64]:
@@ -167,23 +145,6 @@ def stored_values(m: sp.csr_matrix, layout: ArrayLayout) -> tuple[int, str]:
         return ndiag * cols, f"{ndiag} diagonals x {cols} columns"
     width = ell_width(m)
     return rows * width, f"{rows} rows x {width} slots (the longest row)"
-
-
-def padding_refusal(m: sp.csr_matrix, logical: str, layout: ArrayLayout, limits: PaddingLimits) -> str | None:
-    """Why ``m`` cannot be stored in ``layout`` within ``limits``, or ``None`` (always ``None`` for a
-    format that stores no padding)."""
-    limit = {"bsr": limits.bsr, "dia": limits.dia, "ell": limits.ell}.get(layout.format)
-    if limit is None:
-        return None
-    slots, what = stored_values(m, layout)
-    nnz = max(1, m.nnz)
-    if slots <= limit * nnz:
-        return None
-    return (
-        f"layout {layout.label} for {logical!r}: {what} = {slots} stored values for {m.nnz} nonzeros "
-        f"({slots / nnz:.1f}x) exceeds {fill_ratio_key(layout.format)} = {limit:g}x on a graded "
-        f"input; this matrix is not structured for it -- request csr, csc or coo"
-    )
 
 
 def divisibility_refusal(shape: tuple[int, int], logical: str, block_size: int) -> str | None:
@@ -306,13 +267,11 @@ def realize(scheme: Plan, m: sp.csr_matrix, logical: str, layout: ArrayLayout, p
     return pattern_of(scheme, logical, layout.format) if pattern else fill(scheme, m.data)
 
 
-def convert(
-    m: sp.csr_matrix, logical: str, layout: ArrayLayout, limits: PaddingLimits | None = None, pattern: bool = False
-) -> Materialized:
-    """``m`` (canonical CSR) in ``layout``; refuses a padded format past ``limits`` and a block edge
-    that does not tile the matrix before allocating anything (:class:`LayoutRefused`). A
-    ``pattern`` array gets index buffers (and a mask) only."""
-    refused = layout_refusal(m, logical, layout, limits or PaddingLimits.from_config())
+def convert(m: sp.csr_matrix, logical: str, layout: ArrayLayout, pattern: bool = False) -> Materialized:
+    """``m`` (canonical CSR) in ``layout``; refuses a block edge that does not tile the matrix before
+    allocating anything (:class:`LayoutRefused`). A ``pattern`` array gets index buffers (and a mask)
+    only."""
+    refused = layout_refusal(m, logical, layout)
     if refused is not None:
         raise LayoutRefused(refused)
     if layout.format == DEFAULT_FORMAT and not pattern:
@@ -320,14 +279,11 @@ def convert(
     return realize(plan(m, logical, layout), m, logical, layout, pattern)
 
 
-def layout_refusal(m: sp.csr_matrix, logical: str, layout: ArrayLayout, limits: PaddingLimits) -> str | None:
-    """Why ``m`` cannot be converted into ``layout``: a block edge that does not tile it, or padding
-    past ``limits``; ``None`` when it can."""
+def layout_refusal(m: sp.csr_matrix, logical: str, layout: ArrayLayout) -> str | None:
+    """Why ``m`` cannot be converted into ``layout`` (a block edge that does not tile it), or ``None``."""
     if layout.format == BLOCK_FORMAT:
-        untiled = divisibility_refusal(m.shape, logical, layout.block_size)
-        if untiled is not None:
-            return untiled
-    return padding_refusal(m, logical, layout, limits)
+        return divisibility_refusal(m.shape, logical, layout.block_size)
+    return None
 
 
 def buffer_map(data: Mapping[str, object], key: str) -> dict[str, object]:
@@ -381,12 +337,11 @@ def expand_default(layouts: Mapping[str, "SparseLayout"], data: dict[str, object
 def check_layout(layouts: Mapping[str, "SparseLayout"], choice: ResolvedLayout, data: Mapping[str, object]) -> None:
     """Refuse ``choice`` on ``data`` (:class:`LayoutRefused`) exactly where :func:`apply_layout`
     would, without allocating the converted buffers: the pre-build check of the held-out cases."""
-    limits = PaddingLimits.from_config()
     for logical, layout in choice.arrays:
         matrix = data.get(logical)
         if not isinstance(matrix, sp.csr_matrix) or layout == ArrayLayout(layouts[logical].default):
             continue
-        refused = layout_refusal(matrix, logical, layout, limits)
+        refused = layout_refusal(matrix, logical, layout)
         if refused is not None:
             raise LayoutRefused(refused)
 
@@ -401,15 +356,13 @@ PLANS: list[tuple[npt.NDArray[np.int64], npt.NDArray[np.int64], ArrayLayout, Pla
 PLAN_CACHE_SIZE = 2
 
 
-def converted(
-    matrix: sp.csr_matrix, logical: str, layout: ArrayLayout, limits: PaddingLimits | None, pattern: bool = False
-) -> Materialized:
+def converted(matrix: sp.csr_matrix, logical: str, layout: ArrayLayout, pattern: bool = False) -> Materialized:
     """:func:`convert`, with the pattern's plan memoized on its index arrays (:data:`PLANS`). The
-    padding guard depends on the pattern alone, so a pattern that has a plan has passed it."""
+    refusal depends on the pattern alone, so a pattern that has a plan has passed it."""
     for indptr, indices_, held_layout, scheme in PLANS:
         if indptr is matrix.indptr and indices_ is matrix.indices and held_layout == layout:
             return realize(scheme, matrix, logical, layout, pattern)
-    refused = layout_refusal(matrix, logical, layout, limits or PaddingLimits.from_config())
+    refused = layout_refusal(matrix, logical, layout)
     if refused is not None:
         raise LayoutRefused(refused)
     scheme = plan(matrix, logical, layout)
@@ -422,7 +375,6 @@ def apply_layout(
     layouts: Mapping[str, "SparseLayout"],
     choice: ResolvedLayout,
     data: Mapping[str, object],
-    limits: PaddingLimits | None = None,
     memo: bool = False,
 ) -> dict[str, object]:
     """A copy of ``data`` (holding the default layouts, :func:`expand_default`) with each array of
@@ -442,10 +394,6 @@ def apply_layout(
         for name in default_names if isinstance(default_names, tuple) else ():
             out.pop(str(name), None)
         pattern = layouts[logical].pattern
-        done = (
-            converted(matrix, logical, layout, limits, pattern)
-            if memo
-            else convert(matrix, logical, layout, limits, pattern)
-        )
+        done = converted(matrix, logical, layout, pattern) if memo else convert(matrix, logical, layout, pattern)
         record(out, logical, layout, done, layouts[logical].nnz, int(matrix.nnz))
     return out

@@ -14,7 +14,7 @@ import pytest
 import scipy.sparse as sp
 
 from hpcagent_bench.support.helpers.sparse.abi import FORMAT_SPECS, FORMATS, ArrayLayout, scalar_name
-from hpcagent_bench.support.helpers.sparse.materialize import PaddingLimits, canonical_csr, convert
+from hpcagent_bench.support.helpers.sparse.materialize import canonical_csr, convert
 from hpcagent_bench.translators.numpyto_common.frontend.sparse_rebuild import (
     RebuildSpec,
     rebuild_pattern_arrays,
@@ -26,7 +26,6 @@ from tests.translators.source_module import run_source
 EDGE = 2
 
 #: Limits no test matrix reaches: this tests the rebuild, not the padding guard.
-NO_LIMIT = PaddingLimits(bsr=1e9, dia=1e9, ell=1e9)
 
 
 def pattern(rows: int, cols: int, entries: list[tuple[int, int]]) -> sp.csr_matrix:
@@ -63,7 +62,7 @@ def layout_of(fmt: str) -> ArrayLayout:
 
 
 def roles(fmt: str, valued: bool) -> list[str]:
-    done = convert(MATRICES["random"](), "A", layout_of(fmt), NO_LIMIT, pattern=not valued)
+    done = convert(MATRICES["random"](), "A", layout_of(fmt), pattern=not valued)
     return [name.removeprefix("A_") for name in done.buffers]
 
 
@@ -74,7 +73,7 @@ def test_the_rebuild_gives_back_the_canonical_csr(name: str, fmt: str, valued: b
     """Pattern arrays rebuild their indices; valued ones their values too (a valued bsr / dia slot
     holding 0 is padding, and no test matrix stores an explicit zero)."""
     m = MATRICES[name]()
-    done = convert(m, "A", layout_of(fmt), NO_LIMIT, pattern=not valued)
+    done = convert(m, "A", layout_of(fmt), pattern=not valued)
     namespace = {"np": np, "M": m.shape[0], "K": m.shape[1], "nnz_A": m.nnz, **done.buffers, **done.scalars}
     run_source(rebuild_source(spec_for(fmt, valued)), namespace, f"<rebuild {fmt}>")
     indptr, indices = namespace["A_indptr_csr"], namespace["A_indices_csr"]
