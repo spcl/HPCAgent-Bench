@@ -504,7 +504,6 @@ def usage_episode_cost(path: pathlib.Path) -> CostRow:
         "compactions": compactions,
         "output_source": USAGE_JSONL_SOURCE if calls else "none",
         "output_delta_shape": "",
-        "output_suspect": 0.0,
         "naive_total": fresh + cached + output,
         "effective": fresh + CACHE_DISCOUNT * cached + output,
         "effective_provider": fresh + PROVIDER_CACHE_DISCOUNT * cached + output,
@@ -644,8 +643,6 @@ def events_cost(events: list[dict[str, object]]) -> CostRow:
         "output_source": source,
         # Which shape the message_delta readings had, empty when there were none.
         "output_delta_shape": shape,
-        # Kept for the row schema: nothing flags a suspect episode total any more.
-        "output_suspect": 0.0,
         # The per-turn sum: what an API would BILL and what the literature reports.
         "naive_total": fresh + cached + output,
         # Every token once: the context that was ever built, plus everything generated.
@@ -910,7 +907,6 @@ def main() -> int:
             "compactions",
             "output_source",
             "output_delta_shape",
-            "output_suspect",
             "naive_total",
             "effective",
             "effective_provider",

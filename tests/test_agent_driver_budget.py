@@ -270,7 +270,6 @@ def test_tokens_json_keeps_its_old_keys_and_gains_the_relaunch_record(
         "thinking_estimate",
         "output_source",
         "output_delta_shape",
-        "output_suspect",
         "effective",
         "wall_ms",
         "api_ms",
