@@ -7,7 +7,10 @@ Declarative only (no numpy / scipy): :mod:`hpcagent_bench.spec` derives every sp
 physical buffers from :data:`FORMAT_SPECS`, and the prompt, the binding and the docs read the
 same table. A logical sparse array ``A`` unpacks into buffers named ``A_<role>`` plus, for the
 formats that need them, scalars named ``A_<suffix>``. Indices are ``int64`` and 0-based in every
-language; values follow the run precision.
+language; values follow the run precision. A PATTERN array (a boolean matrix: a graph, no values)
+drops the value buffer where its indices already say which entries are stored (csr, csc, coo, ell)
+and keeps a ``uint8`` mask in its place where a stored block or diagonal also holds padding (bsr,
+dia).
 
 A request names one format per sparse array (``{"arrays": {"A": {"format": "bsr", "block_size":
 4}}}``); :func:`parse_layout_request` checks its shape, :mod:`.request` resolves it against a
@@ -31,8 +34,12 @@ __all__ = [
     "FormatSpec",
     "LayoutBuffer",
     "LayoutRefused",
+    "MASK_DTYPE",
+    "MASK_ROLE",
     "ResolvedLayout",
     "array_layout",
+    "fill_ratio_key",
+    "format_buffers",
     "layout_buffers",
     "layout_scalars",
     "parse_layout_request",
@@ -58,6 +65,10 @@ INDEX_DTYPE = "int64"
 
 #: Column index of an unused ELL slot (its value is 0).
 ELL_PAD_INDEX = -1
+
+#: A pattern array's mask buffer: 1 where a stored slot holds an entry, 0 for padding.
+MASK_ROLE = "mask"
+MASK_DTYPE = "uint8"
 
 #: Where a data bag records ``{logical array: buffer names}`` of the layout it holds (read by
 #: :func:`hpcagent_bench.initialize.abi_input_args`).
@@ -90,12 +101,14 @@ class BufferTemplate:
 @dataclass(frozen=True, slots=True)
 class FormatSpec:
     """A storage format: its buffers in declaration order, its scalars as ``(suffix, meaning)``,
-    and one line on what it is."""
+    and one line on what it is. ``mask`` is what a pattern array keeps in place of the value
+    buffer (same shape), or empty when the indices alone say which entries are stored."""
 
     name: str
     buffers: tuple[BufferTemplate, ...]
     scalars: tuple[tuple[str, str], ...]
     summary: str
+    mask: str = ""
 
 
 FORMAT_SPECS: dict[str, FormatSpec] = {
@@ -138,6 +151,7 @@ FORMAT_SPECS: dict[str, FormatSpec] = {
         ),
         (("bs", "block edge (square blocks)"), ("mb", "block rows = rows / bs"), ("nnzb", "stored blocks")),
         "block compressed sparse row, square blocks",
+        "each block row-major: 1 where A[i*bs+r][j*bs+c] is an entry, 0 for padding",
     ),
     "dia": FormatSpec(
         "dia",
@@ -147,6 +161,7 @@ FORMAT_SPECS: dict[str, FormatSpec] = {
         ),
         (("ndiag", "stored diagonals"),),
         "diagonal storage",
+        "mask[d][j] = 1 where A[j - offsets[d]][j] is an entry, 0 for padding and off-matrix",
     ),
     "ell": FormatSpec(
         "ell",
@@ -162,12 +177,19 @@ FORMAT_SPECS: dict[str, FormatSpec] = {
 
 @dataclass(frozen=True, slots=True)
 class LayoutBuffer:
-    """One buffer of one logical array in one format, with its shape resolved to symbols."""
+    """One buffer of one logical array in one format, with its shape resolved to symbols; a
+    pattern array's mask is neither an index nor a value buffer."""
 
     role: str
     name: str
     shape: tuple[str, ...]
     index: bool
+    mask: bool = False
+
+
+def fill_ratio_key(fmt: str) -> str:
+    """The config key bounding a padded format's stored values per nonzero (``sparse.dia_max_fill_ratio``)."""
+    return f"sparse.{fmt}_max_fill_ratio"
 
 
 def scalar_name(logical: str, suffix: str) -> str:
@@ -175,7 +197,22 @@ def scalar_name(logical: str, suffix: str) -> str:
     return f"{logical}_{suffix}"
 
 
-def layout_buffers(fmt: str, logical: str, rows: str, cols: str, nnz: str) -> tuple[LayoutBuffer, ...]:
+def format_buffers(fmt: str, pattern: bool) -> tuple[tuple[BufferTemplate, bool], ...]:
+    """``(template, is_mask)`` per buffer of ``fmt``; a pattern array's value buffer becomes the
+    format's mask or goes (:class:`FormatSpec`)."""
+    spec = FORMAT_SPECS[fmt]
+    out: list[tuple[BufferTemplate, bool]] = []
+    for buf in spec.buffers:
+        if not pattern or buf.index:
+            out.append((buf, False))
+        elif spec.mask:
+            out.append((BufferTemplate(MASK_ROLE, buf.shape, False, spec.mask), True))
+    return tuple(out)
+
+
+def layout_buffers(
+    fmt: str, logical: str, rows: str, cols: str, nnz: str, pattern: bool = False
+) -> tuple[LayoutBuffer, ...]:
     """``logical``'s buffers in format ``fmt``; ``rows`` / ``cols`` / ``nnz`` are the manifest symbols."""
     names = {"rows": rows, "cols": cols, "nnz": nnz, "p": logical}
     return tuple(
@@ -184,8 +221,9 @@ def layout_buffers(fmt: str, logical: str, rows: str, cols: str, nnz: str) -> tu
             name=f"{logical}_{buf.role}",
             shape=tuple(token.format(**names) for token in buf.shape),
             index=buf.index,
+            mask=is_mask,
         )
-        for buf in FORMAT_SPECS[fmt].buffers
+        for buf, is_mask in format_buffers(fmt, pattern)
     )
 
 

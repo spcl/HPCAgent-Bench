@@ -4092,9 +4092,7 @@ def names_logical_sparse(kir: KernelIR) -> bool:
     The frontend expands ``A`` into its physical CSR buffers in the SIGNATURE, but only
     :func:`numpyto_common.lowering.lower` rewrites the BODY onto those buffers; a raw kir therefore
     reaches dace with a signature and a body that disagree, and dace answers ``Use of undefined
-    variable "A"``. A buffer-style kernel (spmv) names no logical matrix and must NOT be lowered:
-    its data-dependent slice is expressible through dace's symbolic shapes, and lowering it would
-    make a variable-length copy dace cannot allocate.
+    variable "A"``.
     """
     if not kir.sparse:
         return False

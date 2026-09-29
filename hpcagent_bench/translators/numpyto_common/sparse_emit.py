@@ -17,16 +17,26 @@ hoister falls back to the dense path or reports an actionable error.
 
 import ast
 from collections.abc import Callable
+from dataclasses import dataclass
 
-from hpcagent_bench.translators.numpyto_common.ast_build import name_, store_
+from hpcagent_bench.translators.numpyto_common.ast_build import expr_of, name_, range_for, store_
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import const_
 
 __all__ = [
+    "ENTRY_COL",
+    "ENTRY_ROW",
+    "ENTRY_VALUE",
+    "ENTRY_WALKERS",
     "SPARSE_MATMUL_DISPATCH",
     "DispatchKey",
+    "EntryExtents",
     "add",
     "bcsr_spmv",
+    "densify",
     "dia_spmv",
+    "entry_loops",
+    "entry_matmat",
+    "entry_matvec_t",
     "expand_matmul_bcoo_dense_vec",
     "expand_matmul_bcsr_dense_vec",
     "expand_matmul_bcsr_t_dense_vec",
@@ -45,7 +55,16 @@ __all__ = [
     "range_call",
     "sub_",
     "subscript_",
+    "zero_fill",
     "zero_init_loop",
+    "assign",
+    "bind_entry",
+    "bcsr_entries",
+    "coo_entries",
+    "csc_entries",
+    "csr_entries",
+    "dia_entries",
+    "ell_entries",
 ]
 
 
@@ -1014,3 +1033,176 @@ SPARSE_MATMUL_DISPATCH: dict[DispatchKey, Callable] = {
     # case when the surrounding expression scales/adds a dense matrix)
     ("csr", "csr", "matmul_dense"): expand_matmul_csr_csr_dense,
 }
+
+
+#: The names :func:`entry_loops` binds for each stored entry: its row, its column, its value.
+ENTRY_ROW, ENTRY_COL, ENTRY_VALUE = "__er", "__ec", "__ev"
+
+
+@dataclass(frozen=True, slots=True)
+class EntryExtents:
+    """The size expressions a format's entry walk needs (source text over the ABI's symbols):
+    the logical ``rows`` / ``cols``, the format's own ``count`` (coo's stored entries, bcsr's block
+    rows, dia's diagonals, ell's slots per row) and bcsr's block edges."""
+
+    rows: str
+    cols: str
+    count: str = "0"
+    block_rows: str = "1"
+    block_cols: str = "1"
+
+
+def assign(name: str, value: ast.expr) -> ast.Assign:
+    return ast.Assign(targets=[store_(name)], value=value)
+
+
+def bind_entry(row: ast.expr, col: ast.expr, value: ast.expr) -> list[ast.stmt]:
+    """``__er, __ec, __ev = row, col, value`` as three assignments."""
+    return [assign(ENTRY_ROW, row), assign(ENTRY_COL, col), assign(ENTRY_VALUE, value)]
+
+
+def csr_entries(bufs: dict[str, str], ext: EntryExtents, inner: list[ast.stmt]) -> list[ast.stmt]:
+    stored = range_for(
+        "__ek",
+        [subscript_(bufs["indptr"], name_("__ei")), subscript_(bufs["indptr"], add(name_("__ei"), const_(1)))],
+        bind_entry(name_("__ei"), subscript_(bufs["indices"], name_("__ek")), subscript_(bufs["data"], name_("__ek")))
+        + inner,
+    )
+    return [range_for("__ei", [expr_of(ext.rows)], [stored])]
+
+
+def csc_entries(bufs: dict[str, str], ext: EntryExtents, inner: list[ast.stmt]) -> list[ast.stmt]:
+    stored = range_for(
+        "__ek",
+        [subscript_(bufs["indptr"], name_("__ej")), subscript_(bufs["indptr"], add(name_("__ej"), const_(1)))],
+        bind_entry(subscript_(bufs["indices"], name_("__ek")), name_("__ej"), subscript_(bufs["data"], name_("__ek")))
+        + inner,
+    )
+    return [range_for("__ej", [expr_of(ext.cols)], [stored])]
+
+
+def coo_entries(bufs: dict[str, str], ext: EntryExtents, inner: list[ast.stmt]) -> list[ast.stmt]:
+    k = name_("__ek")
+    body = bind_entry(subscript_(bufs["row"], k), subscript_(bufs["col"], k), subscript_(bufs["data"], k)) + inner
+    return [range_for("__ek", [expr_of(ext.count)], body)]
+
+
+def bcsr_entries(bufs: dict[str, str], ext: EntryExtents, inner: list[ast.stmt]) -> list[ast.stmt]:
+    r, c = expr_of(ext.block_rows), expr_of(ext.block_cols)
+    entry = bind_entry(
+        add(mul(name_("__eb"), r), name_("__ea")),
+        add(mul(name_("__ebj"), c), name_("__ed")),
+        subscript_(bufs["data"], name_("__ek"), name_("__ea"), name_("__ed")),
+    )
+    per_block = range_for("__ea", [r], [range_for("__ed", [c], entry + inner)])
+    stored = range_for(
+        "__ek",
+        [subscript_(bufs["indptr"], name_("__eb")), subscript_(bufs["indptr"], add(name_("__eb"), const_(1)))],
+        [assign("__ebj", subscript_(bufs["indices"], name_("__ek"))), per_block],
+    )
+    return [range_for("__eb", [expr_of(ext.count)], [stored])]
+
+
+def dia_entries(bufs: dict[str, str], ext: EntryExtents, inner: list[ast.stmt]) -> list[ast.stmt]:
+    column = add(name_("__ei"), name_("__eo"))
+    on_matrix = ast.Compare(
+        left=const_(0), ops=[ast.LtE(), ast.Lt()], comparators=[name_(ENTRY_COL), expr_of(ext.cols)]
+    )
+    guarded = ast.If(
+        test=on_matrix,
+        body=[
+            assign(ENTRY_ROW, name_("__ei")),
+            assign(ENTRY_VALUE, subscript_(bufs["data"], name_("__ed"), name_(ENTRY_COL))),
+        ]
+        + inner,
+        orelse=[],
+    )
+    per_row = range_for("__ei", [expr_of(ext.rows)], [assign(ENTRY_COL, column), guarded])
+    return [
+        range_for("__ed", [expr_of(ext.count)], [assign("__eo", subscript_(bufs["offsets"], name_("__ed"))), per_row])
+    ]
+
+
+def ell_entries(bufs: dict[str, str], ext: EntryExtents, inner: list[ast.stmt]) -> list[ast.stmt]:
+    used = ast.Compare(left=name_(ENTRY_COL), ops=[ast.GtE()], comparators=[const_(0)])
+    guarded = ast.If(
+        test=used,
+        body=[
+            assign(ENTRY_ROW, name_("__ei")),
+            assign(ENTRY_VALUE, subscript_(bufs["data"], name_("__ei"), name_("__es"))),
+        ]
+        + inner,
+        orelse=[],
+    )
+    slots = range_for(
+        "__es",
+        [expr_of(ext.count)],
+        [assign(ENTRY_COL, subscript_(bufs["indices"], name_("__ei"), name_("__es"))), guarded],
+    )
+    return [range_for("__ei", [expr_of(ext.rows)], [slots])]
+
+
+#: Per format: the loop nest visiting every stored entry once, binding ``__er`` / ``__ec`` / ``__ev``.
+ENTRY_WALKERS: dict[str, Callable[[dict[str, str], EntryExtents, list[ast.stmt]], list[ast.stmt]]] = {
+    "csr": csr_entries,
+    "csc": csc_entries,
+    "coo": coo_entries,
+    "bcsr": bcsr_entries,
+    "dia": dia_entries,
+    "ell": ell_entries,
+}
+
+
+def entry_loops(fmt: str, bufs: dict[str, str], ext: EntryExtents, inner: list[ast.stmt]) -> list[ast.stmt]:
+    """``inner`` run once per stored entry of a ``fmt`` matrix, with ``__er`` / ``__ec`` / ``__ev``
+    bound to its row, column and value: the one walk every generic sparse product below reuses."""
+    if fmt not in ENTRY_WALKERS:
+        raise NotImplementedError(f"no stored-entry walk for sparse format {fmt!r}")
+    return ENTRY_WALKERS[fmt](bufs, ext, inner)
+
+
+def zero_fill(target_id: str, rows: str, cols: str | None = None) -> ast.For:
+    """``target[...] = 0`` over a 1-D (``cols`` None) or 2-D extent."""
+    if cols is None:
+        return range_for(
+            "__zi",
+            [expr_of(rows)],
+            [ast.Assign(targets=[subscript_(target_id, name_("__zi"), ctx=ast.Store())], value=const_(0.0))],
+        )
+    cell = ast.Assign(targets=[subscript_(target_id, name_("__zi"), name_("__zc"), ctx=ast.Store())], value=const_(0.0))
+    return range_for("__zi", [expr_of(rows)], [range_for("__zc", [expr_of(cols)], [cell])])
+
+
+def entry_matvec_t(target_id: str, fmt: str, bufs: dict[str, str], ext: EntryExtents, rhs_name: str) -> list[ast.stmt]:
+    """``y = A.T @ x`` for any format (``y`` has A's column count): each stored ``(r, c, v)``
+    scatters ``v * x[r]`` into ``y[c]``."""
+    accum = ast.AugAssign(
+        target=subscript_(target_id, name_(ENTRY_COL), ctx=ast.Store()),
+        op=ast.Add(),
+        value=mul(name_(ENTRY_VALUE), subscript_(rhs_name, name_(ENTRY_ROW))),
+    )
+    return [zero_fill(target_id, ext.cols), *entry_loops(fmt, bufs, ext, [accum])]
+
+
+def entry_matmat(
+    target_id: str, fmt: str, bufs: dict[str, str], ext: EntryExtents, rhs_name: str, out_cols: str
+) -> list[ast.stmt]:
+    """``M = A @ B`` for any sparse-A format and dense ``B`` (``out_cols`` columns): each stored
+    ``(r, c, v)`` adds ``v * B[c, :]`` into ``M[r, :]``."""
+    accum = ast.AugAssign(
+        target=subscript_(target_id, name_(ENTRY_ROW), name_("__c"), ctx=ast.Store()),
+        op=ast.Add(),
+        value=mul(name_(ENTRY_VALUE), subscript_(rhs_name, name_(ENTRY_COL), name_("__c"))),
+    )
+    inner = [range_for("__c", [expr_of(out_cols)], [accum])]
+    return [zero_fill(target_id, ext.rows, out_cols), *entry_loops(fmt, bufs, ext, inner)]
+
+
+def densify(target_id: str, fmt: str, bufs: dict[str, str], ext: EntryExtents) -> list[ast.stmt]:
+    """``D = A`` as a dense ``rows x cols`` array, for a sparse @ sparse product outside csr."""
+    accum = ast.AugAssign(
+        target=subscript_(target_id, name_(ENTRY_ROW), name_(ENTRY_COL), ctx=ast.Store()),
+        op=ast.Add(),
+        value=name_(ENTRY_VALUE),
+    )
+    return [zero_fill(target_id, ext.rows, ext.cols), *entry_loops(fmt, bufs, ext, [accum])]
