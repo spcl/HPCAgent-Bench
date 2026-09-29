@@ -327,6 +327,38 @@ def blas_link_closure(_target: str) -> tuple[bool, str]:
     return detail.startswith("ok"), (detail if detail.startswith("ok") else f"{detail} [{facts}]")[:600]
 
 
+#: The checkout this script sits in: the one-runtime gate and tests run from it, inside the image.
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
+
+
+def one_openmp_gate(_target: str) -> tuple[bool, str]:
+    """One process imports numpy, scipy, runs numba prange + BLAS, loads a gcc -fopenmp library and imports
+    every wheel that may bundle an OpenMP runtime (torch, xgboost, jax, ...): one runtime file may be mapped.
+
+    The build's own gate (containers/lib/one_openmp.sh), asked again of the finished image, so a copy a
+    later layer or a pulled image reintroduced is caught. Exit 3 is two runtimes; anything else is a crash."""
+    code, out = run(
+        [sys.executable, str(REPO_ROOT / "containers" / "lib" / "one_openmp_gate.py")], timeout=900.0, cwd="/"
+    )
+    tail = out.splitlines()[-1][:300] if out else "no output"
+    return code == 0, tail
+
+
+def pytest_file(target: str) -> tuple[bool, str]:
+    """A test file of the checkout, run in the image, with no test skipped: a skip here would be the
+    image lacking what the test needs and reporting green."""
+    code, out = run(
+        [sys.executable, "-m", "pytest", "-p", "no:cacheprovider", "-q", "-rs", target],
+        timeout=1800.0,
+        cwd=str(REPO_ROOT),
+    )
+    tail = out.splitlines()[-1][:200] if out else "no output"
+    skipped = " skipped" in tail
+    if code != 0 or skipped:
+        print(out[-4000:])
+    return code == 0 and not skipped, tail
+
+
 #: Agent runtime -> the absolute interpreter the driver EXECs and one import proving the venv is
 #: whole. hpcagent_bench/cluster/harnesses.py names the same paths; this catches an image that was PULLED
 #: rather than built from this recipe, which the Dockerfile's own build gate cannot see.
@@ -633,6 +665,8 @@ def toolchain_checks(platform: str) -> list[Check]:
     ]
     if amd:
         found.append(Check("blas", "Intel MKL", "lib", "libmkl_core.so", required=False))
+    # numba, OpenBLAS, torch and every wheel that bundles libgomp share ONE runtime file.
+    found.append(Check("openmp", "one runtime across numba/torch/wheels", "one-openmp", "gate"))
     found += [
         Check("fft", "FFTW3", "lib", "libfftw3.so"),
         Check("fft", "fftw3.h", "header", "fftw3.h"),
@@ -729,6 +763,7 @@ def checks(profile: str) -> list[Check]:
     platform = PLATFORM[profile]
     found = common + toolchain_checks(platform)
     if profile in JUDGE_PROFILES:
+        found.append(Check("openmp", "one-runtime tests", "pytest", "tests/test_one_openmp_runtime.py"))
         # Driven FROM libraries.yaml through the harness's own resolver, which only a judge image
         # installs, so a library added to the registry cannot go unverified. Held to a record only
         # where one was measured; elsewhere it reports what links, to be recorded.
@@ -783,6 +818,8 @@ DISPATCH = {
     "harness": have_harness_runtime,
     "dace-gate": dace_solver_gate,
     "blas-link": blas_link_closure,
+    "one-openmp": one_openmp_gate,
+    "pytest": pytest_file,
     "library-registry": library_registry,
     "compile": lambda t: compile_probe(COMPILE_PROBES[t], run_it=False),
     "compile-run": lambda t: compile_probe(COMPILE_PROBES[t], run_it=True),

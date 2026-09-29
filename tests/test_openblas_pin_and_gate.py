@@ -68,7 +68,7 @@ def test_numpy_and_scipy_are_rebuilt_on_the_view_openblas_under_omp_numba(image:
     numba runs its OpenMP layer so every BLAS caller shares one runtime."""
     docker = (IMAGES / image / "Dockerfile").read_text(encoding="utf-8")
     assert "ENV NUMBA_THREADING_LAYER=omp" in docker
-    run = docker.index("RUN sh /tmp/numpy_on_openblas.sh /opt/view")
+    run = docker.index("RUN sh /tmp/one-openmp/numpy_on_openblas.sh /opt/view")
     install = docker.index("--group /opt/hpcagent-bench/pyproject.toml:judge-proxy")
     assert install < run, "the rebuild must follow the install that brings the wheels"
 

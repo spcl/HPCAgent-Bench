@@ -12,7 +12,8 @@
 # blas_gate.sh), numpy and scipy share one BLAS and one OpenMP runtime with the C baselines, DaCe and
 # numba (NUMBA_THREADING_LAYER=omp, set by the Dockerfile). The versions must not move: numpy
 # computes every CPU reference. The gate at the end runs 2 x nproc numba prange iterations that each
-# call np.dot and scipy.linalg.lu_factor concurrently, in one process that maps a single libgomp.
+# call np.dot and scipy.linalg.lu_factor concurrently, in one process that maps a single OpenMP runtime
+# (one_openmp.sh, which also links every wheel's bundled libgomp to the image's).
 set -eux
 ulimit -c 0
 view="$1"
@@ -50,29 +51,26 @@ print("numpy", numpy.__version__, "scipy", scipy.__version__, "on", view)
 PY
 
 # One OpenMP runtime: spack links OpenBLAS against its gcc-runtime copy of libgomp, numba's pool
-# against the system one. Two runtimes cannot see each other's parallel region, so every numba
-# thread's BLAS call opened a full team of its own (nproc^2 threads). Every other libgomp.so.1 in the
-# image becomes a link to the one the image's compiler (CC, else gcc) ships.
-gomp="$(readlink -f "$("${CC:-gcc}" -print-file-name=libgomp.so.1)")"
-test -f "${gomp}"
-for copy in $(ldconfig -p | awk '$1 == "libgomp.so.1" {print $NF}') \
-        /opt/spack-install/*/gcc-runtime-*/lib/libgomp.so.1 /opt/spack-install/*/gcc-*/lib64/libgomp.so.1; do
-    [ -e "${copy}" ] || continue
-    [ "$(readlink -f "${copy}")" = "${gomp}" ] || ln -sf "${gomp}" "${copy}"
-done
-NUMBA_THREADING_LAYER=omp "${py}" - <<'PY'
+# against the system one, and two runtimes cannot see each other's parallel region (nproc^2 threads).
+# one_openmp.sh links every libgomp copy to the compiler's and gates on a single mapped runtime.
+here="$(cd "$(dirname "$0")" && pwd)"
+sh "${here}/one_openmp.sh" "${view}"
+OPENMP_RUNTIMES_PY="${here}/openmp_runtimes.py" NUMBA_THREADING_LAYER=omp "${py}" - <<'PY'
+import importlib.util
 import os
 
 import numba
 import numpy as np
 from scipy.linalg import lu_factor
 
+spec = importlib.util.spec_from_file_location("openmp_runtimes", os.environ["OPENMP_RUNTIMES_PY"])
+omp = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(omp)
+
 callers = 2 * (os.cpu_count() or 1)
 # numba's pool and OpenBLAS share one OpenMP runtime, or each numba thread's BLAS call opens a team.
 numba.njit(parallel=True)(lambda x: x + 1)(np.ones(4))
-with open("/proc/self/maps") as maps:
-    runtimes = sorted({os.path.realpath(line.split()[-1]) for line in maps if "libgomp" in line})
-assert len(runtimes) == 1, ("more than one libgomp mapped", runtimes)
+omp.assert_single_runtime(omp.mapped_runtimes(), "numpy on OpenBLAS with numba's pool")
 
 
 @numba.njit(parallel=True)
