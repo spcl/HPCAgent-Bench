@@ -25,6 +25,11 @@ is the one module that opens, writes and merges such a file. A reader refuses an
 - **A dataset** is any number of these merged into one file: `results_db.merge(dest, sources)`
   remaps every id by the row's natural key, so merging the same file twice, or a shard and a merge
   of it, adds nothing.
+- **Readers** take one or more of them (`--db core.db [--db extra.db ...]`) and read them as one
+  (`hpcagent_bench/stats/databases.py`): one file as it is, several merged into a temporary file.
+  An arm two of them hold with different rows is refused (`ArmConflict`). The core database holds
+  no CPF arm; the CPF archive (`hpcagent-bench-v1-cpf-archive-<date>.db`, the same schema) is the
+  extra database that brings them back.
 
 ## Tables
 
