@@ -2,20 +2,18 @@
 
 import ast
 import copy
-from collections.abc import Collection, Mapping, Sequence
-from collections.abc import Callable
+from collections.abc import Callable, Collection, Mapping, Sequence
 
-from hpcagent_bench.translators.numpyto_common.lib_nodes.call_args import eval_axes, read_kwarg, read_axis_keepdims
+from hpcagent_bench.translators.numpyto_common.ast_build import name_, range_for, store_
+from hpcagent_bench.translators.numpyto_common.lib_nodes.call_args import eval_axes, read_axis_keepdims, read_kwarg
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
     const_,
     const_or_name,
     falsy,
     if_set,
     make_iter_name,
-    name_,
     resolve_shape,
     shape_total_product,
-    store_,
     truthy,
     wrap_for_loops,
 )
@@ -163,14 +161,7 @@ def expand_axis_reduction(
     # Inner loop nest over the reduction axes, deepest first.
     inner_stmts: list[ast.stmt] = [update_stmt]
     for ax, rn in zip(reversed(axes_norm), reversed(red_iter_names)):
-        inner_stmts = [
-            ast.For(
-                target=store_(rn),
-                iter=ast.Call(func=name_("range"), args=[const_or_name(shape[ax])], keywords=[]),
-                body=inner_stmts,
-                orelse=[],
-            )
-        ]
+        inner_stmts = [range_for(rn, [const_or_name(shape[ax])], inner_stmts)]
     if post_fn is not None:
         # Divisor for mean: product of the reduction-axis sizes.
         divisor = const_or_name(shape[axes_norm[0]])
@@ -224,7 +215,7 @@ def full_reduction(
         slice=(name_(iters[0]) if n_dim == 1 else ast.Tuple(elts=[name_(i) for i in iters], ctx=ast.Load())),
         ctx=ast.Load(),
     )
-    target_load = ast.Name(id=target.id, ctx=ast.Load())
+    target_load = name_(target.id)
     body = [
         update_fn(target, target_load, subscript)
         if update_fn
@@ -256,7 +247,7 @@ def reduction_output_refs(target: ast.expr, out_elts: list[ast.expr]) -> tuple[a
     """The (store, load) references of the reduction result: the target itself when no axis is kept
     and keepdims is off (a scalar result), else the target subscripted at ``out_elts``."""
     if len(out_elts) == 0:
-        return target, ast.Name(id=target.id, ctx=ast.Load())
+        return target, name_(target.id)
     if len(out_elts) == 1:
         return (
             ast.Subscript(value=name_(target.id), slice=out_elts[0], ctx=ast.Store()),
@@ -432,12 +423,7 @@ def expand_mean(
             return [
                 ast.Assign(targets=[store_(sum_name)], value=const_(0.0)),
                 ast.Assign(targets=[store_(cnt_name)], value=const_(0)),
-                ast.For(
-                    target=store_(iter_name),
-                    iter=ast.Call(func=name_("range"), args=[n_ast], keywords=[]),
-                    body=body,
-                    orelse=[],
-                ),
+                range_for(iter_name, [n_ast], body),
                 ast.Assign(
                     targets=[store_(target.id)],
                     value=ast.BinOp(left=name_(sum_name), op=ast.Div(), right=name_(cnt_name)),
@@ -646,14 +632,7 @@ def expand_arg_reduction(
     # Wrap the comparison in nested reduction loops, deepest first.
     inner_body: list[ast.stmt] = [update]
     for ax, rn in zip(reversed(axes_norm), reversed(red_iter_names)):
-        inner_body = [
-            ast.For(
-                target=store_(rn),
-                iter=ast.Call(func=name_("range"), args=[const_or_name(shape[ax])], keywords=[]),
-                body=inner_body,
-                orelse=[],
-            )
-        ]
+        inner_body = [range_for(rn, [const_or_name(shape[ax])], inner_body)]
     body_stmts = init_stmts + inner_body
     if not kept_axes:
         return body_stmts
@@ -759,7 +738,7 @@ def expand_var_or_std(
     is_scalar_target = len(out_elts) == 0
     if is_scalar_target:
         out_sub: ast.expr = target
-        out_load: ast.expr = ast.Name(id=target.id, ctx=ast.Load())
+        out_load: ast.expr = name_(target.id)
     elif len(out_elts) == 1:
         out_sub = ast.Subscript(value=name_(target.id), slice=out_elts[0], ctx=ast.Store())
         out_load = ast.Subscript(value=name_(target.id), slice=out_elts[0], ctx=ast.Load())
@@ -790,14 +769,7 @@ def expand_var_or_std(
     # Wrap inner reduction iters around add_acc, deepest first.
     inner_body: list[ast.stmt] = [add_acc]
     for ax, rn in zip(reversed(axes_norm), reversed(red_iter_names)):
-        inner_body = [
-            ast.For(
-                target=store_(rn),
-                iter=ast.Call(func=name_("range"), args=[const_or_name(shape[ax])], keywords=[]),
-                body=inner_body,
-                orelse=[],
-            )
-        ]
+        inner_body = [range_for(rn, [const_or_name(shape[ax])], inner_body)]
     body_stmts = [init_acc, *inner_body, finalize]
     if is_scalar_target:
         return mean_stmts + body_stmts

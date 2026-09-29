@@ -38,7 +38,6 @@ __all__ = [
     "DECISIVE_MAX",
     "DECISIVE_RE",
     "DETAIL_CHARS",
-    "REPO",
     "decisive_lines",
     "main",
     "marshal",
@@ -46,8 +45,6 @@ __all__ = [
     "report",
     "verdict_class",
 ]
-
-REPO = pathlib.Path(__file__).resolve().parents[1]
 
 
 def program_of(module: Any, func_name: str, module_name: str) -> Any:

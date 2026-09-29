@@ -50,10 +50,6 @@ from hpcagent_bench import packets
 from hpcagent_bench.experiment_tags import Registry, canonical, order, registry
 
 __all__ = [
-    "COMBINED_GRID",
-    "COMBINED_L",
-    "COMBINED_MIN_CHROMA",
-    "COMBINED_SLOTS",
     "CONTROL_MARKER",
     "CONTROL_SHADE",
     "LOG",
@@ -64,8 +60,6 @@ __all__ = [
     "color",
     "colormap_slot",
     "colors",
-    "combined_ramp",
-    "combined_slot",
     "control_color",
     "fixed_packet_markers",
     "framework_color",
@@ -74,15 +68,12 @@ __all__ = [
     "hue_order",
     "hues",
     "in_order",
-    "language_marker",
     "lighten",
     "marker",
     "markers",
     "model_color",
-    "model_language_color",
     "model_markers",
     "model_shade",
-    "oklab",
     "ordered_color",
     "packet_marker",
     "shape_table",
@@ -249,19 +240,6 @@ def marker(model: str) -> str:
         return shapes[-1 - (standalone.index(resolved) % len(shapes))]
     LOG.warning("palette: optimizer %r is not in registry.yaml; using a hash marker", model)
     return shapes[zlib.crc32(str(model).encode()) % len(shapes)]
-
-
-def language_marker(language: str) -> str:
-    """The one SHAPE a delivery language wears in a figure whose colour is the model (the transfer
-    scatter): the registry's ``markers`` in ``languages`` order, so appending a language never
-    reshapes another."""
-    shapes = markers()
-    languages = order("languages")
-    resolved = canonical("languages", str(language).lower())
-    if resolved in languages:
-        return shapes[languages.index(resolved) % len(shapes)]
-    LOG.warning("palette: language %r is not in registry.yaml; using a hash marker", language)
-    return shapes[zlib.crc32(str(language).encode()) % len(shapes)]
 
 
 #: The control's shape, reserved: no packet or harness is ever assigned it, and the control is drawn

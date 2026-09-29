@@ -32,7 +32,6 @@ ALLOWED: dict[str, str] = {
     # Tests: a child process or a temp module, given its own path.
     "tests/test_dace_helper_programs.py": "temp module written under tmp_path",
     "tests/test_packaging.py": "child imports the installed wheel and nothing else",
-    "tests/test_perf_reports.py": "temp numba module under tmp_path, auto-reverted by monkeypatch",
     "tests/test_import_paths.py": "this file spells the patterns it searches for",
 }
 

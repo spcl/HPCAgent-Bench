@@ -4,12 +4,13 @@ import ast
 import copy
 from types import NotImplementedType
 
-from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of, extent_is_scalar
+from hpcagent_bench.translators.numpyto_common.ast_build import name_
+from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import extent_is_scalar, iter_extent_of
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
+    const_or_name,
     slice_step_any,
     step_is_negative,
     step_node,
-    const_or_name,
 )
 from hpcagent_bench.translators.numpyto_common.lowering.indexing import advanced_runs
 from hpcagent_bench.translators.numpyto_common.lowering.shape_reads import is_newaxis
@@ -68,7 +69,7 @@ class SubscriptifyNames(ast.NodeTransformer):
             if s == "1":
                 elts.append(ast.Constant(value=0))
             else:
-                elts.append(ast.Name(id=self.iters[offset + i], ctx=ast.Load()))
+                elts.append(name_(self.iters[offset + i]))
         idx = elts[0] if len(elts) == 1 else ast.Tuple(elts=elts, ctx=ast.Load())
         return ast.Subscript(value=node, slice=idx, ctx=ast.Load())
 
@@ -143,7 +144,7 @@ class SubscriptifyNames(ast.NodeTransformer):
             return UNHANDLED
         offset = len(self.iters) - result_rank
         idx_iters = [self.iters[offset + i] for i in range(r)]
-        trail_iters = [ast.Name(id=self.iters[offset + r + i], ctx=ast.Load()) for i in range(n_trailing)]
+        trail_iters = [name_(self.iters[offset + r + i]) for i in range(n_trailing)]
         # The index EXPRESSION scalarised at its own iters; for a bare Name this is ``sl[idx_iters]``.
         gathered = SubscriptifyNames(self.shape_table, idx_iters).visit(copy.deepcopy(sl))
         full = [gathered] + trail_iters
@@ -166,22 +167,18 @@ class SubscriptifyNames(ast.NodeTransformer):
             if start is None and step_is_negative(step):
                 sh = self.shape_table.get(node.value.id)
                 if sh:
-                    al = (
-                        ast.Constant(value=int(sh[0]))
-                        if str(sh[0]).isdigit()
-                        else ast.Name(id=str(sh[0]), ctx=ast.Load())
-                    )
+                    al = ast.Constant(value=int(sh[0])) if str(sh[0]).isdigit() else name_(str(sh[0]))
                     start = ast.BinOp(left=al, op=ast.Sub(), right=ast.Constant(value=1))
             if step_is_negative(step) and start is None:
                 raise NotImplementedError(
                     f"reverse slice of {node.value.id!r} needs a known axis length (shape untracked)"
                 )
-            iterv: ast.expr = ast.Name(id=self.iters[-1], ctx=ast.Load())
+            iterv: ast.expr = name_(self.iters[-1])
             scaled: ast.expr = ast.BinOp(left=iterv, op=ast.Mult(), right=step_node(step))
             idx = scaled if start is None else ast.BinOp(left=scaled, op=ast.Add(), right=start)
             return ast.Subscript(value=node.value, slice=idx, ctx=ast.Load())
         if self.iters:
-            iter_node: ast.expr = ast.Name(id=self.iters[-1], ctx=ast.Load())
+            iter_node: ast.expr = name_(self.iters[-1])
             if sl.lower is not None and not (isinstance(sl.lower, ast.Constant) and sl.lower.value == 0):
                 iter_node = ast.BinOp(left=iter_node, op=ast.Add(), right=sl.lower)
             return ast.Subscript(value=node.value, slice=iter_node, ctx=ast.Load())
@@ -245,7 +242,7 @@ class SubscriptifyNames(ast.NodeTransformer):
             if isinstance(e, ast.Constant) and e.value is None:
                 pos += 1
                 continue
-            it = ast.Name(id=self.iters[offset + pos], ctx=ast.Load())
+            it = name_(self.iters[offset + pos])
             pos += 1
             if (
                 isinstance(e, ast.Slice)
@@ -281,7 +278,7 @@ class SubscriptifyNames(ast.NodeTransformer):
                     axis_pos += 1
                     src_axis += 1
                     continue
-                iter_node: ast.expr = ast.Name(id=self.iters[axis_pos], ctx=ast.Load())
+                iter_node: ast.expr = name_(self.iters[axis_pos])
                 axis_pos += 1
                 src_axis += 1
                 if e.lower is not None and not (isinstance(e.lower, ast.Constant) and e.lower.value == 0):
@@ -293,7 +290,7 @@ class SubscriptifyNames(ast.NodeTransformer):
                 new_elts.append(e)
                 src_axis += 1
         if not new_elts:
-            return ast.Name(id=node.value.id, ctx=ast.Load())
+            return name_(node.value.id)
         new_slot = new_elts[0] if len(new_elts) == 1 else ast.Tuple(elts=new_elts, ctx=ast.Load())
         return ast.Subscript(value=node.value, slice=new_slot, ctx=ast.Load())
 
@@ -321,7 +318,7 @@ class SubscriptifyNames(ast.NodeTransformer):
         res_lead = [resolve_neg_index(e, const_or_name(shape[ax])) for ax, e in enumerate(lead)]
         if 0 < n_trailing <= len(self.iters):
             offset = len(self.iters) - n_trailing
-            new_elts = list(res_lead) + [ast.Name(id=self.iters[offset + j], ctx=ast.Load()) for j in range(n_trailing)]
+            new_elts = list(res_lead) + [name_(self.iters[offset + j]) for j in range(n_trailing)]
             return ast.Subscript(value=node.value, slice=ast.Tuple(elts=new_elts, ctx=ast.Load()), ctx=ast.Load())
         if n_trailing == 0:
             new_slot = res_lead[0] if len(res_lead) == 1 else ast.Tuple(elts=res_lead, ctx=ast.Load())

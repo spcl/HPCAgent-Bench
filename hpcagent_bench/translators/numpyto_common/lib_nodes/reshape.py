@@ -2,13 +2,9 @@
 
 import ast
 
+from hpcagent_bench.translators.numpyto_common.ast_build import name_, range_for
 from hpcagent_bench.translators.numpyto_common.lib_nodes.dims import dims_agree
-from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
-    const_or_name,
-    name_,
-    shape_total_product,
-    store_,
-)
+from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import const_or_name, shape_total_product
 
 __all__ = [
     "axis_stride",
@@ -129,12 +125,7 @@ def reshape_grouped_copy(
         targets=[subscript(tgt_name, tgt_index, ast.Store())], value=subscript(src_name, src_index, ast.Load())
     )
     for it, bound in reversed(loops):
-        inner = ast.For(
-            target=store_(it),
-            iter=ast.Call(func=name_("range"), args=[const_or_name(bound)], keywords=[]),
-            body=[inner],
-            orelse=[],
-        )
+        inner = range_for(it, [const_or_name(bound)], [inner])
     return [inner]
 
 
@@ -206,12 +197,7 @@ def expand_reshape(
     # Wrap in target-shape loop nest (outermost first).
     current: ast.stmt = inner
     for it, bound in zip(reversed(tgt_iters), reversed(list(tgt_shape))):
-        current = ast.For(
-            target=store_(it),
-            iter=ast.Call(func=name_("range"), args=[const_or_name(bound)], keywords=[]),
-            body=[current],
-            orelse=[],
-        )
+        current = range_for(it, [const_or_name(bound)], [current])
     return [current]
 
 
@@ -224,14 +210,7 @@ def flat_copy(target_id: str, source_id: str, a_shape: tuple[str, ...]) -> list[
             value=ast.Subscript(value=name_(source_id), slice=name_("__r"), ctx=ast.Load()),
         )
     ]
-    return [
-        ast.For(
-            target=store_("__r"),
-            iter=ast.Call(func=name_("range"), args=[total], keywords=[]),
-            body=body,
-            orelse=[],
-        )
-    ]
+    return [range_for("__r", [total], body)]
 
 
 def reshape_order(kwargs: list[ast.keyword] | None) -> str:

@@ -27,9 +27,11 @@ import copy
 import itertools
 from collections.abc import Callable, Iterable
 
+from hpcagent_bench.translators.numpyto_common.ast_build import name_, store_
 from hpcagent_bench.translators.numpyto_common.subscripts import base_name
 
 __all__ = [
+    "CONTEXT_NODES",
     "FLAG_PREFIX",
     "Flagger",
     "IfConverter",
@@ -48,6 +50,9 @@ __all__ = [
 
 #: Prefix of the flag locals the FLAGGED form introduces; a counter makes each name unique.
 FLAG_PREFIX = "pluto_pred"
+
+#: The node types that carry an expression context (``ctx``): the ones a store can target.
+CONTEXT_NODES = (ast.Name, ast.Attribute, ast.Subscript, ast.Starred, ast.List, ast.Tuple)
 
 
 def names_read(expr: ast.AST) -> set[str]:
@@ -101,7 +106,7 @@ def load(target: ast.expr) -> ast.expr:
     """``target`` as a read: the value an unselected predicated assignment keeps."""
     node = copy.deepcopy(target)
     for sub in ast.walk(node):
-        if hasattr(sub, "ctx"):
+        if isinstance(sub, CONTEXT_NODES):
             sub.ctx = ast.Load()
     return node
 
@@ -160,10 +165,10 @@ class Flagger:
         self.flags.append(flag)
         bit = ast.IfExp(test=copy.deepcopy(node.test), body=ast.Constant(1), orelse=ast.Constant(0))
         value = bit if guard is None else ast.IfExp(test=copy.deepcopy(guard), body=bit, orelse=ast.Constant(0))
-        taken = ast.Name(id=flag, ctx=ast.Load())
+        taken = name_(flag)
         others = negate(taken) if guard is None else conj(guard, negate(taken))
         return (
-            [ast.Assign(targets=[ast.Name(id=flag, ctx=ast.Store())], value=value)]
+            [ast.Assign(targets=[store_(flag)], value=value)]
             + self.branch(node.body, taken)
             + self.branch(node.orelse, others)
         )

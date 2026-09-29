@@ -3,9 +3,9 @@
 import ast
 from collections.abc import Callable
 
+from hpcagent_bench.translators.numpyto_common.ast_build import name_, numpy_attribute, numpy_call
 from hpcagent_bench.translators.numpyto_common.parallelism import is_timestep_loop
 from hpcagent_bench.translators.numpyto_common.subscripts import is_full_slice
-
 from hpcagent_bench.translators.numpyto_jax.errors import EmitError
 from hpcagent_bench.translators.numpyto_jax.jnp import is_bool_expr
 from hpcagent_bench.translators.numpyto_jax.loops import (
@@ -29,7 +29,6 @@ __all__ = [
     "mask_reduction_slices",
     "mask_slice_reads",
     "maybe_mask",
-    "np_call",
     "reject_dynamic_slices",
     "rewrite_flip_prefix",
     "rolled_loop_writes",
@@ -140,11 +139,11 @@ class MaskToWhere(ast.NodeTransformer):
         if red is None:
             return node
         m, arr = sub.slice, sub.value
-        masked = np_call("where", [deep_copy(m), arr, ast.Constant(value=0)])
-        total = np_call("sum", [masked])
+        masked = numpy_call("where", [deep_copy(m), arr, ast.Constant(value=0)])
+        total = numpy_call("sum", [masked])
         if red == "sum":
             return ast.copy_location(total, node)
-        return ast.copy_location(ast.BinOp(left=total, op=ast.Div(), right=np_call("sum", [deep_copy(m)])), node)
+        return ast.copy_location(ast.BinOp(left=total, op=ast.Div(), right=numpy_call("sum", [deep_copy(m)])), node)
 
     def visit_Assign(self, node):
         self.generic_visit(node)
@@ -155,7 +154,7 @@ class MaskToWhere(ast.NodeTransformer):
         ):
             tgt = node.targets[0]
             m, arr = tgt.slice, tgt.value
-            new = np_call("where", [deep_copy(m), self.widen(node.value), deep_copy(arr)])
+            new = numpy_call("where", [deep_copy(m), self.widen(node.value), deep_copy(arr)])
             return ast.copy_location(ast.Assign(targets=[deep_copy(arr)], value=new), node)
         return node
 
@@ -165,15 +164,9 @@ class MaskToWhere(ast.NodeTransformer):
             tgt = node.target
             m, arr = tgt.slice, tgt.value
             rhs = ast.BinOp(left=deep_copy(arr), op=node.op, right=self.widen(node.value))
-            new = np_call("where", [deep_copy(m), rhs, deep_copy(arr)])
+            new = numpy_call("where", [deep_copy(m), rhs, deep_copy(arr)])
             return ast.copy_location(ast.Assign(targets=[deep_copy(arr)], value=new), node)
         return node
-
-
-def np_call(name: str, args: list[ast.AST]) -> ast.Call:
-    return ast.Call(
-        func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr=name, ctx=ast.Load()), args=args, keywords=[]
-    )
 
 
 def mask_reduction_slices(fn: ast.FunctionDef) -> None:
@@ -245,7 +238,7 @@ def axis_mask(arr: ast.AST, p: int, lower: ast.AST | None, upper: ast.AST | None
         value=ast.Attribute(value=arr, attr="shape", ctx=ast.Load()), slice=ast.Constant(value=p), ctx=ast.Load()
     )
     arange = ast.Call(
-        func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="arange", ctx=ast.Load()),
+        func=numpy_attribute("arange"),
         args=[shape_p],
         keywords=[],
     )
@@ -277,7 +270,7 @@ def maybe_mask(node: ast.AST, lv: set[str]) -> ast.AST:
     full = widen_to_full(node, p)
     mask = axis_mask(arr, p, lower, upper)
     where = ast.Call(
-        func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="where", ctx=ast.Load()),
+        func=numpy_attribute("where"),
         args=[mask, full, ast.Constant(value=0)],
         keywords=[],
     )
@@ -323,7 +316,7 @@ def mask_dynamic_writes(fn: ast.FunctionDef) -> None:
             mask = axis_mask(arr, p, lower, upper)
             keep = widen_dynamic_slices(target, lv)
             where = ast.Call(
-                func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="where", ctx=ast.Load()),
+                func=numpy_attribute("where"),
                 args=[mask, value, keep],
                 keywords=[],
             )
@@ -377,7 +370,7 @@ def rewrite_flip_prefix(fn: ast.FunctionDef) -> None:
                 slice=ast.Constant(value=0),
                 ctx=ast.Load(),
             )
-            arange = np_call("arange", [n])
+            arange = numpy_call("arange", [n])
             km1 = ast.BinOp(left=deep_copy(k), op=ast.Sub(), right=ast.Constant(value=1))
             idx = ast.BinOp(left=km1, op=ast.Sub(), right=arange)
             hi = ast.BinOp(
@@ -389,7 +382,7 @@ def rewrite_flip_prefix(fn: ast.FunctionDef) -> None:
                 op=ast.Sub(),
                 right=ast.Constant(value=1),
             )
-            clipped = np_call("clip", [idx, ast.Constant(value=0), hi])
+            clipped = numpy_call("clip", [idx, ast.Constant(value=0), hi])
             return ast.copy_location(ast.Subscript(value=arr, slice=clipped, ctx=ast.Load()), node)
 
     Rewriter().visit(fn)
@@ -453,9 +446,7 @@ def dynamic_window_slices(fn: ast.FunctionDef) -> None:
             arr = node.value
             for k, (start, width) in wins:
                 arr = ast.Call(
-                    func=ast.Attribute(
-                        value=ast.Name(id="lax", ctx=ast.Load()), attr="dynamic_slice_in_dim", ctx=ast.Load()
-                    ),
+                    func=ast.Attribute(value=name_("lax"), attr="dynamic_slice_in_dim", ctx=ast.Load()),
                     args=[arr, start, width, ast.Constant(value=k)],
                     keywords=[],
                 )

@@ -11,6 +11,7 @@ from collections.abc import Sequence
 import numpy as np
 
 __all__ = [
+    "MAX_CHECKED_RANKS",
     "AXIS_SCHEMES",
     "ArrayDist",
     "AxisDist",
@@ -18,6 +19,8 @@ __all__ = [
     "Grid",
     "array_dist_from_dict",
     "array_dist_to_dict",
+    "axis_index_lists",
+    "axis_to_dict",
     "binding_shapes",
     "block_partition_mismatch",
     "blockcyclic_distribution_from_shapes",
@@ -28,6 +31,7 @@ __all__ = [
     "distribution_from_shapes",
     "distribution_from_split",
     "distribution_over_symbol",
+    "effective_block_size",
     "factor_grid",
     "gather",
     "hypercube_grid",
@@ -40,6 +44,7 @@ __all__ = [
     "replication_refusal",
     "scatter",
     "split_axis_entry",
+    "symbol_axes_from_binding",
 ]
 
 if TYPE_CHECKING:  # hints only; the math core stays free of binding/envelope imports
@@ -49,6 +54,8 @@ if TYPE_CHECKING:  # hints only; the math core stays free of binding/envelope im
 
 #: The per-axis SPLIT schemes; replication is structural (unbound grid_dim, not a scheme here).
 AXIS_SCHEMES = ("block", "block_cyclic", "cyclic")
+#: The largest graded rank count the even-split check covers.
+MAX_CHECKED_RANKS = 16
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,7 +107,7 @@ def _block_bounds(n: int, parts: int, coord: int) -> tuple[int, int]:
     return lo, hi
 
 
-def _effective_block_size(axis: AxisDist) -> int:
+def effective_block_size(axis: AxisDist) -> int:
     """Block width owned_indices applies on a split axis: declared width for block_cyclic, else 1."""
     return max(1, axis.block_size) if axis.scheme == "block_cyclic" else 1
 
@@ -115,7 +122,7 @@ def owned_indices(n: int, axis: AxisDist, grid: Grid, coords: Sequence[int]) -> 
         lo, hi = _block_bounds(n, parts, coord)
         return np.arange(lo, hi, dtype=np.int64)
     if axis.scheme in ("block_cyclic", "cyclic"):
-        block_size = _effective_block_size(axis)
+        block_size = effective_block_size(axis)
         idx = np.arange(n, dtype=np.int64)
         return idx[(idx // block_size) % parts == coord]
     raise ValueError(
@@ -124,7 +131,7 @@ def owned_indices(n: int, axis: AxisDist, grid: Grid, coords: Sequence[int]) -> 
     )
 
 
-def _axis_index_lists(shape: Sequence[int], dist: ArrayDist, grid: Grid, coords: Sequence[int]) -> list[np.ndarray]:
+def axis_index_lists(shape: Sequence[int], dist: ArrayDist, grid: Grid, coords: Sequence[int]) -> list[np.ndarray]:
     if len(dist.axes) != len(shape):
         raise ValueError(f"ArrayDist has {len(dist.axes)} axes but the array has {len(shape)} dimension(s)")
     return [owned_indices(n, ax, grid, coords) for n, ax in zip(shape, dist.axes)]
@@ -135,7 +142,7 @@ def local_shape(shape: Sequence[int], dist: ArrayDist, grid: Grid, rank: int) ->
     if dist.replicated:
         return tuple(shape)
     coords = grid.coords_of(rank)
-    return tuple(len(ix) for ix in _axis_index_lists(shape, dist, grid, coords))
+    return tuple(len(ix) for ix in axis_index_lists(shape, dist, grid, coords))
 
 
 def scatter(a: np.ndarray, dist: ArrayDist, grid: Grid) -> list[np.ndarray]:
@@ -145,7 +152,7 @@ def scatter(a: np.ndarray, dist: ArrayDist, grid: Grid) -> list[np.ndarray]:
     tiles: list[np.ndarray] = []
     for rank in range(grid.nranks):
         coords = grid.coords_of(rank)
-        tiles.append(a[np.ix_(*_axis_index_lists(a.shape, dist, grid, coords))].copy())
+        tiles.append(a[np.ix_(*axis_index_lists(a.shape, dist, grid, coords))].copy())
     return tiles
 
 
@@ -159,7 +166,7 @@ def gather(
         return out
     for rank in range(grid.nranks):
         coords = grid.coords_of(rank)
-        out[np.ix_(*_axis_index_lists(global_shape, dist, grid, coords))] = tiles[rank]
+        out[np.ix_(*axis_index_lists(global_shape, dist, grid, coords))] = tiles[rank]
     return out
 
 
@@ -170,7 +177,7 @@ def is_partition(shape: Sequence[int], dist: ArrayDist, grid: Grid) -> bool:
     seen = np.zeros(tuple(shape), dtype=np.int64)
     for rank in range(grid.nranks):
         coords = grid.coords_of(rank)
-        seen[np.ix_(*_axis_index_lists(shape, dist, grid, coords))] += 1
+        seen[np.ix_(*axis_index_lists(shape, dist, grid, coords))] += 1
     return bool(np.all(seen == 1))
 
 
@@ -290,7 +297,7 @@ def distribution_from_shapes(
     return {"grid": [int(ranks)], "arrays": arrays}
 
 
-def _axis_to_dict(ax: AxisDist) -> dict:
+def axis_to_dict(ax: AxisDist) -> dict:
     """Serialize one AxisDist back to a submission-style axes[] entry (inverse of _array_dist_from_layout)."""
     if ax.grid_dim is None:
         return {"grid_dim": None}
@@ -303,7 +310,7 @@ def array_dist_to_dict(ad: ArrayDist) -> dict:
     the exact :class:`ArrayDist` the judge resolved, without re-deriving it from the manifest."""
     if ad.replicated:
         return {"replicated": True}
-    return {"axes": [_axis_to_dict(ax) for ax in ad.axes]}
+    return {"axes": [axis_to_dict(ax) for ax in ad.axes]}
 
 
 def array_dist_from_dict(layout: dict) -> ArrayDist:
@@ -322,7 +329,7 @@ def blockcyclic_distribution_from_shapes(
             continue  # too few axes to bind every split grid dim; the descriptor replicates it
         # default_distribution reads only the axis count, so a placeholder shape of the right rank works
         dist = default_distribution([2] * len(shape), grid, block_size=block_size)
-        arrays[name] = {"axes": [_axis_to_dict(ax) for ax in dist.axes]}
+        arrays[name] = {"axes": [axis_to_dict(ax) for ax in dist.axes]}
     if not arrays:
         raise ValueError(
             f"no array has >= {grid_ndim} axes to carry an equal-edge {grid_ndim}-D "
@@ -402,7 +409,7 @@ def _array_dist_from_layout(layout: dict) -> ArrayDist:
     return ArrayDist(axes=tuple(axes))
 
 
-def _symbol_axes_from_binding(binding: "Binding") -> dict[str, list[tuple[str, int]]]:
+def symbol_axes_from_binding(binding: "Binding") -> dict[str, list[tuple[str, int]]]:
     """Derive {size_symbol: [(array, axis), ...]} from the binding's declarative array shapes."""
     symbols = {a.name for a in binding.scalars if a.role == "symbol"}
     out: dict[str, list[tuple[str, int]]] = {}
@@ -490,7 +497,7 @@ class Descriptor:
         for name in ptrs:
             locations.setdefault(name, default_location)
 
-        derived = _symbol_axes_from_binding(binding)
+        derived = symbol_axes_from_binding(binding)
         for sym, pair in (symbol_axes or {}).items():
             derived[sym] = [tuple(pair)]  # manifest mapping wins for this symbol
         return cls(grid=grid, arrays=resolved, symbol_axes=derived, locations=locations)
@@ -540,7 +547,7 @@ class Descriptor:
                     sizes_replicated_axis = True
                     continue
                 axdist = ad.axes[axis]
-                schemes.add((axdist.grid_dim, _effective_block_size(axdist)))
+                schemes.add((axdist.grid_dim, effective_block_size(axdist)))
                 if local_val is None:
                     local_val = int(len(owned_indices(int(global_scalars[sym]), axdist, self.grid, coords)))
             if len(schemes) > 1:
@@ -600,7 +607,7 @@ def degenerates_to_block(n: int, parts: int, axis: AxisDist) -> bool:
         return True
     if parts <= 1 or n <= 1:
         return True
-    return n % parts == 0 and _effective_block_size(axis) == n // parts
+    return n % parts == 0 and effective_block_size(axis) == n // parts
 
 
 def block_partition_mismatch(descriptor: "Descriptor", shapes: Mapping[str, Sequence[int]]) -> str | None:
@@ -628,7 +635,7 @@ def block_partition_mismatch(descriptor: "Descriptor", shapes: Mapping[str, Sequ
                 continue
             return (
                 f"distribution.arrays[{name!r}].axes[{axis_index}] declares scheme "
-                f"{axis.scheme!r} (block_size {_effective_block_size(axis)}) over {parts} rank(s) "
+                f"{axis.scheme!r} (block_size {effective_block_size(axis)}) over {parts} rank(s) "
                 f"of extent {n}, but each rank is given the CONTIGUOUS block "
                 f"{_block_bounds(n, parts, 0)} .. of that extent. Declare scheme 'block', or a "
                 f"block_cyclic width of exactly {n // parts if n % parts == 0 else 'n / ranks'} "
@@ -714,8 +721,8 @@ def layout_divisibility_refusal(
             if axis.grid_dim is None or axis.scheme == "block":
                 continue
             n = int(shape[axis_index])
-            width = _effective_block_size(axis)
-            for p in sorted({int(r) for r in graded_ranks if 1 <= int(r) <= 16}):
+            width = effective_block_size(axis)
+            for p in sorted({int(r) for r in graded_ranks if 1 <= int(r) <= MAX_CHECKED_RANKS}):
                 if n % p != 0 or n % width != 0:
                     return (
                         f"distribution.arrays[{name!r}].axes[{axis_index}] declares scheme "

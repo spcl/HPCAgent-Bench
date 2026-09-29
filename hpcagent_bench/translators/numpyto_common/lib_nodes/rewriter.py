@@ -3,9 +3,11 @@
 import ast
 import copy
 import inspect
-from typing import TYPE_CHECKING
 from collections.abc import Callable
+from typing import TYPE_CHECKING
 
+from hpcagent_bench.translators.numpyto_common.ast_build import const_int, store_
+from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.ir import tag_numpy_origin
 from hpcagent_bench.translators.numpyto_common.lib_nodes.call_hoist import CallHoister, numpy_call_key
 from hpcagent_bench.translators.numpyto_common.lib_nodes.dims import NP_ZEROS_ALIASES
@@ -14,7 +16,6 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import is_integ
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
     alloc_marker,
     const_,
-    const_int,
     is_full_slice_subscript,
     is_shape_scalar,
     reads_complex,
@@ -437,10 +438,7 @@ class LibNodeRewriter(ast.NodeTransformer):
             return
         np_attr = (
             rhs.func.attr
-            if isinstance(rhs, ast.Call)
-            and isinstance(rhs.func, ast.Attribute)
-            and isinstance(rhs.func.value, ast.Name)
-            and rhs.func.value.id == "np"
+            if isinstance(rhs, ast.Call) and isinstance(rhs.func, ast.Attribute) and is_numpy_module(rhs.func.value)
             else None
         )
         if np_attr in NP_ZEROS_ALIASES:
@@ -761,7 +759,7 @@ def canonicalize_call_assign(node: ast.Assign) -> None:
         and isinstance(node.value, ast.Call)
         and numpy_call_key(node.value) in NP_CALL_EXPANDERS
     ):
-        node.targets[0] = ast.Name(id=node.targets[0].value.id, ctx=ast.Store())
+        node.targets[0] = store_(node.targets[0].value.id)
     if (
         len(node.targets) == 1
         and isinstance(node.value, ast.Subscript)

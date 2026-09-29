@@ -1,27 +1,25 @@
 """Static rank (and tuple-length) inference over a function body."""
 
 import ast
-from collections.abc import Callable
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 
+from hpcagent_bench.translators.numpyto_common.ast_build import const_int
+from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import numpy_call_attr, numpy_submodule_attr
+from hpcagent_bench.translators.numpyto_common.emit_helpers.tokens import IDENT_RE
 from hpcagent_bench.translators.numpyto_common.lib_nodes import (
+    extent_is_scalar,
     iter_extent_of,
     parse_einsum_subscripts,
-    extent_is_scalar,
+)
+from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import (
+    LIKE_CTORS,
+    REDUCE_FNS,
+    SHAPE_CTORS,
+    reachable_functions,
+    tuple_len,
 )
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
 from hpcagent_bench.translators.numpyto_common.subscripts import is_ellipsis, is_newaxis
-from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import (
-    REDUCE_FNS,
-    LIKE_CTORS,
-    SHAPE_CTORS,
-    const_int,
-    np_attr,
-    tuple_len,
-    np_submodule_attr,
-    reachable_functions,
-)
-from hpcagent_bench.translators.numpyto_common.emit_helpers.tokens import IDENT_RE
 
 __all__ = [
     "NP_CALL_RANKS",
@@ -239,9 +237,9 @@ def subscript_rank(value: ast.Subscript, ranks: dict[str, int]) -> int | None:
 def call_rank(value: ast.Call, ranks: dict[str, int]) -> int | None:
     func = value.func
     is_abs = isinstance(func, ast.Name) and func.id == "abs"
-    if value.args and (is_abs or np_submodule_attr(value, "fft")):
+    if value.args and (is_abs or numpy_submodule_attr(value, "fft")):
         return expr_rank(value.args[0], ranks)  # builtin abs is elementwise; fft/ifft/fftn... preserve rank
-    attr = np_attr(value)
+    attr = numpy_call_attr(value)
     if attr is None:
         return method_call_rank(value, ranks)
     handler = NP_CALL_RANKS.get(attr)

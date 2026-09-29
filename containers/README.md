@@ -246,7 +246,7 @@ when editing. Per-model settings: [docs/serving/](../docs/serving/README.md).
 | `fetch_weights.sbatch` | downloads into `$HF_HOME` inside an image, restripes on the host, fails unless every large blob is wide-striped |
 | `serve-private.sbatch` | a private Qwen3.8 endpoint on one beverin node ([private-endpoint.md](../docs/serving/private-endpoint.md)) |
 | `serve-daint.sbatch`, `alps-endpoint.sh` | GH200 serving and the client-side endpoint check |
-| `smoke-kimi-sglang.sbatch`, `submit-glm53-sglang.sh` | multi-node SGLang serving smokes (GLM-5.3 through the second) |
+| `smoke-kimi-sglang.sbatch` | multi-node SGLang serving smoke |
 | `verify-tools-reasoning.py`, `accuracy-gate.py` | tool-call/reasoning, long-context accuracy and throughput gates against a live server |
 | `moe-configs/` | tuned fused-MoE kernel configs, build input for `sglang/` and `vllm/` |
 

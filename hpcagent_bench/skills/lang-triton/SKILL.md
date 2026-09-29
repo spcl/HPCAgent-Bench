@@ -134,7 +134,7 @@ included -- if it does not win locally it will not win here. Iterate with `score
 
 ## References
 
-Every mechanical claim above was compiled and run on this box (job 626529, ROCm 7.2.3,
+Every mechanical claim above was compiled and run on this box (ROCm 7.2.3,
 triton 3.5.1+rocm7.2.3, torch 2.9.1, MI300A): 9 cases, 9 held -- the 64-lane wave, both `num_stages`
 defaults, the `num_ctas > 1` refusal, the FNUZ type names, the K=8 dot running rather than erroring, the
 LDS message above, and a masked tail store on a non-multiple length.

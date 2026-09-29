@@ -52,6 +52,8 @@ __all__ = [
     "DO_CONCURRENT_GFORTRAN",
     "DO_CONCURRENT_NVFORTRAN",
     "FLANG_BASELINE",
+    "FP_ASSOC_FLANG",
+    "FP_CONTRACT_NVHPC",
     "GCC_AUTOPAR",
     "GCC_AUTOPAR_OUTLINE_PATTERN",
     "GCC_OPT_REPORT",
@@ -144,7 +146,7 @@ _FP_CONTRACT = "-ffp-contract=fast"
 #: nvc's spelling of the same thing: ``-Mfma``, on by default at ``-O2`` and above, so this states the
 #: default. Unverified without the NVIDIA HPC SDK (INSTALL_NVHPC); ``containers/lib/parallelizer-gate.sh``
 #: checks it at image build.
-_FP_CONTRACT_NVHPC = "-Mfma"
+FP_CONTRACT_NVHPC = "-Mfma"
 
 # OS/arch-aware pieces of the CPU baselines (Linux, macOS, WSL2 == Linux). (1) ``-march=native``
 # everywhere except Apple-Silicon macOS, whose clang wants ``-mcpu=native``. (2) clang's ``libomp``
@@ -197,7 +199,7 @@ CPU_BASELINE_GFORTRAN = f"-O3 {ARCH_NATIVE} -fopenmp {_FP_RELAX} {_FP_ASSOC} {_F
 #: NVHPC baseline for C / C++ / Fortran. ``_FP_RELAX`` and ``_FP_ASSOC`` need no nvc spelling: nvc
 #: relaxes errno, trapping and signed zeros AND reassociates by default (``-Kieee`` turns that off).
 #: ``-tp=native`` is its ``-march=native``, ``-mp`` its host ``-fopenmp``.
-CPU_BASELINE_NVHPC = f"-O3 -tp=native -mp {_FP_CONTRACT_NVHPC} -fPIC"
+CPU_BASELINE_NVHPC = f"-O3 -tp=native -mp {FP_CONTRACT_NVHPC} -fPIC"
 
 #: nvc++ implements ``<execution>`` itself -- ``-stdpar=multicore`` is what makes ``par`` parallel,
 #: and it is needed at COMPILE as well as at link. Without it ``par`` silently takes the sequential
@@ -234,8 +236,8 @@ PYTHRAN_BASELINE = f"-DUSE_XSIMD -fopenmp {ARCH_NATIVE} {_FP_RELAX} {_FP_ASSOC} 
 #: (no fast-math). flang rejects ``-fno-math-errno`` (a no-op for Fortran intrinsics) and has no
 #: ``-fno-trapping-math`` spelling. ``-fno-signed-zeros`` rides WITH the licence: LLVM vectorizes a
 #: reduction only with reassoc AND nsz, so ``-fassociative-math`` alone is silently ignored.
-_FP_ASSOC_FLANG = f"{_FP_ASSOC} -fno-signed-zeros" if _FP_ASSOC else ""
-FLANG_BASELINE = f"-O3 {ARCH_NATIVE} -fopenmp {_FP_ASSOC_FLANG} {_FP_CONTRACT} -fPIC"
+FP_ASSOC_FLANG = f"{_FP_ASSOC} -fno-signed-zeros" if _FP_ASSOC else ""
+FLANG_BASELINE = f"-O3 {ARCH_NATIVE} -fopenmp {FP_ASSOC_FLANG} {_FP_CONTRACT} -fPIC"
 
 #: flang's route to glibc's vector libm (no distro driver spec pre-includes it, unlike gfortran's).
 #: PROBE-GATED at use (languages._veclib_accepted), since an older flang rejects it. Empty off Linux.

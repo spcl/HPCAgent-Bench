@@ -3,14 +3,13 @@
 import ast
 import copy
 
+from hpcagent_bench.translators.numpyto_common.ast_build import name_, range_for, store_
 from hpcagent_bench.translators.numpyto_common.lib_nodes.call_args import kwarg_or_pos
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
     alloc_marker,
     const_,
     const_or_name,
-    name_,
-    store_,
     wrap_for_loops,
 )
 from hpcagent_bench.translators.numpyto_common.lib_nodes.scalarize import scalarize_at_iters
@@ -160,14 +159,7 @@ def expand_histogram(
                 orelse=[],
             ),
         ]
-        out.append(
-            ast.For(
-                target=store_("__hsi"),
-                iter=ast.Call(func=name_("range"), args=[n_ast], keywords=[]),
-                body=scan_body,
-                orelse=[],
-            )
-        )
+        out.append(range_for("__hsi", [n_ast], scan_body))
         lo, hi = name_("__hlo"), name_("__hhi")
     # Zero the target.
     zero_body = [
@@ -175,14 +167,7 @@ def expand_histogram(
             targets=[ast.Subscript(value=name_(target.id), slice=name_("__bi"), ctx=ast.Store())], value=const_(0.0)
         )
     ]
-    out.append(
-        ast.For(
-            target=store_("__bi"),
-            iter=ast.Call(func=name_("range"), args=[bins], keywords=[]),
-            body=zero_body,
-            orelse=[],
-        )
-    )
+    out.append(range_for("__bi", [bins], zero_body))
     # numpy's bin is defined by its EDGE ARRAY, not by the closed form below: it truncates the
     # same index and then walks it one step against linspace's edges. The two round apart --
     # probing every edge and one ulp either side, the closed form alone puts 248 of 3005 probes
@@ -224,10 +209,10 @@ def expand_histogram(
     )
     out.append(ast.Assign(targets=[store_(step_name)], value=edge_at(const_(0), ast.Load())))
     out.append(
-        ast.For(
-            target=store_("__hj"),
-            iter=ast.Call(func=name_("range"), args=[copy.deepcopy(bins)], keywords=[]),
-            body=[
+        range_for(
+            "__hj",
+            [copy.deepcopy(bins)],
+            [
                 ast.Assign(
                     targets=[edge_at(name_("__hj"), ast.Store())],
                     value=ast.BinOp(left=name_("__hj"), op=ast.Mult(), right=name_(step_name)),
@@ -237,7 +222,6 @@ def expand_histogram(
                     value=ast.BinOp(left=edge_at(name_("__hj"), ast.Load()), op=ast.Add(), right=copy.deepcopy(lo)),
                 ),
             ],
-            orelse=[],
         )
     )
     # Per-element binning. Bin index (truncated via ``int()``):
@@ -331,12 +315,5 @@ def expand_histogram(
             orelse=[],
         ),
     ]
-    out.append(
-        ast.For(
-            target=store_("__hi"),
-            iter=ast.Call(func=name_("range"), args=[n_ast], keywords=[]),
-            body=bin_body,
-            orelse=[],
-        )
-    )
+    out.append(range_for("__hi", [n_ast], bin_body))
     return out

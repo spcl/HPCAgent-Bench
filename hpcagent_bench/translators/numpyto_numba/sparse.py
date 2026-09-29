@@ -2,6 +2,7 @@
 
 import ast
 
+from hpcagent_bench.translators.numpyto_common.ast_build import name_
 from hpcagent_bench.translators.numpyto_common.ir import KernelIR, SparseArrayDesc
 
 __all__ = [
@@ -110,7 +111,7 @@ def prange_row_loop(loop: ast.For) -> None:
     """
     call = loop.iter
     if isinstance(call, ast.Call):
-        call.func = ast.Attribute(value=ast.Name(id="nb", ctx=ast.Load()), attr="prange", ctx=ast.Load())
+        call.func = ast.Attribute(value=name_("nb"), attr="prange", ctx=ast.Load())
 
 
 class SparseMatmulRewriter(ast.NodeTransformer):
@@ -174,7 +175,7 @@ class SparseMatmulRewriter(ast.NodeTransformer):
         self.counter += 1
         temp = f"__sp{self.counter}"
         self.pre.extend(self.lower(temp, desc, node.right))
-        return ast.Name(id=temp, ctx=ast.Load())
+        return name_(temp)
 
     def bound(self, token: object) -> str:
         """Name of the function-top local holding shape symbol ``token``."""
@@ -212,7 +213,7 @@ class SparseMatmulRewriter(ast.NodeTransformer):
             raise SparseLoweringRefused("sparse @ <expression>: the dense operand must be a name")
         if not self.vectors_only:
             raise SparseLoweringRefused("dense operand is not proven to be a vector")
-        target = ast.Name(id=temp, ctx=ast.Load())
+        target = name_(temp)
         if desc.format == "csr":
             stmts = SPARSE_MATMUL_DISPATCH[("csr", "dense", "matmul_vec")](target, desc.buffers, rhs.id, rows)
             prange_row_loop(stmts[0])

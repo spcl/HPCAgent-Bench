@@ -25,6 +25,7 @@ from typing import Any, ClassVar, Self, cast
 import yaml
 
 __all__ = [
+    "PATH",
     "SCOPED_ENVIRONMENT",
     "AttemptSettings",
     "ConfigValue",
@@ -32,6 +33,7 @@ __all__ = [
     "Section",
     "Settings",
     "clear_override",
+    "coerce",
     "env_value",
     "environment",
     "get",
@@ -48,7 +50,7 @@ __all__ = [
     "settings",
 ]
 
-_PATH = pathlib.Path(__file__).parent / "config.yaml"
+PATH = pathlib.Path(__file__).parent / "config.yaml"
 
 #: What a config value can be once coerced. A key holding anything else is a config bug, not a type
 #: the callers have to carry.
@@ -63,7 +65,7 @@ _OVERRIDES: dict[str, ConfigValue] = {}
 
 @functools.lru_cache(maxsize=1, typed=True)
 def _cfg() -> dict[str, object]:
-    raw = yaml.safe_load(_PATH.read_text())
+    raw = yaml.safe_load(PATH.read_text())
     if not isinstance(raw, dict):
         return {}
     return {str(key): value for key, value in cast("dict[object, object]", raw).items()}
@@ -156,7 +158,7 @@ def environment() -> dict[str, str]:
     return merged
 
 
-def _coerce(s: str) -> ConfigValue:
+def coerce(s: str) -> ConfigValue:
     low = s.lower()
     if low in ("true", "false"):
         return low == "true"
@@ -192,7 +194,7 @@ def get(dotted: str, default: ConfigValue = None) -> ConfigValue:
         return _OVERRIDES[dotted]
     raw = env_value("HPCAGENT_BENCH_" + dotted.replace(".", "_").upper())
     if raw is not None:
-        return _coerce(raw)
+        return coerce(raw)
     node: object = _cfg()
     for key in dotted.split("."):
         if not isinstance(node, dict):

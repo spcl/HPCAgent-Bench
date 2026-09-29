@@ -3,13 +3,13 @@
 """The per-kernel memory cap must bound the HEAP (RLIMIT_DATA), not the whole address space
 (RLIMIT_AS), or a GPU column crashes under it.
 
-canon_column.sh gained a per-kernel memory cap (job 640519: pluto rank 2 OOM-killed at
+canon_column.sh gained a per-kernel memory cap (pluto rank 2 was OOM-killed at
 ~465 GB RSS under --mem=0's no-per-rank-reservation, taking every sibling rank's in-flight kernel
 down with it) via ``ulimit -v`` (RLIMIT_AS), applied unconditionally to every column including the
 GPU ones. A HIP process reserves its own VRAM aperture as address space at ``hipInit`` -- measured
-with a probe job (644414, gfx942): ~97 GiB with no limit, shrunk to ~73 GiB to fit inside a 96 GiB
+with a probe job (gfx942): ~97 GiB with no limit, shrunk to ~73 GiB to fit inside a 96 GiB
 RLIMIT_AS cap -- leaving too little of the same 96 GiB budget for the kernel's own device+host
-buffers. Job 644343 (ppcg_hip, the first GPU canon column run under the cap) crashed 7 of 40
+buffers. A ppcg_hip job (the first GPU canon column run under the cap) crashed 7 of 40
 kernels: ``hipMalloc`` "out of memory" and, on the host side, a numpy ``MemoryError`` on a 2.84 GiB
 array a 513 GB node should never fail to give.
 
@@ -17,7 +17,7 @@ RLIMIT_DATA does not count that aperture (VmData held flat across every case the
 whether hipMalloc'd or not) while still rejecting a real over-cap heap allocation (confirmed
 separately, outside the probe job: a RLIMIT_DATA cap does reject an over-cap allocation the same
 way RLIMIT_AS does -- it is not a no-op on this kernel), so it is the knob that protects against
-job 640519's failure mode without breaking a GPU column.
+that OOM failure mode without breaking a GPU column.
 
 This drives the real script's ``inner`` entry point against a stub ``hpcagent_bench.cli`` that
 reports its own rlimits instead of running a kernel -- the same way
@@ -85,7 +85,7 @@ def test_default_cap_bounds_rlimit_data_not_rlimit_as(tmp_path: pathlib.Path) ->
     expected_bytes = 100663296 * 1024  # 96 GiB, canon_column.sh's own default (KB, ulimit -d unit)
     assert limits["RLIMIT_DATA"] == (expected_bytes, expected_bytes)
     # The bug this guards: RLIMIT_AS must be left untouched, or a GPU column's hipInit aperture
-    # (~97 GiB measured, probe job 644414) competes with the kernel's own buffers for one budget.
+    # (~97 GiB, measured by a probe) competes with the kernel's own buffers for one budget.
     unlimited = (resource.RLIM_INFINITY, resource.RLIM_INFINITY)
     assert limits["RLIMIT_AS"] == unlimited, (
         "canon_column.sh must not constrain RLIMIT_AS -- a GPU column's HIP aperture alone can "

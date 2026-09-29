@@ -17,12 +17,12 @@ from types import SimpleNamespace
 
 import numpy as np
 
+from hpcagent_bench.translators.numpyto_common.ast_build import const_int
 from hpcagent_bench.translators.numpyto_common.numpy_desugar import (
     axis_list,
-    const_int,
+    desugar_for_python_backend,
     param_body_rank_evidence,
     reduce_axis_stmts,
-    desugar_for_python_backend,
 )
 from tests.translators.source_module import run_source
 

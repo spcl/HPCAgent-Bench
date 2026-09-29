@@ -3,6 +3,7 @@
 import ast
 
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import is_integer_expr
+from hpcagent_bench.translators.numpyto_common.ast_build import numpy_attribute
 
 __all__ = ["BuiltinCastRewriter", "ScalarFloatTagger", "TrueDivisionPromoter"]
 
@@ -51,7 +52,7 @@ class BuiltinCastRewriter(ast.NodeTransformer):
         ):
             return ast.copy_location(
                 ast.Call(
-                    func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="float64", ctx=ast.Load()),
+                    func=numpy_attribute("float64"),
                     args=list(operand.args),
                     keywords=[],
                 ),
@@ -124,7 +125,7 @@ class TrueDivisionPromoter(ast.NodeTransformer):
     def as_f64(node: ast.expr) -> ast.expr:
         return ast.copy_location(
             ast.Call(
-                func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="float64", ctx=ast.Load()),
+                func=numpy_attribute("float64"),
                 args=[node],
                 keywords=[],
             ),

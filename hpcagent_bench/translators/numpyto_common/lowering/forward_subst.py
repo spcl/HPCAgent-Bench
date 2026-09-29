@@ -6,7 +6,7 @@ import copy
 from hpcagent_bench.translators.numpyto_common.lowering.mathfuncs import MATH_INTRINSIC_NAMES
 from hpcagent_bench.translators.numpyto_common.lowering.ssa import live_on_loop_reentry, read_in
 from hpcagent_bench.translators.numpyto_common.lowering.tuples import fill_empty_blocks
-from hpcagent_bench.translators.numpyto_common.statement_desugar import written_name
+from hpcagent_bench.translators.numpyto_common.subscripts import base_name
 
 __all__ = [
     "FWD_SUBST_MAX_NODES",
@@ -190,7 +190,7 @@ class CandidateSearch:
             elif isinstance(node, (ast.Assign, ast.AugAssign)):
                 targets = node.targets if isinstance(node, ast.Assign) else [node.target]
                 for tgt in targets:
-                    base = written_name(tgt)
+                    base = base_name(tgt)
                     if base is not None:
                         self.written.add(base)
         # One pass, so the depth test is O(1) and gates the costly liveness walk.
@@ -221,7 +221,7 @@ class CandidateSearch:
         if not fwd_subst_is_pure(expr):
             return False
         for sub in subscripts:  # aliasing: a replayed read must not cross its own store
-            base = written_name(sub)
+            base = base_name(sub)
             if base is None or base in self.written:
                 return False
         return self.operands_stable(expr, loop_vars)

@@ -3,6 +3,8 @@
 import ast
 import copy
 
+from hpcagent_bench.translators.numpyto_common.ast_build import name_, numpy_attribute, range_for, store_
+from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.lib_nodes.dims import NP_ZEROS_ALIASES
 from hpcagent_bench.translators.numpyto_common.lowering.hoisting import StmtHoister
 from hpcagent_bench.translators.numpyto_common.lowering.shape_harvest import ctor_shape_arg
@@ -44,8 +46,7 @@ class FullCallHoister(StmtHoister):
             isinstance(v, ast.Call)
             and isinstance(v.func, ast.Attribute)
             and v.func.attr in ("full", "full_like")
-            and isinstance(v.func.value, ast.Name)
-            and v.func.value.id in ("np", "numpy")
+            and is_numpy_module(v.func.value)
             and len(v.args) >= 2
         )
 
@@ -78,8 +79,7 @@ class FullLikeRewriter(ast.NodeTransformer):
             and isinstance(v, ast.Call)
             and isinstance(v.func, ast.Attribute)
             and v.func.attr in ("full_like", "full")
-            and isinstance(v.func.value, ast.Name)
-            and v.func.value.id in ("np", "numpy")
+            and is_numpy_module(v.func.value)
             and len(v.args) >= 2
         ):
             return node
@@ -87,9 +87,9 @@ class FullLikeRewriter(ast.NodeTransformer):
         alloc_attr = "empty_like" if v.func.attr == "full_like" else "empty"
         dtype_kw = [kw for kw in v.keywords if kw.arg == "dtype"]
         alloc = ast.Assign(
-            targets=[ast.Name(id=tgt.id, ctx=ast.Store())],
+            targets=[store_(tgt.id)],
             value=ast.Call(
-                func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr=alloc_attr, ctx=ast.Load()),
+                func=numpy_attribute(alloc_attr),
                 args=[v.args[0]],
                 keywords=dtype_kw,
             ),
@@ -97,7 +97,7 @@ class FullLikeRewriter(ast.NodeTransformer):
         fill = ast.Assign(
             targets=[
                 ast.Subscript(
-                    value=ast.Name(id=tgt.id, ctx=ast.Load()),
+                    value=name_(tgt.id),
                     slice=ast.Slice(lower=None, upper=None, step=None),
                     ctx=ast.Store(),
                 )
@@ -129,8 +129,7 @@ class EyeCallHoister(StmtHoister):
             isinstance(v, ast.Call)
             and isinstance(v.func, ast.Attribute)
             and v.func.attr in ("eye", "identity")
-            and isinstance(v.func.value, ast.Name)
-            and v.func.value.id in ("np", "numpy")
+            and is_numpy_module(v.func.value)
             and bool(v.args)
         )
 
@@ -169,7 +168,7 @@ class CopyToAllocAndFill(ast.NodeTransformer):
         alloc = ast.Assign(
             targets=[copy.deepcopy(node.targets[0])],
             value=ast.Call(
-                func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="empty_like", ctx=ast.Load()),
+                func=numpy_attribute("empty_like"),
                 args=[copy.deepcopy(src)],
                 keywords=[],
             ),
@@ -192,7 +191,7 @@ def copied_name(node: ast.Assign) -> ast.Name | None:
     ):
         return None
     receiver = value.func.value
-    if isinstance(receiver, ast.Name) and receiver.id in ("np", "numpy"):
+    if is_numpy_module(receiver):
         return value.args[0] if len(value.args) == 1 and isinstance(value.args[0], ast.Name) else None
     return receiver if isinstance(receiver, ast.Name) and not value.args else None
 
@@ -223,8 +222,7 @@ class EyeToZerosDiagonal(ast.NodeTransformer):
             and isinstance(v, ast.Call)
             and isinstance(v.func, ast.Attribute)
             and v.func.attr in ("eye", "identity")
-            and isinstance(v.func.value, ast.Name)
-            and v.func.value.id in ("np", "numpy")
+            and is_numpy_module(v.func.value)
             and v.args
         ):
             return node
@@ -264,53 +262,53 @@ class EyeToZerosDiagonal(ast.NodeTransformer):
         if off_zero:
             count = (
                 ast.Call(
-                    func=ast.Name(id="min", ctx=ast.Load()),
+                    func=name_("min"),
                     args=[copy.deepcopy(rows), copy.deepcopy(cols)],
                     keywords=[],
                 )
                 if rectangular
                 else copy.deepcopy(rows)
             )
-            row_idx, col_idx = ast.Name(id=it, ctx=ast.Load()), ast.Name(id=it, ctx=ast.Load())
+            row_idx, col_idx = name_(it), name_(it)
         else:
             if isinstance(k_node, ast.Constant) and isinstance(k_node.value, int):
                 off_r, off_c = max(0, -k_node.value), max(0, k_node.value)
             else:
                 off_r = ast.Call(
-                    func=ast.Name(id="max", ctx=ast.Load()),
+                    func=name_("max"),
                     args=[ast.Constant(value=0), ast.UnaryOp(op=ast.USub(), operand=copy.deepcopy(k_node))],
                     keywords=[],
                 )
                 off_c = ast.Call(
-                    func=ast.Name(id="max", ctx=ast.Load()),
+                    func=name_("max"),
                     args=[ast.Constant(value=0), copy.deepcopy(k_node)],
                     keywords=[],
                 )
             count = ast.Call(
-                func=ast.Name(id="min", ctx=ast.Load()),
+                func=name_("min"),
                 args=[shift(rows, off_r, ast.Sub()), shift(cols, off_c, ast.Sub())],
                 keywords=[],
             )
-            row_idx = shift(ast.Name(id=it, ctx=ast.Load()), off_r, ast.Add())
-            col_idx = shift(ast.Name(id=it, ctx=ast.Load()), off_c, ast.Add())
+            row_idx = shift(name_(it), off_r, ast.Add())
+            col_idx = shift(name_(it), off_c, ast.Add())
 
         dtype_kw = [kw for kw in v.keywords if kw.arg == "dtype"]
         zeros = ast.Assign(
-            targets=[ast.Name(id=tgt, ctx=ast.Store())],
+            targets=[store_(tgt)],
             value=ast.Call(
-                func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="zeros", ctx=ast.Load()),
+                func=numpy_attribute("zeros"),
                 args=[ast.Tuple(elts=[copy.deepcopy(rows), cols], ctx=ast.Load())],
                 keywords=dtype_kw,
             ),
         )
-        loop = ast.For(
-            target=ast.Name(id=it, ctx=ast.Store()),
-            iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[count], keywords=[]),
-            body=[
+        loop = range_for(
+            it,
+            [count],
+            [
                 ast.Assign(
                     targets=[
                         ast.Subscript(
-                            value=ast.Name(id=tgt, ctx=ast.Load()),
+                            value=name_(tgt),
                             slice=ast.Tuple(elts=[row_idx, col_idx], ctx=ast.Load()),
                             ctx=ast.Store(),
                         )
@@ -318,7 +316,6 @@ class EyeToZerosDiagonal(ast.NodeTransformer):
                     value=ast.Constant(value=1.0),
                 )
             ],
-            orelse=[],
         )
         for s in (zeros, loop):
             ast.copy_location(s, node)
@@ -366,8 +363,7 @@ class ZerosRewriter(ast.NodeTransformer):
             and isinstance(node.targets[0], ast.Name)
             and isinstance(node.value, ast.Call)
             and isinstance(node.value.func, ast.Attribute)
-            and isinstance(node.value.func.value, ast.Name)
-            and node.value.func.value.id == "np"
+            and is_numpy_module(node.value.func.value)
             and node.value.func.attr in self.aliases
         ):
             name = node.targets[0].id
@@ -393,7 +389,7 @@ class ZerosRewriter(ast.NodeTransformer):
                 self.fills[name] = attr
                 # Replace the call with a marker the emitter recognises.
                 node.value = ast.Call(
-                    func=ast.Name(id="__hpcagent_bench_zeros__", ctx=ast.Load()),
+                    func=name_("__hpcagent_bench_zeros__"),
                     args=[],
                     keywords=[],
                 )
@@ -479,8 +475,7 @@ class MgridLowering(ast.NodeTransformer):
         if not (
             isinstance(rhs, ast.Subscript)
             and isinstance(rhs.value, ast.Attribute)
-            and isinstance(rhs.value.value, ast.Name)
-            and rhs.value.value.id == "np"
+            and is_numpy_module(rhs.value.value)
             and rhs.value.attr == "mgrid"
         ):
             return node
@@ -503,39 +498,31 @@ class MgridLowering(ast.NodeTransformer):
             shape_elts.append(ast.BinOp(left=hi, op=ast.Sub(), right=lo))
         shape_tuple = ast.Tuple(elts=shape_elts, ctx=ast.Load())
         out: list[ast.stmt] = []
-        iters = [ast.Name(id=f"__mg{k}", ctx=ast.Load()) for k in range(len(targets))]
+        iters = [name_(f"__mg{k}") for k in range(len(targets))]
         for k, tgt in enumerate(targets):
             out.append(
                 ast.Assign(
-                    targets=[ast.Name(id=tgt.id, ctx=ast.Store())],
+                    targets=[store_(tgt.id)],
                     value=ast.Call(
-                        func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="empty", ctx=ast.Load()),
+                        func=numpy_attribute("empty"),
                         args=[shape_tuple],
                         keywords=[
                             ast.keyword(
                                 arg="dtype",
-                                value=ast.Attribute(
-                                    value=ast.Name(id="np", ctx=ast.Load()), attr="int64", ctx=ast.Load()
-                                ),
+                                value=ast.Attribute(value=name_("np"), attr="int64", ctx=ast.Load()),
                             )
                         ],
                     ),
                 )
             )
             lo_k = axes[k].lower if axes[k].lower is not None else ast.Constant(value=0)
-            idx_expr: ast.expr = ast.Name(id=iters[k].id, ctx=ast.Load())
+            idx_expr: ast.expr = name_(iters[k].id)
             if not (isinstance(lo_k, ast.Constant) and lo_k.value == 0):
                 idx_expr = ast.BinOp(left=idx_expr, op=ast.Add(), right=lo_k)
-            slice_form = (
-                iters[0]
-                if len(iters) == 1
-                else ast.Tuple(elts=[ast.Name(id=it.id, ctx=ast.Load()) for it in iters], ctx=ast.Load())
-            )
+            slice_form = iters[0] if len(iters) == 1 else ast.Tuple(elts=[name_(it.id) for it in iters], ctx=ast.Load())
             body = [
                 ast.Assign(
-                    targets=[
-                        ast.Subscript(value=ast.Name(id=tgt.id, ctx=ast.Load()), slice=slice_form, ctx=ast.Store())
-                    ],
+                    targets=[ast.Subscript(value=name_(tgt.id), slice=slice_form, ctx=ast.Store())],
                     value=idx_expr,
                 )
             ]
@@ -549,13 +536,6 @@ class MgridLowering(ast.NodeTransformer):
                     if isinstance(ax_lo, ast.Constant) and ax_lo.value == 0
                     else ast.BinOp(left=ax_hi, op=ast.Sub(), right=ax_lo)
                 )
-                stmt = [
-                    ast.For(
-                        target=ast.Name(id=it.id, ctx=ast.Store()),
-                        iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[bound], keywords=[]),
-                        body=stmt,
-                        orelse=[],
-                    )
-                ]
+                stmt = [range_for(it.id, [bound], stmt)]
             out.extend(stmt)
         return out

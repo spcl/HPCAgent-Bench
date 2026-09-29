@@ -2,6 +2,9 @@
 
 import ast
 
+from hpcagent_bench.translators.numpyto_common.ast_build import name_
+from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import numpy_submodule_attr
+
 __all__ = [
     "AUG_OP_SRC",
     "LIKE_CTORS",
@@ -11,15 +14,11 @@ __all__ = [
     "RankedRewritePass",
     "RewritePass",
     "as_stmts",
-    "const_int",
     "eigh_alias_names",
     "eigh_call_ab",
     "eigh_call_kind",
-    "expr_of",
     "is_eigh_assign_target",
     "name_store_counts",
-    "np_attr",
-    "np_submodule_attr",
     "reachable_functions",
     "replace_call_with_name",
     "tuple_len",
@@ -58,32 +57,6 @@ SHAPE_CTORS = {"empty", "zeros", "ones", "full", "ndarray"}
 LIKE_CTORS = {"empty_like", "zeros_like", "ones_like"}
 
 
-def np_attr(node: ast.AST) -> str | None:
-    """``np.<attr>`` / ``numpy.<attr>`` call -> ``attr`` else None."""
-    if (
-        isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and isinstance(node.func.value, ast.Name)
-        and node.func.value.id in ("np", "numpy")
-    ):
-        return node.func.attr
-    return None
-
-
-def np_submodule_attr(node: ast.AST, submodule: str) -> str | None:
-    """``np.<submodule>.<attr>(...)`` call (``np.fft.fft``, ``np.linalg.solve``) -> ``attr``, else None."""
-    if (
-        isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and isinstance(node.func.value, ast.Attribute)
-        and node.func.value.attr == submodule
-        and isinstance(node.func.value.value, ast.Name)
-        and node.func.value.value.id in ("np", "numpy")
-    ):
-        return node.func.attr
-    return None
-
-
 def tuple_len(node: ast.AST) -> int | None:
     if isinstance(node, (ast.Tuple, ast.List)):
         return len(node.elts)
@@ -95,24 +68,13 @@ def tuple_len(node: ast.AST) -> int | None:
 REDUCE_FNS = {"sum", "prod", "mean", "std", "var", "min", "max", "amin", "amax", "argmin", "argmax", "any", "all"}
 
 
-def const_int(node: ast.AST) -> int | None:
-    """A constant integer literal, including a negated one (``axis=-1`` parses as
-    ``UnaryOp(USub, Constant(1))``, NOT ``Constant(-1)``)."""
-    if isinstance(node, ast.Constant) and isinstance(node.value, int) and not isinstance(node.value, bool):
-        return node.value
-    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
-        v = const_int(node.operand)
-        return None if v is None else -v
-    return None
-
-
 def replace_call_with_name(root: ast.AST, target: ast.Call, name: str) -> None:
     """Swap one already-lowered Call node for a Name reference, wherever it sits in ``root``."""
 
     class Swap(ast.NodeTransformer):
         def visit_Call(self, node: ast.Call) -> ast.AST:
             self.generic_visit(node)
-            return ast.copy_location(ast.Name(id=name, ctx=ast.Load()), node) if node is target else node
+            return ast.copy_location(name_(name), node) if node is target else node
 
     Swap().visit(root)
 
@@ -146,7 +108,7 @@ def eigh_call_kind(node: ast.AST, alias_names: set):
     if not isinstance(node, ast.Call) or not node.args:
         return None
     f = node.func
-    linalg_attr = np_submodule_attr(node, "linalg")
+    linalg_attr = numpy_submodule_attr(node, "linalg")
     scipy_attr = (
         f.attr
         if isinstance(f, ast.Attribute)
@@ -203,10 +165,6 @@ AUG_OP_SRC = {
     ast.LShift: "<<=",
     ast.RShift: ">>=",
 }
-
-
-def expr_of(src: str) -> ast.expr:
-    return ast.parse(src, mode="eval").body
 
 
 def name_store_counts(fn: ast.FunctionDef) -> dict[str, int]:

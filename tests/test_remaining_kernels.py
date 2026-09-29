@@ -235,7 +235,7 @@ def test_a_harness_fault_attempt_stays_owed(
 def test_a_kernel_whose_only_grades_are_adhoc_is_owed(
     module: types.ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
 ) -> None:
-    """(job 640078, ``tsvc_2_s323``): a grade the judge filed under its
+    """(``tsvc_2_s323``): a grade the judge filed under its
     ``adhoc`` default has no episode identity, so neither its submission nor its genuine attempt
     clears the kernel -- although the judge's ``runs`` row for ``adhoc`` names the job's arm."""
     conn = make_shard(tmp_path / "runs", "100", ARM)
@@ -481,7 +481,7 @@ def test_a_smoke_named_arm_is_excluded_by_pattern(
     ("arm", "expected"),
     [
         ("harness-focus20-smoke-oss120b-claude", True),
-        # job 642813: a re-submitted smoke run numbers itself instead of just repeating "-smoke".
+        # a re-submitted smoke run numbers itself instead of just repeating "-smoke".
         ("harness20-caveman-qwen38-c-clean-kernels-harness20-caveman-smoke2", True),
         ("harness-focus20-smoke10-qwen38-claude", True),
         ("cpf-llr-focus40-qwen38-c-cpf", False),
@@ -490,7 +490,7 @@ def test_a_smoke_named_arm_is_excluded_by_pattern(
 )
 def test_smoke_arm_matches_a_numbered_smoke_run_too(module: types.ModuleType, arm: str, expected: bool) -> None:
     """SMOKE_ARM must catch a re-submitted smoke's own numbering (``-smoke2``, ``-smoke10``, ...),
-    not just a bare trailing ``-smoke`` -- job 642813 fell through this gap and leaked into the
+    not just a bare trailing ``-smoke`` -- one smoke run fell through this gap and leaked into the
     "harness20" campaign's coverage on the board."""
     assert bool(module.SMOKE_ARM.search(arm)) is expected
 
@@ -498,7 +498,7 @@ def test_smoke_arm_matches_a_numbered_smoke_run_too(module: types.ModuleType, ar
 def test_a_smoke_job_reusing_a_real_arms_name_is_excluded_by_job_id(
     module: types.ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
 ) -> None:
-    """Job 641175: a smoke run submitted under a REAL arm's name (harness20-qwen38-claude), with
+    """In one job, a smoke run submitted under a REAL arm's name (harness20-qwen38-claude), with
     nothing in ``runs.arm`` telling it apart -- SMOKE_JOBS is the documented exception list for it."""
     smoke_job_id = next(iter(module.SMOKE_JOBS))
     job_dir_with_rows(tmp_path / "runs", "100", ARM, ["a"])
@@ -510,8 +510,8 @@ def test_a_smoke_job_reusing_a_real_arms_name_is_excluded_by_job_id(
 def test_the_caveman_smoke_642813_is_no_coverage_for_the_arm_it_recorded(
     module: types.ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
 ) -> None:
-    """Job 642813 recorded ``runs.arm = harness20-caveman-qwen38-c-clean``; only its sacct name says
-    smoke, which wave_board reads and this script never does. The two must still agree."""
+    """One smoke job recorded ``runs.arm = harness20-caveman-qwen38-c-clean``; only its sacct name says
+    smoke, which this script never reads."""
     arm = "harness20-caveman-qwen38-c-clean"
     assert module.is_smoke("642813", arm)
     assert module.SMOKE_ARM.search("harness20-caveman-qwen38-c-clean-kernels-harness20-caveman-smoke2")
@@ -539,7 +539,7 @@ def test_a_grade_made_before_the_final_attempt_is_not_coverage(
     """Spec X7: a crashed attempt's submission or genuine attempt
     answers nothing the relaunch delivered and every figure drops it, so it cannot make kernel ``a``
     DONE here; a grade inside the final attempt still does. The episode is found by its declared run
-    id, or by its directory's indices once the reducer pruned mcp.json (641069 kept only tokens.json)."""
+    id, or by its directory's indices once the reducer pruned mcp.json (leaving only tokens.json)."""
     conn = make_shard(tmp_path / "runs", "100", ARM)
     run_id = f"{ARM}.n0.p0.w0"
     add_run(conn, run_id, ARM)
@@ -585,8 +585,7 @@ def test_classify_exit_matches_the_2026_09_18_owed_classes(
     )
 
 
-#: Real ``.submission-spent`` body of a HIP submission the judge refused (job 641085,
-#: agents/node-0/problem-10-worker-4, kernel segment_reduce_ragged audit --
+#: Real ``.submission-spent`` body of a HIP submission the judge refused (agents/node-0/problem-10-worker-4, kernel segment_reduce_ragged audit --
 #: audit-20260918/hip400-rerun.txt) -- the pre-77524cae submit.py wrote this marker even though the
 #: request was refused, so RC_SUBMITTED fired on a kernel the judge never graded (no "correct" field).
 HIP_400_MARKER = json.dumps(
@@ -617,7 +616,7 @@ def write_episode(
     log: str = "",
     marker: str | None = None,
 ) -> None:
-    """One worker's ``tokens.json`` (agent_driver.write_cost_record's real shape, job 641069's rc=124
+    """One worker's ``tokens.json`` (agent_driver.write_cost_record's real shape, that job's rc=124
     episodes) plus, if ``cancelled``, the sibling agent_driver.CANCELLED_MARKER file, a ``claude.log``
     carrying ``log`` (a real excerpt, when the test needs evidence read from it), and, if ``marker`` is
     given, the sibling ``.submission-spent`` file (agent_driver.SUBMISSION_MARKER) it holds."""
@@ -654,7 +653,7 @@ def test_owed_exit_classes_reads_the_latest_episode_per_kernel(
 
 
 def test_hip_400_rc_submitted_is_infra_not_done(module: types.ModuleType, tmp_path: pathlib.Path) -> None:
-    """The pre-77524cae HIP TOOLSCHEMA bug (job 641085, real fixture: HIP_400_MARKER): rc=123 alone
+    """The pre-77524cae HIP TOOLSCHEMA bug (real fixture: HIP_400_MARKER): rc=123 alone
     would read DONE, but the marker proves the judge refused the body and never graded it -- the
     kernel is owed, INFRA class, not silently marked done."""
     job_dir = tmp_path / "100"
@@ -723,17 +722,15 @@ def test_an_arm_of_nothing_but_placeholders_owes_its_whole_roster(
 #: Real log excerpts, one per owed class, pulled from actual runs during the triage
 #: (audit-20260918/failure-triage-1850.md) so each class is proven against evidence that actually
 #: shipped, not an invented string.
-WALL_EXCERPT = "agent_driver: killed after AGENT_TIMEOUT_SECONDS=14400.0\n"  # job 641069/problem-11
-BUDGET_EXCERPT = (
-    "agent_driver: killed after AGENT_MAX_TOKENS=12000000 (total tokens counted=12057185)\n"  # 641069/problem-26
-)
-CTXOVF_EXCERPT = (  # job 641018/problem-4-worker-4 (git-scicomp qwen38, 262144-ctx): rc=1, result="success"
+WALL_EXCERPT = "agent_driver: killed after AGENT_TIMEOUT_SECONDS=14400.0\n"  # problem-11
+BUDGET_EXCERPT = "agent_driver: killed after AGENT_MAX_TOKENS=12000000 (total tokens counted=12057185)\n"  # problem-26
+CTXOVF_EXCERPT = (  # problem-4-worker-4 (git-scicomp qwen38, 262144-ctx): rc=1, result="success"
     '{"type":"result","subtype":"success","is_error":true,"api_error_status":400,'
     '"result":"API Error: 400 Requested token count exceeds the model\'s maximum context length '
     "of 262144 tokens. You requested a total of 266061 tokens: 233293 tokens from the trailing "
     'edge of this conversation..."}\n'
 )
-SERVING_MISCONFIG_EXCERPT = (  # job 640458: a bad VLLM_MODEL, not context overflow -- INFRA
+SERVING_MISCONFIG_EXCERPT = (  # a bad VLLM_MODEL, not context overflow -- INFRA
     '{"type":"result","subtype":"success","is_error":true,"api_error_status":400,"num_turns":1,'
     '"result":"...hpcagent-bench-vllm is not a valid model ID"}\n'
 )
@@ -764,7 +761,7 @@ def test_owed_exit_classes_reads_real_log_excerpts_per_class(
 def test_context_overflow_in_tail_reads_only_the_tail(module: types.ModuleType, tmp_path: pathlib.Path) -> None:
     """A multi-megabyte transcript must not be read whole per ambiguous episode: only the last
     LOG_TAIL_BYTES are scanned, matching where the real evidence sits (observed 1071 chars from EOF
-    on a real 53MB log, job 641018/problem-4-worker-4)."""
+    on a real 53MB log, problem-4-worker-4)."""
     log = tmp_path / "claude.log"
     padding = "x" * (module.LOG_TAIL_BYTES * 2)
     log.write_text(padding + module.CONTEXT_OVERFLOW_EVIDENCE + "y" * 100, encoding="utf-8")
@@ -801,7 +798,7 @@ def test_report_arm_class_flag_writes_only_that_class(
         assert (out / f"{ARM}.txt").read_text(encoding="utf-8").split() == expected
 
 
-#: manifest-epoch fix (job 641739: fv3_dycore's SIGSEGV rows, graded before its XL sizing
+#: manifest-epoch fix (fv3_dycore's SIGSEGV rows, graded before its XL sizing
 #: was fixed, were wrongly read as coverage). A kernel's "comparable since" ts is the last commit to
 #: touch its OWN manifest yaml (kernel_manifest matches by the yaml's stem, not its directory, since a
 #: directory can hold more than one kernel's manifest -- e.g. sparse_linear_algebra/cg/{cg,sp_cg}.yaml).
@@ -993,7 +990,7 @@ def test_comparable_since_ms_falls_back_to_counting_when_git_is_unavailable(
 def test_comparable_since_ms_shells_out_only_on_the_first_call(
     module: types.ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
 ) -> None:
-    """Cached per (kernel, opt): a wave board redraw or a report over many jobs must not re-shell to
+    """Cached per (kernel, opt): a report over many jobs must not re-shell to
     git once per row -- see the module docstring's ``comparable_since_ms``. The backward walk over a
     manifest's own history (semantic-hash fix) makes more than one call on the FIRST
     lookup (one ``log`` plus one ``show`` per commit walked); the property this test protects is that
@@ -1018,7 +1015,7 @@ def test_a_row_from_before_the_manifest_changed_is_not_coverage(
     module: types.ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
 ) -> None:
     """A ``submissions`` row graded before the kernel's manifest/sizing last changed measured a
-    DIFFERENT roster (job 641739's fv3_dycore SIGSEGV rows, pre-resize): it must not clear the
+    DIFFERENT roster (fv3_dycore's SIGSEGV rows, pre-resize): it must not clear the
     kernel, which stays owed until a row lands at or after the manifest's own last commit."""
     repo, kernel, changed_ts_ms = make_git_repo_with_manifest(tmp_path)
     conn = make_shard(tmp_path / "runs", "100", ARM)

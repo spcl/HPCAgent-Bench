@@ -3,17 +3,12 @@
 import ast
 import copy
 
+from hpcagent_bench.translators.numpyto_common.ast_build import name_, range_for, store_
 from hpcagent_bench.translators.numpyto_common.ir import SparseArrayDesc
 from hpcagent_bench.translators.numpyto_common.lib_nodes.blas import BLAS_GEMM_MARKER, BLAS_INELIGIBLE_DTYPES
-from hpcagent_bench.translators.numpyto_common.lib_nodes.dims import static_shape_of, dims_agree
+from hpcagent_bench.translators.numpyto_common.lib_nodes.dims import dims_agree, static_shape_of
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of
-from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
-    alloc_marker,
-    const_,
-    const_or_name,
-    name_,
-    store_,
-)
+from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import alloc_marker, const_, const_or_name
 from hpcagent_bench.translators.numpyto_common.lib_nodes.scalarize import scalarize_at_iters
 
 __all__ = [
@@ -161,14 +156,14 @@ def hoist_matmul(
             )
             return temp, [alloc_marker(temp), ast.Expr(value=gemm)]
         stmts.append(
-            ast.For(
-                target=store_("__i"),
-                iter=ast.Call(func=name_("range"), args=[const_or_name(m)], keywords=[]),
-                body=[
-                    ast.For(
-                        target=store_("__j"),
-                        iter=ast.Call(func=name_("range"), args=[const_or_name(n)], keywords=[]),
-                        body=[
+            range_for(
+                "__i",
+                [const_or_name(m)],
+                [
+                    range_for(
+                        "__j",
+                        [const_or_name(n)],
+                        [
                             ast.Assign(
                                 targets=[
                                     ast.Subscript(
@@ -179,10 +174,10 @@ def hoist_matmul(
                                 ],
                                 value=const_(0.0),
                             ),
-                            ast.For(
-                                target=store_("__l"),
-                                iter=ast.Call(func=name_("range"), args=[const_or_name(k)], keywords=[]),
-                                body=[
+                            range_for(
+                                "__l",
+                                [const_or_name(k)],
+                                [
                                     ast.AugAssign(
                                         target=ast.Subscript(
                                             value=name_(temp),
@@ -205,30 +200,27 @@ def hoist_matmul(
                                         ),
                                     )
                                 ],
-                                orelse=[],
                             ),
                         ],
-                        orelse=[],
                     )
                 ],
-                orelse=[],
             )
         )
     elif len(a_shape) == 2 and len(b_shape) == 1:
         m, k = a_shape
         stmts.append(
-            ast.For(
-                target=store_("__i"),
-                iter=ast.Call(func=name_("range"), args=[const_or_name(m)], keywords=[]),
-                body=[
+            range_for(
+                "__i",
+                [const_or_name(m)],
+                [
                     ast.Assign(
                         targets=[ast.Subscript(value=name_(temp), slice=name_("__i"), ctx=ast.Store())],
                         value=const_(0.0),
                     ),
-                    ast.For(
-                        target=store_("__l"),
-                        iter=ast.Call(func=name_("range"), args=[const_or_name(k)], keywords=[]),
-                        body=[
+                    range_for(
+                        "__l",
+                        [const_or_name(k)],
+                        [
                             ast.AugAssign(
                                 target=ast.Subscript(value=name_(temp), slice=name_("__i"), ctx=ast.Store()),
                                 op=ast.Add(),
@@ -243,27 +235,25 @@ def hoist_matmul(
                                 ),
                             )
                         ],
-                        orelse=[],
                     ),
                 ],
-                orelse=[],
             )
         )
     else:  # len(a)==1, len(b)==2
         k, n = b_shape
         stmts.append(
-            ast.For(
-                target=store_("__j"),
-                iter=ast.Call(func=name_("range"), args=[const_or_name(n)], keywords=[]),
-                body=[
+            range_for(
+                "__j",
+                [const_or_name(n)],
+                [
                     ast.Assign(
                         targets=[ast.Subscript(value=name_(temp), slice=name_("__j"), ctx=ast.Store())],
                         value=const_(0.0),
                     ),
-                    ast.For(
-                        target=store_("__l"),
-                        iter=ast.Call(func=name_("range"), args=[const_or_name(k)], keywords=[]),
-                        body=[
+                    range_for(
+                        "__l",
+                        [const_or_name(k)],
+                        [
                             ast.AugAssign(
                                 target=ast.Subscript(value=name_(temp), slice=name_("__j"), ctx=ast.Store()),
                                 op=ast.Add(),
@@ -278,10 +268,8 @@ def hoist_matmul(
                                 ),
                             )
                         ],
-                        orelse=[],
                     ),
                 ],
-                orelse=[],
             )
         )
     return temp, stmts
@@ -330,33 +318,13 @@ def named_batched_matmul(
             right=ast.Subscript(value=name_(b_name_b), slice=b_sub, ctx=ast.Load()),
         ),
     )
-    l_loop = ast.For(
-        target=store_(l_iter),
-        iter=ast.Call(func=name_("range"), args=[const_or_name(k)], keywords=[]),
-        body=[accum],
-        orelse=[],
-    )
-    j_loop = ast.For(
-        target=store_(j_iter),
-        iter=ast.Call(func=name_("range"), args=[const_or_name(n)], keywords=[]),
-        body=[zero_assign, l_loop],
-        orelse=[],
-    )
-    i_loop = ast.For(
-        target=store_(i_iter),
-        iter=ast.Call(func=name_("range"), args=[const_or_name(m)], keywords=[]),
-        body=[j_loop],
-        orelse=[],
-    )
+    l_loop = range_for(l_iter, [const_or_name(k)], [accum])
+    j_loop = range_for(j_iter, [const_or_name(n)], [zero_assign, l_loop])
+    i_loop = range_for(i_iter, [const_or_name(m)], [j_loop])
     # Wrap with the batch loops, outermost first.
     current: ast.stmt = i_loop
     for bi, bdim in zip(reversed(batch_iters), reversed(list(batch_shape))):
-        current = ast.For(
-            target=store_(bi),
-            iter=ast.Call(func=name_("range"), args=[const_or_name(bdim)], keywords=[]),
-            body=[current],
-            orelse=[],
-        )
+        current = range_for(bi, [const_or_name(bdim)], [current])
     return temp, [current]
 
 
@@ -377,11 +345,10 @@ def scalar_dot_matmul(
     sb = scalarize_at_iters(matmul.right, [name_(iter_var)], shape_table)
     stmts = [
         ast.Assign(targets=[store_(temp)], value=const_(0.0)),
-        ast.For(
-            target=store_(iter_var),
-            iter=ast.Call(func=name_("range"), args=[l_ext[0]], keywords=[]),
-            body=[ast.AugAssign(target=store_(temp), op=ast.Add(), value=ast.BinOp(left=sa, op=ast.Mult(), right=sb))],
-            orelse=[],
+        range_for(
+            iter_var,
+            [l_ext[0]],
+            [ast.AugAssign(target=store_(temp), op=ast.Add(), value=ast.BinOp(left=sa, op=ast.Mult(), right=sb))],
         ),
     ]
     return temp, stmts
@@ -413,28 +380,26 @@ def matvec_matmul(
         sa = scalarize_at_iters(matmul.left, [l_iter], shape_table)
         sb = scalarize_at_iters(matmul.right, [l_iter, out_iter], shape_table)
         stmts = [
-            ast.For(
-                target=store_(out_iter.id),
-                iter=ast.Call(func=name_("range"), args=[n_extent], keywords=[]),
-                body=[
+            range_for(
+                out_iter.id,
+                [n_extent],
+                [
                     ast.Assign(
                         targets=[ast.Subscript(value=name_(temp), slice=out_iter, ctx=ast.Store())],
                         value=const_(0.0),
                     ),
-                    ast.For(
-                        target=store_(l_iter.id),
-                        iter=ast.Call(func=name_("range"), args=[k_extent], keywords=[]),
-                        body=[
+                    range_for(
+                        l_iter.id,
+                        [k_extent],
+                        [
                             ast.AugAssign(
                                 target=ast.Subscript(value=name_(temp), slice=out_iter, ctx=ast.Store()),
                                 op=ast.Add(),
                                 value=ast.BinOp(left=sa, op=ast.Mult(), right=sb),
                             )
                         ],
-                        orelse=[],
                     ),
                 ],
-                orelse=[],
             )
         ]
     else:  # 2-D x 1-D
@@ -447,28 +412,26 @@ def matvec_matmul(
         sa = scalarize_at_iters(matmul.left, [out_iter, l_iter], shape_table)
         sb = scalarize_at_iters(matmul.right, [l_iter], shape_table)
         stmts = [
-            ast.For(
-                target=store_(out_iter.id),
-                iter=ast.Call(func=name_("range"), args=[m_extent], keywords=[]),
-                body=[
+            range_for(
+                out_iter.id,
+                [m_extent],
+                [
                     ast.Assign(
                         targets=[ast.Subscript(value=name_(temp), slice=out_iter, ctx=ast.Store())],
                         value=const_(0.0),
                     ),
-                    ast.For(
-                        target=store_(l_iter.id),
-                        iter=ast.Call(func=name_("range"), args=[k_extent], keywords=[]),
-                        body=[
+                    range_for(
+                        l_iter.id,
+                        [k_extent],
+                        [
                             ast.AugAssign(
                                 target=ast.Subscript(value=name_(temp), slice=out_iter, ctx=ast.Store()),
                                 op=ast.Add(),
                                 value=ast.BinOp(left=sa, op=ast.Mult(), right=sb),
                             )
                         ],
-                        orelse=[],
                     ),
                 ],
-                orelse=[],
             )
         ]
     return temp, stmts
@@ -501,35 +464,32 @@ def scalarised_matmul(
     sb = scalarize_at_iters(matmul.right, [l_iter, j_iter], shape_table)
     out_sub = ast.Tuple(elts=[i_iter, j_iter], ctx=ast.Load())
     stmts = [
-        ast.For(
-            target=store_(i_iter.id),
-            iter=ast.Call(func=name_("range"), args=[m_extent], keywords=[]),
-            body=[
-                ast.For(
-                    target=store_(j_iter.id),
-                    iter=ast.Call(func=name_("range"), args=[n_extent], keywords=[]),
-                    body=[
+        range_for(
+            i_iter.id,
+            [m_extent],
+            [
+                range_for(
+                    j_iter.id,
+                    [n_extent],
+                    [
                         ast.Assign(
                             targets=[ast.Subscript(value=name_(temp), slice=out_sub, ctx=ast.Store())],
                             value=const_(0.0),
                         ),
-                        ast.For(
-                            target=store_(l_iter.id),
-                            iter=ast.Call(func=name_("range"), args=[k_extent], keywords=[]),
-                            body=[
+                        range_for(
+                            l_iter.id,
+                            [k_extent],
+                            [
                                 ast.AugAssign(
                                     target=ast.Subscript(value=name_(temp), slice=out_sub, ctx=ast.Store()),
                                     op=ast.Add(),
                                     value=ast.BinOp(left=sa, op=ast.Mult(), right=sb),
                                 )
                             ],
-                            orelse=[],
                         ),
                     ],
-                    orelse=[],
                 )
             ],
-            orelse=[],
         )
     ]
     return temp, stmts
@@ -579,44 +539,28 @@ def scalarised_batched_matmul(
     out_sub = ast.Tuple(elts=[*batch_iters, i_iter, j_iter], ctx=ast.Load())
     out_ref = lambda ctx: ast.Subscript(value=name_(temp), slice=copy.deepcopy(out_sub), ctx=ctx)
     body: list[ast.stmt] = [
-        ast.For(
-            target=store_(j_iter.id),
-            iter=ast.Call(func=name_("range"), args=[n_extent], keywords=[]),
-            body=[
+        range_for(
+            j_iter.id,
+            [n_extent],
+            [
                 ast.Assign(targets=[out_ref(ast.Store())], value=const_(0.0)),
-                ast.For(
-                    target=store_(l_iter.id),
-                    iter=ast.Call(func=name_("range"), args=[k_extent], keywords=[]),
-                    body=[
+                range_for(
+                    l_iter.id,
+                    [k_extent],
+                    [
                         ast.AugAssign(
                             target=out_ref(ast.Store()),
                             op=ast.Add(),
                             value=ast.BinOp(left=sa, op=ast.Mult(), right=sb),
                         )
                     ],
-                    orelse=[],
                 ),
             ],
-            orelse=[],
         )
     ]
-    body = [
-        ast.For(
-            target=store_(i_iter.id),
-            iter=ast.Call(func=name_("range"), args=[m_extent], keywords=[]),
-            body=body,
-            orelse=[],
-        )
-    ]
+    body = [range_for(i_iter.id, [m_extent], body)]
     for iter_node, ext in zip(reversed(batch_iters), reversed(batch_ext)):
-        body = [
-            ast.For(
-                target=store_(iter_node.id),
-                iter=ast.Call(func=name_("range"), args=[ext], keywords=[]),
-                body=body,
-                orelse=[],
-            )
-        ]
+        body = [range_for(iter_node.id, [ext], body)]
     return temp, body
 
 
@@ -658,7 +602,7 @@ class MatmulHoister(ast.NodeTransformer):
             if sp is not None:
                 temp, stmts = sp
                 self.pre_stmts.extend(self.prepend_alloc_markers(stmts))
-                return ast.Name(id=temp, ctx=ast.Load())
+                return name_(temp)
             node = self.materialise_call_operands(node)
             temp, stmts = hoist_matmul(
                 node,
@@ -683,7 +627,7 @@ class MatmulHoister(ast.NodeTransformer):
                         if dt and dt.startswith("complex"):
                             self.local_dtypes[temp] = "complex128"
                             break
-                return ast.Name(id=temp, ctx=ast.Load())
+                return name_(temp)
         return node
 
     def blas_eligible(self, node: ast.BinOp) -> bool:
@@ -936,12 +880,7 @@ class MatmulHoister(ast.NodeTransformer):
             targets=[ast.Subscript(value=name_(temp), slice=sub_slice, ctx=ast.Store())], value=elem
         )
         for it, extent in zip(reversed(iters), reversed(list(ext))):
-            body = ast.For(
-                target=store_(it.id),
-                iter=ast.Call(func=name_("range"), args=[extent], keywords=[]),
-                body=[body],
-                orelse=[],
-            )
+            body = range_for(it.id, [extent], [body])
         return temp, [body]
 
     def transpose_sparse_desc(self, operand: ast.expr) -> tuple[object, bool] | None:

@@ -23,6 +23,8 @@ __all__ = [
     "get_2d_tile_offsets",
     "get_4d_tile_offsets",
     "get_6d_tile_offsets",
+    "get_mean_sumsq_configs",
+    "get_stddev_configs",
     "grid_sync",
     "kernel_compute_stddev",
     "kernel_mean_and_sumsq",
@@ -220,7 +222,7 @@ def get_1d_tile_offsets(x, tile_width, vector_width):
     return tl.reshape(tile, (tile_width,)), tl.reshape(mask, (tile_width,))
 
 
-def _get_mean_sumsq_configs():
+def get_mean_sumsq_configs():
     return [
         triton.Config({"BLOCK_SIZE_M": m, "BLOCK_SIZE_N": n}, num_warps=w)
         for m, n, w in itertools.product([16, 32, 64, 128], [32, 64, 128, 256], [1, 2, 4, 8])
@@ -242,7 +244,7 @@ def _get_mean_sumsq_configs():
     }
 )
 @triton.autotune(
-    configs=_get_mean_sumsq_configs(),
+    configs=get_mean_sumsq_configs(),
     key=["M", "N"],
     cache_results=True,
 )
@@ -277,7 +279,7 @@ def kernel_mean_and_sumsq(
     tl.atomic_add(out_stddev + columns, row_sum_sq, mask=columns < N)
 
 
-def _get_stddev_configs():
+def get_stddev_configs():
     return [
         triton.Config({"BLOCK_SIZE_N": n}, num_warps=b)
         for n, b in itertools.product([16, 32, 64, 128, 256, 512, 1024, 2048, 4096], [1, 2, 4, 8])
@@ -292,7 +294,7 @@ def unary_noop(x):
 @use_grid(lambda meta: (triton.cdiv(meta["N"], meta["BLOCK_SIZE_N"]),))
 @derive_launch_arguments(lambda mean, **_: {"N": reduce(operator.mul, mean.shape, 1)})
 @triton.autotune(
-    configs=_get_stddev_configs(),
+    configs=get_stddev_configs(),
     key=["N"],
     cache_results=True,
 )

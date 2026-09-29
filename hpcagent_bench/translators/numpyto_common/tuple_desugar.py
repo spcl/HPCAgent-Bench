@@ -28,8 +28,10 @@ Entry point: :func:`desugar_tuples`.
 
 import ast
 import copy
+import functools
 from typing import Any
 
+from hpcagent_bench.translators.numpyto_common.ast_build import SubstituteLoads, map_statement_lists, name_, store_
 from hpcagent_bench.translators.numpyto_common.numpy_desugar import expr_rank
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
 
@@ -534,10 +536,8 @@ class TupleDesugar:
         self.aliases += 1
         alias = f"__ta{self.aliases}_{name}"
         self.captured.append((alias, name))
-        captured = [substitute(copy.deepcopy(e), name, ast.Name(id=alias, ctx=ast.Load())) for e in elements]
-        bind = ast.copy_location(
-            ast.Assign(targets=[ast.Name(id=alias, ctx=ast.Store())], value=ast.Name(id=name, ctx=ast.Load())), at
-        )
+        captured = [substitute(copy.deepcopy(e), name, name_(alias)) for e in elements]
+        bind = ast.copy_location(ast.Assign(targets=[store_(alias)], value=name_(name)), at)
         env.bound.add(alias)
         if name in env.kinds:
             env.kinds[alias] = env.kinds[name]
@@ -622,11 +622,11 @@ class TupleDesugar:
         env.invalidate(assigned_names(stmt))
         return [stmt]
 
-    def loop(self, stmt: ast.stmt, env: Env) -> list[ast.stmt]:
-        for field in ("iter", "test"):
-            value = vars(stmt).get(field)
-            if isinstance(value, ast.expr):
-                setattr(stmt, field, self.fold(value, env))
+    def loop(self, stmt: ast.For | ast.While, env: Env) -> list[ast.stmt]:
+        if isinstance(stmt, ast.For):
+            stmt.iter = self.fold(stmt.iter, env)
+        elif isinstance(stmt, ast.While):
+            stmt.test = self.fold(stmt.test, env)
         # A body read can come from the PREVIOUS iteration, so kill what the body rebinds first.
         inner = env.copy()
         inner.invalidate(assigned_names(stmt))
@@ -877,13 +877,7 @@ def as_slice(node: ast.AST) -> ast.Slice | None:
 def substitute(node: ast.expr, name: str, value: ast.expr) -> ast.expr:
     """``node`` with every load of ``name`` replaced by ``value`` (the comprehension unroll)."""
 
-    class Sub_(ast.NodeTransformer):
-        def visit_Name(self, inner: ast.Name) -> ast.AST:
-            if inner.id == name and isinstance(inner.ctx, ast.Load):
-                return ast.copy_location(copy.deepcopy(value), inner)
-            return inner
-
-    return ast.fix_missing_locations(Sub_().visit(node))
+    return ast.fix_missing_locations(SubstituteLoads({name: value}).visit(node))
 
 
 def desugar_tuples(
@@ -930,13 +924,15 @@ def collapse_capture_aliases(fn: ast.FunctionDef, captured: list[tuple[str, str]
         # Two captures of one name would chain through each other; leave both alone.
         if minted[name] != 1 or written_after_capture(fn, alias, name):
             continue
-        for node in ast.walk(fn):
-            for field, value in ast.iter_fields(node):
-                if isinstance(value, list) and any(isinstance(v, ast.stmt) for v in value):
-                    setattr(node, field, [s for s in value if not is_capture_bind(s, alias, name)])
+        map_statement_lists(fn, functools.partial(without_capture_binds, alias=alias, name=name))
         for node in ast.walk(fn):
             if isinstance(node, ast.Name) and node.id == alias:
                 node.id = name
+
+
+def without_capture_binds(block: list[ast.stmt], alias: str, name: str) -> list[ast.stmt]:
+    """``block`` minus its ``alias = name`` capture binds."""
+    return [s for s in block if not is_capture_bind(s, alias, name)]
 
 
 def is_capture_bind(stmt: ast.stmt, alias: str, name: str) -> bool:
@@ -1012,10 +1008,7 @@ def drop_dead_none_bindings(fn: ast.FunctionDef) -> None:
             out.append(stmt)
         return out
 
-    for node in ast.walk(fn):
-        for field, value in ast.iter_fields(node):
-            if isinstance(value, list) and any(isinstance(v, ast.stmt) for v in value):
-                setattr(node, field, prune(value))
+    map_statement_lists(fn, prune)
 
 
 def none_sentinel_uses(fn: ast.FunctionDef) -> tuple[OrderedSet, OrderedSet]:

@@ -24,7 +24,8 @@ import collections
 import json
 import pathlib
 import sys
-from collections.abc import Iterator
+
+from token_cost import USAGE_NAME, transcripts
 
 #: Substrings that gate the expensive json.loads. An agent log is tens of MB of streaming records
 #: and only two kinds carry token counts, so line filtering is what keeps this a seconds-long read.
@@ -32,15 +33,8 @@ THINKING_MARK = '"thinking_tokens"'
 RESULT_MARK = '"type":"result"'
 
 
-#: What a runner harness writes instead of a claude transcript: one JSON line per model call,
-#: ``{"input", "cached_input", "output", "reasoning"}``, plus harness-end.json when it closed cleanly.
-USAGE_NAME = "usage.jsonl"
+#: What a runner harness writes beside its usage.jsonl when it closed cleanly.
 END_NAME = "harness-end.json"
-
-
-def agent_logs(run_dir: pathlib.Path) -> Iterator[pathlib.Path]:
-    """Every agent transcript under ``run_dir``, in a stable order."""
-    yield from sorted([*run_dir.glob("agents/*/*/claude.log"), *run_dir.glob(f"agents/*/*/{USAGE_NAME}")])
 
 
 def scan_usage(path: pathlib.Path) -> dict[str, float]:
@@ -109,7 +103,7 @@ def totals(run_dir: pathlib.Path) -> tuple[dict[str, float], int]:
     """Summed totals across the run, and how many transcripts were read."""
     agg: dict[str, float] = collections.defaultdict(float)
     seen = 0
-    for log in agent_logs(run_dir):
+    for log in transcripts(run_dir):
         seen += 1
         for key, value in scan(log).items():
             agg[key] += value

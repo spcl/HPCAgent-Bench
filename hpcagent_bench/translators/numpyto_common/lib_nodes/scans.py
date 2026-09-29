@@ -2,19 +2,13 @@
 
 import ast
 import copy
-from typing import Any
 from collections.abc import Callable
+from typing import Any
 
+from hpcagent_bench.translators.numpyto_common.ast_build import const_int, name_, range_for
 from hpcagent_bench.translators.numpyto_common.lib_nodes.call_args import const_axis, kwarg_or_pos, read_axis_keepdims
 from hpcagent_bench.translators.numpyto_common.lib_nodes.elementwise import args_one_name
-from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
-    const_,
-    const_int,
-    const_or_name,
-    name_,
-    store_,
-    wrap_for_loops,
-)
+from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import const_, const_or_name, wrap_for_loops
 
 __all__ = [
     "expand_cummax",
@@ -168,12 +162,7 @@ def expand_cumulative(
     recur = ast.Assign(
         targets=[ast.Subscript(value=name_(target_base), slice=tidx(name_(sc)), ctx=ast.Store())], value=recur_val
     )
-    scan_loop = ast.For(
-        target=store_(sc),
-        iter=ast.Call(func=name_("range"), args=[const_(1), const_or_name(shape[axis])], keywords=[]),
-        body=[recur],
-        orelse=[],
-    )
+    scan_loop = range_for(sc, [const_(1), const_or_name(shape[axis])], [recur])
     inner: list[ast.stmt] = [init, scan_loop]
     return wrap_for_loops([iters[i] for i in outer], [shape[i] for i in outer], inner)
 

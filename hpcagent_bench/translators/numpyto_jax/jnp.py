@@ -2,6 +2,7 @@
 
 import ast
 
+from hpcagent_bench.translators.numpyto_common.ast_build import name_
 from hpcagent_bench.translators.numpyto_jax.names import is_identity_test, is_np_attr, names_loaded
 from hpcagent_bench.translators.numpyto_jax.state import STATE
 from hpcagent_bench.translators.numpyto_jax.vocab import BOOL_FUNCS
@@ -42,13 +43,9 @@ class JnpRewriter(ast.NodeTransformer):
         # np_float/np_complex are framework globals resolving to the
         # 64-bit dtypes under the x64 config.
         if node.id == "np_float":
-            return ast.copy_location(
-                ast.Attribute(value=ast.Name(id="jnp", ctx=ast.Load()), attr="float64", ctx=node.ctx), node
-            )
+            return ast.copy_location(ast.Attribute(value=name_("jnp"), attr="float64", ctx=node.ctx), node)
         if node.id == "np_complex":
-            return ast.copy_location(
-                ast.Attribute(value=ast.Name(id="jnp", ctx=ast.Load()), attr="complex128", ctx=node.ctx), node
-            )
+            return ast.copy_location(ast.Attribute(value=name_("jnp"), attr="complex128", ctx=node.ctx), node)
         return node
 
     def visit_Attribute(self, node: ast.Attribute) -> ast.expr:
@@ -99,7 +96,7 @@ class JnpRewriter(ast.NodeTransformer):
             expr = node.args[0]
             for rhs in node.args[1:]:
                 expr = ast.Call(
-                    func=ast.Attribute(value=ast.Name(id="jnp", ctx=ast.Load()), attr=attr, ctx=ast.Load()),
+                    func=ast.Attribute(value=name_("jnp"), attr=attr, ctx=ast.Load()),
                     args=[expr, rhs],
                     keywords=[],
                 )
@@ -109,9 +106,7 @@ class JnpRewriter(ast.NodeTransformer):
         if isinstance(node.func, ast.Name) and node.func.id in MATH_TO_JNP:
             return ast.copy_location(
                 ast.Call(
-                    func=ast.Attribute(
-                        value=ast.Name(id="jnp", ctx=ast.Load()), attr=MATH_TO_JNP[node.func.id], ctx=ast.Load()
-                    ),
+                    func=ast.Attribute(value=name_("jnp"), attr=MATH_TO_JNP[node.func.id], ctx=ast.Load()),
                     args=node.args,
                     keywords=node.keywords,
                 ),
@@ -126,10 +121,10 @@ class JnpRewriter(ast.NodeTransformer):
         if isinstance(node.func, ast.Name) and node.func.id == "float" and len(node.args) == 1:
             return ast.copy_location(
                 ast.Call(
-                    func=ast.Attribute(value=ast.Name(id="jnp", ctx=ast.Load()), attr="asarray", ctx=ast.Load()),
+                    func=ast.Attribute(value=name_("jnp"), attr="asarray", ctx=ast.Load()),
                     args=[
                         node.args[0],
-                        ast.Attribute(value=ast.Name(id="jnp", ctx=ast.Load()), attr="float64", ctx=ast.Load()),
+                        ast.Attribute(value=name_("jnp"), attr="float64", ctx=ast.Load()),
                     ],
                     keywords=[],
                 ),
@@ -154,7 +149,7 @@ class JnpRewriter(ast.NodeTransformer):
         ):
             return node
         where = ast.Call(
-            func=ast.Attribute(value=ast.Name(id="jnp", ctx=ast.Load()), attr="where", ctx=ast.Load()),
+            func=ast.Attribute(value=name_("jnp"), attr="where", ctx=ast.Load()),
             args=[bool_cond_ast(node.test), node.body, node.orelse],
             keywords=[],
         )

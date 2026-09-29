@@ -3,6 +3,8 @@
 import ast
 import copy
 
+from hpcagent_bench.translators.numpyto_common.ast_build import name_, range_for, store_
+from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.lib_nodes.call_args import axis_literal_or_refuse, kwarg_or_pos
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
@@ -10,8 +12,6 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
     const_,
     const_or_name,
     make_iter_name,
-    name_,
-    store_,
 )
 
 __all__ = ["diff_operand", "expand_repeat", "expand_repeat_prefix_sum"]
@@ -28,8 +28,7 @@ def diff_operand(expr: ast.expr) -> ast.Name | None:
     if not (
         isinstance(expr, ast.Call)
         and isinstance(expr.func, ast.Attribute)
-        and isinstance(expr.func.value, ast.Name)
-        and expr.func.value.id == "np"
+        and is_numpy_module(expr.func.value)
         and expr.func.attr == "diff"
     ):
         return None
@@ -106,18 +105,8 @@ def expand_repeat_prefix_sum(
         ),
         ast.AugAssign(target=store_(pos), op=ast.Add(), value=const_(1)),
     ]
-    inner_loop = ast.For(
-        target=store_(cnt_iter),
-        iter=ast.Call(func=name_("range"), args=[count_at_i], keywords=[]),
-        body=body,
-        orelse=[],
-    )
-    outer_loop = ast.For(
-        target=store_(src_iter),
-        iter=ast.Call(func=name_("range"), args=[const_or_name(a_shape[0])], keywords=[]),
-        body=[inner_loop],
-        orelse=[],
-    )
+    inner_loop = range_for(cnt_iter, [count_at_i], body)
+    outer_loop = range_for(src_iter, [const_or_name(a_shape[0])], [inner_loop])
     init_pos = ast.Assign(targets=[store_(pos)], value=const_(0))
     return [alloc_marker(target.id), init_pos, outer_loop]
 
@@ -193,23 +182,9 @@ def expand_repeat(
         ]
         # Wrap with the source loops and the repetition loop deepest.
         out = body
-        out = [
-            ast.For(
-                target=store_(rep_iter),
-                iter=ast.Call(func=name_("range"), args=[k_arg], keywords=[]),
-                body=out,
-                orelse=[],
-            )
-        ]
+        out = [range_for(rep_iter, [k_arg], out)]
         for var, bound in zip(reversed(iters), reversed(a_shape)):
-            out = [
-                ast.For(
-                    target=store_(var),
-                    iter=ast.Call(func=name_("range"), args=[const_or_name(bound)], keywords=[]),
-                    body=out,
-                    orelse=[],
-                )
-            ]
+            out = [range_for(var, [const_or_name(bound)], out)]
         return out
     # Axis-aware repeat: walk every axis; for axis ``N`` the dest
     # index is ``outer_N * K + inner_N`` while source still reads at
@@ -243,18 +218,7 @@ def expand_repeat(
     ]
     # Innermost = repetition loop.
     out = body
-    out = [
-        ast.For(
-            target=store_(rep_iter), iter=ast.Call(func=name_("range"), args=[k_arg], keywords=[]), body=out, orelse=[]
-        )
-    ]
+    out = [range_for(rep_iter, [k_arg], out)]
     for var, bound in zip(reversed(iters), reversed(a_shape)):
-        out = [
-            ast.For(
-                target=store_(var),
-                iter=ast.Call(func=name_("range"), args=[const_or_name(bound)], keywords=[]),
-                body=out,
-                orelse=[],
-            )
-        ]
+        out = [range_for(var, [const_or_name(bound)], out)]
     return out

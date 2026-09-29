@@ -4,7 +4,23 @@ import ast
 import copy
 from collections.abc import Iterable
 
-from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
+from hpcagent_bench.translators.numpyto_common.ast_build import (
+    ALL_BLOCK_FIELDS,
+    const_int,
+    map_blocks,
+    name_,
+    nested_blocks,
+    numpy_attribute,
+    store_,
+)
+from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
+from hpcagent_bench.translators.numpyto_common.frontend.initialize import FRAMEWORK_DTYPE_ALIASES
+from hpcagent_bench.translators.numpyto_common.frontend.none_folding import (
+    FoldStaticNoneBranches,
+    PeelNoneSeededAccumulators,
+    none_compare,
+)
+from hpcagent_bench.translators.numpyto_common.frontend.shape_arith import literal_axis
 from hpcagent_bench.translators.numpyto_common.numpy_desugar import (
     ComplexAccessorToFunc,
     DecomposeRollSlice,
@@ -15,14 +31,8 @@ from hpcagent_bench.translators.numpyto_common.numpy_desugar import (
     UfuncOutInline,
     UfuncReduceToReducer,
 )
-from hpcagent_bench.translators.numpyto_common.frontend.initialize import FRAMEWORK_DTYPE_ALIASES
-from hpcagent_bench.translators.numpyto_common.frontend.manifest import field_nodes
-from hpcagent_bench.translators.numpyto_common.frontend.none_folding import (
-    FoldStaticNoneBranches,
-    PeelNoneSeededAccumulators,
-    none_compare,
-)
-from hpcagent_bench.translators.numpyto_common.frontend.shape_arith import const_int, literal_axis
+from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
+from hpcagent_bench.translators.numpyto_common.subscripts import base_name
 
 __all__ = [
     "ArrayLiteralToFill",
@@ -44,7 +54,6 @@ __all__ = [
     "np_ix_operands",
     "reads_only_as_index",
     "rename_rebound_parameters",
-    "shape_subject",
     "single_element_repeat",
     "slice_bound_names",
     "slice_call_args",
@@ -151,17 +160,13 @@ class FoldSliceLocals:
                 binding = (stmt.targets[0].id, slice_from_call(stmt.value))
             else:
                 folded |= self.rewrite_uses(stmt, live)
-            nested_blocks = [
-                vars(stmt).get(field)
-                for field in ("body", "orelse", "finalbody")
-                if isinstance(vars(stmt).get(field), list)
-            ]
-            for nested in nested_blocks:
+            blocks = nested_blocks(stmt)
+            for nested in blocks:
                 folded |= self.walk_(nested, dict(live))
             # A window bound inside a branch or loop body may or may not be the one live after it,
             # so forget the name entirely rather than fold the enclosing binding into a use the
             # inner one would have owned.
-            for nested in nested_blocks:
+            for nested in blocks:
                 for name in slice_bound_names(nested):
                     live.pop(name, None)
             if binding is not None:
@@ -246,11 +251,7 @@ def drop_dead_slice_bindings(fn: ast.FunctionDef, folds: set[str]) -> None:
     def prune(body: list[ast.stmt]) -> list[ast.stmt]:
         out: list[ast.stmt] = []
         for stmt in body:
-            # An ast node keeps its fields in ``__dict__``, and most node types carry none of these.
-            for field in ("body", "orelse", "finalbody"):
-                nested: list[object] = field_nodes(vars(stmt).get(field))
-                if nested:
-                    setattr(stmt, field, prune([n for n in nested if isinstance(n, ast.stmt)]))
+            map_blocks(stmt, prune, ALL_BLOCK_FIELDS)
             if (
                 isinstance(stmt, ast.Assign)
                 and len(stmt.targets) == 1
@@ -302,12 +303,12 @@ class ListRepeatToFull(ast.NodeTransformer):
         # -- rejected by gcc, and meaningless if it had compiled.
         dtype = "int64" if isinstance(elt.value, int) else "float64"
         node.value = ast.Call(
-            func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="full", ctx=ast.Load()),
+            func=numpy_attribute("full"),
             args=[ast.Tuple(elts=[count], ctx=ast.Load()), elt],
             keywords=[
                 ast.keyword(
                     arg="dtype",
-                    value=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr=dtype, ctx=ast.Load()),
+                    value=numpy_attribute(dtype),
                 )
             ],
         )
@@ -367,20 +368,18 @@ class ArrayLiteralToFill(ast.NodeTransformer):
                 attr = "int64"
             if attr is None:
                 return node
-            dtype = ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr=attr, ctx=ast.Load())
+            dtype = numpy_attribute(attr)
         alloc = ast.Assign(
-            targets=[ast.Name(id=name, ctx=ast.Store())],
+            targets=[store_(name)],
             value=ast.Call(
-                func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="empty", ctx=ast.Load()),
+                func=numpy_attribute("empty"),
                 args=[ast.Tuple(elts=[ast.Constant(value=len(elts))], ctx=ast.Load())],
                 keywords=[ast.keyword(arg="dtype", value=dtype)],
             ),
         )
         stores = [
             ast.Assign(
-                targets=[
-                    ast.Subscript(value=ast.Name(id=name, ctx=ast.Load()), slice=ast.Constant(value=k), ctx=ast.Store())
-                ],
+                targets=[ast.Subscript(value=name_(name), slice=ast.Constant(value=k), ctx=ast.Store())],
                 value=elt,
             )
             for k, elt in enumerate(elts)
@@ -398,8 +397,7 @@ def array_literal(value: ast.expr) -> tuple[list[ast.expr], ast.expr | None] | N
         isinstance(value, ast.Call)
         and isinstance(value.func, ast.Attribute)
         and value.func.attr == "array"
-        and isinstance(value.func.value, ast.Name)
-        and value.func.value.id in ("np", "numpy")
+        and is_numpy_module(value.func.value)
     ):
         return None
     if len(value.args) != 1 or not isinstance(value.args[0], (ast.List, ast.Tuple)) or not value.args[0].elts:
@@ -526,20 +524,6 @@ def rename_rebound_parameters(fn: ast.FunctionDef, inputs: frozenset[str]) -> No
     ast.fix_missing_locations(fn)
 
 
-def shape_subject(node: ast.expr) -> str | None:
-    """The name a ``.shape`` read ultimately asks about, through any subscript chain.
-
-    Inlining substitutes a parameter with the ARGUMENT EXPRESSION, so a helper's own ``x.shape[2]``
-    arrives spelled ``y[:, 0:c].shape[2]`` whenever the caller passed a slice. Reading only a bare
-    Name there missed every one of those, and a name whose shape is asked for only through a slice
-    is exactly the one that most needs separating: densenet passes each dense block's running
-    buffer to its layers as ``y[:, 0:c]``.
-    """
-    while isinstance(node, ast.Subscript):
-        node = node.value
-    return node.id if isinstance(node, ast.Name) else None
-
-
 def version_rebound_locals(fn: ast.FunctionDef, skip: frozenset[str]) -> None:
     """Give each TOP-LEVEL rebinding of a local its own name, so one name never carries two shapes.
 
@@ -574,7 +558,7 @@ def version_rebound_locals(fn: ast.FunctionDef, skip: frozenset[str]) -> None:
     shape_read = {
         base
         for node in ast.walk(fn)
-        if isinstance(node, ast.Attribute) and node.attr == "shape" and (base := shape_subject(node.value))
+        if isinstance(node, ast.Attribute) and node.attr == "shape" and (base := base_name(node.value))
     }
     # A name a local ALLOCATION is sized by needs separating for the same reason, one step further
     # out. ``resolve_array_ref`` answers a local array's shape with the SOURCE TEXT of its
@@ -633,14 +617,10 @@ class NonFiniteNormalizer(ast.NodeTransformer):
     trips the ``literal 'inf'`` guard.
     """
 
-    @staticmethod
-    def np_const(attr: str) -> ast.Attribute:
-        return ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr=attr, ctx=ast.Load())
-
     def visit_Attribute(self, node: ast.Attribute) -> ast.AST:
         self.generic_visit(node)
         if isinstance(node.value, ast.Name) and node.value.id == "math" and node.attr in ("inf", "nan"):
-            return ast.copy_location(self.np_const(node.attr), node)
+            return ast.copy_location(numpy_attribute(node.attr), node)
         return node
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
@@ -655,11 +635,11 @@ class NonFiniteNormalizer(ast.NodeTransformer):
             return node
         s = node.args[0].value.strip().lower()
         if s in ("inf", "+inf", "infinity", "+infinity"):
-            return ast.copy_location(self.np_const("inf"), node)
+            return ast.copy_location(numpy_attribute("inf"), node)
         if s in ("-inf", "-infinity"):
-            return ast.copy_location(ast.UnaryOp(op=ast.USub(), operand=self.np_const("inf")), node)
+            return ast.copy_location(ast.UnaryOp(op=ast.USub(), operand=numpy_attribute("inf")), node)
         if s == "nan":
-            return ast.copy_location(self.np_const("nan"), node)
+            return ast.copy_location(numpy_attribute("nan"), node)
         return node
 
 
@@ -778,7 +758,7 @@ class NewaxisToNone(ast.NodeTransformer):
 
     def visit_Attribute(self, node: ast.Attribute) -> ast.AST:
         self.generic_visit(node)
-        if isinstance(node.value, ast.Name) and node.value.id == "np" and node.attr == "newaxis":
+        if is_numpy_module(node.value) and node.attr == "newaxis":
             return ast.Constant(value=None)
         return node
 
@@ -806,7 +786,7 @@ class UnpackedOpenMeshToGrid(ast.NodeTransformer):
         ):
             names = tuple(e.id for e in target.elts)
             grid = self.grids.setdefault(names, "_".join(names))
-            return ast.copy_location(ast.Assign(targets=[ast.Name(id=grid, ctx=ast.Store())], value=node.value), node)
+            return ast.copy_location(ast.Assign(targets=[store_(grid)], value=node.value), node)
         return self.generic_visit(node)
 
     def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
@@ -815,7 +795,7 @@ class UnpackedOpenMeshToGrid(ast.NodeTransformer):
         if isinstance(index, ast.Tuple) and all(isinstance(e, ast.Name) for e in index.elts):
             grid = self.grids.get(tuple(e.id for e in index.elts))
             if grid is not None:
-                node.slice = ast.Name(id=grid, ctx=ast.Load())
+                node.slice = name_(grid)
         return node
 
 
@@ -825,8 +805,7 @@ def np_ix_operands(value: ast.AST) -> list[ast.expr] | None:
         isinstance(value, ast.Call)
         and isinstance(value.func, ast.Attribute)
         and value.func.attr == "ix_"
-        and isinstance(value.func.value, ast.Name)
-        and value.func.value.id in ("np", "numpy")
+        and is_numpy_module(value.func.value)
         and value.args
         and not value.keywords
     ):

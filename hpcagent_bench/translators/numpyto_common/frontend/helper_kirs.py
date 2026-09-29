@@ -5,8 +5,7 @@ import copy
 import dataclasses
 from collections.abc import Sequence
 
-from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc, KernelIR, ScalarDesc, SymbolDesc
-from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
+from hpcagent_bench.translators.numpyto_common.ast_build import name_
 from hpcagent_bench.translators.numpyto_common.frontend.axes import reject_symbolic_axis, reject_unsupported_slices
 from hpcagent_bench.translators.numpyto_common.frontend.body_rewrites import native_desugar
 from hpcagent_bench.translators.numpyto_common.frontend.callsite import (
@@ -26,13 +25,13 @@ from hpcagent_bench.translators.numpyto_common.frontend.helper_params import (
     widen_counting_scalar_params,
 )
 from hpcagent_bench.translators.numpyto_common.frontend.helper_shapes import (
+    call_specialized_body,
     desc_key,
+    helper_call_local_arrays,
     helper_return_array_shape,
     helper_return_shape_from_body,
-    structure_key,
-    call_specialized_body,
-    helper_call_local_arrays,
     helper_returns_rank0,
+    structure_key,
     target_shape_is_the_call_itself,
 )
 from hpcagent_bench.translators.numpyto_common.frontend.helper_specialize import (
@@ -44,7 +43,7 @@ from hpcagent_bench.translators.numpyto_common.frontend.helper_specialize import
 )
 from hpcagent_bench.translators.numpyto_common.frontend.inlining import HoistMultiStmtHelpers, unroll_const_list_loops
 from hpcagent_bench.translators.numpyto_common.frontend.module_constants import inline_module_constants
-from hpcagent_bench.translators.numpyto_common.frontend.shapes import local_array_def, conflicting_rebind_shapes
+from hpcagent_bench.translators.numpyto_common.frontend.shapes import conflicting_rebind_shapes, local_array_def
 from hpcagent_bench.translators.numpyto_common.frontend.tuple_helpers import (
     InlineTupleHelperCalls,
     desugar_helper_tuples,
@@ -52,6 +51,8 @@ from hpcagent_bench.translators.numpyto_common.frontend.tuple_helpers import (
     rewrite_helper_axes,
     tuple_template_for_call,
 )
+from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc, KernelIR, ScalarDesc, SymbolDesc
+from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
 
 __all__ = [
     "ArraySpec",
@@ -556,7 +557,7 @@ class HelperKirBuilder:
                     f"it must be inlined into its caller"
                 )
         for owner, call in calls:
-            call.args.extend(ast.Name(id=s, ctx=ast.Load()) for s in extra_syms)
+            call.args.extend(name_(s) for s in extra_syms)
             self.rewrote(owner)
 
     def build_array_return(self, site: Site, hret_shape: list[str], hret_dtype: str | None) -> None:

@@ -10,8 +10,8 @@
 # knobs HERE would silently win over both.
 #
 # In particular AITER_JIT_DIR must NOT be set here. The sglang and vllm EDFs pin it to the
-# IN-IMAGE prebuild at /opt/aiter-jit, and job 628077 measured what happens when a host directory
-# wins instead: module_aiter_core loads from the host and the image's prebuilt copy goes unused.
+# IN-IMAGE prebuild at /opt/aiter-jit; when a host directory wins instead, module_aiter_core loads
+# from the host and the image's prebuilt copy goes unused.
 #
 # TWO ROOTS, because the two kinds of data have opposite shapes:
 #

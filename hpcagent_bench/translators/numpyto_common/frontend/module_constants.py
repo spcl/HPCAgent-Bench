@@ -4,12 +4,14 @@ import ast
 import copy
 import itertools
 import operator
-from typing import Any
 from collections.abc import Callable, Iterator
+from typing import Any
 
 from hpcagent_bench.translators.numpyto_common import dtypes
-from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc
+from hpcagent_bench.translators.numpyto_common.ast_build import name_, numpy_attribute, store_
+from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.frontend.shape_arith import IDENT_RE
+from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc
 
 __all__ = [
     "ARITH_OPS",
@@ -249,11 +251,7 @@ def dtype_module_consts(tree: ast.Module, shadowed: set[str]) -> dict[str, str]:
     return {
         name: v.attr
         for name, v in single_name_assigns(tree)
-        if isinstance(v, ast.Attribute)
-        and isinstance(v.value, ast.Name)
-        and v.value.id in ("np", "numpy")
-        and v.attr in DTYPE_ATTRS
-        and name not in shadowed
+        if isinstance(v, ast.Attribute) and is_numpy_module(v.value) and v.attr in DTYPE_ATTRS and name not in shadowed
     }
 
 
@@ -271,9 +269,7 @@ class SubstituteModuleConsts(ast.NodeTransformer):
         if node.id in self.seqs:
             return ast.copy_location(copy.deepcopy(self.seqs[node.id]), node)
         if node.id in self.dtype_attrs:
-            np_attr = ast.Attribute(
-                value=ast.Name(id="np", ctx=ast.Load()), attr=self.dtype_attrs[node.id], ctx=ast.Load()
-            )
+            np_attr = ast.Attribute(value=name_("np"), attr=self.dtype_attrs[node.id], ctx=ast.Load())
             return ast.copy_location(np_attr, node)
         return node
 
@@ -353,8 +349,7 @@ def parse_array_literal(call: ast.Call):
     if not (
         isinstance(call.func, ast.Attribute)
         and call.func.attr == "array"
-        and isinstance(call.func.value, ast.Name)
-        and call.func.value.id in ("np", "numpy")
+        and is_numpy_module(call.func.value)
         and call.args
     ):
         return None
@@ -426,14 +421,14 @@ def materialize_const_arrays(tree: ast.Module, fn: ast.FunctionDef, input_args: 
         shape_tuple = ast.Tuple(elts=[ast.Constant(value=d) for d in shape], ctx=ast.Load())
         prelude.append(
             ast.Assign(
-                targets=[ast.Name(id=name, ctx=ast.Store())],
+                targets=[store_(name)],
                 value=ast.Call(
-                    func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="zeros", ctx=ast.Load()),
+                    func=numpy_attribute("zeros"),
                     args=[shape_tuple],
                     keywords=[
                         ast.keyword(
                             arg="dtype",
-                            value=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr=dtype, ctx=ast.Load()),
+                            value=numpy_attribute(dtype),
                         )
                     ],
                 ),
@@ -448,7 +443,7 @@ def materialize_const_arrays(tree: ast.Module, fn: ast.FunctionDef, input_args: 
             )
             prelude.append(
                 ast.Assign(
-                    targets=[ast.Subscript(value=ast.Name(id=name, ctx=ast.Load()), slice=sl, ctx=ast.Store())],
+                    targets=[ast.Subscript(value=name_(name), slice=sl, ctx=ast.Store())],
                     value=ast.Constant(value=val),
                 )
             )

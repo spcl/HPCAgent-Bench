@@ -53,6 +53,7 @@ def test_every_lazily_exported_name_actually_resolves() -> None:
     """A name in the map that its module does not define would raise only when first touched,
     which for a backend can be deep into a sweep."""
     import importlib
+
     import hpcagent_bench.frameworks as frameworks
 
     for name, module in frameworks._LAZY_EXPORTS.items():
@@ -405,8 +406,8 @@ def test_a_ccache_masquerade_compiler_is_not_stripped_as_the_launcher(
     ccache_masquerade: tuple[str, str], recorded: tuple[str, ...], compiler: str
 ) -> None:
     """``/usr/lib/ccache/g++`` resolves to the ccache binary but IS the compiler (ccache picks launcher
-    mode by the file NAME). Stripping it left ``-D...`` as the compiler, and DaceFramework.opt_report
-    died on the first build of every CI sweep (FileNotFoundError: '-DDACE_BINARY_DIR=...')."""
+    mode by the file NAME). Stripping it left ``-D...`` as the compiler, and a replay of the recorded line
+    died with FileNotFoundError: '-DDACE_BINARY_DIR=...'."""
     launcher, masquerade = ccache_masquerade
     names = {"launcher": launcher, "masquerade": masquerade}
     argv = tuple(token.format(**names) for token in recorded)

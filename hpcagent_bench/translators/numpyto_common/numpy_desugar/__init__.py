@@ -9,10 +9,8 @@ from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import (
     AUG_OP_SRC,
     REDUCE_FNS,
     DesugarError,
-    const_int,
     eigh_alias_names,
     eigh_call_ab,
-    np_submodule_attr,
 )
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.constants import (
     DEFAULT_FOLDING_BACKENDS,
@@ -150,7 +148,6 @@ __all__ = [
     "UfuncOutInline",
     "UfuncReduceToReducer",
     "axis_list",
-    "const_int",
     "dtype_kind",
     "dtype_table_",
     "eigh_alias_names",
@@ -169,7 +166,6 @@ __all__ = [
     "module_kind_tables",
     "name_binding_index",
     "name_value_pairs",
-    "np_submodule_attr",
     "rank_table",
     "rewrite_curve_fit",
     "shape_table",

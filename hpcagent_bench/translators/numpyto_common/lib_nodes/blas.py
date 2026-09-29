@@ -2,14 +2,9 @@
 
 import ast
 
+from hpcagent_bench.translators.numpyto_common.ast_build import name_, range_for, store_
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of
-from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
-    const_,
-    const_or_name,
-    name_,
-    store_,
-    wrap_for_loops,
-)
+from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import const_, const_or_name, wrap_for_loops
 from hpcagent_bench.translators.numpyto_common.lib_nodes.scalarize import scalarize_at_iters
 
 __all__ = [
@@ -61,10 +56,10 @@ def expand_matmul(
             ],
             value=const_(0.0),
         ),
-        ast.For(
-            target=store_("__l"),
-            iter=ast.Call(func=name_("range"), args=[const_or_name(k)], keywords=[]),
-            body=[
+        range_for(
+            "__l",
+            [const_or_name(k)],
+            [
                 ast.AugAssign(
                     target=ast.Subscript(
                         value=name_(target.id),
@@ -87,21 +82,10 @@ def expand_matmul(
                     ),
                 )
             ],
-            orelse=[],
         ),
     ]
-    j_loop = ast.For(
-        target=store_("__j"),
-        iter=ast.Call(func=name_("range"), args=[const_or_name(n)], keywords=[]),
-        body=body,
-        orelse=[],
-    )
-    i_loop = ast.For(
-        target=store_("__i"),
-        iter=ast.Call(func=name_("range"), args=[const_or_name(m)], keywords=[]),
-        body=[j_loop],
-        orelse=[],
-    )
+    j_loop = range_for("__j", [const_or_name(n)], body)
+    i_loop = range_for("__i", [const_or_name(m)], [j_loop])
     return [i_loop]
 
 
@@ -136,14 +120,7 @@ def expand_dot(target: ast.expr, args: list[ast.expr], shape_table: dict[str, tu
             value=ast.BinOp(left=sa, op=ast.Mult(), right=sb),
         )
     ]
-    loop = [
-        ast.For(
-            target=store_(iter_name),
-            iter=ast.Call(func=name_("range"), args=[extent[0]], keywords=[]),
-            body=body,
-            orelse=[],
-        )
-    ]
+    loop = [range_for(iter_name, [extent[0]], body)]
     return [ast.Assign(targets=[target], value=const_(0.0))] + loop
 
 
@@ -207,18 +184,18 @@ def expand_dot_2d(target: ast.expr, args: list[ast.expr], shape_table: dict[str,
     if len(a_shape) == 2 and len(b_shape) == 1:
         m, k = a_shape
         return [
-            ast.For(
-                target=store_("__i"),
-                iter=ast.Call(func=name_("range"), args=[const_or_name(m)], keywords=[]),
-                body=[
+            range_for(
+                "__i",
+                [const_or_name(m)],
+                [
                     ast.Assign(
                         targets=[ast.Subscript(value=name_(target.id), slice=name_("__i"), ctx=ast.Store())],
                         value=const_(0.0),
                     ),
-                    ast.For(
-                        target=store_("__l"),
-                        iter=ast.Call(func=name_("range"), args=[const_or_name(k)], keywords=[]),
-                        body=[
+                    range_for(
+                        "__l",
+                        [const_or_name(k)],
+                        [
                             ast.AugAssign(
                                 target=ast.Subscript(value=name_(target.id), slice=name_("__i"), ctx=ast.Store()),
                                 op=ast.Add(),
@@ -233,27 +210,25 @@ def expand_dot_2d(target: ast.expr, args: list[ast.expr], shape_table: dict[str,
                                 ),
                             )
                         ],
-                        orelse=[],
                     ),
                 ],
-                orelse=[],
             )
         ]
     if len(a_shape) == 1 and len(b_shape) == 2:
         k, n = b_shape
         return [
-            ast.For(
-                target=store_("__j"),
-                iter=ast.Call(func=name_("range"), args=[const_or_name(n)], keywords=[]),
-                body=[
+            range_for(
+                "__j",
+                [const_or_name(n)],
+                [
                     ast.Assign(
                         targets=[ast.Subscript(value=name_(target.id), slice=name_("__j"), ctx=ast.Store())],
                         value=const_(0.0),
                     ),
-                    ast.For(
-                        target=store_("__l"),
-                        iter=ast.Call(func=name_("range"), args=[const_or_name(k)], keywords=[]),
-                        body=[
+                    range_for(
+                        "__l",
+                        [const_or_name(k)],
+                        [
                             ast.AugAssign(
                                 target=ast.Subscript(value=name_(target.id), slice=name_("__j"), ctx=ast.Store()),
                                 op=ast.Add(),
@@ -268,10 +243,8 @@ def expand_dot_2d(target: ast.expr, args: list[ast.expr], shape_table: dict[str,
                                 ),
                             )
                         ],
-                        orelse=[],
                     ),
                 ],
-                orelse=[],
             )
         ]
     # 2-D x 2-D: delegate to matmul.

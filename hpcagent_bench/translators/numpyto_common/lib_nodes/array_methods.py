@@ -3,6 +3,8 @@
 import ast
 from collections.abc import Iterable
 
+from hpcagent_bench.translators.numpyto_common.ast_build import numpy_attribute
+
 __all__ = ["ARRAY_METHOD_REDUCTIONS", "ARRAY_METHOD_SHAPE_OPS", "ArrayMethodRewriter"]
 
 #: Array methods whose numpy function twin takes the array first and means the same thing, so the
@@ -64,7 +66,7 @@ class ArrayMethodRewriter(ast.NodeTransformer):
             return node
         return ast.copy_location(
             ast.Call(
-                func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr=func.attr, ctx=ast.Load()),
+                func=numpy_attribute(func.attr),
                 args=[recv] + list(node.args),
                 keywords=list(node.keywords),
             ),

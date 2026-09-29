@@ -3,6 +3,7 @@
 import ast
 from collections.abc import Callable
 
+from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.frontend import dtype_from_constructor
 from hpcagent_bench.translators.numpyto_common.ir import COMPLEX_FOR_FLOAT
 from hpcagent_bench.translators.numpyto_common.lib_nodes.array_methods import ARRAY_METHOD_SHAPE_OPS
@@ -171,12 +172,7 @@ def is_conj_call(node: ast.AST) -> ast.expr | None:
     if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
         return None
     f = node.func
-    if (
-        f.attr in ("conj", "conjugate")
-        and isinstance(f.value, ast.Name)
-        and f.value.id in ("np", "numpy")
-        and len(node.args) == 1
-    ):
+    if f.attr in ("conj", "conjugate") and is_numpy_module(f.value) and len(node.args) == 1:
         return node.args[0]
     if f.attr == "conjugate" and not node.args:
         return f.value

@@ -7,31 +7,43 @@ import functools
 import itertools
 import logging
 import re
-from typing import NamedTuple, cast
 from collections.abc import Callable, Iterable, Sequence
+from typing import NamedTuple
 
 from hpcagent_bench.translators.numpyto_common import dtypes
 from hpcagent_bench.translators.numpyto_common import frontend as common_frontend
-from hpcagent_bench.translators.numpyto_common.frontend import PinnedValue, field_nodes, fold_shape_expr
+from hpcagent_bench.translators.numpyto_common.ast_build import (
+    RenameNames,
+    SubstituteLoads,
+    expr_of,
+    literal_loads,
+    name_,
+    nested_blocks,
+    numpy_attribute,
+    store_,
+)
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.emit_helpers.tokens import IDENT_RE
+from hpcagent_bench.translators.numpyto_common.frontend import PinnedValue, field_nodes, fold_shape_expr
 from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc, KernelIR, ScalarDesc, shape_dimension_symbols
 from hpcagent_bench.translators.numpyto_common.lib_nodes import shape_exprs_equal, sympify_shape
+from hpcagent_bench.translators.numpyto_common.lib_nodes.call_args import np_call_attr
 from hpcagent_bench.translators.numpyto_common.lowering import lower
-from hpcagent_bench.translators.numpyto_common.numpy_desugar.reductions import DACE_NATIVE_REDUCE_FNS, reduce_call_parts
 from hpcagent_bench.translators.numpyto_common.numpy_desugar import (
     AUG_OP_SRC,
     axis_list,
+    desugar_for_python_backend,
     dtype_kind,
     dtype_table_,
-    kind_of_dtype_str,
-    promote_kind,
-    desugar_for_python_backend,
     expr_rank,
+    kind_of_dtype_str,
     name_binding_index,
+    promote_kind,
     rank_table,
 )
+from hpcagent_bench.translators.numpyto_common.numpy_desugar.reductions import DACE_NATIVE_REDUCE_FNS, reduce_call_parts
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
+from hpcagent_bench.translators.numpyto_common.parallelism import load_names
 from hpcagent_bench.translators.numpyto_common.statement_desugar import (
     DesugarArrayIteration,
     Spelled,
@@ -108,7 +120,6 @@ __all__ = [
     "allocation_binding",
     "allocation_shapes",
     "array_annotation",
-    "as_stmt_block",
     "bare_alias_binding",
     "bind_caller_expressions",
     "bind_helper_call",
@@ -164,7 +175,6 @@ __all__ = [
     "is_shape_subscript",
     "is_symbol_expr",
     "kwarg_value",
-    "loaded_names",
     "loop_induction_symbols",
     "loop_target_ranks",
     "materialize_strided_helper_args",
@@ -178,11 +188,9 @@ __all__ = [
     "names_rebound",
     "negative_step",
     "nested_in_one_view_region",
-    "np_call_name",
     "once_bound_locals",
     "ordered_reshape_source",
     "output_write_extents",
-    "parse_expr",
     "plan_size_promotion",
     "program_symbols",
     "read_outside",
@@ -296,8 +304,8 @@ class SplitTupleAssign(SplitTupleUnpack):
             # the shape resolver can follow it to the operand's own extents.
             temporary = f"__hpcagent_bench_shaped{self.temps}"
             self.temps += 1
-            prelude.append(ast.Assign(targets=[ast.Name(id=temporary, ctx=ast.Store())], value=base))
-            base = ast.Name(id=temporary, ctx=ast.Load())
+            prelude.append(ast.Assign(targets=[store_(temporary)], value=base))
+            base = name_(temporary)
         reads: list[ast.expr] = [
             ast.Subscript(
                 value=ast.Attribute(value=copy.deepcopy(base), attr="shape", ctx=ast.Load()),
@@ -526,7 +534,7 @@ class FloorDivToIntFloor(ast.NodeTransformer):
         self.generic_visit(node)
         if not isinstance(node.op, ast.FloorDiv):
             return node
-        symbolic = ast.Attribute(value=ast.Name(id="dc", ctx=ast.Load()), attr="symbolic", ctx=ast.Load())
+        symbolic = ast.Attribute(value=name_("dc"), attr="symbolic", ctx=ast.Load())
         call = ast.Call(
             func=ast.Attribute(value=symbolic, attr="int_floor", ctx=ast.Load()),
             args=[node.left, node.right],
@@ -672,11 +680,11 @@ class TernaryValueHoister(ast.NodeTransformer):
         self.prelude.append(
             ast.If(
                 test=node.test,
-                body=[ast.Assign(targets=[ast.Name(id=tmp, ctx=ast.Store())], value=body)],
-                orelse=[ast.Assign(targets=[ast.Name(id=tmp, ctx=ast.Store())], value=orelse)],
+                body=[ast.Assign(targets=[store_(tmp)], value=body)],
+                orelse=[ast.Assign(targets=[store_(tmp)], value=orelse)],
             )
         )
-        return ast.copy_location(ast.Name(id=tmp, ctx=ast.Load()), node)
+        return ast.copy_location(name_(tmp), node)
 
 
 #: A dtype kind -> the dace dtype an array of that kind is declared with.
@@ -711,7 +719,7 @@ class DesugarTernary(ast.NodeTransformer):
             value
             if kind == join
             else ast.Call(
-                func=ast.Attribute(value=value, attr="astype", ctx=ast.Load()), args=[parse_expr(dtype)], keywords=[]
+                func=ast.Attribute(value=value, attr="astype", ctx=ast.Load()), args=[expr_of(dtype)], keywords=[]
             )
             for value, kind in zip((body, orelse), kinds)
         ]
@@ -721,20 +729,13 @@ class DesugarTernary(ast.NodeTransformer):
         node.body = self.process_body_(node.body)
         return node
 
-    def visit_For(self, node: ast.For):
+    def visit_For(self, node: ast.For | ast.While | ast.If):
         node.body = self.process_body_(node.body)
         node.orelse = self.process_body_(node.orelse)
         return node
 
-    def visit_While(self, node: ast.While):
-        node.body = self.process_body_(node.body)
-        node.orelse = self.process_body_(node.orelse)
-        return node
-
-    def visit_If(self, node: ast.If):
-        node.body = self.process_body_(node.body)
-        node.orelse = self.process_body_(node.orelse)
-        return node
+    visit_While = visit_For
+    visit_If = visit_For
 
     def process_body_(self, stmts: list[ast.stmt]) -> list[ast.stmt]:
         out: list[ast.stmt] = []
@@ -777,10 +778,8 @@ class MethodReceiverHoister(ast.NodeTransformer):
             return node
         tmp = f"__hpcagent_bench_recv{self.owner.ctr}"
         self.owner.ctr += 1
-        self.prelude.append(
-            ast.copy_location(ast.Assign(targets=[ast.Name(id=tmp, ctx=ast.Store())], value=node.func.value), node)
-        )
-        node.func.value = ast.copy_location(ast.Name(id=tmp, ctx=ast.Load()), node)
+        self.prelude.append(ast.copy_location(ast.Assign(targets=[store_(tmp)], value=node.func.value), node))
+        node.func.value = ast.copy_location(name_(tmp), node)
         return node
 
 
@@ -804,20 +803,13 @@ class BindMethodReceiver(ast.NodeTransformer):
         node.body = self.process_body(node.body)
         return node
 
-    def visit_For(self, node: ast.For):
+    def visit_For(self, node: ast.For | ast.While | ast.If):
         node.body = self.process_body(node.body)
         node.orelse = self.process_body(node.orelse)
         return node
 
-    def visit_While(self, node: ast.While):
-        node.body = self.process_body(node.body)
-        node.orelse = self.process_body(node.orelse)
-        return node
-
-    def visit_If(self, node: ast.If):
-        node.body = self.process_body(node.body)
-        node.orelse = self.process_body(node.orelse)
-        return node
+    visit_While = visit_For
+    visit_If = visit_For
 
     def process_body(self, stmts: list[ast.stmt]) -> list[ast.stmt]:
         out: list[ast.stmt] = []
@@ -1033,7 +1025,7 @@ def fresh_binding_index(block: list[ast.stmt], at: int, name: str) -> int | None
             continue
         if not any(isinstance(target, ast.Name) and target.id == name for target in stmt.targets):
             continue
-        fresh = isinstance(stmt.value, ast.Call) and np_call_name(stmt.value) in FRESH_ARRAY_CALLS
+        fresh = isinstance(stmt.value, ast.Call) and np_call_attr(stmt.value.func) in FRESH_ARRAY_CALLS
         return index if fresh and len(stmt.targets) == 1 else None
     return None
 
@@ -1041,10 +1033,7 @@ def fresh_binding_index(block: list[ast.stmt], at: int, name: str) -> int | None
 def statement_blocks(root: ast.AST) -> Iterable[list[ast.stmt]]:
     """Every statement list under ``root``: bodies, else branches and finally blocks."""
     for node in ast.walk(root):
-        for field in ("body", "orelse", "finalbody"):
-            block = vars(node).get(field)
-            if isinstance(block, list) and block and isinstance(block[0], ast.stmt):
-                yield block
+        yield from (block for block in nested_blocks(node) if block)
 
 
 class MaterializeWrittenReshape(ast.NodeTransformer):
@@ -1077,7 +1066,7 @@ class MaterializeWrittenReshape(ast.NodeTransformer):
         rebound = any(isinstance(use.ctx, ast.Store) for use in name_uses(block[start + 1 : at + 1], source))
         if rebound or len(name_uses(block[start : at + 1], source)) != len(name_uses([fn], source)):
             return
-        stmt.value = ast.copy_location(ast.Call(func=parse_expr("np.copy"), args=[stmt.value], keywords=[]), stmt.value)
+        stmt.value = ast.copy_location(ast.Call(func=expr_of("np.copy"), args=[stmt.value], keywords=[]), stmt.value)
 
 
 class DesugarUnreplacedCalls(ast.NodeTransformer):
@@ -1178,7 +1167,7 @@ class DesugarReverseSlice(ast.NodeTransformer):
             # ``axis=0`` is not decoration: ``x[::-1]`` reverses the FIRST axis only, while a bare
             # ``np.flip`` reverses every one of them. The two agree at rank 1 and diverge above it.
             flip = ast.Call(
-                func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="flip", ctx=ast.Load()),
+                func=numpy_attribute("flip"),
                 args=[node.value],
                 keywords=[ast.keyword(arg="axis", value=ast.Constant(value=0))],
             )
@@ -1342,20 +1331,13 @@ class MaterializeDynamicFlip(ast.NodeTransformer):
         ast.fix_missing_locations(node)
         return node
 
-    def visit_For(self, node: ast.For):
+    def visit_For(self, node: ast.For | ast.While | ast.If):
         node.body = self.process_body_(node.body)
         node.orelse = self.process_body_(node.orelse)
         return node
 
-    def visit_While(self, node: ast.While):
-        node.body = self.process_body_(node.body)
-        node.orelse = self.process_body_(node.orelse)
-        return node
-
-    def visit_If(self, node: ast.If):
-        node.body = self.process_body_(node.body)
-        node.orelse = self.process_body_(node.orelse)
-        return node
+    visit_While = visit_For
+    visit_If = visit_For
 
     def process_body_(self, stmts: list[ast.stmt]) -> list[ast.stmt]:
         out: list[ast.stmt] = []
@@ -1576,9 +1558,7 @@ class DesugarAugAssign(ast.NodeTransformer):
         store = self.store(node.target, prelude)
         if store is None:
             return node
-        load = (
-            ast.Name(id=node.target.id, ctx=ast.Load()) if isinstance(node.target, ast.Name) else copy.deepcopy(store)
-        )
+        load = name_(node.target.id) if isinstance(node.target, ast.Name) else copy.deepcopy(store)
         load.ctx = ast.Load()
         if isinstance(store, ast.Subscript) and self.index_arrays(store.slice) >= 2:
             loop = self.element_loop(store, node, prelude)
@@ -1611,7 +1591,7 @@ class DesugarAugAssign(ast.NodeTransformer):
         self.counter += 1
         arrays = [self.bound(part, prelude) if rank == 1 else part for part, rank in zip(parts, ranks)]
         element = [
-            ast.Subscript(value=part, slice=ast.Name(id=at, ctx=ast.Load()), ctx=ast.Load()) if rank == 1 else part
+            ast.Subscript(value=part, slice=name_(at), ctx=ast.Load()) if rank == 1 else part
             for part, rank in zip(arrays, ranks)
         ]
         write = ast.Subscript(
@@ -1621,11 +1601,11 @@ class DesugarAugAssign(ast.NodeTransformer):
         read.ctx = ast.Load()
         value = self.bound(node.value, prelude) if value_rank == 1 else self.once(node.value, prelude)
         if value_rank == 1:
-            value = ast.Subscript(value=value, slice=ast.Name(id=at, ctx=ast.Load()), ctx=ast.Load())
+            value = ast.Subscript(value=value, slice=name_(at), ctx=ast.Load())
         first = next(part for part, rank in zip(arrays, ranks) if rank == 1)
         return ast.For(
-            target=ast.Name(id=at, ctx=ast.Store()),
-            iter=parse_expr(f"range({ast.unparse(first)}.shape[0])"),
+            target=store_(at),
+            iter=expr_of(f"range({ast.unparse(first)}.shape[0])"),
             body=[ast.Assign(targets=[write], value=ast.BinOp(left=read, op=node.op, right=value))],
             orelse=[],
         )
@@ -1633,11 +1613,11 @@ class DesugarAugAssign(ast.NodeTransformer):
     def bound(self, expr: ast.expr, prelude: list[ast.stmt]) -> ast.Name:
         """``expr`` as a name: a bare name as is, anything else bound to a temp above the loop, evaluated once."""
         if isinstance(expr, ast.Name):
-            return ast.Name(id=expr.id, ctx=ast.Load())
+            return name_(expr.id)
         name = f"__hpcagent_bench_aug{self.counter}"
         self.counter += 1
-        prelude.append(ast.Assign(targets=[ast.Name(id=name, ctx=ast.Store())], value=copy.deepcopy(expr)))
-        return ast.Name(id=name, ctx=ast.Load())
+        prelude.append(ast.Assign(targets=[store_(name)], value=copy.deepcopy(expr)))
+        return name_(name)
 
     def store(self, target: ast.expr, prelude: list[ast.stmt]) -> ast.Name | ast.Subscript | None:
         if isinstance(target, ast.Name):
@@ -1645,8 +1625,8 @@ class DesugarAugAssign(ast.NodeTransformer):
             if rank is None:
                 return None
             if rank == 0:
-                return ast.Name(id=target.id, ctx=ast.Store())
-            return ast.Subscript(value=ast.Name(id=target.id, ctx=ast.Load()), slice=ast.Slice(), ctx=ast.Store())
+                return store_(target.id)
+            return ast.Subscript(value=name_(target.id), slice=ast.Slice(), ctx=ast.Store())
         if not isinstance(target, ast.Subscript):
             return None
         base = self.base(target.value, prelude)
@@ -1657,7 +1637,7 @@ class DesugarAugAssign(ast.NodeTransformer):
     def base(self, expr: ast.expr, prelude: list[ast.stmt]) -> ast.expr | None:
         """The array a store lands on, its own indices bound once; None if reaching it calls anything."""
         if isinstance(expr, ast.Name):
-            return ast.Name(id=expr.id, ctx=ast.Load())
+            return name_(expr.id)
         if isinstance(expr, ast.Attribute):
             inner = self.base(expr.value, prelude)
             return None if inner is None else ast.Attribute(value=inner, attr=expr.attr, ctx=ast.Load())
@@ -1683,8 +1663,8 @@ class DesugarAugAssign(ast.NodeTransformer):
             return copy.deepcopy(expr)
         name = f"__hpcagent_bench_aug{self.counter}"
         self.counter += 1
-        prelude.append(ast.Assign(targets=[ast.Name(id=name, ctx=ast.Store())], value=expr))
-        return ast.Name(id=name, ctx=ast.Load())
+        prelude.append(ast.Assign(targets=[store_(name)], value=expr))
+        return name_(name)
 
 
 #: Builtins that return a Python scalar whatever they read.
@@ -1747,18 +1727,6 @@ def dace_chained_assign_split(seed_ranks: dict[str, int] | None = None) -> Split
     return SplitChainedAssign(lambda ordinal: f"__hpcagent_bench_chain{ordinal}", True, seed_ranks)
 
 
-class SubstituteNames_(ast.NodeTransformer):
-    """Replace every load of a name in ``mapping`` with a copy of its expression."""
-
-    def __init__(self, mapping: dict[str, ast.AST]) -> None:
-        self.mapping = mapping
-
-    def visit_Name(self, node: ast.Name):
-        if isinstance(node.ctx, ast.Load) and node.id in self.mapping:
-            return ast.copy_location(copy.deepcopy(self.mapping[node.id]), node)
-        return node
-
-
 class DropAliasAssign(ast.NodeTransformer):
     """Drop ``<name> = ...`` for each inlined alias name (its uses are substituted)."""
 
@@ -1812,24 +1780,9 @@ def view_binding(node: ast.stmt, symbols: frozenset[str] = frozenset()) -> str |
     return view_slice_binding(node) or bare_alias_binding(node, symbols)
 
 
-def as_stmt_block(raw: object) -> list[ast.stmt]:
-    """One non-empty statement list off an ast node's field dict; anything else reads as empty.
-
-    ``isinstance(raw, list)`` proves a sequence and nothing about its members, so the first member
-    is the evidence that decides -- an ast field holding a list holds one node type throughout."""
-    return cast("list[ast.stmt]", raw) if isinstance(raw, list) and raw and isinstance(raw[0], ast.stmt) else []
-
-
 def statement_lists(root: ast.AST) -> list[list[ast.stmt]]:
     """Every statement list in the subtree -- the blocks a name's live range can be confined to."""
-    blocks: list[list[ast.stmt]] = []
-    for parent in ast.walk(root):
-        # An ast node keeps its fields in ``__dict__``, and most node types carry none of these.
-        for field in ("body", "orelse", "finalbody"):
-            block = as_stmt_block(vars(parent).get(field))
-            if block:
-                blocks.append(block)
-    return blocks
+    return [block for parent in ast.walk(root) for block in nested_blocks(parent) if block]
 
 
 #: numpy calls that build a FRESH buffer, so the name they bind is a new array rather than a rebind
@@ -1924,7 +1877,7 @@ def copy_view_bindings(fn: ast.FunctionDef, names: set[str], symbols: frozenset[
         for stmt in block:
             if isinstance(stmt, ast.Assign) and view_binding(stmt, symbols) in names:
                 copied = ast.Call(
-                    func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="copy", ctx=ast.Load()),
+                    func=numpy_attribute("copy"),
                     args=[stmt.value],
                     keywords=[],
                 )
@@ -1957,7 +1910,7 @@ def views_of_written_bases(fn: ast.FunctionDef) -> set[str]:
                 continue
             if not stores:
                 stores = [written_through(later) for later in block]
-                reads = [loaded_names(later) for later in block]
+                reads = [load_names(later) for later in block]
             base = stmt.value.value.id
             tail = range(index + 1, len(block))
             store = next((i for i in tail if base in stores[i]), None)
@@ -1967,11 +1920,6 @@ def views_of_written_bases(fn: ast.FunctionDef) -> set[str]:
             if read < store:
                 names.add(name)
     return names
-
-
-def loaded_names(node: ast.AST) -> set[str]:
-    """Every name READ in the subtree."""
-    return {n.id for n in ast.walk(node) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
 
 
 def mixed_view_names(fn: ast.FunctionDef, symbols: frozenset[str] = frozenset()) -> set[str]:
@@ -2399,7 +2347,7 @@ class ResolveShapeReads(ast.NodeTransformer):
             tree = ast.parse(token, mode="eval")
         except SyntaxError:
             return token
-        return fold_shape_expr(ast.unparse(SubstituteNames_(self.aliases).visit(tree).body))
+        return fold_shape_expr(ast.unparse(SubstituteLoads(self.aliases).visit(tree).body))
 
     def note_alias(self, name: str, value: ast.AST) -> None:
         """Record ``name = <integer expression>`` so :meth:`canon` can substitute it away."""
@@ -2413,8 +2361,8 @@ class ResolveShapeReads(ast.NodeTransformer):
             return
         self.alias_seen.add(name)
         # Folded on the way in: without it alias N carries alias N-1's whole expansion, so the AST
-        # deepens once per layer and resnet101's 101 layers overflow the deepcopy in SubstituteNames_.
-        self.aliases[name] = fold_expr(SubstituteNames_(self.aliases).visit(copy.deepcopy(value)))
+        # deepens once per layer and resnet101's 101 layers overflow the deepcopy in SubstituteLoads.
+        self.aliases[name] = fold_expr(SubstituteLoads(self.aliases).visit(copy.deepcopy(value)))
 
     def cumulative_axis(self, node: ast.Call) -> tuple[ast.expr, int] | None:
         """``(operand, axis)`` of an ``np.cumsum``/``np.cumprod`` written with a literal axis, else
@@ -3024,7 +2972,7 @@ class HoistCompoundExtents(ast.NodeTransformer):
         for position, element in enumerate(elements):
             name = self.names.get(ast.unparse(element)) if isinstance(element, ast.BinOp) else None
             if name is not None:
-                elements[position] = ast.copy_location(ast.Name(id=name, ctx=ast.Load()), element)
+                elements[position] = ast.copy_location(name_(name), element)
         return node
 
 
@@ -3036,7 +2984,7 @@ def hoist_compound_extents(fn_ast: ast.FunctionDef, known: set[str]) -> ast.Func
         return fn_ast
     fn_ast = hoister.visit(fn_ast)
     for index, name, element in reversed(hoister.plan):
-        definition = ast.Assign(targets=[ast.Name(id=name, ctx=ast.Store())], value=copy.deepcopy(element))
+        definition = ast.Assign(targets=[store_(name)], value=copy.deepcopy(element))
         fn_ast.body.insert(index, ast.copy_location(definition, fn_ast.body[index]))
     ast.fix_missing_locations(fn_ast)
     return fn_ast
@@ -3081,18 +3029,6 @@ def shape_reaching_names(body: ast.AST, direct: set[str]) -> set[str]:
                     reaching.add(sub.id)
                     frontier.append(sub.id)
     return reaching
-
-
-class SubstituteScalarValues(ast.NodeTransformer):
-    """Replace every READ of a named scalar with its literal value."""
-
-    def __init__(self, values: dict[str, int]) -> None:
-        self.values = values
-
-    def visit_Name(self, node: ast.Name):
-        if isinstance(node.ctx, ast.Load) and node.id in self.values:
-            return ast.copy_location(ast.Constant(value=self.values[node.id]), node)
-        return node
 
 
 def freeze_pinned_extent_scalars(kir: KernelIR) -> KernelIR:
@@ -3156,7 +3092,7 @@ def freeze_pinned_extent_scalars(kir: KernelIR) -> KernelIR:
             frozen[name] = desc.value
     if not frozen:
         return kir
-    tree = SubstituteScalarValues(frozen).visit(copy.deepcopy(kir.tree))
+    tree = literal_loads(frozen).visit(copy.deepcopy(kir.tree))
     ast.fix_missing_locations(tree)
     return dataclasses.replace(kir, tree=tree)
 
@@ -3184,7 +3120,7 @@ def freeze_shape_only_parameters(kir: KernelIR) -> KernelIR:
     # The body too: once helpers are kept, the buffer the kernel allocates for a helper argument is
     # spelled off the same declared extent, and freezing only the declaration left mlp's ``w1`` at
     # ``[C_in, 30000]`` against a ``[N, S0]`` argument buffer dace could not relate to it.
-    tree = ast.fix_missing_locations(SubstituteScalarValues(values).visit(copy.deepcopy(kir.tree)))
+    tree = ast.fix_missing_locations(literal_loads(values).visit(copy.deepcopy(kir.tree)))
     return dataclasses.replace(kir, arrays=arrays, tree=tree)
 
 
@@ -3194,7 +3130,7 @@ def frozen_extent(dim: str, values: dict[str, int]) -> str:
     if not any(ident in values for ident in IDENT_RE.findall(text)):
         return text
     try:
-        tree = SubstituteScalarValues(values).visit(ast.parse(text, mode="eval"))
+        tree = literal_loads(values).visit(ast.parse(text, mode="eval"))
     except SyntaxError:
         return text
     return ast.unparse(ast.fix_missing_locations(tree))
@@ -3385,29 +3321,12 @@ def fold_expr(node: ast.AST) -> ast.AST:
         return node
 
 
-def np_call_name(node: ast.AST) -> str | None:
-    """``np.take`` -> ``"take"``, ``np.linalg.norm`` -> ``"linalg.norm"``, else None."""
-    if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
-        return None
-    base = node.func.value
-    if is_numpy_module(base):
-        return node.func.attr
-    if isinstance(base, ast.Attribute) and is_numpy_module(base.value):
-        return f"{base.attr}.{node.func.attr}"
-    return None
-
-
 def kwarg_value(node: ast.Call, name: str, position: int) -> ast.expr | None:
     """The argument bound to ``name``, whether it was passed by keyword or at ``position``."""
     for kw in node.keywords:
         if kw.arg == name:
             return kw.value
     return node.args[position] if len(node.args) > position else None
-
-
-def parse_expr(text: str) -> ast.expr:
-    """One expression, parsed. The lowerings below are clearer written out than built node by node."""
-    return ast.parse(text, mode="eval").body
 
 
 class LowerCallsDaceCannotReplace(ast.NodeTransformer):
@@ -3444,8 +3363,8 @@ class LowerCallsDaceCannotReplace(ast.NodeTransformer):
     def bind(self, stem: str, value: ast.expr) -> ast.Name:
         """Evaluate ``value`` once into a fresh name -- these lowerings read their operand twice."""
         name = self.temp(stem)
-        self.prelude.append(ast.Assign(targets=[ast.Name(id=name, ctx=ast.Store())], value=value))
-        return ast.Name(id=name, ctx=ast.Load())
+        self.prelude.append(ast.Assign(targets=[store_(name)], value=value))
+        return name_(name)
 
     def block(self, stmts: list[ast.stmt]) -> list[ast.stmt]:
         """Visit one statement list, splicing each statement's prelude in above it."""
@@ -3470,15 +3389,12 @@ class LowerCallsDaceCannotReplace(ast.NodeTransformer):
         node.body, node.orelse = self.block(node.body), self.block(node.orelse)
         return node
 
-    def visit_While(self, node: ast.While) -> ast.AST:
+    def visit_While(self, node: ast.While | ast.If) -> ast.AST:
         node.test = self.visit(node.test)
         node.body, node.orelse = self.block(node.body), self.block(node.orelse)
         return node
 
-    def visit_If(self, node: ast.If) -> ast.AST:
-        node.test = self.visit(node.test)
-        node.body, node.orelse = self.block(node.body), self.block(node.orelse)
-        return node
+    visit_If = visit_While
 
     def scatter_loop(self, stmt: ast.stmt) -> list[ast.stmt] | None:
         """``np.add.at(a, idx, v)`` -> the loop nest it is defined as, or None if not one.
@@ -3521,12 +3437,12 @@ class LowerCallsDaceCannotReplace(ast.NodeTransformer):
         """``value``'s own name when it is a bare Name, else ``name`` bound to it once in the prelude."""
         if isinstance(value, ast.Name):
             return value.id
-        self.prelude.append(ast.Assign(targets=[ast.Name(id=name, ctx=ast.Store())], value=value))
+        self.prelude.append(ast.Assign(targets=[store_(name)], value=value))
         return name
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
         self.generic_visit(node)
-        name = np_call_name(node)
+        name = np_call_attr(node.func)
         handlers: dict[str, Callable[[ast.Call], ast.expr | None]] = {
             "take": self.take,
             "round": self.round_half_to_even,
@@ -3561,7 +3477,7 @@ class LowerCallsDaceCannotReplace(ast.NodeTransformer):
             leading = axis.value
         else:
             return None
-        return parse_expr(f"{ast.unparse(source)}[{', '.join([':'] * leading + [ast.unparse(index)])}]")
+        return expr_of(f"{ast.unparse(source)}[{', '.join([':'] * leading + [ast.unparse(index)])}]")
 
     def round_half_to_even(self, node: ast.Call) -> ast.expr | None:
         """``np.round(x)`` -> floor-and-correct. numpy rounds a HALF to the EVEN neighbour.
@@ -3572,8 +3488,8 @@ class LowerCallsDaceCannotReplace(ast.NodeTransformer):
         if len(node.args) != 1 or node.keywords:
             return None
         value = self.bind("round_x", node.args[0])
-        up = self.bind("round_up", parse_expr(f"np.floor({ast.unparse(value)} + 0.5)"))
-        return parse_expr(
+        up = self.bind("round_up", expr_of(f"np.floor({ast.unparse(value)} + 0.5)"))
+        return expr_of(
             f"np.where(({ast.unparse(up)} - {ast.unparse(value)} == 0.5) & "
             f"(np.mod({ast.unparse(up)}, 2.0) != 0.0), {ast.unparse(up)} - 1.0, {ast.unparse(up)})"
         )
@@ -3594,8 +3510,8 @@ class LowerCallsDaceCannotReplace(ast.NodeTransformer):
             return None
         name = node.args[0].id
         if self.ranks.get(name) == 1 and name not in self.complex_arrays:
-            return parse_expr(f"np.sqrt(np.dot({name}, {name}))")
-        return parse_expr(f"np.sqrt(np.sum(np.abs({name}) ** 2))")
+            return expr_of(f"np.sqrt(np.dot({name}, {name}))")
+        return expr_of(f"np.sqrt(np.sum(np.abs({name}) ** 2))")
 
     def fftfreq(self, node: ast.Call) -> ast.expr | None:
         """``np.fft.fftfreq(n, d)`` -> its closed form: a frequency ladder, not a transform.
@@ -3608,9 +3524,9 @@ class LowerCallsDaceCannotReplace(ast.NodeTransformer):
         count = ast.unparse(node.args[0])
         spacing = kwarg_value(node, "d", 1)
         step = "1.0" if spacing is None else ast.unparse(spacing)
-        ladder = self.bind("fftfreq_k", parse_expr(f"np.arange({count})"))
+        ladder = self.bind("fftfreq_k", expr_of(f"np.arange({count})"))
         k = ast.unparse(ladder)
-        return parse_expr(f"np.where({k} < ({count} + 1) // 2, {k}, {k} - {count}) / ({count} * {step})")
+        return expr_of(f"np.where({k} < ({count} + 1) // 2, {k}, {k} - {count}) / ({count} * {step})")
 
     def searchsorted(self, node: ast.Call) -> ast.expr | None:
         """``np.searchsorted(a, v, side)`` -> a binary search per element of ``v``.
@@ -3649,7 +3565,7 @@ class LowerCallsDaceCannotReplace(ast.NodeTransformer):
                 f"    {stem}[{stem}_i] = {stem}_lo\n"
             ).body
         )
-        return ast.Name(id=stem, ctx=ast.Load())
+        return name_(stem)
 
 
 def indent_block(text: str) -> str:
@@ -3708,7 +3624,7 @@ def spell_aranges_with_named_lengths(fn_ast: ast.FunctionDef, known: set[str]) -
                 call = assign.value if assign is not None else None
                 if assign is None or not (
                     isinstance(call, ast.Call)
-                    and np_call_name(call) == "arange"
+                    and np_call_attr(call.func) == "arange"
                     and len(call.args) == 2
                     and not call.keywords
                 ):
@@ -3718,7 +3634,7 @@ def spell_aranges_with_named_lengths(fn_ast: ast.FunctionDef, known: set[str]) -
                 if match is None:
                     continue
                 lo = call.args[0]
-                call.args = [ast.Name(id=match, ctx=ast.Load())]
+                call.args = [name_(match)]
                 # ``arange(n) - span``, not ``arange(n) + -span``: the negation is one more node for
                 # every consumer to carry, and dace spells the offset into every memlet that reads it.
                 if isinstance(lo, ast.UnaryOp) and isinstance(lo.op, ast.USub):
@@ -3776,7 +3692,7 @@ def splice_before_rebind(block: list[ast.stmt], start: int, nm: str, rhs: ast.ex
     before, and either way the store has already run."""
     boundary = rebind_boundary(block, start, sources)
     for idx in range(start, boundary):
-        block[idx] = SubstituteNames_({nm: rhs}).visit(block[idx])
+        block[idx] = SubstituteLoads({nm: rhs}).visit(block[idx])
         ast.fix_missing_locations(block[idx])
 
 
@@ -3813,7 +3729,7 @@ def inline_symbol_aliases(fn_ast: ast.FunctionDef, symbols: set[str], known: set
             continue
         # Folded at every splice, or a deep net nests one layer's extent inside the next until the
         # expression is hundreds of terms and dace's sympy stops finishing the parse.
-        rhs = fold_expr(SubstituteNames_(alias).visit(copy.deepcopy(first_rhs[nm])))
+        rhs = fold_expr(SubstituteLoads(alias).visit(copy.deepcopy(first_rhs[nm])))
         sources = {sub.id for sub in ast.walk(first_rhs[nm]) if isinstance(sub, ast.Name) and sub.id in rebound}
         if not sources:
             alias[nm] = rhs
@@ -3824,7 +3740,7 @@ def inline_symbol_aliases(fn_ast: ast.FunctionDef, symbols: set[str], known: set
             splice_before_rebind(block, idx + 1, nm, rhs, sources)
             flow_spliced.append(nm)
     if alias:
-        fn_ast = SubstituteNames_(alias).visit(fn_ast)
+        fn_ast = SubstituteLoads(alias).visit(fn_ast)
         fn_ast = DropAliasAssign(alias).visit(fn_ast)
     fully_spliced = {nm for nm in flow_spliced if not name_loaded(fn_ast, nm)}
     if fully_spliced:
@@ -3933,7 +3849,7 @@ class NameExtentExpression(ast.NodeTransformer):
         name = self.minted.get(ast.unparse(node))
         if name is None:
             return node
-        return ast.copy_location(ast.Name(id=name, ctx=ast.Load()), node)
+        return ast.copy_location(name_(name), node)
 
 
 def with_named_floor_extents(
@@ -4003,10 +3919,10 @@ def inline_slice_only_extents(fn_ast: ast.FunctionDef, symbols: set[str], known:
         if nm in reassigned or names_a_clamp(first_rhs[nm]):
             continue
         if is_symbol_expr(first_rhs[nm], atoms | set(alias)):
-            alias[nm] = fold_expr(SubstituteNames_(alias).visit(copy.deepcopy(first_rhs[nm])))
+            alias[nm] = fold_expr(SubstituteLoads(alias).visit(copy.deepcopy(first_rhs[nm])))
     if not alias:
         return fn_ast
-    fn_ast = SubstituteNames_(alias).visit(fn_ast)
+    fn_ast = SubstituteLoads(alias).visit(fn_ast)
     fn_ast = DropAliasAssign(alias).visit(fn_ast)
     ast.fix_missing_locations(fn_ast)
     return fn_ast
@@ -4029,7 +3945,7 @@ def inline_transient_shape_scalars(fn_ast: ast.FunctionDef, known: set[str]) -> 
             alias[nm] = copy.deepcopy(first_rhs[nm])
     if not alias:
         return fn_ast
-    fn_ast = SubstituteNames_(alias).visit(fn_ast)
+    fn_ast = SubstituteLoads(alias).visit(fn_ast)
     fn_ast = DropAliasAssign(alias).visit(fn_ast)
     ast.fix_missing_locations(fn_ast)
     return fn_ast
@@ -4154,34 +4070,6 @@ def sympy_reserved(name: str) -> bool:
     except Exception:  # noqa: BLE001 -- any sympify failure means the name is unusable as a symbol
         return True
     return not any(str(s) == name for s in expr.free_symbols)
-
-
-class RenameNames(ast.NodeTransformer):
-    """Rewrite renamed identifiers wherever they appear -- loads, stores and arguments alike."""
-
-    def __init__(self, renames: dict[str, str]) -> None:
-        self.renames = renames
-
-    def visit_Name(self, node: ast.Name):
-        node.id = self.renames.get(node.id, node.id)
-        return node
-
-    def visit_arg(self, node: ast.arg):
-        node.arg = self.renames.get(node.arg, node.arg)
-        return node
-
-
-class SubstituteNames(ast.NodeTransformer):
-    """Replace each Name in ``values`` by its literal. Used on a symbol RECIPE, which the caller
-    evaluates in its own namespace -- a name that only exists inside the emitted module has to be
-    gone by then, not merely defined here."""
-
-    def __init__(self, values: dict[str, ast.expr]) -> None:
-        self.values = values
-
-    def visit_Name(self, node: ast.Name) -> ast.AST:
-        replacement = self.values.get(node.id)
-        return ast.copy_location(copy.deepcopy(replacement), node) if replacement is not None else node
 
 
 def bound_names(body: list[ast.stmt]) -> OrderedSet[str]:
@@ -4338,7 +4226,7 @@ def materialize_strided_helper_args(
                 pre.append(ast.parse(f"{name}[:] = {ast.unparse(arg)}").body[0])
                 if flags[index]:
                     post.append(ast.parse(f"{ast.unparse(arg)} = {name}").body[0])
-                call.args[index] = ast.Name(id=name, ctx=ast.Load())
+                call.args[index] = name_(name)
         return pre + [stmt] + post
 
     def rewrite(stmts: list[ast.stmt]) -> list[ast.stmt]:
@@ -4885,7 +4773,7 @@ def without_pinned_symbols(
     symbol_names = [n for n in symbol_names if n not in pinned]
     literals: dict[str, ast.expr] = {n: ast.Constant(value=v) for n, v in pinned.items()}
     symbol_defs = [
-        (n, ast.unparse(SubstituteNames(literals).visit(ast.parse(e, mode="eval")).body)) for n, e in symbol_defs
+        (n, ast.unparse(SubstituteLoads(literals).visit(ast.parse(e, mode="eval")).body)) for n, e in symbol_defs
     ]
     named = {node.id for stmt in body for node in ast.walk(stmt) if isinstance(node, ast.Name)}
     named |= {ident for param in params for ident in IDENT_RE.findall(param)}
@@ -5452,7 +5340,7 @@ def bind_helper_call(node: ast.Call, hkir: KernelIR, rendered: RenderedProgram) 
     # dependency order, so each is resolved against the ones already bound.
     bound: dict[str, ast.expr] = dict(arg_of)
     for sym, recipe in rendered.symbol_defs:
-        bound.setdefault(sym, SubstituteNames(bound).visit(ast.parse(recipe, mode="eval")).body)
+        bound.setdefault(sym, SubstituteLoads(bound).visit(ast.parse(recipe, mode="eval")).body)
     keywords: list[ast.keyword] = []
     for sym in rendered.symbol_names:
         if sym in inferred:

@@ -3,6 +3,7 @@
 import ast
 import copy
 
+from hpcagent_bench.translators.numpyto_common.ast_build import RenameNames, numpy_attribute
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.ir import KernelIR
 from hpcagent_bench.translators.numpyto_common.numpy_desugar import expr_rank
@@ -46,19 +47,6 @@ class SubstitutePrecisionGlobals(ast.NodeTransformer):
 PYTHRAN_RESERVED_PARAMS = {"res"}
 
 
-class RenameName(ast.NodeTransformer):
-    """Rename every ``Name`` load/store of ``old`` to ``new`` within a scope."""
-
-    def __init__(self, old: str, new: str) -> None:
-        self.old = old
-        self.new = new
-
-    def visit_Name(self, node: ast.Name) -> ast.Name:
-        if node.id == self.old:
-            node.id = self.new
-        return node
-
-
 def rename_reserved_params(tree: ast.Module, kernel_name: str) -> None:
     """Rename any kernel parameter colliding with a pythran wrapper identifier
     (``res``) to a fresh ``<name>_`` (signature and body). In-place."""
@@ -72,7 +60,7 @@ def rename_reserved_params(tree: ast.Module, kernel_name: str) -> None:
             while new in taken:
                 new += "_"
             taken.add(new)
-            RenameName(arg.arg, new).visit(fn)
+            RenameNames({arg.arg: new}).visit(fn)
             arg.arg = new
 
 
@@ -123,7 +111,7 @@ class PythranMaterialize(ast.NodeTransformer):
 
     @staticmethod
     def ascontig(node: ast.AST) -> ast.Call:
-        fn = ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="ascontiguousarray", ctx=ast.Load())
+        fn = numpy_attribute("ascontiguousarray")
         return ast.Call(func=fn, args=[node], keywords=[])
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
@@ -174,16 +162,12 @@ class NanAwareMinMaxSign(ast.NodeTransformer):
     BINARY = frozenset({"maximum", "minimum"})
 
     @staticmethod
-    def np_attr(attr: str) -> ast.Attribute:
-        return ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr=attr, ctx=ast.Load())
-
-    @staticmethod
     def is_nan(node: ast.AST) -> ast.Compare:
         # ``node != node`` -- True only for a NaN element (dtype-agnostic).
         return ast.Compare(left=copy.deepcopy(node), ops=[ast.NotEq()], comparators=[copy.deepcopy(node)])
 
     def np_where(self, cond: ast.AST, true_val: ast.AST, false_val: ast.AST) -> ast.Call:
-        return ast.Call(func=self.np_attr("where"), args=[cond, true_val, false_val], keywords=[])
+        return ast.Call(func=numpy_attribute("where"), args=[cond, true_val, false_val], keywords=[])
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
         self.generic_visit(node)
@@ -201,7 +185,7 @@ class NanAwareMinMaxSign(ast.NodeTransformer):
             # h next iteration (silently wrong only once pythran compiles it). Forcing an eager
             # copy breaks the self-reference; verified fixes max_filter, still propagates NaN.
             where = self.np_where(cond, asum, node)
-            materialized = ast.Call(func=self.np_attr("array"), args=[where], keywords=[])
+            materialized = ast.Call(func=numpy_attribute("array"), args=[where], keywords=[])
             return ast.copy_location(materialized, node)
         if f.attr == "sign" and len(node.args) == 1:
             a = node.args[0]
@@ -211,8 +195,8 @@ class NanAwareMinMaxSign(ast.NodeTransformer):
             # clip uses the reversed order (returns lo when lo > hi). Re-visit
             # the rebuilt min/max so their NaN rewrite applies here too.
             a, lo, hi = node.args
-            inner = ast.Call(func=self.np_attr("maximum"), args=[a, lo], keywords=[])
-            outer = ast.Call(func=self.np_attr("minimum"), args=[hi, inner], keywords=[])
+            inner = ast.Call(func=numpy_attribute("maximum"), args=[a, lo], keywords=[])
+            outer = ast.Call(func=numpy_attribute("minimum"), args=[hi, inner], keywords=[])
             return ast.copy_location(self.visit(outer), node)
         return node
 

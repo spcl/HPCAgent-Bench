@@ -180,7 +180,7 @@ def test_a_relay_that_never_answers_ends_the_launch(monkeypatch, tmp_path) -> No
 def test_a_relay_fault_is_its_own_exit_and_leaves_the_judges_fault_file(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """mlscale smoke 650476: a stale relay heartbeat ended two launches that were then recorded
+    """An mlscale smoke: a stale relay heartbeat ended two launches that were then recorded
     ``incorrect``. The launcher says the relay failed -- its own exit status and the fault file the
     judge named -- so the judge never reads it as the launched program failing."""
     for key, value in GANG_ENV.items():
@@ -233,7 +233,7 @@ def test_a_step_the_relay_cancelled_for_a_stale_judge_is_a_relay_fault(
 def test_a_stall_of_the_watcher_itself_is_not_a_stale_heartbeat(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """A filesystem stall freezes the watcher too (650476, node 0): heartbeats are measured from its own
+    """A filesystem stall freezes the watcher too (node 0): heartbeats are measured from its own
     resumption, never across time it was not watching."""
     relay = load_relay()
     now = time.time()

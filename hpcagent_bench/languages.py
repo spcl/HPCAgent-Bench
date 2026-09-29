@@ -52,8 +52,6 @@ __all__ = [
     "ALWAYS_LINKED_LANGS",
     "ALWAYS_LINKED_LIBRARIES",
     "CACHEABLE_LANGS",
-    "CLANG_FORMAT_STYLE",
-    "CLANG_LANGS",
     "COMPILERS_YAML",
     "COMPILER_ALIASES",
     "COMPILER_FAMILIES",
@@ -63,7 +61,6 @@ __all__ = [
     "FAMILY_PIN_KEY",
     "FFT_LINKED_LANGS",
     "FFT_LINKED_LIBRARIES",
-    "GENERATED_TIDY_CHECKS",
     "GPU_HOST_LANG",
     "LANG_EXT",
     "LANG_TARGET",
@@ -101,15 +98,17 @@ __all__ = [
     "PYTHON_HOST_COPY_METHODS",
     "REPORT_REFS",
     "ROCM_LLVM_BIN",
+    "STDPAR_PROBE_TIMEOUT_S",
     "TOOLSET_YAML",
+    "VECLIB_PROBE",
     "VECT_COST_MODELS",
     "VECT_UNLIMITED_REFS",
     "XNACK_SUFFIX",
     "Language",
     "Toolchain",
     "agent_offload_flags",
-    "annotate_generated",
     "available_libraries",
+    "backend_dir",
     "balanced_clause_bodies",
     "base_report_flags",
     "baseline_flags",
@@ -118,8 +117,6 @@ __all__ = [
     "build_kernel_lib_commands",
     "build_mpi_executable_commands",
     "build_shared_lib_commands",
-    "column_limit",
-    "comment_block",
     "compile_variant",
     "compiler_block",
     "compiler_driver",
@@ -187,7 +184,6 @@ __all__ = [
     "strip_launcher",
     "submission_toolchain",
     "subst_map",
-    "tidy_footer",
     "toolchain_env",
     "toolset_link_tokens",
     "unknown_language",
@@ -971,7 +967,7 @@ def compiler_names() -> tuple[str, ...]:
     return tuple(sorted(_load_compilers()))
 
 
-def _backend_dir(spec: BenchSpec) -> pathlib.Path:
+def backend_dir(spec: BenchSpec) -> pathlib.Path:
     """The kernel's ``cpp_backend`` directory (where emits + builds live)."""
     return paths.BENCHMARKS / spec.relative_path / "cpp_backend"
 
@@ -985,7 +981,7 @@ def discover_variants(spec: BenchSpec) -> list[tuple[str, pathlib.Path]]:
     accept all discovered ones, the back-compat default). Results are sorted by
     ``(lang, filename)`` for determinism.
     """
-    backend = _backend_dir(spec)
+    backend = backend_dir(spec)
     allowed = set(spec.languages) if spec.languages else None
     found: list[tuple[str, pathlib.Path]] = []
     if not backend.exists():
@@ -1388,7 +1384,7 @@ def _stdpar_backend_is_tbb(cc: str) -> bool:
     exe = resolve_compiler(cc) or cc
     try:
         r = subprocess.run(
-            [exe, "-x", "c++", "-E", "-"], input=probe, capture_output=True, text=True, timeout=_STDPAR_PROBE_TIMEOUT_S
+            [exe, "-x", "c++", "-E", "-"], input=probe, capture_output=True, text=True, timeout=STDPAR_PROBE_TIMEOUT_S
         )
     except (OSError, subprocess.SubprocessError):
         return False
@@ -1396,7 +1392,7 @@ def _stdpar_backend_is_tbb(cc: str) -> bool:
 
 
 #: Seconds allowed for the one-shot ``__has_include`` preprocess above (cached per compiler).
-_STDPAR_PROBE_TIMEOUT_S = 30
+STDPAR_PROBE_TIMEOUT_S = 30
 
 
 def _stdpar_link_for_block(block: dict[str, Any]) -> tuple[str, ...]:
@@ -1456,7 +1452,7 @@ def driver_library_dir(cc: str, sonames: tuple[str, ...]) -> str:
     for soname in sonames:
         try:
             probe = subprocess.run(
-                [exe, f"-print-file-name={soname}"], capture_output=True, text=True, timeout=_STDPAR_PROBE_TIMEOUT_S
+                [exe, f"-print-file-name={soname}"], capture_output=True, text=True, timeout=STDPAR_PROBE_TIMEOUT_S
             )
         except (OSError, subprocess.TimeoutExpired):
             return ""
@@ -1511,7 +1507,7 @@ def probe_succeeds(argv: Sequence[str], source: str | None = None, env: dict[str
             input=source,
             capture_output=True,
             text=True,
-            timeout=_STDPAR_PROBE_TIMEOUT_S,
+            timeout=STDPAR_PROBE_TIMEOUT_S,
             env=env,
             check=False,
         )
@@ -1521,7 +1517,7 @@ def probe_succeeds(argv: Sequence[str], source: str | None = None, env: dict[str
 
 
 #: Probe sources per compiler-block language: the smallest translation unit each front end accepts.
-_VECLIB_PROBE: dict[str, tuple[str, str]] = {
+VECLIB_PROBE: dict[str, tuple[str, str]] = {
     Language.FORTRAN.value: (".f90", "end\n"),
     Language.C.value: (".c", "int main(void){return 0;}\n"),
     Language.CPP.value: (".cpp", "int main(){return 0;}\n"),
@@ -1536,7 +1532,7 @@ def _veclib_accepted(cc: str, flag: str, lang: str) -> bool:
     A temp file rather than stdin: the Fortran front ends infer free vs fixed form from the
     suffix, and ``-x`` is spelled differently (or absent) across them.
     """
-    probe = _VECLIB_PROBE.get(lang)
+    probe = VECLIB_PROBE.get(lang)
     if not flag or probe is None:
         return False
     suffix, source = probe
@@ -1764,7 +1760,7 @@ def pkg_config_answer(pkgs: tuple[str, ...], what: str) -> tuple[str, ...] | Non
     if not pkgs:
         return None
     try:
-        r = subprocess.run(["pkg-config", what, *pkgs], capture_output=True, text=True, timeout=_STDPAR_PROBE_TIMEOUT_S)
+        r = subprocess.run(["pkg-config", what, *pkgs], capture_output=True, text=True, timeout=STDPAR_PROBE_TIMEOUT_S)
     except (OSError, subprocess.SubprocessError):
         return None
     if r.returncode != 0:
@@ -1810,7 +1806,7 @@ def library_compiles(lang: str, compile_tokens: tuple[str, ...], header: str) ->
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
             text=True,
-            timeout=_STDPAR_PROBE_TIMEOUT_S,
+            timeout=STDPAR_PROBE_TIMEOUT_S,
         )
     except (OSError, subprocess.SubprocessError):
         return False
@@ -2026,112 +2022,6 @@ def executable_version(path: str) -> str:
     return lines[0].strip()
 
 
-#: The repo's C/C++ style file. clang-format and clang-tidy both discover a ``.clang-format`` by
-#: walking up from the file they are given, which a scratch copy defeats -- so it is named here and
-#: passed explicitly. Pointing at the FILE (rather than restating ``ColumnLimit: 120``) is what keeps
-#: the report copy at the same width as the rest of the tree: there is one column-limit decision per
-#: formatter (``.clang-format`` / ``[tool.ruff]`` / ``.fprettify.rc``), and this reuses the C/C++ one.
-CLANG_FORMAT_STYLE: pathlib.Path = paths.ROOT / ".clang-format"
-
-#: Languages the LLVM source tools can read. CUDA/HIP are included because clang parses both.
-CLANG_LANGS: tuple[str, ...] = (Language.C.value, Language.CPP.value, Language.CUDA.value, Language.HIP.value)
-
-
-@functools.lru_cache(maxsize=1, typed=True)
-def column_limit() -> int:
-    """The repo's C/C++ column limit, READ from ``.clang-format`` rather than restated.
-
-    The number exists once per formatter and this is the C/C++ one; the commentary this module wraps
-    has to agree with the code clang-format just reflowed, and a second literal ``120`` here would be
-    a place for the two to drift apart."""
-    return int(yaml.safe_load(CLANG_FORMAT_STYLE.read_text())["ColumnLimit"])
-
-
-#: clang-tidy checks run over MACHINE-GENERATED sources, as an explicit allowlist over ``-*``.
-#:
-#: The default check set is unusable here -- measured on the emitted kernels it is ~100% false
-#: positives: ``bugprone-reserved-identifier`` fires on every ``__i``/``__j`` loop counter (the
-#: translator's deliberate naming), and ``misc-redundant-expression`` fires on every ``a != a``,
-#: which is the standard NaN test in the emitted ``min``/``max`` prelude. Neither is a defect, and a
-#: report that is mostly noise does not get read.
-#:
-#: What is left is the checks that can find a real TRANSLATOR bug in numeric code, and nothing whose
-#: verdict is a matter of style:
-#:
-#: * ``clang-analyzer-core.*``     -- path-sensitive dataflow: null deref, uninitialized read,
-#:                                   division by zero. The class of bug a hand-written emitter makes.
-#: * ``clang-analyzer-deadcode.*`` -- an unreachable store usually means a mis-emitted guard.
-#: * the four ``bugprone-`` checks   -- integer division where the result is used as a float,
-#:                                   misplaced widening casts, ``sizeof`` misuse and raw memory
-#:                                   manipulation of non-trivial types: all silent wrong-answer bugs.
-#: * ``performance-*``             -- this is an OPTIMIZATION report, so an avoidable copy belongs in it.
-#:
-#: Deliberately absent: ``readability-*`` / ``modernize-*`` / ``cppcoreguidelines-*``, which grade
-#: hand-maintained style on code no human maintains. Nothing here is ever run with ``--fix``.
-GENERATED_TIDY_CHECKS: str = (
-    "-*,clang-analyzer-core.*,clang-analyzer-deadcode.*,bugprone-integer-division,"
-    "bugprone-misplaced-widening-cast,bugprone-sizeof-expression,"
-    "bugprone-undefined-memory-manipulation,performance-*"
-)
-
-
-def annotate_generated(source: pathlib.Path, lang: str) -> str:
-    """A REPORT copy of ``source``: reformatted to the repo's column limit, then its clang-tidy findings.
-
-    Both tools are AVAILABILITY-GATED and never fatal. Missing clang-format leaves the text exactly as
-    emitted; missing clang-tidy appends a line saying so. A diagnostic that cannot run is a normal
-    answer here, the same way ``perf_reports.write(text=None)`` means "this framework has no such
-    report" -- what must not happen is a host without the LLVM tools failing a measured run.
-
-    Only this returned STRING is touched. The file on disk is the one that was compiled and timed and
-    is never rewritten, so formatting cannot move a line the compiler's report refers to by number --
-    which is also why the tidy findings are appended rather than interleaved.
-
-    Non-C-family sources (Fortran) come back verbatim: clang-format and clang-tidy cannot read them,
-    and the repo's Fortran width is fprettify's business, not this function's.
-    """
-    text = source.read_text()
-    if lang not in CLANG_LANGS:
-        return text
-    fmt = shutil.which("clang-format")
-    if fmt is not None and CLANG_FORMAT_STYLE.is_file():
-        proc = subprocess.run(
-            [fmt, f"-style=file:{CLANG_FORMAT_STYLE}", f"-assume-filename={source.name}"],
-            input=text,
-            capture_output=True,
-            text=True,
-        )
-        if proc.returncode == 0:
-            text = proc.stdout
-    return f"{text}\n{tidy_footer(source, lang)}"
-
-
-def comment_block(text: str) -> str:
-    """``text`` as ``//`` comment lines, wrapped to :func:`column_limit` so the report copy holds the
-    same width clang-format just gave the code above it. Long unbreakable tokens (a check list, a
-    path) are left over-long rather than broken -- a split path is not a path."""
-    width = column_limit()
-    lines: list[str] = []
-    for line in text.splitlines():
-        lines.extend(textwrap.wrap(line, width=width, initial_indent="// ", subsequent_indent="//     ") or ["//"])
-    return "\n".join(lines)
-
-
-def tidy_footer(source: pathlib.Path, lang: str) -> str:
-    """The ``clang-tidy`` findings for ``source`` as a comment block, or a comment saying why there are none."""
-    tidy = shutil.which("clang-tidy")
-    if tidy is None:
-        return comment_block("clang-tidy: not installed on this host -- no findings collected.") + "\n"
-    # Optimization level from the matrix, never spelled here: this is a real compiler invocation,
-    # so a literal would be exactly the drift tests/test_no_literal_flags.py exists to catch.
-    cmd = [tidy, str(source), f"-checks={GENERATED_TIDY_CHECKS}", "--quiet", "--", std_flag(lang), flags.OPT_LEVEL]
-    proc = subprocess.run(cmd, capture_output=True, text=True)
-    findings = proc.stdout.strip()
-    header = f"==== clang-tidy ====\n$ {shlex.join(cmd)}"
-    body = findings if findings else "no findings."
-    return comment_block(f"{header}\n{body}") + "\n"
-
-
 def compile_variant(
     spec: BenchSpec,
     lang: str,
@@ -2167,12 +2057,12 @@ def compile_variant(
     if src is None:
         variants = [p for (vl, p) in discover_variants(spec) if vl == lang]
         if not variants:
-            raise FileNotFoundError(f"{spec.short_name}: no {lang} variant under {_backend_dir(spec)}")
+            raise FileNotFoundError(f"{spec.short_name}: no {lang} variant under {backend_dir(spec)}")
         src = variants[0]
 
     baseline = _resolve_baseline(block, mode)
     obj = src.with_suffix(".o")
-    lib = _backend_dir(spec) / f"lib{spec.short_name}.so"
+    lib = backend_dir(spec) / f"lib{spec.short_name}.so"
 
     subst = subst_map(block["cc"], baseline=baseline, src=src, obj=obj, objs=obj, lib=lib)
 

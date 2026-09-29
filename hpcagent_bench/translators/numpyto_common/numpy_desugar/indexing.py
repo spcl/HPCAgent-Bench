@@ -3,11 +3,13 @@
 import ast
 import copy
 
-from hpcagent_bench.translators.numpyto_common.subscripts import is_ellipsis, is_newaxis
-from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import AUG_OP_SRC, RewritePass, np_attr
+from hpcagent_bench.translators.numpyto_common.ast_build import SubstituteLoads, expr_of, name_, nested_blocks, store_
+from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module, numpy_call_attr
+from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import AUG_OP_SRC, RewritePass
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.hoist import HoistForm, ValueHoist
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.kinds import dtype_kind
-from hpcagent_bench.translators.numpyto_common.numpy_desugar.ranks import newaxis_singletons, expr_rank
+from hpcagent_bench.translators.numpyto_common.numpy_desugar.ranks import expr_rank, newaxis_singletons
+from hpcagent_bench.translators.numpyto_common.subscripts import is_ellipsis, is_newaxis
 
 __all__ = [
     "FANCY_GATHER_HOIST",
@@ -61,8 +63,7 @@ class MgridInline(RewritePass):
             isinstance(val, ast.Subscript)
             and isinstance(val.value, ast.Attribute)
             and val.value.attr == "mgrid"
-            and isinstance(val.value.value, ast.Name)
-            and val.value.value.id in ("np", "numpy")
+            and is_numpy_module(val.value.value)
         ):
             return node
         if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Tuple):
@@ -143,7 +144,7 @@ def hoist_fancy_gather(node: ast.AST, hoist: ValueHoist) -> ast.expr | None:
     p = f"__gather{hoist.ctr}"
     hoist.ctr += 1
     hoist.queue(fancy_gather_lines(arr, elts, elt_ranks, arrs[0], p))
-    return ast.Name(id=f"{p}_o", ctx=ast.Load())
+    return name_(f"{p}_o")
 
 
 FANCY_GATHER_HOIST = HoistForm(frozenset(), (ast.Tuple,), hoist_fancy_gather)
@@ -255,8 +256,7 @@ class DecomposeRollSlice(ast.NodeTransformer):
             isinstance(v, ast.Call)
             and isinstance(v.func, ast.Attribute)
             and v.func.attr == "roll"
-            and isinstance(v.func.value, ast.Name)
-            and v.func.value.id in ("np", "numpy")
+            and is_numpy_module(v.func.value)
             and len(v.args) >= 2
             and len(node.targets) == 1
         ):
@@ -269,14 +269,14 @@ class DecomposeRollSlice(ast.NodeTransformer):
         out: list[ast.stmt] = []
         if not op_bare:  # snapshot a sliced operand into a bare-name temp
             src = self.fresh_()
-            out.append(ast.Assign(targets=[ast.Name(id=src, ctx=ast.Store())], value=v.args[0]))
-            v.args[0] = ast.Name(id=src, ctx=ast.Load())
+            out.append(ast.Assign(targets=[store_(src)], value=v.args[0]))
+            v.args[0] = name_(src)
         if tgt_bare:
             out.append(node)  # target bare -> roll writes it directly
         else:  # roll into a bare temp, then copy back to the sliced target
             dst = self.fresh_()
-            out.append(ast.Assign(targets=[ast.Name(id=dst, ctx=ast.Store())], value=v))
-            out.append(ast.Assign(targets=[target], value=ast.Name(id=dst, ctx=ast.Load())))
+            out.append(ast.Assign(targets=[store_(dst)], value=v))
+            out.append(ast.Assign(targets=[target], value=name_(dst)))
         for s in out:
             ast.copy_location(s, node)
         self.changed = True
@@ -285,7 +285,7 @@ class DecomposeRollSlice(ast.NodeTransformer):
 
 def ix_vectors(node: ast.AST) -> list[ast.expr] | None:
     """``np.ix_(i, j, k)`` call -> its index vectors, else None."""
-    if np_attr(node) == "ix_" and node.args and not node.keywords:
+    if numpy_call_attr(node) == "ix_" and node.args and not node.keywords:
         return list(node.args)
     return None
 
@@ -300,10 +300,7 @@ def ix_unpack_scatters(fn: ast.AST) -> dict[int, list[ast.expr]]:
     """
     found: dict[int, list[ast.expr]] = {}
     for parent in ast.walk(fn):
-        for field in ("body", "orelse", "finalbody"):
-            block = vars(parent).get(field)
-            if not isinstance(block, list):
-                continue
+        for block in nested_blocks(parent):
             for index, stmt in enumerate(block):
                 if not (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1):
                     continue
@@ -379,7 +376,7 @@ class FancySliceStoreToLoop(ast.NodeTransformer):
         self._ctr += 1
         it = f"{p}_i"
         idx_name = next(n.id for n in ast.walk(lead[k]) if isinstance(n, ast.Name) and self.ranks.get(n.id) == 1)
-        at_iter = SubstituteName(idx_name, f"{idx_name}[{it}]").visit(copy.deepcopy(lead[k]))
+        at_iter = SubstituteLoads({idx_name: expr_of(f"{idx_name}[{it}]")}).visit(copy.deepcopy(lead[k]))
         new_lead = [ast.unparse(e) if j != k else ast.unparse(at_iter) for j, e in enumerate(lead)]
         lines = [
             f"{p}_v = {ast.unparse(value)}",
@@ -399,17 +396,6 @@ class FancySliceStoreToLoop(ast.NodeTransformer):
         self.generic_visit(node)
         op = AUG_OP_SRC.get(type(node.op))
         return node if op is None else self.lower_(node, node.target, node.value, op)
-
-
-class SubstituteName(ast.NodeTransformer):
-    """Replace bare ``name`` with the parsed ``text``."""
-
-    def __init__(self, name: str, text: str) -> None:
-        self.name = name
-        self.repl = ast.parse(text, mode="eval").body
-
-    def visit_Name(self, node: ast.Name) -> ast.AST:
-        return copy.deepcopy(self.repl) if node.id == self.name else node
 
 
 class IxWriteToLoop(ast.NodeTransformer):

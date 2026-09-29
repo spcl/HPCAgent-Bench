@@ -9,7 +9,7 @@ usual 4-ranks-per-node split -- the highest-numbered rank(s) get an empty ``mine
 awk summary then tried to open that nonexistent file and died with "cannot open file", which is a
 FATAL awk exit -- not caught by ``set -e`` (this script does not use it) but still the last
 command's exit status, which is what srun sees as the task's own failure and uses to tear down
-every sibling task in the step (smoke job 640088: 3 kernels, 4 ranks, rank 3's awk killed ranks
+every sibling task in the step (a smoke run: 3 kernels, 4 ranks, rank 3's awk killed ranks
 0-2 mid-run even though they had already produced valid rows).
 
 This drives the real script's ``inner`` entry point directly with SLURM_PROCID/SLURM_NTASKS set to

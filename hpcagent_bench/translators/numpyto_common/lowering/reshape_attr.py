@@ -3,6 +3,8 @@
 import ast
 import copy
 
+from hpcagent_bench.translators.numpyto_common.ast_build import name_, numpy_attribute, store_
+
 __all__ = ["ShapeAttrToReshape"]
 
 
@@ -44,11 +46,11 @@ class ShapeAttrToReshape(ast.NodeTransformer):
         out: list[ast.stmt] = []
         for name in shape_targets:
             call = ast.Call(
-                func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="reshape", ctx=ast.Load()),
-                args=[ast.Name(id=name.id, ctx=ast.Load()), copy.deepcopy(new_shape)],
+                func=numpy_attribute("reshape"),
+                args=[name_(name.id), copy.deepcopy(new_shape)],
                 keywords=[],
             )
-            out.append(ast.Assign(targets=[ast.Name(id=name.id, ctx=ast.Store())], value=call))
+            out.append(ast.Assign(targets=[store_(name.id)], value=call))
         for s in out:
             ast.fix_missing_locations(s)
         return out

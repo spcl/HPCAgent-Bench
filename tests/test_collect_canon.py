@@ -3,7 +3,7 @@
 """Collecting a canon sweep's per-rank CSVs into the ``canon`` table plot_canon_speedup.py reads.
 
 The rows below are copied verbatim from the committed reproducibility-artifact table
-(``paper_artifacts/experiments/canon/data/canon_llr40.csv``, sweep 631260), so a synthetic sweep
+(``paper_artifacts/experiments/canon/data/canon_llr40.csv``), so a synthetic sweep
 proves this collector reproduces that table's own numbers, not numbers that merely look plausible.
 """
 
@@ -79,8 +79,8 @@ def read_db(db_path: pathlib.Path) -> list[dict]:
 
 
 def test_a_synthetic_sweep_reproduces_the_committed_tables_own_rows(tmp_path: pathlib.Path) -> None:
-    """cc/wf_triangular and numba/argmax_with_index are copied from the committed canon_llr40.csv
-    (sweep 631260); the collector must reproduce them field for field, not just a plausible row."""
+    """cc/wf_triangular and numba/argmax_with_index are copied from the committed canon_llr40.csv;
+    the collector must reproduce them field for field, not just a plausible row."""
     run_dir = tmp_path / "sweep"
     run_dir.mkdir()
     write_shard(run_dir, "cc", 0, [CC_WF_TRIANGULAR])

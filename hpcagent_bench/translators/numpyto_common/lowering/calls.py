@@ -4,6 +4,8 @@ import ast
 import copy
 from collections.abc import Callable
 
+from hpcagent_bench.translators.numpyto_common.ast_build import name_, numpy_attribute, range_for, store_
+from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.statement_desugar import bind, element_read, indexed_loop, pair_names
 
 __all__ = [
@@ -54,7 +56,7 @@ class AstypeRewriter(ast.NodeTransformer):
             return node
         recv, dt = f.value, node.args[0]
         name = None
-        if isinstance(dt, ast.Attribute) and isinstance(dt.value, ast.Name) and dt.value.id in ("np", "numpy"):
+        if isinstance(dt, ast.Attribute) and is_numpy_module(dt.value):
             name = dt.attr  # np.<dtype>
         elif isinstance(dt, ast.Name) and dt.id in ("int", "float", "bool"):
             name = {"int": "int64", "float": "float64", "bool": "bool_"}[dt.id]
@@ -87,7 +89,7 @@ class AstypeRewriter(ast.NodeTransformer):
                 return recv
         return ast.copy_location(
             ast.Call(
-                func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr=name, ctx=ast.Load()),
+                func=numpy_attribute(name),
                 args=[recv],
                 keywords=[],
             ),
@@ -105,7 +107,7 @@ def match_reshape(node: ast.AST):
     if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "reshape"):
         return None
     recv = node.func.value
-    if isinstance(recv, ast.Name) and recv.id in ("np", "numpy"):
+    if is_numpy_module(recv):
         if len(node.args) < 2:
             return None
         shape = node.args[1]
@@ -127,7 +129,7 @@ class ReshapeMethodRewriter(ast.NodeTransformer):
         if not (isinstance(node.func, ast.Attribute) and node.func.attr == "reshape"):
             return node
         recv = node.func.value
-        if isinstance(recv, ast.Name) and recv.id in ("np", "numpy"):
+        if is_numpy_module(recv):
             return node  # already the function form
         matched = match_reshape(node)
         if matched is None:
@@ -138,7 +140,7 @@ class ReshapeMethodRewriter(ast.NodeTransformer):
         keep = [kw for kw in node.keywords if kw.arg == "order"]
         return ast.copy_location(
             ast.Call(
-                func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="reshape", ctx=ast.Load()),
+                func=numpy_attribute("reshape"),
                 args=[base, ast.Tuple(elts=elts, ctx=ast.Load())],
                 keywords=keep,
             ),
@@ -155,13 +157,7 @@ def match_fft(node: ast.AST):
     if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in FFT_FNS):
         return None
     f = node.func
-    if (
-        isinstance(f.value, ast.Attribute)
-        and f.value.attr == "fft"
-        and isinstance(f.value.value, ast.Name)
-        and f.value.value.id in ("np", "numpy")
-        and node.args
-    ):
+    if isinstance(f.value, ast.Attribute) and f.value.attr == "fft" and is_numpy_module(f.value.value) and node.args:
         return f.attr, node.args[0], node.keywords
     return None
 
@@ -187,12 +183,7 @@ class NpAliasRewriter(ast.NodeTransformer):
     def visit_Call(self, node: ast.Call) -> ast.AST:
         self.generic_visit(node)
         f = node.func
-        if (
-            isinstance(f, ast.Attribute)
-            and isinstance(f.value, ast.Name)
-            and f.value.id in ("np", "numpy")
-            and f.attr in NP_FUNC_ALIASES
-        ):
+        if isinstance(f, ast.Attribute) and is_numpy_module(f.value) and f.attr in NP_FUNC_ALIASES:
             f.attr = NP_FUNC_ALIASES[f.attr]
         return node
 
@@ -259,8 +250,7 @@ class MatmulCallRewriter(ast.NodeTransformer):
         f = node.func
         if (
             isinstance(f, ast.Attribute)
-            and isinstance(f.value, ast.Name)
-            and f.value.id in ("np", "numpy")
+            and is_numpy_module(f.value)
             and f.attr == "matmul"
             and len(node.args) == 2
             and not node.keywords
@@ -311,45 +301,32 @@ class ScalarTimesMatmulRewriter(ast.NodeTransformer):
                     self.shape_table[temp] = shape
                     iters = [f"__si{i}" for i in range(len(shape))]
                     idx = (
-                        ast.Name(id=iters[0], ctx=ast.Load())
+                        name_(iters[0])
                         if len(iters) == 1
-                        else ast.Tuple(elts=[ast.Name(id=i, ctx=ast.Load()) for i in iters], ctx=ast.Load())
+                        else ast.Tuple(elts=[name_(i) for i in iters], ctx=ast.Load())
                     )
                     body = [
                         ast.Assign(
-                            targets=[
-                                ast.Subscript(value=ast.Name(id=temp, ctx=ast.Load()), slice=idx, ctx=ast.Store())
-                            ],
+                            targets=[ast.Subscript(value=name_(temp), slice=idx, ctx=ast.Store())],
                             value=ast.BinOp(
                                 left=scalar,
                                 op=ast.Mult(),
-                                right=ast.Subscript(
-                                    value=ast.Name(id=scaled_name.id, ctx=ast.Load()), slice=idx, ctx=ast.Load()
-                                ),
+                                right=ast.Subscript(value=name_(scaled_name.id), slice=idx, ctx=ast.Load()),
                             ),
                         )
                     ]
                     out = body
                     for v, b in zip(reversed(iters), reversed(shape)):
                         out = [
-                            ast.For(
-                                target=ast.Name(id=v, ctx=ast.Store()),
-                                iter=ast.Call(
-                                    func=ast.Name(id="range", ctx=ast.Load()),
-                                    args=[
-                                        ast.Name(id=b, ctx=ast.Load())
-                                        if not b.isdigit()
-                                        else ast.Constant(value=int(b))
-                                    ],
-                                    keywords=[],
-                                ),
-                                body=out,
-                                orelse=[],
+                            range_for(
+                                v,
+                                [name_(b) if not b.isdigit() else ast.Constant(value=int(b))],
+                                out,
                             )
                         ]
                     self.pre_stmts.extend(out)
                     # Replace ``alpha * A`` in this MatMult with the temp.
-                    node.left = ast.Name(id=temp, ctx=ast.Load())
+                    node.left = name_(temp)
         return node
 
 
@@ -393,13 +370,11 @@ class EnumerateZipRewriter(ast.NodeTransformer):
                 for i, elt in enumerate(it.args[0].elts):
                     out.append(
                         ast.Assign(
-                            targets=[ast.Name(id=idx_name.id, ctx=ast.Store())],
+                            targets=[store_(idx_name.id)],
                             value=ast.BinOp(left=copy.deepcopy(start), op=ast.Add(), right=ast.Constant(value=i)),
                         )
                     )
-                    out.append(
-                        ast.Assign(targets=[ast.Name(id=val_name.id, ctx=ast.Store())], value=copy.deepcopy(elt))
-                    )
+                    out.append(ast.Assign(targets=[store_(val_name.id)], value=copy.deepcopy(elt)))
                     out.extend(copy.deepcopy(stmt) for stmt in node.body)
                 return out
             pair = pair_names(node.target)
@@ -411,7 +386,7 @@ class EnumerateZipRewriter(ast.NodeTransformer):
                     position = ast.BinOp(
                         left=copy.deepcopy(self.enumerate_start(it)),
                         op=ast.Add(),
-                        right=ast.Name(id="__ei", ctx=ast.Load()),
+                        right=name_("__ei"),
                     )
                     binds = [bind(pair[0], position), bind(pair[1], element_read(sequence, "__ei"))]
                     return indexed_loop(node, "__ei", extent, binds)
@@ -470,7 +445,7 @@ class TransposeRewriter(ast.NodeTransformer):
         # ``expand_transpose`` lowers it, so the transpose never survives as an
         # attribute the per-element scalarizer would misapply.
         return ast.Call(
-            func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="transpose", ctx=ast.Load()),
+            func=numpy_attribute("transpose"),
             args=[base],
             keywords=[],
         )
@@ -480,7 +455,7 @@ class TransposeRewriter(ast.NodeTransformer):
         f = node.func
         if not (isinstance(f, ast.Attribute) and f.attr == "transpose"):
             return node
-        if isinstance(f.value, ast.Name) and f.value.id in ("np", "numpy"):
+        if is_numpy_module(f.value):
             return node  # already the ``np.transpose(...)`` function form
         if isinstance(f.value, ast.Name) and f.value.id in self.sparse_names:
             return node  # sparse transpose stays a method on its own buffers
@@ -493,7 +468,7 @@ class TransposeRewriter(ast.NodeTransformer):
             args = [base]  # x.transpose() -- full reverse
         return ast.copy_location(
             ast.Call(
-                func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="transpose", ctx=ast.Load()),
+                func=numpy_attribute("transpose"),
                 args=args,
                 keywords=[],
             ),

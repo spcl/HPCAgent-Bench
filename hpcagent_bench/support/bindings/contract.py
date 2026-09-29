@@ -33,9 +33,12 @@ __all__ = [
     "PackedGroup",
     "binding_from_spec",
     "declared_float_dtype",
+    "dense_dtype",
+    "dense_shape",
     "graded_datatype",
     "index_base",
     "restrict_kw",
+    "sparse_format",
     "workspace_c_params",
 ]
 
@@ -247,7 +250,7 @@ def _symbol_dtype(spec: BenchSpec, sym: str) -> str:
     return DEFAULT_SYMBOL_DTYPE
 
 
-def _sparse_format(spec: BenchSpec, config: str, logical: str) -> str | None:
+def sparse_format(spec: BenchSpec, config: str, logical: str) -> str | None:
     """Resolve the format chosen for ``logical`` under ``config`` (or None)."""
     cfg = spec.configurations.get(config)
     if cfg is None:
@@ -255,7 +258,7 @@ def _sparse_format(spec: BenchSpec, config: str, logical: str) -> str | None:
     return cfg.arrays.get(logical)
 
 
-def _dense_dtype(spec: BenchSpec, name: str) -> str:
+def dense_dtype(spec: BenchSpec, name: str) -> str:
     """Element dtype of a dense array: an ``init.dtypes`` override, else :func:`declared_float_dtype`."""
     if spec.init is not None and name in spec.init.dtypes:
         declared = spec.init.dtypes[name]
@@ -297,7 +300,7 @@ def _scalar_dtype(spec: BenchSpec, name: str) -> str:
     return DEFAULT_FLOAT_DTYPE
 
 
-def _dense_shape(spec: BenchSpec, name: str) -> tuple[str, ...] | None:
+def dense_shape(spec: BenchSpec, name: str) -> tuple[str, ...] | None:
     """Symbolic shape of a dense array from ``init.shapes``; ``None`` (never guessed) for legacy kernels."""
     if spec.init is None:
         return None
@@ -330,7 +333,7 @@ def binding_from_spec(spec: BenchSpec, config: str | None = None) -> Binding:
     for name in spec.array_args:
         if name in PHANTOM_ARG_NAMES:
             continue
-        fmt = _sparse_format(spec, config, name) if is_sparse else None
+        fmt = sparse_format(spec, config, name) if is_sparse else None
         layout = spec.sparse_layouts.get(name)
         if fmt and fmt != "dense" and layout is not None and fmt in layout.variants:
             # Sparse logical array -> packed group of member buffers (Sec. 3).
@@ -361,9 +364,9 @@ def binding_from_spec(spec: BenchSpec, config: str | None = None) -> Binding:
                 Arg(
                     name=name,
                     kind="ptr",
-                    dtype=_dense_dtype(spec, name),
+                    dtype=dense_dtype(spec, name),
                     is_const=not is_output,
-                    shape=_dense_shape(spec, name),
+                    shape=dense_shape(spec, name),
                     role="output" if is_output else None,
                     is_index=name in index_set,
                 )

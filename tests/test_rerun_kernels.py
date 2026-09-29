@@ -18,9 +18,10 @@ import types
 
 import pytest
 
+from hpcagent_bench import campaigns
+
 EXPERIMENTS = pathlib.Path(__file__).resolve().parents[1] / "experiments"
 SCRIPT = EXPERIMENTS / "remaining_kernels.py"
-BOARD = EXPERIMENTS / "wave_board.py"
 TABLE = EXPERIMENTS / "rerun-kernels.tsv"
 ARM = "scicomp-perf-playbook-kimi27sglang-plain"
 ROSTER = ["a", "b", "c"]
@@ -39,11 +40,6 @@ def load(name: str, path: pathlib.Path) -> types.ModuleType:
 @pytest.fixture(name="module", scope="module")
 def module_fixture() -> types.ModuleType:
     return load("remaining_kernels", SCRIPT)
-
-
-@pytest.fixture(name="board", scope="module")
-def board_fixture() -> types.ModuleType:
-    return load("wave_board", BOARD)
 
 
 def write_table(path: pathlib.Path, rows: list[tuple[str, str, str]]) -> pathlib.Path:
@@ -124,7 +120,7 @@ def test_a_budget_class_row_reruns_at_the_scaled_budget_not_as_infra(
     module: types.ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
 ) -> None:
     """A kernel whose last valid episode hit its budget still owes the owed rule's scaled rerun when
-    the scaled rerun itself was voided (647228: the judge refused Triton); INFRA would run it at 1x."""
+    the scaled rerun itself was voided (the judge refused Triton); INFRA would run it at 1x."""
     job_with_coverage(tmp_path / "runs", "641799", ARM, ROSTER)
     monkeypatch.setattr(module, "RERUN_KERNELS", classed_table(tmp_path / "t.tsv", "budget"))
     jobs = [("641799", str(tmp_path / "runs" / "641799"), ARM)]
@@ -142,14 +138,7 @@ def test_a_missing_table_owes_nothing_extra(module: types.ModuleType, tmp_path: 
     assert module.forced_rerun([ARM], tmp_path / "absent.tsv") == set()
 
 
-def test_the_board_marks_an_arm_with_listed_kernels_for_rerun(board: types.ModuleType, tmp_path: pathlib.Path) -> None:
-    """Kernel losses do not move coverage, so such an arm would otherwise show complete and green."""
-    table = write_table(tmp_path / "t.tsv", [(ARM, "b", "pending"), (ARM, "c", "pending"), (ARM, "a", "done")])
-    assert board.rerun_kernel_arms(table) == {ARM: "2 kernels"}
-    assert board.arm_status(done=3, roster=3, states=["COMPLETED"], rerun=True) == "rerun"
-
-
-def test_the_shipped_table_names_real_arms_and_real_roster_kernels(board: types.ModuleType) -> None:
+def test_the_shipped_table_names_real_arms_and_real_roster_kernels(module: types.ModuleType) -> None:
     """A typo here is silent: the kernel is never rerun and the arm stays wrongly complete."""
     with TABLE.open(newline="", encoding="utf-8") as handle:
         rows = list(csv.DictReader((line for line in handle if not line.startswith("#")), delimiter="\t"))
@@ -158,12 +147,11 @@ def test_the_shipped_table_names_real_arms_and_real_roster_kernels(board: types.
     # dlopen/nanosleep device-escape kernels, which are llr-focus40 arms, alongside the original
     # scicomp40 rows, and a roster dict scoped to one tag silently let the other arms' kernels
     # through unchecked.
-    tags = {board.CAMPAIGNS[campaign].tag for row in rows if (campaign := board.campaign_of(row["arm"]))}
-    rosters = {tag: set(board.remaining_kernels.roster(tag, str(EXPERIMENTS.parent))) for tag in tags}
+    tags = {entry.tag for row in rows if (entry := campaigns.campaign_of(row["arm"]))}
+    rosters = {tag: set(module.roster(tag, str(EXPERIMENTS.parent))) for tag in tags}
     for row in rows:
-        campaign = board.campaign_of(row["arm"])
-        assert campaign, row["arm"]
-        tag = board.CAMPAIGNS[campaign].tag
-        assert row["kernel"] in rosters.get(tag, set()), row
+        entry = campaigns.campaign_of(row["arm"])
+        assert entry, row["arm"]
+        assert row["kernel"] in rosters.get(entry.tag, set()), row
         assert row["jobs"].strip() and row["reason"].strip() and row["status"].strip()
-        assert (row.get("class") or "") in board.remaining_kernels.FORCED_CLASSES, row
+        assert (row.get("class") or "") in module.FORCED_CLASSES, row

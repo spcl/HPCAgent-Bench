@@ -106,7 +106,7 @@ def test_concurrent_staging_of_the_same_job_never_leaves_a_readonly_partial_env(
     stage_agent_launch on the SAME AGENT_LAUNCH_DIR (keyed by job id, not role). The in-place
     rm-rf + populate + chmod version let one caller's chmod a-w land between another caller's cp
     and its later `>>` append, so the append hit a file it no longer had permission to write --
-    "Permission denied", the whole job dead before any agent work (jobs 643180-643182). Runs several stagers of the SAME arm in parallel; every one must still exit 0 and
+    "Permission denied", the whole job dead before any agent work. Runs several stagers of the SAME arm in parallel; every one must still exit 0 and
     the launch directory must end up complete and read-only, not truncated mid-write."""
     scripts = tmp_path / "experiments"
     scripts.mkdir()
@@ -221,7 +221,7 @@ def test_a_bound_directory_without_tools_stops_the_driver_before_any_agent(
 
 def test_a_read_only_snapshot_env_is_staged_with_its_problems_line(tmp_path: pathlib.Path) -> None:
     """Every job gets a read-only snapshot as its env (env_layers.sh snapshot_env). Copied with its
-    mode, the staged .env refused the PROBLEMS_FILE line and the job died at launch (643180, 643222)."""
+    mode, the staged .env refused the PROBLEMS_FILE line and the job died at launch."""
     env_file = tmp_path / "snapshot.env"
     env_file.write_text("CAMPAIGN_ARM=arm-c\n")
     env_file.chmod(0o400)
@@ -266,7 +266,7 @@ def test_a_fused_waves_setups_are_staged_beside_the_env(tmp_path: pathlib.Path) 
 def test_a_snapshot_problems_path_resolves_to_the_staged_copy(tmp_path: pathlib.Path) -> None:
     """A snapshot env names its problems file `.rendered/<stem>.jsonl`, relative to experiments/. The
     agent step sees that value (not the launch .env's basename line) and no experiments/ at all, so
-    the driver must find the staged copy in its own launch directory (643226 died on it)."""
+    the driver must find the staged copy in its own launch directory (a job died on it)."""
     launch, _ = staged_checkout(tmp_path)
     probe = "\n".join(
         [

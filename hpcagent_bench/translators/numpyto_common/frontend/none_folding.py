@@ -2,6 +2,7 @@
 
 import ast
 
+from hpcagent_bench.translators.numpyto_common.ast_build import NESTED_BLOCK_FIELDS, name_, nested_blocks, store_
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
 
 __all__ = [
@@ -146,11 +147,11 @@ def flag_guard(flag: str, seed_when_none: bool) -> ast.Compare:
     is 0 exactly while the accumulator would still have read as ``None``, so either comparison keeps
     the ORIGINAL branch taken on the very first pass and its mirror on every later one."""
     op: ast.cmpop = ast.Eq() if seed_when_none else ast.NotEq()
-    return ast.Compare(left=ast.Name(id=flag, ctx=ast.Load()), ops=[op], comparators=[ast.Constant(value=0)])
+    return ast.Compare(left=name_(flag), ops=[op], comparators=[ast.Constant(value=0)])
 
 
 def flag_set_stmt(flag: str) -> ast.Assign:
-    return ast.Assign(targets=[ast.Name(id=flag, ctx=ast.Store())], value=ast.Constant(value=1))
+    return ast.Assign(targets=[store_(flag)], value=ast.Constant(value=1))
 
 
 def rewrite_none_toggle(stmts: list[ast.stmt], start: int, name: str, flag: str, in_loop: bool) -> bool:
@@ -200,20 +201,18 @@ def rewrite_none_toggle(stmts: list[ast.stmt], start: int, name: str, flag: str,
                 # if/else spelling already produces and compiles clean).
                 new_if = ast.If(
                     test=flag_guard(flag, seed_when_none),
-                    body=[ast.Assign(targets=[ast.Name(id=name, ctx=ast.Store())], value=stmt.value.body)],
-                    orelse=[ast.Assign(targets=[ast.Name(id=name, ctx=ast.Store())], value=stmt.value.orelse)],
+                    body=[ast.Assign(targets=[store_(name)], value=stmt.value.body)],
+                    orelse=[ast.Assign(targets=[store_(name)], value=stmt.value.orelse)],
                 )
                 ast.copy_location(new_if, stmt)
                 ast.fix_missing_locations(new_if)
                 stmts[idx] = new_if
                 stmts.insert(idx + 1, flag_set_stmt(flag))
                 return True
-        for field in ("body", "orelse"):
-            nested = vars(stmt).get(field)
-            if isinstance(nested, list):
-                nested_in_loop = in_loop or isinstance(stmt, (ast.For, ast.While))
-                if rewrite_none_toggle(nested, 0, name, flag, nested_in_loop):
-                    return True
+        nested_in_loop = in_loop or isinstance(stmt, (ast.For, ast.While))
+        for nested in nested_blocks(stmt, NESTED_BLOCK_FIELDS):
+            if rewrite_none_toggle(nested, 0, name, flag, nested_in_loop):
+                return True
     return False
 
 
@@ -261,10 +260,8 @@ class PeelNoneSeededAccumulators(ast.NodeTransformer):
             else:
                 # The bind itself may sit inside a branch/loop rather than at this exact level
                 # (a guarded accumulator init); keep looking one level down for more starts.
-                for field in ("body", "orelse"):
-                    nested = vars(stmt).get(field)
-                    if isinstance(nested, list):
-                        self.rewrite_block(nested, taken)
+                for nested in nested_blocks(stmt, NESTED_BLOCK_FIELDS):
+                    self.rewrite_block(nested, taken)
             i += 1
 
 

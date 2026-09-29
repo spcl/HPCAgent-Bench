@@ -3,7 +3,7 @@
 """Restarting an agent whose MCP server did not connect, and capping how many start at once.
 
 A failed MCP server is not a crash. The agent keeps its built-in tools, loses score/submit/task
-entirely, burns its whole budget and exits reporting success -- measured on qwen 604475, where one
+entirely, burns its whole budget and exits reporting success -- in one qwen run, one
 such agent ran 36 minutes over 54 turns and called a `Submit` tool that does not exist. The harness
 records rc=0 and the data point is simply gone, so the driver has to notice and relaunch.
 """

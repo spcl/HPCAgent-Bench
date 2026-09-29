@@ -3,7 +3,8 @@
 import ast
 import copy
 
-from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import RewritePass, np_attr
+from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module, numpy_call_attr
+from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import RewritePass
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.kinds import dtype_arg_kind, dtype_kind
 
 __all__ = [
@@ -38,8 +39,7 @@ class SpliceErrstate(RewritePass):
             isinstance(call, ast.Call)
             and isinstance(call.func, ast.Attribute)
             and call.func.attr == "errstate"
-            and isinstance(call.func.value, ast.Name)
-            and call.func.value.id in ("np", "numpy")
+            and is_numpy_module(call.func.value)
         ):
             return node
         self.changed = True
@@ -54,13 +54,11 @@ class DropGuards(RewritePass):
 
     __slots__ = ("changed",)
 
-    def visit_Raise(self, node: ast.Raise):
+    def visit_Raise(self, node: ast.Raise | ast.Assert):
         self.changed = True
         return ast.copy_location(ast.Pass(), node)
 
-    def visit_Assert(self, node: ast.Assert):
-        self.changed = True
-        return ast.copy_location(ast.Pass(), node)
+    visit_Assert = visit_Raise
 
 
 class DropValidationGuards(ast.NodeTransformer):
@@ -102,7 +100,7 @@ class IssubdtypeFold(ast.NodeTransformer):
 
     def visit_Call(self, node: ast.Call):
         self.generic_visit(node)
-        if np_attr(node) != "issubdtype" or len(node.args) != 2:
+        if numpy_call_attr(node) != "issubdtype" or len(node.args) != 2:
             return node
         a = node.args[0]
         kind = (

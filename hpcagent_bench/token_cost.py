@@ -14,8 +14,8 @@ and it is wrong twice, in opposite directions:
 
 * It EXCLUDES everything the model GENERATED. These endpoints report ``output_tokens: 0`` on every
   per-turn ``assistant`` event and fill the real count in once, on the final ``result`` record, so a
-  sum over turns counts input and nothing else. Verified on job 636540: every per-turn usage block
-  reads ``output_tokens: 0`` while the result record reports 24,153.
+  sum over turns counts input and nothing else: every per-turn usage block reads
+  ``output_tokens: 0`` while the result record reports the real count.
 * It OVERSTATES re-sent context. Each turn re-sends the whole transcript and each turn's
   ``input_tokens`` counts all of it again, so a 40-turn episode pays for its prompt 40 times. The
   server does not: the measured prefix cache hit rate on these runs is 99.3 percent.
@@ -49,8 +49,8 @@ THE MODEL, and its three assumptions:
    text and tool-call arguments alike -- so reasoning is billed at the output rate by construction
    and nothing is added on top. The client's streamed ``estimated_tokens_delta`` is kept as
    ``thinking_estimate``, informational and never summed: it is a client-side character estimate
-   that does not agree with the server (job 636540 problem-0: estimate 34,517 against a server
-   output of 24,153, of which chars/4 puts 22,234 in thinking blocks). Adding it was a DOUBLE
+   that does not agree with the server (one episode: estimate 34,517 against a server output of
+   24,153, of which chars/4 puts 22,234 in thinking blocks). Adding it was a DOUBLE
    COUNT -- see 13/F8 of docs/DESIGN_data_collection_and_scoring.md.
 
 TWO NUMBERS, AND BOTH ARE RIGHT -- for different questions. This matters because the published
@@ -65,7 +65,7 @@ convention is the OPPOSITE of the model above, and not by mistake:
 * ``effective`` (every token once) is what our hardware actually computed. Nobody bills us per
   request; we own the GPUs, and a cached prefix costs no forward pass. Quote this when comparing
   ARMS WITHIN this work, because ``billed`` scales with turn count and turn count differs by model
-  -- measured over the 28 episodes of jobs 636540, 636535 and 630712 that reached a result record,
+  -- measured over 28 episodes that reached a result record,
   ``effective/billed`` runs 0.019 to 0.211 and tracks turns almost monotonically, so the convention
   silently penalises models that take more steps.
 

@@ -5,6 +5,8 @@ from collections.abc import Callable
 from types import NotImplementedType
 
 from hpcagent_bench.translators.numpyto_common import dtypes
+from hpcagent_bench.translators.numpyto_common.ast_build import const_int, name_, store_
+from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.lib_nodes.call_args import const_axis, kwarg_or_pos, read_axis_keepdims
 from hpcagent_bench.translators.numpyto_common.lib_nodes.constructors import arange_count
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import (
@@ -15,7 +17,7 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import (
     iter_extent_of,
     sum_width_tokens,
 )
-from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import attr_call, const_int, reads_complex
+from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import attr_call, reads_complex
 from hpcagent_bench.translators.numpyto_common.lib_nodes.matmul_hoist import MatmulHoister
 from hpcagent_bench.translators.numpyto_common.lib_nodes.registry import ELEMENTWISE_SHAPE_OPS, NP_CALL_EXPANDERS
 from hpcagent_bench.translators.numpyto_common.lib_nodes.repeat import diff_operand
@@ -58,11 +60,7 @@ def numpy_call_key(call: ast.Call) -> tuple[str, str] | None:
     if isinstance(func, ast.Attribute):
         if isinstance(func.value, ast.Name):
             return ("np" if func.value.id == "np" else func.value.id, func.attr)
-        if (
-            isinstance(func.value, ast.Attribute)
-            and isinstance(func.value.value, ast.Name)
-            and func.value.value.id == "np"
-        ):
+        if isinstance(func.value, ast.Attribute) and is_numpy_module(func.value.value):
             return ("np", f"{func.value.attr}.{func.attr}")
     return None
 
@@ -564,13 +562,13 @@ class CallHoister(ast.NodeTransformer):
         if not is_scalar:
             self.pre_stmts.append(
                 ast.Assign(
-                    targets=[ast.Name(id=temp, ctx=ast.Store())],
-                    value=ast.Call(func=ast.Name(id="__hpcagent_bench_zeros__", ctx=ast.Load()), args=[], keywords=[]),
+                    targets=[store_(temp)],
+                    value=ast.Call(func=name_("__hpcagent_bench_zeros__"), args=[], keywords=[]),
                 )
             )
         # Synthesise an Assign that the LibNodeRewriter will lower.
-        self.pre_stmts.append(ast.Assign(targets=[ast.Name(id=temp, ctx=ast.Store())], value=node))
-        return ast.Name(id=temp, ctx=ast.Load())
+        self.pre_stmts.append(ast.Assign(targets=[store_(temp)], value=node))
+        return name_(temp)
 
     def visit_call_children(self, node: ast.Call) -> None:
         """Visit the call's children -- except the ``np.diff`` count of ``np.repeat(src,
@@ -631,15 +629,15 @@ class CallHoister(ast.NodeTransformer):
                 )
             )
             marker = ast.Assign(
-                targets=[ast.Name(id=temp, ctx=ast.Store())],
-                value=ast.Call(func=ast.Name(id="__hpcagent_bench_zeros__", ctx=ast.Load()), args=[], keywords=[]),
+                targets=[store_(temp)],
+                value=ast.Call(func=name_("__hpcagent_bench_zeros__"), args=[], keywords=[]),
             )
-            slice_lhs = ast.Subscript(value=ast.Name(id=temp, ctx=ast.Load()), slice=slice_form, ctx=ast.Store())
+            slice_lhs = ast.Subscript(value=name_(temp), slice=slice_form, ctx=ast.Store())
             self.pre_stmts.append(marker)
             self.pre_stmts.append(ast.Assign(targets=[slice_lhs], value=first))
         else:
-            self.pre_stmts.append(ast.Assign(targets=[ast.Name(id=temp, ctx=ast.Store())], value=first))
-        node.args[0] = ast.Name(id=temp, ctx=ast.Load())
+            self.pre_stmts.append(ast.Assign(targets=[store_(temp)], value=first))
+        node.args[0] = name_(temp)
 
     def stash_axis_keepdims(self, key: tuple[str, str], node: ast.Call) -> None:
         """Stash the call's axis / keepdims for :meth:`derive_output_shape`. ``linalg.norm``'s

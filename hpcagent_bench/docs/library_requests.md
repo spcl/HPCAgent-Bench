@@ -57,13 +57,6 @@ marks the perf-playbook packets (`perf-playbook-cpu`, `-amd`, `-nvidia`, and com
 | bare `-l` | `link` | libraries in the image prefix; fallback when `pkg` is absent |
 | toolkit soname | `toolset` | CUDA and ROCm math libraries (link name derived from `toolset.yaml`) |
 
-List what an image actually offers, per language, with the failing gate for each missing library.
-Run it inside the image; on a login node it answers for the login node:
-
-```bash
-python scripts/report_libraries.py
-```
-
 ## Probe-gated, resolved in the image
 
 `languages.library_tokens` resolves tokens and trial-links them with that language's compiler;

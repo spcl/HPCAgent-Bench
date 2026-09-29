@@ -655,7 +655,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    selection = {column: getattr(args, column) for column in IDENTITY if getattr(args, column)}
+    given = vars(args)
+    selection = {column: given[column] for column in IDENTITY if given[column]}
     frame = observations(args.runs, **selection)
     if frame.empty:
         raise SystemExit(f"no observations for {selection or '(every identity)'}")

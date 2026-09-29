@@ -152,15 +152,9 @@ LLRBLIND_CMP_REPLACEMENT = "llrblind-cmp-"
 #: merely contains "smoke" cannot match by accident.
 SMOKE_ARM = re.compile(r"(?:^|-)smoke\d*(?:-|$)")
 
-#: Smoke job ids that reused a REAL arm's name (641175: a 50-minute
-#: ``harness20-qwen38-claude`` sanity check submitted with a shortened AGENT_TIMEOUT_SECONDS,
-#: nothing else distinguishing it -- ``runs.arm``, ``runs.experiment`` and the run root all read
-#: exactly like the real wave's). No recorded field tells these apart from a real job, so unlike
-#: :data:`SMOKE_ARM` this is a plain, documented exception list rather than a pattern.
-#: 642813 is the same case: submitted as
-#: ``harness20-caveman-qwen38-c-clean-kernels-harness20-caveman-smoke2`` (12M/4h, 2 kernels) but
-#: recording ``runs.arm = harness20-caveman-qwen38-c-clean``, so only its sacct job name -- which
-#: wave_board reads and this script never does -- says smoke. Listed here, both readers agree.
+#: Smoke job ids that recorded a REAL arm's name (``runs.arm``, ``runs.experiment`` and the run
+#: root read exactly like the real wave's). No recorded field tells them apart from a real job, so
+#: unlike :data:`SMOKE_ARM` this is an explicit exception list rather than a pattern.
 SMOKE_JOBS = frozenset({"641175", "642813"})
 
 
@@ -486,7 +480,7 @@ def final_attempt_cuts(job_dir: str) -> dict:
     (promote_unsubmitted.declared_run_id), else -- a directory the reducer left holding only
     ``tokens.json`` -- the launcher's ``<arm>.n<N>.p<P>.w<W>`` indices its own path carries, as the
     observations extractor falls back to. Keyed with the kernel too: a worker slot re-used for a
-    second problem (644336 problem-38-worker-12) declares the run id of its first."""
+    second problem declares the run id of its first."""
     cuts: dict = {}
     for path in glob.glob(os.path.join(job_dir, "agents", "node-*", "problem-*-worker-*", "tokens.json")):
         worker = pathlib.Path(path).parent
@@ -526,8 +520,7 @@ def graded_since(job_dir: str, opt: str, query: str, args: tuple) -> set:
     worker's ``final_attempt_start_ms`` (:func:`final_attempt_cuts`): a crashed attempt is relaunched
     from an empty workspace, so a grade it filed answers nothing the finished episode delivered, and
     every figure drops that row (spec X7, hpcagent_bench.experiments.drop_pre_relaunch_rows).
-    Counting it here left such a kernel DONE with no answer in any figure (641069
-    fuse_move_ifs). An episode with no recorded cut keeps its rows, as X7 does."""
+    Counting it here would leave such a kernel DONE with no answer in any figure. An episode with no recorded cut keeps its rows, as X7 does."""
     seen: set = set()
     thresholds: dict = {}
     cuts = final_attempt_cuts(job_dir)

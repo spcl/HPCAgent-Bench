@@ -2,6 +2,8 @@
 
 import ast
 
+from hpcagent_bench.translators.numpyto_common.ast_build import name_, numpy_attribute, store_
+from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.lowering.mathfuncs import METHOD_TO_NP
 
 __all__ = ["ComputedIndexCallHoister", "MethodCallRewriter", "StmtHoister"]
@@ -37,8 +39,8 @@ class StmtHoister(ast.NodeTransformer):
         """Stage ``<prefix><n> = <expr>`` and return a Load Name for the temp."""
         self._hoist_ctr[0] += 1
         name = f"{prefix}{self._hoist_ctr[0]}"
-        self.pre_stmts.append(ast.Assign(targets=[ast.Name(id=name, ctx=ast.Store())], value=expr))
-        return ast.Name(id=name, ctx=ast.Load())
+        self.pre_stmts.append(ast.Assign(targets=[store_(name)], value=expr))
+        return name_(name)
 
     def flush(self, node: ast.stmt):
         saved = self.pre_stmts
@@ -93,7 +95,7 @@ class MethodCallRewriter(StmtHoister):
             and func.value.id not in self.MODULE_NAMES
         ):
             return ast.Call(
-                func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="reshape", ctx=ast.Load()),
+                func=numpy_attribute("reshape"),
                 args=[func.value, ast.Tuple(elts=[ast.Constant(value=-1)], ctx=ast.Load())],
                 keywords=[],
             )
@@ -121,7 +123,7 @@ class MethodCallRewriter(StmtHoister):
         ):
             return node
         return ast.Call(
-            func=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr=METHOD_TO_NP[func.attr], ctx=ast.Load()),
+            func=numpy_attribute(METHOD_TO_NP[func.attr]),
             args=[recv] + list(node.args),
             keywords=node.keywords,
         )
@@ -169,12 +171,7 @@ class ComputedIndexCallHoister(StmtHoister):
 
     def is_arg_reduction(self, call: ast.Call) -> bool:
         f = call.func
-        return (
-            isinstance(f, ast.Attribute)
-            and f.attr in self.ARG_REDUCTIONS
-            and isinstance(f.value, ast.Name)
-            and f.value.id in ("np", "numpy")
-        )
+        return isinstance(f, ast.Attribute) and f.attr in self.ARG_REDUCTIONS and is_numpy_module(f.value)
 
     def hoist_index(self, e: ast.Call) -> ast.Name:
         """Spill index Call ``e`` to a fresh Name. For an argmax / argmin over a

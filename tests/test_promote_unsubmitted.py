@@ -4,8 +4,8 @@
 
 Every judge request must name the rank it is addressed to, and an absent rank is refused with a
 400 before anything is graded (``service.rank_error``). This script never sent one, so every
-promotion it ever attempted was refused: 626521 reported "refused 400" on all three of its lines
-and 626523 on its one, while 18 verified-correct-and-faster kernels across the two arms -- one of
+promotion it ever attempted was refused: one arm reported "refused 400" on all three of its lines
+and another on its one, while 18 verified-correct-and-faster kernels across the two arms -- one of
 them 76.6x -- reached no submissions table at all. Nothing downstream noticed, because a refused
 promotion prints a word and exits 0.
 
@@ -229,7 +229,7 @@ def test_one_workers_submission_does_not_suppress_anothers_on_the_same_kernel(pr
     Promotion used to be keyed by kernel: any submission of `gemm` removed `gemm` from the
     candidate list, so a second worker that scored it correct and never submitted lost its result
     to a colleague's. Scoring is last-submission-per-episode and max across agents, which only
-    means anything if each episode gets to record one. On git-scicomp 627129 this hid 12
+    means anything if each episode gets to record one. On one git-scicomp arm this hid 12
     promotable workers behind 3 kernel-level candidates.
     """
     rank = tmp_path / "judge" / "rank-0"
@@ -264,7 +264,7 @@ def test_sources_may_spell_the_kernel_as_a_full_key(promoter, tmp_path) -> None:
     The prompt tells the agent to send the FULL registry key, so on scientific_computing the two
     tables disagree -- ``gemm`` against ``scientific_computing/dense_linear_algebra/gemm/gemm``.
     On loop_level_reasoning they coincide, which is why the join looked healthy for months while
-    promotion was dead on every other track: job 628183 held 8 verified correct-and-faster results
+    promotion was dead on every other track: a job held 8 verified correct-and-faster results
     and promoted none of them.
     """
     rank = tmp_path / "judge" / "rank-0"
@@ -395,7 +395,7 @@ def submit_timeouts(promoter: ModuleType, tmp_path: pathlib.Path, monkeypatch: p
 @pytest.mark.parametrize(
     "wall_left_s,more_than_s",
     [
-        # 633871: 58 min of allocation left at the kill. The fixed 1800 s gave up first, and the
+        # One job had 58 min of allocation left at the kill. The fixed 1800 s gave up first, and the
         # teardown right after it killed the grade the judge was still running.
         (3500.0, 1800.0),
         # Nearly out of wall: a wait past the job's end cannot land a grade, only delay teardown.
@@ -441,7 +441,7 @@ def test_a_promotion_the_job_cannot_wait_for_is_never_sent(
 
 
 def add_schemaless_shards(run_dir: pathlib.Path) -> None:
-    """The 633717 layout: a zero-byte file named after another shard, and a rank that never wrote."""
+    """The production layout: a zero-byte file named after another shard, and a rank that never wrote."""
     (run_dir / "judge" / "rank-0" / "hpcagent_bench2.db").write_bytes(b"")
     (run_dir / "judge" / "rank-1").mkdir()
     (run_dir / "judge" / "rank-1" / "hpcagent_bench1.db").write_bytes(b"")
@@ -449,7 +449,7 @@ def add_schemaless_shards(run_dir: pathlib.Path) -> None:
 
 def test_a_shard_with_no_schema_does_not_fail_every_promotion(promoter: ModuleType, tmp_path: pathlib.Path) -> None:
     """An empty shard answered "no such table", and the catch-all reported every worker's promotion
-    as failed: 110 of 120 workers on 633717 lost their verified kernel."""
+    as failed: 110 of 120 workers of one job lost their verified kernel."""
     run_dir = make_run_dir(tmp_path, [("c", "gemm.c", "void gemm(void){}")])
     add_schemaless_shards(run_dir)
     (item,) = promoter.candidates(run_dir)
@@ -562,7 +562,7 @@ def add_submission(run_dir: pathlib.Path, ts: int, run_id: str = "arm.n0.p1.w1")
 def test_a_submission_from_the_wiped_attempt_does_not_block_the_final_attempts_promotion(
     promoter: ModuleType, tmp_path: pathlib.Path
 ) -> None:
-    """645737 tsvc_2_s152: the crashed attempt submitted at 1000, the relaunch scored correct at 3000
+    """tsvc_2_s152: the crashed attempt submitted at 1000, the relaunch scored correct at 3000
     and timed out. X7 drops the 1000 row, so skipping the promotion over it left NO answer at all."""
     run_dir = make_relaunched_run_dir(tmp_path)
     add_submission(run_dir, 1000)
@@ -617,7 +617,7 @@ def test_the_teardown_sweep_ignores_a_submission_from_before_the_workers_cut(
 def test_a_promotion_reads_the_routers_verdict(promoter, monkeypatch, verdict: dict, expected: str) -> None:
     """The router answers /submit with the verdict alone (correct "yes"/"no", build_log on a failed
     build). Read as a full grade, a correct "yes" had no build_ok and every promotion printed
-    "build failed: judge gave no detail" over a recorded correct row (643241, 643242)."""
+    "build failed: judge gave no detail" over a recorded correct row."""
     monkeypatch.setattr(promoter.urllib.request, "urlopen", fake_urlopen([], body=verdict))
     item = {"kernel": "gemm", "run_id": "arm.n0.p1.w1", "language": "c", "source": "void gemm(void){}"}
     assert promoter.promote("http://judge:8800", item, dry_run=False, rank=0).startswith(expected)

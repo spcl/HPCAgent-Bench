@@ -3,14 +3,15 @@
 import ast
 import copy
 
+from hpcagent_bench.translators.numpyto_common.ast_build import name_, range_for, store_
 from hpcagent_bench.translators.numpyto_common.lib_nodes.dims import shape_exprs_equal
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of, span_multiple_of
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
+    const_,
+    const_or_name,
     slice_step_any,
     step_is_negative,
     step_node,
-    const_,
-    const_or_name,
 )
 from hpcagent_bench.translators.numpyto_common.lowering.complex import infer_complex_dtype
 from hpcagent_bench.translators.numpyto_common.lowering.indexing import (
@@ -160,7 +161,7 @@ class SliceFusion(ast.NodeTransformer):
             if not isinstance(lhs_dims[axis], ast.Slice):
                 iter_vars.append(None)
                 continue
-            iter_vars.append(ast.Name(id=iter_var_name(axis), ctx=ast.Load()))
+            iter_vars.append(name_(iter_var_name(axis)))
 
         # LHS subscript: iter var per slice axis, indexed absolute (not
         # relative to the slice's own start).
@@ -192,14 +193,7 @@ class SliceFusion(ast.NodeTransformer):
                 continue
             lo, hi = ranges[axis][0], ranges[axis][1]
             ivar = iter_vars[axis]
-            body = [
-                ast.For(
-                    target=ast.Name(id=ivar.id, ctx=ast.Store()),
-                    iter=ast.Call(func=ast.Name(id="range", ctx=ast.Load()), args=[lo, hi], keywords=[]),
-                    body=body,
-                    orelse=[],
-                )
-            ]
+            body = [range_for(ivar.id, [lo, hi], body)]
         if hoister.staged:
             return [*hoister.staged, *body]
         return body[0] if len(body) == 1 else body
@@ -240,7 +234,7 @@ class SliceFusion(ast.NodeTransformer):
         idx_nodes: list[ast.AST] = []
         for axis, d in enumerate(lhs_dims):
             if isinstance(d, ast.Slice):
-                ivar = ast.Name(id=iter_vars[axis].id, ctx=ast.Load())
+                ivar = name_(iter_vars[axis].id)
                 step, slice_start = ranges[axis][2], ranges[axis][3]
                 if step == 1:
                     idx_nodes.append(ivar)
@@ -298,11 +292,10 @@ class HoistInvariantSelfReads(ast.NodeTransformer):
         self.staged: list[ast.stmt] = []
         self._by_source: dict[str, str] = {}
 
-    def visit_IfExp(self, node: ast.IfExp) -> ast.AST:
+    def visit_IfExp(self, node: ast.IfExp | ast.BoolOp) -> ast.AST:
         return node
 
-    def visit_BoolOp(self, node: ast.BoolOp) -> ast.AST:
-        return node
+    visit_BoolOp = visit_IfExp
 
     def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
         self.generic_visit(node)
@@ -314,8 +307,8 @@ class HoistInvariantSelfReads(ast.NodeTransformer):
             self.counter[0] += 1
             name = f"{INVARIANT_SELF_READ_PREFIX}{self.counter[0]}"
             self._by_source[key] = name
-            self.staged.append(ast.Assign(targets=[ast.Name(id=name, ctx=ast.Store())], value=node))
-        return ast.Name(id=name, ctx=ast.Load())
+            self.staged.append(ast.Assign(targets=[store_(name)], value=node))
+        return name_(name)
 
     def is_invariant_element(self, node: ast.Subscript) -> bool:
         """True when ``node`` reads ONE element of the written array at an index no iter var moves."""
@@ -428,8 +421,8 @@ class LiftFreshArrayFromSlices(ast.NodeTransformer):
             self_ref = any(isinstance(n, ast.Name) and n.id == target.id for n in ast.walk(node.value))
             marker_args = [ast.Constant(value="__reassign__"), ast.Constant(value=self_ref)]
         marker = ast.Assign(
-            targets=[ast.Name(id=target.id, ctx=ast.Store())],
-            value=ast.Call(func=ast.Name(id="__hpcagent_bench_zeros__", ctx=ast.Load()), args=marker_args, keywords=[]),
+            targets=[store_(target.id)],
+            value=ast.Call(func=name_("__hpcagent_bench_zeros__"), args=marker_args, keywords=[]),
         )
         # ``C[:]`` only iterates the first axis; for multi-D targets
         # we need ``C[:, :]`` so slice fusion emits a per-element loop
@@ -442,7 +435,7 @@ class LiftFreshArrayFromSlices(ast.NodeTransformer):
             slice_form = ast.Tuple(
                 elts=[ast.Slice(lower=None, upper=None, step=None) for unused in range(rank)], ctx=ast.Load()
             )
-        slice_lhs = ast.Subscript(value=ast.Name(id=target.id, ctx=ast.Load()), slice=slice_form, ctx=ast.Store())
+        slice_lhs = ast.Subscript(value=name_(target.id), slice=slice_form, ctx=ast.Store())
         slice_assign = ast.Assign(targets=[slice_lhs], value=node.value)
         return [marker, slice_assign]
 

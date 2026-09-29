@@ -542,7 +542,7 @@ def test_the_observations_reader_selects_on_harness(tmp_path: pathlib.Path, monk
 def test_the_observations_reader_never_returns_an_adhoc_grade(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Job 640078: a grade sent with no run id lands under the recorder's ``adhoc`` default, and its
+    """In one job, a grade sent with no run id lands under the recorder's ``adhoc`` default, and its
     ``runs`` row carries the JOB's identity, so the join read it as the arm's own answer. Decision:
     it answers nothing and its kernel is owed a rerun."""
     db = tmp_path / "r.db"

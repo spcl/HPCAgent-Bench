@@ -18,7 +18,8 @@ hoister falls back to the dense path or reports an actionable error.
 import ast
 from collections.abc import Callable
 
-from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import const_, name_, store_
+from hpcagent_bench.translators.numpyto_common.ast_build import name_, store_
+from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import const_
 
 __all__ = [
     "SPARSE_MATMUL_DISPATCH",
