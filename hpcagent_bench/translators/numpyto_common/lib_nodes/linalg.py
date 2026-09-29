@@ -232,7 +232,10 @@ def expand_lstsq(
     fresh_local_allocs: dict[str, tuple[str, ...]] | None = None,
 ) -> list[ast.stmt]:
     """``y = np.linalg.lstsq(A, b, rcond=...)[0]`` -> in-place Gaussian
-    elimination with partial pivoting, writing the solution into ``target``.
+    elimination WITHOUT pivoting (a zero pivot yields 0, see :func:`guarded_div`),
+    writing the solution into ``target``. A near-singular ``A`` loses accuracy
+    that numpy's truncated-SVD ``lstsq`` keeps, so a caller must stop building
+    ``A`` before it degenerates (gmres breaks on its residual for this reason).
 
     Conservative scope: A must be a SQUARE M x M region, either a bare Name
     (shape (M, M)) or a Subscript like ``H[:m, :]`` whose first slice has a

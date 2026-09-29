@@ -84,14 +84,12 @@ def test_sparse_kernel_dace_matches_scipy(kernel: "so.SparseKernel") -> None:
 
 
 def test_gmres_dace_early_convergence_matches_reference() -> None:
-    """gmres's workspace dim ``m`` is split into an allocation SYMBOL and a runtime
-    ``m_iter`` the convergence break reduces. The parametrized oracle above uses a tiny tol
-    so that split path never fires (``m_iter == m`` every run); this drives GENUINE early
-    convergence -- a clustered spectrum so gmres converges in ~4 steps, far below the
-    allocation size ``min(max_iter, n)`` -- and checks the dace SDFG (allocated to the full
-    symbolic ``m``, iterating the reduced ``m_iter``) still matches the numpy reference. It
-    is also the regression guard for the reference's own early-convergence slice
-    (``H[:m, :m]``): with the pre-fix ``H[:m, :]`` the reference raised a shape error here."""
+    """gmres's effective Krylov size ``kk`` is split into a runtime ``kk_iter`` the residual break
+    reduces, while ``m = min(max_iter, n)`` stays the allocation symbol of Q and H. The parametrized
+    oracle above runs small systems whose Krylov space is exhausted before the break matters; this
+    drives GENUINE early convergence -- a clustered spectrum so gmres converges in ~4 steps, far
+    below the allocation size ``min(max_iter, n)`` -- and checks the dace SDFG (allocated to the full
+    symbolic ``m``, solving the reduced ``kk_iter`` system) still matches the numpy reference."""
     pytest.importorskip("dace")
     import importlib.util
     import tempfile
@@ -109,7 +107,7 @@ def test_gmres_dace_early_convergence_matches_reference() -> None:
     gmres = next((k for k in KERNELS if k.short == "gmres"), None)
     assert gmres is not None, "gmres is a committed sparse kernel and must be registered"
     # A spectrum with 4 clusters -> the Krylov space is exhausted in ~4 steps, so gmres
-    # breaks early and reduces m well below the allocation size min(max_iter, N) = 30.
+    # breaks early and reduces kk well below the allocation size min(max_iter, N) = 30.
     N = 30
     rng = np.random.default_rng(2)
     Q, unused = np.linalg.qr(rng.random((N, N)))

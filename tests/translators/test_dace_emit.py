@@ -540,7 +540,7 @@ def test_gmres_workspace_allocation_carries_an_explicit_dtype_end_to_end() -> No
     is pinned here: the workspace is allocated at the symbolic shape, with a dtype."""
     unused, src = emit_("gmres")
     line = next(ln for ln in src.splitlines() if ln.strip().startswith("Q = np."))
-    assert "(N, m_iter + 1)" in line and "dtype=" in line, f"allocation lost its shape or dtype: {line.strip()}"
+    assert "(N, m + 1)" in line and "dtype=" in line, f"allocation lost its shape or dtype: {line.strip()}"
 
 
 # Data-dependent workspace shapes: gmres carries body-computed dimensions       #
@@ -656,27 +656,24 @@ def test_split_reassigned_size_routes_allocations_through_the_runtime_count_too(
 
 
 def test_gmres_emits_promoted_symbols_ternary_and_split() -> None:
-    """End-to-end: the lowered gmres emit seeds the m_iter runtime count from m's recipe,
-    sizes the workspace by that count, and carries no residual conditional-expression RHS.
-    ``n`` is a pure alias of ``N`` (``n = N``), so it is INLINED to ``N`` rather than promoted.
+    """End-to-end: the lowered gmres emit promotes ``m = min(max_iter, N)`` to a symbol bound from its
+    recipe, splits the REASSIGNED effective Krylov size ``kk`` into a runtime count, and carries no
+    residual conditional-expression RHS. ``n`` is a pure alias of ``N`` (``n = N``), so it is INLINED
+    to ``N`` rather than promoted.
 
-    ``m`` itself is reassigned, so every use reads ``m_iter`` and the seed is its only reader.
-    Seeded from the symbol, ``m`` stayed a free symbol of the SDFG and so an entry argument the
-    native ABI does not have; cegterg's drop-in refused exactly that for ``nbase`` and ``notcnv``.
-    Seeded from the recipe, no ``m`` symbol and no recipe to bind remain.
-
-    ``max_iter`` is a PINNED CONFIG knob (``config: max_iter: {value: 100}``), so it is a constant
-    like the C leg's ``constexpr int64_t max_iter = 100`` -- not a symbol. Nothing can bind such a
-    symbol, so the compiled SDFG died on "Missing program argument"; the seed reads the constant."""
+    ``m`` is never rebound (the reference stops early by assigning ``kk``, not ``m``), so it is the
+    allocation extent of Q and H and the loop bound; ``kk_iter`` is seeded from it and advanced by the
+    early break, and sizes only the lstsq operands. ``max_iter`` is a PINNED CONFIG knob, so the recipe
+    reads its value (100), not a symbol nothing could bind."""
     src = emit_with_inline_fallback(lambda: emit_dace(kir_for("gmres", config="csr", do_lower=True)))
     for sym in ("nnz", "N"):  # n inlined to N
         assert re.search(rf"^{sym} = dc\.symbol\('{sym}'", src, re.M), f"{sym} not declared: {src}"
     assert "dc.symbol('max_iter'" not in src  # a pinned knob must not drift back into the symbols
-    assert re.search(r"^max_iter = 100$", src, re.MULTILINE), src  # ... it is the constant the seed reads
-    assert "dc.symbol('m'" not in src and "__hpcagent_bench_symbol_defs__" not in src  # retired
-    assert "m_iter = min(max_iter, N)" in src  # runtime count seeded from the recipe
-    assert "np.zeros((N, m_iter + 1), dtype=dc_float)" in src  # workspace sized by the runtime count
-    assert "for k in range(m_iter):" in src  # iteration uses the runtime count
+    assert "__hpcagent_bench_symbol_defs__ = [('m', 'min(100, N)')]" in src  # recipe reads the constant
+    assert "kk_iter = m" in src and "kk_iter = k + 1" in src  # runtime count: seeded, then advanced
+    assert "np.zeros((N, m + 1), dtype=dc_float)" in src  # workspace sized by the never-rebound m
+    assert "for k in range(m):" in src  # iteration bound is m, not the runtime count
+    assert "y = np.zeros((N,), dtype=dc_float)" in src  # the Arnoldi vector keeps its own length
     ast.parse(src)  # emitted module is valid Python
     prog = next(n for n in ast.parse(src).body if isinstance(n, ast.FunctionDef))
     assert not any(isinstance(node, ast.IfExp) for node in ast.walk(prog))  # ternaries desugared
