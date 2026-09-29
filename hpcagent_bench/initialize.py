@@ -29,13 +29,14 @@ matrices, well-conditioned solvers, ...) keep their existing
 
 import ast
 import functools
+import math
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Protocol, cast, runtime_checkable
 
 import numpy as np
 import numpy.typing as npt
 
-from hpcagent_bench.dtypes import storage_dtype
+from hpcagent_bench.dtypes import compute_view, is_float_dtype, storage_dtype
 from hpcagent_bench.fuzz import EVAL_ERRORS, FuzzValue, safe_eval
 from hpcagent_bench.precision import Precision, numpy_dtype
 from hpcagent_bench.spec import as_block
@@ -44,8 +45,10 @@ from hpcagent_bench.support.distributions import domain as domain_mod
 from hpcagent_bench.support.distributions import hidden, streams
 
 __all__ = [
+    "ML_TRACK",
     "SPARSE_BUFFERS_KEY",
     "SPARSE_ROLE_ATTRS",
+    "UNIT_HALF_RANGE",
     "SparseMatrix",
     "abi_input_args",
     "allocate_declared_buffers",
@@ -59,6 +62,7 @@ __all__ = [
     "fill_index_array",
     "generate_scaled",
     "matrix_format",
+    "ml_default_domain",
     "parse_shape",
     "select_variant",
     "shape_dims",
@@ -213,10 +217,28 @@ def generate_scaled(
     triple has no magnitude to rescale and is returned as-is regardless of ``scale``.
     """
     value: InitValue = distributions.generate(name, shape, precision, spec)
-    if scale == 1.0 or not isinstance(value, np.ndarray) or value.dtype.kind != "f":
+    if scale == 1.0 or not isinstance(value, np.ndarray) or not is_float_dtype(value.dtype):
         return value
-    scaled: npt.NDArray[np.generic] = np.multiply(value, scale)
+    scaled: npt.NDArray[np.generic] = np.multiply(compute_view(value), scale)
     return scaled.astype(value.dtype, copy=False)
+
+
+#: The track whose inputs without a declared domain take :func:`ml_default_domain`.
+ML_TRACK = "machine_learning"
+#: The half-range of an ML activation (a normalized image or embedding) and of a vector parameter.
+UNIT_HALF_RANGE = 1.0
+
+
+def ml_default_domain(activation: bool, shape: tuple[int, ...]) -> tuple[float, float]:
+    """The value domain of a machine_learning array its manifest leaves open, as a network is fed and
+    initialized: the activation (the first float array) and any vector (a bias, a scale) in
+    ``[-1, 1]``, every other array a weight at fan-in init, ``|w| <= 1/sqrt(fan_in)`` (PyTorch's
+    ``nn.Linear`` / ``nn.Conv`` default bound; ``fan_in`` = every axis but the leading one). Each layer
+    then keeps its output O(1), so no precision's range is left at any depth."""
+    if activation or len(shape) < 2:
+        return (-UNIT_HALF_RANGE, UNIT_HALF_RANGE)
+    bound = UNIT_HALF_RANGE / math.sqrt(max(math.prod(shape[1:]), 1))
+    return (-bound, bound)
 
 
 def auto_initialize(
@@ -291,6 +313,7 @@ def auto_initialize(
     pending: list[str] = []
     tasks: list[Callable[[], InitValue]] = []
     elements = 0
+    activation_drawn = False  # the first float array drawn is the activation (ml_default_domain)
     for index, (name, shape_expr) in enumerate(scalars.items()):
         if name in materialized:
             continue  # name collision: scalar declared wins
@@ -314,6 +337,9 @@ def auto_initialize(
             # base_spec so an array's own declaration wins over a variant-wide default.
             if name in spec.init.domains:
                 array_spec["domain"] = spec.init.domains[name]
+            elif spec.track == ML_TRACK:
+                array_spec["domain"] = ml_default_domain(not activation_drawn, shape)
+            activation_drawn = True
             array_spec.setdefault("array", name)
             scale = 1.0
             if variant is not None:
@@ -511,7 +537,7 @@ def allocate_declared_buffers(spec: "BenchSpec", data: dict[str, object], precis
     undeclared: np.dtype[np.generic] = np.dtype(numpy_dtype(precision))
     for existing in spec.array_args:
         buffer = as_array(data.get(existing))
-        if buffer is not None and buffer.dtype.kind in "fc":
+        if buffer is not None and (buffer.dtype.kind == "c" or is_float_dtype(buffer.dtype)):
             undeclared = buffer.dtype
             break
     allocated: list[str] = []

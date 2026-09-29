@@ -40,6 +40,7 @@ __all__ = [
     "numpy_dtype",
     "precision_from_datatype",
     "safe_max",
+    "smallest_normal",
     "tolerance_band",
 ]
 
@@ -198,6 +199,16 @@ def dtype_eps(dtype: DTypeLike) -> float:
         return float(np.finfo(dtype).eps)
     except (TypeError, ValueError):
         return float(ml_dtypes.finfo(dtype).eps)
+
+
+def smallest_normal(precision: Precision) -> float:
+    """The smallest positive normal value of ``precision`` (``np.finfo``, else ``ml_dtypes.finfo``, as
+    :func:`dtype_eps`)."""
+    dtype = numpy_dtype(precision)
+    try:
+        return float(np.finfo(dtype).tiny)
+    except (TypeError, ValueError):
+        return float(ml_dtypes.finfo(dtype).tiny)
 
 
 def derived_band(precision: Precision) -> ToleranceBand:
