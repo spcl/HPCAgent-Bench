@@ -29,7 +29,7 @@ env:
 
 on:
   push:
-    branches: [ main, extended, ci-fix ]
+    branches: [ main, extended, ci-fix, release-v0.1 ]
   pull_request:
     branches: [ main, extended, ci-fix ]
   merge_group:
