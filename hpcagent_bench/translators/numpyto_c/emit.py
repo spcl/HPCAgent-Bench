@@ -1355,6 +1355,11 @@ class CBodyEmitter(BaseEmitter):
         the OLD buffer at every index, which a free+malloc here hands back uninitialised.
         """
         size, c_type, fill = self.deferred_malloc_decls[t]
+        if is_reassign and self.array_shapes.get(t):
+            # The table holds ONE shape per name (the last definition's); a reassign marker names the
+            # shape THIS assignment writes, so a name rebound to arrays of different extents
+            # (gmres: ``y`` is length N, then the length-m lstsq solution) is sized per marker.
+            size = flat_size(tuple(self.array_shapes[t]))
         sizes = self._deferred_alloc_size
         prev = sizes.get(t)
         symbolic_size = any(c.isalpha() for c in size)
