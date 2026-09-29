@@ -22,10 +22,11 @@ import json
 import os
 import pathlib
 import re
+import socket
 import sqlite3
 import subprocess
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import NamedTuple, Protocol
 
 from hpcagent_bench import config, experiment_tags, osinfo, paths
@@ -50,6 +51,7 @@ __all__ = [
     "SCALING_MODES",
     "SHARD_ENV",
     "SNAPSHOT_COMMIT_ENV",
+    "FinalRecord",
     "Identity",
     "Recorded",
     "TrajectoryPoint",
@@ -84,6 +86,7 @@ __all__ = [
     "realized_candidates",
     "record",
     "record_call",
+    "record_final",
     "record_scaling",
     "record_trajectory",
     "rep_tag",
@@ -706,6 +709,20 @@ def attempt_reason(score: Score, verify: VerifyResult | None) -> str:
     return "overfit" if score.public_correct and not score.hidden_correct else "incorrect"
 
 
+class FinalRecord(NamedTuple):
+    """A /submit that is its own final grade (mw4x5, :func:`regrade.submit_grade`): the columns of the
+    ``final`` grade it is also recorded as and its ``grade_cells`` rows, written beside the submit
+    grade with no second timing."""
+
+    values: Mapping[str, results_db.Value]
+    cells: Sequence[Mapping[str, results_db.Value]]
+
+
+#: The columns a submit grade takes from its own final grade, so the two rows state one measurement:
+#: the rule it is credited under and the denominator its inputs agreed on.
+FINAL_SHARED: tuple[str, ...] = ("score_rule", "denominator")
+
+
 class Recorded(NamedTuple):
     """What :func:`record` wrote: ``outcome`` ``submission`` (credited), ``attempts`` or ``skipped``;
     ``detail`` ``clean`` / ``suspect`` or the failed gate; the grade's id (None when skipped)."""
@@ -732,7 +749,7 @@ def credit_values(
         device_runtime=score.device_runtime,
         device=device_plausibility_row(task.residency, task.language),
     )
-    suspect = int(flagged or (verify is not None and verify.suspect))
+    suspect = int(flagged or any(cell.suspect for cell in score.cells) or (verify is not None and verify.suspect))
     values: dict[str, results_db.Value] = {"credited_speedup": float(score.speedup), "suspect": suspect}
     return values, ("submission", "suspect" if suspect else "clean")
 
@@ -751,6 +768,7 @@ def record(
     curves: Sequence[LawCurve] = (),
     tokens: int = 0,
     status: str | None = None,
+    final: FinalRecord | None = None,
 ) -> Recorded:
     """Persist one /submit grade, credited on the judge's OWN verdict.
 
@@ -763,7 +781,8 @@ def record(
     the request's :class:`runner.RunStatus`. ``optimizer`` names a replayed request's origin
     (:data:`ORIGIN_KINDS`), the grade's kind. The delivered source is stored whatever the verdict,
     the timed inputs of a credited grade, and ``curves`` -- the per-law scaling curves the same grade
-    measured -- under the grade (:func:`record_scaling`)."""
+    measured -- under the grade (:func:`record_scaling`). ``final``: the grade is timed under mw4x5, so
+    a credited one is also recorded as its own ``final`` grade, of this grade, in the same transaction."""
     values, (outcome, detail) = credit_values(score, task, verify)
     if outcome != "submission" and not config.get("record.log_attempts", True):
         return Recorded("skipped", "log_attempts disabled", None)
@@ -771,18 +790,46 @@ def record(
     values |= {"status": status, "tokens_so_far": int(tokens), "detail": cap_detail(score.detail) or None}
     kind = ORIGIN_KINDS.get(optimizer or "", "submit")
     benchmark = BenchSpec.load(task.kernel).short_name
+    credited_final = final if outcome == "submission" else None
+    if credited_final is not None:
+        values |= {name: credited_final.values[name] for name in FINAL_SHARED}
     with contextlib.closing(connect(path)) as conn:
         run = open_run(conn, run_id)
         values["call_index"] = results_db.call_index(conn, run, benchmark)
         grade_id, _ts = results_db.add_grade(conn, run, benchmark, kind, ts_ms=now_ms(), values=values)
         store_delivery(conn, grade_id, submission)
-        if outcome == "submission":
+        if credited_final is not None:
+            # One measurement, two rows: the submit grade's inputs are the final grade's own.
+            results_db.add_cells(conn, grade_id, credited_final.cells)
+            record_final(conn, run, benchmark, grade_id, credited_final, task, preset, datatype)
+        elif outcome == "submission":
             results_db.add_cells(conn, grade_id, [cell_values(cell) for cell in score.cells])
         for law in curves:
             if law.curve is not None or law.dropped:
                 record_scaling(conn, grade_id, law.curve, law.mode, dropped=law.dropped)
         conn.commit()
     return Recorded(outcome, detail, grade_id)
+
+
+def record_final(
+    conn: sqlite3.Connection,
+    run: int,
+    benchmark: str,
+    of_grade: int,
+    final: FinalRecord,
+    task: Task,
+    preset: str,
+    datatype: str,
+) -> int:
+    """The ``final`` grade of submit grade ``of_grade`` (``regrade finalize`` writes the same row for a
+    recorded submission, stamped with the same size, datatype, source mode, machine and commit), with
+    one ``grade_cells`` row per timed input; returns its id."""
+    stamp = stamp_values(task, preset, datatype, None)
+    stamp = {name: stamp[name] for name in ("preset", "datatype", "source_mode", "commit_sha")}
+    values = {**final.values, **stamp, "node": socket.gethostname(), "of_grade_id": of_grade}
+    grade_id, _ts = results_db.add_grade(conn, run, benchmark, "final", ts_ms=now_ms(), values=values)
+    results_db.add_cells(conn, grade_id, final.cells)
+    return grade_id
 
 
 def record_call(

@@ -250,7 +250,7 @@ def test_a_submitted_arm_reads_a_snapshot_and_chains_its_finalize_grade(tmp_path
     assert problems.read_text() == (root / "experiments" / arm["PROBLEMS_FILE"]).read_text()
     assert "CPF_DROPIN_DIR" not in (root / "sbatch.env").read_text()
     calls = (root / "sbatch.calls").read_text()
-    assert "--dependency=afterany:4242" in calls and "hpcagent_bench job grade-pending" in calls, calls
+    assert "grade-pending" not in calls, calls
 
 
 def submit_mi200(root: pathlib.Path, model: str, **knobs: str) -> subprocess.CompletedProcess[str]:
