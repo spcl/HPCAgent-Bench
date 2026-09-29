@@ -20,7 +20,7 @@ TOOL = ROOT / "hpcagent_bench" / "harness" / "judge_web_search.py"
 
 
 def load_web_search() -> types.ModuleType:
-    """The module ``experiments/judge_service.py`` imports, so ``isinstance(exc,
+    """The module ``hpcagent_bench/cluster/judge_service.py`` imports, so ``isinstance(exc,
     web_search.NotProvisionedError)`` checks the same class the router would catch."""
     from hpcagent_bench.harness import judge_web_search
 
@@ -153,7 +153,7 @@ UNPROVISIONED_ENV = {"SERPAPI_API_KEY": "", "WEBSEARCH_LLM_BASE_URL": "", "WEBSE
 def test_missing_serpapi_key_raises_not_provisioned_not_a_bare_runtime_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``experiments/judge_service.py`` tells a 'never configured' 503 apart from a 'this call
+    """``hpcagent_bench/cluster/judge_service.py`` tells a 'never configured' 503 apart from a 'this call
     failed' 502 by ``isinstance(exc, NotProvisionedError)`` -- so a config gap must raise THAT
     class, not a plain :class:`RuntimeError` a real SerpAPI/crawl/LLM failure also raises."""
     web_search = load_web_search()

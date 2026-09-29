@@ -295,7 +295,7 @@ def same_rule(table: pd.DataFrame, source: pathlib.Path) -> None:
     if recorded != {score_rule.SCORE_RULE}:
         raise SystemExit(
             f"{source} was scored under {sorted(recorded)}, the figure under {score_rule.SCORE_RULE!r}; "
-            "rebuild it with experiments/paired_arms.py"
+            "rebuild it with statistics/paired_arms.py"
         )
 
 
