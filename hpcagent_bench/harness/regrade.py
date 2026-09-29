@@ -45,7 +45,7 @@ import sys
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from typing import Any
 
-from hpcagent_bench import campaigns, config, frozen_observations, paths
+from hpcagent_bench import campaigns, config, experiment_tags, frozen_observations, paths
 from hpcagent_bench.api import InputMode
 from hpcagent_bench.harness import denominator, metric, native_call, rep_variation, results_db, timing
 from hpcagent_bench.harness.envelope import Submission
@@ -247,7 +247,8 @@ def recorded_arm(path: pathlib.Path) -> str:
 def env_files(arm: str, env_dirs: Iterable[pathlib.Path]) -> Iterator[pathlib.Path]:
     """The env files that describe ``arm``, best first: those named for it (:func:`env_names`), then a
     launch's own render ``.env.<name>-<list>`` when it records one of those names as ``CAMPAIGN_ARM``
-    (``.env.<arm>-skills`` shares the prefix but is another arm)."""
+    (``.env.<arm>-skills`` shares the prefix but is another arm), then one named for an older spelling
+    of it (the registry's arm aliases, :func:`experiment_tags.aliased_arm`: ``.env.cpf-llr-focus40-*``)."""
     dirs = list(env_dirs)
     names = env_names(arm)
     for directory in dirs:
@@ -260,6 +261,11 @@ def env_files(arm: str, env_dirs: Iterable[pathlib.Path]) -> Iterator[pathlib.Pa
             for path in sorted(directory.glob(f".env.{name}-*")):
                 if path.is_file() and recorded_arm(path) in names:
                     yield path
+    for directory in dirs:
+        for path in sorted(directory.glob(".env.*")):
+            spelled = path.name.removeprefix(".env.")
+            if spelled not in names and experiment_tags.aliased_arm(spelled) in names and path.is_file():
+                yield path
 
 
 def arm_env(arm: str, env_dirs: Iterable[pathlib.Path]) -> dict[str, str]:
