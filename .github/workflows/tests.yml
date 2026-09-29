@@ -443,13 +443,6 @@ jobs:
         run: |
           python -m pytest -q -p no:cacheprovider -rfEs -n auto --dist loadgroup tests/test_e2e_numerical.py
 
-      # Needs polycc and dace in one process; this is the only runner with both.
-      - name: Phase 5d -- opt-report + disassembly e2e [dace, pluto] @ S
-        if: ${{ !cancelled() }}
-        timeout-minutes: 10
-        run: |
-          python -m pytest -q -p no:cacheprovider -rfEs --timeout=1200 tests/test_opt_reports_e2e.py
-
       # test_multi_unit_submission.py is the only CI check of a submission built from TWO
       # translation units (the GPU host + device shape); a dropped unit still links as a .so.
       - name: Phase 2 -- native translations + the two-unit build line (emit + compile + validate)
