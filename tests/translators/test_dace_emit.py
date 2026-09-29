@@ -1917,11 +1917,11 @@ def test_a_logical_sparse_matrix_is_lowered_onto_its_own_buffers(short: str) -> 
     assert "A_indptr" in src and "A_indices" in src and "A_data" in src
 
 
-def test_a_buffer_style_sparse_kernel_is_not_lowered() -> None:
-    """spmv names no logical matrix: its body already reads the CSR buffers, and its data-dependent
-    slice is expressible through dace's symbolic shapes. Lowering it would make a variable-length
-    copy dace cannot allocate, so the rule keys off the BODY, not off the manifest block."""
-    kir = kir_for("spmv")
+def test_a_csr_reading_sparse_kernel_is_not_lowered() -> None:
+    """sptrsv_level names no logical matrix: its reference takes L's CSR buffers and walks them
+    itself, so there is nothing to lower, and the rule keys off the BODY, not off the manifest's
+    ``layouts`` block (which it has)."""
+    kir = kir_for("sptrsv_level")
     assert not names_logical_sparse(kir)
 
 
