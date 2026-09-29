@@ -3,11 +3,11 @@
 """Which roster kernels an arm still owes, and the job that reruns them.
 
 ``hpcagent-bench owed collect`` reads every job directory under the run roots. A job's arm is
-``runs.arm`` in its judge shards; an arm, its ``-clean`` rerun and a registry alias are one identity,
-covered by the union of all its jobs, because a rerun runs only the kernels still owed. A kernel is
-delivered when a job graded it: a ``submissions`` row, or an ``attempts`` row the judge graded and
-refused. An ``attempts`` row reasoned ``score_error`` (the judge's own reference failed) and any row
-under the ``adhoc`` run id (no episode) deliver nothing. Every other roster kernel is owed, classed
+``runs.arm`` in its judge shards (results DBs, schema v1); an arm, its ``-clean`` rerun and a registry
+alias are one identity, covered by the union of all its jobs, because a rerun runs only the kernels
+still owed. A kernel is delivered when a job graded it: a credited /submit grade, or one the judge
+graded and refused. A refusal reasoned ``score_error`` (the judge's own reference failed) and any
+grade under the ``adhoc`` run id (no episode) deliver nothing. Every other roster kernel is owed, classed
 by its latest episode's ``tokens.json``: ``budget`` when the agent hit its own time or token cap and
 the job did not cancel it (rerun at a scaled budget), ``infra`` otherwise (rerun as it was).
 
@@ -25,13 +25,13 @@ import json
 import math
 import os
 import pathlib
-import sqlite3
 import subprocess
 import sys
 from collections.abc import Iterable, Sequence
 
 from hpcagent_bench import experiment_tags, tags
 from hpcagent_bench.frozen_observations import ADHOC_RUN_ID
+from hpcagent_bench.harness import results_db
 from hpcagent_bench.stats.population import HARNESS_FAULT_REASON
 
 __all__ = [
@@ -48,14 +48,12 @@ __all__ = [
     "cmd_run",
     "collect_jobs",
     "delivered",
-    "has_table",
     "identity",
     "job_arm",
     "kernel_stem",
     "latest_classes",
     "launch_files",
     "main",
-    "open_shard",
     "owed",
     "read_env",
     "rerun_problems",
@@ -94,31 +92,19 @@ class Job:
     arm: str
 
 
-def open_shard(path: pathlib.Path) -> sqlite3.Connection:
-    return sqlite3.connect(f"file:{path}?mode=ro&immutable=1", uri=True)
-
-
-def has_table(conn: sqlite3.Connection, name: str) -> bool:
-    return conn.execute("select 1 from sqlite_master where type = 'table' and name = ?", (name,)).fetchone() is not None
-
-
-def shard_rows(job_dir: pathlib.Path, table: str, query: str, args: tuple = ()) -> list[tuple]:
-    """``query`` over every shard of ``job_dir`` that has ``table``."""
-    rows: list[tuple] = []
+def shard_rows(job_dir: pathlib.Path, query: str, args: tuple[object, ...] = ()) -> list[tuple[object, ...]]:
+    """``query`` over every judge shard of ``job_dir``."""
+    rows: list[tuple[object, ...]] = []
     for path in sorted(job_dir.glob(SHARD_GLOB)):
-        conn = open_shard(path)
-        try:
-            if has_table(conn, table):
-                rows.extend(conn.execute(query, args))
-        finally:
-            conn.close()
+        with results_db.reading(path) as conn:
+            rows.extend(tuple(row) for row in conn.execute(query, args))
     return rows
 
 
 def job_arm(job_dir: pathlib.Path) -> str:
     """The one arm ``job_dir`` recorded; empty when it has no shard. Raises on a shard with no arm or
     a job that recorded several."""
-    arms = {arm for (arm,) in shard_rows(job_dir, "runs", "select distinct arm from runs") if arm}
+    arms = {str(arm) for (arm,) in shard_rows(job_dir, "select distinct arm from runs") if arm}
     if len(arms) > 1:
         raise SystemExit(f"{job_dir}: runs.arm names several arms: {sorted(arms)}")
     if not arms and any(job_dir.glob(SHARD_GLOB)):
@@ -149,16 +135,15 @@ def collect_jobs(roots: Iterable[pathlib.Path], excluded: set[str]) -> tuple[dic
 
 def delivered(job_dir: pathlib.Path) -> set[str]:
     """Every kernel ``job_dir`` graded for an episode: a submission, or a refused real attempt."""
-    submitted = shard_rows(
-        job_dir, "submissions", "select distinct benchmark from submissions where run_id is not ?", (ADHOC_RUN_ID,)
-    )
-    refused = shard_rows(
+    kinds = ", ".join("?" * len(results_db.SUBMIT_KINDS))
+    graded = shard_rows(
         job_dir,
-        "attempts",
-        "select distinct benchmark from attempts where run_id is not ? and reason is not ?",
-        (ADHOC_RUN_ID, HARNESS_FAULT_REASON),
+        "select distinct g.benchmark from grades g join runs r on r.id = g.run_id where r.label != ? "
+        f"and g.kind in ({kinds}) and (g.credited_speedup is not null or (g.reason is not null and g.reason != ?)) "
+        "and g.id not in (select grade_id from disqualifications)",
+        (ADHOC_RUN_ID, *results_db.SUBMIT_KINDS, HARNESS_FAULT_REASON),
     )
-    return {benchmark for (benchmark,) in [*submitted, *refused]}
+    return {str(benchmark) for (benchmark,) in graded}
 
 
 def kernel_stem(kernel: object) -> str:

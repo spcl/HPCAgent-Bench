@@ -18,7 +18,7 @@ from collections.abc import Iterator
 
 import pytest
 
-from hpcagent_bench.harness import recording, scaling_grade
+from hpcagent_bench.harness import recording, regrade, scaling_grade
 from tests.test_scaling_grade import ARM, arm_env_dir, hip_submission, record
 
 
@@ -47,6 +47,7 @@ def judge_db_fixture(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) ->
     """One mlscale job's judge shard, recorded under ARM (as tests/test_scaling_grade.py lays it out)."""
     monkeypatch.setenv("HPCAGENT_BENCH_RECORD_EXPERIMENT", "mlscale")
     monkeypatch.setenv("HPCAGENT_BENCH_RECORD_ARM", ARM)
+    monkeypatch.setenv(recording.JOB_ENV, "650000")
     db = tmp_path / "runs" / "mlscale-20260924" / "650000" / "judge" / "rank-0" / "hpcagent_bench0.db"
     db.parent.mkdir(parents=True)
     return db
@@ -62,7 +63,7 @@ def env_dir(tmp_path: pathlib.Path, single: str | None) -> pathlib.Path:
 
 
 def graded_sources(items: list[scaling_grade.Item]) -> list[str]:
-    return [pathlib.Path(item.source).read_text(encoding="utf-8") for item in items]
+    return [regrade.submission_of(item).source for item in items]
 
 
 def multi_lines(problems: list[str]) -> list[str]:
@@ -95,12 +96,15 @@ def test_every_repeat_of_a_kernel_is_its_own_episode(judge_db: pathlib.Path, tmp
     assert f"{ARM}.n0.p0.w0" in line
 
 
-def test_a_resubmitted_arm_grades_the_latest_job(judge_db: pathlib.Path, tmp_path: pathlib.Path) -> None:
+def test_a_resubmitted_arm_grades_the_latest_job(
+    judge_db: pathlib.Path, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A resubmitted arm reuses its run_ids in a new job directory: that job's first row decides."""
     run_id = f"{ARM}.n0.p0.w0"
     record(judge_db, hip_submission("// first job"), run_id=run_id)
     rerun = judge_db.parents[3] / "650001" / "judge" / "rank-0" / judge_db.name
     rerun.parent.mkdir(parents=True)
+    monkeypatch.setenv(recording.JOB_ENV, "650001")
     record(rerun, hip_submission("// rerun job"), run_id=run_id)
     record(rerun, hip_submission("// rerun job again"), run_id=run_id)
     items, problems = scaling_grade.build_worklist([judge_db, rerun], [env_dir(tmp_path, "1")], "mlscale")

@@ -12,13 +12,13 @@ and rows are never deleted to force a rerun.
 import csv
 import importlib.util
 import pathlib
-import sqlite3
 import sys
 import types
 
 import pytest
 
 from hpcagent_bench import campaigns
+from tests import results_seed
 
 EXPERIMENTS = pathlib.Path(__file__).resolve().parents[1] / "experiments"
 SCRIPT = EXPERIMENTS / "remaining_kernels.py"
@@ -52,20 +52,9 @@ def write_table(path: pathlib.Path, rows: list[tuple[str, str, str]]) -> pathlib
 
 def job_with_coverage(root: pathlib.Path, job_id: str, arm: str, benchmarks: list[str]) -> None:
     """A job directory whose judge shard says every name in ``benchmarks`` was submitted."""
-    shard = root / job_id / "judge" / "rank-0"
-    shard.mkdir(parents=True)
-    conn = sqlite3.connect(shard / "hpcagent_bench0.db")
-    with conn:
-        conn.execute("create table runs (run_id text, arm text)")
-        conn.execute("create table submissions (run_id text, benchmark text, optimizer text, ts integer)")
-        conn.execute("create table attempts (run_id text, benchmark text, reason text, ts integer)")
-        conn.execute("insert into runs values (?, ?)", (f"{arm}.n0.p0.w0", arm))
-        for name in benchmarks:
-            conn.execute(
-                "insert into submissions values (?, ?, ?, ?)",
-                (f"{arm}.n0.p0.w0", name, "kimi27sglang", FAR_FUTURE_TS_MS),
-            )
-    conn.close()
+    shard = root / job_id / "judge" / "rank-0" / "hpcagent_bench0.db"
+    for name in benchmarks:
+        results_seed.submission(shard, f"{arm}.n0.p0.w0", name, FAR_FUTURE_TS_MS, job=int(job_id))
 
 
 def test_a_listed_kernel_is_owed_although_its_rows_say_done(

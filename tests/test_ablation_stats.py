@@ -12,6 +12,7 @@ ranks 1,2,3 positive and rank 4 negative has 7 of the 16 sign assignments at or 
 as success 0 with a BLANK speedup, never as a zero.
 """
 
+import contextlib
 import csv
 import importlib.util
 import itertools
@@ -27,7 +28,7 @@ from tests.conftest import script_path
 import pytest
 
 from hpcagent_bench import observations_extract
-from hpcagent_bench.harness import recording
+from hpcagent_bench.harness import recording, results_db
 
 EXAMPLE = pathlib.Path(__file__).resolve().parents[1] / "experiments"
 
@@ -116,33 +117,31 @@ def iteration_counts_fixture() -> ModuleType:
 
 
 def seed_db(path: pathlib.Path, submissions: list[tuple], attempts: tuple[str, ...] = ()) -> None:
-    """A merged-results-shaped DB: ``(benchmark, ts, speedup[, suspect])`` rows plus failed-grade
+    """A merged results DB: ``(benchmark, ts, speedup[, suspect])`` credited grades plus rejected-grade
     kernel names. ``suspect`` defaults to 0, the judge's value for a plausible speedup.
     """
-    conn = recording.connect(str(path))
-    try:
-        # the identity is one runs row per run, not a column on every measurement row
-        conn.execute(
-            "INSERT OR IGNORE INTO runs(run_id, experiment, model, language, device, packet, rep, arm) "
-            "VALUES ('run', 'ablation', 'qwen38', 'c', 'cpu', '', 1, 'ablation-qwen38-c')"
+    with contextlib.closing(recording.connect(str(path))) as conn:
+        # the identity is one arm row, not a column on every grade
+        results_db.ensure_arm(
+            conn, results_db.Arm("ablation-qwen38-c", "c", "cpu", experiment="ablation", model="qwen38")
         )
+        run = results_db.ensure_run(conn, "ablation-qwen38-c", "run", None)
+        stamp = {"preset": "S", "datatype": "float64", "source_mode": "restricted", "baseline": "c"}
         for row in submissions:
             benchmark, ts, speedup = row[:3]
             suspect = row[3] if len(row) > 3 else 0
-            conn.execute(
-                "INSERT INTO submissions(run_id, ts, benchmark, preset, datatype, "
-                "source_mode, optimizer, baseline, speedup, suspect) VALUES (?,?,?,?,?,?,?,?,?,?)",
-                ("run", ts, benchmark, "S", "float64", "restricted", "agent", "c", speedup, suspect),
-            )
+            credited = {
+                "build_ok": 1,
+                "correct": 1,
+                "speedup": speedup,
+                "credited_speedup": speedup,
+                "suspect": suspect,
+            }
+            results_db.add_grade(conn, run, benchmark, "submit", ts_ms=ts, values=stamp | credited)
         for benchmark in attempts:
-            conn.execute(
-                "INSERT INTO attempts(run_id, ts, benchmark, preset, datatype, "
-                "source_mode, build_ok, correct, reason) VALUES (?,?,?,?,?,?,?,?,?)",
-                ("run", 1, benchmark, "S", "float64", "restricted", 0, 0, "build"),
-            )
+            rejected = {"build_ok": 0, "correct": 0, "reason": "build"}
+            results_db.add_grade(conn, run, benchmark, "submit", ts_ms=1, values=stamp | rejected)
         conn.commit()
-    finally:
-        conn.close()
 
 
 def read_csv(path: pathlib.Path) -> list[dict[str, str]]:
@@ -224,9 +223,9 @@ def test_a_kernel_whose_only_row_is_suspect_is_censored_not_dropped(ablation_sta
     assert (censored["a_success"], censored["a_speedup"]) == ("0", "")
 
 
-def test_a_db_without_the_suspect_column_warns_and_still_runs(ablation_stats, tmp_path) -> None:
-    """An old DB predates the flag; refusing it would strand every campaign recorded before it, so
-    the filter is dropped and the operator is TOLD the numbers are unfiltered."""
+def test_a_legacy_db_is_refused_naming_the_migration(ablation_stats, tmp_path) -> None:
+    """A DB of the legacy layout is converted by scripts/migrate_db.py first; read as it is, its
+    numbers would silently mean something else."""
     db = tmp_path / "legacy.db"
     conn = sqlite3.connect(str(db))
     try:
@@ -237,9 +236,8 @@ def test_a_db_without_the_suspect_column_warns_and_still_runs(ablation_stats, tm
         conn.commit()
     finally:
         conn.close()
-    speedups, seen = ablation_stats.load_arm("a", str(db), "best")
-    assert speedups == {"gemm": 2.0}
-    assert seen == {"gemm"}
+    with pytest.raises(SystemExit, match="migrate_db"):
+        ablation_stats.load_arm("a", str(db), "best")
 
 
 def test_problems_below_the_observed_universe_is_rejected(ablation_stats, tmp_path) -> None:
@@ -392,7 +390,7 @@ def test_duplicate_arm_names_are_rejected(ablation_stats, tmp_path) -> None:
 def test_non_results_db_names_the_path(ablation_stats, tmp_path) -> None:
     empty = tmp_path / "empty.db"
     empty.touch()
-    with pytest.raises(SystemExit, match="submissions"):
+    with pytest.raises(SystemExit, match="empty.db: not a results DB"):
         ablation_stats.main([f"--arm=a={empty}", f"--out={tmp_path / 'x'}"])
 
 
@@ -580,23 +578,17 @@ def test_iteration_counts_without_agents_dir_names_the_path(iteration_counts, tm
 
 
 def seed_calls(path: pathlib.Path, rows: tuple[tuple[str, str, int, int], ...]) -> None:
-    """``(benchmark, run_id, round, cumulative_tokens)`` rows on the calls table."""
-    conn = recording.connect(str(path))
-    try:
+    """``(benchmark, run_id, call index, cumulative_tokens)`` /score grades."""
+    with contextlib.closing(recording.connect(str(path))) as conn:
+        results_db.ensure_arm(
+            conn, results_db.Arm("ablation-qwen38-c", "c", "cpu", experiment="ablation", model="qwen38")
+        )
+        stamp = {"preset": "S", "datatype": "float64", "source_mode": "restricted", "speedup": 1.0, "correct": 1}
         for benchmark, run_id, round_index, tokens in rows:
-            conn.execute(
-                "INSERT OR IGNORE INTO runs(run_id, experiment, model, language, device, packet, rep, arm) "
-                "VALUES (?, 'ablation', 'qwen38', 'c', 'cpu', '', 1, 'ablation-qwen38-c')",
-                (run_id,),
-            )
-            conn.execute(
-                "INSERT INTO calls(run_id, ts, benchmark, preset, datatype, source_mode, "
-                "optimizer, round, tokens, speedup, correct) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                (run_id, 1, benchmark, "S", "float64", "restricted", "agent", round_index, tokens, 1.0, 1),
-            )
+            run = results_db.ensure_run(conn, "ablation-qwen38-c", run_id, None)
+            values = stamp | {"call_index": round_index, "tokens_so_far": tokens}
+            results_db.add_grade(conn, run, benchmark, "score", ts_ms=round_index, values=values)
         conn.commit()
-    finally:
-        conn.close()
 
 
 def test_a_kernels_cost_is_its_episode_peaks_summed_not_its_rows(ablation_stats, tmp_path) -> None:
@@ -610,16 +602,11 @@ def test_a_kernels_cost_is_its_episode_peaks_summed_not_its_rows(ablation_stats,
     assert costs["k2"] == pytest.approx(7.0)
 
 
-def test_a_db_with_no_calls_table_reports_no_cost_rather_than_zero(ablation_stats, tmp_path) -> None:
-    """A pre-calls DB has no cost evidence. Zero tokens would read as a free intervention."""
+def test_a_db_with_no_reported_tokens_reports_no_cost_rather_than_zero(ablation_stats, tmp_path) -> None:
+    """A DB whose calls reported no spend has no cost evidence. Zero tokens would read as a free
+    intervention."""
     db = tmp_path / "b.db"
     seed_db(db, [("k1", 1, 2.0)])
-    conn = sqlite3.connect(db)
-    try:
-        conn.execute("DROP TABLE IF EXISTS calls")
-        conn.commit()
-    finally:
-        conn.close()
     assert ablation_stats.load_arm_costs("b", str(db)) == {}
 
 
