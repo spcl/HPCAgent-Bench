@@ -39,6 +39,8 @@ import argparse
 import dataclasses
 import enum
 import fcntl
+import functools
+import importlib
 import json
 import os
 import pathlib
@@ -91,6 +93,7 @@ __all__ = [
     "conform",
     "coverage",
     "file_count",
+    "import_torch",
     "kernelbench_workload",
     "locked",
     "main",
@@ -102,16 +105,19 @@ __all__ = [
     "reference_outputs",
     "reference_source",
     "run_job",
+    "shipped_data_workload",
     "shipped_samples",
     "shipped_workload",
     "slot_job",
     "stage",
     "time_samples",
     "timed_calls",
+    "to_numpy",
     "warm",
     "warm_job",
     "warm_kernel",
     "work_root",
+    "workload_builder",
 ]
 
 #: torch device -> whether the compiled graph FREEZES the model's weights. On the CPU Inductor tunes
@@ -334,10 +340,38 @@ def kernelbench_workload(job: Job, spec: BenchSpec, torch_mod: ModuleType, devic
 
 
 def shipped_workload(job: Job, spec: BenchSpec, torch_mod: ModuleType, device: str) -> Workload:
-    """The kernel's own ``reference`` on one ``make_inputs`` draw at ``job.params``, reused every call."""
+    """The kernel's own ``reference`` on one ``make_inputs`` draw at ``job.params``, reused every call:
+    the distributed grade's one-device denominator (:func:`shipped_samples`)."""
     module = torch_reference.load_torch_module(spec)
     inputs = list(torch_reference.as_tuple(module.make_inputs(dict(job.params or {}), int(job.seed), device)))
     return Workload(module.reference, lambda _i: inputs, tuple(spec.output_args))
+
+
+def shipped_data_workload(job: Job, spec: BenchSpec, torch_mod: ModuleType, device: str) -> Workload:
+    """The kernel's own ``reference`` on this grade's inputs (:func:`kernelbench_adapter.reference_arguments`:
+    the input arrays positionally, each keyword-only scalar by its manifest name); call ``i`` stages a
+    fresh copy of repeat ``i``'s arrays. The scalars are the same every repeat, so they are bound once."""
+    data = dict(job.data or {})
+    module = torch_reference.load_torch_module(spec)
+    positional, keyword = kernelbench_adapter.reference_arguments(spec, module.reference)
+    fn = functools.partial(module.reference, **{name: kernelbench_adapter.scalar(data[name]) for name in keyword})
+
+    def arguments(i: int) -> list[Any]:
+        source = job.rep_data(i) if job.rep_data is not None else data
+        return [stage(torch_mod, source[name], device) for name in positional]
+
+    return Workload(fn, arguments, tuple(spec.output_args))
+
+
+def workload_builder(job: Job, spec: BenchSpec) -> Callable[[Job, BenchSpec, ModuleType, str], Workload]:
+    """How ``job`` builds its workload: a grade's own inputs (``data``) go to the kernel's reference, its own
+    ``_torch.py`` or the bound KernelBench model; a problem size (``params``) to ``make_inputs``."""
+    shipped = reference_source(spec) is Source.SHIPPED
+    if job.data is None:
+        if not shipped:
+            raise TorchBaselineUnavailable(f"{spec.short_name}: no _torch.py make_inputs to time at a size alone")
+        return shipped_workload
+    return shipped_data_workload if shipped else kernelbench_workload
 
 
 def stage(torch_mod: ModuleType, value: object, device: str) -> object:
@@ -400,11 +434,7 @@ def outputs_of(torch_mod: ModuleType, result: object, workload: Workload, job: J
     declared = job.data or {}
     out: dict[str, np.ndarray] = {}
     for name, value in zip(workload.output_names, values):
-        array = (
-            kernelbench_adapter.from_torch(torch_mod, cast("torch.Tensor", value))
-            if isinstance(value, torch_mod.Tensor)
-            else np.asarray(value)
-        )
+        array = to_numpy(torch_mod, value)
         out[name] = conform(array, declared.get(name, array))
     return out
 
@@ -417,8 +447,7 @@ def measure(job: Job, torch_mod: ModuleType) -> Measured:
         raise TorchBaselineUnavailable(f"{spec.short_name}: {job.kind} needs a GPU and torch sees none")
     if device == "cpu":
         torch_mod.set_num_threads(max(len(job.cpus), 1))
-    build = shipped_workload if reference_source(spec) is Source.SHIPPED else kernelbench_workload
-    workload = build(job, spec, torch_mod, device)
+    workload = workload_builder(job, spec)(job, spec, torch_mod, device)
     compiled = compile_reference(torch_mod, workload, spec, device)
     samples, result = timed_calls(torch_mod, compiled, workload, job, device)
     outputs = outputs_of(torch_mod, result, workload, job) if job.want_outputs else {}
@@ -429,8 +458,7 @@ def run_job(job: Job) -> Measured:
     """The child's entry point: pin, seed the cache, measure, publish what the compile added. A missing
     reference or an Inductor refusal comes back as ``refused``; anything else is the child's failure."""
     pin_child(job)
-    import torch
-
+    torch = import_torch()
     layer = CacheLayer.for_key(cache_key(job.kind, torch))
     layer.seed()
     torch_reference.configure_inductor(layer.work)
@@ -449,9 +477,7 @@ def run_job(job: Job) -> Measured:
 
 def publish_layer(kind: str) -> None:
     """Child entry point: archive the node's working cache of ``kind`` (the key needs torch's device)."""
-    import torch
-
-    CacheLayer.for_key(cache_key(kind, torch)).publish()
+    CacheLayer.for_key(cache_key(kind, import_torch())).publish()
 
 
 # ---------------------------------------------------------------- the grading process
@@ -517,6 +543,20 @@ def reference_outputs(spec: BenchSpec, data: Mapping[str, Any], baseline: str) -
     equivalence tests hold to the numpy reference."""
     job = slot_job(spec, baseline, repeat=1, warmup=0, data=dict(data), want_outputs=True)
     return child_result(job).outputs
+
+
+@functools.lru_cache(maxsize=1, typed=True)
+def import_torch() -> ModuleType:
+    """torch, imported on first use: only a child (or a test) ever holds it, never the grading process."""
+    return importlib.import_module("torch")
+
+
+def to_numpy(torch_mod: ModuleType, value: object) -> np.ndarray:
+    """A torch return value as host numpy (a storage-only float in its ``ml_dtypes`` dtype), or anything
+    that already is an array."""
+    if isinstance(value, torch_mod.Tensor):
+        return kernelbench_adapter.from_torch(torch_mod, cast("torch.Tensor", value))
+    return np.asarray(value)
 
 
 def conform(value: np.ndarray, declared: object) -> np.ndarray:
