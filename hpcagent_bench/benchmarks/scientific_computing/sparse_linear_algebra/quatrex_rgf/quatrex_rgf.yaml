@@ -21,7 +21,7 @@ parameters:
   XL:
     BS: 64
     NB: 32
-    NE: 144
+    NE: 48
 init:
   input_args:
   - BS
