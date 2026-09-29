@@ -20,7 +20,7 @@
 #   6  PETSc + SLEPc                its OWN layer -- it pulls hypre/METIS/ParMETIS/Scotch and
 #                                   builds against the vendor stack, so nothing downstream of it
 #                                   may invalidate it
-#   7  OpenMPI, MKL, tblis, HPTT, PAPI, Pluto
+#   7  OpenMPI, tblis, HPTT, PAPI, Pluto
 #   8  python frameworks            moves with pyproject.toml (the `amd` extra)
 #   9  dace @ extended              moves whenever the branch moves
 #  10  node, claude-code, harness venvs, final gate (tool scripts are bound at launch)
@@ -605,7 +605,6 @@ ENV PATH=/opt/gcc/bin:/opt/view/bin:/opt/papi/bin:/opt/rocm/bin:${PATH} \
     OPENBLAS_DIR=/opt/view \
     HPTT_ROOT=/usr/local \
     TBLIS_ROOT=/usr/local \
-    MKLROOT=/opt/intel-mkl \
     OPENMPI_ROOT=/opt/openmpi \
     PAPI_ROCM_ROOT=/opt/rocm \
     PAPI_ROCMSMI_ROOT=/opt/rocm
@@ -812,16 +811,111 @@ RUN set -eux; \
     true
 
 # ---------------------------------------------------------------------------------------------
-# 8. The two stacks that must stay OUT of that environment, plus the two source-built libraries.
+# 7b. The llvm OpenMP context's library variants (hpcagent_bench/omp_context.py).
 #
-# OpenMPI and Intel MKL each collide with something the environment already provides -- OpenMPI
-# with mpich over `mpi`, MKL with OpenBLAS over `blas`/`lapack` -- so under `unify: true` they
-# cannot share it. They are installed standalone and reached through a fixed symlink. OpenMPI's
-# bin deliberately does NOT go on PATH, so bare `mpicc` stays mpich; the `ref_openmpi` and
-# `intel_mkl_openmpi` environments find it through OPENMPI_ROOT.
+# A process maps ONE OpenMP runtime, and clang, flang and hipcc cannot use libgomp, so the llvm family runs in
+# a context of its own: libomp, and every library of the gnu view that links -- or, through OpenBLAS, reaches --
+# an OpenMP runtime built AGAIN by the llvm compiler, same versions, variants and sonames, into
+# /opt/omp/llvm/view (containers/lib/omp_contexts.sh links their shared libraries into the context's lib/).
+# numpy and scipy were built once, against libopenblas.so.0 by soname, so they pick the variant of the context
+# they run in through LD_LIBRARY_PATH.
 #
-# MKL ships because intel_mkl / intel_mkl_mpich / intel_mkl_openmpi exist and this is x86_64.
-# OpenBLAS stays the SELECTED BLAS.
+# shared_linking: runpath, unlike the primary environment: an RPATH (spack's default) is searched BEFORE
+# LD_LIBRARY_PATH and would pin each variant to the libomp of whichever llvm built it. The context's lib/
+# names the one libomp every variant maps.
+#
+# `packages:` requires llvm ONLY of the packages that link or reach an OpenMP runtime; everything they need
+# that maps none (METIS, Scotch, HDF5, MPICH ...) is the gnu build installed above, reused. A package that
+# fails to build with llvm fails this layer: it is then reported, and the catalog record
+# (hpcagent_bench/omp_catalog.py) refuses it to llvm-family submissions rather than the image dropping it.
+ENV OMP_LLVM_ENV_DIR=/opt/omp/llvm/env
+RUN set -eux; \
+    spack="${SPACK_ROOT}/bin/spack"; \
+    "${spack}" compiler find --scope site "$("${spack}" location -i "llvm@${LLVM_VERSION}")"; \
+    mkdir -p "${OMP_LLVM_ENV_DIR}"; \
+    printf '%s\n' \
+      'spack:' \
+      '  concretizer:' \
+      '    unify: true' \
+      '  config:' \
+      '    shared_linking:' \
+      '      type: runpath' \
+      '      bind: false' \
+      '  packages:' \
+      '    blas:' \
+      '      require: [openblas]' \
+      '    lapack:' \
+      '      require: [openblas]' \
+      '    openblas:' \
+      '      variants: threads=openmp +fortran +dynamic_dispatch' \
+      '      require: ["%llvm"]' \
+      '    netlib-scalapack:' \
+      '      require: ["%llvm"]' \
+      '    fftw:' \
+      '      require: ["%llvm"]' \
+      '    suite-sparse:' \
+      '      require: ["%llvm"]' \
+      '    superlu:' \
+      '      require: ["%llvm"]' \
+      '    superlu-dist:' \
+      '      require: ["%llvm"]' \
+      '    mumps:' \
+      '      require: ["%llvm"]' \
+      '    strumpack:' \
+      '      require: ["%llvm"]' \
+      '    butterflypack:' \
+      '      require: ["%llvm"]' \
+      '    hypre:' \
+      '      require: ["%llvm"]' \
+      '    arpack-ng:' \
+      '      require: ["%llvm"]' \
+      '    magma:' \
+      '      require: ["%llvm"]' \
+      '    sundials:' \
+      '      require: ["%llvm"]' \
+      '    petsc:' \
+      '      require: ["%llvm"]' \
+      '    slepc:' \
+      '      require: ["%llvm"]' \
+      '  specs:' \
+      '  - openblas@0.3.30' \
+      '  - netlib-scalapack' \
+      '  - fftw +mpi +openmp precision=float,double,long_double' \
+      '  - suite-sparse +openmp' \
+      '  - superlu' \
+      "  - superlu-dist +openmp +parmetis +rocm amdgpu_target=$(echo "${ROCM_ARCH}" | tr ";" ",")" \
+      '  - mumps +mpi +metis +parmetis +scotch +ptscotch +openmp +shared' \
+      "  - strumpack +mpi +openmp +parmetis +scotch ~cuda +rocm amdgpu_target=$(echo "${ROCM_ARCH}" | tr ";" ",")" \
+      '  - hypre +mpi +openmp' \
+      '  - arpack-ng +mpi +shared' \
+      "  - magma ~cuda +rocm amdgpu_target=$(echo "${ROCM_ARCH}" | tr ";" ",") +fortran" \
+      "  - sundials +openmp ~cuda +rocm amdgpu_target=$(echo "${ROCM_ARCH}" | tr ";" ",")" \
+      "  - petsc +mpi +metis +hypre +mumps +superlu-dist +strumpack +suite-sparse +scalapack +hdf5 +fftw +rocm amdgpu_target=$(echo "${ROCM_ARCH}" | tr ";" ",") +shared" \
+      '  - slepc +arpack' \
+      '  view:' \
+      '    default:' \
+      '      root: /opt/omp/llvm/view' \
+      '      link: roots' \
+      '      link_type: symlink' \
+      > "${OMP_LLVM_ENV_DIR}/spack.yaml"; \
+    "${spack}" -e "${OMP_LLVM_ENV_DIR}" concretize -f | tail -60; \
+    "${spack}" -e "${OMP_LLVM_ENV_DIR}" install --fail-fast; \
+    if [ -d /spack-buildcache ]; then \
+      "${spack}" -e "${OMP_LLVM_ENV_DIR}" buildcache push --unsigned --update-index /spack-buildcache || true; \
+    fi; \
+    "${spack}" clean --stage; \
+    ls /opt/omp/llvm/view/lib/libopenblas.so
+
+# ---------------------------------------------------------------------------------------------
+# 8. The stack that must stay OUT of that environment, plus the two source-built libraries.
+#
+# OpenMPI collides with mpich over `mpi`, so under `unify: true` it cannot share the environment. It is
+# installed standalone and reached through a fixed symlink. Its bin deliberately does NOT go on PATH, so
+# bare `mpicc` stays mpich; the `ref_openmpi` environment finds it through OPENMPI_ROOT.
+#
+# Intel MKL is NOT shipped: its threading layer is Intel's libiomp5, a second OpenMP runtime that no
+# context of this image runs on (docs/anti_cheat.md, "Judge fault: a second OpenMP runtime"). OpenBLAS is the
+# BLAS.
 #
 # `+openshmem` is not a request for OpenSHMEM. Spack only ever ADDS `--enable-oshmem`, never
 # `--disable-oshmem`, and OpenMPI 5 builds OSHMEM whenever an SPML is present -- `fabrics=ucx`
@@ -832,14 +926,9 @@ RUN set -eux; \
     spack="${SPACK_ROOT}/bin/spack"; \
     "${spack}" install --fail-fast \
       "openmpi@5 +rocm +openshmem amdgpu_target=$(echo "${ROCM_ARCH}" | tr ";" ",") fabrics=ucx %gcc@${GCC_VERSION} ^ucx +rocm"; \
-    "${spack}" install --fail-fast "intel-oneapi-mkl %gcc@${GCC_VERSION}"; \
     "${spack}" clean --stage; \
     ln -sfn "$("${spack}" location -i openmpi)" /opt/openmpi; \
-    mkl_root="$(ls -d "$("${spack}" location -i intel-oneapi-mkl)"/mkl/* | tail -1)"; \
-    ln -sfn "${mkl_root}" /opt/intel-mkl; \
     test -x /opt/openmpi/bin/mpicc; \
-    test -f /opt/intel-mkl/include/mkl.h; \
-    ls /opt/intel-mkl/lib/libmkl_core.so*; \
     # Gate, the last spack install above: with a pinned target every prefix sits in its dir.
     if [ -n "${SPACK_TARGET}" ]; then \
       stray="$(ls /opt/spack-install | grep -vx -e bin -e "linux-${SPACK_TARGET}" || true)"; \
@@ -1432,8 +1521,18 @@ RUN set -eux; \
 # One OpenMP runtime file, LAST: every layer above that can install a wheel bundling its own libgomp
 # (torch, jax, cupy, scikit-learn, xgboost...) has run, so nothing after this reintroduces a copy.
 # containers/images/verify_image.py re-checks it in the finished image.
-COPY containers/lib/one_openmp.sh containers/lib/one_openmp_gate.py containers/lib/openmp_runtimes.py /tmp/one-openmp/
-RUN sh /tmp/one-openmp/one_openmp.sh /opt/view && rm -rf /tmp/one-openmp
+COPY containers/lib/one_openmp.sh containers/lib/one_openmp_gate.py containers/lib/openmp_runtimes.py \
+     containers/lib/omp_contexts.sh containers/lib/omp_context_gate.py containers/lib/omp_context_scan.py \
+     containers/lib/openmp_probe.c containers/lib/openmp_probe.f90 /tmp/one-openmp/
+# ... then the OpenMP contexts (containers/lib/omp_contexts.sh): gnu, llvm, each gated in its own process and
+# scanned so that no library on disk maps another family's runtime. verify_image.py runs the same again.
+RUN set -eux; \
+    sh /tmp/one-openmp/one_openmp.sh /opt/view; \
+    sh /tmp/one-openmp/omp_contexts.sh /opt/view /opt/omp/llvm/view; \
+    python3 /tmp/one-openmp/omp_context_scan.py; \
+    python3 /tmp/one-openmp/omp_context_gate.py --context gnu --wheels --torch; \
+    python3 /tmp/one-openmp/omp_context_gate.py --context llvm --blas-in-context; \
+    rm -rf /tmp/one-openmp
 
 # Drop the build-time mirror rewrite from the SHIPPED image.
 COPY containers/lib/git_mirror.sh /tmp/git_mirror.sh
@@ -1547,3 +1646,9 @@ leaked = [str(p) for p in pathlib.Path("/").rglob("hidden_tests") if "proc" not 
 assert not leaked, f"hidden tests leaked into the judge image: {leaked}"
 print("judge stage OK:", hpcagent_bench.__file__)
 PY
+
+# Which OpenMP runtimes each catalog library's build maps, per context (hpcagent_bench/omp_catalog.py): a
+# library that would put a second runtime in a family's grading child is refused to that family up front.
+# numpy's BLAS stack must be served everywhere, so a context that cannot serve it fails the build here.
+RUN python3 -m hpcagent_bench.omp_catalog --write --check
+

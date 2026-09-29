@@ -41,6 +41,7 @@ __all__ = [
     "TERM_GRACE_S",
     "RunResult",
     "abandoned_by",
+    "child_environment",
     "child_main",
     "die_with_parent",
     "drain_progress",
@@ -261,6 +262,33 @@ def die_with_parent() -> None:
         os._exit(0)
 
 
+#: Serializes :func:`child_environment`: the spawned child copies ``os.environ`` at ``p.start()``, and the
+#: judge runs grades on several threads, so two children's environments must not interleave.
+CHILD_ENV_LOCK = threading.Lock()
+
+
+@contextlib.contextmanager
+def child_environment(env: Mapping[str, str]) -> Iterator[None]:
+    """``env`` in ``os.environ`` for the span of one child START, then the previous values again.
+
+    A spawned child execs a fresh interpreter, and the dynamic loader reads ``LD_LIBRARY_PATH`` at exec:
+    this is how a child gets an OpenMP context (:mod:`hpcagent_bench.omp_context`) without changing the
+    parent, whose own libraries are already mapped. ``Process.start`` returns only after the child has
+    exec'd, so the environment is restored before anything else can see it; the lock keeps another
+    thread's start from inheriting it."""
+    with CHILD_ENV_LOCK:
+        saved = {key: os.environ.get(key) for key in env}
+        os.environ.update(env)
+        try:
+            yield
+        finally:
+            for key, value in saved.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+
 def process_context(method: str) -> ProcessContext:
     """The start-method context named by ``method``, checked to carry the process factory this
     module forks through. An unknown method raises out of ``get_context`` itself."""
@@ -436,18 +464,22 @@ def run_forked[**P, ResultT](
     stream_progress: bool = False,
     mp_context: str | None = None,
     seal: SealPlan | None = None,
+    env: Mapping[str, str] | None = None,
     **kwargs: P.kwargs,
 ) -> RunResult[ResultT]:
     """Run ``fn(*args, **kwargs)`` in a forked child; returns a failed RunResult (cause logged to stdout) on
     a fatal signal, exception, or timeout overrun, else ``ok=True`` with the picklable return value.
     ``stream_progress=True`` preserves the child's last ``progress`` snapshot even if it is later killed.
-    ``seal`` runs the child sealed (:func:`hpcagent_bench.seal.enter`) before ``fn`` sees it."""
+    ``seal`` runs the child sealed (:func:`hpcagent_bench.seal.enter`) before ``fn`` sees it. A non-empty
+    ``env`` is the child's environment ENTRIES, and forces the ``spawn`` start method whatever
+    ``mp_context`` says: only a fresh interpreter reads ``LD_LIBRARY_PATH`` again, and a forked child
+    keeps the libraries its parent mapped (:func:`child_environment`)."""
     tag = f"[{label}] " if label else ""
     abandoned = ABANDONED.get()
     if abandoned is not None and abandoned.is_set():
         return RunResult(ok=False, signal="ABANDONED", error=f"{tag}abandoned before it started")
     # fork is cheap on Linux/WSL2; spawn on macOS, where forking after numpy/BLAS threads can abort the child.
-    ctx = process_context(mp_context if mp_context is not None else osinfo.mp_context())
+    ctx = process_context("spawn" if env else mp_context if mp_context is not None else osinfo.mp_context())
     # fork() duplicates only the calling thread, so a child entering a parallel region with the
     # parent's pool live blocks forever -- libgomp installs no pthread_atfork handler. No-op under spawn.
     pause_openmp_pools()
@@ -458,7 +490,8 @@ def run_forked[**P, ResultT](
         call_kwargs["progress"] = progress_q
     err_r, err_w = ctx.Pipe(duplex=False)
     p = ctx.Process(target=child_main, args=(fn, args, call_kwargs, q, seal, err_w))
-    p.start()
+    with child_environment(env) if env else contextlib.nullcontext():
+        p.start()
     # The parent's copy of the write end goes NOW, so the read end sees EOF as soon as the child is
     # gone rather than blocking on a writer that only this process still holds.
     err_w.close()

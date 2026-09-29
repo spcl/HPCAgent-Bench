@@ -5,7 +5,9 @@
 A second runtime in one process (libgomp beside libomp, or two libgomp files) cannot see the
 enclosing parallel region, so OpenBLAS inside a numba prange thread opens a team per caller. The
 counter reads realpaths out of ``/proc/self/maps``; ``containers/lib/one_openmp.sh`` links every
-libgomp copy to the compiler's; ``containers/lib/one_openmp_gate.py`` proves one is mapped.
+libgomp copy to the compiler's (the gnu context); ``containers/lib/one_openmp_gate.py`` proves one is
+mapped. The other families' runtimes live in their own contexts: tests/test_omp_context.py and
+tests/test_omp_context_gate.py.
 
 The ``integration`` tests build and load real libraries in fresh processes. They need gcc, numpy,
 scipy and numba, which every image (containers/images/verify_image.py runs this file in each) and the
@@ -14,14 +16,14 @@ CI unit and integration jobs carry; they FAIL where those are missing.
 
 import os
 import pathlib
-import shlex
+import re
 import shutil
 import subprocess
 import sys
 
 import pytest
 
-from hpcagent_bench import flags, openmp_runtimes
+from hpcagent_bench import openmp_runtimes
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 LIB = REPO / "containers" / "lib"
@@ -33,9 +35,6 @@ PARALLEL_C = (
     "#include <omp.h>\nint threads(void) {\n  int n = 0;\n"
     "#pragma omp parallel reduction(max : n)\n  n = omp_get_num_threads();\n  return n;\n}\n"
 )
-
-#: one_openmp_gate.py's exit status for "two runtimes mapped".
-CONFLICT_EXIT = 3
 
 
 def maps_line(path: pathlib.Path | str) -> str:
@@ -87,6 +86,12 @@ def test_libraries_that_are_not_an_openmp_runtime_are_not_counted(tmp_path: path
     assert openmp_runtimes.runtimes_in_maps(maps_line(touch(tmp_path / name))) == ()
 
 
+def test_the_nvhpc_runtime_counts_beside_the_others(tmp_path: pathlib.Path) -> None:
+    gomp, nvomp = touch(tmp_path / "libgomp.so.1.0.0"), touch(tmp_path / "nvhpc" / "libnvomp.so")
+    found = openmp_runtimes.runtimes_in_maps("\n".join(maps_line(p) for p in (gomp, nvomp)))
+    assert found == tuple(sorted((str(gomp), str(nvomp))))
+
+
 def test_iomp5_counts_and_anonymous_and_deleted_mappings_are_handled(tmp_path: pathlib.Path) -> None:
     iomp = touch(tmp_path / "libiomp5.so")
     maps = "\n".join(
@@ -120,17 +125,74 @@ def test_the_image_build_carries_the_same_counter_as_the_package() -> None:
     assert (LIB / "openmp_runtimes.py").read_text(encoding="utf-8") == package
 
 
-@pytest.mark.parametrize("image", ["judge-agent-amd", "judge-agent-cpu", "judge-agent-cuda"])
-def test_every_image_links_one_runtime_after_its_last_python_install(image: str) -> None:
-    """A wheel installed after the linker runs would put its bundled libgomp back."""
+IMAGES = ["judge-agent-amd", "judge-agent-cpu", "judge-agent-cuda"]
+
+
+def agent_stage(image: str) -> str:
     docker = (REPO / "containers" / "images" / image / "Dockerfile").read_text(encoding="utf-8")
-    agent = docker[: docker.index("FROM agent AS judge")]
-    step = agent.rindex("RUN sh /tmp/one-openmp/one_openmp.sh /opt/view")
+    return docker[: docker.index("FROM agent AS judge")]
+
+
+@pytest.mark.parametrize("image", IMAGES)
+def test_every_image_links_one_runtime_after_its_last_python_install(image: str) -> None:
+    """A wheel installed after the linker runs would put its bundled libgomp back; the contexts, their gates
+    and the scan run in the same last step, so they see the final image."""
+    agent = agent_stage(image)
+    step = agent.rindex("sh /tmp/one-openmp/one_openmp.sh /opt/view;")
     installs = [i for i in range(len(agent)) if agent.startswith("pip install", i)]
     assert installs and max(installs) < step, "a pip install runs after the one-runtime step"
     assert step < agent.index("ENV LD_PRELOAD"), "the step runs under the mimalloc preload"
-    for script in ("one_openmp.sh", "one_openmp_gate.py", "openmp_runtimes.py", "numpy_on_openblas.sh"):
-        assert f"containers/lib/{script}" in agent
+    for script in (
+        "one_openmp.sh",
+        "one_openmp_gate.py",
+        "openmp_runtimes.py",
+        "numpy_on_openblas.sh",
+        "omp_contexts.sh",
+        "omp_context_gate.py",
+        "omp_context_scan.py",
+        "openmp_probe.c",
+        "openmp_probe.f90",
+    ):
+        assert f"containers/lib/{script}" in agent, script
+
+
+@pytest.mark.parametrize("image", IMAGES)
+def test_every_image_builds_the_contexts_gates_them_and_scans_them_in_its_last_openmp_step(image: str) -> None:
+    agent = agent_stage(image)
+    last = agent[agent.rindex("sh /tmp/one-openmp/one_openmp.sh /opt/view;") :]
+    last = last[: last.index("rm -rf /tmp/one-openmp")]
+    assert "omp_contexts.sh /opt/view /opt/omp/llvm/view" in last
+    assert "omp_context_scan.py" in last
+    assert "omp_context_gate.py --context gnu --wheels --torch" in last
+    assert "omp_context_gate.py --context llvm --blas-in-context" in last
+    assert ("omp_context_gate.py --context nvhpc --blas-in-context" in last) == (image == "judge-agent-cuda")
+
+
+@pytest.mark.parametrize("image", IMAGES)
+def test_every_image_builds_the_llvm_variants_with_runpath_and_clang_only_where_openmp_is_reached(image: str) -> None:
+    """RPATH is searched before LD_LIBRARY_PATH: spack's default would pin every variant to the libomp of
+    the llvm it was built with, whatever context the child runs in."""
+    agent = agent_stage(image)
+    env = agent[agent.index("OMP_LLVM_ENV_DIR=/opt/omp/llvm/env") :]
+    env = env[: env.index("ls /opt/omp/llvm/view/lib/libopenblas.so")]
+    assert "type: runpath" in env and "root: /opt/omp/llvm/view" in env and "link: roots" in env
+    assert "require: [openblas]" in env, "a spack BLAS provider left open picks MKL from the image"
+    llvm_required = set(
+        re.findall(
+            r"'    ([a-z-]+):'[^\n]*\n\s+'      (?:variants: [^\n]*'[^\n]*\n\s+'      )?require: \[\"%llvm\"\]", env
+        )
+    )
+    assert {"openblas", "netlib-scalapack"} <= llvm_required, llvm_required
+    # every library the gnu environment builds against OpenMP has its llvm twin
+    for name in llvm_required - {"butterflypack"}:
+        assert re.search(rf"'  - {name}[ @']", env) or re.search(rf'"  - {name}[ @]', env), f"{name} has no root spec"
+
+
+def test_the_judge_stage_records_which_libraries_each_context_serves() -> None:
+    for image in IMAGES:
+        docker = (REPO / "containers" / "images" / image / "Dockerfile").read_text(encoding="utf-8")
+        judge = docker[docker.index("FROM agent AS judge") :]
+        assert "python3 -m hpcagent_bench.omp_catalog --write --check" in judge, image
 
 
 def gcc_libgomp() -> pathlib.Path:
@@ -217,16 +279,12 @@ def test_numpy_scipy_numba_prange_and_a_gcc_openmp_library_map_one_runtime() -> 
     assert "one OpenMP runtime mapped" in done.stdout
 
 
-def clang_openmp_flag() -> str:
-    return next(token for token in shlex.split(flags.CPU_BASELINE_CLANG) if token.startswith("-fopenmp"))
-
-
 @pytest.mark.integration
 @pytest.mark.skipif(shutil.which("clang") is None, reason="clang absent: images and CI carry it, where this test runs")
 def test_clang_compiles_the_pragma_away_under_the_libgomp_spelling(tmp_path: pathlib.Path) -> None:
     """``-fopenmp=libgomp`` links libgomp but emits no OpenMP code: clang generates ``__kmpc_*`` calls only
-    for libomp/libiomp5, so the loop runs serial with no diagnostic. That is why clang host builds keep
-    the libomp spelling (flags.CPU_BASELINE_CLANG) and are NOT pointed at the image's libgomp."""
+    for libomp/libiomp5, so the loop runs serial with no diagnostic. That is why the llvm family gets its
+    own OpenMP context (libomp, hpcagent_bench/omp_context.py) instead of being pointed at libgomp."""
     src = tmp_path / "p.c"
     src.write_text(PARALLEL_C)
     counts = {}
@@ -238,22 +296,3 @@ def test_clang_compiles_the_pragma_away_under_the_libgomp_spelling(tmp_path: pat
         )
         counts[spelling] = "__kmpc_fork_call" in undefined.stdout or "GOMP_parallel" in undefined.stdout
     assert counts == {"-fopenmp=libomp": True, "-fopenmp=libgomp": False}
-
-
-@pytest.mark.integration
-@pytest.mark.xfail(
-    strict=True,
-    raises=openmp_runtimes.OpenMPRuntimeConflict,
-    reason="clang host OpenMP links libomp, a second runtime beside libgomp; -fopenmp=libgomp emits no OpenMP "
-    "(test above), so the single-runtime story for clang, hipcc and OpenMP offload is a design decision",
-)
-@pytest.mark.skipif(shutil.which("clang") is None, reason="clang absent: images and CI carry it, where this test runs")
-def test_a_clang_openmp_library_beside_numba_maps_one_runtime(tmp_path: pathlib.Path) -> None:
-    src = tmp_path / "p.c"
-    src.write_text(PARALLEL_C)
-    lib = tmp_path / "libp.so"
-    subprocess.run(["clang", clang_openmp_flag(), "-O1", "-fPIC", "-shared", str(src), "-o", str(lib)], check=True)
-    done = run_gate("--optional", "--load", str(lib))
-    if done.returncode == CONFLICT_EXIT:
-        raise openmp_runtimes.OpenMPRuntimeConflict(done.stderr)
-    assert done.returncode == 0, done.stdout + done.stderr

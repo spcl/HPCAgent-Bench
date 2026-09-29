@@ -344,6 +344,40 @@ def one_openmp_gate(_target: str) -> tuple[bool, str]:
     return code == 0, tail
 
 
+def omp_context_gate(target: str) -> tuple[bool, str]:
+    """One OpenMP context, one process: the family's compilers, numpy and scipy BLAS, numba (gnu and llvm) and
+    torch (gnu) all run multi-threaded on the ONE runtime the context names, every wheel that may bundle a
+    runtime is imported, and the BLAS numpy maps is the context's own (llvm, nvhpc).
+
+    containers/lib/omp_context_gate.py re-executes itself under the context's environment, as the judge
+    starts a grading child of that family. ``target`` is the context. Exit 3 is a second runtime, 4 a serial team."""
+    argv = [sys.executable, str(REPO_ROOT / "containers" / "lib" / "omp_context_gate.py"), "--context", target]
+    argv += ["--wheels", "--torch"] if target == "gnu" else ["--blas-in-context"]
+    code, out = run(argv, timeout=1800.0, cwd="/")
+    tail = out.splitlines()[-1][:300] if out else "no output"
+    return code == 0, tail if code == 0 else f"rc={code}: {tail}"
+
+
+def omp_context_scan(_target: str) -> tuple[bool, str]:
+    """Every OpenMP-linked library of every context resolves ONLY that context's runtime (omp_context_scan.py),
+    and numpy, scipy and numba carry no absolute RPATH that would pin them to one context's BLAS."""
+    code, out = run(
+        [sys.executable, str(REPO_ROOT / "containers" / "lib" / "omp_context_scan.py")],
+        timeout=1800.0,
+        cwd="/",
+    )
+    lines = out.splitlines()
+    return code == 0, (lines[-1] if code == 0 and lines else "; ".join(lines[-3:]))[:300]
+
+
+def omp_catalog(_target: str) -> tuple[bool, str]:
+    """The catalog record of the OpenMP contexts exists and serves numpy's BLAS stack in every context
+    (hpcagent_bench/omp_catalog.py); the libraries it refuses per family are printed, not failed."""
+    code, out = run([sys.executable, "-m", "hpcagent_bench.omp_catalog", "--check"], timeout=1800.0, cwd="/")
+    refused = sorted({ln.split(":")[0] for ln in out.splitlines() if ln.startswith("REFUSED in ")})
+    return code == 0, f"{len(refused)} context(s) refuse some catalog library: {', '.join(refused) or 'none'}"
+
+
 def pytest_file(target: str) -> tuple[bool, str]:
     """A test file of the checkout, run in the image, with no test skipped: a skip here would be the
     image lacking what the test needs and reporting green."""
@@ -663,10 +697,12 @@ def toolchain_checks(platform: str) -> list[Check]:
         Check("blas", "tblis", "lib", "libtblis.so"),
         Check("blas", "HPTT", "lib", "libhptt.so", required=False),
     ]
-    if amd:
-        found.append(Check("blas", "Intel MKL", "lib", "libmkl_core.so", required=False))
     # numba, OpenBLAS, torch and every wheel that bundles libgomp share ONE runtime file.
     found.append(Check("openmp", "one runtime across numba/torch/wheels", "one-openmp", "gate"))
+    # One context per toolchain family, each proven in its own process; then no library on disk maps another.
+    for context in ("gnu", "llvm", *(("nvhpc",) if platform == "cuda" else ())):
+        found.append(Check("openmp", f"{context} OpenMP context", "omp-context", context))
+    found.append(Check("openmp", "context library closures", "omp-scan", "all"))
     found += [
         Check("fft", "FFTW3", "lib", "libfftw3.so"),
         Check("fft", "fftw3.h", "header", "fftw3.h"),
@@ -764,6 +800,9 @@ def checks(profile: str) -> list[Check]:
     found = common + toolchain_checks(platform)
     if profile in JUDGE_PROFILES:
         found.append(Check("openmp", "one-runtime tests", "pytest", "tests/test_one_openmp_runtime.py"))
+        found.append(Check("openmp", "context tests", "pytest", "tests/test_omp_context.py"))
+        found.append(Check("openmp", "context gate tests", "pytest", "tests/test_omp_context_gate.py"))
+        found.append(Check("openmp", "catalog record", "omp-catalog", "check"))
         # Driven FROM libraries.yaml through the harness's own resolver, which only a judge image
         # installs, so a library added to the registry cannot go unverified. Held to a record only
         # where one was measured; elsewhere it reports what links, to be recorded.
@@ -819,6 +858,9 @@ DISPATCH = {
     "dace-gate": dace_solver_gate,
     "blas-link": blas_link_closure,
     "one-openmp": one_openmp_gate,
+    "omp-context": omp_context_gate,
+    "omp-scan": omp_context_scan,
+    "omp-catalog": omp_catalog,
     "pytest": pytest_file,
     "library-registry": library_registry,
     "compile": lambda t: compile_probe(COMPILE_PROBES[t], run_it=False),

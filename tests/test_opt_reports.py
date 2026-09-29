@@ -150,7 +150,7 @@ def test_a_compiler_with_no_report_channel_records_a_reason(
     """A family :data:`languages.REPORT_REFS` wires no flags for (``nvcc``, the MPI wrappers) must
     not read as "the harness forgot to check" -- an explicit reason, not an empty directory. Forced
     here via :func:`languages.report_flags` rather than by finding a REAL such native column,
-    because every C/C++/Fortran column this table has today (gcc/llvm/nvhpc/oneapi) DOES have one --
+    because every C/C++/Fortran column this table has today (gcc/llvm/nvhpc) DOES have one --
     the whole point of the property is what happens on the family that does not."""
     monkeypatch.setattr(opt_reports.languages, "report_flags", lambda lang, compiler=None: "")
 

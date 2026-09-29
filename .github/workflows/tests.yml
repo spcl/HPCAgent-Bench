@@ -83,7 +83,7 @@ jobs:
           pip-args: "-e ./adapters/hpcagent_bench"
           ccache: unit-${{ matrix.python }}-${{ matrix.shard }}
           # Only shard 0 carries an nvc++ case (test_parallelism_dispatch.py); the floor leg runs none.
-          vendor-compilers: ${{ matrix.shard == 0 && 'all' || matrix.shard == 1 && 'oneapi' || '' }}
+          vendor-compilers: ${{ matrix.shard == 0 && 'nvhpc' || '' }}
 
       # Format (ruff / clang-format / fprettify) and ruff's pyupgrade rules at the py312 floor, on
       # the files the change touches. Once, on the floor interpreter.
@@ -222,8 +222,6 @@ jobs:
       - uses: ./.github/actions/setup
         with:
           ccache: integration-${{ matrix.shard.id }}
-          # test_parallelism_dispatch.py's integration cases need icpx; the nvc++ ones run in unit.
-          vendor-compilers: oneapi
       # Keyed by CPU_KEY: the build is not DYNAMIC_ARCH.
       - name: Setup -- restore the from-source OpenBLAS
         id: openblas
