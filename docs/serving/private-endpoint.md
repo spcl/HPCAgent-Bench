@@ -1,7 +1,7 @@
 # Private Qwen3.8 endpoint on Beverin
 
 `containers/inference/serve-private.sbatch` starts a keyed, OpenAI-compatible
-Qwen3.8 SGLang server on one Beverin node that only you can use. `experiments/serve-only.sbatch`, by
+Qwen3.8 SGLang server on one Beverin node that only you can use. `hpcagent_bench/cluster/serve-only.sbatch`, by
 contrast, serves every interface without a key ([`README.md`](README.md)). Contributors:
 [`extending-private-inference.md`](extending-private-inference.md).
 
@@ -35,7 +35,7 @@ contrast, serves every interface without a key ([`README.md`](README.md)). Contr
 | `mi200` | 8x MI250X, 64 GiB each | vLLM 0.28 | `hpcagent-bench-vllm-mi200-latest` | `Qwen/Qwen3.8-27B` (BF16) | `tp8:0.85` | `tp8:0.85` |
 
 Both serve a 262144-token context and 128 running requests with the qwen3 reasoning and qwen3_coder
-tool parsers and the chat template `experiments/chat-template-qwen38.jinja`, as `hpcagent-bench-vllm`.
+tool parsers and the chat template `containers/inference/chat-template-qwen38.jinja`, as `hpcagent-bench-vllm`.
 
 - `mi300` matches `SGLANG_EXTRA_ARGS` of `llrbase-c:qwen38` in `experiments/arms.yaml`
   (`tests/test_serve_private.py` fails if they diverge). 0.306 is node-wide on the APU and derated

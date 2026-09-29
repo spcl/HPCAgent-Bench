@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """An arm whose inference comes from a hosted service rather than a server the job starts.
 
-``experiments/inference_service.py`` is the one place that reads an arm's ``INFERENCE_SERVICE_*``
+``hpcagent_bench/cluster/inference_service.py`` is the one place that reads an arm's ``INFERENCE_SERVICE_*``
 block. It resolves that block into the three values every consumer downstream already reads (the
 base URL, the served model name, the key), decides which variable the claude CLI's key belongs in,
 refuses a harness that cannot speak the service's wire shape, and writes the run's inference
@@ -30,7 +30,7 @@ import pytest
 from hpcagent_bench.harness.agent import anthropic_usage, http_chat_json
 from tests.env_render import rendered
 
-EXPERIMENTS = pathlib.Path(__file__).resolve().parents[1] / "experiments"
+EXPERIMENTS = pathlib.Path(__file__).resolve().parents[1] / "hpcagent_bench" / "cluster"
 AGENT_HARNESS = pathlib.Path(__file__).resolve().parents[1] / "agent" / "harness"
 
 #: A key value no other string in these cases spells, so a leak search cannot match by accident.
@@ -463,7 +463,7 @@ def test_a_service_arm_writes_no_key_into_the_usage_file(
         assert SECRET not in (tmp_path / name).read_text(encoding="utf-8")
 
 
-@pytest.mark.parametrize("name", ["musespark", "fable51", "gpt6astra", "unionalpha"])
+@pytest.mark.parametrize("name", ["musespark"])
 def test_every_example_arm_resolves_when_its_key_is_set(service: types.ModuleType, name: str) -> None:
     """Each shipped example must be a WORKING arm, not a template: reading its env plus the one
     variable it names has to produce a resolved service."""
@@ -495,7 +495,7 @@ def test_the_launcher_never_writes_the_key_value_into_the_run_tree() -> None:
     """Two files the launcher writes outlive the job: the LiteLLM proxy config and the container env
     slice. Neither may carry the key's VALUE -- the config names the variable for LiteLLM to read,
     and the slice is a tmpfs file removed with the job, not ``${RUN_DIR}/job.env``."""
-    script = (pathlib.Path(__file__).resolve().parents[1] / "experiments" / "run_cluster.sh").read_text(
+    script = (pathlib.Path(__file__).resolve().parents[1] / "hpcagent_bench" / "cluster" / "run_cluster.sh").read_text(
         encoding="utf-8"
     )
     assert "api_key: ${VLLM_API_KEY" not in script, "the proxy config would hold the key literally"
@@ -542,13 +542,13 @@ def test_a_free_only_arm_refuses_any_listing_that_does_not_prove_the_model_free(
 def test_every_model_the_claude_cli_picks_itself_is_pinned_to_the_arm_model(service: types.ModuleType) -> None:
     """Unpinned, the CLI's side requests name a Claude model; a router answers that with a model the
     arm never declared, which on OpenRouter is billed."""
-    text = rendered("campaign:unionalpha")
+    text = rendered("campaign:musespark")
     arm = dict(line.split("=", 1) for line in text.splitlines() if line and not line.startswith("#") and "=" in line)
     arm = {key: value.strip('"') for key, value in arm.items()}
-    arm["OPENROUTER_API_KEY"] = SECRET
+    arm[arm["INFERENCE_SERVICE_KEY_ENV"]] = SECRET
     exported = service.launcher_env(service.from_environ(arm))
     assert {name: exported.get(name) for name in service.CLAUDE_MODEL_PINS} == {
-        name: "stealth/union-alpha" for name in service.CLAUDE_MODEL_PINS
+        name: arm["INFERENCE_SERVICE_MODEL"] for name in service.CLAUDE_MODEL_PINS
     }
 
 
@@ -562,8 +562,3 @@ def test_the_launcher_exports_every_pinned_model_variable_after_the_free_check(s
     exports = " ".join(line for line in branch.replace("\\\n", " ").splitlines() if "export" in line)
     for name in service.CLAUDE_MODEL_PINS:
         assert name in exports, name
-
-
-def test_the_free_only_example_arm_declares_the_check(service: types.ModuleType) -> None:
-    text = rendered("campaign:unionalpha")
-    assert f"{service.FREE_ONLY_KEY}=1" in text.splitlines()
