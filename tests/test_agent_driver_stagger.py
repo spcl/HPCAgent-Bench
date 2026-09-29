@@ -9,7 +9,7 @@ with mcp_servers status "failed", and an agent without its MCP server has no sub
 import importlib
 import pathlib
 
-EXAMPLE = pathlib.Path(__file__).resolve().parents[1] / "experiments"
+EXAMPLE = pathlib.Path(__file__).resolve().parents[1] / "hpcagent_bench" / "cluster"
 
 
 def load_driver(monkeypatch, **env):

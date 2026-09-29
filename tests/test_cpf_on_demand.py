@@ -263,7 +263,7 @@ def test_on_demand_is_refused_for_a_dropin_check(tmp_path: pathlib.Path) -> None
 
 def form_gate(tmp_path: pathlib.Path, view: pathlib.Path, commit: str) -> subprocess.CompletedProcess[str]:
     """prepare_job.sh's own cpf_check/cpf_form_gate functions, run with the roster and dace pin stubbed."""
-    text = (REPO / "experiments" / "prepare_job.sh").read_text(encoding="utf-8")
+    text = (REPO / "hpcagent_bench" / "cluster" / "prepare_job.sh").read_text(encoding="utf-8")
     functions = re.search(r"^cpf_check\(\) \{.*?^\}\ncpf_form_gate\(\) \{.*?^\}\n", text, re.MULTILINE | re.DOTALL)
     assert functions, "prepare_job.sh lost cpf_check/cpf_form_gate"
     repo = tmp_path / "repo"

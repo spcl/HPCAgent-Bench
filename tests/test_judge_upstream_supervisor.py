@@ -1,6 +1,6 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""experiments/judge_upstream.py: a judge rank that loses its upstream gets it back.
+"""hpcagent_bench/cluster/judge_upstream.py: a judge rank that loses its upstream gets it back.
 
 The bug this closes: the upstream was a bare background child of the judge step's shell. When
 641799's judge node ran out of memory and the OOM killer took rank 4's upstream, the router in
@@ -20,8 +20,8 @@ from collections.abc import Callable
 import pytest
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-SUPERVISOR = REPO / "experiments" / "judge_upstream.py"
-RUN_CLUSTER = REPO / "experiments" / "run_cluster.sh"
+SUPERVISOR = REPO / "hpcagent_bench" / "cluster" / "judge_upstream.py"
+RUN_CLUSTER = REPO / "hpcagent_bench" / "cluster" / "run_cluster.sh"
 
 #: An upstream that records every start and then dies the way the OOM killer ends one.
 OOM_KILLED = "import os, signal, sys; open(sys.argv[1], 'a').write('start\\n'); os.kill(os.getpid(), signal.SIGKILL)"

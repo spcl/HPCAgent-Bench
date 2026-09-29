@@ -339,7 +339,7 @@ def test_an_openhands_llm_sends_the_rung_the_driver_resolved_for_it(
     harness: types.SimpleNamespace, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
 ) -> None:
     """The clamp onto the SDK's Literal happens in the driver, over the part of the model's ladder the
-    SDK can spell (experiments/effort.py), so what arrives here is already spellable and is sent."""
+    SDK can spell (hpcagent_bench/cluster/effort.py), so what arrives here is already spellable and is sent."""
     fake_openhands(monkeypatch)
     assert openhands_llm_fields(harness, tmp_path, "high", 262144)["reasoning_effort"] == "high"
 

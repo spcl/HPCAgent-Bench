@@ -2,11 +2,11 @@
 
 `zai-org/GLM-5.3`, fp8, about 755 GB of weights, on SGLang across four nodes (`tp=4`, `pp=4`).
 Source of truth: `experiments/layers/model-glm53.env` plus the `glm53` entries of
-`experiments/arms.yaml`; render with `experiments/env_layers.sh render campaign:glm53`.
+`experiments/arms.yaml`; render with `hpcagent_bench/cluster/env_layers.sh render campaign:glm53`.
 Background: [`knobs.md`](knobs.md).
 
 ```bash
-cd experiments && MODEL=glm53 ./serve-only.sbatch
+MODEL=glm53 hpcagent_bench/cluster/serve-only.sbatch
 ```
 
 **Image.** The same `hpcagent-bench-sglang-mi300-latest` as Qwen3.8 and Kimi K2.7: the sglang image

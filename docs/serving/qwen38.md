@@ -5,7 +5,7 @@ truth: `campaign:qwen38` in `experiments/arms.yaml` over `layers/model-qwen38.en
 [`knobs.md`](knobs.md).
 
 ```bash
-cd experiments && ./serve-only.sbatch     # qwen38 is the default MODEL
+hpcagent_bench/cluster/serve-only.sbatch     # qwen38 is the default MODEL
 ```
 
 ## Configuration
@@ -14,7 +14,7 @@ EDF `hpcagent-bench-sglang-mi300-latest`; env `SGLANG_USE_AITER=1`, `SGLANG_SET_
 `run_cluster.sh` adds `--tp-size 4 --host 0.0.0.0 --port 8000 --served-model-name hpcagent-bench-vllm`.
 
 ```
---chat-template experiments/chat-template-qwen38.jinja --trust-remote-code
+--chat-template containers/inference/chat-template-qwen38.jinja --trust-remote-code
 --attention-backend aiter --language-only --watchdog-timeout 1800
 --context-length 262144 --mem-fraction-static 0.306 --mamba-full-memory-ratio 0.25
 --max-running-requests 128 --enable-metrics

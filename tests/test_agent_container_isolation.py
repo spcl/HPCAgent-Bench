@@ -20,7 +20,7 @@ import textwrap
 
 from hpcagent_bench import cpf_cache, paths
 
-RUN_CLUSTER = paths.ROOT / "experiments" / "run_cluster.sh"
+RUN_CLUSTER = paths.ROOT / "hpcagent_bench" / "cluster" / "run_cluster.sh"
 PAYLOAD_MOUNT = "/opt/hpcagent-bench-agent"
 
 
@@ -33,6 +33,8 @@ def render(tmp_path, role, container_mounts: str = "", extra_env: dict[str, str]
         "repo/hpcagent_bench/benchmarks",
         "repo/agent",
         "repo/experiments",
+        "repo/hpcagent_bench/cluster",
+        "repo/containers/inference",
         "runs/.agent-launch/1",
     ):
         (tmp_path / sub).mkdir(parents=True, exist_ok=True)
@@ -75,7 +77,7 @@ def render(tmp_path, role, container_mounts: str = "", extra_env: dict[str, str]
         "SHARED_HOST_DIR": str(tmp_path / "run" / "shared"),
         "SHARED_MOUNT": "/shared",
         "HPCAGENT_BENCH_REPO": str(tmp_path / "repo"),
-        "SCRIPT_DIR": str(tmp_path / "repo" / "experiments"),
+        "SCRIPT_DIR": str(tmp_path / "repo" / "hpcagent_bench" / "cluster"),
         # role_mounts names RUN_ROOT for the judge and inference roles; only the agent branch
         # goes without it, which is why agent-only harnesses never noticed it was missing.
         "RUN_ROOT": str(tmp_path / "runs"),
@@ -221,14 +223,15 @@ def test_vllm_node_mounts_only_the_jit_category_subdirs_not_the_whole_cache_root
 def test_vllm_node_never_mounts_the_graded_tree(tmp_path: pathlib.Path) -> None:
     """The endpoint reads weights and writes JIT artefacts, and that is the whole of it -- it must
     never see the benchmarks an agent is graded against, the same boundary
-    test_agent_edf_does_not_mount_the_repo pins for the agent role. SCRIPT_DIR (repo/experiments,
-    where the step re-executes run_cluster.sh from) is the one repo path this role legitimately
-    mounts; hpcagent_bench/benchmarks is not."""
+    test_agent_edf_does_not_mount_the_repo pins for the agent role. SCRIPT_DIR (repo/hpcagent_bench/cluster,
+    where the step re-executes run_cluster.sh from) and containers/inference (the chat template the engine
+    reads) are the repo paths this role legitimately mounts; hpcagent_bench/benchmarks is not."""
     jit_root, repo = tmp_path / "jit-cache", str(tmp_path / "repo")
     extra_env = {"JIT_CACHE_ROOT": str(jit_root), "HF_HOME": str(tmp_path / "hf")}
     rendered = render(tmp_path, "vllm-node", extra_env=extra_env)
-    leaks = [mount for mount in mounts(rendered) if repo in mount and not mount.startswith(f"{repo}/experiments:")]
-    assert not leaks, f"vllm-node EDF mounts the checkout beyond SCRIPT_DIR: {leaks}"
+    allowed = (f"{repo}/hpcagent_bench/cluster:", f"{repo}/containers/inference:")
+    leaks = [mount for mount in mounts(rendered) if repo in mount and not mount.startswith(allowed)]
+    assert not leaks, f"vllm-node EDF mounts the checkout beyond SCRIPT_DIR and the chat template: {leaks}"
 
 
 def test_the_judge_mounts_the_cpf_view_and_the_cache_it_points_into(tmp_path: pathlib.Path) -> None:

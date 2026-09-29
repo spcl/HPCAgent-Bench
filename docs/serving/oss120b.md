@@ -5,7 +5,7 @@ Source of truth: `experiments/layers/model-oss120b.env`, plus the `hpcagent-benc
 EDF, which owns `VLLM_PLUGINS`. Background: [`knobs.md`](knobs.md).
 
 ```bash
-cd experiments && MODEL=oss120b ./serve-only.sbatch
+MODEL=oss120b hpcagent_bench/cluster/serve-only.sbatch
 ```
 
 ## Configuration

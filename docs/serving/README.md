@@ -14,7 +14,7 @@ carry to MI300X.
 | [`extending-private-inference.md`](extending-private-inference.md) | contributors: the private launcher's security contract, new presets, access paths, engines |
 
 The authoritative launch line per model is the render of `campaign:<model>`
-(`experiments/env_layers.sh render campaign:<model>`). If a page here and the render disagree, the
+(`hpcagent_bench/cluster/env_layers.sh render campaign:<model>`). If a page here and the render disagree, the
 render wins.
 
 ## 1. Shortest path
@@ -25,16 +25,17 @@ Once per account, register the EDFs (container definitions) and set your Slurm a
 cd "$REPO"
 containers/images/install_edfs.sh          # renders into ~/.edf
 sbatch containers/images/registry.sbatch pull <role>  # only if install_edfs.sh reports a missing image
-export SBATCH_ACCOUNT=<project>; . experiments/env.sh    # Beverin rejects jobs without an account
+export SBATCH_ACCOUNT=<project>; . hpcagent_bench/cluster/env.sh    # Beverin rejects jobs without an account
 ```
 
-Then, from `experiments/`:
+Then:
 
 ```bash
-SUBMIT=0 ./serve-only.sbatch                  # print what would be submitted
-./serve-only.sbatch                           # Qwen3.8 (default MODEL)
-MODEL=kimi27sglang ./serve-only.sbatch        # any layers/model-<MODEL>.env: qwen38, kimi27sglang, glm53, oss120b
-SBATCH_TIMELIMIT=08:00:00 ./serve-only.sbatch # longer than the 4 h default
+S=hpcagent_bench/cluster/serve-only.sbatch
+SUBMIT=0 $S                  # print what would be submitted
+$S                           # Qwen3.8 (default MODEL)
+MODEL=kimi27sglang $S        # any experiments/layers/model-<MODEL>.env: qwen38, kimi27sglang, glm53, oss120b
+SBATCH_TIMELIMIT=08:00:00 $S # longer than the 4 h default
 ```
 
 `serve-only.sbatch` renders `campaign:<MODEL>` (`SERVE_BASE_ENV` overrides), reads the node count from it, submits itself with
@@ -175,7 +176,7 @@ templating a flag, use the dash form.
 
 **Layers, last assignment wins.** `layers/common.env` < `arms.yaml` campaign < `layers/model-<m>.env` < `arms.yaml` `models.<m>`
 ([Env layers](../../experiments/README.md#env-layers)); a layer can override a key, never unset it.
-Render one with `./env_layers.sh render campaign:<m>`. `serve-only.sbatch` sources the render, then
+Render one with `hpcagent_bench/cluster/env_layers.sh render campaign:<m>`. `serve-only.sbatch` sources the render, then
 `serve-only.env` (zero judge and agent nodes, `RUN_ROOT`), under `set -a`.
 
 **Arm `.env.<arm>` files are renders.** Fix the layer that owns a key, never the render.
@@ -185,7 +186,7 @@ registered EDF as-is. A model that serves here and fails in a campaign run: susp
 
 ## 7. Where the numbers live
 
-- `experiments/serve-only.sbatch`, `experiments/serve-only.env`: the launcher on this page.
+- `hpcagent_bench/cluster/serve-only.sbatch`, `experiments/serve-only.env`: the launcher on this page.
 - `experiments/layers/model-<m>.env`, `experiments/arms.yaml`: per-model launch lines with inline reasons.
 - `containers/inference/`: `smoke-kimi-sglang.sbatch` (serving smoke with accuracy
   gate and concurrency sweep), `accuracy-gate.py`,

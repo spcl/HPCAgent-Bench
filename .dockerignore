@@ -62,8 +62,8 @@ results/
 hpcagent_bench.db
 hpcagent_bench*.db
 hpcagent_bench.db-*
-hpcagent_bench/native_runs/*
-!hpcagent_bench/native_runs/.gitkeep
+.scratch/*
+!.scratch/.gitkeep
 experiments/.rendered/
 experiments/owed/
 experiments/results/

@@ -25,7 +25,7 @@ pin_per_worker_dace_build_folder()
 #: as one red test: importing at module scope makes it a COLLECTION error, which aborts the whole
 #: run. That is how the full container suite reported "1 error, 0 tests" for days while targeted
 #: login-node selections stayed green. Searched, so the next move costs nothing.
-SCRIPT_DIRS: tuple[str, ...] = ("statistics", "scripts", "experiments")
+SCRIPT_DIRS: tuple[str, ...] = ("statistics", "scripts", "hpcagent_bench/cluster")
 
 
 def script_path(name: str, root: pathlib.Path | None = None) -> pathlib.Path:

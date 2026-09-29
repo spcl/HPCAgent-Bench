@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """What one episode COST, under assumptions that are stated rather than implied.
 
-Standard library only, and imports nothing from the package: ``experiments/token_cost.py`` is a
+Standard library only, and imports nothing from the package: ``hpcagent_bench/cluster/token_cost.py`` is a
 symlink to this file, and ``run_cluster.sh`` copies it beside ``agent_driver.py`` into the agent
 step's launch directory, where ``hpcagent_bench`` is not importable. The package imports it as
 ``hpcagent_bench.token_cost``; the driver loads the copy beside itself. One implementation, two
@@ -178,7 +178,7 @@ INPUT_FIELDS = ("input_tokens", "cache_creation_input_tokens", "cache_read_input
 
 
 #: What a runner harness (mini-SWE, OpenHands) records instead of a claude transcript: one
-#: JSON line per model call, ``{"input", "cached_input", "output", "reasoning"}`` (experiments/harnesses.py).
+#: JSON line per model call, ``{"input", "cached_input", "output", "reasoning"}`` (hpcagent_bench/cluster/harnesses.py).
 USAGE_NAME = "usage.jsonl"
 
 #: Every ``message.usage`` field one claude TURN is billed for (8.1): the three input fields plus
@@ -592,8 +592,8 @@ def events_cost(events: list[dict[str, object]]) -> CostRow:
             if as_block(event.get("modelUsage")):
                 # The session-cumulative reading (:func:`model_usage_totals`), consulted below only
                 # when a compact_boundary marked a compaction happened -- an ordinary episode's
-                # modelUsage disagrees with the per-turn fold by measurement noise alone (~10%,
-                # token_report.py), and that noise must not be mistaken for a compaction's tokens.
+                # modelUsage disagrees with the per-turn fold by measurement noise alone (~10%),
+                # and that noise must not be mistaken for a compaction's tokens.
                 model_usage_event = event
             continue
         if event.get("type") != "assistant":

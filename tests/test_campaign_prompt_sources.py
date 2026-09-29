@@ -24,7 +24,7 @@ from tests.env_render import BASES, rendered
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 AGENT_DIR = REPO / "agent"
-SCRIPTS = REPO / "experiments"
+SCRIPTS = REPO / "hpcagent_bench" / "cluster"
 DRIVER = SCRIPTS / "agent_driver.py"
 MATERIALIZE = SCRIPTS / "materialize_shared.sh"
 
@@ -73,7 +73,7 @@ def test_every_prompt_file_an_arm_names_is_one_materialize_produces() -> None:
     produced = materialized_prompt_files()
     texts = [rendered(base) for base in BASES]
     texts += [path.read_text(encoding="utf-8") for path in SCRIPTS.glob("submit-*.sh")]
-    texts += [path.read_text(encoding="utf-8") for path in SCRIPTS.glob(".env.*")]
+    texts += [path.read_text(encoding="utf-8") for path in (REPO / "experiments").glob(".env.*")]
     named = {name for text in texts for name in re.findall(r"AGENT_PROMPT_FILE=(prompt[a-z0-9-]*\.md)\b", text)}
     missing = {n for n in named if n and n not in produced}
     assert not missing, (

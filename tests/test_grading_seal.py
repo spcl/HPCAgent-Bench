@@ -148,7 +148,7 @@ def test_the_cpf_view_and_its_cache_are_read_only_to_a_kernel(
 
 
 def resolved_overlay(directory: pathlib.Path, setup: str, view: str) -> None:
-    """A fused job's one resolved-overlay file for ``setup`` (experiments/prepare_job.sh's
+    """A fused job's one resolved-overlay file for ``setup`` (hpcagent_bench/cluster/prepare_job.sh's
     output format: ``KEY=VALUE`` lines), naming ``view`` as its CPF view."""
     (directory / f"{setup}.resolved").write_text(
         f"CAMPAIGN_ARM={setup}\nHPCAGENT_BENCH_SERVICE_CANONICAL_PARALLEL_FORM_DIR={view}\n"

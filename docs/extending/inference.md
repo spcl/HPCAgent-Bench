@@ -45,7 +45,7 @@ campaign:
     qwen38:
       EFFORT_LADDER: '"low medium xhigh"'
       CONTEXT_LENGTH: 262144
-      SGLANG_EXTRA_ARGS: '"--chat-template ${SCRIPT_DIR}/chat-template-qwen38.jinja --context-length 262144 --mem-fraction-static 0.306 --reasoning-parser qwen3 --tool-call-parser qwen3_coder --enable-metrics"'
+      SGLANG_EXTRA_ARGS: '"--chat-template ${HPCAGENT_BENCH_REPO}/containers/inference/chat-template-qwen38.jinja --context-length 262144 --mem-fraction-static 0.306 --reasoning-parser qwen3 --tool-call-parser qwen3_coder --enable-metrics"'
 ```
 
 | Key | Meaning |
@@ -57,17 +57,17 @@ campaign:
 | `SGLANG_EXTRA_ARGS`, `VLLM_EXTRA_ARGS` | split on whitespace (`read -r -a`), no quoting; name both parsers |
 | `SGLANG_ATTENTION_BACKEND` | unset appends `--attention-backend aiter`; set empty omits it |
 | `HPCAGENT_BENCH_OPTIMIZER` | checkpoint id; must equal `VLLM_MODEL` and the registry `serves:` |
-| `EFFORT_LADDER` | rungs this server accepts, lowest first (`experiments/effort.py`); empty for no ladder |
+| `EFFORT_LADDER` | rungs this server accepts, lowest first (`hpcagent_bench/cluster/effort.py`); empty for no ladder |
 | `CONTEXT_LENGTH` | served window; harnesses derive compaction from it ([token_accounting.md](../token_accounting.md#context-compaction)) |
 
 Files such as a chat template sit in `experiments/` and are named through `${SCRIPT_DIR}`, which
 `run_cluster.sh` mounts into the inference container.
 
-**3. Serve it alone.** From `experiments/`:
+**3. Serve it alone.**
 
 ```bash
-SUBMIT=0 MODEL=<tag> ./serve-only.sbatch   # print the plan
-MODEL=<tag> ./serve-only.sbatch            # serve; the log reaches "endpoint is live" and prints a curl
+SUBMIT=0 MODEL=<tag> hpcagent_bench/cluster/serve-only.sbatch   # print the plan
+MODEL=<tag> hpcagent_bench/cluster/serve-only.sbatch            # serve; the log reaches "endpoint is live" and prints a curl
 ```
 
 For tool-call, reasoning and long-context accuracy gates, run the smokes in
@@ -75,7 +75,7 @@ For tool-call, reasoning and long-context accuracy gates, run the smokes in
 `MODEL_REPO`, `SERVED_MODEL`, `TOOL_PARSER`, `REASONING_PARSER`, `MEM_FRACTION`, `CONTEXT_LEN`.
 A failure prints `SMOKE FAILED`.
 
-**4. Name it in launchers.** `experiments/submit.sh` renders `<campaign>:<tag>`, so
+**4. Name it in launchers.** `hpcagent_bench/cluster/submit.sh` renders `<campaign>:<tag>`, so
 `MODELS=<tag>` suffices.
 
 **In-process models.** The Python harness ignores env files. An OpenAI-shaped endpoint is one
@@ -95,7 +95,7 @@ python -m pytest --maxfail=10 tests/test_display_names.py tests/test_palette.py 
 | `containers/images/<engine>/` | `Dockerfile`, `image.sh`, `edf.toml.in` (copy `sglang/`) |
 | `containers/images/images.env` | `INFERENCE_<ENGINE>_SQSH`, `_EDF_LATEST`, `_TEMPLATE`, `_REPO`, `_TAG` |
 | `containers/images/install_edfs.sh` | render the new EDF beside the sglang one |
-| `experiments/run_cluster.sh` `run_vllm_node` | interpreter (`engine_python`) and a `command=(...)` branch |
+| `hpcagent_bench/cluster/run_cluster.sh` `run_vllm_node` | interpreter (`engine_python`) and a `command=(...)` branch |
 
 `edf.toml.in` keeps the `PLACEHOLDER.sqsh` image line, a multi-line `mounts = [` block, absolute
 `PATH` and `LD_LIBRARY_PATH` under `[env]` (the CE drops the image's ENV) and the fabric hook

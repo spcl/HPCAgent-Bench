@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Serve one campaign model with vLLM on Daint GH200 nodes (4x H100 96 GB each), from the vllm-cuda
-# image. The beverin serving path (experiments/run_cluster.sh, serve-private.sbatch) is AMD-shaped;
+# image. The beverin serving path (hpcagent_bench/cluster/run_cluster.sh, serve-private.sbatch) is AMD-shaped;
 # this is the GH200 one, and it keeps the three things the agent side keys on unchanged:
 #   * the served model name, hpcagent-bench-vllm (VLLM_SERVED_MODEL in experiments/layers/model-*.env)
 #   * the served window, as --max-model-len (agent_driver.served_context reads --max-model-len or
@@ -66,7 +66,7 @@ use_model() {  # sets MODEL_REPO, CONTEXT, NODES, MIN_NODES, EFFORT and MODEL_FL
     case "${MODEL:-}" in
         qwen38)
             MODEL_REPO=Qwen/Qwen3.8-27B-FP8 CONTEXT=262144 NODES=1 MIN_NODES=1 EFFORT=xhigh
-            MODEL_FLAGS=(--chat-template "${REPO}/experiments/chat-template-qwen38.jinja" --trust-remote-code
+            MODEL_FLAGS=(--chat-template "${REPO}/containers/inference/chat-template-qwen38.jinja" --trust-remote-code
                 --enable-auto-tool-choice --tool-call-parser qwen3_coder --reasoning-parser qwen3)
             ;;
         oss120b)

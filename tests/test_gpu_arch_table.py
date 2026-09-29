@@ -344,7 +344,7 @@ def test_the_runtime_check_refuses_a_partition_the_table_does_not_name(tmp_path:
 @pytest.mark.parametrize(
     ("launcher", "check", "first_gpu_step"),
     [
-        ("experiments/run_cluster.sh", "\ncheck_gpu_arch\n", 'role_srun "${INFERENCE_NODES}"'),
+        ("hpcagent_bench/cluster/run_cluster.sh", "\ncheck_gpu_arch\n", 'role_srun "${INFERENCE_NODES}"'),
         (
             "containers/images/verify_image.sbatch",
             'gpu_arch_check.sh" "${EDF}"',

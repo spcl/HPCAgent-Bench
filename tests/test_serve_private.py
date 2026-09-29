@@ -93,10 +93,10 @@ def flags(words: list[str]) -> dict[str, str]:
 
 
 def campaign_sglang_flags() -> dict[str, str]:
-    """SGLANG_EXTRA_ARGS of the qwen38 campaign, with ${SCRIPT_DIR} expanded as sourcing does."""
+    """SGLANG_EXTRA_ARGS of the qwen38 campaign, with ${HPCAGENT_BENCH_REPO} expanded as sourcing does."""
     found = re.findall(r'^SGLANG_EXTRA_ARGS="([^"]*)"$', rendered(CAMPAIGN_BASE), re.MULTILINE)
     assert len(found) == 1, CAMPAIGN_BASE
-    return flags(found[0].replace("${SCRIPT_DIR}", str(ROOT / "experiments")).split())
+    return flags(found[0].replace("${HPCAGENT_BENCH_REPO}", str(ROOT)).split())
 
 
 def test_the_launcher_refuses_to_start_without_a_preset(tmp_path: pathlib.Path) -> None:

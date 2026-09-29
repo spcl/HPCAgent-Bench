@@ -41,7 +41,7 @@ fi
 
 # JIT build artefacts. run_cluster.sh appends /${INFERENCE_CE_ENV} and derives the seven knobs.
 # An unset SCRATCH falls back to HPCAGENT_BENCH_REPO -- the checkout's own root, which every caller
-# of this file has ALREADY resolved (experiments/env.sh exports it before sourcing this script; see
+# of this file has ALREADY resolved (hpcagent_bench/cluster/env.sh exports it before sourcing this script; see
 # hpcagent_bench/paths.py's repo_root() for the Python side of the same default). That fallback only
 # fires when HPCAGENT_BENCH_REPO is itself set: a bare `. cache_env.sh` with neither var configured
 # still aborts here rather than landing caches under $HOME or /tmp where no later job would look --
@@ -61,7 +61,7 @@ export JIT_CACHE_ROOT
 # Prerendered Canonical Parallel Form. Not a JIT artefact: it is device-independent text, reused
 # across arms and engines, so it is neither keyed by EDF nor purged with the JIT tree.
 export HPCAGENT_BENCH_CPF_PRERENDER_DIR="${HPCAGENT_BENCH_CPF_PRERENDER_DIR:-${JIT_CACHE_ROOT}/.cpf-prerender}"
-# Its content-addressed cache: where prerender_cpf.sbatch warms forms and the judge renders a kernel
+# Its content-addressed cache: where hpcagent_bench.cpf_prerender warms forms and the judge renders a kernel
 # on its first request (hpcagent_bench.cpf_cache, config key cpf.cache).
 export HPCAGENT_BENCH_CPF_CACHE="${HPCAGENT_BENCH_CPF_CACHE:-${HPCAGENT_BENCH_CPF_PRERENDER_DIR}/cache}"
 
@@ -76,7 +76,7 @@ export HPCAGENT_BENCH_TOOLS_DIR="${HPCAGENT_BENCH_TOOLS_DIR:-${JIT_CACHE_ROOT}/t
 # Deterministic-framework job work dirs (canon compiler-baseline columns and siblings: smoke sweeps,
 # opt-report passes). Same shape as jit/ -- small-ish, many, WRITTEN by the job, one tree per job --
 # so it sits beside jit/ under JIT_CACHE_ROOT rather than under HPCAGENT_BENCH_CACHE (the FAST_SCRATCH
-# weights root a job only READS from). Before this existed, submit-canon.sh defaulted
+# weights root a job only READS from). Before this existed, the canon sweep defaulted
 # out_root to ${SCRATCH}/canon-<tag>-<stamp> directly: a bare-scratch directory nothing ever swept,
 # accumulating one DaCe build tree (dacecache-<column>[_rank<N>]) per column forever. A submitter
 # derives its own job dir under this root as ${HPCAGENT_BENCH_RUNS_ROOT}/<job-kind>/<name>-<stamp>
@@ -88,7 +88,7 @@ export HPCAGENT_BENCH_RUNS_ROOT="${HPCAGENT_BENCH_RUNS_ROOT:-${JIT_CACHE_ROOT}/r
 # before the work dir (build trees, per-rank shard DBs) is deleted -- never the destination a job
 # writes its OWN per-rank shards to directly (those still need one file per rank per job; see the
 # job-work-dir note above), or two jobs' rank 0 would race the same file. Consumers derive their own
-# table/filename under this root (canon_column.sh's finalize step uses
+# table/filename under this root (`job baseline --phase finish` uses
 # ${HPCAGENT_BENCH_RESULTS_DIR}/canon.db via scripts/merge_canon_results.py) rather than a single
 # hardcoded name, so a second deterministic-framework family can add its own file here without
 # renaming this one.

@@ -138,12 +138,13 @@ def test_collect_writes_one_list_per_arm_and_removes_a_finished_one(tmp_path: pa
 
 
 def stub_repo(root: pathlib.Path) -> pathlib.Path:
-    """A checkout whose experiments/ holds the real submit plumbing and an empty env.sh."""
-    experiments = root / "experiments"
-    experiments.mkdir(parents=True)
+    """A checkout holding the real submit plumbing, an empty env.sh, and an empty experiments/."""
+    cluster = root / "hpcagent_bench" / "cluster"
+    cluster.mkdir(parents=True)
+    (root / "experiments").mkdir()
     for name in ("arm_nodes.sh", "pin_env_kv.sh", "submit_common.sh", "env_layers.sh"):
-        shutil.copy(REPO / "experiments" / name, experiments / name)
-    (experiments / "env.sh").write_text("")
+        shutil.copy(REPO / "hpcagent_bench" / "cluster" / name, cluster / name)
+    (cluster / "env.sh").write_text("")
     return root
 
 

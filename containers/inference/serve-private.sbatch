@@ -184,7 +184,7 @@ sglang_argv() {  # sglang_argv <tp> <fraction> <port>: sets SERVER_ARGV
         --config "${RUN_DIR}/sglang-auth.yaml"
         --model-path "${MODEL_REPO}" --served-model-name "${SERVED_MODEL}"
         --tp-size "$1" --mem-fraction-static "$2" "${PRESET_FLAGS[@]}"
-        --chat-template "${REPO}/experiments/chat-template-qwen38.jinja" --trust-remote-code --language-only
+        --chat-template "${REPO}/containers/inference/chat-template-qwen38.jinja" --trust-remote-code --language-only
         --watchdog-timeout 1800 --context-length 262144 --mamba-full-memory-ratio 0.5 --max-running-requests 128
         "${METRICS_FLAGS[@]}" --reasoning-parser qwen3 --tool-call-parser qwen3_coder --enable-cache-report
         ${EXTRA_ARGS}
@@ -199,7 +199,7 @@ vllm_argv() {  # vllm_argv <tp> <fraction> <port>: sets SERVER_ARGV
         "${RUN_DIR}/api.key"
         /usr/bin/python3 -m vllm.entrypoints.cli.main serve "${MODEL_REPO}" --served-model-name "${SERVED_MODEL}"
         --tensor-parallel-size "$1" --gpu-memory-utilization "$2" "${PRESET_FLAGS[@]}"
-        --chat-template "${REPO}/experiments/chat-template-qwen38.jinja" --trust-remote-code
+        --chat-template "${REPO}/containers/inference/chat-template-qwen38.jinja" --trust-remote-code
         --max-model-len 262144 --max-num-seqs 128
         --enable-auto-tool-choice --tool-call-parser qwen3_coder --reasoning-parser qwen3
         ${EXTRA_ARGS}
@@ -433,7 +433,7 @@ run dir:  ${RUN_DIR} (mode $(stat -c %a -- "${RUN_DIR}"))
 EOF
 
 if [[ "${DRY_RUN}" != 1 ]]; then
-    ROLE=vllm OUT_DIR="${RUN_DIR}/monitor" INTERVAL=10 bash "${REPO}/experiments/node_monitor.sh" &
+    ROLE=vllm OUT_DIR="${RUN_DIR}/monitor" INTERVAL=10 bash "${REPO}/hpcagent_bench/cluster/node_monitor.sh" &
     MONITOR_PID=$!
 fi
 
