@@ -22,7 +22,10 @@ EXAMPLE = pathlib.Path(__file__).resolve().parents[1] / "experiments"
 def load_driver(monkeypatch, **env):
     for key, value in env.items():
         monkeypatch.setenv(key, value)
-    return importlib.reload(importlib.import_module("agent_driver"))
+    driver = importlib.reload(importlib.import_module("agent_driver"))
+    # The tool registry is a real ``mcp_server.py --describe`` subprocess: ask it before a test fakes Popen.
+    driver.tool_registry()
+    return driver
 
 
 def init_line(status):

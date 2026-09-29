@@ -287,13 +287,18 @@ def test_a_setup_that_sets_no_key_unsets_it_whatever_the_job_env_holds(tmp_path:
 
 
 def tool_names(env: dict[str, str]) -> set[str]:
-    """``tools/list`` of a fresh mcp_server.py under exactly ``env`` (as the worker's CLI starts it)."""
-    base = {key: value for key, value in os.environ.items() if key not in OWNED and key != "AGENT_PACKET"}
+    """``tools/list`` of a fresh mcp_server.py under exactly ``env``, started as the worker's CLI starts it:
+    ``env -u PYTHONSAFEPATH python3 mcp_server.py``, so the server's own directory heads sys.path."""
+    base = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in OWNED and key not in {"AGENT_PACKET", "PYTHONSAFEPATH"}
+    }
     request = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}) + "\n"
     result = subprocess.run(
         [sys.executable, str(MCP_SERVER)],
         input=request,
-        env={**base, "PYTHONSAFEPATH": "1", **env},
+        env={**base, **env},
         capture_output=True,
         text=True,
         timeout=60,
