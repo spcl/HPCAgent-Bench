@@ -359,8 +359,8 @@ RUN set -eux; \
 # pthreads MAX_THREADS=64 BLAS that crashed under numba prange), and numba on OpenMP, so every BLAS
 # caller shares one OpenMP runtime (containers/lib/numpy_on_openblas.sh).
 ENV NUMBA_THREADING_LAYER=omp
-COPY containers/lib/numpy_on_openblas.sh /tmp/numpy_on_openblas.sh
-RUN sh /tmp/numpy_on_openblas.sh /opt/view && rm /tmp/numpy_on_openblas.sh
+COPY containers/lib/numpy_on_openblas.sh containers/lib/one_openmp.sh containers/lib/one_openmp_gate.py containers/lib/openmp_runtimes.py /tmp/one-openmp/
+RUN sh /tmp/one-openmp/numpy_on_openblas.sh /opt/view && rm -rf /tmp/one-openmp
 
 # Judge-side python, installed above: the crawl/browser stack and the proxy the arms talk through.
 # The pins are asserted here.
@@ -578,6 +578,12 @@ RUN set -eux; \
         print('torch', torch.__version__)"; \
     } > /usr/local/share/image-provenance; \
     cat /usr/local/share/image-provenance
+
+# One OpenMP runtime file, LAST: every layer above that can install a wheel bundling its own libgomp
+# (torch, jax, cupy, scikit-learn, xgboost...) has run, so nothing after this reintroduces a copy.
+# containers/images/verify_image.py re-checks it in the finished image.
+COPY containers/lib/one_openmp.sh containers/lib/one_openmp_gate.py containers/lib/openmp_runtimes.py /tmp/one-openmp/
+RUN sh /tmp/one-openmp/one_openmp.sh /opt/view && rm -rf /tmp/one-openmp
 
 # Drop the build-time mirror rewrite from the SHIPPED image.
 COPY containers/lib/git_mirror.sh /tmp/git_mirror.sh
