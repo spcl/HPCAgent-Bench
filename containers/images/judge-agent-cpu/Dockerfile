@@ -355,6 +355,13 @@ RUN set -eux; \
       print('torch', torch.__version__)" "${TORCH_VERSION}"; \
     python3 -c "import mpi4py.MPI as M; v = M.Get_library_version(); assert 'MPICH' in v, v; print(v.splitlines()[0])"
 
+# numpy and scipy on the image's OpenBLAS rather than their wheels' bundled scipy-openblas (a second,
+# pthreads MAX_THREADS=64 BLAS that crashed under numba prange), and numba on OpenMP, so every BLAS
+# caller shares one OpenMP runtime (containers/lib/numpy_on_openblas.sh).
+ENV NUMBA_THREADING_LAYER=omp
+COPY containers/lib/numpy_on_openblas.sh /tmp/numpy_on_openblas.sh
+RUN sh /tmp/numpy_on_openblas.sh /opt/view && rm /tmp/numpy_on_openblas.sh
+
 # Judge-side python, installed above: the crawl/browser stack and the proxy the arms talk through.
 # The pins are asserted here.
 RUN set -eux; \
