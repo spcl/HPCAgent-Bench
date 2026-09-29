@@ -30,6 +30,8 @@
 # 6.0 and target-offload entry points gcc 16 can emit are not among what those clients use). The script lists
 # what is missing and exits 1 with nothing changed. --check-only stops there.
 #
+# OMP_REQUIRE_NVHPC=1 makes a missing NVHPC a failure instead of an image without the nvhpc context.
+#
 # Run it AFTER the last layer that can install an OpenMP runtime or an llvm-view library, and BEFORE
 # omp_context_gate.py; it is safe to run again.
 set -eu
@@ -148,7 +150,13 @@ if [ -n "${libomp}" ]; then
 fi
 
 # ---- write: nvhpc -------------------------------------------------------------------------------------------
+# OMP_REQUIRE_NVHPC=1 (the CUDA image, whose Dockerfile asserts nvc on PATH): a missing nvc is a bug, not a
+# context this image lacks.
 nvc="$(command -v nvc 2>/dev/null || true)"
+if [ -z "${nvc}" ] && [ "${OMP_REQUIRE_NVHPC:-0}" = 1 ]; then
+    echo "omp_contexts: OMP_REQUIRE_NVHPC=1 and nvc is not on PATH" >&2
+    exit 1
+fi
 if [ -n "${nvc}" ]; then
     nvlib="$(dirname "$(dirname "$(readlink -f "${nvc}")")")/lib"
     nvomp="$(ls "${nvlib}"/libnvomp.so* 2>/dev/null | head -1 || true)"
