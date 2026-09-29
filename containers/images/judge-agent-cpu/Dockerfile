@@ -327,6 +327,8 @@ RUN set -eux; \
 # that maps none (METIS, Scotch, HDF5, MPICH ...) is the gnu build installed above, reused. A package that
 # fails to build with llvm fails this layer: it is then reported, and the catalog record
 # (hpcagent_bench/omp_catalog.py) refuses it to llvm-family submissions rather than the image dropping it.
+# Each requirement names every language the package compiles (`%c,fortran=llvm`): in spack 1.x a bare `%llvm`
+# binds one language only, and C then stayed on the gcc@16 preference (libgomp; judge-agent-cpu 655986).
 ENV OMP_LLVM_ENV_DIR=/opt/omp/llvm/env
 RUN set -eux; \
     spack="${SPACK_ROOT}/bin/spack"; \
@@ -347,11 +349,11 @@ RUN set -eux; \
       '      require: [openblas]' \
       '    openblas:' \
       '      variants: threads=openmp +fortran +dynamic_dispatch' \
-      '      require: ["%llvm"]' \
+      '      require: ["%c,cxx,fortran=llvm"]' \
       '    netlib-scalapack:' \
-      '      require: ["%llvm"]' \
+      '      require: ["%c,fortran=llvm"]' \
       '    mumps:' \
-      '      require: ["%llvm"]' \
+      '      require: ["%c,fortran=llvm"]' \
       '  specs:' \
       '  - openblas@0.3.30' \
       '  - netlib-scalapack' \
