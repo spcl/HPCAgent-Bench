@@ -61,9 +61,6 @@ different build on different inputs.
 Null means "not recorded", never 0:
 
 - `total` / `unit`: ALWAYS null on AMD. Copies come back counted and timed, never sized.
-- `min_ns` / `max_ns`: null only under the legacy `rocprof` fallback (`tool` names it), which the
-  route takes only when `rocprofv3` is absent. Under it `memory[]` and `launches[]` come back as
-  EMPTY arrays, not rows of nulls.
 - `warps_per_block`: null when the trace has no GPU agent row with a non-zero `Wave_Front_Size`. The
   width is read, not assumed: NVIDIA's warp is 32, an AMD CDNA wavefront 64, RDNA 32.
 - `shared_memory` and `shared_memory_unit`: null when neither LDS column is present;
@@ -151,7 +148,6 @@ inside it: utilization, wavefront occupancy, launch geometry statistics, stalls,
 | tool | what it is | NVIDIA analogue |
 | --- | --- | --- |
 | `rocprofv3` | rocprofiler-sdk trace and counter CLI, the one behind this route | CUPTI, ncu's counters |
-| `rocprof` | v1 CLI, deprecated; this route's fallback when `rocprofv3` is absent | -- |
 | `rocprofv2` | older CLI: different flags, different output | -- |
 | `rocprof-sys` (was Omnitrace) | timeline and host sampling | `nsys` |
 | `rocprof-compute` (was Omniperf) | per-kernel counters, roofline | `ncu` |
