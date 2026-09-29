@@ -32,19 +32,27 @@ def _raw(short_name: str = "dimtest", **overrides: Any) -> dict[str, Any]:
     return base
 
 
+def _dimensions(spec: BenchSpec) -> dict[str, dict[str, Any]]:
+    """The size symbols of ``spec.parameters``: the merged view minus every config knob."""
+    return {
+        preset: {sym: val for sym, val in row.items() if sym not in spec.config_names}
+        for preset, row in spec.parameters.items()
+    }
+
+
 def test_a_manifest_without_config_exposes_parameters() -> None:
-    """A manifest with only a 'parameters:' block: 'dimensions' mirrors it verbatim and 'config'
+    """A manifest with only a 'parameters:' block: the size symbols mirror it verbatim and 'config'
     stays empty."""
     raw = _raw(parameters={"S": {"N": 16}, "M": {"N": 32}})
     spec = BenchSpec.from_dict(raw, source="<test>")
     assert spec.parameters == {"S": {"N": 16}, "M": {"N": 32}}
-    assert spec.dimensions == {"S": {"N": 16}, "M": {"N": 32}}
+    assert _dimensions(spec) == {"S": {"N": 16}, "M": {"N": 32}}
     assert spec.config == {}
     assert spec.constraints == ()
 
 
 def test_parameters_and_config_stay_apart() -> None:
-    """A manifest declaring 'parameters:' + 'config:' keeps them apart in .dimensions/.config,
+    """A manifest declaring 'parameters:' + 'config:' keeps them apart as size symbols/.config,
     while .parameters merges each config knob's representative value into every preset -- the
     view frameworks/benchmark.py, support/bindings/contract.py, and initialize.py already read."""
     raw = _raw(
@@ -55,7 +63,7 @@ def test_parameters_and_config_stay_apart() -> None:
         },
     )
     spec = BenchSpec.from_dict(raw, source="<test>")
-    assert spec.dimensions == {"S": {"N": 16}, "M": {"N": 32}}
+    assert _dimensions(spec) == {"S": {"N": 16}, "M": {"N": 32}}
     assert set(spec.config) == {"lvn_only", "max_iter"}
     assert spec.config["lvn_only"] == ConfigKnob(domain=(0, 1), value=None, selects="branch")
     assert spec.config["max_iter"] == ConfigKnob(domain=None, value=200, selects="iteration")
@@ -208,7 +216,7 @@ def test_a_curated_config_pins_a_representative_into_every_preset() -> None:
         _raw(parameters={"S": {"N": 16}, "M": {"N": 32}}, config=[{"a": 7}, {"a": 9}]), source="<test>"
     )
     assert spec.parameters == {"S": {"N": 16, "a": 7}, "M": {"N": 32, "a": 7}}
-    assert spec.dimensions == {"S": {"N": 16}, "M": {"N": 32}}
+    assert _dimensions(spec) == {"S": {"N": 16}, "M": {"N": 32}}
 
 
 def test_the_config_space_does_not_depend_on_the_size_preset() -> None:
@@ -217,7 +225,7 @@ def test_the_config_space_does_not_depend_on_the_size_preset() -> None:
         _raw(parameters={"S": {"N": 16}, "XL": {"N": 4096}}, config={"mode": {"domain": [0, 1, 2]}}), source="<test>"
     )
     assert len(spec.config_space) == 3
-    assert set(spec.dimensions) == {"S", "XL"}
+    assert set(spec.parameters) == {"S", "XL"}
 
 
 def test_fuzz_configs_is_rejected_with_a_pointer_to_the_new_block() -> None:

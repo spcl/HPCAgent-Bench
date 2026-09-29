@@ -93,7 +93,7 @@ import json
 import pathlib
 import re
 import sys
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from typing import NamedTuple, cast
 
 __all__ = [
@@ -105,7 +105,6 @@ __all__ = [
     "COMPACT_BOUNDARY_SUBTYPE",
     "INPUT_FIELDS",
     "PROVIDER_CACHE_DISCOUNT",
-    "SUSPECT_RATIO",
     "SYNTHETIC_MODEL",
     "USAGE_EVENT_MARKERS",
     "USAGE_FIELDS",
@@ -113,7 +112,6 @@ __all__ = [
     "USAGE_NAME",
     "AttemptTotals",
     "CostRow",
-    "OutputCounter",
     "TaskTotals",
     "accumulate_total_tokens",
     "as_block",
@@ -148,10 +146,6 @@ __all__ = [
 
 #: One episode's cost row. Mostly counts, plus the two strings that say where ``output`` came from.
 CostRow = dict[str, float | str]
-
-#: The RETOKENIZED tier, injected rather than imported (``retokenize.output_counter``): parsed
-#: events -> generated tokens, or None when the model's tokenizer is not available.
-OutputCounter = Callable[[list[dict[str, object]]], int | None]
 
 #: What a cache read is charged, as a fraction of a fresh token. ZERO, and the reason is not
 #: generosity -- it is that the alternative charges for a quantity that never existed.
@@ -271,11 +265,6 @@ COMPACTION_SEEN_KEY = "compaction-boundary-seen"
 #: standing as ``message_delta`` but from a different file, so it is named for the file it came from
 #: rather than borrowed from a stream event that never occurs there.
 USAGE_JSONL_SOURCE = "usage_jsonl"
-
-#: Above this ratio of retokenized to the server's result total, the result record is not believable
-#: as an episode total and the row is flagged ``output_suspect`` (F9: measured up to 4.73x on
-#: Qwen/SGLang, on complete episodes with every tool call answered).
-SUSPECT_RATIO: float = 1.15
 
 
 def usage_event(line: str) -> dict[str, object] | None:
@@ -536,7 +525,7 @@ def claude_events(log: pathlib.Path) -> list[dict[str, object]]:
         return [event for event in map(usage_event, handle) if event is not None]
 
 
-def episode_cost(log: pathlib.Path, output_counter: OutputCounter | None = None) -> CostRow:
+def episode_cost(log: pathlib.Path) -> CostRow:
     """One episode's fresh, cached and output tokens, plus the effective total.
 
     ``output`` is every token the model generated, reasoning included. ``thinking_estimate`` rides
@@ -545,7 +534,7 @@ def episode_cost(log: pathlib.Path, output_counter: OutputCounter | None = None)
     """
     if is_usage_transcript(log):
         return usage_episode_cost(log)
-    return events_cost(claude_events(log), output_counter)
+    return events_cost(claude_events(log))
 
 
 #: ``message.model`` of the CLI's own placeholder assistant turn -- the one it appends in place of a
@@ -560,13 +549,8 @@ def is_synthetic(message: dict[str, object]) -> bool:
     return message.get("model") == SYNTHETIC_MODEL
 
 
-def events_cost(events: list[dict[str, object]], output_counter: OutputCounter | None = None) -> CostRow:
-    """:func:`episode_cost` over a transcript's already-parsed :func:`claude_events`.
-
-    ``output_counter`` is the RETOKENIZED tier (``retokenize.output_counter``), consulted only when
-    the server counted nothing at all. It is a parameter rather than an import because this module
-    ships inside the agent image, where no tokenizer package exists.
-    """
+def events_cost(events: list[dict[str, object]]) -> CostRow:
+    """:func:`episode_cost` over a transcript's already-parsed :func:`claude_events`."""
     per_turn: dict[str, dict] = {}
     order: list[str] = []
     thinking = 0
@@ -636,7 +620,7 @@ def events_cost(events: list[dict[str, object]], output_counter: OutputCounter |
         cached += cached_now
         compactions += compacted
         previous_input = turn_input
-    output, source, shape, suspect = resolve_output(deltas, output_total if reported else None, events, output_counter)
+    output, source, shape = resolve_output(deltas, output_total if reported else None)
     if compacted_by_cli and model_usage_event is not None:
         # The compaction request's own tokens (:func:`model_usage_totals`), missing from every turn
         # folded above -- charged as a full cache miss, the same rule already applied to the REBUILT
@@ -660,9 +644,8 @@ def events_cost(events: list[dict[str, object]], output_counter: OutputCounter |
         "output_source": source,
         # Which shape the message_delta readings had, empty when there were none.
         "output_delta_shape": shape,
-        # The result record claimed an episode total the transcript's own content exceeds by more
-        # than SUSPECT_RATIO -- unexplained, and measured only on Qwen/SGLang (F9).
-        "output_suspect": suspect,
+        # Kept for the row schema: nothing flags a suspect episode total any more.
+        "output_suspect": 0.0,
         # The per-turn sum: what an API would BILL and what the literature reports.
         "naive_total": fresh + cached + output,
         # Every token once: the context that was ever built, plus everything generated.
@@ -682,16 +665,13 @@ def events_cost(events: list[dict[str, object]], output_counter: OutputCounter |
 def resolve_output(
     deltas: dict[str, list[int]],
     result_total: int | None,
-    events: list[dict[str, object]],
-    output_counter: OutputCounter | None,
-) -> tuple[int, str, str, float]:
-    """PRECEDENCE (8.2): per-request message_delta sum, then the result record, then the model's own
-    tokenizer, then nothing. Returns ``(output, source, delta shape, suspect flag)``.
+) -> tuple[int, str, str]:
+    """PRECEDENCE (8.2): per-request message_delta sum, then the result record, then nothing.
+    Returns ``(output, source, delta shape)``.
 
     Each tier is strictly better evidence than the one under it. The deltas are the server's count
     of each REQUEST and survive a kill; the result record is the server's count of the EPISODE and
-    arrives only if the episode ended; the retokenizer counts what the transcript says was
-    generated, which is the model's work but not the server's arithmetic.
+    arrives only if the episode ended.
     """
     shapes: set[str] = set()
     delta_sum = 0
@@ -702,22 +682,11 @@ def resolve_output(
             shapes.add(shape)
     shape = "mixed" if len(shapes) > 1 else next(iter(shapes), "")
 
-    retokenized = output_counter(events) if output_counter is not None else None
-    # Flagged, never substituted: the result record stays the answer, and the flag says it is not
-    # believable as one. Only computed where both numbers exist.
-    suspect = float(
-        result_total is not None
-        and result_total > 0
-        and retokenized is not None
-        and retokenized / result_total > SUSPECT_RATIO
-    )
     if delta_sum > 0:
-        return delta_sum, "message_delta", shape, suspect
+        return delta_sum, "message_delta", shape
     if result_total is not None:
-        return result_total, "result", shape, suspect
-    if retokenized is not None:
-        return retokenized, "retokenized", shape, 0.0
-    return 0, "none", shape, 0.0
+        return result_total, "result", shape
+    return 0, "none", shape
 
 
 def numbered_attempts(paths: Iterator[pathlib.Path]) -> list[pathlib.Path]:
@@ -784,7 +753,7 @@ class AttemptTotals(NamedTuple):
     output: int
 
 
-def attempt_totals(log: pathlib.Path, output_counter: OutputCounter | None = None) -> AttemptTotals:
+def attempt_totals(log: pathlib.Path) -> AttemptTotals:
     """One attempt's effective, provider and billed tokens (8.1) and their components, from ONE read of its transcript: the
     effective cost model of :func:`events_cost` and the last-usage-per-message-id fold of
     :func:`fold_billed_event` (plus :func:`fold_compaction_recovery`, the same as
@@ -799,7 +768,7 @@ def attempt_totals(log: pathlib.Path, output_counter: OutputCounter | None = Non
         for event in events:
             fold_compaction_recovery(event, billed_by_message)
             fold_billed_event(event, billed_by_message)
-        cost = events_cost(events, output_counter)
+        cost = events_cost(events)
         billed = billed_total(billed_by_message)
     return AttemptTotals(
         int(cast("float", cost["effective"])),
@@ -847,7 +816,7 @@ def final_attempt_start(worker_dir: pathlib.Path, logs: list[pathlib.Path]) -> i
     return int(renamed[-1].stat().st_mtime * 1000) if renamed else 0
 
 
-def task_totals(worker_dir: pathlib.Path, output_counter: OutputCounter | None = None) -> TaskTotals:
+def task_totals(worker_dir: pathlib.Path) -> TaskTotals:
     """The TASK TOKEN TOTAL (T2) of one task: its FINAL attempt, and what the earlier ones spent.
 
     One rule for every directory, old and new: the last agent ran the task from nothing to its end.
@@ -861,7 +830,7 @@ def task_totals(worker_dir: pathlib.Path, output_counter: OutputCounter | None =
     logs = attempt_transcripts(worker_dir)
     if not logs:
         return TaskTotals(0, None, None, 0, 0, 0)
-    per_attempt = [attempt_totals(log, output_counter) for log in logs]
+    per_attempt = [attempt_totals(log) for log in logs]
     final = per_attempt[-1]
     return TaskTotals(
         attempts=len(logs),
