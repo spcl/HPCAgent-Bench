@@ -538,3 +538,10 @@ def test_read_observations_answers_a_scicomp_episode_with_its_first_submission(t
     with pytest.warns(UserWarning, match="first /submit"):
         frame = experiments.read_observations(path)
     assert graded_stamps(frame) == [200]
+
+
+def test_a_task_whose_job_was_never_recorded_is_labelled_not_refused() -> None:
+    """A migrated episode with no Slurm job reads back with a missing ``job``; its task still has one
+    label, joined with an empty job rather than raising on the missing value."""
+    rows = pd.DataFrame({"run_root": ["r", "r"], "job": [pd.NA, "7"], "run_id": ["w0", "w0"]}, dtype="string")
+    assert experiments.task_labels(rows).tolist() == ["r\x1f\x1fw0", "r\x1f7\x1fw0"]

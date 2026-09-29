@@ -43,12 +43,16 @@ __all__ = [
     "FIRST_SUBMISSION_TRACKS",
     "GRADED_RECORDS",
     "IDENTITY",
+    "JUDGE_DIRNAME",
     "LOG",
+    "MERGED_DB_NAME",
     "NAME_FIRST",
     "NAME_READERS",
     "OBSERVATIONS_TABLE",
     "RECORD_TABLES",
+    "RECORD_WHERE",
     "RENAMED_ARM_PREFIXES",
+    "SHARD_DEPTH",
     "TASK_KEY",
     "Database",
     "agent_indices",
@@ -68,6 +72,7 @@ __all__ = [
     "judge_database",
     "kernel_track",
     "main",
+    "merged_shard",
     "observations",
     "read_database",
     "read_observations",
@@ -83,8 +88,7 @@ if TYPE_CHECKING:
 
 LOG = logging.getLogger(__name__)
 
-#: Tables the judge writes a graded observation into. Missing tables are skipped: an old campaign
-#: predates one of them, and a run that recorded nothing is a fact about that run, not an error.
+#: The records a grade reads as (:data:`RECORD_WHERE`).
 RECORD_TABLES: tuple[str, ...] = ("calls", "submissions", "attempts")
 
 #: Databases whose name says they are not a judge record. Everything else under a run root that
@@ -99,10 +103,30 @@ DB_SKIP_NAMES: frozenset[str] = frozenset({"cache.db", "index.db"})
 FINAL_GRADE_DIRNAME: str = "final-grade"
 
 
+#: A finished job's ONE results DB, ``<job>/results.db``: every judge shard and in-job final grade of
+#: the job and every episode record, merged (``experiments/merge_results.py``).
+MERGED_DB_NAME: str = "results.db"
+#: Where a judge rank's shard sits in its job directory: ``<job>/judge/rank-<k>/<shard>.db``.
+SHARD_DEPTH: int = 2
+JUDGE_DIRNAME: str = "judge"
+
+
+def merged_shard(db: pathlib.Path) -> bool:
+    """Whether ``db`` is a judge shard its job's :data:`MERGED_DB_NAME` already holds."""
+    parent = db.parent.parent
+    return parent.name == JUDGE_DIRNAME and (db.parents[SHARD_DEPTH] / MERGED_DB_NAME).is_file()
+
+
 def judge_database(db: pathlib.Path) -> bool:
     """Whether ``db``, found under a run root, is a judge record: a file, not named in
-    :data:`DB_SKIP_NAMES`, and not an in-job final grade (:data:`FINAL_GRADE_DIRNAME`)."""
-    return db.is_file() and db.name not in DB_SKIP_NAMES and FINAL_GRADE_DIRNAME not in db.parent.parts
+    :data:`DB_SKIP_NAMES`, not an in-job final grade (:data:`FINAL_GRADE_DIRNAME`) and not a shard
+    its job's merged DB holds (:func:`merged_shard`: read twice, every grade would count twice)."""
+    return (
+        db.is_file()
+        and db.name not in DB_SKIP_NAMES
+        and FINAL_GRADE_DIRNAME not in db.parent.parts
+        and not merged_shard(db)
+    )
 
 
 class Database(NamedTuple):
@@ -177,41 +201,41 @@ def selects(row: dict[str, Any], want: dict[str, frozenset[str]]) -> bool:
     return True
 
 
+#: A results DB's grades by the record they read as: every request of the agent's trajectory
+#: (``calls``), a credited /submit verdict (``submissions``) and a rejected one (``attempts``).
+RECORD_WHERE: dict[str, str] = {
+    "calls": "call_index IS NOT NULL",
+    "submissions": "credited_speedup IS NOT NULL AND kind IN ('submit', 'promoted', 'harvested', 'probe') "
+    "AND id NOT IN (SELECT grade_id FROM disqualifications)",
+    "attempts": "credited_speedup IS NULL AND reason IS NOT NULL AND kind IN ('submit', 'promoted', 'harvested', 'probe')",
+}
+
+
 def read_database(db: Database, want: dict[str, frozenset[str]]) -> Iterator[dict[str, Any]]:
-    """Rows one database contributes. Never raises on a bad database -- it yields nothing and warns.
+    """Rows one results DB (schema v1) contributes. Never raises on a bad database -- it yields nothing
+    and warns.
 
     An unreadable database in a campaign of hundreds is a fact to report, not a reason to abandon
     the extraction: the alternative is that one truncated file from a killed job costs the whole
     table.
     """
+    from hpcagent_bench.harness import results_db
+
     try:
-        conn = sqlite3.connect(f"file:{db.path}?mode=ro", uri=True, timeout=30.0)
-    except sqlite3.Error as exc:
+        conn = results_db.open_ro(db.path)
+    except (OSError, sqlite3.Error, results_db.NotV1Error) as exc:
         LOG.warning("experiments: cannot read %s (%s); skipped", db.path, exc)
         return
-    conn.row_factory = sqlite3.Row
     # closing(), not `with conn:` -- a connection's own context manager commits and never closes.
     with contextlib.closing(conn):
-        tables = frozenset(r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'"))
-        if "runs" not in tables:
-            LOG.warning("experiments: %s predates the runs table; run scripts/migrate_db.py", db.path)
-            return
-        # A DB written before an identity column existed (runs.harness) yields NULL for it.
-        have = frozenset(r[1] for r in conn.execute("PRAGMA table_info(runs)"))
-        selected = ", ".join(f"r.{c}" if c in have else f"NULL AS {c}" for c in IDENTITY)
-        for table in RECORD_TABLES:
-            if table not in tables:
-                continue
-            # LEFT JOIN, not JOIN: a row whose run was never recorded is a fact about that run and
-            # has to reach the caller as an unidentified row, not vanish from the count.
-            query = f"SELECT t.*, {selected} FROM {table} t LEFT JOIN runs r USING (run_id) ORDER BY t.ts, t.id"
-            for row in conn.execute(query):
-                record = dict(row)
-                # The judge's ``runs`` row for an adhoc grade carries the JOB's identity, so the join
-                # would file it under a real arm; it is no episode's answer and never credited.
-                if frozen_observations.stored_adhoc(record.get("run_id")) or not selects(record, want):
+        for table, where in RECORD_WHERE.items():
+            for row in conn.execute(f"SELECT * FROM grades_flat WHERE {where} ORDER BY ts_ms, id"):
+                record = dict(row) | {"run_id": row["label"], "ts": row["ts_ms"]}
+                # The ``adhoc`` run carries the JOB's identity, so its grade would read as an arm's
+                # answer; it is no episode's answer and never credited.
+                if frozen_observations.stored_adhoc(record["run_id"]) or not selects(record, want):
                     continue
-                node, problem, worker = agent_indices(record.get("run_id") or "")
+                node, problem, worker = agent_indices(record["run_id"])
                 record.update(
                     {
                         "run_root": db.run_root,
@@ -384,8 +408,9 @@ TASK_KEY: tuple[str, ...] = ("run_root", "job", "run_id")
 
 
 def task_labels(rows: "pd.DataFrame") -> "pd.Series":
-    """Each row's task (:data:`TASK_KEY`) as one string, so tasks can be grouped and mapped over."""
-    return rows[list(TASK_KEY)].astype(str).agg("\x1f".join, axis=1)
+    """Each row's task (:data:`TASK_KEY`) as one string, so tasks can be grouped and mapped over. A
+    blank ``job`` (an episode whose Slurm job was never recorded) reads back missing and joins as ""."""
+    return rows[list(TASK_KEY)].astype(object).fillna("").astype(str).agg("\x1f".join, axis=1)
 
 
 def task_rows(frame: "pd.DataFrame", column: str) -> "pd.DataFrame | None":
