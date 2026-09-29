@@ -58,7 +58,8 @@ def submissions(rows: list[dict[str, object]]) -> pd.DataFrame:
         "source_path": "x",
         "timing_suspect": 0,
         "packet": "",
-        "timing_reduction": "mwd-v2",
+        "timing_reduction": "mw4x5",
+        "denominator": "best-of(numba,c)",
     }
     for column, value in defaults.items():
         if column not in out:
@@ -402,12 +403,22 @@ def test_a_rerun_that_verified_nothing_leaves_the_kernel_unanswered() -> None:
     rule), the newest run is chosen -- decided over call rows too -- and the kernel has no answer.
     Under the served policy it is present at 1.0 and flagged undelivered, never at 9.0."""
     rows = rerun(
-        {"row_kind": "submission", "speedup": 9.0, "ts_ms": 10}, {"row_kind": "call", "tokens": 50.0, "ts_ms": 20}
+        {"row_kind": "submission", "speedup": 9.0, "ts_ms": 10, "timing_reduction": "mwd-v2"},
+        {"row_kind": "call", "tokens": 50.0, "ts_ms": 20},
     )
     served = population.kernel_answers(rows)
     assert served.speedup.tolist() == [population.NOT_DELIVERED]
     assert served[population.DELIVERED_COLUMN].tolist() == [False]
     assert population.kernel_answers(rows, policy=population.KernelPolicy.SOLVED).empty
+
+
+def test_a_run_with_a_text_job_among_numeric_ones_is_chosen_not_refused() -> None:
+    """A migrated episode whose Slurm job was never recorded carries a text ``job`` beside the numeric
+    ids of the rest, so the column reads back as object dtype; grouping it beside the string columns
+    turned every key into NaN and the merge refused the slice."""
+    rows = submissions([{"row_kind": "call", "tokens": 50.0, "ts_ms": 20}])
+    rows["job"] = pd.Series(["db"], dtype=object, index=rows.index)
+    assert population.latest_runs(rows).job.tolist() == ["db"]
 
 
 FINAL = {"timing_reduction": timing.FINAL_GRADE_REDUCTION}
@@ -496,31 +507,16 @@ def test_a_superseded_live_submission_does_not_mix_with_its_episodes_final_answe
     assert answers["timing_reduction"].tolist() == [v2, v2]
 
 
-def test_two_final_answers_under_two_reductions_are_still_refused() -> None:
-    """Moving the check onto the answers must not let a genuine mix through: an episode whose
-    newest submission was never re-timed stands beside a re-timed one, and that is refused."""
+def test_an_older_final_pass_is_not_credited_beside_the_final_grade() -> None:
+    """An episode whose newest submission carries an older final pass's stamp has no answer beside
+    the one the final grade re-timed."""
     rows = submissions(
         [
             {"run_id": "w0", "speedup": 4.0, "ts_ms": 1, "timing_reduction": timing.FINAL_GRADE_REDUCTION},
             {"run_id": "w1", "speedup": 5.0, "ts_ms": 2, "timing_reduction": "mwd-final"},
         ]
     )
-    with pytest.raises(population.MixedPopulationError, match="timing reductions"):
-        population.graded_episode_rows(rows, order=("ts_ms",), tainted=())
-
-
-def test_a_live_exempt_answer_is_not_checked_for_its_reduction() -> None:
-    """A live-exempt answer (source deleted, live grade stands as final) already counts as final,
-    whatever it was recorded under; the same answer without the exemption is refused."""
-    rows = submissions(
-        [
-            {"run_id": "w0", "speedup": 4.0, "ts_ms": 1, "timing_reduction": timing.FINAL_GRADE_REDUCTION},
-            {"run_id": "w1", "speedup": 5.0, "ts_ms": 2, "timing_reduction": "mwd-final"},
-        ]
-    ).assign(grade_final_source=["", population.LIVE_EXEMPT])
-    assert len(population.graded_episode_rows(rows, order=("ts_ms",), tainted=())) == 2
-    with pytest.raises(population.MixedPopulationError, match="timing reductions"):
-        population.graded_episode_rows(rows.assign(grade_final_source=""), order=("ts_ms",), tainted=())
+    assert population.graded_episode_rows(rows, order=("ts_ms",), tainted=()).run_id.tolist() == ["w0"]
 
 
 def test_each_kernel_answer_keeps_the_stamp_it_was_graded_under() -> None:
@@ -578,59 +574,39 @@ def test_designed_repeats_answer_with_the_median_and_carry_one_real_runs_row(
     assert (answers.speedup.tolist(), answers.source_path.tolist()) == ([median], [carrier])
 
 
-@pytest.mark.parametrize(
-    "stamps",
-    [
-        pytest.param(["mwd-v2", "mok-v1"], id="two-stamped-reductions"),
-        pytest.param(["mwd-v2", None], id="stamped-beside-unstamped"),
-        pytest.param(["mwd-v2", ""], id="stamped-beside-blank-csv-cell"),
-    ],
-)
-def test_a_final_answer_refuses_speed_ups_credited_under_two_reductions(stamps: list[object]) -> None:
-    """A ratio of minima, a ratio of medians and a floored grid credit are three estimators over the
-    same samples; the best of rows from two of them is a number no reduction produced."""
+@pytest.mark.parametrize("stamp", ["mwd-v2", "mwd-v3", "mok-v1", "mwd-final", "mw4x5-final", None, ""])
+def test_only_the_final_grade_is_credited_and_an_old_protocol_only_episode_has_no_answer(stamp: object) -> None:
+    """One protocol: an episode whose answer carries any stamp but the final grade's has no answer,
+    and one under the final grade (or its older spelling) keeps its own."""
     rows = submissions(
         [
-            {"run_id": f"w{i}", "speedup": 2.0 + i, "ts_ms": i, "timing_reduction": stamp}
-            for i, stamp in enumerate(stamps)
+            {"run_id": "w0", "speedup": 3.0, "ts_ms": 1, "timing_reduction": stamp},
+            {"run_id": "w1", "speedup": 5.0, "ts_ms": 2, **FINAL},
+            {"run_id": "w2", "speedup": 7.0, "ts_ms": 3, **OLDER_SPELLING},
         ]
     )
-    with pytest.raises(population.MixedPopulationError, match="timing reductions"):
-        population.graded_episode_rows(rows, ("ts_ms", "attempt_index"))
+    best = population.graded_episode_rows(rows, ("ts_ms", "attempt_index"))
+    assert best.run_id.tolist() == ["w1", "w2"]
+    assert population.graded_episode_rows(rows[rows.run_id == "w0"], ("ts_ms", "attempt_index")).empty
 
 
-def test_a_campaign_recorded_entirely_before_the_stamp_is_refused_by_default() -> None:
-    """mwd-v2 is the default rule everywhere now: an all-unstamped campaign must be migrated
-    (``hpcagent-bench regrade``) before it is pooled, not pooled silently as a third reduction."""
+def test_an_episode_whose_last_submission_was_never_final_graded_has_no_answer() -> None:
+    """Its earlier final-graded submission is never substituted: the answer is the last one, owed a
+    final grade."""
     rows = submissions(
         [
-            {"run_id": "w0", "speedup": 3.0, "ts_ms": 1, "timing_reduction": None},
-            {"run_id": "w1", "speedup": 5.0, "ts_ms": 2, "timing_reduction": None},
+            {"run_id": "w0", "speedup": 3.0, "ts_ms": 1, **FINAL},
+            {"run_id": "w0", "speedup": 5.0, "ts_ms": 2, "timing_reduction": "mwd-v2"},
         ]
     )
-    with pytest.raises(population.MixedPopulationError, match="unstamped"):
-        population.graded_episode_rows(rows, ("ts_ms", "attempt_index"))
-
-
-def test_a_campaign_recorded_entirely_before_the_stamp_pools_with_allow_unstamped() -> None:
-    """The old pooling behaviour is still reachable, but only by explicit opt-in for a deliberate
-    legacy-only analysis -- never a script's default."""
-    rows = submissions(
-        [
-            {"run_id": "w0", "speedup": 3.0, "ts_ms": 1, "timing_reduction": None},
-            {"run_id": "w1", "speedup": 5.0, "ts_ms": 2, "timing_reduction": None},
-        ]
-    )
-    best = population.graded_episode_rows(rows, ("ts_ms", "attempt_index"), allow_unstamped=True)
-    assert sorted(best.speedup.tolist()) == [3.0, 5.0]
+    assert population.graded_episode_rows(rows, ("ts_ms", "attempt_index")).empty
 
 
 def test_a_frame_with_no_reduction_column_is_refused_by_default() -> None:
-    """A stripped/pre-migration export that dropped the column entirely cannot prove its rows are
-    mwd-v2 either, so it is refused the same way an all-unstamped column is."""
+    """A stripped export that dropped the column entirely cannot show any row is a final grade."""
     rows = submissions([{"run_id": "w0", "speedup": 3.0, "ts_ms": 1}]).drop(columns=["timing_reduction"])
     assert "timing_reduction" not in rows.columns
-    with pytest.raises(population.MixedPopulationError, match="hpcagent-bench regrade"):
+    with pytest.raises(population.MixedPopulationError, match="no 'timing_reduction' column"):
         population.graded_episode_rows(rows, ("ts_ms", "attempt_index"))
 
 
@@ -640,7 +616,7 @@ def test_an_untimed_row_carries_no_reduction_and_does_not_mix_with_a_timed_one()
     rows = submissions(
         [
             {"run_id": "w0", "speedup": 0.0, "ts_ms": 1, "timing_reduction": None},
-            {"run_id": "w1", "speedup": 0.5, "ts_ms": 2, "timing_reduction": "mwd-v2"},
+            {"run_id": "w1", "speedup": 0.5, "ts_ms": 2, **FINAL},
         ]
     )
     best = population.graded_episode_rows(rows, ("ts_ms", "attempt_index"))

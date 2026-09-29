@@ -60,6 +60,7 @@ OBSERVATION_FIELDS: tuple[str, ...] = (
     "timing_suspect",
     "timing_reduction",
     "baseline_policy",
+    "denominator",
     "cpu",
     "node",
     "commit_sha",
