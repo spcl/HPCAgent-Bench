@@ -23,6 +23,7 @@ import pytest
 from hpcagent_bench import observations_extract, paths
 from hpcagent_bench.harness import results_db, timing
 from hpcagent_bench.stats import score_rule
+from tests import results_seed
 from tests.results_rows import grades, runs, sources, submissions
 
 VINTAGES: dict[str, list[str]] = json.loads(
@@ -434,12 +435,55 @@ def test_a_source_no_blob_holds_is_recovered_from_the_transcript_that_wrote_it(
 
 
 def test_a_bf16_kernel_recorded_under_the_configured_float64_is_corrected() -> None:
-    """Older judges wrote the configured datatype for a kernel crossing the ABI in bf16."""
+    """Older judges wrote the configured datatype for a kernel crossing the ABI in bf16. A grade of an
+    ML kernel without a storage-only precision really ran at float64: the ML track's bf16 default
+    postdates it and never rewrites it."""
     data = migrate_db.Dataset()
     run = data.run(JOB, f"{ARM}.n0.p0.w0")
     assert run is not None
     data.grade((*run, "dist_softmax", TS, "submit"), {"datatype": "float64"})
     data.grade((*run, "gemm", TS, "submit"), {"datatype": "float64"})
+    data.grade((*run, "softmax", TS, "submit"), {"datatype": "float64"})
     migrate_db.correct_datatypes(data)
-    assert [row.values["datatype"] for row in data.grades.values()] == ["bf16", "float64"]
+    assert [row.values["datatype"] for row in data.grades.values()] == ["bf16", "float64", "float64"]
     assert data.recovered["grades whose datatype float64 was corrected to bf16"] == 1
+
+
+def test_the_void_cpf_and_naming_rules_shape_the_written_database(tmp_path: pathlib.Path) -> None:
+    """A void arm leaves no row, a CPF arm goes to the archive only, and a legacy ``cpf-`` name that
+    used no CPF loses the prefix in its arm, run labels and experiment."""
+    out, archive = tmp_path / "v1.db", tmp_path / "cpf.db"
+    arms = {
+        "void": "cpf-llr-focus40-kimi27sglang-c",
+        "cpf": "cpf-llr-focus40-qwen38-c-cpfsrc",
+        "legacy": "cpf-llr-focus40-qwen38-c",
+        "kept": "gpu-llr-focus40-kimi27sglang-hip",
+    }
+    for ts, arm in enumerate(arms.values()):
+        results_seed.submission(out, f"{arm}.n0.p{ts}.w{ts}", "gemm", ts, job=7)
+    with contextlib.closing(sqlite3.connect(out)) as conn:
+        conn.execute("UPDATE arms SET experiment = 'cpf-llr-focus40'")
+        conn.execute("PRAGMA journal_mode = DELETE")
+        conn.commit()
+
+    touched = migrate_db.set_aside(out, archive)
+
+    with contextlib.closing(sqlite3.connect(out)) as conn:
+        kept = conn.execute("SELECT arm, experiment FROM arms ORDER BY arm").fetchall()
+        labels = sorted(row[0] for row in conn.execute("SELECT label FROM runs"))
+        assert conn.execute("SELECT COUNT(*) FROM grades").fetchone()[0] == 2
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+    with contextlib.closing(sqlite3.connect(archive)) as conn:
+        archived = [row[0] for row in conn.execute("SELECT arm FROM arms")]
+        assert conn.execute("SELECT COUNT(*) FROM grades").fetchone()[0] == 1
+    assert kept == [("gpu-llr-focus40-kimi27sglang-hip", "llr-focus40"), ("llr-focus40-qwen38-c", "llr-focus40")]
+    assert labels == ["gpu-llr-focus40-kimi27sglang-hip.n0.p3.w3", "llr-focus40-qwen38-c.n0.p2.w2"]
+    assert archived == [arms["cpf"]]
+    assert touched == {
+        "void arms": 1,
+        "void grades": 1,
+        "cpf arms": 1,
+        "cpf grades": 1,
+        "renamed arms": 1,
+        "renamed experiment arms": 2,
+    }
