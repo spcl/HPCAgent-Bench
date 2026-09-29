@@ -144,7 +144,7 @@ def launch_env(scenario: str) -> tuple[tuple[str, str], ...]:
 def agent_runtime(driver_path: pathlib.Path) -> pathlib.Path:
     """The runtime directory run_agent resolves mcp_server.py under: the driver's checkout, since the
     golden environment binds no HPCAGENT_BENCH_AGENT_DIR."""
-    return driver_path.resolve().parents[1] / "containers" / "agent"
+    return driver_path.resolve().parents[1] / "agent"
 
 
 class RecordedProcess:
@@ -386,10 +386,10 @@ def main() -> int:
                 ["git", "-C", str(REPO), "show", f"{args.ref}:experiments/{name}"], check=True, capture_output=True
             ).stdout
             (experiments / name).write_bytes(source)
-        # The driver reads its tool registry from <tree>/containers/agent (agent_runtime), so the
+        # The driver reads its tool registry from <tree>/agent (agent_runtime), so the
         # payload is exported beside the sources at the same ref.
         archive = subprocess.run(
-            ["git", "-C", str(REPO), "archive", "--format=tar", args.ref, "containers/agent"],
+            ["git", "-C", str(REPO), "archive", "--format=tar", args.ref, "agent"],
             check=True,
             capture_output=True,
         ).stdout

@@ -23,7 +23,7 @@ from types import ModuleType
 
 import pytest
 
-AGENT = pathlib.Path(__file__).resolve().parents[1] / "containers/agent"
+AGENT = pathlib.Path(__file__).resolve().parents[1] / "agent"
 EXAMPLE = pathlib.Path(__file__).resolve().parents[1] / "experiments"
 
 

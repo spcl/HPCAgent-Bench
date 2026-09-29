@@ -25,7 +25,7 @@ LAUNCH_CHECK: pathlib.Path = CE_IMAGES / "tools_launch_check.py"
 #: Image paths the tool scripts are bound at; no recipe may create or read them.
 TOOL_MOUNTS: tuple[str, ...] = ("/opt/hpcagent-bench-agent", "/opt/hpcagent-bench-judge")
 HARNESS_BUILD_INPUT: re.Pattern[str] = re.compile(
-    r"containers/agent/harness/(?:pins\.env|install_tools\.sh|node/package(?:-lock)?\.json)"
+    r"agent/harness/(?:pins\.env|install_tools\.sh|node/package(?:-lock)?\.json)"
 )
 
 
@@ -49,7 +49,7 @@ def copy_sources(text: str) -> list[str]:
 
 
 def agent_copies_that_are_not_build_inputs(text: str) -> list[str]:
-    agent = [source for source in copy_sources(text) if source.startswith("containers/agent")]
+    agent = [source for source in copy_sources(text) if source.startswith("agent")]
     return [source for source in agent if HARNESS_BUILD_INPUT.fullmatch(source) is None]
 
 
@@ -62,20 +62,20 @@ def test_no_judge_agent_image_creates_or_reads_a_tool_mount(dockerfile: str) -> 
 @pytest.mark.parametrize("dockerfile", JUDGE_AGENT_DOCKERFILES)
 def test_a_judge_agent_image_copies_only_harness_build_inputs_from_containers_agent(dockerfile: str) -> None:
     text = recipe(dockerfile)
-    assert any(source.startswith("containers/agent/harness/") for source in copy_sources(text)), dockerfile
+    assert any(source.startswith("agent/harness/") for source in copy_sources(text)), dockerfile
     assert agent_copies_that_are_not_build_inputs(text) == []
 
 
 @pytest.mark.parametrize(
     ("text", "flagged"),
     [
-        ("COPY containers/agent /opt/hpcagent-bench-agent\n", ["containers/agent"]),
-        ("COPY --chown=1:1 containers/agent/tools/mcp_server.py /x/\n", ["containers/agent/tools/mcp_server.py"]),
+        ("COPY agent /opt/hpcagent-bench-agent\n", ["agent"]),
+        ("COPY --chown=1:1 agent/tools/mcp_server.py /x/\n", ["agent/tools/mcp_server.py"]),
         (
-            "COPY containers/agent/harness/pins.env \\\n     containers/agent/harness/run_miniswe.py /h/\n",
-            ["containers/agent/harness/run_miniswe.py"],
+            "COPY agent/harness/pins.env \\\n     agent/harness/run_miniswe.py /h/\n",
+            ["agent/harness/run_miniswe.py"],
         ),
-        ("COPY containers/agent/harness/install_tools.sh containers/agent/harness/node/package.json /h/\n", []),
+        ("COPY agent/harness/install_tools.sh agent/harness/node/package.json /h/\n", []),
     ],
 )
 def test_the_copy_scan_flags_each_agent_tree_copy_that_is_not_a_build_input(text: str, flagged: list[str]) -> None:
@@ -85,7 +85,7 @@ def test_the_copy_scan_flags_each_agent_tree_copy_that_is_not_a_build_input(text
 def test_verify_image_binds_the_checkout_agent_tree_and_runs_its_checks_from_repo() -> None:
     text = (CE_IMAGES / "verify_image.sbatch").read_text(encoding="utf-8")
     assert 'REPO="${REPO:-${S}/hpcagent-bench}"' in text
-    assert '"${REPO}/containers/agent:/opt/hpcagent-bench-agent"' in text
+    assert '"${REPO}/agent:/opt/hpcagent-bench-agent"' in text
     assert 'python3 "${REPO}/containers/images/tools_launch_check.py"' in text
     assert "exit $(( rc + sc + tools_rc ))" in text
     hardcoded = [line for line in text.splitlines() if "${S}/hpcagent-bench" in line and not line.startswith("REPO=")]

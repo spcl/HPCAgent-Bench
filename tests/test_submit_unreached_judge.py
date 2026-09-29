@@ -19,7 +19,7 @@ import pytest
 
 from tests.judge_router_stub import closed_port_url
 
-TOOLS = pathlib.Path(__file__).resolve().parents[1] / "containers" / "agent" / "tools"
+TOOLS = pathlib.Path(__file__).resolve().parents[1] / "agent" / "tools"
 
 #: What ``http_json.call_json`` returns for the router's 503 when its upstream judge refused the connection.
 ROUTER_UNREACHED = {

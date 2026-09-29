@@ -126,8 +126,8 @@ def test_a_method_packet_names_a_directory_that_ships(key: str) -> None:
     method = tags.registry().packet_defs[key].method
     if not method:
         return
-    directory = paths.ROOT / "containers" / "agent" / "packets" / method
-    assert directory.is_dir(), f"{key}: method {method!r} has no directory under containers/agent/packets/"
+    directory = paths.ROOT / "agent" / "packets" / method
+    assert directory.is_dir(), f"{key}: method {method!r} has no directory under agent/packets/"
 
 
 def test_the_pages_a_packet_tool_owns_are_the_ones_kept_out_of_the_wildcard() -> None:

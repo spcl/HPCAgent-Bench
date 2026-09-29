@@ -56,7 +56,7 @@ GIT_IGNORED = [
     "ci-mi200-652111.out",
     "core_nid002536_17693",
     "judge-agent-amd.sqsh",
-    "containers/agent/skills/opt-reports/SKILL.md",
+    "agent/skills/opt-reports/SKILL.md",
     "shared/prompt-repo.md",
     ".env",
     "id_ed25519",
@@ -122,7 +122,7 @@ DOCKER_KEPT = [
     "pyproject.toml",
     "README.md",
     "scripts/install_dace.sh",
-    "containers/agent/harness/pins.env",
+    "agent/harness/pins.env",
 ]
 
 

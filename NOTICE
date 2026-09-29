@@ -507,7 +507,7 @@ caveman agent packet
 
 License: MIT
 Copyright (c) 2026 Julius Brussee
-Covers: containers/agent/caveman-LICENSE.txt
+Covers: agent/caveman-LICENSE.txt
 
 ====================================================================================================
 AutoKernel agent packet (RightNow AI)
@@ -515,7 +515,7 @@ AutoKernel agent packet (RightNow AI)
 
 License: MIT
 Copyright (c) 2026 RightNow AI
-Covers: containers/agent/packets/autokernel/
+Covers: agent/packets/autokernel/
 
 ====================================================================================================
 CLOUDSC reference input profiles (ECMWF dwarf-p-cloudsc serialbox input)

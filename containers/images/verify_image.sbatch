@@ -66,7 +66,7 @@ esac
 # The image carries no tool scripts: judge-agent roles get the checkout's agent tree bound where
 # run_cluster.sh binds it.
 case "${PROFILE}" in
-    judge|judge-agent-*) printf -v ce_agent_mount ', "%s"' "${REPO}/containers/agent:/opt/hpcagent-bench-agent" ;;
+    judge|judge-agent-*) printf -v ce_agent_mount ', "%s"' "${REPO}/agent:/opt/hpcagent-bench-agent" ;;
     *)                   ce_agent_mount='' ;;
 esac
 

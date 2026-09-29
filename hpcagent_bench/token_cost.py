@@ -189,7 +189,7 @@ USAGE_NAME = "usage.jsonl"
 
 #: Every ``message.usage`` field one claude TURN is billed for (8.1): the three input fields plus
 #: output. Reasoning needs no field of its own -- ``output_tokens`` is every generated token on both
-#: engines. MUST stay identical to ``containers/agent/tools/http_json.USAGE_FIELDS``, which is the
+#: engines. MUST stay identical to ``agent/tools/http_json.USAGE_FIELDS``, which is the
 #: same list duplicated into the stdlib-only container image; a test asserts the two agree.
 USAGE_FIELDS = (*INPUT_FIELDS, "output_tokens")
 

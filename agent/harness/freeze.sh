@@ -4,7 +4,7 @@
 # The CLI pins are node/package.json; the Python harness pins are the harness-<name> dependency
 # groups of pyproject.toml, which the images install with uv directly.
 #
-#   containers/agent/harness/freeze.sh
+#   agent/harness/freeze.sh
 set -Eeuo pipefail
 
 # A core dump lands in the crashing process's CWD (the checkout) and Slurm propagates the

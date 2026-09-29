@@ -63,7 +63,7 @@ def test_a_named_harness_is_stamped(tmp_path: pathlib.Path):
 
 
 def test_the_submitting_checkout_commit_is_stamped(tmp_path: pathlib.Path) -> None:
-    """containers/agent is mounted from the submitting tree, so its commit is the code the arm ran; the
+    """agent is mounted from the submitting tree, so its commit is the code the arm ran; the
     judge cannot resolve it because the container sees the tree without its repository."""
     env = tmp_path / ".env.arm"
     done = stamp(env)

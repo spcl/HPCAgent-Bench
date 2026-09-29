@@ -18,7 +18,7 @@ that genuinely wants its own dump.
 Three rules, because each one alone has been escaped:
 
 1. EVERY shell entry point carries the guard -- ``*.sbatch``, ``*.sh``, and any tracked file whose
-   shebang names a shell (``containers/agent/bin/hpcagent-bench-tool`` and the OpenHands shell
+   shebang names a shell (``agent/bin/hpcagent-bench-tool`` and the OpenHands shell
    ``bash-norc`` carry no suffix and sit closest to the compiler that crashes). A sourced library
    counts too: setting the limit there is what carries the floor into the caller's shell.
 2. No script RE-ENABLES them: "the text contains ``ulimit -c 0``" would accept a later
@@ -65,7 +65,7 @@ ulimit -c 0
 SHELL_SUFFIXES = (".sbatch", ".sh")
 
 #: ...and a shebang naming a shell, for the entry points that carry no suffix at all. The agent's
-#: own `containers/agent/bin/hpcagent-bench-tool` and the OpenHands shell `bash-norc` are both
+#: own `agent/bin/hpcagent-bench-tool` and the OpenHands shell `bash-norc` are both
 #: extensionless `#!/bin/sh` wrappers, so a suffix rule never sees the two scripts closest to the
 #: compiler that crashes.
 SHELL_SHEBANG = re.compile(rb"^#!.*\b(?:ba|da|k|z|a)?sh\b")

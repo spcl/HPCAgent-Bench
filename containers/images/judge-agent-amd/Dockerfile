@@ -982,12 +982,12 @@ RUN set -eux; \
 # the pinned proxy stack (litellm 1.94.0, httpx2 2.12.0, anyio 4.14.2) is a constraint of the whole
 # install, not something discovered afterwards. Only pyproject.toml is copied, never the package
 # source; `-r pyproject.toml` installs the dependencies, not the project. uv comes from the pins
-# (containers/agent/harness/pins.env, sha256-checked by install_tools.sh).
+# (agent/harness/pins.env, sha256-checked by install_tools.sh).
 #
 # The `amd` extra names no `triton`: on this base that module comes from AMD's ROCm build, and PyPI's
 # `triton` is a DIFFERENT distribution that would overwrite the same site-packages/triton directory
 # with the upstream NVIDIA one. The ROCm triton is asserted intact afterwards.
-COPY containers/agent/harness/pins.env containers/agent/harness/install_tools.sh /opt/harness/
+COPY agent/harness/pins.env agent/harness/install_tools.sh /opt/harness/
 COPY pyproject.toml /opt/hpcagent-bench/pyproject.toml
 RUN set -eux; \
     sh /opt/harness/install_tools.sh /usr/local; \
@@ -1149,9 +1149,9 @@ RUN set -eux; \
 # 13. The agent side: node, the claude CLI, uv, and man pages.
 #
 # Every harness version is a checked-in pin shared with judge-agent-cuda, so nothing here floats:
-# uv and node come from containers/agent/harness/pins.env (versioned URLs, sha256-checked by
+# uv and node come from agent/harness/pins.env (versioned URLs, sha256-checked by
 # install_tools.sh), and claude from `npm ci` over
-# containers/agent/harness/node/package-lock.json. freeze.sh regenerates the lock files. The ROCm
+# agent/harness/node/package-lock.json. freeze.sh regenerates the lock files. The ROCm
 # base is a MINIMIZED Ubuntu -- dpkg strips /usr/share/man -- so unminimize runs after the library
 # layers and its reinstall restores their pages too.
 #
@@ -1159,7 +1159,7 @@ RUN set -eux; \
 # in 2.1.221) and never compacts proactively on its own -- agent_driver.claude_context_env instead
 # names the served window and the trigger through CLAUDE_CODE_MAX_CONTEXT_TOKENS /
 # CLAUDE_CODE_AUTO_COMPACT_WINDOW / CLAUDE_AUTOCOMPACT_PCT_OVERRIDE, which 2.1.197 does read.
-COPY containers/agent/harness/node/package.json containers/agent/harness/node/package-lock.json /opt/harness/node/
+COPY agent/harness/node/package.json agent/harness/node/package-lock.json /opt/harness/node/
 RUN set -eux; \
     cd /opt/harness/node; \
     npm_config_cache=/tmp/npm-cache npm ci --no-audit --no-fund; \

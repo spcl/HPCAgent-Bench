@@ -6,15 +6,15 @@ route: [writing_an_agent.md](../writing_an_agent.md). Run commands from the repo
 
 | File | Change |
 |---|---|
-| `containers/agent/harness/run_<name>.py` | the runner |
-| `containers/agent/harness/freeze.sh` | a `freeze <name> '<pkg>==<ver>'` line; running it writes `requirements-<name>.txt` |
+| `agent/harness/run_<name>.py` | the runner |
+| `agent/harness/freeze.sh` | a `freeze <name> '<pkg>==<ver>'` line; running it writes `requirements-<name>.txt` |
 | `experiments/harnesses.py` | the name in `HARNESSES`, a `<name>_command`, a `RUNNERS` entry |
 | `containers/images/judge-agent-{amd,cuda}/Dockerfile` | the requirements `COPY`, the `for venv in` install loop and an import gate for `/opt/harness/<name>` |
 | `experiments/record_identity.sh`, `hpcagent_bench/envs/registry.yaml` `harnesses:` | the name in the `case` and a display name |
 | `tests/test_harness_pins.py` (`PYTHON_HARNESSES`), `tests/test_harness_dispatch.py` (`expected_runner_argv`) | the new harness |
 
 `agent_driver.harness_spec` returns `RUNNERS[name]` for every name but `claude`, so the driver needs
-no edit. A new prompt fragment adds `containers/agent/tools-<name>.md` and a `compose_tools_prompt`
+no edit. A new prompt fragment adds `agent/tools-<name>.md` and a `compose_tools_prompt`
 line in `experiments/materialize_shared.sh`.
 
 ## Runner contract
@@ -117,5 +117,5 @@ runner script is bound from the checkout at launch; only a new pin needs an imag
 python -m pytest --maxfail=10 tests/test_harness_dispatch.py tests/test_harness_runners.py \
   tests/test_harness_identity.py tests/test_harness_pins.py
 (cd experiments && python -c 'import harnesses; print(harnesses.HARNESSES, sorted(harnesses.RUNNERS))')
-(cd containers/agent/harness && python -c 'import run_myagent')
+(cd agent/harness && python -c 'import run_myagent')
 ```

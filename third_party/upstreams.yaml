@@ -35,12 +35,12 @@ other:
     copyright: Copyright (c) 2015 Aaron Hall
   caveman:
     name: caveman agent packet
-    files: containers/agent/caveman-LICENSE.txt
+    files: agent/caveman-LICENSE.txt
     license: MIT
     copyright: Copyright (c) 2026 Julius Brussee
   autokernel:
     name: AutoKernel agent packet (RightNow AI)
-    files: containers/agent/packets/autokernel/
+    files: agent/packets/autokernel/
     license: MIT
     copyright: Copyright (c) 2026 RightNow AI
   cloudsc_profiles:

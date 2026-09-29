@@ -82,7 +82,7 @@ def usage_line(call_input: int, output: int, reasoning: int = 0) -> str:
 
 def load_http_json() -> ModuleType:
     """The container's ``http_json`` tool, loaded the way the container does: by path, stdlib only."""
-    path = REPO / "containers" / "agent" / "tools" / "http_json.py"
+    path = REPO / "agent" / "tools" / "http_json.py"
     spec = importlib.util.spec_from_file_location("http_json", path)
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
@@ -490,7 +490,7 @@ def test_the_budget_fold_reads_a_partial_message_transcript_as_it_read_the_old_o
 
 
 def test_the_container_tool_and_the_analysis_bill_a_turn_for_the_same_usage_fields(token_cost: ModuleType) -> None:
-    """``containers/agent/tools/http_json.py`` ships standalone in the agent image and repeats this
+    """``agent/tools/http_json.py`` ships standalone in the agent image and repeats this
     list rather than importing it (its own comment says so). A copy that drifts makes the token cap
     the agent is killed on and the cost the analysis reports two different quantities, silently."""
     assert load_http_json().USAGE_FIELDS == token_cost.USAGE_FIELDS
