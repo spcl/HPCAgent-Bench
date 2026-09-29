@@ -4,7 +4,7 @@
 # there -- qwen38, kimi and oss120b -- from ONE engine, where beverin needs SGLang for two of them.
 # Build context is the repository root:
 #
-#   containers/images/vllm-cuda/build.sh
+#   containers/images/build.sh vllm-cuda
 #
 # THIN ON PURPOSE. The official vLLM OpenAI image already carries the engine, torch, NCCL, triton,
 # flashinfer and every tool-call / reasoning parser the campaign names. What beverin's vllm/Dockerfile
@@ -43,7 +43,7 @@ LABEL org.opencontainers.image.title="hpcagent-bench-vllm-cuda" \
       org.opencontainers.image.base.name="${BASE_IMAGE_REF}"
 
 # What can be checked WITHOUT a GPU. The device half (NCCL over CXI, a real serve) is the smoke in
-# inference/serve-daint.sbatch MODE=smoke; build.sbatch runs verify_image.py --profile vllm-cuda inside the image.
+# inference/serve-daint.sbatch MODE=smoke; build_and_verify.sbatch runs verify_image.py --profile vllm-cuda inside the image.
 RUN python3 - <<'PY'
 import importlib
 import importlib.metadata as md

@@ -3,7 +3,7 @@
 # vLLM inference on AMD Instinct, one image for every gpu_arch.env AMD target (MI250X, MI300, MI355X).
 # Serves oss120b on mi300 and Qwen3.8 on mi200; qwen38, kimi and GLM-5.3 on mi300 are on SGLang. Build context is the repository root:
 #
-#   containers/images/vllm/build.sh
+#   containers/images/build.sh vllm
 #
 # THIN ON PURPOSE, like vllm-cuda/Dockerfile: the official vLLM ROCm release image already carries
 # the engine, a ROCm torch, triton, aiter and every tool-call / reasoning parser the campaign names.
@@ -58,7 +58,7 @@ COPY containers/inference/moe-configs/ /opt/moe-configs/
 ENV VLLM_TUNED_CONFIG_FOLDER=/opt/moe-configs
 
 # What can be checked WITHOUT a GPU. The device half (RCCL over CXI, a real serve) is a serving
-# smoke; build.sbatch runs verify_image.py --profile vllm inside the image.
+# smoke; build_and_verify.sbatch runs verify_image.py --profile vllm inside the image.
 RUN python3 - <<'PY'
 import importlib
 import importlib.metadata as md

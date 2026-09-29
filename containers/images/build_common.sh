@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Shared by every <image>/build.sh and build.sbatch. Source it:
-#   source "$(dirname -- "${BASH_SOURCE[0]}")/../build_common.sh"
+# The build library: build.sh, build_and_verify.sbatch, verify_image.sbatch and registry.sh source it,
+# and every <image>/image.sh calls its helpers.
 #
 # Build defaults (IMAGE_REQUIREMENTS.md "Build defaults"), each an environment knob:
 #   CE_BUILD_CACHE=1  keep the node's podman layer store and mount the spack buildcache and pip
@@ -195,25 +195,6 @@ ce_spack_target() {
     printf 'spack target %s for %s\n' "${SPACK_TARGET}" "${family}"
 }
 
-# ce_amd_role <agent|judge>: the images.env role a judge-agent-amd build target writes;
-# ce_amd_candidate prints that role's candidate squashfs name.
-ce_amd_role() {
-    local profile role
-    case "$1" in
-        agent) profile=judge-agent-amd ;;
-        judge) profile=judge ;;
-        *) echo "unknown build target '$1'" >&2; return 2 ;;
-    esac
-    role="$(awk -v p="${profile}" '$4 == "judge-agent-amd" && $6 == p {print $1}' <<<"${CE_IMAGE_TABLE}")"
-    [[ -n "${role}" ]] || { echo "images.env has no judge-agent-amd ${1} row" >&2; return 2; }
-    printf '%s' "${role}"
-}
-ce_amd_candidate() {
-    local role
-    role="$(ce_amd_role "$@")" || return 2
-    printf '%s' "$(ce_image "${role}" candidate)"
-}
-
 # Caches the base image on scratch as a `dir:` tree (plain files; the podman layer store cannot live
 # on scratch, which rejects user xattrs) and rewrites BASE_IMAGE to it on a hit. A miss pulls and
 # copies out through a staging dir, so racing builds never leave a half-written cache entry.
@@ -401,53 +382,6 @@ ce_build() {
     ce_export_image "${tag}" "${out}"
 }
 
-# Verifies a candidate inside itself, under an EDF rendered from its production template, and
-# writes the .verified marker promote_image.sh requires only on a clean verdict. Used by the GH200
-# and CPU build.sbatch; AMD images use build_and_verify.sbatch. Probes run from `/` so a `dace`
-# directory in the CWD cannot shadow the image's own.
-#
-#   ce_verify_candidate <template under containers/images/> <sqsh> <verify_image.py profile> [srun args...]
-ce_verify_candidate() {
-    local template="$1" sqsh="$2" profile="$3" repo edf modules rc=0
-    shift 3
-    repo="$(cd -- "${CE_IMAGES_DIR}/../.." && pwd)"
-    # shellcheck source=../../scripts/cache_env.sh
-    . "${repo}/scripts/cache_env.sh"
-    edf="${SCRATCH:?}/.tmp/verify-${SLURM_JOB_ID:-$$}-${profile}.toml"
-    mkdir -p "$(dirname "${edf}")"
-    sed -e "s|\${SCRATCH}|${SCRATCH}|g" \
-        -e "s|\"<hpcagent_bench_edf_mounts>\"|$(hpcagent_bench_edf_mounts), \"${repo}/agent:/opt/hpcagent-bench-agent\"|" \
-        -e "s|^image = .*|image = \"${sqsh}\"|" \
-        -e "s|^workdir = .*|workdir = \"/\"|" \
-        "${CE_IMAGES_DIR}/${template}" > "${edf}"
-    rm -f "${sqsh}.verified"
-    printf '\n===== verifying %s as profile=%s =====\n' "${sqsh}" "${profile}"
-    srun "$@" --environment="${edf}" python3 "${CE_IMAGES_DIR}/verify_image.py" --profile "${profile}" \
-        --verbose || rc=$((rc + 1))
-    case "${profile}" in
-        vllm-*) modules="numpy,torch,vllm,triton" ;;
-        *)      modules="" ;;
-    esac
-    srun "$@" --environment="${edf}" python3 -P "${CE_IMAGES_DIR}/selfcontained_check.py" \
-        ${modules:+--modules "${modules}"} || rc=$((rc + 1))
-    case "${profile}" in
-        judge*)
-            srun "$@" --environment="${edf}" python3 "${CE_IMAGES_DIR}/tools_launch_check.py" \
-                --agent-dir /opt/hpcagent-bench-agent --judge-web-search "${repo}/hpcagent_bench/harness/judge_web_search.py" \
-                || rc=$((rc + 1))
-            ;;
-    esac
-    rm -f "${edf}"
-    if [[ "${rc}" -eq 0 ]]; then
-        printf 'verified profile=%s job=%s digest=%s\n' "${profile}" "${SLURM_JOB_ID:-none}" \
-            "$(cat "${sqsh}.digest" 2>/dev/null || echo unknown)" > "${sqsh}.verified"
-        printf 'VERIFIED: %s\n' "${sqsh}"
-    else
-        printf 'NOT VERIFIED (%s failed stage(s)): %s\n' "${rc}" "${sqsh}" >&2
-    fi
-    return "${rc}"
-}
-
 # ce_refuse_mounted <sqsh>...: return 2 when an EDF in ~/.edf mounts one of the paths. Overwriting a
 # mounted squashfs is how a running job starts reading a half-written inode table; the EDFs, not a
 # hard-coded name, are what a job resolves. Build to a candidate name and promote by rename.
@@ -480,8 +414,8 @@ ce_export_image() {
     unsquashfs -l "${output_sqsh}" opt >/dev/null
     printf 'Wrote %s\n' "${output_sqsh}"
 
-    # The OCI archive keeps layers and config (a squashfs is flattened), so push_image.sh
-    # --from-archive can publish later without a rebuild. SAVE_OCI_ARCHIVE=0 skips it.
+    # The OCI archive keeps layers and config (a squashfs is flattened), so registry.sh push can
+    # publish later without a rebuild. SAVE_OCI_ARCHIVE=0 skips it.
     if [[ "${SAVE_OCI_ARCHIVE:-1}" != "0" ]]; then
         local archive="${output_sqsh%.sqsh}.oci.tar"
         rm -f "${archive}"
@@ -489,13 +423,88 @@ ce_export_image() {
             printf 'Wrote %s\n' "${archive}"
         else
             echo "OCI archive save FAILED: the squashfs is fine, but publishing this build later" >&2
-            echo "would need a full rebuild. See containers/images/push_image.sh." >&2
+            echo "would need a full rebuild. See containers/images/registry.sh." >&2
         fi
     fi
 
-    # Optional push, after the artifacts exist, so a registry failure never costs the build.
-    if [[ -n "${PUSH_REPO:-}" && "${CE_PULLED:-0}" != 1 ]]; then
-        "${CE_IMAGES_DIR}/push_image.sh" "${image_tag}" ${PUSH_TAGS:-} \
-          || echo "push to ${PUSH_REPO} FAILED; the local image and squashfs are unaffected" >&2
+}
+
+# ce_build_args <name>...: appends `--build-arg <name>=<value>` to BUILD_ARGS for each variable named.
+ce_build_args() {
+    local name
+    for name in "$@"; do BUILD_ARGS+=(--build-arg "${name}=${!name}"); done
+}
+
+# Exports DACE_COMMIT, the release's dace pin (pyproject.toml dace-pin). Resolved here and passed in
+# because the Dockerfile's layer cache keys on the command string: a '--branch extended' clone would
+# be reused forever and the image would age into a pin nothing records.
+ce_dace_commit() {
+    DACE_COMMIT="$("${CE_IMAGES_DIR}/../../scripts/dace_pin.sh")"
+    [[ "${DACE_COMMIT}" =~ ^[0-9a-f]{40}$ ]] || { echo "could not resolve spcl/dace@${DACE_COMMIT}" >&2; return 2; }
+    export DACE_COMMIT
+    printf 'dace @ %s\n' "${DACE_COMMIT}"
+}
+
+# Exports LIBFABRIC_REF (default v2.6.0) and LIBFABRIC_COMMIT, the tag resolved to its commit here so
+# the sha is the cache key and the Dockerfile asserts it: a git tag is mutable. libfabric is only
+# spack MPICH's compile-time link target; the netstack hook supplies the runtime one.
+ce_libfabric_commit() {
+    local url=https://github.com/ofiwg/libfabric.git
+    LIBFABRIC_REF="${LIBFABRIC_REF:-v2.6.0}"
+    if [[ -z "${LIBFABRIC_COMMIT:-}" ]]; then
+        # ^{} dereferences an annotated tag to its commit.
+        LIBFABRIC_COMMIT="$(git ls-remote "${url}" "refs/tags/${LIBFABRIC_REF}^{}" | cut -f1)"
+        [[ -n "${LIBFABRIC_COMMIT}" ]] || LIBFABRIC_COMMIT="$(git ls-remote "${url}" "refs/tags/${LIBFABRIC_REF}" | cut -f1)"
     fi
+    [[ -n "${LIBFABRIC_COMMIT}" ]] || { echo "could not resolve ${LIBFABRIC_REF} in ${url}" >&2; return 2; }
+    export LIBFABRIC_REF LIBFABRIC_COMMIT
+    printf 'libfabric %s @ %s\n' "${LIBFABRIC_REF}" "${LIBFABRIC_COMMIT}"
+}
+
+# Exports MARCH, the -march of SPACK_TARGET (ce_spack_target): native for a native build.
+ce_march() {
+    case "${SPACK_TARGET}" in
+        "") MARCH=native ;;
+        x86_64_v3) MARCH=x86-64-v3 ;;
+        armv8.2a) MARCH=armv8.2-a ;;
+        *) echo "no -march known for spack target ${SPACK_TARGET}" >&2; return 2 ;;
+    esac
+    export MARCH
+}
+
+# ce_require_arch <uname -m>: refuse to build on another CPU family (the GH200 images build on aarch64).
+ce_require_arch() {
+    [[ "$(uname -m)" == "$1" ]] || { echo "this image builds on $1; this node is $(uname -m)" >&2; return 2; }
+}
+
+# ce_render_edf <template under containers/images/> <image .sqsh> <partition|-> [preload lib] [mount]...
+# Prints the EDF a job mounts: the production template with SCRATCH, the checkout's bind mounts
+# (scripts/cache_env.sh) plus any extra mount, the partition's GPU arch and the image filled in, and
+# the preload appended to its one LD_PRELOAD line. install_edfs.sh writes it into ~/.edf;
+# verify_image.sbatch verifies an image under exactly what production mounts.
+ce_render_edf() {
+    local template="${CE_IMAGES_DIR}/$1" image="$2" partition="$3" preload="${4:-}" arch="" mounts
+    shift 3
+    [[ $# -eq 0 ]] || shift
+    # shellcheck source=../../scripts/cache_env.sh
+    . "${CE_IMAGES_DIR}/../../scripts/cache_env.sh"
+    mounts="$(hpcagent_bench_edf_mounts)"
+    local mount
+    for mount in "$@"; do mounts+=", \"${mount}\""; done
+    if grep -qF '${GPU_ARCH}' "${template}"; then
+        arch="$(ce_partition_arch "${partition}")" || return 1
+    fi
+    local -a preload_edit=()
+    if [[ -n "${preload}" ]]; then
+        if [[ "$(grep -c '^LD_PRELOAD = "[^"]*"$' "${template}")" != 1 ]]; then
+            echo "${template} has no single LD_PRELOAD line to extend" >&2
+            return 1
+        fi
+        preload_edit=(-e "s|^LD_PRELOAD = \"\(.*\)\"$|LD_PRELOAD = \"\1:${preload}\"|")
+    fi
+    sed -e "s|\${SCRATCH}|${SCRATCH:?}|g" \
+        -e "s|\"<hpcagent_bench_edf_mounts>\"|${mounts}|" \
+        -e "s|\${GPU_ARCH}|${arch}|g" \
+        -e "s|^image = .*|image = \"${image}\"|" \
+        "${preload_edit[@]}" "${template}"
 }

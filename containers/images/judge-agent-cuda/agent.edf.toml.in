@@ -36,7 +36,7 @@ PATH = "/opt/gcc/bin:/opt/view/bin:/opt/papi/bin:/usr/local/cuda/bin:/usr/local/
 # CUDA first; the distro libdir last but present, as on judge-agent-amd. The base's
 # /usr/local/cuda/compat/lib is left OUT: that forward-compat libcuda is for drivers older than the
 # toolkit and loses to a newer host driver. The image is CUDA 12.9, which any driver >= 525 runs by
-# minor-version compatibility; build.sbatch's nvidia-smi / torch.cuda probe is where that shows.
+# minor-version compatibility; the GPU probe of verify_image.py is where that shows.
 LD_LIBRARY_PATH = "/usr/local/cuda/lib64:/opt/gcc/lib64:/opt/gcc/lib:/opt/view/lib:/opt/view/lib64:/opt/papi/lib:/usr/lib/aarch64-linux-gnu"
 # Named, not left to PATH: a stale configure cache beats PATH.
 CC = "/opt/gcc/bin/gcc"

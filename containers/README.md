@@ -5,17 +5,24 @@ works inside an image, and the model is served from an image; this page builds a
 
 ```
 containers/
-  images/            one directory per image, plus the scripts that build, verify, promote and publish them
-    images.env         the image registry: one row per image; every script here reads it
-    build_common.sh    sourced by every build.sh / build.sbatch
-    <image>/           Dockerfile, build.sh, build.sbatch and the EDF template(s) install_edfs.sh renders
-                       into ~/.edf: edf.toml.in, or agent.edf.toml.in + judge.edf.toml.in for a pair
-  lib/               build steps the Dockerfiles COPY (HPTT, tblis, Pluto, git retry, image gates)
-  inference/         serving jobs, weight fetch, serving smokes and gates, tuned MoE configs
-  agent/             prompt fragments, MCP tools, method packets and harness pins, bound read-only into
-                     the agent container at launch, never copied into an image
-  judge/             .env.example for the web-search tool (hpcagent_bench/harness/judge_web_search.py)
+  images/                  one directory per image, plus one script per action on any of them
+    images.env               the image table: one row per role; every script here reads it
+    build_common.sh          the build library the scripts and every image.sh use
+    build.sh <image>         build an image's targets into candidate squashfs files
+    build_and_verify.sbatch  build.sh, then verify_image.sbatch for every role it wrote
+    verify_image.sbatch      verify one role's image inside itself, mounted as production mounts it
+    registry.sh              promote a verified candidate; push to / pull from the registry
+    registry.sbatch          registry.sh on a compute node
+    install_edfs.sh          render ~/.edf/<edf>.toml for every row of a platform
+    <image>/                 Dockerfile, image.sh (its own build inputs) and the EDF template(s):
+                             edf.toml.in, or agent.edf.toml.in + judge.edf.toml.in for a pair
+  lib/                     build steps the Dockerfiles COPY (HPTT, tblis, Pluto, git retry, image gates)
+  inference/               serving jobs, weight fetch, serving smokes and gates, tuned MoE configs
+  judge/                   .env.example for the web-search tool (hpcagent_bench/harness/judge_web_search.py)
 ```
+
+The agent payload (prompt fragments, MCP tools, method packets, harness pins) is `agent/` at the
+repository root: bound read-only into the agent container at launch, never copied into an image.
 
 The images (`images/<image>/`) serve AMD MI300A/MI250X (beverin), NVIDIA GH200 (daint) and
 CPU-only nodes. Off CSCS the same Dockerfiles build with plain podman or docker
@@ -40,7 +47,7 @@ Two flavors, one choice per cluster, named by `CE_IMAGE_FLAVOR`:
 | AVX-512 | only where libraries dispatch at run time (OpenBLAS, MKL, TBLIS) | everywhere spack compiles, FFTW included |
 | Cost | a pull (minutes) | a build (hours for the judge/agent images) |
 | Runs on | every node | CPUs like the build node's; an older CPU dies on SIGILL at start |
-| Publishable | yes: the only flavor in the registry | no: `pull_image.sh` and `push_image.sh` refuse it |
+| Publishable | yes: the only flavor in the registry | no: `registry.sh push` and `pull` refuse it |
 
 The flavor applies to the agent and judge images. The serving images (SGLang, vLLM) are prebuilt
 engines with nothing to tune, so they are always `-latest`, whichever flavor the agents use.
@@ -51,11 +58,12 @@ libraries and tools inside the image.
 
 ```bash
 # download (default)
-sbatch containers/images/pull_images.sbatch && containers/images/install_edfs.sh
+for role in judge-agent-amd judge sglang vllm; do sbatch containers/images/registry.sbatch pull ${role}; done
+containers/images/install_edfs.sh
 # build natively instead, then run on the -native EDFs: set the same variable for both
 export CE_IMAGE_FLAVOR=native
-cd containers/images && IMAGE_DIR=$PWD/judge-agent-amd sbatch build_and_verify.sbatch
-./promote_image.sh judge-agent-amd judge     # after it passes; renders the -native EDFs
+sbatch -p mi300 containers/images/build_and_verify.sbatch judge-agent-amd
+containers/images/registry.sh promote judge-agent-amd judge   # after it passes; renders the -native EDFs
 ```
 
 With `CE_IMAGE_FLAVOR=native` set at submission, a campaign's agent and judge EDFs become the
@@ -74,9 +82,9 @@ which it is in the label `org.hpcagent-bench.cpu-target` (the baseline, or `nati
 role  prefix  platform  dir  partition  profile  candidate  sqsh  edf  template  tag  flags
 ```
 
-A build writes `candidate`; `promote_image.sh` renames it over `sqsh` once it carries a `.verified`
-marker; `install_edfs.sh` renders `~/.edf/<edf>.toml` from `template`; `pull_image.sh` and
-`push_images.sbatch` move `sqsh` to and from `REGISTRY_REPO:<tag>`. Sourcing `images.env` also
+A build writes `candidate`; `registry.sh promote` renames it over `sqsh` once it carries a
+`.verified` marker; `install_edfs.sh` renders `~/.edf/<edf>.toml` from `template`; `registry.sh pull`
+and `push` move `sqsh` to and from `REGISTRY_REPO:<tag>`. Sourcing `images.env` also
 defines `<PREFIX>_SQSH`, `_EDF_LATEST`, `_TEMPLATE`, `_CANDIDATE` and `_TAG`, which `experiments/`
 reads. The `.digest` sidecar is the build's identity: cite it, never a moving tag or EDF name.
 
@@ -114,23 +122,21 @@ mount `$SCRATCH` and the iopsstor scratch, not `$HOME`).
 Pull the published images (the default: same bytes as published), then render the EDFs:
 
 ```bash
-sbatch pull_images.sbatch                               # judge-agent-amd judge sglang vllm
-./pull_image.sh judge-agent-amd sha256:<digest>         # one role, pinned to a digest
+for role in judge-agent-amd judge sglang vllm; do sbatch registry.sbatch pull ${role}; done
+./registry.sh pull judge-agent-amd sha256:<digest>      # one role, pinned to a digest
 ./install_edfs.sh
 ```
 
-Build when changing an image (partition `mi300` is in each `build.sbatch`):
+Build when changing an image:
 
 ```bash
-IMAGE_DIR=$PWD/judge-agent-amd sbatch build_and_verify.sbatch   # both targets, ~2 h warm
-IMAGE_DIR=$PWD/sglang          sbatch build_and_verify.sbatch   # ~1 h
-IMAGE_DIR=$PWD/vllm            sbatch build_and_verify.sbatch   # < 1 h, the official base
+sbatch -p mi300 build_and_verify.sbatch judge-agent-amd   # both targets, ~2 h warm
+sbatch -p mi300 build_and_verify.sbatch sglang            # ~1 h
+sbatch -p mi300 build_and_verify.sbatch vllm              # < 1 h, the official base
 # the same AMD images on the other partition, before promotion
-IMAGE=$CE_IMAGES/<candidate> PROFILE=judge-agent-amd \
-  sbatch --partition=mi200 --gpus-per-node=8 verify_image.sbatch
+ROLE=judge-agent-amd sbatch --partition=mi200 --gpus-per-node=8 verify_image.sbatch
 
-DRY_RUN=1 ./promote_image.sh --all      # what would move
-./promote_image.sh --all                # rename + sidecars + EDFs
+./registry.sh promote --all             # verified candidates -> live names + sidecars + EDFs
 ```
 
 Build gates prove that an engine imports, not that it serves, so a serving candidate is smoked
@@ -144,7 +150,8 @@ One vLLM release everywhere: `vllm` and `vllm-cuda` both pin v0.28.0 by base-ima
 Re-verify a candidate without rebuilding with `VERIFY_ONLY=1` on `build_and_verify.sbatch`, or:
 
 ```bash
-IMAGE=$SCRATCH/ce-images/<candidate>.sqsh PROFILE=<profile> sbatch verify_image.sbatch
+ROLE=<role> sbatch verify_image.sbatch                                 # the role's candidate
+ROLE=<role> IMAGE=$SCRATCH/ce-images/<file>.sqsh sbatch verify_image.sbatch
 ```
 
 ### NVIDIA GH200 (daint)
@@ -156,11 +163,10 @@ storage config on `/dev/shm` is created on first use if the account has none.
 export SBATCH_ACCOUNT=<project> SBATCH_PARTITION=normal
 cd <checkout under $SCRATCH>/containers/images
 
-IMAGE_DIR=$PWD/vllm-cuda        sbatch vllm-cuda/build.sbatch          # < 1 h
-IMAGE_DIR=$PWD/judge-agent-cuda sbatch judge-agent-cuda/build.sbatch   # up to 24 h cold, then a GPU probe
+sbatch build_and_verify.sbatch vllm-cuda          # < 1 h
+sbatch build_and_verify.sbatch judge-agent-cuda   # up to 24 h cold
 
-DRY_RUN=1 CE_PLATFORM=gh200 ./promote_image.sh --all
-CE_PLATFORM=gh200 ./promote_image.sh --all                             # renders the gh200 EDFs
+CE_PLATFORM=gh200 ./registry.sh promote --all     # renders the gh200 EDFs
 ```
 
 `judge-agent-cuda` carries the CUDA counterparts of `judge-agent-amd`: nvcc, cuBLAS/cuFFT/cuSOLVER/
@@ -207,14 +213,14 @@ HPTT, Pluto, numba, dace and the harnesses; no GPU stack, about an hour to build
 
 ```bash
 export SBATCH_ACCOUNT=<project> SBATCH_PARTITION=<partition of the target architecture>
-IMAGE_DIR=$PWD/judge-agent-cpu sbatch judge-agent-cpu/build.sbatch
-CE_PLATFORM=cpu ./promote_image.sh --all
+sbatch build_and_verify.sbatch judge-agent-cpu
+CE_PLATFORM=cpu ./registry.sh promote --all
 srun -N1 --environment=hpcagent-bench-judge-cpu-$(uname -m)-latest python3 -c 'import hpcagent_bench, dace'
 ```
 
 #### Without the Container Engine
 
-`build.sh` is podman plus the CSCS export; any other host builds each target directly from the
+`build.sh <image>` is podman plus the CSCS export; any other host builds each target directly from the
 repository root (`docker` is a drop-in for `podman`), and Apptainer converts the result:
 
 ```bash
@@ -229,7 +235,7 @@ apptainer build hpcagent_bench-judge.sif docker-archive:hpcagent_bench-judge.tar
 
 The tags are the ones `images:` in `hpcagent_bench/config.yaml` names for the Harbor adapter:
 agent `hpcagent_bench:<cpu|nvidia|amd>`, judge `hpcagent_bench:judge[-nvidia|-amd]`. `nvidia` is
-`judge-agent-cuda` (aarch64) and `amd` is `judge-agent-amd`; their `build.sh` shows the further
+`judge-agent-cuda` (aarch64) and `amd` is `judge-agent-amd`; their `image.sh` shows the further
 build args they take (`LIBFABRIC_COMMIT`, `ROCM_ARCH`).
 `scripts/run_agent_in_container.sh` runs the harness itself inside `hpcagent_bench:<hw>`, so a
 host that uses it tags a judge target that way (or names it with `HPCAGENT_BENCH_DOCKER_IMAGE` /
@@ -299,14 +305,14 @@ xGMI regardless.
 
 ## Publishing
 
-`push_images.sbatch` publishes `<sqsh>.oci.tar` under each role's one tag in `REGISTRY_REPO`
-(`docker.io/spcleth/hpcagent-bench`); a push replaces the tag, and the digest pins a version. The
-default `DRY_RUN=1` runs every registry gate (10 GB per layer, 100 GB per image) and sends nothing.
-Credentials come only from the environment.
+`registry.sh push` publishes a role's live `<sqsh>.oci.tar` under its one tag in `REGISTRY_REPO`
+(`docker.io/spcleth/hpcagent-bench`); a push replaces the tag, and the digest pins a version.
+`--check` runs every registry gate (10 GB per layer, 100 GB per image, portable flavor, `-latest`
+tag) and sends nothing. Credentials come only from the environment.
 
 ```bash
-DRY_RUN=1 sbatch push_images.sbatch
-REGISTRY_USER=<user> REGISTRY_TOKEN=<token> DRY_RUN=0 ROLES="sglang vllm" sbatch push_images.sbatch
+sbatch registry.sbatch push --check --all
+REGISTRY_USER=<user> REGISTRY_TOKEN=<token> sbatch registry.sbatch push sglang vllm
 ```
 
 ## Numeric libraries
@@ -332,12 +338,13 @@ alternatives. `perf` comes from `linux-perf` where the base packages it, else fr
 
 ## Adding a container
 
-1. Create `images/<name>/` with `Dockerfile`, `build.sh`, `build.sbatch` and
-   the EDF template (`edf.toml.in`; `agent.edf.toml.in` + `judge.edf.toml.in` for a pair). Copy the closest existing directory: `sglang/` or `vllm-cuda/` for a
-   single-target image, `judge-agent-cuda/` for an agent+judge pair. `build.sh` sources
-   `../build_common.sh` and `../images.env`, builds from the repository root and ends with
-   `ce_export_image <tag> <candidate path>`; `build.sbatch` sources `../build_common.sh` too and
-   calls `ce_refuse_mounted` so it never overwrites a squashfs an EDF mounts. A Dockerfile that
+1. Create `images/<name>/` with `Dockerfile`, `image.sh` and the EDF template (`edf.toml.in`;
+   `agent.edf.toml.in` + `judge.edf.toml.in` for a pair). Copy the closest existing directory:
+   `sglang/` or `vllm-cuda/` for a single-target image, `judge-agent-cuda/` for an agent+judge pair.
+   `image.sh` sets `TARGET_ORDER` and `TARGET_ROLE` (Dockerfile target -> images.env role, `-` for a
+   one-stage Dockerfile) and `BASE_IMAGE` pinned by digest, and defines `ce_image_args` (fills
+   `BUILD_ARGS`, which key the pull-first fingerprint) and `ce_image_inputs` (mirror and cache mounts
+   into `INPUT_ARGS`); `build.sh` does everything else. A Dockerfile that
    clones runs `lib/git_mirror.sh setup` first and `lib/git_mirror.sh drop` before the image ships
    (retry wrapper and `$GIT_MIRRORS` rewrite). A build step two images share goes in `lib/` and is
    `COPY`'d by its repository path. The EDF template keeps the `"<hpcagent_bench_edf_mounts>"`
@@ -348,8 +355,8 @@ alternatives. `perf` comes from `linux-perf` where the base packages it, else fr
    published).
 3. A new kind of image also needs a `verify_image.py` profile (the checks it must pass).
 
-`install_edfs.sh`, `promote_image.sh`, `pull_image.sh`, `pull_images.sbatch`, `push_images.sbatch`
-and `build_and_verify.sbatch` pick the row up with no further edit. A new serving engine is also
+`build.sh`, `build_and_verify.sbatch`, `verify_image.sbatch`, `registry.sh` and `install_edfs.sh`
+pick the row up with no further edit. A new serving engine is also
 launched by `experiments/run_cluster.sh` (`docs/extending/inference.md`).
 
 Every package added to a Dockerfile gets a probe that uses it (compile, import, link) in the same

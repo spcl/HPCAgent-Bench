@@ -84,17 +84,16 @@ def test_the_copy_scan_flags_each_agent_tree_copy_that_is_not_a_build_input(text
 
 def test_verify_image_binds_the_checkout_agent_tree_and_runs_its_checks_from_repo() -> None:
     text = (CE_IMAGES / "verify_image.sbatch").read_text(encoding="utf-8")
-    assert 'REPO="${REPO:-${S}/hpcagent-bench}"' in text
+    assert 'REPO="${REPO:-${SLURM_SUBMIT_DIR:?' in text
     assert '"${REPO}/agent:/opt/hpcagent-bench-agent"' in text
     assert 'python3 "${REPO}/containers/images/tools_launch_check.py"' in text
-    assert "exit $(( rc + sc + tools_rc ))" in text
-    hardcoded = [line for line in text.splitlines() if "${S}/hpcagent-bench" in line and not line.startswith("REPO=")]
-    assert hardcoded == []
+    assert "exit $(( rc + sc + mpi_rc + tools_rc ))" in text
+    assert "/hpcagent-bench}" not in text, "a hard-coded checkout path"
 
 
 def test_build_and_verify_hands_its_checkout_to_verify_image() -> None:
     text = (CE_IMAGES / "build_and_verify.sbatch").read_text(encoding="utf-8")
-    assert re.search(r'REPO="\$\{REPO\}" \\\n\s+bash "\$\{REPO\}/containers/images/verify_image\.sbatch"', text)
+    assert re.search(r'REPO="\$\{REPO\}" bash "\$\{REPO\}/containers/images/verify_image\.sbatch"', text)
 
 
 def launch_check(agent_dir: pathlib.Path, web_search: pathlib.Path) -> subprocess.CompletedProcess[str]:

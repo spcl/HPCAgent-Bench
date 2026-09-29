@@ -706,7 +706,7 @@ RUN set -eux; \
 #
 # The build check is "is it COMPILED IN", never "is it enabled": PAPI 7 initializes a component
 # LAZILY (harness/papi.py), so a status-flag read calls a working component broken. Whether it comes
-# up needs a driver and a device; build.sbatch asks that on the node after the import. Only
+# up needs a driver and a device; verify_image.sbatch asks that on the node after the import. Only
 # ENUMERATED counter names resolve (`cuda:::dram__bytes_read`, not ncu's `.sum` spelling).
 # --allow-multiple-definition: the cuda and nvml components define the same helper symbols.
 ARG PAPI_REF=papi-7-2-0-t

@@ -5,7 +5,7 @@
 # Build context is the REPOSITORY ROOT, because the tuned fused_moe configs are baked in from
 # there:
 #   podman build -f containers/images/sglang/Dockerfile -t hpcagent-bench-sglang .
-# build.sh does that with the right podman flags; build.sbatch runs build.sh on a compute node.
+# build.sh does that with the right podman flags; build_and_verify.sbatch runs it on a compute node.
 #
 # UBUNTU 24.04, and that is why this tag rather than a 7.2.0 one.
 #

@@ -5,17 +5,16 @@
 #   containers/images/install_edfs.sh                     # beverin (amd)
 #   CE_PLATFORM=gh200 containers/images/install_edfs.sh   # daint
 #   CE_PLATFORM=cpu   containers/images/install_edfs.sh   # any host, CPU only
+#   containers/images/install_edfs.sh <role>...           # only these rows (registry.sh promote)
 #
 # Refuses to point an existing EDF at a different image unless ALLOW_REPOINT=1: every job that
-# starts afterwards, queued ones included, would move. promote_image.sh sets it.
+# starts afterwards, queued ones included, would move. `registry.sh promote` sets it.
 set -Eeuo pipefail
 
 ulimit -c 0
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=images.env
 source "${SCRIPT_DIR}/images.env"
-. "${SCRIPT_DIR}/../../scripts/cache_env.sh"
-EDF_MOUNTS="$(hpcagent_bench_edf_mounts)"
 
 : "${SCRATCH:?set SCRATCH -- an EDF is absolute paths and there is nothing sane to guess}"
 : "${CE_IMAGES:?set SCRATCH or CE_IMAGES}"
@@ -31,7 +30,7 @@ render() {
     local target="${EDF_DIR}/$1.toml" image="${CE_IMAGES}/$3"
     if [[ ! -f "${image}" ]]; then
         echo "refusing to write ${name}: ${image} does not exist" >&2
-        echo "  pull it:  sbatch ${SCRIPT_DIR}/pull_images.sbatch" >&2
+        echo "  pull it:  sbatch ${SCRIPT_DIR}/registry.sbatch pull" >&2
         echo "  or build: containers/README.md" >&2
         return 1
     fi
@@ -46,24 +45,8 @@ render() {
             return 1
         fi
     fi
-    local arch=""
-    if grep -qF '${GPU_ARCH}' "${SCRIPT_DIR}/${template}"; then
-        arch="$(ce_partition_arch "${partition}")" || return 1
-    fi
-    local preload_edit=()
-    if [[ -n "${preload}" ]]; then
-        if [[ "$(grep -c '^LD_PRELOAD = "[^"]*"$' "${SCRIPT_DIR}/${template}")" != 1 ]]; then
-            echo "refusing to write ${name}: ${template} has no single LD_PRELOAD line to extend" >&2
-            return 1
-        fi
-        preload_edit=(-e "s|^LD_PRELOAD = \"\(.*\)\"$|LD_PRELOAD = \"\1:${preload}\"|")
-    fi
-    sed -e "s|\${SCRATCH}|${SCRATCH}|g" \
-        -e "s|\"<hpcagent_bench_edf_mounts>\"|${EDF_MOUNTS}|" \
-        -e "s|\${GPU_ARCH}|${arch}|g" \
-        -e "s|^image = .*|image = \"${image}\"|" \
-        "${preload_edit[@]}" \
-        "${SCRIPT_DIR}/${template}" > "${target}"
+    ce_render_edf "${template}" "${image}" "${partition}" "${preload}" > "${target}.tmp"
+    mv -f "${target}.tmp" "${target}"
     printf '  %-40s -> %s\n' "${name}" "${image}"
 }
 
@@ -75,7 +58,7 @@ esac
 echo "installing ${CE_PLATFORM} EDFs into ${EDF_DIR}"
 
 failed=0
-for role in $(ce_roles "${CE_PLATFORM}"); do
+for role in ${*:-$(ce_roles "${CE_PLATFORM}")}; do
     edf="$(ce_image "${role}" edf)" || continue
     sqsh="$(ce_image "${role}" sqsh)"
     flags="$(ce_image "${role}" flags || true)"

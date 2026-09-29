@@ -99,7 +99,7 @@ def targets() -> str:
 
 def build_partitions(image: str) -> list[str]:
     """The partition column of the images.env row named after an image directory: the hardware its
-    build.sbatch builds for (the Slurm partition itself comes from the site layer)."""
+    build targets (the Slurm partition itself comes from the site layer)."""
     done = run(["bash", "-c", 'source "$1"; printf "%s\\n" "${CE_IMAGE_TABLE}"', "bash", str(CE / "images.env")], {})
     assert done.returncode == 0, done.stderr
     rows = [line.split() for line in done.stdout.splitlines() if line.strip()]
@@ -151,7 +151,7 @@ def test_ce_gpu_arch_refuses_a_missing_unknown_or_contradicted_partition(env: di
 
 
 def test_every_amd_image_builds_on_exactly_one_partition_the_table_names() -> None:
-    images = {path.parent.name for path in CE.glob("*/build.sbatch")}
+    images = {path.parent.name for path in CE.glob("*/image.sh")}
     assert images == set(AMD_IMAGES) | set(NOT_AMD), images
     rows = table()
     for image in AMD_IMAGES:
@@ -165,10 +165,10 @@ def test_every_amd_image_builds_on_exactly_one_partition_the_table_names() -> No
 def test_every_amd_image_takes_rocm_arch_from_the_table_refuses_none_stamps_it_and_overrides_the_base_env(
     image: str,
 ) -> None:
-    build = code_lines(CE / image / "build.sh")
+    build = code_lines(CE / image / "image.sh")
     lookup = "ce_amd_targets" if image in PORTABLE else "ce_gpu_arch"
-    assert re.search(rf"^{lookup}$", build, re.M), f"{image}/build.sh never looks the arch up with {lookup}"
-    assert '--build-arg "ROCM_ARCH=${ROCM_ARCH}"' in build
+    assert re.search(rf"^\s*{lookup}$", build, re.M), f"{image}/image.sh never looks the arch up with {lookup}"
+    assert re.search(r"^\s*ce_build_args .*\bROCM_ARCH\b", build, re.M)
     docker = code_lines(CE / image / "Dockerfile")
     assert re.findall(r"^ARG ROCM_ARCH\b.*$", docker, re.M) == ["ARG ROCM_ARCH"]
     assert 'test -n "${ROCM_ARCH:-}" ||' in docker
@@ -176,8 +176,8 @@ def test_every_amd_image_takes_rocm_arch_from_the_table_refuses_none_stamps_it_a
     # spack, clang, cupy and hipcc take the list ,-separated: that derivation IS the table's value.
     comma_list = docker.replace('$(echo "${ROCM_ARCH}" | tr ";" ",")', "${ROCM_ARCH}")
     if image in PORTABLE:
-        # A list has a ';' hipcc would hand to sh: build.sh passes the ,-form, which the image gates.
-        assert '--build-arg "ROCM_ARCH_CSV=${ROCM_ARCH_CSV}"' in build
+        # A list has a ';' hipcc would hand to sh: image.sh passes the ,-form, which the image gates.
+        assert re.search(r"^\s*ce_build_args .*\bROCM_ARCH_CSV\b", build, re.M)
         assert 'test "${ROCM_ARCH_CSV}" = "$(echo "${ROCM_ARCH}" | tr ";" ",")"' in docker
         assert not re.search(r"HCC_AMDGPU_TARGET=\$\{ROCM_ARCH\}(\s|$)", docker, re.M), (
             "HCC_AMDGPU_TARGET takes the ,-form"
@@ -209,7 +209,11 @@ def in_literal_scope(rel: str) -> bool:
     parts = rel.split("/")
     if rel == "containers/images/gpu_arch.env" or name.endswith(".md") or {"skills", "tests"} & set(parts):
         return False
-    if name in ("Dockerfile", "build.sh") or name.endswith(".sbatch") or re.fullmatch(r"edf.*\.toml\.example", name):
+    if (
+        name in ("Dockerfile", "build.sh", "image.sh")
+        or name.endswith(".sbatch")
+        or re.fullmatch(r"edf.*\.toml\.example", name)
+    ):
         return True
     if parts[0] == "hpcagent_bench":
         return name.endswith(".py")

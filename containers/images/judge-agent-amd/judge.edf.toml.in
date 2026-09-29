@@ -48,7 +48,7 @@ LC_ALL = "C"
 PYTHONSAFEPATH = "1"
 ROCM_PATH = "/opt/rocm"
 HIP_PATH = "/opt/rocm"
-# install_edfs.sh renders ${GPU_ARCH} from gpu_arch.env for the partition build.sbatch names.
+# install_edfs.sh renders ${GPU_ARCH} from gpu_arch.env for the partition the images.env row names.
 PYTORCH_ROCM_ARCH = "${GPU_ARCH}"
 HCC_AMDGPU_TARGET = "${GPU_ARCH}"
 # Absolute, never inherited: host SLES/spack binaries leak in through ${PATH} otherwise. Order

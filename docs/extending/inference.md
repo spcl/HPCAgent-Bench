@@ -92,15 +92,14 @@ python -m pytest --maxfail=10 tests/test_display_names.py tests/test_palette.py 
 
 | File | Change |
 |---|---|
-| `containers/images/<engine>/` | `Dockerfile`, `build.sh`, `build.sbatch`, `edf.toml.in` (copy `sglang/`) |
+| `containers/images/<engine>/` | `Dockerfile`, `image.sh`, `edf.toml.in` (copy `sglang/`) |
 | `containers/images/images.env` | `INFERENCE_<ENGINE>_SQSH`, `_EDF_LATEST`, `_TEMPLATE`, `_REPO`, `_TAG` |
 | `containers/images/install_edfs.sh` | render the new EDF beside the sglang one |
 | `experiments/run_cluster.sh` `run_vllm_node` | interpreter (`engine_python`) and a `command=(...)` branch |
 
 `edf.toml.in` keeps the `PLACEHOLDER.sqsh` image line, a multi-line `mounts = [` block, absolute
 `PATH` and `LD_LIBRARY_PATH` under `[env]` (the CE drops the image's ENV) and the fabric hook
-annotations. The engine name also goes in the profiles of `verify_image.py` and the role lists
-of `promote_image.sh` and `pull_image.sh`.
+annotations. The engine name also goes in the profiles of `verify_image.py`; `registry.sh` reads its row.
 
 The `run_vllm_node` branch serves `${model_path}` as `${VLLM_SERVED_MODEL}` on
 `0.0.0.0:${VLLM_PORT}` with TP `GPUS_PER_NODE`. Under `pp` it takes size, rank and rendezvous from
@@ -109,7 +108,7 @@ The endpoint must answer `GET /v1/models`, `POST /v1/chat/completions` and, in t
 `AGENT_LLM_MODE=direct`, Anthropic `POST /v1/messages` (`AGENT_LLM_MODE=litellm` fronts it with a proxy).
 
 ```bash
-REPO=$PWD IMAGE_DIR=containers/images/<engine> sbatch containers/images/build_and_verify.sbatch
-containers/images/promote_image.sh <engine>   # after the verify job passes
+sbatch -p mi300 containers/images/build_and_verify.sbatch <engine>
+containers/images/registry.sh promote <engine>   # after the verify job passes
 python -m pytest --maxfail=10 tests/test_vllm_pp_serve_args.py tests/test_derived_edf.py
 ```

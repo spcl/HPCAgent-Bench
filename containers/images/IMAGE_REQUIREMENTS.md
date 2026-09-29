@@ -119,8 +119,8 @@ in a prefix the Dockerfile controls (a copy in the image would be found first).
 
 ## Build defaults
 
-Every `build.sh` (and so every `build.sbatch` and `build_and_verify.sbatch`) sources
-`build_common.sh`, which sets two defaults, each an environment knob:
+`build.sh` (and so `build_and_verify.sbatch`) sources `build_common.sh`, which sets two defaults,
+each an environment knob:
 
 * **Caches on (`CE_BUILD_CACHE=1`).** The podman layer store on the node's tmpfs (`$CE_TMPFS/root`)
   is kept between jobs, so a failed build resubmitted to the same node (`--nodelist=<node>`, printed
@@ -143,8 +143,9 @@ Every `build.sh` (and so every `build.sbatch` and `build_and_verify.sbatch`) sou
 
 ## Verification
 
-`build_and_verify.sbatch` (AMD) and each GH200/CPU `build.sbatch` verify a candidate inside itself
-before writing the `.verified` marker `promote_image.sh` requires: `verify_image.py` (the declared
+`build_and_verify.sbatch` verifies every candidate it built inside itself (`verify_image.sbatch`,
+under an EDF rendered from the role's production template) before writing the `.verified` marker
+`registry.sh promote` requires: `verify_image.py` (the declared
 toolchain, libraries and frameworks), `selfcontained_check.py` (nothing resolves outside the image)
 and, for judge profiles, `tools_launch_check.py`. `mpi_gpu_check.sh` runs what the table can only
 look for:

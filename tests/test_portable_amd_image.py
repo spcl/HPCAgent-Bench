@@ -93,15 +93,18 @@ def test_ce_spack_target_refuses_a_family_the_table_does_not_name(tmp_path: path
 
 @pytest.mark.parametrize("target", ["agent", "judge"])
 def test_each_build_target_has_one_candidate_name(target: str) -> None:
-    done = common(f'source "{CE}/images.env"; ce_amd_candidate {target}')
+    """build.sh names a target's output by its image.sh role's images.env candidate."""
+    roles = run(["bash", str(CE / "build.sh"), "judge-agent-amd", "--roles"], {"BUILD_TARGETS": target})
+    assert roles.returncode == 0, roles.stderr
+    done = common(f"ce_image {roles.stdout.strip()} candidate")
     assert done.returncode == 0, done.stderr
-    assert done.stdout == CANDIDATES[target]
+    assert done.stdout.strip() == CANDIDATES[target]
 
 
-def test_ce_amd_candidate_refuses_an_unknown_target() -> None:
-    done = common(f'source "{CE}/images.env"; ce_amd_candidate sglang')
+def test_build_refuses_an_unknown_target() -> None:
+    done = run(["bash", str(CE / "build.sh"), "judge-agent-amd", "--roles"], {"BUILD_TARGETS": "sglang"})
     assert done.returncode == 2
-    assert "unknown build target 'sglang'" in done.stderr
+    assert "judge-agent-amd has no build target 'sglang'" in done.stderr
 
 
 def test_no_script_spells_a_judge_agent_amd_candidate_name_outside_images_env() -> None:
@@ -110,8 +113,6 @@ def test_no_script_spells_a_judge_agent_amd_candidate_name_outside_images_env() 
     for path in sorted(CE.rglob("*")):
         if path.is_file() and path.suffix in {".sh", ".sbatch", ".env", ""} and path.name != "images.env":
             assert not literal.search(path.read_text(encoding="utf-8", errors="replace")), path
-    for rel in ("judge-agent-amd/build.sh", "judge-agent-amd/build.sbatch"):
-        assert "ce_amd_candidate" in (CE / rel).read_text(encoding="utf-8"), rel
     assert len(literal.findall((CE / "images.env").read_text(encoding="utf-8"))) == 2
 
 
@@ -141,9 +142,9 @@ def test_the_published_baseline_is_required_for_every_package(tmp_path: pathlib.
 
 
 def test_the_build_passes_both_targets_and_the_dockerfile_defaults_to_native() -> None:
-    build = (RECIPE / "build.sh").read_text(encoding="utf-8")
-    assert re.search(r"^ce_amd_targets$", build, re.MULTILINE)
-    assert '--build-arg "SPACK_TARGET=${SPACK_TARGET}"' in build
+    build = (RECIPE / "image.sh").read_text(encoding="utf-8")
+    assert re.search(r"^\s+ce_amd_targets$", build, re.MULTILINE)
+    assert re.search(r"^\s+ce_build_args .*\bSPACK_TARGET\b", build, re.MULTILINE)
     docker = (RECIPE / "Dockerfile").read_text(encoding="utf-8")
     assert re.findall(r"^ARG SPACK_TARGET\b.*$", docker, re.MULTILINE) == ["ARG SPACK_TARGET="]
     assert 'grep -vx -e bin -e "linux-${SPACK_TARGET}"' in docker, "the stray-target gate is gone"
@@ -153,7 +154,7 @@ def test_the_build_passes_both_targets_and_the_dockerfile_defaults_to_native() -
 
 def test_the_pip_wheel_cache_is_keyed_by_the_target_list() -> None:
     """pip keys a built cupy wheel by its sdist, not by HCC_AMDGPU_TARGET."""
-    assert 'ce_cache_args spack-buildcache "pip-cache/${ROCM_ARCH//;/-}"' in (RECIPE / "build.sh").read_text(
+    assert 'ce_cache_args spack-buildcache "pip-cache/${ROCM_ARCH//;/-}"' in (RECIPE / "image.sh").read_text(
         encoding="utf-8"
     )
 
@@ -210,18 +211,38 @@ def test_the_mlscale_edf_is_the_judge_edf_plus_the_hwloc_preload(tmp_path: pathl
 
 
 @pytest.mark.parametrize(("role", "target"), [("judge-agent-amd", "agent"), ("judge", "judge")])
-def test_promote_image_moves_each_candidate_over_its_live_name(tmp_path: pathlib.Path, role: str, target: str) -> None:
+def test_promote_moves_each_candidate_over_its_live_name(tmp_path: pathlib.Path, role: str, target: str) -> None:
+    """The verified candidate and its sidecars become the live files, and the EDFs of every row that
+    mounts that image (its partition and mlscale views) are rendered onto it."""
     ce, edf_dir = tmp_path / "ce", tmp_path / "edf"
     ce.mkdir()
     edf_dir.mkdir()
     candidate = CANDIDATES[target]
     (ce / candidate).write_bytes(b"sqsh")
     (ce / f"{candidate}.digest").write_text("sha256:abc\n", encoding="utf-8")
-    (ce / f"{candidate}.verified").write_text(f"verified profile={target} job=1 digest=sha256:abc\n", encoding="utf-8")
-    env = {"SCRATCH": str(tmp_path), "CE_IMAGES": str(ce), "EDF_DIR": str(edf_dir), "DRY_RUN": "1"}
-    done = run(["bash", str(CE / "promote_image.sh"), role], env)
+    (ce / f"{candidate}.verified").write_text(f"verified role={role} job=1 digest=sha256:abc\n", encoding="utf-8")
+    env = {"SCRATCH": str(tmp_path), "CE_IMAGES": str(ce), "EDF_DIR": str(edf_dir), "HOME": str(tmp_path)}
+    done = run(["bash", str(CE / "registry.sh"), "promote", role], env)
     assert done.returncode == 0, done.stderr
-    assert f"{candidate}\n  -> {LIVE[target]}" in done.stdout
+    assert f"{role}: {candidate} -> {LIVE[target]}" in done.stdout
+    assert (ce / LIVE[target]).read_bytes() == b"sqsh" and not (ce / candidate).exists()
+    assert (ce / f"{LIVE[target]}.digest").is_file() and not (ce / f"{candidate}.verified").exists()
+    rendered = {path.name for path in edf_dir.glob("*.toml")}
+    assert rendered and all(str(ce / LIVE[target]) in (edf_dir / name).read_text(encoding="utf-8") for name in rendered)
+
+
+def test_promote_refuses_a_candidate_rebuilt_after_it_was_verified(tmp_path: pathlib.Path) -> None:
+    ce = tmp_path / "ce"
+    ce.mkdir()
+    candidate = CANDIDATES["judge"]
+    (ce / candidate).write_bytes(b"sqsh")
+    (ce / f"{candidate}.digest").write_text("sha256:new\n", encoding="utf-8")
+    (ce / f"{candidate}.verified").write_text("verified role=judge job=1 digest=sha256:old\n", encoding="utf-8")
+    env = {"SCRATCH": str(tmp_path), "CE_IMAGES": str(ce), "EDF_DIR": str(tmp_path / "edf"), "HOME": str(tmp_path)}
+    done = run(["bash", str(CE / "registry.sh"), "promote", "judge"], env)
+    assert done.returncode == 1
+    assert "rebuilt after it was verified" in done.stderr
+    assert (ce / candidate).exists() and not (ce / LIVE["judge"]).exists()
 
 
 def test_verify_only_reverifies_the_candidates_without_building(tmp_path: pathlib.Path) -> None:
@@ -230,22 +251,21 @@ def test_verify_only_reverifies_the_candidates_without_building(tmp_path: pathli
     ce = repo / "containers" / "images"
     (ce / "judge-agent-amd").mkdir(parents=True)
     (scratch / "ce-images").mkdir(parents=True)
-    for name in ("build_common.sh", "images.env", "gpu_arch.env", "cpu_target.env"):
+    for name in ("build_common.sh", "images.env", "gpu_arch.env", "cpu_target.env", "build.sh"):
         shutil.copy2(CE / name, ce / name)
-    (ce / "judge-agent-amd" / "build.sbatch").write_text(f'touch "{tmp_path}/built"\n', encoding="utf-8")
-    (ce / "verify_image.sbatch").write_text(f'echo "$PROFILE $IMAGE" >> "{tmp_path}/verified"\n', encoding="utf-8")
+    shutil.copy2(CE / "judge-agent-amd" / "image.sh", ce / "judge-agent-amd" / "image.sh")
+    (ce / "verify_image.sbatch").write_text(f'echo "$ROLE $IMAGE" >> "{tmp_path}/verified"\n', encoding="utf-8")
     for name in CANDIDATES.values():
         (scratch / "ce-images" / name).write_bytes(b"sqsh")
         (scratch / "ce-images" / f"{name}.digest").write_text("sha256:abc", encoding="utf-8")
     env = {
         "SCRATCH": str(scratch),
         "REPO": str(repo),
-        "IMAGE_DIR": "containers/images/judge-agent-amd",
         "SLURM_JOB_PARTITION": "mi300",
         "SLURM_JOB_ID": "7",
         "VERIFY_ONLY": "1",
     }
-    done = run(["bash", str(CE / "build_and_verify.sbatch")], env)
+    done = run(["bash", str(CE / "build_and_verify.sbatch"), "judge-agent-amd"], env)
     assert done.returncode == 0, done.stderr
     assert not (tmp_path / "built").exists()
     images = {target: scratch / "ce-images" / name for target, name in CANDIDATES.items()}
@@ -253,9 +273,9 @@ def test_verify_only_reverifies_the_candidates_without_building(tmp_path: pathli
         f"judge-agent-amd {images['agent']}",
         f"judge {images['judge']}",
     ]
-    for target, profile in (("agent", "judge-agent-amd"), ("judge", "judge")):
+    for target, role in (("agent", "judge-agent-amd"), ("judge", "judge")):
         marker = pathlib.Path(f"{images[target]}.verified").read_text(encoding="utf-8")
-        assert marker == f"verified profile={profile} job=7 digest=sha256:abc\n", target
+        assert marker == f"verified role={role} job=7 digest=sha256:abc\n", target
 
 
 def test_verify_stage_carries_the_any_host_cpu_rows_on_a_gpu_partition(tmp_path: pathlib.Path) -> None:
@@ -264,28 +284,28 @@ def test_verify_stage_carries_the_any_host_cpu_rows_on_a_gpu_partition(tmp_path:
     ce = repo / "containers" / "images"
     (ce / "judge-agent-cpu").mkdir(parents=True)
     (scratch / "ce-images").mkdir(parents=True)
-    for name in ("build_common.sh", "images.env", "gpu_arch.env", "cpu_target.env"):
+    for name in ("build_common.sh", "images.env", "gpu_arch.env", "cpu_target.env", "build.sh"):
         shutil.copy2(CE / name, ce / name)
-    (ce / "verify_image.sbatch").write_text(f'echo "$PROFILE $IMAGE" >> "{tmp_path}/verified"\n', encoding="utf-8")
+    shutil.copy2(CE / "judge-agent-cpu" / "image.sh", ce / "judge-agent-cpu" / "image.sh")
+    (ce / "verify_image.sbatch").write_text(f'echo "$ROLE $IMAGE" >> "{tmp_path}/verified"\n', encoding="utf-8")
     arch = platform.machine()
     images = {
-        profile: scratch / "ce-images" / f"hpcagent-bench-{role}-cpu-{arch}-latest-candidate.sqsh"
-        for profile, role in (("judge-agent-cpu", "agent"), ("judge-cpu", "judge"))
+        role: scratch / "ce-images" / f"hpcagent-bench-{kind}-cpu-{arch}-latest-candidate.sqsh"
+        for role, kind in (("judge-agent-cpu", "agent"), ("judge-cpu", "judge"))
     }
     for image in images.values():
         image.write_bytes(b"sqsh")
     env = {
         "SCRATCH": str(scratch),
         "REPO": str(repo),
-        "IMAGE_DIR": "containers/images/judge-agent-cpu",
         "SLURM_JOB_PARTITION": "mi300",
         "SLURM_JOB_ID": "7",
         "VERIFY_ONLY": "1",
     }
-    done = run(["bash", str(CE / "build_and_verify.sbatch")], env)
+    done = run(["bash", str(CE / "build_and_verify.sbatch"), "judge-agent-cpu"], env)
     assert done.returncode == 0, done.stderr
     verified = (tmp_path / "verified").read_text(encoding="utf-8").splitlines()
-    assert verified == [f"{profile} {image}" for profile, image in images.items()]
+    assert verified == [f"{role} {image}" for role, image in images.items()]
 
 
 def test_a_native_build_is_asked_for_by_name_and_otherwise_refused() -> None:
@@ -336,9 +356,10 @@ def test_every_registry_tag_is_a_latest_tag() -> None:
 
 def test_pull_refuses_the_native_flavor() -> None:
     done = run(
-        ["bash", str(CE / "pull_image.sh"), "judge-agent-amd"], {"CE_IMAGE_FLAVOR": "native", "HOME": "/nonexistent"}
+        ["bash", str(CE / "registry.sh"), "pull", "judge-agent-amd"],
+        {"CE_IMAGE_FLAVOR": "native", "HOME": "/nonexistent"},
     )
-    assert done.returncode == 2
+    assert done.returncode == 1
     assert "latest images only" in done.stderr
 
 
@@ -350,8 +371,8 @@ def test_every_spack_image_labels_its_cpu_target_after_declaring_it(recipe: str)
     assert docker.index("ARG SPACK_TARGET=") < docker.index(label), "the label reads SPACK_TARGET before it is declared"
 
 
-def test_push_image_refuses_a_native_build() -> None:
-    push = (CE / "push_image.sh").read_text(encoding="utf-8")
-    assert '{{ index .Labels "org.hpcagent-bench.cpu-target" }}' in push
-    assert '[[ "${cpu_target}" != native ]]' in push
-    assert push.index("cpu_target=") < push.index('"${PODMAN[@]}" push'), "the check runs after the upload"
+def test_push_refuses_a_native_build() -> None:
+    push = (CE / "registry.sh").read_text(encoding="utf-8")
+    check = push.index('{{ index .Labels "org.hpcagent-bench.cpu-target" }}')
+    assert "a native build; publish only the portable baseline" in push
+    assert check < push.index('"${pm[@]}" push --format oci'), "the check must run before the upload"

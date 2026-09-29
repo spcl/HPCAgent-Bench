@@ -164,13 +164,14 @@ def test_promotion_moves_exactly_the_candidates_the_builds_write(tmp_path: pathl
         (ce / f"{candidate.name}.digest").write_text("sha256:x\n", encoding="utf-8")
         (ce / f"{candidate.name}.verified").write_text("verified digest=sha256:x\n", encoding="utf-8")
     env = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path), "SCRATCH": str(tmp_path), "CE_IMAGES": str(ce)}
-    env |= {"CE_PLATFORM": platform, "DRY_RUN": "1"}
+    env |= {"CE_PLATFORM": platform, "EDF_DIR": str(tmp_path / "edf")}
     done = subprocess.run(
-        ["bash", str(CE / "promote_image.sh"), "--all"], capture_output=True, text=True, check=False, env=env
+        ["bash", str(CE / "registry.sh"), "promote", "--all"], capture_output=True, text=True, check=False, env=env
     )
     assert done.returncode == 0, done.stdout + done.stderr
     for _, _, image in RENDERED[platform]:
         assert f"-> {image}" in done.stdout, done.stdout
+        assert (ce / image).is_file(), image
 
 
 @pytest.fixture(name="verify", scope="module")

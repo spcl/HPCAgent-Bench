@@ -244,7 +244,7 @@ run_vllm_node() {
     # So: copy the prebuild out ONCE into a host directory and point aiter at the copy.
     #
     # KEYED BY THE IMAGE sha, not the EDF name: install_edfs.sh repoints a name at a new image.
-    # pull_image.sh and build.sh both write <sqsh>.sha256, and the launcher exports it.
+    # registry.sh pull and build.sh both write <sqsh>.sha256, and the launcher exports it.
     #
     # cp -an: never overwrite: a kernel the host cache compiled is at least as good as the image's,
     # and re-copying on every launch would undo run-time work. Staged and renamed, so two ranks
@@ -792,7 +792,7 @@ fi
 # Here, not a dependency job: preparation is 2-6 min against the 30-40 min the endpoint spends
 # loading weights, and refusing HERE costs seconds instead of 755 GB of weight load.
 # The judge image's content hash, which keys the ML track's persistent torch.compile caches
-# (torch_reference.cache_dir, torch_baseline.cache_key): pull_image.sh / build.sh write <sqsh>.sha256
+# (torch_reference.cache_dir, torch_baseline.cache_key): registry.sh pull / build.sh write <sqsh>.sha256
 # beside the squashfs the judge EDF names. Unset (no EDF, no .sha256) the caches fall back to a torch +
 # GPU runtime key. Before the preparation step, whose torch warm archives under the same key.
 if [[ -z "${HPCAGENT_BENCH_IMAGE_SHA:-}" ]]; then

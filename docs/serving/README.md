@@ -24,7 +24,7 @@ Once per account, register the EDFs (container definitions) and set your Slurm a
 ```bash
 cd "$REPO"
 containers/images/install_edfs.sh          # renders into ~/.edf
-sbatch containers/images/pull_images.sbatch  # only if install_edfs.sh reports a missing image
+sbatch containers/images/registry.sbatch pull <role>  # only if install_edfs.sh reports a missing image
 export SBATCH_ACCOUNT=<project>; . experiments/env.sh    # Beverin rejects jobs without an account
 ```
 
