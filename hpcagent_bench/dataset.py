@@ -13,6 +13,7 @@ two extractions of the same experiment are told apart by more than a file mtime.
 """
 
 import argparse
+import contextlib
 import dataclasses
 import datetime
 import logging
@@ -23,7 +24,7 @@ from typing import TYPE_CHECKING
 
 from hpcagent_bench import campaigns, experiments, frozen_observations, observations_extract, paths
 from hpcagent_bench.observation_columns import OBSERVATION_FIELDS
-from hpcagent_bench.stats import population
+from hpcagent_bench.stats import databases, population
 
 __all__ = [
     "EXPERIMENT_COLUMN",
@@ -126,19 +127,24 @@ def keep_roster(frame: "pd.DataFrame", selection: campaigns.Selection) -> tuple[
     return frame[~off], int(off.sum())
 
 
-def extract(selection: campaigns.Selection, frozen: pathlib.Path | None = None, **options: object) -> "pd.DataFrame":
+def extract(
+    selection: campaigns.Selection,
+    frozen: pathlib.Path | None = None,
+    runs: Sequence[str] = (),
+    **options: object,
+) -> "pd.DataFrame":
     """Every row of the experiment: judge rows, task rows with their token totals, and the frozen
     rows of jobs whose directories are gone or unreadable.
 
     One extractor (:mod:`hpcagent_bench.observations_extract`), because there were two and they
     disagreed: the other wrote the plural table name into its row kind and no ``task`` rows at all,
     so a frame from it carried no token cost and every ``row_kind == "task"`` rule silently did
-    nothing."""
+    nothing. ``runs`` (a results database, or run-root globs) replaces the selection's run roots."""
     import pandas as pd
 
     got = observations_extract.extract(
         observations_extract.Options(
-            runs=selection.run_globs(),
+            runs=tuple(runs) or selection.run_globs(),
             benchmarks=paths.BENCHMARKS,
             frozen_dir=frozen,
             **options,  # type: ignore[arg-type]
@@ -241,13 +247,18 @@ def build(
     csvs: Sequence[pathlib.Path] = (),
     regrades: Sequence[str] = (),
     platform_regrades: Sequence[tuple[str, str]] = (),
+    dbs: Sequence[pathlib.Path] = (),
 ) -> tuple["pd.DataFrame", Provenance]:
-    """Extract ``experiment``, fuse any extra CSVs in, write ``out`` (and ``csv_out``)."""
+    """Extract ``experiment`` -- from the results databases ``dbs`` read as one
+    (:func:`hpcagent_bench.stats.databases.union`), else from its run roots -- fuse any extra CSVs in,
+    write ``out`` (and ``csv_out``)."""
     import pandas as pd
 
     selection = campaigns.resolve(experiment, root)
     extracted_at = now()
-    live = extract(selection, frozen, regrades=tuple(regrades), platform_regrades=tuple(platform_regrades))
+    with contextlib.ExitStack() as stack:
+        runs = (str(stack.enter_context(databases.union(dbs))),) if dbs else ()
+        live = extract(selection, frozen, runs, regrades=tuple(regrades), platform_regrades=tuple(platform_regrades))
     extra = pd.concat([load(path) for path in csvs], ignore_index=True) if csvs else pd.DataFrame()
     frame, provenance = fuse(selection, live, extra, extracted_at)
     if frame.empty:
@@ -288,6 +299,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--runs-root", type=pathlib.Path, help=f"default {campaigns.runs_root()}")
     parser.add_argument(
+        "--db",
+        type=pathlib.Path,
+        action="append",
+        default=[],
+        help="a results database (v1) to read instead of the run roots; repeatable, read as one: the core "
+        "database, plus e.g. the CPF archive for the historical CPF arms",
+    )
+    parser.add_argument(
         "--frozen-observations",
         default=None,
         help=f"frozen extraction dir; default ${frozen_observations.ENV}, '' to read none",
@@ -304,6 +323,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         csvs=tuple(args.fuse_csv),
         regrades=tuple(args.regrades),
         platform_regrades=tuple(args.platform_regrades),
+        dbs=tuple(args.db),
     )
     print(provenance.report())
     LOG.debug("fused frame: %d rows", len(frame))

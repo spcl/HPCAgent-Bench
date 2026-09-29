@@ -84,7 +84,7 @@ def test_a_kernels_file_subset_env_diverges_from_the_canonical_name(tmp_path: pa
 def test_dry_run_refuses_to_overwrite_a_file_a_pending_job_reads(tmp_path: pathlib.Path) -> None:
     """A candidate env path that a PENDING job reads as CLUSTER_ENV_FILE (sacct's SubmitLine, mocked
     here) is refused and left untouched, whatever SUBMIT says."""
-    target = tmp_path / ".env.cpf-llr-focus40-kimi27sglang-c-clean"
+    target = tmp_path / ".env.llr-focus40-kimi27sglang-c-clean"
     target.write_text("PENDING-JOBS-OWN-CONTENT\n")
     result = run_probe(
         tmp_path,

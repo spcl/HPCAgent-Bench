@@ -334,9 +334,9 @@ def test_a_blank_arm_stays_blank_through_the_fold() -> None:
     [
         ("cpf-llr-focus40-oss120b-c-cpf", "cpf"),
         ("cpf-llr-focus40-qwen38-c-cpfsrc", "cpfsrc"),
-        ("cpf-llr-focus40-kimi27sglang-c-skills", "lang-skills"),
+        ("llr-focus40-kimi27sglang-c-skills", "lang-skills"),
         ("gpu-llr-focus40-kimi27sglang-c-openmp-skills", "lang-skills"),
-        ("cpf-llr-focus40-qwen38-c-perf-playbook-cpu", "perf-playbook-cpu"),
+        ("llr-focus40-qwen38-c-perf-playbook-cpu", "perf-playbook-cpu"),
     ],
 )
 def test_a_packet_token_after_the_model_is_the_arms_packet(arm: str, packet: str) -> None:
@@ -348,7 +348,7 @@ def test_a_packet_token_after_the_model_is_the_arms_packet(arm: str, packet: str
 
 @pytest.mark.parametrize("arm", ["cpf-llr-focus40-qwen38-c", "cpf-llr-focus40-oss120b-fortran"])
 def test_the_experiment_prefix_never_reads_as_a_packet(arm: str) -> None:
-    """``cpf-llr-focus40`` spells ``cpf`` before the model; the control arm must stay the control."""
+    """The legacy ``cpf-llr-focus40`` spells ``cpf`` before the model; the control arm must stay the control."""
     frame = pd.DataFrame({"arm": [arm], "packet": [""]})
     assert experiments.is_blank(experiments.fill_arm_identity(frame).packet.iloc[0])
 
@@ -412,7 +412,7 @@ def test_a_column_no_row_in_the_table_ever_recorded_still_fills_from_the_arm_nam
     never stamped a language produces, and it is the shape a paired figure reads."""
     frame = pd.DataFrame(
         {
-            "arm": ["cpf-llr-focus40-qwen38-c", "cpf-llr-focus40-qwen38-c"],
+            "arm": ["llr-focus40-qwen38-c", "llr-focus40-qwen38-c"],
             "language": [math.nan, math.nan],
         }
     )
@@ -426,14 +426,25 @@ def test_a_column_no_row_in_the_table_ever_recorded_still_fills_from_the_arm_nam
 @pytest.mark.parametrize(
     ("arm", "folded"),
     [
-        ("llrblind-qwen38-c", "llrblind-cmp-qwen38-c"),
-        ("llrblind-oss120b-fortran-skills", "llrblind-cmp-oss120b-fortran-skills"),
-        ("llrblind-cmp-qwen38-c", "llrblind-cmp-qwen38-c"),
-        ("cpf-llr-focus40-qwen38-c", "cpf-llr-focus40-qwen38-c"),
-        # registry arm_aliases: the dc plain CPU arm is the perf-playbook plain arm
-        ("scicomp-dc-qwen38-plain", "scicomp-perf-playbook-qwen38-plain"),
-        ("scicomp-dc-qwen38-plain-clean", "scicomp-perf-playbook-qwen38-plain-clean"),
-        ("scicomp-dc-gpu-qwen38-hip-plain", "scicomp-dc-gpu-qwen38-hip-plain"),
+        # envs/arm_renames.yaml: every recorded arm under its configuration name
+        ("llrblind-qwen38-c", "llr40-qwen38-c-blind"),
+        ("llrblind-oss120b-fortran-skills", "llr40-oss120b-fortran-skills-blind"),
+        ("llrblind-cmp-qwen38-c", "llr40-qwen38-c-blind"),
+        ("llrblind-kimi27sglang-c", "llr40-kimi27sglang-c-blind"),
+        ("llr-focus40-qwen38-c", "llr40-qwen38-c"),
+        ("llr40v11-qwen38-c", "llr40-qwen38-c"),
+        # registry arm_aliases: a legacy cpf- spelling that used no CPF is the arm without it
+        ("cpf-llr-focus40-qwen38-c", "llr40-qwen38-c"),
+        ("cpf-llr-focus40-qwen38-c-skills-clean", "llr40-qwen38-c-skills"),
+        ("cpf-llr-focus40-qwen38-c-cpf", "cpf-llr-focus40-qwen38-c-cpf"),
+        ("cpf-llr-focus40-qwen38-c-cpf-clean", "cpf-llr-focus40-qwen38-c-cpf-clean"),
+        ("cpf-llr-focus40-qwen38-c-cpfsrc-v2-clean", "cpf-llr-focus40-qwen38-c-cpfsrc-v2-clean"),
+        # the dc plain CPU arm is the perf-playbook plain arm
+        ("scicomp-dc-qwen38-plain", "scicomp40-qwen38-c"),
+        ("scicomp-dc-qwen38-plain-clean", "scicomp40-qwen38-c"),
+        ("scicomp-dc-gpu-qwen38-hip-plain", "scicomp40-qwen38-hip"),
+        # a configuration name is already the arm
+        ("llr40-qwen38-c", "llr40-qwen38-c"),
     ],
 )
 def test_a_renamed_blind_arm_reads_under_its_current_name(arm: str, folded: str) -> None:
@@ -449,12 +460,14 @@ def test_the_dc_and_perf_playbook_spellings_read_as_one_arm() -> None:
         {"arm": ["scicomp-dc-oss120b-plain-clean", "scicomp-perf-playbook-oss120b-plain"], "benchmark": ["a", "a"]}
     )
     folded = experiments.fold_clean_arms(experiments.fold_renamed_arms(frame))
-    assert set(folded.arm) == {"scicomp-perf-playbook-oss120b-plain"}
+    assert set(folded.arm) == {"scicomp40-oss120b-c"}
 
 
 def test_both_waves_of_a_renamed_arm_become_one_arm() -> None:
-    frame = pd.DataFrame({"arm": ["llrblind-kimi27sglang-c", "llrblind-cmp-kimi27sglang-c"], "benchmark": ["a", "b"]})
-    assert set(experiments.fold_renamed_arms(frame).arm) == {"llrblind-cmp-kimi27sglang-c"}
+    frame = pd.DataFrame(
+        {"arm": ["llrblind-kimi27sglang-c", "llrblind-cmp-kimi27sglang-c-clean"], "benchmark": ["a", "b"]}
+    )
+    assert set(experiments.fold_renamed_arms(frame).arm) == {"llr40-kimi27sglang-c-blind"}
 
 
 def graded_episode(benchmark: str, graded: list[tuple[str, str]]) -> pd.DataFrame:
@@ -538,3 +551,10 @@ def test_read_observations_answers_a_scicomp_episode_with_its_first_submission(t
     with pytest.warns(UserWarning, match="first /submit"):
         frame = experiments.read_observations(path)
     assert graded_stamps(frame) == [200]
+
+
+def test_a_task_whose_job_was_never_recorded_is_labelled_not_refused() -> None:
+    """A migrated episode with no Slurm job reads back with a missing ``job``; its task still has one
+    label, joined with an empty job rather than raising on the missing value."""
+    rows = pd.DataFrame({"run_root": ["r", "r"], "job": [pd.NA, "7"], "run_id": ["w0", "w0"]}, dtype="string")
+    assert experiments.task_labels(rows).tolist() == ["r\x1f\x1fw0", "r\x1f7\x1fw0"]

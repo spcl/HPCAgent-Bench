@@ -136,8 +136,8 @@ def test_the_row_keeps_the_requested_language_when_the_agent_ships_another(monke
 
 
 def test_the_trajectory_rows_language_comes_from_the_run(monkeypatch, tmp_path) -> None:
-    """A ``calls`` row carries no language of its own. It belongs to a run, and the run names the
-    language the ARM asked for -- so a trajectory row cannot disagree with its own run about it,
+    """A trajectory grade carries no language of its own. It belongs to a run of an arm, and the arm
+    names the language it asked for -- so a trajectory row cannot disagree with its own run about it,
     which is what two copies of the field allowed."""
     monkeypatch.setattr(runner, "score", _fake_score)
     task = Task("gemm", "restricted", "fortran")
@@ -157,12 +157,12 @@ def test_the_trajectory_rows_language_comes_from_the_run(monkeypatch, tmp_path) 
     assert n == len(row.trajectory) == 1
     conn = recording.connect(db)
     try:
-        columns = {r[1] for r in conn.execute("PRAGMA table_info(calls)")}
-        got = conn.execute("SELECT r.language FROM calls JOIN runs r USING (run_id)").fetchone()
+        columns = {r[1] for r in conn.execute("PRAGMA table_info(grades)")}
+        got = conn.execute("SELECT language FROM grades_flat").fetchone()
     finally:
         conn.close()
     assert "language" not in columns and "delivered_language" not in columns
-    assert got == ("fortran",)  # the ARM's language, from the run, once
+    assert got == ("fortran",)  # the ARM's language, from the arm, once
 
 
 # real end-to-end: a scripted repair through the forked solve_task

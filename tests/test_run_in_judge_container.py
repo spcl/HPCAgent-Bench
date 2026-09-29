@@ -98,14 +98,14 @@ def run_in_judge_container(
     return proc, argv_captured
 
 
-def test_the_freeze_block_runs_the_extractor_in_the_judge_container() -> None:
-    """The freeze block's extractor goes through ``run_in_judge_container``, never a bare host
-    ``python3``; token_report.py/recoverable_report.py are pure stdlib and stay on the host."""
-    start = SCRIPT_TEXT.index('echo "===== freezing token record')
+def test_the_merge_block_runs_merge_results_in_the_judge_container() -> None:
+    """The results-DB merge goes through ``run_in_judge_container``, never a bare host ``python3``;
+    token_report.py/recoverable_report.py are pure stdlib and stay on the host."""
+    start = SCRIPT_TEXT.index('echo "===== folding the results DB')
     end = SCRIPT_TEXT.index('exit "${agent_status}"', start)
-    freeze_block = SCRIPT_TEXT[start:end]
-    assert "command -v" not in freeze_block, freeze_block
-    assert "run_in_judge_container" in freeze_block, freeze_block
+    merge_block = SCRIPT_TEXT[start:end]
+    assert "command -v" not in merge_block, merge_block
+    assert "run_in_judge_container" in merge_block and "merge_results.py" in merge_block, merge_block
 
 
 def test_ce_runtime_runs_the_extractor_inside_the_judges_environment(tmp_path) -> None:

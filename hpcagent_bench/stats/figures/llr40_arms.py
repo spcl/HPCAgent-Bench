@@ -1,6 +1,6 @@
 # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""llr-focus40 arms: which arms a figure draws, their (model, condition), their tokens and roster.
+"""llr40 arms: which arms a figure draws, their (model, condition), their tokens and roster.
 
 The condition comes from the ARM NAME, not the ``language``/``packet`` columns: the pre-regrade
 extraction records those inconsistently for the same arm, while every row of an arm agrees on its
@@ -27,10 +27,13 @@ __all__ = [
     "roster_of",
 ]
 
-#: An arm an llr-focus40 figure may draw, and its (model, condition) in one match: ``-c`` is the control
-#: (condition ``""``), ``-c-cpf`` the CPF page, ``-c-cpfsrc`` CPF as source. C only -- Fortran has no
-#: CPF spelling (mpr-artifacts/experiments/llr-focus40-cpf/README.md).
-ARM_PATTERN: re.Pattern[str] = re.compile(r"^cpf-llr-focus40-(?P<model>[a-z0-9]+)-c(?:-(?P<condition>cpf|cpfsrc))?$")
+#: An arm an llr40 figure may draw, and its (model, condition) in one match: ``-c`` is the control
+#: (condition ``""``), ``-c-cpf`` the CPF page, ``-c-cpfsrc`` CPF as source; the control is ``llr40-``
+#: (or its recorded ``llr-focus40-`` spelling) and a CPF arm keeps the ``cpf-llr-focus40-`` prefix. C only
+#: -- Fortran has no CPF spelling (mpr-artifacts/experiments/llr-focus40-cpf/README.md).
+ARM_PATTERN: re.Pattern[str] = re.compile(
+    r"^(?:llr40|(?:cpf-)?llr-focus40)-(?P<model>[a-z0-9]+)-c(?:-(?P<condition>cpf|cpfsrc))?$"
+)
 
 #: Draw order within one model's own slot, control first.
 CONDITION_ORDER: tuple[str, ...] = ("", "cpf", "cpfsrc")
@@ -80,7 +83,7 @@ def arm_tokens(
 
 
 def roster_of(canon_frame: pd.DataFrame) -> list[str]:
-    """The 40 llr-focus40 kernels: every kernel the canon sweep names, sorted -- the same order
+    """The 40 llr40 kernels: every kernel the canon sweep names, sorted -- the same order
     :func:`hpcagent_bench.stats.canon.speedups` already reduces its ratios in."""
     return sorted({str(k) for k in canon_frame["kernel"].dropna().unique()})
 
@@ -88,7 +91,7 @@ def roster_of(canon_frame: pd.DataFrame) -> list[str]:
 def condition_label(condition: str) -> str:
     """The display text for a condition tag (``""`` control, ``cpf``, ``cpfsrc``).
 
-    The control reads "No Packet", never the registry's "No Skill Packet": the llr-focus40 treatments
+    The control reads "No Packet", never the registry's "No Skill Packet": the llr40 treatments
     (CPF page, CPF as source) are not skills, and borrowing the skills experiments' wording for
     the control names the wrong thing (:func:`hpcagent_bench.packets.control_label`, gated on the
     treatment set rather than hardcoded here or in the registry).
@@ -101,7 +104,7 @@ def condition_label(condition: str) -> str:
 def rank_condition(condition: str, order: Sequence[str] = CONDITION_ORDER) -> tuple[int, str]:
     """``order``'s conditions first, in their declared order, then anything else alphabetically.
 
-    A condition axis need not be a skill packet: git-scicomp's arm names carry ``kernel``/``repo``,
+    A condition axis need not be a skill packet: gitscicomp10's arm names carry ``kernel``/``repo``,
     neither of which is in :data:`CONDITION_ORDER`. ``CONDITION_ORDER.index`` would raise on those;
     this is the same "known order first, unregistered last" tiebreak :func:`palette.in_order` and
     :mod:`statistics.plot_arm_summary`'s ``condition_order`` already use for model and packet axes.

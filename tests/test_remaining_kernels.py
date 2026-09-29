@@ -14,16 +14,19 @@ ended on its own. "done" also means a GENUINE ``attempts`` row -- a real
 no real grade happen and is owed, not done.
 """
 
+import contextlib
 import importlib.util
 import json
 import os
 import pathlib
-import sqlite3
 import subprocess
 import sys
 import types
 
 import pytest
+
+from hpcagent_bench.harness import recording, results_db
+from tests import results_seed
 
 SCRIPT = pathlib.Path(__file__).resolve().parents[1] / "experiments" / "remaining_kernels.py"
 ARM = "cpf-llr-focus40-qwen38-c-cpf"
@@ -46,35 +49,44 @@ def module_fixture() -> types.ModuleType:
     return module
 
 
-def make_shard(root: pathlib.Path, job_id: str, arm: str, rank: int = 0) -> sqlite3.Connection:
-    """An empty judge shard for ``job_id``, already carrying ``runs.arm = arm``."""
-    shard = root / job_id / "judge" / f"rank-{rank}"
-    shard.mkdir(parents=True)
-    conn = sqlite3.connect(shard / f"hpcagent_bench{rank}.db")
-    with conn:
-        conn.execute("create table runs (run_id text, arm text)")
-        conn.execute("create table submissions (run_id text, benchmark text, optimizer text, ts integer)")
-        conn.execute("create table attempts (run_id text, benchmark text, reason text, ts integer)")
-    return conn
+def make_shard(root: pathlib.Path, job_id: str, arm: str, rank: int = 0) -> pathlib.Path:
+    """An empty judge shard (schema v1) for ``job_id``; ``arm`` is recorded with its first run."""
+    shard = root / job_id / "judge" / f"rank-{rank}" / f"hpcagent_bench{rank}.db"
+    shard.parent.mkdir(parents=True)
+    results_db.open_db(shard).close()
+    return shard
 
 
-def add_run(conn: sqlite3.Connection, run_id: str, arm: str) -> None:
-    with conn:
-        conn.execute("insert into runs values (?, ?)", (run_id, arm))
+def add_run(shard: pathlib.Path, run_id: str, arm: str) -> None:
+    """Episode ``run_id`` of ``arm``, in the shard's job."""
+    with contextlib.closing(results_db.open_db(shard)) as conn:
+        results_db.ensure_arm(conn, results_db.Arm(arm, "c", "cpu"))
+        results_db.ensure_run(conn, arm, run_id, int(shard.parents[2].name))
+        conn.commit()
+
+
+def add_grade(shard: pathlib.Path, run_id: str, benchmark: str, kind: str, ts: int, **values: object) -> None:
+    """A ``kind`` grade of ``run_id`` (its run recorded under its label's arm unless already there)."""
+    with contextlib.closing(results_db.open_db(shard)) as conn:
+        known = conn.execute("SELECT arm FROM runs WHERE label = ?", (run_id,)).fetchone()
+    arm = known[0] if known is not None else recording.arm_of(run_id)
+    job = int(shard.parents[2].name)
+    results_seed.grade(shard, run_id, benchmark, kind, ts, job=job, arm=results_db.Arm(arm, "c", "cpu"), **values)
 
 
 def add_submission(
-    conn: sqlite3.Connection, run_id: str, benchmark: str, optimizer: str = "qwen38", ts: int = FAR_FUTURE_TS_MS
+    shard: pathlib.Path, run_id: str, benchmark: str, optimizer: str = "qwen38", ts: int = FAR_FUTURE_TS_MS
 ) -> None:
-    with conn:
-        conn.execute("insert into submissions values (?, ?, ?, ?)", (run_id, benchmark, optimizer, ts))
+    """A credited grade: a /submit, or the origin ``optimizer`` names (a promotion)."""
+    kind = recording.ORIGIN_KINDS.get(optimizer, "submit")
+    add_grade(shard, run_id, benchmark, kind, ts, build_ok=1, correct=1, speedup=2.0, credited_speedup=2.0)
 
 
 def add_attempt(
-    conn: sqlite3.Connection, run_id: str, benchmark: str, reason: str = "score_error", ts: int = FAR_FUTURE_TS_MS
+    shard: pathlib.Path, run_id: str, benchmark: str, reason: str = "score_error", ts: int = FAR_FUTURE_TS_MS
 ) -> None:
-    with conn:
-        conn.execute("insert into attempts values (?, ?, ?, ?)", (run_id, benchmark, reason, ts))
+    """A /submit that earned nothing, its failed gate in ``reason``."""
+    add_grade(shard, run_id, benchmark, "submit", ts, reason=reason)
 
 
 def job_dir_with_rows(root: pathlib.Path, job_id: str, arm: str, benchmarks: list) -> None:
@@ -84,7 +96,6 @@ def job_dir_with_rows(root: pathlib.Path, job_id: str, arm: str, benchmarks: lis
     add_run(conn, run_id, arm)
     for name in benchmarks:
         add_submission(conn, run_id, name)
-    conn.close()
 
 
 def owed_lists(
@@ -127,25 +138,6 @@ def test_the_arm_comes_from_runs_arm_with_no_sacct_call(
     assert owed == {ARM: ["c"]}
 
 
-def test_a_shard_written_before_the_runs_table_names_its_arm_by_its_run_ids(
-    module: types.ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
-) -> None:
-    """Early judges wrote no ``runs`` table; reading that as "no arm" dropped their
-    coverage and hid an arm whose every job is that old (cpf-llr-focus40-kimi27sglang-c-skills). A run
-    id not in the launcher's shape names no arm, so it cannot make the job look two-armed."""
-    shard = tmp_path / "runs" / "631233" / "judge" / "rank-0"
-    shard.mkdir(parents=True)
-    conn = sqlite3.connect(shard / "hpcagent_bench0.db")
-    with conn:
-        conn.execute("create table submissions (run_id text, benchmark text, optimizer text, ts integer)")
-        conn.execute("create table attempts (run_id text, benchmark text, reason text, ts integer)")
-    add_submission(conn, f"{ARM}.n0.p0.w0", "a")
-    add_attempt(conn, "${HPCAGENT_BENCH_RUN_ID}", "b", reason="wrong")
-    conn.close()
-    assert module.job_arm(str(tmp_path / "runs" / "631233")) == ARM
-    assert owed_lists(module, monkeypatch, tmp_path) == {ARM: ["c"]}
-
-
 def test_a_submitted_kernel_is_done(
     module: types.ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
 ) -> None:
@@ -155,7 +147,6 @@ def test_a_submitted_kernel_is_done(
     run_id = f"{ARM}.n0.p0.w0"
     add_run(conn, run_id, ARM)
     add_submission(conn, run_id, "a", optimizer="qwen38")
-    conn.close()
     owed = owed_lists(module, monkeypatch, tmp_path)
     assert owed == {ARM: ["b", "c"]}
 
@@ -170,7 +161,6 @@ def test_an_attempts_only_kernel_whose_episode_did_not_end_is_owed(
     add_run(conn, run_id, ARM)
     add_attempt(conn, run_id, "a")
     add_attempt(conn, run_id, "a")
-    conn.close()
     owed = owed_lists(module, monkeypatch, tmp_path)
     assert owed == {ARM: ["a", "b", "c"]}
 
@@ -184,7 +174,6 @@ def test_a_self_exited_and_promoted_kernel_is_done(
     run_id = f"{ARM}.n0.p0.w0"
     add_run(conn, run_id, ARM)
     add_submission(conn, run_id, "a", optimizer="promoted-unsubmitted")
-    conn.close()
     owed = owed_lists(module, monkeypatch, tmp_path)
     assert owed == {ARM: ["b", "c"]}
 
@@ -198,7 +187,6 @@ def test_a_killed_mid_episode_kernel_is_owed(
     run_id = f"{ARM}.n0.p0.w0"
     add_run(conn, run_id, ARM)
     add_attempt(conn, run_id, "b")
-    conn.close()
     owed = owed_lists(module, monkeypatch, tmp_path)
     assert owed == {ARM: ["a", "b", "c"]}
 
@@ -213,7 +201,6 @@ def test_a_genuine_incorrect_attempt_is_done_not_owed(
     run_id = f"{ARM}.n0.p0.w0"
     add_run(conn, run_id, ARM)
     add_attempt(conn, run_id, "a", reason="incorrect")
-    conn.close()
     owed = owed_lists(module, monkeypatch, tmp_path)
     assert owed == {ARM: ["b", "c"]}
 
@@ -227,7 +214,6 @@ def test_a_harness_fault_attempt_stays_owed(
     run_id = f"{ARM}.n0.p0.w0"
     add_run(conn, run_id, ARM)
     add_attempt(conn, run_id, "a", reason="score_error")
-    conn.close()
     owed = owed_lists(module, monkeypatch, tmp_path)
     assert owed == {ARM: ["a", "b", "c"]}
 
@@ -245,7 +231,6 @@ def test_a_kernel_whose_only_grades_are_adhoc_is_owed(
     add_submission(conn, "adhoc", "a")
     add_attempt(conn, "adhoc", "b", reason="incorrect")
     add_submission(conn, run_id, "c")
-    conn.close()
     owed = owed_lists(module, monkeypatch, tmp_path)
     assert owed == {ARM: ["a", "b"]}
 
@@ -262,7 +247,6 @@ def test_a_fused_jobs_arm_filter_does_not_readmit_an_adhoc_grade(
     add_attempt(conn, "adhoc", "b", reason="incorrect")
     add_submission(conn, run_id, "c")
     add_attempt(conn, run_id, "d", reason="incorrect")
-    conn.close()
     job_dir, opt = str(tmp_path / "100"), str(SCRIPT.parents[1])
     assert module.touched(job_dir, opt, ARM) == {"c"}
     assert module.genuine_attempts(job_dir, opt, ARM) == {"d"}
@@ -273,7 +257,7 @@ def test_a_job_dir_with_shards_but_no_arm_raises(
 ) -> None:
     """A shard DB that never recorded an arm is a broken run, not a job to drop silently: dropping
     it would credit its arm's coverage from nothing."""
-    make_shard(tmp_path / "runs", "100", ARM).close()  # runs table stays empty: no arm recorded
+    make_shard(tmp_path / "runs", "100", ARM)  # runs table stays empty: no arm recorded
     monkeypatch.setattr(module, "roster", lambda tag, opt: list(ROSTER))
     monkeypatch.setattr(sys, "argv", ["remaining_kernels.py", "--run-root", str(tmp_path / "runs"), "--tag", "t"])
     with pytest.raises(SystemExit, match="runs.arm named no arm"):
@@ -383,7 +367,7 @@ def test_a_pre_cmp_llrblind_run_folds_into_its_cmp_successor(
     job_dir_with_rows(tmp_path / "runs", "100", "llrblind-qwen38-c", ["a"])
     job_dir_with_rows(tmp_path / "runs", "200", "llrblind-cmp-qwen38-c", ["b"])
     owed = owed_lists(module, monkeypatch, tmp_path)
-    assert owed == {"llrblind-cmp-qwen38-c": ["c"]}
+    assert owed == {"llr40-qwen38-c-blind": ["c"]}
 
 
 def test_a_pre_cmp_llrblind_clean_rerun_folds_through_both(
@@ -394,7 +378,7 @@ def test_a_pre_cmp_llrblind_clean_rerun_folds_through_both(
     job_dir_with_rows(tmp_path / "runs", "100", "llrblind-cmp-qwen38-c", ["a"])
     job_dir_with_rows(tmp_path / "runs", "200", "llrblind-qwen38-c-clean", ["b"])
     owed = owed_lists(module, monkeypatch, tmp_path)
-    assert owed == {"llrblind-cmp-qwen38-c": ["c"]}
+    assert owed == {"llr40-qwen38-c-blind": ["c"]}
 
 
 def test_an_unrelated_arm_starting_with_llrblind_cmp_is_never_double_folded(
@@ -402,10 +386,11 @@ def test_an_unrelated_arm_starting_with_llrblind_cmp_is_never_double_folded(
 ) -> None:
     """base_arm must not rewrite an arm that already carries the -cmp identity into
     llrblind-cmp-cmp-... -- the prefix check has to skip an arm that already starts with the
-    replacement, not just the bare prefix."""
-    job_dir_with_rows(tmp_path / "runs", "100", "llrblind-cmp-qwen38-c", ["a", "b"])
+    replacement, not just the bare prefix. An arm no record names (glm53 never ran blind) takes that
+    legacy path."""
+    job_dir_with_rows(tmp_path / "runs", "100", "llrblind-cmp-glm53-c", ["a", "b"])
     owed = owed_lists(module, monkeypatch, tmp_path)
-    assert owed == {"llrblind-cmp-qwen38-c": ["c"]}
+    assert owed == {"llrblind-cmp-glm53-c": ["c"]}
 
 
 def test_the_scicomp_dc_and_perf_playbook_plain_arms_are_one_arm(
@@ -417,21 +402,22 @@ def test_the_scicomp_dc_and_perf_playbook_plain_arms_are_one_arm(
     job_dir_with_rows(tmp_path / "runs", "100", "scicomp-perf-playbook-qwen38-plain", ["a"])
     job_dir_with_rows(tmp_path / "runs", "200", "scicomp-dc-qwen38-plain-clean", ["b"])
     owed = owed_lists(module, monkeypatch, tmp_path)
-    assert owed == {"scicomp-perf-playbook-qwen38-plain": ["c"]}
+    assert owed == {"scicomp40-qwen38-c": ["c"]}
 
 
 @pytest.mark.parametrize(
     ("arm", "identity"),
     [
-        ("scicomp-dc-oss120b-plain", "scicomp-perf-playbook-oss120b-plain"),
-        ("scicomp-dc-oss120b-plain-clean", "scicomp-perf-playbook-oss120b-plain"),
-        ("scicomp-perf-playbook-oss120b-plain-clean", "scicomp-perf-playbook-oss120b-plain"),
-        # only the plain CPU C arm has two spellings: the dc GPU, Fortran and C++ arms stay
-        ("scicomp-dc-gpu-oss120b-hip-plain", "scicomp-dc-gpu-oss120b-hip-plain"),
-        ("scicomp-dc-fortran-qwen38-plain", "scicomp-dc-fortran-qwen38-plain"),
-        ("scicomp-dc-cpp-oss120b-plain", "scicomp-dc-cpp-oss120b-plain"),
+        ("scicomp-dc-oss120b-plain", "scicomp40-oss120b-c"),
+        ("scicomp-dc-oss120b-plain-clean", "scicomp40-oss120b-c"),
+        ("scicomp-perf-playbook-oss120b-plain-clean", "scicomp40-oss120b-c"),
+        # every recorded arm under its configuration name (envs/arm_renames.yaml)
+        ("scicomp-dc-gpu-oss120b-hip-plain", "scicomp40-oss120b-hip"),
+        ("scicomp-dc-fortran-qwen38-plain", "scicomp40-qwen38-fortran"),
+        ("scicomp-dc-cpp-oss120b-plain", "scicomp40-oss120b-cpp"),
+        ("git-scicomp-qwen38-kernel", "gitscicomp10-qwen38-c"),
+        # a spelling no record names stays itself
         ("scicomp-dc-qwen38-cpfsrc", "scicomp-dc-qwen38-cpfsrc"),
-        ("git-scicomp-qwen38-kernel", "git-scicomp-qwen38-kernel"),
     ],
 )
 def test_base_arm_folds_only_the_registered_alias(module: types.ModuleType, arm: str, identity: str) -> None:
@@ -460,7 +446,6 @@ def test_list_progress_lists_exactly_the_not_done_rows(
     add_submission(conn, run_id, "a")  # done: its attempts history is not "progress" to review
     add_attempt(conn, run_id, "a")
     add_attempt(conn, run_id, "b")  # owed: this is the row --list-progress must surface
-    conn.close()
     owed_lists(module, monkeypatch, tmp_path, list_progress=True)
     lines = [line for line in capsys.readouterr().out.splitlines() if line.startswith("  progress")]
     assert lines == [f"  progress job=100 table=attempts run_id={run_id} benchmark=b count=1"]
@@ -546,12 +531,9 @@ def test_a_grade_made_before_the_final_attempt_is_not_coverage(
     add_submission(conn, run_id, "a", ts=500)
     add_attempt(conn, run_id, "a", reason="incorrect", ts=999)
     add_submission(conn, f"{ARM}.n0.p1.w1", "b", ts=500)
-    conn.close()
     write_worker_cut(tmp_path / "runs" / "100", run_id, 1000, mcp)
     assert owed_lists(module, monkeypatch, tmp_path) == {ARM: ["a", "c"]}
-    conn = sqlite3.connect(tmp_path / "runs" / "100" / "judge" / "rank-0" / "hpcagent_bench0.db")
     add_submission(conn, run_id, "a", ts=1000)
-    conn.close()
     assert owed_lists(module, monkeypatch, tmp_path) == {ARM: ["c"]}
 
 
@@ -696,7 +678,6 @@ def test_a_forced_1x_placeholder_is_owed_as_infra_not_skipped(module: types.Modu
     job_dir = root / "100"
     conn = make_shard(root, "100", ARM)
     add_run(conn, f"{ARM}.n0.p0.w0", ARM)
-    conn.close()
     write_episode(job_dir, 0, "a", 0)  # rc=0, no submission: classify_exit -> DONE
     assert module.owed_exit_classes([str(job_dir)], ["a"]) == {"a": module.ExitClass.DONE}, "unchanged at this level"
     classes = module.owed_classes([("100", str(job_dir), ARM)], ROSTER, "")
@@ -712,7 +693,6 @@ def test_an_arm_of_nothing_but_placeholders_owes_its_whole_roster(
     job_dir = root / "100"
     conn = make_shard(root, "100", ARM)
     add_run(conn, f"{ARM}.n0.p0.w0", ARM)
-    conn.close()
     for index, kernel in enumerate(ROSTER):
         write_episode(job_dir, index, kernel, 0)
     classes = module.owed_classes([("100", str(job_dir), ARM)], ROSTER, "")
@@ -1022,7 +1002,6 @@ def test_a_row_from_before_the_manifest_changed_is_not_coverage(
     run_id = f"{ARM}.n0.p0.w0"
     add_run(conn, run_id, ARM)
     add_submission(conn, run_id, kernel, ts=changed_ts_ms - 1000)  # before the resize: stale
-    conn.close()
     monkeypatch.setattr(module, "roster", lambda tag, opt: [kernel])
     argv = [
         "remaining_kernels.py",
@@ -1051,7 +1030,6 @@ def test_a_row_at_or_after_the_manifest_change_is_coverage(
     run_id = f"{ARM}.n0.p0.w0"
     add_run(conn, run_id, ARM)
     add_submission(conn, run_id, kernel, ts=changed_ts_ms)
-    conn.close()
     monkeypatch.setattr(module, "roster", lambda tag, opt: [kernel])
     argv = [
         "remaining_kernels.py",

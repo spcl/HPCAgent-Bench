@@ -8,12 +8,12 @@ nodes on finished work, and it gives the re-run kernels a SECOND agent while the
 one, which inflates the arm because a kernel is summarised by the best value any agent verified
 for it. So the next wave is the COMPLEMENT: exactly the kernels with no row at all.
 
-A kernel counts as owed unless it has a ``submissions`` row OR a GENUINE ``attempts`` row
-(:func:`genuine_attempts`).
-``submissions`` is written only by the judge's own ``/submit`` (judge_service.log_grade), and that
+A kernel counts as owed unless it has a credited /submit grade (a ``submissions`` record) OR a
+GENUINE failed one (an ``attempts`` record, :func:`genuine_attempts`).
+A credited /submit grade is written only by the judge's own ``/submit`` (recording.record), and that
 is reached two ways: the agent's own deliberate submission, or agent_driver.promote_at_agent_exit
 posting the worker's last correct score -- which runs ONLY when the episode ended on its own
-(``not cancelled``, agent_driver.cancelled_by_the_job). ``attempts`` is written ONLY from a real
+(``not cancelled``, agent_driver.cancelled_by_the_job). A failed one is written ONLY from a real
 ``/submit`` the judge graded and did not accept (recording.record, called only from the ``/submit``
 handler) -- a genuine, if losing, answer, scored 1x like any failed episode but not a placeholder
 -- EXCEPT a row reasoned :data:`HARNESS_FAULT_REASON`, the judge's OWN reference breaking, which is
@@ -121,6 +121,28 @@ HARNESS_FAULT_REASON = "score_error"
 #: Tables an operator may want to review before deleting a not-done kernel's leftover rows.
 PROGRESS_TABLES = ("submissions", "attempts")
 
+#: The grade kinds that answer a /submit (``results_db.SUBMIT_KINDS``; restated: this tool reads the
+#: results DB with sqlite3 alone).
+SUBMIT_KINDS = "('submit', 'promoted', 'harvested', 'probe')"
+#: A judge shard's grades (results DB schema v1) as the records coverage reads, each with its
+#: episode's run id, kernel, stamp and failed gate: every credited /submit verdict, every rejected
+#: one, and every call of an agent's trajectory.
+RECORDS: dict[str, str] = {
+    "submissions": f"credited_speedup is not null and kind in {SUBMIT_KINDS} "
+    "and g.id not in (select grade_id from disqualifications)",
+    "attempts": f"credited_speedup is null and reason is not null and kind in {SUBMIT_KINDS}",
+    "calls": "call_index is not null",
+}
+
+
+def records(table: str) -> str:
+    """:data:`RECORDS` ``table`` as a subquery with the columns the coverage queries name."""
+    return (
+        "(select r.label as run_id, g.benchmark, g.ts_ms as ts, g.reason, g.credited_speedup as speedup from grades g "
+        f"join runs r on r.id = g.run_id where {RECORDS[table]})"
+    )
+
+
 #: Kernels an operator has declared owed whatever the databases hold: one row per (arm, kernel),
 #: with the jobs that lost them and why. A judge rank that dies mid-run leaves rows that LOOK like
 #: coverage -- a promoted score from before the death, an attempts row from the grade that killed
@@ -159,8 +181,12 @@ SMOKE_JOBS = frozenset({"641175", "642813"})
 
 
 def base_arm(arm: str) -> str:
-    """The arm identity a clean re-run, a pre-cmp llrblind run, or a registry ``arm_aliases``
-    spelling (experiment_tags.aliased_arm) folds into -- itself for an arm that is none of them."""
+    """The arm identity a recorded arm (its configuration name), a clean re-run, a pre-cmp llrblind
+    run, or a registry ``arm_aliases`` spelling (experiment_tags.aliased_arm) folds into -- itself for
+    an arm that is none of them."""
+    known = experiment_tags.aliased_arm(arm)
+    if known != arm:
+        return known
     if arm.endswith(CLEAN_SUFFIX):
         arm = arm[: -len(CLEAN_SUFFIX)]
     if arm.startswith(LLRBLIND_CMP_PREFIX) and not arm.startswith(LLRBLIND_CMP_REPLACEMENT):
@@ -409,7 +435,7 @@ def shard_dbs(job_dir: str) -> list:
 FUSED_SETUPS_DIR = "setups"
 
 #: The judge rows of ONE arm in a fused job: its run_ids, as ``runs`` recorded them.
-ARM_RUN_IDS = "run_id in (select run_id from runs where arm = ?)"
+ARM_RUN_IDS = "run_id in (select label from runs where arm = ?)"
 
 
 def is_fused(job_dir: str) -> bool:
@@ -457,7 +483,7 @@ def table_counts(job_dir: str, table: str, arm: str = "") -> dict:
             continue
         try:
             rows = conn.execute(
-                f"select run_id, benchmark, count(*) from {table}{where} group by run_id, benchmark", args
+                f"select run_id, benchmark, count(*) from {records(table)}{where} group by run_id, benchmark", args
             )
             for run_id, benchmark, n in rows:
                 counts[(run_id, benchmark)] = counts.get((run_id, benchmark), 0) + n
@@ -551,7 +577,7 @@ def touched(job_dir: str, opt: str, arm: str = "") -> set:
     from the same worker -- the newest one is what decides comparability. Only :func:`credited` rows.
     """
     where, args = credited(arm)
-    query = f"select run_id, benchmark, max(ts) from {DONE_TABLE} where {where} group by run_id, benchmark"
+    query = f"select run_id, benchmark, max(ts) from {records(DONE_TABLE)} where {where} group by run_id, benchmark"
     return graded_since(job_dir, opt, query, args)
 
 
@@ -571,7 +597,8 @@ def genuine_attempts(job_dir: str, opt: str, arm: str = "") -> set:
     """
     where, args = credited(arm)
     query = (
-        f"select run_id, benchmark, max(ts) from attempts where reason is not ? and {where} group by run_id, benchmark"
+        f"select run_id, benchmark, max(ts) from {records('attempts')} where reason is not ? and {where} "
+        "group by run_id, benchmark"
     )
     return graded_since(job_dir, opt, query, (HARNESS_FAULT_REASON, *args))
 
@@ -610,36 +637,16 @@ def job_arms(job_dir: str) -> set:
 LAUNCHER_RUN_ID = re.compile(r"^(?P<arm>[^.]+)\.n(?P<node>\d+)\.p(?P<problem>\d+)\.w(?P<worker>\d+)$")
 
 
-def run_id_arms(conn: sqlite3.Connection) -> set:
-    """The arms named by the launcher-shaped run ids of a shard's graded rows: the arm of a shard
-    written before the ``runs`` table existed, read off the same run id
-    convention the observations extractor reads every row's arm by. A run id of any other shape (an
-    unexpanded ``${HPCAGENT_BENCH_RUN_ID}``, an ad-hoc test id) names no arm."""
-    tables = {row[0] for row in conn.execute("select name from sqlite_master where type = 'table'")}
-    arms: set = set()
-    for table in (DONE_TABLE, "attempts", "calls"):
-        if table in tables:
-            for (run_id,) in conn.execute(f"select distinct run_id from {table}"):
-                match = LAUNCHER_RUN_ID.match(run_id or "")
-                if match:
-                    arms.add(match["arm"])
-    return arms
-
-
 def recorded_arms(job_dir: str) -> set:
-    """The distinct non-empty ``runs.arm`` values over this job's shard DBs; a shard with no ``runs``
-    table at all names its arm by its run ids (:func:`run_id_arms`)."""
+    """The distinct ``runs.arm`` values over this job's shard DBs."""
     arms: set = set()
     for db in shard_dbs(job_dir):
         conn = open_shard(db)
         if conn is None:
             continue
         try:
-            if conn.execute("select 1 from sqlite_master where type = 'table' and name = 'runs'").fetchone():
-                arms.update(row[0] for row in conn.execute("select distinct arm from runs") if row[0])
-            else:
-                arms.update(run_id_arms(conn))
-        except sqlite3.Error:
+            arms.update(row[0] for row in conn.execute("select distinct arm from runs") if row[0])
+        except sqlite3.Error:  # a shard whose judge never started has no schema
             pass
         finally:
             conn.close()
@@ -896,10 +903,12 @@ def owed_classes(jobs: list, full: list, opt: str, frozen_dir: pathlib.Path | No
 def arm_selected(identity: str, prefixes: list[str]) -> bool:
     """Whether a ``--arm-prefix`` names ``identity``: the whole identity (a ``-clean`` spelling folds
     into it, as the report does) or its leading ``<prefix>-``. No prefixes selects every arm. A bare
-    ``startswith(prefix + "-")`` printed nothing for an arm named in full."""
+    ``startswith(prefix + "-")`` printed nothing for an arm named in full. A prefix matches as written
+    and as folded: a legacy ``cpf-`` prefix still selects the CPF arms, which keep that spelling."""
     if not prefixes:
         return True
-    return any(identity == name or identity.startswith(f"{name}-") for name in map(base_arm, prefixes))
+    names = {spelling for prefix in prefixes for spelling in (prefix, base_arm(prefix))}
+    return any(identity == name or identity.startswith(f"{name}-") for name in names)
 
 
 def report_arm(

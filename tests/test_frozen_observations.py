@@ -4,15 +4,18 @@
 deleted join the live rows everywhere a reader walks judge DBs -- the extractor and
 remaining_kernels.py -- and the live DB wins, job by job."""
 
+import contextlib
 import csv
 import importlib.util
 import json
 import pathlib
-import sqlite3
 import sys
 import types
 
 import pytest
+
+from hpcagent_bench.harness import results_db
+from tests import results_seed
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 EXPERIMENTS = REPO / "experiments"
@@ -31,10 +34,12 @@ def load(name: str, path: pathlib.Path) -> types.ModuleType:
 from hpcagent_bench import frozen_observations  # noqa: E402
 
 MODELS = ("kimi27sglang", "oss120b", "qwen38", "glm53")
-ARM = "cpf-llr-focus40-qwen38-fortran"
+ARM = "llr-focus40-qwen38-fortran"
+#: The arm ARM is (envs/arm_renames.yaml): what owed planning names it.
+ARM_NOW = "llr40-qwen38-fortran"
 #: An arm the registry's dropped_arms still names (cpfsrc v1, out since).
 DROPPED_ARM = "cpf-llr-focus40-qwen38-c-cpfsrc"
-ROOT = "cpf-llr-focus40-20260917"
+ROOT = "llr-focus40-20260917"
 #: After any real manifest commit, so comparable_since_ms never gates these fake kernels out.
 FAR_FUTURE_TS_MS = 10**13
 FIELDS = (
@@ -80,20 +85,10 @@ def write_frozen(root: pathlib.Path, rows: list[dict]) -> pathlib.Path:
 
 
 def live_job(runs_root: pathlib.Path, job: str, benchmarks: list[str], arm: str = ARM) -> pathlib.Path:
-    """A live job dir of one shard (remaining_kernels' schema), ``runs.arm = arm``, a submission per name."""
-    shard = runs_root / job / "judge" / "rank-0"
-    shard.mkdir(parents=True)
-    conn = sqlite3.connect(shard / "hpcagent_bench0.db")
-    with conn:
-        conn.execute("create table runs (run_id text, arm text)")
-        conn.execute("create table submissions (run_id text, benchmark text, optimizer text, ts integer)")
-        conn.execute("create table attempts (run_id text, benchmark text, reason text, ts integer)")
-        conn.execute("insert into runs values (?, ?)", (f"{arm}.n0.p0.w0", arm))
-        conn.executemany(
-            "insert into submissions values (?, ?, 'q', ?)",
-            [(f"{arm}.n0.p0.w0", name, FAR_FUTURE_TS_MS) for name in benchmarks],
-        )
-    conn.close()
+    """A live job dir of one shard, a submission of ``arm``'s episode per name."""
+    shard = runs_root / job / "judge" / "rank-0" / "hpcagent_bench0.db"
+    for name in benchmarks:
+        results_seed.submission(shard, f"{arm}.n0.p0.w0", name, FAR_FUTURE_TS_MS, job=int(job))
     return runs_root / job
 
 
@@ -186,11 +181,11 @@ def test_remaining_kernels_counts_a_deleted_jobs_frozen_rows_as_coverage(
     argv = ["remaining_kernels.py", "--run-root", str(runs_root), "--tag", "t", "--out-dir", str(out)]
     monkeypatch.setattr(sys, "argv", [*argv, "--frozen-observations", str(frozen)])
     assert kernels.main() == 0
-    assert (out / f"{ARM}.txt").read_text(encoding="utf-8").split() == ["d"]
+    assert (out / f"{ARM_NOW}.txt").read_text(encoding="utf-8").split() == ["d"]
 
     monkeypatch.setattr(sys, "argv", [*argv, "--frozen-observations", ""])
     assert kernels.main() == 0
-    assert (out / f"{ARM}.txt").read_text(encoding="utf-8").split() == ["a", "b", "d"]
+    assert (out / f"{ARM_NOW}.txt").read_text(encoding="utf-8").split() == ["a", "b", "d"]
 
 
 def test_collect_arms_names_a_deleted_job_under_its_frozen_arm(
@@ -202,9 +197,9 @@ def test_collect_arms_names_a_deleted_job_under_its_frozen_arm(
 
     arms, _, _ = kernels.collect_arms([str(runs_root)], set(), frozen_dir=frozen)
 
-    assert arms == {ARM: [("100", str(runs_root / "100"), ARM + "-clean")]}
-    assert kernels.covered(arms[ARM], str(REPO), frozen) == {"a"}
-    assert kernels.covered(arms[ARM], str(REPO)) == set()  # without the frozen dir nothing is known
+    assert arms == {ARM_NOW: [("100", str(runs_root / "100"), ARM + "-clean")]}
+    assert kernels.covered(arms[ARM_NOW], str(REPO), frozen) == {"a"}
+    assert kernels.covered(arms[ARM_NOW], str(REPO)) == set()  # without the frozen dir nothing is known
 
 
 # --- hpcagent_bench.observations_extract -------------------------------------------------------------------------
@@ -212,44 +207,37 @@ def test_collect_arms_names_a_deleted_job_under_its_frozen_arm(
 
 def test_the_extractor_adds_a_deleted_jobs_frozen_rows_and_marks_them(tmp_path: pathlib.Path) -> None:
     """Live rows carry frozen=0; the deleted job's rows come from the frozen CSV with frozen=1; the
-    live job keeps its DB's judge rows (its frozen copy of a row since purged from the DB, ``z``, is
-    not brought back), and takes a frozen task row only for a worker whose tokens.json is gone."""
-    from hpcagent_bench.harness import recording
-
+    live job's rows all come from its results DB, episodes included: its frozen copies (a row since
+    purged from the DB, ``z``, and task rows of workers whose directories are gone since) are not
+    brought back."""
     from hpcagent_bench import observations_extract as extract
+    from hpcagent_bench.harness import episodes
 
     runs_root = tmp_path / "runs" / ROOT
-    db = runs_root / "200" / "judge" / "rank-0" / "hpcagent_bench0.db"
-    db.parent.mkdir(parents=True)
-    conn = recording.connect(str(db))
-    conn.execute(
-        "INSERT INTO runs (run_id, experiment, model, language, device, packet, rep, arm, harness) "
-        "VALUES (?, 'llr-focus40', 'qwen38', 'fortran', 'cpu', '', 1, ?, 'claude')",
-        (f"{ARM}.n0.p0.w0", ARM),
-    )
-    conn.execute(
-        "INSERT INTO submissions (run_id, ts, benchmark, preset, datatype, source_mode, baseline, speedup, suspect) "
-        "VALUES (?, 10, 'c', 'fuzzed', 'float64', 'restricted', 'numba', 2.0, 0)",
-        (f"{ARM}.n0.p0.w0",),
-    )
-    conn.commit()
-    conn.close()
-    kept_worker = runs_root / "200" / "agents" / "node-0" / "problem-0-worker-0"
+    job_dir = runs_root / "200"
+    db = job_dir / "judge" / "rank-0" / "hpcagent_bench0.db"
+    fortran = results_db.Arm(ARM, "fortran", "cpu", experiment="llr-focus40", model="qwen38")
+    results_seed.submission(db, f"{ARM}.n0.p0.w0", "c", 10, job=200, arm=fortran)
+    kept_worker = job_dir / "agents" / "node-0" / "problem-0-worker-0"
     kept_worker.mkdir(parents=True)
     kept_worker.joinpath("tokens.json").write_text(
-        json.dumps({"kernel": "loop_level_reasoning/c/c", "token_fold": 3, "tokens_effective": 7}), encoding="utf-8"
+        json.dumps(
+            {"run_id": f"{ARM}.n0.p0.w0", "kernel": "loop_level_reasoning/c/c", "token_fold": 3, "tokens_effective": 7}
+        ),
+        encoding="utf-8",
     )
-    # a full worker dir: its live row wins over the frozen one
-    kept_worker.joinpath("prompt.txt").write_text("Optimize benchmark kernel x/c/c.", encoding="utf-8")
-    kept_worker.joinpath("mcp.json").write_text(
-        json.dumps({"mcpServers": {"s": {"env": {"HPCAGENT_BENCH_RUN_ID": f"{ARM}.n0.p0.w0"}}}}), encoding="utf-8"
-    )
-    cut_worker = runs_root / "200" / "agents" / "node-0" / "problem-2-worker-2"  # cut to tokens.json after the snapshot
+    cut_worker = job_dir / "agents" / "node-0" / "problem-2-worker-2"  # cut to tokens.json after the snapshot
     cut_worker.mkdir(parents=True)
     cut_worker.joinpath("tokens.json").write_text(
-        json.dumps({"kernel": "loop_level_reasoning/d/d", "token_fold": 3, "tokens_effective": 3}), encoding="utf-8"
+        json.dumps(
+            {"run_id": f"{ARM}.n0.p2.w2", "kernel": "loop_level_reasoning/d/d", "token_fold": 3, "tokens_effective": 3}
+        ),
+        encoding="utf-8",
     )
-    gone_worker = runs_root / "200" / "agents" / "node-0" / "problem-1-worker-1"  # removed after the snapshot
+    gone_worker = job_dir / "agents" / "node-0" / "problem-1-worker-1"  # removed after the snapshot
+    results_db.merge(job_dir / "results.db", [db])
+    with contextlib.closing(results_db.open_db(job_dir / "results.db")) as conn:
+        assert episodes.ingest(conn, job_dir) == (2, 0)
     task_p0 = {**frozen_row("200", "task", "c"), "tokens": "999", "judge_db": str(kept_worker)}
     task_p1 = {
         **frozen_row("200", "task", "b"),
@@ -272,8 +260,8 @@ def test_the_extractor_adds_a_deleted_jobs_frozen_rows_and_marks_them(tmp_path: 
     out = tmp_path / "out"
 
     rc = extract.main(
-        ["--runs", str(tmp_path / "runs" / "cpf-llr-focus40-2026*"), "--benchmarks", str(benchmarks), "--out",
-         str(out), "--no-sources", "--allow-unstamped", "--frozen-observations", str(frozen)]
+        ["--runs", str(tmp_path / "runs" / "llr-focus40-2026*"), "--benchmarks", str(benchmarks), "--out",
+         str(out), "--no-sources", "--frozen-observations", str(frozen)]
     )  # fmt: skip
 
     assert rc == 0
@@ -285,6 +273,4 @@ def test_the_extractor_adds_a_deleted_jobs_frozen_rows_and_marks_them(tmp_path: 
         ("200", "c", "0"),
     ]
     tasks = sorted((row["run_id"], row["tokens"], row["frozen"]) for row in rows if row["row_kind"] == "task")
-    assert tasks == [(f"{ARM}.n0.p0.w0", "7", "0"), (f"{ARM}.n0.p1.w1", "555", "1"), (f"{ARM}.n0.p2.w2", "3", "1")]
-    cut = next(row for row in rows if row["row_kind"] == "task" and row["run_id"] == f"{ARM}.n0.p2.w2")
-    assert cut["ts_ms"] == "1234"  # the snapshot's start, not the cut dir's tokens.json mtime
+    assert tasks == [(f"{ARM}.n0.p0.w0", "7", "0"), (f"{ARM}.n0.p2.w2", "3", "0")]

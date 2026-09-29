@@ -19,7 +19,16 @@ import time
 import pytest
 
 from hpcagent_bench.harness import regrade, scaling_claims, scaling_grade
-from tests.test_scaling_grade import ARM, KERNEL, arm_env_dir, fake_graded, hip_submission, record, shard_items
+from tests.test_scaling_grade import (
+    ARM,
+    KERNEL,
+    arm_env_dir,
+    fake_graded,
+    hip_submission,
+    record,
+    shard_items,
+    stored_item,
+)
 
 RANKS = "[1,2,4,8,16]"
 
@@ -124,11 +133,18 @@ def judge_root(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> pathl
     return root
 
 
+#: The episode of every strong-law replay a grade DB holds.
+STRONG_LABELS = """
+SELECT r.label FROM scaling_grades s JOIN grades g ON g.id = s.grade_id JOIN runs r ON r.id = g.run_id
+WHERE s.mode = 'strong'
+"""
+
+
 def graded_run_ids(out: pathlib.Path) -> list[str]:
     ids: list[str] = []
     for db in sorted(out.glob("scaling-grade-*.db")):
         with contextlib.closing(sqlite3.connect(db)) as conn:
-            ids.extend(row[0] for row in conn.execute("SELECT run_id FROM scaling_grades WHERE mode = 'strong'"))
+            ids.extend(row[0] for row in conn.execute(STRONG_LABELS))
     return sorted(ids)
 
 
@@ -176,7 +192,7 @@ def test_when_nothing_is_left_it_rescans_once_for_new_arrivals_then_exits(
 ) -> None:
     monkeypatch.setenv("HPCAGENT_BENCH_MPI_RANK_COUNTS", RANKS)
     first = shard_items(tmp_path)
-    late = regrade.Item(str(tmp_path / "judge.db"), "late", KERNEL, 8, ARM, "hip", "restricted", "s", "", True, {})
+    late = stored_item(tmp_path / "judge.db", hip_submission("// late"), run_id="late")
     scans = [first, [*first, late], [*first, late]]
     calls: list[int] = []
 

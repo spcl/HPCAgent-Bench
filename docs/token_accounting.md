@@ -120,8 +120,10 @@ Pricing a compaction:
   `AGENT_MAX_TOKENS` enforces) and the component fold (`events_cost`) share this code, so a compaction
   counts once in both.
 
-Extraction re-folds `tokens.json` records older than `observations_extract.MIN_RECORD_FOLD` from their
-transcripts.
+A `tokens.json` record reaches the results DB (its episode's `runs` row, `episodes.ingest`) with its
+token counts only when it was folded by the current rule (`token_fold` of at least
+`episodes.MIN_TOKEN_FOLD`); an older record, which double-counted reasoning, keeps its episode row
+without them.
 
 ## Reading a run
 

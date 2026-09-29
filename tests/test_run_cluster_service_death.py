@@ -6,13 +6,13 @@ steps and waits on whichever dies first.
 Bugs this covers:
 
 1. When a service step (vLLM or the judge) died while the agents were still running, the batch step
-   used to ``exit 1`` immediately -- before the mandatory token-record extraction below it ever ran,
-   and without writing ``EXTRACTION_FAILED``, so nothing on disk said the extraction was skipped.
-2. The extraction's own success/failure marker was written only AT that point, which races a SIGTERM
+   used to ``exit 1`` immediately -- before the mandatory results-DB merge below it ever ran,
+   and without writing ``MERGE_FAILED``, so nothing on disk said the merge was skipped.
+2. The merge's own success/failure marker was written only AT that point, which races a SIGTERM
    (scancel, or the job's time limit) against SIGKILL (KillWait): if the process is killed before it
    gets there, no marker is left at all. The fix writes the marker unconditionally, before either
-   step can die, and only clears it once extraction actually succeeds -- so every exit from here on
-   leaves the run either extracted or visibly marked for re-extraction, with nothing depending on
+   step can die, and only clears it once the merge actually succeeds -- so every exit from here on
+   leaves the run either merged or visibly marked for a re-merge, with nothing depending on
    catching the signal that ends it.
 3. Stopping the agent step used to be a raw `kill` on the srun FRONTEND, which srun turns straight
    into a SIGKILL of its tasks ("srun: forcing job termination") -- never delivering the SIGTERM
@@ -20,7 +20,7 @@ Bugs this covers:
    resolves the agent step's Slurm step id and signals it through `scancel` instead, which reaches
    the step's TASKS cleanly through slurmstepd.
 4. A surviving service step (e.g. multi-node inference) used to keep holding its nodes through the
-   reports and the containerized extraction after a service death; only the old `exit 1` released
+   reports and the results-DB merge after a service death; only the old `exit 1` released
    it. The fix stops it too, once the agent step is confirmed down.
 
 These tests lift the exact block -- the marker write, the ``wait -n``, ``resolve_step_id`` /
@@ -45,15 +45,15 @@ import subprocess
 REPO = pathlib.Path(__file__).resolve().parents[1]
 TEXT = (REPO / "experiments" / "run_cluster.sh").read_text()
 
-START = "# The extraction below is MANDATORY,"
+START = "# The results-DB merge below is MANDATORY,"
 END = "# Post-run utilization verdicts"
 BLOCK = TEXT[TEXT.index(START) : TEXT.index(END)]
 
 assert "agent_status=1" in BLOCK, "the service-death branch no longer sets agent_status directly"
 # A bare `exit 1` STATEMENT (not the phrase inside this file's own comment prose above) would skip
-# the mandatory extraction that follows this block again.
+# the mandatory merge that follows this block again.
 assert not re.search(r"^\s*exit 1\s*$", BLOCK, flags=re.MULTILINE), (
-    "the service-death branch exits before extraction again"
+    "the service-death branch exits before the merge again"
 )
 # The agent step must be stopped through Slurm (scancel, via signal_step), never by a raw `kill` on
 # the srun frontend PID again: that always forced an immediate SIGKILL of the step's tasks instead
@@ -126,11 +126,11 @@ def test_a_dying_service_step_stops_the_agent_and_falls_through_instead_of_exiti
     )
     assert result.returncode == 0, result.stderr
     # The block itself never exits: falling through to REACHED_END is what lets the mandatory
-    # extraction below it (not part of this lifted slice) still run.
+    # merge below it (not part of this lifted slice) still run.
     assert "REACHED_END" in result.stdout, result.stdout
     assert "AGENT_STOPPED" in result.stdout, result.stdout
     assert "agent_status=1" in result.stdout, result.stdout
-    assert (run_dir / "EXTRACTION_FAILED").exists(), "the marker was not written before the steps ran"
+    assert (run_dir / "MERGE_FAILED").exists(), "the marker was not written before the steps ran"
     # scancel was actually reached (not skipped by some short-circuit) -- at least once for the
     # agent step, once more below for the (here: already-gone) surviving service steps.
     assert log.read_text().count("--signal=TERM") >= 2, log.read_text()
@@ -139,7 +139,7 @@ def test_a_dying_service_step_stops_the_agent_and_falls_through_instead_of_exiti
 def test_a_dying_service_step_also_stops_a_surviving_service_step(tmp_path: pathlib.Path) -> None:
     """F14: before this, only the removed `exit 1` released a surviving service step's nodes; the
     agent step going down on its own left a still-running inference/judge step holding them through
-    the reports and the containerized extraction. `other_service_pid` here stands in for that step:
+    the reports and the results-DB merge. `other_service_pid` here stands in for that step:
     nothing in the OLD code touched it at all."""
     run_dir = tmp_path / "run"
     run_dir.mkdir()
@@ -225,7 +225,7 @@ def test_the_agent_finishing_first_leaves_the_surviving_service_step_alone(tmp_p
         # The else branch (agent finished, not a service) must not touch the still-running service step.
         assert "SERVICE_STILL_ALIVE" in result.stdout, result.stdout
         assert "agent_status=3" in result.stdout, result.stdout
-        assert (run_dir / "EXTRACTION_FAILED").exists(), "the marker was not written before the steps ran"
+        assert (run_dir / "MERGE_FAILED").exists(), "the marker was not written before the steps ran"
     finally:
         # This test's own untouched stand-in for the surviving service step; nothing in the lifted
         # block manages it, so the test reaps it itself instead of leaking a 30s sleep per run.

@@ -172,7 +172,7 @@ def test_an_arm_that_records_an_experiment_records_the_whole_tuple() -> None:
     """A half-stamped arm is worse than an unstamped one: its rows join on experiment and then
     group into a NULL model, which reads as a fifth model in every per-model figure.
 
-    This is what the `cpf-llr-focus40` and `gpu-llr-focus40` envs did -- an experiment stamp and
+    This is what the `llr-focus40` and `gpu-llr-focus40` envs did -- an experiment stamp and
     nothing else, under an experiment name that was really a device and a packet."""
     partial = []
     for env in arm_envs():

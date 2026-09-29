@@ -15,6 +15,7 @@ it means the run leg wrote nothing.
 """
 
 import pathlib
+import sqlite3
 
 import pytest
 
@@ -32,9 +33,11 @@ def test_table_exists_is_false_for_an_empty_database(tmp_path: pathlib.Path) -> 
     """And an empty DB is not the same as an absent one: a previous reader may already have
     created it, which is exactly how the confusing case arises."""
     empty = tmp_path / "hpcagent_bench.db"
-    assert not recording.table_exists(str(empty), "results")  # creates it as a side effect
+    sqlite3.connect(empty).close()
     assert empty.exists(), "connect() did not create the file, so this test no longer covers its case"
     assert not recording.table_exists(str(empty), "results")
+    assert not recording.table_exists(str(tmp_path / "absent.db"), "results")
+    assert not (tmp_path / "absent.db").exists(), "table_exists created the file it looked for"
 
 
 def test_reading_an_unwritten_db_names_the_run_leg(tmp_path: pathlib.Path) -> None:

@@ -8,7 +8,7 @@ reader.
 
 A figure asks for an EXPERIMENT and gets back where to look and what to keep:
 
-    selection = campaigns.resolve("git-scicomp")
+    selection = campaigns.resolve("gitscicomp10")
     frame = experiments.observations(selection.run_globs(), experiment=selection.experiment)
 """
 
@@ -18,7 +18,7 @@ import pathlib
 import re
 
 from hpcagent_bench import paths, tags
-from hpcagent_bench.experiment_tags import BaselineSpec, CampaignEntry, registry
+from hpcagent_bench.experiment_tags import BaselineSpec, CampaignEntry, canonical, registry
 
 __all__ = [
     "RUNS_DIRNAME",
@@ -51,11 +51,19 @@ def campaigns() -> dict[str, CampaignEntry]:
 
 
 def prefix_of(arm: str) -> str:
-    """The longest campaign prefix ``arm`` starts with, or "" when no campaign owns it.
+    """The campaign that owns ``arm`` (its key), or "" when none does: the longest prefix ``arm``
+    starts with, and of those a campaign whose suffix token ``arm`` carries
+    (``llr40-qwen38-c-blind`` is the blind campaign's, not ``llr40``'s).
 
     Longest wins so a specific key beats its own stem: ``scicomp-dc-gpu-qwen38-hip-plain`` must
     resolve to the GPU campaign, not to ``scicomp-dc`` with ``gpu`` read as the model."""
-    return max((p for p in campaigns() if arm.startswith(p + "-")), key=len, default="")
+    tokens = arm.split("-")
+    owners = [
+        (len(entry.prefix), bool(entry.suffix), key)
+        for key, entry in campaigns().items()
+        if arm.startswith(entry.prefix + "-") and (not entry.suffix or entry.suffix in tokens[1:])
+    ]
+    return max(owners, default=(0, False, ""))[2]
 
 
 def campaign_of(arm: str) -> CampaignEntry | None:
@@ -83,7 +91,7 @@ class Selection:
 
     ``roster`` is the KERNEL NAMES the experiment was served. It matters because a baseline column
     is not run per experiment: numba and pluto were swept over the whole loop-level-reasoning track
-    (248 kernels), and llr-focus40 is 40 of them. Filtering the sweep by this roster is what stops a
+    (248 kernels), and llr40 is 40 of them. Filtering the sweep by this roster is what stops a
     baseline geomean being taken over kernels the agents never saw.
 
     ``baseline`` names canon-sweep COLUMNS, not another campaign: the reference a ratio is divided
@@ -154,7 +162,9 @@ def resolve(experiment: str, root: pathlib.Path | None = None, tag: str = "") ->
 
     ``tag`` overrides the roster the campaigns recorded, for a figure drawn over a subset.
     Raises on an unknown experiment rather than returning an empty selection: a typo would
-    otherwise read as a campaign that produced no rows, which is what a real gap looks like."""
+    otherwise read as a campaign that produced no rows, which is what a real gap looks like. A name
+    the experiment was recorded under (``aliases.experiments``: ``llr-focus40``) resolves to it."""
+    experiment = canonical("experiments", experiment)
     matched = prefixes_for(experiment)
     if not matched:
         known = ", ".join(experiments_available())

@@ -1395,8 +1395,8 @@ role_srun() {
 # its exit status. <label> tags the derived EDF/mount policy (role_mounts, agent_ro_binds), so it
 # must differ from judge-node/agent-node/vllm-node or it clobbers a file a still-running step reads.
 #
-# For the token-record freeze below: hpcagent_bench.observations_extract needs numpy, which the batch host's bare
-# python3.11 does not carry. Reuses derived_edf / role_mounts / agent_ro_binds, the SAME primitives
+# For the results-DB fold below: experiments/merge_results.py imports hpcagent_bench, which the batch
+# host's bare python3.11 does not carry. Reuses derived_edf / role_mounts / agent_ro_binds, the SAME primitives
 # role_srun composes the judge's own container from.
 #
 # --overlap --nodes=1 --ntasks=1: one shot on a node this allocation already holds -- the judge
@@ -1538,17 +1538,17 @@ if [[ "${COLOCATE:-0}" == 1 && "${DRY_RUN:-0}" == 1 ]]; then
     exit 0
 fi
 
-# The extraction below is MANDATORY, but every path from here on can be cut short: a SIGTERM
+# The results-DB merge below is MANDATORY, but every path from here on can be cut short: a SIGTERM
 # (scancel, or the time limit) races it against KillWait before SIGKILL. All three role steps are
 # already launched by the time this
 # runs -- role_srun backgrounds each one and returns immediately, so none of them are launched by
 # this marker's presence; it just writes the marker as early after that as the script gets a chance
-# to, so as little as possible can go wrong before it exists. Removing it only where extraction
-# actually succeeds (below) means every exit from here -- this branch, a TERM mid-extraction, a
-# plain crash -- leaves the run either extracted or visibly marked for re-extraction; nothing
-# depends on catching the signal that ends it.
-echo "extraction not yet attempted for this run (started $(date -Is)); rerun hpcagent_bench.observations_extract if this file is still here after the job ends" \
-    >"${RUN_DIR}/EXTRACTION_FAILED"
+# to, so as little as possible can go wrong before it exists. Removing it only where the merge
+# actually succeeds (below) means every exit from here -- this branch, a TERM mid-merge, a plain
+# crash -- leaves the run either merged or visibly marked for a re-merge; nothing depends on
+# catching the signal that ends it.
+echo "results DB not yet merged for this run (started $(date -Is)); rerun experiments/merge_results.py if this file is still here after the job ends" \
+    >"${RUN_DIR}/MERGE_FAILED"
 
 # Supervise ALL THREE steps, not just the agent one. Waiting on the agent alone means a dead
 # service step goes unnoticed: the agents cannot make progress, but they retry the dead endpoint
@@ -1710,46 +1710,38 @@ echo "===== token report (${RUN_DIR}/agents) ====="
 "${HPCAGENT_BENCH_HOST_PYTHON}" "${SCRIPT_DIR}/recoverable_report.py" "${RUN_DIR}" 2>&1 \
     || echo "recoverable_report failed; run it manually on the login node"
 
-# ===== MANDATORY: freeze the decomposed token record before the allocation ends =====
+# ===== MANDATORY: fold the job into its results DB before the allocation ends =====
 #
-# The judge database keeps ONE opaque pre-summed integer per call (recording.py, calls.tokens). It
-# carries no fresh/cached/output split, no output_source, no attempts count and no tokens_crashed.
-# Everything needed to re-derive a total under a corrected rule lives instead in each worker's
-# tokens.json, and is only turned into a queryable record by hpcagent_bench.observations_extract.
+# Every judge rank wrote its own shard, the judges' final grades sit in final-grade/, and every agent
+# episode's cost record (decomposed tokens, attempts, the final attempt's start) is a tokens.json in
+# its worker directory. experiments/merge_results.py folds all of them into ONE results DB,
+# ${RUN_DIR}/results.db (docs/results_db.md): the job's record from here on.
 #
-# It runs HERE, while the run directory is still on disk and the allocation is still alive: a
-# lost sidecar leaves an un-decomposable integer that only a re-run can correct.
+# It runs HERE, while the run directory is still on disk and the allocation is still alive: a lost
+# sidecar leaves an episode without its cost, and only a re-run can recover it. A final grade the
+# chained grade_pending job writes later is folded in by the dataset merge.
 #
-# Unlike the three best-effort reports above, a failure here is NOT swallowed: this one IS the
-# data, so it leaves a marker and says so loudly.
-echo "===== freezing token record (${RUN_DIR}/observations) ====="
+# Unlike the best-effort reports above, a failure here is NOT swallowed: this one IS the data, so it
+# leaves a marker and says so loudly.
+echo "===== folding the results DB (${RUN_DIR}/results.db) ====="
 # Runs inside the JUDGE's own container (run_in_judge_container, defined above with role_srun), with
 # the image's interpreter and package.
-if run_in_judge_container extract-node bash -c '"${HPCAGENT_BENCH_IMAGE_PYTHON}" -m hpcagent_bench.observations_extract "$@"' _ \
-        --runs "${RUN_DIR}" \
-        --benchmarks "${HPCAGENT_BENCH_REPO}/hpcagent_bench/benchmarks" \
-        --out "${RUN_DIR}/observations" \
-        --db "${RUN_DIR}/observations/observations.sqlite" 2>&1; then
-    rm -f "${RUN_DIR}/EXTRACTION_FAILED"
-    echo "token record frozen: ${RUN_DIR}/observations/observations.sqlite"
+if run_in_judge_container merge-node bash -c '"${HPCAGENT_BENCH_IMAGE_PYTHON}" "$@"' _ \
+        "${SCRIPT_DIR}/merge_results.py" "${RUN_DIR}" --out "${RUN_DIR}/results.db" 2>&1; then
+    rm -f "${RUN_DIR}/MERGE_FAILED"
+    echo "results DB written: ${RUN_DIR}/results.db"
 else
-    _extract_rc=$?
-    checkout="${HPCAGENT_BENCH_REPO}"
+    _merge_rc=$?
     {
-        echo "extraction exited ${_extract_rc} at $(date -Is)"
-        echo "The decomposed token record for this job was NOT written."
-        echo "tokens.json sidecars under ${RUN_DIR}/agents are still the source of truth."
-        echo "RE-RUN BEFORE THIS DIRECTORY IS PURGED, with the host interpreter or in the judge's container:"
-        echo "  ${HPCAGENT_BENCH_HOST_PYTHON} -m hpcagent_bench.observations_extract \\"
-        echo "      --runs ${RUN_DIR} \\"
-        echo "      --benchmarks ${checkout}/hpcagent_bench/benchmarks \\"
-        echo "      --out ${RUN_DIR}/observations \\"
-        echo "      --db ${RUN_DIR}/observations/observations.sqlite"
-    } | tee "${RUN_DIR}/EXTRACTION_FAILED" >&2
-    echo "!!!!! TOKEN RECORD NOT FROZEN -- see ${RUN_DIR}/EXTRACTION_FAILED !!!!!" >&2
+        echo "merge_results exited ${_merge_rc} at $(date -Is)"
+        echo "The job's results DB was NOT written."
+        echo "The shards under ${RUN_DIR}/judge and the tokens.json sidecars under ${RUN_DIR}/agents are"
+        echo "still the source of truth. RE-RUN BEFORE THIS DIRECTORY IS PURGED:"
+        echo "  ${HPCAGENT_BENCH_HOST_PYTHON} ${SCRIPT_DIR}/merge_results.py ${RUN_DIR} --out ${RUN_DIR}/results.db"
+    } | tee "${RUN_DIR}/MERGE_FAILED" >&2
+    echo "!!!!! RESULTS DB NOT WRITTEN -- see ${RUN_DIR}/MERGE_FAILED !!!!!" >&2
     # Surface it in sacct. Only when the run itself succeeded: a run that already failed keeps its
-    # own status, which says more about what went wrong than this would. Nothing is lost either
-    # way -- the agents' work and their sidecars are on disk, and the command above recovers it.
+    # own status, which says more about what went wrong than this would.
     if [[ "${agent_status}" == "0" ]]; then
         agent_status=75
     fi
