@@ -103,6 +103,11 @@ CREATE TABLE grades (
     detail           TEXT,
     distribution     TEXT,                     -- MPI envelope as sent
     workspace_bytes  TEXT,
+    layout           TEXT,                     -- the sparse layout the grade ran; NULL = dense
+    layout_prep_ns   INTEGER,                  -- untimed conversion into it from the stored CSR
+    layout_request   TEXT,                     -- JSON: the layout request as sent; NULL = none
+    size_scale       REAL,                     -- constant-bytes size factor (1 at fp64); NULL = not recorded
+    scale_axes       TEXT,                     -- JSON list of the size symbols it scaled; NULL = not recorded
     node             TEXT,
     cpu              TEXT,
     commit_sha       TEXT,
@@ -133,6 +138,9 @@ CREATE TABLE grade_cells (
     p_value             REAL,
     baseline            TEXT,                  -- the reference that won the denominator
     baseline_candidates TEXT,                  -- every reference raced, '+'-joined
+    race_leader         TEXT,                  -- the reference an early-stop race timed first; NULL = no race
+    race_leader_source  TEXT CHECK (race_leader_source IN ('cache', 'table', 'default')),
+    race_cuts           TEXT,                  -- JSON {reference: per-rep budget ns} the early stop cut
     baseline_ns         REAL,
     native_ns           REAL,
     ratio               REAL,                  -- the credited r(i, j)
