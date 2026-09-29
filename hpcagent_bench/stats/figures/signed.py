@@ -136,7 +136,7 @@ class Arm:
 class Row:
     """One drawn row: its ratios per kernel, the costs behind them, and what it excluded.
 
-    ``color``/``marker`` and the trailing five fields are set only by the llr-focus40 compiler
+    ``color``/``marker`` and the trailing five fields are set only by the llr40 compiler
     figure rows (:func:`canon_kernel_row`, :func:`agent_kernel_row`); plain TSVC rows leave them
     at their defaults.
     """
@@ -437,7 +437,7 @@ def paired_rows(
     return rows
 
 
-#: The baseline every llr-focus40 compiler row is measured against.
+#: The baseline every llr40 compiler row is measured against.
 LLR40_BASELINE: str = llr40_arms.CANON_BASELINE
 
 #: The two canon-sweep columns this figure draws as their own rows: DaCe's parallel-CPU backend,
@@ -618,7 +618,7 @@ def llr40_rows(
 ) -> list[Row]:
     """DaCe's own canon-sweep rows, then every model's ROSTER-COMPLETE CPF arm rows
     (:func:`~hpcagent_bench.stats.population.complete_arms`), all against ``baseline`` -- the
-    llr-focus40 compiler figure's row source. ``observations=None`` draws the canon rows alone: the
+    llr40 compiler figure's row source. ``observations=None`` draws the canon rows alone: the
     campaign DB is not always reachable, and a figure with only the deterministic columns is still
     a real, if partial, answer -- never a raised error.
 
@@ -651,7 +651,7 @@ def llr40_rows(
     return rows
 
 
-#: A panel's height in the llr-focus40 compiler figure, inches: what 40 kernels need to read at the
+#: A panel's height in the llr40 compiler figure, inches: what 40 kernels need to read at the
 #: text width the figure prints at, not what the canvas can spare.
 LLR40_PANEL_HEIGHT_IN: float = 1.5
 
@@ -728,7 +728,7 @@ def llr40_figure(
     offset: float = 0.0,
     panel_height_in: float = LLR40_PANEL_HEIGHT_IN,
 ) -> matplotlib.figure.Figure:
-    """The llr-focus40 compiler figure: DaCe's own canon-sweep columns and every model's CPF arm on
+    """The llr40 compiler figure: DaCe's own canon-sweep columns and every model's CPF arm on
     ONE kernel axis, a speedup panel (log2, ratio-labelled ticks) over a tokens-spent panel when
     any row spends tokens (:func:`llr40_metrics`), each with per_kernel's summary column past a
     dashed separator -- one slot per row, the geomean with its 95% interval on both panels, over
@@ -801,7 +801,7 @@ def llr40_two_row_figure(
     baseline_fallback: str = "",
     panel_height_in: float = LLR40_PANEL_HEIGHT_IN,
 ) -> pathlib.Path:
-    """Build the llr-focus40 compiler rows, write their tables (Rule 4's costs, rules 5/7's
+    """Build the llr40 compiler rows, write their tables (Rule 4's costs, rules 5/7's
     intervals -- :func:`write_tables`, :func:`token_summary_table`) and render the two-panel
     figure. The ONE function a script calls; ``statistics/plot_llr40_compilers.py`` only parses args.
     ``labels`` renames a row by its framework or arm key (a paper's own name for a column); the

@@ -105,7 +105,7 @@ def figure_size(rows: list[Row]) -> tuple[float, float, float, float]:
 
 
 #: The figure's title: the canon-llr40 sweep's headline.
-DEFAULT_TITLE: str = "Canonicalization against the compilers, llr-focus40"
+DEFAULT_TITLE: str = "Canonicalization against the compilers, llr40"
 
 
 def draw(rows: list[Row], baseline: str) -> "tuple[matplotlib.figure.Figure, matplotlib.axes.Axes]":

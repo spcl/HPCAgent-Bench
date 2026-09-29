@@ -8,7 +8,7 @@ reader.
 
 A figure asks for an EXPERIMENT and gets back where to look and what to keep:
 
-    selection = campaigns.resolve("git-scicomp")
+    selection = campaigns.resolve("gitscicomp10")
     frame = experiments.observations(selection.run_globs(), experiment=selection.experiment)
 """
 
@@ -18,7 +18,7 @@ import pathlib
 import re
 
 from hpcagent_bench import paths, tags
-from hpcagent_bench.experiment_tags import BaselineSpec, CampaignEntry, registry
+from hpcagent_bench.experiment_tags import BaselineSpec, CampaignEntry, canonical, registry
 
 __all__ = [
     "RUNS_DIRNAME",
@@ -83,7 +83,7 @@ class Selection:
 
     ``roster`` is the KERNEL NAMES the experiment was served. It matters because a baseline column
     is not run per experiment: numba and pluto were swept over the whole loop-level-reasoning track
-    (248 kernels), and llr-focus40 is 40 of them. Filtering the sweep by this roster is what stops a
+    (248 kernels), and llr40 is 40 of them. Filtering the sweep by this roster is what stops a
     baseline geomean being taken over kernels the agents never saw.
 
     ``baseline`` names canon-sweep COLUMNS, not another campaign: the reference a ratio is divided
@@ -154,7 +154,9 @@ def resolve(experiment: str, root: pathlib.Path | None = None, tag: str = "") ->
 
     ``tag`` overrides the roster the campaigns recorded, for a figure drawn over a subset.
     Raises on an unknown experiment rather than returning an empty selection: a typo would
-    otherwise read as a campaign that produced no rows, which is what a real gap looks like."""
+    otherwise read as a campaign that produced no rows, which is what a real gap looks like. A name
+    the experiment was recorded under (``aliases.experiments``: ``llr-focus40``) resolves to it."""
+    experiment = canonical("experiments", experiment)
     matched = prefixes_for(experiment)
     if not matched:
         known = ", ".join(experiments_available())

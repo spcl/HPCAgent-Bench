@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Did an intervention buy speedup, and what did it cost in tokens? One mark per arm, paired against
 its own control: treated arms against the no-packet arms of the same campaign, or an explicit pair
-list (``--pairs-csv``) for llrblind or git-scicomp style comparisons. Both routes feed the same raw
+list (``--pairs-csv``) for llrblind or gitscicomp10 style comparisons. Both routes feed the same raw
 tagged frame :mod:`hpcagent_bench.stats.figures.efficacy` draws from.
 
 Significance is corrected once per figure: :func:`points` tests every (model, leg) on both axes via
@@ -222,7 +222,7 @@ def arm_languages(frame: pd.DataFrame) -> dict[str, str]:
     """``{arm: recorded language}``.
 
     The language column is the identity the extractor STAMPED; the arm name is a fallback for rows
-    that predate it. git-scicomp's arms are ``git-scicomp-<model>-repo`` and carry no language token
+    that predate it. gitscicomp10's arms are ``git-scicomp-<model>-repo`` and carry no language token
     at all, so reading the name there gives an empty leg -- a blank tick and an unnamed shape.
     """
     if "arm" not in frame.columns or "language" not in frame.columns:
@@ -354,7 +354,7 @@ def family_stats(table: pd.DataFrame, intervention: str, languages: dict[str, st
 def pair_frame(frame_all: pd.DataFrame, pairs: Sequence[tuple[str, str]], intervention: str) -> pd.DataFrame:
     """The RAW rows of every arm ``pairs`` names, tagged ``model``/``language``/``leg``/``skills`` --
     the same shape :func:`treatment_frame` produces, keyed by explicit arm identity instead of a
-    packet suffix (llrblind's two campaigns, git-scicomp's kernel/repo scope)."""
+    packet suffix (llrblind's two campaigns, gitscicomp10's kernel/repo scope)."""
     known = arm_languages(frame_all)
     parts = []
     for pair in pairs:
@@ -432,7 +432,7 @@ def figure_from_pairs(args: argparse.Namespace, config: efficacy_figures.FigureC
 
     ``config`` and ``--repeats`` are passed on EXPLICITLY. Left to their defaults, this route drew
     its marks under ``latest`` while the table beside it was written under the requested policy, so
-    a git-scicomp panel (REPEAT=3, median) showed Kimi at 3.57x where its own CSV said 0.67x."""
+    a gitscicomp10 panel (REPEAT=3, median) showed Kimi at 3.57x where its own CSV said 0.67x."""
     table = pd.read_csv(args.pairs_csv)
     pairs = family_pairs(table)
     if not pairs:
@@ -565,7 +565,7 @@ def build_multi_comparison(
     over: population.KernelPolicy = efficacy_figures.SPEEDUP_OVER,
 ) -> tuple[str, Sequence[str], dict[str, pd.DataFrame], dict[str, pd.DataFrame]] | None:
     """``treatments=a,b,c`` as ONE panel of several packets against their shared no-packet
-    control -- every llr-focus40 skill packet against C at once, say, instead of a row of one-packet
+    control -- every llr40 skill packet against C at once, say, instead of a row of one-packet
     panels. Packet-suffix only:
     an explicit ``pairs=`` figure is already one panel per pair list, and mixing the two routes in
     one panel would need a control this function has no way to reconcile."""
@@ -781,8 +781,8 @@ def comparison_panel(
     raw: str, args: argparse.Namespace, card: cost.CostModel
 ) -> tuple[efficacy_figures.Panel, population.RepeatPolicy, dict[str, str]] | None:
     """One ``--comparison`` spec as ``(panel, its repeat policy, its spec)``; ``None`` (named on
-    stdout) when it draws nothing. A spec's own ``repeats=`` overrides ``--repeats``: git-scicomp's
-    designed-3x-repeats median sits beside llr-focus40's reruns-take-latest in one row."""
+    stdout) when it draws nothing. A spec's own ``repeats=`` overrides ``--repeats``: gitscicomp10's
+    designed-3x-repeats median sits beside llr40's reruns-take-latest in one row."""
     spec = parse_spec(raw)
     try:
         repeats = population.RepeatPolicy(spec.get("repeats", args.repeats))

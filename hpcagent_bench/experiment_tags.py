@@ -123,7 +123,7 @@ class BaselineSpec:
 @dataclasses.dataclass(frozen=True, slots=True)
 class CampaignEntry:
     """One launcher's job-name prefix: which experiment its arms belong to, on which device, served
-    which roster. ``name`` is the campaign's own label, finer than the experiment's -- llr-focus40's
+    which roster. ``name`` is the campaign's own label, finer than the experiment's -- llr40's
     CPU and GPU halves are one experiment under two campaign names. An empty ``tag`` means no roster."""
 
     experiment: str

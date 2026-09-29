@@ -18,7 +18,8 @@ a check fails.
 Three rules then shape the written database (:func:`set_aside`): the arms declared void
 (:data:`VOID_ARM`) are removed outright; the arms that used CPF (:data:`CPF_ARM`) leave the core
 database, into ``--cpf-archive`` when given; and a legacy arm name that carries the ``cpf-`` prefix
-without using CPF loses it (:func:`current_name`), in the arm, its runs' labels and its experiment.
+without using CPF loses it (:func:`current_name`), in the arm and its runs' labels. Every experiment
+is then named as the registry names it (:func:`rename_experiments`).
 """
 
 import argparse
@@ -34,6 +35,7 @@ import sqlite3
 import sys
 from collections.abc import Callable, Iterable, Iterator
 
+from hpcagent_bench import experiment_tags
 from hpcagent_bench.harness import denominator, episodes, results_db
 from hpcagent_bench.spec import BenchSpec, declares_storage_precision
 
@@ -1034,6 +1036,18 @@ def connect(path: pathlib.Path) -> sqlite3.Connection:
     return conn
 
 
+def rename_experiments(conn: sqlite3.Connection) -> int:
+    """Name every arm's experiment by the registry (``aliases.experiments``: ``llr-focus40`` and
+    ``cpf-llr-focus40`` are ``llr40``); returns the arms renamed."""
+    recorded = [row[0] for row in conn.execute("SELECT DISTINCT experiment FROM arms WHERE experiment IS NOT NULL")]
+    renamed = 0
+    for experiment in recorded:
+        name = experiment_tags.canonical("experiments", experiment)
+        if name != experiment:
+            renamed += conn.execute("UPDATE arms SET experiment = ? WHERE experiment = ?", (name, experiment)).rowcount
+    return renamed
+
+
 def set_aside(out: pathlib.Path, archive: pathlib.Path | None) -> dict[str, int]:
     """Apply the void, CPF and naming rules to the written ``out`` (module docstring); with
     ``archive``, first copy the CPF arms there. Returns what each rule touched."""
@@ -1055,10 +1069,7 @@ def set_aside(out: pathlib.Path, archive: pathlib.Path | None) -> dict[str, int]
         for arm in renamed:
             rename_arm(conn, arm, current_name(arm))
         touched["renamed arms"] = len(renamed)
-        touched["renamed experiment arms"] = conn.execute(
-            "UPDATE arms SET experiment = substr(experiment, ?) WHERE experiment LIKE ?",
-            (len(CPF_PREFIX) + 1, f"{CPF_PREFIX}%"),
-        ).rowcount
+        touched["renamed experiment arms"] = rename_experiments(conn)
         conn.commit()
         conn.execute("VACUUM")
     return touched

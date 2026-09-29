@@ -476,7 +476,7 @@ def test_the_void_cpf_and_naming_rules_shape_the_written_database(tmp_path: path
     with contextlib.closing(sqlite3.connect(archive)) as conn:
         archived = [row[0] for row in conn.execute("SELECT arm FROM arms")]
         assert conn.execute("SELECT COUNT(*) FROM grades").fetchone()[0] == 1
-    assert kept == [("gpu-llr-focus40-kimi27sglang-hip", "llr-focus40"), ("llr-focus40-qwen38-c", "llr-focus40")]
+    assert kept == [("gpu-llr-focus40-kimi27sglang-hip", "llr40"), ("llr-focus40-qwen38-c", "llr40")]
     assert labels == ["gpu-llr-focus40-kimi27sglang-hip.n0.p3.w3", "llr-focus40-qwen38-c.n0.p2.w2"]
     assert archived == [arms["cpf"]]
     assert touched == {
