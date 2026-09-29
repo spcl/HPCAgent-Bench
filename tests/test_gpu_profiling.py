@@ -695,7 +695,7 @@ def test_wavefront_size_reads_the_gpu_agent_and_not_the_cpu_one() -> None:
     report every workgroup as an unknown number of wavefronts."""
     parsed = rocprof_sections()
     assert gpu_profiling.wavefront_size(parsed[gpu_profiling.AGENT_INFO_CSV]) == 64
-    assert gpu_profiling.wavefront_size([]) is None, "legacy rocprof writes no agent report"
+    assert gpu_profiling.wavefront_size([]) is None, "no agent report, no width"
 
 
 def test_rocprof_check_names_every_cause_it_can_refuse_for(tmp_path, monkeypatch) -> None:
