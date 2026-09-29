@@ -12,9 +12,8 @@ drops the value buffer where its indices already say which entries are stored (c
 and keeps a ``uint8`` mask in its place where a stored block or diagonal also holds padding (bsr,
 dia).
 
-A request names one format per sparse array (``{"arrays": {"A": {"format": "bsr", "block_size":
-4}}}``); :func:`parse_layout_request` checks its shape, :mod:`.request` resolves it against a
-kernel."""
+A request names one format per sparse array (``"sparse_config": {"A": "bsr:4"}``);
+:func:`parse_sparse_config` checks its shape, :mod:`.request` resolves it against a kernel."""
 
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -42,7 +41,7 @@ __all__ = [
     "format_buffers",
     "layout_buffers",
     "layout_scalars",
-    "parse_layout_request",
+    "parse_sparse_config",
     "scalar_name",
 ]
 
@@ -245,38 +244,31 @@ class ArrayLayout:
         return f"{self.format}:{self.block_size}" if self.format == BLOCK_FORMAT else self.format
 
 
-def array_layout(name: str, raw: object) -> ArrayLayout:
-    """One ``layout.arrays[name]`` entry, shape-checked (the kernel is not consulted here)."""
-    if not isinstance(raw, Mapping):
-        raise ValueError(f"layout.arrays[{name!r}] must be an object like {{'format': 'csr'}}")
-    unknown = sorted(str(key) for key in raw if key not in ("format", "block_size"))
-    if unknown:
-        raise ValueError(f"layout.arrays[{name!r}] has unknown key(s) {unknown}; expected 'format' and 'block_size'")
-    fmt = raw.get("format")
+def array_layout(name: str, label: object) -> ArrayLayout:
+    """One ``sparse_config`` entry, shape-checked (the kernel is not consulted here): a format name,
+    ``bsr:<block_size>`` for bsr."""
+    if not isinstance(label, str):
+        raise ValueError(f"sparse_config[{name!r}] must be a format name such as 'csc' or 'bsr:4'; got {label!r}")
+    fmt, sep, edge = label.partition(":")
     if fmt not in FORMATS:
-        raise ValueError(f"layout.arrays[{name!r}].format must be one of {list(FORMATS)}; got {fmt!r}")
-    block = raw.get("block_size")
+        raise ValueError(
+            f"sparse_config[{name!r}] must be one of {list(FORMATS)} (bsr as 'bsr:<block_size>'); got {label!r}"
+        )
     if fmt != BLOCK_FORMAT:
-        if block is not None:
-            raise ValueError(f"layout.arrays[{name!r}]: block_size applies to 'bsr' only, not {fmt!r}")
-        return ArrayLayout(str(fmt))
-    if not isinstance(block, int) or isinstance(block, bool) or block <= 0:
-        raise ValueError(f"layout.arrays[{name!r}]: a 'bsr' request needs a positive integer block_size")
-    return ArrayLayout(str(fmt), block)
+        if sep:
+            raise ValueError(f"sparse_config[{name!r}]: a block size applies to 'bsr' only, not {fmt!r}")
+        return ArrayLayout(fmt)
+    if not edge.isdigit() or int(edge) <= 0:
+        raise ValueError(f"sparse_config[{name!r}]: a bsr request names a positive block size, 'bsr:4'; got {label!r}")
+    return ArrayLayout(fmt, int(edge))
 
 
-def parse_layout_request(raw: object) -> dict[str, ArrayLayout]:
-    """The ``layout`` field of a submission, shape-checked: ``{"arrays": {name: {"format": ...,
-    "block_size": ...}}}`` -> ``{name: ArrayLayout}``. Raises ``ValueError`` (a 400)."""
-    if not isinstance(raw, Mapping):
-        raise ValueError("layout must be an object like {'arrays': {'A': {'format': 'csr'}}}")
-    unknown = sorted(str(key) for key in raw if key != "arrays")
-    if unknown:
-        raise ValueError(f"layout has unknown key(s) {unknown}; the only key is 'arrays'")
-    arrays = raw.get("arrays")
-    if not isinstance(arrays, Mapping) or not arrays:
-        raise ValueError("layout.arrays must be a non-empty object {array_name: {'format': ...}}")
-    return {str(name): array_layout(str(name), entry) for name, entry in arrays.items()}
+def parse_sparse_config(raw: object) -> dict[str, ArrayLayout]:
+    """The ``sparse_config`` field of a submission, shape-checked: ``{name: "csc"}`` (``"bsr:4"``
+    for bsr) -> ``{name: ArrayLayout}``. Raises ``ValueError`` (a 400)."""
+    if not isinstance(raw, Mapping) or not raw:
+        raise ValueError("sparse_config must be a non-empty object {array_name: format}, e.g. {'A': 'csc'}")
+    return {str(name): array_layout(str(name), label) for name, label in raw.items()}
 
 
 @dataclass(frozen=True, slots=True)
