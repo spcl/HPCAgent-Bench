@@ -7,16 +7,16 @@ input credited by its Mann-Whitney test, the task by their geomean
 (:func:`hpcagent_bench.harness.regrade.grade_cells`). The judge runs THAT command for every
 correct ``/submit`` it records (a distributed task has its scaling grade instead), after answering:
 
-* the submission becomes a one-line worklist, ``<job>/final-grade/pending/<rank>-<request id>.json``,
-  built from the row the judge just wrote exactly as ``regrade worklist`` builds one from the
-  extracted row (:func:`submitted_item`), with the grading keys of the judge's own environment
+* the submission becomes a one-line worklist, ``<job>/final-grade/pending/<rank>-<run>-<kernel>-<ts>.json``,
+  built from the grade the judge just wrote exactly as ``regrade worklist`` builds one
+  (:func:`submitted_item`), with the grading keys of the judge's own environment
   (:func:`regrade.grading_env`, the filter ``regrade worklist`` applies to the arm's env file);
 * a worker thread takes a device slot from the judge's own pool at :data:`PRIORITY`, after every
   submission and exploration request waiting, so no grade the agents are waiting for is timed
   beside it, and runs ``regrade finalize`` on that one line in a child pinned the way
   ``experiments/regrade.sbatch`` pins a shard (one visible device, the slot's cores);
-* the child writes ``<job>/final-grade/regrade-cells-<rank>.db``, the rows a finalize-grade job
-  writes, and the pending file is removed. ``experiments/run_cluster.sh`` waits (bounded) for the
+* the child writes the final grade into ``<job>/final-grade/regrade-cells-<rank>.db``, a results DB
+  as a finalize-grade job writes, and the pending file is removed. ``experiments/run_cluster.sh`` waits (bounded) for the
   pending files before the job ends, and ``experiments/grade_pending.sbatch``, chained on every
   agent job, grades whatever it left.
 
@@ -25,18 +25,16 @@ submission is owed a final grade.
 """
 
 import collections
-import contextlib
 import dataclasses
 import json
 import os
 import pathlib
-import sqlite3
 import subprocess
 import sys
 import threading
 from collections.abc import Callable, Mapping
 
-from hpcagent_bench.experiments import FINAL_GRADE_DIRNAME, arm_of
+from hpcagent_bench.experiments import FINAL_GRADE_DIRNAME
 from hpcagent_bench.harness import native_call, regrade
 from hpcagent_bench.harness.judge_scheduler import DeviceSlot
 
@@ -85,39 +83,14 @@ def shard_name(rank: int) -> str:
     return f"regrade-cells-{rank}.db"
 
 
-def submitted_item(db: pathlib.Path, request_id: str, environment: Mapping[str, str]) -> regrade.Item | None:
-    """The worklist item of the submission recorded under ``request_id`` in ``db``: the fields
-    ``regrade worklist`` reads off its extracted row, from the row itself, and the grading keys of
-    ``environment``. None when no such submission row or no stored source exists."""
-    with contextlib.closing(sqlite3.connect(f"file:{db}?mode=ro", uri=True)) as conn:
-        row = conn.execute(
-            "SELECT run_id, benchmark, ts, source_mode, speedup, timing_reduction FROM submissions WHERE request_id = ?",
-            (request_id,),
-        ).fetchone()
-    if row is None:
+def submitted_item(db: pathlib.Path, grade_id: int, environment: Mapping[str, str]) -> regrade.Item | None:
+    """The worklist item of the submission the judge just recorded as ``grade_id`` in ``db``, built as
+    ``regrade worklist`` builds one (:func:`regrade.item_of`), with the grading keys of
+    ``environment``. None when that grade is no credited submission or stored no source."""
+    rows = [row for row in regrade.credited_rows(db) if int(row["grade_id"]) == grade_id]
+    if not rows or not rows[0]["hash"]:
         return None
-    run_id, benchmark, ts, source_mode, speedup, reduction = (str(row[0]), str(row[1]), int(row[2]), *row[3:])
-    host, device, language, digest = regrade.stored_sources(db, run_id, benchmark, ts)
-    if not host or not pathlib.Path(host).is_file():
-        return None
-    return regrade.Item(
-        str(db),
-        run_id,
-        benchmark,
-        ts,
-        arm_of(run_id),
-        language,
-        str(source_mode or "restricted"),
-        host,
-        device,
-        True,
-        regrade.grading_env(environment),
-        job=job_dir(db).name,
-        source_hash=digest,
-        speedup=regrade.as_float(speedup),
-        reduction=str(reduction or ""),
-        workspace_bytes=regrade.recorded_workspace(db, run_id, benchmark, ts),
-    )
+    return regrade.item_of(rows[0], regrade.grading_env(environment), final=True)
 
 
 @dataclasses.dataclass(frozen=True, slots=True)

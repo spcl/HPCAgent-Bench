@@ -33,7 +33,7 @@ import pytest
 
 from hpcagent_bench import campaigns, config, observations_extract
 from hpcagent_bench.experiments import FINAL_GRADE_DIRNAME
-from hpcagent_bench.harness import final_grade, regrade, service, timing
+from hpcagent_bench.harness import final_grade, recording, regrade, service, timing
 from hpcagent_bench.harness.judge_scheduler import DeviceSlot
 from hpcagent_bench.harness.optimizers import NoOpOptimizer
 from hpcagent_bench.harness.task import Task
@@ -47,28 +47,26 @@ RUN = f"{ARM}.n0.p0.w0"
 JOB = "651999"
 #: How long the judge's final grade may take on a loaded login or CI node before the test gives up.
 GRADE_DEADLINE_S = 1800.0
-#: The columns of a ``regrade_tasks`` row that do not depend on how fast the host ran the samples:
-#: which submission, which bytes, which rule and stamp, how many inputs, under which protocol.
-TASK_IDENTITY = (
-    "db",
-    "run_id",
-    "benchmark",
-    "ts_ms",
-    "job",
-    "arm",
-    "source_hash",
-    "n_cells",
-    "score_rule",
-    "timing_reduction",
-    "grading_protocol",
-    "baseline_policy",
-    "residency",
-    "final",
-    "status",
-    "original_speedup",
-    "original_reduction",
-)
-CELL_IDENTITY = ("cell", "label", "shape", "timed", "graded", "timing_reduction", "residency", "status")
+#: What a final grade is, whoever ran it, independent of how fast the host ran the samples: which
+#: submission (its episode, kernel, stamp, verdict and bytes), which rule and stamp, how many inputs,
+#: under which protocol.
+FINAL_IDENTITY = """
+SELECT r.job, r.label, o.benchmark, o.ts_ms, o.kind AS original_kind, o.credited_speedup AS original_speedup,
+       o.timing_reduction AS original_reduction, s.hash AS source_hash, f.kind, f.score_rule, f.timing_reduction,
+       f.grading_protocol, f.baseline_policy, f.status, f.build_ok, f.correct,
+       (SELECT COUNT(*) FROM grade_cells c WHERE c.grade_id = f.id) AS n_cells
+FROM grades f
+JOIN grades o ON o.id = f.of_grade_id
+JOIN runs r ON r.id = o.run_id
+LEFT JOIN grade_sources s ON s.grade_id = o.id AND s.part = 'host'
+WHERE f.kind = 'final'
+"""
+#: Each final grade's inputs, by what was run rather than what it measured.
+CELL_IDENTITY = """
+SELECT c.cell, c.label, c.shape, c.timed, c.correct IS NOT NULL AS graded, c.residency, c.status
+FROM grade_cells c JOIN grades f ON f.id = c.grade_id
+WHERE f.kind = 'final'
+"""
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -131,6 +129,7 @@ def judge_fixture(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Judge]:
     with pytest.MonkeyPatch.context() as env, config.overridden("runtime.mp_context", "forkserver"):
         for name in RANK_ENV_VARS:
             env.delenv(name, raising=False)
+        env.setenv(recording.JOB_ENV, JOB)
         env.setenv("HPCAGENT_BENCH_RECORD_DB_PATH", str(job / "judge" / "rank-0" / "hpcagent_bench.db"))
         env.setenv("HPCAGENT_BENCH_RECORD_ENABLED", "true")
         env.setenv("HPCAGENT_BENCH_RECORD_ALLOW_MEMORY_DB", "true")
@@ -154,33 +153,16 @@ def wait_for(done: Callable[[], object], what: str) -> None:
         time.sleep(1.0)
 
 
-def observation(db: pathlib.Path, submitted: dict[str, Any]) -> pathlib.Path:
-    """The extracted row of ``submitted``, as ``regrade worklist`` reads it."""
-    with contextlib.closing(sqlite3.connect(db)) as conn:
-        ts, source_mode, speedup, reduction = conn.execute(
-            "SELECT ts, source_mode, speedup, timing_reduction FROM submissions WHERE request_id = ?",
-            (submitted["request_id"],),
-        ).fetchone()
-    path = db.parent.parent.parent.parent / "observations.db"
-    columns = ("run_root", "job", "judge_db", "row_kind", "run_id", "arm", "benchmark", "source_mode", "speedup")
-    columns += ("timing_reduction", "ts_ms")
-    row = ("llr-root", JOB, str(db), "submission", RUN, ARM, KERNEL, source_mode, speedup, reduction, ts)
-    with contextlib.closing(sqlite3.connect(path)) as conn, conn:
-        conn.execute(f"CREATE TABLE observations ({', '.join(columns)})")
-        conn.execute(f"INSERT INTO observations VALUES ({', '.join('?' * len(columns))})", row)
-    return path
-
-
 @pytest.fixture(name="graded", scope="module")
 def graded_fixture(judge: Judge) -> Graded:
     """One correct /submit final-graded by the judge, and the SAME row graded as a regrade wave does:
-    ``regrade worklist`` over its extracted row, then ``regrade finalize``."""
+    ``regrade worklist`` over the judge's shard, then ``regrade finalize``."""
     submitted = judge.submit(correct_source(), RUN)
     assert submitted["recorded"]["table"] == "submission", submitted["recorded"]
     queued = judge.pending(RUN)
     wait_for(lambda: not judge.pending(RUN), "the judge's final grade")
     db = next((judge.job / "judge" / "rank-0").glob("hpcagent_bench*.db"))
-    items, problems = regrade.build_worklist([observation(db, submitted)], [])
+    items, problems = regrade.build_worklist([db], [])
     assert not problems and len(items) == 1, problems
     worklist = judge.job.parent.parent / "worklist.jsonl"
     worklist.write_text(json.dumps(dataclasses.asdict(items[0])) + "\n", encoding="utf-8")
@@ -191,11 +173,11 @@ def graded_fixture(judge: Judge) -> Graded:
     return Graded(judge, submitted, queued, judge.final_dir / "regrade-cells-0.db", wave / "regrade-cells-0.db")
 
 
-def rows(db: pathlib.Path, table: str, columns: tuple[str, ...]) -> list[dict[str, Any]]:
-    """``columns`` of every row of ``table``, in a stable order."""
+def rows(db: pathlib.Path, query: str) -> list[dict[str, Any]]:
+    """Every row ``query`` reads from ``db``, in a stable order."""
     with contextlib.closing(sqlite3.connect(f"file:{db}?mode=ro", uri=True)) as conn:
         conn.row_factory = sqlite3.Row
-        found = [{name: row[name] for name in columns} for row in conn.execute(f"SELECT * FROM {table}")]
+        found = [dict(row) for row in conn.execute(query)]
     return sorted(found, key=lambda row: [str(value) for value in row.values()])
 
 
@@ -210,16 +192,16 @@ def test_a_correct_submit_owes_its_final_grade_before_the_answer_goes_out(graded
 def test_the_in_job_final_grade_is_the_row_regrade_finalize_writes_for_the_same_source(graded: Graded) -> None:
     """The paper pools in-job rows with regrade-wave rows: any difference in what was graded, or
     under which rule, stamp and protocol, would be pooled as if it were one measurement."""
-    in_job = rows(graded.in_job, regrade.TASK_TABLE, TASK_IDENTITY)
-    wave = rows(graded.wave, regrade.TASK_TABLE, TASK_IDENTITY)
+    in_job = rows(graded.in_job, FINAL_IDENTITY)
+    wave = rows(graded.wave, FINAL_IDENTITY)
     assert in_job == wave, (in_job, wave)
+    assert len(in_job) == 1 and in_job[0]["n_cells"] > 0, in_job
+    assert (in_job[0]["label"], in_job[0]["job"], in_job[0]["original_kind"]) == (RUN, int(JOB), "submit")
     assert (in_job[0]["timing_reduction"], in_job[0]["score_rule"]) == (
         timing.FINAL_GRADE_REDUCTION,
         score_rule.FINAL_SCORE_RULE,
     )
-    assert rows(graded.in_job, regrade.CELL_TABLE, CELL_IDENTITY) == rows(
-        graded.wave, regrade.CELL_TABLE, CELL_IDENTITY
-    )
+    assert rows(graded.in_job, CELL_IDENTITY) == rows(graded.wave, CELL_IDENTITY)
 
 
 def test_an_incorrect_submit_owes_no_final_grade(judge: Judge) -> None:
@@ -319,7 +301,7 @@ def test_a_final_grade_the_job_cannot_wait_for_is_recorded_as_abandoned(
     assert "abandoned 1" in said
 
 
-def test_the_job_waits_after_its_agents_and_before_it_extracts() -> None:
-    """Extraction freezes the job's record; a final grade written after it is missing from it."""
+def test_the_job_waits_after_its_agents_and_before_it_merges() -> None:
+    """The merge folds the job's final grades into its results DB; one written after it is missing."""
     call = RUN_CLUSTER.index('wait_final_grades "${RUN_DIR}/final-grade"')
-    assert RUN_CLUSTER.index('wait "${agent_step_pid}"') < call < RUN_CLUSTER.index("===== freezing token record")
+    assert RUN_CLUSTER.index('wait "${agent_step_pid}"') < call < RUN_CLUSTER.index("===== folding the results DB")
