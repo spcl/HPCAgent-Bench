@@ -807,6 +807,13 @@ RUN set -eux; \
     python3 -c "import triton; print('triton', triton.__version__, triton.__file__)"; \
     python3 -c "import mpi4py.MPI as M; print('mpi4py', M.Get_library_version().splitlines()[0])"
 
+# numpy and scipy on the image's OpenBLAS rather than their wheels' bundled scipy-openblas (a second,
+# pthreads MAX_THREADS=64 BLAS that crashed under numba prange), and numba on OpenMP, so every BLAS
+# caller shares one OpenMP runtime (containers/lib/numpy_on_openblas.sh).
+ENV NUMBA_THREADING_LAYER=omp
+COPY containers/lib/numpy_on_openblas.sh /tmp/numpy_on_openblas.sh
+RUN sh /tmp/numpy_on_openblas.sh /opt/view && rm /tmp/numpy_on_openblas.sh
+
 # cupy is the WHEEL here (the AMD image needs a HIP source build). jax: the plugin must match the
 # toolkit's CUDA major, or jax imports and finds no device. Both majors are read off nvcc.
 ARG CUPY_VERSION=14.2.0
