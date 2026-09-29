@@ -115,7 +115,7 @@ def test_writing_a_db_twice_replaces_it_rather_than_appending(
 
 
 def test_a_row_on_a_kernel_outside_the_roster_is_dropped_and_counted(tmp_path: pathlib.Path) -> None:
-    """The SciComp waves served scicomp40 plus the 09-13 kernels; the campaigns name scicomp35, and a
+    """The SciComp waves served more kernels than the roster; the campaigns name scicomp40, and a
     figure counts an arm over every kernel its rows touch, so an atax row must not reach it."""
     selection = campaigns.resolve("scicomp-focus40", root=tmp_path)
     arm = "scicomp-perf-playbook-qwen38-plain"

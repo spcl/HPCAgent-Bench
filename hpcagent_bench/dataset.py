@@ -116,7 +116,7 @@ def keep_roster(frame: "pd.DataFrame", selection: campaigns.Selection) -> tuple[
     """``frame`` cut to the kernels of the selection's roster, with the drop count.
 
     A wave may serve more kernels than the tag its campaign names (the SciComp waves served
-    scicomp40 plus later additions; the campaigns name scicomp35), and every figure counts an arm
+    an earlier 40-kernel set plus later additions; the campaigns name scicomp40), and every figure counts an arm
     over the kernels its rows touch, so an off-roster row would enter every aggregate. A row with no
     benchmark, or a selection with no roster, is kept."""
     if frame.empty or not selection.roster or "benchmark" not in frame.columns:
