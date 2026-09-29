@@ -198,7 +198,7 @@ import tempfile
 
 FOREIGN = ('blis', 'atlas', 'libblas.so', 'liblapack.so', 'libcblas.so', 'liblapacke.so')
 # Two things in a closure are NOT a foreign BLAS: a generic-named wrapper that lives in an OpenBLAS
-# directory (Debian's openblas-openmp/libblas.so.3, which NEEDS libopenblas.so.0 -- the CPU image), and
+# directory (a libblas.so.3 alternative that NEEDS libopenblas.so.0), and
 # netlib's LAPACKE, an interface layer over whichever liblapack.so.3 won. BLIS and reference BLAS
 # still are: neither path says openblas.
 OWNED = ('openblas',)

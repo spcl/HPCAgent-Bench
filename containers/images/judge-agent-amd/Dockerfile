@@ -333,6 +333,10 @@ RUN set -eux; \
     test -s /opt/ofi-sdk/VERSION; \
     echo "libfabric SDK $(cat /opt/ofi-sdk/VERSION) -- link target only, host provides runtime"
 
+# The hpcagent overlay repo (containers/lib/spack-overlay) sits ahead of builtin: its openblas keeps
+# runtime dispatch whole (no NO_AVX512 under +dynamic_dispatch). OpenBLAS is pinned to 0.3.30:
+# 0.3.34 segfaults row-major dgemm at M >= 8192, K >= 512 in its Haswell/Zen kernels (blas_gate.sh).
+COPY containers/lib/spack-overlay /opt/spack-overlay
 RUN set -eux; \
     git init -q "${SPACK_ROOT}"; \
     git -C "${SPACK_ROOT}" remote add origin https://github.com/spack/spack.git; \
@@ -348,6 +352,7 @@ RUN set -eux; \
     test -f /opt/spack-packages/repos/spack_repo/builtin/repo.yaml; \
     printf '%s\n' \
       'repos:' \
+      '  hpcagent: /opt/spack-overlay/spack_repo/hpcagent' \
       '  builtin: /opt/spack-packages/repos/spack_repo/builtin' \
       > "${SPACK_ROOT}/etc/spack/repos.yaml"; \
     printf '%s\n' \
@@ -505,7 +510,7 @@ RUN set -eux; \
       '  # UCX instead, and the distro MPICH already demonstrates where that ends -- a ch4:ucx' \
       '  # build whose UCX has no ROCm transport at all.' \
       "  - mpich@4 +rocm amdgpu_target=$(echo "${ROCM_ARCH}" | tr ";" ",") +fortran +hwloc ~slurm device=ch4 netmod=ofi" \
-      '  - openblas threads=openmp +fortran +dynamic_dispatch' \
+      '  - openblas@0.3.30 threads=openmp +fortran +dynamic_dispatch' \
       '  - netlib-scalapack' \
       '  - fftw +mpi +openmp precision=float,double,long_double' \
       '  - hdf5 +mpi +fortran +hl' \
@@ -1267,6 +1272,11 @@ print('dace loads', mapped); \
 bad = [m for m in mapped if 'openblas' not in m]; \
 sys.exit('DaCe would link a BLAS that is not OpenBLAS: %s' % (bad or 'nothing at all')) \
   if (bad or not libs or not mapped) else None"
+
+# The BLAS gate: tall GEMMs under every kernel family and concurrent callers past the host's thread
+# count, against the OpenBLAS every -lblas / -lopenblas link now resolves to (containers/lib/blas_gate.sh).
+COPY containers/lib/blas_gate.sh /tmp/blas_gate.sh
+RUN sh /tmp/blas_gate.sh /opt/view/include /opt/view/lib && rm -f /tmp/blas_gate.sh
 
 # 13c. The `.mpich` wrapper names the MPI compiler blocks actually spell.
 #
