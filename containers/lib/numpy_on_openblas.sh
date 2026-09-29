@@ -24,10 +24,13 @@ PKG_CONFIG_PATH="${view}/lib/pkgconfig:${view}/lib64/pkgconfig${PKG_CONFIG_PATH:
 export PKG_CONFIG_PATH
 pkg-config --exists openblas
 # numpy first: scipy's build imports the installed numpy, which one combined reinstall removes mid-build.
-for pkg in "numpy==${numpy_v}" "scipy==${scipy_v}"; do
-    PIP_BREAK_SYSTEM_PACKAGES=1 "${py}" -m pip install --no-cache-dir --force-reinstall --no-deps \
-        --no-binary numpy,scipy -Csetup-args=-Dblas=openblas -Csetup-args=-Dlapack=openblas "${pkg}"
-done
+PIP_BREAK_SYSTEM_PACKAGES=1 "${py}" -m pip install --no-cache-dir --force-reinstall --no-deps \
+    --no-binary numpy -Csetup-args=-Dblas=openblas -Csetup-args=-Dlapack=openblas "numpy==${numpy_v}"
+# scipy without build isolation, so it compiles against the numpy just rebuilt: an isolated build env
+# builds a numpy of its own from source (--no-binary), which scipy's meson then failed to import (AMD 655840).
+PIP_BREAK_SYSTEM_PACKAGES=1 "${py}" -m pip install --no-cache-dir meson-python Cython pybind11 pythran
+PIP_BREAK_SYSTEM_PACKAGES=1 "${py}" -m pip install --no-cache-dir --force-reinstall --no-deps --no-build-isolation \
+    --no-binary scipy -Csetup-args=-Dblas=openblas -Csetup-args=-Dlapack=openblas "scipy==${scipy_v}"
 PIP_BREAK_SYSTEM_PACKAGES=1 "${py}" -m pip uninstall -y scipy-openblas32 scipy-openblas64 || true
 
 VIEW="${view}" NUMPY_V="${numpy_v}" SCIPY_V="${scipy_v}" "${py}" - <<'PY'
