@@ -43,7 +43,7 @@ from hpcagent_bench.support.helpers.sparse.materialize import (
     converted,
     layout_refusal,
 )
-from hpcagent_bench.support.helpers.sparse.request import draw_scenarios, resolve_layout
+from hpcagent_bench.support.helpers.sparse.request import resolve_layout, scenario_of, served_scenarios, uncovered
 
 #: Every kernel whose manifest declares a valued ``layouts`` block.
 SPARSE_KERNELS = ("bicg_solvers", "bicgstab", "cg", "gmres", "minres", "spmm", "spmv")
@@ -479,30 +479,37 @@ def test_divisibility_constraints_are_met_by_snapping_every_draw() -> None:
 @pytest.mark.parametrize(
     "fmt,block_size,served",
     [
-        ("csr", 0, None),
-        ("bsr", 2, None),
+        ("csr", 0, ("uniform", "banded", "diagonal")),
+        ("bsr", 2, ("uniform", "banded", "diagonal")),
         ("bsr", 8, ("banded",)),
         ("dia", 0, ("banded",)),
         ("ell", 0, ("uniform", "banded")),
     ],
 )
-def test_a_layout_draws_only_from_the_scenarios_that_serve_it(fmt: str, block_size: int, served: tuple | None) -> None:
-    """THE RULE (docs/sparse_abi.md): a requested layout grades only on inputs it can be stored in;
-    ``None`` is every scenario."""
+def test_a_layout_is_served_by_the_scenarios_that_list_it(fmt: str, block_size: int, served: tuple) -> None:
+    """The scenarios whose inputs a requested layout runs on (docs/sparse_abi.md): those listing it."""
     spec = BenchSpec.load("bicgstab")
     label = f"bsr:{block_size}" if fmt == "bsr" else fmt
-    assert draw_scenarios(spec, resolve_layout(spec, {"A": label})) == served
+    assert served_scenarios(spec, resolve_layout(spec, {"A": label})) == served
 
 
 @pytest.mark.parametrize("seed", range(6))
-def test_every_seed_of_a_restricted_draw_is_storable_in_the_layout(seed: int) -> None:
-    """No held-out draw is refused: whatever the seed, a dia grade draws a banded matrix."""
+def test_a_layout_draws_every_scenario_and_runs_only_the_inputs_it_covers(seed: int) -> None:
+    """THE RULE (docs/sparse_abi.md): a dia grade draws exactly the default's input at every seed,
+    from all three scenarios; the banded one is run (and is storable in dia), any other is
+    ``uncovered``: not run, scored 1x, with a reason naming its scenario and the layout."""
     spec = BenchSpec.load("bicgstab")
     choice = resolve_layout(spec, {"A": "dia"})
-    data = Benchmark("bicgstab").get_data(
-        preset="S", datatype="float64", input_seed=seed, scenarios=draw_scenarios(spec, choice)
-    )
-    check_layout(spec.sparse_layouts, choice, data)  # raises LayoutRefused on a refused draw
+    data = Benchmark("bicgstab").get_data(preset="S", datatype="float64", input_seed=seed)
+    scenario = scenario_of(spec, seed)
+    assert scenario == tuple(spec.init.scenarios)[seed % len(spec.init.scenarios)]
+    reason = uncovered(spec, choice, seed)
+    if scenario == "banded":
+        assert reason == ""
+        check_layout(spec.sparse_layouts, choice, data)  # raises LayoutRefused on a refused draw
+    else:
+        assert f"scenario {scenario!r}" in reason and "A:dia" in reason and "1x" in reason
+    assert uncovered(spec, None, seed) == ""
 
 
 SCENARIO_PRESETS = ("S", "M")
