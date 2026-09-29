@@ -43,14 +43,16 @@ from hpcagent_bench.frameworks.benchmark import Benchmark
 from hpcagent_bench.frameworks.forked import RunResult
 from hpcagent_bench.frameworks.test import tolerances_for
 from hpcagent_bench.frameworks.utilities import compare_arrays
-from hpcagent_bench.harness import grading, kernelbench_adapter, scoring, torch_baseline
+from hpcagent_bench.harness import grading, kernelbench_adapter, scoring, torch_baseline, torch_reference
 from hpcagent_bench.harness.envelope import Submission
 from hpcagent_bench.harness.task import Task
 from hpcagent_bench.spec import BenchSpec
 from tests.kernelbench_agreement import upstream_for, upstream_root
 
 #: A covered kernel with no parameters at all, one with many, and one whose upstream model the
-#: vendored corpus does not contain.
+#: vendored corpus does not contain (no map row). The tests that need a kernel with NO reference at
+#: all take the ``uncovered`` fixture, which hides that kernel's own ``_torch.py`` as well: the track
+#: is headed for full coverage, so no real kernel can be relied on to stay without one.
 PLAIN_KERNEL = "machine_learning/average_pooling_1d"
 WEIGHTED_KERNEL = "machine_learning/alexnet"
 UNCOVERED_KERNEL = "machine_learning/lenet"
@@ -72,6 +74,17 @@ GPU_KIND = "torch-autotune-gpu"
 def load_torch() -> ModuleType:
     """CPU torch, imported in THIS (test) process: the adapter-level tests build models directly."""
     return importlib.import_module("torch")
+
+
+@pytest.fixture
+def uncovered(monkeypatch: pytest.MonkeyPatch) -> None:
+    """:data:`UNCOVERED_KERNEL` with no PyTorch reference of any kind: no map row (its row names no
+    upstream model) and no ``_torch.py`` (hidden here). The refusal happens in the grading process,
+    before any child starts, so the patch reaches every path under test."""
+    shipped = torch_reference.has_torch_reference
+    monkeypatch.setattr(
+        torch_reference, "has_torch_reference", lambda spec: spec.relative_path != UNCOVERED_KERNEL and shipped(spec)
+    )
 
 
 def kernel_data(kernel: str) -> dict:
@@ -186,6 +199,7 @@ def test_the_weights_are_frozen_on_the_cpu_only() -> None:
     assert torch_baseline.FREEZE_WEIGHTS == {"cpu": True, "cuda": False}
 
 
+@pytest.mark.usefixtures("uncovered")
 def test_the_resolver_names_the_source_or_refuses() -> None:
     """ONE resolver: a kernel's own ``_torch.py`` first, else its KernelBench row, else a refusal that
     says why -- statically, with no torch import."""
@@ -330,6 +344,7 @@ def test_an_uncovered_kernel_refuses_instead_of_falling_back() -> None:
         kernelbench_adapter.build(spec, kernel_data(UNCOVERED_KERNEL), "cpu", torch)
 
 
+@pytest.mark.usefixtures("uncovered")
 def test_a_torch_baseline_never_degrades_to_numpy() -> None:
     """The same rule one layer up: ``python_baseline_samples`` raises rather than returning the
     numpy samples under a torch name."""
@@ -443,6 +458,7 @@ def test_the_child_sees_only_the_grades_gpu_and_runs_on_the_slots_cores(monkeypa
         os.sched_setaffinity(0, before)
 
 
+@pytest.mark.usefixtures("uncovered")
 def test_a_kernel_without_a_reference_is_refused_before_any_child_starts(monkeypatch: pytest.MonkeyPatch) -> None:
     """No child for a kernel the resolver already refuses."""
     monkeypatch.setattr(torch_baseline, "run_forked", lambda *a, **k: pytest.fail("a child was started"))
@@ -580,7 +596,7 @@ def test_a_default_grade_on_the_machine_learning_track_credits_the_cpu_kind() ->
     assert result.speedup > 0
 
 
-@pytest.mark.usefixtures("fp64_track")
+@pytest.mark.usefixtures("fp64_track", "uncovered")
 def test_a_kernel_without_a_reference_is_a_judge_fault_on_the_row_it_asked_for() -> None:
     """No denominator is the JUDGE's gap: ``harness_fault``, never ``incorrect``, and the row names
     the torch kind rather than numpy -- the kind a ``one_denominator`` guard reads."""
@@ -594,7 +610,7 @@ def test_a_kernel_without_a_reference_is_a_judge_fault_on_the_row_it_asked_for()
     assert "no PyTorch reference" in result.detail
 
 
-@pytest.mark.usefixtures("fp64_track")
+@pytest.mark.usefixtures("fp64_track", "uncovered")
 def test_the_advisory_baseline_route_reports_the_torch_kind_or_nothing() -> None:
     """``GET /baseline`` (``measure_baselines``) shows the agent the torch time it will be graded
     against, and a kernel with no reference simply has no entry -- as its grade scores it."""
@@ -675,6 +691,7 @@ def test_the_cpu_reference_at_the_track_datatype_matches_the_oracle() -> None:
         assert ok, f"{name}: {detail} (max rel {error:.2e})"
 
 
+@pytest.mark.usefixtures("uncovered")
 def test_warm_compiles_an_arms_ml_kernels_and_names_the_refused(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
