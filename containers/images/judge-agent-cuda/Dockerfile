@@ -303,6 +303,10 @@ RUN set -eux; \
     test -s /opt/ofi-sdk/VERSION; \
     echo "libfabric SDK $(cat /opt/ofi-sdk/VERSION) -- link target only, the node provides runtime"
 
+# The hpcagent overlay repo (containers/lib/spack-overlay) sits ahead of builtin: its openblas keeps
+# runtime dispatch whole (no NO_AVX512 under +dynamic_dispatch). OpenBLAS is pinned to 0.3.30:
+# 0.3.34 segfaults row-major dgemm at M >= 8192, K >= 512 in its Haswell/Zen kernels (blas_gate.sh).
+COPY containers/lib/spack-overlay /opt/spack-overlay
 RUN set -eux; \
     git init -q "${SPACK_ROOT}"; \
     git -C "${SPACK_ROOT}" remote add origin https://github.com/spack/spack.git; \
@@ -318,7 +322,7 @@ RUN set -eux; \
     test -f /opt/spack-packages/repos/spack_repo/builtin/repo.yaml; \
     overlay=/opt/spack-overlay/spack_repo/hpcagent; \
     mkdir -p "${overlay}/packages/llvm" "${overlay}/packages/strumpack"; \
-    printf '%s\n' 'repo:' '  namespace: hpcagent' '  api: v2.2' > "${overlay}/repo.yaml"; \
+    test -f "${overlay}/repo.yaml"; \
     printf '%s\n' \
       'from spack_repo.builtin.packages.llvm.package import Llvm as BuiltinLlvm' \
       '' \
@@ -443,7 +447,7 @@ RUN set -eux; \
       '  # judge-agent-amd step 4 with +cuda in place of +rocm. device=ch4 netmod=ofi reaches the' \
       '  # fabric through libfabric: the site supplies the provider (cxi on Alps via the CE hook).' \
       "  - mpich@4 +cuda cuda_arch=${CUDA_ARCHS} +fortran +hwloc ~slurm device=ch4 netmod=ofi" \
-      '  - openblas threads=openmp +fortran' \
+      '  - openblas@0.3.30 threads=openmp +fortran +dynamic_dispatch' \
       '  - netlib-scalapack' \
       '  - fftw +mpi +openmp precision=float,double,long_double' \
       '  - hdf5 +mpi +fortran +hl' \
@@ -930,6 +934,11 @@ print('dace loads', mapped); \
 bad = [m for m in mapped if 'openblas' not in m]; \
 sys.exit('DaCe would link a BLAS that is not OpenBLAS: %s' % (bad or 'nothing at all')) \
   if (bad or not libs or not mapped) else None"
+
+# The BLAS gate: tall GEMMs under every kernel family and concurrent callers past the host's thread
+# count, against the OpenBLAS every -lblas / -lopenblas link now resolves to (containers/lib/blas_gate.sh).
+COPY containers/lib/blas_gate.sh /tmp/blas_gate.sh
+RUN sh /tmp/blas_gate.sh /opt/view/include /opt/view/lib && rm -f /tmp/blas_gate.sh
 
 # 14c. The `.mpich` wrapper names envs/compilers.yaml's MPI blocks spell. judge-agent-amd step 13c.
 RUN set -eux; \

@@ -95,7 +95,7 @@ RUN set -eux; \
       libgmp-dev libyaml-dev libssl-dev zlib1g-dev libcurl4-openssl-dev libxml2-dev uuid-dev \
       libnuma-dev libhwloc-dev pciutils \
       make cmake ninja-build pkg-config \
-      libopenblas-openmp-dev liblapacke-dev libblis-openmp-dev libfftw3-dev \
+      liblapacke-dev libblis-openmp-dev libfftw3-dev \
       libsuitesparse-dev libsuperlu-dev libmetis-dev libarpack2-dev libgsl-dev \
       libtbb-dev libeigen3-dev libmimalloc-dev \
       papi-tools libpapi-dev; \
@@ -149,8 +149,10 @@ RUN set -eux; \
 # 1c. The MPI stack from spack, built by the gcc above into /opt/view (link: roots, so only these
 # specs are in the view; their dependencies stay rpath'd under /opt/spack-install). MPICH has no
 # +slurm: its built-in PMI-1/2 client serves any host srun --mpi=pmi2, and netmod=ofi lets a site
-# bind its own libfabric (containers/README.md, "Running outside CSCS"). OpenBLAS is the apt one,
-# declared external, so the view adds no second BLAS. Pins match judge-agent-cuda.
+# bind its own libfabric (containers/README.md, "Running outside CSCS"). OpenBLAS is spack's too, the
+# same pinned build as the GPU images (0.3.30, OpenMP, 512 threads, locking, runtime dispatch through
+# the hpcagent overlay): Ubuntu's MAX_THREADS=64 build crashes past 64 concurrent callers, which a
+# numba pool or an agent's own threads reach on any large node. Pins match judge-agent-cuda.
 ARG SPACK_REF=66ff2229e4ff1fbae9006dddd067e45120a5cba8
 ARG SPACK_PACKAGES_REF=3936d6c1796a095cd29f24f3082a5f32f4b5f938
 ARG SPACK_BUILD_JOBS=64
@@ -162,6 +164,7 @@ ARG SPACK_TARGET=
 ARG MARCH=native
 # What a registry reader needs to know before pulling: the CPU baseline, or native (not publishable).
 LABEL org.hpcagent-bench.cpu-target="${SPACK_TARGET:-native}"
+COPY containers/lib/spack-overlay /opt/spack-overlay
 ENV SPACK_ROOT=/opt/spack \
     SPACK_ENV_DIR=/opt/spack-env \
     SPACK_DISABLE_LOCAL_CONFIG=true \
@@ -179,20 +182,16 @@ RUN set -eux; \
     mkdir -p "${SPACK_ROOT}/etc/spack" /var/spack-stage "${SPACK_USER_CACHE_PATH}" "${SPACK_ENV_DIR}"; \
     build_jobs="$(nproc)"; \
     if [ "${build_jobs}" -gt "${SPACK_BUILD_JOBS}" ]; then build_jobs="${SPACK_BUILD_JOBS}"; fi; \
-    printf '%s\n' 'repos:' '  builtin: /opt/spack-packages/repos/spack_repo/builtin' \
+    printf '%s\n' 'repos:' '  hpcagent: /opt/spack-overlay/spack_repo/hpcagent' \
+      '  builtin: /opt/spack-packages/repos/spack_repo/builtin' \
       > "${SPACK_ROOT}/etc/spack/repos.yaml"; \
     printf '%s\n' 'config:' '  install_tree:' '    root: /opt/spack-install' \
       '  build_stage: /var/spack-stage' "  build_jobs: ${build_jobs}" '  connect_timeout: 60' \
       > "${SPACK_ROOT}/etc/spack/config.yaml"; \
-    openblas_version="$(dpkg-query -W -f='${Version}' libopenblas0-openmp | sed 's/[+-].*//')"; \
     printf '%s\n' 'packages:' \
       '  c:' "    prefer: [gcc@${GCC_MAJOR}]" '  cxx:' "    prefer: [gcc@${GCC_MAJOR}]" \
       '  fortran:' "    prefer: [gcc@${GCC_MAJOR}]" \
       '  blas:' '    require: [openblas]' '  lapack:' '    require: [openblas]' \
-      '  openblas:' '    externals:' \
-      "    - spec: \"openblas@${openblas_version} threads=openmp\"" \
-      '      prefix: /usr' \
-      '    buildable: false' \
       > "${SPACK_ROOT}/etc/spack/packages.yaml"; \
     if [ -n "${SPACK_TARGET}" ]; then \
       printf '%s\n' '  all:' "    require: [\"target=${SPACK_TARGET}\"]" >> "${SPACK_ROOT}/etc/spack/packages.yaml"; \
@@ -209,6 +208,7 @@ RUN set -eux; \
       '  concretizer:' '    unify: true' \
       '  specs:' \
       '  - mpich@4 +fortran +hwloc ~slurm device=ch4 netmod=ofi' \
+      '  - openblas@0.3.30 threads=openmp +fortran +dynamic_dispatch' \
       '  - netlib-scalapack' \
       '  - hdf5 +mpi +fortran +hl' \
       '  - scotch ~mpi' \
@@ -217,7 +217,7 @@ RUN set -eux; \
       > "${SPACK_ENV_DIR}/spack.yaml"; \
     "${spack}" -e "${SPACK_ENV_DIR}" concretize -f | tail -60; \
     python3 -c "import json, sys; specs = json.load(open(sys.argv[1]))['concrete_specs'].values(); \
-bad = sorted({n['name'] for n in specs if n['name'] in ('armpl-gcc', 'openblas', 'curl', 'perl', 'cmake') \
+bad = sorted({n['name'] for n in specs if n['name'] in ('armpl-gcc', 'curl', 'perl', 'cmake') \
 and not n.get('external')}); sys.exit(f'spack would build {bad}: a second BLAS or a tool apt provides' if bad else 0)" \
       "${SPACK_ENV_DIR}/spack.lock"; \
     "${spack}" -e "${SPACK_ENV_DIR}" install --fail-fast; \
@@ -241,8 +241,8 @@ and not n.get('external')}); sys.exit(f'spack would build {bad}: a second BLAS o
       stray="$(ls /opt/spack-install | grep -vx -e bin -e "linux-${SPACK_TARGET}" || true)"; \
       [ -z "${stray}" ] || { echo "spack built outside target ${SPACK_TARGET}: ${stray}" >&2; exit 2; }; \
     fi; \
-    ! ls -d /opt/spack-install/*/openblas-* 2>/dev/null \
-      || { echo "spack built its own OpenBLAS beside the apt one" >&2; exit 1; }; \
+    test -f /opt/view/lib/libopenblas.so; \
+    test -f /opt/view/include/cblas.h; \
     printf '%s\n' '#include <mpi.h>' 'int main(int argc, char **argv) {' \
       '  int size = 0; MPI_Init(&argc, &argv); MPI_Comm_size(MPI_COMM_WORLD, &size);' \
       '  MPI_Finalize(); return size == 2 ? 0 : 1; }' > /tmp/mpi_probe.c; \
@@ -417,19 +417,31 @@ RUN set -eux; \
         --group "/opt/hpcagent-bench/pyproject.toml:harness-${venv}"; \
     done
 
-# 6b. Which BLAS a build gets. Debian's openblas-openmp must win the generic libblas.so.3/
-# liblapack.so.3 names over blis (priority) -- ASSERTED here rather than assumed. LAPACKE is
-# netlib's interface layer over that LAPACK. Then a DaCe probe: what DaCe's OpenBLAS environment
-# would link must map only OpenBLAS (its generic-named wrappers live under an openblas-openmp
-# directory).
+# 6b. Which BLAS a build gets: the generic libblas/liblapack/libcblas names point at the spack
+# OpenBLAS from step 1c (judge-agent-amd step 13b), not at blis and not at netlib. LAPACKE is netlib's
+# interface layer over that LAPACK. update-alternatives only where a group exists; a plain symlink
+# for the names no -dev package manages. Then a DaCe probe: what DaCe's OpenBLAS environment would
+# link must map only that OpenBLAS.
 RUN set -eux; \
     multiarch="$(uname -m)-linux-gnu"; \
-    for group in libblas.so.3 liblapack.so.3; do \
+    openblas_so="$(readlink -f /opt/view/lib/libopenblas.so)"; \
+    test -f "${openblas_so}"; \
+    ! dpkg -l | grep -E '^ii +libopenblas' \
+      || { echo "apt installed an OpenBLAS beside spack's (a -dev package's BLAS dependency)" >&2; exit 1; }; \
+    for group in libblas.so.3 libblas.so liblapack.so.3 liblapack.so libcblas.so; do \
+      link="/usr/lib/${multiarch}/${group}"; \
+      if update-alternatives --list "${group}-${multiarch}" >/dev/null 2>&1; then \
+        update-alternatives --install "${link}" "${group}-${multiarch}" "${openblas_so}" 100; \
+        update-alternatives --set "${group}-${multiarch}" "${openblas_so}"; \
+      else \
+        ln -sfn "${openblas_so}" "${link}"; \
+      fi; \
+    done; \
+    ldconfig; \
+    for group in libblas.so.3 libblas.so liblapack.so.3 liblapack.so libcblas.so; do \
       got="$(readlink -f "/usr/lib/${multiarch}/${group}")"; \
-      case "${got}" in \
-        */openblas-openmp/*) ;; \
-        *) echo "${group} resolves to ${got}, not the openmp OpenBLAS" >&2; exit 1;; \
-      esac; \
+      [ "${got}" = "${openblas_so}" ] \
+        || { echo "${group} resolves to ${got}, not the spack OpenBLAS ${openblas_so}" >&2; exit 1; }; \
     done; \
     printf '%s\n' '#include <lapacke.h>' '#include <cblas.h>' '#include <stdio.h>' \
       'int main(void) {' \
@@ -442,7 +454,7 @@ RUN set -eux; \
       '  putchar(10);' \
       '  return rc == 0 ? 0 : 1;' \
       '}' > /tmp/blas_probe.c; \
-    gcc /tmp/blas_probe.c -llapacke -llapack -lblas -o /tmp/blas_probe; \
+    gcc /tmp/blas_probe.c -llapacke -llapack -lblas -Wl,-rpath,"$(dirname "${openblas_so}")" -o /tmp/blas_probe; \
     ldd /tmp/blas_probe | grep -E 'libopenblas[^ ]* => /' \
       || { echo "a -lblas -llapack -llapacke link does not reach OpenBLAS" >&2; ldd /tmp/blas_probe >&2; exit 1; }; \
     /tmp/blas_probe; \
@@ -458,6 +470,11 @@ print('dace loads', mapped); \
 bad = [m for m in mapped if 'openblas' not in m and 'liblapacke' not in os.path.basename(m)]; \
 sys.exit('DaCe would link a BLAS that is not OpenBLAS: %s' % (bad or 'nothing at all')) \
   if (bad or not libs or not any('openblas' in m for m in mapped)) else None"
+
+# 6c. The BLAS gate: tall GEMMs under every kernel family and concurrent callers past the host's
+# thread count (containers/lib/blas_gate.sh).
+COPY containers/lib/blas_gate.sh /tmp/blas_gate.sh
+RUN sh /tmp/blas_gate.sh /opt/view/include /opt/view/lib && rm -f /tmp/blas_gate.sh
 
 # ---------------------------------------------------------------------------------------------
 # 7. The final gate.
