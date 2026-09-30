@@ -3,8 +3,6 @@
 """Unit tests for hpcagent_bench.reporting_order: the pure row/group ordering shared by the
 report figures. Exercised against a synthetic benchmark->metadata table -- no matplotlib, no DB."""
 
-from typing import List
-
 from hpcagent_bench.reporting_order import (
     BY_LEVEL,
     BY_DWARF,
@@ -18,7 +16,7 @@ from hpcagent_bench.reporting_order import (
 )
 
 
-def _table() -> List[RowMeta]:
+def _table() -> list[RowMeta]:
     """A synthetic mixed table: two HPC dwarfs across two levels, two loop_level_reasoning sources, ML."""
     return [
         # deliberately shuffled input order
@@ -33,7 +31,7 @@ def _table() -> List[RowMeta]:
     ]
 
 
-def _labels(spans: List[GroupSpan]) -> List[str]:
+def _labels(spans: list[GroupSpan]) -> list[str]:
     return [s.label for s in spans]
 
 

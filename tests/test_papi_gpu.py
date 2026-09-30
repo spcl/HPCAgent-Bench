@@ -18,7 +18,7 @@ import ctypes
 import faulthandler
 import os
 import signal
-from typing import Dict, Sequence, Tuple
+from collections.abc import Sequence
 
 import pytest
 
@@ -44,7 +44,7 @@ def component(name: str, *, index: int = 0, enabled: bool = True, reason: str = 
 #: What ``PAPI_get_component_info`` reports on the machine this was written against: PAPI 7.2 with
 #: the cuda component built (and NOT nvml, rocm or rocm_smi -- the common case even on a box with a
 #: working GPU). Frozen as data so the "not built" path is exercised on every host.
-CUDA_ONLY: Tuple[dict, ...] = (
+CUDA_ONLY: tuple[dict, ...] = (
     component("perf_event", index=0, short="perf"),
     component("perf_event_uncore", index=1, short="peu"),
     component("cuda", index=2),
@@ -52,11 +52,11 @@ CUDA_ONLY: Tuple[dict, ...] = (
 )
 
 #: A stock distribution PAPI: every GPU component absent.
-CPU_ONLY: Tuple[dict, ...] = (component("perf_event", index=0, short="perf"),)
+CPU_ONLY: tuple[dict, ...] = (component("perf_event", index=0, short="perf"),)
 
 #: PAPI 7's LAZY bring-up, verbatim: the component is built and reports itself disabled until
 #: something asks it for an event. Reading the flag and stopping calls a working component broken.
-CUDA_DELAYED: Tuple[dict, ...] = (
+CUDA_DELAYED: tuple[dict, ...] = (
     component("perf_event", index=0, short="perf"),
     component("cuda", index=1, enabled=False, reason="Not initialized. Access component events to initialize it."),
 )
@@ -64,7 +64,7 @@ CUDA_DELAYED: Tuple[dict, ...] = (
 #: cuda events as PAPI 7.2 + CUPTI PerfWorks really enumerates them. Note what is NOT here:
 #: ``dram__bytes_read.sum`` and ``sm__warps_active.avg.pct_of_peak_sustained_active``, which are
 #: Nsight Compute's spellings of the same two metrics and which PAPI rejects outright.
-CUDA_EVENTS: Tuple[str, ...] = (
+CUDA_EVENTS: tuple[str, ...] = (
     "cuda:::dram__bytes_read",
     "cuda:::dram__bytes_read.pct_of_peak_sustained_active",
     "cuda:::dram__bytes_write",
@@ -77,7 +77,7 @@ CUDA_EVENTS: Tuple[str, ...] = (
 
 #: rocm / rocm_smi events in the shape those components emit them: a device qualifier after the
 #: name, and a sensor after that. Nothing downstream may assume a bare name.
-ROCM_EVENTS: Tuple[str, ...] = (
+ROCM_EVENTS: tuple[str, ...] = (
     "rocm:::MeanOccupancyPerActiveCU:device=0",
     "rocm:::VALUUtilization:device=0",
     "rocm:::FETCH_SIZE:device=0",
@@ -85,7 +85,7 @@ ROCM_EVENTS: Tuple[str, ...] = (
     "rocm:::MemUnitStalled:device=0",
     "rocm:::L2CacheHit:device=0",
 )
-ROCM_SMI_EVENTS: Tuple[str, ...] = (
+ROCM_SMI_EVENTS: tuple[str, ...] = (
     "rocm_smi:::power_average:device=0",
     "rocm_smi:::power_management_limit:device=0",
     "rocm_smi:::temp_current:device=0:sensor=1",
@@ -94,7 +94,7 @@ ROCM_SMI_EVENTS: Tuple[str, ...] = (
 )
 
 
-def install(monkeypatch, rows: Sequence[dict], events: Dict[str, Tuple[str, ...]]) -> None:
+def install(monkeypatch, rows: Sequence[dict], events: dict[str, tuple[str, ...]]) -> None:
     """Pretend this host has ``rows`` for a component table and ``events`` for their event lists.
 
     Both halves have to be faked together: :func:`papi.component_reason` enumerates a component's
@@ -299,7 +299,7 @@ def test_the_component_report_covers_every_gpu_component_with_a_verdict(monkeypa
 
 
 # resolution: one surface, two vendors
-def resolved(metric: str, vendor: str, events: Dict[str, Tuple[str, ...]], blocked: Dict[str, str] = None):
+def resolved(metric: str, vendor: str, events: dict[str, tuple[str, ...]], blocked: dict[str, str] = None):
     return papi.resolve_gpu(metric, vendor, events, blocked or {})
 
 

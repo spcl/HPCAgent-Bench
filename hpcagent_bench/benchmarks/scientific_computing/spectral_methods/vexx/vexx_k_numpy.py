@@ -71,7 +71,7 @@ def _vcut_init(a, cutoff, security=6.0):
     tpi = 2.0 * np.pi
     b = tpi * np.linalg.inv(a).T  # b = 2pi (a^-1)^T
     a_omega = float(np.linalg.det(a))
-    n = [int(np.ceil(cutoff * np.sqrt(np.sum((a[i, :] * a[i, :]))) / tpi)) for i in range(3)]
+    n = [int(np.ceil(cutoff * np.sqrt(np.sum(a[i, :] * a[i, :])) / tpi)) for i in range(3)]
     n1, n2, n3 = n
 
     # Ewald split params (vcut_formula)
@@ -79,7 +79,7 @@ def _vcut_init(a, cutoff, security=6.0):
     sigma = 3.0 / rwigner
 
     # long-range real-space grid over one unit cell (full grid, weight 1)
-    m = [max(1, int(security * np.sqrt(np.sum((a[:, i] * a[:, i]))) * sigma)) for i in range(3)]
+    m = [max(1, int(security * np.sqrt(np.sum(a[:, i] * a[:, i])) * sigma)) for i in range(3)]
     m1, m2, m3 = m
     F = np.stack(
         np.meshgrid(np.arange(m1) / m1, np.arange(m2) / m2, np.arange(m3) / m3, indexing="ij"), axis=-1
