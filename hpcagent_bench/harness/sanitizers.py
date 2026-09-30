@@ -114,7 +114,10 @@ def classify(stderr: str, returncode: int) -> SanitizerVerdict:
     undefined = UNDEFINED.search(stderr)
     head = memory.group(0).strip("= ").removeprefix("ERROR: ") if memory else ""
     if not head and returncode == MEMORY_ERROR_EXIT:
-        head = "memory error (no report captured)"
+        # The sanitizer's own failures (a CHECK, a shadow mapping that failed) exit with the same status and
+        # print no report head: name what it did print.
+        first = next((line.strip() for line in stderr.splitlines() if line.strip()), "")
+        head = f"memory error (no report captured: {first[:200]})" if first else "memory error (no report captured)"
     return SanitizerVerdict(True, head, undefined.group(0) if undefined else "")
 
 
