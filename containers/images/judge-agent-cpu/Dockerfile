@@ -367,7 +367,7 @@ RUN set -eux; \
     # A package's own `require` replaces `all: require`, so the portable target is named on each
     # one: without it sundials was built for the build node's zen4 (656016).
     if [ -n "${SPACK_TARGET}" ]; then \
-      sed -i "s/^\\( *require: \\[.*\\)\\]\$/\\1, \\\"target=${SPACK_TARGET}\\\"]/" "${OMP_LLVM_ENV_DIR}/spack.yaml"; \
+      sed -i "s/^\\( *require: \\[\\\"%.*\\)\\]\$/\\1, \\\"target=${SPACK_TARGET}\\\"]/" "${OMP_LLVM_ENV_DIR}/spack.yaml"; \
     fi; \
     "${spack}" -e "${OMP_LLVM_ENV_DIR}" concretize -f | tail -60; \
     "${spack}" -e "${OMP_LLVM_ENV_DIR}" install --fail-fast; \
