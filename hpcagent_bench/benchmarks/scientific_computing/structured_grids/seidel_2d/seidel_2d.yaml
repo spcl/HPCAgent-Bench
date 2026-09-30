@@ -11,10 +11,10 @@ parameters:
     N: 288
   L:
     TSTEPS: 5
-    N: 1016
+    N: 2509
   XL:
     TSTEPS: 5
-    N: 15460
+    N: 21863
 init:
   input_args:
   - N

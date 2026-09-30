@@ -34,7 +34,7 @@ parameters:
   XL:
     N: 119
     Lb: 21
-    nfrag: 85
+    nfrag: 60
     nstate: 26
     nproj: 10
     nscf: 6
