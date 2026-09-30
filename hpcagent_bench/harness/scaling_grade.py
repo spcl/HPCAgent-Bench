@@ -44,10 +44,10 @@ from enum import Enum
 from typing import Any
 
 from hpcagent_bench import campaigns, config
-from hpcagent_bench.harness import regrade, results_db, scaling_claims, torch_dist_curve
+from hpcagent_bench.harness import grade_under, results_db, scaling_claims, torch_dist_curve
 from hpcagent_bench.harness.metric import LawCurve, score_ml_distributed
 from hpcagent_bench.harness.recording import record_scaling
-from hpcagent_bench.harness.regrade import Item
+from hpcagent_bench.harness.grade_under import Item
 from hpcagent_bench.harness.scoring import ML_LAWS
 from hpcagent_bench.harness.service import distribution_refusal, from_config
 from hpcagent_bench.harness.task import Task, grading_residency
@@ -150,7 +150,7 @@ def judge_dbs(roots: Iterable[pathlib.Path]) -> list[pathlib.Path]:
 def submission_rows(db: pathlib.Path, experiment: str) -> list[dict[str, Any]]:
     """The verified submissions of ``experiment``'s arms in one results DB, with the recorded envelope
     (``distribution`` / ``workspace_bytes`` / catalog libraries, NULL where absent)."""
-    return [row for row in regrade.credited_rows(db) if row["experiment"] == experiment and not row["promoted"]]
+    return [row for row in grade_under.credited_rows(db) if row["experiment"] == experiment and not row["promoted"]]
 
 
 #: The arm-env key that gives an episode ONE submission (layers/common.env; arms.yaml mlscale pins it).
@@ -168,9 +168,9 @@ def env_value(path: pathlib.Path, name: str) -> str:
 
 
 def single_submission_arm(arm: str, env_dirs: Iterable[pathlib.Path]) -> bool:
-    """Whether ``arm``'s env (:func:`regrade.env_files`) sets ``AGENT_SINGLE_SUBMISSION=1``; an arm without
+    """Whether ``arm``'s env (:func:`grade_under.env_files`) sets ``AGENT_SINGLE_SUBMISSION=1``; an arm without
     an env file keeps the multi-submission rule."""
-    path = next(regrade.env_files(arm, env_dirs), None)
+    path = next(grade_under.env_files(arm, env_dirs), None)
     return path is not None and env_value(path, SINGLE_SUBMISSION_KEY) == "1"
 
 
@@ -216,7 +216,7 @@ def item_of(row: Mapping[str, Any], env: dict[str, str]) -> tuple[Item | None, s
         return None, f"no stored source: {where}"
     if not row.get("distribution"):
         return None, f"no recorded distribution: {where}"
-    return regrade.item_of(row, env, final=True), ""
+    return grade_under.item_of(row, env, final=True), ""
 
 
 def build_worklist(
@@ -231,7 +231,7 @@ def build_worklist(
     items: list[Item] = []
     for row, submissions in finals:
         arm = str(row["arm"])
-        envs.setdefault(arm, regrade.arm_env(arm, dirs))
+        envs.setdefault(arm, grade_under.arm_env(arm, dirs))
         item, problem = item_of(row, envs[arm])
         if item is None:
             problems.append(problem)
@@ -294,7 +294,7 @@ def grade(item: Item) -> Graded:
     replicatable-allowlist check the route makes before building -- one verdict per submission,
     whichever path reads it."""
     cfg = from_config()
-    submission = regrade.submission_of(item)
+    submission = grade_under.submission_of(item)
     task = Task(
         item.benchmark,
         item.source_mode,
@@ -349,7 +349,7 @@ def graded_keys(out_dir: pathlib.Path) -> set[tuple[object, ...]]:
 
 
 def submission_key(item: Item) -> scaling_claims.Key:
-    """``item``'s :data:`regrade.KEY`: the submission, without the law."""
+    """``item``'s :data:`grade_under.KEY`: the submission, without the law."""
     return (item.db, item.run_id, item.benchmark, item.ts_ms)
 
 
@@ -366,7 +366,7 @@ def grade_into(
 ) -> None:
     """Replay ``item`` and write its ``regrade`` grade (beside a copy of the submission it replays),
     one ``scaling_grades`` row per law and each law's curve into ``path``. The DB is opened only after
-    ``grader`` returns (as :func:`regrade.run_shard`). ``recorder`` None writes the laws without their
+    ``grader`` returns (as :func:`grade_under.run_shard`). ``recorder`` None writes the laws without their
     points (``run --no-record``)."""
     graded: Graded | None = None
     reason = ""
@@ -378,7 +378,7 @@ def grade_into(
     status = GradeStatus.ERROR if graded is None else graded.status
     values = {"status": status.value, "detail": reason if graded is None else graded.detail}
     with contextlib.closing(results_db.open_db(path)) as conn:
-        grade_id = regrade.add_regrade(conn, item, regrade.PROMOTION_KIND, values)
+        grade_id = grade_under.add_regrade(conn, item, grade_under.PROMOTION_KIND, values)
         for mode in ML_LAWS:
             law = laws.get(mode)
             law_status = (GradeStatus.ERROR if graded is None else graded.law_status(law)).value
@@ -448,17 +448,17 @@ def run_shard(
 ) -> int:
     """Grade this shard's items not yet in any shard DB of ``out_dir``; returns how many were graded now.
     Then, with ``baseline``, time this shard's share of the missing baseline points."""
-    provenance = regrade.shard_provenance()
+    provenance = grade_under.shard_provenance()
     path = out_dir / f"scaling-grade-{shard}.db"
     results_db.open_db(path).close()
     done = graded_keys(out_dir)
     applied: set[str] = set()
     graded_now = 0
-    with regrade.environment_scope():
+    with grade_under.environment_scope():
         for item in items[shard::shards]:
             if fully_graded(item, done):
                 continue
-            applied = regrade.apply_env(grading_env(item), applied)
+            applied = grade_under.apply_env(grading_env(item), applied)
             grade_into(item, path, grader, recorder)
             graded_now += 1
     if baseline is not None:
@@ -509,14 +509,14 @@ def run_auto(
     Claims ``bound.batch`` at a time; when none is left, ``collect`` runs once more, then the gang exits.
     Stops early at ``bound`` and releases what it holds. Then, with ``baseline``, fills the missing
     baseline points (:func:`fill_baseline`), not counted against MAX_ITEMS."""
-    provenance = regrade.shard_provenance()
+    provenance = grade_under.shard_provenance()
     path = out_dir / f"scaling-grade-{claimer.name}.db"
     results_db.open_db(path).close()
     pool = {submission_key(item): item for item in collect()}
     rescanned = False
     applied: set[str] = set()
     graded_now = 0
-    with regrade.environment_scope(), scaling_claims.heartbeat(claimer):
+    with grade_under.environment_scope(), scaling_claims.heartbeat(claimer):
         try:
             while bound.time_left(claimer.path):
                 done = graded_keys(out_dir)
@@ -534,7 +534,7 @@ def run_auto(
                 for key in taken:
                     if not bound.time_left(claimer.path):
                         break
-                    applied = regrade.apply_env(grading_env(pool[key]), applied)
+                    applied = grade_under.apply_env(grading_env(pool[key]), applied)
                     grade_into(pool[key], path, grader, recorder)
                     scaling_claims.finish(claimer, key)
                     graded_now += 1
@@ -666,8 +666,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_auto_main(args, recorder, counts, baseline)
     if args.shards < 1:
         raise SystemExit("run --worklist <file> needs --shards (the gang count)")
-    items = regrade.read_worklist(pathlib.Path(args.worklist))
-    regrade.hide_campaign_data(args.out_dir, items)
+    items = grade_under.read_worklist(pathlib.Path(args.worklist))
+    grade_under.hide_campaign_data(args.out_dir, items)
     graded = run_shard(items, args.shard, args.shards, args.out_dir, grade, recorder, baseline)
     print(f"shard {args.shard}/{args.shards}: graded {graded} at P={list(counts)}")
     return 0
@@ -726,7 +726,7 @@ def run_auto_main(
         for line in problems:
             print(line, file=sys.stderr)
         seen.extend(items)
-        regrade.hide_campaign_data(args.out_dir, seen)
+        grade_under.hide_campaign_data(args.out_dir, seen)
         print(f"auto: {len(items)} verified submissions under {len(roots)} root(s)", flush=True)
         return items
 

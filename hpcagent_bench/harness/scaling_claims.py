@@ -3,7 +3,7 @@
 """The claim table that lets any number of ML-scaling grade jobs, and every gang of each, grade one
 out directory concurrently without two of them replaying the same submission.
 
-One small sqlite file in the out dir (:data:`CLAIM_DB`) maps a submission key (``regrade.KEY``) to
+One small sqlite file in the out dir (:data:`CLAIM_DB`) maps a submission key (``grade_under.KEY``) to
 the claimer grading it (``<job>-<gang>``), its state (``claimed`` / ``done``) and a heartbeat. A
 claim is taken under ``BEGIN IMMEDIATE`` -- the write lock is held from the first read, so two
 claimers can never both see a key free. A ``claimed`` row whose heartbeat is older than the stale
