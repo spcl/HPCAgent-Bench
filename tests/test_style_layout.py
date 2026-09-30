@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The measured-layout layer of :mod:`hpcagent_bench.stats.style`: the protrusions every figure
 module sizes its chrome from, the crowded-tick shrink, the mark boxes, the save-time placement of

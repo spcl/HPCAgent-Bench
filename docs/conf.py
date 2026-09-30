@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Sphinx configuration: the Markdown files in this directory, rendered with MyST and Furo."""
 
@@ -8,7 +8,7 @@ from pathlib import Path
 from sphinx.application import Sphinx
 
 project = "HPCAgent-Bench"
-copyright = "2021 ETH Zurich and the HPCAgent-Bench authors"  # noqa: A001
+copyright = "2026 ETH Zurich and the HPCAgent-Bench authors"  # noqa: A001
 author = "SPCL @ ETH Zurich"
 
 extensions = ["myst_parser"]

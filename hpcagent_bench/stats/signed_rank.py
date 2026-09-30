@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The Wilcoxon signed-rank null: one rule deciding exact vs approximate, and a stdlib
 implementation of the exact distribution.

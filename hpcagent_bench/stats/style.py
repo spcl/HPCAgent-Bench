@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Shared visual style for every figure: type sizes, tick and spine weight, grid colour, neutral
 inks. Colour belongs to the entity and lives in :mod:`hpcagent_bench.stats.palette`.

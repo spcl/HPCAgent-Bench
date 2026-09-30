@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """AutoKernel's experiment ledger tool, loaded the way the packet-aware MCP server loads it: by file
 path with ``importlib.util``, not as a package import. It is STDLIB ONLY (no ``http_json``, no

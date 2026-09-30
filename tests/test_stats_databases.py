@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Several results databases read as one (``hpcagent_bench/stats/databases.py``): the core database
 and, when asked for, the CPF archive, whose arms the core database leaves out."""

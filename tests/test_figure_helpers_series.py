@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The one series look every overlay figure reads: colour from the model, shape from the packet,
 the control hollow, the torch.distributed baseline grey. The control case is pinned in

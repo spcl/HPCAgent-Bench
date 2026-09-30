@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Print the spcl/dace commit this release pins (pyproject.toml dace-pin): the one dace every image
 # bakes and every job runs.

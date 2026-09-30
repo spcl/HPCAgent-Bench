@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """An enum-typed value leaves the process as its ``.value`` (a DB row, a CLI argument) and reads back
 to the same member, so the on-disk and command-line spellings are the enum values themselves."""

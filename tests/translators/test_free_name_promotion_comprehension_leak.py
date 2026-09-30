@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """A comprehension / lambda / walrus / except-handler bound name must not leak
 into ``promote_free_names_to_params``'s free-name promotion.

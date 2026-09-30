@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """``fold_slice_view_aliases`` -- fold a name bound to a partial/strided VIEW of
 an array into every subscripted use, composing offsets/strides.

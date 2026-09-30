@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 # submit.sh's plumbing: stage an arm's env from its arms.yaml base, then either report what would run
 # (SUBMIT=0) or submit it as beverin.sbatch's CLUSTER_ENV_FILE. Sourced, not executed; the caller has

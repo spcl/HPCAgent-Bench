@@ -1,11 +1,11 @@
 #!/usr/bin/env python
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Enforce the two-line copyright / SPDX header on the core Python package.
 
 Every tracked ``.py`` file in scope must begin with the copyright + SPDX header::
 
-    # Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+    # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
     # SPDX-License-Identifier: GPL-3.0-or-later
 
 (An optional ``#!`` shebang and/or a PEP 263 ``coding`` line may precede it; the
@@ -40,7 +40,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SPDX_LINE = "# SPDX-License-Identifier: GPL-3.0-or-later"
 # What --fix writes into a headerless file (the canonical year).
 HEADER = (
-    "# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.",
+    "# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.",
     SPDX_LINE,
 )
 # A header is PRESENT when an ETH-Zurich copyright line is immediately followed by the

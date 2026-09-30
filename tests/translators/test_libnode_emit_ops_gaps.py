@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Numerical checks for four numpy ops recently added to the native translators
 so a DaCe loop-nest extractor (nest-forge) can round-trip its ``dace -> numpy``

@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """``np.pad(a, w, mode=...)`` edge / reflect / wrap / symmetric -> a per-axis
 boundary index remap, lowered by ``expand_pad`` (the native c / c++ / fortran path).

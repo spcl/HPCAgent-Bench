@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """fp8 (E4M3/E5M2) native emission for C/C++/Fortran: promote-on-read, round-on-op, demote-on-write."""
 

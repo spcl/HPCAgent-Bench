@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The copyright/SPDX header must sit at the top of every core ``.py`` AND survive the formatter.
 
@@ -22,7 +22,7 @@ REPO = Path(__file__).resolve().parent.parent
 #: Passed explicitly rather than discovered, so the test formats the way check_format.py does.
 LINE_LENGTH = "120"
 HEADER: tuple = (
-    "# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.",
+    "# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.",
     "# SPDX-License-Identifier: GPL-3.0-or-later",
 )
 
