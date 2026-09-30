@@ -28,6 +28,10 @@ GATE_PATH = REPO / "containers" / "lib" / "omp_context_gate.py"
 LLVM_AVAILABLE = shutil.which("clang") is not None
 
 
+#: Environment variables that pin a thread count.
+THREAD_PINS = ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMBA_NUM_THREADS")
+
+
 def load_gate() -> types.ModuleType:
     spec = importlib.util.spec_from_file_location("omp_context_gate_under_test", GATE_PATH)
     assert spec is not None and spec.loader is not None
@@ -64,7 +68,9 @@ def run_gate(root: pathlib.Path, *args: str) -> subprocess.CompletedProcess[str]
         [sys.executable, str(GATE_PATH), "--root", str(root), *args],
         capture_output=True,
         text=True,
-        env={key: value for key, value in os.environ.items() if key != omp_context.CONTEXT_ENV},
+        # The gate measures threading: a thread count pinned by this process (numerical_oracle pins one
+        # BLAS thread on import) must not reach it.
+        env={key: value for key, value in os.environ.items() if key not in (omp_context.CONTEXT_ENV, *THREAD_PINS)},
         timeout=1800,
         check=False,
     )
