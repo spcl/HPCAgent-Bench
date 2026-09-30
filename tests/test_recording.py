@@ -75,12 +75,12 @@ def test_connect_creates_the_v1_schema(tmp_path: pathlib.Path) -> None:
 
 
 def test_a_legacy_results_db_is_refused_not_written(tmp_path: pathlib.Path) -> None:
-    """A shard of the legacy layout is converted by scripts/migrate_db.py, never written into."""
+    """A shard of the legacy layout is refused, never written into."""
     db = tmp_path / "old.db"
     with sqlite3.connect(db) as conn:
         conn.execute("CREATE TABLE submissions (id INTEGER PRIMARY KEY, run_id TEXT)")
     conn.close()
-    with pytest.raises(results_db.NotV1Error, match="migrate_db"):
+    with pytest.raises(results_db.NotV1Error, match="legacy results database"):
         recording.connect(str(db))
     with sqlite3.connect(db) as conn:
         assert {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")} == {"submissions"}

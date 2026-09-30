@@ -87,7 +87,7 @@ __all__ = [
 ]
 
 REGISTRY = pathlib.Path(__file__).resolve().parent / "envs" / "registry.yaml"
-#: Every recorded arm name -> the arm it is (``scripts/arm_renames.py`` writes it; DATA).
+#: Every recorded arm name -> the arm it is (DATA).
 ARM_RENAMES_PATH = pathlib.Path(__file__).resolve().parent / "envs" / "arm_renames.yaml"
 
 #: A clean re-run's arm-name suffix; every ``-clean`` arm folds into its base identity. Clean is a
@@ -362,8 +362,7 @@ def aliased_arm(arm: str) -> str:
 
 @functools.lru_cache(maxsize=1, typed=True)
 def arm_renames() -> dict[str, str]:
-    """Every recorded arm name -> the arm it is, named by its configuration (:data:`ARM_RENAMES_PATH`,
-    written by ``scripts/arm_renames.py``)."""
+    """Every recorded arm name -> the arm it is, named by its configuration (:data:`ARM_RENAMES_PATH`)."""
     table = yaml.safe_load(ARM_RENAMES_PATH.read_text(encoding="utf-8")) or {}
     return {str(old): str(new) for old, new in table.items()}
 

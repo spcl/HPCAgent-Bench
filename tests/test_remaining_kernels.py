@@ -1075,7 +1075,7 @@ def test_roster_resolves_with_this_interpreter_whatever_python3_the_path_names(
 def test_a_kernel_the_migration_marked_is_owed_at_its_class_and_an_ordinary_failure_is_not(
     module: types.ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
 ) -> None:
-    """``infra: ...`` and ``budget: ...`` (``migrate_db.fail_infra_reruns``) are no verdict on the agent's
+    """``infra: ...`` and ``budget: ...`` are no verdict on the agent's
     work: their kernels stay owed, as their class. A rejected submit of another kernel is done."""
     root = tmp_path / "runs"
     shard = make_shard(root, "100", ARM)

@@ -223,9 +223,9 @@ def test_a_kernel_whose_only_row_is_suspect_is_censored_not_dropped(ablation_sta
     assert (censored["a_success"], censored["a_speedup"]) == ("0", "")
 
 
-def test_a_legacy_db_is_refused_naming_the_migration(ablation_stats, tmp_path) -> None:
-    """A DB of the legacy layout is converted by scripts/migrate_db.py first; read as it is, its
-    numbers would silently mean something else."""
+def test_a_legacy_db_is_refused(ablation_stats, tmp_path) -> None:
+    """A DB of the legacy layout is refused; read as it is, its numbers would silently mean something
+    else."""
     db = tmp_path / "legacy.db"
     conn = sqlite3.connect(str(db))
     try:
@@ -236,7 +236,7 @@ def test_a_legacy_db_is_refused_naming_the_migration(ablation_stats, tmp_path) -
         conn.commit()
     finally:
         conn.close()
-    with pytest.raises(SystemExit, match="migrate_db"):
+    with pytest.raises(SystemExit, match="legacy layout"):
         ablation_stats.load_arm("a", str(db), "best")
 
 
