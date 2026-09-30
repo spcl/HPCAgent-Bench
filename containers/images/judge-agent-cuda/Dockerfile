@@ -355,6 +355,9 @@ RUN set -eux; \
       "    - spec: \"cuda@${cuda_version}\"" \
       '      prefix: /usr/local/cuda' \
       '    buildable: false' \
+      '    # Required, not only offered: a buildcache binary linked against an older toolkit (llvm and its' \
+      '    # hwloc against libcudart.so.12, daint 4947813) is otherwise reused with that toolkit as its external.' \
+      "    require: [\"@${cuda_version}\"]" \
       '  libfabric:' \
       '    externals:' \
       "    - spec: \"libfabric@$(cat /opt/ofi-sdk/VERSION) +cuda +cuda_dlopen cuda_arch=${CUDA_ARCHS}\"" \
@@ -416,6 +419,7 @@ RUN set -eux; \
       "      - spec: \"cuda@$(cat /opt/cuda-version)\"" \
       '        prefix: /usr/local/cuda' \
       '      buildable: false' \
+      "      require: [\"@$(cat /opt/cuda-version)\"]" \
       '    # libfabric: OURS -- external here AND required, see judge-agent-amd step 4 (630049, 630267).' \
       '    libfabric:' \
       "      require: [\"@$(cat /opt/ofi-sdk/VERSION) +cuda\"]" \
