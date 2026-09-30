@@ -529,9 +529,9 @@ RUN set -eux; \
       '  - scotch +mpi +esmumps' \
       '  - suite-sparse +openmp' \
       '  - superlu' \
-      "  - superlu-dist +openmp +parmetis +rocm amdgpu_target=$(echo "${ROCM_ARCH}" | tr ";" ",")" \
+      '  - superlu-dist +openmp +parmetis ~rocm' \
       '  - mumps +mpi +metis +parmetis +scotch +ptscotch +openmp +shared' \
-      "  - strumpack +mpi +openmp +parmetis +scotch ~cuda +rocm amdgpu_target=$(echo "${ROCM_ARCH}" | tr ";" ",")" \
+      '  - strumpack +mpi +openmp +parmetis +scotch ~cuda ~rocm' \
       '  # hypre is the ONE library here without a GPU build, and the box it is in is closed on' \
       '  # three sides. hypre@3 carries requires("+umpire") with depends_on("umpire+c+rocm");' \
       '  # umpire@2026.07 accepts only cxxstd=20 or 23, and its HIP units are compiled by ROCm' \
@@ -542,11 +542,13 @@ RUN set -eux; \
       '  # +rocm below 3.0.1 does not concretize at all (620907). What is NOT closed: petsc asks' \
       '  # for hypre+rocm only under +int64 (depends_on("hypre+mixedint+rocm", when=' \
       '  # "+hypre+int64+rocm")), which this petsc does not set. So hypre loses its device' \
-      '  # solvers and nothing else moves -- petsc and magma keep +rocm.' \
+      '  # solvers and nothing else moves. The gnu view is CPU-only for superlu-dist, strumpack and petsc: their HIP' \
+      '  # units are hipcc code on libomp, and a process of the gnu family runs on libgomp alone (the llvm view builds' \
+      '  # the device variants). magma is GPU-only and stays +rocm, refused to the gnu family.' \
       '  - hypre +mpi +openmp' \
       '  - arpack-ng +mpi +shared' \
       "  - magma ~cuda +rocm amdgpu_target=$(echo "${ROCM_ARCH}" | tr ";" ",") +fortran" \
-      "  - petsc +mpi +metis +hypre +mumps +superlu-dist +strumpack +suite-sparse +scalapack +hdf5 +fftw +rocm amdgpu_target=$(echo "${ROCM_ARCH}" | tr ";" ",") +shared" \
+      '  - petsc +mpi +metis +hypre +mumps +superlu-dist +strumpack +suite-sparse +scalapack +hdf5 +fftw ~rocm +shared' \
       '  - slepc +arpack' \
       '  # sundials had no provider at all: its entry declares -lsundials_core, which exists only' \
       '  # from SUNDIALS 7, so a distro 6.x fails on that token alone. Spack ships 7.x, with rocm.' \
@@ -803,9 +805,6 @@ RUN set -eux; \
     "${SPACK_ROOT}/bin/spack" clean --stage; \
     ls /opt/view/lib/libpetsc.so /opt/view/lib/libslepc.so; \
     conf="$("${SPACK_ROOT}/bin/spack" -e "${SPACK_ENV_DIR}" location -i petsc)/include/petscconf.h"; \
-    grep -q 'PETSC_HAVE_HIP 1' "${conf}" \
-      || { echo "petsc built WITHOUT HIP -- +rocm did not take, GPU solvers unavailable" >&2; \
-           exit 1; }; \
     grep -q 'PETSC_HAVE_MPIUNI' "${conf}" \
       && { echo "petsc built against MPIUNI -- that is the SERIAL STUB, not MPI" >&2; exit 1; }; \
     true
