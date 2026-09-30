@@ -147,7 +147,7 @@ hpcagent_bench.db-*
 *.csv
 !tests/data/llr40/data/*.csv
 /opt_reports/
-# Documented default outputs of `hf export`, `harbor generate/run` and `regrade worklist/run`.
+# Documented default outputs of `hf export`, `harbor generate/run` and `grade-under worklist/run`.
 hf_dataset/
 harbor-runs/
 adapters/hpcagent_bench/tasks/

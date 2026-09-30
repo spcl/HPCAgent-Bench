@@ -818,7 +818,7 @@ def record_final(
     preset: str,
     datatype: str,
 ) -> int:
-    """The ``final`` grade of submit grade ``of_grade`` (``regrade finalize`` writes the same row for a
+    """The ``final`` grade of submit grade ``of_grade`` (``grade-under run`` writes the same row for a
     recorded submission, stamped with the same size, datatype, source mode, machine and commit), with
     one ``grade_cells`` row per timed input; returns its id."""
     stamp = stamp_values(task, preset, datatype, None)

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The extractor puts every submission the final grade (mw4x5) re-timed on that FINAL grade.
 
-``hpcagent-bench regrade finalize`` re-times every final and promoted submission on m inputs
+``hpcagent-bench grade-under run`` re-times every final and promoted submission on m inputs
 x n runs a side and writes one ``final`` grade per submission. An extraction that read only the
 run-mode regrades would still report the ONE-input speedup the recorded grade took.
 Every fixture here is written by the regrade module's own per-cell pass (``regrade.run_cells_shard``
@@ -133,7 +133,7 @@ def raising(_graded: regrade.Item) -> tuple[list[dict[str, Any]], dict[str, Any]
 
 
 def cells_pass(out: pathlib.Path, graded: regrade.Item, grader: Grader, regrade_ts: int) -> None:
-    """One final-grade pass over ``graded`` into ``out``, as ``regrade finalize`` runs it, with its
+    """One final-grade pass over ``graded`` into ``out``, as ``grade-under run`` runs it, with its
     final grade's stamp pinned to ``regrade_ts`` so the newest-wins rule is tested on known times."""
     regrade.run_cells_shard([graded], 0, 1, out, grader)
     with connect(out / "regrade-cells-0.db") as conn:
@@ -145,7 +145,7 @@ def cells_pass(out: pathlib.Path, graded: regrade.Item, grader: Grader, regrade_
 
 
 def promotion_verdict(out: pathlib.Path, graded: regrade.Item, verified: int) -> None:
-    """The run-mode regrade of a PROMOTION (``regrade run`` over ``--scope unpromoted``): the score
+    """The run-mode regrade of a PROMOTION (``grade-under run`` over ``--scope unpromoted``): the score
     ``graded`` re-graded through /submit."""
     values: dict[str, Any] = {"status": "graded", "speedup": 0.5, "baseline_ns": 80.0, "native_ns": 160.0}
     values |= {"timing_reduction": "mwd-final", "suspect": 0, "build_ok": 1, "correct": verified}

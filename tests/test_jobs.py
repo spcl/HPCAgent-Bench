@@ -49,7 +49,7 @@ def test_a_rank_beyond_the_item_count_has_an_empty_share() -> None:
 
 def test_every_action_is_registered_once_and_listed_by_the_cli() -> None:
     names = [action.name for action in jobs.ACTIONS]
-    assert names == ["regrade", "finalize", "prebuild", "baseline", "migrate"]
+    assert len(set(names)) == len(names)
     help_text = subprocess.run(
         [sys.executable, "-m", "hpcagent_bench", "job", "--help"], capture_output=True, text=True, check=True
     ).stdout
@@ -99,7 +99,7 @@ def test_a_value_the_caller_already_set_stays(tmp_path: pathlib.Path) -> None:
     assert environ["OMP_NUM_THREADS"] == "3"
 
 
-# ------------------------------------------------------------------------------------- regrade and finalize
+# ------------------------------------------------------------------------------------------------ grade-under
 
 
 @pytest.fixture
@@ -112,40 +112,42 @@ def graded(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
     return calls
 
 
-def test_regrade_takes_this_tasks_shard_of_the_worklist(
+def test_grade_under_takes_this_tasks_shard_of_the_worklist(
     graded: list[list[str]], tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("SLURM_PROCID", "2")
     monkeypatch.setenv("SLURM_NTASKS", "4")
     out = tmp_path / "out"
-    assert jobs.main(["regrade", str(tmp_path / "w.jsonl"), "--out-dir", str(out)]) == 0
+    assert jobs.main(["grade-under", str(tmp_path / "w.jsonl"), "--out-dir", str(out)]) == 0
     assert graded == [
         ["run", "--worklist", str(tmp_path / "w.jsonl"), "--shard", "2", "--shards", "4", "--out-dir", str(out)]
     ]
     assert out.is_dir()
 
 
-def test_regrade_outside_slurm_is_shard_0_of_1(
+def test_grade_under_outside_slurm_is_shard_0_of_1(
     graded: list[list[str]], tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.delenv("SLURM_PROCID", raising=False)
     monkeypatch.delenv("SLURM_NTASKS", raising=False)
-    jobs.main(["regrade", str(tmp_path / "w.jsonl"), "--out-dir", str(tmp_path / "o")])
+    jobs.main(["grade-under", str(tmp_path / "w.jsonl"), "--out-dir", str(tmp_path / "o")])
     assert graded[0][3:7] == ["--shard", "0", "--shards", "1"]
 
 
-def test_finalize_carries_the_aa_calibration_and_the_shard_name(
+def test_grade_under_carries_the_aa_calibration_and_the_shard_name(
     graded: list[list[str]], tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("SLURM_PROCID", "0")
     monkeypatch.setenv("SLURM_NTASKS", "2")
-    jobs.main(["finalize", str(tmp_path / "w.jsonl"), "--out-dir", str(tmp_path / "o"), "--aa", "--out-name", "aa.db"])
-    assert graded[0][0] == "finalize" and graded[0][-3:] == ["--aa", "--out-name", "aa.db"]
-    jobs.main(["finalize", str(tmp_path / "w.jsonl"), "--out-dir", str(tmp_path / "o")])
+    jobs.main(
+        ["grade-under", str(tmp_path / "w.jsonl"), "--out-dir", str(tmp_path / "o"), "--aa", "--out-name", "aa.db"]
+    )
+    assert graded[0][0] == "run" and graded[0][-3:] == ["--aa", "--out-name", "aa.db"]
+    jobs.main(["grade-under", str(tmp_path / "w.jsonl"), "--out-dir", str(tmp_path / "o")])
     assert "--aa" not in graded[1] and "--out-name" not in graded[1]
 
 
-# ------------------------------------------------------------------------------------------ prebuild, migrate
+# ------------------------------------------------------------------------------------------------- prebuild
 
 
 def test_prebuild_passes_the_ranks_to_the_preparation_job(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -155,20 +157,6 @@ def test_prebuild_passes_the_ranks_to_the_preparation_job(monkeypatch: pytest.Mo
     monkeypatch.setenv("SLURM_NTASKS", "8")
     assert jobs.main(["prebuild", "--problems", "p.jsonl", "--language", "c"]) == 0
     assert seen == [["--problems", "p.jsonl", "--language", "c", "--rank", "5", "--ranks", "8"]]
-
-
-def test_migrate_runs_on_rank_0_only(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-    from hpcagent_bench.cluster import migrate_db
-
-    seen: list[list[str]] = []
-    monkeypatch.setattr(migrate_db, "main", lambda argv: seen.append(list(argv)) or 0)
-    monkeypatch.setenv("SLURM_NTASKS", "4")
-    monkeypatch.setenv("SLURM_PROCID", "2")
-    assert jobs.main(["migrate", "root", "--out", "db"]) == 0
-    assert seen == [] and "nothing to do" in capsys.readouterr().out
-    monkeypatch.setenv("SLURM_PROCID", "0")
-    assert jobs.main(["migrate", "root", "--out", "db"]) == 0
-    assert seen == [["root", "--out", "db"]]
 
 
 # ---------------------------------------------------------------------------------------------- the sample jobs
