@@ -488,7 +488,7 @@ def test_a_layout_is_served_by_the_scenarios_that_list_it(fmt: str, block_size: 
 def test_a_layout_draws_every_scenario_and_runs_only_the_inputs_it_covers(seed: int) -> None:
     """THE RULE (docs/sparse_abi.md): a dia grade draws exactly the default's input at every seed,
     from all three scenarios; the banded one is run (and is storable in dia), any other is
-    ``uncovered``: not run, scored 1x, with a reason naming its scenario and the layout."""
+    ``uncovered``: not run, the kernel fails, with a reason naming its scenario and the layout."""
     spec = BenchSpec.load("bicgstab")
     choice = resolve_layout(spec, {"A": "dia"})
     data = Benchmark("bicgstab").get_data(preset="S", datatype="float64", input_seed=seed)
@@ -499,7 +499,7 @@ def test_a_layout_draws_every_scenario_and_runs_only_the_inputs_it_covers(seed: 
         assert reason == ""
         check_layout(spec.sparse_layouts, choice, data)  # raises LayoutRefused on a refused draw
     else:
-        assert f"scenario {scenario!r}" in reason and "A:dia" in reason and "1x" in reason
+        assert f"scenario {scenario!r}" in reason and "A:dia" in reason and "kernel fails" in reason
     assert uncovered(spec, None, seed) == ""
 
 
