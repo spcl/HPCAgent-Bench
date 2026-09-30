@@ -53,7 +53,7 @@ ARM_KEYS = frozenset(
     }
 )
 
-#: Two llr-focus40 kernels: enough to tell a subset from the roster.
+#: Two llr40 kernels: enough to tell a subset from the roster.
 SUBSET = ("fuse_diamond", "tsvc_2_s115")
 
 #: The submitter's knobs, cleared so each run sees only what its test sets.
@@ -90,7 +90,7 @@ def tree(root: pathlib.Path) -> pathlib.Path:
 
 
 def submit(root: pathlib.Path, **knobs: str) -> subprocess.CompletedProcess[str]:
-    """The copied submit.sh over the llr-focus40 tag as experiment ``wave``, one model, unless overridden."""
+    """The copied submit.sh over the llr40 tag as experiment ``wave``, one model, unless overridden."""
     env = {k: v for k, v in os.environ.items() if k not in KNOBS and not k.startswith("SLURM_")}
     env.update(
         PATH=f"{root / 'bin'}:{env['PATH']}",
@@ -100,7 +100,7 @@ def submit(root: pathlib.Path, **knobs: str) -> subprocess.CompletedProcess[str]
         SCRATCH=str(root / "scratch"),
         STAMP="20260926",
     )
-    env.update({"MODELS": "qwen38", "TAG": "llr-focus40", "EXPERIMENT": "wave", **knobs})
+    env.update({"MODELS": "qwen38", "TAG": "llr40", "EXPERIMENT": "wave", **knobs})
     return subprocess.run(
         ["bash", str(root / "hpcagent_bench" / "cluster" / "submit.sh")],
         env=env,
@@ -301,9 +301,17 @@ def test_a_served_model_arm_on_mi200_takes_its_serving_layer(tmp_path: pathlib.P
 
 def test_a_served_model_with_no_mi200_serving_layer_is_refused(tmp_path: pathlib.Path) -> None:
     """Without its layer a served model would launch its mi300 serving config on MI250X; refuse it."""
+    layers = REPO / "experiments" / "layers"
+    served = [
+        p.stem.removeprefix("model-")
+        for p in layers.glob("model-*.env")
+        if "# extends: service.env" not in p.read_text()
+    ]
+    bare = sorted(m for m in served if not (layers / f"partition-mi200-{m}.env").exists())
+    assert bare, "every served model has an mi200 layer: the refusal has nothing to guard"
     root = tree(tmp_path)
-    done = submit_mi200(root, "qwen38")
-    assert done.returncode == 2 and "qwen38 has no mi200 config" in done.stderr, done.stderr
+    done = submit_mi200(root, bare[0])
+    assert done.returncode == 2 and f"{bare[0]} has no mi200 config" in done.stderr, done.stderr
     assert not list((root / "experiments").glob(".env.*"))
     assert not (root / "sbatch.calls").exists()
 
