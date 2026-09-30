@@ -10,7 +10,6 @@ unchanged body instead of re-rendering it. All pure: no compile, no hidden tests
 
 import pathlib
 import re
-from typing import FrozenSet
 
 import pytest
 

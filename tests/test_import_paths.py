@@ -33,6 +33,12 @@ ALLOWED: dict[str, str] = {
     "tests/test_dace_helper_programs.py": "temp module written under tmp_path",
     "tests/test_packaging.py": "child imports the installed wheel and nothing else",
     "tests/test_import_paths.py": "this file spells the patterns it searches for",
+    "tests/test_agent_launch_directory.py": "child process that loads the driver from a copied launch directory",
+    "tests/test_omp_context_gate.py": "loads the image gate by file, as the image build runs it",
+    # Image build gates: run by path before the package is installed, under PYTHONSAFEPATH.
+    "containers/lib/omp_context_gate.py": "image build gate, imports its sibling openmp_runtimes.py",
+    "containers/lib/omp_context_scan.py": "image build gate, imports its sibling openmp_runtimes.py",
+    "containers/lib/one_openmp_gate.py": "image build gate, imports its sibling openmp_runtimes.py",
 }
 
 

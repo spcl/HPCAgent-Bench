@@ -100,11 +100,14 @@ jobs:
         if: ${{ matrix.shard == 'floor' && !cancelled() }}
         run: |
           python - <<'PY'
-          import importlib, pkgutil, hpcagent_bench
+          import importlib, pathlib, pkgutil, hpcagent_bench
           # GPU-only packages: the amd/nvidia extras (and the ROCm base image) ship them, the CPU
           # install this leg runs does not. A module that needs one is skipped by name, never
           # silently: any other missing module still fails the leg.
           GPU_ONLY = {"triton", "cupy"}
+          # The cluster directory holds scripts that import their siblings by bare name; pytest's
+          # pythonpath names that directory, so the collection below is what imports those.
+          SIBLINGS = {p.stem for p in (pathlib.Path(hpcagent_bench.__file__).parent / "cluster").glob("*.py")}
           names = [m.name for m in pkgutil.walk_packages(hpcagent_bench.__path__, "hpcagent_bench.")
                    if ".benchmarks." not in m.name]
           skipped = []
@@ -112,7 +115,7 @@ jobs:
               try:
                   importlib.import_module(name)
               except ModuleNotFoundError as exc:
-                  if (exc.name or "").split(".")[0] not in GPU_ONLY:
+                  if (exc.name or "").split(".")[0] not in GPU_ONLY | SIBLINGS:
                       raise
                   skipped.append(f"{name} (needs {exc.name})")
           print(f"imported {len(names) - len(skipped)} modules; skipped {skipped}")

@@ -13,6 +13,7 @@ benchmarks
 prompts
 agents_and_tool_access
 writing_an_agent
+jobs/README
 ```
 
 ```{toctree}

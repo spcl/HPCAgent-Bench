@@ -122,7 +122,7 @@ def test_agent_edf_keeps_what_the_agent_actually_needs(tmp_path) -> None:
     rendered = render(tmp_path, "agent-node")
     launch = tmp_path / "runs" / ".agent-launch" / "1"
     assert f"{tmp_path / 'run' / 'shared'}:/shared" in mounts(rendered)
-    assert f"{tmp_path / 'repo' / 'containers' / 'agent'}:{PAYLOAD_MOUNT}:ro" in mounts(rendered)
+    assert f"{tmp_path / 'repo' / 'agent'}:{PAYLOAD_MOUNT}:ro" in mounts(rendered)
     assert f"{launch}:{launch}:ro" in mounts(rendered), "run_cluster.sh and agent_driver.py run from here"
     assert f"{tmp_path / 'run'}:{tmp_path / 'run'}" in mounts(rendered), "the agent writes its workdirs here"
     # A container whose workdir is not mounted never starts.
