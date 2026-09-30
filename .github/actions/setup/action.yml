@@ -166,6 +166,10 @@ runs:
       shell: bash
       run: ccache --zero-stats
 
+    - name: Sanitizer runtime (ASan cannot map its shadow under 32 bits of mmap entropy)
+      shell: bash
+      run: sudo sysctl -w vm.mmap_rnd_bits=28 >/dev/null 2>&1 || true
+
     - name: DaCe checkout (extended branch tip, editable)
       shell: bash
       run: |
