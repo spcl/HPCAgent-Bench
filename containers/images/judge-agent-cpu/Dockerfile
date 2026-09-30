@@ -364,6 +364,11 @@ RUN set -eux; \
       '      link: roots' \
       '      link_type: symlink' \
       > "${OMP_LLVM_ENV_DIR}/spack.yaml"; \
+    # clang miscompiles 0.3.30's DYNAMIC_ARCH kernels on aarch64 (18 real level-2 routines and potrf fail
+    # its tests, daint 4947814/4951684); 0.3.33 passes. x86_64 stays on 0.3.30.
+    if [ "$(uname -m)" = aarch64 ]; then \
+      sed -i 's/openblas@0\.3\.30/openblas@0.3.33/' "${OMP_LLVM_ENV_DIR}/spack.yaml"; \
+    fi; \
     # A package's own `require` replaces `all: require`, so the portable target is named on each
     # one: without it sundials was built for the build node's zen4 (656016).
     if [ -n "${SPACK_TARGET}" ]; then \
