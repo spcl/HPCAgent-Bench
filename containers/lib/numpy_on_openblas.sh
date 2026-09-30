@@ -33,6 +33,19 @@ PIP_BREAK_SYSTEM_PACKAGES=1 "${py}" -m pip install --no-cache-dir --force-reinst
     --no-binary scipy -Csetup-args=-Dblas=openblas -Csetup-args=-Dlapack=openblas "scipy==${scipy_v}"
 PIP_BREAK_SYSTEM_PACKAGES=1 "${py}" -m pip uninstall -y scipy-openblas32 scipy-openblas64 || true
 
+# A spack-built gcc writes its runtime directory as DT_RPATH into everything it links (AMD 656542), and
+# DT_RPATH is searched before LD_LIBRARY_PATH: the llvm context could not put its own libgomp.so.1 and
+# libopenblas.so.0 first. patchelf rewrites the same path as DT_RUNPATH, which is searched after it.
+site="$("${py}" -c 'import sysconfig; print(sysconfig.get_paths()["platlib"])')"
+patchelf="$(command -v patchelf || echo "$(dirname "${py}")/patchelf")"
+find "${site}/numpy" "${site}/scipy" -name '*.so' | while read -r so; do
+    if readelf -d "${so}" | grep -q '(RPATH)'; then
+        rpath="$("${patchelf}" --print-rpath "${so}")"
+        "${patchelf}" --remove-rpath "${so}"
+        "${patchelf}" --set-rpath "${rpath}" "${so}"
+    fi
+done
+
 VIEW="${view}" NUMPY_V="${numpy_v}" SCIPY_V="${scipy_v}" "${py}" - <<'PY'
 import os
 import pathlib
