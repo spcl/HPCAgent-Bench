@@ -152,6 +152,20 @@ def unit_step(call: ast.Call) -> bool:
 MUTATING_METHODS = frozenset({"fill", "sort", "put", "partition", "itemset"})
 
 
+#: ``np.<name>(a, ...)`` functions that write into their FIRST argument, and ufunc methods (``np.add.at(a, ...)``).
+WRITING_FUNCTIONS = frozenset({"copyto", "put", "putmask", "place", "fill_diagonal", "put_along_axis"})
+
+
+def writes_first_argument(call: ast.Call) -> bool:
+    """``np.copyto(a, b)``-style functions and ``np.add.at(a, i, v)``: ``a`` is written in place."""
+    fn = call.func
+    if not isinstance(fn, ast.Attribute):
+        return False
+    if fn.attr in WRITING_FUNCTIONS:
+        return True
+    return fn.attr == "at" and isinstance(fn.value, ast.Attribute)
+
+
 def handed_to_written_params(call: ast.Call, params: list[str], written: frozenset[str]) -> set[str]:
     """Names of the arrays ``call`` hands to a helper parameter in ``written``, positionally or by
     keyword."""
@@ -167,6 +181,8 @@ def names_written_by_call(call: ast.Call, mutates: dict[str, frozenset[str]], pa
     if isinstance(fn, ast.Name) and fn.id in mutates:
         return handed_to_written_params(call, params[fn.id], mutates[fn.id])
     names = {name for k in call.keywords if k.arg == "out" and (name := base_name(k.value)) is not None}
+    if call.args and writes_first_argument(call) and (name := base_name(call.args[0])) is not None:
+        names.add(name)
     if isinstance(fn, ast.Attribute) and fn.attr in MUTATING_METHODS and (name := base_name(fn.value)) is not None:
         names.add(name)
     return names
