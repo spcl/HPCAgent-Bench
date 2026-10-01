@@ -55,10 +55,13 @@ def test_a_runtime_in_a_libdir_no_loader_searches_earns_an_rpath(tmp_path: pathl
     assert languages.driver_library_dir(cc, ("libomp.so",)) == str(libdir)
 
 
-def test_a_runtime_the_loader_already_finds_earns_none(tmp_path: pathlib.Path) -> None:
-    resident = pathlib.Path("/usr/lib/x86_64-linux-gnu/libgomp.so")
-    if not resident.exists():
-        pytest.skip(f"{resident} is not installed on this host")
+def test_a_runtime_the_loader_already_finds_earns_none(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # A library in one of the loader's default directories needs no RUNPATH; the directory is the stub's own.
+    loader_dir = tmp_path / "usr-lib"
+    loader_dir.mkdir()
+    resident = loader_dir / "libgomp.so"
+    resident.write_bytes(b"")
+    monkeypatch.setattr(languages, "DEFAULT_LOADER_DIRS", (str(loader_dir.resolve()),))
     cc = _stub_driver(tmp_path, resident)
     languages.driver_library_dir.cache_clear()
     assert languages.driver_library_dir(cc, ("libgomp.so",)) == ""
