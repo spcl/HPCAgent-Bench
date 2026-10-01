@@ -182,6 +182,8 @@ def names_written_in(fn: ast.FunctionDef, mutates: dict[str, frozenset[str]], pa
         for t in (n.targets if isinstance(n, ast.Assign) else [n.target])
         if isinstance(t, ast.Subscript) and (name := base_name(t)) is not None
     }
+    # ``p += expr`` on a whole array writes into the caller's buffer, like a subscript store does.
+    stored |= {n.target.id for n in ast.walk(fn) if isinstance(n, ast.AugAssign) and isinstance(n.target, ast.Name)}
     for n in ast.walk(fn):
         if isinstance(n, ast.Call):
             stored |= names_written_by_call(n, mutates, params)
@@ -201,7 +203,7 @@ def written_parameters(tree: ast.Module) -> tuple[dict[str, frozenset[str]], dic
     """Module-level function name -> the names of the parameters a call to it writes into, and
     name -> its parameter list.
 
-    A write counts through a subscript store (``p[...] = ...``, ``p[...] += ...``), a view of the
+    A write counts through a subscript store (``p[...] = ...``, ``p[...] += ...``), an in-place ``p += ...``, a view of the
     parameter (``row = p[i]; row[j] = ...``), an ``out=`` argument or a mutating method, and a call
     to another helper that writes the parameter it is handed -- iterated to a fixed point, so a
     wrapper around a writing helper writes too."""
