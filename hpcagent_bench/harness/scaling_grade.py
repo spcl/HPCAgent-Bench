@@ -4,17 +4,17 @@
 scaling laws, in one allocation (P = 1 shared, one build, one image; hpcagent_bench/cluster/mlscale-grade.sbatch).
 The agent job's one-node judge only measures P = 1, 2, 4.
 
-    python -m hpcagent_bench.harness.scaling_grade worklist --runs <campaign or job dir> [...] \\
-        --env-dir experiments --out worklist.jsonl
+    python -m hpcagent_bench.harness.scaling_grade worklist --runs <experiment or job dir> [...] \\
+        --env-dir studies --out worklist.jsonl
     python -m hpcagent_bench.harness.scaling_grade run --worklist worklist.jsonl --shard 0 --shards 2 \\
         --out-dir grades/
     python -m hpcagent_bench.harness.scaling_grade run --shard 0 --out-dir grades/ \\
-        [--runs <campaign dir> ...] --env-dir experiments [--max-items N] [--deadline <epoch s>]
-    python -m hpcagent_bench.harness.scaling_grade pending --out-dir grades/ [--runs ...] --env-dir experiments
+        [--runs <experiment dir> ...] --env-dir studies [--max-items N] [--deadline <epoch s>]
+    python -m hpcagent_bench.harness.scaling_grade pending --out-dir grades/ [--runs ...] --env-dir studies
     python -m hpcagent_bench.harness.scaling_grade adhoc --kernel dist_softmax \\
         --source k.cpp --device-source k.hip --distribution dist.json --libraries rccl --out one.jsonl
 
-``worklist`` lists the final verified submission per agent episode (arm, kernel, run_id) of the
+``worklist`` lists the final verified submission per agent episode (setup, kernel, run_id) of the
 results DBs (schema v1) under ``--runs`` with everything a replay needs (both source units,
 distribution, catalog libraries, scratch request); unreplayable rows and multi-submission episodes
 are reported (:func:`final_rows`). ``pending`` counts what a new auto-mode job would grade. ``adhoc``
@@ -24,7 +24,7 @@ grade (:func:`metric.score_ml_distributed`, after the replicatable-allowlist che
 grade per item with one ``scaling_grades`` row per law and each law's curve
 (``recording.record_scaling``).
 Without a worklist (or ``--worklist auto``) ``run`` collects the ungraded submissions itself
-(``--runs``, default every ``mlscale-*`` campaign) and grades those it claims (:mod:`scaling_claims`)
+(``--runs``, default every ``mlscale-*`` experiment) and grades those it claims (:mod:`scaling_claims`)
 into ``scaling-grade-<job>-<gang>.db`` (:func:`run_auto`).
 
 ``run`` also fills the torch.distributed baseline curve (:mod:`torch_dist_curve`): ``reference_dist``
@@ -43,7 +43,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from enum import Enum
 from typing import Any
 
-from hpcagent_bench import campaigns, config
+from hpcagent_bench import experiments, config
 from hpcagent_bench.harness import grade_under, results_db, scaling_claims, torch_dist_curve
 from hpcagent_bench.harness.metric import LawCurve, score_ml_distributed
 from hpcagent_bench.harness.recording import record_scaling
@@ -56,7 +56,7 @@ from hpcagent_bench.spec import BenchSpec, as_list
 from hpcagent_bench.support.bindings.contract import graded_datatype
 
 __all__ = [
-    "CAMPAIGN_DB_GLOB",
+    "EXPERIMENT_DB_GLOB",
     "GRADED_LAWS",
     "JOB_DB_GLOB",
     "JOB_OWNED_PREFIX",
@@ -89,7 +89,7 @@ __all__ = [
     "run_auto",
     "run_auto_main",
     "run_shard",
-    "single_submission_arm",
+    "single_submission_setup",
     "submission_key",
     "submission_rows",
     "unclaimed",
@@ -97,7 +97,7 @@ __all__ = [
     "write_worklist",
 ]
 
-#: Arm-env keys the grade job owns (the sweep's launch shape); an arm's one-node values must not
+#: Setup-env keys the grade job owns (the sweep's launch shape); a setup's one-node values must not
 #: reach it.
 JOB_OWNED_PREFIX: str = "HPCAGENT_BENCH_MPI_"
 
@@ -112,9 +112,9 @@ class GradeStatus(Enum):
     ERROR = "error"
 
 
-#: The judge-DB glob of one job directory, and of a campaign directory holding job directories.
+#: The judge-DB glob of one job directory, and of an experiment directory holding job directories.
 JOB_DB_GLOB: str = "judge/rank-*/hpcagent_bench*.db"
-CAMPAIGN_DB_GLOB: str = f"*/{JOB_DB_GLOB}"
+EXPERIMENT_DB_GLOB: str = f"*/{JOB_DB_GLOB}"
 
 Recorder = Callable[..., int]
 
@@ -136,24 +136,24 @@ class Graded:
 
 
 def judge_dbs(roots: Iterable[pathlib.Path]) -> list[pathlib.Path]:
-    """Every judge shard DB under ``roots`` (a DB file, a job directory, or a campaign directory)."""
+    """Every judge shard DB under ``roots`` (a DB file, a job directory, or an experiment directory)."""
     found: list[pathlib.Path] = []
     for root in roots:
         if root.is_file():
             found.append(root)
             continue
         found.extend(sorted(root.glob(JOB_DB_GLOB)))
-        found.extend(sorted(root.glob(CAMPAIGN_DB_GLOB)))
+        found.extend(sorted(root.glob(EXPERIMENT_DB_GLOB)))
     return list(dict.fromkeys(found))
 
 
 def submission_rows(db: pathlib.Path, experiment: str) -> list[dict[str, Any]]:
-    """The verified submissions of ``experiment``'s arms in one results DB, with the recorded envelope
+    """The verified submissions of ``study``'s setups in one results DB, with the recorded envelope
     (``distribution`` / ``workspace_bytes`` / catalog libraries, NULL where absent)."""
     return [row for row in grade_under.credited_rows(db) if row["experiment"] == experiment and not row["promoted"]]
 
 
-#: The arm-env key that gives an episode ONE submission (layers/common.env; arms.yaml mlscale pins it).
+#: The setup-env key that gives an episode ONE submission (layers/common.env; arms.yaml mlscale pins it).
 SINGLE_SUBMISSION_KEY: str = "AGENT_SINGLE_SUBMISSION"
 
 
@@ -167,8 +167,8 @@ def env_value(path: pathlib.Path, name: str) -> str:
     return value
 
 
-def single_submission_arm(arm: str, env_dirs: Iterable[pathlib.Path]) -> bool:
-    """Whether ``arm``'s env (:func:`grade_under.env_files`) sets ``AGENT_SINGLE_SUBMISSION=1``; an arm without
+def single_submission_setup(arm: str, env_dirs: Iterable[pathlib.Path]) -> bool:
+    """Whether ``setup``'s env (:func:`grade_under.env_files`) sets ``AGENT_SINGLE_SUBMISSION=1``; a setup without
     an env file keeps the multi-submission rule."""
     path = next(grade_under.env_files(arm, env_dirs), None)
     return path is not None and env_value(path, SINGLE_SUBMISSION_KEY) == "1"
@@ -180,14 +180,14 @@ def job_of(row: Mapping[str, Any]) -> int:
 
 
 def final_rows(
-    rows: Iterable[Mapping[str, Any]], single_arms: frozenset[str] = frozenset()
+    rows: Iterable[Mapping[str, Any]], single_setups: frozenset[str] = frozenset()
 ) -> tuple[list[tuple[Mapping[str, Any], int]], list[str]]:
-    """The submission graded per agent episode (arm, kernel, ``run_id``), with the episode's row count,
+    """The submission graded per agent episode (setup, kernel, ``run_id``), with the episode's row count,
     and one ``multi-submission:`` line per episode holding more than one.
 
-    Repeats are separate episodes. A resubmitted arm reuses its ``run_id``s: the latest job's rows
-    decide. A single-submission arm's first row is the committed one (a later row predates the router's
-    refusal); any other arm keeps the newest."""
+    Repeats are separate episodes. A resubmitted setup reuses its ``run_id``s: the latest job's rows
+    decide. A single-submission setup's first row is the committed one (a later row predates the router's
+    refusal); any other setup keeps the newest."""
     groups: dict[tuple[str, str, str], list[Mapping[str, Any]]] = {}
     for row in rows:
         groups.setdefault((str(row["arm"]), str(row["benchmark"]), str(row["run_id"])), []).append(row)
@@ -196,7 +196,7 @@ def final_rows(
     for key in sorted(groups):
         group = sorted(groups[key], key=lambda row: int(row["ts_ms"]))
         latest = job_of(max(group, key=job_of))
-        single = key[0] in single_arms
+        single = key[0] in single_setups
         chosen = next(row for row in group if job_of(row) == latest) if single else group[-1]
         finals.append((chosen, len(group)))
         if len(group) > 1:
@@ -225,13 +225,13 @@ def build_worklist(
     """One item per episode's final submission under ``roots``, and one line per row left out."""
     rows = [row for db in judge_dbs(roots) for row in submission_rows(db, experiment)]
     dirs = list(env_dirs)
-    single = frozenset(arm for arm in {str(row["arm"]) for row in rows} if single_submission_arm(arm, dirs))
+    single = frozenset(arm for arm in {str(row["arm"]) for row in rows} if single_submission_setup(arm, dirs))
     finals, problems = final_rows(rows, single)
     envs: dict[str, dict[str, str]] = {}
     items: list[Item] = []
     for row, submissions in finals:
         arm = str(row["arm"])
-        envs.setdefault(arm, grade_under.arm_env(arm, dirs))
+        envs.setdefault(arm, grade_under.setup_env(arm, dirs))
         item, problem = item_of(row, envs[arm])
         if item is None:
             problems.append(problem)
@@ -248,7 +248,7 @@ def adhoc_item(args: argparse.Namespace) -> Item:
         pathlib.Path(f"{db}{suffix}").unlink(missing_ok=True)
     label = f"adhoc-{args.kernel}"
     with contextlib.closing(results_db.open_db(db)) as conn:
-        results_db.ensure_arm(conn, results_db.Arm("adhoc", args.language, "gpu"))
+        results_db.ensure_setup(conn, results_db.Arm("adhoc", args.language, "gpu"))
         run = results_db.ensure_run(conn, "adhoc", label, None)
         grade_id, ts = results_db.add_grade(conn, run, args.kernel, "probe", ts_ms=0, values={})
         results_db.store_source(conn, grade_id, "host", args.language, pathlib.Path(args.source).read_text("utf-8"))
@@ -274,7 +274,7 @@ def adhoc_item(args: argparse.Namespace) -> Item:
 
 
 def grading_env(item: Item) -> dict[str, str]:
-    """``item``'s arm env without the launch shape the job owns."""
+    """``item``'s setup env without the launch shape the job owns."""
     return {k: v for k, v in item.env.items() if not k.startswith(JOB_OWNED_PREFIX)}
 
 
@@ -587,15 +587,19 @@ def write_worklist(path: pathlib.Path, items: Sequence[Item]) -> None:
 def parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="command", required=True)
-    listing = sub.add_parser("worklist", help="list each agent episode's final submission of the scaling arms")
+    listing = sub.add_parser("worklist", help="list each agent episode's final submission of the scaling setups")
     listing.add_argument("--runs", action="append", required=True, type=pathlib.Path, help="campaign/job dir or DB")
     listing.add_argument("--env-dir", action="append", default=[], type=pathlib.Path, help="where .env.<arm> lives")
-    listing.add_argument("--experiment", default="mlscale", help="runs.experiment of the scaling arms")
+    listing.add_argument(
+        "--study", "--experiment", dest="experiment", default="mlscale", help="runs.experiment of the scaling setups"
+    )
     listing.add_argument("--out", required=True, type=pathlib.Path)
     waiting = sub.add_parser("pending", help="count the submissions an auto-mode job would still claim")
     waiting.add_argument("--runs", action="append", default=[], type=pathlib.Path, help="default: <runs>/mlscale-*")
     waiting.add_argument("--env-dir", action="append", default=[], type=pathlib.Path, help="where .env.<arm> lives")
-    waiting.add_argument("--experiment", default="mlscale", help="runs.experiment of the scaling arms")
+    waiting.add_argument(
+        "--study", "--experiment", dest="experiment", default="mlscale", help="runs.experiment of the scaling setups"
+    )
     waiting.add_argument("--out-dir", required=True, type=pathlib.Path)
     waiting.add_argument("--stale-s", type=float, default=scaling_claims.STALE_S, help="heartbeat age of a dead claim")
     adhoc = sub.add_parser("adhoc", help="a one-item worklist for a hand-written submission")
@@ -629,7 +633,9 @@ def parser() -> argparse.ArgumentParser:
         help="campaign/job dir or DB (default: <runs>/mlscale-*)",
     )
     auto.add_argument("--env-dir", action="append", default=[], type=pathlib.Path, help="where .env.<arm> lives")
-    auto.add_argument("--experiment", default="mlscale", help="runs.experiment of the scaling arms")
+    auto.add_argument(
+        "--study", "--experiment", dest="experiment", default="mlscale", help="runs.experiment of the scaling setups"
+    )
     auto.add_argument("--job", default=os.environ.get("SLURM_JOB_ID", f"local-{os.getpid()}"), help="the claimer's job")
     auto.add_argument("--max-items", type=int, default=0, help="claims per job over its life (0 = no cap)")
     auto.add_argument("--deadline", type=float, default=0.0, help="epoch s the job ends (0 = none)")
@@ -667,15 +673,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.shards < 1:
         raise SystemExit("run --worklist <file> needs --shards (the gang count)")
     items = grade_under.read_worklist(pathlib.Path(args.worklist))
-    grade_under.hide_campaign_data(args.out_dir, items)
+    grade_under.hide_experiment_data(args.out_dir, items)
     graded = run_shard(items, args.shard, args.shards, args.out_dir, grade, recorder, baseline)
     print(f"shard {args.shard}/{args.shards}: graded {graded} at P={list(counts)}")
     return 0
 
 
 def default_roots() -> list[pathlib.Path]:
-    """Auto mode's campaigns when ``--runs`` names none: every ``mlscale-*`` under the runs root."""
-    return sorted(campaigns.runs_root().glob("mlscale-*"))
+    """Auto mode's experiments when ``--runs`` names none: every ``mlscale-*`` under the runs root."""
+    return sorted(experiments.runs_root().glob("mlscale-*"))
 
 
 def unclaimed(items: Sequence[Item], out_dir: pathlib.Path, stale_s: float = scaling_claims.STALE_S) -> list[Item]:
@@ -716,7 +722,7 @@ def unclaimed_points(
 def run_auto_main(
     args: argparse.Namespace, recorder: Recorder | None, counts: Sequence[int], baseline: BaselineCurve | None = None
 ) -> int:
-    """``run`` in auto mode: collect from ``--runs`` (default every ``mlscale-*`` campaign), claim, grade
+    """``run`` in auto mode: collect from ``--runs`` (default every ``mlscale-*`` experiment), claim, grade
     (:func:`run_auto`)."""
     roots = list(args.runs) or default_roots()
     seen: list[Item] = []
@@ -726,7 +732,7 @@ def run_auto_main(
         for line in problems:
             print(line, file=sys.stderr)
         seen.extend(items)
-        grade_under.hide_campaign_data(args.out_dir, seen)
+        grade_under.hide_experiment_data(args.out_dir, seen)
         print(f"auto: {len(items)} verified submissions under {len(roots)} root(s)", flush=True)
         return items
 

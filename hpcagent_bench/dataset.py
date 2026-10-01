@@ -1,15 +1,15 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""One experiment's observations, from judge databases to the file a figure reads.
+"""One study's observations, from judge databases to the file a figure reads.
 
     db(s) --extract--> frame --fuse(csv...)--> frame --> .db  (and .csv)  --load--> figure
 
-`extract` reads only the rows :mod:`hpcagent_bench.campaigns` says belong to the experiment.
+`extract` reads only the rows :mod:`hpcagent_bench.experiments` says belong to the study.
 `fuse` joins those live rows with frozen CSVs of jobs whose directories are gone, LIVE WINNING job
 by job. `build` is the two of them plus the write, which is what a caller normally wants.
 
 Every step is read-only with respect to its inputs, and every run stamps :data:`EXTRACTED_AT` so
-two extractions of the same experiment are told apart by more than a file mtime.
+two extractions of the same study are told apart by more than a file mtime.
 """
 
 import argparse
@@ -22,12 +22,12 @@ import sys
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
-from hpcagent_bench import campaigns, experiments, frozen_observations, observations_extract, paths
+from hpcagent_bench import experiments, studies, frozen_observations, observations_extract, paths
 from hpcagent_bench.observation_columns import OBSERVATION_FIELDS
 from hpcagent_bench.stats import databases, population
 
 __all__ = [
-    "EXPERIMENT_COLUMN",
+    "STUDY_COLUMN",
     "EXTRACTED_AT",
     "LOG",
     "PROVENANCE",
@@ -54,11 +54,11 @@ LOG = logging.getLogger(__name__)
 #: Column stamped with the UTC time the rows were read, ISO-8601 to the second.
 EXTRACTED_AT: str = "extracted_at"
 
-#: Column naming the experiment the rows were selected for.
-EXPERIMENT_COLUMN: str = "experiment_key"
+#: Column naming the study the rows were selected for.
+STUDY_COLUMN: str = "experiment_key"
 
 #: Columns this module adds to whatever the extractor recorded.
-PROVENANCE: tuple[str, ...] = (EXTRACTED_AT, EXPERIMENT_COLUMN)
+PROVENANCE: tuple[str, ...] = (EXTRACTED_AT, STUDY_COLUMN)
 
 
 def now() -> str:
@@ -84,40 +84,40 @@ class Provenance:
     def report(self) -> str:
         """One block naming every count, for a caller to print beside the file it just wrote."""
         lines = [
-            f"experiment     {self.experiment}",
+            f"study     {self.experiment}",
             f"extracted_at   {self.extracted_at}",
             f"live rows      {self.live_rows}",
             f"frozen rows    {self.frozen_rows} from {len(self.frozen_jobs)} job(s) whose directory is gone",
-            f"dropped        {self.dropped_retired} retired, {self.dropped_foreign} not this experiment's, "
+            f"dropped        {self.dropped_retired} retired, {self.dropped_foreign} not this study's, "
             f"{self.dropped_off_roster} off its roster",
-            f"arms ({len(self.arms)})      {', '.join(self.arms)}",
+            f"setups ({len(self.arms)})      {', '.join(self.arms)}",
         ]
         return "\n".join(lines)
 
 
 def stamp(frame: "pd.DataFrame", experiment: str, extracted_at: str) -> "pd.DataFrame":
     """``frame`` with the provenance columns set."""
-    return frame.assign(**{EXTRACTED_AT: extracted_at, EXPERIMENT_COLUMN: experiment})
+    return frame.assign(**{EXTRACTED_AT: extracted_at, STUDY_COLUMN: experiment})
 
 
-def keep_owned(frame: "pd.DataFrame", selection: campaigns.Selection) -> tuple["pd.DataFrame", int, int]:
-    """``frame`` cut to the arms ``selection`` owns, with the two drop counts.
+def keep_owned(frame: "pd.DataFrame", selection: experiments.Selection) -> tuple["pd.DataFrame", int, int]:
+    """``frame`` cut to the setups ``selection`` owns, with the two drop counts.
 
-    Retired and foreign are counted apart because they mean different things: a retired arm ran and
-    the user took it out, a foreign one belongs to another experiment that shares a run root."""
+    Retired and foreign are counted apart because they mean different things: a retired setup ran and
+    the user took it out, a foreign one belongs to another study that shares a run root."""
     if frame.empty or "arm" not in frame.columns:
         return frame, 0, 0
     arms = frame["arm"].astype(str)
-    mine = arms.map(lambda arm: campaigns.prefix_of(arm) in selection.prefixes)
-    retired = arms.map(campaigns.dropped)
+    mine = arms.map(lambda arm: experiments.prefix_of(arm) in selection.prefixes)
+    retired = arms.map(experiments.dropped)
     return frame[mine & ~retired], int((mine & retired).sum()), int((~mine).sum())
 
 
-def keep_roster(frame: "pd.DataFrame", selection: campaigns.Selection) -> tuple["pd.DataFrame", int]:
+def keep_roster(frame: "pd.DataFrame", selection: experiments.Selection) -> tuple["pd.DataFrame", int]:
     """``frame`` cut to the kernels of the selection's roster, with the drop count.
 
-    A wave may serve more kernels than the tag its campaign names (the SciComp waves served
-    an earlier 40-kernel set plus later additions; the campaigns name scicomp40), and every figure counts an arm
+    A wave may serve more kernels than the tag its experiment names (the SciComp waves served
+    an earlier 40-kernel set plus later additions; the experiments name scicomp40), and every figure counts a setup
     over the kernels its rows touch, so an off-roster row would enter every aggregate. A row with no
     benchmark, or a selection with no roster, is kept."""
     if frame.empty or not selection.roster or "benchmark" not in frame.columns:
@@ -128,12 +128,12 @@ def keep_roster(frame: "pd.DataFrame", selection: campaigns.Selection) -> tuple[
 
 
 def extract(
-    selection: campaigns.Selection,
+    selection: experiments.Selection,
     frozen: pathlib.Path | None = None,
     runs: Sequence[str] = (),
     **options: object,
 ) -> "pd.DataFrame":
-    """Every row of the experiment: judge rows, task rows with their token totals, and the frozen
+    """Every row of the study: judge rows, task rows with their token totals, and the frozen
     rows of jobs whose directories are gone or unreadable.
 
     One extractor (:mod:`hpcagent_bench.observations_extract`), because there were two and they
@@ -166,12 +166,12 @@ def check_columns(live: "pd.DataFrame", frozen: "pd.DataFrame") -> None:
 
 
 def fuse(
-    selection: campaigns.Selection,
+    selection: experiments.Selection,
     live: "pd.DataFrame",
     frozen: "pd.DataFrame",
     extracted_at: str = "",
 ) -> tuple["pd.DataFrame", Provenance]:
-    """One frame for the experiment, with a count of everything the selection left behind."""
+    """One frame for the study, with a count of everything the selection left behind."""
     import pandas as pd
 
     extracted_at = extracted_at or now()
@@ -235,7 +235,7 @@ def load(path: pathlib.Path) -> "pd.DataFrame":
 
     One entry point for both, so a figure never learns which it was handed, and the cleaning rules
     (foreign kernel, pre-relaunch, cancelled, ``-clean`` superseded) run exactly once, here."""
-    return experiments.read_observations(path)
+    return studies.read_observations(path)
 
 
 def build(
@@ -249,12 +249,12 @@ def build(
     platform_regrades: Sequence[tuple[str, str]] = (),
     dbs: Sequence[pathlib.Path] = (),
 ) -> tuple["pd.DataFrame", Provenance]:
-    """Extract ``experiment`` -- from the results databases ``dbs`` read as one
+    """Extract ``study`` -- from the results databases ``dbs`` read as one
     (:func:`hpcagent_bench.stats.databases.union`), else from its run roots -- fuse any extra CSVs in,
     write ``out`` (and ``csv_out``)."""
     import pandas as pd
 
-    selection = campaigns.resolve(experiment, root)
+    selection = experiments.resolve(experiment, root)
     extracted_at = now()
     with contextlib.ExitStack() as stack:
         runs = (str(stack.enter_context(databases.union(dbs))),) if dbs else ()
@@ -262,7 +262,7 @@ def build(
     extra = pd.concat([load(path) for path in csvs], ignore_index=True) if csvs else pd.DataFrame()
     frame, provenance = fuse(selection, live, extra, extracted_at)
     if frame.empty:
-        raise SystemExit(f"no observations for experiment {experiment!r} under {list(selection.run_globs())}")
+        raise SystemExit(f"no observations for study {experiment!r} under {list(selection.run_globs())}")
     write_db(frame, out) if out.suffix == ".db" else write_csv(frame, out)
     if csv_out is not None:
         write_csv(frame, csv_out)
@@ -271,7 +271,13 @@ def build(
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--experiment", required=True, help=f"one of: {', '.join(campaigns.experiments_available())}")
+    parser.add_argument(
+        "--study",
+        "--experiment",
+        dest="experiment",
+        required=True,
+        help=f"one of: {', '.join(experiments.studies_available())}",
+    )
     parser.add_argument("--out", type=pathlib.Path, required=True, help="observations .db (or .csv) to write")
     parser.add_argument("--csv", dest="csv_out", type=pathlib.Path, help="also write the frame as a CSV here")
     parser.add_argument(
@@ -297,14 +303,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="final-grade regrade DBs re-timing the answers on another machine (gh200=<glob>); each adds a "
         "second row per answer stamped with that platform; repeatable",
     )
-    parser.add_argument("--runs-root", type=pathlib.Path, help=f"default {campaigns.runs_root()}")
+    parser.add_argument("--runs-root", type=pathlib.Path, help=f"default {experiments.runs_root()}")
     parser.add_argument(
         "--db",
         type=pathlib.Path,
         action="append",
         default=[],
         help="a results database (v1) to read instead of the run roots; repeatable, read as one: the core "
-        "database, plus e.g. the CPF archive for the historical CPF arms",
+        "database, plus e.g. the CPF archive for the historical CPF setups",
     )
     parser.add_argument(
         "--frozen-observations",

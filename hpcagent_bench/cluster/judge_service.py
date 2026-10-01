@@ -68,9 +68,9 @@ JUDGE_UNREACHABLE_CAUSE = "judge_unreachable"
 
 #: `/search` when this run has no working search (no ``SERPAPI_API_KEY``, no
 #: ``WEBSEARCH_LLM_BASE_URL``/``WEBSEARCH_LLM_MODEL``): distinct from the 502 a search that WAS
-#: provisioned answers when SerpAPI, Crawl4AI or the LLM call itself fails. Every arm's
+#: provisioned answers when SerpAPI, Crawl4AI or the LLM call itself fails. Every setup's
 #: ``experiments/.env.*`` ships ``SERPAPI_API_KEY=`` empty as of this writing, so today EVERY call
-#: lands here -- but an agent that sees only a flat 502 cannot tell "this arm was never given
+#: lands here -- but an agent that sees only a flat 502 cannot tell "this setup was never given
 #: search, stop calling it" from "the search infra hiccuped, maybe worth one more query", and
 #: search.py's PROMPT needs the distinction to tell it which.
 SEARCH_NOT_PROVISIONED = 503
@@ -98,11 +98,11 @@ def caller_setup(request: Request, body: bytes) -> str:
     """The fused-job setup of this request's worker, "" outside a fused job.
 
     Resolved from the worker's token, never from anything the body says; a POST whose run_id is not
-    that setup's arm is refused as well, since rows are attributed by run_id. Outside a fused job the
-    same attribution rule holds against the one arm this judge serves (:func:`refuse_foreign_arm`).
+    that setup's setup is refused as well, since rows are attributed by run_id. Outside a fused job the
+    same attribution rule holds against the one setup this judge serves (:func:`refuse_foreign_setup`).
     Raises the refusal as an HTTPException, before anything is graded or recorded."""
     if not fused.fused():
-        refuse_foreign_arm(request, body)
+        refuse_foreign_setup(request, body)
         return ""
     try:
         setup = fused.token_setup(request.headers.get(fused.TOKEN_HEADER, "").strip())
@@ -113,29 +113,29 @@ def caller_setup(request: Request, body: bytes) -> str:
     return setup
 
 
-#: A request from another arm than the one this judge serves: refused, like a fused foreign run_id.
-FOREIGN_ARM = 403
+#: A request from another setup than the one this judge serves: refused, like a fused foreign run_id.
+FOREIGN_SETUP = 403
 
 
-def refuse_foreign_arm(request: Request, body: bytes) -> None:
-    """Refuse a POST whose ``run_id`` belongs to another arm than this single-setup judge's.
+def refuse_foreign_setup(request: Request, body: bytes) -> None:
+    """Refuse a POST whose ``run_id`` belongs to another setup than this single-setup judge's.
 
-    One judge per arm (every mlscale arm runs its own): a request that reached the wrong one -- a
+    One judge per setup (every mlscale setup runs its own): a request that reached the wrong one -- a
     stale ``JUDGE_URL``, a curl line copied from another worker -- was graded and recorded in this
-    arm's DB under a foreign identity. The arm is the job's ``CAMPAIGN_ARM`` (:func:`contract_value`),
+    setup's DB under a foreign identity. The setup is the job's ``CAMPAIGN_ARM`` (:func:`contract_value`),
     the prefix ``agent_driver.identity_env`` composes every run_id from, matched up to the first dot
     so ``llr-c`` does not take ``llr-cpp.*``. A body naming NO run_id is left to the routes: the
     recorded ones refuse it themselves (:func:`run_id_refusal`) and a curl ``/profile`` the tool docs
     show carries none. A judge with no ``CAMPAIGN_ARM`` (a local ``serve``) checks nothing. Fused
-    judges never come here: their worker's token names the arm (:func:`caller_setup`)."""
-    arm = contract_value("", fused.ARM_KEY)
+    judges never come here: their worker's token names the setup (:func:`caller_setup`)."""
+    arm = contract_value("", fused.SETUP_KEY)
     if not arm or request.method != "POST":
         return
     run_id = body_run_id(body)
     if run_id and not run_id.startswith(f"{arm}."):
         raise HTTPException(
-            status_code=FOREIGN_ARM,
-            detail=f"run_id {run_id!r} does not belong to arm {arm!r}, the one this judge grades; "
+            status_code=FOREIGN_SETUP,
+            detail=f"run_id {run_id!r} does not belong to setup {arm!r}, the one this judge grades; "
             "nothing was graded or recorded",
         )
 
@@ -158,7 +158,7 @@ async def forward(request: Request, path: str, setup: str | None = None) -> http
     A client that disconnects first cancels the upstream request, except on
     :data:`GRADED_WITHOUT_CLIENT`. An agent killed at its wall clock leaves its last ``/score`` or
     ``/profile`` in flight, and the judge would otherwise grade it for nobody on the device slot its
-    arm's final promotions wait for.
+    setup's final promotions wait for.
 
     ``setup`` is the caller's :func:`caller_setup` when the route already resolved it; None
     resolves it here.
@@ -226,8 +226,8 @@ def body_object(body: bytes) -> dict[str, JSONValue] | None:
 def contract_value(setup: str, key: str) -> str:
     """``key`` as the caller's ARM CONTRACT sets it, "" when unset.
 
-    The arm's env is the contract, and the router already runs under it: run_cluster.sh starts
-    every judge role inside the arm's ``.env`` (a single-setup judge serves exactly that arm). In a
+    The setup's env is the contract, and the router already runs under it: run_cluster.sh starts
+    every judge role inside the setup's ``.env`` (a single-setup judge serves exactly that setup). In a
     fused job the caller's setup overlay decides instead, the same resolution
     ``agent_driver.fused_child_env`` gives that worker's own process -- the overlay's value when it
     names ``key`` (``-KEY`` unsets it), the job's environment otherwise.
@@ -307,7 +307,7 @@ async def search(request: SearchRequest) -> dict[str, Any]:
             request.limit,
         )
     except judge_web_search.NotProvisionedError as exc:
-        # A 503 the agent can act on differently from a 502: this arm was never given search, so
+        # A 503 the agent can act on differently from a 502: this setup was never given search, so
         # retrying (or querying again) cannot help -- stop calling the tool for the rest of the run.
         raise HTTPException(
             status_code=SEARCH_NOT_PROVISIONED, detail={"cause": "not_provisioned", "error": str(exc)}
@@ -324,7 +324,7 @@ def verdict_of(graded: dict[str, Any]) -> dict[str, object]:
     return submit_verdict(score_from_response(graded), str(graded.get("request_id", "")))
 
 
-#: The arm-contract key that gives an episode ONE terminal grade per kernel (layers/common.env).
+#: The setup-contract key that gives an episode ONE terminal grade per kernel (layers/common.env).
 SINGLE_SUBMISSION_KEY = "AGENT_SINGLE_SUBMISSION"
 
 #: A second terminal grade of one episode's kernel under single submission: a conflict with the
@@ -340,7 +340,7 @@ SPENT_SUBMISSIONS: set[tuple[str, str]] = set()
 
 
 def submission_key(setup: str, body: bytes) -> tuple[str, str] | None:
-    """The ``(run_id, kernel)`` a terminal grade of ``body`` spends, or None when the caller's arm
+    """The ``(run_id, kernel)`` a terminal grade of ``body`` spends, or None when the caller's setup
     contract allows more than one (or the body is not one the judge could grade).
 
     The kernel by its last path segment, the one spelling every table agrees on

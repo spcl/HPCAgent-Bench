@@ -19,8 +19,8 @@ from tests.env_render import rendered
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 LAUNCHER = ROOT / "containers" / "inference" / "serve-private.sbatch"
-#: The qwen38 campaign base whose serving flags the mi300 preset mirrors.
-CAMPAIGN_BASE = "llrbase-c:qwen38"
+#: The qwen38 experiment base whose serving flags the mi300 preset mirrors.
+EXPERIMENT_BASE = "llrbase-c:qwen38"
 KEY = "0123456789abcdef" * 4
 PRESETS = ("mi300", "mi200")
 #: The partition each preset must refuse.
@@ -92,10 +92,10 @@ def flags(words: list[str]) -> dict[str, str]:
     return {word: ("" if nxt.startswith("--") else nxt) for word, nxt in zip(words, following) if word.startswith("--")}
 
 
-def campaign_sglang_flags() -> dict[str, str]:
-    """SGLANG_EXTRA_ARGS of the qwen38 campaign, with ${HPCAGENT_BENCH_REPO} expanded as sourcing does."""
-    found = re.findall(r'^SGLANG_EXTRA_ARGS="([^"]*)"$', rendered(CAMPAIGN_BASE), re.MULTILINE)
-    assert len(found) == 1, CAMPAIGN_BASE
+def experiment_sglang_flags() -> dict[str, str]:
+    """SGLANG_EXTRA_ARGS of the qwen38 experiment, with ${HPCAGENT_BENCH_REPO} expanded as sourcing does."""
+    found = re.findall(r'^SGLANG_EXTRA_ARGS="([^"]*)"$', rendered(EXPERIMENT_BASE), re.MULTILINE)
+    assert len(found) == 1, EXPERIMENT_BASE
     return flags(found[0].replace("${HPCAGENT_BENCH_REPO}", str(ROOT)).split())
 
 
@@ -208,12 +208,12 @@ def test_the_mi300_preset_refuses_a_leg_wider_than_its_four_gpus(tmp_path: pathl
     assert_untouched(tmp_path, done)
 
 
-def test_the_mi300_preset_serves_the_qwen38_campaign_flags_on_fp8_weights_with_aiter(tmp_path: pathlib.Path) -> None:
+def test_the_mi300_preset_serves_the_qwen38_experiment_flags_on_fp8_weights_with_aiter(tmp_path: pathlib.Path) -> None:
     done = launch(tmp_path, "mi300")
     assert done.returncode == 0, done.stderr
     (argv,) = argv_lines(done.stdout)
     served = flags(argv.split())
-    campaign = campaign_sglang_flags()
+    campaign = experiment_sglang_flags()
     assert {name: served.get(name) for name in campaign} == campaign
     assert (served["--attention-backend"], served["--mem-fraction-static"]) == ("aiter", "0.306")
     assert (served["--model-path"], served["--tp-size"]) == ("Qwen/Qwen3.8-27B-FP8", "4")
@@ -222,7 +222,7 @@ def test_the_mi300_preset_serves_the_qwen38_campaign_flags_on_fp8_weights_with_a
     assert "engine:   sglang, env SGLANG_USE_AITER=1 SGLANG_SET_CPU_AFFINITY=0\n" in done.stdout
 
 
-def test_the_mi200_preset_serves_bf16_weights_on_vllm_with_the_campaign_parsers_across_all_eight_gcds(
+def test_the_mi200_preset_serves_bf16_weights_on_vllm_with_the_experiment_parsers_across_all_eight_gcds(
     tmp_path: pathlib.Path,
 ) -> None:
     done = launch(tmp_path, "mi200")
@@ -236,7 +236,7 @@ def test_the_mi200_preset_serves_bf16_weights_on_vllm_with_the_campaign_parsers_
         "0.85",
         "bfloat16",
     )
-    campaign = campaign_sglang_flags()
+    campaign = experiment_sglang_flags()
     for name in ("--chat-template", "--reasoning-parser", "--tool-call-parser"):
         assert served[name] == campaign[name], name
     assert "--enable-auto-tool-choice" in served

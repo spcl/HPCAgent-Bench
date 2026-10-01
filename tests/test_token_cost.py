@@ -262,7 +262,7 @@ def test_an_episode_whose_server_never_reported_output_says_so_instead_of_claimi
     """A timed-out episode has no ``result`` record, and the per-turn events carry output_tokens: 0
     on these endpoints -- so its output is unknown, not measured as nothing. ``output_source`` says
     which tier counted it, because a reader that averages a silence in with a measurement reports
-    every timeout arm as having generated less than it did."""
+    every timeout setup as having generated less than it did."""
     write_claude_log(tmp_path / "claude.log", input_tokens=500, output_tokens=50)
     killed = tmp_path / "claude.attempt1.log"
     killed.write_text(assistant_line("m1", 700, 0) + "\nagent_driver: killed after AGENT_TIMEOUT_SECONDS\n")
@@ -275,7 +275,7 @@ def message_start(message_id: str) -> str:
     """The CLI's ``stream_event`` envelope around an Anthropic ``message_start``.
 
     CRAFTED from the documented streaming event shapes rather than captured: these events only
-    appear under ``--include-partial-messages``, which no recorded campaign ran, and this repository
+    appear under ``--include-partial-messages``, which no recorded experiment ran, and this repository
     has no cluster to record a new one from.
     """
     return json.dumps(
@@ -423,7 +423,7 @@ def test_the_budget_fold_reads_a_partial_message_transcript_as_it_read_the_old_o
 ) -> None:
     """``--include-partial-messages`` adds stream_event lines to every new transcript, and the token
     cap the agent is killed on folds that same file inside the container (``http_json``). The new
-    lines are not assistant turns and must change no billed total, or every arm's budget moves the
+    lines are not assistant turns and must change no billed total, or every setup's budget moves the
     day the flag lands."""
     lines = [
         message_start("m1"),
@@ -512,7 +512,7 @@ def test_the_container_tool_and_the_analysis_agree_on_a_calls_prompt(
 def test_a_compaction_charges_the_rebuilt_prompt_as_fresh_and_is_counted(
     token_cost: ModuleType, tmp_path: pathlib.Path
 ) -> None:
-    """the claude arms compact proactively (agent_driver.claude_context_env). After a
+    """the claude setups compact proactively (agent_driver.claude_context_env). After a
     compaction the prompt is SHORTER than the previous one and shares no prefix with it -- a full
     cache miss -- so the whole rebuilt prompt is fresh. The old fold charged it at zero
     (max(0, 400 - 1500))."""

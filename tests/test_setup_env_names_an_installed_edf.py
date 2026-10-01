@@ -1,17 +1,17 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Every arm must name a container environment that install_edfs.sh actually installs.
+"""Every setup must name a container environment that install_edfs.sh actually installs.
 
-An arm reaches its image through an EDF NAME: `AMD_CE_ENV`, `JUDGE_CE_ENV` and
+A setup reaches its image through an EDF NAME: `AMD_CE_ENV`, `JUDGE_CE_ENV` and
 `INFERENCE_CE_ENV` in `experiments/.env.<arm>`. Nothing checks at submit time that the name
-resolves -- the job starts, `srun --environment=<name>` finds no such file, and the arm dies
+resolves -- the job starts, `srun --environment=<name>` finds no such file, and the setup dies
 after the allocation is granted.
 
 This is not hypothetical. The rename to hpcagent-bench moved the EDF names in
 images.env while a mechanical rewrite moved the names inside 149 .env files to something
 *different* -- `hpcagent-bench-amd-mi300-latest` against images.env's
 `hpcagent-bench-agent-mi300-latest`, and bare `sglang-latest` against
-`hpcagent-bench-sglang-mi300-latest`. All four roles disagreed at once, so every campaign in the
+`hpcagent-bench-sglang-mi300-latest`. All four roles disagreed at once, so every experiment in the
 repo would have failed to find its container, one allocation at a time.
 
 Names outside images.env are allowed only when they are DELIBERATE one-offs -- a `-candidate`
@@ -34,7 +34,7 @@ IMAGES_ENV = REPO / "containers" / "images" / "images.env"
 KNOWN_ONE_OFFS = {
     # hpcagent-bench-agent-mi300-candidate: the pre-promotion agent image, hand-rendered into
     # ~/.edf (not by install_edfs.sh -- there is no *_EDF_LATEST for it in
-    # images.env). The harness-focus20 smoke arms for miniswe/openhands run on it deliberately,
+    # images.env). The harness-focus20 smoke setups for miniswe/openhands run on it deliberately,
     # comparing the candidate agent image before it replaces hpcagent-bench-agent-mi300-latest.
     # Drop this entry and repoint those two .env files to -latest once the image is promoted.
     "hpcagent-bench-agent-mi300-candidate",
@@ -50,7 +50,7 @@ def _installed_edf_names() -> set[str]:
     return {line.split("=", 1)[1].strip() for line in out.splitlines() if "=" in line}
 
 
-def test_every_arm_names_an_installed_container_environment() -> None:
+def test_every_setup_names_an_installed_container_environment() -> None:
     installed = _installed_edf_names()
     assert installed, "images.env defined no *_EDF_LATEST names at all"
 
@@ -67,7 +67,7 @@ def test_every_arm_names_an_installed_container_environment() -> None:
                 offenders.append(f"{source}: {m.group(1)}={name}")
 
     assert not offenders, (
-        "arms name container environments that images.env does not install, so the job dies "
+        "setups name container environments that images.env does not install, so the job dies "
         "after its allocation is granted:\n  "
         + "\n  ".join(offenders)
         + "\n\ninstalled names are:\n  "

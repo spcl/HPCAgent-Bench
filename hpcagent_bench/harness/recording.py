@@ -29,7 +29,7 @@ import time
 from collections.abc import Mapping, Sequence
 from typing import NamedTuple, Protocol
 
-from hpcagent_bench import config, experiment_tags, osinfo, paths
+from hpcagent_bench import config, study_tags, osinfo, paths
 from hpcagent_bench.harness import denominator, grading, results_db
 from hpcagent_bench.harness.envelope import Submission
 from hpcagent_bench.harness.metric import LawCurve, ScalingDrop, ScalingScore
@@ -56,8 +56,8 @@ __all__ = [
     "Recorded",
     "TrajectoryPoint",
     "aggregate",
-    "arm_of",
-    "arm_tag",
+    "setup_of",
+    "setup_tag",
     "base_db_path",
     "baseline_policy",
     "build_commands_json",
@@ -71,7 +71,7 @@ __all__ = [
     "db_shard",
     "device_tag",
     "ensure_aggregated",
-    "experiment_tag",
+    "study_tag",
     "harness_tag",
     "identity",
     "job_of_dir",
@@ -107,7 +107,7 @@ def baseline_policy() -> str:
     """The stamp of the denominator POLICY this grade ran under (``measurement.baseline_policy``).
 
     The realized denominator is already on every cell (``TimedCell.baseline``: which reference was
-    timed); this says how it was chosen. A campaign that ships a new policy sets the config key, and
+    timed); this says how it was chosen. An experiment that ships a new policy sets the config key, and
     every row it writes carries the new stamp without a schema change."""
     return config.get_str("measurement.baseline_policy", LEGACY_BASELINE_POLICY)
 
@@ -262,11 +262,11 @@ def db_path() -> str:
     return shard_db_path(0 if shard is None else shard)
 
 
-def experiment_tag() -> str | None:
-    """The experiment these rows belong to (``record.experiment``), or None when unset.
+def study_tag() -> str | None:
+    """The study these rows belong to (``record.experiment``), or None when unset.
 
-    Set it per campaign, not per arm: the point is to filter one experiment's rows out of a results
-    DB that several campaigns write to, and the arms of one A/B share the experiment they are arms
+    Set it per experiment, not per setup: the point is to filter one study's rows out of a results
+    DB that several experiments write to, and the setups of one A/B share the study they are setups
     of. Env-overridable as ``$HPCAGENT_BENCH_RECORD_EXPERIMENT`` like every other config key."""
     tag = str(config.get("record.experiment", "") or "").strip()
     return tag or None
@@ -289,7 +289,7 @@ def packet_tag() -> str:
     whether it is written ``a;b`` or ``a+b``.
 
     Falls back to a packet token an older submitter baked into ``record.language`` instead of its
-    own field (see :func:`split_record_language`) only when this arm recorded no packet of its
+    own field (see :func:`split_record_language`) only when this setup recorded no packet of its
     own -- an explicit ``record.packet`` always wins."""
     raw = str(config.get("record.packet", "") or "")
     explicit = "+".join(sorted({part for part in re.split(r"[+;,\s]+", raw) if part}))
@@ -298,43 +298,43 @@ def packet_tag() -> str:
 
 def split_record_language() -> tuple[str, str]:
     """``(language, packet)`` out of the raw ``record.language``, unwinding an older submitter's
-    bug (see :func:`experiment_tags.split_record_language`) so a queued job's already-written env
+    bug (see :func:`study_tags.split_record_language`) so a queued job's already-written env
     -- never edited after the fact -- still records a clean language and, when it embedded one, a
     packet."""
     raw = str(config.get("record.language", "") or "").strip()
-    return experiment_tags.split_record_language(raw) if raw else ("", "")
+    return study_tags.split_record_language(raw) if raw else ("", "")
 
 
 def language_tag() -> str | None:
-    """``record.language`` -- the language the ARM asked for, or None when the arm declared none.
+    """``record.language`` -- the language the ARM asked for, or None when the setup declared none.
 
     The request body's own claim is NOT recorded: a Triton kernel honestly calls itself ``python``,
     and a claim that misleads the judge already shows in ``status`` and ``reason``.
 
-    Canonicalized through :func:`experiment_tags.split_record_language`, so a value carrying a
-    packet token and/or a clean suffix (clean is a run flag the arm name alone carries, never the
+    Canonicalized through :func:`study_tags.split_record_language`, so a value carrying a
+    packet token and/or a clean suffix (clean is a run flag the setup name alone carries, never the
     language) still records the bare language."""
     language, _ = split_record_language()
     return language or None
 
 
 def model_tag() -> str | None:
-    """``record.model`` -- the checkpoint the arm served, e.g. ``zai-org/GLM-5.3``."""
+    """``record.model`` -- the checkpoint the setup served, e.g. ``zai-org/GLM-5.3``."""
     model = str(config.get("record.model", "") or "").strip()
     return model or None
 
 
-def arm_tag() -> str | None:
+def setup_tag() -> str | None:
     """``record.arm`` -- provenance. The four tags above are what queries and figures select on."""
     arm = str(config.get("record.arm", "") or "").strip()
     return arm or None
 
 
 def rep_tag() -> int:
-    """``record.rep`` -- which REPETITION of this arm is running; 1 when unset.
+    """``record.rep`` -- which REPETITION of this setup is running; 1 when unset.
 
-    A run id is ``<arm>.n<node>.p<agent>.w<worker>``, so three repetitions of one arm write rows
-    identical in every other recorded column. Without this a campaign that reports a spread across
+    A run id is ``<setup>.n<node>.p<agent>.w<worker>``, so three repetitions of one setup write rows
+    identical in every other recorded column. Without this an experiment that reports a spread across
     repetitions has to infer them from which directory the shard landed in."""
     raw = str(config.get("record.rep", "") or "").strip()
     if not raw:
@@ -346,8 +346,8 @@ def rep_tag() -> int:
 
 
 def harness_tag() -> str | None:
-    """``record.harness`` -- the agent harness that drove the arm (``claude``, ``miniswe``,
-    ``openhands``), or None when the arm named none."""
+    """``record.harness`` -- the agent harness that drove the setup (``claude``, ``miniswe``,
+    ``openhands``), or None when the setup named none."""
     harness = str(config.get("record.harness", "") or "").strip()
     return harness or None
 
@@ -366,12 +366,12 @@ def snapshot_commit() -> str | None:
 
 
 def commit_tag() -> str | None:
-    """``record.commit`` -- the hpcagent_bench commit the arm ran, or None if unknown.
+    """``record.commit`` -- the hpcagent_bench commit the setup ran, or None if unknown.
 
-    The job's code snapshot wins: it is the code that ran, while the arm env's stamp is the commit
-    the arm was PLANNED at, on a checkout that kept moving until the job started. Stamped at all
+    The job's code snapshot wins: it is the code that ran, while the setup env's stamp is the commit
+    the setup was PLANNED at, on a checkout that kept moving until the job started. Stamped at all
     because the judge cannot ask git: the container sees the tree without its repository, so
-    ``git rev-parse`` there fails, and every row of every campaign recorded NULL."""
+    ``git rev-parse`` there fails, and every row of every experiment recorded NULL."""
     snapshot = snapshot_commit()
     if snapshot is not None:
         return snapshot
@@ -395,19 +395,19 @@ class Identity(NamedTuple):
 def identity() -> Identity:
     """The identity of the run this judge is recording for."""
     return Identity(
-        experiment_tag(),
+        study_tag(),
         model_tag(),
         language_tag(),
         device_tag(),
         packet_tag(),
         rep_tag(),
-        arm_tag(),
+        setup_tag(),
         harness_tag(),
     )
 
 
 def commit_sha() -> str | None:
-    """The commit the arm ran (:func:`commit_tag`), else this checkout's own; ``None`` when neither
+    """The commit the setup ran (:func:`commit_tag`), else this checkout's own; ``None`` when neither
     is known."""
     stamped = commit_tag()
     if stamped is not None:
@@ -495,11 +495,11 @@ def connect(path: str | None = None) -> sqlite3.Connection:
 
 # ---- who a grade belongs to ---------------------------------------------------------------------
 
-#: The run id of a grade no campaign episode sent (a local run, a probe): recorded, never credited.
+#: The run id of a grade no experiment episode sent (a local run, a probe): recorded, never credited.
 ADHOC_RUN_ID = "adhoc"
 #: The Slurm job a judge records its episodes under.
 JOB_ENV = "SLURM_JOB_ID"
-#: An episode's run id, ``<arm>.n<node>.p<problem>.w<worker>``.
+#: An episode's run id, ``<setup>.n<node>.p<problem>.w<worker>``.
 LABEL = re.compile(r"(?P<arm>[^.]+)\.n\d+\.p\d+\.w\d+")
 #: ``optimizer`` markers a replayed request carries: how its source was obtained, the grade's kind.
 ORIGIN_KINDS: dict[str, str] = {
@@ -515,12 +515,12 @@ def job_tag() -> int | None:
     return int(raw) if raw.isdigit() else None
 
 
-def arm_of(run_id: str) -> str:
-    """The arm a run id belongs to: an episode label's prefix, else ``record.arm``, else the id."""
+def setup_of(run_id: str) -> str:
+    """The setup a run id belongs to: an episode label's prefix, else ``record.arm``, else the id."""
     match = LABEL.fullmatch(run_id)
     if match:
         return match["arm"]
-    return arm_tag() or run_id
+    return setup_tag() or run_id
 
 
 #: A run directory, ``<run root>/<job id>`` (a suffix after a dash names a variant of the job's dir).
@@ -533,25 +533,25 @@ def job_of_dir(directory: pathlib.Path) -> int | None:
     return int(match["job"]) if match else None
 
 
-def open_run(conn: sqlite3.Connection, run_id: str, arm_language: str | None = None) -> int:
+def open_run(conn: sqlite3.Connection, run_id: str, setup_language: str | None = None) -> int:
     """:func:`open_episode` of ``run_id`` in this judge's job (:func:`job_tag`)."""
-    return open_episode(conn, run_id, job_tag(), arm_language)
+    return open_episode(conn, run_id, job_tag(), setup_language)
 
 
-def open_episode(conn: sqlite3.Connection, run_id: str, job: int | None, arm_language: str | None = None) -> int:
-    """The ``runs`` id of episode ``run_id`` in ``job``, its arm recorded first.
+def open_episode(conn: sqlite3.Connection, run_id: str, job: int | None, setup_language: str | None = None) -> int:
+    """The ``runs`` id of episode ``run_id`` in ``job``, its setup recorded first.
 
-    The arm's identity is this judge's own configuration (:func:`identity`); the first grade of an arm
-    fixes it. ``arm_language`` fills the language only when the arm declared none, and a caller may
+    The setup's identity is this judge's own configuration (:func:`identity`); the first grade of a setup
+    fixes it. ``setup_language`` fills the language only when the setup declared none, and a caller may
     pass it ONLY when it is the harness's own task language: a request body is agent-controlled and
     has arrived naming ``py``, ``zzz`` and a file path."""
     who = identity()
-    arm = arm_of(run_id)
-    results_db.ensure_arm(
+    arm = setup_of(run_id)
+    results_db.ensure_setup(
         conn,
         results_db.Arm(
             arm=arm,
-            language=who.language or arm_language or "",
+            language=who.language or setup_language or "",
             device=who.device.value,
             harness=who.harness or results_db.DEFAULT_HARNESS,
             experiment=who.experiment,
@@ -901,7 +901,7 @@ def record_trajectory(
     Records EVERY call, passes and failures, and is NOT verify-gated (that gate is the leaderboard's).
     The run learns its trajectory only at its end, so each call is stamped back from the end by the
     wall seconds the calls after it took. ``language`` is the REQUESTED language and lives on the
-    arm."""
+    setup."""
     points = list(trajectory)
     if not points:
         return 0
@@ -911,7 +911,7 @@ def record_trajectory(
     stamp |= {"cpu": osinfo.cpu_model(), "commit_sha": commit_sha()}
     stamps = trajectory_stamps(points, now_ms())
     with contextlib.closing(connect(path)) as conn:
-        run = open_run(conn, run_id, arm_language=language)
+        run = open_run(conn, run_id, setup_language=language)
         for point, ts in zip(points, stamps, strict=True):
             values = stamp | {
                 "call_index": int(point.round),

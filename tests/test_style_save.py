@@ -72,7 +72,7 @@ def test_a_log_value_axis_labels_no_minor_tick_in_scientific_notation() -> None:
 
 
 def test_a_point_mark_that_never_delivered_an_answer_carries_a_cross_on_the_model_shape() -> None:
-    """A kernel the arm was served and never solved enters every aggregate at 1x and keeps its
+    """A kernel the setup was served and never solved enters every aggregate at 1x and keeps its
     tokens, so the mark is a PLACEHOLDER, not a measurement. The cross says so while the shape still
     names the model and the colour still names the intervention."""
     fig, ax = plt.subplots()

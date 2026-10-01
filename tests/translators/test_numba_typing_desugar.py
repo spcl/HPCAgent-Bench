@@ -167,7 +167,7 @@ def test_a_real_matrix_times_a_complex_matrix_in_a_helper_promotes_like_numpy(tm
     np.testing.assert_allclose(out, r @ c, rtol=1e-13, atol=1e-13)
 
 
-DEAD_ARM_SRC = """import numpy as np
+DEAD_SETUP_SRC = """import numpy as np
 
 
 def shifted(x, use_extra, extra):
@@ -182,11 +182,11 @@ def run(x, out):
 """
 
 
-def test_a_helper_flag_every_caller_passes_false_loses_its_dead_arm(tmp_path: pathlib.Path) -> None:
-    """numba types both arms of ``if use_extra:``, so the arm reading the ``None`` buffer must be gone before
+def test_a_helper_flag_every_caller_passes_false_loses_its_dead_setup(tmp_path: pathlib.Path) -> None:
+    """numba types both setups of ``if use_extra:``, so the setup reading the ``None`` buffer must be gone before
     it sees the helper."""
-    kir = kernel_ir(DEAD_ARM_SRC, "run", [("x", "float64", ("N",)), ("out", "float64", ("N",))])
-    emitted, module = emit_and_load(tmp_path, DEAD_ARM_SRC, kir)
+    kir = kernel_ir(DEAD_SETUP_SRC, "run", [("x", "float64", ("N",)), ("out", "float64", ("N",))])
+    emitted, module = emit_and_load(tmp_path, DEAD_SETUP_SRC, kir)
     assert "if use_extra" not in emitted
     x = np.array([1.0, -2.0, 4.0])
     out = np.zeros(3)

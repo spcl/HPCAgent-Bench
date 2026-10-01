@@ -3,7 +3,7 @@
 
 """Intervention efficacy: what a skill, a tool or a change in task framing did, in the score-cost plane.
 
-An intervention is measured by a paired evaluation of the arm with it (after) against the arm
+An intervention is measured by a paired evaluation of the setup with it (after) against the setup
 without it (before), over the tasks both attempted, on a score ``S_i`` (speedup over the reference,
 larger is better) and a cost ``C_i`` (total tokens, smaller is better). Both aggregate by the
 scale-invariant geometric mean:
@@ -179,7 +179,7 @@ def correct_family(pvalues: Sequence[float], *, alpha: float = ALPHA) -> list[Ve
 
 @dataclass(frozen=True, slots=True)
 class Ratio:
-    """One arm-vs-arm ratio: two parameters, each with its own point and interval.
+    """One setup-vs-setup ratio: two parameters, each with its own point and interval.
 
     ``rho`` (the ratio of geometric means, > 1 an improvement) is the plane coordinate and ``Q``'s
     input, bounded by ``ci_low``/``ci_high``, untested. ``change`` is the Hodges-Lehmann pseudo-median
@@ -245,7 +245,7 @@ class Ratio:
 class Efficacy:
     """An intervention as a point ``(rho_S, rho_C)`` in the score-cost plane, plus the ranking proxy
     ``Q = w_S ln rho_S + w_C ln rho_C``: 0 at no effect, ``exp(Q)`` one multiplicative effect, negated
-    by swapping the arms (``test_swapping_the_arms_negates_q``).
+    by swapping the setups (``test_swapping_the_setups_negates_q``).
 
     ``tasks`` is what the pairing kept; ``unmatched`` is every task some mapping lacks, so a claim
     cannot quietly rest on fewer tasks than the roster."""
@@ -342,7 +342,7 @@ def efficacy(
     universe = set(before_scores) | set(after_scores) | set(before_costs) | set(after_costs)
     shared = sorted(set(before_scores) & set(after_scores) & set(before_costs) & set(after_costs))
     if not shared:
-        raise ValueError("the arms share no task, so there is nothing paired to compare")
+        raise ValueError("the setups share no task, so there is nothing paired to compare")
     unmatched = tuple(sorted(universe - set(shared)))
 
     score = ratio(

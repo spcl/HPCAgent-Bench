@@ -8,7 +8,7 @@ Bash ``tool_use`` content block and zero new bytes for 4+ hours -- CLAUDE_BYTE_S
 clock (AGENT_TIMEOUT_SECONDS=72000, 20h), shared across every crash-relaunch attempt. Nothing killed
 the stuck attempt until the operator did it by hand. watch_dead_stream polls the transcript tail
 directly instead of trusting the CLI to notice its own silence, so this class of stall is bounded by
-the arm's own derived idle budget again, not by a 20h wall clock nobody wants to wait out.
+the setup's own derived idle budget again, not by a 20h wall clock nobody wants to wait out.
 """
 
 import importlib.util
@@ -82,8 +82,8 @@ def test_an_open_tool_use_block_reports_its_own_age(driver: ModuleType, tmp_path
     assert 115 <= stalled_for <= 135, stalled_for
 
 
-def test_threshold_reads_the_arms_own_derived_idle_timeout(driver: ModuleType) -> None:
-    """The watchdog must not invent a second number the arm's stream_idle_timeout.py can drift from."""
+def test_threshold_reads_the_setups_own_derived_idle_timeout(driver: ModuleType) -> None:
+    """The watchdog must not invent a second number the setup's stream_idle_timeout.py can drift from."""
     assert driver.dead_stream_threshold_seconds({"CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS": "60000"}) == 60.0
 
 

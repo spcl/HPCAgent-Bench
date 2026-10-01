@@ -102,9 +102,9 @@ def fill(conn: sqlite3.Connection, run_id: int, values: Mapping[str, results_db.
 def ingest(conn: sqlite3.Connection, job_dir: pathlib.Path) -> tuple[int, int]:
     """Fold every worker record under ``job_dir`` into ``conn``'s runs of its job
     (:func:`recording.job_of_dir`; created, with the
-    arm's identity, for an episode that never reached the judge); returns ``(filled, unattributed)``.
+    setup's identity, for an episode that never reached the judge); returns ``(filled, unattributed)``.
     A record naming no ``run_id`` (written before the driver named it) is unattributed. A fused
-    wave's record names its setup, whose identity the arm takes."""
+    wave's record names its setup, whose identity the setup takes."""
     filled = unattributed = 0
     job = recording.job_of_dir(job_dir)
     for path in sorted(job_dir.glob(RECORD_GLOB)):

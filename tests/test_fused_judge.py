@@ -2,15 +2,15 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """A fused owed wave's JUDGE records and serves every request under the worker's own setup.
 
-One fused job grades workers of many setups (arms) with one judge. The judge process holds no arm
+One fused job grades workers of many setups (setups) with one judge. The judge process holds no setup
 identity of its own; each request is resolved from the worker's secret token (router) to its setup,
 and graded under that setup's ``HPCAGENT_BENCH_*`` keys (upstream, :mod:`hpcagent_bench.fused`).
 What is pinned here:
 
 * GOLDEN identity: a row a fused judge records for a setup is the row a single-setup judge of that
-  arm records -- runs, submissions and calls alike.
+  setup records -- runs, submissions and calls alike.
 * ISOLATION: a control worker's token never reaches the CPF view or the score route of another
-  setup, whatever arm its body claims; a request without a token grades nothing.
+  setup, whatever setup its body claims; a request without a token grades nothing.
 * the agent-side clients send the token, and only inside a fused job.
 """
 
@@ -42,29 +42,29 @@ PROMOTE = REPO / "hpcagent_bench" / "cluster" / "promote_unsubmitted.py"
 KERNEL = "tsvc_2_s212"
 
 #: One cpf setup and one control setup of the same model, as a single-setup job's env states them.
-CPF_ARM = "cpf-llr-focus40-qwen38-c-cpf-clean"
-CONTROL_ARM = "llr-focus40-qwen38-c-clean"
+CPF_SETUP = "cpf-llr-focus40-qwen38-c-cpf-clean"
+CONTROL_SETUP = "llr-focus40-qwen38-c-clean"
 IDENTITY_KEYS = {
-    CPF_ARM: {
+    CPF_SETUP: {
         "HPCAGENT_BENCH_RECORD_EXPERIMENT": "llr-focus40",
         "HPCAGENT_BENCH_RECORD_LANGUAGE": "c",
         "HPCAGENT_BENCH_RECORD_DEVICE": "cpu",
         "HPCAGENT_BENCH_RECORD_PACKET": "cpf",
-        "HPCAGENT_BENCH_RECORD_ARM": CPF_ARM,
+        "HPCAGENT_BENCH_RECORD_ARM": CPF_SETUP,
         "HPCAGENT_BENCH_RECORD_COMMIT": "abc1234",
     },
-    CONTROL_ARM: {
+    CONTROL_SETUP: {
         "HPCAGENT_BENCH_RECORD_EXPERIMENT": "llr-focus40",
         "HPCAGENT_BENCH_RECORD_LANGUAGE": "hip",
         "HPCAGENT_BENCH_RECORD_DEVICE": "gpu",
         "HPCAGENT_BENCH_RECORD_PACKET": "",
-        "HPCAGENT_BENCH_RECORD_ARM": CONTROL_ARM,
+        "HPCAGENT_BENCH_RECORD_ARM": CONTROL_SETUP,
         "HPCAGENT_BENCH_RECORD_COMMIT": "abc1234",
     },
 }
 #: What the job env keeps for every setup: the model's identity is per job.
 JOB_IDENTITY = {"HPCAGENT_BENCH_RECORD_MODEL": "qwen38", "HPCAGENT_BENCH_RECORD_ENABLED": "true"}
-IDENTITY_COLUMNS = "experiment, model, language, device, packet, rep, arm, harness"
+IDENTITY_COLUMNS = "study, model, language, device, packet, rep, setup, harness"
 
 
 def write_resolved(directory: pathlib.Path, setup: str, lines: list[str]) -> None:
@@ -99,16 +99,16 @@ def fused_job_fixture(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -
     """A fused job's setups dir (cpf + control), its RUN_DIR, and one issued token per setup."""
     view = publish_view(tmp_path)
     setups = tmp_path / "launch" / "setups"
-    write_resolved(setups, f"{CPF_ARM}.budget4x", setup_lines(CPF_ARM, view))
-    write_resolved(setups, CONTROL_ARM, setup_lines(CONTROL_ARM, None))
+    write_resolved(setups, f"{CPF_SETUP}.budget4x", setup_lines(CPF_SETUP, view))
+    write_resolved(setups, CONTROL_SETUP, setup_lines(CONTROL_SETUP, None))
     run_dir = tmp_path / "run"
     tokens = run_dir / fused.TOKEN_DIR_NAME
     tokens.mkdir(parents=True)
     issued = {}
-    for setup, token in ((f"{CPF_ARM}.budget4x", "cpf-token"), (CONTROL_ARM, "control-token")):
+    for setup, token in ((f"{CPF_SETUP}.budget4x", "cpf-token"), (CONTROL_SETUP, "control-token")):
         (tokens / fused.token_digest(token)).write_text(f"{setup}\n", encoding="utf-8")
         issued[setup] = token
-    for key in [*IDENTITY_KEYS[CPF_ARM], "HPCAGENT_BENCH_SERVICE_CANONICAL_PARALLEL_FORM_DIR"]:
+    for key in [*IDENTITY_KEYS[CPF_SETUP], "HPCAGENT_BENCH_SERVICE_CANONICAL_PARALLEL_FORM_DIR"]:
         monkeypatch.delenv(key, raising=False)
     for key, value in JOB_IDENTITY.items():
         monkeypatch.setenv(key, value)
@@ -116,10 +116,10 @@ def fused_job_fixture(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setenv("RUN_DIR", str(run_dir))
     fused.read_overlay.cache_clear()
     return {
-        "cpf": f"{CPF_ARM}.budget4x",
-        "control": CONTROL_ARM,
-        "cpf-token": issued[f"{CPF_ARM}.budget4x"],
-        "control-token": issued[CONTROL_ARM],
+        "cpf": f"{CPF_SETUP}.budget4x",
+        "control": CONTROL_SETUP,
+        "cpf-token": issued[f"{CPF_SETUP}.budget4x"],
+        "control-token": issued[CONTROL_SETUP],
     }
 
 
@@ -167,10 +167,10 @@ def test_a_request_without_a_token_is_told_where_the_token_is(fused_job: dict[st
     assert fused.TOKEN_HEADER in refused.value.message and f"${fused.TOKEN_ENV}" in refused.value.message
 
 
-def test_a_run_id_of_another_arm_is_refused(fused_job: dict[str, str]) -> None:
-    fused.check_run_id(fused_job["control"], f"{CONTROL_ARM}.n0.p3.w3")
+def test_a_run_id_of_another_setup_is_refused(fused_job: dict[str, str]) -> None:
+    fused.check_run_id(fused_job["control"], f"{CONTROL_SETUP}.n0.p3.w3")
     with pytest.raises(fused.FusedRefusal):
-        fused.check_run_id(fused_job["control"], f"{CPF_ARM}.n0.p3.w3")
+        fused.check_run_id(fused_job["control"], f"{CPF_SETUP}.n0.p3.w3")
     with pytest.raises(fused.FusedRefusal):
         fused.check_run_id(fused_job["control"], "adhoc")
 
@@ -179,7 +179,7 @@ def test_the_judge_scope_holds_only_hpcagent_bench_keys(fused_job: dict[str, str
     overlay = fused.judge_overlay(fused_job["control"])
     assert "CAMPAIGN_ARM" not in overlay
     assert overlay["HPCAGENT_BENCH_SERVICE_CANONICAL_PARALLEL_FORM_DIR"] is None
-    assert overlay["HPCAGENT_BENCH_RECORD_ARM"] == CONTROL_ARM
+    assert overlay["HPCAGENT_BENCH_RECORD_ARM"] == CONTROL_SETUP
 
 
 def test_outside_a_fused_job_nothing_is_fused(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -230,7 +230,8 @@ def recorded(db: str) -> dict[str, list[tuple[object, ...]]]:
     with results_db.reading(db) as conn:
         return {
             "runs": [
-                tuple(row) for row in conn.execute(f"select label, {IDENTITY_COLUMNS} from runs join arms using (arm)")
+                tuple(row)
+                for row in conn.execute(f"select label, {IDENTITY_COLUMNS} from runs join setups using (setup)")
             ],
             "submissions": [
                 tuple(row)
@@ -251,14 +252,14 @@ def recorded(db: str) -> dict[str, list[tuple[object, ...]]]:
         }
 
 
-@pytest.mark.parametrize("arm", [CPF_ARM, CONTROL_ARM])
+@pytest.mark.parametrize("arm", [CPF_SETUP, CONTROL_SETUP])
 def test_a_fused_judge_records_the_row_a_single_setup_judge_records(
     arm: str, fused_job: dict[str, str], tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The same grade, recorded once by a single-setup judge (identity in its process env) and once
     by a fused one (identity in the request's setup scope only): identical rows."""
     run_id = f"{arm}.n0.p4.w4"
-    setup = fused_job["cpf"] if arm == CPF_ARM else fused_job["control"]
+    setup = fused_job["cpf"] if arm == CPF_SETUP else fused_job["control"]
     with monkeypatch.context() as single:
         single.delenv(fused.SETUPS_DIR_ENV)
         for key, value in IDENTITY_KEYS[arm].items():

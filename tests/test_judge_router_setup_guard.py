@@ -1,10 +1,10 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""A single-setup judge grades only its own arm: a body whose ``run_id`` names another is refused.
+"""A single-setup judge grades only its own setup: a body whose ``run_id`` names another is refused.
 
-Every mlscale arm runs its own judge, and rows are attributed by ``run_id``. A request that reaches
-the wrong arm's judge (a stale ``JUDGE_URL``, a copied curl line) used to be graded and recorded in
-that arm's DB under a foreign identity. The router now refuses, before anything is graded, a POST
+Every mlscale setup runs its own judge, and rows are attributed by ``run_id``. A request that reaches
+the wrong setup's judge (a stale ``JUDGE_URL``, a copied curl line) used to be graded and recorded in
+that setup's DB under a foreign identity. The router now refuses, before anything is graded, a POST
 whose ``run_id`` does not start with ``"$CAMPAIGN_ARM."`` of the job it serves. A fused judge keeps
 its own per-worker check (``fused.check_run_id``) and never reads the job's ``CAMPAIGN_ARM``; a judge
 with no ``CAMPAIGN_ARM`` (a local ``serve``) checks nothing.
@@ -74,7 +74,7 @@ def upstream_routes() -> list[str]:
 
 
 @pytest.mark.parametrize("route", ROUTES)
-def test_a_body_from_another_arm_is_refused_before_the_judge_sees_it(router: "TestClient", route: str) -> None:
+def test_a_body_from_another_setup_is_refused_before_the_judge_sees_it(router: "TestClient", route: str) -> None:
     reply = router.post(route, json=body(f"{FOREIGN}.n0.p1.w0"))
     assert reply.status_code == 403, reply.text
     assert FOREIGN in reply.json()["detail"] and ARM in reply.json()["detail"]
@@ -82,18 +82,18 @@ def test_a_body_from_another_arm_is_refused_before_the_judge_sees_it(router: "Te
 
 
 @pytest.mark.parametrize("route", ROUTES)
-def test_a_body_of_this_arm_reaches_the_judge(router: "TestClient", route: str) -> None:
+def test_a_body_of_this_setup_reaches_the_judge(router: "TestClient", route: str) -> None:
     assert router.post(route, json=body(f"{ARM}.n0.p1.w0")).status_code == 200
     assert upstream_routes() == ["/submit" if route == "/verify" else route]
 
 
-def test_an_arm_whose_name_merely_starts_with_this_one_is_another_arm(router: "TestClient") -> None:
-    """``llr-c`` must not accept ``llr-cpp.*``: the arm is matched up to the run id's first dot."""
+def test_an_setup_whose_name_merely_starts_with_this_one_is_another_setup(router: "TestClient") -> None:
+    """``llr-c`` must not accept ``llr-cpp.*``: the setup is matched up to the run id's first dot."""
     assert router.post("/score", json=body(f"{ARM}-skills.n0.p1.w0")).status_code == 403
 
 
 def test_a_profile_without_a_run_id_is_still_relayed(router: "TestClient") -> None:
-    """``tools/counters.md`` shows agents a curl ``/profile`` without one; a missing id is no other arm's."""
+    """``tools/counters.md`` shows agents a curl ``/profile`` without one; a missing id is no other setup's."""
     reply = router.post("/profile", json={"kernel": "dist_softmax", "language": "c", "source": "x", "rank": 0})
     assert reply.status_code == 200
     assert upstream_routes() == ["/profile"]
@@ -104,17 +104,17 @@ def test_a_read_route_carries_no_run_id_and_is_relayed(router: "TestClient") -> 
     assert upstream_routes() == ["/baseline/dist_softmax"]
 
 
-def test_a_judge_that_serves_no_arm_checks_nothing(router: "TestClient", monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_judge_that_serves_no_setup_checks_nothing(router: "TestClient", monkeypatch: pytest.MonkeyPatch) -> None:
     """A local ``hpcagent-bench serve`` behind the router has no CAMPAIGN_ARM to hold anyone to."""
     monkeypatch.delenv("CAMPAIGN_ARM")
     assert router.post("/score", json=body("adhoc")).status_code == 200
 
 
-def test_a_fused_judge_never_consults_the_jobs_campaign_arm(
+def test_a_fused_judge_never_consults_the_jobs_experiment_setup(
     router: "TestClient", monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
 ) -> None:
-    """Fused: the worker's token decides the arm (fused.check_run_id); the job's CAMPAIGN_ARM -- here
-    a third arm neither setup belongs to -- plays no part, so a worker's own run_id is graded."""
+    """Fused: the worker's token decides the setup (fused.check_run_id); the job's CAMPAIGN_ARM -- here
+    a third setup neither setup belongs to -- plays no part, so a worker's own run_id is graded."""
     setups, run_dir = tmp_path / "setups", tmp_path / "run"
     setups.mkdir()
     (setups / f"{FOREIGN}.resolved").write_text(f"CAMPAIGN_ARM={FOREIGN}\n", encoding="utf-8")
@@ -128,7 +128,7 @@ def test_a_fused_judge_never_consults_the_jobs_campaign_arm(
     try:
         for route in ROUTES:
             assert router.post(route, json=body(f"{FOREIGN}.n0.p1.w0"), headers=headers).status_code == 200
-        # ... and the fused rule still stands on its own: the job's arm is not the worker's arm.
+        # ... and the fused rule still stands on its own: the job's setup is not the worker's setup.
         assert router.post("/score", json=body(f"{ARM}.n0.p1.w0"), headers=headers).status_code == 403
     finally:
         fused.read_overlay.cache_clear()
@@ -186,12 +186,12 @@ def test_the_teardown_promotion_is_accepted(router: "TestClient", monkeypatch: p
     assert upstream_routes() == ["/submit"]
 
 
-def test_the_grade_job_lists_every_arm_whatever_arm_the_process_serves(
+def test_the_grade_job_lists_every_setup_whatever_setup_the_process_serves(
     monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
 ) -> None:
     """The grade job replays in-process (scaling_grade -> metric.score_ml_distributed), never through
-    a router, so no arm guard stands in its way: a process holding another arm's CAMPAIGN_ARM (the
-    grade job inherits whatever env it is launched from) still lists this arm's submission."""
+    a router, so no setup guard stands in its way: a process holding another setup's CAMPAIGN_ARM (the
+    grade job inherits whatever env it is launched from) still lists this setup's submission."""
     monkeypatch.setenv("CAMPAIGN_ARM", FOREIGN)
     monkeypatch.setenv("AGENT_SINGLE_SUBMISSION", "1")
     monkeypatch.setenv("HPCAGENT_BENCH_RECORD_EXPERIMENT", "mlscale")
@@ -199,14 +199,14 @@ def test_the_grade_job_lists_every_arm_whatever_arm_the_process_serves(
     db = tmp_path / "runs" / "mlscale" / "650000" / "judge" / "rank-0" / "hpcagent_bench0.db"
     db.parent.mkdir(parents=True)
     test_scaling_grade.record(db, test_scaling_grade.hip_submission(), run_id=f"{test_scaling_grade.ARM}.n0.p0.w0")
-    items, problems = scaling_grade.build_worklist([db], [test_scaling_grade.arm_env_dir(tmp_path)], "mlscale")
+    items, problems = scaling_grade.build_worklist([db], [test_scaling_grade.setup_env_dir(tmp_path)], "mlscale")
     assert problems == []
     assert [(item.arm, item.run_id) for item in items] == [
         (test_scaling_grade.ARM, f"{test_scaling_grade.ARM}.n0.p0.w0")
     ]
 
 
-def test_the_regrade_replay_grades_whatever_arm_the_process_serves(
+def test_the_regrade_replay_grades_whatever_setup_the_process_serves(
     monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
 ) -> None:
     """The regrade replay grades a recorded item in-process as ``POST /submit`` would, router-free."""

@@ -70,14 +70,14 @@ convention is the OPPOSITE of the model above, and not by mistake:
   silently penalises models that take more steps.
 
 The field also reports an EFFECTIVENESS-AWARE cost: total cost divided by instances RESOLVED, not
-attempted. Worth pairing with either number here, since an arm that spends little and lands nothing
+attempted. Worth pairing with either number here, since a setup that spends little and lands nothing
 is not cheap.
 
 THE UNIT THIS SETTING ACTUALLY PAYS IN is node-seconds, not tokens. Tokens are a borrowed
 currency: we rent nodes by the second and the token count is only a proxy for how hard we worked
 them. ``api_ms`` per episode is the share of the shared inference node that episode occupied, so an
 episode's true cost is the job's ``nodes x wall`` apportioned by it -- no discount assumption
-anywhere. Prefer it when the question is what an arm COST; prefer ``effective`` when the question
+anywhere. Prefer it when the question is what a setup COST; prefer ``effective`` when the question
 is what an agent CONSUMED, which is what a per-agent budget bounds.
 
 What this deliberately does NOT do is convert to money. A price needs an output-to-input multiplier
@@ -167,7 +167,7 @@ CACHE_DISCOUNT: float = 0.0
 
 #: The PROVIDER's reading of the same fold: a cache read is billed at about a tenth of a fresh input
 #: token (Anthropic, OpenAI and Meta all price it near 10 percent), so ``effective_provider`` charges
-#: every re-read prefix at that rate. It is the number a hosted-service arm pays in dollars, and it
+#: every re-read prefix at that rate. It is the number a hosted-service setup pays in dollars, and it
 #: grows with turn count the way the bill does; ``effective`` (the free reading) does not. Both are
 #: recorded per task, beside ``billed``.
 PROVIDER_CACHE_DISCOUNT: float = 0.1
@@ -639,7 +639,7 @@ def events_cost(events: list[dict[str, object]]) -> CostRow:
         # Prompts that shrank against their predecessor: context compactions, each a full cache miss.
         "compactions": compactions,
         # WHICH tier counted the output (8.2). "none" is not a zero: it means nobody counted, and a
-        # reader that averages it in with measurements reports the arm low.
+        # reader that averages it in with measurements reports the setup low.
         "output_source": source,
         # Which shape the message_delta readings had, empty when there were none.
         "output_delta_shape": shape,

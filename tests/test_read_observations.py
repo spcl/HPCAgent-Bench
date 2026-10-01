@@ -1,9 +1,9 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""An experiment's observations read the same from its CSV and from its extracted ``.db``.
+"""A study's observations read the same from its CSV and from its extracted ``.db``.
 
-The reproducibility artifact ships one database per experiment and every figure reads it through
-:func:`hpcagent_bench.experiments.read_observations`, so a row, a number or the row order moving
+The reproducibility artifact ships one database per study and every figure reads it through
+:func:`hpcagent_bench.studies.read_observations`, so a row, a number or the row order moving
 between the two files would change a published figure without anyone touching the data.
 """
 
@@ -11,7 +11,7 @@ import pathlib
 
 import pandas as pd
 
-from hpcagent_bench import experiments
+from hpcagent_bench import studies
 
 #: The pair is written by the extractor that writes every shipped artifact, not by a hand-rolled
 #: CREATE TABLE here: the two files have to agree on the COLUMN TYPES as well as on the rows, and a
@@ -54,9 +54,9 @@ def write_pair(tmp_path: pathlib.Path) -> tuple[pathlib.Path, pathlib.Path]:
 
 def test_a_db_and_its_csv_give_the_same_rows_in_the_same_order(tmp_path: pathlib.Path) -> None:
     csv_path, db_path = write_pair(tmp_path)
-    from_csv = experiments.read_observations(csv_path)
-    from_db = experiments.read_observations(db_path)
-    # fill_arm_identity (run by read_observations on both paths) appends recorded_packet, the raw
+    from_csv = studies.read_observations(csv_path)
+    from_db = studies.read_observations(db_path)
+    # fill_setup_identity (run by read_observations on both paths) appends recorded_packet, the raw
     # value kept beside the filled "packet" column -- both paths must gain it identically.
     expected_columns = [*FIELDS, "recorded_packet"]
     assert list(from_db.columns) == expected_columns
@@ -72,8 +72,8 @@ def test_the_token_columns_have_the_same_dtype_from_either_file(tmp_path: pathli
     dtype on the DB path while the CSV path read float64 -- one table, two dtypes, and arithmetic
     that raised on exactly one of them."""
     csv_path, db_path = write_pair(tmp_path)
-    from_csv = experiments.read_observations(csv_path)
-    from_db = experiments.read_observations(db_path)
+    from_csv = studies.read_observations(csv_path)
+    from_db = studies.read_observations(db_path)
     for column in ("tokens", "tokens_crashed", "speedup"):
         assert from_db[column].dtype == from_csv[column].dtype, column
         pd.testing.assert_series_equal(from_db[column], from_csv[column])
@@ -85,5 +85,5 @@ def test_the_token_columns_have_the_same_dtype_from_either_file(tmp_path: pathli
 def test_a_db_is_opened_read_only(tmp_path: pathlib.Path) -> None:
     _, db_path = write_pair(tmp_path)
     before = db_path.stat().st_mtime_ns
-    experiments.read_observations(db_path)
+    studies.read_observations(db_path)
     assert db_path.stat().st_mtime_ns == before

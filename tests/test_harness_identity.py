@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The agent HARNESS is part of a run's identity, stamped by the launcher and named in the registry.
 
-An arm env that names no harness must stamp exactly what it stamped before the harness existed:
-every campaign submitted today goes through ``record_identity`` with seven arguments.
+A setup env that names no harness must stamp exactly what it stamped before the harness existed:
+every experiment submitted today goes through ``record_identity`` with seven arguments.
 """
 
 import pathlib
@@ -13,7 +13,7 @@ import subprocess
 
 import pytest
 
-from hpcagent_bench import experiment_tags, paths
+from hpcagent_bench import study_tags, paths
 
 SCRIPT = paths.ROOT / "hpcagent_bench" / "cluster" / "record_identity.sh"
 
@@ -37,7 +37,7 @@ COMMIT_LINE = (
 
 
 def stamp(env: pathlib.Path, *harness: str, script: pathlib.Path = SCRIPT) -> subprocess.CompletedProcess[str]:
-    """Source the launcher helper and stamp one arm, passing ``harness`` only when given."""
+    """Source the launcher helper and stamp one setup, passing ``harness`` only when given."""
     identity = ("harness-focus20", "qwen38", "c", "cpu", "", "harness-focus20-qwen38-claude")
     return subprocess.run(
         ["bash", "-c", '. "$0" && record_identity "$@"', str(script), str(env), *identity, *harness],
@@ -48,7 +48,7 @@ def stamp(env: pathlib.Path, *harness: str, script: pathlib.Path = SCRIPT) -> su
 
 
 @pytest.mark.parametrize("harness", [(), ("",)], ids=["omitted", "empty"])
-def test_an_arm_that_names_no_harness_stamps_what_it_did_before(tmp_path: pathlib.Path, harness: tuple[str, ...]):
+def test_an_setup_that_names_no_harness_stamps_what_it_did_before(tmp_path: pathlib.Path, harness: tuple[str, ...]):
     env = tmp_path / ".env.arm"
     done = stamp(env, *harness)
     assert done.returncode == 0, done.stderr
@@ -63,7 +63,7 @@ def test_a_named_harness_is_stamped(tmp_path: pathlib.Path):
 
 
 def test_the_submitting_checkout_commit_is_stamped(tmp_path: pathlib.Path) -> None:
-    """agent is mounted from the submitting tree, so its commit is the code the arm ran; the
+    """agent is mounted from the submitting tree, so its commit is the code the setup ran; the
     judge cannot resolve it because the container sees the tree without its repository."""
     env = tmp_path / ".env.arm"
     done = stamp(env)
@@ -94,7 +94,7 @@ def test_every_harness_the_launcher_accepts_has_a_display_name():
     submit or drawn under its raw tag."""
     accepted = re.search(r'^\s*""\|([a-z|]+)\)', SCRIPT.read_text(), re.MULTILINE)
     assert accepted is not None, f"no harness case in {SCRIPT}"
-    assert sorted(accepted.group(1).split("|")) == sorted(experiment_tags.names("harnesses"))
+    assert sorted(accepted.group(1).split("|")) == sorted(study_tags.names("harnesses"))
 
 
 @pytest.mark.parametrize(
@@ -107,8 +107,8 @@ def test_every_harness_the_launcher_accepts_has_a_display_name():
     ],
 )
 def test_a_harness_is_spelled_by_the_registry(harness: str, want: str):
-    assert experiment_tags.harness_name(harness) == want
+    assert study_tags.harness_name(harness) == want
 
 
-def test_the_harness_experiment_has_a_display_name():
-    assert experiment_tags.display_name("harness20") == "Agent Harness Comparison, Claude Native@20"
+def test_the_harness_study_has_a_display_name():
+    assert study_tags.display_name("harness20") == "Agent Harness Comparison, Claude Native@20"

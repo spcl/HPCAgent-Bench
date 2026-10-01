@@ -27,8 +27,8 @@ import sys
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
-from hpcagent_bench.experiment_tags import framework_name
-from hpcagent_bench.experiments import read_table
+from hpcagent_bench.study_tags import framework_name
+from hpcagent_bench.studies import read_table
 from hpcagent_bench.stats import style, summary
 from hpcagent_bench.stats.canon import read_times, speedups
 from hpcagent_bench.stats.figures.helpers.axes import rotated_labels_in
@@ -45,7 +45,7 @@ TABLE: str = "canon"
 #: answers the separate question of what canonicalization buys over sequential C.
 BASELINES: tuple[str, ...] = ("numba", "cc")
 
-#: Columns on the figure, in axis order; each is labelled by :func:`experiment_tags.framework_name`.
+#: Columns on the figure, in axis order; each is labelled by :func:`study_tags.framework_name`.
 #: dace_cpu / dace_gpu -- the non-canonicalized DaCe columns -- are collected by
 #: scripts/collect_canon.py but drawn only on --columns request: this figure answers what
 #: canonicalization is worth against the compilers, not what DaCe is worth against itself.

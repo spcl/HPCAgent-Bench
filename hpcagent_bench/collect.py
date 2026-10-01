@@ -1,6 +1,6 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Collect a campaign's recorded data into one self-describing directory, verify it, archive it.
+"""Collect an experiment's recorded data into one self-describing directory, verify it, archive it.
 
     hpcagent-bench collect copy --out $DATA          # run roots + their DBs + frozen observations
     hpcagent-bench collect verify $DATA              # re-hash every file, quick_check every DB
@@ -12,7 +12,7 @@ verified archive is a separate, manual step.
 
 Three kinds of source (:class:`DataSource`), each copied under ``<out>/<kind>/<root name>/``:
 
-* ``runs``        campaign run roots: run metadata (arm env, prompts, token files, JSON/JSONL/CSV
+* ``runs``        experiment run roots: run metadata (setup env, prompts, token files, JSON/JSONL/CSV
                   records, mlscale observations) and every SQLite DB, agent homes and caches skipped;
 * ``db``          directories whose SQLite DBs are wanted alone (regrade shards, mlscale grades);
 * ``frozen-csv``  frozen extracted observations and sweep CSVs (``hpcagent_bench.frozen_observations``).
@@ -36,7 +36,7 @@ import sys
 import tarfile
 from collections.abc import Iterable, Iterator, Sequence
 
-from hpcagent_bench import campaigns, data_guard, frozen_observations, paths
+from hpcagent_bench import experiments, data_guard, frozen_observations, paths
 
 __all__ = [
     "DB_SUFFIXES",
@@ -174,7 +174,7 @@ def sha256(path: pathlib.Path) -> str:
 
 
 def roots_of(args: argparse.Namespace) -> list[Root]:
-    roots = [Root(kind=DataSource.RUNS, path=pathlib.Path(p)) for p in args.runs or [campaigns.runs_root()]]
+    roots = [Root(kind=DataSource.RUNS, path=pathlib.Path(p)) for p in args.runs or [experiments.runs_root()]]
     roots += [Root(kind=DataSource.DB, path=pathlib.Path(p)) for p in args.db_root]
     frozen = frozen_observations.resolve(args.frozen_observations)
     roots += [Root(kind=DataSource.FROZEN_CSV, path=p) for p in ([frozen] if frozen else [])]
@@ -290,7 +290,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         metavar="DIR",
-        help="run root; repeatable (default the campaign runs root)",
+        help="run root; repeatable (default the experiment runs root)",
     )
     cp.add_argument("--db-root", action="append", default=[], metavar="DIR", help="directory of SQLite DBs; repeatable")
     cp.add_argument(

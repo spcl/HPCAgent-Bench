@@ -3,7 +3,7 @@
 """agent_driver.py: what a vLLM replica that is not ready yet costs the run.
 
 The driver used to wait on replicas one after another with a hard failure, which made the slowest
-replica the deadline for all of them and turned one laggard into a dead arm: on llr4, oss
+replica the deadline for all of them and turned one laggard into a dead setup: on llr4, oss
 589511/512/513/516 lost all 242 agents and wrote zero judge rows because a replica was still
 capturing CUDA graphs when its wait expired. A replica that misses the deadline is usually late
 rather than dead, and LiteLLM keeps every upstream in rotation regardless of what the driver saw,

@@ -6,13 +6,13 @@ WHY THIS EXISTS AS A FILE, NOT A CSV OR AN IN-TEST DICT. Tests must not read the
 artifact's CSVs under ``ICLR26Reproducibility/`` -- they live outside this repo and are not
 portable to another checkout or CI. ``experiments.read_observations`` reads either a ``.csv`` or an
 extracted ``.db`` (table ``observations``), so a tiny committed ``.db`` exercises the SAME reader a
-real campaign's artifact does, without the tree depending on a path outside it.
+real experiment's artifact does, without the tree depending on a path outside it.
 
 NOT A LITERAL SLICE OF llr-focus40. The real ``observations.csv`` extract
 predates both the ``packet`` and ``timing_reduction`` columns -- it carries only a 0/1 ``skills``
 flag -- so there is no real row to cut that already carries ``packet="perf-playbook-cpu"``. This
 fixture is instead hand-built to the shape a fresher extraction produces: the real column names,
-the real arm-naming convention (``llr-focus40-<model>-<language>[-<packet suffix>]``, a CPF arm
+the real setup-naming convention (``llr-focus40-<model>-<language>[-<packet suffix>]``, a CPF setup
 prefixed ``cpf-``), real
 kernel short-names and plausible speedup/token magnitudes, covering the four packets this
 session's multi-treatment work needs -- the no-packet control, ``skills``, ``cpfsrc`` and
@@ -57,7 +57,7 @@ COLUMNS: tuple[str, ...] = (
     "tokens_output",
 )  # fmt: skip
 
-#: The arm's trailing suffix for each packet, matching the launcher's own naming.
+#: The setup's trailing suffix for each packet, matching the launcher's own naming.
 PACKET_SUFFIX: dict[str, str] = {
     "": "",
     "skills": "-skills",
@@ -66,13 +66,13 @@ PACKET_SUFFIX: dict[str, str] = {
 }
 
 
-def arm_name(model: str, packet: str) -> str:
+def setup_name(model: str, packet: str) -> str:
     return f"{'cpf-' if packet == 'cpfsrc' else ''}llr-focus40-{model}-c{PACKET_SUFFIX[packet]}"
 
 
 def episode_rows(run_root: str, arm: str, packet: str, kernel: str, index: int, ts: int) -> list[tuple[object, ...]]:
     """One episode's submission + call + task row, in :data:`COLUMNS` order: a plausible speedup
-    and token spend, distinct per (arm, kernel) so no two cells in the fixture are accidentally
+    and token spend, distinct per (setup, kernel) so no two cells in the fixture are accidentally
     identical. The task's effective total equals the call's running count: this fixture gives every
     episode exactly one attempt, so the two happen to agree (a relaunch would not). The task row
     states its whole spend as fresh input, so every cost card prices it at ``tokens``."""
@@ -103,9 +103,9 @@ def rows() -> list[tuple[object, ...]]:
     ts = 0
     for model in MODELS:
         for packet in PACKETS:
-            arm = arm_name(model, packet)
+            arm = setup_name(model, packet)
             # Every packet -- including perf-playbook-cpu -- covers the full roster: the
-            # roster gate (population.complete_arms) drops an arm short of it before it can
+            # roster gate (population.complete_setups) drops a setup short of it before it can
             # draw a panel at all, so a partial fixture would read as "no comparison".
             for index, kernel in enumerate(KERNELS):
                 out += episode_rows("630709", arm, packet, kernel, index, ts)

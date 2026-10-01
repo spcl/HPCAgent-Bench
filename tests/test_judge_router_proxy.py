@@ -177,7 +177,7 @@ def test_read_routes_forward_as_a_get(client: "TestClient", route: str) -> None:
 
 
 def test_canonical_parallel_form_is_forwarded(client: "TestClient") -> None:
-    """The agent's canonical_parallel_form tool called this exact route in every campaign and the
+    """The agent's canonical_parallel_form tool called this exact route in every experiment and the
     router had no handler for it, so every call 404'd at the router before the judge ever saw it.
     Path and query (rank included) must reach the upstream judge unchanged, like every other read
     route, and the judge's answer -- a rendered form or an 'unavailable' -- comes back as itself."""
@@ -326,7 +326,7 @@ def test_search_failure_is_a_bad_gateway(
 def test_search_not_provisioned_is_a_distinct_service_unavailable(
     client: "TestClient", service: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """An agent that sees only a flat 502 cannot tell 'this arm was never given search' from 'the
+    """An agent that sees only a flat 502 cannot tell 'this setup was never given search' from 'the
     search infra hiccuped' -- ``NotProvisionedError`` must answer 503 with a machine-readable
     ``cause``, never the same status a real SerpAPI/crawl/LLM failure gets."""
 
@@ -431,8 +431,8 @@ def router_route_prefixes(service: ModuleType) -> set[tuple[str, str]]:
 def test_every_agent_tool_judge_call_has_a_router_route(service: ModuleType) -> None:
     """The bug this test exists to catch: an agent tool's ``get_judge``/``post_judge`` call named a
     path the router declared no route for, so it 404'd before reaching the upstream judge in every
-    campaign. Parsing the tool call sites (rather than a hand-maintained list) means a new tool
-    call to an unrouted path fails HERE, not silently in a running experiment. A GET is routed by
+    experiment. Parsing the tool call sites (rather than a hand-maintained list) means a new tool
+    call to an unrouted path fails HERE, not silently in a running study. A GET is routed by
     the catch-all relay too; a POST needs its own route."""
     tool_paths = agent_tool_judge_paths()
     assert tool_paths, "no get_judge/post_judge call sites found -- the parser or the tools moved"

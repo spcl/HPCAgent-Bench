@@ -26,12 +26,12 @@ def load_env_spec() -> types.ModuleType:
 
 env_spec = load_env_spec()
 
-#: Every ``<campaign>:<model>`` a submitter can render.
+#: Every ``<experiment>:<model>`` a submitter can render.
 BASES: tuple[str, ...] = tuple(env_spec.targets())
 
 
 def rendered(target: str | pathlib.Path) -> str:
-    """``target`` (``<campaign>:<model>`` or an env file) flattened: one ``KEY=VALUE`` line per key."""
+    """``target`` (``<experiment>:<model>`` or an env file) flattened: one ``KEY=VALUE`` line per key."""
     return env_spec.as_text(env_spec.render(str(target)))
 
 
@@ -45,7 +45,7 @@ SPEC_INPUTS: tuple[str, ...] = (
 
 
 def set_base(experiments: pathlib.Path, target: str, **env: str | int) -> None:
-    """In a temp ``experiments/`` copy: set ``env`` on ``<campaign>:<model>`` (its ``models`` entry)."""
+    """In a temp ``experiments/`` copy: set ``env`` on ``<experiment>:<model>`` (its ``models`` entry)."""
     campaign, model = target.split(":", 1)
     path = experiments / "arms.yaml"
     spec = yaml.safe_load(path.read_text(encoding="utf-8"))

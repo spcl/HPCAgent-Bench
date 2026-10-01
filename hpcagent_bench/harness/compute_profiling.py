@@ -95,7 +95,7 @@ __all__ = [
 ROCPROF_COMPUTE = "rocprof-compute"
 NCU = "ncu"
 
-#: The compute profiler per device language; an OpenMP-offload arm takes the AMD one.
+#: The compute profiler per device language; an OpenMP-offload setup takes the AMD one.
 COMPUTE_TOOLS = {"hip": ROCPROF_COMPUTE, "cuda": NCU}
 
 #: Replays one request may pay for. rocprof-compute 3.4.0 ran the program 13 times on MI300A.

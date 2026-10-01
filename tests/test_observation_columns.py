@@ -5,7 +5,7 @@
 import csv
 import pathlib
 
-from hpcagent_bench import experiments, frozen_observations, observations_extract
+from hpcagent_bench import studies, frozen_observations, observations_extract
 from hpcagent_bench.observation_columns import COLUMN_ALIASES, OBSERVATION_FIELDS
 
 RUN = "llr-arm-c.n0.p0.w0"
@@ -98,7 +98,7 @@ def test_every_alias_names_a_current_column_and_no_current_column_is_an_alias() 
 
 
 def test_an_old_header_csv_reads_under_the_current_names_with_the_same_values(tmp_path: pathlib.Path) -> None:
-    frame = experiments.read_observations(write_old_csv(tmp_path / "old.csv", OLD_ROWS))
+    frame = studies.read_observations(write_old_csv(tmp_path / "old.csv", OLD_ROWS))
     assert not set(COLUMN_ALIASES) & set(frame.columns)
     submission = frame[frame.row_kind == "submission"].iloc[0]
     assert submission["judge_db"] == OLD_ROWS[0]["db"]

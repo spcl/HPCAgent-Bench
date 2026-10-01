@@ -145,8 +145,8 @@ def test_web_search_tool_answers_via_fake_serpapi_crawl_and_llm() -> None:
     assert main() == 0
 
 
-#: Every ``experiments/.env.*`` ships this empty (98/98 arms), so this is the
-#: config every campaign arm actually runs search under today.
+#: Every ``experiments/.env.*`` ships this empty (98/98 setups), so this is the
+#: config every experiment setup actually runs search under today.
 UNPROVISIONED_ENV = {"SERPAPI_API_KEY": "", "WEBSEARCH_LLM_BASE_URL": "", "WEBSEARCH_LLM_MODEL": ""}
 
 
@@ -169,7 +169,7 @@ def test_missing_serpapi_key_raises_not_provisioned_not_a_bare_runtime_error(
 
 @pytest.mark.parametrize("missing", ["WEBSEARCH_LLM_BASE_URL", "WEBSEARCH_LLM_MODEL"])
 def test_missing_llm_config_raises_not_provisioned(monkeypatch: pytest.MonkeyPatch, missing: str) -> None:
-    """The LLM synthesis leg is provisioning too: an arm with a SerpAPI key but no configured
+    """The LLM synthesis leg is provisioning too: a setup with a SerpAPI key but no configured
     judge-local LLM is just as unprovisioned as one with neither."""
     web_search = load_web_search()
     monkeypatch.setenv("WEBSEARCH_LLM_BASE_URL", "http://127.0.0.1:1/v1")

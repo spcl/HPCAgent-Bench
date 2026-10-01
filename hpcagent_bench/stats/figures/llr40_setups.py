@@ -1,10 +1,10 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""llr40 arms: which arms a figure draws, their (model, condition), their tokens and roster.
+"""llr40 setups: which setups a figure draws, their (model, condition), their tokens and roster.
 
 The condition comes from the ARM NAME, not the ``language``/``packet`` columns: the pre-regrade
-extraction records those inconsistently for the same arm, while every row of an arm agrees on its
-name. :data:`ARM_PATTERN` is both the arm selector and the (model, condition) parser.
+extraction records those inconsistently for the same setup, while every row of a setup agrees on its
+name. :data:`ARM_PATTERN` is both the setup selector and the (model, condition) parser.
 """
 
 import re
@@ -12,26 +12,26 @@ from collections.abc import Sequence
 
 import pandas as pd
 
-from hpcagent_bench import experiment_tags, packets
+from hpcagent_bench import study_tags, packets
 from hpcagent_bench.stats import population
 
 __all__ = [
-    "ARM_PATTERN",
+    "SETUP_PATTERN",
     "CANON_BASELINE",
     "CONDITION_ORDER",
-    "arm_tokens",
-    "candidate_arms",
+    "setup_tokens",
+    "candidate_setups",
     "condition_label",
-    "parse_arm",
+    "parse_setup",
     "rank_condition",
     "roster_of",
 ]
 
-#: An arm an llr40 figure may draw, and its (model, condition) in one match: ``-c`` is the control
+#: A setup an llr40 figure may draw, and its (model, condition) in one match: ``-c`` is the control
 #: (condition ``""``), ``-c-cpf`` the CPF page, ``-c-cpfsrc`` CPF as source; the control is ``llr40-``
-#: (or its recorded ``llr-focus40-`` spelling) and a CPF arm keeps the ``cpf-llr-focus40-`` prefix. C only
+#: (or its recorded ``llr-focus40-`` spelling) and a CPF setup keeps the ``cpf-llr-focus40-`` prefix. C only
 #: -- Fortran has no CPF spelling (mpr-artifacts/experiments/llr-focus40-cpf/README.md).
-ARM_PATTERN: re.Pattern[str] = re.compile(
+SETUP_PATTERN: re.Pattern[str] = re.compile(
     r"^(?:llr40|(?:cpf-)?llr-focus40)-(?P<model>[a-z0-9]+)-c(?:-(?P<condition>cpf|cpfsrc))?$"
 )
 
@@ -42,28 +42,28 @@ CONDITION_ORDER: tuple[str, ...] = ("", "cpf", "cpfsrc")
 CANON_BASELINE: str = "numba"
 
 
-def parse_arm(arm: str, pattern: re.Pattern[str] = ARM_PATTERN) -> tuple[str, str] | None:
-    """``arm``'s (model, condition), or ``None`` when ``pattern`` does not name it."""
+def parse_setup(arm: str, pattern: re.Pattern[str] = SETUP_PATTERN) -> tuple[str, str] | None:
+    """``setup``'s (model, condition), or ``None`` when ``pattern`` does not name it."""
     match = pattern.fullmatch(arm)
     if match is None:
         return None
     return match.group("model"), match.group("condition") or ""
 
 
-def candidate_arms(frame: pd.DataFrame, pattern: re.Pattern[str] = ARM_PATTERN) -> dict[str, tuple[str, str]]:
-    """Every distinct arm of ``frame`` that ``pattern`` names: arm -> (model, condition)."""
+def candidate_setups(frame: pd.DataFrame, pattern: re.Pattern[str] = SETUP_PATTERN) -> dict[str, tuple[str, str]]:
+    """Every distinct setup of ``frame`` that ``pattern`` names: setup -> (model, condition)."""
     out: dict[str, tuple[str, str]] = {}
     for arm in frame["arm"].dropna().astype(str).unique():
-        parsed = parse_arm(str(arm), pattern)
+        parsed = parse_setup(str(arm), pattern)
         if parsed is not None:
             out[str(arm)] = parsed
     return out
 
 
-def arm_tokens(
+def setup_tokens(
     frame: pd.DataFrame, arm: str, repeats: population.RepeatPolicy = population.RepeatPolicy.LATEST
 ) -> tuple[dict[str, float], dict[str, float], dict[str, float]]:
-    """``arm``'s per-kernel token total under ``repeats`` (:func:`population.kernel_tokens`), plus
+    """``setup``'s per-kernel token total under ``repeats`` (:func:`population.kernel_tokens`), plus
     the minimum and maximum over the tasks when ``repeats="median"`` (R5).
 
     Tokens come only from ``record = task`` rows (T4); a kernel with no task total is absent, never
@@ -92,21 +92,21 @@ def condition_label(condition: str) -> str:
     """The display text for a condition tag (``""`` control, ``cpf``, ``cpfsrc``).
 
     The control reads "No Packet", never the registry's "No Skill Packet": the llr40 treatments
-    (CPF page, CPF as source) are not skills, and borrowing the skills experiments' wording for
+    (CPF page, CPF as source) are not skills, and borrowing the skills studies' wording for
     the control names the wrong thing (:func:`hpcagent_bench.packets.control_label`, gated on the
     treatment set rather than hardcoded here or in the registry).
     """
     if condition == "":
         return packets.control_label(CONDITION_ORDER[1:])
-    return experiment_tags.names("packets").get(condition, condition)
+    return study_tags.names("packets").get(condition, condition)
 
 
 def rank_condition(condition: str, order: Sequence[str] = CONDITION_ORDER) -> tuple[int, str]:
     """``order``'s conditions first, in their declared order, then anything else alphabetically.
 
-    A condition axis need not be a skill packet: gitscicomp10's arm names carry ``kernel``/``repo``,
+    A condition axis need not be a skill packet: gitscicomp10's setup names carry ``kernel``/``repo``,
     neither of which is in :data:`CONDITION_ORDER`. ``CONDITION_ORDER.index`` would raise on those;
     this is the same "known order first, unregistered last" tiebreak :func:`palette.in_order` and
-    :mod:`statistics.plot_arm_summary`'s ``condition_order`` already use for model and packet axes.
+    :mod:`statistics.plot_setup_summary`'s ``condition_order`` already use for model and packet axes.
     """
     return (order.index(condition), "") if condition in order else (len(order), condition)

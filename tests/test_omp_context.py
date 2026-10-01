@@ -89,7 +89,7 @@ def test_an_unknown_family_request_falls_to_the_default_and_the_build_reports_it
     assert sandbox.compiled_omp_context("c", "tcc") == "gnu"
 
 
-def test_an_arm_pin_beats_the_submissions_request() -> None:
+def test_an_setup_pin_beats_the_submissions_request() -> None:
     config.set_override("build.compiler.c", "llvm")
     assert sandbox.compiled_omp_context("c", "gcc") == "llvm"
 
@@ -103,10 +103,10 @@ def test_an_arm_pin_beats_the_submissions_request() -> None:
         ("openacc", "amd", "gnu"),
     ],
 )
-def test_an_offload_arm_takes_its_legs_family_whatever_the_submission_asked(
+def test_an_offload_setup_takes_its_legs_family_whatever_the_submission_asked(
     monkeypatch: pytest.MonkeyPatch, model: str, vendor: str, expected: str
 ) -> None:
-    """OpenACC has no AMD leg: that arm builds with the block's own driver, so it is the default context."""
+    """OpenACC has no AMD leg: that setup builds with the block's own driver, so it is the default context."""
     monkeypatch.setenv(languages.OFFLOAD_MODEL_ENV, model)
     monkeypatch.setattr(sandbox, "OFFLOAD_VENDOR", vendor)
     # The leg's driver is looked up on PATH and in the ROCm tree; the map, not this host's install, is under test.

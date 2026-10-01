@@ -155,7 +155,7 @@ def test_a_relaunch_waits_only_the_remaining_wall_clock_not_a_fresh_one(
 ) -> None:
     """docs/token_accounting.md: ``AGENT_TIMEOUT_SECONDS`` is ONE deadline shared by every attempt of
     a problem. If a relaunch instead started its own fresh clock, three relaunches would hold a
-    worker for three times the wall the arm was sized against -- the exact regression this pins.
+    worker for three times the wall the setup was sized against -- the exact regression this pins.
     """
     import shutil
 

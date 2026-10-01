@@ -4,7 +4,7 @@
 
 An upper bound or an exact pin (``<``, ``<=``, ``==``, ``~=``) carries a comment naming the break or
 the recorded run it reproduces, after it on its line or on the line above. Exact pins live only in the
-dependency groups, whose job is to reproduce the recorded arms. A package named in several lists
+dependency groups, whose job is to reproduce the recorded setups. A package named in several lists
 (dependencies, extras, groups, build requirements) never gets a pin another list excludes. Static:
 the file is read, nothing is resolved.
 """

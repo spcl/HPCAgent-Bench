@@ -13,7 +13,7 @@ explicit ``if/else`` over a fresh temp on the Fortran-only tree copy.
 
 Both probes run the compiled kernel from a generated Fortran PROGRAM, in a subprocess:
 
-* the FPE trap ``-ffpe-trap=zero`` arms is installed by ``libgfortran``'s PROGRAM-level startup
+* the FPE trap ``-ffpe-trap=zero`` setups is installed by ``libgfortran``'s PROGRAM-level startup
   code, which never runs for a bare ``dlopen``ed subroutine -- a ctypes call into a shared object
   does not trap however the object was compiled;
 * an aborting kernel is the SIGNAL these tests read, so it must not be able to take the pytest

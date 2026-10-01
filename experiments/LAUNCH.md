@@ -1,9 +1,9 @@
 # Launching jobs on Beverin
 
-How to size, submit, watch and cancel a campaign arm on Beverin (AMD MI300A, partition `mi300`),
+How to size, submit, watch and cancel an experiment setup on Beverin (AMD MI300A, partition `mi300`),
 regrade and extract its results, and which serving configurations complete. Every command runs from
 `experiments/` on a login node. A job snapshots the checkout when it STARTS, not when it is submitted
-(README "Frozen tree"). Jobs never resubmit themselves. Arms and the role split:
+(README "Frozen tree"). Jobs never resubmit themselves. Setups and the role split:
 [README.md](README.md); Slurm flags per serving role: [`docs/serving/`](../docs/serving/README.md).
 
 A node is 4 MI300A APUs (96 Zen 4 cores, 192 hardware threads, 4 GPUs), about 513 GB.
@@ -24,21 +24,21 @@ Every `SUBMIT=1` refuses to call `sbatch` without `SBATCH_ACCOUNT` (export it, o
 - **Partition `mi300`.** `beverin.sbatch` defaults to it. Another partition needs `PARTITION=<p>` and
   a `layers/partition-<p>.env` layer (mi200: section 0).
 - **Never pass `--nodes` by hand.** `arm_nodes.sh` sums `INFERENCE_NODES + AGENT_NODES +
-  JUDGE_NODES` from the arm's `.env`; `beverin.sbatch` exits 2 when the allocation disagrees.
+  JUDGE_NODES` from the setup's `.env`; `beverin.sbatch` exits 2 when the allocation disagrees.
 - **Never pass `--account`/`-A`.** Export `SBATCH_ACCOUNT` (or set it in `layers/site.env`);
-  `. hpcagent_bench/cluster/env.sh` hands it to `srun`/`salloc` too, so every job of a campaign bills one account.
+  `. hpcagent_bench/cluster/env.sh` hands it to `srun`/`salloc` too, so every job of an experiment bills one account.
 - **Size judges from the grading rate** ([README.md](README.md#roles-and-nodes)).
 - **Edit an env line, never append.** The file is sourced, so a duplicate silently shadows.
 
 
-## 0. Submit an arm
+## 0. Submit a setup
 
-`submit.sh` stages every MODELS x LANGUAGES x PACKETS x HARNESSES arm of one `arms.yaml` campaign
+`submit.sh` stages every MODELS x LANGUAGES x PACKETS x HARNESSES setup of one `arms.yaml` experiment
 (`BASE`) over one roster (`TAG` or `KERNELS_FILE`) and, with `SUBMIT=1`, submits each as a read-only
-snapshot `.rendered/<arm>-<UTC time>-<hash>.env`. Its header comment lists its knobs.
+snapshot `.rendered/<setup>-<UTC time>-<hash>.env`. Its header comment lists its knobs.
 
 ```bash
-TAG=llr40 ../hpcagent_bench/cluster/submit.sh                                   # dry run: env + problems per arm
+TAG=llr40 ../hpcagent_bench/cluster/submit.sh                                   # dry run: env + problems per setup
 TAG=llr40 MODELS="qwen38 oss120b" LANGUAGES="c hip" PACKETS="none lang-skills" SUBMIT=1 ../hpcagent_bench/cluster/submit.sh
 BASE=harness TAG=harness20 HARNESSES="claude miniswe" CLEAN=1 SUBMIT=1 ../hpcagent_bench/cluster/submit.sh
 BASE=mlscale TAG=mlscale20 LANGUAGES=hip NICE=1500 SUBMIT=1 ../hpcagent_bench/cluster/submit.sh
@@ -51,17 +51,17 @@ One existing env file, no wrapper:
 
 ```bash
 . ../hpcagent_bench/cluster/arm_nodes.sh
-sbatch --nodes="$(arm_nodes .env.<arm>)" --time="$(arm_walltime .env.<arm> 40)" \
-    --partition=mi300 --no-requeue --job-name=<arm> \
+sbatch --nodes="$(setup_nodes .env.<arm>)" --time="$(setup_walltime .env.<arm> 40)" \
+    --partition=mi300 --no-requeue --job-name=<setup> \
     --export=ALL,CLUSTER_ENV_FILE="$PWD/.env.<arm>" ../hpcagent_bench/cluster/beverin.sbatch
 ```
 
-`arm_walltime <env> <kernels>` covers every agent batch plus `STAGING_HOURS` (default 3). A smoke
+`setup_walltime <env> <kernels>` covers every agent batch plus `STAGING_HOURS` (default 3). A smoke
 run is the same command with a short `--time`. Check the queue and budget first:
 `squeue -u "$USER" -o "%.10i %.30j %.9T %.10M %.5D %R"`.
 
 **mi200 (overflow, never paper data).** `PARTITION=mi200` swaps every `*_CE_ENV` to its `-mi200-`
-EDF, pins `layers/partition-mi200*.env` and requests 8 GCDs per node. The recorded experiment must
+EDF, pins `layers/partition-mi200*.env` and requests 8 GCDs per node. The recorded study must
 name `mi200`; only qwen38 has an mi200 serving layer.
 
 ```bash
@@ -71,7 +71,7 @@ PARTITION=mi200 EXPERIMENT=harness20-mi200 BASE=harness TAG=harness20 HARNESSES=
 ## Sizing agents and walltime
 
 `AGENTS_PER_NODE x AGENT_NODES` is a rolling pool. A pass is `ceil(kernels / agents)`, so the floor
-is `passes x AGENT_TIMEOUT_SECONDS` plus serving start-up and the judge drain. Give an arm its floor
+is `passes x AGENT_TIMEOUT_SECONDS` plus serving start-up and the judge drain. Give a setup its floor
 plus half again.
 
 | Model | `AGENTS_PER_NODE` | `AGENT_TIMEOUT_SECONDS` (LLR base) | 40 kernels |
@@ -81,7 +81,7 @@ plus half again.
 | kimi27sglang | 20 | 43200 | 2 passes |
 
 Agents stop at `AGENT_TIMEOUT_SECONDS`, not at the job's wall clock. One inference server does not
-carry 120 qwen38 agents (decode slows until the arm records almost nothing); split a long list with
+carry 120 qwen38 agents (decode slows until the setup records almost nothing); split a long list with
 `KERNELS_FILE` instead.
 
 
@@ -93,7 +93,7 @@ carry 120 qwen38 agents (decode slows until the arm records almost nothing); spl
 | Single (`single`) | unlimited | once | `AGENT_SINGLE_SUBMISSION=1`, `AGENT_SUBMISSION_POLICY_FILE=submission-single.md` |
 | Blind (`blind`) | none | once | Single's keys with `submission-blind.md`, plus `AGENT_SCORE_TOOL=0` and `HPCAGENT_BENCH_SERVICE_SCORE_ENABLED=0` |
 
-`layers/common.env` defaults to Single. An arm that wants Open or Blind pins both keys itself; Blind
+`layers/common.env` defaults to Single. A setup that wants Open or Blind pins both keys itself; Blind
 also needs the judge-side switch, or an agent's own HTTP call still reaches `/score`. Tool gates:
 [`docs/agents_and_tool_access.md`](../docs/agents_and_tool_access.md).
 
@@ -106,7 +106,7 @@ also needs the judge-side switch, or an agent's own HTTP call still reaches `/sc
 | Kimi K2.7 on SGLang, `--attention-backend triton`, `SGLANG_USE_AITER=1` | completes |
 | qwen38 on SGLang, same attention config | full accuracy up to 51,200-token cases |
 | `JUDGE_NODES=1` (4 ranks) for 40 agents | no judge backlog |
-| `--language-only` | campaigns are text-only; a vision stack only costs KV cache |
+| `--language-only` | experiments are text-only; a vision stack only costs KV cache |
 | weights on `iopsstor` | much higher concurrent-read throughput than general scratch |
 | aiter on, vLLM path | fails: kernels JIT-build behind a lock and outlive the engine's RPC deadline |
 | qwen38 on vLLM | fails: a fraction of SGLang throughput; `mtp`, `fp8kv+mtp`, aiter legs do not serve |
@@ -137,7 +137,7 @@ Each model's `arms.yaml` entry declares the rungs its server accepts in `EFFORT_
 
 Never delete the line: `agent_driver.py` defaults a missing `AGENT_EFFORT` to `xhigh`. A harness
 whose client types fewer rungs gets the top one it can spell; `harness-end.json` records it. qwen38
-arms pass `--chat-template ${SCRIPT_DIR}/chat-template-qwen38.jinja` in `SGLANG_EXTRA_ARGS` (the
+setups pass `--chat-template ${SCRIPT_DIR}/chat-template-qwen38.jinja` in `SGLANG_EXTRA_ARGS` (the
 stock template rejects `max`, which SGLang maps `xhigh` to); re-apply it when the weights change.
 
 
@@ -152,7 +152,7 @@ inlines the packet.
     --tag llr40 > problems-llr40-c.jsonl          # skills leg: add --skills
 ```
 
-`JUDGE_INPUT_MODE=source` makes the judge accept only `<kernel>.<ext>` in the arm's language.
+`JUDGE_INPUT_MODE=source` makes the judge accept only `<kernel>.<ext>` in the setup's language.
 
 
 ## 1. Grade under the final protocol
@@ -183,9 +183,9 @@ pass's grades back beside the submissions they re-timed. Scan again after `apply
 makes it a submission that is now owed its final grade.
 
 `--db` names a results DB (repeatable: a job's `results.db`, a dataset merged from many, or the core
-database plus the CPF archive; an arm two of them hold with different rows is refused). `--track` narrows to
-one track. `--env-dir` is where the arms' `.env.<arm>` files are; an arm renamed since its launch grades under
-the file of its older spelling (`experiment_tags.aliased_arm`: `.env.cpf-llr40-<model>-c` for
+database plus the CPF archive; a setup two of them hold with different rows is refused). `--track` narrows to
+one track. `--env-dir` is where the setups' `.env.<arm>` files are; a setup renamed since its launch grades under
+the file of its older spelling (`study_tags.aliased_setup`: `.env.cpf-llr40-<model>-c` for
 `llr40-<model>-c`). The extraction applies the promotions it is handed with `--regrades 'out/regrade-*.db'`.
 
 `hpcagent-bench grade-under <subcommand>` is the same entry point.
@@ -248,7 +248,7 @@ squeue -j <jobid> --steps --noheader --format='%i|%j|%T|%N'
 `FAILED 1:0` with steps `Killed` at the end is the normal teardown after the agents finished. Read
 the judge DBs, not `sacct`: exit state says nothing about how many kernels were graded.
 
-`RUN_ROOT` comes from the arm's `.env` (`$SCRATCH/hpcagent-bench-runs/<experiment>-<stamp>`); the
+`RUN_ROOT` comes from the setup's `.env` (`$SCRATCH/hpcagent-bench-runs/<study>-<stamp>`); the
 run directory is `$RUN_ROOT/<jobid>`.
 
 ```bash
@@ -286,7 +286,7 @@ Cancel:
 
 ```bash
 scancel <jobid> [<jobid> ...]
-scancel -u "$USER" --name=<arm>      # every arm is --job-name'd
+scancel -u "$USER" --name=<setup>      # every setup is --job-name'd
 ```
 
 Judge shards written before the cancel stay under `$RUN_ROOT/<jobid>/judge/`.
@@ -302,7 +302,7 @@ build. The **grade job** (`mlscale-grade.sbatch`) replays each submission at P =
 `mlscale-part2` (second ten) are aliases of it.
 
 Grade jobs run in chunks by default: each collects the verified submissions itself (every
-`mlscale-*` campaign, or `RUNS`; `EXPERIMENT` filters on the recorded experiment), skips what a
+`mlscale-*` experiment, or `RUNS`; `EXPERIMENT` filters on the recorded study), skips what a
 `scaling-grade-*.db` in the out dir holds, and claims one item at a time in
 `<out>/scaling-claims.db`, so N jobs on one out dir never grade a submission twice. A gang stops at
 `MAX_ITEMS` or when the walltime left cannot fit another item; a killed job's claims come free after
@@ -338,7 +338,7 @@ GANG_NODES=1 RANK_COUNTS='[1,2,4]' PRESET=L NO_RECORD=1 sbatch --nodes=1 --time=
 
 ## Traps
 
-- **Exit state is not the result.** An arm cut off by its wall clock reads `COMPLETED`; one where
+- **Exit state is not the result.** A setup cut off by its wall clock reads `COMPLETED`; one where
   every agent exits nonzero reads `FAILED` and may still hold many graded submissions. Read the judge
   DBs.
 - **An agent whose MCP server failed at init never submits yet exits rc=0.** Check the `connected`
@@ -352,11 +352,11 @@ GANG_NODES=1 RANK_COUNTS='[1,2,4]' PRESET=L NO_RECORD=1 sbatch --nodes=1 --time=
   `SKILL.md`.
 - **Never edit an env file or launcher while its jobs run**; roles re-source them.
 - **Never export `CPF_*` in the submitting shell.** `sbatch --export=ALL` would stage the CPF
-  drop-in into a control arm; `submit_arm_job` strips `CPF_DROPIN_DIR`, `CPF_FORMS_DIR` and
+  drop-in into a control setup; `submit_setup_job` strips `CPF_DROPIN_DIR`, `CPF_FORMS_DIR` and
   `HPCAGENT_BENCH_SERVICE_CANONICAL_PARALLEL_FORM_DIR`.
 - **Walltime can be lowered, never raised.** Submit with slack. A dependency can be added only while
   the job is PENDING. `launch failed requeued held` does not restart: `scontrol release <id>`.
-- **Arms compare only under identical serve config.** Changing a model layer mid-campaign splits the
+- **Setups compare only under identical serve config.** Changing a model layer mid-experiment splits the
   A/B.
 - **Long tool arguments look like a dead stream.** SGLang's `qwen3_coder` parser emits a tool
   argument only when fully decoded; `run_cluster.sh` derives `CLAUDE_STREAM_IDLE_TIMEOUT_MS` from

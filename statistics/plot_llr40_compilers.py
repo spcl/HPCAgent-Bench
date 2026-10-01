@@ -1,7 +1,7 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """llr40: DaCe's canon-sweep columns, the polyhedral compiler baselines, and every model's
-CPF arm, speedup over numba.
+CPF setup, speedup over numba.
 
 Two panels sharing one kernel axis (:func:`hpcagent_bench.stats.figures.signed.llr40_figure`, drawn
 by :mod:`hpcagent_bench.stats.figures.per_kernel`): speedup on top (log2 axis read in ratios,
@@ -18,7 +18,7 @@ stays that (decision). A roster kernel either has no validated result for: the r
 enters it at 1x, flagged, never dropped (:func:`hpcagent_bench.stats.canon.roster_speedups`) -- a
 crossed mark on the figure and a row of the ``-kernels.csv`` table, but no summary: the geomean column
 is taken over the kernels the column SOLVED, and its success rate is the separate number.
-``--mark-pending`` (off by default) splits off the kernels a column or arm has not ATTEMPTED yet:
+``--mark-pending`` (off by default) splits off the kernels a column or setup has not ATTEMPTED yet:
 they draw a "?" and enter no geomean, where a failure keeps its cross at 1x. A kernel Numba does not
 verify is timed against C autopar (:data:`BASELINE_FALLBACK`).
 
@@ -30,9 +30,9 @@ import argparse
 import pathlib
 import sys
 
-from hpcagent_bench.experiments import read_observations, read_table
+from hpcagent_bench.studies import read_observations, read_table
 from hpcagent_bench.stats import cost, population
-from hpcagent_bench.stats.figures import llr40_arms, signed
+from hpcagent_bench.stats.figures import llr40_setups, signed
 
 #: The polyhedral compiler baselines (decision), appended to
 #: :data:`~hpcagent_bench.stats.figures.signed.LLR40_CANON_COLUMNS`' two DaCe columns for THIS
@@ -45,7 +45,7 @@ def load_roster(roster_file: pathlib.Path | None, canon_frame: "object") -> list
     """The roster kernel names: ``--roster-file`` (one per line) or every kernel the canon db names."""
     if roster_file is not None:
         return [line.strip() for line in roster_file.read_text().splitlines() if line.strip()]
-    return llr40_arms.roster_of(canon_frame)
+    return llr40_setups.roster_of(canon_frame)
 
 
 #: The canon column that times a kernel Numba did not verify.
@@ -118,7 +118,7 @@ def main(argv: list[str] | None = None) -> int:
         action="append",
         default=[],
         metavar="KEY=LABEL",
-        help="rename a row by framework or arm key, e.g. dace_cpu_canonicalize=CPF; repeatable",
+        help="rename a row by framework or setup key, e.g. dace_cpu_canonicalize=CPF; repeatable",
     )
     ap.add_argument(
         "--offset", type=float, default=0.0, help="spread a kernel's rows over this fraction of its slot; 0 stacks them"
@@ -126,8 +126,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument(
         "--mark-pending",
         action="store_true",
-        help="draw a kernel a column or arm has not attempted yet as '?' (left out of the geomean) "
-        "instead of a failure at 1x; keeps arms not yet served the whole roster",
+        help="draw a kernel a column or setup has not attempted yet as '?' (left out of the geomean) "
+        "instead of a failure at 1x; keeps setups not yet served the whole roster",
     )
     ap.add_argument("--out", type=pathlib.Path, default=pathlib.Path("figures/llr40_compilers"))
     cost.add_arguments(ap)

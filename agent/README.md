@@ -91,4 +91,4 @@ There are two, and they do not feed each other.
   rendered by `harness/runner.py` for the CLI and the optimizer backends. One shot, no tools.
 
 A fact written only into a `.j2` section is invisible to every campaign agent: state a campaign fact
-HERE. `tests/test_campaign_prompt_sources.py` pins the separation.
+HERE. `tests/test_experiment_prompt_sources.py` pins the separation.

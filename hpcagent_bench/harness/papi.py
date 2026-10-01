@@ -9,7 +9,7 @@ counting half (what the hardware did).
 * **One metric per run.** More events than counter registers forces multiplexing, whose scaled
   estimates are not counts; each metric therefore costs one measured run.
 * **Availability is discovered.** :func:`available_events` walks PAPI's preset table and then
-  arms each survivor (:func:`countable`): on a virtualised host a preset can query yes and still
+  setups each survivor (:func:`countable`): on a virtualised host a preset can query yes and still
   fail to add.
 * **ctypes only.** ``libpapi.so`` needs no build step; there is one availability oracle.
 * **A missing number is named, never substituted.** Each metric has candidate expressions, best
@@ -620,7 +620,7 @@ def demand(lib: ctypes.CDLL, code: int, what: str) -> None:
 
 
 def countable(lib: ctypes.CDLL, code: int) -> bool:
-    """Whether this machine can arm ``code``: add it to a scratch set and start it. ``PAPI_query_event``
+    """Whether this machine can setup ``code``: add it to a scratch set and start it. ``PAPI_query_event``
     reads the CPU-model preset table, which a virtualised guest answers yes to without a PMU."""
     eventset = ctypes.c_int(PAPI_NULL)
     if lib.PAPI_create_eventset(ctypes.byref(eventset)) != PAPI_OK:
@@ -1003,13 +1003,13 @@ def counted_run(
         if index < warm:  # untimed as far as the counters go: this is what creates the OpenMP pool
             start = time.perf_counter_ns()
             fn(*c_args)
-            settle()  # the pool arm() enumerates below must be the one the kernel actually used
+            settle()  # the pool setup() enumerates below must be the one the kernel actually used
             return host_rep(time.perf_counter_ns() - start)
         if index == warm:
             arm()
         # Sampled at every rep boundary, outside the read bracket.
         seen.update(thread_ids())
-        # Read-delta per rep: PAPI_start arms once, and two reads isolate one call.
+        # Read-delta per rep: PAPI_start setups once, and two reads isolate one call.
         for (_tid, eventset), (before, _after) in zip(handles, buffers):
             demand(lib, lib.PAPI_read(eventset, before), "PAPI_read")
         t0 = time.perf_counter_ns()
@@ -1184,7 +1184,7 @@ def perf_event_reason() -> tuple[str, str] | None:
             "kernel.perf_event_paranoid=2', or run the container with --cap-add=CAP_PERFMON)",
         )
     # An open gate is not a countable machine: a hypervisor may expose perf_event without a PMU.
-    # available_events arms what it reports, so that arrives as an empty set.
+    # available_events setups what it reports, so that arrives as an empty set.
     try:
         armable = available_events()
     except PapiUnavailable:

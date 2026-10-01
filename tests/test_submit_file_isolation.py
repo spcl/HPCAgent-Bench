@@ -1,9 +1,9 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """submit_common.sh's guards against a submission rewriting what a queued job reads, its budget
-scaling, and the sbatch call submit_arm_job makes.
+scaling, and the sbatch call submit_setup_job makes.
 
-A dry run (SUBMIT=0) writes the arm's env and problems file too, so without these guards a preview or
+A dry run (SUBMIT=0) writes the setup's env and problems file too, so without these guards a preview or
 a subset rerun could silently rewrite a queued job's kernel list. refuse_if_queue_references is
 exercised against a stub squeue/sacct standing in for a real PENDING job.
 """
@@ -57,11 +57,11 @@ def sacct_pointing_at(env_path: str) -> str:
 
 
 def test_a_kernels_file_subset_env_diverges_from_the_canonical_name(tmp_path: pathlib.Path) -> None:
-    """arm_file_suffix at KERNELS_FILE unset is empty (canonical); set, it is never empty -- the
+    """setup_file_suffix at KERNELS_FILE unset is empty (canonical); set, it is never empty -- the
     whole mechanism a subset submission relies on to avoid the canonical filename."""
     path = f"{tmp_path / 'bin'}:/usr/bin:/bin"
     result = subprocess.run(
-        [BASH, "-c", f'. {EXPERIMENTS / "submit_common.sh"}; echo "[$(arm_file_suffix)]"'],
+        [BASH, "-c", f'. {EXPERIMENTS / "submit_common.sh"}; echo "[$(setup_file_suffix)]"'],
         env={"PATH": path},
         capture_output=True,
         text=True,
@@ -71,7 +71,7 @@ def test_a_kernels_file_subset_env_diverges_from_the_canonical_name(tmp_path: pa
     assert result.stdout.strip() == "[]"
 
     result = subprocess.run(
-        [BASH, "-c", f'. {EXPERIMENTS / "submit_common.sh"}; echo "[$(arm_file_suffix)]"'],
+        [BASH, "-c", f'. {EXPERIMENTS / "submit_common.sh"}; echo "[$(setup_file_suffix)]"'],
         env={"PATH": path, "KERNELS_FILE": "owed/arm-budget.txt"},
         capture_output=True,
         text=True,
@@ -191,7 +191,7 @@ def test_scale_time_clamps_to_the_partition_limit_minus_staging(tmp_path: pathli
 
 
 def test_scaled_budget_from_reports_the_same_capped_value_it_writes(tmp_path: pathlib.Path) -> None:
-    """submit.sh records scaled_budget_from's return value as the arm's budget, so that value must
+    """submit.sh records scaled_budget_from's return value as the setup's budget, so that value must
     already be the capped one the job runs under."""
     base = tmp_path / "base.env"
     base.write_text("AGENT_TIMEOUT_SECONDS=28800\nAGENT_MAX_TOKENS=12000000\n")
@@ -231,11 +231,11 @@ def test_budget_env_suffix_names_both_scales_when_they_diverge(
     assert result.stdout.strip() == f"[{want}]"
 
 
-def run_submit_arm_job_probe(
+def run_submit_setup_job_probe(
     tmp_path: pathlib.Path, extra_env: dict[str, str], env_text: str = ""
 ) -> tuple[str, str, list[str]]:
-    """Source arm_nodes.sh + submit_common.sh, call submit_arm_job against a stub sbatch that
-    records every call's argv, and return (the agent job's argv, submit_arm_job's own stdout line
+    """Source arm_nodes.sh + submit_common.sh, call submit_setup_job against a stub sbatch that
+    records every call's argv, and return (the agent job's argv, submit_setup_job's own stdout line
     for it, the argv of every other sbatch call)."""
     env_file = tmp_path / ".env.some-arm"
     env_file.write_text("INFERENCE_NODES=2\nAGENT_NODES=1\nJUDGE_NODES=1\n" + env_text)
@@ -252,7 +252,7 @@ def run_submit_arm_job_probe(
         f". {EXPERIMENTS / 'arm_nodes.sh'}\n"
         f". {EXPERIMENTS / 'submit_common.sh'}\n"
         f'cd "{tmp_path}"\n'
-        f'submit_arm_job "{env_file}" some-arm 01:00:00\n'
+        f'submit_setup_job "{env_file}" some-setup 01:00:00\n'
     )
     env = {
         "PATH": f"{tmp_path / 'bin'}:/usr/bin:/bin",
@@ -268,17 +268,17 @@ def run_submit_arm_job_probe(
     argvs = [(calls / str(n)).read_text() for n in range(len(list(calls.iterdir())))]
     agent = [argv for argv in argvs if any(line.endswith("/beverin.sbatch") for line in argv.splitlines())]
     assert len(agent) == 1, argvs
-    line = next(text for text in result.stdout.splitlines() if text.startswith("submitted some-arm"))
+    line = next(text for text in result.stdout.splitlines() if text.startswith("submitted some-setup"))
     return agent[0], line, [argv for argv in argvs if argv not in agent]
 
 
 def test_hold_1_asks_sbatch_for_hold(tmp_path: pathlib.Path) -> None:
     """HOLD=1 passes --hold to the same sbatch call that submits the job: a follow-up
     ``scontrol hold`` races the scheduler, and a job can start before it lands."""
-    argv = run_submit_arm_job_probe(tmp_path, {"HOLD": "1"})[0]
+    argv = run_submit_setup_job_probe(tmp_path, {"HOLD": "1"})[0]
     assert "--hold" in argv.splitlines()
     (tmp_path / "unheld").mkdir()
-    argv = run_submit_arm_job_probe(tmp_path / "unheld", {})[0]
+    argv = run_submit_setup_job_probe(tmp_path / "unheld", {})[0]
     assert "--hold" not in argv.splitlines()
 
 
@@ -287,12 +287,12 @@ def test_the_job_is_submitted_at_nice_else_the_site_default(
     tmp_path: pathlib.Path, knobs: dict[str, str], nice: str
 ) -> None:
     """NICE reaches the submitting sbatch call; unset, the site layer's HPCAGENT_BENCH_NICE does."""
-    argv = run_submit_arm_job_probe(tmp_path, knobs)[0]
+    argv = run_submit_setup_job_probe(tmp_path, knobs)[0]
     assert f"--nice={nice}" in argv.splitlines()
 
 
 def test_an_agent_job_chains_no_job_after_it(tmp_path: pathlib.Path) -> None:
     """Every /submit is its own final grade (mw4x5), so no job is chained on the agent job to grade what its
     judges left pending."""
-    _, _, others = run_submit_arm_job_probe(tmp_path, {"NICE": "1000"})
+    _, _, others = run_submit_setup_job_probe(tmp_path, {"NICE": "1000"})
     assert others == []

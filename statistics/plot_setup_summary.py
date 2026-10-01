@@ -1,6 +1,6 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Where each ARM landed on one experiment: geomean speedup, and median spend, with and without
+"""Where each ARM landed on one study: geomean speedup, and median spend, with and without
 the skills packet.
 
 One point per (model, language, condition). With TWO conditions -- a packet on or off -- they are
@@ -17,7 +17,7 @@ THE SPEEDUP AXIS IS THE GEOMEAN OVER KERNELS (:func:`hpcagent_bench.stats.popula
 speedup is a ratio, and the geometric mean is the statistic an "overall speedup" is under this
 rule everywhere else in the repo (:class:`~hpcagent_bench.stats.population.ArmAggregate`), never a
 median -- a median of per-kernel speedups is not the geomean except when they happen to be
-symmetric, so a kernel the arm never solved does not quietly drop out of one side of the comparison
+symmetric, so a kernel the setup never solved does not quietly drop out of one side of the comparison
 either way. Tokens are not a ratio, so the spend axis stays the MEDIAN over kernels.
 
 No interval. These are locations, not tests; whether the difference is real is the question the
@@ -35,7 +35,7 @@ import matplotlib.patches
 import numpy as np
 import pandas as pd
 
-from hpcagent_bench import experiment_tags, experiments, packets
+from hpcagent_bench import study_tags, studies, packets
 from hpcagent_bench.stats import cost, palette, population, rules
 from hpcagent_bench.stats.figures import per_kernel
 from hpcagent_bench.stats import style as plotstyle
@@ -63,7 +63,9 @@ MARK_PT: float = 2.0 * TYPE.marker_size
 LEGEND_COLS_SINGLE: int = 3
 
 
-def arm_points(frame: pd.DataFrame, repeats: population.RepeatPolicy = population.RepeatPolicy.LATEST) -> pd.DataFrame:
+def setup_points(
+    frame: pd.DataFrame, repeats: population.RepeatPolicy = population.RepeatPolicy.LATEST
+) -> pd.DataFrame:
     """One row per (model, language, condition): :func:`~hpcagent_bench.stats.population.kernel_medians`
     under ``repeats``, checked against SC15 Rules 4 and 5 before it is drawn."""
     rows = []
@@ -80,19 +82,19 @@ def arm_points(frame: pd.DataFrame, repeats: population.RepeatPolicy = populatio
 
 
 def eligible_rows(rows: pd.DataFrame, include_incomplete: bool = False) -> pd.DataFrame:
-    """``rows`` of the arms with a row for every roster kernel (spec E1), naming each dropped arm on
-    stderr; the roster is every kernel any arm in ``rows`` touched. ``include_incomplete`` keeps all."""
+    """``rows`` of the setups with a row for every roster kernel (spec E1), naming each dropped setup on
+    stderr; the roster is every kernel any setup in ``rows`` touched. ``include_incomplete`` keeps all."""
     if include_incomplete:
         return rows
     roster = sorted(rows["benchmark"].dropna().astype(str).unique())
-    kept, dropped = population.complete_arms(rows, roster)
+    kept, dropped = population.complete_setups(rows, roster)
     for arm in sorted(dropped):
         print(f"dropping {arm} ({dropped[arm]}/{len(roster)} roster kernels)", file=sys.stderr)
     return rows[rows["arm"].astype(str).isin(kept)]
 
 
 #: Fixed display order for the known conditions: the control, then the treatments in the order the
-#: campaigns introduced them. A condition outside this set (an unregistered packet combination)
+#: experiments introduced them. A condition outside this set (an unregistered packet combination)
 #: still plots, just after every named one -- see :func:`condition_order`.
 CONDITION_ORDER: tuple[str, ...] = ("", "lang-skills", "cpf", "cpfsrc")
 
@@ -183,7 +185,7 @@ def draw_metric(ax: matplotlib.axes.Axes, frame: pd.DataFrame, column: str, labe
     stop three models overplotting, not a coordinate.
     """
     # Colour is the PACKET, shape is the MODEL, in both branches: a reader carries one meaning for
-    # a colour across every figure, and a panel that swapped the channels when a third arm appeared
+    # a colour across every figure, and a panel that swapped the channels when a third setup appeared
     # would repaint every series.
     hues = palette.colors(condition_order(frame))
     shapes = palette.model_markers(frame.model.unique())
@@ -206,7 +208,7 @@ def draw_metric(ax: matplotlib.axes.Axes, frame: pd.DataFrame, column: str, labe
         ax.set_yscale("log")
     ax.set_ylabel(label)
     ax.set_xticks(range(len(languages)))
-    ax.set_xticklabels([experiment_tags.language_name(lang) for lang in languages], fontsize=TYPE.label_pt, rotation=0)
+    ax.set_xticklabels([study_tags.language_name(lang) for lang in languages], fontsize=TYPE.label_pt, rotation=0)
     ax.set_xlim(-0.6, len(languages) - 0.4)
     plotstyle.value_axis(ax, "y", log_base=10.0)
     plotstyle.despine(ax)
@@ -229,7 +231,7 @@ def handles_for(frame: pd.DataFrame) -> list:
             linestyle="none",
             color=plotstyle.MUTED,
             markersize=MARK_PT,
-            label=experiment_tags.model_name(name),
+            label=study_tags.model_name(name),
         )
         for name, shape in palette.model_markers(palette.in_order(frame.model.unique())).items()
     ]
@@ -290,7 +292,7 @@ def figure_pair(frame: pd.DataFrame, title: str, out: pathlib.Path) -> pathlib.P
 
 
 def load(path: pathlib.Path, prefix: str, card: cost.CostModel = cost.resolve()) -> pd.DataFrame:
-    frame = cost.priced(experiments.read_observations(path), card)
+    frame = cost.priced(studies.read_observations(path), card)
     if prefix:
         frame = frame[frame["arm"].astype(str).str.startswith(prefix)]
     # NO filter on speedup or tokens here. The two metrics come off DIFFERENT record types -- the
@@ -300,10 +302,10 @@ def load(path: pathlib.Path, prefix: str, card: cost.CostModel = cost.resolve())
     #
     # ``condition`` is the row's RECORDED packet (see hpcagent_bench.harness.recording),
     # canonicalized through packets.canonical (aliases included); blank for a row written before
-    # that column existed, which reads as the control -- the arm name is never parsed for this.
+    # that column existed, which reads as the control -- the setup name is never parsed for this.
     condition = frame["packet"].fillna("").astype(str).map(packets.canonical) if "packet" in frame else ""
     frame = frame.assign(
-        model=frame["arm"].astype(str).map(experiment_tags.model_of),
+        model=frame["arm"].astype(str).map(study_tags.model_of),
         condition=condition,
     )
     return frame[frame.model != "other"]
@@ -312,16 +314,20 @@ def load(path: pathlib.Path, prefix: str, card: cost.CostModel = cost.resolve())
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("observations", type=pathlib.Path)
-    parser.add_argument("--experiment", required=True, help="arm prefix naming ONE campaign")
-    parser.add_argument("--arms", default="", help="regex; keep only arms whose full name matches")
-    parser.add_argument("--label", default="", help="figure title; defaults to the campaign's display name")
+    parser.add_argument(
+        "--study", "--experiment", dest="experiment", required=True, help="setup prefix naming ONE experiment"
+    )
+    parser.add_argument(
+        "--setups", "--arms", dest="arms", default="", help="regex; keep only setups whose full name matches"
+    )
+    parser.add_argument("--label", default="", help="figure title; defaults to the experiment's display name")
     parser.add_argument("--out", type=pathlib.Path, default=pathlib.Path("figures/arm_summary.pdf"))
     parser.add_argument("--table", type=pathlib.Path, default=pathlib.Path("data/arm_summary.csv"))
     parser.add_argument(
         "--include-incomplete",
         action="store_true",
         default=False,
-        help="draw an arm even without a row for every roster kernel (default: dropped, named on stderr)",
+        help="draw a setup even without a row for every roster kernel (default: dropped, named on stderr)",
     )
     parser.add_argument(
         "--repeats",
@@ -337,20 +343,20 @@ def main() -> None:
     if args.arms:
         rows = rows[rows["arm"].astype(str).str.fullmatch(args.arms)]
     rows = eligible_rows(rows, args.include_incomplete)
-    frame = arm_points(rows, args.repeats)
+    frame = setup_points(rows, args.repeats)
     if frame.empty:
-        raise SystemExit(f"no arms for experiment {args.experiment!r}")
+        raise SystemExit(f"no setups for study {args.experiment!r}")
     args.table.parent.mkdir(parents=True, exist_ok=True)
     frame.to_csv(args.table, index=False)
 
-    title = args.label or experiment_tags.display_name(args.experiment)
+    title = args.label or study_tags.display_name(args.experiment)
     stem, suffix = args.out.stem, args.out.suffix
     written = [
         figure_one(frame, SPEEDUP, title, args.out.with_name(f"{stem}-speedup{suffix}")),
         figure_one(frame, TOKENS, title, args.out.with_name(f"{stem}-tokens{suffix}")),
         figure_pair(frame, title, args.out.with_name(f"{stem}-pair{suffix}")),
     ]
-    print(f"{len(frame)} arm points -> {args.table}")
+    print(f"{len(frame)} setup points -> {args.table}")
     for path in written:
         print(f"figure -> {path} (+ .png)")
 

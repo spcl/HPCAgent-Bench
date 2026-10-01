@@ -121,7 +121,7 @@ def run_cluster(root: pathlib.Path, env_file: pathlib.Path, **knobs: str) -> sub
 
 
 def test_run_cluster_without_colocate_still_requires_the_role_node_sum(tmp_path: pathlib.Path) -> None:
-    """COLOCATE unset keeps the old contract: a 1-node allocation for a 1+2+2 arm is refused after
+    """COLOCATE unset keeps the old contract: a 1-node allocation for a 1+2+2 setup is refused after
     preparation and before any step, even with DRY_RUN=1 set."""
     env_file = cluster_tree(tmp_path, {"INFERENCE_NODES": "1", "AGENT_NODES": "2", "JUDGE_NODES": "2"})
     result = run_cluster(tmp_path, env_file, DRY_RUN="1")

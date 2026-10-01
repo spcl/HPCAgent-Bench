@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Every shell entry point in this repo must disable core dumps before it runs anything.
 
-A core dump lands in the CRASHING PROCESS'S CWD -- which for a campaign arm is the repository checkout. A segfaulting agent kernel,
+A core dump lands in the CRASHING PROCESS'S CWD -- which for an experiment setup is the repository checkout. A segfaulting agent kernel,
 a wedged engine, an OOM-killed rank: each leaves a ``core_<host>_<pid>`` file behind, and the inode
 cost is paid on a filesystem whose quota is inodes rather than bytes.
 
@@ -47,7 +47,7 @@ import sys
 GUARD = "ulimit -c 0"
 #: The guard as it may be spelled: ``ulimit -c 0``, or ``ulimit -S -c 0`` in a file that is SOURCED
 #: into a caller's shell -- the soft limit alone stops the dumps without taking the hard limit away
-#: from a later judge-core arm (:data:`hpcagent_bench.core_dumps.JUDGE`).
+#: from a later judge-core setup (:data:`hpcagent_bench.core_dumps.JUDGE`).
 GUARDED = re.compile(r"\bulimit\s+(?:-S\s+)?-c\s+0\b")
 
 

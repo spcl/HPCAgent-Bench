@@ -66,7 +66,7 @@ def run_derived_edf(tmp_path, name, edf_dir, role: str = "judge"):
             f"AGENT_LAUNCH_DIR={shlex.quote(str(run_dir / '.agent-launch'))}",
             'CONTAINER_MOUNTS=""',
             # run_cluster.sh:143 defines these before derived_edf ever runs, and the mount block
-            # reads them under `set -u` -- the judge arm names the cache, and the mkdir on line 851
+            # reads them under `set -u` -- the judge setup names the cache, and the mkdir on line 851
             # names it for EVERY role. Cutting the function out of the script leaves the preamble
             # behind, so the harness has to restate it or all four cases die on an unbound variable
             # instead of exercising the rewrite.
@@ -119,7 +119,7 @@ def test_two_roles_get_two_files(tmp_path) -> None:
     """The reason the role is in the path at all. Judge and agent are launched from the same
     AMD_CE_ENV, and role_srun backgrounds the judge's srun before the agent's rewrite starts -- so a
     name-only path had the agent truncating the file the judge's srun was still reading, the step
-    ran on the bare host, and the arm was lost."""
+    ran on the bare host, and the setup was lost."""
     edf_dir = tmp_path / "edf"
     write_edf(edf_dir, "bench", MULTILINE_EDF)
 

@@ -1,8 +1,8 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Extract the agentic campaign runs into a flat, plottable reproducibility folder.
+"""Extract the agentic experiment runs into a flat, plottable reproducibility folder.
 
-Reads the results databases (schema v1, :mod:`hpcagent_bench.harness.results_db`) a campaign leaves
+Reads the results databases (schema v1, :mod:`hpcagent_bench.harness.results_db`) an experiment leaves
 under its run roots -- a job's judge shards or its merged ``results.db``, or one dataset DB given
 directly -- and writes into ``--out``: a long-format observations CSV (one row per recorded
 observation), the baseline source each agent was given beside the candidate source it submitted,
@@ -20,8 +20,8 @@ grades and promotions the databases (and the ``--regrades`` files) hold are appl
 re-time.
 
 Every source database is opened READ-ONLY (``mode=ro``): the run roots are the only copy of the
-campaign and a reader must never be able to damage them by re-running the extraction. The run
-globs and the output directory are arguments, so the same script serves any campaign.
+experiment and a reader must never be able to damage them by re-running the extraction. The run
+globs and the output directory are arguments, so the same script serves any experiment.
 
 The index's ``provenance`` column carries the honesty of the artifact and is never inferred away:
 a baseline is ``run_local`` (the run's own copy of the task the agent was served) or
@@ -57,16 +57,16 @@ from collections.abc import Iterable, Iterator, Mapping
 from typing import Any, NamedTuple
 
 from hpcagent_bench import config, data_guard, frozen_observations
-from hpcagent_bench.experiments import FINAL_GRADE_DIRNAME, agent_indices, arm_of, judge_database
+from hpcagent_bench.studies import FINAL_GRADE_DIRNAME, agent_indices, setup_of, judge_database
 from hpcagent_bench.harness import denominator, results_db, scoring, timing
 from hpcagent_bench.harness.native_call import TimingProbe
 from hpcagent_bench.observation_columns import CANON_FIELDS, NUMERIC_COLUMNS, OBSERVATION_FIELDS, SOURCE_FIELDS
 from hpcagent_bench.spec import BenchSpec, load_spec
 from hpcagent_bench.stats import population, score_rule
-from hpcagent_bench.stats.databases import check_arms
+from hpcagent_bench.stats.databases import check_setups
 
 __all__ = [
-    "ADHOC_ARM",
+    "ADHOC_SETUP",
     "CANCELLED_MARKER",
     "CANON_MARKER",
     "CELL_TALLY",
@@ -89,7 +89,7 @@ __all__ = [
     "SCALING_ROWS",
     "SOURCE_SUFFIX",
     "TASK_ROWS",
-    "TORCH_DIST_ARM",
+    "TORCH_DIST_SETUP",
     "UNSOLVED",
     "Agent",
     "CellTally",
@@ -102,7 +102,7 @@ __all__ = [
     "RegradeKey",
     "apply_final_regrades",
     "apply_promotions",
-    "arm_admitted",
+    "setup_admitted",
     "baseline_entries",
     "baseline_rows",
     "before_the_c_fix",
@@ -172,8 +172,8 @@ RegradeKey = tuple[str, str, str, int]
 #: of one submission under two denominators never replace each other.
 FinalKey = tuple[str, str, str, int, str]
 
-#: Pseudo-arm the harness writes for a grade with no campaign run id; never a real condition.
-ADHOC_ARM = frozen_observations.ADHOC_RUN_ID
+#: Pseudo-setup the harness writes for a grade with no experiment run id; never a real condition.
+ADHOC_SETUP = frozen_observations.ADHOC_RUN_ID
 
 
 #: Epoch ms (2026-08-26 00:00 UTC) of the C reference sources' regeneration
@@ -185,8 +185,8 @@ ADHOC_ARM = frozen_observations.ADHOC_RUN_ID
 C_REFERENCE_FIX_MS = 1787702400000
 
 
-#: Language the C reference defect applies to. `cpp` shared the defect but no cpp arm appears in the
-#: llr8 campaign, so widening this would be untested rather than safer.
+#: Language the C reference defect applies to. `cpp` shared the defect but no cpp setup appears in the
+#: llr8 experiment, so widening this would be untested rather than safer.
 C_LANGUAGE = "c"
 
 
@@ -213,7 +213,7 @@ class Database(NamedTuple):
 
 
 class Agent(NamedTuple):
-    """One (arm, kernel, agent) triple -- the unit a reader diffs baseline against candidate in."""
+    """One (setup, kernel, agent) triple -- the unit a reader diffs baseline against candidate in."""
 
     run_root: str
     job: str
@@ -254,8 +254,8 @@ def job_directory(db: pathlib.Path, run_root: pathlib.Path) -> pathlib.Path:
 
 
 def uses_skills(arm: str) -> str:
-    """Whether the arm shipped the skill packet. The ``-skills`` token is how every launcher names
-    the treated arm; kept for the rows a source DB predates ``runs.packet`` on (see ``packet``,
+    """Whether the setup shipped the skill packet. The ``-skills`` token is how every launcher names
+    the treated setup; kept for the rows a source DB predates ``runs.packet`` on (see ``packet``,
     the column a reader should prefer -- :mod:`hpcagent_bench.packets` resolves it, this script
     does not, since it ships without that package as a dependency)."""
     return "1" if "skills" in arm.split("-") else "0"
@@ -273,7 +273,7 @@ def readable_job(job_dir: pathlib.Path) -> bool:
 def frozen_rows(
     frozen_dir: pathlib.Path | None,
     run_globs: Iterable[str],
-    arm_prefix: str,
+    setup_prefix: str,
     excluded: frozenset[str],
 ) -> list[dict[str, Any]]:
     """The frozen observations (``hpcagent_bench/frozen_observations.py``) of the jobs the ``run_globs``
@@ -290,7 +290,7 @@ def frozen_rows(
         live = any(readable_job(parent / run_root / job) for parent in parents)
         for row in rows:
             arm = row.get("arm") or ""
-            if not arm.startswith(arm_prefix) or not excluded.isdisjoint(arm.split("-")):
+            if not arm.startswith(setup_prefix) or not excluded.isdisjoint(arm.split("-")):
                 continue
             if live:
                 continue
@@ -298,7 +298,7 @@ def frozen_rows(
             kept[frozen_observations.COLUMN] = "1"
             if frozen_observations.stored_adhoc(row.get("run_id"), row.get(frozen_observations.RETAGGED_COLUMN)):
                 # an older extraction re-attributed this adhoc grade; it goes back under the run id it was stored with
-                kept["run_id"] = kept["arm"] = ADHOC_ARM
+                kept["run_id"] = kept["arm"] = ADHOC_SETUP
             out.append(kept)
     return out
 
@@ -332,10 +332,10 @@ def job_assets(job_dir: pathlib.Path, kernels: Iterable[str]) -> JobAssets:
     return JobAssets(baselines, frozenset(saved))
 
 
-def arm_admitted(arm: str, arm_prefix: str, excluded: frozenset[str]) -> bool:
-    """Whether ``arm`` belongs to the campaign: its label starts with ``arm_prefix`` and none of its
+def setup_admitted(arm: str, setup_prefix: str, excluded: frozenset[str]) -> bool:
+    """Whether ``setup`` belongs to the experiment: its label starts with ``setup_prefix`` and none of its
     hyphen-separated tokens is ``excluded`` (see :func:`read_db`)."""
-    return arm.startswith(arm_prefix) and excluded.isdisjoint(arm.split("-"))
+    return arm.startswith(setup_prefix) and excluded.isdisjoint(arm.split("-"))
 
 
 #: ``row_kind`` of a per-P scaling row (hpcagent_bench.stats.figures.scaling reads this value).
@@ -347,7 +347,7 @@ def blank(value: Any) -> Any:
     return "" if value is None else value
 
 
-TORCH_DIST_ARM = "torch_dist"
+TORCH_DIST_SETUP = "torch_dist"
 
 
 def copy_into(origin: pathlib.Path, target: pathlib.Path) -> tuple[int, str] | None:
@@ -416,7 +416,7 @@ def regrade_files(patterns: Iterable[str]) -> list[str]:
 
 def regrade_patterns(given: Iterable[str], job_dirs: Iterable[pathlib.Path]) -> tuple[str, ...]:
     """The ``--regrades`` globs plus the FINAL grade directory of every job extracted
-    (``<job>/final-grade``, :data:`~hpcagent_bench.experiments.FINAL_GRADE_DIRNAME`) that exists: a
+    (``<job>/final-grade``, :data:`~hpcagent_bench.studies.FINAL_GRADE_DIRNAME`) that exists: a
     job run before ``/submit`` was the final grade carries its judges' final grades there, read exactly
     as a regrade wave's shards are. Later jobs hold theirs in the judge shards themselves."""
     in_job = sorted({str(job / FINAL_GRADE_DIRNAME) for job in job_dirs if (job / FINAL_GRADE_DIRNAME).is_dir()})
@@ -655,7 +655,7 @@ KIND_OPTIMIZER: dict[str, str] = {
     "probe": "probe",
 }
 
-#: Every request grade of a results DB with its episode, its arm's identity, the shape of its first
+#: Every request grade of a results DB with its episode, its setup's identity, the shape of its first
 #: timed input (a floor-override kernel's suspect is re-derived at it), its host source, and whether
 #: an audit withdrew its verdict (``disqualifications``).
 GRADE_ROWS = f"""
@@ -685,7 +685,7 @@ JOIN arms a ON a.arm = r.arm
 ORDER BY r.label, o.benchmark, o.ts_ms, p.mode, p.ranks
 """
 
-#: Every episode with a record (``tokens.json`` folded into ``runs``), with its arm's identity.
+#: Every episode with a record (``tokens.json`` folded into ``runs``), with its setup's identity.
 TASK_ROWS = """
 SELECT r.*, a.language AS arm_language, a.harness AS arm_harness, a.packet AS arm_packet
 FROM runs r JOIN arms a ON a.arm = r.arm
@@ -732,7 +732,7 @@ def results_database(path: pathlib.Path) -> bool:
 def identity_row(db: Database, row: Mapping[str, Any], record: str) -> dict[str, Any]:
     """The columns every row of one episode carries."""
     run_id = str(row["label"])
-    arm = arm_of(run_id)
+    arm = setup_of(run_id)
     return {
         "run_root": db.run_root,
         "job": job_of(row["episode_job"]),
@@ -812,20 +812,20 @@ def verdict_row(db: Database, grade: Mapping[str, Any], index: int) -> dict[str,
 
 
 def before_the_c_fix(grade: Mapping[str, Any], c_fix_ms: int) -> bool:
-    """Whether a C arm's grade was stamped before the C references were regenerated."""
+    """Whether a C setup's grade was stamped before the C references were regenerated."""
     return c_fix_ms > 0 and grade["arm_language"] == C_LANGUAGE and int(grade["ts_ms"]) < c_fix_ms
 
 
 def graded_rows(
     conn: sqlite3.Connection, db: Database, campaign: tuple[str, frozenset[str]], c_fix_ms: int
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Every call and verdict row of ``db``'s grades whose arm the ``campaign`` admits, and the graded
+    """Every call and verdict row of ``db``'s grades whose setup the ``experiment`` admits, and the graded
     source behind each (``graded_attempt`` candidates)."""
     observations: list[dict[str, Any]] = []
     sources: list[dict[str, Any]] = []
     ordinals: collections.Counter[tuple[str, str, str]] = collections.Counter()
     for grade in conn.execute(GRADE_ROWS):
-        if not arm_admitted(arm_of(grade["label"]), *campaign) or before_the_c_fix(grade, c_fix_ms):
+        if not setup_admitted(setup_of(grade["label"]), *campaign) or before_the_c_fix(grade, c_fix_ms):
             continue
         rows = [call_row(db, grade)] if grade["call_index"] is not None else []
         if (
@@ -866,7 +866,7 @@ def task_rows(conn: sqlite3.Connection, db: Database, campaign: tuple[str, froze
     how it ended, and no speedup (R1-R2 only look at ``submission`` rows)."""
     rows: list[dict[str, Any]] = []
     for run in conn.execute(TASK_ROWS):
-        if not arm_admitted(arm_of(run["label"]), *campaign):
+        if not setup_admitted(setup_of(run["label"]), *campaign):
             continue
         row: dict[str, Any] = dict.fromkeys(OBSERVATION_FIELDS, "")
         row |= identity_row(db, {**dict(run), "episode_job": run["job"]}, "task")
@@ -889,11 +889,11 @@ def task_rows(conn: sqlite3.Connection, db: Database, campaign: tuple[str, froze
 
 
 def scaling_rows(conn: sqlite3.Connection, db: Database, campaign: tuple[str, frozenset[str]]) -> list[dict[str, Any]]:
-    """``row_kind = "scaling"`` rows: one per scaling point whose arm the ``campaign`` (arm prefix,
-    excluded tokens) admits (:func:`arm_admitted`), stamped with the submission it measured."""
+    """``row_kind = "scaling"`` rows: one per scaling point whose setup the ``experiment`` (setup prefix,
+    excluded tokens) admits (:func:`setup_admitted`), stamped with the submission it measured."""
     out: list[dict[str, Any]] = []
     for row in conn.execute(SCALING_ROWS):
-        if not arm_admitted(arm_of(row["label"]), *campaign):
+        if not setup_admitted(setup_of(row["label"]), *campaign):
             continue
         out.append(
             identity_row(db, row, SCALING_RECORD)
@@ -915,8 +915,8 @@ def scaling_rows(conn: sqlite3.Connection, db: Database, campaign: tuple[str, fr
 
 def baseline_rows(conn: sqlite3.Connection, db: Database) -> list[dict[str, Any]]:
     """``row_kind = "scaling"`` rows of the torch.distributed baseline curve: one per
-    ``reference_scaling_points`` row with ``source = 'torch_dist'``, under the pseudo-arm
-    :data:`TORCH_DIST_ARM` (no campaign filter: it is no agent's arm, and one curve serves every arm of
+    ``reference_scaling_points`` row with ``source = 'torch_dist'``, under the pseudo-setup
+    :data:`TORCH_DIST_ARM` (no experiment filter: it is no agent's setup, and one curve serves every setup of
     the sweep). ``run_id`` is ``torch_dist:<arch>:<image>``, the stack the point is valid for;
     ``scaling_note`` leads with the mode the point ran under (``max-autotune-no-cudagraphs`` or
     ``eager``). ``scaling_single_rank_ns`` is blank: a curve's points may sit in several grade DBs
@@ -924,15 +924,15 @@ def baseline_rows(conn: sqlite3.Connection, db: Database) -> list[dict[str, Any]
     (``hpcagent_bench.stats.figures.scaling.baseline_anchored``)."""
     out: list[dict[str, Any]] = []
     query = "SELECT * FROM reference_scaling_points WHERE source = ? ORDER BY ranks, ts_ms"
-    for row in conn.execute(query, (TORCH_DIST_ARM,)):
+    for row in conn.execute(query, (TORCH_DIST_SETUP,)):
         out.append(
             {
                 "run_root": db.run_root,
                 "job": db.job,
                 "judge_db": str(db.path),
                 "row_kind": SCALING_RECORD,
-                "run_id": f"{TORCH_DIST_ARM}:{row['arch']}:{row['image']}",
-                "arm": TORCH_DIST_ARM,
+                "run_id": f"{TORCH_DIST_SETUP}:{row['arch']}:{row['image']}",
+                "arm": TORCH_DIST_SETUP,
                 "benchmark": row["benchmark"] or "",
                 "ts_ms": int(row["ts_ms"]),
                 "scaling_ranks": row["ranks"],
@@ -950,22 +950,22 @@ def baseline_rows(conn: sqlite3.Connection, db: Database) -> list[dict[str, Any]
 
 def read_db(
     db: Database,
-    arm_prefix: str,
+    setup_prefix: str,
     excluded: frozenset[str],
     c_fix_ms: int,
 ) -> DbResult:
     """One database -> the rows it contributes. Opens read-only, never writes.
 
-    ``arm_prefix`` selects the campaign by ARM LABEL rather than by run root, because one campaign's
-    arms are spread over both its named wave roots and its per-job Slurm-id roots. ``excluded`` drops
-    an arm by one of its hyphen-separated tokens, which is how a model is named in the label; a token
+    ``setup_prefix`` selects the experiment by ARM LABEL rather than by run root, because one experiment's
+    setups are spread over both its named wave roots and its per-job Slurm-id roots. ``excluded`` drops
+    a setup by one of its hyphen-separated tokens, which is how a model is named in the label; a token
     test rather than a substring keeps it from matching a longer name by accident. The ``adhoc``
-    pseudo-arm (a grade with no run id rather than a condition) is read like any arm and dropped by
+    pseudo-setup (a grade with no run id rather than a condition) is read like any setup and dropped by
     every reader that credits (:func:`frozen_observations.stored_adhoc`).
 
-    ``c_fix_ms`` drops a C arm's grades stamped before the reference regeneration. It is a TIMESTAMP
-    rule, not a name rule, because an arm can straddle the date."""
-    campaign = (arm_prefix, excluded)
+    ``c_fix_ms`` drops a C setup's grades stamped before the reference regeneration. It is a TIMESTAMP
+    rule, not a name rule, because a setup can straddle the date."""
+    campaign = (setup_prefix, excluded)
     try:
         with results_db.reading(db.path) as conn:
             observations, sources = graded_rows(conn, db, campaign, c_fix_ms)
@@ -1340,7 +1340,7 @@ def export_agent(
     graded: list[dict[str, Any]],
     corpus: dict[str, pathlib.Path],
 ) -> Iterator[dict[str, Any]]:
-    """Lay one (arm, kernel, agent) triple out as a directory a reader can diff.
+    """Lay one (setup, kernel, agent) triple out as a directory a reader can diff.
 
     The baseline is the run's OWN copy of the task the agent was handed. Where the run did not keep
     one, today's corpus file stands in only if there is a candidate to diff it against, and it goes
@@ -1432,21 +1432,27 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         action="append",
         required=True,
         metavar="GLOB",
-        help="run-root glob or results DB; repeatable (two results DBs holding one arm with different rows "
+        help="run-root glob or results DB; repeatable (two results DBs holding one setup with different rows "
         "are refused)",
     )
     ap.add_argument("--benchmarks", required=True, type=pathlib.Path, help="benchmark corpus root (read-only)")
     ap.add_argument("--out", required=True, type=pathlib.Path, help="output directory (created if absent)")
     ap.add_argument("--canon", type=pathlib.Path, default=None, help="canonicalization log to key on benchmark")
     ap.add_argument(
-        "--arm-prefix", default="", help="keep only arms whose label starts with this; empty keeps every arm"
+        "--setup-prefix",
+        "--arm-prefix",
+        dest="setup_prefix",
+        default="",
+        help="keep only setups whose label starts with this; empty keeps every setup",
     )
     ap.add_argument(
+        "--exclude-setup",
         "--exclude-arm",
+        dest="exclude_setup",
         action="append",
         default=[],
         metavar="TOKEN",
-        help="drop arms carrying this hyphen-separated token (e.g. a model name); repeatable",
+        help="drop setups carrying this hyphen-separated token (e.g. a model name); repeatable",
     )
     ap.add_argument(
         "--c-reference-fix-ms",
@@ -1501,8 +1507,8 @@ class Options:
 
     runs: tuple[str, ...]
     benchmarks: pathlib.Path
-    arm_prefix: str = ""
-    exclude_arm: tuple[str, ...] = ()
+    setup_prefix: str = ""
+    exclude_setup: tuple[str, ...] = ()
     c_reference_fix_ms: int = C_REFERENCE_FIX_MS
     threads: int = 32
     regrades: tuple[str, ...] = ()
@@ -1526,11 +1532,11 @@ class Extracted(NamedTuple):
 
 def read_all(databases: list[Database], args: Options) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """The rows and graded sources of every database, a grade read twice kept once."""
-    excluded = frozenset(args.exclude_arm)
+    excluded = frozenset(args.exclude_setup)
     observations: list[dict[str, Any]] = []
     sources: list[dict[str, Any]] = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, args.threads)) as pool:
-        for result in pool.map(lambda db: read_db(db, args.arm_prefix, excluded, args.c_reference_fix_ms), databases):
+        for result in pool.map(lambda db: read_db(db, args.setup_prefix, excluded, args.c_reference_fix_ms), databases):
             observations.extend(result.observations)
             sources.extend(result.sources)
     return distinct(observations), distinct(sources)
@@ -1548,7 +1554,7 @@ def regraded(
 
 def named_databases(runs: Iterable[str]) -> list[pathlib.Path]:
     """The results databases ``runs`` names as files (``--runs core.db --runs cpf.db``), not the run
-    roots it globs: an arm two of them hold with different rows is refused
+    roots it globs: a setup two of them hold with different rows is refused
     (:func:`hpcagent_bench.stats.databases.check_arms`); the shards of one job are not such files."""
     return [path for path in map(pathlib.Path, runs) if path.is_file() and path.suffix == ".db"]
 
@@ -1562,7 +1568,7 @@ def extract(options: Options) -> Extracted:
     corpus = manifest_kernels(args.benchmarks)
     print(f"corpus: {len(corpus)} kernels", file=sys.stderr)
 
-    check_arms(named_databases(args.runs))
+    check_setups(named_databases(args.runs))
     databases = discover_databases(args.runs, args.skip)
     print(f"databases: {len(databases)} under {len({d.run_root for d in databases})} run roots", file=sys.stderr)
     job_dirs = {(db.run_root, db.job): db.job_dir for db in databases}
@@ -1578,7 +1584,7 @@ def extract(options: Options) -> Extracted:
     assets = {key: job_assets(job_dirs[key], corpus) for key in sorted(in_scope)}
     for row in observations:
         row["frozen"] = "0"
-    lost = frozen_rows(args.frozen_dir, args.runs, args.arm_prefix, frozenset(args.exclude_arm))
+    lost = frozen_rows(args.frozen_dir, args.runs, args.setup_prefix, frozenset(args.exclude_setup))
     lost_jobs = {(str(row["run_root"]), str(row["job"])) for row in lost}
     print(
         f"frozen: {len(lost)} rows of {len(lost_jobs)} job(s) with no live directory, from {args.frozen_dir}",
@@ -1627,8 +1633,8 @@ def main(argv: list[str]) -> int:
             Options(
                 runs=tuple(args.runs),
                 benchmarks=args.benchmarks,
-                arm_prefix=args.arm_prefix,
-                exclude_arm=tuple(args.exclude_arm),
+                setup_prefix=args.setup_prefix,
+                exclude_setup=tuple(args.exclude_setup),
                 c_reference_fix_ms=args.c_reference_fix_ms,
                 threads=args.threads,
                 regrades=tuple(args.regrades),
@@ -1659,15 +1665,15 @@ def main(argv: list[str]) -> int:
 
 def export_sources(out: pathlib.Path, got: Extracted) -> None:
     """The sources tree and its index: every agent's baseline beside its graded candidates."""
-    # Keyed by WORKER too, not just (run_root, job): a job can run more than one arm at once (each
-    # arm claiming a disjoint slice of the job's worker indices), so a job-level key would file a
-    # worker's saved-but-ungraded file under whichever arm the loop reached first. Empty when the
+    # Keyed by WORKER too, not just (run_root, job): a job can run more than one setup at once (each
+    # setup claiming a disjoint slice of the job's worker indices), so a job-level key would file a
+    # worker's saved-but-ungraded file under whichever setup the loop reached first. Empty when the
     # worker never produced a judge or task row, which reads as "unlabelled" below.
     worker_identity_map: dict[tuple[str, str, str], tuple[str, str]] = {}
     for row in got.observations:
         arm = str(row.get("arm") or "")
         worker = str(row.get("worker_index") or "")
-        if arm and arm != ADHOC_ARM and worker:
+        if arm and arm != ADHOC_SETUP and worker:
             worker_identity_map.setdefault(
                 (str(row["run_root"]), str(row["job"]), worker), (arm, str(row.get("run_id") or ""))
             )

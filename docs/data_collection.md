@@ -1,10 +1,10 @@
 # Data collection
 
-From finished campaign runs to the observations table the figures are drawn from, in four steps:
+From finished experiment runs to the observations table the figures are drawn from, in four steps:
 collect, extract, regrade, hand off. Every step reads its sources read-only and refuses an output
 that overlaps a source (`hpcagent_bench/data_guard.py`); none of them deletes or moves data.
 
-Which kernels a campaign still owes, and how runs resume, is in
+Which kernels an experiment still owes, and how runs resume, is in
 [experiments/README.md](../experiments/README.md#owed-kernels). The scoring rules the extracted rows feed
 are in [DESIGN_data_collection_and_scoring.md](DESIGN_data_collection_and_scoring.md).
 
@@ -12,7 +12,7 @@ are in [DESIGN_data_collection_and_scoring.md](DESIGN_data_collection_and_scorin
 
 | source | default | set with |
 |---|---|---|
-| campaign run roots (`<root>/<campaign>-<stamp>/<job>/judge/rank-N/*.db`, agent metadata) | `$SCRATCH/hpcagent-bench-runs` | `--runs` |
+| experiment run roots (`<root>/<campaign>-<stamp>/<job>/judge/rank-N/*.db`, agent metadata) | `$SCRATCH/hpcagent-bench-runs` | `--runs` |
 | regrade shards (`regrade-*.db`, `regrade-cells-*.db`) and mlscale grades (`scaling-grade-*.db`) | wherever the regrade/grade jobs wrote them | `--db-root`, `--regrades` |
 | frozen observations (the extracted rows of jobs whose judge DBs are gone) | `$HPCAGENT_BENCH_FROZEN_OBSERVATIONS` | `--frozen-observations` (`''` = none) |
 | other frozen CSV sweeps (e.g. a canon sweep's `<column>.rank<N>.csv`) | none | `--csv-root` |
@@ -58,10 +58,10 @@ submission without one keeps its live row, never credited and owed a grade
 ## Hand off to plotting
 
 `out/<track>/llr40_observations.csv` (and the `--db` copy) is the input of every figure script:
-[plotting.md](plotting.md) picks the answer per (arm, kernel) and draws from it, e.g.
+[plotting.md](plotting.md) picks the answer per (setup, kernel) and draws from it, e.g.
 
 ```bash
-python statistics/plot_arm_summary.py out/llr-cpu/llr40_observations.csv --experiment llr40 \
+python statistics/plot_setup_summary.py out/llr-cpu/llr40_observations.csv --study llr40 \
     --out figures/arm.pdf --table out/llr-cpu/arm.csv
 ```
 

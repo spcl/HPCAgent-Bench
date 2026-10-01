@@ -4,7 +4,7 @@
 
 The load-bearing assertions are about MULTIPLICITY (a raw threshold does not survive the BH
 correction, a real effect does) and about the DOT-ROW CONTRACT: one column per (LLM, delivery), the
-control hollow beside the packet arm, each row carrying only its own axis's star, and the drawing
+control hollow beside the packet setup, each row carrying only its own axis's star, and the drawing
 itself lives in :mod:`hpcagent_bench.stats.figures.efficacy` -- this script only wires the data.
 """
 
@@ -124,7 +124,7 @@ def observations(gains: tuple[float, ...], winner: tuple[str, str] | None) -> tu
     return pd.DataFrame(control), pd.DataFrame(treated)
 
 
-def one_arm_raw(
+def one_setup_raw(
     model: str = "qwen38",
     language: str = "c",
     off_speedup: float = 1.0,
@@ -133,12 +133,12 @@ def one_arm_raw(
     on_tokens: float = 900.0,
     kernels: int = KERNELS,
 ) -> pd.DataFrame:  # fmt: skip
-    """One arm's RAW tagged rows (``skills`` True/False), the shape
+    """One setup's RAW tagged rows (``skills`` True/False), the shape
     :func:`~hpcagent_bench.stats.figures.efficacy.reduce_pair` pairs per kernel.
 
     A small alternating per-kernel jitter, never zero: every kernel at exactly the same ratio has no
     spread for :func:`~hpcagent_bench.stats.summary.geomean_ci` to draw an interval around, which a
-    real campaign never is.
+    real experiment never is.
     """
     control, treated = [], []
     for kernel in range(kernels):
@@ -151,7 +151,7 @@ def one_arm_raw(
     return frame.reset_index(drop=True)
 
 
-def one_arm_stats(
+def one_setup_stats(
     model: str = "qwen38",
     language: str = "c",
     score_verdict: str = efficacy.NOT_SIGNIFICANT,
@@ -180,7 +180,7 @@ def test_a_raw_threshold_that_would_have_starred_a_point_does_not_survive_the_co
     assert not (frame.score_verdict == efficacy.SIGNIFICANT).any()
 
 
-def test_an_effect_every_arm_shows_still_survives_the_correction() -> None:
+def test_an_effect_every_setup_shows_still_survives_the_correction() -> None:
     """The correction has to cost power, not all of it: BH keeps a finding that the whole family
     agrees on, which is what separates it from simply refusing to mark anything."""
     before, after = observations(DECISIVE, winner=None)
@@ -198,13 +198,13 @@ def test_the_family_the_marks_are_corrected_over_is_every_test_the_figure_could_
     assert plot.efficacy_figures.family_size(frame) == 12
 
 
-#: The card for a frame that carries only ``arm`` and ``packet``: ``effective`` leaves the frame
+#: The card for a frame that carries only ``setup`` and ``packet``: ``effective`` leaves the frame
 #: unpriced, so a test about packets needs no token columns.
 PACKET_ONLY = cost.resolve("effective")
 
 
-def test_load_reads_skills_off_the_recorded_packet_before_the_arm_name(tmp_path: pathlib.Path) -> None:
-    """An arm renamed away from the ``-skills`` suffix but recording ``lang-skills`` loads as skilled, and a recorded
+def test_load_reads_skills_off_the_recorded_packet_before_the_setup_name(tmp_path: pathlib.Path) -> None:
+    """A setup renamed away from the ``-skills`` suffix but recording ``lang-skills`` loads as skilled, and a recorded
     packet beats a ``-skills`` name."""
     path = tmp_path / "observations.csv"
     pd.DataFrame(
@@ -217,15 +217,15 @@ def test_load_reads_skills_off_the_recorded_packet_before_the_arm_name(tmp_path:
 
     frame = plot.load(path, prefix="", card=PACKET_ONLY)
 
-    by_arm = frame.set_index("arm").skills
-    assert bool(by_arm["renamed-qwen38-c"]) is True
-    assert bool(by_arm["qwen38-fortran-skills"]) is False
-    assert bool(by_arm["qwen38-c-skills"]) is True
+    by_setup = frame.set_index("arm").skills
+    assert bool(by_setup["renamed-qwen38-c"]) is True
+    assert bool(by_setup["qwen38-fortran-skills"]) is False
+    assert bool(by_setup["qwen38-c-skills"]) is True
 
 
 def test_load_counts_a_composite_packet_as_skilled(tmp_path: pathlib.Path) -> None:
     """``llrsingle`` records ``lang-skills+no-score-tool``; comparing the whole packet for
-    equality against the bare ``lang-skills`` key read every one of its skilled arms as
+    equality against the bare ``lang-skills`` key read every one of its skilled setups as
     unskilled."""
     path = tmp_path / "observations.csv"
     pd.DataFrame(
@@ -237,14 +237,14 @@ def test_load_counts_a_composite_packet_as_skilled(tmp_path: pathlib.Path) -> No
 
     frame = plot.load(path, prefix="", card=PACKET_ONLY)
 
-    by_arm = frame.set_index("arm").skills
-    assert bool(by_arm["llrsingle-qwen38-c-skills"]) is True
-    assert bool(by_arm["llrsingle-qwen38-c"]) is False
+    by_setup = frame.set_index("arm").skills
+    assert bool(by_setup["llrsingle-qwen38-c-skills"]) is True
+    assert bool(by_setup["llrsingle-qwen38-c"]) is False
 
 
-def test_control_rows_is_exactly_the_no_packet_arm(tmp_path: pathlib.Path) -> None:
+def test_control_rows_is_exactly_the_no_packet_setup(tmp_path: pathlib.Path) -> None:
     """``control_rows`` needs no treatment list at all: the control is exactly the canonical empty
-    packet, whatever treatments a campaign happens to run."""
+    packet, whatever treatments an experiment happens to run."""
     path = tmp_path / "observations.csv"
     pd.DataFrame(
         [
@@ -261,8 +261,8 @@ def test_control_rows_is_exactly_the_no_packet_arm(tmp_path: pathlib.Path) -> No
     assert set(control.arm) == {"llr40-qwen38-c"}  # read under its configuration name
 
 
-def test_a_perf_playbook_arm_never_enters_the_control_side(tmp_path: pathlib.Path) -> None:
-    """The bug this guards: an arm recording a treatment ``control_rows`` does not name by string
+def test_a_perf_playbook_setup_never_enters_the_control_side(tmp_path: pathlib.Path) -> None:
+    """The bug this guards: a setup recording a treatment ``control_rows`` does not name by string
     must never be silently counted as part of the no-packet control."""
     path = tmp_path / "observations.csv"
     pd.DataFrame(
@@ -290,10 +290,10 @@ def test_treatment_frame_tags_the_control_false_and_the_treatment_true() -> None
         ]
     )
     tagged = plot.treatment_frame(frame_all, "cpfsrc")
-    by_arm = tagged.set_index("arm").skills
-    assert bool(by_arm["a-control"]) is False
-    assert bool(by_arm["a-cpfsrc"]) is True
-    assert "a-skills" not in by_arm.index
+    by_setup = tagged.set_index("arm").skills
+    assert bool(by_setup["a-control"]) is False
+    assert bool(by_setup["a-cpfsrc"]) is True
+    assert "a-skills" not in by_setup.index
 
 
 def test_points_never_raises_a_bare_keyerror_when_the_two_sides_share_no_model_language() -> None:
@@ -309,10 +309,10 @@ def test_points_never_raises_a_bare_keyerror_when_the_two_sides_share_no_model_l
     assert list(frame.columns) == list(plot.POINT_COLUMNS)
 
 
-def test_a_treatment_arm_that_never_recorded_its_language_still_pairs_against_control(
+def test_a_treatment_setup_that_never_recorded_its_language_still_pairs_against_control(
     tmp_path: pathlib.Path,
 ) -> None:
-    """``load`` (through ``experiments.fill_arm_identity``) must recover ``c`` from the arm's own
+    """``load`` (through ``experiments.fill_setup_identity``) must recover ``c`` from the setup's own
     name, and ``one_treatment_panel`` must then find the (model, language) key it shares with its
     control instead of finding nothing."""
     path = tmp_path / "observations.csv"
@@ -346,7 +346,7 @@ def test_a_treatment_arm_that_never_recorded_its_language_still_pairs_against_co
 
     frame_all = plot.load(path, prefix="")
     treated = frame_all[frame_all.arm == "cpf-llr-focus40-oss120b-c-cpf"]
-    assert set(treated.language) == {"c"}, "the arm name is the last resort when no row ever recorded it"
+    assert set(treated.language) == {"c"}, "the setup name is the last resort when no row ever recorded it"
 
     control = plot.control_rows(frame_all)
     roster = sorted(frame_all.benchmark.dropna().unique())
@@ -359,10 +359,10 @@ def test_a_treatment_arm_that_never_recorded_its_language_still_pairs_against_co
     assert (stats.iloc[0].model, stats.iloc[0].language) == ("oss120b", "c")
 
 
-def test_complete_side_arms_drops_an_arm_short_of_the_roster_and_names_it_on_stderr(
+def test_complete_side_setups_drops_an_setup_short_of_the_roster_and_names_it_on_stderr(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """An arm missing a roster kernel is dropped, not entered at any stand-in value, and named so
+    """A setup missing a roster kernel is dropped, not entered at any stand-in value, and named so
     the drop is auditable."""
     roster = ["k0", "k1", "k2"]
     control = pd.DataFrame({"arm": ["ctrl"] * 3, "benchmark": roster})
@@ -370,19 +370,19 @@ def test_complete_side_arms_drops_an_arm_short_of_the_roster_and_names_it_on_std
         {"arm": ["good-cpf", "good-cpf", "good-cpf", "short-cpf"], "benchmark": ["k0", "k1", "k2", "k0"]}
     )
 
-    kept = plot.complete_side_arms(control, treated, roster, "cpf", include_incomplete=False)
+    kept = plot.complete_side_setups(control, treated, roster, "cpf", include_incomplete=False)
 
     assert kept == {"ctrl", "good-cpf"}
     err = capsys.readouterr().err
     assert "cpf: dropping short-cpf (1/3 roster kernels)" in err
 
 
-def test_include_incomplete_keeps_a_short_arm_and_prints_nothing(capsys: pytest.CaptureFixture[str]) -> None:
+def test_include_incomplete_keeps_a_short_setup_and_prints_nothing(capsys: pytest.CaptureFixture[str]) -> None:
     roster = ["k0", "k1", "k2"]
     control = pd.DataFrame({"arm": ["ctrl"] * 3, "benchmark": roster})
     treated = pd.DataFrame({"arm": ["short-cpf"], "benchmark": ["k0"]})
 
-    kept = plot.complete_side_arms(control, treated, roster, "cpf", include_incomplete=True)
+    kept = plot.complete_side_setups(control, treated, roster, "cpf", include_incomplete=True)
 
     assert kept == {"ctrl", "short-cpf"}
     assert capsys.readouterr().err == ""
@@ -393,9 +393,9 @@ def test_include_incomplete_keeps_a_short_arm_and_prints_nothing(capsys: pytest.
 
 
 def test_error_bars_are_drawn_on_both_axes_from_the_paired_geomean() -> None:
-    """Every arm's mark carries a crossed 95% interval: SC15 Rule 5/7, computed from
+    """Every setup's mark carries a crossed 95% interval: SC15 Rule 5/7, computed from
     ``summary.geomean_ci`` on the paired per-kernel ratios."""
-    frame = one_arm_raw(on_speedup=2.0, on_tokens=400.0)
+    frame = one_setup_raw(on_speedup=2.0, on_tokens=400.0)
     series = efficacy_figures.reduce_pair(frame[~frame.skills], frame[frame.skills])
     assert series is not None
     assert series.x_low < series.x < series.x_high
@@ -421,8 +421,8 @@ def test_a_marks_significance_superscript_reads_off_the_corrected_verdict_per_ax
                 plt.close(fig)
         return drawn
 
-    neither = symbols_of(one_arm_stats())
-    both = symbols_of(one_arm_stats(score_verdict=efficacy.SIGNIFICANT, cost_verdict=efficacy.SIGNIFICANT))
+    neither = symbols_of(one_setup_stats())
+    both = symbols_of(one_setup_stats(score_verdict=efficacy.SIGNIFICANT, cost_verdict=efficacy.SIGNIFICANT))
     assert neither == {"speedup": [], "cost": []}, neither
     assert both == {
         "speedup": [efficacy_figures.SCORE_SIG_MARK],
@@ -520,7 +520,7 @@ def test_the_key_explains_a_superscript_exactly_when_the_panel_drew_one(
 
 
 def test_an_undelivered_kernel_still_counts_in_the_served_geomean() -> None:
-    """A kernel the arm was served and never verified is a placeholder, not a measurement
+    """A kernel the setup was served and never verified is a placeholder, not a measurement
     (``population.DELIVERED_COLUMN``) -- under ``served`` it still scores 1x and still counts its
     tokens in the geomean, and the pair records it as not delivered."""
     control_rows_list = [
@@ -562,7 +562,7 @@ def test_an_undelivered_kernel_still_counts_in_the_served_geomean() -> None:
 
 
 # ---------------------------------------------------------------------------
-# The EXPLICIT-PAIR entry point: a comparison whose two sides are two campaigns, or whose condition
+# The EXPLICIT-PAIR entry point: a comparison whose two sides are two experiments, or whose condition
 # is not a packet suffix at all, drawn through the same figure.
 
 BLIND_PAIR: tuple[str, str] = ("llrblind-qwen38-c-skills", "llr-focus40-qwen38-c-skills")
@@ -570,7 +570,7 @@ SCICOMP_PAIR: tuple[str, str] = ("git-scicomp-qwen38-c-repo", "git-scicomp-qwen3
 
 
 def family_csv(pairs: list[tuple[str, str]], score_verdict: str, cost_verdict: str, n: int = 40) -> pd.DataFrame:
-    """A family table in the shape ``statistics/paired_arms.py`` writes, one row per pair per leg."""
+    """A family table in the shape ``statistics/paired_setups.py`` writes, one row per pair per leg."""
     return pd.DataFrame(
         [
             {
@@ -595,16 +595,16 @@ def family_csv(pairs: list[tuple[str, str]], score_verdict: str, cost_verdict: s
     )
 
 
-def test_a_pairs_leg_names_the_language_and_every_packet_both_arms_carried() -> None:
-    """llrblind runs C and C with the skill pages against their own scored arms, so a leg label of
-    the language alone would draw two different arms as one."""
+def test_a_pairs_leg_names_the_language_and_every_packet_both_setups_carried() -> None:
+    """llrblind runs C and C with the skill pages against their own scored setups, so a leg label of
+    the language alone would draw two different setups as one."""
     assert plot.pair_leg_label(BLIND_PAIR, "no-score") == "C +skills"
     plain = ("llrblind-qwen38-fortran", "llr-focus40-qwen38-fortran")
     assert plot.pair_leg_label(plain, "no-score") == "Fortran"
 
 
 def test_a_pairs_leg_never_names_the_intervention_the_two_sides_differ_in() -> None:
-    """git-scicomp's two arms differ in `repo` against `kernel`; naming either on the label would
+    """git-scicomp's two setups differ in `repo` against `kernel`; naming either on the label would
     say on every row what the figure's own title says once."""
     label = plot.pair_leg_label(SCICOMP_PAIR, "repo")
     assert label == "C"
@@ -612,7 +612,7 @@ def test_a_pairs_leg_never_names_the_intervention_the_two_sides_differ_in() -> N
 
 
 def test_the_stars_come_off_the_family_csv_and_are_never_recomputed_here() -> None:
-    """``statistics/paired_arms.py`` already ran the paired test and the Benjamini-Hochberg
+    """``statistics/paired_setups.py`` already ran the paired test and the Benjamini-Hochberg
     correction over exactly this family, and the paper's table is printed from the same CSV."""
     table = family_csv([BLIND_PAIR], efficacy.SIGNIFICANT, efficacy.NOT_SIGNIFICANT)
     stats = plot.family_stats(table, "no-score")
@@ -632,7 +632,7 @@ def test_the_family_csv_declares_the_pairs_in_the_order_it_wrote_them() -> None:
 
 
 def observation_rows(arm: str, speedup: float, tokens: float, kernels: int = KERNELS) -> list[dict[str, object]]:
-    """One arm's rows in the shape an extraction writes: a graded submission and a task total per
+    """One setup's rows in the shape an extraction writes: a graded submission and a task total per
     kernel."""
     rows: list[dict[str, object]] = []
     for kernel in range(kernels):
@@ -659,9 +659,9 @@ def observation_rows(arm: str, speedup: float, tokens: float, kernels: int = KER
     return rows
 
 
-def test_pair_frame_tags_each_arm_by_name_and_which_side_of_the_pair_it_is() -> None:
-    """The two sides live in two campaigns with different arm prefixes, so there is no packet
-    suffix to split on -- the pair names the arms directly."""
+def test_pair_frame_tags_each_setup_by_name_and_which_side_of_the_pair_it_is() -> None:
+    """The two sides live in two experiments with different setup prefixes, so there is no packet
+    suffix to split on -- the pair names the setups directly."""
     frame_all = pd.DataFrame(observation_rows(BLIND_PAIR[0], 2.0, 150e3) + observation_rows(BLIND_PAIR[1], 4.0, 200e3))
 
     tagged = plot.pair_frame(frame_all, [BLIND_PAIR], "no-score")
@@ -748,11 +748,11 @@ def test_an_arrows_factor_is_printed_to_one_decimal(value: float, want: str) -> 
     assert plotstyle.ratio_label(value) == want
 
 
-def arrow_row() -> efficacy_figures.ArmRow:
-    """One category whose packet arm is 4x its control on both measures."""
-    control = efficacy_figures.ArmPoint(1.0, 0.9, 1.1, 1e6, 0.9e6, 1.1e6, 40, 40)
-    treated = efficacy_figures.ArmPoint(3.0, 2.9, 3.1, 4e6, 3.9e6, 4.1e6, 40, 40)
-    return efficacy_figures.ArmRow("qwen38", "HIP", "#1f77b4", control, treated)
+def arrow_row() -> efficacy_figures.SetupRow:
+    """One category whose packet setup is 4x its control on both measures."""
+    control = efficacy_figures.SetupPoint(1.0, 0.9, 1.1, 1e6, 0.9e6, 1.1e6, 40, 40)
+    treated = efficacy_figures.SetupPoint(3.0, 2.9, 3.1, 4e6, 3.9e6, 4.1e6, 40, 40)
+    return efficacy_figures.SetupRow("qwen38", "HIP", "#1f77b4", control, treated)
 
 
 @pytest.mark.parametrize("measure", ["speedup", "cost"])
@@ -836,9 +836,9 @@ def test_the_token_cost_axis_formatter_spells_a_ratio_below_one_as_a_fraction() 
 # Several packets sharing ONE panel (``treatments=``): read and recorded per packet.
 
 
-def one_arm_observations_csv(tmp_path: pathlib.Path) -> pathlib.Path:
-    """One tiny campaign as an extracted-observations CSV: a control, a ``skills`` arm and a
-    ``cpf`` arm, two models -- what :func:`plot.build_multi_comparison` reads off disk. Reuses
+def one_setup_observations_csv(tmp_path: pathlib.Path) -> pathlib.Path:
+    """One tiny experiment as an extracted-observations CSV: a control, a ``skills`` setup and a
+    ``cpf`` setup, two models -- what :func:`plot.build_multi_comparison` reads off disk. Reuses
     :func:`observation_rows`'s own shape so the emitted rows carry the ``baseline_ns``/``native_ns``
     columns :func:`~hpcagent_bench.stats.figures.efficacy.pairs_table` requires (SC15 Rule 4)."""
     rows: list[dict[str, object]] = []
@@ -854,7 +854,7 @@ def one_arm_observations_csv(tmp_path: pathlib.Path) -> pathlib.Path:
 
 
 def test_build_multi_comparison_reads_treatments_as_a_comma_list() -> None:
-    obs = one_arm_observations_csv(pathlib.Path(tempfile.mkdtemp()))
+    obs = one_setup_observations_csv(pathlib.Path(tempfile.mkdtemp()))
     built = plot.build_multi_comparison(
         {"treatments": "skills,cpf", "title": "CPU"}, [obs], "exp", "latest", False, plot.cost.resolve()
     )
@@ -867,7 +867,7 @@ def test_build_multi_comparison_reads_treatments_as_a_comma_list() -> None:
     assert set(frame["skills"].model.unique()) == {"qwen38", "oss120b"}
 
 
-def test_several_treatments_of_one_campaign_draw_one_dot_row(
+def test_several_treatments_of_one_experiment_draw_one_dot_row(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Two ``--treatment`` flags join as columns of ONE row, each against the same control."""
@@ -879,7 +879,7 @@ def test_several_treatments_of_one_campaign_draw_one_dot_row(
         return real(panels, *args, **kwargs)  # pyright: ignore[reportArgumentType]
 
     monkeypatch.setattr(plot.efficacy_figures, "figure_dot_row", record)
-    obs = one_arm_observations_csv(tmp_path)
+    obs = one_setup_observations_csv(tmp_path)
     out = tmp_path / "fig.pdf"
     old_argv = sys.argv
     sys.argv = [
@@ -897,7 +897,7 @@ def test_several_treatments_of_one_campaign_draw_one_dot_row(
 def test_write_panel_tables_merges_a_multi_treatment_panel_into_one_packet_tagged_csv(
     tmp_path: pathlib.Path,
 ) -> None:
-    obs = one_arm_observations_csv(tmp_path)
+    obs = one_setup_observations_csv(tmp_path)
     built = plot.build_multi_comparison(
         {"treatments": "skills,cpf"}, [obs], "exp", "latest", False, plot.cost.resolve()
     )
@@ -916,7 +916,7 @@ def test_a_kernel_without_a_token_total_keeps_its_speed_up_and_the_table_says_n(
     coordinate is the geomean over EVERY paired kernel (the family CSV's own score leg), the token
     coordinate over the kernels priced on both sides, and the table records that n. Intersecting
     the two moved Kimi's C skill-pages point from 0.83x (38 kernels) to 1.01x (19)."""
-    frame = one_arm_raw(on_speedup=2.0, on_tokens=500.0)
+    frame = one_setup_raw(on_speedup=2.0, on_tokens=500.0)
     unpriced = {f"k{kernel}" for kernel in range(0, KERNELS, 2)}
     frame = frame[~(frame.skills & (frame.row_kind == "task") & frame.benchmark.isin(unpriced))]
 
@@ -938,7 +938,7 @@ def test_the_pairs_csv_route_draws_its_marks_under_the_repeat_policy_it_was_aske
 ) -> None:
     """``figure_from_pairs`` once passed neither ``--repeats`` nor the figure config on to the
     figure, so its marks were drawn under the default ``latest`` while the table written
-    one line above used the policy the caller asked for. On git-scicomp, whose campaign rule is the
+    one line above used the policy the caller asked for. On git-scicomp, whose experiment rule is the
     median of three repeats, that put Kimi-K2.7-Code at 3.57x where its own CSV said 0.67x -- the
     difference between the repository helping and hurting."""
     rows: list[dict] = []
@@ -973,7 +973,7 @@ def test_the_pairs_csv_route_draws_its_marks_under_the_repeat_policy_it_was_aske
     frame = plot.pair_frame(plot.load_all([observations_csv]), [("git-repo", "git-kernel")], "repo")
 
     def treated_x(policy: str) -> float:
-        points = efficacy_figures.arm_points(frame[~frame.skills], frame[frame.skills], policy)
+        points = efficacy_figures.setup_points(frame[~frame.skills], frame[frame.skills], policy)
         assert points is not None
         return points[1].x
 
@@ -981,7 +981,7 @@ def test_the_pairs_csv_route_draws_its_marks_under_the_repeat_policy_it_was_aske
     assert by_policy["median"] != pytest.approx(by_policy["latest"]), by_policy
 
     drawn: list[float] = []
-    real = efficacy_figures.arm_points
+    real = efficacy_figures.setup_points
 
     def spy(*args, **kwargs):
         points = real(*args, **kwargs)
@@ -1010,7 +1010,7 @@ def test_the_pairs_csv_route_draws_its_marks_under_the_repeat_policy_it_was_aske
 
 
 def solved_and_failed_pair() -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Five kernels: the control answers k0-k3 at 2x and gets k4 wrong; the treated arm answers all
+    """Five kernels: the control answers k0-k3 at 2x and gets k4 wrong; the treated setup answers all
     five, k0-k3 at 4x and k4 at 8x."""
     control = [row for row in observation_rows(BLIND_PAIR[1], 2.0, 100.0, kernels=5)
                if not (row["benchmark"] == "k4" and row["row_kind"] == "submission")]  # fmt: skip
@@ -1022,10 +1022,10 @@ def solved_and_failed_pair() -> tuple[pd.DataFrame, pd.DataFrame]:
 
 
 def test_by_default_a_wrong_answer_is_no_speedup_and_counts_against_the_success_rate() -> None:
-    """The speedup of both arms is over the kernels BOTH solved, so the control's wrong
-    k4 is not scored as its baseline and the treated arm's k4 win does not lift it either; the
+    """The speedup of both setups is over the kernels BOTH solved, so the control's wrong
+    k4 is not scored as its baseline and the treated setup's k4 win does not lift it either; the
     failure is the success rate's to show."""
-    points = efficacy_figures.arm_points(*solved_and_failed_pair())
+    points = efficacy_figures.setup_points(*solved_and_failed_pair())
     assert points is not None
     control, treated = points
     assert 2.0**control.x == pytest.approx(2.0) and 2.0**treated.x == pytest.approx(4.0)
@@ -1035,7 +1035,7 @@ def test_by_default_a_wrong_answer_is_no_speedup_and_counts_against_the_success_
 
 def test_the_fallback_reading_scores_the_wrong_answer_at_one() -> None:
     """``served`` keeps the old reading: every kernel, a failure at 1x."""
-    points = efficacy_figures.arm_points(*solved_and_failed_pair(), over=population.KernelPolicy.SERVED)
+    points = efficacy_figures.setup_points(*solved_and_failed_pair(), over=population.KernelPolicy.SERVED)
     assert points is not None
     control, treated = points
     assert 2.0**control.x == pytest.approx(2.0 ** (4.0 / 5.0))
@@ -1093,7 +1093,7 @@ def test_a_full_roster_mark_on_the_ceiling_is_drawn_whole() -> None:
     import matplotlib.pyplot as plt
 
     fig, ax = plt.subplots()
-    row = efficacy_figures.ArmRow("qwen38", "HIP", "#1f77b4", arm(1.0, 2.0, 8, 8), arm(1.0, 2.0, 8, 8))
+    row = efficacy_figures.SetupRow("qwen38", "HIP", "#1f77b4", arm(1.0, 2.0, 8, 8), arm(1.0, 2.0, 8, 8))
     efficacy_figures.draw_success_row(ax, [row], "^", efficacy_figures.PAPER_CONFIG, "Solved (%)")
     marks = [collection for collection in ax.collections if isinstance(collection, PathCollection)]
     assert marks and not any(mark.get_clip_on() for mark in marks)
@@ -1104,7 +1104,7 @@ def test_the_success_row_draws_its_marks_and_no_interval() -> None:
     """The roster is fixed, so the count solved is a census, not a sample: a Wilson
     bar under a 10/10 mark reaching down to 7 read as seven solved."""
     fig, ax = plt.subplots()
-    row = efficacy_figures.ArmRow("qwen38", "HIP", "#1f77b4", arm(1.0, 2.0, 7, 10), arm(1.0, 2.0, 10, 10))
+    row = efficacy_figures.SetupRow("qwen38", "HIP", "#1f77b4", arm(1.0, 2.0, 7, 10), arm(1.0, 2.0, 10, 10))
     efficacy_figures.draw_success_row(ax, [row], "^", efficacy_figures.PAPER_CONFIG, "Solved (%)")
     assert [collection for collection in ax.collections if isinstance(collection, PathCollection)]
     assert not [collection for collection in ax.collections if isinstance(collection, LineCollection)]
@@ -1121,10 +1121,10 @@ def test_a_success_mark_sits_at_the_solved_rate(
 ) -> None:
     """The row is the solved RATE, solved over served, so pairs with different
     rosters share one 0-100% scale; the control's hollow mark left of the column, the treated one
-    right, and a 10/10 arm exactly on the 100% ceiling."""
+    right, and a 10/10 setup exactly on the 100% ceiling."""
     fig, ax = plt.subplots()
     control, treated = (arm(1.0, 2.0, count, served) for count in solved)
-    row = efficacy_figures.ArmRow("qwen38", "HIP", "#1f77b4", control, treated)
+    row = efficacy_figures.SetupRow("qwen38", "HIP", "#1f77b4", control, treated)
     efficacy_figures.draw_success_row(ax, [row], "^", efficacy_figures.PAPER_CONFIG, "Solved (%)")
     marks = [collection for collection in ax.collections if isinstance(collection, PathCollection)]
     drawn = sorted({(float(x), float(y)) for mark in marks for x, y in mark.get_offsets()})
@@ -1176,7 +1176,7 @@ def test_category_names_still_touching_on_two_lines_step_down_until_clear(legs: 
 
     fig, ax = plt.subplots(figsize=(1.3, 1.0))
     config = efficacy_figures.PAPER_CONFIG
-    rows = [efficacy_figures.ArmRow("qwen38", leg, "#1f77b4", arm(1.0, 2.0), arm(1.0, 2.0)) for leg in legs]
+    rows = [efficacy_figures.SetupRow("qwen38", leg, "#1f77b4", arm(1.0, 2.0), arm(1.0, 2.0)) for leg in legs]
     ax.set_xlim(-0.6, len(rows) - 0.4)
     efficacy_figures.draw_category_axis(ax, rows, config)
     efficacy_figures.stagger_crowded_ticks(fig, [ax], config)
@@ -1193,7 +1193,7 @@ def test_a_difference_label_under_the_top_tick_settles_inside_the_frame_and_off_
     import matplotlib.pyplot as plt
 
     fig, ax = plt.subplots(figsize=(1.2, 1.0))
-    row = efficacy_figures.ArmRow("qwen38", "HIP", "#1f77b4", arm(1.0, 2.0), arm(3.5, 4.0))
+    row = efficacy_figures.SetupRow("qwen38", "HIP", "#1f77b4", arm(1.0, 2.0), arm(3.5, 4.0))
     efficacy_figures.draw_measure_row(ax, [row], "speedup", "^", {}, differences=frozenset({("qwen38", "HIP")}))
     plotstyle.settle_clear_labels(fig)
     fig.canvas.draw()
@@ -1213,19 +1213,19 @@ def test_without_the_success_row_speedup_and_cost_keep_their_order(success_row: 
     assert plot.dot_measures(argparse.Namespace(success_row=success_row)) == want
 
 
-def arm(x: float, high: float, solved: int = 4, served: int = 6) -> efficacy_figures.ArmPoint:
-    """An arm at ``log2`` speedup ``x`` whose interval tops out at ``high``."""
-    return efficacy_figures.ArmPoint(x, x - 1.0, high, 1e5, 5e4, 2e5, served, served, solved, served)
+def arm(x: float, high: float, solved: int = 4, served: int = 6) -> efficacy_figures.SetupPoint:
+    """A setup at ``log2`` speedup ``x`` whose interval tops out at ``high``."""
+    return efficacy_figures.SetupPoint(x, x - 1.0, high, 1e5, 5e4, 2e5, served, served, solved, served)
 
 
 def test_a_success_row_nobody_was_served_is_not_a_singular_axis() -> None:
-    """Every arm of a column pending leaves N = 0, and a headroom taken as a fraction of N set the
+    """Every setup of a column pending leaves N = 0, and a headroom taken as a fraction of N set the
     limits to (0, 0): matplotlib warns and expands them on its own."""
     import matplotlib.pyplot as plt
 
     fig, ax = plt.subplots()
     unserved = arm(1.0, 2.0, solved=0, served=0)
-    row = efficacy_figures.ArmRow("qwen38", "HIP", "#1f77b4", unserved, unserved)
+    row = efficacy_figures.SetupRow("qwen38", "HIP", "#1f77b4", unserved, unserved)
     try:
         efficacy_figures.draw_success_row(ax, [row], "^", efficacy_figures.PAPER_CONFIG, "")
         low, high = ax.get_ylim()
@@ -1239,7 +1239,7 @@ def test_a_difference_label_sits_above_both_intervals_not_on_the_treated_mark() 
     import matplotlib.pyplot as plt
 
     fig, ax = plt.subplots()
-    row = efficacy_figures.ArmRow("qwen38", "HIP", "#1f77b4", arm(4.0, 5.0), arm(4.5, 6.0))
+    row = efficacy_figures.SetupRow("qwen38", "HIP", "#1f77b4", arm(4.0, 5.0), arm(4.5, 6.0))
     efficacy_figures.draw_measure_row(ax, [row], "speedup", "^", {}, differences=frozenset({("qwen38", "HIP")}))
     (label,) = [text for text in ax.texts if text.get_text().endswith("x")]
     assert label.xy == (0, 6.0), label.xy
@@ -1253,7 +1253,7 @@ def test_the_success_row_runs_to_100_percent_and_carries_no_x_ticks() -> None:
     import matplotlib.pyplot as plt
 
     fig, ax = plt.subplots()
-    row = efficacy_figures.ArmRow("qwen38", "HIP", "#1f77b4", arm(1.0, 2.0, 2, 8), arm(1.0, 2.0, 8, 8))
+    row = efficacy_figures.SetupRow("qwen38", "HIP", "#1f77b4", arm(1.0, 2.0, 2, 8), arm(1.0, 2.0, 8, 8))
     efficacy_figures.draw_success_row(ax, [row], "^", efficacy_figures.PAPER_CONFIG, "Solved (%)")
     fig.canvas.draw()
     assert list(ax.get_yticks()) == [0.0, 0.5, 1.0]
@@ -1267,10 +1267,10 @@ def test_the_success_row_runs_to_100_percent_and_carries_no_x_ticks() -> None:
 
 
 @pytest.mark.parametrize(("solved", "served", "want"), [(8, 8, 1.0), (0, 40, 0.0), (31, 40, 0.775), (0, 0, 0.0)])
-def test_the_success_rate_is_solved_over_served_and_zero_for_an_unserved_arm(
+def test_the_success_rate_is_solved_over_served_and_zero_for_an_unserved_setup(
     solved: int, served: int, want: float
 ) -> None:
-    """An arm nobody served yet has no rate to show; it reads 0, and the row skips drawing it."""
+    """A setup nobody served yet has no rate to show; it reads 0, and the row skips drawing it."""
     assert efficacy_figures.success_rate(solved, served) == want
 
 
@@ -1291,7 +1291,7 @@ def test_crowded_category_ticks_alternate_two_lines_and_sparse_ones_do_not(
 
     fig, ax = plt.subplots(figsize=(1.6, 1.0))
     config = efficacy_figures.PAPER_CONFIG
-    rows = [efficacy_figures.ArmRow("qwen38", leg, "#1f77b4", arm(1.0, 2.0), arm(1.0, 2.0)) for leg in legs]
+    rows = [efficacy_figures.SetupRow("qwen38", leg, "#1f77b4", arm(1.0, 2.0), arm(1.0, 2.0)) for leg in legs]
     ax.set_xlim(-0.6, len(rows) - 0.4)
     efficacy_figures.draw_category_axis(ax, rows, config)
     before = [tick.get_pad() for tick in ax.xaxis.get_major_ticks()]
@@ -1335,7 +1335,7 @@ def test_a_per_column_panel_never_asks_the_registry_for_its_pseudo_intervention(
 
 
 def test_a_pending_model_gets_an_empty_category_in_registry_order() -> None:
-    drawn = efficacy_figures.ArmRow(
+    drawn = efficacy_figures.SetupRow(
         "qwen38", "C", "#000000", efficacy_figures.EMPTY_POINT, efficacy_figures.EMPTY_POINT
     )  # fmt: skip
     rows = efficacy_figures.pending_rows([drawn], ["kimi27sglang", "qwen38", "oss120b"])
@@ -1424,8 +1424,8 @@ def test_intervals_reach_a_factor_four_past_the_outermost_marks(
 def test_an_interval_past_the_reach_is_cut_at_it_with_an_arrowhead() -> None:
     """The axis must not follow the interval out, and the cut end has to say the interval goes on."""
     fig, ax = plt.subplots()
-    wide = efficacy_figures.ArmPoint(0.0, -9.0, 12.0, 1e5, 5e4, 2e5, 6, 6, 6, 6)
-    row = efficacy_figures.ArmRow("qwen38", "HIP", "#1f77b4", arm(1.0, 2.0), wide)
+    wide = efficacy_figures.SetupPoint(0.0, -9.0, 12.0, 1e5, 5e4, 2e5, 6, 6, 6, 6)
+    row = efficacy_figures.SetupRow("qwen38", "HIP", "#1f77b4", arm(1.0, 2.0), wide)
     efficacy_figures.draw_measure_row(ax, [row], "speedup", "^", {})
     low, high = ax.get_ylim()
     assert high < 12.0 and low > -9.0, (low, high)
@@ -1434,9 +1434,9 @@ def test_an_interval_past_the_reach_is_cut_at_it_with_an_arrowhead() -> None:
     plt.close(fig)
 
 
-def few_kernel_arm(x: float, kernels: int) -> efficacy_figures.ArmPoint:
-    """An arm at ``log2`` speedup ``x`` over ``kernels`` kernels whose interval runs 20 octaves wide."""
-    return efficacy_figures.ArmPoint(x, x - 10.0, x + 10.0, 1e5, 5e4, 2e5, kernels, 40, kernels, 40)
+def few_kernel_setup(x: float, kernels: int) -> efficacy_figures.SetupPoint:
+    """A setup at ``log2`` speedup ``x`` over ``kernels`` kernels whose interval runs 20 octaves wide."""
+    return efficacy_figures.SetupPoint(x, x - 10.0, x + 10.0, 1e5, 5e4, 2e5, kernels, 40, kernels, 40)
 
 
 def test_a_mark_from_fewer_than_six_kernels_draws_no_interval_and_does_not_stretch_the_axis() -> None:
@@ -1447,8 +1447,8 @@ def test_a_mark_from_fewer_than_six_kernels_draws_no_interval_and_does_not_stret
     limits = {}
     for kernels in (5, 6):
         fig, ax = plt.subplots()
-        point = few_kernel_arm(2.0, kernels)
-        row = efficacy_figures.ArmRow("qwen38", "OpenMP Offload", "#1f77b4", point, point)
+        point = few_kernel_setup(2.0, kernels)
+        row = efficacy_figures.SetupRow("qwen38", "OpenMP Offload", "#1f77b4", point, point)
         efficacy_figures.draw_measure_row(ax, [row], "speedup", "^", {}, config=efficacy_figures.PAPER_CONFIG)
         lines[kernels] = len(ax.lines)
         limits[kernels] = ax.get_ylim()
@@ -1467,8 +1467,8 @@ def test_a_mark_from_fewer_than_six_kernels_draws_no_interval_and_does_not_stret
     ],
 )
 def test_the_key_notes_a_missing_interval_only_when_a_few_kernel_mark_is_drawn(kernels: int, want: bool) -> None:
-    point = few_kernel_arm(1.0, kernels)
-    row = efficacy_figures.ArmRow("qwen38", "HIP", "#1f77b4", point, point)
+    point = few_kernel_setup(1.0, kernels)
+    row = efficacy_figures.SetupRow("qwen38", "HIP", "#1f77b4", point, point)
     assert efficacy_figures.few_kernel_marks([row], efficacy_figures.PAPER_CONFIG) is want
 
 
@@ -1560,7 +1560,7 @@ def test_the_solved_row_is_never_starred_because_the_solved_rate_is_not_tested()
     stats = pd.DataFrame([{"model": "qwen38", "leg": "C", "score_verdict": efficacy.SIGNIFICANT,
                            "cost_verdict": efficacy.SIGNIFICANT}])  # fmt: skip
     significance = efficacy_figures.axis_significance(stats)
-    row = efficacy_figures.ArmRow("qwen38", "C", "#000000", arm(1.0, 1.5), arm(2.0, 2.5))
+    row = efficacy_figures.SetupRow("qwen38", "C", "#000000", arm(1.0, 1.5), arm(2.0, 2.5))
     texts = {}
     for measure in ("speedup", "success"):
         fig, ax = plt.subplots()

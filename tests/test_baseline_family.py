@@ -4,7 +4,7 @@
 it; best-of-v1's c-autopar denominator does not.
 
 Scicomp waves ran under both best-of-v2 and best-of-v3. A v2 control paired with a v3 treatment
-(or one arm with rows under both) must reduce, not raise, while each row keeps its exact stamp and
+(or one setup with rows under both) must reduce, not raise, while each row keeps its exact stamp and
 every other rule stays refused.
 """
 

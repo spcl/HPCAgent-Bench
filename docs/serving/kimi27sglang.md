@@ -2,7 +2,7 @@
 
 `moonshotai/Kimi-K2.7-Code` on SGLang, four nodes, `tp=4` per node and `pp=4` across them (it does
 not fit fewer). Source of truth: `experiments/layers/model-kimi27sglang.env` (render:
-`campaign:kimi27sglang`). Background: [`knobs.md`](knobs.md).
+`experiment:kimi27sglang`). Background: [`knobs.md`](knobs.md).
 
 ```bash
 MODEL=kimi27sglang hpcagent_bench/cluster/serve-only.sbatch

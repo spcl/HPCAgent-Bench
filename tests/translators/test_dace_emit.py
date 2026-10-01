@@ -1577,10 +1577,10 @@ def test_a_binding_nested_inside_another_binding_extent_is_declined() -> None:
     assert "m_iter = i + 1" in src  # ... and the advance still writes the name the read sees
 
 
-def test_bindings_in_sibling_branch_arms_are_still_versioned() -> None:
-    """The decline above is about NESTING, not about branches or loops: bindings in sibling arms
-    have genuinely disjoint live ranges and each read sits in the arm that bound it. esirkepov
-    binds ``cum_x = np.cumsum(..)`` in three arms of one branch and reads each immediately, so a
+def test_bindings_in_sibling_branch_setups_are_still_versioned() -> None:
+    """The decline above is about NESTING, not about branches or loops: bindings in sibling setups
+    have genuinely disjoint live ranges and each read sits in the setup that bound it. esirkepov
+    binds ``cum_x = np.cumsum(..)`` in three setups of one branch and reads each immediately, so a
     rule that refused every binding under a loop would leave it unported for nothing."""
     src = value_versioned(
         "def k(a, out):\n"
@@ -1618,7 +1618,7 @@ def test_bindings_in_sibling_branch_arms_are_still_versioned() -> None:
 
 
 def test_a_binding_nested_in_a_loop_that_alone_reaches_its_reads_gets_its_own_name() -> None:
-    """cegterg binds ``psi_k = psi[:kdim, :nbase]`` before its loop and again in branch arms inside it,
+    """cegterg binds ``psi_k = psi[:kdim, :nbase]`` before its loop and again in branch setups inside it,
     after ``nbase`` grows. Declined, every binding became a copy sized by a different version of the
     reassigned symbol, and dace refused the second: ``Cannot reassign value to variable "psi_k"``."""
     src = agrees_with_numpy(

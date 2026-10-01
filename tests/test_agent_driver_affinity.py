@@ -3,7 +3,7 @@
 """agent_driver.py: how the agent node's CPUs are shared out between its agents.
 
 The agent step owns the whole node and every agent used to inherit that full mask, so which CPUs
-40 of them landed on was the scheduler's guess. The arm measures wall clock, so the guess is not
+40 of them landed on was the scheduler's guess. The setup measures wall clock, so the guess is not
 free -- and the CLI plus its MCP servers are real processes, not just sockets waiting on HTTP.
 
 The share is dealt round-robin. These tests pin the three properties that makes it worth having:
@@ -54,7 +54,7 @@ def node_fixture(monkeypatch):
 
 def test_the_whole_node_is_dealt_out_and_no_two_agents_share_a_cpu(driver, node) -> None:
     """Disjoint and complete: an agent that shares a CPU is contending with a peer, and a CPU no
-    agent holds is a quarter of a socket the arm paid for and did not use."""
+    agent holds is a quarter of a socket the setup paid for and did not use."""
     node(192)
     shares = [driver.agent_cpus(i, 40) for i in range(40)]
     flat = [cpu for share in shares for cpu in share]
@@ -94,7 +94,7 @@ def test_a_nonsense_worker_count_is_refused_rather_than_dividing_by_it(driver, n
 
 
 def test_an_unreadable_mask_is_not_fatal(driver) -> None:
-    """A platform without affinity, or a mask the step may not read, must not take the arm down --
+    """A platform without affinity, or a mask the step may not read, must not take the setup down --
     every agent still runs, just wherever the scheduler puts it.
 
     Restored by hand rather than through monkeypatch: pytest's own teardown reads the affinity mask,
@@ -142,7 +142,7 @@ def test_no_cpus_means_no_syscall_and_no_log_noise(driver, tmp_path) -> None:
 def test_the_node_is_dealt_over_the_agents_it_runs_not_the_pool_it_declares() -> None:
     """The bug every other test in this file passed through.
 
-    ``AGENTS_PER_NODE`` sizes the thread pool for the BIGGEST arm; a node is handed only the
+    ``AGENTS_PER_NODE`` sizes the thread pool for the BIGGEST setup; a node is handed only the
     problems striped onto it, which is fewer. Dealing over the pool size gave each of 40 agents
     ``cpus[i::120]`` -- two CPUs of 192, 112 idle -- and the shares were still disjoint, still even,
     still spread, so nothing here caught it. Read at the call site because that is where the
@@ -173,8 +173,8 @@ def test_the_node_is_dealt_over_the_agents_it_runs_not_the_pool_it_declares() ->
 
 
 @pytest.mark.parametrize(("agents", "share"), [(40, 4), (12, 16), (120, 1)])
-def test_a_shipped_arm_gets_the_node_divided_by_its_own_agent_count(driver, node, agents, share) -> None:
-    """The three shapes the campaign actually submits: 40 focus40 agents, a 12-worker kimi batch,
+def test_a_shipped_setup_gets_the_node_divided_by_its_own_agent_count(driver, node, agents, share) -> None:
+    """The three shapes the experiment actually submits: 40 focus40 agents, a 12-worker kimi batch,
     and the full 120 pool. Each agent holds at least the floor of the division -- 4 CPUs, not 2."""
     node(192)
     assert min(len(driver.agent_cpus(i, agents)) for i in range(agents)) == share

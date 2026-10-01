@@ -19,7 +19,7 @@ import matplotlib.lines
 import matplotlib.pyplot as plt
 from matplotlib.collections import PathCollection
 
-from hpcagent_bench import experiment_tags
+from hpcagent_bench import study_tags
 from hpcagent_bench.stats import population, style
 from hpcagent_bench.stats.figures import per_kernel as pk
 
@@ -237,7 +237,7 @@ def answer_rows(kernel: str, run: str, ts_ms: int, speedup: float) -> dict[str, 
 
 def test_answer_cells_takes_a_rerun_kernels_latest_run_not_its_first() -> None:
     """A rerun supersedes the run it replaced: a stale first answer drawn beside the rerun's would
-    credit the arm with a result its latest run did not deliver."""
+    credit the setup with a result its latest run did not deliver."""
     frame = pd.DataFrame([answer_rows("k1", "first", 10, 8.0), answer_rows("k1", "rerun", 30, 2.0)])
     assert [(cell.kernel, cell.episodes) for cell in pk.answer_cells(frame)] == [("k1", (2.0,))]
 
@@ -417,8 +417,8 @@ def test_a_summary_value_label_prints_the_geomean_over_solved_kernels_only() -> 
 
 
 def test_kernel_tick_label_prints_the_manifest_short_name() -> None:
-    assert pk.kernel_tick_label("argmax_with_index") == experiment_tags.kernel_short_display_name("argmax_with_index")
-    assert pk.kernel_tick_label("argmax_with_index") != experiment_tags.kernel_display_name("argmax_with_index")
+    assert pk.kernel_tick_label("argmax_with_index") == study_tags.kernel_short_display_name("argmax_with_index")
+    assert pk.kernel_tick_label("argmax_with_index") != study_tags.kernel_display_name("argmax_with_index")
 
 
 @pytest.mark.parametrize(
@@ -431,12 +431,12 @@ def test_kernel_tick_label_prints_the_manifest_short_name() -> None:
 def test_kernel_tick_label_folds_a_long_fallback_name_without_dropping_a_character(kernel: str) -> None:
     """A kernel with no short name falls back to its full name; unfolded, one long rotated name
     deepens the whole band, and cut ("2-D Jacobi stencil..") it no longer names one kernel."""
-    name = experiment_tags.kernel_display_name(kernel)
-    assert len(name) > experiment_tags.SHORT_NAME_MAX
+    name = study_tags.kernel_display_name(kernel)
+    assert len(name) > study_tags.SHORT_NAME_MAX
     lines = pk.kernel_tick_label(kernel).split("\n")
     assert len(lines) > 1, lines
     assert "".join(lines).replace(" ", "") == name.replace(" ", ""), lines
-    assert all(len(line) <= experiment_tags.SHORT_NAME_MAX or " " not in line for line in lines), lines
+    assert all(len(line) <= study_tags.SHORT_NAME_MAX or " " not in line for line in lines), lines
 
 
 def ink_box_in(fig: matplotlib.figure.Figure, artists: list) -> list:
@@ -573,7 +573,7 @@ def test_a_print_size_tick_is_the_compact_kernel_name(kernel: str, want: str) ->
 
 
 def test_every_compact_name_fits_the_compact_limit() -> None:
-    assert all(len(name) <= experiment_tags.COMPACT_NAME_MAX for name in experiment_tags.COMPACT_NAMES.values())
+    assert all(len(name) <= study_tags.COMPACT_NAME_MAX for name in study_tags.COMPACT_NAMES.values())
 
 
 def test_a_rerun_writes_byte_identical_png_and_pdf(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:

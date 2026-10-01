@@ -3,13 +3,13 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Render a base env flat from ``layers/*.env`` and ``arms.yaml``: ``KEY=VALUE`` lines.
 
-    env_spec.py render campaign:qwen38          # campaign "campaign" for model qwen38
-    env_spec.py render scicomp                  # campaign "scicomp", no model: its budget keys
+    env_spec.py render experiment:qwen38          # experiment "campaign" for model qwen38
+    env_spec.py render scicomp                  # experiment "scicomp", no model: its budget keys
     env_spec.py render layers/model-qwen38.env  # an env file and its "# extends:" parents
-    env_spec.py list                            # every campaign:model a submitter can render
+    env_spec.py list                            # every experiment:model a submitter can render
 
-A campaign:model renders, lowest precedence first: ``layers/common.env``, the campaign's ``env``,
-the rest of ``layers/model-<model>.env``'s chain, the campaign's ``models.<model>``. A campaign that
+An experiment:model renders, lowest precedence first: ``layers/common.env``, the experiment's ``env``,
+the rest of ``layers/model-<model>.env``'s chain, the experiment's ``models.<model>``. An experiment that
 ``extends`` another applies the parent's ``env`` (and ``models`` entry) before its own. A later key
 keeps its first position. Values are copied verbatim, so ``${SCRATCH:?}`` resolves where the job
 sources the result.
@@ -25,7 +25,7 @@ from typing import Annotated
 import yaml
 from pydantic import BaseModel, ConfigDict, StrictInt, StrictStr, StringConstraints, TypeAdapter
 
-#: The checkout's ``experiments/``: the arm specification and its env layers.
+#: The checkout's ``experiments/``: the setup specification and its env layers.
 EXPERIMENTS = pathlib.Path(__file__).resolve().parents[2] / "experiments"
 SPEC = EXPERIMENTS / "arms.yaml"
 LAYERS = EXPERIMENTS / "layers"
@@ -40,29 +40,29 @@ Model = enum.Enum(
 )
 
 type EnvKey = Annotated[str, StringConstraints(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")]
-type CampaignName = Annotated[str, StringConstraints(pattern=r"^[a-z0-9][a-z0-9-]*$")]
+type ExperimentName = Annotated[str, StringConstraints(pattern=r"^[a-z0-9][a-z0-9-]*$")]
 type Env = dict[EnvKey, StrictStr | StrictInt]
 
 
 class Campaign(BaseModel):
-    """Keys one campaign sets on every model, and per model on top of that model's layer."""
+    """Keys one experiment sets on every model, and per model on top of that model's layer."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    extends: CampaignName | None = None
+    extends: ExperimentName | None = None
     env: Env = {}
     models: dict[Model, Env] = {}
 
 
-SPEC_ADAPTER = TypeAdapter(dict[CampaignName, Campaign])
+SPEC_ADAPTER = TypeAdapter(dict[ExperimentName, Campaign])
 
 
 def load_spec(path: pathlib.Path = SPEC) -> dict[str, Campaign]:
-    """``arms.yaml`` validated: campaign names, model names, env key names and scalar values."""
+    """``arms.yaml`` validated: experiment names, model names, env key names and scalar values."""
     spec = SPEC_ADAPTER.validate_python(yaml.safe_load(path.read_text(encoding="utf-8")) or {})
     for name, campaign in spec.items():
         if campaign.extends is not None and campaign.extends not in spec:
-            raise SystemExit(f"env_spec: campaign {name} extends unknown campaign {campaign.extends}")
+            raise SystemExit(f"env_spec: experiment {name} extends unknown experiment {campaign.extends}")
     return spec
 
 
@@ -93,27 +93,27 @@ def render_file(path: pathlib.Path) -> dict[str, str]:
     return env
 
 
-def campaign_chain(name: str, spec: dict[str, Campaign]) -> list[Campaign]:
-    """Campaign ``name`` and the campaigns it extends, root first."""
+def experiment_chain(name: str, spec: dict[str, Campaign]) -> list[Campaign]:
+    """Experiment ``name`` and the experiments it extends, root first."""
     names: list[str] = []
     current: str | None = name
     while current is not None:
         if current not in spec:
-            raise SystemExit(f"env_spec: no campaign {current} in {SPEC.name}")
+            raise SystemExit(f"env_spec: no experiment {current} in {SPEC.name}")
         if current in names:
-            raise SystemExit(f"env_spec: extends cycle through campaign {current}")
+            raise SystemExit(f"env_spec: extends cycle through experiment {current}")
         names.insert(0, current)
         current = spec[current].extends
     return [spec[n] for n in names]
 
 
-def render_campaign(name: str, model: str, spec: dict[str, Campaign]) -> dict[str, str]:
-    """Campaign ``name`` for ``model`` flattened (precedence in the module docstring)."""
+def render_experiment(name: str, model: str, spec: dict[str, Campaign]) -> dict[str, str]:
+    """Experiment ``name`` for ``model`` flattened (precedence in the module docstring)."""
     try:
         member = Model(model)
     except ValueError:
         raise SystemExit(f"env_spec: no model {model}: no layers/model-{model}.env") from None
-    campaigns = campaign_chain(name, spec)
+    campaigns = experiment_chain(name, spec)
     chain = layer_chain(LAYERS / f"model-{member.value}.env")
     if COMMON.resolve() not in chain:
         raise SystemExit(f"env_spec: layers/model-{member.value}.env does not extend common.env")
@@ -129,30 +129,30 @@ def render_campaign(name: str, model: str, spec: dict[str, Campaign]) -> dict[st
 
 
 def render_track(name: str, spec: dict[str, Campaign]) -> dict[str, str]:
-    """Campaign ``name`` without a model: ``layers/common.env`` and the campaign chain's ``env``.
+    """Experiment ``name`` without a model: ``layers/common.env`` and the experiment chain's ``env``.
 
     Budgets are per track, never per model, so this is where a submitter reads them."""
     env = assignments(COMMON)
-    for campaign in campaign_chain(name, spec):
+    for campaign in experiment_chain(name, spec):
         env.update((key, str(value)) for key, value in campaign.env.items())
     return env
 
 
 def render(target: str, spec: dict[str, Campaign] | None = None) -> dict[str, str]:
-    """``target`` rendered flat: ``<campaign>:<model>``, a bare ``<campaign>``, else an env file."""
+    """``target`` rendered flat: ``<experiment>:<model>``, a bare ``<experiment>``, else an env file."""
     spec = load_spec() if spec is None else spec
     if ":" in target:
         name, model = target.split(":", 1)
-        return render_campaign(name, model, spec)
+        return render_experiment(name, model, spec)
     if target in spec:
         return render_track(target, spec)
     if not pathlib.Path(target).is_file():
-        raise SystemExit(f"env_spec: {target} is neither <campaign>:<model> nor an env file")
+        raise SystemExit(f"env_spec: {target} is neither <experiment>:<model> nor an env file")
     return render_file(pathlib.Path(target))
 
 
 def targets(spec: dict[str, Campaign] | None = None) -> list[str]:
-    """Every ``<campaign>:<model>`` that renders."""
+    """Every ``<experiment>:<model>`` that renders."""
     return [f"{name}:{model.value}" for name in (load_spec() if spec is None else spec) for model in Model]
 
 
@@ -164,8 +164,8 @@ def as_text(env: dict[str, str]) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
-    sub.add_parser("render", help="print one campaign:model or env file flat").add_argument("target")
-    sub.add_parser("list", help="print every campaign:model")
+    sub.add_parser("render", help="print one experiment:model or env file flat").add_argument("target")
+    sub.add_parser("list", help="print every experiment:model")
     args = parser.parse_args()
     match args.command:
         case "render":

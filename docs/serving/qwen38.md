@@ -1,7 +1,7 @@
 # Serving Qwen3.8 on MI300A
 
 `Qwen/Qwen3.8-27B-FP8` on SGLang, one node, `tp=4`. The cheapest useful endpoint here. Source of
-truth: `campaign:qwen38` in `experiments/arms.yaml` over `layers/model-qwen38.env`. Background:
+truth: `experiment:qwen38` in `experiments/arms.yaml` over `layers/model-qwen38.env`. Background:
 [`knobs.md`](knobs.md).
 
 ```bash
@@ -23,7 +23,7 @@ EDF `hpcagent-bench-sglang-mi300-latest`; env `SGLANG_USE_AITER=1`, `SGLANG_SET_
 
 | Mamba ratio | KV pool | Mamba slots | Captured decode batch | Used by |
 |---|---|---|---|---|
-| **0.25** | **4.03 M tokens** | 427 | up to 85 | `campaign:qwen38`, `serve-only.sbatch` |
+| **0.25** | **4.03 M tokens** | 427 | up to 85 | `experiment:qwen38`, `serve-only.sbatch` |
 | 0.5 | 3.32-3.36 M tokens | 704 | full 128 | `llrbase-c:qwen38`, private `mi300` preset |
 | 0.9 (engine default) | 1.91 M tokens | | | never: hit rate 0.20, 25 tok/s at 40 x 60k |
 

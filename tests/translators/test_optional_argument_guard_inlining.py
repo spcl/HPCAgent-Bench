@@ -9,14 +9,14 @@ kernel its DaCe program outright rather than degrading anything visible:
 
 * the guard is spelled ``if weight is None``, and only ``==``/``!=`` counted as a decidable
   compare, so an identity test against a call-site literal was treated as a runtime condition;
-* the affine arm binds its broadcast ``shape`` AFTER the guard, and the fuse only ever looked at
+* the affine setup binds its broadcast ``shape`` AFTER the guard, and the fuse only ever looked at
   the last two statements, so the guard and the trailing return were never adjacent to begin with.
 
 conv2d_instance_norm_divide's ``_instance_norm`` has both at once. It matched no inlinable form,
 survived as a call a ``@dc.program`` cannot make, and emitted no program at all.
 
-The load-bearing assertion is the last one. Picking the wrong arm still produces a program, and
-every value it computes is wrong -- so the arm is checked against the reference, not assumed.
+The load-bearing assertion is the last one. Picking the wrong setup still produces a program, and
+every value it computes is wrong -- so the setup is checked against the reference, not assumed.
 """
 
 import ast
@@ -34,7 +34,7 @@ from tests.translators.op_oracle import run_op
 BACKENDS = ("c", "cpp", "fortran", "numba", "pythran", "jax")
 
 #: ``_instance_norm``'s exact shape: an ``is None`` guard with a pure binding BETWEEN it and the
-#: trailing return. The affine arm is scaled far from 1.0 so selecting it cannot pass as round-off.
+#: trailing return. The affine setup is scaled far from 1.0 so selecting it cannot pass as round-off.
 NORM_SRC = (
     "import numpy as np\n"
     "def _norm(x, weight):\n"
@@ -79,7 +79,7 @@ def test_an_identity_test_against_a_literal_is_a_static_flag_test() -> None:
 )
 def test_an_undecidable_identity_test_is_declined(expr, reason) -> None:
     """An undecidable guard fused into an ``IfExp`` over ARRAY branches has no target form: C's
-    ``?:`` rejects the operand types and Fortran's ``merge`` evaluates BOTH arms."""
+    ``?:`` rejects the operand types and Fortran's ``merge`` evaluates BOTH setups."""
     assert not is_static_flag_test(ast.parse(expr, mode="eval").body, flags("weight")), reason
 
 
@@ -135,9 +135,9 @@ def test_a_binding_the_guard_reads_is_not_lifted() -> None:
     assert [type(s).__name__ for s in body] == ["Assign", "Assign", "If", "Assign", "Return"]
 
 
-def test_the_selected_arm_is_the_one_the_reference_takes() -> None:
+def test_the_selected_setup_is_the_one_the_reference_takes() -> None:
     """Every backend, against numpy's own answer. ``weight=None`` selects the CENTERED array, and
-    the affine arm it must not select is a hundred times larger."""
+    the affine setup it must not select is a hundred times larger."""
     x = np.arange(1.0, 9.0)
     verdicts = run_op(
         NORM_SRC, "f", {"x": x}, {"out": (8,)}, {"N": 8}, shapes={"x": "(N,)", "out": "(N,)"}, backends=BACKENDS

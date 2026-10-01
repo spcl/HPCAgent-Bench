@@ -92,7 +92,7 @@ def test_env_override_carries_lists_and_objects(monkeypatch) -> None:
     An environment variable is text, so without JSON coercion these arrive as strings and fail far
     from the export that caused them -- ``dict()`` over the compilers string raises "dictionary
     update sequence element #0 has length 1", and ``list()`` over the launcher string would launch
-    with one argument per character. Both are exactly how a campaign's .env sets them."""
+    with one argument per character. Both are exactly how an experiment's .env sets them."""
     from hpcagent_bench import config
 
     monkeypatch.setenv("HPCAGENT_BENCH_MPI_LAUNCHER", '["srun", "--mpi=pmi2", "-n"]')

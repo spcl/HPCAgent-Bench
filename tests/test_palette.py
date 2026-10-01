@@ -47,7 +47,7 @@ def test_colour_does_not_depend_on_the_other_series():
 
 
 def test_a_combination_keeps_its_lead_packets_family():
-    """`cpfsrc+lang-skills` is a CPF arm carrying a second packet, and reads as one."""
+    """`cpfsrc+lang-skills` is a CPF setup carrying a second packet, and reads as one."""
     assert packets.lead(packets.spec_parts("cpfsrc+lang-skills")) == "cpfsrc"
     assert palette.color("cpfsrc+lang-skills") != palette.color("cpfsrc")
     assert palette.color("cpfsrc+lang-skills") != palette.color("lang-skills")
@@ -193,7 +193,7 @@ def test_an_alias_wears_what_it_aliases():
 def test_offload_is_a_device_and_a_language_not_a_packet():
     """`device=gpu` with `language=c` IS OpenMP offload, so the old `openmp-offload` packet names
     nothing the other columns do not already say. It resolves to the control, which keeps every row
-    recorded under it comparable to a CPU arm on the same packet axis."""
+    recorded under it comparable to a CPU setup on the same packet axis."""
     assert palette.color("openmp-offload") == palette.control_color()
     assert palette.color("openmp-offload+lang-skills") == palette.color("lang-skills")
 

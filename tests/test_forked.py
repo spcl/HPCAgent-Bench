@@ -145,7 +145,7 @@ def test_a_childs_own_signal_beats_the_timeout_it_raced() -> None:
     # The caller attributes a failure by its cause, and "TIMEOUT" for a child that segfaulted is
     # the wrong cause: papi.count_gpu_metric turns this string into the reason a metric has no
     # number, so a CUPTI crash that lost a scheduling race would be filed as a slow kernel.
-    # The child arms the deadline itself (run_forked waits for its "started" message), so the
+    # The child setups the deadline itself (run_forked waits for its "started" message), so the
     # SIGTERM lands 2s into the CHILD'S life rather than 2s after p.start() -- the handler is
     # installed by then no matter how slow the box was to schedule the fork. Widening the headroom
     # was the earlier answer to this and it does not converge: the same race took CI down again
@@ -274,14 +274,14 @@ def test_the_child_entry_point_keeps_the_name_a_running_judge_pickles() -> None:
     A judge service outlives a checkout update: it holds ``forked`` from the tree as it was when it
     started and keeps naming the entry point the way that tree spelled it, while a forkserver daemon
     it respawns imports THIS file. Drop the historical spelling and every forked grade such a parent
-    starts dies on an AttributeError the parent only sees as a broken result pipe -- a whole arm's
+    starts dies on an AttributeError the parent only sees as a broken result pipe -- a whole setup's
     rows lost with no failing kernel to point at. Both names must resolve, to ONE function, through
     a pickle round trip, and take the argument tuple run_forked builds.
 
     The five leading parameters are the ABI and are pinned by NAME AND POSITION. Anything after
     them must be OPTIONAL, which is the property that actually matters here: an old parent calls
     with exactly five positional arguments, so a new REQUIRED parameter would make every grade it
-    starts die on a TypeError the parent only sees as a broken pipe -- the same silent, whole-arm
+    starts die on a TypeError the parent only sees as a broken pipe -- the same silent, whole-setup
     loss as a renamed entry point. Asserting that, rather than a literal parameter list, is why
     ``err_w`` could be added (the raw error pipe; child_main falls back to the queue without it)
     without loosening the guard.
@@ -316,7 +316,7 @@ def test_reparented_is_a_change_from_entry_not_a_literal_pid(
 
 
 def test_die_with_parent_survives_a_pid_namespace_init_as_the_real_parent(monkeypatch) -> None:
-    """A child of the sealed worker reads getppid() == 1 before AND after prctl arms -- no death."""
+    """A child of the sealed worker reads getppid() == 1 before AND after prctl setups -- no death."""
     monkeypatch.setattr(forked.osinfo, "IS_LINUX", True)
     monkeypatch.setattr(forked.os, "getppid", lambda: 1)
     monkeypatch.setattr(

@@ -13,8 +13,8 @@ carry to MI300X.
 | [`mi200-endpoint.md`](mi200-endpoint.md) | the same server in BF16 on an mi200 node, and the one-command ping test that checks it from anywhere |
 | [`extending-private-inference.md`](extending-private-inference.md) | contributors: the private launcher's security contract, new presets, access paths, engines |
 
-The authoritative launch line per model is the render of `campaign:<model>`
-(`hpcagent_bench/cluster/env_layers.sh render campaign:<model>`). If a page here and the render disagree, the
+The authoritative launch line per model is the render of `experiment:<model>`
+(`hpcagent_bench/cluster/env_layers.sh render experiment:<model>`). If a page here and the render disagree, the
 render wins.
 
 ## 1. Shortest path
@@ -38,7 +38,7 @@ MODEL=kimi27sglang $S        # any experiments/layers/model-<MODEL>.env: qwen38,
 SBATCH_TIMELIMIT=08:00:00 $S # longer than the 4 h default
 ```
 
-`serve-only.sbatch` renders `campaign:<MODEL>` (`SERVE_BASE_ENV` overrides), reads the node count from it, submits itself with
+`serve-only.sbatch` renders `experiment:<MODEL>` (`SERVE_BASE_ENV` overrides), reads the node count from it, submits itself with
 that `--nodes`, starts the server, polls `/v1/models`, then prints:
 
 ```
@@ -55,7 +55,7 @@ actually ran.
 
 **Runtime caveat.** `serve-only.sbatch` launches the registered EDF as is. A single-node server
 (qwen38, oss120b) can fail building its tensor-parallel group with `Failed to initialize any NET
-plugin` when the EDF forces the fabric plugin; the campaign launcher switches the hooks off for a
+plugin` when the EDF forces the fabric plugin; the experiment launcher switches the hooks off for a
 single-node server, see [`experiments/README.md`](../../experiments/README.md#container-runtimes).
 
 ## 2. Images (EDFs)
@@ -174,15 +174,15 @@ colon-dash):
 Deleting a key turns the default **on**. To omit a flag, assign it empty (GLM-5.3 does this). When
 templating a flag, use the dash form.
 
-**Layers, last assignment wins.** `layers/common.env` < `arms.yaml` campaign < `layers/model-<m>.env` < `arms.yaml` `models.<m>`
+**Layers, last assignment wins.** `layers/common.env` < `arms.yaml` experiment < `layers/model-<m>.env` < `arms.yaml` `models.<m>`
 ([Env layers](../../experiments/README.md#env-layers)); a layer can override a key, never unset it.
-Render one with `hpcagent_bench/cluster/env_layers.sh render campaign:<m>`. `serve-only.sbatch` sources the render, then
+Render one with `hpcagent_bench/cluster/env_layers.sh render experiment:<m>`. `serve-only.sbatch` sources the render, then
 `serve-only.env` (zero judge and agent nodes, `RUN_ROOT`), under `set -a`.
 
-**Arm `.env.<arm>` files are renders.** Fix the layer that owns a key, never the render.
+**Setup `.env.<arm>` files are renders.** Fix the layer that owns a key, never the render.
 
-**Mounts.** A campaign job narrows the inference container's mounts; `serve-only.sbatch` uses the
-registered EDF as-is. A model that serves here and fails in a campaign run: suspect the mounts first.
+**Mounts.** An experiment job narrows the inference container's mounts; `serve-only.sbatch` uses the
+registered EDF as-is. A model that serves here and fails in an experiment run: suspect the mounts first.
 
 ## 7. Where the numbers live
 

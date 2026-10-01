@@ -22,7 +22,7 @@ __all__ = [
     "cpu_model",
     "default_mp_context",
     "gpu_model",
-    "is_arm",
+    "is_setup",
     "machine",
     "mp_context",
     "node_name",
@@ -76,7 +76,7 @@ def node_name() -> str:
 
     The only column that tells two machines of the SAME model apart. :func:`cpu_model` and
     :func:`gpu_model` name the hardware MODEL, so on a homogeneous cluster every node reports one
-    string and a partition on ``(cpu, gpu)`` folds the whole campaign into one group -- a candidate
+    string and a partition on ``(cpu, gpu)`` folds the whole experiment into one group -- a candidate
     timed on one node can then be divided by a baseline timed on another with nothing downstream
     able to notice, and the measured node-to-node spread is larger than most effects claimed.
     Recorded per ROW rather than per run, because one run_id spans ranks and a multi-node run
@@ -95,7 +95,7 @@ def gpu_model() -> str:
     ``""`` when the host has no discoverable device -- not an error, just a CPU-only box.
 
     Pairs with :func:`cpu_model` to name the NODE a measurement came from. Two nodes are two
-    experiments: a baseline timed on one machine against a candidate timed on another is a hardware
+    studies: a baseline timed on one machine against a candidate timed on another is a hardware
     comparison wearing a software label. Cached, because this is read once per recorded row and a
     subprocess per row would cost more than the measurement.
     """

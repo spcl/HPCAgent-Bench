@@ -3,7 +3,7 @@
 """``extract_llr40.py --db`` writes the observations table the figures read.
 
 The reproducibility artifact commits this database instead of the CSV, so the database the extractor
-writes has to read back through :func:`hpcagent_bench.experiments.read_observations` as exactly the
+writes has to read back through :func:`hpcagent_bench.studies.read_observations` as exactly the
 rows the CSV holds.
 """
 
@@ -11,7 +11,7 @@ import pathlib
 
 import pandas as pd
 
-from hpcagent_bench import experiments
+from hpcagent_bench import studies
 
 from hpcagent_bench import observations_extract as extract_llr40
 from tests.sqlite_closing import connect
@@ -46,8 +46,8 @@ def test_the_db_reads_back_as_the_rows_the_csv_holds(tmp_path: pathlib.Path) -> 
     fields = extract_llr40.OBSERVATION_FIELDS
     extract_llr40.write_csv(tmp_path / "obs.csv", fields, ROWS)
     assert extract_llr40.write_db(tmp_path / "obs.db", fields, ROWS) == 2
-    from_csv = experiments.read_observations(tmp_path / "obs.csv")
-    from_db = experiments.read_observations(tmp_path / "obs.db")
+    from_csv = studies.read_observations(tmp_path / "obs.csv")
+    from_db = studies.read_observations(tmp_path / "obs.db")
     assert list(from_db.columns) == list(from_csv.columns)
     # read_observations appends what each identity column recorded (recorded_<column>) after the extractor's fields.
     assert [c for c in from_db.columns if not c.startswith("recorded_")] == list(fields)
@@ -62,7 +62,7 @@ def test_a_rewrite_replaces_the_table_instead_of_appending(tmp_path: pathlib.Pat
     db = tmp_path / "obs.db"
     extract_llr40.write_db(db, fields, ROWS)
     extract_llr40.write_db(db, fields, ROWS[:1])
-    assert len(experiments.read_observations(db)) == 1
+    assert len(studies.read_observations(db)) == 1
 
 
 def test_every_typed_column_is_a_column_the_table_has() -> None:
@@ -74,7 +74,7 @@ def test_every_typed_column_is_a_column_the_table_has() -> None:
 
 
 def test_a_missing_numeric_cell_is_null_and_a_missing_text_cell_stays_empty(tmp_path: pathlib.Path) -> None:
-    """``packet`` is "" for the CONTROL arm -- a value, which fill_arm_identity reads as one -- so
+    """``packet`` is "" for the CONTROL setup -- a value, which fill_setup_identity reads as one -- so
     the empty-to-NULL rule is confined to the numeric columns."""
     db = tmp_path / "obs.db"
     extract_llr40.write_db(db, extract_llr40.OBSERVATION_FIELDS, ROWS)

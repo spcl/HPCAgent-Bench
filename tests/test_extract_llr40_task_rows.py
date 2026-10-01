@@ -14,7 +14,7 @@ import json
 import pathlib
 
 import merge_results
-from hpcagent_bench import experiments
+from hpcagent_bench import studies
 from hpcagent_bench import observations_extract as extract_llr40
 from hpcagent_bench.harness import episodes, results_db
 
@@ -55,7 +55,7 @@ def shard(job_dir: pathlib.Path, rank: int, label: str, ts_ms: int) -> None:
     path.parent.mkdir(parents=True)
     arm = label.split(".")[0]
     with contextlib.closing(results_db.open_db(path)) as conn:
-        results_db.ensure_arm(conn, results_db.Arm(arm, "c", "cpu", experiment="llr40", model="stub-model"))
+        results_db.ensure_setup(conn, results_db.Arm(arm, "c", "cpu", experiment="llr40", model="stub-model"))
         run = results_db.ensure_run(conn, arm, label, JOB)
         values = {
             "preset": "XL",
@@ -78,10 +78,10 @@ def merged(job_dir: pathlib.Path) -> pathlib.Path:
     return out
 
 
-def rows_of(db: pathlib.Path, arm_prefix: str = "", excluded: frozenset[str] = frozenset()) -> list[dict]:
+def rows_of(db: pathlib.Path, setup_prefix: str = "", excluded: frozenset[str] = frozenset()) -> list[dict]:
     """Every observation row the extractor reads from ``db``."""
     database = extract_llr40.Database(db, "r", db.parent, str(JOB))
-    return extract_llr40.read_db(database, arm_prefix, excluded, 0).observations
+    return extract_llr40.read_db(database, setup_prefix, excluded, 0).observations
 
 
 def task_rows(db: pathlib.Path, **campaign: object) -> list[dict]:
@@ -179,14 +179,14 @@ def test_a_record_naming_no_run_is_counted_not_attributed(tmp_path: pathlib.Path
     assert len(task_rows(out)) == 1
 
 
-def test_an_excluded_arm_or_one_outside_the_campaign_yields_no_task_rows(tmp_path: pathlib.Path) -> None:
+def test_an_excluded_setup_or_one_outside_the_experiment_yields_no_task_rows(tmp_path: pathlib.Path) -> None:
     job_dir = job(tmp_path)
     write_record(job_dir, 0)
     db = merged(job_dir)
 
-    assert task_rows(db, arm_prefix="arm-b") == []
+    assert task_rows(db, setup_prefix="arm-b") == []
     assert task_rows(db, excluded=frozenset({"a"})) == []
-    assert len(task_rows(db, arm_prefix="arm-a")) == 1
+    assert len(task_rows(db, setup_prefix="arm-a")) == 1
 
 
 def test_task_rows_are_emitted_once_per_job_not_once_per_rank_database(tmp_path: pathlib.Path) -> None:
@@ -212,7 +212,7 @@ def test_the_token_columns_round_trip_through_sqlite(tmp_path: pathlib.Path) -> 
 
     db_path = tmp_path / "obs.db"
     assert extract_llr40.write_db(db_path, extract_llr40.OBSERVATION_FIELDS, rows) == 1
-    frame = experiments.read_observations(db_path)
+    frame = studies.read_observations(db_path)
 
     assert frame["row_kind"].tolist() == ["task"]
     assert frame["tokens"].tolist() == [99_001]

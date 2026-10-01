@@ -3,7 +3,7 @@
 """An agent step runs from a per-job launch directory and loads its tools from the payload bound at launch.
 
 run_cluster.sh used to bind all of experiments/ into the agent container, because run_cluster.sh and
-agent_driver.py live there -- and with them every arm's .env and problems file. stage_agent_launch now
+agent_driver.py live there -- and with them every setup's .env and problems file. stage_agent_launch now
 copies only what the step executes, and agent_driver.py takes its tools, packets and prompts from
 ``$HPCAGENT_BENCH_AGENT_DIR`` (the checkout's agent, bound by the launcher) instead of probing for
 a copy baked into the image. The shell function is cut out of the shipped script and run as-is.
@@ -57,7 +57,7 @@ def stage(script_dir: pathlib.Path, launch: pathlib.Path, env_file: pathlib.Path
 
 
 def staged_checkout(tmp_path: pathlib.Path) -> tuple[pathlib.Path, pathlib.Path]:
-    """The real experiments/ files, an arm env, its problems file, and another arm's files beside them."""
+    """The real experiments/ files, a setup env, its problems file, and another setup's files beside them."""
     launch = tmp_path / "runs" / ".agent-launch" / "7"
     env_file = tmp_path / ".env.arm-c"
     env_file.write_text("CAMPAIGN_ARM=arm-c\nPROBLEMS_FILE=problems-arm-c.jsonl\n")
@@ -67,8 +67,8 @@ def staged_checkout(tmp_path: pathlib.Path) -> tuple[pathlib.Path, pathlib.Path]
 
 
 def test_the_launch_directory_holds_what_an_agent_step_executes_and_nothing_else(tmp_path: pathlib.Path) -> None:
-    """A file staged here is readable by every agent of the job; another arm's .env or problems file
-    names kernels and treatments this arm must not see."""
+    """A file staged here is readable by every agent of the job; another setup's .env or problems file
+    names kernels and treatments this setup must not see."""
     scripts = tmp_path / "experiments"
     scripts.mkdir()
     for name in (*launch_files(), ".env.other-arm", "problems-other-arm.jsonl", "submit-other.sh"):
@@ -83,7 +83,7 @@ def test_the_launch_directory_holds_what_an_agent_step_executes_and_nothing_else
 
 def test_the_staged_env_names_the_staged_problems_file(tmp_path: pathlib.Path) -> None:
     """The step re-sources .env inside the container, where a problems path with a directory would
-    point outside the only experiments files it can read."""
+    point outside the only studies files it can read."""
     launch, _ = staged_checkout(tmp_path)
     assert (launch / ".env").read_text().splitlines()[-1] == f"PROBLEMS_FILE={PROBLEMS}"
 
@@ -106,7 +106,7 @@ def test_concurrent_staging_of_the_same_job_never_leaves_a_readonly_partial_env(
     stage_agent_launch on the SAME AGENT_LAUNCH_DIR (keyed by job id, not role). The in-place
     rm-rf + populate + chmod version let one caller's chmod a-w land between another caller's cp
     and its later `>>` append, so the append hit a file it no longer had permission to write --
-    "Permission denied", the whole job dead before any agent work. Runs several stagers of the SAME arm in parallel; every one must still exit 0 and
+    "Permission denied", the whole job dead before any agent work. Runs several stagers of the SAME setup in parallel; every one must still exit 0 and
     the launch directory must end up complete and read-only, not truncated mid-write."""
     scripts = tmp_path / "experiments"
     scripts.mkdir()

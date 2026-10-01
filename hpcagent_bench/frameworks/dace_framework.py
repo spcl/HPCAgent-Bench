@@ -170,7 +170,7 @@ STRICT_FP_FLAG = "-ffp-contract=off"
 
 
 def pin_host_compiler(family: str | None = None) -> str | None:
-    """Build dace's generated C++ with the same driver and flags a native arm of ``family`` uses, so a
+    """Build dace's generated C++ with the same driver and flags a native setup of ``family`` uses, so a
     dace-vs-native comparison measures the pipeline, not the compiler: ``compiler.cpu.executable`` is
     the family's C++ driver, ``compiler.cpu.args`` its baseline minus :data:`DACE_SUPPLIED_FLAGS`
     (dace's default carries ``-freciprocal-math``, which the harness baselines do not). Overrides

@@ -225,7 +225,7 @@ def test_the_plot_loader_partitions_machines_instead_of_folding_them(tmp_path, m
     groups = results.machine_groups(results.load_results(path, preset="S"))
 
     # Three machines: two CPU-only boxes, plus the xeon's GPU runs -- which are a DIFFERENT
-    # experiment from the same xeon's CPU runs and must not share a figure with them.
+    # study from the same xeon's CPU runs and must not share a figure with them.
     assert [label for label, _ in groups] == ["epyc", "xeon", "xeon-A100"]
     assert [len(frame) for _, frame in groups] == [2, 1, 2]
     for _, frame in groups:

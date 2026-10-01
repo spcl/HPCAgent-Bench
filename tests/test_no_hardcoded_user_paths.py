@@ -3,7 +3,7 @@
 """Repo-wide guard: no tracked file hardcodes a value that belongs to one site or one person.
 
 Site values -- storage mounts, home directories, the Slurm account and partition, node and host
-names, user names, the image registry, one campaign's run directories -- come from the environment,
+names, user names, the image registry, one experiment's run directories -- come from the environment,
 with ONE default place each (docs/configuration.md):
 
 * ``scripts/site_env.sh`` loads the site layer (``experiments/layers/site-<name>.env``): fast
@@ -121,7 +121,7 @@ CODE_PATTERNS = {
         ),
         "the partition is SBATCH_PARTITION (site layer); pass --partition only from a variable",
     ),
-    "one campaign's run directory": (
+    "one experiment's run directory": (
         re.compile(
             r"hpcagent-bench-runs/(?![$<{*])[\w.-]*\d{6,}"
             r"|/[\w.-]*[-_]20[2-3]\d[01]\d[0-3]\d[a-z]?(?![\w-])"

@@ -1,6 +1,6 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""``results_db.delete_arms``: an arm declared void leaves no row behind, and nothing of another arm goes."""
+"""``results_db.delete_setups``: a setup declared void leaves no row behind, and nothing of another setup goes."""
 
 import contextlib
 import pathlib
@@ -12,7 +12,7 @@ VOID = "void-arm"
 KEPT = "kept-arm"
 
 
-def test_a_void_arm_leaves_no_row_and_the_other_arm_keeps_every_one(tmp_path: pathlib.Path) -> None:
+def test_a_void_setup_leaves_no_row_and_the_other_setup_keeps_every_one(tmp_path: pathlib.Path) -> None:
     db = tmp_path / "r.db"
     shared = "void gemm(void) { /* both */ }"
     void = results_seed.submission(db, f"{VOID}.n0.p0.w0", "gemm", 10, source="void gemm(void) { /* void */ }")
@@ -23,7 +23,7 @@ def test_a_void_arm_leaves_no_row_and_the_other_arm_keeps_every_one(tmp_path: pa
         final, _ts = results_db.add_grade(conn, run, "gemm", "final", ts_ms=20, values={"of_grade_id": void})
         results_db.add_cells(conn, final, [{"cell": 0, "ratio": 2.0}])
         conn.commit()
-        removed = results_db.delete_arms(conn, [VOID])
+        removed = results_db.delete_setups(conn, [VOID])
         conn.commit()
         left = {table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] for table in results_db.TABLES}
         arms = [row[0] for row in conn.execute("SELECT arm FROM arms")]

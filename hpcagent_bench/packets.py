@@ -30,7 +30,7 @@ import re
 from collections.abc import Iterable, Mapping
 from types import MappingProxyType
 
-from hpcagent_bench import experiment_tags as tags
+from hpcagent_bench import study_tags as tags
 
 __all__ = [
     "DEVICE_LANGUAGES",
@@ -42,7 +42,7 @@ __all__ = [
     "SKILL_TREATMENTS",
     "Packet",
     "applies_to",
-    "arm_order",
+    "setup_order",
     "canonical",
     "companion_language_pages",
     "control_label",
@@ -105,7 +105,7 @@ def tool_pages() -> frozenset[str]:
     declares ``tools``.
 
     ``*`` does not expand to them. ``agent/tools/mcp_server.py`` serves such a tool only
-    in that packet's arms (its ``PACKET_TOOL_SWITCH``), so any other arm staging the page would read
+    in that packet's setups (its ``PACKET_TOOL_SWITCH``), so any other setup staging the page would read
     the manual for a tool it was never given. Naming the page outright
     (``--skill canonical-parallel-form``) still stages it; only ``*`` stops picking it up."""
     return frozenset(
@@ -115,7 +115,7 @@ def tool_pages() -> frozenset[str]:
 
 @functools.lru_cache(maxsize=None, typed=True)
 def page_applies(page: str) -> Mapping[str, object]:
-    """``page``'s ``applies:`` frontmatter block: which arms the page can be of use to at all.
+    """``page``'s ``applies:`` frontmatter block: which setups the page can be of use to at all.
 
     ``languages`` (the run's language), ``images`` (cpu, amd, nvidia), ``multinode`` (true when
     the page only matters to a task spanning nodes) and ``explicit`` (true when the page IS a
@@ -129,9 +129,9 @@ def page_applies(page: str) -> Mapping[str, object]:
 
 
 def applies_to(page: str, language: str, image: str | None, multinode: bool) -> bool:
-    """Whether ``page`` can be of use to an arm writing ``language`` on ``image``.
+    """Whether ``page`` can be of use to a setup writing ``language`` on ``image``.
 
-    ``*`` stages only the pages that can apply, so an arm is not indexed triggers for situations
+    ``*`` stages only the pages that can apply, so a setup is not indexed triggers for situations
     that cannot occur in it (NVIDIA tracers on AMD nodes, OpenACC, MPI, other languages). An empty or
     free-choice ``language`` ("", "any") and an unknown ``image`` (None) do not restrict, so a
     caller that cannot name them still gets the whole library rather than a guessed subset."""
@@ -154,13 +154,13 @@ def companion_language_pages(language: str, image: str | None = None, multinode:
     A GPU or a Python-delivered submission is written in two surfaces at once: the host half of a
     ``.hip`` is ordinary C++ and ``lang-cpp`` governs it, a Triton module is delivered through the
     Python ABI ``lang-python`` owns. Both pages say so in their triggers ("read this page first,
-    together with lang-cpp") -- so an arm that stages ``lang-hip`` without ``lang-cpp`` publishes a
+    together with lang-cpp") -- so a setup that stages ``lang-hip`` without ``lang-cpp`` publishes a
     trigger pointing at ``/shared/skills/lang-cpp.md``, which is not there. ``*`` already picked the
     companion up, because the companion's ``applies`` names the language; the ``lang`` token did
     not, so ``lang``, ``all-in-amd`` and ``all-in-nvidia`` shipped the half packet.
 
     Read off the pages rather than a table here: the companion relation is already stated once, in
-    the companion's own frontmatter, and a second copy is a second thing to keep in step. The arm's
+    the companion's own frontmatter, and a second copy is a second thing to keep in step. The setup's
     own image and multinode flags still apply, so a companion its device cannot run is not staged."""
     own = f"lang-{language}"
     return tuple(
@@ -174,7 +174,7 @@ def companion_language_pages(language: str, image: str | None = None, multinode:
     )
 
 
-def arm_order(pages: Iterable[str], language: str, image: str | None = None) -> list[str]:
+def setup_order(pages: Iterable[str], language: str, image: str | None = None) -> list[str]:
     """The pages an agent needs before its first edit, first: its own language page, then the
     language pages that page leans on (lang-cpp for the host half of a HIP file), then the page
     that owns its directives -- offload before host threading on a GPU image -- then the rest
@@ -208,7 +208,7 @@ def expand_skill_token(token: str, language: str, image: str | None = None, mult
     ``lang`` is the caller's language page, the language pages that page leans on
     (:func:`companion_language_pages`) and its OpenMP page when one is shipped; ``*`` is every
     shipped page that is not a packet tool's manual (:func:`tool_pages`) and that
-    :func:`applies_to` the arm, in :func:`arm_order`; anything else must already be a page. Raises
+    :func:`applies_to` the setup, in :func:`setup_order`; anything else must already be a page. Raises
     when an expanded page does not exist, so a bad language fails at resolve time rather than
     staging nothing."""
     language = SKILL_LANGUAGE.get(language, language)
@@ -220,7 +220,7 @@ def expand_skill_token(token: str, language: str, image: str | None = None, mult
     elif token == "*":
         gated = tool_pages()
         shipped = (entry.name for entry in SKILLS_DIR.iterdir() if entry.is_dir() and entry.name not in gated)
-        pages = arm_order((page for page in shipped if applies_to(page, language, image, multinode)), language, image)
+        pages = setup_order((page for page in shipped if applies_to(page, language, image, multinode)), language, image)
     else:
         pages = [token]
     for page in pages:
@@ -307,7 +307,7 @@ def reached_keys(token: str, definitions: Mapping[str, tags.PacketDef]) -> tuple
 
 def refuse_frozen(spec: str) -> None:
     """Raise a ``ValueError`` when ``spec`` reaches a frozen key. Launchers call this before building an
-    arm; :func:`resolve` does not, so the records a frozen key already holds still resolve."""
+    setup; :func:`resolve` does not, so the records a frozen key already holds still resolve."""
     definitions = tags.registry().packet_defs
     frozen = {
         key: definitions[key].frozen
@@ -345,9 +345,9 @@ def resolve(
     ``fill=False`` keeps every ``${VAR}`` template as written: the packet's DEFINITION, which is what
     a results DB records, rather than one launch's values.
 
-    ``image`` and ``multinode`` narrow ``*`` to the pages that apply to the arm (:func:`applies_to`).
+    ``image`` and ``multinode`` narrow ``*`` to the pages that apply to the setup (:func:`applies_to`).
     Left at their defaults they do not narrow: the DB definition is the language-level set, and the
-    problems file ``make_problems.py`` freezes is the record of what one arm was actually staged.
+    problems file ``make_problems.py`` freezes is the record of what one setup was actually staged.
 
     Unknown tokens, a missing ``${VAR}`` (when filling), or two packets disagreeing on one env key all
     raise a ``ValueError`` naming what is wrong."""
@@ -420,12 +420,12 @@ def libraries_enabled(spec: str) -> bool:
     """Whether ``spec`` reaches a packet in :data:`LIBRARY_ENABLED_PACKETS`, directly or through
     composition (``all-in-cpu`` reaches ``perf-playbook-cpu`` this way).
 
-    A CLASSIFICATION only -- whether an arm's env actually turns
+    A CLASSIFICATION only -- whether a setup's env actually turns
     ``grading.allow_agent_build_tokens`` on for a spec this says yes to is a deployment choice
     (which .env a submitter writes), not something this function can see or enforce. It is the
     static half of the "controls never see the library text" contract; :mod:`prompts`'s
     ``build_list_applied`` (read off the grading config directly) is the runtime half, and the two
-    must be kept in agreement by which arms are given the switch -- see
+    must be kept in agreement by which setups are given the switch -- see
     ``tests/test_skill_isolation_matrix.py``.
     """
     definitions = tags.registry().packet_defs

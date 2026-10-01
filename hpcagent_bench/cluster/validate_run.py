@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Post-run sanity checks for a cluster campaign run directory (``RUN_ROOT/<jobid>``).
+"""Post-run sanity checks for a cluster experiment run directory (``RUN_ROOT/<jobid>``).
 
 Usage: validate_run.py <run dir>
 
@@ -82,8 +82,8 @@ def check_db_shards(run_dir: pathlib.Path) -> CheckResult:
                 # Rows, for the conservation check below -- submissions is append-only and an agent
                 # resubmits freely, so this counts attempts and NOT how much of the track was done.
                 merged_total = int(conn.execute(CREDITED_COUNT).fetchone()[0])
-                # Distinct kernels, which is the number that says whether an arm is usable: llr4
-                # arms reported hundreds of rows while having actually graded 12 to 81 of 242.
+                # Distinct kernels, which is the number that says whether a setup is usable: llr4
+                # setups reported hundreds of rows while having actually graded 12 to 81 of 242.
                 coverage = int(
                     conn.execute(CREDITED_COUNT.replace("COUNT(*)", "COUNT(DISTINCT benchmark)")).fetchone()[0]
                 )

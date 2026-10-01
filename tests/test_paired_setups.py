@@ -1,6 +1,6 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""paired_arms.py: arm-against-arm comparisons over a declared family.
+"""paired_setups.py: setup-against-setup comparisons over a declared family.
 
 THE FIXTURE IS THE PRODUCTION SHAPE. Every episode here emits a graded ``submission`` row carrying a
 speedup and NO token count, a ``call`` row, and a ``task`` row carrying the task's token total, because
@@ -8,7 +8,7 @@ that is what extraction writes (docs/DESIGN_data_collection_and_scoring.md, T3).
 one row, which is why a filter that AND-ed them -- and so kept only call rows and dropped every
 graded submission -- passed its tests and reached a published table.
 
-The replicate case is checked directly: two jobs of one arm reuse the same ``run_id``, because a
+The replicate case is checked directly: two jobs of one setup reuse the same ``run_id``, because a
 launcher derives it from the rank layout, so a reduction keyed on ``run_id`` alone silently discards
 one replicate. They must come out as two episodes whose MAXIMUM stands.
 """
@@ -25,14 +25,14 @@ import pytest
 from hpcagent_bench.stats import population, summary
 
 EXPERIMENTS = pathlib.Path(__file__).resolve().parents[1] / "hpcagent_bench" / "cluster"
-#: paired_arms.py moved to statistics/ (a12a5881); promote_unsubmitted.py stays in experiments/.
+#: paired_setups.py moved to statistics/ (a12a5881); promote_unsubmitted.py stays in experiments/.
 STATISTICS = pathlib.Path(__file__).resolve().parents[1] / "statistics"
 
 #: One kernel roster the fixtures draw names from, so a coverage count has something to be over.
 KERNELS = ("k1", "k2", "k3", "k4", "k5", "k6", "k7", "k8")
 
 
-def load_experiment_module(name: str, folder: pathlib.Path = EXPERIMENTS) -> ModuleType:
+def load_study_module(name: str, folder: pathlib.Path = EXPERIMENTS) -> ModuleType:
     spec = importlib.util.spec_from_file_location(name, folder / f"{name}.py")
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -42,8 +42,8 @@ def load_experiment_module(name: str, folder: pathlib.Path = EXPERIMENTS) -> Mod
 
 
 @pytest.fixture(name="paired_arms")
-def paired_arms_fixture() -> ModuleType:
-    return load_experiment_module("paired_arms", STATISTICS)
+def paired_setups_fixture() -> ModuleType:
+    return load_study_module("paired_arms", STATISTICS)
 
 
 def graded(
@@ -141,19 +141,19 @@ def episode(arm: str, kernel: str, speedup: float, tokens: float, job: str = "j1
     ]
 
 
-def test_within_an_episode_the_last_submission_wins_not_the_best(paired_arms: ModuleType) -> None:
+def test_within_an_episode_the_last_submission_wins_not_the_best(paired_setups: ModuleType) -> None:
     """Evaluation is single-shot, so the answer the agent stopped at is the answer; a max over an
     episode's rows would score best-of-N."""
     rows = [graded("a", "k1", 4.0, ts=1000, index=1), graded("a", "k1", 2.0, ts=2000, index=2)]
-    best = paired_arms.best_by_arm_kernel(frame(rows))
+    best = paired_setups.best_by_setup_kernel(frame(rows))
     assert best.speedup.tolist() == [2.0]
 
 
-def test_a_rerun_job_is_a_separate_run_and_the_latest_run_stands(paired_arms: ModuleType) -> None:
-    """Two jobs of one arm reuse the run_id, so keying on it alone would merge a rerun into the run it
+def test_a_rerun_job_is_a_separate_run_and_the_latest_run_stands(paired_setups: ModuleType) -> None:
+    """Two jobs of one setup reuse the run_id, so keying on it alone would merge a rerun into the run it
     replaces.
 
-    Job j1 ends at 5.0; job j2 reruns the kernel and ends at 3.0. They are two runs, and the arm's
+    Job j1 ends at 5.0; job j2 reruns the kernel and ends at 3.0. They are two runs, and the setup's
     value is the latest run's final answer (3.0) -- not the earlier 5.0, and not a max over rows (9.0).
     """
     rows = [
@@ -161,25 +161,25 @@ def test_a_rerun_job_is_a_separate_run_and_the_latest_run_stands(paired_arms: Mo
         graded("a", "k1", 9.0, job="j2", ts=2000, index=1),
         graded("a", "k1", 3.0, job="j2", ts=3000, index=2),
     ]
-    episodes = population.last_per_episode(frame(rows), paired_arms.SUBMISSION_ORDER)
+    episodes = population.last_per_episode(frame(rows), paired_setups.SUBMISSION_ORDER)
     assert len(episodes) == 2
-    assert paired_arms.best_by_arm_kernel(frame(rows)).speedup.tolist() == [3.0]
+    assert paired_setups.best_by_setup_kernel(frame(rows)).speedup.tolist() == [3.0]
 
 
-def test_designed_repeats_score_the_median_run(paired_arms: ModuleType) -> None:
-    """git-scicomp gives each kernel three agents by design, so all three are the arm's result and the
+def test_designed_repeats_score_the_median_run(paired_setups: ModuleType) -> None:
+    """git-scicomp gives each kernel three agents by design, so all three are the setup's result and the
     kernel scores their median, whatever order they finished in."""
     rows = [
         graded("a", "k1", 5.0, job="j1", ts=1000),
         graded("a", "k1", 3.0, job="j1", ts=2000) | {"run_id": "a.n0.p0.w1"},
         graded("a", "k1", 9.0, job="j1", ts=3000) | {"run_id": "a.n0.p0.w2"},
     ]
-    assert paired_arms.best_by_arm_kernel(frame(rows), population.RepeatPolicy.MEDIAN).speedup.tolist() == [5.0]
+    assert paired_setups.best_by_setup_kernel(frame(rows), population.RepeatPolicy.MEDIAN).speedup.tolist() == [5.0]
 
 
-def test_the_score_leg_keeps_a_kernel_that_has_no_call_row(paired_arms: ModuleType, tmp_path: pathlib.Path) -> None:
+def test_the_score_leg_keeps_a_kernel_that_has_no_call_row(paired_setups: ModuleType, tmp_path: pathlib.Path) -> None:
     """A graded row carries no tokens, so intersecting the two legs would drop every kernel whose
-    call rows are missing. The score leg is over the kernels both arms SOLVED and nothing else."""
+    call rows are missing. The score leg is over the kernels both setups SOLVED and nothing else."""
     rows: list[dict[str, object]] = []
     for kernel in KERNELS:
         rows += episode("a", kernel, 2.0, 100.0)
@@ -188,22 +188,22 @@ def test_the_score_leg_keeps_a_kernel_that_has_no_call_row(paired_arms: ModuleTy
     rows.append(graded("b", "k9", 2.0))
 
     path = observations(rows, tmp_path)
-    obs = paired_arms.load_observations([path])
-    graded_rows = paired_arms.graded_rows(obs, ["a", "b"])
-    best = paired_arms.best_by_arm_kernel(graded_rows)
-    table = paired_arms.arm_aggregates(best, paired_arms.served_by_arm(obs), "numba")
-    tokens = paired_arms.tokens_by_arm_kernel(obs)
+    obs = paired_setups.load_observations([path])
+    graded_rows = paired_setups.graded_rows(obs, ["a", "b"])
+    best = paired_setups.best_by_setup_kernel(graded_rows)
+    table = paired_setups.setup_aggregates(best, paired_setups.served_by_setup(obs), "numba")
+    tokens = paired_setups.tokens_by_setup_kernel(obs)
 
     assert ("a", "k9") not in tokens
-    change, n_pairs = paired_arms.score_leg(table["a"], table["b"])
+    change, n_pairs = paired_setups.score_leg(table["a"], table["b"])
     assert n_pairs == len(KERNELS) + 1
     assert change.n == len(KERNELS) + 1
-    assert paired_arms.cost_leg("a", "b", tokens)[1] == len(KERNELS)
+    assert paired_setups.cost_leg("a", "b", tokens)[1] == len(KERNELS)
 
 
-def test_the_cost_leg_reads_the_task_record_and_a_rerun_as_its_latest_task(paired_arms: ModuleType) -> None:
+def test_the_cost_leg_reads_the_task_record_and_a_rerun_as_its_latest_task(paired_setups: ModuleType) -> None:
     """A task's cost is its task record (900, the total over its attempts), not the 250 its last call
-    row read. Job j2 reruns the kernel, so the arm's cost is that task's 400 -- not the 1300 a sum over
+    row read. Job j2 reruns the kernel, so the setup's cost is that task's 400 -- not the 1300 a sum over
     reruns would bill."""
     rows = [
         call("a", "k1", 100.0, job="j1", ts=1000, index=1),
@@ -212,11 +212,11 @@ def test_the_cost_leg_reads_the_task_record_and_a_rerun_as_its_latest_task(paire
         call("a", "k1", 400.0, job="j2", ts=3000, index=1),
         task("a", "k1", 400.0, job="j2", ts=2900),
     ]
-    assert paired_arms.tokens_by_arm_kernel(frame(rows[:3]))[("a", "k1")] == 900.0
-    assert paired_arms.tokens_by_arm_kernel(frame(rows))[("a", "k1")] == 400.0
+    assert paired_setups.tokens_by_setup_kernel(frame(rows[:3]))[("a", "k1")] == 900.0
+    assert paired_setups.tokens_by_setup_kernel(frame(rows))[("a", "k1")] == 400.0
 
 
-def test_usage_counts_every_call_of_the_selected_tasks_per_task(paired_arms: ModuleType) -> None:
+def test_usage_counts_every_call_of_the_selected_tasks_per_task(paired_setups: ModuleType) -> None:
     """Score and submit calls of ANY status count, accepted submissions are submission rows, and the
     mean is over the tasks the repeat policy selects: the rerun in j2 replaces j1's task entirely."""
     rows = [
@@ -228,23 +228,23 @@ def test_usage_counts_every_call_of_the_selected_tasks_per_task(paired_arms: Mod
         graded("a", "k2", 2.0, job="j1", ts=1300),
         call("a", "k1", 50.0, job="j2", ts=5000) | {"route": "submit"},
     ]
-    usage = paired_arms.task_usage(frame(rows), population.RepeatPolicy.LATEST).loc["a"]
+    usage = paired_setups.task_usage(frame(rows), population.RepeatPolicy.LATEST).loc["a"]
     assert usage.tasks == 2
     assert usage.score_calls_per_task == pytest.approx(1.0)
     assert usage.submit_calls_per_task == pytest.approx(1.0)
     assert usage.accepted_submissions_per_task == pytest.approx(0.5)
 
 
-def test_a_pair_across_two_models_is_refused(paired_arms: ModuleType, tmp_path: pathlib.Path) -> None:
+def test_a_pair_across_two_models_is_refused(paired_setups: ModuleType, tmp_path: pathlib.Path) -> None:
     """A pair answers what one change did to one model on one language; across models it is two
     questions at once and no estimate separates them."""
     rows = episode("x-qwen38-c", "k1", 2.0, 100.0) + episode("x-oss120b-c", "k1", 2.0, 100.0)
     path = observations(rows, tmp_path)
     with pytest.raises(SystemExit, match="share model and language"):
-        paired_arms.main(["--observations", str(path), "--pair", "x-qwen38-c,x-oss120b-c", "--family", "f"])
+        paired_setups.main(["--observations", str(path), "--pair", "x-qwen38-c,x-oss120b-c", "--family", "f"])
 
 
-def impact_table(paired_arms: ModuleType, tmp_path: pathlib.Path) -> pd.DataFrame:
+def impact_table(paired_setups: ModuleType, tmp_path: pathlib.Path) -> pd.DataFrame:
     """The CPF-page impact table over 8 kernels: the treatment is 1.5x faster for half the tokens and
     took two attempts per task, the control one."""
     rows: list[dict[str, object]] = []
@@ -255,22 +255,22 @@ def impact_table(paired_arms: ModuleType, tmp_path: pathlib.Path) -> pd.DataFram
         rows += control + treated
     path = observations(rows, tmp_path)
     out = tmp_path / "impact.csv"
-    rc = paired_arms.main(
+    rc = paired_setups.main(
         ["--observations", str(path), "--pair", "x-qwen38-c-cpf,x-qwen38-c", "--family", "f", "--impact-out", str(out)]
     )
     assert rc == 0
     return pd.read_csv(out)
 
 
-def test_the_impact_table_has_one_row_per_arm_with_the_ratio_on_the_treatment_row(
-    paired_arms: ModuleType, tmp_path: pathlib.Path
+def test_the_impact_table_has_one_row_per_setup_with_the_ratio_on_the_treatment_row(
+    paired_setups: ModuleType, tmp_path: pathlib.Path
 ) -> None:
-    """Spec section 10: every arm once, the control carrying no ratio, the treatment carrying
+    """Spec section 10: every setup once, the control carrying no ratio, the treatment carrying
     the paper's rho on both legs -- speedup treatment/control 3/2, cost control/treated 100/50 = 2
     (above 1: the treatment is cheaper)."""
-    table = impact_table(paired_arms, tmp_path).set_index("arm")
+    table = impact_table(paired_setups, tmp_path).set_index("arm")
     assert list(table.index) == ["x-qwen38-c-cpf", "x-qwen38-c"]
-    assert list(table.columns) == [c for c in paired_arms.IMPACT_COLUMNS if c != "arm"]
+    assert list(table.columns) == [c for c in paired_setups.IMPACT_COLUMNS if c != "arm"]
     treated, control = table.loc["x-qwen38-c-cpf"], table.loc["x-qwen38-c"]
     assert treated.control == "x-qwen38-c" and pd.isna(control.control)
     assert treated.speedup_ratio == pytest.approx(1.5) and treated.token_ratio == pytest.approx(2.0)
@@ -278,10 +278,12 @@ def test_the_impact_table_has_one_row_per_arm_with_the_ratio_on_the_treatment_ro
     assert (treated.model, treated.language, treated.packet) == ("qwen38", "c", "cpf")
 
 
-def test_the_impact_table_carries_usage_and_the_arm_aggregates(paired_arms: ModuleType, tmp_path: pathlib.Path) -> None:
+def test_the_impact_table_carries_usage_and_the_setup_aggregates(
+    paired_setups: ModuleType, tmp_path: pathlib.Path
+) -> None:
     """Attempts come off the task rows, speedup is the geomean (A1), cost the geomean task total with
     its log-t interval (A2), each over the 8 selected tasks."""
-    table = impact_table(paired_arms, tmp_path).set_index("arm")
+    table = impact_table(paired_setups, tmp_path).set_index("arm")
     treated, control = table.loc["x-qwen38-c-cpf"], table.loc["x-qwen38-c"]
     assert (treated.tasks, treated.n_solved, treated.n_token_kernels) == (8, 8, 8)
     assert (treated.attempts_per_task, control.attempts_per_task) == (2.0, 1.0)
@@ -291,11 +293,11 @@ def test_the_impact_table_carries_usage_and_the_arm_aggregates(paired_arms: Modu
 
 
 def test_counts_are_written_as_integers_and_ratios_at_full_precision(
-    paired_arms: ModuleType, tmp_path: pathlib.Path
+    paired_setups: ModuleType, tmp_path: pathlib.Path
 ) -> None:
     """Spec N3/N4: a count reads 8, never 8.0, and stays blank where it does not apply; a ratio is
     written with every digit float64 holds, not rounded to four decimals."""
-    impact_table(paired_arms, tmp_path)
+    impact_table(paired_setups, tmp_path)
     header, treated, control = (tmp_path / "impact.csv").read_text().splitlines()[:3]
     columns = header.split(",")
     treated_cells = dict(zip(columns, treated.split(","), strict=True))
@@ -305,16 +307,16 @@ def test_counts_are_written_as_integers_and_ratios_at_full_precision(
     assert float(treated_cells["speedup_ratio"]) == pytest.approx(1.5, abs=1e-12)
 
 
-def test_two_denominators_are_refused_rather_than_pooled(paired_arms: ModuleType) -> None:
+def test_two_denominators_are_refused_rather_than_pooled(paired_setups: ModuleType) -> None:
     """The judge stamps the reference it divided by; two of them are not one quantity."""
     rows = [graded("a", "k1", 2.0), graded("b", "k1", 2.0)]
     rows[1]["baseline"] = "c"
     with pytest.raises(population.MixedPopulationError):
-        paired_arms.graded_rows(frame(rows), ["a", "b"])
+        paired_setups.graded_rows(frame(rows), ["a", "b"])
 
 
-def test_a_pair_reports_what_the_intersection_dropped(paired_arms: ModuleType, tmp_path: pathlib.Path) -> None:
-    """Arm b solves two kernels arm a never did. Both arms were SERVED all eight, so both enter the
+def test_a_pair_reports_what_the_intersection_dropped(paired_setups: ModuleType, tmp_path: pathlib.Path) -> None:
+    """Setup b solves two kernels setup a never did. Both setups were SERVED all eight, so both enter the
     leg with the two failures at 1.0, and the row still carries the discordance as ``n_only_b``: the
     counts say who delivered, the population says who was asked."""
     rows: list[dict[str, object]] = []
@@ -326,42 +328,50 @@ def test_a_pair_reports_what_the_intersection_dropped(paired_arms: ModuleType, t
         rows.append(call("a", kernel, 100.0))
 
     path = observations(rows, tmp_path)
-    obs = paired_arms.load_observations([path])
-    graded_rows = paired_arms.graded_rows(obs, ["a", "b"])
-    best = paired_arms.best_by_arm_kernel(graded_rows)
-    table = paired_arms.arm_aggregates(best, paired_arms.served_by_arm(obs), "numba", population.KernelPolicy.SERVED)
-    reported = paired_arms.pair_rows([("a", "b")], table, paired_arms.tokens_by_arm_kernel(obs), list(KERNELS), "f")
+    obs = paired_setups.load_observations([path])
+    graded_rows = paired_setups.graded_rows(obs, ["a", "b"])
+    best = paired_setups.best_by_setup_kernel(graded_rows)
+    table = paired_setups.setup_aggregates(
+        best, paired_setups.served_by_setup(obs), "numba", population.KernelPolicy.SERVED
+    )
+    reported = paired_setups.pair_rows(
+        [("a", "b")], table, paired_setups.tokens_by_setup_kernel(obs), list(KERNELS), "f"
+    )
 
     speed = next(row for row in reported if row["leg"] == "speedup")
-    # population: both arms were served all eight, so the fallback leg is paired over eight
+    # population: both setups were served all eight, so the fallback leg is paired over eight
     assert (speed["n_a"], speed["n_b"], speed["n_pairs"]) == (8, 8, 8)
     # delivery: b answered two that a did not, and the coverage columns still say so
     assert (speed["n_both"], speed["n_only_a"], speed["n_only_b"]) == (6, 0, 2)
     # exact McNemar on (0, 2): 2 * C(2, 0) / 2^2 = 0.5, by hand
     assert speed["coverage_p"] == pytest.approx(0.5)
 
-    solved = paired_arms.arm_aggregates(best, paired_arms.served_by_arm(obs), "numba")
-    by_default = paired_arms.pair_rows([("a", "b")], solved, paired_arms.tokens_by_arm_kernel(obs), list(KERNELS), "f")
+    solved = paired_setups.setup_aggregates(best, paired_setups.served_by_setup(obs), "numba")
+    by_default = paired_setups.pair_rows(
+        [("a", "b")], solved, paired_setups.tokens_by_setup_kernel(obs), list(KERNELS), "f"
+    )
     speed = next(row for row in by_default if row["leg"] == "speedup")
     # the default leg is over what BOTH solved; the two b alone answered move coverage, not speedup
     assert (speed["n_a"], speed["n_b"], speed["n_pairs"]) == (6, 8, 6)
     assert (speed["n_both"], speed["n_only_a"], speed["n_only_b"]) == (6, 0, 2)
 
 
-def test_a_leg_below_the_interval_floor_reports_underpowered(paired_arms: ModuleType, tmp_path: pathlib.Path) -> None:
+def test_a_leg_below_the_interval_floor_reports_underpowered(paired_setups: ModuleType, tmp_path: pathlib.Path) -> None:
     """Under ``MIN_PAIRS_FOR_INTERVAL`` no interval and no p can be had, and the verdict says so
     rather than reading a bootstrap flag that is a coin toss at n = 2. The cost leg here is
-    degenerate as well -- both arms spent the same on every kernel -- which is equally not a test."""
+    degenerate as well -- both setups spent the same on every kernel -- which is equally not a test."""
     rows: list[dict[str, object]] = []
     for kernel in KERNELS[:3]:
         rows += episode("a", kernel, 3.0, 100.0)
         rows += episode("b", kernel, 2.0, 100.0)
 
     path = observations(rows, tmp_path)
-    obs = paired_arms.load_observations([path])
-    best = paired_arms.best_by_arm_kernel(paired_arms.graded_rows(obs, ["a", "b"]))
-    table = paired_arms.arm_aggregates(best, paired_arms.served_by_arm(obs), "numba")
-    reported = paired_arms.pair_rows([("a", "b")], table, paired_arms.tokens_by_arm_kernel(obs), list(KERNELS), "f")
+    obs = paired_setups.load_observations([path])
+    best = paired_setups.best_by_setup_kernel(paired_setups.graded_rows(obs, ["a", "b"]))
+    table = paired_setups.setup_aggregates(best, paired_setups.served_by_setup(obs), "numba")
+    reported = paired_setups.pair_rows(
+        [("a", "b")], table, paired_setups.tokens_by_setup_kernel(obs), list(KERNELS), "f"
+    )
 
     assert len(KERNELS[:3]) < summary.MIN_PAIRS_FOR_INTERVAL
     for row in reported:
@@ -369,7 +379,7 @@ def test_a_leg_below_the_interval_floor_reports_underpowered(paired_arms: Module
         assert math.isnan(float(row["ci_low"])) and math.isnan(float(row["ci_high"]))
 
 
-def test_the_correction_runs_over_every_leg_of_every_pair(paired_arms: ModuleType, tmp_path: pathlib.Path) -> None:
+def test_the_correction_runs_over_every_leg_of_every_pair(paired_setups: ModuleType, tmp_path: pathlib.Path) -> None:
     """The family is the whole table: two pairs on two legs is four tests, and a per-row threshold
     applied four times is the multiplicity error the correction exists to prevent."""
     rows: list[dict[str, object]] = []
@@ -379,11 +389,11 @@ def test_the_correction_runs_over_every_leg_of_every_pair(paired_arms: ModuleTyp
         rows += episode("c", kernel, 1.5 + index * 0.1, 300.0 + index)
 
     path = observations(rows, tmp_path)
-    obs = paired_arms.load_observations([path])
-    best = paired_arms.best_by_arm_kernel(paired_arms.graded_rows(obs, ["a", "b", "c"]))
-    table = paired_arms.arm_aggregates(best, paired_arms.served_by_arm(obs), "numba")
-    tokens = paired_arms.tokens_by_arm_kernel(obs)
-    reported = paired_arms.pair_rows([("a", "b"), ("a", "c")], table, tokens, list(KERNELS), "f")
+    obs = paired_setups.load_observations([path])
+    best = paired_setups.best_by_setup_kernel(paired_setups.graded_rows(obs, ["a", "b", "c"]))
+    table = paired_setups.setup_aggregates(best, paired_setups.served_by_setup(obs), "numba")
+    tokens = paired_setups.tokens_by_setup_kernel(obs)
+    reported = paired_setups.pair_rows([("a", "b"), ("a", "c")], table, tokens, list(KERNELS), "f")
 
     assert len(reported) == 4
     assert all(row["p_adjusted"] >= row["p_value"] for row in reported)
@@ -391,8 +401,8 @@ def test_the_correction_runs_over_every_leg_of_every_pair(paired_arms: ModuleTyp
     assert {row["leg"] for row in reported} == {"speedup", "tokens"}
 
 
-def test_the_estimate_is_the_geomean_of_the_paired_ratios(paired_arms: ModuleType, tmp_path: pathlib.Path) -> None:
-    """An arm comparison is the geometric mean of its per-kernel ratios, so a skewed kernel (40x) moves
+def test_the_estimate_is_the_geomean_of_the_paired_ratios(paired_setups: ModuleType, tmp_path: pathlib.Path) -> None:
+    """A setup comparison is the geometric mean of its per-kernel ratios, so a skewed kernel (40x) moves
     the estimate exactly as it moves that geomean; the interval and p are on the same mean log."""
     values = (1.05, 1.1, 0.95, 1.2, 0.9, 1.15, 1.02, 40.0)
     rows: list[dict[str, object]] = []
@@ -401,54 +411,54 @@ def test_the_estimate_is_the_geomean_of_the_paired_ratios(paired_arms: ModuleTyp
         rows += episode("b", kernel, 2.0, 100.0)
 
     path = observations(rows, tmp_path)
-    obs = paired_arms.load_observations([path])
-    best = paired_arms.best_by_arm_kernel(paired_arms.graded_rows(obs, ["a", "b"]))
-    table = paired_arms.arm_aggregates(best, paired_arms.served_by_arm(obs), "numba")
-    change, _ = paired_arms.score_leg(table["a"], table["b"])
+    obs = paired_setups.load_observations([path])
+    best = paired_setups.best_by_setup_kernel(paired_setups.graded_rows(obs, ["a", "b"]))
+    table = paired_setups.setup_aggregates(best, paired_setups.served_by_setup(obs), "numba")
+    change, _ = paired_setups.score_leg(table["a"], table["b"])
 
     assert math.exp(change.estimate) == pytest.approx(summary.geomean(values))
     assert change.method == "paired-t"
 
 
 @pytest.mark.parametrize("pseudo", ["adhoc", ""], ids=["adhoc", "blank"])
-def test_a_grade_with_no_arm_never_becomes_a_pair_table_arm(
-    paired_arms: ModuleType, tmp_path: pathlib.Path, pseudo: str
+def test_a_grade_with_no_setup_never_becomes_a_pair_table_setup(
+    paired_setups: ModuleType, tmp_path: pathlib.Path, pseudo: str
 ) -> None:
-    """The pair tables read the same condition filter as the arm tables, not a local copy of it."""
+    """The pair tables read the same condition filter as the setup tables, not a local copy of it."""
     rows = episode("a", "k1", 2.0, 100.0) + episode(pseudo, "k1", 3.0, 100.0)
-    obs = paired_arms.load_observations([observations(rows, tmp_path)])
-    assert set(paired_arms.served_by_arm(obs)) == {"a"}
+    obs = paired_setups.load_observations([observations(rows, tmp_path)])
+    assert set(paired_setups.served_by_setup(obs)) == {"a"}
 
 
 def test_a_teardown_harvest_does_not_make_the_agent_a_non_submitter(
-    paired_arms: ModuleType, tmp_path: pathlib.Path
+    paired_setups: ModuleType, tmp_path: pathlib.Path
 ) -> None:
     """The two counts answer different questions and a table may not blur them.
 
     k1 is an episode that SUBMITTED and then had a workspace harvest appended at teardown, which is
-    what the blind arms do: the harvest fallback fires for every worker of an arm with no score
+    what the blind setups do: the harvest fallback fires for every worker of a setup with no score
     route, whether or not it already submitted, and the last-per-episode rule then picks it. Its
     final row carries the tag; the agent still chose an answer. k2 is an episode whose only row is a
     harvest, which is the one that says nobody submitted.
     """
     rows = [
         graded("a", "k1", 2.0, ts=1000, index=1),
-        graded("a", "k1", 2.5, ts=2000, index=2, optimizer=paired_arms.HARVESTED_TAG),
+        graded("a", "k1", 2.5, ts=2000, index=2, optimizer=paired_setups.HARVESTED_TAG),
         call("a", "k1", 100.0),
-        graded("a", "k2", 3.0, optimizer=paired_arms.HARVESTED_TAG),
+        graded("a", "k2", 3.0, optimizer=paired_setups.HARVESTED_TAG),
         call("a", "k2", 100.0),
         *episode("a", "k3", 4.0, 100.0),
     ]
 
     path = observations(rows, tmp_path)
-    obs = paired_arms.load_observations([path])
-    graded_frame = paired_arms.graded_rows(obs, ["a"])
-    best = paired_arms.best_by_arm_kernel(graded_frame)
-    served = paired_arms.served_by_arm(obs)
-    table = paired_arms.arm_aggregates(best, served, "numba")
-    tokens = paired_arms.tokens_by_arm_kernel(obs)
-    row = paired_arms.arm_rows(
-        best, graded_frame, table, served, tokens, paired_arms.task_usage(obs, population.RepeatPolicy.LATEST)
+    obs = paired_setups.load_observations([path])
+    graded_frame = paired_setups.graded_rows(obs, ["a"])
+    best = paired_setups.best_by_setup_kernel(graded_frame)
+    served = paired_setups.served_by_setup(obs)
+    table = paired_setups.setup_aggregates(best, served, "numba")
+    tokens = paired_setups.tokens_by_setup_kernel(obs)
+    row = paired_setups.setup_rows(
+        best, graded_frame, table, served, tokens, paired_setups.task_usage(obs, population.RepeatPolicy.LATEST)
     )[0]
 
     assert row["n_solved"] == 3
@@ -456,32 +466,32 @@ def test_a_teardown_harvest_does_not_make_the_agent_a_non_submitter(
     assert row["n_never_submitted"] == 1
 
 
-def test_a_promoted_row_is_not_a_submission_either(paired_arms: ModuleType, tmp_path: pathlib.Path) -> None:
+def test_a_promoted_row_is_not_a_submission_either(paired_setups: ModuleType, tmp_path: pathlib.Path) -> None:
     """A promotion is an answer the agent scored and never submitted, so an episode carrying only
     one recorded no submission act -- and it is not a workspace harvest, so it is not counted as
     one."""
     rows = [
-        graded("a", "k1", 3.0, optimizer=paired_arms.PROMOTED_TAG),
+        graded("a", "k1", 3.0, optimizer=paired_setups.PROMOTED_TAG),
         call("a", "k1", 100.0),
         task("a", "k1", 100.0),
     ]
 
     path = observations(rows, tmp_path)
-    obs = paired_arms.load_observations([path])
-    graded_frame = paired_arms.graded_rows(obs, ["a"])
-    best = paired_arms.best_by_arm_kernel(graded_frame)
-    served = paired_arms.served_by_arm(obs)
-    table = paired_arms.arm_aggregates(best, served, "numba")
-    tokens = paired_arms.tokens_by_arm_kernel(obs)
-    row = paired_arms.arm_rows(
-        best, graded_frame, table, served, tokens, paired_arms.task_usage(obs, population.RepeatPolicy.LATEST)
+    obs = paired_setups.load_observations([path])
+    graded_frame = paired_setups.graded_rows(obs, ["a"])
+    best = paired_setups.best_by_setup_kernel(graded_frame)
+    served = paired_setups.served_by_setup(obs)
+    table = paired_setups.setup_aggregates(best, served, "numba")
+    tokens = paired_setups.tokens_by_setup_kernel(obs)
+    row = paired_setups.setup_rows(
+        best, graded_frame, table, served, tokens, paired_setups.task_usage(obs, population.RepeatPolicy.LATEST)
     )[0]
 
     assert (row["n_final_harvest"], row["n_never_submitted"]) == (0, 1)
 
 
-def test_load_observations_concatenates_two_paths(paired_arms: ModuleType, tmp_path: pathlib.Path) -> None:
-    """A scored campaign and its blind control live in two separate extracted databases; pairing
+def test_load_observations_concatenates_two_paths(paired_setups: ModuleType, tmp_path: pathlib.Path) -> None:
+    """A scored experiment and its blind control live in two separate extracted databases; pairing
     across them must not require copying one into the other's directory first."""
     left_dir, right_dir = tmp_path / "left", tmp_path / "right"
     left_dir.mkdir()
@@ -489,29 +499,29 @@ def test_load_observations_concatenates_two_paths(paired_arms: ModuleType, tmp_p
     left = observations(episode("a", "k1", 2.0, 100.0), left_dir)
     right = observations(episode("b", "k1", 3.0, 100.0), right_dir)
 
-    obs = paired_arms.load_observations([left, right])
+    obs = paired_setups.load_observations([left, right])
 
     assert set(obs.arm) == {"a", "b"}
-    assert paired_arms.served_by_arm(obs) == {"a": frozenset({"k1"}), "b": frozenset({"k1"})}
+    assert paired_setups.served_by_setup(obs) == {"a": frozenset({"k1"}), "b": frozenset({"k1"})}
 
 
-def test_excluded_pairs_drops_a_pair_when_either_arm_is_short(paired_arms: ModuleType) -> None:
-    """A leg pairing one arm's partial roster against the other's full one is not the comparison a
+def test_excluded_pairs_drops_a_pair_when_either_setup_is_short(paired_setups: ModuleType) -> None:
+    """A leg pairing one setup's partial roster against the other's full one is not the comparison a
     reader asked for, so the whole pair drops rather than one leg silently narrowing to whatever the
-    short arm covered."""
-    survivors, notes = paired_arms.excluded_pairs(
+    short setup covered."""
+    survivors, notes = paired_setups.excluded_pairs(
         [("a", "b"), ("c", "d")], kept=["a", "b", "c"], dropped={"d": 5}, roster_size=8
     )
     assert survivors == [("a", "b")]
     assert notes == ["excluding pair c,d -- incomplete roster coverage: d 5/8"]
 
 
-def test_a_pair_with_an_incomplete_arm_is_dropped_by_default(
-    paired_arms: ModuleType, tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
+def test_a_pair_with_an_incomplete_setup_is_dropped_by_default(
+    paired_setups: ModuleType, tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """b never got a row for k3. Pairing a,d stays (both complete); a,b is dropped and named on
-    stderr rather than silently pairing a's full roster against b's partial one. (No arm is named
-    ``c``: that token reads as the C language in an arm name.)"""
+    stderr rather than silently pairing a's full roster against b's partial one. (No setup is named
+    ``c``: that token reads as the C language in a setup name.)"""
     rows: list[dict[str, object]] = []
     for kernel in ("k1", "k2", "k3"):
         rows += episode("a", kernel, 2.0, 100.0)
@@ -521,20 +531,20 @@ def test_a_pair_with_an_incomplete_arm_is_dropped_by_default(
 
     path = observations(rows, tmp_path)
     out = tmp_path / "pairs.csv"
-    rc = paired_arms.main(
+    rc = paired_setups.main(
         ["--observations", str(path), "--pair", "a,b", "--pair", "a,d", "--family", "f", "--out", str(out)]
     )
 
     assert rc == 0
     assert "excluding pair a,b -- incomplete roster coverage: b 2/3" in capsys.readouterr().err
     table = pd.read_csv(out)
-    assert set(zip(table.arm_a, table.arm_b, strict=True)) == {("a", "d")}
+    assert set(zip(table.setup_a, table.setup_b, strict=True)) == {("a", "d")}
 
 
 def test_include_incomplete_keeps_a_pair_missing_roster_coverage(
-    paired_arms: ModuleType, tmp_path: pathlib.Path
+    paired_setups: ModuleType, tmp_path: pathlib.Path
 ) -> None:
-    """The flag is the escape hatch: the same short arm, and the pair survives."""
+    """The flag is the escape hatch: the same short setup, and the pair survives."""
     rows: list[dict[str, object]] = []
     for kernel in ("k1", "k2", "k3"):
         rows += episode("a", kernel, 2.0, 100.0)
@@ -543,7 +553,7 @@ def test_include_incomplete_keeps_a_pair_missing_roster_coverage(
 
     path = observations(rows, tmp_path)
     out = tmp_path / "pairs.csv"
-    rc = paired_arms.main(
+    rc = paired_setups.main(
         [
             "--observations",
             str(path),
@@ -559,11 +569,11 @@ def test_include_incomplete_keeps_a_pair_missing_roster_coverage(
 
     assert rc == 0
     table = pd.read_csv(out)
-    assert set(zip(table.arm_a, table.arm_b, strict=True)) == {("a", "b")}
+    assert set(zip(table.setup_a, table.setup_b, strict=True)) == {("a", "b")}
 
 
 def test_every_pair_excluded_raises_rather_than_writing_an_empty_table(
-    paired_arms: ModuleType, tmp_path: pathlib.Path
+    paired_setups: ModuleType, tmp_path: pathlib.Path
 ) -> None:
     """Silently writing an empty CSV reads as "nothing to report"; a family with nothing left in it
     must say so instead."""
@@ -575,11 +585,11 @@ def test_every_pair_excluded_raises_rather_than_writing_an_empty_table(
 
     path = observations(rows, tmp_path)
     with pytest.raises(SystemExit, match="excluded"):
-        paired_arms.main(["--observations", str(path), "--pair", "a,b", "--family", "f"])
+        paired_setups.main(["--observations", str(path), "--pair", "a,b", "--family", "f"])
 
 
 def test_usage_reports_how_many_tasks_were_relaunched_and_what_the_crashes_spent(
-    paired_arms: ModuleType,
+    paired_setups: ModuleType,
 ) -> None:
     """A token cost is the FINAL attempt's (T2), so a reader needs the relaunch rate beside it to
     see where that rule bit. The crashed attempts' spend is carried separately and never added in."""
@@ -591,7 +601,7 @@ def test_usage_reports_how_many_tasks_were_relaunched_and_what_the_crashes_spent
     ]
     for task_row, attempts, crashed in zip(rows[2::3], (1, 2, 3, 1), (0, 40, 90, 0), strict=True):
         task_row |= {"task_attempts": attempts, "tokens_crashed": crashed}
-    usage = paired_arms.task_usage(frame(rows), population.RepeatPolicy.LATEST).loc["a"]
+    usage = paired_setups.task_usage(frame(rows), population.RepeatPolicy.LATEST).loc["a"]
     assert usage.tasks == 4
     assert usage.attempts_per_task == pytest.approx(1.75)
     assert usage.relaunched_tasks == 2
@@ -600,29 +610,31 @@ def test_usage_reports_how_many_tasks_were_relaunched_and_what_the_crashes_spent
 
 
 def test_the_impact_table_carries_the_relaunch_rate_beside_every_token_ratio(
-    paired_arms: ModuleType, tmp_path: pathlib.Path
+    paired_setups: ModuleType, tmp_path: pathlib.Path
 ) -> None:
     """The fixture relaunches every treated task once and never relaunches a control one."""
-    table = impact_table(paired_arms, tmp_path).set_index("arm")
+    table = impact_table(paired_setups, tmp_path).set_index("arm")
     treated, control = table.loc["x-qwen38-c-cpf"], table.loc["x-qwen38-c"]
     assert (treated.relaunched_tasks, control.relaunched_tasks) == (8, 0)
     assert treated.share_relaunched == pytest.approx(1.0) and control.share_relaunched == pytest.approx(0.0)
 
 
 def test_a_declared_roster_is_read_from_the_file_and_not_from_the_rows(
-    paired_arms: ModuleType, tmp_path: pathlib.Path
+    paired_setups: ModuleType, tmp_path: pathlib.Path
 ) -> None:
-    """Spec E1. A roster taken from the rows moves with the data: an experiment that lost a kernel
+    """Spec E1. A roster taken from the rows moves with the data: a study that lost a kernel
     everywhere would report full coverage over the survivors."""
     path = tmp_path / "roster.txt"
     path.write_text("k1  # a comment\n\n# a whole comment line\nk2\nk9\n", encoding="utf-8")
     rows = frame([graded("a", "k1", 2.0), graded("a", "k2", 2.0)])
-    assert paired_arms.declared_roster(path, rows) == ["k1", "k2", "k9"]
-    assert paired_arms.declared_roster(None, rows) == ["k1", "k2"]
+    assert paired_setups.declared_roster(path, rows) == ["k1", "k2", "k9"]
+    assert paired_setups.declared_roster(None, rows) == ["k1", "k2"]
 
 
-def test_an_arm_short_of_the_declared_roster_leaves_the_family(paired_arms: ModuleType, tmp_path: pathlib.Path) -> None:
-    """Both arms cover every kernel they were given, and the roster says one more was expected, so
+def test_an_setup_short_of_the_declared_roster_leaves_the_family(
+    paired_setups: ModuleType, tmp_path: pathlib.Path
+) -> None:
+    """Both setups cover every kernel they were given, and the roster says one more was expected, so
     the pair is dropped rather than compared over a roster that quietly shrank to fit."""
     rows: list[dict[str, object]] = []
     for kernel in KERNELS:
@@ -631,7 +643,7 @@ def test_an_arm_short_of_the_declared_roster_leaves_the_family(paired_arms: Modu
     roster = tmp_path / "roster.txt"
     roster.write_text("\n".join([*KERNELS, "never_served"]) + "\n", encoding="utf-8")
     with pytest.raises(SystemExit, match="incomplete roster coverage"):
-        paired_arms.main(
+        paired_setups.main(
             [
                 "--observations",
                 str(path),
@@ -645,7 +657,7 @@ def test_an_arm_short_of_the_declared_roster_leaves_the_family(paired_arms: Modu
         )
 
 
-def test_one_baseline_keeps_the_named_reference_and_every_row_without_one(paired_arms: ModuleType) -> None:
+def test_one_baseline_keeps_the_named_reference_and_every_row_without_one(paired_setups: ModuleType) -> None:
     """Spec P1: a speedup divided by two references is not one quantity, so the caller splits by
     reference. A task row carries the token total and no denominator, and must survive the split."""
     rows = frame(
@@ -656,13 +668,13 @@ def test_one_baseline_keeps_the_named_reference_and_every_row_without_one(paired
             task("a", "k2", 200.0),
         ]
     )
-    kept = paired_arms.one_baseline(rows, "c-autopar")
+    kept = paired_setups.one_baseline(rows, "c-autopar")
     assert list(kept.row_kind) == ["submission", "task", "task"]
     assert sorted(kept[kept.row_kind == "task"].benchmark) == ["k1", "k2"]
 
 
-def test_a_kernel_the_arm_never_delivered_scores_one_and_still_costs_its_tokens(
-    paired_arms: ModuleType, tmp_path: pathlib.Path
+def test_a_kernel_the_setup_never_delivered_scores_one_and_still_costs_its_tokens(
+    paired_setups: ModuleType, tmp_path: pathlib.Path
 ) -> None:
     """A failed episode is not absent from the roster and it is not free: the agent was served the
     kernel and spent its budget, and the baseline is what it left standing."""
@@ -672,19 +684,19 @@ def test_a_kernel_the_arm_never_delivered_scores_one_and_still_costs_its_tokens(
     # served, never delivered: a call and a task row, no graded submission
     rows.append(call("a", "k5", 100.0))
     rows.append(task("a", "k5", 100.0))
-    obs = paired_arms.load_observations([observations(rows, tmp_path)])
-    best = paired_arms.best_by_arm_kernel(paired_arms.graded_rows(obs, ["a"]))
-    aggregate = paired_arms.arm_aggregates(
-        best, paired_arms.served_by_arm(obs), "numba", population.KernelPolicy.SERVED
+    obs = paired_setups.load_observations([observations(rows, tmp_path)])
+    best = paired_setups.best_by_setup_kernel(paired_setups.graded_rows(obs, ["a"]))
+    aggregate = paired_setups.setup_aggregates(
+        best, paired_setups.served_by_setup(obs), "numba", population.KernelPolicy.SERVED
     )["a"]
     assert aggregate.policy == population.KernelPolicy.SERVED
     assert (aggregate.n, aggregate.n_solved) == (5, 4)
     assert aggregate.geomean() == pytest.approx(4.0 ** (4.0 / 5.0))
-    assert paired_arms.tokens_by_arm_kernel(obs)[("a", "k5")] == pytest.approx(100.0)
+    assert paired_setups.tokens_by_setup_kernel(obs)[("a", "k5")] == pytest.approx(100.0)
 
 
 def test_by_default_a_wrong_answer_is_left_out_of_the_speedup_and_still_costs_its_tokens(
-    paired_arms: ModuleType, tmp_path: pathlib.Path
+    paired_setups: ModuleType, tmp_path: pathlib.Path
 ) -> None:
     """A wrong answer is no speedup: the default leg is over the solved kernels only,
     the failure shows as coverage, and its tokens are still spent."""
@@ -693,41 +705,41 @@ def test_by_default_a_wrong_answer_is_left_out_of_the_speedup_and_still_costs_it
         rows += episode("a", kernel, 4.0, 100.0)
     rows.append(call("a", "k5", 100.0))
     rows.append(task("a", "k5", 100.0))
-    obs = paired_arms.load_observations([observations(rows, tmp_path)])
-    best = paired_arms.best_by_arm_kernel(paired_arms.graded_rows(obs, ["a"]))
-    aggregate = paired_arms.arm_aggregates(best, paired_arms.served_by_arm(obs), "numba")["a"]
+    obs = paired_setups.load_observations([observations(rows, tmp_path)])
+    best = paired_setups.best_by_setup_kernel(paired_setups.graded_rows(obs, ["a"]))
+    aggregate = paired_setups.setup_aggregates(best, paired_setups.served_by_setup(obs), "numba")["a"]
     assert aggregate.policy == population.KernelPolicy.SOLVED
     assert (aggregate.n, aggregate.n_solved) == (4, 4)
     assert aggregate.geomean() == pytest.approx(4.0)
-    assert paired_arms.tokens_by_arm_kernel(obs)[("a", "k5")] == pytest.approx(100.0)
+    assert paired_setups.tokens_by_setup_kernel(obs)[("a", "k5")] == pytest.approx(100.0)
 
 
-def test_the_arm_row_counts_what_the_arm_delivered_not_the_size_of_its_population(
-    paired_arms: ModuleType, tmp_path: pathlib.Path
+def test_the_setup_row_counts_what_the_setup_delivered_not_the_size_of_its_population(
+    paired_setups: ModuleType, tmp_path: pathlib.Path
 ) -> None:
     """Under the served policy the population is the whole roster, so reporting it as ``n_solved``
-    would say every arm solved every kernel it was given, and ``coverage`` would always read 1.0."""
+    would say every setup solved every kernel it was given, and ``coverage`` would always read 1.0."""
     rows: list[dict[str, object]] = []
     for kernel in KERNELS[:5]:
         rows += episode("a", kernel, 2.0, 100.0)
     for kernel in KERNELS[5:]:
         rows.append(call("a", kernel, 100.0))
         rows.append(task("a", kernel, 100.0))
-    obs = paired_arms.load_observations([observations(rows, tmp_path)])
-    best = paired_arms.best_by_arm_kernel(paired_arms.graded_rows(obs, ["a"]))
-    served = paired_arms.served_by_arm(obs)
-    table = paired_arms.arm_aggregates(best, served, "numba")
-    usage = paired_arms.task_usage(obs, population.RepeatPolicy.LATEST)
-    row = paired_arms.arm_rows(best, paired_arms.graded_rows(obs, ["a"]), table, served, {}, usage)[0]
+    obs = paired_setups.load_observations([observations(rows, tmp_path)])
+    best = paired_setups.best_by_setup_kernel(paired_setups.graded_rows(obs, ["a"]))
+    served = paired_setups.served_by_setup(obs)
+    table = paired_setups.setup_aggregates(best, served, "numba")
+    usage = paired_setups.task_usage(obs, population.RepeatPolicy.LATEST)
+    row = paired_setups.setup_rows(best, paired_setups.graded_rows(obs, ["a"]), table, served, {}, usage)[0]
     assert (row["n_served"], row["n_solved"]) == (8, 5)
     assert row["coverage"] == pytest.approx(5 / 8)
 
 
-# a kernel an arm never ran (only its task row: no graded answer, no judge call)
-# leaves that arm's population -- speedup, completion and tokens -- while one it ran and failed still
-# counts unsolved; a pair is over the kernels both arms ran.
-def test_a_kernel_the_arm_never_ran_leaves_its_completion_and_its_pairs_while_a_failure_stays_unsolved(
-    paired_arms: ModuleType, tmp_path: pathlib.Path
+# a kernel a setup never ran (only its task row: no graded answer, no judge call)
+# leaves that setup's population -- speedup, completion and tokens -- while one it ran and failed still
+# counts unsolved; a pair is over the kernels both setups ran.
+def test_a_kernel_the_setup_never_ran_leaves_its_completion_and_its_pairs_while_a_failure_stays_unsolved(
+    paired_setups: ModuleType, tmp_path: pathlib.Path
 ) -> None:
     rows: list[dict[str, object]] = []
     for kernel in KERNELS[:6]:
@@ -737,32 +749,32 @@ def test_a_kernel_the_arm_never_ran_leaves_its_completion_and_its_pairs_while_a_
     rows += episode("b", "k7", 2.0, 100.0)
     rows.append(task("a", "k8", 100.0))  # never ran: the job ended first
     rows += episode("b", "k8", 2.0, 100.0)
-    obs = paired_arms.load_observations([observations(rows, tmp_path)])
-    served = paired_arms.served_by_arm(obs)
+    obs = paired_setups.load_observations([observations(rows, tmp_path)])
+    served = paired_setups.served_by_setup(obs)
     assert (served["a"], served["b"]) == (frozenset(KERNELS[:7]), frozenset(KERNELS))
-    best = paired_arms.best_by_arm_kernel(paired_arms.graded_rows(obs, ["a", "b"]))
-    table = paired_arms.arm_aggregates(best, served, "numba")
-    usage = paired_arms.task_usage(obs, population.RepeatPolicy.LATEST)
-    arm = paired_arms.arm_rows(best, paired_arms.graded_rows(obs, ["a"]), table, served, {}, usage)[0]
+    best = paired_setups.best_by_setup_kernel(paired_setups.graded_rows(obs, ["a", "b"]))
+    table = paired_setups.setup_aggregates(best, served, "numba")
+    usage = paired_setups.task_usage(obs, population.RepeatPolicy.LATEST)
+    arm = paired_setups.setup_rows(best, paired_setups.graded_rows(obs, ["a"]), table, served, {}, usage)[0]
     assert (arm["n_served"], arm["n_solved"], arm["coverage"]) == (7, 6, pytest.approx(6 / 7))
-    tokens = paired_arms.tokens_by_arm_kernel(obs)
+    tokens = paired_setups.tokens_by_setup_kernel(obs)
     assert ("a", "k8") not in tokens and ("a", "k7") in tokens
-    legs = {row["leg"]: row for row in paired_arms.pair_rows([("a", "b")], table, tokens, list(KERNELS), "f", served)}
+    legs = {row["leg"]: row for row in paired_setups.pair_rows([("a", "b")], table, tokens, list(KERNELS), "f", served)}
     assert (legs["speedup"]["n_only_a"], legs["speedup"]["n_only_b"]) == (0, 1)
     assert (legs["speedup"]["n_pairs"], legs["tokens"]["n_pairs"]) == (6, 7)
 
 
 def test_no_submit_rate_is_over_every_episode_not_the_kernels_final_one(
-    paired_arms: ModuleType, tmp_path: pathlib.Path
+    paired_setups: ModuleType, tmp_path: pathlib.Path
 ) -> None:
     """k1 is rerun as a separate job (same run_id, different job -- the rerun shape
     ``test_a_rerun_job_is_a_separate_run_and_the_latest_run_stands`` already covers): job j1 never
-    submitted (harvest only), job j2 reran and DID submit. ``best_by_arm_kernel`` picks j2 as k1's
+    submitted (harvest only), job j2 reran and DID submit. ``best_by_setup_kernel`` picks j2 as k1's
     final answer, so ``n_never_submitted`` (kernel-level) reads 0 -- but j1 was still a real episode
     that ended with nobody choosing an answer, and ``no_submit_rate`` must count it: 1 of 2 episodes.
     """
     rows = [
-        graded("a", "k1", 5.0, job="j1", ts=1000, optimizer=paired_arms.HARVESTED_TAG),
+        graded("a", "k1", 5.0, job="j1", ts=1000, optimizer=paired_setups.HARVESTED_TAG),
         call("a", "k1", 50.0, job="j1"),
         task("a", "k1", 50.0, job="j1"),
         graded("a", "k1", 3.0, job="j2", ts=2000),
@@ -770,39 +782,39 @@ def test_no_submit_rate_is_over_every_episode_not_the_kernels_final_one(
         task("a", "k1", 80.0, job="j2"),
     ]
     path = observations(rows, tmp_path)
-    obs = paired_arms.load_observations([path])
-    graded_frame = paired_arms.graded_rows(obs, ["a"])
-    rate = paired_arms.no_submit_rate_by_arm(graded_frame)
+    obs = paired_setups.load_observations([path])
+    graded_frame = paired_setups.graded_rows(obs, ["a"])
+    rate = paired_setups.no_submit_rate_by_setup(graded_frame)
     assert rate == {"a": pytest.approx(0.5)}
 
-    best = paired_arms.best_by_arm_kernel(graded_frame)
-    served = paired_arms.served_by_arm(obs)
-    table = paired_arms.arm_aggregates(best, served, "numba")
-    tokens = paired_arms.tokens_by_arm_kernel(obs)
-    row = paired_arms.arm_rows(
+    best = paired_setups.best_by_setup_kernel(graded_frame)
+    served = paired_setups.served_by_setup(obs)
+    table = paired_setups.setup_aggregates(best, served, "numba")
+    tokens = paired_setups.tokens_by_setup_kernel(obs)
+    row = paired_setups.setup_rows(
         best,
         graded_frame,
         table,
         served,
         tokens,
-        paired_arms.task_usage(obs, population.RepeatPolicy.LATEST),
+        paired_setups.task_usage(obs, population.RepeatPolicy.LATEST),
         no_submit=rate,
     )[0]
     assert row["n_never_submitted"] == 0
     assert row["no_submit_rate"] == pytest.approx(0.5)
 
 
-def test_no_submit_rate_is_absent_for_an_arm_with_no_episodes_in_the_frame(paired_arms: ModuleType) -> None:
-    """An empty ``graded`` frame names no arm at all, so the mapping stays empty and a caller reading
-    it back with ``.get(arm, nan)`` sees NaN, never a fabricated 0.0."""
+def test_no_submit_rate_is_absent_for_an_setup_with_no_episodes_in_the_frame(paired_setups: ModuleType) -> None:
+    """An empty ``graded`` frame names no setup at all, so the mapping stays empty and a caller reading
+    it back with ``.get(setup, nan)`` sees NaN, never a fabricated 0.0."""
     empty = frame([]).assign(
         **{name: pd.Series(dtype="object") for name in (*population.EPISODE_KEY, "arm", "optimizer")}
     )
-    assert paired_arms.no_submit_rate_by_arm(empty) == {}
+    assert paired_setups.no_submit_rate_by_setup(empty) == {}
 
 
-def test_cpf_uptake_reads_the_iteration_counts_call_column(paired_arms: ModuleType, tmp_path: pathlib.Path) -> None:
-    """``cpf_uptake_by_arm`` reads an ``iteration_counts.py`` CSV per arm: the fraction of its rows
+def test_cpf_uptake_reads_the_iteration_counts_call_column(paired_setups: ModuleType, tmp_path: pathlib.Path) -> None:
+    """``cpf_uptake_by_setup`` reads an ``iteration_counts.py`` CSV per setup: the fraction of its rows
     (one per transcript) whose ``canonical_parallel_form_calls`` is nonzero. 2 of 3 episodes here
     called the tool at least once."""
     csv_path = tmp_path / "iters-cpf.csv"
@@ -813,28 +825,28 @@ def test_cpf_uptake_reads_the_iteration_counts_call_column(paired_arms: ModuleTy
             {"agent_dir": "w2", "canonical_parallel_form_calls": 1},
         ]
     ).to_csv(csv_path, index=False)
-    assert paired_arms.cpf_uptake_by_arm({"x-qwen38-c-cpf": csv_path}) == {"x-qwen38-c-cpf": pytest.approx(2 / 3)}
+    assert paired_setups.cpf_uptake_by_setup({"x-qwen38-c-cpf": csv_path}) == {"x-qwen38-c-cpf": pytest.approx(2 / 3)}
 
 
-def test_cpf_uptake_is_absent_without_the_call_column(paired_arms: ModuleType, tmp_path: pathlib.Path) -> None:
-    """A CSV from before the tool existed (or any CSV missing the column) contributes no arm rather
+def test_cpf_uptake_is_absent_without_the_call_column(paired_setups: ModuleType, tmp_path: pathlib.Path) -> None:
+    """A CSV from before the tool existed (or any CSV missing the column) contributes no setup rather
     than a misleading 0.0."""
     csv_path = tmp_path / "iters-old.csv"
     pd.DataFrame([{"agent_dir": "w0", "turns": 4}]).to_csv(csv_path, index=False)
-    assert paired_arms.cpf_uptake_by_arm({"x-qwen38-c-cpf": csv_path}) == {}
+    assert paired_setups.cpf_uptake_by_setup({"x-qwen38-c-cpf": csv_path}) == {}
 
 
-def test_parse_iteration_counts_splits_arm_and_path(paired_arms: ModuleType) -> None:
-    arm, path = paired_arms.parse_iteration_counts("x-qwen38-c-cpf=/tmp/iters.csv")
+def test_parse_iteration_counts_splits_setup_and_path(paired_setups: ModuleType) -> None:
+    arm, path = paired_setups.parse_iteration_counts("x-qwen38-c-cpf=/tmp/iters.csv")
     assert (arm, path) == ("x-qwen38-c-cpf", pathlib.Path("/tmp/iters.csv"))
     with pytest.raises(SystemExit):
-        paired_arms.parse_iteration_counts("no-equals-sign")
+        paired_setups.parse_iteration_counts("no-equals-sign")
 
 
-def test_the_impact_table_carries_cpf_uptake_only_for_the_arm_it_was_given(
-    paired_arms: ModuleType, tmp_path: pathlib.Path
+def test_the_impact_table_carries_cpf_uptake_only_for_the_setup_it_was_given(
+    paired_setups: ModuleType, tmp_path: pathlib.Path
 ) -> None:
-    """``--iteration-counts`` names one arm's CSV; the treated arm reports its measured uptake and the
+    """``--iteration-counts`` names one setup's CSV; the treated setup reports its measured uptake and the
     control -- never passed one -- reports NaN rather than 0.0 (it did not run with the tool at all)."""
     rows: list[dict[str, object]] = []
     for kernel in KERNELS:
@@ -846,7 +858,7 @@ def test_the_impact_table_carries_cpf_uptake_only_for_the_arm_it_was_given(
         [{"agent_dir": f"w{i}", "canonical_parallel_form_calls": 1 if i < 6 else 0} for i in range(len(KERNELS))]
     ).to_csv(iters_path, index=False)
     out = tmp_path / "impact.csv"
-    rc = paired_arms.main(
+    rc = paired_setups.main(
         [
             "--observations", str(obs_path),
             "--pair", "x-qwen38-c-cpf,x-qwen38-c",
@@ -868,7 +880,7 @@ def priced_task(arm: str, kernel: str, fresh: float, cached: float) -> dict[str,
 
 
 def cost_fixture(tmp_path: pathlib.Path) -> pathlib.Path:
-    """Seven kernels, both arms served all seven. Treatment solves k1-k7 at 2x/4x alternating on k1-k6
+    """Seven kernels, both setups served all seven. Treatment solves k1-k7 at 2x/4x alternating on k1-k6
     and 100x on k7; control solves k1-k6 at 1x and is SERVED k7 without solving it. Billed tokens:
     treatment 100 on k1-k6 and 400 on k7; control 200 on k1-k6 (100 fresh + 1000 cached) and 100 on k7."""
     rows: list[dict[str, object]] = []
@@ -884,21 +896,21 @@ def cost_fixture(tmp_path: pathlib.Path) -> pathlib.Path:
 
 
 def test_the_speedup_leg_is_over_the_kernels_both_solved_and_the_cost_leg_over_every_served_kernel(
-    paired_arms: ModuleType, tmp_path: pathlib.Path
+    paired_setups: ModuleType, tmp_path: pathlib.Path
 ) -> None:
-    """Paper rho_S over B, rho_C over K. rho_S = GM(2,4,2,4,2,4) = sqrt(8): k7, solved by one arm only,
+    """Paper rho_S over B, rho_C over K. rho_S = GM(2,4,2,4,2,4) = sqrt(8): k7, solved by one setup only,
     is out. rho_C = GM(C_control / C_treated) = GM(2 x6, 0.25) = 2^(4/7) = 1.48599 on BILLED tokens:
     k7, unsolved by the control, still counts (over B alone it would read 2.0; on effective tokens
     1.0 on k1-k6)."""
     out = tmp_path / "pairs.csv"
-    arms_out = tmp_path / "arms.csv"
-    rc = paired_arms.main(
+    setups_out = tmp_path / "arms.csv"
+    rc = paired_setups.main(
         [
             "--observations", str(cost_fixture(tmp_path)),
             "--pair", "x-qwen38-c-cpf,x-qwen38-c",
             "--family", "f",
             "--out", str(out),
-            "--arms-out", str(arms_out),
+            "--arms-out", str(setups_out),
         ]
     )  # fmt: skip
     assert rc == 0
@@ -908,7 +920,7 @@ def test_the_speedup_leg_is_over_the_kernels_both_solved_and_the_cost_leg_over_e
     assert legs.at["tokens", "n_pairs"] == 7
     assert legs.at["tokens", "rho"] == pytest.approx(1.4859942891369484)
     assert legs.at["tokens", "cost_model"] == "billed"
-    control = pd.read_csv(arms_out).set_index("arm").loc["x-qwen38-c"]
+    control = pd.read_csv(setups_out).set_index("arm").loc["x-qwen38-c"]
     # GM billed tokens over K: (200^6 * 100)^(1/7)
     assert control.n_token_kernels == 7
     assert control.gm_tokens == pytest.approx(181.14473285278135)
@@ -916,7 +928,7 @@ def test_the_speedup_leg_is_over_the_kernels_both_solved_and_the_cost_leg_over_e
 
 
 def test_coverage_is_an_exact_mcnemar_on_the_discordant_kernels(
-    paired_arms: ModuleType, tmp_path: pathlib.Path
+    paired_setups: ModuleType, tmp_path: pathlib.Path
 ) -> None:
     """The descriptive coverage column is exact McNemar on (g, l) = (1, 7):
     p = 2 * (C(8,0) + C(8,1)) / 2^8 = 0.0703125."""
@@ -926,11 +938,11 @@ def test_coverage_is_an_exact_mcnemar_on_the_discordant_kernels(
         rows += [call("a", kernel, 100.0), task("a", kernel, 100.0), call("b", kernel, 100.0), task("b", kernel, 100.0)]
     rows += [graded("a", kernel, 2.0) for kernel in roster[:3]]
     rows += [graded("b", kernel, 2.0) for kernel in roster[:2] + roster[3:]]
-    obs = paired_arms.load_observations([observations(rows, tmp_path)])
-    best = paired_arms.best_by_arm_kernel(paired_arms.graded_rows(obs, ["a", "b"]))
-    table = paired_arms.arm_aggregates(best, paired_arms.served_by_arm(obs), "numba")
+    obs = paired_setups.load_observations([observations(rows, tmp_path)])
+    best = paired_setups.best_by_setup_kernel(paired_setups.graded_rows(obs, ["a", "b"]))
+    table = paired_setups.setup_aggregates(best, paired_setups.served_by_setup(obs), "numba")
 
-    reported = paired_arms.pair_rows([("a", "b")], table, paired_arms.tokens_by_arm_kernel(obs), roster, "f")
+    reported = paired_setups.pair_rows([("a", "b")], table, paired_setups.tokens_by_setup_kernel(obs), roster, "f")
 
     speed = next(row for row in reported if row["leg"] == "speedup")
     assert (speed["n_a"], speed["n_b"], speed["n_only_a"], speed["n_only_b"]) == (3, 9, 1, 7)
@@ -938,28 +950,28 @@ def test_coverage_is_an_exact_mcnemar_on_the_discordant_kernels(
 
 
 @pytest.mark.parametrize(("n", "has_interval"), [(5, False), (6, True)])
-def test_an_arm_interval_is_withheld_below_six_kernels(paired_arms: ModuleType, n: int, has_interval: bool) -> None:
-    """Spec A1/A2: the arm geomean keeps its point at any n, its interval only from 6 values up."""
-    point, low, high = paired_arms.floored_geomean([1.0, 2.0, 4.0, 1.0, 2.0, 4.0][:n])
+def test_an_setup_interval_is_withheld_below_six_kernels(paired_setups: ModuleType, n: int, has_interval: bool) -> None:
+    """Spec A1/A2: the setup geomean keeps its point at any n, its interval only from 6 values up."""
+    point, low, high = paired_setups.floored_geomean([1.0, 2.0, 4.0, 1.0, 2.0, 4.0][:n])
     assert point > 1.0
     assert math.isfinite(low) == has_interval == math.isfinite(high)
 
 
 def test_a_served_kernel_without_a_task_token_total_is_dropped_loudly(
-    paired_arms: ModuleType, tmp_path: pathlib.Path
+    paired_setups: ModuleType, tmp_path: pathlib.Path
 ) -> None:
-    """Both arms were served k1-k8; b has no task row on k7 and k8, so K is 6 of 8 and the run says so."""
+    """Both setups were served k1-k8; b has no task row on k7 and k8, so K is 6 of 8 and the run says so."""
     rows = [row for kernel in KERNELS for row in episode("a", kernel, 2.0, 100.0)]
     rows += [row for kernel in KERNELS[:6] for row in episode("b", kernel, 2.0, 100.0)]
     rows += [row for kernel in KERNELS[6:] for row in (graded("b", kernel, 2.0), call("b", kernel, 100.0))]
-    obs = paired_arms.load_observations([observations(rows, tmp_path)])
-    best = paired_arms.best_by_arm_kernel(paired_arms.graded_rows(obs, ["a", "b"]))
-    served = paired_arms.served_by_arm(obs)
-    table = paired_arms.arm_aggregates(best, served, "numba")
+    obs = paired_setups.load_observations([observations(rows, tmp_path)])
+    best = paired_setups.best_by_setup_kernel(paired_setups.graded_rows(obs, ["a", "b"]))
+    served = paired_setups.served_by_setup(obs)
+    table = paired_setups.setup_aggregates(best, served, "numba")
 
     with pytest.warns(UserWarning, match=r"served \(8\): b 2 \['k7', 'k8'\]"):
-        reported = paired_arms.pair_rows(
-            [("a", "b")], table, paired_arms.tokens_by_arm_kernel(obs), list(KERNELS), "f", served
+        reported = paired_setups.pair_rows(
+            [("a", "b")], table, paired_setups.tokens_by_setup_kernel(obs), list(KERNELS), "f", served
         )
 
     assert next(row for row in reported if row["leg"] == "tokens")["n_pairs"] == 6
@@ -973,9 +985,9 @@ def test_a_served_kernel_without_a_task_token_total_is_dropped_loudly(
         ("harness20-qwen38-claude", ["", ""], ""),
     ],
 )
-def test_an_arm_named_without_a_language_takes_the_language_its_rows_recorded(
-    paired_arms: ModuleType, arm: str, recorded: list[str], want: str
+def test_an_setup_named_without_a_language_takes_the_language_its_rows_recorded(
+    paired_setups: ModuleType, arm: str, recorded: list[str], want: str
 ) -> None:
-    """A harness arm's name carries no language token; its rows do, so it pairs with its ``-c`` treatment."""
+    """A harness setup's name carries no language token; its rows do, so it pairs with its ``-c`` treatment."""
     observations = pd.DataFrame({"arm": [arm] * len(recorded), "language": recorded})
-    assert paired_arms.arm_language(observations, arm) == want
+    assert paired_setups.setup_language(observations, arm) == want

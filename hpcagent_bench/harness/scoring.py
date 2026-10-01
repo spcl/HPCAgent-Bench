@@ -222,7 +222,7 @@ __all__ = [
 #: entries across ranks and jobs. A race just measures twice.
 BASELINE_TIMING_CACHE: dict[tuple, tuple[dict[str, int], dict[str, list[int]]]] = {}
 
-#: Entry ceiling, above one campaign; overflow drops the whole memo (entries are small).
+#: Entry ceiling, above one experiment; overflow drops the whole memo (entries are small).
 BASELINE_TIMING_CACHE_MAX = 8192
 
 #: (kernel, preset, datatype) -> the reference that last won its best-of race in this process, at any

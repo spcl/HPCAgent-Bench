@@ -4,14 +4,14 @@
 """Fold ONE column's canon CSV shards into the persistent, cross-run canon results DB.
 
 ``scripts/collect_canon.py`` REBUILDS a fresh ``--db`` from a whole sweep's directory -- the tool
-the paper's reproducibility repos call once a campaign is done, and it must keep doing exactly
+the paper's reproducibility repos call once an experiment is done, and it must keep doing exactly
 that for them. This is a different tool for a different moment: the per-job step
 ``hpcagent-bench job baseline --phase finish`` runs at the END OF EACH COLUMN'S Slurm job, while the sweep is
 still in progress and other columns' jobs may still be writing beside this one, so the tiny
 per-kernel score row survives after the run's DaCe build tree (``dacecache-<column>[_rank<N>]``,
 routinely the bulk of a canon work dir) is deleted.
 
-APPEND-only against a DB every column of every campaign shares: a ``(run, column, kernel, preset,
+APPEND-only against a DB every column of every experiment shares: a ``(run, column, kernel, preset,
 datatype)`` row is ``INSERT OR REPLACE``, so re-running this script after a partial write (or a
 requeued job) never doubles a row, and rebuilding it here (as collect_canon.py does) would erase
 every other column's rows the moment the first column's job finished.

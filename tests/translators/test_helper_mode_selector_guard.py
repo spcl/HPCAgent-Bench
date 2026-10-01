@@ -14,7 +14,7 @@ literal at every site (:func:`static_flag_params`), so substitution leaves two c
 HAS to be decided here -- a string has no type in the C or Fortran parameter tables, so a mode that
 survived to the backend could not be passed at all.
 
-The load-bearing assertion is not that it emits. It is WHICH arm it emits: a fold that picks the
+The load-bearing assertion is not that it emits. It is WHICH setup it emits: a fold that picks the
 wrong branch still produces a program, and every value it computes is wrong.
 """
 
@@ -28,7 +28,7 @@ from tests.translators.op_oracle import run_op
 
 BACKENDS = ("c", "cpp", "fortran", "numba", "pythran", "jax")
 
-#: Three return paths on a string selector, the shape kl_div_loss ships. The arms are deliberately
+#: Three return paths on a string selector, the shape kl_div_loss ships. The setups are deliberately
 #: far apart numerically so a wrong pick cannot pass as round-off.
 MODE_SRC = (
     "import numpy as np\n"
@@ -66,14 +66,14 @@ def test_a_mode_compare_is_a_static_flag_test() -> None:
 )
 def test_an_undecidable_compare_is_not_a_static_flag_test(expr: str, reason: str) -> None:
     """Fusing an undecidable guard would leave an ``IfExp`` over ARRAY branches standing, which C's
-    ``?:`` rejects outright and Fortran's ``merge`` evaluates on BOTH arms -- so a guarded division
+    ``?:`` rejects outright and Fortran's ``merge`` evaluates on BOTH setups -- so a guarded division
     or subscript would run on exactly the values the guard exists to exclude."""
     assert not is_static_flag_test(ast.parse(expr, mode="eval").body, flags("mode")), reason
 
 
-def test_the_selected_arm_is_the_one_the_reference_takes() -> None:
+def test_the_selected_setup_is_the_one_the_reference_takes() -> None:
     """Every backend, against the numpy reference's own answer. ``mode='total'`` selects the SUM,
-    and the mean arm it must not select differs by a factor of eight here."""
+    and the mean setup it must not select differs by a factor of eight here."""
     x = np.arange(1.0, 9.0)
     verdicts = run_op(
         MODE_SRC, "f", {"x": x}, {"out": (1,)}, {"N": 8}, shapes={"x": "(N,)", "out": "(N,)"}, backends=BACKENDS

@@ -229,7 +229,7 @@ class PairedChange:
 
     Each producer keeps the three on one quantity: :func:`paired_change` the Hodges-Lehmann location
     its signed-rank test inverts, :func:`paired_geomean` the mean log its t test is on. A bootstrap
-    mean beside a rank test does not: the two can disagree about which arm is ahead, and a reader
+    mean beside a rank test does not: the two can disagree about which setup is ahead, and a reader
     cannot tell which to believe.
     """
 
@@ -526,7 +526,7 @@ def paired_geomean(log_ratios: Samples, alpha: float = DEFAULT_ALPHA) -> PairedC
     interval and the paired t-test p, all three on that one mean.
 
     ``exp(estimate)`` is the geomean ratio, the statistic an overall ratio is reported as everywhere
-    in this repo, so an arm comparison reads "a is X times b on the geomean over the shared kernels".
+    in this repo, so a setup comparison reads "a is X times b on the geomean over the shared kernels".
     The interval and the test are on the same mean, so the interval excludes 0 exactly when
     ``p < alpha``. A zero log (no change on a kernel) stays in: dropping the kernels that did not
     change would overstate the change of the rest.

@@ -13,7 +13,7 @@ passes scipy the method this rule chose explicitly, so a scipy release cannot mo
 200 is the largest ``n`` where the exact subset-sum DP stays fast (cost grows as n^3 past it) and
 covers every paired-kernel count these tables reach; above it the tie-corrected normal
 approximation is close enough not to matter. The count for one ``n`` is cached, so a table
-comparing many arm pairs at the same ``n`` pays the DP once.
+comparing many setup pairs at the same ``n`` pays the DP once.
 """
 
 import functools

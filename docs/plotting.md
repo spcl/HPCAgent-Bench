@@ -1,6 +1,6 @@
 # Plotting
 
-How a campaign's run directories become a paper figure: extract once, then draw every figure from
+How an experiment's run directories become a paper figure: extract once, then draw every figure from
 the extracted observations. Statistics behind the corpus figures (speedup heatmap, per-kernel
 distribution grid): [measurement_statistics.md](measurement_statistics.md). Token cost and cards:
 [token_accounting.md](token_accounting.md).
@@ -80,7 +80,7 @@ Further conventions:
   `hpcagent_bench/envs/registry.yaml` is append-only; a mid-list insert recolours or reshapes every
   published figure (`tests/test_palette.py` pins the rules: one shape per treatment, never the
   control circle, shades stay the model's hue).
-- **Names come from the registry** through `hpcagent_bench.experiment_tags` (`display_name`,
+- **Names come from the registry** through `hpcagent_bench.study_tags` (`display_name`,
   `model_name`, `packet_name`, `framework_name`), never literals. Serving details (`sglang`, `-FP8`)
   stay out of names.
 - **Baseline is a property of the data**: `population.one_denominator` reads the column the judge
@@ -94,37 +94,37 @@ Further conventions:
   with one decimal (`style.ratio_label`: `6.3x`, `0.04x` below 0.1x); tokens with
   `style.decade_label` (`35.5K`). Labels beside marks are tagged `style.CLEAR_GID` and settled clear
   at save (`style.settle_clear_labels`). If a figure caps coverage, it prints what was dropped.
-- **A connector is a pair link**, never a trend: it joins one arm's control and treated marks, and the
+- **A connector is a pair link**, never a trend: it joins one setup's control and treated marks, and the
   legend names it `Pair Link`.
 
 ## Extract once, plot from the observations
 
 ```bash
-python -m hpcagent_bench.experiments \
+python -m hpcagent_bench.studies \
     --runs "$RUN_ROOT/llrblind-*" --runs "$RUN_ROOT/6[0-9][0-9][0-9][0-9][0-9]" \
-    --experiment llrblind --out data/observations.csv
+    --study llrblind --out data/observations.csv
 ```
 
-`--runs` is a run-root glob and `--experiment` an arm prefix; both repeat. Keep waves in a suffix
-(`<campaign>-w2`) so one prefix matches every wave. Check the printed summary: a missing arm means a
-wrong prefix. From Python: `hpcagent_bench.experiments.observations(globs, experiment=[...])`.
+`--runs` is a run-root glob and `--study` a setup prefix; both repeat. Keep waves in a suffix
+(`<experiment>-w2`) so one prefix matches every wave. Check the printed summary: a missing setup means a
+wrong prefix. From Python: `hpcagent_bench.studies.observations(globs, study=[...])`.
 
-Registered experiments (`hpcagent_bench.campaigns`) extract by name, reading their campaigns' run
-roots and the owed waves' `owed-<experiment>-<date>` roots, and fuse final-grade rows:
+Registered studies (`hpcagent_bench.experiments`) extract by name, reading their experiments' run
+roots and the owed waves' `owed-<study>-<date>` roots, and fuse final-grade rows:
 
 ```bash
-python -m hpcagent_bench.dataset --experiment llr40-blind \
+python -m hpcagent_bench.dataset --study llr40-blind \
     --regrades "$RUN_ROOT/regrades/regrade-*.db" --out data/llrblind.db --csv data/llrblind.csv
 ```
 
 From the results databases instead of run roots, `--db` names one or more results databases (v1),
 read as one (`hpcagent_bench.stats.databases.union`): the core database alone plots what it holds
-(the CPF arms only from CPF runs recorded there), and adding the CPF archive brings back every
-historical CPF arm. Several databases merge by natural key, so their row ids never collide; an arm
+(the CPF setups only from CPF runs recorded there), and adding the CPF archive brings back every
+historical CPF setup. Several databases merge by natural key, so their row ids never collide; a setup
 two of them hold with different rows is refused.
 
 ```bash
-python -m hpcagent_bench.dataset --experiment llr40 --db hpcagent-bench-v1.db \
+python -m hpcagent_bench.dataset --study llr40 --db hpcagent-bench-v1.db \
     --db hpcagent-bench-v1-cpf-archive-20260929.db --out data/llr40.db
 ```
 
@@ -140,18 +140,18 @@ episode's answer only.
 | script | figure | library |
 |---|---|---|
 | `plot_score_change.py` | efficacy: speedup, tasks completed and token cost per comparison | `figures.efficacy.figure_dot_row` |
-| `plot_llr40_compilers.py` | llr40 per kernel: canon columns, Pluto, PPCG-HIP, optional CPF arms | `figures.signed.llr40_two_row_figure` |
-| `plot_arm_summary.py` | per-arm geomean speedup and median spend, one slot per language | `stats.summary`, `palette` |
-| `plot_scaling.py` | distributed track: eta(P), sigma(P), per-kernel, per-arm summary | `figures.scaling` |
+| `plot_llr40_compilers.py` | llr40 per kernel: canon columns, Pluto, PPCG-HIP, optional CPF setups | `figures.signed.llr40_two_row_figure` |
+| `plot_setup_summary.py` | per-setup geomean speedup and median spend, one slot per language | `stats.summary`, `palette` |
+| `plot_scaling.py` | distributed track: eta(P), sigma(P), per-kernel, per-setup summary | `figures.scaling` |
 | `plot_canon_speedup.py` | median speedup per framework from one canon sweep (`--db`) | `stats.canon` |
 | `plot_speedup.py` | corpus figures from the results DB | see [measurement_statistics.md](measurement_statistics.md) |
 
 Run any script with `-h` for its flags.
 
-Quick looks at one campaign:
+Quick looks at one experiment:
 
 ```bash
-python statistics/plot_arm_summary.py data/observations.csv --experiment llr40v11 \
+python statistics/plot_setup_summary.py data/observations.csv --study llr40v11 \
     --out figures/arm.pdf --table data/arm.csv
 ```
 
@@ -174,11 +174,11 @@ export CANON_DB=/path/to/results/canon.db         # canon sweep, table `canon`
 | input | what | from |
 |---|---|---|
 | `$AR/experiments/<track>/data/<track>.{csv,db}` | observations | extraction, above |
-| `$AR/experiments/<track>/tables/*_billed.csv` | pair tables | `statistics/paired_arms.py` |
+| `$AR/experiments/<track>/tables/*_billed.csv` | pair tables | `statistics/paired_setups.py` |
 | `$CANON_DB` | median time per (compiler column, kernel), validated only | canon sweep |
 | roster file | kernels a track is scored over, one per line | derived below |
 
-Derive the llr40 roster from the kernels its control arm was served:
+Derive the llr40 roster from the kernels its control setup was served:
 
 ```bash
 python3 -c "
@@ -192,7 +192,7 @@ Build a pair table (one per comparison; `--policy solved` is the default and is 
 and the figure refuses a table built under another policy or card):
 
 ```bash
-python statistics/paired_arms.py --observations "$AR/experiments/llr-cpu/data/llr-cpu.csv" \
+python statistics/paired_setups.py --observations "$AR/experiments/llr-cpu/data/llr-cpu.csv" \
     --pair llr40-qwen38-c,llr40-qwen38-c-skills --family skills \
     --cost-model billed --out "$AR/experiments/llr-cpu/tables/skills_billed.csv"
 ```
@@ -212,7 +212,7 @@ python3 statistics/plot_llr40_compilers.py \
 - Filled mark = measured. Hollow crossed mark = no validated result, drawn at 1x, kept as a row of
   `-kernels.csv` (`canon.roster_speedups`), left out of the summary; read the `n` column of
   `-summary.csv` before quoting a geomean.
-- `--observations` adds every model's CPF arm. `--offset` spreads a kernel's series across its slot;
+- `--observations` adds every model's CPF setup. `--offset` spreads a kernel's series across its slot;
   0 stacks them.
 - When both DaCe device columns appear, each falls back to its `frameworks` name, which carries the
   device (`signed.distinct_canon_labels`).
@@ -234,9 +234,9 @@ python3 statistics/plot_score_change.py "$AR/experiments/llr-gpu/data/llr-gpu.db
 Drawn by `figures.efficacy.figure_dot_row`. Each column is one model and delivery: control = hollow
 circle, treated = the packet's shape. Rows:
 
-- **Speedup**: geomean over the kernels both arms solved; a wrong answer is left out, a correct
+- **Speedup**: geomean over the kernels both setups solved; a wrong answer is left out, a correct
   slower answer keeps its sub-1 ratio. `--speedup-over served` draws every kernel with a failure at 1x.
-- **Tasks completed**: kernels solved per arm on a 0..N axis, no interval (census).
+- **Tasks completed**: kernels solved per setup on a 0..N axis, no interval (census).
   `--no-success-row` drops it.
 - **Token cost**: every served kernel, failed ones included, priced with `--cost-model` (the
   library prices with the `billed` card when called without one: `figures.efficacy.paired_kernels`).
@@ -247,7 +247,7 @@ Benjamini-Hochberg correction within the panel's family: one family per panel, e
 `FigureConfig.min_interval_kernels` kernels has none.
 
 `--comparison` is a `key=value;...` spec, one per panel. Either `treatment=<packet>` (split one
-campaign on a recorded packet) or `pairs=<csv>` (pairs from `paired_arms.py`, whose corrected
+experiment on a recorded packet) or `pairs=<csv>` (pairs from `paired_setups.py`, whose corrected
 verdicts are the stars; the figure recomputes only the drawn point through
 `figures.efficacy.reduce_pair`). Other keys:
 
@@ -294,23 +294,23 @@ counts run and no grid. Weak and strong are panels; colour and shape are the mod
 (`harness.torch_dist_curve`: `torch.compile` under the one-GPU baseline's autotune config, eager
 only when the compile fails), and stores it once per (kernel, law, P, params, GPU arch, image) in
 the grade DB's `reference_scaling_points` table under `source = 'torch_dist'`. Extraction reads those rows
-as scaling rows under the pseudo-arm `torch_dist`, and every overlay panel draws it in the
+as scaling rows under the pseudo-setup `torch_dist`, and every overlay panel draws it in the
 control's grey, dashed, beside the models; `--no-torch-dist` leaves it out.
 
 ```bash
 OBS="$AR/data/mlscale_observations.csv"
-python statistics/plot_scaling.py "$OBS" --experiment mlscale --out figures/scaling --table data/scaling.csv
-python statistics/plot_scaling.py "$OBS" --experiment mlscale --figure efficiency --out figures/scaling
-python statistics/plot_scaling.py "$OBS" --experiment mlscale --figure speedup --out figures/scaling
-python statistics/plot_scaling.py "$OBS" --experiment mlscale --figure per-kernel --mode strong \
+python statistics/plot_scaling.py "$OBS" --study mlscale --out figures/scaling --table data/scaling.csv
+python statistics/plot_scaling.py "$OBS" --study mlscale --figure efficiency --out figures/scaling
+python statistics/plot_scaling.py "$OBS" --study mlscale --figure speedup --out figures/scaling
+python statistics/plot_scaling.py "$OBS" --study mlscale --figure per-kernel --mode strong \
     --quantity efficiency --out figures/scaling
-python statistics/plot_scaling.py "$OBS" --experiment mlscale --figure summary --out figures/scaling
-python statistics/plot_scaling.py "$OBS" --arm 'mlscale-qwen38-hip' --width 5.5 --out figures/scaling-qwen38
+python statistics/plot_scaling.py "$OBS" --study mlscale --figure summary --out figures/scaling
+python statistics/plot_scaling.py "$OBS" --setup 'mlscale-qwen38-hip' --width 5.5 --out figures/scaling-qwen38
 ```
 
 ## A new figure
 
 Add a function under `hpcagent_bench/stats/figures/` with a test, then a thin script in
 `statistics/`. Call `style.apply()` before importing pyplot, take colours and shapes from `palette`
-(`model_color`, `model_markers`), names from `experiment_tags`, and save with `style.save` (PDF and
-PNG). `statistics/plot_arm_summary.py` is a short example.
+(`model_color`, `model_markers`), names from `study_tags`, and save with `style.save` (PDF and
+PNG). `statistics/plot_setup_summary.py` is a short example.

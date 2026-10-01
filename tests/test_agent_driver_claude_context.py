@@ -12,7 +12,7 @@ trigger (CLAUDE_AUTOCOMPACT_PCT_OVERRIDE).
 the limit L is min(served window, 262144) for every model; the reply reserve R is
 min(CLAUDE_CODE_MAX_OUTPUT_TOKENS, L // 8) and is exported as the reply cap; the trigger leaves R plus
 one turn of growth, round(0.12 * L), under L -- ~198k at 256k, ~99k at 128k. The window comes from
-keys every arm snapshot ALREADY carries -- CONTEXT_LENGTH and the engine's --context-length /
+keys every setup snapshot ALREADY carries -- CONTEXT_LENGTH and the engine's --context-length /
 --max-model-len -- so a pending job picks the fix up at start without being re-rendered.
 """
 
@@ -89,7 +89,7 @@ def env_values(path: str) -> dict[str, str]:
 
 
 def model_of(path: str) -> str:
-    """The model a ``<campaign>:<model>`` base serves."""
+    """The model a ``<experiment>:<model>`` base serves."""
     return path.split(":", 1)[1]
 
 
@@ -103,9 +103,9 @@ def cli_trigger(environment: dict[str, str]) -> int:
 
 
 @pytest.mark.parametrize("path", BASES)
-def test_every_arm_env_gives_claude_its_models_window_capped_at_256k(driver: ModuleType, path: str) -> None:
+def test_every_setup_env_gives_claude_its_models_window_capped_at_256k(driver: ModuleType, path: str) -> None:
     """Each base, rendered the way a snapshot is: the window is the model's own, never the
-    cap standing in for a window the arm forgot to name, and never above 262144."""
+    cap standing in for a window the setup forgot to name, and never above 262144."""
     values = env_values(path)
     values["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = "32768"  # the launcher's export (run_cluster.sh)
     served = SERVED[model_of(path)]
@@ -141,8 +141,8 @@ def test_the_smallest_window_any_source_names_wins(driver: ModuleType) -> None:
     assert driver.served_context(environment) == 131072
 
 
-def test_an_arm_naming_no_window_gets_the_policy_cap(driver: ModuleType) -> None:
-    """No committed arm and no pending snapshot does this; the cap is still a limit the policy allows."""
+def test_an_setup_naming_no_window_gets_the_policy_cap(driver: ModuleType) -> None:
+    """No committed setup and no pending snapshot does this; the cap is still a limit the policy allows."""
     assert driver.served_context({}) == driver.CLAUDE_CONTEXT_CAP == 262144
 
 
@@ -161,7 +161,7 @@ def test_the_argv_never_carries_autocompact_even_where_a_cli_would_accept_it(
     driver: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
 ) -> None:
     """CLAUDE_AUTOCOMPACT used to become --autocompact, an option 2.1.197 does not have: the probe
-    dropped it on every recorded arm. The environment above is the one mechanism now."""
+    dropped it on every recorded setup. The environment above is the one mechanism now."""
     monkeypatch.setenv("CLAUDE_AUTOCOMPACT", "200144")
     monkeypatch.setattr(driver, "claude_supports_flag", lambda binary, flag: True)
     argv = driver.claude_command(SimpleNamespace(prompt="optimize it", mcp_config=tmp_path / "mcp.json"))

@@ -119,7 +119,7 @@ def test_a_non_whole_float_is_not_an_integer(pinned):
 
 
 def test_an_env_var_reaches_the_typed_accessor(monkeypatch):
-    """The env is how a campaign sets every one of these, so it is the path that has to work."""
+    """The env is how an experiment sets every one of these, so it is the path that has to work."""
     monkeypatch.setenv("HPCAGENT_BENCH_T_FROM_ENV", "12")
     assert config.get_int("t.from_env") == 12
     assert config.get_str("t.from_env") == "12"

@@ -72,14 +72,14 @@ extraction lacks raises and asks for a re-extract; `effective` needs none.
 Two scripts price tokens with a card, default `billed`:
 
 ```bash
-python statistics/paired_arms.py --observations obs.csv --pair ARM_A,ARM_B --family skills \
+python statistics/paired_setups.py --observations obs.csv --pair ARM_A,ARM_B --family skills \
     --out pairs_billed.csv --cost-model billed
 python statistics/plot_score_change.py obs.csv --pairs-csv pairs_billed.csv --intervention lang-skills \
     --cost-model billed
 ```
 
 `--cost-model` also takes inline weights (`fresh_input=1,cached_input=0.25,output=4`), and
-`--cost-models my_cards.yaml` adds cards in the shape of `cost_models.yaml`. `paired_arms.py` writes the card into its CSV (`cost_model`), and
+`--cost-models my_cards.yaml` adds cards in the shape of `cost_models.yaml`. `paired_setups.py` writes the card into its CSV (`cost_model`), and
 `plot_score_change.py` refuses a pair table priced with a different card. The other figure scripts
 plot the raw `tokens` column, that is, the `effective` card.
 
@@ -97,7 +97,7 @@ A task that crashed twice may have spent up to `3 x AGENT_MAX_TOKENS`; `tokens_c
 
 claude-code compacts proactively only when the context window comes from the environment, so
 `agent_driver.claude_context_env` sets it from the served window (`served_context`, read from
-`CONTEXT_LENGTH` / `--context-length` / `--max-model-len` in the arm env):
+`CONTEXT_LENGTH` / `--context-length` / `--max-model-len` in the setup env):
 
     limit     = min(served window, 262144)                  # CLAUDE_CODE_MAX_CONTEXT_TOKENS, CLAUDE_CODE_AUTO_COMPACT_WINDOW
     reply     = min(CLAUDE_CODE_MAX_OUTPUT_TOKENS or 32768, limit // 8)   # exported as CLAUDE_CODE_MAX_OUTPUT_TOKENS
@@ -135,7 +135,7 @@ python hpcagent_bench/cluster/token_cost.py "$RUN_ROOT"/<run-dir> [--csv per_epi
 (`total` card), `effective` and `effective_provider` (`billed` card). It is stdlib-only so it ships
 in the agent image; `tests/test_cost_models.py` pins it to `stats/cost.py`.
 
-From an extracted observations DB, the campaign cost under the `billed` card:
+From an extracted observations DB, the experiment cost under the `billed` card:
 
 ```sql
 SELECT SUM(tokens_fresh_input + 0.1 * tokens_cached_input + tokens_output)
@@ -147,7 +147,7 @@ FROM observations WHERE record = 'task' AND tokens_output IS NOT NULL;
 - **Best case.** A chat template that re-serializes past turns breaks real prefix reuse, so a real
   bill is higher.
 - **Cache writes and expiry.** No card models a write premium or cache expiry.
-- **Tokenizers differ.** A token count compares within one model's paired arms; across models it is
+- **Tokenizers differ.** A token count compares within one model's paired setups; across models it is
   a different unit.
 - **A nonzero cache weight grows with turn count.** `billed` and `total` scale with turns x context,
   as a bill does; `effective` does not.

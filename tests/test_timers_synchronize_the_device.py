@@ -5,7 +5,7 @@
 A compiled DaCe GPU program returns before its kernel finishes, so a host clock read without a
 synchronize times the LAUNCH. Measured on one kernel: 11.0 ms unsynchronised against 24.3 ms
 synchronised -- a 2.2x undercount, reported as a speedup. It also leaves the device busy into the
-next arm's sample, so an A/B between two arms mixes them.
+next setup's sample, so an A/B between two setups mixes them.
 
 The test drives the two timer entry points with a fake device module, because the property under
 test is "was the device waited for", which is observable without a GPU and is exactly what

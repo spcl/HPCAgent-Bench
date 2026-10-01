@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Weak- and strong-scaling figures for the distributed ML-op track.
 
-Selects observations by ``--experiment`` prefix and ``--arm`` regex, then draws parallel
-efficiency, speedup, per-kernel small multiples, and per-arm geomean curves. Each figure writes a
+Selects observations by ``--study`` prefix and ``--setup`` regex, then draws parallel
+efficiency, speedup, per-kernel small multiples, and per-setup geomean curves. Each figure writes a
 PDF, a PNG, and the CSV behind the marks plus one listing points the sweep never measured.
 """
 
@@ -13,7 +13,7 @@ import sys
 
 import pandas as pd
 
-from hpcagent_bench import experiments
+from hpcagent_bench import studies
 from hpcagent_bench.stats import style as plotstyle
 from hpcagent_bench.stats.figures import scaling
 
@@ -29,24 +29,32 @@ FIGURES: tuple[str, ...] = (
 
 
 def load(path: pathlib.Path, prefix: str, arm: str, torch_dist: bool = True) -> pd.DataFrame:
-    """The observations frame, narrowed to one experiment prefix and one arm regex; keeps the
-    torch.distributed baseline rows (arm ``torch_dist``) unless ``torch_dist`` is False."""
-    frame = experiments.read_observations(path)
+    """The observations frame, narrowed to one study prefix and one setup regex; keeps the
+    torch.distributed baseline rows (setup ``torch_dist``) unless ``torch_dist`` is False."""
+    frame = studies.read_observations(path)
     names = frame["arm"].astype(str)
     keep = pd.Series(True, index=frame.index)
     if prefix:
         keep &= names.str.startswith(prefix)
     if arm:
         keep &= names.str.fullmatch(arm)
-    baseline = names == scaling.TORCH_DIST_ARM
+    baseline = names == scaling.TORCH_DIST_SETUP
     return frame.loc[(keep & ~baseline) | (baseline & torch_dist)]
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("observations", type=pathlib.Path, help="observations CSV or extracted .db")
-    parser.add_argument("--experiment", default="", help="arm prefix selecting one experiment; blank keeps all")
-    parser.add_argument("--arm", default="", help="regex; keep only arms whose full name matches")
+    parser.add_argument(
+        "--study",
+        "--experiment",
+        dest="experiment",
+        default="",
+        help="setup prefix selecting one study; blank keeps all",
+    )
+    parser.add_argument(
+        "--setup", "--arm", dest="arm", default="", help="regex; keep only setups whose full name matches"
+    )
     parser.add_argument("--figure", choices=FIGURES, default="all", help="which figure to draw (default: all)")
     parser.add_argument(
         "--mode",
@@ -78,7 +86,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--kernels", nargs="+", default=[], help="per-kernel figure: the kernels that get a panel, in order"
     )
     parser.add_argument(
-        "--no-torch-dist", action="store_true", help="leave out the torch.distributed baseline curve (arm torch_dist)"
+        "--no-torch-dist", action="store_true", help="leave out the torch.distributed baseline curve (setup torch_dist)"
     )
     parser.add_argument("--out", type=pathlib.Path, default=pathlib.Path("figures/scaling"))
     parser.add_argument("--table", type=pathlib.Path, default=pathlib.Path("data/scaling.csv"))
@@ -112,8 +120,8 @@ def report(curves: list[scaling.Curve]) -> None:
         if all_kernels:
             solo = sorted(all_kernels - common)
             print(
-                f"  {mode}: {len(common)} kernel(s) every arm has"
-                + (f"; not on every arm: {', '.join(solo)}" if solo else ""),
+                f"  {mode}: {len(common)} kernel(s) every setup has"
+                + (f"; not on every setup: {', '.join(solo)}" if solo else ""),
                 file=sys.stderr,
             )
 
@@ -148,7 +156,7 @@ def main() -> None:
     frame = load(args.observations, args.experiment, args.arm, not args.no_torch_dist)
     curves = scaling.curves(frame)
     if not curves:
-        raise SystemExit(f"no scaling rows for experiment={args.experiment!r} arm={args.arm!r}")
+        raise SystemExit(f"no scaling rows for study={args.experiment!r} setup={args.arm!r}")
 
     # a recorded eta that disagrees with the formula behind it means one of them is wrong
     mismatched = scaling.disagreements(frame)

@@ -4,7 +4,7 @@
 """Pre-commit guard: the python embedded in an image Dockerfile must not reference an unbound name.
 
 The image Dockerfiles end with a gate written as ``python <<'PY' ... PY``: it imports the built
-stack and asserts the versions, backends and parser flags the campaign depends on. That block runs
+stack and asserts the versions, backends and parser flags the experiment depends on. That block runs
 LAST, so a name typed once and never bound is not a lint -- it fails the whole build after every
 real check in the gate has passed.
 

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """A recorded grade is labelled with the size it was GRADED at, never the one the body asked.
 
-An experiment fixes ONE size and the judge grades at it on every route, so no client picks a size
+A study fixes ONE size and the judge grades at it on every route, so no client picks a size
 any more -- ``service.do_POST`` reads ``self.cfg.preset`` and the agent tools no longer offer the
 field. The router that used to log calls read the body's value: 44 of llr40v11's 823 submit rows were
 labelled S/M/L while every one of them was graded at the configured preset. The grade was right and

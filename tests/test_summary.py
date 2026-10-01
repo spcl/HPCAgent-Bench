@@ -183,7 +183,7 @@ def test_the_estimator_does_not_change_with_n() -> None:
 
 
 def test_paired_geomean_is_the_geometric_mean_of_the_paired_ratios() -> None:
-    """An arm comparison is reported as the geomean of its per-kernel ratios, so one kernel at 40x
+    """A setup comparison is reported as the geomean of its per-kernel ratios, so one kernel at 40x
     moves the estimate exactly as it moves that geomean."""
     ratios = [1.05, 1.1, 0.95, 1.2, 0.9, 1.15, 1.02, 40.0]
     change = summary.paired_geomean([math.log(ratio) for ratio in ratios])
@@ -200,7 +200,7 @@ def test_paired_geomean_interval_excludes_no_change_exactly_when_its_test_reject
 
 
 def test_paired_geomean_keeps_the_kernels_that_did_not_change() -> None:
-    """Dropping the zero logs would report the change of the kernels that moved as the arm's change."""
+    """Dropping the zero logs would report the change of the kernels that moved as the setup's change."""
     change = summary.paired_geomean([0.0, 0.0, 0.0, 0.0, 1.0, 1.0])
     assert (change.n, change.ties) == (6, 4)
     assert change.estimate == pytest.approx(1.0 / 3.0)
@@ -254,7 +254,7 @@ def test_a_cell_below_the_interval_floor_reports_its_median_without_an_interval(
 
 def test_a_bootstrap_over_log_ratios_keeps_the_negative_values() -> None:
     """A log speedup below zero is a slow-down, not a broken timer reading; cleaning it away would move
-    every interval of a regressing arm toward zero."""
+    every interval of a regressing setup toward zero."""
     logs = [-1.0, -0.8, -0.6, -0.5, -0.4, -0.2, 0.1, 0.3]
     interval = summary.bootstrap_ci(logs, np.median, "median", n_resamples=999, method="percentile")
     assert interval.n == len(logs)

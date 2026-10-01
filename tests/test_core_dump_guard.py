@@ -3,7 +3,7 @@
 """Nothing this repo runs may leave core dumps in the checkout.
 
 Beverin's ``core_pattern`` is the machine-global ``core_%h_%p``, so a crashing process writes a
-multi-GB dump into its CWD -- the checkout -- on a filesystem whose quota is inodes. One campaign
+multi-GB dump into its CWD -- the checkout -- on a filesystem whose quota is inodes. One experiment
 left 131 of them, 43 GB; a login-node CPF repro left 21.6 GB in two files. The guard
 is ``ulimit -c 0`` in every shell entry point, plus :func:`hpcagent_bench.core_dumps.disable` for a
 python process started by a script outside the repo. These tests keep both there, including in
@@ -168,8 +168,8 @@ def judge_core_limits(extra: dict[str, str]) -> tuple[int, int, int]:
     return soft, hard, child
 
 
-def test_the_judge_keeps_its_own_core_only_when_the_arm_asks() -> None:
-    """A crash-diagnosis arm wants the judge's core; every other arm keeps the floor."""
+def test_the_judge_keeps_its_own_core_only_when_the_setup_asks() -> None:
+    """A crash-diagnosis setup wants the judge's core; every other setup keeps the floor."""
     soft, hard = judge_core_limits({core_dumps.JUDGE: "1"})[:2]
     assert hard != 0, "precondition: this shell's hard limit forbids any core, nothing to test"
     assert soft == hard
@@ -187,11 +187,11 @@ FLOORED = ["hpcagent_bench/cluster/run_cluster.sh"]
 
 @pytest.mark.parametrize("script", FLOORED)
 @pytest.mark.parametrize(("flag", "hard_is_zero"), [("", True), ("1", False)], ids=["floor", "judge-arm"])
-def test_the_shell_floor_leaves_the_hard_limit_only_for_a_judge_core_arm(
+def test_the_shell_floor_leaves_the_hard_limit_only_for_a_judge_core_setup(
     script: str, flag: str, hard_is_zero: bool
 ) -> None:
     """``ulimit -c 0`` sets BOTH limits, after which nothing below can raise its own. Every script on
-    the judge's launch path must floor the soft limit alone on a judge-core arm."""
+    the judge's launch path must floor the soft limit alone on a judge-core setup."""
     text = (paths.ROOT / script).read_text()
     (guard,) = [line for line in text.splitlines() if line.startswith("if [[") and "ulimit" in line]
     done = subprocess.run(

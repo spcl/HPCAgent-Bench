@@ -668,7 +668,7 @@ def plot_signed_speedup(
     :param db: SQLite results DB path; ``None`` uses the configured ``record.db_path``.
     :param output: PDF path family for the banded figure.
     :param usetex: render text with LaTeX (default); ``False`` for a LaTeX-free box.
-    :param baseline: the speedup denominator. Defaults to the campaign default (``numba``); an
+    :param baseline: the speedup denominator. Defaults to the experiment default (``numba``); an
         npbench-shaped corpus wants ``numpy``, and a v9/v10 llr corpus wants ``c``. Which
         framework divides is a property of the DATA being plotted, so it is named by the caller
         rather than assumed here.

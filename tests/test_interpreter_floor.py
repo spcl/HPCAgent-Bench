@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The package parses on the OLDEST interpreter that has to import it.
 
-The venv and CI run 3.14, but a campaign does not: materialize_shared.sh picks whatever interpreter
+The venv and CI run 3.14, but an experiment does not: materialize_shared.sh picks whatever interpreter
 inside the job's container can import hpcagent_bench, and that one can be older. Syntax newer than
-the floor raises at IMPORT, which takes the whole arm down 35 seconds in with no graded row -- and
+the floor raises at IMPORT, which takes the whole setup down 35 seconds in with no graded row -- and
 the suite stays green because the suite runs on 3.14.
 """
 
@@ -19,8 +19,8 @@ import pytest
 
 from hpcagent_bench import paths
 
-#: The oldest interpreter a campaign may hand the package to. Raise it only when every container
-#: that runs an arm has been rebuilt past it.
+#: The oldest interpreter an experiment may hand the package to. Raise it only when every container
+#: that runs a setup has been rebuilt past it.
 FLOOR = (3, 12)
 
 #: Constructs newer than FLOOR, each with the version that introduced it. A plain grep, because the
@@ -41,7 +41,7 @@ TYPING_TOO_NEW = {
 
 
 def sources() -> list[pathlib.Path]:
-    """Every module a campaign can import, which is the package minus its generated files."""
+    """Every module an experiment can import, which is the package minus its generated files."""
     root = paths.BENCHMARKS.parent
     return [p for p in sorted(root.rglob("*.py")) if not p.name.endswith("_generated.py")]
 

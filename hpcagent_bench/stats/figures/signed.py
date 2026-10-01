@@ -1,8 +1,8 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Signed-change figures: one row per arm, and the paired comparison of two tools.
+"""Signed-change figures: one row per setup, and the paired comparison of two tools.
 
-:func:`arms_figure` puts several arms on a common denominator to compare how fast each arm is.
+:func:`setups_figure` puts several setups on a common denominator to compare how fast each setup is.
 :func:`paired_figure` compares two tools directly, per kernel, on the kernels both compiled --
 dividing geomeans taken over different kernel sets is not a speedup of anything.
 
@@ -35,9 +35,9 @@ from matplotlib.artist import Artist
 from matplotlib.axes import Axes
 from matplotlib.lines import Line2D
 
-from hpcagent_bench import experiment_tags, flags
+from hpcagent_bench import study_tags, flags
 from hpcagent_bench.stats import canon, palette, population, rules, style
-from hpcagent_bench.stats.figures import llr40_arms, per_kernel
+from hpcagent_bench.stats.figures import llr40_setups, per_kernel
 from hpcagent_bench.stats.summary import DEFAULT_CONFIDENCE, geomean_ci, signed_change, usable_ratios
 
 __all__ = [
@@ -65,8 +65,8 @@ __all__ = [
     "against_baseline",
     "agent_kernel_row",
     "answer_ratios",
-    "arm_rows",
-    "arms_figure",
+    "setup_rows",
+    "setups_figure",
     "canon_kernel_row",
     "canon_label",
     "distinct_canon_labels",
@@ -85,7 +85,7 @@ __all__ = [
     "paired_figure",
     "paired_rows",
     "pending_note",
-    "read_arm",
+    "read_setup",
     "row_color",
     "shard_paths",
     "sign_test",
@@ -106,20 +106,20 @@ ARMS: dict[str, str] = {
 }
 
 #: The speedup denominator: a serial optimizing compile, not the interpreted reference. cc exists
-#: for every kernel (unlike llvm+polly, undefined on a non-affine loop), so every arm keeps full n
-#: and llvm+polly stays visible as an arm instead of hiding in the denominator.
+#: for every kernel (unlike llvm+polly, undefined on a non-affine loop), so every setup keeps full n
+#: and llvm+polly stays visible as a setup instead of hiding in the denominator.
 BASELINE: str = "cc"
 
 #: Kernels these figures are about. tsvc_2_5* sources are already under this prefix.
 TSVC_PREFIX: str = "tsvc_2"
 
-#: The numerator of every ratio on the paired figure: the arm the ablation is about.
+#: The numerator of every ratio on the paired figure: the setup the ablation is about.
 REFERENCE: str = "dace_cpu_canonicalize"
 
 #: Denominator -> the row label, for the paired figure. Insertion order is the order on the axis.
 COMPARISONS: dict[str, str] = {"dace_cpu": "vs dace main", "cc_llvm_autopar": "vs llvm + polly"}
 
-#: Dead band of the sign test. Below 1% the two arms are the same code and the difference is jitter.
+#: Dead band of the sign test. Below 1% the two setups are the same code and the difference is jitter.
 DEAD_BAND: float = 1.01
 
 
@@ -162,7 +162,7 @@ def shard_paths(root: pathlib.Path, framework: str) -> list[pathlib.Path]:
     return ([single] if single.is_file() else []) + sorted(root.glob(f"{framework}.rank*.csv"))
 
 
-def read_arm(root: pathlib.Path, framework: str) -> Arm:
+def read_setup(root: pathlib.Path, framework: str) -> Arm:
     """Concatenate the framework's shards into ``kernel -> ms``, tallying every rejected TSVC row.
 
     A crashed, unvalidated, or untimed row is not a data point and is counted, never plotted as
@@ -190,12 +190,12 @@ def read_arm(root: pathlib.Path, framework: str) -> Arm:
 
 
 def tally(arm: Arm) -> str:
-    """One phrase naming every row the arm lost and why; empty when it lost none."""
+    """One phrase naming every row the setup lost and why; empty when it lost none."""
     return ", ".join(f"{n} {why}" for why, n in sorted(arm.rejected.items()))
 
 
 def against_baseline(arm: Arm, baseline: Mapping[str, float]) -> dict[str, float]:
-    """``kernel -> baseline_ms / arm_ms`` over the kernels BOTH the arm and the reference timed."""
+    """``kernel -> baseline_ms / setup_ms`` over the kernels BOTH the setup and the reference timed."""
     return {k: baseline[k] / ms for k, ms in sorted(arm.times.items()) if k in baseline}
 
 
@@ -309,7 +309,7 @@ RULE_LINE_WIDTH: float = 1.0
 
 
 def draw_row(ax: Axes, index: int, row: Row, color: str, jitter: random.Random) -> None:
-    """One arm's cloud of kernels, its geomean with interval, and its median tick.
+    """One setup's cloud of kernels, its geomean with interval, and its median tick.
 
     Rule 12: no line joins the kernels, since a kernel axis has no order.
     """
@@ -377,9 +377,9 @@ def draw(rows: Sequence[Row], title: str, xlabel: str, stem: pathlib.Path) -> pa
     return style.save(fig, stem, formats=("pdf", "svg"))
 
 
-def arm_rows(root: pathlib.Path, arms: Mapping[str, str] = ARMS, baseline: str = BASELINE) -> list[Row]:
-    """Every arm's ratios against the common ``baseline``, in ``arms`` order."""
-    reference = read_arm(root, baseline)
+def setup_rows(root: pathlib.Path, arms: Mapping[str, str] = ARMS, baseline: str = BASELINE) -> list[Row]:
+    """Every setup's ratios against the common ``baseline``, in ``setups`` order."""
+    reference = read_setup(root, baseline)
     if not reference.times:
         raise SystemExit(
             f"no {baseline} baseline in {root}: looked for {baseline}.csv and {baseline}.rank*.csv. "
@@ -387,7 +387,7 @@ def arm_rows(root: pathlib.Path, arms: Mapping[str, str] = ARMS, baseline: str =
         )
     rows: list[Row] = []
     for framework, label in arms.items():
-        arm = read_arm(root, framework)
+        arm = read_setup(root, framework)
         ratios = against_baseline(arm, reference.times)
         missing = len(arm.times) - len(ratios)
         excluded = [tally(arm)] if tally(arm) else []
@@ -409,21 +409,21 @@ def arm_rows(root: pathlib.Path, arms: Mapping[str, str] = ARMS, baseline: str =
 def paired_rows(
     root: pathlib.Path, reference: str = REFERENCE, comparisons: Mapping[str, str] = COMPARISONS
 ) -> list[Row]:
-    """Each comparison arm's ratios against ``reference``, restricted to the shared kernels."""
-    numerator = read_arm(root, reference)
+    """Each comparison setup's ratios against ``reference``, restricted to the shared kernels."""
+    numerator = read_setup(root, reference)
     if not numerator.times:
         raise SystemExit(
-            f"no {reference} arm in {root}: looked for {reference}.csv and {reference}.rank*.csv. "
+            f"no {reference} setup in {root}: looked for {reference}.csv and {reference}.rank*.csv. "
             f"It is the numerator of every ratio here, so there is nothing to plot without it."
         )
     rows: list[Row] = []
     for framework, label in comparisons.items():
-        arm = read_arm(root, framework)
+        arm = read_setup(root, framework)
         ratios = paired(numerator.times, arm.times)
         unpaired = len(numerator.times) - len(ratios)
         excluded = [f"{unpaired} {reference} kernels unpaired"] if unpaired else []
         if tally(arm):
-            excluded.append(f"comparison arm lost {tally(arm)}")
+            excluded.append(f"comparison setup lost {tally(arm)}")
         rows.append(
             Row(
                 framework,
@@ -438,7 +438,7 @@ def paired_rows(
 
 
 #: The baseline every llr40 compiler row is measured against.
-LLR40_BASELINE: str = llr40_arms.CANON_BASELINE
+LLR40_BASELINE: str = llr40_setups.CANON_BASELINE
 
 #: The two canon-sweep columns this figure draws as their own rows: DaCe's parallel-CPU backend,
 #: then its canonicalizing pass. A caller wanting the polyhedral baselines too (Pluto, PPCG-on-AMD)
@@ -503,9 +503,9 @@ def unattempted_kernels(
 
 def canon_label(column: str) -> str:
     """A canon column's legend label: its optimizer's standalone name, else its framework name."""
-    optimizer = experiment_tags.canonical("optimizers", column)
-    standalone = experiment_tags.names("optimizers")
-    return standalone[optimizer] if optimizer in standalone else experiment_tags.names("frameworks").get(column, column)
+    optimizer = study_tags.canonical("optimizers", column)
+    standalone = study_tags.names("optimizers")
+    return standalone[optimizer] if optimizer in standalone else study_tags.names("frameworks").get(column, column)
 
 
 def fallback_note(substituted: frozenset[str], fallback: str) -> str:
@@ -530,7 +530,7 @@ def distinct_canon_labels(rows: Sequence[Row]) -> list[Row]:
     for row in rows:
         counts[row.label] = counts.get(row.label, 0) + 1
     return [
-        dataclasses.replace(row, label=experiment_tags.framework_name(row.framework)) if counts[row.label] > 1 else row
+        dataclasses.replace(row, label=study_tags.framework_name(row.framework)) if counts[row.label] > 1 else row
         for row in rows
     ]
 
@@ -544,17 +544,17 @@ def agent_kernel_row(
     repeats: population.RepeatPolicy = population.RepeatPolicy.LATEST,
     pending: frozenset[str] = frozenset(),
 ) -> Row:
-    """One CPF arm's row, restricted to ``roster``: its final answer per kernel, plus each kernel's
+    """One CPF setup's row, restricted to ``roster``: its final answer per kernel, plus each kernel's
     own confidence interval over every graded episode it ran (SC15 rules 5/7)."""
     subset = frame.loc[frame["arm"].astype(str) == arm]
     answers = population.kernel_answers(subset, repeats=repeats, policy=population.KernelPolicy.SOLVED)
     kernels = set(roster)
     ratios, numerator_ms, denominator_ms = answer_ratios(answers, kernels)
     ratios_low, ratios_high = kernel_intervals(subset, ratios.keys(), arm)
-    raw_tokens, tokens_low, tokens_high = llr40_arms.arm_tokens(subset, arm, repeats)
+    raw_tokens, tokens_low, tokens_high = llr40_setups.setup_tokens(subset, arm, repeats)
     del tokens_low, tokens_high  # under "latest" both are empty; a repeat's own range is not this figure's concern
     tokens = {k: v for k, v in raw_tokens.items() if k in kernels}
-    label = f"{experiment_tags.model_name(model)} - {llr40_arms.condition_label(condition)}"
+    label = f"{study_tags.model_name(model)} - {llr40_setups.condition_label(condition)}"
     return Row(
         arm, label, ratios, numerator_ms, denominator_ms, pending_note(pending),
         palette.color(condition), palette.marker(model), ratios_low, ratios_high, tokens, pending=pending,
@@ -584,7 +584,7 @@ def answer_ratios(
 def kernel_intervals(
     subset: pd.DataFrame, kernels: Collection[str], arm: str
 ) -> tuple[dict[str, float], dict[str, float]]:
-    """Each of ``kernels``' geomean-speedup CI over every graded episode of ``arm``, as (low, high)."""
+    """Each of ``kernels``' geomean-speedup CI over every graded episode of ``setup``, as (low, high)."""
     ratios_low: dict[str, float] = {}
     ratios_high: dict[str, float] = {}
     graded = subset.loc[subset["row_kind"] == "submission"] if "row_kind" in subset.columns else subset
@@ -611,18 +611,18 @@ def llr40_rows(
     baseline: str = LLR40_BASELINE,
     canon_columns: Sequence[str] = LLR40_CANON_COLUMNS,
     conditions: Sequence[str] = LLR40_CONDITIONS,
-    pattern: re.Pattern[str] = llr40_arms.ARM_PATTERN,
+    pattern: re.Pattern[str] = llr40_setups.SETUP_PATTERN,
     repeats: population.RepeatPolicy = population.RepeatPolicy.LATEST,
     mark_pending: bool = False,
     baseline_fallback: str = "",
 ) -> list[Row]:
-    """DaCe's own canon-sweep rows, then every model's ROSTER-COMPLETE CPF arm rows
+    """DaCe's own canon-sweep rows, then every model's ROSTER-COMPLETE CPF setup rows
     (:func:`~hpcagent_bench.stats.population.complete_arms`), all against ``baseline`` -- the
     llr40 compiler figure's row source. ``observations=None`` draws the canon rows alone: the
-    campaign DB is not always reachable, and a figure with only the deterministic columns is still
+    experiment DB is not always reachable, and a figure with only the deterministic columns is still
     a real, if partial, answer -- never a raised error.
 
-    ``mark_pending`` also keeps an arm that has not been served every roster kernel yet, its missing
+    ``mark_pending`` also keeps a setup that has not been served every roster kernel yet, its missing
     kernels in ``pending``, where the default drops it."""
     rows = distinct_canon_labels(
         [
@@ -632,9 +632,9 @@ def llr40_rows(
     )
     if observations is None:
         return rows
-    candidates = llr40_arms.candidate_arms(observations, pattern)
+    candidates = llr40_setups.candidate_setups(observations, pattern)
     frame = observations[observations["arm"].astype(str).isin(candidates)]
-    kept, dropped = population.complete_arms(frame, roster)
+    kept, dropped = population.complete_setups(frame, roster)
     if mark_pending:
         kept = [*kept, *dropped]
     by_model: dict[str, list[str]] = {}
@@ -643,7 +643,7 @@ def llr40_rows(
         if condition in conditions:
             by_model.setdefault(model, []).append(arm)
     for model in palette.in_order(by_model.keys(), "models"):
-        for arm in sorted(by_model[model], key=lambda a: llr40_arms.rank_condition(candidates[a][1])):
+        for arm in sorted(by_model[model], key=lambda a: llr40_setups.rank_condition(candidates[a][1])):
             model_tag, condition = candidates[arm]
             served = set(frame.loc[frame["arm"].astype(str) == arm, "benchmark"].astype(str))
             pending = frozenset(k for k in roster if k not in served)
@@ -658,7 +658,7 @@ LLR40_PANEL_HEIGHT_IN: float = 1.5
 
 def llr40_baseline_label(baseline: str) -> str:
     """The speedup axis label, naming the baseline by its registry display name."""
-    return f"Speedup over {experiment_tags.names('frameworks').get(baseline, baseline)}"
+    return f"Speedup over {study_tags.names('frameworks').get(baseline, baseline)}"
 
 
 def row_color(row: Row) -> str:
@@ -728,7 +728,7 @@ def llr40_figure(
     offset: float = 0.0,
     panel_height_in: float = LLR40_PANEL_HEIGHT_IN,
 ) -> matplotlib.figure.Figure:
-    """The llr40 compiler figure: DaCe's own canon-sweep columns and every model's CPF arm on
+    """The llr40 compiler figure: DaCe's own canon-sweep columns and every model's CPF setup on
     ONE kernel axis, a speedup panel (log2, ratio-labelled ticks) over a tokens-spent panel when
     any row spends tokens (:func:`llr40_metrics`), each with per_kernel's summary column past a
     dashed separator -- one slot per row, the geomean with its 95% interval on both panels, over
@@ -791,7 +791,7 @@ def llr40_two_row_figure(
     baseline: str = LLR40_BASELINE,
     canon_columns: Sequence[str] = LLR40_CANON_COLUMNS,
     conditions: Sequence[str] = LLR40_CONDITIONS,
-    pattern: re.Pattern[str] = llr40_arms.ARM_PATTERN,
+    pattern: re.Pattern[str] = llr40_setups.SETUP_PATTERN,
     repeats: population.RepeatPolicy = population.RepeatPolicy.LATEST,
     title: str = "",
     dpi: float = 150.0,
@@ -804,7 +804,7 @@ def llr40_two_row_figure(
     """Build the llr40 compiler rows, write their tables (Rule 4's costs, rules 5/7's
     intervals -- :func:`write_tables`, :func:`token_summary_table`) and render the two-panel
     figure. The ONE function a script calls; ``statistics/plot_llr40_compilers.py`` only parses args.
-    ``labels`` renames a row by its framework or arm key (a paper's own name for a column); the
+    ``labels`` renames a row by its framework or setup key (a paper's own name for a column); the
     tables carry the same names the legend does.
     ``dpi`` defaults to 150 -- this figure's own review/paper convention, not
     :func:`~hpcagent_bench.stats.style.save`'s general-purpose 200.
@@ -830,9 +830,9 @@ def llr40_two_row_figure(
     return style.save(fig, out, formats=("pdf", "png"), fixed=True, dpi=dpi)
 
 
-def arms_figure(root: pathlib.Path, out: pathlib.Path) -> pathlib.Path:
-    """The three arms on a common serial denominator, with their tables beside the figure."""
-    rows = arm_rows(root)
+def setups_figure(root: pathlib.Path, out: pathlib.Path) -> pathlib.Path:
+    """The three setups on a common serial denominator, with their tables beside the figure."""
+    rows = setup_rows(root)
     write_tables(rows, out)
     return draw(
         rows,
@@ -874,11 +874,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("sweep", type=pathlib.Path, help="directory of <framework>[.rank<N>].csv files")
     parser.add_argument("--out", type=pathlib.Path, required=True, help="directory for the figures and tables")
     args = parser.parse_args(argv)
-    # The source directory is in the file name: two sweeps of the same three arms are two
+    # The source directory is in the file name: two sweeps of the same three setups are two
     # measurements, and one silently overwriting the other is how a stale figure reaches a paper.
     name = args.sweep.resolve().name
     out = args.out
-    print(arms_figure(args.sweep, out / f"tsvc_signed_speedup_{name}"))
+    print(setups_figure(args.sweep, out / f"tsvc_signed_speedup_{name}"))
     print(paired_figure(args.sweep, out / f"tsvc_canon_paired_{name}"))
     return 0
 

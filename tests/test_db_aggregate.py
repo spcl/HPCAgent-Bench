@@ -22,14 +22,14 @@ from tests.results_rows import attempts, submissions
 
 
 def _seed(path: str, *, run: str, kernels: list[str], with_results: bool = True, language: str = "c") -> None:
-    """Write one shard: the run's arm and identity, one credited and one failed grade per kernel.
+    """Write one shard: the run's setup and identity, one credited and one failed grade per kernel.
 
-    The grades carry no ``language`` of their own -- the identity a figure groups by is the arm the
+    The grades carry no ``language`` of their own -- the identity a figure groups by is the setup the
     run belongs to -- so the shard has to hold that row or the merged DB describes grades nothing
     can attribute."""
     arm = run.split(".")[0]
     with contextlib.closing(recording.connect(path)) as conn:
-        results_db.ensure_arm(conn, results_db.Arm(arm, language, "cpu", experiment="agg", model="stub-model"))
+        results_db.ensure_setup(conn, results_db.Arm(arm, language, "cpu", experiment="agg", model="stub-model"))
         run_id = results_db.ensure_run(conn, arm, run, None)
         for kernel in kernels:
             stamp = {"preset": "S", "datatype": "float64", "source_mode": "restricted", "baseline": "c"}
@@ -85,7 +85,7 @@ def test_aggregate_merges_every_table_and_reassigns_ids(tmp_path) -> None:
 
     recording.aggregate(base)
 
-    # Every grade is its own natural key; the runs and arms keep one row per key.
+    # Every grade is its own natural key; the runs and setups keep one row per key.
     assert len(submissions(base)) == 4
     assert len(attempts(base)) == 4
     assert _count(base, "results") == 4
@@ -101,7 +101,7 @@ def test_aggregate_merges_every_table_and_reassigns_ids(tmp_path) -> None:
     # Both shards number their own rows from 1; the destination must reassign, not collide.
     assert len(set(ids)) == 4
     assert runs == {"r0", "r1"}
-    # A merged grade must still reach its arm: the identity is on `arms`, so a merge that carried the
+    # A merged grade must still reach its setup: the identity is on `setups`, so a merge that carried the
     # grades and dropped the identity would leave four rows nothing can group.
     assert tagged == [("c", 2), ("fortran", 2)]
 
@@ -109,7 +109,7 @@ def test_aggregate_merges_every_table_and_reassigns_ids(tmp_path) -> None:
 def test_two_ranks_of_one_run_merge_instead_of_colliding(tmp_path: pathlib.Path) -> None:
     """A run is keyed by its job and label, and every rank of a run writes its own shard with that
     same row. Merged with a plain INSERT the second copy raises UNIQUE and takes the WHOLE merge
-    down, so a multi-rank campaign would lose every table, not one row. The same grade seen by two
+    down, so a multi-rank experiment would lose every table, not one row. The same grade seen by two
     ranks is one grade too."""
     base = str(tmp_path / "hpcagent_bench.db")
     for rank in (0, 1):

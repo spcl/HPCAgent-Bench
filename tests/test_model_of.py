@@ -3,7 +3,7 @@
 """``model_of`` is a CONSUMED function, and deleting it breaks two figures at import time.
 
 THE FAILURE THIS PREVENTS. A consolidation commit deleted this function while
-``statistics/plot_tokens.py``, ``plot_score_change.py``, ``plot_arm_summary.py`` and
+``statistics/plot_tokens.py``, ``plot_score_change.py``, ``plot_setup_summary.py`` and
 ``plot_single_shot_score.py`` still called it, so all four died with ``AttributeError`` the next
 time anyone drew a figure -- and nothing in the suite noticed, because no test called it and the
 scripts have no import-time consumer. These are that consumer: the parametrised cases below fail if
@@ -16,9 +16,9 @@ import pathlib
 
 import pytest
 
-from hpcagent_bench import experiment_tags
+from hpcagent_bench import study_tags
 
-#: The scripts that call it. A figure that cannot resolve its model draws every arm as one series.
+#: The scripts that call it. A figure that cannot resolve its model draws every setup as one series.
 CALLERS = (
     "statistics/plot_score_change.py",
     "statistics/plot_arm_summary.py",
@@ -27,7 +27,7 @@ CALLERS = (
 
 def test_model_of_exists_and_is_importable() -> None:
     """The bare existence check, because the regression was an AttributeError and nothing else."""
-    module = importlib.import_module("hpcagent_bench.experiment_tags")
+    module = importlib.import_module("hpcagent_bench.study_tags")
     assert callable(module.model_of)
 
 
@@ -37,7 +37,7 @@ def test_every_caller_still_reaches_it(script: str) -> None:
     source = (pathlib.Path(__file__).resolve().parents[1] / script).read_text(encoding="utf-8")
     assert "model_of" in source, f"{script} no longer calls model_of; drop it from CALLERS"
     assert "experiment_tags.model_of" in source, (
-        f"{script} calls model_of through something other than experiment_tags, which is how the "
+        f"{script} calls model_of through something other than study_tags, which is how the "
         "last copy drifted out of the registry"
     )
 
@@ -53,18 +53,18 @@ def test_every_caller_still_reaches_it(script: str) -> None:
         ("", "other"),
     ],
 )
-def test_an_arm_resolves_to_the_model_that_ran_it(arm: str, expected: str) -> None:
-    assert experiment_tags.model_of(arm) == expected
+def test_an_setup_resolves_to_the_model_that_ran_it(arm: str, expected: str) -> None:
+    assert study_tags.model_of(arm) == expected
 
 
 def test_a_language_token_cannot_match_inside_a_model_name() -> None:
     """THE dash-bounded case. A substring search for the language ``c`` finds one inside
     ``kimi27sglang``, and the same search for a MODEL finds ``glm53`` inside a longer word. The
     match is on whole dash-delimited tokens, so neither can happen."""
-    assert experiment_tags.model_of("llr40-kimi27sglang-c") == "kimi27sglang"
-    assert experiment_tags.model_of("prefix-notglm53here-c") == "other"
-    assert experiment_tags.model_of("llr40-oss120bx-c") == "other"
-    assert experiment_tags.model_of("xoss120b-c") == "other"
+    assert study_tags.model_of("llr40-kimi27sglang-c") == "kimi27sglang"
+    assert study_tags.model_of("prefix-notglm53here-c") == "other"
+    assert study_tags.model_of("llr40-oss120bx-c") == "other"
+    assert study_tags.model_of("xoss120b-c") == "other"
 
 
 @pytest.mark.parametrize(
@@ -73,20 +73,20 @@ def test_a_language_token_cannot_match_inside_a_model_name() -> None:
 )
 def test_a_registered_alias_resolves_to_the_entity_it_names(spelling: str, canonical: str) -> None:
     """Two spellings of one model must not split a figure into two series with two colours."""
-    assert experiment_tags.model_of(spelling) == canonical
+    assert study_tags.model_of(spelling) == canonical
 
 
 def test_the_fallback_is_a_registered_word_and_not_a_fragment() -> None:
-    """An unrecognised arm gets the explicit ``other``, never a half-parsed token that the palette
+    """An unrecognised setup gets the explicit ``other``, never a half-parsed token that the palette
     would then colour and label as though it were a model."""
-    assert experiment_tags.model_of("something-entirely-new") == "other"
-    assert experiment_tags.model_of("something-entirely-new", unknown="") == ""
+    assert study_tags.model_of("something-entirely-new") == "other"
+    assert study_tags.model_of("something-entirely-new", unknown="") == ""
 
 
-def test_registry_order_decides_when_an_arm_names_two_models() -> None:
-    """A malformed arm carrying two model tokens must resolve the same way in every process, so the
+def test_registry_order_decides_when_an_setup_names_two_models() -> None:
+    """A malformed setup carrying two model tokens must resolve the same way in every process, so the
     winner is registry order rather than whichever token came first in the string."""
-    order = experiment_tags.order("models")
+    order = study_tags.order("models")
     first, second = order[0], order[1]
-    assert experiment_tags.model_of(f"x-{second}-{first}-c") == first
-    assert experiment_tags.model_of(f"x-{first}-{second}-c") == first
+    assert study_tags.model_of(f"x-{second}-{first}-c") == first
+    assert study_tags.model_of(f"x-{first}-{second}-c") == first

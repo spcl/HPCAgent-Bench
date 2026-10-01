@@ -5,8 +5,8 @@ appends alongside record_identity's own columns, so two runs of "the same tag na
 apart once the tag's file (hpcagent_bench/tags/<tag>.txt) moves between them.
 
 The run itself is already frozen the moment PROBLEMS_FILE is written (every submit-*.sh test in
-this suite proves that separately); this is the OTHER half -- pooling two runs by (experiment,
-tag_version) instead of (experiment) alone must not silently merge two different kernel sets.
+this suite proves that separately); this is the OTHER half -- pooling two runs by (study,
+tag_version) instead of (study) alone must not silently merge two different kernel sets.
 """
 
 import os

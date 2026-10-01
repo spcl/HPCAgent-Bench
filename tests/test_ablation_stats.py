@@ -1,6 +1,6 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""ablation_stats.py and iteration_counts.py: the campaign's paired-arm analysis.
+"""ablation_stats.py and iteration_counts.py: the experiment's paired-setup analysis.
 
 The DBs here are built through ``recording.connect``, i.e. the SAME schema path the judge writes
 through, so a schema change breaks these tests instead of silently changing what the paper reports.
@@ -8,7 +8,7 @@ through, so a schema change breaks these tests instead of silently changing what
 The statistics are checked against hand-computable cases rather than a reference implementation:
 McNemar with 3-vs-0 discordant pairs is ``2 * C(3,0) / 2**3 = 0.25``, and a signed-rank vector with
 ranks 1,2,3 positive and rank 4 negative has 7 of the 16 sign assignments at or below W = 4, so
-``p = 2 * 7/16 = 0.875``. Censoring is checked directly: a kernel an arm never solved must come out
+``p = 2 * 7/16 = 0.875``. Censoring is checked directly: a kernel a setup never solved must come out
 as success 0 with a BLANK speedup, never as a zero.
 """
 
@@ -121,8 +121,8 @@ def seed_db(path: pathlib.Path, submissions: list[tuple], attempts: tuple[str, .
     kernel names. ``suspect`` defaults to 0, the judge's value for a plausible speedup.
     """
     with contextlib.closing(recording.connect(str(path))) as conn:
-        # the identity is one arm row, not a column on every grade
-        results_db.ensure_arm(
+        # the identity is one setup row, not a column on every grade
+        results_db.ensure_setup(
             conn, results_db.Arm("ablation-qwen38-c", "c", "cpu", experiment="ablation", model="qwen38")
         )
         run = results_db.ensure_run(conn, "ablation-qwen38-c", "run", None)
@@ -184,8 +184,8 @@ def test_dedup_last_takes_the_final_submission_in_time(ablation_stats, tmp_path)
 def test_dedup_defaults_to_last(ablation_stats, tmp_path) -> None:
     """The DEFAULT, not just the modes: every other test passes --dedup explicitly, so a flipped
     default would move every reported number without failing anything. `last` is the agent's own
-    final answer; `best` takes the MAX over resubmissions, which scores an arm by its luckiest
-    attempt and flatters whichever arm submitted most often (llr4 reached 6 rows for one kernel)."""
+    final answer; `best` takes the MAX over resubmissions, which scores a setup by its luckiest
+    attempt and flatters whichever setup submitted most often (llr4 reached 6 rows for one kernel)."""
     db = tmp_path / "a.db"
     seed_db(db, [("gemm", 1, 3.0), ("gemm", 2, 2.0)])
     prefix = tmp_path / "abl"
@@ -195,7 +195,7 @@ def test_dedup_defaults_to_last(ablation_stats, tmp_path) -> None:
 
 
 def test_suspect_rows_are_excluded_from_dedup_best(ablation_stats, tmp_path, capsys) -> None:
-    """A suspect row is a broken measurement, not a result: left in, its 1e6 would BE the arm's
+    """A suspect row is a broken measurement, not a result: left in, its 1e6 would BE the setup's
     best for that kernel and would move the median of every comparison it entered."""
     db = tmp_path / "a.db"
     seed_db(db, [("gemm", 1, 2.0), ("gemm", 2, 1.0e6, 1)])
@@ -237,7 +237,7 @@ def test_a_legacy_db_is_refused(ablation_stats, tmp_path) -> None:
     finally:
         conn.close()
     with pytest.raises(SystemExit, match="legacy layout"):
-        ablation_stats.load_arm("a", str(db), "best")
+        ablation_stats.load_setup("a", str(db), "best")
 
 
 def test_problems_below_the_observed_universe_is_rejected(ablation_stats, tmp_path) -> None:
@@ -249,7 +249,7 @@ def test_problems_below_the_observed_universe_is_rejected(ablation_stats, tmp_pa
         ablation_stats.main([f"--arm=a={db}", "--problems=2", f"--out={tmp_path / 'x'}"])
 
 
-def test_single_arm_writes_per_problem_and_an_empty_pairs_file(ablation_stats, tmp_path) -> None:
+def test_single_setup_writes_per_problem_and_an_empty_pairs_file(ablation_stats, tmp_path) -> None:
     db = tmp_path / "a.db"
     seed_db(db, [("gemm", 1, 2.0)])
     rows, pairs = run_stats(ablation_stats, tmp_path, [f"a={db}"], problems=10)
@@ -259,7 +259,7 @@ def test_single_arm_writes_per_problem_and_an_empty_pairs_file(ablation_stats, t
 
 
 def test_missing_benchmark_is_censored_not_zero(ablation_stats, tmp_path) -> None:
-    """A kernel an arm never verified must read as success 0 with a BLANK speedup: a zero there
+    """A kernel a setup never verified must read as success 0 with a BLANK speedup: a zero there
     would be averaged in as "solved it, gained nothing" and bias every effect size downwards."""
     db_a, db_b = tmp_path / "a.db", tmp_path / "b.db"
     seed_db(db_a, [("gemm", 1, 2.0), ("stencil", 1, 1.5)])
@@ -273,11 +273,11 @@ def test_missing_benchmark_is_censored_not_zero(ablation_stats, tmp_path) -> Non
 
     mcnemar = next(r for r in pairs if r["test"] == "mcnemar_success")
     assert (mcnemar["n_both"], mcnemar["n_only_a"], mcnemar["n_only_b"]) == ("1", "1", "0")
-    # 5 problems, 2 with any evidence: the 3 neither arm solved must still count in the denominator.
+    # 5 problems, 2 with any evidence: the 3 neither setup solved must still count in the denominator.
     assert mcnemar["n_neither"] == "3"
 
 
-def test_kernel_no_arm_solved_still_appears_via_attempts(ablation_stats, tmp_path) -> None:
+def test_kernel_no_setup_solved_still_appears_via_attempts(ablation_stats, tmp_path) -> None:
     db = tmp_path / "a.db"
     seed_db(db, [("gemm", 1, 2.0)], attempts=("fdtd",))
     rows, _ = run_stats(ablation_stats, tmp_path, [f"a={db}"], problems=2)
@@ -320,8 +320,8 @@ def test_wilcoxon_drops_zero_differences(ablation_stats) -> None:
     assert ablation_stats.wilcoxon_signed_rank([0.0, 0.0]) == (0, 1.0, "degenerate")
 
 
-def test_wilcoxon_over_arms_uses_log_speedup(ablation_stats, tmp_path) -> None:
-    """The same 1, 2, 3, -4 vector, delivered as speedups: arm b is 1.0 everywhere, so the paired
+def test_wilcoxon_over_setups_uses_log_speedup(ablation_stats, tmp_path) -> None:
+    """The same 1, 2, 3, -4 vector, delivered as speedups: setup b is 1.0 everywhere, so the paired
     log-ratio IS the exponent, and the reported HL estimate is the median Walsh average of it."""
     diffs = [1.0, 2.0, 3.0, -4.0]
     names = [f"k{i}" for i in range(len(diffs))]
@@ -363,7 +363,7 @@ def test_benjamini_hochberg_is_monotone_in_p(ablation_stats) -> None:
 
 
 def test_q_values_are_per_family_and_monotone(ablation_stats, tmp_path) -> None:
-    """Three arms -> three pairs -> a real multiple-comparison correction in each family."""
+    """Three setups -> three pairs -> a real multiple-comparison correction in each family."""
     dbs = []
     for index, factor in enumerate((1.0, 2.0, 4.0)):
         db = tmp_path / f"arm{index}.db"
@@ -380,7 +380,7 @@ def test_q_values_are_per_family_and_monotone(ablation_stats, tmp_path) -> None:
         assert all(q >= p for p, q in ordered)
 
 
-def test_duplicate_arm_names_are_rejected(ablation_stats, tmp_path) -> None:
+def test_duplicate_setup_names_are_rejected(ablation_stats, tmp_path) -> None:
     db = tmp_path / "a.db"
     seed_db(db, [("gemm", 1, 2.0)])
     with pytest.raises(SystemExit):
@@ -436,7 +436,7 @@ def test_iteration_counts_counts_turns_and_tool_calls(iteration_counts, tmp_path
 
 def test_iteration_counts_counts_an_absent_tool_as_zero(iteration_counts, tmp_path) -> None:
     """A tracked tool the agent never called must read 0, not blank -- the ablation subtracts these
-    columns across arms."""
+    columns across setups."""
     run_dir = tmp_path / "run"
     worker = run_dir / "agents" / "node-0" / "problem-0-worker-0"
     worker.mkdir(parents=True)
@@ -580,7 +580,7 @@ def test_iteration_counts_without_agents_dir_names_the_path(iteration_counts, tm
 def seed_calls(path: pathlib.Path, rows: tuple[tuple[str, str, int, int], ...]) -> None:
     """``(benchmark, run_id, call index, cumulative_tokens)`` /score grades."""
     with contextlib.closing(recording.connect(str(path))) as conn:
-        results_db.ensure_arm(
+        results_db.ensure_setup(
             conn, results_db.Arm("ablation-qwen38-c", "c", "cpu", experiment="ablation", model="qwen38")
         )
         stamp = {"preset": "S", "datatype": "float64", "source_mode": "restricted", "speedup": 1.0, "correct": 1}
@@ -597,7 +597,7 @@ def test_a_kernels_cost_is_its_episode_peaks_summed_not_its_rows(ablation_stats,
     for one episode is the whole point."""
     db = tmp_path / "a.db"
     seed_calls(db, (("k1", "r1", 1, 100), ("k1", "r1", 2, 250), ("k1", "r2", 1, 40), ("k2", "r1", 1, 7)))
-    costs = ablation_stats.load_arm_costs("a", str(db))
+    costs = ablation_stats.load_setup_costs("a", str(db))
     assert costs["k1"] == pytest.approx(290.0), "one episode's spend is its MAX, and episodes add"
     assert costs["k2"] == pytest.approx(7.0)
 
@@ -607,7 +607,7 @@ def test_a_db_with_no_reported_tokens_reports_no_cost_rather_than_zero(ablation_
     intervention."""
     db = tmp_path / "b.db"
     seed_db(db, [("k1", 1, 2.0)])
-    assert ablation_stats.load_arm_costs("b", str(db)) == {}
+    assert ablation_stats.load_setup_costs("b", str(db)) == {}
 
 
 def test_the_efficacy_matches_the_library_definition(ablation_stats) -> None:
@@ -753,7 +753,7 @@ def test_the_rank_interval_matches_the_library_definition(ablation_stats) -> Non
 
 
 def seed_observations(path: pathlib.Path, rows: list[tuple[str, str, str, int, int]]) -> None:
-    """An extracted observations DB of task rows only: (arm, benchmark, run_id, tokens, ts_ms), each
+    """An extracted observations DB of task rows only: (setup, benchmark, run_id, tokens, ts_ms), each
     total stated as fresh input alone so every cost card prices it at ``tokens``.
 
     Written by the one extractor, :mod:`hpcagent_bench.observations_extract`."""
@@ -773,7 +773,7 @@ def test_with_observations_the_cost_half_is_the_task_rows_effective_total(
 ) -> None:
     """Every published token number comes off the task row (final attempt, priced by the cost card),
     so the cost ratio here must too, and it must come from the one shared reduction rather than from the
-    results DB's cumulative billed calls.tokens. Arm ``b`` spent 3x arm ``a`` on the one kernel both
+    results DB's cumulative billed calls.tokens. Setup ``b`` spent 3x setup ``a`` on the one kernel both
     solved, and its rerun of that kernel is reduced to the LATEST run, not summed."""
     db_a, db_b = tmp_path / "a.db", tmp_path / "b.db"
     seed_db(db_a, [("k1", 1, 2.0)])
@@ -802,7 +802,7 @@ def test_with_observations_the_cost_half_is_the_task_rows_effective_total(
 def test_the_cost_half_prices_the_task_rows_with_the_billed_card_by_default(
     ablation_stats: ModuleType, tmp_path: pathlib.Path, card: str | None, expected: float
 ) -> None:
-    """Both arms read 100 fresh tokens; ``b`` also re-read 1000 cached. Billed (1, 0.1, 1): 100 vs
+    """Both setups read 100 fresh tokens; ``b`` also re-read 1000 cached. Billed (1, 0.1, 1): 100 vs
     200, rho_cost 2.0; effective (1, 0, 1): 100 vs 100, rho_cost 1.0."""
     db_a, db_b = tmp_path / "a.db", tmp_path / "b.db"
     seed_db(db_a, [("k1", 1, 2.0)])

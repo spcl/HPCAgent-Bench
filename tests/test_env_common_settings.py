@@ -25,7 +25,7 @@ EXPERIMENTS = REPO / "hpcagent_bench" / "cluster"
 LAUNCHER = EXPERIMENTS / "run_cluster.sh"
 
 #: Settings that are the same for every model and every harness: the launcher owns them, and a .env
-#: that repeats one is how two arms end up on different values.
+#: that repeats one is how two setups end up on different values.
 COMMON_VARS = (
     "API_TIMEOUT_MS",
     "CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS",
@@ -35,8 +35,8 @@ COMMON_VARS = (
 )
 
 #: The launcher's default for each of them. The idle watchdog is the wall that fires first in Claude
-#: Code 2.1.197; its default is DERIVED (stream_idle_timeout.py) from the arm's own
-#: CONTEXT_LENGTH and AGENTS_PER_NODE rather than copied, but every arm that named neither still
+#: Code 2.1.197; its default is DERIVED (stream_idle_timeout.py) from the setup's own
+#: CONTEXT_LENGTH and AGENTS_PER_NODE rather than copied, but every setup that named neither still
 #: lands on 1800000 ms, the CLI's ceiling for it -- see test_stream_idle_timeout.py.
 LAUNCHER_DEFAULTS = {
     "API_TIMEOUT_MS": "3600000",
@@ -74,7 +74,7 @@ RESOLVED = {
     "musespark": "xhigh",
 }
 
-#: The campaign base of every model (arms.yaml ``campaign:<model>``).
+#: The experiment base of every model (arms.yaml ``experiment:<model>``).
 BASE_ENVS = [name for name in BASES if name.startswith("campaign:")]
 
 
@@ -127,7 +127,7 @@ def test_a_base_env_sets_none_of_the_common_client_settings(path: str, name: str
 
 @pytest.mark.parametrize("name", COMMON_VARS)
 def test_the_launcher_exports_each_common_setting_with_its_default(name: str) -> None:
-    """The .env files no longer carry these, so the launcher's default IS what every arm runs at."""
+    """The .env files no longer carry these, so the launcher's default IS what every setup runs at."""
     default = LAUNCHER_DEFAULTS[name]
     assert f'export {name}="${{{name}:-{default}}}"' in LAUNCHER.read_text(encoding="utf-8")
 
@@ -158,7 +158,7 @@ def test_a_base_env_declares_the_ladder_its_server_accepts_and_no_rung(path: str
 
 @pytest.mark.parametrize("path", BASE_ENVS)
 def test_the_policy_resolves_each_declared_ladder_to_the_rung_that_model_runs_at(path: str) -> None:
-    """The ladders are only right if the rung they resolve to is the one the campaign meant to run."""
+    """The ladders are only right if the rung they resolve to is the one the experiment meant to run."""
     model = path.removeprefix("campaign:")
     assert effort.resolve(env_values(path)["EFFORT_LADDER"]) == RESOLVED[model]
 
@@ -166,7 +166,7 @@ def test_the_policy_resolves_each_declared_ladder_to_the_rung_that_model_runs_at
 def test_every_cli_idle_wall_resolves_to_the_one_derived_value() -> None:
     """Run the launcher's own idle-timeout export lines: the SSE-event watchdog must land on the
     same number as the byte watchdog, and Bun's fetch socket timeout must be switched off (the CLI
-    reads "0" as falsy and then passes ``timeout: false`` to fetch). A 262144-token qwen38 arm at 40
+    reads "0" as falsy and then passes ``timeout: false`` to fetch). A 262144-token qwen38 setup at 40
     agents per node derives the CLI's 30-minute ceiling."""
     names = ("CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS", "CLAUDE_STREAM_IDLE_TIMEOUT_MS", "API_FORCE_IDLE_TIMEOUT")
     lines = [

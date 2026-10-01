@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The GH200 (Daint) and CPU-only images are reached, promoted, verified and served by contract.
 
-Nothing here builds an image. The properties are the ones that fail a campaign silently when they
+Nothing here builds an image. The properties are the ones that fail an experiment silently when they
 drift: which EDFs a platform renders and onto which image, which toolchain the EDF PATH resolves to,
 which candidate a promotion moves, what the verifier asks of each profile, and whether the Daint
 serve command keeps the served model name, window and parsers the agent side keys on.

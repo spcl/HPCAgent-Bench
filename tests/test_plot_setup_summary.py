@@ -1,6 +1,6 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""``statistics/plot_arm_summary.py`` -- where an arm's point lands on the speedup axis.
+"""``statistics/plot_setup_summary.py`` -- where a setup's point lands on the speedup axis.
 
 Speedup is a ratio, so its "overall" value is the GEOMETRIC MEAN over kernels
 (:func:`hpcagent_bench.stats.population.kernel_medians`), the same rule every other "overall
@@ -19,7 +19,7 @@ import types
 import pandas as pd
 import pytest
 
-from hpcagent_bench import experiment_tags
+from hpcagent_bench import study_tags
 from hpcagent_bench.stats import palette
 from hpcagent_bench.stats import style as plotstyle
 
@@ -27,7 +27,7 @@ REPO = pathlib.Path(__file__).resolve().parents[1]
 
 
 def load_script() -> types.ModuleType:
-    """Import ``statistics/plot_arm_summary.py`` as a module (scripts/ is not a package)."""
+    """Import ``statistics/plot_setup_summary.py`` as a module (scripts/ is not a package)."""
     spec = importlib.util.spec_from_file_location("plot_arm_summary", REPO / "statistics" / "plot_arm_summary.py")
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -45,8 +45,8 @@ plot = load_script()
 ASYMMETRIC_SPEEDUPS: tuple[float, ...] = (1.0, 1.0, 1.0, 1.0, 1.0, 1000.0)
 
 
-def arm_frame(speedups: tuple[float, ...]) -> pd.DataFrame:
-    """One arm, one kernel per speedup, one episode each -- the shape ``arm_points`` groups over."""
+def setup_frame(speedups: tuple[float, ...]) -> pd.DataFrame:
+    """One setup, one kernel per speedup, one episode each -- the shape ``setup_points`` groups over."""
     rows = []
     for index, value in enumerate(speedups):
         kernel = f"k{index}"
@@ -94,9 +94,9 @@ def arm_frame(speedups: tuple[float, ...]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def test_an_arm_points_speed_up_is_the_geomean_over_kernels_not_the_median() -> None:
-    frame = arm_frame(ASYMMETRIC_SPEEDUPS)
-    table = plot.arm_points(frame)
+def test_an_setup_points_speed_up_is_the_geomean_over_kernels_not_the_median() -> None:
+    frame = setup_frame(ASYMMETRIC_SPEEDUPS)
+    table = plot.setup_points(frame)
     assert len(table) == 1
     row = table.iloc[0]
     expected_geomean = math.prod(ASYMMETRIC_SPEEDUPS) ** (1.0 / len(ASYMMETRIC_SPEEDUPS))
@@ -105,19 +105,19 @@ def test_an_arm_points_speed_up_is_the_geomean_over_kernels_not_the_median() -> 
     assert row.log2_speedup != pytest.approx(median_log2)
 
 
-def test_an_arm_points_tokens_are_the_geomean_over_kernels() -> None:
+def test_an_setup_points_tokens_are_the_geomean_over_kernels() -> None:
     """Paper rule: the spend axis is the geomean of billed tokens over kernels, 100 on every kernel here."""
-    frame = arm_frame(ASYMMETRIC_SPEEDUPS)
-    table = plot.arm_points(frame)
+    frame = setup_frame(ASYMMETRIC_SPEEDUPS)
+    table = plot.setup_points(frame)
     row = table.iloc[0]
     assert row.tokens == pytest.approx(100.0)
 
 
-def test_an_arm_short_of_the_roster_is_not_drawn() -> None:
-    """An arm missing a roster kernel would be scored over a smaller kernel set than its neighbours on
-    the same axes, so it is dropped unless the caller explicitly includes incomplete arms."""
-    complete = arm_frame(ASYMMETRIC_SPEEDUPS)
-    short = arm_frame(ASYMMETRIC_SPEEDUPS[:-1]).assign(arm="short-arm")
+def test_an_setup_short_of_the_roster_is_not_drawn() -> None:
+    """A setup missing a roster kernel would be scored over a smaller kernel set than its neighbours on
+    the same axes, so it is dropped unless the caller explicitly includes incomplete setups."""
+    complete = setup_frame(ASYMMETRIC_SPEEDUPS)
+    short = setup_frame(ASYMMETRIC_SPEEDUPS[:-1]).assign(arm="short-arm")
     rows = pd.concat([complete, short], ignore_index=True)
     assert set(plot.eligible_rows(rows).arm) == {"demo-arm"}
     assert set(plot.eligible_rows(rows, include_incomplete=True).arm) == {"demo-arm", "short-arm"}
@@ -150,7 +150,7 @@ def test_the_measured_value_is_on_the_y_axis_and_the_language_is_the_x_category(
     try:
         plot.draw_metric(ax, two_condition_points(), "log2_speedup", "Speedup", log=False)
         assert ax.get_ylabel() == "Speedup"
-        assert [tick.get_text() for tick in ax.get_xticklabels()] == [experiment_tags.language_name("c")]
+        assert [tick.get_text() for tick in ax.get_xticklabels()] == [study_tags.language_name("c")]
         assert not [tick for tick in ax.xaxis.get_major_ticks() if tick.gridline.get_visible()]
     finally:
         plt.close(fig)

@@ -40,8 +40,8 @@ __all__ = [
     "add_scaling",
     "call_index",
     "copy_grade",
-    "delete_arms",
-    "ensure_arm",
+    "delete_setups",
+    "ensure_setup",
     "ensure_run",
     "grade_sources",
     "insert",
@@ -59,7 +59,7 @@ SCHEMA_PATH = paths.ROOT / "hpcagent_bench" / "harness" / "schema.sql"
 SCHEMA_VERSION = 1
 #: A judge is threaded and a job's final-grade children write beside it: wait, never fail, on a lock.
 BUSY_TIMEOUT_S = 30.0
-#: The harness an arm that named none ran under: Claude Code, the only harness before the column.
+#: The harness a setup that named none ran under: Claude Code, the only harness before the column.
 DEFAULT_HARNESS = "claude"
 #: The v1 tables, parents before children (the order :func:`merge` copies them in).
 TABLES = (
@@ -184,7 +184,7 @@ def upsert(conn: sqlite3.Connection, table: str, target: str, key: Sequence[str]
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class Arm:
-    """One experimental condition (an ``arms`` row)."""
+    """One experimental condition (an ``setups`` row)."""
 
     arm: str
     language: str
@@ -195,13 +195,13 @@ class Arm:
     packet: str = ""
 
 
-def ensure_arm(conn: sqlite3.Connection, arm: Arm) -> None:
-    """Record ``arm``; the first writer fixes its identity, a later one only fills what it left NULL."""
+def ensure_setup(conn: sqlite3.Connection, arm: Arm) -> None:
+    """Record ``setup``; the first writer fixes its identity, a later one only fills what it left NULL."""
     upsert(conn, "arms", "arm", ("arm",), dataclasses.asdict(arm))
 
 
 def ensure_run(conn: sqlite3.Connection, arm: str, label: str, job: int | None, rep: int = 1) -> int:
-    """The id of the episode ``(job, label, rep)`` of ``arm``, created on first sight."""
+    """The id of the episode ``(job, label, rep)`` of ``setup``, created on first sight."""
     values: dict[str, Value] = {"arm": arm, "job": job, "label": label, "rep": rep}
     return upsert(conn, "runs", "coalesce(job, -1), label, rep", ("job", "label", "rep"), values)
 
@@ -391,7 +391,7 @@ def merge(dest: str | pathlib.Path, sources: Sequence[str | pathlib.Path]) -> di
 
 
 def copy_grade(src: pathlib.Path, grade_id: int, dest: sqlite3.Connection) -> int:
-    """Copy grade ``grade_id`` of the v1 file ``src`` into ``dest`` with its arm, run and sources
+    """Copy grade ``grade_id`` of the v1 file ``src`` into ``dest`` with its setup, run and sources
     (and, for a final grade or regrade, the grade it re-timed); return its id in ``dest``. How a
     regrade's own file names the grade it re-times, so the file merges on its own."""
     with reading(src) as conn:
@@ -434,9 +434,9 @@ GRADE_CHILDREN: tuple[str, ...] = (
 )
 
 
-def delete_arms(conn: sqlite3.Connection, arms: Sequence[str]) -> dict[str, int]:
-    """Remove every row of the arms ``arms`` -- their runs, grades and everything keyed by those, and
-    the source texts no other grade names -- and return the rows removed per table. For an arm
+def delete_setups(conn: sqlite3.Connection, arms: Sequence[str]) -> dict[str, int]:
+    """Remove every row of the setups ``setups`` -- their runs, grades and everything keyed by those, and
+    the source texts no other grade names -- and return the rows removed per table. For a setup
     declared void; the caller commits."""
     marks = ", ".join("?" * len(arms))
     conn.execute("CREATE TEMP TABLE IF NOT EXISTS doomed (id INTEGER PRIMARY KEY)")

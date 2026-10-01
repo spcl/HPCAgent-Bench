@@ -3,7 +3,7 @@
 """Consumers of the signed-change figures: the exclusion rules, the pairing rule, and the tables.
 
 The sweep these figures read takes eight hours, so the shapes that break a plotting script -- an
-arm whose CSV never appeared, an arm with one usable kernel and therefore no interval, a miscompile
+setup whose CSV never appeared, a setup with one usable kernel and therefore no interval, a miscompile
 that must not be drawn as "no change" -- are exercised against a synthetic sweep directory instead
 of against whichever of them the next real run happens to contain.
 
@@ -55,7 +55,7 @@ def sweep_fixture(tmp_path: pathlib.Path) -> pathlib.Path:
     """A sweep directory covering every case the real run can produce.
 
     Both file shapes appear on purpose: the baseline is sharded the way a four-rank job writes it
-    and the arms are unsharded, so a reader of this fixture can see that the two are read the same
+    and the setups are unsharded, so a reader of this fixture can see that the two are read the same
     way.
     """
     baseline = [row(signed.BASELINE, f"tsvc_2_s{i}", "100.0") for i in range(1, 7)]
@@ -81,13 +81,13 @@ def sweep_fixture(tmp_path: pathlib.Path) -> pathlib.Path:
     )
     # One usable kernel: the t-interval is undefined at n=1 and must not raise.
     write(tmp_path / "dace_cpu.csv", [row("dace_cpu", "tsvc_2_s1", "20.0")])
-    # cc_llvm_autopar gets NO file at all -- the arm that never ran.
+    # cc_llvm_autopar gets NO file at all -- the setup that never ran.
     return tmp_path
 
 
 @pytest.fixture(name="paired_sweep")
 def paired_sweep_fixture(tmp_path: pathlib.Path) -> pathlib.Path:
-    """Canon against two comparison arms, carrying every shape the real sweep can produce.
+    """Canon against two comparison setups, carrying every shape the real sweep can produce.
 
     Canon times s1..s4 plus s_only. dace main times s1..s4 (s3 CRASHED, so it drops out of the
     pair) and s_main_only, which canon never timed. llvm+polly times s1 and s2 only.
@@ -119,7 +119,7 @@ def paired_sweep_fixture(tmp_path: pathlib.Path) -> pathlib.Path:
 
 
 def test_rejects_are_counted_not_plotted(sweep: pathlib.Path) -> None:
-    arm = signed.read_arm(sweep, "dace_cpu_canonicalize")
+    arm = signed.read_setup(sweep, "dace_cpu_canonicalize")
     assert set(arm.times) == {"tsvc_2_s1", "tsvc_2_s2", "tsvc_2_s3", "tsvc_2_s4", "tsvc_2_slow"}
     assert arm.rejected["status=crash"] == 1
     assert arm.rejected["not validated"] == 1
@@ -129,60 +129,60 @@ def test_rejects_are_counted_not_plotted(sweep: pathlib.Path) -> None:
 
 
 def test_slower_than_baseline_lands_below_zero(sweep: pathlib.Path) -> None:
-    arm = signed.read_arm(sweep, "dace_cpu_canonicalize")
-    reference = signed.read_arm(sweep, signed.BASELINE)
+    arm = signed.read_setup(sweep, "dace_cpu_canonicalize")
+    reference = signed.read_setup(sweep, signed.BASELINE)
     values = signed.against_baseline(arm, reference.times)
     assert signed.signed_change(values["tsvc_2_slow"]) == pytest.approx(-3.0)
     assert signed.signed_change(values["tsvc_2_s1"]) == pytest.approx(1.0)
 
 
-def test_missing_arm_reads_as_empty(sweep: pathlib.Path) -> None:
-    arm = signed.read_arm(sweep, "cc_llvm_autopar")
+def test_missing_setup_reads_as_empty(sweep: pathlib.Path) -> None:
+    arm = signed.read_setup(sweep, "cc_llvm_autopar")
     assert not arm.times and not arm.rejected
 
 
-def test_render_survives_every_degenerate_arm(sweep: pathlib.Path, tmp_path: pathlib.Path) -> None:
-    out = signed.arms_figure(sweep, tmp_path / "figure")
+def test_render_survives_every_degenerate_setup(sweep: pathlib.Path, tmp_path: pathlib.Path) -> None:
+    out = signed.setups_figure(sweep, tmp_path / "figure")
     assert out.with_suffix(".pdf").is_file() and out.with_suffix(".svg").is_file()
 
 
 def test_missing_baseline_is_fatal(tmp_path: pathlib.Path) -> None:
     write(tmp_path / "dace_cpu.csv", [row("dace_cpu", "tsvc_2_s1", "20.0")])
     with pytest.raises(SystemExit, match=signed.BASELINE):
-        signed.arms_figure(tmp_path, tmp_path / "figure")
+        signed.setups_figure(tmp_path, tmp_path / "figure")
 
 
 def test_pairs_only_kernels_both_tools_timed(paired_sweep: pathlib.Path) -> None:
-    canon = signed.read_arm(paired_sweep, signed.REFERENCE)
-    other = signed.read_arm(paired_sweep, "dace_cpu")
+    canon = signed.read_setup(paired_sweep, signed.REFERENCE)
+    other = signed.read_setup(paired_sweep, "dace_cpu")
     ratios = signed.paired(canon.times, other.times)
-    # s3 crashed in the comparison arm and s_only/s_main_only are one-sided: all three drop out.
+    # s3 crashed in the comparison setup and s_only/s_main_only are one-sided: all three drop out.
     assert sorted(ratios) == ["tsvc_2_s1", "tsvc_2_s2", "tsvc_2_s4"]
 
 
 def test_ratio_is_other_over_canon(paired_sweep: pathlib.Path) -> None:
-    canon = signed.read_arm(paired_sweep, signed.REFERENCE)
-    other = signed.read_arm(paired_sweep, "dace_cpu")
+    canon = signed.read_setup(paired_sweep, signed.REFERENCE)
+    other = signed.read_setup(paired_sweep, "dace_cpu")
     ratios = signed.paired(canon.times, other.times)
     assert ratios["tsvc_2_s1"] == pytest.approx(2.0)  # canon 50ms vs main 100ms -- canon wins
     assert ratios["tsvc_2_s4"] == pytest.approx(0.5)  # canon 200ms vs main 100ms -- canon loses
 
 
 def test_sign_test_counts_both_directions_and_ignores_ties(paired_sweep: pathlib.Path) -> None:
-    canon = signed.read_arm(paired_sweep, signed.REFERENCE)
-    other = signed.read_arm(paired_sweep, "dace_cpu")
+    canon = signed.read_setup(paired_sweep, signed.REFERENCE)
+    other = signed.read_setup(paired_sweep, "dace_cpu")
     wins, losses = signed.sign_test(signed.paired(canon.times, other.times))
     assert (wins, losses) == (1, 1)  # s2 is an exact tie and counts for neither side
 
 
-def test_narrow_comparison_arm_keeps_its_own_n(paired_sweep: pathlib.Path) -> None:
-    canon = signed.read_arm(paired_sweep, signed.REFERENCE)
-    polly = signed.read_arm(paired_sweep, "cc_llvm_autopar")
+def test_narrow_comparison_setup_keeps_its_own_n(paired_sweep: pathlib.Path) -> None:
+    canon = signed.read_setup(paired_sweep, signed.REFERENCE)
+    polly = signed.read_setup(paired_sweep, "cc_llvm_autopar")
     # polly compiled two kernels, so its row has n=2 -- NOT canon's five.
     assert len(signed.paired(canon.times, polly.times)) == 2
 
 
-def test_render_survives_a_missing_comparison_arm(paired_sweep: pathlib.Path, tmp_path: pathlib.Path) -> None:
+def test_render_survives_a_missing_comparison_setup(paired_sweep: pathlib.Path, tmp_path: pathlib.Path) -> None:
     (paired_sweep / "cc_llvm_autopar.csv").unlink()
     out = signed.paired_figure(paired_sweep, tmp_path / "canon")
     assert out.with_suffix(".pdf").is_file() and out.with_suffix(".svg").is_file()
@@ -196,7 +196,7 @@ def test_missing_reference_is_fatal(tmp_path: pathlib.Path) -> None:
 
 def test_the_table_carries_the_costs_behind_every_ratio(sweep: pathlib.Path) -> None:
     """SC15 Rule 4: a speedup alone is uninterpretable, so the milliseconds travel with it."""
-    frame = signed.table(signed.arm_rows(sweep))
+    frame = signed.table(signed.setup_rows(sweep))
     assert list(frame.columns) == list(signed.TABLE_COLUMNS)
     canon = frame[(frame.framework == "dace_cpu_canonicalize") & (frame.kernel == "tsvc_2_s1")].iloc[0]
     assert canon.numerator_ms == pytest.approx(100.0) and canon.denominator_ms == pytest.approx(50.0)
@@ -211,7 +211,7 @@ def test_a_ratio_table_with_no_costs_is_refused() -> None:
 
 def test_every_summarized_row_carries_an_interval(sweep: pathlib.Path) -> None:
     """SC15 Rules 5 and 7: a nondeterministic measurement is never a bare point estimate."""
-    frame = signed.summary_table(signed.arm_rows(sweep))
+    frame = signed.summary_table(signed.setup_rows(sweep))
     assert list(frame.columns) == list(signed.SUMMARY_COLUMNS)
     multi = frame[frame.row == "dace canon"].iloc[0]
     assert multi.geomean_low < multi.geomean < multi.geomean_high
@@ -221,34 +221,34 @@ def test_every_summarized_row_carries_an_interval(sweep: pathlib.Path) -> None:
     assert single.n == 1 and single.geomean_low == pytest.approx(single.geomean_high)
 
 
-def test_an_arm_that_never_ran_is_reported_not_dropped(sweep: pathlib.Path) -> None:
-    frame = signed.summary_table(signed.arm_rows(sweep))
+def test_an_setup_that_never_ran_is_reported_not_dropped(sweep: pathlib.Path) -> None:
+    frame = signed.summary_table(signed.setup_rows(sweep))
     absent = frame[frame.row == "llvm + polly"].iloc[0]
     assert absent.n == 0 and absent.excluded == "none"
 
 
 def test_the_tables_are_written_beside_the_figure(sweep: pathlib.Path, tmp_path: pathlib.Path) -> None:
-    signed.arms_figure(sweep, tmp_path / "figure")
+    signed.setups_figure(sweep, tmp_path / "figure")
     assert (tmp_path / "figure-kernels.csv").is_file() and (tmp_path / "figure-summary.csv").is_file()
 
 
 def test_a_sweep_with_no_overlap_draws_nothing_rather_than_failing_a_rule(tmp_path: pathlib.Path) -> None:
-    """A baseline that shares no kernel with any arm has nothing to summarize, which is an empty
+    """A baseline that shares no kernel with any setup has nothing to summarize, which is an empty
     figure and not a broken rule -- the checks guard a ratio that IS reported, never the absence."""
     write(tmp_path / f"{signed.BASELINE}.csv", [row(signed.BASELINE, "tsvc_2_s1", "100.0")])
     write(tmp_path / "dace_cpu_canonicalize.csv", [row("dace_cpu_canonicalize", "tsvc_2_s9", "50.0")])
-    rows = signed.arm_rows(tmp_path)
+    rows = signed.setup_rows(tmp_path)
     assert signed.table(rows).empty
     assert (signed.summary_table(rows)["n"] == 0).all()
-    out = signed.arms_figure(tmp_path, tmp_path / "empty")
+    out = signed.setups_figure(tmp_path, tmp_path / "empty")
     assert out.with_suffix(".pdf").is_file()
 
 
 # --------------------------------------------------------------------------------------------
-# llr-focus40 compiler figure: DaCe's own canon-sweep columns beside every model's CPF arm, all
+# llr-focus40 compiler figure: DaCe's own canon-sweep columns beside every model's CPF setup, all
 # against numba, drawn by per_kernel on its log2 ratio axis. The row-building
 # helpers below stand in for canon.read_times/population.kernel_answers/graded_episode_rows
-# without a real sweep or a real campaign DB.
+# without a real sweep or a real experiment DB.
 # --------------------------------------------------------------------------------------------
 
 ROSTER40: tuple[str, ...] = ("k1", "k2", "k3")
@@ -311,8 +311,8 @@ def llr40_canon_fixture() -> pd.DataFrame:
 
 @pytest.fixture(name="llr40_observations")
 def llr40_observations_fixture() -> pd.DataFrame:
-    """Two models, each with a ``cpf`` and a ``cpfsrc`` arm, complete over ROSTER_TOKENS (and so
-    over ROSTER40); qwen38's cpfsrc arm runs k1 twice (a repeat, for the per-kernel interval),
+    """Two models, each with a ``cpf`` and a ``cpfsrc`` setup, complete over ROSTER_TOKENS (and so
+    over ROSTER40); qwen38's cpfsrc setup runs k1 twice (a repeat, for the per-kernel interval),
     everything else once."""
     rows: list[dict[str, object]] = []
     for model in ("qwen38", "oss120b"):
@@ -358,7 +358,7 @@ def test_canon_row_ignores_kernels_outside_the_roster(llr40_canon: pd.DataFrame)
     assert set(row.ratios) == {"k1"}
 
 
-def test_two_arms_of_one_model_share_shape_and_differ_in_hue(llr40_observations: pd.DataFrame) -> None:
+def test_two_setups_of_one_model_share_shape_and_differ_in_hue(llr40_observations: pd.DataFrame) -> None:
     """Channel rule: SHAPE is the LLM, COLOUR is the packet/condition."""
     cpf = signed.agent_kernel_row(llr40_observations, "cpf-llr-focus40-qwen38-c-cpf", "qwen38", "cpf", ROSTER40)
     cpfsrc = signed.agent_kernel_row(
@@ -421,7 +421,7 @@ def test_adding_compiler_columns_does_not_change_any_agent_rows_ratios(
     llr40_canon: pd.DataFrame, llr40_observations: pd.DataFrame
 ) -> None:
     """Wiring Pluto/ppcg_hip into the figure (``statistics/plot_llr40_compilers.py``'s own
-    ``--canon-columns`` default) only ADDS rows -- it must never change an agent arm's
+    ``--canon-columns`` default) only ADDS rows -- it must never change an agent setup's
     own per-kernel speedup (its S_i). ``pluto``/``ppcg_hip`` are absent from ``llr40_canon`` here
     (never a validated row, exactly the historical ppcg canon sweep), so every roster
     kernel on those two rows fills at 1x -- and every agent row's ratios must be BIT-IDENTICAL to
@@ -436,9 +436,9 @@ def test_adding_compiler_columns_does_not_change_any_agent_rows_ratios(
         row.framework: row.ratios
         for row in signed.llr40_rows(llr40_canon, llr40_observations, ROSTER40, canon_columns=columns_4)
     }
-    agent_arms = [key for key in before if key not in columns_2]
-    assert agent_arms  # the fixture must actually carry agent rows, or this test proves nothing
-    for arm in agent_arms:
+    agent_setups = [key for key in before if key not in columns_2]
+    assert agent_setups  # the fixture must actually carry agent rows, or this test proves nothing
+    for arm in agent_setups:
         assert after[arm] == before[arm], arm
     assert "pluto" not in before and "ppcg_hip" not in before
     assert "pluto" in after and "ppcg_hip" in after
@@ -698,7 +698,7 @@ def test_a_kernel_the_baseline_never_ran_is_pending_too(pending_canon: pd.DataFr
     assert row.pending == frozenset({"k1", "k3"})
 
 
-def test_mark_pending_keeps_an_arm_not_yet_served_every_kernel(
+def test_mark_pending_keeps_an_setup_not_yet_served_every_kernel(
     llr40_canon: pd.DataFrame, llr40_observations: pd.DataFrame
 ) -> None:
     partial = llr40_observations[

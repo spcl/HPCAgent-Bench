@@ -2,10 +2,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """agent_driver.py: the context-window death, the one budget the CLI spends without saying so.
 
-Campaign 594529 lost agents at ~60 turns to vLLM refusing a prompt longer than the served window.
+Experiment 594529 lost agents at ~60 turns to vLLM refusing a prompt longer than the served window.
 The CLI closes such a run with subtype ``success`` and exit 0 (2.1.197: exit 1) -- the refusal appears only as
 ``is_error`` plus the served text in ``result`` -- so without this check the driver records the
-death as a finished run and the arm reads as complete.
+death as a finished run and the setup reads as complete.
 """
 
 import importlib.util

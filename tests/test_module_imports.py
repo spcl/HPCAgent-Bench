@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Every module a job imports, imported.
 
-This exists because a one-line import failure cost six GPU arms. `config.py` annotated a
+This exists because a one-line import failure cost six GPU setups. `config.py` annotated a
 module-level name with a type alias defined sixty lines further down; a module-level annotation
 is evaluated at import on the 3.12 floor, so every process
 that touched `hpcagent_bench` died on `NameError: name 'ConfigValue' is not defined`. Nothing in
@@ -28,8 +28,8 @@ JOB_MODULES: tuple[str, ...] = (
     "hpcagent_bench.dtypes",
     "hpcagent_bench.spec",
     "hpcagent_bench.languages",
-    "hpcagent_bench.experiment_tags",
-    "hpcagent_bench.experiments",
+    "hpcagent_bench.study_tags",
+    "hpcagent_bench.studies",
     "hpcagent_bench.cli",
     "hpcagent_bench.harness.envelope",
     "hpcagent_bench.harness.recording",

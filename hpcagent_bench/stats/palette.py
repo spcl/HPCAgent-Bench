@@ -47,7 +47,7 @@ import matplotlib
 import matplotlib.colors
 
 from hpcagent_bench import packets
-from hpcagent_bench.experiment_tags import Registry, canonical, order, registry
+from hpcagent_bench.study_tags import Registry, canonical, order, registry
 
 __all__ = [
     "CONTROL_MARKER",

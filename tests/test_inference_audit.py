@@ -2,13 +2,13 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Inferential-statistics audit: the properties a number has to have before it is a claim.
 
-Each test here states ONE property that the campaign tables and figures rely on and that an
-audit found broken or unverified on real campaign data. Where a test is red, the property is
+Each test here states ONE property that the experiment tables and figures rely on and that an
+audit found broken or unverified on real experiment data. Where a test is red, the property is
 the correct one and the code is what has to move -- the numbers in the tables were checked
 against a second, independently written route before the property was written down.
 
 The paired sets used below have the shape the real ones do: per-kernel log speedup ratios,
-right-tailed, a handful of kernels per arm pair (llr40's skill pairs are n = 2, 3 and 4), and a
+right-tailed, a handful of kernels per setup pair (llr40's skill pairs are n = 2, 3 and 4), and a
 1% geometric quantisation ladder that guarantees ties in |d|.
 """
 
@@ -24,7 +24,7 @@ from hpcagent_bench.harness import efficacy, metric
 from hpcagent_bench.stats import signed_rank, summary
 
 #: The real paired set the published C-vs-Fortran claim rests on: ``log(c_best_su / fortran_best_su)``
-#: for every kernel of the llr40 campaign's per-language kernel table that both languages
+#: for every kernel of the llr40 experiment's per-language kernel table that both languages
 #: reached. n = 39, four exact ties (the 1% geometric ladder collides), skew +0.54, excess kurtosis
 #: +3.1. A synthetic Gaussian fixture would test a distribution this analysis never sees.
 LLR40_C_OVER_FORTRAN_LOG_DELTAS: tuple[float, ...] = (
@@ -177,7 +177,7 @@ def test_the_interval_around_rho_holds_its_nominal_level_on_skewed_paired_deltas
 def test_every_p_value_column_sits_beside_the_estimate_it_tests() -> None:
     """On a skewed paired set the ratio of geometric means and the Hodges-Lehmann pseudo-median can
     straddle no-change, so a row reporting ``rho`` beside the signed-rank p hands a reader an effect
-    and a test that disagree about which arm is ahead. The two parameters are reported as separate
+    and a test that disagree about which setup is ahead. The two parameters are reported as separate
     blocks, and the p value, its correction and its verdict belong to the HL block alone."""
     deltas = ZERO_MEAN_DELTAS + 0.02
     item = efficacy.ratio([1.0] * deltas.size, np.exp(deltas).tolist())
@@ -298,7 +298,7 @@ def test_an_absent_measurement_reads_the_same_way_at_every_geomean_call_site(
 
 
 def test_a_paired_comparison_reports_how_many_units_it_dropped() -> None:
-    """The complement waves re-run only the kernels with no judge row, so the two arms of a pairing
+    """The complement waves re-run only the kernels with no judge row, so the two setups of a pairing
     cover different kernel sets; an intersection that names only what it KEPT lets a claim about
     forty kernels be made on two, with nothing in the record saying so."""
     before = {"a": 2.0, "b": 3.0, "c": 4.0, "d": 5.0}

@@ -132,7 +132,7 @@ _FP_RELAX = "-fno-math-errno -fno-trapping-math -fno-signed-zeros"
 #: the oracle already does) and nothing else of -ffast-math. Pinned because gfortran reassociates at
 #: _FP_RELAX alone while gcc (C), clang and flang do not; GCC ignores it without _FP_RELAX beside it.
 #: OFF by default (``flags.fp_associative``): it moves the baseline every speedup is a ratio against,
-#: so a campaign sets it for all of its waves or none. Read at import through :func:`config.get` or
+#: so an experiment sets it for all of its waves or none. Read at import through :func:`config.get` or
 #: ``$HPCAGENT_BENCH_FLAGS_FP_ASSOCIATIVE=1``; ``config.set_override`` comes too late to change it.
 _FP_ASSOC = "-fassociative-math" if config.get("flags.fp_associative", False) else ""
 
@@ -150,7 +150,7 @@ FP_CONTRACT_NVHPC = "-Mfma"
 # everywhere except Apple-Silicon macOS, whose clang wants ``-mcpu=native``. (2) clang's ``libomp``
 # pin is Linux-only; on macOS plain ``-fopenmp`` resolves to whatever runtime the compiler carries.
 # (3) libmvec is glibc-only, reached by a different knob per compiler family (see below).
-ARCH_NATIVE = "-mcpu=native" if (osinfo.IS_MACOS and osinfo.is_arm()) else "-march=native"
+ARCH_NATIVE = "-mcpu=native" if (osinfo.IS_MACOS and osinfo.is_setup()) else "-march=native"
 #: clang links LLVM's OWN runtime, not GNU's: libomp is what an LLVM toolchain ships and what
 #: Polly's parallel backend is exercised against.
 _OPENMP_CLANG = "-fopenmp=libomp" if osinfo.IS_LINUX else "-fopenmp"
@@ -294,7 +294,7 @@ GCC_AUTOPAR = "-ftree-parallelize-loops={n} -floop-parallelize-all -fgraphite-id
 #: - flang: lowers ``do concurrent`` ONLY (``__kmpc_fork_call``, honors OMP_NUM_THREADS; the
 #:   "experimental" warning is normal). Needs LLVM >= 20.
 #: - gfortran: parloops. Also threads any other loop it proves independent, identically on every
-#:   arm. Thread count is FIXED at compile time from ``{n}``, sized like GCC_AUTOPAR.
+#:   setup. Thread count is FIXED at compile time from ``{n}``, sized like GCC_AUTOPAR.
 #: - nvfortran: ``-stdpar=multicore``. No compilers.yaml block references it until the opt-in
 #:   NVIDIA HPC SDK layer is baked into the images.
 DO_CONCURRENT_FLANG = "-fdo-concurrent-to-openmp=host"

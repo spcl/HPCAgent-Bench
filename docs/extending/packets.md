@@ -50,11 +50,11 @@ A key maps to a display-name string or a mapping with:
 | Field | Meaning |
 |---|---|
 | `name` | display name (required) |
-| `skills` | page directories to stage; `lang` expands to the language pages for the arm, `*` to every shipped page except packet-tool manuals |
+| `skills` | page directories to stage; `lang` expands to the language pages for the setup, `*` to every shipped page except packet-tool manuals |
 | `packets` | registered keys to compose, resolved recursively |
 | `env` | `KEY: value` switches; `${VAR}` is filled from the caller's environment |
 | `method` | a directory under `agent/packets/`, at most one per resolved packet |
-| `tools` | MCP tools served only in this packet's arms; its `skills` pages become their manual |
+| `tools` | MCP tools served only in this packet's setups; its `skills` pages become their manual |
 | `device` | `cpu`, `amd` or `nvidia`; resolving for a language that device does not run is refused |
 | `frozen` | reason a recorded key takes no new submissions; it still resolves for old records |
 
@@ -69,7 +69,7 @@ in `hpcagent_bench/cluster/make_problems.py`.
   same meaning goes under `aliases: packets:`.
 - `packets.canonical` names a registered composite only when the staged pages and switches match it
   exactly.
-- A running job sources its env once; a registry edit reaches only newly submitted arms.
+- A running job sources its env once; a registry edit reaches only newly submitted setups.
 
 ## Validate
 
@@ -82,4 +82,4 @@ python -m pytest --maxfail=10 tests/test_packets.py tests/test_packet_env.py \
 ```
 
 `packet_env.py` prints the resolved env and a final `HPCAGENT_BENCH_RECORD_PACKET=<canonical key>`
-line, which `record_identity` writes into the arm's `.env` and the DB stores as `runs.packet`.
+line, which `record_identity` writes into the setup's `.env` and the DB stores as `runs.packet`.

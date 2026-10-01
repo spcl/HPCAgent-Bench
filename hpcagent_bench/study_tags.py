@@ -2,16 +2,16 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """How an entity this repo records is SPELLED in a figure.
 
-An arm is named for the machine that routes it -- ``gpu-llr-focus40-qwen38-c-openmp`` says track,
+A setup is named for the machine that routes it -- ``gpu-llr-focus40-qwen38-c-openmp`` says track,
 device, model, language and packet in one hyphenated string, which is right for a filename and
 wrong for a figure title. A reader who has not spent a week in this repo cannot expand it.
 
 THE NAMES ARE DATA, in ``envs/registry.yaml``, which also decides the colours -- see
 :mod:`hpcagent_bench.stats.palette`. A name spelled in three plotting scripts is a name that will
 disagree with itself, which it already did once, with one figure saying ``qwen38`` where its
-neighbour said ``Qwen3.8-27B`` for the same arm.
+neighbour said ``Qwen3.8-27B`` for the same setup.
 
-Every lookup FALLS BACK to the tag unchanged rather than raising. A new campaign must not break a
+Every lookup FALLS BACK to the tag unchanged rather than raising. A new experiment must not break a
 figure; it gets a plain label until someone names it. ``tests/test_display_names.py`` is what stops
 that fallback from going unnoticed.
 """
@@ -28,31 +28,31 @@ from hpcagent_bench import spec
 from hpcagent_bench.spec import as_list
 
 __all__ = [
-    "ARM_RENAMES_PATH",
+    "SETUP_RENAMES_PATH",
     "CLEAN_SUFFIX",
     "COMPACT_NAMES",
     "COMPACT_NAME_MAX",
-    "OFFLOAD_ARM_TOKEN",
+    "OFFLOAD_SETUP_TOKEN",
     "OFFLOAD_DELIVERY_NAME",
     "REGISTRY",
     "SHORT_NAME_MAX",
     "SUITE_PREFIXES",
     "BaselineSpec",
-    "CampaignEntry",
+    "ExperimentEntry",
     "Marker",
     "ModelEntry",
     "Names",
     "PacketDef",
     "Registry",
-    "aliased_arm",
-    "arm_aliases_of",
-    "arm_delivery_name",
-    "arm_renames",
-    "arm_suffix",
+    "aliased_setup",
+    "setup_aliases_of",
+    "setup_delivery_name",
+    "setup_renames",
+    "setup_suffix",
     "as_block",
-    "baseline_arms_of",
+    "baseline_setups_of",
     "baselines_of",
-    "campaigns_of",
+    "experiments_of",
     "canonical",
     "display_name",
     "framework_name",
@@ -87,10 +87,10 @@ __all__ = [
 ]
 
 REGISTRY = pathlib.Path(__file__).resolve().parent / "envs" / "registry.yaml"
-#: Every recorded arm name -> the arm it is (DATA).
-ARM_RENAMES_PATH = pathlib.Path(__file__).resolve().parent / "envs" / "arm_renames.yaml"
+#: Every recorded setup name -> the setup it is (DATA).
+SETUP_RENAMES_PATH = pathlib.Path(__file__).resolve().parent / "envs" / "arm_renames.yaml"
 
-#: A clean re-run's arm-name suffix; every ``-clean`` arm folds into its base identity. Clean is a
+#: A clean re-run's setup-name suffix; every ``-clean`` setup folds into its base identity. Clean is a
 #: run flag carried by the ARM NAME alone -- submit_common.sh's ``clean_suffix`` leaves the identity
 #: columns (experiment/model/language/device/packet) untouched -- so it must never survive into a
 #: recorded ``language`` value. Older env files baked it in; :func:`split_record_language` unwinds it.
@@ -104,8 +104,8 @@ Names = dict[str, str]
 class ModelEntry:
     """A model's display name and the checkpoint it is expected to serve.
 
-    The checkpoint is recorded so a campaign that swaps one cannot silently keep the old name on an
-    axis; ``tests/test_display_names.py`` is what checks it against what the arms really ran."""
+    The checkpoint is recorded so an experiment that swaps one cannot silently keep the old name on an
+    axis; ``tests/test_display_names.py`` is what checks it against what the setups really ran."""
 
     name: str
     serves: str
@@ -113,10 +113,10 @@ class ModelEntry:
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class BaselineSpec:
-    """The canon-sweep columns an experiment is drawn against.
+    """The canon-sweep columns a study is drawn against.
 
-    ``denominator`` is the column every speedup ratio is divided by -- one per experiment, so two
-    figures of the same experiment cannot quietly use different references. ``comparators`` are the
+    ``denominator`` is the column every speedup ratio is divided by -- one per study, so two
+    figures of the same study cannot quietly use different references. ``comparators`` are the
     other toolchain columns drawn as their own series beside the agents; they are never the
     denominator."""
 
@@ -125,17 +125,17 @@ class BaselineSpec:
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
-class CampaignEntry:
-    """One launcher's job-name prefix: which experiment its arms belong to, on which device, served
-    which roster. ``name`` is the campaign's own label, finer than the experiment's -- llr40's
-    CPU and GPU halves are one experiment under two campaign names. An empty ``tag`` means no roster."""
+class ExperimentEntry:
+    """One launcher's job-name prefix: which study its setups belong to, on which device, served
+    which roster. ``name`` is the experiment's own label, finer than the study's -- llr40's
+    CPU and GPU halves are one study under two experiment names. An empty ``tag`` means no roster."""
 
     experiment: str
     name: str
     device: str
     tag: str
-    #: The arm-name prefix it owns (the key, unless set) and, when set, the one name token its arms
-    #: carry (``llr40-<model>-<lang>-blind``): such a campaign takes those arms from its prefix's.
+    #: The setup-name prefix it owns (the key, unless set) and, when set, the one name token its setups
+    #: carry (``llr40-<model>-<lang>-blind``): such an experiment takes those setups from its prefix's.
     prefix: str = ""
     suffix: str = ""
 
@@ -152,7 +152,7 @@ class PacketDef:
     env: tuple[tuple[str, str], ...]
     method: str
     #: MCP tools this packet CARRIES -- served by agent/tools/mcp_server.py only in its
-    #: arms (its ``PACKET_TOOL_SWITCH``). Its ``skills`` pages are then that tool's manual, which is
+    #: setups (its ``PACKET_TOOL_SWITCH``). Its ``skills`` pages are then that tool's manual, which is
     #: why ``*`` does not expand to them (:func:`hpcagent_bench.packets.tool_pages`).
     tools: tuple[str, ...] = ()
     #: Whose tools the pages teach (cpu, amd, nvidia); "" for a device-neutral packet.
@@ -189,20 +189,20 @@ class Registry:
     languages: Names
     frameworks: Names
     harnesses: Names
-    #: job-name prefix -> the campaign it names. Longest prefix wins; see :mod:`hpcagent_bench.campaigns`.
-    campaigns: dict[str, CampaignEntry]
-    #: One regex matching every arm the user retired from the experiments.
-    dropped_arms: str
-    #: experiment -> the canon columns it is scored against and drawn beside.
-    experiment_baselines: dict[str, "BaselineSpec"]
+    #: job-name prefix -> the experiment it names. Longest prefix wins; see :mod:`hpcagent_bench.experiments`.
+    campaigns: dict[str, ExperimentEntry]
+    #: One regex matching every setup the user retired from the studies.
+    dropped_setups: str
+    #: study -> the canon columns it is scored against and drawn beside.
+    study_baselines: dict[str, "BaselineSpec"]
     #: kind -> {spelling: the tag it names}, so an alias never takes its own colour slot.
     aliases: dict[str, Names]
-    #: ``track/device/language`` -> {"arm": template on ``{model}``, <model>: that model's own arm}:
-    #: the one baseline arm a treatment on such a kernel pairs against (:func:`baseline_arms_of`).
-    baseline_arms: dict[str, dict[str, str]] = dataclasses.field(default_factory=dict)
-    #: (pattern, replacement) re.sub pairs: an arm spelling -> the ONE arm it is (:func:`aliased_arm`).
-    arm_aliases: tuple[tuple[re.Pattern[str], str], ...] = ()
-    #: experiment -> the run-root prefixes its fused owed waves write (:func:`owed_run_roots_of`).
+    #: ``track/device/language`` -> {"arm": template on ``{model}``, <model>: that model's own setup}:
+    #: the one baseline setup a treatment on such a kernel pairs against (:func:`baseline_setups_of`).
+    baseline_setups: dict[str, dict[str, str]] = dataclasses.field(default_factory=dict)
+    #: (pattern, replacement) re.sub pairs: a setup spelling -> the ONE setup it is (:func:`aliased_setup`).
+    setup_aliases: tuple[tuple[re.Pattern[str], str], ...] = ()
+    #: study -> the run-root prefixes its fused owed waves write (:func:`owed_run_roots_of`).
     owed_run_roots: dict[str, tuple[str, ...]] = dataclasses.field(default_factory=dict)
 
 
@@ -278,7 +278,7 @@ def packet_defs_of(raw: object) -> dict[str, PacketDef]:
 
 
 def baselines_of(raw: object) -> dict[str, BaselineSpec]:
-    """The experiment -> canon-column block."""
+    """The study -> canon-column block."""
     out: dict[str, BaselineSpec] = {}
     for key, entry in as_block(raw).items():
         fields = as_block(entry)
@@ -289,27 +289,27 @@ def baselines_of(raw: object) -> dict[str, BaselineSpec]:
     return out
 
 
-def baseline_arms_of(raw: object) -> dict[str, dict[str, str]]:
-    """The ``track/device/language`` -> baseline-arm block, every key and value forced to text."""
+def baseline_setups_of(raw: object) -> dict[str, dict[str, str]]:
+    """The ``track/device/language`` -> baseline-setup block, every key and value forced to text."""
     return {str(key): {str(k): str(v) for k, v in as_block(entry).items()} for key, entry in as_block(raw).items()}
 
 
-def arm_aliases_of(raw: object) -> tuple[tuple[re.Pattern[str], str], ...]:
-    """The ``arm_aliases`` block, each pattern compiled once, in file order."""
+def setup_aliases_of(raw: object) -> tuple[tuple[re.Pattern[str], str], ...]:
+    """The ``setup_aliases`` block, each pattern compiled once, in file order."""
     return tuple((re.compile(str(pattern)), str(target)) for pattern, target in as_block(raw).items())
 
 
 def owed_run_roots_of(raw: object) -> dict[str, tuple[str, ...]]:
-    """The experiment -> owed run-root prefixes block, every value forced to text."""
+    """The study -> owed run-root prefixes block, every value forced to text."""
     return {str(key): tuple(str(p) for p in as_list(entry)) for key, entry in as_block(raw).items()}
 
 
-def campaigns_of(raw: object) -> dict[str, CampaignEntry]:
-    """The campaigns block. A missing field falls back to the prefix itself, never to a guess."""
-    out: dict[str, CampaignEntry] = {}
+def experiments_of(raw: object) -> dict[str, ExperimentEntry]:
+    """The experiments block. A missing field falls back to the prefix itself, never to a guess."""
+    out: dict[str, ExperimentEntry] = {}
     for prefix, entry in as_block(raw).items():
         fields = as_block(entry)
-        out[str(prefix)] = CampaignEntry(
+        out[str(prefix)] = ExperimentEntry(
             experiment=str(fields.get("experiment", prefix)),
             name=str(fields.get("name", prefix)),
             device=str(fields.get("device", "")),
@@ -341,29 +341,29 @@ def registry() -> Registry:
         languages=names_of(doc.get("languages"), "languages"),
         frameworks=names_of(doc.get("frameworks"), "frameworks"),
         harnesses=names_of(doc.get("harnesses"), "harnesses"),
-        campaigns=campaigns_of(doc.get("campaigns")),
-        dropped_arms=str(doc.get("dropped_arms", "")),
-        experiment_baselines=baselines_of(doc.get("experiment_baselines")),
+        campaigns=experiments_of(doc.get("campaigns")),
+        dropped_setups=str(doc.get("dropped_arms", "")),
+        study_baselines=baselines_of(doc.get("experiment_baselines")),
         aliases={str(kind): names_of(block, str(kind)) for kind, block in as_block(aliases).items()},
-        baseline_arms=baseline_arms_of(doc.get("baseline_arms")),
-        arm_aliases=arm_aliases_of(doc.get("arm_aliases")),
+        baseline_setups=baseline_setups_of(doc.get("baseline_arms")),
+        setup_aliases=setup_aliases_of(doc.get("arm_aliases")),
         owed_run_roots=owed_run_roots_of(doc.get("owed_run_roots")),
     )
 
 
-def aliased_arm(arm: str) -> str:
-    """``arm`` under the ONE arm it is: the registry's ``arm_aliases``, then the recorded arm's
-    configuration name (:func:`arm_renames`); itself when neither names it. The single fold owed
+def aliased_setup(arm: str) -> str:
+    """``setup`` under the ONE setup it is: the registry's ``setup_aliases``, then the recorded setup's
+    configuration name (:func:`setup_renames`); itself when neither names it. The single fold owed
     planning, extraction and the migration share."""
-    for pattern, target in registry().arm_aliases:
+    for pattern, target in registry().setup_aliases:
         arm = pattern.sub(target, arm)
-    return arm_renames().get(arm, arm)
+    return setup_renames().get(arm, arm)
 
 
 @functools.lru_cache(maxsize=1, typed=True)
-def arm_renames() -> dict[str, str]:
-    """Every recorded arm name -> the arm it is, named by its configuration (:data:`ARM_RENAMES_PATH`)."""
-    table = yaml.safe_load(ARM_RENAMES_PATH.read_text(encoding="utf-8")) or {}
+def setup_renames() -> dict[str, str]:
+    """Every recorded setup name -> the setup it is, named by its configuration (:data:`ARM_RENAMES_PATH`)."""
+    table = yaml.safe_load(SETUP_RENAMES_PATH.read_text(encoding="utf-8")) or {}
     return {str(old): str(new) for old, new in table.items()}
 
 
@@ -402,14 +402,14 @@ def order(kind: str) -> tuple[str, ...]:
 
 
 def display_name(tag: str) -> str:
-    """The name to put on a figure for an experiment tag. Falls back to the tag itself."""
+    """The name to put on a figure for a study tag. Falls back to the tag itself."""
     if not tag:
         return ""
     known = names("experiments")
     resolved = canonical("experiments", tag)
     if resolved in known:
         return known[resolved]
-    # An arm rather than an experiment ("llr40-qwen38-c-skills"): title it by its experiment.
+    # A setup rather than a study ("llr40-qwen38-c-skills"): title it by its study.
     head = canonical("experiments", tag.split("-", 1)[0])
     return known.get(head, tag)
 
@@ -431,8 +431,8 @@ def optimizer_name(optimizer: str) -> str:
 def model_checkpoint(model: str) -> str:
     """The checkpoint a model tag is expected to serve, or "" if the registry does not say.
 
-    Recorded so ``tests/test_display_names.py`` can check the label against what the arms really
-    ran: a campaign that swaps a checkpoint must not silently keep the old name on its axis.
+    Recorded so ``tests/test_display_names.py`` can check the label against what the setups really
+    ran: an experiment that swaps a checkpoint must not silently keep the old name on its axis.
     """
     entry = registry().models.get(canonical("models", str(model).lower()))
     return entry.serves if entry is not None else ""
@@ -478,15 +478,15 @@ def model_spellings() -> tuple[tuple[str, tuple[str, ...]], ...]:
 
 
 def model_of(arm: str, unknown: str = "other") -> str:
-    """The model tag an arm ran, read out of its name; ``unknown`` when none is found.
+    """The model tag a setup ran, read out of its name; ``unknown`` when none is found.
 
-    Arms are ``<experiment>-<model>-<language>[-skills]``, so the model is a whole dash-delimited
+    Setups are ``<study>-<model>-<language>[-skills]``, so the model is a whole dash-delimited
     token rather than a substring -- ``-c`` must not match inside ``kimi27sglang``. Registry order
-    decides which token wins when an arm somehow carries two, and an alias resolves to the entity
+    decides which token wins when a setup somehow carries two, and an alias resolves to the entity
     it names so two spellings of one model never split into two series.
 
-    This is the LAST resort. An arm string is provenance, and every campaign since the identity
-    columns landed records its model in the database instead; parse the arm only for a CSV that
+    This is the LAST resort. A setup string is provenance, and every experiment since the identity
+    columns landed records its model in the database instead; parse the setup only for a CSV that
     predates them.
     """
     padded = f"-{arm}-"
@@ -510,15 +510,15 @@ def language_spellings() -> tuple[tuple[str, tuple[str, ...]], ...]:
 
 
 def language_of(arm: str, unknown: str = "") -> str:
-    """The language tag an arm ran, read out of its name; ``unknown`` when none is found.
+    """The language tag a setup ran, read out of its name; ``unknown`` when none is found.
 
-    Arms are ``<experiment>-<model>-<language>[-skills|-cpf|-cpfsrc|...]``, so the language is a
+    Setups are ``<study>-<model>-<language>[-skills|-cpf|-cpfsrc|...]``, so the language is a
     whole dash-delimited token, same rule as :func:`model_of` and for the same reason.
 
     THE LAST RESORT, same as :func:`model_of`: a recorded ``language`` column is provenance, and
-    this exists for the rows a campaign never stamped it onto at all -- an arm whose every row
-    predates the column has nothing :func:`hpcagent_bench.experiments.fill_arm_identity` could fill
-    from, and the arm name is the only place the language still is.
+    this exists for the rows an experiment never stamped it onto at all -- a setup whose every row
+    predates the column has nothing :func:`hpcagent_bench.studies.fill_arm_identity` could fill
+    from, and the setup name is the only place the language still is.
     """
     padded = f"-{arm}-"
     for language, spellings in language_spellings():
@@ -530,7 +530,7 @@ def language_of(arm: str, unknown: str = "") -> str:
 def split_record_language(value: str) -> tuple[str, str]:
     """``(language, packet)`` parsed out of a possibly-corrupted ``HPCAGENT_BENCH_RECORD_LANGUAGE``
     value: an older submitter baked a packet token and/or :data:`CLEAN_SUFFIX` into it instead of
-    stamping them into their own fields (fixed for new arms -- every ``submit-*.sh`` now passes
+    stamping them into their own fields (fixed for new setups -- every ``submit-*.sh`` now passes
     ``record_identity`` the bare language). ``clean`` is a run flag the ARM NAME alone carries and
     is dropped here, not returned. A value naming no registered language token passes through
     unchanged with no packet -- the normal unregistered-tag fallback.
@@ -542,7 +542,7 @@ def split_record_language(value: str) -> tuple[str, str]:
             if text == token:
                 return language, ""
             if text.startswith(f"{token}-"):
-                # Only a REGISTERED packet counts -- an offload arm's stale value carries
+                # Only a REGISTERED packet counts -- an offload setup's stale value carries
                 # "c-openmp[-clean]" (the OFFLOAD directive, never a packet: device=gpu with
                 # language=c already says offload) and must resolve to no packet, not a bogus one.
                 packet = canonical("packets", text[len(token) + 1 :])
@@ -550,9 +550,9 @@ def split_record_language(value: str) -> tuple[str, str]:
     return text, ""
 
 
-def arm_suffix(arm: str) -> str:
-    """The dash-padded part of an arm name after its model token (``-c-cpf-`` of ``cpf-llr-focus40-qwen38-c-cpf``);
-    "" when the name names no registered model. The experiment prefix before the model can spell a packet
+def setup_suffix(arm: str) -> str:
+    """The dash-padded part of a setup name after its model token (``-c-cpf-`` of ``cpf-llr-focus40-qwen38-c-cpf``);
+    "" when the name names no registered model. The study prefix before the model can spell a packet
     (``cpf-llr-focus40``), so a packet is only ever read from this suffix."""
     padded = f"-{arm}-"
     ends = [padded.find(s) + len(s) - 1 for _, spellings in model_spellings() for s in spellings if s in padded]
@@ -570,12 +570,12 @@ def packet_spellings() -> tuple[tuple[str, str], ...]:
 
 
 def packet_of(arm: str, unknown: str = "") -> str:
-    """The packet an arm ran, read from a packet token after its model token; ``unknown`` when there is none.
+    """The packet a setup ran, read from a packet token after its model token; ``unknown`` when there is none.
 
-    A name without a packet token is the control or an arm named before packets were suffixed, so the caller decides
-    what no token means (:func:`hpcagent_bench.experiments.fill_arm_identity` falls back to the recorded value).
+    A name without a packet token is the control or a setup named before packets were suffixed, so the caller decides
+    what no token means (:func:`hpcagent_bench.studies.fill_arm_identity` falls back to the recorded value).
     """
-    suffix = arm_suffix(arm)
+    suffix = setup_suffix(arm)
     for packet, spelling in packet_spellings():
         if spelling in suffix:
             return packet
@@ -620,7 +620,7 @@ def kernel_names() -> Names:
 
     The kernel axis of a figure reads THIS, not the folder stem: "heat_3d" and "addusxx_g" are
     identifiers a results row joins on, and no reader expands them. The names are data, in the
-    manifests, for the same reason the arm names are data in ``registry.yaml`` -- a title spelled in
+    manifests, for the same reason the setup names are data in ``registry.yaml`` -- a title spelled in
     a plotting script is a title that will disagree with the corpus."""
     return manifest_names()[0]
 
@@ -683,24 +683,24 @@ def language_name(language: str) -> str:
     return names("languages").get(key, str(language))
 
 
-#: What a GPU C arm actually delivered. Offload is device=gpu plus language=c and never a packet
-#: (:func:`hpcagent_bench.records.split_record_language`), so the recorded language of an arm that
+#: What a GPU C setup actually delivered. Offload is device=gpu plus language=c and never a packet
+#: (:func:`hpcagent_bench.records.split_record_language`), so the recorded language of a setup that
 #: wrote ``#pragma omp target`` kernels is plain ``c`` -- and "C" beside "HIP" and "Triton" in a
-#: figure names the host language while hiding what was written. DISPLAY ONLY: the arm's identity,
+#: figure names the host language while hiding what was written. DISPLAY ONLY: the setup's identity,
 #: and so every pairing taken over it, is untouched.
 OFFLOAD_DELIVERY_NAME: str = "OpenMP Offload"
 
-#: The arm-name token those arms carry, for a caller holding a name and no device column.
-OFFLOAD_ARM_TOKEN: str = "-c-openmp-"
+#: The setup-name token those setups carry, for a caller holding a name and no device column.
+OFFLOAD_SETUP_TOKEN: str = "-c-openmp-"
 
 
-def arm_delivery_name(arm: str) -> str:
-    """The display spelling of what an arm DELIVERED, read off its NAME: its language, except a GPU
-    C arm, which is an OpenMP target offload (:data:`OFFLOAD_DELIVERY_NAME`). An extracted
+def setup_delivery_name(arm: str) -> str:
+    """The display spelling of what a setup DELIVERED, read off its NAME: its language, except a GPU
+    C setup, which is an OpenMP target offload (:data:`OFFLOAD_DELIVERY_NAME`). An extracted
     observations table carries no ``device`` column, so :data:`OFFLOAD_ARM_TOKEN` -- the offload
-    arms' own spelling -- is how a figure grouping those rows sees device=gpu plus language=c."""
+    setups' own spelling -- is how a figure grouping those rows sees device=gpu plus language=c."""
     name = str(arm)
-    if OFFLOAD_ARM_TOKEN in f"-{name}-":
+    if OFFLOAD_SETUP_TOKEN in f"-{name}-":
         return OFFLOAD_DELIVERY_NAME
     return language_name(language_of(name))
 

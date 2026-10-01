@@ -4,8 +4,8 @@
 
 The judge grades a distributed submission at several rank counts P and turns each into a
 :class:`~hpcagent_bench.harness.metric.ScalingPoint`. This module draws those points. It reads the
-EXTRACTED observations table (:func:`hpcagent_bench.experiments.read_observations`), the same file
-every other figure reads, never a judge database: one row per (arm, kernel, P) under
+EXTRACTED observations table (:func:`hpcagent_bench.studies.read_observations`), the same file
+every other figure reads, never a judge database: one row per (setup, kernel, P) under
 ``row_kind == "scaling"``, carrying ``scaling_ranks``, ``scaling_ranked_ns`` (T(P)),
 ``scaling_single_rank_ns`` (T(1)) and -- for weak scaling -- ``scaling_work_ratio``
 (r = W(N_P)/W(N_1)). ``docs/observations.md`` lists the columns.
@@ -23,9 +23,9 @@ Four figures, all in the repo's shared ink (:mod:`hpcagent_bench.stats.style`) a
 * :func:`figure_speedup` -- sigma(P) = T(1)/T(P) (strong) and the WORK-SCALED r * T(1)/T(P) (weak),
   which is the quantity whose ideal is P in both panels, so one dashed y = P line reads for both.
 * :func:`figure_per_kernel` -- one small panel per kernel, every model overlaid.
-* :func:`figure_summary` -- the geomean eta per arm with its interval, weak beside strong.
+* :func:`figure_summary` -- the geomean eta per setup with its interval, weak beside strong.
 
-THE TORCH.DISTRIBUTED BASELINE CURVE rides in the same rows under the pseudo-arm
+THE TORCH.DISTRIBUTED BASELINE CURVE rides in the same rows under the pseudo-setup
 :data:`TORCH_DIST_ARM`: the kernel's own ``reference_dist`` timed by the grade job at every (law, P)
 point the agents were (``hpcagent_bench.harness.torch_dist_curve``). Its points are spread over
 the grade job's per-chunk DBs, so its P=1 anchor is joined here (:func:`baseline_anchored`), and
@@ -35,13 +35,13 @@ A series is one (packet, model) pair: COLOUR is the model and SHAPE the packet, 
 channel rule; the control is a hollow circle in its model's colour. Weak against strong is never a colour:
 the two measure different things and are drawn as different panels.
 
-THE MEASURED AXIS IS Y and carries the grid; P is a parameter the experiment set, so its axis gets
+THE MEASURED AXIS IS Y and carries the grid; P is a parameter the study set, so its axis gets
 fixed ticks at the rank counts actually run (1, 2, 4, 8, 16) on a log2 scale and no grid of its own.
 Efficiency is drawn LINEAR from 0: it is a fraction of the ideal, a reader places 0.5 against 1.0 by
 eye, and a log axis would spend its resolution on the region a curve reaches only when it has
 already failed. Speedup is a ratio and keeps this repo's log2 ratio axis.
 
-An aggregate line is the GEOMEAN over the arm's kernels at that P with its 95% interval as a band
+An aggregate line is the GEOMEAN over the setup's kernels at that P with its 95% interval as a band
 (:func:`hpcagent_bench.stats.summary.geomean_interval`) -- never a mean and never a median, the same
 rule every ratio in this repo is summarized under.
 """
@@ -59,11 +59,11 @@ import pandas as pd
 from matplotlib.lines import Line2D
 from matplotlib.ticker import FixedFormatter, FixedLocator, FuncFormatter, LogLocator, NullFormatter
 
-from hpcagent_bench import experiment_tags
+from hpcagent_bench import study_tags
 from hpcagent_bench.harness import metric
 from hpcagent_bench.stats import palette, summary
 from hpcagent_bench.stats import style as plotstyle
-from hpcagent_bench.stats.figures.helpers.series import TORCH_DIST_ARM, series_style, torch_dist_style
+from hpcagent_bench.stats.figures.helpers.series import TORCH_DIST_SETUP, series_style, torch_dist_style
 
 __all__ = [
     "AGENT_LINE_SCALE",
@@ -168,7 +168,7 @@ REQUIRED_COLUMNS: tuple[str, ...] = (
     "scaling_single_rank_ns",
 )
 
-#: The torch.distributed baseline curve's legend label; its pseudo-arm and look are
+#: The torch.distributed baseline curve's legend label; its pseudo-setup and look are
 #: :mod:`hpcagent_bench.stats.figures.helpers.series`'s.
 TORCH_DIST_LABEL: str = "PyTorch Distributed"
 
@@ -225,9 +225,9 @@ class Quantity(enum.Enum):
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class Point:
-    """One rank count on one (arm, kernel) curve, already through :func:`metric.scaling_point`.
+    """One rank count on one (setup, kernel) curve, already through :func:`metric.scaling_point`.
 
-    ``slots=True``: one per graded P per kernel per arm -- thousands over a campaign, fixed schema.
+    ``slots=True``: one per graded P per kernel per setup -- thousands over an experiment, fixed schema.
     """
 
     ranks: int
@@ -245,7 +245,7 @@ class Point:
 
         The speedup of a WEAK point is the work-scaled one, r * T(1)/T(P): the plain ratio of a
         weak run is bounded by 1 by construction (the same work per rank takes the same time), so
-        drawing it against an ideal of P would show every honest arm as a total failure. Scaled by
+        drawing it against an ideal of P would show every honest setup as a total failure. Scaled by
         the realized work ratio it is Gustafson's speedup and its ideal IS P, which is the line
         the panel draws.
         """
@@ -256,11 +256,11 @@ class Point:
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class Curve:
-    """One (arm, kernel, mode) scaling curve: the P that were measured, and why the others were not.
+    """One (setup, kernel, mode) scaling curve: the P that were measured, and why the others were not.
 
     ``dropped`` is ``(P, reason)`` for a rank count the sweep refused or failed at -- the judge's
     own ``scaling_notes`` line. A dropped P is a HOLE in the curve and never a zero: a figure that
-    filled it would draw a collapse the experiment never measured.
+    filled it would draw a collapse the study never measured.
     """
 
     arm: str
@@ -303,20 +303,20 @@ def panel_title(kernel: str, kernels: Sequence[str]) -> str:
 
 def label_of(model: str) -> str:
     """The legend spelling of a model (of the torch.distributed baseline: :data:`TORCH_DIST_LABEL`)."""
-    return TORCH_DIST_LABEL if model == TORCH_DIST_ARM else experiment_tags.model_name(model)
+    return TORCH_DIST_LABEL if model == TORCH_DIST_SETUP else study_tags.model_name(model)
 
 
 def packet_of(curve: "Curve") -> str:
-    """The packet a curve's arm ran; empty for the control."""
-    return experiment_tags.packet_of(curve.arm)
+    """The packet a curve's setup ran; empty for the control."""
+    return study_tags.packet_of(curve.arm)
 
 
 def series_label(packet: str, model: str) -> str:
     """The legend spelling of one (packet, model) series; the torch.distributed baseline runs no
     packet, so it is named alone."""
-    if model == TORCH_DIST_ARM:
+    if model == TORCH_DIST_SETUP:
         return label_of(model)
-    return f"{label_of(model)}, {experiment_tags.packet_name(packet)}"
+    return f"{label_of(model)}, {study_tags.packet_name(packet)}"
 
 
 def series_keys(pairs: Iterable[tuple[str, str]]) -> list[tuple[str, str]]:
@@ -339,7 +339,7 @@ def series_handles(
     kernels = {key: {c.kernel for c in curves_ if (packet_of(c), c.model) == key} for key in keys}
     return [
         Line2D(
-            [], [], linewidth=line_width * (1.0 if key[1] == TORCH_DIST_ARM else AGENT_LINE_SCALE), **series_style(*key),
+            [], [], linewidth=line_width * (1.0 if key[1] == TORCH_DIST_SETUP else AGENT_LINE_SCALE), **series_style(*key),
             label=series_label(*key) + (f" (n={len(kernels[key])})" if counted else ""),
         )
         for key in keys
@@ -374,9 +374,9 @@ def type_axes(ax: matplotlib.axes.Axes, type_: plotstyle.TypeScale) -> None:
 
 
 def mode_of(arm: str, recorded: object = "") -> str:
-    """The scaling law a row was graded under: what it recorded, else what its arm name says.
+    """The scaling law a row was graded under: what it recorded, else what its setup name says.
 
-    The arm name is the fallback and not the source: an ``mlscale-weak-...`` arm name is a last
+    The setup name is the fallback and not the source: an ``mlscale-weak-...`` setup name is a last
     resort for a CSV without the column, and a row that states its own mode is believed over its name.
     """
     text = str(recorded).strip().lower()
@@ -413,9 +413,9 @@ def text_cell(row: pd.Series, name: str) -> str:
 
 
 def scaling_rows(frame: pd.DataFrame) -> pd.DataFrame:
-    """The frame's per-P scaling rows, one grade per (arm, kernel, mode): the LATEST.
+    """The frame's per-P scaling rows, one grade per (setup, kernel, mode): the LATEST.
 
-    An arm graded twice (a resubmission, a re-grade) holds two curves for one kernel, and pooling
+    A setup graded twice (a resubmission, a re-grade) holds two curves for one kernel, and pooling
     them would average a fixed submission with the one it replaced. The latest ``ts_ms`` wins, the
     same any-run rule the per-kernel figures take their episode under.
     """
@@ -444,14 +444,14 @@ def baseline_anchored(rows: pd.DataFrame) -> pd.DataFrame:
     gets the group's P=1 time as ``scaling_single_rank_ns`` (blank when P=1 was not timed: no anchor, every
     point a hole) and the group's newest stamp as ``ts_ms``, so the latest-curve rule keeps or drops
     the curve whole."""
-    if not (rows["arm"].astype(str) == TORCH_DIST_ARM).any():
+    if not (rows["arm"].astype(str) == TORCH_DIST_SETUP).any():
         return rows
     rows = rows.copy()
     records = rows.to_dict("records")
     anchors: dict[tuple[str, str, str], float] = {}
     stamps: dict[tuple[str, str, str], float] = {}
     for record in records:
-        if str(record["arm"]) != TORCH_DIST_ARM:
+        if str(record["arm"]) != TORCH_DIST_SETUP:
             continue
         key = (str(record["run_id"]), str(record["benchmark"]), str(record["scaling_mode"]))
         stamps[key] = max(stamps.get(key, 0.0), number(record["ts_ms"]))
@@ -462,7 +462,7 @@ def baseline_anchored(rows: pd.DataFrame) -> pd.DataFrame:
     stamped: list[object] = []
     for record in records:
         key = (str(record["run_id"]), str(record["benchmark"]), str(record["scaling_mode"]))
-        baseline = str(record["arm"]) == TORCH_DIST_ARM
+        baseline = str(record["arm"]) == TORCH_DIST_SETUP
         single.append(anchors.get(key, "") if baseline else record.get("scaling_single_rank_ns", ""))
         stamped.append(stamps[key] if baseline else record["ts_ms"])
     rows["scaling_single_rank_ns"] = pd.Series(single, index=rows.index, dtype=object)
@@ -513,9 +513,9 @@ def drop_reason(row: pd.Series) -> str:
 
 
 def curves(frame: pd.DataFrame) -> list[Curve]:
-    """Every (arm, kernel, mode) curve in the frame, ascending in P, with its dropped points.
+    """Every (setup, kernel, mode) curve in the frame, ascending in P, with its dropped points.
 
-    An empty or column-less frame yields an empty list rather than raising: a campaign that has not
+    An empty or column-less frame yields an empty list rather than raising: an experiment that has not
     run its scaling sweep yet is a normal state of the table, not a broken one.
     """
     rows = scaling_rows(frame)
@@ -533,9 +533,9 @@ def curves(frame: pd.DataFrame) -> list[Curve]:
             else:
                 points.append(point)
         model = (
-            TORCH_DIST_ARM
-            if arm == TORCH_DIST_ARM
-            else text_cell(group.iloc[0], "model") or experiment_tags.model_of(str(arm))
+            TORCH_DIST_SETUP
+            if arm == TORCH_DIST_SETUP
+            else text_cell(group.iloc[0], "model") or study_tags.model_of(str(arm))
         )
         out.append(
             Curve(
@@ -561,12 +561,12 @@ def single_point_curves(curves_: Sequence[Curve]) -> list[Curve]:
 
 
 def dropped_points(curves_: Sequence[Curve]) -> list[tuple[str, str, str, int, str]]:
-    """``(arm, kernel, mode, P, reason)`` for every rank count the sweep did not measure."""
+    """``(setup, kernel, mode, P, reason)`` for every rank count the sweep did not measure."""
     return [(c.arm, c.kernel, c.mode, p, why) for c in curves_ for p, why in c.dropped]
 
 
 def disagreements(frame: pd.DataFrame, tolerance: float = EFFICIENCY_RTOL) -> list[tuple[str, str, int, float, float]]:
-    """``(arm, kernel, P, recorded, recomputed)`` wherever a recorded ``scaling_point_efficiency`` is not the one
+    """``(setup, kernel, P, recorded, recomputed)`` wherever a recorded ``scaling_point_efficiency`` is not the one
     :func:`metric.scaling_point` gives for the same row's times.
 
     A disclosure column and the formula behind it must agree; where they do not, the extractor or
@@ -589,20 +589,20 @@ def disagreements(frame: pd.DataFrame, tolerance: float = EFFICIENCY_RTOL) -> li
 
 
 def common_kernels(curves_: Sequence[Curve], mode: str) -> set[str]:
-    """The kernels EVERY arm of ``mode`` has a drawable curve for.
+    """The kernels EVERY setup of ``mode`` has a drawable curve for.
 
-    Overlaying two arms whose kernel sets differ compares each against its own roster, which is a
+    Overlaying two setups whose kernel sets differ compares each against its own roster, which is a
     different and always kinder number than the comparison the panel looks like it is making. The
     callers default to this set and say how many kernels it cost. The torch.distributed baseline
-    is not an arm here: a kernel it could not time must not take the agents' curves off a panel.
+    is not a setup here: a kernel it could not time must not take the agents' curves off a panel.
     """
-    per_arm: dict[str, set[str]] = {}
+    per_setup: dict[str, set[str]] = {}
     for curve in drawable(curves_):
-        if curve.mode == mode and curve.arm != TORCH_DIST_ARM:
-            per_arm.setdefault(curve.arm, set()).add(curve.kernel)
-    if not per_arm:
+        if curve.mode == mode and curve.arm != TORCH_DIST_SETUP:
+            per_setup.setdefault(curve.arm, set()).add(curve.kernel)
+    if not per_setup:
         return set()
-    return set.intersection(*per_arm.values())
+    return set.intersection(*per_setup.values())
 
 
 def restrict(curves_: Sequence[Curve], mode: str, kernels: Iterable[str]) -> list[Curve]:
@@ -623,8 +623,8 @@ def rank_axis(curves_: Sequence[Curve]) -> tuple[int, ...]:
 def series(curves_: Sequence[Curve], quantity: Quantity) -> dict[int, summary.Interval]:
     """Per rank count, the GEOMEAN over the given curves' kernels and its 95% interval.
 
-    An arm's line on an overlay panel: one interval per P over that arm's per-kernel values, which
-    is what makes two arms' lines comparable as estimates rather than as two sets of dots.
+    A setup's line on an overlay panel: one interval per P over that setup's per-kernel values, which
+    is what makes two setups' lines comparable as estimates rather than as two sets of dots.
     """
     buckets: dict[int, list[float]] = {}
     for curve in curves_:
@@ -719,13 +719,13 @@ def panel_curves(
     """One panel: an ideal reference, one aggregated line per (packet, model) and the torch.distributed
     baseline dashed. Returns the ideal's legend handle; the series' are :func:`series_handles`'."""
     ideal = ideal_mark(ax, quantity, ranks)
-    agents = [curve for curve in curves_ if curve.model != TORCH_DIST_ARM]
+    agents = [curve for curve in curves_ if curve.model != TORCH_DIST_SETUP]
     agent_type = dataclasses.replace(type_, line_width=type_.line_width * AGENT_LINE_SCALE)
     for packet, model in series_keys((packet_of(curve), curve.model) for curve in agents):
         part = [curve for curve in agents if curve.model == model and packet_of(curve) == packet]
         style, label = series_style(packet, model), series_label(packet, model)
         draw_series(ax, series(part, quantity), style, label, band=band, type_=agent_type)
-    baseline = [curve for curve in curves_ if curve.model == TORCH_DIST_ARM]
+    baseline = [curve for curve in curves_ if curve.model == TORCH_DIST_SETUP]
     draw_series(ax, series(baseline, quantity), torch_dist_style(), TORCH_DIST_LABEL, band, type_, "--")
     rank_ticks(ax, ranks)
     measured_axis(ax, quantity)
@@ -790,7 +790,7 @@ def figure_modes(
     band: bool = True,
     type_: plotstyle.TypeScale = plotstyle.AUTHOR_SCALE,
 ) -> matplotlib.figure.Figure | None:
-    """Weak beside strong, one aggregated line per arm in each. None when nothing is drawable.
+    """Weak beside strong, one aggregated line per setup in each. None when nothing is drawable.
 
     The two panels do NOT share a Y axis: weak efficiency and strong efficiency are different
     quantities on the same scale, and forcing one pair of limits lets the harder panel decide how
@@ -950,7 +950,7 @@ def figure_mode_grid(
         row[0].set_ylabel(mode_label(mode), fontsize=type_.label_pt)
     title_panels(
         axes[0],
-        [experiment_tags.kernel_short_display_name(k) for k in kernels] + [GEOMEAN_LABEL] * geomean_panel,
+        [study_tags.kernel_short_display_name(k) for k in kernels] + [GEOMEAN_LABEL] * geomean_panel,
         type_,
     )
     for ax in axes.flat:
@@ -967,7 +967,7 @@ def figure_mode_grid(
 
 
 def summary_rows(curves_: Sequence[Curve]) -> list[tuple[str, str, str, summary.Interval, int]]:
-    """``(arm, model, mode, interval, n_kernels)``: the geomean of the per-kernel geomean eta."""
+    """``(setup, model, mode, interval, n_kernels)``: the geomean of the per-kernel geomean eta."""
     grouped: dict[tuple[str, str, str], list[float]] = {}
     for curve in drawable(curves_):
         value = curve.mean_efficiency()
@@ -993,7 +993,7 @@ def summary_mark(
     row: tuple[str, str, str, summary.Interval, int],
     type_: plotstyle.TypeScale,
 ) -> None:
-    """One arm's geomean eta at X ``index`` with its 95% interval, and its kernel count below it."""
+    """One setup's geomean eta at X ``index`` with its 95% interval, and its kernel count below it."""
     arm, model, _, interval, n_kernels = row
     # below summary.MIN_PAIRS_FOR_INTERVAL kernels the interval is withheld: a bare point
     low, high = drawn_ends(interval)
@@ -1006,7 +1006,7 @@ def summary_mark(
         elinewidth=type_.line_width * 0.75,
         capsize=type_.marker_size / 2.0,
         zorder=5,
-        **series_style(experiment_tags.packet_of(arm), model),
+        **series_style(study_tags.packet_of(arm), model),
     )
     # BELOW the mark: above it the label lands on the ideal line and on the panel's name.
     # Neighbours alternate between two depths so their labels never share a line.
@@ -1028,7 +1028,7 @@ def summary_panel(
     ceiling: float,
     type_: plotstyle.TypeScale,
 ) -> None:
-    """One scaling law's panel of :func:`figure_summary`: a mark per arm, the ideal at 1, Y from 0 to
+    """One scaling law's panel of :func:`figure_summary`: a mark per setup, the ideal at 1, Y from 0 to
     ``ceiling`` (shared by both panels)."""
     for index, row in enumerate(part):
         summary_mark(ax, index, row, type_)
@@ -1046,7 +1046,7 @@ def figure_summary(
     width: float = plotstyle.DOUBLE_COLUMN_WIDTH,
     type_: plotstyle.TypeScale = plotstyle.AUTHOR_SCALE,
 ) -> matplotlib.figure.Figure | None:
-    """Geomean eta per arm with its 95% interval, weak beside strong. None when nothing is drawable.
+    """Geomean eta per setup with its 95% interval, weak beside strong. None when nothing is drawable.
 
     A point with an interval, not a bar: the quantity is a geomean of ratios and the interval is
     the claim, while a bar's area from zero is a length nobody reads a ratio off.
@@ -1065,7 +1065,7 @@ def figure_summary(
         ax.set_title(mode_label(mode), fontsize=type_.title_pt, color=plotstyle.INK)
     axes[0][0].set_ylabel("Geomean $\\eta$ over Kernels", fontsize=type_.label_pt)
     fig.tight_layout()
-    keys = series_keys((experiment_tags.packet_of(row[0]), row[1]) for row in rows)
+    keys = series_keys((study_tags.packet_of(row[0]), row[1]) for row in rows)
     marks = [
         Line2D([], [], linestyle="", markersize=type_.marker_size, label=series_label(*key), **series_style(*key))
         for key in keys
@@ -1088,7 +1088,7 @@ GEOMEAN_LABEL: str = "Geomean"
 
 
 def points_table(curves_: Sequence[Curve]) -> pd.DataFrame:
-    """The numbers behind every mark: one row per (arm, kernel, mode, P)."""
+    """The numbers behind every mark: one row per (setup, kernel, mode, P)."""
     return pd.DataFrame(
         [
             {

@@ -4,7 +4,7 @@
 
 SGLang hands ``--dist-timeout`` to every model-parallel subgroup it creates (parallel_state's
 ``_MODEL_PARALLEL_GROUP_TIMEOUT``), ``pp:device`` included. Left unset those groups run at torch's
-600 s default, and a ``pp:device`` SEND watchdog at exactly that bound aborted the four-node kimi arm
+600 s default, and a ``pp:device`` SEND watchdog at exactly that bound aborted the four-node kimi setup
 633011. ``run_vllm_node`` cannot be sourced, so the argv is pinned against the shipped text, as
 tests/test_vllm_pp_serve_args.py does for the vLLM branch.
 """

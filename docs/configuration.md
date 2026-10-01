@@ -32,7 +32,7 @@ SALLOC_PARTITION="${SALLOC_PARTITION:-${SBATCH_PARTITION}}"
 
 To keep the layer outside the checkout, point `HPCAGENT_BENCH_SITE_ENV` at it. With no layer every variable
 takes its generic default, which runs wherever `SCRATCH` is set. `experiments/layers/site-cscs.env` is the layer
-of the CSCS Alps MI300A partition, the reference setup of this repository's campaigns.
+of the CSCS Alps MI300A partition, the reference setup of this repository's experiments.
 
 | Where | What it resolves |
 |---|---|
@@ -44,7 +44,7 @@ of the CSCS Alps MI300A partition, the reference setup of this repository's camp
 | `pyproject.toml` (`[tool.hpcagent-bench] dace-pin`) | the dace commit a release installs, bakes and runs ([below](#dace)) |
 | `hpcagent_bench/paths.py` | the Python side of the same roots |
 
-Campaign knobs (models, agents, judges, budgets) are not site values: they live in `experiments/layers/common.env`
+Experiment knobs (models, agents, judges, budgets) are not site values: they live in `experiments/layers/common.env`
 and the model layers ([launch.md](launch.md), [`experiments/LAUNCH.md`](../experiments/LAUNCH.md)).
 
 ## Job shape per system
@@ -78,7 +78,7 @@ ones). An explicit `--gpus-per-task` replaces the system's `gpus_per_node`, sinc
 | Variable | Default | Controls |
 |---|---|---|
 | `HPCAGENT_BENCH_SITE_ENV` | `experiments/layers/site.env` when it exists | which layer `scripts/site_env.sh` loads; a named file that does not exist is an error |
-| `SBATCH_PARTITION`, `SALLOC_PARTITION` | unset (the cluster's default) | the partition of every `sbatch` / `salloc`; Slurm reads it and it overrides a script's `#SBATCH --partition`, and `--partition=` on the command line overrides it (`PARTITION=mi200` does that for campaign arms) |
+| `SBATCH_PARTITION`, `SALLOC_PARTITION` | unset (the cluster's default) | the partition of every `sbatch` / `salloc`; Slurm reads it and it overrides a script's `#SBATCH --partition`, and `--partition=` on the command line overrides it (`PARTITION=mi200` does that for experiment setups) |
 | `SBATCH_ACCOUNT` | empty | the account every `sbatch` bills; `hpcagent_bench/cluster/submit.sh` refuses to submit without one, and `root`. `SLURM_ACCOUNT` and `SALLOC_ACCOUNT` follow it. No script passes `-A` |
 | `HPCAGENT_BENCH_EXCLUDE_NODES` | empty | a Slurm hostlist regrade jobs avoid |
 | `HPCAGENT_BENCH_CI_PARTITION` | `SBATCH_PARTITION` | partition of the CI replay, `scripts/run_tests.sh --container` |
@@ -90,7 +90,7 @@ ones). An explicit `--gpus-per-task` replaces the system's `gpus_per_node`, sinc
 | Variable | Default | Controls |
 |---|---|---|
 | `SCRATCH` | set by the site | bulk storage: runs, result DBs, logs, JIT caches, the venv |
-| `HPCAGENT_BENCH_SCRATCH` | `<checkout>/.scratch` (git-ignored) | submitter Slurm output (`logs/`), the judge core dump of a crash-diagnosis arm (`core/`), native-mode submissions (`native_runs/`) |
+| `HPCAGENT_BENCH_SCRATCH` | `<checkout>/.scratch` (git-ignored) | submitter Slurm output (`logs/`), the judge core dump of a crash-diagnosis setup (`core/`), native-mode submissions (`native_runs/`) |
 | `FAST_SCRATCH` | `SCRATCH`, else `<checkout>/.cache` | model weights and large read-mostly caches (`HF_HOME`, the judge's disk result store) |
 | `HPCAGENT_BENCH_CACHE` | `$FAST_SCRATCH/.hpcagentbench-cache` | root of the read-mostly caches; `HF_HOME` is `$HPCAGENT_BENCH_CACHE/hf` |
 | `JIT_CACHE_ROOT` | `$SCRATCH/.hpcagentbench-cache`, else `<checkout>/.cache/jit` | compile/JIT caches (aiter, triton, inductor, vLLM), keyed by image below it |
@@ -148,7 +148,7 @@ built for that architecture and its GPU count. The partition that hardware sits 
 
 `tests/test_no_hardcoded_user_paths.py` scans every tracked file for storage mounts, home directories, user names,
 site emails, Slurm accounts, `#SBATCH` partition/account/node directives, node and login host names, literal
-partitions, one campaign's run directories and the site image registry, in live code (comments and docstrings may
+partitions, one experiment's run directories and the site image registry, in live code (comments and docstrings may
 name a site to explain it). A file that legitimately carries such a value is allowlisted in the test with one
 reason: the CSCS site layer, the system profiles, the hardware-profile layer, this page, and the MI300A serving
 recipe's partition check.

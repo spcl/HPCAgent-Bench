@@ -36,7 +36,7 @@ CEILING_MS = 1_800_000
 
 #: Node-aggregate prompt throughput, tokens/s, measured on one mi300 node serving qwen38 with SGLang
 #: at peak_running=5: 11,029,217 prompt tokens over 6917.5s of wall time. The floor a single request
-#: is promised under full contention -- divide by the arm's AGENTS_PER_NODE for its per-request share.
+#: is promised under full contention -- divide by the setup's AGENTS_PER_NODE for its per-request share.
 MEASURED_NODE_PROMPT_TOK_S = 1594.39
 
 #: How far past the worst-case arithmetic mean to sit, since the measured throughput above is itself
@@ -55,11 +55,11 @@ def derive_ms(
     node_tok_s: float = MEASURED_NODE_PROMPT_TOK_S,
     margin: float = SAFETY_MARGIN,
 ) -> int:
-    """The idle timeout covering a full-context prefill at this arm's worst-case concurrency.
+    """The idle timeout covering a full-context prefill at this setup's worst-case concurrency.
 
-    ``context_tokens`` and ``agents_per_node`` at or below zero mean the arm names neither (or
+    ``context_tokens`` and ``agents_per_node`` at or below zero mean the setup names neither (or
     is misconfigured) -- there is nothing to derive from, so this returns the CLI's ceiling, the
-    same default every arm ran with before this module existed.
+    same default every setup ran with before this module existed.
     """
     if context_tokens <= 0 or agents_per_node <= 0:
         return CEILING_MS
