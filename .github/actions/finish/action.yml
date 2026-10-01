@@ -19,13 +19,13 @@ runs:
     # Saved from a red job too: its objects are what make the next run warm.
     - name: ccache save
       if: ${{ always() && env.CCACHE_KEY != '' }}
-      uses: actions/cache/save@v4
+      uses: actions/cache/save@v5
       with:
         path: ~/.ccache
         key: ${{ env.CCACHE_KEY }}-${{ github.run_id }}
     - name: Upload coverage data
       if: ${{ always() && inputs.coverage != '' }}
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v6
       with:
         name: coverage-${{ inputs.coverage }}
         path: .coverage*

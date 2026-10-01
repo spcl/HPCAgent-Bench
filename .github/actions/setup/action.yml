@@ -29,7 +29,7 @@ inputs:
 runs:
   using: composite
   steps:
-    - uses: actions/setup-python@v5
+    - uses: actions/setup-python@v6
       with:
         python-version: ${{ inputs.python-version || env.PYTHON_VERSION }}
 
@@ -156,7 +156,7 @@ runs:
     # which keeps a cold cache cold forever.
     - name: ccache restore
       if: ${{ inputs.ccache != '' }}
-      uses: actions/cache/restore@v4
+      uses: actions/cache/restore@v5
       with:
         path: ~/.ccache
         key: ${{ env.CCACHE_KEY }}-${{ github.run_id }}
