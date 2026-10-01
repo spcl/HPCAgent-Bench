@@ -41,9 +41,9 @@ def load_study_module(name: str, folder: pathlib.Path = EXPERIMENTS) -> ModuleTy
     return module
 
 
-@pytest.fixture(name="paired_arms")
+@pytest.fixture(name="paired_setups")
 def paired_setups_fixture() -> ModuleType:
-    return load_study_module("paired_arms", STATISTICS)
+    return load_study_module("paired_setups", STATISTICS)
 
 
 def graded(

@@ -406,7 +406,7 @@ packets:
       - lang
   # gitscicomp10's OTHER condition, beside `repo` above: the agent gets the kernel alone, no
   # surrounding repository. Not a treatment an arm stages -- it names no skills or env -- but the
-  # display-name lookup `hpcagent_bench.stats.figures.llr40_arms.condition_label` reads off
+  # display-name lookup `hpcagent_bench.stats.figures.llr40_setups.condition_label` reads off
   # this same table for `repo`, and a condition it does not find here fell through to the bare
   # arm-name token ("kernel") instead of a proper name.
   kernel:
@@ -536,7 +536,7 @@ aliases:
   # column name for the same toolchain: a gitscicomp10 submission carries baseline `c-autopar` while
   # the sweep column is `cc_autopar`. Two spellings of one framework take one colour slot and one
   # name only while they are registered as aliases -- unregistered, a baseline filter written in
-  # either spelling silently matches nothing (paired_arms refused gitscicomp10 outright).
+  # either spelling silently matches nothing (paired_setups refused gitscicomp10 outright).
   frameworks:
     c-autopar: cc_autopar
     c: cc

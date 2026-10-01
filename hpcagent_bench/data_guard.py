@@ -52,9 +52,9 @@ class ProtectedPathError(ValueError):
 
 def protected_roots() -> tuple[pathlib.Path, ...]:
     """Every root whose contents no collection or cleanup tool may delete or overwrite."""
-    from hpcagent_bench import campaigns  # lazy: keeps check_output free of the registry imports
+    from hpcagent_bench import experiments  # lazy: keeps check_output free of the registry imports
 
-    roots = [campaigns.runs_root()]
+    roots = [experiments.runs_root()]
     frozen = frozen_observations.default_dir()
     if frozen is not None:
         roots.append(frozen)

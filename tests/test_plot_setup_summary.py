@@ -28,7 +28,7 @@ REPO = pathlib.Path(__file__).resolve().parents[1]
 
 def load_script() -> types.ModuleType:
     """Import ``statistics/plot_setup_summary.py`` as a module (scripts/ is not a package)."""
-    spec = importlib.util.spec_from_file_location("plot_arm_summary", REPO / "statistics" / "plot_arm_summary.py")
+    spec = importlib.util.spec_from_file_location("plot_setup_summary", REPO / "statistics" / "plot_setup_summary.py")
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module

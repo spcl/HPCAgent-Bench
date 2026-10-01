@@ -17,7 +17,6 @@ What is pinned here:
 import importlib.util
 import json
 import pathlib
-import sqlite3
 import sys
 import threading
 from collections.abc import Iterator
@@ -231,7 +230,7 @@ def recorded(db: str) -> dict[str, list[tuple[object, ...]]]:
         return {
             "runs": [
                 tuple(row)
-                for row in conn.execute(f"select label, {IDENTITY_COLUMNS} from runs join setups using (setup)")
+                for row in conn.execute(f"select label, {IDENTITY_COLUMNS} from runs join arms using (arm)")
             ],
             "submissions": [
                 tuple(row)

@@ -104,7 +104,7 @@ def shard_rows(job_dir: pathlib.Path, query: str, args: tuple[object, ...] = ())
 def job_setup(job_dir: pathlib.Path) -> str:
     """The one setup ``job_dir`` recorded; empty when it has no shard. Raises on a shard with no setup or
     a job that recorded several."""
-    arms = {str(arm) for (arm,) in shard_rows(job_dir, "select distinct setup from runs") if arm}
+    arms = {str(arm) for (arm,) in shard_rows(job_dir, "select distinct arm from runs") if arm}
     if len(arms) > 1:
         raise SystemExit(f"{job_dir}: runs.arm names several setups: {sorted(arms)}")
     if not arms and any(job_dir.glob(SHARD_GLOB)):
