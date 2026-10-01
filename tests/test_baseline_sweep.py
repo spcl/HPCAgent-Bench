@@ -175,7 +175,7 @@ def test_the_default_cap_bounds_the_heap_not_the_address_space(
     sweep = sweep_of(tmp_path, opt, ("onlykernel",), managed=False)
     assert baseline.run(sweep, jobs.Rank(0, 1)) == 0
     limits = rlimits_of(capfd.readouterr().out)
-    heap = 100663296 * 1024  # 96 GiB, CANON_KERNEL_MEM_KB's default
+    heap = baseline.DEFAULT_KERNEL_MEM_KB * 1024  # CANON_KERNEL_MEM_KB unset: the default cap
     assert limits["RLIMIT_DATA"] == (heap, heap)
     assert limits["RLIMIT_AS"] == (resource.RLIM_INFINITY, resource.RLIM_INFINITY)
 
