@@ -17,6 +17,9 @@ REPO = pathlib.Path(__file__).resolve().parents[1]
 IMAGES = REPO / "containers" / "images"
 LIB = REPO / "containers" / "lib"
 DOCKERFILES = ("judge-agent-amd", "judge-agent-cpu", "judge-agent-cuda")
+# judge-agent-cuda is the aarch64 (GH200) image: its llvm context builds 0.3.33 because clang miscompiles
+# 0.3.30's DYNAMIC_ARCH kernels there (level-2 routines and potrf fail OpenBLAS's own tests).
+AARCH64_ONLY = "judge-agent-cuda"
 OVERLAY_PACKAGE = LIB / "spack-overlay" / "spack_repo" / "hpcagent" / "packages" / "openblas" / "package.py"
 
 
@@ -24,7 +27,9 @@ OVERLAY_PACKAGE = LIB / "spack-overlay" / "spack_repo" / "hpcagent" / "packages"
 def test_the_image_builds_the_pinned_openblas_with_runtime_dispatch(image: str) -> None:
     docker = (IMAGES / image / "Dockerfile").read_text(encoding="utf-8")
     specs = re.findall(r"'  - (openblas[^']*)'", docker)
-    assert specs and all(spec.startswith("openblas@0.3.30") for spec in specs), specs
+    assert specs and specs[0].startswith("openblas@0.3.30"), specs
+    allowed = ("openblas@0.3.30", "openblas@0.3.33") if image == AARCH64_ONLY else ("openblas@0.3.30",)
+    assert all(spec.startswith(allowed) for spec in specs), specs
 
 
 @pytest.mark.parametrize("image", DOCKERFILES)
