@@ -545,13 +545,14 @@ RUN set -eux; \
       '  # solvers and nothing else moves. The gnu view is CPU-only for petsc: its HIP' \
       '  # units are hipcc code on libomp, and a process of the gnu family runs on libgomp alone (the llvm view builds' \
       '  # the device variants). the gnu petsc takes ~superlu-dist ~strumpack: those gcc builds still link libomp' \
-      '  # (superlu-dist, butterflypack), which would refuse petsc and slepc to the gnu family. magma is GPU-only and stays' \
+      '  # (superlu-dist, butterflypack), which would refuse petsc and slepc to the gnu family; without them nothing pins' \
+      '  # its compiler, and spack picked rocmcc, so petsc and slepc name the gcc. magma is GPU-only and stays' \
       '  # +rocm, refused to the gnu family.' \
       '  - hypre +mpi +openmp' \
       '  - arpack-ng +mpi +shared' \
       "  - magma ~cuda +rocm amdgpu_target=$(echo "${ROCM_ARCH}" | tr ";" ",") +fortran" \
-      '  - petsc +mpi +metis +hypre +mumps ~superlu-dist ~strumpack +suite-sparse +scalapack +hdf5 +fftw ~rocm +shared' \
-      '  - slepc +arpack' \
+      "  - petsc +mpi +metis +hypre +mumps ~superlu-dist ~strumpack +suite-sparse +scalapack +hdf5 +fftw ~rocm +shared %gcc@${GCC_VERSION}" \
+      "  - slepc +arpack %gcc@${GCC_VERSION}" \
       '  # sundials had no provider at all: its entry declares -lsundials_core, which exists only' \
       '  # from SUNDIALS 7, so a distro 6.x fails on that token alone. Spack ships 7.x, with rocm.' \
       "  - sundials +openmp ~cuda +rocm amdgpu_target=$(echo "${ROCM_ARCH}" | tr ";" ",")" \
