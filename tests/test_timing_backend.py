@@ -25,6 +25,22 @@ def test_min_of_k_empty_candidate_is_zero_speedup() -> None:
     assert r.speedup == 0.0
 
 
+# median_of_k
+def test_median_of_k_divides_the_medians_and_ignores_one_outlier() -> None:
+    r = timing.reduce_median_of_k([10, 11, 12, 13, 400], [20, 22, 24, 26, 28])
+    assert (r.native_ns, r.baseline_ns, r.speedup, r.backend) == (12, 24, 2.0, "median_of_k")
+    assert r.significant
+
+
+def test_median_of_k_empty_candidate_is_zero_speedup() -> None:
+    assert timing.reduce_median_of_k([], [20, 22]).speedup == 0.0
+
+
+def test_reduce_dispatches_median_of_k_and_stamps_it() -> None:
+    r = timing.reduce([10, 12, 14], [20, 24, 28], backend="median_of_k")
+    assert (r.speedup, r.reduction) == (2.0, "medk-v1")
+
+
 # mannwhitney_delta
 def _spread(center, n: int = 20):
     # deterministic small monotonic spread so the U test has no exact-tie issues
