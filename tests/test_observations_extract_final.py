@@ -12,13 +12,11 @@ flagged (never read as unsolved, never as re-timed), an older per-cell stamp is 
 grade, and the newest measurement wins.
 """
 
-import contextlib
 import csv
 import functools
 import math
 import pathlib
-import sqlite3
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from typing import Any
 
 import pytest
@@ -28,6 +26,7 @@ from hpcagent_bench.harness import grade_under, results_db, timing
 from hpcagent_bench.harness.scoring import Score, TimedCell
 from hpcagent_bench.stats import population, score_rule
 from tests import results_seed
+from tests.sqlite_closing import connect
 
 RUN = "llr-focus40-qwen38-c.n0.p0.w0"
 ARM = "llr-focus40-qwen38-c"
@@ -40,13 +39,6 @@ FINAL = timing.FINAL_GRADE_REDUCTION
 ONE_REPLACED = {"replaced": 1, "unsolved": 0, "errored": 0, "fallback": 0, "not_retimed": 1, "unmatched": 0}
 ONE_REPLACED |= {FINAL: 1}
 Grader = Callable[[grade_under.Item], tuple[list[dict[str, Any]], dict[str, Any]]]
-
-
-@contextlib.contextmanager
-def connect(path: pathlib.Path) -> Iterator[sqlite3.Connection]:
-    """``sqlite3.connect`` as a block that commits AND closes (an open handle fails ``-W error``)."""
-    with contextlib.closing(sqlite3.connect(path)) as conn, conn:
-        yield conn
 
 
 @pytest.fixture(autouse=True)

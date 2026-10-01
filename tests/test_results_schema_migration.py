@@ -13,13 +13,13 @@ import multiprocessing
 import multiprocessing.queues
 import multiprocessing.synchronize
 import pathlib
-import sqlite3
 
 import pytest
 from sqlmodel import Session, select
 
 from hpcagent_bench import osinfo
 from hpcagent_bench.frameworks.schema import Result, results_engine
+from tests.sqlite_closing import connect
 
 #: The table as it stood before ``flavor`` / ``build``: enough columns to insert a legacy row.
 LEGACY_DDL = """
@@ -47,7 +47,7 @@ CREATE TABLE results (
 def _legacy_db(tmp_path):
     """A results DB one column behind the model, with a row already in it."""
     path = tmp_path / "hpcagent_bench.db"
-    with sqlite3.connect(path) as conn:
+    with connect(path) as conn:
         conn.execute(LEGACY_DDL)
         conn.execute(
             "INSERT INTO results (timestamp, benchmark, preset, framework, validated, time, execution, cpu) "
@@ -83,7 +83,7 @@ def test_a_legacy_db_accepts_a_row_carrying_the_new_column(legacy_db) -> None:
 def test_reconciling_twice_is_a_no_op(legacy_db) -> None:
     results_engine(legacy_db)
     results_engine(legacy_db)  # ADD COLUMN is not idempotent in SQLite; the guard must be
-    with sqlite3.connect(legacy_db) as conn:
+    with connect(legacy_db) as conn:
         names = [row[1] for row in conn.execute("PRAGMA table_info(results)")]
     assert names.count("flavor") == 1
     assert names.count("build") == 1
@@ -125,7 +125,7 @@ def test_four_ranks_racing_the_first_write_to_one_shard_do_not_crash(tmp_path: p
     for worker in workers:
         worker.join(timeout=30)
     assert outcomes == ["ok"] * 4, outcomes
-    with sqlite3.connect(path) as conn:
+    with connect(path) as conn:
         names = {row[1] for row in conn.execute("PRAGMA table_info(results)")}
     assert names == set(Result.__table__.columns.keys())
 

@@ -12,6 +12,7 @@ import pytest
 
 from hpcagent_bench import collect
 from hpcagent_bench.collect import DataSource
+from tests.sqlite_closing import connect
 
 
 def tree_digest(root: pathlib.Path) -> dict[str, str]:
@@ -46,7 +47,7 @@ def sources(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> Iterator
     (job / "observations").mkdir()
     (job / "observations" / "curve.bin").write_bytes(b"\1")
     (src / "regrades" / "w1").mkdir(parents=True)
-    with sqlite3.connect(src / "regrades" / "w1" / "regrade-cells-0.db") as c:
+    with connect(src / "regrades" / "w1" / "regrade-cells-0.db") as c:
         c.execute("create table regrade_cells (x)")
     (src / "regrades" / "w1" / "worklist.jsonl").write_text("{}\n")
     (src / "frozen" / "llr").mkdir(parents=True)
@@ -107,7 +108,7 @@ def test_copy_collects_every_kind_and_leaves_sources_untouched(sources: pathlib.
     }
     assert not any("home/" in c or c.endswith(("claude.log", "build.so", "worklist.jsonl")) for c in copied)
     assert n == 6
-    with sqlite3.connect(out / "runs/runs/camp-1/900/judge/rank-0/hpcagent_bench0.db") as conn:
+    with connect(out / "runs/runs/camp-1/900/judge/rank-0/hpcagent_bench0.db") as conn:
         assert conn.execute("select x from submissions").fetchall() == [(42,)]
     assert collect.verify(out) == []
     listed = [line.split("\t") for line in (out / "SOURCES.tsv").read_text().splitlines()]

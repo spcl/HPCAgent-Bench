@@ -8,13 +8,13 @@ rows the CSV holds.
 """
 
 import pathlib
-import sqlite3
 
 import pandas as pd
 
 from hpcagent_bench import experiments
 
 from hpcagent_bench import observations_extract as extract_llr40
+from tests.sqlite_closing import connect
 
 ROWS = [
     {
@@ -78,6 +78,6 @@ def test_a_missing_numeric_cell_is_null_and_a_missing_text_cell_stays_empty(tmp_
     the empty-to-NULL rule is confined to the numeric columns."""
     db = tmp_path / "obs.db"
     extract_llr40.write_db(db, extract_llr40.OBSERVATION_FIELDS, ROWS)
-    with sqlite3.connect(db) as conn:
+    with connect(db) as conn:
         rows = conn.execute("SELECT tokens, speedup, packet FROM observations ORDER BY benchmark").fetchall()
     assert rows == [(900, None, ""), (None, 2.5, "cpf")]
