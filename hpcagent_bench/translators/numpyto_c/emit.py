@@ -1327,7 +1327,8 @@ class CBodyEmitter(BaseEmitter):
         if t in self.branch_local_decls and t not in self._branch_declared:
             self._branch_declared.add(t)
             size, c_type, fill = self.branch_local_decls[t]
-            lines = [f"{indent}{c_type} *{t} = ({c_type} *)malloc(({size}) * sizeof({c_type}));"]
+            nbytes = byte_count(size, c_type)
+            lines = [f"{indent}{c_type} *{t} = ({c_type} *)malloc({nbytes});", alloc_check(t, nbytes, indent)]
             if fill is not None:
                 lines.append(self.body_fill_stmt(t, size, c_type, fill, indent))
             return "\n".join(lines)
@@ -1375,7 +1376,8 @@ class CBodyEmitter(BaseEmitter):
         lines = [f"{indent}free({t});"]
         # Pluto: cast to the multidimensional pointer-to-array type matching the declaration; else flat T*.
         cast = f"({c_type} (*){self.md_trailing[t]})" if t in self.md_trailing else f"({c_type} *)"
-        lines.append(f"{indent}{t} = {cast}malloc({byte_count(size, c_type)});")
+        nbytes = byte_count(size, c_type)
+        lines += [f"{indent}{t} = {cast}malloc({nbytes});", alloc_check(t, nbytes, indent)]
         if fill is not None:
             lines.append(self.body_fill_stmt(t, size, c_type, fill, indent))
         return "\n".join(lines)
@@ -1945,6 +1947,7 @@ class CBodyEmitter(BaseEmitter):
                     f"{indent}    {num} _Complex *__fft_in = ({num} _Complex *)malloc((size_t)(__fft_n * __fft_batch) "
                     f"* sizeof({num} _Complex));"
                 ),
+                alloc_check("__fft_in", f"(size_t)(__fft_n * __fft_batch) * sizeof({num} _Complex)", f"{indent}    "),
                 f"{indent}    for (int64_t __fft_i = 0; __fft_i < __fft_n * __fft_batch; ++__fft_i) {{",
                 f"{indent}      __fft_in[__fft_i] = ({num} _Complex)({src}[__fft_i]);",
                 f"{indent}    }}",
@@ -2496,6 +2499,17 @@ def literal_stack_bytes(size: str, c_type: str) -> int | None:
     return total
 
 
+def alloc_check(name: str, nbytes: str, indent: str) -> str:
+    """Abort with the array and byte count when its ``malloc`` returned NULL.
+
+    A refused allocation (an armed ``RLIMIT_DATA`` cap, an exhausted node) would otherwise surface as a
+    SIGSEGV at the first write, which reads like a miscompile."""
+    return (
+        f"{indent}if ({name} == NULL && {nbytes} != 0) {{ fprintf(stderr, "
+        f'"out of memory: %zu bytes for {name}\\n", {nbytes}); abort(); }}'
+    )
+
+
 def byte_count(size: str, c_type: str) -> str:
     """``size`` elements of ``c_type`` as a byte count for malloc / memset.
 
@@ -2830,10 +2844,18 @@ class FunctionTopDecls:
         if name in self.md_locals:
             # Pluto: pointer-to-array (heap) so name[i][j] is affine.
             tr = self.emitter.md_trailing[name]
-            self.decls.append(f"{indent}{c_type} (*{name}){tr} = ({c_type} (*){tr})malloc({byte_count(size, c_type)});")
+            nbytes = byte_count(size, c_type)
+            self.decls += [
+                f"{indent}{c_type} (*{name}){tr} = ({c_type} (*){tr})malloc({nbytes});",
+                alloc_check(name, nbytes, indent),
+            ]
             self.heap.append(name)
         elif stack_bytes is None or self.stack_used + stack_bytes > STACK_BUDGET_BYTES:
-            self.decls.append(f"{indent}{c_type} *{name} = ({c_type} *)malloc({byte_count(size, c_type)});")
+            nbytes = byte_count(size, c_type)
+            self.decls += [
+                f"{indent}{c_type} *{name} = ({c_type} *)malloc({nbytes});",
+                alloc_check(name, nbytes, indent),
+            ]
             self.heap.append(name)
         else:
             self.stack_used += stack_bytes
@@ -2885,6 +2907,7 @@ C_HEADER = (
     "#define _USE_MATH_DEFINES\n"
     "#include <stdint.h>\n"
     "#include <stdlib.h>\n"
+    "#include <stdio.h>\n"
     "#include <stdbool.h>\n"
     "#include <string.h>\n"
     "#include <math.h>\n"
@@ -3049,7 +3072,7 @@ C_HEADER = (
 CPP_ARITH = (
     "#include <cstdint>\n#include <cmath>\n"
     "#include <type_traits>\n"
-    "#include <cstring>\n#include <cstdlib>\n"
+    "#include <cstring>\n#include <cstdlib>\n#include <cstdio>\n"
     + NPB_HD_GUARD
     + "// Math constants as typed constexpr values. ``<cmath>`` may\n"
     "// predefine M_PI / M_E as macros (glibc __USE_MISC); undefine\n"
