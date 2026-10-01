@@ -380,7 +380,8 @@ fi
 
 # ---------------------------------------------------------------- 4. PETSc, GPU-enabled
 petscconf=""
-for c in /opt/view/include/petscconf.h /opt/view/lib/petsc/conf/petscvariables; do
+# The llvm context carries the GPU PETSc (+rocm); the gnu view's is CPU-only.
+for c in /opt/omp/llvm/view/include/petscconf.h /opt/view/include/petscconf.h /opt/view/lib/petsc/conf/petscvariables; do
     [[ -e "${c}" ]] && petscconf="${c}" && break
 done
 if [[ -n "${petscconf}" ]] && grep -q 'PETSC_HAVE_HIP' "${petscconf}" 2>/dev/null; then
