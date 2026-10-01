@@ -542,13 +542,15 @@ RUN set -eux; \
       '  # +rocm below 3.0.1 does not concretize at all (620907). What is NOT closed: petsc asks' \
       '  # for hypre+rocm only under +int64 (depends_on("hypre+mixedint+rocm", when=' \
       '  # "+hypre+int64+rocm")), which this petsc does not set. So hypre loses its device' \
-      '  # solvers and nothing else moves. The gnu view is CPU-only for superlu-dist, strumpack and petsc: their HIP' \
+      '  # solvers and nothing else moves. The gnu view is CPU-only for petsc: its HIP' \
       '  # units are hipcc code on libomp, and a process of the gnu family runs on libgomp alone (the llvm view builds' \
-      '  # the device variants). magma is GPU-only and stays +rocm, refused to the gnu family.' \
+      '  # the device variants). the gnu petsc takes ~superlu-dist ~strumpack: those gcc builds still link libomp' \
+      '  # (superlu-dist, butterflypack), which would refuse petsc and slepc to the gnu family. magma is GPU-only and stays' \
+      '  # +rocm, refused to the gnu family.' \
       '  - hypre +mpi +openmp' \
       '  - arpack-ng +mpi +shared' \
       "  - magma ~cuda +rocm amdgpu_target=$(echo "${ROCM_ARCH}" | tr ";" ",") +fortran" \
-      '  - petsc +mpi +metis +hypre +mumps +superlu-dist +strumpack +suite-sparse +scalapack +hdf5 +fftw ~rocm +shared' \
+      '  - petsc +mpi +metis +hypre +mumps ~superlu-dist ~strumpack +suite-sparse +scalapack +hdf5 +fftw ~rocm +shared' \
       '  - slepc +arpack' \
       '  # sundials had no provider at all: its entry declares -lsundials_core, which exists only' \
       '  # from SUNDIALS 7, so a distro 6.x fails on that token alone. Spack ships 7.x, with rocm.' \
