@@ -684,8 +684,8 @@ class SubstituteParamAliases(ast.NodeTransformer):
     every backend. ICON velocity_tendencies aliases ~40 parameters this way.
 
     Conservative: only fires when the RHS is a parameter, the LHS isn't itself
-    a parameter, and the LHS is bound exactly once (a genuine reassignment
-    would make the substitution unsound)."""
+    a parameter, and the LHS is bound exactly once in the whole function, at any
+    nesting depth (a genuine reassignment would make the substitution unsound)."""
 
     def __init__(self, params: Iterable[str]) -> None:
         self.params = set(params)
@@ -703,7 +703,10 @@ class SubstituteParamAliases(ast.NodeTransformer):
         for node in ast.walk(fn):
             if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
                 bare_binds[node.id] = bare_binds.get(node.id, 0) + 1
-        for s in fn.body:
+        # Every ``local = param`` statement counts, at any depth: inlining a helper into a time-step loop
+        # leaves its ``f = field`` aliases inside the loop body, and a copy there loses the helper's
+        # in-place writes (fv3_dycore's corner fills never reached ``q``).
+        for s in ast.walk(fn):
             if (
                 isinstance(s, ast.Assign)
                 and len(s.targets) == 1
