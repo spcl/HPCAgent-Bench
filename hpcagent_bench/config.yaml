@@ -43,8 +43,8 @@ fuzz:
   # interval (large_shapes' big_spec), so the timed span is [(lo+hi)/2, hi] x XL, not [lo, hi].
   # 0.50/1.00 therefore times [0.75, 1.00] x XL -- production-scale, per the note above, with a
   # real spread instead of the three-measurements-of-one-point that 0.85/1.15 timed
-  # ([1.00, 1.15], span 0.15 -- and every draw over 1.00 BREACHED the track ceiling, since
-  # sizing.fit_to_ceiling puts XL at 0.97 * XL_BYTE_CEILING = 3.88 GiB and 1.15x is 4.46 GiB).
+  # ([1.00, 1.15], span 0.15 -- and every draw over 1.00 breaches the XL byte ceiling, since
+  # sizing.fit_to_ceiling puts XL at CEILING_MARGIN (0.97) x XL_BYTE_CEILING).
   # Capping hi at 1.00 makes XL a real ceiling; lowering lo widens correctness coverage too.
   xl_lo_mult: 0.50
   xl_hi_mult: 1.00
