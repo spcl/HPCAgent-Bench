@@ -16,8 +16,8 @@ parameters:
     ngrid: 2531607
     k: 205
   fuzzed:
-    ngrid: [2048, 1500000]
-    k: [8, 160]
+    ngrid: [2048, 2531607]
+    k: [8, 205]
 init:
   input_args:
   - ngrid

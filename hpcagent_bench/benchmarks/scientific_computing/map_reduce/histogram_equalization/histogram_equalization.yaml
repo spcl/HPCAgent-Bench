@@ -18,10 +18,10 @@ parameters:
   fuzzed:
     H:
     - 512
-    - 1024
+    - 21515
     W:
     - 512
-    - 1024
+    - 21515
 init:
   input_args:
   - H

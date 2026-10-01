@@ -12,7 +12,7 @@ parameters:
   XL:
     N: 638
   fuzzed:
-    N: [12, 320]
+    N: [12, 638]
 init:
   input_args:
   - N

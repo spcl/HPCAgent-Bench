@@ -17,7 +17,7 @@ parameters:
     N: 640
     niter: 25
   fuzzed:
-    N: [12, 200]
+    N: [12, 640]
     niter: [10, 80]
 init:
   input_args:
