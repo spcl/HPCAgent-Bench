@@ -70,12 +70,12 @@ def now() -> str:
 class Provenance:
     """What went into a fused frame, and what did not."""
 
-    experiment: str
+    study: str
     live_rows: int
     frozen_rows: int
     dropped_retired: int
     dropped_foreign: int
-    arms: tuple[str, ...]
+    setups: tuple[str, ...]
     frozen_jobs: tuple[str, ...]
     extracted_at: str
     #: Rows on a kernel outside the selection's roster (a wave that served more than the tag).
@@ -84,20 +84,20 @@ class Provenance:
     def report(self) -> str:
         """One block naming every count, for a caller to print beside the file it just wrote."""
         lines = [
-            f"study     {self.experiment}",
+            f"study     {self.study}",
             f"extracted_at   {self.extracted_at}",
             f"live rows      {self.live_rows}",
             f"frozen rows    {self.frozen_rows} from {len(self.frozen_jobs)} job(s) whose directory is gone",
             f"dropped        {self.dropped_retired} retired, {self.dropped_foreign} not this study's, "
             f"{self.dropped_off_roster} off its roster",
-            f"setups ({len(self.arms)})      {', '.join(self.arms)}",
+            f"setups ({len(self.setups)})      {', '.join(self.setups)}",
         ]
         return "\n".join(lines)
 
 
-def stamp(frame: "pd.DataFrame", experiment: str, extracted_at: str) -> "pd.DataFrame":
+def stamp(frame: "pd.DataFrame", study: str, extracted_at: str) -> "pd.DataFrame":
     """``frame`` with the provenance columns set."""
-    return frame.assign(**{EXTRACTED_AT: extracted_at, STUDY_COLUMN: experiment})
+    return frame.assign(**{EXTRACTED_AT: extracted_at, STUDY_COLUMN: study})
 
 
 def keep_owned(frame: "pd.DataFrame", selection: experiments.Selection) -> tuple["pd.DataFrame", int, int]:
@@ -107,9 +107,9 @@ def keep_owned(frame: "pd.DataFrame", selection: experiments.Selection) -> tuple
     the user took it out, a foreign one belongs to another study that shares a run root."""
     if frame.empty or "arm" not in frame.columns:
         return frame, 0, 0
-    arms = frame["arm"].astype(str)
-    mine = arms.map(lambda arm: experiments.prefix_of(arm) in selection.prefixes)
-    retired = arms.map(experiments.dropped)
+    setups = frame["arm"].astype(str)
+    mine = setups.map(lambda setup: experiments.prefix_of(setup) in selection.prefixes)
+    retired = setups.map(experiments.dropped)
     return frame[mine & ~retired], int((mine & retired).sum()), int((~mine).sum())
 
 
@@ -187,7 +187,7 @@ def fuse(
     # Stamped HERE, on the result, not on the way in: a caller that built its own frame still gets
     # provenance, and re-stamping an already-stamped frame is the same value.
     if not frame.empty:
-        frame = stamp(frame, selection.experiment, extracted_at)
+        frame = stamp(frame, selection.study, extracted_at)
     # Counted off the FUSED frame's own flag, not off the `frozen` argument: the extractor merges
     # the frozen rows of gone-or-unreadable jobs itself, so they arrive inside `live` and a count
     # taken from the argument reported 0 while hundreds sat in the frame.
@@ -195,14 +195,14 @@ def fuse(
     is_frozen = flag.astype(str).eq("1") if flag is not None else None
     frozen_rows = int(is_frozen.sum()) if is_frozen is not None else 0
     jobs = tuple(sorted(frame.loc[is_frozen, "job"].astype(str).unique())) if frozen_rows else ()
-    arms = tuple(sorted(frame["arm"].astype(str).unique())) if not frame.empty else ()
+    setups = tuple(sorted(frame["arm"].astype(str).unique())) if not frame.empty else ()
     return frame, Provenance(
-        experiment=selection.experiment,
+        study=selection.study,
         live_rows=len(frame) - frozen_rows,
         frozen_rows=frozen_rows,
         dropped_retired=live_retired + frozen_retired,
         dropped_foreign=live_foreign + frozen_foreign,
-        arms=arms,
+        setups=setups,
         frozen_jobs=jobs,
         extracted_at=extracted_at,
         dropped_off_roster=off_roster,
@@ -239,7 +239,7 @@ def load(path: pathlib.Path) -> "pd.DataFrame":
 
 
 def build(
-    experiment: str,
+    study: str,
     out: pathlib.Path,
     csv_out: pathlib.Path | None = None,
     frozen: pathlib.Path | None = None,
@@ -254,7 +254,7 @@ def build(
     write ``out`` (and ``csv_out``)."""
     import pandas as pd
 
-    selection = experiments.resolve(experiment, root)
+    selection = experiments.resolve(study, root)
     extracted_at = now()
     with contextlib.ExitStack() as stack:
         runs = (str(stack.enter_context(databases.union(dbs))),) if dbs else ()
@@ -262,7 +262,7 @@ def build(
     extra = pd.concat([load(path) for path in csvs], ignore_index=True) if csvs else pd.DataFrame()
     frame, provenance = fuse(selection, live, extra, extracted_at)
     if frame.empty:
-        raise SystemExit(f"no observations for study {experiment!r} under {list(selection.run_globs())}")
+        raise SystemExit(f"no observations for study {study!r} under {list(selection.run_globs())}")
     write_db(frame, out) if out.suffix == ".db" else write_csv(frame, out)
     if csv_out is not None:
         write_csv(frame, csv_out)
@@ -273,8 +273,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--study",
-        "--experiment",
-        dest="experiment",
+        dest="study",
         required=True,
         help=f"one of: {', '.join(experiments.studies_available())}",
     )
@@ -321,7 +320,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     frame, provenance = build(
-        args.experiment,
+        args.study,
         args.out,
         csv_out=args.csv_out,
         frozen=frozen_observations.resolve(args.frozen_observations),

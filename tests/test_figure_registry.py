@@ -34,7 +34,7 @@ from hpcagent_bench.stats.figures import results, signed
 #: kind of unregistered value no data-driven check can see, because no row has to exist for it to
 #: reach a legend.
 FIGURE_FRAMEWORKS: dict[str, tuple[str, ...]] = {
-    "figures.signed.ARMS": tuple(signed.ARMS),
+    "figures.signed.SETUPS": tuple(signed.SETUPS),
     "figures.signed.COMPARISONS": tuple(signed.COMPARISONS),
     "figures.signed.BASELINE": (signed.BASELINE,),
     "figures.signed.REFERENCE": (signed.REFERENCE,),
@@ -96,9 +96,9 @@ def test_a_setup_name_resolves_to_a_registered_model_or_to_nothing() -> None:
     """`model_of` is the last resort for a CSV that predates the identity columns. It must return a
     tag the palette can shape, or the explicit `other` -- never a half-parsed fragment."""
     registered = set(study_tags.order("models"))
-    for arm in ("llr40-oss120b-c-skills", "cpf-kimi27sglang-fortran", "llr40-gpt-oss-120b-c", "llr4-qwen30b-c"):
-        resolved = study_tags.model_of(arm)
-        assert resolved in registered or resolved == "other", f"{arm} -> {resolved!r}"
+    for setup in ("llr40-oss120b-c-skills", "cpf-kimi27sglang-fortran", "llr40-gpt-oss-120b-c", "llr4-qwen30b-c"):
+        resolved = study_tags.model_of(setup)
+        assert resolved in registered or resolved == "other", f"{setup} -> {resolved!r}"
 
 
 def load_script(name: str) -> ModuleType:
@@ -112,7 +112,7 @@ def load_script(name: str) -> ModuleType:
 
 
 def setup_frame(conditions: list[str]) -> pd.DataFrame:
-    """``plot_setup_summary.arm_points`` rows, one per (model, language, condition)."""
+    """``plot_setup_summary.setup_points`` rows, one per (model, language, condition)."""
     rows = []
     for model in ("qwen38", "oss120b"):
         for condition in conditions:

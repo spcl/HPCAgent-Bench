@@ -133,7 +133,7 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--run-dir", type=pathlib.Path, required=True)
     ap.add_argument("--column", required=True)
-    ap.add_argument("--run", required=True, help="the run/campaign label recorded on every row")
+    ap.add_argument("--run", required=True, help="the run/experiment label recorded on every row")
     ap.add_argument("--db", type=pathlib.Path, required=True)
     ap.add_argument(
         "--expected",

@@ -62,7 +62,7 @@ LLR40_LOG_DELTAS: tuple[float, ...] = (
 )
 
 
-def arms(before_s, after_s, before_c, after_c):
+def setups(before_s, after_s, before_c, after_c):
     """Four mappings keyed by task name, from four equal-length sequences."""
     names = [f"k{i}" for i in range(len(before_s))]
     return (
@@ -75,7 +75,7 @@ def arms(before_s, after_s, before_c, after_c):
 
 def test_no_effect_is_exactly_one_and_zero() -> None:
     """The anchor the whole scale hangs on: identical setups must read no effect, not 'almost none'."""
-    b, a, bc, ac = arms([1.0, 2.0, 0.5], [1.0, 2.0, 0.5], [10.0, 20.0, 5.0], [10.0, 20.0, 5.0])
+    b, a, bc, ac = setups([1.0, 2.0, 0.5], [1.0, 2.0, 0.5], [10.0, 20.0, 5.0], [10.0, 20.0, 5.0])
     r = eff.efficacy(b, a, bc, ac)
     assert r.score.rho == pytest.approx(1.0)
     assert r.cost.rho == pytest.approx(1.0)
@@ -88,7 +88,7 @@ def test_no_effect_is_exactly_one_and_zero() -> None:
 def test_swapping_the_setups_negates_q() -> None:
     """Antisymmetry. Without it the metric would answer differently depending on which setup the
     caller happened to call 'before', and no ranking built on it would mean anything."""
-    b, a, bc, ac = arms([1.0, 2.0, 4.0], [2.0, 2.0, 1.0], [10.0, 30.0, 5.0], [20.0, 10.0, 5.0])
+    b, a, bc, ac = setups([1.0, 2.0, 4.0], [2.0, 2.0, 1.0], [10.0, 30.0, 5.0], [20.0, 10.0, 5.0])
     forward = eff.efficacy(b, a, bc, ac)
     backward = eff.efficacy(a, b, ac, bc)
     assert backward.q == pytest.approx(-forward.q)
@@ -100,7 +100,7 @@ def test_swapping_the_setups_negates_q() -> None:
 def test_a_cheaper_setup_is_an_improvement_not_a_regression() -> None:
     """rho_C is INVERTED on purpose. Read the other way round, every intervention that saved tokens
     would be reported as having made things worse -- the sign error the inversion exists to stop."""
-    b, a, bc, ac = arms([1.0, 1.0], [1.0, 1.0], [100.0, 200.0], [50.0, 100.0])
+    b, a, bc, ac = setups([1.0, 1.0], [1.0, 1.0], [100.0, 200.0], [50.0, 100.0])
     r = eff.efficacy(b, a, bc, ac)
     assert r.cost.rho == pytest.approx(2.0), "halving the tokens is a 2x improvement"
     assert r.cost.pct_change == pytest.approx(100.0)
@@ -111,7 +111,7 @@ def test_a_cheaper_setup_is_an_improvement_not_a_regression() -> None:
 def test_the_aggregate_is_scale_invariant_across_tasks() -> None:
     """The reason it is a geometric mean. A kernel timed in nanoseconds and one timed in seconds must
     move the aggregate by the same factor for the same RELATIVE change, or the unit picks the winner."""
-    b, a, bc, ac = arms([1.0, 1.0, 1.0], [2.0, 3.0, 0.5], [10.0, 10.0, 10.0], [5.0, 20.0, 10.0])
+    b, a, bc, ac = setups([1.0, 1.0, 1.0], [2.0, 3.0, 0.5], [10.0, 10.0, 10.0], [5.0, 20.0, 10.0])
     plain = eff.efficacy(b, a, bc, ac)
     scaled_b = {k: v * 1e6 for k, v in b.items()}
     scaled_a = {k: v * 1e6 for k, v in a.items()}
@@ -123,7 +123,7 @@ def test_the_aggregate_is_scale_invariant_across_tasks() -> None:
 def test_log_rho_is_the_mean_of_the_deltas() -> None:
     """ln rho and mean(d_i) are the same quantity, and the median, the counts and the interval are
     all computed over d. If these ever disagree the pairing is wrong, not the rounding."""
-    b, a, bc, ac = arms([1.0, 2.0, 4.0, 8.0], [3.0, 1.0, 9.0, 2.0], [7.0, 5.0, 11.0, 2.0], [1.0, 9.0, 3.0, 4.0])
+    b, a, bc, ac = setups([1.0, 2.0, 4.0, 8.0], [3.0, 1.0, 9.0, 2.0], [7.0, 5.0, 11.0, 2.0], [1.0, 9.0, 3.0, 4.0])
     r = eff.efficacy(b, a, bc, ac)
     assert r.score.log_rho == pytest.approx(math.log(r.score.rho))
     assert r.cost.log_rho == pytest.approx(math.log(r.cost.rho))
@@ -135,7 +135,7 @@ def test_the_median_and_the_counts_expose_a_tail_the_mean_hides() -> None:
     regressions should have sunk. The geomean says improvement, the median and the count say not."""
     before = [1.0] * 10
     after = [100.0] + [0.9] * 9
-    b, a, bc, ac = arms(before, after, [1.0] * 10, [1.0] * 10)
+    b, a, bc, ac = setups(before, after, [1.0] * 10, [1.0] * 10)
     r = eff.efficacy(b, a, bc, ac)
     assert r.score.rho > 1.0, "the mean of the logs is carried by the one big win"
     assert r.score.median_delta < 0.0, "the median must show the typical task got worse"
@@ -165,7 +165,7 @@ def test_setups_that_share_no_task_are_refused() -> None:
 def test_a_value_that_is_not_a_ratio_is_refused(bad) -> None:
     """A zero or negative speedup is a MISSING measurement, not a small one. Skipping it silently
     would change which tasks the pairing covers without the report ever saying so."""
-    b, a, bc, ac = arms([1.0, 1.0], [1.0, bad], [1.0, 1.0], [1.0, 1.0])
+    b, a, bc, ac = setups([1.0, 1.0], [1.0, bad], [1.0, 1.0], [1.0, 1.0])
     with pytest.raises(ValueError):
         eff.efficacy(b, a, bc, ac)
 
@@ -182,7 +182,7 @@ def test_the_interval_is_deterministic_for_the_same_input() -> None:
 def test_the_bootstrap_interval_brackets_the_mean_it_bounds() -> None:
     """The bootstrap interval is FOR ``rho``, so it has to contain it. It decides nothing: the
     significance statement is the Hodges-Lehmann change, which is a different parameter."""
-    b, a, bc, ac = arms([1.0, 1.0, 1.0, 1.0], [2.0, 0.5, 2.0, 0.5], [1.0] * 4, [1.0] * 4)
+    b, a, bc, ac = setups([1.0, 1.0, 1.0, 1.0], [2.0, 0.5, 2.0, 0.5], [1.0] * 4, [1.0] * 4)
     r = eff.efficacy(b, a, bc, ac, resamples=2000)
     assert r.score.ci_low <= r.score.log_rho <= r.score.ci_high
     assert r.score.ci_low <= 0.0 <= r.score.ci_high
@@ -192,7 +192,7 @@ def test_an_interval_end_past_what_exp_represents_reads_as_unbounded() -> None:
     """Three near-tied tasks make most resamples nearly spread-free, so the studentized end lands far
     past ``exp``'s range; the percentage has to read as unbounded rather than raise OverflowError."""
     after = [1.0, math.exp(1e-9), math.exp(2e-9), math.exp(5.0)]
-    b, a, bc, ac = arms([1.0] * 4, after, [1.0] * 4, [1.0] * 4)
+    b, a, bc, ac = setups([1.0] * 4, after, [1.0] * 4, [1.0] * 4)
     r = eff.efficacy(b, a, bc, ac)
     assert r.score.ci_pct == (-100.0, math.inf), r.score.ci_pct
 
@@ -200,7 +200,7 @@ def test_an_interval_end_past_what_exp_represents_reads_as_unbounded() -> None:
 def test_gains_and_losses_that_cancel_are_not_significant() -> None:
     """The null case the whole decision exists to get right: six tasks, three up and three down by
     the same factor, is no effect -- not a small one, and not an effect whose sign the mean picked."""
-    b, a, bc, ac = arms([1.0] * 6, [2.0, 0.5, 2.0, 0.5, 2.0, 0.5], [1.0] * 6, [1.0] * 6)
+    b, a, bc, ac = setups([1.0] * 6, [2.0, 0.5, 2.0, 0.5, 2.0, 0.5], [1.0] * 6, [1.0] * 6)
     r = eff.efficacy(b, a, bc, ac)
     rows = eff.family_rows({"cancel": r})
     assert rows[0]["score_verdict"] == eff.NOT_SIGNIFICANT
@@ -210,7 +210,7 @@ def test_gains_and_losses_that_cancel_are_not_significant() -> None:
 def test_a_pair_with_too_few_tasks_reports_underpowered_rather_than_a_boolean() -> None:
     """A two-task pair cannot reach any alpha whatever it measured, and the llr40 skill pairs run
     at n = 2, 3 and 4. A boolean column has only 'yes' and 'no' to say, and both are wrong there."""
-    b, a, bc, ac = arms([1.0, 1.0], [4.0, 4.0], [100.0, 100.0], [25.0, 25.0])
+    b, a, bc, ac = setups([1.0, 1.0], [4.0, 4.0], [100.0, 100.0], [25.0, 25.0])
     r = eff.efficacy(b, a, bc, ac)
     assert r.score.underpowered and math.isnan(r.score.pvalue)
     rows = eff.family_rows({"tiny": r})
@@ -227,7 +227,7 @@ def test_a_single_task_cannot_bound_anything() -> None:
 
 
 def test_weights_must_sum_to_one_and_stay_non_negative() -> None:
-    b, a, bc, ac = arms([1.0], [2.0], [1.0], [1.0])
+    b, a, bc, ac = setups([1.0], [2.0], [1.0], [1.0])
     with pytest.raises(ValueError, match="sum to 1"):
         eff.efficacy(b, a, bc, ac, score_weight=0.7, cost_weight=0.7)
     with pytest.raises(ValueError, match="negative weight"):
@@ -237,7 +237,7 @@ def test_weights_must_sum_to_one_and_stay_non_negative() -> None:
 def test_a_weighting_can_favour_either_axis_without_moving_the_point() -> None:
     """Q is a PROXY. Changing the weights must move the ranking number and leave the two ratios --
     the thing Pareto dominance is decided on -- exactly where they were."""
-    b, a, bc, ac = arms([1.0, 1.0], [4.0, 4.0], [1.0, 1.0], [2.0, 2.0])
+    b, a, bc, ac = setups([1.0, 1.0], [4.0, 4.0], [1.0, 1.0], [2.0, 2.0])
     even = eff.efficacy(b, a, bc, ac)
     score_led = eff.efficacy(b, a, bc, ac, score_weight=1.0)
     assert score_led.point == even.point
@@ -247,7 +247,7 @@ def test_a_weighting_can_favour_either_axis_without_moving_the_point() -> None:
 
 def test_dominance_needs_both_axes_and_a_strict_gain_on_one() -> None:
     def at(rho_s, rho_c):
-        b, a, bc, ac = arms([1.0], [rho_s], [1.0], [1.0 / rho_c])
+        b, a, bc, ac = setups([1.0], [rho_s], [1.0], [1.0 / rho_c])
         return eff.efficacy(b, a, bc, ac)
 
     strong, weak, traded = at(2.0, 2.0), at(1.5, 1.5), at(4.0, 0.5)
@@ -260,7 +260,7 @@ def test_dominance_needs_both_axes_and_a_strict_gain_on_one() -> None:
 
 def test_the_front_keeps_every_intervention_nothing_dominates() -> None:
     def at(rho_s, rho_c):
-        b, a, bc, ac = arms([1.0], [rho_s], [1.0], [1.0 / rho_c])
+        b, a, bc, ac = setups([1.0], [rho_s], [1.0], [1.0 / rho_c])
         return eff.efficacy(b, a, bc, ac)
 
     front = eff.pareto_front({"cheap": at(1.2, 4.0), "fast": at(4.0, 1.2), "dominated": at(1.1, 1.1)})
@@ -270,7 +270,7 @@ def test_the_front_keeps_every_intervention_nothing_dominates() -> None:
 def test_the_row_reports_percentages_and_carries_the_robustness_checks() -> None:
     """What lands in the CSV is what a reader sees. A row that dropped the counts would let a
     tail-carried result print as a clean percentage."""
-    b, a, bc, ac = arms([1.0] * 8, [2.0, 3.0] * 4, [10.0] * 8, [5.0] * 8)
+    b, a, bc, ac = setups([1.0] * 8, [2.0, 3.0] * 4, [10.0] * 8, [5.0] * 8)
     row = eff.as_row("skills", eff.efficacy(b, a, bc, ac))
     assert row["intervention"] == "skills" and row["tasks"] == 8
     assert row["score_pct"] > 0.0 and row["cost_pct"] == pytest.approx(100.0)
@@ -282,7 +282,7 @@ def test_the_row_reports_percentages_and_carries_the_robustness_checks() -> None
 
 def flat_pair(score_ratio: float, cost_ratio: float, tasks: int = 12) -> eff.Efficacy:
     """One intervention whose every task moved by the same two factors, for counting flags."""
-    b, a, bc, ac = arms([1.0] * tasks, [score_ratio] * tasks, [100.0] * tasks, [100.0 / cost_ratio] * tasks)
+    b, a, bc, ac = setups([1.0] * tasks, [score_ratio] * tasks, [100.0] * tasks, [100.0 / cost_ratio] * tasks)
     return eff.efficacy(b, a, bc, ac)
 
 

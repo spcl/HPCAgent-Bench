@@ -9,7 +9,7 @@ reader.
 A figure asks for a STUDY and gets back where to look and what to keep:
 
     selection = experiments.resolve("gitscicomp10")
-    frame = studies.observations(selection.run_globs(), study=selection.experiment)
+    frame = studies.observations(selection.run_globs(), study=selection.study)
 """
 
 import dataclasses
@@ -26,7 +26,6 @@ __all__ = [
     "baseline_setup",
     "baseline_for",
     "experiment_of",
-    "campaigns",
     "dropped",
     "dropped_pattern",
     "studies_available",
@@ -45,31 +44,31 @@ def runs_root() -> pathlib.Path:
     return paths.scratch_or_repo() / RUNS_DIRNAME
 
 
-def campaigns() -> dict[str, ExperimentEntry]:
+def experiments() -> dict[str, ExperimentEntry]:
     """Job-name prefix -> the experiment it names."""
-    return registry().campaigns
+    return registry().experiments
 
 
-def prefix_of(arm: str) -> str:
+def prefix_of(setup: str) -> str:
     """The experiment that owns ``setup`` (its key), or "" when none does: the longest prefix ``setup``
     starts with, and of those an experiment whose suffix token ``setup`` carries
     (``llr40-qwen38-c-blind`` is the blind experiment's, not ``llr40``'s).
 
     Longest wins so a specific key beats its own stem: ``scicomp-dc-gpu-qwen38-hip-plain`` must
     resolve to the GPU experiment, not to ``scicomp-dc`` with ``gpu`` read as the model."""
-    tokens = arm.split("-")
+    tokens = setup.split("-")
     owners = [
         (len(entry.prefix), bool(entry.suffix), key)
-        for key, entry in campaigns().items()
-        if arm.startswith(entry.prefix + "-") and (not entry.suffix or entry.suffix in tokens[1:])
+        for key, entry in experiments().items()
+        if setup.startswith(entry.prefix + "-") and (not entry.suffix or entry.suffix in tokens[1:])
     ]
     return max(owners, default=(0, False, ""))[2]
 
 
-def experiment_of(arm: str) -> ExperimentEntry | None:
+def experiment_of(setup: str) -> ExperimentEntry | None:
     """The experiment ``setup`` belongs to, or None when no prefix matches."""
-    prefix = prefix_of(arm)
-    return campaigns()[prefix] if prefix else None
+    prefix = prefix_of(setup)
+    return experiments()[prefix] if prefix else None
 
 
 @functools.lru_cache(maxsize=1, typed=True)
@@ -79,10 +78,10 @@ def dropped_pattern() -> re.Pattern[str] | None:
     return re.compile(raw) if raw else None
 
 
-def dropped(arm: str) -> bool:
+def dropped(setup: str) -> bool:
     """Whether the user retired ``setup`` from the studies."""
     pattern = dropped_pattern()
-    return bool(pattern and pattern.search(arm))
+    return bool(pattern and pattern.search(setup))
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -98,7 +97,7 @@ class Selection:
     by and the comparator toolchains drawn beside the agents share neither the study nor the
     roster tag of the setups they appear with."""
 
-    experiment: str
+    study: str
     #: Every experiment prefix that feeds this study, longest first.
     prefixes: tuple[str, ...]
     #: The devices those experiments ran on, in registry order.
@@ -118,13 +117,13 @@ class Selection:
         Then one per owed prefix: ``<root>/<prefix>-[0-9]*``, the dated root a fused owed wave
         writes (``owed-llr-focus40-20260922``). The digit keeps ``owed-llr-focus40`` from matching
         ``owed-llr-focus40-blind-20260922``, another study's root."""
-        campaign = (str(self.root / f"{prefix}-*") for prefix in self.prefixes)
+        experiment_roots = (str(self.root / f"{prefix}-*") for prefix in self.prefixes)
         owed = (str(self.root / f"{prefix}-[0-9]*") for prefix in self.owed_prefixes)
-        return (*campaign, *owed)
+        return (*experiment_roots, *owed)
 
-    def owns(self, arm: str) -> bool:
+    def owns(self, setup: str) -> bool:
         """Whether ``setup`` is one of this study's, and not retired."""
-        return prefix_of(arm) in self.prefixes and not dropped(arm)
+        return prefix_of(setup) in self.prefixes and not dropped(setup)
 
     def canon_columns(self) -> tuple[str, ...]:
         """The denominator and every comparator, denominator first."""
@@ -133,18 +132,18 @@ class Selection:
 
 def studies_available() -> tuple[str, ...]:
     """Every study an experiment feeds, in registry order."""
-    seen = dict.fromkeys(entry.experiment for entry in campaigns().values())
+    seen = dict.fromkeys(entry.study for entry in experiments().values())
     return tuple(seen)
 
 
-def prefixes_for(experiment: str) -> dict[str, ExperimentEntry]:
+def prefixes_for(study: str) -> dict[str, ExperimentEntry]:
     """Every experiment prefix feeding ``study``."""
-    return {prefix: entry for prefix, entry in campaigns().items() if entry.experiment == experiment}
+    return {prefix: entry for prefix, entry in experiments().items() if entry.study == study}
 
 
-def baseline_for(experiment: str) -> BaselineSpec:
+def baseline_for(study: str) -> BaselineSpec:
     """The canon columns ``study`` is scored against, empty when it names none."""
-    return registry().study_baselines.get(experiment, BaselineSpec(denominator="", comparators=()))
+    return registry().study_baselines.get(study, BaselineSpec(denominator="", comparators=()))
 
 
 def baseline_setup(model: str, track: str, device: str, language: str) -> str:
@@ -154,29 +153,29 @@ def baseline_setup(model: str, track: str, device: str, language: str) -> str:
     ``baseline_setup("qwen38", "scientific_computing", "cpu", "c")`` is ``scicomp-perf-playbook-qwen38-plain``:
     a harness20 or perf-playbook setup on gemm pairs with that setup's gemm, never with a control of its own."""
     entry = registry().baseline_setups.get(f"{track}/{device}/{language}", {})
-    return entry.get(model) or entry.get("arm", "").replace("{model}", model)
+    return entry.get(model) or entry.get("setup", "").replace("{model}", model)
 
 
-def resolve(experiment: str, root: pathlib.Path | None = None, tag: str = "") -> Selection:
+def resolve(study: str, root: pathlib.Path | None = None, tag: str = "") -> Selection:
     """Where to read ``study`` from, what to keep, and what to score it against.
 
     ``tag`` overrides the roster the experiments recorded, for a figure drawn over a subset.
     Raises on an unknown study rather than returning an empty selection: a typo would
     otherwise read as an experiment that produced no rows, which is what a real gap looks like. A name
-    the study was recorded under (``aliases.experiments``: ``llr-focus40``) resolves to it."""
-    experiment = canonical("experiments", experiment)
-    matched = prefixes_for(experiment)
+    the study was recorded under (``aliases.studies``: ``llr-focus40``) resolves to it."""
+    study = canonical("studies", study)
+    matched = prefixes_for(study)
     if not matched:
         known = ", ".join(studies_available())
-        raise KeyError(f"no experiment feeds study {experiment!r}; known: {known}")
+        raise KeyError(f"no experiment feeds study {study!r}; known: {known}")
     roster_tag = tag or next((entry.tag for entry in matched.values() if entry.tag), "")
     return Selection(
-        experiment=experiment,
+        study=study,
         prefixes=tuple(sorted(matched, key=len, reverse=True)),
         devices=tuple(dict.fromkeys(entry.device for entry in matched.values())),
         tag=roster_tag,
         roster=tags.roster(roster_tag) if roster_tag else (),
-        baseline=baseline_for(experiment),
+        baseline=baseline_for(study),
         root=root or runs_root(),
-        owed_prefixes=registry().owed_run_roots.get(experiment, ()),
+        owed_prefixes=registry().owed_run_roots.get(study, ()),
     )

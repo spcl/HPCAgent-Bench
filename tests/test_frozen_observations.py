@@ -34,8 +34,8 @@ def load(name: str, path: pathlib.Path) -> types.ModuleType:
 from hpcagent_bench import frozen_observations  # noqa: E402
 
 MODELS = ("kimi27sglang", "oss120b", "qwen38", "glm53")
-ARM = "llr-focus40-qwen38-fortran"
-#: The setup ARM is (envs/arm_renames.yaml): what owed planning names it.
+SETUP = "llr-focus40-qwen38-fortran"
+#: The setup SETUP is (envs/setup_renames.yaml): what owed planning names it.
 SETUP_NOW = "llr40-qwen38-fortran"
 ROOT = "llr-focus40-20260917"
 #: After any real manifest commit, so comparable_since_ms never gates these fake kernels out.
@@ -61,10 +61,10 @@ def kernels_fixture() -> types.ModuleType:
 
 
 def frozen_row(
-    job: str, record: str, benchmark: str, *, arm: str = ARM, reason: str = "", ts: int = FAR_FUTURE_TS_MS
+    job: str, record: str, benchmark: str, *, setup: str = SETUP, reason: str = "", ts: int = FAR_FUTURE_TS_MS
 ) -> dict:
     return {
-        "run_root": ROOT, "job": job, "judge_db": "", "row_kind": record, "run_id": f"{arm}.n0.p0.w0", "arm": arm,
+        "run_root": ROOT, "job": job, "judge_db": "", "row_kind": record, "run_id": f"{setup}.n0.p0.w0", "arm": setup,
         "benchmark": benchmark, "ts_ms": str(ts), "reason": reason, "speedup": "2.0" if record == "submission" else "",
         "tokens": "",
     }  # fmt: skip
@@ -82,11 +82,11 @@ def write_frozen(root: pathlib.Path, rows: list[dict]) -> pathlib.Path:
     return root / "frozen"
 
 
-def live_job(runs_root: pathlib.Path, job: str, benchmarks: list[str], arm: str = ARM) -> pathlib.Path:
+def live_job(runs_root: pathlib.Path, job: str, benchmarks: list[str], setup: str = SETUP) -> pathlib.Path:
     """A live job dir of one shard, a submission of ``setup``'s episode per name."""
     shard = runs_root / job / "judge" / "rank-0" / "hpcagent_bench0.db"
     for name in benchmarks:
-        results_seed.submission(shard, f"{arm}.n0.p0.w0", name, FAR_FUTURE_TS_MS, job=int(job))
+        results_seed.submission(shard, f"{setup}.n0.p0.w0", name, FAR_FUTURE_TS_MS, job=int(job))
     return runs_root / job
 
 
@@ -122,7 +122,7 @@ def test_delivered_is_a_submission_or_a_genuine_attempt_after_the_epoch() -> Non
         frozen_row("1", "task", "f"),
     ]
     assert frozen_observations.delivered(rows, lambda kernel: 10) == {"a", "b"}
-    assert frozen_observations.delivered(rows, lambda kernel: 10, arm="other-arm") == set()
+    assert frozen_observations.delivered(rows, lambda kernel: 10, setup="other-arm") == set()
 
 
 def test_delivered_drops_a_grade_made_before_its_episodes_final_attempt() -> None:
@@ -191,13 +191,13 @@ def test_collect_setups_names_a_deleted_job_under_its_frozen_setup(
 ) -> None:
     runs_root = tmp_path / "runs" / ROOT
     runs_root.mkdir(parents=True)
-    frozen = write_frozen(tmp_path, [frozen_row("100", "submission", "a", arm=ARM + "-clean")])
+    frozen = write_frozen(tmp_path, [frozen_row("100", "submission", "a", setup=SETUP + "-clean")])
 
-    arms, _, _ = kernels.collect_setups([str(runs_root)], set(), frozen_dir=frozen)
+    setups, _, _ = kernels.collect_setups([str(runs_root)], set(), frozen_dir=frozen)
 
-    assert arms == {SETUP_NOW: [("100", str(runs_root / "100"), ARM + "-clean")]}
-    assert kernels.covered(arms[SETUP_NOW], str(REPO), frozen) == {"a"}
-    assert kernels.covered(arms[SETUP_NOW], str(REPO)) == set()  # without the frozen dir nothing is known
+    assert setups == {SETUP_NOW: [("100", str(runs_root / "100"), SETUP + "-clean")]}
+    assert kernels.covered(setups[SETUP_NOW], str(REPO), frozen) == {"a"}
+    assert kernels.covered(setups[SETUP_NOW], str(REPO)) == set()  # without the frozen dir nothing is known
 
 
 # --- hpcagent_bench.observations_extract -------------------------------------------------------------------------
@@ -214,13 +214,18 @@ def test_the_extractor_adds_a_deleted_jobs_frozen_rows_and_marks_them(tmp_path: 
     runs_root = tmp_path / "runs" / ROOT
     job_dir = runs_root / "200"
     db = job_dir / "judge" / "rank-0" / "hpcagent_bench0.db"
-    fortran = results_db.Arm(ARM, "fortran", "cpu", experiment="llr-focus40", model="qwen38")
-    results_seed.submission(db, f"{ARM}.n0.p0.w0", "c", 10, job=200, arm=fortran)
+    fortran = results_db.Setup(SETUP, "fortran", "cpu", experiment="llr-focus40", model="qwen38")
+    results_seed.submission(db, f"{SETUP}.n0.p0.w0", "c", 10, job=200, setup=fortran)
     kept_worker = job_dir / "agents" / "node-0" / "problem-0-worker-0"
     kept_worker.mkdir(parents=True)
     kept_worker.joinpath("tokens.json").write_text(
         json.dumps(
-            {"run_id": f"{ARM}.n0.p0.w0", "kernel": "loop_level_reasoning/c/c", "token_fold": 3, "tokens_effective": 7}
+            {
+                "run_id": f"{SETUP}.n0.p0.w0",
+                "kernel": "loop_level_reasoning/c/c",
+                "token_fold": 3,
+                "tokens_effective": 7,
+            }
         ),
         encoding="utf-8",
     )
@@ -228,7 +233,12 @@ def test_the_extractor_adds_a_deleted_jobs_frozen_rows_and_marks_them(tmp_path: 
     cut_worker.mkdir(parents=True)
     cut_worker.joinpath("tokens.json").write_text(
         json.dumps(
-            {"run_id": f"{ARM}.n0.p2.w2", "kernel": "loop_level_reasoning/d/d", "token_fold": 3, "tokens_effective": 3}
+            {
+                "run_id": f"{SETUP}.n0.p2.w2",
+                "kernel": "loop_level_reasoning/d/d",
+                "token_fold": 3,
+                "tokens_effective": 3,
+            }
         ),
         encoding="utf-8",
     )
@@ -239,13 +249,13 @@ def test_the_extractor_adds_a_deleted_jobs_frozen_rows_and_marks_them(tmp_path: 
     task_p0 = {**frozen_row("200", "task", "c"), "tokens": "999", "judge_db": str(kept_worker)}
     task_p1 = {
         **frozen_row("200", "task", "b"),
-        "run_id": f"{ARM}.n0.p1.w1",
+        "run_id": f"{SETUP}.n0.p1.w1",
         "tokens": "555",
         "judge_db": str(gone_worker),
     }
     task_p2 = {
         **frozen_row("200", "task", "d", ts=1234),
-        "run_id": f"{ARM}.n0.p2.w2",
+        "run_id": f"{SETUP}.n0.p2.w2",
         "tokens": "3",
         "judge_db": str(cut_worker),
     }
@@ -271,4 +281,4 @@ def test_the_extractor_adds_a_deleted_jobs_frozen_rows_and_marks_them(tmp_path: 
         ("200", "c", "0"),
     ]
     tasks = sorted((row["run_id"], row["tokens"], row["frozen"]) for row in rows if row["row_kind"] == "task")
-    assert tasks == [(f"{ARM}.n0.p0.w0", "7", "0"), (f"{ARM}.n0.p2.w2", "3", "0")]
+    assert tasks == [(f"{SETUP}.n0.p0.w0", "7", "0"), (f"{SETUP}.n0.p2.w2", "3", "0")]

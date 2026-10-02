@@ -162,7 +162,7 @@ def test_the_trajectory_rows_language_comes_from_the_run(monkeypatch, tmp_path) 
     finally:
         conn.close()
     assert "language" not in columns and "delivered_language" not in columns
-    assert got == ("fortran",)  # the ARM's language, from the setup, once
+    assert got == ("fortran",)  # the SETUP's language, from the setup, once
 
 
 # real end-to-end: a scripted repair through the forked solve_task

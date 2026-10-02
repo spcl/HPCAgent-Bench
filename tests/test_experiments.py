@@ -21,7 +21,7 @@ REPO = pathlib.Path(__file__).resolve().parents[1]
 
 
 @pytest.mark.parametrize(
-    ("arm", "prefix"),
+    ("setup", "prefix"),
     [
         ("git-scicomp-qwen38-repo", "git-scicomp"),
         ("llr40-qwen38-c", "llr40"),
@@ -42,8 +42,8 @@ REPO = pathlib.Path(__file__).resolve().parents[1]
         ("", ""),
     ],
 )
-def test_the_longest_experiment_prefix_wins(arm: str, prefix: str) -> None:
-    assert experiments.prefix_of(arm) == prefix
+def test_the_longest_experiment_prefix_wins(setup: str, prefix: str) -> None:
+    assert experiments.prefix_of(setup) == prefix
 
 
 def test_an_experiment_prefix_only_matches_on_a_hyphen_boundary() -> None:
@@ -54,7 +54,7 @@ def test_an_experiment_prefix_only_matches_on_a_hyphen_boundary() -> None:
 
 
 @pytest.mark.parametrize(
-    ("arm", "retired"),
+    ("setup", "retired"),
     [
         ("cpf-llr-focus40-qwen38-c-cpfsrc", True),
         # Only cpfsrc-v2 counts, so the v2 setup must survive the same regex.
@@ -66,8 +66,8 @@ def test_an_experiment_prefix_only_matches_on_a_hyphen_boundary() -> None:
         ("git-scicomp-qwen38-repo", False),
     ],
 )
-def test_a_retired_setup_is_recognised_from_the_registry_regex(arm: str, retired: bool) -> None:
-    assert experiments.dropped(arm) is retired
+def test_a_retired_setup_is_recognised_from_the_registry_regex(setup: str, retired: bool) -> None:
+    assert experiments.dropped(setup) is retired
 
 
 def test_an_unknown_study_raises_and_names_the_ones_that_exist() -> None:
@@ -80,7 +80,7 @@ def test_an_unknown_study_raises_and_names_the_ones_that_exist() -> None:
 def test_one_study_collects_every_experiment_that_feeds_it() -> None:
     """llr40 ran under two launchers, CPU and GPU; a selection that took only one would
     silently halve the study. The name it was recorded under resolves to it."""
-    assert experiments.resolve("llr-focus40").experiment == "llr40"
+    assert experiments.resolve("llr-focus40").study == "llr40"
     selection = experiments.resolve("llr40")
     assert set(selection.prefixes) == {"llr40", "llr-focus40", "cpf-llr-focus40", "gpu-llr-focus40"}
     assert set(selection.devices) == {"CPU+GPU", "CPU", "GPU"}
@@ -105,12 +105,12 @@ def test_an_owed_wave_root_is_read_under_its_setups_real_key(
     """A fused owed wave writes ``owed-<study>-<date>``, which no experiment prefix matches; its
     rows must still reach the study, under the setup that ran them. The blind study's owed
     root shares the stem and must not be read as llr-focus40's."""
-    for root, experiment, arm in (
+    for root, study, setup in (
         ("owed-llr-focus40-20260922", "llr-focus40", "llr-focus40-qwen38-c"),
         ("owed-llr-focus40-blind-20260922", "llr-focus40-blind", "llrblind-qwen38-c"),
     ):
-        monkeypatch.setenv("HPCAGENT_BENCH_RECORD_EXPERIMENT", experiment)
-        monkeypatch.setenv("HPCAGENT_BENCH_RECORD_ARM", arm)
+        monkeypatch.setenv("HPCAGENT_BENCH_RECORD_EXPERIMENT", study)
+        monkeypatch.setenv("HPCAGENT_BENCH_RECORD_ARM", setup)
         db = tmp_path / root / "647033" / "judge" / "rank-0" / "hpcagent_bench0.db"
         db.parent.mkdir(parents=True)
         recording.record(
@@ -125,7 +125,7 @@ def test_an_owed_wave_root_is_read_under_its_setups_real_key(
             ),
             Submission(language="c", source="void k(void) {}"),
             Task("argmax_with_index", "restricted", "c"),
-            run_id=f"{arm}.n0.p0.w0",
+            run_id=f"{setup}.n0.p0.w0",
             path=str(db),
         )
     selection = experiments.resolve("llr40", root=tmp_path)
@@ -154,8 +154,8 @@ def test_the_baseline_names_canon_columns_not_another_experiment() -> None:
 
 def test_every_experiment_names_a_study_the_registry_lists() -> None:
     """An experiment pointing at an unlisted study draws under a raw tag instead of its name."""
-    known = set(registry().experiments)
-    unlisted = sorted({entry.experiment for entry in experiments.campaigns().values()} - known)
+    known = set(registry().studies)
+    unlisted = sorted({entry.study for entry in experiments.experiments().values()} - known)
     assert not unlisted, unlisted
 
 

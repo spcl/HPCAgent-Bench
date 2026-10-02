@@ -306,7 +306,7 @@ NAME_READERS: Mapping[str, Callable[[str], str]] = {
 NAME_FIRST: frozenset[str] = frozenset({"language"})
 
 
-def setup_value(arm: str, column: str, recorded: Iterable[object]) -> str:
+def setup_value(setup: str, column: str, recorded: Iterable[object]) -> str:
     """The identity every row of ``setup`` takes in ``column``.
 
     ``language``: the setup name's token first -- a row's language is what the request body claimed, and the agent
@@ -314,12 +314,12 @@ def setup_value(arm: str, column: str, recorded: Iterable[object]) -> str:
     value first and the name's packet token only when no row recorded one (whole experiments predate the stamp).
     Two different recorded values where the recorded value decides raise: then two conditions share one label.
     """
-    named = NAME_READERS[column](arm)
+    named = NAME_READERS[column](setup)
     if named and column in NAME_FIRST:
         return named
     values = sorted({str(v).strip() for v in recorded if not is_blank(v)})
     if len(values) > 1:
-        raise ValueError(f"setup {arm!r} carries more than one {column}: {values}")
+        raise ValueError(f"setup {setup!r} carries more than one {column}: {values}")
     return values[0] if values else named
 
 
@@ -346,10 +346,10 @@ def fill_setup_identity(frame: "pd.DataFrame", columns: Sequence[str] = FILLABLE
         # filling it, so the dtype is settled here instead of being discovered by a crash on the one
         # experiment whose language nothing stamped.
         filled[column] = filled[column].astype("str")
-        for arm, group in filled.groupby("arm", sort=False):
-            if is_blank(arm):
+        for setup, group in filled.groupby("arm", sort=False):
+            if is_blank(setup):
                 continue
-            value = setup_value(str(arm), column, group[column])
+            value = setup_value(str(setup), column, group[column])
             if value:
                 filled.loc[group.index, column] = value
     return filled
@@ -633,18 +633,18 @@ def drop_resubmissions(frame: "pd.DataFrame") -> "pd.DataFrame":
 RENAMED_SETUP_PREFIXES: tuple[tuple[str, str], ...] = (("llrblind-", "llrblind-cmp-"),)
 
 
-def renamed_setup(arm: str) -> str:
+def renamed_setup(setup: str) -> str:
     """``setup`` under the setup it is (``study_tags.aliased_setup``: the registry's aliases and every
     recorded setup's configuration name); a spelling no record names first takes the name its experiment
     runs under now; itself when it was never renamed or aliased."""
-    known = study_tags.aliased_setup(arm)
-    if known != arm:
+    known = study_tags.aliased_setup(setup)
+    if known != setup:
         return known
     for old, new in RENAMED_SETUP_PREFIXES:
-        if arm.startswith(old) and not arm.startswith(new):
-            arm = new + arm.removeprefix(old)
+        if setup.startswith(old) and not setup.startswith(new):
+            setup = new + setup.removeprefix(old)
             break
-    return study_tags.aliased_setup(arm)
+    return study_tags.aliased_setup(setup)
 
 
 def fold_renamed_setups(frame: "pd.DataFrame") -> "pd.DataFrame":
@@ -664,9 +664,9 @@ def fold_clean_setups(frame: "pd.DataFrame") -> "pd.DataFrame":
     so an owed rerun of a few kernels keeps the rest of the wave it topped up."""
     if frame.empty or "arm" not in frame.columns:
         return frame
-    arms = frame["arm"]
-    folded = arms.astype(str).str.removesuffix(study_tags.CLEAN_SUFFIX)
-    return frame.assign(arm=folded.where(arms.notna(), arms))
+    setups = frame["arm"]
+    folded = setups.astype(str).str.removesuffix(study_tags.CLEAN_SUFFIX)
+    return frame.assign(arm=folded.where(setups.notna(), setups))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -691,9 +691,9 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit(f"no observations for {selection or '(every identity)'}")
     args.out.parent.mkdir(parents=True, exist_ok=True)
     frame.to_csv(args.out, index=False)
-    arms = sorted(frame["arm"].unique())
-    print(f"{len(frame)} observations over {len(arms)} setups -> {args.out}")
-    print(f"setups: {', '.join(arms)}")
+    setups = sorted(frame["arm"].unique())
+    print(f"{len(frame)} observations over {len(setups)} setups -> {args.out}")
+    print(f"setups: {', '.join(setups)}")
     return 0
 
 

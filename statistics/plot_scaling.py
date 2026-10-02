@@ -28,7 +28,7 @@ FIGURES: tuple[str, ...] = (
 )
 
 
-def load(path: pathlib.Path, prefix: str, arm: str, torch_dist: bool = True) -> pd.DataFrame:
+def load(path: pathlib.Path, prefix: str, setup: str, torch_dist: bool = True) -> pd.DataFrame:
     """The observations frame, narrowed to one study prefix and one setup regex; keeps the
     torch.distributed baseline rows (setup ``torch_dist``) unless ``torch_dist`` is False."""
     frame = studies.read_observations(path)
@@ -36,8 +36,8 @@ def load(path: pathlib.Path, prefix: str, arm: str, torch_dist: bool = True) -> 
     keep = pd.Series(True, index=frame.index)
     if prefix:
         keep &= names.str.startswith(prefix)
-    if arm:
-        keep &= names.str.fullmatch(arm)
+    if setup:
+        keep &= names.str.fullmatch(setup)
     baseline = names == scaling.TORCH_DIST_SETUP
     return frame.loc[(keep & ~baseline) | (baseline & torch_dist)]
 
@@ -47,14 +47,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("observations", type=pathlib.Path, help="observations CSV or extracted .db")
     parser.add_argument(
         "--study",
-        "--experiment",
-        dest="experiment",
+        dest="study",
         default="",
         help="setup prefix selecting one study; blank keeps all",
     )
-    parser.add_argument(
-        "--setup", "--arm", dest="arm", default="", help="regex; keep only setups whose full name matches"
-    )
+    parser.add_argument("--setup", dest="setup", default="", help="regex; keep only setups whose full name matches")
     parser.add_argument("--figure", choices=FIGURES, default="all", help="which figure to draw (default: all)")
     parser.add_argument(
         "--mode",
@@ -110,10 +107,10 @@ def report(curves: list[scaling.Curve]) -> None:
     print(f"{len(drawn)} curve(s) drawable of {len(curves)}", file=sys.stderr)
     for curve in short:
         print(
-            f"  not drawn: {curve.arm} / {curve.kernel} / {curve.mode}: {len(curve.points)} point(s)", file=sys.stderr
+            f"  not drawn: {curve.setup} / {curve.kernel} / {curve.mode}: {len(curve.points)} point(s)", file=sys.stderr
         )
-    for arm, kernel, mode, ranks, reason in missing:
-        print(f"  no point: {arm} / {kernel} / {mode} at P={ranks}: {reason}", file=sys.stderr)
+    for setup, kernel, mode, ranks, reason in missing:
+        print(f"  no point: {setup} / {kernel} / {mode} at P={ranks}: {reason}", file=sys.stderr)
     for mode in scaling.MODES:
         common = scaling.common_kernels(curves, mode)
         all_kernels = {curve.kernel for curve in drawn if curve.mode == mode}
@@ -153,16 +150,16 @@ def draw(curves: list[scaling.Curve], args: argparse.Namespace) -> list[pathlib.
 
 def main() -> None:
     args = build_parser().parse_args()
-    frame = load(args.observations, args.experiment, args.arm, not args.no_torch_dist)
+    frame = load(args.observations, args.study, args.setup, not args.no_torch_dist)
     curves = scaling.curves(frame)
     if not curves:
-        raise SystemExit(f"no scaling rows for study={args.experiment!r} setup={args.arm!r}")
+        raise SystemExit(f"no scaling rows for study={args.study!r} setup={args.setup!r}")
 
     # a recorded eta that disagrees with the formula behind it means one of them is wrong
     mismatched = scaling.disagreements(frame)
     if mismatched:
         lines = "\n".join(
-            f"  {arm} / {kernel} P={p}: recorded {a:.6g}, recomputed {b:.6g}" for arm, kernel, p, a, b in mismatched
+            f"  {setup} / {kernel} P={p}: recorded {a:.6g}, recomputed {b:.6g}" for setup, kernel, p, a, b in mismatched
         )
         raise SystemExit(f"{len(mismatched)} row(s) record an efficiency the times do not give:\n{lines}")
 

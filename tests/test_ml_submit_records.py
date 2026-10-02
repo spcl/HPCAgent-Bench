@@ -95,7 +95,7 @@ KERNELS = (
 )
 
 #: The setup the env above records, and the job directory its judge DB lives under.
-ARM = "mlscale-qwen38-hip-dist-rccl-amd"
+SETUP = "mlscale-qwen38-hip-dist-rccl-amd"
 JOB = "649109"
 
 #: The device unit of a submission every rank grades wrong.
@@ -118,7 +118,7 @@ def load_http_json() -> types.ModuleType:
 def setup_judge(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> Iterator[tuple[str, list[Launch], list[Mapping[str, object]]]]:
-    """An in-process judge under :data:`ARM_ENV` and the SHIPPED presets (``service.preset`` XL+fuzz,
+    """An in-process judge under :data:`SETUP_ENV` and the SHIPPED presets (``service.preset`` XL+fuzz,
     ``mpi.leaderboard_preset`` XL -- conftest's ``S`` pins removed, and its fuzz size cap with
     :data:`pytestmark`), its GPU build, rank launch and torch baseline child faked. Yields the judge URL, every launch and every baseline request."""
     for name in RANK_ENV_VARS:
@@ -205,7 +205,7 @@ def agent_body(kernel: str, *, wrong: bool = False) -> dict[str, object]:
         "libraries": ["mpi", "rccl"],
         "workspace_bytes": workspace_request(spec),
         "distribution": distribution_for_kernel(spec.mpi, binding_from_spec(spec), 4),
-        "run_id": f"{ARM}.n0.p0.w0",
+        "run_id": f"{SETUP}.n0.p0.w0",
     }
     body = load_http_json().submission_body(payload)
     body["run_id"] = payload["run_id"]
@@ -331,7 +331,7 @@ def test_the_grade_jobs_worklist_finds_the_setups_submit_and_replays_both_laws(
     ``run`` replays it under both laws at the grade job's P = 1..16 (four gang nodes)."""
     env_dir = tmp_path / "experiments"
     env_dir.mkdir()
-    (env_dir / f".env.{ARM}").write_text("".join(f"{k}={v}\n" for k, v in SETUP_ENV.items()), encoding="utf-8")
+    (env_dir / f".env.{SETUP}").write_text("".join(f"{k}={v}\n" for k, v in SETUP_ENV.items()), encoding="utf-8")
     with setup_judge(tmp_path, monkeypatch) as (url, launches, _baselines):
         body = agent_body("dist_moe_dispatch")
         code, graded = post(f"{url}/submit", body)
@@ -339,7 +339,7 @@ def test_the_grade_jobs_worklist_finds_the_setups_submit_and_replays_both_laws(
         items, problems = scaling_grade.build_worklist([tmp_path / JOB], [env_dir], "mlscale")
         assert problems == [] and len(items) == 1
         (item,) = items
-        assert (item.arm, item.benchmark, item.job) == (ARM, "dist_moe_dispatch", JOB)
+        assert (item.setup, item.benchmark, item.job) == (SETUP, "dist_moe_dispatch", JOB)
         assert pathlib.Path(item.db) == pathlib.Path(recording.db_path())
         with results_db.reading(item.db) as conn:
             units = results_db.grade_sources(conn, item.grade_id)

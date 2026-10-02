@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """``hpcagent_bench.stats.figures.llr40_setups``: setup selection, conditions, tokens and roster.
 
-Condition comes from the ARM NAME (:data:`llr40_setups.ARM_PATTERN`), never the
+Condition comes from the SETUP NAME (:data:`llr40_setups.SETUP_PATTERN`), never the
 ``language``/``packet`` columns, because the pre-regrade extraction records those inconsistently
 for the same setup.
 """
@@ -16,19 +16,21 @@ from hpcagent_bench.stats.figures import llr40_setups
 ROSTER: tuple[str, ...] = ("k1", "k2", "k3")
 
 
-def submission_rows(arm: str, benchmark_speedups: dict[str, float], baseline: str = "numba") -> list[dict[str, object]]:
+def submission_rows(
+    setup: str, benchmark_speedups: dict[str, float], baseline: str = "numba"
+) -> list[dict[str, object]]:
     """One graded episode per (setup, kernel): the columns ``population.kernel_answers`` needs.
 
     ``baseline`` is the reference that won the row's denominator (``numba`` here)."""
     rows = []
     for benchmark, speedup in benchmark_speedups.items():
-        run = f"{arm}-{benchmark}"
+        run = f"{setup}-{benchmark}"
         rows.append(
             {
                 "run_root": "j1",
                 "job": "j1",
                 "run_id": run,
-                "arm": arm,
+                "arm": setup,
                 "row_kind": "submission",
                 "benchmark": benchmark,
                 "speedup": speedup,
@@ -44,18 +46,18 @@ def submission_rows(arm: str, benchmark_speedups: dict[str, float], baseline: st
     return rows
 
 
-def call_rows(arm: str, benchmark_tokens: dict[str, float]) -> list[dict[str, object]]:
+def call_rows(setup: str, benchmark_tokens: dict[str, float]) -> list[dict[str, object]]:
     """One ``call`` row per (setup, kernel): a running count mid-task, NEVER a token cost (T4) --
     used only to test that a frame with call rows and no task rows is refused for tokens."""
     rows = []
     for benchmark, tokens in benchmark_tokens.items():
-        run = f"{arm}-{benchmark}"
+        run = f"{setup}-{benchmark}"
         rows.append(
             {
                 "run_root": "j1",
                 "job": "j1",
                 "run_id": run,
-                "arm": arm,
+                "arm": setup,
                 "row_kind": "call",
                 "benchmark": benchmark,
                 "tokens": tokens,
@@ -67,20 +69,20 @@ def call_rows(arm: str, benchmark_tokens: dict[str, float]) -> list[dict[str, ob
 
 
 def task_rows(
-    arm: str, benchmark_tokens: dict[str, float], ts_ms: int = 1, run_suffix: str = ""
+    setup: str, benchmark_tokens: dict[str, float], ts_ms: int = 1, run_suffix: str = ""
 ) -> list[dict[str, object]]:
     """One ``row_kind=task`` row per (setup, kernel): the columns ``population.kernel_tokens`` needs
     (T2-T4) -- one row per worker directory, ``tokens`` the task's own effective total.
     ``run_suffix`` distinguishes several tasks of the same kernel (a rerun or a designed repeat)."""
     rows = []
     for benchmark, tokens in benchmark_tokens.items():
-        run = f"{arm}-{benchmark}{run_suffix}"
+        run = f"{setup}-{benchmark}{run_suffix}"
         rows.append(
             {
                 "run_root": f"j1{run_suffix}",
                 "job": f"j1{run_suffix}",
                 "run_id": run,
-                "arm": arm,
+                "arm": setup,
                 "row_kind": "task",
                 "benchmark": benchmark,
                 "tokens": tokens,
@@ -109,7 +111,7 @@ def canon_frame(rows: list[tuple[str, str, float, str]]) -> pd.DataFrame:
 
 
 @pytest.mark.parametrize(
-    ("arm", "expected"),
+    ("setup", "expected"),
     [
         ("llr-focus40-qwen38-c", ("qwen38", "")),
         ("cpf-llr-focus40-qwen38-c-cpf", ("qwen38", "cpf")),
@@ -119,11 +121,11 @@ def canon_frame(rows: list[tuple[str, str, float, str]]) -> pd.DataFrame:
     ],
 )
 def test_parse_setup_reads_model_and_condition_from_the_setup_name_only(
-    arm: str, expected: tuple[str, str] | None
+    setup: str, expected: tuple[str, str] | None
 ) -> None:
     """The setup name is the one column every row of a setup agrees on in the pre-regrade db; language
     and packet are not read here at all."""
-    assert llr40_setups.parse_setup(arm) == expected
+    assert llr40_setups.parse_setup(setup) == expected
 
 
 def test_candidate_setups_keeps_only_setups_the_pattern_names() -> None:
@@ -154,15 +156,15 @@ def test_setup_tokens_reads_one_tasks_total_never_a_sum() -> None:
 def test_setup_tokens_reads_a_rerun_kernels_latest_task_total_not_the_sum_of_both() -> None:
     """A rerun kernel's token cell is the LATEST task's own total (R4): summing both tasks would
     bill a setup twice for being resubmitted, which the earlier reduction did (spec F1)."""
-    arm = "llr-focus40-qwen38-c"
+    setup = "llr-focus40-qwen38-c"
     frame = observations(
         [
-            *submission_rows(arm, {"k1": 2.0}),
-            *task_rows(arm, {"k1": 400.0}, ts_ms=10, run_suffix="-w0"),
-            *task_rows(arm, {"k1": 250.0}, ts_ms=30, run_suffix="-w1"),
+            *submission_rows(setup, {"k1": 2.0}),
+            *task_rows(setup, {"k1": 400.0}, ts_ms=10, run_suffix="-w0"),
+            *task_rows(setup, {"k1": 250.0}, ts_ms=30, run_suffix="-w1"),
         ]
     )
-    values, low, high = llr40_setups.setup_tokens(frame, arm)
+    values, low, high = llr40_setups.setup_tokens(frame, setup)
     assert values == {"k1": 250.0}
     assert low == {} and high == {}
 

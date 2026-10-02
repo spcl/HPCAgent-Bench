@@ -221,7 +221,7 @@ class Item:
     run_id: str
     benchmark: str
     ts_ms: int
-    arm: str
+    setup: str
     language: str
     source_mode: str
     final: bool
@@ -248,11 +248,11 @@ class Item:
 UNKNOWN_WORKSPACE = "ARRAY_BYTES + 67108864"
 
 
-def env_names(arm: str) -> tuple[str, ...]:
+def env_names(setup: str) -> tuple[str, ...]:
     """The ``.env.<name>`` files that describe ``setup``, best first (a ``-clean`` rerun and its setup name
     the same grading setup)."""
-    stripped = arm.removesuffix("-clean")
-    return tuple(dict.fromkeys((arm, f"{stripped}-clean", stripped)))
+    stripped = setup.removesuffix("-clean")
+    return tuple(dict.fromkeys((setup, f"{stripped}-clean", stripped)))
 
 
 def recorded_setup(path: pathlib.Path) -> str:
@@ -264,14 +264,14 @@ def recorded_setup(path: pathlib.Path) -> str:
     return ""
 
 
-def env_files(arm: str, env_dirs: Iterable[pathlib.Path]) -> Iterator[pathlib.Path]:
+def env_files(setup: str, env_dirs: Iterable[pathlib.Path]) -> Iterator[pathlib.Path]:
     """The env files that describe ``setup``, best first: those named for it (:func:`env_names`), then a
     launch's own render ``.env.<name>-<list>`` when it records one of those names as ``CAMPAIGN_ARM``
-    (``.env.<arm>-skills`` shares the prefix but is another setup), then one named for an older spelling
+    (``.env.<setup>-skills`` shares the prefix but is another setup), then one named for an older spelling
     of it, by name or by the ``CAMPAIGN_ARM`` it records (:func:`study_tags.aliased_setup`:
     ``.env.cpf-llr-focus40-*`` for ``llr40-*``), the latest wave's (``-clean``) first."""
     dirs = list(env_dirs)
-    names = env_names(arm)
+    names = env_names(setup)
     for directory in dirs:
         for name in names:
             path = directory / f".env.{name}"
@@ -292,9 +292,9 @@ def env_files(arm: str, env_dirs: Iterable[pathlib.Path]) -> Iterator[pathlib.Pa
                 yield path
 
 
-def setup_env(arm: str, env_dirs: Iterable[pathlib.Path]) -> dict[str, str]:
+def setup_env(setup: str, env_dirs: Iterable[pathlib.Path]) -> dict[str, str]:
     """The grading keys of the first env file describing ``setup`` (:func:`env_files`); empty if none."""
-    path = next(env_files(arm, env_dirs), None)
+    path = next(env_files(setup, env_dirs), None)
     if path is None:
         return {}
     keys: dict[str, str] = {}
@@ -446,10 +446,10 @@ def build_worklist(dbs: Iterable[pathlib.Path], env_dirs: list[pathlib.Path]) ->
             if not row["hash"]:
                 problems.append(f"no stored source: {where}")
                 continue
-            arm = str(row["arm"])
-            envs.setdefault(arm, setup_env(arm, env_dirs))
+            setup = str(row["arm"])
+            envs.setdefault(setup, setup_env(setup, env_dirs))
             final = last[(row["job"], row["run_id"], row["benchmark"])] == int(row["ts_ms"])
-            items.append(item_of(row, envs[arm], final))
+            items.append(item_of(row, envs[setup], final))
     items.sort(key=lambda item: (not item.final, item.benchmark, item.db, item.run_id, item.ts_ms))
     return items, problems
 
@@ -551,9 +551,9 @@ def build_promotion_worklist(dbs: Iterable[pathlib.Path], env_dirs: list[pathlib
                 newest[(int(row["run"]), str(row["benchmark"]))] = {**dict(row), "db": str(db)}
             owed = [row for key, row in sorted(newest.items()) if not spent(conn, *key, since_ms=int(row["cut"]))]
         for row in owed:
-            arm = str(row["arm"])
-            envs.setdefault(arm, setup_env(arm, env_dirs))
-            items.append(dataclasses.replace(item_of(row, envs[arm], True), promoted=True))
+            setup = str(row["arm"])
+            envs.setdefault(setup, setup_env(setup, env_dirs))
+            items.append(dataclasses.replace(item_of(row, envs[setup], True), promoted=True))
     return items, []
 
 
@@ -1259,13 +1259,13 @@ def host_only(item: Item) -> bool:
     device = item.env.get(RECORD_DEVICE_ENV)
     if device is not None:
         return device.startswith("cpu")
-    return item.language in HOST_LANGUAGES and "device" not in item.arm and "triton" not in item.arm
+    return item.language in HOST_LANGUAGES and "device" not in item.setup and "triton" not in item.setup
 
 
 def write_worklist(args: argparse.Namespace) -> int:
     """``worklist``: what ``args.db`` holds no grade under the final protocol of, filtered, one JSON line
     each. Every database is listed from on its own (an item names its database); a setup two of them hold
-    with different rows is refused (:func:`hpcagent_bench.stats.databases.check_arms`)."""
+    with different rows is refused (:func:`hpcagent_bench.stats.databases.check_setups`)."""
     databases.check_setups(args.db)
     items, problems = build_grade_under_worklist(args.db, args.env_dir)
     if args.track:
@@ -1277,8 +1277,8 @@ def write_worklist(args: argparse.Namespace) -> int:
     for line in problems:
         print(line, file=sys.stderr)
     promotions = sum(item.promoted for item in items)
-    for arm, count in sorted(collections.Counter(item.arm for item in items).items()):
-        print(f"  {arm}: {count}")
+    for setup, count in sorted(collections.Counter(item.setup for item in items).items()):
+        print(f"  {setup}: {count}")
     print(f"{len(items)} submissions ({promotions} promotions) -> {args.out}; {len(problems)} without a stored source")
     return 0
 

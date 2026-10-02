@@ -3,7 +3,7 @@
 """Every setup must name a container environment that install_edfs.sh actually installs.
 
 A setup reaches its image through an EDF NAME: `AMD_CE_ENV`, `JUDGE_CE_ENV` and
-`INFERENCE_CE_ENV` in `experiments/.env.<arm>`. Nothing checks at submit time that the name
+`INFERENCE_CE_ENV` in `experiments/.env.<setup>`. Nothing checks at submit time that the name
 resolves -- the job starts, `srun --environment=<name>` finds no such file, and the setup dies
 after the allocation is granted.
 

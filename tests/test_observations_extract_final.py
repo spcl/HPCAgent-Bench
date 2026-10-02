@@ -29,7 +29,7 @@ from tests import results_seed
 from tests.sqlite_closing import connect
 
 RUN = "llr-focus40-qwen38-c.n0.p0.w0"
-ARM = "llr-focus40-qwen38-c"
+SETUP = "llr-focus40-qwen38-c"
 JOB = 631272
 #: Where the extraction read the submission; a regrade names it by its episode's job, not this path.
 OBSERVED_DB = "/new-mount/scratch/hpcagent-bench-runs/c/631272/judge/rank-0/hpcagent_bench0.db"
@@ -65,7 +65,7 @@ def item(tmp_path: pathlib.Path, ts: int, kind: str = "submit") -> grade_under.I
             values["call_index"] = 1
         grade_id = results_seed.grade(db, RUN, "k1", kind, ts, job=JOB, source="void k(void) {}\n", **values)
     return grade_under.Item(
-        str(db), grade_id, RUN, "k1", ts, ARM, "c", "restricted", True, {}, job=str(JOB), speedup=9.0,
+        str(db), grade_id, RUN, "k1", ts, SETUP, "c", "restricted", True, {}, job=str(JOB), speedup=9.0,
         reduction="mwd-final",
     )  # fmt: skip
 
@@ -153,7 +153,7 @@ def submission(ts: int, speedup: float = 9.0, reduction: str = "mwd-final") -> d
         "judge_db": OBSERVED_DB,
         "row_kind": "submission",
         "run_id": RUN,
-        "arm": ARM,
+        "arm": SETUP,
         "benchmark": "k1",
         "ts_ms": ts,
         "speedup": speedup,

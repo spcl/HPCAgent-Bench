@@ -170,27 +170,27 @@ SMOKE_SETUP = re.compile(r"(?:^|-)smoke\d*(?:-|$)")
 
 #: Smoke job ids that recorded a REAL setup's name (``runs.arm``, ``runs.experiment`` and the run
 #: root read exactly like the real wave's). No recorded field tells them apart from a real job, so
-#: unlike :data:`SMOKE_ARM` this is an explicit exception list rather than a pattern.
+#: unlike :data:`SMOKE_SETUP` this is an explicit exception list rather than a pattern.
 SMOKE_JOBS = frozenset({"641175", "642813"})
 
 
-def base_setup(arm: str) -> str:
+def base_setup(setup: str) -> str:
     """The setup identity a recorded setup (its configuration name), a clean re-run, a pre-cmp llrblind
     run, or a registry ``setup_aliases`` spelling (study_tags.aliased_setup) folds into -- itself for
     a setup that is none of them."""
-    known = study_tags.aliased_setup(arm)
-    if known != arm:
+    known = study_tags.aliased_setup(setup)
+    if known != setup:
         return known
-    if arm.endswith(CLEAN_SUFFIX):
-        arm = arm[: -len(CLEAN_SUFFIX)]
-    if arm.startswith(LLRBLIND_CMP_PREFIX) and not arm.startswith(LLRBLIND_CMP_REPLACEMENT):
-        arm = LLRBLIND_CMP_REPLACEMENT + arm[len(LLRBLIND_CMP_PREFIX) :]
-    return study_tags.aliased_setup(arm)
+    if setup.endswith(CLEAN_SUFFIX):
+        setup = setup[: -len(CLEAN_SUFFIX)]
+    if setup.startswith(LLRBLIND_CMP_PREFIX) and not setup.startswith(LLRBLIND_CMP_REPLACEMENT):
+        setup = LLRBLIND_CMP_REPLACEMENT + setup[len(LLRBLIND_CMP_PREFIX) :]
+    return study_tags.aliased_setup(setup)
 
 
-def is_smoke(job: str, arm: str) -> bool:
+def is_smoke(job: str, setup: str) -> bool:
     """Whether ``job`` (running ``setup``) is a smoke run whose rows must not count as coverage."""
-    return job in SMOKE_JOBS or bool(SMOKE_SETUP.search(arm))
+    return job in SMOKE_JOBS or bool(SMOKE_SETUP.search(setup))
 
 
 class ExitClass(enum.Enum):
@@ -438,20 +438,20 @@ def is_fused(job_dir: str) -> bool:
 
 def fused_setups(job_dir: str) -> set:
     """Every setup a fused job served, from its setups' resolved overlays (planned, not just graded)."""
-    arms: set = set()
+    setups: set = set()
     for path in glob.glob(os.path.join(job_dir, FUSED_SETUPS_DIR, "*.resolved")):
         for line in pathlib.Path(path).read_text(encoding="utf-8").splitlines():
             if line.startswith("CAMPAIGN_ARM="):
-                arms.add(line.partition("=")[2].strip())
-    return {arm for arm in arms if arm}
+                setups.add(line.partition("=")[2].strip())
+    return {setup for setup in setups if setup}
 
 
-def setup_filter(job_dir: str, arm: str) -> str:
+def setup_filter(job_dir: str, setup: str) -> str:
     """``setup`` when ``job_dir`` is a fused job (its rows must be filtered to it), else ""."""
-    return arm if is_fused(job_dir) else ""
+    return setup if is_fused(job_dir) else ""
 
 
-def credited(arm: str = "") -> tuple[str, tuple]:
+def credited(setup: str = "") -> tuple[str, tuple]:
     """``(conditions, args)``: the ``and``-joined SQL conditions selecting the judge rows that count
     as coverage, and their arguments.
 
@@ -460,17 +460,17 @@ def credited(arm: str = "") -> tuple[str, tuple]:
     names the job's setup for the ``adhoc`` run id too. ``setup``'s rows only when given (:func:`setup_filter`).
     """
     conditions, args = ["run_id is not ?"], [frozen_observations.ADHOC_RUN_ID]
-    if arm:
+    if setup:
         conditions.append(SETUP_RUN_IDS)
-        args.append(arm)
+        args.append(setup)
     return " and ".join(conditions), tuple(args)
 
 
-def table_counts(job_dir: str, table: str, arm: str = "") -> dict:
+def table_counts(job_dir: str, table: str, setup: str = "") -> dict:
     """(run_id, benchmark) -> row count in ``table``, summed over every shard of this job dir (one
     setup's rows only when ``setup`` is given -- see :func:`setup_filter`)."""
     counts: dict = {}
-    where, args = (f" where {SETUP_RUN_IDS}", (arm,)) if arm else ("", ())
+    where, args = (f" where {SETUP_RUN_IDS}", (setup,)) if setup else ("", ())
     for db in shard_dbs(job_dir):
         conn = open_shard(db)
         if conn is None:
@@ -560,7 +560,7 @@ def graded_since(job_dir: str, opt: str, query: str, args: tuple) -> set:
     return seen
 
 
-def touched(job_dir: str, opt: str, arm: str = "") -> set:
+def touched(job_dir: str, opt: str, setup: str = "") -> set:
     """Every benchmark this job graded a real submission for, deliberate or promoted, at or after
     that kernel's own :func:`comparable_since_ms` -- a row graded before the kernel's manifest/sizing
     last changed measured a DIFFERENT roster and must not count as coverage -- and within its
@@ -570,12 +570,12 @@ def touched(job_dir: str, opt: str, arm: str = "") -> set:
     an ``AGENT_SINGLE_SUBMISSION=0`` setup can post more than one submissions row for the same kernel
     from the same worker -- the newest one is what decides comparability. Only :func:`credited` rows.
     """
-    where, args = credited(arm)
+    where, args = credited(setup)
     query = f"select run_id, benchmark, max(ts) from {records(DONE_TABLE)} where {where} group by run_id, benchmark"
     return graded_since(job_dir, opt, query, args)
 
 
-def genuine_attempts(job_dir: str, opt: str, arm: str = "") -> set:
+def genuine_attempts(job_dir: str, opt: str, setup: str = "") -> set:
     """Every benchmark this job holds a REAL judge verdict for in ``attempts`` -- a ``/submit`` the
     judge actually graded and did not accept (wrong answer, build failure, too slow, timed out,
     overfit) -- under the same epoch and final-attempt gates :func:`touched` applies.
@@ -589,7 +589,7 @@ def genuine_attempts(job_dir: str, opt: str, arm: str = "") -> set:
     breaking, not a verdict about the agent's code, and proves nothing was really graded, and so is one an
     operator's list voided (:data:`RERUN_REASONS`). Only :func:`credited` rows count.
     """
-    where, args = credited(arm)
+    where, args = credited(setup)
     query = (
         f"select run_id, benchmark, max(ts) from {records('attempts')} where reason is not ? and {NOT_RERUN_REASON} "
         f"and {where} "
@@ -598,11 +598,11 @@ def genuine_attempts(job_dir: str, opt: str, arm: str = "") -> set:
     return graded_since(job_dir, opt, query, (HARNESS_FAULT_REASON, *args))
 
 
-def progress_rows(job_dir: str, done: set, arm: str = "") -> list:
+def progress_rows(job_dir: str, done: set, setup: str = "") -> list:
     """(table, run_id, benchmark, count) for every row of a NOT-done kernel in this job dir."""
     rows = []
     for table in PROGRESS_TABLES:
-        for (run_id, benchmark), count in table_counts(job_dir, table, arm).items():
+        for (run_id, benchmark), count in table_counts(job_dir, table, setup).items():
             if benchmark not in done:
                 rows.append((table, run_id, benchmark, count))
     return rows
@@ -610,48 +610,48 @@ def progress_rows(job_dir: str, done: set, arm: str = "") -> list:
 
 def job_setup(job_dir: str) -> str:
     """The setup this job ran, from ``runs.arm``. Empty when the job has no shard DBs at all."""
-    arms = recorded_setups(job_dir)
-    if len(arms) == 1:
-        return arms.pop()
-    if not arms:
+    setups = recorded_setups(job_dir)
+    if len(setups) == 1:
+        return setups.pop()
+    if not setups:
         if shard_dbs(job_dir):
             raise SystemExit(f"{job_dir}: shard DB(s) present but runs.arm named no setup")
         return ""
-    raise SystemExit(f"{job_dir}: runs.arm disagrees within one job dir: {sorted(arms)}")
+    raise SystemExit(f"{job_dir}: runs.arm disagrees within one job dir: {sorted(setups)}")
 
 
 def job_setups(job_dir: str) -> set:
     """Every setup this job ran: :func:`job_setup`'s one, or a fused job's planned and recorded setups."""
     if is_fused(job_dir):
         return fused_setups(job_dir) | recorded_setups(job_dir)
-    arm = job_setup(job_dir)
-    return {arm} if arm else set()
+    setup = job_setup(job_dir)
+    return {setup} if setup else set()
 
 
 #: A run id as the launcher writes it, ``<setup>.n<N>.p<P>.w<W>``.
-LAUNCHER_RUN_ID = re.compile(r"^(?P<arm>[^.]+)\.n(?P<node>\d+)\.p(?P<problem>\d+)\.w(?P<worker>\d+)$")
+LAUNCHER_RUN_ID = re.compile(r"^(?P<setup>[^.]+)\.n(?P<node>\d+)\.p(?P<problem>\d+)\.w(?P<worker>\d+)$")
 
 
 def recorded_setups(job_dir: str) -> set:
     """The distinct ``runs.arm`` values over this job's shard DBs."""
-    arms: set = set()
+    setups: set = set()
     for db in shard_dbs(job_dir):
         conn = open_shard(db)
         if conn is None:
             continue
         try:
-            arms.update(row[0] for row in conn.execute("select distinct arm from runs") if row[0])
+            setups.update(row[0] for row in conn.execute("select distinct arm from runs") if row[0])
         except sqlite3.Error:  # a shard whose judge never started has no schema
             pass
         finally:
             conn.close()
-    return arms
+    return setups
 
 
 @functools.lru_cache(maxsize=None, typed=True)
 def roster(tag: str, opt: str) -> list:
     """A pure read of ``opt``'s checkout, so callers safely share one cached result per (tag, opt):
-    several CAMPAIGNS entries can name the same tag, and each uncached call re-runs roster.sh's
+    several ``experiments`` entries can name the same tag, and each uncached call re-runs roster.sh's
     recursive manifest glob (~450 ms). roster.sh runs ``HPCAGENT_BENCH_HOST_PYTHON``, set to THIS
     interpreter: the one whose packages (yaml, the bench) the caller already imports."""
     script = f'OPT="{opt}"; . "$OPT/hpcagent_bench/cluster/roster.sh"; roster_for "{tag}"'
@@ -672,7 +672,7 @@ def collect_setups(
     ``frozen_dir`` adds every job of these roots whose directory is GONE but whose rows survive in
     the frozen observations (frozen_observations.py): its triple names the missing directory, and
     :func:`covered` reads its coverage from the frozen rows instead."""
-    arms: dict = {}
+    setups: dict = {}
     empty_jobs: list = []
     smoke_jobs: list = []
     for root in run_roots:
@@ -690,25 +690,25 @@ def collect_setups(
             if not ran:
                 empty_jobs.append(job)
                 continue
-            for arm in sorted(ran):
-                if is_smoke(job, arm):
+            for setup in sorted(ran):
+                if is_smoke(job, setup):
                     smoke_jobs.append(job)
                     continue
-                arms.setdefault(base_setup(arm), []).append((job, job_dir, arm))
+                setups.setdefault(base_setup(setup), []).append((job, job_dir, setup))
     lost = frozen_observations.lost_jobs(frozen_dir, [pathlib.Path(root) for root in run_roots])
     for (run_root, job), rows in sorted(lost.items()):
         if job in dropped:
             continue
         job_dir = next(os.path.join(root, job) for root in run_roots if os.path.basename(root.rstrip("/")) == run_root)
-        for arm in sorted(frozen_observations.setups_of(rows)):
-            if is_smoke(job, arm):
+        for setup in sorted(frozen_observations.setups_of(rows)):
+            if is_smoke(job, setup):
                 smoke_jobs.append(job)
                 continue
-            arms.setdefault(base_setup(arm), []).append((job, job_dir, arm))
-    return arms, empty_jobs, smoke_jobs
+            setups.setdefault(base_setup(setup), []).append((job, job_dir, setup))
+    return setups, empty_jobs, smoke_jobs
 
 
-def frozen_coverage(job_dir: str, arm: str, opt: str, frozen_dir: pathlib.Path | None) -> set:
+def frozen_coverage(job_dir: str, setup: str, opt: str, frozen_dir: pathlib.Path | None) -> set:
     """What :func:`touched` + :func:`genuine_attempts` gave for a job whose directory is gone, read
     from its frozen rows (every row for a single-setup job, as the DB query was; ``setup``'s rows only
     when the frozen job holds several setups). Empty without ``frozen_dir``."""
@@ -716,7 +716,7 @@ def frozen_coverage(job_dir: str, arm: str, opt: str, frozen_dir: pathlib.Path |
         return set()
     key = (os.path.basename(os.path.dirname(job_dir.rstrip("/"))), os.path.basename(job_dir.rstrip("/")))
     rows = frozen_observations.by_job(str(frozen_dir)).get(key, ())
-    only = arm if len(frozen_observations.setups_of(rows)) > 1 else ""
+    only = setup if len(frozen_observations.setups_of(rows)) > 1 else ""
     return frozen_observations.delivered(rows, lambda kernel: comparable_since_ms(kernel, opt), only)
 
 
@@ -727,7 +727,7 @@ CONCLUSIVE_RETURNCODES = frozenset(
 )
 
 
-def episode_records(job_dirs: list, arms: frozenset = frozenset()) -> list:
+def episode_records(job_dirs: list, setups: frozenset = frozenset()) -> list:
     """One dict per worker episode across ``job_dirs``: its graded kernel, a deterministic ordering
     key (the episode's own ``final_attempt_start_ms``, falling back to the file's mtime for an older
     record that predates that field), its exit code, whether the job cancelled it, and its
@@ -753,7 +753,7 @@ def episode_records(job_dirs: list, arms: frozenset = frozenset()) -> list:
             if not kernel:
                 continue
             # A fused job's episode names its setup; one of another setup is not this setup's evidence.
-            if arms and "arm" in data and data["arm"] not in arms:
+            if setups and "arm" in data and data["arm"] not in setups:
                 continue
             start_ms = int(data.get("final_attempt_start_ms") or 0)
             sort_key = start_ms or int(path.stat().st_mtime * 1000)
@@ -771,7 +771,7 @@ def episode_records(job_dirs: list, arms: frozenset = frozenset()) -> list:
     return records
 
 
-def owed_exit_classes(job_dirs: list, owed: list, arms: frozenset = frozenset()) -> dict:
+def owed_exit_classes(job_dirs: list, owed: list, setups: frozenset = frozenset()) -> dict:
     """kernel -> :class:`ExitClass` for every name in ``owed``, from its LATEST episode across
     ``job_dirs`` (ties broken by whichever record :func:`episode_records` visits last, which cannot
     happen for two DIFFERENT episodes of the same kernel since their start times differ). A kernel
@@ -784,7 +784,7 @@ def owed_exit_classes(job_dirs: list, owed: list, arms: frozenset = frozenset())
     """
     latest: dict = {}
     owed_set = set(owed)
-    for record in episode_records(job_dirs, arms):
+    for record in episode_records(job_dirs, setups):
         if record["kernel"] not in owed_set:
             continue
         current = latest.get(record["kernel"])
@@ -820,11 +820,11 @@ def covered(jobs: list, opt: str, frozen_dir: pathlib.Path | None = None) -> set
     """Every kernel ``jobs`` (collect_setups's (job, job_dir, setup) triples of one identity) delivered;
     a job whose directory is gone counts its frozen rows (:func:`frozen_coverage`)."""
     seen: set = set()
-    for _, job_dir, arm in jobs:
+    for _, job_dir, setup in jobs:
         if not os.path.isdir(job_dir):
-            seen |= frozen_coverage(job_dir, arm, opt, frozen_dir)
+            seen |= frozen_coverage(job_dir, setup, opt, frozen_dir)
             continue
-        only = setup_filter(job_dir, arm)
+        only = setup_filter(job_dir, setup)
         seen |= touched(job_dir, opt, only) | genuine_attempts(job_dir, opt, only)
     return seen
 
@@ -835,10 +835,10 @@ def marked_classes(jobs: list, kernels: Iterable[str]) -> dict:
     wanted = set(kernels)
     found: dict = {}
     for job in jobs:
-        job_dir, arm = job[1], job[2]
+        job_dir, setup = job[1], job[2]
         if not os.path.isdir(job_dir):
             continue
-        where, args = credited(setup_filter(job_dir, arm))
+        where, args = credited(setup_filter(job_dir, setup))
         marked = " or ".join(f"reason like '{prefix}%'" for prefix in RERUN_REASONS)
         query = f"select distinct benchmark, reason from {records('attempts')} where ({marked}) and {where}"
         for db in shard_dbs(job_dir):
@@ -874,15 +874,15 @@ def owed_classes(jobs: list, full: list, opt: str, frozen_dir: pathlib.Path | No
     agent's own exit says nothing about it. ``budget`` keeps the owed rule's scaled rerun for a kernel
     whose last valid episode hit its budget and whose scaled rerun was voided; ``infra`` reruns as-is."""
     owed = owed_names(jobs, full, opt, frozen_dir)
-    arms = frozenset(arm for _, _, arm in jobs)
-    classes = owed_exit_classes(sorted({job_dir for _, job_dir, _ in jobs}), owed, arms)
+    setups = frozenset(setup for _, _, setup in jobs)
+    classes = owed_exit_classes(sorted({job_dir for _, job_dir, _ in jobs}), owed, setups)
     classes = {kernel: (ExitClass.INFRA if cls == ExitClass.DONE else cls) for kernel, cls in classes.items()}
     classes.update(marked_classes(jobs, owed))
     return classes
 
 
 def setup_selected(identity: str, prefixes: list[str]) -> bool:
-    """Whether a ``--arm-prefix`` names ``identity``: the whole identity (a ``-clean`` spelling folds
+    """Whether a ``--setup-prefix`` names ``identity``: the whole identity (a ``-clean`` spelling folds
     into it, as the report does) or its leading ``<prefix>-``. No prefixes selects every setup. A bare
     ``startswith(prefix + "-")`` printed nothing for a setup named in full. A prefix matches as written
     and as folded: a legacy ``cpf-`` prefix still selects the CPF setups, which keep that spelling."""
@@ -907,7 +907,7 @@ def report_setup(
     classes = owed_classes(jobs, full, opt, frozen_dir)
     budget = sorted(name for name in owed if classes[name] == ExitClass.BUDGET)
     infra = sorted(name for name in owed if classes[name] == ExitClass.INFRA)
-    clean = any(arm.endswith(CLEAN_SUFFIX) for _, _, arm in jobs)
+    clean = any(setup.endswith(CLEAN_SUFFIX) for _, _, setup in jobs)
     job_ids = ",".join(job for job, _, _ in sorted(jobs))
     label = identity + (" [clean]" if clean else "")
     print(
@@ -916,8 +916,8 @@ def report_setup(
     )
     if list_progress:
         rows = []
-        for job, job_dir, arm in jobs:
-            rows.extend((job, *row) for row in progress_rows(job_dir, seen, setup_filter(job_dir, arm)))
+        for job, job_dir, setup in jobs:
+            rows.extend((job, *row) for row in progress_rows(job_dir, seen, setup_filter(job_dir, setup)))
         for job, table, run_id, benchmark, count in sorted(rows):
             print(f"  progress job={job} table={table} run_id={run_id} benchmark={benchmark} count={count}")
     if out_dir is None:
@@ -956,7 +956,6 @@ def main() -> int:
     ap.add_argument("--tag", required=True, help="study tag naming the roster")
     ap.add_argument(
         "--setup-prefix",
-        "--arm-prefix",
         dest="setup_prefix",
         action="append",
         default=[],
@@ -994,7 +993,7 @@ def main() -> int:
 
     dropped = set(args.exclude_job)
     frozen_dir = frozen_observations.resolve(args.frozen_observations)
-    arms, empty_jobs, smoke_jobs = collect_setups(args.run_root, dropped, frozen_dir=frozen_dir)
+    setups, empty_jobs, smoke_jobs = collect_setups(args.run_root, dropped, frozen_dir=frozen_dir)
 
     out_dir = pathlib.Path(args.out_dir) if args.out_dir else None
     if out_dir:
@@ -1006,11 +1005,11 @@ def main() -> int:
     if smoke_jobs:
         print(f"smoke rows, excluded from coverage: jobs {sorted(smoke_jobs)}")
     for prefix in args.setup_prefix:
-        if not any(setup_selected(identity, [prefix]) for identity in arms):
-            print(f"no setup matches --arm-prefix {prefix}")
-    for identity in sorted(arms):
+        if not any(setup_selected(identity, [prefix]) for identity in setups):
+            print(f"no setup matches --setup-prefix {prefix}")
+    for identity in sorted(setups):
         if setup_selected(identity, args.setup_prefix):
-            report_setup(identity, arms[identity], full, args.list_progress, out_dir, only_class, opt, frozen_dir)
+            report_setup(identity, setups[identity], full, args.list_progress, out_dir, only_class, opt, frozen_dir)
     if frozen_dir is not None:
         print(f"frozen observations (jobs with no live directory count as coverage): {frozen_dir}")
     return 0

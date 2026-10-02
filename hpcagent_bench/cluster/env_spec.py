@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Render a base env flat from ``layers/*.env`` and ``arms.yaml``: ``KEY=VALUE`` lines.
+"""Render a base env flat from ``layers/*.env`` and ``setups.yaml``: ``KEY=VALUE`` lines.
 
-    env_spec.py render experiment:qwen38          # experiment "campaign" for model qwen38
+    env_spec.py render experiment:qwen38          # the experiment for model qwen38
     env_spec.py render scicomp                  # experiment "scicomp", no model: its budget keys
     env_spec.py render layers/model-qwen38.env  # an env file and its "# extends:" parents
     env_spec.py list                            # every experiment:model a submitter can render
@@ -27,7 +27,7 @@ from pydantic import BaseModel, ConfigDict, StrictInt, StrictStr, StringConstrai
 
 #: The checkout's ``experiments/``: the setup specification and its env layers.
 EXPERIMENTS = pathlib.Path(__file__).resolve().parents[2] / "experiments"
-SPEC = EXPERIMENTS / "arms.yaml"
+SPEC = EXPERIMENTS / "setups.yaml"
 LAYERS = EXPERIMENTS / "layers"
 COMMON = LAYERS / "common.env"
 ASSIGNMENT = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$")
@@ -44,7 +44,7 @@ type ExperimentName = Annotated[str, StringConstraints(pattern=r"^[a-z0-9][a-z0-
 type Env = dict[EnvKey, StrictStr | StrictInt]
 
 
-class Campaign(BaseModel):
+class Experiment(BaseModel):
     """Keys one experiment sets on every model, and per model on top of that model's layer."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -54,15 +54,15 @@ class Campaign(BaseModel):
     models: dict[Model, Env] = {}
 
 
-SPEC_ADAPTER = TypeAdapter(dict[ExperimentName, Campaign])
+SPEC_ADAPTER = TypeAdapter(dict[ExperimentName, Experiment])
 
 
-def load_spec(path: pathlib.Path = SPEC) -> dict[str, Campaign]:
-    """``arms.yaml`` validated: experiment names, model names, env key names and scalar values."""
+def load_spec(path: pathlib.Path = SPEC) -> dict[str, Experiment]:
+    """``setups.yaml`` validated: experiment names, model names, env key names and scalar values."""
     spec = SPEC_ADAPTER.validate_python(yaml.safe_load(path.read_text(encoding="utf-8")) or {})
-    for name, campaign in spec.items():
-        if campaign.extends is not None and campaign.extends not in spec:
-            raise SystemExit(f"env_spec: experiment {name} extends unknown experiment {campaign.extends}")
+    for name, experiment in spec.items():
+        if experiment.extends is not None and experiment.extends not in spec:
+            raise SystemExit(f"env_spec: experiment {name} extends unknown experiment {experiment.extends}")
     return spec
 
 
@@ -93,7 +93,7 @@ def render_file(path: pathlib.Path) -> dict[str, str]:
     return env
 
 
-def experiment_chain(name: str, spec: dict[str, Campaign]) -> list[Campaign]:
+def experiment_chain(name: str, spec: dict[str, Experiment]) -> list[Experiment]:
     """Experiment ``name`` and the experiments it extends, root first."""
     names: list[str] = []
     current: str | None = name
@@ -107,13 +107,13 @@ def experiment_chain(name: str, spec: dict[str, Campaign]) -> list[Campaign]:
     return [spec[n] for n in names]
 
 
-def render_experiment(name: str, model: str, spec: dict[str, Campaign]) -> dict[str, str]:
+def render_experiment(name: str, model: str, spec: dict[str, Experiment]) -> dict[str, str]:
     """Experiment ``name`` for ``model`` flattened (precedence in the module docstring)."""
     try:
         member = Model(model)
     except ValueError:
         raise SystemExit(f"env_spec: no model {model}: no layers/model-{model}.env") from None
-    campaigns = experiment_chain(name, spec)
+    lineage = experiment_chain(name, spec)
     chain = layer_chain(LAYERS / f"model-{member.value}.env")
     if COMMON.resolve() not in chain:
         raise SystemExit(f"env_spec: layers/model-{member.value}.env does not extend common.env")
@@ -121,24 +121,24 @@ def render_experiment(name: str, model: str, spec: dict[str, Campaign]) -> dict[
     for layer in chain:
         env.update(assignments(layer))
         if layer == COMMON.resolve():
-            for campaign in campaigns:
-                env.update((key, str(value)) for key, value in campaign.env.items())
-    for campaign in campaigns:
-        env.update((key, str(value)) for key, value in campaign.models.get(member, {}).items())
+            for experiment in lineage:
+                env.update((key, str(value)) for key, value in experiment.env.items())
+    for experiment in lineage:
+        env.update((key, str(value)) for key, value in experiment.models.get(member, {}).items())
     return env
 
 
-def render_track(name: str, spec: dict[str, Campaign]) -> dict[str, str]:
+def render_track(name: str, spec: dict[str, Experiment]) -> dict[str, str]:
     """Experiment ``name`` without a model: ``layers/common.env`` and the experiment chain's ``env``.
 
     Budgets are per track, never per model, so this is where a submitter reads them."""
     env = assignments(COMMON)
-    for campaign in experiment_chain(name, spec):
-        env.update((key, str(value)) for key, value in campaign.env.items())
+    for experiment in experiment_chain(name, spec):
+        env.update((key, str(value)) for key, value in experiment.env.items())
     return env
 
 
-def render(target: str, spec: dict[str, Campaign] | None = None) -> dict[str, str]:
+def render(target: str, spec: dict[str, Experiment] | None = None) -> dict[str, str]:
     """``target`` rendered flat: ``<experiment>:<model>``, a bare ``<experiment>``, else an env file."""
     spec = load_spec() if spec is None else spec
     if ":" in target:
@@ -151,7 +151,7 @@ def render(target: str, spec: dict[str, Campaign] | None = None) -> dict[str, st
     return render_file(pathlib.Path(target))
 
 
-def targets(spec: dict[str, Campaign] | None = None) -> list[str]:
+def targets(spec: dict[str, Experiment] | None = None) -> list[str]:
     """Every ``<experiment>:<model>`` that renders."""
     return [f"{name}:{model.value}" for name in (load_spec() if spec is None else spec) for model in Model]
 

@@ -12,17 +12,17 @@ import pytest
 
 from hpcagent_bench import experiments, dataset, frozen_observations
 
-ARM = "git-scicomp-qwen38-repo"
+SETUP = "git-scicomp-qwen38-repo"
 RETIRED = "cpf-llr-focus40-qwen38-c-cpfsrc"
 FOREIGN = "llr-focus40-qwen38-c"
 
 
-def row(job: str, benchmark: str, arm: str = ARM, frozen: str = "0", **extra: object) -> dict[str, object]:
+def row(job: str, benchmark: str, setup: str = SETUP, frozen: str = "0", **extra: object) -> dict[str, object]:
     return {
         "run_root": "git-scicomp-20260917",
         "job": job,
         "row_kind": "submission",
-        "arm": arm,
+        "arm": setup,
         "benchmark": benchmark,
         "speedup": 2.0,
         frozen_observations.COLUMN: frozen,
@@ -75,9 +75,9 @@ def test_a_retired_setup_is_dropped_and_counted_apart_from_a_foreign_one(
 ) -> None:
     """Retired means the user took a real setup out; foreign means another study shares the run
     root. Reporting them as one number hides which of the two shrank a population."""
-    live = pd.DataFrame([row("100", "dfa"), row("101", "dfa", arm=RETIRED), row("102", "dfa", arm=FOREIGN)])
+    live = pd.DataFrame([row("100", "dfa"), row("101", "dfa", setup=RETIRED), row("102", "dfa", setup=FOREIGN)])
     frame, provenance = dataset.fuse(selection, live, pd.DataFrame())
-    assert list(frame["arm"]) == [ARM]
+    assert list(frame["arm"]) == [SETUP]
     assert (provenance.dropped_retired, provenance.dropped_foreign) == (0, 2)
 
 
@@ -118,8 +118,8 @@ def test_a_row_on_a_kernel_outside_the_roster_is_dropped_and_counted(tmp_path: p
     """The SciComp waves served more kernels than the roster; the experiments name scicomp40, and a
     figure counts a setup over every kernel its rows touch, so an atax row must not reach it."""
     selection = experiments.resolve("scicomp40", root=tmp_path)
-    arm = "scicomp-perf-playbook-qwen38-plain"
-    live = pd.DataFrame([row("100", "gemm", arm=arm), row("101", "atax", arm=arm)])
+    setup = "scicomp-perf-playbook-qwen38-plain"
+    live = pd.DataFrame([row("100", "gemm", setup=setup), row("101", "atax", setup=setup)])
     frame, provenance = dataset.fuse(selection, live, pd.DataFrame())
     assert list(frame["benchmark"]) == ["gemm"]
     assert provenance.dropped_off_roster == 1

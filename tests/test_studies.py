@@ -330,7 +330,7 @@ def test_a_blank_setup_stays_blank_through_the_fold() -> None:
 
 
 @pytest.mark.parametrize(
-    ("arm", "packet"),
+    ("setup", "packet"),
     [
         ("cpf-llr-focus40-oss120b-c-cpf", "cpf"),
         ("cpf-llr-focus40-qwen38-c-cpfsrc", "cpfsrc"),
@@ -339,17 +339,17 @@ def test_a_blank_setup_stays_blank_through_the_fold() -> None:
         ("llr-focus40-qwen38-c-perf-playbook-cpu", "perf-playbook-cpu"),
     ],
 )
-def test_a_packet_token_after_the_model_is_the_setups_packet(arm: str, packet: str) -> None:
+def test_a_packet_token_after_the_model_is_the_setups_packet(setup: str, packet: str) -> None:
     """Most ``-skills`` setups never recorded their packet; without the name the skills contrast found one pair of
     fifteen. Replaces the earlier rule that packet had no name fallback, which is what lost those pairs."""
-    frame = pd.DataFrame({"arm": [arm] * 2, "packet": ["", None]})
+    frame = pd.DataFrame({"arm": [setup] * 2, "packet": ["", None]})
     assert studies.fill_setup_identity(frame).packet.tolist() == [packet, packet]
 
 
-@pytest.mark.parametrize("arm", ["cpf-llr-focus40-qwen38-c", "cpf-llr-focus40-oss120b-fortran"])
-def test_the_study_prefix_never_reads_as_a_packet(arm: str) -> None:
+@pytest.mark.parametrize("setup", ["cpf-llr-focus40-qwen38-c", "cpf-llr-focus40-oss120b-fortran"])
+def test_the_study_prefix_never_reads_as_a_packet(setup: str) -> None:
     """The legacy ``cpf-llr-focus40`` spells ``cpf`` before the model; the control setup must stay the control."""
-    frame = pd.DataFrame({"arm": [arm], "packet": [""]})
+    frame = pd.DataFrame({"arm": [setup], "packet": [""]})
     assert studies.is_blank(studies.fill_setup_identity(frame).packet.iloc[0])
 
 
@@ -424,9 +424,9 @@ def test_a_column_no_row_in_the_table_ever_recorded_still_fills_from_the_setup_n
 
 
 @pytest.mark.parametrize(
-    ("arm", "folded"),
+    ("setup", "folded"),
     [
-        # envs/arm_renames.yaml: every recorded setup under its configuration name
+        # envs/setup_renames.yaml: every recorded setup under its configuration name
         ("llrblind-qwen38-c", "llr40-qwen38-c-blind"),
         ("llrblind-oss120b-fortran-skills", "llr40-oss120b-fortran-skills-blind"),
         ("llrblind-cmp-qwen38-c", "llr40-qwen38-c-blind"),
@@ -447,10 +447,10 @@ def test_a_column_no_row_in_the_table_ever_recorded_still_fills_from_the_setup_n
         ("llr40-qwen38-c", "llr40-qwen38-c"),
     ],
 )
-def test_a_renamed_blind_setup_reads_under_its_current_name(arm: str, folded: str) -> None:
+def test_a_renamed_blind_setup_reads_under_its_current_name(setup: str, folded: str) -> None:
     """``llrblind-cmp`` is the old llrblind setup renamed. Read as two setups, a blind pair sees
     only half of its kernels, and a cmp setup must never fold a second time."""
-    assert studies.renamed_setup(arm) == folded
+    assert studies.renamed_setup(setup) == folded
 
 
 def test_the_dc_and_perf_playbook_spellings_read_as_one_setup() -> None:

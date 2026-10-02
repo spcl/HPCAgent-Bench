@@ -53,10 +53,10 @@ def shard(job_dir: pathlib.Path, rank: int, label: str, ts_ms: int) -> None:
     """Rank ``rank``'s judge shard: one credited submission of ``label``."""
     path = job_dir / "judge" / f"rank-{rank}" / f"hpcagent_bench{rank}.db"
     path.parent.mkdir(parents=True)
-    arm = label.split(".")[0]
+    setup = label.split(".")[0]
     with contextlib.closing(results_db.open_db(path)) as conn:
-        results_db.ensure_setup(conn, results_db.Arm(arm, "c", "cpu", experiment="llr40", model="stub-model"))
-        run = results_db.ensure_run(conn, arm, label, JOB)
+        results_db.ensure_setup(conn, results_db.Setup(setup, "c", "cpu", experiment="llr40", model="stub-model"))
+        run = results_db.ensure_run(conn, setup, label, JOB)
         values = {
             "preset": "XL",
             "datatype": "float64",
@@ -84,8 +84,8 @@ def rows_of(db: pathlib.Path, setup_prefix: str = "", excluded: frozenset[str] =
     return extract_llr40.read_db(database, setup_prefix, excluded, 0).observations
 
 
-def task_rows(db: pathlib.Path, **campaign: object) -> list[dict]:
-    return [row for row in rows_of(db, **campaign) if row["row_kind"] == "task"]  # type: ignore[arg-type]
+def task_rows(db: pathlib.Path, **experiment: object) -> list[dict]:
+    return [row for row in rows_of(db, **experiment) if row["row_kind"] == "task"]  # type: ignore[arg-type]
 
 
 def job(tmp_path: pathlib.Path) -> pathlib.Path:

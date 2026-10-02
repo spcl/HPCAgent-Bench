@@ -47,7 +47,7 @@ def paired_setups_fixture() -> ModuleType:
 
 
 def graded(
-    arm: str,
+    setup: str,
     kernel: str,
     speedup: float,
     job: str = "j1",
@@ -64,8 +64,8 @@ def graded(
         "run_root": "stamp",
         "job": job,
         "row_kind": "submission",
-        "run_id": f"{arm}.n0.p{kernel}.w0",
-        "arm": arm,
+        "run_id": f"{setup}.n0.p{kernel}.w0",
+        "arm": setup,
         "benchmark": kernel,
         "speedup": speedup,
         "tokens": "",
@@ -78,7 +78,7 @@ def graded(
     }
 
 
-def call(arm: str, kernel: str, tokens: float, job: str = "j1", ts: int = 1000, index: int = 1) -> dict[str, object]:
+def call(setup: str, kernel: str, tokens: float, job: str = "j1", ts: int = 1000, index: int = 1) -> dict[str, object]:
     """One trajectory call: a CUMULATIVE token count, no timings, and a blank ``suspect`` because the
     ``calls`` table has no such column."""
     return {
@@ -86,8 +86,8 @@ def call(arm: str, kernel: str, tokens: float, job: str = "j1", ts: int = 1000, 
         "run_root": "stamp",
         "job": job,
         "row_kind": "call",
-        "run_id": f"{arm}.n0.p{kernel}.w0",
-        "arm": arm,
+        "run_id": f"{setup}.n0.p{kernel}.w0",
+        "arm": setup,
         "benchmark": kernel,
         "speedup": "",
         "tokens": tokens,
@@ -108,7 +108,7 @@ def observations(rows: list[dict[str, object]], tmp_path: pathlib.Path) -> pathl
     return path
 
 
-def task(arm: str, kernel: str, tokens: float, job: str = "j1", ts: int = 900) -> dict[str, object]:
+def task(setup: str, kernel: str, tokens: float, job: str = "j1", ts: int = 900) -> dict[str, object]:
     """One task record: the task's token total over all its attempts, stamped with its start. The
     total is stated as fresh input alone, so every cost card prices the task at ``tokens``."""
     return {
@@ -116,8 +116,8 @@ def task(arm: str, kernel: str, tokens: float, job: str = "j1", ts: int = 900) -
         "run_root": "stamp",
         "job": job,
         "row_kind": "task",
-        "run_id": f"{arm}.n0.p{kernel}.w0",
-        "arm": arm,
+        "run_id": f"{setup}.n0.p{kernel}.w0",
+        "arm": setup,
         "benchmark": kernel,
         "speedup": "",
         "tokens": tokens,
@@ -131,13 +131,13 @@ def task(arm: str, kernel: str, tokens: float, job: str = "j1", ts: int = 900) -
     }
 
 
-def episode(arm: str, kernel: str, speedup: float, tokens: float, job: str = "j1") -> list[dict[str, object]]:
+def episode(setup: str, kernel: str, speedup: float, tokens: float, job: str = "j1") -> list[dict[str, object]]:
     """One agent on one kernel, in the rows extraction writes for it: its accepted submission, the
     submit call, and the task record carrying its token total."""
     return [
-        graded(arm, kernel, speedup, job=job),
-        call(arm, kernel, tokens, job=job),
-        task(arm, kernel, tokens, job=job),
+        graded(setup, kernel, speedup, job=job),
+        call(setup, kernel, tokens, job=job),
+        task(setup, kernel, tokens, job=job),
     ]
 
 
@@ -755,8 +755,8 @@ def test_a_kernel_the_setup_never_ran_leaves_its_completion_and_its_pairs_while_
     best = paired_setups.best_by_setup_kernel(paired_setups.graded_rows(obs, ["a", "b"]))
     table = paired_setups.setup_aggregates(best, served, "numba")
     usage = paired_setups.task_usage(obs, population.RepeatPolicy.LATEST)
-    arm = paired_setups.setup_rows(best, paired_setups.graded_rows(obs, ["a"]), table, served, {}, usage)[0]
-    assert (arm["n_served"], arm["n_solved"], arm["coverage"]) == (7, 6, pytest.approx(6 / 7))
+    setup = paired_setups.setup_rows(best, paired_setups.graded_rows(obs, ["a"]), table, served, {}, usage)[0]
+    assert (setup["n_served"], setup["n_solved"], setup["coverage"]) == (7, 6, pytest.approx(6 / 7))
     tokens = paired_setups.tokens_by_setup_kernel(obs)
     assert ("a", "k8") not in tokens and ("a", "k7") in tokens
     legs = {row["leg"]: row for row in paired_setups.pair_rows([("a", "b")], table, tokens, list(KERNELS), "f", served)}
@@ -837,8 +837,8 @@ def test_cpf_uptake_is_absent_without_the_call_column(paired_setups: ModuleType,
 
 
 def test_parse_iteration_counts_splits_setup_and_path(paired_setups: ModuleType) -> None:
-    arm, path = paired_setups.parse_iteration_counts("x-qwen38-c-cpf=/tmp/iters.csv")
-    assert (arm, path) == ("x-qwen38-c-cpf", pathlib.Path("/tmp/iters.csv"))
+    setup, path = paired_setups.parse_iteration_counts("x-qwen38-c-cpf=/tmp/iters.csv")
+    assert (setup, path) == ("x-qwen38-c-cpf", pathlib.Path("/tmp/iters.csv"))
     with pytest.raises(SystemExit):
         paired_setups.parse_iteration_counts("no-equals-sign")
 
@@ -873,10 +873,10 @@ def test_the_impact_table_carries_cpf_uptake_only_for_the_setup_it_was_given(
     assert pd.isna(table.loc["x-qwen38-c", "cpf_uptake"])
 
 
-def priced_task(arm: str, kernel: str, fresh: float, cached: float) -> dict[str, object]:
+def priced_task(setup: str, kernel: str, fresh: float, cached: float) -> dict[str, object]:
     """A task row whose three cards disagree: effective ``fresh``, billed ``fresh + 0.1 cached``,
     total ``fresh + cached``. The raw ``tokens_billed`` column carries a decoy no card produces."""
-    return task(arm, kernel, fresh) | {"tokens_cached_input": cached, "tokens_billed": 1e9}
+    return task(setup, kernel, fresh) | {"tokens_cached_input": cached, "tokens_billed": 1e9}
 
 
 def cost_fixture(tmp_path: pathlib.Path) -> pathlib.Path:
@@ -903,14 +903,14 @@ def test_the_speedup_leg_is_over_the_kernels_both_solved_and_the_cost_leg_over_e
     k7, unsolved by the control, still counts (over B alone it would read 2.0; on effective tokens
     1.0 on k1-k6)."""
     out = tmp_path / "pairs.csv"
-    setups_out = tmp_path / "arms.csv"
+    setups_out = tmp_path / "setups.csv"
     rc = paired_setups.main(
         [
             "--observations", str(cost_fixture(tmp_path)),
             "--pair", "x-qwen38-c-cpf,x-qwen38-c",
             "--family", "f",
             "--out", str(out),
-            "--arms-out", str(setups_out),
+            "--setups-out", str(setups_out),
         ]
     )  # fmt: skip
     assert rc == 0
@@ -978,7 +978,7 @@ def test_a_served_kernel_without_a_task_token_total_is_dropped_loudly(
 
 
 @pytest.mark.parametrize(
-    ("arm", "recorded", "want"),
+    ("setup", "recorded", "want"),
     [
         ("harness20-qwen38-claude", ["", "c", "c"], "c"),
         ("harness20-caveman-qwen38-c", ["", "fortran"], "c"),
@@ -986,8 +986,8 @@ def test_a_served_kernel_without_a_task_token_total_is_dropped_loudly(
     ],
 )
 def test_a_setup_named_without_a_language_takes_the_language_its_rows_recorded(
-    paired_setups: ModuleType, arm: str, recorded: list[str], want: str
+    paired_setups: ModuleType, setup: str, recorded: list[str], want: str
 ) -> None:
     """A harness setup's name carries no language token; its rows do, so it pairs with its ``-c`` treatment."""
-    observations = pd.DataFrame({"arm": [arm] * len(recorded), "language": recorded})
-    assert paired_setups.setup_language(observations, arm) == want
+    observations = pd.DataFrame({"arm": [setup] * len(recorded), "language": recorded})
+    assert paired_setups.setup_language(observations, setup) == want

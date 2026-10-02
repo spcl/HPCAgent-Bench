@@ -181,7 +181,7 @@ def is_reportable(suspect: object) -> bool:
 def condition_rows(frame: "pd.DataFrame") -> "pd.DataFrame":
     """The rows of ``frame`` recorded under a real setup.
 
-    Every per-setup table and figure starts from these. A pseudo-setup (:data:`PSEUDO_ARMS`, or no setup at
+    Every per-setup table and figure starts from these. A pseudo-setup (:data:`PSEUDO_SETUPS`, or no setup at
     all) is not a condition, and reading it as one puts a phantom column beside the real setups.
     """
     if "arm" not in frame.columns:
@@ -227,17 +227,17 @@ def complete_setups(frame: "pd.DataFrame", roster: Sequence[str]) -> tuple[list[
     if missing:
         raise MixedPopulationError(f"cannot check roster coverage without {missing}")
     needed = set(roster)
-    arms = frame["arm"].fillna("").astype(str)
-    order = [arm for arm in dict.fromkeys(arms) if arm not in PSEUDO_SETUPS]
-    served = frame.assign(arm=arms).groupby("arm")["benchmark"].agg(lambda column: set(column.astype(str)))
+    setups = frame["arm"].fillna("").astype(str)
+    order = [setup for setup in dict.fromkeys(setups) if setup not in PSEUDO_SETUPS]
+    served = frame.assign(arm=setups).groupby("arm")["benchmark"].agg(lambda column: set(column.astype(str)))
     kept: list[str] = []
     dropped: dict[str, int] = {}
-    for arm in order:
-        have = served.get(arm, set())
+    for setup in order:
+        have = served.get(setup, set())
         if needed <= have:
-            kept.append(arm)
+            kept.append(setup)
         else:
-            dropped[arm] = len(needed & have)
+            dropped[setup] = len(needed & have)
     return kept, dropped
 
 
@@ -910,7 +910,7 @@ class SetupAggregate:
     can be checked for comparability rather than assumed to be comparable.
     """
 
-    arm: str
+    setup: str
     baseline: str
     policy: KernelPolicy
     kernels: tuple[str, ...]
@@ -924,17 +924,17 @@ class SetupAggregate:
 
     def __post_init__(self) -> None:
         if not self.baseline:
-            raise MixedPopulationError(f"{self.arm}: an aggregate must name the denominator it is over")
+            raise MixedPopulationError(f"{self.setup}: an aggregate must name the denominator it is over")
         if not isinstance(self.policy, KernelPolicy):
-            raise MixedPopulationError(f"{self.arm}: policy must be a KernelPolicy, got {self.policy!r}")
+            raise MixedPopulationError(f"{self.setup}: policy must be a KernelPolicy, got {self.policy!r}")
         if len(self.kernels) != len(self.values):
-            raise MixedPopulationError(f"{self.arm}: {len(self.kernels)} kernels against {len(self.values)} values")
+            raise MixedPopulationError(f"{self.setup}: {len(self.kernels)} kernels against {len(self.values)} values")
         if len(set(self.kernels)) != len(self.kernels):
-            raise MixedPopulationError(f"{self.arm}: a kernel may enter an aggregate only once")
+            raise MixedPopulationError(f"{self.setup}: a kernel may enter an aggregate only once")
         if any(not math.isfinite(value) or value <= 0.0 for value in self.values):
-            raise MixedPopulationError(f"{self.arm}: every value must be a finite positive ratio")
+            raise MixedPopulationError(f"{self.setup}: every value must be a finite positive ratio")
         if self.delivered and not set(self.delivered) <= set(self.kernels):
-            raise MixedPopulationError(f"{self.arm}: delivered a kernel that is not in its population")
+            raise MixedPopulationError(f"{self.setup}: delivered a kernel that is not in its population")
 
     @property
     def n(self) -> int:
@@ -962,12 +962,12 @@ class SetupAggregate:
         index = {kernel: value for kernel, value in zip(self.kernels, self.values, strict=True)}
         absent = [kernel for kernel in kernels if kernel not in index]
         if absent:
-            raise MixedPopulationError(f"{self.arm}: cannot restrict to kernels it has no value for: {absent[:4]}")
+            raise MixedPopulationError(f"{self.setup}: cannot restrict to kernels it has no value for: {absent[:4]}")
         keep = tuple(kernels)
         kept_delivered = tuple(k for k in keep if k in self.delivered_kernels())
         solved = len(kept_delivered)
         return SetupAggregate(
-            self.arm, self.baseline, self.policy, keep, tuple(index[k] for k in keep), solved, kept_delivered
+            self.setup, self.baseline, self.policy, keep, tuple(index[k] for k in keep), solved, kept_delivered
         )
 
 
@@ -984,7 +984,7 @@ class Coverage:
 
 
 def aggregate_setup(
-    arm: str,
+    setup: str,
     baseline: str,
     solved: Mapping[str, float],
     served: Collection[str],
@@ -997,13 +997,13 @@ def aggregate_setup(
     at :data:`NOT_DELIVERED`, which is what a non-delivery left behind.
     """
     if not isinstance(policy, KernelPolicy):
-        raise MixedPopulationError(f"{arm}: policy must be a KernelPolicy, got {policy!r}")
+        raise MixedPopulationError(f"{setup}: policy must be a KernelPolicy, got {policy!r}")
     unserved = sorted(set(solved) - set(served))
     if unserved:
-        raise MixedPopulationError(f"{arm}: verified kernels that were never served: {unserved[:4]}")
+        raise MixedPopulationError(f"{setup}: verified kernels that were never served: {unserved[:4]}")
     kernels = tuple(sorted(solved)) if policy == KernelPolicy.SOLVED else tuple(sorted(served))
     values = tuple(float(solved.get(kernel, NOT_DELIVERED)) for kernel in kernels)
-    return SetupAggregate(arm, baseline, policy, kernels, values, len(solved), tuple(sorted(solved)))
+    return SetupAggregate(setup, baseline, policy, kernels, values, len(solved), tuple(sorted(solved)))
 
 
 def common_kernels(aggregates: Sequence[SetupAggregate]) -> tuple[str, ...]:
@@ -1083,13 +1083,13 @@ def ratio(left: SetupAggregate, right: SetupAggregate) -> float:
     statement about the setups and was partly a statement about what they were divided by, what was
     counted as a failure, and which kernels each happened to reach.
     """
-    one_denominator([left.baseline, right.baseline], label=f"{left.arm} / {right.arm}")
+    one_denominator([left.baseline, right.baseline], label=f"{left.setup} / {right.setup}")
     if left.policy != right.policy:
-        raise MixedPopulationError(f"{left.arm} / {right.arm}: {left.policy} is not comparable with {right.policy}")
+        raise MixedPopulationError(f"{left.setup} / {right.setup}: {left.policy} is not comparable with {right.policy}")
     if left.kernels != right.kernels:
         gap = coverage(left, right)
         raise MixedPopulationError(
-            f"{left.arm} / {right.arm}: different kernel sets ({left.n} against {right.n}, "
+            f"{left.setup} / {right.setup}: different kernel sets ({left.n} against {right.n}, "
             f"{gap.n_both} shared); call align() first"
         )
     if not left.kernels:
@@ -1100,6 +1100,6 @@ def ratio(left: SetupAggregate, right: SetupAggregate) -> float:
 def log_differences(left: SetupAggregate, right: SetupAggregate) -> list[float]:
     """``log(left / right)`` per kernel, the paired quantity a signed-rank test is taken over."""
     if left.kernels != right.kernels:
-        raise MixedPopulationError(f"{left.arm} / {right.arm}: pairing needs one kernel set; call align() first")
-    one_denominator([left.baseline, right.baseline], label=f"{left.arm} / {right.arm}")
+        raise MixedPopulationError(f"{left.setup} / {right.setup}: pairing needs one kernel set; call align() first")
+    one_denominator([left.baseline, right.baseline], label=f"{left.setup} / {right.setup}")
     return [math.log(a / b) for a, b in zip(left.values, right.values, strict=True)]

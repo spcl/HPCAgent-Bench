@@ -42,7 +42,7 @@ IMAGES: tuple[str, ...] = ("cpu", *sorted(packets.DEVICE_LANGUAGES))
 #: column and no page is written for it, so it is dropped rather than demanding a ``lang-omp``.
 LANGUAGES: tuple[str, ...] = tuple(name for name in tags.names("languages") if name != "omp")
 
-ARMS: tuple[tuple[str, str, bool], ...] = tuple(itertools.product(LANGUAGES, IMAGES, (False, True)))
+SETUPS: tuple[tuple[str, str, bool], ...] = tuple(itertools.product(LANGUAGES, IMAGES, (False, True)))
 
 PAGES: tuple[str, ...] = tuple(sorted(entry.name for entry in SKILLS.iterdir() if (entry / "SKILL.md").is_file()))
 
@@ -97,7 +97,7 @@ def test_every_shipped_page_reaches_some_setup(page: str) -> None:
         named_by = sorted(key for key, d in tags.registry().packet_defs.items() if page in d.skills)
         assert named_by, f"{page}: applies.explicit keeps it out of `*` and no registered packet names it"
         return
-    reached = [arm for arm in ARMS if packets.applies_to(page, *arm)]
+    reached = [setup for setup in SETUPS if packets.applies_to(page, *setup)]
     assert reached, f"{page}: applies admits no (language, image, multinode) setup at all"
 
 
@@ -108,7 +108,7 @@ def test_every_registered_packet_resolves_or_refuses_by_device(key: str) -> None
     launch abort with the allocation already held. The only refusal allowed here is the intended
     one: a ``device:`` packet handed a language that device does not run."""
     resolved_any = False
-    for language, image, multinode in ARMS:
+    for language, image, multinode in SETUPS:
         try:
             packet = packets.resolve(key, language, {"CPF_VIEW": "/view"}, image=image, multinode=multinode)
         except ValueError as exc:
@@ -173,9 +173,9 @@ def pages_sent_to(page: str) -> frozenset[str]:
 def test_a_packet_stages_every_page_the_pages_it_stages_send_the_reader_to(key: str) -> None:
     """A staged page that says "read `lang-cpp` first" on a setup where `lang-cpp` was not staged
     costs a turn on a failed read and then leaves the reader without the contract it was sent for.
-    ``*`` gets this right through :func:`packets.arm_order`; the ``lang`` token had to be taught the
+    ``*`` gets this right through :func:`packets.setup_order`; the ``lang`` token had to be taught the
     same rule, which is what this pins."""
-    for language, image, multinode in ARMS:
+    for language, image, multinode in SETUPS:
         try:
             packet = packets.resolve(key, language, {"CPF_VIEW": "/view"}, image=image, multinode=multinode)
         except ValueError:

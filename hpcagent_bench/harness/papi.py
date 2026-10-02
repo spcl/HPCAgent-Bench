@@ -980,7 +980,7 @@ def counted_run(
     seen: set[int] = set()
     scope = CounterScope(threads=(), how="all_threads", fallback=None)
 
-    def arm() -> None:
+    def setup() -> None:
         """One event set per live thread, then start them all."""
         tids = thread_ids()
         for tid in tids:
@@ -1006,7 +1006,7 @@ def counted_run(
             settle()  # the pool setup() enumerates below must be the one the kernel actually used
             return host_rep(time.perf_counter_ns() - start)
         if index == warm:
-            arm()
+            setup()
         # Sampled at every rep boundary, outside the read bracket.
         seen.update(thread_ids())
         # Read-delta per rep: PAPI_start setups once, and two reads isolate one call.

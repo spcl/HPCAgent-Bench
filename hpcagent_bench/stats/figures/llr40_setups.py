@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """llr40 setups: which setups a figure draws, their (model, condition), their tokens and roster.
 
-The condition comes from the ARM NAME, not the ``language``/``packet`` columns: the pre-regrade
+The condition comes from the SETUP NAME, not the ``language``/``packet`` columns: the pre-regrade
 extraction records those inconsistently for the same setup, while every row of a setup agrees on its
-name. :data:`ARM_PATTERN` is both the setup selector and the (model, condition) parser.
+name. :data:`SETUP_PATTERN` is both the setup selector and the (model, condition) parser.
 """
 
 import re
@@ -42,9 +42,9 @@ CONDITION_ORDER: tuple[str, ...] = ("", "cpf", "cpfsrc")
 CANON_BASELINE: str = "numba"
 
 
-def parse_setup(arm: str, pattern: re.Pattern[str] = SETUP_PATTERN) -> tuple[str, str] | None:
+def parse_setup(setup: str, pattern: re.Pattern[str] = SETUP_PATTERN) -> tuple[str, str] | None:
     """``setup``'s (model, condition), or ``None`` when ``pattern`` does not name it."""
-    match = pattern.fullmatch(arm)
+    match = pattern.fullmatch(setup)
     if match is None:
         return None
     return match.group("model"), match.group("condition") or ""
@@ -53,15 +53,15 @@ def parse_setup(arm: str, pattern: re.Pattern[str] = SETUP_PATTERN) -> tuple[str
 def candidate_setups(frame: pd.DataFrame, pattern: re.Pattern[str] = SETUP_PATTERN) -> dict[str, tuple[str, str]]:
     """Every distinct setup of ``frame`` that ``pattern`` names: setup -> (model, condition)."""
     out: dict[str, tuple[str, str]] = {}
-    for arm in frame["arm"].dropna().astype(str).unique():
-        parsed = parse_setup(str(arm), pattern)
+    for setup in frame["arm"].dropna().astype(str).unique():
+        parsed = parse_setup(str(setup), pattern)
         if parsed is not None:
-            out[str(arm)] = parsed
+            out[str(setup)] = parsed
     return out
 
 
 def setup_tokens(
-    frame: pd.DataFrame, arm: str, repeats: population.RepeatPolicy = population.RepeatPolicy.LATEST
+    frame: pd.DataFrame, setup: str, repeats: population.RepeatPolicy = population.RepeatPolicy.LATEST
 ) -> tuple[dict[str, float], dict[str, float], dict[str, float]]:
     """``setup``'s per-kernel token total under ``repeats`` (:func:`population.kernel_tokens`), plus
     the minimum and maximum over the tasks when ``repeats="median"`` (R5).
@@ -70,7 +70,7 @@ def setup_tokens(
     entered at any stand-in value. Under ``latest`` one task IS the
     kernel's value, so the range dicts come back empty -- there is nothing to bracket.
     """
-    subset = frame[frame["arm"].astype(str) == arm]
+    subset = frame[frame["arm"].astype(str) == setup]
     totals = population.kernel_tokens(subset, ("arm", "benchmark"), repeats=repeats)
     values = {str(kernel): float(value) for kernel, value in totals.droplevel(0).items() if value > 0}
     if population.repeat_policy(repeats) != population.RepeatPolicy.MEDIAN or not values:

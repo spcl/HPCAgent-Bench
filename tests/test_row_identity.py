@@ -95,8 +95,8 @@ def test_the_identity_lives_on_setups_and_nowhere_else(tmp_path: pathlib.Path) -
     run, and nothing would say which copy was right."""
     conn = recording.connect(str(tmp_path / "r.db"))
     try:
-        arms = {r[1] for r in conn.execute("PRAGMA table_info(arms)")}
-        assert set(IDENTITY) | {"language"} <= arms
+        setups = {r[1] for r in conn.execute("PRAGMA table_info(setups)")}
+        assert set(IDENTITY) | {"language"} <= setups
         assert "rep" in {r[1] for r in conn.execute("PRAGMA table_info(runs)")}
         have = {r[1] for r in conn.execute("PRAGMA table_info(grades)")}
         assert have & (set(IDENTITY) | {"language"}) == set(), f"grades repeat the identity: {have & set(IDENTITY)}"

@@ -38,7 +38,7 @@ def test_the_registry_parses_and_every_section_a_figure_reads_is_populated() -> 
     axis, so that -- not the key's presence -- is the property."""
     registry = study_tags.registry()
     populated = {
-        "experiments": registry.experiments,
+        "studies": registry.studies,
         "models": registry.models,
         "languages": registry.languages,
         "packets": registry.packets,
@@ -115,7 +115,7 @@ def test_split_record_language_strips_clean_and_the_baked_in_packet(raw: str, la
 
 def test_an_unknown_tag_falls_back_instead_of_raising() -> None:
     """A new experiment must not break a figure -- it gets a plain label until someone names it."""
-    assert study_tags.display_name("brand-new-campaign") == "brand-new-campaign"
+    assert study_tags.display_name("brand-new-experiment") == "brand-new-experiment"
     assert study_tags.model_name("brand-new-model") == "brand-new-model"
     assert study_tags.language_name("zig") == "zig"
     assert study_tags.display_name("") == ""
@@ -124,7 +124,7 @@ def test_an_unknown_tag_falls_back_instead_of_raising() -> None:
 #: The identity a setup .env stamps, and the registry block each value has to be found in. A value
 #: the registry does not name still DRAWS -- in a hash colour, under a raw-string label -- so the
 #: only thing standing between an unregistered packet and a mislabelled figure is this test.
-RECORDED = {"EXPERIMENT": "experiments", "MODEL": "models", "LANGUAGE": "languages", "DEVICE": "devices"}
+RECORDED = {"EXPERIMENT": "studies", "MODEL": "models", "LANGUAGE": "languages", "DEVICE": "devices"}
 
 
 def recorded_identity(text: str) -> dict[str, str]:

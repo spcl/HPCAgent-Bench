@@ -70,28 +70,28 @@ def setup_name(model: str, packet: str) -> str:
     return f"{'cpf-' if packet == 'cpfsrc' else ''}llr-focus40-{model}-c{PACKET_SUFFIX[packet]}"
 
 
-def episode_rows(run_root: str, arm: str, packet: str, kernel: str, index: int, ts: int) -> list[tuple[object, ...]]:
+def episode_rows(run_root: str, setup: str, packet: str, kernel: str, index: int, ts: int) -> list[tuple[object, ...]]:
     """One episode's submission + call + task row, in :data:`COLUMNS` order: a plausible speedup
     and token spend, distinct per (setup, kernel) so no two cells in the fixture are accidentally
     identical. The task's effective total equals the call's running count: this fixture gives every
     episode exactly one attempt, so the two happen to agree (a relaunch would not). The task row
     states its whole spend as fresh input, so every cost card prices it at ``tokens``."""
-    run_id = f"{arm}.n0.p{index}.w{index}"
+    run_id = f"{setup}.n0.p{index}.w{index}"
     speedup = 1.2 + 0.3 * index + (0.5 if packet else 0.0)
     tokens = 80000.0 + 5000.0 * index
     baseline_ns = 500000.0
     submission = (
-        run_root, run_root, "submission", run_id, arm, packet, "c", kernel,
+        run_root, run_root, "submission", run_id, setup, packet, "c", kernel,
         1, ts, speedup, baseline_ns, baseline_ns / speedup, None, "numba", "mw4x5", "best-of(numba,c)", 0,
         None, None, None,
     )  # fmt: skip
     call = (
-        run_root, run_root, "call", run_id, arm, packet, "c", kernel,
+        run_root, run_root, "call", run_id, setup, packet, "c", kernel,
         1, ts + 1, speedup, None, None, tokens, "numba", "mw4x5", "best-of(numba,c)", 0,
         None, None, None,
     )  # fmt: skip
     task = (
-        run_root, run_root, "task", run_id, arm, packet, "c", kernel,
+        run_root, run_root, "task", run_id, setup, packet, "c", kernel,
         1, ts + 2, None, None, None, tokens, "numba", "mw4x5", "best-of(numba,c)", 0,
         tokens, 0.0, 0.0,
     )  # fmt: skip
@@ -103,12 +103,12 @@ def rows() -> list[tuple[object, ...]]:
     ts = 0
     for model in MODELS:
         for packet in PACKETS:
-            arm = setup_name(model, packet)
+            setup = setup_name(model, packet)
             # Every packet -- including perf-playbook-cpu -- covers the full roster: the
             # roster gate (population.complete_setups) drops a setup short of it before it can
             # draw a panel at all, so a partial fixture would read as "no comparison".
             for index, kernel in enumerate(KERNELS):
-                out += episode_rows("630709", arm, packet, kernel, index, ts)
+                out += episode_rows("630709", setup, packet, kernel, index, ts)
                 ts += 3
     return out
 

@@ -88,10 +88,10 @@ __all__ = [
 
 REGISTRY = pathlib.Path(__file__).resolve().parent / "envs" / "registry.yaml"
 #: Every recorded setup name -> the setup it is (DATA).
-SETUP_RENAMES_PATH = pathlib.Path(__file__).resolve().parent / "envs" / "arm_renames.yaml"
+SETUP_RENAMES_PATH = pathlib.Path(__file__).resolve().parent / "envs" / "setup_renames.yaml"
 
 #: A clean re-run's setup-name suffix; every ``-clean`` setup folds into its base identity. Clean is a
-#: run flag carried by the ARM NAME alone -- submit_common.sh's ``clean_suffix`` leaves the identity
+#: run flag carried by the SETUP NAME alone -- submit_common.sh's ``clean_suffix`` leaves the identity
 #: columns (experiment/model/language/device/packet) untouched -- so it must never survive into a
 #: recorded ``language`` value. Older env files baked it in; :func:`split_record_language` unwinds it.
 CLEAN_SUFFIX = "-clean"
@@ -130,7 +130,7 @@ class ExperimentEntry:
     which roster. ``name`` is the experiment's own label, finer than the study's -- llr40's
     CPU and GPU halves are one study under two experiment names. An empty ``tag`` means no roster."""
 
-    experiment: str
+    study: str
     name: str
     device: str
     tag: str
@@ -179,7 +179,7 @@ class Registry:
     #: (sides, style, angle) tuple, see :mod:`hpcagent_bench.stats.palette`.
     shapes: tuple["Marker", ...]
     lightness_step: float
-    experiments: Names
+    studies: Names
     models: dict[str, ModelEntry]
     #: Standalone optimizers (DaCe, CPF): shapes after the models, see :func:`optimizer_name`.
     optimizers: Names
@@ -190,14 +190,14 @@ class Registry:
     frameworks: Names
     harnesses: Names
     #: job-name prefix -> the experiment it names. Longest prefix wins; see :mod:`hpcagent_bench.experiments`.
-    campaigns: dict[str, ExperimentEntry]
+    experiments: dict[str, ExperimentEntry]
     #: One regex matching every setup the user retired from the studies.
     dropped_setups: str
     #: study -> the canon columns it is scored against and drawn beside.
     study_baselines: dict[str, "BaselineSpec"]
     #: kind -> {spelling: the tag it names}, so an alias never takes its own colour slot.
     aliases: dict[str, Names]
-    #: ``track/device/language`` -> {"arm": template on ``{model}``, <model>: that model's own setup}:
+    #: ``track/device/language`` -> {"setup": template on ``{model}``, <model>: that model's own setup}:
     #: the one baseline setup a treatment on such a kernel pairs against (:func:`baseline_setups_of`).
     baseline_setups: dict[str, dict[str, str]] = dataclasses.field(default_factory=dict)
     #: (pattern, replacement) re.sub pairs: a setup spelling -> the ONE setup it is (:func:`aliased_setup`).
@@ -310,7 +310,7 @@ def experiments_of(raw: object) -> dict[str, ExperimentEntry]:
     for prefix, entry in as_block(raw).items():
         fields = as_block(entry)
         out[str(prefix)] = ExperimentEntry(
-            experiment=str(fields.get("experiment", prefix)),
+            study=str(fields.get("study", prefix)),
             name=str(fields.get("name", prefix)),
             device=str(fields.get("device", "")),
             tag=str(fields.get("tag", "")),
@@ -332,7 +332,7 @@ def registry() -> Registry:
         markers=tuple(str(m) for m in as_list(markers)),
         shapes=tuple(marker_of(m) for m in as_list(doc.get("shapes"))),
         lightness_step=float(step) if isinstance(step, (int, float)) else 0.13,
-        experiments=names_of(doc.get("experiments"), "experiments"),
+        studies=names_of(doc.get("studies"), "studies"),
         models=models_of(doc.get("models")),
         optimizers=names_of(doc.get("optimizers"), "optimizers"),
         packets=names_of(doc.get("packets"), "packets"),
@@ -341,28 +341,28 @@ def registry() -> Registry:
         languages=names_of(doc.get("languages"), "languages"),
         frameworks=names_of(doc.get("frameworks"), "frameworks"),
         harnesses=names_of(doc.get("harnesses"), "harnesses"),
-        campaigns=experiments_of(doc.get("campaigns")),
-        dropped_setups=str(doc.get("dropped_arms", "")),
-        study_baselines=baselines_of(doc.get("experiment_baselines")),
+        experiments=experiments_of(doc.get("experiments")),
+        dropped_setups=str(doc.get("dropped_setups", "")),
+        study_baselines=baselines_of(doc.get("study_baselines")),
         aliases={str(kind): names_of(block, str(kind)) for kind, block in as_block(aliases).items()},
-        baseline_setups=baseline_setups_of(doc.get("baseline_arms")),
-        setup_aliases=setup_aliases_of(doc.get("arm_aliases")),
+        baseline_setups=baseline_setups_of(doc.get("baseline_setups")),
+        setup_aliases=setup_aliases_of(doc.get("setup_aliases")),
         owed_run_roots=owed_run_roots_of(doc.get("owed_run_roots")),
     )
 
 
-def aliased_setup(arm: str) -> str:
+def aliased_setup(setup: str) -> str:
     """``setup`` under the ONE setup it is: the registry's ``setup_aliases``, then the recorded setup's
     configuration name (:func:`setup_renames`); itself when neither names it. The single fold owed
     planning, extraction and the migration share."""
     for pattern, target in registry().setup_aliases:
-        arm = pattern.sub(target, arm)
-    return setup_renames().get(arm, arm)
+        setup = pattern.sub(target, setup)
+    return setup_renames().get(setup, setup)
 
 
 @functools.lru_cache(maxsize=1, typed=True)
 def setup_renames() -> dict[str, str]:
-    """Every recorded setup name -> the setup it is, named by its configuration (:data:`ARM_RENAMES_PATH`)."""
+    """Every recorded setup name -> the setup it is, named by its configuration (:data:`SETUP_RENAMES_PATH`)."""
     table = yaml.safe_load(SETUP_RENAMES_PATH.read_text(encoding="utf-8")) or {}
     return {str(old): str(new) for old, new in table.items()}
 
@@ -384,7 +384,7 @@ def names(kind: str) -> Names:
     """The ordered ``{tag: name}`` block for one entity kind. Key order IS channel order."""
     reg = registry()
     blocks: dict[str, Names] = {
-        "experiments": reg.experiments,
+        "studies": reg.studies,
         "models": {tag: entry.name for tag, entry in reg.models.items()},
         "optimizers": reg.optimizers,
         "packets": reg.packets,
@@ -405,12 +405,12 @@ def display_name(tag: str) -> str:
     """The name to put on a figure for a study tag. Falls back to the tag itself."""
     if not tag:
         return ""
-    known = names("experiments")
-    resolved = canonical("experiments", tag)
+    known = names("studies")
+    resolved = canonical("studies", tag)
     if resolved in known:
         return known[resolved]
     # A setup rather than a study ("llr40-qwen38-c-skills"): title it by its study.
-    head = canonical("experiments", tag.split("-", 1)[0])
+    head = canonical("studies", tag.split("-", 1)[0])
     return known.get(head, tag)
 
 
@@ -477,7 +477,7 @@ def model_spellings() -> tuple[tuple[str, tuple[str, ...]], ...]:
     )
 
 
-def model_of(arm: str, unknown: str = "other") -> str:
+def model_of(setup: str, unknown: str = "other") -> str:
     """The model tag a setup ran, read out of its name; ``unknown`` when none is found.
 
     Setups are ``<study>-<model>-<language>[-skills]``, so the model is a whole dash-delimited
@@ -489,7 +489,7 @@ def model_of(arm: str, unknown: str = "other") -> str:
     columns landed records its model in the database instead; parse the setup only for a CSV that
     predates them.
     """
-    padded = f"-{arm}-"
+    padded = f"-{setup}-"
     for model, spellings in model_spellings():
         if any(spelling in padded for spelling in spellings):
             return model
@@ -509,7 +509,7 @@ def language_spellings() -> tuple[tuple[str, tuple[str, ...]], ...]:
     )
 
 
-def language_of(arm: str, unknown: str = "") -> str:
+def language_of(setup: str, unknown: str = "") -> str:
     """The language tag a setup ran, read out of its name; ``unknown`` when none is found.
 
     Setups are ``<study>-<model>-<language>[-skills|-cpf|-cpfsrc|...]``, so the language is a
@@ -520,7 +520,7 @@ def language_of(arm: str, unknown: str = "") -> str:
     predates the column has nothing :func:`hpcagent_bench.studies.fill_setup_identity` could fill
     from, and the setup name is the only place the language still is.
     """
-    padded = f"-{arm}-"
+    padded = f"-{setup}-"
     for language, spellings in language_spellings():
         if any(spelling in padded for spelling in spellings):
             return language
@@ -531,7 +531,7 @@ def split_record_language(value: str) -> tuple[str, str]:
     """``(language, packet)`` parsed out of a possibly-corrupted ``HPCAGENT_BENCH_RECORD_LANGUAGE``
     value: an older submitter baked a packet token and/or :data:`CLEAN_SUFFIX` into it instead of
     stamping them into their own fields (fixed for new setups -- every ``submit-*.sh`` now passes
-    ``record_identity`` the bare language). ``clean`` is a run flag the ARM NAME alone carries and
+    ``record_identity`` the bare language). ``clean`` is a run flag the SETUP NAME alone carries and
     is dropped here, not returned. A value naming no registered language token passes through
     unchanged with no packet -- the normal unregistered-tag fallback.
     """
@@ -550,11 +550,11 @@ def split_record_language(value: str) -> tuple[str, str]:
     return text, ""
 
 
-def setup_suffix(arm: str) -> str:
+def setup_suffix(setup: str) -> str:
     """The dash-padded part of a setup name after its model token (``-c-cpf-`` of ``cpf-llr-focus40-qwen38-c-cpf``);
     "" when the name names no registered model. The study prefix before the model can spell a packet
     (``cpf-llr-focus40``), so a packet is only ever read from this suffix."""
-    padded = f"-{arm}-"
+    padded = f"-{setup}-"
     ends = [padded.find(s) + len(s) - 1 for _, spellings in model_spellings() for s in spellings if s in padded]
     return padded[min(ends) :] if ends else ""
 
@@ -569,13 +569,13 @@ def packet_spellings() -> tuple[tuple[str, str], ...]:
     return tuple((target, f"-{spelling}-") for spelling, target in sorted(rows, key=lambda row: -len(row[0])))
 
 
-def packet_of(arm: str, unknown: str = "") -> str:
+def packet_of(setup: str, unknown: str = "") -> str:
     """The packet a setup ran, read from a packet token after its model token; ``unknown`` when there is none.
 
     A name without a packet token is the control or a setup named before packets were suffixed, so the caller decides
     what no token means (:func:`hpcagent_bench.studies.fill_setup_identity` falls back to the recorded value).
     """
-    suffix = setup_suffix(arm)
+    suffix = setup_suffix(setup)
     for packet, spelling in packet_spellings():
         if spelling in suffix:
             return packet
@@ -694,12 +694,12 @@ OFFLOAD_DELIVERY_NAME: str = "OpenMP Offload"
 OFFLOAD_SETUP_TOKEN: str = "-c-openmp-"
 
 
-def setup_delivery_name(arm: str) -> str:
+def setup_delivery_name(setup: str) -> str:
     """The display spelling of what a setup DELIVERED, read off its NAME: its language, except a GPU
     C setup, which is an OpenMP target offload (:data:`OFFLOAD_DELIVERY_NAME`). An extracted
-    observations table carries no ``device`` column, so :data:`OFFLOAD_ARM_TOKEN` -- the offload
+    observations table carries no ``device`` column, so :data:`OFFLOAD_SETUP_TOKEN` -- the offload
     setups' own spelling -- is how a figure grouping those rows sees device=gpu plus language=c."""
-    name = str(arm)
+    name = str(setup)
     if OFFLOAD_SETUP_TOKEN in f"-{name}-":
         return OFFLOAD_DELIVERY_NAME
     return language_name(language_of(name))

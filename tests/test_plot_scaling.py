@@ -25,7 +25,7 @@ RANKS: tuple[int, ...] = (1, 2, 4, 8, 16)
 
 
 def row(
-    arm: str,
+    setup: str,
     kernel: str,
     mode: str,
     ranks: int,
@@ -38,7 +38,7 @@ def row(
     """One per-P scaling row in the shape the extractor is required to write."""
     return {
         "row_kind": scaling.SCALING_RECORD,
-        "arm": arm,
+        "arm": setup,
         "benchmark": kernel,
         "scaling_mode": mode,
         "scaling_ranks": ranks,
@@ -51,15 +51,15 @@ def row(
     }
 
 
-def perfect_strong(arm: str, kernel: str, t1: float = 4096.0) -> list[dict[str, object]]:
+def perfect_strong(setup: str, kernel: str, t1: float = 4096.0) -> list[dict[str, object]]:
     """A strong curve on the ideal: T(P) = T(1)/P, so eta(P) = 1. T(1) is a power of two so
     every T(P) is a whole nanosecond and no point is off the ideal by a truncated clock."""
-    return [row(arm, kernel, "strong", p, t1 / p, single_rank_ns=t1) for p in RANKS]
+    return [row(setup, kernel, "strong", p, t1 / p, single_rank_ns=t1) for p in RANKS]
 
 
-def perfect_weak(arm: str, kernel: str, t1: float = 4096.0) -> list[dict[str, object]]:
+def perfect_weak(setup: str, kernel: str, t1: float = 4096.0) -> list[dict[str, object]]:
     """A weak curve that hits the ideal: the P-times-larger problem takes the base time, eta = 1."""
-    return [row(arm, kernel, "weak", p, t1, single_rank_ns=t1, work_ratio=float(p)) for p in RANKS]
+    return [row(setup, kernel, "weak", p, t1, single_rank_ns=t1, work_ratio=float(p)) for p in RANKS]
 
 
 def frame(rows: list[dict[str, object]]) -> pd.DataFrame:
@@ -67,7 +67,7 @@ def frame(rows: list[dict[str, object]]) -> pd.DataFrame:
 
 
 def only(curves: list[scaling.Curve]) -> scaling.Curve:
-    assert len(curves) == 1, [(c.arm, c.kernel, c.mode) for c in curves]
+    assert len(curves) == 1, [(c.setup, c.kernel, c.mode) for c in curves]
     return curves[0]
 
 
@@ -107,10 +107,10 @@ def test_a_weak_row_without_a_work_ratio_is_read_as_exact_growth() -> None:
 
 def test_the_curve_score_is_the_geomean_over_p_and_not_the_mean() -> None:
     """geomean_P eta(P) over {1, 0.5}: sqrt(0.5) = 0.7071, where the arithmetic mean says 0.75."""
-    arm = "mlscale-strong-qwen38-hip"
+    setup = "mlscale-strong-qwen38-hip"
     rows = [
-        row(arm, "dist_layer_norm", "strong", 2, 500.0, single_rank_ns=1000.0),  # eta = 1
-        row(arm, "dist_layer_norm", "strong", 4, 500.0, single_rank_ns=1000.0),  # eta = 0.5
+        row(setup, "dist_layer_norm", "strong", 2, 500.0, single_rank_ns=1000.0),  # eta = 1
+        row(setup, "dist_layer_norm", "strong", 4, 500.0, single_rank_ns=1000.0),  # eta = 0.5
     ]
     curve = only(scaling.curves(frame(rows)))
     assert curve.mean_efficiency() == pytest.approx(math.sqrt(0.5))
@@ -128,15 +128,15 @@ def test_a_perfect_sweep_scores_one_at_every_p_in_both_modes() -> None:
 
 def test_a_failed_p_is_dropped_with_its_reason_and_leaves_a_hole_not_a_zero() -> None:
     """A P the sweep could not measure has no point, is named with the judge's note, and is counted."""
-    arm = "mlscale-strong-qwen38-hip"
-    rows = perfect_strong(arm, "dist_moe_dispatch")
+    setup = "mlscale-strong-qwen38-hip"
+    rows = perfect_strong(setup, "dist_moe_dispatch")
     rows = [r for r in rows if r["scaling_ranks"] != 8]
-    rows.append(row(arm, "dist_moe_dispatch", "strong", 8, 0.0, note="P=8: mpi build failed"))
+    rows.append(row(setup, "dist_moe_dispatch", "strong", 8, 0.0, note="P=8: mpi build failed"))
     curve = only(scaling.curves(frame(rows)))
     assert curve.ranks == (1, 2, 4, 16)  # the hole is a hole
     assert 8 not in [p.ranks for p in curve.points]
     assert curve.dropped == ((8, "P=8: mpi build failed"),)
-    assert scaling.dropped_points([curve]) == [(arm, "dist_moe_dispatch", "strong", 8, "P=8: mpi build failed")]
+    assert scaling.dropped_points([curve]) == [(setup, "dist_moe_dispatch", "strong", 8, "P=8: mpi build failed")]
     assert all(p.efficiency > 0 for p in curve.points)  # nothing was filled in at zero
 
 
@@ -150,9 +150,9 @@ def test_a_point_with_no_recorded_note_still_says_why_it_is_absent() -> None:
 
 def test_a_single_point_curve_draws_nothing_and_is_counted() -> None:
     """One point is a measurement, not a curve: it is excluded from the figures and reported."""
-    arm = "mlscale-strong-qwen38-hip"
-    rows = perfect_strong(arm, "dist_softmax")
-    rows += [row(arm, "dist_sdpa", "strong", 4, 250.0)]
+    setup = "mlscale-strong-qwen38-hip"
+    rows = perfect_strong(setup, "dist_softmax")
+    rows += [row(setup, "dist_sdpa", "strong", 4, 250.0)]
     curves = scaling.curves(frame(rows))
     assert {c.kernel for c in scaling.drawable(curves)} == {"dist_softmax"}
     assert [c.kernel for c in scaling.single_point_curves(curves)] == ["dist_sdpa"]
@@ -231,13 +231,13 @@ def test_every_figure_carries_one_legend_on_the_figure_and_none_on_an_axes() -> 
 def test_the_summary_panel_is_the_geomean_over_kernels_and_withholds_a_two_kernel_interval() -> None:
     """One mark per setup per mode, at the geomean of its per-kernel geomean eta, n on the label; two
     kernels are below the 6-kernel floor, so the mark carries no interval."""
-    arm = "mlscale-strong-qwen38-hip"
-    rows = perfect_strong(arm, "dist_softmax")  # eta = 1 everywhere
-    rows += [row(arm, "dist_sdpa", "strong", p, 1000.0 / p * 2.0, single_rank_ns=1000.0) for p in RANKS]  # eta = 0.5
+    setup = "mlscale-strong-qwen38-hip"
+    rows = perfect_strong(setup, "dist_softmax")  # eta = 1 everywhere
+    rows += [row(setup, "dist_sdpa", "strong", p, 1000.0 / p * 2.0, single_rank_ns=1000.0) for p in RANKS]  # eta = 0.5
     summary_rows = scaling.summary_rows(scaling.curves(frame(rows)))
     assert len(summary_rows) == 1
-    arm, model, mode, interval, n_kernels = summary_rows[0]
-    assert arm.endswith("qwen38-hip") and model == "qwen38"
+    setup, model, mode, interval, n_kernels = summary_rows[0]
+    assert setup.endswith("qwen38-hip") and model == "qwen38"
     assert mode == "strong"
     assert n_kernels == 2
     assert interval.point == pytest.approx(math.sqrt(1.0 * 0.5))
@@ -246,9 +246,9 @@ def test_the_summary_panel_is_the_geomean_over_kernels_and_withholds_a_two_kerne
 
 def test_only_the_latest_grade_of_a_kernel_enters_a_curve() -> None:
     """A re-graded (setup, kernel, mode) keeps its newest sweep; the superseded one is not pooled in."""
-    arm = "mlscale-strong-qwen38-hip"
-    rows = [row(arm, "dist_softmax", "strong", 4, 1000.0, ts_ms=1)]  # eta = 0.25, superseded
-    rows += [row(arm, "dist_softmax", "strong", p, 1000.0 / p, ts_ms=99) for p in (2, 4)]
+    setup = "mlscale-strong-qwen38-hip"
+    rows = [row(setup, "dist_softmax", "strong", 4, 1000.0, ts_ms=1)]  # eta = 0.25, superseded
+    rows += [row(setup, "dist_softmax", "strong", p, 1000.0 / p, ts_ms=99) for p in (2, 4)]
     curve = only(scaling.curves(frame(rows)))
     assert curve.ranks == (2, 4)
     assert curve.mean_efficiency() == pytest.approx(1.0)
@@ -299,8 +299,8 @@ def test_a_print_size_scaling_figure_keeps_every_text_on_the_print_scale(builder
     """The ML figure sits in a wrap beside the cost figure: both must print at the same type sizes and width."""
     from hpcagent_bench.stats import style
 
-    arm = "mlscale-strong-qwen38-hip"
-    rows = perfect_strong(arm, "dist_softmax") + perfect_weak("mlscale-weak-qwen38-hip", "dist_softmax")
+    setup = "mlscale-strong-qwen38-hip"
+    rows = perfect_strong(setup, "dist_softmax") + perfect_weak("mlscale-weak-qwen38-hip", "dist_softmax")
     fig = builder(scaling.curves(frame(rows)), width=style.ICLR_WRAP_WIDTH_IN, type_=style.PRINT_SCALE)
     assert fig is not None
     try:
@@ -343,10 +343,10 @@ def test_the_mode_grid_is_one_row_per_law_one_column_per_picked_kernel_and_the_g
 def test_the_band_at_a_rank_count_is_the_log_t_interval_of_the_kernels_geomean() -> None:
     """Six kernels at P = 2 with efficiency 1, 0.5, 0.25 twice: GM = 0.5, log2 sd = sqrt(0.8),
     t(0.975, 5) = 2.5706, so the band is 0.5 * 2^(-/+ 0.93865) = 0.26086 .. 0.95836 (scipy t quantile, worked by hand)."""
-    arm = "mlscale-strong-qwen38-hip"
+    setup = "mlscale-strong-qwen38-hip"
     t1 = 4096.0
     rows = [
-        row(arm, f"k{index}", "strong", p, t1 / p / (eta if p == 2 else 1.0), single_rank_ns=t1)
+        row(setup, f"k{index}", "strong", p, t1 / p / (eta if p == 2 else 1.0), single_rank_ns=t1)
         for index, eta in enumerate((1.0, 0.5, 0.25, 1.0, 0.5, 0.25))
         for p in RANKS
     ]

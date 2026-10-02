@@ -156,6 +156,6 @@ def token_setup(token: str) -> str:
 
 def check_run_id(setup: str, run_id: str) -> None:
     """Refuse a run_id that is not one of ``setup``'s: rows are attributed by it."""
-    arm = setup_overlay(setup).get(SETUP_KEY) or ""
-    if not arm or not run_id.startswith(f"{arm}."):
-        raise FusedRefusal(403, f"run_id {run_id!r} does not belong to this worker's setup {arm!r}")
+    identity = setup_overlay(setup).get(SETUP_KEY) or ""
+    if not identity or not run_id.startswith(f"{identity}."):
+        raise FusedRefusal(403, f"run_id {run_id!r} does not belong to this worker's setup {identity!r}")

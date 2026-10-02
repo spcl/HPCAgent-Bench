@@ -26,7 +26,7 @@ Four figures, all in the repo's shared ink (:mod:`hpcagent_bench.stats.style`) a
 * :func:`figure_summary` -- the geomean eta per setup with its interval, weak beside strong.
 
 THE TORCH.DISTRIBUTED BASELINE CURVE rides in the same rows under the pseudo-setup
-:data:`TORCH_DIST_ARM`: the kernel's own ``reference_dist`` timed by the grade job at every (law, P)
+:data:`TORCH_DIST_SETUP`: the kernel's own ``reference_dist`` timed by the grade job at every (law, P)
 point the agents were (``hpcagent_bench.harness.torch_dist_curve``). Its points are spread over
 the grade job's per-chunk DBs, so its P=1 anchor is joined here (:func:`baseline_anchored`), and
 every overlay panel draws it as one more series in the control's grey, dashed, beside the setups.
@@ -263,7 +263,7 @@ class Curve:
     filled it would draw a collapse the study never measured.
     """
 
-    arm: str
+    setup: str
     model: str
     kernel: str
     mode: str
@@ -308,7 +308,7 @@ def label_of(model: str) -> str:
 
 def packet_of(curve: "Curve") -> str:
     """The packet a curve's setup ran; empty for the control."""
-    return study_tags.packet_of(curve.arm)
+    return study_tags.packet_of(curve.setup)
 
 
 def series_label(packet: str, model: str) -> str:
@@ -373,7 +373,7 @@ def type_axes(ax: matplotlib.axes.Axes, type_: plotstyle.TypeScale) -> None:
     ax.tick_params(axis="both", labelsize=type_.tick_pt)
 
 
-def mode_of(arm: str, recorded: object = "") -> str:
+def mode_of(setup: str, recorded: object = "") -> str:
     """The scaling law a row was graded under: what it recorded, else what its setup name says.
 
     The setup name is the fallback and not the source: an ``mlscale-weak-...`` setup name is a last
@@ -382,7 +382,7 @@ def mode_of(arm: str, recorded: object = "") -> str:
     text = str(recorded).strip().lower()
     if text in MODES:
         return text
-    padded = f"-{arm}-"
+    padded = f"-{setup}-"
     for mode in MODES:
         if f"-{mode}-" in padded:
             return mode
@@ -424,9 +424,9 @@ def scaling_rows(frame: pd.DataFrame) -> pd.DataFrame:
     rows = frame[frame["row_kind"].astype(str) == SCALING_RECORD].copy()
     if rows.empty:
         return rows
-    arms = [str(arm) for arm in rows["arm"].tolist()]
-    stated = rows["scaling_mode"].tolist() if "scaling_mode" in rows.columns else [""] * len(arms)
-    rows["scaling_mode"] = [mode_of(arm, mode) for arm, mode in zip(arms, stated)]
+    setups = [str(setup) for setup in rows["arm"].tolist()]
+    stated = rows["scaling_mode"].tolist() if "scaling_mode" in rows.columns else [""] * len(setups)
+    rows["scaling_mode"] = [mode_of(setup, mode) for setup, mode in zip(setups, stated)]
     rows = rows[rows["scaling_mode"].isin(MODES)]
     if rows.empty or "ts_ms" not in rows.columns:
         return rows
@@ -522,7 +522,7 @@ def curves(frame: pd.DataFrame) -> list[Curve]:
     if rows.empty:
         return []
     out: list[Curve] = []
-    for (arm, kernel, mode), group in rows.groupby(["arm", "benchmark", "scaling_mode"], sort=True):
+    for (setup, kernel, mode), group in rows.groupby(["arm", "benchmark", "scaling_mode"], sort=True):
         points: list[Point] = []
         dropped: list[tuple[int, str]] = []
         for index in range(len(group)):
@@ -534,12 +534,12 @@ def curves(frame: pd.DataFrame) -> list[Curve]:
                 points.append(point)
         model = (
             TORCH_DIST_SETUP
-            if arm == TORCH_DIST_SETUP
-            else text_cell(group.iloc[0], "model") or study_tags.model_of(str(arm))
+            if setup == TORCH_DIST_SETUP
+            else text_cell(group.iloc[0], "model") or study_tags.model_of(str(setup))
         )
         out.append(
             Curve(
-                arm=str(arm),
+                setup=str(setup),
                 model=model,
                 kernel=str(kernel),
                 mode=str(mode),
@@ -562,7 +562,7 @@ def single_point_curves(curves_: Sequence[Curve]) -> list[Curve]:
 
 def dropped_points(curves_: Sequence[Curve]) -> list[tuple[str, str, str, int, str]]:
     """``(setup, kernel, mode, P, reason)`` for every rank count the sweep did not measure."""
-    return [(c.arm, c.kernel, c.mode, p, why) for c in curves_ for p, why in c.dropped]
+    return [(c.setup, c.kernel, c.mode, p, why) for c in curves_ for p, why in c.dropped]
 
 
 def disagreements(frame: pd.DataFrame, tolerance: float = EFFICIENCY_RTOL) -> list[tuple[str, str, int, float, float]]:
@@ -598,8 +598,8 @@ def common_kernels(curves_: Sequence[Curve], mode: str) -> set[str]:
     """
     per_setup: dict[str, set[str]] = {}
     for curve in drawable(curves_):
-        if curve.mode == mode and curve.arm != TORCH_DIST_SETUP:
-            per_setup.setdefault(curve.arm, set()).add(curve.kernel)
+        if curve.mode == mode and curve.setup != TORCH_DIST_SETUP:
+            per_setup.setdefault(curve.setup, set()).add(curve.kernel)
     if not per_setup:
         return set()
     return set.intersection(*per_setup.values())
@@ -972,10 +972,10 @@ def summary_rows(curves_: Sequence[Curve]) -> list[tuple[str, str, str, summary.
     for curve in drawable(curves_):
         value = curve.mean_efficiency()
         if value > 0:
-            grouped.setdefault((curve.arm, curve.model, curve.mode), []).append(value)
+            grouped.setdefault((curve.setup, curve.model, curve.mode), []).append(value)
     return [
-        (arm, model, mode, summary.geomean_interval(values), len(values))
-        for (arm, model, mode), values in sorted(grouped.items())
+        (setup, model, mode, summary.geomean_interval(values), len(values))
+        for (setup, model, mode), values in sorted(grouped.items())
         if values
     ]
 
@@ -994,7 +994,7 @@ def summary_mark(
     type_: plotstyle.TypeScale,
 ) -> None:
     """One setup's geomean eta at X ``index`` with its 95% interval, and its kernel count below it."""
-    arm, model, _, interval, n_kernels = row
+    setup, model, _, interval, n_kernels = row
     # below summary.MIN_PAIRS_FOR_INTERVAL kernels the interval is withheld: a bare point
     low, high = drawn_ends(interval)
     ax.errorbar(
@@ -1006,7 +1006,7 @@ def summary_mark(
         elinewidth=type_.line_width * 0.75,
         capsize=type_.marker_size / 2.0,
         zorder=5,
-        **series_style(study_tags.packet_of(arm), model),
+        **series_style(study_tags.packet_of(setup), model),
     )
     # BELOW the mark: above it the label lands on the ideal line and on the panel's name.
     # Neighbours alternate between two depths so their labels never share a line.
@@ -1092,7 +1092,7 @@ def points_table(curves_: Sequence[Curve]) -> pd.DataFrame:
     return pd.DataFrame(
         [
             {
-                "arm": curve.arm,
+                "arm": curve.setup,
                 "model": curve.model,
                 "benchmark": curve.kernel,
                 "scaling_mode": curve.mode,
@@ -1115,12 +1115,12 @@ def points_table(curves_: Sequence[Curve]) -> pd.DataFrame:
 def dropped_table(curves_: Sequence[Curve]) -> pd.DataFrame:
     """One row per point the sweep did not measure, and per curve too short to draw."""
     rows = [
-        {"arm": arm, "benchmark": kernel, "scaling_mode": mode, "ranks": ranks, "reason": reason}
-        for arm, kernel, mode, ranks, reason in dropped_points(curves_)
+        {"arm": setup, "benchmark": kernel, "scaling_mode": mode, "ranks": ranks, "reason": reason}
+        for setup, kernel, mode, ranks, reason in dropped_points(curves_)
     ]
     rows += [
         {
-            "arm": curve.arm,
+            "arm": curve.setup,
             "benchmark": curve.kernel,
             "scaling_mode": curve.mode,
             "ranks": -1,

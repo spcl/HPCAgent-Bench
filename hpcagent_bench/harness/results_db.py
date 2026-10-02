@@ -32,8 +32,8 @@ __all__ = [
     "SCHEMA_VERSION",
     "SUBMIT_KINDS",
     "TABLES",
-    "Arm",
     "NotV1Error",
+    "Setup",
     "Value",
     "add_cells",
     "add_grade",
@@ -41,8 +41,8 @@ __all__ = [
     "call_index",
     "copy_grade",
     "delete_setups",
-    "ensure_setup",
     "ensure_run",
+    "ensure_setup",
     "grade_sources",
     "insert",
     "merge",
@@ -183,8 +183,8 @@ def upsert(conn: sqlite3.Connection, table: str, target: str, key: Sequence[str]
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
-class Arm:
-    """One experimental condition (an ``setups`` row)."""
+class Setup:
+    """One experimental condition (an ``arms`` table row; ``arm`` is the stored column name)."""
 
     arm: str
     language: str
@@ -195,14 +195,14 @@ class Arm:
     packet: str = ""
 
 
-def ensure_setup(conn: sqlite3.Connection, arm: Arm) -> None:
+def ensure_setup(conn: sqlite3.Connection, setup: Setup) -> None:
     """Record ``setup``; the first writer fixes its identity, a later one only fills what it left NULL."""
-    upsert(conn, "arms", "arm", ("arm",), dataclasses.asdict(arm))
+    upsert(conn, "arms", "arm", ("arm",), dataclasses.asdict(setup))
 
 
-def ensure_run(conn: sqlite3.Connection, arm: str, label: str, job: int | None, rep: int = 1) -> int:
+def ensure_run(conn: sqlite3.Connection, setup: str, label: str, job: int | None, rep: int = 1) -> int:
     """The id of the episode ``(job, label, rep)`` of ``setup``, created on first sight."""
-    values: dict[str, Value] = {"arm": arm, "job": job, "label": label, "rep": rep}
+    values: dict[str, Value] = {"arm": setup, "job": job, "label": label, "rep": rep}
     return upsert(conn, "runs", "coalesce(job, -1), label, rep", ("job", "label", "rep"), values)
 
 
@@ -411,8 +411,8 @@ def copy_one_grade(conn: sqlite3.Connection, grade_id: int, dest: sqlite3.Connec
     """:func:`copy_grade` of one grade whose original, if any, ``copied`` already maps."""
     grade = dict(conn.execute("SELECT * FROM grades WHERE id = ?", (grade_id,)).fetchone())
     run = dict(conn.execute("SELECT * FROM runs WHERE id = ?", (grade["run_id"],)).fetchone())
-    arm = dict(conn.execute("SELECT * FROM arms WHERE arm = ?", (run["arm"],)).fetchone())
-    upsert(dest, "arms", *NATURAL_KEYS["arms"], arm)
+    setup = dict(conn.execute("SELECT * FROM arms WHERE arm = ?", (run["arm"],)).fetchone())
+    upsert(dest, "arms", *NATURAL_KEYS["arms"], setup)
     run.pop("id")
     grade.pop("id")
     grade["run_id"] = upsert(dest, "runs", *NATURAL_KEYS["runs"], run)
@@ -434,16 +434,16 @@ GRADE_CHILDREN: tuple[str, ...] = (
 )
 
 
-def delete_setups(conn: sqlite3.Connection, arms: Sequence[str]) -> dict[str, int]:
+def delete_setups(conn: sqlite3.Connection, setups: Sequence[str]) -> dict[str, int]:
     """Remove every row of the setups ``setups`` -- their runs, grades and everything keyed by those, and
     the source texts no other grade names -- and return the rows removed per table. For a setup
     declared void; the caller commits."""
-    marks = ", ".join("?" * len(arms))
+    marks = ", ".join("?" * len(setups))
     conn.execute("CREATE TEMP TABLE IF NOT EXISTS doomed (id INTEGER PRIMARY KEY)")
     conn.execute("DELETE FROM doomed")
     conn.execute(
         f"INSERT INTO doomed SELECT g.id FROM grades g JOIN runs r ON r.id = g.run_id WHERE r.arm IN ({marks})",
-        tuple(arms),
+        tuple(setups),
     )
     removed = {
         table: conn.execute(f"DELETE FROM {table} WHERE grade_id IN (SELECT id FROM doomed)").rowcount
@@ -454,7 +454,7 @@ def delete_setups(conn: sqlite3.Connection, arms: Sequence[str]) -> dict[str, in
         "DELETE FROM grades WHERE id IN (SELECT id FROM doomed) AND of_grade_id IS NOT NULL"
     ).rowcount
     removed["grades"] += conn.execute("DELETE FROM grades WHERE id IN (SELECT id FROM doomed)").rowcount
-    removed["runs"] = conn.execute(f"DELETE FROM runs WHERE arm IN ({marks})", tuple(arms)).rowcount
-    removed["arms"] = conn.execute(f"DELETE FROM arms WHERE arm IN ({marks})", tuple(arms)).rowcount
+    removed["runs"] = conn.execute(f"DELETE FROM runs WHERE arm IN ({marks})", tuple(setups)).rowcount
+    removed["arms"] = conn.execute(f"DELETE FROM arms WHERE arm IN ({marks})", tuple(setups)).rowcount
     removed["sources"] = conn.execute("DELETE FROM sources WHERE hash NOT IN (SELECT hash FROM grade_sources)").rowcount
     return removed

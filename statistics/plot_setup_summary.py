@@ -1,6 +1,6 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Where each ARM landed on one study: geomean speedup, and median spend, with and without
+"""Where each SETUP landed on one study: geomean speedup, and median spend, with and without
 the skills packet.
 
 One point per (model, language, condition). With TWO conditions -- a packet on or off -- they are
@@ -88,8 +88,8 @@ def eligible_rows(rows: pd.DataFrame, include_incomplete: bool = False) -> pd.Da
         return rows
     roster = sorted(rows["benchmark"].dropna().astype(str).unique())
     kept, dropped = population.complete_setups(rows, roster)
-    for arm in sorted(dropped):
-        print(f"dropping {arm} ({dropped[arm]}/{len(roster)} roster kernels)", file=sys.stderr)
+    for setup in sorted(dropped):
+        print(f"dropping {setup} ({dropped[setup]}/{len(roster)} roster kernels)", file=sys.stderr)
     return rows[rows["arm"].astype(str).isin(kept)]
 
 
@@ -314,15 +314,11 @@ def load(path: pathlib.Path, prefix: str, card: cost.CostModel = cost.resolve())
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("observations", type=pathlib.Path)
-    parser.add_argument(
-        "--study", "--experiment", dest="experiment", required=True, help="setup prefix naming ONE experiment"
-    )
-    parser.add_argument(
-        "--setups", "--arms", dest="arms", default="", help="regex; keep only setups whose full name matches"
-    )
+    parser.add_argument("--study", dest="study", required=True, help="setup prefix naming ONE experiment")
+    parser.add_argument("--setups", dest="setups", default="", help="regex; keep only setups whose full name matches")
     parser.add_argument("--label", default="", help="figure title; defaults to the experiment's display name")
-    parser.add_argument("--out", type=pathlib.Path, default=pathlib.Path("figures/arm_summary.pdf"))
-    parser.add_argument("--table", type=pathlib.Path, default=pathlib.Path("data/arm_summary.csv"))
+    parser.add_argument("--out", type=pathlib.Path, default=pathlib.Path("figures/setup_summary.pdf"))
+    parser.add_argument("--table", type=pathlib.Path, default=pathlib.Path("data/setup_summary.csv"))
     parser.add_argument(
         "--include-incomplete",
         action="store_true",
@@ -339,17 +335,17 @@ def main() -> None:
     cost.add_arguments(parser)
     args = parser.parse_args()
 
-    rows = load(args.observations, args.experiment, cost.resolve(args.cost_model, args.cost_models))
-    if args.arms:
-        rows = rows[rows["arm"].astype(str).str.fullmatch(args.arms)]
+    rows = load(args.observations, args.study, cost.resolve(args.cost_model, args.cost_models))
+    if args.setups:
+        rows = rows[rows["arm"].astype(str).str.fullmatch(args.setups)]
     rows = eligible_rows(rows, args.include_incomplete)
     frame = setup_points(rows, args.repeats)
     if frame.empty:
-        raise SystemExit(f"no setups for study {args.experiment!r}")
+        raise SystemExit(f"no setups for study {args.study!r}")
     args.table.parent.mkdir(parents=True, exist_ok=True)
     frame.to_csv(args.table, index=False)
 
-    title = args.label or study_tags.display_name(args.experiment)
+    title = args.label or study_tags.display_name(args.study)
     stem, suffix = args.out.stem, args.out.suffix
     written = [
         figure_one(frame, SPEEDUP, title, args.out.with_name(f"{stem}-speedup{suffix}")),

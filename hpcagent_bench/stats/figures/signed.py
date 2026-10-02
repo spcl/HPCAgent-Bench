@@ -41,7 +41,6 @@ from hpcagent_bench.stats.figures import llr40_setups, per_kernel
 from hpcagent_bench.stats.summary import DEFAULT_CONFIDENCE, geomean_ci, signed_change, usable_ratios
 
 __all__ = [
-    "ARMS",
     "BASELINE",
     "CLOUD_KEY_MARK_PT",
     "CLOUD_MARK_AREA",
@@ -56,17 +55,16 @@ __all__ = [
     "LLR40_PANEL_HEIGHT_IN",
     "REFERENCE",
     "RULE_LINE_WIDTH",
+    "SETUPS",
     "SUMMARY_COLUMNS",
     "TABLE_COLUMNS",
     "TOKEN_SUMMARY_COLUMNS",
     "TSVC_PREFIX",
-    "Arm",
     "Row",
+    "Setup",
     "against_baseline",
     "agent_kernel_row",
     "answer_ratios",
-    "setup_rows",
-    "setups_figure",
     "canon_kernel_row",
     "canon_label",
     "distinct_canon_labels",
@@ -87,6 +85,8 @@ __all__ = [
     "pending_note",
     "read_setup",
     "row_color",
+    "setup_rows",
+    "setups_figure",
     "shard_paths",
     "sign_test",
     "solved_ratios",
@@ -99,7 +99,7 @@ __all__ = [
 ]
 
 #: Framework -> the name a reader knows it by. Insertion order is the order on the axis.
-ARMS: dict[str, str] = {
+SETUPS: dict[str, str] = {
     "dace_cpu_canonicalize": "dace canon",
     "dace_cpu": "dace main",
     "cc_llvm_autopar": "llvm + polly",
@@ -124,7 +124,7 @@ DEAD_BAND: float = 1.01
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
-class Arm:
+class Setup:
     """One framework's usable TSVC timings in ms, and a tally of what was thrown away and why."""
 
     framework: str
@@ -162,7 +162,7 @@ def shard_paths(root: pathlib.Path, framework: str) -> list[pathlib.Path]:
     return ([single] if single.is_file() else []) + sorted(root.glob(f"{framework}.rank*.csv"))
 
 
-def read_setup(root: pathlib.Path, framework: str) -> Arm:
+def read_setup(root: pathlib.Path, framework: str) -> Setup:
     """Concatenate the framework's shards into ``kernel -> ms``, tallying every rejected TSVC row.
 
     A crashed, unvalidated, or untimed row is not a data point and is counted, never plotted as
@@ -186,17 +186,17 @@ def read_setup(root: pathlib.Path, framework: str) -> Arm:
                     # A kernel repeated across shards (a re-run rank) keeps its fastest time.
                     ms = float(row["median_ms"])
                     times[kernel] = min(times.get(kernel, ms), ms)
-    return Arm(framework, times, rejected)
+    return Setup(framework, times, rejected)
 
 
-def tally(arm: Arm) -> str:
+def tally(setup: Setup) -> str:
     """One phrase naming every row the setup lost and why; empty when it lost none."""
-    return ", ".join(f"{n} {why}" for why, n in sorted(arm.rejected.items()))
+    return ", ".join(f"{n} {why}" for why, n in sorted(setup.rejected.items()))
 
 
-def against_baseline(arm: Arm, baseline: Mapping[str, float]) -> dict[str, float]:
+def against_baseline(setup: Setup, baseline: Mapping[str, float]) -> dict[str, float]:
     """``kernel -> baseline_ms / setup_ms`` over the kernels BOTH the setup and the reference timed."""
-    return {k: baseline[k] / ms for k, ms in sorted(arm.times.items()) if k in baseline}
+    return {k: baseline[k] / ms for k, ms in sorted(setup.times.items()) if k in baseline}
 
 
 def paired(reference: Mapping[str, float], other: Mapping[str, float]) -> dict[str, float]:
@@ -377,7 +377,7 @@ def draw(rows: Sequence[Row], title: str, xlabel: str, stem: pathlib.Path) -> pa
     return style.save(fig, stem, formats=("pdf", "svg"))
 
 
-def setup_rows(root: pathlib.Path, arms: Mapping[str, str] = ARMS, baseline: str = BASELINE) -> list[Row]:
+def setup_rows(root: pathlib.Path, setups: Mapping[str, str] = SETUPS, baseline: str = BASELINE) -> list[Row]:
     """Every setup's ratios against the common ``baseline``, in ``setups`` order."""
     reference = read_setup(root, baseline)
     if not reference.times:
@@ -386,11 +386,11 @@ def setup_rows(root: pathlib.Path, arms: Mapping[str, str] = ARMS, baseline: str
             f"Every speedup here is a ratio against it, so there is nothing to plot without it."
         )
     rows: list[Row] = []
-    for framework, label in arms.items():
-        arm = read_setup(root, framework)
-        ratios = against_baseline(arm, reference.times)
-        missing = len(arm.times) - len(ratios)
-        excluded = [tally(arm)] if tally(arm) else []
+    for framework, label in setups.items():
+        setup = read_setup(root, framework)
+        ratios = against_baseline(setup, reference.times)
+        missing = len(setup.times) - len(ratios)
+        excluded = [tally(setup)] if tally(setup) else []
         if missing:
             excluded.append(f"{missing} not timed by {baseline}")
         rows.append(
@@ -399,7 +399,7 @@ def setup_rows(root: pathlib.Path, arms: Mapping[str, str] = ARMS, baseline: str
                 label,
                 ratios,
                 {k: reference.times[k] for k in ratios},
-                {k: arm.times[k] for k in ratios},
+                {k: setup.times[k] for k in ratios},
                 "; ".join(excluded) or "none",
             )
         )
@@ -418,18 +418,18 @@ def paired_rows(
         )
     rows: list[Row] = []
     for framework, label in comparisons.items():
-        arm = read_setup(root, framework)
-        ratios = paired(numerator.times, arm.times)
+        setup = read_setup(root, framework)
+        ratios = paired(numerator.times, setup.times)
         unpaired = len(numerator.times) - len(ratios)
         excluded = [f"{unpaired} {reference} kernels unpaired"] if unpaired else []
-        if tally(arm):
-            excluded.append(f"comparison setup lost {tally(arm)}")
+        if tally(setup):
+            excluded.append(f"comparison setup lost {tally(setup)}")
         rows.append(
             Row(
                 framework,
                 label,
                 ratios,
-                {k: arm.times[k] for k in ratios},
+                {k: setup.times[k] for k in ratios},
                 {k: numerator.times[k] for k in ratios},
                 "; ".join(excluded) or "none",
             )
@@ -537,7 +537,7 @@ def distinct_canon_labels(rows: Sequence[Row]) -> list[Row]:
 
 def agent_kernel_row(
     frame: pd.DataFrame,
-    arm: str,
+    setup: str,
     model: str,
     condition: str,
     roster: Sequence[str],
@@ -546,17 +546,17 @@ def agent_kernel_row(
 ) -> Row:
     """One CPF setup's row, restricted to ``roster``: its final answer per kernel, plus each kernel's
     own confidence interval over every graded episode it ran (SC15 rules 5/7)."""
-    subset = frame.loc[frame["arm"].astype(str) == arm]
+    subset = frame.loc[frame["arm"].astype(str) == setup]
     answers = population.kernel_answers(subset, repeats=repeats, policy=population.KernelPolicy.SOLVED)
     kernels = set(roster)
     ratios, numerator_ms, denominator_ms = answer_ratios(answers, kernels)
-    ratios_low, ratios_high = kernel_intervals(subset, ratios.keys(), arm)
-    raw_tokens, tokens_low, tokens_high = llr40_setups.setup_tokens(subset, arm, repeats)
+    ratios_low, ratios_high = kernel_intervals(subset, ratios.keys(), setup)
+    raw_tokens, tokens_low, tokens_high = llr40_setups.setup_tokens(subset, setup, repeats)
     del tokens_low, tokens_high  # under "latest" both are empty; a repeat's own range is not this figure's concern
     tokens = {k: v for k, v in raw_tokens.items() if k in kernels}
     label = f"{study_tags.model_name(model)} - {llr40_setups.condition_label(condition)}"
     return Row(
-        arm, label, ratios, numerator_ms, denominator_ms, pending_note(pending),
+        setup, label, ratios, numerator_ms, denominator_ms, pending_note(pending),
         palette.color(condition), palette.marker(model), ratios_low, ratios_high, tokens, pending=pending,
     )  # fmt: skip
 
@@ -582,7 +582,7 @@ def answer_ratios(
 
 
 def kernel_intervals(
-    subset: pd.DataFrame, kernels: Collection[str], arm: str
+    subset: pd.DataFrame, kernels: Collection[str], setup: str
 ) -> tuple[dict[str, float], dict[str, float]]:
     """Each of ``kernels``' geomean-speedup CI over every graded episode of ``setup``, as (low, high)."""
     ratios_low: dict[str, float] = {}
@@ -595,7 +595,7 @@ def kernel_intervals(
         kernel = str(kernel)
         if kernel not in kernels:
             continue
-        values = usable_ratios(group["speedup"].tolist(), label=f"{arm}@{kernel}")
+        values = usable_ratios(group["speedup"].tolist(), label=f"{setup}@{kernel}")
         if values.size == 0:
             continue
         interval = geomean_ci(values)
@@ -617,7 +617,7 @@ def llr40_rows(
     baseline_fallback: str = "",
 ) -> list[Row]:
     """DaCe's own canon-sweep rows, then every model's ROSTER-COMPLETE CPF setup rows
-    (:func:`~hpcagent_bench.stats.population.complete_arms`), all against ``baseline`` -- the
+    (:func:`~hpcagent_bench.stats.population.complete_setups`), all against ``baseline`` -- the
     llr40 compiler figure's row source. ``observations=None`` draws the canon rows alone: the
     experiment DB is not always reachable, and a figure with only the deterministic columns is still
     a real, if partial, answer -- never a raised error.
@@ -638,16 +638,16 @@ def llr40_rows(
     if mark_pending:
         kept = [*kept, *dropped]
     by_model: dict[str, list[str]] = {}
-    for arm in kept:
-        model, condition = candidates[arm]
+    for setup in kept:
+        model, condition = candidates[setup]
         if condition in conditions:
-            by_model.setdefault(model, []).append(arm)
+            by_model.setdefault(model, []).append(setup)
     for model in palette.in_order(by_model.keys(), "models"):
-        for arm in sorted(by_model[model], key=lambda a: llr40_setups.rank_condition(candidates[a][1])):
-            model_tag, condition = candidates[arm]
-            served = set(frame.loc[frame["arm"].astype(str) == arm, "benchmark"].astype(str))
+        for setup in sorted(by_model[model], key=lambda a: llr40_setups.rank_condition(candidates[a][1])):
+            model_tag, condition = candidates[setup]
+            served = set(frame.loc[frame["arm"].astype(str) == setup, "benchmark"].astype(str))
             pending = frozenset(k for k in roster if k not in served)
-            rows.append(agent_kernel_row(frame, arm, model_tag, condition, roster, repeats, pending))
+            rows.append(agent_kernel_row(frame, setup, model_tag, condition, roster, repeats, pending))
     return rows
 
 

@@ -127,13 +127,13 @@ def test_a_served_policy_scores_a_non_delivery_at_one_rather_than_dropping_it() 
     """Non-delivery is a real outcome of the setup: the agent died or never verified anything and the
     baseline stands. Dropping it makes the geomean an average over the kernels the setup happened to
     manage, which is why a setup that reached the hard kernels scored lower for doing so."""
-    arm = population.aggregate_setup(
+    setup = population.aggregate_setup(
         "a", "c", {"k1": 4.0, "k2": 4.0}, ["k1", "k2", "k3", "k4"], population.KernelPolicy.SERVED
     )
-    assert arm.kernels == ("k1", "k2", "k3", "k4")
-    assert arm.values == (4.0, 4.0, 1.0, 1.0)
-    assert arm.n_solved == 2
-    assert arm.geomean() == pytest.approx(2.0)
+    assert setup.kernels == ("k1", "k2", "k3", "k4")
+    assert setup.values == (4.0, 4.0, 1.0, 1.0)
+    assert setup.n_solved == 2
+    assert setup.geomean() == pytest.approx(2.0)
 
 
 def test_the_served_roster_is_what_the_setup_was_given_not_the_full_roster() -> None:
@@ -179,10 +179,10 @@ def test_a_solved_and_a_served_aggregate_do_not_divide() -> None:
 def test_an_aggregate_states_the_population_behind_its_number() -> None:
     """A headline number with no n and no denominator cannot be checked, and the published per-setup
     table had neither: a reader could not tell 36 kernels against numba from 19 against C."""
-    arm = population.aggregate_setup(
+    setup = population.aggregate_setup(
         "a", "numba", {"k1": 4.0, "k2": 1.0}, ["k1", "k2", "k3"], population.KernelPolicy.SERVED
     )
-    assert arm.label() == "geomean over 3 kernels vs numba (served; 2 solved)"
+    assert setup.label() == "geomean over 3 kernels vs numba (served; 2 solved)"
 
 
 def test_an_intersection_reports_what_it_dropped() -> None:

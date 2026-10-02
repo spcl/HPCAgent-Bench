@@ -72,11 +72,11 @@ def spent(tokens: float) -> dict[str, float]:
     return {"tokens": tokens, "tokens_fresh_input": tokens, "tokens_cached_input": 0.0, "tokens_output": 0.0}
 
 
-def episode(arm: str, model: str, language: str, kernel: int, run: str, speedup: float, tokens: float) -> list[dict]:
+def episode(setup: str, model: str, language: str, kernel: int, run: str, speedup: float, tokens: float) -> list[dict]:
     """One episode as the judge records it: a GRADED row carrying the speedup and no token count,
     and a ``task`` row carrying the token total and no timings."""
     common = {
-        "arm": arm,
+        "arm": setup,
         "model": model,
         "language": language,
         "benchmark": f"k{kernel}",
@@ -117,10 +117,10 @@ def observations(gains: tuple[float, ...], winner: tuple[str, str] | None) -> tu
             for kernel in range(KERNELS):
                 treated_cell = winner is None or (model, language) == winner
                 gain = gains[kernel] if treated_cell else FLAT[kernel]
-                arm = f"{model}-{language}"
-                run = f"{arm}-{kernel}"
-                control += episode(arm, model, language, kernel, run, 2.0, 1000.0)
-                treated += episode(f"{arm}-skills", model, language, kernel, f"{run}-t", 2.0 * gain, 1000.0 / gain)
+                setup = f"{model}-{language}"
+                run = f"{setup}-{kernel}"
+                control += episode(setup, model, language, kernel, run, 2.0, 1000.0)
+                treated += episode(f"{setup}-skills", model, language, kernel, f"{run}-t", 2.0 * gain, 1000.0 / gain)
     return pd.DataFrame(control), pd.DataFrame(treated)
 
 
@@ -329,12 +329,12 @@ def test_a_treatment_setup_that_never_recorded_its_language_still_pairs_against_
             "timing_reduction": "mw4x5",
             "denominator": "best-of(numba,c)",
         }  # fmt: skip
-        for arm, packet, language, speedup in (
+        for setup, packet, language, speedup in (
             ("llr-focus40-oss120b-c", "", "c", 2.0),
             ("cpf-llr-focus40-oss120b-c-cpf", "cpf", "", 2.4),
         ):
-            run = f"{arm}-{kernel}"
-            base = {**common, "arm": arm, "packet": packet, "language": language, "run_id": run}
+            run = f"{setup}-{kernel}"
+            base = {**common, "arm": setup, "packet": packet, "language": language, "run_id": run}
             rows.append({
                 **base, "row_kind": "submission",
                 "speedup": speedup,
@@ -631,19 +631,19 @@ def test_the_family_csv_declares_the_pairs_in_the_order_it_wrote_them() -> None:
     assert plot.family_pairs(table) == [BLIND_PAIR, SCICOMP_PAIR]
 
 
-def observation_rows(arm: str, speedup: float, tokens: float, kernels: int = KERNELS) -> list[dict[str, object]]:
+def observation_rows(setup: str, speedup: float, tokens: float, kernels: int = KERNELS) -> list[dict[str, object]]:
     """One setup's rows in the shape an extraction writes: a graded submission and a task total per
     kernel."""
     rows: list[dict[str, object]] = []
     for kernel in range(kernels):
         common = {
-            "arm": arm,
+            "arm": setup,
             "benchmark": f"k{kernel}",
             "timing_suspect": 0,
             "baseline": "numba",
             "run_root": "j1",
             "job": "j1",
-            "run_id": f"{arm}-{kernel}",
+            "run_id": f"{setup}-{kernel}",
             "attempt_index": 1,
             "ts_ms": kernel,
             "timing_reduction": "mw4x5",
@@ -844,9 +844,9 @@ def one_setup_observations_csv(tmp_path: pathlib.Path) -> pathlib.Path:
     rows: list[dict[str, object]] = []
     for model, base in (("qwen38", 2.0), ("oss120b", 3.0)):
         for packet, suffix, factor in (("", "", 1.0), ("skills", "-skills", 1.2), ("cpf", "-cpf", 0.8)):
-            arm = f"exp-{model}-c{suffix}"
+            setup = f"exp-{model}-c{suffix}"
             rows += [
-                {**row, "language": "c", "packet": packet} for row in observation_rows(arm, base * factor, 1000.0 / factor)
+                {**row, "language": "c", "packet": packet} for row in observation_rows(setup, base * factor, 1000.0 / factor)
             ]  # fmt: skip
     path = tmp_path / "observations.csv"
     pd.DataFrame(rows).to_csv(path, index=False)
@@ -883,7 +883,7 @@ def test_several_treatments_of_one_experiment_draw_one_dot_row(
     out = tmp_path / "fig.pdf"
     old_argv = sys.argv
     sys.argv = [
-        "plot_score_change.py", str(obs), "--experiment", "exp", "--treatment", "skills", "--treatment", "cpf",
+        "plot_score_change.py", str(obs), "--study", "exp", "--treatment", "skills", "--treatment", "cpf",
         "--out", str(out), "--table", str(tmp_path / "table.csv"),
     ]  # fmt: skip
     try:
@@ -1094,7 +1094,7 @@ def test_a_full_roster_mark_on_the_ceiling_is_drawn_whole() -> None:
     import matplotlib.pyplot as plt
 
     fig, ax = plt.subplots()
-    row = efficacy_figures.SetupRow("qwen38", "HIP", "#1f77b4", arm(1.0, 2.0, 8, 8), arm(1.0, 2.0, 8, 8))
+    row = efficacy_figures.SetupRow("qwen38", "HIP", "#1f77b4", setup(1.0, 2.0, 8, 8), setup(1.0, 2.0, 8, 8))
     efficacy_figures.draw_success_row(ax, [row], "^", efficacy_figures.PAPER_CONFIG, "Solved (%)")
     marks = [collection for collection in ax.collections if isinstance(collection, PathCollection)]
     assert marks and not any(mark.get_clip_on() for mark in marks)
@@ -1105,7 +1105,7 @@ def test_the_success_row_draws_its_marks_and_no_interval() -> None:
     """The roster is fixed, so the count solved is a census, not a sample: a Wilson
     bar under a 10/10 mark reaching down to 7 read as seven solved."""
     fig, ax = plt.subplots()
-    row = efficacy_figures.SetupRow("qwen38", "HIP", "#1f77b4", arm(1.0, 2.0, 7, 10), arm(1.0, 2.0, 10, 10))
+    row = efficacy_figures.SetupRow("qwen38", "HIP", "#1f77b4", setup(1.0, 2.0, 7, 10), setup(1.0, 2.0, 10, 10))
     efficacy_figures.draw_success_row(ax, [row], "^", efficacy_figures.PAPER_CONFIG, "Solved (%)")
     assert [collection for collection in ax.collections if isinstance(collection, PathCollection)]
     assert not [collection for collection in ax.collections if isinstance(collection, LineCollection)]
@@ -1124,7 +1124,7 @@ def test_a_success_mark_sits_at_the_solved_rate(
     rosters share one 0-100% scale; the control's hollow mark left of the column, the treated one
     right, and a 10/10 setup exactly on the 100% ceiling."""
     fig, ax = plt.subplots()
-    control, treated = (arm(1.0, 2.0, count, served) for count in solved)
+    control, treated = (setup(1.0, 2.0, count, served) for count in solved)
     row = efficacy_figures.SetupRow("qwen38", "HIP", "#1f77b4", control, treated)
     efficacy_figures.draw_success_row(ax, [row], "^", efficacy_figures.PAPER_CONFIG, "Solved (%)")
     marks = [collection for collection in ax.collections if isinstance(collection, PathCollection)]
@@ -1177,7 +1177,7 @@ def test_category_names_still_touching_on_two_lines_step_down_until_clear(legs: 
 
     fig, ax = plt.subplots(figsize=(1.3, 1.0))
     config = efficacy_figures.PAPER_CONFIG
-    rows = [efficacy_figures.SetupRow("qwen38", leg, "#1f77b4", arm(1.0, 2.0), arm(1.0, 2.0)) for leg in legs]
+    rows = [efficacy_figures.SetupRow("qwen38", leg, "#1f77b4", setup(1.0, 2.0), setup(1.0, 2.0)) for leg in legs]
     ax.set_xlim(-0.6, len(rows) - 0.4)
     efficacy_figures.draw_category_axis(ax, rows, config)
     efficacy_figures.stagger_crowded_ticks(fig, [ax], config)
@@ -1194,7 +1194,7 @@ def test_a_difference_label_under_the_top_tick_settles_inside_the_frame_and_off_
     import matplotlib.pyplot as plt
 
     fig, ax = plt.subplots(figsize=(1.2, 1.0))
-    row = efficacy_figures.SetupRow("qwen38", "HIP", "#1f77b4", arm(1.0, 2.0), arm(3.5, 4.0))
+    row = efficacy_figures.SetupRow("qwen38", "HIP", "#1f77b4", setup(1.0, 2.0), setup(3.5, 4.0))
     efficacy_figures.draw_measure_row(ax, [row], "speedup", "^", {}, differences=frozenset({("qwen38", "HIP")}))
     plotstyle.settle_clear_labels(fig)
     fig.canvas.draw()
@@ -1214,7 +1214,7 @@ def test_without_the_success_row_speedup_and_cost_keep_their_order(success_row: 
     assert plot.dot_measures(argparse.Namespace(success_row=success_row)) == want
 
 
-def arm(x: float, high: float, solved: int = 4, served: int = 6) -> efficacy_figures.SetupPoint:
+def setup(x: float, high: float, solved: int = 4, served: int = 6) -> efficacy_figures.SetupPoint:
     """A setup at ``log2`` speedup ``x`` whose interval tops out at ``high``."""
     return efficacy_figures.SetupPoint(x, x - 1.0, high, 1e5, 5e4, 2e5, served, served, solved, served)
 
@@ -1225,7 +1225,7 @@ def test_a_success_row_nobody_was_served_is_not_a_singular_axis() -> None:
     import matplotlib.pyplot as plt
 
     fig, ax = plt.subplots()
-    unserved = arm(1.0, 2.0, solved=0, served=0)
+    unserved = setup(1.0, 2.0, solved=0, served=0)
     row = efficacy_figures.SetupRow("qwen38", "HIP", "#1f77b4", unserved, unserved)
     try:
         efficacy_figures.draw_success_row(ax, [row], "^", efficacy_figures.PAPER_CONFIG, "")
@@ -1240,7 +1240,7 @@ def test_a_difference_label_sits_above_both_intervals_not_on_the_treated_mark() 
     import matplotlib.pyplot as plt
 
     fig, ax = plt.subplots()
-    row = efficacy_figures.SetupRow("qwen38", "HIP", "#1f77b4", arm(4.0, 5.0), arm(4.5, 6.0))
+    row = efficacy_figures.SetupRow("qwen38", "HIP", "#1f77b4", setup(4.0, 5.0), setup(4.5, 6.0))
     efficacy_figures.draw_measure_row(ax, [row], "speedup", "^", {}, differences=frozenset({("qwen38", "HIP")}))
     (label,) = [text for text in ax.texts if text.get_text().endswith("x")]
     assert label.xy == (0, 6.0), label.xy
@@ -1254,7 +1254,7 @@ def test_the_success_row_runs_to_100_percent_and_carries_no_x_ticks() -> None:
     import matplotlib.pyplot as plt
 
     fig, ax = plt.subplots()
-    row = efficacy_figures.SetupRow("qwen38", "HIP", "#1f77b4", arm(1.0, 2.0, 2, 8), arm(1.0, 2.0, 8, 8))
+    row = efficacy_figures.SetupRow("qwen38", "HIP", "#1f77b4", setup(1.0, 2.0, 2, 8), setup(1.0, 2.0, 8, 8))
     efficacy_figures.draw_success_row(ax, [row], "^", efficacy_figures.PAPER_CONFIG, "Solved (%)")
     fig.canvas.draw()
     assert list(ax.get_yticks()) == [0.0, 0.5, 1.0]
@@ -1292,7 +1292,7 @@ def test_crowded_category_ticks_alternate_two_lines_and_sparse_ones_do_not(
 
     fig, ax = plt.subplots(figsize=(1.6, 1.0))
     config = efficacy_figures.PAPER_CONFIG
-    rows = [efficacy_figures.SetupRow("qwen38", leg, "#1f77b4", arm(1.0, 2.0), arm(1.0, 2.0)) for leg in legs]
+    rows = [efficacy_figures.SetupRow("qwen38", leg, "#1f77b4", setup(1.0, 2.0), setup(1.0, 2.0)) for leg in legs]
     ax.set_xlim(-0.6, len(rows) - 0.4)
     efficacy_figures.draw_category_axis(ax, rows, config)
     before = [tick.get_pad() for tick in ax.xaxis.get_major_ticks()]
@@ -1426,7 +1426,7 @@ def test_an_interval_past_the_reach_is_cut_at_it_with_an_arrowhead() -> None:
     """The axis must not follow the interval out, and the cut end has to say the interval goes on."""
     fig, ax = plt.subplots()
     wide = efficacy_figures.SetupPoint(0.0, -9.0, 12.0, 1e5, 5e4, 2e5, 6, 6, 6, 6)
-    row = efficacy_figures.SetupRow("qwen38", "HIP", "#1f77b4", arm(1.0, 2.0), wide)
+    row = efficacy_figures.SetupRow("qwen38", "HIP", "#1f77b4", setup(1.0, 2.0), wide)
     efficacy_figures.draw_measure_row(ax, [row], "speedup", "^", {})
     low, high = ax.get_ylim()
     assert high < 12.0 and low > -9.0, (low, high)
@@ -1561,7 +1561,7 @@ def test_the_solved_row_is_never_starred_because_the_solved_rate_is_not_tested()
     stats = pd.DataFrame([{"model": "qwen38", "leg": "C", "score_verdict": efficacy.SIGNIFICANT,
                            "cost_verdict": efficacy.SIGNIFICANT}])  # fmt: skip
     significance = efficacy_figures.axis_significance(stats)
-    row = efficacy_figures.SetupRow("qwen38", "C", "#000000", arm(1.0, 1.5), arm(2.0, 2.5))
+    row = efficacy_figures.SetupRow("qwen38", "C", "#000000", setup(1.0, 1.5), setup(2.0, 2.5))
     texts = {}
     for measure in ("speedup", "success"):
         fig, ax = plt.subplots()

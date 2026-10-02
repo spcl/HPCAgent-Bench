@@ -175,8 +175,8 @@ def complete_side_setups(
     if include_incomplete:
         return set(combined["arm"].dropna().astype(str).unique())
     kept, dropped = population.complete_setups(combined, roster)
-    for arm in sorted(dropped):
-        print(f"{treatment}: dropping {arm} ({dropped[arm]}/{len(roster)} roster kernels)", file=sys.stderr)
+    for setup in sorted(dropped):
+        print(f"{treatment}: dropping {setup} ({dropped[setup]}/{len(roster)} roster kernels)", file=sys.stderr)
     return set(kept)
 
 
@@ -211,7 +211,7 @@ def one_treatment_panel(
 def shared_spelling(pair: tuple[str, str], packet: str) -> str:
     """``packet``'s own setup-name token when BOTH setups of ``pair`` carry it, else "" -- the token, not
     the registry key, since a setup reads ``...-c-skills``."""
-    suffixes = [study_tags.setup_suffix(arm) for arm in pair]
+    suffixes = [study_tags.setup_suffix(setup) for setup in pair]
     for key, spelling in study_tags.packet_spellings():
         if key == packet and all(spelling in suffix for suffix in suffixes):
             return spelling.strip("-")
@@ -239,13 +239,13 @@ HARNESS_INTERVENTION: str = "harness"
 PACKETS_INTERVENTION: str = "packets"
 
 
-def treated_harness(arm: str) -> str:
+def treated_harness(setup: str) -> str:
     """What a harness comparison's treated setup changed: its packet when it has one (AutoKernel on
     Claude Code), else its harness's display name."""
-    packet = study_tags.packet_of(arm)
+    packet = study_tags.packet_of(setup)
     if packet:
         return study_tags.packet_name(packet)
-    tokens = arm.split("-")
+    tokens = setup.split("-")
     # A packet named mid-setup ("harness20-caveman-qwen38-c") still names the column.
     for key in study_tags.order("packets"):
         if key and key in tokens:
@@ -253,7 +253,7 @@ def treated_harness(arm: str) -> str:
     for harness in study_tags.order("harnesses"):
         if harness and harness in tokens:
             return study_tags.harness_name(harness)
-    return arm
+    return setup
 
 
 def pair_leg_label(pair: tuple[str, str], intervention: str, recorded_language: str = "") -> str:
@@ -369,14 +369,14 @@ def pair_frame(frame_all: pd.DataFrame, pairs: Sequence[tuple[str, str]], interv
     for pair in pairs:
         recorded = known.get(pair[0], "") or known.get(pair[1], "")
         leg = pair_leg_label(pair, intervention, recorded)
-        for arm, skills in zip(pair, (True, False), strict=True):
-            part = frame_all[frame_all["arm"].astype(str) == arm]
+        for setup, skills in zip(pair, (True, False), strict=True):
+            part = frame_all[frame_all["arm"].astype(str) == setup]
             if part.empty:
                 continue
             parts.append(
                 part.assign(
-                    model=study_tags.model_of(arm),
-                    language=study_tags.language_of(arm) or known.get(arm, ""),
+                    model=study_tags.model_of(setup),
+                    language=study_tags.language_of(setup) or known.get(setup, ""),
                     leg=leg,
                     skills=skills,
                 ))  # fmt: skip
@@ -653,8 +653,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("observations", type=pathlib.Path, nargs="+", help="extracted observations; repeatable")
     parser.add_argument(
         "--study",
-        "--experiment",
-        dest="experiment",
+        dest="study",
         default="",
         help="setup prefix naming ONE experiment; required without --pairs-csv/--comparison",
     )
@@ -804,7 +803,7 @@ def comparison_panel(
             f"comparison {raw!r}: repeats={spec['repeats']!r} not in {[p.value for p in population.REPEAT_POLICIES]}"
         ) from None
     built = build_comparison(
-        spec, args.observations, args.experiment, repeats, args.include_incomplete, card, args.speedup_over
+        spec, args.observations, args.study, repeats, args.include_incomplete, card, args.speedup_over
     )
     if built is None and spec.get("pending"):
         # A comparison whose setups have not run yet is a STUB: its box, its axes and a "?" per
@@ -885,13 +884,13 @@ def figure_from_treatments(
 ) -> None:
     """The ``--study`` route: each ``--treatment`` against the experiment's own no-packet control,
     one figure for one treatment, a joined row for several."""
-    if not args.experiment:
+    if not args.study:
         raise SystemExit("--study names the experiment to split; pass it, or --pairs-csv/--comparison")
     treatments = args.treatment or ["skills"]
-    frame_all = load(args.observations[0], args.experiment, card)
+    frame_all = load(args.observations[0], args.study, card)
     control = control_rows(frame_all)
     if control.empty:
-        raise SystemExit(f"no no-packet control rows for study {args.experiment!r}")
+        raise SystemExit(f"no no-packet control rows for study {args.study!r}")
     # Every kernel ANY setup of this experiment touched -- the roster :func:`complete_side_setups` gates
     # coverage against.
     roster = sorted(frame_all["benchmark"].dropna().astype(str).unique())
@@ -914,7 +913,7 @@ def figure_from_treatments(
         )
         panels.append((packets.label(treatment), treatment, stats, frame))
     if not panels:
-        raise SystemExit(f"no treatment of {treatments} produced a comparison for study {args.experiment!r}")
+        raise SystemExit(f"no treatment of {treatments} produced a comparison for study {args.study!r}")
     if len(panels) == 1:
         # A single comparison draws no name; the caption is its title.
         _title, treatment, stats, frame = panels[0]

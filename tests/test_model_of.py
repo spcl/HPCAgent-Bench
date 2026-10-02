@@ -43,7 +43,7 @@ def test_every_caller_still_reaches_it(script: str) -> None:
 
 
 @pytest.mark.parametrize(
-    ("arm", "expected"),
+    ("setup", "expected"),
     [
         ("llr40v10-oss120b-c-skills", "oss120b"),
         ("llr40v9-qwen38-fortran", "qwen38"),
@@ -53,8 +53,8 @@ def test_every_caller_still_reaches_it(script: str) -> None:
         ("", "other"),
     ],
 )
-def test_a_setup_resolves_to_the_model_that_ran_it(arm: str, expected: str) -> None:
-    assert study_tags.model_of(arm) == expected
+def test_a_setup_resolves_to_the_model_that_ran_it(setup: str, expected: str) -> None:
+    assert study_tags.model_of(setup) == expected
 
 
 def test_a_language_token_cannot_match_inside_a_model_name() -> None:

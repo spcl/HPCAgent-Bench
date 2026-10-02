@@ -63,7 +63,7 @@ IDENTITY_KEYS = {
 }
 #: What the job env keeps for every setup: the model's identity is per job.
 JOB_IDENTITY = {"HPCAGENT_BENCH_RECORD_MODEL": "qwen38", "HPCAGENT_BENCH_RECORD_ENABLED": "true"}
-IDENTITY_COLUMNS = "experiment, model, language, device, packet, rep, arm, harness"
+IDENTITY_COLUMNS = "experiment, model, language, device, packet, rep, setup, harness"
 
 
 def write_resolved(directory: pathlib.Path, setup: str, lines: list[str]) -> None:
@@ -71,8 +71,8 @@ def write_resolved(directory: pathlib.Path, setup: str, lines: list[str]) -> Non
     (directory / f"{setup}.resolved").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def setup_lines(arm: str, view: pathlib.Path | None) -> list[str]:
-    lines = [f"CAMPAIGN_ARM={arm}", *(f"{key}={value}" for key, value in IDENTITY_KEYS[arm].items())]
+def setup_lines(setup: str, view: pathlib.Path | None) -> list[str]:
+    lines = [f"CAMPAIGN_ARM={setup}", *(f"{key}={value}" for key, value in IDENTITY_KEYS[setup].items())]
     if view is None:
         lines += ["-HPCAGENT_BENCH_SERVICE_CANONICAL_PARALLEL_FORM_DIR", "HPCAGENT_BENCH_SERVICE_SCORE_ENABLED=0"]
     else:
@@ -250,24 +250,24 @@ def recorded(db: str) -> dict[str, list[tuple[object, ...]]]:
         }
 
 
-@pytest.mark.parametrize("arm", [CPF_SETUP, CONTROL_SETUP])
+@pytest.mark.parametrize("identity", [CPF_SETUP, CONTROL_SETUP])
 def test_a_fused_judge_records_the_row_a_single_setup_judge_records(
-    arm: str, fused_job: dict[str, str], tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    identity: str, fused_job: dict[str, str], tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The same grade, recorded once by a single-setup judge (identity in its process env) and once
     by a fused one (identity in the request's setup scope only): identical rows."""
-    run_id = f"{arm}.n0.p4.w4"
-    setup = fused_job["cpf"] if arm == CPF_SETUP else fused_job["control"]
+    run_id = f"{identity}.n0.p4.w4"
+    setup = fused_job["cpf"] if identity == CPF_SETUP else fused_job["control"]
     with monkeypatch.context() as single:
         single.delenv(fused.SETUPS_DIR_ENV)
-        for key, value in IDENTITY_KEYS[arm].items():
+        for key, value in IDENTITY_KEYS[identity].items():
             single.setenv(key, value)
         record_all(str(tmp_path / "single.db"), run_id)
     with config.scoped_environment(fused.judge_overlay(setup)):
         record_all(str(tmp_path / "fused.db"), run_id)
     single_rows, fused_rows = recorded(str(tmp_path / "single.db")), recorded(str(tmp_path / "fused.db"))
     assert fused_rows == single_rows
-    assert fused_rows["joined"][0][6] == arm and fused_rows["joined"][0][1] == "qwen38"
+    assert fused_rows["joined"][0][6] == identity and fused_rows["joined"][0][1] == "qwen38"
 
 
 # ------------------------------------------------------------------ the upstream judge

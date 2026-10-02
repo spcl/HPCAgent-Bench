@@ -123,7 +123,7 @@ def seed_db(path: pathlib.Path, submissions: list[tuple], attempts: tuple[str, .
     with contextlib.closing(recording.connect(str(path))) as conn:
         # the identity is one setup row, not a column on every grade
         results_db.ensure_setup(
-            conn, results_db.Arm("ablation-qwen38-c", "c", "cpu", experiment="ablation", model="qwen38")
+            conn, results_db.Setup("ablation-qwen38-c", "c", "cpu", experiment="ablation", model="qwen38")
         )
         run = results_db.ensure_run(conn, "ablation-qwen38-c", "run", None)
         stamp = {"preset": "S", "datatype": "float64", "source_mode": "restricted", "baseline": "c"}
@@ -155,11 +155,11 @@ def csv_header(path: pathlib.Path) -> list[str]:
 
 
 def run_stats(
-    module: ModuleType, tmp_path: pathlib.Path, arms: list[str], problems: int, dedup: str = "best"
+    module: ModuleType, tmp_path: pathlib.Path, setups: list[str], problems: int, dedup: str = "best"
 ) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
     """Run the CLI end to end; return ``(per-problem rows, pairs rows)``."""
     prefix = tmp_path / "abl"
-    argv = [f"--arm={spec}" for spec in arms] + [f"--problems={problems}", f"--out={prefix}", f"--dedup={dedup}"]
+    argv = [f"--setup={spec}" for spec in setups] + [f"--problems={problems}", f"--out={prefix}", f"--dedup={dedup}"]
     assert module.main(argv) == 0
     return (
         read_csv(tmp_path / ("abl" + module.PER_PROBLEM_SUFFIX)),
@@ -189,7 +189,7 @@ def test_dedup_defaults_to_last(ablation_stats, tmp_path) -> None:
     db = tmp_path / "a.db"
     seed_db(db, [("gemm", 1, 3.0), ("gemm", 2, 2.0)])
     prefix = tmp_path / "abl"
-    assert ablation_stats.main([f"--arm=a={db}", "--problems=1", f"--out={prefix}"]) == 0
+    assert ablation_stats.main([f"--setup=a={db}", "--problems=1", f"--out={prefix}"]) == 0
     rows = read_csv(tmp_path / ("abl" + ablation_stats.PER_PROBLEM_SUFFIX))
     assert float(rows[0]["a_speedup"]) == 2.0
 
@@ -246,7 +246,7 @@ def test_problems_below_the_observed_universe_is_rejected(ablation_stats, tmp_pa
     db = tmp_path / "a.db"
     seed_db(db, [("gemm", 1, 2.0), ("stencil", 1, 1.5), ("fdtd", 1, 1.1)])
     with pytest.raises(SystemExit, match="3 kernels with evidence"):
-        ablation_stats.main([f"--arm=a={db}", "--problems=2", f"--out={tmp_path / 'x'}"])
+        ablation_stats.main([f"--setup=a={db}", "--problems=2", f"--out={tmp_path / 'x'}"])
 
 
 def test_single_setup_writes_per_problem_and_an_empty_pairs_file(ablation_stats, tmp_path) -> None:
@@ -384,14 +384,14 @@ def test_duplicate_setup_names_are_rejected(ablation_stats, tmp_path) -> None:
     db = tmp_path / "a.db"
     seed_db(db, [("gemm", 1, 2.0)])
     with pytest.raises(SystemExit):
-        ablation_stats.main([f"--arm=a={db}", f"--arm=a={db}", f"--out={tmp_path / 'x'}"])
+        ablation_stats.main([f"--setup=a={db}", f"--setup=a={db}", f"--out={tmp_path / 'x'}"])
 
 
 def test_non_results_db_names_the_path(ablation_stats, tmp_path) -> None:
     empty = tmp_path / "empty.db"
     empty.touch()
     with pytest.raises(SystemExit, match="empty.db: not a results DB"):
-        ablation_stats.main([f"--arm=a={empty}", f"--out={tmp_path / 'x'}"])
+        ablation_stats.main([f"--setup=a={empty}", f"--out={tmp_path / 'x'}"])
 
 
 def build_run_dir(tmp_path: pathlib.Path) -> pathlib.Path:
@@ -581,7 +581,7 @@ def seed_calls(path: pathlib.Path, rows: tuple[tuple[str, str, int, int], ...]) 
     """``(benchmark, run_id, call index, cumulative_tokens)`` /score grades."""
     with contextlib.closing(recording.connect(str(path))) as conn:
         results_db.ensure_setup(
-            conn, results_db.Arm("ablation-qwen38-c", "c", "cpu", experiment="ablation", model="qwen38")
+            conn, results_db.Setup("ablation-qwen38-c", "c", "cpu", experiment="ablation", model="qwen38")
         )
         stamp = {"preset": "S", "datatype": "float64", "source_mode": "restricted", "speedup": 1.0, "correct": 1}
         for benchmark, run_id, round_index, tokens in rows:
@@ -758,10 +758,10 @@ def seed_observations(path: pathlib.Path, rows: list[tuple[str, str, str, int, i
 
     Written by the one extractor, :mod:`hpcagent_bench.observations_extract`."""
     records = []
-    for arm, benchmark, run_id, tokens, ts_ms in rows:
+    for setup, benchmark, run_id, tokens, ts_ms in rows:
         record = dict.fromkeys(observations_extract.OBSERVATION_FIELDS, "")
         record.update(
-            row_kind="task", arm=arm, benchmark=benchmark, run_root="rr", job=1, run_id=run_id, tokens=tokens, ts_ms=ts_ms,
+            row_kind="task", arm=setup, benchmark=benchmark, run_root="rr", job=1, run_id=run_id, tokens=tokens, ts_ms=ts_ms,
             tokens_fresh_input=tokens, tokens_cached_input=0, tokens_output=0,
         )  # fmt: skip
         records.append(record)
@@ -788,7 +788,7 @@ def test_with_observations_the_cost_half_is_the_task_rows_effective_total(
     prefix = tmp_path / "eff"
 
     code = ablation_stats.main(
-        [f"--arm=a={db_a}", f"--arm=b={db_b}", f"--observations={observations}", "--problems=1", f"--out={prefix}"]
+        [f"--setup=a={db_a}", f"--setup=b={db_b}", f"--observations={observations}", "--problems=1", f"--out={prefix}"]
     )
 
     assert code == 0
@@ -808,17 +808,23 @@ def test_the_cost_half_prices_the_task_rows_with_the_billed_card_by_default(
     seed_db(db_a, [("k1", 1, 2.0)])
     seed_db(db_b, [("k1", 1, 4.0)])
     records = []
-    for arm, cached in (("a", 0), ("b", 1000)):
+    for setup, cached in (("a", 0), ("b", 1000)):
         record = dict.fromkeys(observations_extract.OBSERVATION_FIELDS, "")
         record.update(
-            row_kind="task", arm=arm, benchmark="k1", run_root="rr", job=1, run_id=f"r-{arm}", tokens=100, ts_ms=1,
+            row_kind="task", arm=setup, benchmark="k1", run_root="rr", job=1, run_id=f"r-{setup}", tokens=100, ts_ms=1,
             tokens_fresh_input=100, tokens_cached_input=cached, tokens_output=0,
         )  # fmt: skip
         records.append(record)
     observations = tmp_path / "observations.db"
     observations_extract.write_db(observations, observations_extract.OBSERVATION_FIELDS, records)
     prefix = tmp_path / "card"
-    argv = [f"--arm=a={db_a}", f"--arm=b={db_b}", f"--observations={observations}", "--problems=1", f"--out={prefix}"]
+    argv = [
+        f"--setup=a={db_a}",
+        f"--setup=b={db_b}",
+        f"--observations={observations}",
+        "--problems=1",
+        f"--out={prefix}",
+    ]
 
     assert ablation_stats.main(argv + ([f"--cost-model={card}"] if card else [])) == 0
 

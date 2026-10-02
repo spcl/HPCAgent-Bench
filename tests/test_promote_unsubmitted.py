@@ -120,22 +120,22 @@ def test_a_gpu_promotion_carries_both_translation_units(promoter, monkeypatch) -
 
 #: The one judge shard of every fixture run directory.
 SHARD = pathlib.Path("judge") / "rank-0" / "hpcagent_bench0.db"
-HIP = results_db.Arm("arm", "hip", "gpu")
+HIP = results_db.Setup("arm", "hip", "gpu")
 
 
 def make_run_dir(
-    tmp_path: pathlib.Path, source: str, device_source: str | None = None, arm: results_db.Arm | None = None
+    tmp_path: pathlib.Path, source: str, device_source: str | None = None, setup: results_db.Setup | None = None
 ) -> pathlib.Path:
     """A run dir whose judge shard holds one verified gemm score of ``setup.n0.p1.w1`` with its units."""
     results_seed.score(
-        tmp_path / SHARD, "arm.n0.p1.w1", "gemm", 1, 4.0, arm=arm, source=source, device_source=device_source
+        tmp_path / SHARD, "arm.n0.p1.w1", "gemm", 1, 4.0, setup=setup, source=source, device_source=device_source
     )
     return tmp_path
 
 
 def test_the_device_row_is_never_submitted_as_the_host_source(promoter, tmp_path) -> None:
     """Both halves sort together by ts, so an unfiltered 'newest wins' picks the device unit."""
-    run_dir = make_run_dir(tmp_path, "/* host */", "/* __global__ */", arm=HIP)
+    run_dir = make_run_dir(tmp_path, "/* host */", "/* __global__ */", setup=HIP)
     (item,) = promoter.candidates(run_dir)
     assert item["language"] == "hip"
     assert item["source"] == "/* host */"

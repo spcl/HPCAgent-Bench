@@ -2,12 +2,12 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Setup-against-setup comparisons over a DECLARED family, from an extracted observations CSV.
 
-:mod:`hpcagent_bench.stats.arms` pairs the setups ONE launcher varied -- the skill packet --
+:mod:`hpcagent_bench.stats.setups` pairs the setups ONE launcher varied -- the skill packet --
 because those are the pairs it can derive from a setup label. An experiment that is the control for
 ANOTHER experiment has no such label, so the comparison it exists to make (a blind setup against the
 scored setup of the same model, language and roster) has nowhere to be formed. This takes the pairs as
 an ARGUMENT and runs them through the same reduction and the same guards:
-:func:`~hpcagent_bench.stats.population.arm_kernel_answers` for the one value per kernel,
+:func:`~hpcagent_bench.stats.population.setup_kernel_answers` for the one value per kernel,
 :func:`~hpcagent_bench.stats.population.align` and :func:`~hpcagent_bench.stats.population.coverage`
 for the kernel set, :func:`~hpcagent_bench.stats.summary.paired_geomean` for the geomean ratio, its
 interval and its p, and :func:`~hpcagent_bench.harness.efficacy.correct_family` for the family. A kernel
@@ -265,20 +265,22 @@ def impact_rows(pairs: list[tuple[str, str]], setup_frame: pd.DataFrame, pair_fr
         if control not in controls:
             controls.add(control)
             order.append((control, ""))
-    arms = setup_frame.set_index("arm")
+    setups = setup_frame.set_index("arm")
     rows: list[dict[str, object]] = []
-    for arm, control in order:
+    for setup, control in order:
         row: dict[str, object] = {
-            "model": study_tags.model_of(arm),
-            "language": study_tags.language_of(arm),
-            "packet": study_tags.packet_of(arm),
-            "arm": arm,
+            "model": study_tags.model_of(setup),
+            "language": study_tags.language_of(setup),
+            "packet": study_tags.packet_of(setup),
+            "arm": setup,
             "control": control,
         }
         for column, source in IMPACT_SETUP_COLUMNS.items():
-            row[column] = arms.at[arm, source] if arm in arms.index else math.nan
+            row[column] = setups.at[setup, source] if setup in setups.index else math.nan
         for leg, prefix in IMPACT_LEGS.items():
-            match = pair_frame[(pair_frame.setup_a == arm) & (pair_frame.setup_b == control) & (pair_frame.leg == leg)]
+            match = pair_frame[
+                (pair_frame.setup_a == setup) & (pair_frame.setup_b == control) & (pair_frame.leg == leg)
+            ]
             found = match.iloc[0] if control and not match.empty else None
             for suffix, source in IMPACT_LEG_COLUMNS.items():
                 row[f"{prefix}_{suffix}"] = found[source] if found is not None else math.nan
@@ -314,13 +316,13 @@ def one_baseline(observations: pd.DataFrame, baseline: str) -> pd.DataFrame:
     return observations[(named == baseline) | (named == "") | observations.baseline.isna()]
 
 
-def graded_rows(observations: pd.DataFrame, arms: list[str]) -> pd.DataFrame:
+def graded_rows(observations: pd.DataFrame, setups: list[str]) -> pd.DataFrame:
     """The ``submission`` rows of ``setups``, all of which must share one denominator.
 
     ``one_denominator`` raises rather than picking a majority: a speedup divided by two different
     references is not one quantity, and the setups of two experiments are exactly where that happens.
     """
-    rows = observations[(observations.row_kind == "submission") & observations.arm.isin(arms)]
+    rows = observations[(observations.row_kind == "submission") & observations.arm.isin(setups)]
     population.one_denominator(rows.baseline.tolist(), label="graded rows")
     return rows
 
@@ -331,7 +333,7 @@ def best_by_setup_kernel(
     """One row per ``(setup, kernel)``: the setup's FINAL answer on that kernel.
 
     WITHIN a run the LAST verified submission counts; a kernel run more than once is reduced by
-    ``repeats`` (:func:`~hpcagent_bench.stats.population.arm_kernel_answers`). Runs of different jobs
+    ``repeats`` (:func:`~hpcagent_bench.stats.population.setup_kernel_answers`). Runs of different jobs
     are separate under :data:`~hpcagent_bench.stats.population.EPISODE_KEY` even though a launcher
     reuses the ``run_id``, so a rerun is seen as a rerun rather than merged into the run it replaces.
     """
@@ -341,7 +343,7 @@ def best_by_setup_kernel(
 def served_by_setup(observations: pd.DataFrame) -> dict[str, frozenset[str]]:
     """Every kernel a setup has a recorded observation for -- the roster it was actually given."""
     rows = observations.dropna(subset=["arm", "benchmark"])
-    return {str(arm): frozenset(group.benchmark.astype(str)) for arm, group in rows.groupby("arm")}
+    return {str(setup): frozenset(group.benchmark.astype(str)) for setup, group in rows.groupby("arm")}
 
 
 def tokens_by_setup_kernel(
@@ -355,7 +357,7 @@ def tokens_by_setup_kernel(
     never a cost here. A kernel run more than once is reduced by ``repeats``.
     """
     totals = population.kernel_tokens(observations, ("arm", "benchmark"), repeats=repeats)
-    return {(str(arm), str(kernel)): float(spend) for (arm, kernel), spend in totals.items()}
+    return {(str(setup), str(kernel)): float(spend) for (setup, kernel), spend in totals.items()}
 
 
 def setup_aggregates(
@@ -363,10 +365,10 @@ def setup_aggregates(
 ) -> dict[str, population.SetupAggregate]:
     """``{setup: aggregate}`` under ``policy``, each carrying the exact kernels behind it."""
     out: dict[str, population.SetupAggregate] = {}
-    for arm, group in best.groupby("arm"):
+    for setup, group in best.groupby("arm"):
         solved = {str(row.benchmark): float(row.speedup) for row in group.itertuples()}
-        roster = served.get(str(arm), frozenset(solved))
-        out[str(arm)] = population.aggregate_setup(str(arm), baseline, solved, roster, policy)
+        roster = served.get(str(setup), frozenset(solved))
+        out[str(setup)] = population.aggregate_setup(str(setup), baseline, solved, roster, policy)
     return out
 
 
@@ -410,9 +412,9 @@ def warn_missing_tokens(
 ) -> None:
     """Warn, with counts, when the cost population ``K`` falls short of the kernels both setups were
     served: a kernel without a task token total on either side leaves the tokens leg silently."""
-    missing = {arm: sorted(k for k in both_served if (arm, k) not in tokens) for arm in (setup_a, setup_b)}
+    missing = {setup: sorted(k for k in both_served if (setup, k) not in tokens) for setup in (setup_a, setup_b)}
     if any(missing.values()):
-        detail = "; ".join(f"{arm} {len(kernels)} {kernels[:5]}" for arm, kernels in missing.items() if kernels)
+        detail = "; ".join(f"{setup} {len(kernels)} {kernels[:5]}" for setup, kernels in missing.items() if kernels)
         warnings.warn(
             f"tokens leg {setup_a},{setup_b}: no task token total for kernels both were served "
             f"({len(both_served)}): {detail}",
@@ -435,7 +437,7 @@ def pair_rows(
     rows: list[dict[str, object]] = []
     for setup_a, setup_b in pairs:
         left, right = table[setup_a], table[setup_b]
-        kernels_a, kernels_b = ((served or {}).get(arm, frozenset(roster)) for arm in (setup_a, setup_b))
+        kernels_a, kernels_b = ((served or {}).get(setup, frozenset(roster)) for setup in (setup_a, setup_b))
         # solved-or-not is paired over the kernels BOTH setups ran, never one only a single setup ran
         both_ran = kernels_a & kernels_b
         gap = population.coverage(left, right, roster=both_ran, within=both_ran)
@@ -511,7 +513,7 @@ def no_submit_rate_by_setup(graded: pd.DataFrame) -> dict[str, float]:
     per_episode = episode_submitted(graded)
     episode_setup = graded[[*population.EPISODE_KEY, "arm"]].drop_duplicates(list(population.EPISODE_KEY))
     with_setup = per_episode.merge(episode_setup, on=list(population.EPISODE_KEY), how="left")
-    return {str(arm): float(group.never_submitted.mean()) for arm, group in with_setup.groupby("arm")}
+    return {str(setup): float(group.never_submitted.mean()) for setup, group in with_setup.groupby("arm")}
 
 
 #: The column :mod:`iteration_counts` writes for the judge's ``canonical_parallel_form`` MCP tool --
@@ -522,11 +524,11 @@ CPF_CALLS_COLUMN = "canonical_parallel_form_calls"
 
 
 def parse_iteration_counts(spec: str) -> tuple[str, pathlib.Path]:
-    """``ARM=path.csv`` -> ``(setup, path)``, the pairing ``--iteration-counts`` takes."""
-    arm, sep, path = spec.partition("=")
-    if not sep or not arm or not path:
-        raise SystemExit(f"--iteration-counts expects ARM=path.csv, got {spec!r}")
-    return arm, pathlib.Path(path)
+    """``SETUP=path.csv`` -> ``(setup, path)``, the pairing ``--iteration-counts`` takes."""
+    setup, sep, path = spec.partition("=")
+    if not sep or not setup or not path:
+        raise SystemExit(f"--iteration-counts expects SETUP=path.csv, got {spec!r}")
+    return setup, pathlib.Path(path)
 
 
 def cpf_uptake_by_setup(paths: dict[str, pathlib.Path]) -> dict[str, float]:
@@ -544,12 +546,12 @@ def cpf_uptake_by_setup(paths: dict[str, pathlib.Path]) -> dict[str, float]:
     existed), is simply absent from the result and prints as ``cpf_uptake`` NaN.
     """
     out: dict[str, float] = {}
-    for arm, path in paths.items():
+    for setup, path in paths.items():
         frame = pd.read_csv(path)
         if CPF_CALLS_COLUMN not in frame.columns or frame.empty:
             continue
         called = pd.to_numeric(frame[CPF_CALLS_COLUMN], errors="coerce").fillna(0) > 0
-        out[arm] = float(called.mean())
+        out[setup] = float(called.mean())
     return out
 
 
@@ -652,18 +654,18 @@ def setup_rows(
     episodes = population.last_per_episode(graded[graded.speedup > 0], SUBMISSION_ORDER)
     best = best.merge(episode_submitted(graded), on=list(population.EPISODE_KEY), how="left")
     rows: list[dict[str, object]] = []
-    for arm, item in sorted(table.items()):
-        mine_best = best[best.arm == arm]
+    for setup, item in sorted(table.items()):
+        mine_best = best[best.arm == setup]
         values = mine_best.speedup
         speed = floored_geomean(item.values)
-        mine = graded[graded.arm == arm]
-        n_served = len(served.get(arm, frozenset(item.kernels)))
-        spend = [value for (owner, _kernel), value in tokens.items() if owner == arm]
+        mine = graded[graded.arm == setup]
+        n_served = len(served.get(setup, frozenset(item.kernels)))
+        spend = [value for (owner, _kernel), value in tokens.items() if owner == setup]
         spend_interval = floored_geomean(spend)
-        used = usage.loc[arm] if arm in usage.index else None
+        used = usage.loc[setup] if setup in usage.index else None
         rows.append(
             {
-                "arm": arm,
+                "arm": setup,
                 "baseline": item.baseline,
                 "n_served": n_served,
                 # The kernels the setup DELIVERED, never the size of its population: under the served
@@ -673,7 +675,7 @@ def setup_rows(
                 "n_faster": int((values > 1.0).sum()),
                 "n_final_harvest": int((mine_best.optimizer == HARVESTED_TAG).sum()),
                 "n_never_submitted": int(mine_best.never_submitted.sum()),
-                "no_submit_rate": no_submit.get(arm, math.nan),
+                "no_submit_rate": no_submit.get(setup, math.nan),
                 "coverage": item.n_solved / n_served if n_served else math.nan,
                 "geomean_solved": item.geomean(),
                 "geomean_ci_low": speed[1],
@@ -688,7 +690,7 @@ def setup_rows(
                 "share_relaunched": float(used.share_relaunched) if used is not None else math.nan,
                 "tokens_crashed": int(used.tokens_crashed) if used is not None else 0,
                 "submissions": len(mine),
-                "episodes": len(episodes[episodes.arm == arm]),
+                "episodes": len(episodes[episodes.arm == setup]),
                 "jobs": int(mine.job.nunique()),
                 "tasks": int(used.tasks) if used is not None else 0,
                 "score_calls_per_task": float(used.score_calls_per_task) if used is not None else math.nan,
@@ -696,7 +698,7 @@ def setup_rows(
                 "accepted_submissions_per_task": (
                     float(used.accepted_submissions_per_task) if used is not None else math.nan
                 ),
-                "cpf_uptake": uptake.get(arm, math.nan),
+                "cpf_uptake": uptake.get(setup, math.nan),
             }
         )
     return rows
@@ -705,7 +707,7 @@ def setup_rows(
 def excluded_pairs(
     pairs: list[tuple[str, str]], kept: list[str], dropped: dict[str, int], roster_size: int
 ) -> tuple[list[tuple[str, str]], list[str]]:
-    """``pairs`` restricted to setups :func:`~hpcagent_bench.stats.population.complete_arms` kept, and
+    """``pairs`` restricted to setups :func:`~hpcagent_bench.stats.population.complete_setups` kept, and
     one note per pair it drops.
 
     A pair drops when EITHER setup is short of the roster: a leg pairing one setup's partial roster
@@ -717,9 +719,9 @@ def excluded_pairs(
     survivors: list[tuple[str, str]] = []
     notes: list[str] = []
     for setup_a, setup_b in pairs:
-        short = [(arm, dropped[arm]) for arm in (setup_a, setup_b) if arm not in keep]
+        short = [(setup, dropped[setup]) for setup in (setup_a, setup_b) if setup not in keep]
         if short:
-            detail = ", ".join(f"{arm} {n}/{roster_size}" for arm, n in short)
+            detail = ", ".join(f"{setup} {n}/{roster_size}" for setup, n in short)
             notes.append(f"excluding pair {setup_a},{setup_b} -- incomplete roster coverage: {detail}")
         else:
             survivors.append((setup_a, setup_b))
@@ -743,10 +745,10 @@ def declared_roster(path: pathlib.Path | None, observations: pd.DataFrame) -> li
 
 
 def parse_pair(spec: str) -> tuple[str, str]:
-    """``ARM_A,ARM_B`` -> ``(ARM_A, ARM_B)``: treatment ``a``, control ``b``; ``rho`` above 1 favors ``a``."""
+    """``SETUP_A,SETUP_B`` -> ``(SETUP_A, SETUP_B)``: treatment ``a``, control ``b``; ``rho`` above 1 favors ``a``."""
     setup_a, sep, setup_b = spec.partition(",")
     if not sep or not setup_a or not setup_b:
-        raise SystemExit(f"--pair expects ARM_A,ARM_B, got {spec!r}")
+        raise SystemExit(f"--pair expects SETUP_A,SETUP_B, got {spec!r}")
     return setup_a, setup_b
 
 
@@ -759,12 +761,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         type=pathlib.Path,
         help="an extracted observations .db or CSV; repeatable, to pair setups across two experiments",
     )
-    ap.add_argument("--pair", action="append", required=True, metavar="ARM_A,ARM_B", help="repeatable")
+    ap.add_argument("--pair", action="append", required=True, metavar="SETUP_A,SETUP_B", help="repeatable")
     ap.add_argument("--family", required=True, help="the family name the correction is declared over")
     ap.add_argument("--out", type=pathlib.Path, default=None, help="write the pairs CSV here")
     ap.add_argument(
         "--setups-out",
-        "--arms-out",
         dest="setups_out",
         type=pathlib.Path,
         default=None,
@@ -814,7 +815,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--iteration-counts",
         action="append",
         default=[],
-        metavar="ARM=path.csv",
+        metavar="SETUP=path.csv",
         help="an iteration_counts.py CSV for one cpf-packet setup; repeatable. Fills that setup's "
         "cpf_uptake (fraction of episodes that called the canonical_parallel_form tool); a setup "
         "named on no --iteration-counts reports cpf_uptake NaN",
@@ -822,17 +823,17 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     return ap.parse_args(argv)
 
 
-def setup_language(observations: pd.DataFrame, arm: str) -> str:
+def setup_language(observations: pd.DataFrame, setup: str) -> str:
     """``setup``'s language: its name's language token, else the language its rows recorded.
 
     A setup named by harness alone (``harness20-qwen38-claude``) carries no language token, while
     its rows record one; reading the name alone would call it a different language from the
     ``-c`` setup it is the control of.
     """
-    named = study_tags.language_of(arm)
+    named = study_tags.language_of(setup)
     if named or "language" not in observations.columns:
         return named
-    recorded = observations.loc[observations.arm == arm, "language"].dropna().astype(str)
+    recorded = observations.loc[observations.arm == setup, "language"].dropna().astype(str)
     recorded = recorded[recorded != ""]
     return str(recorded.mode().iloc[0]) if not recorded.empty else ""
 
@@ -840,7 +841,7 @@ def setup_language(observations: pd.DataFrame, arm: str) -> str:
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
     pairs = [parse_pair(spec) for spec in args.pair]
-    arms = sorted({arm for pair in pairs for arm in pair})
+    setups = sorted({setup for pair in pairs for setup in pair})
 
     card = cost.resolve(args.cost_model, args.cost_models)
     observations = load_observations(args.observations, card)
@@ -855,28 +856,28 @@ def main(argv: list[str]) -> int:
         raise SystemExit(f"a pair must share model and language: {unlike}")
     if args.baseline:
         observations = one_baseline(observations, args.baseline)
-    missing = [arm for arm in arms if arm not in set(observations.arm)]
+    missing = [setup for setup in setups if setup not in set(observations.arm)]
     if missing:
         raise SystemExit(f"no observations for {missing}")
 
     roster = declared_roster(args.roster_file, observations)
     if not args.include_incomplete:
-        kept, dropped = population.complete_setups(observations[observations.arm.isin(arms)], roster)
+        kept, dropped = population.complete_setups(observations[observations.arm.isin(setups)], roster)
         pairs, notes = excluded_pairs(pairs, kept, dropped, len(roster))
         for note in notes:
             print(f"note: {note}", file=sys.stderr)
         if not pairs:
             raise SystemExit("every pair was excluded for incomplete roster coverage; rerun with --include-incomplete")
-        arms = sorted({arm for pair in pairs for arm in pair})
+        setups = sorted({setup for pair in pairs for setup in pair})
 
-    graded = graded_rows(observations, arms)
+    graded = graded_rows(observations, setups)
     baseline = population.one_denominator(graded.baseline.tolist(), label="family")
-    best = best_by_setup_kernel(observations[observations.arm.isin(arms)], args.repeats)
-    served = served_by_setup(observations[observations.arm.isin(arms)])
+    best = best_by_setup_kernel(observations[observations.arm.isin(setups)], args.repeats)
+    served = served_by_setup(observations[observations.arm.isin(setups)])
     table = setup_aggregates(best, served, baseline, args.policy)
 
     tokens = tokens_by_setup_kernel(observations, args.repeats)
-    usage = task_usage(observations[observations.arm.isin(arms)], args.repeats)
+    usage = task_usage(observations[observations.arm.isin(setups)], args.repeats)
     no_submit = no_submit_rate_by_setup(graded)
     uptake = cpf_uptake_by_setup(dict(parse_iteration_counts(spec) for spec in args.iteration_counts))
     setup_frame = (

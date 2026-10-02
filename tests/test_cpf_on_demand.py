@@ -78,7 +78,7 @@ def dace_commit() -> str:
 
 
 @pytest.fixture
-def arm(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> tuple[pathlib.Path, pathlib.Path]:
+def setup(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> tuple[pathlib.Path, pathlib.Path]:
     """A cpu cpf setup configured the way run_cluster.sh configures its judge: a view that does not exist
     yet, the cache root, the setup language and the image's toolchain variables."""
     view, cache = tmp_path / "views" / "arm-cpu", tmp_path / "cache"
@@ -101,7 +101,7 @@ def get_form(url: str, kernel: str = KERNEL) -> dict[str, Any]:
 
 
 def test_a_miss_is_rendered_on_the_first_request_and_then_served(
-    arm: tuple[pathlib.Path, pathlib.Path], monkeypatch: pytest.MonkeyPatch, make_judge: JudgeFactory
+    setup: tuple[pathlib.Path, pathlib.Path], monkeypatch: pytest.MonkeyPatch, make_judge: JudgeFactory
 ) -> None:
     renderer = FakeRenderer()
     monkeypatch.setattr(cpf_bridge, "prerender_kernel", renderer)
@@ -113,9 +113,9 @@ def test_a_miss_is_rendered_on_the_first_request_and_then_served(
 
 
 def test_a_missing_view_is_created_pinned_to_the_setups_cache_target_and_dace(
-    arm: tuple[pathlib.Path, pathlib.Path], monkeypatch: pytest.MonkeyPatch, make_judge: JudgeFactory
+    setup: tuple[pathlib.Path, pathlib.Path], monkeypatch: pytest.MonkeyPatch, make_judge: JudgeFactory
 ) -> None:
-    view, cache = arm
+    view, cache = setup
     monkeypatch.setattr(cpf_bridge, "prerender_kernel", FakeRenderer())
     url = make_judge(RunConfig())[1]
     assert not view.exists()
@@ -130,7 +130,7 @@ def test_a_missing_view_is_created_pinned_to_the_setups_cache_target_and_dace(
 
 
 def test_a_concurrent_second_request_waits_for_the_first_render_instead_of_rendering_again(
-    arm: tuple[pathlib.Path, pathlib.Path], monkeypatch: pytest.MonkeyPatch, make_judge: JudgeFactory
+    setup: tuple[pathlib.Path, pathlib.Path], monkeypatch: pytest.MonkeyPatch, make_judge: JudgeFactory
 ) -> None:
     """Judge ranks share one view: two agents asking at once must not render the kernel twice."""
     renderer = FakeRenderer(delay=1.0)
@@ -175,9 +175,9 @@ def test_the_render_lock_excludes_a_second_process(tmp_path: pathlib.Path) -> No
 
 
 def test_a_recorded_failure_is_answered_and_never_rendered_again(
-    arm: tuple[pathlib.Path, pathlib.Path], monkeypatch: pytest.MonkeyPatch, make_judge: JudgeFactory
+    setup: tuple[pathlib.Path, pathlib.Path], monkeypatch: pytest.MonkeyPatch, make_judge: JudgeFactory
 ) -> None:
-    view = arm[0]
+    view = setup[0]
     renderer = FakeRenderer(verdict="fail")
     monkeypatch.setattr(cpf_bridge, "prerender_kernel", renderer)
     url = make_judge(RunConfig())[1]
@@ -190,10 +190,10 @@ def test_a_recorded_failure_is_answered_and_never_rendered_again(
 
 
 def test_an_unknown_kernel_is_answered_without_rendering_or_recording(
-    arm: tuple[pathlib.Path, pathlib.Path], monkeypatch: pytest.MonkeyPatch, make_judge: JudgeFactory
+    setup: tuple[pathlib.Path, pathlib.Path], monkeypatch: pytest.MonkeyPatch, make_judge: JudgeFactory
 ) -> None:
     """An agent can send any name; only a registry kernel may cost a render or a pointer file."""
-    view = arm[0]
+    view = setup[0]
     renderer = FakeRenderer()
     monkeypatch.setattr(cpf_bridge, "prerender_kernel", renderer)
     url = make_judge(RunConfig())[1]
@@ -204,9 +204,9 @@ def test_an_unknown_kernel_is_answered_without_rendering_or_recording(
 
 
 def test_a_view_pinned_to_another_dace_is_not_rendered_into(
-    arm: tuple[pathlib.Path, pathlib.Path], monkeypatch: pytest.MonkeyPatch, make_judge: JudgeFactory
+    setup: tuple[pathlib.Path, pathlib.Path], monkeypatch: pytest.MonkeyPatch, make_judge: JudgeFactory
 ) -> None:
-    view, cache = arm
+    view, cache = setup
     cpf_cache.open_view(view, cache, "cpu", "another-dace-commit")
     renderer = FakeRenderer()
     monkeypatch.setattr(cpf_bridge, "prerender_kernel", renderer)
