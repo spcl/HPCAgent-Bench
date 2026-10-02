@@ -422,8 +422,7 @@ RUN set -eux; \
       '        prefix: /opt/ofi-sdk' \
       '      buildable: false' \
       '  specs:' \
-      "  # -pipe: no /tmp/cc*.s files; 12 llvm units failed on truncated ones in the podman build (daint 4957900)." \
-      "  - llvm@${LLVM_VERSION} +clang +flang +mlir +polly +lld +offload +libomptarget targets=aarch64,nvptx cflags=-pipe cxxflags=-pipe" \
+      "  - llvm@${LLVM_VERSION} +clang +flang +mlir +polly +lld +offload +libomptarget targets=aarch64,nvptx" \
       '  # GPU-aware MPICH, no +slurm (its built-in PMI-1/2 client serves any srun); every variant is' \
       '  # judge-agent-amd step 4 with +cuda in place of +rocm. device=ch4 netmod=ofi reaches the' \
       '  # fabric through libfabric: the site supplies the provider (cxi on Alps via the CE hook).' \
@@ -475,7 +474,11 @@ RUN set -eux; \
       > /tmp/lockgate.py; \
     python3 /tmp/lockgate.py "${SPACK_ENV_DIR}/spack.lock"; \
     rm -f /tmp/lockgate.py; \
-    "${spack}" -e "${SPACK_ENV_DIR}" install --fail-fast "llvm@${LLVM_VERSION}"; \
+    # -pipe: no /tmp/cc*.s files; 12 llvm units failed on truncated ones in the podman build (daint 4957900). \
+    # Through the compiler wrapper's own override variables, not as `cflags=-pipe cxxflags=-pipe` on the \
+    # spec: llvm then failed in python's build hook with KeyError: no compiler-wrapper in the llvm spec (660463). \
+    SPACK_ALWAYS_CFLAGS=-pipe SPACK_ALWAYS_CXXFLAGS=-pipe \
+      "${spack}" -e "${SPACK_ENV_DIR}" install --fail-fast "llvm@${LLVM_VERSION}"; \
     spack-cache-push; \
     "${spack}" clean --stage
 
@@ -884,7 +887,7 @@ RUN set -eux; \
 # caller shares one OpenMP runtime (containers/lib/numpy_on_openblas.sh).
 ENV NUMBA_THREADING_LAYER=omp
 COPY containers/lib/numpy_on_openblas.sh containers/lib/one_openmp.sh containers/lib/openmp_gate.py /tmp/one-openmp/
-RUN sh /tmp/one-openmp/numpy_on_openblas.sh /opt/view /opt/hpcagent-bench && rm -rf /tmp/one-openmp
+RUN sh /tmp/one-openmp/numpy_on_openblas.sh /opt/view /opt/hpcagent-bench --extra nvgpu --group judge-proxy && rm -rf /tmp/one-openmp
 
 # cupy is the WHEEL here (the AMD image needs a HIP source build). jax: the plugin must match the
 # toolkit's CUDA major, or jax imports and finds no device. The lock's nvgpu extra carries the CUDA 13 pair;
@@ -1221,7 +1224,8 @@ COPY README.md LICENSE NOTICE /opt/hpcagent-bench/
 COPY containers/lib/package_hook.sh /tmp/package_hook.sh
 RUN set -eux; \
     sh /tmp/package_hook.sh /opt/hpcagent-bench /opt/hpcagent-bench/hpcagent_bench \
-      "$(python3 -c 'import sys; print(sys.prefix)')" --python "$(command -v python3)" --no-install-package hpcagent-agent; \
+      "$(python3 -c 'import sys; print(sys.prefix)')" --python "$(command -v python3)" --no-install-package hpcagent-agent \
+      --no-install-package numpy --no-install-package scipy --extra nvgpu --group judge-proxy; \
     rm -f /tmp/package_hook.sh
 
 # The hook exists and the package does not, and the firewall is asserted rather than trusted: neither the

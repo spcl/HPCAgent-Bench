@@ -495,8 +495,7 @@ RUN set -eux; \
       '        prefix: /opt/ofi-sdk' \
       '      buildable: false' \
       '  specs:' \
-      "  # -pipe: no /tmp/cc*.s files; 12 llvm units failed on truncated ones in the podman build (daint 4957900)." \
-      "  - llvm@${LLVM_VERSION} +clang +flang +mlir +polly +lld +offload +libomptarget targets=amdgpu,nvptx,x86 cflags=-pipe cxxflags=-pipe" \
+      "  - llvm@${LLVM_VERSION} +clang +flang +mlir +polly +lld +offload +libomptarget targets=amdgpu,nvptx,x86" \
       '  # ~slurm spelled out: left open, the concretizer reuses a cached +slurm build (654075),' \
       '  # which links one Slurm release, and the image must launch under any. NOT' \
       '  # pmi=pmix, which spack conflicts with +hydra: that would set --with-pm=no and remove' \
@@ -590,7 +589,11 @@ RUN set -eux; \
       > /tmp/lockgate.py; \
     python3 /tmp/lockgate.py "${SPACK_ENV_DIR}/spack.lock"; \
     rm -f /tmp/lockgate.py; \
-    "${spack}" -e "${SPACK_ENV_DIR}" install --fail-fast "llvm@${LLVM_VERSION}"; \
+    # -pipe: no /tmp/cc*.s files; 12 llvm units failed on truncated ones in the podman build (daint 4957900). \
+    # Through the compiler wrapper's own override variables, not as `cflags=-pipe cxxflags=-pipe` on the \
+    # spec: llvm then failed in python's build hook with KeyError: no compiler-wrapper in the llvm spec (660463). \
+    SPACK_ALWAYS_CFLAGS=-pipe SPACK_ALWAYS_CXXFLAGS=-pipe \
+      "${spack}" -e "${SPACK_ENV_DIR}" install --fail-fast "llvm@${LLVM_VERSION}"; \
     spack-cache-push; \
     "${spack}" clean --stage
 
@@ -1113,7 +1116,7 @@ RUN set -eux; \
 # caller shares one OpenMP runtime (containers/lib/numpy_on_openblas.sh).
 ENV NUMBA_THREADING_LAYER=omp
 COPY containers/lib/numpy_on_openblas.sh containers/lib/one_openmp.sh containers/lib/openmp_gate.py /tmp/one-openmp/
-RUN sh /tmp/one-openmp/numpy_on_openblas.sh /opt/view /opt/hpcagent-bench && rm -rf /tmp/one-openmp
+RUN sh /tmp/one-openmp/numpy_on_openblas.sh /opt/view /opt/hpcagent-bench --extra amdgpu --group judge-proxy && rm -rf /tmp/one-openmp
 
 # cupy is the GPU track's array module: every arch == "gpu" flavor stages its arrays through it,
 # so without it the GPU legs die at import and no dace_gpu column can exist at all. Built from
@@ -1133,7 +1136,8 @@ RUN set -eux; \
     CUPY_INSTALL_USE_HIP=1 ROCM_HOME=/opt/rocm HCC_AMDGPU_TARGET="$(echo "${ROCM_ARCH}" | tr ";" ",")" \
     CUPY_NUM_BUILD_JOBS="$(nproc)" UV_PROJECT_ENVIRONMENT=/opt/venv \
       uv sync --frozen --inexact --cache-dir /uv-cache --python "$(command -v python3)" --no-install-project \
-      --no-install-package hpcagent-agent --extra amdgpu --group judge-proxy --no-binary-package cupy; \
+      --no-install-package hpcagent-agent --no-install-package numpy --no-install-package scipy \
+      --extra amdgpu --group judge-proxy --no-binary-package cupy; \
     python3 -c "import cupy; print('cupy', cupy.__version__)"
 
 # Gate: cupy's device code targets exactly the ROCM_ARCH list.
@@ -1593,7 +1597,8 @@ COPY README.md LICENSE NOTICE /opt/hpcagent-bench/
 COPY containers/lib/package_hook.sh /tmp/package_hook.sh
 RUN set -eux; \
     sh /tmp/package_hook.sh /opt/hpcagent-bench /opt/hpcagent-bench/hpcagent_bench \
-      /opt/venv --python "$(command -v python3)" --no-install-package hpcagent-agent; \
+      /opt/venv --python "$(command -v python3)" --no-install-package hpcagent-agent \
+      --no-install-package numpy --no-install-package scipy --extra amdgpu --group judge-proxy; \
     rm -f /tmp/package_hook.sh
 
 # The hook exists and the package does not, and the firewall is asserted rather than trusted: neither the
