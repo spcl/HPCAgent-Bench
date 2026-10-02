@@ -73,14 +73,17 @@ def test_numpy_and_scipy_are_rebuilt_on_the_view_openblas_under_omp_numba(image:
     numba runs its OpenMP layer so every BLAS caller shares one runtime."""
     docker = (IMAGES / image / "Dockerfile").read_text(encoding="utf-8")
     assert "ENV NUMBA_THREADING_LAYER=omp" in docker
-    run = docker.index("RUN sh /tmp/one-openmp/numpy_on_openblas.sh /opt/view")
-    install = docker.index("--group /opt/hpcagent-bench/pyproject.toml:judge-proxy")
+    run = docker.index("RUN sh /tmp/one-openmp/numpy_on_openblas.sh /opt/view /opt/hpcagent-bench")
+    install = docker.index("--group judge-proxy")
     assert install < run, "the rebuild must follow the install that brings the wheels"
 
 
-def test_the_numpy_rebuild_keeps_the_versions_and_gates_concurrent_callers() -> None:
+def test_the_numpy_rebuild_is_the_locked_version_built_by_uv_sync_and_gates_concurrent_callers() -> None:
     script = (LIB / "numpy_on_openblas.sh").read_text(encoding="utf-8")
-    assert "--no-binary numpy" in script and "--no-binary scipy" in script
-    assert "-Dblas=openblas" in script and "-Dlapack=openblas" in script
-    assert '"numpy==${numpy_v}"' in script and '"scipy==${scipy_v}"' in script
+    assert "--no-binary-package numpy" in script and "--no-binary-package scipy" in script
+    assert "--reinstall-package numpy" in script and "--no-build-isolation-package scipy" in script
+    assert "numpy:setup-args=-Dblas=openblas" in script and "numpy:setup-args=-Dlapack=openblas" in script
+    assert "scipy:setup-args=-Dblas=openblas" in script and "scipy:setup-args=-Dlapack=openblas" in script
+    assert "uv sync --frozen --inexact" in script and "--group openblas-build" in script
+    assert "pip" not in script.replace("scipy-openblas", ""), "the rebuild is uv sync only"
     assert "numba.prange" in script and "2 * (os.cpu_count() or 1)" in script

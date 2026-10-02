@@ -1073,35 +1073,39 @@ RUN set -eux; \
 # ---------------------------------------------------------------------------------------------
 # 11. The python framework stack.
 #
-# Every framework the harness can dispatch to must import or an arm silently cannot run, and
-# numpy/scipy/pandas/astunparse must stay where the image put them: numpy computes every CPU
-# reference, so an install that quietly moves it moves the oracle too.
+# Every framework the harness can dispatch to must import or an arm silently cannot run.
 #
-# The dependencies are pyproject.toml's `amd` extra plus the judge-proxy group, in ONE uv resolution:
-# the pinned proxy stack (litellm 1.94.0, httpx2 2.12.0, anyio 4.14.2) is a constraint of the whole
-# install, not something discovered afterwards. Only pyproject.toml is copied, never the package
-# source; `-r pyproject.toml` installs the dependencies, not the project. uv comes from the pins
-# (agent/harness/pins.env, sha256-checked by install_tools.sh).
+# uv.lock decides every version, numpy/scipy/pandas included: ONE `uv sync --frozen --inexact` installs
+# pyproject.toml's `amd` extra plus the judge-proxy group into the base's venv /opt/venv (the image python),
+# so the pinned proxy stack (litellm 1.94.0, httpx2 2.12.0, anyio 4.14.2) is part of the single locked
+# resolution and not something discovered afterwards. Only pyproject.toml, uv.lock and agent/pyproject.toml
+# are copied, never the package source: --no-install-project and --no-install-package hpcagent-agent leave
+# both to the editable hooks of steps 13a and the judge stage (containers/lib/package_hook.sh), and
+# /opt/hpcagent-bench/agent links to /opt/hpcagent-bench-agent so that the workspace member is the directory
+# an agent step binds. uv comes from the pins (agent/harness/pins.env, sha256-checked by install_tools.sh).
 #
-# The `amd` extra names no `triton`: on this base that module comes from AMD's ROCm build, and PyPI's
-# `triton` is a DIFFERENT distribution that would overwrite the same site-packages/triton directory
-# with the upstream NVIDIA one. The ROCm triton is asserted intact afterwards.
+# The base provides its own build of torch (ROCm) and triton (AMD's): PyPI's torch is the CUDA build and
+# drags in triton, cuda-toolkit and the nvidia-* wheels, and PyPI's `triton` is a DIFFERENT distribution
+# that would overwrite the same site-packages/triton directory with the upstream NVIDIA one. All of them are
+# skipped, and the ROCm torch and triton are asserted intact afterwards. tests/test_portable_amd_image.py
+# checks the list against the lock.
 COPY agent/harness/pins.env agent/harness/install_tools.sh /opt/harness/
-COPY pyproject.toml /opt/hpcagent-bench/pyproject.toml
+COPY pyproject.toml uv.lock /opt/hpcagent-bench/
+COPY agent/pyproject.toml /opt/hpcagent-bench-agent/pyproject.toml
 RUN set -eux; \
     sh /opt/harness/install_tools.sh /usr/local; \
-    triton_before="$(python3 -c 'import importlib.metadata as m; \
-      print(next((d.metadata["Name"] for d in m.distributions() \
-      if d.metadata["Name"] and "triton" in d.metadata["Name"].lower()), ""))')"; \
-    printf 'triton distribution before: %s\n' "${triton_before:-none}"; \
-    uv pip install --python "$(command -v python3)" --break-system-packages --no-cache --upgrade setuptools wheel; \
-    printf 'dace\nhpcagent-agent\n' > /tmp/uv-excludes.txt; \
-    MPICC=/opt/view/bin/mpicc uv pip install --python "$(command -v python3)" --break-system-packages --no-cache \
-      --no-binary mpi4py --no-sources --excludes /tmp/uv-excludes.txt -r /opt/hpcagent-bench/pyproject.toml --extra amd \
-      --group /opt/hpcagent-bench/pyproject.toml:judge-proxy; \
-    if [ -z "${triton_before}" ]; then \
-      uv pip install --python "$(command -v python3)" --break-system-packages --no-cache pytorch-triton-rocm; \
-    fi; \
+    ln -s /opt/hpcagent-bench-agent /opt/hpcagent-bench/agent; \
+    skip=""; \
+    for package in torch triton cuda-bindings cuda-pathfinder cuda-toolkit nvidia-cublas nvidia-cuda-cupti \
+        nvidia-cuda-nvrtc nvidia-cuda-runtime nvidia-cudnn-cu13 nvidia-cufft nvidia-cufile nvidia-curand \
+        nvidia-cusolver nvidia-cusparse nvidia-cusparselt-cu13 nvidia-nccl-cu13 nvidia-nvjitlink \
+        nvidia-nvshmem-cu13 nvidia-nvtx; do \
+      skip="${skip} --no-install-package ${package}"; \
+    done; \
+    cd /opt/hpcagent-bench; \
+    MPICC=/opt/view/bin/mpicc UV_PROJECT_ENVIRONMENT=/opt/venv \
+      uv sync --frozen --inexact --no-cache --python "$(command -v python3)" --no-install-project \
+      --no-install-package hpcagent-agent ${skip} --no-binary-package mpi4py --extra amd --group judge-proxy; \
     python3 -c "import triton; print('triton', triton.__version__, triton.__file__)"; \
     python3 -c "import torch; assert torch.version.hip, 'torch lost its HIP build'; \
       print('torch', torch.__version__, 'hip', torch.version.hip)"; \
@@ -1112,7 +1116,7 @@ RUN set -eux; \
 # caller shares one OpenMP runtime (containers/lib/numpy_on_openblas.sh).
 ENV NUMBA_THREADING_LAYER=omp
 COPY containers/lib/numpy_on_openblas.sh containers/lib/one_openmp.sh containers/lib/openmp_gate.py /tmp/one-openmp/
-RUN sh /tmp/one-openmp/numpy_on_openblas.sh /opt/view && rm -rf /tmp/one-openmp
+RUN sh /tmp/one-openmp/numpy_on_openblas.sh /opt/view /opt/hpcagent-bench && rm -rf /tmp/one-openmp
 
 # JAX on ROCm is its own build: the CUDA recipe does not transfer, and PyPI's jaxlib is CPU and
 # CUDA only. AMD publishes wheels for this exact ROCm, so jaxlib and the plugin come from
@@ -1138,23 +1142,19 @@ RUN set -eux; \
 # source because there is no ROCm wheel -- the cupy-rocm-* lines are dead and PyPI carries only
 # the sdist. This is also why the AMD and CUDA judge/agent images cannot be one Dockerfile.
 #
-# numpy is CONSTRAINED to what is installed and the build fails if it moved: the sdist would
-# otherwise pull its own, moving the oracle the GPU results are graded against.
+# It is the root pyproject.toml's cupy-rocm group, so uv.lock decides the version and the numpy it builds
+# against; --no-binary-package keeps uv from looking for a wheel.
 #
 # NOT verified beyond the import: the first HIPRTC compile needs repair_hiprtc_include_path
 # (cupy flattens hipcc's include list and loses the -internal-isystem kinds, so device code dies
 # inside <initializer_list>). The harness applies that on the one path it imports cupy through,
 # so a bare device op here would fail for that reason and prove nothing.
-ARG CUPY_VERSION=14.2.0
 RUN set -eux; \
-    numpy_before="$(python3 -c 'import numpy; print(numpy.__version__)')"; \
-    printf 'numpy==%s\n' "${numpy_before}" > /tmp/constraint.txt; \
+    cd /opt/hpcagent-bench; \
     CUPY_INSTALL_USE_HIP=1 ROCM_HOME=/opt/rocm HCC_AMDGPU_TARGET="$(echo "${ROCM_ARCH}" | tr ";" ",")" \
-    CUPY_NUM_BUILD_JOBS="$(nproc)" \
-      uv pip install --python "$(command -v python3)" --break-system-packages --cache-dir /uv-cache --constraints /tmp/constraint.txt "cupy==${CUPY_VERSION}"; \
-    rm -f /tmp/constraint.txt; \
-    test "$(python3 -c 'import numpy; print(numpy.__version__)')" = "${numpy_before}" \
-      || { echo "cupy moved numpy off ${numpy_before}; the CPU reference oracle would change" >&2; exit 2; }; \
+    CUPY_NUM_BUILD_JOBS="$(nproc)" UV_PROJECT_ENVIRONMENT=/opt/venv \
+      uv sync --frozen --inexact --cache-dir /uv-cache --python "$(command -v python3)" --no-install-project \
+      --no-install-package hpcagent-agent --group cupy-rocm --no-binary-package cupy; \
     python3 -c "import cupy; print('cupy', cupy.__version__)"
 
 # Gate: cupy's device code targets exactly the ROCM_ARCH list.
@@ -1179,11 +1179,9 @@ RUN set -eux; \
 # therefore runs UNDER PYTHONSAFEPATH=1: without that it passes at build time only, because the
 # ENV that breaks it is set later in this file, and the breakage only appears in a job.
 #
-# astunparse is read TOLERANTLY, because at this point in the file it is not installed yet: it
-# arrives as a dependency of the editable dace install further down, so a bare `import astunparse`
-# exits non-zero, and under `set -e` an assignment whose only command is that substitution takes
-# the build down with it. The guard asks whether the version CHANGED, and "absent both times" is
-# a truthful answer to that; the ordering is what makes a hard import wrong here.
+# astunparse is read TOLERANTLY: a bare `import astunparse` exits non-zero when it is absent, and under
+# `set -e` an assignment whose only command is that substitution takes the build down with it. The
+# guard asks whether the version CHANGED, and "absent both times" is a truthful answer to that.
 ARG ROCPROF_COMPUTE_PANDAS=2.2.3
 RUN set -eux; \
     rc=/opt/rocm/libexec/rocprofiler-compute; \
@@ -1225,23 +1223,24 @@ assert got == want, got"; \
 
 # ---------------------------------------------------------------------------------------------
 # 12. DaCe -- the spcl/dace@extended commit build.sh resolves and passes in (the release pin,
-# pyproject.toml [tool.uv.sources] dace). Never `git clone --branch extended`: the layer cache keys on the command
-# STRING, which never changes, so every later rebuild would reuse the first clone and the image
+# pyproject.toml [tool.uv.sources] dace). Step 11 already installed it from uv.lock, so what this step adds is
+# the checkout at /opt/dace, which the jobs stamp their results with (/opt/dace.commit), and the proof that
+# the install and the checkout are one commit. Never `git clone --branch extended`: the layer cache keys on
+# the command STRING, which never changes, so every later rebuild would reuse the first clone and the image
 # would age into a pin nothing records. DACE_COMMIT is part of the key, so the layer rebuilds
 # exactly when the commit changes. Jobs run it as baked.
 ARG DACE_COMMIT
 RUN set -eux; \
     test -n "${DACE_COMMIT}" || { echo "DACE_COMMIT build-arg is required (build.sh resolves it)" >&2; exit 2; }; \
-    numpy_before="$(python3 -c 'import numpy; print(numpy.__version__)')"; \
     git init -q /opt/dace; \
     git -C /opt/dace remote add origin https://github.com/spcl/dace.git; \
     gitretry -C /opt/dace fetch -q --depth 1 origin "${DACE_COMMIT}"; \
     git -C /opt/dace checkout -q FETCH_HEAD; \
     gitretry -C /opt/dace submodule update --init --recursive --depth 1 -q; \
     git -C /opt/dace rev-parse HEAD > /opt/dace.commit; \
-    uv pip install --python "$(command -v python3)" --break-system-packages --no-cache -e /opt/dace; \
-    test "$(python3 -c 'import numpy; print(numpy.__version__)')" = "${numpy_before}" \
-      || { echo "the dace install moved numpy off ${numpy_before}" >&2; exit 2; }; \
+    test "$(python3 -c "import importlib.metadata as m, json; \
+      print(json.loads(m.distribution('dace').read_text('direct_url.json'))['vcs_info']['commit_id'])")" \
+      = "${DACE_COMMIT}" || { echo "the dace in uv.lock is not ${DACE_COMMIT}: run uv lock" >&2; exit 2; }; \
     python3 -c "import dace; print('dace', dace.__version__)"
 
 # ---------------------------------------------------------------------------------------------
@@ -1275,29 +1274,23 @@ RUN set -eux; \
     man -w gcc >/dev/null || { echo "manpages missing: unminimize did not take" >&2; exit 1; }
 
 # ---------------------------------------------------------------------------------------------
-# 13a. Isolated venvs for the Python harnesses (mini-SWE-agent, OpenHands) on the base's
-# python${HARNESS_PYTHON}, kept off the system python so their deps cannot displace system
-# litellm[proxy]==1.94.0. Each installs pyproject.toml's harness-<name> group, which carries none of
-# the project's own dependencies. Prompts and tool scripts are bound from the submitting checkout at
-# launch, so the image carries their dependencies only.
+# 13a. The hpcagent_agent hook (driver, MCP tools, harness runners) in the image python, and the isolated venvs
+# for the Python harnesses (mini-SWE-agent, OpenHands) on the base's python${HARNESS_PYTHON}, kept off the
+# system python so their deps cannot displace system litellm[proxy]==1.94.0. Each venv is
+# `uv sync --package hpcagent-agent --group harness-<name>` from uv.lock, which carries none of the
+# project's own dependencies and gives the venv the same hook. An agent step binds the submitting checkout's
+# agent/ at /opt/hpcagent-bench-agent, and that is the whole setup (containers/lib/package_hook.sh). No
+# agent code is in the image; prompts and tool scripts are bound at launch, so the image carries their
+# dependencies only.
+COPY containers/lib/package_hook.sh /tmp/package_hook.sh
 RUN set -eux; \
     . /opt/harness/pins.env; \
     for venv in miniswe openhands; do \
-      uv venv --python "/usr/bin/python${HARNESS_PYTHON}" "/opt/harness/${venv}"; \
-      uv pip install --python "/opt/harness/${venv}/bin/python" --no-cache \
-        --group "/opt/hpcagent-bench/pyproject.toml:harness-${venv}"; \
-    done
-
-# The hpcagent_agent hook (driver, MCP tools, harness runners) in the image python and in each harness venv:
-# an agent step binds the submitting checkout's agent/ at the hook's root, and that is the whole
-# setup (containers/lib/package_hook.sh). No agent code is in the image.
-COPY agent/pyproject.toml /opt/hpcagent-bench-agent/pyproject.toml
-COPY containers/lib/package_hook.sh /tmp/package_hook.sh
-RUN set -eux; \
-    sh /tmp/package_hook.sh /opt/hpcagent-bench-agent hpcagent_agent "$(command -v python3)" --break-system-packages; \
-    for venv in miniswe openhands; do \
-      sh /tmp/package_hook.sh /opt/hpcagent-bench-agent hpcagent_agent "/opt/harness/${venv}/bin/python"; \
+      sh /tmp/package_hook.sh /opt/hpcagent-bench /opt/hpcagent-bench-agent/hpcagent_agent "/opt/harness/${venv}" \
+        --python "/usr/bin/python${HARNESS_PYTHON}" --package hpcagent-agent --group "harness-${venv}"; \
     done; \
+    sh /tmp/package_hook.sh /opt/hpcagent-bench /opt/hpcagent-bench-agent/hpcagent_agent \
+      /opt/venv --python "$(command -v python3)" --package hpcagent-agent; \
     rm -f /tmp/package_hook.sh
 
 # Agent and judge tool scripts are bound from the submitting checkout at launch (run_cluster.sh);
@@ -1642,7 +1635,8 @@ ENV HPCAGENT_BENCH_ML_KERNELBENCH_DIR=/opt/kernelbench/KernelBench
 COPY README.md LICENSE NOTICE /opt/hpcagent-bench/
 COPY containers/lib/package_hook.sh /tmp/package_hook.sh
 RUN set -eux; \
-    sh /tmp/package_hook.sh /opt/hpcagent-bench hpcagent_bench "$(command -v python3)" --break-system-packages; \
+    sh /tmp/package_hook.sh /opt/hpcagent-bench /opt/hpcagent-bench/hpcagent_bench \
+      /opt/venv --python "$(command -v python3)" --no-install-package hpcagent-agent; \
     rm -f /tmp/package_hook.sh
 
 # The hook exists and the package does not, and the firewall is asserted rather than trusted: neither the

@@ -16,7 +16,7 @@ uv sync --extra cpu                        # --extra nvidia / --extra amd on a G
 pre-commit install
 ```
 
-A dace checkout of your own goes over it with `uv pip install -e <dace checkout>`. After changing a dependency
+A dace checkout of your own replaces the pin through `[tool.uv.sources]` in your working copy. After changing a dependency
 or the dace pin, run `uv lock` and commit `uv.lock` with it.
 
 On a cluster, source `hpcagent_bench/cluster/env.sh`: it loads the site layer, names the host interpreter

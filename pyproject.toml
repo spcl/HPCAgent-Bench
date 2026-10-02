@@ -1,6 +1,7 @@
-# The ONLY dependency list: package metadata, extras, the harness venvs' groups and the dace pin.
-# The images install from this file without the package source (`uv pip install -r pyproject.toml
-# --extra ...` installs the dependencies, never the project), so it holds nothing hidden.
+# The ONLY dependency list, with agent/pyproject.toml (the harness venvs' groups): package metadata, extras,
+# groups and the dace pin, all resolved into uv.lock. The images `uv sync --frozen` from this file and the lock
+# without the package source (`--no-install-project` installs the dependencies, never the project), so it
+# holds nothing hidden.
 [build-system]
 # 77: the first setuptools that reads the PEP 639 `license` expression and `license-files`.
 requires = ["setuptools>=77"]
@@ -77,8 +78,8 @@ numpyto_pythran = "hpcagent_bench.translators.numpyto_pythran.cli:main"
 # Exactly one of cpu / amd / nvidia is a COMPLETE install for that hardware: the grading stack, every
 # framework baseline, the judge, HF export, the agent clients and the developer tools ([dev]). Harbor
 # itself is the adapter's dependency (adapters/hpcagent_bench/pyproject.toml): its rich>=14.1 cannot
-# share an environment with the judge-proxy group below. The images install one of them (`uv pip install -r pyproject.toml --extra
-# amd`); they differ only in the accelerator builds.
+# share an environment with the judge-proxy group below. The images install one of them (`uv sync --frozen
+# --extra amd`); they differ only in the accelerator builds.
 [project.optional-dependencies]
 cpu = [
     "hpcagent_bench[dev]",
@@ -99,9 +100,8 @@ cpu = [
     "z3-solver",
     # The upstream KernelBench models the machine_learning ports are compared against import it.
     "einops",
-    # A CPU box installs torch from PyTorch's CPU index first (the PyPI wheel is the CUDA build); an
-    # index cannot be named in a PEP 508 requirement. On the AMD image torch, jax's ROCm plugin and
-    # triton come from the ROCm base image, not PyPI.
+    # The cpu extra takes torch from PyTorch's CPU index ([tool.uv.sources]; the PyPI wheel is the CUDA
+    # build). The AMD and CUDA images skip the locked torch and triton at install: both come from the base.
     "torch",
     "jax",
     # tvm.s_tir and tvm.tirx (frameworks/tvm_build.py) first ship in 0.25.
@@ -130,8 +130,8 @@ cpu = [
     "transformers",
     "accelerate",
 ]
-amd = ["hpcagent_bench[cpu]"]
-nvidia = ["hpcagent_bench[cpu]", "jax[cuda13]", "cupy-cuda13x", "triton"]
+amd = ["hpcagent_bench[cpu,dev]"]
+nvidia = ["hpcagent_bench[cpu,dev]", "jax[cuda13]", "cupy-cuda13x", "triton"]
 # The Sphinx build of docs/ (`sphinx-build -W -b html docs docs/_build`).
 docs = ["sphinx", "myst-parser", "furo"]
 # Tests and formatters, also part of every hardware extra so the suite runs inside each image.
@@ -162,16 +162,12 @@ judge-proxy = [
     "httpx2==2.12.0",  # the proxy stack the recorded setups ran
     "anyio==4.14.2",  # the proxy stack the recorded setups ran
 ]
-# The Python agent harnesses, each in its own image venv (/opt/harness/<name>) so its deps cannot
-# displace the judge's pinned proxy stack. Groups, not extras: a group installs without the
-# project's own dependencies.
-harness-miniswe = [
-    "mini-swe-agent==2.4.6",  # the harness the recorded miniswe setups ran
-]
-harness-openhands = [
-    "openhands-sdk==1.47.0",  # the harness the recorded openhands setups ran
-    "openhands-tools==1.47.0",  # the harness the recorded openhands setups ran
-]
+# numpy_on_openblas.sh rebuilds the locked numpy and scipy from source on the image's OpenBLAS: scipy builds
+# without isolation, so its build tools are installed into the environment first.
+openblas-build = ["meson-python", "Cython", "pybind11", "pythran<0.19", "patchelf"]
+# The AMD images' cupy: no ROCm wheel exists, so it is the PyPI sdist built for HIP (CUPY_INSTALL_USE_HIP=1,
+# --no-binary-package cupy). The nvidia extra carries the CUDA wheel instead.
+cupy-rocm = ["cupy==14.2.0"]
 # `hpcagent-bench harbor run`: the Harbor CLI and the compose frontend its podman backend drives,
 # in their own venv (harbor>=0.23 needs rich>=14, which litellm's judge-proxy stack refuses).
 harbor = ["harbor>=0.23.0", "podman-compose>=1.6"]
@@ -199,7 +195,13 @@ environments = ["sys_platform == 'linux'"]
 # rich<14; harbor and the OpenHands tools need rich>=14).
 conflicts = [
     [{ extra = "cpu" }, { extra = "amd" }, { extra = "nvidia" }],
-    [{ group = "judge-proxy" }, { group = "harbor" }, { group = "harness-miniswe" }, { group = "harness-openhands" }],
+    [{ group = "cupy-rocm" }, { extra = "nvidia" }],
+    [
+        { group = "judge-proxy" },
+        { group = "harbor" },
+        { package = "hpcagent-agent", group = "harness-miniswe" },
+        { package = "hpcagent-agent", group = "harness-openhands" },
+    ],
 ]
 
 [tool.setuptools]
