@@ -2500,14 +2500,8 @@ def literal_stack_bytes(size: str, c_type: str) -> int | None:
 
 
 def alloc_check(name: str, nbytes: str, indent: str) -> str:
-    """Abort with the array and byte count when its ``malloc`` returned NULL.
-
-    A refused allocation (an armed ``RLIMIT_DATA`` cap, an exhausted node) would otherwise surface as a
-    SIGSEGV at the first write, which reads like a miscompile."""
-    return (
-        f"{indent}if ({name} == NULL && {nbytes} != 0) {{ fprintf(stderr, "
-        f'"out of memory: %zu bytes for {name}\\n", {nbytes}); abort(); }}'
-    )
+    """The prelude's ``__npb_alloc_check`` on ``name`` right after its ``malloc``."""
+    return f'{indent}__npb_alloc_check({name}, {nbytes}, "{name}");'
 
 
 def byte_count(size: str, c_type: str) -> str:
@@ -2918,6 +2912,15 @@ C_HEADER = (
     "static inline NPB_HD double _Complex __npb_conj(double _Complex z) {\n"
     "    return conj(z);\n"
     "}\n"
+    "/* A refused ``malloc`` (an armed ``RLIMIT_DATA`` cap, an exhausted node) aborts naming the\n"
+    " * array and byte count instead of surfacing as a SIGSEGV at the first write. A function, so\n"
+    " * the kernel body stays free of control flow pet / pluto would have to model. */\n"
+    "static inline void __npb_alloc_check(const void *p, size_t nbytes, const char *name) {\n"
+    "    if (p == NULL && nbytes != 0) {\n"
+    '        fprintf(stderr, "out of memory: %zu bytes for %s\\n", nbytes, name);\n'
+    "        abort();\n"
+    "    }\n"
+    "}\n"
     "/* M_PI / M_E etc. are POSIX/GNU extensions -- ensure they\n"
     " * are defined even on strict-C builds (glibc 2.27+ /\n"
     " * BSDs / MSVC). */\n"
@@ -3074,6 +3077,17 @@ CPP_ARITH = (
     "#include <type_traits>\n"
     "#include <cstring>\n#include <cstdlib>\n#include <cstdio>\n"
     + NPB_HD_GUARD
+    + (
+        "/* A refused ``malloc`` (an armed ``RLIMIT_DATA`` cap, an exhausted node) aborts naming the\n"
+        " * array and byte count instead of surfacing as a SIGSEGV at the first write. A function, so\n"
+        " * the kernel body stays free of control flow pet / pluto would have to model. */\n"
+        "static inline void __npb_alloc_check(const void *p, std::size_t nbytes, const char *name) {\n"
+        "    if (p == nullptr && nbytes != 0) {\n"
+        '        std::fprintf(stderr, "out of memory: %zu bytes for %s\\n", nbytes, name);\n'
+        "        std::abort();\n"
+        "    }\n"
+        "}\n"
+    )
     + "// Math constants as typed constexpr values. ``<cmath>`` may\n"
     "// predefine M_PI / M_E as macros (glibc __USE_MISC); undefine\n"
     "// them so the names rebind to our constexpr values -- we emit no\n"
