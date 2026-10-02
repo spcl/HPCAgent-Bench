@@ -146,6 +146,16 @@ def test_the_agent_gets_its_tools_and_launch_directory_read_only_and_never_the_r
 
 
 @pytest.mark.parametrize("runtime", RUNTIMES)
+@pytest.mark.parametrize(("role", "mounted"), [("judge-node", True), ("merge-node", True), ("agent-node", False)])
+def test_the_judge_image_gets_the_checkout_where_its_editable_install_looks(
+    tmp_path: pathlib.Path, runtime: str, role: str, mounted: bool
+) -> None:
+    done = wrap(tmp_path, runtime, role)
+    assert done.returncode == 0, done.stderr
+    assert (f"{tmp_path}/repo:/opt/hpcagent-bench" in " ".join(done.wrap)) is mounted
+
+
+@pytest.mark.parametrize("runtime", RUNTIMES)
 def test_an_extra_bind_source_reaches_every_runtime_at_its_own_path(tmp_path: pathlib.Path, runtime: str) -> None:
     cache = tmp_path / "generated-cache"
     done = wrap(tmp_path, runtime, "prepare", extra=(str(cache),))
@@ -211,6 +221,11 @@ if __name__ == "__main__":
             test_podman_and_docker_run_the_image_on_the_host_network_with_the_job_env(
                 fresh(f"run-{container}"), container
             )
+        for container in RUNTIMES:
+            for name, flag in (("judge-node", True), ("merge-node", True), ("agent-node", False)):
+                test_the_judge_image_gets_the_checkout_where_its_editable_install_looks(
+                    fresh(f"pkg-{container}-{name}"), container, name, flag
+                )
         for container in RUNTIMES:
             test_the_agent_gets_its_tools_and_launch_directory_read_only_and_never_the_repo(
                 fresh(f"agent-{container}"), container
