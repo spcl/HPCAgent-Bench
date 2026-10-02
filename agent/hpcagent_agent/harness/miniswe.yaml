@@ -74,7 +74,7 @@ environment:
     PAGER: cat
     MANPAGER: cat
     LESS: -R
-    PIP_PROGRESS_BAR: 'off'
+    UV_NO_PROGRESS: '1'
     TQDM_DISABLE: '1'
 model:
   cost_tracking: ignore_errors

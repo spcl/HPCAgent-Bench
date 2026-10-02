@@ -338,7 +338,7 @@ def one_openmp_gate(_target: str) -> tuple[bool, str]:
     The build's own gate (containers/lib/one_openmp.sh), asked again of the finished image, so a copy a
     later layer or a pulled image reintroduced is caught. Exit 3 is two runtimes; anything else is a crash."""
     code, out = run(
-        [sys.executable, str(REPO_ROOT / "containers" / "lib" / "one_openmp_gate.py")], timeout=900.0, cwd="/"
+        [sys.executable, str(REPO_ROOT / "containers" / "lib" / "openmp_gate.py"), "one"], timeout=900.0, cwd="/"
     )
     tail = out.splitlines()[-1][:300] if out else "no output"
     return code == 0, tail
@@ -349,9 +349,9 @@ def omp_context_gate(target: str) -> tuple[bool, str]:
     torch (gnu) all run multi-threaded on the ONE runtime the context names, every wheel that may bundle a
     runtime is imported, and the BLAS numpy maps is the context's own (llvm, nvhpc).
 
-    containers/lib/omp_context_gate.py re-executes itself under the context's environment, as the judge
+    `containers/lib/openmp_gate.py context` re-executes itself under the context's environment, as the judge
     starts a grading child of that family. ``target`` is the context. Exit 3 is a second runtime, 4 a serial team."""
-    argv = [sys.executable, str(REPO_ROOT / "containers" / "lib" / "omp_context_gate.py"), "--context", target]
+    argv = [sys.executable, str(REPO_ROOT / "containers" / "lib" / "openmp_gate.py"), "context", "--context", target]
     argv += ["--wheels", "--torch"] if target == "gnu" else ["--blas-in-context"]
     code, out = run(argv, timeout=1800.0, cwd="/")
     tail = out.splitlines()[-1][:300] if out else "no output"
@@ -359,10 +359,10 @@ def omp_context_gate(target: str) -> tuple[bool, str]:
 
 
 def omp_context_scan(_target: str) -> tuple[bool, str]:
-    """Every OpenMP-linked library of every context resolves ONLY that context's runtime (omp_context_scan.py),
+    """Every OpenMP-linked library of every context resolves ONLY that context's runtime (`openmp_gate.py scan`),
     and numpy, scipy and numba carry no absolute RPATH that would pin them to one context's BLAS."""
     code, out = run(
-        [sys.executable, str(REPO_ROOT / "containers" / "lib" / "omp_context_scan.py")],
+        [sys.executable, str(REPO_ROOT / "containers" / "lib" / "openmp_gate.py"), "scan"],
         timeout=1800.0,
         cwd="/",
     )
@@ -401,7 +401,7 @@ def pytest_file(target: str) -> tuple[bool, str]:
 
 
 #: Agent runtime -> the absolute interpreter the driver EXECs and one import proving the venv is
-#: whole. hpcagent_bench/cluster/harnesses.py names the same paths; this catches an image that was PULLED
+#: whole. agent/hpcagent_agent/driver/harnesses.py names the same paths; this catches an image that was PULLED
 #: rather than built from this recipe, which the Dockerfile's own build gate cannot see.
 HARNESS_RUNTIMES = {
     "miniswe": ("/opt/harness/miniswe/bin/python", "minisweagent.agents.default"),

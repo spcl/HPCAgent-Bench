@@ -11,11 +11,9 @@ agent as the verdict alone -- correct yes/no and the request id; everything else
 the recorded answer.
 """
 
-import importlib.util
 import json
 import pathlib
 import re
-import sys
 import threading
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -25,12 +23,12 @@ from urllib.parse import urlparse
 
 import pytest
 
+from tests.fresh_module import fresh
 from tests.optional_imports import import_or_skip
 
 if TYPE_CHECKING:
     from fastapi.testclient import TestClient
 
-SERVICE = pathlib.Path(__file__).resolve().parents[1] / "hpcagent_bench" / "cluster" / "judge_service.py"
 
 #: A submission body of the shape the judge takes, including the rank and run id every request must name.
 SUBMISSION = {"kernel": "gemm", "language": "c", "source": "void gemm(void){}", "rank": 3, "run_id": "setup.n0.p1.w1"}
@@ -111,12 +109,7 @@ def upstream() -> Iterator[str]:
 def service() -> ModuleType:
     import_or_skip("fastapi")
     import_or_skip("httpx")
-    spec = importlib.util.spec_from_file_location("judge_service_example", SERVICE)
-    module = importlib.util.module_from_spec(spec)
-    # Registered BEFORE exec: dataclasses resolves a string annotation through
-    # sys.modules[cls.__module__], which is None for a module loaded by path alone.
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
+    module = fresh("hpcagent_bench.cluster.judge_service")
     return module
 
 
@@ -399,7 +392,7 @@ def test_the_read_relay_leaves_other_methods_answered_by_the_router(
 #: static prefix up to the first path parameter or the whole literal for a route with none. This is
 #: the class of bug ``/canonical_parallel_form`` was: a tool calling a path this router never
 #: declared a handler for, forwarded to a 404 the agent cannot recover from.
-TOOLS_DIR = pathlib.Path(__file__).resolve().parents[1] / "agent" / "tools"
+TOOLS_DIR = pathlib.Path(__file__).resolve().parents[1] / "agent" / "hpcagent_agent" / "tools"
 JUDGE_CALL_PATTERN = re.compile(r'(get|post)_judge\(\s*\n?\s*f?"(/[^"{]*)')
 
 

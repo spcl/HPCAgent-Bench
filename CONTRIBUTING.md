@@ -7,15 +7,17 @@ Set up, lint, test, and find the page for the thing you are adding. Normative sp
 
 ## Development setup
 
-Python 3.12 or newer. Every hardware extra includes the dev tools (the `dev` extra):
+Python 3.12 or newer and [uv](https://docs.astral.sh/uv/). Every hardware extra includes the dev tools (the
+`dev` extra); `uv.lock` pins every dependency, dace at the spcl/dace@extended commit `[tool.uv.sources]` names:
 
 ```sh
-python -m venv .venv && . .venv/bin/activate
-pip install --upgrade "pip>=25.1"
-pip install -e ".[cpu]"                    # .[nvidia] / .[amd] on a GPU host
-scripts/install_dace.sh                    # dace: the pinned spcl/dace@extended commit
+uv sync --extra cpu                        # --extra nvidia / --extra amd on a GPU host
+. .venv/bin/activate
 pre-commit install
 ```
+
+A dace checkout of your own goes over it with `uv pip install -e <dace checkout>`. After changing a dependency
+or the dace pin, run `uv lock` and commit `uv.lock` with it.
 
 On a cluster, source `hpcagent_bench/cluster/env.sh`: it loads the site layer, names the host interpreter
 (`HPCAGENT_BENCH_HOST_PYTHON`) and sets `PYTHONHASHSEED=0` ([docs/configuration.md](docs/configuration.md)).
@@ -82,9 +84,9 @@ run them as CI does:
 docker run --rm --privileged -v "$PWD:/repo" -w /repo ubuntu:24.04 bash -c '
   apt-get update -qq && apt-get install -y -qq python3 python3-venv build-essential gfortran \
     pkg-config libopenblas-dev libfftw3-dev liblapacke-dev &&
-  python3 -m venv /venv && /venv/bin/pip install -q --upgrade pip &&
-  /venv/bin/pip install -q -e ".[dev]" &&
-  /venv/bin/python -m pytest -q -rfEs -m sealed tests/'
+  apt-get install -y -qq curl && curl -LsSf https://astral.sh/uv/install.sh | sh &&
+  ~/.local/bin/uv sync --frozen --extra dev &&
+  .venv/bin/python -m pytest -q -rfEs -m sealed tests/'
 ```
 
 ## Docs
@@ -94,7 +96,7 @@ page is added there. CI (the `docs` job) fails on any warning and on a Markdown 
 that does not exist:
 
 ```bash
-pip install -e ".[docs]"
+uv sync --extra docs
 python scripts/checks/check_doc_links.py
 sphinx-build -W --keep-going -b html docs docs/_build
 ```

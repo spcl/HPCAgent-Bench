@@ -18,7 +18,6 @@ it is reimplemented, only cross-checked against :func:`hpcagent_bench.packets.re
 itself the module's own oracle for "what does this spec compose".
 """
 
-import importlib.util
 import json
 import os
 import pathlib
@@ -28,11 +27,13 @@ from types import ModuleType
 
 import pytest
 
-from hpcagent_bench import study_tags as tags, packets
+from hpcagent_bench import packets
+from hpcagent_bench import study_tags as tags
+from tests.fresh_module import fresh
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 EXPERIMENTS = REPO / "hpcagent_bench" / "cluster"
-MCP_SERVER = REPO / "agent" / "tools" / "mcp_server.py"
+MCP_SERVER = REPO / "agent" / "hpcagent_agent" / "tools" / "mcp_server.py"
 MATERIALIZE = EXPERIMENTS / "materialize_shared.sh"
 KERNEL = "loop_level_reasoning/argmax_value/argmax_value"
 
@@ -130,9 +131,9 @@ def tool_names(env: dict[str, str]) -> set[str]:
 
 def method_tool_stems(agent_packet: str) -> set[str]:
     """The extra tool stems ``AGENT_PACKET=<agent_packet>`` adds: every ``*.py`` under its
-    ``agent/packets/<name>/`` directory, the same glob ``mcp_server.py`` runs."""
-    directory = REPO / "agent" / "packets" / agent_packet
-    return {p.stem for p in directory.glob("*.py")} if directory.is_dir() else set()
+    ``agent/hpcagent_agent/packets/<name>/`` directory, the same glob ``mcp_server.py`` runs."""
+    directory = REPO / "agent" / "hpcagent_agent" / "packets" / agent_packet
+    return {p.stem for p in directory.glob("*.py") if p.stem != "__init__"} if directory.is_dir() else set()
 
 
 @pytest.mark.parametrize("key", REGISTERED_KEYS)
@@ -165,10 +166,7 @@ def test_no_registered_key_other_than_cpf_ever_serves_the_canonical_parallel_for
 
 
 def load_make_problems() -> ModuleType:
-    spec = importlib.util.spec_from_file_location("make_problems_isolation_matrix", EXPERIMENTS / "make_problems.py")
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    module = fresh("hpcagent_bench.cluster.make_problems")
     return module
 
 

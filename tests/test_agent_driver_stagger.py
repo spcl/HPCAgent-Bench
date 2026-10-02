@@ -6,16 +6,13 @@ Measured on 604479: with every agent submitted to the pool at the same instant, 
 with mcp_servers status "failed", and an agent without its MCP server has no submit tool at all.
 """
 
-import importlib
-import pathlib
-
-EXAMPLE = pathlib.Path(__file__).resolve().parents[1] / "hpcagent_bench" / "cluster"
+from tests.fresh_module import DRIVER_DIR, fresh
 
 
 def load_driver(monkeypatch, **env):
     for key, value in env.items():
         monkeypatch.setenv(key, value)
-    return importlib.reload(importlib.import_module("agent_driver"))
+    return fresh("agent_driver")
 
 
 def test_the_stagger_is_on_by_default(monkeypatch) -> None:
@@ -55,6 +52,6 @@ def test_both_mcp_budgets_are_raised() -> None:
     """An agent whose MCP server reports "failed" has no submit tool and records nothing. Claude
     Code has TWO budgets and the connect one defaults to 5 s -- raising only the 30 s startup
     budget leaves the tighter of the pair in place."""
-    source = (EXAMPLE / "agent_driver.py").read_text()
+    source = (DRIVER_DIR / "agent_driver.py").read_text()
     assert 'environment.setdefault("MCP_TIMEOUT"' in source
     assert 'environment.setdefault("MCP_CONNECT_TIMEOUT_MS"' in source

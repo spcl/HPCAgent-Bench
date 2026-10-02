@@ -5,8 +5,8 @@
   "//4": "reportMissingTypeStubs is off: scipy and several other deps ship no stubs, which is a fact",
   "//5": "about them rather than about this code.",
   "include": [
-    "hpcagent_bench/cluster/agent_driver.py",
-    "hpcagent_bench/cluster/seal_worker.py",
+    "agent/hpcagent_agent/driver/agent_driver.py",
+    "agent/hpcagent_agent/driver/seal_worker.py",
     "hpcagent_bench/config.py",
     "hpcagent_bench/study_tags.py",
     "hpcagent_bench/frameworks/native_framework.py",

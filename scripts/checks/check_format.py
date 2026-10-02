@@ -214,7 +214,7 @@ def main(argv: list[str] | None = None) -> int:
     missing = [TOOLS[lang] for lang, files in by_lang.items() if files and shutil.which(TOOLS[lang]) is None]
     if missing:
         print(
-            f"error: missing formatter(s): {', '.join(sorted(set(missing)))} (pip install ruff fprettify clang-format)",
+            f"error: missing formatter(s): {', '.join(sorted(set(missing)))} (uv sync --extra dev)",
             file=sys.stderr,
         )
         return 2

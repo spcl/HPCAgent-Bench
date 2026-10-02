@@ -20,7 +20,7 @@ import shutil
 import subprocess
 from typing import Any
 
-import http_json
+from hpcagent_agent.tools import http_json
 
 #: One parse is seconds of work; anything beyond this is a compiler stuck on pathological input, and
 #: an agent turn blocked on it is worse than the diagnostic it was waiting for.

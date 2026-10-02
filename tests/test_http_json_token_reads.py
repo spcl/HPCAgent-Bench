@@ -20,7 +20,7 @@ REPO = pathlib.Path(__file__).resolve().parents[1]
 
 def load_http_json() -> ModuleType:
     """The container's ``http_json`` tool, loaded the way the container does: by path, stdlib only."""
-    path = REPO / "agent" / "tools" / "http_json.py"
+    path = REPO / "agent" / "hpcagent_agent" / "tools" / "http_json.py"
     spec = importlib.util.spec_from_file_location("http_json_token_reads", path)
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module

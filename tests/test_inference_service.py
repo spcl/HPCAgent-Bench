@@ -16,10 +16,8 @@ value reaches the worker and reaches nothing else.
 """
 
 import http.server
-import importlib.util
 import json
 import pathlib
-import sys
 import threading
 import types
 from collections.abc import Iterator
@@ -29,9 +27,9 @@ import pytest
 
 from hpcagent_bench.harness.agent import anthropic_usage, http_chat_json
 from tests.env_render import rendered
+from tests.fresh_module import fresh
 
 EXPERIMENTS = pathlib.Path(__file__).resolve().parents[1] / "hpcagent_bench" / "cluster"
-AGENT_HARNESS = pathlib.Path(__file__).resolve().parents[1] / "agent" / "harness"
 
 #: A key value no other string in these cases spells, so a leak search cannot match by accident.
 SECRET = "sk-test-1nf3r3nc3-s3rv1c3-l34k-c4n4ry"
@@ -46,25 +44,14 @@ def messages_url(base_url: str) -> str:
     return f"{base_url.rstrip('/')}/messages"
 
 
-def load(name: str, path: pathlib.Path) -> types.ModuleType:
-    """Import a module by path, the way the driver loads the launcher's helpers."""
-    spec = importlib.util.spec_from_file_location(name, path)
-    if spec is None or spec.loader is None:
-        raise AssertionError(f"cannot load {path}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
 @pytest.fixture(name="service")
 def service_fixture() -> types.ModuleType:
-    return load("inference_service", EXPERIMENTS / "inference_service.py")
+    return fresh("inference_service")
 
 
 @pytest.fixture(name="runner_common")
 def runner_common_fixture(monkeypatch: pytest.MonkeyPatch) -> types.ModuleType:
-    return load("runner_common", AGENT_HARNESS / "runner_common.py")
+    return fresh("runner_common")
 
 
 def openai_setup(**overrides: str) -> dict[str, str]:

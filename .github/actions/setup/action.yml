@@ -1,18 +1,22 @@
 name: "HPCAgent-Bench CI setup"
 description: >
-  Python, the native toolchain (GCC 16, LLVM 22, OpenBLAS, FFTW, LAPACKE), dace from the extended
-  branch tip and the project with its extras, in ONE pip resolution per job. Optionally a
-  per-job ccache and the vendor compilers. Pair with ./.github/actions/finish at the end of a job.
+  Python, the native toolchain (GCC 16, LLVM 22, OpenBLAS, FFTW, LAPACKE), and the project's `cpu`
+  environment from uv.lock (dace at the pinned spcl/dace@extended commit), one `uv sync` per job.
+  Optionally a per-job ccache and the vendor compilers. Pair with ./.github/actions/finish at the end of a job.
 
 inputs:
   python-version:
     description: Interpreter version; defaults to the workflow's PYTHON_VERSION.
     required: false
     default: ""
-  pip-args:
+  sync-args:
     description: >
-      Extra pip arguments, e.g. "--no-binary mpi4py" to build against a local MPI, or
-      "-e ./adapters/hpcagent_bench" for harbor.
+      Extra `uv sync` arguments, e.g. "--no-binary-package mpi4py" to build against a local MPI, or
+      "--group harbor" for the harbor checks.
+    required: false
+    default: ""
+  editable:
+    description: Extra local packages installed editable over the synced environment, e.g. "./adapters/hpcagent_bench".
     required: false
     default: ""
   ccache:
@@ -170,34 +174,35 @@ runs:
       shell: bash
       run: sudo sysctl -w vm.mmap_rnd_bits=28 >/dev/null 2>&1 || true
 
-    - name: DaCe checkout (extended branch tip, editable)
+    - name: uv (the release pinned in agent/harness/pins.env)
       shell: bash
       run: |
-        # A checkout, not a wheel: the submodules carry the runtime headers (moodycamel).
         set -euo pipefail
-        HPCAGENT_BENCH_HOST_PYTHON=python scripts/install_dace.sh --editable "${RUNNER_TEMP}/dace"
+        sh agent/harness/install_tools.sh "$HOME/.local" uv
+        echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-    - name: Python deps (one resolution per job)
+    - name: Python deps (uv.lock, one environment per job)
       shell: bash
       run: |
         set -euo pipefail
-        pip_retry() { for i in 1 2 3 4 5; do python -m pip install "$@" && return 0; echo "pip attempt $i failed; retrying in $((i*5))s"; sleep $((i*5)); done; return 1; }
-        python -m pip install --upgrade pip
-        # CPU torch first: the default PyPI wheel drags ~2.5 GB of CUDA wheels.
-        pip_retry --index-url https://download.pytorch.org/whl/cpu torch
-        # The `cpu` extra is the complete install (frameworks, judge, agent clients, dev tools); dace
-        # is not an extra: the editable checkout above already satisfies it.
-        # shellcheck disable=SC2086 -- pip-args is a flag list
-        pip_retry -e ".[cpu]" ${{ inputs.pip-args }}
-        echo "dace @ $(git -C "${RUNNER_TEMP}/dace" rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
-        # A dependency that caps dace (gt4py 1.2.2 did) makes pip swap the pinned checkout for a PyPI
-        # release without an error; every dace test would then grade the wrong compiler.
-        python - "${RUNNER_TEMP}/dace" <<'PY'
-        import pathlib, sys
-        import dace
-        where = pathlib.Path(dace.__file__).resolve()
-        if pathlib.Path(sys.argv[1]).resolve() not in where.parents:
-            sys.exit(f"dace imports from {where}, not the pinned checkout {sys.argv[1]}")
+        # The `cpu` extra is the complete install (frameworks, judge, agent clients, dev tools), torch from
+        # PyTorch's CPU index and dace at the pinned commit, exactly as uv.lock records them.
+        # shellcheck disable=SC2086 -- sync-args and editable are flag/path lists
+        uv sync --frozen --extra cpu --python "$(command -v python)" ${{ inputs.sync-args }}
+        if [ -n "${{ inputs.editable }}" ]; then
+          # shellcheck disable=SC2086
+          uv pip install --python .venv/bin/python --no-deps $(printf -- '-e %s ' ${{ inputs.editable }})
+        fi
+        echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+        echo "VIRTUAL_ENV=$PWD/.venv" >> "$GITHUB_ENV"
+        # dace must be the pinned commit: a dependency that caps dace would otherwise swap in a PyPI release.
+        .venv/bin/python - "$(scripts/dace_pin.sh)" <<'PY'
+        import sys
+        from hpcagent_bench import cpf_canonical
+        got = cpf_canonical.dace_commit()
+        if got != sys.argv[1]:
+            sys.exit(f"dace is {got}, not the pin {sys.argv[1]}")
+        print(f"dace @ {got}")
         PY
         # No DACE_compiler_build_mode here: a DACE_* env var outranks Config.set and would defeat
         # dace_framework.BUILD_CACHE_PINS (tests/test_dace_flavors.py).

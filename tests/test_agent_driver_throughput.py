@@ -10,24 +10,18 @@ It is measurement, so it must never be able to end a run: a replica that errors,
 usage block, an unwritable run dir all cost the sample and nothing else.
 """
 
-import importlib.util
 import json
-import pathlib
-import sys
 import urllib.error
 from types import ModuleType
 
 import pytest
 
-EXAMPLE = pathlib.Path(__file__).resolve().parents[1] / "hpcagent_bench" / "cluster"
+from tests.fresh_module import fresh
 
 
 def load_example_module(name: str) -> ModuleType:
     """``sys.modules`` must carry the module BEFORE exec, matching tests/test_validate_run.py."""
-    spec = importlib.util.spec_from_file_location(name, EXAMPLE / f"{name}.py")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
+    module = fresh(name)
     return module
 
 

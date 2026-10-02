@@ -91,7 +91,7 @@ def main() -> int:
     try:
         found = offenders(paths)
     except FileNotFoundError:
-        print("error: ruff is not on PATH (pip install ruff)", file=sys.stderr)
+        print("error: ruff is not on PATH (uv sync --extra dev)", file=sys.stderr)
         return 1
 
     if not found:

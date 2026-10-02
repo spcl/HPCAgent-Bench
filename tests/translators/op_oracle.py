@@ -444,7 +444,7 @@ def run_jax_leg(
     Not forked: an xdist worker already runs threads (execnet I/O, BLAS and OpenMP pools), a jax child
     forked from it can deadlock on a lock one of them held, and that child then holds the execnet pipe
     and wedges the session. The spawned child unpickles :func:`jax_leg_child` by module name through
-    the parent's ``sys.path`` (the repo root, pytest's ``pythonpath``).
+    the parent's ``sys.path``, which multiprocessing hands to a spawned child (pytest's rootdir puts the repo root on it).
     """
     if importlib.util.find_spec("jax") is None:
         return "skip:not-installed"

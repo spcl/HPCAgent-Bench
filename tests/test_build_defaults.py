@@ -105,7 +105,7 @@ def test_mounts_and_a_local_base_copy_do_not_move_the_fingerprint(repo: pathlib.
         repo,
         "agent",
         "-v",
-        "/somewhere:/pip-cache:rw",
+        "/somewhere:/uv-cache:rw",
         "--build-arg",
         "ROCM_ARCH=gfx90a",
         "--build-arg",
@@ -185,13 +185,13 @@ def test_the_layer_store_survives_only_with_the_cache_on(
 
 
 def test_the_cache_knob_off_mounts_no_build_cache(repo: pathlib.Path) -> None:
-    done = bash('ce_cache_args spack pip >/dev/null; printf "%s" "${#CACHE_ARGS[@]}"', repo, {"CE_BUILD_CACHE": "0"})
+    done = bash('ce_cache_args spack uv >/dev/null; printf "%s" "${#CACHE_ARGS[@]}"', repo, {"CE_BUILD_CACHE": "0"})
     assert (done.returncode, done.stdout) == (0, "0"), done.stderr
 
 
 def test_the_cache_knob_on_mounts_the_spack_and_pip_caches(repo: pathlib.Path, tmp_path: pathlib.Path) -> None:
     done = bash(
-        'ce_cache_args spack-buildcache pip-cache/gfx90a >/dev/null; printf "%s\\n" "${CACHE_ARGS[@]}"',
+        'ce_cache_args spack-buildcache uv-cache/gfx90a >/dev/null; printf "%s\\n" "${CACHE_ARGS[@]}"',
         repo,
         {"SCRATCH": str(tmp_path)},
     )
@@ -200,5 +200,5 @@ def test_the_cache_knob_on_mounts_the_spack_and_pip_caches(repo: pathlib.Path, t
         "-v",
         f"{tmp_path}/spack-buildcache:/spack-buildcache:rw",
         "-v",
-        f"{tmp_path}/pip-cache/gfx90a:/pip-cache:rw",
+        f"{tmp_path}/uv-cache/gfx90a:/uv-cache:rw",
     ]

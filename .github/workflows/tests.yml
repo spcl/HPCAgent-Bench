@@ -85,7 +85,8 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
           # harbor: test_harbor.py checks task.toml against Harbor's own model.
-          pip-args: "-e ./adapters/hpcagent_bench"
+          sync-args: "--group harbor"
+          editable: "./adapters/hpcagent_bench"
           ccache: unit-${{ matrix.python }}-${{ matrix.shard }}
           # Only shard 0 carries an nvc++ case (test_parallelism_dispatch.py); the floor leg runs none.
           vendor-compilers: ${{ matrix.shard == 0 && 'nvhpc' || '' }}
@@ -105,22 +106,20 @@ jobs:
         if: ${{ matrix.shard == 'floor' && !cancelled() }}
         run: |
           python - <<'PY'
-          import importlib, pathlib, pkgutil, hpcagent_bench
+          import importlib, pkgutil, hpcagent_agent, hpcagent_bench
           # GPU-only packages: the amd/nvidia extras (and the ROCm base image) ship them, the CPU
           # install this leg runs does not. A module that needs one is skipped by name, never
           # silently: any other missing module still fails the leg.
           GPU_ONLY = {"triton", "cupy"}
-          # The cluster directory holds scripts that import their siblings by bare name; pytest's
-          # pythonpath names that directory, so the collection below is what imports those.
-          SIBLINGS = {p.stem for p in (pathlib.Path(hpcagent_bench.__file__).parent / "cluster").glob("*.py")}
           names = [m.name for m in pkgutil.walk_packages(hpcagent_bench.__path__, "hpcagent_bench.")
                    if ".benchmarks." not in m.name]
+          names += [m.name for m in pkgutil.walk_packages(hpcagent_agent.__path__, "hpcagent_agent.")]
           skipped = []
           for name in names:
               try:
                   importlib.import_module(name)
               except ModuleNotFoundError as exc:
-                  if (exc.name or "").split(".")[0] not in GPU_ONLY | SIBLINGS:
+                  if (exc.name or "").split(".")[0] not in GPU_ONLY:
                       raise
                   skipped.append(f"{name} (needs {exc.name})")
           print(f"imported {len(names) - len(skipped)} modules; skipped {skipped}")
@@ -537,7 +536,7 @@ jobs:
           sudo apt-get update && sudo apt-get install -y --no-install-recommends openmpi-bin libopenmpi-dev python3-dev
       - uses: ./.github/actions/setup
         with:
-          pip-args: "--no-binary mpi4py"
+          sync-args: "--no-binary-package mpi4py"
           ccache: mpi
         env:
           MPICC: mpicc
@@ -757,11 +756,11 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-      - name: Setup -- the GPU extra and dace (the pin)
+      - name: Setup -- the GPU extra (uv.lock, dace at the pin)
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e ".[${{ inputs.gpu_vendor }}]"
-          HPCAGENT_BENCH_HOST_PYTHON=python scripts/install_dace.sh
+          sh agent/harness/install_tools.sh "$HOME/.local" uv
+          "$HOME/.local/bin/uv" sync --frozen --extra "${{ inputs.gpu_vendor }}" --python "$(command -v python)"
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
       - name: Hardware groups (GPU device, profilers, ROCm/CUDA toolchain)
         if: ${{ !cancelled() }}
         timeout-minutes: 30
@@ -791,8 +790,9 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
       - name: Setup -- the docs extra
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install ".[docs]"
+          sh agent/harness/install_tools.sh "$HOME/.local" uv
+          "$HOME/.local/bin/uv" sync --frozen --extra docs --python "$(command -v python)"
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
       - name: Markdown links resolve to existing repo paths
         run: python scripts/checks/check_doc_links.py
       - name: Sphinx build (warnings are errors)
@@ -819,8 +819,9 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
       - name: Setup -- the coverage tool
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e ".[dev]"
+          sh agent/harness/install_tools.sh "$HOME/.local" uv
+          "$HOME/.local/bin/uv" sync --frozen --extra dev --python "$(command -v python)"
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
       # Not merge-multiple: every artifact holds a `.coverage`, and flattening them keeps one.
       - name: Download every job's coverage data
         uses: actions/download-artifact@v7

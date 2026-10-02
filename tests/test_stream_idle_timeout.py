@@ -8,7 +8,6 @@ ceiling -- so raising it further is not possible, only checking that the ceiling
 installed CLI enforces, and that the arithmetic which justifies sitting at it is right.
 """
 
-import importlib.util
 import pathlib
 import subprocess
 import sys
@@ -16,16 +15,14 @@ import types
 
 import pytest
 
-SCRIPT = pathlib.Path(__file__).resolve().parents[1] / "hpcagent_bench" / "cluster" / "stream_idle_timeout.py"
+from tests.fresh_module import fresh
+
+SCRIPT = pathlib.Path(__file__).resolve().parents[1] / "agent" / "hpcagent_agent" / "driver" / "stream_idle_timeout.py"
 
 
 @pytest.fixture(name="module", scope="module")
 def module_fixture() -> types.ModuleType:
-    spec = importlib.util.spec_from_file_location("stream_idle_timeout", SCRIPT)
-    assert spec is not None and spec.loader is not None
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = mod
-    spec.loader.exec_module(mod)
+    mod = fresh("stream_idle_timeout")
     return mod
 
 

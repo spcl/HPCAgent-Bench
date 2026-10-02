@@ -13,10 +13,10 @@ import platform
 import re
 import shutil
 import subprocess
-import tomllib
 from typing import Any
 
 import pytest
+import tomllib
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 CE = ROOT / "containers" / "images"
@@ -153,8 +153,8 @@ def test_the_build_passes_both_targets_and_the_dockerfile_defaults_to_native() -
 
 
 def test_the_pip_wheel_cache_is_keyed_by_the_target_list() -> None:
-    """pip keys a built cupy wheel by its sdist, not by HCC_AMDGPU_TARGET."""
-    assert 'ce_cache_args spack-buildcache "pip-cache/${ROCM_ARCH//;/-}"' in (RECIPE / "image.sh").read_text(
+    """uv keys a built cupy wheel by its sdist, not by HCC_AMDGPU_TARGET."""
+    assert 'ce_cache_args spack-buildcache "uv-cache/${ROCM_ARCH//;/-}"' in (RECIPE / "image.sh").read_text(
         encoding="utf-8"
     )
 

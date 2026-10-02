@@ -11,26 +11,20 @@ directly instead of trusting the CLI to notice its own silence, so this class of
 the setup's own derived idle budget again, not by a 20h wall clock nobody wants to wait out.
 """
 
-import importlib.util
 import os
 import pathlib
 import subprocess
-import sys
 import time
 from types import ModuleType
 
 import pytest
 
-EXAMPLE = pathlib.Path(__file__).resolve().parents[1] / "hpcagent_bench" / "cluster"
+from tests.fresh_module import fresh
 
 
 def load_example_module(name: str) -> ModuleType:
     """``sys.modules`` must carry the module BEFORE exec, matching tests/test_agent_driver_context.py."""
-    spec = importlib.util.spec_from_file_location(name, EXAMPLE / f"{name}.py")
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
+    module = fresh(name)
     return module
 
 
@@ -97,7 +91,7 @@ def test_threshold_reads_the_setups_own_derived_idle_timeout(driver: ModuleType)
 def test_a_missing_or_garbage_env_value_falls_back_to_the_clis_own_ceiling(
     driver: ModuleType, raw: dict[str, str]
 ) -> None:
-    ceiling_s = driver.stream_idle_timeout_module().CEILING_MS / 1000.0
+    ceiling_s = driver.stream_idle_timeout.CEILING_MS / 1000.0
     assert driver.dead_stream_threshold_seconds(raw) == ceiling_s
 
 

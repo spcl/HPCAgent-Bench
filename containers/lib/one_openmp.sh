@@ -14,10 +14,10 @@
 # scikit-learn, xgboost, ...) -- becomes a link to the file the image compiler (CC, else gcc) ships.
 # The loader keys objects by file, so a wheel that names its own copy maps the compiler's.
 #
-# Run it AFTER the last layer that can install an OpenMP runtime (a later pip install of a wheel
+# Run it AFTER the last layer that can install an OpenMP runtime (a later uv pip install of a wheel
 # that bundles one puts a copy back), and it is safe to run again. LLVM's libgomp shim (a link to
 # libomp) and libiomp5/libomp copies are not GNU libgomp: they are left alone, and the gate fails
-# when one is mapped. openmp_runtimes.py and one_openmp_gate.py (COPYed beside this script) do the counting.
+# when one is mapped. openmp_gate.py (COPYed beside this script) does the counting.
 set -eu
 ulimit -c 0
 gate=1
@@ -60,6 +60,6 @@ done
 rm -f "${gomp_versions}"
 [ "${gate}" = 1 ] || exit 0
 
-# The gate: one_openmp_gate.py runs numba prange calling BLAS, a gcc -fopenmp library and a torch op
+# The gate: `openmp_gate.py one` runs numba prange calling BLAS, a gcc -fopenmp library and a torch op
 # in one process, imports every other wheel that may bundle a runtime, and asserts one is mapped.
-NUMBA_THREADING_LAYER=omp "${py}" "${here}/one_openmp_gate.py"
+NUMBA_THREADING_LAYER=omp "${py}" "${here}/openmp_gate.py" one

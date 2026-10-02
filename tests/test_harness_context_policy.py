@@ -10,17 +10,13 @@ the reply caps a launcher may configure: a harness comparison must not also comp
 points.
 """
 
-import importlib.util
 import math
-import pathlib
-import sys
 from types import ModuleType
 
 import pytest
 
 from tests.env_render import BASES, rendered
-
-EXPERIMENTS = pathlib.Path(__file__).resolve().parents[1] / "hpcagent_bench" / "cluster"
+from tests.fresh_module import fresh
 
 #: (served window, launcher reply cap) -> (L, R, T).
 POLICY = {
@@ -32,11 +28,7 @@ POLICY = {
 
 
 def load(name: str) -> ModuleType:
-    spec = importlib.util.spec_from_file_location(name, EXPERIMENTS / f"{name}.py")
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
+    module = fresh(name)
     return module
 
 

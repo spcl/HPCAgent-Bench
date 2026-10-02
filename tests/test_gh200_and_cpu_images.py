@@ -13,10 +13,10 @@ import os
 import pathlib
 import subprocess
 import sys
-import tomllib
 from types import ModuleType
 
 import pytest
+import tomllib
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 CE = ROOT / "containers" / "images"
@@ -242,7 +242,7 @@ def test_the_agent_driver_reads_the_daint_window_off_the_serve_command(model: st
     """claude-code compacts against agent_driver.served_context; a spelling it cannot read falls back to
     the 262144 cap and overflows a 131072 server."""
     _, window, _, _ = SERVED[model]
-    driver = load(ROOT / "hpcagent_bench" / "cluster" / "agent_driver.py", "gh200_cpu_agent_driver")
+    driver = load(ROOT / "agent" / "hpcagent_agent" / "driver" / "agent_driver.py", "gh200_cpu_agent_driver")
     assert driver.served_context({"VLLM_EXTRA_ARGS": argv(serve(model))}) == window
 
 

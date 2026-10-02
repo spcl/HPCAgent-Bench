@@ -74,7 +74,7 @@ and re-checks the pinned numpy/scipy/pandas/astunparse versions.
 
 * cupy: the wheel on CUDA, a HIP source build on AMD; jax: the plugin for the base's CUDA major.
 * triton: the build the base's torch was compiled with, never PyPI's over it.
-* dace: `spcl/dace@extended` at the release pin (`dace-pin` in `pyproject.toml`); jobs run it as baked.
+* dace: `spcl/dace@extended` at the release pin (`[tool.uv.sources] dace` in `pyproject.toml`); jobs run it as baked.
 * islpy and z3 back `WavefrontSkew` and the `LoopToMap` dependence proof, and both gates fail
   closed and silent. The build asserts `polyhedral_isl.HAVE_ISL` and `smt_dependence.has_z3()`, not
   merely the imports.
@@ -82,8 +82,8 @@ and re-checks the pinned numpy/scipy/pandas/astunparse versions.
 ## Load-bearing details
 
 * **No `dace` directory in the CWD.** A plain `dace/` directory on `sys.path` shadows the editable
-  install as an empty namespace package. `verify_image.py` probes from `/`; jobs whose workdir holds
-  a `dace/` checkout must put the intended tree on `PYTHONPATH`.
+  install as an empty namespace package. `verify_image.py` probes from `/`, and the EDFs set
+  `PYTHONSAFEPATH=1`, which keeps the CWD off `sys.path`.
 * **rocprof-compute runs in its own venv.** ROCm installs the tool without its Python dependencies,
   and installing its `requirements.txt` into the image environment pins `astunparse==1.6.2` (moving
   the graded stack) and still fails on pandas 3. `/opt/rocprof-compute-venv` carries pandas 2 and
@@ -100,7 +100,7 @@ and re-checks the pinned numpy/scipy/pandas/astunparse versions.
 * **LD_PRELOAD (mimalloc) and `PYTHONSAFEPATH=1` are set last**, after every `RUN`.
 * **The EDF restates `PATH` and `LD_LIBRARY_PATH` absolutely** (the Container Engine drops the image
   `ENV`): `/opt/gcc/bin` and `/opt/view/bin` ahead of `/usr/bin`, and on AMD `/opt/venv/bin` (the base
-  venv every `pip install` lands in). A prefix missing there is missing at run time.
+  venv every `uv pip install` lands in). A prefix missing there is missing at run time.
 * **The build mirror rewrite is removed** from the shipped image's git config.
 
 ## Fabric
@@ -131,7 +131,7 @@ each an environment knob:
   is kept between jobs, so a failed build resubmitted to the same node (`--nodelist=<node>`, printed
   at the start of the build) resumes from its last good layer. The spack binary buildcache
   (`$SPACK_BUILDCACHE`, default `$SCRATCH/spack-buildcache[-<arch>]`) and the pip wheel cache
-  (`$PIP_CACHE`, default `$SCRATCH/pip-cache[/<gpu arch>]`) live on scratch and resume on any node;
+  (`$UV_BUILD_CACHE`, default `$SCRATCH/uv-cache[/<gpu arch>]`) live on scratch and resume on any node;
   the Dockerfiles use them when mounted. The kept store occupies node RAM (tmpfs) until the next
   build on that node. `CE_BUILD_CACHE=0` wipes the store, builds with `--no-cache` and mounts
   neither cache. The digest-pinned base image copy (`$BASE_CACHE`) is not a build cache and stays.

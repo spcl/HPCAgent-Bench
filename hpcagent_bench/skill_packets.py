@@ -18,8 +18,8 @@ What a class may provide (``docs/extending/registry.md`` has the full table):
   ``openmp-<language>`` when that page exists; ``*`` means every shipped page.
 * ``packets``: other registered keys this one composes, resolved recursively.
 * ``env``: KEY -> value switches; a value may hold ``${VAR}``, filled from the caller's environment.
-* ``method``: a directory under ``agent/packets/`` (``AGENT_PACKET``), at most one per resolved packet.
-* ``tools``: MCP tools this packet CARRIES, served by ``agent/tools/mcp_server.py`` only in its setups;
+* ``method``: a directory under ``agent/hpcagent_agent/packets/`` (``AGENT_PACKET``), at most one per resolved packet.
+* ``tools``: MCP tools this packet CARRIES, served by ``agent/hpcagent_agent/tools/mcp_server.py`` only in its setups;
   the pages in ``skills`` are then that tool's manual, which ``*`` does not pick up.
 * ``device``: ``cpu``, ``amd`` or ``nvidia``, whose tools the pages teach; resolving it for a language that
   device does not run is refused.

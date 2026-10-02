@@ -39,6 +39,8 @@ DEFAULT_MAX_KB = 500
 #: still caught, just at a threshold no hand-written module reaches by accident.
 DEFAULT_MAX_TEXT_KB = 1024
 BYTES_PER_KB = 1024
+#: Generated files the repo must commit whatever their size: uv.lock pins every dependency of every environment.
+LOCK_FILES = frozenset({"uv.lock"})
 
 
 def staged_files() -> list[str]:
@@ -73,7 +75,7 @@ def oversized(paths: list[str], max_bytes: int, max_text_bytes: int) -> Iterator
     """Yield ``(path, size_bytes, limit_bytes)`` for each existing regular file over its limit."""
     for rel in paths:
         path = Path(rel)
-        if not path.is_file():  # deletions / submodules / gone paths
+        if not path.is_file() or path.name in LOCK_FILES:  # deletions / submodules / gone paths / locks
             continue
         size = path.stat().st_size
         limit = max_text_bytes if is_text(path) else max_bytes

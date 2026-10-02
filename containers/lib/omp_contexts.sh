@@ -33,7 +33,7 @@
 # OMP_REQUIRE_NVHPC=1 makes a missing NVHPC a failure instead of an image without the nvhpc context.
 #
 # Run it AFTER the last layer that can install an OpenMP runtime or an llvm-view library, and BEFORE
-# omp_context_gate.py; it is safe to run again.
+# `openmp_gate.py context`; it is safe to run again.
 set -eu
 ulimit -c 0
 check_only=0

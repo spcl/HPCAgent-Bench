@@ -1,7 +1,7 @@
 # Build inputs of the AMD judge and agent images, sourced by ../build.sh. One portable image for every
 # AMD partition: device code for gpu_arch.env's AMD targets and cpu_target.env's baseline CPU, whichever
 # partition builds it. `judge` is `FROM agent` plus the hpcagent_bench install, so both targets cost
-# the agent build plus a pip layer. The build context is the repository root: the Dockerfile COPYs
+# the agent build plus a uv layer. The build context is the repository root: the Dockerfile COPYs
 # pyproject.toml and the harness build inputs from agent/harness; tool scripts are bound at launch.
 
 # A core dump lands in the crashing process's CWD (the checkout) and Slurm propagates the
@@ -23,14 +23,14 @@ ce_image_args() {
 }
 
 # The 30 GB rocm/pytorch base comes from the scratch cache; spack's binary buildcache (gcc 16 and
-# llvm 22 are 60-80 minutes) and the pip wheel cache survive between jobs outside the image. The pip
-# cache is keyed by the GPU target list: pip keys a built wheel by its sdist, not HCC_AMDGPU_TARGET.
+# llvm 22 are 60-80 minutes) and the uv wheel cache survive between jobs outside the image. The uv
+# cache is keyed by the GPU target list: uv keys a built wheel by its sdist, not HCC_AMDGPU_TARGET.
 ce_image_inputs() {
     ce_require_kernelbench
     ce_mirror_args
     ce_require_mirror_commit "spcl/dace.git" "${DACE_COMMIT}"
     ce_require_mirror_commit "ofiwg/libfabric.git" "${LIBFABRIC_COMMIT}"
     ce_cache_base_image
-    ce_cache_args spack-buildcache "pip-cache/${ROCM_ARCH//;/-}"
+    ce_cache_args spack-buildcache "uv-cache/${ROCM_ARCH//;/-}"
     INPUT_ARGS=("${MIRROR_ARGS[@]}" "${CACHE_ARGS[@]}")
 }

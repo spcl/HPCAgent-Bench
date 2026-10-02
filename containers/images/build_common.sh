@@ -3,7 +3,7 @@
 # and every <image>/image.sh calls its helpers.
 #
 # Build defaults (IMAGE_REQUIREMENTS.md "Build defaults"), each an environment knob:
-#   CE_BUILD_CACHE=1  keep the node's podman layer store and mount the spack buildcache and pip
+#   CE_BUILD_CACHE=1  keep the node's podman layer store and mount the spack buildcache and uv
 #                     cache, so a failed build resumes from its last good layer; 0 builds cold.
 #   CE_PULL=1         before building, pull the registry image whose build-inputs label matches
 #                     this checkout (ce_pull_wanted); only = pull the tag or fail; 0 = always build.
@@ -50,20 +50,20 @@ ce_podman_env() {
     [[ "${CE_BUILD_CACHE}" == 1 ]] || CE_BUILD_FLAGS=(--no-cache)
 }
 
-# Sets CACHE_ARGS: the spack binary buildcache and pip wheel cache as build mounts. The Dockerfiles
+# Sets CACHE_ARGS: the spack binary buildcache and uv wheel cache as build mounts. The Dockerfiles
 # use each when mounted and skip it otherwise, so CE_BUILD_CACHE=0 leaves CACHE_ARGS empty.
-#   ce_cache_args <spack cache name under SCRATCH> <pip cache name under SCRATCH>
+#   ce_cache_args <spack cache name under SCRATCH> <uv cache name under SCRATCH>
 ce_cache_args() {
     CACHE_ARGS=()
     if [[ "${CE_BUILD_CACHE}" != 1 ]]; then
-        printf 'spack buildcache and pip cache OFF (CE_BUILD_CACHE=0)\n'
+        printf 'spack buildcache and uv cache OFF (CE_BUILD_CACHE=0)\n'
         return 0
     fi
     SPACK_BUILDCACHE="${SPACK_BUILDCACHE:-${SCRATCH:?}/$1}"
-    PIP_CACHE="${PIP_CACHE:-${SCRATCH:?}/$2}"
-    mkdir -p "${SPACK_BUILDCACHE}" "${PIP_CACHE}"
-    CACHE_ARGS=(-v "${SPACK_BUILDCACHE}:/spack-buildcache:rw" -v "${PIP_CACHE}:/pip-cache:rw")
-    printf 'spack buildcache %s\npip cache %s\n' "${SPACK_BUILDCACHE}" "${PIP_CACHE}"
+    UV_BUILD_CACHE="${UV_BUILD_CACHE:-${SCRATCH:?}/$2}"
+    mkdir -p "${SPACK_BUILDCACHE}" "${UV_BUILD_CACHE}"
+    CACHE_ARGS=(-v "${SPACK_BUILDCACHE}:/spack-buildcache:rw" -v "${UV_BUILD_CACHE}:/uv-cache:rw")
+    printf 'spack buildcache %s\nuv cache %s\n' "${SPACK_BUILDCACHE}" "${UV_BUILD_CACHE}"
 }
 
 # A private podman store for a node another podman may use (a login node), inherited by every
@@ -486,7 +486,7 @@ ce_build_args() {
     for name in "$@"; do BUILD_ARGS+=(--build-arg "${name}=${!name}"); done
 }
 
-# Exports DACE_COMMIT, the release's dace pin (pyproject.toml dace-pin). Resolved here and passed in
+# Exports DACE_COMMIT, the release's dace pin (pyproject.toml [tool.uv.sources] dace). Resolved here and passed in
 # because the Dockerfile's layer cache keys on the command string: a '--branch extended' clone would
 # be reused forever and the image would age into a pin nothing records.
 ce_dace_commit() {

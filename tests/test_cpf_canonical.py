@@ -45,18 +45,24 @@ def test_the_canonical_key_moves_with_the_program_the_commit_the_precision_and_t
     assert cpf_canonical.canonical_key(program(tmp_path, text), commit, precision, target) != base
 
 
-def test_a_dace_tree_with_no_commit_is_refused(tmp_path: pathlib.Path) -> None:
-    """Every key holds the dace commit; a tree that has none cannot name the dace it rendered with."""
-    with pytest.raises(RuntimeError, match="not a git checkout"):
-        cpf_canonical.dace_commit(tmp_path)
+def test_a_dace_record_with_no_commit_names_none(tmp_path: pathlib.Path) -> None:
+    """Every key holds the dace commit; an install that names none cannot name the dace it rendered with."""
+    assert cpf_canonical.commit_of({"url": "https://pypi.org/x.whl", "archive_info": {}}) == ""
+    assert cpf_canonical.commit_of({"url": tmp_path.as_uri(), "dir_info": {"editable": True}}) == ""
 
 
-def test_the_dace_commit_is_the_checkouts_head(tmp_path: pathlib.Path) -> None:
+def test_a_git_install_is_keyed_on_the_commit_uv_recorded() -> None:
+    record = {"url": "https://github.com/spcl/dace.git", "vcs_info": {"vcs": "git", "commit_id": "3cec0d9"}}
+    assert cpf_canonical.commit_of(record) == "3cec0d9"
+
+
+def test_an_editable_checkout_is_keyed_on_its_head(tmp_path: pathlib.Path) -> None:
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
     identity = ["-c", "user.name=test", "-c", "user.email=test@example.org"]
     subprocess.run(["git", "-C", str(tmp_path), *identity, "commit", "-q", "--allow-empty", "-m", "c"], check=True)
     head = subprocess.run(["git", "-C", str(tmp_path), "rev-parse", "HEAD"], capture_output=True, text=True, check=True)
-    assert cpf_canonical.dace_commit(tmp_path) == head.stdout.strip()
+    record = {"url": tmp_path.as_uri(), "dir_info": {"editable": True}}
+    assert cpf_canonical.commit_of(record) == head.stdout.strip()
 
 
 def test_a_canonicalize_that_raises_is_cached_and_not_run_again(

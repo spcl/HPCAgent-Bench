@@ -121,7 +121,6 @@ DOCKER_KEPT = [
     f"{KERNEL}/gemm_numpy.py",
     "pyproject.toml",
     "README.md",
-    "scripts/install_dace.sh",
     "agent/harness/pins.env",
 ]
 

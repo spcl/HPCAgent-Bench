@@ -12,7 +12,7 @@ import types
 
 import pytest
 
-MODULE_PATH = pathlib.Path(__file__).resolve().parents[1] / "agent/packets/autokernel/experiment.py"
+MODULE_PATH = pathlib.Path(__file__).resolve().parents[1] / "agent/hpcagent_agent/packets/autokernel/experiment.py"
 
 
 def load_experiment_module() -> types.ModuleType:

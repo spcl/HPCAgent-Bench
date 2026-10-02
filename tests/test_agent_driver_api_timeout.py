@@ -14,14 +14,12 @@ and never relaunched -- so ``AGENT_CRASH_ATTEMPTS`` had never once applied to th
 in the experiment.
 """
 
-import importlib.util
 import pathlib
-import sys
 from types import ModuleType
 
 import pytest
 
-EXAMPLE = pathlib.Path(__file__).resolve().parents[1] / "hpcagent_bench" / "cluster"
+from tests.fresh_module import fresh
 
 #: The closing event of a timed-out agent, verbatim in shape from a 626523 claude.log.
 TIMED_OUT = (
@@ -33,10 +31,7 @@ FINISHED = '{"type":"result","subtype":"success","is_error":false,"num_turns":12
 
 def load_example_module(name: str) -> ModuleType:
     """``sys.modules`` must carry the module BEFORE exec, matching tests/test_agent_driver_context.py."""
-    spec = importlib.util.spec_from_file_location(name, EXAMPLE / f"{name}.py")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
+    module = fresh(name)
     return module
 
 

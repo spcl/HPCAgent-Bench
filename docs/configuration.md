@@ -41,7 +41,7 @@ of the CSCS Alps MI300A partition, the reference setup of this repository's expe
 | `scripts/host_python.sh` | the host-side interpreter (`HPCAGENT_BENCH_HOST_PYTHON`), checked to be Python >= 3.10 |
 | each image's EDF | the interpreter of every step inside it (`HPCAGENT_BENCH_IMAGE_PYTHON`) and `PYTHONHASHSEED=0` |
 | `hpcagent_bench/cluster/env.sh` | the checkout; sources the two scripts above |
-| `pyproject.toml` (`[tool.hpcagent-bench] dace-pin`) | the dace commit a release installs, bakes and runs ([below](#dace)) |
+| `pyproject.toml` (`[tool.uv.sources] dace`) | the dace commit a release installs, bakes and runs ([below](#dace)) |
 | `hpcagent_bench/paths.py` | the Python side of the same roots |
 
 Experiment knobs (models, agents, judges, budgets) are not site values: they live in `experiments/layers/common.env`
@@ -115,17 +115,16 @@ the GPU generation whose images and serving layers the experiment uses ([below](
 | Variable | Default | Controls |
 |---|---|---|
 | `HPCAGENT_BENCH_REPO` | the checkout `cluster/env.sh` lives in | the tree scripts and jobs run from |
-| `HPCAGENT_BENCH_HOST_PYTHON` | `python3` on PATH | the host-side interpreter, with the package installed (`pip install -e .`) |
+| `HPCAGENT_BENCH_HOST_PYTHON` | `python3` on PATH | the host-side interpreter, with the package installed (`uv sync`) |
 | `HPCAGENT_BENCH_IMAGE_PYTHON` | the image's EDF | the interpreter of every step inside a container |
 | `EDF_PATH` | `$HOME/.edf` | where container EDFs are looked up |
 | `CONTAINER_RUNTIME` | `ce` | how `cluster/services.sbatch` starts containers, through one seam (`cluster/container_runtime.sh`, [runtime.md](runtime.md)): `ce`, `apptainer`, `podman` or `docker` |
 | `HPCAGENT_BENCH_PROFILE`, `HPCAGENT_BENCH_MAX_TIME_HOURS` | the system's `profile`, `max_time_hours`; else unset | the hardware profile, and the longest time limit of the partition, which clamps a scaled wall clock (`TIME_SCALE`, minus `STAGING_HOURS`); unset, nothing is clamped |
 | `HPCAGENT_BENCH_HOST` | `SLURMD_NODENAME`, else the host name | the node name recorded with each result |
 
-Every command runs `<python> -m hpcagent_bench...` with one of the two interpreters, never a PATH lookup. Never set
-`PYTHONPATH` by hand or edit `sys.path` in code (`tests/test_import_paths.py`); the one exception is a script that
-runs in the agent or judge image beside its sibling modules, where `PYTHONSAFEPATH=1` drops the script's own
-directory and the script puts it back.
+Every command runs `<python> -m hpcagent_bench...` (or `-m hpcagent_agent...` in an agent step) with one of the two
+interpreters, never a PATH lookup. Nothing sets `PYTHONPATH` or edits `sys.path` (`tests/test_import_paths.py`): both
+packages are installed, editable in a checkout (`uv sync`) and through the image hooks in a container.
 
 ### Container image builds
 
@@ -138,13 +137,13 @@ Defaults are in `containers/images/images.env` and `build_common.sh`; `IMAGE_REQ
 | `CE_BUILD_CACHE` | `1` | keep the node's podman layer store and mount the spack and pip caches; `0` builds cold |
 | `CE_PULL` | `1` | pull a registry image whose build-inputs label matches instead of building; `only`, `0` |
 | `REGISTRY_REPO`, `PULL_REPO` | `docker.io/spcleth/hpcagent-bench`, `PUSH_REPO` | the published image repository, and the one pull-first reads |
-| `SPACK_BUILDCACHE`, `PIP_CACHE`, `BASE_CACHE`, `GIT_MIRRORS` | under `$SCRATCH` | the binary, wheel, base-image and git caches the builds mount |
+| `SPACK_BUILDCACHE`, `UV_BUILD_CACHE`, `BASE_CACHE`, `GIT_MIRRORS` | under `$SCRATCH` | the binary, wheel, base-image and git caches the builds mount |
 
 ### dace
 
-DaCe comes from the spcl/dace `extended` branch, pinned by `dace-pin` in `pyproject.toml` (the one place it is
-written; PyPI rejects direct-URL requirements, so no version of it is a dependency). `scripts/install_dace.sh`
-installs the pin (`--editable DIR` for a checkout); the judge and agent images bake it, every job runs the
+DaCe comes from the spcl/dace `extended` branch, pinned by the `dace` entry of `[tool.uv.sources]` in
+`pyproject.toml` (the one place it is written; the published metadata says plain `dace`). `uv sync` installs the pin
+(`uv pip install -e DIR` for a checkout of your own); the judge and agent images bake it, every job runs the
 image's dace as baked, and another dace means another image: move the pin (only to an extended commit whose CI is
 green) and rebuild. The image records its commit in `/opt/dace.commit`, which the judge prints into the job log;
 canon columns stamp `dace <sha>` into `record.build` and `canon.db`'s `build` column.

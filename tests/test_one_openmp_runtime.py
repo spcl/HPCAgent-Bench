@@ -5,7 +5,7 @@
 A second runtime in one process (libgomp beside libomp, or two libgomp files) cannot see the
 enclosing parallel region, so OpenBLAS inside a numba prange thread opens a team per caller. The
 counter reads realpaths out of ``/proc/self/maps``; ``containers/lib/one_openmp.sh`` links every
-libgomp copy to the compiler's (the gnu context); ``containers/lib/one_openmp_gate.py`` proves one is
+libgomp copy to the compiler's (the gnu context); ``containers/lib/openmp_gate.py one`` proves one is
 mapped. The other families' runtimes live in their own contexts: tests/test_omp_context.py and
 tests/test_omp_context_gate.py.
 
@@ -27,7 +27,7 @@ from hpcagent_bench import openmp_runtimes
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 LIB = REPO / "containers" / "lib"
-GATE = LIB / "one_openmp_gate.py"
+GATE = LIB / "openmp_gate.py"
 LINKER = LIB / "one_openmp.sh"
 
 #: A parallel region that reports how many threads it ran: 1 means the pragma compiled to serial code.
@@ -120,9 +120,14 @@ def test_more_than_one_runtime_raises_and_names_every_file() -> None:
 
 
 def test_the_image_build_carries_the_same_counter_as_the_package() -> None:
-    """The agent stage may not COPY hpcagent_bench, so the build gate runs its own copy of the counter."""
+    """The agent stage may not COPY hpcagent_bench, so the build gate repeats the counter verbatim."""
     package = pathlib.Path(openmp_runtimes.__file__).read_text(encoding="utf-8")
-    assert (LIB / "openmp_runtimes.py").read_text(encoding="utf-8") == package
+    counter = package[package.index("#: Runtime library files") : package.index("\ndef main(")].rstrip("\n")
+    gate = GATE.read_text(encoding="utf-8")
+    start = gate.index("verbatim from here to the END marker. ---\n") + len(
+        "verbatim from here to the END marker. ---\n"
+    )
+    assert gate[start : gate.index("# --- END of the verbatim counter. ---")].rstrip("\n") == counter
 
 
 IMAGES = ["judge-agent-amd", "judge-agent-cpu", "judge-agent-cuda"]
@@ -140,16 +145,13 @@ def test_every_image_links_one_runtime_after_its_last_python_install(image: str)
     agent = agent_stage(image)
     step = agent.rindex("sh /tmp/one-openmp/one_openmp.sh /opt/view;")
     installs = [i for i in range(len(agent)) if agent.startswith("pip install", i)]
-    assert installs and max(installs) < step, "a pip install runs after the one-runtime step"
+    assert installs and max(installs) < step, "a uv pip install runs after the one-runtime step"
     assert step < agent.index("ENV LD_PRELOAD"), "the step runs under the mimalloc preload"
     for script in (
         "one_openmp.sh",
-        "one_openmp_gate.py",
-        "openmp_runtimes.py",
+        "openmp_gate.py",
         "numpy_on_openblas.sh",
         "omp_contexts.sh",
-        "omp_context_gate.py",
-        "omp_context_scan.py",
         "openmp_probe.c",
         "openmp_probe.f90",
     ):
@@ -162,10 +164,10 @@ def test_every_image_builds_the_contexts_gates_them_and_scans_them_in_its_last_o
     last = agent[agent.rindex("sh /tmp/one-openmp/one_openmp.sh /opt/view;") :]
     last = last[: last.index("rm -rf /tmp/one-openmp")]
     assert "omp_contexts.sh /opt/view /opt/omp/llvm/view" in last
-    assert "omp_context_scan.py" in last
-    assert "omp_context_gate.py --context gnu --wheels --torch" in last
-    assert "omp_context_gate.py --context llvm --blas-in-context" in last
-    assert ("omp_context_gate.py --context nvhpc --blas-in-context" in last) == (image == "judge-agent-cuda")
+    assert "openmp_gate.py scan" in last
+    assert "openmp_gate.py context --context gnu --wheels --torch" in last
+    assert "openmp_gate.py context --context llvm --blas-in-context" in last
+    assert ("openmp_gate.py context --context nvhpc --blas-in-context" in last) == (image == "judge-agent-cuda")
     # nvc is asserted on the CUDA image's PATH, so a missing nvhpc context is a bug: required, never conditional
     assert ("OMP_REQUIRE_NVHPC=1 sh /tmp/one-openmp/omp_contexts.sh" in last) == (image == "judge-agent-cuda")
     assert "/opt/omp/nvhpc ]" not in last
@@ -271,7 +273,7 @@ def test_the_linker_refuses_a_copy_that_needs_a_newer_libgomp_than_the_compilers
 
 def run_gate(*args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [sys.executable, str(GATE), *args],
+        [sys.executable, str(GATE), "one", *args],
         capture_output=True,
         text=True,
         env={**os.environ, "NUMBA_THREADING_LAYER": "omp"},

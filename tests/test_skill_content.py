@@ -198,7 +198,7 @@ def profile_tool_properties() -> str:
     importable package, so the page-to-tool agreement is checked against the text that defines it
     -- the same reason :func:`test_the_profiling_skill_quotes_the_perf_flags_the_harness_actually_passes`
     reads perf_reports.py rather than importing an argv."""
-    return (paths.ROOT / "agent" / "tools" / "profile_tool.py").read_text()
+    return (paths.ROOT / "agent" / "hpcagent_agent" / "tools" / "profile_tool.py").read_text()
 
 
 def test_the_profiling_skill_teaches_the_per_thread_report_as_a_route_and_not_a_call() -> None:

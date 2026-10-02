@@ -12,24 +12,19 @@ parameter from the Bash schema and the promise from the system prompt, probed on
 under --bare and native alike.
 """
 
-import importlib.util
 import pathlib
-import sys
 from types import ModuleType, SimpleNamespace
 
 import pytest
 
+from tests.fresh_module import fresh
+
 REPO = pathlib.Path(__file__).resolve().parents[1]
-DRIVER = REPO / "hpcagent_bench" / "cluster" / "agent_driver.py"
 
 
 @pytest.fixture(name="driver")
 def driver_fixture() -> ModuleType:
-    spec = importlib.util.spec_from_file_location("agent_driver_background_tasks", DRIVER)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
+    module = fresh("agent_driver")
     return module
 
 

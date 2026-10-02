@@ -19,16 +19,15 @@ agents/, no monitor/) fails that one check with a message; it never raises.
 """
 
 import argparse
-import dataclasses
 import contextlib
+import dataclasses
 import pathlib
 import sqlite3
 import sys
 import tempfile
 from collections.abc import Callable
 
-import merge_results
-import monitor_report
+from hpcagent_bench.cluster import merge_results, monitor_report
 
 
 @dataclasses.dataclass(slots=True)

@@ -23,12 +23,10 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from types import ModuleType
-from typing import TYPE_CHECKING, Any, NamedTuple, TextIO, TypedDict, cast
+from typing import Any, NamedTuple, TextIO, TypedDict, cast
 
-if TYPE_CHECKING:
-    from harnesses import Closing, Context, Harness
-
+from hpcagent_agent.driver import harnesses, promote_unsubmitted, stream_idle_timeout, token_cost
+from hpcagent_agent.driver.harnesses import Closing, Context, Harness
 
 #: One value a problem record carries: whatever ``json.loads`` produced for it. The record is an
 #: OPEN object -- make_problems.py writes keys this driver never reads and :func:`problem_text`
@@ -137,7 +135,7 @@ def resolve_problems_path(problem_file: str) -> pathlib.Path:
     # The launch directory holds the staged copy under its BASENAME. A snapshot env names
     # `.rendered/<stem>.jsonl`, relative to experiments/, which no agent container mounts, and the
     # agent step reads that value from the batch step's environment.
-    staged = pathlib.Path(__file__).resolve().parent / path.name
+    staged = pathlib.Path(os.environ.get("SCRIPT_DIR", ".")) / path.name
     if path.parent == pathlib.Path(".") or staged.exists():
         return staged
     return path
@@ -848,23 +846,18 @@ MCP_SERVER_NAME = "hpcagent_bench"
 def agent_runtime() -> pathlib.Path:
     """The agent payload: ``$HPCAGENT_BENCH_AGENT_DIR`` where the launcher bound it, else this checkout's."""
     bound = os.environ.get(AGENT_DIR_ENV, "").strip()
-    return pathlib.Path(bound) if bound else pathlib.Path(__file__).resolve().parents[2] / "agent"
+    return pathlib.Path(bound) if bound else pathlib.Path(__file__).resolve().parents[2]
 
 
 @functools.lru_cache(maxsize=1, typed=True)
 def tool_registry() -> dict[str, Any]:
-    """What the runtime's ``tools/mcp_server.py`` offers this setup (``--describe``, under this process's
-    environment): ``allowed_tools``, ``prompt`` and ``prompt_cli``. Asked on first use, not at import,
-    so a driver copied away from its runtime still imports."""
-    path = agent_runtime() / "tools" / "mcp_server.py"
-    if not path.is_file():
-        raise SystemExit(f"agent_driver: no tool registry at {path}; {AGENT_DIR_ENV} must name the bound agent")
-    environment = {key: value for key, value in os.environ.items() if key != "PYTHONSAFEPATH"}
-    done = subprocess.run(
-        [sys.executable, str(path), "--describe"], capture_output=True, text=True, env=environment, check=False
-    )
+    """What ``hpcagent_agent.tools.mcp_server`` offers this setup (``--describe``, under this process's
+    environment): ``allowed_tools``, ``prompt`` and ``prompt_cli``. A child process, because the server
+    builds its registry from the environment at import."""
+    command = [sys.executable, "-m", "hpcagent_agent.tools.mcp_server", "--describe"]
+    done = subprocess.run(command, capture_output=True, text=True, check=False)
     if done.returncode != 0:
-        raise SystemExit(f"agent_driver: {path} --describe failed: {done.stderr.strip()[-500:]}")
+        raise SystemExit(f"agent_driver: mcp_server --describe failed: {done.stderr.strip()[-500:]}")
     return cast("dict[str, Any]", json.loads(done.stdout))
 
 
@@ -874,11 +867,11 @@ def agent_tools() -> tuple[str, ...]:
 
 
 def packet_dir() -> pathlib.Path | None:
-    """``agent/packets/<AGENT_PACKET>``, or None for a setup without a method packet."""
+    """``hpcagent_agent/packets/<AGENT_PACKET>``, or None for a setup without a method packet."""
     name = os.environ.get("AGENT_PACKET", "").strip()
     if not name:
         return None
-    path = agent_runtime() / "packets" / name
+    path = pathlib.Path(__file__).resolve().parents[1] / "packets" / name
     if not (path / "packet.md").is_file():
         raise SystemExit(f"AGENT_PACKET={name}: {path / 'packet.md'} does not exist")
     return path
@@ -887,7 +880,9 @@ def packet_dir() -> pathlib.Path | None:
 def packet_tools() -> tuple[str, ...]:
     """The MCP tools a method packet adds: one per module in its directory, named by the module stem."""
     path = packet_dir()
-    return () if path is None else tuple(sorted(module.stem for module in path.glob("*.py")))
+    return (
+        () if path is None else tuple(sorted(module.stem for module in path.glob("*.py") if module.stem != "__init__"))
+    )
 
 
 def hints_text() -> str:
@@ -1082,7 +1077,7 @@ def experiment_setup() -> str:
 def identity_env(problem_index: int, worker_index: int) -> dict[str, str]:
     """The identity ONE agent's judge calls are recorded under, as environment for its process.
 
-    The submission body is built inside the agent container by ``agent/tools/http_json.py``,
+    The submission body is built inside the agent container by ``agent/hpcagent_agent/tools/http_json.py``,
     which knows nothing of setups or shards -- so the run id is composed here, where the setup, the node,
     the problem's index in the FULL list and the worker slot are all known, and handed over as
     ``$HPCAGENT_BENCH_RUN_ID``. Dots join the four fields because a setup name already contains hyphens and
@@ -1334,14 +1329,6 @@ def budget_note(seconds: float, tokens: int, task_text: str = "") -> str:
     return " ".join(sentences)
 
 
-def token_cost_module() -> ModuleType:
-    """``token_cost.py`` from beside this file, imported on first use. Same reason ``harness_module``
-    is not a top-level import: the sibling loads only when the driver needs it."""
-    import token_cost
-
-    return token_cost
-
-
 def usage_total(usage: dict[str, object]) -> int | None:
     """One turn's TOTAL consumed tokens: input + both cache fields + output.
 
@@ -1352,7 +1339,7 @@ def usage_total(usage: dict[str, object]) -> int | None:
     Delegates to ``token_cost.usage_total``, the one implementation (8.1, ``billed``), so the
     budget watcher here and the task token total there cannot drift apart.
     """
-    return token_cost_module().usage_total(usage)
+    return token_cost.usage_total(usage)
 
 
 def accumulate_total_tokens(lines: list[str], total_by_message: dict[str, int]) -> int:
@@ -1371,7 +1358,7 @@ def accumulate_total_tokens(lines: list[str], total_by_message: dict[str, int]) 
     task token total (T2) so a relaunched task's attempts are folded the same way this watcher
     folds one.
     """
-    return token_cost_module().accumulate_total_tokens(lines, total_by_message)
+    return token_cost.accumulate_total_tokens(lines, total_by_message)
 
 
 def read_new_lines(path: pathlib.Path, offset: int) -> tuple[int, list[str]]:
@@ -1434,7 +1421,7 @@ def cost_breakdown(log: pathlib.Path) -> dict[str, float | str]:
     bookkeeping and must not turn a finished run into a failed one.
     """
     try:
-        row = token_cost_module().episode_cost(log)
+        row = token_cost.episode_cost(log)
     except Exception:  # noqa: BLE001 -- see the docstring: bookkeeping never fails a run
         return {}
     return {key: row[key] for key in COST_KEYS if key in row}
@@ -1450,7 +1437,7 @@ def task_token_totals(workdir: pathlib.Path) -> tuple[int, int | None, int | Non
     bookkeeping and must not turn a finished run into a failed one.
     """
     try:
-        totals = token_cost_module().task_totals(workdir)
+        totals = token_cost.task_totals(workdir)
     except Exception:  # noqa: BLE001 -- see the docstring
         return 0, None, None, 0, 0
     return (
@@ -1602,7 +1589,7 @@ def clear_for_relaunch(workdir: pathlib.Path, agent_dir: pathlib.Path) -> None:
         {
             *RELAUNCH_KEEPS,
             SUBMISSION_MARKER,
-            *(entry.name for entry in workdir.iterdir() if token_cost_module().ATTEMPT_MARKER.search(entry.name)),
+            *(entry.name for entry in workdir.iterdir() if token_cost.ATTEMPT_MARKER.search(entry.name)),
         }
     )
     remove_entries(workdir, kept)
@@ -1613,7 +1600,7 @@ def final_attempt_start_of(workdir: pathlib.Path) -> int:
     """Epoch ms the task's FINAL attempt began per ``token_cost.final_attempt_start`` (T5), 0 when unknown.
     Never raises: a cost record is bookkeeping."""
     try:
-        module = token_cost_module()
+        module = token_cost
         return int(module.final_attempt_start(workdir, module.attempt_transcripts(workdir)))
     except Exception:  # noqa: BLE001 -- see the docstring
         return 0
@@ -1847,17 +1834,6 @@ def host_home_root() -> str:
     return str(pathlib.Path(*parts[:2])) if len(parts) > 2 else ""
 
 
-def seal_module() -> pathlib.Path:
-    """``seal_worker.py``, beside this driver in the job's launch directory."""
-    module = pathlib.Path(__file__).resolve().parent / "seal_worker.py"
-    if not module.is_file():
-        raise SystemExit(
-            f"agent_driver: {module} is missing, so no worker can be sealed. run_cluster.sh stages "
-            "it through AGENT_LAUNCH_FILES; a launch directory without it is a stale copy."
-        )
-    return module
-
-
 def crashed_attempt_records(workdir: pathlib.Path) -> list[pathlib.Path]:
     """The records of this worker's crashed attempts (``claude.attempt1.log``, ...), which
     :func:`clear_for_relaunch` keeps in the workdir as the only account of what they cost.
@@ -1867,7 +1843,7 @@ def crashed_attempt_records(workdir: pathlib.Path) -> list[pathlib.Path]:
     the final attempt inherits that work for free."""
     if not workdir.is_dir():
         return []
-    marker = token_cost_module().ATTEMPT_MARKER
+    marker = token_cost.ATTEMPT_MARKER
     return sorted(entry for entry in workdir.iterdir() if entry.is_file() and marker.search(entry.name))
 
 
@@ -1884,8 +1860,9 @@ def seal_argv(workdir: pathlib.Path, agent_dir: pathlib.Path, task: pathlib.Path
     hidden = [path for path in (os.environ.get("AGENT_LAUNCH_DIR", "").strip(), host_home_root()) if path]
     return [
         *SEAL_UNSHARE,
-        "python3",
-        str(seal_module()),
+        sys.executable,
+        "-m",
+        "hpcagent_agent.driver.seal_worker",
         "--workdir",
         str(workdir),
         "--agent-dir",
@@ -1970,7 +1947,7 @@ def crashed(returncode: int, log_path: pathlib.Path) -> bool:
     return closing_crashed(returncode, transcript_closing(log_path))
 
 
-def closing_crashed(returncode: int, closing: "Closing") -> bool:
+def closing_crashed(returncode: int, closing: Closing) -> bool:
     """:func:`crashed` for any harness, read off the record the attempt closed with."""
     if returncode in (RC_TIMEOUT, RC_TOKEN_BUDGET, RC_CONTEXT, RC_SUBMITTED):
         return False
@@ -2092,14 +2069,6 @@ def open_tool_use_index(tail: str) -> int | None:
     return open_index
 
 
-def stream_idle_timeout_module() -> ModuleType:
-    """``stream_idle_timeout.py`` from beside this file, imported on first use. Same reason
-    ``harness_module`` is not a top-level import: the sibling loads only when the driver needs it."""
-    import stream_idle_timeout
-
-    return stream_idle_timeout
-
-
 def open_tool_use_stall_seconds(log_path: pathlib.Path) -> float | None:
     """Seconds since ``log_path`` last grew, IF its tail sits mid an unclosed ``tool_use`` block.
 
@@ -2136,7 +2105,7 @@ def dead_stream_threshold_seconds(environment: dict[str, str]) -> float:
     except ValueError:
         ms = 0
     if ms <= 0:
-        ms = stream_idle_timeout_module().CEILING_MS
+        ms = stream_idle_timeout.CEILING_MS
     return ms / 1000.0
 
 
@@ -2162,10 +2131,10 @@ def watch_dead_stream(
             return
 
 
-def transcript_closing(log_path: pathlib.Path) -> "Closing":
+def transcript_closing(log_path: pathlib.Path) -> Closing:
     """claude's transcript as a :class:`~harnesses.Closing`, read off its closing ``result`` event."""
     subtype, turns = final_result(log_path)
-    return harness_module().Closing(
+    return harnesses.Closing(
         recorded=result_event(log_path) is not None,
         subtype=subtype,
         turns=turns,
@@ -2174,7 +2143,7 @@ def transcript_closing(log_path: pathlib.Path) -> "Closing":
     )
 
 
-def claude_closing(workdir: pathlib.Path) -> "Closing":
+def claude_closing(workdir: pathlib.Path) -> Closing:
     return transcript_closing(workdir / "claude.log")
 
 
@@ -2296,8 +2265,6 @@ def promote_at_agent_exit(run_id: str, judge_url: str, kernel: str = "", since_m
     if not run_dir or not judge_url:
         return ""
     try:
-        import promote_unsubmitted
-
         return promote_unsubmitted.promote_one_worker(
             pathlib.Path(run_dir), judge_url, run_id, kernel=kernel, since_ms=since_ms
         )
@@ -2305,21 +2272,9 @@ def promote_at_agent_exit(run_id: str, judge_url: str, kernel: str = "", since_m
         return f"error:{type(exc).__name__}"
 
 
-def harness_module() -> ModuleType:
-    """``harnesses.py`` from beside this file, imported on first use.
-
-    The driver runs as a script (run_cluster.sh starts it without PYTHONSAFEPATH), so its own
-    directory is on ``sys.path`` and its siblings import by name.
-    """
-    import harnesses
-
-    return harnesses
-
-
-def harness_spec(name: str) -> "Harness":
+def harness_spec(name: str) -> Harness:
     """The spec for ``name``: claude's is built from this file's own functions, a runner's is in
     ``harnesses.py``."""
-    harnesses = harness_module()
     if name != harnesses.CLAUDE:
         return harnesses.RUNNERS[name]
     return harnesses.Harness(
@@ -2353,7 +2308,7 @@ def claude_bare() -> bool:
     return os.environ.get("CLAUDE_BARE", "1").strip() != "0"
 
 
-def claude_command(context: "Context") -> list[str]:
+def claude_command(context: Context) -> list[str]:
     """The claude CLI invocation for one agent. Built per attempt; nothing in it changes between them."""
     prompt = context.prompt
     mcp_config = context.mcp_config
@@ -2439,7 +2394,7 @@ CLAUDE_SUMMARY_RESERVE = 20000
 def served_context(environment: Mapping[str, str]) -> int:
     """The window the engine enforces; ``harnesses.served_context`` is the one implementation (its
     policy cap equals :data:`CLAUDE_CONTEXT_CAP`)."""
-    return harness_module().served_context(environment)
+    return harnesses.served_context(environment)
 
 
 def claude_context_env(environment: Mapping[str, str]) -> dict[str, str]:
@@ -2456,7 +2411,6 @@ def claude_context_env(environment: Mapping[str, str]) -> dict[str, str]:
     so it is also the max_tokens every request asks the server to hold free.
     """
     limit = min(served_context(environment), CLAUDE_CONTEXT_CAP)
-    harnesses = harness_module()
     configured = (
         harnesses.positive_int(environment.get("CLAUDE_CODE_MAX_OUTPUT_TOKENS", ""))
         or harnesses.DEFAULT_MAX_OUTPUT_TOKENS
@@ -2483,7 +2437,7 @@ def claude_context_env(environment: Mapping[str, str]) -> dict[str, str]:
 CLAUDE_BACKGROUND_TASKS_OFF = "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"
 
 
-def claude_env(context: "Context", base: dict[str, str]) -> dict[str, str]:
+def claude_env(context: Context, base: dict[str, str]) -> dict[str, str]:
     """The shared environment plus the variables only claude reads."""
     environment = dict(base)
     # Direct mode (default): claude speaks vLLM's native /v1/messages; agents stripe over the
@@ -2581,14 +2535,8 @@ def write_mcp_config(
             {
                 "mcpServers": {
                     MCP_SERVER_NAME: {
-                        # A script, run as one: its own directory heads sys.path (not under PYTHONSAFEPATH).
-                        "command": "env",
-                        "args": [
-                            "-u",
-                            "PYTHONSAFEPATH",
-                            "python3",
-                            str((runtime / "tools" / "mcp_server.py").resolve()),
-                        ],
+                        "command": sys.executable,
+                        "args": ["-m", "hpcagent_agent.tools.mcp_server"],
                         "env": identity_env(problem_index, worker_index),
                     }
                 }
@@ -2645,7 +2593,7 @@ def agent_environment(
 
 def start_watchers(
     process: subprocess.Popen[bytes],
-    harness: "Harness",
+    harness: Harness,
     paths: tuple[pathlib.Path, pathlib.Path, pathlib.Path],
     max_tokens: int,
     dead_stream_threshold: float,
@@ -2710,7 +2658,7 @@ def watched_returncode(
     return returncode
 
 
-def closing_returncode(returncode: int, closing: "Closing") -> int:
+def closing_returncode(returncode: int, closing: Closing) -> int:
     """The rc once the harness's closing record is read: a context overflow or an API timeout."""
     # Whatever the agent exited with, only the driver's own caps outrank a recorded overflow: a
     # runner's end file names it at any exit, and claude-code 2.1.197 closes such a run with exit 1.
@@ -2770,7 +2718,7 @@ def note_relaunch(log: TextIO, returncode: int, crash_attempts: int, *, out_of_c
         log.write("\nagent_driver: crashed with no wall clock left to relaunch in\n")
 
 
-def set_aside_crash(harness: "Harness", workdir: pathlib.Path, agent_dir: pathlib.Path, crash_attempts: int) -> None:
+def set_aside_crash(harness: Harness, workdir: pathlib.Path, agent_dir: pathlib.Path, crash_attempts: int) -> None:
     """Keep a crashed attempt's records under ``.attempt<N>`` names, then empty the workspace.
 
     Without this the next attempt's log truncation deletes the transcript of the crash -- and the
@@ -2840,7 +2788,6 @@ def run_agent(
     judge_url = judges[judge_rank]
     environment = agent_environment(problem, judge_url, judge_rank, problem_index, worker_index)
 
-    harnesses = harness_module()
     harness = harness_spec(harnesses.selected_harness())
     # Every harness stripes onto a replica the way problems stripe onto judges; claude reads its
     # server root, a runner the /v1 path under it.
@@ -2892,7 +2839,7 @@ def run_agent(
     seal = seal_argv(workdir, agent_dir, task_dir(environment["KERNEL"]), cpus)
     if seal:
         environment["HOME"] = str(worker_home(workdir))
-    # Compiler/package caches, node-local: no submission data lives in a Triton JIT cache or a pip
+    # Compiler/package caches, node-local: no submission data lives in a Triton JIT cache or a uv
     # wheel cache, so neither belongs under the persistent workdir.
     cache_root = worker_cache_root(node_dir, workdir)
     environment["TRITON_CACHE_DIR"] = str(cache_root / "triton")
@@ -3099,7 +3046,8 @@ def run_fused_problem(problem: Problem, worker_index: int, problem_index: int, a
     environment = fused_child_env(os.environ, overlay, token, material, start_gate_dir())
     command = [
         sys.executable,
-        str(pathlib.Path(__file__).resolve()),
+        "-m",
+        "hpcagent_agent.driver.agent_driver",
         FUSED_PROBLEM_FLAG,
         str(problem_index),
         str(worker_index),
@@ -3113,7 +3061,7 @@ def fused_problem_main(argv: Sequence[str]) -> int:
     if len(argv) != 3:
         raise SystemExit(f"usage: agent_driver.py {FUSED_PROBLEM_FLAG} <problem index> <worker index> <agents>")
     problem_index, worker_index, agents = (int(value) for value in argv)
-    harness_module().selected_harness()
+    harnesses.selected_harness()
     watch_for_job_cancellation()
     problems = load_problems()
     node_dir = pathlib.Path(os.environ["RUN_DIR"]) / "agents" / f"node-{node_rank()}"
@@ -3124,7 +3072,7 @@ def fused_problem_main(argv: Sequence[str]) -> int:
 
 def main() -> int:
     # First, so a misspelled harness ends the step before it waits on any service.
-    harness_module().selected_harness()
+    harnesses.selected_harness()
     replicas = vllm_urls()
     judges = judge_urls()
     vllm_headers: dict[str, str] = {}

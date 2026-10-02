@@ -13,23 +13,18 @@ full, every submission it made along the way stands, and 604475/604476 ended 69 
 nothing else wrong; treating those as cancellations would delete the experiment.
 """
 
-import importlib.util
 import pathlib
-import sys
 import time
 from collections.abc import Iterator
 from types import ModuleType
 
 import pytest
 
-EXAMPLE = pathlib.Path(__file__).resolve().parents[1] / "hpcagent_bench" / "cluster"
+from tests.fresh_module import fresh
 
 
 def load_example_module(name: str) -> ModuleType:
-    spec = importlib.util.spec_from_file_location(name, EXAMPLE / f"{name}.py")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
+    module = fresh(name)
     return module
 
 

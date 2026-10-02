@@ -9,7 +9,6 @@ so these tests state which place each one belongs in and that the per-model valu
 server arguments they describe.
 """
 
-import importlib.util
 import pathlib
 import re
 import subprocess
@@ -19,6 +18,7 @@ import types
 import pytest
 
 from tests.env_render import BASES, rendered
+from tests.fresh_module import fresh
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 EXPERIMENTS = REPO / "hpcagent_bench" / "cluster"
@@ -35,12 +35,12 @@ COMMON_VARS = (
 )
 
 #: The launcher's default for each of them. The idle watchdog is the wall that fires first in Claude
-#: Code 2.1.197; its default is DERIVED (stream_idle_timeout.py) from the setup's own
+#: Code 2.1.197; its default is DERIVED (hpcagent_agent.driver.stream_idle_timeout) from the setup's own
 #: CONTEXT_LENGTH and AGENTS_PER_NODE rather than copied, but every setup that named neither still
 #: lands on 1800000 ms, the CLI's ceiling for it -- see test_stream_idle_timeout.py.
 LAUNCHER_DEFAULTS = {
     "API_TIMEOUT_MS": "3600000",
-    "CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS": '$("${HPCAGENT_BENCH_IMAGE_PYTHON}" "${SCRIPT_DIR}/stream_idle_timeout.py")',
+    "CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS": '$("${HPCAGENT_BENCH_IMAGE_PYTHON}" -m hpcagent_agent.driver.stream_idle_timeout)',
     # The byte watchdog above is installed only for api.anthropic.com. Against SGLang/vLLM the walls
     # that fire are the SSE-event watchdog (floor 300 s) and Bun's own ~300 s fetch socket timeout,
     # which the CLI lifts only when API_FORCE_IDLE_TIMEOUT is falsy -- both unset cut qwen38 streams
@@ -79,12 +79,8 @@ BASE_ENVS = [name for name in BASES if name.startswith("experiment:")]
 
 
 def load_effort() -> types.ModuleType:
-    """``hpcagent_bench/cluster/effort.py``, loaded by path: it ships in the agent image, not the package."""
-    spec = importlib.util.spec_from_file_location("effort", EXPERIMENTS / "effort.py")
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
+    """``agent/hpcagent_agent/driver/effort.py``, loaded by path: it ships in the agent image, not the package."""
+    module = fresh("effort")
     return module
 
 

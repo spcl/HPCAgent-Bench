@@ -8,20 +8,17 @@ such agent ran 36 minutes over 54 turns and called a `Submit` tool that does not
 records rc=0 and the data point is simply gone, so the driver has to notice and relaunch.
 """
 
-import importlib
 import json
-import pathlib
 import threading
 import time
 
-
-EXAMPLE = pathlib.Path(__file__).resolve().parents[1] / "hpcagent_bench" / "cluster"
+from tests.fresh_module import fresh
 
 
 def load_driver(monkeypatch, **env):
     for key, value in env.items():
         monkeypatch.setenv(key, value)
-    driver = importlib.reload(importlib.import_module("agent_driver"))
+    driver = fresh("agent_driver")
     # The tool registry is a real ``mcp_server.py --describe`` subprocess: ask it before a test fakes Popen.
     driver.tool_registry()
     return driver

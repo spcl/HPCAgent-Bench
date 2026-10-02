@@ -2,7 +2,7 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Build, check and smoke-test the PyPI release of hpcagent-bench; upload only when asked.
+# Build, check and smoke-test the PyPI release of hpcagent-bench and hpcagent-agent; upload only when asked.
 #
 #   scripts/do_release.sh                          # dry run: build + twine check + wheel smoke
 #   scripts/do_release.sh --upload testpypi        # same, then upload to TestPyPI
@@ -14,10 +14,10 @@
 #   --keep          keep the temp work dir (source export, venvs) for inspection
 #
 # The build input is `git archive HEAD` (tracked, committed files only), exported to a local temp
-# dir, so untracked build products never reach the wheel. build/twine and the smoke venv are fresh
-# venvs under that temp dir; the shared repo venv is never touched. The smoke installs the wheel
-# with its dependencies from PyPI and dace from GitHub (scripts/install_dace.sh), so it needs
-# network access.
+# dir, so untracked build products never reach the wheel. `uv build` builds both distributions, twine runs
+# through uvx, and the smoke venv is a fresh uv venv under that temp dir; the shared repo venv is never
+# touched. The smoke installs both wheels with their dependencies from PyPI and dace at the pin from GitHub
+# (scripts/dace_pin.sh), so it needs network access.
 #
 # Credentials for --upload come from the environment (TWINE_USERNAME=__token__ plus
 # TWINE_PASSWORD=<api token>) or ~/.pypirc; this script never asks for or stores one.
@@ -76,22 +76,22 @@ echo "=== export HEAD -> ${WORK}/src ==="
 mkdir -p "${WORK}/src"
 git -C "${REPO_ROOT}" archive --format=tar HEAD | tar -x -C "${WORK}/src"
 
-echo "=== build tools venv ==="
-"${PY}" -m venv "${WORK}/tools"
-"${WORK}/tools/bin/python" -m pip install --quiet --upgrade pip build twine
-
-echo "=== build sdist + wheel -> ${OUTDIR} ==="
+echo "=== build sdists + wheels -> ${OUTDIR} ==="
 mkdir -p "${OUTDIR}"
-rm -f "${OUTDIR}"/hpcagent_bench-*
-"${WORK}/tools/bin/python" -m build --outdir "${OUTDIR}" "${WORK}/src" > "${WORK}/build.log" 2>&1 || {
-  tail -40 "${WORK}/build.log" >&2
-  exit 1
-}
+rm -f "${OUTDIR}"/hpcagent_bench-* "${OUTDIR}"/hpcagent_agent-*
+for project in "${WORK}/src" "${WORK}/src/agent"; do
+  uv build --python "${PY}" --out-dir "${OUTDIR}" "${project}" > "${WORK}/build.log" 2>&1 || {
+    tail -40 "${WORK}/build.log" >&2
+    exit 1
+  }
+done
 WHEEL="$(ls "${OUTDIR}"/hpcagent_bench-"${VERSION}"-*.whl)"
 SDIST="$(ls "${OUTDIR}"/hpcagent_bench-"${VERSION}".tar.gz)"
+AGENT_WHEEL="$(ls "${OUTDIR}"/hpcagent_agent-"${VERSION}"-*.whl)"
+AGENT_SDIST="$(ls "${OUTDIR}"/hpcagent_agent-"${VERSION}".tar.gz)"
 
 echo "=== twine check ==="
-"${WORK}/tools/bin/twine" check --strict "${WHEEL}" "${SDIST}"
+uvx twine check --strict "${WHEEL}" "${SDIST}" "${AGENT_WHEEL}" "${AGENT_SDIST}"
 
 echo "=== wheel contents ==="
 "${PY}" - "${WHEEL}" "${SDIST}" <<'PY'
@@ -128,12 +128,11 @@ PY
 
 if [ "${SMOKE}" -eq 1 ]; then
   echo "=== smoke: fresh venv + wheel install ==="
-  "${PY}" -m venv "${WORK}/smoke"
+  uv venv --python "${PY}" "${WORK}/smoke"
   SPY="${WORK}/smoke/bin/python"
-  "${SPY}" -m pip install --quiet --upgrade pip
-  "${SPY}" -m pip install --quiet "${WHEEL}" pytest
-  # dace the one documented way, so the smoke runs what a user installs next to the wheel.
-  HPCAGENT_BENCH_HOST_PYTHON="${SPY}" "${REPO_ROOT}/scripts/install_dace.sh"
+  # dace at the pin, as uv.lock resolves it for a checkout; PyPI's dace is not the extended branch.
+  uv pip install --quiet --python "${SPY}" "${WHEEL}" "${AGENT_WHEEL}" pytest \
+    "dace @ git+https://github.com/spcl/dace.git@$("${REPO_ROOT}/scripts/dace_pin.sh")"
   mkdir -p "${WORK}/smoke-tests"
   # Pure tests that need the installed package data (every manifest) and nothing from the repo.
   for t in test_output_args.py test_perf_protocol.py test_distributions.py; do
@@ -173,7 +172,7 @@ fi
 
 if [ -n "${UPLOAD}" ]; then
   echo "=== upload -> ${UPLOAD} ==="
-  "${WORK}/tools/bin/twine" upload --repository "${UPLOAD}" "${WHEEL}" "${SDIST}"
+  uvx twine upload --repository "${UPLOAD}" "${AGENT_WHEEL}" "${AGENT_SDIST}" "${WHEEL}" "${SDIST}"
 else
-  echo "dry run OK: ${WHEEL}, ${SDIST} (pass --upload testpypi|pypi to publish)"
+  echo "dry run OK: ${WHEEL}, ${SDIST}, ${AGENT_WHEEL}, ${AGENT_SDIST} (pass --upload testpypi|pypi to publish)"
 fi

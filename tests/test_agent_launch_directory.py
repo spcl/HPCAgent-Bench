@@ -10,7 +10,6 @@ a copy baked into the image. The shell function is cut out of the shipped script
 """
 
 import ast
-import importlib.util
 import os
 import pathlib
 import re
@@ -21,6 +20,8 @@ import sys
 from types import ModuleType
 
 import pytest
+
+from tests.fresh_module import fresh
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 EXPERIMENTS = REPO / "hpcagent_bench" / "cluster"
@@ -159,29 +160,22 @@ def test_every_file_the_agent_step_reaches_beside_itself_is_staged() -> None:
     assert shell_refs | python_refs <= staged, sorted((shell_refs | python_refs) - staged)
 
 
-def test_the_driver_runs_from_a_staged_launch_directory(tmp_path: pathlib.Path) -> None:
-    """With no checkout on sys.path: its sibling modules and its problems file resolve from the launch
-    directory alone, as they must inside an agent container. run_cluster.sh starts the driver as a
-    script, which puts the script's own directory (the launch directory) first on sys.path; the probe
-    does the same and nothing else."""
+def test_the_driver_finds_its_problems_file_in_the_launch_directory(tmp_path: pathlib.Path) -> None:
+    """Run as the agent step runs it (``-P``, cwd RUN_DIR, no checkout on sys.path): the driver imports from the
+    installed hpcagent_agent and finds the staged problems file in the launch directory, SCRIPT_DIR."""
     launch, _ = staged_checkout(tmp_path)
     probe = "\n".join(
         [
-            "import importlib.util, pathlib, sys",
+            "import pathlib",
+            "from hpcagent_agent.driver import agent_driver as driver",
             f"launch = pathlib.Path({str(launch)!r})",
-            "sys.path.insert(0, str(launch))",
-            "spec = importlib.util.spec_from_file_location('agent_driver', launch / 'agent_driver.py')",
-            "driver = importlib.util.module_from_spec(spec)",
-            "sys.modules['agent_driver'] = driver",
-            "spec.loader.exec_module(driver)",
-            "import_dirs = {pathlib.Path(driver.harness_module().__file__).parent}",
-            "import token_cost, promote_unsubmitted",
-            "import_dirs |= {pathlib.Path(m.__file__).parent for m in (token_cost, promote_unsubmitted)}",
             f"assert driver.resolve_problems_path({PROBLEMS!r}) == launch / {PROBLEMS!r}",
-            "assert import_dirs == {launch}, import_dirs",
+            f"assert driver.resolve_problems_path('.rendered/{PROBLEMS}') == launch / {PROBLEMS!r}",
+            "assert driver.resolve_problems_path('/elsewhere/absent.jsonl') == pathlib.Path('/elsewhere/absent.jsonl')",
         ]
     )
     env = {key: value for key, value in os.environ.items() if key not in ("PYTHONPATH", "PYTHONHOME")}
+    env["SCRIPT_DIR"] = str(launch)
     # The agent step's cwd is RUN_DIR, which holds no problems file of its own.
     run_dir = tmp_path / "run"
     run_dir.mkdir()
@@ -191,35 +185,21 @@ def test_the_driver_runs_from_a_staged_launch_directory(tmp_path: pathlib.Path) 
     assert done.returncode == 0, done.stderr
 
 
-def load_driver(name: str) -> ModuleType:
-    spec = importlib.util.spec_from_file_location(name, EXPERIMENTS / "agent_driver.py")
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
-    spec.loader.exec_module(module)
-    return module
+def load_driver() -> ModuleType:
+    return fresh("agent_driver")
 
 
 def test_the_driver_reads_the_payload_the_launcher_bound(
     monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
 ) -> None:
     monkeypatch.setenv("HPCAGENT_BENCH_AGENT_DIR", str(tmp_path))
-    assert load_driver("agent_driver_bound").agent_runtime() == tmp_path
+    assert load_driver().agent_runtime() == tmp_path
 
 
 def test_without_a_bound_payload_the_driver_reads_its_own_checkout(monkeypatch: pytest.MonkeyPatch) -> None:
     """A driver run from a checkout (tests, a host run) has no launcher; no image copy may stand in."""
     monkeypatch.delenv("HPCAGENT_BENCH_AGENT_DIR", raising=False)
-    assert load_driver("agent_driver_checkout").agent_runtime() == REPO / "agent"
-
-
-def test_a_bound_directory_without_tools_stops_the_driver_before_any_agent(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
-) -> None:
-    """A missing bind would otherwise surface as an agent with no tools that exits 0."""
-    monkeypatch.setenv("HPCAGENT_BENCH_AGENT_DIR", str(tmp_path))
-    with pytest.raises(SystemExit, match="HPCAGENT_BENCH_AGENT_DIR"):
-        load_driver("agent_driver_unbound").tool_registry()
+    assert load_driver().agent_runtime() == REPO / "agent"
 
 
 def test_a_read_only_snapshot_env_is_staged_with_its_problems_line(tmp_path: pathlib.Path) -> None:
@@ -264,30 +244,3 @@ def test_a_fused_waves_setups_are_staged_beside_the_env(tmp_path: pathlib.Path) 
         "setup-c-clean.jsonl",
         "setup-c-clean.resolved",
     ]
-
-
-def test_a_snapshot_problems_path_resolves_to_the_staged_copy(tmp_path: pathlib.Path) -> None:
-    """A snapshot env names its problems file `.rendered/<stem>.jsonl`, relative to experiments/. The
-    agent step sees that value (not the launch .env's basename line) and no experiments/ at all, so
-    the driver must find the staged copy in its own launch directory (a job died on it)."""
-    launch, _ = staged_checkout(tmp_path)
-    probe = "\n".join(
-        [
-            "import importlib.util, pathlib, sys",
-            f"launch = pathlib.Path({str(launch)!r})",
-            "sys.path.insert(0, str(launch))",
-            "spec = importlib.util.spec_from_file_location('agent_driver', launch / 'agent_driver.py')",
-            "driver = importlib.util.module_from_spec(spec)",
-            "sys.modules['agent_driver'] = driver",
-            "spec.loader.exec_module(driver)",
-            f"assert driver.resolve_problems_path('.rendered/{PROBLEMS}') == launch / {PROBLEMS!r}",
-            "assert driver.resolve_problems_path('/elsewhere/absent.jsonl') == pathlib.Path('/elsewhere/absent.jsonl')",
-        ]
-    )
-    env = {key: value for key, value in os.environ.items() if key not in ("PYTHONPATH", "PYTHONHOME")}
-    run_dir = tmp_path / "run"
-    run_dir.mkdir()
-    done = subprocess.run(
-        [sys.executable, "-P", "-c", probe], cwd=run_dir, env=env, capture_output=True, text=True, check=False
-    )
-    assert done.returncode == 0, done.stderr

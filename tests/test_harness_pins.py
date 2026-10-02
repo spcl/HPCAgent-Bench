@@ -10,7 +10,7 @@ agent/harness: pins.env (uv, node, the harness python) and node/package.json wit
 
 The second half is the same question about PATHS rather than versions. A pinned venv the driver
 cannot exec is worth as little as an unpinned one, so /opt/harness/<name> is held across the three
-files that spell it: the Dockerfiles that build it, hpcagent_bench/cluster/harnesses.py that execs it, and
+files that spell it: the Dockerfiles that build it, agent/hpcagent_agent/driver/harnesses.py that execs it, and
 verify_image.py, which is the only gate a PULLED image passes through.
 """
 
@@ -21,9 +21,9 @@ import os
 import pathlib
 import re
 import sys
-import tomllib
 
 import pytest
+import tomllib
 
 ROOT: pathlib.Path = pathlib.Path(__file__).resolve().parents[1]
 HARNESS: pathlib.Path = ROOT / "agent" / "harness"
@@ -254,8 +254,8 @@ def module(path: pathlib.Path, name: str) -> object:
 
 @functools.lru_cache(maxsize=1)
 def harnesses() -> object:
-    """hpcagent_bench/cluster/harnesses.py, which puts its own directory on sys.path for ``import effort``."""
-    return module(ROOT / "hpcagent_bench" / "cluster" / "harnesses.py", "harness_pins_harnesses")
+    """agent/hpcagent_agent/driver/harnesses.py, which puts its own directory on sys.path for ``import effort``."""
+    return module(ROOT / "agent" / "hpcagent_agent" / "driver" / "harnesses.py", "harness_pins_harnesses")
 
 
 @functools.lru_cache(maxsize=1)

@@ -17,23 +17,17 @@ idle, with every property above still holding.
 """
 
 import ast
-import importlib.util
 import os
-import pathlib
-import sys
 from types import ModuleType
 
 import pytest
 
-EXAMPLE = pathlib.Path(__file__).resolve().parents[1] / "hpcagent_bench" / "cluster"
+from tests.fresh_module import DRIVER_DIR, fresh
 
 
 def load_example_module(name: str) -> ModuleType:
     """``sys.modules`` must carry the module BEFORE exec, matching tests/test_validate_run.py."""
-    spec = importlib.util.spec_from_file_location(name, EXAMPLE / f"{name}.py")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
+    module = fresh(name)
     return module
 
 
@@ -147,7 +141,7 @@ def test_the_node_is_dealt_over_the_agents_it_runs_not_the_pool_it_declares() ->
     ``cpus[i::120]`` -- two CPUs of 192, 112 idle -- and the shares were still disjoint, still even,
     still spread, so nothing here caught it. Read at the call site because that is where the
     divisor is chosen; ``agent_cpus`` itself was always correct for whatever it was given."""
-    tree = ast.parse((EXAMPLE / "agent_driver.py").read_text())
+    tree = ast.parse((DRIVER_DIR / "agent_driver.py").read_text())
     submits = [
         node
         for node in ast.walk(tree)

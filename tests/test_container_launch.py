@@ -75,10 +75,12 @@ def _exec(sif, *cmd, env=None, background: bool = False, log=None):
     argv = ["apptainer", "exec", "--writable-tmpfs", "--bind", f"{REPO}:{REPO}", "--pwd", str(REPO)]
     for k, v in (env or {}).items():
         argv += ["--env", f"{k}={v}"]
-    # pip chatter goes to stderr (not /dev/null) so a failed install isn't silently discarded.
-    # --no-build-isolation: a plain install would fetch setuptools/wheel from PyPI at launch and time out.
+    # Install chatter goes to stderr (not /dev/null) so a failed install isn't silently discarded.
+    # --no-build-isolation: a plain install would fetch setuptools from PyPI at launch and time out; --no-deps:
+    # the image carries every dependency.
     inner = (
-        f"pip install --break-system-packages --no-build-isolation -e {shlex.quote(str(REPO))} >&2 && "
+        f"uv pip install --system --break-system-packages --no-build-isolation --no-deps "
+        f"-e {shlex.quote(str(REPO))} -e {shlex.quote(str(REPO / 'agent'))} >&2 && "
         "exec " + shlex.join(str(c) for c in cmd)
     )
     argv += [sif, "sh", "-c", inner]

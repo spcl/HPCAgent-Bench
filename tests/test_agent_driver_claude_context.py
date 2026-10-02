@@ -16,18 +16,16 @@ keys every setup snapshot ALREADY carries -- CONTEXT_LENGTH and the engine's --c
 --max-model-len -- so a pending job picks the fix up at start without being re-rendered.
 """
 
-import importlib.util
 import math
 import pathlib
-import sys
 from types import ModuleType, SimpleNamespace
 
 import pytest
 
 from tests.env_render import BASES, rendered
+from tests.fresh_module import fresh
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-EXPERIMENTS = REPO / "hpcagent_bench" / "cluster"
 
 #: The window each model is served with (the engine's argument, or the provider's published one).
 SERVED = {
@@ -66,11 +64,7 @@ TRIGGERS = {
 
 
 def load(name: str) -> ModuleType:
-    spec = importlib.util.spec_from_file_location(name, EXPERIMENTS / f"{name}.py")
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
+    module = fresh(name)
     return module
 
 

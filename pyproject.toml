@@ -37,8 +37,8 @@ classifiers = [
 # What the library imports at module level (hpcagent_bench/ outside benchmarks/ and tests/). The
 # framework matrix (torch/jax/tvm/triton/...) is per platform and lives in the extras; numba is core
 # because it is the default LLR/SciComp baseline.
-# dace is not a dependency (PyPI rejects direct-URL requirements): scripts/install_dace.sh installs
-# the commit [tool.hpcagent-bench] dace-pin names below.
+# dace resolves to the spcl/dace@extended commit [tool.uv.sources] pins; hpcagent-agent is the agent-side
+# runtime (agent/), a workspace member.
 dependencies = [
     # numpy 2: the references are graded under its NEP 50 scalar promotion; 2.3.2 is the first
     # release with Python 3.14 wheels.
@@ -53,6 +53,8 @@ dependencies = [
     "cffi",
     "sympy",
     "numba",
+    "dace",
+    "hpcagent-agent",
 ]
 
 [project.urls]
@@ -174,10 +176,31 @@ harness-openhands = [
 # in their own venv (harbor>=0.23 needs rich>=14, which litellm's judge-proxy stack refuses).
 harbor = ["harbor>=0.23.0", "podman-compose>=1.6"]
 
-# The spcl/dace@extended commit this release is tested with, and the ONE place it is written.
-# scripts/install_dace.sh, the image builds, CI and jobs all use it (scripts/dace_pin.sh reads it).
-[tool.hpcagent-bench]
-dace-pin = "3cec0d97daa096f31b4b6c5caa6dd9149481638c"
+[tool.uv.workspace]
+members = ["agent"]
+
+[tool.uv.sources]
+# The spcl/dace@extended commit this release is tested with, and the ONE place it is written: uv.lock
+# records it, and the image builds and jobs read it through scripts/dace_pin.sh.
+dace = { git = "https://github.com/spcl/dace.git", rev = "3cec0d97daa096f31b4b6c5caa6dd9149481638c" }
+hpcagent-agent = { workspace = true }
+torch = [{ index = "pytorch-cpu", extra = "cpu" }]
+
+[[tool.uv.index]]
+# A CPU box takes torch from PyTorch's CPU index: the PyPI wheel is the CUDA build.
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv]
+# Linux only: the toolchain, the seal and the images are.
+environments = ["sys_platform == 'linux'"]
+# One environment per hardware extra, and each group is its own venv (litellm's judge-proxy stack needs
+# rich<14; harbor and the OpenHands tools need rich>=14).
+conflicts = [
+    [{ extra = "cpu" }, { extra = "amd" }, { extra = "nvidia" }],
+    [{ group = "judge-proxy" }, { group = "harbor" }, { group = "harness-miniswe" }, { group = "harness-openhands" }],
+]
 
 [tool.setuptools]
 include-package-data = true
@@ -230,9 +253,6 @@ hpcagent_bench = [
 
 # Third-party warnings only (zero-warning policy for our own code).
 [tool.pytest.ini_options]
-# The ONE place tests get their import path: the checkout under test (not whatever tree an editable
-# install points at), plus the script directories whose modules run as scripts beside each other.
-pythonpath = [".", "hpcagent_bench/cluster", "scripts", "agent/tools", "agent/harness"]
 filterwarnings = [
     # starlette's TestClient portal teardown, inside anyio/starlette.
     "ignore:.*BlockingPortal.*:DeprecationWarning:anyio",

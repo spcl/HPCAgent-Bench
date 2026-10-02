@@ -1,6 +1,6 @@
 # Pre-commit formatting for HPCAgent-Bench (column limit 120).
 #
-#   one-time:   pip install pre-commit && pre-commit install
+#   one-time:   uv sync --extra dev && pre-commit install
 #   all files:  pre-commit run --all-files   (== python scripts/checks/check_format.py --fix --all)
 #   on commit:  runs automatically over staged files
 #

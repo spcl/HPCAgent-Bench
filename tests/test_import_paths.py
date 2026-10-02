@@ -1,8 +1,7 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""No tracked file edits ``sys.path`` or ``PYTHONPATH``: the package is installed (``pip install -e .``
-on a host, baked into the images), and the suite takes its path from pyproject's pytest
-``pythonpath``. Every other edit is either on :data:`ALLOWED` below, with the reason it has to
+"""No tracked file edits ``sys.path`` or ``PYTHONPATH``: the packages are installed (``uv sync``
+on a host, the image hooks in a container), and the suite imports them as installed. Every other edit is either on :data:`ALLOWED` below, with the reason it has to
 exist, or a failure here. Markdown is scanned too, so an instruction to export PYTHONPATH cannot come
 back into the docs.
 """
@@ -29,16 +28,7 @@ EDIT = re.compile(
 
 #: Repo-relative path -> why that file may edit the import path.
 ALLOWED: dict[str, str] = {
-    # Tests: a child process or a temp module, given its own path.
-    "tests/test_dace_helper_programs.py": "temp module written under tmp_path",
-    "tests/test_packaging.py": "child imports the installed wheel and nothing else",
     "tests/test_import_paths.py": "this file spells the patterns it searches for",
-    "tests/test_agent_launch_directory.py": "child process that loads the driver from a copied launch directory",
-    "tests/test_omp_context_gate.py": "loads the image gate by file, as the image build runs it",
-    # Image build gates: run by path before the package is installed, under PYTHONSAFEPATH.
-    "containers/lib/omp_context_gate.py": "image build gate, imports its sibling openmp_runtimes.py",
-    "containers/lib/omp_context_scan.py": "image build gate, imports its sibling openmp_runtimes.py",
-    "containers/lib/one_openmp_gate.py": "image build gate, imports its sibling openmp_runtimes.py",
 }
 
 

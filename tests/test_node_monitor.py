@@ -9,7 +9,6 @@ monitor_report.py must keep reading both the old 8-column files (already on disk
 from past runs) and the new extended ones -- pinned here so neither format regresses.
 """
 
-import importlib.util
 import os
 import shutil
 import signal
@@ -19,6 +18,8 @@ import time
 from pathlib import Path
 
 import pytest
+
+from tests.fresh_module import fresh
 
 EXAMPLE = Path(__file__).resolve().parents[1] / "hpcagent_bench" / "cluster"
 SCRIPT = EXAMPLE / "node_monitor.sh"
@@ -158,10 +159,7 @@ def test_header_is_fixed_for_the_life_of_the_csv_file(tmp_path) -> None:
 
 
 def monitor_report():
-    spec = importlib.util.spec_from_file_location("monitor_report", REPORT)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module  # registered before exec, as a real import does
-    spec.loader.exec_module(module)
+    module = fresh("hpcagent_bench.cluster.monitor_report")
     return module
 
 

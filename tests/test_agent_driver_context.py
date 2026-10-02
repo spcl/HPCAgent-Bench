@@ -8,14 +8,11 @@ The CLI closes such a run with subtype ``success`` and exit 0 (2.1.197: exit 1) 
 death as a finished run and the setup reads as complete.
 """
 
-import importlib.util
-import pathlib
-import sys
 from types import ModuleType
 
 import pytest
 
-EXAMPLE = pathlib.Path(__file__).resolve().parents[1] / "hpcagent_bench" / "cluster"
+from tests.fresh_module import fresh
 
 #: The closing event of a killed agent, verbatim in shape from a 594529 claude.log (vLLM).
 OVERFLOW = (
@@ -34,10 +31,7 @@ SGLANG_OVERFLOW = (
 
 def load_example_module(name: str) -> ModuleType:
     """``sys.modules`` must carry the module BEFORE exec, matching tests/test_validate_run.py."""
-    spec = importlib.util.spec_from_file_location(name, EXAMPLE / f"{name}.py")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
+    module = fresh(name)
     return module
 
 
