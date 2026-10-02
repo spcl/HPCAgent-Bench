@@ -285,7 +285,7 @@ def test_a_generic_cluster_submits_from_flags_alone(tmp_path: pathlib.Path) -> N
 
 
 def test_job_options_resolve_flag_over_environment_over_system(tmp_path: pathlib.Path) -> None:
-    """The experiment path takes the same precedence as `hpcagent-bench job submit`, from the one resolver."""
+    """The cluster path takes the same precedence as `hpcagent-bench job submit`, from the one resolver."""
     root = tree(tmp_path)
     common = {"KERNELS_FILE": "subset.txt", "SUBMIT": "1", "HPCAGENT_BENCH_JOB_GPUS_PER_NODE": None}
 

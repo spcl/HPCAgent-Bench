@@ -108,7 +108,7 @@ SETUP_RENAMES_PATH = pathlib.Path(__file__).resolve().parent / "envs" / "setup_r
 
 #: A clean re-run's setup-name suffix; every ``-clean`` setup folds into its base identity. Clean is a
 #: run flag carried by the SETUP NAME alone -- submit_common.sh's ``clean_suffix`` leaves the identity
-#: columns (experiment/model/language/device/packet) untouched -- so it must never survive into a
+#: columns (study/model/language/device/packet) untouched -- so it must never survive into a
 #: recorded ``language`` value. Older env files baked it in; :func:`split_record_language` unwinds it.
 CLEAN_SUFFIX = "-clean"
 

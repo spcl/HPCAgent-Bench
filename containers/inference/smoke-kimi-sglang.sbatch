@@ -281,8 +281,8 @@ for tag, prompt, expect in gate:
 
 # --- throughput: streamed completions at 10k-token prompts, per-request-distinct prefixes so
 # every request pays real prefill (the experiment's cache-cold shape is what killed the vLLM setup)
-def one_request(idx, arm, out, tools=False):
-    prompt = f'request {idx} of arm {arm}. ' + FILLER * 700 + '\nExplain loop tiling in detail.'
+def one_request(idx, setup, out, tools=False):
+    prompt = f'request {idx} of setup {setup}. ' + FILLER * 700 + '\nExplain loop tiling in detail.'
     if tools:
         body = {'model': MODEL, 'max_tokens': 256, 'temperature': 0, 'stream': True,
                 'ignore_eos': True,
@@ -309,7 +309,7 @@ def one_request(idx, arm, out, tools=False):
     except Exception as e:
         out[idx] = ('ERR', repr(e)[:80], 0)
 
-def run_arm(name, conc, tools=False):
+def run_setup(name, conc, tools=False):
     out = {}
     threads = [threading.Thread(target=one_request, args=(i, f'{name}{conc}', out, tools))
                for i in range(conc)]
@@ -341,11 +341,11 @@ def run_arm(name, conc, tools=False):
 sweep_tools = os.environ.get('SWEEP_TOOLS', '1') != '0'
 print(f'===== sweep: streamed chat, 10k-token cache-cold prompts, tools={sweep_tools} =====', flush=True)
 for c in [int(x) for x in os.environ.get('SWEEP_CONCURRENCY', '1 8 16').split()]:
-    run_arm('sglang-sweep', c, tools=sweep_tools)
+    run_setup('sglang-sweep', c, tools=sweep_tools)
 # Same shape and concurrency as the last sweep leg, deliberately: a SECOND measurement at conc 16
 # inside one run, which is the only within-run estimate of variance this harness produces.
 print('===== experiment shape: chat+stream+tools (repeat at conc 16) =====', flush=True)
-run_arm('sglang-tools', 16, tools=True)
+run_setup('sglang-tools', 16, tools=True)
 
 if FAILURES:
     print('===== SMOKE FAILED =====', flush=True)
