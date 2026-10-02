@@ -74,7 +74,7 @@ TABLES = (
     "disqualifications",
     "reference_scaling_points",
 )
-#: Tables only the legacy layout had; a file holding one is migrated, never opened.
+#: Tables only the legacy layout had; a file holding one is refused.
 LEGACY_TABLES = frozenset({"calls", "submissions", "attempts", "submission_cells", "regrade_tasks", "regrades"})
 #: Grade kinds an agent's request produced (the call trajectory), and those that answer a /submit.
 CALL_KINDS = ("score", "submit")

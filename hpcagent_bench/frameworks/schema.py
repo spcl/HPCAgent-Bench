@@ -7,7 +7,6 @@ the DDL (``create_all``) and the row inserts."""
 import re
 from typing import ClassVar
 
-from sqlalchemy import Table
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.pool import NullPool
@@ -19,7 +18,6 @@ __all__ = [
     "RESULTS_TABLE",
     "KernelMetric",
     "Result",
-    "add_missing_columns",
     "is_concurrent_schema_race",
     "results_engine",
 ]
@@ -28,14 +26,13 @@ __all__ = [
 RESULTS_TABLE = "results"
 
 #: SQLite's message when another connection ran the same check-then-act DDL first (CREATE TABLE in
-#: ``create_all``, ALTER TABLE in :func:`add_missing_columns`). Matched by message: SQLite raises a
-#: plain ``OperationalError`` for real schema errors too.
-CONCURRENT_SCHEMA_RACE = re.compile(r"table \S+ already exists|duplicate column name")
+#: ``create_all``). Matched by message: SQLite raises a plain ``OperationalError`` for real schema errors too.
+CONCURRENT_SCHEMA_RACE = re.compile(r"table \S+ already exists")
 
 
 def is_concurrent_schema_race(exc: OperationalError) -> bool:
     """True when ``exc`` is the loser of a same-DDL race against another writer to this shard file,
-    not a genuine schema problem -- the table/column it wanted now exists either way."""
+    not a genuine schema problem -- the table it wanted now exists either way."""
     message = str(exc.orig) if exc.orig is not None else str(exc)
     return CONCURRENT_SCHEMA_RACE.search(message) is not None
 
@@ -101,42 +98,10 @@ class KernelMetric(SQLModel, table=True):
     node: str | None = None
 
 
-def add_missing_columns(engine: Engine) -> None:
-    """Add to an existing ``results`` table every nullable column :class:`Result` declares and the
-    table lacks (``create_all`` never alters a present table). Old rows read NULL for it; a missing
-    NOT NULL column raises, since no value can be backfilled. Each ADD COLUMN commits on its own, so
-    losing a same-column race to another rank (:data:`CONCURRENT_SCHEMA_RACE`) keeps the columns
-    this call already added."""
-    # The metadata, not ``Result.__table__``: the same Table object, and the one spelling typed.
-    table: Table = SQLModel.metadata.tables[RESULTS_TABLE]
-    with engine.connect() as conn:
-        present: set[str] = {row[1] for row in conn.exec_driver_sql(f"PRAGMA table_info({table.name})")}
-        if not present:
-            return  # create_all just built it from the model; nothing to reconcile
-        for name, column in table.columns.items():
-            if name in present:
-                continue
-            if not column.nullable:
-                raise RuntimeError(
-                    f"results table lacks the NOT NULL column {name!r} and no value can be "
-                    f"backfilled for existing rows; migrate {engine.url.database} by hand"
-                )
-            sql_type = column.type.compile(engine.dialect)
-            try:
-                conn.exec_driver_sql(f"ALTER TABLE {table.name} ADD COLUMN {name} {sql_type}")
-            except OperationalError as exc:
-                if not is_concurrent_schema_race(exc):
-                    raise
-                conn.rollback()  # another rank's ALTER for this column won the race; keep going
-                continue
-            conn.commit()
-
-
 def results_engine(db_path: str) -> Engine:
-    """A SQLModel engine for the results DB at ``db_path``, with the table created from
-    :class:`Result` when absent and reconciled to it when present (:func:`add_missing_columns`).
-    A lost CREATE TABLE race (:data:`CONCURRENT_SCHEMA_RACE`) is ignored: the winner built the
-    same table. No pool: a connection closes when its Session does, so a caller never owns a
+    """A SQLModel engine for the results DB at ``db_path``, with the table created from :class:`Result`
+    when absent. A lost CREATE TABLE race (:data:`CONCURRENT_SCHEMA_RACE`) is ignored: the winner built
+    the same table. No pool: a connection closes when its Session does, so a caller never owns a
     connection the garbage collector would find still open."""
     engine = create_engine(f"sqlite:///{db_path}", connect_args={"check_same_thread": False}, poolclass=NullPool)
     try:
@@ -144,5 +109,4 @@ def results_engine(db_path: str) -> Engine:
     except OperationalError as exc:
         if not is_concurrent_schema_race(exc):
             raise
-    add_missing_columns(engine)
     return engine

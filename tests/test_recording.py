@@ -59,8 +59,8 @@ def _ok_verify(**kw):
     return VerifyResult(**base)
 
 
-def test_connect_creates_the_v1_schema(tmp_path: pathlib.Path) -> None:
-    """One schema, created on first connect: exactly the v1 tables, stamped ``user_version`` 1, and a
+def test_connect_creates_the_current_schema(tmp_path: pathlib.Path) -> None:
+    """One schema, created on first connect: exactly the current tables, stamped with the schema version, and a
     grade records the build commands (the commands themselves), never a per-row machine name."""
     db = str(tmp_path / "r.db")
     conn = recording.connect(db)

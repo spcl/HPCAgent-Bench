@@ -959,9 +959,8 @@ def test_the_pairs_csv_route_draws_its_marks_under_the_repeat_policy_it_was_aske
                 "cost_model": "effective",
                 "score_rule": score_rule.SCORE_RULE,
                 "kernel_policy": efficacy_figures.SPEEDUP_OVER.value,
-                # Pair columns as written before the setup rename: read through the legacy alias.
-                "arm_a": "git-repo",
-                "arm_b": "git-kernel",
+                "setup_a": "git-repo",
+                "setup_b": "git-kernel",
                 "leg": leg,
                 "verdict": efficacy.NOT_SIGNIFICANT,
                 "n_pairs": KERNELS,

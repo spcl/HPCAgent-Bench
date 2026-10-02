@@ -1,12 +1,10 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""A results DB written before a column existed must still accept inserts.
+"""``results_engine`` builds the framework-sweep ``results`` table and holds no connection open.
 
-``SQLModel.metadata.create_all`` is CREATE TABLE IF NOT EXISTS: it builds the table when absent and
-does nothing whatsoever when present. Every deployment carries a results DB -- it is a persistent
-artifact, one per rank of every past run -- so declaring a new field on ``Result`` without
-reconciling the table breaks the next INSERT on every one of them, with a message
-("table results has no column named X") that names the symptom and not the cause.
+Every rank of a sweep writes through its own shard file, and the first writes of four ranks race the
+CREATE TABLE of one file; the plot loader reads the rows back, folding ``flavor`` and ``build`` into the
+series name and partitioning by machine.
 """
 
 import multiprocessing
@@ -21,73 +19,6 @@ from sqlmodel import Session, select
 from hpcagent_bench import osinfo
 from hpcagent_bench.frameworks.schema import Result, results_engine
 from tests.sqlite_closing import connect
-
-#: The table as it stood before ``flavor`` / ``build``: enough columns to insert a legacy row.
-LEGACY_DDL = """
-CREATE TABLE results (
-    id INTEGER PRIMARY KEY,
-    timestamp INTEGER NOT NULL,
-    benchmark VARCHAR NOT NULL,
-    domain VARCHAR,
-    preset VARCHAR NOT NULL,
-    framework VARCHAR NOT NULL,
-    agent VARCHAR,
-    validated BOOLEAN NOT NULL,
-    time FLOAT NOT NULL,
-    native_time FLOAT,
-    datatype VARCHAR,
-    variant VARCHAR,
-    prompt_hash VARCHAR,
-    execution VARCHAR NOT NULL,
-    cpu VARCHAR NOT NULL
-)
-"""
-
-
-@pytest.fixture
-def legacy_db(tmp_path: pathlib.Path) -> str:
-    """A results DB one column behind the model, with a row already in it."""
-    path = tmp_path / "hpcagent_bench.db"
-    with connect(path) as conn:
-        conn.execute(LEGACY_DDL)
-        conn.execute(
-            "INSERT INTO results (timestamp, benchmark, preset, framework, validated, time, execution, cpu) "
-            "VALUES (1, 'gemm', 'S', 'numpy', 1, 1.5, 'native', 'legacy-cpu')"
-        )
-    return str(path)
-
-
-def test_a_legacy_db_accepts_a_row_carrying_the_new_column(legacy_db: str) -> None:
-    engine = results_engine(legacy_db)
-    with Session(engine) as session:
-        session.add(
-            Result(
-                timestamp=2,
-                benchmark="gemm",
-                preset="S",
-                framework="dace_cpu",
-                flavor="parallel",
-                validated=True,
-                time=0.5,
-                build="extended",
-                cpu="test-cpu",
-            )
-        )
-        session.commit()
-    with Session(engine) as session:
-        rows = {r.framework: (r.flavor, r.build) for r in session.exec(select(Result))}
-    # The pre-existing row reads back as NULL, which is what "this run predates the axis" means --
-    # it must not be backfilled with a guess that would make it comparable to a labelled row.
-    assert rows == {"numpy": (None, None), "dace_cpu": ("parallel", "extended")}
-
-
-def test_reconciling_twice_is_a_no_op(legacy_db: str) -> None:
-    results_engine(legacy_db)
-    results_engine(legacy_db)  # ADD COLUMN is not idempotent in SQLite; the guard must be
-    with connect(legacy_db) as conn:
-        names = [row[1] for row in conn.execute("PRAGMA table_info(results)")]
-    assert names.count("flavor") == 1
-    assert names.count("build") == 1
 
 
 def create_schema_race_worker(
