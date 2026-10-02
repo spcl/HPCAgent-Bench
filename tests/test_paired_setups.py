@@ -631,7 +631,7 @@ def test_a_declared_roster_is_read_from_the_file_and_not_from_the_rows(
     assert paired_setups.declared_roster(None, rows) == ["k1", "k2"]
 
 
-def test_an_setup_short_of_the_declared_roster_leaves_the_family(
+def test_a_setup_short_of_the_declared_roster_leaves_the_family(
     paired_setups: ModuleType, tmp_path: pathlib.Path
 ) -> None:
     """Both setups cover every kernel they were given, and the roster says one more was expected, so
@@ -804,7 +804,7 @@ def test_no_submit_rate_is_over_every_episode_not_the_kernels_final_one(
     assert row["no_submit_rate"] == pytest.approx(0.5)
 
 
-def test_no_submit_rate_is_absent_for_an_setup_with_no_episodes_in_the_frame(paired_setups: ModuleType) -> None:
+def test_no_submit_rate_is_absent_for_a_setup_with_no_episodes_in_the_frame(paired_setups: ModuleType) -> None:
     """An empty ``graded`` frame names no setup at all, so the mapping stays empty and a caller reading
     it back with ``.get(setup, nan)`` sees NaN, never a fabricated 0.0."""
     empty = frame([]).assign(
@@ -950,7 +950,7 @@ def test_coverage_is_an_exact_mcnemar_on_the_discordant_kernels(
 
 
 @pytest.mark.parametrize(("n", "has_interval"), [(5, False), (6, True)])
-def test_an_setup_interval_is_withheld_below_six_kernels(paired_setups: ModuleType, n: int, has_interval: bool) -> None:
+def test_a_setup_interval_is_withheld_below_six_kernels(paired_setups: ModuleType, n: int, has_interval: bool) -> None:
     """Spec A1/A2: the setup geomean keeps its point at any n, its interval only from 6 values up."""
     point, low, high = paired_setups.floored_geomean([1.0, 2.0, 4.0, 1.0, 2.0, 4.0][:n])
     assert point > 1.0
@@ -985,7 +985,7 @@ def test_a_served_kernel_without_a_task_token_total_is_dropped_loudly(
         ("harness20-qwen38-claude", ["", ""], ""),
     ],
 )
-def test_an_setup_named_without_a_language_takes_the_language_its_rows_recorded(
+def test_a_setup_named_without_a_language_takes_the_language_its_rows_recorded(
     paired_setups: ModuleType, arm: str, recorded: list[str], want: str
 ) -> None:
     """A harness setup's name carries no language token; its rows do, so it pairs with its ``-c`` treatment."""

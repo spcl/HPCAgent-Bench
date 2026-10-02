@@ -88,8 +88,8 @@ PAIR_COLUMNS = (
     "score_rule",
     # the kernel population the speedup leg was taken over (--policy); a figure refuses another one
     "kernel_policy",
-    "arm_a",
-    "arm_b",
+    "setup_a",
+    "setup_b",
     "baseline",
     "n_a",
     "n_b",
@@ -443,8 +443,8 @@ def pair_rows(
             warn_missing_tokens(setup_a, setup_b, kernels_a & kernels_b, tokens)
         head = {
             "family": family,
-            "arm_a": setup_a,
-            "arm_b": setup_b,
+            "setup_a": setup_a,
+            "setup_b": setup_b,
             "baseline": left.baseline,
             "n_a": left.n,
             "n_b": right.n,

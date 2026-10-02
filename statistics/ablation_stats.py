@@ -39,8 +39,8 @@ PAIRS_SUFFIX = "-pairs.csv"
 #: from ``rho_score`` on is a second, untested quantity (a ratio of geometric means) with its own
 #: bootstrap interval.
 PAIR_COLUMNS = (
-    "arm_a",
-    "arm_b",
+    "setup_a",
+    "setup_b",
     "test",
     "parameter",
     "n_both",
@@ -213,11 +213,11 @@ def load_effective_costs(
     Needs pandas, so the imports are local to this branch; a run without ``--observations`` never
     pays for them.
     """
-    from hpcagent_bench import experiments as bench_studies
+    from hpcagent_bench import studies
     from hpcagent_bench.stats import cost, population
 
     frame = cost.priced(
-        bench_studies.read_observations(pathlib.Path(observations)),
+        studies.read_observations(pathlib.Path(observations)),
         cost.resolve(cost_model or cost.DEFAULT_COST_MODEL),
     )
     if "arm" not in frame.columns:
@@ -469,8 +469,8 @@ def pair_stats(
     efficacy["n_cost"] = len(priced)
 
     shared = {
-        "arm_a": name_a,
-        "arm_b": name_b,
+        "setup_a": name_a,
+        "setup_b": name_b,
         "n_both": len(both),
         "n_only_a": only_a,
         "n_only_b": only_b,

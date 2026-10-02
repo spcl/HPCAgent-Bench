@@ -312,7 +312,7 @@ def test_points_never_raises_a_bare_keyerror_when_the_two_sides_share_no_model_l
 def test_a_treatment_setup_that_never_recorded_its_language_still_pairs_against_control(
     tmp_path: pathlib.Path,
 ) -> None:
-    """``load`` (through ``experiments.fill_setup_identity``) must recover ``c`` from the setup's own
+    """``load`` (through ``studies.fill_setup_identity``) must recover ``c`` from the setup's own
     name, and ``one_treatment_panel`` must then find the (model, language) key it shares with its
     control instead of finding nothing."""
     path = tmp_path / "observations.csv"
@@ -359,7 +359,7 @@ def test_a_treatment_setup_that_never_recorded_its_language_still_pairs_against_
     assert (stats.iloc[0].model, stats.iloc[0].language) == ("oss120b", "c")
 
 
-def test_complete_side_setups_drops_an_setup_short_of_the_roster_and_names_it_on_stderr(
+def test_complete_side_setups_drops_a_setup_short_of_the_roster_and_names_it_on_stderr(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """A setup missing a roster kernel is dropped, not entered at any stand-in value, and named so
@@ -578,8 +578,8 @@ def family_csv(pairs: list[tuple[str, str]], score_verdict: str, cost_verdict: s
                 "score_rule": score_rule.SCORE_RULE,
                 "cost_model": cost.DEFAULT_COST_MODEL,
                 "kernel_policy": efficacy_figures.SPEEDUP_OVER.value,
-                "arm_a": treated,
-                "arm_b": control,
+                "setup_a": treated,
+                "setup_b": control,
                 "leg": leg,
                 "n_pairs": n,
                 "n_tested": n,
@@ -959,6 +959,7 @@ def test_the_pairs_csv_route_draws_its_marks_under_the_repeat_policy_it_was_aske
                 "cost_model": "effective",
                 "score_rule": score_rule.SCORE_RULE,
                 "kernel_policy": efficacy_figures.SPEEDUP_OVER.value,
+                # Pair columns as written before the setup rename: read through the legacy alias.
                 "arm_a": "git-repo",
                 "arm_b": "git-kernel",
                 "leg": leg,
@@ -988,7 +989,7 @@ def test_the_pairs_csv_route_draws_its_marks_under_the_repeat_policy_it_was_aske
         drawn.append(points[1].x)
         return points
 
-    monkeypatch.setattr(efficacy_figures, "arm_points", spy)
+    monkeypatch.setattr(efficacy_figures, "setup_points", spy)
     args = argparse.Namespace(
         speedup_over=efficacy_figures.SPEEDUP_OVER,
         pairs_csv=pairs_csv,

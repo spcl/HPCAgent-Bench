@@ -315,6 +315,15 @@ def same_policy(table: pd.DataFrame, source: pathlib.Path, over: population.Kern
         )
 
 
+#: Pair columns of a family CSV written before the setup rename.
+LEGACY_PAIR_COLUMNS: dict[str, str] = {"arm_a": "setup_a", "arm_b": "setup_b"}
+
+
+def read_family_csv(path: str | pathlib.Path) -> pd.DataFrame:
+    """A family CSV from ``statistics/paired_setups.py``; older files name the pair columns ``arm_a``/``arm_b``."""
+    return pd.read_csv(path).rename(columns=LEGACY_PAIR_COLUMNS)
+
+
 def family_pairs(table: pd.DataFrame) -> list[tuple[str, str]]:
     """Every ``(treatment, control)`` the family CSV names, in the order it declared them."""
     seen: dict[tuple[str, str], None] = {}
@@ -433,7 +442,7 @@ def figure_from_pairs(args: argparse.Namespace, config: efficacy_figures.FigureC
     ``config`` and ``--repeats`` are passed on EXPLICITLY. Left to their defaults, this route drew
     its marks under ``latest`` while the table beside it was written under the requested policy, so
     a gitscicomp10 panel (REPEAT=3, median) showed Kimi at 3.57x where its own CSV said 0.67x."""
-    table = pd.read_csv(args.pairs_csv)
+    table = read_family_csv(args.pairs_csv)
     pairs = family_pairs(table)
     if not pairs:
         raise SystemExit(f"{args.pairs_csv} names no pairs")
@@ -613,7 +622,7 @@ def build_comparison(
     title = spec.get("title") or study_tags.packet_name(intervention)
     observations = spec_observations(spec, default_observations)
     if "pairs" in spec:
-        table = pd.read_csv(pathlib.Path(spec["pairs"]))
+        table = read_family_csv(pathlib.Path(spec["pairs"]))
         same_card(table, card, pathlib.Path(spec["pairs"]))
         same_rule(table, pathlib.Path(spec["pairs"]))
         same_policy(table, pathlib.Path(spec["pairs"]), over)
