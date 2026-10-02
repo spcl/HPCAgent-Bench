@@ -56,6 +56,10 @@ __all__ = [
     "context_for_python_source",
     "context_root",
     "context_runtime",
+    "CATALOG_ENV",
+    "CATALOG_KEY",
+    "CatalogMissing",
+    "catalog_path",
     "context_view",
     "library_refusal",
     "numba_omp_pool_launched",
@@ -81,6 +85,12 @@ NUMBA_LAYER: Mapping[str, str] = {GNU: "omp", LLVM: "omp", NVHPC: "workqueue"}
 
 #: ``config.yaml`` key naming the directory that holds the context directories.
 ROOT_KEY = "runtime.omp_context_root"
+
+#: ``config.yaml`` key naming the catalog file (:data:`CATALOG_FILE` in the context root when empty).
+CATALOG_KEY = "runtime.omp_catalog"
+
+#: The environment variable that sets :data:`CATALOG_KEY` (config.py's ``HPCAGENT_BENCH_<DOTTED_KEY>`` rule).
+CATALOG_ENV = "HPCAGENT_BENCH_RUNTIME_OMP_CATALOG"
 
 #: Environment variable a child carries so its own gate and log lines name the context it runs in.
 CONTEXT_ENV = "HPCAGENT_BENCH_OMP_CONTEXT"
@@ -273,18 +283,36 @@ def read_catalog(path: str, mtime_ns: int) -> dict[str, dict[str, list[str] | No
     return json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
 
 
+class CatalogMissing(RuntimeError):
+    """A host with OpenMP contexts has no readable catalog: grading would silently refuse nothing."""
+
+
+def catalog_path() -> pathlib.Path:
+    """Where the catalog is read and written: ``runtime.omp_catalog``, else ``catalog.json`` in the context root."""
+    named = config.get_str(CATALOG_KEY, "")
+    return pathlib.Path(named) if named else context_root() / CATALOG_FILE
+
+
 def catalog_record() -> dict[str, dict[str, list[str] | None]] | None:
-    """The image's catalog record, or ``None`` on a host that has none (a login node, CI)."""
-    path = context_root() / CATALOG_FILE
+    """The catalog record, or ``None`` on a host without OpenMP contexts (a login node, CI), which has nothing to
+    refuse. A host with contexts and no readable catalog raises :class:`CatalogMissing`: the job start step
+    ``python3 -m hpcagent_bench.omp_catalog --write`` writes it, so a missing one is a job set up wrong."""
+    if not any(context_dir(context) for context in CONTEXTS):
+        return None
+    path = catalog_path()
     try:
         return read_catalog(str(path), path.stat().st_mtime_ns)
-    except (OSError, ValueError):
-        return None
+    except (OSError, ValueError) as error:
+        raise CatalogMissing(
+            f"the OpenMP catalog {path} cannot be read ({error}). It is written at every job start by "
+            f"`python3 -m hpcagent_bench.omp_catalog --write {path}` (hpcagent_bench/cluster/run_cluster.sh); "
+            f"point {CATALOG_ENV} at it"
+        ) from error
 
 
 def library_refusal(name: str, context: str) -> str:
-    """Why catalog library ``name`` may not be linked by a ``context`` build, or ``""``, by the image's own
-    record (:func:`refusal_from`); a host with no record refuses nothing."""
+    """Why catalog library ``name`` may not be linked by a ``context`` build, or ``""``, by the catalog
+    (:func:`refusal_from`); a host without OpenMP contexts refuses nothing."""
     return refusal_from(catalog_record(), name, context)
 
 
