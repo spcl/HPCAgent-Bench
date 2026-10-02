@@ -71,7 +71,8 @@ def test_judge_server_bounds_concurrent_grades_to_device_slots(monkeypatch) -> N
                 json.loads(resp.read())
                 statuses.append(resp.status)
         except urllib.error.HTTPError as exc:
-            statuses.append(exc.code)
+            with exc:  # an HTTPError holds the response body open until closed
+                statuses.append(exc.code)
 
     try:
         firers = [threading.Thread(target=fire) for _ in range(6)]
