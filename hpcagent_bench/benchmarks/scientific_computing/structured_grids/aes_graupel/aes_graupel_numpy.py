@@ -42,6 +42,11 @@ and the ones the last step produced (``t = 0.5 * (t0 + t)``), as a dynamical cor
 back while the microphysics integrates cloud and precipitation. A step thus reads the previous one, the
 temperature and vapour stay between the initial and the produced values, and the cloud and the precipitation
 keep forming. The outputs are the last step's.
+
+Form: every call of a scalar helper stands alone on the right of an assignment, and the four precipitating
+categories are copied into ``qcol`` so one loop over them calls ``fall`` with a runtime index. The Fortran emitter
+lowers a scalar helper only in the first form, and the emitters do not specialise a helper that a nested helper calls
+with different literal arguments (the first caller's would serve all).
 """
 
 import numpy as np
@@ -295,11 +300,10 @@ def vapor_x_snow(t, p, rho, qs, ns, slope, eta, ice_dep, dvsw, dvsi, dvsw0, dt):
                 rate = np.minimum(rate, dvsi / dt - ice_dep)
             if qs <= 1.0e-7:
                 rate = np.minimum(rate, 0.0)
+        elif t > (TMELT - TX * dvsw0):
+            rate = (31282.3 / p + 0.241897) * np.minimum(0.0, dvsw0) * (qs * rho) ** 0.8
         else:
-            if t > (TMELT - TX * dvsw0):
-                rate = (31282.3 / p + 0.241897) * np.minimum(0.0, dvsw0) * (qs * rho) ** 0.8
-            else:
-                rate = (0.28003 - 0.146293e-6 * p) * dvsw * (qs * rho) ** 0.8
+            rate = (0.28003 - 0.146293e-6 * p) * dvsw * (qs * rho) ** 0.8
         rate = np.maximum(rate, -qs / dt)
     return rate
 
@@ -309,11 +313,10 @@ def vapor_x_graupel(t, p, rho, qg, dvsw, dvsi, dvsw0, dt):
     if qg > QMIN:
         if t < TMELT:
             rate = (0.398561 - 0.00152398 * t + 2554.99 / p + 2.6531e-7 * p) * dvsi * (qg * rho) ** 0.6
+        elif t > (TMELT - TX * dvsw0):
+            rate = (0.153907 - 7.86703e-07 * p) * np.minimum(0.0, dvsw0) * (qg * rho) ** 0.6
         else:
-            if t > (TMELT - TX * dvsw0):
-                rate = (0.153907 - 7.86703e-07 * p) * np.minimum(0.0, dvsw0) * (qg * rho) ** 0.6
-            else:
-                rate = (0.0418521 - 4.7524e-8 * p) * dvsw * (qg * rho) ** 0.6
+            rate = (0.0418521 - 4.7524e-8 * p) * dvsw * (qg * rho) ** 0.6
         rate = np.maximum(rate, -qg / dt)
     return rate
 
@@ -338,8 +341,9 @@ def fall_speed(density, ix):
 
 def process_rates(t, p, rho, qv, qc, qi, qr, qs, qg, nc, dt, sig, sx2x):
     """The conversion rates of one level, ``sx2x[a, b]`` the mass fraction per second from category a to b."""
-    dvsw = qv - qsat_rho(t, rho)
+    qvsw = qsat_rho(t, rho)
     qvsi = qsat_ice_rho(t, rho)
+    dvsw = qv - qvsw
     dvsi = qv - qvsi
     n_snow = snow_number(t, rho, qs)
     l_snow = snow_lambda(rho, qs, n_snow)
@@ -366,18 +370,21 @@ def process_rates(t, p, rho, qv, qc, qi, qr, qs, qg, nc, dt, sig, sx2x):
             sx2x[LQV, LQI] = np.maximum(sx2x[LQV, LQI], 0.0)
             ice_dep = np.minimum(sx2x[LQV, LQI], dvsi / dt)
             sx2x[LQI, LQS] = deposition_auto_conversion(qi, m_ice, ice_dep)
-            sx2x[LQI, LQS] = sx2x[LQI, LQS] + ice_to_snow(qi, n_snow, l_snow, x_ice)
+            aggregation = ice_to_snow(qi, n_snow, l_snow, x_ice)
+            sx2x[LQI, LQS] = sx2x[LQI, LQS] + aggregation
             sx2x[LQI, LQG] = ice_to_graupel(rho, qr, qg, qi, x_ice)
             sx2x[LQS, LQG] = snow_to_graupel(t, rho, qc, qs)
             sx2x[LQR, LQG] = rain_to_graupel(t, rho, qc, qr, qi, qs, m_ice, dvsw, dt)
-        sx2x[LQV, LQI] = sx2x[LQV, LQI] + ice_deposition_nucleation(t, qc, qi, n_ice, dvsi, dt)
+        nucleation = ice_deposition_nucleation(t, qc, qi, n_ice, dvsi, dt)
+        sx2x[LQV, LQI] = sx2x[LQV, LQI] + nucleation
     else:
         sx2x[LQC, LQR] = sx2x[LQC, LQR] + sx2x[LQC, LQS] + sx2x[LQC, LQG]
         sx2x[LQC, LQS] = 0.0
         sx2x[LQC, LQG] = 0.0
 
     if sig:
-        dvsw0 = qv - qsat_rho(TMELT, rho)
+        qvsw0 = qsat_rho(TMELT, rho)
+        dvsw0 = qv - qvsw0
         sx2x[LQV, LQS] = vapor_x_snow(t, p, rho, qs, n_snow, l_snow, eta, ice_dep, dvsw, dvsi, dvsw0, dt)
         sx2x[LQS, LQV] = -np.minimum(sx2x[LQV, LQS], 0.0)
         sx2x[LQV, LQS] = np.maximum(sx2x[LQV, LQS], 0.0)
@@ -390,7 +397,8 @@ def process_rates(t, p, rho, qv, qc, qi, qr, qs, qg, nc, dt, sig, sx2x):
 
 def microphysics_cell(t, p, rho, qv, qc, qi, qr, qs, qg, nc, dt, iv, k, sx2x, qx, sink, dqdt):
     """The microphysics of level k of column iv, when the level holds condensate or is cold and supersaturated."""
-    cold_vapor = t[k, iv] < TFRZ_HET2 and qv[k, iv] > qsat_ice_rho(t[k, iv], rho[k, iv])
+    qvsi = qsat_ice_rho(t[k, iv], rho[k, iv])
+    cold_vapor = t[k, iv] < TFRZ_HET2 and qv[k, iv] > qvsi
     peak = np.maximum(np.maximum(np.maximum(qc[k, iv], qr[k, iv]), np.maximum(qs[k, iv], qi[k, iv])), qg[k, iv])
     if peak > QMIN or cold_vapor:
         qx[LQR] = qr[k, iv]
@@ -454,15 +462,17 @@ def fall(qcol, flux, vt, ix, k, kp1, zeta, xrho, t, rho):
     if ix == LQI:
         vc = xrho ** (2.0 / 3.0)
     if ix == LQS:
-        vc = xrho * snow_number(t, rho, qcol[ix, k]) ** (-1.0 / 6.0)
+        snow_n = snow_number(t, rho, qcol[ix, k])
+        vc = xrho * snow_n ** (-1.0 / 6.0)
     rho_x = qcol[ix, k] * rho
     flx_eff = rho_x / zeta + 2.0 * flux[ix]
-    flx_partial = rho_x * vc * fall_speed(rho_x, ix)
-    flx_partial = np.minimum(flx_partial, flx_eff)
+    speed = fall_speed(rho_x, ix)
+    flx_partial = np.minimum(rho_x * vc * speed, flx_eff)
     q_new = zeta * (flx_eff - flx_partial) / ((1.0 + zeta * vt[ix]) * rho)
     flux[ix] = (q_new * rho * vt[ix] + flx_partial) * 0.5
     rho_x = (q_new + qcol[ix, kp1]) * 0.5 * rho
-    vt[ix] = vc * fall_speed(rho_x, ix)
+    speed = fall_speed(rho_x, ix)
+    vt[ix] = vc * speed
     qcol[ix, k] = q_new
 
 
@@ -510,7 +520,8 @@ def sediment_column(
         if k >= kfirst:
             qliq = qc[k, iv] + qcol[LQR, k]
             qice = qcol[LQS, k] + qcol[LQI, k] + qcol[LQG, k]
-            e_int = internal_energy(t[k, iv], qv[k, iv], qliq, qice, rho[k, iv], dz[k, iv]) + eflx
+            e_int = internal_energy(t[k, iv], qv[k, iv], qliq, qice, rho[k, iv], dz[k, iv])
+            e_int = e_int + eflx
             zeta = dt / (2.0 * dz[k, iv])
             xrho = np.sqrt(RHO_00 / rho[k, iv])
             for ix in range(NP):

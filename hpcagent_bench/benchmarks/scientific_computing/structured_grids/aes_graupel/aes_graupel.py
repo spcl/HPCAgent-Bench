@@ -43,6 +43,8 @@ VAPOR_CAP = 0.03
 #: Spread (log-normal sigma) of the amount in a layer cell.
 AMOUNT_SPREAD = 0.6
 SITUATIONS = 8
+#: Columns generated at a time.
+BLOCK = 1 << 16
 
 
 class Layer(NamedTuple):
@@ -100,42 +102,58 @@ def saturation_vapor(temperature, pressure, ratio, condensate):
     return vapor, density
 
 
+def column_block(rng: np.random.Generator, first: int, count: int, z_full):
+    """The pressure, density, temperature and the six categories of ``count`` columns from column ``first``."""
+    ke = z_full.shape[0]
+    situation = ((first + np.arange(count)) % SITUATIONS)[None, :]
+    surface_temperature = np.where(
+        situation[0] == COLD_SITUATION,
+        rng.uniform(*COLD_SURFACE_TEMPERATURE, count),
+        rng.uniform(*SURFACE_TEMPERATURE, count),
+    )
+    surface_pressure = rng.uniform(*SURFACE_PRESSURE, count)
+    t, p = standard_atmosphere(z_full, surface_temperature, surface_pressure)
+
+    ratio = np.full((ke, count), BACKGROUND_RATIO)
+    amounts = np.zeros((5, ke, count))
+    for layer in LAYERS:
+        inside = (situation == layer.situation) & (t >= layer.t_low) & (t < layer.t_high)
+        ratio[inside] = layer.ratio
+        levels, columns = np.nonzero(inside)
+        kept = rng.random(levels.size) < layer.presence
+        levels, columns = levels[kept], columns[kept]
+        for category, mean in enumerate(layer[5:]):
+            if mean > 0.0:
+                amounts[category][levels, columns] += mean * rng.lognormal(0.0, AMOUNT_SPREAD, levels.size)
+    qv, rho = saturation_vapor(t, p, ratio, amounts.sum(axis=0))
+    return p, rho, t, qv, *amounts
+
+
 def initialize(nvec, ke, datatype=np.float64, rng: np.random.Generator | None = None):
     if rng is None:
-        from numpy.random import default_rng
-
-        rng = default_rng(42)
-    shape = (ke, nvec)
-
+        rng = np.random.default_rng(42)
     depth = (ke - np.arange(ke + 1, dtype=np.float64)) / ke
     z_half = Z_TOP * np.expm1(STRETCHING * depth) / np.expm1(STRETCHING)
     z_full = (0.5 * (z_half[:-1] + z_half[1:]))[:, None]
-    dz = np.broadcast_to((z_half[:-1] - z_half[1:])[:, None], shape)
 
-    situation = np.arange(nvec) % SITUATIONS
-    surface_temperature = np.where(
-        situation == COLD_SITUATION,
-        rng.uniform(*COLD_SURFACE_TEMPERATURE, nvec),
-        rng.uniform(*SURFACE_TEMPERATURE, nvec),
+    # In blocks of columns, so the temporaries stay small at the largest sizes.
+    names = ("p", "rho", "t", "qv", "qc", "qi", "qr", "qs", "qg")
+    fields = {name: np.empty((ke, nvec), dtype=datatype) for name in names}
+    for first in range(0, nvec, BLOCK):
+        count = min(BLOCK, nvec - first)
+        for name, block in zip(names, column_block(rng, first, count, z_full), strict=True):
+            fields[name][:, first : first + count] = block
+    dz = np.empty((ke, nvec), dtype=datatype)
+    dz[:, :] = (z_half[:-1] - z_half[1:])[:, None]
+    qnc = rng.lognormal(np.log(CLOUD_NUMBER), CLOUD_NUMBER_SPREAD, nvec).astype(datatype)
+
+    outputs = np.zeros((5, nvec), dtype=datatype)
+    pflx = np.zeros((ke, nvec), dtype=datatype)
+    return (
+        dz,
+        *(fields[name] for name in names),
+        qnc,
+        *outputs[:4],
+        pflx,
+        outputs[4],
     )
-    surface_pressure = rng.uniform(*SURFACE_PRESSURE, nvec)
-    t, p = standard_atmosphere(z_full, surface_temperature, surface_pressure)
-
-    situation = situation[None, :]
-    ratio = np.full(shape, BACKGROUND_RATIO)
-    amounts = np.zeros((5, *shape))
-    for layer in LAYERS:
-        inside = (situation == layer.situation) & (t >= layer.t_low) & (t < layer.t_high)
-        present = rng.random(shape) < layer.presence
-        ratio = np.where(inside, layer.ratio, ratio)
-        for category, mean in enumerate(layer[5:]):
-            amounts[category] += inside * present * mean * rng.lognormal(0.0, AMOUNT_SPREAD, shape)
-    qc, qi, qr, qs, qg = amounts
-
-    qv, rho = saturation_vapor(t, p, ratio, qc + qi + qr + qs + qg)
-    qnc = rng.lognormal(np.log(CLOUD_NUMBER), CLOUD_NUMBER_SPREAD, nvec)
-
-    prr_gsp, pri_gsp, prs_gsp, prg_gsp, pre_gsp = np.zeros((5, nvec))
-    pflx = np.zeros(shape)
-    arrays = (dz, p, rho, t, qv, qc, qi, qr, qs, qg, qnc, prr_gsp, pri_gsp, prs_gsp, prg_gsp, pflx, pre_gsp)
-    return tuple(np.ascontiguousarray(array, dtype=datatype) for array in arrays)

@@ -375,10 +375,10 @@ def test_removing_any_one_process_changes_the_result_so_the_source_comparison_wo
     reference(want, DT, 1, 10, 1)
     mutations: list[tuple[str, Callable[..., float]]] = [(name, lambda *args: 0.0) for name in PROCESSES]
     original = numpy_port.fall_speed
-    for category in range(4):
-        mutations.append(
-            (f"fall_speed[{category}]", lambda density, ix, c=category: 0.0 if ix == c else original(density, ix))
-        )
+    mutations.extend(
+        (f"fall_speed[{category}]", lambda density, ix, c=category: 0.0 if ix == c else original(density, ix))
+        for category in range(4)
+    )
     for name, replacement in mutations:
         got = make_fields(128, 90)
         with mock.patch.object(numpy_port, name.split("[")[0], replacement):
@@ -412,7 +412,7 @@ def test_the_cloud_number_of_column_ivstart_serves_every_column(reference: Refer
 
 def test_levels_above_kstart_and_columns_before_ivstart_are_left_alone(reference: Reference) -> None:
     ivstart, kstart = 5, 30
-    for run in (run_numpy, lambda f, dt, iv, k, n: reference(f, dt, iv, k, n)):
+    for run in (run_numpy, reference):
         before = make_fields(128, 90)
         fields = make_fields(128, 90)
         run(fields, DT, ivstart, kstart, 2)
@@ -445,7 +445,7 @@ def test_a_category_the_microphysics_creates_does_not_start_the_sedimentation_at
     the microphysics, so no category falls and the surface rates and ``pflx`` stay zero. The source agrees."""
     ke, nvec = 90, 4
     results = []
-    for run in (run_numpy, lambda f, dt, iv, k, n: reference(f, dt, iv, k, n)):
+    for run in (run_numpy, reference):
         fields = make_fields(nvec, ke)
         for name in ("qc", "qi", "qr", "qs", "qg"):
             fields[name][:] = 0.0
