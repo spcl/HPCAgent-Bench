@@ -591,7 +591,7 @@ def disagreements(frame: pd.DataFrame, tolerance: float = EFFICIENCY_RTOL) -> li
 def common_kernels(curves_: Sequence[Curve], mode: str) -> set[str]:
     """The kernels EVERY setup of ``mode`` has a drawable curve for.
 
-    Overlaying two setups whose kernel sets differ compares each against its own roster, which is a
+    Overlaying two setups whose kernel sets differ compares each against its own tag, which is a
     different and always kinder number than the comparison the panel looks like it is making. The
     callers default to this set and say how many kernels it cost. The torch.distributed baseline
     is not a setup here: a kernel it could not time must not take the agents' curves off a panel.

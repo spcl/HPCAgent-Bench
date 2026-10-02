@@ -23,7 +23,7 @@ left the baseline standing and that is a real outcome of the setup. Both are leg
 answer different questions, so :class:`SetupAggregate` stores which one it is and :func:`ratio`
 refuses to divide one by the other.
 
-The ``served`` roster is the kernels the setup RAN (:func:`ran_rows`), never the full roster: a
+The ``served`` tag is the kernels the setup RAN (:func:`ran_rows`), never the full tag: a
 kernel it never ran is a scheduling fact, not a failure, and entering one at 1.0 would score a setup
 on how long its job ran. A snapshot of an unfinished experiment therefore reports both columns.
 """
@@ -37,7 +37,6 @@ from typing import TYPE_CHECKING
 
 from hpcagent_bench.frozen_observations import ADHOC_EPISODE_ID
 from hpcagent_bench.harness import denominator
-from hpcagent_bench.harness.timing import FINAL_GRADE_REDUCTIONS
 from hpcagent_bench.stats import score_rule, summary
 
 __all__ = [
@@ -210,23 +209,23 @@ def ran_rows(frame: "pd.DataFrame") -> "pd.DataFrame":
     return frame[key.isin(ran)]
 
 
-def complete_setups(frame: "pd.DataFrame", roster: Sequence[str]) -> tuple[list[str], dict[str, int]]:
-    """Setups whose recorded rows name EVERY kernel of ``roster``, and what the rest covered.
+def complete_setups(frame: "pd.DataFrame", tag_kernels: Sequence[str]) -> tuple[list[str], dict[str, int]]:
+    """Setups whose recorded rows name EVERY kernel of ``tag``, and what the rest covered.
 
     Coverage counts ANY row (call, submission or attempt) naming the kernel -- a served fact, not a
-    verified one. A setup below full roster coverage cannot be scored over ``roster`` under either
+    verified one. A setup below full tag coverage cannot be scored over ``tag`` under either
     :data:`KernelPolicy` without inventing a value for a kernel it was never even served, so a table
-    drawn over the roster keeps only the complete setups and reports the rest, rather than entering a
-    missing kernel at :data:`NOT_DELIVERED` or silently shrinking the roster to whatever survived.
+    drawn over the tag keeps only the complete setups and reports the rest, rather than entering a
+    missing kernel at :data:`NOT_DELIVERED` or silently shrinking the tag to whatever survived.
 
     Kept setups come back in the order they first appear in ``frame`` -- the order a caller's own setup
-    selection listed them, not a sorted one. ``dropped`` maps each excluded setup to how many roster
+    selection listed them, not a sorted one. ``dropped`` maps each excluded setup to how many tag
     kernels it has at least one row for, so a caller can print "kept N/40" beside the drop.
     """
     missing = [name for name in ("setup", "kernel") if name not in frame.columns]
     if missing:
-        raise MixedPopulationError(f"cannot check roster coverage without {missing}")
-    needed = set(roster)
+        raise MixedPopulationError(f"cannot check tag coverage without {missing}")
+    needed = set(tag_kernels)
     setups = frame["setup"].fillna("").astype(str)
     order = [setup for setup in dict.fromkeys(setups) if setup not in PSEUDO_SETUPS]
     served = frame.assign(setup=setups).groupby("setup")["kernel"].agg(lambda column: set(column.astype(str)))
@@ -376,14 +375,9 @@ def one_reduction(values: Iterable[object], label: str = "") -> str:
     """The single timing reduction a slice's speedups were credited under, or raise.
 
     Two reductions are two estimators, so a mean over rows from two of them is a number no reduction
-    produced. A blank cell reads as :data:`UNSTAMPED`, a reduction of its own. The final grade's
-    stamps (:data:`FINAL_GRADE_REDUCTIONS`: the rule and its older spelling) are ONE reduction here,
-    returned as their ``+``-join when a slice holds both.
+    produced. A blank cell reads as :data:`UNSTAMPED`, a reduction of its own.
     """
     found = sorted({str(value).strip() if is_named(value) else UNSTAMPED for value in values})
-    finals = [stamp for stamp in found if stamp in FINAL_GRADE_REDUCTIONS]
-    if len(finals) > 1:
-        found = sorted({*found} - {*finals} | {"+".join(finals)})
     if not found:
         return UNSTAMPED
     if len(found) > 1:
@@ -917,7 +911,7 @@ class SetupAggregate:
     values: tuple[float, ...]
     n_solved: int
     #: The kernels the setup actually DELIVERED a verified answer for. Under ``served`` the population
-    #: is the whole roster and a failure enters at :data:`NOT_DELIVERED`, so this is the only place
+    #: is the whole tag and a failure enters at :data:`NOT_DELIVERED`, so this is the only place
     #: that still says who delivered -- which is what :func:`coverage` tests. Empty means the
     #: aggregate predates the field and the population stands in for it.
     delivered: tuple[str, ...] = ()
@@ -1033,16 +1027,19 @@ def align(aggregates: Sequence[SetupAggregate]) -> list[SetupAggregate]:
 
 
 def coverage(
-    left: SetupAggregate, right: SetupAggregate, roster: Collection[str] = (), within: Collection[str] | None = None
+    left: SetupAggregate,
+    right: SetupAggregate,
+    tag_kernels: Collection[str] = (),
+    within: Collection[str] | None = None,
 ) -> Coverage:
     """What restricting ``left`` and ``right`` to their shared kernels keeps and drops.
 
-    ``roster`` is the set both setups were asked for, which is what makes ``n_neither`` -- the kernels
+    ``tag`` is the set both setups were asked for, which is what makes ``n_neither`` -- the kernels
     neither reached -- a number rather than an assumption. Without it that count is 0. ``within``
     is the kernels BOTH setups ran (:func:`ran_rows`): one only a single setup ran pairs with nothing.
 
     Over the kernels each setup DELIVERED, not over its population. Under ``served`` the two
-    populations are both the whole roster and comparing them would report perfect agreement on every
+    populations are both the whole tag and comparing them would report perfect agreement on every
     pair, erasing exactly the difference this tests: which kernels one setup answered and the other
     did not.
     """
@@ -1053,7 +1050,7 @@ def coverage(
         n_both=len(lhs & rhs),
         n_only_left=len(lhs - rhs),
         n_only_right=len(rhs - lhs),
-        n_neither=len(set(roster) - lhs - rhs),
+        n_neither=len(set(tag_kernels) - lhs - rhs),
         only_left=tuple(sorted(lhs - rhs)),
         only_right=tuple(sorted(rhs - lhs)),
     )

@@ -1,6 +1,6 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""The baseline sweep: the deterministic compiler columns over a kernel roster, no agents and no judge.
+"""The baseline sweep: the deterministic compiler columns over a kernel tag, no agents and no judge.
 
 One column (numba, cc, cc_autopar, dace_cpu[_canonicalize], dace_gpu[_canonicalize], pluto, ppcg_hip, ...)
 is one sweep, timed at the graded width: the tasks of a step take one socket each, ``--hint=nomultithread``,
@@ -139,7 +139,7 @@ def begin(sweep: Sweep) -> int:
     """Rotate this column's shard CSVs aside (a managed work dir only), then drop the previous run's dace labels.
 
     ``run-framework``'s CSV writer APPENDS, so a re-run into one ``out_root`` (a smoke and then the full sweep,
-    an owed resubmit) would leave an old row beside the fresh ones in the same file, and after a roster or
+    an owed resubmit) would leave an old row beside the fresh ones in the same file, and after a tag or
     rank-count change the file that kept the old row can look newer than the one holding the fresh row. Rotated,
     never deleted: the old rows stay under ``out_root/.stale-shards`` for inspection."""
     print(f"=== column {sweep.column} ===")
@@ -409,9 +409,9 @@ def configure(parser: argparse.ArgumentParser) -> None:
         "--column", required=True, help="one framework column (numba, cc, dace_cpu, dace_gpu, pluto, ...)"
     )
     parser.add_argument("--out-root", required=True, type=pathlib.Path, help="the sweep's work directory")
-    parser.add_argument("--tag", default="", help="the roster: a study tag (hpcagent_bench/tags/<tag>.txt) or track")
-    parser.add_argument("--kernels", default="", help="the roster as comma-separated kernel names")
-    parser.add_argument("--kernels-file", type=pathlib.Path, default=None, help="the roster as one name per line")
+    parser.add_argument("--tag", default="", help="the tag: a study tag (hpcagent_bench/tags/<tag>.txt) or track")
+    parser.add_argument("--kernels", default="", help="the tag as comma-separated kernel names")
+    parser.add_argument("--kernels-file", type=pathlib.Path, default=None, help="the tag as one name per line")
     parser.add_argument("--preset", default="fuzzed", help="the size preset the column is timed at")
     parser.add_argument(
         "--phase", choices=PHASES, default="all", help="begin (1 task), run (all tasks), finish (1 task)"
@@ -436,7 +436,7 @@ def read_kernels_file(path: pathlib.Path) -> list[str]:
 
 
 def resolve_kernels(tag: str, kernels: str, kernels_file: pathlib.Path | None) -> tuple[str, ...]:
-    """The sorted, unique roster: ``--kernels-file`` replaces ``--kernels``, which replaces ``--tag``. Every name
+    """The sorted, unique tag: ``--kernels-file`` replaces ``--kernels``, which replaces ``--tag``. Every name
     is checked against the registry HERE, because inside the job an unknown name only fails deep into a run, after
     a node was already held for it."""
     from hpcagent_bench import tags
@@ -447,9 +447,9 @@ def resolve_kernels(tag: str, kernels: str, kernels_file: pathlib.Path | None) -
     elif kernels:
         names = [name for name in kernels.split(",") if name.strip()]
     elif tag:
-        names = list(tags.roster(tag))
+        names = list(tags.kernels_of(tag))
     else:
-        raise SystemExit("baseline: name the roster with --tag, --kernels or --kernels-file")
+        raise SystemExit("baseline: name the tag with --tag, --kernels or --kernels-file")
     unknown = []
     for name in names:
         try:

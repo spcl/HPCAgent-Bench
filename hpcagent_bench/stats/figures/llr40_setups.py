@@ -1,6 +1,6 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""llr40 setups: which setups a figure draws, their (model, condition), their tokens and roster.
+"""llr40 setups: which setups a figure draws, their (model, condition), their tokens and tag.
 
 The condition comes from the SETUP NAME, not the ``language``/``packet`` columns: the pre-regrade
 extraction records those inconsistently for the same setup, while every row of a setup agrees on its
@@ -24,16 +24,14 @@ __all__ = [
     "condition_label",
     "parse_setup",
     "rank_condition",
-    "roster_of",
+    "tag_of",
 ]
 
 #: A setup an llr40 figure may draw, and its (model, condition) in one match: ``-c`` is the control
 #: (condition ``""``), ``-c-cpf`` the CPF page, ``-c-cpfsrc`` CPF as source; the control is ``llr40-``
-#: and a CPF setup keeps the ``cpf-llr-focus40-`` prefix. C only
+#: and a CPF setup keeps the ``llr40-`` prefix. C only
 #: -- Fortran has no CPF spelling (mpr-artifacts/experiments/llr-focus40-cpf/README.md).
-SETUP_PATTERN: re.Pattern[str] = re.compile(
-    r"^(?:llr40|cpf-llr-focus40)-(?P<model>[a-z0-9]+)-c(?:-(?P<condition>cpf|cpfsrc))?$"
-)
+SETUP_PATTERN: re.Pattern[str] = re.compile(r"^llr40-(?P<model>[a-z0-9]+)-c(?:-(?P<condition>cpf|cpfsrc))?$")
 
 #: Draw order within one model's own slot, control first.
 CONDITION_ORDER: tuple[str, ...] = ("", "cpf", "cpfsrc")
@@ -82,7 +80,7 @@ def setup_tokens(
     return values, low, high
 
 
-def roster_of(canon_frame: pd.DataFrame) -> list[str]:
+def tag_of(canon_frame: pd.DataFrame) -> list[str]:
     """The 40 llr40 kernels: every kernel the canon sweep names, sorted -- the same order
     :func:`hpcagent_bench.stats.canon.speedups` already reduces its ratios in."""
     return sorted({str(k) for k in canon_frame["kernel"].dropna().unique()})

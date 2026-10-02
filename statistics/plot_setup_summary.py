@@ -82,14 +82,14 @@ def setup_points(
 
 
 def eligible_rows(rows: pd.DataFrame, include_incomplete: bool = False) -> pd.DataFrame:
-    """``rows`` of the setups with a row for every roster kernel (spec E1), naming each dropped setup on
-    stderr; the roster is every kernel any setup in ``rows`` touched. ``include_incomplete`` keeps all."""
+    """``rows`` of the setups with a row for every tag kernel (spec E1), naming each dropped setup on
+    stderr; the tag is every kernel any setup in ``rows`` touched. ``include_incomplete`` keeps all."""
     if include_incomplete:
         return rows
-    roster = sorted(rows["kernel"].dropna().astype(str).unique())
-    kept, dropped = population.complete_setups(rows, roster)
+    tag_kernels = sorted(rows["kernel"].dropna().astype(str).unique())
+    kept, dropped = population.complete_setups(rows, tag_kernels)
     for setup in sorted(dropped):
-        print(f"dropping {setup} ({dropped[setup]}/{len(roster)} roster kernels)", file=sys.stderr)
+        print(f"dropping {setup} ({dropped[setup]}/{len(tag_kernels)} tag kernels)", file=sys.stderr)
     return rows[rows["setup"].astype(str).isin(kept)]
 
 
@@ -323,7 +323,7 @@ def main() -> None:
         "--include-incomplete",
         action="store_true",
         default=False,
-        help="draw a setup even without a row for every roster kernel (default: dropped, named on stderr)",
+        help="draw a setup even without a row for every tag kernel (default: dropped, named on stderr)",
     )
     parser.add_argument(
         "--repeats",

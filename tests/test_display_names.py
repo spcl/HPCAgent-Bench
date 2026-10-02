@@ -94,25 +94,6 @@ def test_every_model_the_palette_colours_also_has_a_name() -> None:
     assert not unnamed, f"models with a colour but no display name: {unnamed}"
 
 
-@pytest.mark.parametrize(
-    "raw, language, packet",
-    [
-        ("c-clean", "c", ""),
-        ("hip-perf-playbook-amd-clean", "hip", "perf-playbook-amd"),
-        ("triton-skills-clean", "triton", "lang-skills"),
-        # "openmp" is the OFFLOAD directive, never a packet (device=gpu + language=c already says
-        # offload) -- an unregistered tail must resolve to no packet, not a bogus one.
-        ("c-openmp-clean", "c", ""),
-    ],
-)
-def test_split_record_language_strips_clean_and_the_baked_in_packet(raw: str, language: str, packet: str) -> None:
-    """A Kimi `-clean` env file an older submitter wrote (see the LANGUAGE folding
-    rule) must still resolve to its bare, registered language -- clean is a run flag the setup
-    name alone carries, never the language."""
-    assert study_tags.split_record_language(raw) == (language, packet)
-    assert study_tags.canonical("languages", raw) == language
-
-
 def test_an_unknown_tag_falls_back_instead_of_raising() -> None:
     """A new experiment must not break a figure -- it gets a plain label until someone names it."""
     assert study_tags.display_name("brand-new-experiment") == "brand-new-experiment"
@@ -227,10 +208,12 @@ def test_every_short_name_fits_and_no_two_benchmarks_share_one() -> None:
 
 def test_every_llr40_kernel_has_a_short_label() -> None:
     """The MPR compiler figure draws these 40 on one text-width axis."""
-    roster = tags.members("llr40")
-    assert len(roster) == 40
+    tag_kernels = tags.members("llr40")
+    assert len(tag_kernels) == 40
     long = [
-        kernel for kernel in roster if len(study_tags.kernel_short_display_name(kernel)) > study_tags.SHORT_NAME_MAX
+        kernel
+        for kernel in tag_kernels
+        if len(study_tags.kernel_short_display_name(kernel)) > study_tags.SHORT_NAME_MAX
     ]
     assert not long, f"llr40 kernels with no short label: {long}"
 

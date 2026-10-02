@@ -136,7 +136,7 @@ def test_a_served_policy_scores_a_non_delivery_at_one_rather_than_dropping_it() 
     assert setup.geomean() == pytest.approx(2.0)
 
 
-def test_the_served_roster_is_what_the_setup_was_given_not_the_full_roster() -> None:
+def test_the_served_tag_is_what_the_setup_was_given_not_the_full_tag() -> None:
     """A kernel the setup never saw is a scheduling fact. Entering one at 1.0 would score a setup on
     how long its job ran: the llr40v9 setups were served 1 to 6 of the 40 kernels before being cut."""
     with pytest.raises(population.MixedPopulationError, match="never served"):
@@ -191,14 +191,14 @@ def test_an_intersection_reports_what_it_dropped() -> None:
     above the setup's own four, so the pairing reported the easy half as the whole."""
     left = population.aggregate_setup("a", "c", {"k1": 2.0, "k2": 2.0}, ["k1", "k2"], population.KernelPolicy.SOLVED)
     right = population.aggregate_setup("b", "c", {"k2": 2.0, "k3": 2.0}, ["k2", "k3"], population.KernelPolicy.SOLVED)
-    gap = population.coverage(left, right, roster=["k1", "k2", "k3", "k4"])
+    gap = population.coverage(left, right, tag_kernels=["k1", "k2", "k3", "k4"])
     assert (gap.n_both, gap.n_only_left, gap.n_only_right, gap.n_neither) == (1, 1, 1, 1)
     assert gap.only_left == ("k1",) and gap.only_right == ("k3",)
 
 
-def test_complete_setups_keeps_only_setups_with_a_row_for_every_roster_kernel() -> None:
+def test_complete_setups_keeps_only_setups_with_a_row_for_every_tag_kernel() -> None:
     """An experiment snapshot taken mid-run has a partial setup (25 of 40 kernels) beside finished ones.
-    Scoring the partial one over the full roster invents a value for 15 kernels it was never even
+    Scoring the partial one over the full tag invents a value for 15 kernels it was never even
     served, so it is dropped rather than entered at any policy's non-delivery value."""
     frame = pd.DataFrame(
         {
@@ -222,8 +222,8 @@ def test_complete_setups_keeps_the_order_setups_first_appear_in_the_frame() -> N
 
 def test_complete_setups_drops_a_pseudo_setup_and_counts_any_record_type() -> None:
     """A blank or ``adhoc`` setup is not a condition (Defect 1) and must not enter the kept list even
-    when it happens to cover the roster; a real setup's coverage counts a ``call`` row the same as a
-    ``submission`` -- reaching a kernel is what roster coverage asks, not verifying it."""
+    when it happens to cover the tag; a real setup's coverage counts a ``call`` row the same as a
+    ``submission`` -- reaching a kernel is what tag coverage asks, not verifying it."""
     frame = pd.DataFrame(
         {
             "setup": ["", "adhoc", "a", "a"],
@@ -237,8 +237,8 @@ def test_complete_setups_drops_a_pseudo_setup_and_counts_any_record_type() -> No
 
 
 def test_complete_setups_refuses_a_frame_with_no_benchmark_column() -> None:
-    """Roster coverage is undecidable without knowing which kernel each row names."""
-    with pytest.raises(population.MixedPopulationError, match="roster coverage"):
+    """Tag coverage is undecidable without knowing which kernel each row names."""
+    with pytest.raises(population.MixedPopulationError, match="tag coverage"):
         population.complete_setups(pd.DataFrame({"setup": ["a"]}), ["k1"])
 
 
@@ -429,7 +429,6 @@ def test_a_run_with_a_text_job_among_numeric_ones_is_chosen_not_refused() -> Non
 
 
 FINAL = {"timing_reduction": timing.FINAL_GRADE_REDUCTION}
-OLDER_SPELLING = {"timing_reduction": "mw4x5-final-v2"}
 
 
 def chosen_job(rows: pd.DataFrame) -> list[object]:
@@ -486,16 +485,6 @@ def test_a_rerun_whose_every_row_is_a_failed_grade_never_supersedes_the_run_befo
     assert population.kernel_answers(rows).speedup.tolist() == [9.0]
 
 
-def test_the_two_final_stamps_pool_as_one_reduction_and_nothing_else_joins_them() -> None:
-    """mw4x5 and its older spelling are one final grade; a row still under a live stamp -- a
-    re-timing the judge failed -- is refused beside them."""
-    final, alias = timing.FINAL_GRADE_REDUCTIONS
-    assert timing.canonical_reduction(alias) == final
-    assert population.one_reduction([final, alias]) == f"{final}+{alias}"
-    with pytest.raises(population.MixedPopulationError, match="timing reductions"):
-        population.one_reduction([final, alias, "mwd-final"])
-
-
 def test_a_superseded_live_submission_does_not_mix_with_its_episodes_final_answer() -> None:
     """The final regrade re-times only an episode's newest submission; the earlier ones keep their
     live stamp. They are not answers, so they cannot mix the population the answers form."""
@@ -531,7 +520,7 @@ def test_each_kernel_answer_keeps_the_stamp_it_was_graded_under() -> None:
     rows = submissions(
         [
             {"row_kind": "submission", "kernel": "k1", "speedup": 2.0, "ts_ms": 1, **FINAL},
-            {"row_kind": "submission", "kernel": "k2", "speedup": 3.0, "ts_ms": 2, **OLDER_SPELLING},
+            {"row_kind": "submission", "kernel": "k2", "speedup": 3.0, "ts_ms": 2, **FINAL},
             {"row_kind": "call", "kernel": "k3", "ts_ms": 3, "timing_reduction": ""},
         ]
     )
@@ -539,7 +528,7 @@ def test_each_kernel_answer_keeps_the_stamp_it_was_graded_under() -> None:
     assert answers.speedup.to_dict() == {"k1": 2.0, "k2": 3.0, "k3": population.NOT_DELIVERED}
     assert answers.timing_reduction.to_dict() == {
         "k1": FINAL["timing_reduction"],
-        "k2": OLDER_SPELLING["timing_reduction"],
+        "k2": FINAL["timing_reduction"],
         "k3": "",
     }
 
@@ -583,12 +572,12 @@ def test_designed_repeats_answer_with_the_median_and_carry_one_real_runs_row(
 @pytest.mark.parametrize("stamp", ["mwd-v2", "mwd-v3", "mok-v1", "mwd-final", "mw4x5-final", None, ""])
 def test_only_the_final_grade_is_credited_and_an_old_protocol_only_episode_has_no_answer(stamp: object) -> None:
     """One protocol: an episode whose answer carries any stamp but the final grade's has no answer,
-    and one under the final grade (or its older spelling) keeps its own."""
+    and one under the final grade keeps its own."""
     rows = submissions(
         [
             {"episode_id": "w0", "speedup": 3.0, "ts_ms": 1, "timing_reduction": stamp},
             {"episode_id": "w1", "speedup": 5.0, "ts_ms": 2, **FINAL},
-            {"episode_id": "w2", "speedup": 7.0, "ts_ms": 3, **OLDER_SPELLING},
+            {"episode_id": "w2", "speedup": 7.0, "ts_ms": 3, **FINAL},
         ]
     )
     best = population.graded_episode_rows(rows, ("ts_ms", "attempt_index"))

@@ -5,7 +5,7 @@
 :mod:`hpcagent_bench.stats.setups` pairs the setups ONE launcher varied -- the skill packet --
 because those are the pairs it can derive from a setup label. An experiment that is the control for
 ANOTHER experiment has no such label, so the comparison it exists to make (a blind setup against the
-scored setup of the same model, language and roster) has nowhere to be formed. This takes the pairs as
+scored setup of the same model, language and tag) has nowhere to be formed. This takes the pairs as
 an ARGUMENT and runs them through the same reduction and the same guards:
 :func:`~hpcagent_bench.stats.population.setup_kernel_answers` for the one value per kernel,
 :func:`~hpcagent_bench.stats.population.align` and :func:`~hpcagent_bench.stats.population.coverage`
@@ -29,7 +29,7 @@ Benjamini-Hochberg runs across it once, and a leg with fewer than ``summary.MIN_
 pairs reports ``underpowered`` rather than a verdict.
 
     python3 paired_setups.py --observations scored.db --observations blind.db \\
-        --pair llr-focus40-oss120b-c,llrblind-oss120b-c \\
+        --pair llr40-oss120b-c,llrblind-oss120b-c \\
         --family blind-vs-scored --out blind.csv
 
 ``--observations`` is repeatable: the scored experiment and its blind control usually live in two
@@ -70,7 +70,7 @@ PROMOTED_TAG = "promoted-unsubmitted"
 RECOVERY_TAGS = (HARVESTED_TAG, PROMOTED_TAG)
 
 #: The policy every number here is over: every kernel the setup was SERVED, with one it never
-#: delivered entering at 1.0. A failed episode is not absent from the roster and it is not free: the
+#: delivered entering at 1.0. A failed episode is not absent from the tag and it is not free: the
 #: agent was given the kernel, it spent its tokens, and what it left behind is the baseline. Scoring
 #: only what a setup verified reports the setup on the subset it happened to succeed on, which flatters
 #: exactly the setups that failed most -- Qwen3.8-27B verified 21 of 40 CPU kernels and would be
@@ -341,7 +341,7 @@ def best_by_setup_kernel(
 
 
 def served_by_setup(observations: pd.DataFrame) -> dict[str, frozenset[str]]:
-    """Every kernel a setup has a recorded observation for -- the roster it was actually given."""
+    """Every kernel a setup has a recorded observation for -- the tag it was actually given."""
     rows = observations.dropna(subset=["setup", "kernel"])
     return {str(setup): frozenset(group.kernel.astype(str)) for setup, group in rows.groupby("setup")}
 
@@ -367,8 +367,8 @@ def setup_aggregates(
     out: dict[str, population.SetupAggregate] = {}
     for setup, group in best.groupby("setup"):
         solved = {str(row.kernel): float(row.speedup) for row in group.itertuples()}
-        roster = served.get(str(setup), frozenset(solved))
-        out[str(setup)] = population.aggregate_setup(str(setup), baseline, solved, roster, policy)
+        tag_kernels = served.get(str(setup), frozenset(solved))
+        out[str(setup)] = population.aggregate_setup(str(setup), baseline, solved, tag_kernels, policy)
     return out
 
 
@@ -426,21 +426,21 @@ def pair_rows(
     pairs: list[tuple[str, str]],
     table: dict[str, population.SetupAggregate],
     tokens: dict[tuple[str, str], float],
-    roster: list[str],
+    tag_kernels: list[str],
     family: str,
     served: dict[str, frozenset[str]] | None = None,
 ) -> list[dict[str, object]]:
     """One row per leg per pair, with the family's Benjamini-Hochberg verdicts already applied.
 
     ``served`` is each setup's served kernels (:func:`served_by_setup`), the ``K`` the tokens leg is
-    checked against; without it every setup was served ``roster``."""
+    checked against; without it every setup was served ``tag``."""
     rows: list[dict[str, object]] = []
     for setup_a, setup_b in pairs:
         left, right = table[setup_a], table[setup_b]
-        kernels_a, kernels_b = ((served or {}).get(setup, frozenset(roster)) for setup in (setup_a, setup_b))
+        kernels_a, kernels_b = ((served or {}).get(setup, frozenset(tag_kernels)) for setup in (setup_a, setup_b))
         # solved-or-not is paired over the kernels BOTH setups ran, never one only a single setup ran
         both_ran = kernels_a & kernels_b
-        gap = population.coverage(left, right, roster=both_ran, within=both_ran)
+        gap = population.coverage(left, right, tag_kernels=both_ran, within=both_ran)
         if served is not None:
             warn_missing_tokens(setup_a, setup_b, kernels_a & kernels_b, tokens)
         head = {
@@ -646,7 +646,7 @@ def setup_rows(
     read as "measured, never used" instead of "not this setup's question".
 
     ``coverage`` is verified over SERVED -- the kernels the setup has any recorded observation for --
-    never over the full roster, because a kernel a setup was never given is a scheduling fact.
+    never over the full tag, because a kernel a setup was never given is a scheduling fact.
 
     ``gm_tokens`` is the setup's typical task cost: the geometric mean over EVERY kernel it has a token
     total for (``K``, solved or not), priced with the table's cost card (spec A2).
@@ -707,14 +707,14 @@ def setup_rows(
 
 
 def excluded_pairs(
-    pairs: list[tuple[str, str]], kept: list[str], dropped: dict[str, int], roster_size: int
+    pairs: list[tuple[str, str]], kept: list[str], dropped: dict[str, int], tag_size: int
 ) -> tuple[list[tuple[str, str]], list[str]]:
     """``pairs`` restricted to setups :func:`~hpcagent_bench.stats.population.complete_setups` kept, and
     one note per pair it drops.
 
-    A pair drops when EITHER setup is short of the roster: a leg pairing one setup's partial roster
+    A pair drops when EITHER setup is short of the tag: a leg pairing one setup's partial tag
     against the other's full one is not the comparison a reader asked for, and completing it with
-    ``align`` would silently narrow the roster to whatever the short setup happened to cover instead
+    ``align`` would silently narrow the tag to whatever the short setup happened to cover instead
     of saying so.
     """
     keep = set(kept)
@@ -723,27 +723,29 @@ def excluded_pairs(
     for setup_a, setup_b in pairs:
         short = [(setup, dropped[setup]) for setup in (setup_a, setup_b) if setup not in keep]
         if short:
-            detail = ", ".join(f"{setup} {n}/{roster_size}" for setup, n in short)
-            notes.append(f"excluding pair {setup_a},{setup_b} -- incomplete roster coverage: {detail}")
+            detail = ", ".join(f"{setup} {n}/{tag_size}" for setup, n in short)
+            notes.append(f"excluding pair {setup_a},{setup_b} -- incomplete tag coverage: {detail}")
         else:
             survivors.append((setup_a, setup_b))
     return survivors, notes
 
 
-def declared_roster(path: pathlib.Path | None, observations: pd.DataFrame) -> list[str]:
-    """The roster (spec E1): ``path``'s kernels, else every kernel the input touched.
+def declared_tag(path: pathlib.Path | None, observations: pd.DataFrame) -> list[str]:
+    """The tag (spec E1): ``path``'s kernels, else every kernel the input touched.
 
-    A DERIVED ROSTER MOVES WITH THE DATA. A setup covers "the whole roster" whenever the setups it is
+    A DERIVED TAG MOVES WITH THE DATA. A setup covers "the whole tag" whenever the setups it is
     compared against covered no more, so a study that lost a kernel everywhere reports full
     coverage over the survivors; and a stray kernel one wave served makes every other setup incomplete
     and empties the family. Both happened. Pass the launcher's kernels file and neither can.
     """
     if path is None:
         return sorted(observations.kernel.dropna().astype(str).unique())
-    roster = sorted({line.split("#", 1)[0].strip() for line in path.read_text(encoding="utf-8").splitlines()} - {""})
-    if not roster:
-        raise SystemExit(f"--roster-file {path} names no kernels")
-    return roster
+    tag_kernels = sorted(
+        {line.split("#", 1)[0].strip() for line in path.read_text(encoding="utf-8").splitlines()} - {""}
+    )
+    if not tag_kernels:
+        raise SystemExit(f"--tag-file {path} names no kernels")
+    return tag_kernels
 
 
 def parse_pair(spec: str) -> tuple[str, str]:
@@ -780,16 +782,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "experiment grades different kernels against different ones",
     )
     ap.add_argument(
-        "--roster-file",
+        "--tag-file",
         type=pathlib.Path,
         default=None,
-        help="one kernel per line: the roster eligibility is judged against (spec E1); without it, "
+        help="one kernel per line: the tag eligibility is judged against (spec E1); without it, "
         "every kernel any setup in the input touched",
     )
     ap.add_argument(
         "--include-incomplete",
         action="store_true",
-        help="keep a pair even when either setup lacks an observation row for some roster kernel",
+        help="keep a pair even when either setup lacks an observation row for some tag kernel",
     )
     ap.add_argument(
         "--repeats",
@@ -862,14 +864,14 @@ def main(argv: list[str]) -> int:
     if missing:
         raise SystemExit(f"no observations for {missing}")
 
-    roster = declared_roster(args.roster_file, observations)
+    tag_kernels = declared_tag(args.tag_file, observations)
     if not args.include_incomplete:
-        kept, dropped = population.complete_setups(observations[observations.setup.isin(setups)], roster)
-        pairs, notes = excluded_pairs(pairs, kept, dropped, len(roster))
+        kept, dropped = population.complete_setups(observations[observations.setup.isin(setups)], tag_kernels)
+        pairs, notes = excluded_pairs(pairs, kept, dropped, len(tag_kernels))
         for note in notes:
             print(f"note: {note}", file=sys.stderr)
         if not pairs:
-            raise SystemExit("every pair was excluded for incomplete roster coverage; rerun with --include-incomplete")
+            raise SystemExit("every pair was excluded for incomplete tag coverage; rerun with --include-incomplete")
         setups = sorted({setup for pair in pairs for setup in pair})
 
     graded = graded_rows(observations, setups)
@@ -888,7 +890,7 @@ def main(argv: list[str]) -> int:
         .reindex(columns=list(SETUP_COLUMNS))
     )
     pair_frame = (
-        pd.DataFrame(pair_rows(pairs, table, tokens, roster, args.family, served))
+        pd.DataFrame(pair_rows(pairs, table, tokens, tag_kernels, args.family, served))
         .assign(cost_model=card.key, score_rule=score_rule.SCORE_RULE, kernel_policy=args.policy.value)
         .reindex(columns=list(PAIR_COLUMNS))
     )

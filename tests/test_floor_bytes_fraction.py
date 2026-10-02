@@ -114,7 +114,7 @@ def test_a_kernel_without_an_override_keeps_the_judges_flag() -> None:
     assert extract.rederived_cell_suspect(cell(kernel="argmax_with_index", shape='{"LEN_1D": 64}')) == 1
 
 
-RUN = "gpu-llr-focus40-qwen38-hip-clean.n0.p13.w13"
+RUN = "llr40-qwen38-hip.n0.p13.w13"
 JOB = 650001
 #: When the final grade's submission was graded.
 TS_MS = 10

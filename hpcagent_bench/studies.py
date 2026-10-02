@@ -63,7 +63,6 @@ __all__ = [
     "drop_pre_relaunch_rows",
     "drop_resubmissions",
     "fill_setup_identity",
-    "fold_clean_setups",
     "group_answer",
     "is_blank",
     "judge_database",
@@ -324,7 +323,7 @@ def fill_setup_identity(frame: "pd.DataFrame", columns: Sequence[str] = FILLABLE
     recorded kept as ``recorded_<column>``.
 
     The judge's per-record tables stamp language and packet unevenly: an attempt or call row can predate the
-    stamp, whole setups (``cpf-llr-focus40-*-c-cpf``) never recorded a language, most ``-skills`` setups never recorded
+    stamp, whole setups (``llr40-*-c-cpf``) never recorded a language, most ``-skills`` setups never recorded
     their packet, and a HIP or Triton setup's rows can claim ``c``. Grouping the raw columns splits one setup into
     several slices -- it fragmented ``gitscicomp10``'s setup summary and left one skills pair out of fifteen.
 
@@ -391,7 +390,6 @@ def read_observations(path: pathlib.Path, platform: str = population.DEFAULT_PLA
         drop_pre_relaunch_rows,
         drop_cancelled_episode_rows,
         drop_resubmissions,
-        fold_clean_setups,
     ):
         frame = rule(frame)
     return frame
@@ -622,17 +620,6 @@ def drop_resubmissions(frame: "pd.DataFrame") -> "pd.DataFrame":
     keep = np.ones(len(frame), dtype=bool)
     keep[ranked["position"].to_numpy()[later]] = False
     return frame.loc[keep]
-
-
-def fold_clean_setups(frame: "pd.DataFrame") -> "pd.DataFrame":
-    """``frame`` with every ``-clean`` setup under the setup it re-ran (spec X9). Nothing is dropped:
-    the waves pool and the latest run per kernel (``population.latest_episodes``) picks between them,
-    so an owed rerun of a few kernels keeps the rest of the wave it topped up."""
-    if frame.empty or "setup" not in frame.columns:
-        return frame
-    setups = frame["setup"]
-    folded = setups.astype(str).str.removesuffix(study_tags.CLEAN_SUFFIX)
-    return frame.assign(setup=folded.where(setups.notna(), setups))
 
 
 def main(argv: list[str] | None = None) -> int:

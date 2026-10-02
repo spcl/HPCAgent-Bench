@@ -25,7 +25,7 @@ from scipy.stats import wilcoxon
 
 from hpcagent_bench.stats import signed_rank, summary
 
-#: Sizes spanning the range these tables reach and a little past it. 40 is the llr focus roster,
+#: Sizes spanning the range these tables reach and a little past it. 40 is the llr focus tag,
 #: which is where the two implementations actually disagreed.
 EXACT_RANGE = (6, 8, 12, 19, 25, 26, 32, 40, 55, 80, 120)
 
@@ -118,7 +118,7 @@ def test_both_paths_read_one_threshold() -> None:
 def test_the_threshold_sits_where_the_exact_null_is_still_affordable() -> None:
     """The cutoff is measured, not inherited from scipy. Guards the two ways it goes wrong: raised
     past what the login-node DP can pay, or lowered back under the sizes these tables reach."""
-    assert 40 <= signed_rank.EXACT_MAX_N, "the llr focus roster is 40 kernels and must stay exact"
+    assert 40 <= signed_rank.EXACT_MAX_N, "the llr focus tag is 40 kernels and must stay exact"
     assert signed_rank.EXACT_MAX_N <= 250, "past this the stdlib DP costs seconds per distinct n"
     assert signed_rank.use_exact([float(i) for i in range(signed_rank.EXACT_MAX_N)])
     assert not signed_rank.use_exact([float(i) for i in range(signed_rank.EXACT_MAX_N + 1)])

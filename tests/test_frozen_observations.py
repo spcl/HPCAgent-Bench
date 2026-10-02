@@ -35,10 +35,8 @@ from hpcagent_bench import frozen_observations  # noqa: E402
 
 MODELS = ("kimi27sglang", "oss120b", "qwen38", "glm53")
 SETUP = "llr40-qwen38-fortran"
-#: The setup an older spelling of SETUP named.
-SETUP_NOW = "llr40-qwen38-fortran"
+
 ROOT = "llr40-20260917"
-#: After any real manifest commit, so comparable_since_ms never gates these fake kernels out.
 FAR_FUTURE_TS_MS = 10**13
 FIELDS = (
     "run_root",
@@ -110,19 +108,17 @@ def test_the_directory_comes_from_one_env_var_with_a_scratch_default(
     assert frozen_observations.resolve(str(tmp_path)) == tmp_path
 
 
-def test_delivered_is_a_submission_or_a_genuine_attempt_after_the_epoch() -> None:
-    """The same rule as remaining_kernels.touched + genuine_attempts: a harness-fault attempt is not a
-    grade, and a row older than the kernel's comparable epoch measured another roster."""
+def test_delivered_is_a_submission_or_a_genuine_attempt() -> None:
+    """The same rule as remaining_kernels.touched + genuine_attempts: a harness-fault attempt is not a grade."""
     rows = [
         frozen_row("1", "submission", "a"),
         frozen_row("1", "attempt", "b", reason="incorrect"),
         frozen_row("1", "attempt", "c", reason="score_error"),
-        frozen_row("1", "submission", "d", ts=5),
         frozen_row("1", "call", "e"),
         frozen_row("1", "episode", "f"),
     ]
-    assert frozen_observations.delivered(rows, lambda kernel: 10) == {"a", "b"}
-    assert frozen_observations.delivered(rows, lambda kernel: 10, setup="other-setup") == set()
+    assert frozen_observations.delivered(rows) == {"a", "b"}
+    assert frozen_observations.delivered(rows, setup="other-setup") == set()
 
 
 def test_delivered_drops_a_grade_made_before_its_episodes_final_attempt() -> None:
@@ -131,9 +127,9 @@ def test_delivered_drops_a_grade_made_before_its_episodes_final_attempt() -> Non
     delivery either; a grade inside the final attempt still is."""
     task = {**frozen_row("1", "episode", "a"), "episode_final_attempt_start_ms": "100"}
     rows = [task, frozen_row("1", "submission", "a", ts=50), frozen_row("1", "attempt", "b", reason="incorrect", ts=99)]
-    assert frozen_observations.delivered(rows, lambda kernel: 10) == set()
+    assert frozen_observations.delivered(rows) == set()
     rows.append(frozen_row("1", "submission", "b", ts=100))
-    assert frozen_observations.delivered(rows, lambda kernel: 10) == {"b"}
+    assert frozen_observations.delivered(rows) == {"b"}
 
 
 def test_delivered_never_counts_a_row_stored_under_adhoc() -> None:
@@ -144,7 +140,7 @@ def test_delivered_never_counts_a_row_stored_under_adhoc() -> None:
         {**frozen_row("1", "attempt", "b", reason="incorrect"), "retagged": "transcript"},
         frozen_row("1", "submission", "c"),
     ]
-    assert frozen_observations.delivered(rows, lambda kernel: 10) == {"c"}
+    assert frozen_observations.delivered(rows) == {"c"}
 
 
 def test_a_frozen_job_counts_only_when_its_live_directory_is_gone(tmp_path: pathlib.Path) -> None:
@@ -175,15 +171,15 @@ def test_remaining_kernels_counts_a_deleted_jobs_frozen_rows_as_coverage(
          frozen_row("200", "submission", "d")],
     )  # fmt: skip
     out = tmp_path / "owed"
-    monkeypatch.setattr(kernels, "roster", lambda tag, opt: ["a", "b", "c", "d"])
+    monkeypatch.setattr(kernels, "tag_kernels", lambda tag: ["a", "b", "c", "d"])
     argv = ["remaining_kernels.py", "--run-root", str(runs_root), "--tag", "t", "--out-dir", str(out)]
     monkeypatch.setattr(sys, "argv", [*argv, "--frozen-observations", str(frozen)])
     assert kernels.main() == 0
-    assert (out / f"{SETUP_NOW}.txt").read_text(encoding="utf-8").split() == ["d"]
+    assert (out / f"{SETUP}.txt").read_text(encoding="utf-8").split() == ["d"]
 
     monkeypatch.setattr(sys, "argv", [*argv, "--frozen-observations", ""])
     assert kernels.main() == 0
-    assert (out / f"{SETUP_NOW}.txt").read_text(encoding="utf-8").split() == ["a", "b", "d"]
+    assert (out / f"{SETUP}.txt").read_text(encoding="utf-8").split() == ["a", "b", "d"]
 
 
 def test_collect_setups_names_a_deleted_job_under_its_frozen_setup(
@@ -191,13 +187,13 @@ def test_collect_setups_names_a_deleted_job_under_its_frozen_setup(
 ) -> None:
     runs_root = tmp_path / "runs" / ROOT
     runs_root.mkdir(parents=True)
-    frozen = write_frozen(tmp_path, [frozen_row("100", "submission", "a", setup=SETUP + "-clean")])
+    frozen = write_frozen(tmp_path, [frozen_row("100", "submission", "a", setup=SETUP)])
 
     setups, _, _ = kernels.collect_setups([str(runs_root)], set(), frozen_dir=frozen)
 
-    assert setups == {SETUP_NOW: [("100", str(runs_root / "100"), SETUP + "-clean")]}
-    assert kernels.covered(setups[SETUP_NOW], str(REPO), frozen) == {"a"}
-    assert kernels.covered(setups[SETUP_NOW], str(REPO)) == set()  # without the frozen dir nothing is known
+    assert setups == {SETUP: [("100", str(runs_root / "100"), SETUP)]}
+    assert kernels.covered(setups[SETUP], frozen) == {"a"}
+    assert kernels.covered(setups[SETUP]) == set()  # without the frozen dir nothing is known
 
 
 # --- hpcagent_bench.observations_extract -------------------------------------------------------------------------

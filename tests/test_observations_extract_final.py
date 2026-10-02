@@ -28,8 +28,8 @@ from hpcagent_bench.stats import score_rule
 from tests import results_seed
 from tests.sqlite_closing import connect
 
-RUN = "llr-focus40-qwen38-c.n0.p0.w0"
-SETUP = "llr-focus40-qwen38-c"
+RUN = "llr40-qwen38-c.n0.p0.w0"
+SETUP = "llr40-qwen38-c"
 JOB = 631272
 #: Where the extraction read the submission; a regrade names it by its episode's job, not this path.
 OBSERVED_DB = "/new-mount/scratch/hpcagent-bench-runs/c/631272/judge/rank-0/hpcagent_bench0.db"
@@ -349,18 +349,6 @@ def test_the_credit_is_s_i_never_the_geomean_column(tmp_path: pathlib.Path) -> N
 
 # mw4x5 is preferred per submission, the v1 re-timing (mw4x5-final) is its fallback, and the two
 # values of one submission are never averaged.
-def test_a_row_stamped_under_the_rules_older_name_reads_as_mw4x5(tmp_path: pathlib.Path) -> None:
-    """Shards written before the rename carry ``mw4x5-final-v2``: the same rule, read through the
-    one alias map as mw4x5, never as a second stamp or as not-final."""
-    shard = tmp_path / "mwd-final-regrades-v7"
-    cells_pass(shard, item(tmp_path, 10), grading(2.0, 2.0, 2.0, 2.0), regrade_ts=1)
-    with connect(shard / "regrade-cells-0.db") as conn:
-        conn.execute("UPDATE grades SET timing_reduction = 'mw4x5-final-v2' WHERE kind = 'final'")
-    (row,) = extract.load_final_regrades(extract.regrade_files([str(shard)])).values()
-    assert (row["timing_reduction"], row["regrade_status"]) == (FINAL, "graded")
-    assert FINAL == "mw4x5" and timing.canonical_reduction("mw4x5-final-v2") == FINAL
-
-
 def extract_main(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, rows: list[dict[str, Any]], *extra: str
 ) -> list[dict[str, str]]:

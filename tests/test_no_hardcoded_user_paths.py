@@ -19,7 +19,7 @@ user's data (or bills the wrong project) for everyone else.
 The scan covers every file ``git ls-files`` lists (tracked files only: a local scratch file is not
 the release). It looks at LIVE text: for Python, non-docstring string literals (a docstring or
 comment may name a site to explain it); for shell-like files (shell, sbatch, env, toml, yaml,
-Dockerfile, rosters), lines with ``#`` comments stripped; everything else verbatim. ``RAW_PATTERNS``
+Dockerfile, tags), lines with ``#`` comments stripped; everything else verbatim. ``RAW_PATTERNS``
 apply to comments too: a user name, an account or an ``#SBATCH`` site directive is never right.
 ``${USER}``, ``$USER``, ``$(id -un)`` and the placeholder ``/users/someone`` are resolvers or
 fixtures, never flagged.
@@ -297,7 +297,7 @@ def test_the_scan_catches_every_kind_of_hit(tmp_path: pathlib.Path) -> None:
             "srun -p debug -N 1 true\n"
             'SBATCH_PARTITION="${SBATCH_PARTITION:-normal}"\n'
             "ssh -J beverin nid002664\n"
-            'RUNS="${SCRATCH}/hpcagent-bench-runs/cpf-llr-focus40-20260916/639344"\n'
+            'RUNS="${SCRATCH}/hpcagent-bench-runs/llr40-20260916/639344"\n'
             'OUT="${SCRATCH}/canon-648131"\n'
             "IMAGE=jfrog.svc.cscs.ch/hpcagent/judge:latest\n"
         ),

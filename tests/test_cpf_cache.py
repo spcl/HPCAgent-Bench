@@ -115,7 +115,7 @@ def test_concurrent_publishes_to_one_key_never_let_a_reader_see_a_mismatched_ent
     """publish() assembles an entry in a SIBLING staging directory and renames it into place, "so a
     reader sees a whole entry or none" (its own docstring). Several rendering ranks can legitimately
     race to publish the same key (prerender_cpf.sbatch shards by kernel, not by (kernel, language,
-    mode); two prerender jobs with overlapping rosters race the same way), so a reader hammering the
+    mode); two prerender jobs with overlapping tags race the same way), so a reader hammering the
     cache throughout that race must only ever see CacheMiss or a fully self-consistent, hash-verified
     entry -- never a manifest paired with another writer's bytes -- and a writer must never crash on
     a directory a sibling publish() call is mid-rewrite of."""

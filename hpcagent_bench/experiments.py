@@ -87,23 +87,23 @@ def dropped(setup: str) -> bool:
 class Selection:
     """Where one study's rows live, which of them count, and what they are scored against.
 
-    ``roster`` is the KERNEL NAMES the study was served. It matters because a baseline column
+    ``tag`` is the KERNEL NAMES the study was served. It matters because a baseline column
     is not run per study: numba and pluto were swept over the whole loop-level-reasoning track
-    (248 kernels), and llr40 is 40 of them. Filtering the sweep by this roster is what stops a
+    (248 kernels), and llr40 is 40 of them. Filtering the sweep by this tag is what stops a
     baseline geomean being taken over kernels the agents never saw.
 
     ``baseline`` names canon-sweep COLUMNS, not another experiment: the reference a ratio is divided
     by and the comparator toolchains drawn beside the agents share neither the study nor the
-    roster tag of the setups they appear with."""
+    tag of the setups they appear with."""
 
     study: str
     #: Every experiment prefix that feeds this study, longest first.
     prefixes: tuple[str, ...]
     #: The devices those experiments ran on, in registry order.
     devices: tuple[str, ...]
-    #: The roster tag the experiments served, and the kernel names it resolves to.
+    #: The tag the experiments served, and the kernel names it resolves to.
     tag: str
-    roster: tuple[str, ...]
+    tag_kernels: tuple[str, ...]
     baseline: BaselineSpec
     root: pathlib.Path
     #: Run-root prefixes the study's fused owed waves write (``owed_run_roots`` in the registry).
@@ -157,20 +157,20 @@ def control_setup(model: str, track: str, device: str, language: str) -> str:
 def resolve(study: str, root: pathlib.Path | None = None, tag: str = "") -> Selection:
     """Where to read ``study`` from, what to keep, and what to score it against.
 
-    ``tag`` overrides the roster the experiments recorded, for a figure drawn over a subset.
+    ``tag`` overrides the tag the experiments recorded, for a figure drawn over a subset.
     Raises on an unknown study rather than returning an empty selection: a typo would
     otherwise read as an experiment that produced no rows, which is what a real gap looks like."""
     matched = prefixes_for(study)
     if not matched:
         known = ", ".join(studies_available())
         raise KeyError(f"no experiment feeds study {study!r}; known: {known}")
-    roster_tag = tag or next((entry.tag for entry in matched.values() if entry.tag), "")
+    tag_name = tag or next((entry.tag for entry in matched.values() if entry.tag), "")
     return Selection(
         study=study,
         prefixes=tuple(sorted(matched, key=len, reverse=True)),
         devices=tuple(dict.fromkeys(entry.device for entry in matched.values())),
-        tag=roster_tag,
-        roster=tags.roster(roster_tag) if roster_tag else (),
+        tag=tag_name,
+        tag_kernels=tags.kernels_of(tag_name) if tag_name else (),
         baseline=baseline_for(study),
         root=root or runs_root(),
         owed_prefixes=registry().owed_run_roots.get(study, ()),

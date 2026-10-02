@@ -16,7 +16,12 @@ the code no longer reads:
   ``episodes.setup`` and the setup prefix of ``episodes.label``. Two spellings of one setup merge into one
   ``setups`` row, which needs equal identity columns; a merge that would lose a distinction, or two episodes that
   would collide on ``(job, label, rep)``, refuses the file;
-* ``setups.study`` is rewritten through the retired study aliases;
+* the CPF archive's ``cpf-llr-focus40-*`` setups become ``llr40-*``, and every ``<setup>-clean`` setup folds into
+  ``<setup>`` (the clean suffix is retired); kernels graded under both a clean and a plain spelling are listed;
+* ``setups.language`` values an older submitter corrupted with a baked-in packet token or ``-clean`` are repaired
+  to the bare language (the packet moves to ``setups.packet`` when that is empty);
+* ``setups.study`` is rewritten through the retired study aliases (``mlscale`` -> ``mlscale20`` included);
+* ``grades.timing_reduction`` ``mw4x5-final-v2`` becomes ``mw4x5``;
 * ``PRAGMA user_version`` goes 2 -> 3.
 
 Before the commit the migrated file is checked: integrity_check, foreign_key_check, the table and column lists
@@ -326,6 +331,19 @@ SETUP_ALIASES: tuple[tuple[str, str], ...] = (
 )
 #: A pre-cmp llrblind setup is the llrblind-cmp setup of the same model, language and packet.
 RENAMED_PREFIXES: tuple[tuple[str, str], ...] = (("llrblind-", "llrblind-cmp-"),)
+#: Registered languages and packets (the vocabulary at the time of the migration), for repairing a corrupted language.
+LANGUAGES = ("c", "cpp", "fortran", "python", "cuda", "hip", "triton", "omp")
+PACKETS = frozenset(
+    {
+        "cpfsrc", "cpf", "lang-skills", "divide-and-conquer", "profiling", "repo", "no-score-tool", "rocprof", "nsys",
+        "opt-reports", "autokernel", "lang", "all-in", "perf-playbook-cpu", "perf-playbook-amd", "perf-playbook-nvidia",
+        "all-in-cpu", "all-in-amd", "all-in-nvidia", "kernel", "caveman", "cpfsrc-v2", "distributed-amd", "dist-rccl-amd",
+    }
+)  # fmt: skip
+PACKET_ALIASES = {"skills": "lang-skills", "no-score": "no-score-tool", "openmp-offload": ""}
+#: Final-grade stamps retired with this migration -> the stamp that replaces them.
+STAMP_RENAMES = {"mw4x5-final-v2": "mw4x5"}
+CLEAN_SUFFIX = "-clean"
 #: The study each recorded study spelling was read as (studies.yaml ``aliases.studies``, retired).
 STUDY_ALIASES: dict[str, str] = {
     "llr-focus40": "llr40",
@@ -380,13 +398,25 @@ def renamed_setup(setup: str) -> str:
         return SETUP_RENAMES.get(name, name)
 
     known = aliased(setup)
-    if known != setup:
-        return known
-    for old, new in RENAMED_PREFIXES:
-        if setup.startswith(old) and not setup.startswith(new):
-            setup = new + setup.removeprefix(old)
-            break
-    return aliased(setup)
+    if known == setup:
+        for old, new in RENAMED_PREFIXES:
+            if setup.startswith(old) and not setup.startswith(new):
+                setup = new + setup.removeprefix(old)
+                break
+        known = aliased(setup)
+    return re.sub(r"^cpf-llr-focus40-", "llr40-", known).removesuffix(CLEAN_SUFFIX)
+
+
+def repaired_language(language: str, packet: str) -> tuple[str, str]:
+    """``(language, packet)`` with a baked-in packet token and ``-clean`` unwound (the retired ``split_record_language``)."""
+    text = language.removesuffix(CLEAN_SUFFIX)
+    for token in LANGUAGES:
+        if text == token:
+            return token, packet
+        if text.startswith(f"{token}-"):
+            tail = PACKET_ALIASES.get(text[len(token) + 1 :], text[len(token) + 1 :])
+            return token, packet or (tail if tail in PACKETS else "")
+    return text, packet
 
 
 def table_columns(conn: sqlite3.Connection) -> dict[str, tuple[str, ...]]:
@@ -444,13 +474,22 @@ def old_hash_columns(columns: dict[str, tuple[str, ...]]) -> dict[str, Sequence[
     """The tables and columns hashed before the migration: the unchanged tables whole, ``runs`` without the rewritten ones."""
     hashed: dict[str, Sequence[str]] = {t: columns[t] for t in UNCHANGED_TABLES if t in columns}
     hashed["runs"] = tuple(c for c in columns["runs"] if c not in ("label", "setup"))
+    hashed["grades"] = tuple(c for c in columns["grades"] if c != "timing_reduction")
     return hashed
 
 
 def new_hash_columns(columns: dict[str, tuple[str, ...]]) -> dict[str, Sequence[str]]:
     hashed: dict[str, Sequence[str]] = {t: columns[t] for t in UNCHANGED_TABLES if t in columns}
     hashed["episodes"] = tuple(c for c in columns["episodes"] if c not in ("label", "setup"))
+    hashed["grades"] = tuple(c for c in columns["grades"] if c != "timing_reduction")
     return hashed
+
+
+def identity(row: tuple[object, ...]) -> tuple[object, ...]:
+    """A ``setups`` row as the migration will write it: study alias folded, language and packet repaired."""
+    study, model, language, device, packet, harness = row
+    language, packet = repaired_language(str(language or ""), str(packet or ""))
+    return (STUDY_ALIASES.get(str(study or ""), study), model, language, device, packet, harness)
 
 
 def plan_setups(conn: sqlite3.Connection) -> dict[str, str]:
@@ -466,7 +505,7 @@ def plan_setups(conn: sqlite3.Connection) -> dict[str, str]:
     for new, olds in merged.items():
         if len(olds) < 2:
             continue
-        identities = {(STUDY_ALIASES.get(rows[o][0] or "", rows[o][0]), *rows[o][1:]) for o in olds}
+        identities = {identity(rows[o]) for o in olds}
         if len(identities) > 1:
             raise Refused(
                 f"setups {sorted(olds)} fold into {new} but differ in study/model/language/device/packet/harness"
@@ -501,11 +540,52 @@ def rewrite_values(conn: sqlite3.Connection, mapping: dict[str, str], log: list[
         if count:
             conn.execute("UPDATE setups SET study = ? WHERE study = ?", (new, old))
             log.append(f"study {old} -> {new} ({count} setups)")
+    for setup, language, packet in conn.execute("SELECT setup, language, packet FROM setups").fetchall():
+        fixed_language, fixed_packet = repaired_language(language, packet)
+        if (fixed_language, fixed_packet) != (language, packet):
+            conn.execute(
+                "UPDATE setups SET language = ?, packet = ? WHERE setup = ?", (fixed_language, fixed_packet, setup)
+            )
+            log.append(
+                f"language {language!r} -> {fixed_language!r}, packet {packet!r} -> {fixed_packet!r} (setup {setup})"
+            )
+
+
+def clean_collisions(conn: sqlite3.Connection, mapping: dict[str, str], log: list[str]) -> None:
+    """List, per merged setup, the kernels graded under both a ``-clean`` and a plain spelling (latest run wins)."""
+    merged: dict[str, list[str]] = {}
+    for old, new in mapping.items():
+        merged.setdefault(new, []).append(old)
+    for new, olds in sorted(merged.items()):
+        clean = [o for o in olds if o.endswith(CLEAN_SUFFIX)]
+        plain = [o for o in olds if not o.endswith(CLEAN_SUFFIX)]
+        if not clean or not plain:
+            continue
+
+        def kernels(names: list[str]) -> set[str]:
+            marks = ",".join("?" * len(names))
+            sql = f"SELECT DISTINCT g.benchmark FROM grades g JOIN runs r ON r.id = g.run_id WHERE r.setup IN ({marks})"
+            return {row[0] for row in conn.execute(sql, names)}
+
+        both = sorted(kernels(clean) & kernels(plain))
+        if both:
+            log.append(
+                f"collision {new}: {len(both)} kernels graded under a clean and a plain spelling: {', '.join(both[:8])}"
+            )
+
+
+def rewrite_stamps(conn: sqlite3.Connection, log: list[str]) -> None:
+    for old, new in STAMP_RENAMES.items():
+        count = int(conn.execute("SELECT COUNT(*) FROM grades WHERE timing_reduction = ?", (old,)).fetchone()[0])
+        if count:
+            conn.execute("UPDATE grades SET timing_reduction = ? WHERE timing_reduction = ?", (new, old))
+            log.append(f"grades.timing_reduction {old} -> {new} ({count} grades)")
 
 
 def migrate_results(conn: sqlite3.Connection, log: list[str]) -> dict[str, str]:
     """The v2 -> v3 renames and rewrites, inside the caller's transaction; returns the setup mapping."""
     mapping = plan_setups(conn)
+    clean_collisions(conn, mapping, log)
     conn.execute("DROP VIEW IF EXISTS grades_flat")
     for old, new in INDEX_RENAMES:
         conn.execute(f"DROP INDEX IF EXISTS {old}")
@@ -518,6 +598,7 @@ def migrate_results(conn: sqlite3.Connection, log: list[str]) -> dict[str, str]:
     conn.execute("CREATE INDEX grades_episode ON grades (episode_id, kernel)")
     conn.execute("CREATE UNIQUE INDEX episodes_key ON episodes (coalesce(job, -1), label, rep)")
     rewrite_values(conn, mapping, log)
+    rewrite_stamps(conn, log)
     conn.execute(GRADES_FLAT)
     conn.execute(f"PRAGMA user_version = {SCHEMA_NEW}")
     log.append(f"user_version {SCHEMA_OLD} -> {SCHEMA_NEW}")

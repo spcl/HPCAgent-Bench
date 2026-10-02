@@ -207,9 +207,8 @@ def test_the_registered_vocabulary_passes_its_own_cross_checks() -> None:
 
 
 def test_an_alias_resolves_to_the_entity_it_names_and_takes_no_slot() -> None:
-    assert vocabulary.MODELS.canonical("gpt-oss-120b") == "oss120b"
-    assert vocabulary.PACKETS.canonical("no-score") == "no-score-tool"
-    assert vocabulary.PACKETS.canonical("openmp-offload") == ""
+    assert vocabulary.FRAMEWORKS.canonical("jax_cpu") == "jax"
+    assert vocabulary.OPTIMIZERS.canonical("dace_cpu") == "dace"
     for kind in vocabulary.KINDS.values():
         assert not set(kind.aliases) & set(kind.orders)
 

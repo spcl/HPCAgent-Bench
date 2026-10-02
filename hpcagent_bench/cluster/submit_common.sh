@@ -33,13 +33,6 @@ symbolic_path() {
 # hms <seconds> -> HH:MM:SS, for a sbatch --time computed off a deadline.
 hms() { printf '%02d:%02d:%02d\n' "$(( $1 / 3600 ))" "$(( $1 % 3600 / 60 ))" "$(( $1 % 60 ))"; }
 
-# clean_suffix <CLEAN> -> "-clean" when CLEAN=1, else "". A clean re-run keeps the setup's recorded
-# identity (study, model, language, device, packet); only the setup, job, env and problems names
-# carry the suffix, and the analysis prefers the -clean setup.
-clean_suffix() {
-    [[ "$1" == 1 ]] && printf -- '-clean' || printf ''
-}
-
 # BUDGET_SCALE=<N> scales a rerun's budget (the owed "budget" class). TOKEN_SCALE and TIME_SCALE
 # default to it and scale tokens and wall clock separately (4x wall clock may not fit the partition).
 BUDGET_SCALE=${BUDGET_SCALE:-1}
@@ -57,7 +50,7 @@ job_options() {
 }
 
 # parse_job_flags "$@" -- the job flags of a submitter: --system, --account, --partition, --gpus-per-node, --hardware,
-# --time (the job's time limit, else computed from the roster) and --nice, each as `--flag value` or `--flag=value`.
+# --time (the job's time limit, else computed from the tag) and --nice, each as `--flag value` or `--flag=value`.
 # The resolver's flags go to JOB_FLAGS, over the environment and systems.yaml; any other word is an error.
 parse_job_flags() {
     local flag value
@@ -125,7 +118,7 @@ budget_env_suffix() {
 }
 
 # setup_file_suffix -> budget_env_suffix plus "-<KERNELS_FILE stem>" when a kernels file narrows the
-# roster: the suffix of BOTH a setup's env and its problems file, so a subset or scaled submission can
+# tag: the suffix of BOTH a setup's env and its problems file, so a subset or scaled submission can
 # never overwrite the canonical files a PENDING job of the same setup still reads.
 setup_file_suffix() {
     printf '%s' "$(budget_env_suffix)"

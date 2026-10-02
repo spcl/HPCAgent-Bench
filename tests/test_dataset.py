@@ -114,12 +114,12 @@ def test_writing_a_db_twice_replaces_it_rather_than_appending(
     assert len(dataset.load(tmp_path / "x.db")) == 1
 
 
-def test_a_row_on_a_kernel_outside_the_roster_is_dropped_and_counted(tmp_path: pathlib.Path) -> None:
-    """The SciComp waves served more kernels than the roster; the experiments name scicomp40, and a
+def test_a_row_on_a_kernel_outside_the_tag_is_dropped_and_counted(tmp_path: pathlib.Path) -> None:
+    """The SciComp waves served more kernels than the tag; the experiments name scicomp40, and a
     figure counts a setup over every kernel its rows touch, so an atax row must not reach it."""
     selection = experiments.resolve("scicomp40", root=tmp_path)
     setup = "scicomp40-qwen38-c"
     live = pd.DataFrame([row("100", "gemm", setup=setup), row("101", "atax", setup=setup)])
     frame, provenance = dataset.fuse(selection, live, pd.DataFrame())
     assert list(frame["kernel"]) == ["gemm"]
-    assert provenance.dropped_off_roster == 1
+    assert provenance.dropped_off_tag == 1

@@ -258,7 +258,7 @@ def test_the_mode_falls_back_to_the_setup_name_when_a_row_does_not_state_it() ->
     """A CSV extracted before the column exists still splits weak from strong, by the setup key."""
     assert scaling.mode_of("mlscale-weak-qwen38-hip") == "weak"
     assert scaling.mode_of("mlscale-strong-kimi27sglang-hip") == "strong"
-    assert scaling.mode_of("llr-focus40-qwen38-c") == ""
+    assert scaling.mode_of("llr40-qwen38-c") == ""
     assert scaling.mode_of("mlscale-weak-qwen38-hip", "strong") == "strong"  # a stated mode wins
 
 

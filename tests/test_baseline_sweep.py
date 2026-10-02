@@ -1,12 +1,12 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""``hpcagent-bench job baseline``: one compiler column over a roster, split over the tasks of a step.
+"""``hpcagent-bench job baseline``: one compiler column over a tag, split over the tasks of a step.
 
 The kernels run through a STUB image interpreter whose ``-m hpcagent_bench.cli`` is a small script (a
 ``run-framework`` that writes one CSV row, one that hangs, one that reports its rlimits), so no dace tree, build
 toolchain or benchmark registry is needed: what is tested is the sweep's own wiring -- the rank split, the wall
 and heap caps, the timeout row, the managed work dir (shard DB redirection, rotation of an old run's shards, the
-verified merge into ``canon.db``) and the roster resolution -- not ``run-framework``'s CSV correctness.
+verified merge into ``canon.db``) and the tag resolution -- not ``run-framework``'s CSV correctness.
 """
 
 import contextlib
@@ -109,10 +109,10 @@ def canon_rows(sweep: baseline.Sweep) -> dict[str, dict]:
 
 
 @pytest.mark.parametrize("size", [1, 2, 3, 4, 7])
-def test_the_ranks_split_a_roster_disjointly_and_completely(size: int) -> None:
-    roster = [f"k{index}" for index in range(10)]
-    shares = [jobs.share(roster, jobs.Rank(index, size)) for index in range(size)]
-    assert sorted(name for share in shares for name in share) == sorted(roster)
+def test_the_ranks_split_a_tag_disjointly_and_completely(size: int) -> None:
+    tag_kernels = [f"k{index}" for index in range(10)]
+    shares = [jobs.share(tag_kernels, jobs.Rank(index, size)) for index in range(size)]
+    assert sorted(name for share in shares for name in share) == sorted(tag_kernels)
     assert all(not set(a) & set(b) for i, a in enumerate(shares) for b in shares[i + 1 :])
 
 
@@ -309,12 +309,12 @@ def test_a_caller_supplied_build_label_is_left_alone(tmp_path: pathlib.Path) -> 
     assert pathlib.Path(f"{sweep.csv(0)}.record_build").read_text().strip() == "extended-fork"
 
 
-def test_a_stale_shard_from_an_old_roster_never_resurrects(tmp_path: pathlib.Path) -> None:
-    """``run-framework`` APPENDS to an existing rank CSV, so once a roster or rank-count change moves a kernel to a
+def test_a_stale_shard_from_an_old_tag_never_resurrects(tmp_path: pathlib.Path) -> None:
+    """``run-framework`` APPENDS to an existing rank CSV, so once a tag or rank-count change moves a kernel to a
     different rank between two runs into ONE out_root, the file that kept its OLD row can receive a fresh append for
     another kernel and end up newer than the file holding the genuinely fresh row; the merge would keep the stale one.
 
-    Exact repro: the old run's 3-rank roster put ``d`` on rank 0 (with ``a``); the new 4-rank roster moves it to
+    Exact repro: the old run's 3-rank tag put ``d`` on rank 0 (with ``a``); the new 4-rank tag moves it to
     rank 3 and leaves ``a`` on rank 0, which finishes last. Rotation in ``begin`` keeps the old row out of the file."""
     opt = stub_checkout(tmp_path, WRITING_CLI)
     sweep = sweep_of(tmp_path, opt, ("a", "b", "c", "d"))
@@ -341,11 +341,11 @@ def test_begin_forgets_the_previous_runs_dace_labels(tmp_path: pathlib.Path) -> 
     assert not label.exists()
 
 
-# --------------------------------------------------------------------------------------- the roster and phases
+# --------------------------------------------------------------------------------------- the tag and phases
 
 
-def test_a_kernels_file_narrows_the_roster_and_is_read_sorted(tmp_path: pathlib.Path) -> None:
-    """One name per line, comments and blanks dropped, replacing the tag's roster; the loop order must not depend on
+def test_a_kernels_file_narrows_the_tag_and_is_read_sorted(tmp_path: pathlib.Path) -> None:
+    """One name per line, comments and blanks dropped, replacing the tag's tag; the loop order must not depend on
     how the file was written."""
     names = tmp_path / "owed.txt"
     names.write_text("kmp\n# a comment line\ndfa  # rerun\n\n")
@@ -368,7 +368,7 @@ def test_a_missing_or_empty_kernels_file_is_refused(tmp_path: pathlib.Path) -> N
         baseline.resolve_kernels("", "", blank)
 
 
-def test_the_whole_tag_is_the_roster_when_nothing_narrows_it() -> None:
+def test_the_whole_tag_is_the_tag_when_nothing_narrows_it() -> None:
     assert len(baseline.resolve_kernels("llr-focus40", "", None)) == 40
 
 

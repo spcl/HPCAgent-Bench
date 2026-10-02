@@ -339,7 +339,7 @@ def read_view(view: pathlib.Path) -> dict[str, str]:
 
 
 def short_name(kernel: str) -> str:
-    """A roster may name a kernel by its full registry key; views are keyed by its last segment."""
+    """A tag may name a kernel by its full registry key; views are keyed by its last segment."""
     return kernel.rsplit("/", 1)[-1]
 
 

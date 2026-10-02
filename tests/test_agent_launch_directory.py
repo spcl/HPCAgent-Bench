@@ -221,7 +221,7 @@ def test_a_fused_waves_setups_are_staged_beside_the_env(tmp_path: pathlib.Path) 
     setups = run_dir / "setups"
     setups.mkdir(parents=True)
     for suffix in (".resolved", ".env", ".jsonl", ".keys"):
-        (setups / f"setup-c-clean{suffix}").write_text("x\n")
+        (setups / f"setup-c{suffix}").write_text("x\n")
     env_file = tmp_path / "job.env"
     env_file.write_text("SETUP=owed-w1\n")
     (tmp_path / PROBLEMS).write_text("{}\n")
@@ -240,7 +240,7 @@ def test_a_fused_waves_setups_are_staged_beside_the_env(tmp_path: pathlib.Path) 
     done = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False)
     assert done.returncode == 0, done.stderr
     assert sorted(path.name for path in (launch / "setups").iterdir()) == [
-        "setup-c-clean.env",
-        "setup-c-clean.jsonl",
-        "setup-c-clean.resolved",
+        "setup-c.env",
+        "setup-c.jsonl",
+        "setup-c.resolved",
     ]

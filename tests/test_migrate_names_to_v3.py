@@ -116,6 +116,46 @@ def test_a_merge_of_setups_that_differ_in_identity_is_refused_and_leaves_the_fil
     assert db.read_bytes() == before
 
 
+def test_the_clean_suffix_folds_and_a_kernel_graded_both_ways_is_listed(tmp_path: pathlib.Path) -> None:
+    db = v2_database(
+        tmp_path / "r.db",
+        (("llr40-qwen38-c", "llr40", "llr40-qwen38-c"), ("llr40-qwen38-c-clean", "llr40", "llr40-qwen38-c-clean")),
+    )
+    dry = migrate("--dry-run", db)
+    assert "collision llr40-qwen38-c: 1 kernels graded under a clean and a plain spelling: gemm" in dry.stdout
+    assert migrate(db).returncode == 0
+    assert rows(db, "SELECT setup FROM setups") == [("llr40-qwen38-c",)]
+    assert rows(db, "SELECT count(*) FROM episodes WHERE setup = 'llr40-qwen38-c'") == [(2,)]
+
+
+def test_the_cpf_archive_setups_move_to_the_llr40_prefix(tmp_path: pathlib.Path) -> None:
+    db = v2_database(
+        tmp_path / "r.db", (("cpf-llr-focus40-qwen38-c-cpf-clean", "llr40", "cpf-llr-focus40-qwen38-c-cpf-clean"),)
+    )
+    assert migrate(db).returncode == 0
+    assert rows(db, "SELECT setup FROM setups") == [("llr40-qwen38-c-cpf",)]
+    assert rows(db, "SELECT label FROM episodes") == [("llr40-qwen38-c-cpf.n0.p0.w0",)]
+
+
+def test_the_retired_final_stamp_and_the_mlscale_study_are_rewritten(tmp_path: pathlib.Path) -> None:
+    db = v2_database(tmp_path / "r.db", (("mlscale20-qwen38-c", "mlscale", "mlscale20-qwen38-c"),))
+    with connect(db) as conn:
+        conn.execute("UPDATE grades SET timing_reduction = 'mw4x5-final-v2'")
+    done = migrate("--dry-run", db)
+    assert "grades.timing_reduction mw4x5-final-v2 -> mw4x5 (1 grades)" in done.stdout
+    assert migrate(db).returncode == 0
+    assert rows(db, "SELECT timing_reduction FROM grades") == [("mw4x5",)]
+    assert rows(db, "SELECT study FROM setups") == [("mlscale20",)]
+
+
+def test_a_corrupted_language_is_repaired_and_its_packet_kept(tmp_path: pathlib.Path) -> None:
+    db = v2_database(tmp_path / "r.db", (("llr40-qwen38-c", "llr40", "llr40-qwen38-c"),))
+    with connect(db) as conn:
+        conn.execute("UPDATE setups SET language = 'triton-skills-clean', packet = ''")
+    assert migrate(db).returncode == 0
+    assert rows(db, "SELECT language, packet FROM setups") == [("triton", "lang-skills")]
+
+
 def test_a_second_run_changes_nothing(tmp_path: pathlib.Path) -> None:
     db = v2_database(tmp_path / "r.db", (("llr40-qwen38-c", "llr40", "llr40-qwen38-c"),))
     assert migrate(db).returncode == 0
@@ -153,6 +193,10 @@ if __name__ == "__main__":
         test_an_old_setup_spelling_is_rewritten_in_setups_episodes_and_labels,
         test_two_spellings_of_one_setup_merge_into_one_row,
         test_a_merge_of_setups_that_differ_in_identity_is_refused_and_leaves_the_file_alone,
+        test_the_clean_suffix_folds_and_a_kernel_graded_both_ways_is_listed,
+        test_the_cpf_archive_setups_move_to_the_llr40_prefix,
+        test_the_retired_final_stamp_and_the_mlscale_study_are_rewritten,
+        test_a_corrupted_language_is_repaired_and_its_packet_kept,
         test_a_second_run_changes_nothing,
         test_verify_compares_a_migrated_copy_with_its_original,
         test_a_file_that_is_not_a_v2_results_database_is_refused,

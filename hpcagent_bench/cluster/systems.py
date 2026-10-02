@@ -63,7 +63,7 @@ FIELDS: dict[str, tuple[str, str]] = {
 #: Slurm takes one of these, so an explicit one displaces the system's other.
 GPU_FIELDS = ("gpus_per_node", "gpus_per_task")
 #: What the experiment job takes from this module. Its node count is the sum of its roles and its time limit is
-#: computed from the roster, so neither is a field here; its tasks and cores are its own (one task per node).
+#: computed from the tag, so neither is a field here; its tasks and cores are its own (one task per node).
 JOB_FIELDS = ("partition", "account", "gpus_per_node")
 #: Without these the job cannot run: the account bills it, the GPUs are what its roles share.
 JOB_REQUIRED = ("account", "gpus_per_node")

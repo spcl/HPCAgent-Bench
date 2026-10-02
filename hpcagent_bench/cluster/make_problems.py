@@ -373,9 +373,9 @@ def selection(args: argparse.Namespace) -> tuple[list[str], set[str]]:
     """The ``--select`` / ``--kernels-file`` tokens and the path-keys they name."""
     tokens: list[str] = list(args.select)
     if args.kernels_file:
-        # A name is whatever precedes a `#`, so a roster that annotates each line with its dwarf
+        # A name is whatever precedes a `#`, so a tag that annotates each line with its dwarf
         # reads the same as a bare list. Matching the whole line silently kept NOTHING from an
-        # annotated roster and reported a file with no kernels in it.
+        # annotated tag and reported a file with no kernels in it.
         with open(args.kernels_file) as fh:
             lines = [name for name in (ln.split("#", 1)[0].strip() for ln in fh) if name]
         if not lines:

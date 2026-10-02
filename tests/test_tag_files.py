@@ -26,8 +26,8 @@ def test_every_tag_file_names_existing_kernels_without_duplicates(tag: str) -> N
     assert len(tags.resolve(tag)) == len(listed)
 
 
-def test_every_experiment_s_roster_tag_has_a_tag_file() -> None:
-    """A registry experiment names the roster its setups were served; that roster must be a file."""
+def test_every_experiments_tag_has_a_tag_file() -> None:
+    """A registry experiment names the tag its setups were served; that tag must be a file."""
     experiments = study_tags.registry().experiments
     missing = sorted({entry.tag for entry in experiments.values() if entry.tag} - set(TAG_NAMES))
     assert not missing, f"registry experiments name tags with no file in {tags.TAGS_DIR}: {missing}"

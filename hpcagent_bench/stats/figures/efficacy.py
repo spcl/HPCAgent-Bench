@@ -582,7 +582,7 @@ def per_kernel_ci(values: "np.ndarray") -> tuple[float, float, float]:
     """What ONE KERNEL cost, and its 95% interval: the mean over the kernels of the pair, with the
     bootstrap mean interval around it.
 
-    Per kernel rather than per roster so the row is comparable across experiments whose rosters are
+    Per kernel rather than per tag so the row is comparable across experiments whose tags are
     different sizes -- gitscicomp10's ten against llr40's forty -- which a total is not.
     """
     if values.size == 0:
@@ -1798,8 +1798,8 @@ def draw_success_row(
     significance: dict[tuple[str, str], Significance] | None = None,
 ) -> None:
     """The success row: the RATE each setup solved its pair's kernels at, solved over served, on an axis
-    running 0 to 100% (user; a count per pair put pairs of different roster sizes on
-    different scales), as a mark and NOTHING around it. The roster is fixed, so
+    running 0 to 100% (user; a count per pair put pairs of different tag sizes on
+    different scales), as a mark and NOTHING around it. The tag is fixed, so
     the rate is a census, not a sample: there is no sampling error to draw, and an interval under a
     10/10 mark reaching down to 70% read as seven solved. The control wears its lighter shade
     (:data:`~hpcagent_bench.stats.palette.CONTROL_SHADE`), as on every other row."""
@@ -1807,7 +1807,7 @@ def draw_success_row(
         for point, filled, dodge, mark, colour in setup_marks(row, shape, config):
             if point.served == 0:
                 continue
-            # A full roster sits on 100%, and the headroom above it is thinner than a mark in a half-height row.
+            # A full tag sits on 100%, and the headroom above it is thinner than a mark in a half-height row.
             style.point_mark(
                 ax, x + dodge, success_rate(point.solved, point.served), colour, mark, filled,
                 size=config.mark_size, clip=False,
@@ -2115,7 +2115,7 @@ class Comparator:
     """A compiler or framework drawn beside the models of one delivery group (Pluto beside the C
     answers, PPCG beside HIP): ``name`` is its key (``pluto``, ``ppcg_hip``, ``jax_cpu``), ``group``
     the delivery tick it sits under, ``speedups`` the baseline-over-comparator ratio of each kernel
-    it ran validly, and ``served`` the roster it was asked for."""
+    it ran validly, and ``served`` the tag it was asked for."""
 
     name: str
     group: str
@@ -2141,7 +2141,7 @@ def comparator_point(comparator: Comparator) -> SetupPoint:
 
 def comparators_from_table(table: pd.DataFrame, entries: Sequence[tuple[str, str]]) -> list[Comparator]:
     """``entries`` (comparator key, delivery group) read off a comparator CSV (``kernel``,
-    ``comparator``, ``speedup``; one row per roster kernel, ``speedup`` blank where the comparator
+    ``comparator``, ``speedup``; one row per tag kernel, ``speedup`` blank where the comparator
     has no valid run). A key the table does not name is skipped."""
     out: list[Comparator] = []
     for name, group in entries:

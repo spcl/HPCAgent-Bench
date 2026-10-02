@@ -913,7 +913,7 @@ def targets(cpp_root: pathlib.Path, only: str = "") -> list[Target]:
                 raise SystemExit(f"{module} has C++ on disk AND a HAND_WRITTEN body; one of the two is stale")
             dest_dir = llr / module
             # The MANIFEST, not the directory, is what says a kernel is in the corpus. A kernel that
-            # was dropped from the roster leaves its directory behind the moment anything generated a
+            # was dropped from the tag leaves its directory behind the moment anything generated a
             # sidecar into it (``<module>_dace.py``, ``__pycache__``), and porting into that
             # directory dies further in with ``unknown benchmark`` instead of skipping it here.
             if not (dest_dir / f"{module}.yaml").is_file():

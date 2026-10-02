@@ -47,7 +47,7 @@ def test_every_caller_still_reaches_it(script: str) -> None:
     [
         ("llr40v10-oss120b-c-skills", "oss120b"),
         ("llr40v9-qwen38-fortran", "qwen38"),
-        ("cpf-llr-focus40-kimi27sglang-c-cpfsrc", "kimi27sglang"),
+        ("llr40-kimi27sglang-c-cpfsrc", "kimi27sglang"),
         ("glm53llr20-glm53-c", "glm53"),
         ("llr4-qwen30b-c", "other"),
         ("", "other"),
@@ -65,15 +65,6 @@ def test_a_language_token_cannot_match_inside_a_model_name() -> None:
     assert study_tags.model_of("prefix-notglm53here-c") == "other"
     assert study_tags.model_of("llr40-oss120bx-c") == "other"
     assert study_tags.model_of("xoss120b-c") == "other"
-
-
-@pytest.mark.parametrize(
-    ("spelling", "canonical"),
-    [("llr40-gpt-oss-120b-c", "oss120b"), ("llr40-qwen3.8-c", "qwen38"), ("a-kimi-k2.7-c", "kimi27sglang")],
-)
-def test_a_registered_alias_resolves_to_the_entity_it_names(spelling: str, canonical: str) -> None:
-    """Two spellings of one model must not split a figure into two series with two colours."""
-    assert study_tags.model_of(spelling) == canonical
 
 
 def test_the_fallback_is_a_registered_word_and_not_a_fragment() -> None:

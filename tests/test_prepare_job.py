@@ -19,8 +19,8 @@ def problems_file(tmp_path: pathlib.Path, kernels: list[str]) -> pathlib.Path:
     return path
 
 
-def test_the_tasks_split_the_roster_without_overlap(tmp_path: pathlib.Path) -> None:
-    kernels = prepare.roster(problems_file(tmp_path, ["c", "a", "b", "a", "d", "e"]))
+def test_the_tasks_split_the_tag_without_overlap(tmp_path: pathlib.Path) -> None:
+    kernels = prepare.tag_kernels(problems_file(tmp_path, ["c", "a", "b", "a", "d", "e"]))
     assert kernels == ["a", "b", "c", "d", "e"]
     shares = [prepare.rank_share(kernels, rank, 2) for rank in (0, 1)]
     assert shares == [["a", "c", "e"], ["b", "d"]]

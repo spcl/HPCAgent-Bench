@@ -41,9 +41,9 @@ DB_PATH = pathlib.Path(__file__).with_name("observations-mini.db")
 MODELS: tuple[str, ...] = ("qwen38", "oss120b")
 
 #: The four packets this fixture exists to cover: the no-packet control, then three treatments.
-PACKETS: tuple[str, ...] = ("", "skills", "cpfsrc", "perf-playbook-cpu")
+PACKETS: tuple[str, ...] = ("", "lang-skills", "cpfsrc", "perf-playbook-cpu")
 
-#: Real llr-focus40 short names, kept small on purpose but AT or ABOVE
+#: Real llr40 short names, kept small on purpose but AT or ABOVE
 #: summary.MIN_INTERVAL_SAMPLES (5): population.kernel_medians withholds its interval below that
 #: floor, and rules.require_interval refuses a table whose every row is bare.
 KERNELS: tuple[str, ...] = ("argmax_with_index", "tsvc_2_s116", "tsvc_2_s119", "jacobi_1d", "gemver")
@@ -60,14 +60,14 @@ COLUMNS: tuple[str, ...] = (
 #: The setup's trailing suffix for each packet, matching the launcher's own naming.
 PACKET_SUFFIX: dict[str, str] = {
     "": "",
-    "skills": "-skills",
+    "lang-skills": "-lang-skills",
     "cpfsrc": "-cpfsrc",
     "perf-playbook-cpu": "-perf-playbook-cpu",
 }
 
 
 def setup_name(model: str, packet: str) -> str:
-    return f"{'cpf-' if packet == 'cpfsrc' else ''}llr-focus40-{model}-c{PACKET_SUFFIX[packet]}"
+    return f"llr40-{model}-c{PACKET_SUFFIX[packet]}"
 
 
 def episode_rows(run_root: str, setup: str, packet: str, kernel: str, index: int, ts: int) -> list[tuple[object, ...]]:
@@ -104,8 +104,8 @@ def rows() -> list[tuple[object, ...]]:
     for model in MODELS:
         for packet in PACKETS:
             setup = setup_name(model, packet)
-            # Every packet -- including perf-playbook-cpu -- covers the full roster: the
-            # roster gate (population.complete_setups) drops a setup short of it before it can
+            # Every packet -- including perf-playbook-cpu -- covers the full tag: the
+            # tag gate (population.complete_setups) drops a setup short of it before it can
             # draw a panel at all, so a partial fixture would read as "no comparison".
             for index, kernel in enumerate(KERNELS):
                 out += episode_rows("630709", setup, packet, kernel, index, ts)
