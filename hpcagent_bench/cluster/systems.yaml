@@ -2,15 +2,19 @@
 # `hpcagent-bench job submit --system <name>` starts from one entry; a flag, then an environment variable
 # (HPCAGENT_BENCH_JOB_<FIELD>, SBATCH_PARTITION, SBATCH_ACCOUNT, or the site layer's value of it), overrides a field.
 # Add a system in a file of the same shape named by HPCAGENT_BENCH_SYSTEMS_FILE. `cluster` is matched against
-# SLURM_CLUSTER_NAME to pick the system when none is named. One task per GPU, each with its share of the cores.
+# SLURM_CLUSTER_NAME to pick the system when none is named; with no entry a job runs from flags and the environment.
+# `profile` is the hardware profile whose images and serving layers an experiment uses (HPCAGENT_BENCH_PROFILE,
+# --profile). One task per GPU, each with its share of the cores.
 beverin:
   cluster: beverin
+  profile: mi300
   partition: mi300
   ntasks_per_node: 4
   cpus_per_task: 24
   gpus_per_node: 4
 beverin-mi200:
   cluster: beverin
+  profile: mi200
   partition: mi200
   ntasks_per_node: 4
   cpus_per_task: 16

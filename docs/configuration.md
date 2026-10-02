@@ -67,9 +67,19 @@ hpcagent-bench job submit --ntasks-per-node 2 --cpus-per-task 32 --gpus-per-task
 
 A field nothing sets comes from the system's entry in `hpcagent_bench/cluster/systems.yaml`: `beverin` (MI300A,
 partition `mi300`), `beverin-mi200` and `daint.alps` (GH200) ship. The system is `--system`, else
-`HPCAGENT_BENCH_SYSTEM`, else the entry whose `cluster` is `SLURM_CLUSTER_NAME`, else `beverin`. A new machine
-is a file of the same shape named by `HPCAGENT_BENCH_SYSTEMS_FILE` (its entries add to or replace the shipped
-ones). An explicit `--gpus-per-task` replaces the system's `gpus_per_node`, since Slurm takes one.
+`HPCAGENT_BENCH_SYSTEM`, else the entry whose `cluster` is `SLURM_CLUSTER_NAME`, else none: a cluster with no entry
+runs from flags and the environment alone. A new machine is a file of the same shape named by
+`HPCAGENT_BENCH_SYSTEMS_FILE` (its entries add to or replace the shipped ones). An explicit `--gpus-per-task`
+replaces the system's `gpus_per_node`, since Slurm takes one.
+
+The experiment submitter (`hpcagent_bench/cluster/submit.sh`) resolves the same way, through the same code
+(`hpcagent-bench job options`): `--partition`, `--account`, `--gpus-per-node`, `--system` and `--profile` over their
+variables over the system's entry. Its node count is the sum of its roles and its time limit comes from the roster
+(`--time` overrides it), so neither is resolved. An experiment cannot run without an account and a GPU count: a
+missing one is an error naming its flag and its variable (`--account` / `SBATCH_ACCOUNT`, `--gpus-per-node` /
+`HPCAGENT_BENCH_JOB_GPUS_PER_NODE`). The partition may stay unset, which is the cluster's default partition. The
+hardware profile (`--profile`, `HPCAGENT_BENCH_PROFILE`, the entry's `profile`) is not an `sbatch` option: it names
+the GPU generation whose images and serving layers the experiment uses ([below](#hardware-profiles-are-not-site-values)).
 
 ## Variables
 

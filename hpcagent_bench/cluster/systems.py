@@ -1,20 +1,24 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""``hpcagent-bench job submit``: a helper job's ``sbatch`` line for the system it runs on.
+"""The ``sbatch`` options of a job, for the system it runs on: ``hpcagent-bench job submit`` (a helper job) and
+``hpcagent-bench job options`` (the experiment submitter, ``cluster/submit.sh``).
 
 The node shape of a job (tasks per node, cores per task, GPUs per node or per task, partition, account) differs
-between machines, so the samples in ``docs/jobs/`` carry no shape of their own that a site must edit: this module
-resolves each field and passes it as an ``sbatch`` option, which overrides the script's ``#SBATCH`` line.
-A field's value is, in order of precedence:
+between machines, so no job script carries a shape a site must edit: this module resolves each field and passes it
+as an ``sbatch`` option, which overrides the script's ``#SBATCH`` line. A field's value is, in order of precedence:
 
 1. its command-line flag (``--cpus-per-task 72``);
 2. its environment variable (:data:`FIELDS`), which the site layer (``experiments/layers/site.env``) also
    provides, since a layer keeps a value the environment already holds;
-3. the system's entry in ``systems.yaml`` (Beverin and Daint.Alps ship; ``$HPCAGENT_BENCH_SYSTEMS_FILE`` adds
-   or replaces others). The system is ``--system``, else ``$HPCAGENT_BENCH_SYSTEM``, else the entry whose
-   ``cluster`` is ``$SLURM_CLUSTER_NAME``, else the first entry (Beverin).
+3. the system's entry in ``systems.yaml`` (``$HPCAGENT_BENCH_SYSTEMS_FILE`` adds or replaces entries). The system is
+   ``--system``, else ``$HPCAGENT_BENCH_SYSTEM``, else the entry whose ``cluster`` is ``$SLURM_CLUSTER_NAME``, else
+   none: a cluster with no entry runs from flags and the environment alone.
 
 ``--gpus-per-task`` given by the caller replaces the system's ``--gpus-per-node`` and vice versa: Slurm takes one.
+A job names the fields it cannot run without (:data:`EXPERIMENT_REQUIRED`); a missing one is an error that names its
+flag and its environment variable. The hardware profile (``--profile``, ``$HPCAGENT_BENCH_PROFILE``, the entry's
+``profile``) names the GPU generation whose images and serving layers the experiment uses; it is not an ``sbatch``
+option.
 """
 
 import argparse
@@ -24,12 +28,26 @@ import shlex
 import subprocess
 import sys
 from collections.abc import Mapping, Sequence
+from typing import NamedTuple
 
 import yaml
 
 from hpcagent_bench import paths
 
-__all__ = ["FIELDS", "SYSTEMS_FILE", "load_systems", "main", "resolve", "sbatch_command", "site_environment"]
+__all__ = [
+    "EXPERIMENT_FIELDS",
+    "EXPERIMENT_REQUIRED",
+    "FIELDS",
+    "PROFILE_VARIABLE",
+    "SYSTEMS_FILE",
+    "Resolved",
+    "load_systems",
+    "main",
+    "options_main",
+    "resolve",
+    "sbatch_command",
+    "site_environment",
+]
 
 #: field -> (sbatch option, environment variable that sets it).
 FIELDS: dict[str, tuple[str, str]] = {
@@ -44,6 +62,12 @@ FIELDS: dict[str, tuple[str, str]] = {
 }
 #: Slurm takes one of these, so an explicit one displaces the system's other.
 GPU_FIELDS = ("gpus_per_node", "gpus_per_task")
+#: What the experiment job takes from this module. Its node count is the sum of its roles and its time limit is
+#: computed from the roster, so neither is a field here; its tasks and cores are its own (one task per node).
+EXPERIMENT_FIELDS = ("partition", "account", "gpus_per_node")
+#: Without these the job cannot run: the account bills it, the GPUs are what its roles share.
+EXPERIMENT_REQUIRED = ("account", "gpus_per_node")
+PROFILE_VARIABLE = "HPCAGENT_BENCH_PROFILE"
 PACKAGED = pathlib.Path(__file__).with_name("systems.yaml")
 SYSTEMS_FILE = "HPCAGENT_BENCH_SYSTEMS_FILE"
 
@@ -74,32 +98,48 @@ def site_environment(environ: Mapping[str, str]) -> dict[str, str]:
 
 
 def choose_system(name: str | None, systems: Mapping[str, Mapping[str, object]], environ: Mapping[str, str]) -> str:
-    """``name``, else ``$HPCAGENT_BENCH_SYSTEM``, else the system of ``$SLURM_CLUSTER_NAME``, else the first one."""
+    """``name``, else ``$HPCAGENT_BENCH_SYSTEM``, else the system of ``$SLURM_CLUSTER_NAME``, else ``""``."""
     chosen = name or environ.get("HPCAGENT_BENCH_SYSTEM") or ""
     if not chosen:
         cluster = environ.get("SLURM_CLUSTER_NAME", "")
         chosen = next((key for key, entry in systems.items() if cluster and entry.get("cluster") == cluster), "")
-    chosen = chosen or next(iter(systems))  # the first entry of systems.yaml
-    if chosen not in systems:
+    if chosen and chosen not in systems:
         raise SystemExit(f"job submit: no system {chosen!r}; known: {', '.join(sorted(systems))}")
     return chosen
 
 
+class Resolved(NamedTuple):
+    """What a job gets: the system it was resolved for (``""`` when none), its ``sbatch`` fields and its profile."""
+
+    system: str
+    values: dict[str, str]
+    profile: str
+
+
 def resolve(
-    system: str | None, flags: Mapping[str, str | None], environ: Mapping[str, str]
-) -> tuple[str, dict[str, str]]:
-    """``(system, {field: value})``: a flag over an environment variable over the system's entry."""
+    system: str | None,
+    flags: Mapping[str, str | None],
+    environ: Mapping[str, str],
+    fields: Sequence[str] = tuple(FIELDS),
+    required: Sequence[str] = (),
+) -> Resolved:
+    """The ``fields`` of a job: a flag over an environment variable over the system's entry. Refuses a ``required``
+    field nothing sets, naming its flag and its variable."""
     systems = load_systems(environ)
     name = choose_system(system, systems, environ)
-    explicit = {
-        field: value
-        for field, (_option, variable) in FIELDS.items()
-        if (value := flags.get(field) or environ.get(variable))
-    }
-    defaults = {field: str(value) for field, value in systems[name].items() if field in FIELDS}
+    entry = systems.get(name, {})
+    explicit = {field: value for field in fields if (value := flags.get(field) or environ.get(FIELDS[field][1]))}
+    defaults = {field: str(value) for field, value in entry.items() if field in fields}
     if any(field in explicit for field in GPU_FIELDS):
         defaults = {field: value for field, value in defaults.items() if field not in GPU_FIELDS}
-    return name, {**defaults, **explicit}
+    merged = {**defaults, **explicit}
+    values = {field: merged[field] for field in fields if field in merged}
+    for field in required:
+        if field not in values:
+            option, variable = FIELDS[field]
+            raise SystemExit(f"job submit: no {field.replace('_', ' ')}: pass {option} or set ${variable}")
+    profile = flags.get("profile") or environ.get(PROFILE_VARIABLE) or str(entry.get("profile", ""))
+    return Resolved(name, values, profile)
 
 
 def sbatch_command(script: str, values: Mapping[str, str], script_args: Sequence[str], nice: str = "") -> list[str]:
@@ -120,7 +160,31 @@ def main(argv: Sequence[str]) -> int:
     parser.add_argument("script_args", nargs=argparse.REMAINDER, help="the script's own arguments")
     args = parser.parse_args(list(argv))
     environ = site_environment(os.environ)
-    name, values = resolve(args.system, vars(args), environ)
-    command = sbatch_command(str(args.script), values, args.script_args, environ.get("HPCAGENT_BENCH_NICE", ""))
-    print(f"# system {name}: {shlex.join(command)}", file=sys.stderr)
+    resolved = resolve(args.system, vars(args), environ)
+    command = sbatch_command(
+        str(args.script), resolved.values, args.script_args, environ.get("HPCAGENT_BENCH_NICE", "")
+    )
+    print(f"# system {resolved.system or 'none'}: {shlex.join(command)}", file=sys.stderr)
     return 0 if args.dry_run else subprocess.run(command, check=False).returncode
+
+
+def options_main(argv: Sequence[str]) -> int:
+    """``hpcagent-bench job options``: the ``sbatch`` options of the experiment job, one per line, or with
+    ``--profile-only`` the hardware profile. The shell submitter reads both from here, so its flags, variables and
+    ``systems.yaml`` resolve exactly as a helper job's do."""
+    parser = argparse.ArgumentParser(prog="hpcagent-bench job options", description=options_main.__doc__)
+    parser.add_argument("--system", help="a system of systems.yaml (default: $HPCAGENT_BENCH_SYSTEM, else by cluster)")
+    for field in EXPERIMENT_FIELDS:
+        option, variable = FIELDS[field]
+        parser.add_argument(option, dest=field, metavar="VALUE", help=f"overrides ${variable} and the system's value")
+    parser.add_argument("--profile", help=f"the hardware profile (default: ${PROFILE_VARIABLE}, else the system's)")
+    parser.add_argument("--profile-only", action="store_true", help="print the hardware profile and nothing else")
+    args = parser.parse_args(list(argv))
+    environ = site_environment(os.environ)
+    required = () if args.profile_only else EXPERIMENT_REQUIRED
+    resolved = resolve(args.system, vars(args), environ, EXPERIMENT_FIELDS, required)
+    if args.profile_only:
+        print(resolved.profile)
+    else:
+        print("\n".join(f"{FIELDS[field][0]}={value}" for field, value in resolved.values.items()))
+    return 0
