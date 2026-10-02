@@ -128,11 +128,26 @@ PY
 
 if [ "${SMOKE}" -eq 1 ]; then
   echo "=== smoke: fresh venv + wheel install ==="
-  uv venv --python "${PY}" "${WORK}/smoke"
+  # A throwaway uv project: both wheels, pytest, and dace at the pin, as uv.lock resolves it for a checkout
+  # (PyPI's dace is not the extended branch). `uv sync` builds the venv at ${WORK}/smoke.
+  mkdir -p "${WORK}/smoke-project"
+  cat > "${WORK}/smoke-project/pyproject.toml" <<TOML
+[project]
+name = "release-smoke"
+version = "0"
+requires-python = ">=3.12"
+dependencies = ["hpcagent-bench", "hpcagent-agent", "pytest", "dace"]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+hpcagent-bench = { path = "${WHEEL}" }
+hpcagent-agent = { path = "${AGENT_WHEEL}" }
+dace = { git = "https://github.com/spcl/dace.git", rev = "$("${REPO_ROOT}/scripts/dace_pin.sh")" }
+TOML
+  (cd "${WORK}/smoke-project" && UV_PROJECT_ENVIRONMENT="${WORK}/smoke" uv sync --quiet --python "${PY}")
   SPY="${WORK}/smoke/bin/python"
-  # dace at the pin, as uv.lock resolves it for a checkout; PyPI's dace is not the extended branch.
-  uv pip install --quiet --python "${SPY}" "${WHEEL}" "${AGENT_WHEEL}" pytest \
-    "dace @ git+https://github.com/spcl/dace.git@$("${REPO_ROOT}/scripts/dace_pin.sh")"
   mkdir -p "${WORK}/smoke-tests"
   # Pure tests that need the installed package data (every manifest) and nothing from the repo.
   for t in test_output_args.py test_perf_protocol.py test_distributions.py; do

@@ -75,14 +75,14 @@ numpyto_cupy = "hpcagent_bench.translators.numpyto_cupy.cli:main"
 numpyto_numba = "hpcagent_bench.translators.numpyto_numba.cli:main"
 numpyto_pythran = "hpcagent_bench.translators.numpyto_pythran.cli:main"
 
-# Exactly one of cpu / amd / nvidia is a COMPLETE install for that hardware: the grading stack, every
-# framework baseline, the judge, HF export, the agent clients and the developer tools ([dev]). Harbor
-# itself is the adapter's dependency (adapters/hpcagent_bench/pyproject.toml): its rich>=14.1 cannot
-# share an environment with the judge-proxy group below. The images install one of them (`uv sync --frozen
-# --extra amd`); they differ only in the accelerator builds.
+# Exactly one of cpu / amdgpu / nvgpu is a COMPLETE install for that hardware: the grading stack ([common]),
+# that hardware's framework set (torch, jax, triton, cupy), the judge, HF export, the agent clients and the
+# developer tools ([dev]). Harbor itself is the adapter's dependency (adapters/hpcagent_bench/pyproject.toml):
+# its rich>=14.1 cannot share an environment with the judge-proxy group below. The images install one of
+# them (`uv sync --frozen --extra amdgpu`).
 [project.optional-dependencies]
-cpu = [
-    "hpcagent_bench[dev]",
+# Everything the three framework sets share; install a framework set, not this.
+common = [
     "pygount",
     "jsonschema",
     "setuptools",
@@ -100,10 +100,6 @@ cpu = [
     "z3-solver",
     # The upstream KernelBench models the machine_learning ports are compared against import it.
     "einops",
-    # The cpu extra takes torch from PyTorch's CPU index ([tool.uv.sources]; the PyPI wheel is the CUDA
-    # build). The AMD and CUDA images skip the locked torch and triton at install: both come from the base.
-    "torch",
-    "jax",
     # tvm.s_tir and tvm.tirx (frameworks/tvm_build.py) first ship in 0.25.
     "apache-tvm>=0.25",
     # Built from source against the system MPI (MPICC).
@@ -130,11 +126,29 @@ cpu = [
     "transformers",
     "accelerate",
 ]
-amd = ["hpcagent_bench[cpu,dev]"]
-nvidia = ["hpcagent_bench[cpu,dev]", "jax[cuda13]", "cupy-cuda13x", "triton"]
+# The framework sets differ in torch and jax, triton and cupy; [tool.uv.sources] picks each one's wheel index.
+# cpu: PyTorch's CPU index, jax's CPU jaxlib, triton for its CPU interpreter.
+cpu = ["hpcagent_bench[common,dev]", "torch", "jax", "triton"]
+# amdgpu: torch for ROCm 7.2 and triton-rocm (AMD's triton, the same `triton` module) from PyTorch's ROCm index;
+# jaxlib and the ROCm plugin from AMD's repo.radeon.com page, where 0.8.0+rocm7.2.0 is the newest for ROCm 7.2 and
+# holds jax itself at 0.8.0; cupy built from the PyPI sdist for HIP (no ROCm wheel exists; CUPY_INSTALL_USE_HIP=1
+# and --no-binary-package cupy). x86_64 only, and ROCm jax on CPython 3.12 only: AMD publishes no aarch64 wheels
+# and a cp311 and cp312 plugin.
+amdgpu = [
+    "hpcagent_bench[common,dev]",
+    "torch ; platform_machine == 'x86_64'",
+    "triton-rocm ; platform_machine == 'x86_64'",
+    "jax ; platform_machine == 'x86_64' and python_version == '3.12'",
+    "jaxlib ; platform_machine == 'x86_64' and python_version == '3.12'",
+    "jax-rocm7-plugin ; platform_machine == 'x86_64' and python_version == '3.12'",
+    "jax-rocm7-pjrt ; platform_machine == 'x86_64' and python_version == '3.12'",
+    "cupy ; platform_machine == 'x86_64'",
+]
+# nvgpu: torch for CUDA 13 from PyTorch's cu132 index, jax and cupy wheels for CUDA 13, PyPI's triton.
+nvgpu = ["hpcagent_bench[common,dev]", "torch", "jax[cuda13]", "cupy-cuda13x", "triton"]
 # The Sphinx build of docs/ (`sphinx-build -W -b html docs docs/_build`).
 docs = ["sphinx", "myst-parser", "furo"]
-# Tests and formatters, also part of every hardware extra so the suite runs inside each image.
+# Tests and formatters, also part of every framework set so the suite runs inside each image.
 dev = [
     "pytest",
     "pytest-timeout",
@@ -165,37 +179,59 @@ judge-proxy = [
 # numpy_on_openblas.sh rebuilds the locked numpy and scipy from source on the image's OpenBLAS: scipy builds
 # without isolation, so its build tools are installed into the environment first.
 openblas-build = ["meson-python", "Cython", "pybind11", "pythran<0.19", "patchelf"]
-# The AMD images' cupy: no ROCm wheel exists, so it is the PyPI sdist built for HIP (CUPY_INSTALL_USE_HIP=1,
-# --no-binary-package cupy). The nvidia extra carries the CUDA wheel instead.
-cupy-rocm = ["cupy==14.2.0"]
 # `hpcagent-bench harbor run`: the Harbor CLI and the compose frontend its podman backend drives,
 # in their own venv (harbor>=0.23 needs rich>=14, which litellm's judge-proxy stack refuses).
 harbor = ["harbor>=0.23.0", "podman-compose>=1.6"]
 
 [tool.uv.workspace]
-members = ["agent"]
+members = ["agent", "adapters/hpcagent_bench"]
 
 [tool.uv.sources]
 # The spcl/dace@extended commit this release is tested with, and the ONE place it is written: uv.lock
 # records it, and the image builds and jobs read it through scripts/dace_pin.sh.
 dace = { git = "https://github.com/spcl/dace.git", rev = "3cec0d97daa096f31b4b6c5caa6dd9149481638c" }
 hpcagent-agent = { workspace = true }
-torch = [{ index = "pytorch-cpu", extra = "cpu" }]
+torch = [
+    { index = "pytorch-cpu", extra = "cpu" },
+    { index = "pytorch-rocm", extra = "amdgpu" },
+    { index = "pytorch-cuda", extra = "nvgpu" },
+]
+triton-rocm = [{ index = "pytorch-rocm", extra = "amdgpu" }]
+jaxlib = [{ index = "rocm-jax", extra = "amdgpu" }]
+jax-rocm7-plugin = [{ index = "rocm-jax", extra = "amdgpu" }]
+jax-rocm7-pjrt = [{ index = "rocm-jax", extra = "amdgpu" }]
 
+# PyPI's torch is the CUDA 12 build: every framework set takes it from PyTorch's index for its hardware.
 [[tool.uv.index]]
-# A CPU box takes torch from PyTorch's CPU index: the PyPI wheel is the CUDA build.
 name = "pytorch-cpu"
 url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-rocm"
+url = "https://download.pytorch.org/whl/rocm7.2"
+explicit = true
+
+# cu132 is the newest CUDA 13 index that carries torch (cu134 carries none yet); a CUDA 13.4 driver runs it.
+[[tool.uv.index]]
+name = "pytorch-cuda"
+url = "https://download.pytorch.org/whl/cu132"
+explicit = true
+
+# AMD's flat page of ROCm wheels (links, no index pages): the only source of jaxlib and its plugin for ROCm.
+[[tool.uv.index]]
+name = "rocm-jax"
+url = "https://repo.radeon.com/rocm/manylinux/rocm-rel-7.2/"
+format = "flat"
 explicit = true
 
 [tool.uv]
 # Linux only: the toolchain, the seal and the images are.
 environments = ["sys_platform == 'linux'"]
-# One environment per hardware extra, and each group is its own venv (litellm's judge-proxy stack needs
+# One environment per framework set, and each group is its own venv (litellm's judge-proxy stack needs
 # rich<14; harbor and the OpenHands tools need rich>=14).
 conflicts = [
-    [{ extra = "cpu" }, { extra = "amd" }, { extra = "nvidia" }],
-    [{ group = "cupy-rocm" }, { extra = "nvidia" }],
+    [{ extra = "cpu" }, { extra = "amdgpu" }, { extra = "nvgpu" }],
     [
         { group = "judge-proxy" },
         { group = "harbor" },

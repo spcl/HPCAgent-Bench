@@ -74,9 +74,9 @@ Every adapter in `hpcagent_bench/frameworks/*_framework.py` must import: cupy, d
 pluto, pythran, triton, tvm, plus numpy, scipy and torch as baselines. The final gate imports each
 and prints the locked numpy/scipy/pandas/astunparse versions.
 
-* cupy: the lock's wheel on CUDA, a HIP source build (the `cupy-rocm` group) on AMD; jax: the plugin for the base's
-  CUDA major. The AMD jax is AMD's ROCm wheels, which the lock does not carry.
-* triton: the build the base's torch was compiled with, never PyPI's over it.
+* cupy: the lock's wheel on CUDA, a HIP source build (part of the `amdgpu` extra) on AMD; jax: the plugin for the
+  base's CUDA major, and AMD's ROCm 7.2 wheels (a flat index in `[tool.uv.index]`) on AMD.
+* torch and triton: the lock's, from PyTorch's index for the hardware (CPU, ROCm 7.2, cu132), triton-rocm on AMD.
 * dace: `spcl/dace@extended` at the release pin (`[tool.uv.sources] dace` in `pyproject.toml`); jobs run it as baked.
 * islpy and z3 back `WavefrontSkew` and the `LoopToMap` dependence proof, and both gates fail
   closed and silent. The build asserts `polyhedral_isl.HAVE_ISL` and `smt_dependence.has_z3()`, not

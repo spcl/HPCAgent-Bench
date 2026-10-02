@@ -7,17 +7,19 @@ Set up, lint, test, and find the page for the thing you are adding. Normative sp
 
 ## Development setup
 
-Python 3.12 or newer and [uv](https://docs.astral.sh/uv/). Every hardware extra includes the dev tools (the
+Python 3.12 or newer and [uv](https://docs.astral.sh/uv/). Every framework extra includes the dev tools (the
 `dev` extra); `uv.lock` pins every dependency, dace at the spcl/dace@extended commit `[tool.uv.sources]` names:
 
 ```sh
-uv sync --extra cpu                        # --extra nvidia / --extra amd on a GPU host
+uv sync --extra cpu                        # --extra nvgpu / --extra amdgpu on a GPU host
 . .venv/bin/activate
 pre-commit install
 ```
 
-A dace checkout of your own replaces the pin through `[tool.uv.sources]` in your working copy. After changing a dependency
-or the dace pin, run `uv lock` and commit `uv.lock` with it.
+To develop against a dace checkout of your own, change the `dace` line of `[tool.uv.sources]` in your working copy to
+`dace = { path = "/path/to/dace", editable = true }` and `uv sync --extra cpu` (without `--frozen`, since the lock names
+the pin). That is a local edit: do not commit it or the `uv.lock` it rewrites (`git checkout pyproject.toml uv.lock`
+restores both). After changing a dependency or the dace pin, run `uv lock` and commit `uv.lock` with it.
 
 On a cluster, source `hpcagent_bench/cluster/env.sh`: it loads the site layer, names the host interpreter
 (`HPCAGENT_BENCH_HOST_PYTHON`) and sets `PYTHONHASHSEED=0` ([docs/configuration.md](docs/configuration.md)).

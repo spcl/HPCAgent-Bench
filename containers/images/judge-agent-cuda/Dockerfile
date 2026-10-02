@@ -11,7 +11,7 @@
 #   vendor      CUDA toolkit, cuTENSOR, NCCL, Nsight Compute/Systems, NVHPC (the only OpenACC path)
 #   offload     LLVM OpenMP -> nvptx sm_{${CUDA_ARCHS}}; GCC is built without +nvptx
 #   GPU-aware   mpich/superlu-dist/strumpack/magma/petsc/sundials +cuda cuda_arch=${CUDA_ARCHS}
-#   python      the base's torch, the cupy wheel, jax, all for the base's CUDA major
+#   python      the lock's torch (cu132), the cupy wheel, jax, all for the base's CUDA major
 #   absent      likwid, msr-tools (x86 only), rocprof, PAPI rocm components
 #
 # CUDA 13.4.1: it runs on any driver >= 580 (minor-version compatibility inside CUDA 13), and the CE's
@@ -422,7 +422,8 @@ RUN set -eux; \
       '        prefix: /opt/ofi-sdk' \
       '      buildable: false' \
       '  specs:' \
-      "  - llvm@${LLVM_VERSION} +clang +flang +mlir +polly +lld +offload +libomptarget targets=aarch64,nvptx" \
+      "  # -pipe: no /tmp/cc*.s files; 12 llvm units failed on truncated ones in the podman build (daint 4957900)." \
+      "  - llvm@${LLVM_VERSION} +clang +flang +mlir +polly +lld +offload +libomptarget targets=aarch64,nvptx cflags=-pipe cxxflags=-pipe" \
       '  # GPU-aware MPICH, no +slurm (its built-in PMI-1/2 client serves any srun); every variant is' \
       '  # judge-agent-amd step 4 with +cuda in place of +rocm. device=ch4 netmod=ofi reaches the' \
       '  # fabric through libfabric: the site supplies the provider (cxi on Alps via the CE hook).' \
@@ -854,30 +855,25 @@ RUN set -eux; \
 # 12. The python framework stack.
 #
 # uv.lock decides every version, numpy/scipy/pandas included: ONE `uv sync --frozen --inexact` installs
-# pyproject.toml's `nvidia` extra plus the judge-proxy group into the image python's own prefix, so the pinned
-# proxy stack is part of the single locked resolution. The extra is the `cpu` stack plus CUDA 13's jax and
-# cupy (cupy-cuda13x), which match the base's CUDA major (asserted below). The base's torch is the NGC build
-# for this architecture and its triton is the one that torch was built with: PyPI's torch is another build,
-# and PyPI's `triton` is a different distribution that would overwrite the same site-packages directory, so
-# both are skipped and the NGC torch is asserted unmoved. Only pyproject.toml, uv.lock and
-# agent/pyproject.toml are copied, never the package source: --no-install-project and
-# --no-install-package hpcagent-agent leave both to the editable hooks of steps 14a and the judge stage
-# (containers/lib/package_hook.sh), and /opt/hpcagent-bench/agent links to /opt/hpcagent-bench-agent so that
-# the workspace member is the directory an agent step binds. uv comes from the pins.
+# pyproject.toml's `nvgpu` extra plus the judge-proxy group into the image python's own prefix, so the pinned
+# proxy stack is part of the single locked resolution. The extra carries the ML stack too: torch from
+# PyTorch's cu132 index, CUDA 13's jax and cupy wheels, triton, and dace at the pinned commit. The base's NGC
+# torch and triton are replaced by the lock's, and the install is asserted to be a CUDA build. Only
+# pyproject.toml, uv.lock and agent/pyproject.toml are copied, never the package source:
+# --no-install-project and --no-install-package hpcagent-agent leave both to the editable hooks of steps 14a
+# and the judge stage (containers/lib/package_hook.sh), and /opt/hpcagent-bench/agent links to
+# /opt/hpcagent-bench-agent so that the workspace member is the directory an agent step binds. uv comes from
+# the pins.
 COPY agent/harness/pins.env agent/harness/install_tools.sh /opt/harness/
 COPY pyproject.toml uv.lock /opt/hpcagent-bench/
 COPY agent/pyproject.toml /opt/hpcagent-bench-agent/pyproject.toml
 RUN set -eux; \
     sh /opt/harness/install_tools.sh /usr/local; \
     ln -s /opt/hpcagent-bench-agent /opt/hpcagent-bench/agent; \
-    torch_before="$(python3 -c 'import torch; print(torch.__version__)')"; \
     cd /opt/hpcagent-bench; \
     MPICC=/opt/view/bin/mpicc UV_PROJECT_ENVIRONMENT="$(python3 -c 'import sys; print(sys.prefix)')" \
       uv sync --frozen --inexact --no-cache --python "$(command -v python3)" --no-install-project \
-      --no-install-package hpcagent-agent --no-install-package torch --no-install-package triton \
-      --no-binary-package mpi4py --extra nvidia --group judge-proxy; \
-    test "$(python3 -c 'import torch; print(torch.__version__)')" = "${torch_before}" \
-      || { echo "the install moved torch off ${torch_before}; the ML baseline changed" >&2; exit 2; }; \
+      --no-install-package hpcagent-agent --no-binary-package mpi4py --extra nvgpu --group judge-proxy; \
     python3 -c "import torch; assert torch.version.cuda, 'torch lost its CUDA build'; \
       print('torch', torch.__version__, 'cuda', torch.version.cuda)"; \
     python3 -c "import triton; print('triton', triton.__version__, triton.__file__)"; \
@@ -891,7 +887,7 @@ COPY containers/lib/numpy_on_openblas.sh containers/lib/one_openmp.sh containers
 RUN sh /tmp/one-openmp/numpy_on_openblas.sh /opt/view /opt/hpcagent-bench && rm -rf /tmp/one-openmp
 
 # cupy is the WHEEL here (the AMD image needs a HIP source build). jax: the plugin must match the
-# toolkit's CUDA major, or jax imports and finds no device. The lock's nvidia extra carries the CUDA 13 pair;
+# toolkit's CUDA major, or jax imports and finds no device. The lock's nvgpu extra carries the CUDA 13 pair;
 # the major is read off nvcc, so a base that moves to another major fails here and not in a job.
 RUN set -eux; \
     cuda_major="$(nvcc --version | sed -n 's/.*release \([0-9]*\).*/\1/p')"; \
@@ -918,21 +914,16 @@ assert got == want, got"; \
     chmod -R a+rX "${PLAYWRIGHT_BROWSERS_PATH}"
 
 # ---------------------------------------------------------------------------------------------
-# 13. DaCe -- the spcl/dace@extended commit build.sh resolves and passes in (the release pin). Step 12 already
-# installed it from uv.lock; this step adds the checkout at /opt/dace (the jobs stamp their results with
-# /opt/dace.commit) and proves the install and the checkout are one commit.
+# 13. DaCe -- the spcl/dace@extended commit build.sh resolves and passes in (the release pin, pyproject.toml
+# [tool.uv.sources] dace). Step 12 installed it from uv.lock, so there is no checkout: this step proves the
+# installed commit, which PEP 610 records in dace's direct_url.json (hpcagent_bench.cpf_canonical.dace_commit
+# reads the same record), is the one build.sh passed in, and the layer cache keys on DACE_COMMIT so a moved
+# pin rebuilds from the sync.
 ARG DACE_COMMIT
 RUN set -eux; \
     test -n "${DACE_COMMIT}" || { echo "DACE_COMMIT build-arg is required (build.sh resolves it)" >&2; exit 2; }; \
-    git init -q /opt/dace; \
-    git -C /opt/dace remote add origin https://github.com/spcl/dace.git; \
-    gitretry -C /opt/dace fetch -q --depth 1 origin "${DACE_COMMIT}"; \
-    git -C /opt/dace checkout -q FETCH_HEAD; \
-    gitretry -C /opt/dace submodule update --init --recursive --depth 1 -q; \
-    git -C /opt/dace rev-parse HEAD > /opt/dace.commit; \
-    test "$(python3 -c "import importlib.metadata as m, json; \
-      print(json.loads(m.distribution('dace').read_text('direct_url.json'))['vcs_info']['commit_id'])")" \
-      = "${DACE_COMMIT}" || { echo "the dace in uv.lock is not ${DACE_COMMIT}: run uv lock" >&2; exit 2; }; \
+    test "$(python3 -c "import importlib.metadata as m, json; print(json.loads(m.distribution('dace').read_text('direct_url.json'))['vcs_info']['commit_id'])")" = "${DACE_COMMIT}" \
+      || { echo "the dace in uv.lock is not ${DACE_COMMIT}: run uv lock" >&2; exit 2; }; \
     python3 -c "import dace; print('dace', dace.__version__)"
 
 # ---------------------------------------------------------------------------------------------
@@ -1158,7 +1149,7 @@ RUN set -eux; \
       cat /usr/local/share/toolchain-provenance; \
       echo "python $(python3 --version 2>&1)"; \
       echo "torch $(python3 -c 'import torch; print(torch.__version__)')"; \
-      echo "dace $(cat /opt/dace.commit)"; \
+      echo "dace $(python3 -c "import importlib.metadata as m, json; print(json.loads(m.distribution('dace').read_text('direct_url.json'))['vcs_info']['commit_id'])")"; \
       python3 -c "import numpy, scipy, pandas, astunparse; \
         print('numpy', numpy.__version__); print('scipy', scipy.__version__); \
         print('pandas', pandas.__version__); print('astunparse', astunparse.__version__)"; \
