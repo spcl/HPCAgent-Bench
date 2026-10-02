@@ -55,7 +55,7 @@ import yaml
 
 from hpcagent_bench import experiments, config, frozen_observations, paths
 from hpcagent_bench.api import InputMode, RunConfig
-from hpcagent_bench.harness import denominator, metric, native_call, rep_variation, results_db, timing
+from hpcagent_bench.harness import denominator, metric, native_call, results_db, timing
 from hpcagent_bench.harness.envelope import Submission
 from hpcagent_bench.harness.recording import (
     ADHOC_EPISODE_ID,
@@ -89,8 +89,6 @@ __all__ = [
     "GRADING_CUTS",
     "KEY",
     "N_INPUTS_ENV",
-    "POOLED_REDUCTION",
-    "POOL_SIZE_ENV",
     "PROMOTION_KIND",
     "REPEAT_ENV",
     "REPEAT_FLOOR_ENV",
@@ -172,13 +170,8 @@ DEVICE_DISCLOSURE: tuple[str, ...] = (
     "device_index",
 )
 
-#: The env keys :func:`final_env` sets for the final grade's draws: varied inputs from a bounded
-#: pool (:func:`rep_variation.final_seeds`).
+#: The env key :func:`final_env` sets for the final grade's draws: varied inputs (:func:`rep_variation.final_seeds`).
 VARY_INPUTS_ENV: str = "HPCAGENT_BENCH_MEASUREMENT_VARY_INPUTS"
-POOL_SIZE_ENV: str = "HPCAGENT_BENCH_MEASUREMENT_VARY_INPUTS_POOL_SIZE"
-#: The reduction a final-grade input must come out of before it is stamped mw4x5: Mann-Whitney on
-#: varied inputs from the bounded pool.
-POOLED_REDUCTION: str = timing.REDUCTIONS_FINAL["mannwhitney_delta"]
 #: The env keys :func:`final_env` sets for mw4x5's parameters (``measurement.final.*``): backend,
 #: timed inputs, runs per side (and floor), test level.
 TIMING_BACKEND_ENV: str = "HPCAGENT_BENCH_MEASUREMENT_TIMING_BACKEND"
@@ -724,7 +717,6 @@ def final_settings(base: Mapping[str, str], protocol: Protocol = FINAL) -> dict[
     inputs, repeat, alpha = protocol.parameters()
     env = dict(base)
     env[VARY_INPUTS_ENV] = "1"
-    env[POOL_SIZE_ENV] = str(rep_variation.DEFAULT_POOL_SIZE)
     env[UNTIMED_BASE_ENV] = "1"
     env[WARMUP_ENV] = "1"
     env[TIMING_BACKEND_ENV] = protocol.backend
@@ -829,7 +821,7 @@ def final_grade(
         timed = dataclasses.replace(result.cells[0], label=label) if result.cells else None
         refused = ""
         if timed is not None and not timed.uncovered:  # an uncovered input timed nothing to stamp
-            if timed.timing_reduction == timing.REDUCTIONS_FINAL[protocol.backend]:
+            if timed.timing_reduction == timing.REDUCTIONS_VARIED[protocol.backend]:
                 timed = dataclasses.replace(timed, timing_reduction=stamp)
             else:
                 refused = f"not the {stamp} reduction: reduced as {timed.timing_reduction}"

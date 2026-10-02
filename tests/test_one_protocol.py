@@ -102,7 +102,7 @@ def test_an_owed_submission_is_listed_final_graded_and_applied_back_beside_it(tm
     last = submission(db, 0, "gemm", T0 + 20)
     with contextlib.closing(results_db.open_db(db)) as conn:
         run, bench = conn.execute("SELECT episode_id, kernel FROM grades WHERE id = ?", (last,)).fetchone()
-        older = {**results_seed.STAMP, **final_values(2.0), "timing_reduction": "mwd-final", "of_grade_id": last}
+        older = {**results_seed.STAMP, **final_values(2.0), "timing_reduction": "mwd-v3", "of_grade_id": last}
         results_db.add_grade(conn, run, bench, "final", ts_ms=T0 + 25, values=older)
         conn.commit()
 
@@ -120,7 +120,7 @@ def test_an_owed_submission_is_listed_final_graded_and_applied_back_beside_it(tm
         linked = conn.execute(
             "SELECT of_grade_id, timing_reduction FROM grades WHERE kind = 'final' ORDER BY ts_ms"
         ).fetchall()
-    assert [tuple(row) for row in linked] == [(last, "mwd-final"), (last, timing.FINAL_GRADE_REDUCTION)]
+    assert [tuple(row) for row in linked] == [(last, "mwd-v3"), (last, timing.FINAL_GRADE_REDUCTION)]
 
 
 def test_a_final_grade_under_another_denominator_leaves_its_submission_owed(tmp_path: pathlib.Path) -> None:

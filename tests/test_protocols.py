@@ -14,8 +14,6 @@ PINNED_STAMPS = {
     "mw4x5": "final",
     "md1x5": "preview",
     "mw4x5-aa": "calibration",
-    "mwd-final": "retired",
-    "medk-final": "retired",
     "mwd-v3": "live",
     "mok-v1-varied": "live",
     "medk-v1-varied": "live",
@@ -50,7 +48,6 @@ def test_every_stamp_a_reduction_writes_is_registered() -> None:
     written = {
         *timing.REDUCTIONS.values(),
         *timing.REDUCTIONS_VARIED.values(),
-        *timing.REDUCTIONS_FINAL.values(),
         timing.FINAL_GRADE_REDUCTION,
         timing.SCORE_REDUCTION,
         timing.AA_REDUCTION,
