@@ -38,7 +38,7 @@ def sources(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> Iterator
     conn.execute("create table submissions (x)")
     conn.execute("insert into submissions values (42)")
     conn.commit()  # left open: the rows live in the -wal only, as in a running job
-    (job / ".env").write_text("ARM=a\n")
+    (job / ".env").write_text("SETUP=a\n")
     (job / "agents" / "p0").mkdir(parents=True)
     (job / "agents" / "p0" / "tokens.json").write_text("{}")
     (job / "agents" / "p0" / "claude.log").write_text("transcript")

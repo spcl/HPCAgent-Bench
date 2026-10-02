@@ -64,7 +64,7 @@ convention is the OPPOSITE of the model above, and not by mistake:
   papers.
 * ``effective`` (every token once) is what our hardware actually computed. Nobody bills us per
   request; we own the GPUs, and a cached prefix costs no forward pass. Quote this when comparing
-  ARMS WITHIN this work, because ``billed`` scales with turn count and turn count differs by model
+  SETUPS WITHIN this work, because ``billed`` scales with turn count and turn count differs by model
   -- measured over 28 episodes that reached a result record,
   ``effective/billed`` runs 0.019 to 0.211 and tracks turns almost monotonically, so the convention
   silently penalises models that take more steps.

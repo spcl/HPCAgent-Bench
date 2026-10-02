@@ -23,7 +23,7 @@ def torch_dist_style() -> dict[str, object]:
 
 def series_style(packet: str, model: str) -> dict[str, object]:
     """Colour from the model, shape from the packet; the control's mark is hollow. The
-    torch.distributed baseline (:data:`TORCH_DIST_ARM`) wears :func:`torch_dist_style`."""
+    torch.distributed baseline (:data:`TORCH_DIST_SETUP`) wears :func:`torch_dist_style`."""
     if model == TORCH_DIST_SETUP:
         return torch_dist_style()
     # Two setups of one model share its hue; the control takes a lighter shade so their marks and
