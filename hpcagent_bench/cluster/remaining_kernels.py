@@ -155,7 +155,7 @@ def records(table: str) -> str:
 CLEAN_SUFFIX = "-clean"
 
 #: llrblind-cmp is the pre-cmp llrblind setup under a later name, not a new
-#: identity -- the same model/language/packet, submit-llrblind.sh's own EXPERIMENT default renamed.
+#: identity -- the same model/language/packet, the STUDY default of the llrblind launcher renamed.
 #: The pre-cmp data is valid and must be reused rather than rerun, so an old
 #: "llrblind-<model>-<lang>[-skills]" setup folds onto its "llrblind-cmp-<model>-<lang>[-skills]"
 #: successor here too, same principle as CLEAN_SUFFIX above (and composing with it: a pre-cmp

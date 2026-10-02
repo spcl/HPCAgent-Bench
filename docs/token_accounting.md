@@ -72,7 +72,7 @@ extraction lacks raises and asks for a re-extract; `effective` needs none.
 Two scripts price tokens with a card, default `billed`:
 
 ```bash
-python statistics/paired_setups.py --observations obs.csv --pair ARM_A,ARM_B --family skills \
+python statistics/paired_setups.py --observations obs.csv --pair SETUP_A,SETUP_B --family skills \
     --out pairs_billed.csv --cost-model billed
 python statistics/plot_score_change.py obs.csv --pairs-csv pairs_billed.csv --intervention lang-skills \
     --cost-model billed

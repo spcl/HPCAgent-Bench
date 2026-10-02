@@ -71,7 +71,7 @@ ENV HCC_AMDGPU_TARGET=${ROCM_ARCH} \
     GPU_ARCH_LIST=${ROCM_ARCH}
 COPY containers/lib/device_arch_gate.sh /usr/local/bin/device_arch_gate.sh
 
-# flydsl, PINNED and INSIDE the image. The base carries 0.3.1; the arms run 0.3.2, and a package
+# flydsl, PINNED and INSIDE the image. The base carries 0.3.1; the setups run 0.3.2, and a package
 # reached through an out-of-image PYTHONPATH would be invisible to the image digest.
 #
 # It matters because kimi's int4 MoE dispatches through it: AMD measure fused_moe at 87.8-89.7% of
@@ -165,7 +165,7 @@ RUN set -eux; \
 
 # aiter's JIT, built HERE instead of on the first request.
 #
-# SGLANG_USE_AITER=1 is set by every kimi and qwen38 arm, so unlike the vLLM image this engine
+# SGLANG_USE_AITER=1 is set by every kimi and qwen38 setup, so unlike the vLLM image this engine
 # runs aiter ON -- and aiter ships no prebuilt .so. It JIT-builds module_aiter_core on import and
 # each op module on FIRST USE, behind a baton lock that outlives the deadline, so a cold cache can
 # blow the 300 s watchdog. The wedge is a property of the image, so it is fixed in the image.

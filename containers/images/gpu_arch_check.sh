@@ -7,7 +7,7 @@
 #   gpu_arch_check.sh <edf name or path>        (inside a Slurm allocation)
 #
 # Exit 2 on a mismatch, printing all three. An image built before the stamp existed has no
-# /opt/gpu-arch: that WARNS and exits 0, so campaigns on those images keep launching.
+# /opt/gpu-arch: that WARNS and exits 0, so experiments on those images keep launching.
 set -euo pipefail
 ulimit -c 0
 

@@ -1,13 +1,13 @@
 # syntax=docker/dockerfile:1
 #
-# vLLM inference on NVIDIA GH200 (aarch64 Grace + H100, CSCS Daint). Serves every campaign model
+# vLLM inference on NVIDIA GH200 (aarch64 Grace + H100, CSCS Daint). Serves every experiment model
 # there -- qwen38, kimi and oss120b -- from ONE engine, where beverin needs SGLang for two of them.
 # Build context is the repository root:
 #
 #   containers/images/build.sh vllm-cuda
 #
 # THIN ON PURPOSE. The official vLLM OpenAI image already carries the engine, torch, NCCL, triton,
-# flashinfer and every tool-call / reasoning parser the campaign names. What beverin's vllm/Dockerfile
+# flashinfer and every tool-call / reasoning parser the experiment names. What beverin's vllm/Dockerfile
 # adds on top of its base is ROCm-shaped and does not transfer:
 #   * aiter, flash-attn's triton_amd path, the aiter JIT prebuild     -- ROCm kernels
 #   * inference/moe-configs/                                          -- tuned for AMD_Instinct_MI300A;

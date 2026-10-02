@@ -31,7 +31,7 @@ gates itself (`build_and_verify.sbatch`), and the unit tests hold the recipes to
 The CI runners' NVHPC install is `.github/scripts/install-extra-toolchains.sh`.
 
 Skill pages have one copy, `hpcagent_bench/skills/<name>/SKILL.md`: the judge's EDF mounts the
-checkout, and a campaign stages the pages a problems file names into `/shared/skills/` at launch
+checkout, and an experiment stages the pages a problems file names into `/shared/skills/` at launch
 (`make_problems.py --stage-skills`). Adding a skill touches no container file
 ([docs/extending/skills-and-tools.md](../docs/extending/skills-and-tools.md)).
 
@@ -66,7 +66,7 @@ sbatch -p mi300 containers/images/build_and_verify.sbatch judge-agent-amd
 containers/images/registry.sh promote judge-agent-amd judge   # after it passes; renders the -native EDFs
 ```
 
-With `CE_IMAGE_FLAVOR=native` set at submission, a campaign's agent and judge EDFs become the
+With `CE_IMAGE_FLAVOR=native` set at submission, an experiment's agent and judge EDFs become the
 `-native` ones (`hpcagent_bench/cluster/submit_common.sh` `apply_flavor`), as do the default EDFs of the
 standalone scripts (regrade, mlscale-grade, preflight).
 
@@ -147,7 +147,7 @@ ROLE=judge-agent-amd sbatch --partition=mi200 --gpus-per-node=8 verify_image.sba
 
 Build gates prove that an engine imports, not that it serves, so a serving candidate is smoked
 before promotion: an SGLang candidate through `inference/smoke-kimi-sglang.sbatch`. A vLLM candidate is smoked with `hpcagent_bench/cluster/serve-only.sbatch`,
-which serves what a campaign serves: copy `~/.edf/hpcagent-bench-vllm-mi300-latest.toml` to
+which serves what an experiment serves: copy `~/.edf/hpcagent-bench-vllm-mi300-latest.toml` to
 `~/.edf/candidate-vllm.toml` with `image` pointing at the vllm role's candidate squashfs, then
 run `SERVE_ENV_FILE=<copy of serve-only.env plus INFERENCE_CE_ENV=candidate-vllm> MODEL=oss120b
 hpcagent_bench/cluster/serve-only.sbatch` and query the endpoint it prints.
@@ -207,8 +207,8 @@ MODEL=kimi DRY_RUN=1 bash containers/inference/serve-daint.sbatch   # print the 
 | `kimi` | 4 (`SERVE_NODES=2` allowed) | 4 x 4 | 262144 | `kimi_k2` / `kimi_k2` |
 
 From another Daint job, `source containers/inference/alps-endpoint.sh <run dir>/endpoint.json`
-checks the endpoint and exports `VLLM_BASE_URL`, `VLLM_API_KEY` and `VLLM_MODEL`. For a campaign the
-endpoint is a service arm (`hpcagent_bench/cluster/inference_service.py`) with
+checks the endpoint and exports `VLLM_BASE_URL`, `VLLM_API_KEY` and `VLLM_MODEL`. For an experiment the
+endpoint is a service setup (`hpcagent_bench/cluster/inference_service.py`) with
 `AMD_CE_ENV=hpcagent-bench-agent-gh200-latest` and `JUDGE_CE_ENV=hpcagent-bench-judge-gh200-latest`.
 `hpcagent_bench/cluster/run_cluster.sh`, `hpcagent_bench/cluster/beverin.sbatch` and the `experiments/layers/*.env` model
 layers are beverin-shaped.
@@ -384,7 +384,7 @@ pick the row up with no further edit. A new serving engine is also
 launched by `hpcagent_bench/cluster/run_cluster.sh` (`docs/extending/inference.md`).
 
 Every package added to a Dockerfile gets a probe that uses it (compile, import, link) in the same
-`RUN`, so a broken install fails the build rather than a campaign.
+`RUN`, so a broken install fails the build rather than an experiment.
 
 ## Agent harness pins
 

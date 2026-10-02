@@ -11,7 +11,7 @@
 # that same directory, came down with all 141 blobs at stripe_count 1 / 1 MiB. Inheritance is not
 # a property of hf download. RESTRIPE EVERY NEW MODEL AND VERIFY; never assume.
 #
-#   sbatch fetch_weights.sbatch                     # the four models the campaign serves
+#   sbatch fetch_weights.sbatch                     # the four models the experiment serves
 #   MODELS="zai-org/GLM-5.3" sbatch fetch_weights.sbatch
 #   AUDIT_ONLY=1 sbatch fetch_weights.sbatch        # check layout, change nothing
 #
@@ -41,8 +41,8 @@ REPO="${REPO:-$(git -C "${SLURM_SUBMIT_DIR:-${PWD}}" rev-parse --show-toplevel 2
 EDF="${EDF:-${HOME}/.edf/hpcagent-bench-sglang-mi300-latest.toml}"
 AUDIT_ONLY="${AUDIT_ONLY:-0}"
 
-# Every model the campaign serves. Weights are ~1.5 TB in total, so the default is the full set
-# only because a partial one is the thing that bites six hours into a campaign.
+# Every model the experiment serves. Weights are ~1.5 TB in total, so the default is the full set
+# only because a partial one is the thing that bites six hours into an experiment.
 MODELS="${MODELS:-moonshotai/Kimi-K2.7-Code zai-org/GLM-5.3 Qwen/Qwen3.8-27B-FP8 openai/gpt-oss-120b}"
 
 STRIPE_COUNT="${STRIPE_COUNT:-16}"
@@ -77,7 +77,7 @@ import os
 from huggingface_hub import snapshot_download
 
 repo = os.environ["MODEL_REPO"]
-# max_workers is the download parallelism, not a thread pool for one file; 8 is what the campaign
+# max_workers is the download parallelism, not a thread pool for one file; 8 is what the experiment
 # path uses and what the mirror tolerates.
 path = snapshot_download(repo_id=repo, max_workers=8)
 print(f"resolved {repo} -> {path}", flush=True)

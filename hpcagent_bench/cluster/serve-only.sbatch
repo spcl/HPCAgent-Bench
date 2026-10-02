@@ -37,7 +37,7 @@ BASE_ENV="${SERVE_BASE_ENV:-experiment:${MODEL}}"
 SERVE_ENV="${SERVE_ENV_FILE:-${REPO_DIR}/experiments/serve-only.env}"
 [[ -f "${SERVE_ENV}" ]] || { echo "missing env file ${SERVE_ENV}" >&2; exit 2; }
 
-# Campaign values first, role split second: last assignment wins, as the submit scripts do it.
+# Experiment values first, role split second: last assignment wins, as the submit scripts do it.
 # Flatten the base once, source and record the flat form.
 . "${SCRIPT_DIR}/env_layers.sh"
 BASE_FLAT="$(render_env "${BASE_ENV}")" || exit 2

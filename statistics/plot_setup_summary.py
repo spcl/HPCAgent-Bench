@@ -314,9 +314,9 @@ def load(path: pathlib.Path, prefix: str, card: cost.CostModel = cost.resolve())
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("observations", type=pathlib.Path)
-    parser.add_argument("--study", dest="study", required=True, help="setup prefix naming ONE experiment")
+    parser.add_argument("--study", dest="study", required=True, help="setup prefix naming ONE study")
     parser.add_argument("--setups", dest="setups", default="", help="regex; keep only setups whose full name matches")
-    parser.add_argument("--label", default="", help="figure title; defaults to the experiment's display name")
+    parser.add_argument("--label", default="", help="figure title; defaults to the study's display name")
     parser.add_argument("--out", type=pathlib.Path, default=pathlib.Path("figures/setup_summary.pdf"))
     parser.add_argument("--table", type=pathlib.Path, default=pathlib.Path("data/setup_summary.csv"))
     parser.add_argument(

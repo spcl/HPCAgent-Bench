@@ -7,7 +7,7 @@ and fails at the FIRST request, which reads as a serving bug rather than a launc
 failure has to be asserted rather than eyeballed.
 
 Reasoning is the same shape: an engine that drops reasoning_effort still answers, just without the
-thinking budget the arm was configured for, and nothing in a tok/s number shows it.
+thinking budget the setup was configured for, and nothing in a tok/s number shows it.
 
 --api-key-file names a file holding the endpoint's key, sent as ``Authorization: Bearer``; the key
 never appears in argv. Without it no Authorization header is sent.

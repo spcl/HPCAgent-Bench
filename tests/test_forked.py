@@ -145,7 +145,7 @@ def test_a_childs_own_signal_beats_the_timeout_it_raced() -> None:
     # The caller attributes a failure by its cause, and "TIMEOUT" for a child that segfaulted is
     # the wrong cause: papi.count_gpu_metric turns this string into the reason a metric has no
     # number, so a CUPTI crash that lost a scheduling race would be filed as a slow kernel.
-    # The child setups the deadline itself (run_forked waits for its "started" message), so the
+    # The child arms the deadline itself (run_forked waits for its "started" message), so the
     # SIGTERM lands 2s into the CHILD'S life rather than 2s after p.start() -- the handler is
     # installed by then no matter how slow the box was to schedule the fork. Widening the headroom
     # was the earlier answer to this and it does not converge: the same race took CI down again

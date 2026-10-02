@@ -56,7 +56,7 @@ def runner_common_fixture(monkeypatch: pytest.MonkeyPatch) -> types.ModuleType:
 
 def openai_setup(**overrides: str) -> dict[str, str]:
     """An OpenAI-shaped service setup's environment, as its ``.env`` sets it."""
-    arm = {
+    setup = {
         "INFERENCE_SOURCE": "service",
         "INFERENCE_NODES": "0",
         "INFERENCE_SERVICE_PROVIDER": "openai",
@@ -69,13 +69,13 @@ def openai_setup(**overrides: str) -> dict[str, str]:
         "HARNESS": "openhands",
         "OPENAI_API_KEY": SECRET,
     }
-    arm.update(overrides)
-    return arm
+    setup.update(overrides)
+    return setup
 
 
 def anthropic_setup(**overrides: str) -> dict[str, str]:
     """An Anthropic-shaped service setup's environment, as its ``.env`` sets it."""
-    arm = {
+    setup = {
         "INFERENCE_SOURCE": "service",
         "INFERENCE_NODES": "0",
         "INFERENCE_SERVICE_PROVIDER": "anthropic",
@@ -88,13 +88,13 @@ def anthropic_setup(**overrides: str) -> dict[str, str]:
         "HARNESS": "claude",
         "ANTHROPIC_API_KEY": SECRET,
     }
-    arm.update(overrides)
-    return arm
+    setup.update(overrides)
+    return setup
 
 
 def muse_setup(**overrides: str) -> dict[str, str]:
     """The Muse Spark contributor-tier setup, Meta's Anthropic-shaped surface with bearer auth."""
-    arm = {
+    setup = {
         "INFERENCE_SOURCE": "service",
         "INFERENCE_NODES": "0",
         "INFERENCE_SERVICE_PROVIDER": "meta",
@@ -107,8 +107,8 @@ def muse_setup(**overrides: str) -> dict[str, str]:
         "HARNESS": "claude",
         "META_MODEL_API_KEY": SECRET,
     }
-    arm.update(overrides)
-    return arm
+    setup.update(overrides)
+    return setup
 
 
 # which source a setup selects
@@ -148,18 +148,18 @@ def test_a_service_setup_that_still_claims_an_inference_node_is_refused(service:
     "missing", ["INFERENCE_SERVICE_BASE_URL", "INFERENCE_SERVICE_MODEL", "INFERENCE_SERVICE_KEY_ENV"]
 )
 def test_an_incomplete_service_block_names_the_key_it_is_missing(service: types.ModuleType, missing: str) -> None:
-    arm = openai_setup()
-    del arm[missing]
+    setup = openai_setup()
+    del setup[missing]
     with pytest.raises(SystemExit, match=missing):
-        service.from_environ(arm)
+        service.from_environ(setup)
 
 
 def test_a_key_variable_that_is_not_set_fails_before_any_agent_starts(service: types.ModuleType) -> None:
     """A whole setup running against a 401 for its wall clock is the failure this check exists for."""
-    arm = openai_setup()
-    del arm["OPENAI_API_KEY"]
+    setup = openai_setup()
+    del setup["OPENAI_API_KEY"]
     with pytest.raises(SystemExit, match="OPENAI_API_KEY"):
-        service.from_environ(arm)
+        service.from_environ(setup)
 
 
 # the wire shape decides what may run against it
@@ -361,12 +361,12 @@ def test_an_openai_service_setup_sends_its_key_and_its_model(
     """The endpoint, the model name and the key all come from the resolved service block, and the
     fake refuses a request that carries no bearer key at all."""
     root, handler = fake_openai
-    arm = openai_setup(INFERENCE_SERVICE_BASE_URL=f"{root}/v1")
-    exported = service.launcher_env(service.from_environ(arm))
+    setup = openai_setup(INFERENCE_SERVICE_BASE_URL=f"{root}/v1")
+    exported = service.launcher_env(service.from_environ(setup))
     body = http_chat_json(
         f"{exported['VLLM_BASE_URL']}/chat/completions",
         {"model": exported["VLLM_SERVED_MODEL"], "messages": [{"role": "user", "content": "hi"}]},
-        {"Authorization": f"Bearer {arm[exported['INFERENCE_KEY_ENV']]}"},
+        {"Authorization": f"Bearer {setup[exported['INFERENCE_KEY_ENV']]}"},
         10.0,
         "fake service unreachable",
     )
@@ -384,8 +384,8 @@ def test_an_anthropic_service_setup_sends_the_key_header_the_launcher_chose(
     """The fake rejects a request missing either the key header or the version header, so reaching
     it at all proves the setup's auth choice matches the service's."""
     root, handler = fake_anthropic
-    arm = anthropic_setup(INFERENCE_SERVICE_BASE_URL=f"{root}/v1")
-    resolved = service.from_environ(arm)
+    setup = anthropic_setup(INFERENCE_SERVICE_BASE_URL=f"{root}/v1")
+    resolved = service.from_environ(setup)
     exported = service.launcher_env(resolved)
     body = http_chat_json(
         f"{messages_url(exported['VLLM_BASE_URL'])}",
@@ -457,10 +457,10 @@ def test_every_example_setup_resolves_when_its_key_is_set(service: types.ModuleT
     """Each shipped example must be a WORKING setup, not a template: reading its env plus the one
     variable it names has to produce a resolved service."""
     text = rendered(f"experiment:{name}")
-    arm = dict(line.split("=", 1) for line in text.splitlines() if line and not line.startswith("#") and "=" in line)
-    arm = {key: value.strip('"') for key, value in arm.items()}
-    arm[arm["INFERENCE_SERVICE_KEY_ENV"]] = SECRET
-    resolved = service.from_environ(arm)
+    setup = dict(line.split("=", 1) for line in text.splitlines() if line and not line.startswith("#") and "=" in line)
+    setup = {key: value.strip('"') for key, value in setup.items()}
+    setup[setup["INFERENCE_SERVICE_KEY_ENV"]] = SECRET
+    resolved = service.from_environ(setup)
     assert resolved.tier
     assert SECRET not in service.shell_block(service.launcher_env(resolved))
 
@@ -474,8 +474,8 @@ def test_a_service_setup_never_leaks_its_key_into_the_staged_setup_env() -> None
 
 def test_an_unreachable_service_fails_loudly(service: types.ModuleType) -> None:
     """A closed port must raise rather than return an empty body an agent would treat as a reply."""
-    arm = openai_setup(INFERENCE_SERVICE_BASE_URL="http://127.0.0.1:1/v1")
-    exported = service.launcher_env(service.from_environ(arm))
+    setup = openai_setup(INFERENCE_SERVICE_BASE_URL="http://127.0.0.1:1/v1")
+    exported = service.launcher_env(service.from_environ(setup))
     with pytest.raises(RuntimeError, match="unreachable"):
         http_chat_json(f"{exported['VLLM_BASE_URL']}/chat/completions", {}, {}, 2.0, "service unreachable")
 
@@ -532,12 +532,12 @@ def test_every_model_the_claude_cli_picks_itself_is_pinned_to_the_setup_model(se
     """Unpinned, the CLI's side requests name a Claude model; a router answers that with a model the
     setup never declared, which on OpenRouter is billed."""
     text = rendered("experiment:musespark")
-    arm = dict(line.split("=", 1) for line in text.splitlines() if line and not line.startswith("#") and "=" in line)
-    arm = {key: value.strip('"') for key, value in arm.items()}
-    arm[arm["INFERENCE_SERVICE_KEY_ENV"]] = SECRET
-    exported = service.launcher_env(service.from_environ(arm))
+    setup = dict(line.split("=", 1) for line in text.splitlines() if line and not line.startswith("#") and "=" in line)
+    setup = {key: value.strip('"') for key, value in setup.items()}
+    setup[setup["INFERENCE_SERVICE_KEY_ENV"]] = SECRET
+    exported = service.launcher_env(service.from_environ(setup))
     assert {name: exported.get(name) for name in service.CLAUDE_MODEL_PINS} == {
-        name: arm["INFERENCE_SERVICE_MODEL"] for name in service.CLAUDE_MODEL_PINS
+        name: setup["INFERENCE_SERVICE_MODEL"] for name in service.CLAUDE_MODEL_PINS
     }
 
 

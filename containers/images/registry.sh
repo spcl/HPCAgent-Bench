@@ -114,7 +114,7 @@ pull_one() {
     ce_remove_podman_store "${store}"
     [[ "${rc}" -eq 0 ]] || return 1
     sha256sum "${out}" | tee "${out}.sha256"
-    echo "PULLED ${out}; verify it (verify_image.sbatch) before a campaign mounts it"
+    echo "PULLED ${out}; verify it (verify_image.sbatch) before an experiment mounts it"
 }
 
 # promote_one <role>: rename a verified candidate (and its sidecars and archive) over the live name.

@@ -450,7 +450,7 @@ def test_list_progress_lists_exactly_the_not_done_rows(
 def test_a_smoke_named_setup_is_excluded_by_pattern(
     module: types.ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path, capsys: pytest.CaptureFixture
 ) -> None:
-    """Any ``*-smoke*`` setup (SMOKE=1's own default EXPERIMENT naming) never becomes an owed-coverage
+    """Any ``*-smoke*`` setup (SMOKE=1's own default STUDY naming) never becomes an owed-coverage
     row: it exists to prove the pipeline runs, not to grade the roster."""
     job_dir_with_rows(tmp_path / "runs", "100", "harness-focus20-smoke-oss120b-claude", ["a"])
     owed = owed_lists(module, monkeypatch, tmp_path)

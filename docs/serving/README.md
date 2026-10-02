@@ -179,7 +179,7 @@ templating a flag, use the dash form.
 Render one with `hpcagent_bench/cluster/env_layers.sh render experiment:<m>`. `serve-only.sbatch` sources the render, then
 `serve-only.env` (zero judge and agent nodes, `RUN_ROOT`), under `set -a`.
 
-**Setup `.env.<arm>` files are renders.** Fix the layer that owns a key, never the render.
+**Setup `.env.<setup>` files are renders.** Fix the layer that owns a key, never the render.
 
 **Mounts.** An experiment job narrows the inference container's mounts; `serve-only.sbatch` uses the
 registered EDF as-is. A model that serves here and fails in an experiment run: suspect the mounts first.

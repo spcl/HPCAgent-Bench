@@ -1,7 +1,7 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Did an intervention buy speedup, and what did it cost in tokens? One mark per setup, paired against
-its own control: treated setups against the no-packet setups of the same experiment, or an explicit pair
+its own control: treated setups against the no-packet setups of the same study, or an explicit pair
 list (``--pairs-csv``) for llrblind or gitscicomp10 style comparisons. Both routes feed the same raw
 tagged frame :mod:`hpcagent_bench.stats.figures.efficacy` draws from.
 
@@ -542,10 +542,10 @@ def spec_observations(spec: dict[str, str], default: Sequence[pathlib.Path]) -> 
     return [pathlib.Path(p) for p in spec["observations"].split(",")] if "observations" in spec else default
 
 
-def spec_experiment(
+def spec_study(
     spec: dict[str, str], default_observations: Sequence[pathlib.Path], default_study: str, card: cost.CostModel
 ) -> tuple[pd.DataFrame, pd.DataFrame, list[str]] | None:
-    """``(every row, the no-packet control, the roster)`` of the spec's ONE experiment, the roster
+    """``(every row, the no-packet control, the roster)`` of the spec's ONE study, the roster
     being every kernel any of its setups touched; ``None`` without a control."""
     observations = spec_observations(spec, default_observations)
     frame_all = load(observations[0], spec.get("study", default_study), card)
@@ -571,7 +571,7 @@ def build_multi_comparison(
     one panel would need a control this function has no way to reconcile."""
     treatments = [t.strip() for t in spec["treatments"].split(",") if t.strip()]
     title = spec.get("title") or " / ".join(study_tags.packet_name(t) for t in treatments)
-    loaded = spec_experiment(spec, default_observations, default_study, card)
+    loaded = spec_study(spec, default_observations, default_study, card)
     if loaded is None:
         return None
     frame_all, control, roster = loaded
@@ -599,7 +599,7 @@ def build_comparison(
     """One ``--comparison`` spec as a panel (:data:`~hpcagent_bench.stats.figures.efficacy.Panel`)
     -- an explicit pair list (``pairs=``), several packets sharing one panel (``treatments=``,
     :func:`build_multi_comparison`), or a single packet-suffix split (``treatment=``) of its own or
-    the default experiment. ``treatment`` is the registry key(s) the panel is SHAPED by."""
+    the default study. ``treatment`` is the registry key(s) the panel is SHAPED by."""
     if spec.get("stub", "").lower() in ("1", "true", "yes"):
         # A PLACEHOLDER panel: the box, the axes and the caption, with nothing plotted. It keeps a
         # slot in the row for a comparison that has not finished running, so the figure can go into
@@ -625,7 +625,7 @@ def build_comparison(
         if frame.empty:
             return None
         return title, intervention, family_stats(table, intervention, setup_languages(frame_all)), frame
-    loaded = spec_experiment(spec, default_observations, default_study, card)
+    loaded = spec_study(spec, default_observations, default_study, card)
     if loaded is None:
         return None
     frame_all, control, roster = loaded
@@ -646,7 +646,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--study",
         dest="study",
         default="",
-        help="setup prefix naming ONE experiment; required without --pairs-csv/--comparison",
+        help="setup prefix naming ONE study; required without --pairs-csv/--comparison",
     )
     parser.add_argument(
         "--pairs-csv",
@@ -873,16 +873,16 @@ def figure_from_comparisons(
 def figure_from_treatments(
     args: argparse.Namespace, config: efficacy_figures.FigureConfig, card: cost.CostModel, row_width: float | None
 ) -> None:
-    """The ``--study`` route: each ``--treatment`` against the experiment's own no-packet control,
+    """The ``--study`` route: each ``--treatment`` against the study's own no-packet control,
     one figure for one treatment, a joined row for several."""
     if not args.study:
-        raise SystemExit("--study names the experiment to split; pass it, or --pairs-csv/--comparison")
+        raise SystemExit("--study names the study to split; pass it, or --pairs-csv/--comparison")
     treatments = args.treatment or ["skills"]
     frame_all = load(args.observations[0], args.study, card)
     control = control_rows(frame_all)
     if control.empty:
         raise SystemExit(f"no no-packet control rows for study {args.study!r}")
-    # Every kernel ANY setup of this experiment touched -- the roster :func:`complete_side_setups` gates
+    # Every kernel ANY setup of this study touched -- the roster :func:`complete_side_setups` gates
     # coverage against.
     roster = sorted(frame_all["benchmark"].dropna().astype(str).unique())
     args.table.parent.mkdir(parents=True, exist_ok=True)

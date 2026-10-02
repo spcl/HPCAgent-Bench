@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Serve one campaign model with vLLM on Daint GH200 nodes (4x H100 96 GB each), from the vllm-cuda
+# Serve one experiment model with vLLM on Daint GH200 nodes (4x H100 96 GB each), from the vllm-cuda
 # image. The beverin serving path (hpcagent_bench/cluster/run_cluster.sh, serve-private.sbatch) is AMD-shaped;
 # this is the GH200 one, and it keeps the three things the agent side keys on unchanged:
 #   * the served model name, hpcagent-bench-vllm (VLLM_SERVED_MODEL in experiments/layers/model-*.env)
@@ -75,7 +75,7 @@ use_model() {  # sets MODEL_REPO, CONTEXT, NODES, MIN_NODES, EFFORT and MODEL_FL
                 --enable-auto-tool-choice --tool-call-parser openai --reasoning-parser openai_gptoss)
             ;;
         kimi)
-            # No reasoning_effort: Moonshot documents it as a K3-only field (experiments/arms.yaml, campaign:kimi27sglang).
+            # No reasoning_effort: Moonshot documents it as a K3-only field (experiments/setups.yaml, experiment:kimi27sglang).
             MODEL_REPO=moonshotai/Kimi-K2.7-Code CONTEXT=262144 NODES=4 MIN_NODES=2 EFFORT=""
             MODEL_FLAGS=(--trust-remote-code
                 --enable-auto-tool-choice --tool-call-parser kimi_k2 --reasoning-parser kimi_k2)
