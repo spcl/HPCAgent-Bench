@@ -161,7 +161,7 @@ MODES: tuple[str, ...] = ("weak", "strong")
 #: are ``scaling_nodes``, ``scaling_mode`` and ``scaling_note``.
 REQUIRED_COLUMNS: tuple[str, ...] = (
     "row_kind",
-    "arm",
+    "setup",
     "benchmark",
     "scaling_ranks",
     "scaling_ranked_ns",
@@ -424,7 +424,7 @@ def scaling_rows(frame: pd.DataFrame) -> pd.DataFrame:
     rows = frame[frame["row_kind"].astype(str) == SCALING_RECORD].copy()
     if rows.empty:
         return rows
-    setups = [str(setup) for setup in rows["arm"].tolist()]
+    setups = [str(setup) for setup in rows["setup"].tolist()]
     stated = rows["scaling_mode"].tolist() if "scaling_mode" in rows.columns else [""] * len(setups)
     rows["scaling_mode"] = [mode_of(setup, mode) for setup, mode in zip(setups, stated)]
     rows = rows[rows["scaling_mode"].isin(MODES)]
@@ -434,7 +434,7 @@ def scaling_rows(frame: pd.DataFrame) -> pd.DataFrame:
     # A stamp that will not parse sorts oldest rather than dropping the row: an unstamped grade is
     # still a measurement, and it only loses to one that says it is newer.
     rows["scaling_ts"] = pd.to_numeric(rows["ts_ms"], errors="coerce").fillna(0)
-    newest = rows.groupby(["arm", "benchmark", "scaling_mode"])["scaling_ts"].transform("max")
+    newest = rows.groupby(["setup", "benchmark", "scaling_mode"])["scaling_ts"].transform("max")
     return rows[rows["scaling_ts"] == newest].drop(columns=["scaling_ts"])
 
 
@@ -444,14 +444,14 @@ def baseline_anchored(rows: pd.DataFrame) -> pd.DataFrame:
     gets the group's P=1 time as ``scaling_single_rank_ns`` (blank when P=1 was not timed: no anchor, every
     point a hole) and the group's newest stamp as ``ts_ms``, so the latest-curve rule keeps or drops
     the curve whole."""
-    if not (rows["arm"].astype(str) == TORCH_DIST_SETUP).any():
+    if not (rows["setup"].astype(str) == TORCH_DIST_SETUP).any():
         return rows
     rows = rows.copy()
     records = rows.to_dict("records")
     anchors: dict[tuple[str, str, str], float] = {}
     stamps: dict[tuple[str, str, str], float] = {}
     for record in records:
-        if str(record["arm"]) != TORCH_DIST_SETUP:
+        if str(record["setup"]) != TORCH_DIST_SETUP:
             continue
         key = (str(record["run_id"]), str(record["benchmark"]), str(record["scaling_mode"]))
         stamps[key] = max(stamps.get(key, 0.0), number(record["ts_ms"]))
@@ -462,7 +462,7 @@ def baseline_anchored(rows: pd.DataFrame) -> pd.DataFrame:
     stamped: list[object] = []
     for record in records:
         key = (str(record["run_id"]), str(record["benchmark"]), str(record["scaling_mode"]))
-        baseline = str(record["arm"]) == TORCH_DIST_SETUP
+        baseline = str(record["setup"]) == TORCH_DIST_SETUP
         single.append(anchors.get(key, "") if baseline else record.get("scaling_single_rank_ns", ""))
         stamped.append(stamps[key] if baseline else record["ts_ms"])
     rows["scaling_single_rank_ns"] = pd.Series(single, index=rows.index, dtype=object)
@@ -522,7 +522,7 @@ def curves(frame: pd.DataFrame) -> list[Curve]:
     if rows.empty:
         return []
     out: list[Curve] = []
-    for (setup, kernel, mode), group in rows.groupby(["arm", "benchmark", "scaling_mode"], sort=True):
+    for (setup, kernel, mode), group in rows.groupby(["setup", "benchmark", "scaling_mode"], sort=True):
         points: list[Point] = []
         dropped: list[tuple[int, str]] = []
         for index in range(len(group)):
@@ -584,7 +584,7 @@ def disagreements(frame: pd.DataFrame, tolerance: float = EFFICIENCY_RTOL) -> li
         if point is None or math.isnan(recorded):
             continue
         if not math.isclose(recorded, point.efficiency, rel_tol=tolerance):
-            out.append((str(row["arm"]), str(row["benchmark"]), point.ranks, recorded, point.efficiency))
+            out.append((str(row["setup"]), str(row["benchmark"]), point.ranks, recorded, point.efficiency))
     return out
 
 
@@ -1092,7 +1092,7 @@ def points_table(curves_: Sequence[Curve]) -> pd.DataFrame:
     return pd.DataFrame(
         [
             {
-                "arm": curve.setup,
+                "setup": curve.setup,
                 "model": curve.model,
                 "benchmark": curve.kernel,
                 "scaling_mode": curve.mode,
@@ -1115,12 +1115,12 @@ def points_table(curves_: Sequence[Curve]) -> pd.DataFrame:
 def dropped_table(curves_: Sequence[Curve]) -> pd.DataFrame:
     """One row per point the sweep did not measure, and per curve too short to draw."""
     rows = [
-        {"arm": setup, "benchmark": kernel, "scaling_mode": mode, "ranks": ranks, "reason": reason}
+        {"setup": setup, "benchmark": kernel, "scaling_mode": mode, "ranks": ranks, "reason": reason}
         for setup, kernel, mode, ranks, reason in dropped_points(curves_)
     ]
     rows += [
         {
-            "arm": curve.setup,
+            "setup": curve.setup,
             "benchmark": curve.kernel,
             "scaling_mode": curve.mode,
             "ranks": -1,

@@ -53,7 +53,7 @@ def parse_setup(setup: str, pattern: re.Pattern[str] = SETUP_PATTERN) -> tuple[s
 def candidate_setups(frame: pd.DataFrame, pattern: re.Pattern[str] = SETUP_PATTERN) -> dict[str, tuple[str, str]]:
     """Every distinct setup of ``frame`` that ``pattern`` names: setup -> (model, condition)."""
     out: dict[str, tuple[str, str]] = {}
-    for setup in frame["arm"].dropna().astype(str).unique():
+    for setup in frame["setup"].dropna().astype(str).unique():
         parsed = parse_setup(str(setup), pattern)
         if parsed is not None:
             out[str(setup)] = parsed
@@ -70,12 +70,12 @@ def setup_tokens(
     entered at any stand-in value. Under ``latest`` one task IS the
     kernel's value, so the range dicts come back empty -- there is nothing to bracket.
     """
-    subset = frame[frame["arm"].astype(str) == setup]
-    totals = population.kernel_tokens(subset, ("arm", "benchmark"), repeats=repeats)
+    subset = frame[frame["setup"].astype(str) == setup]
+    totals = population.kernel_tokens(subset, ("setup", "benchmark"), repeats=repeats)
     values = {str(kernel): float(value) for kernel, value in totals.droplevel(0).items() if value > 0}
     if population.repeat_policy(repeats) != population.RepeatPolicy.MEDIAN or not values:
         return values, {}, {}
-    episodes = population.episode_tokens(subset, ("arm", "benchmark"))
+    episodes = population.episode_tokens(subset, ("setup", "benchmark"))
     grouped = episodes.groupby("benchmark").tokens
     low = {str(kernel): float(value) for kernel, value in grouped.min().items() if str(kernel) in values}
     high = {str(kernel): float(value) for kernel, value in grouped.max().items() if str(kernel) in values}

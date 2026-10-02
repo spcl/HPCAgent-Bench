@@ -178,8 +178,8 @@ def test_setup_summary_load_reads_the_condition_off_the_recorded_packet(tmp_path
     load under that condition -- the setup name used to be the only route in (``condition_of``)."""
     summary = load_script("plot_setup_summary")
     path = tmp_path / "observations.csv"
-    pd.DataFrame([{"arm": "renamed-qwen38-c", "packet": "cpf"}]).to_csv(path, index=False)
+    pd.DataFrame([{"setup": "renamed-qwen38-c", "packet": "cpf"}]).to_csv(path, index=False)
 
     frame = summary.load(path, prefix="")
 
-    assert frame.set_index("arm").condition["renamed-qwen38-c"] == "cpf"
+    assert frame.set_index("setup").condition["renamed-qwen38-c"] == "cpf"

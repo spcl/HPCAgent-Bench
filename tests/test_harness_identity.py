@@ -19,12 +19,12 @@ SCRIPT = paths.ROOT / "hpcagent_bench" / "cluster" / "record_identity.sh"
 
 #: What ``record_identity`` wrote before it took a harness, for the arguments in :func:`stamp`.
 PRE_HARNESS_LINES = [
-    "HPCAGENT_BENCH_RECORD_EXPERIMENT=harness-focus20",
+    "HPCAGENT_BENCH_RECORD_STUDY=harness-focus20",
     "HPCAGENT_BENCH_RECORD_MODEL=qwen38",
     "HPCAGENT_BENCH_RECORD_LANGUAGE=c",
     "HPCAGENT_BENCH_RECORD_DEVICE=cpu",
     "HPCAGENT_BENCH_RECORD_PACKET=",
-    "HPCAGENT_BENCH_RECORD_ARM=harness-focus20-qwen38-claude",
+    "HPCAGENT_BENCH_RECORD_SETUP=harness-focus20-qwen38-claude",
 ]
 
 #: The last line stamped from a script inside a git checkout, which this test tree is.
@@ -49,14 +49,14 @@ def stamp(env: pathlib.Path, *harness: str, script: pathlib.Path = SCRIPT) -> su
 
 @pytest.mark.parametrize("harness", [(), ("",)], ids=["omitted", "empty"])
 def test_a_setup_that_names_no_harness_stamps_what_it_did_before(tmp_path: pathlib.Path, harness: tuple[str, ...]):
-    env = tmp_path / ".env.arm"
+    env = tmp_path / ".env.setup"
     done = stamp(env, *harness)
     assert done.returncode == 0, done.stderr
     assert env.read_text().splitlines() == [*PRE_HARNESS_LINES, COMMIT_LINE]
 
 
 def test_a_named_harness_is_stamped(tmp_path: pathlib.Path):
-    env = tmp_path / ".env.arm"
+    env = tmp_path / ".env.setup"
     done = stamp(env, "miniswe")
     assert done.returncode == 0, done.stderr
     assert env.read_text().splitlines() == [*PRE_HARNESS_LINES, "HPCAGENT_BENCH_RECORD_HARNESS=miniswe", COMMIT_LINE]
@@ -65,7 +65,7 @@ def test_a_named_harness_is_stamped(tmp_path: pathlib.Path):
 def test_the_submitting_checkout_commit_is_stamped(tmp_path: pathlib.Path) -> None:
     """agent is mounted from the submitting tree, so its commit is the code the setup ran; the
     judge cannot resolve it because the container sees the tree without its repository."""
-    env = tmp_path / ".env.arm"
+    env = tmp_path / ".env.setup"
     done = stamp(env)
     assert done.returncode == 0, done.stderr
     assert COMMIT_LINE.removeprefix("HPCAGENT_BENCH_RECORD_COMMIT=")
@@ -75,7 +75,7 @@ def test_the_submitting_checkout_commit_is_stamped(tmp_path: pathlib.Path) -> No
 def test_a_script_outside_a_git_checkout_stamps_no_commit_rather_than_a_guess(tmp_path: pathlib.Path) -> None:
     script = tmp_path / "record_identity.sh"
     shutil.copy(SCRIPT, script)
-    env = tmp_path / ".env.arm"
+    env = tmp_path / ".env.setup"
     done = stamp(env, script=script)
     assert done.returncode == 0, done.stderr
     assert env.read_text().splitlines() == PRE_HARNESS_LINES
@@ -83,7 +83,7 @@ def test_a_script_outside_a_git_checkout_stamps_no_commit_rather_than_a_guess(tm
 
 def test_an_unknown_harness_is_refused_before_anything_is_stamped(tmp_path: pathlib.Path):
     """A typo must fail at submit time, not become a fifth harness no figure names."""
-    env = tmp_path / ".env.arm"
+    env = tmp_path / ".env.setup"
     done = stamp(env, "mini-swe")
     assert (done.returncode, env.exists()) == (2, False), done.stderr
     assert "mini-swe" in done.stderr

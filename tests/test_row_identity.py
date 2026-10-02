@@ -25,20 +25,20 @@ from tests.results_rows import attempts, calls, grades, runs, submissions
 
 KERNEL = "tsvc_2_s212"
 MEASUREMENTS = {"submissions": submissions, "attempts": attempts, "calls": calls}
-IDENTITY = ("experiment", "model", "device", "packet", "arm", "harness")
+IDENTITY = ("study", "model", "device", "packet", "setup", "harness")
 
 
 @pytest.fixture
 def tagged() -> Iterator[tuple[str, ...]]:
     """Pin the whole identity for the block, exactly as an experiment env var would."""
     keys = {
-        "record.experiment": "repo-vs-kernel",
+        "record.study": "repo-vs-kernel",
         "record.model": "Qwen/Qwen3.8-27B",
         "record.device": "gpu",
         "record.packet": "lang-skills",
         "record.language": "fortran",
         "record.rep": "2",
-        "record.arm": "qwen38-hip-skills",
+        "record.setup": "qwen38-hip-skills",
         "record.harness": "miniswe",
     }
     for key, value in keys.items():
@@ -236,12 +236,12 @@ def test_an_untagged_run_stores_null_rather_than_an_empty_string(tmp_path: pathl
     """An empty study would silently join with every other untagged experiment under one key. An
     setup that named none is its run id, and its harness the one every setup ran before the column."""
     db = str(tmp_path / "r.db")
-    config.set_override("record.experiment", "   ")
+    config.set_override("record.study", "   ")
     try:
         recording.record_call(_score(), Task(KERNEL, "restricted", "c"), status="ok", route="score", path=db)
     finally:
-        config.clear_override("record.experiment")
-    assert _runs(db, ("experiment", "model", "arm", "harness")) == [
+        config.clear_override("record.study")
+    assert _runs(db, ("study", "model", "setup", "harness")) == [
         (None, None, recording.ADHOC_RUN_ID, results_db.DEFAULT_HARNESS)
     ]
 
@@ -249,7 +249,7 @@ def test_an_untagged_run_stores_null_rather_than_an_empty_string(tmp_path: pathl
 def test_two_setups_in_one_db_stay_separable(tmp_path: pathlib.Path) -> None:
     """The whole point: one DB, two setups of one study, told apart without a string parse."""
     db = str(tmp_path / "r.db")
-    config.set_override("record.experiment", "llr-focus40")
+    config.set_override("record.study", "llr-focus40")
     # distinct run ids, because two setups never share one: a run id carries the setup that produced it
     for packet, run_id in (("", "control.n0.p0.w0"), ("lang-skills", "treated.n0.p0.w0")):
         config.set_override("record.packet", packet)
@@ -259,11 +259,11 @@ def test_two_setups_in_one_db_stay_separable(tmp_path: pathlib.Path) -> None:
             )
         finally:
             config.clear_override("record.packet")
-    config.clear_override("record.experiment")
+    config.clear_override("record.study")
     with results_db.reading(db) as conn:
         counts = dict(
             conn.execute(
-                "SELECT packet, COUNT(*) FROM grades_flat WHERE experiment = 'llr-focus40' GROUP BY packet"
+                "SELECT packet, COUNT(*) FROM grades_flat WHERE study = 'llr-focus40' GROUP BY packet"
             ).fetchall()
         )
     assert counts == {"": 1, "lang-skills": 1}
@@ -454,11 +454,11 @@ def test_the_observations_reader_never_returns_an_adhoc_grade(
     ``runs`` row carries the JOB's identity, so the join read it as the setup's own answer. Decision:
     it answers nothing and its kernel is owed a rerun."""
     db = tmp_path / "r.db"
-    monkeypatch.setenv("HPCAGENT_BENCH_RECORD_ARM", "gpu-llr-focus40-qwen38-hip")
+    monkeypatch.setenv("HPCAGENT_BENCH_RECORD_SETUP", "gpu-llr-focus40-qwen38-hip")
     task = Task(KERNEL, "restricted", "c")
     recording.record_call(_score(), task, status="ok", route="score", run_id="gpu.n0.p4.w4", path=str(db))
     recording.record_call(_score(), task, status="ok", route="score", path=str(db))
-    assert ("adhoc", "gpu-llr-focus40-qwen38-hip") in _runs(str(db), ("label", "arm"))
+    assert ("adhoc", "gpu-llr-focus40-qwen38-hip") in _runs(str(db), ("label", "setup"))
     rows = list(studies.read_database(studies.Database(db, "root", "job"), {}))
     assert [r["run_id"] for r in rows] == ["gpu.n0.p4.w4"]
 

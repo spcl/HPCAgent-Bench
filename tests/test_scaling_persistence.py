@@ -270,7 +270,7 @@ def test_an_extracted_scaling_row_has_every_column_the_table_declares(tmp_path: 
     assert set(row) <= set(observations_extract.OBSERVATION_FIELDS), set(row) - set(
         observations_extract.OBSERVATION_FIELDS
     )
-    assert row["ts_ms"] == TS and row["arm"]
+    assert row["ts_ms"] == TS and row["setup"]
 
 
 def test_the_extracted_efficiency_is_the_one_recomputed_from_the_times(tmp_path: pathlib.Path) -> None:

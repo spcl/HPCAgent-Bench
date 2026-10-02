@@ -65,7 +65,7 @@ def graded(
         "job": job,
         "row_kind": "submission",
         "run_id": f"{setup}.n0.p{kernel}.w0",
-        "arm": setup,
+        "setup": setup,
         "benchmark": kernel,
         "speedup": speedup,
         "tokens": "",
@@ -87,7 +87,7 @@ def call(setup: str, kernel: str, tokens: float, job: str = "j1", ts: int = 1000
         "job": job,
         "row_kind": "call",
         "run_id": f"{setup}.n0.p{kernel}.w0",
-        "arm": setup,
+        "setup": setup,
         "benchmark": kernel,
         "speedup": "",
         "tokens": tokens,
@@ -117,7 +117,7 @@ def task(setup: str, kernel: str, tokens: float, job: str = "j1", ts: int = 900)
         "job": job,
         "row_kind": "task",
         "run_id": f"{setup}.n0.p{kernel}.w0",
-        "arm": setup,
+        "setup": setup,
         "benchmark": kernel,
         "speedup": "",
         "tokens": tokens,
@@ -268,9 +268,9 @@ def test_the_impact_table_has_one_row_per_setup_with_the_ratio_on_the_treatment_
     """Spec section 10: every setup once, the control carrying no ratio, the treatment carrying
     the paper's rho on both legs -- speedup treatment/control 3/2, cost control/treated 100/50 = 2
     (above 1: the treatment is cheaper)."""
-    table = impact_table(paired_setups, tmp_path).set_index("arm")
+    table = impact_table(paired_setups, tmp_path).set_index("setup")
     assert list(table.index) == ["x-qwen38-c-cpf", "x-qwen38-c"]
-    assert list(table.columns) == [c for c in paired_setups.IMPACT_COLUMNS if c != "arm"]
+    assert list(table.columns) == [c for c in paired_setups.IMPACT_COLUMNS if c != "setup"]
     treated, control = table.loc["x-qwen38-c-cpf"], table.loc["x-qwen38-c"]
     assert treated.control == "x-qwen38-c" and pd.isna(control.control)
     assert treated.speedup_ratio == pytest.approx(1.5) and treated.token_ratio == pytest.approx(2.0)
@@ -283,7 +283,7 @@ def test_the_impact_table_carries_usage_and_the_setup_aggregates(
 ) -> None:
     """Attempts come off the task rows, speedup is the geomean (A1), cost the geomean task total with
     its log-t interval (A2), each over the 8 selected tasks."""
-    table = impact_table(paired_setups, tmp_path).set_index("arm")
+    table = impact_table(paired_setups, tmp_path).set_index("setup")
     treated, control = table.loc["x-qwen38-c-cpf"], table.loc["x-qwen38-c"]
     assert (treated.tasks, treated.n_solved, treated.n_token_kernels) == (8, 8, 8)
     assert (treated.attempts_per_task, control.attempts_per_task) == (2.0, 1.0)
@@ -501,7 +501,7 @@ def test_load_observations_concatenates_two_paths(paired_setups: ModuleType, tmp
 
     obs = paired_setups.load_observations([left, right])
 
-    assert set(obs.arm) == {"a", "b"}
+    assert set(obs.setup) == {"a", "b"}
     assert paired_setups.served_by_setup(obs) == {"a": frozenset({"k1"}), "b": frozenset({"k1"})}
 
 
@@ -613,7 +613,7 @@ def test_the_impact_table_carries_the_relaunch_rate_beside_every_token_ratio(
     paired_setups: ModuleType, tmp_path: pathlib.Path
 ) -> None:
     """The fixture relaunches every treated task once and never relaunches a control one."""
-    table = impact_table(paired_setups, tmp_path).set_index("arm")
+    table = impact_table(paired_setups, tmp_path).set_index("setup")
     treated, control = table.loc["x-qwen38-c-cpf"], table.loc["x-qwen38-c"]
     assert (treated.relaunched_tasks, control.relaunched_tasks) == (8, 0)
     assert treated.share_relaunched == pytest.approx(1.0) and control.share_relaunched == pytest.approx(0.0)
@@ -808,7 +808,7 @@ def test_no_submit_rate_is_absent_for_a_setup_with_no_episodes_in_the_frame(pair
     """An empty ``graded`` frame names no setup at all, so the mapping stays empty and a caller reading
     it back with ``.get(setup, nan)`` sees NaN, never a fabricated 0.0."""
     empty = frame([]).assign(
-        **{name: pd.Series(dtype="object") for name in (*population.EPISODE_KEY, "arm", "optimizer")}
+        **{name: pd.Series(dtype="object") for name in (*population.EPISODE_KEY, "setup", "optimizer")}
     )
     assert paired_setups.no_submit_rate_by_setup(empty) == {}
 
@@ -868,7 +868,7 @@ def test_the_impact_table_carries_cpf_uptake_only_for_the_setup_it_was_given(
         ]
     )  # fmt: skip
     assert rc == 0
-    table = pd.read_csv(out).set_index("arm")
+    table = pd.read_csv(out).set_index("setup")
     assert table.loc["x-qwen38-c-cpf", "cpf_uptake"] == pytest.approx(6 / 8)
     assert pd.isna(table.loc["x-qwen38-c", "cpf_uptake"])
 
@@ -920,7 +920,7 @@ def test_the_speedup_leg_is_over_the_kernels_both_solved_and_the_cost_leg_over_e
     assert legs.at["tokens", "n_pairs"] == 7
     assert legs.at["tokens", "rho"] == pytest.approx(1.4859942891369484)
     assert legs.at["tokens", "cost_model"] == "billed"
-    control = pd.read_csv(setups_out).set_index("arm").loc["x-qwen38-c"]
+    control = pd.read_csv(setups_out).set_index("setup").loc["x-qwen38-c"]
     # GM billed tokens over K: (200^6 * 100)^(1/7)
     assert control.n_token_kernels == 7
     assert control.gm_tokens == pytest.approx(181.14473285278135)
@@ -989,5 +989,5 @@ def test_a_setup_named_without_a_language_takes_the_language_its_rows_recorded(
     paired_setups: ModuleType, setup: str, recorded: list[str], want: str
 ) -> None:
     """A harness setup's name carries no language token; its rows do, so it pairs with its ``-c`` treatment."""
-    observations = pd.DataFrame({"arm": [setup] * len(recorded), "language": recorded})
+    observations = pd.DataFrame({"setup": [setup] * len(recorded), "language": recorded})
     assert paired_setups.setup_language(observations, setup) == want

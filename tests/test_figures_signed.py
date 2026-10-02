@@ -273,7 +273,7 @@ def episode_row(setup: str, benchmark: str, speedup: float, run_suffix: str = "1
         "run_root": f"j{run_suffix}",
         "job": f"j{run_suffix}",
         "run_id": f"{setup}-{benchmark}-{run_suffix}",
-        "arm": setup,
+        "setup": setup,
         "row_kind": "submission",
         "benchmark": benchmark,
         "speedup": speedup,
@@ -292,7 +292,7 @@ def token_row(setup: str, benchmark: str, tokens: float, run_suffix: str = "1") 
     """One ``row_kind=task`` row: what ``population.kernel_tokens`` reads a spend off (spec T4)."""
     return {
         "run_root": f"j{run_suffix}", "job": f"j{run_suffix}", "run_id": f"{setup}-{benchmark}-{run_suffix}",
-        "arm": setup, "row_kind": "task", "benchmark": benchmark, "tokens": tokens, "ts_ms": int(run_suffix),
+        "setup": setup, "row_kind": "task", "benchmark": benchmark, "tokens": tokens, "ts_ms": int(run_suffix),
     }  # fmt: skip
 
 
@@ -702,7 +702,7 @@ def test_mark_pending_keeps_a_setup_not_yet_served_every_kernel(
     llr40_canon: pd.DataFrame, llr40_observations: pd.DataFrame
 ) -> None:
     partial = llr40_observations[
-        ~((llr40_observations["arm"] == "cpf-llr-focus40-oss120b-c-cpf") & (llr40_observations["benchmark"] == "k3"))
+        ~((llr40_observations["setup"] == "cpf-llr-focus40-oss120b-c-cpf") & (llr40_observations["benchmark"] == "k3"))
     ]
     setup = "cpf-llr-focus40-oss120b-c-cpf"
     assert setup not in {row.framework for row in signed.llr40_rows(llr40_canon, partial, ROSTER40)}

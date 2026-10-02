@@ -105,9 +105,9 @@ def keep_owned(frame: "pd.DataFrame", selection: experiments.Selection) -> tuple
 
     Retired and foreign are counted apart because they mean different things: a retired setup ran and
     the user took it out, a foreign one belongs to another study that shares a run root."""
-    if frame.empty or "arm" not in frame.columns:
+    if frame.empty or "setup" not in frame.columns:
         return frame, 0, 0
-    setups = frame["arm"].astype(str)
+    setups = frame["setup"].astype(str)
     mine = setups.map(lambda setup: experiments.prefix_of(setup) in selection.prefixes)
     retired = setups.map(experiments.dropped)
     return frame[mine & ~retired], int((mine & retired).sum()), int((~mine).sum())
@@ -195,7 +195,7 @@ def fuse(
     is_frozen = flag.astype(str).eq("1") if flag is not None else None
     frozen_rows = int(is_frozen.sum()) if is_frozen is not None else 0
     jobs = tuple(sorted(frame.loc[is_frozen, "job"].astype(str).unique())) if frozen_rows else ()
-    setups = tuple(sorted(frame["arm"].astype(str).unique())) if not frame.empty else ()
+    setups = tuple(sorted(frame["setup"].astype(str).unique())) if not frame.empty else ()
     return frame, Provenance(
         study=selection.study,
         live_rows=len(frame) - frozen_rows,
@@ -308,7 +308,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         type=pathlib.Path,
         action="append",
         default=[],
-        help="a results database (v1) to read instead of the run roots; repeatable, read as one: the core "
+        help="a results database to read instead of the run roots; repeatable, read as one: the core "
         "database, plus e.g. the CPF archive for the historical CPF setups",
     )
     parser.add_argument(

@@ -115,7 +115,7 @@ PAIR_COLUMNS = (
 )
 
 SETUP_COLUMNS = (
-    "arm",
+    "setup",
     "baseline",
     "score_rule",
     "n_served",
@@ -152,7 +152,7 @@ IMPACT_COLUMNS = (
     "model",
     "language",
     "packet",
-    "arm",
+    "setup",
     "control",
     "tasks",
     "n_solved",
@@ -265,14 +265,14 @@ def impact_rows(pairs: list[tuple[str, str]], setup_frame: pd.DataFrame, pair_fr
         if control not in controls:
             controls.add(control)
             order.append((control, ""))
-    setups = setup_frame.set_index("arm")
+    setups = setup_frame.set_index("setup")
     rows: list[dict[str, object]] = []
     for setup, control in order:
         row: dict[str, object] = {
             "model": study_tags.model_of(setup),
             "language": study_tags.language_of(setup),
             "packet": study_tags.packet_of(setup),
-            "arm": setup,
+            "setup": setup,
             "control": control,
         }
         for column, source in IMPACT_SETUP_COLUMNS.items():
@@ -322,7 +322,7 @@ def graded_rows(observations: pd.DataFrame, setups: list[str]) -> pd.DataFrame:
     ``one_denominator`` raises rather than picking a majority: a speedup divided by two different
     references is not one quantity, and the setups of two experiments are exactly where that happens.
     """
-    rows = observations[(observations.row_kind == "submission") & observations.arm.isin(setups)]
+    rows = observations[(observations.row_kind == "submission") & observations.setup.isin(setups)]
     population.one_denominator(rows.baseline.tolist(), label="graded rows")
     return rows
 
@@ -342,8 +342,8 @@ def best_by_setup_kernel(
 
 def served_by_setup(observations: pd.DataFrame) -> dict[str, frozenset[str]]:
     """Every kernel a setup has a recorded observation for -- the roster it was actually given."""
-    rows = observations.dropna(subset=["arm", "benchmark"])
-    return {str(setup): frozenset(group.benchmark.astype(str)) for setup, group in rows.groupby("arm")}
+    rows = observations.dropna(subset=["setup", "benchmark"])
+    return {str(setup): frozenset(group.benchmark.astype(str)) for setup, group in rows.groupby("setup")}
 
 
 def tokens_by_setup_kernel(
@@ -356,7 +356,7 @@ def tokens_by_setup_kernel(
     (docs/token_accounting.md); ``calls.tokens`` is a cumulative BILLED count at a judge call and is
     never a cost here. A kernel run more than once is reduced by ``repeats``.
     """
-    totals = population.kernel_tokens(observations, ("arm", "benchmark"), repeats=repeats)
+    totals = population.kernel_tokens(observations, ("setup", "benchmark"), repeats=repeats)
     return {(str(setup), str(kernel)): float(spend) for (setup, kernel), spend in totals.items()}
 
 
@@ -365,7 +365,7 @@ def setup_aggregates(
 ) -> dict[str, population.SetupAggregate]:
     """``{setup: aggregate}`` under ``policy``, each carrying the exact kernels behind it."""
     out: dict[str, population.SetupAggregate] = {}
-    for setup, group in best.groupby("arm"):
+    for setup, group in best.groupby("setup"):
         solved = {str(row.benchmark): float(row.speedup) for row in group.itertuples()}
         roster = served.get(str(setup), frozenset(solved))
         out[str(setup)] = population.aggregate_setup(str(setup), baseline, solved, roster, policy)
@@ -511,9 +511,9 @@ def no_submit_rate_by_setup(graded: pd.DataFrame) -> dict[str, float]:
     zero). A setup with no episodes at all is simply absent from the returned mapping.
     """
     per_episode = episode_submitted(graded)
-    episode_setup = graded[[*population.EPISODE_KEY, "arm"]].drop_duplicates(list(population.EPISODE_KEY))
+    episode_setup = graded[[*population.EPISODE_KEY, "setup"]].drop_duplicates(list(population.EPISODE_KEY))
     with_setup = per_episode.merge(episode_setup, on=list(population.EPISODE_KEY), how="left")
-    return {str(setup): float(group.never_submitted.mean()) for setup, group in with_setup.groupby("arm")}
+    return {str(setup): float(group.never_submitted.mean()) for setup, group in with_setup.groupby("setup")}
 
 
 #: The column :mod:`iteration_counts` writes for the judge's ``canonical_parallel_form`` MCP tool --
@@ -561,7 +561,7 @@ def task_usage(observations: pd.DataFrame, repeats: population.RepeatPolicy) -> 
     Over the tasks ``repeats`` selects -- the same tasks every reported number is over -- with calls
     of ANY status counted: a rejected submit is still an attempt the agent made.
     """
-    key = ["arm", *population.EPISODE_KEY]
+    key = ["setup", *population.EPISODE_KEY]
     selected = (
         population.latest_runs(observations)
         if population.repeat_policy(repeats) == population.RepeatPolicy.LATEST
@@ -594,7 +594,7 @@ def task_usage(observations: pd.DataFrame, repeats: population.RepeatPolicy) -> 
         tokens_crashed=("tokens_crashed", "max"),
     )
     per_task["relaunched"] = (per_task.attempts > 1).where(per_task.attempts.notna())
-    return per_task.groupby("arm").agg(
+    return per_task.groupby("setup").agg(
         tasks=("score_calls", "size"),
         attempts_per_task=("attempts", "mean"),
         relaunched_tasks=("relaunched", "sum"),
@@ -655,17 +655,17 @@ def setup_rows(
     best = best.merge(episode_submitted(graded), on=list(population.EPISODE_KEY), how="left")
     rows: list[dict[str, object]] = []
     for setup, item in sorted(table.items()):
-        mine_best = best[best.arm == setup]
+        mine_best = best[best.setup == setup]
         values = mine_best.speedup
         speed = floored_geomean(item.values)
-        mine = graded[graded.arm == setup]
+        mine = graded[graded.setup == setup]
         n_served = len(served.get(setup, frozenset(item.kernels)))
         spend = [value for (owner, _kernel), value in tokens.items() if owner == setup]
         spend_interval = floored_geomean(spend)
         used = usage.loc[setup] if setup in usage.index else None
         rows.append(
             {
-                "arm": setup,
+                "setup": setup,
                 "baseline": item.baseline,
                 "n_served": n_served,
                 # The kernels the setup DELIVERED, never the size of its population: under the served
@@ -690,7 +690,7 @@ def setup_rows(
                 "share_relaunched": float(used.share_relaunched) if used is not None else math.nan,
                 "tokens_crashed": int(used.tokens_crashed) if used is not None else 0,
                 "submissions": len(mine),
-                "episodes": len(episodes[episodes.arm == setup]),
+                "episodes": len(episodes[episodes.setup == setup]),
                 "jobs": int(mine.job.nunique()),
                 "tasks": int(used.tasks) if used is not None else 0,
                 "score_calls_per_task": float(used.score_calls_per_task) if used is not None else math.nan,
@@ -833,7 +833,7 @@ def setup_language(observations: pd.DataFrame, setup: str) -> str:
     named = study_tags.language_of(setup)
     if named or "language" not in observations.columns:
         return named
-    recorded = observations.loc[observations.arm == setup, "language"].dropna().astype(str)
+    recorded = observations.loc[observations.setup == setup, "language"].dropna().astype(str)
     recorded = recorded[recorded != ""]
     return str(recorded.mode().iloc[0]) if not recorded.empty else ""
 
@@ -856,13 +856,13 @@ def main(argv: list[str]) -> int:
         raise SystemExit(f"a pair must share model and language: {unlike}")
     if args.baseline:
         observations = one_baseline(observations, args.baseline)
-    missing = [setup for setup in setups if setup not in set(observations.arm)]
+    missing = [setup for setup in setups if setup not in set(observations.setup)]
     if missing:
         raise SystemExit(f"no observations for {missing}")
 
     roster = declared_roster(args.roster_file, observations)
     if not args.include_incomplete:
-        kept, dropped = population.complete_setups(observations[observations.arm.isin(setups)], roster)
+        kept, dropped = population.complete_setups(observations[observations.setup.isin(setups)], roster)
         pairs, notes = excluded_pairs(pairs, kept, dropped, len(roster))
         for note in notes:
             print(f"note: {note}", file=sys.stderr)
@@ -872,12 +872,12 @@ def main(argv: list[str]) -> int:
 
     graded = graded_rows(observations, setups)
     baseline = population.one_denominator(graded.baseline.tolist(), label="family")
-    best = best_by_setup_kernel(observations[observations.arm.isin(setups)], args.repeats)
-    served = served_by_setup(observations[observations.arm.isin(setups)])
+    best = best_by_setup_kernel(observations[observations.setup.isin(setups)], args.repeats)
+    served = served_by_setup(observations[observations.setup.isin(setups)])
     table = setup_aggregates(best, served, baseline, args.policy)
 
     tokens = tokens_by_setup_kernel(observations, args.repeats)
-    usage = task_usage(observations[observations.arm.isin(setups)], args.repeats)
+    usage = task_usage(observations[observations.setup.isin(setups)], args.repeats)
     no_submit = no_submit_rate_by_setup(graded)
     uptake = cpf_uptake_by_setup(dict(parse_iteration_counts(spec) for spec in args.iteration_counts))
     setup_frame = (

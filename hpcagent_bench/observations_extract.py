@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Extract the agentic experiment runs into a flat, plottable reproducibility folder.
 
-Reads the results databases (schema v1, :mod:`hpcagent_bench.harness.results_db`) an experiment leaves
+Reads the results databases (schema v2, :mod:`hpcagent_bench.harness.results_db`) an experiment leaves
 under its run roots -- a job's judge shards or its merged ``results.db``, or one dataset DB given
 directly -- and writes into ``--out``: a long-format observations CSV (one row per recorded
 observation), the baseline source each agent was given beside the candidate source it submitted,
@@ -289,7 +289,7 @@ def frozen_rows(
             continue
         live = any(readable_job(parent / run_root / job) for parent in parents)
         for row in rows:
-            setup = row.get("arm") or ""
+            setup = row.get("setup") or ""
             if not setup.startswith(setup_prefix) or not excluded.isdisjoint(setup.split("-")):
                 continue
             if live:
@@ -298,7 +298,7 @@ def frozen_rows(
             kept[frozen_observations.COLUMN] = "1"
             if frozen_observations.stored_adhoc(row.get("run_id"), row.get(frozen_observations.RETAGGED_COLUMN)):
                 # an older extraction re-attributed this adhoc grade; it goes back under the run id it was stored with
-                kept["run_id"] = kept["arm"] = ADHOC_SETUP
+                kept["run_id"] = kept["setup"] = ADHOC_SETUP
             out.append(kept)
     return out
 
@@ -659,13 +659,13 @@ KIND_OPTIMIZER: dict[str, str] = {
 #: timed input (a floor-override kernel's suspect is re-derived at it), its host source, and whether
 #: an audit withdrew its verdict (``disqualifications``).
 GRADE_ROWS = f"""
-SELECT g.*, r.label, r.job AS episode_job, r.arm, a.language AS arm_language, a.harness AS arm_harness,
-       a.packet AS arm_packet, a.model AS arm_model, gs.hash AS source_hash, gs.language AS source_language,
+SELECT g.*, r.label, r.job AS episode_job, r.setup, a.language AS setup_language, a.harness AS setup_harness,
+       a.packet AS setup_packet, a.model AS setup_model, gs.hash AS source_hash, gs.language AS source_language,
        (SELECT c.shape FROM grade_cells c WHERE c.grade_id = g.id AND c.cell = 0) AS cell_shape,
        EXISTS (SELECT 1 FROM disqualifications d WHERE d.grade_id = g.id) AS disqualified
 FROM grades g
 JOIN runs r ON r.id = g.run_id
-JOIN arms a ON a.arm = r.arm
+JOIN setups a ON a.setup = r.setup
 LEFT JOIN grade_sources gs ON gs.grade_id = g.id AND gs.part = 'host'
 WHERE g.kind IN {REQUEST_KINDS}
 ORDER BY g.ts_ms, g.id
@@ -674,21 +674,21 @@ ORDER BY g.ts_ms, g.id
 #: Every scaling point, with the grade it is a curve of: a replay (a ``regrade``) reads as the
 #: submission it replayed.
 SCALING_ROWS = """
-SELECT p.*, s.single_rank_ns, r.label, r.job AS episode_job, r.arm, a.harness AS arm_harness,
-       a.packet AS arm_packet, o.benchmark, o.ts_ms
+SELECT p.*, s.single_rank_ns, r.label, r.job AS episode_job, r.setup, a.harness AS setup_harness,
+       a.packet AS setup_packet, o.benchmark, o.ts_ms
 FROM scaling_points p
 JOIN scaling_grades s ON s.grade_id = p.grade_id AND s.mode = p.mode
 JOIN grades g ON g.id = p.grade_id
 JOIN grades o ON o.id = coalesce(g.of_grade_id, g.id)
 JOIN runs r ON r.id = o.run_id
-JOIN arms a ON a.arm = r.arm
+JOIN setups a ON a.setup = r.setup
 ORDER BY r.label, o.benchmark, o.ts_ms, p.mode, p.ranks
 """
 
 #: Every episode with a record (``tokens.json`` folded into ``runs``), with its setup's identity.
 TASK_ROWS = """
-SELECT r.*, a.language AS arm_language, a.harness AS arm_harness, a.packet AS arm_packet
-FROM runs r JOIN arms a ON a.arm = r.arm
+SELECT r.*, a.language AS setup_language, a.harness AS setup_harness, a.packet AS setup_packet
+FROM runs r JOIN setups a ON a.setup = r.setup
 WHERE r.benchmark IS NOT NULL
 ORDER BY r.id
 """
@@ -701,7 +701,7 @@ def job_of(episode_job: object) -> str:
 
 
 def discover_databases(run_globs: Iterable[str], skip: Iterable[pathlib.Path] = ()) -> list[Database]:
-    """Every results DB (schema v1) under every matched run root outside the ``skip`` directories (the
+    """Every results DB (schema v2) under every matched run root outside the ``skip`` directories (the
     extraction's own output), in-job final grades aside, deduplicated and sorted for a stable CSV. A
     matched file is read as one database."""
     skipped = [path.resolve() for path in skip]
@@ -721,11 +721,11 @@ def discover_databases(run_globs: Iterable[str], skip: Iterable[pathlib.Path] = 
 
 
 def results_database(path: pathlib.Path) -> bool:
-    """Whether ``path`` is a results DB of schema v1 (a legacy or foreign file is not read)."""
+    """Whether ``path`` is a results DB of schema v2 (a legacy or foreign file is not read)."""
     try:
         with results_db.reading(path):
             return True
-    except (sqlite3.Error, results_db.NotV1Error):
+    except (sqlite3.Error, results_db.SchemaVersionError):
         return False
 
 
@@ -739,9 +739,9 @@ def identity_row(db: Database, row: Mapping[str, Any], record: str) -> dict[str,
         "judge_db": str(db.path),
         "row_kind": record,
         "run_id": run_id,
-        "arm": setup,
-        "harness": row["arm_harness"] or "",
-        "packet": row["arm_packet"] or "",
+        "setup": setup,
+        "harness": row["setup_harness"] or "",
+        "packet": row["setup_packet"] or "",
         "skills": uses_skills(setup),
         "worker_index": agent_indices(run_id)[2],
     }
@@ -752,8 +752,8 @@ def grade_columns(grade: Mapping[str, Any]) -> dict[str, Any]:
     kind = str(grade["kind"])
     return {
         "benchmark": grade["benchmark"],
-        "language": grade["arm_language"] or "",
-        "optimizer": KIND_OPTIMIZER.get(kind, grade["arm_model"] or ""),
+        "language": grade["setup_language"] or "",
+        "optimizer": KIND_OPTIMIZER.get(kind, grade["setup_model"] or ""),
         "preset": blank(grade["preset"]),
         "datatype": blank(grade["datatype"]),
         "source_mode": blank(grade["source_mode"]),
@@ -813,7 +813,7 @@ def verdict_row(db: Database, grade: Mapping[str, Any], index: int) -> dict[str,
 
 def before_the_c_fix(grade: Mapping[str, Any], c_fix_ms: int) -> bool:
     """Whether a C setup's grade was stamped before the C references were regenerated."""
-    return c_fix_ms > 0 and grade["arm_language"] == C_LANGUAGE and int(grade["ts_ms"]) < c_fix_ms
+    return c_fix_ms > 0 and grade["setup_language"] == C_LANGUAGE and int(grade["ts_ms"]) < c_fix_ms
 
 
 def graded_rows(
@@ -847,7 +847,7 @@ def source_entry(db: Database, grade: Mapping[str, Any], row: Mapping[str, Any])
     return {
         "run_root": db.run_root,
         "job": row["job"],
-        "arm": row["arm"],
+        "setup": row["setup"],
         "run_id": row["run_id"],
         "worker_index": row["worker_index"],
         "benchmark": row["benchmark"],
@@ -873,7 +873,7 @@ def task_rows(conn: sqlite3.Connection, db: Database, experiment: tuple[str, fro
         start = run["final_attempt_start_ms"]
         row |= {
             "benchmark": run["benchmark"],
-            "language": run["arm_language"] or "",
+            "language": run["setup_language"] or "",
             "ts_ms": blank(start),
             "tokens": blank(run["effective_tokens"]),
             "tokens_fresh_input": blank(run["fresh_input_tokens"]),
@@ -934,7 +934,7 @@ def baseline_rows(conn: sqlite3.Connection, db: Database) -> list[dict[str, Any]
                 "judge_db": str(db.path),
                 "row_kind": SCALING_RECORD,
                 "run_id": f"{TORCH_DIST_SETUP}:{row['arch']}:{row['image']}",
-                "arm": TORCH_DIST_SETUP,
+                "setup": TORCH_DIST_SETUP,
                 "benchmark": row["benchmark"] or "",
                 "ts_ms": int(row["ts_ms"]),
                 "scaling_ranks": row["ranks"],
@@ -973,7 +973,7 @@ def read_db(
             observations, sources = graded_rows(conn, db, experiment, c_fix_ms)
             observations += task_rows(conn, db, experiment) + scaling_rows(conn, db, experiment)
             observations += baseline_rows(conn, db)
-    except (sqlite3.Error, results_db.NotV1Error) as exc:
+    except (sqlite3.Error, results_db.SchemaVersionError) as exc:
         broken = {"run_root": db.run_root, "job": db.job, "judge_db": str(db.path), "row_kind": f"unreadable:{exc}"}
         return DbResult([broken], [], 0)
     return DbResult(observations, sources, 0)
@@ -1322,7 +1322,7 @@ def graded_text(origin: str) -> str | None:
     try:
         with results_db.reading(db) as conn:
             row = conn.execute("SELECT text FROM sources WHERE hash = ?", (digest,)).fetchone()
-    except (OSError, sqlite3.Error, results_db.NotV1Error):
+    except (OSError, sqlite3.Error, results_db.SchemaVersionError):
         return None
     return None if row is None else str(row[0])
 
@@ -1353,7 +1353,7 @@ def export_agent(
     stem = {
         "run_root": agent.run_root,
         "job": agent.job,
-        "arm": agent.setup,
+        "setup": agent.setup,
         "run_id": agent.run_id,
         "worker_index": agent.worker_index,
         "benchmark": agent.benchmark,
@@ -1671,7 +1671,7 @@ def export_sources(out: pathlib.Path, got: Extracted) -> None:
     # worker never produced a judge or task row, which reads as "unlabelled" below.
     worker_identity_map: dict[tuple[str, str, str], tuple[str, str]] = {}
     for row in got.observations:
-        setup = str(row.get("arm") or "")
+        setup = str(row.get("setup") or "")
         worker = str(row.get("worker_index") or "")
         if setup and setup != ADHOC_SETUP and worker:
             worker_identity_map.setdefault(
@@ -1682,7 +1682,7 @@ def export_sources(out: pathlib.Path, got: Extracted) -> None:
         agent = Agent(
             str(row["run_root"]),
             str(row["job"]),
-            str(row["arm"]),
+            str(row["setup"]),
             str(row["benchmark"]),
             str(row["run_id"]),
             str(row["worker_index"]),

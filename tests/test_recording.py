@@ -80,7 +80,7 @@ def test_a_legacy_results_db_is_refused_not_written(tmp_path: pathlib.Path) -> N
     with connect(db) as conn:
         conn.execute("CREATE TABLE submissions (id INTEGER PRIMARY KEY, run_id TEXT)")
     conn.close()
-    with pytest.raises(results_db.NotV1Error, match="legacy results database"):
+    with pytest.raises(results_db.SchemaVersionError, match="legacy results database"):
         recording.connect(str(db))
     with connect(db) as conn:
         assert {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")} == {"submissions"}

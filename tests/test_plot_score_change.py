@@ -76,7 +76,7 @@ def episode(setup: str, model: str, language: str, kernel: int, run: str, speedu
     """One episode as the judge records it: a GRADED row carrying the speedup and no token count,
     and a ``task`` row carrying the token total and no timings."""
     common = {
-        "arm": setup,
+        "setup": setup,
         "model": model,
         "language": language,
         "benchmark": f"k{kernel}",
@@ -209,15 +209,15 @@ def test_load_reads_skills_off_the_recorded_packet_before_the_setup_name(tmp_pat
     path = tmp_path / "observations.csv"
     pd.DataFrame(
         [
-            {"arm": "renamed-qwen38-c", "packet": "skills"},
-            {"arm": "qwen38-fortran-skills", "packet": "cpf"},
-            {"arm": "qwen38-c-skills", "packet": ""},
+            {"setup": "renamed-qwen38-c", "packet": "skills"},
+            {"setup": "qwen38-fortran-skills", "packet": "cpf"},
+            {"setup": "qwen38-c-skills", "packet": ""},
         ]
     ).to_csv(path, index=False)
 
     frame = plot.load(path, prefix="", card=PACKET_ONLY)
 
-    by_setup = frame.set_index("arm").skills
+    by_setup = frame.set_index("setup").skills
     assert bool(by_setup["renamed-qwen38-c"]) is True
     assert bool(by_setup["qwen38-fortran-skills"]) is False
     assert bool(by_setup["qwen38-c-skills"]) is True
@@ -230,14 +230,14 @@ def test_load_counts_a_composite_packet_as_skilled(tmp_path: pathlib.Path) -> No
     path = tmp_path / "observations.csv"
     pd.DataFrame(
         [
-            {"arm": "llrsingle-qwen38-c-skills", "packet": "lang-skills+no-score-tool"},
-            {"arm": "llrsingle-qwen38-c", "packet": "no-score-tool"},
+            {"setup": "llrsingle-qwen38-c-skills", "packet": "lang-skills+no-score-tool"},
+            {"setup": "llrsingle-qwen38-c", "packet": "no-score-tool"},
         ]
     ).to_csv(path, index=False)
 
     frame = plot.load(path, prefix="", card=PACKET_ONLY)
 
-    by_setup = frame.set_index("arm").skills
+    by_setup = frame.set_index("setup").skills
     assert bool(by_setup["llrsingle-qwen38-c-skills"]) is True
     assert bool(by_setup["llrsingle-qwen38-c"]) is False
 
@@ -248,17 +248,17 @@ def test_control_rows_is_exactly_the_no_packet_setup(tmp_path: pathlib.Path) -> 
     path = tmp_path / "observations.csv"
     pd.DataFrame(
         [
-            {"arm": "llr-focus40-qwen38-c-perf-playbook-cpu", "packet": "perf-playbook-cpu"},
-            {"arm": "cpf-llr-focus40-qwen38-c-cpfsrc", "packet": "cpfsrc"},
-            {"arm": "llr-focus40-qwen38-c-skills", "packet": "skills"},
-            {"arm": "llr-focus40-qwen38-c", "packet": ""},
+            {"setup": "llr-focus40-qwen38-c-perf-playbook-cpu", "packet": "perf-playbook-cpu"},
+            {"setup": "cpf-llr-focus40-qwen38-c-cpfsrc", "packet": "cpfsrc"},
+            {"setup": "llr-focus40-qwen38-c-skills", "packet": "skills"},
+            {"setup": "llr-focus40-qwen38-c", "packet": ""},
         ]
     ).to_csv(path, index=False)
 
     frame_all = plot.load(path, prefix="", card=PACKET_ONLY)
     control = plot.control_rows(frame_all)
 
-    assert set(control.arm) == {"llr40-qwen38-c"}  # read under its configuration name
+    assert set(control.setup) == {"llr40-qwen38-c"}  # read under its configuration name
 
 
 def test_a_perf_playbook_setup_never_enters_the_control_side(tmp_path: pathlib.Path) -> None:
@@ -267,16 +267,16 @@ def test_a_perf_playbook_setup_never_enters_the_control_side(tmp_path: pathlib.P
     path = tmp_path / "observations.csv"
     pd.DataFrame(
         [
-            {"arm": "llr-focus40-qwen38-c-perf-playbook-cpu", "packet": "perf-playbook-cpu"},
-            {"arm": "llr-focus40-qwen38-c", "packet": ""},
+            {"setup": "llr-focus40-qwen38-c-perf-playbook-cpu", "packet": "perf-playbook-cpu"},
+            {"setup": "llr-focus40-qwen38-c", "packet": ""},
         ]
     ).to_csv(path, index=False)
 
     frame_all = plot.load(path, prefix="", card=PACKET_ONLY)
     control = plot.control_rows(frame_all)
 
-    assert "llr-focus40-qwen38-c-perf-playbook-cpu" not in set(control.arm)
-    assert set(control.arm) == {"llr40-qwen38-c"}  # read under its configuration name
+    assert "llr-focus40-qwen38-c-perf-playbook-cpu" not in set(control.setup)
+    assert set(control.setup) == {"llr40-qwen38-c"}  # read under its configuration name
 
 
 def test_treatment_frame_tags_the_control_false_and_the_treatment_true() -> None:
@@ -284,13 +284,13 @@ def test_treatment_frame_tags_the_control_false_and_the_treatment_true() -> None
     split rather than the historical column name."""
     frame_all = pd.DataFrame(
         [
-            {"arm": "a-control", "packet": "", "model": "qwen38", "language": "c"},
-            {"arm": "a-cpfsrc", "packet": "cpfsrc", "model": "qwen38", "language": "c"},
-            {"arm": "a-skills", "packet": "skills", "model": "qwen38", "language": "c"},
+            {"setup": "a-control", "packet": "", "model": "qwen38", "language": "c"},
+            {"setup": "a-cpfsrc", "packet": "cpfsrc", "model": "qwen38", "language": "c"},
+            {"setup": "a-skills", "packet": "skills", "model": "qwen38", "language": "c"},
         ]
     )
     tagged = plot.treatment_frame(frame_all, "cpfsrc")
-    by_setup = tagged.set_index("arm").skills
+    by_setup = tagged.set_index("setup").skills
     assert bool(by_setup["a-control"]) is False
     assert bool(by_setup["a-cpfsrc"]) is True
     assert "a-skills" not in by_setup.index
@@ -334,7 +334,7 @@ def test_a_treatment_setup_that_never_recorded_its_language_still_pairs_against_
             ("cpf-llr-focus40-oss120b-c-cpf", "cpf", "", 2.4),
         ):
             run = f"{setup}-{kernel}"
-            base = {**common, "arm": setup, "packet": packet, "language": language, "run_id": run}
+            base = {**common, "setup": setup, "packet": packet, "language": language, "run_id": run}
             rows.append({
                 **base, "row_kind": "submission",
                 "speedup": speedup,
@@ -345,7 +345,7 @@ def test_a_treatment_setup_that_never_recorded_its_language_still_pairs_against_
     pd.DataFrame(rows).to_csv(path, index=False)
 
     frame_all = plot.load(path, prefix="")
-    treated = frame_all[frame_all.arm == "cpf-llr-focus40-oss120b-c-cpf"]
+    treated = frame_all[frame_all.setup == "cpf-llr-focus40-oss120b-c-cpf"]
     assert set(treated.language) == {"c"}, "the setup name is the last resort when no row ever recorded it"
 
     control = plot.control_rows(frame_all)
@@ -365,9 +365,9 @@ def test_complete_side_setups_drops_a_setup_short_of_the_roster_and_names_it_on_
     """A setup missing a roster kernel is dropped, not entered at any stand-in value, and named so
     the drop is auditable."""
     roster = ["k0", "k1", "k2"]
-    control = pd.DataFrame({"arm": ["ctrl"] * 3, "benchmark": roster})
+    control = pd.DataFrame({"setup": ["ctrl"] * 3, "benchmark": roster})
     treated = pd.DataFrame(
-        {"arm": ["good-cpf", "good-cpf", "good-cpf", "short-cpf"], "benchmark": ["k0", "k1", "k2", "k0"]}
+        {"setup": ["good-cpf", "good-cpf", "good-cpf", "short-cpf"], "benchmark": ["k0", "k1", "k2", "k0"]}
     )
 
     kept = plot.complete_side_setups(control, treated, roster, "cpf", include_incomplete=False)
@@ -379,8 +379,8 @@ def test_complete_side_setups_drops_a_setup_short_of_the_roster_and_names_it_on_
 
 def test_include_incomplete_keeps_a_short_setup_and_prints_nothing(capsys: pytest.CaptureFixture[str]) -> None:
     roster = ["k0", "k1", "k2"]
-    control = pd.DataFrame({"arm": ["ctrl"] * 3, "benchmark": roster})
-    treated = pd.DataFrame({"arm": ["short-cpf"], "benchmark": ["k0"]})
+    control = pd.DataFrame({"setup": ["ctrl"] * 3, "benchmark": roster})
+    treated = pd.DataFrame({"setup": ["short-cpf"], "benchmark": ["k0"]})
 
     kept = plot.complete_side_setups(control, treated, roster, "cpf", include_incomplete=True)
 
@@ -534,7 +534,7 @@ def test_an_undelivered_kernel_still_counts_in_the_served_geomean() -> None:
     # never delivered.
     control_rows_list += episode("a-c", "qwen38", "c", "missing", "c-missing", 2.0, 1000.0)
     treated_rows_list.append({
-        "arm": "a-c-skills",
+        "setup": "a-c-skills",
         "model": "qwen38",
         "language": "c",
         "benchmark": "kmissing",
@@ -637,7 +637,7 @@ def observation_rows(setup: str, speedup: float, tokens: float, kernels: int = K
     rows: list[dict[str, object]] = []
     for kernel in range(kernels):
         common = {
-            "arm": setup,
+            "setup": setup,
             "benchmark": f"k{kernel}",
             "timing_suspect": 0,
             "baseline": "numba",
@@ -668,8 +668,8 @@ def test_pair_frame_tags_each_setup_by_name_and_which_side_of_the_pair_it_is() -
 
     assert set(tagged.leg) == {"C +skills"}
     assert set(tagged.model) == {"qwen38"}
-    assert set(tagged[tagged.skills].arm) == {BLIND_PAIR[0]}
-    assert set(tagged[~tagged.skills].arm) == {BLIND_PAIR[1]}
+    assert set(tagged[tagged.skills].setup) == {BLIND_PAIR[0]}
+    assert set(tagged[~tagged.skills].setup) == {BLIND_PAIR[1]}
 
     series = efficacy_figures.reduce_pair(tagged[~tagged.skills], tagged[tagged.skills])
     assert series is not None

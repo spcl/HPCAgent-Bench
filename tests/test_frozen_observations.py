@@ -46,7 +46,7 @@ FIELDS = (
     "judge_db",
     "row_kind",
     "run_id",
-    "arm",
+    "setup",
     "benchmark",
     "ts_ms",
     "reason",
@@ -64,7 +64,7 @@ def frozen_row(
     job: str, record: str, benchmark: str, *, setup: str = SETUP, reason: str = "", ts: int = FAR_FUTURE_TS_MS
 ) -> dict:
     return {
-        "run_root": ROOT, "job": job, "judge_db": "", "row_kind": record, "run_id": f"{setup}.n0.p0.w0", "arm": setup,
+        "run_root": ROOT, "job": job, "judge_db": "", "row_kind": record, "run_id": f"{setup}.n0.p0.w0", "setup": setup,
         "benchmark": benchmark, "ts_ms": str(ts), "reason": reason, "speedup": "2.0" if record == "submission" else "",
         "tokens": "",
     }  # fmt: skip
@@ -122,7 +122,7 @@ def test_delivered_is_a_submission_or_a_genuine_attempt_after_the_epoch() -> Non
         frozen_row("1", "task", "f"),
     ]
     assert frozen_observations.delivered(rows, lambda kernel: 10) == {"a", "b"}
-    assert frozen_observations.delivered(rows, lambda kernel: 10, setup="other-arm") == set()
+    assert frozen_observations.delivered(rows, lambda kernel: 10, setup="other-setup") == set()
 
 
 def test_delivered_drops_a_grade_made_before_its_episodes_final_attempt() -> None:
@@ -140,7 +140,7 @@ def test_delivered_never_counts_a_row_stored_under_adhoc() -> None:
     """A grade the judge filed under ``adhoc`` (or an extraction retagged
     from it) has no episode identity, so a lost job's frozen copy of it is no delivery either."""
     rows = [
-        {**frozen_row("1", "submission", "a"), "run_id": "adhoc", "arm": "adhoc"},
+        {**frozen_row("1", "submission", "a"), "run_id": "adhoc", "setup": "adhoc"},
         {**frozen_row("1", "attempt", "b", reason="incorrect"), "retagged": "transcript"},
         frozen_row("1", "submission", "c"),
     ]
@@ -214,7 +214,7 @@ def test_the_extractor_adds_a_deleted_jobs_frozen_rows_and_marks_them(tmp_path: 
     runs_root = tmp_path / "runs" / ROOT
     job_dir = runs_root / "200"
     db = job_dir / "judge" / "rank-0" / "hpcagent_bench0.db"
-    fortran = results_db.Setup(SETUP, "fortran", "cpu", experiment="llr-focus40", model="qwen38")
+    fortran = results_db.Setup(SETUP, "fortran", "cpu", study="llr-focus40", model="qwen38")
     results_seed.submission(db, f"{SETUP}.n0.p0.w0", "c", 10, job=200, setup=fortran)
     kept_worker = job_dir / "agents" / "node-0" / "problem-0-worker-0"
     kept_worker.mkdir(parents=True)

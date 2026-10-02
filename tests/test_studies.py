@@ -25,7 +25,7 @@ def test_a_blank_and_filled_setup_reads_as_one_identity() -> None:
     """One setup, packet recorded on some rows and blank on others, fills to one value."""
     frame = pd.DataFrame(
         {
-            "arm": ["a", "a", "a"],
+            "setup": ["a", "a", "a"],
             "packet": ["repo", "", None],
             "language": ["c", "c", "c"],
         }
@@ -36,14 +36,14 @@ def test_a_blank_and_filled_setup_reads_as_one_identity() -> None:
 
 def test_a_conflicting_setup_raises_by_name() -> None:
     """Two different non-blank values under one setup label is contamination, not a gap."""
-    frame = pd.DataFrame({"arm": ["a", "a"], "language": ["c", "fortran"]})
+    frame = pd.DataFrame({"setup": ["a", "a"], "language": ["c", "fortran"]})
     with pytest.raises(ValueError, match="'a'"):
         studies.fill_setup_identity(frame)
 
 
 def test_a_setup_with_no_value_anywhere_stays_blank() -> None:
     """No row of the setup ever recorded the column: filling has nothing to fill from."""
-    frame = pd.DataFrame({"arm": ["a", "a"], "packet": ["", None]})
+    frame = pd.DataFrame({"setup": ["a", "a"], "packet": ["", None]})
     filled = studies.fill_setup_identity(frame)
     assert filled.packet.map(studies.is_blank).all()
 
@@ -54,7 +54,7 @@ def test_a_language_never_recorded_on_any_row_falls_back_to_the_setup_name() -> 
     same rule :func:`hpcagent_bench.study_tags.model_of` already uses. Without this, the setup's
     language stayed blank and it shared no (model, language) key with its control at all, which is
     what crashed ``statistics/plot_score_change.py`` rather than skipping the pair."""
-    frame = pd.DataFrame({"arm": ["cpf-llr-focus40-oss120b-c-cpf"] * 2, "language": ["", None]})
+    frame = pd.DataFrame({"setup": ["cpf-llr-focus40-oss120b-c-cpf"] * 2, "language": ["", None]})
     filled = studies.fill_setup_identity(frame)
     assert filled.language.tolist() == ["c", "c"]
 
@@ -62,7 +62,7 @@ def test_a_language_never_recorded_on_any_row_falls_back_to_the_setup_name() -> 
 def foreign_kernel_frame() -> pd.DataFrame:
     """Task w38 was given ``wf_diff_skew``; its agent also scored ``wf_triangular``, the kernel task
     w39 was given. Run w40 has judge rows and no task row (extracted before task records)."""
-    common = {"run_root": "r", "job": "636537", "arm": "a"}
+    common = {"run_root": "r", "job": "636537", "setup": "a"}
     return pd.DataFrame(
         [
             {**common, "run_id": "a.n0.p38.w38", "row_kind": "task", "benchmark": "wf_diff_skew"},
@@ -96,7 +96,7 @@ def test_a_run_without_a_task_row_keeps_its_judge_rows() -> None:
 def relaunched_frame() -> pd.DataFrame:
     """Task w38 crashed at 500 and its relaunch started at 1000; the grades at 200 and 700 were
     scored on the workspace that relaunch deleted. Task w39 never relaunched (no stamp)."""
-    common = {"run_root": "r", "job": "636537", "arm": "a", "benchmark": "gemm"}
+    common = {"run_root": "r", "job": "636537", "setup": "a", "benchmark": "gemm"}
     return pd.DataFrame(
         [
             {**common, "run_id": "a.n0.p38.w38", "row_kind": "task", "ts_ms": 100, "task_final_attempt_start_ms": 1000},
@@ -133,7 +133,7 @@ def test_a_judge_row_from_before_the_tasks_final_attempt_is_dropped_with_a_warni
 def scored_relaunch(early: float, late: float | None) -> pd.DataFrame:
     """One task relaunched at ts 1000: an earlier attempt answering ``early`` at ts 700, and the final
     attempt answering ``late`` at ts 1200 (none when None)."""
-    common = {"run_root": "r", "job": "636537", "arm": "a", "benchmark": "gemm", "run_id": "a.n0.p38.w38"}
+    common = {"run_root": "r", "job": "636537", "setup": "a", "benchmark": "gemm", "run_id": "a.n0.p38.w38"}
     rows = [
         {
             **common,
@@ -209,7 +209,7 @@ def test_the_task_start_is_taken_over_the_rows_x7_kept() -> None:
 
 def cancelled_frame() -> pd.DataFrame:
     """Task w38's agent was still working when the job went down; task w39's finished."""
-    common = {"run_root": "r", "job": "636537", "arm": "a", "benchmark": "gemm"}
+    common = {"run_root": "r", "job": "636537", "setup": "a", "benchmark": "gemm"}
     return pd.DataFrame(
         [
             {**common, "run_id": "a.n0.p38.w38", "row_kind": "task", "task_cancelled": "1", "tokens": 900},
@@ -242,10 +242,10 @@ def adhoc_frame() -> pd.DataFrame:
     common = {"run_root": "r", "job": "640078", "row_kind": "submission"}
     return pd.DataFrame(
         [
-            {**common, "run_id": "a.n0.p4.w4", "arm": "a", "benchmark": "tsvc_2_s1113", "retagged": ""},
-            {**common, "run_id": "adhoc", "arm": "adhoc", "benchmark": "tsvc_2_s323", "retagged": ""},
-            {**common, "run_id": "adhoc", "arm": "adhoc", "benchmark": "tsvc_2_s323", "retagged": None},
-            {**common, "run_id": "a.n0.p5.w5", "arm": "a", "benchmark": "tsvc_2_s323", "retagged": "transcript"},
+            {**common, "run_id": "a.n0.p4.w4", "setup": "a", "benchmark": "tsvc_2_s1113", "retagged": ""},
+            {**common, "run_id": "adhoc", "setup": "adhoc", "benchmark": "tsvc_2_s323", "retagged": ""},
+            {**common, "run_id": "adhoc", "setup": "adhoc", "benchmark": "tsvc_2_s323", "retagged": None},
+            {**common, "run_id": "a.n0.p5.w5", "setup": "a", "benchmark": "tsvc_2_s323", "retagged": "transcript"},
         ]
     )
 
@@ -278,25 +278,25 @@ def test_read_observations_never_returns_an_adhoc_row(tmp_path: pathlib.Path) ->
 def clean_frame() -> pd.DataFrame:
     """The c-cpf condition of qwen38 ran twice: once as ``...-c-cpf``, then again from scratch as
     ``...-c-cpf-clean``. The c-cpfsrc condition ran once and was never re-run."""
-    common = {"run_root": "r", "job": "639060", "experiment": "llr-focus40", "model": "qwen38"}
+    common = {"run_root": "r", "job": "639060", "study": "llr-focus40", "model": "qwen38"}
     common |= {"language": "c", "device": "cpu", "harness": "claude", "benchmark": "gemm"}
     cpf = {**common, "packet": "cpf"}
     src = {**common, "packet": "cpfsrc"}
     return pd.DataFrame(
         [
-            {**cpf, "arm": "cpf-llr-focus40-qwen38-c-cpf", "run_id": "a.p1.w1", "row_kind": "task"},
-            {**cpf, "arm": "cpf-llr-focus40-qwen38-c-cpf", "run_id": "a.p1.w1", "row_kind": "submission"},
-            {**cpf, "arm": "cpf-llr-focus40-qwen38-c-cpf-clean", "run_id": "b.p1.w1", "row_kind": "task"},
-            {**cpf, "arm": "cpf-llr-focus40-qwen38-c-cpf-clean", "run_id": "b.p1.w1", "row_kind": "submission"},
-            {**src, "arm": "cpf-llr-focus40-qwen38-c-cpfsrc", "run_id": "c.p1.w1", "row_kind": "task"},
-            {**src, "arm": "cpf-llr-focus40-qwen38-c-cpfsrc", "run_id": "c.p1.w1", "row_kind": "submission"},
+            {**cpf, "setup": "cpf-llr-focus40-qwen38-c-cpf", "run_id": "a.p1.w1", "row_kind": "task"},
+            {**cpf, "setup": "cpf-llr-focus40-qwen38-c-cpf", "run_id": "a.p1.w1", "row_kind": "submission"},
+            {**cpf, "setup": "cpf-llr-focus40-qwen38-c-cpf-clean", "run_id": "b.p1.w1", "row_kind": "task"},
+            {**cpf, "setup": "cpf-llr-focus40-qwen38-c-cpf-clean", "run_id": "b.p1.w1", "row_kind": "submission"},
+            {**src, "setup": "cpf-llr-focus40-qwen38-c-cpfsrc", "run_id": "c.p1.w1", "row_kind": "task"},
+            {**src, "setup": "cpf-llr-focus40-qwen38-c-cpfsrc", "run_id": "c.p1.w1", "row_kind": "submission"},
         ]
     )
 
 
 def test_an_experiment_with_no_clean_setup_is_left_alone() -> None:
     frame = clean_frame()
-    frame = frame[~frame.arm.str.endswith("-clean")]
+    frame = frame[~frame.setup.str.endswith("-clean")]
     assert studies.fold_clean_setups(frame).equals(frame)
 
 
@@ -305,8 +305,8 @@ def test_a_clean_rerun_folds_into_the_setup_it_re_ran_and_keeps_every_row() -> N
     reported under the setup it re-ran and both waves' rows stay for the latest run to choose from."""
     kept = studies.fold_clean_setups(clean_frame())
     assert len(kept) == len(clean_frame())
-    assert (kept.arm == "cpf-llr-focus40-qwen38-c-cpf").sum() == 4
-    assert (kept.arm == "cpf-llr-focus40-qwen38-c-cpfsrc").sum() == 2
+    assert (kept.setup == "cpf-llr-focus40-qwen38-c-cpf").sum() == 4
+    assert (kept.setup == "cpf-llr-focus40-qwen38-c-cpfsrc").sum() == 2
 
 
 def test_a_one_kernel_owed_rerun_keeps_the_setups_other_kernels_and_wins_its_own() -> None:
@@ -314,19 +314,19 @@ def test_a_one_kernel_owed_rerun_keeps_the_setups_other_kernels_and_wins_its_own
     of the wave it topped up -- 40 kernels became the rerun's one."""
     common = {"row_kind": "task", "run_root": "r", "language": "c", "packet": "", "harness": "claude"}
     rows = [
-        {**common, "arm": "x-qwen38-c", "job": "1", "run_id": f"a{i}", "benchmark": f"k{i}", "ts_ms": 1}
+        {**common, "setup": "x-qwen38-c", "job": "1", "run_id": f"a{i}", "benchmark": f"k{i}", "ts_ms": 1}
         for i in range(3)
-    ] + [{**common, "arm": "x-qwen38-c-clean", "job": "2", "run_id": "b0", "benchmark": "k0", "ts_ms": 2}]
+    ] + [{**common, "setup": "x-qwen38-c-clean", "job": "2", "run_id": "b0", "benchmark": "k0", "ts_ms": 2}]
     latest = population.latest_runs(studies.fold_clean_setups(pd.DataFrame(rows)))
     assert sorted(latest.benchmark) == ["k0", "k1", "k2"]
     assert latest.set_index("benchmark").loc["k0", "job"] == "2"
-    assert set(latest.arm) == {"x-qwen38-c"}
+    assert set(latest.setup) == {"x-qwen38-c"}
 
 
 def test_a_blank_setup_stays_blank_through_the_fold() -> None:
-    frame = pd.DataFrame({"arm": [math.nan, "x-c-clean"], "row_kind": ["call", "task"]})
+    frame = pd.DataFrame({"setup": [math.nan, "x-c-clean"], "row_kind": ["call", "task"]})
     kept = studies.fold_clean_setups(frame)
-    assert studies.is_blank(kept.arm.iloc[0]) and kept.arm.iloc[1] == "x-c"
+    assert studies.is_blank(kept.setup.iloc[0]) and kept.setup.iloc[1] == "x-c"
 
 
 @pytest.mark.parametrize(
@@ -342,20 +342,20 @@ def test_a_blank_setup_stays_blank_through_the_fold() -> None:
 def test_a_packet_token_after_the_model_is_the_setups_packet(setup: str, packet: str) -> None:
     """Most ``-skills`` setups never recorded their packet; without the name the skills contrast found one pair of
     fifteen. Replaces the earlier rule that packet had no name fallback, which is what lost those pairs."""
-    frame = pd.DataFrame({"arm": [setup] * 2, "packet": ["", None]})
+    frame = pd.DataFrame({"setup": [setup] * 2, "packet": ["", None]})
     assert studies.fill_setup_identity(frame).packet.tolist() == [packet, packet]
 
 
 @pytest.mark.parametrize("setup", ["cpf-llr-focus40-qwen38-c", "cpf-llr-focus40-oss120b-fortran"])
 def test_the_study_prefix_never_reads_as_a_packet(setup: str) -> None:
     """The legacy ``cpf-llr-focus40`` spells ``cpf`` before the model; the control setup must stay the control."""
-    frame = pd.DataFrame({"arm": [setup], "packet": [""]})
+    frame = pd.DataFrame({"setup": [setup], "packet": [""]})
     assert studies.is_blank(studies.fill_setup_identity(frame).packet.iloc[0])
 
 
 def test_the_setup_name_wins_over_a_rows_claimed_language_and_the_claim_is_kept() -> None:
     """A HIP setup's agent can submit C; the setup still ran HIP, and the row's claim stays inspectable."""
-    frame = pd.DataFrame({"arm": ["gpu-llr-focus40-qwen38-hip"] * 3, "language": ["hip", "c", ""]})
+    frame = pd.DataFrame({"setup": ["gpu-llr-focus40-qwen38-hip"] * 3, "language": ["hip", "c", ""]})
     filled = studies.fill_setup_identity(frame)
     assert filled.language.tolist() == ["hip", "hip", "hip"]
     assert filled.recorded_language.tolist() == ["hip", "c", ""]
@@ -363,14 +363,14 @@ def test_the_setup_name_wins_over_a_rows_claimed_language_and_the_claim_is_kept(
 
 def test_two_setups_are_filled_independently() -> None:
     """One setup's recorded value never leaks into a different setup's blank cells."""
-    frame = pd.DataFrame({"arm": ["a", "a", "b", "b"], "packet": ["repo", "", "", ""]})
+    frame = pd.DataFrame({"setup": ["a", "a", "b", "b"], "packet": ["repo", "", "", ""]})
     filled = studies.fill_setup_identity(frame)
     assert filled.packet.tolist() == ["repo", "repo", "", ""]
 
 
 def test_a_blank_setup_label_is_never_pooled_into_one_identity() -> None:
     """Rows with no setup at all (an ad-hoc grade) keep their own recorded values, unfilled."""
-    frame = pd.DataFrame({"arm": ["", None], "language": ["c", "fortran"]})
+    frame = pd.DataFrame({"setup": ["", None], "language": ["c", "fortran"]})
     filled = studies.fill_setup_identity(frame)
     assert filled.language.tolist() == ["c", "fortran"]
 
@@ -395,7 +395,7 @@ def test_is_blank_rejects_a_real_value(value: object) -> None:
 def test_read_observations_fills_setup_identity_from_a_csv(tmp_path: pathlib.Path) -> None:
     """The public entry point applies the fill, not just the helper underneath it."""
     path = tmp_path / "observations.csv"
-    pd.DataFrame({"arm": ["a", "a"], "packet": ["repo", ""]}).to_csv(path, index=False)
+    pd.DataFrame({"setup": ["a", "a"], "packet": ["repo", ""]}).to_csv(path, index=False)
     frame = studies.read_observations(path)
     assert frame.packet.tolist() == ["repo", "repo"]
 
@@ -412,7 +412,7 @@ def test_a_column_no_row_in_the_table_ever_recorded_still_fills_from_the_setup_n
     never stamped a language produces, and it is the shape a paired figure reads."""
     frame = pd.DataFrame(
         {
-            "arm": ["llr-focus40-qwen38-c", "llr-focus40-qwen38-c"],
+            "setup": ["llr-focus40-qwen38-c", "llr-focus40-qwen38-c"],
             "language": [math.nan, math.nan],
         }
     )
@@ -457,23 +457,23 @@ def test_the_dc_and_perf_playbook_spellings_read_as_one_setup() -> None:
     """ "dc should be an alias for perf playbook": both spellings reach analysis as
     ONE setup, so the latest run per kernel picks between them."""
     frame = pd.DataFrame(
-        {"arm": ["scicomp-dc-oss120b-plain-clean", "scicomp-perf-playbook-oss120b-plain"], "benchmark": ["a", "a"]}
+        {"setup": ["scicomp-dc-oss120b-plain-clean", "scicomp-perf-playbook-oss120b-plain"], "benchmark": ["a", "a"]}
     )
     folded = studies.fold_clean_setups(studies.fold_renamed_setups(frame))
-    assert set(folded.arm) == {"scicomp40-oss120b-c"}
+    assert set(folded.setup) == {"scicomp40-oss120b-c"}
 
 
 def test_both_waves_of_a_renamed_setup_become_one_setup() -> None:
     frame = pd.DataFrame(
-        {"arm": ["llrblind-kimi27sglang-c", "llrblind-cmp-kimi27sglang-c-clean"], "benchmark": ["a", "b"]}
+        {"setup": ["llrblind-kimi27sglang-c", "llrblind-cmp-kimi27sglang-c-clean"], "benchmark": ["a", "b"]}
     )
-    assert set(studies.fold_renamed_setups(frame).arm) == {"llr40-kimi27sglang-c-blind"}
+    assert set(studies.fold_renamed_setups(frame).setup) == {"llr40-kimi27sglang-c-blind"}
 
 
 def graded_episode(benchmark: str, graded: list[tuple[str, str]]) -> pd.DataFrame:
     """One episode's task row, a call, and its graded ``/submit`` rows as ``(record, reason)`` in the
     order the agent sent them (ts 200, 300, ...)."""
-    common = {"run_root": "r", "job": "648827", "run_id": "a.n0.p2.w2", "arm": "a", "benchmark": benchmark}
+    common = {"run_root": "r", "job": "648827", "run_id": "a.n0.p2.w2", "setup": "a", "benchmark": benchmark}
     rows = [{**common, "row_kind": "task", "ts_ms": 100, "reason": ""}, {**common, "row_kind": "call", "ts_ms": 150}]
     rows += [
         {**common, "row_kind": record, "ts_ms": 200 + 100 * index, "attempt_index": index + 1, "reason": reason}

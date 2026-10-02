@@ -160,7 +160,7 @@ def agent_indices(run_id: str | None) -> tuple[str, str, str]:
 #: The identity a row is selected and grouped by, read off ``runs`` rather than off a name. The
 #: launcher writes every one of these into the setup's .env (``hpcagent_bench/cluster/record_identity.sh``) and
 #: the judge copies them onto the run, so a query filters on columns.
-IDENTITY: tuple[str, ...] = ("experiment", "model", "language", "device", "packet", "rep", "arm", "harness")
+IDENTITY: tuple[str, ...] = ("study", "model", "language", "device", "packet", "rep", "setup", "harness")
 
 
 def discover_databases(run_globs: Iterable[str]) -> list[Database]:
@@ -212,7 +212,7 @@ RECORD_WHERE: dict[str, str] = {
 
 
 def read_database(db: Database, want: dict[str, frozenset[str]]) -> Iterator[dict[str, Any]]:
-    """Rows one results DB (schema v1) contributes. Never raises on a bad database -- it yields nothing
+    """Rows one results DB (schema v2) contributes. Never raises on a bad database -- it yields nothing
     and warns.
 
     An unreadable database in an experiment of hundreds is a fact to report, not a reason to abandon
@@ -223,7 +223,7 @@ def read_database(db: Database, want: dict[str, frozenset[str]]) -> Iterator[dic
 
     try:
         conn = results_db.open_ro(db.path)
-    except (OSError, sqlite3.Error, results_db.NotV1Error) as exc:
+    except (OSError, sqlite3.Error, results_db.SchemaVersionError) as exc:
         LOG.warning("studies: cannot read %s (%s); skipped", db.path, exc)
         return
     # closing(), not `with conn:` -- a connection's own context manager commits and never closes.
@@ -280,7 +280,7 @@ def observations(run_globs: Iterable[str], **identity: str | Iterable[str]) -> "
 
 
 #: Identity columns worth filling per setup when an experiment recorded them on only part of a setup's
-#: rows. Not the whole of :data:`IDENTITY`: "experiment", "model", "device", "rep", "arm" and
+#: rows. Not the whole of :data:`IDENTITY`: "study", "model", "device", "rep", "setup" and
 #: "harness" have never shown this gap, and filling them silently would hide a real difference
 #: between two runs a caller assumed were one setup.
 FILLABLE_IDENTITY: tuple[str, ...] = ("language", "packet")
@@ -334,7 +334,7 @@ def fill_setup_identity(frame: "pd.DataFrame", columns: Sequence[str] = FILLABLE
 
     A blank setup label (no setup, or an ad-hoc grade) names no condition, so its rows keep what they recorded.
     """
-    if "arm" not in frame.columns:
+    if "setup" not in frame.columns:
         return frame
     filled = frame.copy()
     for column in columns:
@@ -346,7 +346,7 @@ def fill_setup_identity(frame: "pd.DataFrame", columns: Sequence[str] = FILLABLE
         # filling it, so the dtype is settled here instead of being discovered by a crash on the one
         # experiment whose language nothing stamped.
         filled[column] = filled[column].astype("str")
-        for setup, group in filled.groupby("arm", sort=False):
+        for setup, group in filled.groupby("setup", sort=False):
             if is_blank(setup):
                 continue
             value = setup_value(str(setup), column, group[column])
@@ -650,23 +650,23 @@ def renamed_setup(setup: str) -> str:
 def fold_renamed_setups(frame: "pd.DataFrame") -> "pd.DataFrame":
     """``frame`` with every renamed setup under its current name, so the two waves are one setup and the
     latest run per kernel (``population.latest_runs``) picks between them."""
-    if frame.empty or "arm" not in frame.columns:
+    if frame.empty or "setup" not in frame.columns:
         return frame
     # pandas's default "str" dtype keeps a missing cell as NaN straight through .astype(str)
     # (PDEP-14), so a blank/adhoc setup-less row stays a float and renamed_setup's .startswith crashes
     # on it -- the same gap fill_setup_identity's language/packet columns settle with the same call.
-    return frame.assign(arm=frame["arm"].astype(str).fillna("").map(renamed_setup))
+    return frame.assign(setup=frame["setup"].astype(str).fillna("").map(renamed_setup))
 
 
 def fold_clean_setups(frame: "pd.DataFrame") -> "pd.DataFrame":
     """``frame`` with every ``-clean`` setup under the setup it re-ran (spec X9). Nothing is dropped:
     the waves pool and the latest run per kernel (``population.latest_runs``) picks between them,
     so an owed rerun of a few kernels keeps the rest of the wave it topped up."""
-    if frame.empty or "arm" not in frame.columns:
+    if frame.empty or "setup" not in frame.columns:
         return frame
-    setups = frame["arm"]
+    setups = frame["setup"]
     folded = setups.astype(str).str.removesuffix(study_tags.CLEAN_SUFFIX)
-    return frame.assign(arm=folded.where(setups.notna(), setups))
+    return frame.assign(setup=folded.where(setups.notna(), setups))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -691,7 +691,7 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit(f"no observations for {selection or '(every identity)'}")
     args.out.parent.mkdir(parents=True, exist_ok=True)
     frame.to_csv(args.out, index=False)
-    setups = sorted(frame["arm"].unique())
+    setups = sorted(frame["setup"].unique())
     print(f"{len(frame)} observations over {len(setups)} setups -> {args.out}")
     print(f"setups: {', '.join(setups)}")
     return 0

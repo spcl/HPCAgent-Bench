@@ -3,7 +3,7 @@
 """The POPULATION an aggregate is taken over, made explicit so a wrong one cannot be expressed.
 
 * ONE DENOMINATOR. ``baseline`` is a per-job property of every graded row, and the same agent work
-  reads very differently over two denominators. :class:`ArmAggregate` carries its ``baseline`` and
+  reads very differently over two denominators. :class:`SetupAggregate` carries its ``baseline`` and
   :func:`ratio` refuses two that disagree.
 * ONE BASELINE RULE. A scientific_computing denominator is either the track's single kind or the
   FASTEST of ``c-autopar``, ``c`` and ``numba``; both can read ``baseline=c-autopar`` on one kernel,
@@ -20,7 +20,7 @@ TWO POLICIES, AND A TABLE MUST NAME ITS OWN. ``solved`` is "how good when it wor
 over the kernels the setup verified. ``served`` is "how good overall" -- every kernel the setup was
 GIVEN, with a non-delivery entered at 1.0, because an agent that died or never verified anything
 left the baseline standing and that is a real outcome of the setup. Both are legitimate and they
-answer different questions, so :class:`ArmAggregate` stores which one it is and :func:`ratio`
+answer different questions, so :class:`SetupAggregate` stores which one it is and :func:`ratio`
 refuses to divide one by the other.
 
 The ``served`` roster is the kernels the setup RAN (:func:`ran_rows`), never the full roster: a
@@ -184,9 +184,9 @@ def condition_rows(frame: "pd.DataFrame") -> "pd.DataFrame":
     Every per-setup table and figure starts from these. A pseudo-setup (:data:`PSEUDO_SETUPS`, or no setup at
     all) is not a condition, and reading it as one puts a phantom column beside the real setups.
     """
-    if "arm" not in frame.columns:
+    if "setup" not in frame.columns:
         raise MixedPopulationError("cannot select the conditions of a frame without a setup column")
-    labels = frame["arm"].fillna("").astype(str).str.strip()
+    labels = frame["setup"].fillna("").astype(str).str.strip()
     return ran_rows(frame[~labels.isin(PSEUDO_SETUPS)])
 
 
@@ -203,9 +203,9 @@ def ran_rows(frame: "pd.DataFrame") -> "pd.DataFrame":
     than entered as a failure. One the setup ran and never solved stays, at 1x
     under ``served`` and unsolved under ``solved``. The rows stay in the database.
     """
-    if not {"row_kind", "arm", "benchmark"} <= set(frame.columns):
+    if not {"row_kind", "setup", "benchmark"} <= set(frame.columns):
         return frame
-    key = frame["arm"].fillna("").astype(str) + "\x1f" + frame["benchmark"].fillna("").astype(str)
+    key = frame["setup"].fillna("").astype(str) + "\x1f" + frame["benchmark"].fillna("").astype(str)
     ran = set(key[frame["row_kind"].isin(RAN_RECORDS)])
     return frame[key.isin(ran)]
 
@@ -223,13 +223,13 @@ def complete_setups(frame: "pd.DataFrame", roster: Sequence[str]) -> tuple[list[
     selection listed them, not a sorted one. ``dropped`` maps each excluded setup to how many roster
     kernels it has at least one row for, so a caller can print "kept N/40" beside the drop.
     """
-    missing = [name for name in ("arm", "benchmark") if name not in frame.columns]
+    missing = [name for name in ("setup", "benchmark") if name not in frame.columns]
     if missing:
         raise MixedPopulationError(f"cannot check roster coverage without {missing}")
     needed = set(roster)
-    setups = frame["arm"].fillna("").astype(str)
+    setups = frame["setup"].fillna("").astype(str)
     order = [setup for setup in dict.fromkeys(setups) if setup not in PSEUDO_SETUPS]
-    served = frame.assign(arm=setups).groupby("arm")["benchmark"].agg(lambda column: set(column.astype(str)))
+    served = frame.assign(setup=setups).groupby("setup")["benchmark"].agg(lambda column: set(column.astype(str)))
     kept: list[str] = []
     dropped: dict[str, int] = {}
     for setup in order:
@@ -548,7 +548,7 @@ def valid_submission_rows(frame: "pd.DataFrame") -> "pd.Series":
     return stamped | (record.isin(("submission", "attempt")) & (status == "unsolved"))
 
 
-def latest_runs(frame: "pd.DataFrame", by: Sequence[str] = ("arm", "benchmark")) -> "pd.DataFrame":
+def latest_runs(frame: "pd.DataFrame", by: Sequence[str] = ("setup", "benchmark")) -> "pd.DataFrame":
     """Every row, of any record type, of each ``by`` group's chosen run: the run holding the group's
     NEWEST VALID submission (:func:`valid_submission_rows`), across all runs. A
     rerun that crashed or timed out without a valid answer therefore does not erase an older valid
@@ -717,7 +717,7 @@ def setup_kernel_answers(
     episodes = episodes[episodes[SUSPECT_COLUMN].map(is_reportable).astype(bool)]
     if policy == RepeatPolicy.LATEST or episodes.empty:
         return episodes
-    group = ["arm", "benchmark"]
+    group = ["setup", "benchmark"]
     ordered = episodes.sort_values([*group, "speedup"], kind="stable")
     position = ordered.groupby(group).cumcount()
     size = ordered.groupby(group).speedup.transform("size")
@@ -852,14 +852,14 @@ def kernel_tokens(
     one setup ran more than once is reduced by ``repeats``: ``latest`` charges the latest run's total
     (:func:`latest_runs`), never the sum over reruns, which would bill a setup for being resubmitted;
     ``median`` charges the median over runs that repeat by design. ``by`` groups the result,
-    ``("arm", "benchmark")`` for a table over setups; a slice grouped by kernel alone that holds several
+    ``("setup", "benchmark")`` for a table over setups; a slice grouped by kernel alone that holds several
     setups of one condition adds their latest runs.
     """
     import pandas as pd
 
     policy = repeat_policy(repeats)
     if policy == RepeatPolicy.LATEST:
-        frame = latest_runs(frame, tuple(name for name in ("arm", "benchmark") if name in frame.columns))
+        frame = latest_runs(frame, tuple(name for name in ("setup", "benchmark") if name in frame.columns))
     episodes = episode_tokens(frame, by)
     if episodes.empty:
         return pd.Series(dtype=float, name="tokens")

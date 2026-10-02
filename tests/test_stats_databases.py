@@ -40,7 +40,7 @@ def seed(db: pathlib.Path, setup: str, speedups: tuple[float, ...]) -> None:
 def counts(db: pathlib.Path) -> dict[str, int]:
     with contextlib.closing(sqlite3.connect(db)) as conn:
         return {
-            table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] for table in ("arms", "runs", "grades")
+            table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] for table in ("setups", "runs", "grades")
         }
 
 
@@ -58,11 +58,11 @@ def test_two_databases_are_unioned_with_their_ids_remapped(tmp_path: pathlib.Pat
     seed(core, CORE_SETUP, (2.0, 3.0))
     seed(archive, CPF_SETUP, (4.0,))
     with databases.union([core, archive]) as db:
-        assert counts(db) == {"arms": 2, "runs": 2, "grades": 5}
+        assert counts(db) == {"setups": 2, "runs": 2, "grades": 5}
         with contextlib.closing(sqlite3.connect(db)) as conn:
             finals = conn.execute(
-                "SELECT r.arm, o.speedup FROM grades g JOIN grades o ON o.id = g.of_grade_id "
-                "JOIN runs r ON r.id = o.run_id WHERE g.kind = 'final' ORDER BY r.arm"
+                "SELECT r.setup, o.speedup FROM grades g JOIN grades o ON o.id = g.of_grade_id "
+                "JOIN runs r ON r.id = o.run_id WHERE g.kind = 'final' ORDER BY r.setup"
             ).fetchall()
             assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
     assert finals == [(CPF_SETUP, 4.0), (CORE_SETUP, 3.0)]
@@ -91,8 +91,8 @@ def test_the_loader_reads_the_cpf_setups_only_when_the_archive_is_passed(tmp_pat
     seed(archive, CPF_SETUP, (4.0,))
     alone, _ = dataset.build("llr40", tmp_path / "alone.db", frozen=None, root=tmp_path, dbs=(core,))
     both, _ = dataset.build("llr40", tmp_path / "both.db", frozen=None, root=tmp_path, dbs=(core, archive))
-    assert set(alone["arm"]) == {CORE_SETUP}
-    assert set(both["arm"]) == {CORE_SETUP, CPF_SETUP}
+    assert set(alone["setup"]) == {CORE_SETUP}
+    assert set(both["setup"]) == {CORE_SETUP, CPF_SETUP}
 
 
 def test_the_extractor_refuses_two_named_databases_that_disagree_on_a_setup(tmp_path: pathlib.Path) -> None:

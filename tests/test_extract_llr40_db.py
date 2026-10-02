@@ -21,7 +21,7 @@ ROWS = [
         "run_root": "llr-focus40-20260914",
         "job": 636541,
         "row_kind": "submission",
-        "arm": "a",
+        "setup": "a",
         "benchmark": "k2",
         "speedup": 2.5,
         "tokens": None,
@@ -32,7 +32,7 @@ ROWS = [
         "run_root": "llr-focus40-20260914",
         "job": 636541,
         "row_kind": "call",
-        "arm": "a",
+        "setup": "a",
         "benchmark": "k1",
         "speedup": None,
         "tokens": 900,
@@ -51,7 +51,7 @@ def test_the_db_reads_back_as_the_rows_the_csv_holds(tmp_path: pathlib.Path) -> 
     assert list(from_db.columns) == list(from_csv.columns)
     # read_observations appends what each identity column recorded (recorded_<column>) after the extractor's fields.
     assert [c for c in from_db.columns if not c.startswith("recorded_")] == list(fields)
-    for column in ("benchmark", "arm", "job"):
+    for column in ("benchmark", "setup", "job"):
         assert from_db[column].tolist() == from_csv[column].tolist(), column
     for column in ("speedup", "tokens"):
         pd.testing.assert_series_equal(from_db[column], from_csv[column], check_dtype=False)

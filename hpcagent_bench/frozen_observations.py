@@ -160,7 +160,9 @@ def lost_jobs(root: pathlib.Path | None, run_roots: Iterable[pathlib.Path]) -> d
 def setups_of(rows: Iterable[dict[str, str]]) -> set[str]:
     """The setups a frozen job's rows name (placeholder setups excluded)."""
     return {
-        row["arm"] for row in rows if row.get("arm") and row["arm"] not in (ADHOC_RUN_ID, "${HPCAGENT_BENCH_RUN_ID}")
+        row["setup"]
+        for row in rows
+        if row.get("setup") and row["setup"] not in (ADHOC_RUN_ID, "${HPCAGENT_BENCH_RUN_ID}")
     }
 
 
@@ -188,7 +190,7 @@ def delivered(rows: Iterable[dict[str, str]], since_ms: Callable[[str], int], se
     cuts = final_attempt_cuts(rows)
     newest: dict[str, int] = {}
     for row in rows:
-        if setup and row.get("arm") != setup:
+        if setup and row.get("setup") != setup:
             continue
         if stored_adhoc(row.get("run_id"), row.get(RETAGGED_COLUMN)):
             continue

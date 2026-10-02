@@ -136,7 +136,7 @@ def load_all(paths: Sequence[pathlib.Path], card: cost.CostModel = cost.resolve(
 def load(path: pathlib.Path, prefix: str, card: cost.CostModel = cost.resolve()) -> pd.DataFrame:
     frame = population.condition_rows(cost.priced(studies.read_observations(path), card))
     if prefix:
-        frame = frame[frame["arm"].astype(str).str.startswith(prefix)]
+        frame = frame[frame["setup"].astype(str).str.startswith(prefix)]
     # No filter on speedup or tokens here: score and cost come from different record types, and a
     # predicate over both columns would drop every graded submission.
     #
@@ -146,7 +146,7 @@ def load(path: pathlib.Path, prefix: str, card: cost.CostModel = cost.resolve())
         frame = frame.assign(packet="")
     packet = frame["packet"].fillna("").astype(str).map(packets.canonical)
     frame = frame.assign(
-        model=frame["arm"].astype(str).map(study_tags.model_of),
+        model=frame["setup"].astype(str).map(study_tags.model_of),
         packet=packet,
         skills=packet.map(lambda p: packets.has_part(p, "skills")),
     )
@@ -173,7 +173,7 @@ def complete_side_setups(
     of the roster is dropped and named on stderr with its coverage, never silently."""
     combined = pd.concat([control, treated], ignore_index=True)
     if include_incomplete:
-        return set(combined["arm"].dropna().astype(str).unique())
+        return set(combined["setup"].dropna().astype(str).unique())
     kept, dropped = population.complete_setups(combined, roster)
     for setup in sorted(dropped):
         print(f"{treatment}: dropping {setup} ({dropped[setup]}/{len(roster)} roster kernels)", file=sys.stderr)
@@ -196,15 +196,15 @@ def one_treatment_panel(
     if control.empty or treated.empty:
         return None
     keep = complete_side_setups(control, treated, roster, treatment, include_incomplete)
-    control = control[control["arm"].astype(str).isin(keep)]
-    treated = treated[treated["arm"].astype(str).isin(keep)]
+    control = control[control["setup"].astype(str).isin(keep)]
+    treated = treated[treated["setup"].astype(str).isin(keep)]
     if control.empty or treated.empty:
         return None
     stats = points(control, treated, repeats, over, card)
     if stats.empty:
         return None
     frame = treatment_frame(frame_all, treatment)
-    frame = frame[frame["arm"].astype(str).isin(keep)]
+    frame = frame[frame["setup"].astype(str).isin(keep)]
     return stats, frame
 
 
@@ -225,10 +225,10 @@ def setup_languages(frame: pd.DataFrame) -> dict[str, str]:
     that predate it. gitscicomp10's setups are ``git-scicomp-<model>-repo`` and carry no language token
     at all, so reading the name there gives an empty leg -- a blank tick and an unnamed shape.
     """
-    if "arm" not in frame.columns or "language" not in frame.columns:
+    if "setup" not in frame.columns or "language" not in frame.columns:
         return {}
-    known = frame[["arm", "language"]].dropna().astype(str)
-    return dict(zip(known["arm"], known["language"], strict=True))
+    known = frame[["setup", "language"]].dropna().astype(str)
+    return dict(zip(known["setup"], known["language"], strict=True))
 
 
 #: The ``intervention=`` of a panel whose pairs differ in the agent harness rather than a packet.
@@ -370,7 +370,7 @@ def pair_frame(frame_all: pd.DataFrame, pairs: Sequence[tuple[str, str]], interv
         recorded = known.get(pair[0], "") or known.get(pair[1], "")
         leg = pair_leg_label(pair, intervention, recorded)
         for setup, skills in zip(pair, (True, False), strict=True):
-            part = frame_all[frame_all["arm"].astype(str) == setup]
+            part = frame_all[frame_all["setup"].astype(str) == setup]
             if part.empty:
                 continue
             parts.append(
@@ -557,7 +557,7 @@ def spec_experiment(
     """``(every row, the no-packet control, the roster)`` of the spec's ONE experiment, the roster
     being every kernel any of its setups touched; ``None`` without a control."""
     observations = spec_observations(spec, default_observations)
-    frame_all = load(observations[0], spec.get("experiment", default_study), card)
+    frame_all = load(observations[0], spec.get("study", default_study), card)
     control = control_rows(frame_all)
     if control.empty:
         return None

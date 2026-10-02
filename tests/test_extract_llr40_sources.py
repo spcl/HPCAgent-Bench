@@ -30,9 +30,7 @@ def write_run(db_path: pathlib.Path, run_id: str, kernel: str, language: str, de
     setup = extract_llr40.setup_of(run_id)
     db_path.parent.mkdir(parents=True)
     with contextlib.closing(results_db.open_db(db_path)) as conn:
-        results_db.ensure_setup(
-            conn, results_db.Setup(setup, language, device, experiment="llr-focus40", model="oss120b")
-        )
+        results_db.ensure_setup(conn, results_db.Setup(setup, language, device, study="llr-focus40", model="oss120b"))
         run = results_db.ensure_run(conn, setup, run_id, int(db_path.parents[2].name))
         stamp = {"preset": "fuzzed", "datatype": "float64", "source_mode": "restricted", "baseline": "c"}
         if credited:
@@ -101,5 +99,5 @@ def test_the_sources_index_row_carries_the_workers_own_setup_and_run_id(tmp_path
     with (out / "llr40_sources_index.csv").open(newline="", encoding="utf-8") as handle:
         rows = [row for row in csv.DictReader(handle) if row["worker_index"] == "17" and row["kind"] == "candidate"]
     assert len(rows) == 1
-    assert rows[0]["arm"] == SETUP_B
+    assert rows[0]["setup"] == SETUP_B
     assert rows[0]["run_id"] == f"{SETUP_B}.n0.p17.w17"

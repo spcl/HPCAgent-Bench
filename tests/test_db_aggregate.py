@@ -29,7 +29,7 @@ def _seed(path: str, *, run: str, kernels: list[str], with_results: bool = True,
     can attribute."""
     setup = run.split(".")[0]
     with contextlib.closing(recording.connect(path)) as conn:
-        results_db.ensure_setup(conn, results_db.Setup(setup, language, "cpu", experiment="agg", model="stub-model"))
+        results_db.ensure_setup(conn, results_db.Setup(setup, language, "cpu", study="agg", model="stub-model"))
         run_id = results_db.ensure_run(conn, setup, run, None)
         for kernel in kernels:
             stamp = {"preset": "S", "datatype": "float64", "source_mode": "restricted", "baseline": "c"}
@@ -120,7 +120,7 @@ def test_two_ranks_of_one_run_merge_instead_of_colliding(tmp_path: pathlib.Path)
     assert _count(base, "runs") == 1
     assert len(submissions(base)) == 1
     with results_db.reading(base) as conn:
-        assert [r[0] for r in conn.execute("SELECT language FROM arms")] == ["c"]
+        assert [r[0] for r in conn.execute("SELECT language FROM setups")] == ["c"]
 
 
 def test_aggregate_merges_a_run_id_shared_by_multiple_shards(tmp_path) -> None:
@@ -134,7 +134,7 @@ def test_aggregate_merges_a_run_id_shared_by_multiple_shards(tmp_path) -> None:
 
     assert _count(base, "runs") == 1
     with results_db.reading(base) as conn:
-        rows = [tuple(r) for r in conn.execute("SELECT label, model, arm FROM runs JOIN arms USING (arm)")]
+        rows = [tuple(r) for r in conn.execute("SELECT label, model, setup FROM runs JOIN setups USING (setup)")]
     assert rows == [("shared", "stub-model", "shared")]
     # The grades still concatenate; only the run's identity dedups.
     assert len(submissions(base)) == 2

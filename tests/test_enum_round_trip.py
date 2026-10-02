@@ -30,8 +30,8 @@ def test_the_recorded_device_reads_back_to_its_member(
     """``setups.device`` holds the member's value, and parsing it gives the member back."""
     monkeypatch.setenv("HPCAGENT_BENCH_RECORD_DEVICE", device.value)
     config.reload()
-    recording.open_run(judge_db, "arm.n0.p0.w0")
-    (stored,) = judge_db.execute("SELECT device FROM arms WHERE arm = 'arm'").fetchone()
+    recording.open_run(judge_db, "setup.n0.p0.w0")
+    (stored,) = judge_db.execute("SELECT device FROM setups WHERE setup = 'setup'").fetchone()
     assert stored == device.value
     assert RecordDevice(stored) is device
 

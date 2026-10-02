@@ -22,7 +22,7 @@ def row(job: str, benchmark: str, setup: str = SETUP, frozen: str = "0", **extra
         "run_root": "git-scicomp-20260917",
         "job": job,
         "row_kind": "submission",
-        "arm": setup,
+        "setup": setup,
         "benchmark": benchmark,
         "speedup": 2.0,
         frozen_observations.COLUMN: frozen,
@@ -77,7 +77,7 @@ def test_a_retired_setup_is_dropped_and_counted_apart_from_a_foreign_one(
     root. Reporting them as one number hides which of the two shrank a population."""
     live = pd.DataFrame([row("100", "dfa"), row("101", "dfa", setup=RETIRED), row("102", "dfa", setup=FOREIGN)])
     frame, provenance = dataset.fuse(selection, live, pd.DataFrame())
-    assert list(frame["arm"]) == [SETUP]
+    assert list(frame["setup"]) == [SETUP]
     assert (provenance.dropped_retired, provenance.dropped_foreign) == (0, 2)
 
 
@@ -99,7 +99,7 @@ def test_a_frame_written_as_a_db_and_as_a_csv_reads_back_the_same(
     dataset.write_csv(frame, tmp_path / "x.csv")
     from_db, from_csv = dataset.load(tmp_path / "x.db"), dataset.load(tmp_path / "x.csv")
     assert list(from_db["benchmark"]) == list(from_csv["benchmark"]) == ["dfa", "kmp"]
-    assert list(from_db["arm"]) == list(from_csv["arm"])
+    assert list(from_db["setup"]) == list(from_csv["setup"])
 
 
 def test_writing_a_db_twice_replaces_it_rather_than_appending(

@@ -109,8 +109,8 @@ def test_an_owed_wave_root_is_read_under_its_setups_real_key(
         ("owed-llr-focus40-20260922", "llr-focus40", "llr-focus40-qwen38-c"),
         ("owed-llr-focus40-blind-20260922", "llr-focus40-blind", "llrblind-qwen38-c"),
     ):
-        monkeypatch.setenv("HPCAGENT_BENCH_RECORD_EXPERIMENT", study)
-        monkeypatch.setenv("HPCAGENT_BENCH_RECORD_ARM", setup)
+        monkeypatch.setenv("HPCAGENT_BENCH_RECORD_STUDY", study)
+        monkeypatch.setenv("HPCAGENT_BENCH_RECORD_SETUP", setup)
         db = tmp_path / root / "647033" / "judge" / "rank-0" / "hpcagent_bench0.db"
         db.parent.mkdir(parents=True)
         recording.record(
@@ -131,7 +131,7 @@ def test_an_owed_wave_root_is_read_under_its_setups_real_key(
     selection = experiments.resolve("llr40", root=tmp_path)
     frame = dataset.extract(selection)
     graded = frame[frame["row_kind"] == "submission"]
-    assert graded["arm"].tolist() == ["llr-focus40-qwen38-c"]
+    assert graded["setup"].tolist() == ["llr-focus40-qwen38-c"]
     assert set(frame["run_root"]) == {"owed-llr-focus40-20260922"}
 
 

@@ -655,8 +655,8 @@ def leg_labels(frame: pd.DataFrame) -> pd.Series:
     """
     if "leg" in frame:
         return frame["leg"].astype(str)
-    if "arm" in frame:
-        return frame["arm"].astype(str).map(study_tags.setup_delivery_name)
+    if "setup" in frame:
+        return frame["setup"].astype(str).map(study_tags.setup_delivery_name)
     return frame["language"].astype(str).map(study_tags.language_name)
 
 
@@ -1953,7 +1953,7 @@ class DotColumn:
     differences: frozenset[DifferenceKey]
 
 
-#: An ArmPoint with nothing in it: the slot a delivery that has not been measured yet keeps, so a
+#: An SetupPoint with nothing in it: the slot a delivery that has not been measured yet keeps, so a
 #: column's spacing is its FINAL spacing and the figure does not re-lay out when the data lands.
 EMPTY_POINT = SetupPoint(math.nan, math.nan, math.nan, math.nan, math.nan, math.nan, 0, 0)
 

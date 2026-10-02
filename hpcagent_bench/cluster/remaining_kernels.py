@@ -51,7 +51,7 @@ runs, not to grade the roster, and a smoke agent typically gets a fraction of th
 :data:`SMOKE_JOBS` names the rest by job id, for a smoke run that reused a real setup's name (see its
 own docstring for why that cannot be told apart from the setup name or the run's recorded fields).
 
-The setup is read from ``runs.arm`` in the job's own shard DBs, verified against ``sacct`` job names
+The setup is read from ``runs.setup`` in the job's own shard DBs, verified against ``sacct`` job names
 on 12 real jobs (a shard written before the ``runs`` table existed names it by its run ids). Not
 sacct: a job whose accounting record has already rolled off gives an empty name. A job
 dir with shard DBs but no readable setup is a hard error -- guessing at coverage from a broken shard
@@ -168,7 +168,7 @@ LLRBLIND_CMP_REPLACEMENT = "llrblind-cmp-"
 #: merely contains "smoke" cannot match by accident.
 SMOKE_SETUP = re.compile(r"(?:^|-)smoke\d*(?:-|$)")
 
-#: Smoke job ids that recorded a REAL setup's name (``runs.arm``, ``runs.experiment`` and the run
+#: Smoke job ids that recorded a REAL setup's name (``runs.setup``, ``setups.study`` and the run
 #: root read exactly like the real wave's). No recorded field tells them apart from a real job, so
 #: unlike :data:`SMOKE_SETUP` this is an explicit exception list rather than a pattern.
 SMOKE_JOBS = frozenset({"641175", "642813"})
@@ -424,12 +424,12 @@ def shard_dbs(job_dir: str) -> list:
 
 #: A FUSED owed wave's run dir holds ``setups/<setup>.resolved``, one per
 #: setup it served, each naming its setup. Its rows belong to several setups, so every read of such a
-#: job is filtered to one setup: DB rows by ``runs.arm`` of their run_id, episodes by the ``setup`` their
+#: job is filtered to one setup: DB rows by ``runs.setup`` of their run_id, episodes by the ``setup`` their
 #: tokens.json carries (agent_driver.FUSED_PROBLEM_KEYS).
 FUSED_SETUPS_DIR = "setups"
 
 #: The judge rows of ONE setup in a fused job: its run_ids, as ``runs`` recorded them.
-SETUP_RUN_IDS = "run_id in (select label from runs where arm = ?)"
+SETUP_RUN_IDS = "run_id in (select label from runs where setup = ?)"
 
 
 def is_fused(job_dir: str) -> bool:
@@ -441,7 +441,7 @@ def fused_setups(job_dir: str) -> set:
     setups: set = set()
     for path in glob.glob(os.path.join(job_dir, FUSED_SETUPS_DIR, "*.resolved")):
         for line in pathlib.Path(path).read_text(encoding="utf-8").splitlines():
-            if line.startswith("CAMPAIGN_ARM="):
+            if line.startswith("EXPERIMENT_SETUP="):
                 setups.add(line.partition("=")[2].strip())
     return {setup for setup in setups if setup}
 
@@ -609,15 +609,15 @@ def progress_rows(job_dir: str, done: set, setup: str = "") -> list:
 
 
 def job_setup(job_dir: str) -> str:
-    """The setup this job ran, from ``runs.arm``. Empty when the job has no shard DBs at all."""
+    """The setup this job ran, from ``runs.setup``. Empty when the job has no shard DBs at all."""
     setups = recorded_setups(job_dir)
     if len(setups) == 1:
         return setups.pop()
     if not setups:
         if shard_dbs(job_dir):
-            raise SystemExit(f"{job_dir}: shard DB(s) present but runs.arm named no setup")
+            raise SystemExit(f"{job_dir}: shard DB(s) present but runs.setup named no setup")
         return ""
-    raise SystemExit(f"{job_dir}: runs.arm disagrees within one job dir: {sorted(setups)}")
+    raise SystemExit(f"{job_dir}: runs.setup disagrees within one job dir: {sorted(setups)}")
 
 
 def job_setups(job_dir: str) -> set:
@@ -633,14 +633,14 @@ LAUNCHER_RUN_ID = re.compile(r"^(?P<setup>[^.]+)\.n(?P<node>\d+)\.p(?P<problem>\
 
 
 def recorded_setups(job_dir: str) -> set:
-    """The distinct ``runs.arm`` values over this job's shard DBs."""
+    """The distinct ``runs.setup`` values over this job's shard DBs."""
     setups: set = set()
     for db in shard_dbs(job_dir):
         conn = open_shard(db)
         if conn is None:
             continue
         try:
-            setups.update(row[0] for row in conn.execute("select distinct arm from runs") if row[0])
+            setups.update(row[0] for row in conn.execute("select distinct setup from runs") if row[0])
         except sqlite3.Error:  # a shard whose judge never started has no schema
             pass
         finally:
@@ -753,7 +753,7 @@ def episode_records(job_dirs: list, setups: frozenset = frozenset()) -> list:
             if not kernel:
                 continue
             # A fused job's episode names its setup; one of another setup is not this setup's evidence.
-            if setups and "arm" in data and data["arm"] not in setups:
+            if setups and "setup" in data and data["setup"] not in setups:
                 continue
             start_ms = int(data.get("final_attempt_start_ms") or 0)
             sort_key = start_ms or int(path.stat().st_mtime * 1000)

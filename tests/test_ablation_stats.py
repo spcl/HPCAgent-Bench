@@ -123,7 +123,7 @@ def seed_db(path: pathlib.Path, submissions: list[tuple], attempts: tuple[str, .
     with contextlib.closing(recording.connect(str(path))) as conn:
         # the identity is one setup row, not a column on every grade
         results_db.ensure_setup(
-            conn, results_db.Setup("ablation-qwen38-c", "c", "cpu", experiment="ablation", model="qwen38")
+            conn, results_db.Setup("ablation-qwen38-c", "c", "cpu", study="ablation", model="qwen38")
         )
         run = results_db.ensure_run(conn, "ablation-qwen38-c", "run", None)
         stamp = {"preset": "S", "datatype": "float64", "source_mode": "restricted", "baseline": "c"}
@@ -366,7 +366,7 @@ def test_q_values_are_per_family_and_monotone(ablation_stats, tmp_path) -> None:
     """Three setups -> three pairs -> a real multiple-comparison correction in each family."""
     dbs = []
     for index, factor in enumerate((1.0, 2.0, 4.0)):
-        db = tmp_path / f"arm{index}.db"
+        db = tmp_path / f"setup{index}.db"
         seed_db(db, [(f"k{k}", 1, factor * (1.0 + 0.1 * k)) for k in range(8)])
         dbs.append(db)
     _, pairs = run_stats(ablation_stats, tmp_path, [f"a{i}={db}" for i, db in enumerate(dbs)], problems=8)
@@ -581,7 +581,7 @@ def seed_calls(path: pathlib.Path, rows: tuple[tuple[str, str, int, int], ...]) 
     """``(benchmark, run_id, call index, cumulative_tokens)`` /score grades."""
     with contextlib.closing(recording.connect(str(path))) as conn:
         results_db.ensure_setup(
-            conn, results_db.Setup("ablation-qwen38-c", "c", "cpu", experiment="ablation", model="qwen38")
+            conn, results_db.Setup("ablation-qwen38-c", "c", "cpu", study="ablation", model="qwen38")
         )
         stamp = {"preset": "S", "datatype": "float64", "source_mode": "restricted", "speedup": 1.0, "correct": 1}
         for benchmark, run_id, round_index, tokens in rows:
@@ -761,7 +761,7 @@ def seed_observations(path: pathlib.Path, rows: list[tuple[str, str, str, int, i
     for setup, benchmark, run_id, tokens, ts_ms in rows:
         record = dict.fromkeys(observations_extract.OBSERVATION_FIELDS, "")
         record.update(
-            row_kind="task", arm=setup, benchmark=benchmark, run_root="rr", job=1, run_id=run_id, tokens=tokens, ts_ms=ts_ms,
+            row_kind="task", setup=setup, benchmark=benchmark, run_root="rr", job=1, run_id=run_id, tokens=tokens, ts_ms=ts_ms,
             tokens_fresh_input=tokens, tokens_cached_input=0, tokens_output=0,
         )  # fmt: skip
         records.append(record)
@@ -811,7 +811,7 @@ def test_the_cost_half_prices_the_task_rows_with_the_billed_card_by_default(
     for setup, cached in (("a", 0), ("b", 1000)):
         record = dict.fromkeys(observations_extract.OBSERVATION_FIELDS, "")
         record.update(
-            row_kind="task", arm=setup, benchmark="k1", run_root="rr", job=1, run_id=f"r-{setup}", tokens=100, ts_ms=1,
+            row_kind="task", setup=setup, benchmark="k1", run_root="rr", job=1, run_id=f"r-{setup}", tokens=100, ts_ms=1,
             tokens_fresh_input=100, tokens_cached_input=cached, tokens_output=0,
         )  # fmt: skip
         records.append(record)

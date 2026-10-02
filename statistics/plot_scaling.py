@@ -32,7 +32,7 @@ def load(path: pathlib.Path, prefix: str, setup: str, torch_dist: bool = True) -
     """The observations frame, narrowed to one study prefix and one setup regex; keeps the
     torch.distributed baseline rows (setup ``torch_dist``) unless ``torch_dist`` is False."""
     frame = studies.read_observations(path)
-    names = frame["arm"].astype(str)
+    names = frame["setup"].astype(str)
     keep = pd.Series(True, index=frame.index)
     if prefix:
         keep &= names.str.startswith(prefix)

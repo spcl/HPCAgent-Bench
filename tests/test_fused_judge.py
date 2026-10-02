@@ -45,25 +45,25 @@ CPF_SETUP = "cpf-llr-focus40-qwen38-c-cpf-clean"
 CONTROL_SETUP = "llr-focus40-qwen38-c-clean"
 IDENTITY_KEYS = {
     CPF_SETUP: {
-        "HPCAGENT_BENCH_RECORD_EXPERIMENT": "llr-focus40",
+        "HPCAGENT_BENCH_RECORD_STUDY": "llr-focus40",
         "HPCAGENT_BENCH_RECORD_LANGUAGE": "c",
         "HPCAGENT_BENCH_RECORD_DEVICE": "cpu",
         "HPCAGENT_BENCH_RECORD_PACKET": "cpf",
-        "HPCAGENT_BENCH_RECORD_ARM": CPF_SETUP,
+        "HPCAGENT_BENCH_RECORD_SETUP": CPF_SETUP,
         "HPCAGENT_BENCH_RECORD_COMMIT": "abc1234",
     },
     CONTROL_SETUP: {
-        "HPCAGENT_BENCH_RECORD_EXPERIMENT": "llr-focus40",
+        "HPCAGENT_BENCH_RECORD_STUDY": "llr-focus40",
         "HPCAGENT_BENCH_RECORD_LANGUAGE": "hip",
         "HPCAGENT_BENCH_RECORD_DEVICE": "gpu",
         "HPCAGENT_BENCH_RECORD_PACKET": "",
-        "HPCAGENT_BENCH_RECORD_ARM": CONTROL_SETUP,
+        "HPCAGENT_BENCH_RECORD_SETUP": CONTROL_SETUP,
         "HPCAGENT_BENCH_RECORD_COMMIT": "abc1234",
     },
 }
 #: What the job env keeps for every setup: the model's identity is per job.
 JOB_IDENTITY = {"HPCAGENT_BENCH_RECORD_MODEL": "qwen38", "HPCAGENT_BENCH_RECORD_ENABLED": "true"}
-IDENTITY_COLUMNS = "experiment, model, language, device, packet, rep, setup, harness"
+IDENTITY_COLUMNS = "study, model, language, device, packet, rep, setup, harness"
 
 
 def write_resolved(directory: pathlib.Path, setup: str, lines: list[str]) -> None:
@@ -72,7 +72,7 @@ def write_resolved(directory: pathlib.Path, setup: str, lines: list[str]) -> Non
 
 
 def setup_lines(setup: str, view: pathlib.Path | None) -> list[str]:
-    lines = [f"CAMPAIGN_ARM={setup}", *(f"{key}={value}" for key, value in IDENTITY_KEYS[setup].items())]
+    lines = [f"EXPERIMENT_SETUP={setup}", *(f"{key}={value}" for key, value in IDENTITY_KEYS[setup].items())]
     if view is None:
         lines += ["-HPCAGENT_BENCH_SERVICE_CANONICAL_PARALLEL_FORM_DIR", "HPCAGENT_BENCH_SERVICE_SCORE_ENABLED=0"]
     else:
@@ -126,19 +126,19 @@ def fused_job_fixture(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -
 
 
 def test_a_scoped_environment_overrides_and_unsets_only_inside_its_context(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("HPCAGENT_BENCH_RECORD_ARM", "job-level")
+    monkeypatch.setenv("HPCAGENT_BENCH_RECORD_SETUP", "job-level")
     monkeypatch.setenv("HPCAGENT_BENCH_FUSED_TEST_ONLY_KEY", "job-level")
-    scope = {"HPCAGENT_BENCH_RECORD_ARM": "setup-arm", "HPCAGENT_BENCH_FUSED_TEST_ONLY_KEY": None}
+    scope = {"HPCAGENT_BENCH_RECORD_SETUP": "setup-setup", "HPCAGENT_BENCH_FUSED_TEST_ONLY_KEY": None}
     with config.scoped_environment(scope):
-        assert config.get_str("record.arm") == "setup-arm"
+        assert config.get_str("record.setup") == "setup-setup"
         # None means UNSET for the scope: the default, never the process env's value.
         assert config.get("fused.test_only_key", "default") == "default"
         seen: list[str] = []
-        other = threading.Thread(target=lambda: seen.append(config.get_str("record.arm")))
+        other = threading.Thread(target=lambda: seen.append(config.get_str("record.setup")))
         other.start()
         other.join()
         assert seen == ["job-level"], "a scope leaked into another request's thread"
-    assert config.get_str("record.arm") == "job-level"
+    assert config.get_str("record.setup") == "job-level"
 
 
 def test_a_resolved_overlay_parses_sets_and_unsets() -> None:
@@ -176,9 +176,9 @@ def test_a_run_id_of_another_setup_is_refused(fused_job: dict[str, str]) -> None
 
 def test_the_judge_scope_holds_only_hpcagent_bench_keys(fused_job: dict[str, str]) -> None:
     overlay = fused.judge_overlay(fused_job["control"])
-    assert "CAMPAIGN_ARM" not in overlay
+    assert "EXPERIMENT_SETUP" not in overlay
     assert overlay["HPCAGENT_BENCH_SERVICE_CANONICAL_PARALLEL_FORM_DIR"] is None
-    assert overlay["HPCAGENT_BENCH_RECORD_ARM"] == CONTROL_SETUP
+    assert overlay["HPCAGENT_BENCH_RECORD_SETUP"] == CONTROL_SETUP
 
 
 def test_outside_a_fused_job_nothing_is_fused(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -229,7 +229,8 @@ def recorded(db: str) -> dict[str, list[tuple[object, ...]]]:
     with results_db.reading(db) as conn:
         return {
             "runs": [
-                tuple(row) for row in conn.execute(f"select label, {IDENTITY_COLUMNS} from runs join arms using (arm)")
+                tuple(row)
+                for row in conn.execute(f"select label, {IDENTITY_COLUMNS} from runs join setups using (setup)")
             ],
             "submissions": [
                 tuple(row)

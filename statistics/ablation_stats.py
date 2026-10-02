@@ -220,9 +220,9 @@ def load_effective_costs(
         studies.read_observations(pathlib.Path(observations)),
         cost.resolve(cost_model or cost.DEFAULT_COST_MODEL),
     )
-    if "arm" not in frame.columns:
-        raise SystemExit(f"{observations}: no 'arm' column; not an extracted observations file")
-    spent = population.kernel_tokens(frame[frame.arm.isin(names)], ("arm", "benchmark"))
+    if "setup" not in frame.columns:
+        raise SystemExit(f"{observations}: no 'setup' column; not an extracted observations file")
+    spent = population.kernel_tokens(frame[frame.setup.isin(names)], ("setup", "benchmark"))
     costs: dict[str, dict[str, float]] = {name: {} for name in names}
     for (setup, benchmark), tokens in spent.items():
         if float(tokens) > 0:

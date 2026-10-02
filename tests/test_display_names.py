@@ -179,7 +179,7 @@ def test_a_setup_that_records_a_study_records_the_whole_tuple() -> None:
         identity = recorded_identity(env.read_text(encoding="utf-8", errors="replace"))
         if not identity:
             continue
-        missing = [k for k in ("EXPERIMENT", "MODEL", "LANGUAGE", "DEVICE", "ARM") if not identity.get(k)]
+        missing = [k for k in ("EXPERIMENT", "MODEL", "LANGUAGE", "DEVICE", "SETUP") if not identity.get(k)]
         if missing:
             partial.append(f"{env.name}: stamps {sorted(identity)} but not {missing}")
     assert not partial, "half-stamped setup envs:\n  " + "\n  ".join(partial)

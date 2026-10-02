@@ -256,19 +256,19 @@ def env_names(setup: str) -> tuple[str, ...]:
 
 
 def recorded_setup(path: pathlib.Path) -> str:
-    """The setup an env file was rendered for: its ``CAMPAIGN_ARM``, the identity the launcher writes."""
+    """The setup an env file was rendered for: its ``EXPERIMENT_SETUP``, the identity the launcher writes."""
     for line in path.read_text(encoding="utf-8").splitlines():
         name, sep, value = line.partition("=")
-        if sep and name == "CAMPAIGN_ARM":
+        if sep and name == "EXPERIMENT_SETUP":
             return value.strip().strip("\"'")
     return ""
 
 
 def env_files(setup: str, env_dirs: Iterable[pathlib.Path]) -> Iterator[pathlib.Path]:
     """The env files that describe ``setup``, best first: those named for it (:func:`env_names`), then a
-    launch's own render ``.env.<name>-<list>`` when it records one of those names as ``CAMPAIGN_ARM``
+    launch's own render ``.env.<name>-<list>`` when it records one of those names as ``EXPERIMENT_SETUP``
     (``.env.<setup>-skills`` shares the prefix but is another setup), then one named for an older spelling
-    of it, by name or by the ``CAMPAIGN_ARM`` it records (:func:`study_tags.aliased_setup`:
+    of it, by name or by the ``EXPERIMENT_SETUP`` it records (:func:`study_tags.aliased_setup`:
     ``.env.cpf-llr-focus40-*`` for ``llr40-*``), the latest wave's (``-clean``) first."""
     dirs = list(env_dirs)
     names = env_names(setup)
@@ -337,14 +337,14 @@ def on_track(benchmark: str, track: str) -> bool:
 #: judge credited, or the grade a promotion (a ``regrade`` without a scaling curve) credited, keyed
 #: by the grade it re-timed. An audit's disqualified grade is none.
 CREDITED_SUBMISSIONS = f"""
-SELECT g.id AS grade_id, r.label AS run_id, r.job, r.arm, g.benchmark, g.ts_ms, g.source_mode,
+SELECT g.id AS grade_id, r.label AS run_id, r.job, r.setup, g.benchmark, g.ts_ms, g.source_mode,
        coalesce(g.credited_speedup, p.credited_speedup) AS speedup,
        coalesce(p.timing_reduction, g.timing_reduction) AS timing_reduction,
        g.workspace_bytes, g.distribution, g.requested_libraries, p.id IS NOT NULL AS promoted,
-       gs.language, gs.hash, a.experiment
+       gs.language, gs.hash, a.study
 FROM grades g
 JOIN runs r ON r.id = g.run_id
-JOIN arms a ON a.arm = r.arm
+JOIN setups a ON a.setup = r.setup
 LEFT JOIN grades p ON p.of_grade_id = g.id AND p.kind = '{PROMOTION_KIND}' AND p.credited_speedup > 0
     AND NOT EXISTS (SELECT 1 FROM scaling_grades s WHERE s.grade_id = p.id)
 LEFT JOIN grade_sources gs ON gs.grade_id = g.id AND gs.part = 'host'
@@ -364,12 +364,12 @@ def credited_rows(db: pathlib.Path) -> list[dict[str, Any]]:
 #: The submissions :data:`CREDITED_SUBMISSIONS` leaves out (no live credit) of the kernels named by
 #: ``{kernels}``, in its columns; :func:`stale_rows` keeps those graded before their kernel's cut.
 UNCREDITED_SUBMISSIONS = f"""
-SELECT g.id AS grade_id, r.label AS run_id, r.job, r.arm, g.benchmark, g.ts_ms, g.source_mode,
+SELECT g.id AS grade_id, r.label AS run_id, r.job, r.setup, g.benchmark, g.ts_ms, g.source_mode,
        g.credited_speedup AS speedup, g.timing_reduction, g.workspace_bytes, g.distribution,
-       g.requested_libraries, 0 AS promoted, gs.language, gs.hash, a.experiment
+       g.requested_libraries, 0 AS promoted, gs.language, gs.hash, a.study
 FROM grades g
 JOIN runs r ON r.id = g.run_id
-JOIN arms a ON a.arm = r.arm
+JOIN setups a ON a.setup = r.setup
 JOIN grade_sources gs ON gs.grade_id = g.id AND gs.part = 'host'
 WHERE NOT EXISTS (SELECT 1 FROM disqualifications d WHERE d.grade_id = g.id)
   AND g.kind IN {results_db.SUBMIT_KINDS} AND coalesce(g.credited_speedup, 0) <= 0
@@ -405,7 +405,7 @@ def item_of(row: Mapping[str, Any], env: dict[str, str], final: bool) -> Item:
         str(row["run_id"]),
         str(row["benchmark"]),
         int(row["ts_ms"]),
-        str(row["arm"]),
+        str(row["setup"]),
         str(row["language"] or ""),
         str(row["source_mode"] or "restricted"),
         final,
@@ -446,7 +446,7 @@ def build_worklist(dbs: Iterable[pathlib.Path], env_dirs: list[pathlib.Path]) ->
             if not row["hash"]:
                 problems.append(f"no stored source: {where}")
                 continue
-            setup = str(row["arm"])
+            setup = str(row["setup"])
             envs.setdefault(setup, setup_env(setup, env_dirs))
             final = last[(row["job"], row["run_id"], row["benchmark"])] == int(row["ts_ms"])
             items.append(item_of(row, envs[setup], final))
@@ -458,7 +458,7 @@ def build_worklist(dbs: Iterable[pathlib.Path], env_dirs: list[pathlib.Path]) ->
 #: or after the final attempt's start, the best speedup of those, and whether the final attempt
 #: spent its answer -- a graded submit the judge did not fault, or a promotion already credited.
 UNPROMOTED_EPISODES = f"""
-SELECT g.id AS grade_id, r.id AS run, r.label AS run_id, r.job, r.arm, g.benchmark, g.ts_ms, g.source_mode,
+SELECT g.id AS grade_id, r.id AS run, r.label AS run_id, r.job, r.setup, g.benchmark, g.ts_ms, g.source_mode,
        coalesce(r.final_attempt_start_ms, 0) AS cut, g.workspace_bytes, g.distribution, g.requested_libraries, gs.language, gs.hash,
        (SELECT max(c.speedup) FROM grades c WHERE c.run_id = g.run_id AND c.benchmark = g.benchmark
             AND c.kind = 'score' AND c.correct = 1 AND c.ts_ms >= coalesce(r.final_attempt_start_ms, 0)) AS speedup
@@ -551,7 +551,7 @@ def build_promotion_worklist(dbs: Iterable[pathlib.Path], env_dirs: list[pathlib
                 newest[(int(row["run"]), str(row["benchmark"]))] = {**dict(row), "db": str(db)}
             owed = [row for key, row in sorted(newest.items()) if not spent(conn, *key, since_ms=int(row["cut"]))]
         for row in owed:
-            setup = str(row["arm"])
+            setup = str(row["setup"])
             envs.setdefault(setup, setup_env(setup, env_dirs))
             items.append(dataclasses.replace(item_of(row, envs[setup], True), promoted=True))
     return items, []

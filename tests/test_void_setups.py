@@ -8,8 +8,8 @@ import pathlib
 from hpcagent_bench.harness import results_db
 from tests import results_seed
 
-VOID = "void-arm"
-KEPT = "kept-arm"
+VOID = "void-setup"
+KEPT = "kept-setup"
 
 
 def test_a_void_setup_leaves_no_row_and_the_other_setup_keeps_every_one(tmp_path: pathlib.Path) -> None:
@@ -26,8 +26,8 @@ def test_a_void_setup_leaves_no_row_and_the_other_setup_keeps_every_one(tmp_path
         removed = results_db.delete_setups(conn, [VOID])
         conn.commit()
         left = {table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] for table in results_db.TABLES}
-        setups = [row[0] for row in conn.execute("SELECT arm FROM arms")]
+        setups = [row[0] for row in conn.execute("SELECT setup FROM setups")]
         texts = [row[0] for row in conn.execute("SELECT text FROM sources")]
-    assert removed["grades"] == 3 and removed["runs"] == 2 and removed["arms"] == 1 and removed["grade_cells"] == 1
+    assert removed["grades"] == 3 and removed["runs"] == 2 and removed["setups"] == 1 and removed["grade_cells"] == 1
     assert setups == [KEPT] and texts == [shared]
     assert (left["runs"], left["grades"], left["grade_sources"], left["grade_cells"]) == (1, 1, 1, 0)

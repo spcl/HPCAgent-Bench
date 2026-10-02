@@ -15,7 +15,7 @@ two are still separable without either being colour-alone.
 
 THE SPEEDUP AXIS IS THE GEOMEAN OVER KERNELS (:func:`hpcagent_bench.stats.population.kernel_medians`):
 speedup is a ratio, and the geometric mean is the statistic an "overall speedup" is under this
-rule everywhere else in the repo (:class:`~hpcagent_bench.stats.population.ArmAggregate`), never a
+rule everywhere else in the repo (:class:`~hpcagent_bench.stats.population.SetupAggregate`), never a
 median -- a median of per-kernel speedups is not the geomean except when they happen to be
 symmetric, so a kernel the setup never solved does not quietly drop out of one side of the comparison
 either way. Tokens are not a ratio, so the spend axis stays the MEDIAN over kernels.
@@ -90,7 +90,7 @@ def eligible_rows(rows: pd.DataFrame, include_incomplete: bool = False) -> pd.Da
     kept, dropped = population.complete_setups(rows, roster)
     for setup in sorted(dropped):
         print(f"dropping {setup} ({dropped[setup]}/{len(roster)} roster kernels)", file=sys.stderr)
-    return rows[rows["arm"].astype(str).isin(kept)]
+    return rows[rows["setup"].astype(str).isin(kept)]
 
 
 #: Fixed display order for the known conditions: the control, then the treatments in the order the
@@ -294,7 +294,7 @@ def figure_pair(frame: pd.DataFrame, title: str, out: pathlib.Path) -> pathlib.P
 def load(path: pathlib.Path, prefix: str, card: cost.CostModel = cost.resolve()) -> pd.DataFrame:
     frame = cost.priced(studies.read_observations(path), card)
     if prefix:
-        frame = frame[frame["arm"].astype(str).str.startswith(prefix)]
+        frame = frame[frame["setup"].astype(str).str.startswith(prefix)]
     # NO filter on speedup or tokens here. The two metrics come off DIFFERENT record types -- the
     # speedup from the graded submissions, the cost from the task rows that carry a token count
     # (population.kernel_tokens) -- and one predicate over both columns keeps only the rows that
@@ -305,7 +305,7 @@ def load(path: pathlib.Path, prefix: str, card: cost.CostModel = cost.resolve())
     # that column existed, which reads as the control -- the setup name is never parsed for this.
     condition = frame["packet"].fillna("").astype(str).map(packets.canonical) if "packet" in frame else ""
     frame = frame.assign(
-        model=frame["arm"].astype(str).map(study_tags.model_of),
+        model=frame["setup"].astype(str).map(study_tags.model_of),
         condition=condition,
     )
     return frame[frame.model != "other"]
@@ -337,7 +337,7 @@ def main() -> None:
 
     rows = load(args.observations, args.study, cost.resolve(args.cost_model, args.cost_models))
     if args.setups:
-        rows = rows[rows["arm"].astype(str).str.fullmatch(args.setups)]
+        rows = rows[rows["setup"].astype(str).str.fullmatch(args.setups)]
     rows = eligible_rows(rows, args.include_incomplete)
     frame = setup_points(rows, args.repeats)
     if frame.empty:
