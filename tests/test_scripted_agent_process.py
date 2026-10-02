@@ -149,7 +149,7 @@ def test_the_trajectory_rows_language_comes_from_the_run(monkeypatch, tmp_path) 
     n = recording.record_trajectory(
         task,
         row.trajectory,
-        run_id="t",
+        episode_id="t",
         language=task.language,
         source_mode=task.source_mode,
         path=db,

@@ -84,4 +84,4 @@ python -m pytest --maxfail=10 tests/test_packets.py tests/test_packet_env.py \
 ```
 
 `packet_env.py` prints the resolved env and a final `HPCAGENT_BENCH_RECORD_PACKET=<canonical key>`
-line, which `record_identity` writes into the setup's `.env` and the DB stores as `runs.packet`.
+line, which `record_identity` writes into the setup's `.env` and the DB stores as `setups.packet`.

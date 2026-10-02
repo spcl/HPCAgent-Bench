@@ -1,7 +1,7 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """An agent episode's record, ``tokens.json`` (written by ``agent/hpcagent_agent/driver/agent_driver.py`` beside the
-worker's transcript), as the episode columns of its ``runs`` row.
+worker's transcript), as the episode columns of its ``episodes`` row.
 
 :func:`ingest` folds a finished job's records into the job's results DB: token counts are taken only from a
 record folded by the current token rule (:data:`MIN_TOKEN_FOLD`), since an older fold double-counted
@@ -32,14 +32,14 @@ __all__ = [
 RECORD_GLOB = "agents/*/*/tokens.json"
 #: The oldest ``token_fold`` whose counts are trusted (a lower one double-counted reasoning).
 MIN_TOKEN_FOLD = 2
-#: record key -> ``runs`` column, for how the episode ended (besides its ``result`` text).
+#: record key -> ``episodes`` column, for how the episode ended (besides its ``result`` text).
 OUTCOME_COLUMNS: dict[str, str] = {
     "returncode": "returncode",
     "turns": "turns",
     "wall_ms": "wall_ms",
     "api_ms": "api_ms",
 }
-#: record key -> ``runs`` column, for what it cost.
+#: record key -> ``episodes`` column, for what it cost.
 TOKEN_COLUMNS: dict[str, str] = {
     "fresh_input": "fresh_input_tokens",
     "cached_input": "cached_input_tokens",
@@ -75,7 +75,7 @@ def whole(value: object) -> int | None:
 
 
 def episode_values(record: Mapping[str, object]) -> dict[str, results_db.Value]:
-    """The ``runs`` columns a record fills: how the episode ended, the kernel it was assigned, how
+    """The ``episodes`` columns a record fills: how the episode ended, the kernel it was assigned, how
     often it was relaunched and when its final attempt began, and -- from a trusted fold only -- its
     token counts."""
     result = record.get("result")
@@ -84,40 +84,42 @@ def episode_values(record: Mapping[str, object]) -> dict[str, results_db.Value]:
     if trusted_fold(record):
         values |= {column: whole(record.get(key)) for key, column in TOKEN_COLUMNS.items()}
     kernel = record.get("kernel")
-    values["benchmark"] = str(kernel).rsplit("/", 1)[-1] if kernel else None
+    values["kernel"] = str(kernel).rsplit("/", 1)[-1] if kernel else None
     values["relaunches"] = max((whole(record.get("attempts")) or 1) - 1, 0)
     start = whole(record.get("final_attempt_start_ms"))
     values["final_attempt_start_ms"] = start if start else None
     return values
 
 
-def fill(conn: sqlite3.Connection, run_id: int, values: Mapping[str, results_db.Value]) -> None:
-    """Set the episode columns of run ``run_id`` (the record is their one source)."""
+def fill(conn: sqlite3.Connection, episode_id: int, values: Mapping[str, results_db.Value]) -> None:
+    """Set the episode columns of run ``episode_id`` (the record is their one source)."""
     columns = [name for name, value in values.items() if value is not None]
     if columns:
         assignments = ", ".join(f"{name} = ?" for name in columns)
-        conn.execute(f"UPDATE runs SET {assignments} WHERE id = ?", (*(values[name] for name in columns), run_id))
+        conn.execute(
+            f"UPDATE episodes SET {assignments} WHERE id = ?", (*(values[name] for name in columns), episode_id)
+        )
 
 
 def ingest(conn: sqlite3.Connection, job_dir: pathlib.Path) -> tuple[int, int]:
     """Fold every worker record under ``job_dir`` into ``conn``'s runs of its job
     (:func:`recording.job_of_dir`; created, with the
     setup's identity, for an episode that never reached the judge); returns ``(filled, unattributed)``.
-    A record naming no ``run_id`` (written before the driver named it) is unattributed. A fused
+    A record naming no ``episode_id`` (written before the driver named it) is unattributed. A fused
     wave's record names its setup, whose identity the setup takes."""
     filled = unattributed = 0
     job = recording.job_of_dir(job_dir)
     for path in sorted(job_dir.glob(RECORD_GLOB)):
         record = read_record(path)
-        label = str(record.get("run_id") or "") if record is not None else ""
+        label = str(record.get("episode_id") or "") if record is not None else ""
         if record is None or not label:
             unattributed += 1
             continue
         setup = str(record.get("setup") or "")
         scope = config.scoped_environment(fused.judge_overlay(setup)) if setup else contextlib.nullcontext()
         with scope:
-            run_id = recording.open_episode(conn, label, job)
-        fill(conn, run_id, episode_values(record))
+            episode_id = recording.open_episode_in_job(conn, label, job)
+        fill(conn, episode_id, episode_values(record))
         filled += 1
     conn.commit()
     return filled, unattributed

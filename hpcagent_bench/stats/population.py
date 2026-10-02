@@ -12,7 +12,7 @@
 * ONE KERNEL SET. A geomean over whatever each setup solved ranks coverage as much as quality. An
   aggregate carries the exact ``kernels`` behind it, :func:`ratio` refuses two whose kernel tuples
   differ, and :func:`align` makes two that match.
-* ONE EPISODE KEY. ``runs.run_id`` is unique only inside one results database and repeats across
+* ONE EPISODE KEY. ``runs.episode_id`` is unique only inside one results database and repeats across
   jobs of one setup (it is derived from the rank layout ``<setup>.n<node>.p<problem>.w<worker>``);
   :data:`EPISODE_KEY` is one agent on one kernel.
 
@@ -35,7 +35,7 @@ from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from hpcagent_bench.frozen_observations import ADHOC_RUN_ID
+from hpcagent_bench.frozen_observations import ADHOC_EPISODE_ID
 from hpcagent_bench.harness import denominator
 from hpcagent_bench.harness.timing import FINAL_GRADE_REDUCTIONS
 from hpcagent_bench.stats import score_rule, summary
@@ -61,7 +61,7 @@ __all__ = [
     "SOLVED_COLUMN",
     "SUBMISSION_ORDER",
     "SUSPECT_COLUMN",
-    "TASK_RECORD",
+    "EPISODE_RECORD",
     "UNBRACKETED",
     "UNNAMED_BASELINE_POLICY",
     "UNSTAMPED",
@@ -89,7 +89,7 @@ __all__ = [
     "kernel_medians",
     "kernel_tokens",
     "last_per_episode",
-    "latest_runs",
+    "latest_episodes",
     "log_differences",
     "mcnemar_exact",
     "on_platform",
@@ -112,10 +112,10 @@ __all__ = [
 if TYPE_CHECKING:
     import pandas as pd
 
-#: One agent on one kernel. ``run_root`` and ``job`` scope the ``run_id``, which is only unique
-#: inside one results database; ``benchmark`` is carried because a caller may reduce a frame that
+#: One agent on one kernel. ``run_root`` and ``job`` scope the ``episode_id``, which is only unique
+#: inside one results database; ``kernel`` is carried because a caller may reduce a frame that
 #: spans kernels, and one episode is one kernel by construction.
-EPISODE_KEY: tuple[str, str, str, str] = ("run_root", "job", "run_id", "benchmark")
+EPISODE_KEY: tuple[str, str, str, str] = ("run_root", "job", "episode_id", "kernel")
 
 
 #: Which population a number is over. Never a default: a table that does not state one is the
@@ -143,7 +143,7 @@ HARNESS_FAULT_REASON: str = "score_error"
 
 #: The ``row_kind`` :mod:`hpcagent_bench.observations_extract` gives an ``attempts``
 #: row (``table[:-1]``): a real ``/submit`` the judge graded and did not accept (wrong answer, build
-#: failure, too slow, timed out, overfit) -- genuine agent work, distinct from :data:`TASK_RECORD`
+#: failure, too slow, timed out, overfit) -- genuine agent work, distinct from :data:`EPISODE_RECORD`
 #: or a ``call`` row.
 ATTEMPT_RECORD: str = "attempt"
 
@@ -151,9 +151,9 @@ ATTEMPT_RECORD: str = "attempt"
 #: table names it.
 SUSPECT_COLUMN: str = "timing_suspect"
 
-#: Setup labels that name no condition: ``adhoc`` is a grade recorded with no run id (a manual judge
+#: Setup labels that name no condition: ``adhoc`` is a grade recorded with no episode id (a manual judge
 #: call), and a blank setup names no launcher at all.
-PSEUDO_SETUPS: frozenset[str] = frozenset({"", ADHOC_RUN_ID})
+PSEUDO_SETUPS: frozenset[str] = frozenset({"", ADHOC_EPISODE_ID})
 
 
 class MixedPopulationError(ValueError):
@@ -203,9 +203,9 @@ def ran_rows(frame: "pd.DataFrame") -> "pd.DataFrame":
     than entered as a failure. One the setup ran and never solved stays, at 1x
     under ``served`` and unsolved under ``solved``. The rows stay in the database.
     """
-    if not {"row_kind", "setup", "benchmark"} <= set(frame.columns):
+    if not {"row_kind", "setup", "kernel"} <= set(frame.columns):
         return frame
-    key = frame["setup"].fillna("").astype(str) + "\x1f" + frame["benchmark"].fillna("").astype(str)
+    key = frame["setup"].fillna("").astype(str) + "\x1f" + frame["kernel"].fillna("").astype(str)
     ran = set(key[frame["row_kind"].isin(RAN_RECORDS)])
     return frame[key.isin(ran)]
 
@@ -223,13 +223,13 @@ def complete_setups(frame: "pd.DataFrame", roster: Sequence[str]) -> tuple[list[
     selection listed them, not a sorted one. ``dropped`` maps each excluded setup to how many roster
     kernels it has at least one row for, so a caller can print "kept N/40" beside the drop.
     """
-    missing = [name for name in ("setup", "benchmark") if name not in frame.columns]
+    missing = [name for name in ("setup", "kernel") if name not in frame.columns]
     if missing:
         raise MixedPopulationError(f"cannot check roster coverage without {missing}")
     needed = set(roster)
     setups = frame["setup"].fillna("").astype(str)
     order = [setup for setup in dict.fromkeys(setups) if setup not in PSEUDO_SETUPS]
-    served = frame.assign(setup=setups).groupby("setup")["benchmark"].agg(lambda column: set(column.astype(str)))
+    served = frame.assign(setup=setups).groupby("setup")["kernel"].agg(lambda column: set(column.astype(str)))
     kept: list[str] = []
     dropped: dict[str, int] = {}
     for setup in order:
@@ -473,7 +473,7 @@ def last_per_episode(frame: "pd.DataFrame", order: Sequence[str]) -> "pd.DataFra
     """One row per episode: the LAST graded row that episode produced, by ``order``.
 
     Evaluation is single-shot, so within an episode the answer the agent stopped at is the answer.
-    Keyed on :data:`EPISODE_KEY` rather than on ``run_id``, which collides across jobs.
+    Keyed on :data:`EPISODE_KEY` rather than on ``episode_id``, which collides across jobs.
     """
     missing = [column for column in (*EPISODE_KEY, *order) if column not in frame.columns]
     if missing:
@@ -526,9 +526,9 @@ def credited(frame: "pd.DataFrame") -> "pd.Series":
     grade under its kernel's configured denominator); a frame missing a column credits nothing."""
     import pandas as pd
 
-    if not {REDUCTION_COLUMN, DENOMINATOR_COLUMN, "benchmark"} <= set(frame.columns):
+    if not {REDUCTION_COLUMN, DENOMINATOR_COLUMN, "kernel"} <= set(frame.columns):
         return pd.Series(False, index=frame.index)
-    rows = zip(frame[REDUCTION_COLUMN].tolist(), frame[DENOMINATOR_COLUMN].tolist(), frame["benchmark"].tolist())
+    rows = zip(frame[REDUCTION_COLUMN].tolist(), frame[DENOMINATOR_COLUMN].tolist(), frame["kernel"].tolist())
     flags = [denominator.credited(stamp, value if is_named(value) else "", str(bench)) for stamp, value, bench in rows]
     return pd.Series(flags, index=frame.index, dtype=bool)
 
@@ -548,7 +548,7 @@ def valid_submission_rows(frame: "pd.DataFrame") -> "pd.Series":
     return stamped | (record.isin(("submission", "attempt")) & (status == "unsolved"))
 
 
-def latest_runs(frame: "pd.DataFrame", by: Sequence[str] = ("setup", "benchmark")) -> "pd.DataFrame":
+def latest_episodes(frame: "pd.DataFrame", by: Sequence[str] = ("setup", "kernel")) -> "pd.DataFrame":
     """Every row, of any record type, of each ``by`` group's chosen run: the run holding the group's
     NEWEST VALID submission (:func:`valid_submission_rows`), across all runs. A
     rerun that crashed or timed out without a valid answer therefore does not erase an older valid
@@ -556,7 +556,7 @@ def latest_runs(frame: "pd.DataFrame", by: Sequence[str] = ("setup", "benchmark"
     kernel has no answer -- which is what its runs delivered.
 
     A run is one :data:`EPISODE_KEY`; its start is the earliest ``ts_ms`` over ALL of its rows.
-    Ties break on ``(start, job, run_root, run_id)``, the last three compared as text, so a tie has
+    Ties break on ``(start, job, run_root, episode_id)``, the last three compared as text, so a tie has
     one answer. A run with no timestamp sorts first and never supersedes a dated one. The whole
     chosen run is kept (calls, tasks, attempts), so the score and the cost come from the same run.
     """
@@ -578,7 +578,7 @@ def latest_runs(frame: "pd.DataFrame", by: Sequence[str] = ("setup", "benchmark"
     answered = answered.groupby(keys, as_index=False, dropna=False).answer_ts.max()
     starts = starts.merge(answered, on=keys, how="left")
     starts["has_answer"] = starts["answer_ts"].notna()
-    tie_break = {f"{name}_text": starts[name].astype(str) for name in ("job", "run_root", "run_id")}
+    tie_break = {f"{name}_text": starts[name].astype(str) for name in ("job", "run_root", "episode_id")}
     order = ["has_answer", "answer_ts", "start", *tie_break]
     latest = (
         starts.assign(**tie_break)
@@ -702,7 +702,7 @@ def setup_kernel_answers(
     """One whole row per ``(setup, benchmark)``: the setup's FINAL answer on that kernel under ``repeats``.
 
     ``frame`` should hold every record type, so ``latest`` sees a rerun that never had a submission
-    persisted (:func:`latest_runs`); a frame without ``row_kind`` is read as graded rows only. WITHIN a
+    persisted (:func:`latest_episodes`); a frame without ``row_kind`` is read as graded rows only. WITHIN a
     run the last verified submission counts (:func:`graded_episode_rows`); when the judge flagged that
     answer suspect the run answered nothing. ACROSS runs ``latest``
     keeps the latest run's answer -- none, when that run verified nothing -- and ``median`` keeps the
@@ -710,14 +710,14 @@ def setup_kernel_answers(
     of them, so its timings are that run's own.
     """
     policy = repeat_policy(repeats)
-    runs = latest_runs(frame) if policy == RepeatPolicy.LATEST else frame
+    runs = latest_episodes(frame) if policy == RepeatPolicy.LATEST else frame
     graded = runs[runs["row_kind"] == "submission"] if "row_kind" in runs.columns else runs
     episodes = graded_episode_rows(graded, order)
     # A final answer the judge flagged suspect solved nothing: the kernel reads as unanswered.
     episodes = episodes[episodes[SUSPECT_COLUMN].map(is_reportable).astype(bool)]
     if policy == RepeatPolicy.LATEST or episodes.empty:
         return episodes
-    group = ["setup", "benchmark"]
+    group = ["setup", "kernel"]
     ordered = episodes.sort_values([*group, "speedup"], kind="stable")
     position = ordered.groupby(group).cumcount()
     size = ordered.groupby(group).speedup.transform("size")
@@ -738,7 +738,7 @@ def kernel_answers(
     Each ``(setup, benchmark)`` reduced by :func:`setup_kernel_answers` under ``repeats``, then the best
     setup per kernel, so a slice holding several setups of one condition keeps its best answer. A
     ``call`` row carries a speedup for a round the judge never persisted, and a median over those
-    rows weights a kernel by how many rounds the agent spent on it. Indexed by ``benchmark``, sorted.
+    rows weights a kernel by how many rounds the agent spent on it. Indexed by ``kernel``, sorted.
 
     Under ``served`` (the default) a kernel the slice has a row for and never answered is present at
     :data:`NOT_DELIVERED`, which is what the failed episode left standing, and
@@ -762,16 +762,16 @@ def kernel_answers(
     columns = [c for c in (*ANSWER_COLUMNS, REDUCTION_COLUMN) if c in frame.columns]
     if not graded.empty:
         best = setup_kernel_answers(frame, order, repeats=repeats)
-        best = best.sort_values("speedup", ascending=False).drop_duplicates("benchmark", keep="first")
-        answered = best.set_index("benchmark")[columns].sort_index()
+        best = best.sort_values("speedup", ascending=False).drop_duplicates("kernel", keep="first")
+        answered = best.set_index("kernel")[columns].sort_index()
         answered = answered.assign(**{DELIVERED_COLUMN: True, SOLVED_COLUMN: True})
     else:
-        answered = graded.set_index("benchmark")[columns].assign(
+        answered = graded.set_index("kernel")[columns].assign(
             **{DELIVERED_COLUMN: pd.Series(dtype=bool), SOLVED_COLUMN: pd.Series(dtype=bool)}
         )
     if KernelPolicy(policy) == KernelPolicy.SOLVED:
         return answered
-    served = sorted(set(frame["benchmark"].dropna().astype(str)) - set(answered.index.astype(str)))
+    served = sorted(set(frame["kernel"].dropna().astype(str)) - set(answered.index.astype(str)))
     if not served:
         return answered
     genuine = genuinely_attempted(frame) - set(answered.index.astype(str))
@@ -779,7 +779,7 @@ def kernel_answers(
     placeholder = {"speedup": NOT_DELIVERED, REDUCTION_COLUMN: ""}
     filler = pd.DataFrame(
         {column: placeholder.get(column, math.nan) for column in columns},
-        index=pd.Index(served, name="benchmark"),
+        index=pd.Index(served, name="kernel"),
     )
     filler[DELIVERED_COLUMN] = filler.index.isin(genuine)
     filler[SOLVED_COLUMN] = False
@@ -791,23 +791,23 @@ def genuinely_attempted(frame: "pd.DataFrame") -> set:
     graded and did not accept, excluding one reasoned :data:`HARNESS_FAULT_REASON` (the judge's own
     reference breaking, not a verdict about the agent's code -- see :func:`kernel_answers`).
     """
-    needed = ("row_kind", "benchmark")
+    needed = ("row_kind", "kernel")
     if any(column not in frame.columns for column in needed):
         return set()
     attempts = frame[frame.row_kind == ATTEMPT_RECORD]
     if "reason" in attempts.columns:
         reasons = attempts["reason"].fillna("").astype(str)
         attempts = attempts[reasons != HARNESS_FAULT_REASON]
-    return set(attempts["benchmark"].dropna().astype(str))
+    return set(attempts["kernel"].dropna().astype(str))
 
 
 #: The ``row_kind`` a task's token total travels on (spec T3): one row per task, ``tokens`` = the effective
 #: tokens of its FINAL attempt. What the attempts before it spent rides on the separate
 #: ``tokens_crashed`` column and is never added in (docs/token_accounting.md).
-TASK_RECORD: str = "task"
+EPISODE_RECORD: str = "episode"
 
 
-def episode_tokens(frame: "pd.DataFrame", by: Sequence[str] = ("benchmark",)) -> "pd.DataFrame":
+def episode_tokens(frame: "pd.DataFrame", by: Sequence[str] = ("kernel",)) -> "pd.DataFrame":
     """One row per TASK: its token total, read off its ``task`` row, plus ``by``.
 
     A task's cost is the effective tokens of its FINAL attempt (spec T1-T2), which only the task row
@@ -819,14 +819,14 @@ def episode_tokens(frame: "pd.DataFrame", by: Sequence[str] = ("benchmark",)) ->
     """
     import pandas as pd
 
-    # ``by`` usually names ``benchmark``, which is already one of EPISODE_KEY's own columns; a
+    # ``by`` usually names ``kernel``, which is already one of EPISODE_KEY's own columns; a
     # naive concatenation then lists it twice and an empty frame with a repeated column name
-    # returns a DataFrame, not a Series, from `frame["benchmark"]` -- which breaks every groupby
+    # returns a DataFrame, not a Series, from `frame["kernel"]` -- which breaks every groupby
     # a caller runs on the (correctly) empty result. dict.fromkeys dedupes, keeping first order.
     empty_columns = list(dict.fromkeys((*EPISODE_KEY, *by, "tokens")))
     if "tokens" not in frame.columns or frame.empty:
         return pd.DataFrame(columns=empty_columns)
-    tasks = frame[frame.row_kind == TASK_RECORD]
+    tasks = frame[frame.row_kind == EPISODE_RECORD]
     if tasks.empty:
         if (frame.row_kind == "call").any():
             raise MixedPopulationError(
@@ -844,22 +844,22 @@ def episode_tokens(frame: "pd.DataFrame", by: Sequence[str] = ("benchmark",)) ->
 
 
 def kernel_tokens(
-    frame: "pd.DataFrame", by: Sequence[str] = ("benchmark",), *, repeats: RepeatPolicy = RepeatPolicy.LATEST
+    frame: "pd.DataFrame", by: Sequence[str] = ("kernel",), *, repeats: RepeatPolicy = RepeatPolicy.LATEST
 ) -> "pd.Series":
     """The tokens spent on each kernel of ``frame``: one task's total (:func:`episode_tokens`).
 
     A task is one agent optimizing one kernel, and its cost is everything that run spent. A kernel
     one setup ran more than once is reduced by ``repeats``: ``latest`` charges the latest run's total
-    (:func:`latest_runs`), never the sum over reruns, which would bill a setup for being resubmitted;
+    (:func:`latest_episodes`), never the sum over reruns, which would bill a setup for being resubmitted;
     ``median`` charges the median over runs that repeat by design. ``by`` groups the result,
-    ``("setup", "benchmark")`` for a table over setups; a slice grouped by kernel alone that holds several
+    ``("setup", "kernel")`` for a table over setups; a slice grouped by kernel alone that holds several
     setups of one condition adds their latest runs.
     """
     import pandas as pd
 
     policy = repeat_policy(repeats)
     if policy == RepeatPolicy.LATEST:
-        frame = latest_runs(frame, tuple(name for name in ("setup", "benchmark") if name in frame.columns))
+        frame = latest_episodes(frame, tuple(name for name in ("setup", "kernel") if name in frame.columns))
     episodes = episode_tokens(frame, by)
     if episodes.empty:
         return pd.Series(dtype=float, name="tokens")

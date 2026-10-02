@@ -225,14 +225,14 @@ def test_every_short_name_fits_and_no_two_benchmarks_share_one() -> None:
     assert not shared, f"short labels claimed by more than one manifest: {shared}"
 
 
-def test_every_llr_focus40_kernel_has_a_short_label() -> None:
+def test_every_llr40_kernel_has_a_short_label() -> None:
     """The MPR compiler figure draws these 40 on one text-width axis."""
-    roster = tags.members("llr-focus40")
+    roster = tags.members("llr40")
     assert len(roster) == 40
     long = [
         kernel for kernel in roster if len(study_tags.kernel_short_display_name(kernel)) > study_tags.SHORT_NAME_MAX
     ]
-    assert not long, f"llr-focus40 kernels with no short label: {long}"
+    assert not long, f"llr40 kernels with no short label: {long}"
 
 
 def test_llms_and_standalone_optimizers_never_share_a_shape() -> None:

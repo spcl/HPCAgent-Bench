@@ -4,7 +4,7 @@
 
 Every figure in this repo, and every table in the reproducibility artifact, is built from the same
 shape: one row per recorded observation, with the setup label and the agent indices unpacked out of
-the run id. That reader lived only in the artifact repository, so a plot could not be drawn from a
+the episode id. That reader lived only in the artifact repository, so a plot could not be drawn from a
 experiment without first running an artifact export -- and the two copies of "which rows belong to
 this study" were free to disagree.
 
@@ -50,22 +50,20 @@ __all__ = [
     "OBSERVATIONS_TABLE",
     "RECORD_TABLES",
     "RECORD_WHERE",
-    "RENAMED_SETUP_PREFIXES",
     "SHARD_DEPTH",
-    "TASK_KEY",
+    "JOB_EPISODE_KEY",
     "Database",
     "agent_indices",
     "setup_of",
     "setup_value",
     "discover_databases",
     "drop_adhoc_rows",
-    "drop_cancelled_task_rows",
+    "drop_cancelled_episode_rows",
     "drop_foreign_kernel_rows",
     "drop_pre_relaunch_rows",
     "drop_resubmissions",
     "fill_setup_identity",
     "fold_clean_setups",
-    "fold_renamed_setups",
     "group_answer",
     "is_blank",
     "judge_database",
@@ -76,10 +74,9 @@ __all__ = [
     "read_database",
     "read_observations",
     "read_table",
-    "renamed_setup",
     "selects",
-    "task_labels",
-    "task_rows",
+    "episode_labels",
+    "episode_rows",
 ]
 
 if TYPE_CHECKING:
@@ -136,16 +133,16 @@ class Database(NamedTuple):
     job: str
 
 
-def setup_of(run_id: str | None) -> str:
-    """The setup label. A run id is ``<setup>.n<N>.p<P>.w<W>``; the setup is the only experiment condition
+def setup_of(episode_id: str | None) -> str:
+    """The setup label. An episode id is ``<setup>.n<N>.p<P>.w<W>``; the setup is the only experiment condition
     label that reaches the judge database."""
-    return (run_id or "").split(".")[0]
+    return (episode_id or "").split(".")[0]
 
 
-def agent_indices(run_id: str | None) -> tuple[str, str, str]:
-    """``(node, problem, worker)`` parsed out of a run id, empty where absent."""
+def agent_indices(episode_id: str | None) -> tuple[str, str, str]:
+    """``(node, problem, worker)`` parsed out of an episode id, empty where absent."""
     node = problem = worker = ""
-    for part in (run_id or "").split(".")[1:]:
+    for part in (episode_id or "").split(".")[1:]:
         if len(part) > 1 and part[1:].isdigit():
             if part[0] == "n":
                 node = part[1:]
@@ -156,7 +153,7 @@ def agent_indices(run_id: str | None) -> tuple[str, str, str]:
     return node, problem, worker
 
 
-#: The identity a row is selected and grouped by, read off ``runs`` rather than off a name. The
+#: The identity a row is selected and grouped by, read off ``episodes`` rather than off a name. The
 #: launcher writes every one of these into the setup's .env (``hpcagent_bench/cluster/record_identity.sh``) and
 #: the judge copies them onto the run, so a query filters on columns.
 IDENTITY: tuple[str, ...] = ("study", "model", "language", "device", "packet", "rep", "setup", "harness")
@@ -211,7 +208,7 @@ RECORD_WHERE: dict[str, str] = {
 
 
 def read_database(db: Database, want: dict[str, frozenset[str]]) -> Iterator[dict[str, Any]]:
-    """Rows one results DB (schema v2) contributes. Never raises on a bad database -- it yields nothing
+    """Rows one results DB (schema v3) contributes. Never raises on a bad database -- it yields nothing
     and warns.
 
     An unreadable database in an experiment of hundreds is a fact to report, not a reason to abandon
@@ -229,12 +226,12 @@ def read_database(db: Database, want: dict[str, frozenset[str]]) -> Iterator[dic
     with contextlib.closing(conn):
         for table, where in RECORD_WHERE.items():
             for row in conn.execute(f"SELECT * FROM grades_flat WHERE {where} ORDER BY ts_ms, id"):
-                record = dict(row) | {"run_id": row["label"], "ts": row["ts_ms"]}
+                record = dict(row) | {"episode_id": row["label"], "ts": row["ts_ms"]}
                 # The ``adhoc`` run carries the JOB's identity, so its grade would read as a setup's
                 # answer; it is no episode's answer and never credited.
-                if frozen_observations.stored_adhoc(record["run_id"]) or not selects(record, want):
+                if frozen_observations.stored_adhoc(record["episode_id"]) or not selects(record, want):
                     continue
-                node, problem, worker = agent_indices(record["run_id"])
+                node, problem, worker = agent_indices(record["episode_id"])
                 record.update(
                     {
                         "run_root": db.run_root,
@@ -390,10 +387,9 @@ def read_observations(path: pathlib.Path, platform: str = population.DEFAULT_PLA
     # it as a resubmission of that answer
     frame = fill_setup_identity(drop_adhoc_rows(population.on_platform(frame, platform)))
     for rule in (
-        fold_renamed_setups,
         drop_foreign_kernel_rows,
         drop_pre_relaunch_rows,
-        drop_cancelled_task_rows,
+        drop_cancelled_episode_rows,
         drop_resubmissions,
         fold_clean_setups,
     ):
@@ -401,52 +397,54 @@ def read_observations(path: pathlib.Path, platform: str = population.DEFAULT_PLA
     return frame
 
 
-#: The columns naming the task a judge row was made by (spec 1.1): ``run_id`` repeats across jobs.
-TASK_KEY: tuple[str, ...] = ("run_root", "job", "run_id")
+#: The columns naming the task a judge row was made by (spec 1.1): ``episode_id`` repeats across jobs.
+JOB_EPISODE_KEY: tuple[str, ...] = ("run_root", "job", "episode_id")
 
 
-def task_labels(rows: "pd.DataFrame") -> "pd.Series":
-    """Each row's task (:data:`TASK_KEY`) as one string, so tasks can be grouped and mapped over. A
+def episode_labels(rows: "pd.DataFrame") -> "pd.Series":
+    """Each row's task (:data:`JOB_EPISODE_KEY`) as one string, so tasks can be grouped and mapped over. A
     blank ``job`` (an episode whose Slurm job was never recorded) reads back missing and joins as ""."""
-    return rows[list(TASK_KEY)].astype(object).fillna("").astype(str).agg("\x1f".join, axis=1)
+    return rows[list(JOB_EPISODE_KEY)].astype(object).fillna("").astype(str).agg("\x1f".join, axis=1)
 
 
-def task_rows(frame: "pd.DataFrame", column: str) -> "pd.DataFrame | None":
+def episode_rows(frame: "pd.DataFrame", column: str) -> "pd.DataFrame | None":
     """The frame's ``task`` rows when it can carry the per-task rule ``column``, else None."""
     if frame.empty or "row_kind" not in frame.columns or column not in frame.columns:
         return None
-    if not set(TASK_KEY) <= set(frame.columns):
+    if not set(JOB_EPISODE_KEY) <= set(frame.columns):
         return None
-    tasks = frame[frame["row_kind"] == "task"]
+    tasks = frame[frame["row_kind"] == "episode"]
     return None if tasks.empty else tasks
 
 
 def drop_adhoc_rows(frame: "pd.DataFrame") -> "pd.DataFrame":
-    """``frame`` without every row stored under the judge's ``adhoc`` run id, retagged ones included.
+    """``frame`` without every row stored under the judge's ``adhoc`` episode id, retagged ones included.
 
-    See :data:`hpcagent_bench.frozen_observations.ADHOC_RUN_ID`: a grade filed
-    with no run id has no agent-episode identity, so it answers no setup's kernel; the kernel is owed a
+    See :data:`hpcagent_bench.frozen_observations.ADHOC_EPISODE_ID`: a grade filed
+    with no episode id has no agent-episode identity, so it answers no setup's kernel; the kernel is owed a
     rerun (experiments/remaining_kernels.covered skips the same rows). It runs BEFORE
     :func:`fill_setup_identity`, so a retagged row cannot lend its recorded identity to a real setup. Only
     the frame changes, never the database, and the count is warned about.
     """
     import warnings
 
-    if frame.empty or "run_id" not in frame.columns:
+    if frame.empty or "episode_id" not in frame.columns:
         return frame
     column = frozen_observations.RETAGGED_COLUMN
     retagged = frame[column] if column in frame.columns else [""] * len(frame)
-    adhoc = [frozen_observations.stored_adhoc(run_id, tag) for run_id, tag in zip(frame["run_id"], retagged)]
+    adhoc = [
+        frozen_observations.stored_adhoc(episode_id, tag) for episode_id, tag in zip(frame["episode_id"], retagged)
+    ]
     count = sum(adhoc)
     if count:
-        warnings.warn(f"dropped {count} row(s) stored under run id 'adhoc' (no episode identity)", stacklevel=2)
+        warnings.warn(f"dropped {count} row(s) stored under episode id 'adhoc' (no episode identity)", stacklevel=2)
     return frame[[not flag for flag in adhoc]]
 
 
 def drop_foreign_kernel_rows(frame: "pd.DataFrame") -> "pd.DataFrame":
     """``frame`` without judge rows that name a kernel other than their task's own (spec X6).
 
-    The ``benchmark`` on a judge row is what the agent sent, so an agent can score or submit a kernel
+    The ``kernel`` on a judge row is what the agent sent, so an agent can score or submit a kernel
     it was not given. Such a row is not a row of any task on that kernel: kept, it would enter the
     other kernel's answer and move which task counts as that kernel's latest (R4). A task's kernel
     is the one its ``task`` row read from the worker's prompt; runs with no task row are kept as they
@@ -454,17 +452,19 @@ def drop_foreign_kernel_rows(frame: "pd.DataFrame") -> "pd.DataFrame":
     """
     import warnings
 
-    tasks = task_rows(frame, "benchmark")
+    tasks = episode_rows(frame, "kernel")
     if tasks is None:
         return frame
-    labelled = tasks.assign(task=task_labels(tasks), kernel=tasks["benchmark"].astype(str))
-    kernels = labelled.groupby("task").kernel.unique()
+    labelled = tasks.assign(episode=episode_labels(tasks), kernel=tasks["kernel"].astype(str))
+    kernels = labelled.groupby("episode").kernel.unique()
     ambiguous = [task.replace("\x1f", "/") for task, names in kernels.items() if len(names) > 1]
     if ambiguous:
-        raise ValueError(f"a run names one task, but these carry task rows for several kernels: {ambiguous[:4]}")
+        raise ValueError(
+            f"an episode names one kernel, but these carry episode rows for several kernels: {ambiguous[:4]}"
+        )
     kernel_of = {task: names[0] for task, names in kernels.items()}
-    owner = task_labels(frame).map(kernel_of)
-    foreign = (frame["row_kind"] != "task") & owner.notna() & (owner != frame["benchmark"].astype(str))
+    owner = episode_labels(frame).map(kernel_of)
+    foreign = (frame["row_kind"] != "episode") & owner.notna() & (owner != frame["kernel"].astype(str))
     count = int(foreign.sum())
     if count:
         warnings.warn(f"dropped {count} judge row(s) naming a kernel other than their task's (spec X6)", stacklevel=2)
@@ -496,7 +496,7 @@ def drop_pre_relaunch_rows(frame: "pd.DataFrame") -> "pd.DataFrame":
     """``frame`` with each relaunched task reduced to its BEST attempt group (spec X7, USER).
 
     A crashed attempt is relaunched from an empty workspace (T5). The task row records only when the
-    FINAL attempt started (``task_final_attempt_start_ms``), so a task's judge rows split in two groups:
+    FINAL attempt started (``episode_final_attempt_start_ms``), so a task's judge rows split in two groups:
     before that cut (every earlier attempt) and after it (the final attempt). Each group's answer is
     its last believable submission (:func:`group_answer`), the within-episode rule. The task's answer
     is the better of the two: the losing group's judge rows are dropped, so the earlier attempt's
@@ -509,15 +509,15 @@ def drop_pre_relaunch_rows(frame: "pd.DataFrame") -> "pd.DataFrame":
 
     import pandas as pd
 
-    tasks = task_rows(frame, "task_final_attempt_start_ms")
+    tasks = episode_rows(frame, "episode_final_attempt_start_ms")
     if tasks is None or "ts_ms" not in frame.columns:
         return frame
-    starts = pd.to_numeric(tasks["task_final_attempt_start_ms"], errors="coerce").fillna(0)
-    cut = starts.groupby(task_labels(tasks)).max()
-    labels = task_labels(frame)
+    starts = pd.to_numeric(tasks["episode_final_attempt_start_ms"], errors="coerce").fillna(0)
+    cut = starts.groupby(episode_labels(tasks)).max()
+    labels = episode_labels(frame)
     owner = labels.map(cut)
     stamps = pd.to_numeric(frame["ts_ms"], errors="coerce")
-    relaunched = (frame["row_kind"] != "task") & owner.notna() & (owner > 0) & stamps.notna()
+    relaunched = (frame["row_kind"] != "episode") & owner.notna() & (owner > 0) & stamps.notna()
     early = relaunched & (stamps < owner)
     late = relaunched & (stamps >= owner)
     drop = early.copy()
@@ -532,7 +532,7 @@ def drop_pre_relaunch_rows(frame: "pd.DataFrame") -> "pd.DataFrame":
     return frame[~drop]
 
 
-def drop_cancelled_task_rows(frame: "pd.DataFrame") -> "pd.DataFrame":
+def drop_cancelled_episode_rows(frame: "pd.DataFrame") -> "pd.DataFrame":
     """``frame`` without EVERY row of a task the job cancelled (spec X8).
 
     The driver marks a task whose agent was still working when the step was signalled or the
@@ -545,14 +545,14 @@ def drop_cancelled_task_rows(frame: "pd.DataFrame") -> "pd.DataFrame":
 
     import pandas as pd
 
-    tasks = task_rows(frame, "task_cancelled")
+    tasks = episode_rows(frame, "episode_cancelled")
     if tasks is None:
         return frame
-    flags = pd.to_numeric(tasks["task_cancelled"], errors="coerce").fillna(0)
-    cancelled = set(task_labels(tasks)[flags > 0])
+    flags = pd.to_numeric(tasks["episode_cancelled"], errors="coerce").fillna(0)
+    cancelled = set(episode_labels(tasks)[flags > 0])
     if not cancelled:
         return frame
-    dropped = task_labels(frame).isin(cancelled)
+    dropped = episode_labels(frame).isin(cancelled)
     warnings.warn(f"dropped {int(dropped.sum())} row(s) of {len(cancelled)} cancelled task(s) (spec X8)", stacklevel=2)
     return frame[~dropped]
 
@@ -571,11 +571,11 @@ FALLTHROUGH_REASONS: frozenset[str] = frozenset({"timeout", "too_slow"})
 
 
 @functools.lru_cache(maxsize=None, typed=True)
-def kernel_track(benchmark: str) -> str:
-    """The track directory ``benchmark``'s manifest sits under; "" for a kernel the corpus lacks."""
+def kernel_track(kernel: str) -> str:
+    """The track directory ``kernel``'s manifest sits under; "" for a kernel the corpus lacks."""
     from hpcagent_bench.spec import KERNELS  # the manifest scan is not a launch dependency
 
-    key = KERNELS.path_key(benchmark)
+    key = KERNELS.path_key(kernel)
     return key.split("/", 1)[0] if key else ""
 
 
@@ -595,9 +595,9 @@ def drop_resubmissions(frame: "pd.DataFrame") -> "pd.DataFrame":
     import numpy as np
     import pandas as pd
 
-    if frame.empty or not {*TASK_KEY, "benchmark", "row_kind", "ts_ms"} <= set(frame.columns):
+    if frame.empty or not {*JOB_EPISODE_KEY, "kernel", "row_kind", "ts_ms"} <= set(frame.columns):
         return frame
-    on_track = frame["benchmark"].astype(str).map(kernel_track).isin(FIRST_SUBMISSION_TRACKS)
+    on_track = frame["kernel"].astype(str).map(kernel_track).isin(FIRST_SUBMISSION_TRACKS)
     mask = (on_track & frame["row_kind"].isin(GRADED_RECORDS)).to_numpy()
     graded = frame.loc[mask]
     if graded.empty:
@@ -605,7 +605,7 @@ def drop_resubmissions(frame: "pd.DataFrame") -> "pd.DataFrame":
     order = [name for name in ("ts_ms", "attempt_index") if name in graded.columns]
     ranked = graded.assign(
         position=np.flatnonzero(mask),
-        episode=task_labels(graded) + "\x1f" + graded["benchmark"].astype(str),
+        episode=episode_labels(graded) + "\x1f" + graded["kernel"].astype(str),
         real=[
             not frozen_observations.is_judge_fault(row) and str(row.get("reason") or "") not in FALLTHROUGH_REASONS
             for row in graded.to_dict(orient="records")
@@ -624,41 +624,9 @@ def drop_resubmissions(frame: "pd.DataFrame") -> "pd.DataFrame":
     return frame.loc[keep]
 
 
-#: Setup prefixes an experiment was renamed from, and the name it runs under now (``llrblind-cmp`` is the
-#: pre-cmp ``llrblind`` setup under a later name, the same condition, and its data is reused).
-#: ``hpcagent_bench/cluster/remaining_kernels.py:base_setup`` applies the same fold to coverage. The registry's
-#: ``setup_aliases`` (``study_tags.aliased_setup``) are folded after these, by both.
-RENAMED_SETUP_PREFIXES: tuple[tuple[str, str], ...] = (("llrblind-", "llrblind-cmp-"),)
-
-
-def renamed_setup(setup: str) -> str:
-    """``setup`` under the setup it is (``study_tags.aliased_setup``: the registry's aliases and every
-    recorded setup's configuration name); a spelling no record names first takes the name its experiment
-    runs under now; itself when it was never renamed or aliased."""
-    known = study_tags.aliased_setup(setup)
-    if known != setup:
-        return known
-    for old, new in RENAMED_SETUP_PREFIXES:
-        if setup.startswith(old) and not setup.startswith(new):
-            setup = new + setup.removeprefix(old)
-            break
-    return study_tags.aliased_setup(setup)
-
-
-def fold_renamed_setups(frame: "pd.DataFrame") -> "pd.DataFrame":
-    """``frame`` with every renamed setup under its current name, so the two waves are one setup and the
-    latest run per kernel (``population.latest_runs``) picks between them."""
-    if frame.empty or "setup" not in frame.columns:
-        return frame
-    # pandas's default "str" dtype keeps a missing cell as NaN straight through .astype(str)
-    # (PDEP-14), so a blank/adhoc setup-less row stays a float and renamed_setup's .startswith crashes
-    # on it -- the same gap fill_setup_identity's language/packet columns settle with the same call.
-    return frame.assign(setup=frame["setup"].astype(str).fillna("").map(renamed_setup))
-
-
 def fold_clean_setups(frame: "pd.DataFrame") -> "pd.DataFrame":
     """``frame`` with every ``-clean`` setup under the setup it re-ran (spec X9). Nothing is dropped:
-    the waves pool and the latest run per kernel (``population.latest_runs``) picks between them,
+    the waves pool and the latest run per kernel (``population.latest_episodes``) picks between them,
     so an owed rerun of a few kernels keeps the rest of the wave it topped up."""
     if frame.empty or "setup" not in frame.columns:
         return frame

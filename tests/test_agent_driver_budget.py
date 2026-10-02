@@ -220,7 +220,7 @@ def test_non_assistant_and_malformed_lines_are_skipped(driver) -> None:
 
 
 def claude_log_content(input_tokens: int, output_tokens: int) -> str:
-    """One turn plus its result event -- the shape ``cost_breakdown`` and ``task_totals`` both read,
+    """One turn plus its result event -- the shape ``cost_breakdown`` and ``episode_totals`` both read,
     output on the result event only, matching what this endpoint actually reports (token_cost.py)."""
     lines = [
         assistant_line("m1", usage(input_tokens=input_tokens)),

@@ -68,15 +68,6 @@ def test_a_tag_without_a_file_is_a_key_error(temp_tags: pathlib.Path) -> None:
         tags.resolve("no-such-tag")
 
 
-def test_an_alias_reads_the_file_of_the_tag_it_names(monkeypatch: pytest.MonkeyPatch, temp_tags: pathlib.Path) -> None:
-    monkeypatch.setattr(tags, "ALIASES", {"shortcut": "mytag"})
-    write_tag(temp_tags, "mytag", "kmp\ndfa\n")
-    assert tags.canonical("shortcut") == "mytag"
-    assert tags.canonical("unaliased") == "unaliased"
-    assert tags.resolve("shortcut") == tags.resolve("mytag")
-    assert tags.version("shortcut") == tags.version("mytag")
-
-
 def test_the_index_maps_each_kernel_to_every_tag_listing_it(temp_tags: pathlib.Path) -> None:
     write_tag(temp_tags, "b", "kmp\n")
     write_tag(temp_tags, "a", "kmp\ndfa\n")
@@ -124,9 +115,6 @@ def test_save_writes_a_readable_tag_file_and_refuses_an_existing_name(
     assert tags.tags_of("kmp") == ("frozen",)
     with pytest.raises(ValueError, match="already exists"):
         tags.save("frozen", keys, "again")
-    monkeypatch.setattr(tags, "ALIASES", {"alias": "frozen"})
-    with pytest.raises(ValueError, match="already exists"):
-        tags.save("alias", keys, "an alias")
 
 
 def test_cli_resolve_prints_sorted_names_and_refuses_with_a_clear_message(

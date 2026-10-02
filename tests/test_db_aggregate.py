@@ -30,24 +30,23 @@ def _seed(path: str, *, run: str, kernels: list[str], with_results: bool = True,
     setup = run.split(".")[0]
     with contextlib.closing(recording.connect(path)) as conn:
         results_db.ensure_setup(conn, results_db.Setup(setup, language, "cpu", study="agg", model="stub-model"))
-        run_id = results_db.ensure_run(conn, setup, run, None)
+        episode_id = results_db.ensure_episode(conn, setup, run, None)
         for kernel in kernels:
             stamp = {"preset": "S", "datatype": "float64", "source_mode": "restricted", "baseline": "c"}
             credited = {"build_ok": 1, "correct": 1, "speedup": 1.5, "credited_speedup": 1.5}
-            results_db.add_grade(conn, run_id, kernel, "submit", ts_ms=1, values=stamp | credited)
+            results_db.add_grade(conn, episode_id, kernel, "submit", ts_ms=1, values=stamp | credited)
             failed = {"build_ok": 0, "correct": 0, "reason": "build"}
-            results_db.add_grade(conn, run_id, kernel, "submit", ts_ms=2, values=stamp | failed)
+            results_db.add_grade(conn, episode_id, kernel, "submit", ts_ms=2, values=stamp | failed)
             if with_results:
                 # The framework ``results`` table belongs to another module's schema but lives in the
                 # same file; aggregation must carry it even though recording.py never creates it.
                 conn.execute(
                     "CREATE TABLE IF NOT EXISTS results ("
-                    "id INTEGER PRIMARY KEY, timestamp INTEGER, benchmark TEXT, preset TEXT, "
+                    "id INTEGER PRIMARY KEY, timestamp INTEGER, kernel TEXT, preset TEXT, "
                     "framework TEXT, validated INTEGER, time REAL)"
                 )
                 conn.execute(
-                    "INSERT INTO results(timestamp, benchmark, preset, framework, validated, time) "
-                    "VALUES (?,?,?,?,?,?)",
+                    "INSERT INTO results(timestamp, kernel, preset, framework, validated, time) VALUES (?,?,?,?,?,?)",
                     (1, kernel, "S", "numpy", 1, 2.0),
                 )
         conn.commit()
@@ -89,7 +88,7 @@ def test_aggregate_merges_every_table_and_reassigns_ids(tmp_path) -> None:
     assert len(submissions(base)) == 4
     assert len(attempts(base)) == 4
     assert _count(base, "results") == 4
-    assert _count(base, "runs") == 2
+    assert _count(base, "episodes") == 2
 
     ids = [row["id"] for row in submissions(base)]
     runs = {row["label"] for row in submissions(base)}
@@ -117,13 +116,13 @@ def test_two_ranks_of_one_run_merge_instead_of_colliding(tmp_path: pathlib.Path)
 
     recording.aggregate(base)
 
-    assert _count(base, "runs") == 1
+    assert _count(base, "episodes") == 1
     assert len(submissions(base)) == 1
     with results_db.reading(base) as conn:
         assert [r[0] for r in conn.execute("SELECT language FROM setups")] == ["c"]
 
 
-def test_aggregate_merges_a_run_id_shared_by_multiple_shards(tmp_path) -> None:
+def test_aggregate_merges_a_episode_id_shared_by_multiple_shards(tmp_path) -> None:
     """A run served by several ranks writes the SAME run into every rank's own shard, so the second
     shard's row for it must not collide with the first's -- it is the same fact."""
     base = str(tmp_path / "hpcagent_bench.db")
@@ -132,9 +131,9 @@ def test_aggregate_merges_a_run_id_shared_by_multiple_shards(tmp_path) -> None:
 
     recording.aggregate(base)
 
-    assert _count(base, "runs") == 1
+    assert _count(base, "episodes") == 1
     with results_db.reading(base) as conn:
-        rows = [tuple(r) for r in conn.execute("SELECT label, model, setup FROM runs JOIN setups USING (setup)")]
+        rows = [tuple(r) for r in conn.execute("SELECT label, model, setup FROM episodes JOIN setups USING (setup)")]
     assert rows == [("shared", "stub-model", "shared")]
     # The grades still concatenate; only the run's identity dedups.
     assert len(submissions(base)) == 2

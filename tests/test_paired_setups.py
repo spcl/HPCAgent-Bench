@@ -8,8 +8,8 @@ that is what extraction writes (docs/DESIGN_data_collection_and_scoring.md, T3).
 one row, which is why a filter that AND-ed them -- and so kept only call rows and dropped every
 graded submission -- passed its tests and reached a published table.
 
-The replicate case is checked directly: two jobs of one setup reuse the same ``run_id``, because a
-launcher derives it from the rank layout, so a reduction keyed on ``run_id`` alone silently discards
+The replicate case is checked directly: two jobs of one setup reuse the same ``episode_id``, because a
+launcher derives it from the rank layout, so a reduction keyed on ``episode_id`` alone silently discards
 one replicate. They must come out as two episodes whose MAXIMUM stands.
 """
 
@@ -24,7 +24,7 @@ import pytest
 
 from hpcagent_bench.stats import population, summary
 
-EXPERIMENTS = pathlib.Path(__file__).resolve().parents[1] / "hpcagent_bench" / "cluster"
+CLUSTER_DIR = pathlib.Path(__file__).resolve().parents[1] / "hpcagent_bench" / "cluster"
 #: paired_setups.py moved to statistics/ (a12a5881); promote_unsubmitted.py stays in experiments/.
 STATISTICS = pathlib.Path(__file__).resolve().parents[1] / "statistics"
 
@@ -32,7 +32,7 @@ STATISTICS = pathlib.Path(__file__).resolve().parents[1] / "statistics"
 KERNELS = ("k1", "k2", "k3", "k4", "k5", "k6", "k7", "k8")
 
 
-def load_study_module(name: str, folder: pathlib.Path = EXPERIMENTS) -> ModuleType:
+def load_study_module(name: str, folder: pathlib.Path = CLUSTER_DIR) -> ModuleType:
     spec = importlib.util.spec_from_file_location(name, folder / f"{name}.py")
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -55,7 +55,7 @@ def graded(
     index: int = 1,
     optimizer: str = "a-model",
 ) -> dict[str, object]:
-    """One graded submission: timings, no tokens. ``run_id`` is the rank spelling, which repeats
+    """One graded submission: timings, no tokens. ``episode_id`` is the rank spelling, which repeats
     across jobs exactly as a launcher writes it. ``optimizer`` carries the recovery tag when the row
     is one nobody submitted. ``suspect`` is the judge's flag, 0 on a clean graded row, as
     ``hpcagent_bench.observations_extract`` copies it from ``submissions.suspect`` into ``timing_suspect``."""
@@ -64,9 +64,9 @@ def graded(
         "run_root": "stamp",
         "job": job,
         "row_kind": "submission",
-        "run_id": f"{setup}.n0.p{kernel}.w0",
+        "episode_id": f"{setup}.n0.p{kernel}.w0",
         "setup": setup,
-        "benchmark": kernel,
+        "kernel": kernel,
         "speedup": speedup,
         "tokens": "",
         "timing_suspect": 0,
@@ -86,9 +86,9 @@ def call(setup: str, kernel: str, tokens: float, job: str = "j1", ts: int = 1000
         "run_root": "stamp",
         "job": job,
         "row_kind": "call",
-        "run_id": f"{setup}.n0.p{kernel}.w0",
+        "episode_id": f"{setup}.n0.p{kernel}.w0",
         "setup": setup,
-        "benchmark": kernel,
+        "kernel": kernel,
         "speedup": "",
         "tokens": tokens,
         "timing_suspect": "",
@@ -115,10 +115,10 @@ def task(setup: str, kernel: str, tokens: float, job: str = "j1", ts: int = 900)
         "optimizer": "",
         "run_root": "stamp",
         "job": job,
-        "row_kind": "task",
-        "run_id": f"{setup}.n0.p{kernel}.w0",
+        "row_kind": "episode",
+        "episode_id": f"{setup}.n0.p{kernel}.w0",
         "setup": setup,
-        "benchmark": kernel,
+        "kernel": kernel,
         "speedup": "",
         "tokens": tokens,
         "tokens_fresh_input": tokens,
@@ -150,7 +150,7 @@ def test_within_an_episode_the_last_submission_wins_not_the_best(paired_setups: 
 
 
 def test_a_rerun_job_is_a_separate_run_and_the_latest_run_stands(paired_setups: ModuleType) -> None:
-    """Two jobs of one setup reuse the run_id, so keying on it alone would merge a rerun into the run it
+    """Two jobs of one setup reuse the episode_id, so keying on it alone would merge a rerun into the run it
     replaces.
 
     Job j1 ends at 5.0; job j2 reruns the kernel and ends at 3.0. They are two runs, and the setup's
@@ -171,8 +171,8 @@ def test_designed_repeats_score_the_median_run(paired_setups: ModuleType) -> Non
     kernel scores their median, whatever order they finished in."""
     rows = [
         graded("a", "k1", 5.0, job="j1", ts=1000),
-        graded("a", "k1", 3.0, job="j1", ts=2000) | {"run_id": "a.n0.p0.w1"},
-        graded("a", "k1", 9.0, job="j1", ts=3000) | {"run_id": "a.n0.p0.w2"},
+        graded("a", "k1", 3.0, job="j1", ts=2000) | {"episode_id": "a.n0.p0.w1"},
+        graded("a", "k1", 9.0, job="j1", ts=3000) | {"episode_id": "a.n0.p0.w2"},
     ]
     assert paired_setups.best_by_setup_kernel(frame(rows), population.RepeatPolicy.MEDIAN).speedup.tolist() == [5.0]
 
@@ -216,7 +216,7 @@ def test_the_cost_leg_reads_the_task_record_and_a_rerun_as_its_latest_task(paire
     assert paired_setups.tokens_by_setup_kernel(frame(rows))[("a", "k1")] == 400.0
 
 
-def test_usage_counts_every_call_of_the_selected_tasks_per_task(paired_setups: ModuleType) -> None:
+def test_usage_counts_every_call_of_the_selected_tasks_per_episode(paired_setups: ModuleType) -> None:
     """Score and submit calls of ANY status count, accepted submissions are submission rows, and the
     mean is over the tasks the repeat policy selects: the rerun in j2 replaces j1's task entirely."""
     rows = [
@@ -228,11 +228,11 @@ def test_usage_counts_every_call_of_the_selected_tasks_per_task(paired_setups: M
         graded("a", "k2", 2.0, job="j1", ts=1300),
         call("a", "k1", 50.0, job="j2", ts=5000) | {"route": "submit"},
     ]
-    usage = paired_setups.task_usage(frame(rows), population.RepeatPolicy.LATEST).loc["a"]
+    usage = paired_setups.episode_usage(frame(rows), population.RepeatPolicy.LATEST).loc["a"]
     assert usage.tasks == 2
-    assert usage.score_calls_per_task == pytest.approx(1.0)
-    assert usage.submit_calls_per_task == pytest.approx(1.0)
-    assert usage.accepted_submissions_per_task == pytest.approx(0.5)
+    assert usage.score_calls_per_episode == pytest.approx(1.0)
+    assert usage.submit_calls_per_episode == pytest.approx(1.0)
+    assert usage.accepted_submissions_per_episode == pytest.approx(0.5)
 
 
 def test_a_pair_across_two_models_is_refused(paired_setups: ModuleType, tmp_path: pathlib.Path) -> None:
@@ -250,8 +250,8 @@ def impact_table(paired_setups: ModuleType, tmp_path: pathlib.Path) -> pd.DataFr
     rows: list[dict[str, object]] = []
     for kernel in KERNELS:
         control, treated = episode("x-qwen38-c", kernel, 2.0, 100.0), episode("x-qwen38-c-cpf", kernel, 3.0, 50.0)
-        control[2] |= {"task_attempts": 1}
-        treated[2] |= {"task_attempts": 2}
+        control[2] |= {"episode_attempts": 1}
+        treated[2] |= {"episode_attempts": 2}
         rows += control + treated
     path = observations(rows, tmp_path)
     out = tmp_path / "impact.csv"
@@ -286,8 +286,8 @@ def test_the_impact_table_carries_usage_and_the_setup_aggregates(
     table = impact_table(paired_setups, tmp_path).set_index("setup")
     treated, control = table.loc["x-qwen38-c-cpf"], table.loc["x-qwen38-c"]
     assert (treated.tasks, treated.n_solved, treated.n_token_kernels) == (8, 8, 8)
-    assert (treated.attempts_per_task, control.attempts_per_task) == (2.0, 1.0)
-    assert treated.accepted_submissions_per_task == pytest.approx(1.0)
+    assert (treated.attempts_per_episode, control.attempts_per_episode) == (2.0, 1.0)
+    assert treated.accepted_submissions_per_episode == pytest.approx(1.0)
     assert treated.geomean_speedup == pytest.approx(3.0) and control.gm_tokens == pytest.approx(100.0)
     assert treated.gm_tokens_ci_low == pytest.approx(50.0) == treated.gm_tokens_ci_high
 
@@ -458,7 +458,7 @@ def test_a_teardown_harvest_does_not_make_the_agent_a_non_submitter(
     table = paired_setups.setup_aggregates(best, served, "numba")
     tokens = paired_setups.tokens_by_setup_kernel(obs)
     row = paired_setups.setup_rows(
-        best, graded_frame, table, served, tokens, paired_setups.task_usage(obs, population.RepeatPolicy.LATEST)
+        best, graded_frame, table, served, tokens, paired_setups.episode_usage(obs, population.RepeatPolicy.LATEST)
     )[0]
 
     assert row["n_solved"] == 3
@@ -484,7 +484,7 @@ def test_a_promoted_row_is_not_a_submission_either(paired_setups: ModuleType, tm
     table = paired_setups.setup_aggregates(best, served, "numba")
     tokens = paired_setups.tokens_by_setup_kernel(obs)
     row = paired_setups.setup_rows(
-        best, graded_frame, table, served, tokens, paired_setups.task_usage(obs, population.RepeatPolicy.LATEST)
+        best, graded_frame, table, served, tokens, paired_setups.episode_usage(obs, population.RepeatPolicy.LATEST)
     )[0]
 
     assert (row["n_final_harvest"], row["n_never_submitted"]) == (0, 1)
@@ -600,11 +600,11 @@ def test_usage_reports_how_many_tasks_were_relaunched_and_what_the_crashes_spent
         *episode("a", "k4", 2.0, 100.0, job="j1"),
     ]
     for task_row, attempts, crashed in zip(rows[2::3], (1, 2, 3, 1), (0, 40, 90, 0), strict=True):
-        task_row |= {"task_attempts": attempts, "tokens_crashed": crashed}
-    usage = paired_setups.task_usage(frame(rows), population.RepeatPolicy.LATEST).loc["a"]
+        task_row |= {"episode_attempts": attempts, "tokens_crashed": crashed}
+    usage = paired_setups.episode_usage(frame(rows), population.RepeatPolicy.LATEST).loc["a"]
     assert usage.tasks == 4
-    assert usage.attempts_per_task == pytest.approx(1.75)
-    assert usage.relaunched_tasks == 2
+    assert usage.attempts_per_episode == pytest.approx(1.75)
+    assert usage.relaunched_episodes == 2
     assert usage.share_relaunched == pytest.approx(0.5)
     assert usage.tokens_crashed == pytest.approx(130.0)
 
@@ -615,7 +615,7 @@ def test_the_impact_table_carries_the_relaunch_rate_beside_every_token_ratio(
     """The fixture relaunches every treated task once and never relaunches a control one."""
     table = impact_table(paired_setups, tmp_path).set_index("setup")
     treated, control = table.loc["x-qwen38-c-cpf"], table.loc["x-qwen38-c"]
-    assert (treated.relaunched_tasks, control.relaunched_tasks) == (8, 0)
+    assert (treated.relaunched_episodes, control.relaunched_episodes) == (8, 0)
     assert treated.share_relaunched == pytest.approx(1.0) and control.share_relaunched == pytest.approx(0.0)
 
 
@@ -669,8 +669,8 @@ def test_one_baseline_keeps_the_named_reference_and_every_row_without_one(paired
         ]
     )
     kept = paired_setups.one_baseline(rows, "c-autopar")
-    assert list(kept.row_kind) == ["submission", "task", "task"]
-    assert sorted(kept[kept.row_kind == "task"].benchmark) == ["k1", "k2"]
+    assert list(kept.row_kind) == ["submission", "episode", "episode"]
+    assert sorted(kept[kept.row_kind == "episode"].kernel) == ["k1", "k2"]
 
 
 def test_a_kernel_the_setup_never_delivered_scores_one_and_still_costs_its_tokens(
@@ -729,7 +729,7 @@ def test_the_setup_row_counts_what_the_setup_delivered_not_the_size_of_its_popul
     best = paired_setups.best_by_setup_kernel(paired_setups.graded_rows(obs, ["a"]))
     served = paired_setups.served_by_setup(obs)
     table = paired_setups.setup_aggregates(best, served, "numba")
-    usage = paired_setups.task_usage(obs, population.RepeatPolicy.LATEST)
+    usage = paired_setups.episode_usage(obs, population.RepeatPolicy.LATEST)
     row = paired_setups.setup_rows(best, paired_setups.graded_rows(obs, ["a"]), table, served, {}, usage)[0]
     assert (row["n_served"], row["n_solved"]) == (8, 5)
     assert row["coverage"] == pytest.approx(5 / 8)
@@ -754,7 +754,7 @@ def test_a_kernel_the_setup_never_ran_leaves_its_completion_and_its_pairs_while_
     assert (served["a"], served["b"]) == (frozenset(KERNELS[:7]), frozenset(KERNELS))
     best = paired_setups.best_by_setup_kernel(paired_setups.graded_rows(obs, ["a", "b"]))
     table = paired_setups.setup_aggregates(best, served, "numba")
-    usage = paired_setups.task_usage(obs, population.RepeatPolicy.LATEST)
+    usage = paired_setups.episode_usage(obs, population.RepeatPolicy.LATEST)
     setup = paired_setups.setup_rows(best, paired_setups.graded_rows(obs, ["a"]), table, served, {}, usage)[0]
     assert (setup["n_served"], setup["n_solved"], setup["coverage"]) == (7, 6, pytest.approx(6 / 7))
     tokens = paired_setups.tokens_by_setup_kernel(obs)
@@ -767,7 +767,7 @@ def test_a_kernel_the_setup_never_ran_leaves_its_completion_and_its_pairs_while_
 def test_no_submit_rate_is_over_every_episode_not_the_kernels_final_one(
     paired_setups: ModuleType, tmp_path: pathlib.Path
 ) -> None:
-    """k1 is rerun as a separate job (same run_id, different job -- the rerun shape
+    """k1 is rerun as a separate job (same episode_id, different job -- the rerun shape
     ``test_a_rerun_job_is_a_separate_run_and_the_latest_run_stands`` already covers): job j1 never
     submitted (harvest only), job j2 reran and DID submit. ``best_by_setup_kernel`` picks j2 as k1's
     final answer, so ``n_never_submitted`` (kernel-level) reads 0 -- but j1 was still a real episode
@@ -797,7 +797,7 @@ def test_no_submit_rate_is_over_every_episode_not_the_kernels_final_one(
         table,
         served,
         tokens,
-        paired_setups.task_usage(obs, population.RepeatPolicy.LATEST),
+        paired_setups.episode_usage(obs, population.RepeatPolicy.LATEST),
         no_submit=rate,
     )[0]
     assert row["n_never_submitted"] == 0

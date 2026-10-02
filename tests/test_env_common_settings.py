@@ -21,8 +21,8 @@ from tests.env_render import BASES, rendered
 from tests.fresh_module import fresh
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-EXPERIMENTS = REPO / "hpcagent_bench" / "cluster"
-LAUNCHER = EXPERIMENTS / "run_cluster.sh"
+CLUSTER_DIR = REPO / "hpcagent_bench" / "cluster"
+LAUNCHER = CLUSTER_DIR / "run_cluster.sh"
 
 #: Settings that are the same for every model and every harness: the launcher owns them, and a .env
 #: that repeats one is how two setups end up on different values.
@@ -176,7 +176,7 @@ def test_every_cli_idle_wall_resolves_to_the_one_derived_value() -> None:
         ["bash", "-c", script],
         env={
             "PATH": "/usr/bin:/bin",
-            "SCRIPT_DIR": str(EXPERIMENTS),
+            "SCRIPT_DIR": str(CLUSTER_DIR),
             "HPCAGENT_BENCH_IMAGE_PYTHON": sys.executable,  # the image interpreter the EDF names
             "CONTEXT_LENGTH": "262144",
             "AGENTS_PER_NODE": "40",

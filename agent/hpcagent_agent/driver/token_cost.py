@@ -112,7 +112,7 @@ __all__ = [
     "USAGE_NAME",
     "AttemptTotals",
     "CostRow",
-    "TaskTotals",
+    "EpisodeTotals",
     "accumulate_total_tokens",
     "as_block",
     "attempt_ledger",
@@ -136,7 +136,7 @@ __all__ = [
     "numbered_attempts",
     "resolve_output",
     "stream_message_id",
-    "task_totals",
+    "episode_totals",
     "transcripts",
     "usage_episode_cost",
     "usage_event",
@@ -716,7 +716,7 @@ def attempt_transcripts(worker_dir: pathlib.Path) -> list[pathlib.Path]:
     return []
 
 
-class TaskTotals(NamedTuple):
+class EpisodeTotals(NamedTuple):
     """T2: one task's token totals, read off the attempts in its worker directory.
 
     ``tokens_effective``/``tokens_billed`` are the FINAL attempt's, which is what the task cost
@@ -813,7 +813,7 @@ def final_attempt_start(worker_dir: pathlib.Path, logs: list[pathlib.Path]) -> i
     return int(renamed[-1].stat().st_mtime * 1000) if renamed else 0
 
 
-def task_totals(worker_dir: pathlib.Path) -> TaskTotals:
+def episode_totals(worker_dir: pathlib.Path) -> EpisodeTotals:
     """The TASK TOKEN TOTAL (T2) of one task: its FINAL attempt, and what the earlier ones spent.
 
     One rule for every directory, old and new: the last agent ran the task from nothing to its end.
@@ -826,10 +826,10 @@ def task_totals(worker_dir: pathlib.Path) -> TaskTotals:
     """
     logs = attempt_transcripts(worker_dir)
     if not logs:
-        return TaskTotals(0, None, None, 0, 0, 0)
+        return EpisodeTotals(0, None, None, 0, 0, 0)
     per_attempt = [attempt_totals(log) for log in logs]
     final = per_attempt[-1]
-    return TaskTotals(
+    return EpisodeTotals(
         attempts=len(logs),
         tokens_effective=final.effective,
         tokens_billed=final.billed,

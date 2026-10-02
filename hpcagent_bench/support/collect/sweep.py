@@ -109,7 +109,7 @@ def run_one(
 
 
 def run_benchmark_sweep(
-    benchmark: str,
+    kernel: str,
     framework: str,
     preset: str,
     validate: bool,
@@ -117,10 +117,10 @@ def run_benchmark_sweep(
     timeout: float,
     datatype: str | None,
 ) -> list[str]:
-    """Run the ``benchmark`` selection (kernel, track, dwarf, prefix, or "all") under one ``framework``,
+    """Run the ``kernel`` selection (kernel, track, dwarf, prefix, or "all") under one ``framework``,
     forking each kernel so a crashing kernel does not end the sweep; returns the kernels whose child
     failed."""
-    benchnames = KERNELS.select(benchmark)
+    benchnames = KERNELS.select(kernel)
     failed = []
     for benchname in benchnames:
         if len(benchnames) > 1:
@@ -182,14 +182,14 @@ def filter_out_completed_benchmarks(
             if has_datatype:
                 cur.execute(
                     """
-                    SELECT benchmark FROM (
-                        SELECT benchmark, timestamp, COUNT(*) AS c
+                    SELECT kernel FROM (
+                        SELECT kernel, timestamp, COUNT(*) AS c
                         FROM results
                         WHERE framework = ? AND preset = ?
                         AND COALESCE(datatype, 'float64') = ?
-                        GROUP BY benchmark, timestamp
+                        GROUP BY kernel, timestamp
                     )
-                    GROUP BY benchmark
+                    GROUP BY kernel
                     HAVING MAX(c) >= ?
                 """,
                     (framework_name, preset, datatype, repeat),
@@ -204,13 +204,13 @@ def filter_out_completed_benchmarks(
                     return all_benchmarks
                 cur.execute(
                     """
-                    SELECT benchmark FROM (
-                        SELECT benchmark, timestamp, COUNT(*) AS c
+                    SELECT kernel FROM (
+                        SELECT kernel, timestamp, COUNT(*) AS c
                         FROM results
                         WHERE framework = ? AND preset = ?
-                        GROUP BY benchmark, timestamp
+                        GROUP BY kernel, timestamp
                     )
-                    GROUP BY benchmark
+                    GROUP BY kernel
                     HAVING MAX(c) >= ?
                 """,
                     (framework_name, preset, repeat),
@@ -258,7 +258,7 @@ def shard_names(
 
 
 def run_framework_sweep(
-    benchmark: str,
+    kernel: str,
     framework: str,
     preset: str,
     validate: bool,
@@ -272,7 +272,7 @@ def run_framework_sweep(
     distributed: bool = False,
     opt_reports_dir: str | None = None,
 ) -> list[str]:
-    """Run the ``benchmark`` selection under ``framework``, forking each kernel; returns the kernels whose
+    """Run the ``kernel`` selection under ``framework``, forking each kernel; returns the kernels whose
     child failed. ``skip_existing`` drops kernels already recorded.
 
     ``distributed`` names the residency and is passed to every child (``False``: independent shards;
@@ -281,7 +281,7 @@ def run_framework_sweep(
     (:func:`write_csv_rows`) for :func:`summarize_csv`. ``opt_reports_dir`` collects
     :mod:`hpcagent_bench.opt_reports` output per kernel (per framework when several), read after a
     successful child and outside the fork."""
-    benchnames = shard_names(KERNELS.select(benchmark or "all"), shard, preset)
+    benchnames = shard_names(KERNELS.select(kernel or "all"), shard, preset)
 
     if skip_existing:
         benchname_to_shortname_mapping = {name: BenchSpec.load(name).short_name for name in benchnames}

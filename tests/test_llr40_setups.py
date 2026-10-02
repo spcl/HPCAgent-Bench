@@ -23,16 +23,16 @@ def submission_rows(
 
     ``baseline`` is the reference that won the row's denominator (``numba`` here)."""
     rows = []
-    for benchmark, speedup in benchmark_speedups.items():
-        run = f"{setup}-{benchmark}"
+    for kernel, speedup in benchmark_speedups.items():
+        run = f"{setup}-{kernel}"
         rows.append(
             {
                 "run_root": "j1",
                 "job": "j1",
-                "run_id": run,
+                "episode_id": run,
                 "setup": setup,
                 "row_kind": "submission",
-                "benchmark": benchmark,
+                "kernel": kernel,
                 "speedup": speedup,
                 "baseline_ns": 1000.0,
                 "native_ns": 1000.0 / speedup,
@@ -50,16 +50,16 @@ def call_rows(setup: str, benchmark_tokens: dict[str, float]) -> list[dict[str, 
     """One ``call`` row per (setup, kernel): a running count mid-task, NEVER a token cost (T4) --
     used only to test that a frame with call rows and no task rows is refused for tokens."""
     rows = []
-    for benchmark, tokens in benchmark_tokens.items():
-        run = f"{setup}-{benchmark}"
+    for kernel, tokens in benchmark_tokens.items():
+        run = f"{setup}-{kernel}"
         rows.append(
             {
                 "run_root": "j1",
                 "job": "j1",
-                "run_id": run,
+                "episode_id": run,
                 "setup": setup,
                 "row_kind": "call",
-                "benchmark": benchmark,
+                "kernel": kernel,
                 "tokens": tokens,
                 "ts_ms": 1,
                 "attempt_index": 1,
@@ -68,23 +68,23 @@ def call_rows(setup: str, benchmark_tokens: dict[str, float]) -> list[dict[str, 
     return rows
 
 
-def task_rows(
+def episode_rows(
     setup: str, benchmark_tokens: dict[str, float], ts_ms: int = 1, run_suffix: str = ""
 ) -> list[dict[str, object]]:
-    """One ``row_kind=task`` row per (setup, kernel): the columns ``population.kernel_tokens`` needs
+    """One ``row_kind=episode`` row per (setup, kernel): the columns ``population.kernel_tokens`` needs
     (T2-T4) -- one row per worker directory, ``tokens`` the task's own effective total.
     ``run_suffix`` distinguishes several tasks of the same kernel (a rerun or a designed repeat)."""
     rows = []
-    for benchmark, tokens in benchmark_tokens.items():
-        run = f"{setup}-{benchmark}{run_suffix}"
+    for kernel, tokens in benchmark_tokens.items():
+        run = f"{setup}-{kernel}{run_suffix}"
         rows.append(
             {
                 "run_root": f"j1{run_suffix}",
                 "job": f"j1{run_suffix}",
-                "run_id": run,
+                "episode_id": run,
                 "setup": setup,
-                "row_kind": "task",
-                "benchmark": benchmark,
+                "row_kind": "episode",
+                "kernel": kernel,
                 "tokens": tokens,
                 # the task total as fresh input alone, so every cost card prices it at ``tokens``
                 "tokens_fresh_input": tokens,
@@ -113,11 +113,11 @@ def canon_frame(rows: list[tuple[str, str, float, str]]) -> pd.DataFrame:
 @pytest.mark.parametrize(
     ("setup", "expected"),
     [
-        ("llr-focus40-qwen38-c", ("qwen38", "")),
+        ("llr40-qwen38-c", ("qwen38", "")),
         ("cpf-llr-focus40-qwen38-c-cpf", ("qwen38", "cpf")),
         ("cpf-llr-focus40-oss120b-c-cpfsrc", ("oss120b", "cpfsrc")),
-        ("llr-focus40-qwen38-fortran", None),
-        ("llr-focus40-qwen38-c-skills", None),
+        ("llr40-qwen38-fortran", None),
+        ("llr40-qwen38-c-skills", None),
     ],
 )
 def test_parse_setup_reads_model_and_condition_from_the_setup_name_only(
@@ -131,12 +131,12 @@ def test_parse_setup_reads_model_and_condition_from_the_setup_name_only(
 def test_candidate_setups_keeps_only_setups_the_pattern_names() -> None:
     frame = observations(
         [
-            *submission_rows("llr-focus40-qwen38-c", {"k1": 2.0}),
-            *submission_rows("llr-focus40-qwen38-fortran", {"k1": 2.0}),
-            *submission_rows("llr-focus40-qwen38-c-skills", {"k1": 2.0}),
+            *submission_rows("llr40-qwen38-c", {"k1": 2.0}),
+            *submission_rows("llr40-qwen38-fortran", {"k1": 2.0}),
+            *submission_rows("llr40-qwen38-c-skills", {"k1": 2.0}),
         ]
     )
-    assert llr40_setups.candidate_setups(frame) == {"llr-focus40-qwen38-c": ("qwen38", "")}
+    assert llr40_setups.candidate_setups(frame) == {"llr40-qwen38-c": ("qwen38", "")}
 
 
 def test_setup_tokens_reads_one_tasks_total_never_a_sum() -> None:
@@ -144,11 +144,11 @@ def test_setup_tokens_reads_one_tasks_total_never_a_sum() -> None:
     rows -- a kernel with one task simply reports that task's own total."""
     frame = observations(
         [
-            *submission_rows("llr-focus40-qwen38-c", {"k1": 2.0}),
-            *task_rows("llr-focus40-qwen38-c", {"k1": 100.0}),
+            *submission_rows("llr40-qwen38-c", {"k1": 2.0}),
+            *episode_rows("llr40-qwen38-c", {"k1": 100.0}),
         ]
     )
-    values, low, high = llr40_setups.setup_tokens(frame, "llr-focus40-qwen38-c")
+    values, low, high = llr40_setups.setup_tokens(frame, "llr40-qwen38-c")
     assert values == {"k1": 100.0}
     assert low == {} and high == {}
 
@@ -156,12 +156,12 @@ def test_setup_tokens_reads_one_tasks_total_never_a_sum() -> None:
 def test_setup_tokens_reads_a_rerun_kernels_latest_task_total_not_the_sum_of_both() -> None:
     """A rerun kernel's token cell is the LATEST task's own total (R4): summing both tasks would
     bill a setup twice for being resubmitted, which the earlier reduction did (spec F1)."""
-    setup = "llr-focus40-qwen38-c"
+    setup = "llr40-qwen38-c"
     frame = observations(
         [
             *submission_rows(setup, {"k1": 2.0}),
-            *task_rows(setup, {"k1": 400.0}, ts_ms=10, run_suffix="-w0"),
-            *task_rows(setup, {"k1": 250.0}, ts_ms=30, run_suffix="-w1"),
+            *episode_rows(setup, {"k1": 400.0}, ts_ms=10, run_suffix="-w0"),
+            *episode_rows(setup, {"k1": 250.0}, ts_ms=30, run_suffix="-w1"),
         ]
     )
     values, low, high = llr40_setups.setup_tokens(frame, setup)
@@ -175,12 +175,12 @@ def test_setup_tokens_refuses_a_frame_with_call_rows_and_no_task_records() -> No
     silently reading a partial total."""
     frame = observations(
         [
-            *submission_rows("llr-focus40-qwen38-c", {"k1": 2.0}),
-            *call_rows("llr-focus40-qwen38-c", {"k1": 900.0}),
+            *submission_rows("llr40-qwen38-c", {"k1": 2.0}),
+            *call_rows("llr40-qwen38-c", {"k1": 900.0}),
         ]
     )
     with pytest.raises(population.MixedPopulationError, match="no task records"):
-        llr40_setups.setup_tokens(frame, "llr-focus40-qwen38-c")
+        llr40_setups.setup_tokens(frame, "llr40-qwen38-c")
 
 
 def test_the_control_condition_reads_no_packet_not_the_registry_skill_wording() -> None:
@@ -227,5 +227,5 @@ def test_rank_condition_sorts_an_axis_outside_the_declared_order_alphabetically(
 
 def test_the_control_is_read_under_its_configuration_name_and_its_recorded_one() -> None:
     assert llr40_setups.parse_setup("llr40-qwen38-c") == ("qwen38", "")
-    assert llr40_setups.parse_setup("llr-focus40-qwen38-c") == ("qwen38", "")
+    assert llr40_setups.parse_setup("llr40-qwen38-c") == ("qwen38", "")
     assert llr40_setups.parse_setup("cpf-llr-focus40-qwen38-c-cpfsrc") == ("qwen38", "cpfsrc")

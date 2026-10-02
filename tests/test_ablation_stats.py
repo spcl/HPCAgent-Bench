@@ -125,10 +125,10 @@ def seed_db(path: pathlib.Path, submissions: list[tuple], attempts: tuple[str, .
         results_db.ensure_setup(
             conn, results_db.Setup("ablation-qwen38-c", "c", "cpu", study="ablation", model="qwen38")
         )
-        run = results_db.ensure_run(conn, "ablation-qwen38-c", "run", None)
+        run = results_db.ensure_episode(conn, "ablation-qwen38-c", "run", None)
         stamp = {"preset": "S", "datatype": "float64", "source_mode": "restricted", "baseline": "c"}
         for row in submissions:
-            benchmark, ts, speedup = row[:3]
+            kernel, ts, speedup = row[:3]
             suspect = row[3] if len(row) > 3 else 0
             credited = {
                 "build_ok": 1,
@@ -137,10 +137,10 @@ def seed_db(path: pathlib.Path, submissions: list[tuple], attempts: tuple[str, .
                 "credited_speedup": speedup,
                 "suspect": suspect,
             }
-            results_db.add_grade(conn, run, benchmark, "submit", ts_ms=ts, values=stamp | credited)
-        for benchmark in attempts:
+            results_db.add_grade(conn, run, kernel, "submit", ts_ms=ts, values=stamp | credited)
+        for kernel in attempts:
             rejected = {"build_ok": 0, "correct": 0, "reason": "build"}
-            results_db.add_grade(conn, run, benchmark, "submit", ts_ms=1, values=stamp | rejected)
+            results_db.add_grade(conn, run, kernel, "submit", ts_ms=1, values=stamp | rejected)
         conn.commit()
 
 
@@ -171,7 +171,7 @@ def test_dedup_best_takes_the_fastest_verified_submission(ablation_stats, tmp_pa
     db = tmp_path / "a.db"
     seed_db(db, [("gemm", 1, 3.0), ("gemm", 2, 2.0)])
     rows, _ = run_stats(ablation_stats, tmp_path, [f"a={db}"], problems=1)
-    assert [(r["benchmark"], r["a_success"], float(r["a_speedup"])) for r in rows] == [("gemm", "1", 3.0)]
+    assert [(r["kernel"], r["a_success"], float(r["a_speedup"])) for r in rows] == [("gemm", "1", 3.0)]
 
 
 def test_dedup_last_takes_the_final_submission_in_time(ablation_stats, tmp_path) -> None:
@@ -219,7 +219,7 @@ def test_a_kernel_whose_only_row_is_suspect_is_censored_not_dropped(ablation_sta
     db = tmp_path / "a.db"
     seed_db(db, [("gemm", 1, 2.0), ("blowup", 1, float("inf"), 1)])
     rows, _ = run_stats(ablation_stats, tmp_path, [f"a={db}"], problems=2)
-    censored = next(r for r in rows if r["benchmark"] == "blowup")
+    censored = next(r for r in rows if r["kernel"] == "blowup")
     assert (censored["a_success"], censored["a_speedup"]) == ("0", "")
 
 
@@ -230,9 +230,9 @@ def test_a_legacy_db_is_refused(ablation_stats, tmp_path) -> None:
     conn = sqlite3.connect(str(db))
     try:
         conn.execute(
-            "CREATE TABLE submissions (id INTEGER PRIMARY KEY, ts INTEGER, benchmark TEXT NOT NULL, speedup REAL)"
+            "CREATE TABLE submissions (id INTEGER PRIMARY KEY, ts INTEGER, kernel TEXT NOT NULL, speedup REAL)"
         )
-        conn.execute("INSERT INTO submissions(ts, benchmark, speedup) VALUES (1, 'gemm', 2.0)")
+        conn.execute("INSERT INTO submissions(ts, kernel, speedup) VALUES (1, 'gemm', 2.0)")
         conn.commit()
     finally:
         conn.close()
@@ -266,7 +266,7 @@ def test_missing_benchmark_is_censored_not_zero(ablation_stats, tmp_path) -> Non
     seed_db(db_b, [("gemm", 1, 2.0)], attempts=("stencil",))
     rows, pairs = run_stats(ablation_stats, tmp_path, [f"a={db_a}", f"b={db_b}"], problems=5)
 
-    by_name = {r["benchmark"]: r for r in rows}
+    by_name = {r["kernel"]: r for r in rows}
     assert by_name["stencil"]["a_success"] == "1"
     assert by_name["stencil"]["b_success"] == "0"
     assert by_name["stencil"]["b_speedup"] == ""
@@ -281,7 +281,7 @@ def test_kernel_no_setup_solved_still_appears_via_attempts(ablation_stats, tmp_p
     db = tmp_path / "a.db"
     seed_db(db, [("gemm", 1, 2.0)], attempts=("fdtd",))
     rows, _ = run_stats(ablation_stats, tmp_path, [f"a={db}"], problems=2)
-    censored = next(r for r in rows if r["benchmark"] == "fdtd")
+    censored = next(r for r in rows if r["kernel"] == "fdtd")
     assert (censored["a_success"], censored["a_speedup"]) == ("0", "")
 
 
@@ -511,14 +511,14 @@ def test_iteration_counts_benchmark_column_joins_on_the_kernel_stem(iteration_co
     )
     out = tmp_path / "iters.csv"
     assert iteration_counts.main([f"--run-dir={run_dir}", f"--out={out}", f"--problems={problems}"]) == 0
-    assert read_csv(out)[0]["benchmark"] == "argmax_value"
+    assert read_csv(out)[0]["kernel"] == "argmax_value"
 
 
 def test_iteration_counts_benchmark_column_is_empty_without_problems(iteration_counts, tmp_path) -> None:
     run_dir = build_run_dir(tmp_path)
     out = tmp_path / "iters.csv"
     assert iteration_counts.main([f"--run-dir={run_dir}", f"--out={out}"]) == 0
-    assert read_csv(out)[0]["benchmark"] == ""
+    assert read_csv(out)[0]["kernel"] == ""
 
 
 def test_iteration_counts_rejects_a_problems_file_that_is_not_a_manifest(iteration_counts, tmp_path) -> None:
@@ -578,16 +578,16 @@ def test_iteration_counts_without_agents_dir_names_the_path(iteration_counts, tm
 
 
 def seed_calls(path: pathlib.Path, rows: tuple[tuple[str, str, int, int], ...]) -> None:
-    """``(benchmark, run_id, call index, cumulative_tokens)`` /score grades."""
+    """``(benchmark, episode_id, call index, cumulative_tokens)`` /score grades."""
     with contextlib.closing(recording.connect(str(path))) as conn:
         results_db.ensure_setup(
             conn, results_db.Setup("ablation-qwen38-c", "c", "cpu", study="ablation", model="qwen38")
         )
         stamp = {"preset": "S", "datatype": "float64", "source_mode": "restricted", "speedup": 1.0, "correct": 1}
-        for benchmark, run_id, round_index, tokens in rows:
-            run = results_db.ensure_run(conn, "ablation-qwen38-c", run_id, None)
+        for kernel, episode_id, round_index, tokens in rows:
+            run = results_db.ensure_episode(conn, "ablation-qwen38-c", episode_id, None)
             values = stamp | {"call_index": round_index, "tokens_so_far": tokens}
-            results_db.add_grade(conn, run, benchmark, "score", ts_ms=round_index, values=values)
+            results_db.add_grade(conn, run, kernel, "score", ts_ms=round_index, values=values)
         conn.commit()
 
 
@@ -753,15 +753,15 @@ def test_the_rank_interval_matches_the_library_definition(ablation_stats) -> Non
 
 
 def seed_observations(path: pathlib.Path, rows: list[tuple[str, str, str, int, int]]) -> None:
-    """An extracted observations DB of task rows only: (setup, benchmark, run_id, tokens, ts_ms), each
+    """An extracted observations DB of task rows only: (setup, benchmark, episode_id, tokens, ts_ms), each
     total stated as fresh input alone so every cost card prices it at ``tokens``.
 
     Written by the one extractor, :mod:`hpcagent_bench.observations_extract`."""
     records = []
-    for setup, benchmark, run_id, tokens, ts_ms in rows:
+    for setup, kernel, episode_id, tokens, ts_ms in rows:
         record = dict.fromkeys(observations_extract.OBSERVATION_FIELDS, "")
         record.update(
-            row_kind="task", setup=setup, benchmark=benchmark, run_root="rr", job=1, run_id=run_id, tokens=tokens, ts_ms=ts_ms,
+            row_kind="episode", setup=setup, kernel=kernel, run_root="rr", job=1, episode_id=episode_id, tokens=tokens, ts_ms=ts_ms,
             tokens_fresh_input=tokens, tokens_cached_input=0, tokens_output=0,
         )  # fmt: skip
         records.append(record)
@@ -811,7 +811,7 @@ def test_the_cost_half_prices_the_task_rows_with_the_billed_card_by_default(
     for setup, cached in (("a", 0), ("b", 1000)):
         record = dict.fromkeys(observations_extract.OBSERVATION_FIELDS, "")
         record.update(
-            row_kind="task", setup=setup, benchmark="k1", run_root="rr", job=1, run_id=f"r-{setup}", tokens=100, ts_ms=1,
+            row_kind="episode", setup=setup, kernel="k1", run_root="rr", job=1, episode_id=f"r-{setup}", tokens=100, ts_ms=1,
             tokens_fresh_input=100, tokens_cached_input=cached, tokens_output=0,
         )  # fmt: skip
         records.append(record)

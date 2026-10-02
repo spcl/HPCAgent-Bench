@@ -44,7 +44,7 @@ def cell(index: int = 0, **changes: object) -> dict[str, Any]:
     adds), flagged suspect by the old floor; its synchronization readings are those of an honest
     mi300 grade."""
     row: dict[str, Any] = {
-        "benchmark": KERNEL,
+        "kernel": KERNEL,
         "cell": index,
         "label": f"cfg0:large{index}",
         "shape": '{"LEN_2D": 12070, "VLEN": 8}',
@@ -111,7 +111,7 @@ def test_a_flag_another_cause_may_explain_is_never_cleared(changes: dict[str, An
 
 def test_a_kernel_without_an_override_keeps_the_judges_flag() -> None:
     """argmax_with_index must read all of ``a``: its floor is right and its flag is not touched."""
-    assert extract.rederived_cell_suspect(cell(benchmark="argmax_with_index", shape='{"LEN_1D": 64}')) == 1
+    assert extract.rederived_cell_suspect(cell(kernel="argmax_with_index", shape='{"LEN_1D": 64}')) == 1
 
 
 RUN = "gpu-llr-focus40-qwen38-hip-clean.n0.p13.w13"
@@ -127,7 +127,7 @@ def shard(path: pathlib.Path, cells: list[dict[str, Any]]) -> None:
     stamp = {"preset": "XL", "datatype": "float64", "source_mode": "restricted", "baseline": "hip"}
     with contextlib.closing(results_db.open_db(path)) as conn:
         results_db.ensure_setup(conn, results_db.Setup(setup, "hip", "gpu", study="llr-focus40", model="qwen38"))
-        run = results_db.ensure_run(conn, setup, RUN, JOB)
+        run = results_db.ensure_episode(conn, setup, RUN, JOB)
         credited = {"build_ok": 1, "correct": 1, "speedup": 3.0, "credited_speedup": 3.0}
         original, _ = results_db.add_grade(conn, run, KERNEL, "submit", ts_ms=TS_MS, values=stamp | credited)
         final = {
@@ -141,7 +141,7 @@ def shard(path: pathlib.Path, cells: list[dict[str, Any]]) -> None:
             "status": "graded",
         }
         grade, _ = results_db.add_grade(conn, run, KERNEL, "final", ts_ms=TS_MS + 1, values=stamp | final)
-        results_db.add_cells(conn, grade, [{k: v for k, v in c.items() if k != "benchmark"} for c in cells])
+        results_db.add_cells(conn, grade, [{k: v for k, v in c.items() if k != "kernel"} for c in cells])
         conn.commit()
 
 
@@ -157,7 +157,7 @@ def test_an_all_suspect_s1232_task_is_credited_again_from_its_stored_cells(tmp_p
 def test_the_final_grade_marks_the_rederived_submission_solved(tmp_path: pathlib.Path) -> None:
     shard(tmp_path / "regrade-cells-0.db", [cell(index) for index in range(4)])
     final = extract.load_final_regrades([str(tmp_path / "regrade-cells-0.db")])
-    row = {"row_kind": "submission", "job": str(JOB), "run_id": RUN, "benchmark": KERNEL}
+    row = {"row_kind": "submission", "job": str(JOB), "episode_id": RUN, "kernel": KERNEL}
     (graded,), _ = extract.apply_final_regrades([{**row, "ts_ms": TS_MS, "speedup": 1.0, "timing_suspect": 1}], final)
     assert (graded["timing_suspect"], graded["speedup"]) == (0, pytest.approx(math.prod(RATIOS) ** 0.25))
 
@@ -165,7 +165,7 @@ def test_the_final_grade_marks_the_rederived_submission_solved(tmp_path: pathlib
 def live_row(**changes: object) -> sqlite3.Row:
     """One live credited grade of s1232 on a GPU setup, as sqlite hands it to ``read_db``."""
     values: dict[str, Any] = {
-        "benchmark": KERNEL,
+        "kernel": KERNEL,
         "suspect": 1,
         "credited_speedup": RATIOS[0],
         "baseline_ns": BASELINE_NS,

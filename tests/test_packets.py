@@ -5,7 +5,7 @@
 Covers every predefined packet (cpf, cpfsrc, lang, lang-skills, profiling bundle, repo,
 no-score-tool, autokernel, all-in, the perf-playbook and all-in device variants), an implicit
 single-skill packet, an ad-hoc ``;``-separated list, the device and frozen refusals, the error paths,
-and the identity/colour round trips that ``runs.packet`` already depends on.
+and the identity/colour round trips that ``setups.packet`` already depends on.
 """
 
 import dataclasses

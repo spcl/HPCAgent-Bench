@@ -108,9 +108,9 @@ def shard_rows(db: str, sql: str, args: tuple = ()) -> list[tuple]:
 
 
 def submitted_pairs(
-    run_dir: pathlib.Path, only_run_id: str = "", cuts: dict[str, int] | None = None
+    run_dir: pathlib.Path, only_episode_id: str = "", cuts: dict[str, int] | None = None
 ) -> set[tuple[str, str]]:
-    """Every ``(run_id, kernel)`` this run already holds a submission for.
+    """Every ``(episode_id, kernel)`` this run already holds a submission for.
 
     ONE definition, because both promotion paths must skip the same episodes. The score-store path
     reads it to leave a worker's own answer standing; the workspace fallback reads it for the same
@@ -120,35 +120,35 @@ def submitted_pairs(
     LAST row of an episode, so the harvest replaced the answer the agent chose: 18 of 22 tagged rows
     on one blind setup. A second skip list here would be the same defect waiting to reopen.
 
-    ``cuts`` maps a run id to its worker's FINAL-attempt start (T5), as :func:`candidates` and
+    ``cuts`` maps an episode id to its worker's FINAL-attempt start (T5), as :func:`candidates` and
     :func:`swept_candidates` cut the grades. A submission older than that came from an attempt the
     relaunch wiped, and the analysis drops it (spec X7), so it does not stand for the episode and
     must not block promoting the final attempt's own correct score, or the episode is left with no
     answer at all.
     """
-    where = " and r.label = ?" if only_run_id else ""
-    args: tuple = (only_run_id,) if only_run_id else ()
+    where = " and r.label = ?" if only_episode_id else ""
+    args: tuple = (only_episode_id,) if only_episode_id else ()
     cut_of = cuts or {}
     stamp = "g.ts_ms" if cut_of else "0"
     sql = (
-        f"select g.benchmark, r.label, {stamp} from grades g join runs r on r.id = g.run_id "
+        f"select g.kernel, r.label, {stamp} from grades g join episodes r on r.id = g.episode_id "
         f"where g.credited_speedup is not null and g.kind in {SUBMIT_KINDS}{where}"
     )
     pairs: set[tuple[str, str]] = set()
     for db in db_files(run_dir):
-        for bench, run_id, ts in shard_rows(db, sql, args):
-            if bench and run_id and (ts or 0) >= cut_of.get(run_id, 0):
-                pairs.add((run_id, short_name(bench)))
+        for bench, episode_id, ts in shard_rows(db, sql, args):
+            if bench and episode_id and (ts or 0) >= cut_of.get(episode_id, 0):
+                pairs.add((episode_id, short_name(bench)))
     return pairs
 
 
-def best_speedups(run_dir: pathlib.Path, only_run_id: str = "", since_ms: int = 0) -> dict[tuple[str, str], float]:
-    """The best correct speedup per ``(run_id, kernel)`` in this run's judge shards.
+def best_speedups(run_dir: pathlib.Path, only_episode_id: str = "", since_ms: int = 0) -> dict[tuple[str, str], float]:
+    """The best correct speedup per ``(episode_id, kernel)`` in this run's judge shards.
 
     Correct is enough, slower included: speedup is taken over the kernels a setup solved, so a correct
     answer below 1x is a solved kernel at its own ratio and dropping it would score the task unsolved.
 
-    Keyed by (run_id, kernel), not by kernel. Scoring is last-submission-per-episode and max
+    Keyed by (episode_id, kernel), not by kernel. Scoring is last-submission-per-episode and max
     across agents, so two workers handed the same kernel are two episodes and two data points --
     deduping by kernel would let one worker's submission suppress another's promotion.
 
@@ -157,19 +157,19 @@ def best_speedups(run_dir: pathlib.Path, only_run_id: str = "", since_ms: int = 
     """
     where = ["g.correct = 1", "g.call_index is not null"]
     args: list[object] = []
-    if only_run_id:
+    if only_episode_id:
         where.append("r.label = ?")
-        args.append(only_run_id)
+        args.append(only_episode_id)
     if since_ms > 0:
         where.append("g.ts_ms >= ?")
         args.append(since_ms)
-    sql = f"select g.benchmark, r.label, g.speedup from grades g join runs r on r.id = g.run_id where {' and '.join(where)}"
+    sql = f"select g.kernel, r.label, g.speedup from grades g join episodes r on r.id = g.episode_id where {' and '.join(where)}"
     best: dict[tuple[str, str], float] = {}
     for db in db_files(run_dir):
-        for bench, run_id, speedup in shard_rows(db, sql, tuple(args)):
-            if not bench or not run_id:
+        for bench, episode_id, speedup in shard_rows(db, sql, tuple(args)):
+            if not bench or not episode_id:
                 continue
-            key = (run_id, short_name(bench))
+            key = (episode_id, short_name(bench))
             if key not in best or speedup > best[key]:
                 best[key] = float(speedup)
     return best
@@ -178,7 +178,7 @@ def best_speedups(run_dir: pathlib.Path, only_run_id: str = "", since_ms: int = 
 def promotable(
     run_dir: pathlib.Path, best: dict[tuple[str, str], float], submitted: set[tuple[str, str]], cuts: dict[str, int]
 ) -> list[dict[str, str]]:
-    """The submittable item behind each ranked ``(run_id, kernel)``, best speedup first.
+    """The submittable item behind each ranked ``(episode_id, kernel)``, best speedup first.
 
     ``cuts`` holds a worker's final-attempt stamp where there is one, so the source read back for it
     is one that attempt produced (T5).
@@ -186,10 +186,10 @@ def promotable(
     out: list[dict[str, str]] = []
     # Biggest speedup FIRST: a budget can cut this list short, and 76.6x vs 1.0x are not
     # interchangeable -- alphabetical order made survival-under-truncation a property of the name.
-    for (run_id, bench), _best_speedup in sorted(best.items(), key=lambda kv: (-kv[1], kv[0])):
-        if (run_id, bench) in submitted:
+    for (episode_id, bench), best_speedup in sorted(best.items(), key=lambda kv: (-kv[1], kv[0])):
+        if (episode_id, bench) in submitted:
             continue
-        item = last_passing(run_dir, bench, run_id, since_ms=cuts.get(run_id, 0))
+        item = last_passing(run_dir, bench, episode_id, since_ms=cuts.get(episode_id, 0))
         if item is not None:
             out.append(item)
     return out
@@ -202,14 +202,14 @@ ENVELOPE_FIELDS = ("distribution", "workspace_bytes", "build", "libraries")
 #: A worker's passing /score grades on one kernel with their stored units, newest first: the grade id,
 #: kernel, stamp, request envelope, and each unit's part, language and text.
 PASSING_GRADES = (
-    "select g.id, g.benchmark, g.ts_ms, g.distribution, g.workspace_bytes, g.requested_build, "
+    "select g.id, g.kernel, g.ts_ms, g.distribution, g.workspace_bytes, g.requested_build, "
     "g.requested_libraries, gs.part, gs.language, s.text from grades g "
-    "join runs r on r.id = g.run_id join grade_sources gs on gs.grade_id = g.id join sources s on s.hash = gs.hash "
+    "join episodes r on r.id = g.episode_id join grade_sources gs on gs.grade_id = g.id join sources s on s.hash = gs.hash "
     "where r.label = ? and g.kind = 'score' and g.correct = 1 and g.ts_ms >= ? order by g.ts_ms desc, g.id desc"
 )
 
 
-def last_passing(run_dir: pathlib.Path, bench: str, run_id: str, since_ms: int = 0) -> dict[str, str] | None:
+def last_passing(run_dir: pathlib.Path, bench: str, episode_id: str, since_ms: int = 0) -> dict[str, str] | None:
     """The submittable item of this worker's newest CORRECT score on ``bench`` that kept its source:
     the source, the device unit of a two-unit delivery, and the request envelope it was graded under
     (``distribution`` / ``workspace_bytes`` / ``build`` / ``libraries``, each as JSON text; a field the
@@ -227,7 +227,7 @@ def last_passing(run_dir: pathlib.Path, bench: str, run_id: str, since_ms: int =
     graded: dict[tuple[int, int, str], tuple[tuple, dict[str, tuple[str, str]]]] = {}
     for db in db_files(run_dir):
         for grade, stored_bench, ts, *envelope, part, language, text in shard_rows(
-            db, PASSING_GRADES, (run_id, since_ms)
+            db, PASSING_GRADES, (episode_id, since_ms)
         ):
             # Matched on the short name, not the stored string (see short_name).
             if short_name(stored_bench) == short_name(bench):
@@ -237,7 +237,7 @@ def last_passing(run_dir: pathlib.Path, bench: str, run_id: str, since_ms: int =
     if newest is None or "host" not in units:
         return None
     language, text = units["host"]
-    item = {"kernel": bench, "run_id": run_id, "language": language, "source": text}
+    item = {"kernel": bench, "episode_id": episode_id, "language": language, "source": text}
     if "device" in units:
         item["device_source"] = units["device"][1]
     distribution, workspace, build, libraries = newest[0]
@@ -251,15 +251,15 @@ def last_passing(run_dir: pathlib.Path, bench: str, run_id: str, since_ms: int =
     return item
 
 
-def candidates(run_dir: pathlib.Path, only_run_id: str = "", since_ms: int = 0) -> list[dict[str, str]]:
+def candidates(run_dir: pathlib.Path, only_episode_id: str = "", since_ms: int = 0) -> list[dict[str, str]]:
     """One entry per WORKER that scored correct and never submitted, best first.
 
-    ``only_run_id`` narrows it to one worker, which is what the agent-exit call passes, and
+    ``only_episode_id`` narrows it to one worker, which is what the agent-exit call passes, and
     ``since_ms`` cuts that worker's grades at its final attempt (T5).
     """
-    cuts = {only_run_id: since_ms} if only_run_id and since_ms > 0 else {}
-    best = best_speedups(run_dir, only_run_id, since_ms)
-    return promotable(run_dir, best, submitted_pairs(run_dir, only_run_id, cuts), cuts)
+    cuts = {only_episode_id: since_ms} if only_episode_id and since_ms > 0 else {}
+    best = best_speedups(run_dir, only_episode_id, since_ms)
+    return promotable(run_dir, best, submitted_pairs(run_dir, only_episode_id, cuts), cuts)
 
 
 def read_json(path: pathlib.Path) -> dict[str, object]:
@@ -272,10 +272,10 @@ def read_json(path: pathlib.Path) -> dict[str, object]:
     return {str(key): value for key, value in parsed.items()} if isinstance(parsed, dict) else {}
 
 
-def declared_run_id(mcp_config: pathlib.Path) -> str:
-    """The run id the driver declared for this worker's MCP server (``HPCAGENT_BENCH_RUN_ID``).
+def declared_episode_id(mcp_config: pathlib.Path) -> str:
+    """The episode id the driver declared for this worker's MCP server (``HPCAGENT_BENCH_EPISODE_ID``).
 
-    The worker directory names the node and the worker but not the PROBLEM index, which the run id
+    The worker directory names the node and the worker but not the PROBLEM index, which the episode id
     carries, so the config the driver wrote is where the two are tied together.
     """
     servers = read_json(mcp_config).get("mcpServers")
@@ -283,17 +283,17 @@ def declared_run_id(mcp_config: pathlib.Path) -> str:
         return ""
     for server in servers.values():
         environment = server.get("env") if isinstance(server, dict) else None
-        run_id = environment.get("HPCAGENT_BENCH_RUN_ID") if isinstance(environment, dict) else None
-        if isinstance(run_id, str) and run_id:
-            return run_id
+        episode_id = environment.get("HPCAGENT_BENCH_EPISODE_ID") if isinstance(environment, dict) else None
+        if isinstance(episode_id, str) and episode_id:
+            return episode_id
     return ""
 
 
 def worker_cuts(run_dir: pathlib.Path) -> dict[str, int]:
-    """``run_id`` -> the epoch ms its final attempt started, over every worker directory of the run.
+    """``episode_id`` -> the epoch ms its final attempt started, over every worker directory of the run.
 
     Read off the files the driver leaves in each worker directory: ``tokens.json`` carries the stamp
-    and the run id it belongs to (``mcp.json`` names the run id of a record written before it did).
+    and the episode id it belongs to (``mcp.json`` names the episode id of a record written before it did).
     A worker that never relaunched carries the stamp too and applying it costs nothing -- its first
     attempt is its final one.
     """
@@ -301,9 +301,9 @@ def worker_cuts(run_dir: pathlib.Path) -> dict[str, int]:
     for tokens_path in sorted(run_dir.glob("agents/*/*/tokens.json")):
         record = read_json(tokens_path)
         start = record.get("final_attempt_start_ms")
-        run_id = str(record.get("run_id") or "") or declared_run_id(tokens_path.parent / "mcp.json")
-        if isinstance(start, int) and start > 0 and run_id:
-            cuts[run_id] = start
+        episode_id = str(record.get("episode_id") or "") or declared_episode_id(tokens_path.parent / "mcp.json")
+        if isinstance(start, int) and start > 0 and episode_id:
+            cuts[episode_id] = start
     return cuts
 
 
@@ -316,10 +316,10 @@ def swept_candidates(run_dir: pathlib.Path) -> list[dict[str, str]]:
     """
     cuts = worker_cuts(run_dir)
     best = best_speedups(run_dir)
-    for run_id, cut in cuts.items():
-        for key in [key for key in best if key[0] == run_id]:
+    for episode_id, cut in cuts.items():
+        for key in [key for key in best if key[0] == episode_id]:
             del best[key]
-        best.update(best_speedups(run_dir, run_id, cut))
+        best.update(best_speedups(run_dir, episode_id, cut))
     return promotable(run_dir, best, submitted_pairs(run_dir, cuts=cuts), cuts)
 
 
@@ -336,20 +336,20 @@ WORKSPACE_LANGUAGES: dict[str, str] = {".c": "c", ".f90": "fortran", ".cpp": "cp
 DEVICE_EXT = ".hip"
 
 
-def workspace_dir(run_dir: pathlib.Path, run_id: str) -> pathlib.Path | None:
+def workspace_dir(run_dir: pathlib.Path, episode_id: str) -> pathlib.Path | None:
     """The write folder the driver gave this worker: ``<run>/shared/agent-<problem index>``.
 
-    Keyed on the PROBLEM index out of the run id (``<setup>.n<N>.p<P>.w<W>``), because that is what
+    Keyed on the PROBLEM index out of the episode id (``<setup>.n<N>.p<P>.w<W>``), because that is what
     ``agent_driver.agent_workspace`` keys it on. The worker index coincides on a one-agent-per-task
     setup and does not in general, and a folder picked by the wrong index is another agent's answer.
     """
-    for field in run_id.split("."):
+    for field in episode_id.split("."):
         if field.startswith("p") and field[1:].isdigit():
             return run_dir / "shared" / f"agent-{field[1:]}"
     return None
 
 
-def workspace_candidate(run_dir: pathlib.Path, run_id: str, kernel: str) -> dict[str, str] | None:
+def workspace_candidate(run_dir: pathlib.Path, episode_id: str, kernel: str) -> dict[str, str] | None:
     """The deliverable the agent LEFT behind, for a setup where nothing it did was ever scored.
 
     :func:`candidates` cannot see a blind worker at all: its evidence is the source the judge keeps
@@ -362,7 +362,7 @@ def workspace_candidate(run_dir: pathlib.Path, run_id: str, kernel: str) -> dict
     promotion path only ever offers the judge an answer the agent VERIFIED; harvesting unverified
     files by default would quietly add rows to setups whose numbers are already published.
     """
-    folder = workspace_dir(run_dir, run_id)
+    folder = workspace_dir(run_dir, episode_id)
     if folder is None or not folder.is_dir():
         return None
     stem = short_name(kernel)
@@ -372,7 +372,7 @@ def workspace_candidate(run_dir: pathlib.Path, run_id: str, kernel: str) -> dict
             continue
         item = {
             "kernel": kernel,
-            "run_id": run_id,
+            "episode_id": episode_id,
             "language": language,
             "source": path.read_text(errors="ignore"),
             "optimizer": HARVESTED_TAG,
@@ -391,7 +391,7 @@ def harvest_enabled() -> bool:
     return os.environ.get("AGENT_HARVEST_WORKSPACE", "").strip() in {"1", "true", "yes"}
 
 
-def short_name(benchmark: str) -> str:
+def short_name(kernel: str) -> str:
     """The kernel's last path segment, which is the ONE spelling every table agrees on.
 
     A grade holds the resolved short name; a request's ``kernel`` field is whatever the agent sent,
@@ -399,7 +399,7 @@ def short_name(benchmark: str) -> str:
     -- ``jacobi_2d`` against ``scientific_computing/structured_grids/jacobi_2d/jacobi_2d`` -- so every
     match is on the short name.
     """
-    return benchmark.rsplit("/", 1)[-1] if benchmark else benchmark
+    return kernel.rsplit("/", 1)[-1] if kernel else kernel
 
 
 def refusal_reason(exc: urllib.error.HTTPError) -> str:
@@ -467,7 +467,7 @@ def promote(judge: str, item: dict[str, str], dry_run: bool, rank: int, timeout:
         "kernel": item["kernel"],
         "language": item["language"],
         "source": item["source"],
-        "run_id": item["run_id"],
+        "episode_id": item["episode_id"],
         # Carried by the ITEM, not fixed here: a harvest and a verified promotion are different
         # claims about the kernel, and `submissions.optimizer` is where analysis tells them apart.
         "optimizer": item.get("optimizer", PROMOTED_TAG),
@@ -514,7 +514,7 @@ def promote(judge: str, item: dict[str, str], dry_run: bool, rank: int, timeout:
 def promote_one_worker(
     run_dir: pathlib.Path,
     judge: str,
-    run_id: str,
+    episode_id: str,
     timeout: float | None = None,
     kernel: str = "",
     since_ms: int = 0,
@@ -545,12 +545,12 @@ def promote_one_worker(
     Never raises: a promotion is bookkeeping and must not change the agent's recorded outcome.
     """
     try:
-        items = candidates(run_dir, only_run_id=run_id, since_ms=since_ms)
+        items = candidates(run_dir, only_episode_id=episode_id, since_ms=since_ms)
         if not items and kernel and harvest_enabled():
-            cut = {run_id: since_ms} if since_ms > 0 else {}
-            if (run_id, short_name(kernel)) in submitted_pairs(run_dir, only_run_id=run_id, cuts=cut):
+            cut = {episode_id: since_ms} if since_ms > 0 else {}
+            if (episode_id, short_name(kernel)) in submitted_pairs(run_dir, only_episode_id=episode_id, cuts=cut):
                 return ""
-            harvested = workspace_candidate(run_dir, run_id, kernel)
+            harvested = workspace_candidate(run_dir, episode_id, kernel)
             items = [harvested] if harvested else []
         if not items:
             return ""

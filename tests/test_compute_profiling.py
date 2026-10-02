@@ -573,7 +573,13 @@ def test_the_route_hands_the_compute_profiler_its_reps_kernel_and_a_home_under_t
         return {"build_ok": False, "kernel": task.kernel, "language": task.language, "detail": "recorded"}
 
     monkeypatch.setattr(compute_profiling, "profile_compute_submission", record)
-    fields = {**gpu_submission("cuda").to_json(), "tool": "ncu", "reps": 2, "device_kernel": "k", "run_id": "setup.n0"}
+    fields = {
+        **gpu_submission("cuda").to_json(),
+        "tool": "ncu",
+        "reps": 2,
+        "device_kernel": "k",
+        "episode_id": "setup.n0",
+    }
     status, answer = post_profile(make_judge(service.ServiceConfig())[1], fields)
     assert (status, answer.get("detail")) == (200, "recorded"), answer
     assert (seen["reps"], seen["device_kernel"]) == (2, "k"), seen

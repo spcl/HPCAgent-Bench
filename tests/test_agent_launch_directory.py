@@ -24,8 +24,8 @@ import pytest
 from tests.fresh_module import fresh
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-EXPERIMENTS = REPO / "hpcagent_bench" / "cluster"
-RUN_CLUSTER = EXPERIMENTS / "run_cluster.sh"
+CLUSTER_DIR = REPO / "hpcagent_bench" / "cluster"
+RUN_CLUSTER = CLUSTER_DIR / "run_cluster.sh"
 LAUNCH_FILES_RE = re.compile(r"^AGENT_LAUNCH_FILES=\(([^)]*)\)$", re.MULTILINE)
 PROBLEMS = "problems-setup-c.jsonl"
 
@@ -63,7 +63,7 @@ def staged_checkout(tmp_path: pathlib.Path) -> tuple[pathlib.Path, pathlib.Path]
     env_file = tmp_path / ".env.setup-c"
     env_file.write_text("SETUP=setup-c\nPROBLEMS_FILE=problems-setup-c.jsonl\n")
     (tmp_path / PROBLEMS).write_text('{"id": 0, "kernel": "k", "language": "c", "task": "t"}\n')
-    stage(EXPERIMENTS, launch, env_file, str(tmp_path / PROBLEMS))
+    stage(CLUSTER_DIR, launch, env_file, str(tmp_path / PROBLEMS))
     return launch, env_file
 
 
@@ -98,7 +98,7 @@ def test_staged_files_are_read_only(tmp_path: pathlib.Path) -> None:
 def test_restaging_the_same_job_replaces_the_launch_directory(tmp_path: pathlib.Path) -> None:
     """A requeued job stages again into its own id; read-only files from the first attempt must not stop it."""
     launch, env_file = staged_checkout(tmp_path)
-    stage(EXPERIMENTS, launch, env_file, "")
+    stage(CLUSTER_DIR, launch, env_file, "")
     assert PROBLEMS not in {path.name for path in launch.iterdir()}
 
 
@@ -148,7 +148,7 @@ def test_every_file_the_agent_step_reaches_beside_itself_is_staged() -> None:
     python_refs = set()
     for name in sorted(staged):
         if name.endswith(".py"):
-            for node in ast.walk(ast.parse((EXPERIMENTS / name).read_text())):
+            for node in ast.walk(ast.parse((CLUSTER_DIR / name).read_text())):
                 modules = (
                     [alias.name for alias in node.names]
                     if isinstance(node, ast.Import)
@@ -156,7 +156,7 @@ def test_every_file_the_agent_step_reaches_beside_itself_is_staged() -> None:
                     if isinstance(node, ast.ImportFrom) and node.level == 0
                     else []
                 )
-                python_refs |= {f"{module}.py" for module in modules if (EXPERIMENTS / f"{module}.py").is_file()}
+                python_refs |= {f"{module}.py" for module in modules if (CLUSTER_DIR / f"{module}.py").is_file()}
     assert shell_refs | python_refs <= staged, sorted((shell_refs | python_refs) - staged)
 
 
@@ -210,7 +210,7 @@ def test_a_read_only_snapshot_env_is_staged_with_its_problems_line(tmp_path: pat
     env_file.chmod(0o400)
     (tmp_path / PROBLEMS).write_text("{}\n")
     launch = tmp_path / "launch"
-    stage(EXPERIMENTS, launch, env_file, str(tmp_path / PROBLEMS))
+    stage(CLUSTER_DIR, launch, env_file, str(tmp_path / PROBLEMS))
     assert (launch / ".env").read_text().splitlines()[-1] == f"PROBLEMS_FILE={PROBLEMS}"
     assert not os.access(launch / ".env", os.W_OK), "the staged env is still read-only once written"
 
@@ -230,7 +230,7 @@ def test_a_fused_waves_setups_are_staged_beside_the_env(tmp_path: pathlib.Path) 
         [
             "set -euo pipefail",
             LAUNCH_FILES_RE.search(RUN_CLUSTER.read_text()).group(0),
-            f"SCRIPT_DIR={shlex.quote(str(EXPERIMENTS))}",
+            f"SCRIPT_DIR={shlex.quote(str(CLUSTER_DIR))}",
             f"AGENT_LAUNCH_DIR={shlex.quote(str(launch))}",
             f"RUN_DIR={shlex.quote(str(run_dir))}",
             shell_function("stage_agent_launch"),

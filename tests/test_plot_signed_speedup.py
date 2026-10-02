@@ -42,7 +42,7 @@ def build_results_db(db: pathlib.Path, shift: float = 0.0) -> None:
                     session.add(
                         Result(
                             timestamp=1_700_000_000,
-                            benchmark=kernel,
+                            kernel=kernel,
                             domain=domain,
                             preset="S",
                             framework=framework,
@@ -84,7 +84,7 @@ def summary_for(cells) -> pd.DataFrame:
     ``cells`` is ``(kernel, framework, milliseconds)``; each cell is given identical samples, which
     keeps the cleaned median exact and the bootstrap CI degenerate (nothing to warn about).
     """
-    rows = [dict(benchmark=k, domain="Physics", framework=f, time=t) for k, f, ms in cells for t in [ms] * 5]
+    rows = [dict(kernel=k, domain="Physics", framework=f, time=t) for k, f, ms in cells for t in [ms] * 5]
     return plotting.cell_summary(pd.DataFrame(rows))
 
 
@@ -374,7 +374,7 @@ def baseline_only_db(path: pathlib.Path) -> None:
             session.add(
                 Result(
                     timestamp=0,
-                    benchmark="heat_3d",
+                    kernel="heat_3d",
                     domain="Physics",
                     preset="S",
                     framework=plotting.DEFAULT_BASELINE,
@@ -444,9 +444,7 @@ def test_points_carry_their_repetitions_only_when_asked() -> None:
     """``speedup_points`` must not change the POSITIONS it computes by being asked for spread --
     the median and the band come from the summary either way, and only ``samples`` is added."""
     cells = [("heat_3d", plotting.DEFAULT_BASELINE, 10.0), ("heat_3d", "dace_cpu", 5.0)]
-    rows = pd.DataFrame(
-        [dict(benchmark=k, domain="Physics", framework=f, time=t) for k, f, ms in cells for t in [ms] * 5]
-    )
+    rows = pd.DataFrame([dict(kernel=k, domain="Physics", framework=f, time=t) for k, f, ms in cells for t in [ms] * 5])
     frame = plotting.cell_summary(rows)
     without = speedup.speedup_points(frame)
     with_samples = speedup.speedup_points(frame, data=rows)

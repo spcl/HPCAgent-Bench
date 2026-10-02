@@ -61,7 +61,7 @@ def judge_shard(tmp_path: pathlib.Path) -> pathlib.Path:
     db = tmp_path / "root" / f"{JOB}" / "judge" / "rank-0" / "hpcagent_bench0.db"
     with contextlib.closing(recording.connect(str(db))) as conn:
         results_db.ensure_setup(conn, results_db.Setup(SETUP, "hip", "gpu", study="gpu-llr-focus40"))
-        results_db.ensure_run(conn, SETUP, RUN, JOB)
+        results_db.ensure_episode(conn, SETUP, RUN, JOB)
         conn.commit()
     return db
 
@@ -78,7 +78,7 @@ def add_grade(
     """One grade of episode ``RUN`` in ``db`` with its stored source ``units`` (host, then device),
     delivered in ``language``."""
     with contextlib.closing(recording.connect(str(db))) as conn:
-        run = results_db.ensure_run(conn, SETUP, RUN, JOB)
+        run = results_db.ensure_episode(conn, SETUP, RUN, JOB)
         stamp = {"preset": "XL", "datatype": "float64", "source_mode": "restricted"}
         grade_id, _ts = results_db.add_grade(conn, run, kernel, kind, ts_ms=ts, values=stamp | values)
         for part, text in zip(("host", "device"), units, strict=False):
@@ -109,7 +109,7 @@ def test_every_timed_submission_is_listed_and_each_episodes_final_comes_first(
 ) -> None:
     items, problems = grade_under.build_worklist([shard_db(tmp_path)], [])
     assert problems == []
-    assert [(item.benchmark, item.ts_ms, item.final) for item in items] == [
+    assert [(item.kernel, item.ts_ms, item.final) for item in items] == [
         ("k1", 20, True),
         ("k2", 30, True),
         ("k1", 10, False),
@@ -181,21 +181,10 @@ def test_the_setup_env_is_found_under_a_kernel_list_launchs_file_name(tmp_path: 
     }
 
 
-def test_the_setup_env_is_found_under_the_setups_legacy_spelling(tmp_path: pathlib.Path) -> None:
-    """An llr-focus40 CPU setup launched as ``cpf-llr-focus40-*``: its env file keeps that name, and the
-    renamed setup still grades under it; a CPF setup, which keeps the prefix, is another setup."""
-    (tmp_path / ".env.cpf-llr-focus40-qwen38-c").write_text("HPCAGENT_BENCH_OFFLOAD=none\n", encoding="utf-8")
-    (tmp_path / ".env.cpf-llr-focus40-qwen38-c-cpf").write_text("HPCAGENT_BENCH_OFFLOAD=cpf\n", encoding="utf-8")
-    assert grade_under.setup_env("llr-focus40-qwen38-c-clean", [tmp_path]) == {"HPCAGENT_BENCH_OFFLOAD": "none"}
-    assert grade_under.setup_env("llr40-qwen38-c", [tmp_path]) == {"HPCAGENT_BENCH_OFFLOAD": "none"}
-    assert grade_under.setup_env("cpf-llr-focus40-qwen38-c-cpf", [tmp_path]) == {"HPCAGENT_BENCH_OFFLOAD": "cpf"}
-
-
 def test_the_setup_env_is_found_by_the_setup_its_launch_render_recorded(tmp_path: pathlib.Path) -> None:
-    """A kernel-list launch's render is named after the list; the setup it recorded (an older spelling
-    of the folded setup) is what finds it."""
-    render = tmp_path / ".env.llrblind-cmp-kimi27sglang-fortran-llrblind-cmp-kimi27sglang-fortran"
-    render.write_text("SETUP=llrblind-cmp-kimi27sglang-fortran\nHPCAGENT_BENCH_OFFLOAD=none\n", encoding="utf-8")
+    """A kernel-list launch's render is named after the list; the setup it recorded is what finds it."""
+    render = tmp_path / ".env.llr40-kimi27sglang-fortran-blind-owed-list"
+    render.write_text("SETUP=llr40-kimi27sglang-fortran-blind\nHPCAGENT_BENCH_OFFLOAD=none\n", encoding="utf-8")
     assert grade_under.setup_env("llr40-kimi27sglang-fortran-blind", [tmp_path]) == {"HPCAGENT_BENCH_OFFLOAD": "none"}
 
 
@@ -371,8 +360,8 @@ def obs(ts: int, speedup: float, reduction: str) -> dict[str, Any]:
     return {
         "judge_db": "d.db",
         "job": f"{JOB}",
-        "run_id": RUN,
-        "benchmark": "k1",
+        "episode_id": RUN,
+        "kernel": "k1",
         "ts_ms": ts,
         "row_kind": "submission",
         "submitted": "1",
@@ -690,12 +679,12 @@ def test_host_only_splits_cpu_from_gpu_episodes() -> None:
 
 
 def refile_as_adhoc(shard: pathlib.Path) -> None:
-    """Every grade filed under the judge's ``adhoc`` run id, as a run-id-less grade was."""
+    """Every grade filed under the judge's ``adhoc`` episode id, as a run-id-less grade was."""
     with connect(shard) as conn:
-        conn.execute("UPDATE runs SET label = 'adhoc'")
+        conn.execute("UPDATE episodes SET label = 'adhoc'")
 
 
-def test_a_worklist_never_lists_a_grade_stored_under_the_adhoc_run_id(tmp_path: pathlib.Path) -> None:
+def test_a_worklist_never_lists_a_grade_stored_under_the_adhoc_episode_id(tmp_path: pathlib.Path) -> None:
     """No reader credits an ``adhoc`` grade, yet the v6 re-timing listed 10 of them: shard
     time spent on rows every figure then drops. Each is named as a gap, with its source still stored."""
     shard = shard_db(tmp_path)
@@ -705,7 +694,7 @@ def test_a_worklist_never_lists_a_grade_stored_under_the_adhoc_run_id(tmp_path: 
     assert len(problems) == 3 and all("credited to nothing (adhoc)" in line for line in problems), problems
 
 
-def test_no_promotion_is_owed_to_a_correct_score_stored_under_the_adhoc_run_id(tmp_path: pathlib.Path) -> None:
+def test_no_promotion_is_owed_to_a_correct_score_stored_under_the_adhoc_episode_id(tmp_path: pathlib.Path) -> None:
     """The promotion would file its grade under ``adhoc`` too, and credit it to nothing."""
     shard = promotion_db(tmp_path, [("score", "k1", 1, 0.5, 12)])
     refile_as_adhoc(shard)
@@ -737,7 +726,7 @@ def promotion_db(tmp_path: pathlib.Path, rows: list[tuple], cut: int = 0) -> pat
     without is rejected for ``reason``. ``cut`` is when the episode's final attempt began."""
     db = judge_shard(tmp_path)
     with connect(db) as conn:
-        conn.execute("UPDATE runs SET final_attempt_start_ms = ?", (cut or None,))
+        conn.execute("UPDATE episodes SET final_attempt_start_ms = ?", (cut or None,))
     for index, (kind, kernel, correct, speedup, ts, *reason) in enumerate(rows, start=1):
         if kind == "score":
             units = (HOST, DEVICE) if correct else ()
@@ -755,7 +744,7 @@ def test_an_unsubmitted_correct_score_is_owed_a_promotion_of_its_newest_source(t
     db = promotion_db(tmp_path, [("score", "k1", 1, 0.5, 12)])
     (item,), problems = grade_under.build_promotion_worklist([db], [])
     assert problems == []
-    assert (item.benchmark, item.ts_ms, item.promoted, item.speedup) == ("k1", 12, True, 0.5)
+    assert (item.kernel, item.ts_ms, item.promoted, item.speedup) == ("k1", 12, True, 0.5)
     assert grade_under.submission_of(item).device_source == DEVICE
 
 
@@ -783,7 +772,7 @@ def test_a_submission_from_a_wiped_attempt_leaves_the_final_attempts_score_owed_
     rows = [("submit", "k1", 1, 3.0, 12), ("score", "k1", 1, 2.0, 18)]
     (item,), problems = grade_under.build_promotion_worklist([promotion_db(tmp_path, rows, cut=15)], [])
     assert problems == []
-    assert (item.benchmark, item.ts_ms, item.promoted, item.speedup) == ("k1", 18, True, 2.0)
+    assert (item.kernel, item.ts_ms, item.promoted, item.speedup) == ("k1", 18, True, 2.0)
 
 
 def test_a_submission_from_the_final_attempt_still_spends_it(tmp_path: pathlib.Path) -> None:
@@ -797,7 +786,7 @@ def test_a_judge_fault_on_submit_leaves_the_correct_score_owed_a_promotion(tmp_p
     Nothing was graded, so the episode spent nothing and its answer is still owed a grade."""
     rows = [("score", "k1", 1, 3.0, 12), ("submit", "k1", 0, None, 15, "score_error")]
     (item,), _ = grade_under.build_promotion_worklist([promotion_db(tmp_path, rows)], [])
-    assert (item.benchmark, item.promoted) == ("k1", True)
+    assert (item.kernel, item.promoted) == ("k1", True)
 
 
 def test_a_legacy_judge_fault_before_the_score_error_stamp_leaves_the_correct_score_owed_a_promotion(
@@ -810,14 +799,14 @@ def test_a_legacy_judge_fault_before_the_score_error_stamp_leaves_the_correct_sc
     reason = "harden: k1: c reference build failed: ...\nfatal error: ... Stale file handle\n"
     rows = [("score", "k1", 1, 63.08, 12), ("submit", "k1", 0, None, 15, reason)]
     (item,), _ = grade_under.build_promotion_worklist([promotion_db(tmp_path, rows)], [])
-    assert (item.benchmark, item.promoted) == ("k1", True)
+    assert (item.kernel, item.promoted) == ("k1", True)
 
 
 def promotion_regrade(db: str, verified: int, **changes: object) -> dict[tuple[str, str, str, int], dict[str, Any]]:
     row = {
         "db": db,
-        "run_id": RUN,
-        "benchmark": "k1",
+        "episode_id": RUN,
+        "kernel": "k1",
         "ts_ms": 20,
         "status": "graded",
         "verified": verified,
@@ -842,9 +831,9 @@ def episode_call(db: str) -> dict[str, Any]:
         "job": "631272",
         "judge_db": db,
         "row_kind": "call",
-        "run_id": RUN,
+        "episode_id": RUN,
         "setup": SETUP,
-        "benchmark": "k1",
+        "kernel": "k1",
         "speedup": 0.5,
         "ts_ms": 12,
         "optimizer": "qwen",
@@ -1198,12 +1187,12 @@ def test_a_finalize_resume_redoes_rows_of_an_earlier_final_rule(
     calls: list[str] = []
 
     def grader(one: grade_under.Item) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-        calls.append(one.run_id)
+        calls.append(one.episode_id)
         return grade_under.grade_cells(one, scorer=final_scorer([2.0] * 4))
 
     assert grade_under.run_cells_shard([item], 0, 1, out, grader) == 1
     assert grade_under.run_cells_shard([item], 0, 1, out, grader) == 0  # now current: done
-    assert calls == [item.run_id]
+    assert calls == [item.episode_id]
     rules = sorted(row["score_rule"] for row in grades(out / "regrade-cells-0.db", "kind = 'final'"))
     assert rules == sorted(["s-mw4x5-v1", score_rule.FINAL_SCORE_RULE])
 
@@ -1220,7 +1209,7 @@ def test_the_final_columns_reach_the_shard_database(tmp_path: pathlib.Path, fina
         pytest.approx(2.0),
         score_rule.FINAL_SCORE_RULE,
     )
-    assert (final["label"], final["benchmark"], final["job"]) == (RUN, "k1", JOB)
+    assert (final["label"], final["kernel"], final["job"]) == (RUN, "k1", JOB)
 
 
 def test_the_aa_calibration_asks_the_scorer_for_aa_and_stamps_every_row_apart(

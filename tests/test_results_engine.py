@@ -92,7 +92,7 @@ def test_the_plot_loader_folds_flavor_and_build_back_into_one_series(
             session.add(
                 Result(
                     timestamp=1,
-                    benchmark="gemm",
+                    kernel="gemm",
                     domain="LinAlg",
                     preset="S",
                     framework=framework,
@@ -144,7 +144,7 @@ def test_the_plot_loader_partitions_machines_instead_of_folding_them(
             session.add(
                 Result(
                     timestamp=1,
-                    benchmark="gemm",
+                    kernel="gemm",
                     domain="LinAlg",
                     preset="S",
                     framework=framework,

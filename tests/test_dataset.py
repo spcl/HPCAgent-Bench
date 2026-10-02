@@ -12,18 +12,18 @@ import pytest
 
 from hpcagent_bench import experiments, dataset, frozen_observations
 
-SETUP = "git-scicomp-qwen38-repo"
-RETIRED = "cpf-llr-focus40-qwen38-c-cpfsrc"
-FOREIGN = "llr-focus40-qwen38-c"
+SETUP = "gitscicomp10-qwen38-c-repo"
+RETIRED = "llr40-qwen38-c-cpfsrc"
+FOREIGN = "llr40-qwen38-c"
 
 
-def row(job: str, benchmark: str, setup: str = SETUP, frozen: str = "0", **extra: object) -> dict[str, object]:
+def row(job: str, kernel: str, setup: str = SETUP, frozen: str = "0", **extra: object) -> dict[str, object]:
     return {
-        "run_root": "git-scicomp-20260917",
+        "run_root": "gitscicomp10-20260917",
         "job": job,
         "row_kind": "submission",
         "setup": setup,
-        "benchmark": benchmark,
+        "kernel": kernel,
         "speedup": 2.0,
         frozen_observations.COLUMN: frozen,
         **extra,
@@ -98,7 +98,7 @@ def test_a_frame_written_as_a_db_and_as_a_csv_reads_back_the_same(
     dataset.write_db(frame, tmp_path / "x.db")
     dataset.write_csv(frame, tmp_path / "x.csv")
     from_db, from_csv = dataset.load(tmp_path / "x.db"), dataset.load(tmp_path / "x.csv")
-    assert list(from_db["benchmark"]) == list(from_csv["benchmark"]) == ["dfa", "kmp"]
+    assert list(from_db["kernel"]) == list(from_csv["kernel"]) == ["dfa", "kmp"]
     assert list(from_db["setup"]) == list(from_csv["setup"])
 
 
@@ -118,8 +118,8 @@ def test_a_row_on_a_kernel_outside_the_roster_is_dropped_and_counted(tmp_path: p
     """The SciComp waves served more kernels than the roster; the experiments name scicomp40, and a
     figure counts a setup over every kernel its rows touch, so an atax row must not reach it."""
     selection = experiments.resolve("scicomp40", root=tmp_path)
-    setup = "scicomp-perf-playbook-qwen38-plain"
+    setup = "scicomp40-qwen38-c"
     live = pd.DataFrame([row("100", "gemm", setup=setup), row("101", "atax", setup=setup)])
     frame, provenance = dataset.fuse(selection, live, pd.DataFrame())
-    assert list(frame["benchmark"]) == ["gemm"]
+    assert list(frame["kernel"]) == ["gemm"]
     assert provenance.dropped_off_roster == 1

@@ -68,7 +68,7 @@ def test_a_written_shard_is_aggregated_and_read(tmp_path: pathlib.Path) -> None:
         session.add(
             Result(
                 timestamp=0,
-                benchmark="gemm",
+                kernel="gemm",
                 domain="LinAlg",
                 preset="S",
                 framework="numpy",
@@ -85,9 +85,9 @@ def test_a_written_shard_is_aggregated_and_read(tmp_path: pathlib.Path) -> None:
         )
         session.commit()
 
-    rows = plotting.load_results(str(base), benchmark="gemm", preset="S")
+    rows = plotting.load_results(str(base), kernel="gemm", preset="S")
     assert not rows.empty, "a recorded shard must reach the reader through the aggregate"
-    assert set(rows["benchmark"]) == {"gemm"}
+    assert set(rows["kernel"]) == {"gemm"}
 
 
 def write_row(shard: pathlib.Path, framework: str, build: str, time: float) -> None:
@@ -100,7 +100,7 @@ def write_row(shard: pathlib.Path, framework: str, build: str, time: float) -> N
         session.add(
             Result(
                 timestamp=0,
-                benchmark="gemm",
+                kernel="gemm",
                 domain="LinAlg",
                 preset="S",
                 framework=framework,
@@ -132,7 +132,7 @@ def test_the_baseline_survives_a_build_stamp(tmp_path: pathlib.Path) -> None:
     write_row(shard, "dace_cpu", "main", 5.0)
     write_row(shard, "dace_cpu", "extended", 2.5)
 
-    frameworks = set(plotting.load_results(str(base), benchmark="gemm", preset="S")["framework"])
+    frameworks = set(plotting.load_results(str(base), kernel="gemm", preset="S")["framework"])
     assert plotting.DEFAULT_BASELINE in frameworks, (
         f"the baseline was folded into {sorted(frameworks)} -- every speedup "
         f"divides by {plotting.DEFAULT_BASELINE!r} and can no longer find it"

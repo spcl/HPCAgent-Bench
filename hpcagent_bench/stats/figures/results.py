@@ -77,7 +77,7 @@ def save_figure(output: str, fig: Figure) -> str:
 
 def load_results(
     db: str | None,
-    benchmark: str = "all",
+    kernel: str = "all",
     preset: str = "S",
     datatype: str = "float64",
     variant: str | None = None,
@@ -88,17 +88,17 @@ def load_results(
     Applies the shared selection (kernel / track / dwarf / ``@lvl<n>`` via
     :func:`select_short_names`), drops undomained / unvalidated rows, filters to ``datatype``
     (legacy NULL treated float64) and ``preset``, folds the sparse ``variant`` axis into the
-    ``benchmark`` name (``benchmark/variant``) and the ``flavor`` / ``build`` axes into the
+    ``kernel`` name (``benchmark/variant``) and the ``flavor`` / ``build`` axes into the
     ``framework`` name (``dace_cpu/canonicalize/extended``). One row per timed sample survives,
-    with columns ``benchmark``, ``domain``, ``framework``, ``time``, plus the ``cpu`` / ``gpu``
+    with columns ``kernel``, ``domain``, ``framework``, ``time``, plus the ``cpu`` / ``gpu``
     machine axes, which are deliberately NOT folded -- see :func:`machine_groups`.
     """
     data = read_results_table(db)
     data = data.drop(["timestamp"], axis=1).reset_index(drop=True)
 
-    if benchmark != "all":
-        keep: set[str] = set(select_short_names(benchmark))
-        data = data.loc[data["benchmark"].isin(list(keep))].reset_index(drop=True)
+    if kernel != "all":
+        keep: set[str] = set(select_short_names(kernel))
+        data = data.loc[data["kernel"].isin(list(keep))].reset_index(drop=True)
 
     data = data.loc[data["domain"] != ""]
     data = data.loc[data["validated"].eq(True)]
@@ -147,21 +147,21 @@ def filter_datatype(data: pd.DataFrame, datatype: str, db: str | None) -> pd.Dat
 
 
 def fold_variant(data: pd.DataFrame, variant: str | None) -> pd.DataFrame:
-    """``data`` restricted to ``variant`` (plus variant-less rows), the variant folded into ``benchmark``."""
+    """``data`` restricted to ``variant`` (plus variant-less rows), the variant folded into ``kernel``."""
     if "variant" not in data.columns:
         return data
     if variant is not None:
         data = data.loc[(data["variant"].isna()) | (data["variant"] == variant)]
     sparse_mask = data["variant"].notna()
-    data.loc[sparse_mask, "benchmark"] = (
-        data.loc[sparse_mask, "benchmark"].astype(str) + "/" + data.loc[sparse_mask, "variant"].astype(str)
+    data.loc[sparse_mask, "kernel"] = (
+        data.loc[sparse_mask, "kernel"].astype(str) + "/" + data.loc[sparse_mask, "variant"].astype(str)
     )
     return data.drop(["variant"], axis=1).reset_index(drop=True)
 
 
 def fold_build_axes(data: pd.DataFrame, baseline: str) -> pd.DataFrame:
     """``data`` with the ``flavor`` and ``build`` axes folded into every non-baseline ``framework``."""
-    # `flavor` and `build` fold into `framework` exactly as `variant` folds into `benchmark` above:
+    # `flavor` and `build` fold into `framework` exactly as `variant` folds into `kernel` above:
     # they are stored apart so the DB can be queried on either axis, and joined here because a
     # figure plots one series per column. Without the fold, dace_cpu's three optimizers -- and the
     # same optimizer measured on two DaCe trees -- would silently average into one line.
@@ -232,7 +232,7 @@ class CellSummary:
     :ivar ci_perc: the bootstrap CI width as a percent of that median.
     """
 
-    benchmark: str
+    kernel: str
     domain: str
     framework: str
     time: float
@@ -252,7 +252,7 @@ def cell_summary(data: pd.DataFrame) -> pd.DataFrame:
     ci_high, ci_perc`` where ``time`` is the cleaned median (used for best-selection AND the
     plotted value) and ``ci_perc`` is the CI width as a percent of that median."""
     rows: list[CellSummary] = []
-    for keys, g in data.groupby(["benchmark", "domain", "framework"], dropna=False):
+    for keys, g in data.groupby(["kernel", "domain", "framework"], dropna=False):
         b, dom, fw = cast("tuple[str, str, str]", keys)
         med, lo, hi = summary.median_ci(g["time"].to_numpy(), label=f"{b}@{fw}", seed=CI_SEED)[:3]
         perc = ((hi - lo) / med * 100.0) if (med != 0.0 and not math.isnan(med)) else 0.0

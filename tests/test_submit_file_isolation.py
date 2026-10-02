@@ -19,7 +19,7 @@ BASH = shutil.which("bash")
 assert BASH is not None
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-EXPERIMENTS = REPO / "hpcagent_bench" / "cluster"
+CLUSTER_DIR = REPO / "hpcagent_bench" / "cluster"
 
 
 def stub(directory: pathlib.Path, name: str, body: str) -> None:
@@ -36,7 +36,7 @@ def run_probe(
     stub(tmp_path / "bin", "squeue", queue_body)
     stub(tmp_path / "bin", "sacct", sacct_body)
     probe = tmp_path / "probe.sh"
-    probe.write_text(f"set -eu\n. {EXPERIMENTS / 'submit_common.sh'}\n{script}\n")
+    probe.write_text(f"set -eu\n. {CLUSTER_DIR / 'submit_common.sh'}\n{script}\n")
     return subprocess.run(
         [BASH, str(probe)],
         env={"PATH": f"{tmp_path / 'bin'}:/usr/bin:/bin", "USER": "tester"},
@@ -61,7 +61,7 @@ def test_a_kernels_file_subset_env_diverges_from_the_canonical_name(tmp_path: pa
     whole mechanism a subset submission relies on to avoid the canonical filename."""
     path = f"{tmp_path / 'bin'}:/usr/bin:/bin"
     result = subprocess.run(
-        [BASH, "-c", f'. {EXPERIMENTS / "submit_common.sh"}; echo "[$(setup_file_suffix)]"'],
+        [BASH, "-c", f'. {CLUSTER_DIR / "submit_common.sh"}; echo "[$(setup_file_suffix)]"'],
         env={"PATH": path},
         capture_output=True,
         text=True,
@@ -71,7 +71,7 @@ def test_a_kernels_file_subset_env_diverges_from_the_canonical_name(tmp_path: pa
     assert result.stdout.strip() == "[]"
 
     result = subprocess.run(
-        [BASH, "-c", f'. {EXPERIMENTS / "submit_common.sh"}; echo "[$(setup_file_suffix)]"'],
+        [BASH, "-c", f'. {CLUSTER_DIR / "submit_common.sh"}; echo "[$(setup_file_suffix)]"'],
         env={"PATH": path, "KERNELS_FILE": "owed/setup-budget.txt"},
         capture_output=True,
         text=True,
@@ -155,7 +155,7 @@ def run_common(tmp_path: pathlib.Path, script: str, extra_env: dict[str, str]) -
         **extra_env,
     }
     return subprocess.run(
-        [BASH, "-c", f". {EXPERIMENTS / 'submit_common.sh'}\n{script}"],
+        [BASH, "-c", f". {CLUSTER_DIR / 'submit_common.sh'}\n{script}"],
         env=env,
         capture_output=True,
         text=True,
@@ -272,8 +272,8 @@ def run_submit_setup_job_probe(
     probe = tmp_path / "probe.sh"
     probe.write_text(
         "set -eu\n"
-        f". {EXPERIMENTS / 'setup_nodes.sh'}\n"
-        f". {EXPERIMENTS / 'submit_common.sh'}\n"
+        f". {CLUSTER_DIR / 'setup_nodes.sh'}\n"
+        f". {CLUSTER_DIR / 'submit_common.sh'}\n"
         f'cd "{tmp_path}"\n'
         f'submit_setup_job "{env_file}" some-setup 01:00:00\n'
     )

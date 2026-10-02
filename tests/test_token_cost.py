@@ -98,7 +98,7 @@ def test_a_legacy_dir_without_attempts_jsonl_also_counts_only_its_final_attempt(
     write_claude_log(tmp_path / "claude.attempt1.log", input_tokens=1000, output_tokens=100)
     write_claude_log(tmp_path / "claude.log", input_tokens=2000, output_tokens=200)
 
-    totals = token_cost.task_totals(tmp_path)
+    totals = token_cost.episode_totals(tmp_path)
 
     assert totals.attempts == 2
     # effective adds the result event's output; billed folds only the per-turn assistant usage,
@@ -120,7 +120,7 @@ def test_a_legacy_dirs_final_attempt_starts_when_the_crash_was_moved_aside(
     write_claude_log(tmp_path / "claude.log", input_tokens=2000, output_tokens=200)
     os.utime(crashed, (1_700_000_000, 1_700_000_000))
 
-    assert token_cost.task_totals(tmp_path).final_attempt_start_ms == 1_700_000_000_000
+    assert token_cost.episode_totals(tmp_path).final_attempt_start_ms == 1_700_000_000_000
 
 
 def test_a_fresh_relaunched_task_counts_only_its_final_attempt_and_reports_the_rest_as_crashed(
@@ -132,7 +132,7 @@ def test_a_fresh_relaunched_task_counts_only_its_final_attempt_and_reports_the_r
     write_claude_log(tmp_path / "claude.log", input_tokens=2000, output_tokens=200)
     write_attempts(token_cost, tmp_path, [(1, 1_000, True), (2, 2_000, False)])
 
-    totals = token_cost.task_totals(tmp_path)
+    totals = token_cost.episode_totals(tmp_path)
 
     assert totals.attempts == 2
     assert (totals.tokens_effective, totals.tokens_billed) == (2000 + 200, 2000)
@@ -143,7 +143,7 @@ def test_a_fresh_relaunched_task_counts_only_its_final_attempt_and_reports_the_r
 def test_a_single_attempt_tasks_total_is_that_attempts_own(token_cost: ModuleType, tmp_path: pathlib.Path) -> None:
     write_claude_log(tmp_path / "claude.log", input_tokens=500, output_tokens=50)
 
-    totals = token_cost.task_totals(tmp_path)
+    totals = token_cost.episode_totals(tmp_path)
 
     assert totals.attempts == 1
     assert totals.tokens_effective == 550
@@ -158,7 +158,7 @@ def test_effective_comes_from_episode_cost_not_a_reimplementation(
     write_claude_log(tmp_path / "claude.attempt1.log", input_tokens=900, output_tokens=10)
     write_claude_log(tmp_path / "claude.log", input_tokens=1900, output_tokens=20)
 
-    totals = token_cost.task_totals(tmp_path)
+    totals = token_cost.episode_totals(tmp_path)
 
     def effective(name: str) -> int:
         return int(token_cost.episode_cost(tmp_path / name)["effective"])
@@ -175,7 +175,7 @@ def test_billed_comes_from_accumulate_total_tokens_not_a_reimplementation(
     write_claude_log(tmp_path / "claude.attempt1.log", input_tokens=900, output_tokens=10)
     write_claude_log(tmp_path / "claude.log", input_tokens=1900, output_tokens=20)
 
-    totals = token_cost.task_totals(tmp_path)
+    totals = token_cost.episode_totals(tmp_path)
 
     def folded(name: str) -> int:
         return token_cost.accumulate_total_tokens((tmp_path / name).read_text(encoding="utf-8").splitlines(), {})
@@ -216,7 +216,7 @@ def test_skipping_lines_that_cannot_carry_usage_changes_no_total(
     assert cost["effective_provider"] == fresh + 0.1 * cached + 70 == 1670
     assert cost["effective"] < cost["effective_provider"] < cost["naive_total"]
     assert token_cost.accumulate_total_tokens(lines, {}) == 1000 + 1500
-    totals = token_cost.task_totals(tmp_path)
+    totals = token_cost.episode_totals(tmp_path)
     assert (totals.tokens_effective, totals.tokens_billed) == (int(cost["effective"]), 1000 + 1500)
     assert totals.tokens_provider == 1670
     # The components a cost card weights ride on the task, and they are NOT recoverable from billed:
@@ -252,7 +252,7 @@ def test_the_streamed_thinking_estimate_is_reported_but_never_added_to_the_effec
 
     assert cost["output"] == 300 and cost["thinking_estimate"] == 900
     assert cost["effective"] == 1000 + 300, "the 900 is the same tokens the 300 already counts"
-    assert token_cost.task_totals(tmp_path).tokens_effective == 1300
+    assert token_cost.episode_totals(tmp_path).tokens_effective == 1300
 
 
 def test_an_episode_whose_server_never_reported_output_says_so_instead_of_claiming_zero(
@@ -451,7 +451,7 @@ def test_the_container_tool_and_the_analysis_bill_a_turn_for_the_same_usage_fiel
 def test_a_worker_dir_without_a_transcript_has_no_token_total(token_cost: ModuleType, tmp_path: pathlib.Path) -> None:
     """A worker directory the driver never entered is not a task that cost 0 tokens -- it has no
     measurement at all, same as R7 treats a missing kernel token total."""
-    totals = token_cost.task_totals(tmp_path)
+    totals = token_cost.episode_totals(tmp_path)
 
     assert totals.attempts == 0
     assert totals.tokens_effective is None
@@ -467,7 +467,7 @@ def test_a_runner_harnesss_totals_come_from_its_final_attempts_usage_file(
     (tmp_path / "usage.attempt1.jsonl").write_text(usage_line(300, 30) + "\n", encoding="utf-8")
     (tmp_path / "usage.jsonl").write_text(usage_line(700, 70) + "\n", encoding="utf-8")
 
-    totals = token_cost.task_totals(tmp_path)
+    totals = token_cost.episode_totals(tmp_path)
 
     assert totals.attempts == 2
     assert (totals.tokens_effective, totals.tokens_billed) == (700 + 70, 770)

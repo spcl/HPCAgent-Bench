@@ -380,7 +380,7 @@ def resolve(
 def canonical(spec: str) -> str:
     """The recorded identity key for ``spec``: "" for the control, a registered key when ``spec``
     stages exactly what that composite stages (:func:`leaves`), else the parts sorted and
-    ``+``-joined -- the format ``runs.packet`` already uses.
+    ``+``-joined -- the format ``setups.packet`` already uses.
 
     Leaves, not top-level parts: the token ``profiling`` is the whole bundle, so a spec spelling a
     playbook's pages with it stages two tracer pages the playbook does not carry."""

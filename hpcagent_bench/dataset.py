@@ -120,9 +120,9 @@ def keep_roster(frame: "pd.DataFrame", selection: experiments.Selection) -> tupl
     an earlier 40-kernel set plus later additions; the experiments name scicomp40), and every figure counts a setup
     over the kernels its rows touch, so an off-roster row would enter every aggregate. A row with no
     benchmark, or a selection with no roster, is kept."""
-    if frame.empty or not selection.roster or "benchmark" not in frame.columns:
+    if frame.empty or not selection.roster or "kernel" not in frame.columns:
         return frame, 0
-    names = frame["benchmark"].fillna("").astype(str)
+    names = frame["kernel"].fillna("").astype(str)
     off = names.ne("") & ~names.isin(selection.roster)
     return frame[~off], int(off.sum())
 
@@ -138,8 +138,8 @@ def extract(
 
     One extractor (:mod:`hpcagent_bench.observations_extract`), because there were two and they
     disagreed: the other wrote the plural table name into its row kind and no ``task`` rows at all,
-    so a frame from it carried no token cost and every ``row_kind == "task"`` rule silently did
-    nothing. ``runs`` (a results database, or run-root globs) replaces the selection's run roots."""
+    so a frame from it carried no token cost and every ``row_kind == "episode"`` rule silently did
+    nothing. ``episodes`` (a results database, or run-root globs) replaces the selection's run roots."""
     import pandas as pd
 
     got = observations_extract.extract(

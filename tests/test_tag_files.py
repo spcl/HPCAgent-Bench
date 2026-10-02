@@ -31,8 +31,3 @@ def test_every_experiment_s_roster_tag_has_a_tag_file() -> None:
     experiments = study_tags.registry().experiments
     missing = sorted({entry.tag for entry in experiments.values() if entry.tag} - set(TAG_NAMES))
     assert not missing, f"registry experiments name tags with no file in {tags.TAGS_DIR}: {missing}"
-
-
-def test_every_alias_reads_an_existing_file_and_shadows_none() -> None:
-    assert set(tags.ALIASES.values()) <= set(TAG_NAMES)
-    assert not set(tags.ALIASES) & set(TAG_NAMES)
