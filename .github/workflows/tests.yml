@@ -150,9 +150,10 @@ jobs:
           test -n "$files" || { echo 'unit sweep selected no files'; exit 1; }
           echo "$files" | tr ' ' '\n' | wc -l | xargs echo "sweeping files:"
           # -v names each test as it starts: a step cap is a SIGKILL and prints no summary.
-          # -m "papi or not papi" selects the papi hardware group this job installed.
+          # -m "(papi or not papi) ..." selects the papi hardware group this job installed; "not integration"
+          # leaves the integration-marked tests to the `integration` job, which runs every one of them.
           python -m pytest -p no:cacheprovider -rfEs -n auto --dist loadgroup --durations=25 -v \
-            -m "papi or not papi" --timeout=600 --timeout-method=thread $files
+            -m "(papi or not papi) and not integration" --timeout=600 --timeout-method=thread $files
 
       - uses: ./.github/actions/finish
         if: always()
@@ -607,7 +608,7 @@ jobs:
           OPENBLAS_NUM_THREADS: "2"
           MKL_NUM_THREADS: "2"
         run: |
-          python -m pytest -q -p no:cacheprovider -rfEs -n 2 --timeout=600 --forked \
+          python -m pytest -q -p no:cacheprovider -rfEs -n 2 --timeout=600 --forked -m "not integration" \
             --ignore=tests/ports/cegterg tests/ports/
 
       # One BLAS thread per xdist worker. HPCAGENT_BENCH_CEGTERG_SHARD is the re-split knob.
