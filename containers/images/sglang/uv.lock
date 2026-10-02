@@ -1,0 +1,61 @@
+version = 1
+revision = 3
+requires-python = "==3.10.*"
+resolution-markers = [
+    "platform_machine == 'x86_64' and sys_platform == 'linux'",
+]
+supported-markers = [
+    "platform_machine == 'x86_64' and sys_platform == 'linux'",
+]
+
+[[package]]
+name = "cuda-pathfinder"
+version = "1.8.3"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b9/fb/f8e1890428f9f590b4beebd63b068aac1ce32a3331510c847b9f9a78f261/cuda_pathfinder-1.8.3-py3-none-any.whl", hash = "sha256:e29e59829c297a7a5233bd9cc71094fc5bddbd076951482670178f9eade39b1f", size = 62561, upload-time = "2026-10-02T03:20:23.712Z" },
+]
+
+[[package]]
+name = "cupy"
+version = "14.2.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cuda-pathfinder" },
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/dc/10/059a92d40b161ea24607c9e41a75098812ca7021f2b565524f87beba15c9/cupy-14.2.0.tar.gz", hash = "sha256:cfed725e612178cfbdbf62f4a3a598b60edecbbca718c0d4580c21a16ae4a62c", size = 4057114, upload-time = "2026-08-20T02:42:12.036Z" }
+
+[[package]]
+name = "flydsl"
+version = "0.3.2"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/be/23/70d6a97ec9d4d62f7bb51f13c375bfea7960aad8ebf3276de211d54c742c/flydsl-0.3.2-cp310-cp310-manylinux_2_27_x86_64.whl", hash = "sha256:e1ea923b79d58fc2c979f5f2faa94cd5cdd0d26203bc7385352acb19c2b6a5d5", size = 76244205, upload-time = "2026-08-25T07:30:05.092Z" },
+]
+
+[[package]]
+name = "numpy"
+version = "2.2.6"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/76/21/7d2a95e4bba9dc13d043ee156a356c0a8f0c6309dff6b21b4d71a073b8a8/numpy-2.2.6.tar.gz", hash = "sha256:e29554e2bef54a90aa5cc07da6ce955accb83f21ab5de01a62c8478897b264fd", size = 20276440, upload-time = "2025-05-17T22:38:04.611Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b4/63/3de6a34ad7ad6646ac7d2f55ebc6ad439dbbf9c4370017c50cf403fb19b5/numpy-2.2.6-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:fc7b73d02efb0e18c000e9ad8b83480dfcd5dfd11065997ed4c6747470ae8915", size = 16801050, upload-time = "2025-05-17T21:29:27.675Z" },
+    { url = "https://files.pythonhosted.org/packages/01/c8/dc6ae86e3c61cfec1f178e5c9f7858584049b6093f843bca541f94120920/numpy-2.2.6-cp310-cp310-musllinux_1_2_x86_64.whl", hash = "sha256:8fc377d995680230e83241d8a96def29f204b5782f371c532579b4f20607a289", size = 18614185, upload-time = "2025-05-17T21:30:18.703Z" },
+    { url = "https://files.pythonhosted.org/packages/af/30/feba75f143bdc868a1cc3f44ccfa6c4b9ec522b36458e738cd00f67b573f/numpy-2.2.6-pp310-pypy310_pp73-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:ce47521a4754c8f4593837384bd3424880629f718d87c5d44f8ed763edd63543", size = 16643476, upload-time = "2025-05-17T21:45:11.871Z" },
+]
+
+[[package]]
+name = "sglang-image-extras"
+version = "0"
+source = { virtual = "." }
+dependencies = [
+    { name = "cupy" },
+    { name = "flydsl" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "cupy", specifier = "==14.2.0" },
+    { name = "flydsl", specifier = "==0.3.2" },
+]

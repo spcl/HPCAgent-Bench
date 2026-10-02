@@ -21,8 +21,10 @@ against); `judge` is `agent` plus the KernelBench data and an editable-install h
 
 AMD and CUDA stay separate images: different base, architecture, compiler (`hipcc` vs `nvcc`), cupy
 build and library backends. Every judge/agent image uses its base's Python 3.12 (no second
-interpreter) and pins numpy, scipy, pandas and astunparse to the versions the judge grades with,
-asserted in the final gate and recorded in `/usr/local/share/image-provenance`. The host venv and CI
+interpreter). Python installs only through `uv sync --frozen --inexact` from `uv.lock`, so numpy, scipy,
+pandas and astunparse are the versions the lock (and the host venv) grades with, recorded in
+`/usr/local/share/image-provenance`; an image skips only what its base provides its own build of (ROCm or NGC
+torch and triton). The workspace member `agent/` is linked at `/opt/hpcagent-bench/agent`. The host venv and CI
 run a newer Python: a result that differs between host and container can be the interpreter.
 
 ## Toolchain (every judge/agent image)
@@ -70,10 +72,11 @@ A HIP build must never see vendored NVIDIA CUB; `gpucub.cuh` alone chooses the b
 
 Every adapter in `hpcagent_bench/frameworks/*_framework.py` must import: cupy, dace, jax, numba,
 pluto, pythran, triton, tvm, plus numpy, scipy and torch as baselines. The final gate imports each
-and re-checks the pinned numpy/scipy/pandas/astunparse versions.
+and prints the locked numpy/scipy/pandas/astunparse versions.
 
-* cupy: the wheel on CUDA, a HIP source build on AMD; jax: the plugin for the base's CUDA major.
-* triton: the build the base's torch was compiled with, never PyPI's over it.
+* cupy: the lock's wheel on CUDA, a HIP source build (part of the `amdgpu` extra) on AMD; jax: the plugin for the
+  base's CUDA major, and AMD's ROCm 7.2 wheels (a flat index in `[tool.uv.index]`) on AMD.
+* torch and triton: the lock's, from PyTorch's index for the hardware (CPU, ROCm 7.2, cu132), triton-rocm on AMD.
 * dace: `spcl/dace@extended` at the release pin (`[tool.uv.sources] dace` in `pyproject.toml`); jobs run it as baked.
 * islpy and z3 back `WavefrontSkew` and the `LoopToMap` dependence proof, and both gates fail
   closed and silent. The build asserts `polyhedral_isl.HAVE_ISL` and `smt_dependence.has_z3()`, not
@@ -81,14 +84,14 @@ and re-checks the pinned numpy/scipy/pandas/astunparse versions.
 
 ## Load-bearing details
 
-* **No `dace` directory in the CWD.** A plain `dace/` directory on `sys.path` shadows the editable
-  install as an empty namespace package. `verify_image.py` probes from `/`, and the EDFs set
+* **No `dace` directory in the CWD.** A plain `dace/` directory on `sys.path` shadows the installed
+  dace with another source. `verify_image.py` probes from `/`, and the EDFs set
   `PYTHONSAFEPATH=1`, which keeps the CWD off `sys.path`.
 * **rocprof-compute runs in its own venv.** ROCm installs the tool without its Python dependencies,
   and installing its `requirements.txt` into the image environment pins `astunparse==1.6.2` (moving
   the graded stack) and still fails on pandas 3. `/opt/rocprof-compute-venv` carries pandas 2 and
   that `requirements.txt`; `/opt/rocm/bin/rocprof-compute` is a wrapper exec'ing it. The build fails
-  if the venv cannot import its stack or the image's pinned packages moved.
+  if the venv cannot import its stack.
 * **`rocprof-sys-sample`, never `rocprof-sys-run`:** `-run` exits 0 and writes nothing.
 * **PAPI initializes components lazily.** An untouched component reports "Not initialized"; check it
   by enumerating its events (`papi.component_reason()`), never by reading the status flag. AMD device
@@ -100,7 +103,7 @@ and re-checks the pinned numpy/scipy/pandas/astunparse versions.
 * **LD_PRELOAD (mimalloc) and `PYTHONSAFEPATH=1` are set last**, after every `RUN`.
 * **The EDF restates `PATH` and `LD_LIBRARY_PATH` absolutely** (the Container Engine drops the image
   `ENV`): `/opt/gcc/bin` and `/opt/view/bin` ahead of `/usr/bin`, and on AMD `/opt/venv/bin` (the base
-  venv every `uv pip install` lands in). A prefix missing there is missing at run time.
+  venv every `uv sync` lands in). A prefix missing there is missing at run time.
 * **The build mirror rewrite is removed** from the shipped image's git config.
 
 ## Fabric
@@ -130,7 +133,7 @@ each an environment knob:
 * **Caches on (`CE_BUILD_CACHE=1`).** The podman layer store on the node's tmpfs (`$CE_TMPFS/root`)
   is kept between jobs, so a failed build resubmitted to the same node (`--nodelist=<node>`, printed
   at the start of the build) resumes from its last good layer. The spack binary buildcache
-  (`$SPACK_BUILDCACHE`, default `$SCRATCH/spack-buildcache[-<arch>]`) and the pip wheel cache
+  (`$SPACK_BUILDCACHE`, default `$SCRATCH/spack-buildcache[-<arch>]`) and the uv wheel cache
   (`$UV_BUILD_CACHE`, default `$SCRATCH/uv-cache[/<gpu arch>]`) live on scratch and resume on any node;
   the Dockerfiles use them when mounted. The kept store occupies node RAM (tmpfs) until the next
   build on that node. `CE_BUILD_CACHE=0` wipes the store, builds with `--no-cache` and mounts

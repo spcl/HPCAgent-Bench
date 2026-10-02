@@ -25,9 +25,12 @@ kernels) for cupy. The functions of indices are the reference they must equal, b
 """
 
 import math
+from collections.abc import Callable
 from types import ModuleType
+from typing import Any
 
 import numpy as np
+from numpy.typing import DTypeLike, NDArray
 
 __all__ = [
     "BLOCK",
@@ -72,12 +75,12 @@ def key(seed: int, stream: int = 0) -> int:
     return mix(mix(seed) + (stream + 1) * GAMMA)
 
 
-def counter(shape: tuple[int, ...], xp: ModuleType = np):
+def counter(shape: tuple[int, ...], xp: ModuleType = np) -> NDArray[np.uint64]:
     """The flat (C-order) index of every element of ``shape``, as uint64."""
     return xp.arange(math.prod(shape), dtype=xp.uint64).reshape(shape)
 
 
-def bits(index, seed: int, stream: int = 0, xp: ModuleType = np):
+def bits(index: NDArray[np.integer[Any]], seed: int, stream: int = 0, xp: ModuleType = np) -> NDArray[np.uint64]:
     """64 random bits for each element of ``index`` (an integer array): the splitmix64 output at that position of
     the sequence the key ``key(seed, stream)`` starts."""
     state = index.astype(xp.uint64)
@@ -92,7 +95,9 @@ def bits(index, seed: int, stream: int = 0, xp: ModuleType = np):
     return state
 
 
-def uniform(index, seed: int, stream: int = 0, xp: ModuleType = np, dtype: np.typing.DTypeLike = np.float64):
+def uniform(
+    index: NDArray[np.integer[Any]], seed: int, stream: int = 0, xp: ModuleType = np, dtype: DTypeLike = np.float64
+) -> NDArray[np.floating[Any]]:
     """A value in [0, 1) for each element of ``index``: the top 53 bits (float64) or 24 bits (float32) of
     :func:`bits`, which the float holds exactly."""
     if np.dtype(dtype) == np.float32:
@@ -100,7 +105,9 @@ def uniform(index, seed: int, stream: int = 0, xp: ModuleType = np, dtype: np.ty
     return (bits(index, seed, stream, xp) >> xp.uint64(11)).astype(xp.float64) * (0.5**53)
 
 
-def normal(index, seed: int, stream: int = 0, xp: ModuleType = np, dtype: np.typing.DTypeLike = np.float64):
+def normal(
+    index: NDArray[np.integer[Any]], seed: int, stream: int = 0, xp: ModuleType = np, dtype: DTypeLike = np.float64
+) -> NDArray[np.floating[Any]]:
     """A value of mean 0 and variance 1 (less 2**-42) for each element of ``index``: twelve uniform pieces of 21 bits
     summed exactly as integers, as float64 or rounded to float32. Bit-identical across array libraries; tails end
     at +-6."""
@@ -115,12 +122,14 @@ def normal(index, seed: int, stream: int = 0, xp: ModuleType = np, dtype: np.typ
     return (total.astype(xp.float64) * (0.5**PIECE_BITS) - centre).astype(dtype, copy=False)
 
 
-def integers(index, seed: int, bound: int, stream: int = 0, xp: ModuleType = np):
+def integers(
+    index: NDArray[np.integer[Any]], seed: int, bound: int, stream: int = 0, xp: ModuleType = np
+) -> NDArray[np.int64]:
     """An int64 in [0, bound) for each element of ``index``. The modulo bias is ``bound / 2**64``."""
     return (bits(index, seed, stream, xp) % xp.uint64(bound)).astype(xp.int64)
 
 
-def accelerator(xp: ModuleType):
+def accelerator(xp: ModuleType) -> ModuleType | None:
     """The module of fast kernels for ``xp``: numba for numpy when numba imports, a cupy kernel set for cupy, else
     ``None`` (the array-API reference runs). Both compute the reference's bits."""
     if xp is np:
@@ -136,7 +145,13 @@ def accelerator(xp: ModuleType):
     return None
 
 
-def field(draw, shape: tuple[int, ...], xp: ModuleType, dtype, first: int = 0):
+def field(
+    draw: Callable[[NDArray[np.uint64]], NDArray[Any]],
+    shape: tuple[int, ...],
+    xp: ModuleType,
+    dtype: DTypeLike,
+    first: int = 0,
+) -> NDArray[Any]:
     """``draw(index)`` for the flat indices ``first`` onward of ``shape``, written into one array, in blocks of
     :data:`BLOCK` elements on numpy and in one block elsewhere. The reference path of the ``*_field`` builders."""
     size = math.prod(shape)
@@ -153,9 +168,9 @@ def uniform_field(
     seed: int,
     stream: int = 0,
     xp: ModuleType = np,
-    dtype: np.typing.DTypeLike = np.float64,
+    dtype: DTypeLike = np.float64,
     first: int = 0,
-):
+) -> NDArray[np.floating[Any]]:
     """An array of ``shape`` of :func:`uniform` values at the flat indices ``first`` onward. On the fast backend
     (:func:`accelerator`) when there is one; the same bits either way."""
     fast = accelerator(xp)
@@ -169,9 +184,9 @@ def normal_field(
     seed: int,
     stream: int = 0,
     xp: ModuleType = np,
-    dtype: np.typing.DTypeLike = np.float64,
+    dtype: DTypeLike = np.float64,
     first: int = 0,
-):
+) -> NDArray[np.floating[Any]]:
     """An array of ``shape`` of :func:`normal` values at the flat indices ``first`` onward, on the fast backend when
     there is one."""
     fast = accelerator(xp)
@@ -180,7 +195,9 @@ def normal_field(
     return fast.normal(xp.empty(shape, dtype=dtype), first, seed, stream)
 
 
-def integers_field(shape: tuple[int, ...], seed: int, bound: int, stream: int = 0, xp: ModuleType = np, first: int = 0):
+def integers_field(
+    shape: tuple[int, ...], seed: int, bound: int, stream: int = 0, xp: ModuleType = np, first: int = 0
+) -> NDArray[np.int64]:
     """An int64 array of ``shape`` of :func:`integers` values at the flat indices ``first`` onward, on the fast
     backend when there is one."""
     fast = accelerator(xp)

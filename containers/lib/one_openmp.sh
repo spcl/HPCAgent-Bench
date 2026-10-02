@@ -14,7 +14,7 @@
 # scikit-learn, xgboost, ...) -- becomes a link to the file the image compiler (CC, else gcc) ships.
 # The loader keys objects by file, so a wheel that names its own copy maps the compiler's.
 #
-# Run it AFTER the last layer that can install an OpenMP runtime (a later uv pip install of a wheel
+# Run it AFTER the last layer that can install an OpenMP runtime (a later uv sync of a wheel
 # that bundles one puts a copy back), and it is safe to run again. LLVM's libgomp shim (a link to
 # libomp) and libiomp5/libomp copies are not GNU libgomp: they are left alone, and the gate fails
 # when one is mapped. openmp_gate.py (COPYed beside this script) does the counting.

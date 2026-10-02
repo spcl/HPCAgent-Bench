@@ -2,7 +2,7 @@
 # Regenerate the harness npm lock with the node the images install:
 #   node/package-lock.json    npm install --package-lock-only from node/package.json
 # The CLI pins are node/package.json; the Python harness pins are the harness-<name> dependency
-# groups of pyproject.toml, which the images install with uv directly.
+# groups of agent/pyproject.toml, locked in uv.lock and installed with `uv sync --package hpcagent-agent`.
 #
 #   agent/harness/freeze.sh
 set -Eeuo pipefail

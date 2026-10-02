@@ -75,12 +75,12 @@ def _exec(sif, *cmd, env=None, background: bool = False, log=None):
     argv = ["apptainer", "exec", "--writable-tmpfs", "--bind", f"{REPO}:{REPO}", "--pwd", str(REPO)]
     for k, v in (env or {}).items():
         argv += ["--env", f"{k}={v}"]
-    # Install chatter goes to stderr (not /dev/null) so a failed install isn't silently discarded.
-    # --no-build-isolation: a plain install would fetch setuptools from PyPI at launch and time out; --no-deps:
-    # the image carries every dependency.
+    # Install chatter goes to stderr (not /dev/null) so a failed install isn't silently discarded. The sync is the
+    # image hook's: the dependencies are the image's already (the same uv.lock), so it adds the checkout and
+    # agent/ editable. No build isolation: a plain build would fetch setuptools from PyPI at launch and time out.
     inner = (
-        f"uv pip install --system --break-system-packages --no-build-isolation --no-deps "
-        f"-e {shlex.quote(str(REPO))} -e {shlex.quote(str(REPO / 'agent'))} >&2 && "
+        f"UV_PROJECT_ENVIRONMENT=/opt/venv uv sync --project {shlex.quote(str(REPO))} --frozen --inexact --no-cache "
+        "--no-build-isolation-package hpcagent-bench --no-build-isolation-package hpcagent-agent >&2 && "
         "exec " + shlex.join(str(c) for c in cmd)
     )
     argv += [sif, "sh", "-c", inner]

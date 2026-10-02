@@ -48,8 +48,8 @@ on:
       gpu_vendor:
         description: pyproject extra of the GPU runner.
         type: choice
-        options: [ amd, nvidia ]
-        default: amd
+        options: [ amdgpu, nvgpu ]
+        default: amdgpu
       hardware:
         description: Hardware marker groups the `gpu` job selects (tests/conftest.py HARDWARE_GROUPS).
         type: string
@@ -85,8 +85,7 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
           # harbor: test_harbor.py checks task.toml against Harbor's own model.
-          sync-args: "--group harbor"
-          editable: "./adapters/hpcagent_bench"
+          sync-args: "--group harbor --all-packages"
           ccache: unit-${{ matrix.python }}-${{ matrix.shard }}
           # Only shard 0 carries an nvc++ case (test_parallelism_dispatch.py); the floor leg runs none.
           vendor-compilers: ${{ matrix.shard == 0 && 'nvhpc' || '' }}

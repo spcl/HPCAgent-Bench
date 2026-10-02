@@ -12,10 +12,13 @@ numpy's default generator.
 import importlib
 import math
 import time
+from collections.abc import Callable
 from types import ModuleType
+from typing import Any
 
 import numpy as np
 import pytest
+from numpy.typing import DTypeLike, NDArray
 
 from hpcagent_bench.frameworks.forked import run_forked
 from hpcagent_bench.support import counter_rng as rng
@@ -37,7 +40,7 @@ PINNED_BITS = [12035550249420947055, 12935080325729570654, 7141179953334974231, 
 PINNED_NORMALS = [-0.845736026763916, -0.4002513885498047, 0.8101696968078613, -0.030861854553222656]
 
 
-def host(array) -> np.ndarray:
+def host(array: NDArray[Any]) -> np.ndarray:
     return array.get() if hasattr(array, "get") else np.asarray(array)
 
 
@@ -108,7 +111,7 @@ FIELD_CASES = (
 )
 
 
-def reference_field(kind: str, dtype, size: int, first: int, seed: int, stream: int) -> np.ndarray:
+def reference_field(kind: str, dtype: DTypeLike, size: int, first: int, seed: int, stream: int) -> np.ndarray:
     """The array-API reference of a field: the functions of indices, on numpy."""
     index = np.arange(first, first + size, dtype=np.uint64)
     if kind == "uniform":
@@ -118,7 +121,9 @@ def reference_field(kind: str, dtype, size: int, first: int, seed: int, stream: 
     return rng.integers(index, seed, 1000, stream)
 
 
-def built_field(kind: str, dtype, shape: tuple[int, ...], first: int, seed: int, stream: int, xp: ModuleType):
+def built_field(
+    kind: str, dtype: DTypeLike, shape: tuple[int, ...], first: int, seed: int, stream: int, xp: ModuleType
+) -> np.ndarray:
     if kind == "uniform":
         return rng.uniform_field(shape, seed, stream, xp, dtype, first)
     if kind == "normal":
@@ -130,7 +135,7 @@ def built_field(kind: str, dtype, shape: tuple[int, ...], first: int, seed: int,
 @pytest.mark.parametrize(("kind", "dtype"), FIELD_CASES, ids=lambda case: getattr(case, "__name__", str(case)))
 @pytest.mark.parametrize("shape,first", [((1,), 0), ((7, 13), 5), ((3, 4101), 2**40), ((100_003,), 12345)])
 def test_the_fast_field_builders_equal_the_reference_on_every_element(
-    xp: ModuleType, kind: str, dtype, shape: tuple[int, ...], first: int
+    xp: ModuleType, kind: str, dtype: DTypeLike, shape: tuple[int, ...], first: int
 ) -> None:
     """numba on numpy and the elementwise kernel on cupy: the bits of the functions of indices, at an offset, on a
     size no block divides, in every dtype the draws offer."""
@@ -227,7 +232,7 @@ def test_counter_is_the_flat_c_order_index() -> None:
     assert index.dtype == np.uint64 and index.tolist() == [[0, 1, 2, 3], [4, 5, 6, 7], [8, 9, 10, 11]]
 
 
-def best_time(function, repeats: int = 3) -> float:
+def best_time(function: Callable[[], object], repeats: int = 3) -> float:
     times = []
     for _ in range(repeats):
         start = time.perf_counter()

@@ -144,8 +144,11 @@ def test_every_image_links_one_runtime_after_its_last_python_install(image: str)
     and the scan run in the same last step, so they see the final image."""
     agent = agent_stage(image)
     step = agent.rindex("sh /tmp/one-openmp/one_openmp.sh /opt/view;")
-    installs = [i for i in range(len(agent)) if agent.startswith("pip install", i)]
-    assert installs and max(installs) < step, "a uv pip install runs after the one-runtime step"
+    code = "\n".join(line for line in agent.splitlines() if not line.lstrip().startswith("#"))
+    installs = [match.start() for match in re.finditer(r"uv sync |package_hook\.sh /opt", code)]
+    assert installs and max(installs) < code.rindex("sh /tmp/one-openmp/one_openmp.sh /opt/view;"), (
+        "a uv sync runs after the one-runtime step"
+    )
     assert step < agent.index("ENV LD_PRELOAD"), "the step runs under the mimalloc preload"
     for script in (
         "one_openmp.sh",

@@ -63,7 +63,7 @@ INTEGERS = cp.ElementwiseKernel(
 )
 
 
-def uniform(out, first: int, seed: int, stream: int):
+def uniform(out: cp.ndarray, first: int, seed: int, stream: int) -> cp.ndarray:
     """Fill the float32 or float64 ``out`` with the uniform draw of the flat indices ``first`` onward."""
     wide = out.dtype == np.float64
     UNIFORM(
@@ -73,13 +73,13 @@ def uniform(out, first: int, seed: int, stream: int):
     return out
 
 
-def normal(out, first: int, seed: int, stream: int):
+def normal(out: cp.ndarray, first: int, seed: int, stream: int) -> cp.ndarray:
     """Fill the float32 or float64 ``out`` with the normal draw of the flat indices ``first`` onward."""
     NORMAL(np.uint64(first), np.uint64(reference.key(seed, stream)), out)
     return out
 
 
-def integers(out, first: int, seed: int, bound: int, stream: int):
+def integers(out: cp.ndarray, first: int, seed: int, bound: int, stream: int) -> cp.ndarray:
     """Fill the int64 ``out`` with the integer draw below ``bound`` of the flat indices ``first`` onward."""
     INTEGERS(np.uint64(first), np.uint64(reference.key(seed, stream)), np.uint64(bound), out)
     return out
