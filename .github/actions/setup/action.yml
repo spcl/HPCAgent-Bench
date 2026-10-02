@@ -12,11 +12,7 @@ inputs:
   sync-args:
     description: >
       Extra `uv sync` arguments, e.g. "--no-binary-package mpi4py" to build against a local MPI, or
-      "--group harbor" for the harbor checks.
-    required: false
-    default: ""
-  editable:
-    description: Extra local packages installed editable over the synced environment, e.g. "./adapters/hpcagent_bench".
+      "--group harbor --all-packages" for the harbor checks (the Harbor CLI and the adapter workspace member).
     required: false
     default: ""
   ccache:
@@ -187,12 +183,8 @@ runs:
         set -euo pipefail
         # The `cpu` extra is the complete install (frameworks, judge, agent clients, dev tools), torch from
         # PyTorch's CPU index and dace at the pinned commit, exactly as uv.lock records them.
-        # shellcheck disable=SC2086 -- sync-args and editable are flag/path lists
+        # shellcheck disable=SC2086 -- sync-args is a flag list
         uv sync --frozen --extra cpu --python "$(command -v python)" ${{ inputs.sync-args }}
-        if [ -n "${{ inputs.editable }}" ]; then
-          # shellcheck disable=SC2086
-          uv pip install --python .venv/bin/python --no-deps $(printf -- '-e %s ' ${{ inputs.editable }})
-        fi
         echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
         echo "VIRTUAL_ENV=$PWD/.venv" >> "$GITHUB_ENV"
         # dace must be the pinned commit: a dependency that caps dace would otherwise swap in a PyPI release.

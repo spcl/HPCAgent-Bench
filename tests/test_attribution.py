@@ -6,7 +6,7 @@ import pathlib
 
 import pytest
 
-import render_attribution as ra
+from scripts import render_attribution as ra
 
 
 def test_every_manifest_carries_a_provenance_line_the_registry_resolves() -> None:

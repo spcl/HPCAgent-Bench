@@ -38,7 +38,7 @@ def test_a_shard_with_a_load_failure_and_a_render_failure_still_exits_zero(
     package.mkdir()
     view, cache = tmp_path / "view", tmp_path / "cache"
     cpf_cache.open_view(view, cache, "cpu", before)
-    monkeypatch.setattr(cpf_canonical, "dace_commit", lambda root: before)
+    monkeypatch.setattr(cpf_canonical, "dace_commit", lambda: before)
 
     def fake_load(short_name: str) -> FakeSpec:
         if short_name == "missing_kernel":
@@ -76,7 +76,7 @@ def test_a_dace_commit_that_moves_mid_run_withdraws_and_fails_the_rank(
     package.mkdir()
     view, cache = tmp_path / "view", tmp_path / "cache"
     cpf_cache.open_view(view, cache, "cpu", before)
-    monkeypatch.setattr(cpf_canonical, "dace_commit", lambda root: "after")
+    monkeypatch.setattr(cpf_canonical, "dace_commit", lambda: "after")
     monkeypatch.setattr(cpf_prerender.BenchSpec, "load", classmethod(lambda cls, short_name: FakeSpec(short_name)))
 
     def fake_prerender_kernel(spec: FakeSpec, cache_root: pathlib.Path, **kwargs: object) -> dict[str, object]:
@@ -103,7 +103,7 @@ def test_a_gpu_prerender_records_hip_entries_the_launch_gates_accept(
     package.mkdir()
     view, cache = tmp_path / "view", tmp_path / "cache"
     cpf_cache.open_view(view, cache, "gpu", before)
-    monkeypatch.setattr(cpf_canonical, "dace_commit", lambda root: before)
+    monkeypatch.setattr(cpf_canonical, "dace_commit", lambda: before)
     monkeypatch.setattr(cpf_prerender.BenchSpec, "load", classmethod(lambda cls, short_name: FakeSpec(short_name)))
 
     def fake_prerender_kernel(

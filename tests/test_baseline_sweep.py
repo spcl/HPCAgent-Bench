@@ -22,9 +22,8 @@ import sys
 
 import pytest
 
-from hpcagent_bench import paths
+from hpcagent_bench import cpf_canonical, paths
 from hpcagent_bench.cluster import baseline, jobs
-from tests.dace_checkout import pinned_dace
 
 #: A ``run-framework`` that writes one row per call in ``merge_canon_results.py``'s shape and marks what it saw.
 WRITING_CLI = """
@@ -79,7 +78,7 @@ def stub_checkout(root: pathlib.Path, cli: str) -> pathlib.Path:
 
 
 def environment(root: pathlib.Path, **extra: str) -> dict[str, str]:
-    """The step's environment: a private cache root, the stub interpreter and a pinned stand-in dace checkout."""
+    """The step's environment: a private cache root, the stub interpreter."""
     env = {
         key: value
         for key, value in os.environ.items()
@@ -87,7 +86,6 @@ def environment(root: pathlib.Path, **extra: str) -> dict[str, str]:
         and key not in {"HPCAGENT_BENCH_RECORD_DB_PATH", "HPCAGENT_BENCH_RECORD_BUILD", "SLURM_PROCID", "SLURM_NTASKS"}
     }
     env.update(JIT_CACHE_ROOT=str(root / "jitcache"), HPCAGENT_BENCH_IMAGE_PYTHON=str(root / "image-python"))
-    env.update(pinned_dace(root))
     env.update(CANON_OPT_REPORTS="0", SLURM_CPUS_PER_TASK="2", **extra)
     return env
 
@@ -299,12 +297,7 @@ def test_a_column_stamps_the_dace_commit_into_its_build_record(tmp_path: pathlib
     opt = stub_checkout(tmp_path, WRITING_CLI)
     sweep = sweep_of(tmp_path, opt, ("fakekernel",))
     baseline.run(sweep, jobs.Rank(0, 1))
-    commit = subprocess.run(
-        ["git", "-C", sweep.environ["DACE_DIR"], "rev-parse", "--short", "HEAD"],
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.strip()
+    commit = cpf_canonical.dace_commit()[:9]
     assert pathlib.Path(f"{sweep.csv(0)}.record_build").read_text().strip() == f"dace {commit}"
     assert (sweep.out_root / "fakecol.rank0.dace").read_text().strip() == f"dace {commit}"
 

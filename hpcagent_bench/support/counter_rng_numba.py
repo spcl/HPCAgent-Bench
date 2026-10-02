@@ -15,9 +15,12 @@ one the process's context runs on. Threads follow the process's CPU affinity.
 
 import concurrent.futures
 import os
+from collections.abc import Callable
+from typing import Any
 
 import numba
 import numpy as np
+from numpy.typing import NDArray
 
 from hpcagent_bench.support import counter_rng as reference
 
@@ -44,7 +47,7 @@ CENTRE = reference.PIECES * (1.0 - SCALE_21) / 2.0
 
 
 @numba.njit(inline="always", cache=True)
-def hashed(index, key):
+def hashed(index: np.uint64, key: np.uint64) -> np.uint64:
     """splitmix64 output at ``index`` of the sequence ``key`` starts."""
     state = (index + ONE) * GAMMA + key
     state ^= state >> SHIFT_30
@@ -55,13 +58,15 @@ def hashed(index, key):
 
 
 @numba.njit(nogil=True, cache=True)
-def uniform_kernel(out, first, key, shift, scale):
+def uniform_kernel(
+    out: NDArray[np.floating[Any]], first: np.uint64, key: np.uint64, shift: np.uint64, scale: float
+) -> None:
     for position in range(out.size):
         out[position] = (hashed(first + np.uint64(position), key) >> shift) * scale
 
 
 @numba.njit(nogil=True, cache=True)
-def normal_kernel(out, first, key):
+def normal_kernel(out: NDArray[np.floating[Any]], first: np.uint64, key: np.uint64) -> None:
     for position in range(out.size):
         base = (first + np.uint64(position)) * WORDS
         total = np.uint64(0)
@@ -74,7 +79,7 @@ def normal_kernel(out, first, key):
 
 
 @numba.njit(nogil=True, cache=True)
-def integers_kernel(out, first, key, bound):
+def integers_kernel(out: NDArray[np.int64], first: np.uint64, key: np.uint64, bound: np.uint64) -> None:
     for position in range(out.size):
         out[position] = hashed(first + np.uint64(position), key) % bound
 
@@ -106,7 +111,9 @@ def blocks(count: int, block: int, threads: int) -> list[tuple[int, int]]:
     return [(start, min(start + step, count)) for start in range(0, count, step)]
 
 
-def run(kernel, out: np.ndarray, first: int, arguments: tuple, block: int, threads: int | None) -> np.ndarray:
+def run(
+    kernel: Callable[..., None], out: np.ndarray, first: int, arguments: tuple, block: int, threads: int | None
+) -> np.ndarray:
     """``kernel(out[start:stop], first + start, *arguments)`` over the ranges of the flat ``out``, on threads."""
     flat = out.reshape(-1)
     workers = threads or default_threads()

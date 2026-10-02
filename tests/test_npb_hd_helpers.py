@@ -35,6 +35,11 @@ HELPER_HEAD_RE = {
 }
 
 
+#: Helpers that only host code calls: the NULL check after a ``malloc`` runs where the ``malloc`` runs, and it
+#: reports through ``fprintf``/``abort``, which device code cannot call.
+HOST_ONLY = ("__npb_alloc_check",)
+
+
 def unmarked(prelude: str) -> str:
     """``prelude`` as it was before ``NPB_HD`` existed: no guard, no marker."""
     return prelude.replace(NPB_HD_GUARD, "").replace(" NPB_HD ", " ")
@@ -56,7 +61,7 @@ def test_every_prelude_helper_definition_is_marked_host_and_device(lang: str) ->
     prelude = PRELUDES[lang]
     heads = [prelude[m.start() : prelude.index("(", m.start())] for m in HELPER_HEAD_RE[lang].finditer(prelude)]
     assert heads, "no helper definitions found: the head pattern no longer matches the prelude"
-    missing = [head for head in heads if " NPB_HD " not in head]
+    missing = [head for head in heads if " NPB_HD " not in head and not head.endswith(HOST_ONLY)]
     assert not missing, missing
     assert prelude.index(NPB_HD_GUARD) < prelude.index(" NPB_HD "), "the guard must precede every helper"
 
@@ -79,7 +84,8 @@ def test_a_gpu_compiler_sees_every_helper_as_host_and_device(macro: str, tmp_pat
     text = preprocess(C_PRELUDE_WITH_FP8, "c", tmp_path, f"-D{macro}")
     heads = re.findall(r"^static inline (?!const)[^(]*\(", text, re.MULTILINE)
     assert heads
-    assert all(head.startswith("static inline __host__ __device__ ") for head in heads), heads
+    device = [head for head in heads if not head.rstrip("(").endswith(HOST_ONLY)]
+    assert all(head.startswith("static inline __host__ __device__ ") for head in device), device
 
 
 def test_a_second_copy_of_the_guard_does_not_redefine_the_marker() -> None:

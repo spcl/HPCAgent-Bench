@@ -2,36 +2,42 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Rebuild numpy and scipy, at the versions already installed, against the image's OpenBLAS.
+# Rebuild the numpy and scipy that uv.lock pins against the image's OpenBLAS.
 #
-#   numpy_on_openblas.sh <view prefix>      (e.g. /opt/view)
+#   numpy_on_openblas.sh <view prefix> <workspace>      (e.g. /opt/view /opt/hpcagent-bench)
 #
 # The PyPI wheels bundle their own scipy-openblas: a pthreads build with MAX_THREADS=64 that crashed
 # when numba's prange threads (192 on an mi300 node) called np.linalg at once, and a second BLAS
 # runtime beside the image's OpenMP one. Built from source against <view>'s openblas (threads=openmp,
 # blas_gate.sh), numpy and scipy share one BLAS and one OpenMP runtime with the C baselines, DaCe and
-# numba (NUMBA_THREADING_LAYER=omp, set by the Dockerfile). The versions must not move: numpy
-# computes every CPU reference. The gate at the end runs 2 x nproc numba prange iterations that each
+# numba (NUMBA_THREADING_LAYER=omp, set by the Dockerfile). uv.lock decides the versions, so this is the
+# same numpy that computes every CPU reference, only linked differently. <workspace> holds the COPY'd
+# pyproject.toml, uv.lock and agent/pyproject.toml; the environment is the interpreter's prefix unless
+# UV_PROJECT_ENVIRONMENT names one. The gate at the end runs 2 x nproc numba prange iterations that each
 # call np.dot and scipy.linalg.lu_factor concurrently, in one process that maps a single OpenMP runtime
 # (one_openmp.sh, which also links every wheel's bundled libgomp to the image's).
 set -eux
 ulimit -c 0
 view="$1"
+workspace="$2"
 py="$(command -v python3)"
-numpy_v="$("${py}" -c 'import numpy; print(numpy.__version__)')"
-scipy_v="$("${py}" -c 'import scipy; print(scipy.__version__)')"
+UV_PROJECT_ENVIRONMENT="${UV_PROJECT_ENVIRONMENT:-$("${py}" -c 'import sys; print(sys.prefix)')}"
+export UV_PROJECT_ENVIRONMENT
 PKG_CONFIG_PATH="${view}/lib/pkgconfig:${view}/lib64/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
 export PKG_CONFIG_PATH
 pkg-config --exists openblas
+sync() {
+    (cd "${workspace}" && uv sync --frozen --inexact --no-cache --python "${py}" --no-install-project \
+        --no-install-package hpcagent-agent --group openblas-build "$@")
+}
 # numpy first: scipy's build imports the installed numpy, which one combined reinstall removes mid-build.
-uv pip install --python "${py}" --break-system-packages --no-cache --reinstall-package numpy --no-deps \
-    --no-binary numpy -Csetup-args=-Dblas=openblas -Csetup-args=-Dlapack=openblas "numpy==${numpy_v}"
+sync --reinstall-package numpy --no-binary-package numpy \
+    --config-settings-package numpy:setup-args=-Dblas=openblas --config-settings-package numpy:setup-args=-Dlapack=openblas
 # scipy without build isolation, so it compiles against the numpy just rebuilt: an isolated build env
 # builds a numpy of its own from source (--no-binary), which scipy's meson then failed to import (AMD 655840).
-uv pip install --python "${py}" --break-system-packages --no-cache meson-python Cython pybind11 pythran patchelf
-uv pip install --python "${py}" --break-system-packages --no-cache --reinstall-package scipy --no-deps --no-build-isolation \
-    --no-binary scipy -Csetup-args=-Dblas=openblas -Csetup-args=-Dlapack=openblas "scipy==${scipy_v}"
-uv pip uninstall --python "${py}" --break-system-packages scipy-openblas32 scipy-openblas64 || true
+# Its build tools are the locked openblas-build group, already in the environment.
+sync --reinstall-package scipy --no-binary-package scipy --no-build-isolation-package scipy \
+    --config-settings-package scipy:setup-args=-Dblas=openblas --config-settings-package scipy:setup-args=-Dlapack=openblas
 
 # A spack-built gcc writes its runtime directory as DT_RPATH into everything it links (AMD 656542), and
 # DT_RPATH is searched before LD_LIBRARY_PATH: the llvm context could not put its own libgomp.so.1 and
@@ -46,15 +52,13 @@ find "${site}/numpy" "${site}/scipy" -name '*.so' | while read -r so; do
     fi
 done
 
-VIEW="${view}" NUMPY_V="${numpy_v}" SCIPY_V="${scipy_v}" "${py}" - <<'PY'
+VIEW="${view}" "${py}" - <<'PY'
 import os
 import pathlib
 import numpy
 import scipy
 
 view = os.environ["VIEW"]
-assert numpy.__version__ == os.environ["NUMPY_V"], ("numpy moved", numpy.__version__)
-assert scipy.__version__ == os.environ["SCIPY_V"], ("scipy moved", scipy.__version__)
 # pkg-config reports the spack install prefix the view links to, so compare resolved directories.
 view_lib = pathlib.Path(view, "lib", "libopenblas.so").resolve().parent
 for mod in (numpy, scipy):
