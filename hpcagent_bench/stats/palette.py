@@ -25,16 +25,16 @@ a MODEL (a figure whose only axis is which LLM ran).
 
 ONE GLOBAL PALETTE: matplotlib's ``tab20``, extended by ``tab20b`` once its twenty slots are spent,
 and nothing else. Every entity a figure colours -- packet, framework, model, harness, language --
-takes a SLOT decided by its position in
-``envs/registry.yaml``, so a colour is looked up in exactly one table and no figure, script or
-registry entry carries a hex literal of its own.
+takes a SLOT decided by the explicit ``order`` of its registered class (:mod:`hpcagent_bench.vocabulary`;
+the yaml kinds, studies and frameworks, by position), so a colour is looked up in exactly one table and no
+figure, script or registry entry carries a hex literal of its own.
 
 A packet's colour is :func:`color`: its LEAD packet's slot and one lightness step per additional
 packet, so ``cpfsrc`` and ``cpfsrc+lang-skills`` read as the same treatment family at two
 strengths, and neutral grey for the no-packet control.
 
-THE VOCABULARY AND THE ORDER ARE DATA, in ``envs/registry.yaml``, beside the display names: one
-registry for one vocabulary.
+THE VOCABULARY AND THE ORDER ARE REGISTERED in code, beside the display names: one registry for one
+vocabulary. The pools (neutral colour, marker shapes, lightness step) are ``envs/registry.yaml``.
 """
 
 import colorsys
@@ -47,7 +47,7 @@ import matplotlib
 import matplotlib.colors
 
 from hpcagent_bench import packets
-from hpcagent_bench.study_tags import Registry, canonical, order, registry
+from hpcagent_bench.study_tags import Registry, canonical, order, registry, slot
 
 __all__ = [
     "CONTROL_MARKER",
@@ -147,17 +147,17 @@ def slot_color(kind: str, name: str) -> str:
 
     CRC, never ``hash()``: ``hash`` is salted by PYTHONHASHSEED and would hand the same entity a
     different colour in two runs of the same script."""
-    known, ramp = hue_order(kind), hues()
-    resolved = canonical(kind, name)
-    if resolved in known:
-        return ramp[known.index(resolved) % len(ramp)]
+    ramp = hues()
+    index = slot(kind, name)
+    if index is not None:
+        return ramp[index % len(ramp)]
     return ramp[zlib.crc32(str(name).encode()) % len(ramp)]
 
 
 def ordered_color(kind: str, name: str) -> str:
     """``name``'s tab20 slot within one entity ``kind``, warning when the registry does not name it."""
     if canonical(kind, name) not in hue_order(kind):
-        LOG.warning("palette: %s %r is not in registry.yaml; using a hash colour", kind, name)
+        LOG.warning("palette: %s %r is not registered; using a hash colour", kind, name)
     return slot_color(kind, name)
 
 
@@ -193,11 +193,11 @@ def color(packet: str) -> str:
     """The one colour ``packet`` wears, in every figure and every process: the control grey for the
     control, otherwise the lead part's tab20 slot lightened one step per extra part.
 
-    Warns for each part registry.yaml does not name, since an unregistered part draws in a hash slot."""
+    Warns for each part the vocabulary does not register, since an unregistered part draws in a hash slot."""
     known = set(hue_order("packets"))
     for part in packets.spec_parts(packet):
         if part not in known:
-            LOG.warning("palette: packets %r is not in registry.yaml; using a hash colour", part)
+            LOG.warning("palette: packets %r is not registered; using a hash colour", part)
     parts = packets.spec_parts(packet)
     if not parts:
         return control_color()
@@ -230,15 +230,13 @@ def marker(model: str) -> str:
     standalone optimizers from the BACK, so registering another model never repaints a figure that
     already carries DaCe or CPF. Pairs with :func:`color` so identity is never colour alone."""
     shapes = markers()
-    models = order("models")
-    resolved = canonical("models", model)
-    if resolved in models:
-        return shapes[models.index(resolved) % len(shapes)]
-    standalone = order("optimizers")
-    resolved = canonical("optimizers", model)
-    if resolved in standalone:
-        return shapes[-1 - (standalone.index(resolved) % len(shapes))]
-    LOG.warning("palette: optimizer %r is not in registry.yaml; using a hash marker", model)
+    index = slot("models", model)
+    if index is not None:
+        return shapes[index % len(shapes)]
+    index = slot("optimizers", model)
+    if index is not None:
+        return shapes[-1 - (index % len(shapes))]
+    LOG.warning("palette: optimizer %r is not registered; using a hash marker", model)
     return shapes[zlib.crc32(str(model).encode()) % len(shapes)]
 
 
@@ -286,7 +284,7 @@ def treatment_shape(kind: str, name: str) -> object:
     table = shape_table()
     if (kind, resolved) in table:
         return table[(kind, resolved)]
-    LOG.warning("palette: %s %r is not in registry.yaml; using a hash marker", kind, name)
+    LOG.warning("palette: %s %r is not registered; using a hash marker", kind, name)
     pool = [shape for shape in registry().shapes if shape != CONTROL_MARKER]
     return pool[zlib.crc32(str(name).encode()) % len(pool)]
 

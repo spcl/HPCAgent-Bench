@@ -85,7 +85,7 @@ def test_the_registered_checkpoint_is_what_the_setups_served() -> None:
             problems.append(f"{model}: served {sorted(checkpoints)} but the registry does not list it")
         elif checkpoints != {expected}:
             problems.append(f"{model}: registry says {expected!r}, setups served {sorted(checkpoints)}")
-    assert not problems, "registry.yaml disagrees with the setups:\n  " + "\n  ".join(problems)
+    assert not problems, "the registered vocabulary disagrees with the setups:\n  " + "\n  ".join(problems)
 
 
 def test_every_model_the_palette_colours_also_has_a_name() -> None:
@@ -124,7 +124,7 @@ def test_an_unknown_tag_falls_back_instead_of_raising() -> None:
 #: The identity a setup .env stamps, and the registry block each value has to be found in. A value
 #: the registry does not name still DRAWS -- in a hash colour, under a raw-string label -- so the
 #: only thing standing between an unregistered packet and a mislabelled figure is this test.
-RECORDED = {"EXPERIMENT": "studies", "MODEL": "models", "LANGUAGE": "languages", "DEVICE": "devices"}
+RECORDED = {"STUDY": "studies", "MODEL": "models", "LANGUAGE": "languages", "DEVICE": "devices"}
 
 
 def recorded_identity(text: str) -> dict[str, str]:
@@ -140,7 +140,7 @@ def stamped_setup_envs() -> list[pathlib.Path]:
 
 
 def unregistered_values(env: pathlib.Path) -> list[str]:
-    """Every identity value ``env`` records that registry.yaml cannot colour or label."""
+    """Every identity value ``env`` records that the vocabulary cannot colour or label."""
     identity = recorded_identity(env.read_text(encoding="utf-8", errors="replace"))
 
     unknown = []
@@ -149,13 +149,13 @@ def unregistered_values(env: pathlib.Path) -> list[str]:
         if not value:
             continue
         if study_tags.canonical(kind, value.lower()) not in study_tags.names(kind):
-            unknown.append(f"{env.name}: {key}={value!r} is in no `{kind}` key of registry.yaml")
+            unknown.append(f"{env.name}: {key}={value!r} is registered under no `{kind}` key")
 
     # The packet is a '+'-joined SET, and '' is the control rather than a missing value, so it is
     # checked part by part instead of as one string.
     for part in study_tags.packet_parts(identity.get("PACKET", "")):
         if part not in study_tags.names("packets"):
-            unknown.append(f"{env.name}: packet {part!r} is in no `packets` key of registry.yaml")
+            unknown.append(f"{env.name}: packet {part!r} is not a registered packet")
     return unknown
 
 
@@ -179,7 +179,7 @@ def test_a_setup_that_records_a_study_records_the_whole_tuple() -> None:
         identity = recorded_identity(env.read_text(encoding="utf-8", errors="replace"))
         if not identity:
             continue
-        missing = [k for k in ("EXPERIMENT", "MODEL", "LANGUAGE", "DEVICE", "SETUP") if not identity.get(k)]
+        missing = [k for k in ("STUDY", "MODEL", "LANGUAGE", "DEVICE", "SETUP") if not identity.get(k)]
         if missing:
             partial.append(f"{env.name}: stamps {sorted(identity)} but not {missing}")
     assert not partial, "half-stamped setup envs:\n  " + "\n  ".join(partial)

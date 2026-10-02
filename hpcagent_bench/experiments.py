@@ -3,7 +3,7 @@
 """Which rows belong to a study.
 
 A setup name says which launcher produced it (``git-scicomp-qwen38-repo``), not which study it
-answers. The mapping between the two is data in ``envs/registry.yaml`` and this module is its only
+answers. The mapping between the two is data in ``envs/studies.yaml`` and this module is its only
 reader.
 
 A figure asks for a STUDY and gets back where to look and what to keep:

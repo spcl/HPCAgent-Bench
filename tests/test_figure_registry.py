@@ -47,7 +47,7 @@ def test_every_framework_a_figure_names_is_registered(source: str) -> None:
     """A builder that colours a framework the registry does not carry puts a raw tag on a legend."""
     named = study_tags.names("frameworks")
     unknown = [tag for tag in FIGURE_FRAMEWORKS[source] if study_tags.canonical("frameworks", tag) not in named]
-    assert not unknown, f"{source} colours {unknown}, which no `frameworks` key of registry.yaml names"
+    assert not unknown, f"{source} colours {unknown}, which no `frameworks` key of studies.yaml names"
 
 
 def test_every_packet_the_palette_hues_is_named() -> None:
@@ -66,20 +66,20 @@ def test_colouring_an_unregistered_packet_is_never_silent(caplog: pytest.LogCapt
     with caplog.at_level(logging.WARNING, logger=palette.LOG.name):
         colour = palette.color("a-packet-nobody-registered")
     assert colour
-    assert "registry.yaml" in caplog.text and "a-packet-nobody-registered" in caplog.text
+    assert "is not registered" in caplog.text and "a-packet-nobody-registered" in caplog.text
 
 
 def test_colouring_an_unregistered_framework_is_never_silent(caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.WARNING, logger=palette.LOG.name):
         palette.framework_color("a-framework-nobody-registered")
-    assert "registry.yaml" in caplog.text
+    assert "is not registered" in caplog.text
 
 
 def test_shaping_an_unregistered_model_is_never_silent(caplog: pytest.LogCaptureFixture) -> None:
     """Shape is the model in every figure, so an unregistered model loses its identity twice."""
     with caplog.at_level(logging.WARNING, logger=palette.LOG.name):
         palette.marker("a-model-nobody-registered")
-    assert "registry.yaml" in caplog.text
+    assert "is not registered" in caplog.text
 
 
 def test_a_figure_that_colours_a_whole_unregistered_set_warns_once_per_entity(
@@ -89,7 +89,7 @@ def test_a_figure_that_colours_a_whole_unregistered_set_warns_once_per_entity(
     call and not only the scalar one."""
     with caplog.at_level(logging.WARNING, logger=palette.LOG.name):
         palette.colors(["cpfsrc", "mystery-one", "mystery-two"])
-    assert caplog.text.count("registry.yaml") == 2
+    assert caplog.text.count("is not registered") == 2
 
 
 def test_a_setup_name_resolves_to_a_registered_model_or_to_nothing() -> None:
@@ -141,7 +141,9 @@ def identity_warnings(summary: ModuleType, conditions: list[str], caplog: pytest
     with caplog.at_level(logging.WARNING, logger=palette.LOG.name):
         summary.draw_metric(ax, setup_frame(conditions), "log2_speedup", "Speedup", log=False)
     plt.close(fig)
-    return [r.getMessage() for r in caplog.records if r.name == palette.LOG.name and "registry.yaml" in r.getMessage()]
+    return [
+        r.getMessage() for r in caplog.records if r.name == palette.LOG.name and "is not registered" in r.getMessage()
+    ]
 
 
 def test_every_packet_the_setup_summary_can_colour_is_registered() -> None:
@@ -150,9 +152,7 @@ def test_every_packet_the_setup_summary_can_colour_is_registered() -> None:
     named = set(study_tags.names("packets"))
     packets = list(summary.CONDITION_ORDER)
     unknown = [p for p in packets if any(part not in named for part in study_tags.packet_parts(p))]
-    assert not unknown, (
-        f"plot_setup_summary.CONDITION_ORDER colours {unknown}, which no `packets` key of registry.yaml names"
-    )
+    assert not unknown, f"plot_setup_summary.CONDITION_ORDER colours {unknown}, which no registered packet names"
 
 
 @pytest.mark.parametrize("width", [2, 4], ids=["joined pair", "unjoined conditions"])

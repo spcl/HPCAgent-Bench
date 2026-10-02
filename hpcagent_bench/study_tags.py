@@ -6,9 +6,10 @@ A setup is named for the machine that routes it -- ``gpu-llr-focus40-qwen38-c-op
 device, model, language and packet in one hyphenated string, which is right for a filename and
 wrong for a figure title. A reader who has not spent a week in this repo cannot expand it.
 
-THE NAMES ARE DATA, in ``envs/registry.yaml``, which also decides the colours -- see
-:mod:`hpcagent_bench.stats.palette`. A name spelled in three plotting scripts is a name that will
-disagree with itself, which it already did once, with one figure saying ``qwen38`` where its
+THE NAMES ARE REGISTERED, as decorated classes (:mod:`hpcagent_bench.models`,
+:mod:`hpcagent_bench.skill_packets`, see :mod:`hpcagent_bench.vocabulary`), whose explicit ``order`` also
+decides the colours -- see :mod:`hpcagent_bench.stats.palette`. A name spelled in three plotting scripts is a
+name that will disagree with itself, which it already did once, with one figure saying ``qwen38`` where its
 neighbour said ``Qwen3.8-27B`` for the same setup.
 
 Every lookup FALLS BACK to the tag unchanged rather than raising. A new experiment must not break a
@@ -24,8 +25,9 @@ from typing import cast
 
 import yaml
 
-from hpcagent_bench import spec
+from hpcagent_bench import models, skill_packets, spec
 from hpcagent_bench.spec import as_list
+from hpcagent_bench.vocabulary import KINDS, MODELS, PACKETS, ModelEntry, PacketDef, check_vocabulary
 
 __all__ = [
     "SETUP_RENAMES_PATH",
@@ -35,14 +37,14 @@ __all__ = [
     "OFFLOAD_SETUP_TOKEN",
     "OFFLOAD_DELIVERY_NAME",
     "REGISTRY",
+    "STUDIES",
+    "VOCABULARY_MODULES",
     "SHORT_NAME_MAX",
     "SUITE_PREFIXES",
     "BaselineSpec",
     "ExperimentEntry",
     "Marker",
-    "ModelEntry",
     "Names",
-    "PacketDef",
     "Registry",
     "aliased_setup",
     "setup_aliases_of",
@@ -70,23 +72,28 @@ __all__ = [
     "model_name",
     "model_of",
     "model_spellings",
-    "models_of",
     "names",
     "names_of",
     "optimizer_name",
     "order",
     "owed_run_roots_of",
-    "packet_defs_of",
     "packet_name",
     "packet_of",
     "packet_parts",
     "packet_short_name",
     "packet_spellings",
+    "registered",
     "registry",
+    "slot",
     "split_record_language",
 ]
 
+#: The pools (neutral colour, marker shapes, lightness step) every figure draws from.
 REGISTRY = pathlib.Path(__file__).resolve().parent / "envs" / "registry.yaml"
+#: Run-level data: studies, experiments, baselines and the spellings older setups recorded under.
+STUDIES = pathlib.Path(__file__).resolve().parent / "envs" / "studies.yaml"
+#: The modules whose import registers the vocabulary; importing this module is what loads them.
+VOCABULARY_MODULES = (models, skill_packets)
 #: Every recorded setup name -> the setup it is (DATA).
 SETUP_RENAMES_PATH = pathlib.Path(__file__).resolve().parent / "envs" / "setup_renames.yaml"
 
@@ -98,17 +105,6 @@ CLEAN_SUFFIX = "-clean"
 
 #: One entity kind's tag -> display name. Key ORDER is the colour and marker order.
 Names = dict[str, str]
-
-
-@dataclasses.dataclass(frozen=True, slots=True)
-class ModelEntry:
-    """A model's display name and the checkpoint it is expected to serve.
-
-    The checkpoint is recorded so an experiment that swaps one cannot silently keep the old name on an
-    axis; ``tests/test_display_names.py`` is what checks it against what the setups really ran."""
-
-    name: str
-    serves: str
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -138,31 +134,6 @@ class ExperimentEntry:
     #: carry (``llr40-<model>-<lang>-blind``): such an experiment takes those setups from its prefix's.
     prefix: str = ""
     suffix: str = ""
-
-
-@dataclasses.dataclass(frozen=True, slots=True)
-class PacketDef:
-    """One packet's raw definition, before ``${VAR}`` placeholders are filled or ``lang``/``*``
-    are expanded into concrete skill pages -- see :mod:`hpcagent_bench.packets`, the resolver that
-    reads this."""
-
-    name: str
-    skills: tuple[str, ...]
-    packets: tuple[str, ...]
-    env: tuple[tuple[str, str], ...]
-    method: str
-    #: MCP tools this packet CARRIES -- served by agent/tools/mcp_server.py only in its
-    #: setups (its ``PACKET_TOOL_SWITCH``). Its ``skills`` pages are then that tool's manual, which is
-    #: why ``*`` does not expand to them (:func:`hpcagent_bench.packets.tool_pages`).
-    tools: tuple[str, ...] = ()
-    #: Whose tools the pages teach (cpu, amd, nvidia); "" for a device-neutral packet.
-    device: str = ""
-    #: Why a recorded key takes no new submissions; "" while it still does.
-    frozen: str = ""
-    #: The shape this packet wears instead of the next free one from the pool ("": the pool's).
-    marker: str = ""
-    #: A figure's short spelling, for a column naming delivery and packet at once ("C-Skills").
-    short: str = ""
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -227,15 +198,6 @@ def marker_of(raw: object) -> Marker:
     return str(raw)
 
 
-def models_of(raw: object) -> dict[str, ModelEntry]:
-    """The models block, whose entries carry a name AND the checkpoint the tag should serve."""
-    out: dict[str, ModelEntry] = {}
-    for tag, entry in as_block(raw).items():
-        fields = as_block(entry)
-        out[str(tag)] = ModelEntry(name=str(fields.get("name", tag)), serves=str(fields.get("serves", "")))
-    return out
-
-
 def names_of(raw: object, key: str) -> Names:
     """One ``kind -> {tag: name}`` block, with every key and value forced to text.
 
@@ -245,35 +207,6 @@ def names_of(raw: object, key: str) -> Names:
     out: Names = {}
     for tag, entry in as_block(raw).items():
         out[str(tag)] = str(as_block(entry).get("name", tag)) if isinstance(entry, dict) else str(entry)
-    return out
-
-
-def packet_defs_of(raw: object) -> dict[str, PacketDef]:
-    """The ``packets`` block's raw definitions, for :mod:`hpcagent_bench.packets` to resolve.
-
-    A plain string entry (a display name only) carries no skills, env or method. A mapping entry
-    reads ``skills``, ``packets``, ``env``, ``method``, ``tools``, ``device`` and ``frozen`` --
-    all optional beyond ``name``. A colour is NOT among them: every entity takes a tab20 slot from
-    its position in this file (:mod:`hpcagent_bench.stats.palette`)."""
-    out: dict[str, PacketDef] = {}
-    for tag, entry in as_block(raw).items():
-        if isinstance(entry, dict):
-            fields = as_block(entry)
-            env_block = as_block(fields.get("env"))
-            out[str(tag)] = PacketDef(
-                name=str(fields.get("name", tag)),
-                skills=tuple(str(s) for s in as_list(fields.get("skills"))),
-                packets=tuple(str(p) for p in as_list(fields.get("packets"))),
-                env=tuple((str(k), str(v)) for k, v in env_block.items()),
-                method=str(fields.get("method", "")),
-                tools=tuple(str(t) for t in as_list(fields.get("tools"))),
-                device=str(fields.get("device", "")),
-                frozen=str(fields.get("frozen", "")),
-                marker=str(fields.get("marker", "")),
-                short=str(fields.get("short", "")),
-            )
-        else:
-            out[str(tag)] = PacketDef(name=str(entry), skills=(), packets=(), env=(), method="")
     return out
 
 
@@ -320,35 +253,57 @@ def experiments_of(raw: object) -> dict[str, ExperimentEntry]:
     return out
 
 
+def registered(kind: str) -> Names:
+    """``{key: display name}`` of a vocabulary kind, in slot order (the no-packet control first)."""
+    block = KINDS[kind]
+    return {
+        key: block.entries[key] if isinstance(block.entries[key], str) else block.entries[key].name
+        for key in block.keys()
+    }
+
+
 @functools.lru_cache(maxsize=1, typed=True)
 def registry() -> Registry:
-    """The parsed registry. Cached: every label and every colour on every figure goes through here."""
-    doc = as_block(yaml.safe_load(REGISTRY.read_text(encoding="utf-8")))
-    markers = doc.get("markers")
-    aliases = doc.get("aliases")
-    step = doc.get("lightness_step")
+    """The vocabulary registered in code plus the pools and run-level data of the two yaml files. Cached:
+    every label and every colour on every figure goes through here."""
+    check_vocabulary()
+    pools = as_block(yaml.safe_load(REGISTRY.read_text(encoding="utf-8")))
+    doc = as_block(yaml.safe_load(STUDIES.read_text(encoding="utf-8")))
+    step = pools.get("lightness_step")
     return Registry(
-        control_color=str(doc.get("control_color", "#4d4d4d")),
-        markers=tuple(str(m) for m in as_list(markers)),
-        shapes=tuple(marker_of(m) for m in as_list(doc.get("shapes"))),
+        control_color=str(pools.get("control_color", "#4d4d4d")),
+        markers=tuple(str(m) for m in as_list(pools.get("markers"))),
+        shapes=tuple(marker_of(m) for m in as_list(pools.get("shapes"))),
         lightness_step=float(step) if isinstance(step, (int, float)) else 0.13,
         studies=names_of(doc.get("studies"), "studies"),
-        models=models_of(doc.get("models")),
-        optimizers=names_of(doc.get("optimizers"), "optimizers"),
-        packets=names_of(doc.get("packets"), "packets"),
-        packet_defs=packet_defs_of(doc.get("packets")),
-        devices=names_of(doc.get("devices"), "devices"),
-        languages=names_of(doc.get("languages"), "languages"),
+        models={key: MODELS.entries[key] for key in MODELS.keys()},
+        optimizers=registered("optimizers"),
+        packets=registered("packets"),
+        packet_defs={key: PACKETS.entries[key] for key in PACKETS.keys()},
+        devices=registered("devices"),
+        languages=registered("languages"),
         frameworks=names_of(doc.get("frameworks"), "frameworks"),
-        harnesses=names_of(doc.get("harnesses"), "harnesses"),
+        harnesses=registered("harnesses"),
         experiments=experiments_of(doc.get("experiments")),
         dropped_setups=str(doc.get("dropped_setups", "")),
         study_baselines=baselines_of(doc.get("study_baselines")),
-        aliases={str(kind): names_of(block, str(kind)) for kind, block in as_block(aliases).items()},
+        aliases={kind: dict(block.aliases) for kind, block in KINDS.items()}
+        | {str(kind): names_of(block, str(kind)) for kind, block in as_block(doc.get("aliases")).items()},
         baseline_setups=baseline_setups_of(doc.get("baseline_setups")),
         setup_aliases=setup_aliases_of(doc.get("setup_aliases")),
         owed_run_roots=owed_run_roots_of(doc.get("owed_run_roots")),
     )
+
+
+def slot(kind: str, tag: str) -> int | None:
+    """The slot ``tag`` takes within ``kind``: the explicit ``order`` of a vocabulary kind, else (the yaml
+    kinds) its position; ``None`` for an unregistered tag and for the no-packet control."""
+    resolved = canonical(kind, tag)
+    block = KINDS.get(kind)
+    if block is not None:
+        return block.orders.get(resolved)
+    known = tuple(names(kind))
+    return known.index(resolved) if resolved in known else None
 
 
 def aliased_setup(setup: str) -> str:

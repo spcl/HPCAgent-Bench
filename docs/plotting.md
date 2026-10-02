@@ -77,7 +77,8 @@ Further conventions:
 
 - **Identity keys by name.** `palette.model_color(name)`, `palette.packet_marker(name)`,
   `palette.framework_color(name)` key by entity, never by list position. Key order in
-  `hpcagent_bench/envs/registry.yaml` is append-only; a mid-list insert recolours or reshapes every
+  the explicit `order` of a registered class is its slot (`hpcagent_bench/models.py`,
+  `hpcagent_bench/skill_packets.py`); renumbering one recolours or reshapes every
   published figure (`tests/test_palette.py` pins the rules: one shape per treatment, never the
   control circle, shades stay the model's hue).
 - **Names come from the registry** through `hpcagent_bench.study_tags` (`display_name`,

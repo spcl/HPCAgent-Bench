@@ -198,7 +198,7 @@ def test_the_title_is_the_canon_llr40_headline() -> None:
 
 def test_distribution_gives_a_compiler_baseline_a_different_color_than_a_dace_column() -> None:
     """cc and dace_cpu_canonicalize wrap onto the SAME slot of the palette's 6-hue ramp
-    (registry.yaml has 30 frameworks); drawn as two lines of one color they would read as one
+    (studies.yaml has 30 frameworks); drawn as two lines of one color they would read as one
     series. draw_distribution must tell them apart (a neutral grey for the non-dace column)."""
     times = {
         "numba": {"k1": 10.0, "k2": 20.0},

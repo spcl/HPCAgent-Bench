@@ -10,7 +10,7 @@ and in `docs/serving/<tag>.md`; copy them from there.
 |---|---|
 | `experiments/layers/model-<tag>.env` | serving block (extends `layers/common.env`) |
 | `experiments/setups.yaml` `<experiment>.models.<tag>` | effort ladder, context and engine args (a model with a layer renders in any experiment; add an entry only for what differs) |
-| `hpcagent_bench/envs/registry.yaml` `models:` | `<tag>: {name: <Display Name>, serves: org/Name}`, appended at the end |
+| `hpcagent_bench/models.py` | an `@llm("<tag>", order=<next free>)` class with `name` (display name) and `serves` (`org/Name`); see [registry.md](registry.md) |
 | `docs/serving/<tag>.md` | the measurements behind the recipe |
 
 `<tag>` is the model token in setup names (`llr40-<tag>-c`). Env layering is described in

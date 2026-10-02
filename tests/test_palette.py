@@ -8,33 +8,29 @@ reads as its lead packet's family, and identity is never carried by colour alone
 """
 
 import logging
-import pathlib
 
 import pytest
-import yaml
 
-from hpcagent_bench import packets
+from hpcagent_bench import packets, vocabulary
 from hpcagent_bench.stats import palette
-
-REGISTRY = yaml.safe_load((pathlib.Path(palette.__file__).parents[1] / "envs" / "registry.yaml").read_text())
 
 
 def test_every_registered_packet_has_a_name():
     """A packet a figure can colour must also be a packet it can label; an unnamed one would put a
     raw tag like `cpfsrc` on a legend."""
-    named = set(REGISTRY["packets"])
+    named = {key for key, entry in vocabulary.PACKETS.entries.items() if entry.name}
     assert set(palette.hue_order("packets")) <= named, sorted(set(palette.hue_order("packets")) - named)
 
 
 def test_every_registered_model_has_a_name():
-    named = set(REGISTRY["models"])
+    named = {key for key, entry in vocabulary.MODELS.entries.items() if entry.name}
     assert set(palette.order("models")) <= named, sorted(set(palette.order("models")) - named)
 
 
 def test_the_control_has_a_name_and_a_neutral_colour():
     """No packet is a condition, so it is drawn and labelled like one -- neutral, because it is the
     reference every treatment is read against rather than one more colour among them."""
-    assert REGISTRY["packets"][""] == "No Skill Packet"
+    assert vocabulary.PACKETS.entries[""].name == "No Skill Packet"
     assert palette.color("") == palette.control_color()
     assert palette.control_color() not in palette.hues()
 
@@ -79,7 +75,7 @@ def test_the_ramp_is_tab20_dark_first_and_every_slot_is_distinct():
 
 def test_no_registered_packet_shares_a_slot_with_another():
     """Forty slots (tab20, then tab20b) for every packet, so nothing wraps and no packet needs an override. This is
-    what the three hand-picked hex `color:` keys in registry.yaml used to buy one packet at a time."""
+    what three hand-picked hex colours used to buy one packet at a time."""
     leads = palette.hue_order("packets")
     assert len({palette.color(p) for p in leads}) == len(leads)
 
@@ -95,14 +91,14 @@ def test_an_unregistered_packet_is_stable_and_warns(unknown, caplog):
     with caplog.at_level("WARNING"):
         first = palette.color(unknown)
     assert first == palette.color(unknown)
-    assert "not in registry.yaml" in caplog.text
+    assert "is not registered" in caplog.text
 
 
 def test_an_unregistered_model_is_stable_and_warns(caplog):
     with caplog.at_level("WARNING"):
         first = palette.marker("nomodel")
     assert first == palette.marker("nomodel")
-    assert "not in registry.yaml" in caplog.text
+    assert "is not registered" in caplog.text
 
 
 def test_two_entities_sharing_a_colour_in_one_figure_warn(caplog):
@@ -117,10 +113,10 @@ def test_two_entities_sharing_a_colour_in_one_figure_warn(caplog):
 
 #: THE PUBLISHED COLOURS. Every entity that has appeared in a figure, pinned by VALUE.
 #:
-#: The registry decides a colour from its KEY ORDER, which makes the file append-only: inserting a
-#: key in the middle shifts every entry after it and repaints figures that are already in a paper.
-#: An order test cannot catch that -- the reordered file is still internally consistent. This can,
-#: and it fails naming the exact entity whose colour moved.
+#: The registry decides a colour from the explicit ``order`` of a registered class, so an order is never
+#: renumbered: a new entry takes the next free slot and no entry already in a paper changes colour. An
+#: order test cannot catch a renumbering -- the vocabulary is still internally consistent. This can, and
+#: it fails naming the exact entity whose colour moved.
 #:
 #: A NEW entity is added here in the same commit that registers it. A CHANGED value is a decision
 #: to repaint, so it is made deliberately, with the figures regenerated.
@@ -167,9 +163,9 @@ PUBLISHED_FRAMEWORK_COLORS = {
 @pytest.mark.parametrize("packet,expected", sorted(PUBLISHED_PACKET_COLORS.items()))
 def test_a_published_packet_colour_did_not_move(packet, expected):
     assert palette.color(packet) == expected, (
-        f"{packet!r} was {expected} and is now {palette.color(packet)}. A key was inserted into "
-        "registry.yaml rather than appended, which repaints every figure already drawn with it. "
-        "Append instead, or change this table deliberately and regenerate the figures."
+        f"{packet!r} was {expected} and is now {palette.color(packet)}. An order was changed "
+        "or reused, which repaints every figure already drawn with it. Give the entry the next free "
+        "order instead, or change this table deliberately and regenerate the figures."
     )
 
 
@@ -244,7 +240,7 @@ def test_every_intervention_git_scicomp_and_llrblind_name_has_a_registered_hue(
     out of the same table with its own global hue instead of falling through to a hash colour."""
     with caplog.at_level(logging.WARNING, logger=palette.LOG.name):
         chosen = {name: palette.color(name) for name in ("kernel", "repo", "no-score")}
-    assert "registry.yaml" not in caplog.text
+    assert "not registered" not in caplog.text
     assert palette.control_color() not in chosen.values()
     assert len(set(chosen.values())) == len(chosen), chosen
 
@@ -281,7 +277,7 @@ def test_an_unregistered_packet_marker_is_stable_and_warns(caplog: pytest.LogCap
     with caplog.at_level("WARNING"):
         first = palette.packet_marker("mystery")
     assert first == palette.packet_marker("mystery")
-    assert "not in registry.yaml" in caplog.text
+    assert "is not registered" in caplog.text
 
 
 def test_model_colour_is_reused_by_the_packet_efficacy_panels() -> None:
