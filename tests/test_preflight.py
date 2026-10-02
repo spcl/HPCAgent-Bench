@@ -17,7 +17,7 @@ def test_an_agent_column_is_not_a_deterministic_one() -> None:
 
 def test_deterministic_frameworks_matches_the_frozen_pre_derivation_list() -> None:
     """:data:`preflight.DETERMINISTIC_FRAMEWORKS` is now derived from
-    ``FRAMEWORK_META[name]["sweep_deterministic"]`` rather than a second hand-kept list; this pins
+    the registered column's ``sweep_deterministic`` rather than a second hand-kept list; this pins
     the derived set to the exact set the hand-kept list named, so moving the data does not silently
     add or drop a column a deterministic sweep may select."""
     frozen = {

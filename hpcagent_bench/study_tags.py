@@ -25,9 +25,18 @@ from typing import cast
 
 import yaml
 
-from hpcagent_bench import models, skill_packets, spec
+from hpcagent_bench import columns, models, skill_packets, spec
 from hpcagent_bench.spec import as_list
-from hpcagent_bench.vocabulary import KINDS, MODELS, PACKETS, ModelEntry, PacketDef, check_vocabulary
+from hpcagent_bench.vocabulary import (
+    KINDS,
+    MODELS,
+    PACKETS,
+    RETIRED_FRAMEWORKS,
+    ModelEntry,
+    PacketDef,
+    check_vocabulary,
+    framework_slots,
+)
 
 __all__ = [
     "SETUP_RENAMES_PATH",
@@ -93,7 +102,7 @@ REGISTRY = pathlib.Path(__file__).resolve().parent / "envs" / "registry.yaml"
 #: Run-level data: studies, experiments, baselines and the spellings older setups recorded under.
 STUDIES = pathlib.Path(__file__).resolve().parent / "envs" / "studies.yaml"
 #: The modules whose import registers the vocabulary; importing this module is what loads them.
-VOCABULARY_MODULES = (models, skill_packets)
+VOCABULARY_MODULES = (models, skill_packets, columns)
 #: Every recorded setup name -> the setup it is (DATA).
 SETUP_RENAMES_PATH = pathlib.Path(__file__).resolve().parent / "envs" / "setup_renames.yaml"
 
@@ -256,6 +265,10 @@ def experiments_of(raw: object) -> dict[str, ExperimentEntry]:
 def registered(kind: str) -> Names:
     """``{key: display name}`` of a vocabulary kind, in slot order (the no-packet control first)."""
     block = KINDS[kind]
+    if kind == "frameworks":
+        shown = {key: meta["display"] for key, meta in block.entries.items()} | RETIRED_FRAMEWORKS.entries
+        slots = framework_slots()
+        return {key: shown[key] for key in sorted(shown, key=slots.__getitem__)}
     return {
         key: block.entries[key] if isinstance(block.entries[key], str) else block.entries[key].name
         for key in block.keys()
@@ -282,7 +295,7 @@ def registry() -> Registry:
         packet_defs={key: PACKETS.entries[key] for key in PACKETS.keys()},
         devices=registered("devices"),
         languages=registered("languages"),
-        frameworks=names_of(doc.get("frameworks"), "frameworks"),
+        frameworks=registered("frameworks"),
         harnesses=registered("harnesses"),
         experiments=experiments_of(doc.get("experiments")),
         dropped_setups=str(doc.get("dropped_setups", "")),
@@ -299,6 +312,8 @@ def slot(kind: str, tag: str) -> int | None:
     """The slot ``tag`` takes within ``kind``: the explicit ``order`` of a vocabulary kind, else (the yaml
     kinds) its position; ``None`` for an unregistered tag and for the no-packet control."""
     resolved = canonical(kind, tag)
+    if kind == "frameworks":
+        return framework_slots().get(resolved)
     block = KINDS.get(kind)
     if block is not None:
         return block.orders.get(resolved)

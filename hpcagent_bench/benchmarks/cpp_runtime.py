@@ -7,25 +7,26 @@ from collections.abc import Callable
 from typing import Any
 
 from hpcagent_bench.frameworks.errors import NotSupportedByFramework
-from hpcagent_bench.frameworks.framework import FRAMEWORK_META, native_column_languages
+from hpcagent_bench.columns import FRAMEWORKS
+from hpcagent_bench.frameworks.framework import native_column_languages
 from hpcagent_bench.languages import LANG_EXT
 
-#: framework -> source language it compiles: each column's ``FRAMEWORK_META`` ``language``. Polly is a flag
+#: framework -> source language it compiles: each column's ``language``. Polly is a flag
 #: preset on the same cpp source as ``llvm``; Pluto compiles polycc's output, which is C (VLA parameters and
 #: ``restrict``, neither of which is C++); ``ppcg`` follows the local GPU toolchain (hpcagent_bench.ppcg_transform).
 FRAMEWORK_LANG: dict[str, str] = {name: languages[1] for name, languages in native_column_languages().items()}
 
 #: The columns that compile PPCG's output (``transform: ppcg``). Their FRAMEWORK_LANG entry doubles as
 #: the vendor handed to :func:`hpcagent_bench.ppcg_transform.transformed_sources`.
-PPCG_FRAMEWORKS: tuple[str, ...] = tuple(n for n, m in FRAMEWORK_META.items() if m.get("transform") == "ppcg")
+PPCG_FRAMEWORKS: tuple[str, ...] = tuple(n for n, m in FRAMEWORKS.entries.items() if m.get("transform") == "ppcg")
 
-#: framework -> forced ``compilers.yaml`` block (``FRAMEWORK_META`` ``compiler``); an absent column takes
+#: framework -> forced ``compilers.yaml`` block (each column's ``compiler``); an absent column takes
 #: its language's first block.
-FRAMEWORK_COMPILER: dict[str, str] = {n: m["compiler"] for n, m in FRAMEWORK_META.items() if "compiler" in m}
+FRAMEWORK_COMPILER: dict[str, str] = {n: m["compiler"] for n, m in FRAMEWORKS.entries.items() if "compiler" in m}
 
-#: framework -> flag-preset constant name in hpcagent_bench.flags (``FRAMEWORK_META`` ``flags``),
+#: framework -> flag-preset constant name in hpcagent_bench.flags (each column's ``flags``),
 #: appended to the baseline flags.
-FRAMEWORK_FLAGS: dict[str, str] = {n: m["flags"] for n, m in FRAMEWORK_META.items() if "flags" in m}
+FRAMEWORK_FLAGS: dict[str, str] = {n: m["flags"] for n, m in FRAMEWORKS.entries.items() if "flags" in m}
 
 
 SO_CACHE: dict[pathlib.Path, ctypes.CDLL] = {}
@@ -40,7 +41,7 @@ def native_sources(cpp_backend: pathlib.Path, short: str, framework: str) -> lis
     wearing Pluto's label, which is what this used to be. Keyed on the framework rather than the
     language for exactly that reason: which sources a column compiles is a property of the column,
     not of the file extension."""
-    transform = FRAMEWORK_META[framework].get("transform")
+    transform = FRAMEWORKS.entries[framework].get("transform")
     if transform == "pluto":
         from hpcagent_bench import pluto_transform
 
@@ -63,9 +64,9 @@ def framework_extra_flags(framework: str) -> str:
 
 
 #: framework -> the flags.<name>_capability() probe that must read OK before this column builds
-#: (``FRAMEWORK_META`` ``autopar_gate``): a column whose autopar flags can be silently vacuous on some
+#: (each column's ``autopar_gate``): a column whose autopar flags can be silently vacuous on some
 #: toolchain builds (Polly, Pluto's OpenMP, nvc ``-Mconcur``) declines instead of timing a serial binary.
-AUTOPAR_GATED: dict[str, str] = {n: m["autopar_gate"] for n, m in FRAMEWORK_META.items() if "autopar_gate" in m}
+AUTOPAR_GATED: dict[str, str] = {n: m["autopar_gate"] for n, m in FRAMEWORKS.entries.items() if "autopar_gate" in m}
 
 
 def assert_autopar_capable(framework: str, short: str) -> None:

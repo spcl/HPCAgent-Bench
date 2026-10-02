@@ -20,7 +20,7 @@ import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 
-from hpcagent_bench import config
+from hpcagent_bench import config, protocols
 
 __all__ = [
     "AA_REDUCTION",
@@ -83,10 +83,13 @@ REDUCTIONS_FINAL: dict[str, str] = {"mannwhitney_delta": "mwd-final", "median_of
 #: one-sided Mann-Whitney at alpha (0.1), the task by the geomean of per-input credits
 #: (:func:`hpcagent_bench.stats.score_rule.final_credit`). Written by ``grade-under run``, never
 #: pooled with live mwd-final rows.
-FINAL_GRADE_REDUCTION: str = "mw4x5"
-#: Stamps earlier builds wrote for this same rule: a reader maps each to :data:`FINAL_GRADE_REDUCTION`
-#: (:func:`canonical_reduction`); nothing writes them.
-FINAL_GRADE_ALIASES: dict[str, str] = {"mw4x5-final-v2": FINAL_GRADE_REDUCTION}
+#: It is the protocol ``measurement.credited_protocol`` names, registered in :mod:`hpcagent_bench.protocols`.
+FINAL_GRADE_REDUCTION: str = protocols.credited_name()
+#: Stamps earlier builds wrote for this same rule (its registered aliases): a reader maps each to
+#: :data:`FINAL_GRADE_REDUCTION` (:func:`canonical_reduction`); nothing writes them.
+FINAL_GRADE_ALIASES: dict[str, str] = {
+    alias: key for alias, key in protocols.PROTOCOLS.aliases.items() if key == FINAL_GRADE_REDUCTION
+}
 #: Every stamp a final-grade row may carry, preferred first; an alias ranks with its rule.
 FINAL_GRADE_REDUCTIONS: tuple[str, ...] = (FINAL_GRADE_REDUCTION, *FINAL_GRADE_ALIASES)
 
@@ -109,12 +112,12 @@ def credited_protocol(stamp: object) -> bool:
 #: md1x5: the ``/score`` preview of the final grade: ONE input of its own, 5 runs a side after 1 warmup, reduced
 #: to the median ratio (no rank test: it answers "how fast?" for steering, not "is it credited?"). Its
 #: own stamp keeps it out of every credited population; nothing writes it into a ``final`` grade.
-SCORE_REDUCTION: str = "md1x5"
+SCORE_REDUCTION: str = protocols.stamp_of("preview")
 
 #: The A/A calibration of mw4x5 (``grade-under run --aa``): the candidate's samples are a second
 #: timing of the baseline, so every credit is false. Its own stamp keeps it out of grade
 #: populations; ``mw4x5-aa`` is the A/A of the v1 draws.
-AA_REDUCTION: str = "mw4x5-aa"
+AA_REDUCTION: str = protocols.stamp_of("calibration")
 
 #: Residency -> how a sample was bracketed, recorded in ``grading_protocol`` beside :data:`REDUCTIONS`.
 #:
