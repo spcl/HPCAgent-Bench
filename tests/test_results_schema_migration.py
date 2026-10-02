@@ -13,6 +13,7 @@ import multiprocessing
 import multiprocessing.queues
 import multiprocessing.synchronize
 import pathlib
+import sqlite3
 
 import pytest
 from sqlmodel import Session, select
@@ -235,3 +236,25 @@ def test_the_plot_loader_partitions_machines_instead_of_folding_them(tmp_path, m
     names = [results.machine_output("plots/heatmap.pdf", label) for label, _ in groups]
     assert len(set(names)) == len(names)
     assert names[0] == "plots/heatmap.epyc.pdf"
+
+
+def test_a_results_engine_holds_no_open_connection_once_its_session_closes(tmp_path, monkeypatch) -> None:
+    """The engine outlives its Session here and still owns no open sqlite handle: a pooled one would be
+    garbage-collected later as a ResourceWarning (Python 3.13+)."""
+    opened: list[sqlite3.Connection] = []
+    real_connect = sqlite3.dbapi2.connect  # the entry SQLAlchemy's pysqlite dialect opens its connections through
+
+    def recording_connect(*args, **kwargs) -> sqlite3.Connection:
+        conn = real_connect(*args, **kwargs)
+        opened.append(conn)
+        return conn
+
+    monkeypatch.setattr(sqlite3.dbapi2, "connect", recording_connect)
+    engine = results_engine(str(tmp_path / "r.db"))
+    with Session(engine) as session:
+        assert session.exec(select(Result)).all() == []
+
+    assert opened
+    for conn in opened:
+        with pytest.raises(sqlite3.ProgrammingError):
+            conn.execute("SELECT 1")

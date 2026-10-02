@@ -497,8 +497,7 @@ class Test:
         benchmark = self.bench.info["short_name"]
         # The contract -d selects; an empty -d is absent.
         stored_datatype = datatype or "float64"
-        engine = results_engine(recording.db_path())
-        with Session(engine) as session:
+        with Session(results_engine(recording.db_path())) as session:
             for d in samples:
                 session.add(
                     Result(
@@ -523,5 +522,3 @@ class Test:
                     )
                 )
             session.commit()
-        # dispose() closes the pooled connection the Session returned; otherwise GC warns on it.
-        engine.dispose()

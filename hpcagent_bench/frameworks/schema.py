@@ -10,6 +10,7 @@ from typing import ClassVar
 from sqlalchemy import Table
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import OperationalError
+from sqlalchemy.pool import NullPool
 from sqlmodel import Field, SQLModel, create_engine
 
 __all__ = [
@@ -135,8 +136,9 @@ def results_engine(db_path: str) -> Engine:
     """A SQLModel engine for the results DB at ``db_path``, with the table created from
     :class:`Result` when absent and reconciled to it when present (:func:`add_missing_columns`).
     A lost CREATE TABLE race (:data:`CONCURRENT_SCHEMA_RACE`) is ignored: the winner built the
-    same table."""
-    engine = create_engine(f"sqlite:///{db_path}", connect_args={"check_same_thread": False})
+    same table. No pool: a connection closes when its Session does, so a caller never owns a
+    connection the garbage collector would find still open."""
+    engine = create_engine(f"sqlite:///{db_path}", connect_args={"check_same_thread": False}, poolclass=NullPool)
     try:
         SQLModel.metadata.create_all(engine)
     except OperationalError as exc:
