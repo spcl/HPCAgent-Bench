@@ -10,7 +10,6 @@ physical constants it uses stay in the numpy module and are imported here.
 """
 
 import math
-from typing import Optional
 
 import numpy as np
 
@@ -34,7 +33,7 @@ def initialize(
     do_ionization,
     enable_reduced_shape,
     datatype=np.float64,
-    rng: Optional[np.random.Generator] = None,
+    rng: np.random.Generator | None = None,
 ):
     """Build zeroed guard-padded current arrays plus a set of particles whose
     per-step grid displacement stays below one cell (the Esirkepov CFL-like

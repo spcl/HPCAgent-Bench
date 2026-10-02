@@ -23,7 +23,7 @@ import functools
 import pathlib
 import subprocess
 import tempfile
-from typing import Any, List, Optional, Tuple
+from typing import Any
 
 import numpy as np
 
@@ -36,8 +36,8 @@ SO = HERE / "libcegterg_reference.so"
 
 #: Flags only -- the driver is resolved per call, since which g++ can build this is a
 #: PATH question answered at run time, not a constant.
-BUILD_CMD: Tuple[str, ...] = ("-O3", "-std=c++20", "-Wall", "-Wextra", "-fPIC", "-shared")
-LINK_LIBS: Tuple[str, ...] = ("-lfftw3", "-llapack", "-lblas")
+BUILD_CMD: tuple[str, ...] = ("-O3", "-std=c++20", "-Wall", "-Wextra", "-fPIC", "-shared")
+LINK_LIBS: tuple[str, ...] = ("-lfftw3", "-llapack", "-lblas")
 
 _VP = ctypes.c_void_p
 _CI = ctypes.c_int
@@ -95,12 +95,12 @@ def _lib() -> ctypes.CDLL:
     return lib
 
 
-def _f(a: Any, dtype: Any) -> Optional[np.ndarray]:
+def _f(a: Any, dtype: Any) -> np.ndarray | None:
     """Fortran-order contiguous copy in ``dtype``; ``None`` passes through."""
     return np.asfortranarray(np.asarray(a, dtype=dtype)) if a is not None else None
 
 
-def _split(a: Any) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+def _split(a: Any) -> tuple[np.ndarray | None, np.ndarray | None]:
     """Complex array -> (real plane, imag plane), both Fortran-order float64 -- the SoA ABI."""
     if a is None:
         return None, None
@@ -108,7 +108,7 @@ def _split(a: Any) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
     return np.asfortranarray(z.real), np.asfortranarray(z.imag)
 
 
-def _p(a: Optional[np.ndarray]) -> Any:
+def _p(a: np.ndarray | None) -> Any:
     return a.ctypes.data_as(_VP) if a is not None else None
 
 
@@ -202,7 +202,7 @@ def cegterg(
     msg = ctypes.create_string_buffer(256)
 
     # keepalive refs so the ctypes pointers stay valid across the call
-    keep: List[Any] = [
+    keep: list[Any] = [
         g2,
         vrs_f,
         gmap,
@@ -282,7 +282,7 @@ def cegterg(
     if rc == 1:
         raise NotImplementedError("cegterg_reference: configuration not yet lowered/verified: " + msg.value.decode())
     if rc != 0:
-        raise RuntimeError("cegterg_reference failed (rc=%d): %s" % (rc, msg.value.decode()))
+        raise RuntimeError(f"cegterg_reference failed (rc={rc}): {msg.value.decode()}")
 
     e[:nvec] = e_out[:nvec]
     evc[...] = evc_re + 1j * evc_im
