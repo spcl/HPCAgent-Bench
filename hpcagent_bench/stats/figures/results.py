@@ -87,7 +87,7 @@ def load_results(
 
     Applies the shared selection (kernel / track / dwarf / ``@lvl<n>`` via
     :func:`select_short_names`), drops undomained / unvalidated rows, filters to ``datatype``
-    (legacy NULL treated float64) and ``preset``, folds the sparse ``variant`` axis into the
+    and ``preset``, folds the sparse ``variant`` axis into the
     ``kernel`` name (``benchmark/variant``) and the ``flavor`` / ``build`` axes into the
     ``framework`` name (``dace_cpu/canonicalize/extended``). One row per timed sample survives,
     with columns ``kernel``, ``domain``, ``framework``, ``time``, plus the ``cpu`` / ``gpu``
@@ -104,7 +104,7 @@ def load_results(
     data = data.loc[data["validated"].eq(True)]
     data = data.drop(["validated"], axis=1).reset_index(drop=True)
 
-    data = fold_build_axes(fold_variant(filter_datatype(data, datatype, db), variant), baseline)
+    data = fold_build_axes(fold_variant(filter_datatype(data, datatype), variant), baseline)
     data = data.loc[data["preset"] == preset]
     data = data.drop(["preset"], axis=1).reset_index(drop=True)
     return data
@@ -134,16 +134,9 @@ def read_results_table(db: str | None) -> pd.DataFrame:
     return data
 
 
-def filter_datatype(data: pd.DataFrame, datatype: str, db: str | None) -> pd.DataFrame:
-    """``data``'s ``datatype`` rows (legacy NULL read as float64), the column dropped."""
-    if "datatype" in data.columns:
-        legacy_mask = data["datatype"].isna()
-        data.loc[legacy_mask, "datatype"] = "float64"
-        data = data.loc[data["datatype"] == datatype]
-        return data.drop(["datatype"], axis=1).reset_index(drop=True)
-    if datatype != "float64":
-        raise RuntimeError(f"{db} predates the datatype column; cannot filter to --datatype={datatype}.")
-    return data
+def filter_datatype(data: pd.DataFrame, datatype: str) -> pd.DataFrame:
+    """``data``'s ``datatype`` rows, the column dropped."""
+    return data.loc[data["datatype"] == datatype].drop(["datatype"], axis=1).reset_index(drop=True)
 
 
 def fold_variant(data: pd.DataFrame, variant: str | None) -> pd.DataFrame:

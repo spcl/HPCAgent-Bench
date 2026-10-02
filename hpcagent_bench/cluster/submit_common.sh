@@ -215,7 +215,7 @@ stage_base_env() {
 # -<base>- EDF to the -<hardware>- one, then pins layers/hardware-<hardware>.env and, for a model served on our nodes, layers/hardware-<hardware>-<model>.env over
 # it. A hosted model (INFERENCE_SOURCE=service) runs no engine here, so it needs no serving layer. Refuses:
 # no hardware under the Container Engine (the EDF names carry it), a hardware with no layer, a served model with no
-# serving config on it, and a recorded study that does not name it, so its rows never pool with the base's.
+# serving config on it, and a given RECORD_STUDY that does not name it (the default study gets -<hardware> appended), so its rows never pool with the base's.
 apply_hardware() {
     local env="$1" model="$2" hardware base runtime layer kv study gpus
     gpus="$(job_options --require gpus_per_node --print gpus_per_node)" || return 2
@@ -243,10 +243,13 @@ apply_hardware() {
         done < <(grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "${layer}")
     done
     study="$(sed -n 's/^HPCAGENT_BENCH_RECORD_STUDY=//p' "${env}" | tail -1)"
-    [[ "${study}" == *"${hardware}"* ]] || {
-        echo "apply_hardware: study '${study}' does not name ${hardware}; ${hardware} rows need their own study" >&2
-        return 2
-    }
+    if [[ "${study}" != *"${hardware}"* ]]; then
+        [[ -z "${RECORD_STUDY_GIVEN:-}" ]] || {
+            echo "apply_hardware: study '${study}' does not name ${hardware}; ${hardware} rows need their own study" >&2
+            return 2
+        }
+        pin_env_kv "${env}" "HPCAGENT_BENCH_RECORD_STUDY=${study}-${hardware}" || return 2
+    fi
 }
 
 # apply_flavor <env> -- CE_IMAGE_FLAVOR=native (containers/images/images.env) renames every agent and

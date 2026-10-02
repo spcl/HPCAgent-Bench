@@ -327,7 +327,7 @@ def submit_mi200(root: pathlib.Path, model: str, **knobs: str) -> subprocess.Com
     return submit(
         root,
         "--account", "p", "--partition", "mi200", "--hardware", "mi200", "--gpus-per-node", "8",
-        **{"KERNELS_FILE": "subset.txt", "EXPERIMENT": "x-mi200", "RECORD_STUDY": "x-mi200", "MODELS": model, "SUBMIT": "1", **knobs},
+        **{"KERNELS_FILE": "subset.txt", "EXPERIMENT": "x-mi200", "MODELS": model, "SUBMIT": "1", **knobs},
     )  # fmt: skip
 
 
@@ -344,6 +344,7 @@ def test_a_hosted_model_setup_lands_on_mi200_without_a_serving_layer(tmp_path: p
     assert done.returncode == 0, done.stderr
     env = setup_env(root, "x-mi200-musespark-c")
     assert env["INFERENCE_SOURCE"] == "service"
+    assert env["HPCAGENT_BENCH_RECORD_STUDY"] == "llr40-mi200"
     assert_on_mi200(root, env)
 
 
@@ -383,7 +384,7 @@ def test_the_mi200_system_entry_is_the_whole_job_shape(tmp_path: pathlib.Path) -
     root = tree(tmp_path)
     done = submit(
         root, "--account", "p", "--system", "beverin-mi200",
-        KERNELS_FILE="subset.txt", EXPERIMENT="x-mi200", RECORD_STUDY="x-mi200", MODELS="musespark", SUBMIT="1",
+        KERNELS_FILE="subset.txt", EXPERIMENT="x-mi200", MODELS="musespark", SUBMIT="1",
         HPCAGENT_BENCH_HARDWARE=None, HPCAGENT_BENCH_JOB_GPUS_PER_NODE=None,
     )  # fmt: skip
     assert done.returncode == 0, done.stderr
