@@ -424,6 +424,8 @@ def http_chat_json(
         with urllib.request.urlopen(request, timeout=timeout) as resp:
             return json_object(json.loads(resp.read().decode("utf-8")))
     except urllib.error.URLError as exc:
+        if isinstance(exc, urllib.error.HTTPError):
+            exc.close()  # the error is also the open response
         raise RuntimeError(unreachable_msg) from exc
 
 
