@@ -1,6 +1,6 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""``isolated``: run one test in its own pytest process.
+"""Run test code in a process of its own: ``isolated`` for a whole test, ``fresh_interpreter`` for a call.
 
 A test that loads a clang-built OpenMP library into the interpreter it runs in maps libomp beside the
 libgomp numpy's OpenBLAS already holds there. In an xdist worker that mapping outlives the test, and every
@@ -8,14 +8,17 @@ later grading child forked from the worker inherits it, which the grading child'
 refuses (``OpenMPRuntimeConflict``).
 """
 
+import concurrent.futures
 import functools
+import multiprocessing
 import os
 import pathlib
 import subprocess
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from unittest import mock
 
-__all__ = ["isolated"]
+__all__ = ["fresh_interpreter", "isolated"]
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 
@@ -44,3 +47,18 @@ def isolated(test: Callable[..., None]) -> Callable[..., None]:
         assert proc.returncode == 0, proc.stdout[-2000:] + proc.stderr[-800:]
 
     return run
+
+
+def fresh_interpreter[T](fn: Callable[..., T], *args: object, env: Mapping[str, str] | None = None) -> T:
+    """``fn(*args)`` run from a newly spawned interpreter launched with ``env`` added to this one's.
+
+    libgomp reads ``OMP_STACKSIZE`` and ``OMP_THREAD_LIMIT`` once, when numpy loads it, and a forked
+    grading child keeps whatever its parent's runtime read. The suite's workers are launched with the
+    production values (conftest), so a test that needs OTHER values -- a team clamped to a pinned core
+    count, 1 MiB stacks under a tiny memory cap -- gets them only from an interpreter started with them.
+    Not a pool worker: those are daemons, and a daemon may not fork the grading child."""
+    with (
+        mock.patch.dict(os.environ, env or {}),
+        concurrent.futures.ProcessPoolExecutor(1, mp_context=multiprocessing.get_context("spawn")) as pool,
+    ):
+        return pool.submit(fn, *args).result()
