@@ -13,13 +13,8 @@ The fix (``numpyto_common.narrow_int``) re-wraps the wide result of every narrow
 two's-complement wraps) in Fortran. WHEN to wrap is decided by ONE shared oracle that infers the numpy
 result dtype of a subtree -- so integer true division and int*float stay FLOAT (no wrap), a call result
 and shape symbols stay non-narrow (no wrap), and only a subtree numpy would genuinely wrap is wrapped.
-This file is the C/Fortran/numpy differential test the re-implementation was gated on.
-
-An earlier per-op re-wrap was reverted because it answered "which numpy dtype does this subtree compute
-in" with two divergent hand-rolled oracles: it truncated integer true division in C/C++, int8-times-float
-in Fortran, cast a libm ``**`` double into a narrow int, and needed an undefined ``npb_wrap_*`` in a
-non-inlined Fortran helper. The tests below the wrap test pin the guards that keep those from recurring:
-no wrap where numpy PROMOTES, and no truncation of results that are not integers at all.
+This file is the C/Fortran/numpy differential test of that wrap. The tests below the wrap test pin its
+guards: no wrap where numpy PROMOTES, and no truncation of results that are not integers at all.
 """
 
 import numpy as np
@@ -37,14 +32,17 @@ def assert_ok(res) -> None:
 
 def run_(src, ins, outs, dtypes, n):
     shapes = {name: "(N,)" for name in list(ins) + list(outs)}
-    return run_op(src, "f", ins, {name: (n,) for name in outs}, {"N": n}, shapes=shapes, dtypes=dtypes, backends=NATIVE)
+    # Every case here overflows its element width on purpose: numpy's scalar ops wrap there and say so.
+    with np.errstate(over="ignore"):
+        return run_op(
+            src, "f", ins, {name: (n,) for name in outs}, {"N": n}, shapes=shapes, dtypes=dtypes, backends=NATIVE
+        )
 
 
 def test_int8_intermediate_overflow_wraps() -> None:
     # a + b overflows int8 (200 -> -56) BEFORE the floor-div, so wrapping changes the result. This
-    # is the ONLY case in this file that distinguishes a per-op wrap from wrapping at the store --
-    # the ring ops below compose identically either way, which is why they stayed green when the
-    # feature was deleted and why they never protected it.
+    # case distinguishes a per-op wrap from wrapping at the store; the ring ops below compose
+    # identically either way.
     src = (
         "import numpy as np\ndef f(a, b, out):\n    for i in range(a.shape[0]):\n        out[i] = (a[i] + b[i]) // 2\n"
     )
@@ -77,10 +75,8 @@ def test_uint8_subtraction_wraps_modulo() -> None:
 
 def test_uint8_subtraction_wraps_before_floordiv() -> None:
     # Same values as test_uint8_subtraction_wraps_modulo, but the wrapped result feeds a NON-RING
-    # consumer (// 2) so a missing (or signed-reinterpreted) wrap is load-bearing -- a store-only
-    # ring result cannot distinguish "wrapped" from "not wrapped" (see the module docstring); this
-    # is the uint8 fortran regression: the wrap used to reinterpret the modulo-256 bit pattern as
-    # SIGNED (255 -> -1), which floor-divides to -1, not numpy's unsigned 255 // 2 == 127.
+    # consumer (// 2), so a missing wrap or a signed reinterpretation of the modulo-256 pattern
+    # (255 -> -1, which floor-divides to -1, not numpy's unsigned 255 // 2 == 127) shows.
     src = (
         "import numpy as np\ndef f(a, b, out):\n    for i in range(a.shape[0]):\n        out[i] = (a[i] - b[i]) // 2\n"
     )
@@ -91,7 +87,7 @@ def test_uint8_subtraction_wraps_before_floordiv() -> None:
 
 
 def test_uint16_subtraction_wraps_before_floordiv() -> None:
-    # Same defect at uint16 (255 -> -1 generalises to 65535 -> -1 at the wider width).
+    # The same at uint16: 65535 must not read back as -1.
     src = (
         "import numpy as np\ndef f(a, b, out):\n    for i in range(a.shape[0]):\n        out[i] = (a[i] - b[i]) // 2\n"
     )
@@ -107,13 +103,10 @@ def test_int32_accumulator_wraps() -> None:
     assert_ok(run_(src, {"x": x}, ["out"], {"x": "int32", "out": "int32"}, 4))
 
 
-# ``**`` and ``<<`` overflow their own width exactly like ``*`` (a narrow base run through
-# enough of the ring), so they need the same re-wrap. Both were previously EXCLUDED from
-# ``WRAP_BINOPS`` on the false premise that they "stay within their operands' range" -- true for
-# ``//``/``%``, false for these two: ``16 ** 2`` == 256 (needs 9 bits) and ``50 << 2`` == 200 (needs
-# 8 bits unsigned / overflows signed int8), so each is squarely in the same silent-overflow class
-# tested above for ``+``/``-``/``*``. Each test below follows the wrap with a non-ring ``//`` so a
-# missing wrap is load-bearing (see the note on ``test_int8_intermediate_overflow_wraps``).
+# ``**`` and ``<<`` overflow their own width exactly like ``*`` (``16 ** 2`` == 256 needs 9 bits,
+# ``50 << 2`` == 200 overflows signed int8), unlike ``//`` and ``%``, so they get the same re-wrap.
+# Each test below follows the wrap with a non-ring ``//`` so a missing wrap shows (see
+# ``test_int8_intermediate_overflow_wraps``).
 def test_int8_pow_wraps_before_floordiv() -> None:
     # 16 ** 2 = 256 -> wraps to 0; 20 ** 2 = 400 -> wraps to -112 (144 - 256); 3 ** 2 = 9 (in range).
     src = "import numpy as np\ndef f(x, out):\n    for i in range(x.shape[0]):\n        out[i] = (x[i] ** 2) // 3\n"
@@ -174,8 +167,8 @@ def test_mixed_narrow_and_wide_promotes_and_is_not_wrapped() -> None:
 
 def test_logical_negation_is_not_wrapped() -> None:
     # `not x` yields a LOGICAL, not an integer. Wrapping it is a hard type error in Fortran
-    # ("'a' argument of 'int' intrinsic must have a numeric type") and meaningless in C -- this is
-    # what broke cloudsc, whose masks are narrow-int-backed booleans.
+    # ("'a' argument of 'int' intrinsic must have a numeric type") and meaningless in C; masks are
+    # narrow-int-backed booleans (cloudsc).
     src = (
         "import numpy as np\n"
         "def f(flag, x, out):\n"
@@ -187,62 +180,29 @@ def test_logical_negation_is_not_wrapped() -> None:
     )
     flag = np.array([0, 1, 0, 1], dtype=np.int32)
     x = np.array([5, 6, 7, 8], dtype=np.int32)
-    res = run_op(
-        src,
-        "f",
-        {"flag": flag, "x": x},
-        {"out": (4,)},
-        {"N": 4},
-        shapes={"flag": "(N,)", "x": "(N,)", "out": "(N,)"},
-        dtypes={"flag": "int32", "x": "int32", "out": "int32"},
-        backends=NATIVE,
-    )
-    assert_ok(res)
+    assert_ok(run_(src, {"flag": flag, "x": x}, ["out"], {"flag": "int32", "x": "int32", "out": "int32"}, 4))
 
 
 def test_integer_true_division_is_not_truncated() -> None:
     """``/`` on ints is REAL division in numpy, and the wrap must not cast the quotient back.
 
-    Integer ``a / b`` is desugared to ``np.float64(a) / b``, whose subtree reads only int arrays.
-    The C wrap oracle saw int32 operands and no float, so it cast the double quotient to int32:
-    7 / 2 emitted 3 where numpy says 3.5 -- a silent wrong ANSWER, not an overflow edge case, on
-    every integer true division in every C and C++ kernel. Fortran was correct only because it
-    already bailed on any call in the subtree.
+    Integer ``a / b`` is desugared to ``np.float64(a) / b``, whose subtree reads only int arrays: a wrap
+    oracle that sees int32 operands and no float would cast the double quotient to int32 (7 / 2 as 3
+    where numpy says 3.5), a wrong answer on every integer true division.
     """
     src = "import numpy as np\ndef f(a, b, out):\n    for i in range(a.shape[0]):\n        out[i] = a[i] / b[i]\n"
     a = np.array([7, 9, 1, 5], dtype=np.int32)
     b = np.array([2, 2, 2, 2], dtype=np.int32)
     assert np.array_equal(a / b, np.array([3.5, 4.5, 0.5, 2.5]))  # numpy anchor: REAL division
-    res = run_op(
-        src,
-        "f",
-        {"a": a, "b": b},
-        {"out": (4,)},
-        {"N": 4},
-        shapes={"a": "(N,)", "b": "(N,)", "out": "(N,)"},
-        dtypes={"a": "int32", "b": "int32", "out": "float64"},
-        backends=NATIVE,
-    )
-    assert_ok(res)
+    assert_ok(run_(src, {"a": a, "b": b}, ["out"], {"a": "int32", "b": "int32", "out": "float64"}, 4))
 
 
 def test_narrow_true_division_is_not_truncated() -> None:
-    # Same defect at int8, where the wrap is otherwise legitimately active.
+    # The same at int8, where the wrap is otherwise active.
     src = "import numpy as np\ndef f(a, b, out):\n    for i in range(a.shape[0]):\n        out[i] = a[i] / b[i]\n"
     a = np.array([7, 100, 3], dtype=np.int8)
     b = np.array([2, 8, 4], dtype=np.int8)
-    assert_ok(
-        run_op(
-            src,
-            "f",
-            {"a": a, "b": b},
-            {"out": (3,)},
-            {"N": 3},
-            shapes={"a": "(N,)", "b": "(N,)", "out": "(N,)"},
-            dtypes={"a": "int8", "b": "int8", "out": "float64"},
-            backends=NATIVE,
-        )
-    )
+    assert_ok(run_(src, {"a": a, "b": b}, ["out"], {"a": "int8", "b": "int8", "out": "float64"}, 3))
 
 
 def test_call_result_is_not_wrapped() -> None:
@@ -251,18 +211,7 @@ def test_call_result_is_not_wrapped() -> None:
     src = "import numpy as np\ndef f(a, out):\n    for i in range(a.shape[0]):\n        out[i] = int(a[i]) * 3\n"
     a = np.array([100, 50, -100], dtype=np.int8)
     assert np.array_equal(np.array([int(x) * 3 for x in a]), np.array([300, 150, -300]))  # no wrap
-    assert_ok(
-        run_op(
-            src,
-            "f",
-            {"a": a},
-            {"out": (3,)},
-            {"N": 3},
-            shapes={"a": "(N,)", "out": "(N,)"},
-            dtypes={"a": "int8", "out": "int64"},
-            backends=NATIVE,
-        )
-    )
+    assert_ok(run_(src, {"a": a}, ["out"], {"a": "int8", "out": "int64"}, 3))
 
 
 def test_float_operand_disables_the_int_wrap() -> None:

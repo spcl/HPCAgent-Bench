@@ -237,10 +237,10 @@ filterwarnings = [
     # starlette's TestClient portal teardown, inside anyio/starlette.
     "ignore:.*BlockingPortal.*:DeprecationWarning:anyio",
     "ignore:.*BlockingPortal.*:DeprecationWarning:starlette",
-    # run_forked starts a child that runs one native call and exits (hpcagent_bench/frameworks/forked.py): it
-    # never re-enters a thread pool the parent held, which is what both fork warnings are about. The
-    # suite's workers carry numpy/BLAS threads, and JAX's once a jax test has run in them. A child that
-    # DID run JAX would deadlock; none does, and production keeps both warnings visible.
+    # A forked child (run_forked, the oracle's and the seal's raw forks) runs its task and exits without
+    # re-entering a thread pool the parent held, which is what both fork warnings are about; the oracle
+    # and the seal already silence the same warning at their fork sites. The suite's workers carry
+    # numpy/BLAS threads, and JAX's once a jax test has run in them; no forked child runs JAX.
     "ignore:This process .* is multi-threaded, use of fork\\(\\) may lead to deadlocks in the child:DeprecationWarning",
     "ignore:os.fork\\(\\) was called. os.fork\\(\\) is incompatible with multithreaded code, and JAX is multithreaded:RuntimeWarning",
 ]
