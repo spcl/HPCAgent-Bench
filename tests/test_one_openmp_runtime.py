@@ -237,6 +237,19 @@ def test_the_linker_points_every_gnu_copy_at_the_compilers_and_leaves_the_llvm_s
 
 
 @pytest.mark.integration
+def test_the_linker_skips_a_libgomp_link_whose_target_directory_is_gone(tmp_path: pathlib.Path) -> None:
+    (tmp_path / "view").mkdir()
+    tree = tmp_path / "tree" / "llvm"
+    tree.mkdir(parents=True)
+    (tree / "libgomp.so.1").symlink_to(tmp_path / "removed" / "lib" / "libomp.so.5")
+
+    done = link_only(tmp_path)
+
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert (tree / "libgomp.so.1").is_symlink()
+
+
+@pytest.mark.integration
 def test_the_linker_refuses_a_copy_that_needs_a_newer_libgomp_than_the_compilers(tmp_path: pathlib.Path) -> None:
     (tmp_path / "view").mkdir()
     tree = tmp_path / "tree" / "venv"

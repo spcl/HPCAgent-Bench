@@ -102,7 +102,7 @@ if [ -n "${libomp}" ]; then
     defined "${libomp}" > "${work}/omp.defined"
     : > "${work}/missing"
     while read -r client; do
-        real="$(readlink -f "${client}")"
+        real="$(readlink -f "${client}")" || continue
         [ -f "${real}" ] || continue
         referenced "${real}" | grep -E '^(GOMP_|OMP_)' | comm -23 - "${work}/omp.defined" | sed "s|\$| (${real})|" >> "${work}/missing" || true
     done < "${work}/clients"
