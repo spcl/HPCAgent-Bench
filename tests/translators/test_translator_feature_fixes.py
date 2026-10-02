@@ -16,8 +16,9 @@ Grouped by feature so a regression points straight at the cause:
   (the matvec-cluster fix) and synthesized return outputs carry no leading
   ``__`` (``ret_arr`` -- valid in every backend).
 
-The end-to-end correctness of these on the real kernels is asserted in
-``test_feature_kernels_e2e`` via the numerical oracle.
+The end-to-end correctness of these on the real kernels is asserted by the corpus gate,
+``tests/test_e2e_numerical.py`` (native leg on every gated kernel), via the numerical oracle; conv2d's
+wider backend matrix is ``test_feature_kernels_e2e``.
 """
 
 import ast
@@ -617,57 +618,25 @@ def oracle():
     return no
 
 
-#: Kernels unblocked by this batch, with the feature each exercises. This is a curated,
-#: feature-labeled NATIVE regression pointer (C / C++ / Fortran must reproduce numpy). The
-#: numba / pythran / jax breadth for the scientific_computing kernels here is already provided by the repo-wide
-#: corpus gate (tests/test_e2e_numerical.py, which carries the jax-timeout retry), so this
-#: file stays native-only. ABI-order duplicates are collapsed to one representative per family
-#: (matvec -> gesummv, stencil -> conv2d, wavefront-DP -> smith_waterman).
+#: The one kernel of this batch the corpus gate (tests/test_e2e_numerical.py) cannot cover on its
+#: wider backend matrix. The native c / cpp / fortran numpy agreement of the others -- gesummv,
+#: smith_waterman, cloudsc, velocity_tendencies, the fft and ICON kernels -- is the gate's native leg,
+#: which sweeps every gated kernel on every push; the Fortran ``where`` check on smith_waterman is held
+#: to ``ok`` there by ``REQUIRE_OK``.
 E2E = [
-    ("edge_laplacian", "np.add.at scatter + fancy-index gather x[src]"),
-    ("gem", "3D broadcast + axis reduction + sqrt-of-reduction local decl"),
-    ("dfa", "rng.integers 2-D shape recovery + dynamic gather flatten"),
-    ("bellman_ford", "np.full(N, fill) shape (no INF phantom axis)"),
-    ("gesummv", "Fortran ABI param-order (matvec family: subsumes atax/bicg)"),
-    ("conv2d", "Fortran ABI param-order (stencil family: subsumes fdtd_2d; machine_learning-track, only e2e net)"),
-    (
-        "smith_waterman",
-        "outer-broadcast + dim-alias fold + int32-out + Fortran where/max (DP family: subsumes needleman_wunsch)",
-    ),
-    ("hotspot_3d", "N-D implicit trailing-slice padding (3-D stencil shifts)"),
-    ("gaussian", "broadcast right-alignment (rank-1 update mult[:,None]*A[k,k:])"),
-    # lenet moved to test_microapps.py (full backend matrix, not native-only)
-    ("fft_3d", "np.fft.fftn/ifftn naive DFT + 3-D fancy gather u2[q,r,s] + arange int dtype"),
-    ("fft_1d", "np.fft.fft/ifft 1-D naive DFT (single-axis path) + complex round-trip"),
-    ("bfs", "int64 graph/level (yaml dtypes) -> Fortran logical/int merge typing"),
-    ("stockham_fft", "per-dimension realloc guard for reshape/transpose transients"),
-    ("cloudsc", "NaN-faithful max/min + negative-literal parens + int-as-bool logical typing"),
-    ("icon_gather", "ICON unstructured + semi-structured gather (2 index arrays / 1 index + scalar axis)"),
-    ("icon_scatter", "ICON unstructured + semi-structured scatter (multi-index np.add.at -> accumulation loop)"),
-    ("zekin_gather", "ICON zekinh mixed scalar-index gather z_kin_hor_e[blk[..],jk,idx[..]] in explicit loops"),
-    (
-        "velocity_tendencies",
-        "full ICON velocity-advection: None-fold + nested gat() inline + param-alias subst + gather-in-slice-store + abs->fabs float-scalar",
-    ),
+    ("conv2d", "Fortran ABI param-order (stencil family: subsumes fdtd_2d)"),
 ]
 
-#: Backend set per e2e kernel. Default is native-only: the numba/pythran/jax breadth for the scientific_computing
-#: kernels already lives in the corpus gate (test_e2e_numerical.py), and several of these (smith_waterman, dfa, cloudsc,
-#: velocity_tendencies) are scalar in-place DP nests jax lowers to a forked data-dependent while-loop and hangs on.
-#: conv2d is the exception: it is machine_learning-track, so the corpus gate (loop_level_reasoning+scientific_computing
-#: only) never covers it -- validate its wider matrix here so its jax path is checked somewhere (numba/pythran
-#: self-skip; jax is verified ok -- conv2d is a counted conv loop, not a data-dependent while, so it lowers and runs, it
-#: does not hang).
-E2E_NATIVE = {"c", "cpp", "fortran"}
+#: conv2d is not in the gate's per-push slice, so its numba / pythran / jax legs run only here on a push
+#: (numba and pythran self-skip; jax is verified ok -- conv2d is a counted conv loop, not a data-dependent
+#: while, so it lowers and runs, it does not hang).
 E2E_BACKENDS = {"conv2d": {"c", "cpp", "fortran", "numba", "pythran", "jax"}}
 
 
 @pytest.mark.parametrize("kernel,feature", E2E, ids=[k for k, unused in E2E])
 def test_feature_kernels_e2e(kernel, feature) -> None:
     no = oracle()
-    status = no.run_kernel(
-        kernel, preset="S", precision="fp64", seed=0, only_backends=E2E_BACKENDS.get(kernel, E2E_NATIVE)
-    )
+    status = no.run_kernel(kernel, preset="S", precision="fp64", seed=0, only_backends=E2E_BACKENDS[kernel])
     fails = {b: s for b, s in status.items() if s.startswith("FAIL")}
     assert not fails, f"{kernel} ({feature}): {fails}"
 
@@ -783,19 +752,6 @@ def test_oracle_output_dtype_for_kind() -> None:
     assert no._np_dtype_for_kind("ptr_double", np.float64) == np.float64
     assert no._np_dtype_for_kind("ptr_float", np.float32) == np.float32
     assert no._np_dtype_for_kind("ptr_complex128", np.float64) == np.complex128
-
-
-# R. Fortran type unification: max/min int-expr -> real; where neg-literal      #
-
-
-def test_fortran_where_negative_int_literal() -> None:
-    """``np.where(cond, 2, -1)`` -- both MERGE branches share a type (the -1 is
-    a UnaryOp, not a Constant; the old code left it integer beside a real)."""
-    no = oracle()
-    # fortran-only: this is a focused section-R pointer (where neg-int-literal typing), so it
-    # need not re-run the other backends the _E2E smith_waterman entry already covers.
-    status = no.run_kernel("smith_waterman", preset="S", precision="fp64", seed=0, only_backends={"fortran"})
-    assert status.get("fortran") == "ok", status
 
 
 # S. np_float / np_complex dtype aliases never become scalar parameters         #

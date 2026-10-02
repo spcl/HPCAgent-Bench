@@ -95,6 +95,20 @@ MIN_PRECISION_KERNELS = (
 #: a hundred.
 UNGATED_TAGS = ("kernelbench",)
 
+#: (kernel, backend) pairs that must reach ``ok`` at fp64, not merely avoid a FAIL. The sweep turns any
+#: ``skip:*`` into a skip, so an emitter that starts declining one of these kernels would stay green;
+#: these are the pairs a dedicated test used to hold to ``ok`` before the sweep absorbed it. ``skip:not-installed``
+#: stays a skip (a host without the toolchain), anything else fails.
+REQUIRE_OK = frozenset(
+    {
+        *((stem, "c") for stem in ("lenet", "channel_flow", "cavity_flow", "vadv", "hdiff")),
+        *((stem, backend) for stem in ("fft_1d", "fft_3d") for backend in ("numba", "pythran")),
+        ("cegterg", "numba"),
+        ("smith_waterman", "fortran"),
+        *(("vexx_k", backend) for backend in ("c", "cpp", "fortran", "jax")),
+    }
+)
+
 
 def _ungated_stems() -> list[str]:
     """Corpus kernels the sweep deliberately does not assert on, by study tag."""
@@ -413,8 +427,26 @@ def test_e2e_numerical_correctness(stem: str, backend: str) -> None:
         )
         pytest.skip(status)
     if status.startswith("skip"):
+        required = (stem, backend) in REQUIRE_OK and E2E_PRECISION == "fp64" and status != "skip:not-installed"
+        assert not required, f"{stem} [{backend}] must reach ok at fp64 (REQUIRE_OK) but returned {status}"
         pytest.skip(status)
     assert status == "ok", f"{stem} [{backend}] -> {status}"
+
+
+def test_every_required_ok_pair_is_swept_on_every_push() -> None:
+    """A REQUIRE_OK pair that no push runs would be held to ``ok`` only on a dispatched run. The native
+    backends sweep every gated kernel (the native job sets no subset); the others run the per-push slice."""
+    swept = set(subset_stems())
+    gated = set(_gated_stems())
+    missing = sorted(
+        (stem, backend)
+        for stem, backend in REQUIRE_OK
+        if stem not in (gated if backend in NATIVE_EMIT_BACKENDS else swept)
+    )
+    assert not missing, f"REQUIRE_OK names pairs no push sweeps: {missing}"
+    assert not {stem for stem, unused in REQUIRE_OK} & set(MISSING_EMIT_FEATURE), (
+        "a kernel on MISSING_EMIT_FEATURE is excused, so it cannot also be required to emit"
+    )
 
 
 #: Ungated kernels whose NUMPY REFERENCE cannot run on the sweep's inputs, with the status that

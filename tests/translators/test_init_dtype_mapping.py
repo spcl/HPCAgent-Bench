@@ -15,7 +15,7 @@ The fix gates the positional fallback on EQUAL lengths (the only case where the
 correspondence is provably 1:1); the by-name ``init.dtypes`` block stays the
 authoritative source. These tests pin both directions of that gate. A full
 emit+compile+run numerical check of the fix lives in
-``test_translator_feature_fixes::test_feature_kernels_e2e[cloudsc]``.
+the corpus gate (``tests/test_e2e_numerical.py``, cloudsc is a pinned kernel).
 """
 
 import pathlib
