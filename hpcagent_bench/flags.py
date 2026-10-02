@@ -150,7 +150,7 @@ FP_CONTRACT_NVHPC = "-Mfma"
 # everywhere except Apple-Silicon macOS, whose clang wants ``-mcpu=native``. (2) clang's ``libomp``
 # pin is Linux-only; on macOS plain ``-fopenmp`` resolves to whatever runtime the compiler carries.
 # (3) libmvec is glibc-only, reached by a different knob per compiler family (see below).
-ARCH_NATIVE = "-mcpu=native" if (osinfo.IS_MACOS and osinfo.is_setup()) else "-march=native"
+ARCH_NATIVE = "-mcpu=native" if (osinfo.IS_MACOS and osinfo.is_arm()) else "-march=native"
 #: clang links LLVM's OWN runtime, not GNU's: libomp is what an LLVM toolchain ships and what
 #: Polly's parallel backend is exercised against.
 _OPENMP_CLANG = "-fopenmp=libomp" if osinfo.IS_LINUX else "-fopenmp"

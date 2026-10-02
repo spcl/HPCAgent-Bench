@@ -56,7 +56,6 @@ __all__ = [
     "cmd_owed",
     "cmd_preflight",
     "cmd_prompt",
-    "cmd_regrade",
     "cmd_run_benchmark",
     "cmd_run_framework",
     "cmd_run_sparse",

@@ -22,7 +22,7 @@ __all__ = [
     "cpu_model",
     "default_mp_context",
     "gpu_model",
-    "is_setup",
+    "is_arm",
     "machine",
     "mp_context",
     "node_name",

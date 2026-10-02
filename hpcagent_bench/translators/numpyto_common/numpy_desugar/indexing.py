@@ -19,7 +19,6 @@ __all__ = [
     "MaskedAssignToLoop",
     "MgridInline",
     "ScalarizeMask",
-    "SubstituteName",
     "fancy_gather_lines",
     "hoist_fancy_gather",
     "ix_unpack_scatters",

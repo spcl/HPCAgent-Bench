@@ -39,9 +39,8 @@ def driver_fixture() -> ModuleType:
     return load_example_module("agent_driver")
 
 
-#: A tool_use block opened and never closed -- same shape as DIED_MID_TOOL_USE in
-#: test_agent_driver_api_timeout.py, but with no closing "result" event at all: this is the LIVE
-#: shape (stream still silent, client has not given up), not the post-mortem one.
+#: A tool_use block opened and never closed, with no closing "result" event: the LIVE shape (stream
+#: still silent, client has not given up).
 OPEN_TOOL_USE_TAIL = (
     '{"type":"stream_event","event":{"type":"content_block_start","index":1,'
     '"content_block":{"type":"text"}}}\n'

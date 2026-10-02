@@ -22,7 +22,6 @@ __all__ = [
     "ConstEvaluator",
     "FinfoEpsFold",
     "ListCompUnroll",
-    "SubstConstName",
     "const_iterable",
     "const_literal_ast",
     "const_name_values",

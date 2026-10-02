@@ -34,13 +34,13 @@ def test_mp_context_resolves_auto_and_honours_an_explicit_override() -> None:
         config.clear_override("runtime.mp_context")
 
 
-def test_is_setup_matches_the_machine_string(monkeypatch) -> None:
+def test_is_arm_matches_the_machine_string(monkeypatch) -> None:
     for m in ("arm64", "aarch64"):
         monkeypatch.setattr(osinfo, "machine", lambda m=m: m)
-        assert osinfo.is_setup()
+        assert osinfo.is_arm()
     for m in ("x86_64", "amd64"):
         monkeypatch.setattr(osinfo, "machine", lambda m=m: m)
-        assert not osinfo.is_setup()
+        assert not osinfo.is_arm()
 
 
 # flag matrix: glibc-only pieces gated to Linux, arch flag per-arch
@@ -60,7 +60,7 @@ def test_clang_baseline_glibc_pieces_are_linux_only() -> None:
 
 
 def test_arch_flag_is_mcpu_on_apple_silicon_march_elsewhere() -> None:
-    want = "-mcpu=native" if (osinfo.IS_MACOS and osinfo.is_setup()) else "-march=native"
+    want = "-mcpu=native" if (osinfo.IS_MACOS and osinfo.is_arm()) else "-march=native"
     assert want in flags.CPU_BASELINE_GCC
     assert want in flags.CPU_BASELINE_CLANG
     # exactly one of the two arch spellings, never both

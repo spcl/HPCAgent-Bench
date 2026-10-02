@@ -18,7 +18,6 @@ __all__ = [
     "NanAwareMinMaxSign",
     "PythranMaterialize",
     "PythranSafeMatVec",
-    "RenameName",
     "SubstitutePrecisionGlobals",
     "clean_for_pythran",
     "rename_reserved_params",

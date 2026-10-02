@@ -19,8 +19,6 @@ __all__ = [
     "AxisChoice",
     "AxisReshapeToIndexing",
     "FoldConstantSymbols",
-    "RenameLocals",
-    "SubstituteAxisLiteral",
     "axis_argument",
     "axis_index_spaces",
     "is_literal_axis",
