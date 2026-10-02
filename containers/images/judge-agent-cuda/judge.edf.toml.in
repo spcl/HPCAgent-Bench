@@ -13,6 +13,10 @@ mounts = [
     # install_edfs.sh replaces this item with hpcagent_bench_edf_mounts (scripts/cache_env.sh).
     "<hpcagent_bench_edf_mounts>",
     "${SCRATCH}:${SCRATCH}",
+    # The image carries the editable-install hook of hpcagent_bench and none of its code
+    # (containers/lib/package_hook.sh): the checkout that renders this EDF is the package. A run rewrites
+    # the source to its own checkout.
+    "<hpcagent_bench_checkout>:/opt/hpcagent-bench",
 ]
 workdir = "${SCRATCH}"
 writable = true

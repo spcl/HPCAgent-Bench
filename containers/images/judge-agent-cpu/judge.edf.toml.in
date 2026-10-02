@@ -15,9 +15,10 @@ mounts = [
     # the filesystems of $SCRATCH and $FAST_SCRATCH.
     "<hpcagent_bench_edf_mounts>",
     "${SCRATCH}:${SCRATCH}",
-    # The image carries no hpcagent_bench: the checkout's package sits where pip would have installed it
-    # (rendered with the checkout that renders this EDF; a run rewrites it to its own checkout).
-    "<hpcagent_bench_checkout>/hpcagent_bench:/opt/venv/lib/python3.12/site-packages/hpcagent_bench",
+    # The image carries the editable-install hook of hpcagent_bench and none of its code
+    # (containers/lib/package_hook.sh): the checkout that renders this EDF is the package. A run rewrites
+    # the source to its own checkout.
+    "<hpcagent_bench_checkout>:/opt/hpcagent-bench",
 ]
 workdir = "${SCRATCH}"
 writable = true
