@@ -92,7 +92,11 @@ def test_every_sync_after_the_openblas_rebuild_keeps_its_extra_and_leaves_numpy_
     wheel and its bundled BLAS back, because uv reinstalls a package whose build settings changed."""
     text = recipe(image)
     after = text[text.index("numpy_on_openblas.sh /opt/view") :]
-    assert f"numpy_on_openblas.sh /opt/view /opt/hpcagent-bench --extra {EXTRA_OF[image]} --group judge-proxy" in text
+    rebuild = re.search(r"numpy_on_openblas\.sh /opt/view /opt/hpcagent-bench ([^&]*)&&", text)
+    assert rebuild is not None, image
+    assert f"--extra {EXTRA_OF[image]}" in rebuild.group(1) and "--group judge-proxy" in rebuild.group(1)
+    # amdgpu's cupy is built from source in its own layer, after this step.
+    assert ("--no-install-package cupy" in rebuild.group(1)) == (image == "judge-agent-amd")
     # The image environment's syncs; rocprof-compute's is its own project in its own venv.
     for sync in re.findall(r"uv sync [^;]*?(?=; \\)", after, re.DOTALL):
         if "--no-install-project" not in sync:
