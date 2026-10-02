@@ -435,7 +435,7 @@ RUN set -eux; \
 # caller shares one OpenMP runtime (containers/lib/numpy_on_openblas.sh).
 ENV NUMBA_THREADING_LAYER=omp
 COPY containers/lib/numpy_on_openblas.sh containers/lib/one_openmp.sh containers/lib/openmp_gate.py /tmp/one-openmp/
-RUN sh /tmp/one-openmp/numpy_on_openblas.sh /opt/view /opt/hpcagent-bench && rm -rf /tmp/one-openmp
+RUN sh /tmp/one-openmp/numpy_on_openblas.sh /opt/view /opt/hpcagent-bench --extra cpu --group judge-proxy && rm -rf /tmp/one-openmp
 
 # Judge-side python, installed above: the crawl/browser stack and the proxy the arms talk through.
 # The pins are asserted here.
@@ -707,7 +707,8 @@ COPY README.md LICENSE NOTICE /opt/hpcagent-bench/
 COPY containers/lib/package_hook.sh /tmp/package_hook.sh
 RUN set -eux; \
     sh /tmp/package_hook.sh /opt/hpcagent-bench /opt/hpcagent-bench/hpcagent_bench /opt/venv \
-      --python /opt/venv/bin/python --no-install-package hpcagent-agent; \
+      --python /opt/venv/bin/python --no-install-package hpcagent-agent \
+      --no-install-package numpy --no-install-package scipy --extra cpu --group judge-proxy; \
     rm -f /tmp/package_hook.sh
 
 # The hook exists and the package does not, and the firewall is asserted rather than trusted: neither the

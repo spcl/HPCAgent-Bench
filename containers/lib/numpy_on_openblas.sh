@@ -4,7 +4,7 @@
 #
 # Rebuild the numpy and scipy that uv.lock pins against the image's OpenBLAS.
 #
-#   numpy_on_openblas.sh <view prefix> <workspace>      (e.g. /opt/view /opt/hpcagent-bench)
+#   numpy_on_openblas.sh <view prefix> <workspace> [uv sync flags]      (e.g. /opt/view /opt/hpcagent-bench --extra cpu)
 #
 # The PyPI wheels bundle their own scipy-openblas: a pthreads build with MAX_THREADS=64 that crashed
 # when numba's prange threads (192 on an mi300 node) called np.linalg at once, and a second BLAS
@@ -13,13 +13,17 @@
 # numba (NUMBA_THREADING_LAYER=omp, set by the Dockerfile). uv.lock decides the versions, so this is the
 # same numpy that computes every CPU reference, only linked differently. <workspace> holds the COPY'd
 # pyproject.toml, uv.lock and agent/pyproject.toml; the environment is the interpreter's prefix unless
-# UV_PROJECT_ENVIRONMENT names one. The gate at the end runs 2 x nproc numba prange iterations that each
+# UV_PROJECT_ENVIRONMENT names one. The uv sync flags are the ones the image's install used (its --extra and
+# --group): a sync that selects other extras swaps the packages those extras pick (torch's CPU wheel for PyPI's,
+# rich for another release). The gate at the end runs 2 x nproc numba prange iterations that each
 # call np.dot and scipy.linalg.lu_factor concurrently, in one process that maps a single OpenMP runtime
 # (one_openmp.sh, which also links every wheel's bundled libgomp to the image's).
 set -eux
 ulimit -c 0
 view="$1"
 workspace="$2"
+shift 2
+sync_flags="$*"
 py="$(command -v python3)"
 UV_PROJECT_ENVIRONMENT="${UV_PROJECT_ENVIRONMENT:-$("${py}" -c 'import sys; print(sys.prefix)')}"
 export UV_PROJECT_ENVIRONMENT
@@ -28,15 +32,18 @@ export PKG_CONFIG_PATH
 pkg-config --exists openblas
 sync() {
     (cd "${workspace}" && uv sync --frozen --inexact --no-cache --python "${py}" --no-install-project \
-        --no-install-package hpcagent-agent --group openblas-build "$@")
+        --no-install-package hpcagent-agent --group openblas-build ${sync_flags} "$@")
 }
 # numpy first: scipy's build imports the installed numpy, which one combined reinstall removes mid-build.
 sync --reinstall-package numpy --no-binary-package numpy \
     --config-settings-package numpy:setup-args=-Dblas=openblas --config-settings-package numpy:setup-args=-Dlapack=openblas
 # scipy without build isolation, so it compiles against the numpy just rebuilt: an isolated build env
 # builds a numpy of its own from source (--no-binary), which scipy's meson then failed to import (AMD 655840).
-# Its build tools are the locked openblas-build group, already in the environment.
-sync --reinstall-package scipy --no-binary-package scipy --no-build-isolation-package scipy \
+# Its build tools are the locked openblas-build group, already in the environment. numpy is skipped here and by
+# every later sync of this environment (the Dockerfile passes --no-install-package numpy --no-install-package
+# scipy): uv reinstalls a package whose build settings differ from the ones it was installed with, and without
+# the setup-args above a plain sync puts the wheel and its bundled scipy-openblas back (660464).
+sync --no-install-package numpy --reinstall-package scipy --no-binary-package scipy --no-build-isolation-package scipy \
     --config-settings-package scipy:setup-args=-Dblas=openblas --config-settings-package scipy:setup-args=-Dlapack=openblas
 
 # A spack-built gcc writes its runtime directory as DT_RPATH into everything it links (AMD 656542), and
