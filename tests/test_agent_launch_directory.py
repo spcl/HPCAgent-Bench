@@ -61,7 +61,7 @@ def staged_checkout(tmp_path: pathlib.Path) -> tuple[pathlib.Path, pathlib.Path]
     """The real experiments/ files, a setup env, its problems file, and another setup's files beside them."""
     launch = tmp_path / "runs" / ".agent-launch" / "7"
     env_file = tmp_path / ".env.setup-c"
-    env_file.write_text("EXPERIMENT_SETUP=setup-c\nPROBLEMS_FILE=problems-setup-c.jsonl\n")
+    env_file.write_text("SETUP=setup-c\nPROBLEMS_FILE=problems-setup-c.jsonl\n")
     (tmp_path / PROBLEMS).write_text('{"id": 0, "kernel": "k", "language": "c", "task": "t"}\n')
     stage(EXPERIMENTS, launch, env_file, str(tmp_path / PROBLEMS))
     return launch, env_file
@@ -75,7 +75,7 @@ def test_the_launch_directory_holds_what_an_agent_step_executes_and_nothing_else
     for name in (*launch_files(), ".env.other-setup", "problems-other-setup.jsonl", "submit-other.sh"):
         (scripts / name).write_text(f"# {name}\n")
     env_file = scripts / ".env.setup-c"
-    env_file.write_text("EXPERIMENT_SETUP=setup-c\n")
+    env_file.write_text("SETUP=setup-c\n")
     (scripts / PROBLEMS).write_text("{}\n")
     launch = tmp_path / "launch"
     stage(scripts, launch, env_file, str(scripts / PROBLEMS))
@@ -114,7 +114,7 @@ def test_concurrent_staging_of_the_same_job_never_leaves_a_readonly_partial_env(
     for name in launch_files():
         (scripts / name).write_text(f"# {name}\n")
     env_file = scripts / ".env.setup-c"
-    env_file.write_text("EXPERIMENT_SETUP=setup-c\n")
+    env_file.write_text("SETUP=setup-c\n")
     (scripts / PROBLEMS).write_text("{}\n")
     launch = tmp_path / "runs" / ".agent-launch" / "7"
     script = "\n".join(
@@ -206,7 +206,7 @@ def test_a_read_only_snapshot_env_is_staged_with_its_problems_line(tmp_path: pat
     """Every job gets a read-only snapshot as its env (env_layers.sh snapshot_env). Copied with its
     mode, the staged .env refused the PROBLEMS_FILE line and the job died at launch."""
     env_file = tmp_path / "snapshot.env"
-    env_file.write_text("EXPERIMENT_SETUP=setup-c\n")
+    env_file.write_text("SETUP=setup-c\n")
     env_file.chmod(0o400)
     (tmp_path / PROBLEMS).write_text("{}\n")
     launch = tmp_path / "launch"
@@ -223,7 +223,7 @@ def test_a_fused_waves_setups_are_staged_beside_the_env(tmp_path: pathlib.Path) 
     for suffix in (".resolved", ".env", ".jsonl", ".keys"):
         (setups / f"setup-c-clean{suffix}").write_text("x\n")
     env_file = tmp_path / "job.env"
-    env_file.write_text("EXPERIMENT_SETUP=owed-w1\n")
+    env_file.write_text("SETUP=owed-w1\n")
     (tmp_path / PROBLEMS).write_text("{}\n")
     launch = tmp_path / "launch"
     script = "\n".join(

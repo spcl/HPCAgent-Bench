@@ -5,9 +5,9 @@
 Every mlscale setup runs its own judge, and rows are attributed by ``run_id``. A request that reaches
 the wrong setup's judge (a stale ``JUDGE_URL``, a copied curl line) used to be graded and recorded in
 that setup's DB under a foreign identity. The router now refuses, before anything is graded, a POST
-whose ``run_id`` does not start with ``"$EXPERIMENT_SETUP."`` of the job it serves. A fused judge keeps
-its own per-worker check (``fused.check_run_id``) and never reads the job's ``EXPERIMENT_SETUP``; a judge
-with no ``EXPERIMENT_SETUP`` (a local ``serve``) checks nothing.
+whose ``run_id`` does not start with ``"$SETUP."`` of the job it serves. A fused judge keeps
+its own per-worker check (``fused.check_run_id``) and never reads the job's ``SETUP``; a judge
+with no ``SETUP`` (a local ``serve``) checks nothing.
 
 The accept cases drive every legitimate caller through its REAL client code: the agent tools, the
 harness's ``JudgeClient`` (its ``verify`` step included), the teardown promotion, and -- by showing
@@ -55,7 +55,7 @@ def router_fixture(monkeypatch: pytest.MonkeyPatch) -> Iterator["TestClient"]:
     monkeypatch.delenv(fused.SETUPS_DIR_ENV, raising=False)
     monkeypatch.setenv("HPCAGENT_BENCH_RECORD_ENABLED", "false")
     monkeypatch.setenv("AGENT_SINGLE_SUBMISSION", "0")
-    monkeypatch.setenv("EXPERIMENT_SETUP", SETUP)
+    monkeypatch.setenv("SETUP", SETUP)
     with stub_judge() as url:
         module = load_router("judge_service_arm_guard")
         monkeypatch.setattr(module, "UPSTREAM_URL", url)
@@ -102,24 +102,24 @@ def test_a_read_route_carries_no_run_id_and_is_relayed(router: "TestClient") -> 
 
 
 def test_a_judge_that_serves_no_setup_checks_nothing(router: "TestClient", monkeypatch: pytest.MonkeyPatch) -> None:
-    """A local ``hpcagent-bench serve`` behind the router has no EXPERIMENT_SETUP to hold anyone to."""
-    monkeypatch.delenv("EXPERIMENT_SETUP")
+    """A local ``hpcagent-bench serve`` behind the router has no SETUP to hold anyone to."""
+    monkeypatch.delenv("SETUP")
     assert router.post("/score", json=body("adhoc")).status_code == 200
 
 
 def test_a_fused_judge_never_consults_the_jobs_experiment_setup(
     router: "TestClient", monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
 ) -> None:
-    """Fused: the worker's token decides the setup (fused.check_run_id); the job's EXPERIMENT_SETUP -- here
+    """Fused: the worker's token decides the setup (fused.check_run_id); the job's SETUP -- here
     a third setup neither setup belongs to -- plays no part, so a worker's own run_id is graded."""
     setups, run_dir = tmp_path / "setups", tmp_path / "run"
     setups.mkdir()
-    (setups / f"{FOREIGN}.resolved").write_text(f"EXPERIMENT_SETUP={FOREIGN}\n", encoding="utf-8")
+    (setups / f"{FOREIGN}.resolved").write_text(f"SETUP={FOREIGN}\n", encoding="utf-8")
     (run_dir / fused.TOKEN_DIR_NAME).mkdir(parents=True)
     (run_dir / fused.TOKEN_DIR_NAME / fused.token_digest("tok")).write_text(FOREIGN, encoding="utf-8")
     monkeypatch.setenv(fused.SETUPS_DIR_ENV, str(setups))
     monkeypatch.setenv("RUN_DIR", str(run_dir))
-    monkeypatch.setenv("EXPERIMENT_SETUP", SETUP)
+    monkeypatch.setenv("SETUP", SETUP)
     fused.read_overlay.cache_clear()
     headers = {fused.TOKEN_HEADER: "tok"}
     try:
@@ -141,7 +141,7 @@ def load_tool(name: str) -> ModuleType:
 def test_the_agent_tools_score_submit_and_profile_are_accepted(
     router: "TestClient", monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
 ) -> None:
-    """The run id the tools send is the one agent_driver.identity_env composes from EXPERIMENT_SETUP."""
+    """The run id the tools send is the one agent_driver.identity_env composes from SETUP."""
     monkeypatch.setattr(urllib.request, "urlopen", through_router(router))
     monkeypatch.setenv("HPCAGENT_BENCH_RUN_ID", f"{SETUP}.n0.p2.w1")
     monkeypatch.setenv("JUDGE_URL", "http://judge.test:8800")
@@ -185,9 +185,9 @@ def test_the_grade_job_lists_every_setup_whatever_setup_the_process_serves(
     monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
 ) -> None:
     """The grade job replays in-process (scaling_grade -> metric.score_ml_distributed), never through
-    a router, so no setup guard stands in its way: a process holding another setup's EXPERIMENT_SETUP (the
+    a router, so no setup guard stands in its way: a process holding another setup's SETUP (the
     grade job inherits whatever env it is launched from) still lists this setup's submission."""
-    monkeypatch.setenv("EXPERIMENT_SETUP", FOREIGN)
+    monkeypatch.setenv("SETUP", FOREIGN)
     monkeypatch.setenv("AGENT_SINGLE_SUBMISSION", "1")
     monkeypatch.setenv("HPCAGENT_BENCH_RECORD_STUDY", "mlscale")
     monkeypatch.setenv("HPCAGENT_BENCH_RECORD_SETUP", test_scaling_grade.SETUP)
@@ -205,7 +205,7 @@ def test_the_regrade_replay_grades_whatever_setup_the_process_serves(
     monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
 ) -> None:
     """The regrade replay grades a recorded item in-process as ``POST /submit`` would, router-free."""
-    monkeypatch.setenv("EXPERIMENT_SETUP", FOREIGN)
+    monkeypatch.setenv("SETUP", FOREIGN)
     monkeypatch.setenv("AGENT_SINGLE_SUBMISSION", "1")
     verdict = types.SimpleNamespace(ok=True, suspect=False, reason="", ungradeable=False, harness_fault=False)
     item = test_grade_under.listed_item(tmp_path)

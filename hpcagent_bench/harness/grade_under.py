@@ -256,19 +256,19 @@ def env_names(setup: str) -> tuple[str, ...]:
 
 
 def recorded_setup(path: pathlib.Path) -> str:
-    """The setup an env file was rendered for: its ``EXPERIMENT_SETUP``, the identity the launcher writes."""
+    """The setup an env file was rendered for: its ``SETUP``, the identity the launcher writes."""
     for line in path.read_text(encoding="utf-8").splitlines():
         name, sep, value = line.partition("=")
-        if sep and name == "EXPERIMENT_SETUP":
+        if sep and name == "SETUP":
             return value.strip().strip("\"'")
     return ""
 
 
 def env_files(setup: str, env_dirs: Iterable[pathlib.Path]) -> Iterator[pathlib.Path]:
     """The env files that describe ``setup``, best first: those named for it (:func:`env_names`), then a
-    launch's own render ``.env.<name>-<list>`` when it records one of those names as ``EXPERIMENT_SETUP``
+    launch's own render ``.env.<name>-<list>`` when it records one of those names as ``SETUP``
     (``.env.<setup>-skills`` shares the prefix but is another setup), then one named for an older spelling
-    of it, by name or by the ``EXPERIMENT_SETUP`` it records (:func:`study_tags.aliased_setup`:
+    of it, by name or by the ``SETUP`` it records (:func:`study_tags.aliased_setup`:
     ``.env.cpf-llr-focus40-*`` for ``llr40-*``), the latest wave's (``-clean``) first."""
     dirs = list(env_dirs)
     names = env_names(setup)

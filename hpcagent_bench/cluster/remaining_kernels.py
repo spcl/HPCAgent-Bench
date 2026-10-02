@@ -443,7 +443,7 @@ def fused_setups(job_dir: str) -> set:
     setups: set = set()
     for path in glob.glob(os.path.join(job_dir, FUSED_SETUPS_DIR, "*.resolved")):
         for line in pathlib.Path(path).read_text(encoding="utf-8").splitlines():
-            if line.startswith("EXPERIMENT_SETUP="):
+            if line.startswith("SETUP="):
                 setups.add(line.partition("=")[2].strip())
     return {setup for setup in setups if setup}
 
