@@ -35,6 +35,9 @@ alias.
 
 from hpcagent_bench.vocabulary import packet
 
+#: Nothing is imported by name: every class registers itself through its decorator on import.
+__all__: list[str] = []
+
 
 @packet("", order=None, aliases=("openmp-offload",))
 class NoPacket:

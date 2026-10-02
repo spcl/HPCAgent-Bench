@@ -11,7 +11,7 @@ import pytest
 import yaml
 
 
-import ci_replay  # pyright: ignore[reportMissingImports]
+from scripts import ci_replay
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 

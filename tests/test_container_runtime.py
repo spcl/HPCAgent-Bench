@@ -170,9 +170,9 @@ def test_a_runtime_that_runs_an_image_refuses_to_run_without_one(tmp_path: pathl
 
 
 def test_an_unknown_runtime_is_refused_with_the_known_ones_named(tmp_path: pathlib.Path) -> None:
-    done = wrap(tmp_path, "enroot")
+    done = wrap(tmp_path, "lxc")
     assert done.returncode == 2
-    assert "unknown CONTAINER_RUNTIME 'enroot' (ce|apptainer|podman|docker)" in done.stderr
+    assert "unknown CONTAINER_RUNTIME 'lxc' (ce|apptainer|podman|docker)" in done.stderr
 
 
 def gang_supported(runtime: str) -> subprocess.CompletedProcess[str]:
