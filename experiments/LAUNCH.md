@@ -51,12 +51,12 @@ One existing env file, no wrapper:
 
 ```bash
 . ../hpcagent_bench/cluster/arm_nodes.sh
-sbatch --nodes="$(setup_nodes .env.<arm>)" --time="$(setup_walltime .env.<arm> 40)" \
+sbatch --nodes="$(arm_nodes .env.<arm>)" --time="$(arm_walltime .env.<arm> 40)" \
     --partition=mi300 --no-requeue --job-name=<setup> \
     --export=ALL,CLUSTER_ENV_FILE="$PWD/.env.<arm>" ../hpcagent_bench/cluster/beverin.sbatch
 ```
 
-`setup_walltime <env> <kernels>` covers every agent batch plus `STAGING_HOURS` (default 3). A smoke
+`arm_walltime <env> <kernels>` covers every agent batch plus `STAGING_HOURS` (default 3). A smoke
 run is the same command with a short `--time`. Check the queue and budget first:
 `squeue -u "$USER" -o "%.10i %.30j %.9T %.10M %.5D %R"`.
 
@@ -352,7 +352,7 @@ GANG_NODES=1 RANK_COUNTS='[1,2,4]' PRESET=L NO_RECORD=1 sbatch --nodes=1 --time=
   `SKILL.md`.
 - **Never edit an env file or launcher while its jobs run**; roles re-source them.
 - **Never export `CPF_*` in the submitting shell.** `sbatch --export=ALL` would stage the CPF
-  drop-in into a control setup; `submit_setup_job` strips `CPF_DROPIN_DIR`, `CPF_FORMS_DIR` and
+  drop-in into a control setup; `submit_arm_job` strips `CPF_DROPIN_DIR`, `CPF_FORMS_DIR` and
   `HPCAGENT_BENCH_SERVICE_CANONICAL_PARALLEL_FORM_DIR`.
 - **Walltime can be lowered, never raised.** Submit with slack. A dependency can be added only while
   the job is PENDING. `launch failed requeued held` does not restart: `scontrol release <id>`.

@@ -9,7 +9,6 @@ under the final rule; an extraction that keeps a live speedup next to a final on
 definitions.
 """
 
-import argparse
 import contextlib
 import csv
 import dataclasses
@@ -936,7 +935,7 @@ def test_hide_experiment_data_overrides_an_inherited_run_root_and_run_dir(
     monkeypatch.setenv("RUN_DIR", "")
     out_dir = tmp_path / "out"
     grade_under.hide_experiment_data(out_dir, [])
-    assert os.environ["RUN_ROOT"] == str(grade_under.campaigns.runs_root())
+    assert os.environ["RUN_ROOT"] == str(grade_under.experiments.runs_root())
     assert os.environ["RUN_DIR"] == str(out_dir.resolve())
 
 
@@ -948,7 +947,7 @@ def test_hide_experiment_data_hides_every_item_directory_when_scratch_is_unset(
     repo that needs host env vars (serve-only.sbatch, serve-private.sbatch, run_cluster.sh's
     role_srun) -- because pyxis starts a CE container from a SPANK plugin with a sanitised
     environment that does not reliably forward it. With SCRATCH
-    unset, campaigns.runs_root() silently falls back to <repo>/hpcagent-bench-runs, a directory
+    unset, experiments.runs_root() silently falls back to <repo>/hpcagent-bench-runs, a directory
     that holds none of this worklist's data, so RUN_ROOT alone names the WRONG directory -- and an
     inherited RUN_ROOT (a sourced setup .env, still present here since a setdefault would keep it and
     the assign above overwrites it with the same wrong fallback either way) points at neither the

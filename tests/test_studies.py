@@ -41,7 +41,7 @@ def test_a_conflicting_setup_raises_by_name() -> None:
         studies.fill_setup_identity(frame)
 
 
-def test_an_setup_with_no_value_anywhere_stays_blank() -> None:
+def test_a_setup_with_no_value_anywhere_stays_blank() -> None:
     """No row of the setup ever recorded the column: filling has nothing to fill from."""
     frame = pd.DataFrame({"arm": ["a", "a"], "packet": ["", None]})
     filled = studies.fill_setup_identity(frame)
@@ -294,7 +294,7 @@ def clean_frame() -> pd.DataFrame:
     )
 
 
-def test_a_experiment_with_no_clean_setup_is_left_alone() -> None:
+def test_an_experiment_with_no_clean_setup_is_left_alone() -> None:
     frame = clean_frame()
     frame = frame[~frame.arm.str.endswith("-clean")]
     assert studies.fold_clean_setups(frame).equals(frame)

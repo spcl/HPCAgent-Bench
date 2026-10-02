@@ -430,7 +430,7 @@ def test_a_dead_endpoint_costs_samples_and_never_the_workload(
 def test_the_probe_is_on_by_default_and_switchable_off_from_the_environment(
     driver: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Default-on because a measurement nobody remembers to setup is not taken, and it costs one HTTP
+    """Default-on because a measurement nobody remembers to arm is not taken, and it costs one HTTP
     GET per interval against a server already serving 40 agents. Garbage reads as off rather than as
     a crash: this value is one line in a hand-edited .env file."""
     monkeypatch.delenv("AGGREGATE_PROBE_SECONDS", raising=False)

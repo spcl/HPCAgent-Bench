@@ -91,7 +91,10 @@ and `--cost-models FILE` for extra cards. Only the final attempt is priced (T2).
 |---|---|
 | task | one agent optimizing one kernel once. Key `(run_root, job, run_id, benchmark)` (`population.EPISODE_KEY`); `run_id` = `<setup>.n<node>.p<problem>.w<worker>` repeats across jobs, so `job` is part of the key |
 | attempt | one agent process inside a task; a crashed attempt is relaunched, at most `AGENT_CRASH_ATTEMPTS=3` per task |
-| setup | one setup: model x language x packet x harness (e.g. `llr40-qwen38-c-skills`; `envs/arm_renames.yaml` names every recorded setup) |
+| setup | one launcher configuration: model x language x packet x harness (e.g. `llr40-qwen38-c-skills`; `envs/arm_renames.yaml` names every recorded setup) |
+| experiment | a batch of setups launched to answer one question: the job-name prefix that owns them (`hpcagent_bench/experiments.py`) |
+| study | the question and figure grouping: the experiments whose setups are scored and drawn together, with a roster (`hpcagent_bench/study_tags.py`) |
+| baseline setup, intervention setup | the two setups of an efficacy comparison: the same model and language without and with the intervention (packet, harness or tool); sec. 7 |
 | roster | the kernels a study serves every setup |
 | wave | one Slurm job of a setup; a later wave serves only roster kernels without a judge row yet (`hpcagent_bench/cluster/remaining_kernels.py`) |
 | rerun | a task on a kernel the same setup already ran |
@@ -175,29 +178,29 @@ up:
 builds one study's observations database, from its run roots or from the results databases
 `--db` names (repeatable, read as one: `hpcagent_bench/stats/databases.py`); `hpcagent_bench/observations_extract.py` (also reachable as
 `hpcagent-bench extract --runs GLOB --benchmarks DIR --out DIR --db FILE`) is the
-extractor underneath. `experiments.read_observations` applies X6-X9 on read.
+extractor underneath. `studies.read_observations` applies X6-X9 on read.
 
 - X1. One row per judge row, `record` in {`call`, `submission`, `attempt`}, plus one `task` row per
   worker directory (T3).
 - X2. `attempt_index`: the judge's `round` for `call` rows; for `submission` / `attempt` rows the
   1-based ordinal among the task's rows of that table, ordered by `(ts, id)`.
 - X3. `setup`, `packet`, `language` come from the setup name when a row did not record them
-  (`experiments.fill_setup_identity`); recorded values are kept in `recorded_<column>`.
+  (`studies.fill_setup_identity`); recorded values are kept in `recorded_<column>`.
 - X4. Only the final grade (`mw4x5`) under the kernel's configured denominator is credited
   (`denominator.credited`). A submission whose final grade is missing, faulted or under an older
   stamp or another denominator stays on record uncredited and is owed a final grade
   (`hpcagent-bench grade-under worklist`).
 - X6. A judge row whose `benchmark` differs from its task's kernel (the agent sent another kernel's
-  name) is dropped with a warning (`experiments.drop_foreign_kernel_rows`).
+  name) is dropped with a warning (`studies.drop_foreign_kernel_rows`).
 - X7. A judge row stamped before its task's final attempt started (`final_attempt_start_ms`) is
-  dropped with a warning (`experiments.drop_pre_relaunch_rows`): the relaunch deleted what it graded.
+  dropped with a warning (`studies.drop_pre_relaunch_rows`): the relaunch deleted what it graded.
 - X8. Every row of a task with `cancelled = 1` is dropped with a warning
-  (`experiments.drop_cancelled_task_rows`).
+  (`studies.drop_cancelled_task_rows`).
 - X8b. A recorded setup name reads as the setup it is (`study_tags.aliased_setup`: the registry's
   `setup_aliases`, then `envs/arm_renames.yaml`), so an archive's old spelling and the
   database name one setup alike.
 - X9. A setup name ending in `-clean` (`CLEAN=1` waves, owed reruns) is folded into the setup without
-  the suffix (`experiments.fold_clean_setups`); both waves pool and R4 picks between them.
+  the suffix (`studies.fold_clean_setups`); both waves pool and R4 picks between them.
 
 ## 4. Per-task answer
 
@@ -342,7 +345,7 @@ A pair with an ineligible setup is dropped and named (E1), shrinking its family.
 | scaling | `metric.scaling_point`, `metric.scaling_score`, `mpi_sizing.weak`, `mpi_sizing.work_ratio` |
 | token cost | `stats.cost` (`resolve`, `priced`), `envs/cost_models.yaml` |
 | T5, T6 | `agent_driver.clear_for_relaunch`, `append_attempt`, `cancelled_by_the_job` |
-| X6-X9 | `experiments.read_observations` and the four `drop_*` / `fold_*` helpers |
+| X6-X9 | `studies.read_observations` and the four `drop_*` / `fold_*` helpers |
 | R1, R2 | `population.graded_episode_rows`, `last_per_episode` |
 | R3-R5 | `population.latest_runs`, `setup_kernel_answers`, `kernel_tokens` |
 | E1 | `population.complete_setups`; `plot_setup_summary.eligible_rows` |

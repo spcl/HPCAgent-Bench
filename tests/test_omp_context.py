@@ -89,7 +89,7 @@ def test_an_unknown_family_request_falls_to_the_default_and_the_build_reports_it
     assert sandbox.compiled_omp_context("c", "tcc") == "gnu"
 
 
-def test_an_setup_pin_beats_the_submissions_request() -> None:
+def test_a_setup_pin_beats_the_submissions_request() -> None:
     config.set_override("build.compiler.c", "llvm")
     assert sandbox.compiled_omp_context("c", "gcc") == "llvm"
 

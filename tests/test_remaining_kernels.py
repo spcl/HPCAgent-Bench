@@ -308,7 +308,7 @@ OTHER_SETUP = "cpf-llr-focus40-oss120b-c-cpf"
     ],
     ids=["exact", "exact-clean", "model", "campaign"],
 )
-def test_setup_prefix_selects_an_setup_named_in_full_or_by_prefix(
+def test_setup_prefix_selects_a_setup_named_in_full_or_by_prefix(
     module: types.ModuleType,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: pathlib.Path,
@@ -330,7 +330,7 @@ def test_setup_prefix_selects_an_setup_named_in_full_or_by_prefix(
     assert reported == sorted(expected)
 
 
-def test_an_setup_prefix_that_names_no_setup_says_so(
+def test_a_setup_prefix_that_names_no_setup_says_so(
     module: types.ModuleType,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: pathlib.Path,
@@ -684,7 +684,7 @@ def test_a_forced_1x_placeholder_is_owed_as_infra_not_skipped(module: types.Modu
     assert classes["a"] == module.ExitClass.INFRA
 
 
-def test_an_setup_of_nothing_but_placeholders_owes_its_whole_roster(
+def test_a_setup_of_nothing_but_placeholders_owes_its_whole_roster(
     module: types.ModuleType, tmp_path: pathlib.Path
 ) -> None:
     """Every roster kernel ends in a placeholder, none delivered: owed_classes must not read any of

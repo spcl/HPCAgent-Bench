@@ -159,7 +159,7 @@ def unregistered_values(env: pathlib.Path) -> list[str]:
     return unknown
 
 
-def test_every_value_an_setup_records_is_registered() -> None:
+def test_every_value_a_setup_records_is_registered() -> None:
     """Every identity value that reaches the database can be coloured and labelled.
 
     Setup envs are rendered at submit time and untracked, so this checks whichever sit on disk; each
@@ -168,7 +168,7 @@ def test_every_value_an_setup_records_is_registered() -> None:
     assert not unknown, "\n  ".join(unknown)
 
 
-def test_an_setup_that_records_an_study_records_the_whole_tuple() -> None:
+def test_a_setup_that_records_a_study_records_the_whole_tuple() -> None:
     """A half-stamped setup is worse than an unstamped one: its rows join on study and then
     group into a NULL model, which reads as a fifth model in every per-model figure.
 

@@ -221,7 +221,7 @@ def test_every_summarized_row_carries_an_interval(sweep: pathlib.Path) -> None:
     assert single.n == 1 and single.geomean_low == pytest.approx(single.geomean_high)
 
 
-def test_an_setup_that_never_ran_is_reported_not_dropped(sweep: pathlib.Path) -> None:
+def test_a_setup_that_never_ran_is_reported_not_dropped(sweep: pathlib.Path) -> None:
     frame = signed.summary_table(signed.setup_rows(sweep))
     absent = frame[frame.row == "llvm + polly"].iloc[0]
     assert absent.n == 0 and absent.excluded == "none"
@@ -698,7 +698,7 @@ def test_a_kernel_the_baseline_never_ran_is_pending_too(pending_canon: pd.DataFr
     assert row.pending == frozenset({"k1", "k3"})
 
 
-def test_mark_pending_keeps_an_setup_not_yet_served_every_kernel(
+def test_mark_pending_keeps_a_setup_not_yet_served_every_kernel(
     llr40_canon: pd.DataFrame, llr40_observations: pd.DataFrame
 ) -> None:
     partial = llr40_observations[

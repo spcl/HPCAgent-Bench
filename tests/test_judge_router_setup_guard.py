@@ -87,7 +87,7 @@ def test_a_body_of_this_setup_reaches_the_judge(router: "TestClient", route: str
     assert upstream_routes() == ["/submit" if route == "/verify" else route]
 
 
-def test_an_setup_whose_name_merely_starts_with_this_one_is_another_setup(router: "TestClient") -> None:
+def test_a_setup_whose_name_merely_starts_with_this_one_is_another_setup(router: "TestClient") -> None:
     """``llr-c`` must not accept ``llr-cpp.*``: the setup is matched up to the run id's first dot."""
     assert router.post("/score", json=body(f"{ARM}-skills.n0.p1.w0")).status_code == 403
 

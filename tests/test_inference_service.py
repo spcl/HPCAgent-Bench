@@ -127,7 +127,7 @@ def muse_setup(**overrides: str) -> dict[str, str]:
 # which source a setup selects
 
 
-def test_an_setup_that_names_no_source_still_starts_its_own_server(service: types.ModuleType) -> None:
+def test_a_setup_that_names_no_source_still_starts_its_own_server(service: types.ModuleType) -> None:
     """Every setup written before this mode existed declares no source and must keep its server."""
     assert service.source({}) == service.SOURCE_NODE
     assert service.source({"INFERENCE_SOURCE": "node"}) == service.SOURCE_NODE

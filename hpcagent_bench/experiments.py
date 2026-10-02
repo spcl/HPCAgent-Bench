@@ -6,10 +6,10 @@ A setup name says which launcher produced it (``git-scicomp-qwen38-repo``), not 
 answers. The mapping between the two is data in ``envs/registry.yaml`` and this module is its only
 reader.
 
-A figure asks for an EXPERIMENT and gets back where to look and what to keep:
+A figure asks for a STUDY and gets back where to look and what to keep:
 
-    selection = campaigns.resolve("gitscicomp10")
-    frame = experiments.observations(selection.run_globs(), study=selection.experiment)
+    selection = experiments.resolve("gitscicomp10")
+    frame = studies.observations(selection.run_globs(), study=selection.experiment)
 """
 
 import dataclasses

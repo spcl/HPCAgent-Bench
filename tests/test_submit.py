@@ -316,7 +316,7 @@ def test_a_served_model_with_no_mi200_serving_layer_is_refused(tmp_path: pathlib
     assert not (root / "sbatch.calls").exists()
 
 
-def test_an_mi200_setup_needs_an_study_naming_mi200(tmp_path: pathlib.Path) -> None:
+def test_an_mi200_setup_needs_a_study_naming_mi200(tmp_path: pathlib.Path) -> None:
     root = tree(tmp_path)
     done = submit_mi200(root, "musespark", EXPERIMENT="wave", SUBMIT="0")
     assert done.returncode == 2 and "does not name mi200" in done.stderr, done.stderr

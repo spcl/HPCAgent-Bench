@@ -168,7 +168,7 @@ dropped_arms: "unionalpha|-cpfsrc(?!-v2)|-smoke$|^scicomp40-[^-]+-cpp(-|$)|^scic
 # Arm names that are ONE arm under two spellings, as {regex: replacement} applied to an arm name with
 # re.sub (\1 = a captured group; an unmatched optional group is empty). The left spelling's rows, jobs
 # and owed kernels count as the right one's everywhere: remaining_kernels.base_arm (owed planning)
-# and experiments.renamed_arm (extraction/analysis) both read it, so coverage is the
+# and studies.renamed_setup (extraction/analysis) both read it, so coverage is the
 # union and the latest run per kernel wins between them. The scicomp40 CPU C control ran
 # as scicomp-perf-playbook-<model>-plain and later as scicomp-dc-<model>-plain, same model,
 # language, device, empty packet, prompt and budget. Only that plain CPU C arm has both spellings; no other dc arm aliases.

@@ -151,7 +151,7 @@ BUDGET_KEYS = ("AGENT_TIMEOUT_SECONDS", "AGENT_MAX_TOKENS")
 
 
 @pytest.mark.parametrize("campaign", sorted(env_spec.load_spec()))
-def test_a_experiments_budget_is_the_same_for_every_model(campaign: str) -> None:
+def test_an_experiments_budget_is_the_same_for_every_model(campaign: str) -> None:
     """A track budget binds every model alike: the bare experiment render (what a submitter reads)
     equals every experiment:model render on both budget keys."""
     track = env_spec.render(campaign)
@@ -189,7 +189,7 @@ def test_the_spec_refuses_what_it_cannot_render_verbatim(tmp_path: pathlib.Path,
         env_spec.load_spec(spec)
 
 
-def test_a_experiment_extending_an_unknown_experiment_fails_loudly(tmp_path: pathlib.Path) -> None:
+def test_an_experiment_extending_an_unknown_experiment_fails_loudly(tmp_path: pathlib.Path) -> None:
     spec = tmp_path / "arms.yaml"
     spec.write_text("a:\n  extends: gone\n")
     with pytest.raises(SystemExit, match="unknown experiment gone"):
@@ -246,7 +246,7 @@ def test_a_second_submission_never_touches_the_first_snapshot(tmp_path: pathlib.
 
 
 def test_the_job_gets_the_snapshot_not_the_setup_env(tmp_path: pathlib.Path) -> None:
-    """submit_setup_job hands sbatch the snapshot as CLUSTER_ENV_FILE."""
+    """submit_arm_job hands sbatch the snapshot as CLUSTER_ENV_FILE."""
     stub_dir = tmp_path / "bin"
     stub_dir.mkdir()
     # appends: the agent job's sbatch is followed by its chained finalize-grade job's
@@ -256,7 +256,7 @@ def test_the_job_gets_the_snapshot_not_the_setup_env(tmp_path: pathlib.Path) -> 
     (tmp_path / "arm.env").write_text("CAMPAIGN_ARM=a\nPROBLEMS_FILE=problems-a.jsonl\n")
     probe = tmp_path / "probe.sh"
     probe.write_text(
-        f"set -eu\n. {CLUSTER / 'submit_common.sh'}\narm_nodes() {{ echo 1; }}\nsubmit_setup_job arm.env a 00:10:00\n"
+        f"set -eu\n. {CLUSTER / 'submit_common.sh'}\narm_nodes() {{ echo 1; }}\nsubmit_arm_job arm.env a 00:10:00\n"
     )
     env = {
         "PATH": f"{stub_dir}:/usr/bin:/bin",

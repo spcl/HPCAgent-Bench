@@ -92,7 +92,7 @@ def test_a_figure_that_colours_a_whole_unregistered_set_warns_once_per_entity(
     assert caplog.text.count("registry.yaml") == 2
 
 
-def test_an_setup_name_resolves_to_a_registered_model_or_to_nothing() -> None:
+def test_a_setup_name_resolves_to_a_registered_model_or_to_nothing() -> None:
     """`model_of` is the last resort for a CSV that predates the identity columns. It must return a
     tag the palette can shape, or the explicit `other` -- never a half-parsed fragment."""
     registered = set(study_tags.order("models"))

@@ -46,7 +46,7 @@ def test_the_longest_experiment_prefix_wins(arm: str, prefix: str) -> None:
     assert experiments.prefix_of(arm) == prefix
 
 
-def test_a_experiment_prefix_only_matches_on_a_hyphen_boundary() -> None:
+def test_an_experiment_prefix_only_matches_on_a_hyphen_boundary() -> None:
     """``harness20`` and ``harness-focus20`` are different experiments; a bare startswith would let
     one swallow setups of the other."""
     assert experiments.prefix_of("harness20-oss120b-claude") == "harness20"
@@ -152,14 +152,14 @@ def test_the_baseline_names_canon_columns_not_another_experiment() -> None:
     assert selection.canon_columns()[0] == "numba"
 
 
-def test_every_experiment_names_an_study_the_registry_lists() -> None:
+def test_every_experiment_names_a_study_the_registry_lists() -> None:
     """An experiment pointing at an unlisted study draws under a raw tag instead of its name."""
     known = set(registry().experiments)
     unlisted = sorted({entry.experiment for entry in experiments.campaigns().values()} - known)
     assert not unlisted, unlisted
 
 
-def test_every_declared_baseline_belongs_to_an_study_a_experiment_feeds() -> None:
+def test_every_declared_baseline_belongs_to_a_study_an_experiment_feeds() -> None:
     """A baseline declared for a study nothing runs is a typo that never surfaces."""
     fed = set(experiments.studies_available())
     orphans = sorted(set(registry().study_baselines) - fed)

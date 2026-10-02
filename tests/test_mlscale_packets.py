@@ -35,7 +35,7 @@ def resolved(key: str) -> packets.Packet:
 
 
 @pytest.mark.parametrize("key", sorted(PAGES))
-def test_an_setup_key_resolves_for_the_setup_the_launcher_submits(key: str) -> None:
+def test_a_setup_key_resolves_for_the_setup_the_launcher_submits(key: str) -> None:
     """`--packet <key> --language hip --image amd --multinode` is what make_problems.py runs; a key
     that raises there aborts the launch with the nodes already allocated."""
     packet = resolved(key)
@@ -50,7 +50,7 @@ def test_the_two_setups_differ_by_exactly_the_rccl_page() -> None:
 
 
 @pytest.mark.parametrize("key", sorted(PAGES))
-def test_every_page_an_setup_stages_is_a_shipped_page(key: str) -> None:
+def test_every_page_a_setup_stages_is_a_shipped_page(key: str) -> None:
     """Staging copies ``<page>/SKILL.md`` by name: a page the registry names but the tree does not
     ship stages nothing and reports nothing."""
     for page in resolved(key).skills:

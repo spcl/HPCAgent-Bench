@@ -15,6 +15,7 @@ makes that true, so these tests poison the parent on purpose and assert the chil
 """
 
 import ctypes
+import functools
 import inspect
 import os
 import pathlib
@@ -48,6 +49,37 @@ void kern(double *a, int n) {
 """
 
 N = 4096
+
+#: Set in the fresh interpreter that runs an :func:`isolated` test body.
+ISOLATED_ENV = "HPCAGENT_BENCH_OPENMP_ISOLATED"
+
+
+def isolated(test: Callable[..., None]) -> Callable[..., None]:
+    """Run ``test`` in its own pytest process.
+
+    These tests map libgomp and libomp side by side in the process that runs them. In an xdist
+    worker that mapping outlives the test and every later grading child forked from the worker
+    inherits it, which the grading child's one-runtime gate refuses (OpenMPRuntimeConflict)."""
+
+    @functools.wraps(test)
+    def run(*args: object, **kwargs: object) -> None:
+        if os.environ.get(ISOLATED_ENV):
+            test(*args, **kwargs)
+            return
+        node = os.environ["PYTEST_CURRENT_TEST"].rsplit(" ", 1)[0]
+        env = {**os.environ, ISOLATED_ENV: "1", "PYTEST_ADDOPTS": ""}
+        proc = subprocess.run(
+            [sys.executable, "-m", "pytest", "-p", "no:cacheprovider", "-q", node],
+            capture_output=True,
+            text=True,
+            env=env,
+            cwd=REPO,
+            check=False,
+        )
+        assert proc.returncode == 0, proc.stdout[-2000:] + proc.stderr[-800:]
+
+    return run
+
 
 #: (runtime, mode) -> does omp_pause_resource_all ACTUALLY tear the thread pool down? MEASURED
 #: here, not assumed, by counting threads in /proc/self/task across the call:
@@ -102,10 +134,13 @@ def build(tmp_path: pathlib.Path, runtime: str) -> pathlib.Path:
         search = [f"-L{lib_dir}", f"-Wl,-rpath,{lib_dir}"] if lib_dir else []
         extra = [*search, f"-Wl,--push-state,--no-as-needed,-l{runtime},--pop-state"]
     proc = subprocess.run(
-        ["gcc", "-O2", "-fPIC", "-shared", "-fopenmp", *extra, str(src), "-o", str(so)], capture_output=True, text=True
+        ["gcc", "-O2", "-fPIC", "-shared", "-fopenmp", *extra, str(src), "-o", str(so)],
+        capture_output=True,
+        text=True,
+        check=False,
     )
     assert proc.returncode == 0, proc.stderr[-800:]
-    needed = subprocess.run(["readelf", "-d", str(so)], capture_output=True, text=True).stdout
+    needed = subprocess.run(["readelf", "-d", str(so)], capture_output=True, text=True, check=False).stdout
     # DT_NEEDED may show libomp.so.5 for a libiomp5 request (ABI-compat symlink); accept the
     # resolved one.
     assert any(f"[lib{r}.so" in needed for r in (runtime, "omp")), f"expected lib{runtime} in DT_NEEDED, got:\n{needed}"
@@ -143,6 +178,7 @@ def kernel_total(so_path: str) -> float:
 
 @pytest.mark.integration
 @pytest.mark.parametrize("runtime", ["gomp", "omp"])
+@isolated
 def test_forked_child_runs_openmp_after_the_parent_already_did(tmp_path: pathlib.Path, runtime: str) -> None:
     """THE regression: parent enters a parallel region, THEN forks a child that enters one.
 
@@ -161,6 +197,7 @@ def test_forked_child_runs_openmp_after_the_parent_already_did(tmp_path: pathlib
 @pytest.mark.integration
 @pytest.mark.parametrize("runtime", ["gomp", "omp"])
 @pytest.mark.parametrize("mode", sorted(OMP_PAUSE_MODES))
+@isolated
 def test_the_parent_can_still_use_openmp_after_pausing(tmp_path: pathlib.Path, runtime: str, mode: str) -> None:
     """Pausing must not cost the parent anything, under EITHER tear-down mode: a paused runtime
     re-initialises on its next parallel region. Otherwise run_forked would fix the fork by
@@ -175,6 +212,7 @@ def test_the_parent_can_still_use_openmp_after_pausing(tmp_path: pathlib.Path, r
 @pytest.mark.integration
 @pytest.mark.parametrize("runtime", ["gomp", "omp"])
 @pytest.mark.parametrize("mode", sorted(OMP_PAUSE_MODES))
+@isolated
 def test_both_teardown_modes_make_the_fork_safe(tmp_path: pathlib.Path, runtime: str, mode: str) -> None:
     """BOTH omp_pause_resource_t options must buy fork safety -- but NOT always by tearing the
     pool down: libgomp drops it under either mode, whereas libomp's SOFT pause leaves the whole
@@ -282,6 +320,7 @@ def test_a_mapped_runtime_without_the_pause_symbol_is_warned_not_silent(monkeypa
 
 
 @pytest.mark.integration
+@isolated
 def test_a_second_pause_of_an_idle_libomp_is_not_reported_as_a_live_pool(tmp_path: pathlib.Path) -> None:
     """libomp refuses a pause with no parallel region since the last one. run_forked pauses before
     EVERY fork, so reading that refusal as a live pool warned on each fork after the first."""

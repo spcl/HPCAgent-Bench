@@ -4,7 +4,7 @@
 
 WHY THIS EXISTS AS A FILE, NOT A CSV OR AN IN-TEST DICT. Tests must not read the reproducibility
 artifact's CSVs under ``ICLR26Reproducibility/`` -- they live outside this repo and are not
-portable to another checkout or CI. ``experiments.read_observations`` reads either a ``.csv`` or an
+portable to another checkout or CI. ``studies.read_observations`` reads either a ``.csv`` or an
 extracted ``.db`` (table ``observations``), so a tiny committed ``.db`` exercises the SAME reader a
 real experiment's artifact does, without the tree depending on a path outside it.
 

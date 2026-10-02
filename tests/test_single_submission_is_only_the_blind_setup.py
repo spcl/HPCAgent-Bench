@@ -19,7 +19,7 @@ PAGES = {"1": "submission-single.md", "0": "submission-multi.md"}
 
 
 @pytest.mark.parametrize("campaign", sorted(SPEC))
-def test_a_experiment_declares_its_commit_budget_in_setups_yaml(campaign: str) -> None:
+def test_an_experiment_declares_its_commit_budget_in_setups_yaml(campaign: str) -> None:
     chain = env_spec.experiment_chain(campaign, SPEC)
     assert any("AGENT_SINGLE_SUBMISSION" in entry.env for entry in chain), campaign
 

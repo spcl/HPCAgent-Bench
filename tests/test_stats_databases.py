@@ -69,7 +69,7 @@ def test_two_databases_are_unioned_with_their_ids_remapped(tmp_path: pathlib.Pat
     assert not db.exists(), "the merge is temporary"
 
 
-def test_an_setup_held_twice_with_different_rows_is_refused(tmp_path: pathlib.Path) -> None:
+def test_a_setup_held_twice_with_different_rows_is_refused(tmp_path: pathlib.Path) -> None:
     core, other = tmp_path / "core.db", tmp_path / "other.db"
     seed(core, CORE_SETUP, (2.0,))
     seed(other, CORE_SETUP, (5.0,))
@@ -77,7 +77,7 @@ def test_an_setup_held_twice_with_different_rows_is_refused(tmp_path: pathlib.Pa
         pass
 
 
-def test_an_setup_held_twice_with_identical_rows_is_read_once(tmp_path: pathlib.Path) -> None:
+def test_a_setup_held_twice_with_identical_rows_is_read_once(tmp_path: pathlib.Path) -> None:
     core = tmp_path / "core.db"
     seed(core, CORE_SETUP, (2.0,))
     copy = shutil.copy(core, tmp_path / "copy.db")
@@ -95,7 +95,7 @@ def test_the_loader_reads_the_cpf_setups_only_when_the_archive_is_passed(tmp_pat
     assert set(both["arm"]) == {CORE_SETUP, CPF_SETUP}
 
 
-def test_the_extractor_refuses_two_named_databases_that_disagree_on_an_setup(tmp_path: pathlib.Path) -> None:
+def test_the_extractor_refuses_two_named_databases_that_disagree_on_a_setup(tmp_path: pathlib.Path) -> None:
     core, other = tmp_path / "core.db", tmp_path / "other.db"
     seed(core, CORE_SETUP, (2.0,))
     seed(other, CORE_SETUP, (5.0,))

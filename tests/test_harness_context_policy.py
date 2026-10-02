@@ -100,5 +100,5 @@ def test_the_smallest_window_any_source_names_wins(harnesses: ModuleType) -> Non
     assert harnesses.served_context(environment) == 131072
 
 
-def test_an_setup_naming_no_window_gets_the_policy_cap(harnesses: ModuleType) -> None:
+def test_a_setup_naming_no_window_gets_the_policy_cap(harnesses: ModuleType) -> None:
     assert harnesses.context_policy({}) == (262144, 32768, 197919)

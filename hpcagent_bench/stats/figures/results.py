@@ -15,6 +15,7 @@ import dataclasses
 import math
 import pathlib
 import re
+import contextlib
 import sqlite3
 from dataclasses import dataclass
 from typing import cast
@@ -128,9 +129,8 @@ def read_results_table(db: str | None) -> pd.DataFrame:
             f"rebuilt from those, so an absent table means the run leg recorded no rows "
             f"-- check that leg, not the plot."
         )
-    conn = sqlite3.connect(aggregate)
-    data: pd.DataFrame = pd.read_sql_query("SELECT * FROM results", conn)
-    conn.close()
+    with contextlib.closing(sqlite3.connect(aggregate)) as conn:
+        data: pd.DataFrame = pd.read_sql_query("SELECT * FROM results", conn)
     return data
 
 

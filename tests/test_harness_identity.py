@@ -48,7 +48,7 @@ def stamp(env: pathlib.Path, *harness: str, script: pathlib.Path = SCRIPT) -> su
 
 
 @pytest.mark.parametrize("harness", [(), ("",)], ids=["omitted", "empty"])
-def test_an_setup_that_names_no_harness_stamps_what_it_did_before(tmp_path: pathlib.Path, harness: tuple[str, ...]):
+def test_a_setup_that_names_no_harness_stamps_what_it_did_before(tmp_path: pathlib.Path, harness: tuple[str, ...]):
     env = tmp_path / ".env.arm"
     done = stamp(env, *harness)
     assert done.returncode == 0, done.stderr

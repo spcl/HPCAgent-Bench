@@ -94,7 +94,7 @@ def setup_frame(speedups: tuple[float, ...]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def test_an_setup_points_speed_up_is_the_geomean_over_kernels_not_the_median() -> None:
+def test_a_setup_points_speed_up_is_the_geomean_over_kernels_not_the_median() -> None:
     frame = setup_frame(ASYMMETRIC_SPEEDUPS)
     table = plot.setup_points(frame)
     assert len(table) == 1
@@ -105,7 +105,7 @@ def test_an_setup_points_speed_up_is_the_geomean_over_kernels_not_the_median() -
     assert row.log2_speedup != pytest.approx(median_log2)
 
 
-def test_an_setup_points_tokens_are_the_geomean_over_kernels() -> None:
+def test_a_setup_points_tokens_are_the_geomean_over_kernels() -> None:
     """Paper rule: the spend axis is the geomean of billed tokens over kernels, 100 on every kernel here."""
     frame = setup_frame(ASYMMETRIC_SPEEDUPS)
     table = plot.setup_points(frame)
@@ -113,7 +113,7 @@ def test_an_setup_points_tokens_are_the_geomean_over_kernels() -> None:
     assert row.tokens == pytest.approx(100.0)
 
 
-def test_an_setup_short_of_the_roster_is_not_drawn() -> None:
+def test_a_setup_short_of_the_roster_is_not_drawn() -> None:
     """A setup missing a roster kernel would be scored over a smaller kernel set than its neighbours on
     the same axes, so it is dropped unless the caller explicitly includes incomplete setups."""
     complete = setup_frame(ASYMMETRIC_SPEEDUPS)

@@ -141,7 +141,7 @@ def test_the_smallest_window_any_source_names_wins(driver: ModuleType) -> None:
     assert driver.served_context(environment) == 131072
 
 
-def test_an_setup_naming_no_window_gets_the_policy_cap(driver: ModuleType) -> None:
+def test_a_setup_naming_no_window_gets_the_policy_cap(driver: ModuleType) -> None:
     """No committed setup and no pending snapshot does this; the cap is still a limit the policy allows."""
     assert driver.served_context({}) == driver.CLAUDE_CONTEXT_CAP == 262144
 
