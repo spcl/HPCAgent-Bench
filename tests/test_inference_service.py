@@ -152,7 +152,7 @@ def test_a_service_setup_points_every_consumer_at_the_service(service: types.Mod
 
 def test_a_service_setup_that_still_claims_an_inference_node_is_refused(service: types.ModuleType) -> None:
     """A setup that asks for a GPU node it will never use sizes its allocation for a server that is
-    never started, and the allocation check in beverin.sbatch would pass it."""
+    never started, and the allocation check in services.sbatch would pass it."""
     with pytest.raises(SystemExit, match="INFERENCE_NODES"):
         service.from_environ(openai_setup(INFERENCE_NODES="1"))
 
@@ -469,7 +469,7 @@ def test_a_service_setup_writes_no_key_into_the_usage_file(
 def test_every_example_setup_resolves_when_its_key_is_set(service: types.ModuleType, name: str) -> None:
     """Each shipped example must be a WORKING setup, not a template: reading its env plus the one
     variable it names has to produce a resolved service."""
-    text = rendered(f"campaign:{name}")
+    text = rendered(f"experiment:{name}")
     arm = dict(line.split("=", 1) for line in text.splitlines() if line and not line.startswith("#") and "=" in line)
     arm = {key: value.strip('"') for key, value in arm.items()}
     arm[arm["INFERENCE_SERVICE_KEY_ENV"]] = SECRET
@@ -481,7 +481,7 @@ def test_every_example_setup_resolves_when_its_key_is_set(service: types.ModuleT
 def test_a_service_setup_never_leaks_its_key_into_the_staged_setup_env() -> None:
     """The setup env is copied into the run tree and read by every role; the key is named there, not
     written there, so rotating it never means editing a committed file."""
-    text = rendered("campaign:musespark")
+    text = rendered("experiment:musespark")
     assert "META_MODEL_API_KEY=" not in text.replace("INFERENCE_SERVICE_KEY_ENV=META_MODEL_API_KEY", "")
 
 
@@ -544,7 +544,7 @@ def test_a_free_only_setup_refuses_any_listing_that_does_not_prove_the_model_fre
 def test_every_model_the_claude_cli_picks_itself_is_pinned_to_the_setup_model(service: types.ModuleType) -> None:
     """Unpinned, the CLI's side requests name a Claude model; a router answers that with a model the
     setup never declared, which on OpenRouter is billed."""
-    text = rendered("campaign:musespark")
+    text = rendered("experiment:musespark")
     arm = dict(line.split("=", 1) for line in text.splitlines() if line and not line.startswith("#") and "=" in line)
     arm = {key: value.strip('"') for key, value in arm.items()}
     arm[arm["INFERENCE_SERVICE_KEY_ENV"]] = SECRET

@@ -3,7 +3,7 @@
 """Which roster kernels a setup still owes, and the job that reruns them.
 
 ``hpcagent-bench owed collect`` reads every job directory under the run roots. A job's setup is
-``runs.arm`` in its judge shards (results DBs, schema v1); a setup, its ``-clean`` rerun and a registry
+``runs.setup`` in its judge shards (results DBs, schema v2); a setup, its ``-clean`` rerun and a registry
 alias are one identity, covered by the union of all its jobs, because a rerun runs only the kernels
 still owed. A kernel is delivered when a job graded it: a credited /submit grade, or one the judge
 graded and refused. A refusal reasoned ``score_error`` (the judge's own reference failed) and any
@@ -89,7 +89,7 @@ class Job:
 
     job: str
     path: pathlib.Path
-    arm: str
+    setup: str
 
 
 def shard_rows(job_dir: pathlib.Path, query: str, args: tuple[object, ...] = ()) -> list[tuple[object, ...]]:
@@ -104,17 +104,17 @@ def shard_rows(job_dir: pathlib.Path, query: str, args: tuple[object, ...] = ())
 def job_setup(job_dir: pathlib.Path) -> str:
     """The one setup ``job_dir`` recorded; empty when it has no shard. Raises on a shard with no setup or
     a job that recorded several."""
-    arms = {str(arm) for (arm,) in shard_rows(job_dir, "select distinct arm from runs") if arm}
-    if len(arms) > 1:
-        raise SystemExit(f"{job_dir}: runs.arm names several setups: {sorted(arms)}")
-    if not arms and any(job_dir.glob(SHARD_GLOB)):
-        raise SystemExit(f"{job_dir}: judge shards present but runs.arm names no setup")
-    return arms.pop() if arms else ""
+    setups = {str(setup) for (setup,) in shard_rows(job_dir, "select distinct setup from runs") if setup}
+    if len(setups) > 1:
+        raise SystemExit(f"{job_dir}: runs.setup names several setups: {sorted(setups)}")
+    if not setups and any(job_dir.glob(SHARD_GLOB)):
+        raise SystemExit(f"{job_dir}: judge shards present but runs.setup names no setup")
+    return setups.pop() if setups else ""
 
 
-def identity(arm: str) -> str:
+def identity(setup: str) -> str:
     """The setup a clean rerun or a registry alias folds into."""
-    return study_tags.aliased_setup(arm.removesuffix(study_tags.CLEAN_SUFFIX))
+    return study_tags.aliased_setup(setup.removesuffix(study_tags.CLEAN_SUFFIX))
 
 
 def collect_jobs(roots: Iterable[pathlib.Path], excluded: set[str]) -> tuple[dict[str, list[Job]], list[str]]:
@@ -125,9 +125,9 @@ def collect_jobs(roots: Iterable[pathlib.Path], excluded: set[str]) -> tuple[dic
         for job_dir in sorted(path for path in root.iterdir() if path.is_dir() and path.name.isdigit()):
             if job_dir.name in excluded:
                 continue
-            arm = job_setup(job_dir)
-            if arm:
-                by_identity.setdefault(identity(arm), []).append(Job(job_dir.name, job_dir, arm))
+            setup = job_setup(job_dir)
+            if setup:
+                by_identity.setdefault(identity(setup), []).append(Job(job_dir.name, job_dir, setup))
             else:
                 empty.append(job_dir.name)
     return by_identity, empty
@@ -200,7 +200,7 @@ def cmd_collect(args: argparse.Namespace) -> int:
         print(f"no judge shard: jobs {sorted(empty)}")
     if args.out:
         args.out.mkdir(parents=True, exist_ok=True)
-    for name in sorted(n for n in by_identity if selected(n, args.arm)):
+    for name in sorted(n for n in by_identity if selected(n, args.setups)):
         jobs = sorted(by_identity[name], key=lambda job: int(job.job))
         classes = owed(jobs, roster)
         budget = sum(owed_class is OwedClass.BUDGET for owed_class in classes.values())
@@ -268,16 +268,16 @@ submit_setup_job "${env_file}" "${setup}" "${walltime}" "" "" ", ${walltime}"
 def cmd_run(args: argparse.Namespace) -> int:
     env_path, problems_path = launch_files(args.job_dir)
     values = read_env(env_path)
-    arm = values.get("CAMPAIGN_ARM", "")
-    if not arm:
-        raise SystemExit(f"{env_path} names no CAMPAIGN_ARM")
+    setup = values.get("EXPERIMENT_SETUP", "")
+    if not setup:
+        raise SystemExit(f"{env_path} names no EXPERIMENT_SETUP")
     kernels = {line.strip() for line in args.kernels_file.read_text(encoding="utf-8").splitlines() if line.strip()}
     if not kernels:
         raise SystemExit(f"{args.kernels_file} lists no kernel")
     lines = rerun_problems(problems_path, kernels)
     experiments = args.repo / "experiments"
     scaled = (args.token_scale, args.time_scale) != (1, 1)
-    stem = f"{arm}-owed-{args.kernels_file.stem}" + (
+    stem = f"{setup}-owed-{args.kernels_file.stem}" + (
         f"-tok{args.token_scale}x-time{args.time_scale}x" if scaled else ""
     )
     problems = experiments / f"problems-{stem}.jsonl"
@@ -300,7 +300,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             SUBMIT_SCRIPT,
             "owed-run",
             env.name,
-            arm,
+            setup,
             problems.name,
             str(args.repo / "hpcagent_bench" / "cluster"),
         ],
@@ -318,14 +318,13 @@ def build_parser() -> argparse.ArgumentParser:
     collect.add_argument("--tag", required=True, help="the study tag naming the roster")
     collect.add_argument(
         "--setup",
-        "--arm",
-        dest="arm",
+        dest="setups",
         action="append",
         default=[],
         help="only this setup or its <setup>- family; repeatable",
     )
     collect.add_argument("--exclude-job", action="append", default=[], help="a job id that does not count; repeatable")
-    collect.add_argument("--out", type=pathlib.Path, help="write <arm>.txt kernel lists here")
+    collect.add_argument("--out", type=pathlib.Path, help="write <setup>.txt kernel lists here")
     collect.add_argument(
         "--class", dest="owed_class", choices=[c.value for c in OwedClass], help="write only this class's kernels"
     )

@@ -6,7 +6,8 @@
     fused_split.py <job env> <problems.jsonl> <setups.json> <out dir>
 
 prepare_job.sh calls this for a job whose env names a ``SETUPS_FILE`` (the fused-wave planner wrote
-it), then prepares every ``<out>/<setup>.env`` exactly as it prepares a single-setup setup. Each env is
+it) and whose problems each name their env file under ``env_file`` (their ``setup`` is the recorded identity
+and is carried through untouched), then prepares every ``<out>/<setup>.env`` exactly as it prepares a single-setup setup. Each env is
 the job's own lines with the setup's overlay appended -- sourced in that order, the overlay wins,
 which is the same env a single-setup job of that setup is launched with -- and ``<setup>.keys`` /
 ``<setup>.unset`` name what the overlay sets and clears, so the caller can resolve it to the flat
@@ -43,10 +44,10 @@ def split(env_path: pathlib.Path, problems_path: pathlib.Path, setups_path: path
     for number, line in enumerate(problems_path.read_text(encoding="utf-8").splitlines(), start=1):
         if not line.strip():
             continue
-        setup = str(json.loads(line).get("setup") or "")
-        if setup not in by_setup:
-            raise SystemExit(f"fused_split: {problems_path}:{number} names setup {setup!r}, not in {setups_path}")
-        by_setup[setup].append(line)
+        env_file = str(json.loads(line).get("env_file") or "")
+        if env_file not in by_setup:
+            raise SystemExit(f"fused_split: {problems_path}:{number} names env file {env_file!r}, not in {setups_path}")
+        by_setup[env_file].append(line)
     out.mkdir(parents=True, exist_ok=True)
     for name, spec in setups.items():
         if not SETUP_ID.match(name):

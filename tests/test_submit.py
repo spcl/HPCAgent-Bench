@@ -1,6 +1,6 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""hpcagent_bench/cluster/submit.sh: every setup of a wave is staged from one arms.yaml base and differs from its
+"""hpcagent_bench/cluster/submit.sh: every setup of a wave is staged from one setups.yaml base and differs from its
 siblings only in the setup's own keys.
 
 The submitter runs from a temp copy of the studies files it reads, generating problems from this
@@ -59,9 +59,9 @@ SUBSET = ("fuse_diamond", "tsvc_2_s115")
 #: The submitter's knobs, cleared so each run sees only what its test sets.
 KNOBS = frozenset(
     {
-        *"BASE TAG KERNELS_FILE MODELS LANGUAGES PACKETS HARNESSES OFFLOAD OFFLOAD_RESIDENCY EXPERIMENT".split(),
-        *"RECORD_EXPERIMENT STAMP REPEAT AGENTS_PER_NODE AGENT_NODES JUDGE_NODES CPF_VIEW CLEAN".split(),
-        *"BUDGET_SCALE TOKEN_SCALE TIME_SCALE DEADLINE EXTRA_ENV_KV ARM_SUFFIX SUBMIT".split(),
+        *"BASE TAG KERNELS_FILE MODELS LANGUAGES PACKETS HARNESSES OFFLOAD OFFLOAD_RESIDENCY STUDY".split(),
+        *"RECORD_STUDY STAMP REPEAT AGENTS_PER_NODE AGENT_NODES JUDGE_NODES CPF_VIEW CLEAN".split(),
+        *"BUDGET_SCALE TOKEN_SCALE TIME_SCALE DEADLINE EXTRA_ENV_KV SETUP_SUFFIX SUBMIT".split(),
         *"DEPEND_ON BEGIN NICE HOLD TIME_LIMIT SBATCH_ACCOUNT SBATCH_PARTITION PYTHONPATH HPCAGENT_BENCH_REPO".split(),
         *"HPCAGENT_BENCH_SYSTEM HPCAGENT_BENCH_PROFILE HPCAGENT_BENCH_MAX_TIME_HOURS".split(),
         *"HPCAGENT_BENCH_SYSTEMS_FILE HPCAGENT_BENCH_ACCOUNT".split(),
@@ -111,7 +111,7 @@ def submit(root: pathlib.Path, *flags: str, **knobs: str | None) -> subprocess.C
         SCRATCH=str(root / "scratch"),
         STAMP="20260926",
     )
-    env.update({"MODELS": "qwen38", "TAG": "llr40", "EXPERIMENT": "wave", **JOB_ENV, **knobs})
+    env.update({"MODELS": "qwen38", "TAG": "llr40", "STUDY": "wave", **JOB_ENV, **knobs})
     env = {key: value for key, value in env.items() if value is not None}
     return subprocess.run(
         ["bash", str(root / "hpcagent_bench" / "cluster" / "submit.sh"), *flags],
@@ -129,9 +129,9 @@ def staged(root: pathlib.Path, name: str) -> dict[str, str]:
     return dict(line.split("=", 1) for line in lines)
 
 
-def setup_env(root: pathlib.Path, arm: str) -> dict[str, str]:
+def setup_env(root: pathlib.Path, setup: str) -> dict[str, str]:
     """The env of ``setup`` staged over the two-kernel subset: its files carry the subset's suffix."""
-    return staged(root, f"{arm}-subset")
+    return staged(root, f"{setup}-subset")
 
 
 def kernels(root: pathlib.Path, env: dict[str, str]) -> list[str]:
@@ -148,12 +148,12 @@ def wave(tmp_path_factory: pytest.TempPathFactory) -> pathlib.Path:
     return root
 
 
-ARMS = ("wave-qwen38-c", "wave-qwen38-c-lang-skills", "wave-qwen38-hip", "wave-qwen38-hip-lang-skills")
+SETUPS = ("wave-qwen38-c", "wave-qwen38-c-lang-skills", "wave-qwen38-hip", "wave-qwen38-hip-lang-skills")
 
 
 def test_a_dry_run_stages_every_setup_and_submits_nothing(wave: pathlib.Path) -> None:
     assert sorted(path.name for path in (wave / "experiments").glob(".env.*")) == sorted(
-        f".env.{a}-subset" for a in ARMS
+        f".env.{a}-subset" for a in SETUPS
     )
     assert not (wave / "sbatch.calls").exists()
 
@@ -174,8 +174,8 @@ def test_the_recorded_identity_follows_the_language(wave: pathlib.Path) -> None:
     assert (cpu["HPCAGENT_BENCH_RECORD_DEVICE"], gpu["HPCAGENT_BENCH_RECORD_DEVICE"]) == ("cpu", "gpu")
     assert (cpu["LANGUAGE"], gpu["LANGUAGE"]) == ("c", "hip")
     assert cpu["AGENT_PROMPT_FILE"] != gpu["AGENT_PROMPT_FILE"] == "prompt-gpu.md"
-    for env, arm in ((cpu, "wave-qwen38-c"), (gpu, "wave-qwen38-hip")):
-        assert env["EXPERIMENT_SETUP"] == env["HPCAGENT_BENCH_RECORD_SETUP"] == arm
+    for env, setup in ((cpu, "wave-qwen38-c"), (gpu, "wave-qwen38-hip")):
+        assert env["EXPERIMENT_SETUP"] == env["HPCAGENT_BENCH_RECORD_SETUP"] == setup
         assert env["HPCAGENT_BENCH_RECORD_STUDY"] == "wave"
         assert "HPCAGENT_BENCH_RECORD_HARNESS" not in env and "HARNESS" not in env
 
@@ -316,13 +316,13 @@ def test_a_submitted_setup_reads_a_snapshot_and_chains_its_finalize_grade(tmp_pa
     snapshot = pathlib.Path(export.split("=", 2)[2])
     assert snapshot.parent.name == ".rendered" and not os.access(snapshot, os.W_OK)
     frozen = dict(line.split("=", 1) for line in snapshot.read_text().splitlines())
-    arm = setup_env(root, "wave-qwen38-c")
+    setup = setup_env(root, "wave-qwen38-c")
     assert {k: v for k, v in frozen.items() if k != "PROBLEMS_FILE"} == {
-        k: v for k, v in arm.items() if k != "PROBLEMS_FILE"
+        k: v for k, v in setup.items() if k != "PROBLEMS_FILE"
     }
     problems = root / "experiments" / frozen["PROBLEMS_FILE"]
     assert problems.parent.name == ".rendered"
-    assert problems.read_text() == (root / "experiments" / arm["PROBLEMS_FILE"]).read_text()
+    assert problems.read_text() == (root / "experiments" / setup["PROBLEMS_FILE"]).read_text()
     assert "CPF_DROPIN_DIR" not in (root / "sbatch.env").read_text()
     calls = (root / "sbatch.calls").read_text()
     assert "grade-pending" not in calls, calls
@@ -333,7 +333,7 @@ def submit_mi200(root: pathlib.Path, model: str, **knobs: str) -> subprocess.Com
     return submit(
         root,
         "--account", "p", "--partition", "mi200", "--profile", "mi200", "--gpus-per-node", "8",
-        **{"KERNELS_FILE": "subset.txt", "EXPERIMENT": "x-mi200", "MODELS": model, "SUBMIT": "1", **knobs},
+        **{"KERNELS_FILE": "subset.txt", "STUDY": "x-mi200", "MODELS": model, "SUBMIT": "1", **knobs},
     )  # fmt: skip
 
 
@@ -389,7 +389,7 @@ def test_the_mi200_system_entry_is_the_whole_job_shape(tmp_path: pathlib.Path) -
     root = tree(tmp_path)
     done = submit(
         root, "--account", "p", "--system", "beverin-mi200",
-        KERNELS_FILE="subset.txt", EXPERIMENT="x-mi200", MODELS="musespark", SUBMIT="1",
+        KERNELS_FILE="subset.txt", STUDY="x-mi200", MODELS="musespark", SUBMIT="1",
         HPCAGENT_BENCH_PROFILE=None, HPCAGENT_BENCH_JOB_GPUS_PER_NODE=None,
     )  # fmt: skip
     assert done.returncode == 0, done.stderr
@@ -398,6 +398,6 @@ def test_the_mi200_system_entry_is_the_whole_job_shape(tmp_path: pathlib.Path) -
 
 def test_an_mi200_setup_needs_a_study_naming_mi200(tmp_path: pathlib.Path) -> None:
     root = tree(tmp_path)
-    done = submit_mi200(root, "musespark", EXPERIMENT="wave", SUBMIT="0")
+    done = submit_mi200(root, "musespark", STUDY="wave", SUBMIT="0")
     assert done.returncode == 2 and "does not name mi200" in done.stderr, done.stderr
     assert not list((root / "experiments").glob(".env.*"))

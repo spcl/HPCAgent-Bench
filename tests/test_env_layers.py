@@ -1,8 +1,8 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Base envs render flat from layers + arms.yaml, and every submission gets its own read-only snapshot.
+"""Base envs render flat from layers + setups.yaml, and every submission gets its own read-only snapshot.
 
-A base is ``layers/*.env`` plus one ``experiments/arms.yaml`` entry (env_spec.py). A job reads a
+A base is ``layers/*.env`` plus one ``experiments/setups.yaml`` entry (env_spec.py). A job reads a
 snapshot under ``.rendered/``, never the setup's re-stageable ``.env.<setup>``, so a later submission or
 ``SUBMIT=0`` dry run of the same setup cannot rewrite what a PENDING job is about to read.
 """
@@ -77,8 +77,8 @@ def test_a_missing_parent_fails_loudly(tmp_path: pathlib.Path) -> None:
 
 def test_an_unknown_model_or_experiment_fails_loudly() -> None:
     for target, message in (
-        ("campaign:nosuchmodel", "no layers/model-nosuchmodel.env"),
-        ("nosuchcampaign:qwen38", "no experiment nosuchcampaign"),
+        ("experiment:nosuchmodel", "no layers/model-nosuchmodel.env"),
+        ("nosuchexperiment:qwen38", "no experiment nosuchexperiment"),
         ("base-qwen38", "neither <experiment>:<model> nor an env file"),
     ):
         run = subprocess.run(
@@ -116,10 +116,10 @@ def test_rendering_is_deterministic() -> None:
 
 
 def test_every_model_layer_is_listed_in_every_experiment() -> None:
-    """Adding a model is adding its layer: it renders in every experiment with no arms.yaml edit."""
+    """Adding a model is adding its layer: it renders in every experiment with no setups.yaml edit."""
     models = sorted(path.name.removeprefix("model-").removesuffix(".env") for path in LAYERS_DIR.glob("model-*.env"))
     spec = env_spec.load_spec()
-    assert sorted(BASES) == sorted(f"{campaign}:{model}" for campaign in spec for model in models)
+    assert sorted(BASES) == sorted(f"{experiment}:{model}" for experiment in spec for model in models)
 
 
 def test_a_fortran_base_extends_its_c_base_and_keeps_every_key() -> None:
@@ -150,14 +150,14 @@ def test_a_model_layer_wins_over_the_experiment_and_a_models_entry_over_both() -
 BUDGET_KEYS = ("AGENT_TIMEOUT_SECONDS", "AGENT_MAX_TOKENS")
 
 
-@pytest.mark.parametrize("campaign", sorted(env_spec.load_spec()))
-def test_an_experiments_budget_is_the_same_for_every_model(campaign: str) -> None:
+@pytest.mark.parametrize("experiment", sorted(env_spec.load_spec()))
+def test_an_experiments_budget_is_the_same_for_every_model(experiment: str) -> None:
     """A track budget binds every model alike: the bare experiment render (what a submitter reads)
     equals every experiment:model render on both budget keys."""
-    track = env_spec.render(campaign)
+    track = env_spec.render(experiment)
     assert all(track.get(key, "").isdigit() for key in BUDGET_KEYS), track
     for model in (member.value for member in env_spec.Model):
-        values = env_spec.render(f"{campaign}:{model}")
+        values = env_spec.render(f"{experiment}:{model}")
         assert {key: values[key] for key in BUDGET_KEYS} == {key: track[key] for key in BUDGET_KEYS}, model
 
 
@@ -165,8 +165,8 @@ def test_no_model_layer_or_models_entry_sets_a_budget() -> None:
     """The budget lives on the experiment only; a model-level one would split a track by model."""
     for path in LAYERS_DIR.glob("*.env"):
         assert not set(env_spec.assignments(path)) & set(BUDGET_KEYS), path.name
-    for name, campaign in env_spec.load_spec().items():
-        for model, entry in campaign.models.items():
+    for name, experiment in env_spec.load_spec().items():
+        for model, entry in experiment.models.items():
             assert not set(entry) & set(BUDGET_KEYS), f"{name}.models.{model}"
 
 
@@ -183,14 +183,14 @@ def test_no_model_layer_or_models_entry_sets_a_budget() -> None:
 )
 def test_the_spec_refuses_what_it_cannot_render_verbatim(tmp_path: pathlib.Path, text: str) -> None:
     """A YAML bool would render as True, not the true a job reads: the spec takes str and int only."""
-    spec = tmp_path / "arms.yaml"
+    spec = tmp_path / "setups.yaml"
     spec.write_text(text)
     with pytest.raises(pydantic.ValidationError):
         env_spec.load_spec(spec)
 
 
 def test_an_experiment_extending_an_unknown_experiment_fails_loudly(tmp_path: pathlib.Path) -> None:
-    spec = tmp_path / "arms.yaml"
+    spec = tmp_path / "setups.yaml"
     spec.write_text("a:\n  extends: gone\n")
     with pytest.raises(SystemExit, match="unknown experiment gone"):
         env_spec.load_spec(spec)
