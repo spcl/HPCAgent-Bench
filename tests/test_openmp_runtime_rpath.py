@@ -22,10 +22,11 @@ import stat
 import pytest
 
 from hpcagent_bench import languages
+from tests.own_process import isolated
 
 #: A translation unit that references the OpenMP runtime and nothing else, so a load failure can
 #: only come from that runtime being unreachable.
-_OMP_TU = """#include <omp.h>
+OMP_TU = """#include <omp.h>
 double probe(double *a, int n) {
   double s = 0.0;
 #pragma omp parallel for reduction(+ : s)
@@ -38,7 +39,7 @@ double probe(double *a, int n) {
 """
 
 
-def _stub_driver(tmp_path: pathlib.Path, answer: pathlib.Path | str) -> str:
+def stub_driver(tmp_path: pathlib.Path, answer: pathlib.Path | str) -> str:
     """A fake compiler that answers ``-print-file-name`` with ``answer``, as a real driver does."""
     script = tmp_path / "stubcc"
     script.write_text(f'#!/bin/sh\nprintf "%s\\n" "{answer}"\n')
@@ -50,7 +51,7 @@ def test_a_runtime_in_a_libdir_no_loader_searches_earns_an_rpath(tmp_path: pathl
     libdir = tmp_path / "lib" / "x86_64-unknown-linux-gnu"
     libdir.mkdir(parents=True)
     (libdir / "libomp.so").write_bytes(b"")
-    cc = _stub_driver(tmp_path, libdir / "libomp.so")
+    cc = stub_driver(tmp_path, libdir / "libomp.so")
     languages.driver_library_dir.cache_clear()
     assert languages.driver_library_dir(cc, ("libomp.so",)) == str(libdir)
 
@@ -62,14 +63,14 @@ def test_a_runtime_the_loader_already_finds_earns_none(tmp_path: pathlib.Path, m
     resident = loader_dir / "libgomp.so"
     resident.write_bytes(b"")
     monkeypatch.setattr(languages, "DEFAULT_LOADER_DIRS", (str(loader_dir.resolve()),))
-    cc = _stub_driver(tmp_path, resident)
+    cc = stub_driver(tmp_path, resident)
     languages.driver_library_dir.cache_clear()
     assert languages.driver_library_dir(cc, ("libgomp.so",)) == ""
 
 
 def test_a_driver_that_cannot_place_the_name_earns_none(tmp_path: pathlib.Path) -> None:
     # What gcc answers for libomp.so: the name straight back, with no path in front of it.
-    cc = _stub_driver(tmp_path, "libomp.so")
+    cc = stub_driver(tmp_path, "libomp.so")
     languages.driver_library_dir.cache_clear()
     assert languages.driver_library_dir(cc, ("libomp.so",)) == ""
 
@@ -82,7 +83,7 @@ def test_a_library_only_library_path_can_reach_is_still_named(
     viewdir = tmp_path / "view" / "lib"
     viewdir.mkdir(parents=True)
     (viewdir / "libmimalloc.so").write_bytes(b"")
-    cc = _stub_driver(tmp_path, "libmimalloc.so")  # what a driver answers when it cannot place it
+    cc = stub_driver(tmp_path, "libmimalloc.so")  # what a driver answers when it cannot place it
     monkeypatch.setenv("LIBRARY_PATH", f"/nonexistent:{viewdir}")
     languages.driver_library_dir.cache_clear()
     assert languages.driver_library_dir(cc, ("libmimalloc.so",)) == str(viewdir)
@@ -90,6 +91,7 @@ def test_a_library_only_library_path_can_reach_is_still_named(
 
 
 @pytest.mark.parametrize("block", ["clang", "gcc"])
+@isolated
 def test_an_openmp_shared_library_loads_after_it_links(tmp_path: pathlib.Path, block: str) -> None:
     blocks = languages.compiler_names()
     if block not in blocks:
@@ -98,7 +100,7 @@ def test_an_openmp_shared_library_loads_after_it_links(tmp_path: pathlib.Path, b
     if languages.resolve_compiler(cc) is None:
         pytest.skip(f"{cc} is not installed on this host")
     src = tmp_path / "omp_probe.c"
-    src.write_text(_OMP_TU)
+    src.write_text(OMP_TU)
     lib = tmp_path / "libomp_probe.so"
     cmds = languages.build_shared_lib_commands("c", src, lib, compiler=block)
     failed, log = languages.run_build_commands(cmds, tmp_path)
