@@ -1,6 +1,7 @@
 """One :class:`KernelIR` per helper that survives inlining."""
 
 import ast
+import collections
 import copy
 import dataclasses
 from collections.abc import Sequence
@@ -40,10 +41,13 @@ from hpcagent_bench.translators.numpyto_common.frontend.helper_specialize import
     literal_call_arg,
     literal_key,
     rewrite_returns_to_outparam,
-    specialise_helpers_by_call_signature,
+    specialise_helper_by_call_signature,
 )
 from hpcagent_bench.translators.numpyto_common.frontend.inlining import HoistMultiStmtHelpers, unroll_const_list_loops
-from hpcagent_bench.translators.numpyto_common.frontend.module_constants import inline_module_constants
+from hpcagent_bench.translators.numpyto_common.frontend.module_constants import (
+    inline_module_constants,
+    materialize_const_arrays,
+)
 from hpcagent_bench.translators.numpyto_common.frontend.shapes import conflicting_rebind_shapes, local_array_def
 from hpcagent_bench.translators.numpyto_common.frontend.tuple_helpers import (
     InlineTupleHelperCalls,
@@ -128,7 +132,7 @@ def helper_call_sites(
 
 
 def helpers_callers_first(helper_defs: list[ast.FunctionDef], kernel_fn: ast.FunctionDef) -> list[ast.FunctionDef]:
-    """``helper_defs`` reordered so a helper is visited before every helper it calls.
+    """``helper_defs`` reordered so a helper is visited before every helper it calls (a cycle excepted).
 
     A helper's parameters are inferred from a call site, and when the only site sits in a SIBLING
     that sibling's descriptor tables are the resolution scope -- which exist only once the sibling
@@ -169,7 +173,17 @@ def helpers_callers_first(helper_defs: list[ast.FunctionDef], kernel_fn: ast.Fun
             visit(names[node.func.id])
     for h in helper_defs:
         visit(h)
-    return ordered
+    # The walk above puts a helper right after its FIRST caller; a second caller can still come later.
+    callers = {h.name: {c for c in calls if h.name in calls[c]} for h in helper_defs}
+    remaining = list(ordered)
+    result: list[ast.FunctionDef] = []
+    done: set[str] = set()
+    while remaining:
+        ready = next((h for h in remaining if callers[h.name] <= done), remaining[0])
+        remaining.remove(ready)
+        result.append(ready)
+        done.add(ready.name)
+    return result
 
 
 def abi_hostile_arguments(tree: ast.Module, hname: str) -> list[str]:
@@ -256,6 +270,7 @@ class HelperKirBuilder:
         "callsite_rewrites",
         "generation",
         "helper_defs",
+        "hidx_of",
         "keep_helpers",
         "kernel_fn",
         "local_arrays",
@@ -271,6 +286,8 @@ class HelperKirBuilder:
         self.parent = parent
         self.keep_helpers = keep_helpers
         self.helper_defs: list[ast.FunctionDef] = []
+        #: Index of each helper in definition order, which names its out-param; a clone takes the next.
+        self.hidx_of: dict[int, int] = {}
         self.out: list[KernelIR] = []
         #: {id(owner tree): {id(Assign): replacement stmts}}; call sites are not all in the kernel body.
         self.callsite_rewrites: dict[int, dict[int, list[ast.stmt]]] = {}
@@ -287,12 +304,13 @@ class HelperKirBuilder:
         # classifies the return as an array.
         HoistMultiStmtHelpers({h.name: h for h in self.helper_defs}).visit(self.kernel_fn)
         ast.fix_missing_locations(self.kernel_fn)
-        arr_by = {a.name: a for a in self.parent.arrays}
-        if specialise_helpers_by_call_signature(self.tree, self.kernel_fn, self.helper_defs, arr_by):
-            self.helper_defs = collect_called_helper_defs(self.tree, self.kernel_fn)
-        hidx_of = {id(h): i for i, h in enumerate(self.helper_defs)}
-        for hdef in helpers_callers_first(self.helper_defs, self.kernel_fn):
-            site = self.first_site(hdef, hidx_of[id(hdef)])
+        self.hidx_of = {id(h): i for i, h in enumerate(self.helper_defs)}
+        pending = collections.deque(helpers_callers_first(self.helper_defs, self.kernel_fn))
+        while pending:
+            hdef = pending.popleft()
+            # Split off the clones first: a clone is built next, as a second helper with its own literals.
+            pending.extendleft(reversed(self.split_by_call_signature(hdef)))
+            site = self.first_site(hdef, self.hidx_of[id(hdef)])
             if site is not None:
                 self.build_helper(site)
         for owner_fn, unused, unused, unused in self.scopes:
@@ -307,6 +325,17 @@ class HelperKirBuilder:
         defn_order = {h.name: i for i, h in enumerate(self.helper_defs)}
         self.out.sort(key=lambda ir: defn_order[ir.kernel_name])
         return self.out
+
+    def split_by_call_signature(self, hdef: ast.FunctionDef) -> list[ast.FunctionDef]:
+        """One clone of ``hdef`` per further set of constant arguments its calls pass, among the kernel and the
+        helpers built so far (its callers, all built before it); the clones follow it in ``helper_defs``."""
+        owners = [(fn, {a.name: a for a in arrays}) for fn, arrays, unused, unused in self.scopes]
+        clones = specialise_helper_by_call_signature(self.tree, hdef, owners)
+        at = self.helper_defs.index(hdef)
+        for offset, clone in enumerate(clones, start=1):
+            self.helper_defs.insert(at + offset, clone)
+            self.hidx_of[id(clone)] = len(self.hidx_of)
+        return clones
 
     def rewrote(self, owner: ast.FunctionDef) -> None:
         """``owner``'s tree changed: renumber it and retire the memo."""
@@ -383,6 +412,8 @@ class HelperKirBuilder:
                 )
         # The parent's folded names carry over: array params reuse the parent's folded shapes.
         site.hconsts = set(self.parent.inlined_consts) | set(inline_module_constants(self.tree, site.hfn, site.pnames))
+        # A lookup table the body reads is a local of the helper, as of the kernel; a free name would be a parameter.
+        materialize_const_arrays(self.tree, site.hfn, site.pnames)
         # The kernel body's desugars and const-list unroll; before mark_written_outputs so a
         # ufunc-out / roll rewrite counts as a write.
         native_desugar(site.hfn)

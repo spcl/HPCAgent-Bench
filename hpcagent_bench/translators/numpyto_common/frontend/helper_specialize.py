@@ -17,7 +17,7 @@ __all__ = [
     "literal_call_arg",
     "literal_key",
     "rewrite_returns_to_outparam",
-    "specialise_helpers_by_call_signature",
+    "specialise_helper_by_call_signature",
     "substitute_names",
 ]
 
@@ -37,10 +37,12 @@ def call_arg_key(arg: ast.expr, kernel_fn: ast.FunctionDef, arr_by: dict[str, Ar
     return resolved[0] if resolved is not None else ast.unparse(arg)
 
 
-def specialise_helpers_by_call_signature(
-    tree: ast.Module, kernel_fn: ast.FunctionDef, helper_defs: list[ast.FunctionDef], arr_by: dict[str, ArrayDesc]
-) -> bool:
-    """Give each distinct set of constant call arguments its own copy of the helper.
+def specialise_helper_by_call_signature(
+    tree: ast.Module,
+    hdef: ast.FunctionDef,
+    owners: list[tuple[ast.FunctionDef, dict[str, ArrayDesc]]],
+) -> list[ast.FunctionDef]:
+    """Give each distinct set of constant call arguments to ``hdef`` its own copy of the helper.
 
     A kept helper folds its call site's literal arguments into its body, so one emitted function
     serves exactly one set of them. resnet101 calls ``_conv2d(x, w, 1, 0)`` and
@@ -49,50 +51,44 @@ def specialise_helpers_by_call_signature(
     whose own call sites point at it, and every later pass sees two ordinary helpers each with one
     consistent signature.
 
-    Keyed on constant arguments and on the DECLARED shape of any array argument the parent names,
+    ``owners`` are every function that may call ``hdef`` -- the kernel and each helper already built,
+    with the descriptors of the arrays it names. The literals a built helper passes on exist only
+    after its own call arguments were folded into it, so a helper is split just before it is built,
+    once all its callers are.
+
+    Keyed on constant arguments and on the DECLARED shape of any array argument the owner names,
     since the body is specialised on both. A local rebound to several shapes across the body still
     refuses: which shape reaches which call site is not decidable before lowering, so there is
-    nothing to key on. Returns whether anything was cloned.
+    nothing to key on. Returns the clones, in order.
     """
+    pnames = [a.arg for a in hdef.args.args]
+    by_key: dict[tuple[tuple[str, ConstArg | tuple[str, ...]], ...], list[ast.Call]] = {}
+    for owner_fn, arr_by in owners:
+        for node in ast.walk(owner_fn):
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == hdef.name):
+                continue
+            if len(node.args) != len(pnames) or node.keywords:
+                return []  # an arity/keyword mismatch is a different failure; leave it be
+            key = tuple((pn, call_arg_key(a, owner_fn, arr_by)) for pn, a in zip(pnames, node.args))
+            by_key.setdefault(key, []).append(node)
     existing = {node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
-    # One walk, bucketed by callee, instead of re-walking the kernel for EVERY helper. Cloning
-    # below renames a site's func.id in place and appends the clone to ``tree``, so it neither adds
-    # nor removes Call nodes under ``kernel_fn`` -- the buckets stay valid across the loop, and a
-    # rename only ever touches the bucket of the helper being processed.
-    calls_by_name: dict[str, list[ast.Call]] = {}
-    for node in ast.walk(kernel_fn):
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-            calls_by_name.setdefault(node.func.id, []).append(node)
-    cloned = False
-    for hdef in helper_defs:
-        pnames = [a.arg for a in hdef.args.args]
-        sites = calls_by_name.get(hdef.name, [])
-        by_key: dict[tuple[tuple[str, ConstArg | tuple[str, ...]], ...], list[ast.Call]] = {}
-        for site in sites:
-            if len(site.args) != len(pnames) or site.keywords:
-                by_key.clear()  # an arity/keyword mismatch is a different failure; leave it be
-                break
-            key = tuple((pn, call_arg_key(a, kernel_fn, arr_by)) for pn, a in zip(pnames, site.args))
-            by_key.setdefault(key, []).append(site)
-        if len(by_key) < 2:
-            continue
-        # The first key keeps the original name, so a helper called one way is untouched.
-        for index, key in enumerate(list(by_key)[1:], start=2):
+    clones: list[ast.FunctionDef] = []
+    # The first key keeps the original name, so a helper called one way is untouched.
+    for index, key in enumerate(list(by_key)[1:], start=2):
+        name = f"{hdef.name}__s{index}"
+        while name in existing:
+            index += 1
             name = f"{hdef.name}__s{index}"
-            while name in existing:
-                index += 1
-                name = f"{hdef.name}__s{index}"
-            existing.add(name)
-            clone = copy.deepcopy(hdef)
-            clone.name = name
-            tree.body.append(clone)
-            for site in by_key[key]:
-                site.func.id = name
-            cloned = True
-    if cloned:
+        existing.add(name)
+        clone = copy.deepcopy(hdef)
+        clone.name = name
+        tree.body.append(clone)
+        clones.append(clone)
+        for site in by_key[key]:
+            site.func.id = name
+    if clones:
         ast.fix_missing_locations(tree)
-        ast.fix_missing_locations(kernel_fn)
-    return cloned
+    return clones
 
 
 def substitute_names(node: ast.Expression, consts: dict[str, ast.expr]) -> ast.Expression:

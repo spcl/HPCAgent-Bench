@@ -3879,8 +3879,9 @@ def hoist_nested_helper_calls(
     return out
 
 
-def rename_helper_to_fortran_safe(hkir: KernelIR) -> tuple[KernelIR, dict[str, str]]:
+def rename_helper_to_fortran_safe(hkir: KernelIR, siblings: list[KernelIR]) -> tuple[KernelIR, dict[str, str]]:
     """Fortran-safe rename of a captured helper KIR, mirroring the kernel-level rename so body and decl names match.
+    A call to a sibling helper nested in an expression is lifted into its own statement first, as in the kernel.
 
     Returns the renamed KIR alongside its case_map: a helper's ABI order and result name are read
     from the ORIGINAL (pre-rename) KIR by :func:`helper_abi_order`, so :func:`emit_fortran_helper`
@@ -3890,6 +3891,8 @@ def rename_helper_to_fortran_safe(hkir: KernelIR) -> tuple[KernelIR, dict[str, s
     htree = copy.deepcopy(hkir.tree)
     # Fortran-only IfExp->if/else hoist (see hoist_ifexp_stmts), same as the top-level kernel tree.
     htree.body, ifexp_temps = hoist_ifexp(htree.body)
+    hcall_temps: dict[str, str] = {}
+    htree.body = hoist_nested_helper_calls(htree.body, {h.kernel_name for h in siblings}, [0], hcall_temps)
     FortranRenameTemps(case_map=case_map).visit(htree)
     ast.fix_missing_locations(htree)
 
@@ -3926,6 +3929,9 @@ def rename_helper_to_fortran_safe(hkir: KernelIR) -> tuple[KernelIR, dict[str, s
     # Same branch-type join as the kernel tree, on the helper's own (fresh) local_dtypes dict --
     # emit_fortran_helper calls collect_implicit_locals on this KernelIR to declare its locals.
     record_ifexp_temp_dtypes(FortranBodyEmitter(renamed), ifexp_temps, safe)
+    helper_by_name = {h.kernel_name: h for h in siblings}
+    for temp, callee in hcall_temps.items():
+        renamed.local_dtypes[safe(temp)] = "int64" if helper_returns_int(helper_by_name[callee]) else "float64"
     return renamed, case_map
 
 
@@ -3941,7 +3947,7 @@ def emit_fortran_helper(
     call another, and its body emitter needs their call shapes to spell that as a ``call``.
     """
     abi_order, ret_orig = helper_abi_order(hkir)
-    hkir, case_map = rename_helper_to_fortran_safe(hkir)
+    hkir, case_map = rename_helper_to_fortran_safe(hkir, siblings or [])
     name = fortran_safe(hkir.kernel_name)
     # One order for definition and call; only the SPELLING is Fortran-specific. abi_order/ret_orig
     # are read on the PRE-rename KIR (see helper_abi_order's docstring), so they fold through the
