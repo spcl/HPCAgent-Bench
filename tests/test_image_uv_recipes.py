@@ -108,7 +108,7 @@ def test_the_extras_are_three_exclusive_framework_sets_that_each_carry_dev() -> 
     assert {"cpu", "amdgpu", "nvgpu"} <= set(extras)
     assert {"amd", "nvidia"}.isdisjoint(extras)
     for name in ("cpu", "amdgpu", "nvgpu"):
-        assert "hpcagent_bench[common,dev]" in extras[name], name
+        assert "hpcagent_bench[dev]" in extras[name], name
     conflicts = project["tool"]["uv"]["conflicts"]  # type: ignore[index]
     assert [{"extra": "cpu"}, {"extra": "amdgpu"}, {"extra": "nvgpu"}] in conflicts
     sources = project["tool"]["uv"]["sources"]  # type: ignore[index]

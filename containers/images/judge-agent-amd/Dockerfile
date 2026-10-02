@@ -495,7 +495,8 @@ RUN set -eux; \
       '        prefix: /opt/ofi-sdk' \
       '      buildable: false' \
       '  specs:' \
-      "  - llvm@${LLVM_VERSION} +clang +flang +mlir +polly +lld +offload +libomptarget targets=amdgpu,nvptx,x86" \
+      "  # -pipe: no /tmp/cc*.s files; 12 llvm units failed on truncated ones in the podman build (daint 4957900)." \
+      "  - llvm@${LLVM_VERSION} +clang +flang +mlir +polly +lld +offload +libomptarget targets=amdgpu,nvptx,x86 cflags=-pipe cxxflags=-pipe" \
       '  # ~slurm spelled out: left open, the concretizer reuses a cached +slurm build (654075),' \
       '  # which links one Slurm release, and the image must launch under any. NOT' \
       '  # pmi=pmix, which spack conflicts with +hydra: that would set --with-pm=no and remove' \
