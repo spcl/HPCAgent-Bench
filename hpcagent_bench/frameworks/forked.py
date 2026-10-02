@@ -236,7 +236,7 @@ PR_SET_PDEATHSIG = 1
 def reparented(parent_at_entry: int, parent_now: int) -> bool:
     """True when the pid that had us at entry is no longer our parent.
 
-    Not ``parent_now == 1``: a sealed worker (:mod:`experiments.seal_worker`) is PID 1 of its own
+    Not ``parent_now == 1``: a sealed worker (:mod:`hpcagent_bench.cluster.seal_worker`) is PID 1 of its own
     PID namespace, so its children legitimately read ``getppid() == 1``.
     """
     return parent_at_entry != parent_now
