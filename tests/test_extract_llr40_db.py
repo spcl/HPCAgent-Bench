@@ -22,7 +22,7 @@ ROWS = [
         "job": 636541,
         "row_kind": "submission",
         "setup": "a",
-        "benchmark": "k2",
+        "kernel": "k2",
         "speedup": 2.5,
         "tokens": None,
         "packet": "cpf",
@@ -33,7 +33,7 @@ ROWS = [
         "job": 636541,
         "row_kind": "call",
         "setup": "a",
-        "benchmark": "k1",
+        "kernel": "k1",
         "speedup": None,
         "tokens": 900,
         "packet": "",
@@ -51,7 +51,7 @@ def test_the_db_reads_back_as_the_rows_the_csv_holds(tmp_path: pathlib.Path) -> 
     assert list(from_db.columns) == list(from_csv.columns)
     # read_observations appends what each identity column recorded (recorded_<column>) after the extractor's fields.
     assert [c for c in from_db.columns if not c.startswith("recorded_")] == list(fields)
-    for column in ("benchmark", "setup", "job"):
+    for column in ("kernel", "setup", "job"):
         assert from_db[column].tolist() == from_csv[column].tolist(), column
     for column in ("speedup", "tokens"):
         pd.testing.assert_series_equal(from_db[column], from_csv[column], check_dtype=False)
@@ -79,5 +79,5 @@ def test_a_missing_numeric_cell_is_null_and_a_missing_text_cell_stays_empty(tmp_
     db = tmp_path / "obs.db"
     extract_llr40.write_db(db, extract_llr40.OBSERVATION_FIELDS, ROWS)
     with connect(db) as conn:
-        rows = conn.execute("SELECT tokens, speedup, packet FROM observations ORDER BY benchmark").fetchall()
+        rows = conn.execute("SELECT tokens, speedup, packet FROM observations ORDER BY kernel").fetchall()
     assert rows == [(900, None, ""), (None, 2.5, "cpf")]

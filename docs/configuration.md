@@ -73,13 +73,13 @@ runs from flags and the environment alone. A new machine is a file of the same s
 replaces the system's `gpus_per_node`, since Slurm takes one.
 
 The experiment submitter (`hpcagent_bench/cluster/submit.sh`) resolves the same way, through the same code
-(`hpcagent-bench job options`): `--partition`, `--account`, `--gpus-per-node`, `--system` and `--profile` over their
-variables over the system's entry. Its node count is the sum of its roles and its time limit comes from the roster
+(`hpcagent-bench job options`): `--partition`, `--account`, `--gpus-per-node`, `--system` and `--hardware` over their
+variables over the system's entry. Its node count is the sum of its roles and its time limit comes from the tag
 (`--time` overrides it), so neither is resolved. An experiment cannot run without an account and a GPU count: a
 missing one is an error naming its flag and its variable (`--account` / `SBATCH_ACCOUNT`, `--gpus-per-node` /
 `HPCAGENT_BENCH_JOB_GPUS_PER_NODE`). The partition may stay unset, which is the cluster's default partition. The
-hardware profile (`--profile`, `HPCAGENT_BENCH_PROFILE`, the entry's `profile`) is not an `sbatch` option: it names
-the GPU generation whose images and serving layers the experiment uses ([below](#hardware-profiles-are-not-site-values)).
+hardware (`--hardware`, `HPCAGENT_BENCH_HARDWARE`, the entry's `hardware`) is not an `sbatch` option: it names
+the GPU generation whose images and serving layers the experiment uses ([below](#hardware-is-not-a-site-value)).
 
 ## Variables
 
@@ -119,7 +119,7 @@ the GPU generation whose images and serving layers the experiment uses ([below](
 | `HPCAGENT_BENCH_IMAGE_PYTHON` | the image's EDF | the interpreter of every step inside a container |
 | `EDF_PATH` | `$HOME/.edf` | where container EDFs are looked up |
 | `CONTAINER_RUNTIME` | `ce` | how `cluster/services.sbatch` starts containers, through one seam (`cluster/container_runtime.sh`, [runtime.md](runtime.md)): `ce`, `apptainer`, `podman` or `docker` |
-| `HPCAGENT_BENCH_PROFILE`, `HPCAGENT_BENCH_MAX_TIME_HOURS` | the system's `profile`, `max_time_hours`; else unset | the hardware profile, and the longest time limit of the partition, which clamps a scaled wall clock (`TIME_SCALE`, minus `STAGING_HOURS`); unset, nothing is clamped |
+| `HPCAGENT_BENCH_HARDWARE`, `HPCAGENT_BENCH_MAX_TIME_HOURS` | the system's `hardware`, `max_time_hours`; else unset | the hardware, and the longest time limit of the partition, which clamps a scaled wall clock (`TIME_SCALE`, minus `STAGING_HOURS`); unset, nothing is clamped |
 | `HPCAGENT_BENCH_HOST` | `SLURMD_NODENAME`, else the host name | the node name recorded with each result |
 
 Every command runs `<python> -m hpcagent_bench...` (or `-m hpcagent_agent...` in an agent step) with one of the two
@@ -148,19 +148,19 @@ job runs the image's dace as baked, and another dace means another image: move t
 green) and rebuild. The installed dace records its commit in its PEP 610 `direct_url.json`, which the judge prints into the job log;
 canon columns stamp `dace <sha>` into `record.build` and `canon.db`'s `build` column.
 
-## Hardware profiles are not site values
+## Hardware is not a site value
 
-`mi300` and `mi200` in image and EDF names (`hpcagent-bench-agent-mi300-latest`), in `--profile mi200` and in
-`experiments/layers/profile-mi200.env` name a GPU generation, not a site's Slurm partition: they select the image
+`mi300` and `mi200` in image and EDF names (`hpcagent-bench-agent-mi300-latest`), in `--hardware mi200` and in
+`experiments/layers/hardware-mi200.env` name a GPU generation, not a site's Slurm partition: they select the image
 built for that architecture and its serving layers. The partition that hardware sits in (`--partition`) and the
 GPUs per node (`--gpus-per-node`) are job-shape values, so a cluster whose MI250X partition is called `gpu` runs
-`submit.sh --profile mi200 --partition gpu --gpus-per-node 8`, or names the three in a `systems.yaml` entry.
+`submit.sh --hardware mi200 --partition gpu --gpus-per-node 8`, or names the three in a `systems.yaml` entry.
 
-The Container Engine names its images by EDF, and the EDF name carries the profile. `layers/common.env` names the
-EDFs of its base profile (`HPCAGENT_BENCH_BASE_PROFILE=mi300`); `submit.sh` pins `HPCAGENT_BENCH_PROFILE` and, for
-any other profile, renames every `*_CE_ENV` to the `-<profile>-` EDF and pins `layers/profile-<profile>.env`
-(and `profile-<profile>-<model>.env` for a model served on our nodes). A recorded experiment on another profile
-must name it, so its rows never pool with the base profile's. Under the Container Engine no profile is an error;
+The Container Engine names its images by EDF, and the EDF name carries the hardware. `layers/common.env` names the
+EDFs of its base hardware (`HPCAGENT_BENCH_BASE_HARDWARE=mi300`); `submit.sh` pins `HPCAGENT_BENCH_HARDWARE` and, for
+any other hardware, renames every `*_CE_ENV` to the `-<hardware>-` EDF and pins `layers/hardware-<hardware>.env`
+(and `hardware-<hardware>-<model>.env` for a model served on our nodes). A recorded experiment on another hardware
+must name it, so its rows never pool with the base hardware's. Under the Container Engine no hardware is an error;
 the other runtimes name an image per role (`INFERENCE_IMAGE`, `BENCH_IMAGE`) and need none.
 
 ## The guard
@@ -169,5 +169,5 @@ the other runtimes name an image per role (`INFERENCE_IMAGE`, `BENCH_IMAGE`) and
 site emails, Slurm accounts, `#SBATCH` partition/account/node directives, node and login host names, literal
 partitions, one experiment's run directories and the site image registry, in live code (comments and docstrings may
 name a site to explain it). A file that legitimately carries such a value is allowlisted in the test with one
-reason: the CSCS site layer, the system profiles, the hardware-profile layer, this page, and the MI300A serving
+reason: the CSCS site layer, the system entries, the hardware layer, this page, and the MI300A serving
 recipe's partition check.

@@ -148,7 +148,7 @@ def load(path: pathlib.Path, prefix: str, card: cost.CostModel = cost.resolve())
     frame = frame.assign(
         model=frame["setup"].astype(str).map(study_tags.model_of),
         packet=packet,
-        skills=packet.map(lambda p: packets.has_part(p, "skills")),
+        skills=packet.map(lambda p: packets.has_part(p, "lang-skills")),
     )
     return frame[frame.model != "other"]
 
@@ -167,16 +167,16 @@ def treatment_frame(frame_all: pd.DataFrame, treatment: str) -> pd.DataFrame:
 
 
 def complete_side_setups(
-    control: pd.DataFrame, treated: pd.DataFrame, roster: Sequence[str], treatment: str, include_incomplete: bool
+    control: pd.DataFrame, treated: pd.DataFrame, tag_kernels: Sequence[str], treatment: str, include_incomplete: bool
 ) -> set[str]:
-    """The setups of ``control`` and ``treated`` that cover every kernel of ``roster``. A setup short
-    of the roster is dropped and named on stderr with its coverage, never silently."""
+    """The setups of ``control`` and ``treated`` that cover every kernel of ``tag``. A setup short
+    of the tag is dropped and named on stderr with its coverage, never silently."""
     combined = pd.concat([control, treated], ignore_index=True)
     if include_incomplete:
         return set(combined["setup"].dropna().astype(str).unique())
-    kept, dropped = population.complete_setups(combined, roster)
+    kept, dropped = population.complete_setups(combined, tag_kernels)
     for setup in sorted(dropped):
-        print(f"{treatment}: dropping {setup} ({dropped[setup]}/{len(roster)} roster kernels)", file=sys.stderr)
+        print(f"{treatment}: dropping {setup} ({dropped[setup]}/{len(tag_kernels)} tag kernels)", file=sys.stderr)
     return set(kept)
 
 
@@ -184,7 +184,7 @@ def one_treatment_panel(
     frame_all: pd.DataFrame,
     control: pd.DataFrame,
     treatment: str,
-    roster: Sequence[str],
+    tag_kernels: Sequence[str],
     include_incomplete: bool = False,
     repeats: population.RepeatPolicy = population.RepeatPolicy.LATEST,
     over: population.KernelPolicy = efficacy_figures.SPEEDUP_OVER,
@@ -195,7 +195,7 @@ def one_treatment_panel(
     treated = frame_all[frame_all.packet.map(lambda p: packets.has_part(p, treatment))]
     if control.empty or treated.empty:
         return None
-    keep = complete_side_setups(control, treated, roster, treatment, include_incomplete)
+    keep = complete_side_setups(control, treated, tag_kernels, treatment, include_incomplete)
     control = control[control["setup"].astype(str).isin(keep)]
     treated = treated[treated["setup"].astype(str).isin(keep)]
     if control.empty or treated.empty:
@@ -210,7 +210,7 @@ def one_treatment_panel(
 
 def shared_spelling(pair: tuple[str, str], packet: str) -> str:
     """``packet``'s own setup-name token when BOTH setups of ``pair`` carry it, else "" -- the token, not
-    the registry key, since a setup reads ``...-c-skills``."""
+    the registry key, since a setup reads ``...-c-lang-skills``."""
     suffixes = [study_tags.setup_suffix(setup) for setup in pair]
     for key, spelling in study_tags.packet_spellings():
         if key == packet and all(spelling in suffix for suffix in suffixes):
@@ -271,8 +271,12 @@ def pair_leg_label(pair: tuple[str, str], intervention: str, recorded_language: 
         # Several packets in one panel: the column names its delivery AND its packet ("C-CPF").
         return f"{language}-{study_tags.packet_short_name(study_tags.packet_of(pair[0]))}"
     resolved = packets.canonical(intervention)
-    extra = [shared_spelling(pair, key) for key in study_tags.order("packets") if key and key != resolved]
-    return " ".join([language, *[f"+{token}" for token in extra if token]])
+    shared = [
+        token for key in study_tags.order("packets") if key and key != resolved if (token := shared_spelling(pair, key))
+    ]
+    # A packet whose key is a dash-bounded part of a longer shared one (``lang`` in ``lang-skills``) is that one.
+    extra = [token for token in shared if not any(token != other and f"-{token}-" in f"-{other}-" for other in shared)]
+    return " ".join([language, *[f"+{token}" for token in extra]])
 
 
 def same_card(table: pd.DataFrame, card: cost.CostModel, source: pathlib.Path) -> None:
@@ -543,22 +547,22 @@ def spec_observations(spec: dict[str, str], default: Sequence[pathlib.Path]) -> 
 
 
 def spec_experiment(
-    spec: dict[str, str], default_observations: Sequence[pathlib.Path], default_study: str, card: cost.CostModel
+    spec: dict[str, str], default_observations: Sequence[pathlib.Path], default_experiment: str, card: cost.CostModel
 ) -> tuple[pd.DataFrame, pd.DataFrame, list[str]] | None:
-    """``(every row, the no-packet control, the roster)`` of the spec's ONE experiment, the roster
+    """``(every row, the no-packet control, the tag)`` of the spec's ONE experiment, the tag
     being every kernel any of its setups touched; ``None`` without a control."""
     observations = spec_observations(spec, default_observations)
-    frame_all = load(observations[0], spec.get("study", default_study), card)
+    frame_all = load(observations[0], spec.get("experiment", default_experiment), card)
     control = control_rows(frame_all)
     if control.empty:
         return None
-    return frame_all, control, sorted(frame_all["benchmark"].dropna().astype(str).unique())
+    return frame_all, control, sorted(frame_all["kernel"].dropna().astype(str).unique())
 
 
 def build_multi_comparison(
     spec: dict[str, str],
     default_observations: Sequence[pathlib.Path],
-    default_study: str,
+    default_experiment: str,
     repeats: population.RepeatPolicy,
     include_incomplete: bool,
     card: cost.CostModel,
@@ -571,14 +575,14 @@ def build_multi_comparison(
     one panel would need a control this function has no way to reconcile."""
     treatments = [t.strip() for t in spec["treatments"].split(",") if t.strip()]
     title = spec.get("title") or " / ".join(study_tags.packet_name(t) for t in treatments)
-    loaded = spec_experiment(spec, default_observations, default_study, card)
+    loaded = spec_experiment(spec, default_observations, default_experiment, card)
     if loaded is None:
         return None
-    frame_all, control, roster = loaded
+    frame_all, control, tag_kernels = loaded
     stats_by_treatment: dict[str, pd.DataFrame] = {}
     frame_by_treatment: dict[str, pd.DataFrame] = {}
     for treatment in treatments:
-        built = one_treatment_panel(frame_all, control, treatment, roster, include_incomplete, repeats, over, card)
+        built = one_treatment_panel(frame_all, control, treatment, tag_kernels, include_incomplete, repeats, over, card)
         if built is None:
             continue
         stats_by_treatment[treatment], frame_by_treatment[treatment] = built
@@ -590,7 +594,7 @@ def build_multi_comparison(
 def build_comparison(
     spec: dict[str, str],
     default_observations: Sequence[pathlib.Path],
-    default_study: str,
+    default_experiment: str,
     repeats: population.RepeatPolicy,
     include_incomplete: bool,
     card: cost.CostModel,
@@ -607,7 +611,7 @@ def build_comparison(
         return spec.get("title", ""), spec.get("intervention", ""), pd.DataFrame(), pd.DataFrame()
     if "treatments" in spec:
         return build_multi_comparison(
-            spec, default_observations, default_study, repeats, include_incomplete, card, over
+            spec, default_observations, default_experiment, repeats, include_incomplete, card, over
         )
     intervention = spec["intervention"]
     title = spec.get("title") or study_tags.packet_name(intervention)
@@ -625,12 +629,12 @@ def build_comparison(
         if frame.empty:
             return None
         return title, intervention, family_stats(table, intervention, setup_languages(frame_all)), frame
-    loaded = spec_experiment(spec, default_observations, default_study, card)
+    loaded = spec_experiment(spec, default_observations, default_experiment, card)
     if loaded is None:
         return None
-    frame_all, control, roster = loaded
+    frame_all, control, tag_kernels = loaded
     treatment = spec.get("treatment", intervention)
-    built = one_treatment_panel(frame_all, control, treatment, roster, include_incomplete, repeats, over, card)
+    built = one_treatment_panel(frame_all, control, treatment, tag_kernels, include_incomplete, repeats, over, card)
     if built is None:
         return None
     stats, frame = built
@@ -639,12 +643,12 @@ def build_comparison(
 
 def build_parser() -> argparse.ArgumentParser:
     """The command line: the observations, the route (``--comparison``, ``--pairs-csv`` or
-    ``--study`` + ``--treatment``) and the figure's look."""
+    ``--experiment`` + ``--treatment``) and the figure's look."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("observations", type=pathlib.Path, nargs="+", help="extracted observations; repeatable")
     parser.add_argument(
-        "--study",
-        dest="study",
+        "--experiment",
+        dest="experiment",
         default="",
         help="setup prefix naming ONE experiment; required without --pairs-csv/--comparison",
     )
@@ -684,7 +688,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=[],
         help="'title=...;intervention=...;treatment=...' or "
         "'title=...;intervention=...;pairs=<csv>[;control-label=...][;observations=a.csv,b.csv]"
-        "[;study=...][;comparators=<csv>;comparator-set=pluto:C,jax_cpu:C]'; repeatable -- joins "
+        "[;experiment=...][;comparators=<csv>;comparator-set=pluto:C,jax_cpu:C]'; repeatable -- joins "
         "into ONE row alongside --treatment, mixing a packet-suffix comparison and an explicit-pairs one "
         "in the same figure. comparators= draws compilers/frameworks (comparators.py's CSV) beside the "
         "models of a delivery on the speedup and solved rows",
@@ -711,7 +715,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         help=
-        "draw a setup even without a row for every roster kernel (default: dropped, named on stderr)",
+        "draw a setup even without a row for every tag kernel (default: dropped, named on stderr)",
     )  # fmt: skip
     parser.add_argument(
         "--speedup-over",
@@ -794,7 +798,7 @@ def comparison_panel(
             f"comparison {raw!r}: repeats={spec['repeats']!r} not in {[p.value for p in population.REPEAT_POLICIES]}"
         ) from None
     built = build_comparison(
-        spec, args.observations, args.study, repeats, args.include_incomplete, card, args.speedup_over
+        spec, args.observations, args.experiment, repeats, args.include_incomplete, card, args.speedup_over
     )
     if built is None and spec.get("pending"):
         # A comparison whose setups have not run yet is a STUB: its box, its axes and a "?" per
@@ -873,23 +877,23 @@ def figure_from_comparisons(
 def figure_from_treatments(
     args: argparse.Namespace, config: efficacy_figures.FigureConfig, card: cost.CostModel, row_width: float | None
 ) -> None:
-    """The ``--study`` route: each ``--treatment`` against the experiment's own no-packet control,
+    """The ``--experiment`` route: each ``--treatment`` against the experiment's own no-packet control,
     one figure for one treatment, a joined row for several."""
-    if not args.study:
-        raise SystemExit("--study names the experiment to split; pass it, or --pairs-csv/--comparison")
-    treatments = args.treatment or ["skills"]
-    frame_all = load(args.observations[0], args.study, card)
+    if not args.experiment:
+        raise SystemExit("--experiment names the experiment to split; pass it, or --pairs-csv/--comparison")
+    treatments = args.treatment or ["lang-skills"]
+    frame_all = load(args.observations[0], args.experiment, card)
     control = control_rows(frame_all)
     if control.empty:
-        raise SystemExit(f"no no-packet control rows for study {args.study!r}")
-    # Every kernel ANY setup of this experiment touched -- the roster :func:`complete_side_setups` gates
+        raise SystemExit(f"no no-packet control rows for experiment {args.experiment!r}")
+    # Every kernel ANY setup of this experiment touched -- the tag :func:`complete_side_setups` gates
     # coverage against.
-    roster = sorted(frame_all["benchmark"].dropna().astype(str).unique())
+    tag_kernels = sorted(frame_all["kernel"].dropna().astype(str).unique())
     args.table.parent.mkdir(parents=True, exist_ok=True)
     panels: list[tuple[str, str, pd.DataFrame, pd.DataFrame]] = []
     for treatment in treatments:
         built = one_treatment_panel(
-            frame_all, control, treatment, roster, args.include_incomplete, args.repeats, args.speedup_over, card
+            frame_all, control, treatment, tag_kernels, args.include_incomplete, args.repeats, args.speedup_over, card
         )
         if built is None:
             print(f"skipping {treatment!r}: empty side, or no (model, language) shared with control")
@@ -904,7 +908,7 @@ def figure_from_treatments(
         )
         panels.append((packets.label(treatment), treatment, stats, frame))
     if not panels:
-        raise SystemExit(f"no treatment of {treatments} produced a comparison for study {args.study!r}")
+        raise SystemExit(f"no treatment of {treatments} produced a comparison for experiment {args.experiment!r}")
     if len(panels) == 1:
         # A single comparison draws no name; the caption is its title.
         _title, treatment, stats, frame = panels[0]

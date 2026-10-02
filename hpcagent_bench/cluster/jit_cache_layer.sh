@@ -31,7 +31,7 @@ STAGE_PREFIX=".jit-layer-staging"
 # vllm_compile_cache.py. An entry another job compiled under a node-local root that no longer
 # exists is therefore not a cache MISS but a cache TRAP: the engine reads the manifest, opens the
 # recorded path and dies at startup with FileNotFoundError on artifact_compile_range_*, taking the
-# whole arm with it. Such an entry is dropped
+# whole setup with it. Such an entry is dropped
 # after seeding so the engine simply recompiles it.
 scrub_dead_entries() {
     local root="$1" manifest dir path

@@ -494,7 +494,7 @@ class Test:
         build = config.get_str("record.build", "") or None
         # `dace_cpu_parallel` is stored as backend + optimizer (split_flavor).
         column, flavor = split_flavor(self.frmwrk.info.get("simple_name", self.frmwrk.fname))
-        benchmark = self.bench.info["short_name"]
+        kernel = self.bench.info["short_name"]
         # The contract -d selects; an empty -d is absent.
         stored_datatype = datatype or "float64"
         with Session(results_engine(recording.db_path())) as session:
@@ -502,7 +502,7 @@ class Test:
                 session.add(
                     Result(
                         timestamp=timestamp,
-                        benchmark=benchmark,
+                        kernel=kernel,
                         # The only kernel-info field the results table carries (heatmap groups on it).
                         domain=self.bench.info.get("domain", ""),
                         preset=preset,

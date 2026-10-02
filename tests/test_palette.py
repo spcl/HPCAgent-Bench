@@ -180,18 +180,8 @@ def test_a_published_framework_colour_did_not_move(framework, expected):
 
 
 def test_an_alias_wears_what_it_aliases():
-    """A spelling is not an entity. `gpt-oss-120b` and `oss120b` are one model, so they must take
-    one shape and one colour -- otherwise a legend that happens to hold both draws it twice."""
-    assert palette.marker("gpt-oss-120b") == palette.marker("oss120b")
-    assert palette.model_color("qwen3.8") == palette.model_color("qwen38")
-
-
-def test_offload_is_a_device_and_a_language_not_a_packet():
-    """`device=gpu` with `language=c` IS OpenMP offload, so the old `openmp-offload` packet names
-    nothing the other columns do not already say. It resolves to the control, which keeps every row
-    recorded under it comparable to a CPU setup on the same packet axis."""
-    assert palette.color("openmp-offload") == palette.control_color()
-    assert palette.color("openmp-offload+lang-skills") == palette.color("lang-skills")
+    """A spelling is not an entity. `jax_cpu` and `jax` are one framework, so they must take one colour."""
+    assert palette.framework_color("jax_cpu") == palette.framework_color("jax")
 
 
 #: The interventions the PAPER's figures draw, each named with the figure it appears in. A reader
@@ -236,20 +226,13 @@ def test_every_intervention_git_scicomp_and_llrblind_name_has_a_registered_hue(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """A scope is an intervention: `kernel` (the bare kernel), `repo` (the whole repository) and
-    `no-score` (the blind condition) are compared exactly like a skill packet, so each has to come
+    `no-score-tool` (the blind condition) are compared exactly like a skill packet, so each has to come
     out of the same table with its own global hue instead of falling through to a hash colour."""
     with caplog.at_level(logging.WARNING, logger=palette.LOG.name):
-        chosen = {name: palette.color(name) for name in ("kernel", "repo", "no-score")}
+        chosen = {name: palette.color(name) for name in ("kernel", "repo", "no-score-tool")}
     assert "not registered" not in caplog.text
     assert palette.control_color() not in chosen.values()
     assert len(set(chosen.values())) == len(chosen), chosen
-
-
-def test_no_score_is_an_alias_of_the_registered_key_and_takes_no_hue_slot_of_its_own() -> None:
-    """One intervention, one colour. A SECOND key would hand the blind condition two hues and shift
-    every packet registered after it, repainting figures already drawn."""
-    assert palette.color("no-score") == palette.color("no-score-tool")
-    assert "no-score" not in palette.hue_order("packets")
 
 
 def test_every_registered_treatment_wears_its_own_shape_and_none_wears_the_control_circle() -> None:

@@ -14,7 +14,7 @@ The agent job's one-node judge only measures P = 1, 2, 4.
     python -m hpcagent_bench.harness.scaling_grade adhoc --kernel dist_softmax \\
         --source k.cpp --device-source k.hip --distribution dist.json --libraries rccl --out one.jsonl
 
-``worklist`` lists the final verified submission per agent episode (setup, kernel, run_id) of the
+``worklist`` lists the final verified submission per agent episode (setup, kernel, episode_id) of the
 results DBs (schema v1) under ``--runs`` with everything a replay needs (both source units,
 distribution, catalog libraries, scratch request); unreplayable rows and multi-submission episodes
 are reported (:func:`final_rows`). ``pending`` counts what a new auto-mode job would grade. ``adhoc``
@@ -182,15 +182,15 @@ def job_of(row: Mapping[str, Any]) -> int:
 def final_rows(
     rows: Iterable[Mapping[str, Any]], single_setups: frozenset[str] = frozenset()
 ) -> tuple[list[tuple[Mapping[str, Any], int]], list[str]]:
-    """The submission graded per agent episode (setup, kernel, ``run_id``), with the episode's row count,
+    """The submission graded per agent episode (setup, kernel, ``episode_id``), with the episode's row count,
     and one ``multi-submission:`` line per episode holding more than one.
 
-    Repeats are separate episodes. A resubmitted setup reuses its ``run_id``s: the latest job's rows
+    Repeats are separate episodes. A resubmitted setup reuses its ``episode_id``s: the latest job's rows
     decide. A single-submission setup's first row is the committed one (a later row predates the router's
     refusal); any other setup keeps the newest."""
     groups: dict[tuple[str, str, str], list[Mapping[str, Any]]] = {}
     for row in rows:
-        groups.setdefault((str(row["setup"]), str(row["benchmark"]), str(row["run_id"])), []).append(row)
+        groups.setdefault((str(row["setup"]), str(row["kernel"]), str(row["episode_id"])), []).append(row)
     finals: list[tuple[Mapping[str, Any], int]] = []
     lines: list[str] = []
     for key in sorted(groups):
@@ -211,7 +211,7 @@ def final_rows(
 
 def item_of(row: Mapping[str, Any], env: dict[str, str]) -> tuple[Item | None, str]:
     """``(item, "")`` for one final submission row, or ``(None, why it cannot be replayed)``."""
-    where = f"{row['db']} {row['run_id']} {row['benchmark']} {row['ts_ms']}"
+    where = f"{row['db']} {row['episode_id']} {row['kernel']} {row['ts_ms']}"
     if not row.get("hash"):
         return None, f"no stored source: {where}"
     if not row.get("distribution"):
@@ -249,7 +249,7 @@ def adhoc_item(args: argparse.Namespace) -> Item:
     label = f"adhoc-{args.kernel}"
     with contextlib.closing(results_db.open_db(db)) as conn:
         results_db.ensure_setup(conn, results_db.Setup("adhoc", args.language, "gpu"))
-        run = results_db.ensure_run(conn, "adhoc", label, None)
+        run = results_db.ensure_episode(conn, "adhoc", label, None)
         grade_id, ts = results_db.add_grade(conn, run, args.kernel, "probe", ts_ms=0, values={})
         results_db.store_source(conn, grade_id, "host", args.language, pathlib.Path(args.source).read_text("utf-8"))
         if args.device_source:
@@ -296,16 +296,16 @@ def grade(item: Item) -> Graded:
     cfg = from_config()
     submission = grade_under.submission_of(item)
     task = Task(
-        item.benchmark,
+        item.kernel,
         item.source_mode,
         submission.language,
-        residency=grading_residency(item.benchmark, submission.language),
+        residency=grading_residency(item.kernel, submission.language),
     )
     # At the leaderboard preset: the service default ``fuzzed`` holds ranges global_shapes cannot evaluate.
     refused = distribution_refusal(submission, task, config.get_str("mpi.leaderboard_preset", "XL"))
     if refused is not None:
         return Graded(GradeStatus.REFUSED, refused)
-    datatype = graded_datatype(BenchSpec.load(item.benchmark), cfg.datatype)
+    datatype = graded_datatype(BenchSpec.load(item.kernel), cfg.datatype)
     score, curves = score_ml_distributed(submission, task, datatype=datatype, repeat=cfg.repeat)
     status = GradeStatus.INCORRECT if not score.correct else (GradeStatus.GRADED if curves else GradeStatus.NO_CURVE)
     return Graded(status, score.detail, curves)
@@ -313,7 +313,7 @@ def grade(item: Item) -> Graded:
 
 def curve_lines(item: Item, graded: Graded) -> list[str]:
     """The printed curves: per law, one line per measured P with its nodes, time and efficiency."""
-    lines = [f"curve {item.setup} {item.benchmark} status={graded.status.value}"]
+    lines = [f"curve {item.setup} {item.kernel} status={graded.status.value}"]
     if not graded.curves:
         lines.append(f"  no curve: {graded.detail}"[:2000])
     for law in graded.curves:
@@ -333,8 +333,8 @@ def curve_lines(item: Item, graded: Graded) -> list[str]:
 
 #: ``(run label, kernel, ts, law)`` of every scaling law a grade DB holds a replay of.
 GRADED_LAWS = """
-SELECT r.label, o.benchmark, o.ts_ms, s.mode FROM scaling_grades s
-JOIN grades g ON g.id = s.grade_id JOIN grades o ON o.id = g.of_grade_id JOIN runs r ON r.id = o.run_id
+SELECT r.label, o.kernel, o.ts_ms, s.mode FROM scaling_grades s
+JOIN grades g ON g.id = s.grade_id JOIN grades o ON o.id = g.of_grade_id JOIN episodes r ON r.id = o.episode_id
 """
 
 
@@ -350,12 +350,12 @@ def graded_keys(out_dir: pathlib.Path) -> set[tuple[object, ...]]:
 
 def submission_key(item: Item) -> scaling_claims.Key:
     """``item``'s :data:`grade_under.KEY`: the submission, without the law."""
-    return (item.db, item.run_id, item.benchmark, item.ts_ms)
+    return (item.db, item.episode_id, item.kernel, item.ts_ms)
 
 
 def fully_graded(item: Item, done: set[tuple[object, ...]]) -> bool:
     """Whether every law of ``item`` is in ``done`` (:func:`graded_keys`)."""
-    return all((item.run_id, item.benchmark, item.ts_ms, law) in done for law in ML_LAWS)
+    return all((item.episode_id, item.kernel, item.ts_ms, law) in done for law in ML_LAWS)
 
 
 def grade_into(
@@ -429,7 +429,7 @@ def baseline_work(
     """The baseline points of ``items``' kernels no grade DB of ``out_dir`` holds; unplannable kernels are
     reported and left out."""
     planned: list[torch_dist_curve.Point] = []
-    for kernel in sorted({item.benchmark for item in items}):
+    for kernel in sorted({item.kernel for item in items}):
         try:
             planned.extend(torch_dist_curve.planned_points(kernel, counts, preset))
         except (KeyError, ValueError, OSError) as exc:
@@ -590,12 +590,12 @@ def parser() -> argparse.ArgumentParser:
     listing = sub.add_parser("worklist", help="list each agent episode's final submission of the scaling setups")
     listing.add_argument("--runs", action="append", required=True, type=pathlib.Path, help="experiment/job dir or DB")
     listing.add_argument("--env-dir", action="append", default=[], type=pathlib.Path, help="where .env.<setup> lives")
-    listing.add_argument("--study", dest="study", default="mlscale", help="the study of the scaling setups")
+    listing.add_argument("--study", dest="study", default="mlscale20", help="the study of the scaling setups")
     listing.add_argument("--out", required=True, type=pathlib.Path)
     waiting = sub.add_parser("pending", help="count the submissions an auto-mode job would still claim")
     waiting.add_argument("--runs", action="append", default=[], type=pathlib.Path, help="default: <runs>/mlscale-*")
     waiting.add_argument("--env-dir", action="append", default=[], type=pathlib.Path, help="where .env.<setup> lives")
-    waiting.add_argument("--study", dest="study", default="mlscale", help="the study of the scaling setups")
+    waiting.add_argument("--study", dest="study", default="mlscale20", help="the study of the scaling setups")
     waiting.add_argument("--out-dir", required=True, type=pathlib.Path)
     waiting.add_argument("--stale-s", type=float, default=scaling_claims.STALE_S, help="heartbeat age of a dead claim")
     adhoc = sub.add_parser("adhoc", help="a one-item worklist for a hand-written submission")
@@ -629,7 +629,7 @@ def parser() -> argparse.ArgumentParser:
         help="experiment/job dir or DB (default: <runs>/mlscale-*)",
     )
     auto.add_argument("--env-dir", action="append", default=[], type=pathlib.Path, help="where .env.<setup> lives")
-    auto.add_argument("--study", dest="study", default="mlscale", help="the study of the scaling setups")
+    auto.add_argument("--study", dest="study", default="mlscale20", help="the study of the scaling setups")
     auto.add_argument("--job", default=os.environ.get("SLURM_JOB_ID", f"local-{os.getpid()}"), help="the claimer's job")
     auto.add_argument("--max-items", type=int, default=0, help="claims per job over its life (0 = no cap)")
     auto.add_argument("--deadline", type=float, default=0.0, help="epoch s the job ends (0 = none)")
@@ -709,7 +709,11 @@ def unclaimed_points(
     claims = out_dir / scaling_claims.CLAIM_DB
     held = scaling_claims.held_keys(claims, stale_s) if claims.is_file() else set()
     # Claim keys carry the grade node's (arch, image) digest; match by kernel, law and P only.
-    claimed = {(bench, run_id.rsplit(":", 1)[0]) for db, run_id, bench, _ts in held if db == torch_dist_curve.SOURCE}
+    claimed = {
+        (bench, episode_id.rsplit(":", 1)[0])
+        for db, episode_id, bench, stamp_ms in held
+        if db == torch_dist_curve.SOURCE
+    }
     return [point for point in missing if (point.kernel, f"{point.law}:P={point.ranks}") not in claimed]
 
 

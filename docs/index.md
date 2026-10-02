@@ -6,6 +6,7 @@ The project overview and quick start are in the repository README; these pages h
 :caption: Running the benchmark
 :maxdepth: 1
 
+concepts
 launch
 runtime
 configuration

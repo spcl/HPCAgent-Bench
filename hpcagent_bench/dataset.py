@@ -37,7 +37,7 @@ __all__ = [
     "extract",
     "fuse",
     "keep_owned",
-    "keep_roster",
+    "keep_tag",
     "load",
     "main",
     "now",
@@ -55,7 +55,7 @@ LOG = logging.getLogger(__name__)
 EXTRACTED_AT: str = "extracted_at"
 
 #: Column naming the study the rows were selected for.
-STUDY_COLUMN: str = "experiment_key"
+STUDY_COLUMN: str = "study_key"
 
 #: Columns this module adds to whatever the extractor recorded.
 PROVENANCE: tuple[str, ...] = (EXTRACTED_AT, STUDY_COLUMN)
@@ -78,8 +78,8 @@ class Provenance:
     setups: tuple[str, ...]
     frozen_jobs: tuple[str, ...]
     extracted_at: str
-    #: Rows on a kernel outside the selection's roster (a wave that served more than the tag).
-    dropped_off_roster: int = 0
+    #: Rows on a kernel outside the selection's tag (a wave that served more than the tag).
+    dropped_off_tag: int = 0
 
     def report(self) -> str:
         """One block naming every count, for a caller to print beside the file it just wrote."""
@@ -89,7 +89,7 @@ class Provenance:
             f"live rows      {self.live_rows}",
             f"frozen rows    {self.frozen_rows} from {len(self.frozen_jobs)} job(s) whose directory is gone",
             f"dropped        {self.dropped_retired} retired, {self.dropped_foreign} not this study's, "
-            f"{self.dropped_off_roster} off its roster",
+            f"{self.dropped_off_tag} off its tag",
             f"setups ({len(self.setups)})      {', '.join(self.setups)}",
         ]
         return "\n".join(lines)
@@ -113,17 +113,17 @@ def keep_owned(frame: "pd.DataFrame", selection: experiments.Selection) -> tuple
     return frame[mine & ~retired], int((mine & retired).sum()), int((~mine).sum())
 
 
-def keep_roster(frame: "pd.DataFrame", selection: experiments.Selection) -> tuple["pd.DataFrame", int]:
-    """``frame`` cut to the kernels of the selection's roster, with the drop count.
+def keep_tag(frame: "pd.DataFrame", selection: experiments.Selection) -> tuple["pd.DataFrame", int]:
+    """``frame`` cut to the kernels of the selection's tag, with the drop count.
 
     A wave may serve more kernels than the tag its experiment names (the SciComp waves served
     an earlier 40-kernel set plus later additions; the experiments name scicomp40), and every figure counts a setup
-    over the kernels its rows touch, so an off-roster row would enter every aggregate. A row with no
-    benchmark, or a selection with no roster, is kept."""
-    if frame.empty or not selection.roster or "benchmark" not in frame.columns:
+    over the kernels its rows touch, so an off-tag row would enter every aggregate. A row with no
+    benchmark, or a selection with no tag, is kept."""
+    if frame.empty or not selection.tag_kernels or "kernel" not in frame.columns:
         return frame, 0
-    names = frame["benchmark"].fillna("").astype(str)
-    off = names.ne("") & ~names.isin(selection.roster)
+    names = frame["kernel"].fillna("").astype(str)
+    off = names.ne("") & ~names.isin(selection.tag_kernels)
     return frame[~off], int(off.sum())
 
 
@@ -138,8 +138,8 @@ def extract(
 
     One extractor (:mod:`hpcagent_bench.observations_extract`), because there were two and they
     disagreed: the other wrote the plural table name into its row kind and no ``task`` rows at all,
-    so a frame from it carried no token cost and every ``row_kind == "task"`` rule silently did
-    nothing. ``runs`` (a results database, or run-root globs) replaces the selection's run roots."""
+    so a frame from it carried no token cost and every ``row_kind == "episode"`` rule silently did
+    nothing. ``episodes`` (a results database, or run-root globs) replaces the selection's run roots."""
     import pandas as pd
 
     got = observations_extract.extract(
@@ -183,7 +183,7 @@ def fuse(
     frozen, frozen_retired, frozen_foreign = keep_owned(frozen, selection)
     parts = [part for part in (live, frozen) if not part.empty]
     frame = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
-    frame, off_roster = keep_roster(frame, selection)
+    frame, off_tag = keep_tag(frame, selection)
     # Stamped HERE, on the result, not on the way in: a caller that built its own frame still gets
     # provenance, and re-stamping an already-stamped frame is the same value.
     if not frame.empty:
@@ -205,7 +205,7 @@ def fuse(
         setups=setups,
         frozen_jobs=jobs,
         extracted_at=extracted_at,
-        dropped_off_roster=off_roster,
+        dropped_off_tag=off_tag,
     )
 
 
@@ -234,7 +234,7 @@ def load(path: pathlib.Path) -> "pd.DataFrame":
     """An observations ``.db`` or ``.csv`` as the frame a figure draws.
 
     One entry point for both, so a figure never learns which it was handed, and the cleaning rules
-    (foreign kernel, pre-relaunch, cancelled, ``-clean`` superseded) run exactly once, here."""
+    (foreign kernel, pre-relaunch, cancelled) run exactly once, here."""
     return studies.read_observations(path)
 
 

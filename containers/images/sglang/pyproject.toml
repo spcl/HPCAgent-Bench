@@ -1,4 +1,4 @@
-# What the sglang image adds to the vendor venv /opt/venv: flydsl at the version the arms run (the base
+# What the sglang image adds to the vendor venv /opt/venv: flydsl at the version the setups run (the base
 # carries an older one) and cupy built for HIP. Synced with `uv sync --frozen --inexact` so that nothing
 # else in the vendor environment is removed; the Dockerfile skips numpy, which the vendor environment owns
 # and served results are compared against. Not a package: nothing here is built or installed.

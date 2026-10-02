@@ -355,7 +355,7 @@ def false_positive_rate(population: np.ndarray, n: int) -> tuple[float, float, f
         pytest.param(4, 0.0, math.nan, 1.0, id="n=4 -- withheld, an llr40 skill pair"),
         pytest.param(10, 0.08, 0.90, 0.0, id="n=10"),
         pytest.param(20, 0.08, 0.90, 0.0, id="n=20"),
-        pytest.param(39, 0.08, 0.90, 0.0, id="n=39 -- the focus40 roster"),
+        pytest.param(39, 0.08, 0.90, 0.0, id="n=39 -- the focus40 tag"),
     ],
 )
 def test_the_significance_decision_holds_its_nominal_level_on_the_real_delta_shape(

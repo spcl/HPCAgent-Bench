@@ -65,6 +65,6 @@ def test_the_trajectory_writer_leaves_the_envelope_null(tmp_path: pathlib.Path) 
     """record_trajectory has no request body: the two columns stay NULL."""
     db = str(tmp_path / "r.db")
     point = CallPoint(round=1, tokens=5, speedup=2.0, correct=True, status="ok")
-    assert recording.record_trajectory(TASK, (point,), run_id="t", path=db) == 1
+    assert recording.record_trajectory(TASK, (point,), episode_id="t", path=db) == 1
     row = one_row(db)
     assert (row["distribution"], row["workspace_bytes"]) == (None, None)

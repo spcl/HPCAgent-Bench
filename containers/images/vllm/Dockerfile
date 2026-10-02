@@ -6,7 +6,7 @@
 #   containers/images/build.sh vllm
 #
 # THIN ON PURPOSE, like vllm-cuda/Dockerfile: the official vLLM ROCm release image already carries
-# the engine, a ROCm torch, triton, aiter and every tool-call / reasoning parser the campaign names.
+# the engine, a ROCm torch, triton, aiter and every tool-call / reasoning parser the experiment names.
 # This file pins that base by digest, bakes in the repo's tuned MoE configs, and GATES what the
 # serving configs need. One vLLM release on every platform: the same v0.28.0 as vllm-cuda.
 #

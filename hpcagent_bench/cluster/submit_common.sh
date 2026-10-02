@@ -33,13 +33,6 @@ symbolic_path() {
 # hms <seconds> -> HH:MM:SS, for a sbatch --time computed off a deadline.
 hms() { printf '%02d:%02d:%02d\n' "$(( $1 / 3600 ))" "$(( $1 % 3600 / 60 ))" "$(( $1 % 60 ))"; }
 
-# clean_suffix <CLEAN> -> "-clean" when CLEAN=1, else "". A clean re-run keeps the setup's recorded
-# identity (study, model, language, device, packet); only the setup, job, env and problems names
-# carry the suffix, and the analysis prefers the -clean setup.
-clean_suffix() {
-    [[ "$1" == 1 ]] && printf -- '-clean' || printf ''
-}
-
 # BUDGET_SCALE=<N> scales a rerun's budget (the owed "budget" class). TOKEN_SCALE and TIME_SCALE
 # default to it and scale tokens and wall clock separately (4x wall clock may not fit the partition).
 BUDGET_SCALE=${BUDGET_SCALE:-1}
@@ -50,14 +43,14 @@ TIME_SCALE=${TIME_SCALE:-${BUDGET_SCALE}}
 JOB_FLAGS=()
 
 # job_options [args...] -- `hpcagent-bench job options` (hpcagent_bench/cluster/systems.py), the ONE resolver of the
-# job's sbatch fields, profile and time limit: the flags submit.sh was given (parse_job_flags), else the
+# job's sbatch fields, hardware and time limit: the flags submit.sh was given (parse_job_flags), else the
 # environment, else the system's systems.yaml entry.
 job_options() {
     "${HPCAGENT_BENCH_HOST_PYTHON:?source scripts/host_python.sh}" -m hpcagent_bench job options "${JOB_FLAGS[@]}" "$@"
 }
 
-# parse_job_flags "$@" -- the job flags of a submitter: --system, --account, --partition, --gpus-per-node, --profile,
-# --time (the job's time limit, else computed from the roster) and --nice, each as `--flag value` or `--flag=value`.
+# parse_job_flags "$@" -- the job flags of a submitter: --system, --account, --partition, --gpus-per-node, --hardware,
+# --time (the job's time limit, else computed from the tag) and --nice, each as `--flag value` or `--flag=value`.
 # The resolver's flags go to JOB_FLAGS, over the environment and systems.yaml; any other word is an error.
 parse_job_flags() {
     local flag value
@@ -72,10 +65,10 @@ parse_job_flags() {
             shift 2
         fi
         case "${flag}" in
-            --system | --account | --partition | --gpus-per-node | --profile) JOB_FLAGS+=("${flag}" "${value}") ;;
+            --system | --account | --partition | --gpus-per-node | --hardware) JOB_FLAGS+=("${flag}" "${value}") ;;
             --time) TIME_LIMIT="${value}" ;;
             --nice) NICE="${value}" ;;
-            *) echo "unknown argument ${flag} (job flags: --system --account --partition --gpus-per-node --profile --time --nice)" >&2; return 2 ;;
+            *) echo "unknown argument ${flag} (job flags: --system --account --partition --gpus-per-node --hardware --time --nice)" >&2; return 2 ;;
         esac
     done
 }
@@ -125,7 +118,7 @@ budget_env_suffix() {
 }
 
 # setup_file_suffix -> budget_env_suffix plus "-<KERNELS_FILE stem>" when a kernels file narrows the
-# roster: the suffix of BOTH a setup's env and its problems file, so a subset or scaled submission can
+# tag: the suffix of BOTH a setup's env and its problems file, so a subset or scaled submission can
 # never overwrite the canonical files a PENDING job of the same setup still reads.
 setup_file_suffix() {
     printf '%s' "$(budget_env_suffix)"
@@ -200,60 +193,63 @@ forms_missing() {
 }
 
 # stage_base_env <base> <setup> <study> <stamp> <staged-out> [extra sed -e expr...]
-# The setup's base (<base>:<model>, setups.yaml) rendered flat, with EXPERIMENT_SETUP and RUN_ROOT
+# The setup's base (<base>:<model>, setups.yaml) rendered flat, with SETUP and RUN_ROOT
 # rewritten. Written to <staged-out>, never the final setup env: a later gate that bails leaves no file
 # that looks complete.
 stage_base_env() {
-    local base="$1" setup="$2" study="$3" stamp="$4" out="$5" flat
+    local base="$1" setup="$2" experiment="$3" stamp="$4" out="$5" flat
     shift 5
     flat="$(render_env "${base}")" || { echo "stage_base_env: cannot render base env ${base}" >&2; return 2; }
-    sed -e "s|^EXPERIMENT_SETUP=.*|EXPERIMENT_SETUP=${setup}|" \
-        -e "s|^RUN_ROOT=.*|RUN_ROOT=\${SCRATCH:?}/hpcagent-bench-runs/${study}-${stamp}|" \
+    sed -e "s|^SETUP=.*|SETUP=${setup}|" \
+        -e "s|^RUN_ROOT=.*|RUN_ROOT=\${SCRATCH:?}/hpcagent-bench-runs/${experiment}-${stamp}|" \
         "$@" <<<"${flat}" >"${out}"
 }
 
-# The hardware profile (--profile, HPCAGENT_BENCH_PROFILE, the system's `profile`) names the GPU generation whose
-# images and serving layers a setup uses: `hpcagent-bench-agent-<profile>-latest`, layers/profile-<profile>.env.
-# It is not a Slurm partition (--partition is). layers/common.env names the profile its EDF names and model layers
-# carry (HPCAGENT_BENCH_BASE_PROFILE); any other profile renames them and pins its own layers.
+# The hardware (--hardware, HPCAGENT_BENCH_HARDWARE, the system's `hardware`) names the GPU generation whose
+# images and serving layers a setup uses: `hpcagent-bench-agent-<hardware>-latest`, layers/hardware-<hardware>.env.
+# It is not a Slurm partition (--partition is). layers/common.env names the hardware its EDF names and model layers
+# carry (HPCAGENT_BENCH_BASE_HARDWARE); any other hardware renames them and pins its own layers.
 
-# apply_profile <env> <model> -- pins the job's GPUS_PER_NODE (the resolved --gpus-per-node, which every role's GPU
-# split divides) and HPCAGENT_BENCH_PROFILE into <env>. A profile other than the base renames every *_CE_ENV from its
-# -<base>- EDF to the -<profile>- one, then pins layers/profile-<profile>.env and, for a model served on our nodes, layers/profile-<profile>-<model>.env over
+# apply_hardware <env> <model> -- pins the job's GPUS_PER_NODE (the resolved --gpus-per-node, which every role's GPU
+# split divides) and HPCAGENT_BENCH_HARDWARE into <env>. A hardware other than the base renames every *_CE_ENV from its
+# -<base>- EDF to the -<hardware>- one, then pins layers/hardware-<hardware>.env and, for a model served on our nodes, layers/hardware-<hardware>-<model>.env over
 # it. A hosted model (INFERENCE_SOURCE=service) runs no engine here, so it needs no serving layer. Refuses:
-# no profile under the Container Engine (the EDF names carry it), a profile with no layer, a served model with no
-# serving config on it, and a recorded study that does not name it, so its rows never pool with the base's.
-apply_profile() {
-    local env="$1" model="$2" profile base runtime layer kv study gpus
+# no hardware under the Container Engine (the EDF names carry it), a hardware with no layer, a served model with no
+# serving config on it, and a given RECORD_STUDY that does not name it (the default study gets -<hardware> appended), so its rows never pool with the base's.
+apply_hardware() {
+    local env="$1" model="$2" hardware base runtime layer kv study gpus
     gpus="$(job_options --require gpus_per_node --print gpus_per_node)" || return 2
     pin_env_kv "${env}" "GPUS_PER_NODE=${gpus}" || return 2
-    profile="$(job_options --print profile)" || return 2
-    base="$(sed -n 's/^HPCAGENT_BENCH_BASE_PROFILE=//p' "${env}" | tail -1)"
+    hardware="$(job_options --print hardware)" || return 2
+    base="$(sed -n 's/^HPCAGENT_BENCH_BASE_HARDWARE=//p' "${env}" | tail -1)"
     runtime="$(sed -n 's/^CONTAINER_RUNTIME=//p' "${env}" | tail -1)"
-    if [[ -z "${profile}" ]]; then
+    if [[ -z "${hardware}" ]]; then
         [[ "${runtime:-ce}" != ce ]] || {
-            echo "apply_profile: no hardware profile; the EDF names carry it: pass --profile <p> (or --system <s>), or set HPCAGENT_BENCH_PROFILE" >&2
+            echo "apply_hardware: no hardware; the EDF names carry it: pass --hardware <hardware> (or --system <s>), or set HPCAGENT_BENCH_HARDWARE" >&2
             return 2
         }
         return 0
     fi
-    pin_env_kv "${env}" "HPCAGENT_BENCH_PROFILE=${profile}" || return 2
-    [[ "${profile}" != "${base}" ]] || return 0
+    pin_env_kv "${env}" "HPCAGENT_BENCH_HARDWARE=${hardware}" || return 2
+    [[ "${hardware}" != "${base}" ]] || return 0
     local dir="${EXPERIMENTS_DIR}/layers"
-    local layers=("${dir}/profile-${profile}.env")
-    grep -qx 'INFERENCE_SOURCE=service' "${env}" || layers+=("${dir}/profile-${profile}-${model}.env")
-    sed -i -E "s/^([A-Z_]*CE_ENV=.*)-${base}-/\1-${profile}-/" "${env}"
+    local layers=("${dir}/hardware-${hardware}.env")
+    grep -qx 'INFERENCE_SOURCE=service' "${env}" || layers+=("${dir}/hardware-${hardware}-${model}.env")
+    sed -i -E "s/^([A-Z_]*CE_ENV=.*)-${base}-/\1-${hardware}-/" "${env}"
     for layer in "${layers[@]}"; do
-        [[ -f "${layer}" ]] || { echo "apply_profile: no ${layer##*/}: ${model} has no ${profile} config" >&2; return 2; }
+        [[ -f "${layer}" ]] || { echo "apply_hardware: no ${layer##*/}: ${model} has no ${hardware} config" >&2; return 2; }
         while IFS= read -r kv; do
             pin_env_kv "${env}" "${kv}" || return 2
         done < <(grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "${layer}")
     done
     study="$(sed -n 's/^HPCAGENT_BENCH_RECORD_STUDY=//p' "${env}" | tail -1)"
-    [[ "${study}" == *"${profile}"* ]] || {
-        echo "apply_profile: study '${study}' does not name ${profile}; ${profile} rows need their own study" >&2
-        return 2
-    }
+    if [[ "${study}" != *"${hardware}"* ]]; then
+        [[ -z "${RECORD_STUDY_GIVEN:-}" ]] || {
+            echo "apply_hardware: study '${study}' does not name ${hardware}; ${hardware} rows need their own study" >&2
+            return 2
+        }
+        pin_env_kv "${env}" "HPCAGENT_BENCH_RECORD_STUDY=${study}-${hardware}" || return 2
+    fi
 }
 
 # apply_flavor <env> -- CE_IMAGE_FLAVOR=native (containers/images/images.env) renames every agent and
@@ -268,11 +264,11 @@ apply_flavor() {
     esac
 }
 
-# finalize_staged_env <staged> <env> -- the hardware profile, the image flavor, then the rename. A
+# finalize_staged_env <staged> <env> -- the hardware, the image flavor, then the rename. A
 # bailed gate leaves neither a staged nor a final file looking complete.
 finalize_staged_env() {
     local staged="$1" env="$2"
-    apply_profile "${staged}" "$(sed -n 's/^HPCAGENT_BENCH_RECORD_MODEL=//p' "${staged}" | tail -1)" \
+    apply_hardware "${staged}" "$(sed -n 's/^HPCAGENT_BENCH_RECORD_MODEL=//p' "${staged}" | tail -1)" \
         || { rm -f "${staged}"; return 2; }
     apply_flavor "${staged}" || { rm -f "${staged}"; return 2; }
     mv -- "${staged}" "${env}"

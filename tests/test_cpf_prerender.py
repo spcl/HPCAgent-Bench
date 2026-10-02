@@ -3,7 +3,7 @@
 """A shard's rank must finish and record a verdict for every kernel it owns, never kill its siblings.
 
 A job died because a rank returned nonzero for a per-kernel render failure inside its own
-shard; srun's kill-on-bad-exit took the other ranks down mid-render, and the roster-wide check that
+shard; srun's kill-on-bad-exit took the other ranks down mid-render, and the tag-wide check that
 ran afterward mistook their unfinished kernels for misses. The fix moves failure reporting to the
 recorded verdict (:mod:`hpcagent_bench.cpf_cache`) and leaves the rank's own exit status to signal
 only an internal error.
@@ -190,10 +190,10 @@ def test_require_toolchain_rejects_a_missing_blas_root(tmp_path: pathlib.Path, m
         ([], 3),
     ],
 )
-def test_shard_partitions_the_roster_with_no_overlap_and_no_gap(kernels: list[str], ranks: int) -> None:
-    """One rank per core renders a roster of many small kernels (prerender_cpf.sbatch's
+def test_shard_partitions_the_tag_with_no_overlap_and_no_gap(kernels: list[str], ranks: int) -> None:
+    """One rank per core renders a tag of many small kernels (prerender_cpf.sbatch's
     CPF_RANKS=96 CPF_CORES_PER_RANK=1 mode). Two ranks racing to render the SAME kernel is wasted
-    GPU/CPU time at best; a kernel no rank owns is a silent gap the roster-wide check after the
+    GPU/CPU time at best; a kernel no rank owns is a silent gap the tag-wide check after the
     shard would misreport as a render failure rather than a sharding bug."""
     shards = [cpf_prerender.shard(kernels, rank, ranks) for rank in range(ranks)]
     owners: dict[str, list[int]] = {}

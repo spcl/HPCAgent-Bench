@@ -10,7 +10,7 @@ them has been wrong in some experiment already:
 * the treatment key RESOLVES for the setup shape the launcher submits (hip / amd / multinode),
   since a packet that raises does so after the allocation is held;
 * it stages the RCCL page and nothing else, because every further page is a second variable;
-* the two setups are TOLD APART in the recorded identity -- ``runs.packet``, whose key the registry
+* the two setups are TOLD APART in the recorded identity -- ``setups.packet``, whose key the registry
   resolves to one definition -- or the DB cannot separate them after the fact.
 """
 
@@ -65,7 +65,7 @@ def test_the_treatment_refuses_a_language_its_device_never_runs() -> None:
 
 
 def test_the_two_setups_are_distinct_in_the_recorded_identity() -> None:
-    """``runs.packet`` groups a query, and the registry holds what each key MEANS. Two setups whose key
+    """``setups.packet`` groups a query, and the registry holds what each key MEANS. Two setups whose key
     or whose resolved definition coincided would pool into one population."""
     definitions = {
         key: json.dumps(

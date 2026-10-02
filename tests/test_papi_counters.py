@@ -40,7 +40,7 @@ requires_counters = pytest.mark.hw_counters
 
 
 def unarmable_events(metric: str) -> set:
-    """The events ``metric`` would want that this CPU cannot setup -- what a refusal must NAME."""
+    """The events ``metric`` would want that this CPU cannot arm -- what a refusal must NAME."""
     wanted = {papi.event_name(term) for candidate in papi.METRICS[metric] for term in candidate}
     return wanted.difference(papi.available_events() if CAN_COUNT else ())
 
@@ -434,7 +434,7 @@ def test_availability_comes_from_papi_and_is_a_strict_subset_of_the_presets() ->
 
 @requires_papi
 def test_at_least_one_metric_resolves_on_a_real_cpu() -> None:
-    """And on a CPU that setups nothing, every metric is refused WITH the events it wanted -- the
+    """And on a CPU that arms nothing, every metric is refused WITH the events it wanted -- the
     absence is enumerated, never a silent empty table."""
     resolved = {m: papi.resolve(m, papi.available_events()) for m in papi.METRICS}
     if not CAN_COUNT:
@@ -549,7 +549,7 @@ def test_the_count_covers_the_timed_call_and_nothing_else(monkeypatch) -> None:
 
     NOT skipped on a CPU with no fp-op preset, which is what a hosted runner is: there the metric
     is honestly unavailable, and the assertion is the other half of the contract -- count_metric
-    refuses it by name, NAMES the events it could not setup, and the parent survives to ask for the
+    refuses it by name, NAMES the events it could not arm, and the parent survives to ask for the
     next metric. Both halves run everywhere: the refusal is forced with an empty event set, so a
     machine with counters walks the same ladder a machine without them walks for real.
     """
@@ -645,7 +645,7 @@ def test_a_threaded_kernel_is_counted_on_every_thread_and_degrades_out_loud(monk
     still answers, with the master thread's share and a STATED scope. A silent fraction of the
     kernel's work is the one outcome that must be impossible.
 
-    And where the CPU cannot setup an fp-op event at all -- a hosted runner -- BOTH runs come back
+    And where the CPU cannot arm an fp-op event at all -- a hosted runner -- BOTH runs come back
     refused by name, with the events they wanted. That is what "degrades out loud" means when
     there is nothing to count: a named absence, never a crash and never a fraction.
     """
@@ -1048,7 +1048,7 @@ def test_a_serial_kernel_is_refused_as_not_openmp_rather_than_reported_balanced(
     """A single thread has no distribution. Reporting 1.00x for it would be a perfectly balanced
     parallel kernel and a serial one rendered identically.
 
-    A CPU that cannot setup a cycle counter has no distribution EITHER, and the two absences are
+    A CPU that cannot arm a cycle counter has no distribution EITHER, and the two absences are
     different answers: ``not_openmp`` names the kernel, ``events_unsupported`` names the machine.
     Both are asserted, the second on every host through an emptied event set, because a refusal
     that picked the wrong one sends a reader to fix the wrong thing."""
@@ -1063,7 +1063,7 @@ def test_a_serial_kernel_is_refused_as_not_openmp_rather_than_reported_balanced(
     # thread knobs when the library loads; setting them inside this test did not reach it in the
     # MI300A hardware run, four BLAS threads burned cycles and the report read balanced.
     # Library threads are real parallel work; the refusal under test is about a kernel that starts
-    # none. A hosted runner cannot setup a counter and never gets here.
+    # none. A hosted runner cannot arm a counter and never gets here.
     assert "#pragma" not in SERIAL_GEMM, "the serial fixture still carries the OpenMP pragma"
     have_cpi = armable(*papi.PER_THREAD_METRICS)  # before the patch below empties the event set
     binding = binding_from_spec(BenchSpec.load("gemm"))

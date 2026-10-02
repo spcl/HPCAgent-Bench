@@ -37,7 +37,7 @@ BASE_ENV="${SERVE_BASE_ENV:-experiment:${MODEL}}"
 SERVE_ENV="${SERVE_ENV_FILE:-${REPO_DIR}/experiments/serve-only.env}"
 [[ -f "${SERVE_ENV}" ]] || { echo "missing env file ${SERVE_ENV}" >&2; exit 2; }
 
-# Campaign values first, role split second: last assignment wins, as the submit scripts do it.
+# Experiment values first, role split second: last assignment wins, as the submit scripts do it.
 # Flatten the base once, source and record the flat form.
 . "${SCRIPT_DIR}/env_layers.sh"
 BASE_FLAT="$(render_env "${BASE_ENV}")" || exit 2
@@ -52,7 +52,7 @@ INFERENCE_NODES="${INFERENCE_NODES:-1}"
 INFERENCE_MODE="${INFERENCE_MODE:-replicas}"
 VLLM_PORT="${VLLM_PORT:-8000}"
 SERVED_MODEL="${VLLM_SERVED_MODEL:-hpcagent-bench-vllm}"
-# same precedence the experiment path uses, so one key covers both; 2400 could not hold a
+# same precedence the cluster path uses, so one key covers both; 2400 could not hold a
 # GLM-5.3 start, whose slowest stage alone reaches 4200 s before KV alloc and graph capture
 READY_TIMEOUT="${VLLM_READY_TIMEOUT_SECONDS:-${AGENT_READY_TIMEOUT_SECONDS:-7200}}"
 RUN_ROOT="${RUN_ROOT:?RUN_ROOT must name a writable directory}"

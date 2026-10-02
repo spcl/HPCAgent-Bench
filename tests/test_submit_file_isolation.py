@@ -19,7 +19,7 @@ BASH = shutil.which("bash")
 assert BASH is not None
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-EXPERIMENTS = REPO / "hpcagent_bench" / "cluster"
+CLUSTER_DIR = REPO / "hpcagent_bench" / "cluster"
 
 
 def stub(directory: pathlib.Path, name: str, body: str) -> None:
@@ -36,7 +36,7 @@ def run_probe(
     stub(tmp_path / "bin", "squeue", queue_body)
     stub(tmp_path / "bin", "sacct", sacct_body)
     probe = tmp_path / "probe.sh"
-    probe.write_text(f"set -eu\n. {EXPERIMENTS / 'submit_common.sh'}\n{script}\n")
+    probe.write_text(f"set -eu\n. {CLUSTER_DIR / 'submit_common.sh'}\n{script}\n")
     return subprocess.run(
         [BASH, str(probe)],
         env={"PATH": f"{tmp_path / 'bin'}:/usr/bin:/bin", "USER": "tester"},
@@ -61,7 +61,7 @@ def test_a_kernels_file_subset_env_diverges_from_the_canonical_name(tmp_path: pa
     whole mechanism a subset submission relies on to avoid the canonical filename."""
     path = f"{tmp_path / 'bin'}:/usr/bin:/bin"
     result = subprocess.run(
-        [BASH, "-c", f'. {EXPERIMENTS / "submit_common.sh"}; echo "[$(setup_file_suffix)]"'],
+        [BASH, "-c", f'. {CLUSTER_DIR / "submit_common.sh"}; echo "[$(setup_file_suffix)]"'],
         env={"PATH": path},
         capture_output=True,
         text=True,
@@ -71,20 +71,20 @@ def test_a_kernels_file_subset_env_diverges_from_the_canonical_name(tmp_path: pa
     assert result.stdout.strip() == "[]"
 
     result = subprocess.run(
-        [BASH, "-c", f'. {EXPERIMENTS / "submit_common.sh"}; echo "[$(setup_file_suffix)]"'],
-        env={"PATH": path, "KERNELS_FILE": "owed/arm-budget.txt"},
+        [BASH, "-c", f'. {CLUSTER_DIR / "submit_common.sh"}; echo "[$(setup_file_suffix)]"'],
+        env={"PATH": path, "KERNELS_FILE": "owed/setup-budget.txt"},
         capture_output=True,
         text=True,
         timeout=10,
         check=True,
     )
-    assert result.stdout.strip() == "[-arm-budget]"
+    assert result.stdout.strip() == "[-setup-budget]"
 
 
 def test_dry_run_refuses_to_overwrite_a_file_a_pending_job_reads(tmp_path: pathlib.Path) -> None:
     """A candidate env path that a PENDING job reads as CLUSTER_ENV_FILE (sacct's SubmitLine, mocked
     here) is refused and left untouched, whatever SUBMIT says."""
-    target = tmp_path / ".env.llr-focus40-kimi27sglang-c-clean"
+    target = tmp_path / ".env.llr40-kimi27sglang-c"
     target.write_text("PENDING-JOBS-OWN-CONTENT\n")
     result = run_probe(
         tmp_path,
@@ -102,9 +102,9 @@ def test_a_problems_file_referenced_through_a_pending_jobs_own_env_is_also_refus
     """PROBLEMS_FILE inside the referenced env is a bare name relative to ITS OWN directory --
     resolved against that, not matched by basename alone, so this only fires for the SAME file the
     queued job will actually read."""
-    queued_env = tmp_path / ".env.other-arm"
-    queued_env.write_text("PROBLEMS_FILE=problems-other-arm-owed.jsonl\n")
-    problems = tmp_path / "problems-other-arm-owed.jsonl"
+    queued_env = tmp_path / ".env.other-setup"
+    queued_env.write_text("PROBLEMS_FILE=problems-other-setup-owed.jsonl\n")
+    problems = tmp_path / "problems-other-setup-owed.jsonl"
     result = run_probe(
         tmp_path,
         f'refuse_if_queue_references "{tmp_path}/.env.unrelated" "{problems}"',
@@ -121,7 +121,7 @@ def test_a_same_named_problems_file_in_a_different_directory_does_not_collide(tm
     firing -- only the resolved, same-directory path collides."""
     real_dir = tmp_path / "real-experiments"
     real_dir.mkdir()
-    queued_env = real_dir / ".env.some-other-real-arm"
+    queued_env = real_dir / ".env.some-other-real-setup"
     queued_env.write_text("PROBLEMS_FILE=problems-git-scicomp-owed.jsonl\n")
 
     sandbox_dir = tmp_path / "sandbox"
@@ -138,7 +138,7 @@ def test_a_same_named_problems_file_in_a_different_directory_does_not_collide(tm
 
 def test_an_empty_queue_passes_through(tmp_path: pathlib.Path) -> None:
     """No PENDING/RUNNING job at all (a stub squeue that prints nothing) never blocks a submission."""
-    target = tmp_path / ".env.some-arm"
+    target = tmp_path / ".env.some-setup"
     result = run_probe(tmp_path, f'refuse_if_queue_references "{target}"', "true", "true")
     assert result.returncode == 0, result.stdout + result.stderr
 
@@ -155,7 +155,7 @@ def run_common(tmp_path: pathlib.Path, script: str, extra_env: dict[str, str]) -
         **extra_env,
     }
     return subprocess.run(
-        [BASH, "-c", f". {EXPERIMENTS / 'submit_common.sh'}\n{script}"],
+        [BASH, "-c", f". {CLUSTER_DIR / 'submit_common.sh'}\n{script}"],
         env=env,
         capture_output=True,
         text=True,
@@ -260,7 +260,7 @@ def run_submit_setup_job_probe(
     """Source setup_nodes.sh + submit_common.sh, call submit_setup_job against a stub sbatch that
     records every call's argv, and return (the agent job's argv, submit_setup_job's own stdout line
     for it, the argv of every other sbatch call)."""
-    env_file = tmp_path / ".env.some-arm"
+    env_file = tmp_path / ".env.some-setup"
     env_file.write_text("INFERENCE_NODES=2\nAGENT_NODES=1\nJUDGE_NODES=1\n" + env_text)
     calls = tmp_path / "sbatch-calls"
     calls.mkdir()
@@ -272,8 +272,8 @@ def run_submit_setup_job_probe(
     probe = tmp_path / "probe.sh"
     probe.write_text(
         "set -eu\n"
-        f". {EXPERIMENTS / 'setup_nodes.sh'}\n"
-        f". {EXPERIMENTS / 'submit_common.sh'}\n"
+        f". {CLUSTER_DIR / 'setup_nodes.sh'}\n"
+        f". {CLUSTER_DIR / 'submit_common.sh'}\n"
         f'cd "{tmp_path}"\n'
         f'submit_setup_job "{env_file}" some-setup 01:00:00\n'
     )

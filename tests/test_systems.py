@@ -47,10 +47,10 @@ def test_the_cluster_name_picks_the_system_and_an_unknown_cluster_picks_none() -
 
 def test_a_cluster_with_no_entry_runs_from_flags_and_the_environment_alone() -> None:
     resolved = systems.resolve(
-        None, {"gpus_per_node": "2"}, {"SBATCH_ACCOUNT": "proj", "SBATCH_PARTITION": "gpu"}, systems.EXPERIMENT_FIELDS
+        None, {"gpus_per_node": "2"}, {"SBATCH_ACCOUNT": "proj", "SBATCH_PARTITION": "gpu"}, systems.JOB_FIELDS
     )
     assert (resolved.system, resolved.values) == ("", {"partition": "gpu", "account": "proj", "gpus_per_node": "2"})
-    assert resolved.extras == {"profile": "", "max_time_hours": ""}
+    assert resolved.extras == {"hardware": "", "max_time_hours": ""}
     assert systems.resolve(None, {}, {}).values == {}
 
 
@@ -74,11 +74,11 @@ def test_an_unknown_system_names_the_known_ones() -> None:
 
 def test_a_missing_required_field_names_its_flag_and_its_variable() -> None:
     with pytest.raises(SystemExit, match=r"no account: pass --account or set \$SBATCH_ACCOUNT"):
-        systems.resolve(None, {"gpus_per_node": "4"}, {}, systems.EXPERIMENT_FIELDS, systems.EXPERIMENT_REQUIRED)
+        systems.resolve(None, {"gpus_per_node": "4"}, {}, systems.JOB_FIELDS, systems.JOB_REQUIRED)
     with pytest.raises(
         SystemExit, match=r"no gpus per node: pass --gpus-per-node or set \$HPCAGENT_BENCH_JOB_GPUS_PER_NODE"
     ):
-        systems.resolve(None, {"account": "p"}, {}, systems.EXPERIMENT_FIELDS, systems.EXPERIMENT_REQUIRED)
+        systems.resolve(None, {"account": "p"}, {}, systems.JOB_FIELDS, systems.JOB_REQUIRED)
 
 
 def test_the_experiment_job_takes_only_its_own_fields_and_a_systems_gpu_count_fills_the_rest() -> None:
@@ -86,18 +86,18 @@ def test_the_experiment_job_takes_only_its_own_fields_and_a_systems_gpu_count_fi
         "beverin-mi200",
         {"account": "p", "cpus_per_task": "99"},
         {"HPCAGENT_BENCH_JOB_NODES": "3"},
-        systems.EXPERIMENT_FIELDS,
-        systems.EXPERIMENT_REQUIRED,
+        systems.JOB_FIELDS,
+        systems.JOB_REQUIRED,
     )
     assert resolved.values == {"partition": "mi200", "gpus_per_node": "8", "account": "p"}
-    assert resolved.profile == "mi200"
+    assert resolved.hardware == "mi200"
 
 
-def test_the_profile_is_its_flag_then_its_variable_then_the_systems() -> None:
-    assert systems.resolve("beverin", {}, {}).profile == "mi300"
-    assert systems.resolve("beverin", {}, {"HPCAGENT_BENCH_PROFILE": "mi200"}).profile == "mi200"
-    assert systems.resolve("beverin", {"profile": "x"}, {"HPCAGENT_BENCH_PROFILE": "mi200"}).profile == "x"
-    assert systems.resolve(None, {}, {}).profile == ""
+def test_the_hardware_is_its_flag_then_its_variable_then_the_systems() -> None:
+    assert systems.resolve("beverin", {}, {}).hardware == "mi300"
+    assert systems.resolve("beverin", {}, {"HPCAGENT_BENCH_HARDWARE": "mi200"}).hardware == "mi200"
+    assert systems.resolve("beverin", {"hardware": "x"}, {"HPCAGENT_BENCH_HARDWARE": "mi200"}).hardware == "x"
+    assert systems.resolve(None, {}, {}).hardware == ""
 
 
 def test_the_longest_time_limit_is_the_systems_unless_set_and_has_no_default() -> None:
@@ -107,13 +107,13 @@ def test_the_longest_time_limit_is_the_systems_unless_set_and_has_no_default() -
     assert systems.resolve(None, {}, {}).extras["max_time_hours"] == ""
 
 
-def test_the_options_command_prints_one_option_per_line_or_the_profile(
+def test_the_options_command_prints_one_option_per_line_or_the_hardware(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.setattr(systems, "site_environment", lambda environ: {"SBATCH_ACCOUNT": "proj"})
     assert systems.options_main(["--system", "beverin", "--partition", "gpu"]) == 0
     assert capsys.readouterr().out.splitlines() == ["--partition=gpu", "--account=proj", "--gpus-per-node=4"]
-    assert systems.options_main(["--system", "beverin-mi200", "--print", "profile"]) == 0
+    assert systems.options_main(["--system", "beverin-mi200", "--print", "hardware"]) == 0
     assert capsys.readouterr().out == "mi200\n"
     assert systems.options_main(["--print", "max_time_hours"]) == 0
     assert capsys.readouterr().out == "\n"

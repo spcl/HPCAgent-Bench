@@ -134,7 +134,7 @@ def test_an_unoffered_catalog_request_is_a_400_and_does_not_spend_the_submission
                 "rank": RANK,
                 "source": "void gemm_fp64(void) {}\n",
                 "libraries": ["not-a-real-library"],
-                "run_id": "test-catalog-refusal",
+                "episode_id": "test-catalog-refusal",
             },
         )
         assert status == 400, body

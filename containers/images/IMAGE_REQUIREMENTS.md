@@ -175,7 +175,7 @@ it got.
 
 ## Serving images
 
-Each rebuilt inference image is smoked against the campaign's serving arguments (the
+Each rebuilt inference image is smoked against the experiment's serving arguments (the
 `experiments/layers/model-*.env` layers) before promotion, not just "the server started".
 
 * **SGLang (beverin):** `/opt/venv/bin/python3` (named by the EDF's `HPCAGENT_BENCH_IMAGE_PYTHON`), aiter with its JIT

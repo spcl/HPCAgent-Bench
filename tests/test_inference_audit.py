@@ -105,7 +105,7 @@ def paired_change_false_positive_rate(population: np.ndarray, n: int, trials: in
     [
         pytest.param(4, 0.08, id="n=4 -- the llr40 oss120b/qwen38 skill pairs"),
         pytest.param(10, 0.08, id="n=10"),
-        pytest.param(39, 0.08, id="n=39 -- the focus40 roster"),
+        pytest.param(39, 0.08, id="n=39 -- the focus40 tag"),
     ],
 )
 def test_the_efficacy_significance_flag_holds_its_nominal_level_on_skewed_paired_deltas(
@@ -128,7 +128,7 @@ def test_the_efficacy_significance_flag_holds_its_nominal_level_on_skewed_paired
     [
         pytest.param(6, 0.08, id="n=6 -- MIN_PAIRS_FOR_INTERVAL"),
         pytest.param(20, 0.08, id="n=20"),
-        pytest.param(39, 0.08, id="n=39 -- the focus40 roster"),
+        pytest.param(39, 0.08, id="n=39 -- the focus40 tag"),
     ],
 )
 def test_the_hodges_lehmann_interval_holds_its_nominal_level_on_skewed_paired_deltas(
@@ -232,7 +232,7 @@ def test_the_reported_effect_and_the_p_value_describe_the_same_parameter(
 
 SIGNED_RANK_SIZES = [
     pytest.param(35, 219.0, 0.118674, 0.117769, id="n=35 -- the llr40 C-vs-Fortran pairing"),
-    pytest.param(40, 293.0, 0.118149, 0.117369, id="n=40 -- the focus40 roster"),
+    pytest.param(40, 293.0, 0.118149, 0.117369, id="n=40 -- the focus40 tag"),
     pytest.param(97, 1943.0, 0.119557, 0.119225, id="n=97 -- the pooled model/kernel pairing"),
     pytest.param(210, 9705.0, 0.119812, 0.119658, id="n=210 -- above EXACT_MAX_N"),
 ]

@@ -69,7 +69,7 @@ Every figure in the HPCAgent-Bench papers follows these rules. A figure that bre
    interval method, n and the undelivered cross.
 10. **Minor ticks.** Log axes, linear axes in log2 units and the tasks-completed row carry unlabelled
     minor ticks and a faint minor grid (`style.minor_ticks`, `style.MinorLocator`). Other linear axes
-    and category axes carry none. A count over a fixed roster is a census: a mark with no interval.
+    and category axes carry none. A count over a fixed tag is a census: a mark with no interval.
 11. **Deliverable** = PDF, 150 dpi PNG beside it, the CSV behind every mark, and the exact CLI. A bad
     figure is saved, shown with bad-vs-good, and asked about; never silently redrawn.
 
@@ -106,7 +106,7 @@ python -m hpcagent_bench.studies \
     --study llrblind --out data/observations.csv
 ```
 
-`--runs` is a run-root glob and `--study` a setup prefix; both repeat. Keep waves in a suffix
+`--runs` is a run-root glob and `--study` the recorded study (an identity column); both repeat. Keep waves in a suffix
 (`<experiment>-w2`) so one prefix matches every wave. Check the printed summary: a missing setup means a
 wrong prefix. From Python: `hpcagent_bench.studies.observations(globs, study=[...])`.
 
@@ -152,7 +152,7 @@ Run any script with `-h` for its flags.
 Quick looks at one experiment:
 
 ```bash
-python statistics/plot_setup_summary.py data/observations.csv --study llr40v11 \
+python statistics/plot_setup_summary.py data/observations.csv --experiment llr40v11 \
     --out figures/setups.pdf --table data/setups.csv
 ```
 
@@ -177,16 +177,16 @@ export CANON_DB=/path/to/results/canon.db         # canon sweep, table `canon`
 | `$AR/experiments/<track>/data/<track>.{csv,db}` | observations | extraction, above |
 | `$AR/experiments/<track>/tables/*_billed.csv` | pair tables | `statistics/paired_setups.py` |
 | `$CANON_DB` | median time per (compiler column, kernel), validated only | canon sweep |
-| roster file | kernels a track is scored over, one per line | derived below |
+| tag file | kernels a track is scored over, one per line | derived below |
 
-Derive the llr40 roster from the kernels its control setup was served:
+Derive the llr40 tag from the kernels its control setup was served:
 
 ```bash
 python3 -c "
 import pandas as pd
 d = pd.read_csv('$AR/experiments/llr-cpu/data/llr-cpu.csv', low_memory=False)
-print('\n'.join(sorted(set(d[d.setup == 'llr40-kimi27sglang-c'].benchmark.astype(str)))))
-" > roster-llr40.txt
+print('\n'.join(sorted(set(d[d.setup == 'llr40-kimi27sglang-c'].kernel.astype(str)))))
+" > tag-llr40.txt
 ```
 
 Build a pair table (one per comparison; `--policy solved` is the default and is stamped on the CSV,
@@ -204,14 +204,14 @@ python statistics/paired_setups.py --observations "$AR/experiments/llr-cpu/data/
 
 ```bash
 python3 statistics/plot_llr40_compilers.py \
-    --canon-db "$CANON_DB" --roster-file roster-llr40.txt \
+    --canon-db "$CANON_DB" --tag-file tag-llr40.txt \
     --canon-columns pluto,dace_cpu_canonicalize,dace_gpu_canonicalize,ppcg_hip \
     --offset 0.6 --out figures/compilers-per-kernel
 ```
 
 - Numba is the denominator (the 1x line, `--baseline` changes it). Pluto and PPCG are comparators.
 - Filled mark = measured. Hollow crossed mark = no validated result, drawn at 1x, kept as a row of
-  `-kernels.csv` (`canon.roster_speedups`), left out of the summary; read the `n` column of
+  `-kernels.csv` (`canon.tag_speedups`), left out of the summary; read the `n` column of
   `-summary.csv` before quoting a geomean.
 - `--observations` adds every model's CPF setup. `--offset` spreads a kernel's series across its slot;
   0 stacks them.
@@ -261,8 +261,8 @@ verdicts are the stars; the figure recomputes only the drawn point through
 | `placeholders=Fortran` | empty column for a leg with no data yet |
 | `pending=kimi27sglang,qwen38` | empty column per model with no pair yet; `?` with `--mark-pending` |
 | `difference=HIP:qwen38,...` | grey bar between a named pair's two marks, with its factor |
-| `comparators=<csv>` | compiler/framework marks from a `kernel,comparator,device,numba_ms,ms,speedup` table (one row per roster kernel, `speedup` blank where invalid) |
-| `comparator-set=pluto:C,jax_cpu:C` | which comparators the panel draws and under which delivery; no `:group` = the panel's first delivery. One mark each: geomean of `speedup` over the valid kernels, 95% log-t interval from `summary.MIN_PAIRS_FOR_INTERVAL` kernels; solved row = valid / roster; nothing on the cost row. Numbers go to `<table>-comparators.csv` |
+| `comparators=<csv>` | compiler/framework marks from a `kernel,comparator,device,numba_ms,ms,speedup` table (one row per tag kernel, `speedup` blank where invalid) |
+| `comparator-set=pluto:C,jax_cpu:C` | which comparators the panel draws and under which delivery; no `:group` = the panel's first delivery. One mark each: geomean of `speedup` over the valid kernels, 95% log-t interval from `summary.MIN_PAIRS_FOR_INTERVAL` kernels; solved row = valid / tag; nothing on the cost row. Numbers go to `<table>-comparators.csv` |
 
 A single comparison can also use top-level flags:
 
@@ -300,12 +300,12 @@ control's grey, dashed, beside the models; `--no-torch-dist` leaves it out.
 
 ```bash
 OBS="$AR/data/mlscale_observations.csv"
-python statistics/plot_scaling.py "$OBS" --study mlscale --out figures/scaling --table data/scaling.csv
-python statistics/plot_scaling.py "$OBS" --study mlscale --figure efficiency --out figures/scaling
-python statistics/plot_scaling.py "$OBS" --study mlscale --figure speedup --out figures/scaling
-python statistics/plot_scaling.py "$OBS" --study mlscale --figure per-kernel --mode strong \
+python statistics/plot_scaling.py "$OBS" --experiment mlscale --out figures/scaling --table data/scaling.csv
+python statistics/plot_scaling.py "$OBS" --experiment mlscale --figure efficiency --out figures/scaling
+python statistics/plot_scaling.py "$OBS" --experiment mlscale --figure speedup --out figures/scaling
+python statistics/plot_scaling.py "$OBS" --experiment mlscale --figure per-kernel --mode strong \
     --quantity efficiency --out figures/scaling
-python statistics/plot_scaling.py "$OBS" --study mlscale --figure summary --out figures/scaling
+python statistics/plot_scaling.py "$OBS" --experiment mlscale --figure summary --out figures/scaling
 python statistics/plot_scaling.py "$OBS" --setup 'mlscale-qwen38-hip' --width 5.5 --out figures/scaling-qwen38
 ```
 

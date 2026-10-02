@@ -60,7 +60,7 @@ refuse() {
 
 use_preset() {  # sets the PRESET_* values; key file, triton cache and run root derive from the name
     case "${PRESET:-}" in
-        mi300)  # the qwen38 campaign line (llrbase-c:qwen38, experiments/arms.yaml); 0.306 is node-wide on the APU
+        mi300)  # the qwen38 experiment line (llrbase-c:qwen38, experiments/setups.yaml); 0.306 is node-wide on the APU
             PRESET_PARTITION=mi300 PRESET_GPUS=4 PRESET_ENGINE=sglang PRESET_MODEL=Qwen/Qwen3.8-27B-FP8
             PRESET_EDF=hpcagent-bench-sglang-mi300-latest PRESET_LEGS="tp4:0.306"
             PRESET_FLAGS=(--attention-backend aiter)

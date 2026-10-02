@@ -52,9 +52,9 @@ __all__ = [
 #: The claim DB's file name in the out dir. Not ``scaling-grade-*.db``: graded_keys globs those.
 CLAIM_DB: str = "scaling-claims.db"
 CLAIM_DDL: str = (
-    "CREATE TABLE IF NOT EXISTS claims (db TEXT, run_id TEXT, benchmark TEXT, ts_ms INTEGER, "
+    "CREATE TABLE IF NOT EXISTS claims (db TEXT, episode_id TEXT, kernel TEXT, ts_ms INTEGER, "
     "claimer TEXT, job TEXT, gang INTEGER, state TEXT, claimed_at REAL, heartbeat REAL, done_at REAL, "
-    "PRIMARY KEY (db, run_id, benchmark, ts_ms))"
+    "PRIMARY KEY (db, episode_id, kernel, ts_ms))"
 )
 #: How often a claimer's heartbeat is written, and after how long without one a claim is stale.
 HEARTBEAT_S: float = 60.0
@@ -109,9 +109,9 @@ def held_keys(path: pathlib.Path, stale_s: float = STALE_S, now: float | None = 
     now = time.time() if now is None else now
     with connection(path) as conn:
         rows = conn.execute(
-            "SELECT db, run_id, benchmark, ts_ms FROM claims WHERE state = 'done' OR heartbeat >= ?", (now - stale_s,)
+            "SELECT db, episode_id, kernel, ts_ms FROM claims WHERE state = 'done' OR heartbeat >= ?", (now - stale_s,)
         ).fetchall()
-    return {(str(db), str(run_id), str(benchmark), int(ts)) for db, run_id, benchmark, ts in rows}
+    return {(str(db), str(episode_id), str(kernel), int(ts)) for db, episode_id, kernel, ts in rows}
 
 
 def claim(claimer: Claimer, keys: Sequence[Key], batch: int, max_items: int = 0, now: float | None = None) -> list[Key]:
@@ -135,7 +135,7 @@ def claim(claimer: Claimer, keys: Sequence[Key], batch: int, max_items: int = 0,
                 if len(taken) >= room:
                     break
                 row = conn.execute(
-                    "SELECT state, heartbeat FROM claims WHERE db = ? AND run_id = ? AND benchmark = ? AND ts_ms = ?",
+                    "SELECT state, heartbeat FROM claims WHERE db = ? AND episode_id = ? AND kernel = ? AND ts_ms = ?",
                     key,
                 ).fetchone()
                 if row is not None and (row[0] != "claimed" or float(row[1]) >= now - claimer.stale_s):
@@ -166,7 +166,7 @@ def finish(claimer: Claimer, key: Key) -> None:
     with connection(claimer.path) as conn:
         conn.execute(
             "UPDATE claims SET state = 'done', done_at = ? "
-            "WHERE db = ? AND run_id = ? AND benchmark = ? AND ts_ms = ? AND claimer = ?",
+            "WHERE db = ? AND episode_id = ? AND kernel = ? AND ts_ms = ? AND claimer = ?",
             (time.time(), *key, claimer.name),
         )
 

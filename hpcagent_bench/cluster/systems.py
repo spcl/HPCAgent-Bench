@@ -15,9 +15,9 @@ as an ``sbatch`` option, which overrides the script's ``#SBATCH`` line. A field'
    none: a cluster with no entry runs from flags and the environment alone.
 
 ``--gpus-per-task`` given by the caller replaces the system's ``--gpus-per-node`` and vice versa: Slurm takes one.
-A job names the fields it cannot run without (:data:`EXPERIMENT_REQUIRED`); a missing one is an error that names its
+A job names the fields it cannot run without (:data:`JOB_REQUIRED`); a missing one is an error that names its
 flag and its environment variable. Two more values resolve the same way and are not ``sbatch`` options
-(:data:`EXTRAS`): the hardware profile, which names the GPU generation whose images and serving layers an experiment
+(:data:`EXTRAS`): the hardware, which names the GPU generation whose images and serving layers an experiment
 uses, and the partition's longest time limit, which caps a scaled experiment's wall clock. Neither has a default.
 """
 
@@ -35,8 +35,8 @@ import yaml
 from hpcagent_bench import paths
 
 __all__ = [
-    "EXPERIMENT_FIELDS",
-    "EXPERIMENT_REQUIRED",
+    "JOB_FIELDS",
+    "JOB_REQUIRED",
     "EXTRAS",
     "FIELDS",
     "SYSTEMS_FILE",
@@ -63,13 +63,13 @@ FIELDS: dict[str, tuple[str, str]] = {
 #: Slurm takes one of these, so an explicit one displaces the system's other.
 GPU_FIELDS = ("gpus_per_node", "gpus_per_task")
 #: What the experiment job takes from this module. Its node count is the sum of its roles and its time limit is
-#: computed from the roster, so neither is a field here; its tasks and cores are its own (one task per node).
-EXPERIMENT_FIELDS = ("partition", "account", "gpus_per_node")
+#: computed from the tag, so neither is a field here; its tasks and cores are its own (one task per node).
+JOB_FIELDS = ("partition", "account", "gpus_per_node")
 #: Without these the job cannot run: the account bills it, the GPUs are what its roles share.
-EXPERIMENT_REQUIRED = ("account", "gpus_per_node")
+JOB_REQUIRED = ("account", "gpus_per_node")
 #: Values a job needs that are no ``sbatch`` option: name -> (flag, environment variable).
 EXTRAS: dict[str, tuple[str, str]] = {
-    "profile": ("--profile", "HPCAGENT_BENCH_PROFILE"),
+    "hardware": ("--hardware", "HPCAGENT_BENCH_HARDWARE"),
     "max_time_hours": ("--max-time-hours", "HPCAGENT_BENCH_MAX_TIME_HOURS"),
 }
 PACKAGED = pathlib.Path(__file__).with_name("systems.yaml")
@@ -121,8 +121,8 @@ class Resolved(NamedTuple):
     extras: dict[str, str]
 
     @property
-    def profile(self) -> str:
-        return self.extras["profile"]
+    def hardware(self) -> str:
+        return self.extras["hardware"]
 
 
 def resolve(
@@ -186,26 +186,26 @@ def options_main(argv: Sequence[str]) -> int:
     ``systems.yaml`` resolve exactly as a helper job's do."""
     parser = argparse.ArgumentParser(prog="hpcagent-bench job options", description=options_main.__doc__)
     parser.add_argument("--system", help="a system of systems.yaml (default: $HPCAGENT_BENCH_SYSTEM, else by cluster)")
-    for field in EXPERIMENT_FIELDS:
+    for field in JOB_FIELDS:
         option, variable = FIELDS[field]
         parser.add_argument(option, dest=field, metavar="VALUE", help=f"overrides ${variable} and the system's value")
     for extra, (option, variable) in EXTRAS.items():
         parser.add_argument(option, dest=extra, metavar="VALUE", help=f"overrides ${variable} and the system's value")
     parser.add_argument(
-        "--print", choices=(*EXPERIMENT_FIELDS, *EXTRAS), help="print this value alone (empty when nothing sets it)"
+        "--print", choices=(*JOB_FIELDS, *EXTRAS), help="print this value alone (empty when nothing sets it)"
     )
     parser.add_argument(
         "--require",
         action="append",
         default=[],
-        choices=EXPERIMENT_FIELDS,
+        choices=JOB_FIELDS,
         help="fail naming its flag and variable when this field is unset (with --print; plain output requires "
-        "every EXPERIMENT_REQUIRED field)",
+        "every JOB_REQUIRED field)",
     )
     args = parser.parse_args(list(argv))
     environ = site_environment(os.environ)
     resolved = resolve(
-        args.system, vars(args), environ, EXPERIMENT_FIELDS, tuple(args.require) if args.print else EXPERIMENT_REQUIRED
+        args.system, vars(args), environ, JOB_FIELDS, tuple(args.require) if args.print else JOB_REQUIRED
     )
     if args.print:
         print({**resolved.values, **resolved.extras}.get(args.print, ""))

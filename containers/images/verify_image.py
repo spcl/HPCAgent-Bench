@@ -432,7 +432,7 @@ def have_harness_runtime(name: str) -> tuple[bool, str]:
 #: The sets below are a RATCHET, not a wishlist, and both directions fail:
 #:   * a name that stops linking is a REGRESSION -- the image lost a library agents are offered;
 #:   * a name that starts linking is also a failure: the agent-facing menu changed unrecorded,
-#:     and arms before and after it are no longer comparable.
+#:     and setups before and after it are no longer comparable.
 #:
 #: ONE RECORD PER PLATFORM (REGISTRY_RECORDS below). A platform with no record yet reports what
 #: links and stays optional until that output is recorded here.
@@ -796,7 +796,7 @@ def toolchain_checks(platform: str) -> list[Check]:
         Check("canonicalize", "isl gate (WavefrontSkew)", "dace-gate", "isl"),
         Check("canonicalize", "z3 gate (LoopToMap proof)", "dace-gate", "z3"),
         Check("python", "mpi4py", "py", "mpi4py"),
-        # An agent runtime missing here kills the whole arm, not one kernel.
+        # An agent runtime missing here kills the whole setup, not one kernel.
         Check("agent", "claude CLI", "exe", "claude"),
         *(Check("agent", f"{name} interpreter", "harness", name) for name in sorted(HARNESS_RUNTIMES)),
     ]

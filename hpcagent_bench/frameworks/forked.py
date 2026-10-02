@@ -61,7 +61,7 @@ __all__ = [
     "take_result",
 ]
 
-#: One message on the result queue: the start stamp that setups the parent's deadline, the child's
+#: One message on the result queue: the start stamp that arms the parent's deadline, the child's
 #: return value (``None`` when the queue could not take the real one), or its traceback text. ``R`` is
 #: whatever the callable returns; a progress snapshot stands in for that return value (the best-so-far a
 #: killed child would have returned), so it is the same type.
@@ -333,7 +333,7 @@ def child_main[ResultT](
             with contextlib.suppress(Exception):
                 q.put(("error", tb))
         return
-    # First act, before any work: this is what setups the parent's deadline (see run_forked).
+    # First act, before any work: this is what arms the parent's deadline (see run_forked).
     q.put(("started", None))
     try:
         out = fn(*args, **kwargs)
@@ -496,7 +496,7 @@ def run_forked[**P, ResultT](
     # gone rather than blocking on a writer that only this process still holds.
     err_w.close()
     last_progress: ResultT | None = None
-    # The deadline measures the CHILD'S runtime: the child setups it by reporting that it started,
+    # The deadline measures the CHILD'S runtime: the child arms it by reporting that it started,
     # so fork/spawn latency is not billed to the callee. Until it reports in, the ceiling is its own
     # timeout plus the arming grace, so a child that never runs at all still ends.
     limit = None if timeout is None else time.monotonic() + timeout + ARM_GRACE_S

@@ -19,7 +19,7 @@ user's data (or bills the wrong project) for everyone else.
 The scan covers every file ``git ls-files`` lists (tracked files only: a local scratch file is not
 the release). It looks at LIVE text: for Python, non-docstring string literals (a docstring or
 comment may name a site to explain it); for shell-like files (shell, sbatch, env, toml, yaml,
-Dockerfile, rosters), lines with ``#`` comments stripped; everything else verbatim. ``RAW_PATTERNS``
+Dockerfile, tags), lines with ``#`` comments stripped; everything else verbatim. ``RAW_PATTERNS``
 apply to comments too: a user name, an account or an ``#SBATCH`` site directive is never right.
 ``${USER}``, ``$USER``, ``$(id -un)`` and the placeholder ``/users/someone`` are resolvers or
 fixtures, never flagged.
@@ -137,20 +137,20 @@ CODE_PATTERNS = {
 ALLOW = {
     "tests/test_no_hardcoded_user_paths.py": "this file: embeds the patterns' own text",
     "experiments/layers/site-cscs.env": "THE site layer for one real site: its values live here",
-    "experiments/layers/profile-mi200.env": "names the MI250X hardware profile (docs/configuration.md)",
+    "experiments/layers/hardware-mi200.env": "names the MI250X hardware (docs/configuration.md)",
     "hpcagent_bench/cluster/systems.yaml": "the job shape of each named system (docs/configuration.md)",
     "docs/configuration.md": "shows the CSCS site layer's values next to the generic ones",
     "pyproject.toml": "package author contact (PyPI metadata), not a runtime value",
     "agent/pyproject.toml": "package author contact (metadata), not a runtime value",
     "hpcagent_bench/observations_extract.py": "reads legacy MCP server/env keys of already-recorded rows",
-    "tests/test_extract_llr40_task_rows.py": "fixtures of legacy recorded keys",
+    "tests/test_extract_llr40_episode_rows.py": "fixtures of legacy recorded keys",
     "tests/test_ablation_stats.py": "fixtures of legacy recorded keys",
     "tests/test_harbor_images.py": "asserts a generated Harbor task names no storage mount",
     "containers/inference/serve-private.sbatch::PRESET_PARTITION=mi300": (
-        "MI300A serving recipe: the preset is the hardware profile, checked against its partition"
+        "MI300A serving recipe: the preset is the hardware, checked against its partition"
     ),
     "containers/inference/serve-private.sbatch::PRESET_PARTITION=mi200": (
-        "MI200 serving recipe: the preset is the hardware profile, checked against its partition"
+        "MI200 serving recipe: the preset is the hardware, checked against its partition"
     ),
 }
 
@@ -297,7 +297,7 @@ def test_the_scan_catches_every_kind_of_hit(tmp_path: pathlib.Path) -> None:
             "srun -p debug -N 1 true\n"
             'SBATCH_PARTITION="${SBATCH_PARTITION:-normal}"\n'
             "ssh -J beverin nid002664\n"
-            'RUNS="${SCRATCH}/hpcagent-bench-runs/cpf-llr-focus40-20260916/639344"\n'
+            'RUNS="${SCRATCH}/hpcagent-bench-runs/llr40-20260916/639344"\n'
             'OUT="${SCRATCH}/canon-648131"\n'
             "IMAGE=jfrog.svc.cscs.ch/hpcagent/judge:latest\n"
         ),

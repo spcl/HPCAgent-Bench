@@ -101,7 +101,7 @@ def test_the_shell_and_the_module_render_every_base_identically() -> None:
 def test_every_base_renders_to_a_complete_flat_env(name: str) -> None:
     """Each base carries every launcher placeholder and assigns no key twice."""
     values = flat(rendered(name))
-    for key in ("EXPERIMENT_SETUP", "RUN_ROOT", "PROBLEMS_FILE", "AMD_CE_ENV", "LANGUAGE", "AGENT_MAX_TOKENS"):
+    for key in ("SETUP", "RUN_ROOT", "PROBLEMS_FILE", "AMD_CE_ENV", "LANGUAGE", "AGENT_MAX_TOKENS"):
         assert key in values, f"{name} renders no {key}"
 
 
@@ -215,14 +215,14 @@ def fingerprint(path: pathlib.Path) -> tuple[int, int, bytes]:
 
 def test_a_snapshot_is_read_only_and_owns_its_problems_copy(tmp_path: pathlib.Path) -> None:
     (tmp_path / "problems-a.jsonl").write_text('{"kernel": "k1"}\n')
-    (tmp_path / "setup.env").write_text("EXPERIMENT_SETUP=a\nPROBLEMS_FILE=problems-a.jsonl\n")
+    (tmp_path / "setup.env").write_text("SETUP=a\nPROBLEMS_FILE=problems-a.jsonl\n")
     env = snapshot(tmp_path, "a")
     values = flat(env.read_text())
     problems = tmp_path / values["PROBLEMS_FILE"]
     assert env.parent.name == ".rendered"
     assert env.name.startswith("a-")
     assert problems.read_text() == '{"kernel": "k1"}\n'
-    assert values["EXPERIMENT_SETUP"] == "a"
+    assert values["SETUP"] == "a"
     assert not os.access(env, os.W_OK)
     assert not os.access(problems, os.W_OK)
 
@@ -230,13 +230,13 @@ def test_a_snapshot_is_read_only_and_owns_its_problems_copy(tmp_path: pathlib.Pa
 def test_a_second_submission_never_touches_the_first_snapshot(tmp_path: pathlib.Path) -> None:
     """Re-staging the setup (new env AND new problems under the same names) leaves snapshot one as it was."""
     (tmp_path / "problems-a.jsonl").write_text('{"kernel": "k1"}\n')
-    (tmp_path / "setup.env").write_text("EXPERIMENT_SETUP=a\nAGENT_MAX_TOKENS=1\nPROBLEMS_FILE=problems-a.jsonl\n")
+    (tmp_path / "setup.env").write_text("SETUP=a\nAGENT_MAX_TOKENS=1\nPROBLEMS_FILE=problems-a.jsonl\n")
     first = snapshot(tmp_path, "a")
     first_problems = tmp_path / flat(first.read_text())["PROBLEMS_FILE"]
     before = {path: fingerprint(path) for path in (first, first_problems)}
 
     (tmp_path / "problems-a.jsonl").write_text('{"kernel": "k2"}\n')
-    (tmp_path / "setup.env").write_text("EXPERIMENT_SETUP=a\nAGENT_MAX_TOKENS=2\nPROBLEMS_FILE=problems-a.jsonl\n")
+    (tmp_path / "setup.env").write_text("SETUP=a\nAGENT_MAX_TOKENS=2\nPROBLEMS_FILE=problems-a.jsonl\n")
     second = snapshot(tmp_path, "a")
 
     assert second != first
@@ -253,7 +253,7 @@ def test_the_job_gets_the_snapshot_not_the_setup_env(tmp_path: pathlib.Path) -> 
     (stub_dir / "sbatch").write_text("#!/bin/sh\nprintf '%s\\n' \"$@\" >> sbatch.args\necho 4242\n")
     (stub_dir / "sbatch").chmod(0o755)
     (tmp_path / "problems-a.jsonl").write_text('{"kernel": "k1"}\n')
-    (tmp_path / "setup.env").write_text("EXPERIMENT_SETUP=a\nPROBLEMS_FILE=problems-a.jsonl\n")
+    (tmp_path / "setup.env").write_text("SETUP=a\nPROBLEMS_FILE=problems-a.jsonl\n")
     probe = tmp_path / "probe.sh"
     probe.write_text(
         f"set -eu\n. {CLUSTER / 'submit_common.sh'}\nsetup_nodes() {{ echo 1; }}\nsubmit_setup_job setup.env a 00:10:00\n"
@@ -273,4 +273,4 @@ def test_the_job_gets_the_snapshot_not_the_setup_env(tmp_path: pathlib.Path) -> 
     assert len(exported) == 1
     path = pathlib.Path(exported[0].split("CLUSTER_ENV_FILE=", 1)[1])
     assert path.parent == tmp_path / ".rendered"
-    assert flat(path.read_text())["EXPERIMENT_SETUP"] == "a"
+    assert flat(path.read_text())["SETUP"] == "a"

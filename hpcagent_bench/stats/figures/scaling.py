@@ -162,7 +162,7 @@ MODES: tuple[str, ...] = ("weak", "strong")
 REQUIRED_COLUMNS: tuple[str, ...] = (
     "row_kind",
     "setup",
-    "benchmark",
+    "kernel",
     "scaling_ranks",
     "scaling_ranked_ns",
     "scaling_single_rank_ns",
@@ -434,13 +434,13 @@ def scaling_rows(frame: pd.DataFrame) -> pd.DataFrame:
     # A stamp that will not parse sorts oldest rather than dropping the row: an unstamped grade is
     # still a measurement, and it only loses to one that says it is newer.
     rows["scaling_ts"] = pd.to_numeric(rows["ts_ms"], errors="coerce").fillna(0)
-    newest = rows.groupby(["setup", "benchmark", "scaling_mode"])["scaling_ts"].transform("max")
+    newest = rows.groupby(["setup", "kernel", "scaling_mode"])["scaling_ts"].transform("max")
     return rows[rows["scaling_ts"] == newest].drop(columns=["scaling_ts"])
 
 
 def baseline_anchored(rows: pd.DataFrame) -> pd.DataFrame:
     """``rows`` with each torch.distributed baseline curve made whole: one curve is one
-    (``run_id`` = stack, kernel, law) group, whose points several grade DBs may hold. Every point
+    (``episode_id`` = stack, kernel, law) group, whose points several grade DBs may hold. Every point
     gets the group's P=1 time as ``scaling_single_rank_ns`` (blank when P=1 was not timed: no anchor, every
     point a hole) and the group's newest stamp as ``ts_ms``, so the latest-curve rule keeps or drops
     the curve whole."""
@@ -453,7 +453,7 @@ def baseline_anchored(rows: pd.DataFrame) -> pd.DataFrame:
     for record in records:
         if str(record["setup"]) != TORCH_DIST_SETUP:
             continue
-        key = (str(record["run_id"]), str(record["benchmark"]), str(record["scaling_mode"]))
+        key = (str(record["episode_id"]), str(record["kernel"]), str(record["scaling_mode"]))
         stamps[key] = max(stamps.get(key, 0.0), number(record["ts_ms"]))
         time_ns = number(record["scaling_ranked_ns"])
         if number(record["scaling_ranks"]) == 1 and time_ns > 0:
@@ -461,7 +461,7 @@ def baseline_anchored(rows: pd.DataFrame) -> pd.DataFrame:
     single: list[object] = []
     stamped: list[object] = []
     for record in records:
-        key = (str(record["run_id"]), str(record["benchmark"]), str(record["scaling_mode"]))
+        key = (str(record["episode_id"]), str(record["kernel"]), str(record["scaling_mode"]))
         baseline = str(record["setup"]) == TORCH_DIST_SETUP
         single.append(anchors.get(key, "") if baseline else record.get("scaling_single_rank_ns", ""))
         stamped.append(stamps[key] if baseline else record["ts_ms"])
@@ -522,7 +522,7 @@ def curves(frame: pd.DataFrame) -> list[Curve]:
     if rows.empty:
         return []
     out: list[Curve] = []
-    for (setup, kernel, mode), group in rows.groupby(["setup", "benchmark", "scaling_mode"], sort=True):
+    for (setup, kernel, mode), group in rows.groupby(["setup", "kernel", "scaling_mode"], sort=True):
         points: list[Point] = []
         dropped: list[tuple[int, str]] = []
         for index in range(len(group)):
@@ -584,14 +584,14 @@ def disagreements(frame: pd.DataFrame, tolerance: float = EFFICIENCY_RTOL) -> li
         if point is None or math.isnan(recorded):
             continue
         if not math.isclose(recorded, point.efficiency, rel_tol=tolerance):
-            out.append((str(row["setup"]), str(row["benchmark"]), point.ranks, recorded, point.efficiency))
+            out.append((str(row["setup"]), str(row["kernel"]), point.ranks, recorded, point.efficiency))
     return out
 
 
 def common_kernels(curves_: Sequence[Curve], mode: str) -> set[str]:
     """The kernels EVERY setup of ``mode`` has a drawable curve for.
 
-    Overlaying two setups whose kernel sets differ compares each against its own roster, which is a
+    Overlaying two setups whose kernel sets differ compares each against its own tag, which is a
     different and always kinder number than the comparison the panel looks like it is making. The
     callers default to this set and say how many kernels it cost. The torch.distributed baseline
     is not a setup here: a kernel it could not time must not take the agents' curves off a panel.
@@ -1094,7 +1094,7 @@ def points_table(curves_: Sequence[Curve]) -> pd.DataFrame:
             {
                 "setup": curve.setup,
                 "model": curve.model,
-                "benchmark": curve.kernel,
+                "kernel": curve.kernel,
                 "scaling_mode": curve.mode,
                 "ranks": point.ranks,
                 "nodes": point.nodes,
@@ -1115,13 +1115,13 @@ def points_table(curves_: Sequence[Curve]) -> pd.DataFrame:
 def dropped_table(curves_: Sequence[Curve]) -> pd.DataFrame:
     """One row per point the sweep did not measure, and per curve too short to draw."""
     rows = [
-        {"setup": setup, "benchmark": kernel, "scaling_mode": mode, "ranks": ranks, "reason": reason}
+        {"setup": setup, "kernel": kernel, "scaling_mode": mode, "ranks": ranks, "reason": reason}
         for setup, kernel, mode, ranks, reason in dropped_points(curves_)
     ]
     rows += [
         {
             "setup": curve.setup,
-            "benchmark": curve.kernel,
+            "kernel": curve.kernel,
             "scaling_mode": curve.mode,
             "ranks": -1,
             "reason": f"curve has {len(curve.points)} point(s), fewer than {MIN_CURVE_POINTS}; not drawn",

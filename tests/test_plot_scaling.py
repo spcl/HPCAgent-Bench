@@ -39,7 +39,7 @@ def row(
     return {
         "row_kind": scaling.SCALING_RECORD,
         "setup": setup,
-        "benchmark": kernel,
+        "kernel": kernel,
         "scaling_mode": mode,
         "scaling_ranks": ranks,
         "scaling_nodes": -(-ranks // scaling.RANKS_PER_NODE),
@@ -157,8 +157,8 @@ def test_a_single_point_curve_draws_nothing_and_is_counted() -> None:
     assert {c.kernel for c in scaling.drawable(curves)} == {"dist_softmax"}
     assert [c.kernel for c in scaling.single_point_curves(curves)] == ["dist_sdpa"]
     dropped = scaling.dropped_table(curves)
-    assert (dropped.benchmark == "dist_sdpa").any()
-    assert "fewer than" in dropped[dropped.benchmark == "dist_sdpa"].reason.iloc[0]
+    assert (dropped.kernel == "dist_sdpa").any()
+    assert "fewer than" in dropped[dropped.kernel == "dist_sdpa"].reason.iloc[0]
 
 
 def test_a_kernel_only_one_model_solved_is_out_of_the_overlay_and_named() -> None:
@@ -258,7 +258,7 @@ def test_the_mode_falls_back_to_the_setup_name_when_a_row_does_not_state_it() ->
     """A CSV extracted before the column exists still splits weak from strong, by the setup key."""
     assert scaling.mode_of("mlscale-weak-qwen38-hip") == "weak"
     assert scaling.mode_of("mlscale-strong-kimi27sglang-hip") == "strong"
-    assert scaling.mode_of("llr-focus40-qwen38-c") == ""
+    assert scaling.mode_of("llr40-qwen38-c") == ""
     assert scaling.mode_of("mlscale-weak-qwen38-hip", "strong") == "strong"  # a stated mode wins
 
 
@@ -289,7 +289,7 @@ def test_an_empty_frame_draws_nothing_and_raises_nothing() -> None:
 def test_a_frame_of_grade_rows_alone_holds_no_scaling_rows() -> None:
     """The per-P rows are selected by ``record``, so an ordinary observations CSV yields no curves."""
     grades = pd.DataFrame(
-        [{"row_kind": "submission", "setup": "mlscale-weak-qwen38-hip", "benchmark": "dist_softmax", "speedup": 2.0}]
+        [{"row_kind": "submission", "setup": "mlscale-weak-qwen38-hip", "kernel": "dist_softmax", "speedup": 2.0}]
     )
     assert scaling.curves(grades) == []
 
@@ -434,7 +434,7 @@ def test_model_lines_are_thinner_than_the_baseline_and_the_geomean_column_is_wid
         scaling.TORCH_DIST_SETUP, "dist_softmax"
     )
     for index, entry in enumerate(rows):
-        entry["run_id"] = f"run-{index // len(RANKS)}"
+        entry["episode_id"] = f"run-{index // len(RANKS)}"
     fig = scaling.figure_mode_grid(scaling.curves(frame(rows)), ["dist_softmax"], geomean_panel=True)
     assert fig is not None
     try:

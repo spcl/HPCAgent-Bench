@@ -5,7 +5,7 @@
 #   P=--partition=${HPCAGENT_BENCH_CI_PARTITION}   # the site's CI partition (site layer)
 #   sbatch $P scripts/ci_mi200.sbatch                       every job of tests.yml
 #   CI_EDF=<judge EDF name> sbatch $P scripts/ci_mi200.sbatch   a specific image (default: the judge image of
-#                                                           $HPCAGENT_BENCH_PROFILE, e.g. mi200)
+#                                                           $HPCAGENT_BENCH_HARDWARE, e.g. mi200)
 #   sbatch $P scripts/ci_mi200.sbatch --ci --jobs unit,mpi  chosen jobs (scripts/ci_replay.py)
 #   sbatch $P scripts/ci_mi200.sbatch -q tests/test_x.py    a pytest selection
 #   scripts/run_tests.sh --container [same args]                      submit and wait
@@ -44,7 +44,7 @@ fi
 # holds an editable install of hpcagent_bench pointing at /opt/hpcagent-bench, where the EDF mounts a checkout: the
 # one under test, so the EDF is copied with that mount. The OpenMP catalog is written at the start, as a job does.
 . "${REPO}/hpcagent_bench/cluster/container_runtime.sh"
-ci_edf="${CI_EDF:-hpcagent-bench-judge-${HPCAGENT_BENCH_PROFILE:?set CI_EDF or HPCAGENT_BENCH_PROFILE (the hardware profile of the CI partition, e.g. mi200)}-${CE_IMAGE_FLAVOR:-latest}}"
+ci_edf="${CI_EDF:-hpcagent-bench-judge-${HPCAGENT_BENCH_HARDWARE:?set CI_EDF or HPCAGENT_BENCH_HARDWARE (the hardware of the CI partition, e.g. mi200)}-${CE_IMAGE_FLAVOR:-latest}}"
 registered_edf="${ci_edf}"
 if [[ "${ci_edf}" != /* ]]; then
     IFS=: read -r -a edf_dirs <<<"${EDF_PATH:-${HOME}/.edf}"

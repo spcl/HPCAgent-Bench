@@ -1,13 +1,12 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Which roster kernels a setup still owes, and the job that reruns them.
+"""Which tag kernels a setup still owes, and the job that reruns them.
 
 ``hpcagent-bench owed collect`` reads every job directory under the run roots. A job's setup is
-``runs.setup`` in its judge shards (results DBs, schema v2); a setup, its ``-clean`` rerun and a registry
-alias are one identity, covered by the union of all its jobs, because a rerun runs only the kernels
+``episodes.setup`` in its judge shards (results DBs, schema v3); a setup is one identity, covered by the union of all its jobs, because a rerun runs only the kernels
 still owed. A kernel is delivered when a job graded it: a credited /submit grade, or one the judge
 graded and refused. A refusal reasoned ``score_error`` (the judge's own reference failed) and any
-grade under the ``adhoc`` run id (no episode) deliver nothing. Every other roster kernel is owed, classed
+grade under the ``adhoc`` episode id (no episode) deliver nothing. Every other tag kernel is owed, classed
 by its latest episode's ``tokens.json``: ``budget`` when the agent hit its own time or token cap and
 the job did not cancel it (rerun at a scaled budget), ``infra`` otherwise (rerun as it was).
 
@@ -29,8 +28,8 @@ import subprocess
 import sys
 from collections.abc import Iterable, Sequence
 
-from hpcagent_bench import study_tags, tags
-from hpcagent_bench.frozen_observations import ADHOC_RUN_ID
+from hpcagent_bench import tags
+from hpcagent_bench.frozen_observations import ADHOC_EPISODE_ID
 from hpcagent_bench.harness import results_db
 from hpcagent_bench.stats.population import HARNESS_FAULT_REASON
 
@@ -48,7 +47,6 @@ __all__ = [
     "cmd_run",
     "collect_jobs",
     "delivered",
-    "identity",
     "job_setup",
     "kernel_stem",
     "latest_classes",
@@ -104,17 +102,12 @@ def shard_rows(job_dir: pathlib.Path, query: str, args: tuple[object, ...] = ())
 def job_setup(job_dir: pathlib.Path) -> str:
     """The one setup ``job_dir`` recorded; empty when it has no shard. Raises on a shard with no setup or
     a job that recorded several."""
-    setups = {str(setup) for (setup,) in shard_rows(job_dir, "select distinct setup from runs") if setup}
+    setups = {str(setup) for (setup,) in shard_rows(job_dir, "select distinct setup from episodes") if setup}
     if len(setups) > 1:
-        raise SystemExit(f"{job_dir}: runs.setup names several setups: {sorted(setups)}")
+        raise SystemExit(f"{job_dir}: episodes.setup names several setups: {sorted(setups)}")
     if not setups and any(job_dir.glob(SHARD_GLOB)):
-        raise SystemExit(f"{job_dir}: judge shards present but runs.setup names no setup")
+        raise SystemExit(f"{job_dir}: judge shards present but episodes.setup names no setup")
     return setups.pop() if setups else ""
-
-
-def identity(setup: str) -> str:
-    """The setup a clean rerun or a registry alias folds into."""
-    return study_tags.aliased_setup(setup.removesuffix(study_tags.CLEAN_SUFFIX))
 
 
 def collect_jobs(roots: Iterable[pathlib.Path], excluded: set[str]) -> tuple[dict[str, list[Job]], list[str]]:
@@ -127,7 +120,7 @@ def collect_jobs(roots: Iterable[pathlib.Path], excluded: set[str]) -> tuple[dic
                 continue
             setup = job_setup(job_dir)
             if setup:
-                by_identity.setdefault(identity(setup), []).append(Job(job_dir.name, job_dir, setup))
+                by_identity.setdefault(setup, []).append(Job(job_dir.name, job_dir, setup))
             else:
                 empty.append(job_dir.name)
     return by_identity, empty
@@ -138,12 +131,12 @@ def delivered(job_dir: pathlib.Path) -> set[str]:
     kinds = ", ".join("?" * len(results_db.SUBMIT_KINDS))
     graded = shard_rows(
         job_dir,
-        "select distinct g.benchmark from grades g join runs r on r.id = g.run_id where r.label != ? "
+        "select distinct g.kernel from grades g join episodes r on r.id = g.episode_id where r.label != ? "
         f"and g.kind in ({kinds}) and (g.credited_speedup is not null or (g.reason is not null and g.reason != ?)) "
         "and g.id not in (select grade_id from disqualifications)",
-        (ADHOC_RUN_ID, *results_db.SUBMIT_KINDS, HARNESS_FAULT_REASON),
+        (ADHOC_EPISODE_ID, *results_db.SUBMIT_KINDS, HARNESS_FAULT_REASON),
     )
-    return {str(benchmark) for (benchmark,) in graded}
+    return {str(kernel) for (kernel,) in graded}
 
 
 def kernel_stem(kernel: object) -> str:
@@ -169,16 +162,16 @@ def latest_classes(job_dirs: Iterable[pathlib.Path]) -> dict[str, OwedClass]:
     return {kernel: entry[1] for kernel, entry in latest.items()}
 
 
-def owed(jobs: Sequence[Job], roster: Sequence[str]) -> dict[str, OwedClass]:
-    """Every roster kernel no job of the identity delivered, in roster order, with its class. A
+def owed(jobs: Sequence[Job], tag_kernels: Sequence[str]) -> dict[str, OwedClass]:
+    """Every tag kernel no job of the identity delivered, in tag order, with its class. A
     kernel no episode ever started is ``infra``."""
     done = set().union(*(delivered(job.path) for job in jobs))
     classes = latest_classes(job.path for job in jobs)
-    return {kernel: classes.get(kernel, OwedClass.INFRA) for kernel in roster if kernel not in done}
+    return {kernel: classes.get(kernel, OwedClass.INFRA) for kernel in tag_kernels if kernel not in done}
 
 
 def selected(name: str, prefixes: Sequence[str]) -> bool:
-    return not prefixes or any(name == prefix or name.startswith(f"{prefix}-") for prefix in map(identity, prefixes))
+    return not prefixes or any(name == prefix or name.startswith(f"{prefix}-") for prefix in prefixes)
 
 
 def write_listing(out_dir: pathlib.Path, name: str, kernels: Sequence[str]) -> None:
@@ -192,20 +185,20 @@ def write_listing(out_dir: pathlib.Path, name: str, kernels: Sequence[str]) -> N
 
 
 def cmd_collect(args: argparse.Namespace) -> int:
-    roster = list(tags.roster(args.tag))
+    tag_kernels = list(tags.kernels_of(args.tag))
     by_identity, empty = collect_jobs(args.runs, set(args.exclude_job))
     only = OwedClass(args.owed_class) if args.owed_class else None
-    print(f"roster {args.tag}: {len(roster)} kernels")
+    print(f"tag {args.tag}: {len(tag_kernels)} kernels")
     if empty:
         print(f"no judge shard: jobs {sorted(empty)}")
     if args.out:
         args.out.mkdir(parents=True, exist_ok=True)
     for name in sorted(n for n in by_identity if selected(n, args.setups)):
         jobs = sorted(by_identity[name], key=lambda job: int(job.job))
-        classes = owed(jobs, roster)
+        classes = owed(jobs, tag_kernels)
         budget = sum(owed_class is OwedClass.BUDGET for owed_class in classes.values())
         print(
-            f"{name} done {len(roster) - len(classes)}/{len(roster)} owed {len(classes)} "
+            f"{name} done {len(tag_kernels) - len(classes)}/{len(tag_kernels)} owed {len(classes)} "
             f"(budget {budget}, infra {len(classes) - budget}) newest {jobs[-1].path}"
         )
         if args.out:
@@ -268,9 +261,9 @@ submit_setup_job "${env_file}" "${setup}" "${walltime}" "" "" ", ${walltime}"
 def cmd_run(args: argparse.Namespace) -> int:
     env_path, problems_path = launch_files(args.job_dir)
     values = read_env(env_path)
-    setup = values.get("EXPERIMENT_SETUP", "")
+    setup = values.get("SETUP", "")
     if not setup:
-        raise SystemExit(f"{env_path} names no EXPERIMENT_SETUP")
+        raise SystemExit(f"{env_path} names no SETUP")
     kernels = {line.strip() for line in args.kernels_file.read_text(encoding="utf-8").splitlines() if line.strip()}
     if not kernels:
         raise SystemExit(f"{args.kernels_file} lists no kernel")
@@ -313,9 +306,9 @@ def cmd_run(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="hpcagent-bench owed", description=__doc__.split("\n\n", 1)[0])
     sub = parser.add_subparsers(dest="command", required=True)
-    collect = sub.add_parser("collect", help="report, per setup, the roster kernels no job delivered")
+    collect = sub.add_parser("collect", help="report, per setup, the tag kernels no job delivered")
     collect.add_argument("--runs", type=pathlib.Path, action="append", required=True, help="a run root; repeatable")
-    collect.add_argument("--tag", required=True, help="the study tag naming the roster")
+    collect.add_argument("--tag", required=True, help="the study tag naming the tag")
     collect.add_argument(
         "--setup",
         dest="setups",
