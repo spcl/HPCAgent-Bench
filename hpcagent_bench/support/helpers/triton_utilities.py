@@ -243,10 +243,12 @@ def get_mean_sumsq_configs():
         "N": reduce(operator.mul, data.shape[1:], 1),
     }
 )
+# restore_value: both outputs are accumulated into, so the autotuner must restore them between trials.
 @triton.autotune(
     configs=get_mean_sumsq_configs(),
     key=["M", "N"],
     cache_results=True,
+    restore_value=["out_mean", "out_stddev"],
 )
 @triton.jit
 def kernel_mean_and_sumsq(
@@ -293,10 +295,12 @@ def unary_noop(x):
 
 @use_grid(lambda meta: (triton.cdiv(meta["N"], meta["BLOCK_SIZE_N"]),))
 @derive_launch_arguments(lambda mean, **_: {"N": reduce(operator.mul, mean.shape, 1)})
+# restore_value: stddev is read and overwritten, so a second trial would take the square root of a square root.
 @triton.autotune(
     configs=get_stddev_configs(),
     key=["N"],
     cache_results=True,
+    restore_value=["stddev"],
 )
 @triton.jit
 def kernel_compute_stddev(
