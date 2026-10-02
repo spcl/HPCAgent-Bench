@@ -21,13 +21,13 @@ import signal
 import subprocess
 import sys
 import tempfile
+from collections.abc import Sequence
 
 import numpy as np
 
-from hpcagent_bench.frameworks.forked import run_forked
-
 # Reuse the repo oracle's compile flags + ctypes invoke + comparison.
 from hpcagent_bench import numerical_oracle as no
+from hpcagent_bench.frameworks.forked import RunResult, run_forked
 from tests.translators.source_module import run_source
 
 HERE = pathlib.Path(__file__).resolve()
@@ -107,7 +107,7 @@ def run_op(
     shapes: dict[str, str] = None,
     rtol: float = 1e-9,
     atol: float = 1e-9,
-    backends=("c", "cpp", "fortran", "numba", "pythran", "jax"),
+    backends: Sequence[str] = ("c", "cpp", "fortran", "numba", "pythran", "jax"),
     skip_backends: dict[str, str] = None,
     dtypes: dict[str, str] = None,
     fft_library: bool = False,
@@ -151,7 +151,7 @@ def run_op(
     }
     eff_dtypes.update(dtypes or {})
 
-    def np_dtype(name):
+    def np_dtype(name: str) -> type[np.generic]:
         dt = eff_dtypes.get(name)
         return np.dtype(dt).type if dt else np.float64
 
@@ -272,11 +272,52 @@ def shape_tokens(v: np.ndarray) -> list[str]:
     return [str(d) for d in v.shape]
 
 
-def run_numba(npy, bi, func, inputs, outputs, syms, expected, rtol, atol, capture_return: bool = False) -> str:
-    import importlib.util
-
+def run_numba(
+    npy: pathlib.Path,
+    bi: pathlib.Path,
+    func: str,
+    inputs: dict[str, np.ndarray],
+    outputs: dict[str, tuple],
+    syms: dict[str, int],
+    expected: dict[str, np.ndarray],
+    rtol: float,
+    atol: float,
+    capture_return: bool = False,
+) -> str:
+    """Grade the numba emission of ``func`` in a FORKED child, so numba's omp pool never launches in this
+    process: a pool launched in the xdist worker terminates every numba child later forked from it
+    (:func:`hpcagent_bench.omp_context.numba_omp_pool_launched`)."""
     if importlib.util.find_spec("numba") is None:
         return "skip:not-installed"
+    outcome = run_forked(
+        numba_leg_child,
+        npy,
+        bi,
+        func,
+        inputs,
+        outputs,
+        expected,
+        rtol,
+        atol,
+        capture_return,
+        label=f"numba:{func}",
+        timeout=no.PY_FORK_TIMEOUT_S,
+    )
+    return leg_status(outcome)
+
+
+def numba_leg_child(
+    npy: pathlib.Path,
+    bi: pathlib.Path,
+    func: str,
+    inputs: dict[str, np.ndarray],
+    outputs: dict[str, tuple],
+    expected: dict[str, np.ndarray],
+    rtol: float,
+    atol: float,
+    capture_return: bool,
+) -> str:
+    """Emit, njit, run and compare the numba kernel; only ever called in the child :func:`run_numba` forks."""
     # Emit through NumpyToNumba (kir threaded) so the SAME desugar the real oracle
     # applies runs here: axis-tuple / keepdims reductions and batched matmul are
     # lowered to loops numba can njit, and every top-level def is decorated. Njit'ing
@@ -318,7 +359,19 @@ def run_numba(npy, bi, func, inputs, outputs, syms, expected, rtol, atol, captur
     return cmp_(got, expected, rtol, atol)
 
 
-def run_pythran(npy, bi, func, inputs, outputs, syms, expected, rtol, atol, tdp, capture_return: bool = False) -> str:
+def run_pythran(
+    npy: pathlib.Path,
+    bi: pathlib.Path,
+    func: str,
+    inputs: dict[str, np.ndarray],
+    outputs: dict[str, tuple],
+    syms: dict[str, int],
+    expected: dict[str, np.ndarray],
+    rtol: float,
+    atol: float,
+    tdp: pathlib.Path,
+    capture_return: bool = False,
+) -> str:
     import importlib.util
     import shutil
 
@@ -412,6 +465,11 @@ def run_jax_leg(
         timeout=int(os.environ.get("HPCAGENT_BENCH_JAX_FORK_TIMEOUT_S", "120")),
         mp_context="spawn",
     )
+    return leg_status(outcome)
+
+
+def leg_status(outcome: RunResult[str]) -> str:
+    """The leg's status string for a finished child: its own verdict, or how it died."""
     if outcome.ok:
         return outcome.result or "FAIL:no-result"
     if outcome.signal == "TIMEOUT":
@@ -441,7 +499,16 @@ def jax_leg_child(
         return f"FAIL:{type(exc).__name__}:{exc}"
 
 
-def jax_child(src, func, inputs, outputs, expected, rtol, atol, capture_return: bool = False) -> str:
+def jax_child(
+    src: str,
+    func: str,
+    inputs: dict[str, np.ndarray],
+    outputs: dict[str, tuple],
+    expected: dict[str, np.ndarray],
+    rtol: float,
+    atol: float,
+    capture_return: bool = False,
+) -> str:
     import ast
 
     import jax
@@ -494,7 +561,7 @@ def jax_child(src, func, inputs, outputs, expected, rtol, atol, capture_return: 
     return cmp_(got, expected, rtol, atol)
 
 
-def cmp_(got: dict[str, np.ndarray], expected: dict[str, np.ndarray], rtol, atol) -> str:
+def cmp_(got: dict[str, np.ndarray], expected: dict[str, np.ndarray], rtol: float, atol: float) -> str:
     for nm, e in expected.items():
         g = no.comparison_array(got[nm])
         if g.shape != e.shape:
@@ -504,7 +571,7 @@ def cmp_(got: dict[str, np.ndarray], expected: dict[str, np.ndarray], rtol, atol
     return "ok"
 
 
-def map_returns(ret, out_names: list[str]):
+def map_returns(ret: object, out_names: list[str]) -> dict[str, np.ndarray] | str:
     """Map a return-style backend's return value(s) onto the ordered promoted
     output names, returning ``name -> ndarray`` -- or a ``FAIL:`` string when a
     name has no matching return.
@@ -539,7 +606,7 @@ def run_return_op(
     shapes: dict[str, str] = None,
     rtol: float = 1e-9,
     atol: float = 1e-9,
-    backends=("c", "cpp", "fortran", "numba", "pythran", "jax"),
+    backends: Sequence[str] = ("c", "cpp", "fortran", "numba", "pythran", "jax"),
     skip_backends: dict[str, str] = None,
 ) -> dict[str, str]:
     """Validate a RETURN-style kernel (``def f(x): return <expr>``) across backends.

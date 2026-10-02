@@ -17,6 +17,7 @@ import scipy.sparse as sp
 from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc, KernelIR, SparseArrayDesc
 from hpcagent_bench.translators.numpyto_numba.emit import emit_numba
 from hpcagent_bench.translators.numpyto_numba.sparse import rewrite_sparse_matmuls
+from tests.own_process import isolated
 from tests.translators.test_numba_typing_desugar import emit_and_load
 
 COLUMN_SRC = """import numpy as np
@@ -69,6 +70,7 @@ def system(n: int = 40, m: int = 6) -> tuple[sp.csr_matrix, np.ndarray]:
     return A, np.random.default_rng(3).random((n, m))
 
 
+@isolated
 def test_column_slice_lowers_to_vector_matvec_and_matches_numpy(tmp_path: pathlib.Path) -> None:
     kir = sparse_ir(COLUMN_SRC, "colmv", ("N", "M"))
     emitted, module = emit_and_load(tmp_path, COLUMN_SRC, kir)
@@ -84,6 +86,7 @@ def test_column_slice_lowers_to_vector_matvec_and_matches_numpy(tmp_path: pathli
     np.testing.assert_allclose(got, want, rtol=1e-12)
 
 
+@isolated
 def test_row_slice_lowers_to_vector_matvec_and_matches_numpy(tmp_path: pathlib.Path) -> None:
     kir = sparse_ir(ROW_SRC, "rowmv", ("N",))
     emitted, module = emit_and_load(tmp_path, ROW_SRC, kir)
@@ -118,6 +121,7 @@ def solve(H, y, out):
 """
 
 
+@isolated
 def test_lstsq_default_cutoff_types_under_numba_and_matches_numpy(tmp_path: pathlib.Path) -> None:
     """numba rejects ``rcond=None``; the rewrite gives it numpy's ``eps * max(M, N)`` cutoff."""
     tree = next(n for n in ast.parse(LSTSQ_SRC).body if isinstance(n, ast.FunctionDef))

@@ -34,6 +34,7 @@ import os
 import pathlib
 import re
 import subprocess
+import sys
 from collections.abc import Iterable, Mapping
 from typing import Protocol
 
@@ -57,6 +58,7 @@ __all__ = [
     "context_runtime",
     "context_view",
     "library_refusal",
+    "numba_omp_pool_launched",
     "spawn_needed",
 ]
 
@@ -183,6 +185,22 @@ def spawn_needed(context: str) -> bool:
     at exec, so only a context other than the parent's own (the default) and present here changes
     anything."""
     return bool(context) and context != DEFAULT_CONTEXT and context_dir(context) is not None
+
+
+def numba_omp_pool_launched() -> bool:
+    """Whether this process has launched numba's ``omp`` threading layer.
+
+    A child forked from such a process terminates with SIGTERM ("fork() called from a process already
+    using GNU OpenMP, this is unsafe") the moment it enters a numba parallel region, so a caller about to
+    fork a numba child checks this first. numba is only looked up in ``sys.modules``: a process that never
+    imported it has launched nothing."""
+    numba = sys.modules.get("numba")
+    if numba is None:
+        return False
+    try:
+        return bool(numba.threading_layer() == "omp")
+    except ValueError:  # numba raises until a parallel region has launched a layer
+        return False
 
 
 def prepend_path(entries: Iterable[str], current: str) -> str:
