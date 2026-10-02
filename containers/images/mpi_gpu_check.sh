@@ -10,7 +10,7 @@
 #                   OFI over its TCP fallback -- a correct allreduce proves correctness, not
 #                   transport.
 #
-# libfabric/libcxi/librccl-net all come from the host via the enroot hooks; the image ships none
+# libfabric/libcxi/librccl-net all come from the host via the CE hooks; the image ships none
 # of them, so a missing EDF annotation shows up as an unresolvable libmpi.so, not silence.
 #
 # Exits non-zero on the first hard failure. GPU checks degrade to SKIP with no visible device

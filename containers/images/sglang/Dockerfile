@@ -28,7 +28,7 @@ ARG BASE_IMAGE=docker.io/lmsysorg/sglang-rocm:v0.5.20-rocm724-mi30x-20260926\
 # ------------------------------------------------------------------------------------------------
 # One stage. This image builds NO fabric software at all -- no libfabric, no libcxi, no RCCL net
 # plugin. CSCS ships all three as one internally consistent artifact, matched to the host driver,
-# and the enroot hooks install it when the EDF sets com.hooks.netstack / .cxi / .aws_ofi_nccl.
+# and the CE hooks install it when the EDF sets com.hooks.netstack / .cxi / .aws_ofi_nccl.
 # Measured on an unmodified image:
 #
 #     plugin:    /opt/cscs/netstack/librccl-net.so

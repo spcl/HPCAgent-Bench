@@ -42,7 +42,7 @@ ARG BASE_IMAGE=docker.io/rocm/pytorch:rocm7.2_ubuntu24.04_py3.12_pytorch_release
 # Stage 0: a compile-only libfabric, and nothing else.
 #
 # This image does NOT build an RCCL network plugin. CSCS ships one, matched to the host driver,
-# installed by the enroot hook when the EDF sets com.hooks.aws_ofi_nccl.enabled.
+# installed by the CE hook when the EDF sets com.hooks.aws_ofi_nccl.enabled.
 #
 # So the only thing left to build here is a libfabric to LINK against, because spack's MPICH needs
 # one at build time and the artifact does not exist then. Providers are disabled: this .so is a

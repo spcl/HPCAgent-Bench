@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build one image and export each of its targets as a squashfs candidate enroot can mount.
+# Build one image and export each of its targets as a squashfs candidate the Container Engine can mount.
 #
 #   containers/images/build.sh <image>     <image> = a directory here: judge-agent-amd, judge-agent-cpu,
 #                                           judge-agent-cuda, sglang, vllm, vllm-cuda

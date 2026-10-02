@@ -33,7 +33,7 @@ import sys
 import tempfile
 
 #: Prefixes the loader is not told about by default. /opt/cscs/netstack is the CSCS netstack
-#: artifact the enroot hooks install (images may not ship libcxi/RCCL plugin themselves); its
+#: artifact the CE hooks install (images may not ship libcxi/RCCL plugin themselves); its
 #: .so files sit FLAT at the prefix root with no lib/lib64 under it, and only libfabric gets
 #: bind-mounted onto a system path, so ldconfig never learns the rest.
 PREFIXES = (

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run registry.sh on a compute node: pushes and pulls move tens of GB through podman and enroot,
+# Run registry.sh on a compute node: pushes and pulls move tens of GB through podman and mksquashfs,
 # which the login node has neither the tmpfs nor the patience for.
 #
 #   sbatch containers/images/registry.sbatch push --check --all

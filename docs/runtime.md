@@ -37,7 +37,7 @@ select one with `HPCAGENT_BENCH_RUNTIME_BACKEND`:
 | `podman` (default) | the OCI tag | yes | none | laptop and HPC login node |
 | `docker` | the OCI tag | no (daemon) | `docker` | laptop, cloud VM |
 | `apptainer` | a SIF converted from the OCI image | yes | `singularity` | shared/HPC sites |
-| `ce` | a SquashFS import (`enroot import`) | n/a | none | CSCS Alps; chosen by `srun --environment=<edf>`, no wrapper command |
+| `ce` | the OCI image as a SquashFS file | n/a | none | CSCS Alps; chosen by `srun --environment=<edf>`, no wrapper command |
 
 `scripts/run_agent_in_container.sh` probes `podman`, `docker`, `apptainer` in that order when no
 backend is pinned. A Harbor run needs `docker` or `podman`: the generated tasks are compose tasks,
@@ -50,6 +50,26 @@ scripts/run_agent_in_container.sh cpu -- stub --kernels gemm --preset S
 
 For NVIDIA GPUs podman uses `--device nvidia.com/gpu=all`,
 docker `--gpus all` (`hpcagent_bench/container_backends.txt`).
+
+## Cluster launcher: one container seam
+
+The experiment launcher (`hpcagent_bench/cluster/run_cluster.sh` and `prepare_job.sh`) starts every role step and
+every in-container helper step through one function, `container_wrap <role> <ce-env> <image>`, defined in
+`hpcagent_bench/cluster/container_runtime.sh`. It fills `CONTAINER_SRUN_ARGS` and `CONTAINER_WRAP` for the runtime in
+`CONTAINER_RUNTIME`, so no caller branches on it:
+
+| `CONTAINER_RUNTIME` | the step is | image |
+|---|---|---|
+| `ce` (default) | `srun --environment=<EDF>`, the EDF rewritten per role with that role's mounts | `*_CE_ENV` names a registered EDF |
+| `apptainer` | `apptainer exec [GPU flags] --bind <mounts> <image>` | `INFERENCE_IMAGE`, `BENCH_IMAGE`: a `.sif` |
+| `podman`, `docker` | `<runtime> run --rm --network host --env-file <job env> [GPU flags] --volume <mount> <image>` | an image reference |
+
+All four apply one mount policy per role (the agent sees its tools and launch directory read-only and never the
+checkout), keep host networking, and take site GPU flags verbatim from `CONTAINER_GPU_FLAGS`. MPI gangs
+(`JUDGE_GANG_NODES`) are Container Engine only: their ranks are fresh containers the batch shell starts through the
+gang relay with the Engine's fabric hooks (cxi, aws-ofi-nccl), which the other runtimes lack, so a rank would
+fall back to TCP; `container_gang_supported` refuses them with that reason. `tests/test_container_runtime.py` builds
+each runtime's command line without the runtime installed.
 
 ## HPC notes
 

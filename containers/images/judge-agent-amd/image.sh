@@ -26,6 +26,7 @@ ce_image_args() {
 # llvm 22 are 60-80 minutes) and the pip wheel cache survive between jobs outside the image. The pip
 # cache is keyed by the GPU target list: pip keys a built wheel by its sdist, not HCC_AMDGPU_TARGET.
 ce_image_inputs() {
+    ce_require_kernelbench
     ce_mirror_args
     ce_require_mirror_commit "spcl/dace.git" "${DACE_COMMIT}"
     ce_require_mirror_commit "ofiwg/libfabric.git" "${LIBFABRIC_COMMIT}"

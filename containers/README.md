@@ -110,12 +110,14 @@ installed package. Held-out tests are in neither: the judge reads them from the 
 
 ## Build, verify, promote
 
-Every build writes a candidate squashfs (plus `.digest`, `.sha256` and an `.oci.tar` for publishing),
+Every build writes a candidate squashfs (the podman image's root filesystem through `mksquashfs`, in `build_common.sh`
+`ce_squash_image`; plus `.digest`, `.sha256` and an `.oci.tar` for publishing),
 verifies it inside itself, and leaves promotion to a separate, explicit step. A mounted squashfs is
 held by its inode, so promotion is safe while jobs run. There is no layer cache between build jobs.
 
 Run everything below from `containers/images/` of a checkout under `$SCRATCH` (the EDFs
-mount `$SCRATCH` and the iopsstor scratch, not `$HOME`).
+mount `$SCRATCH` and the iopsstor scratch, not `$HOME`). The judge stage COPYs `third_party/KernelBench`, so check
+the submodule out first (`git submodule update --init third_party/KernelBench`); a build says so before it starts.
 
 ### AMD (beverin)
 
@@ -289,14 +291,12 @@ For a fast fabric there are two ways in, lightest first:
    The device tests need the host MPI to be GPU-aware for the same GPU.
 
 **Launching across nodes.** The image's MPICH speaks PMI-1 and PMI-2, not PMIx. Under Slurm, start
-one container per rank with `srun --mpi=pmi2` (Pyxis/Enroot `--container-image`, or `srun apptainer
-exec`). The image links no Slurm library, so any Slurm release that offers `--mpi=pmi2` works. On
+one container per rank with `srun --mpi=pmi2` (the CE's `--environment`, or `srun apptainer exec`). The image links no Slurm library, so any Slurm release that offers `--mpi=pmi2` works. On
 one node, `mpiexec -launcher fork` inside a single container needs no scheduler at all.
 
 | runtime | MPI and fabric |
 |---|---|
 | CSCS CE | the EDF hooks do both options automatically |
-| Enroot/Pyxis | `srun --mpi=pmi2 --container-image=...`; mount the libfabric or MPI yourself |
 | Apptainer | bind model, by hand as above |
 | Docker/Podman | `-v` binds as above, or the TCP fallback |
 

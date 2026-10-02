@@ -399,6 +399,61 @@ ce_refuse_mounted() {
     done
 }
 
+# ce_squash_mounted <image tag> <container> <output sqsh>: runs inside `podman unshare`, the only place a
+# rootless user can mount the container's root filesystem. It writes the files the Container Engine reads from
+# a root filesystem (the image's environment, working directory and command, as its OCI config names them),
+# then squashes the tree: root-owned, lzo with uncompressed data blocks, which is what mounts fast under the CE.
+ce_squash_mounted() {
+    local image_tag="$1" container="$2" output_sqsh="$3" rootfs config workdir
+    local -a entrypoint=() cmd=()
+    set -euo pipefail
+    rootfs="$(podman mount "${container}")"
+    trap "podman unmount '${container}' >/dev/null 2>&1 || true" EXIT
+    config="$(podman image inspect --format '{{json .Config}}' "${image_tag}")"
+    mkdir -p "${rootfs}/etc"
+    jq -r '.Env[]?' <<<"${config}" > "${rootfs}/etc/environment"
+    : > "${rootfs}/etc/fstab"
+    workdir="$(jq -r '.WorkingDir // empty' <<<"${config}")"
+    readarray -t entrypoint < <(jq -r '.Entrypoint[]?' <<<"${config}")
+    readarray -t cmd < <(jq -r '.Cmd[]?' <<<"${config}")
+    [[ ${#entrypoint[@]} -gt 0 || ${#cmd[@]} -gt 0 ]] || cmd=(/bin/sh)
+    mkdir -p "${rootfs}${workdir:-/}"
+    jq -r '(.Labels // {}) | to_entries[] | "# \(.key) \(.value | gsub("\n"; " "))"' <<<"${config}" > "${rootfs}/etc/rc"
+    [[ ! -s "${rootfs}/etc/rc" ]] || echo >> "${rootfs}/etc/rc"
+    cat >> "${rootfs}/etc/rc" <<-EOF
+	mkdir -p "${workdir:-/}" 2> /dev/null
+	cd "${workdir:-/}" && unset OLDPWD || exit 1
+
+	if [ -s /etc/rc.local ]; then
+	    . /etc/rc.local
+	fi
+
+	if [ \$# -gt 0 ]; then
+	    exec ${entrypoint[@]+${entrypoint[@]@Q}} "\$@"
+	else
+	    exec ${entrypoint[@]+${entrypoint[@]@Q}} ${cmd[@]+${cmd[@]@Q}}
+	fi
+	EOF
+    printf '%s\n' '# This file is sourced by /etc/rc when the container starts.' \
+        '# It can be used to manipulate the entrypoint or the command of the container.' > "${rootfs}/etc/rc.local"
+    mksquashfs "${rootfs}" "${output_sqsh}" -all-root -noappend -comp lzo -noD -exit-on-error -no-progress \
+        -processors "$(nproc)" >&2
+}
+
+# ce_squash_image <image tag> <output sqsh>: the podman image's root filesystem as the squashfs the Container
+# Engine mounts. Listing the inode table, at the end of the file, is the gate: a truncated image fails it.
+ce_squash_image() {
+    local image_tag="$1" output_sqsh="$2" container="ce-squash-$$" rc=0
+    podman rm -f "${container}" >/dev/null 2>&1 || true
+    podman create --name "${container}" "${image_tag}" >/dev/null
+    rm -f "${output_sqsh}"
+    podman unshare bash -c "$(declare -f ce_squash_mounted); ce_squash_mounted \"\$@\"" bash \
+        "${image_tag}" "${container}" "${output_sqsh}" || rc=$?
+    podman rm -f "${container}" >/dev/null 2>&1 || true
+    [[ "${rc}" -eq 0 ]] || return "${rc}"
+    unsquashfs -l "${output_sqsh}" opt >/dev/null
+}
+
 # After a successful `podman build`: digest sidecar, squashfs, OCI archive, optional push.
 ce_export_image() {
     local image_tag="$1" output_sqsh="$2"
@@ -407,11 +462,7 @@ ce_export_image() {
     podman image inspect --format '{{.Digest}}' "${image_tag}" > "${output_sqsh}.digest"
     printf 'image digest %s\n' "$(cat "${output_sqsh}.digest")"
 
-    # enroot's exit code is unreliable, so gate on the artifact: listing reads the inode table at
-    # the end of the file, which a truncated image fails. Remove first: enroot will not overwrite.
-    rm -f "${output_sqsh}"
-    enroot import -x mount -o "${output_sqsh}" "podman://${image_tag}" || true
-    unsquashfs -l "${output_sqsh}" opt >/dev/null
+    ce_squash_image "${image_tag}" "${output_sqsh}"
     printf 'Wrote %s\n' "${output_sqsh}"
 
     # The OCI archive keeps layers and config (a squashfs is flattened), so registry.sh push can
@@ -470,6 +521,14 @@ ce_march() {
         *) echo "no -march known for spack target ${SPACK_TARGET}" >&2; return 2 ;;
     esac
     export MARCH
+}
+
+# Fails fast when the KernelBench submodule is not checked out: the judge stage COPYs it, which would
+# otherwise fail only after the agent stage's hours.
+ce_require_kernelbench() {
+    [[ -d "${CE_IMAGES_DIR}/../../third_party/KernelBench/KernelBench" ]] && return 0
+    echo "third_party/KernelBench is empty; run: git submodule update --init third_party/KernelBench" >&2
+    return 2
 }
 
 # ce_require_arch <uname -m>: refuse to build on another CPU family (the GH200 images build on aarch64).

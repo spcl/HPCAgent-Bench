@@ -91,9 +91,9 @@ PY
     return "${rc}"
 }
 
-# pull_one <role> [digest]: enroot-import the role's registry image as its live squashfs (or OUT).
+# pull_one <role> [digest]: podman-pull the role's registry image and squash it into its live squashfs (or OUT).
 pull_one() {
-    local role="$1" ref out
+    local role="$1" ref out store rc=0
     [[ "${CE_IMAGE_FLAVOR}" == latest ]] || { echo "the registry has latest images only; build a native one" >&2; return 2; }
     : "${CE_IMAGES:?set SCRATCH or CE_IMAGES}"
     if [[ -n "${2:-}" ]]; then
@@ -105,12 +105,14 @@ pull_one() {
     out="${OUT:-${CE_IMAGES}/$(ce_image "${role}" sqsh)}"
     mkdir -p "${CE_IMAGES}"
     ce_refuse_mounted "${out}"
-    export ENROOT_TEMP_PATH="${ENROOT_TEMP_PATH:-${CE_TMPFS}/enroot-tmp}"
-    export ENROOT_CACHE_PATH="${ENROOT_CACHE_PATH:-${SCRATCH:?}/.enroot}"
-    mkdir -p "${ENROOT_TEMP_PATH}" "${ENROOT_CACHE_PATH}"
+    store="${CE_TMPFS}/registry-$$-pull"
+    ce_private_podman_store "${store}"
+    export TMPDIR="${store}/tmp" XDG_RUNTIME_DIR="${store}/xdg"
+    mkdir -p -m 0700 "${XDG_RUNTIME_DIR}"
     echo "pulling ${ref} -> ${out}"
-    rm -f "${out}"
-    enroot import -x mount -o "${out}" "docker://${ref}"
+    { podman pull "${ref}" >/dev/null && ce_squash_image "${ref}" "${out}"; } || rc=1
+    ce_remove_podman_store "${store}"
+    [[ "${rc}" -eq 0 ]] || return 1
     sha256sum "${out}" | tee "${out}.sha256"
     echo "PULLED ${out}; verify it (verify_image.sbatch) before a campaign mounts it"
 }
