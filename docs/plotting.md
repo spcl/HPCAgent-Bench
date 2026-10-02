@@ -152,7 +152,7 @@ Quick looks at one experiment:
 
 ```bash
 python statistics/plot_setup_summary.py data/observations.csv --study llr40v11 \
-    --out figures/arm.pdf --table data/arm.csv
+    --out figures/setups.pdf --table data/setups.csv
 ```
 
 ## The paper figures, end to end

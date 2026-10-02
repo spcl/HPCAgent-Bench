@@ -61,7 +61,7 @@ tbb:
 # lib and include directories, so a bare -l is the whole answer. The link NAME is derived from that
 # entry's soname in envs/toolset.yaml rather than written again here, because two files naming one
 # library independently is how they drift. The trial link is what decides whether it is really on
-# THIS host, which matters because the GPU arms build inside the ROCm container, not on the login
+# THIS host, which matters because the GPU setups build inside the ROCm container, not on the login
 # node.
 hiptensor:
   toolset: hip_libraries.hiptensor

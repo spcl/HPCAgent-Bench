@@ -37,7 +37,7 @@ contrast, serves every interface without a key ([`README.md`](README.md)). Contr
 Both serve a 262144-token context and 128 running requests with the qwen3 reasoning and qwen3_coder
 tool parsers and the chat template `containers/inference/chat-template-qwen38.jinja`, as `hpcagent-bench-vllm`.
 
-- `mi300` matches `SGLANG_EXTRA_ARGS` of `llrbase-c:qwen38` in `experiments/arms.yaml`
+- `mi300` matches `SGLANG_EXTRA_ARGS` of `llrbase-c:qwen38` in `experiments/setups.yaml`
   (`tests/test_serve_private.py` fails if they diverge). 0.306 is node-wide on the APU and derated
   to 0.26 by aiter; move it only with the backend and mamba ratio ([`qwen38.md`](qwen38.md)).
 - `mi200`: MI250X has neither FP8 nor aiter kernels, so BF16 on the AMD vLLM image (the same one

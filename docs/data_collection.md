@@ -1,10 +1,10 @@
 # Data collection
 
-From finished experiment runs to the observations table the figures are drawn from, in four steps:
+From finished study runs to the observations table the figures are drawn from, in four steps:
 collect, extract, regrade, hand off. Every step reads its sources read-only and refuses an output
 that overlaps a source (`hpcagent_bench/data_guard.py`); none of them deletes or moves data.
 
-Which kernels an experiment still owes, and how runs resume, is in
+Which kernels a study still owes, and how runs resume, is in
 [experiments/README.md](../experiments/README.md#owed-kernels). The scoring rules the extracted rows feed
 are in [DESIGN_data_collection_and_scoring.md](DESIGN_data_collection_and_scoring.md).
 
@@ -12,7 +12,7 @@ are in [DESIGN_data_collection_and_scoring.md](DESIGN_data_collection_and_scorin
 
 | source | default | set with |
 |---|---|---|
-| experiment run roots (`<root>/<campaign>-<stamp>/<job>/judge/rank-N/*.db`, agent metadata) | `$SCRATCH/hpcagent-bench-runs` | `--runs` |
+| study run roots (`<root>/<experiment>-<stamp>/<job>/judge/rank-N/*.db`, agent metadata) | `$SCRATCH/hpcagent-bench-runs` | `--runs` |
 | regrade shards (`regrade-*.db`, `regrade-cells-*.db`) and mlscale grades (`scaling-grade-*.db`) | wherever the regrade/grade jobs wrote them | `--db-root`, `--regrades` |
 | frozen observations (the extracted rows of jobs whose judge DBs are gone) | `$HPCAGENT_BENCH_FROZEN_OBSERVATIONS` | `--frozen-observations` (`''` = none) |
 | other frozen CSV sweeps (e.g. a canon sweep's `<column>.rank<N>.csv`) | none | `--csv-root` |
@@ -62,7 +62,7 @@ submission without one keeps its live row, never credited and owed a grade
 
 ```bash
 python statistics/plot_setup_summary.py out/llr-cpu/llr40_observations.csv --study llr40 \
-    --out figures/arm.pdf --table out/llr-cpu/arm.csv
+    --out figures/setups.pdf --table out/llr-cpu/setups.csv
 ```
 
 ## Tools

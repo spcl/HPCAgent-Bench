@@ -1,7 +1,7 @@
 # Serving Qwen3.8 on MI300A
 
 `Qwen/Qwen3.8-27B-FP8` on SGLang, one node, `tp=4`. The cheapest useful endpoint here. Source of
-truth: `experiment:qwen38` in `experiments/arms.yaml` over `layers/model-qwen38.env`. Background:
+truth: `experiment:qwen38` in `experiments/setups.yaml` over `layers/model-qwen38.env`. Background:
 [`knobs.md`](knobs.md).
 
 ```bash
