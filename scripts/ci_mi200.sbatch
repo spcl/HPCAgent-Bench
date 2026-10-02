@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# The CI verdict on one mi200 node, inside the judge image (its gcc 16 / ROCm toolchain is the one
+# The CI verdict on one GPU node, inside the judge image (its gcc 16 / ROCm toolchain is the one
 # graded runs use; the host gcc has no -std=c23). Submit from the checkout root.
 #
-#   P=--partition=${HPCAGENT_BENCH_CI_PARTITION}   # the site's MI250X partition (site layer)
+#   P=--partition=${HPCAGENT_BENCH_CI_PARTITION}   # the site's CI partition (site layer)
 #   sbatch $P scripts/ci_mi200.sbatch                       every job of tests.yml
-#   CI_EDF=hpcagent-bench-judge-mi300-latest sbatch --partition=mi300 scripts/ci_mi200.sbatch   another image
+#   CI_EDF=<judge EDF name> sbatch $P scripts/ci_mi200.sbatch   a specific image (default: the judge image of
+#                                                           $HPCAGENT_BENCH_PROFILE, e.g. mi200)
 #   sbatch $P scripts/ci_mi200.sbatch --ci --jobs unit,mpi  chosen jobs (scripts/ci_replay.py)
 #   sbatch $P scripts/ci_mi200.sbatch -q tests/test_x.py    a pytest selection
 #   scripts/run_tests.sh --container [same args]                      submit and wait
@@ -42,7 +43,8 @@ fi
 # The image's venv is the interpreter; the host venv under $SCRATCH is built for the login node's OS.
 # The checkout under test is installed editable over the image's copy, as CI installs it; the write
 # lands in the container's writable layer, so the image itself never changes.
-srun --environment="${CI_EDF:-hpcagent-bench-judge-mi200-${CE_IMAGE_FLAVOR:-latest}}" --overlap --nodes=1 --ntasks=1 \
+ci_edf="${CI_EDF:-hpcagent-bench-judge-${HPCAGENT_BENCH_PROFILE:?set CI_EDF or HPCAGENT_BENCH_PROFILE (the hardware profile of the CI partition, e.g. mi200)}-${CE_IMAGE_FLAVOR:-latest}}"
+srun --environment="${ci_edf}" --overlap --nodes=1 --ntasks=1 \
     bash -c 'repo="${0%/scripts/run_tests.sh}"
              PIP_BREAK_SYSTEM_PACKAGES=1 /opt/venv/bin/python -m pip install -q --no-deps --no-build-isolation -e "${repo}" || exit 1
              export TMPDIR="$1" HPCAGENT_BENCH_HOST_PYTHON=/opt/venv/bin/python; shift; exec "$0" "$@"' \

@@ -61,7 +61,7 @@ def cluster_tree(root: pathlib.Path, nodes: dict[str, str]) -> pathlib.Path:
     (root / "experiments").mkdir(parents=True)
     cluster = root / "hpcagent_bench" / "cluster"
     cluster.mkdir(parents=True)
-    for name in ("run_cluster.sh", "env.sh", "inference_service.py"):
+    for name in ("run_cluster.sh", "container_runtime.sh", "env.sh", "inference_service.py"):
         shutil.copy2(CLUSTER / name, cluster / name)
     shutil.copytree(REPO / "scripts", root / "scripts", ignore=shutil.ignore_patterns("checks", "*.py"))
     stub(cluster, "prepare_job.sh", 'touch "${STUB_MARKERS}/prepare-called"')
@@ -81,6 +81,7 @@ def cluster_tree(root: pathlib.Path, nodes: dict[str, str]) -> pathlib.Path:
     env_file = root / "experiments" / ".env.stub"
     lines = {
         "INFERENCE_MODE": "replicas",
+        "GPUS_PER_NODE": "4",
         "INFERENCE_CE_ENV": "hpcagent-bench-sglang-mi300-latest",
         "AMD_CE_ENV": "hpcagent-bench-agent-mi300-latest",
         "JUDGE_CE_ENV": "hpcagent-bench-judge-mi300-latest",

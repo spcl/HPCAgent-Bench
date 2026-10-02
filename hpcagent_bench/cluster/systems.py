@@ -16,9 +16,9 @@ as an ``sbatch`` option, which overrides the script's ``#SBATCH`` line. A field'
 
 ``--gpus-per-task`` given by the caller replaces the system's ``--gpus-per-node`` and vice versa: Slurm takes one.
 A job names the fields it cannot run without (:data:`EXPERIMENT_REQUIRED`); a missing one is an error that names its
-flag and its environment variable. The hardware profile (``--profile``, ``$HPCAGENT_BENCH_PROFILE``, the entry's
-``profile``) names the GPU generation whose images and serving layers the experiment uses; it is not an ``sbatch``
-option.
+flag and its environment variable. Two more values resolve the same way and are not ``sbatch`` options
+(:data:`EXTRAS`): the hardware profile, which names the GPU generation whose images and serving layers an experiment
+uses, and the partition's longest time limit, which caps a scaled experiment's wall clock. Neither has a default.
 """
 
 import argparse
@@ -37,8 +37,8 @@ from hpcagent_bench import paths
 __all__ = [
     "EXPERIMENT_FIELDS",
     "EXPERIMENT_REQUIRED",
+    "EXTRAS",
     "FIELDS",
-    "PROFILE_VARIABLE",
     "SYSTEMS_FILE",
     "Resolved",
     "load_systems",
@@ -67,7 +67,11 @@ GPU_FIELDS = ("gpus_per_node", "gpus_per_task")
 EXPERIMENT_FIELDS = ("partition", "account", "gpus_per_node")
 #: Without these the job cannot run: the account bills it, the GPUs are what its roles share.
 EXPERIMENT_REQUIRED = ("account", "gpus_per_node")
-PROFILE_VARIABLE = "HPCAGENT_BENCH_PROFILE"
+#: Values a job needs that are no ``sbatch`` option: name -> (flag, environment variable).
+EXTRAS: dict[str, tuple[str, str]] = {
+    "profile": ("--profile", "HPCAGENT_BENCH_PROFILE"),
+    "max_time_hours": ("--max-time-hours", "HPCAGENT_BENCH_MAX_TIME_HOURS"),
+}
 PACKAGED = pathlib.Path(__file__).with_name("systems.yaml")
 SYSTEMS_FILE = "HPCAGENT_BENCH_SYSTEMS_FILE"
 
@@ -109,11 +113,16 @@ def choose_system(name: str | None, systems: Mapping[str, Mapping[str, object]],
 
 
 class Resolved(NamedTuple):
-    """What a job gets: the system it was resolved for (``""`` when none), its ``sbatch`` fields and its profile."""
+    """What a job gets: the system it was resolved for (``""`` when none), its ``sbatch`` fields and its
+    :data:`EXTRAS` (``""`` for one nothing sets)."""
 
     system: str
     values: dict[str, str]
-    profile: str
+    extras: dict[str, str]
+
+    @property
+    def profile(self) -> str:
+        return self.extras["profile"]
 
 
 def resolve(
@@ -138,8 +147,11 @@ def resolve(
         if field not in values:
             option, variable = FIELDS[field]
             raise SystemExit(f"job submit: no {field.replace('_', ' ')}: pass {option} or set ${variable}")
-    profile = flags.get("profile") or environ.get(PROFILE_VARIABLE) or str(entry.get("profile", ""))
-    return Resolved(name, values, profile)
+    extras = {
+        extra: str(flags.get(extra) or environ.get(variable) or entry.get(extra, ""))
+        for extra, (unused, variable) in EXTRAS.items()
+    }
+    return Resolved(name, values, extras)
 
 
 def sbatch_command(script: str, values: Mapping[str, str], script_args: Sequence[str], nice: str = "") -> list[str]:
@@ -169,22 +181,34 @@ def main(argv: Sequence[str]) -> int:
 
 
 def options_main(argv: Sequence[str]) -> int:
-    """``hpcagent-bench job options``: the ``sbatch`` options of the experiment job, one per line, or with
-    ``--profile-only`` the hardware profile. The shell submitter reads both from here, so its flags, variables and
+    """``hpcagent-bench job options``: the ``sbatch`` options of the experiment job, one per line, or with ``--print``
+    one of the other resolved values. The shell submitter reads them from here, so its flags, variables and
     ``systems.yaml`` resolve exactly as a helper job's do."""
     parser = argparse.ArgumentParser(prog="hpcagent-bench job options", description=options_main.__doc__)
     parser.add_argument("--system", help="a system of systems.yaml (default: $HPCAGENT_BENCH_SYSTEM, else by cluster)")
     for field in EXPERIMENT_FIELDS:
         option, variable = FIELDS[field]
         parser.add_argument(option, dest=field, metavar="VALUE", help=f"overrides ${variable} and the system's value")
-    parser.add_argument("--profile", help=f"the hardware profile (default: ${PROFILE_VARIABLE}, else the system's)")
-    parser.add_argument("--profile-only", action="store_true", help="print the hardware profile and nothing else")
+    for extra, (option, variable) in EXTRAS.items():
+        parser.add_argument(option, dest=extra, metavar="VALUE", help=f"overrides ${variable} and the system's value")
+    parser.add_argument(
+        "--print", choices=(*EXPERIMENT_FIELDS, *EXTRAS), help="print this value alone (empty when nothing sets it)"
+    )
+    parser.add_argument(
+        "--require",
+        action="append",
+        default=[],
+        choices=EXPERIMENT_FIELDS,
+        help="fail naming its flag and variable when this field is unset (with --print; plain output requires "
+        "every EXPERIMENT_REQUIRED field)",
+    )
     args = parser.parse_args(list(argv))
     environ = site_environment(os.environ)
-    required = () if args.profile_only else EXPERIMENT_REQUIRED
-    resolved = resolve(args.system, vars(args), environ, EXPERIMENT_FIELDS, required)
-    if args.profile_only:
-        print(resolved.profile)
+    resolved = resolve(
+        args.system, vars(args), environ, EXPERIMENT_FIELDS, tuple(args.require) if args.print else EXPERIMENT_REQUIRED
+    )
+    if args.print:
+        print({**resolved.values, **resolved.extras}.get(args.print, ""))
     else:
         print("\n".join(f"{FIELDS[field][0]}={value}" for field, value in resolved.values.items()))
     return 0

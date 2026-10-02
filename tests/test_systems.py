@@ -49,7 +49,8 @@ def test_a_cluster_with_no_entry_runs_from_flags_and_the_environment_alone() -> 
     resolved = systems.resolve(
         None, {"gpus_per_node": "2"}, {"SBATCH_ACCOUNT": "proj", "SBATCH_PARTITION": "gpu"}, systems.EXPERIMENT_FIELDS
     )
-    assert resolved == systems.Resolved("", {"partition": "gpu", "account": "proj", "gpus_per_node": "2"}, "")
+    assert (resolved.system, resolved.values) == ("", {"partition": "gpu", "account": "proj", "gpus_per_node": "2"})
+    assert resolved.extras == {"profile": "", "max_time_hours": ""}
     assert systems.resolve(None, {}, {}).values == {}
 
 
@@ -94,9 +95,16 @@ def test_the_experiment_job_takes_only_its_own_fields_and_a_systems_gpu_count_fi
 
 def test_the_profile_is_its_flag_then_its_variable_then_the_systems() -> None:
     assert systems.resolve("beverin", {}, {}).profile == "mi300"
-    assert systems.resolve("beverin", {}, {systems.PROFILE_VARIABLE: "mi200"}).profile == "mi200"
-    assert systems.resolve("beverin", {"profile": "x"}, {systems.PROFILE_VARIABLE: "mi200"}).profile == "x"
+    assert systems.resolve("beverin", {}, {"HPCAGENT_BENCH_PROFILE": "mi200"}).profile == "mi200"
+    assert systems.resolve("beverin", {"profile": "x"}, {"HPCAGENT_BENCH_PROFILE": "mi200"}).profile == "x"
     assert systems.resolve(None, {}, {}).profile == ""
+
+
+def test_the_longest_time_limit_is_the_systems_unless_set_and_has_no_default() -> None:
+    assert systems.resolve("beverin", {}, {}).extras["max_time_hours"] == "23"
+    assert systems.resolve("beverin", {"max_time_hours": "5"}, {}).extras["max_time_hours"] == "5"
+    assert systems.resolve(None, {}, {"HPCAGENT_BENCH_MAX_TIME_HOURS": "7"}).extras["max_time_hours"] == "7"
+    assert systems.resolve(None, {}, {}).extras["max_time_hours"] == ""
 
 
 def test_the_options_command_prints_one_option_per_line_or_the_profile(
@@ -105,10 +113,28 @@ def test_the_options_command_prints_one_option_per_line_or_the_profile(
     monkeypatch.setattr(systems, "site_environment", lambda environ: {"SBATCH_ACCOUNT": "proj"})
     assert systems.options_main(["--system", "beverin", "--partition", "gpu"]) == 0
     assert capsys.readouterr().out.splitlines() == ["--partition=gpu", "--account=proj", "--gpus-per-node=4"]
-    assert systems.options_main(["--system", "beverin-mi200", "--profile-only"]) == 0
+    assert systems.options_main(["--system", "beverin-mi200", "--print", "profile"]) == 0
     assert capsys.readouterr().out == "mi200\n"
+    assert systems.options_main(["--print", "max_time_hours"]) == 0
+    assert capsys.readouterr().out == "\n"
     with pytest.raises(SystemExit, match="--gpus-per-node"):
         systems.options_main([])
+
+
+def test_print_names_one_resolved_value_and_require_refuses_it_unset(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`--print` answers one value (empty when unset); `--require` makes unset an error naming flag and variable."""
+    monkeypatch.setattr(systems, "site_environment", lambda environ: {})
+    assert systems.options_main(["--print", "gpus_per_node"]) == 0
+    assert capsys.readouterr().out == "\n"
+    with pytest.raises(SystemExit, match=r"--gpus-per-node or set \$HPCAGENT_BENCH_JOB_GPUS_PER_NODE"):
+        systems.options_main(["--print", "gpus_per_node", "--require", "gpus_per_node"])
+    assert (
+        systems.options_main(["--system", "beverin-mi200", "--print", "gpus_per_node", "--require", "gpus_per_node"])
+        == 0
+    )
+    assert capsys.readouterr().out == "8\n"
 
 
 def test_the_sbatch_command_puts_the_options_before_the_script_and_keeps_its_arguments() -> None:

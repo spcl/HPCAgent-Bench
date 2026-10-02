@@ -7,9 +7,9 @@ collectives only; a single-node tensor-parallel server fails at init with them (
 initialize any NET plugin"). The agent and single-node inference therefore get an EDF with both
 switched off; the judge (MPI gang ranks reuse its EDF) and multi-node inference keep them.
 
-``run_cluster.sh`` cannot be sourced (its top level needs a real allocation), so ``role_srun`` and
-the functions it calls are cut out of the shipped text and run standalone with a fake ``srun``
-that records its argv -- the same technique tests/test_derived_edf.py uses.
+``run_cluster.sh`` cannot be sourced (its top level needs a real allocation), so ``role_srun`` is cut out of the
+shipped text and run with the sourced container-runtime seam (``container_runtime.sh``) and a fake ``srun`` that
+records its argv.
 """
 
 import pathlib
@@ -22,22 +22,14 @@ from typing import Any
 REPO = pathlib.Path(__file__).resolve().parents[1]
 SCRIPT = REPO / "hpcagent_bench" / "cluster" / "run_cluster.sh"
 
-_FUNCS = {
-    "agent_ro_binds": re.compile(r"^agent_ro_binds\(\) \{$.*?^\}$", re.MULTILINE | re.DOTALL),
-    "role_mounts": re.compile(r"^role_mounts\(\) \{$.*?^\}$", re.MULTILINE | re.DOTALL),
-    "derived_edf": re.compile(r"^derived_edf\(\) \{$.*?^\}$", re.MULTILINE | re.DOTALL),
-    "role_srun": re.compile(r"^role_srun\(\) \{$.*?^\}$", re.MULTILINE | re.DOTALL),
-}
+SEAM = REPO / "hpcagent_bench" / "cluster" / "container_runtime.sh"
+ROLE_SRUN = re.compile(r"^role_srun\(\) \{$.*?^\}$", re.MULTILINE | re.DOTALL)
 
 
 def _function_text() -> str:
-    text = SCRIPT.read_text()
-    out = []
-    for name, pattern in _FUNCS.items():
-        match = pattern.search(text)
-        assert match, f"{name}() not found in {SCRIPT} -- this test runs its shipped text"
-        out.append(match.group(0))
-    return "\n".join(out)
+    match = ROLE_SRUN.search(SCRIPT.read_text())
+    assert match, f"role_srun() not found in {SCRIPT} -- this test runs its shipped text"
+    return match.group(0)
 
 
 def _stub(path: pathlib.Path, body: str) -> None:
@@ -92,6 +84,7 @@ def run_role_srun(tmp_path: pathlib.Path, role_flag: str, *, inference_nodes: in
             "DRY_RUN=0",
             "GRADE_CPUS=4",
             "JUDGES_PER_NODE=1",
+            f". {shlex.quote(str(SEAM))}",
             _function_text(),
             f"role_srun 1 nid001 bench-ce-env '' {shlex.quote(role_flag)}",
             'wait "${ROLE_PID}"',

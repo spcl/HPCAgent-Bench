@@ -24,9 +24,7 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "hpcagent_bench/cluster/run_cluster.sh"
 SCRIPT_TEXT = SCRIPT.read_text()
 
-ROLE_MOUNTS_RE = re.compile(r"^role_mounts\(\) \{$.*?^\}$", re.MULTILINE | re.DOTALL)
-AGENT_RO_BINDS_RE = re.compile(r"^agent_ro_binds\(\) \{$.*?^\}$", re.MULTILINE | re.DOTALL)
-DERIVED_EDF_RE = re.compile(r"^derived_edf\(\) \{$.*?^\}$", re.MULTILINE | re.DOTALL)
+SEAM = REPO_ROOT / "hpcagent_bench/cluster/container_runtime.sh"
 RUN_IN_JUDGE_CONTAINER_RE = re.compile(r"^run_in_judge_container\(\) \{$.*?^\}$", re.MULTILINE | re.DOTALL)
 
 MULTILINE_EDF = """image = "docker://example/hpcagent-bench:latest"
@@ -41,17 +39,9 @@ FI_PROVIDER = "cxi"
 
 
 def function_text() -> str:
-    out = []
-    for name, pattern in (
-        ("agent_ro_binds", AGENT_RO_BINDS_RE),
-        ("role_mounts", ROLE_MOUNTS_RE),
-        ("derived_edf", DERIVED_EDF_RE),
-        ("run_in_judge_container", RUN_IN_JUDGE_CONTAINER_RE),
-    ):
-        match = pattern.search(SCRIPT_TEXT)
-        assert match, f"{name}() not found in {SCRIPT} -- the tests below run its shipped text"
-        out.append(match.group(0))
-    return "\n".join(out)
+    match = RUN_IN_JUDGE_CONTAINER_RE.search(SCRIPT_TEXT)
+    assert match, f"run_in_judge_container() not found in {SCRIPT} -- the tests below run its shipped text"
+    return f". {shlex.quote(str(SEAM))}\n{match.group(0)}"
 
 
 def write_edf(edf_dir: pathlib.Path, name: str, body: str) -> None:
@@ -171,7 +161,7 @@ def test_unknown_container_runtime_fails_loudly(tmp_path) -> None:
 
 
 def test_apptainer_runtime_binds_the_repo_and_wraps_the_image(tmp_path) -> None:
-    """A second CONTAINER_RUNTIME, to pin that this reuses role_mounts rather than a ce-only path.
+    """A second CONTAINER_RUNTIME, to pin that the seam reuses role_mounts rather than a ce-only path.
     role_mounts's default case (label matches neither agent*/vllm*/judge*) gives exactly
     HPCAGENT_BENCH_REPO + RUN_ROOT -- what the extractor needs to import the package and read the
     run directory, nothing a judge-only or agent-only bind would leave out."""

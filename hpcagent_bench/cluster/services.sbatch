@@ -1,19 +1,18 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=hpcagent-bench-services
-#SBATCH --nodes=4
 #SBATCH --ntasks-per-node=1
-#SBATCH --gpus-per-node=4
 #SBATCH --mem=0
-#SBATCH --time=04:00:00
 # NODE_FAIL auto-requeue reruns this job id into the same RUN_DIR and stacks rows.
 #SBATCH --no-requeue
-#SBATCH --output=beverin-services-%j.out
-#SBATCH --error=beverin-services-%j.err
+#SBATCH --output=services-%j.out
+#SBATCH --error=services-%j.err
 
-# The three-role job (inference, agent, judge). Site specifics (partition, account, GPU count) come
-# from the site layer or the sbatch command line:
+# The three-role job (inference, agent, judge), one task per node. The node count, time limit, account,
+# partition and GPUs per node are sbatch options, never this script's: submit.sh resolves them (flags, environment,
+# systems.yaml) and passes them. By hand:
 #
-#   sbatch --partition=<p> --account=<a> --gpus-per-node=4 --nodes=<sum> hpcagent_bench/cluster/beverin.sbatch
+#   sbatch --nodes=<sum> --time=<hh:mm:ss> --account=<a> --gpus-per-node=<g> [--partition=<p>] \
+#       hpcagent_bench/cluster/services.sbatch
 #
 # CONTAINER_RUNTIME (.env or environment): ce (default; srun --environment=<EDF>), apptainer, podman,
 # docker. Non-CE runtimes need INFERENCE_IMAGE and BENCH_IMAGE plus CONTAINER_GPU_FLAGS ("--rocm" or

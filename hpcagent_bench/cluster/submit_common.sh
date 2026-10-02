@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-# submit.sh's plumbing: stage an arm's env from its arms.yaml base, then either report what would run
-# (SUBMIT=0) or submit it as beverin.sbatch's CLUSTER_ENV_FILE. Sourced, not executed; the caller has
-# sourced arm_nodes.sh and pin_env_kv.sh.
+# submit.sh's plumbing: stage a setup's env from its setups.yaml base, then either report what would run
+# (SUBMIT=0) or submit it as services.sbatch's CLUSTER_ENV_FILE. Sourced, not executed; the caller has
+# sourced setup_nodes.sh and pin_env_kv.sh.
 
 # A core dump lands in the crashing process's CWD (the checkout) and Slurm propagates the
 # SUBMITTER's core limit, so the floor has to be set here.
 ulimit -c 0
-# render_env (a <campaign>:<model> base, flattened) and snapshot_env (the per-submission copy a job reads).
+# render_env (a <base>:<model> base, flattened) and snapshot_env (the per-submission copy a job reads).
 CLUSTER_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-# The arm configs (arms.yaml, layers/) and the operator's generated files (.env.<arm>, .rendered/).
+# The setup configs (setups.yaml, layers/) and the operator's generated files (.env.<setup>, .rendered/).
 EXPERIMENTS_DIR="$(cd -- "${CLUSTER_DIR}/../../experiments" && pwd)"
 # Slurm output of the jobs this file submits: <scratch>/logs (hpcagent_bench.paths.scratch_dir).
 HPCAGENT_BENCH_SCRATCH="${HPCAGENT_BENCH_SCRATCH:-$(cd -- "${CLUSTER_DIR}/../.." && pwd)/.scratch}"
@@ -18,7 +18,7 @@ HPCAGENT_BENCH_SCRATCH="${HPCAGENT_BENCH_SCRATCH:-$(cd -- "${CLUSTER_DIR}/../.."
 
 # symbolic_path <root-var-name> <resolved-absolute-path> -- the path with the CURRENT value of
 # ${<root-var-name>} rewritten back to a literal "${<root-var-name>}" prefix, for a value written into
-# an arm's .env (tests/test_no_hardcoded_user_paths.py refuses a literal scratch path there). Every
+# a setup's .env (tests/test_no_hardcoded_user_paths.py refuses a literal scratch path there). Every
 # consumer sources the .env after cache_env.sh exported <root-var-name>. A path the root-var does not
 # prefix is returned unchanged.
 symbolic_path() {
@@ -33,9 +33,9 @@ symbolic_path() {
 # hms <seconds> -> HH:MM:SS, for a sbatch --time computed off a deadline.
 hms() { printf '%02d:%02d:%02d\n' "$(( $1 / 3600 ))" "$(( $1 % 3600 / 60 ))" "$(( $1 % 60 ))"; }
 
-# clean_suffix <CLEAN> -> "-clean" when CLEAN=1, else "". A clean re-run keeps the arm's recorded
-# identity (experiment, model, language, device, packet); only the arm, job, env and problems names
-# carry the suffix, and the analysis prefers the -clean arm.
+# clean_suffix <CLEAN> -> "-clean" when CLEAN=1, else "". A clean re-run keeps the setup's recorded
+# identity (study, model, language, device, packet); only the setup, job, env and problems names
+# carry the suffix, and the analysis prefers the -clean setup.
 clean_suffix() {
     [[ "$1" == 1 ]] && printf -- '-clean' || printf ''
 }
@@ -46,25 +46,61 @@ BUDGET_SCALE=${BUDGET_SCALE:-1}
 TOKEN_SCALE=${TOKEN_SCALE:-${BUDGET_SCALE}}
 TIME_SCALE=${TIME_SCALE:-${BUDGET_SCALE}}
 
-# The partition's MaxTime with a safety margin (mi300: 24 h). A scaled AGENT_TIMEOUT_SECONDS past what
-# fits asks sbatch for a --time the partition never grants, and the job stays PENDING forever.
-PARTITION_TIME_LIMIT_HOURS=${PARTITION_TIME_LIMIT_HOURS:-23}
+# JOB_FLAGS -- the job flags parse_job_flags took from the command line, as `hpcagent-bench job options` arguments.
+JOB_FLAGS=()
 
-# scale_time <value> -> <value> * TIME_SCALE, clamped so one batch plus STAGING_HOURS still fits the
-# partition. scale_tokens is uncapped: a token ceiling costs money, not a job that never starts.
+# job_options [args...] -- `hpcagent-bench job options` (hpcagent_bench/cluster/systems.py), the ONE resolver of the
+# job's sbatch fields, profile and time limit: the flags submit.sh was given (parse_job_flags), else the
+# environment, else the system's systems.yaml entry.
+job_options() {
+    "${HPCAGENT_BENCH_HOST_PYTHON:?source scripts/host_python.sh}" -m hpcagent_bench job options "${JOB_FLAGS[@]}" "$@"
+}
+
+# parse_job_flags "$@" -- the job flags of a submitter: --system, --account, --partition, --gpus-per-node, --profile,
+# --time (the job's time limit, else computed from the roster) and --nice, each as `--flag value` or `--flag=value`.
+# The resolver's flags go to JOB_FLAGS, over the environment and systems.yaml; any other word is an error.
+parse_job_flags() {
+    local flag value
+    while (( $# )); do
+        flag="$1"
+        if [[ "${flag}" == --*=* ]]; then
+            value="${flag#*=}" flag="${flag%%=*}"
+            shift
+        else
+            (( $# >= 2 )) || { echo "${flag} needs a value" >&2; return 2; }
+            value="$2"
+            shift 2
+        fi
+        case "${flag}" in
+            --system | --account | --partition | --gpus-per-node | --profile) JOB_FLAGS+=("${flag}" "${value}") ;;
+            --time) TIME_LIMIT="${value}" ;;
+            --nice) NICE="${value}" ;;
+            *) echo "unknown argument ${flag} (job flags: --system --account --partition --gpus-per-node --profile --time --nice)" >&2; return 2 ;;
+        esac
+    done
+}
+
+# scale_time <value> -> <value> * TIME_SCALE, clamped so one batch plus STAGING_HOURS still fits the partition's
+# longest time limit (max_time_hours, from the system or HPCAGENT_BENCH_MAX_TIME_HOURS): a --time past it is one the
+# partition never grants, and the job stays PENDING forever. Without a known limit nothing is clamped.
+# scale_tokens is uncapped: a token ceiling costs money, not a job that never starts.
 scale_time() {
-    local cap=$(( (PARTITION_TIME_LIMIT_HOURS - STAGING_HOURS) * 3600 ))
-    (( cap > 0 )) || {
-        echo "scale_time: STAGING_HOURS=${STAGING_HOURS} leaves no room under PARTITION_TIME_LIMIT_HOURS=${PARTITION_TIME_LIMIT_HOURS}" >&2
-        return 2
-    }
-    local scaled=$(( $1 * TIME_SCALE ))
-    (( scaled > cap )) && scaled="${cap}"
+    local scaled=$(( $1 * TIME_SCALE )) limit cap
+    (( TIME_SCALE != 1 )) || { printf '%s\n' "${scaled}"; return 0; }
+    limit=$(job_options --print max_time_hours) || return 2
+    if [[ -n "${limit}" ]]; then
+        cap=$(( (limit - STAGING_HOURS) * 3600 ))
+        (( cap > 0 )) || {
+            echo "scale_time: STAGING_HOURS=${STAGING_HOURS} leaves no room under the ${limit} h time limit" >&2
+            return 2
+        }
+        (( scaled <= cap )) || scaled="${cap}"
+    fi
     printf '%s\n' "${scaled}"
 }
 scale_tokens() { printf '%s\n' "$(( $1 * TOKEN_SCALE ))"; }
 
-# scaled_budget_from <base> <KEY> -> <KEY>'s value in <base> (arms.yaml), scaled. Refuses a base that
+# scaled_budget_from <base> <KEY> -> <KEY>'s value in <base> (setups.yaml), scaled. Refuses a base that
 # sets none: a scaled rerun would otherwise apply no scale at all.
 scaled_budget_from() {
     local base="$1" key="$2" configured
@@ -78,7 +114,7 @@ scaled_budget_from() {
 }
 
 # budget_env_suffix -> "" at the base budget; "-budget<N>x" when TOKEN_SCALE and TIME_SCALE agree;
-# "-tok<N>x-time<M>x" otherwise. A scaled rerun never rewrites the canonical .env of its arm.
+# "-tok<N>x-time<M>x" otherwise. A scaled rerun never rewrites the canonical .env of its setup.
 budget_env_suffix() {
     if [[ "${TOKEN_SCALE}" == "${TIME_SCALE}" ]]; then
         [[ "${TOKEN_SCALE}" == 1 ]] && return 0
@@ -88,10 +124,10 @@ budget_env_suffix() {
     fi
 }
 
-# arm_file_suffix -> budget_env_suffix plus "-<KERNELS_FILE stem>" when a kernels file narrows the
-# roster: the suffix of BOTH an arm's env and its problems file, so a subset or scaled submission can
-# never overwrite the canonical files a PENDING job of the same arm still reads.
-arm_file_suffix() {
+# setup_file_suffix -> budget_env_suffix plus "-<KERNELS_FILE stem>" when a kernels file narrows the
+# roster: the suffix of BOTH a setup's env and its problems file, so a subset or scaled submission can
+# never overwrite the canonical files a PENDING job of the same setup still reads.
+setup_file_suffix() {
     printf '%s' "$(budget_env_suffix)"
     [[ -z "${KERNELS_FILE:-}" ]] || printf -- '-%s' "$(basename -- "${KERNELS_FILE%.*}")"
 }
@@ -163,45 +199,59 @@ forms_missing() {
         --kernels "$5" "${verified[@]}" || [[ $? == 1 ]] || echo "cpf_cache check failed for view $1"
 }
 
-# stage_base_env <base> <arm> <experiment> <stamp> <staged-out> [extra sed -e expr...]
-# The arm's base (<campaign>:<model>, arms.yaml) rendered flat, with CAMPAIGN_ARM and RUN_ROOT
-# rewritten. Written to <staged-out>, never the final arm env: a later gate that bails leaves no file
+# stage_base_env <base> <setup> <study> <stamp> <staged-out> [extra sed -e expr...]
+# The setup's base (<base>:<model>, setups.yaml) rendered flat, with EXPERIMENT_SETUP and RUN_ROOT
+# rewritten. Written to <staged-out>, never the final setup env: a later gate that bails leaves no file
 # that looks complete.
 stage_base_env() {
-    local base="$1" arm="$2" experiment="$3" stamp="$4" out="$5" flat
+    local base="$1" setup="$2" study="$3" stamp="$4" out="$5" flat
     shift 5
     flat="$(render_env "${base}")" || { echo "stage_base_env: cannot render base env ${base}" >&2; return 2; }
-    sed -e "s|^CAMPAIGN_ARM=.*|CAMPAIGN_ARM=${arm}|" \
-        -e "s|^RUN_ROOT=.*|RUN_ROOT=\${SCRATCH:?}/hpcagent-bench-runs/${experiment}-${stamp}|" \
+    sed -e "s|^EXPERIMENT_SETUP=.*|EXPERIMENT_SETUP=${setup}|" \
+        -e "s|^RUN_ROOT=.*|RUN_ROOT=\${SCRATCH:?}/hpcagent-bench-runs/${study}-${stamp}|" \
         "$@" <<<"${flat}" >"${out}"
 }
 
-# PARTITION -- the hardware profile the arms run on, named like its Slurm partition. Unset or mi300:
-# the job lands on the site layer's SBATCH_PARTITION. Any other value needs layers/partition-<P>.env
-# (and -<model>.env for the serving config); it is for smokes and overflow only.
-partition_is_default() { [[ -z "${PARTITION:-}" || "${PARTITION}" == mi300 ]]; }
+# The hardware profile (--profile, HPCAGENT_BENCH_PROFILE, the system's `profile`) names the GPU generation whose
+# images and serving layers a setup uses: `hpcagent-bench-agent-<profile>-latest`, layers/profile-<profile>.env.
+# It is not a Slurm partition (--partition is). layers/common.env names the profile its EDF names and model layers
+# carry (HPCAGENT_BENCH_BASE_PROFILE); any other profile renames them and pins its own layers.
 
-# apply_partition <env> <model> -- renames every *_CE_ENV of <env> from its -mi300- EDF to the -<P>-
-# one, then pins layers/partition-<P>.env and, for a model served on our nodes,
-# layers/partition-<P>-<model>.env over it. A hosted model (INFERENCE_SOURCE=service) runs no engine
-# here, so it needs no serving layer. Refuses a served model with no serving config on <P> and a
-# recorded experiment that does not name <P>, so its rows never pool with mi300 data.
-apply_partition() {
-    local env="$1" model="$2" layer kv experiment
-    partition_is_default && return 0
+# apply_profile <env> <model> -- pins the job's GPUS_PER_NODE (the resolved --gpus-per-node, which every role's GPU
+# split divides) and HPCAGENT_BENCH_PROFILE into <env>. A profile other than the base renames every *_CE_ENV from its
+# -<base>- EDF to the -<profile>- one, then pins layers/profile-<profile>.env and, for a model served on our nodes, layers/profile-<profile>-<model>.env over
+# it. A hosted model (INFERENCE_SOURCE=service) runs no engine here, so it needs no serving layer. Refuses:
+# no profile under the Container Engine (the EDF names carry it), a profile with no layer, a served model with no
+# serving config on it, and a recorded study that does not name it, so its rows never pool with the base's.
+apply_profile() {
+    local env="$1" model="$2" profile base runtime layer kv study gpus
+    gpus="$(job_options --require gpus_per_node --print gpus_per_node)" || return 2
+    pin_env_kv "${env}" "GPUS_PER_NODE=${gpus}" || return 2
+    profile="$(job_options --print profile)" || return 2
+    base="$(sed -n 's/^HPCAGENT_BENCH_BASE_PROFILE=//p' "${env}" | tail -1)"
+    runtime="$(sed -n 's/^CONTAINER_RUNTIME=//p' "${env}" | tail -1)"
+    if [[ -z "${profile}" ]]; then
+        [[ "${runtime:-ce}" != ce ]] || {
+            echo "apply_profile: no hardware profile; the EDF names carry it: pass --profile <p> (or --system <s>), or set HPCAGENT_BENCH_PROFILE" >&2
+            return 2
+        }
+        return 0
+    fi
+    pin_env_kv "${env}" "HPCAGENT_BENCH_PROFILE=${profile}" || return 2
+    [[ "${profile}" != "${base}" ]] || return 0
     local dir="${EXPERIMENTS_DIR}/layers"
-    local layers=("${dir}/partition-${PARTITION}.env")
-    grep -qx 'INFERENCE_SOURCE=service' "${env}" || layers+=("${dir}/partition-${PARTITION}-${model}.env")
-    sed -i -E "s/^([A-Z_]*CE_ENV=.*)-mi300-/\1-${PARTITION}-/" "${env}"
+    local layers=("${dir}/profile-${profile}.env")
+    grep -qx 'INFERENCE_SOURCE=service' "${env}" || layers+=("${dir}/profile-${profile}-${model}.env")
+    sed -i -E "s/^([A-Z_]*CE_ENV=.*)-${base}-/\1-${profile}-/" "${env}"
     for layer in "${layers[@]}"; do
-        [[ -f "${layer}" ]] || { echo "apply_partition: no ${layer##*/}: ${model} has no ${PARTITION} config" >&2; return 2; }
+        [[ -f "${layer}" ]] || { echo "apply_profile: no ${layer##*/}: ${model} has no ${profile} config" >&2; return 2; }
         while IFS= read -r kv; do
             pin_env_kv "${env}" "${kv}" || return 2
         done < <(grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "${layer}")
     done
-    experiment="$(sed -n 's/^HPCAGENT_BENCH_RECORD_EXPERIMENT=//p' "${env}" | tail -1)"
-    [[ "${experiment}" == *"${PARTITION}"* ]] || {
-        echo "apply_partition: experiment '${experiment}' does not name ${PARTITION}; ${PARTITION} rows need their own experiment" >&2
+    study="$(sed -n 's/^HPCAGENT_BENCH_RECORD_STUDY=//p' "${env}" | tail -1)"
+    [[ "${study}" == *"${profile}"* ]] || {
+        echo "apply_profile: study '${study}' does not name ${profile}; ${profile} rows need their own study" >&2
         return 2
     }
 }
@@ -218,55 +268,46 @@ apply_flavor() {
     esac
 }
 
-# partition_sbatch_args -- the sbatch words that move a job off the default partition, one per line.
-partition_sbatch_args() {
-    partition_is_default && return 0
-    local layer="${EXPERIMENTS_DIR}/layers/partition-${PARTITION}.env"
-    printf '%s\n' "--partition=${PARTITION}" "--gpus-per-node=$(sed -n 's/^GPUS_PER_NODE=//p' "${layer}")"
-}
-
-# finalize_staged_env <staged> <env> -- the partition layers, the image flavor, then the rename. A
+# finalize_staged_env <staged> <env> -- the hardware profile, the image flavor, then the rename. A
 # bailed gate leaves neither a staged nor a final file looking complete.
 finalize_staged_env() {
     local staged="$1" env="$2"
-    apply_partition "${staged}" "$(sed -n 's/^HPCAGENT_BENCH_RECORD_MODEL=//p' "${staged}" | tail -1)" \
+    apply_profile "${staged}" "$(sed -n 's/^HPCAGENT_BENCH_RECORD_MODEL=//p' "${staged}" | tail -1)" \
         || { rm -f "${staged}"; return 2; }
     apply_flavor "${staged}" || { rm -f "${staged}"; return 2; }
     mv -- "${staged}" "${env}"
 }
 
-# submit_arm_job <env> <arm> <walltime> [dep-ids] [begin] [detail]
+# submit_setup_job <env> <setup> <walltime> [dep-ids] [begin] [detail]
 # SUBMIT=1 submits a read-only snapshot of <env> and its problems file (snapshot_env) as
-# beverin.sbatch's CLUSTER_ENV_FILE, chained afterany on <dep-ids>, held until <begin>, at --nice=NICE
+# services.sbatch's CLUSTER_ENV_FILE, chained afterany on <dep-ids>, held until <begin>, at --nice=NICE
 # (default the site layer's HPCAGENT_BENCH_NICE), held with HOLD=1; anything else only reports.
 # --no-requeue: a NODE_FAIL requeue reruns the job in the SAME run directory, stacking two runs' rows.
-submit_arm_job() {
-    local env="$1" arm="$2" walltime="$3" dep_ids="${4:-}" begin="${5:-}" detail="${6:-}" nodes snapshot jid
-    nodes=$(arm_nodes "${env}")
+submit_setup_job() {
+    local env="$1" setup="$2" walltime="$3" dep_ids="${4:-}" begin="${5:-}" detail="${6:-}" nodes snapshot jid resolved
+    local -a options
+    nodes=$(setup_nodes "${env}")
     if [[ "${SUBMIT:-0}" != 1 ]]; then
-        echo "prepared ${arm} (${nodes} nodes${detail})${begin:+ begin ${begin}}${dep_ids:+ after ${dep_ids}} -- not submitted"
+        echo "prepared ${setup} (${nodes} nodes${detail})${begin:+ begin ${begin}}${dep_ids:+ after ${dep_ids}} -- not submitted"
         return 0
     fi
-    [[ -n "${SBATCH_ACCOUNT:-}" && "${SBATCH_ACCOUNT}" != root ]] \
-        || { echo "set SBATCH_ACCOUNT (site layer or shell) to a project account" >&2; return 2; }
-    snapshot=$(snapshot_env "${env}" "${arm}") || return 2
+    resolved=$(job_options) || return 2
+    mapfile -t options <<<"${resolved}"
+    [[ " ${options[*]} " != *" --account=root "* ]] \
+        || { echo "submit_setup_job: account root is not a project account: pass --account or set SBATCH_ACCOUNT" >&2; return 2; }
+    snapshot=$(snapshot_env "${env}" "${setup}") || return 2
     local logs="${HPCAGENT_BENCH_SCRATCH}/logs"
     mkdir -p -- "${logs}"
-    local -a args=(--parsable --no-requeue --nodes="${nodes}" --time="${walltime}" --job-name="${arm}"
-        --output="${logs}/beverin-services-%j.out" --error="${logs}/beverin-services-%j.err"
-        --nice="${NICE:-${HPCAGENT_BENCH_NICE:-0}}")
+    local -a args=(--parsable --no-requeue --nodes="${nodes}" --time="${walltime}" --job-name="${setup}"
+        --output="${logs}/services-%j.out" --error="${logs}/services-%j.err"
+        --nice="${NICE:-${HPCAGENT_BENCH_NICE:-0}}" "${options[@]}")
     [[ -z "${dep_ids}" ]] || args+=(--dependency="afterany:${dep_ids}")
     [[ -z "${begin}" ]] || args+=(--begin="${begin}")
     [[ "${HOLD:-0}" != 1 ]] || args+=(--hold)
-    if ! partition_is_default; then
-        grep -qx "HPCAGENT_BENCH_PARTITION=${PARTITION}" "${env}" \
-            || { echo "submit_arm_job: ${env} was not staged for PARTITION=${PARTITION}" >&2; return 2; }
-        mapfile -t -O "${#args[@]}" args < <(partition_sbatch_args)
-    fi
-    # The env file pins any CPF view an arm's packet asks for; the caller's own must not leak into others.
+    # The env file pins any CPF view a setup's packet asks for; the caller's own must not leak into others.
     # CLUSTER_SCRIPT_DIR: under sbatch BASH_SOURCE is a spooled copy, so the job finds run_cluster.sh through this.
     jid=$(env -u CPF_DROPIN_DIR -u CPF_FORMS_DIR -u HPCAGENT_BENCH_SERVICE_CANONICAL_PARALLEL_FORM_DIR \
         CLUSTER_SCRIPT_DIR="${CLUSTER_DIR}" \
-        sbatch "${args[@]}" --export=ALL,CLUSTER_ENV_FILE="${PWD}/${snapshot}" "${CLUSTER_DIR}/beverin.sbatch") || return 2
-    echo "submitted ${arm} -> ${jid} (${nodes} nodes${detail}) env ${snapshot}"
+        sbatch "${args[@]}" --export=ALL,CLUSTER_ENV_FILE="${PWD}/${snapshot}" "${CLUSTER_DIR}/services.sbatch") || return 2
+    echo "submitted ${setup} -> ${jid} (${nodes} nodes${detail}) env ${snapshot}"
 }

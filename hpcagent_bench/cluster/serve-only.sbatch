@@ -2,16 +2,16 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Inference only: one OpenAI-compatible endpoint and nothing else. The payload is run_cluster.sh's
-# own --vllm-node role, so this serves what a campaign serves, without the judge and agent roles.
+# own --vllm-node role, so this serves what an experiment serves, without the judge and agent roles.
 #   hpcagent_bench/cluster/serve-only.sbatch                      qwen38 on the nodes its env file asks for
 #   MODEL=kimi27sglang hpcagent_bench/cluster/serve-only.sbatch   another model (any experiments/layers/model-<MODEL>.env)
 #   SUBMIT=0 hpcagent_bench/cluster/serve-only.sbatch             print what would be submitted, submit nothing
-# It derives --nodes from the env file, so never pass --nodes yourself.
+# It derives --nodes from the env file, so never pass --nodes yourself. Account, partition and GPUs per node resolve as
+# for an experiment job (`hpcagent-bench job options`: $SBATCH_ACCOUNT, $SBATCH_PARTITION,
+# $HPCAGENT_BENCH_JOB_GPUS_PER_NODE or the system's systems.yaml entry); the time limit is SERVE_TIME (default 04:00:00).
 #SBATCH --job-name=serve-only
 #SBATCH --ntasks-per-node=1
-#SBATCH --gpus-per-node=4
 #SBATCH --mem=0
-#SBATCH --time=04:00:00
 # NODE_FAIL auto-requeue reruns this job id into the same RUN_DIR and stacks rows.
 #SBATCH --no-requeue
 #SBATCH --output=%x-%j.out
@@ -32,8 +32,8 @@ export SCRIPT_DIR
 REPO_DIR="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 
 MODEL="${MODEL:-qwen38}"
-# <campaign>:<model> (arms.yaml) or an env file
-BASE_ENV="${SERVE_BASE_ENV:-campaign:${MODEL}}"
+# <base>:<model> (setups.yaml) or an env file
+BASE_ENV="${SERVE_BASE_ENV:-experiment:${MODEL}}"
 SERVE_ENV="${SERVE_ENV_FILE:-${REPO_DIR}/experiments/serve-only.env}"
 [[ -f "${SERVE_ENV}" ]] || { echo "missing env file ${SERVE_ENV}" >&2; exit 2; }
 
@@ -52,15 +52,20 @@ INFERENCE_NODES="${INFERENCE_NODES:-1}"
 INFERENCE_MODE="${INFERENCE_MODE:-replicas}"
 VLLM_PORT="${VLLM_PORT:-8000}"
 SERVED_MODEL="${VLLM_SERVED_MODEL:-hpcagent-bench-vllm}"
-# same precedence the campaign path uses, so one key covers both; 2400 could not hold a
+# same precedence the experiment path uses, so one key covers both; 2400 could not hold a
 # GLM-5.3 start, whose slowest stage alone reaches 4200 s before KV alloc and graph capture
 READY_TIMEOUT="${VLLM_READY_TIMEOUT_SECONDS:-${AGENT_READY_TIMEOUT_SECONDS:-7200}}"
 RUN_ROOT="${RUN_ROOT:?RUN_ROOT must name a writable directory}"
 
 if [[ -z "${SLURM_JOB_ID:-}" ]]; then
     . "${REPO_DIR}/scripts/site_env.sh"
-    submit=(sbatch --nodes="${INFERENCE_NODES}" --nice="${NICE:-${HPCAGENT_BENCH_NICE}}"
-        --export=ALL,MODEL="${MODEL}",CLUSTER_SCRIPT_DIR="${SCRIPT_DIR}"
+    . "${REPO_DIR}/scripts/host_python.sh"
+    shape="$("${HPCAGENT_BENCH_HOST_PYTHON}" -m hpcagent_bench job options)" || exit 2
+    mapfile -t shape <<<"${shape}"
+    gpus_per_node="$("${HPCAGENT_BENCH_HOST_PYTHON}" -m hpcagent_bench job options --print gpus_per_node)" || exit 2
+    submit=(sbatch --nodes="${INFERENCE_NODES}" --time="${SERVE_TIME:-04:00:00}" --nice="${NICE:-${HPCAGENT_BENCH_NICE}}"
+        "${shape[@]}"
+        --export=ALL,MODEL="${MODEL}",GPUS_PER_NODE="${gpus_per_node}",CLUSTER_SCRIPT_DIR="${SCRIPT_DIR}"
         "${SCRIPT_DIR}/serve-only.sbatch")
     if [[ "${SUBMIT:-1}" != 1 ]]; then
         printf 'would serve %s on %s node(s)\n' "${MODEL}" "${INFERENCE_NODES}"
@@ -84,12 +89,12 @@ if (( ${#nodes[@]} != INFERENCE_NODES )); then
 fi
 
 # The cache roots (FAST_SCRATCH, JIT_CACHE_ROOT, HF_HOME, ...) every role step reads, as run_cluster.sh's
-# batch shell resolves them for a campaign job.
+# batch shell resolves them for an experiment job.
 . "${SCRIPT_DIR}/env.sh"
 RUN_DIR="${RUN_ROOT}/${SLURM_JOB_ID}"
 mkdir -p "${RUN_DIR}"
 # The one file run_cluster.sh re-reads in the container, and the record of what this job served.
-{ printf '%s\n' "${BASE_FLAT}"; cat -- "${SERVE_ENV}"; } >"${RUN_DIR}/serve.env"
+{ printf '%s\n' "${BASE_FLAT}"; cat -- "${SERVE_ENV}"; printf 'GPUS_PER_NODE=%s\n' "${GPUS_PER_NODE:?}"; } >"${RUN_DIR}/serve.env"
 
 export CLUSTER_ENV_FILE="${RUN_DIR}/serve.env"
 export HPCAGENT_BENCH_REPO="${HPCAGENT_BENCH_REPO:-${REPO_DIR}}"

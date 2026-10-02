@@ -3,7 +3,7 @@
 """Base envs render flat from layers + arms.yaml, and every submission gets its own read-only snapshot.
 
 A base is ``layers/*.env`` plus one ``experiments/arms.yaml`` entry (env_spec.py). A job reads a
-snapshot under ``.rendered/``, never the setup's re-stageable ``.env.<arm>``, so a later submission or
+snapshot under ``.rendered/``, never the setup's re-stageable ``.env.<setup>``, so a later submission or
 ``SUBMIT=0`` dry run of the same setup cannot rewrite what a PENDING job is about to read.
 """
 
@@ -101,7 +101,7 @@ def test_the_shell_and_the_module_render_every_base_identically() -> None:
 def test_every_base_renders_to_a_complete_flat_env(name: str) -> None:
     """Each base carries every launcher placeholder and assigns no key twice."""
     values = flat(rendered(name))
-    for key in ("CAMPAIGN_ARM", "RUN_ROOT", "PROBLEMS_FILE", "AMD_CE_ENV", "LANGUAGE", "AGENT_MAX_TOKENS"):
+    for key in ("EXPERIMENT_SETUP", "RUN_ROOT", "PROBLEMS_FILE", "AMD_CE_ENV", "LANGUAGE", "AGENT_MAX_TOKENS"):
         assert key in values, f"{name} renders no {key}"
 
 
@@ -202,9 +202,9 @@ def test_an_extends_cycle_fails_loudly() -> None:
         env_spec.render("a:qwen38", spec)
 
 
-def snapshot(workdir: pathlib.Path, arm: str) -> pathlib.Path:
-    """Snapshot workdir/arm.env for ``setup``; the snapshot's path."""
-    return workdir / layers("snapshot", "arm.env", arm, cwd=workdir).strip()
+def snapshot(workdir: pathlib.Path, setup: str) -> pathlib.Path:
+    """Snapshot workdir/setup.env for ``setup``; the snapshot's path."""
+    return workdir / layers("snapshot", "setup.env", setup, cwd=workdir).strip()
 
 
 def fingerprint(path: pathlib.Path) -> tuple[int, int, bytes]:
@@ -215,14 +215,14 @@ def fingerprint(path: pathlib.Path) -> tuple[int, int, bytes]:
 
 def test_a_snapshot_is_read_only_and_owns_its_problems_copy(tmp_path: pathlib.Path) -> None:
     (tmp_path / "problems-a.jsonl").write_text('{"kernel": "k1"}\n')
-    (tmp_path / "arm.env").write_text("CAMPAIGN_ARM=a\nPROBLEMS_FILE=problems-a.jsonl\n")
+    (tmp_path / "setup.env").write_text("EXPERIMENT_SETUP=a\nPROBLEMS_FILE=problems-a.jsonl\n")
     env = snapshot(tmp_path, "a")
     values = flat(env.read_text())
     problems = tmp_path / values["PROBLEMS_FILE"]
     assert env.parent.name == ".rendered"
     assert env.name.startswith("a-")
     assert problems.read_text() == '{"kernel": "k1"}\n'
-    assert values["CAMPAIGN_ARM"] == "a"
+    assert values["EXPERIMENT_SETUP"] == "a"
     assert not os.access(env, os.W_OK)
     assert not os.access(problems, os.W_OK)
 
@@ -230,13 +230,13 @@ def test_a_snapshot_is_read_only_and_owns_its_problems_copy(tmp_path: pathlib.Pa
 def test_a_second_submission_never_touches_the_first_snapshot(tmp_path: pathlib.Path) -> None:
     """Re-staging the setup (new env AND new problems under the same names) leaves snapshot one as it was."""
     (tmp_path / "problems-a.jsonl").write_text('{"kernel": "k1"}\n')
-    (tmp_path / "arm.env").write_text("CAMPAIGN_ARM=a\nAGENT_MAX_TOKENS=1\nPROBLEMS_FILE=problems-a.jsonl\n")
+    (tmp_path / "setup.env").write_text("EXPERIMENT_SETUP=a\nAGENT_MAX_TOKENS=1\nPROBLEMS_FILE=problems-a.jsonl\n")
     first = snapshot(tmp_path, "a")
     first_problems = tmp_path / flat(first.read_text())["PROBLEMS_FILE"]
     before = {path: fingerprint(path) for path in (first, first_problems)}
 
     (tmp_path / "problems-a.jsonl").write_text('{"kernel": "k2"}\n')
-    (tmp_path / "arm.env").write_text("CAMPAIGN_ARM=a\nAGENT_MAX_TOKENS=2\nPROBLEMS_FILE=problems-a.jsonl\n")
+    (tmp_path / "setup.env").write_text("EXPERIMENT_SETUP=a\nAGENT_MAX_TOKENS=2\nPROBLEMS_FILE=problems-a.jsonl\n")
     second = snapshot(tmp_path, "a")
 
     assert second != first
@@ -246,22 +246,26 @@ def test_a_second_submission_never_touches_the_first_snapshot(tmp_path: pathlib.
 
 
 def test_the_job_gets_the_snapshot_not_the_setup_env(tmp_path: pathlib.Path) -> None:
-    """submit_arm_job hands sbatch the snapshot as CLUSTER_ENV_FILE."""
+    """submit_setup_job hands sbatch the snapshot as CLUSTER_ENV_FILE."""
     stub_dir = tmp_path / "bin"
     stub_dir.mkdir()
     # appends: the agent job's sbatch is followed by its chained finalize-grade job's
     (stub_dir / "sbatch").write_text("#!/bin/sh\nprintf '%s\\n' \"$@\" >> sbatch.args\necho 4242\n")
     (stub_dir / "sbatch").chmod(0o755)
     (tmp_path / "problems-a.jsonl").write_text('{"kernel": "k1"}\n')
-    (tmp_path / "arm.env").write_text("CAMPAIGN_ARM=a\nPROBLEMS_FILE=problems-a.jsonl\n")
+    (tmp_path / "setup.env").write_text("EXPERIMENT_SETUP=a\nPROBLEMS_FILE=problems-a.jsonl\n")
     probe = tmp_path / "probe.sh"
     probe.write_text(
-        f"set -eu\n. {CLUSTER / 'submit_common.sh'}\narm_nodes() {{ echo 1; }}\nsubmit_arm_job arm.env a 00:10:00\n"
+        f"set -eu\n. {CLUSTER / 'submit_common.sh'}\nsetup_nodes() {{ echo 1; }}\nsubmit_setup_job setup.env a 00:10:00\n"
     )
+    (tmp_path / "site.env").write_text("")
     env = {
         "PATH": f"{stub_dir}:/usr/bin:/bin",
         "SUBMIT": "1",
         "SBATCH_ACCOUNT": "project",
+        "HPCAGENT_BENCH_JOB_GPUS_PER_NODE": "4",
+        "HPCAGENT_BENCH_HOST_PYTHON": sys.executable,
+        "HPCAGENT_BENCH_SITE_ENV": str(tmp_path / "site.env"),
         "HPCAGENT_BENCH_SCRATCH": str(tmp_path / "scratch"),
     }
     subprocess.run([bash(), str(probe)], env=env, cwd=tmp_path, capture_output=True, text=True, check=True)
@@ -269,4 +273,4 @@ def test_the_job_gets_the_snapshot_not_the_setup_env(tmp_path: pathlib.Path) -> 
     assert len(exported) == 1
     path = pathlib.Path(exported[0].split("CLUSTER_ENV_FILE=", 1)[1])
     assert path.parent == tmp_path / ".rendered"
-    assert flat(path.read_text())["CAMPAIGN_ARM"] == "a"
+    assert flat(path.read_text())["EXPERIMENT_SETUP"] == "a"

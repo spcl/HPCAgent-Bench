@@ -7,8 +7,8 @@
 #   jit_cache_layer.sh seed    <shared> <local>   copy what the shared cache has into <local>
 #   jit_cache_layer.sh publish <local> <shared>   add what <local> compiled to the shared cache
 #
-# WHY. The shared cache lives on ${SCRATCH}, which is NFS on beverin. Several engines compiling at
-# the same moment each rewrite the same content-addressed files there, and NFS turns "a file another
+# WHY. The shared cache lives on ${SCRATCH}, which is NFS on some clusters (CSCS Beverin, for example). Several
+# engines compiling at the same moment each rewrite the same content-addressed files there, and NFS turns "a file another
 # client just replaced" into ESTALE for the reader (`OSError: [Errno 116] Stale file handle` in
 # inductor's autotune: one TP worker down, the engine hung). So an engine never writes the shared tree while it runs: it
 # compiles into a node-local copy, and publishes what it added once it is serving.
