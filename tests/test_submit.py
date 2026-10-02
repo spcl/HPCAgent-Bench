@@ -63,7 +63,7 @@ KNOBS = frozenset(
         *"RECORD_STUDY STAMP REPEAT AGENTS_PER_NODE AGENT_NODES JUDGE_NODES CPF_VIEW CLEAN".split(),
         *"BUDGET_SCALE TOKEN_SCALE TIME_SCALE DEADLINE EXTRA_ENV_KV SETUP_SUFFIX SUBMIT".split(),
         *"DEPEND_ON BEGIN NICE HOLD TIME_LIMIT SBATCH_ACCOUNT SBATCH_PARTITION PYTHONPATH HPCAGENT_BENCH_REPO".split(),
-        *"HPCAGENT_BENCH_SYSTEM HPCAGENT_BENCH_PROFILE HPCAGENT_BENCH_MAX_TIME_HOURS".split(),
+        *"HPCAGENT_BENCH_SYSTEM HPCAGENT_BENCH_HARDWARE HPCAGENT_BENCH_MAX_TIME_HOURS".split(),
         *"HPCAGENT_BENCH_SYSTEMS_FILE HPCAGENT_BENCH_ACCOUNT".split(),
     }
 )
@@ -93,14 +93,14 @@ def tree(root: pathlib.Path) -> pathlib.Path:
     return root
 
 
-#: What the base environment says about the job: the base profile (as a site layer would) and four GPUs per node. A
+#: What the base environment says about the job: the base hardware (as a site layer would) and four GPUs per node. A
 #: knob given as None removes it, so a test can run a submitter that is told neither.
-JOB_ENV = {"HPCAGENT_BENCH_PROFILE": "mi300", "HPCAGENT_BENCH_JOB_GPUS_PER_NODE": "4"}
+JOB_ENV = {"HPCAGENT_BENCH_HARDWARE": "mi300", "HPCAGENT_BENCH_JOB_GPUS_PER_NODE": "4"}
 
 
 def submit(root: pathlib.Path, *flags: str, **knobs: str | None) -> subprocess.CompletedProcess[str]:
     """The copied submit.sh over the llr40 tag as study ``wave``, one model, unless overridden, with the job
-    ``flags`` (--account, --partition, --gpus-per-node, --profile, --system, --time, --nice) as its arguments."""
+    ``flags`` (--account, --partition, --gpus-per-node, --hardware, --system, --time, --nice) as its arguments."""
     env = {k: v for k, v in os.environ.items() if k not in KNOBS and not k.startswith("SLURM_")}
     env.update(
         PATH=f"{root / 'bin'}:{env['PATH']}",
@@ -256,12 +256,14 @@ def test_gpus_per_node_is_required_even_for_a_dry_run(tmp_path: pathlib.Path) ->
     assert not list((root / "experiments").glob(".env.*"))
 
 
-def test_an_image_name_carries_the_profile_so_none_is_refused_under_the_container_engine(
+def test_an_image_name_carries_the_hardware_so_none_is_refused_under_the_container_engine(
     tmp_path: pathlib.Path,
 ) -> None:
     root = tree(tmp_path)
-    done = submit(root, KERNELS_FILE="subset.txt", HPCAGENT_BENCH_PROFILE=None)
-    assert done.returncode == 2 and "--profile" in done.stderr and "HPCAGENT_BENCH_PROFILE" in done.stderr, done.stderr
+    done = submit(root, KERNELS_FILE="subset.txt", HPCAGENT_BENCH_HARDWARE=None)
+    assert done.returncode == 2 and "--hardware" in done.stderr and "HPCAGENT_BENCH_HARDWARE" in done.stderr, (
+        done.stderr
+    )
     assert not list((root / "experiments").glob(".env.*"))
 
 
@@ -329,22 +331,22 @@ def test_a_submitted_setup_reads_a_snapshot_and_chains_its_finalize_grade(tmp_pa
 
 
 def submit_mi200(root: pathlib.Path, model: str, **knobs: str) -> subprocess.CompletedProcess[str]:
-    """One ``model`` setup submitted to the mi200 profile as study ``x-mi200``, unless overridden."""
+    """One ``model`` setup submitted to the mi200 hardware as study ``x-mi200``, unless overridden."""
     return submit(
         root,
-        "--account", "p", "--partition", "mi200", "--profile", "mi200", "--gpus-per-node", "8",
+        "--account", "p", "--partition", "mi200", "--hardware", "mi200", "--gpus-per-node", "8",
         **{"KERNELS_FILE": "subset.txt", "EXPERIMENT": "x-mi200", "MODELS": model, "SUBMIT": "1", **knobs},
     )  # fmt: skip
 
 
 def assert_on_mi200(root: pathlib.Path, env: dict[str, str]) -> None:
-    assert env["HPCAGENT_BENCH_PROFILE"] == "mi200" and env["GPUS_PER_NODE"] == "8"
+    assert env["HPCAGENT_BENCH_HARDWARE"] == "mi200" and env["GPUS_PER_NODE"] == "8"
     assert env["AMD_CE_ENV"].endswith("-mi200-latest") and env["JUDGE_CE_ENV"].endswith("-mi200-latest")
     assert {"--partition=mi200", "--gpus-per-node=8"} <= set(sbatch_args(root))
 
 
 def test_a_hosted_model_setup_lands_on_mi200_without_a_serving_layer(tmp_path: pathlib.Path) -> None:
-    """A model behind a provider API runs no engine on the node, so the profile layer alone moves it."""
+    """A model behind a provider API runs no engine on the node, so the hardware layer alone moves it."""
     root = tree(tmp_path)
     done = submit_mi200(root, "musespark")
     assert done.returncode == 0, done.stderr
@@ -354,10 +356,10 @@ def test_a_hosted_model_setup_lands_on_mi200_without_a_serving_layer(tmp_path: p
 
 
 def test_a_served_model_setup_on_mi200_takes_its_serving_layer(tmp_path: pathlib.Path) -> None:
-    """A self-served model runs on mi200 through layers/profile-mi200-<model>.env, pinned over the
-    setup after the profile layer. The test writes its own layer, so it holds whatever ships."""
+    """A self-served model runs on mi200 through layers/hardware-mi200-<model>.env, pinned over the
+    setup after the hardware layer. The test writes its own layer, so it holds whatever ships."""
     root = tree(tmp_path)
-    layer = root / "experiments" / "layers" / "profile-mi200-qwen38.env"
+    layer = root / "experiments" / "layers" / "hardware-mi200-qwen38.env"
     layer.write_text("INFERENCE_ENGINE=vllm\nINFERENCE_CE_ENV=hpcagent-bench-vllm-mi200-latest\n")
     done = submit_mi200(root, "qwen38")
     assert done.returncode == 0, done.stderr
@@ -374,7 +376,7 @@ def test_a_served_model_with_no_mi200_serving_layer_is_refused(tmp_path: pathlib
         for p in layers.glob("model-*.env")
         if "# extends: service.env" not in p.read_text()
     ]
-    bare = sorted(m for m in served if not (layers / f"profile-mi200-{m}.env").exists())
+    bare = sorted(m for m in served if not (layers / f"hardware-mi200-{m}.env").exists())
     assert bare, "every served model has an mi200 layer: the refusal has nothing to guard"
     root = tree(tmp_path)
     done = submit_mi200(root, bare[0])
@@ -384,13 +386,13 @@ def test_a_served_model_with_no_mi200_serving_layer_is_refused(tmp_path: pathlib
 
 
 def test_the_mi200_system_entry_is_the_whole_job_shape(tmp_path: pathlib.Path) -> None:
-    """`--system beverin-mi200` supplies the partition, the GPUs and the profile that --partition, --gpus-per-node and
-    --profile give one at a time."""
+    """`--system beverin-mi200` supplies the partition, the GPUs and the hardware that --partition, --gpus-per-node and
+    --hardware give one at a time."""
     root = tree(tmp_path)
     done = submit(
         root, "--account", "p", "--system", "beverin-mi200",
         KERNELS_FILE="subset.txt", EXPERIMENT="x-mi200", MODELS="musespark", SUBMIT="1",
-        HPCAGENT_BENCH_PROFILE=None, HPCAGENT_BENCH_JOB_GPUS_PER_NODE=None,
+        HPCAGENT_BENCH_HARDWARE=None, HPCAGENT_BENCH_JOB_GPUS_PER_NODE=None,
     )  # fmt: skip
     assert done.returncode == 0, done.stderr
     assert_on_mi200(root, setup_env(root, "x-mi200-musespark-c"))

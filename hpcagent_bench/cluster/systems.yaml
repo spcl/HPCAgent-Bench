@@ -3,12 +3,12 @@
 # (HPCAGENT_BENCH_JOB_<FIELD>, SBATCH_PARTITION, SBATCH_ACCOUNT, or the site layer's value of it), overrides a field.
 # Add a system in a file of the same shape named by HPCAGENT_BENCH_SYSTEMS_FILE. `cluster` is matched against
 # SLURM_CLUSTER_NAME to pick the system when none is named; with no entry a job runs from flags and the environment.
-# `profile` is the hardware profile whose images and serving layers an experiment uses (HPCAGENT_BENCH_PROFILE,
-# --profile). `max_time_hours` is the longest --time the partition grants, less a margin
+# `hardware` is the hardware whose images and serving layers an experiment uses (HPCAGENT_BENCH_HARDWARE,
+# --hardware). `max_time_hours` is the longest --time the partition grants, less a margin
 # (HPCAGENT_BENCH_MAX_TIME_HOURS, --max-time-hours). One task per GPU, each with its share of the cores.
 beverin:
   cluster: beverin
-  profile: mi300
+  hardware: mi300
   partition: mi300
   max_time_hours: 23
   ntasks_per_node: 4
@@ -16,7 +16,7 @@ beverin:
   gpus_per_node: 4
 beverin-mi200:
   cluster: beverin
-  profile: mi200
+  hardware: mi200
   partition: mi200
   max_time_hours: 23
   ntasks_per_node: 4

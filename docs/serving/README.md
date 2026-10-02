@@ -119,7 +119,7 @@ The served name is `hpcagent-bench-vllm` for every model, not the HuggingFace id
 
 The engine is per model and partition: on mi300, Qwen3.8 on vLLM is about 19x slower than on SGLang
 and Kimi K2.7 on vLLM collapses above concurrency 1. On mi200 (MI250X, BF16) the SGLang base has no
-kernels, and Qwen3.8 serves on the AMD vLLM image (`layers/profile-mi200-qwen38.env`, 421 tok/s at
+kernels, and Qwen3.8 serves on the AMD vLLM image (`layers/hardware-mi200-qwen38.env`, 421 tok/s at
 16 concurrent requests).
 
 ## 5. Healthy or sick
