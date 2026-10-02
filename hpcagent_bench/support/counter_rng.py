@@ -17,8 +17,11 @@ arithmetic and one exact conversion. Its tails end at +-6 and its kurtosis is 2.
 distribution needs and nothing more.
 
 Indices are arrays (a 0-d array or a scalar would warn on the intended uint64 wraparound). ``xp.arange``
-gives them; :func:`counter` gives the flat index of every element of a shape. :func:`uniform_field` and
-:func:`normal_field` build a whole array of a shape that way, in cache-sized blocks on numpy.
+gives them; :func:`counter` gives the flat index of every element of a shape. :func:`uniform_field`,
+:func:`normal_field` and :func:`integers_field` build a whole array of a shape, from the flat index ``first``
+(a column block of a larger array is a call with ``first`` set), on the fast backend of the array library:
+:mod:`counter_rng_numba` (parallel numba kernels) for numpy and :mod:`counter_rng_cupy` (elementwise GPU
+kernels) for cupy. The functions of indices are the reference they must equal, bit for bit.
 """
 
 import math
@@ -26,7 +29,19 @@ from types import ModuleType
 
 import numpy as np
 
-__all__ = ["BLOCK", "bits", "counter", "integers", "key", "normal", "normal_field", "uniform", "uniform_field"]
+__all__ = [
+    "BLOCK",
+    "accelerator",
+    "bits",
+    "counter",
+    "integers",
+    "integers_field",
+    "key",
+    "normal",
+    "normal_field",
+    "uniform",
+    "uniform_field",
+]
 
 MASK = (1 << 64) - 1
 #: splitmix64's increment (the golden ratio in 64 bits) and the two multipliers of its finalizer.
@@ -38,9 +53,8 @@ NORMAL_WORDS = 4
 PIECE_BITS = 21
 PIECE_MASK = (1 << PIECE_BITS) - 1
 PIECES = 12
-#: Elements per block of the ``*_field`` builders on numpy: the temporaries of one block stay in cache, which
-#: is 2.5 to 3 times faster than one pass over a large array. An array library with its own device memory
-#: builds the field in one block.
+#: Elements per block of the reference ``*_field`` builder on numpy when no fast backend loads: the temporaries of
+#: one block stay in cache, which is 2.5 to 3 times faster than one pass over a large array.
 BLOCK = 1 << 16
 
 
@@ -78,7 +92,7 @@ def bits(index, seed: int, stream: int = 0, xp: ModuleType = np):
     return state
 
 
-def uniform(index, seed: int, stream: int = 0, xp: ModuleType = np, dtype=np.float64):
+def uniform(index, seed: int, stream: int = 0, xp: ModuleType = np, dtype: np.typing.DTypeLike = np.float64):
     """A value in [0, 1) for each element of ``index``: the top 53 bits (float64) or 24 bits (float32) of
     :func:`bits`, which the float holds exactly."""
     if np.dtype(dtype) == np.float32:
@@ -86,18 +100,19 @@ def uniform(index, seed: int, stream: int = 0, xp: ModuleType = np, dtype=np.flo
     return (bits(index, seed, stream, xp) >> xp.uint64(11)).astype(xp.float64) * (0.5**53)
 
 
-def normal(index, seed: int, stream: int = 0, xp: ModuleType = np):
-    """A float64 of mean 0 and variance 1 (less 2**-42) for each element of ``index``: twelve uniform pieces of
-    21 bits summed exactly as integers. Bit-identical across array libraries; tails end at +-6."""
-    total = None
+def normal(index, seed: int, stream: int = 0, xp: ModuleType = np, dtype: np.typing.DTypeLike = np.float64):
+    """A value of mean 0 and variance 1 (less 2**-42) for each element of ``index``: twelve uniform pieces of 21 bits
+    summed exactly as integers, as float64 or rounded to float32. Bit-identical across array libraries; tails end
+    at +-6."""
     base = index.astype(xp.uint64) * xp.uint64(NORMAL_WORDS)
+    total = xp.zeros(base.shape, dtype=xp.uint64)
     for word in range(NORMAL_WORDS):
         hashed = bits(base + xp.uint64(word), seed, stream, xp)
         for piece in range(PIECES // NORMAL_WORDS):
             part = (hashed >> xp.uint64(piece * PIECE_BITS)) & xp.uint64(PIECE_MASK)
-            total = part if total is None else total + part
+            total += part
     centre = PIECES * (1.0 - 0.5**PIECE_BITS) / 2.0
-    return total.astype(xp.float64) * (0.5**PIECE_BITS) - centre
+    return (total.astype(xp.float64) * (0.5**PIECE_BITS) - centre).astype(dtype, copy=False)
 
 
 def integers(index, seed: int, bound: int, stream: int = 0, xp: ModuleType = np):
@@ -105,23 +120,70 @@ def integers(index, seed: int, bound: int, stream: int = 0, xp: ModuleType = np)
     return (bits(index, seed, stream, xp) % xp.uint64(bound)).astype(xp.int64)
 
 
-def field(draw, shape: tuple[int, ...], xp: ModuleType, dtype):
-    """``draw(index)`` for the flat index of every element of ``shape``, written into one array, in blocks of
-    :data:`BLOCK` elements on numpy and in one block elsewhere."""
+def accelerator(xp: ModuleType):
+    """The module of fast kernels for ``xp``: numba for numpy when numba imports, a cupy kernel set for cupy, else
+    ``None`` (the array-API reference runs). Both compute the reference's bits."""
+    if xp is np:
+        try:
+            from hpcagent_bench.support import counter_rng_numba
+        except ImportError:
+            return None
+        return counter_rng_numba
+    if getattr(xp, "__name__", "") == "cupy":
+        from hpcagent_bench.support import counter_rng_cupy
+
+        return counter_rng_cupy
+    return None
+
+
+def field(draw, shape: tuple[int, ...], xp: ModuleType, dtype, first: int = 0):
+    """``draw(index)`` for the flat indices ``first`` onward of ``shape``, written into one array, in blocks of
+    :data:`BLOCK` elements on numpy and in one block elsewhere. The reference path of the ``*_field`` builders."""
     size = math.prod(shape)
     step = BLOCK if xp is np else max(size, 1)
     out = xp.empty(size, dtype=dtype)
     for start in range(0, size, step):
         stop = min(start + step, size)
-        out[start:stop] = draw(xp.arange(start, stop, dtype=xp.uint64))
+        out[start:stop] = draw(xp.arange(first + start, first + stop, dtype=xp.uint64))
     return out.reshape(shape)
 
 
-def uniform_field(shape: tuple[int, ...], seed: int, stream: int = 0, xp: ModuleType = np, dtype=np.float64):
-    """An array of ``shape`` of :func:`uniform` values at the flat index of each element."""
-    return field(lambda index: uniform(index, seed, stream, xp, dtype), shape, xp, dtype)
+def uniform_field(
+    shape: tuple[int, ...],
+    seed: int,
+    stream: int = 0,
+    xp: ModuleType = np,
+    dtype: np.typing.DTypeLike = np.float64,
+    first: int = 0,
+):
+    """An array of ``shape`` of :func:`uniform` values at the flat indices ``first`` onward. On the fast backend
+    (:func:`accelerator`) when there is one; the same bits either way."""
+    fast = accelerator(xp)
+    if fast is None:
+        return field(lambda index: uniform(index, seed, stream, xp, dtype), shape, xp, dtype, first)
+    return fast.uniform(xp.empty(shape, dtype=dtype), first, seed, stream)
 
 
-def normal_field(shape: tuple[int, ...], seed: int, stream: int = 0, xp: ModuleType = np):
-    """An array of ``shape`` of :func:`normal` values at the flat index of each element."""
-    return field(lambda index: normal(index, seed, stream, xp), shape, xp, np.float64)
+def normal_field(
+    shape: tuple[int, ...],
+    seed: int,
+    stream: int = 0,
+    xp: ModuleType = np,
+    dtype: np.typing.DTypeLike = np.float64,
+    first: int = 0,
+):
+    """An array of ``shape`` of :func:`normal` values at the flat indices ``first`` onward, on the fast backend when
+    there is one."""
+    fast = accelerator(xp)
+    if fast is None:
+        return field(lambda index: normal(index, seed, stream, xp, dtype), shape, xp, dtype, first)
+    return fast.normal(xp.empty(shape, dtype=dtype), first, seed, stream)
+
+
+def integers_field(shape: tuple[int, ...], seed: int, bound: int, stream: int = 0, xp: ModuleType = np, first: int = 0):
+    """An int64 array of ``shape`` of :func:`integers` values at the flat indices ``first`` onward, on the fast
+    backend when there is one."""
+    fast = accelerator(xp)
+    if fast is None:
+        return field(lambda index: integers(index, seed, bound, stream, xp), shape, xp, np.int64, first)
+    return fast.integers(xp.empty(shape, dtype=np.int64), first, seed, bound, stream)
