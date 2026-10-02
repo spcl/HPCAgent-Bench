@@ -883,7 +883,7 @@ def test_several_treatments_of_one_experiment_draw_one_dot_row(
     out = tmp_path / "fig.pdf"
     old_argv = sys.argv
     sys.argv = [
-        "plot_score_change.py", str(obs), "--study", "exp", "--treatment", "skills", "--treatment", "cpf",
+        "plot_score_change.py", str(obs), "--experiment", "exp", "--treatment", "skills", "--treatment", "cpf",
         "--out", str(out), "--table", str(tmp_path / "table.csv"),
     ]  # fmt: skip
     try:

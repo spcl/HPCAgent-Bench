@@ -106,7 +106,7 @@ python -m hpcagent_bench.studies \
     --study llrblind --out data/observations.csv
 ```
 
-`--runs` is a run-root glob and `--study` a setup prefix; both repeat. Keep waves in a suffix
+`--runs` is a run-root glob and `--study` the recorded study (an identity column); both repeat. Keep waves in a suffix
 (`<experiment>-w2`) so one prefix matches every wave. Check the printed summary: a missing setup means a
 wrong prefix. From Python: `hpcagent_bench.studies.observations(globs, study=[...])`.
 
@@ -152,7 +152,7 @@ Run any script with `-h` for its flags.
 Quick looks at one experiment:
 
 ```bash
-python statistics/plot_setup_summary.py data/observations.csv --study llr40v11 \
+python statistics/plot_setup_summary.py data/observations.csv --experiment llr40v11 \
     --out figures/setups.pdf --table data/setups.csv
 ```
 
@@ -300,12 +300,12 @@ control's grey, dashed, beside the models; `--no-torch-dist` leaves it out.
 
 ```bash
 OBS="$AR/data/mlscale_observations.csv"
-python statistics/plot_scaling.py "$OBS" --study mlscale --out figures/scaling --table data/scaling.csv
-python statistics/plot_scaling.py "$OBS" --study mlscale --figure efficiency --out figures/scaling
-python statistics/plot_scaling.py "$OBS" --study mlscale --figure speedup --out figures/scaling
-python statistics/plot_scaling.py "$OBS" --study mlscale --figure per-kernel --mode strong \
+python statistics/plot_scaling.py "$OBS" --experiment mlscale --out figures/scaling --table data/scaling.csv
+python statistics/plot_scaling.py "$OBS" --experiment mlscale --figure efficiency --out figures/scaling
+python statistics/plot_scaling.py "$OBS" --experiment mlscale --figure speedup --out figures/scaling
+python statistics/plot_scaling.py "$OBS" --experiment mlscale --figure per-kernel --mode strong \
     --quantity efficiency --out figures/scaling
-python statistics/plot_scaling.py "$OBS" --study mlscale --figure summary --out figures/scaling
+python statistics/plot_scaling.py "$OBS" --experiment mlscale --figure summary --out figures/scaling
 python statistics/plot_scaling.py "$OBS" --setup 'mlscale-qwen38-hip' --width 5.5 --out figures/scaling-qwen38
 ```
 

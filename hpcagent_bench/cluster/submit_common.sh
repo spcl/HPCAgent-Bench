@@ -204,11 +204,11 @@ forms_missing() {
 # rewritten. Written to <staged-out>, never the final setup env: a later gate that bails leaves no file
 # that looks complete.
 stage_base_env() {
-    local base="$1" setup="$2" study="$3" stamp="$4" out="$5" flat
+    local base="$1" setup="$2" experiment="$3" stamp="$4" out="$5" flat
     shift 5
     flat="$(render_env "${base}")" || { echo "stage_base_env: cannot render base env ${base}" >&2; return 2; }
     sed -e "s|^EXPERIMENT_SETUP=.*|EXPERIMENT_SETUP=${setup}|" \
-        -e "s|^RUN_ROOT=.*|RUN_ROOT=\${SCRATCH:?}/hpcagent-bench-runs/${study}-${stamp}|" \
+        -e "s|^RUN_ROOT=.*|RUN_ROOT=\${SCRATCH:?}/hpcagent-bench-runs/${experiment}-${stamp}|" \
         "$@" <<<"${flat}" >"${out}"
 }
 

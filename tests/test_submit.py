@@ -59,7 +59,7 @@ SUBSET = ("fuse_diamond", "tsvc_2_s115")
 #: The submitter's knobs, cleared so each run sees only what its test sets.
 KNOBS = frozenset(
     {
-        *"BASE TAG KERNELS_FILE MODELS LANGUAGES PACKETS HARNESSES OFFLOAD OFFLOAD_RESIDENCY STUDY".split(),
+        *"BASE TAG KERNELS_FILE MODELS LANGUAGES PACKETS HARNESSES OFFLOAD OFFLOAD_RESIDENCY EXPERIMENT".split(),
         *"RECORD_STUDY STAMP REPEAT AGENTS_PER_NODE AGENT_NODES JUDGE_NODES CPF_VIEW CLEAN".split(),
         *"BUDGET_SCALE TOKEN_SCALE TIME_SCALE DEADLINE EXTRA_ENV_KV SETUP_SUFFIX SUBMIT".split(),
         *"DEPEND_ON BEGIN NICE HOLD TIME_LIMIT SBATCH_ACCOUNT SBATCH_PARTITION PYTHONPATH HPCAGENT_BENCH_REPO".split(),
@@ -111,7 +111,7 @@ def submit(root: pathlib.Path, *flags: str, **knobs: str | None) -> subprocess.C
         SCRATCH=str(root / "scratch"),
         STAMP="20260926",
     )
-    env.update({"MODELS": "qwen38", "TAG": "llr40", "STUDY": "wave", **JOB_ENV, **knobs})
+    env.update({"MODELS": "qwen38", "TAG": "llr40", "EXPERIMENT": "wave", **JOB_ENV, **knobs})
     env = {key: value for key, value in env.items() if value is not None}
     return subprocess.run(
         ["bash", str(root / "hpcagent_bench" / "cluster" / "submit.sh"), *flags],
@@ -333,7 +333,7 @@ def submit_mi200(root: pathlib.Path, model: str, **knobs: str) -> subprocess.Com
     return submit(
         root,
         "--account", "p", "--partition", "mi200", "--profile", "mi200", "--gpus-per-node", "8",
-        **{"KERNELS_FILE": "subset.txt", "STUDY": "x-mi200", "MODELS": model, "SUBMIT": "1", **knobs},
+        **{"KERNELS_FILE": "subset.txt", "EXPERIMENT": "x-mi200", "MODELS": model, "SUBMIT": "1", **knobs},
     )  # fmt: skip
 
 
@@ -389,7 +389,7 @@ def test_the_mi200_system_entry_is_the_whole_job_shape(tmp_path: pathlib.Path) -
     root = tree(tmp_path)
     done = submit(
         root, "--account", "p", "--system", "beverin-mi200",
-        KERNELS_FILE="subset.txt", STUDY="x-mi200", MODELS="musespark", SUBMIT="1",
+        KERNELS_FILE="subset.txt", EXPERIMENT="x-mi200", MODELS="musespark", SUBMIT="1",
         HPCAGENT_BENCH_PROFILE=None, HPCAGENT_BENCH_JOB_GPUS_PER_NODE=None,
     )  # fmt: skip
     assert done.returncode == 0, done.stderr
@@ -398,6 +398,6 @@ def test_the_mi200_system_entry_is_the_whole_job_shape(tmp_path: pathlib.Path) -
 
 def test_an_mi200_setup_needs_a_study_naming_mi200(tmp_path: pathlib.Path) -> None:
     root = tree(tmp_path)
-    done = submit_mi200(root, "musespark", STUDY="wave", SUBMIT="0")
+    done = submit_mi200(root, "musespark", EXPERIMENT="wave", SUBMIT="0")
     assert done.returncode == 2 and "does not name mi200" in done.stderr, done.stderr
     assert not list((root / "experiments").glob(".env.*"))

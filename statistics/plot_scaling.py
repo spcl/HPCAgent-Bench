@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Weak- and strong-scaling figures for the distributed ML-op track.
 
-Selects observations by ``--study`` prefix and ``--setup`` regex, then draws parallel
+Selects observations by ``--experiment`` prefix and ``--setup`` regex, then draws parallel
 efficiency, speedup, per-kernel small multiples, and per-setup geomean curves. Each figure writes a
 PDF, a PNG, and the CSV behind the marks plus one listing points the sweep never measured.
 """
@@ -29,7 +29,7 @@ FIGURES: tuple[str, ...] = (
 
 
 def load(path: pathlib.Path, prefix: str, setup: str, torch_dist: bool = True) -> pd.DataFrame:
-    """The observations frame, narrowed to one study prefix and one setup regex; keeps the
+    """The observations frame, narrowed to one experiment prefix and one setup regex; keeps the
     torch.distributed baseline rows (setup ``torch_dist``) unless ``torch_dist`` is False."""
     frame = studies.read_observations(path)
     names = frame["setup"].astype(str)
@@ -46,10 +46,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("observations", type=pathlib.Path, help="observations CSV or extracted .db")
     parser.add_argument(
-        "--study",
-        dest="study",
+        "--experiment",
+        dest="experiment",
         default="",
-        help="setup prefix selecting one study; blank keeps all",
+        help="setup prefix selecting one experiment; blank keeps all",
     )
     parser.add_argument("--setup", dest="setup", default="", help="regex; keep only setups whose full name matches")
     parser.add_argument("--figure", choices=FIGURES, default="all", help="which figure to draw (default: all)")
@@ -150,10 +150,10 @@ def draw(curves: list[scaling.Curve], args: argparse.Namespace) -> list[pathlib.
 
 def main() -> None:
     args = build_parser().parse_args()
-    frame = load(args.observations, args.study, args.setup, not args.no_torch_dist)
+    frame = load(args.observations, args.experiment, args.setup, not args.no_torch_dist)
     curves = scaling.curves(frame)
     if not curves:
-        raise SystemExit(f"no scaling rows for study={args.study!r} setup={args.setup!r}")
+        raise SystemExit(f"no scaling rows for experiment={args.experiment!r} setup={args.setup!r}")
 
     # a recorded eta that disagrees with the formula behind it means one of them is wrong
     mismatched = scaling.disagreements(frame)
