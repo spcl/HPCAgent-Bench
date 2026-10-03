@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Build tests: verify the package is installable. The full HPC image is too large to build in a
 unit test, so these cover packaging completeness and the editable-install flow instead.
-``test_apptainer_builds_and_imports`` does a real minimal build; it runs wherever ``apptainer`` is on PATH,
-since it pulls a base image and takes a minute."""
+``test_apptainer_builds_and_imports`` does a real minimal build; it runs wherever ``apptainer`` is on PATH, pulls a
+base image and takes minutes, so CI gives this file a step of its own."""
 
 import json
 import os
@@ -225,7 +225,9 @@ def test_apptainer_builds_and_imports(tmp_path: pathlib.Path) -> None:
     build = subprocess.run(
         ["apptainer", "build", str(sif), str(definition)], capture_output=True, text=True, check=False
     )
-    if build.returncode != 0 and any(word in build.stderr for word in ("newuidmap", "fakeroot", "subuid")):
+    if build.returncode != 0 and any(
+        word in build.stderr for word in ("newuidmap", "fakeroot", "subuid", "binfmt_misc")
+    ):
         pytest.skip(f"host cannot build unprivileged (apptainer rootless tooling missing): {build.stderr.strip()}")
     assert build.returncode == 0, build.stderr
     run = subprocess.run(

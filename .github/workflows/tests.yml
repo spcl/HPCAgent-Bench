@@ -285,9 +285,17 @@ jobs:
             tests/test_agent_service.py \
             tests/test_token_usage.py \
             tests/test_harbor.py \
-            tests/test_packaging.py \
             tests/test_optimizer_plugin.py \
             tests/test_agent_bench.py
+
+      # Two real installs: the wheel and its locked dependencies into a fresh uv venv (131 s on a cold cache, dace is a
+      # git clone), and a minimal Apptainer image that runs the same uv sync (3 min on a fast link; its squashfs alone
+      # is 18 CPU-minutes). Phase 3's 12 minutes were sized for in-process tests that take 8.
+      - name: Phase 3p -- packaging (wheel into a fresh uv venv, minimal Apptainer image build)
+        if: ${{ !cancelled() && matrix.shard.id == 0 }}
+        timeout-minutes: 20
+        run: |
+          python -m pytest -q -p no:cacheprovider -rfEs --timeout=900 --durations=0 tests/test_packaging.py
 
       - uses: ./.github/actions/finish
         if: always()

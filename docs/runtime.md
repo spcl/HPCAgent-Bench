@@ -82,7 +82,7 @@ each runtime's command line without the runtime installed.
 Build off-cluster, run on-cluster. An unprivileged build needs `newuidmap`/`newgidmap` and
 `/etc/subuid` ranges, which HPC systems often lack; build the SIF on a machine you control and copy
 it. Running needs none of that: `module load apptainer` then `apptainer run image.sif`, or rootless
-`podman`. `tests/test_packaging.py::test_apptainer_builds_and_imports` is opt-in for this reason.
+`podman`. `tests/test_packaging.py::test_apptainer_builds_and_imports` runs only where `apptainer` is on `PATH` and skips when the host lacks that tooling.
 
 ## MPI
 
