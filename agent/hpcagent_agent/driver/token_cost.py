@@ -113,6 +113,8 @@ __all__ = [
     "AttemptTotals",
     "CostRow",
     "EpisodeTotals",
+    "PromptFold",
+    "ResolvedOutput",
     "accumulate_total_tokens",
     "as_block",
     "attempt_ledger",
@@ -451,8 +453,16 @@ def usage_prompt_tokens(record: dict[str, object]) -> int:
     return count(record, "input") + count(record, "cached_input")
 
 
-def fold_prompt(prompt: int, previous: int) -> tuple[int, int, int]:
-    """One call's ``(fresh, cached, compacted)`` under the perfect-prefix model.
+class PromptFold(NamedTuple):
+    """One call's prompt split by :func:`fold_prompt`; ``compacted`` is 1 for a context compaction."""
+
+    fresh: int
+    cached: int
+    compacted: int
+
+
+def fold_prompt(prompt: int, previous: int) -> PromptFold:
+    """One call's fresh, cached and compacted counts under the perfect-prefix model.
 
     A transcript only grows, so the fresh part of call N is what exceeds call N-1 and the rest was
     served from cache. A prompt SHORTER than the previous one is a context compaction (claude-code
@@ -465,8 +475,8 @@ def fold_prompt(prompt: int, previous: int) -> tuple[int, int, int]:
     the ``events_cost`` addendum beside it), since it never appears as a turn this fold ever sees.
     """
     if prompt < previous:
-        return prompt, 0, 1
-    return prompt - previous, previous, 0
+        return PromptFold(prompt, 0, 1)
+    return PromptFold(prompt - previous, previous, 0)
 
 
 def usage_episode_cost(path: pathlib.Path) -> CostRow:
@@ -670,12 +680,19 @@ def events_cost(events: list[dict[str, object]]) -> CostRow:
     }
 
 
+class ResolvedOutput(NamedTuple):
+    """An episode's output tokens, the evidence tier they came from, and the message_delta shape."""
+
+    output: int
+    source: str
+    shape: str
+
+
 def resolve_output(
     deltas: dict[str, list[int]],
     result_total: int | None,
-) -> tuple[int, str, str]:
+) -> ResolvedOutput:
     """PRECEDENCE (8.2): per-request message_delta sum, then the result record, then nothing.
-    Returns ``(output, source, delta shape)``.
 
     Each tier is strictly better evidence than the one under it. The deltas are the server's count
     of each REQUEST and survive a kill; the result record is the server's count of the EPISODE and
@@ -691,10 +708,10 @@ def resolve_output(
     shape = "mixed" if len(shapes) > 1 else next(iter(shapes), "")
 
     if delta_sum > 0:
-        return delta_sum, "message_delta", shape
+        return ResolvedOutput(delta_sum, "message_delta", shape)
     if result_total is not None:
-        return result_total, "result", shape
-    return 0, "none", shape
+        return ResolvedOutput(result_total, "result", shape)
+    return ResolvedOutput(0, "none", shape)
 
 
 def numbered_attempts(paths: Iterator[pathlib.Path]) -> list[pathlib.Path]:

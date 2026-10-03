@@ -20,7 +20,7 @@ import logging
 import pathlib
 import sys
 from collections.abc import Sequence
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 from hpcagent_bench import experiments, studies, frozen_observations, observations_extract, paths
 from hpcagent_bench.observation_columns import OBSERVATION_FIELDS
@@ -31,6 +31,7 @@ __all__ = [
     "LOG",
     "PROVENANCE",
     "STUDY_COLUMN",
+    "Owned",
     "Provenance",
     "build",
     "check_columns",
@@ -100,17 +101,25 @@ def stamp(frame: "pd.DataFrame", study: str, extracted_at: str) -> "pd.DataFrame
     return frame.assign(**{EXTRACTED_AT: extracted_at, STUDY_COLUMN: study})
 
 
-def keep_owned(frame: "pd.DataFrame", selection: experiments.Selection) -> tuple["pd.DataFrame", int, int]:
+class Owned(NamedTuple):
+    """A frame cut to the setups a selection owns, with how many rows were retired and foreign."""
+
+    frame: "pd.DataFrame"
+    retired: int
+    foreign: int
+
+
+def keep_owned(frame: "pd.DataFrame", selection: experiments.Selection) -> Owned:
     """``frame`` cut to the setups ``selection`` owns, with the two drop counts.
 
     Retired and foreign are counted apart because they mean different things: a retired setup ran and
     the user took it out, a foreign one belongs to another study that shares a run root."""
     if frame.empty or "setup" not in frame.columns:
-        return frame, 0, 0
+        return Owned(frame, 0, 0)
     setups = frame["setup"].astype(str)
     mine = setups.map(lambda setup: experiments.prefix_of(setup) in selection.prefixes)
     retired = setups.map(experiments.dropped)
-    return frame.loc[mine & ~retired], int((mine & retired).to_numpy().sum()), int((~mine).to_numpy().sum())
+    return Owned(frame.loc[mine & ~retired], int((mine & retired).to_numpy().sum()), int((~mine).to_numpy().sum()))
 
 
 def keep_tag(frame: "pd.DataFrame", selection: experiments.Selection) -> tuple["pd.DataFrame", int]:

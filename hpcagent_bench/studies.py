@@ -52,6 +52,7 @@ __all__ = [
     "RECORD_TABLES",
     "RECORD_WHERE",
     "SHARD_DEPTH",
+    "AgentIndices",
     "Database",
     "agent_indices",
     "discover_databases",
@@ -139,8 +140,16 @@ def setup_of(episode_id: str | None) -> str:
     return (episode_id or "").split(".")[0]
 
 
-def agent_indices(episode_id: str | None) -> tuple[str, str, str]:
-    """``(node, problem, worker)`` parsed out of an episode id, empty where absent."""
+class AgentIndices(NamedTuple):
+    """The node, problem and worker indices of an episode id, empty where absent."""
+
+    node: str
+    problem: str
+    worker: str
+
+
+def agent_indices(episode_id: str | None) -> AgentIndices:
+    """The indices parsed out of an episode id."""
     node = problem = worker = ""
     for part in (episode_id or "").split(".")[1:]:
         if len(part) > 1 and part[1:].isdigit():
@@ -150,7 +159,7 @@ def agent_indices(episode_id: str | None) -> tuple[str, str, str]:
                 problem = part[1:]
             elif part[0] == "w":
                 worker = part[1:]
-    return node, problem, worker
+    return AgentIndices(node, problem, worker)
 
 
 #: The identity a row is selected and grouped by, read off ``episodes`` rather than off a name. The
