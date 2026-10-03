@@ -170,6 +170,15 @@ ENV LC_ALL=C \
     SPACK_DISABLE_LOCAL_CONFIG=true \
     SPACK_USER_CACHE_PATH=/opt/spack-cache
 
+# The base is a MINIMIZED Ubuntu: dpkg drops /usr/share/man. unminimize runs FIRST, on the bare base: it restores
+# the base's pages and lifts the exclusion, so every package installed below keeps its own. Run after the other
+# layers it would reinstall all of them, fontconfig too, whose fc-cache postinst fails in a rootless build.
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends unminimize man-db manpages manpages-dev; \
+    yes | unminimize; \
+    rm -rf /var/lib/apt/lists/*
+
 # /opt/gpu-arch records the ROCM_ARCH list as a FILE, because the CE does not reliably keep image ENV.
 RUN set -eu; \
     test -n "${ROCM_ARCH:-}" || { echo "ROCM_ARCH is unset: build with build.sh, which reads gpu_arch.env" >&2; exit 2; }; \
@@ -1210,9 +1219,7 @@ RUN set -eux; \
 # Every harness version is a checked-in pin shared with judge-agent-cuda, so nothing here floats:
 # uv and node come from agent/harness/pins.env (versioned URLs, sha256-checked by
 # install_tools.sh), and claude from `npm ci` over
-# agent/harness/node/package-lock.json. freeze.sh regenerates the lock files. The ROCm
-# base is a MINIMIZED Ubuntu -- dpkg strips /usr/share/man -- so unminimize runs after the library
-# layers and its reinstall restores their pages too.
+# agent/harness/node/package-lock.json. freeze.sh regenerates the lock files.
 #
 # claude-code stays 2.1.197: every recorded claude setup ran it. 2.1.197 has no --autocompact (added
 # in 2.1.221) and never compacts proactively on its own -- agent_driver.claude_context_env instead
@@ -1227,16 +1234,11 @@ RUN set -eux; \
       ln -sf "/opt/harness/node/node_modules/.bin/${cli}" "/usr/local/bin/${cli}"; \
     done
 
-# unminimize reinstalls every package, and fontconfig's fc-cache postinst fails once on that rootless-overlay
-# reinstall; `dpkg --configure -a` reruns it and passes. MANPATH ends in ':' so the distro and PATH-derived
-# roots stay; man_gate.sh fails the build when a root below holds pages man cannot reach.
+# Every layer kept its pages (unminimize ran first). MANPATH ends in ':' so the distro and PATH-derived roots
+# stay; man_gate.sh fails the build when a root below holds pages man cannot reach.
 ENV MANPATH=/opt/gcc/share/man:/opt/view/share/man:/opt/papi/share/man:/opt/rocm/share/man:/opt/rocm/llvm/share:/opt/openmpi/share/man:
 COPY containers/lib/man_gate.sh /tmp/man_gate.sh
 RUN set -eux; \
-    apt-get update; \
-    yes | unminimize || dpkg --configure -a; \
-    apt-get install -y --no-install-recommends man-db manpages manpages-dev; \
-    rm -rf /var/lib/apt/lists/*; \
     man -w gcc >/dev/null || { echo "manpages missing: unminimize did not take" >&2; exit 1; }; \
     sh /tmp/man_gate.sh /opt/gcc/share/man /opt/view/share/man /opt/papi/share/man /opt/rocm/share/man \
       /opt/rocm/llvm/share /opt/openmpi/share/man; \
