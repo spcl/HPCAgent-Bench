@@ -53,7 +53,7 @@ def reserve_device(total_bytes: int, device: int = 0) -> tuple[bool, str]:
     the reservation raises instead: that is the plan being wrong about this machine.
     """
     try:
-        import cupy as cp
+        import cupy as cp  # pyright: ignore[reportMissingImports] -- optional GPU dependency, absent from the dev env
     except Exception:  # noqa: BLE001 -- no cupy is a host-only judge, not an error
         return False, "cupy is absent; nothing to pool on a device"
     try:

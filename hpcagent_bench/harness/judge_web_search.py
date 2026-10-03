@@ -26,7 +26,7 @@ import textwrap
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Iterable
+from collections.abc import AsyncIterable, Iterable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -248,7 +248,7 @@ async def collect_arun_many(crawler: "AsyncWebCrawler", urls: list[str], config:
     crawled = crawler.arun_many(urls, config=config)
     if inspect.isawaitable(crawled):
         crawled = await crawled
-    if hasattr(crawled, "__aiter__"):
+    if isinstance(crawled, AsyncIterable):
         return [item async for item in crawled]
     return list(crawled)
 

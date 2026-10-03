@@ -11,8 +11,8 @@ from collections.abc import Sequence
 import numpy as np
 
 __all__ = [
-    "MAX_CHECKED_RANKS",
     "AXIS_SCHEMES",
+    "MAX_CHECKED_RANKS",
     "ArrayDist",
     "AxisDist",
     "Descriptor",
@@ -499,7 +499,7 @@ class Descriptor:
 
         derived = symbol_axes_from_binding(binding)
         for sym, pair in (symbol_axes or {}).items():
-            derived[sym] = [tuple(pair)]  # manifest mapping wins for this symbol
+            derived[sym] = [(pair[0], pair[1])]  # manifest mapping wins for this symbol
         return cls(grid=grid, arrays=resolved, symbol_axes=derived, locations=locations)
 
     def dist_for(self, name: str, global_shape: Sequence[int] | None = None) -> ArrayDist:

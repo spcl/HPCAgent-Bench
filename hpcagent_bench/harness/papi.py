@@ -397,8 +397,6 @@ class Placement(TypedDict):
 class ThreadRow(Placement):
     """One counted thread's cycles, instructions and the two ratios, plus its placement."""
 
-    __slots__ = ()
-
     tid: int
     cycles: int
     instructions: int
@@ -423,8 +421,6 @@ class Spread(TypedDict):
 
 class Imbalance(Spread):
     """:class:`Spread` plus the thread every other thread waits for."""
-
-    __slots__ = ()
 
     critical_tid: int
     critical_cpus: list[int]
@@ -1308,18 +1304,18 @@ def measurement_caveats(
     ``idle`` counted nothing; the split is itself a caveat."""
     notes: list[str] = []
     if idle:
-        tids = ", ".join(str(row["tid"]) for row in idle)
+        idle_tids = ", ".join(str(row["tid"]) for row in idle)
         notes.append(
-            f"IDLE: thread(s) {tids} counted 0 cycles and are EXCLUDED from the imbalance below. From "
+            f"IDLE: thread(s) {idle_tids} counted 0 cycles and are EXCLUDED from the imbalance below. From "
             "outside the .so a worker that got no iterations and a thread that was never in the pool "
             "read the same zero; if the kernel was asked for more threads than are listed above, the "
             "excluded ones are workers and the real imbalance is worse than the figure"
         )
     loose = [row for row in rows if not row["pinned"]]
     if loose:
-        tids = ", ".join(str(row["tid"]) for row in loose)
+        unpinned = ", ".join(str(row["tid"]) for row in loose)
         notes.append(
-            f"UNPINNED: thread(s) {tids} may run on more than one CORE, so their counters mix the cores "
+            f"UNPINNED: thread(s) {unpinned} may run on more than one CORE, so their counters mix the cores "
             f"they migrated across; set OMP_PLACES/OMP_PROC_BIND ({dict(PINNED_ENV)}) before the "
             ".so loads -- after it has loaded, the runtime has already placed its pool"
         )
@@ -1516,6 +1512,7 @@ def count_per_thread(
     Absence carries a ``cause`` from :data:`CAUSES` (``papi_missing``, ``perf_event_paranoid``,
     ``no_perf_events``, ``not_native``, ``not_openmp``, ``attach_refused``); a segfault or timeout is
     ``run_failed``. Never raises for a measurement failure."""
+    report: PerThreadReport
     if lang == "python":
         report = missing_report(
             "not_native",
@@ -1556,7 +1553,8 @@ def render_thread_report(report: PerThreadReport) -> str:
     """The human view: per-thread table, aggregate, imbalance, caveats (shipped with the payload). An
     absent report renders as its reason."""
     if "missing" in report:
-        return f"per-thread counters unavailable [{report['cause']}]: {report['missing']}"
+        # mypy does not narrow a TypedDict union on ``"key" in``; pyright does.
+        return f"per-thread counters unavailable [{report['cause']}]: {report['missing']}"  # type: ignore[typeddict-item]
     aggregate, spread = report["aggregate"], report["imbalance"]
     events = " / ".join(report["expressions"][metric] for metric in PER_THREAD_METRICS)
     idle = f", {report['threads_idle']} idle (excluded)" if report["threads_idle"] else ""

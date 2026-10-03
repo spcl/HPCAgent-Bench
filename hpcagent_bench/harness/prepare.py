@@ -40,8 +40,8 @@ __all__ = [
     "Plan",
     "main",
     "rank_share",
-    "tag",
     "run_kernel",
+    "tag_kernels",
 ]
 
 #: The per-kernel steps, in the order they run (``--steps`` picks a subset).
