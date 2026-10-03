@@ -8,6 +8,7 @@ to ``lax.fori_loop`` / ``while_loop`` and never unrolls.
 """
 
 import ast
+from collections.abc import Sequence
 
 from hpcagent_bench.translators.numpyto_common.ir import KernelIR
 
@@ -31,8 +32,10 @@ __all__ = [
     "is_range_for",
     "is_timestep_loop",
     "load_names",
+    "loop_index",
     "loop_is_parallel_safe",
     "loop_reduction",
+    "range_args",
     "range_bound_names",
     "range_step_sign",
     "reads_acc",
@@ -128,6 +131,20 @@ def is_range_for(node: ast.AST) -> bool:
     )
 
 
+def loop_index(node: ast.For) -> str:
+    """The loop variable of a ``for <name> in ...`` loop."""
+    if not isinstance(node.target, ast.Name):
+        raise TypeError(f"loop target {ast.unparse(node.target)} is not a single name")
+    return node.target.id
+
+
+def range_args(node: ast.For) -> list[ast.expr]:
+    """The arguments of the ``range(...)`` a ``for`` loop iterates."""
+    if not isinstance(node.iter, ast.Call):
+        raise TypeError(f"loop iterable {ast.unparse(node.iter)} is not a call")
+    return node.iter.args
+
+
 def subscript_idx_safe(sub: ast.Subscript, idx: str) -> bool:
     """A subscript of a WRITTEN array is cross-iteration independent under a
     parallel loop on ``idx`` iff ``idx`` appears as a BARE index in >=1 axis and
@@ -171,7 +188,7 @@ def bare_store_names(node: ast.AST) -> set[str]:
     return {n.id for n in ast.walk(node) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)}
 
 
-def reads_before_write(stmts: list[ast.stmt], scalars: set[str], defined: set[str]) -> bool:
+def reads_before_write(stmts: Sequence[ast.stmt], scalars: set[str], defined: set[str]) -> bool:
     """True if some scalar in ``scalars`` is READ before it is WRITTEN, in execution
     order over ``stmts`` (a loop-carried scalar: the read observes a prior iteration's
     value). ``defined`` is the set already bound on entry. Conservative across control
@@ -204,7 +221,7 @@ def has_carried_scalar(node: ast.For) -> bool:
     loop-carried scalar (a lag/shift like ``b[i] = s; s = a[i]``) that a parallel
     schedule races on. The loop index is pre-bound (defined every iteration)."""
     scalars = bare_store_names(ast.Module(body=list(node.body), type_ignores=[]))
-    return reads_before_write(node.body, scalars, {node.target.id})
+    return reads_before_write(node.body, scalars, {loop_index(node)})
 
 
 def assigns_a_live_out_scalar(node: ast.For) -> bool:
@@ -249,9 +266,9 @@ def loop_is_parallel_safe(node: ast.AST) -> bool:
     (independent iterations) without changing results. Errs toward serial: any
     pattern not proven independent returns False. Scalar reductions / carried
     scalars are rejected here -- they are handled by :func:`loop_reduction`."""
-    if not is_range_for(node):
+    if not (isinstance(node, ast.For) and is_range_for(node)):
         return False
-    idx = node.target.id
+    idx = loop_index(node)
     body = ast.Module(body=list(node.body), type_ignores=[])
     for n in ast.walk(body):
         if isinstance(n, ast.Assign):
@@ -325,9 +342,9 @@ def loop_reduction(node: ast.AST) -> tuple[str, str] | None:
     (+, *, max, min), return ``(op, acc_name)`` for a ``reduction(op:acc)``
     clause; else None. Every array write must be iteration-independent, so the
     accumulator is the sole race a reduction clause must cover."""
-    if not is_range_for(node):
+    if not (isinstance(node, ast.For) and is_range_for(node)):
         return None
-    idx = node.target.id
+    idx = loop_index(node)
     body = ast.Module(body=list(node.body), type_ignores=[])
     accs = scalar_accumulators(body)
     if accs is None or len(accs) != 1:
@@ -374,12 +391,12 @@ def accumulator_observed(body: ast.AST, acc: str) -> bool:
     """Whether the accumulator's LIVE value is read outside its own combine. Captured each iteration
     (``s = s + a[i]; out[i] = s`` -- a prefix scan) or otherwise read, a ``reduction(op:acc)`` clause
     would hand out racy per-thread partials, not the running value."""
-    combine_loads: set = set()
+    combine_loads: set[int] = set()
     for n in ast.walk(body):
         combines = (isinstance(n, ast.AugAssign) and isinstance(n.target, ast.Name) and n.target.id == acc) or (
             isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id == acc for t in n.targets)
         )
-        if combines:
+        if combines and isinstance(n, (ast.AugAssign, ast.Assign)):
             combine_loads |= {id(x) for x in ast.walk(n.value) if isinstance(x, ast.Name) and x.id == acc}
     return any(
         isinstance(n, ast.Name) and n.id == acc and isinstance(n.ctx, ast.Load) and id(n) not in combine_loads
@@ -467,19 +484,20 @@ def collapsible_depth(node: ast.For) -> int:
       its own index against the same body.
     """
     depth = 1
-    collapsed_names = {node.target.id}
+    collapsed_names = {loop_index(node)}
     cur = node
     while len(cur.body) == 1 and isinstance(cur.body[0], ast.For):
         nxt = cur.body[0]
         if not is_range_for(nxt) or is_timestep_loop(nxt):
             break
-        if range_step_sign(nxt.iter.args[2] if len(nxt.iter.args) == 3 else None) is None:
+        nxt_args = range_args(nxt)
+        if range_step_sign(nxt_args[2] if len(nxt_args) == 3 else None) is None:
             break
-        if any(reads_name(arg, name) for arg in nxt.iter.args for name in collapsed_names):
+        if any(reads_name(arg, name) for arg in nxt_args for name in collapsed_names):
             break  # a bound depends on an already-collapsed index -- not rectangular.
         if loop_reduction(nxt) is not None or not loop_is_parallel_safe(nxt):
             break
-        collapsed_names.add(nxt.target.id)
+        collapsed_names.add(loop_index(nxt))
         depth += 1
         cur = nxt
     return depth

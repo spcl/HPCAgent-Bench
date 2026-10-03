@@ -29,6 +29,7 @@ Entry point: :func:`desugar_tuples`.
 import ast
 import copy
 import functools
+from collections.abc import Sequence
 from typing import Any
 
 from hpcagent_bench.translators.numpyto_common.ast_build import SubstituteLoads, map_statement_lists, name_, store_
@@ -68,6 +69,7 @@ __all__ = [
     "substitute",
     "target_names",
     "type_names",
+    "without_capture_binds",
     "written_after_capture",
 ]
 
@@ -165,7 +167,7 @@ class Env:
             self.bound.discard(name)
 
 
-def is_index_element(node: ast.AST) -> bool:
+def is_index_element(node: ast.expr) -> bool:
     """An element that can only be part of a SUBSCRIPT index: a slice, ``None``, or an ellipsis."""
     if isinstance(node, ast.Slice):
         return True
@@ -174,7 +176,7 @@ def is_index_element(node: ast.AST) -> bool:
     return isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "slice"
 
 
-def target_names(target: ast.AST) -> OrderedSet:
+def target_names(target: ast.expr) -> OrderedSet[str]:
     """The name(s) one assignment TARGET actually binds -- a bare Name, every element of a
     Tuple/List/Starred pattern, or (for a Subscript/Attribute LValue) the base object being
     written THROUGH, e.g. ``a`` in ``a[i] = x``.
@@ -190,7 +192,7 @@ def target_names(target: ast.AST) -> OrderedSet:
     if isinstance(target, ast.Starred):
         return target_names(target.value)
     if isinstance(target, (ast.Tuple, ast.List)):
-        names = OrderedSet()
+        names: OrderedSet[str] = OrderedSet()
         for elt in target.elts:
             names |= target_names(elt)
         return names
@@ -199,11 +201,11 @@ def target_names(target: ast.AST) -> OrderedSet:
     return OrderedSet()
 
 
-def assigned_names(node: ast.AST) -> OrderedSet:
+def assigned_names(node: ast.AST) -> OrderedSet[str]:
     """Every name the subtree can rebind -- the conservative kill set for a branch or loop body."""
-    out = OrderedSet()
+    out: OrderedSet[str] = OrderedSet()
     for sub in ast.walk(node):
-        targets: list[ast.AST] = []
+        targets: list[ast.expr] = []
         if isinstance(sub, ast.Assign):
             targets = list(sub.targets)
         elif isinstance(sub, (ast.AugAssign, ast.AnnAssign)):
@@ -215,24 +217,24 @@ def assigned_names(node: ast.AST) -> OrderedSet:
     return out
 
 
-def own_targets(node: ast.stmt) -> OrderedSet:
+def own_targets(node: ast.stmt) -> OrderedSet[str]:
     """The names this ONE statement rebinds, not counting the blocks nested under it.
 
     :func:`assigned_names` answers the whole subtree, which is the right kill set for a branch but
     the wrong question when a scan needs to know where in source order a write lands.
     """
-    targets: list[ast.AST] = []
+    targets: list[ast.expr] = []
     if isinstance(node, ast.Assign):
         targets = list(node.targets)
     elif isinstance(node, (ast.AugAssign, ast.AnnAssign, ast.For)):
         targets = [node.target]
-    out = OrderedSet()
+    out: OrderedSet[str] = OrderedSet()
     for tgt in targets:
         out |= target_names(tgt)
     return out
 
 
-def const_value(node: ast.AST) -> Any:
+def const_value(node: ast.expr) -> Any:
     """The literal a node denotes, or :data:`NO_VALUE` when it is not a literal."""
     return node.value if isinstance(node, ast.Constant) else NO_VALUE
 
@@ -241,22 +243,23 @@ def const_value(node: ast.AST) -> Any:
 NO_VALUE = object()
 
 
-def const_int(node: ast.AST) -> int | None:
+def const_int(node: ast.expr) -> int | None:
     v = const_value(node)
     return v if isinstance(v, int) and not isinstance(v, bool) else None
 
 
-def static_bool(node: ast.AST) -> bool | None:
+def static_bool(node: ast.expr) -> bool | None:
     v = const_value(node)
     return None if v is NO_VALUE else bool(v)
 
 
-def type_names(node: ast.AST) -> list[str] | None:
+def type_names(node: ast.expr) -> list[str] | None:
     """The bare type names an ``isinstance`` second argument denotes (``int``, ``np.integer``,
     ``(int, np.integer)``), or ``None`` when it names something this pass does not model."""
     if isinstance(node, ast.Tuple):
         parts = [type_names(e) for e in node.elts]
-        return None if any(p is None for p in parts) else [n for p in parts for n in p]
+        names = [p for p in parts if p is not None]
+        return None if len(names) != len(parts) else [n for p in names for n in p]
     if isinstance(node, ast.Name):
         return [node.id] if node.id in TYPE_ACCEPTS else None
     if (
@@ -387,8 +390,11 @@ class TupleDesugar:
         elements = self.tuple_of(node.value, env)
         if elements is None:
             return None
+        sliced = node.slice
+        if not isinstance(sliced, ast.Slice):
+            return None
         bounds: list[int | None] = []
-        for part in (node.slice.lower, node.slice.upper, node.slice.step):
+        for part in (sliced.lower, sliced.upper, sliced.step):
             if part is None:
                 bounds.append(None)
                 continue
@@ -414,18 +420,18 @@ class TupleDesugar:
             ast.Subscript(value=copy.deepcopy(node), slice=ast.Constant(value=i), ctx=ast.Load()) for i in range(rank)
         ]
 
-    def repeat(self, seq: ast.AST, count: ast.AST, env: Env) -> list[ast.expr] | None:
+    def repeat(self, seq: ast.expr, count: ast.expr, env: Env) -> list[ast.expr] | None:
         """``(1,) * K`` -> K copies. The ports pad a broadcast shape out to an array's rank this way."""
         elts = self.tuple_of(seq, env)
         times = const_int(count)
         return None if elts is None or times is None or times < 0 else [copy.deepcopy(e) for e in elts] * times
 
-    def rank(self, node: ast.AST) -> int | None:
+    def rank(self, node: ast.expr) -> int | None:
         """The rank of an array expression. Shared with the rest of the pipeline so that
         ``np.expand_dims(x, axis=1).shape`` resolves by the same rules the emitter uses."""
         return expr_rank(node, self.ranks)
 
-    def unroll(self, node: ast.AST, env: Env) -> list[ast.expr] | None:
+    def unroll(self, node: ast.expr, env: Env) -> list[ast.expr] | None:
         """``<expr> for i in range(K)`` -> the K substituted element expressions. The trip count must
         be a literal; a symbolic one would need a runtime tuple, which is the thing we are removing."""
         if not isinstance(node, (ast.GeneratorExp, ast.ListComp)) or len(node.generators) != 1:
@@ -442,7 +448,7 @@ class TupleDesugar:
             for i in range(lo, hi, step)
         ]
 
-    def range_bounds(self, node: ast.AST, env: Env) -> tuple[int, int, int] | None:
+    def range_bounds(self, node: ast.expr, env: Env) -> tuple[int, int, int] | None:
         """``range(...)`` with literal arguments, as ``(start, stop, step)``."""
         if not (
             isinstance(node, ast.Call)
@@ -452,8 +458,9 @@ class TupleDesugar:
             and not node.keywords
         ):
             return None
-        args = [const_int(self.fold(copy.deepcopy(a), env)) for a in node.args]
-        if any(a is None for a in args) or len(args) > 3:
+        folded_args = [const_int(self.fold(copy.deepcopy(a), env)) for a in node.args]
+        args = [a for a in folded_args if a is not None]
+        if len(args) != len(folded_args) or len(args) > 3:
             return None
         if len(args) == 1:
             return 0, args[0], 1
@@ -461,10 +468,13 @@ class TupleDesugar:
 
     # -- expression folding ------------------------------------------------- #
     def fold(self, node: ast.expr, env: Env) -> ast.expr:
-        return Folder(self, env).visit(node)
+        folded = Folder(self, env).visit(node)
+        if not isinstance(folded, ast.expr):
+            raise TypeError(f"folding an expression yields an expression, got {type(folded).__name__}")
+        return folded
 
     # -- statements --------------------------------------------------------- #
-    def run(self, stmts: list[ast.stmt], env: Env, linear: bool = True) -> list[ast.stmt]:
+    def run(self, stmts: Sequence[ast.stmt], env: Env, linear: bool = True) -> list[ast.stmt]:
         out: list[ast.stmt] = []
         for stmt in stmts:
             out.extend(self.statement(stmt, env, linear))
@@ -476,7 +486,7 @@ class TupleDesugar:
         if isinstance(stmt, (ast.For, ast.While)):
             return self.loop(stmt, env)
         if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name):
-            return self.assign(stmt, env, linear)
+            return self.assign(stmt, stmt.targets[0], env, linear)
         if (
             isinstance(stmt, ast.Assign)
             and len(stmt.targets) == 1
@@ -486,7 +496,7 @@ class TupleDesugar:
             if unpacked is not None:
                 return unpacked
         if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Subscript):
-            element = self.assign_element(stmt, env, linear)
+            element = self.assign_element(stmt, stmt.targets[0], env, linear)
             if element is not None:
                 return element
         for field, value in ast.iter_fields(stmt):
@@ -497,8 +507,8 @@ class TupleDesugar:
         env.invalidate(assigned_names(stmt))
         return [stmt]
 
-    def assign(self, stmt: ast.Assign, env: Env, linear: bool) -> list[ast.stmt]:
-        name = stmt.targets[0].id
+    def assign(self, stmt: ast.Assign, target: ast.Name, env: Env, linear: bool) -> list[ast.stmt]:
+        name = target.id
         stmt.value = self.fold(stmt.value, env)
         elts = self.tuple_of(stmt.value, env)
         # Recording a binding is only sound where the assignment dominates every later read of the
@@ -556,8 +566,11 @@ class TupleDesugar:
         and the kernel computes the wrong numbers with no diagnostic. Left standing, the statement
         reaches ``lowering.ShapeTableTupleSplit``, which stages the elements through temps.
         """
-        targets = stmt.targets[0].elts
-        if not all(isinstance(t, ast.Name) for t in targets):
+        unpacked = stmt.targets[0]
+        if not isinstance(unpacked, (ast.Tuple, ast.List)):
+            return None
+        targets = [t for t in unpacked.elts if isinstance(t, ast.Name)]
+        if len(targets) != len(unpacked.elts):
             return None
         elements = self.tuple_of(self.fold(stmt.value, env), env)
         if elements is None or len(elements) != len(targets):
@@ -570,17 +583,16 @@ class TupleDesugar:
         out: list[ast.stmt] = []
         for target, value in zip(targets, elements):
             one = ast.copy_location(ast.Assign(targets=[target], value=copy.deepcopy(value)), stmt)
-            out.extend(self.assign(one, env, linear))
+            out.extend(self.assign(one, target, env, linear))
         return out
 
-    def assign_element(self, stmt: ast.Assign, env: Env, linear: bool) -> list[ast.stmt] | None:
+    def assign_element(self, stmt: ast.Assign, target: ast.Subscript, env: Env, linear: bool) -> list[ast.stmt] | None:
         """``slices[k] = <index>`` on a bound index list -> rebind the list, emit nothing.
 
         The ports build a full-slice list, overwrite ONE axis, then tuple it
         (``slices = [slice(None)] * x.ndim; slices[dim] = slice(a, b); x[tuple(slices)]``). Returns
         ``None`` when this is an ordinary array store, which must be left exactly as it is.
         """
-        target = stmt.targets[0]
         if not (isinstance(target.value, ast.Name) and target.value.id in env.tuples and linear):
             return None
         index = const_int(self.fold(copy.deepcopy(target.slice), env))
@@ -645,6 +657,8 @@ FOLDED_TUPLE = "tuple_desugar_folded"
 class Folder(ast.NodeTransformer):
     """Bottom-up expression rewrite against one :class:`Env`."""
 
+    __slots__ = ("env", "interp")
+
     def __init__(self, interp: TupleDesugar, env: Env) -> None:
         self.interp = interp
         self.env = env
@@ -652,7 +666,7 @@ class Folder(ast.NodeTransformer):
     def visit(self, node: ast.AST) -> ast.AST:
         return node if vars(node).get(FOLDED_TUPLE) else super().visit(node)
 
-    def materialize(self, elts: list[ast.expr], at: ast.AST) -> ast.Tuple:
+    def materialize(self, elts: Sequence[ast.expr], at: ast.expr) -> ast.Tuple:
         out = ast.copy_location(ast.Tuple(elts=[copy.deepcopy(e) for e in elts], ctx=ast.Load()), at)
         setattr(out, FOLDED_TUPLE, True)
         return out
@@ -679,10 +693,10 @@ class Folder(ast.NodeTransformer):
             return node
         return ast.copy_location(copy.deepcopy(elts[index]), node)
 
-    def slice_elements(self, elts: list[ast.expr], sl: ast.Slice) -> list[ast.expr] | None:
+    def slice_elements(self, elts: Sequence[ast.expr], sl: ast.Slice) -> list[ast.expr] | None:
         """``t[i:j:k]`` with literal bounds -> the selected elements. ``x.shape[2:]`` is the reason
         this exists; an unbounded or symbolic bound leaves the subscript alone."""
-        bounds = []
+        bounds: list[int | None] = []
         for part in (sl.lower, sl.upper, sl.step):
             if part is None:
                 bounds.append(None)
@@ -760,7 +774,7 @@ class Folder(ast.NodeTransformer):
         elts = self.interp.shape_tuple(node)
         return node if elts is None else self.materialize(elts, node)
 
-    def isinstance_(self, node: ast.Call) -> ast.AST | None:
+    def isinstance_(self, node: ast.Call) -> ast.expr | None:
         """``isinstance(x, T)`` decided from x's kind -- the exact Python answer, never a guess: a
         fold that disagreed with the numpy reference would emit a kernel the oracle never runs."""
         names = type_names(node.args[1])
@@ -847,7 +861,7 @@ def fold_int_arithmetic(node: ast.BinOp) -> ast.Constant | None:
     return ast.Constant(value=op(left, right))
 
 
-def slice_calls_to_slices(index: ast.AST) -> ast.AST:
+def slice_calls_to_slices(index: ast.expr) -> ast.expr:
     """``a[slice(i, j)]`` / ``a[(slice(None), slice(i, j))]`` -> real slice syntax.
 
     The ports build index tuples out of ``slice`` objects because a tuple is the only way to
@@ -860,7 +874,7 @@ def slice_calls_to_slices(index: ast.AST) -> ast.AST:
     return ast.copy_location(ast.Tuple(elts=out, ctx=ast.Load()), index) if isinstance(index, ast.Tuple) else out[0]
 
 
-def as_slice(node: ast.AST) -> ast.Slice | None:
+def as_slice(node: ast.expr) -> ast.Slice | None:
     if not (
         isinstance(node, ast.Call)
         and isinstance(node.func, ast.Name)
@@ -930,7 +944,7 @@ def collapse_capture_aliases(fn: ast.FunctionDef, captured: list[tuple[str, str]
                 node.id = name
 
 
-def without_capture_binds(block: list[ast.stmt], alias: str, name: str) -> list[ast.stmt]:
+def without_capture_binds(block: Sequence[ast.stmt], alias: str, name: str) -> list[ast.stmt]:
     """``block`` minus its ``alias = name`` capture binds."""
     return [s for s in block if not is_capture_bind(s, alias, name)]
 
@@ -952,7 +966,7 @@ def written_after_capture(fn: ast.FunctionDef, alias: str, name: str) -> bool:
     capture sits in, whose body runs again), or the capture is not found at all."""
     state = {"seen": False, "written": False}
 
-    def walk(stmts: list[ast.stmt], in_loop: bool) -> None:
+    def walk(stmts: Sequence[ast.stmt], in_loop: bool) -> None:
         for stmt in stmts:
             if is_capture_bind(stmt, alias, name):
                 state["seen"] = True
@@ -992,14 +1006,14 @@ def drop_dead_none_bindings(fn: ast.FunctionDef) -> None:
     read = OrderedSet(n.id for n in ast.walk(fn) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load))
     tested, rebound = none_sentinel_uses(fn)
 
-    def dead(name: str, i: int, stmts: list[ast.stmt]) -> bool:
+    def dead(name: str, i: int, stmts: Sequence[ast.stmt]) -> bool:
         return (
             name not in read
             or (i + 1 < len(stmts) and rebinds_name(stmts[i + 1], name))
             or (name in rebound and name not in tested)
         )
 
-    def prune(stmts: list[ast.stmt]) -> list[ast.stmt]:
+    def prune(stmts: Sequence[ast.stmt]) -> list[ast.stmt]:
         out: list[ast.stmt] = []
         for i, stmt in enumerate(stmts):
             names = none_bind_targets(stmt)
@@ -1011,16 +1025,16 @@ def drop_dead_none_bindings(fn: ast.FunctionDef) -> None:
     map_statement_lists(fn, prune)
 
 
-def none_sentinel_uses(fn: ast.FunctionDef) -> tuple[OrderedSet, OrderedSet]:
+def none_sentinel_uses(fn: ast.FunctionDef) -> tuple[OrderedSet[str], OrderedSet[str]]:
     """``(tested, rebound)``: the names some comparison tests against ``None``, and the names some
     assignment binds to a value other than ``None``."""
-    tested: OrderedSet = OrderedSet()
+    tested: OrderedSet[str] = OrderedSet()
     for cmp in ast.walk(fn):
         if isinstance(cmp, ast.Compare) and any(
             isinstance(c, ast.Constant) and c.value is None for c in cmp.comparators
         ):
             tested.update(n.id for n in ast.walk(cmp) if isinstance(n, ast.Name))
-    rebound: OrderedSet = OrderedSet()
+    rebound: OrderedSet[str] = OrderedSet()
     for node in ast.walk(fn):
         if not isinstance(node, ast.Assign) or (isinstance(node.value, ast.Constant) and node.value.value is None):
             continue
@@ -1033,13 +1047,10 @@ def none_sentinel_uses(fn: ast.FunctionDef) -> tuple[OrderedSet, OrderedSet]:
 def none_bind_targets(stmt: ast.stmt) -> list[str]:
     """The names ``stmt`` binds to ``None`` -- ``a = b = None`` declares a whole run of sentinels at
     once, so a chained bind is the same statement."""
-    if (
-        isinstance(stmt, ast.Assign)
-        and isinstance(stmt.value, ast.Constant)
-        and stmt.value.value is None
-        and all(isinstance(t, ast.Name) for t in stmt.targets)
-    ):
-        return [t.id for t in stmt.targets]
+    if isinstance(stmt, ast.Assign) and isinstance(stmt.value, ast.Constant) and stmt.value.value is None:
+        names = [t.id for t in stmt.targets if isinstance(t, ast.Name)]
+        if len(names) == len(stmt.targets):
+            return names
     return []
 
 

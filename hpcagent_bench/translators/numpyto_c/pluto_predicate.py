@@ -55,7 +55,7 @@ FLAG_PREFIX = "pluto_pred"
 CONTEXT_NODES = (ast.Name, ast.Attribute, ast.Subscript, ast.Starred, ast.List, ast.Tuple)
 
 
-def names_read(expr: ast.AST) -> set[str]:
+def names_read(expr: ast.expr) -> set[str]:
     """Every variable ``expr`` reads, arrays by name."""
     return {node.id for node in ast.walk(expr) if isinstance(node, ast.Name)}
 
@@ -122,10 +122,14 @@ def negate(test: ast.expr) -> ast.expr:
 
 def predicated(stmt: ast.stmt, guard: ast.expr) -> ast.Assign:
     """``stmt`` (an assignment) as ``target = guard ? value : target``."""
+    target: ast.expr
+    value: ast.expr
     if isinstance(stmt, ast.AugAssign):
         target, value = stmt.target, ast.BinOp(left=load(stmt.target), op=stmt.op, right=stmt.value)
-    else:
+    elif isinstance(stmt, ast.Assign):
         target, value = stmt.targets[0], stmt.value
+    else:
+        raise TypeError(f"cannot predicate a {type(stmt).__name__}")
     return ast.Assign(
         targets=[copy.deepcopy(target)], value=ast.IfExp(test=copy.deepcopy(guard), body=value, orelse=load(target))
     )
@@ -186,6 +190,8 @@ def convert(node: ast.If, fresh: Callable[[], str], flags: list[str]) -> list[as
 
 class IfConverter(ast.NodeTransformer):
     """Rewrites every convertible value-dependent ``if`` that sits inside a ``for`` loop."""
+
+    __slots__ = ("depth", "flags", "fresh", "value_dependent")
 
     def __init__(self, value_dependent: Callable[[ast.expr], bool], taken: set[str]) -> None:
         self.value_dependent = value_dependent

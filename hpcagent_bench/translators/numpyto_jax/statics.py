@@ -76,7 +76,7 @@ def static_params(fn: ast.FunctionDef, params: list[str]) -> list[str]:
     return [p for p in params if p in want and p not in array_like]
 
 
-def value_names(node: ast.AST, pset: set[str]) -> set[str]:
+def value_names(node: ast.expr, pset: set[str]) -> set[str]:
     """Param names appearing in ``node`` as a VALUE -- EXCLUDING those that occur
     only as the base of a ``.shape`` / ``.size`` / ``.ndim`` access (a statically
     known dimension, not the array's data). So ``int(egrid.shape[0])`` yields
@@ -155,18 +155,14 @@ def transitive_array_like(funcs: dict) -> dict:
                 gparams = params_of[call.func.id]
                 for gp in al[call.func.id]:
                     pos = gparams.index(gp)  # gp is a callee param -> always present
-                    if (
-                        pos < len(call.args)
-                        and isinstance(call.args[pos], ast.Name)
-                        and call.args[pos].id in pset
-                        and call.args[pos].id not in al[name]
-                    ):
-                        al[name].add(call.args[pos].id)
+                    arg = call.args[pos] if pos < len(call.args) else None
+                    if isinstance(arg, ast.Name) and arg.id in pset and arg.id not in al[name]:
+                        al[name].add(arg.id)
                         changed = True
     return al
 
 
-def is_static_expr(node: ast.AST, ctx: set[str]) -> bool:
+def is_static_expr(node: ast.expr, ctx: set[str]) -> bool:
     """Is ``node`` evaluable to a concrete value given the static names in
     ``ctx``? Literals, ``ctx`` names, arithmetic/compare/ternary over such,
     ``.shape``/``.size``/``.ndim``, and a pure builtin/``np.``/``math.`` call
@@ -217,9 +213,9 @@ def static_ctx(fn: ast.FunctionDef, base: set[str]) -> set[str]:
         changed = False
         for node in ast.walk(fn):
             if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
-                t = node.targets[0].id
-                if counts.get(t) == 1 and t not in ctx and is_static_expr(node.value, ctx):
-                    ctx.add(t)
+                bound = node.targets[0].id
+                if counts.get(bound) == 1 and bound not in ctx and is_static_expr(node.value, ctx):
+                    ctx.add(bound)
                     changed = True
     return ctx
 
@@ -242,7 +238,7 @@ def concrete_params(funcs: dict, kernel_name: str, kernel_static: list[str]) -> 
         off = len(ps) - len(dflts)
         defaults_of[name] = {ps[off + k]: d for k, d in enumerate(dflts)}
     mc = set(STATE.module_consts)
-    concrete = {name: set() for name in funcs}
+    concrete: dict[str, set[str]] = {name: set() for name in funcs}
     concrete[kernel_name] = set(kernel_static)
     changed = True
     while changed:

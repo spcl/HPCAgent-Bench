@@ -27,6 +27,8 @@ class FftGridReshapeRewriter(ast.NodeTransformer):
     ``expand_dftn`` (both C-order, matching numpy) expand them into loops.
     Runs before LibNodeRewriter."""
 
+    __slots__ = ("counter", "local_dtypes", "shape_table")
+
     def __init__(
         self, shape_table: dict[str, tuple[str, ...]], local_dtypes: dict[str, str], counter: list[int]
     ) -> None:
@@ -34,7 +36,7 @@ class FftGridReshapeRewriter(ast.NodeTransformer):
         self.local_dtypes = local_dtypes
         self.counter = counter
 
-    def src_MC(self, src: ast.AST):
+    def src_MC(self, src: ast.expr):
         """Resolve the FFT input expression to ``(name, M, C)`` -- a bare Name
         to reshape and its leading/trailing extents. Handles a 2-D Name, a 1-D
         Name (C=1), and ``X[:, None]`` of a 1-D Name (C=1). Else ``None``."""
@@ -126,6 +128,7 @@ class FftGridReshapeRewriter(ast.NodeTransformer):
         )
         # Output reshape: drop the singleton column when the chain ends ``[:, 0]``
         # (only valid for C == 1, the single-column case); else keep (M, C).
+        out_shape: tuple[str, ...]
         if col_k is not None:
             if str(C) != "1" or col_k != 0:
                 return node

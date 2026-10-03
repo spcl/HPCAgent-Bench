@@ -2,6 +2,7 @@
 
 import ast
 import copy
+from collections.abc import Sequence
 
 from hpcagent_bench.translators.numpyto_common.ast_build import name_, range_for, store_
 from hpcagent_bench.translators.numpyto_common.lib_nodes.call_args import kwarg_or_pos, read_axis_keepdims
@@ -9,6 +10,7 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_ext
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
     const_,
     const_or_name,
+    first_name,
     flat_index_,
     wrap_for_loops,
 )
@@ -66,8 +68,8 @@ def make_sort_routine(buf: str, n: ast.expr, prefix: str) -> list[ast.stmt]:
 
 
 def expand_median(
-    target: ast.expr,
-    args: list[ast.expr],
+    target: ast.Name,
+    args: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     kwargs: list[ast.keyword] | None = None,
     local_dtypes: dict[str, str] | None = None,
@@ -78,14 +80,14 @@ def expand_median(
 
     A scratch buffer ``__md_buf`` of the operand's total size holds the sorted
     copy so the input is not mutated."""
-    if not args or not isinstance(args[0], ast.Name):
+    a = first_name(args)
+    if a is None:
         raise NotImplementedError("np.median needs a bare-Name array")
     # ONLY the full flattened median. An axis was silently ignored: the expander flattened every
     # element and returned one scalar, so ``np.median(A, axis=1)`` computed a whole-array median
     # and reported no error at all.
     if read_axis_keepdims(args, kwargs or [])[0] is not None:
         raise NotImplementedError("np.median(axis=...) is not implemented; only the flattened median is")
-    a = args[0]
     shape = shape_table.get(a.id)
     if shape is None:
         raise NotImplementedError("np.median: operand shape unknown")
@@ -97,7 +99,7 @@ def expand_median(
     # Flat copy a -> buf.
     cp_iters = [f"__mdc{i}" for i in range(len(shape))]
     flat = flat_index_(cp_iters, shape)
-    copy_body = [
+    copy_body: list[ast.stmt] = [
         ast.Assign(
             targets=[ast.Subscript(value=name_(buf), slice=flat, ctx=ast.Store())],
             value=ast.Subscript(
@@ -136,8 +138,8 @@ def expand_median(
 
 
 def expand_sort(
-    target: ast.expr,
-    args: list[ast.expr],
+    target: ast.Name,
+    args: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     kwargs: list[ast.keyword] | None = None,
 ) -> list[ast.stmt]:
@@ -147,11 +149,11 @@ def expand_sort(
     (``t = np.sort(a)``, allocated via :data:`ELEMENT_WRITE_EXPANDERS`);
     registering ``shape_table[target]`` here makes the sorted buffer's shape
     available to that auto-alloc and any later use of ``t``."""
-    if not args or not isinstance(args[0], ast.Name):
+    a = first_name(args)
+    if a is None:
         raise NotImplementedError("np.sort needs a bare-Name array")
     if not isinstance(target, ast.Name):
         raise NotImplementedError("np.sort target must be a bare Name")
-    a = args[0]
     shape = shape_table.get(a.id)
     if shape is None:
         raise NotImplementedError("np.sort: operand shape unknown")
@@ -160,7 +162,7 @@ def expand_sort(
     out = target.id
     shape_table.setdefault(out, tuple(shape))
     it = "__srtc"
-    copy_body = [
+    copy_body: list[ast.stmt] = [
         ast.Assign(
             targets=[ast.Subscript(value=name_(out), slice=name_(it), ctx=ast.Store())],
             value=ast.Subscript(value=name_(a.id), slice=name_(it), ctx=ast.Load()),
@@ -172,8 +174,8 @@ def expand_sort(
 
 
 def expand_searchsorted(
-    target: ast.expr,
-    args: list[ast.expr],
+    target: ast.Name,
+    args: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     kwargs: list[ast.keyword] | None = None,
     local_dtypes: dict[str, str] | None = None,

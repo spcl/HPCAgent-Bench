@@ -2,7 +2,7 @@
 
 import ast
 
-from hpcagent_bench.translators.numpyto_common.ast_build import name_, store_
+from hpcagent_bench.translators.numpyto_common.ast_build import name_, name_ids, store_
 from hpcagent_bench.translators.numpyto_common.statement_desugar import DesugarArrayIteration, SplitChainedAssign
 from hpcagent_bench.translators.numpyto_jax.names import names_loaded, names_stored
 from hpcagent_bench.translators.numpyto_jax.state import STATE
@@ -18,6 +18,8 @@ def rewrite_eigh(fn: ast.FunctionDef) -> None:
     from hpcagent_bench.translators.numpyto_common import numpy_desugar
 
     class Rewriter(ast.NodeTransformer):
+        __slots__ = ("ctr",)
+
         def __init__(self) -> None:
             self.ctr = 0
 
@@ -29,11 +31,10 @@ def rewrite_eigh(fn: ast.FunctionDef) -> None:
                 return node
             a_node, b_node, kw = hit
             tgt = node.targets[0]
-            if not (
-                isinstance(tgt, ast.Tuple) and len(tgt.elts) == 2 and all(isinstance(e, ast.Name) for e in tgt.elts)
-            ):
+            pair = name_ids(tgt.elts) if isinstance(tgt, ast.Tuple) else None
+            if pair is None or len(pair) != 2:
                 return node
-            w, v = tgt.elts[0].id, tgt.elts[1].id
+            w, v = pair
             p = f"__eigh{self.ctr}"
             self.ctr += 1
             pre: list[str] = []
@@ -73,6 +74,8 @@ def fold_const_branches(fn: ast.FunctionDef) -> None:
         return
 
     class Rewriter(ast.NodeTransformer):
+        __slots__ = ()
+
         def visit_If(self, node: ast.If) -> ast.If | list[ast.stmt]:
             self.generic_visit(node)  # fold inner elif chain first
             if names_loaded(node.test) <= set(usable):
@@ -112,6 +115,8 @@ def expand_tuple_targets(fn: ast.FunctionDef) -> None:
     alone -- JAX unpacks tuples directly."""
 
     class Rewriter(ast.NodeTransformer):
+        __slots__ = ()
+
         def visit_Assign(self, node: ast.Assign) -> ast.Assign | list[ast.stmt]:
             self.generic_visit(node)
             if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Tuple):

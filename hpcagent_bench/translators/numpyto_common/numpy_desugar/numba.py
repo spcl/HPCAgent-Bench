@@ -2,8 +2,9 @@
 
 import ast
 import copy
+from collections.abc import Sequence
 
-from hpcagent_bench.translators.numpyto_common.ast_build import const_int, expr_of, name_, store_
+from hpcagent_bench.translators.numpyto_common.ast_build import const_int, expr_of, name_, range_for, store_
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module, numpy_call_attr
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import (
     RankedRewritePass,
@@ -93,7 +94,7 @@ def without_leading_newaxis(e: ast.expr) -> ast.expr | None:
     return ast.Subscript(value=e.value, slice=sl, ctx=ast.Load())
 
 
-def scalar_index(e: ast.AST, ranks: dict[str, int]) -> bool:
+def scalar_index(e: ast.expr, ranks: dict[str, int]) -> bool:
     """A subscript entry that consumes its base axis and contributes none. An unknown-rank Name
     reads as a scalar, as in :func:`expr_rank`."""
     if isinstance(e, ast.Constant):
@@ -112,7 +113,7 @@ class OuterBroadcastPeel(RankedRewritePass):
     Extents are ``<name>.shape[k]`` tokens from the rank table, since manifest shape symbols are
     not bound in the kernel. An operand whose axes cannot be placed declines the whole statement."""
 
-    __slots__ = ("_ctr", "changed")
+    __slots__ = ()
 
     def operands_(self, node: ast.AST) -> list[ast.expr] | None:
         """The operands an elementwise node broadcasts together, or None when it is not one."""
@@ -122,11 +123,16 @@ class OuterBroadcastPeel(RankedRewritePass):
             return [node.left, *node.comparators]
         if isinstance(node, ast.BoolOp):
             return list(node.values)
-        if numpy_call_attr(node) == "where" and len(node.args) == 3 and not node.keywords:
+        if (
+            isinstance(node, ast.Call)
+            and numpy_call_attr(node) == "where"
+            and len(node.args) == 3
+            and not node.keywords
+        ):
             return list(node.args)
         return None
 
-    def combine(self, nodes: list[ast.expr]) -> list[str] | None:
+    def combine(self, nodes: Sequence[ast.expr]) -> list[str] | None:
         out: list[str] = []
         for n in nodes:
             ext = self.extents_(n)
@@ -135,7 +141,7 @@ class OuterBroadcastPeel(RankedRewritePass):
             out = bcast_tokens(out, ext)
         return out
 
-    def extents_(self, expr: ast.AST) -> list[str] | None:
+    def extents_(self, expr: ast.expr) -> list[str] | None:
         """Per-axis extent tokens of an expression, or None when this pass cannot place its axes."""
         if isinstance(expr, ast.Constant):
             return [] if isinstance(expr.value, (bool, int, float, complex)) else None
@@ -159,7 +165,8 @@ class OuterBroadcastPeel(RankedRewritePass):
         if base is None:
             return None
         entries = list(sub.slice.elts) if isinstance(sub.slice, ast.Tuple) else [sub.slice]
-        axes, bi = [], 0
+        axes: list[tuple[int | None, str, str]] = []
+        bi = 0
         for i, e in enumerate(entries):
             if is_newaxis(e):
                 axes.append((i, "new", ONE))
@@ -180,7 +187,7 @@ class OuterBroadcastPeel(RankedRewritePass):
         axes.extend((None, "tail", base[k]) for k in range(bi, len(base)))
         return axes
 
-    def outer_product(self, value: ast.AST, rank: int) -> bool:
+    def outer_product(self, value: ast.expr, rank: int) -> bool:
         """True when some elementwise node of this rank has a shape numba's analysis asserts on and
         peeling axis 0 dissolves: non-1 extents in different axes with one on axis 0 (an outer
         product), or two full-rank operands sharing a non-1 axis 0 that split on a later axis
@@ -189,8 +196,9 @@ class OuterBroadcastPeel(RankedRewritePass):
             ops = self.operands_(node)
             if ops is None:
                 continue
-            exts = [self.extents_(o) for o in ops]
-            if any(e is None or len(e) > rank for e in exts):
+            sized = [self.extents_(o) for o in ops]
+            exts = [e for e in sized if e is not None and len(e) <= rank]
+            if len(exts) != len(sized):
                 continue
             if max((len(e) for e in exts), default=0) != rank:
                 continue
@@ -214,22 +222,25 @@ class OuterBroadcastPeel(RankedRewritePass):
             return None if operand is None else ast.UnaryOp(op=expr.op, operand=operand)
         ops = self.operands_(expr)
         if ops is not None:
-            peeled = [self.peel(o, idx, rank) for o in ops]
-            return None if any(p is None for p in peeled) else self.rebuild(expr, peeled)
+            candidates = [self.peel(o, idx, rank) for o in ops]
+            peeled = [p for p in candidates if p is not None]
+            return None if len(peeled) != len(candidates) else self.rebuild(expr, peeled)
         if isinstance(expr, ast.Name):
             return ast.Subscript(value=expr, slice=expr_of(idx), ctx=ast.Load())
         if isinstance(expr, ast.Subscript):
             return self.peel_subscript(expr, idx)
         return None
 
-    def rebuild(self, expr: ast.expr, peeled: list[ast.expr]) -> ast.expr:
+    def rebuild(self, expr: ast.AST, peeled: list[ast.expr]) -> ast.expr:
         if isinstance(expr, ast.BinOp):
             return ast.BinOp(left=peeled[0], op=expr.op, right=peeled[1])
         if isinstance(expr, ast.Compare):
             return ast.Compare(left=peeled[0], ops=expr.ops, comparators=peeled[1:])
         if isinstance(expr, ast.BoolOp):
             return ast.BoolOp(op=expr.op, values=peeled)
-        return ast.Call(func=expr.func, args=peeled, keywords=[])
+        if isinstance(expr, ast.Call):
+            return ast.Call(func=expr.func, args=peeled, keywords=[])
+        raise TypeError(f"cannot rebuild {type(expr).__name__}")
 
     def peel_subscript(self, sub: ast.Subscript, idx: str) -> ast.expr | None:
         axes = self.axes_(sub)
@@ -245,6 +256,8 @@ class OuterBroadcastPeel(RankedRewritePass):
             entries = entries[:pos] + entries[pos + 1 :]
         else:
             e = entries[pos]
+            if not isinstance(e, ast.Slice):
+                return None
             if ext0 == ONE:
                 repl = e.lower if e.lower is not None else ast.Constant(value=0)
             elif e.lower is None or const_int(e.lower) == 0:
@@ -256,7 +269,7 @@ class OuterBroadcastPeel(RankedRewritePass):
             entries = entries[:pos] + [repl] + entries[pos + 1 :]
         return self.tidy(sub.value, entries)
 
-    def tidy(self, base: ast.expr, entries: list[ast.expr]) -> ast.expr:
+    def tidy(self, base: ast.expr, entries: Sequence[ast.expr]) -> ast.expr:
         """Drop entries the peel made redundant: leading singleton out-axes (see
         :func:`one_slice_index`) and trailing full slices (``a[i, :]`` is ``a[i]``)."""
         kept: list[ast.expr] = []
@@ -278,7 +291,7 @@ class OuterBroadcastPeel(RankedRewritePass):
         sl = kept[0] if len(kept) == 1 else ast.Tuple(elts=kept, ctx=ast.Load())
         return ast.Subscript(value=base, slice=sl, ctx=ast.Load())
 
-    def store_base(self, target: ast.AST, rank: int) -> str | None:
+    def store_base(self, target: ast.expr, rank: int) -> str | None:
         """``T[:]`` / ``T[:, :]`` over a rank-``rank`` ``T`` -> ``T``; anything else declines."""
         if not (isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name)):
             return None
@@ -287,14 +300,16 @@ class OuterBroadcastPeel(RankedRewritePass):
             return None
         return target.value.id if self.ranks.get(target.value.id) == rank else None
 
-    def drop_newaxes(self, value: ast.AST) -> None:
+    def drop_newaxes(self, value: ast.expr) -> None:
         """Drop every leading newaxis the enclosing broadcast makes redundant.
 
         numba's analysis equates a (1, n) operand with an (m, n) one instead of broadcasting it;
         ``x[None, :]`` -> ``x`` is exact only while the node's rank does not change."""
         for node in ast.walk(value):
             ops = self.operands_(node)
-            rank = None if ops is None else expr_rank(node, self.ranks)
+            if ops is None:
+                continue
+            rank = expr_rank(node, self.ranks)
             if rank is None:
                 continue
             for i, operand in enumerate(ops):
@@ -323,10 +338,10 @@ class OuterBroadcastPeel(RankedRewritePass):
                 node.comparators[i - 1] = operand
         elif isinstance(node, ast.BoolOp):
             node.values[i] = operand
-        else:
+        elif isinstance(node, ast.Call):
             node.args[i] = operand
 
-    def visit_Assign(self, node: ast.Assign) -> ast.AST:
+    def visit_Assign(self, node: ast.Assign) -> ast.AST | list[ast.stmt]:
         if len(node.targets) != 1:
             return node
         self.drop_newaxes(node.value)
@@ -359,11 +374,8 @@ class OuterBroadcastPeel(RankedRewritePass):
         elif not direct and isinstance(target, ast.Subscript):
             # The store casts into the target's dtype, so the temp takes it.
             out.append(ast.parse(f"{dest} = np.empty(({shape},), ({ast.unparse(target.value)}).dtype)").body[0])
-        store = ast.parse(f"{dest}[{ivar}] = 0").body[0]
-        store.value = row
-        loop = ast.parse(f"for {ivar} in range({ext[0]}): pass").body[0]
-        loop.body = [store]
-        out.append(loop)
+        store = ast.Assign(targets=[ast.Subscript(value=name_(dest), slice=name_(ivar), ctx=ast.Store())], value=row)
+        out.append(range_for(ivar, [expr_of(ext[0])], [store]))
         if not direct:
             out.append(ast.Assign(targets=[target], value=name_(dest)))
         for s in out:
@@ -378,6 +390,8 @@ class SliceObjectInline(ast.NodeTransformer):
     :func:`expr_rank` reads a Name index as a scalar, so ``X[b, :]`` would rank 1, not 2. The
     substitution is exact when the binding is the name's only store and every name ``lo``/``hi``
     read is bound at most once. Runs before the rank table is built."""
+
+    __slots__ = ("changed", "slices")
 
     def __init__(self, fn: ast.FunctionDef) -> None:
         self.changed = False
@@ -431,7 +445,7 @@ class ReshapeFortranOrderInline(RewritePass):
     numba's ``reshape`` takes no keyword. Fortran order is C order on the axis-reversed array, so
     the transposed spelling is exact. A shape passed as one name cannot be reversed and stays verbatim."""
 
-    __slots__ = ("changed",)
+    __slots__ = ()
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
         self.generic_visit(node)
@@ -465,6 +479,8 @@ class NumbaDtypeFixups(ast.NodeTransformer):
     * real ``@`` complex: numba requires equal dtypes. Casting the real side to the complex name's
       ``.dtype`` is numpy's promotion. Only fires when both kinds are known and the complex side is a
       Name, so reading its dtype evaluates nothing twice."""
+
+    __slots__ = ("changed", "kinds")
 
     def __init__(self, kinds: dict[str, str]) -> None:
         self.kinds = kinds
@@ -511,6 +527,8 @@ class NdimFold(ast.NodeTransformer):
     """``x.ndim`` for a parameter bound once with an agreed rank -> that rank, then fold ``K == K'`` and
     ``a if <bool constant> else b`` (numba only). ``y = x if x.ndim == 2 else x[:, None]`` has two
     branch ranks the rank table cannot join; the fold keeps the branch that runs."""
+
+    __slots__ = ("changed", "known")
 
     def __init__(self, fn: ast.FunctionDef, agreed: dict[str, int]) -> None:
         stores = name_store_counts(fn)

@@ -1,10 +1,11 @@
 """dtype KIND inference (bool < int < float < complex) over a module, helper calls included."""
 
 import ast
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import NamedTuple
 
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import numpy_call_attr, numpy_submodule_attr
+from hpcagent_bench.translators.numpyto_common.limits import CALL_GRAPH_ROUNDS, FIXPOINT_ROUNDS
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import (
     LIKE_CTORS,
     SHAPE_CTORS,
@@ -119,7 +120,7 @@ def kind_of_dtype_str(dt: str | None) -> str | None:
     )
 
 
-def dtype_arg_kind(node: ast.AST) -> str | None:
+def dtype_arg_kind(node: ast.expr) -> str | None:
     """A dtype ARGUMENT (``np.int64`` / ``np.dtype('f8')`` / a bare name) -> kind."""
     if isinstance(node, ast.Attribute):
         return DTYPE_NAME_KIND.get(node.attr)
@@ -167,7 +168,7 @@ class CallKinds(NamedTuple):
 NO_CALLS = CallKinds({}, {})
 
 
-def dtype_position_kind(dt: ast.AST, dtypes: dict[str, str], calls: CallKinds = NO_CALLS) -> str | None:
+def dtype_position_kind(dt: ast.expr, dtypes: dict[str, str], calls: CallKinds = NO_CALLS) -> str | None:
     """Kind a DTYPE argument names: a spelling (``np.int64``, ``"f8"``), ``x.dtype``, or a name holding one
     (a helper's ``dtype`` parameter fed its caller's ``X.dtype``)."""
     if isinstance(dt, ast.Attribute) and dt.attr == "dtype":
@@ -228,7 +229,7 @@ def binop_kind(value: ast.BinOp, dtypes: dict[str, str], calls: CallKinds) -> st
     return promote_kind(lk, rk)
 
 
-def dtype_kind(value: ast.AST, dtypes: dict[str, str], calls: CallKinds = NO_CALLS) -> str | None:
+def dtype_kind(value: ast.expr, dtypes: dict[str, str], calls: CallKinds = NO_CALLS) -> str | None:
     """Best-effort dtype KIND of an expression under the name -> kind table and the helpers' return kinds.
 
     ``None`` = unknown; callers treat it conservatively (e.g. never desugar a matmul as integer)."""
@@ -342,7 +343,7 @@ def derived_kind(attr: str | None, inner: str | None) -> str | None:
 def dtype_table_(tree: ast.AST, seed: dict[str, str], calls: CallKinds = NO_CALLS) -> dict[str, str]:
     """Propagate dtype kinds across straight-line assignments to a fixpoint (:func:`assigned_kinds`)."""
     dtypes = dict(seed)
-    for unused in range(8):
+    for unused in range(FIXPOINT_ROUNDS):
         changed = False
         for node in ast.walk(tree):
             if not (isinstance(node, ast.Assign) and len(node.targets) == 1):
@@ -429,7 +430,7 @@ def returned_values(fn: ast.FunctionDef) -> list[ast.expr]:
     return values
 
 
-def return_arity(values: list[ast.expr]) -> int | None:
+def return_arity(values: Sequence[ast.expr]) -> int | None:
     """-1 when no returned value is a tuple literal, n when every one is an n-tuple, ``None`` otherwise."""
     tuples = [value for value in values if isinstance(value, ast.Tuple)]
     if not values or any(isinstance(elt, ast.Starred) for tup in tuples for elt in tup.elts):
@@ -640,7 +641,7 @@ def infer_param_kinds(
     seeds: dict[str, dict[str, str]] = {fn.name: {} for fn in funcs}
     if kernel_name in seeds:
         seeds[kernel_name] = dict(kernel_kinds)
-    for unused in range(6):
+    for unused in range(CALL_GRAPH_ROUNDS):
         tables = {fn.name: dtype_table_(fn, seeds[fn.name]) for fn in funcs}
         returns = agreed_return_kinds(funcs, tables)
         observed: KindObservations = {}

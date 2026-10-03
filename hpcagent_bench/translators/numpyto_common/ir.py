@@ -5,6 +5,7 @@ layout / shape info backends need for typed signatures and subscript resolution.
 """
 
 import ast
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -18,12 +19,14 @@ __all__ = [
     "NUMPY_NOTE_CHARS",
     "SYMBOL_ASSUMPTIONS",
     "ArrayDesc",
+    "Desc",
     "KernelIR",
     "ScalarDesc",
     "SparseArrayDesc",
     "SymbolDesc",
     "apply_precision",
     "apply_precision_",
+    "descs",
     "is_alloc_marker",
     "numpy_origin",
     "shape_dimension_symbols",
@@ -166,6 +169,15 @@ class ScalarDesc:
         # One spelling where the dtype is stored, so signature, binding JSON and ABI gate agree
         # (the frontend records aliases such as ``int`` and ``double``).
         self.dtype = dtypes.canonical(self.dtype)
+
+
+#: Any one declared kernel entry.
+type Desc = ArrayDesc | ScalarDesc | SymbolDesc
+
+
+def descs(*tables: Sequence[Desc]) -> list[Desc]:
+    """Every entry of ``tables`` in order, as one list (the tables hold different descriptor kinds)."""
+    return [desc for table in tables for desc in table]
 
 
 @dataclass(slots=True)
@@ -359,7 +371,7 @@ def is_alloc_marker(stmt: ast.stmt) -> bool:
     )
 
 
-def tag_numpy_origin(stmts: list[ast.stmt], text: str) -> None:
+def tag_numpy_origin(stmts: Sequence[ast.stmt], text: str) -> None:
     """Record on the first of ``stmts`` which numpy expression they were lowered from.
 
     A named intrinsic documents itself -- Fortran's ``MATMUL`` says what it is. A loop nest does

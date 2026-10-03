@@ -20,7 +20,7 @@ import numpy as np
 import numpy.typing as npt
 import scipy.sparse as sp
 
-from hpcagent_bench.fuzz import safe_eval
+from hpcagent_bench.fuzz import FuzzValue, safe_eval
 from hpcagent_bench.support.helpers.sparse.abi import (
     BLOCK_FORMAT,
     DEFAULT_FORMAT,
@@ -29,20 +29,25 @@ from hpcagent_bench.support.helpers.sparse.abi import (
     INDEX_DTYPE,
     MASK_DTYPE,
     MASK_ROLE,
-    ArrayLayout,
     SPARSE_BUFFERS_KEY,
     SPARSE_LAYOUT_KEY,
-    ResolvedLayout,
+    ArrayLayout,
     LayoutRefused,
+    ResolvedLayout,
     scalar_name,
 )
+from hpcagent_bench.support.helpers.sparse.generators import shape_of
 
 if TYPE_CHECKING:
     from hpcagent_bench.spec import SparseLayout
 
 __all__ = [
+    "CONVERTERS",
+    "PLANS",
+    "PLAN_CACHE_SIZE",
     "SPARSE_BUFFERS_KEY",
     "SPARSE_LAYOUT_KEY",
+    "Buffer",
     "Materialized",
     "Plan",
     "apply_layout",
@@ -111,12 +116,12 @@ def canonical_csr(matrix: object) -> sp.csr_matrix:
 
 def row_ids(m: sp.csr_matrix) -> npt.NDArray[np.int64]:
     """The row index of every stored entry, in storage order."""
-    return np.repeat(np.arange(m.shape[0], dtype=np.int64), np.diff(m.indptr))
+    return np.repeat(np.arange(shape_of(m)[0], dtype=np.int64), np.diff(m.indptr))
 
 
 def diagonal_count(m: sp.csr_matrix) -> int:
     """How many distinct diagonals (``j - i``) hold an entry: ``dia``'s ``ndiag``. O(nnz), no sort."""
-    rows, cols = m.shape
+    rows, cols = shape_of(m)
     occupied = np.zeros(rows + cols, dtype=bool)
     occupied[m.indices - row_ids(m) + rows] = True
     return int(occupied.sum())
@@ -124,18 +129,18 @@ def diagonal_count(m: sp.csr_matrix) -> int:
 
 def ell_width(m: sp.csr_matrix) -> int:
     """The longest row: ``ell``'s slots per row."""
-    return int(np.diff(m.indptr).max()) if m.shape[0] else 0
+    return int(np.diff(m.indptr).max()) if shape_of(m)[0] else 0
 
 
 def block_count(m: sp.csr_matrix, edge: int) -> int:
     """How many ``edge x edge`` blocks hold an entry: ``bsr``'s ``nnzb``."""
-    block_cols = -(-m.shape[1] // edge)
+    block_cols = -(-shape_of(m)[1] // edge)
     return int(np.unique(row_ids(m) // edge * block_cols + m.indices // edge).size)
 
 
 def stored_values(m: sp.csr_matrix, layout: ArrayLayout) -> tuple[int, str]:
     """How many values ``layout`` stores for ``m`` (padding included), and what they are."""
-    rows, cols = m.shape
+    rows, cols = shape_of(m)
     if layout.format == BLOCK_FORMAT:
         edge = layout.block_size
         nnzb = block_count(m, edge)
@@ -180,14 +185,14 @@ def to_bsr(m: sp.csr_matrix, p: str, layout: ArrayLayout) -> Materialized:
     }
     scalars = {
         scalar_name(p, "bs"): edge,
-        scalar_name(p, "mb"): m.shape[0] // edge,
+        scalar_name(p, "mb"): shape_of(m)[0] // edge,
         scalar_name(p, "nnzb"): int(b.indices.size),
     }
     return Materialized(buffers, scalars)
 
 
 def to_dia(m: sp.csr_matrix, p: str, _layout: ArrayLayout) -> Materialized:
-    rows, cols = m.shape
+    rows, cols = shape_of(m)
     diag = m.indices - row_ids(m)
     occupied = np.zeros(rows + cols, dtype=bool)
     occupied[diag + rows] = True
@@ -202,7 +207,7 @@ def to_dia(m: sp.csr_matrix, p: str, _layout: ArrayLayout) -> Materialized:
 
 
 def to_ell(m: sp.csr_matrix, p: str, _layout: ArrayLayout) -> Materialized:
-    rows = m.shape[0]
+    rows = shape_of(m)[0]
     width = ell_width(m)
     row = row_ids(m)
     slot = np.arange(m.nnz, dtype=np.int64) - m.indptr[row]
@@ -282,7 +287,7 @@ def convert(m: sp.csr_matrix, logical: str, layout: ArrayLayout, pattern: bool =
 def layout_refusal(m: sp.csr_matrix, logical: str, layout: ArrayLayout) -> str | None:
     """Why ``m`` cannot be converted into ``layout`` (a block edge that does not tile it), or ``None``."""
     if layout.format == BLOCK_FORMAT:
-        return divisibility_refusal(m.shape, logical, layout.block_size)
+        return divisibility_refusal(shape_of(m), logical, layout.block_size)
     return None
 
 
@@ -303,7 +308,9 @@ def record(
     if nnz_symbol.isidentifier():
         data[nnz_symbol] = nnz
     else:
-        sizes = {k: int(v) for k, v in data.items() if isinstance(v, (int, np.integer)) and not isinstance(v, bool)}
+        sizes: dict[str, FuzzValue] = {
+            k: int(v) for k, v in data.items() if isinstance(v, (int, np.integer)) and not isinstance(v, bool)
+        }
         declared = int(str(safe_eval(nnz_symbol, sizes)))
         if declared != nnz:
             raise ValueError(f"{logical!r} stores {nnz} entries; its layouts count {nnz_symbol} is {declared}")
@@ -350,7 +357,7 @@ def check_layout(layouts: Mapping[str, "SparseLayout"], choice: ResolvedLayout, 
 #: grade redraw a sparse array's VALUES on one pattern (the same ``indptr`` / ``indices`` objects,
 #: :func:`hpcagent_bench.harness.rep_variation.variant_for`), so every repeat after the first is a
 #: gather instead of a conversion.
-PLANS: list[tuple[npt.NDArray[np.int64], npt.NDArray[np.int64], ArrayLayout, Plan]] = []
+PLANS: list[tuple[npt.NDArray[np.integer], npt.NDArray[np.integer], ArrayLayout, Plan]] = []
 
 #: How many plans :data:`PLANS` keeps (the public draw and one held-out case).
 PLAN_CACHE_SIZE = 2

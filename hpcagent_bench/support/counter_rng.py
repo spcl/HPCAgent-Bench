@@ -34,19 +34,44 @@ from numpy.typing import DTypeLike, NDArray
 
 __all__ = [
     "BLOCK",
+    "F32_BITS",
+    "F64_BITS",
+    "GAMMA",
+    "MASK",
+    "MIX_SHIFT_1",
+    "MIX_SHIFT_2",
+    "MIX_SHIFT_3",
+    "MULTIPLIER_1",
+    "MULTIPLIER_2",
+    "NORMAL_WORDS",
+    "PIECES",
+    "PIECE_BITS",
+    "PIECE_MASK",
+    "WORD_BITS",
     "accelerator",
     "bits",
     "counter",
+    "field",
     "integers",
     "integers_field",
     "key",
+    "mix",
     "normal",
     "normal_field",
     "uniform",
     "uniform_field",
 ]
 
-MASK = (1 << 64) - 1
+#: Bits of the generator's word.
+WORD_BITS = 64
+MASK = (1 << WORD_BITS) - 1
+#: The three right shifts of splitmix64's finalizer.
+MIX_SHIFT_1 = 30
+MIX_SHIFT_2 = 27
+MIX_SHIFT_3 = 31
+#: Mantissa bits of float64 and float32; a uniform draw keeps that many top bits of a word, so the float holds it exactly.
+F64_BITS = 53
+F32_BITS = 24
 #: splitmix64's increment (the golden ratio in 64 bits) and the two multipliers of its finalizer.
 GAMMA = 0x9E3779B97F4A7C15
 MULTIPLIER_1 = 0xBF58476D1CE4E5B9
@@ -64,9 +89,9 @@ BLOCK = 1 << 16
 def mix(value: int) -> int:
     """The splitmix64 finalizer of a Python integer, modulo 2**64."""
     value &= MASK
-    value = ((value ^ (value >> 30)) * MULTIPLIER_1) & MASK
-    value = ((value ^ (value >> 27)) * MULTIPLIER_2) & MASK
-    return value ^ (value >> 31)
+    value = ((value ^ (value >> MIX_SHIFT_1)) * MULTIPLIER_1) & MASK
+    value = ((value ^ (value >> MIX_SHIFT_2)) * MULTIPLIER_2) & MASK
+    return value ^ (value >> MIX_SHIFT_3)
 
 
 def key(seed: int, stream: int = 0) -> int:
@@ -87,11 +112,11 @@ def bits(index: NDArray[np.integer[Any]], seed: int, stream: int = 0, xp: Module
     state += xp.uint64(1)
     state *= xp.uint64(GAMMA)
     state += xp.uint64(key(seed, stream))
-    state ^= state >> xp.uint64(30)
+    state ^= state >> xp.uint64(MIX_SHIFT_1)
     state *= xp.uint64(MULTIPLIER_1)
-    state ^= state >> xp.uint64(27)
+    state ^= state >> xp.uint64(MIX_SHIFT_2)
     state *= xp.uint64(MULTIPLIER_2)
-    state ^= state >> xp.uint64(31)
+    state ^= state >> xp.uint64(MIX_SHIFT_3)
     return state
 
 
@@ -101,8 +126,10 @@ def uniform(
     """A value in [0, 1) for each element of ``index``: the top 53 bits (float64) or 24 bits (float32) of
     :func:`bits`, which the float holds exactly."""
     if np.dtype(dtype) == np.float32:
-        return (bits(index, seed, stream, xp) >> xp.uint64(40)).astype(xp.float32) * np.float32(0.5**24)
-    return (bits(index, seed, stream, xp) >> xp.uint64(11)).astype(xp.float64) * (0.5**53)
+        return (bits(index, seed, stream, xp) >> xp.uint64(WORD_BITS - F32_BITS)).astype(xp.float32) * np.float32(
+            0.5**F32_BITS
+        )
+    return (bits(index, seed, stream, xp) >> xp.uint64(WORD_BITS - F64_BITS)).astype(xp.float64) * (0.5**F64_BITS)
 
 
 def normal(

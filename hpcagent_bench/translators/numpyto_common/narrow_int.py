@@ -37,6 +37,7 @@ from collections.abc import Callable
 from hpcagent_bench.translators.numpyto_common import dtypes
 
 __all__ = [
+    "ABI_INT_BYTES",
     "FLOAT",
     "INT_PRESERVING",
     "UNKNOWN",
@@ -95,12 +96,16 @@ def is_float_or_complex(dtype: str) -> bool:
     return c.startswith("float") or c.startswith("complex")
 
 
+#: Bytes of the integer the C ABI passes by value; a dtype narrower than this is narrow.
+ABI_INT_BYTES: int = 8
+
+
 def narrow_width(dtype: str) -> int | None:
     """Itemsize (bytes) of a NARROW integer dtype (< the 8-byte ABI int), else None."""
     if not dtypes.is_integer(dtype):
         return None
     w = dtypes.itemsize(dtype)
-    return w if w < 8 else None
+    return w if w < ABI_INT_BYTES else None
 
 
 def leaf_dtype(dtype: str | None) -> Category:
@@ -118,7 +123,7 @@ def leaf_dtype(dtype: str | None) -> Category:
 
 def combine(a: Category, b: Category) -> Category:
     """Numpy promotion of two inferred categories."""
-    if a is UNKNOWN or b is UNKNOWN:
+    if a is None or b is None:  # UNKNOWN
         return UNKNOWN
     if a == FLOAT or b == FLOAT:
         return FLOAT
@@ -131,7 +136,7 @@ def combine(a: Category, b: Category) -> Category:
     return dtypes.promote_integers(a, b)  # both concrete integers
 
 
-def infer(node: ast.AST, name_dtype: NameDtype) -> Category:
+def infer(node: ast.expr, name_dtype: NameDtype) -> Category:
     """The numpy result-dtype category of an expression."""
     if isinstance(node, ast.Constant):
         v = node.value
@@ -162,7 +167,7 @@ def infer(node: ast.AST, name_dtype: NameDtype) -> Category:
     return UNKNOWN  # Call / Compare / BoolOp / IfExp -> not a narrow-int wrap site
 
 
-def wrap_dtype(node: ast.AST, name_dtype: NameDtype) -> str | None:
+def wrap_dtype(node: ast.expr, name_dtype: NameDtype) -> str | None:
     """The canonical narrow integer dtype a node's numpy result must be wrapped to
     (e.g. ``"int8"``), or None when no wrap is needed.
 
@@ -177,6 +182,6 @@ def wrap_dtype(node: ast.AST, name_dtype: NameDtype) -> str | None:
     else:
         return None
     cat = infer(node, name_dtype)
-    if cat is UNKNOWN or cat == FLOAT or cat == WEAK_INT:
+    if cat is None or cat == FLOAT or cat == WEAK_INT:  # None is UNKNOWN
         return None
     return cat if narrow_width(cat) is not None else None

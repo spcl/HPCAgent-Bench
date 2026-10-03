@@ -1,6 +1,7 @@
 """Sparse ``@`` lowered onto the unpacked buffer ABI the manifest declares."""
 
 import ast
+from collections.abc import Sequence
 
 from hpcagent_bench.translators.numpyto_common.ast_build import name_, store_
 from hpcagent_bench.translators.numpyto_common.ir import KernelIR, SparseArrayDesc
@@ -56,7 +57,7 @@ def call_leaf(func: ast.AST) -> str:
     return ""
 
 
-def sparse_operand(node: ast.AST, sparse: dict[str, SparseArrayDesc]) -> tuple[SparseArrayDesc, bool] | None:
+def sparse_operand(node: ast.expr, sparse: dict[str, SparseArrayDesc]) -> tuple[SparseArrayDesc, bool] | None:
     """``(descriptor, is_transpose)`` when ``node`` names a sparse array or its ``.T``, else ``None``."""
     if isinstance(node, ast.Name) and node.id in sparse:
         return sparse[node.id], False
@@ -123,6 +124,8 @@ class SparseMatmulRewriter(ast.NodeTransformer):
     hoisted above it.
     """
 
+    __slots__ = ("bounds", "counter", "pre", "ranks", "sparse", "symbol_exprs", "vectors_only")
+
     def __init__(
         self,
         sparse: dict[str, SparseArrayDesc],
@@ -138,7 +141,7 @@ class SparseMatmulRewriter(ast.NodeTransformer):
         self.bounds: dict[str, str] = {}
         self.pre: list[ast.stmt] = []
 
-    def block(self, stmts: list[ast.stmt]) -> list[ast.stmt]:
+    def block(self, stmts: Sequence[ast.stmt]) -> list[ast.stmt]:
         out = []
         for stmt in stmts:
             outer, self.pre = self.pre, []
@@ -198,7 +201,7 @@ class SparseMatmulRewriter(ast.NodeTransformer):
         shape = extents[0] if len(extents) == 1 else "({})".format(", ".join(extents))
         return ast.parse(f"{temp} = np.zeros({shape}, dtype={data_buffer}.dtype)").body[0]
 
-    def lower(self, temp: str, desc: SparseArrayDesc, rhs: ast.AST) -> list[ast.stmt]:
+    def lower(self, temp: str, desc: SparseArrayDesc, rhs: ast.expr) -> list[ast.stmt]:
         from hpcagent_bench.translators.numpyto_common.sparse_emit import SPARSE_MATMUL_DISPATCH
 
         if len(desc.logical_shape) != 2:

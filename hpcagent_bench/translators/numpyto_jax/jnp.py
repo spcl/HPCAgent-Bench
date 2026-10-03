@@ -37,6 +37,8 @@ MATH_TO_JNP = {
 class JnpRewriter(ast.NodeTransformer):
     """``np.<x>`` -> ``jnp.<x>`` plus the jnp spellings of what numpy and jax name differently."""
 
+    __slots__ = ()
+
     def visit_Name(self, node: ast.Name) -> ast.expr:
         if node.id == "np":
             return ast.copy_location(ast.Name(id="jnp", ctx=node.ctx), node)
@@ -176,7 +178,7 @@ class JnpRewriter(ast.NodeTransformer):
         return node
 
 
-def np_to_jnp(tree: ast.AST) -> ast.AST:
+def np_to_jnp(tree: ast.AST) -> ast.expr:
     """Rewrite ``np.<x>`` -> ``jnp.<x>`` (and bare ``np`` -> ``jnp``)."""
     return JnpRewriter().visit(tree)
 
@@ -186,7 +188,7 @@ def unparse_jnp(node: ast.AST) -> str:
     return ast.unparse(np_to_jnp(ast.fix_missing_locations(node)))
 
 
-def is_bool_expr(node: ast.AST) -> bool:
+def is_bool_expr(node: ast.expr) -> bool:
     """A provably-boolean array expression: a comparison, ``np.logical_*``/
     predicate call, or bitwise combo of such (force_lj's ``(rsq < cutoffsq) &
     (rsq > 0.0)``) -- ``boolean_mask_transform`` needs this to lower
@@ -202,7 +204,7 @@ def is_bool_expr(node: ast.AST) -> bool:
     return False
 
 
-def bool_cond_ast(node: ast.AST) -> ast.AST:
+def bool_cond_ast(node: ast.expr) -> ast.expr:
     """Coerce a Python-truthiness condition into an explicit boolean-array
     expression a jit trace can evaluate: ``a and b`` -> ``mask(a) & mask(b)``,
     ``a or b`` -> ``mask(a) | mask(b)``, ``not a`` -> ``~mask(a)``. A
@@ -223,6 +225,6 @@ def bool_cond_ast(node: ast.AST) -> ast.AST:
     return ast.Compare(left=node, ops=[ast.NotEq()], comparators=[ast.Constant(value=0)])
 
 
-def cond_str(test: ast.AST) -> str:
+def cond_str(test: ast.expr) -> str:
     """Unparse a condition (np->jnp) as a traceable boolean-array expression."""
     return unparse_jnp(bool_cond_ast(test))

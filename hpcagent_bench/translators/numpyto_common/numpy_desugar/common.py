@@ -1,6 +1,7 @@
 """Shared pieces of the desugar passes: the refusal type, numpy call recognition, small AST helpers."""
 
 import ast
+from typing import Protocol
 
 from hpcagent_bench.translators.numpyto_common.ast_build import name_
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import numpy_submodule_attr
@@ -11,6 +12,7 @@ __all__ = [
     "REDUCE_FNS",
     "SHAPE_CTORS",
     "DesugarError",
+    "DesugarPass",
     "RankedRewritePass",
     "RewritePass",
     "as_stmts",
@@ -32,8 +34,18 @@ class DesugarError(NotImplementedError):
     verbatim (a clean backend skip)."""
 
 
+class DesugarPass(Protocol):
+    """What the desugar driver runs over each statement: a visitor that records whether it rewrote anything."""
+
+    changed: bool
+
+    def visit(self, node: ast.stmt) -> ast.stmt | list[ast.stmt] | None: ...
+
+
 class RewritePass(ast.NodeTransformer):
     """A desugar pass: ``changed`` turns True once it rewrites anything, ``_ctr`` numbers the temps it mints."""
+
+    __slots__ = ("_ctr", "changed")
 
     def __init__(self) -> None:
         self.changed = False
@@ -57,7 +69,7 @@ SHAPE_CTORS = {"empty", "zeros", "ones", "full", "ndarray"}
 LIKE_CTORS = {"empty_like", "zeros_like", "ones_like"}
 
 
-def tuple_len(node: ast.AST) -> int | None:
+def tuple_len(node: ast.expr) -> int | None:
     if isinstance(node, (ast.Tuple, ast.List)):
         return len(node.elts)
     return None
@@ -72,6 +84,8 @@ def replace_call_with_name(root: ast.AST, target: ast.Call, name: str) -> None:
     """Swap one already-lowered Call node for a Name reference, wherever it sits in ``root``."""
 
     class Swap(ast.NodeTransformer):
+        __slots__ = ()
+
         def visit_Call(self, node: ast.Call) -> ast.AST:
             self.generic_visit(node)
             return ast.copy_location(name_(name), node) if node is target else node
@@ -99,7 +113,7 @@ def eigh_alias_names(tree: ast.AST) -> set:
     return out
 
 
-def eigh_call_kind(node: ast.AST, alias_names: set):
+def eigh_call_kind(node: ast.expr, alias_names: set):
     """``eigh(a[, b], ...)`` / ``eigvalsh(a, ...)`` -> ``(kind, a_node, b_node_or_None, kwargs)``, else None.
 
     Matches ``np.linalg``, ``scipy.linalg`` and an imported ``eigh`` alias. ``kind`` is ``"eigh"`` (an
@@ -130,7 +144,7 @@ def eigh_call_kind(node: ast.AST, alias_names: set):
     return kind, a, b, kw
 
 
-def eigh_call_ab(node: ast.AST, alias_names: set):
+def eigh_call_ab(node: ast.expr, alias_names: set):
     """:func:`eigh_call_kind` without the kind: ``(a_node, b_node_or_None, kwargs)``, else None."""
     hit = eigh_call_kind(node, alias_names)
     return None if hit is None else hit[1:]

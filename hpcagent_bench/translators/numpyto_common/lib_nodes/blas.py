@@ -1,6 +1,7 @@
 """Matrix products: ``@``/``np.matmul``, ``np.dot``, ``np.outer``. A BLAS-capable target gets :data:`BLAS_GEMM_MARKER` instead of the loop nest."""
 
 import ast
+from collections.abc import Sequence
 
 from hpcagent_bench.translators.numpyto_common.ast_build import name_, range_for, store_
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of
@@ -29,7 +30,7 @@ BLAS_INELIGIBLE_DTYPES = ("complex", "int", "uint", "bool", "float16", "bfloat16
 
 
 def expand_matmul(
-    target: ast.expr, lhs: ast.expr, rhs: ast.expr, shape_table: dict[str, tuple[str, ...]]
+    target: ast.Name, lhs: ast.expr, rhs: ast.expr, shape_table: dict[str, tuple[str, ...]]
 ) -> list[ast.stmt]:
     """Lower ``C = A @ B`` to the naive ``M x K x N`` triple-loop GEMM. Both
     operands must be Name expressions with a declared shape in the shape table.
@@ -94,7 +95,7 @@ def expand_matmul(
 # Registry
 
 
-def expand_dot(target: ast.expr, args: list[ast.expr], shape_table: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
+def expand_dot(target: ast.Name, args: Sequence[ast.expr], shape_table: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
     """``s = np.dot(a, b)`` -> accumulator loop.
 
     Each operand may be a bare Name (whose full shape drives the
@@ -115,19 +116,19 @@ def expand_dot(target: ast.expr, args: list[ast.expr], shape_table: dict[str, tu
     iters = [name_(iter_name)]
     sa = scalarize_at_iters(a, iters, shape_table)
     sb = scalarize_at_iters(b, iters, shape_table)
-    body = [
+    body: list[ast.stmt] = [
         ast.AugAssign(
             target=target if isinstance(target, ast.Subscript) else store_(target.id),
             op=ast.Add(),
             value=ast.BinOp(left=sa, op=ast.Mult(), right=sb),
         )
     ]
-    loop = [range_for(iter_name, [extent[0]], body)]
-    return [ast.Assign(targets=[target], value=const_(0.0))] + loop
+    loop = range_for(iter_name, [extent[0]], body)
+    return [ast.Assign(targets=[target], value=const_(0.0)), loop]
 
 
 def expand_outer(
-    target: ast.expr, args: list[ast.expr], shape_table: dict[str, tuple[str, ...]], op: ast.operator | None = None
+    target: ast.Name, args: Sequence[ast.expr], shape_table: dict[str, tuple[str, ...]], op: ast.operator | None = None
 ) -> list[ast.stmt]:
     """``out = np.outer(a, b)`` -> ``out[i, j] = a[i] * b[j]``. ``op`` defaults to
     ``Mult()``; pass ``ast.Add()`` for ``np.add.outer`` (sum-outer-product).
@@ -144,7 +145,7 @@ def expand_outer(
     iter_a, iter_b = name_("__i"), name_("__j")
     sa = scalarize_at_iters(a, [iter_a], shape_table)
     sb = scalarize_at_iters(b, [iter_b], shape_table)
-    body = [
+    body: list[ast.stmt] = [
         ast.Assign(
             targets=[
                 ast.Subscript(
@@ -158,11 +159,15 @@ def expand_outer(
     return wrap_for_loops(["__i", "__j"], bounds, body)
 
 
-def expand_add_outer(target: ast.expr, args: list[ast.expr], shape_table: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
+def expand_add_outer(
+    target: ast.Name, args: Sequence[ast.expr], shape_table: dict[str, tuple[str, ...]]
+) -> list[ast.stmt]:
     return expand_outer(target, args, shape_table, op=ast.Add())
 
 
-def expand_dot_2d(target: ast.expr, args: list[ast.expr], shape_table: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
+def expand_dot_2d(
+    target: ast.Name, args: Sequence[ast.expr], shape_table: dict[str, tuple[str, ...]]
+) -> list[ast.stmt]:
     """``out = np.dot(A, b)`` -> matrix-vector / matrix-matrix. Routes 1-D x 1-D
     (both operands with 1-D iteration extent -- bare Names or slices like
     ``A[i, :j]``) to :func:`expand_dot`; the remaining branches handle

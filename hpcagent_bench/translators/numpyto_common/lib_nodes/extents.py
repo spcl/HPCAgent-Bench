@@ -2,11 +2,12 @@
 
 import ast
 import copy
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from types import NotImplementedType
 
 from hpcagent_bench.translators.numpyto_common import dtypes
-from hpcagent_bench.translators.numpyto_common.ast_build import const_int, name_, numpy_attribute
+from hpcagent_bench.translators.numpyto_common.ast_build import callee_attribute, const_int, name_, numpy_attribute
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module, numpy_submodule_attr
 from hpcagent_bench.translators.numpyto_common.lib_nodes.array_methods import ARRAY_METHOD_SHAPE_OPS
 from hpcagent_bench.translators.numpyto_common.lib_nodes.call_args import (
@@ -44,6 +45,9 @@ __all__ = [
     "INT_PRESERVING_ELEMENTWISE",
     "NP_CALL_EXTENT",
     "UNHANDLED",
+    "CallSize",
+    "Extent",
+    "ShapeTable",
     "advanced_index_rank",
     "all_integer_operands",
     "arange_extent",
@@ -109,7 +113,13 @@ __all__ = [
 ]
 
 
-def operand_token_shape(node: ast.expr, shape_table: dict[str, tuple[str, ...]]) -> tuple[str, ...] | None:
+#: One expression node per iterated axis.
+type Extent = tuple[ast.expr, ...]
+#: Array name -> its shape tokens (read-only: the sizers never write the table).
+type ShapeTable = Mapping[str, Sequence[str]]
+
+
+def operand_token_shape(node: ast.expr, shape_table: ShapeTable) -> tuple[str, ...] | None:
     """Residual shape TOKENS (not AST nodes -- stays consistent with the shape
     table) of an einsum/contraction operand. Bare ``Name(A)`` -> A's declared
     shape. Anything else (a Subscript slice/index chain, a matmul, a
@@ -119,12 +129,13 @@ def operand_token_shape(node: ast.expr, shape_table: dict[str, tuple[str, ...]])
     resolves. ``None`` if unresolvable."""
     nm = name_id(node)
     if nm:
-        return shape_table.get(nm)
+        named = shape_table.get(nm)
+        return None if named is None else tuple(named)
     ext = iter_extent_of(node, shape_table)
     return tuple(ast.unparse(e) for e in ext) if ext is not None else None
 
 
-def chained_base_shape(node: ast.expr, shape_table: dict[str, tuple[str, ...]]) -> tuple[str, ...] | None:
+def chained_base_shape(node: ast.expr, shape_table: ShapeTable) -> tuple[str, ...] | None:
     """Residual token-shape of a SCALAR-chained subscript base ``A[i, j][...]``,
     when every inner index is a single-axis scalar (int Constant / bare Name):
     numpy combined-basic-indexing drops one leading axis per scalar, e.g.
@@ -146,11 +157,11 @@ def chained_base_shape(node: ast.expr, shape_table: dict[str, tuple[str, ...]]) 
     return operand_token_shape(node, shape_table)
 
 
-def contraction_result_extent(expr: ast.Call, shape_table: dict[str, tuple[str, ...]]) -> tuple[ast.expr, ...] | None:
+def contraction_result_extent(expr: ast.Call, shape_table: ShapeTable) -> tuple[ast.expr, ...] | None:
     """Output iter-extent of an ``np.einsum``/``tensordot``/``inner`` call.
     einsum uses its subscript string directly; tensordot/inner are mapped to
     an equivalent einsum spec first. ``None`` if operand shapes don't resolve."""
-    attr = expr.func.attr
+    attr = callee_attribute(expr).attr
     if attr == "einsum":
         if not (isinstance(expr.args[0], ast.Constant) and isinstance(expr.args[0].value, str)):
             return None
@@ -183,12 +194,12 @@ def contraction_result_extent(expr: ast.Call, shape_table: dict[str, tuple[str, 
             except NotImplementedError:
                 return None  # sizer contract: an unresolved extent is None, never an exception
             a_spec = list(letters[:ra])
-            b_spec = [None] * rb
+            b_spec = [""] * rb
             nxt = ra
             for ca, cb in zip(a_ax, b_ax):
                 b_spec[cb] = a_spec[ca]
             for i in range(rb):
-                if b_spec[i] is None:
+                if not b_spec[i]:
                     b_spec[i] = letters[nxt]
                     nxt += 1
             inputs = ["".join(a_spec), "".join(b_spec)]
@@ -208,7 +219,7 @@ def contraction_result_extent(expr: ast.Call, shape_table: dict[str, tuple[str, 
     return tuple(const_or_name(letter_extent[c]) for c in output)
 
 
-def concat_extent(attr: str, expr: ast.Call, shape_table: dict[str, tuple[str, ...]]) -> tuple[ast.expr, ...] | None:
+def concat_extent(attr: str, expr: ast.Call, shape_table: ShapeTable) -> tuple[ast.expr, ...] | None:
     """Extent of a concatenation call, or ``None`` when the operands do not agree on one.
 
     Every operand must size, share a rank, and agree on every axis but the joined one, whose
@@ -220,8 +231,9 @@ def concat_extent(attr: str, expr: ast.Call, shape_table: dict[str, tuple[str, .
         if (len(expr.args) == 1 and isinstance(expr.args[0], (ast.Tuple, ast.List)))
         else list(expr.args)
     )
-    extents = [iter_extent_of(operand, shape_table) for operand in operands]
-    if not extents or any(e is None for e in extents):
+    maybe_extents = [iter_extent_of(operand, shape_table) for operand in operands]
+    extents = [e for e in maybe_extents if e is not None]
+    if not extents or len(extents) != len(maybe_extents):
         return None
     rank = len(extents[0])
     if any(len(e) != rank for e in extents):
@@ -231,9 +243,10 @@ def concat_extent(attr: str, expr: ast.Call, shape_table: dict[str, tuple[str, .
     axis = 0 if rank == 1 or attr == "vstack" else 1
     if attr == "concatenate":
         node = kwarg_or_pos(expr.args[1:], expr.keywords, 0, "axis")
-        axis = 0 if node is None else const_axis(node, rank)
-        if axis is None:
+        joined_axis = 0 if node is None else const_axis(node, rank)
+        if joined_axis is None:
             return None
+        axis = joined_axis
     if axis >= rank:
         return None
     kept = [ast.unparse(e) for k, e in enumerate(extents[0]) if k != axis]
@@ -241,8 +254,9 @@ def concat_extent(attr: str, expr: ast.Call, shape_table: dict[str, tuple[str, .
         return None  # the untouched axes are spelled differently; nothing here can prove them equal
     widths = [extent[axis] for extent in extents]
     literals = [const_int(w) for w in widths]
-    if all(v is not None for v in literals):
-        joined: ast.expr = const_(sum(literals))  # ``3``, not ``1 + 1 + 1``: this becomes a stride
+    ints = [v for v in literals if v is not None]
+    if len(ints) == len(literals):
+        joined: ast.expr = const_(sum(ints))  # ``3``, not ``1 + 1 + 1``: this becomes a stride
     else:
         joined = widths[0]
         for width in widths[1:]:
@@ -260,8 +274,6 @@ def sum_width_tokens(tokens: Sequence[str]) -> str:
     return str(sum(values)) if len(values) == len(tokens) else "+".join(str(tok) for tok in tokens)
 
 
-type Extent = tuple[ast.expr, ...]
-type ShapeTable = dict[str, tuple[str, ...]]
 #: A call sizer's answer: an extent, None (known to be unsized), or :data:`UNHANDLED`.
 type CallSize = Extent | None | NotImplementedType
 
@@ -430,13 +442,14 @@ def reshape_target(elts: list[ast.expr], source: ast.expr, shape_table: ShapeTab
 def method_reshape_extent(expr: ast.Call, shape_table: ShapeTable) -> Extent | None:
     """Method-form ``<expr>.reshape(...)``: the receiver is the operand, not ``np``. Left unsized, a
     reshape target like ``X = (Yf @ C).reshape(shp)`` poisons every derived shape."""
+    elts: list[ast.expr]
     if len(expr.args) == 1 and isinstance(expr.args[0], (ast.Tuple, ast.List)):
         elts = list(expr.args[0].elts)
     elif len(expr.args) == 1 and isinstance(expr.args[0], (ast.Name, ast.Constant, ast.BinOp, ast.UnaryOp)):
         elts = [expr.args[0]]
     else:
         elts = list(expr.args)  # varargs ``.reshape(a, b, c)``
-    return reshape_target(elts, expr.func.value, shape_table)
+    return reshape_target(elts, callee_attribute(expr).value, shape_table)
 
 
 def reduction_extent(expr: ast.Call, shape_table: ShapeTable, *, method_form: bool) -> Extent | None:
@@ -446,7 +459,7 @@ def reduction_extent(expr: ast.Call, shape_table: ShapeTable, *, method_form: bo
     The METHOD spelling carries its operand in the RECEIVER, not in ``args[0]``; ``m.any(axis=-1)``
     must size exactly as ``np.any(m, axis=-1)`` does. ``read_axis_keepdims`` reads the axis from
     positional slot 1, so the method's args are shifted by one into the vocabulary it expects."""
-    red_args = ([expr.func.value] + list(expr.args)) if method_form else list(expr.args)
+    red_args = ([callee_attribute(expr).value, *expr.args]) if method_form else list(expr.args)
     if not red_args:
         return None
     axes, keepdims = read_axis_keepdims(red_args, expr.keywords)
@@ -467,14 +480,14 @@ def method_extent(method: str, expr: ast.Call, shape_table: ShapeTable) -> CallS
     ``np.copy(rho)`` says and is routed to that sizer once, here. ``astype`` and ``flatten`` have no
     numpy function twin and answer directly. :data:`UNHANDLED` for any other method."""
     if method == "astype":
-        return iter_extent_of(expr.func.value, shape_table)  # dtype only, never the shape
+        return iter_extent_of(callee_attribute(expr).value, shape_table)  # dtype only, never the shape
     if method in ("ravel", "flatten"):
-        base = iter_extent_of(expr.func.value, shape_table)
+        base = iter_extent_of(callee_attribute(expr).value, shape_table)
         return None if base is None else (mul_exts(base),)
     if method in ARRAY_METHOD_SHAPE_OPS:
         routed = ast.Call(
             func=numpy_attribute(method),
-            args=[expr.func.value] + list(expr.args),
+            args=[callee_attribute(expr).value, *expr.args],
             keywords=list(expr.keywords),
         )
         return iter_extent_of(ast.copy_location(routed, expr), shape_table)
@@ -549,6 +562,7 @@ def reshape_call_extent(attr: str, expr: ast.Call, shape_table: ShapeTable) -> C
     if len(expr.args) < 2:
         return UNHANDLED
     newshape = expr.args[1]
+    elts: list[ast.expr]
     if isinstance(newshape, (ast.Tuple, ast.List)):
         elts = list(newshape.elts)
     elif isinstance(newshape, (ast.Name, ast.Constant, ast.BinOp, ast.UnaryOp)):
@@ -626,7 +640,10 @@ def squeeze_extent(attr: str, expr: ast.Call, shape_table: ShapeTable) -> CallSi
     axis_node = kwarg_or_pos(expr.args, expr.keywords, 1, "axis")
     if axis_node is not None:
         axis = const_axis(axis_node, len(base))
-        if axis is None or not (isinstance(base[axis], ast.Constant) and base[axis].value == 1):
+        if axis is None:
+            return None
+        squeezed = base[axis]
+        if not (isinstance(squeezed, ast.Constant) and squeezed.value == 1):
             return None
         out = [e for k, e in enumerate(base) if k != axis]
     else:
@@ -653,6 +670,8 @@ def take_extent(attr: str, expr: ast.Call, shape_table: ShapeTable) -> CallSize:
             return None
         out = [e for k, e in enumerate(base) if k != axis]
         return tuple(out) or None
+    if idx_ext is None:
+        return None
     if axis_node is None:
         return idx_ext if len(base) == 1 else None  # flat take on a 1-D source
     axis = const_axis(axis_node, len(base))
@@ -826,7 +845,8 @@ def subscript_base_shape(expr: ast.Subscript, shape_table: ShapeTable) -> tuple[
     expand_dims to a newaxis index)."""
     name = name_id(expr.value)
     if name:
-        return shape_table.get(name)
+        named = shape_table.get(name)
+        return None if named is None else tuple(named)
     shape = chained_base_shape(expr.value, shape_table)
     if shape is None:
         base_ext = iter_extent_of(expr.value, shape_table)
@@ -855,7 +875,12 @@ def slice_count(ax: ast.Slice, axis_len: ast.expr | None) -> ast.expr | None:
     hi = resolve_negative(ax.upper, axis_len) if ax.upper is not None else axis_len
     if hi is None or lo is None:
         return None
-    if isinstance(hi, ast.Constant) and isinstance(lo, ast.Constant):
+    if (
+        isinstance(hi, ast.Constant)
+        and isinstance(lo, ast.Constant)
+        and isinstance(hi.value, int)
+        and isinstance(lo.value, int)
+    ):
         raw: ast.expr = const_(hi.value - lo.value)
     elif isinstance(lo, ast.Constant) and lo.value == 0:
         raw = hi
@@ -880,7 +905,7 @@ def slice_count(ax: ast.Slice, axis_len: ast.expr | None) -> ast.expr | None:
     if step is not None and step != 1:
         # A full-axis reverse spans as many elements as its positive magnitude.
         astep = abs(step)
-        if isinstance(raw, ast.Constant):
+        if isinstance(raw, ast.Constant) and isinstance(raw.value, int):
             return const_((raw.value + astep - 1) // astep)
         return ast.BinOp(
             left=ast.BinOp(left=raw, op=ast.Add(), right=const_(astep - 1)),
@@ -989,7 +1014,7 @@ def extent_is_scalar(ext: tuple[ast.expr, ...] | None) -> bool:
     return ext is not None and all(extent_is_one(e) for e in ext)
 
 
-def is_integer_expr(node: ast.AST, local_dtypes: dict[str, str], array_names: set[str] = frozenset()) -> bool:
+def is_integer_expr(node: ast.AST, local_dtypes: dict[str, str], array_names: AbstractSet[str] = frozenset()) -> bool:
     """Best-effort: does ``node`` evaluate to an integer? Recognises int Constants,
     Names tagged integer in ``local_dtypes``, and ``+ - * % //`` over integer
     operands.
@@ -1051,7 +1076,7 @@ def provably_integer(node: ast.expr, local_dtypes: dict[str, str]) -> bool:
     return False
 
 
-def all_integer_operands(args: list[ast.expr], local_dtypes: dict[str, str] | None) -> bool:
+def all_integer_operands(args: Sequence[ast.expr], local_dtypes: dict[str, str] | None) -> bool:
     """True when EVERY operand of a ufunc call is provably integer -- i.e. numpy would
     promote the result to an integer dtype. An absent dtype table answers False."""
     if not local_dtypes or not args:
@@ -1110,9 +1135,7 @@ BROADCASTING_UFUNCS: set[str] = {
 INT_PRESERVING_ELEMENTWISE: set[str] = {"add", "subtract", "multiply", "power", "maximum", "minimum"}
 
 
-def broadcast_children(
-    children: list[ast.expr], shape_table: dict[str, tuple[str, ...]]
-) -> tuple[ast.expr, ...] | None:
+def broadcast_children(children: Sequence[ast.expr], shape_table: ShapeTable) -> tuple[ast.expr, ...] | None:
     """Fold every child's iter extent through numpy broadcasting, skipping
     scalar (None-extent) children. Returns the broadcast extent, or None when
     no child has an extent. Shared by the Compare / BoolOp extent branches."""
@@ -1125,7 +1148,7 @@ def broadcast_children(
     return acc
 
 
-def resolve_negative(node: ast.AST, axis_len: ast.expr | None) -> ast.expr | None:
+def resolve_negative(node: ast.expr, axis_len: ast.expr | None) -> ast.expr | None:
     """Resolve a slice bound: negative int -> ``axis_len - K``."""
     if isinstance(node, ast.Constant) and isinstance(node.value, int) and node.value < 0:
         if axis_len is None:
@@ -1142,7 +1165,7 @@ def resolve_negative(node: ast.AST, axis_len: ast.expr | None) -> ast.expr | Non
     return node
 
 
-def sliced_index_rank(axes: list[ast.expr]) -> int | None:
+def sliced_index_rank(axes: Sequence[ast.expr]) -> int | None:
     """Rank of an index array read through ``axes``: one per slice and one per newaxis, since ``mat[:, None]``
     is rank 2. ``None`` when no slice keeps an axis of the array itself."""
     slices = sum(1 for a in axes if isinstance(a, ast.Slice))
@@ -1150,7 +1173,7 @@ def sliced_index_rank(axes: list[ast.expr]) -> int | None:
     return slices + newaxes if slices else None
 
 
-def advanced_index_rank(expr: ast.expr, shape_table: dict[str, tuple[str, ...]]) -> int | None:
+def advanced_index_rank(expr: ast.expr, shape_table: ShapeTable) -> int | None:
     """Broadcast rank of an advanced-index EXPRESSION used as one axis of an outer
     gather, or ``None`` if ``expr`` isn't one: a Subscript on a known array with
     >=1 Slice axis, possibly wrapped in arithmetic (ICON's ``edge_idx[:, :, 0] -
@@ -1211,7 +1234,7 @@ def span_multiple_of(span: ast.expr, step: ast.expr) -> ast.expr | None:
 
 
 def concat_operands_axis(
-    args: list[ast.expr], kwargs: list[ast.keyword] | None, shape_table: dict[str, tuple[str, ...]]
+    args: Sequence[ast.expr], kwargs: list[ast.keyword] | None, shape_table: ShapeTable
 ) -> tuple[list[str | None], list[tuple[str, ...]], int]:
     """Shared parse for ``np.concatenate`` / ``np.stack``-style calls: return
     ``(names, shapes, axis)``. The sequence is the first positional arg (a

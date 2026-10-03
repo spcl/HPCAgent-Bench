@@ -31,8 +31,9 @@ on how long its job ran. A snapshot of an unfinished experiment therefore report
 import argparse
 import enum
 import math
+import numbers
 import statistics
-from collections.abc import Collection, Iterable, Mapping, Sequence
+from collections.abc import Collection, Hashable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -41,8 +42,6 @@ from hpcagent_bench.harness import denominator
 from hpcagent_bench.stats import score_rule, summary
 
 __all__ = [
-    "add_selection_arguments",
-    "select_setups",
     "ANSWER_COLUMNS",
     "ATTEMPT_RECORD",
     "BASELINE_FAMILIES",
@@ -51,31 +50,32 @@ __all__ = [
     "DELIVERED_COLUMN",
     "DENOMINATOR_COLUMN",
     "EPISODE_KEY",
+    "EPISODE_RECORD",
     "HARNESS_FAULT_REASON",
     "NOT_DELIVERED",
     "PLATFORM_COLUMN",
     "POLICIES",
     "PROTOCOL_COLUMN",
     "PSEUDO_SETUPS",
+    "RAN_RECORDS",
     "RAW_SPEEDUP_COLUMN",
     "REDUCTION_COLUMN",
     "REPEAT_POLICIES",
     "SOLVED_COLUMN",
     "SUBMISSION_ORDER",
     "SUSPECT_COLUMN",
-    "EPISODE_RECORD",
     "UNBRACKETED",
     "UNNAMED_BASELINE_POLICY",
     "UNSTAMPED",
-    "SetupAggregate",
     "Coverage",
     "KernelPolicy",
     "MixedPopulationError",
     "RepeatPolicy",
+    "SetupAggregate",
+    "add_selection_arguments",
     "aggregate_setup",
     "align",
     "answer_score",
-    "setup_kernel_answers",
     "baseline_family",
     "common_kernels",
     "complete_setups",
@@ -90,6 +90,7 @@ __all__ = [
     "kernel_answers",
     "kernel_medians",
     "kernel_tokens",
+    "key_parts",
     "last_per_episode",
     "latest_episodes",
     "log_differences",
@@ -104,9 +105,13 @@ __all__ = [
     "per_episode_max",
     "platform_of",
     "policies_agree",
+    "ran_rows",
     "ratio",
     "repeat_policy",
     "scored_answers",
+    "select_setups",
+    "series_of",
+    "setup_kernel_answers",
     "timing_bracket_of",
     "valid_submission_rows",
 ]
@@ -162,6 +167,23 @@ class MixedPopulationError(ValueError):
     """Raised when an aggregate would be formed over two populations the claim is not about."""
 
 
+def key_parts(key: Hashable, count: int) -> tuple[str, ...]:
+    """A multi-column ``groupby`` key as ``count`` strings; pandas types it only as ``Hashable``."""
+    if not isinstance(key, tuple) or len(key) != count:
+        raise MixedPopulationError(f"group key {key!r} is not a {count}-tuple")
+    return tuple(str(part) for part in key)
+
+
+def series_of(frame: "pd.DataFrame", name: str) -> "pd.Series":
+    """The one column called ``name``; a duplicated name would be a DataFrame, which no caller means."""
+    import pandas as pd
+
+    found = frame.loc[:, name]
+    if not isinstance(found, pd.Series):
+        raise MixedPopulationError(f"column {name!r} is not unique")
+    return found
+
+
 def is_reportable(suspect: object) -> bool:
     """Whether ONE recorded row may enter a reported statistic. A flagged row may not.
 
@@ -172,6 +194,8 @@ def is_reportable(suspect: object) -> bool:
     A blank or non-numeric cell reads as UNFLAGGED: an unscreened row is not a suspect one.
     """
     if suspect is None or suspect == "":
+        return True
+    if not isinstance(suspect, (str, numbers.Real)):
         return True
     try:
         flag = int(float(suspect))  # sqlite hands back 0/1, a CSV hands back "0"/"1"/"", NaN floats
@@ -189,7 +213,7 @@ def condition_rows(frame: "pd.DataFrame") -> "pd.DataFrame":
     if "setup" not in frame.columns:
         raise MixedPopulationError("cannot select the conditions of a frame without a setup column")
     labels = frame["setup"].fillna("").astype(str).str.strip()
-    return ran_rows(frame[~labels.isin(PSEUDO_SETUPS)])
+    return ran_rows(frame.loc[~labels.isin(list(PSEUDO_SETUPS))])
 
 
 #: Records that show a setup RAN a kernel: a graded answer, accepted or not, or a judge call. The call
@@ -208,8 +232,8 @@ def ran_rows(frame: "pd.DataFrame") -> "pd.DataFrame":
     if not {"row_kind", "setup", "kernel"} <= set(frame.columns):
         return frame
     key = frame["setup"].fillna("").astype(str) + "\x1f" + frame["kernel"].fillna("").astype(str)
-    ran = set(key[frame["row_kind"].isin(RAN_RECORDS)])
-    return frame[key.isin(ran)]
+    ran = set(key.loc[frame["row_kind"].isin(list(RAN_RECORDS))])
+    return frame.loc[key.isin(list(ran))]
 
 
 def complete_setups(frame: "pd.DataFrame", tag_kernels: Sequence[str]) -> tuple[list[str], dict[str, int]]:
@@ -235,7 +259,7 @@ def complete_setups(frame: "pd.DataFrame", tag_kernels: Sequence[str]) -> tuple[
     kept: list[str] = []
     dropped: dict[str, int] = {}
     for setup in order:
-        have = served.get(setup, set())
+        have: set[str] = served.get(setup) or set()
         if needed <= have:
             kept.append(setup)
         else:
@@ -359,7 +383,7 @@ def on_platform(frame: "pd.DataFrame", platform: str = DEFAULT_PLATFORM) -> "pd.
     never enters an MI300A statistic as a second answer."""
     if PLATFORM_COLUMN not in frame.columns:
         return frame if platform == DEFAULT_PLATFORM else frame.iloc[0:0]
-    return frame[frame[PLATFORM_COLUMN].map(platform_of) == platform]
+    return frame.loc[frame[PLATFORM_COLUMN].map(platform_of) == platform]
 
 
 def one_platform(values: Iterable[object], label: str = "") -> str:
@@ -493,7 +517,8 @@ def per_episode_max(frame: "pd.DataFrame", column: str, keep: Sequence[str] = ()
     missing = [name for name in (column, *EPISODE_KEY, *keep) if name not in frame.columns]
     if missing:
         raise MixedPopulationError(f"cannot reduce episodes without {missing}")
-    return frame.groupby([*EPISODE_KEY, *keep], as_index=False)[column].max()
+    keys = [*EPISODE_KEY, *keep]
+    return frame.loc[:, [*keys, column]].groupby(keys, as_index=False).max()
 
 
 #: How a kernel that one setup ran MORE THAN ONCE becomes one value. ``latest``: a rerun -- a later wave
@@ -538,7 +563,7 @@ def select_setups(frame: "pd.DataFrame", experiment: str = "", setups: str = "")
     keep = names.str.startswith(experiment) if experiment else names.notna()
     if setups:
         keep &= names.str.fullmatch(setups)
-    return frame[keep]
+    return frame.loc[keep]
 
 
 def repeat_policy(repeats: RepeatPolicy | str) -> RepeatPolicy:
@@ -570,7 +595,12 @@ def valid_submission_rows(frame: "pd.DataFrame") -> "pd.Series":
     import pandas as pd
 
     def column(name: str) -> "pd.Series":
-        return frame[name].astype(str) if name in frame.columns else pd.Series("", index=frame.index)
+        if name not in frame.columns:
+            return pd.Series("", index=frame.index)
+        found = frame.loc[:, name]
+        if not isinstance(found, pd.Series):
+            raise MixedPopulationError(f"column {name!r} is not unique")
+        return found.astype(str)
 
     record, status = column("row_kind"), column("grade_final_status")
     stamped = (record == "submission") & credited(frame) & (status != "error")
@@ -600,7 +630,7 @@ def latest_episodes(frame: "pd.DataFrame", by: Sequence[str] = ("setup", "kernel
     ts = pd.to_numeric(frame["ts_ms"], errors="coerce")
     # Keyed as text: a ``job`` column mixing Slurm ids and a text label reads back as object dtype,
     # which pandas groups beside string columns as all-NaN keys.
-    ids = frame[keys].astype(str)
+    ids = frame.loc[:, keys].astype(str)
     starts = ids.assign(start=ts)
     starts = starts.groupby(keys, as_index=False, dropna=False).start.min()
     answered = ids.loc[valid_submission_rows(frame)].assign(answer_ts=ts)
@@ -614,8 +644,8 @@ def latest_episodes(frame: "pd.DataFrame", by: Sequence[str] = ("setup", "kernel
         .sort_values(order, kind="stable", na_position="first")
         .drop_duplicates(list(by), keep="last")
     )
-    chosen = pd.MultiIndex.from_frame(latest[keys])
-    return frame[pd.MultiIndex.from_frame(ids).isin(chosen)]
+    chosen = pd.MultiIndex.from_frame(latest.loc[:, keys])
+    return frame.loc[pd.MultiIndex.from_frame(ids).isin(chosen)]
 
 
 def graded_episode_rows(
@@ -663,8 +693,8 @@ def graded_episode_rows(
         )
     # The episode's answer is its LAST submission; when that is not a credited final grade the
     # episode has none (an earlier credited one is never substituted).
-    answers = last_per_episode(frame[frame.speedup > 0], order or SUBMISSION_ORDER)
-    answers = answers[credited(answers)]
+    answers = last_per_episode(frame.loc[frame.speedup > 0], order or SUBMISSION_ORDER)
+    answers = answers.loc[credited(answers)]
     one_reduction(answers[REDUCTION_COLUMN].tolist(), label="graded episodes")
     # The bracket is the other half of "are these the same measurement": the reduction says how the
     # samples became a credit, the bracket says what a sample contains. Checked separately from the
@@ -740,17 +770,17 @@ def setup_kernel_answers(
     """
     policy = repeat_policy(repeats)
     runs = latest_episodes(frame) if policy == RepeatPolicy.LATEST else frame
-    graded = runs[runs["row_kind"] == "submission"] if "row_kind" in runs.columns else runs
+    graded = runs.loc[runs["row_kind"] == "submission"] if "row_kind" in runs.columns else runs
     episodes = graded_episode_rows(graded, order)
     # A final answer the judge flagged suspect solved nothing: the kernel reads as unanswered.
-    episodes = episodes[episodes[SUSPECT_COLUMN].map(is_reportable).astype(bool)]
+    episodes = episodes.loc[episodes[SUSPECT_COLUMN].map(is_reportable).astype(bool)]
     if policy == RepeatPolicy.LATEST or episodes.empty:
         return episodes
     group = ["setup", "kernel"]
     ordered = episodes.sort_values([*group, "speedup"], kind="stable")
     position = ordered.groupby(group).cumcount()
     size = ordered.groupby(group).speedup.transform("size")
-    carriers = ordered[position == (size - 1) // 2].drop(columns=["speedup"])
+    carriers = ordered.loc[position == (size - 1) // 2].drop(columns=["speedup"])
     medians = ordered.groupby(group, as_index=False).speedup.median()
     return carriers.merge(medians, on=group)
 
@@ -823,10 +853,10 @@ def genuinely_attempted(frame: "pd.DataFrame") -> set:
     needed = ("row_kind", "kernel")
     if any(column not in frame.columns for column in needed):
         return set()
-    attempts = frame[frame.row_kind == ATTEMPT_RECORD]
+    attempts = frame.loc[frame.row_kind == ATTEMPT_RECORD]
     if "reason" in attempts.columns:
         reasons = attempts["reason"].fillna("").astype(str)
-        attempts = attempts[reasons != HARNESS_FAULT_REASON]
+        attempts = attempts.loc[reasons != HARNESS_FAULT_REASON]
     return set(attempts["kernel"].dropna().astype(str))
 
 
@@ -869,7 +899,7 @@ def episode_tokens(frame: "pd.DataFrame", by: Sequence[str] = ("kernel",)) -> "p
         return pd.DataFrame(columns=empty_columns)
     # one task row per task; the maximum only guards a task extracted twice
     episodes = per_episode_max(tasks, "tokens", keep=tuple(c for c in by if c not in EPISODE_KEY))
-    return episodes[episodes.tokens > 0]
+    return episodes.loc[episodes.tokens > 0]
 
 
 def kernel_tokens(
@@ -907,8 +937,8 @@ def kernel_medians(frame: "pd.DataFrame", *, repeats: RepeatPolicy = RepeatPolic
     (:func:`hpcagent_bench.stats.cost.priced`).
     """
     answers = kernel_answers(frame, repeats=repeats)
-    answers = answers[answers.speedup > 0]
-    delivered = answers[answers[DELIVERED_COLUMN]] if DELIVERED_COLUMN in answers else answers
+    answers = answers.loc[answers.speedup > 0]
+    delivered = answers.loc[answers[DELIVERED_COLUMN]] if DELIVERED_COLUMN in answers else answers
     tokens = kernel_tokens(frame, repeats=repeats)
     if answers.empty or tokens.empty:
         return None
@@ -1056,7 +1086,7 @@ def align(aggregates: Sequence[SetupAggregate]) -> list[SetupAggregate]:
     one_denominator([item.baseline for item in aggregates], label="align")
     policies = {item.policy for item in aggregates}
     if len(policies) > 1:
-        raise MixedPopulationError(f"cannot align aggregates under different policies {sorted(policies)}")
+        raise MixedPopulationError(f"cannot align aggregates under different policies {sorted(policies, key=str)}")
     shared = common_kernels(aggregates)
     return [item.restricted_to(shared) for item in aggregates]
 

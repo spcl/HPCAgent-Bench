@@ -41,7 +41,7 @@ class FullCallHoister(StmtHoister):
     __slots__ = ()
 
     @staticmethod
-    def is_full_call(v: ast.AST) -> bool:
+    def is_full_call(v: ast.expr) -> bool:
         return (
             isinstance(v, ast.Call)
             and isinstance(v.func, ast.Attribute)
@@ -56,7 +56,7 @@ class FullCallHoister(StmtHoister):
             return self.spill(node, "__full")
         return node
 
-    def visit_Assign(self, node: ast.Assign) -> ast.AST:
+    def visit_Assign(self, node: ast.Assign) -> ast.AST | list[ast.stmt]:
         if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and self.is_full_call(node.value):
             return node
         return self.flush(node)
@@ -70,7 +70,9 @@ class FullLikeRewriter(ast.NodeTransformer):
     arg) and the whole-array scalar-broadcast assign fills it -- so no dedicated
     full/full_like emitter path is needed (lulesh ``pbvc = np.full_like(bvc, c1s)``)."""
 
-    def visit_Assign(self, node: ast.Assign) -> ast.AST:
+    __slots__ = ()
+
+    def visit_Assign(self, node: ast.Assign) -> ast.AST | list[ast.stmt]:
         self.generic_visit(node)
         v = node.value
         if not (
@@ -124,7 +126,7 @@ class EyeCallHoister(StmtHoister):
     __slots__ = ()
 
     @staticmethod
-    def is_eye_call(v: ast.AST) -> bool:
+    def is_eye_call(v: ast.expr) -> bool:
         return (
             isinstance(v, ast.Call)
             and isinstance(v.func, ast.Attribute)
@@ -139,7 +141,7 @@ class EyeCallHoister(StmtHoister):
             return self.spill(node, "__eye")
         return node
 
-    def visit_Assign(self, node: ast.Assign) -> ast.AST:
+    def visit_Assign(self, node: ast.Assign) -> ast.AST | list[ast.stmt]:
         if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and self.is_eye_call(node.value):
             return node
         return self.flush(node)
@@ -159,6 +161,8 @@ class CopyToAllocAndFill(ast.NodeTransformer):
     size against, and the shape-sharing path already declines it for the same reason. The method
     form is matched here as well as the function form, since ``MethodCallRewriter`` runs later.
     """
+
+    __slots__ = ()
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST | list[ast.stmt]:
         self.generic_visit(node)
@@ -210,10 +214,12 @@ class EyeToZerosDiagonal(ast.NodeTransformer):
     lowering only -- the python backends keep the builtin ``np.eye``.
     """
 
+    __slots__ = ("_n",)
+
     def __init__(self) -> None:
         self._n = 0
 
-    def visit_Assign(self, node: ast.Assign) -> ast.AST:
+    def visit_Assign(self, node: ast.Assign) -> ast.AST | list[ast.stmt]:
         self.generic_visit(node)
         v = node.value
         if not (
@@ -246,7 +252,6 @@ class EyeToZerosDiagonal(ast.NodeTransformer):
                 k_node = kw.value
         if k_node is None and v.func.attr == "eye" and len(v.args) >= 3:
             k_node = v.args[2]
-        off_zero = k_node is None or (isinstance(k_node, ast.Constant) and k_node.value == 0)
         it = f"__diag{self._n}"
         self._n += 1
 
@@ -259,7 +264,7 @@ class EyeToZerosDiagonal(ast.NodeTransformer):
                 )
             return ast.BinOp(left=copy.deepcopy(expr), op=op, right=copy.deepcopy(off))
 
-        if off_zero:
+        if k_node is None or (isinstance(k_node, ast.Constant) and k_node.value == 0):
             count = (
                 ast.Call(
                     func=name_("min"),
@@ -271,6 +276,8 @@ class EyeToZerosDiagonal(ast.NodeTransformer):
             )
             row_idx, col_idx = name_(it), name_(it)
         else:
+            off_r: int | ast.expr
+            off_c: int | ast.expr
             if isinstance(k_node, ast.Constant) and isinstance(k_node.value, int):
                 off_r, off_c = max(0, -k_node.value), max(0, k_node.value)
             else:
@@ -333,6 +340,8 @@ class ZerosRewriter(ast.NodeTransformer):
     from the named array (looked up in :attr:`shape_table`) instead
     of from the call's explicit shape argument.
     """
+
+    __slots__ = ("aliases", "dtype_literal", "dtype_src", "fills", "shape_table", "zeros")
 
     def __init__(self, shape_table: dict[str, tuple[str, ...]] | None = None) -> None:
         self.zeros: dict[str, tuple[str, ...]] = {}
@@ -467,7 +476,9 @@ class MgridLowering(ast.NodeTransformer):
     other local array.
     """
 
-    def visit_Assign(self, node: ast.Assign) -> ast.AST:
+    __slots__ = ()
+
+    def visit_Assign(self, node: ast.Assign) -> ast.AST | list[ast.stmt]:
         self.generic_visit(node)
         if not (len(node.targets) == 1 and isinstance(node.targets[0], ast.Tuple)):
             return node
@@ -479,22 +490,20 @@ class MgridLowering(ast.NodeTransformer):
             and rhs.value.attr == "mgrid"
         ):
             return node
-        targets = node.targets[0].elts
-        if not all(isinstance(t, ast.Name) for t in targets):
+        targets = [t for t in node.targets[0].elts if isinstance(t, ast.Name)]
+        if len(targets) != len(node.targets[0].elts):
             return node
         sl = rhs.slice
-        if isinstance(sl, ast.Tuple):
-            axes = list(sl.elts)
-        else:
-            axes = [sl]
-        if len(axes) != len(targets) or not all(isinstance(a, ast.Slice) for a in axes):
+        entries = sl.elts if isinstance(sl, ast.Tuple) else [sl]
+        axes = [a for a in entries if isinstance(a, ast.Slice)]
+        if len(axes) != len(targets) or len(axes) != len(entries):
+            return node
+        highs = [ax.upper for ax in axes if ax.upper is not None]
+        if len(highs) != len(axes):
             return node
         shape_elts: list[ast.expr] = []
-        for ax in axes:
+        for ax, hi in zip(axes, highs):
             lo = ax.lower if ax.lower is not None else ast.Constant(value=0)
-            hi = ax.upper
-            if hi is None:
-                return node
             shape_elts.append(ast.BinOp(left=hi, op=ast.Sub(), right=lo))
         shape_tuple = ast.Tuple(elts=shape_elts, ctx=ast.Load())
         out: list[ast.stmt] = []
@@ -515,7 +524,8 @@ class MgridLowering(ast.NodeTransformer):
                     ),
                 )
             )
-            lo_k = axes[k].lower if axes[k].lower is not None else ast.Constant(value=0)
+            lower_k = axes[k].lower
+            lo_k = lower_k if lower_k is not None else ast.Constant(value=0)
             idx_expr: ast.expr = name_(iters[k].id)
             if not (isinstance(lo_k, ast.Constant) and lo_k.value == 0):
                 idx_expr = ast.BinOp(left=idx_expr, op=ast.Add(), right=lo_k)
@@ -527,10 +537,9 @@ class MgridLowering(ast.NodeTransformer):
                 )
             ]
             # Wrap the body in nested loops, deepest first.
-            stmt: list[ast.stmt] = body
-            for it, ax in zip(reversed(iters), reversed(axes)):
+            stmt: list[ast.stmt] = [*body]
+            for it, ax, ax_hi in zip(reversed(iters), reversed(axes), reversed(highs)):
                 ax_lo = ax.lower if ax.lower is not None else ast.Constant(value=0)
-                ax_hi = ax.upper
                 bound = (
                     ax_hi
                     if isinstance(ax_lo, ast.Constant) and ax_lo.value == 0

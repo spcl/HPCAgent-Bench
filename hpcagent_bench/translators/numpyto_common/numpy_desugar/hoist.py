@@ -1,8 +1,8 @@
 """Value hoisting: lift a matched call out of its expression into statements that compute a temp."""
 
 import ast
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from collections.abc import Callable
 
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
 
@@ -56,7 +56,7 @@ class HoistForm:
 
     cue_attrs: frozenset[str]
     cue_kinds: tuple[type[ast.AST], ...]
-    rewrite: Callable[[ast.AST, "ValueHoist"], ast.expr | None]
+    rewrite: Callable[[ast.expr, "ValueHoist"], ast.expr | None]
     live: Callable[[HoistTables], bool] = always_live
     drop: Callable[[ast.stmt, HoistTables], bool] = drops_nothing
 
@@ -68,7 +68,7 @@ VALUE_STATEMENTS = (ast.Assign, ast.AugAssign, ast.Return, ast.Expr)
 BINDING_EXPRESSIONS = (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp, ast.Lambda)
 
 
-def has_cue(value: ast.AST, form: HoistForm) -> bool:
+def has_cue(value: ast.expr, form: HoistForm) -> bool:
     """Whether ``value`` holds a cue of ``form``: one scan, so a value the form cannot match is never rewritten."""
     attrs, kinds = form.cue_attrs, form.cue_kinds
     stack: list[object] = [value]
@@ -86,7 +86,7 @@ def has_cue(value: ast.AST, form: HoistForm) -> bool:
     return False
 
 
-def scope_bound_names(node: ast.AST) -> OrderedSet[str]:
+def scope_bound_names(node: ast.expr) -> OrderedSet[str]:
     """Every parameter and stored name under a comprehension or lambda: a superset of what it binds for its body."""
     names: OrderedSet[str] = OrderedSet()
     for sub in ast.walk(node):
@@ -106,9 +106,18 @@ class FormRewriter(ast.NodeTransformer):
     """Rewrite one statement's value with a hoist's form, bottom-up so inner matches go first. A node reading a name
     an enclosing comprehension or lambda binds stays put: its temp would be computed before that name exists."""
 
+    __slots__ = ("bound", "hoist")
+
     def __init__(self, hoist: "ValueHoist") -> None:
         self.hoist = hoist
         self.bound: OrderedSet[str] = OrderedSet()
+
+    def rewrite(self, value: ast.expr) -> ast.expr:
+        """``value`` with the form applied bottom-up; the root is an expression, and stays one."""
+        rewritten = self.visit(value)
+        if not isinstance(rewritten, ast.expr):
+            raise TypeError(f"the rewrite of an expression is an expression, got {type(rewritten).__name__}")
+        return rewritten
 
     def visit(self, node: ast.AST) -> ast.AST:
         if isinstance(node, BINDING_EXPRESSIONS):
@@ -118,7 +127,7 @@ class FormRewriter(ast.NodeTransformer):
             self.bound = enclosing
             return node
         self.generic_visit(node)
-        if self.bound and reads_any(node, self.bound):
+        if not isinstance(node, ast.expr) or (self.bound and reads_any(node, self.bound)):
             return node
         replacement = self.hoist.form.rewrite(node, self.hoist)
         return node if replacement is None else ast.copy_location(replacement, node)
@@ -139,14 +148,14 @@ class ValueHoist:
         self.pre: list[ast.stmt] = []
         self.changed = False
 
-    def visit(self, stmt: ast.stmt) -> list[ast.stmt]:
-        return self.block([stmt]) if self.live else [stmt]
+    def visit(self, node: ast.stmt) -> list[ast.stmt]:
+        return self.block([node]) if self.live else [node]
 
     def queue(self, lines: list[str]) -> None:
         """Queue source lines computing a temp, spliced in front of the current statement."""
         self.pre.extend(ast.parse("\n".join(lines)).body)
 
-    def block(self, stmts: list[ast.stmt]) -> list[ast.stmt]:
+    def block(self, stmts: Sequence[ast.stmt]) -> list[ast.stmt]:
         out: list[ast.stmt] = []
         for stmt in stmts:
             if isinstance(stmt, VALUE_STATEMENTS):
@@ -176,7 +185,7 @@ class ValueHoist:
         value = stmt.value
         if value is None or not has_cue(value, self.form):
             return [stmt]
-        stmt.value = FormRewriter(self).visit(value)
+        stmt.value = FormRewriter(self).rewrite(value)
         if not self.pre:
             return [stmt]
         self.changed = True

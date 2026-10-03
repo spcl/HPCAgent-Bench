@@ -5,6 +5,7 @@ import copy
 import math
 import operator
 from collections.abc import Callable, Iterator, Sequence
+from typing import Any
 
 from hpcagent_bench.translators.numpyto_common import dtypes
 from hpcagent_bench.translators.numpyto_common.ast_build import SubstituteLoads, const_int, literal_loads
@@ -22,6 +23,7 @@ __all__ = [
     "ConstEvaluator",
     "FinfoEpsFold",
     "ListCompUnroll",
+    "Value",
     "const_iterable",
     "const_literal_ast",
     "const_name_values",
@@ -59,6 +61,8 @@ class FinfoEpsFold(ast.NodeTransformer):
     and must not go through here. Folded because the emitters write source text: there is no
     ``finfo`` at native run time.
     """
+
+    __slots__ = ("eps",)
 
     def __init__(self, precision: str | None = None) -> None:
         self.eps = dtypes.float_eps(working_float_dtype(precision))
@@ -116,6 +120,11 @@ CONST_BUILTINS = {
 }
 
 
+#: A Python value the constant folder evaluates: dynamic by design (it mirrors the interpreter's own
+#: semantics over whatever literals the kernel binds), so no narrower static type exists.
+type Value = Any
+
+
 def const_name_values(fn: ast.AST) -> dict[str, object]:
     """Names bound EXACTLY once inside ``fn``, to a literal -> that literal's value.
     A name stored anywhere else (a second assignment, a loop target, a parameter)
@@ -148,20 +157,23 @@ def const_literal_ast(value: object) -> ast.expr | None:
                 value = sorted(value)  # set iteration is hash order -- the emitted source must not vary
             except TypeError:
                 return None
-            elts = [const_literal_ast(v) for v in value]
-            return ast.Set(elts=elts) if elts and all(e is not None for e in elts) else None
-        elts = [const_literal_ast(v) for v in value]
-        if any(e is None for e in elts):
+            members = [const_literal_ast(v) for v in value]
+            literal_members = [e for e in members if e is not None]
+            return ast.Set(elts=literal_members) if members and len(literal_members) == len(members) else None
+        items = [const_literal_ast(v) for v in value]
+        elts = [e for e in items if e is not None]
+        if len(elts) != len(items):
             return None
         if isinstance(value, list):
             return ast.List(elts=elts, ctx=ast.Load())
         return ast.Tuple(elts=elts, ctx=ast.Load())
     if isinstance(value, dict):
         keys = [const_literal_ast(k) for k in value]
-        vals = [const_literal_ast(v) for v in value.values()]
-        if any(e is None for e in keys + vals):
+        literal_keys = [k for k in keys if k is not None]
+        literal_vals = [v for v in (const_literal_ast(v) for v in value.values()) if v is not None]
+        if len(literal_keys) != len(keys) or len(literal_vals) != len(value):
             return None
-        return ast.Dict(keys=keys, values=vals)
+        return ast.Dict(keys=list(literal_keys), values=literal_vals)
     return None
 
 
@@ -174,11 +186,13 @@ class ConstComprehensionFold(ast.NodeTransformer):
     knows. Attribute and subscript reads, lambdas, and calls to anything but a
     whitelisted pure builtin count as runtime. Inner comprehensions fold first."""
 
+    __slots__ = ("changed", "consts")
+
     def __init__(self, consts: dict[str, object]) -> None:
         self.consts = consts
         self.changed = False
 
-    def foldable(self, node: ast.expr) -> bool:
+    def foldable(self, node: ast.ListComp | ast.SetComp | ast.DictComp | ast.GeneratorExp) -> bool:
         bound = {n.id for g in node.generators for n in ast.walk(g.target) if isinstance(n, ast.Name)}
         for n in ast.walk(node):
             if isinstance(
@@ -204,7 +218,7 @@ class ConstComprehensionFold(ast.NodeTransformer):
                 return False
         return True
 
-    def fold_(self, node: ast.expr) -> ast.AST:
+    def fold_(self, node: ast.ListComp | ast.SetComp | ast.DictComp | ast.GeneratorExp) -> ast.expr:
         if not self.foldable(node):
             return node
         try:
@@ -228,7 +242,7 @@ class ConstComprehensionFold(ast.NodeTransformer):
     visit_GeneratorExp = visit_ListComp
 
 
-BINARY_OPS: dict[type[ast.operator], Callable[[object, object], object]] = {
+BINARY_OPS: dict[type[ast.operator], Callable[[Value, Value], Value]] = {
     ast.Add: operator.add,
     ast.Sub: operator.sub,
     ast.Mult: operator.mul,
@@ -243,13 +257,13 @@ BINARY_OPS: dict[type[ast.operator], Callable[[object, object], object]] = {
     ast.BitXor: operator.xor,
     ast.BitAnd: operator.and_,
 }
-UNARY_OPS: dict[type[ast.unaryop], Callable[[object], object]] = {
+UNARY_OPS: dict[type[ast.unaryop], Callable[[Value], Value]] = {
     ast.UAdd: operator.pos,
     ast.USub: operator.neg,
     ast.Not: operator.not_,
     ast.Invert: operator.invert,
 }
-COMPARE_OPS: dict[type[ast.cmpop], Callable[[object, object], object]] = {
+COMPARE_OPS: dict[type[ast.cmpop], Callable[[Value, Value], Value]] = {
     ast.Eq: operator.eq,
     ast.NotEq: operator.ne,
     ast.Lt: operator.lt,
@@ -271,10 +285,10 @@ class ConstEvaluator:
 
     __slots__ = ("names",)
 
-    def __init__(self, names: dict[str, object]) -> None:
+    def __init__(self, names: dict[str, Value]) -> None:
         self.names = names
 
-    def value(self, node: ast.AST, scope: dict[str, object]) -> object:
+    def value(self, node: ast.expr, scope: dict[str, Value]) -> Value:
         if isinstance(node, ast.Constant):
             return node.value
         if isinstance(node, ast.Name):
@@ -301,8 +315,8 @@ class ConstEvaluator:
             return self.comprehension(node, scope)
         raise NotImplementedError(type(node).__name__)
 
-    def display_dict(self, node: ast.Dict, scope: dict[str, object]) -> dict:
-        result: dict = {}
+    def display_dict(self, node: ast.Dict, scope: dict[str, Value]) -> dict[Value, Value]:
+        result: dict[Value, Value] = {}
         for key, item in zip(node.keys, node.values):
             if key is None:
                 result.update(self.value(item, scope))
@@ -310,17 +324,17 @@ class ConstEvaluator:
                 result[self.value(key, scope)] = self.value(item, scope)
         return result
 
-    def boolop(self, node: ast.BoolOp, scope: dict[str, object]) -> object:
-        result: object = None
+    def boolop(self, node: ast.BoolOp, scope: dict[str, Value]) -> Value:
+        result: Value = None
         for operand in node.values:
             result = self.value(operand, scope)
             if bool(result) != isinstance(node.op, ast.And):
                 return result
         return result
 
-    def compare(self, node: ast.Compare, scope: dict[str, object]) -> object:
+    def compare(self, node: ast.Compare, scope: dict[str, Value]) -> Value:
         left = self.value(node.left, scope)
-        result: object = True
+        result: Value = True
         for op, comparator in zip(node.ops, node.comparators):
             right = self.value(comparator, scope)
             result = COMPARE_OPS[type(op)](left, right)
@@ -329,10 +343,10 @@ class ConstEvaluator:
             left = right
         return result
 
-    def call(self, node: ast.Call, scope: dict[str, object]) -> object:
+    def call(self, node: ast.Call, scope: dict[str, Value]) -> Value:
         func = self.value(node.func, scope)
         args = [self.value(a, scope) for a in node.args]
-        kwargs: dict[str, object] = {}
+        kwargs: dict[str, Value] = {}
         for kw in node.keywords:
             if kw.arg is None:
                 kwargs.update(self.value(kw.value, scope))
@@ -341,8 +355,8 @@ class ConstEvaluator:
         return func(*args, **kwargs)
 
     def comprehension(
-        self, node: ast.ListComp | ast.SetComp | ast.DictComp | ast.GeneratorExp, scope: dict[str, object]
-    ) -> object:
+        self, node: ast.ListComp | ast.SetComp | ast.DictComp | ast.GeneratorExp, scope: dict[str, Value]
+    ) -> Value:
         # The first iterable is evaluated in the enclosing scope, before the comprehension runs.
         first = iter(self.value(node.generators[0].iter, scope))
         if isinstance(node, ast.DictComp):
@@ -354,8 +368,8 @@ class ConstEvaluator:
         return list(elements) if isinstance(node, ast.ListComp) else set(elements)
 
     def generate(
-        self, generators: list[ast.comprehension], index: int, iterable: Iterator, scope: dict[str, object]
-    ) -> Iterator[dict[str, object]]:
+        self, generators: list[ast.comprehension], index: int, iterable: Iterator[Value], scope: dict[str, Value]
+    ) -> Iterator[dict[str, Value]]:
         """Each scope the comprehension's element is evaluated in, in iteration order."""
         gen = generators[index]
         for item in iterable:
@@ -370,7 +384,7 @@ class ConstEvaluator:
                     generators, index + 1, iter(self.value(generators[index + 1].iter, inner)), inner
                 )
 
-    def bind(self, target: ast.expr, item: object, scope: dict[str, object]) -> None:
+    def bind(self, target: ast.expr, item: Value, scope: dict[str, Value]) -> None:
         if isinstance(target, ast.Name):
             scope[target.id] = item
             return
@@ -408,9 +422,10 @@ def const_iterable(node: ast.expr, consts: dict[str, object]) -> Sequence[object
         and not node.keywords
     ):
         bounds = [const_int(a) for a in node.args]
-        if None in bounds or bounds[2:] == [0]:
+        ints = [b for b in bounds if b is not None]
+        if len(ints) != len(bounds) or ints[2:] == [0]:
             return None  # a zero step is a ValueError, not an iterable
-        return range(*bounds)
+        return range(*ints)
     return None
 
 
@@ -424,6 +439,8 @@ class ListCompUnroll(ast.NodeTransformer):
     a non-Name target, an element with no literal spelling, and a body holding a lambda
     or rebinding the target -- either would capture the substituted literal instead of
     shadowing it."""
+
+    __slots__ = ("changed", "consts")
 
     def __init__(self, consts: dict[str, object]) -> None:
         self.consts = consts
@@ -547,7 +564,7 @@ def constant_parameters(fn: ast.FunctionDef, calls: list[ast.Call]) -> dict[str,
     return subst
 
 
-def substitute_loads(fn: ast.FunctionDef, subst: dict[str, object]) -> bool:
+def substitute_loads(fn: ast.FunctionDef, subst: dict[str, Value]) -> bool:
     """Replace every load of a name in ``subst`` inside ``fn`` by its literal. True when one was replaced."""
     changed = any(isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load) and n.id in subst for n in ast.walk(fn))
     literal_loads(subst).visit(fn)

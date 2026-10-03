@@ -6,8 +6,8 @@ adapted from it (slower -- no tl.dot support). Neither kernel is specifically tu
 
 import itertools
 import operator
-from functools import reduce
 from collections.abc import Callable
+from functools import reduce
 
 import torch
 import triton
@@ -86,7 +86,7 @@ def complex_matmul2(a, b):
     a_real, a_imag = tl.split(a)
     b_real, b_imag = tl.split(b)
     return tl.join(
-        micro_matmul(a_real, b_real) - micro_matmul(a_imag, b_imag),
+        micro_matmul(a_real, b_real) - micro_matmul(a_imag, b_imag),  # pyright: ignore[reportOperatorIssue]  # triton's stubs type tl.sum's result as a tuple
         micro_matmul(a_real, b_imag) + micro_matmul(a_imag, b_real),
     )
 
@@ -162,8 +162,16 @@ def get_4d_tile_offsets(c0, c1, c2, c3, tile_dims: tl.constexpr, matrix_dims: tl
     n2: tl.constexpr = tile_dims[2]
     n3: tl.constexpr = tile_dims[3]
     m0, m1, m2, m3 = matrix_dims
+    # A jit call binds constexpr parameters from plain tuples and ints; the stubs demand constexpr objects.
     tile, mask = get_6d_tile_offsets(
-        0, 0, c0, c1, c2, c3, tile_dims=(1, 1, n0, n1, n2, n3), matrix_dims=(1, 1, m0, m1, m2, m3)
+        0,
+        0,
+        c0,
+        c1,
+        c2,
+        c3,
+        tile_dims=(1, 1, n0, n1, n2, n3),  # pyright: ignore[reportArgumentType]
+        matrix_dims=(1, 1, m0, m1, m2, m3),  # pyright: ignore[reportArgumentType]
     )
     return tl.reshape(tile, *tile_dims), tl.reshape(mask, *tile_dims)
 
@@ -197,12 +205,12 @@ def grid_sync(barrier) -> None:
 
 @triton.jit
 def get_2d_tile_offsets(
-    x: tl.int32,
-    y: tl.int32,
+    x: tl.int32,  # pyright: ignore[reportInvalidTypeForm]  # triton annotates device scalars with the tl.int32 dtype instance
+    y: tl.int32,  # pyright: ignore[reportInvalidTypeForm]  # triton annotates device scalars with the tl.int32 dtype instance
     tile_width: tl.constexpr,
     tile_height: tl.constexpr,
-    matrix_width: tl.int32,
-    matrix_height: tl.int32,
+    matrix_width: tl.int32,  # pyright: ignore[reportInvalidTypeForm]  # triton annotates device scalars with the tl.int32 dtype instance
+    matrix_height: tl.int32,  # pyright: ignore[reportInvalidTypeForm]  # triton annotates device scalars with the tl.int32 dtype instance
 ) -> tuple[tl.block_type, tl.block_type, tl.block_type, tl.block_type]:
     """Offset tile (tile_height, tile_width) at (x, y) in a contiguous matrix (element units), plus the
     in-bounds mask and the row/column index vectors; returns (offsets, mask, rows, columns)."""
@@ -216,8 +224,14 @@ def get_2d_tile_offsets(
 @triton.jit
 def get_1d_tile_offsets(x, tile_width, vector_width):
     """Offset tile of 'tile_width' elements at 'x' in a 'vector_width'-length vector, plus the in-bounds mask."""
+    # A jit call binds constexpr parameters from plain ints; the stubs demand constexpr objects.
     tile, mask, rows, columns = get_2d_tile_offsets(
-        x=x, y=0, tile_width=tile_width, tile_height=1, matrix_width=vector_width, matrix_height=1
+        x=x,
+        y=0,
+        tile_width=tile_width,
+        tile_height=1,  # pyright: ignore[reportArgumentType]
+        matrix_width=vector_width,
+        matrix_height=1,
     )
     return tl.reshape(tile, (tile_width,)), tl.reshape(mask, (tile_width,))
 
@@ -308,7 +322,7 @@ def kernel_compute_stddev(
     stddev,  # (N,)
     N,
     BLOCK_SIZE_N: tl.constexpr,
-    post_process: tl.constexpr = unary_noop,
+    post_process: tl.constexpr = unary_noop,  # pyright: ignore[reportArgumentType]  # a constexpr parameter's default is the jit function itself
 ) -> None:
     """Computes the standard deviation from 'mean' and the mean-of-squares in 'stddev', stores it back
     to 'stddev' (optionally post-processed by 'post_process')."""
@@ -526,7 +540,7 @@ def matmul_kernel_float32(
 
     # Accumulate into a [BLOCK_SIZE_M, BLOCK_SIZE_N] fp32 block for higher accuracy.
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
-    for k in tl.range(0, tl.cdiv(K, BLOCK_SIZE_K), warp_specialize=True):
+    for k in tl.range(0, tl.cdiv(K, BLOCK_SIZE_K), warp_specialize=True):  # pyright: ignore[reportGeneralTypeIssues]  # tl.range is iterable inside a jit kernel; the stub says NoReturn
         # Out-of-bounds K elements are masked to 0.
         a = tl.load(a_ptrs, mask=offs_k[None, :] < K - k * BLOCK_SIZE_K, other=0.0)
         b = tl.load(b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_SIZE_K, other=0.0)

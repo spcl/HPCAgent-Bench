@@ -1,6 +1,7 @@
 """Argument parsing for numpy calls: axis/keepdims, keyword-or-positional slots, einsum and tensordot specs."""
 
 import ast
+from collections.abc import Sequence
 from typing import Any
 
 from hpcagent_bench.translators.numpyto_common.ast_build import const_int
@@ -55,7 +56,7 @@ def eval_axes(node: ast.expr) -> list[int] | None:
     return None
 
 
-def read_axis_keepdims(args: list[ast.expr], kwargs: list[ast.keyword] | None) -> tuple[list[int] | None, bool]:
+def read_axis_keepdims(args: Sequence[ast.expr], kwargs: list[ast.keyword] | None) -> tuple[list[int] | None, bool]:
     """Return ``(axes, keepdims)`` from a call, keyword or positional. ``axes``:
     ``None`` for full reduction (``np.X(arr)``); ``[k]`` for single-axis
     (``np.X(arr, axis=k)``, negative ``axis=-1`` accepted); ``[k1, k2, ...]`` for
@@ -105,7 +106,7 @@ def read_kwarg(kwargs: list[ast.keyword] | None, name: str) -> ast.expr | None:
     return None
 
 
-def kwarg_or_pos(args: list[ast.expr], kwargs: list[ast.keyword] | None, pos: int, name: str) -> ast.expr | None:
+def kwarg_or_pos(args: Sequence[ast.expr], kwargs: list[ast.keyword] | None, pos: int, name: str) -> ast.expr | None:
     """Resolve a numpy arg passed positionally OR by keyword: ``args[pos]`` if
     present, else the ``name=`` keyword value from ``kwargs``, else ``None``.
     Lets an expander accept both ``np.transpose(A, (1,0,2))`` and
@@ -152,7 +153,7 @@ def axis_literal_or_refuse(node: ast.expr | None, what: str, default: int | None
     return axis
 
 
-def stack_axis(args: list[ast.expr], kwargs: list[ast.keyword] | None, rank: int) -> int:
+def stack_axis(args: Sequence[ast.expr], kwargs: list[ast.keyword] | None, rank: int) -> int:
     """The (possibly negative) NEW-axis position for ``np.stack``, normalized to
     ``[0, rank]`` (an insert position, so ``rank`` -- append -- is valid, unlike
     concatenate's ``[0, rank)``)."""

@@ -2,6 +2,7 @@
 
 import ast
 import copy
+from collections.abc import Sequence
 from types import NotImplementedType
 
 from hpcagent_bench.translators.numpyto_common.ast_build import name_
@@ -50,11 +51,13 @@ class SubscriptifyNames(ast.NodeTransformer):
     """Rewrite ``Name(arr)`` references whose shape matches the loop
     nest's bounds into ``Subscript(arr, idx)``."""
 
+    __slots__ = ("iters", "shape_table")
+
     def __init__(self, shape_table, iters) -> None:
         self.shape_table = shape_table
         self.iters = iters
 
-    def visit_Name(self, node: ast.Name) -> ast.AST:
+    def visit_Name(self, node: ast.Name) -> ast.expr:
         shape = self.shape_table.get(node.id)
         if not shape:
             return node
@@ -64,7 +67,7 @@ class SubscriptifyNames(ast.NodeTransformer):
         # axis subscripts the corresponding iter, EXCEPT size-1
         # axes which subscript constant 0 (broadcast).
         offset = len(self.iters) - len(shape)
-        elts = []
+        elts: list[ast.expr] = []
         for i, s in enumerate(shape):
             if s == "1":
                 elts.append(ast.Constant(value=0))
@@ -90,19 +93,20 @@ class SubscriptifyNames(ast.NodeTransformer):
           just needs the iter variable. Concrete indices stay.
         """
         if isinstance(node.ctx, ast.Load):
-            steps = (
-                (self.fancy_gather, self.lone_slice, self.index_tuple, self.partial_scalar_index)
-                if isinstance(node.value, ast.Name)
-                else (self.computed_base_reshape,)
-            )
-            for step in steps:
-                scalar = step(node)
+            base = node.value
+            if isinstance(base, ast.Name):
+                for step in (self.fancy_gather, self.lone_slice, self.index_tuple, self.partial_scalar_index):
+                    scalar = step(node, base)
+                    if scalar is not UNHANDLED:
+                        return scalar
+            else:
+                scalar = self.computed_base_reshape(node)
                 if scalar is not UNHANDLED:
                     return scalar
         self.generic_visit(node)
         return node
 
-    def computed_base_reshape(self, node: ast.Subscript) -> ast.AST | NotImplementedType:
+    def computed_base_reshape(self, node: ast.Subscript) -> ast.expr | NotImplementedType:
         """A subscript on a NON-Name value (a BinOp / Call result) whose slice is a pure
         broadcast-reshape -- only ``:`` and ``np.newaxis`` (``(q_nb[:, None, :] * fs)[:, :, :, None]``):
         the inner expression scalarised at the iters mapped to the ``:`` axes; each newaxis adds a
@@ -120,7 +124,7 @@ class SubscriptifyNames(ast.NodeTransformer):
             return SubscriptifyNames(self.shape_table, sub_iters).visit(copy.deepcopy(node.value))
         return UNHANDLED
 
-    def fancy_gather(self, node: ast.Subscript) -> ast.AST | NotImplementedType:
+    def fancy_gather(self, node: ast.Subscript, base: ast.Name) -> ast.expr | NotImplementedType:
         """``arr[idx]`` with an INDEX ARRAY ``idx`` (or any array-valued expression over one, such as
         ``table[ri + 1]``) -> ``arr[idx[iter...]]``: ``arr`` itself is NOT subscripted by the iter.
         numpy basic fancy indexing gathers along ``arr``'s LEADING axis -- result shape = idx.shape +
@@ -136,7 +140,7 @@ class SubscriptifyNames(ast.NodeTransformer):
                 idx_shape = tuple(ast.unparse(e) for e in idx_ext)
         if idx_shape is None:
             return UNHANDLED
-        src_shape = self.shape_table.get(node.value.id)
+        src_shape = self.shape_table.get(base.id)
         r = len(idx_shape)
         n_trailing = (len(src_shape) - 1) if src_shape else 0
         result_rank = r + n_trailing
@@ -149,9 +153,9 @@ class SubscriptifyNames(ast.NodeTransformer):
         gathered = SubscriptifyNames(self.shape_table, idx_iters).visit(copy.deepcopy(sl))
         full = [gathered] + trail_iters
         slot = full[0] if len(full) == 1 else ast.Tuple(elts=full, ctx=ast.Load())
-        return ast.Subscript(value=node.value, slice=slot, ctx=ast.Load())
+        return ast.Subscript(value=base, slice=slot, ctx=ast.Load())
 
-    def lone_slice(self, node: ast.Subscript) -> ast.AST | NotImplementedType:
+    def lone_slice(self, node: ast.Subscript, base: ast.Name) -> ast.expr | NotImplementedType:
         """``arr[:]`` is the bare Name. A strided / reverse ``arr[::k]`` / ``arr[lo::k]`` reads ``start
         + iter*k`` (start = ``lower``, or 0 / axis_len-1 for a negative step when omitted; an
         untracked reverse is refused rather than emitted forward). A bounded ``arr[:k]`` / ``arr[a:b]``
@@ -160,44 +164,42 @@ class SubscriptifyNames(ast.NodeTransformer):
         if not isinstance(sl, ast.Slice):
             return UNHANDLED
         if sl.lower is None and sl.upper is None and sl.step is None:
-            return self.visit_Name(node.value)
+            return self.visit_Name(base)
         step = slice_step_any(sl)
         if step is not None and step != 1 and self.iters:
             start: ast.expr | None = sl.lower
             if start is None and step_is_negative(step):
-                sh = self.shape_table.get(node.value.id)
+                sh = self.shape_table.get(base.id)
                 if sh:
                     al = ast.Constant(value=int(sh[0])) if str(sh[0]).isdigit() else name_(str(sh[0]))
                     start = ast.BinOp(left=al, op=ast.Sub(), right=ast.Constant(value=1))
             if step_is_negative(step) and start is None:
-                raise NotImplementedError(
-                    f"reverse slice of {node.value.id!r} needs a known axis length (shape untracked)"
-                )
+                raise NotImplementedError(f"reverse slice of {base.id!r} needs a known axis length (shape untracked)")
             iterv: ast.expr = name_(self.iters[-1])
             scaled: ast.expr = ast.BinOp(left=iterv, op=ast.Mult(), right=step_node(step))
             idx = scaled if start is None else ast.BinOp(left=scaled, op=ast.Add(), right=start)
-            return ast.Subscript(value=node.value, slice=idx, ctx=ast.Load())
+            return ast.Subscript(value=base, slice=idx, ctx=ast.Load())
         if self.iters:
             iter_node: ast.expr = name_(self.iters[-1])
             if sl.lower is not None and not (isinstance(sl.lower, ast.Constant) and sl.lower.value == 0):
                 iter_node = ast.BinOp(left=iter_node, op=ast.Add(), right=sl.lower)
-            return ast.Subscript(value=node.value, slice=iter_node, ctx=ast.Load())
+            return ast.Subscript(value=base, slice=iter_node, ctx=ast.Load())
         return UNHANDLED
 
-    def index_tuple(self, node: ast.Subscript) -> ast.AST | NotImplementedType:
+    def index_tuple(self, node: ast.Subscript, base: ast.Name) -> ast.expr | NotImplementedType:
         """A tuple subscript: all ``:`` is the bare Name; one with index arrays goes through
         :meth:`advanced_tuple`; a mix of slices and concrete indices through :meth:`sliced_tuple`."""
         sl = node.slice
         if not (isinstance(sl, ast.Tuple) and sl.elts):
             return UNHANDLED
         if all(isinstance(e, ast.Slice) and e.lower is None and e.upper is None and e.step is None for e in sl.elts):
-            return self.visit_Name(node.value)
+            return self.visit_Name(base)
         if any(self.index_rank(e) >= 1 for e in sl.elts):
-            scalar = self.advanced_tuple(node)
+            scalar = self.advanced_tuple(node, base, sl.elts)
             if scalar is not UNHANDLED:
                 return scalar
         if any(isinstance(e, ast.Slice) for e in sl.elts):
-            return self.sliced_tuple(node)
+            return self.sliced_tuple(node, base, sl.elts)
         return UNHANDLED
 
     def index_rank(self, e: ast.expr) -> int:
@@ -210,29 +212,30 @@ class SubscriptifyNames(ast.NodeTransformer):
         ext = iter_extent_of(e, self.shape_table)
         return len(ext) if ext is not None and not extent_is_scalar(ext) else 0
 
-    def advanced_tuple(self, node: ast.Subscript) -> ast.AST | NotImplementedType:
+    def advanced_tuple(
+        self, node: ast.Subscript, base: ast.Name, elts: Sequence[ast.expr]
+    ) -> ast.expr | NotImplementedType:
         """Advanced indices (index arrays AND plain scalars -- numpy counts a bare integer as advanced
         next to an index array) that are ADJACENT BROADCAST into one shared block of result axes; a
         Slice keeps its own axis (``x1[:, PERM]`` with PERM (8,6) -> ``x1[w0, PERM[w1, w2]]``;
         ``A[idx, lev, blk]`` is rank 3, not the sum). Each operand in the run right-aligns against the
         SAME shared iters. Advanced indices separated by a slice / newaxis are refused."""
-        sl = node.slice
-        runs = advanced_runs(sl.elts)
+        runs = advanced_runs(elts)
         if len(runs) > 1:
             raise NotImplementedError(
-                f"advanced indices of {node.value.id!r} separated by a slice/newaxis "
+                f"advanced indices of {base.id!r} separated by a slice/newaxis "
                 f"({ast.unparse(node)!r}) -- broadcast-to-front placement is not implemented"
             )
         run = set(runs[0])
-        run_rank = max((self.index_rank(sl.elts[i]) for i in run), default=0)
-        result_axis_count = len(sl.elts) - len(run) + run_rank
+        run_rank = max((self.index_rank(elts[i]) for i in run), default=0)
+        result_axis_count = len(elts) - len(run) + run_rank
         if result_axis_count > len(self.iters):
             return UNHANDLED
         offset = len(self.iters) - result_axis_count
         pos = 0
         giters: list[str] | None = None
         new_elts = []
-        for i, e in enumerate(sl.elts):
+        for i, e in enumerate(elts):
             if i in run:
                 if giters is None:
                     giters = self.iters[offset + pos : offset + pos + run_rank]
@@ -242,7 +245,7 @@ class SubscriptifyNames(ast.NodeTransformer):
             if isinstance(e, ast.Constant) and e.value is None:
                 pos += 1
                 continue
-            it = name_(self.iters[offset + pos])
+            it: ast.expr = name_(self.iters[offset + pos])
             pos += 1
             if (
                 isinstance(e, ast.Slice)
@@ -252,26 +255,27 @@ class SubscriptifyNames(ast.NodeTransformer):
                 it = ast.BinOp(left=it, op=ast.Add(), right=e.lower)
             new_elts.append(it)
         slot = new_elts[0] if len(new_elts) == 1 else ast.Tuple(elts=new_elts, ctx=ast.Load())
-        return ast.Subscript(value=node.value, slice=slot, ctx=ast.Load())
+        return ast.Subscript(value=base, slice=slot, ctx=ast.Load())
 
-    def sliced_tuple(self, node: ast.Subscript) -> ast.AST | NotImplementedType:
+    def sliced_tuple(
+        self, node: ast.Subscript, base: ast.Name, elts: Sequence[ast.expr]
+    ) -> ast.expr | NotImplementedType:
         """Slices and concrete indices: each Slice (full or bounded) takes the next iter in axis order,
         right-aligned, plus any ``lower``; a concrete index stays. A newaxis consumes a result axis
         (and its iter) but no source index, so the right-alignment counts it. A source axis the array
         declares as 1 BROADCASTS along its result axis and pins to 0, as :meth:`visit_Name` does for
         a bare Name (``pressure[..., None]`` of an ``(ncells, 1)`` array under an ``(ncells, 4, 3)``
         nest would otherwise read the next cell's row)."""
-        sl = node.slice
-        n_slices = sum(1 for e in sl.elts if isinstance(e, ast.Slice))
-        n_newaxis = sum(1 for e in sl.elts if isinstance(e, ast.Constant) and e.value is None)
+        n_slices = sum(1 for e in elts if isinstance(e, ast.Slice))
+        n_newaxis = sum(1 for e in elts if isinstance(e, ast.Constant) and e.value is None)
         result_rank = n_slices + n_newaxis
         if result_rank > len(self.iters):
             return UNHANDLED
         axis_pos = len(self.iters) - result_rank
         new_elts: list[ast.expr] = []
-        src_shape = self.shape_table.get(node.value.id)
+        src_shape = self.shape_table.get(base.id)
         src_axis = 0  # the SOURCE axis each element reads: a slice or an index consumes one
-        for e in sl.elts:
+        for e in elts:
             if isinstance(e, ast.Slice):
                 if src_shape and src_axis < len(src_shape) and str(src_shape[src_axis]).strip() == "1":
                     new_elts.append(ast.Constant(value=0))
@@ -290,11 +294,11 @@ class SubscriptifyNames(ast.NodeTransformer):
                 new_elts.append(e)
                 src_axis += 1
         if not new_elts:
-            return name_(node.value.id)
+            return name_(base.id)
         new_slot = new_elts[0] if len(new_elts) == 1 else ast.Tuple(elts=new_elts, ctx=ast.Load())
-        return ast.Subscript(value=node.value, slice=new_slot, ctx=ast.Load())
+        return ast.Subscript(value=base, slice=new_slot, ctx=ast.Load())
 
-    def partial_scalar_index(self, node: ast.Subscript) -> ast.AST | NotImplementedType:
+    def partial_scalar_index(self, node: ast.Subscript, base: ast.Name) -> ast.expr | NotImplementedType:
         """A partial scalar index on a HIGHER-rank array: numpy ``Ham[n]`` == ``Ham[n, :, :]``, so the
         trailing axes take the right-aligned iters (otherwise the read stays rank-1: a Fortran rank
         mismatch, silently wrong numerics in C). A subscript that already FULLY indexes the array
@@ -310,7 +314,7 @@ class SubscriptifyNames(ast.NodeTransformer):
             and not any(self.reads_index_array(e) for e in lead)
         ):
             return UNHANDLED
-        shape = self.shape_table.get(node.value.id)
+        shape = self.shape_table.get(base.id)
         if shape is None:
             return UNHANDLED
         n_trailing = len(shape) - len(lead)
@@ -319,10 +323,10 @@ class SubscriptifyNames(ast.NodeTransformer):
         if 0 < n_trailing <= len(self.iters):
             offset = len(self.iters) - n_trailing
             new_elts = list(res_lead) + [name_(self.iters[offset + j]) for j in range(n_trailing)]
-            return ast.Subscript(value=node.value, slice=ast.Tuple(elts=new_elts, ctx=ast.Load()), ctx=ast.Load())
+            return ast.Subscript(value=base, slice=ast.Tuple(elts=new_elts, ctx=ast.Load()), ctx=ast.Load())
         if n_trailing == 0:
             new_slot = res_lead[0] if len(res_lead) == 1 else ast.Tuple(elts=res_lead, ctx=ast.Load())
-            return ast.Subscript(value=node.value, slice=new_slot, ctx=ast.Load())
+            return ast.Subscript(value=base, slice=new_slot, ctx=ast.Load())
         return UNHANDLED
 
     def reads_index_array(self, e: ast.expr) -> bool:

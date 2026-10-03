@@ -28,9 +28,9 @@ class SpliceErrstate(RewritePass):
     resource and are left standing.
     """
 
-    __slots__ = ("changed",)
+    __slots__ = ()
 
-    def visit_With(self, node: ast.With) -> ast.AST:
+    def visit_With(self, node: ast.With) -> ast.AST | list[ast.stmt]:
         self.generic_visit(node)
         if len(node.items) != 1 or node.items[0].optional_vars is not None:
             return node
@@ -52,7 +52,7 @@ class DropGuards(RewritePass):
     Sound because kernels run on oracle-validated inputs, so input-validation guards never fire.
     ``pass`` keeps an otherwise-empty ``if`` body valid."""
 
-    __slots__ = ("changed",)
+    __slots__ = ()
 
     def visit_Raise(self, node: ast.Raise | ast.Assert):
         self.changed = True
@@ -66,6 +66,8 @@ class DropValidationGuards(ast.NodeTransformer):
 
     The condition (``.ndim`` / ``.flags.c_contiguous`` / ``.dtype``) is often unemittable. Fires only
     when the body is all raise/assert/pass with no else; inputs are oracle-validated, so it never fires."""
+
+    __slots__ = ()
 
     def visit_If(self, node: ast.If):
         self.generic_visit(node)
@@ -94,6 +96,8 @@ class IssubdtypeFold(ast.NodeTransformer):
     The backends cannot evaluate ``np.issubdtype``; folding lets :class:`DeadBranchElim` drop the branch.
     Left verbatim when the kind or category is unknown."""
 
+    __slots__ = ("changed", "dtypes")
+
     def __init__(self, dtypes: dict[str, str]) -> None:
         self.dtypes = dtypes
         self.changed = False
@@ -110,7 +114,7 @@ class IssubdtypeFold(ast.NodeTransformer):
         )
         cat = node.args[1]
         catname = cat.attr if isinstance(cat, ast.Attribute) else (cat.id if isinstance(cat, ast.Name) else None)
-        kinds = ISSUBDTYPE_CATEGORY.get(catname)
+        kinds = ISSUBDTYPE_CATEGORY.get(catname) if catname is not None else None
         if kind is None or kinds is None:
             return node
         self.changed = True
@@ -122,9 +126,9 @@ class DeadBranchElim(RewritePass):
 
     pythran types dead branches too (e.g. ``.toarray()`` under a folded ``issparse``) and would reject them."""
 
-    __slots__ = ("changed",)
+    __slots__ = ()
 
-    def const_bool(self, node: ast.AST):
+    def const_bool(self, node: ast.expr):
         if isinstance(node, ast.Constant) and isinstance(node.value, bool):
             return node.value
         if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
@@ -173,7 +177,7 @@ class BoolOpIfToChain(RewritePass):
     :data:`BOOLOP_CLONE_MAX`, and a test with no bare ``==``/``!=`` (keeps :class:`DeadBranchElim`'s
     whole-BoolOp fold)."""
 
-    __slots__ = ("changed",)
+    __slots__ = ()
 
     def visit_If(self, node: ast.If) -> ast.AST:
         self.generic_visit(node)

@@ -87,6 +87,8 @@ def fold_default_args(fn: ast.FunctionDef, input_args: list[str]) -> None:
         return
 
     class Sub_(ast.NodeTransformer):
+        __slots__ = ()
+
         def visit_Name(self, node: ast.Name) -> ast.expr:
             if isinstance(node.ctx, ast.Load) and node.id in subst:
                 return ast.copy_location(copy.deepcopy(subst[node.id]), node)
@@ -154,7 +156,7 @@ DTYPE_ATTRS = frozenset(
 )
 
 
-def fold_const_expr(v: ast.AST, consts: dict[str, ModuleConst]) -> ModuleConst | None:
+def fold_const_expr(v: ast.expr, consts: dict[str, ModuleConst]) -> ModuleConst | None:
     """``v`` as a number when it is a numeric literal, ``np.pi``-like constant, an already folded
     module constant, or a unary / binary expression over those; else ``None``."""
     if isinstance(v, ast.Constant) and isinstance(v.value, (int, float, complex)) and not isinstance(v.value, bool):
@@ -219,6 +221,7 @@ def numeric_module_consts(tree: ast.Module, shadowed: set[str]) -> dict[str, Mod
         if not isinstance(stmt, ast.Assign) or len(stmt.targets) != 1:
             continue
         tgt = stmt.targets[0]
+        pairs: list[tuple[ast.expr, ast.expr]]
         if isinstance(tgt, ast.Name):
             pairs = [(tgt, stmt.value)]
         elif isinstance(tgt, ast.Tuple) and isinstance(stmt.value, ast.Tuple) and len(tgt.elts) == len(stmt.value.elts):
@@ -256,6 +259,8 @@ def dtype_module_consts(tree: ast.Module, shadowed: set[str]) -> dict[str, str]:
 
 
 class SubstituteModuleConsts(ast.NodeTransformer):
+    __slots__ = ("consts", "dtype_attrs", "seqs")
+
     def __init__(self, consts: dict[str, ModuleConst], seqs: dict[str, ast.Tuple], dtype_attrs: dict[str, str]) -> None:
         self.consts = consts
         self.seqs = seqs
@@ -330,7 +335,7 @@ ARRAY_LITERAL_DTYPES = {
 }
 
 
-def numeric_const(node: ast.AST) -> int | float | None:
+def numeric_const(node: ast.expr) -> int | float | None:
     """A plain int/float constant (incl. unary minus); else ``None``."""
     if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)) and not isinstance(node.value, bool):
         return node.value
@@ -387,7 +392,7 @@ def parse_array_literal(call: ast.Call):
                 if isinstance(kw.value, ast.Attribute)
                 else (kw.value.id if isinstance(kw.value, ast.Name) else None)
             )
-            dtype = ARRAY_LITERAL_DTYPES.get(tag)
+            dtype = ARRAY_LITERAL_DTYPES.get(tag) if tag is not None else None
     if dtype is None:
         dtype = "int64" if all_int else "float64"
     return shape, dtype, flat

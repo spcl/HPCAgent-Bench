@@ -2,8 +2,10 @@
 
 import ast
 import copy
+from collections.abc import Sequence
 
 from hpcagent_bench.translators.numpyto_common.ast_build import name_, nested_blocks, store_
+from hpcagent_bench.translators.numpyto_common.limits import HELPER_NESTING_ROUNDS
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
 
 __all__ = [
@@ -34,11 +36,11 @@ __all__ = [
 ]
 
 
-def has_loop_control(body: list[ast.stmt]) -> bool:
+def has_loop_control(body: Sequence[ast.stmt]) -> bool:
     """True when ``body`` has a ``break``/``continue`` bound to its own loop
     (not one nested inside a further For/While, which would capture it)."""
 
-    def walk_(stmts: list[ast.stmt]) -> bool:
+    def walk_(stmts: Sequence[ast.stmt]) -> bool:
         for s in stmts:
             if isinstance(s, (ast.Break, ast.Continue)):
                 return True
@@ -82,7 +84,7 @@ def resolve_call_args(call: ast.Call, helper: ast.FunctionDef) -> list[ast.expr]
     return present if len(present) == len(resolved) else None
 
 
-def strip_docstrings_(stmts: list[ast.stmt]) -> list[ast.stmt]:
+def strip_docstrings_(stmts: Sequence[ast.stmt]) -> list[ast.stmt]:
     """Return ``stmts`` with leading / standalone string-literal Expr
     statements removed.
 
@@ -153,7 +155,7 @@ def fold_constant_branches(fn: ast.FunctionDef) -> bool:
     """
     changed = False
 
-    def walk(body: list[ast.stmt]) -> list[ast.stmt]:
+    def walk(body: Sequence[ast.stmt]) -> list[ast.stmt]:
         nonlocal changed
         out: list[ast.stmt] = []
         for stmt in body:
@@ -234,9 +236,9 @@ def collect_inlinable_helpers(tree: ast.Module, kernel_fn: ast.FunctionDef) -> d
     # shorthand). These are stripped from the body after their calls are inlined
     # (see InlineHelpers.visit_FunctionDef) -- a backend can't emit a Python
     # ``def``, so the only correct lowering is full inlining.
-    for node in ast.walk(kernel_fn):
-        if isinstance(node, ast.FunctionDef) and node is not kernel_fn and classify(node):
-            out[node.name] = node
+    for nested in ast.walk(kernel_fn):
+        if isinstance(nested, ast.FunctionDef) and nested is not kernel_fn and classify(nested):
+            out[nested.name] = nested
     return out
 
 
@@ -293,20 +295,23 @@ def fuse_guarded_returns(tree: ast.Module) -> None:
         body = fn.body
         while True:
             lift_pure_assignment_over_guard(body, flags)
+            if len(body) < 2:
+                break
+            guard, last = body[-2], body[-1]
             if not (
-                len(body) >= 2
-                and isinstance(body[-1], ast.Return)
-                and body[-1].value is not None
-                and isinstance(body[-2], ast.If)
-                and not body[-2].orelse
-                and len(body[-2].body) == 1
-                and isinstance(body[-2].body[0], ast.Return)
-                and body[-2].body[0].value is not None
-                and is_static_flag_test(body[-2].test, flags)
+                isinstance(last, ast.Return)
+                and last.value is not None
+                and isinstance(guard, ast.If)
+                and not guard.orelse
+                and len(guard.body) == 1
             ):
                 break
-            guard = body[-2]
-            fused = ast.Return(value=ast.IfExp(test=guard.test, body=guard.body[0].value, orelse=body[-1].value))
+            early = guard.body[0]
+            if not (
+                isinstance(early, ast.Return) and early.value is not None and is_static_flag_test(guard.test, flags)
+            ):
+                break
+            fused = ast.Return(value=ast.IfExp(test=guard.test, body=early.value, orelse=last.value))
             body[-2:] = [ast.copy_location(fused, guard)]
         ast.fix_missing_locations(fn)
 
@@ -397,7 +402,7 @@ def flatten_nested_helpers(tree: ast.Module) -> None:
     Inlining the nested defs into their parent (then dropping them) leaves
     each outer helper nested-def-free. Iterated for helpers nested more than
     one level deep."""
-    for unused in range(16):
+    for unused in range(HELPER_NESTING_ROUNDS):
         changed = False
         for h in list(tree.body):
             if not isinstance(h, ast.FunctionDef):
@@ -415,7 +420,7 @@ def flatten_nested_helpers(tree: ast.Module) -> None:
             break
 
 
-def is_const_list_literal(node: ast.AST) -> bool:
+def is_const_list_literal(node: ast.expr) -> bool:
     """A non-empty list/tuple literal usable as a compile-time-unrollable loop
     iterable: lulesh's ``faces = [(0,1,2,3), (0,4,5,1), ...]`` AND the inlined
     ``for nk in (n0, n1, n2, n3)``. Elements may be constants, names, or nested
@@ -431,9 +436,11 @@ class LoopVarSubst(ast.NodeTransformer):
     element's components) and a single Name target (``for f in faces`` -> ``*f`` in
     a call expanded to the element's components, and bare ``f`` replaced by it)."""
 
-    def __init__(self, target: ast.AST, elt: ast.AST) -> None:
+    __slots__ = ("elt", "map", "single")
+
+    def __init__(self, target: ast.expr, elt: ast.expr) -> None:
         self.elt = elt
-        self.map: dict[str, ast.AST] = {}
+        self.map: dict[str, ast.expr] = {}
         if (
             isinstance(target, ast.Tuple)
             and isinstance(elt, (ast.Tuple, ast.List))
@@ -481,6 +488,7 @@ def single_list_bindings(fn: ast.FunctionDef) -> dict[str, list[ast.expr]]:
             isinstance(s, ast.Assign)
             and len(s.targets) == 1
             and isinstance(s.targets[0], ast.Name)
+            and isinstance(s.value, (ast.List, ast.Tuple))
             and is_const_list_literal(s.value)
             and binds_count.get(s.targets[0].id) == 1
         ):
@@ -490,6 +498,8 @@ def single_list_bindings(fn: ast.FunctionDef) -> dict[str, list[ast.expr]]:
 
 class ConstListLoopUnroller(ast.NodeTransformer):
     """Clone a ``for`` body once per element of its literal (or once-bound literal) iterable."""
+
+    __slots__ = ("consumed", "list_binds")
 
     def __init__(self, list_binds: dict[str, list[ast.expr]]) -> None:
         self.list_binds = list_binds
@@ -522,6 +532,8 @@ class ConstListLoopUnroller(ast.NodeTransformer):
 
 
 class DropListBindings(ast.NodeTransformer):
+    __slots__ = ("names",)
+
     def __init__(self, names: set[str]) -> None:
         self.names = names
 
@@ -559,6 +571,8 @@ class HoistMultiStmtHelpers(ast.NodeTransformer):
     helper Calls inside non-Assign-of-Call expressions are replaced by fresh
     ``__hcall<n>`` temps, with their Assigns prepended.
     """
+
+    __slots__ = ("_counter", "_pending", "_taken", "helpers", "multi_stmt")
 
     def __init__(self, helpers: dict[str, ast.FunctionDef], counter: list[int] | None = None) -> None:
         self.helpers = helpers
@@ -601,7 +615,7 @@ class HoistMultiStmtHelpers(ast.NodeTransformer):
         self._pending = pending
         return node
 
-    def rewrite_stmt_list(self, stmts: list[ast.stmt]) -> list[ast.stmt]:
+    def rewrite_stmt_list(self, stmts: Sequence[ast.stmt]) -> list[ast.stmt]:
         out: list[ast.stmt] = []
         for stmt in stmts:
             # Skip the "Assign of a direct helper Call" form -- the
@@ -649,22 +663,24 @@ class HoistMultiStmtHelpers(ast.NodeTransformer):
         fresh ``__hcall<n>`` Name and queue an Assign in
         ``self._pending``."""
 
-        class Replacer(ast.NodeTransformer):
-            outer = self
+        inliner = self
 
-            def visit_Call(self_inner, call: ast.Call) -> ast.AST:
+        class Replacer(ast.NodeTransformer):
+            __slots__ = ()
+
+            def visit_Call(self, node: ast.Call) -> ast.AST:
                 # Recurse into args / kwargs first.
-                self_inner.generic_visit(call)
-                if isinstance(call.func, ast.Name) and call.func.id in self.multi_stmt:
-                    self._counter[0] += 1
-                    temp = f"__hcall{self._counter[0]}"
-                    while temp in self._taken:
-                        self._counter[0] += 1
-                        temp = f"__hcall{self._counter[0]}"
-                    self._taken.add(temp)
-                    self._pending.append(ast.Assign(targets=[store_(temp)], value=call))
+                self.generic_visit(node)
+                if isinstance(node.func, ast.Name) and node.func.id in inliner.multi_stmt:
+                    inliner._counter[0] += 1
+                    temp = f"__hcall{inliner._counter[0]}"
+                    while temp in inliner._taken:
+                        inliner._counter[0] += 1
+                        temp = f"__hcall{inliner._counter[0]}"
+                    inliner._taken.add(temp)
+                    inliner._pending.append(ast.Assign(targets=[store_(temp)], value=node))
                     return name_(temp)
-                return call
+                return node
 
         return Replacer().visit(expr)
 
@@ -695,6 +711,8 @@ class InlineHelpers(ast.NodeTransformer):
       Assign-level visit; expression-level inlining for the single-
       return forms remains in visit_Call.
     """
+
+    __slots__ = ("_counter", "helpers")
 
     def __init__(self, helpers: dict[str, ast.FunctionDef], counter: list[int] | None = None) -> None:
         self.helpers = helpers
@@ -730,7 +748,7 @@ class InlineHelpers(ast.NodeTransformer):
                 # the prefix so multiple inlines don't collide.
                 local_names = collect_assigned_names(body[:-1])
                 arg_map = dict(zip(param_names, node.value.args))
-                rename: dict[str, ast.AST] = dict(arg_map)
+                rename: dict[str, ast.expr] = dict(arg_map)
                 # A parameter REASSIGNED in the body (lulesh _phi's ``delvm =
                 # delvm * normd``) becomes a fresh prefixed local, initialised
                 # from the call argument first -- otherwise its first read is
@@ -817,7 +835,7 @@ class InlineHelpers(ast.NodeTransformer):
         self._counter[0] += 1
         prefix = f"__inl{self._counter[0]}_"
         local_names = collect_assigned_names(body)
-        rename: dict[str, ast.AST] = dict(zip(param_names, node.value.args))
+        rename: dict[str, ast.expr] = dict(zip(param_names, node.value.args))
         for ln in local_names:
             if ln in param_names:
                 # The helper rebinds a parameter (e.g. ``pn = p.copy()``
@@ -836,7 +854,7 @@ class InlineHelpers(ast.NodeTransformer):
             new_body.append(cloned)
         return new_body
 
-    def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.AST:
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.AST | None:
         # Recurse so calls inside the def (and the kernel body) are inlined,
         # then DROP any nested helper def whose calls we just inlined -- a
         # backend cannot emit a Python ``def``. The kernel itself is never in
@@ -859,25 +877,29 @@ class InlineHelpers(ast.NodeTransformer):
         node.keywords = []
         subst = dict(zip(param_names, node.args))
         body_stmts = strip_docstrings_(helper.body)
-        if len(body_stmts) == 1 and isinstance(body_stmts[0], ast.Return):
+        only = body_stmts[0] if len(body_stmts) == 1 else None
+        if isinstance(only, ast.Return) and only.value is not None:
             return SubstNames(subst).visit(
-                ast.fix_missing_locations(ast.parse(ast.unparse(body_stmts[0].value), mode="eval").body)
+                ast.fix_missing_locations(ast.parse(ast.unparse(only.value), mode="eval").body)
             )
-        if (
-            len(body_stmts) == 1
-            and isinstance(body_stmts[0], ast.If)
-            and len(body_stmts[0].body) == 1
-            and len(body_stmts[0].orelse) == 1
-        ):
-            cond = ast.parse(ast.unparse(body_stmts[0].test), mode="eval").body
-            then = ast.parse(ast.unparse(body_stmts[0].body[0].value), mode="eval").body
-            else_ = ast.parse(ast.unparse(body_stmts[0].orelse[0].value), mode="eval").body
+        if isinstance(only, ast.If) and len(only.body) == 1 and len(only.orelse) == 1:
+            then_stmt, else_stmt = only.body[0], only.orelse[0]
+            if not (
+                isinstance(then_stmt, ast.Return)
+                and then_stmt.value is not None
+                and isinstance(else_stmt, ast.Return)
+                and else_stmt.value is not None
+            ):
+                return node
+            cond = ast.parse(ast.unparse(only.test), mode="eval").body
+            then = ast.parse(ast.unparse(then_stmt.value), mode="eval").body
+            else_ = ast.parse(ast.unparse(else_stmt.value), mode="eval").body
             ifexp = ast.IfExp(test=cond, body=then, orelse=else_)
             return SubstNames(subst).visit(ast.fix_missing_locations(ifexp))
         return node
 
 
-def collect_assigned_names(stmts: list[ast.stmt]) -> OrderedSet[str]:
+def collect_assigned_names(stmts: Sequence[ast.stmt]) -> OrderedSet[str]:
     """Return the set of Name targets assigned in any of ``stmts``,
     recursing into For / If bodies.
 
@@ -921,7 +943,9 @@ class SubstNames(ast.NodeTransformer):
     renames work but a param-arg replacement on a Store context is
     silently rejected to keep AST validity)."""
 
-    def __init__(self, subst: dict[str, ast.AST]) -> None:
+    __slots__ = ("subst",)
+
+    def __init__(self, subst: dict[str, ast.expr]) -> None:
         self.subst = subst
 
     def visit_Name(self, node: ast.Name) -> ast.AST:

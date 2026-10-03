@@ -9,21 +9,31 @@ bits equal numpy's. ``first`` is the flat index of the first element, as in :mod
 compile on first use (NVRTC or hipRTC) and cupy caches them.
 """
 
-import cupy as cp
+import cupy as cp  # pyright: ignore[reportMissingImports]  # optional dep, not in the dev env
 import numpy as np
 
 from hpcagent_bench.support import counter_rng as reference
 
-__all__ = ["integers", "normal", "uniform"]
+__all__ = [
+    "CENTRE",
+    "INTEGERS",
+    "NORMAL",
+    "PREAMBLE",
+    "SCALE_21",
+    "UNIFORM",
+    "integers",
+    "normal",
+    "uniform",
+]
 
 PREAMBLE = f"""
 __device__ inline unsigned long long counter_hash(unsigned long long index, unsigned long long key) {{
     unsigned long long state = (index + 1ULL) * {reference.GAMMA}ULL + key;
-    state ^= state >> 30;
+    state ^= state >> {reference.MIX_SHIFT_1};
     state *= {reference.MULTIPLIER_1}ULL;
-    state ^= state >> 27;
+    state ^= state >> {reference.MIX_SHIFT_2};
     state *= {reference.MULTIPLIER_2}ULL;
-    return state ^ (state >> 31);
+    return state ^ (state >> {reference.MIX_SHIFT_3});
 }}
 """
 
@@ -65,10 +75,10 @@ INTEGERS = cp.ElementwiseKernel(
 
 def uniform(out: cp.ndarray, first: int, seed: int, stream: int) -> cp.ndarray:
     """Fill the float32 or float64 ``out`` with the uniform draw of the flat indices ``first`` onward."""
-    wide = out.dtype == np.float64
+    mantissa = reference.F64_BITS if out.dtype == np.float64 else reference.F32_BITS
     UNIFORM(
-        np.uint64(first), np.uint64(reference.key(seed, stream)), np.uint32(11 if wide else 40),
-        0.5**53 if wide else 0.5**24, out,
+        np.uint64(first), np.uint64(reference.key(seed, stream)), np.uint32(reference.WORD_BITS - mantissa),
+        0.5**mantissa, out,
     )  # fmt: skip
     return out
 

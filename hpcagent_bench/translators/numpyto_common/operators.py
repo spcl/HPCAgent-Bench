@@ -11,7 +11,7 @@ import ast
 __all__ = ["BINOP", "BOOLOP", "CMPOP", "FORTRAN_FN_EXPR", "FORTRAN_INTRINSICS"]
 
 #: AST binary-op type -> target operator string.
-BINOP: dict[str, dict[type[ast.AST], str]] = {
+BINOP: dict[str, dict[type[ast.operator], str]] = {
     "c": {
         ast.Add: "+",
         ast.Sub: "-",
@@ -38,7 +38,7 @@ BINOP: dict[str, dict[type[ast.AST], str]] = {
 }
 
 #: AST compare-op type -> target operator string.
-CMPOP: dict[str, dict[type[ast.AST], str]] = {
+CMPOP: dict[str, dict[type[ast.cmpop], str]] = {
     "c": {
         ast.Eq: "==",
         ast.NotEq: "!=",
@@ -58,7 +58,7 @@ CMPOP: dict[str, dict[type[ast.AST], str]] = {
 }
 
 #: AST bool-op type -> target operator string.
-BOOLOP: dict[str, dict[type[ast.AST], str]] = {
+BOOLOP: dict[str, dict[type[ast.boolop], str]] = {
     "c": {ast.And: "&&", ast.Or: "||"},
     "fortran": {ast.And: ".AND.", ast.Or: ".OR."},
 }

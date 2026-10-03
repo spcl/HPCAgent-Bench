@@ -2,6 +2,7 @@
 
 import ast
 import copy
+from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 from hpcagent_bench.translators.numpyto_common.ast_build import name_, range_for, store_
@@ -113,7 +114,7 @@ def hoist_matmul(
             sliced = scalarised_batched_matmul
         if sliced is not None:
             return sliced(matmul, l_ext, r_ext, shape_table, temp_arrays, temp_counter)
-    if not both_names:
+    if not (isinstance(matmul.left, ast.Name) and isinstance(matmul.right, ast.Name)):
         return None, []
     a_name, b_name = matmul.left.id, matmul.right.id
     a_shape = shape_table.get(a_name)
@@ -138,7 +139,7 @@ def hoist_matmul(
         or (len(a_shape) == 2 and len(b_shape) >= 3)
         or (len(a_shape) >= 3 and len(b_shape) >= 3)
     ):
-        return named_batched_matmul(matmul, a_shape, b_shape, temp, temp_counter[0])
+        return named_batched_matmul(a_name, b_name, a_shape, b_shape, temp, temp_counter[0])
 
     # Emit the matmul loop nest that fills ``temp``.
     stmts: list[ast.stmt] = []
@@ -248,7 +249,7 @@ def hoist_matmul(
                 ],
             )
         )
-    else:  # len(a)==1, len(b)==2
+    elif len(a_shape) == 1 and len(b_shape) == 2:
         k, n = b_shape
         stmts.append(
             range_for(
@@ -281,16 +282,17 @@ def hoist_matmul(
                 ],
             )
         )
+    else:
+        raise NotImplementedError(f"matmul of operand ranks ({len(a_shape)}, {len(b_shape)}) has no loop nest")
     return temp, stmts
 
 
 def named_batched_matmul(
-    matmul: ast.BinOp, a_shape: tuple[str, ...], b_shape: tuple[str, ...], temp: str, ctr: int
+    a_name_b: str, b_name_b: str, a_shape: Sequence[str], b_shape: Sequence[str], temp: str, ctr: int
 ) -> tuple[str | None, list[ast.stmt]]:
     """Batched ``(*batch, m, k) @ (k, n) -> (*batch, m, n)`` of two Names (and ``(m, k) @ (*batch, k, n)``,
     and both batched): a plain 2-D matmul body in a loop nest over the batch dims, indexing each
     batched operand by ``[*batch, ...]`` and writing the temp by ``[*batch, m, n]``."""
-    a_name_b, b_name_b = matmul.left.id, matmul.right.id
     # Which side(s) carry the batch dims. Both-batched broadcasts the SAME
     # batch index into both operands; one-sided indexes only that operand.
     a_batch = len(a_shape) >= 3
@@ -308,9 +310,9 @@ def named_batched_matmul(
     batch_names = [name_(b) for b in batch_iters]
     # Each operand's subscript is prefixed with the batch iters iff that
     # operand is batched; the output is always batched.
-    a_sub_elts = (batch_names if a_batch else []) + [name_(i_iter), name_(l_iter)]
-    b_sub_elts = (batch_names if b_batch else []) + [name_(l_iter), name_(j_iter)]
-    out_sub_elts = batch_names + [name_(i_iter), name_(j_iter)]
+    a_sub_elts: list[ast.expr] = [*(batch_names if a_batch else []), name_(i_iter), name_(l_iter)]
+    b_sub_elts: list[ast.expr] = [*(batch_names if b_batch else []), name_(l_iter), name_(j_iter)]
+    out_sub_elts: list[ast.expr] = [*batch_names, name_(i_iter), name_(j_iter)]
     out_sub = ast.Tuple(elts=out_sub_elts, ctx=ast.Load())
     a_sub = ast.Tuple(elts=a_sub_elts, ctx=ast.Load()) if len(a_sub_elts) > 1 else a_sub_elts[0]
     b_sub = ast.Tuple(elts=b_sub_elts, ctx=ast.Load()) if len(b_sub_elts) > 1 else b_sub_elts[0]
@@ -339,8 +341,8 @@ def named_batched_matmul(
 
 def scalar_dot_matmul(
     matmul: ast.BinOp,
-    l_ext: tuple[ast.expr, ...],
-    r_ext: tuple[ast.expr, ...],
+    l_ext: Sequence[ast.expr],
+    r_ext: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     temp_arrays: dict[str, tuple[str, ...]],
     temp_counter: list[int],
@@ -352,7 +354,7 @@ def scalar_dot_matmul(
     iter_var = f"__mml{temp_counter[0]}"
     sa = scalarize_at_iters(matmul.left, [name_(iter_var)], shape_table)
     sb = scalarize_at_iters(matmul.right, [name_(iter_var)], shape_table)
-    stmts = [
+    stmts: list[ast.stmt] = [
         ast.Assign(targets=[store_(temp)], value=const_(0.0)),
         range_for(
             iter_var,
@@ -365,8 +367,8 @@ def scalar_dot_matmul(
 
 def matvec_matmul(
     matmul: ast.BinOp,
-    l_ext: tuple[ast.expr, ...],
-    r_ext: tuple[ast.expr, ...],
+    l_ext: Sequence[ast.expr],
+    r_ext: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     temp_arrays: dict[str, tuple[str, ...]],
     temp_counter: list[int],
@@ -388,7 +390,7 @@ def matvec_matmul(
         out_iter = name_(f"__mmj{temp_counter[0]}")  # j
         sa = scalarize_at_iters(matmul.left, [l_iter], shape_table)
         sb = scalarize_at_iters(matmul.right, [l_iter, out_iter], shape_table)
-        stmts = [
+        stmts: list[ast.stmt] = [
             range_for(
                 out_iter.id,
                 [n_extent],
@@ -448,8 +450,8 @@ def matvec_matmul(
 
 def scalarised_matmul(
     matmul: ast.BinOp,
-    l_ext: tuple[ast.expr, ...],
-    r_ext: tuple[ast.expr, ...],
+    l_ext: Sequence[ast.expr],
+    r_ext: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     temp_arrays: dict[str, tuple[str, ...]],
     temp_counter: list[int],
@@ -472,7 +474,7 @@ def scalarised_matmul(
     sa = scalarize_at_iters(matmul.left, [i_iter, l_iter], shape_table)
     sb = scalarize_at_iters(matmul.right, [l_iter, j_iter], shape_table)
     out_sub = ast.Tuple(elts=[i_iter, j_iter], ctx=ast.Load())
-    stmts = [
+    stmts: list[ast.stmt] = [
         range_for(
             i_iter.id,
             [m_extent],
@@ -506,8 +508,8 @@ def scalarised_matmul(
 
 def scalarised_batched_matmul(
     matmul: ast.BinOp,
-    l_ext: tuple[ast.expr, ...],
-    r_ext: tuple[ast.expr, ...],
+    l_ext: Sequence[ast.expr],
+    r_ext: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     temp_arrays: dict[str, tuple[str, ...]],
     temp_counter: list[int],
@@ -579,13 +581,24 @@ class MatmulHoister(ast.NodeTransformer):
     each get their own temp (chained ``A @ B @ C`` lifts to two temps fused
     left-to-right)."""
 
+    __slots__ = (
+        "blas",
+        "dim_aliases",
+        "local_dtypes",
+        "pre_stmts",
+        "shape_table",
+        "sparse",
+        "temp_arrays",
+        "temp_counter",
+    )
+
     def __init__(
         self,
         shape_table: dict[str, tuple[str, ...]],
         temp_arrays: dict[str, tuple[str, ...]],
         temp_counter: list[int],
         local_dtypes: dict[str, str] | None = None,
-        sparse: dict[str, object] | None = None,
+        sparse: dict[str, SparseArrayDesc] | None = None,
         dim_aliases: dict[str, str] | None = None,
         blas: bool = False,
     ) -> None:
@@ -600,7 +613,7 @@ class MatmulHoister(ast.NodeTransformer):
         self.dim_aliases: dict[str, str] = dim_aliases or {}
         #: Logical-name -> SparseArrayDesc (from KernelIR.sparse). When
         #: a matmul's operands are sparse, route to the sparse emitter.
-        self.sparse: dict[str, object] = sparse or {}
+        self.sparse: dict[str, SparseArrayDesc] = sparse or {}
         self.pre_stmts: list[ast.stmt] = []
 
     def visit_BinOp(self, node: ast.BinOp) -> ast.AST:
@@ -609,9 +622,9 @@ class MatmulHoister(ast.NodeTransformer):
             # Sparse path: both operands are logical sparse arrays.
             sp = self.try_hoist_sparse_matmul(node)
             if sp is not None:
-                temp, stmts = sp
-                self.pre_stmts.extend(self.prepend_alloc_markers(stmts))
-                return name_(temp)
+                sparse_temp, sparse_stmts = sp
+                self.pre_stmts.extend(self.prepend_alloc_markers(sparse_stmts))
+                return name_(sparse_temp)
             node = self.materialise_call_operands(node)
             temp, stmts = hoist_matmul(
                 node,
@@ -689,7 +702,7 @@ class MatmulHoister(ast.NodeTransformer):
             return node
         return ast.BinOp(left=left, op=ast.MatMult(), right=right)
 
-    def prepend_alloc_markers(self, stmts: list[ast.stmt]) -> list[ast.stmt]:
+    def prepend_alloc_markers(self, stmts: Sequence[ast.stmt]) -> list[ast.stmt]:
         """Prepend a ``__hpcagent_bench_zeros__()`` allocation marker for each array
         temp written in ``stmts`` (first-write order). A matmul/column-slice
         temp whose shape depends on a body-computed scalar (gmres ``n``/``m``)
@@ -712,7 +725,7 @@ class MatmulHoister(ast.NodeTransformer):
                     tgt = tgt.value
                 if isinstance(tgt, ast.Name) and tgt.id in self.temp_arrays and tgt.id not in seen:
                     seen.append(tgt.id)
-        return [alloc_marker(n) for n in seen] + stmts
+        return [*(alloc_marker(n) for n in seen), *stmts]
 
     def try_hoist_sparse_matmul(self, node: ast.BinOp) -> tuple[str, list[ast.stmt]] | None:
         """Route ``A @ B`` through the sparse emitter when an operand carries a
@@ -754,7 +767,7 @@ class MatmulHoister(ast.NodeTransformer):
                 n_rows = td.logical_shape[0] if td.logical_shape else "0"
                 self.temp_arrays[temp] = (n_rows,)
                 self.shape_table[temp] = (n_rows,)
-                return temp, pre + self.sparse_matvec(td, node.right.id, temp, transposed=transposed)
+                return temp, [*pre, *self.sparse_matvec(td, node.right.id, temp, transposed=transposed)]
         l_sparse = isinstance(node.left, ast.Name) and node.left.id in self.sparse
         r_sparse = isinstance(node.right, ast.Name) and node.right.id in self.sparse
         if not (l_sparse or r_sparse):
@@ -778,11 +791,11 @@ class MatmulHoister(ast.NodeTransformer):
         if la is None and ra is None:
             return None  # purely dense -- not our path
         if la is not None and ra is not None:
-            return self.sparse_sparse_matmul(node, la, ra, pre)
-        return self.sparse_dense_matmul(node, la, ra, pre)
+            return self.sparse_sparse_matmul(node.left.id, node.right.id, la, ra, pre)
+        return self.sparse_dense_matmul(node.left.id, node.right.id, la, ra, pre)
 
     def sparse_sparse_matmul(
-        self, node: ast.BinOp, la: SparseArrayDesc, ra: SparseArrayDesc, pre: list[ast.stmt]
+        self, left_name: str, right_name: str, la: SparseArrayDesc, ra: SparseArrayDesc, pre: Sequence[ast.stmt]
     ) -> tuple[str, list[ast.stmt]]:
         """``csr @ csr`` into a dense result temp; every other sparse @ sparse pairing is refused."""
         from hpcagent_bench.translators.numpyto_common import sparse_emit as se
@@ -792,10 +805,10 @@ class MatmulHoister(ast.NodeTransformer):
         nj = ra.logical_shape[1] if len(ra.logical_shape) > 1 else (ra.logical_shape[0] if ra.logical_shape else "0")
         temp = self.fresh_temp("__mm", (ni, nj))
         if lfmt == "csr" and rfmt == "csr":
-            return temp, pre + se.expand_matmul_csr_csr_dense(temp, la.buffers, ra.buffers, ni, nj)
+            return temp, [*pre, *se.expand_matmul_csr_csr_dense(temp, la.buffers, ra.buffers, ni, nj)]
         if lfmt not in se.ENTRY_WALKERS or rfmt not in se.ENTRY_WALKERS:
             raise NotImplementedError(
-                f"sparse @ sparse has no lowering for {lfmt} @ {rfmt} ({node.left.id} @ {node.right.id})."
+                f"sparse @ sparse has no lowering for {lfmt} @ {rfmt} ({left_name} @ {right_name})."
             )
         # Any other pairing: the right operand is densified into a temp, then every stored entry of
         # the left one scales a row of it -- a reference, correct for every layout, not a fast path.
@@ -803,23 +816,26 @@ class MatmulHoister(ast.NodeTransformer):
         dense_rhs = self.fresh_temp("__spd", (rhs_ext.rows, rhs_ext.cols))
         stmts = se.densify(dense_rhs, rfmt, ra.buffers, rhs_ext)
         stmts += se.entry_matmat(temp, lfmt, la.buffers, self.entry_extents(la), dense_rhs, nj)
-        return temp, pre + stmts
+        return temp, [*pre, *stmts]
 
     def sparse_dense_matmul(
         self,
-        node: ast.BinOp,
+        left_name: str,
+        right_name: str,
         la: SparseArrayDesc | None,
         ra: SparseArrayDesc | None,
-        pre: list[ast.stmt],
+        pre: Sequence[ast.stmt],
     ) -> tuple[str, list[ast.stmt]]:
         """Exactly one operand sparse: a sparse @ dense matvec (any format) or a CSR matmat; a 1-D dense
         @ sparse row-vector product and every other pairing are refused."""
         from hpcagent_bench.translators.numpyto_common import sparse_emit as se
 
         if la is not None:
-            sp_desc, dense_name, sp_on_left = la, node.right.id, True
+            sp_desc, dense_name, sp_on_left = la, right_name, True
+        elif ra is not None:
+            sp_desc, dense_name, sp_on_left = ra, left_name, False
         else:
-            sp_desc, dense_name, sp_on_left = ra, node.left.id, False
+            raise ValueError("sparse_dense_matmul needs a sparse operand")
         dense_shape = self.shape_table.get(dense_name)
         rank = len(dense_shape) if dense_shape else None
         if rank == 1:
@@ -834,19 +850,19 @@ class MatmulHoister(ast.NodeTransformer):
             self.temp_arrays[temp] = (n_rows,)
             self.shape_table[temp] = (n_rows,)
             stmts = self.sparse_matvec(sp_desc, dense_name, temp)
-            return temp, pre + stmts
+            return temp, [*pre, *stmts]
         # matmat sparse @ dense (2-D) -> dense: csr's own loop nest, the stored-entry walk elsewhere.
-        if rank == 2 and sp_on_left and sp_desc.format in se.ENTRY_WALKERS:
+        if dense_shape is not None and rank == 2 and sp_on_left and sp_desc.format in se.ENTRY_WALKERS:
             n_rows = sp_desc.logical_shape[0] if sp_desc.logical_shape else "0"
             n_cols = dense_shape[1]
             temp = self.fresh_temp("__mm", (n_rows, n_cols))
             if sp_desc.format == "csr":
-                return temp, pre + se.expand_matmul_csr_dense_mat(temp, sp_desc.buffers, dense_name, n_rows, n_cols)
+                return temp, [*pre, *se.expand_matmul_csr_dense_mat(temp, sp_desc.buffers, dense_name, n_rows, n_cols)]
             ext = self.entry_extents(sp_desc)
-            return temp, pre + se.entry_matmat(temp, sp_desc.format, sp_desc.buffers, ext, dense_name, n_cols)
+            return temp, [*pre, *se.entry_matmat(temp, sp_desc.format, sp_desc.buffers, ext, dense_name, n_cols)]
         raise NotImplementedError(
             f"sparse @ dense for format {sp_desc.format} with dense rank "
-            f"{rank} not supported ({node.left.id} @ {node.right.id})."
+            f"{rank} not supported ({left_name} @ {right_name})."
         )
 
     def materialise_dense_operand(
@@ -891,7 +907,7 @@ class MatmulHoister(ast.NodeTransformer):
             body = range_for(it.id, [extent], [body])
         return temp, [body]
 
-    def transpose_sparse_desc(self, operand: ast.expr) -> tuple[object, bool] | None:
+    def transpose_sparse_desc(self, operand: ast.expr) -> tuple[SparseArrayDesc, bool] | None:
         """If ``operand`` is ``A.T`` for a sparse ``A``, return ``(desc, transposed)`` describing
         ``A.T`` so the matvec dispatcher emits ``A.T @ x`` directly; ``None`` otherwise.
 
@@ -965,7 +981,9 @@ class MatmulHoister(ast.NodeTransformer):
         count = self.buffer_extent(bufs, *count_axis) if count_axis else None
         return EntryExtents(rows, cols, count or "0")
 
-    def sparse_matvec(self, sp_desc: object, dense_name: str, temp: str, transposed: bool = False) -> list[ast.stmt]:
+    def sparse_matvec(
+        self, sp_desc: SparseArrayDesc, dense_name: str, temp: str, transposed: bool = False
+    ) -> list[ast.stmt]:
         """Build the per-format matvec loop nest filling 1-D ``temp``.
 
         Derives each format's extra size symbols from the sparse

@@ -41,6 +41,8 @@ class AxisReshapeToIndexing(ast.NodeTransformer):
     alone, which surfaces as an unsupported-call error rather than a wrong axis.
     """
 
+    __slots__ = ("ranks", "scalars")
+
     def __init__(self, ranks: dict[str, int], scalars: frozenset[str] = frozenset()) -> None:
         self.ranks = ranks
         #: Declared scalar parameters. ``expr_rank`` only tracks arrays, so without these a
@@ -144,7 +146,7 @@ class AxisReshapeToIndexing(ast.NodeTransformer):
         """``np.linalg.norm``'s callee shape, so a user helper called ``norm`` is not caught."""
         return isinstance(func, ast.Attribute) and isinstance(func.value, ast.Attribute) and func.value.attr == "linalg"
 
-    def axis_norm(self, node: ast.Call) -> ast.AST:
+    def axis_norm(self, node: ast.Call) -> ast.expr:
         """``np.linalg.norm(v, axis=k)`` -> ``np.sqrt(np.sum(abs(v) ** 2, axis=k))``.
 
         Only the default 2-norm; an explicit ``ord`` is a different reduction and is left alone.
@@ -179,7 +181,7 @@ class AxisReshapeToIndexing(ast.NodeTransformer):
                 return None
         return out or None
 
-    def index_(self, operand: ast.expr, entries: list[ast.expr], node: ast.Call) -> ast.AST:
+    def index_(self, operand: ast.expr, entries: Sequence[ast.expr], node: ast.Call) -> ast.expr:
         """``operand[entries]``, merged into the operand's OWN index list when that is a basic one.
 
         Nested ``expand_dims`` / ``squeeze`` -- every instance-norm port reduces over
@@ -190,13 +192,13 @@ class AxisReshapeToIndexing(ast.NodeTransformer):
         """
         merged = self.merge_index(operand, entries)
         subscript = ast.Subscript(
-            value=operand if merged is None else operand.value,
-            slice=index_slot(entries if merged is None else merged),
+            value=operand.value if merged is not None and isinstance(operand, ast.Subscript) else operand,
+            slice=index_slot(list(entries if merged is None else merged)),
             ctx=ast.Load(),
         )
         return ast.fix_missing_locations(ast.copy_location(subscript, node))
 
-    def merge_index(self, operand: ast.expr, entries: list[ast.expr]) -> list[ast.expr] | None:
+    def merge_index(self, operand: ast.expr, entries: Sequence[ast.expr]) -> list[ast.expr] | None:
         """``entries`` applied to ``operand``'s own index list, or ``None`` when they cannot merge.
 
         numpy basic indexing associates: an outer entry lands on the axis the inner subscript left
@@ -232,7 +234,7 @@ class AxisReshapeToIndexing(ast.NodeTransformer):
         merged.extend(entries[pos:])
         return merged
 
-    def rewrite_(self, source: str, node: ast.Call) -> ast.AST:
+    def rewrite_(self, source: str, node: ast.Call) -> ast.expr:
         return ast.copy_location(ast.parse(source, mode="eval").body, node)
 
 
@@ -368,6 +370,8 @@ class FoldConstantSymbols(ast.NodeTransformer):
     (``if isinstance(stride, int): stride = (stride, stride)``) and then read ``stride[0]``;
     folding the loads turned that read into ``1[0]``, since the rebinding is what makes it a tuple.
     """
+
+    __slots__ = ("const_syms",)
 
     def __init__(self, const_syms: dict[str, int]) -> None:
         self.const_syms = const_syms
@@ -572,7 +576,9 @@ def runtime_axis_dispatch(fn: ast.FunctionDef, scalars: frozenset[str], ranks: d
     axis_names: OrderedSet[str] = OrderedSet()
     axis_spaces: dict[int, int | None] = {}
     for node in ast.walk(fn):
-        axis = axis_argument(node) if isinstance(node, ast.Call) else None
+        if not isinstance(node, ast.Call):
+            continue
+        axis = axis_argument(node)
         if axis is None:
             continue
         operand = expr_rank(node.args[0], ranks) if node.args else None

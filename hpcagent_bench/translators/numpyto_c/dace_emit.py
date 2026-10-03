@@ -25,7 +25,7 @@ from hpcagent_bench.translators.numpyto_common.ast_build import (
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.emit_helpers.tokens import IDENT_RE
 from hpcagent_bench.translators.numpyto_common.frontend import PinnedValue, field_nodes, fold_shape_expr
-from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc, KernelIR, ScalarDesc, shape_dimension_symbols
+from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc, KernelIR, ScalarDesc, descs, shape_dimension_symbols
 from hpcagent_bench.translators.numpyto_common.lib_nodes import shape_exprs_equal, sympify_shape
 from hpcagent_bench.translators.numpyto_common.lib_nodes.call_args import np_call_attr
 from hpcagent_bench.translators.numpyto_common.lowering import lower
@@ -59,6 +59,7 @@ __all__ = [
     "BUILTIN_DTYPE",
     "DTYPE_TO_DACE",
     "ELEMENTWISE_CALLS",
+    "EXTENT_CACHE_SIZE",
     "FLOAT_CALLS",
     "FLOAT_LITERAL_RE",
     "FRAMEWORK_DTYPE_TO_DACE",
@@ -251,6 +252,8 @@ FLOAT_LITERAL_RE = re.compile(r"\d*\.\d|\d[eE][-+]?\d")
 class ShapeToSymbol(ast.NodeTransformer):
     """Replace each <array>.shape[<const k>] with the array's k-th declared symbolic shape token."""
 
+    __slots__ = ("arr_shapes",)
+
     def __init__(self, arr_shapes: dict[str, list[str]]) -> None:
         self.arr_shapes = arr_shapes
 
@@ -286,9 +289,9 @@ class SplitTupleAssign(SplitTupleUnpack):
     rather than a refusal.
     """
 
-    __slots__ = ("temps",)
+    __slots__ = ()
 
-    def values(self, targets: list[ast.expr], value: ast.expr) -> Spelled | None:
+    def values(self, targets: Sequence[ast.expr], value: ast.expr) -> Spelled | None:
         if not (isinstance(value, ast.Attribute) and value.attr == "shape"):
             return super().values(targets, value)
         # Re-reading ``.shape`` per name is free: it is resolved to declared extents below, and
@@ -320,6 +323,8 @@ class SplitTupleAssign(SplitTupleUnpack):
 class DropSymbolAssign(ast.NodeTransformer):
     """Drop <sym> = ... where <sym> is a declared size symbol (dace symbols are immutable)."""
 
+    __slots__ = ("symbols",)
+
     def __init__(self, symbols: Iterable[str]) -> None:
         self.symbols = set(symbols)
 
@@ -331,6 +336,8 @@ class DropSymbolAssign(ast.NodeTransformer):
 
 class ResolveZeros(ast.NodeTransformer):
     """Resolve a lowered kir's __hpcagent_bench_zeros__() allocation marker to an explicit np.zeros/np.ones() call."""
+
+    __slots__ = ("allocated", "default_dtype", "local_dtypes", "zeros_fills", "zeros_locals")
 
     def __init__(
         self,
@@ -417,6 +424,8 @@ class AnnotateEmptyDtype(ast.NodeTransformer):
     precision-driven float global reproduces that default rather than guessing one.
     """
 
+    __slots__ = ("dtype_expr",)
+
     def __init__(self, dtype_expr: str) -> None:
         self.dtype_expr = dtype_expr
 
@@ -459,6 +468,8 @@ class FillOutputParamRealloc(ast.NodeTransformer):
     different extent is a different container, and filling the parameter with it would be a
     miscompile rather than the missed write it replaces.
     """
+
+    __slots__ = ("shapes",)
 
     def __init__(self, shapes: dict[str, list[str]]) -> None:
         self.shapes = shapes
@@ -527,6 +538,8 @@ def dace_dtype(tag: str) -> str:
 class FloorDivToIntFloor(ast.NodeTransformer):
     """``a // b`` -> ``dc.symbolic.int_floor(a, b)``, recursively."""
 
+    __slots__ = ()
+
     def visit_BinOp(self, node: ast.BinOp):
         self.generic_visit(node)
         if not isinstance(node.op, ast.FloorDiv):
@@ -540,7 +553,11 @@ class FloorDivToIntFloor(ast.NodeTransformer):
         return ast.copy_location(call, node)
 
 
-@functools.lru_cache(maxsize=4096, typed=True)
+#: Distinct extent strings :func:`extent_without_dead_symbols` memoises.
+EXTENT_CACHE_SIZE: int = 4096
+
+
+@functools.lru_cache(maxsize=EXTENT_CACHE_SIZE, typed=True)
 def extent_without_dead_symbols(text: str) -> str:
     """``text`` with any symbol that CANCELS out of it gone, or ``text`` unchanged.
 
@@ -600,6 +617,8 @@ FRAMEWORK_DTYPE_TO_DACE = {"np_float": "dc_float", "np_complex": "dc_complex_flo
 class RewriteFrameworkDtype(ast.NodeTransformer):
     """Rewrite leaked np_float/np_complex tokens to the dace precision global; tracks complex usage for the import."""
 
+    __slots__ = ("used_complex",)
+
     def __init__(self) -> None:
         self.used_complex = False
 
@@ -648,6 +667,8 @@ class RewriteBuiltinDtype(ast.NodeTransformer):
     emitter declares, so the fp32 leg does not allocate an fp64 workspace.
     """
 
+    __slots__ = ("float_dtype",)
+
     def __init__(self, float_dtype: str) -> None:
         self.float_dtype = float_dtype
 
@@ -664,6 +685,8 @@ class RewriteBuiltinDtype(ast.NodeTransformer):
 
 class TernaryValueHoister(ast.NodeTransformer):
     """Hoist each ternary-used-as-value to a scalar temp assigned by a guarding if/else appended to prelude."""
+
+    __slots__ = ("owner", "prelude")
 
     def __init__(self, owner: "DesugarTernary", prelude: list[ast.stmt]) -> None:
         self.owner = owner
@@ -690,6 +713,8 @@ KIND_DACE_DTYPE = {"bool": "np.bool_", "int": "np.int64", "float": "dc_float", "
 
 class DesugarTernary(ast.NodeTransformer):
     """Lower a ternary (assignment RHS or nested value) to the if/else statement dace's frontend accepts."""
+
+    __slots__ = ("ctr", "dtypes", "ranks")
 
     def __init__(self, dtypes: dict[str, str] | None = None, ranks: dict[str, int] | None = None) -> None:
         self.ctr = 0
@@ -734,7 +759,7 @@ class DesugarTernary(ast.NodeTransformer):
     visit_While = visit_For
     visit_If = visit_For
 
-    def process_body_(self, stmts: list[ast.stmt]) -> list[ast.stmt]:
+    def process_body_(self, stmts: Sequence[ast.stmt]) -> list[ast.stmt]:
         out: list[ast.stmt] = []
         for stmt in stmts:
             if isinstance(stmt, (ast.For, ast.While, ast.If)):
@@ -759,6 +784,8 @@ class DesugarTernary(ast.NodeTransformer):
 
 class MethodReceiverHoister(ast.NodeTransformer):
     """Bind a method call's non-Name receiver to a temp, appended to ``prelude``."""
+
+    __slots__ = ("owner", "prelude")
 
     def __init__(self, owner: "BindMethodReceiver", prelude: list[ast.stmt]) -> None:
         self.owner = owner
@@ -793,6 +820,8 @@ class BindMethodReceiver(ast.NodeTransformer):
     before the loop would freeze the first value. That construct stays refused, which is honest.
     """
 
+    __slots__ = ("ctr",)
+
     def __init__(self) -> None:
         self.ctr = 0
 
@@ -808,7 +837,7 @@ class BindMethodReceiver(ast.NodeTransformer):
     visit_While = visit_For
     visit_If = visit_For
 
-    def process_body(self, stmts: list[ast.stmt]) -> list[ast.stmt]:
+    def process_body(self, stmts: Sequence[ast.stmt]) -> list[ast.stmt]:
         out: list[ast.stmt] = []
         for stmt in stmts:
             prelude: list[ast.stmt] = []
@@ -844,6 +873,8 @@ class DropIdentityAsarray(ast.NodeTransformer):
     keeps its call: there the constructor is doing real work.
     """
 
+    __slots__ = ("ranks",)
+
     def __init__(self, ranks: dict[str, int]) -> None:
         self.ranks = ranks
 
@@ -871,6 +902,8 @@ class DesugarChainedCompare(ast.NodeTransformer):
     its chain and is refused by dace, which is the honest outcome: a duplicated side effect would
     be a miscompile, and a duplicated array read would be a second memlet.
     """
+
+    __slots__ = ()
 
     def visit_Compare(self, node: ast.Compare):
         self.generic_visit(node)
@@ -915,6 +948,8 @@ class ResolveInferredReshape(ast.NodeTransformer):
     guessed at.
     """
 
+    __slots__ = ("arr_shapes",)
+
     def __init__(self, arr_shapes: dict[str, list[str]]) -> None:
         self.arr_shapes = arr_shapes
 
@@ -951,6 +986,8 @@ class NormalizeReshape(ast.NodeTransformer):
     The ``order=`` keyword goes with it: a plain ``ravel()`` reads C order, so an F-order flatten
     would come back permuted.
     """
+
+    __slots__ = ()
 
     def visit_Call(self, node: ast.Call):
         self.generic_visit(node)
@@ -1014,7 +1051,7 @@ def name_uses(nodes: Iterable[ast.AST], name: str) -> list[ast.Name]:
     return [found for node in nodes for found in ast.walk(node) if isinstance(found, ast.Name) and found.id == name]
 
 
-def fresh_binding_index(block: list[ast.stmt], at: int, name: str) -> int | None:
+def fresh_binding_index(block: Sequence[ast.stmt], at: int, name: str) -> int | None:
     """The index of the last statement before ``at`` binding ``name``, when it binds a new array."""
     for index in range(at - 1, -1, -1):
         stmt = block[index]
@@ -1045,13 +1082,15 @@ class MaterializeWrittenReshape(ast.NodeTransformer):
     whether the write reached the source, whatever layout numpy gave it.
     """
 
+    __slots__ = ()
+
     def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.AST:
         for block in statement_blocks(node):
             for at, stmt in enumerate(block):
                 self.materialize(node, block, at, stmt)
         return node
 
-    def materialize(self, fn: ast.FunctionDef, block: list[ast.stmt], at: int, stmt: ast.stmt) -> None:
+    def materialize(self, fn: ast.FunctionDef, block: Sequence[ast.stmt], at: int, stmt: ast.stmt) -> None:
         if not (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)):
             return
         source = ordered_reshape_source(stmt.value)
@@ -1069,6 +1108,8 @@ class MaterializeWrittenReshape(ast.NodeTransformer):
 class DesugarUnreplacedCalls(ast.NodeTransformer):
     """Rewrite a numpy call dace has no replacement for; unrewritten it becomes an untyped callback
     ("KeyError: pyobject"). outer -> broadcast product, ascontiguousarray -> copy (also contiguous)."""
+
+    __slots__ = ()
 
     def visit_Call(self, node: ast.Call):
         self.generic_visit(node)
@@ -1097,6 +1138,8 @@ class DesugarContractionFreeEinsum(ast.NodeTransformer):
     of one element from each operand, so there is no accumulation to reorder. Same rewrite
     ``np.outer`` already gets above, generalised to leading batch axes.
     """
+
+    __slots__ = ()
 
     @staticmethod
     def broadcast_index(operand: str, out: str) -> str | None:
@@ -1145,8 +1188,10 @@ class DesugarContractionFreeEinsum(ast.NodeTransformer):
 class DesugarReverseSlice(ast.NodeTransformer):
     """Rewrite x[::-1] to np.flip(x) -- dace rejects negative-stride subscripts."""
 
+    __slots__ = ()
+
     @staticmethod
-    def is_neg_one(node: ast.AST | None) -> bool:
+    def is_neg_one(node: ast.expr | None) -> bool:
         # ``-1`` parses to ``UnaryOp(USub, Constant(1))``, not ``Constant(-1)``.
         if isinstance(node, ast.Constant):
             return node.value == -1
@@ -1189,6 +1234,8 @@ class DivisibleStridedSpan(ast.NodeTransformer):
     selects the SAME elements either way -- both yield ``A + 1`` of them for any ``stride >= 1``; only
     the stop moves, from the last element to one full step past it, which a slice clamps.
     """
+
+    __slots__ = ()
 
     def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
         self.generic_visit(node)
@@ -1243,7 +1290,7 @@ class DivisibleStridedSpan(ast.NodeTransformer):
             return upper
         lower = ast.unparse(element.lower)
         terms: list[ast.expr] = []
-        pending = [upper]
+        pending = [upper] if upper is not None else []
         while pending:
             term = pending.pop()
             if isinstance(term, ast.BinOp) and isinstance(term.op, ast.Add):
@@ -1259,7 +1306,7 @@ class DivisibleStridedSpan(ast.NodeTransformer):
         return functools.reduce(lambda left, right: ast.BinOp(left=left, op=ast.Add(), right=right), rest)
 
 
-def is_literal_one(node: ast.AST) -> bool:
+def is_literal_one(node: ast.expr) -> bool:
     return isinstance(node, ast.Constant) and node.value == 1 and not isinstance(node.value, bool)
 
 
@@ -1285,6 +1332,8 @@ def negative_step(step: ast.expr) -> bool:
 class FlipReplacer(ast.NodeTransformer):
     """Replace a materialisable np.flip(base[lo:hi]) with a reversing-copy workspace slice, via the owner."""
 
+    __slots__ = ("owner", "prelude")
+
     def __init__(self, owner: "MaterializeDynamicFlip", prelude: list[ast.stmt]) -> None:
         self.owner = owner
         self.prelude = prelude
@@ -1299,6 +1348,8 @@ class FlipReplacer(ast.NodeTransformer):
 
 class MaterializeDynamicFlip(ast.NodeTransformer):
     """Materialise a dynamic-length np.flip into a fixed-extent reversing-copy workspace -- dace rejects a View there."""
+
+    __slots__ = ("arr_dtypes", "arr_shapes", "ctr", "symbols", "workspaces")
 
     def __init__(self, arr_shapes: dict[str, list[str]], arr_dtypes: dict[str, str], symbols: set[str]) -> None:
         self.arr_shapes = arr_shapes
@@ -1336,7 +1387,7 @@ class MaterializeDynamicFlip(ast.NodeTransformer):
     visit_While = visit_For
     visit_If = visit_For
 
-    def process_body_(self, stmts: list[ast.stmt]) -> list[ast.stmt]:
+    def process_body_(self, stmts: Sequence[ast.stmt]) -> list[ast.stmt]:
         out: list[ast.stmt] = []
         for stmt in stmts:
             if isinstance(stmt, (ast.For, ast.While, ast.If)):
@@ -1374,7 +1425,7 @@ class MaterializeDynamicFlip(ast.NodeTransformer):
             return None
         return base, arg.slice.lower, hi
 
-    def materialize(self, spec: tuple[str, ast.expr | None, ast.expr], prelude: list[ast.stmt]) -> ast.AST:
+    def materialize(self, spec: tuple[str, ast.expr | None, ast.expr], prelude: list[ast.stmt]) -> ast.expr:
         base, lo, hi = spec
         ws, fi = f"__hpcagent_bench_flip{self.ctr}", f"__hpcagent_bench_fi{self.ctr}"
         self.ctr += 1
@@ -1477,6 +1528,8 @@ class PointwiseScatterToLoop(ast.NodeTransformer):
     :class:`numpyto_common.numpy_desugar.IxWriteToLoop` carries, and undetectable statically.
     """
 
+    __slots__ = ("ctr", "ranks")
+
     def __init__(self, ranks: dict[str, int]) -> None:
         self.ranks = ranks
         self.ctr = 0
@@ -1545,6 +1598,8 @@ class DesugarAugAssign(ast.NodeTransformer):
     Index parts that call anything are bound to a temp above the store, so they run once. A target
     that cannot be spelled twice -- a call in its base, a name of unknown rank -- is left alone.
     """
+
+    __slots__ = ("counter", "ranks")
 
     def __init__(self, ranks: dict[str, int]) -> None:
         self.ranks = ranks
@@ -1692,7 +1747,7 @@ def settled_ranks(fn: ast.AST, ranks: dict[str, int]) -> dict[str, int]:
     return settled
 
 
-def is_full_slice(node: ast.AST) -> bool:
+def is_full_slice(node: ast.expr) -> bool:
     """True iff a subscript index selects everything -- ``[:]``, or a tuple of ``:``."""
     if isinstance(node, ast.Slice):
         return node.lower is None and node.upper is None and node.step is None
@@ -1702,6 +1757,8 @@ def is_full_slice(node: ast.AST) -> bool:
 class DropRedundantSliceStore(ast.NodeTransformer):
     """``cn[l][:] = v`` -> ``cn[l] = v``: dace mis-sizes the chained store. Base must ALREADY be a
     subscript -- on a bare name ``y[:] = v`` writes in place where ``y = v`` would rebind."""
+
+    __slots__ = ()
 
     def visit_Assign(self, node: ast.Assign):
         self.generic_visit(node)
@@ -1726,6 +1783,8 @@ def dace_chained_assign_split(seed_ranks: dict[str, int] | None = None) -> Split
 
 class DropAliasAssign(ast.NodeTransformer):
     """Drop ``<name> = ...`` for each inlined alias name (its uses are substituted)."""
+
+    __slots__ = ("names",)
 
     def __init__(self, names: Iterable[str]) -> None:
         self.names = set(names)
@@ -1938,9 +1997,9 @@ def mixed_view_names(fn: ast.FunctionDef, symbols: frozenset[str] = frozenset())
                     continue
                 (views if view_binding(stmt, symbols) == target.id else valued).add(target.id)
     for node in ast.walk(fn):
-        target = node.target if isinstance(node, (ast.AugAssign, ast.AnnAssign, ast.For)) else None
-        if isinstance(target, ast.Name):
-            valued.add(target.id)
+        loop_target = node.target if isinstance(node, (ast.AugAssign, ast.AnnAssign, ast.For)) else None
+        if isinstance(loop_target, ast.Name):
+            valued.add(loop_target.id)
     return views & valued
 
 
@@ -2051,7 +2110,7 @@ class ReachingBindings:
             if isinstance(sub, ast.Name) and sub.id == self.name:
                 self.reached[id(sub)] = self.reached.get(id(sub), frozenset()) | state
 
-    def block(self, stmts: list[ast.stmt], state: frozenset[int]) -> frozenset[int]:
+    def block(self, stmts: Sequence[ast.stmt], state: frozenset[int]) -> frozenset[int]:
         for stmt in stmts:
             if id(stmt) in self.touching:
                 state = self.statement(stmt, state)
@@ -2298,7 +2357,7 @@ ELEMENTWISE_CALLS = frozenset(
 )
 
 
-def inserts_axis(element: ast.AST) -> bool:
+def inserts_axis(element: ast.expr) -> bool:
     """True iff a subscript element INSERTS a length-1 axis -- ``None`` or ``np.newaxis``."""
     if isinstance(element, ast.Constant) and element.value is None:
         return True
@@ -2330,9 +2389,11 @@ class ResolveShapeReads(ast.NodeTransformer):
     extent was read as axis 0's.
     """
 
+    __slots__ = ("alias_seen", "aliases", "shapes")
+
     def __init__(self, shapes: dict[str, list[str]]) -> None:
         self.shapes: dict[str, list[str]] = {k: [fold_shape_expr(t) for t in v] for k, v in shapes.items()}
-        self.aliases: dict[str, ast.AST] = {}
+        self.aliases: dict[str, ast.expr] = {}
         self.alias_seen: set[str] = set()
 
     def canon(self, token: str) -> str:
@@ -2346,7 +2407,7 @@ class ResolveShapeReads(ast.NodeTransformer):
             return token
         return fold_shape_expr(ast.unparse(SubstituteLoads(self.aliases).visit(tree).body))
 
-    def note_alias(self, name: str, value: ast.AST) -> None:
+    def note_alias(self, name: str, value: ast.expr) -> None:
         """Record ``name = <integer expression>`` so :meth:`canon` can substitute it away."""
         rank0 = {nm for nm, shape in self.shapes.items() if shape == []}
         reads_self = any(isinstance(n, ast.Name) and n.id == name for n in ast.walk(value))
@@ -2456,7 +2517,7 @@ class ResolveShapeReads(ast.NodeTransformer):
         self.generic_visit(node)
         return node
 
-    def accumulates(self, name: str, value: ast.AST) -> bool:
+    def accumulates(self, name: str, value: ast.expr) -> bool:
         """True iff ``value`` is an elementwise UPDATE of ``name`` -- ``out = np.maximum(out, ...)``,
         alexnet's max-pool workspace. Not a guess: one transient keeps one descriptor, so a write
         back into it has the shape dace already has. ``@`` is excluded -- it changes the extents."""
@@ -2473,7 +2534,7 @@ class ResolveShapeReads(ast.NodeTransformer):
             isinstance(n, ast.Name) and n.id == name and isinstance(n.ctx, ast.Load) for n in ast.walk(value)
         )
 
-    def tuple_tokens(self, node: ast.AST) -> list[str] | None:
+    def tuple_tokens(self, node: ast.expr) -> list[str] | None:
         """The extent tokens of a shape ARGUMENT, or None when its RANK is not established.
 
         A tuple spells its own extents. A ``.shape`` read carries the array's WHOLE rank:
@@ -2490,7 +2551,7 @@ class ResolveShapeReads(ast.NodeTransformer):
             return list(tokens) if tokens else None
         return [ast.unparse(node)] if self.infer(node) == [] else None
 
-    def infer(self, node: ast.AST) -> list[str] | None:
+    def infer(self, node: ast.expr) -> list[str] | None:
         if is_scalar_literal(node):
             return []  # rank 0: a literal broadcasts against anything and decides no extent
         if isinstance(node, ast.Name):
@@ -2518,7 +2579,7 @@ class ResolveShapeReads(ast.NodeTransformer):
             return None
         return self.method_call(node.func.attr, node.args)
 
-    def method_call(self, name: str, args: list[ast.expr]) -> list[str] | None:
+    def method_call(self, name: str, args: Sequence[ast.expr]) -> list[str] | None:
         """Extents of an ``np.<name>(*args)`` / ``x.<name>(*args)`` call."""
         if name in ALLOC_FUNCS and args:
             return self.tuple_tokens(args[0])
@@ -2534,7 +2595,7 @@ class ResolveShapeReads(ast.NodeTransformer):
             return self.aranged(args)
         return None
 
-    def aranged(self, args: list[ast.expr]) -> list[str] | None:
+    def aranged(self, args: Sequence[ast.expr]) -> list[str] | None:
         """``np.arange`` is rank 1 and its extent is EXACT: the stop for one argument, the span for
         two. A step makes it a ceiling division this declines to spell rather than guess.
 
@@ -2549,7 +2610,7 @@ class ResolveShapeReads(ast.NodeTransformer):
             return [f"({ast.unparse(args[1])}) - ({ast.unparse(args[0])})"]
         return None
 
-    def dotted(self, args: list[ast.expr]) -> list[str] | None:
+    def dotted(self, args: Sequence[ast.expr]) -> list[str] | None:
         """``np.dot`` of two rank-1 operands is rank 0 -- numpy's inner product.
 
         Every other rank combination is declined rather than guessed: rank-2 ``dot`` is a matmul and
@@ -2604,7 +2665,7 @@ class ResolveShapeReads(ast.NodeTransformer):
             return upper
         return f"{upper} - ({ast.unparse(element.lower)})"
 
-    def transposed(self, args: list[ast.expr]) -> list[str] | None:
+    def transposed(self, args: Sequence[ast.expr]) -> list[str] | None:
         base = self.infer(args[0])
         if base is None:
             return None
@@ -2623,7 +2684,7 @@ class ResolveShapeReads(ast.NodeTransformer):
             return None
         return [left[0], right[1]]
 
-    def broadcast(self, operands: list[ast.expr]) -> list[str] | None:
+    def broadcast(self, operands: Sequence[ast.expr]) -> list[str] | None:
         """The broadcast shape of an elementwise operand list, or None when it is not certain.
 
         Numpy's own rule, applied exactly: align right, and each axis takes whichever operand
@@ -2643,8 +2704,8 @@ class ResolveShapeReads(ast.NodeTransformer):
             if shape is None:
                 return None
             shapes.append(shape)
-        no_operand: list[str] = []
-        result: list[str] = list(max(shapes, key=len, default=no_operand))
+        longest = max(shapes, key=len) if shapes else []
+        result: list[str] = list(longest)
         for shape in shapes:
             offset = len(result) - len(shape)
             for axis, extent in enumerate(shape):
@@ -2742,7 +2803,7 @@ FLOAT_CALLS = frozenset(
 INT_CALLS = frozenset({"int", "int32", "int64", "len", "argmax", "argmin", "floor_divide"})
 
 
-def is_float_expr(node: ast.AST, floats: set[str]) -> bool:
+def is_float_expr(node: ast.expr, floats: set[str]) -> bool:
     """Conservative: True only where the value is CERTAINLY floating point (or complex).
 
     One-directional on purpose. Both consumers fall back to the integer spelling when this says no,
@@ -2803,7 +2864,7 @@ class CopyScalarAlias(ResolveShapeReads):
         self.floats = floats
         self.skip = skip
 
-    def infer(self, node: ast.AST) -> list[str] | None:
+    def infer(self, node: ast.expr) -> list[str] | None:
         """The base class declines a bare-name call; ``center = int(center0_value)`` is rank 0."""
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in SCALAR_BUILTINS_:
             ranks = [super(CopyScalarAlias, self).infer(a) for a in node.args]
@@ -2852,7 +2913,7 @@ def widen_int_seeds(fn_ast: ast.FunctionDef, floats: set[str], skip: set[str]) -
                 node.value = ast.copy_location(widened, node.value)
 
 
-def is_symbol_expr(node: ast.AST, allowed: set[str]) -> bool:
+def is_symbol_expr(node: ast.expr, allowed: set[str]) -> bool:
     """True iff node is a shape expression dace can evaluate as a symbol (names, int consts, + - * // %, min/max).
 
     A ``.shape[k]`` read is included whatever its receiver: dace's own array descriptor already
@@ -2934,6 +2995,8 @@ class HoistCompoundExtents(ast.NodeTransformer):
     anything else would move a read above its write.
     """
 
+    __slots__ = ("known", "names", "plan")
+
     def __init__(self, known: set[str]) -> None:
         self.known = known
         self.names: dict[str, str] = {}
@@ -2987,7 +3050,7 @@ def hoist_compound_extents(fn_ast: ast.FunctionDef, known: set[str]) -> ast.Func
     return fn_ast
 
 
-def shape_base_ids(node: ast.AST) -> set[int]:
+def shape_base_ids(node: ast.expr) -> set[int]:
     """``id()`` of every Name read as ``<x>.shape`` -- x is a DIMENSION source, never an integer value."""
     return {
         id(a.value)
@@ -2996,7 +3059,7 @@ def shape_base_ids(node: ast.AST) -> set[int]:
     }
 
 
-def shape_reaching_names(body: ast.AST, direct: set[str]) -> set[str]:
+def shape_reaching_names(body: ast.expr, direct: set[str]) -> set[str]:
     """Names whose VALUE reaches a shape, following assignments -- not only the names written in one.
 
     conv2d_instance_norm_divide reads its stride, padding and dilation out of manifest scalars,
@@ -3266,6 +3329,8 @@ class StripIdentityIntCasts(ast.NodeTransformer):
     so it is left alone.
     """
 
+    __slots__ = ("symbols",)
+
     def __init__(self, symbols: set[str]) -> None:
         self.symbols = symbols
 
@@ -3310,7 +3375,7 @@ def loop_induction_symbols(fn_ast: ast.FunctionDef) -> OrderedSet[str]:
 INLINE_ALIAS_ROUNDS = 25
 
 
-def fold_expr(node: ast.AST) -> ast.AST:
+def fold_expr(node: ast.expr) -> ast.expr:
     """Fold an integer expression AST through :func:`fold_shape_expr`; unchanged if it will not parse."""
     try:
         return ast.parse(fold_shape_expr(ast.unparse(node)), mode="eval").body
@@ -3346,6 +3411,8 @@ class LowerCallsDaceCannotReplace(ast.NodeTransformer):
     extents these emit are resolved with every other one.
     """
 
+    __slots__ = ("changed", "complex_arrays", "counter", "prelude", "ranks")
+
     def __init__(self, ranks: dict[str, int], complex_arrays: set[str] | None = None) -> None:
         self.ranks = ranks
         self.complex_arrays = complex_arrays or set()
@@ -3363,7 +3430,7 @@ class LowerCallsDaceCannotReplace(ast.NodeTransformer):
         self.prelude.append(ast.Assign(targets=[store_(name)], value=value))
         return name_(name)
 
-    def block(self, stmts: list[ast.stmt]) -> list[ast.stmt]:
+    def block(self, stmts: Sequence[ast.stmt]) -> list[ast.stmt]:
         """Visit one statement list, splicing each statement's prelude in above it."""
         out: list[ast.stmt] = []
         for stmt in stmts:
@@ -3570,7 +3637,7 @@ def indent_block(text: str) -> str:
     return "\n".join("    " + line for line in text.splitlines())
 
 
-def names_a_clamp(node: ast.AST) -> bool:
+def names_a_clamp(node: ast.expr) -> bool:
     """Whether ``node`` contains a ``min``/``max`` -- an expression dace does not fold.
 
     Inlining one is what CREATES the second spelling this pass exists to remove. banded_mmt's
@@ -3669,7 +3736,7 @@ def bind_site(fn_ast: ast.FunctionDef, nm: str, rhs: ast.expr) -> tuple[list[ast
     return None
 
 
-def rebind_boundary(block: list[ast.stmt], start: int, sources: set[str]) -> int:
+def rebind_boundary(block: Sequence[ast.stmt], start: int, sources: set[str]) -> int:
     """Index of the first statement at ``start`` or later whose subtree stores a name in ``sources``,
     else ``len(block)``: a nested store counts, same as a store at this list's own level."""
     for idx in range(start, len(block)):
@@ -3717,7 +3784,7 @@ def inline_symbol_aliases(fn_ast: ast.FunctionDef, symbols: set[str], known: set
         return fn_ast
     first_rhs, order, reassigned = scan_size_assigns(fn_ast, shape_idents)
     rebound = names_rebound(fn_ast)
-    alias: dict[str, ast.AST] = {}
+    alias: dict[str, ast.expr] = {}
     flow_spliced: list[str] = []
     for nm in order:
         if nm in reassigned or names_a_clamp(first_rhs[nm]):
@@ -3774,7 +3841,7 @@ def slice_bound_only_locals(fn_ast: ast.FunctionDef) -> set[str]:
     return inside - outside
 
 
-def body_allocated_shape(body: list[ast.stmt], hret: str, values: set[str]) -> list[str] | None:
+def body_allocated_shape(body: Sequence[ast.stmt], hret: str, values: set[str]) -> list[str] | None:
     """The shape the BODY allocates for what it writes into ``hret``, or ``None``.
 
     A kept helper's out-param is declared in the CALLER's vocabulary, because the caller is what
@@ -3837,6 +3904,8 @@ def body_allocated_shape(body: list[ast.stmt], hret: str, values: set[str]) -> l
 
 class NameExtentExpression(ast.NodeTransformer):
     """Replace every expression spelled like one of ``minted``'s keys with that key's symbol name."""
+
+    __slots__ = ("minted",)
 
     def __init__(self, minted: dict[str, str]) -> None:
         self.minted = minted
@@ -3911,7 +3980,7 @@ def inline_slice_only_extents(fn_ast: ast.FunctionDef, symbols: set[str], known:
         return fn_ast
     first_rhs, order, reassigned = scan_size_assigns(fn_ast, cand)
     atoms = symbols | mintable_int_locals(fn_ast, symbols, known)
-    alias: dict[str, ast.AST] = {}
+    alias: dict[str, ast.expr] = {}
     for nm in order:
         if nm in reassigned or names_a_clamp(first_rhs[nm]):
             continue
@@ -3925,7 +3994,7 @@ def inline_slice_only_extents(fn_ast: ast.FunctionDef, symbols: set[str], known:
     return fn_ast
 
 
-def is_shape_subscript(node: ast.AST) -> bool:
+def is_shape_subscript(node: ast.expr) -> bool:
     """True iff node is <expr>.shape[k] -- a residual .shape read of a body-local transient's dimension."""
     return isinstance(node, ast.Subscript) and isinstance(node.value, ast.Attribute) and node.value.attr == "shape"
 
@@ -3936,7 +4005,7 @@ def inline_transient_shape_scalars(fn_ast: ast.FunctionDef, known: set[str]) -> 
     if not cand:
         return fn_ast
     first_rhs, order, reassigned = scan_size_assigns(fn_ast, cand)
-    alias: dict[str, ast.AST] = {}
+    alias: dict[str, ast.expr] = {}
     for nm in order:
         if nm not in reassigned and is_shape_subscript(first_rhs[nm]):
             alias[nm] = copy.deepcopy(first_rhs[nm])
@@ -4000,6 +4069,8 @@ class SplitReassignedSize(ast.NodeTransformer):
 
     numpy sizes an allocation by the CURRENT value, and dace promotes a scalar extent per version.
     """
+
+    __slots__ = ("_droppable", "defined_", "names")
 
     def __init__(self, names: Iterable[str]) -> None:
         self.names = set(names)
@@ -4069,7 +4140,7 @@ def sympy_reserved(name: str) -> bool:
     return not any(str(s) == name for s in expr.free_symbols)
 
 
-def bound_names(body: list[ast.stmt]) -> OrderedSet[str]:
+def bound_names(body: Sequence[ast.stmt]) -> OrderedSet[str]:
     """The names the body BINDS -- the only ones a rename may touch.
 
     A reserved name that is merely CALLED (``sqrt(x)``, ``exp(x)``, ``log(x)``) is resolved by
@@ -4097,7 +4168,7 @@ def names_logical_sparse(kir: KernelIR) -> bool:
     return any(isinstance(n, ast.Name) and n.id in logical for n in ast.walk(kir.tree))
 
 
-def called_helpers(body: list[ast.stmt], helpers: list[KernelIR]) -> OrderedSet[str]:
+def called_helpers(body: Sequence[ast.stmt], helpers: list[KernelIR]) -> OrderedSet[str]:
     """Kept-helper names ``body`` still calls. A specialised helper is spelled ``<name>__s<N>``,
     so the match is the name or that prefix -- never a substring, which would claim ``relu_scale``."""
     names = OrderedSet(h.kernel_name for h in helpers)
@@ -4170,7 +4241,7 @@ def sliced_extents(node: ast.Subscript, shapes: dict[str, list[str]], known: set
 
 
 def materialize_strided_helper_args(
-    body: list[ast.stmt],
+    body: Sequence[ast.stmt],
     written_by: dict[str, list[bool]],
     shapes: dict[str, list[str]],
     dtype_of: dict[str, str],
@@ -4224,7 +4295,7 @@ def materialize_strided_helper_args(
                 call.args[index] = name_(name)
         return pre + [stmt] + post
 
-    def rewrite(stmts: list[ast.stmt]) -> list[ast.stmt]:
+    def rewrite(stmts: Sequence[ast.stmt]) -> list[ast.stmt]:
         out: list[ast.stmt] = []
         for stmt in stmts:
             for field, value in ast.iter_fields(stmt):
@@ -4258,12 +4329,12 @@ class RenderedProgram:
     needs_complex: bool
 
 
-def exits_with_valueless_return(body: list[ast.stmt]) -> bool:
+def exits_with_valueless_return(body: Sequence[ast.stmt]) -> bool:
     """Whether ``body`` ends in a ``return`` that carries no value."""
     return bool(body) and isinstance(body[-1], ast.Return) and body[-1].value is None
 
 
-def without_valueless_returns(body: list[ast.stmt]) -> list[ast.stmt]:
+def without_valueless_returns(body: Sequence[ast.stmt]) -> list[ast.stmt]:
     """``body``, in TAIL position, with every ``return`` that carries no value structured away.
 
     :func:`numpyto_common.frontend.helper_specialize.rewrite_returns_to_outparam` closes a promoted-return helper
@@ -4484,7 +4555,9 @@ def render_program(
     ast.fix_missing_locations(fn_ast)
     # Last, after promotion: a name that became a dc.symbol is no longer a container, and neither
     # rewrite has anything to say about one. See dace issues 05 and 06 for both causes.
-    declared_floats = {d.name for d in (*kir.arrays, *kir.scalars) if not d.dtype.startswith(("int", "uint", "bool"))}
+    declared_floats = {
+        d.name for d in descs(kir.arrays, kir.scalars) if not d.dtype.startswith(("int", "uint", "bool"))
+    }
     floats = float_names(fn_ast, declared_floats)
     fn_ast = CopyScalarAlias(value_shapes, floats, set(symbol_names) | set(scalars)).visit(fn_ast)
     widen_int_seeds(fn_ast, floats, set(symbol_names))
@@ -4544,7 +4617,7 @@ def render_program(
 
 def program_symbols(
     kir: KernelIR, arrays: dict[str, ArrayDesc], scalars: dict[str, ScalarDesc], arr_shapes: dict[str, list[str]]
-) -> tuple[list[str], OrderedSet]:
+) -> tuple[list[str], OrderedSet[str]]:
     """``(dc.symbol names, scalar params promoted to symbols)`` of a program.
 
     Sparse kirs carry size symbols only in array shapes, so every free identifier of a declared
@@ -4627,8 +4700,8 @@ def inline_exposed_aliases(
     inlined helper recopies the previous layer's extents, and inlining one SPLICES its definition
     into the shape arguments, exposing names that were in no shape before."""
     previous: set[str] = set()
-    for unused in range(INLINE_ALIAS_ROUNDS):
-        promotable, unused, unused = plan_size_promotion(fn_ast, known, symbols)
+    for unused_round in range(INLINE_ALIAS_ROUNDS):
+        promotable, unused_names, unused_mints = plan_size_promotion(fn_ast, known, symbols)
         if set(promotable) == previous:
             break  # nothing new was exposed: another round would substitute the same names again
         previous = set(promotable)
@@ -4650,7 +4723,7 @@ def without_docstring(body: list[ast.stmt]) -> list[ast.stmt]:
 def materialized_helper_args(
     kir: KernelIR,
     helpers: Sequence[KernelIR],
-    body: list[ast.stmt],
+    body: Sequence[ast.stmt],
     arr_shapes: dict[str, list[str]],
     symbol_names: list[str],
     default_dtype: str,
@@ -4749,7 +4822,7 @@ def renamed_sympy_reserved(
 def without_pinned_symbols(
     kir: KernelIR,
     params: list[str],
-    body: list[ast.stmt],
+    body: Sequence[ast.stmt],
     symbol_names: list[str],
     symbol_defs: list[tuple[str, str]],
 ) -> tuple[list[str], list[tuple[str, str]], dict[str, PinnedValue]]:
@@ -4830,7 +4903,7 @@ class HelperBinding:
     pinned: dict[str, PinnedValue] = dataclasses.field(default_factory=dict)
 
 
-def captured_parameter_names(hkir: KernelIR, abi: list[str], args: list[ast.expr]) -> list[str]:
+def captured_parameter_names(hkir: KernelIR, abi: list[str], args: Sequence[ast.expr]) -> list[str]:
     """The helper parameters whose NAME the descriptors already spell for a DIFFERENT quantity.
 
     A helper's descriptors are written in the CALLER's vocabulary while its body speaks its own
@@ -5352,7 +5425,7 @@ def bind_helper_call(node: ast.Call, hkir: KernelIR, rendered: RenderedProgram) 
 
 
 def bind_helper_calls(
-    body: list[ast.stmt], rendered_by_name: dict[str, RenderedProgram], kir_by_name: dict[str, KernelIR]
+    body: Sequence[ast.stmt], rendered_by_name: dict[str, RenderedProgram], kir_by_name: dict[str, KernelIR]
 ) -> None:
     """Rewrite every call in ``body`` that names one of the rendered helpers."""
     for stmt in body:
@@ -5361,7 +5434,7 @@ def bind_helper_calls(
                 bind_helper_call(node, kir_by_name[node.func.id], rendered_by_name[node.func.id])
 
 
-def returns_removed(stmts: list[ast.stmt], tail: list[ast.stmt], name: str) -> list[ast.stmt]:
+def returns_removed(stmts: Sequence[ast.stmt], tail: Sequence[ast.stmt], name: str) -> list[ast.stmt]:
     """``stmts`` followed by ``tail``, with every VALUELESS ``return`` gone.
 
     A branch that returns drops ``tail``, which is exactly what the return said; a branch that
@@ -5391,7 +5464,7 @@ def returns_removed(stmts: list[ast.stmt], tail: list[ast.stmt], name: str) -> l
         orelse = returns_removed(stmt.orelse, copy.deepcopy(rest), name)
         out.append(rebuilt_if(stmt, body, orelse))
         return out
-    return out + tail
+    return [*out, *tail]
 
 
 def rebuilt_if(stmt: ast.If, body: list[ast.stmt], orelse: list[ast.stmt]) -> ast.If:
@@ -5461,7 +5534,7 @@ def substituted_extent(token: object, substitutions: dict[str, str]) -> str:
     )
 
 
-def allocation_shapes(body: list[ast.stmt]) -> dict[str, list[str]]:
+def allocation_shapes(body: Sequence[ast.stmt]) -> dict[str, list[str]]:
     """``{local: its allocation's per-axis extents}`` for every ``<local> = np.empty(...)`` in ``body``."""
     found: dict[str, list[str]] = {}
     for stmt in body:

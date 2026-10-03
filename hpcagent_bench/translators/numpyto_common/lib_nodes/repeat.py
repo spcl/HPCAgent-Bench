@@ -2,6 +2,7 @@
 
 import ast
 import copy
+from collections.abc import Sequence
 
 from hpcagent_bench.translators.numpyto_common.ast_build import name_, range_for, store_
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
@@ -11,6 +12,7 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
     alloc_marker,
     const_,
     const_or_name,
+    first_name,
     make_iter_name,
 )
 
@@ -38,7 +40,7 @@ def diff_operand(expr: ast.expr) -> ast.Name | None:
 
 
 def expand_repeat_prefix_sum(
-    target: ast.expr,
+    target: ast.Name,
     a: ast.Name,
     a_shape: tuple[str, ...],
     k_arg: ast.expr,
@@ -112,8 +114,8 @@ def expand_repeat_prefix_sum(
 
 
 def expand_repeat(
-    target: ast.expr,
-    args: list[ast.expr],
+    target: ast.Name,
+    args: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     kwargs: list[ast.keyword] | None = None,
     local_dtypes: dict[str, str] | None = None,
@@ -133,9 +135,9 @@ def expand_repeat(
     ``axis`` may be int (positional or kwarg) or None (flat-axis repeat: result
     is a flat 1-D array of size ``prod(A.shape) * K``).
     """
-    if not args or not isinstance(args[0], ast.Name):
+    a = first_name(args)
+    if a is None:
         raise NotImplementedError("np.repeat needs Name first arg")
-    a = args[0]
     a_shape = shape_table.get(a.id)
     if not a_shape:
         raise NotImplementedError("np.repeat: source shape unknown")
@@ -162,7 +164,9 @@ def expand_repeat(
         iters = [make_iter_name("__rp", i) for i in range(n_dim)]
         rep_iter = make_iter_name("__rep", 0)
         # source subscript
-        src_slot = name_(iters[0]) if n_dim == 1 else ast.Tuple(elts=[name_(i) for i in iters], ctx=ast.Load())
+        src_slot: ast.expr = (
+            name_(iters[0]) if n_dim == 1 else ast.Tuple(elts=[name_(i) for i in iters], ctx=ast.Load())
+        )
         # destination flat index = ((((i0)*s1 + i1)*s2 + ...) * K + r)
         flat_index: ast.expr = name_(iters[0])
         for k in range(1, n_dim):
@@ -181,7 +185,7 @@ def expand_repeat(
             )
         ]
         # Wrap with the source loops and the repetition loop deepest.
-        out = body
+        out: list[ast.stmt] = [*body]
         out = [range_for(rep_iter, [k_arg], out)]
         for var, bound in zip(reversed(iters), reversed(a_shape)):
             out = [range_for(var, [const_or_name(bound)], out)]
@@ -195,7 +199,7 @@ def expand_repeat(
         raise NotImplementedError(f"np.repeat axis {axis} out of range for ndim {n_dim}")
     iters = [make_iter_name("__rp", i) for i in range(n_dim)]
     rep_iter = make_iter_name("__rep", 0)
-    src_elts = [name_(iters[i]) for i in range(n_dim)]
+    src_elts: list[ast.expr] = [name_(iters[i]) for i in range(n_dim)]
     dst_elts: list[ast.expr] = []
     for i in range(n_dim):
         if i == axis:
@@ -217,7 +221,7 @@ def expand_repeat(
         )
     ]
     # Innermost = repetition loop.
-    out = body
+    out = [*body]
     out = [range_for(rep_iter, [k_arg], out)]
     for var, bound in zip(reversed(iters), reversed(a_shape)):
         out = [range_for(var, [const_or_name(bound)], out)]

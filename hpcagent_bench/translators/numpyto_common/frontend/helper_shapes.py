@@ -2,10 +2,8 @@
 
 import ast
 import copy
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 
-from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc, ScalarDesc, SymbolDesc
-from hpcagent_bench.translators.numpyto_common.lib_nodes import iter_extent_of
 from hpcagent_bench.translators.numpyto_common.frontend.callsite import (
     caller_side_shape,
     held_before_table,
@@ -15,8 +13,11 @@ from hpcagent_bench.translators.numpyto_common.frontend.callsite import (
 from hpcagent_bench.translators.numpyto_common.frontend.helper_params import DescEntry, DescKey, infer_helper_params
 from hpcagent_bench.translators.numpyto_common.frontend.helper_specialize import bind_call_constants, literal_call_arg
 from hpcagent_bench.translators.numpyto_common.frontend.shapes import assigns_to, local_array_def, resolve_array_ref
+from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc, ScalarDesc, SymbolDesc, descs
+from hpcagent_bench.translators.numpyto_common.lib_nodes import iter_extent_of
 
 __all__ = [
+    "ReturnArray",
     "assigns_in_run_order",
     "call_specialized_body",
     "desc_key",
@@ -38,13 +39,17 @@ __all__ = [
 ]
 
 
+#: ``(shape_strings, dtype)`` of an array a helper returns.
+type ReturnArray = tuple[list[str], str]
+
+
 def helper_return_array_shape(
     lhs: ast.expr | None, arr_by: dict[str, ArrayDesc], fn: ast.FunctionDef
-) -> tuple[list[str] | None, str | None]:
+) -> ReturnArray | None:
     """When a captured helper's result is stored into an ARRAY target
     (``X = h(...)`` with X an array, or ``X[:, j] = h(...)``), return the returned
     array's ``(shape_strings, dtype)`` -- so the helper emits an out-param of that
-    shape. A scalar / non-array target returns ``(None, None)`` (by-value path).
+    shape. A scalar / non-array target returns ``None`` (by-value path).
 
     Delegates to :func:`resolve_array_ref`, which chases the WHOLE alias chain -- a bare
     ``X`` target is not always a declared param or a direct ``np.zeros`` local: inlining a
@@ -52,9 +57,9 @@ def helper_return_array_shape(
     ``__inl1_out = np.zeros(...)``), and a single-hop check stops one alias short, misreading
     an array-returning helper's target as a scalar."""
     if not isinstance(lhs, (ast.Name, ast.Subscript)):
-        return None, None
+        return None
     res = resolve_array_ref(fn, lhs, arr_by)
-    return (list(res[0]), res[1]) if res is not None else (None, None)
+    return (list(res[0]), res[1]) if res is not None else None
 
 
 def name_assign(stmt: ast.stmt) -> bool:
@@ -62,7 +67,7 @@ def name_assign(stmt: ast.stmt) -> bool:
     return isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)
 
 
-def statements_in_order(body: list[ast.stmt], nested: bool = False) -> Iterator[tuple[ast.stmt, bool]]:
+def statements_in_order(body: Sequence[ast.stmt], nested: bool = False) -> Iterator[tuple[ast.stmt, bool]]:
     """Each statement in SOURCE order, nested blocks included, paired with whether it is nested.
 
     ``ast.walk`` is breadth-first, which is the wrong order for a forward extent sweep.
@@ -133,12 +138,13 @@ def scalar_value_names(hfn: ast.FunctionDef, seed: set[str]) -> set[str]:
             continue
         target = stmt.targets[0]
         targets = target.elts if isinstance(target, ast.Tuple) else [target]
-        if not all(isinstance(t, ast.Name) for t in targets):
+        names = [t for t in targets if isinstance(t, ast.Name)]
+        if len(names) != len(targets):
             continue
         values = stmt.value.elts if isinstance(stmt.value, ast.Tuple) else [stmt.value] * len(targets)
         if len(values) != len(targets):
             continue
-        for name_node, value in zip(targets, values):
+        for name_node, value in zip(names, values):
             if all(n.id in known for n in ast.walk(value) if isinstance(n, ast.Name)):
                 known.add(name_node.id)
     return known
@@ -193,7 +199,7 @@ def target_shape_is_the_call_itself(
     )
 
 
-def call_specialized_body(hfn: ast.FunctionDef, pnames: list[str], args: list[ast.expr]) -> ast.FunctionDef:
+def call_specialized_body(hfn: ast.FunctionDef, pnames: list[str], args: Sequence[ast.expr]) -> ast.FunctionDef:
     """A COPY of ``hfn`` with this call site's literal arguments bound and the guards they decide gone.
 
     The return classification has to read the body this call site produces, not the generic one.
@@ -214,7 +220,7 @@ def call_specialized_body(hfn: ast.FunctionDef, pnames: list[str], args: list[as
 def helper_returns_rank0(
     hfn: ast.FunctionDef,
     pnames: list[str],
-    args: list[ast.expr],
+    args: Sequence[ast.expr],
     arr_by: dict[str, ArrayDesc],
     sca_by: dict[str, ScalarDesc],
     sym_by: dict[str, SymbolDesc],
@@ -234,7 +240,7 @@ def helper_returns_rank0(
     arrays, scalars, symbols = infer_helper_params(pnames, args, arr_by, sca_by, sym_by, fn)
     if not arrays:
         return False
-    scalar_names = scalar_value_names(hfn, {d.name for d in (*scalars, *symbols)})
+    scalar_names = scalar_value_names(hfn, {d.name for d in descs(scalars, symbols)})
     table = {a.name: tuple(str(s) for s in a.shape) for a in arrays}
     propagate_local_extents(hfn, table)
     if any(not extent_operands_resolved(value, table, scalar_names) for value in returns):
@@ -245,12 +251,12 @@ def helper_returns_rank0(
 def helper_return_shape_from_body(
     hfn: ast.FunctionDef,
     pnames: list[str],
-    args: list[ast.expr],
+    args: Sequence[ast.expr],
     arr_by: dict[str, ArrayDesc],
     sca_by: dict[str, ScalarDesc],
     sym_by: dict[str, SymbolDesc],
     fn: ast.FunctionDef | None = None,
-) -> tuple[list[str] | None, str | None]:
+) -> ReturnArray | None:
     """``(shape_strings, dtype)`` for a helper whose RETURN EXPRESSION is array-valued.
 
     The call-site target is the first authority on this, but it only exists when some call writes
@@ -260,15 +266,15 @@ def helper_return_shape_from_body(
 
     The helper's own parameters are enough to size it: their shapes come from the call site, and
     :func:`iter_extent_of` already resolves a return expression against them. Rank 0 means the
-    return really is scalar, so ``(None, None)`` keeps the existing path.
+    return really is scalar, so ``None`` keeps the existing path.
     """
     returns = [n.value for n in ast.walk(hfn) if isinstance(n, ast.Return) and n.value is not None]
     if not returns:
-        return None, None
+        return None
     arrays, scalars, symbols = infer_helper_params(pnames, args, arr_by, sca_by, sym_by, fn)
     if not arrays:
-        return None, None
-    scalar_names = scalar_value_names(hfn, {d.name for d in (*scalars, *symbols)})
+        return None
+    scalar_names = scalar_value_names(hfn, {d.name for d in descs(scalars, symbols)})
     table = {a.name: tuple(str(s) for s in a.shape) for a in arrays}
     # A return expression is built from the helper's own locals (mamba2's
     # ``return seg + np.triu(__full1, 1)``), not from its parameters directly, so sizing it needs
@@ -279,15 +285,15 @@ def helper_return_shape_from_body(
         # back None. That is a serviceable broadcast hint and a wrong allocation: mamba2's
         # ``seg + np.triu(...)`` reported the triangle's ``(span, span)`` for a 4-D result, which
         # sizes the out-param two ranks short of what the body writes into it.
-        return None, None
+        return None
     extents = [iter_extent_of(value, table) for value in returns]
     resolved = [ext for ext in extents if ext is not None]
     if not extents or len(resolved) != len(extents):
-        return None, None
+        return None
     shapes = {tuple(ast.unparse(dim) for dim in ext) for ext in resolved}
     if len(shapes) != 1:
         # Two returns of different extents need two out-params; one pointer cannot carry both.
-        return None, None
+        return None
     shape = list(shapes.pop())
     # The result takes the dtype of the array operand it is computed from -- the same rule
     # ``helper_return_array_shape`` gets for free from the target it writes into.
@@ -442,7 +448,10 @@ def helper_call_local(
     one -- and ``caller_side_symbol`` declines a symbol that is not bound exactly once, so every
     one of its hundred-odd specialisations went unresolved and each following layer's input with it.
     """
-    hfn = hdefs[call.func.id]
+    callee = call.func
+    if not isinstance(callee, ast.Name):
+        return None
+    hfn = hdefs[callee.id]
     pnames = [a.arg for a in hfn.args.args]
     if len(call.args) != len(pnames):
         return None
@@ -450,11 +459,12 @@ def helper_call_local(
     if consts:
         hfn = copy.deepcopy(hfn)
         bind_call_constants(hfn, consts)
-    shape, dtype = helper_return_shape_from_body(hfn, pnames, call.args, known, sca_by, sym_by, owner_fn)
-    if shape is None:
+    returned = helper_return_shape_from_body(hfn, pnames, call.args, known, sca_by, sym_by, owner_fn)
+    if returned is None:
         return None
+    shape, dtype = returned
     try:
-        tokens = caller_side_shape(shape, site_held, pnames, call.args, hfn, call.func.id, known)
+        tokens = caller_side_shape(shape, site_held, pnames, call.args, hfn, callee.id, known)
     except NotImplementedError:
         return None  # the callee sizes itself through more of its own locals than the chase follows
     free: set[str] = set()
@@ -476,7 +486,7 @@ def assigns_in_run_order(fn: ast.FunctionDef) -> list[ast.Assign]:
     """
     out: list[ast.Assign] = []
 
-    def walk(body: list[ast.stmt]) -> None:
+    def walk(body: Sequence[ast.stmt]) -> None:
         for stmt in body:
             if isinstance(stmt, ast.Assign):
                 out.append(stmt)
@@ -522,6 +532,9 @@ def plain_local_array(
     nothing to read it off.
     """
     value = site.value
+    target = site.targets[0]
+    if not isinstance(target, ast.Name):
+        return None
     reads = rhs_value_names(value)
     if not reads or not reads <= (set(known) | scalar_names):
         return None
@@ -542,4 +555,4 @@ def plain_local_array(
     )
     if dtype is None:
         return None
-    return ArrayDesc(name=site.targets[0].id, dtype=dtype, shape=tuple(tokens), is_output=False)
+    return ArrayDesc(name=target.id, dtype=dtype, shape=tuple(tokens), is_output=False)

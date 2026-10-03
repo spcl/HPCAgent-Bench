@@ -2,6 +2,7 @@
 
 import ast
 import copy
+from collections.abc import Sequence
 
 from hpcagent_bench.translators.numpyto_common.ast_build import map_blocks, name_, range_for, store_
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
@@ -45,6 +46,8 @@ class BooleanMaskRewriter(ast.NodeTransformer):
     ``for i: if I[i]: Z[i] = Z[i]**2 + C[i]``).
     """
 
+    __slots__ = ("bool_names", "shape_table")
+
     def __init__(self, shape_table, bool_names) -> None:
         self.shape_table = shape_table
         #: Names :func:`collect_bool_names` proved boolean. A bare ``Name`` index is a mask ONLY
@@ -54,15 +57,15 @@ class BooleanMaskRewriter(ast.NodeTransformer):
         #: the buffer whenever the declared shape is an upper bound (lulesh's symmX/Y/Z).
         self.bool_names = bool_names
 
-    def visit_Assign(self, node: ast.Assign) -> ast.AST:
+    def visit_Assign(self, node: ast.Assign) -> ast.AST | list[ast.stmt]:
         self.generic_visit(node)
         return self.rewrite_(node.targets[0] if len(node.targets) == 1 else None, node.value, aug_op=None) or node
 
-    def visit_AugAssign(self, node: ast.AugAssign) -> ast.AST:
+    def visit_AugAssign(self, node: ast.AugAssign) -> ast.AST | list[ast.stmt]:
         self.generic_visit(node)
         return self.rewrite_(node.target, node.value, aug_op=node.op) or node
 
-    def rewrite_(self, target, value, aug_op):
+    def rewrite_(self, target: ast.expr | None, value: ast.expr, aug_op: ast.operator | None) -> list[ast.stmt] | None:
         if not isinstance(target, ast.Subscript) or not isinstance(target.value, ast.Name):
             return None
         arr_name = target.value.id
@@ -75,9 +78,10 @@ class BooleanMaskRewriter(ast.NodeTransformer):
         #: along those axes.
         mask_axes = None
         if isinstance(mask_expr, ast.Tuple):
-            axis, mask_expr = self.axis_mask(mask_expr, shape, arr_name)
-            if axis is None:
+            found = self.axis_mask(mask_expr, shape, arr_name)
+            if found is None:
                 return None
+            axis, mask_expr = found
             mask_axes = [axis]
         elif not self.is_mask_expr(mask_expr, shape, arr_name):
             lead = self.leading_mask_rank(mask_expr, shape, arr_name)
@@ -99,6 +103,7 @@ class BooleanMaskRewriter(ast.NodeTransformer):
         rhs_clean = strip_mask_subscripts(copy.deepcopy(value), mask_names=mask_names_(mask_expr), mask_expr=mask_expr)
         rhs_scalar = SubscriptifyNames(self.shape_table, iters).visit(rhs_clean)
         lhs_sub = ast.Subscript(value=name_(arr_name), slice=idx, ctx=ast.Store())
+        inner: ast.stmt
         if aug_op is None:
             inner = ast.Assign(targets=[lhs_sub], value=rhs_scalar)
         else:
@@ -107,22 +112,22 @@ class BooleanMaskRewriter(ast.NodeTransformer):
         out = wrap_for_loops(iters, list(shape), [guarded])
         return out
 
-    def axis_mask(self, tup, lhs_shape, lhs_name):
+    def axis_mask(self, tup: ast.Tuple, lhs_shape: tuple[str, ...], lhs_name: str) -> tuple[int, ast.expr] | None:
         """``A[:, mask] = v`` -- one mask position, every other axis a bare ``:``.
 
-        Returns ``(axis, mask_expr)``, or ``(None, None)`` when the tuple is not that shape. The
+        Returns ``(axis, mask_expr)``, or ``None`` when the tuple is not that shape. The
         mask is checked against that ONE axis's extent, not the whole shape."""
         if len(tup.elts) != len(lhs_shape):
-            return None, None
+            return None
         found = None
         for k, e in enumerate(tup.elts):
             if isinstance(e, ast.Slice) and e.lower is None and e.upper is None and e.step is None:
                 continue
             if found is not None or not self.is_mask_expr(e, (lhs_shape[k],), lhs_name):
-                return None, None
+                return None
             found = k
         if found is None:
-            return None, None
+            return None
         return found, tup.elts[found]
 
     def leading_mask_rank(self, expr, lhs_shape, lhs_name):
@@ -177,7 +182,7 @@ class BooleanMaskRewriter(ast.NodeTransformer):
         return False
 
 
-def mask_names_(mask_expr: ast.AST) -> set[str]:
+def mask_names_(mask_expr: ast.expr) -> set[str]:
     """Return the bare Name references inside a boolean mask
     expression -- the candidates whose ``arr[name]`` reads should be
     treated as boolean-mask reductions in the RHS-cleanup pass."""
@@ -191,7 +196,7 @@ def mask_names_(mask_expr: ast.AST) -> set[str]:
     return out
 
 
-def strip_mask_subscripts(expr: ast.AST, mask_names: set[str], mask_expr: ast.AST | None = None) -> ast.AST:
+def strip_mask_subscripts(expr: ast.expr, mask_names: set[str], mask_expr: ast.expr | None = None) -> ast.expr:
     """Recursively replace ``arr[name]`` (where ``name`` is one of
     ``mask_names``) with the bare ``arr`` so the surrounding scalariser
     can subscript ``arr`` at the per-element iters. The mask itself is
@@ -204,8 +209,10 @@ def strip_mask_subscripts(expr: ast.AST, mask_names: set[str], mask_expr: ast.AS
     mask_src = ast.unparse(mask_expr) if mask_expr is not None else None
 
     class Strip(ast.NodeTransformer):
-        def visit_Subscript(self_inner, node: ast.Subscript) -> ast.AST:
-            self_inner.generic_visit(node)
+        __slots__ = ()
+
+        def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
+            self.generic_visit(node)
             if isinstance(node.slice, ast.Name) and node.slice.id in mask_names:
                 return node.value
             if (
@@ -261,7 +268,7 @@ BOOLEAN_NP_FUNCS = frozenset(
 )
 
 
-def is_bool_value(e: ast.AST, bn: set[str]) -> bool:
+def is_bool_value(e: ast.expr, bn: set[str]) -> bool:
     """``e`` is unambiguously boolean given the known boolean names ``bn``: a comparison, a boolean
     Name, ``~`` / ``& | ^`` over booleans, an index into a boolean array, or a boolean call."""
     if isinstance(e, (ast.Compare, ast.BoolOp)):
@@ -317,7 +324,7 @@ def unwrap_cast(value: ast.expr) -> tuple[ast.expr, ast.expr | None]:
     return value, None
 
 
-def reads_before_rebind(stmts: list[ast.stmt], name: str) -> bool:
+def reads_before_rebind(stmts: Sequence[ast.stmt], name: str) -> bool:
     """Is ``name`` READ anywhere in ``stmts`` before a statement rebinds it?
 
     A read after the rebind sees a different value, so it does not keep the old binding alive.
@@ -331,6 +338,8 @@ def reads_before_rebind(stmts: list[ast.stmt], name: str) -> bool:
 
 
 class BooleanMaskReductionRewriter(ast.NodeTransformer):
+    __slots__ = ("bool_names", "shape_table")
+
     def __init__(self, shape_table=None, bool_names=None) -> None:
         self.shape_table = shape_table or {}
         self.bool_names = bool_names or set()
@@ -350,8 +359,8 @@ class BooleanMaskReductionRewriter(ast.NodeTransformer):
     same loop we avoid the dynamic shape.
     """
 
-    def walk_body(self, stmts):
-        out = []
+    def walk_body(self, stmts: list[ast.stmt]) -> list[ast.stmt]:
+        out: list[ast.stmt] = []
         i = 0
         while i < len(stmts):
             stmt = stmts[i]
@@ -390,7 +399,9 @@ class BooleanMaskReductionRewriter(ast.NodeTransformer):
                 and i + 1 < len(stmts)
             ):
                 tmp_name = stmt.targets[0].id
-                arr = stmt.value.value.id if isinstance(stmt.value.value, ast.Name) else stmt.value.value
+                selected: str | ast.expr = (
+                    stmt.value.value.id if isinstance(stmt.value.value, ast.Name) else stmt.value.value
+                )
                 mask = stmt.value.slice.id
                 # A compacted select feeds as many reductions as follow it (vexx_k takes both the
                 # min and the max of one masked table row), so consume the whole run of them.
@@ -398,7 +409,7 @@ class BooleanMaskReductionRewriter(ast.NodeTransformer):
                 j = i + 1
                 while j < len(stmts):
                     op = self.consumer_op(stmts[j], tmp_name)
-                    emitted = None if op is None else self.emit_consumer(stmts[j], arr, mask, op, j)
+                    emitted = None if op is None else self.emit_consumer(stmts[j], selected, mask, op, j)
                     if emitted is None:
                         break
                     run.extend(emitted)
@@ -437,7 +448,7 @@ class BooleanMaskReductionRewriter(ast.NodeTransformer):
         ast.fix_missing_locations(tail)
         return list(emitted) + [tail]
 
-    def masked_source(self, arr, mask):
+    def masked_source(self, arr: str | ast.expr, mask: str):
         """Element-load builder and iteration extent for a masked select's source.
 
         ``arr`` is either an array Name or a basic-indexed VIEW of one
@@ -455,11 +466,12 @@ class BooleanMaskReductionRewriter(ast.NodeTransformer):
             )
         if not (isinstance(arr, ast.Subscript) and isinstance(arr.value, ast.Name)):
             return None
-        shape = self.shape_table.get(arr.value.id)
+        base_name = arr.value.id
+        shape = self.shape_table.get(base_name)
         elts = list(arr.slice.elts) if isinstance(arr.slice, ast.Tuple) else [arr.slice]
         if not shape or len(elts) > len(shape):
             return None
-        elts = elts + [ast.Slice() for unused in range(len(shape) - len(elts))]
+        elts = [*elts, *(ast.Slice() for unused in range(len(shape) - len(elts)))]
         kept = [k for k, e in enumerate(elts) if isinstance(e, ast.Slice)]
         if len(kept) != 1 or has_negative_step(elts):
             return None
@@ -467,6 +479,8 @@ class BooleanMaskReductionRewriter(ast.NodeTransformer):
             return None
         axis = kept[0]
         view = elts[axis]
+        if not isinstance(view, ast.Slice):
+            return None
         upper = view.upper if view.upper is not None else self.tok_to_ast(shape[axis])
         n_expr = strided_trip_count(view.lower or const_(0), upper, view.step or 1)
 
@@ -474,14 +488,14 @@ class BooleanMaskReductionRewriter(ast.NodeTransformer):
             composed = [copy.deepcopy(e) for e in elts]
             composed[axis] = view_offset(view.lower, view.step, idx)
             return ast.Subscript(
-                value=name_(arr.value.id),
+                value=name_(base_name),
                 slice=ast.Tuple(elts=composed, ctx=ast.Load()),
                 ctx=ast.Load(),
             )
 
         return load, n_expr
 
-    def inline_masked_reduction(self, stmt):
+    def inline_masked_reduction(self, stmt: ast.stmt) -> tuple[str, str, str, ast.Name | ast.Subscript] | None:
         """Detect ``X = np.<reduction>(arr[mask])`` / ``X = arr[mask].<reduction>()``
         as a single statement with a KNOWN-boolean ``mask``.
 
@@ -497,8 +511,8 @@ class BooleanMaskReductionRewriter(ast.NodeTransformer):
         if not isinstance(call, ast.Call):
             return None
         func = call.func
-        sel = None
-        op = None
+        sel: ast.expr | None = None
+        op: str | None = None
         # Form ``np.<op>(arr[mask])``.
         if (
             isinstance(func, ast.Attribute)
@@ -517,7 +531,8 @@ class BooleanMaskReductionRewriter(ast.NodeTransformer):
         ):
             sel, op = func.value, func.attr
         if (
-            isinstance(sel, ast.Subscript)
+            op is not None
+            and isinstance(sel, ast.Subscript)
             and isinstance(sel.value, ast.Name)
             and isinstance(sel.slice, ast.Name)
             and sel.slice.id in self.bool_names
@@ -568,7 +583,7 @@ class BooleanMaskReductionRewriter(ast.NodeTransformer):
             return func.attr
         return None
 
-    def emit_masked(self, res_name, arr, mask, op):
+    def emit_masked(self, res_name: str, arr: str | ast.expr, mask: str, op: str) -> list[ast.stmt] | None:
         i_name = f"__msk_i_{res_name}"
         sum_name = f"__msk_acc_{res_name}"
         cnt_name = f"__msk_cnt_{res_name}"
@@ -582,7 +597,7 @@ class BooleanMaskReductionRewriter(ast.NodeTransformer):
         if op == "mean":
             out.append(ast.Assign(targets=[store_(sum_name)], value=ast.Constant(value=0.0)))
             out.append(ast.Assign(targets=[store_(cnt_name)], value=ast.Constant(value=0)))
-            body = [
+            body: list[ast.stmt] = [
                 ast.AugAssign(target=store_(sum_name), op=ast.Add(), value=arr_load),
                 ast.AugAssign(target=store_(cnt_name), op=ast.Add(), value=ast.Constant(value=1)),
             ]

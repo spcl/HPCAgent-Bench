@@ -21,10 +21,13 @@ from functools import lru_cache
 
 __all__ = [
     "ALIASES",
+    "BITS_PER_BYTE",
     "BY_PTR_KIND",
     "BY_SCALAR_KIND",
     "COMPLEX_REAL_COMPONENT",
+    "DTYPE_CACHE_SIZE",
     "FLOAT_EPS",
+    "MAX_SIGNED_BYTES",
     "REAL_COMPLEX_COMPONENT",
     "REGISTRY",
     "SCALAR_KINDS",
@@ -170,6 +173,15 @@ REGISTRY: dict[str, DTypeInfo] = {
 
 #: dtype-name aliases -> canonical key. ``"int"`` is the platform/un-widened int
 #: the legacy specs use for shape symbols; the canonical ABI treats it as int64.
+#: Bits in one byte, for converting between an itemsize and a bit width.
+BITS_PER_BYTE: int = 8
+
+#: Bytes of the widest signed integer dtype: numpy has no signed type holding a full uint64.
+MAX_SIGNED_BYTES: int = 8
+
+#: Distinct dtype spellings :func:`info` memoises.
+DTYPE_CACHE_SIZE: int = 256
+
 ALIASES = {
     "int": "int64",
     "bool_": "bool",
@@ -187,7 +199,7 @@ ALIASES = {
 }
 
 
-@lru_cache(maxsize=256, typed=True)
+@lru_cache(maxsize=DTYPE_CACHE_SIZE, typed=True)
 def info(dtype: str) -> DTypeInfo:
     """Look up a dtype (resolving aliases). Raises ``KeyError`` for unknown.
 
@@ -304,7 +316,7 @@ def itemsize(dtype: str) -> int:
     if ct is not None:
         return ctypes.sizeof(ct)
     bits = int("".join(c for c in canonical(dtype) if c.isdigit()) or "0")
-    return bits // 8
+    return bits // BITS_PER_BYTE
 
 
 #: Real dtype backing one component (``.real`` / ``.imag``) of each complex dtype.
@@ -376,15 +388,15 @@ def promote_integers(a: str, b: str) -> str:
     wa, wb = itemsize(a), itemsize(b)
     ua, ub = a.startswith("uint"), b.startswith("uint")
     if ua == ub:  # same signedness -> the wider
-        return ("uint" if ua else "int") + str(max(wa, wb) * 8)
+        return ("uint" if ua else "int") + str(max(wa, wb) * BITS_PER_BYTE)
     uw = wa if ua else wb  # unsigned operand's width
     sw = wb if ua else wa  # signed operand's width
     if sw > uw:  # the signed type already holds the unsigned one
-        return "int" + str(sw * 8)
+        return "int" + str(sw * BITS_PER_BYTE)
     need = uw * 2  # otherwise a signed type strictly wider than the unsigned
-    if need > 8:  # a full uint64 fits no signed int -> numpy falls to float64
+    if need > MAX_SIGNED_BYTES:  # a full uint64 fits no signed int -> numpy falls to float64
         return "float64"
-    return "int" + str(need * 8)
+    return "int" + str(need * BITS_PER_BYTE)
 
 
 def c_type(dtype: str) -> str:

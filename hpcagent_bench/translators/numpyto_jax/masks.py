@@ -86,16 +86,18 @@ def inline_masked_subsets(fn: ast.FunctionDef, is_mask: Callable[[ast.expr], boo
         return
 
     class Substituter(ast.NodeTransformer):
+        __slots__ = ()
+
         def visit_Assign(self, node):
             if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and node.targets[0].id in subset_map:
                 return None  # drop the now-inlined definition
             self.generic_visit(node)
             return node
 
-        def visit_Name(self, n):
-            if isinstance(n.ctx, ast.Load) and n.id in subset_map:
-                return deep_copy(subset_map[n.id])
-            return n
+        def visit_Name(self, node):
+            if isinstance(node.ctx, ast.Load) and node.id in subset_map:
+                return deep_copy(subset_map[node.id])
+            return node
 
     Substituter().visit(fn)
     ast.fix_missing_locations(fn)
@@ -103,6 +105,8 @@ def inline_masked_subsets(fn: ast.FunctionDef, is_mask: Callable[[ast.expr], boo
 
 class MaskToWhere(ast.NodeTransformer):
     """Masked reductions and masked (augmented) stores -> ``np.where`` forms."""
+
+    __slots__ = ("is_mask",)
 
     def __init__(self, is_mask: Callable[[ast.expr], bool]) -> None:
         self.is_mask = is_mask
@@ -112,16 +116,19 @@ class MaskToWhere(ast.NodeTransformer):
         is_mask = self.is_mask
 
         class Walker(ast.NodeTransformer):
-            def visit_Subscript(self, n):
-                self.generic_visit(n)
-                return n.value if is_mask(n.slice) else n
+            __slots__ = ()
+
+            def visit_Subscript(self, node: ast.Subscript) -> ast.expr:
+                self.generic_visit(node)
+                return node.value if is_mask(node.slice) else node
 
         return Walker().visit(deep_copy(node))
 
-    def visit_Call(self, node):
+    def visit_Call(self, node: ast.Call) -> ast.AST:
         self.generic_visit(node)
         # ``X[m].mean()`` / ``.sum()``  and ``np.sum(X[m])`` / ``np.mean``
-        red = None
+        red: str | None = None
+        sub: ast.Subscript | None = None
         if (
             isinstance(node.func, ast.Attribute)
             and node.func.attr in ("mean", "sum")
@@ -130,13 +137,14 @@ class MaskToWhere(ast.NodeTransformer):
         ):
             red, sub = node.func.attr, node.func.value
         elif (
-            (is_np_attr(node.func, "sum") or is_np_attr(node.func, "mean"))
+            isinstance(node.func, ast.Attribute)
+            and (is_np_attr(node.func, "sum") or is_np_attr(node.func, "mean"))
             and len(node.args) == 1
             and isinstance(node.args[0], ast.Subscript)
             and self.is_mask(node.args[0].slice)
         ):
             red, sub = node.func.attr, node.args[0]
-        if red is None:
+        if red is None or sub is None:
             return node
         m, arr = sub.slice, sub.value
         masked = numpy_call("where", [deep_copy(m), arr, ast.Constant(value=0)])
@@ -181,6 +189,8 @@ def mask_reduction_slices(fn: ast.FunctionDef) -> None:
     lv = loop_vars(fn)
 
     class Rewriter(ast.NodeTransformer):
+        __slots__ = ()
+
         def visit_BinOp(self, node):
             self.generic_visit(node)
             if isinstance(node.op, ast.MatMult):
@@ -198,7 +208,7 @@ def mask_reduction_slices(fn: ast.FunctionDef) -> None:
     ast.fix_missing_locations(fn)
 
 
-def dyn_slice_info(node: ast.AST, lv: set[str]):
+def dyn_slice_info(node: ast.expr, lv: set[str]) -> tuple[ast.Name, int, ast.expr | None, ast.expr | None] | None:
     """For ``Arr[.., dynamic-slice, ..]`` return ``(arr, axis, lower, upper)``
     when a bound depends on a loop var, else None. Covers one-sided (``:j``,
     ``i:``) and two-sided-but-one-dynamic (``i:M``) slices. ``arr`` must be a
@@ -228,10 +238,12 @@ def dyn_slice_info(node: ast.AST, lv: set[str]):
         if k != p and isinstance(e, ast.Slice) and not is_full_slice(e):
             return None
     s = elts[p]
+    if not isinstance(s, ast.Slice):
+        return None
     return node.value, p, s.lower, s.upper
 
 
-def axis_mask(arr: ast.AST, p: int, lower: ast.AST | None, upper: ast.AST | None) -> ast.AST:
+def axis_mask(arr: ast.expr, p: int, lower: ast.expr | None, upper: ast.expr | None) -> ast.expr:
     """``np.arange(arr.shape[p])`` constrained by the present bounds:
     ``(arange >= lower) & (arange < upper)``."""
     shape_p = ast.Subscript(
@@ -242,7 +254,7 @@ def axis_mask(arr: ast.AST, p: int, lower: ast.AST | None, upper: ast.AST | None
         args=[shape_p],
         keywords=[],
     )
-    terms = []
+    terms: list[ast.expr] = []
     if lower is not None:
         terms.append(ast.Compare(left=arange, ops=[ast.GtE()], comparators=[deep_copy(lower)]))
     if upper is not None:
@@ -253,7 +265,7 @@ def axis_mask(arr: ast.AST, p: int, lower: ast.AST | None, upper: ast.AST | None
     return mask
 
 
-def widen_to_full(node: ast.Subscript, p: int) -> ast.AST:
+def widen_to_full(node: ast.Subscript, p: int) -> ast.expr:
     """Replace the dynamic slice axis ``p`` of a subscript with full ``:``."""
     if isinstance(node.slice, ast.Tuple):
         new_elts = list(node.slice.elts)
@@ -262,9 +274,9 @@ def widen_to_full(node: ast.Subscript, p: int) -> ast.AST:
     return node.value  # ``v[:k]`` -> whole vector ``v``
 
 
-def maybe_mask(node: ast.AST, lv: set[str]) -> ast.AST:
+def maybe_mask(node: ast.expr, lv: set[str]) -> ast.expr:
     info = dyn_slice_info(node, lv)
-    if info is None:
+    if info is None or not isinstance(node, ast.Subscript):
         return node
     arr, p, lower, upper = info
     full = widen_to_full(node, p)
@@ -277,24 +289,26 @@ def maybe_mask(node: ast.AST, lv: set[str]) -> ast.AST:
     return ast.copy_location(where, node)
 
 
-def widen_dynamic_slices(node: ast.AST, lv: set[str]) -> ast.AST:
+def widen_dynamic_slices(node: ast.expr, lv: set[str]) -> ast.expr:
     """Drop one-sided dynamic-slice bounds to full ``:`` (no zeroing -- a write
     mask does the truncation). Used on the RHS of a masked dynamic write."""
 
     class Walker(ast.NodeTransformer):
-        def visit_Subscript(self, n):
-            self.generic_visit(n)
-            info = dyn_slice_info(n, lv)
+        __slots__ = ()
+
+        def visit_Subscript(self, node):
+            self.generic_visit(node)
+            info = dyn_slice_info(node, lv)
             if info is None:
-                return n
+                return node
             p = info[1]
-            if isinstance(n.slice, ast.Tuple):
-                elts = list(n.slice.elts)
+            if isinstance(node.slice, ast.Tuple):
+                elts = list(node.slice.elts)
                 elts[p] = ast.Slice(lower=None, upper=None, step=None)
                 return ast.copy_location(
-                    ast.Subscript(value=n.value, slice=ast.Tuple(elts=elts, ctx=ast.Load()), ctx=ast.Load()), n
+                    ast.Subscript(value=node.value, slice=ast.Tuple(elts=elts, ctx=ast.Load()), ctx=ast.Load()), node
                 )
-            return n.value  # ``v[:k]`` -> ``v``
+            return node.value  # ``v[:k]`` -> ``v``
 
     return Walker().visit(node)
 
@@ -307,6 +321,8 @@ def mask_dynamic_writes(fn: ast.FunctionDef) -> None:
     lv = loop_vars(fn)
 
     class Rewriter(ast.NodeTransformer):
+        __slots__ = ()
+
         def rewrite(self, target, value):
             info = dyn_slice_info(target, lv)
             if info is None:
@@ -350,6 +366,8 @@ def rewrite_flip_prefix(fn: ast.FunctionDef) -> None:
     lv = loop_vars(fn)
 
     class Rewriter(ast.NodeTransformer):
+        __slots__ = ()
+
         def visit_Call(self, node):
             self.generic_visit(node)
             if not (is_np_attr(node.func, "flip") and len(node.args) == 1):
@@ -397,6 +415,8 @@ def mask_slice_reads(fn: ast.FunctionDef) -> None:
     lv = loop_vars(fn)
 
     class Rewriter(ast.NodeTransformer):
+        __slots__ = ()
+
         def visit_Assign(self, node):
             self.generic_visit(node)
             if (
@@ -434,6 +454,8 @@ def dynamic_window_slices(fn: ast.FunctionDef) -> None:
         return None
 
     class Rewriter(ast.NodeTransformer):
+        __slots__ = ()
+
         def visit_Subscript(self, node):
             self.generic_visit(node)
             if not isinstance(node.value, ast.Name):

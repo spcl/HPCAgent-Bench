@@ -23,6 +23,7 @@ from hpcagent_bench.harness import recording
 from hpcagent_bench.precision import TOLERANCE_MATRIX, Precision, numpy_dtype, precision_from_datatype, tolerance_band
 
 __all__ = [
+    "DEFAULT_TIMEOUT_S",
     "FLOAT_SCALARS",
     "NJIT_INTERPRETED",
     "TOLERANCES",
@@ -232,6 +233,10 @@ def njit_reference(impl: KernelImpl, bench: Benchmark, data: BenchData | None = 
     return guarded
 
 
+#: Seconds one framework run may take when the caller gives no timeout.
+DEFAULT_TIMEOUT_S: float = 200.0
+
+
 class Test:
     """A class for testing a framework on a benchmark."""
 
@@ -256,7 +261,7 @@ class Test:
         repeat: int,
         ignore_errors: bool,
         optimized: bool = False,
-    ) -> tuple[list[OutputValue | None] | None, list[float] | None, list[float] | None]:
+    ) -> tuple[list[OutputValue] | None, list[float] | None, list[float] | None]:
         """Run ``impl`` ``repeat`` times via :meth:`Framework.measure`; returns ``(outputs, python_time_list,
         native_time_list)``. ``repeat=0`` is one untimed run. ``optimized`` means ``impl`` already came from
         :meth:`Framework.optimize`."""
@@ -325,7 +330,7 @@ class Test:
                 traceback.print_exception(e)
                 self._last_failure = "runtime_error"
                 ret = None
-        out: list[OutputValue | None] = util.resolve_outputs(
+        out: list[OutputValue] = util.resolve_outputs(
             ret, plan.inout_values(), self.bench.info.get("output_args", []), plan.inout_names()
         )
         return out, timelist, native_times
@@ -335,7 +340,7 @@ class Test:
         preset: str,
         validate: bool,
         repeat: int,
-        timeout: float = 200.0,
+        timeout: float = DEFAULT_TIMEOUT_S,
         ignore_errors: bool = True,
         datatype: str | None = None,
         fuzz_iteration: int | None = None,
@@ -363,14 +368,15 @@ class Test:
         validate = validate and self.frmwrk.fname != "numpy" and self.numpy is not None
         np_out = self.oracle_output(bdata, ignore_errors) if validate else None
         band_rtol, band_atol = tolerances_for(tolerance_datatype(datatype, detected_dtype))
-        # Keyed by the data precision when no --datatype was given; per-bench rtol/atol still win.
-        band = (self.bench.info.get("rtol", band_rtol), self.bench.info.get("atol", band_atol))
+        # Keyed by the data precision when no --datatype was given; the spec carries no per-bench rtol/atol
+        # (spec.py rejects them), so the band is the datatype's alone.
+        band = (band_rtol, band_atol)
         context: BenchData = {**bdata, **self.frmwrk.imports()}
 
         @tout.exit_after(timeout)
         def first_execution(
             impl: KernelImpl, impl_name: str
-        ) -> tuple[list[OutputValue | None] | None, list[float] | None, list[float] | None]:
+        ) -> tuple[list[OutputValue] | None, list[float] | None, list[float] | None]:
             return self._execute(self.frmwrk, impl, impl_name, "first/validation", context, 0, ignore_errors)
 
         samples: list[Sample] = []
@@ -403,7 +409,9 @@ class Test:
             timing = self.timed_run(impl_name, context, repeat, ignore_errors, valid, validate, np_out, band)
             if timing is not None:
                 per_impl_timings[impl_name] = timing
-                natives = timing["native"] or [None] * len(timing["python"] or [])
+                natives: list[float | None] = (
+                    [*timing["native"]] if timing["native"] else [None] * len(timing["python"] or [])
+                )
                 samples.extend(
                     Sample(details=impl_name, validated=timing["validated"], time=t, native_time=nt)
                     for t, nt in zip(timing["python"] or [], natives)
@@ -411,7 +419,7 @@ class Test:
         self.record(samples, preset, datatype)
         return per_impl_timings
 
-    def oracle_output(self, bdata: BenchData, ignore_errors: bool) -> list[OutputValue | None] | None:
+    def oracle_output(self, bdata: BenchData, ignore_errors: bool) -> list[OutputValue] | None:
         """The NumPy oracle's outputs for ``bdata`` (njit-compiled where it can be), ``None`` if it failed."""
         oracle = self.numpy
         if oracle is None:
@@ -428,14 +436,17 @@ class Test:
         ignore_errors: bool,
         valid: bool,
         validate: bool,
-        np_out: list[OutputValue | None] | None,
+        np_out: list[OutputValue] | None,
         band: tuple[float, float],
     ) -> ImplTiming | None:
         """Time the handle the first execution optimized (``optimize`` runs once per kernel) and grade the
         median run's final capture too (a kernel can go wrong on later calls); ``None`` when nothing was
         timed."""
+        measured = self._measured_impl
+        if measured is None:
+            raise RuntimeError(f"{impl_name}: timed_run needs first_execution to have set the optimized handle")
         later_out, timelist, native_times = self._execute(
-            self.frmwrk, self._measured_impl, impl_name, "median", context, repeat, ignore_errors, optimized=True
+            self.frmwrk, measured, impl_name, "median", context, repeat, ignore_errors, optimized=True
         )
         if valid and validate and timelist and later_out is not None and np_out is not None:
             valid = self._last_failure is None and self.matches_oracle(
@@ -449,8 +460,8 @@ class Test:
 
     def matches_oracle(
         self,
-        np_out: list[OutputValue | None],
-        frmwrk_out: list[OutputValue | None] | None,
+        np_out: list[OutputValue],
+        frmwrk_out: list[OutputValue] | None,
         impl_name: str,
         stage: str,
         band: tuple[float, float],
@@ -460,9 +471,10 @@ class Test:
         names the call in the log. A comparison that raised is a failed validation, also under
         ``ignore_errors``."""
         try:
-            copy_back = self.frmwrk.copy_back_func()
             host = (
-                [copy_back(a) for a in frmwrk_out] if isinstance(frmwrk_out, (tuple, list)) else copy_back(frmwrk_out)
+                [self.frmwrk.copy_back_output(a) for a in frmwrk_out]
+                if isinstance(frmwrk_out, (tuple, list))
+                else frmwrk_out
             )
             frmwrk_name = self.frmwrk.info["full_name"] + " - " + impl_name
             valid = util.validate(np_out, host, frmwrk_name, rtol=band[0], atol=band[1])

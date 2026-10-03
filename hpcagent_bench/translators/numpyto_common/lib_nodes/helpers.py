@@ -16,6 +16,7 @@ __all__ = [
     "const_",
     "const_or_name",
     "falsy",
+    "first_name",
     "flat_index_",
     "if_set",
     "is_const_one",
@@ -52,6 +53,12 @@ def const_(v: Any) -> ast.Constant:
     return ast.Constant(value=v)
 
 
+def first_name(args: Sequence[ast.expr]) -> ast.Name | None:
+    """The first argument when it is a bare ``Name``, else ``None`` (also for no arguments)."""
+    first = args[0] if args else None
+    return first if isinstance(first, ast.Name) else None
+
+
 def attr_call(mod: str, attr: str, args: list[ast.expr]) -> ast.Call:
     return ast.Call(func=ast.Attribute(value=name_(mod), attr=attr, ctx=ast.Load()), args=args, keywords=[])
 
@@ -63,35 +70,38 @@ def make_iter_name(prefix: str, depth: int) -> str:
     return f"{prefix}{depth}"
 
 
-def wrap_for_loops(iters: list[str], bounds: Sequence[str | ast.expr], body: list[ast.stmt]) -> list[ast.stmt]:
+def wrap_for_loops(iters: list[str], bounds: Sequence[str | ast.expr], body: Sequence[ast.stmt]) -> list[ast.stmt]:
     """Wrap ``body`` in nested ``for v in range(bound):`` loops, outermost first.
 
     ``bounds`` entries are either a string (rendered via :func:`const_or_name`)
     or an already-built AST expression (passed through unchanged).
     """
-    out = body
+    out: list[ast.stmt] = list(body)
     for var, bound in zip(reversed(iters), reversed(bounds)):
         bound_node = const_or_name(bound) if isinstance(bound, str) else bound
         out = [range_for(var, [bound_node], out)]
     return out
 
 
-def ast_eq(a: ast.AST, b: ast.AST) -> bool:
+def ast_eq(a: ast.expr, b: ast.expr) -> bool:
     """Structural equality for two AST expressions -- only ``Name``/``Constant``
     ids/values and matching ``BinOp`` ops; anything else is False, so the
     algebraic simplifier just falls back to the unsimplified form."""
-    if type(a) is not type(b):
-        return False
     if isinstance(a, ast.Name):
-        return a.id == b.id
+        return isinstance(b, ast.Name) and a.id == b.id
     if isinstance(a, ast.Constant):
-        return a.value == b.value
+        return isinstance(b, ast.Constant) and a.value == b.value
     if isinstance(a, ast.BinOp):
-        return type(a.op) is type(b.op) and ast_eq(a.left, b.left) and ast_eq(a.right, b.right)
+        return (
+            isinstance(b, ast.BinOp)
+            and type(a.op) is type(b.op)
+            and ast_eq(a.left, b.left)
+            and ast_eq(a.right, b.right)
+        )
     return False
 
 
-def simplify_sub(hi: ast.AST, lo: ast.AST) -> ast.AST | None:
+def simplify_sub(hi: ast.expr, lo: ast.expr) -> ast.expr | None:
     """Algebraic simplification for ``hi - lo``. Returns ``None``
     when the form doesn't match a known simplifying pattern."""
     if ast_eq(hi, lo):
@@ -232,7 +242,7 @@ def reads_complex(expr: ast.AST, local_dtypes: dict[str, str]) -> bool:
     return any(reads_complex(c, local_dtypes) for c in ast.iter_child_nodes(expr))
 
 
-def slice_axes(node: ast.AST) -> list[ast.AST]:
+def slice_axes(node: ast.AST) -> list[ast.expr]:
     """Flat list of per-axis index nodes for any Subscript: ``A[i]`` -> ``[i]``,
     ``A[i, j]`` -> ``[i, j]``. A Slice axis is returned as the Slice node itself
     so callers can decide whether to scalarize."""

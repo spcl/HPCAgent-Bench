@@ -10,7 +10,7 @@ from hpcagent_bench.translators.numpyto_common.numpy_desugar.ranks import expr_r
 __all__ = ["PadInline", "const_pair_widths", "pad_constant_inline_stmts", "pad_inline_stmts", "widths_all_literal"]
 
 
-def const_pair_widths(pad_width: ast.AST, rank: int):
+def const_pair_widths(pad_width: ast.expr, rank: int):
     """Per-axis ``(lo, hi)`` exprs from a scalar ``R`` or a ``((lo, hi), ...)`` ``pad_width``, else None."""
     if isinstance(pad_width, (ast.Name, ast.Constant)):
         return [(pad_width, copy.deepcopy(pad_width)) for unused in range(rank)]
@@ -25,7 +25,7 @@ def const_pair_widths(pad_width: ast.AST, rank: int):
     return None
 
 
-def pad_inline_stmts(target: str, arr: ast.AST, widths, rank: int, ctr: int) -> list[ast.stmt]:
+def pad_inline_stmts(target: str, arr: ast.expr, widths, rank: int, ctr: int) -> list[ast.stmt]:
     """``<target> = np.pad(arr, ..., mode="edge")`` as a clamped-index copy loop nest.
 
     Inlined rather than a helper call: numba needs an ``@njit`` callee, pythran a plain def."""
@@ -50,7 +50,7 @@ def widths_all_literal(widths) -> bool:
     return all(const_int(lo) is not None and const_int(hi) is not None for lo, hi in widths)
 
 
-def pad_constant_inline_stmts(target: str, arr: ast.AST, widths, fill: ast.AST, ctr: int) -> list[ast.stmt]:
+def pad_constant_inline_stmts(target: str, arr: ast.expr, widths, fill: ast.expr, ctr: int) -> list[ast.stmt]:
     """``<target> = np.pad(arr, ..., mode="constant")`` as ``np.full`` plus an interior slice copy.
 
     For symbolic widths: dace's own ``np.pad`` casts every width through ``int()`` and fails, while
@@ -74,6 +74,8 @@ class PadInline(ast.NodeTransformer):
     ``lower_symbolic_constant`` (dace) and a non-literal width; see :func:`pad_constant_inline_stmts`.
     """
 
+    __slots__ = ("_ctr", "changed", "lower_symbolic_constant", "ranks")
+
     def __init__(self, ranks: dict[str, int], lower_symbolic_constant: bool = False) -> None:
         self.ranks = ranks
         self.lower_symbolic_constant = lower_symbolic_constant
@@ -82,9 +84,14 @@ class PadInline(ast.NodeTransformer):
 
     def visit_Assign(self, node: ast.Assign):
         self.generic_visit(node)
-        if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Name) or numpy_call_attr(node.value) != "pad":
-            return node
         call = node.value
+        if (
+            len(node.targets) != 1
+            or not isinstance(node.targets[0], ast.Name)
+            or not isinstance(call, ast.Call)
+            or numpy_call_attr(call) != "pad"
+        ):
+            return node
         kw = {k.arg: k.value for k in call.keywords}
         mode = kw.get("mode")
         mode_value = mode.value if isinstance(mode, ast.Constant) else None

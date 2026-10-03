@@ -19,8 +19,8 @@ geometric mean over the solved kernels (:func:`summary_geomean`). The canvas is 
 fixed (:func:`fit_canvas`): margins come from what the chrome actually prints.
 """
 
-import enum
 import dataclasses
+import enum
 import logging
 import math
 import pathlib
@@ -257,7 +257,11 @@ def answer_cells(
     answers = population.kernel_answers(frame, repeats=repeats, policy=population.KernelPolicy.SOLVED)
     if "speedup" not in answers.columns:
         return []
-    return [KernelCell(str(kernel), (float(value),)) for kernel, value in answers["speedup"].items() if value > 0]
+    return [
+        KernelCell(str(kernel), (float(value),))
+        for kernel, value in population.series_of(answers, "speedup").items()
+        if value > 0
+    ]
 
 
 def exp2_or_nan(value: float) -> float:
@@ -383,7 +387,7 @@ def style_token_axis(
     """A log10 value axis over the plotted values (:func:`token_limits`), majors at 1-2-5."""
     ax.set_yscale("log")
     ax.set_ylim(*token_limits(cells))
-    plotstyle.value_axis(ax, "y", log_base=10.0)
+    plotstyle.value_axis(ax, "y", log_base=plotstyle.LOG_BASE)
     ax.tick_params(axis="y", labelsize=tick_pt)
 
 
@@ -427,7 +431,7 @@ def mark_size(pitch_in: float, n_series: int, span: float = DODGE_SPAN) -> float
     """A mark's area in points squared: :data:`MARK_PT` across where the marks have room, shrinking
     with the gap to the nearest neighbour down to :data:`MIN_MARK_PT` where they do not."""
     dodged = n_series > 1 and span > 0.0
-    gap_pt = 72.0 * pitch_in * (span / (n_series - 1) if dodged else 1.0)
+    gap_pt = plotstyle.POINTS_PER_INCH * pitch_in * (span / (n_series - 1) if dodged else 1.0)
     return max(MIN_MARK_PT, min(MARK_PT, MARK_GAP_RATIO * gap_pt)) ** 2
 
 
@@ -879,7 +883,7 @@ def fit_ylabels(
     """Keep every Y label within its own panel's height: broken onto two lines, then stepped down
     to its floor (:func:`min_text_pt`). A label still too tall at the floor is logged; the caller
     has to shorten it."""
-    renderer = fig.canvas.get_renderer()
+    renderer = plotstyle.renderer_of(fig)
     for ax in axes:
         label = ax.yaxis.label
         if not label.get_text() or label.get_window_extent(renderer).height / fig.dpi <= panel_height_in:

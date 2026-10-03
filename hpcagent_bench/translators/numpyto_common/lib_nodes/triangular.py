@@ -1,19 +1,20 @@
 """Diagonal and triangular views: triu, tril, trace, diagonal, diag."""
 
 import ast
+from collections.abc import Sequence
 
 from hpcagent_bench.translators.numpyto_common.ast_build import const_int, name_, store_
 from hpcagent_bench.translators.numpyto_common.lib_nodes.call_args import kwarg_or_pos
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of
-from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import const_, wrap_for_loops
+from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import const_, first_name, wrap_for_loops
 from hpcagent_bench.translators.numpyto_common.lib_nodes.scalarize import scalarize_at_iters
 
 __all__ = ["expand_diag", "expand_diagonal", "expand_trace", "expand_triangular", "expand_tril", "expand_triu"]
 
 
 def expand_triangular(
-    target: ast.expr,
-    args: list[ast.expr],
+    target: ast.Name,
+    args: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     kwargs: list[ast.keyword] | None,
     lower: bool,
@@ -23,9 +24,9 @@ def expand_triangular(
     ``lower=True`` keeps ``j <= i + k``. Optional ``k`` offset (positional or
     ``k=``) defaults to 0."""
     name = "np.tril" if lower else "np.triu"
-    if not args or not isinstance(args[0], ast.Name):
+    a = first_name(args)
+    if a is None:
         raise NotImplementedError(f"{name} needs Name first arg")
-    a = args[0]
     shape = shape_table.get(a.id)
     if not shape or len(shape) != 2:
         raise NotImplementedError(f"{name}: only 2-D supported")
@@ -42,7 +43,7 @@ def expand_triangular(
     else:
         threshold = ast.BinOp(left=name_("__i"), op=ast.Add(), right=k_arg)
     cmp_op = ast.LtE() if lower else ast.GtE()
-    body = [
+    body: list[ast.stmt] = [
         ast.Assign(
             targets=[
                 ast.Subscript(
@@ -62,8 +63,8 @@ def expand_triangular(
 
 
 def expand_triu(
-    target: ast.expr,
-    args: list[ast.expr],
+    target: ast.Name,
+    args: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     kwargs: list[ast.keyword] | None = None,
 ) -> list[ast.stmt]:
@@ -74,7 +75,7 @@ def expand_triu(
     return expand_triangular(target, args, shape_table, kwargs, lower=False)
 
 
-def expand_trace(target: ast.expr, args: list[ast.expr], shape_table: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
+def expand_trace(target: ast.Name, args: Sequence[ast.expr], shape_table: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
     """``np.trace(A)`` -> ``sum_i A[i, i]`` (the diagonal sum)."""
     if len(args) != 1 or not isinstance(args[0], ast.Name):
         raise NotImplementedError("np.trace needs one bare-Name 2-D arg")
@@ -85,11 +86,13 @@ def expand_trace(target: ast.expr, args: list[ast.expr], shape_table: dict[str, 
     diag = ast.Subscript(
         value=name_(args[0].id), slice=ast.Tuple(elts=[name_(it), name_(it)], ctx=ast.Load()), ctx=ast.Load()
     )
-    body = [ast.AugAssign(target=store_(target.id), op=ast.Add(), value=diag)]
+    body: list[ast.stmt] = [ast.AugAssign(target=store_(target.id), op=ast.Add(), value=diag)]
     return [ast.Assign(targets=[store_(target.id)], value=const_(0.0)), *wrap_for_loops([it], [shape[0]], body)]
 
 
-def expand_diagonal(target: ast.expr, args: list[ast.expr], shape_table: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
+def expand_diagonal(
+    target: ast.Name, args: Sequence[ast.expr], shape_table: dict[str, tuple[str, ...]]
+) -> list[ast.stmt]:
     """``np.diagonal(A)`` -> ``out[i] = A[i, i]``."""
     if len(args) != 1 or not isinstance(args[0], ast.Name):
         raise NotImplementedError("np.diagonal needs one bare-Name 2-D arg")
@@ -100,13 +103,15 @@ def expand_diagonal(target: ast.expr, args: list[ast.expr], shape_table: dict[st
     diag = ast.Subscript(
         value=name_(args[0].id), slice=ast.Tuple(elts=[name_(it), name_(it)], ctx=ast.Load()), ctx=ast.Load()
     )
-    body = [ast.Assign(targets=[ast.Subscript(value=name_(target.id), slice=name_(it), ctx=ast.Store())], value=diag)]
+    body: list[ast.stmt] = [
+        ast.Assign(targets=[ast.Subscript(value=name_(target.id), slice=name_(it), ctx=ast.Store())], value=diag)
+    ]
     return wrap_for_loops([it], [shape[0]], body)
 
 
 def expand_diag(
-    target: ast.expr,
-    args: list[ast.expr],
+    target: ast.Name,
+    args: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     kwargs: list[ast.keyword] | None = None,
 ) -> list[ast.stmt]:
@@ -128,6 +133,7 @@ def expand_diag(
     if len(ext) != 1:
         raise NotImplementedError("np.diag: only 1-D / 2-D operands supported")
     k_node = kwarg_or_pos(args, kwargs, 1, "k")
+    k: int | None
     if k_node is None:
         k = 0
     else:
@@ -137,7 +143,7 @@ def expand_diag(
     n_tok = ast.unparse(ext[0])
     side_tok = n_tok if k == 0 else f"({n_tok}) + {abs(k)}"
     # Zero the whole (side x side) matrix.
-    zero_body = [
+    zero_body: list[ast.stmt] = [
         ast.Assign(
             targets=[
                 ast.Subscript(
@@ -159,7 +165,7 @@ def expand_diag(
     else:
         row = ast.BinOp(left=name_(it), op=ast.Add(), right=const_(-k))
         col = name_(it)
-    set_body = [
+    set_body: list[ast.stmt] = [
         ast.Assign(
             targets=[
                 ast.Subscript(value=name_(target.id), slice=ast.Tuple(elts=[row, col], ctx=ast.Load()), ctx=ast.Store())
@@ -171,8 +177,8 @@ def expand_diag(
 
 
 def expand_tril(
-    target: ast.expr,
-    args: list[ast.expr],
+    target: ast.Name,
+    args: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     kwargs: list[ast.keyword] | None = None,
 ) -> list[ast.stmt]:

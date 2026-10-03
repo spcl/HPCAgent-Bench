@@ -2,11 +2,16 @@
 
 import ast
 import copy
+from collections.abc import Sequence
 
 from hpcagent_bench.translators.numpyto_common.ast_build import name_
 from hpcagent_bench.translators.numpyto_common.lib_nodes.call_args import axis_kwarg, const_axis, kwarg_or_pos
-from hpcagent_bench.translators.numpyto_common.lib_nodes.elementwise import args_one_name
-from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import const_, const_or_name, wrap_for_loops
+from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
+    const_,
+    const_or_name,
+    first_name,
+    wrap_for_loops,
+)
 from hpcagent_bench.translators.numpyto_common.lib_nodes.reshape import expand_reshape
 
 __all__ = [
@@ -22,8 +27,8 @@ __all__ = [
 
 
 def expand_transpose(
-    target: ast.expr,
-    args: list[ast.expr],
+    target: ast.Name,
+    args: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     kwargs: list[ast.keyword] | None = None,
 ) -> list[ast.stmt]:
@@ -33,9 +38,9 @@ def expand_transpose(
     array (already declared by the pre-pass harvester), copied element-by-element
     through the permuted index map.
     """
-    if not args_one_name(args):
+    a = first_name(args)
+    if a is None:
         raise NotImplementedError("np.transpose needs Name first arg")
-    a = args[0]
     if isinstance(target, ast.Name) and target.id == a.id:
         # ``tap = np.moveaxis(tap, -1, 1)`` -- the permutation writes back into the buffer it is
         # reading. Element by element that overwrites source cells before they are read, so the
@@ -58,15 +63,15 @@ def expand_transpose(
     src_iters = [f"__t{i}" for i in range(n_dim)]
     # Output index in source axis order: out[src_iters[perm[0]], ..., src_iters[perm[-1]]]
     # i.e. axis ``i`` of out comes from source axis perm[i].
-    out_slot_elts = [name_(src_iters[p]) for p in perm]
-    src_slot_elts = [name_(v) for v in src_iters]
+    out_slot_elts: list[ast.expr] = [name_(src_iters[p]) for p in perm]
+    src_slot_elts: list[ast.expr] = [name_(v) for v in src_iters]
     if n_dim == 1:
         out_slot = out_slot_elts[0]
         src_slot = src_slot_elts[0]
     else:
         out_slot = ast.Tuple(elts=out_slot_elts, ctx=ast.Load())
         src_slot = ast.Tuple(elts=src_slot_elts, ctx=ast.Load())
-    body = [
+    body: list[ast.stmt] = [
         ast.Assign(
             targets=[ast.Subscript(value=name_(target.id), slice=out_slot, ctx=ast.Store())],
             value=ast.Subscript(value=name_(a.id), slice=src_slot, ctx=ast.Load()),
@@ -76,17 +81,17 @@ def expand_transpose(
 
 
 def expand_swapaxes(
-    target: ast.expr,
-    args: list[ast.expr],
+    target: ast.Name,
+    args: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     kwargs: list[ast.keyword] | None = None,
 ) -> list[ast.stmt]:
     """``out = np.swapaxes(a, i, j)`` -> ``np.transpose(a, perm)`` with ``perm`` the
     identity permutation with axes ``i`` and ``j`` exchanged (constant int axes). Reuses
     the transpose loop-lowering, so no new machinery -- the ML attention Q/K axis swap."""
-    if not (args_one_name(args) and len(args) >= 3):
+    a = first_name(args)
+    if a is None or len(args) < 3:
         raise NotImplementedError("np.swapaxes needs (Name, int, int)")
-    a = args[0]
     shape = shape_table.get(a.id)
     if not shape:
         raise NotImplementedError("np.swapaxes: source shape unknown")
@@ -101,8 +106,8 @@ def expand_swapaxes(
 
 
 def expand_moveaxis(
-    target: ast.expr,
-    args: list[ast.expr],
+    target: ast.Name,
+    args: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     kwargs: list[ast.keyword] | None = None,
 ) -> list[ast.stmt]:
@@ -111,9 +116,9 @@ def expand_moveaxis(
     among the rest). Reuses the transpose loop-lowering like ``expand_swapaxes``.
     Scalar ``source``/``destination`` only (constant ints); the tuple form of the numpy
     API is rare enough in this corpus to decline rather than support here."""
-    if not args_one_name(args):
+    a = first_name(args)
+    if a is None:
         raise NotImplementedError("np.moveaxis needs a Name first arg")
-    a = args[0]
     shape = shape_table.get(a.id)
     if not shape:
         raise NotImplementedError("np.moveaxis: source shape unknown")
@@ -129,16 +134,16 @@ def expand_moveaxis(
 
 
 def expand_expand_dims(
-    target: ast.expr,
-    args: list[ast.expr],
+    target: ast.Name,
+    args: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     kwargs: list[ast.keyword] | None = None,
 ) -> list[ast.stmt]:
     """``out = np.expand_dims(a, axis)`` -> ``np.reshape(a, <a's shape with a size-1 axis
     inserted at axis>)`` -- a metadata view, lowered as the reshape flat-copy."""
-    if not args_one_name(args):
+    a = first_name(args)
+    if a is None:
         raise NotImplementedError("np.expand_dims needs a Name first arg")
-    a = args[0]
     shape = shape_table.get(a.id)
     if not shape:
         raise NotImplementedError("np.expand_dims: source shape unknown")
@@ -152,17 +157,17 @@ def expand_expand_dims(
 
 
 def expand_squeeze(
-    target: ast.expr,
-    args: list[ast.expr],
+    target: ast.Name,
+    args: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     kwargs: list[ast.keyword] | None = None,
 ) -> list[ast.stmt]:
     """``out = np.squeeze(a[, axis])`` -> ``np.reshape(a, <a's shape with the size-1
     axis / all size-1 axes dropped>)``. Without ``axis`` every unit dim is dropped; with
     ``axis`` that one axis (which must be size-1) is dropped."""
-    if not args_one_name(args):
+    a = first_name(args)
+    if a is None:
         raise NotImplementedError("np.squeeze needs a Name first arg")
-    a = args[0]
     shape = shape_table.get(a.id)
     if not shape:
         raise NotImplementedError("np.squeeze: source shape unknown")
@@ -180,8 +185,8 @@ def expand_squeeze(
 
 
 def expand_take(
-    target: ast.expr,
-    args: list[ast.expr],
+    target: ast.Name,
+    args: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     kwargs: list[ast.keyword] | None = None,
 ) -> list[ast.stmt]:
@@ -190,15 +195,17 @@ def expand_take(
     other axes copied straight through: ``out[.., t, ..] = a[.., idx[t], ..]``
     (the ML embedding lookup). Without ``axis``, the flat take needs a 1-D
     source: ``out[t] = a[idx[t]]``."""
-    if not (args_one_name(args) and len(args) >= 2 and isinstance(args[1], ast.Name)):
+    a = first_name(args)
+    idx = args[1] if len(args) >= 2 else None
+    if a is None or not isinstance(idx, ast.Name):
         raise NotImplementedError("np.take needs (Name a, Name idx)")
-    a, idx = args[0], args[1]
     a_shape, idx_shape = shape_table.get(a.id), shape_table.get(idx.id)
     if not a_shape or not idx_shape:
         raise NotImplementedError("np.take: source / index shape unknown")
     if len(idx_shape) != 1:
         raise NotImplementedError("np.take: index must be 1-D")
     axis_node = kwarg_or_pos(args, kwargs, 2, "axis")
+    axis: int | None
     if axis_node is None:
         if len(a_shape) != 1:
             raise NotImplementedError("np.take without axis needs a 1-D source")
@@ -210,11 +217,11 @@ def expand_take(
     out_shape = list(a_shape)
     out_shape[axis] = idx_shape[0]  # the gathered axis takes the index length
     iters = [f"__tk{i}" for i in range(len(out_shape))]
-    src_index = [name_(v) for v in iters]
+    src_index: list[ast.expr] = [name_(v) for v in iters]
     src_index[axis] = ast.Subscript(value=name_(idx.id), slice=name_(iters[axis]), ctx=ast.Load())
     out_slot = name_(iters[0]) if len(iters) == 1 else ast.Tuple(elts=[name_(v) for v in iters], ctx=ast.Load())
     src_slot = src_index[0] if len(src_index) == 1 else ast.Tuple(elts=src_index, ctx=ast.Load())
-    body = [
+    body: list[ast.stmt] = [
         ast.Assign(
             targets=[ast.Subscript(value=name_(target.id), slice=out_slot, ctx=ast.Store())],
             value=ast.Subscript(value=name_(a.id), slice=src_slot, ctx=ast.Load()),
@@ -224,17 +231,17 @@ def expand_take(
 
 
 def expand_flip(
-    target: ast.expr,
-    args: list[ast.expr],
+    target: ast.Name,
+    args: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     kwargs: list[ast.keyword] | None = None,
 ) -> list[ast.stmt]:
     """``out = np.flip(A[, axis])`` -> reverse-order copy. Without ``axis`` EVERY axis is
     reversed (numpy's default); with ``axis=k`` only that axis. N-D: a loop nest over the
     shape where each flipped axis index ``i`` reads ``extent - 1 - i`` from the source."""
-    if not args_one_name(args):
+    a = first_name(args)
+    if a is None:
         raise NotImplementedError("np.flip needs Name arg")
-    a = args[0]
     shape = shape_table.get(a.id)
     if not shape:
         raise NotImplementedError("np.flip: source shape unknown")
@@ -259,7 +266,7 @@ def expand_flip(
             src_elts.append(name_(iters[d]))
     out_slot = name_(iters[0]) if rank == 1 else ast.Tuple(elts=[name_(i) for i in iters], ctx=ast.Load())
     src_slot = src_elts[0] if rank == 1 else ast.Tuple(elts=src_elts, ctx=ast.Load())
-    body = [
+    body: list[ast.stmt] = [
         ast.Assign(
             targets=[ast.Subscript(value=name_(target.id), slice=out_slot, ctx=ast.Store())],
             value=ast.Subscript(value=name_(a.id), slice=src_slot, ctx=ast.Load()),
@@ -269,16 +276,16 @@ def expand_flip(
 
 
 def expand_roll(
-    target: ast.expr,
-    args: list[ast.expr],
+    target: ast.Name,
+    args: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     kwargs: list[ast.keyword] | None = None,
 ) -> list[ast.stmt]:
     """``np.roll(a, shift, axis)`` -> ``out[i] = a[(i - shift) % n]`` along the
     rolled axis (1-D, or N-D with an explicit axis)."""
-    if len(args) < 2 or not isinstance(args[0], ast.Name):
+    a = first_name(args)
+    if len(args) < 2 or a is None:
         raise NotImplementedError("np.roll needs a bare-Name array and a shift")
-    a = args[0]
     shift = args[1]
     shape = shape_table.get(a.id)
     if shape is None:
@@ -312,11 +319,11 @@ def expand_roll(
         op=ast.Mod(),
         right=copy.deepcopy(extent),
     )
-    src_elts = [src_axis if i == axis else name_(iters[i]) for i in range(n)]
-    dst_elts = [name_(it) for it in iters]
+    src_elts: list[ast.expr] = [src_axis if i == axis else name_(iters[i]) for i in range(n)]
+    dst_elts: list[ast.expr] = [name_(it) for it in iters]
     src_sl = src_elts[0] if n == 1 else ast.Tuple(elts=src_elts, ctx=ast.Load())
     dst_sl = dst_elts[0] if n == 1 else ast.Tuple(elts=dst_elts, ctx=ast.Load())
-    body = [
+    body: list[ast.stmt] = [
         ast.Assign(
             targets=[ast.Subscript(value=name_(target.id), slice=dst_sl, ctx=ast.Store())],
             value=ast.Subscript(value=name_(a.id), slice=src_sl, ctx=ast.Load()),

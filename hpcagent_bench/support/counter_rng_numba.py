@@ -24,7 +24,35 @@ from numpy.typing import NDArray
 
 from hpcagent_bench.support import counter_rng as reference
 
-__all__ = ["BLOCK", "NORMAL_BLOCK", "default_threads", "integers", "normal", "uniform"]
+__all__ = [
+    "BLOCK",
+    "CENTRE",
+    "GAMMA",
+    "MIX_SHIFT_1",
+    "MIX_SHIFT_2",
+    "MIX_SHIFT_3",
+    "MULTIPLIER_1",
+    "MULTIPLIER_2",
+    "NORMAL_BLOCK",
+    "ONE",
+    "PIECE_MASK",
+    "PIECE_SHIFT_1",
+    "PIECE_SHIFT_2",
+    "POOLS",
+    "SCALE_21",
+    "WORDS",
+    "blocks",
+    "default_threads",
+    "hashed",
+    "integers",
+    "integers_kernel",
+    "normal",
+    "normal_kernel",
+    "pool",
+    "run",
+    "uniform",
+    "uniform_kernel",
+]
 
 #: The fewest elements a thread is given: below it a call is not worth the hand-off to another thread.
 BLOCK = 1 << 19
@@ -35,11 +63,11 @@ GAMMA = np.uint64(reference.GAMMA)
 MULTIPLIER_1 = np.uint64(reference.MULTIPLIER_1)
 MULTIPLIER_2 = np.uint64(reference.MULTIPLIER_2)
 ONE = np.uint64(1)
-SHIFT_21 = np.uint64(21)
-SHIFT_27 = np.uint64(27)
-SHIFT_30 = np.uint64(30)
-SHIFT_31 = np.uint64(31)
-SHIFT_42 = np.uint64(42)
+MIX_SHIFT_1 = np.uint64(reference.MIX_SHIFT_1)
+MIX_SHIFT_2 = np.uint64(reference.MIX_SHIFT_2)
+MIX_SHIFT_3 = np.uint64(reference.MIX_SHIFT_3)
+PIECE_SHIFT_1 = np.uint64(reference.PIECE_BITS)
+PIECE_SHIFT_2 = np.uint64(2 * reference.PIECE_BITS)
 PIECE_MASK = np.uint64(reference.PIECE_MASK)
 WORDS = np.uint64(reference.NORMAL_WORDS)
 SCALE_21 = 0.5**reference.PIECE_BITS
@@ -50,11 +78,11 @@ CENTRE = reference.PIECES * (1.0 - SCALE_21) / 2.0
 def hashed(index: np.uint64, key: np.uint64) -> np.uint64:
     """splitmix64 output at ``index`` of the sequence ``key`` starts."""
     state = (index + ONE) * GAMMA + key
-    state ^= state >> SHIFT_30
+    state ^= state >> MIX_SHIFT_1
     state *= MULTIPLIER_1
-    state ^= state >> SHIFT_27
+    state ^= state >> MIX_SHIFT_2
     state *= MULTIPLIER_2
-    return state ^ (state >> SHIFT_31)
+    return state ^ (state >> MIX_SHIFT_3)
 
 
 @numba.njit(nogil=True, cache=True)
@@ -73,8 +101,8 @@ def normal_kernel(out: NDArray[np.floating[Any]], first: np.uint64, key: np.uint
         for word in range(reference.NORMAL_WORDS):
             value = hashed(base + np.uint64(word), key)
             total += value & PIECE_MASK
-            total += (value >> SHIFT_21) & PIECE_MASK
-            total += (value >> SHIFT_42) & PIECE_MASK
+            total += (value >> PIECE_SHIFT_1) & PIECE_MASK
+            total += (value >> PIECE_SHIFT_2) & PIECE_MASK
         out[position] = total * SCALE_21 - CENTRE
 
 
@@ -133,12 +161,8 @@ def uniform(
     out: np.ndarray, first: int, seed: int, stream: int, block: int = BLOCK, threads: int | None = None
 ) -> np.ndarray:
     """Fill the float32 or float64 ``out`` with the uniform draw of the flat indices ``first`` onward."""
-    wide = out.dtype == np.float64
-    arguments = (
-        np.uint64(reference.key(seed, stream)),
-        np.uint64(11 if wide else 40),
-        0.5**53 if wide else 0.5**24,
-    )
+    mantissa = reference.F64_BITS if out.dtype == np.float64 else reference.F32_BITS
+    arguments = (np.uint64(reference.key(seed, stream)), np.uint64(reference.WORD_BITS - mantissa), 0.5**mantissa)
     return run(uniform_kernel, out, first, arguments, block, threads)
 
 

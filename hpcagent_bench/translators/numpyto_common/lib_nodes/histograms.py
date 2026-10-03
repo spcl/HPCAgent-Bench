@@ -2,6 +2,7 @@
 
 import ast
 import copy
+from collections.abc import Sequence
 
 from hpcagent_bench.translators.numpyto_common.ast_build import name_, range_for, store_
 from hpcagent_bench.translators.numpyto_common.lib_nodes.call_args import kwarg_or_pos
@@ -10,6 +11,7 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
     alloc_marker,
     const_,
     const_or_name,
+    first_name,
     wrap_for_loops,
 )
 from hpcagent_bench.translators.numpyto_common.lib_nodes.scalarize import scalarize_at_iters
@@ -18,8 +20,8 @@ __all__ = ["expand_bincount", "expand_histogram"]
 
 
 def expand_bincount(
-    target: ast.expr,
-    args: list[ast.expr],
+    target: ast.Name,
+    args: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     kwargs: list[ast.keyword] | None = None,
 ) -> list[ast.stmt]:
@@ -51,7 +53,7 @@ def expand_bincount(
     out_len = ast.unparse(minlength)
     shape_table.setdefault(target.id, (out_len,))
     zero_it = "__bcz0"
-    zero_body = [
+    zero_body: list[ast.stmt] = [
         ast.Assign(
             targets=[ast.Subscript(value=name_(target.id), slice=name_(zero_it), ctx=ast.Store())], value=const_(0.0)
         )
@@ -59,7 +61,7 @@ def expand_bincount(
     acc_it = "__bc0"
     idx_k = scalarize_at_iters(idx, [name_(acc_it)], shape_table)
     val_k = const_(1.0) if weights is None else scalarize_at_iters(weights, [name_(acc_it)], shape_table)
-    acc_body = [
+    acc_body: list[ast.stmt] = [
         ast.AugAssign(
             target=ast.Subscript(value=name_(target.id), slice=idx_k, ctx=ast.Store()), op=ast.Add(), value=val_k
         )
@@ -72,8 +74,8 @@ def expand_bincount(
 
 
 def expand_histogram(
-    target: ast.expr,
-    args: list[ast.expr],
+    target: ast.Name,
+    args: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     kwargs: list[ast.keyword] | None = None,
     local_dtypes: dict[str, str] | None = None,
@@ -94,9 +96,9 @@ def expand_histogram(
     ``np.histogram(a, bins, lo, hi, weights=w)``.
     """
     kwargs = kwargs or []
-    if len(args) < 2 or not isinstance(args[0], ast.Name):
+    a = first_name(args)
+    if len(args) < 2 or a is None:
         raise NotImplementedError("np.histogram needs (a, bins[, lo, hi])")
-    a = args[0]
     bins = args[1]
     a_shape = shape_table.get(a.id)
     if not a_shape or len(a_shape) != 1:
@@ -112,7 +114,7 @@ def expand_histogram(
         if kw.arg == "range" and isinstance(kw.value, ast.Tuple) and len(kw.value.elts) == 2:
             lo, hi = kw.value.elts[0], kw.value.elts[1]
     # ``weights`` keyword.
-    weights: ast.expr | None = None
+    weights: ast.Name | None = None
     for kw in kwargs:
         if kw.arg == "weights" and isinstance(kw.value, ast.Name):
             weights = kw.value
@@ -129,7 +131,7 @@ def expand_histogram(
                 targets=[store_("__hhi")], value=ast.Subscript(value=name_(a.id), slice=const_(0), ctx=ast.Load())
             )
         )
-        scan_body = [
+        scan_body: list[ast.stmt] = [
             ast.If(
                 test=ast.Compare(
                     left=ast.Subscript(value=name_(a.id), slice=name_("__hsi"), ctx=ast.Load()),
@@ -162,7 +164,7 @@ def expand_histogram(
         out.append(range_for("__hsi", [n_ast], scan_body))
         lo, hi = name_("__hlo"), name_("__hhi")
     # Zero the target.
-    zero_body = [
+    zero_body: list[ast.stmt] = [
         ast.Assign(
             targets=[ast.Subscript(value=name_(target.id), slice=name_("__bi"), ctx=ast.Store())], value=const_(0.0)
         )

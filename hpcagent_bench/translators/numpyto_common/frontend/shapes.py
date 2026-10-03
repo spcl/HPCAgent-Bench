@@ -12,6 +12,7 @@ from hpcagent_bench.translators.numpyto_common.frontend.manifest import parse_sh
 from hpcagent_bench.translators.numpyto_common.frontend.shape_arith import literal_axis
 from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc
 from hpcagent_bench.translators.numpyto_common.lib_nodes import iter_extent_of, read_axis_keepdims
+from hpcagent_bench.translators.numpyto_common.limits import FIXPOINT_ROUNDS
 from hpcagent_bench.translators.numpyto_common.numpy_desugar import extent_tokens, name_value_pairs, shape_table
 from hpcagent_bench.translators.numpyto_common.subscripts import is_newaxis
 
@@ -43,7 +44,7 @@ __all__ = [
 ]
 
 
-def shape_from_iter_extent(node: ast.AST, known: dict[str, str], route_calls: bool = False) -> str | None:
+def shape_from_iter_extent(node: ast.expr, known: dict[str, str], route_calls: bool = False) -> str | None:
     """Fall back to ``iter_extent_of`` to derive a shape for an
     array-valued BinOp / Subscript -- needed when a returned local is
     assigned via broadcasting (e.g. ``C = X + Y[:, None] * 1j``).
@@ -95,7 +96,7 @@ RETURN_REDUCTIONS = {
 }
 
 
-def shape_from_reduction(node: ast.AST, known: dict[str, str]) -> str | None:
+def shape_from_reduction(node: ast.expr, known: dict[str, str]) -> str | None:
     """``np.<reduction>(operand, axis=k[, keepdims=True])`` -> the operand's
     broadcast shape with axis ``k`` removed (size 1 if keepdims). The operand
     may itself be a broadcast/elementwise expression (force_lj / gem:
@@ -134,7 +135,7 @@ def shape_from_reduction(node: ast.AST, known: dict[str, str]) -> str | None:
     return "(" + ", ".join(parts) + ",)" if len(parts) == 1 else "(" + ", ".join(parts) + ")"
 
 
-def shape_from_linspace_or_arange(node: ast.AST) -> str | None:
+def shape_from_linspace_or_arange(node: ast.expr) -> str | None:
     """``np.linspace(start, stop, n)`` -> ``(n,)``;
     ``np.arange(stop)`` -> ``(stop,)`` -- frontend-level shape
     harvest for return-style kernel outputs that depend on a
@@ -149,7 +150,7 @@ def shape_from_linspace_or_arange(node: ast.AST) -> str | None:
     return None
 
 
-def transpose_operands(node: ast.AST) -> tuple[ast.AST | None, ast.AST | None]:
+def transpose_operands(node: ast.expr) -> tuple[ast.expr | None, ast.expr | None]:
     """``(base, axes)`` of ``x.T`` / ``np.transpose(x[, axes])`` / ``x.transpose([axes])``; ``base`` is
     ``None`` for anything else and ``axes`` is ``None`` when the axes are reversed."""
     if isinstance(node, ast.Attribute) and node.attr == "T":
@@ -164,7 +165,7 @@ def transpose_operands(node: ast.AST) -> tuple[ast.AST | None, ast.AST | None]:
     return f.value, ast.Tuple(elts=list(node.args), ctx=ast.Load()) if node.args else None
 
 
-def base_shape_tokens(base: ast.AST, known: dict[str, str]) -> list[str] | None:
+def base_shape_tokens(base: ast.expr, known: dict[str, str]) -> list[str] | None:
     """The base array's extents as strings: from ``known`` for a Name, else :func:`iter_extent_of`."""
     if isinstance(base, ast.Name):
         sstr = known.get(base.id)
@@ -178,7 +179,7 @@ def base_shape_tokens(base: ast.AST, known: dict[str, str]) -> list[str] | None:
     return [ast.unparse(e) for e in ext] if ext else None
 
 
-def shape_from_transpose(node: ast.AST, known: dict[str, str]) -> str | None:
+def shape_from_transpose(node: ast.expr, known: dict[str, str]) -> str | None:
     """The shape of a transposed view (materialised into a fresh buffer when returned): the base
     shape reversed, or permuted by explicit literal axes."""
     base, axes_node = transpose_operands(node)
@@ -199,7 +200,7 @@ def shape_from_transpose(node: ast.AST, known: dict[str, str]) -> str | None:
     return "(" + ", ".join(new) + ",)" if len(new) == 1 else "(" + ", ".join(new) + ")"
 
 
-def shape_from_dot_shape(node: ast.AST, known: dict[str, str]) -> str | None:
+def shape_from_dot_shape(node: ast.expr, known: dict[str, str]) -> str | None:
     """Resolve constructor calls of the form ``np.zeros(C.shape, ...)``
     by looking ``C`` up in the so-far shape table."""
     if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in SHAPE_FIRST_ARG):
@@ -212,7 +213,7 @@ def shape_from_dot_shape(node: ast.AST, known: dict[str, str]) -> str | None:
     return None
 
 
-def apply_subscript_axes(dims: list[str], sub_slice: ast.AST) -> list[str]:
+def apply_subscript_axes(dims: list[str], sub_slice: ast.expr) -> list[str]:
     """Result shape of subscripting a ``dims``-shaped array with ``sub_slice``:
     a full-``Slice`` axis keeps its dimension, an integer/scalar index drops it,
     and any trailing un-indexed axes are kept. A kept dimension is passed through untouched.
@@ -285,9 +286,10 @@ def sliced_extent(dim: str, sl: ast.Slice) -> str | None:
         return dim
     step = 1
     if sl.step is not None:
-        step = const_int(sl.step)
-        if step is None or step < 1:
+        literal_step = const_int(sl.step)
+        if literal_step is None or literal_step < 1:
             return None
+        step = literal_step
     start = "0" if sl.lower is None else bound_token(sl.lower, dim)
     stop = f"{dim}" if sl.upper is None else bound_token(sl.upper, dim)
     span = stop if start == "0" else f"({stop}) - ({start})"
@@ -504,11 +506,13 @@ def fold_dtype_aliases(fn: ast.FunctionDef) -> None:
         name = stmt.targets[0].id
         return (name, value) if stores.get(name) == 1 else None
 
-    aliases = dict(b for b in (bind_of(s) for s in ast.walk(fn)) if b is not None)
+    aliases = dict(b for b in (bind_of(s) for s in ast.walk(fn) if isinstance(s, ast.stmt)) if b is not None)
     if not aliases:
         return
 
     class Fold(ast.NodeTransformer):
+        __slots__ = ()
+
         def visit_Name(self, node: ast.Name) -> ast.AST:
             value = aliases.get(node.id) if isinstance(node.ctx, ast.Load) else None
             return ast.copy_location(copy.deepcopy(value), node) if value is not None else node
@@ -549,6 +553,8 @@ def resolve_shape_reads(fn: ast.FunctionDef, arr_by: dict[str, ArrayDesc]) -> li
     tuple_locals = frozenset(n for n, v in name_value_pairs(fn) if isinstance(v, (ast.Tuple, ast.List)))
 
     class Rewriter(ast.NodeTransformer):
+        __slots__ = ("changed", "shapes", "unresolved")
+
         def __init__(self, shapes: dict[str, tuple[str, ...]]) -> None:
             self.shapes = shapes
             self.changed = False
@@ -614,7 +620,8 @@ def resolve_shape_reads(fn: ast.FunctionDef, arr_by: dict[str, ArrayDesc]) -> li
     # reads the tuple-valued name as a SINGLE dimension, so the block came back rank 1 and the wrong
     # rank was then substituted into every shape read that resolved against it.
     params = {a.arg for a in fn.args.args}
-    for unused in range(8):
+    unresolved: list[str] = []
+    for unused in range(FIXPOINT_ROUNDS):
         rw = Rewriter(shape_table(fn, seed))
         rw.visit(fn)
         ast.fix_missing_locations(fn)
@@ -623,9 +630,10 @@ def resolve_shape_reads(fn: ast.FunctionDef, arr_by: dict[str, ArrayDesc]) -> li
         folder.visit(fn)
         ast.fix_missing_locations(fn)
         fold_extent_locals(fn, arr_by)
+        unresolved = rw.unresolved
         if not rw.changed:
             break
-    return rw.unresolved
+    return unresolved
 
 
 def resolve_extent_of(
@@ -719,6 +727,8 @@ def fold_extent_locals(fn: ast.FunctionDef, arr_by: dict[str, ArrayDesc]) -> Non
         return
 
     class Folder(ast.NodeTransformer):
+        __slots__ = ()
+
         def visit_Assign(self, node: ast.Assign) -> ast.AST:
             # The defining store itself keeps its name; a dead scalar store costs nothing and
             # removing it here would race the passes that still read the definition.

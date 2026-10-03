@@ -11,6 +11,7 @@ __all__ = [
     "MUTATING_METHODS",
     "PARFOR_UNSAFE_CALLS",
     "REORDERING_OPS",
+    "WRITING_FUNCTIONS",
     "abs_offset",
     "calls_a_mutating_helper",
     "calls_a_parfor_unsafe_op",
@@ -27,6 +28,7 @@ __all__ = [
     "spell_out_reshape_augassigns",
     "spelled_out_augassign",
     "unit_step",
+    "writes_first_argument",
     "written_parameters",
 ]
 
@@ -108,7 +110,7 @@ def has_inplace_slice_self_dependency(src: str) -> bool:
     them, and the ratio picks up the thread count as a free multiplier.
     """
 
-    def contains_slice(node: ast.AST) -> bool:
+    def contains_slice(node: ast.expr) -> bool:
         return any(isinstance(child, ast.Slice) for child in ast.walk(node))
 
     for stmt in ast.walk(ast.parse(src)):
@@ -267,11 +269,16 @@ def parallelize_one_range_loop(src: str) -> str:
         (
             f
             for f in range_fors
-            if unit_step(f.iter) and loop_is_parallel_safe(f) and not calls_a_mutating_helper(f, mutates, params)
+            if isinstance(f.iter, ast.Call)
+            and unit_step(f.iter)
+            and loop_is_parallel_safe(f)
+            and not calls_a_mutating_helper(f, mutates, params)
         ),
         None,
     )
     if target is None:
+        return src
+    if not isinstance(target.iter, ast.Call):
         return src
     fn = target.iter.func
     off = abs_offset(src, fn.lineno, fn.col_offset)
@@ -280,12 +287,12 @@ def parallelize_one_range_loop(src: str) -> str:
     return src[:off] + "nb.prange" + src[off + 5 :]
 
 
-def is_reshape_call(node: ast.AST) -> bool:
+def is_reshape_call(node: ast.expr) -> bool:
     """``np.reshape(b, s)`` or ``b.reshape(s)``."""
     return isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "reshape"
 
 
-def reshape_operand(node: ast.AST, reshaped: set[str]) -> bool:
+def reshape_operand(node: ast.expr, reshaped: set[str]) -> bool:
     """True if the elementwise expression ``node`` has a reshape as one of its OPERANDS: the call
     itself or a name in ``reshaped``, reached through arithmetic only. A reshape inside a call's
     arguments (``np.sum(b.reshape(...))``) or an index is not an operand of the store."""
@@ -314,6 +321,7 @@ def spelled_out_augassign(stmt: ast.AugAssign) -> ast.Assign:
     target = stmt.target
     load = name_(target.id) if isinstance(target, ast.Name) else target
     value = ast.BinOp(left=load, op=stmt.op, right=stmt.value)
+    store: ast.expr
     if isinstance(target, ast.Name):
         store = ast.Subscript(value=name_(target.id), slice=ast.Constant(Ellipsis), ctx=ast.Store())
     else:
@@ -345,6 +353,8 @@ def spell_out_reshape_augassigns(src: str) -> str:
                 and reshape_operand(stmt.value, reshaped)
             ):
                 start = abs_offset(src, stmt.lineno, stmt.col_offset)
+                if stmt.end_lineno is None or stmt.end_col_offset is None:
+                    continue
                 end = abs_offset(src, stmt.end_lineno, stmt.end_col_offset)
                 edits.append((start, end, ast.unparse(spelled_out_augassign(stmt))))
     for start, end, text in sorted(set(edits), reverse=True):

@@ -23,6 +23,8 @@ class MembershipToComparisons(ast.NodeTransformer):
     membership test against an ARRAY is a numpy search, not a comparison chain.
     """
 
+    __slots__ = ()
+
     def visit_Compare(self, node: ast.Compare) -> ast.AST:
         self.generic_visit(node)
         if len(node.ops) != 1 or not isinstance(node.ops[0], (ast.In, ast.NotIn)):
@@ -32,7 +34,7 @@ class MembershipToComparisons(ast.NodeTransformer):
             return node
         negated = isinstance(node.ops[0], ast.NotIn)
         op: ast.cmpop = ast.NotEq() if negated else ast.Eq()
-        terms = [
+        terms: list[ast.expr] = [
             ast.Compare(left=copy.deepcopy(node.left), ops=[copy.deepcopy(op)], comparators=[copy.deepcopy(e)])
             for e in operand.elts
         ]
@@ -49,6 +51,8 @@ class UnrollConstRangeComprehension(ast.NodeTransformer):
     what lets ``np.concatenate``'s operand list resolve (unet_softmax builds its 3x3 im2col taps
     this way). Anything with a symbolic bound, a filter, or a non-range iterable is left alone.
     """
+
+    __slots__ = ()
 
     def visit_ListComp(self, node: ast.ListComp) -> ast.AST:
         self.generic_visit(node)
@@ -84,6 +88,8 @@ class DaceMapRewriter(ast.NodeTransformer):
     we only care that the iteration shape matches a Python ``range``.
     """
 
+    __slots__ = ()
+
     def visit_For(self, node: ast.For) -> ast.AST:
         self.generic_visit(node)
         # Detect ``for i, in dace.map[a:b:c]:`` (single-element tuple target,
@@ -101,11 +107,10 @@ class DaceMapRewriter(ast.NodeTransformer):
         ):
             sl = node.iter.slice
             if isinstance(sl, ast.Slice):
-                args: list[ast.AST] = [
-                    sl.lower if sl.lower is not None else ast.Constant(value=0),
-                    sl.upper,
-                ]
+                args: list[ast.expr] = [sl.lower if sl.lower is not None else ast.Constant(value=0)]
+                if sl.upper is not None:
+                    args.append(sl.upper)
                 if sl.step is not None:
                     args.append(sl.step)
-                node.iter = ast.Call(func=name_("range"), args=[a for a in args if a is not None], keywords=[])
+                node.iter = ast.Call(func=name_("range"), args=args, keywords=[])
         return node

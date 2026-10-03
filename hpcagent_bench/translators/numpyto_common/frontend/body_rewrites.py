@@ -2,13 +2,14 @@
 
 import ast
 import copy
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 
 from hpcagent_bench.translators.numpyto_common.ast_build import (
     ALL_BLOCK_FIELDS,
     const_int,
     map_blocks,
     name_,
+    name_ids,
     nested_blocks,
     numpy_attribute,
     store_,
@@ -146,7 +147,7 @@ class FoldSliceLocals:
         if folded:
             drop_dead_slice_bindings(fn, folded)
 
-    def walk_(self, body: list[ast.stmt], live: dict[str, ast.Slice]) -> set[str]:
+    def walk_(self, body: Sequence[ast.stmt], live: dict[str, ast.Slice]) -> set[str]:
         """Rewrite ``body`` in order against ``live``; return every name folded anywhere below."""
         folded: set[str] = set()
         for stmt in body:
@@ -155,6 +156,7 @@ class FoldSliceLocals:
                 isinstance(stmt, ast.Assign)
                 and len(stmt.targets) == 1
                 and isinstance(stmt.targets[0], ast.Name)
+                and isinstance(stmt.value, ast.Call)
                 and slice_call_args(stmt.value) is not None
             ):
                 binding = (stmt.targets[0].id, slice_from_call(stmt.value))
@@ -180,7 +182,7 @@ class FoldSliceLocals:
             if not isinstance(node, ast.Subscript):
                 continue
             slots = node.slice.elts if isinstance(node.slice, ast.Tuple) else [node.slice]
-            new_slots = []
+            new_slots: list[ast.expr] = []
             for slot in slots:
                 if isinstance(slot, ast.Name) and slot.id in live:
                     folded.add(slot.id)
@@ -194,7 +196,7 @@ class FoldSliceLocals:
         return folded
 
 
-def slice_bound_names(body: list[ast.stmt]) -> set[str]:
+def slice_bound_names(body: Sequence[ast.stmt]) -> set[str]:
     """Every name bound to a ``slice(...)`` anywhere inside ``body``, nested blocks included."""
     out: set[str] = set()
     for stmt in body:
@@ -209,7 +211,7 @@ def slice_bound_names(body: list[ast.stmt]) -> set[str]:
     return out
 
 
-def slice_call_args(value: ast.AST) -> list[ast.expr] | None:
+def slice_call_args(value: ast.expr) -> list[ast.expr] | None:
     """The argument list of a builtin ``slice(...)`` call, else ``None``."""
     if (
         isinstance(value, ast.Call)
@@ -248,7 +250,7 @@ def drop_dead_slice_bindings(fn: ast.FunctionDef, folds: set[str]) -> None:
     """
     live = {n.id for n in ast.walk(fn) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load) and n.id in folds}
 
-    def prune(body: list[ast.stmt]) -> list[ast.stmt]:
+    def prune(body: Sequence[ast.stmt]) -> list[ast.stmt]:
         out: list[ast.stmt] = []
         for stmt in body:
             map_blocks(stmt, prune, ALL_BLOCK_FIELDS)
@@ -279,6 +281,8 @@ class ListRepeatToFull(ast.NodeTransformer):
     pattern, not a fill, and a list the body appends to or pops from is a different data structure
     that happens to share the syntax -- neither is claimed here.
     """
+
+    __slots__ = ("mutated",)
 
     def __init__(self) -> None:
         self.mutated: frozenset[str] = frozenset()
@@ -315,7 +319,7 @@ class ListRepeatToFull(ast.NodeTransformer):
         return node
 
 
-def single_element_repeat(value: ast.expr) -> tuple[ast.expr, ast.expr] | None:
+def single_element_repeat(value: ast.expr) -> tuple[ast.Constant, ast.expr] | None:
     """``([K] | (K,)) * <extent>`` -> ``(K, <extent>)``, else ``None``. ``K`` must be a numeric
     literal: a repeat of a mutable or symbolic element is not a fill."""
     if not (isinstance(value, ast.BinOp) and isinstance(value.op, ast.Mult)):
@@ -345,6 +349,8 @@ class ArrayLiteralToFill(ast.NodeTransformer):
     makes it an index vector and so ``int64``. Anything else keeps the call and the refusal behind
     it, because a buffer typed wrong is a miscompile and a refusal is not.
     """
+
+    __slots__ = ("fn",)
 
     def __init__(self) -> None:
         self.fn: ast.FunctionDef | None = None
@@ -437,7 +443,7 @@ def is_num_literal(node: ast.expr) -> bool:
     )
 
 
-def literal_elt_dtype(elts: list[ast.expr]) -> str | None:
+def literal_elt_dtype(elts: Sequence[ast.expr]) -> str | None:
     """The buffer type an all-literal element list gives, following numpy: every element an int ->
     ``int64``, any of them a float -> ``float64``. ``None`` when an element is not a literal."""
     if all(const_int(elt) is not None for elt in elts):
@@ -617,6 +623,8 @@ class NonFiniteNormalizer(ast.NodeTransformer):
     trips the ``literal 'inf'`` guard.
     """
 
+    __slots__ = ()
+
     def visit_Attribute(self, node: ast.Attribute) -> ast.AST:
         self.generic_visit(node)
         if isinstance(node.value, ast.Name) and node.value.id == "math" and node.attr in ("inf", "nan"):
@@ -652,6 +660,8 @@ class FoldParamNoneGuard(ast.NodeTransformer):
     code -- the initializer always provides ``nrdmax_jg`` -- and folding it
     removes the otherwise-unlowerable ``None`` literal."""
 
+    __slots__ = ("params",)
+
     def __init__(self, params: Iterable[str]) -> None:
         self.params = set(params)
 
@@ -686,6 +696,8 @@ class SubstituteParamAliases(ast.NodeTransformer):
     Conservative: only fires when the RHS is a parameter, the LHS isn't itself
     a parameter, and the LHS is bound exactly once in the whole function, at any
     nesting depth (a genuine reassignment would make the substitution unsound)."""
+
+    __slots__ = ("params", "subst")
 
     def __init__(self, params: Iterable[str]) -> None:
         self.params = set(params)
@@ -759,6 +771,8 @@ class NewaxisToNone(ast.NodeTransformer):
     form. Both lower to a length-1 axis insertion at scalarisation
     time."""
 
+    __slots__ = ()
+
     def visit_Attribute(self, node: ast.Attribute) -> ast.AST:
         self.generic_visit(node)
         if is_numpy_module(node.value) and node.attr == "newaxis":
@@ -775,19 +789,16 @@ class UnpackedOpenMeshToGrid(ast.NodeTransformer):
     fails further down. Only a use naming exactly the unpacked names, in order, is rewritten.
     """
 
+    __slots__ = ("grids",)
+
     def __init__(self) -> None:
         self.grids: dict[tuple[str, ...], str] = {}
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST:
         target = node.targets[0] if len(node.targets) == 1 else None
         operands = np_ix_operands(node.value)
-        if (
-            isinstance(target, ast.Tuple)
-            and all(isinstance(e, ast.Name) for e in target.elts)
-            and operands is not None
-            and len(operands) == len(target.elts)
-        ):
-            names = tuple(e.id for e in target.elts)
+        names = name_ids(target.elts) if isinstance(target, ast.Tuple) else None
+        if names is not None and operands is not None and len(operands) == len(names):
             grid = self.grids.setdefault(names, "_".join(names))
             return ast.copy_location(ast.Assign(targets=[store_(grid)], value=node.value), node)
         return self.generic_visit(node)
@@ -795,14 +806,15 @@ class UnpackedOpenMeshToGrid(ast.NodeTransformer):
     def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
         self.generic_visit(node)
         index = node.slice
-        if isinstance(index, ast.Tuple) and all(isinstance(e, ast.Name) for e in index.elts):
-            grid = self.grids.get(tuple(e.id for e in index.elts))
+        names = name_ids(index.elts) if isinstance(index, ast.Tuple) else None
+        if names is not None:
+            grid = self.grids.get(names)
             if grid is not None:
                 node.slice = name_(grid)
         return node
 
 
-def np_ix_operands(value: ast.AST) -> list[ast.expr] | None:
+def np_ix_operands(value: ast.expr) -> list[ast.expr] | None:
     """The index arrays of an ``np.ix_(a, b, c)`` call, else ``None``."""
     if (
         isinstance(value, ast.Call)
@@ -833,6 +845,8 @@ class FoldTupleLocals(ast.NodeTransformer):
     the rule -- an element naming a loop VARIABLE has a different value each iteration, so the
     definition and its uses are not interchangeable and the local stays.
     """
+
+    __slots__ = ("params", "subst")
 
     def __init__(self, params: Iterable[str]) -> None:
         self.params = set(params)

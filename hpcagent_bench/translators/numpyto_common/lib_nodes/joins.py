@@ -1,6 +1,7 @@
 """Joining arrays: hstack, concatenate, stack."""
 
 import ast
+from collections.abc import Sequence
 
 from hpcagent_bench.translators.numpyto_common.ast_build import name_, range_for
 from hpcagent_bench.translators.numpyto_common.lib_nodes.call_args import stack_axis
@@ -13,10 +14,17 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
     wrap_for_loops,
 )
 
-__all__ = ["expand_concatenate", "expand_hstack", "expand_stack"]
+__all__ = [
+    "expand_concatenate",
+    "expand_hstack",
+    "expand_stack",
+    "named_operands",
+]
 
 
-def expand_hstack(target: ast.expr, args: list[ast.expr], shape_table: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
+def expand_hstack(
+    target: ast.Name, args: Sequence[ast.expr], shape_table: dict[str, tuple[str, ...]]
+) -> list[ast.stmt]:
     """``out = np.hstack((a, b, c, ...))`` -- horizontal concatenation. 2-D
     operands ``(N, K_i)`` -> ``(N, sum K_i)``, each copied into ``out`` at its
     column offset. 1-D operands ``(K_i,)`` -> ``(sum K_i,)``, flat concat.
@@ -43,16 +51,16 @@ def expand_hstack(target: ast.expr, args: list[ast.expr], shape_table: dict[str,
     if rank not in (1, 2):
         raise NotImplementedError("np.hstack: only rank-1 / rank-2 supported")
     out: list[ast.stmt] = []
+    col_index: ast.expr
     if rank == 1:
         offset_tok = "0"
         for nm, s in zip(names, shapes):
             k_ast = const_or_name(s[0])
-            col_index: ast.expr
             if offset_tok == "0":
                 col_index = name_("__hsj")
             else:
                 col_index = ast.BinOp(left=name_("__hsj"), op=ast.Add(), right=const_or_name(offset_tok))
-            body = [
+            body: list[ast.stmt] = [
                 ast.Assign(
                     targets=[ast.Subscript(value=name_(target.id), slice=col_index, ctx=ast.Store())],
                     value=ast.Subscript(value=name_(nm), slice=name_("__hsj"), ctx=ast.Load()),
@@ -66,7 +74,6 @@ def expand_hstack(target: ast.expr, args: list[ast.expr], shape_table: dict[str,
     offset_tok = "0"
     for nm, s in zip(names, shapes):
         k_ast = const_or_name(s[1])
-        col_index: ast.expr
         if offset_tok == "0":
             col_index = name_("__hsj")
         else:
@@ -93,9 +100,17 @@ def expand_hstack(target: ast.expr, args: list[ast.expr], shape_table: dict[str,
     return out
 
 
+def named_operands(names: Sequence[str | None], op: str) -> list[str]:
+    """``names`` with every entry present; an operand that is not a bare Name cannot be joined."""
+    present = [nm for nm in names if nm is not None]
+    if len(present) != len(names):
+        raise NotImplementedError(f"{op}: operand must be a Name")
+    return present
+
+
 def expand_concatenate(
-    target: ast.expr,
-    args: list[ast.expr],
+    target: ast.Name,
+    args: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     kwargs: list[ast.keyword] | None = None,
     local_dtypes: dict[str, str] | None = None,
@@ -115,13 +130,12 @@ def expand_concatenate(
         )
         args = [ast.Tuple(elts=list(elts), ctx=ast.Load())] + list(args[1:])
     names, shapes, axis = concat_operands_axis(args, kwargs, shape_table)
-    if any(nm is None for nm in names):  # materialisation above could not spill this operand
-        raise NotImplementedError("np.concatenate: operand must be a Name")
+    operand_names = named_operands(names, "np.concatenate")  # materialisation above spilled the rest
     rank = len(shapes[0])
     iters = [make_iter_name("__cc", d) for d in range(rank)]
     out: list[ast.stmt] = []
     offset_tok = "0"
-    for nm, s in zip(names, shapes):
+    for nm, s in zip(operand_names, shapes):
         tgt_elts: list[ast.expr] = []
         for d in range(rank):
             if d == axis and offset_tok != "0":
@@ -130,7 +144,7 @@ def expand_concatenate(
                 tgt_elts.append(name_(iters[d]))
         tgt_slot = tgt_elts[0] if rank == 1 else ast.Tuple(elts=tgt_elts, ctx=ast.Load())
         src_slot = name_(iters[0]) if rank == 1 else ast.Tuple(elts=[name_(i) for i in iters], ctx=ast.Load())
-        body = [
+        body: list[ast.stmt] = [
             ast.Assign(
                 targets=[ast.Subscript(value=name_(target.id), slice=tgt_slot, ctx=ast.Store())],
                 value=ast.Subscript(value=name_(nm), slice=src_slot, ctx=ast.Load()),
@@ -142,8 +156,8 @@ def expand_concatenate(
 
 
 def expand_stack(
-    target: ast.expr,
-    args: list[ast.expr],
+    target: ast.Name,
+    args: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     kwargs: list[ast.keyword] | None = None,
 ) -> list[ast.stmt]:
@@ -157,7 +171,7 @@ def expand_stack(
     axis = stack_axis(args, kwargs, rank)
     iters = [make_iter_name("__st", d) for d in range(rank)]
     out: list[ast.stmt] = []
-    for s_idx, (nm, s) in enumerate(zip(names, shapes)):
+    for s_idx, (nm, s) in enumerate(zip(named_operands(names, "np.stack"), shapes)):
         # A FRESH source slot per operand, never one hoisted out of this loop. Sharing a single
         # Subscript slice object across the operands made every copy loop read the SAME nodes, and
         # the Fortran emitter -- which must uniquify DO variables, Fortran having no block scope --
@@ -167,10 +181,10 @@ def expand_stack(
         # stale element copied over the whole slice. C never saw it -- its per-loop ``__st0`` is
         # block-scoped, so the alias is harmless there and only Fortran came out wrong.
         src_slot = name_(iters[0]) if rank == 1 else ast.Tuple(elts=[name_(i) for i in iters], ctx=ast.Load())
-        tgt_elts = [name_(iters[d]) for d in range(rank)]
+        tgt_elts: list[ast.expr] = [name_(iters[d]) for d in range(rank)]
         tgt_elts.insert(axis, const_(s_idx))
         tgt_slot = tgt_elts[0] if len(tgt_elts) == 1 else ast.Tuple(elts=tgt_elts, ctx=ast.Load())
-        body = [
+        body: list[ast.stmt] = [
             ast.Assign(
                 targets=[ast.Subscript(value=name_(target.id), slice=tgt_slot, ctx=ast.Store())],
                 value=ast.Subscript(value=name_(nm), slice=src_slot, ctx=ast.Load()),

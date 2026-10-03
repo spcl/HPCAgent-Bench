@@ -2,16 +2,17 @@
 
 import ast
 import copy
+from collections.abc import Sequence
 
 from hpcagent_bench.translators.numpyto_common.ast_build import name_, range_for, store_
 from hpcagent_bench.translators.numpyto_common.lib_nodes.call_args import read_axis_keepdims
 from hpcagent_bench.translators.numpyto_common.lib_nodes.contractions import OP_SPILL_TEMP
-from hpcagent_bench.translators.numpyto_common.lib_nodes.elementwise import args_one_name
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
     attr_call,
     const_,
     const_or_name,
+    first_name,
     make_iter_name,
     reads_complex,
     wrap_for_loops,
@@ -37,6 +38,7 @@ __all__ = [
     "materialize_solve_operands",
     "publish_solve_workspace",
     "reset_temp_counters",
+    "shifted",
     "solve_operand_dtype",
 ]
 
@@ -73,8 +75,8 @@ def classify_norm_ord(node: ast.expr | None) -> str | None:
 
 
 def expand_linalg_norm(
-    target: ast.expr,
-    args: list[ast.expr],
+    target: ast.Name,
+    args: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     kwargs: list[ast.keyword] | None = None,
 ) -> list[ast.stmt]:
@@ -114,7 +116,7 @@ def expand_linalg_norm(
             iters = [make_iter_name("__nr", i) for i in range(len(extent))]
             sa = scalarize_at_iters(a, [name_(it) for it in iters], shape_table)
             acc_init = ast.Assign(targets=[store_(target.id)], value=const_(0.0))
-            inner = [
+            inner: list[ast.stmt] = [
                 ast.AugAssign(target=store_(target.id), op=ast.Add(), value=ast.BinOp(left=sa, op=ast.Mult(), right=sa))
             ]
             loops = wrap_for_loops(iters, extent, inner)
@@ -157,10 +159,11 @@ def expand_linalg_norm(
         sa = scalarize_at_iters(a, [name_(it)], shape_table)
         abs_sa = ast.Call(func=name_("abs"), args=[sa], keywords=[])
         acc_init = ast.Assign(targets=[store_(target.id)], value=const_(0.0))
+        inner_stmts: list[ast.stmt]
         if kind == "l1":
-            inner = [ast.AugAssign(target=store_(target.id), op=ast.Add(), value=abs_sa)]
+            inner_stmts = [ast.AugAssign(target=store_(target.id), op=ast.Add(), value=abs_sa)]
         else:  # inf: running max of |v| (|v| >= 0, so 0 is a safe max identity)
-            inner = [
+            inner_stmts = [
                 ast.Assign(
                     targets=[store_(target.id)],
                     value=ast.IfExp(
@@ -170,7 +173,7 @@ def expand_linalg_norm(
                     ),
                 )
             ]
-        loops = wrap_for_loops([it], extent, inner)
+        loops = wrap_for_loops([it], extent, inner_stmts)
         return [acc_init, *loops]
     if len(extent) == 2 and isinstance(a, ast.Name):
         # Matrix ord=1 / ord=inf: accumulate each line's abs-sum into a scalar
@@ -225,8 +228,8 @@ def guarded_div(num: ast.expr, denom: ast.expr) -> ast.expr:
 
 
 def expand_lstsq(
-    target: ast.expr,
-    args: list[ast.expr],
+    target: ast.Name,
+    args: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     kwargs: list[ast.keyword] | None = None,
     fresh_local_allocs: dict[str, tuple[str, ...]] | None = None,
@@ -316,7 +319,7 @@ def expand_lstsq(
     #       factor = A[r,p] / A[p,p]
     #       for c in p+1..M: A[r,c] -= factor * A[p,c]
     #       b[r] -= factor * b[p]
-    inner_c = [
+    inner_c: list[ast.stmt] = [
         ast.AugAssign(
             target=ast.Subscript(
                 value=name_(a_name), slice=ast.Tuple(elts=[r_name, c_name], ctx=ast.Load()), ctx=ast.Store()
@@ -343,7 +346,7 @@ def expand_lstsq(
     #     y[r] = sum / A[r,r]
     y_c = ast.Subscript(value=name_(target.id), slice=c_name, ctx=ast.Load())
     y_r = ast.Subscript(value=name_(target.id), slice=r_name, ctx=ast.Store())
-    bs_inner = [
+    bs_inner: list[ast.stmt] = [
         ast.AugAssign(target=store_(sum_v), op=ast.Sub(), value=ast.BinOp(left=a_rcol, op=ast.Mult(), right=y_c))
     ]
     bs_inner_for = range_for(c_iter, [ast.BinOp(left=r_name, op=ast.Add(), right=const_(1)), a_size], bs_inner)
@@ -395,7 +398,7 @@ def lstsq_array_base(node: ast.expr) -> tuple[str | None, list[ast.expr | None] 
     if isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name):
         sl = node.slice
         slots = sl.elts if isinstance(sl, ast.Tuple) else [sl]
-        bases = []
+        bases: list[ast.expr | None] = []
         for s in slots:
             if isinstance(s, ast.Slice):
                 bases.append(s.lower if s.lower is not None else const_(0))
@@ -405,36 +408,31 @@ def lstsq_array_base(node: ast.expr) -> tuple[str | None, list[ast.expr | None] 
     return None, None
 
 
+def shifted(index: ast.expr, base: ast.expr | None) -> ast.expr:
+    """``index + base``; ``index`` itself when ``base`` is absent (a concrete index axis) or the literal 0."""
+    if base is None or (isinstance(base, ast.Constant) and base.value == 0):
+        return index
+    return ast.BinOp(left=index, op=ast.Add(), right=base)
+
+
 def lstsq_index2d(name: str, i: ast.expr, j: ast.expr, base: list[ast.expr | None] | None) -> ast.Subscript:
     """Build ``name[i, j]`` (or ``name[i + base0, j + base1]`` when
     a non-zero base is present)."""
     if base is not None:
-        slot_i = (
-            i
-            if (isinstance(base[0], ast.Constant) and base[0].value == 0)
-            else ast.BinOp(left=i, op=ast.Add(), right=base[0])
-        )
-        slot_j = (
-            j
-            if (isinstance(base[1], ast.Constant) and base[1].value == 0)
-            else ast.BinOp(left=j, op=ast.Add(), right=base[1])
-        )
+        slot_i, slot_j = shifted(i, base[0]), shifted(j, base[1])
     else:
         slot_i, slot_j = i, j
     return ast.Subscript(value=name_(name), slice=ast.Tuple(elts=[slot_i, slot_j], ctx=ast.Load()), ctx=ast.Load())
 
 
 def lstsq_index1d(name: str, i: ast.expr, base: list[ast.expr | None] | None) -> ast.Subscript:
-    if base is not None and not (isinstance(base[0], ast.Constant) and base[0].value == 0):
-        slot = ast.BinOp(left=i, op=ast.Add(), right=base[0])
-    else:
-        slot = i
+    slot = shifted(i, base[0]) if base is not None else i
     return ast.Subscript(value=name_(name), slice=slot, ctx=ast.Load())
 
 
 def expand_cholesky(
-    target: ast.expr,
-    args: list[ast.expr],
+    target: ast.Name,
+    args: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     local_dtypes: dict[str, str] | None = None,
 ) -> list[ast.stmt]:
@@ -454,9 +452,9 @@ def expand_cholesky(
                     s -= L[i, k] * conj(L[j, k])
                 L[i, j] = s / L[j, j]
     """
-    if not args_one_name(args):
+    a = first_name(args)
+    if a is None:
         raise NotImplementedError("np.linalg.cholesky needs Name arg")
-    a = args[0]
     a_shape = shape_table.get(a.id)
     if not a_shape or len(a_shape) != 2:
         raise NotImplementedError("cholesky: only 2-D arg")
@@ -467,7 +465,7 @@ def expand_cholesky(
             local_dtypes.setdefault("__s", a_dt)
     n = a_shape[0]
     n_ast = const_or_name(n)
-    inner_k = [
+    inner_k: list[ast.stmt] = [
         ast.AugAssign(
             target=store_("__s"),
             op=ast.Sub(),
@@ -600,8 +598,8 @@ def expand_cholesky(
 
 
 def expand_linalg_solve(
-    target: ast.expr,
-    args: list[ast.expr],
+    target: ast.Name,
+    args: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     kwargs: list[ast.keyword] | None = None,
     local_dtypes: dict[str, str] | None = None,
@@ -614,9 +612,9 @@ def expand_linalg_solve(
     be 2-D and b 1-D or 2-D; x is written into target with the same shape as b.
     """
     out, args = materialize_solve_operands(args, shape_table, local_dtypes, fresh_local_allocs)
-    if len(args) < 2 or not isinstance(args[0], ast.Name) or not isinstance(args[1], ast.Name):
+    a = first_name(args)
+    if len(args) < 2 or a is None or not isinstance(args[1], ast.Name):
         raise NotImplementedError("np.linalg.solve needs Name args")
-    a = args[0]
     b = args[1]
     a_shape = shape_table.get(a.id)
     b_shape = shape_table.get(b.id)
@@ -693,7 +691,7 @@ def expand_linalg_solve(
         ],
     )
     # Swap row p and row k in __sol_aw.
-    swap_aw = [
+    swap_aw: list[ast.stmt] = [
         ast.Assign(targets=[store_("__sol_tmp")], value=aw(K, C)),
         ast.Assign(targets=[aw_store(K, C)], value=aw(P, C)),
         ast.Assign(targets=[aw_store(P, C)], value=T),
@@ -702,7 +700,7 @@ def expand_linalg_solve(
     swap_b_loop = rhs.swap_rows(K, P, C, T)
     # Divide pivot row by aw[k, k]. Stash divisor.
     pivot_div_stash = ast.Assign(targets=[store_("__sol_factor")], value=aw(K, K))
-    pivot_div_aw_body = [
+    pivot_div_aw_body: list[ast.stmt] = [
         ast.Assign(targets=[aw_store(K, C)], value=ast.BinOp(left=aw(K, C), op=ast.Div(), right=F)),
     ]
     pivot_div_aw = range_for("__sol_c", [n_ast], pivot_div_aw_body)
@@ -737,7 +735,7 @@ def expand_linalg_solve(
 
 
 def materialize_solve_operands(
-    args: list[ast.expr],
+    args: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     local_dtypes: dict[str, str] | None,
     fresh_local_allocs: dict[str, tuple[str, ...]] | None,
@@ -822,6 +820,8 @@ class SolveRhs:
 
     def load(self, r: ast.expr, c: ast.expr | None = None) -> ast.Subscript:
         if self.is_2d:
+            if c is None:
+                raise ValueError("a 2-D right-hand side needs a column index")
             return ast.Subscript(
                 value=name_(self.target_id), slice=ast.Tuple(elts=[r, c], ctx=ast.Load()), ctx=ast.Load()
             )
@@ -829,6 +829,8 @@ class SolveRhs:
 
     def store(self, r: ast.expr, c: ast.expr | None = None) -> ast.Subscript:
         if self.is_2d:
+            if c is None:
+                raise ValueError("a 2-D right-hand side needs a column index")
             return ast.Subscript(
                 value=name_(self.target_id), slice=ast.Tuple(elts=[r, c], ctx=ast.Load()), ctx=ast.Store()
             )
@@ -936,8 +938,8 @@ def reset_temp_counters() -> None:
 
 
 def expand_linalg_inv(
-    target: ast.expr,
-    args: list[ast.expr],
+    target: ast.Name,
+    args: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     kwargs: list[ast.keyword] | None = None,
     local_dtypes: dict[str, str] | None = None,
@@ -956,9 +958,9 @@ def expand_linalg_inv(
     Conservative: ``A`` must be a Name with a known square 2-D shape. A is
     preserved -- the elimination runs on a copy, ``__inv_aw``.
     """
-    if not args or not isinstance(args[0], ast.Name):
+    a = first_name(args)
+    if a is None:
         raise NotImplementedError("np.linalg.inv needs Name first arg")
-    a = args[0]
     shape = shape_table.get(a.id)
     if not shape or len(shape) != 2:
         raise NotImplementedError("np.linalg.inv: only 2-D square input supported")
@@ -978,8 +980,8 @@ def expand_linalg_inv(
             local_dtypes[aw_name] = a_dt
             local_dtypes[target.id] = a_dt
             # Scalar swap / pivot temps carry A's dtype too.
-            for nm in ("__inv_tmp", "__inv_factor"):
-                local_dtypes.setdefault(nm, a_dt)
+            for scratch in ("__inv_tmp", "__inv_factor"):
+                local_dtypes.setdefault(scratch, a_dt)
     if fresh_local_allocs is not None:
         fresh_local_allocs[aw_name] = (n, n)
     out.append(
@@ -1073,7 +1075,7 @@ def expand_linalg_inv(
         ],
     )
     # Swap row p and row k in both aw and target.
-    swap_body = [
+    swap_body: list[ast.stmt] = [
         ast.Assign(targets=[store_("__inv_tmp")], value=aw(nm("k"), nm("c"))),
         ast.Assign(targets=[aw_store(nm("k"), nm("c"))], value=aw(nm("p"), nm("c"))),
         ast.Assign(targets=[aw_store(nm("p"), nm("c"))], value=nm("tmp")),
@@ -1085,7 +1087,7 @@ def expand_linalg_inv(
     # Divide pivot row by aw[k, k] -- stash it first since the loop overwrites
     # aw[k, k] itself before every use.
     pivot_div_stash = ast.Assign(targets=[store_("__inv_factor")], value=aw(nm("k"), nm("k")))
-    pivot_div_body_safe = [
+    pivot_div_body_safe: list[ast.stmt] = [
         ast.Assign(
             targets=[tgt_store(nm("k"), nm("c"))],
             value=ast.BinOp(left=tgt(nm("k"), nm("c")), op=ast.Div(), right=nm("factor")),
@@ -1101,7 +1103,7 @@ def expand_linalg_inv(
     ]
     # Eliminate other rows.
     elim_factor = ast.Assign(targets=[store_("__inv_factor")], value=aw(nm("r"), nm("k")))
-    elim_body_inner = [
+    elim_body_inner: list[ast.stmt] = [
         ast.Assign(
             targets=[tgt_store(nm("r"), nm("c"))],
             value=ast.BinOp(
@@ -1138,8 +1140,8 @@ def expand_linalg_inv(
 
 
 def expand_linalg_det(
-    target: ast.expr,
-    args: list[ast.expr],
+    target: ast.Name,
+    args: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     kwargs: list[ast.keyword] | None = None,
     local_dtypes: dict[str, str] | None = None,
@@ -1155,11 +1157,11 @@ def expand_linalg_det(
     a Name with a known square 2-D shape; ``A`` is preserved -- the
     elimination runs on the copy ``__det_aw``.
     """
-    if not args or not isinstance(args[0], ast.Name):
+    a = first_name(args)
+    if a is None:
         raise NotImplementedError("np.linalg.det needs Name first arg")
     if not isinstance(target, ast.Name):
         raise NotImplementedError("np.linalg.det: scalar Name target expected")
-    a = args[0]
     shape = shape_table.get(a.id)
     if not shape or len(shape) != 2:
         raise NotImplementedError("np.linalg.det: only 2-D square input supported")
@@ -1242,7 +1244,7 @@ def expand_linalg_det(
         ],
     )
     # Swap rows p and k (when distinct) and flip the running sign.
-    swap_body = [
+    swap_body: list[ast.stmt] = [
         ast.Assign(targets=[store_("__det_tmp")], value=aw(K, C)),
         ast.Assign(targets=[aw_store(K, C)], value=aw(P, C)),
         ast.Assign(targets=[aw_store(P, C)], value=T),

@@ -2,6 +2,7 @@
 
 import ast
 import copy
+from collections.abc import Sequence
 
 from hpcagent_bench.translators.numpyto_common.ast_build import name_
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of
@@ -45,7 +46,9 @@ class EllipsisExpander(ast.NodeTransformer):
     ChainedSubscriptFlattener; a base that is an EXPRESSION is sized through
     :func:`iter_extent_of`, which is all the rank costs."""
 
-    def __init__(self, array_shapes: dict[str, list[str]]) -> None:
+    __slots__ = ("array_shapes",)
+
+    def __init__(self, array_shapes: dict[str, tuple[str, ...]]) -> None:
         self.array_shapes = array_shapes
 
     def base_rank(self, base: ast.expr) -> int | None:
@@ -98,7 +101,9 @@ class PadImplicitTrailingSlices(ast.NodeTransformer):
     symbol). Advanced indexing (``x[src]`` with ``src`` an index array, the
     fancy-gather path) is left untouched so it is not mis-expanded."""
 
-    def __init__(self, array_shapes: dict[str, list[str]]) -> None:
+    __slots__ = ("array_shapes",)
+
+    def __init__(self, array_shapes: dict[str, tuple[str, ...]]) -> None:
         self.array_shapes = array_shapes
 
     def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
@@ -137,7 +142,7 @@ class PadImplicitTrailingSlices(ast.NodeTransformer):
         return ast.copy_location(node, node)
 
 
-def fold_subarray_aliases(tree: ast.AST, array_shapes: dict[str, list[str]]) -> None:
+def fold_subarray_aliases(tree: ast.AST, array_shapes: dict[str, tuple[str, ...]]) -> None:
     """Fold a partial / trailing-slice sub-array alias into ONE flat multi-dim index.
 
     ``low = A[i, j]`` (or ``A[i, j, :]``) on a 3-D array is a sub-array; each use
@@ -175,7 +180,7 @@ def fold_subarray_aliases(tree: ast.AST, array_shapes: dict[str, list[str]]) -> 
     ast.fix_missing_locations(tree)
 
 
-def subarray_alias_candidates(tree: ast.AST, array_shapes: dict[str, list[str]]) -> dict[str, tuple]:
+def subarray_alias_candidates(tree: ast.AST, array_shapes: dict[str, tuple[str, ...]]) -> dict[str, tuple]:
     """``{alias: (array, lead indices)}`` for each ``alias = A[i, j(, :...)]``: plain scalar leading
     indices (trailing ``:`` axes dropped -- they are what ``alias[k]`` fills) that leave at least one
     trailing source axis (a genuine sub-array, not a full element index)."""
@@ -221,11 +226,14 @@ def aliases_with_rebound_base(tree: ast.AST, aliases: dict[str, tuple]) -> set[s
             for cb in child_blocks_of(s):
                 scan(cb)
 
-    scan(tree.body if isinstance(tree, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Module)) else [tree])
+    if isinstance(tree, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Module)):
+        scan(tree.body)
+    elif isinstance(tree, ast.stmt):
+        scan([tree])
     return unsafe
 
 
-def names_stored_in(stmts: list[ast.stmt]) -> set[str]:
+def names_stored_in(stmts: Sequence[ast.stmt]) -> set[str]:
     """Names rebound anywhere in ``stmts``: Store-context Names and for-loop targets."""
     out: set = set()
     for s in stmts:
@@ -240,6 +248,8 @@ def names_stored_in(stmts: list[ast.stmt]) -> set[str]:
 class AliasFold(ast.NodeTransformer):
     """Fold each alias in ``good`` into its uses (``visit_Subscript``, per subclass) and drop the
     now-unused alias assignment."""
+
+    __slots__ = ("good",)
 
     def __init__(self, good: dict[str, tuple]) -> None:
         self.good = good
@@ -279,11 +289,11 @@ def child_blocks_of(stmt: ast.stmt):
             yield h.body
 
 
-def names_written_in(stmts: list[ast.stmt]) -> OrderedSet:
+def names_written_in(stmts: Sequence[ast.stmt]) -> OrderedSet[str]:
     """Names written in ``stmts``: a rebind, a loop target, or the base of a
     subscript STORE (``x[...] = ...`` writes THROUGH ``x``, which a plain
     Name-rebind scan misses)."""
-    out: OrderedSet = OrderedSet()
+    out: OrderedSet[str] = OrderedSet()
     for s in stmts:
         for n in ast.walk(s):
             if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store):
@@ -297,12 +307,12 @@ def names_written_in(stmts: list[ast.stmt]) -> OrderedSet:
 
 def reject_view_writes_between_bind_and_use(
     tree: ast.AST, candidates: dict[str, tuple[str, list[ast.expr]]]
-) -> OrderedSet:
+) -> OrderedSet[str]:
     """Names among ``candidates`` whose base array, or a name their captured bounds
     read, is written in a statement able to run AFTER the alias's own ``Assign``
     (same block, recursively) -- folding such an alias would read the value AFTER
     that write at the use site, not the one the view captured at bind time."""
-    free_names: dict[str, OrderedSet] = {}
+    free_names: dict[str, OrderedSet[str]] = {}
     for name, (base_name, elts) in candidates.items():
         names = OrderedSet((base_name,))
         for e in elts:
@@ -313,7 +323,7 @@ def reject_view_writes_between_bind_and_use(
 
     unsafe: OrderedSet = OrderedSet()
 
-    def scan(stmts: list[ast.stmt]) -> None:
+    def scan(stmts: Sequence[ast.stmt]) -> None:
         for i, s in enumerate(stmts):
             if (
                 isinstance(s, ast.Assign)
@@ -328,7 +338,10 @@ def reject_view_writes_between_bind_and_use(
             for cb in child_blocks_of(s):
                 scan(cb)
 
-    scan(tree.body if isinstance(tree, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Module)) else [tree])
+    if isinstance(tree, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Module)):
+        scan(tree.body)
+    elif isinstance(tree, ast.stmt):
+        scan([tree])
     return unsafe
 
 
@@ -348,7 +361,7 @@ def flatten_view_chains(good: dict[str, tuple[str, list[ast.expr]]]) -> dict[str
     """
     resolved: dict[str, tuple[str, list[ast.expr]]] = {}
 
-    def resolve_(name: str, seen: OrderedSet) -> tuple[str, list[ast.expr]]:
+    def resolve_(name: str, seen: OrderedSet[str]) -> tuple[str, list[ast.expr]]:
         if name in resolved:
             return resolved[name]
         base_name, elts = good[name]
@@ -362,7 +375,9 @@ def flatten_view_chains(good: dict[str, tuple[str, list[ast.expr]]]) -> dict[str
             ]
             composed = [copy.deepcopy(e) for e in root_elts]
             for pos, u in zip(kept_positions, padded):
-                composed[pos] = compose_kept_axis(root_elts[pos], u)
+                root_axis = root_elts[pos]
+                if isinstance(root_axis, ast.Slice):
+                    composed[pos] = compose_kept_axis(root_axis, u)
             result = (root_base, composed)
         else:
             result = (base_name, elts)
@@ -374,7 +389,9 @@ def flatten_view_chains(good: dict[str, tuple[str, list[ast.expr]]]) -> dict[str
     return resolved
 
 
-def is_rank_preserving_slice_view(node: ast.Subscript, array_shapes: dict[str, list[str]], target_rank: int) -> bool:
+def is_rank_preserving_slice_view(
+    node: ast.Subscript, array_shapes: dict[str, tuple[str, ...]], target_rank: int
+) -> bool:
     """Whether ``node`` is a basic slice of a known array that KEEPS every axis.
 
     ``canvas[:, :, p:p + oh, p:p + ow]`` bound to a name and then used bare has no fold to resolve
@@ -393,7 +410,7 @@ def is_rank_preserving_slice_view(node: ast.Subscript, array_shapes: dict[str, l
     return all(isinstance(e, ast.Slice) and not is_fancy_dim(e, array_shapes) for e in elts)
 
 
-def fold_slice_view_aliases(tree: ast.AST, array_shapes: dict[str, list[str]]) -> OrderedSet:
+def fold_slice_view_aliases(tree: ast.AST, array_shapes: dict[str, tuple[str, ...]]) -> OrderedSet[str]:
     """Fold a name bound to a partial/strided VIEW of an array into every subscripted use.
 
     ``x_g = padded[:, g*in_per_group:(g+1)*in_per_group]`` on a 4-D ``padded`` binds a
@@ -491,7 +508,9 @@ class SliceViewFold(AliasFold):
         return ast.copy_location(ast.Subscript(value=name_(base_name), slice=sl, ctx=node.ctx), node)
 
 
-def view_alias_candidates(tree: ast.AST, array_shapes: dict[str, list[str]]) -> dict[str, tuple[str, list[ast.expr]]]:
+def view_alias_candidates(
+    tree: ast.AST, array_shapes: dict[str, tuple[str, ...]]
+) -> dict[str, tuple[str, list[ast.expr]]]:
     """``{alias: (base, view entries padded to the base rank)}`` for each ``alias = base[...]`` that
     is a basic-indexed VIEW: at least one Slice (a fully scalar index is an element read), no index
     array, no negative step (the offset algebra assumes a positive stride)."""
@@ -517,7 +536,7 @@ def view_alias_candidates(tree: ast.AST, array_shapes: dict[str, list[str]]) -> 
 
 
 def composable_view_aliases(
-    tree: ast.AST, aliases: dict[str, tuple[str, list[ast.expr]]], array_shapes: dict[str, list[str]]
+    tree: ast.AST, aliases: dict[str, tuple[str, list[ast.expr]]], array_shapes: dict[str, tuple[str, ...]]
 ) -> dict[str, tuple[str, list[ast.expr]]]:
     """The aliases assigned exactly once whose every use is a BASIC-indexed subscript READ within the
     view's kept rank (never bare, never gathered through an index array, never written through)."""

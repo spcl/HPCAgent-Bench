@@ -36,7 +36,9 @@ def fft_axes(fattr: str, call: ast.Call, rank: int):
         if isinstance(axes, (ast.Tuple, ast.List)) and all(
             isinstance(e, ast.Constant) and isinstance(e.value, int) for e in axes.elts
         ):
-            return [e.value % rank for e in axes.elts], inverse
+            return [
+                e.value % rank for e in axes.elts if isinstance(e, ast.Constant) and isinstance(e.value, int)
+            ], inverse
         return None, inverse
     return None, inverse
 
@@ -102,6 +104,8 @@ class FftInline(ast.NodeTransformer):
     argument, or a transform nested in a larger expression or a ``return``, is bound to a temp first;
     a non-constant axis spec leaves the call verbatim. Not applied to :data:`NATIVE_FFT_BACKENDS`."""
 
+    __slots__ = ("_ctr", "array_dtypes", "changed", "ranks")
+
     def __init__(self, ranks: dict[str, int], array_dtypes: dict[str, str]) -> None:
         self.ranks = ranks
         self.array_dtypes = array_dtypes
@@ -112,8 +116,9 @@ class FftInline(ast.NodeTransformer):
         self.generic_visit(node)
         if len(node.targets) != 1:
             return node
-        fattr = numpy_submodule_attr(node.value, "fft")
-        if fattr is None or not node.value.args:
+        call = node.value
+        fattr = numpy_submodule_attr(call, "fft")
+        if fattr is None or not isinstance(call, ast.Call) or not call.args:
             return self.hoist_operand_transform(node)
         tgt = node.targets[0]
         if isinstance(tgt, ast.Name):
@@ -128,11 +133,11 @@ class FftInline(ast.NodeTransformer):
             tname, alloc = tgt.value.id, False
         else:
             return node
-        arg = node.value.args[0]
+        arg = call.args[0]
         rank = expr_rank(arg, self.ranks)
         if rank is None or rank < 1:
             return node
-        taxes, inverse = fft_axes(fattr, node.value, rank)
+        taxes, inverse = fft_axes(fattr, call, rank)
         if not taxes:
             return node
         pre: list[ast.stmt] = []
@@ -196,6 +201,8 @@ class FftInline(ast.NodeTransformer):
 
 class SubstituteFftCalls(ast.NodeTransformer):
     """Replace every ``np.fft.*`` call ``visitor`` accepts with the Name it returns."""
+
+    __slots__ = ("visitor",)
 
     def __init__(self, visitor: Callable[[ast.Call], ast.Name | None]) -> None:
         self.visitor = visitor

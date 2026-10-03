@@ -31,9 +31,17 @@ __all__ = [
     "DispatchKey",
     "EntryExtents",
     "add",
+    "assign",
+    "bcsr_entries",
     "bcsr_spmv",
+    "bind_entry",
+    "coo_entries",
+    "csc_entries",
+    "csr_entries",
     "densify",
+    "dia_entries",
     "dia_spmv",
+    "ell_entries",
     "entry_loops",
     "entry_matmat",
     "entry_matvec_t",
@@ -57,14 +65,6 @@ __all__ = [
     "subscript_",
     "zero_fill",
     "zero_init_loop",
-    "assign",
-    "bind_entry",
-    "bcsr_entries",
-    "coo_entries",
-    "csc_entries",
-    "csr_entries",
-    "dia_entries",
-    "ell_entries",
 ]
 
 
@@ -254,7 +254,7 @@ def expand_matmul_csr_dense_vec(
     # ``range(A_indptr[i], A_indptr[i + 1])``
     inner_start = subscript_(indptr, name_("__i"))
     inner_stop = subscript_(indptr, ast.BinOp(left=name_("__i"), op=ast.Add(), right=const_(1)))
-    inner_body = [
+    inner_body: list[ast.stmt] = [
         ast.AugAssign(
             target=yi,
             op=ast.Add(),
@@ -324,7 +324,7 @@ def expand_matmul_jds_dense_vec(
     jd_next = subscript_(jd_ptr, ast.BinOp(left=name_("__jd"), op=ast.Add(), right=const_(1)))
     jd_len = ast.BinOp(left=jd_next, op=ast.Sub(), right=subscript_(jd_ptr, name_("__jd")))
     inner_idx = ast.BinOp(left=subscript_(jd_ptr, name_("__jd")), op=ast.Add(), right=name_("__r"))
-    inner_body = [
+    inner_body: list[ast.stmt] = [
         ast.AugAssign(
             target=subscript_(y_perm, name_("__r"), ctx=ast.Store()),
             op=ast.Add(),
@@ -471,7 +471,7 @@ def expand_matmul_csc_dense_vec(
     data = lhs_buffers["data"]
     init_loop = zero_init_loop(target.id, "__i", n_rows_sym)
     scatter_target = subscript_(target.id, subscript_(indices, name_("__k")), ctx=ast.Store())
-    inner_body = [
+    inner_body: list[ast.stmt] = [
         ast.AugAssign(
             target=scatter_target,
             op=ast.Add(),
@@ -513,7 +513,7 @@ def expand_matmul_coo_dense_vec(
     data = lhs_buffers["data"]
     init_loop = zero_init_loop(target.id, "__i", n_rows_sym)
     scatter_target = subscript_(target.id, subscript_(row, name_("__k")), ctx=ast.Store())
-    nnz_body = [
+    nnz_body: list[ast.stmt] = [
         ast.AugAssign(
             target=scatter_target,
             op=ast.Add(),
@@ -1194,7 +1194,7 @@ def entry_matmat(
         op=ast.Add(),
         value=mul(name_(ENTRY_VALUE), subscript_(rhs_name, name_(ENTRY_COL), name_("__c"))),
     )
-    inner = [range_for("__c", [expr_of(out_cols)], [accum])]
+    inner: list[ast.stmt] = [range_for("__c", [expr_of(out_cols)], [accum])]
     return [zero_fill(target_id, ext.rows, out_cols), *entry_loops(fmt, bufs, ext, inner)]
 
 

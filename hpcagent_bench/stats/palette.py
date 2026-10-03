@@ -45,9 +45,10 @@ from collections.abc import Iterable
 
 import matplotlib
 import matplotlib.colors
+from matplotlib.markers import MarkerStyle
 
 from hpcagent_bench import packets
-from hpcagent_bench.study_tags import Registry, canonical, order, registry, slot
+from hpcagent_bench.study_tags import Marker, Registry, canonical, order, registry, slot
 
 __all__ = [
     "CONTROL_MARKER",
@@ -70,6 +71,7 @@ __all__ = [
     "in_order",
     "lighten",
     "marker",
+    "marker_style",
     "markers",
     "model_color",
     "model_markers",
@@ -246,7 +248,7 @@ CONTROL_MARKER: str = "o"
 
 
 @functools.lru_cache(maxsize=1, typed=True)
-def shape_table() -> dict[tuple[str, str], object]:
+def shape_table() -> dict[tuple[str, str], Marker]:
     """``(kind, key) -> shape`` for every registered treatment: harnesses, then packets, each taking
     the next free shape of the registry's pool in file order, or its packet entry's own ``marker:``.
     The control's circle is never handed out. Registering a treatment therefore gives it a shape of
@@ -267,17 +269,19 @@ def shape_table() -> dict[tuple[str, str], object]:
     return {entity: table[entity] for entity in entities}
 
 
-def fixed_packet_markers(reg: Registry) -> dict[tuple[str, str], object]:
+def fixed_packet_markers(reg: Registry) -> dict[tuple[str, str], Marker]:
     """``("packets", key) -> shape`` for every packet whose registry entry names its own ``marker:``;
     raises when two share one or one takes the control's :data:`CONTROL_MARKER`."""
-    fixed = {("packets", key): d.marker for key, d in reg.packet_defs.items() if key and d.marker}
+    fixed: dict[tuple[str, str], Marker] = {
+        ("packets", key): d.marker for key, d in reg.packet_defs.items() if key and d.marker
+    }
     taken = list(fixed.values())
     if CONTROL_MARKER in taken or len(set(taken)) != len(taken):
         raise ValueError(f"registry: packet markers must be distinct and never {CONTROL_MARKER!r}: {fixed}")
     return fixed
 
 
-def treatment_shape(kind: str, name: str) -> object:
+def treatment_shape(kind: str, name: str) -> Marker:
     """``name``'s registered shape among ``kind`` (packets, harnesses); an unregistered one warns and
     takes a stable pool slot by CRC."""
     resolved = canonical(kind, name)
@@ -289,7 +293,15 @@ def treatment_shape(kind: str, name: str) -> object:
     return pool[zlib.crc32(str(name).encode()) % len(pool)]
 
 
-def packet_marker(packet: str) -> object:
+def marker_style(marker: Marker) -> MarkerStyle:
+    """A registry marker as the object matplotlib draws: a code, or a ``(sides, style, angle)`` polygon."""
+    if isinstance(marker, str):
+        return MarkerStyle(marker)
+    # The stubs type the angle as int; matplotlib accepts any float degrees.
+    return MarkerStyle(marker)  # pyright: ignore[reportArgumentType]
+
+
+def packet_marker(packet: str) -> Marker:
     """The one SHAPE ``packet`` wears (:func:`shape_table`): its lead part's, or the control's hollow
     circle for no packet. Colour is spent on the model (:func:`model_color`), so shape alone tells
     treatments apart, and no two registered treatments share one."""
@@ -299,7 +311,7 @@ def packet_marker(packet: str) -> object:
     return treatment_shape("packets", packets.lead(parts))
 
 
-def harness_marker(harness: str) -> object:
+def harness_marker(harness: str) -> Marker:
     """The one SHAPE an agent HARNESS wears (:func:`shape_table`), from the same pool as the packets,
     so a harness and a packet in one figure never share a shape."""
     return treatment_shape("harnesses", harness)

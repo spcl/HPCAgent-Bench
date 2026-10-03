@@ -2,8 +2,16 @@
 
 import ast
 import copy
+from collections.abc import Sequence
 
-from hpcagent_bench.translators.numpyto_common.ast_build import SubstituteLoads, expr_of, name_, nested_blocks, store_
+from hpcagent_bench.translators.numpyto_common.ast_build import (
+    SubstituteLoads,
+    expr_of,
+    name_,
+    name_ids,
+    nested_blocks,
+    store_,
+)
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module, numpy_call_attr
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import AUG_OP_SRC, RewritePass
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.hoist import HoistForm, ValueHoist
@@ -27,7 +35,7 @@ __all__ = [
 ]
 
 
-def mgrid_inline_stmts(tnames: list[str], slices: list[ast.AST]) -> list[ast.stmt] | None:
+def mgrid_inline_stmts(tnames: list[str], slices: list[ast.expr]) -> list[ast.stmt] | None:
     """``i, j = np.mgrid[a0:b0, a1:b1]`` -> per-axis ``arange`` reshaped onto its axis and
     broadcast-added to full-shape int zeros (numba and pythran lack ``np.mgrid``).
     ``None`` when a slice has a step or an open upper bound."""
@@ -53,7 +61,7 @@ def mgrid_inline_stmts(tnames: list[str], slices: list[ast.AST]) -> list[ast.stm
 class MgridInline(RewritePass):
     """Replace ``i, j = np.mgrid[s0, s1]`` with explicit ``arange`` broadcasts."""
 
-    __slots__ = ("changed",)
+    __slots__ = ()
 
     def visit_Assign(self, node: ast.Assign):
         self.generic_visit(node)
@@ -67,11 +75,11 @@ class MgridInline(RewritePass):
             return node
         if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Tuple):
             return node
-        elts = node.targets[0].elts
-        if not all(isinstance(e, ast.Name) for e in elts):
+        target_names = name_ids(node.targets[0].elts)
+        if target_names is None:
             return node
         slices = val.slice.elts if isinstance(val.slice, ast.Tuple) else [val.slice]
-        stmts = mgrid_inline_stmts([e.id for e in elts], slices)
+        stmts = mgrid_inline_stmts(list(target_names), slices)
         if stmts is None:
             return node
         self.changed = True
@@ -79,7 +87,7 @@ class MgridInline(RewritePass):
 
 
 def fancy_gather_lines(
-    arr: str, elts: list[ast.expr], elt_ranks: list[int | None], driver_rank: int, p: str
+    arr: str, elts: Sequence[ast.expr], elt_ranks: list[int | None], driver_rank: int, p: str
 ) -> list[str]:
     """Source lines gathering ``arr[elts]`` point-wise into ``<p>_o``, one loop per driver axis."""
     iters = [f"{p}_i{k}" for k in range(driver_rank)]
@@ -113,7 +121,7 @@ def fancy_gather_lines(
     return lines
 
 
-def hoist_fancy_gather(node: ast.AST, hoist: ValueHoist) -> ast.expr | None:
+def hoist_fancy_gather(node: ast.expr, hoist: ValueHoist) -> ast.expr | None:
     """A point-wise fancy gather ``A[e0, e1, ...]`` (one entry per axis, >=1 index array) -> the
     temp its gather loop fills. numba supports a single advanced index but not this multi-index form.
 
@@ -153,13 +161,15 @@ class ScalarizeMask(ast.NodeTransformer):
     """Index every full-rank array reference by the loop iterators: ``X[<mask>]`` -> ``X[i, j]``
     and a bare full-rank ``Z`` -> ``Z[i, j]``. Lower-rank operands and scalars broadcast as is."""
 
-    def __init__(self, maskdump: str, idx_slice: ast.AST, arank: int, ranks: dict[str, int]) -> None:
+    __slots__ = ("arank", "idx_slice", "maskdump", "ranks")
+
+    def __init__(self, maskdump: str, idx_slice: ast.expr, arank: int, ranks: dict[str, int]) -> None:
         self.maskdump = maskdump
         self.idx_slice = idx_slice
         self.arank = arank
         self.ranks = ranks
 
-    def sub_(self, value_node: ast.AST) -> ast.Subscript:
+    def sub_(self, value_node: ast.expr) -> ast.Subscript:
         return ast.Subscript(value=value_node, slice=copy.deepcopy(self.idx_slice), ctx=ast.Load())
 
     def visit_Subscript(self, node: ast.Subscript):
@@ -183,6 +193,8 @@ class MaskedAssignToLoop(ast.NodeTransformer):
 
     The mask is >=2-D and of the target's rank: a non-numeric-kind Name, or an inline
     Compare / ``& | ^ ~`` expression. An integer index Name is a fancy index and stays verbatim."""
+
+    __slots__ = ("_ctr", "changed", "dtypes", "ranks")
 
     def __init__(self, ranks: dict[str, int], dtypes: dict[str, str]) -> None:
         self.ranks = ranks
@@ -219,7 +231,10 @@ class MaskedAssignToLoop(ast.NodeTransformer):
         p = f"__mi{self._ctr}"
         self._ctr += 1
         idx_vars = [f"{p}_{k}" for k in range(arank)]
-        idx_slice = ast.parse(f"_x[{', '.join(idx_vars)}]", mode="eval").body.slice
+        probe = ast.parse(f"_x[{', '.join(idx_vars)}]", mode="eval").body
+        if not isinstance(probe, ast.Subscript):
+            raise TypeError("the index probe parses as a subscript")
+        idx_slice = probe.slice
         scal = ScalarizeMask(ast.dump(idx), idx_slice, arank, self.ranks)
         mask_s = ast.unparse(scal.visit(copy.deepcopy(idx)))
         rhs_s = ast.unparse(ScalarizeMask(ast.dump(idx), idx_slice, arank, self.ranks).visit(copy.deepcopy(node.value)))
@@ -238,6 +253,8 @@ class DecomposeRollSlice(ast.NodeTransformer):
     the native ``expand_roll`` needs bare Names. A sliced self-roll then reads a snapshot, so the
     in-place write is safe. Native-only: numpy and the Python backends roll a slice verbatim."""
 
+    __slots__ = ("_n", "changed")
+
     def __init__(self) -> None:
         self.changed = False
         self._n = 0
@@ -246,7 +263,7 @@ class DecomposeRollSlice(ast.NodeTransformer):
         self._n += 1
         return f"__roll_{self._n}"
 
-    def visit_Assign(self, node: ast.Assign) -> ast.AST:
+    def visit_Assign(self, node: ast.Assign) -> ast.AST | list[ast.stmt]:
         self.generic_visit(node)
         v = node.value
         # ``expand_roll`` reads a positional shift from args[1]; a keyword ``shift=`` roll is
@@ -282,9 +299,9 @@ class DecomposeRollSlice(ast.NodeTransformer):
         return out
 
 
-def ix_vectors(node: ast.AST) -> list[ast.expr] | None:
+def ix_vectors(node: ast.expr) -> list[ast.expr] | None:
     """``np.ix_(i, j, k)`` call -> its index vectors, else None."""
-    if numpy_call_attr(node) == "ix_" and node.args and not node.keywords:
+    if isinstance(node, ast.Call) and numpy_call_attr(node) == "ix_" and node.args and not node.keywords:
         return list(node.args)
     return None
 
@@ -341,13 +358,15 @@ class FancySliceStoreToLoop(ast.NodeTransformer):
     axis before it.
     """
 
+    __slots__ = ("_ctr", "changed", "dtypes", "ranks")
+
     def __init__(self, ranks: dict[str, int], dtypes: dict[str, str]) -> None:
         self.ranks = ranks
         self.dtypes = dtypes
         self.changed = False
         self._ctr = 0
 
-    def carrier(self, lead: list[ast.expr]) -> int | None:
+    def carrier(self, lead: Sequence[ast.expr]) -> int | None:
         """Index of the one lead position holding a rank-1 index array, if the shape fits."""
         if not any(isinstance(e, ast.Slice) for e in lead):
             return None
@@ -364,7 +383,9 @@ class FancySliceStoreToLoop(ast.NodeTransformer):
             found = k
         return found
 
-    def lower_(self, node: ast.stmt, target: ast.expr, value: ast.expr, op: str) -> ast.AST:
+    def lower_(
+        self, node: ast.Assign | ast.AugAssign, target: ast.expr, value: ast.expr, op: str
+    ) -> ast.stmt | list[ast.stmt]:
         if not (isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name)):
             return node
         lead = list(target.slice.elts) if isinstance(target.slice, ast.Tuple) else [target.slice]
@@ -385,13 +406,13 @@ class FancySliceStoreToLoop(ast.NodeTransformer):
         self.changed = True
         return [ast.copy_location(st, node) for st in ast.parse("\n".join(lines)).body]
 
-    def visit_Assign(self, node: ast.Assign) -> ast.AST:
+    def visit_Assign(self, node: ast.Assign) -> ast.AST | list[ast.stmt]:
         self.generic_visit(node)
         if len(node.targets) != 1:
             return node
         return self.lower_(node, node.targets[0], node.value, "=")
 
-    def visit_AugAssign(self, node: ast.AugAssign) -> ast.AST:
+    def visit_AugAssign(self, node: ast.AugAssign) -> ast.AST | list[ast.stmt]:
         self.generic_visit(node)
         op = AUG_OP_SRC.get(type(node.op))
         return node if op is None else self.lower_(node, node.target, node.value, op)
@@ -407,6 +428,8 @@ class IxWriteToLoop(ast.NodeTransformer):
     assumes no duplicates within a vector: a repeated value accumulates here where numpy's
     ``+=`` applies the update once."""
 
+    __slots__ = ("_ctr", "changed", "dtypes", "fn", "ranks", "unpacked")
+
     def __init__(self, ranks: dict[str, int], dtypes: dict[str, str], fn: ast.AST) -> None:
         self.ranks = ranks
         self.dtypes = dtypes
@@ -415,7 +438,7 @@ class IxWriteToLoop(ast.NodeTransformer):
         self.fn = fn
         self.unpacked: dict[int, list[ast.expr]] | None = None
 
-    def lower_(self, node: ast.stmt, target: ast.expr, op: str) -> ast.AST:
+    def lower_(self, node: ast.Assign | ast.AugAssign, target: ast.expr, op: str) -> ast.stmt | list[ast.stmt]:
         if not (isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name)):
             return node
         # Built lazily, after every earlier pass has rewritten the whole body.
@@ -452,13 +475,13 @@ class IxWriteToLoop(ast.NodeTransformer):
         self.changed = True
         return [ast.copy_location(s, node) for s in ast.parse("\n".join(lines)).body]
 
-    def visit_Assign(self, node: ast.Assign) -> ast.AST:
+    def visit_Assign(self, node: ast.Assign) -> ast.AST | list[ast.stmt]:
         self.generic_visit(node)
         if len(node.targets) != 1:
             return node
         return self.lower_(node, node.targets[0], "=")
 
-    def visit_AugAssign(self, node: ast.AugAssign) -> ast.AST:
+    def visit_AugAssign(self, node: ast.AugAssign) -> ast.AST | list[ast.stmt]:
         self.generic_visit(node)
         op = AUG_OP_SRC.get(type(node.op))
         return node if op is None else self.lower_(node, node.target, op)

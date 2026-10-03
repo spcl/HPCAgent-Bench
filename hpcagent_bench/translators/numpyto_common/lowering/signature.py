@@ -161,7 +161,7 @@ def integer_candidates(kir: KernelIR) -> tuple[dict[str, bool], dict[str, list[a
 
 
 def provably_integer(
-    node: ast.AST, assumed: set[str], local_dtypes: dict[str, str], array_dtypes: dict[str, str]
+    node: ast.expr, assumed: set[str], local_dtypes: dict[str, str], array_dtypes: dict[str, str]
 ) -> bool:
     """``node`` is an INTEGER value given the names ``assumed`` integer: int literals, reads of
     integer arrays, integer-preserving operators over integers, ``int(x)`` / ``len(x)``."""
@@ -208,8 +208,12 @@ def integer_bindings(fn: ast.FunctionDef, name: str) -> list[ast.expr]:
         elif isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name) and node.target.id == name:
             bound.append(ast.BinOp(left=name_(name), op=node.op, right=node.value))
         elif isinstance(node, ast.For) and isinstance(node.target, ast.Name) and node.target.id == name:
-            is_range = isinstance(node.iter, ast.Call) and isinstance(node.iter.func, ast.Name)
-            bound.append(ast.Constant(value=0) if is_range and node.iter.func.id == "range" else node.iter)
+            is_range = (
+                isinstance(node.iter, ast.Call)
+                and isinstance(node.iter.func, ast.Name)
+                and node.iter.func.id == "range"
+            )
+            bound.append(ast.Constant(value=0) if is_range else node.iter)
     return bound
 
 
@@ -545,6 +549,8 @@ def fold_shape_aliases(kir: KernelIR) -> None:
         return
 
     class Fold(ast.NodeTransformer):
+        __slots__ = ()
+
         def visit_Assign(self, node: ast.Assign):
             if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and node.targets[0].id in aliases:
                 return None  # drop the now-dead defining stmt
@@ -713,7 +719,7 @@ def promote_shape_symbols_to_params(kir: KernelIR) -> None:
             kir.input_args.insert(0, sym)
 
 
-def target_names(tgt: ast.AST) -> list[str]:
+def target_names(tgt: ast.expr) -> list[str]:
     """Every bare Name id appearing as an assignment target, including inside a Tuple / Starred
     unpack (``i_coord, j_coord = np.mgrid[...]``) and a Subscript base (``a[i] = ...``)."""
     if isinstance(tgt, ast.Name):

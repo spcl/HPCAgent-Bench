@@ -18,6 +18,7 @@ import pathlib
 __all__ = [
     "FORTRAN_SYMBOL_LIMIT",
     "FPTYPE",
+    "SYMBOL_DIGEST_BYTES",
     "SYMBOL_DIGEST_CHARS",
     "entry_symbol",
     "fptype_tag",
@@ -75,6 +76,9 @@ FORTRAN_SYMBOL_LIMIT = 63
 #: one anyway. Shorter reads better but stops being safe to assert on.
 SYMBOL_DIGEST_CHARS = 8
 
+#: Bytes of the blake2s digest a symbol is hashed to before it is cut to :data:`SYMBOL_DIGEST_CHARS` hex characters.
+SYMBOL_DIGEST_BYTES: int = 8
+
 
 def entry_symbol(base: str) -> str:
     """The exported C symbol for a ``native_base`` stem: lowercased, then folded to Fortran's
@@ -104,5 +108,5 @@ def entry_symbol(base: str) -> str:
     symbol = base.lower()
     if len(symbol) <= FORTRAN_SYMBOL_LIMIT:
         return symbol
-    digest = hashlib.blake2s(symbol.encode("utf-8"), digest_size=8).hexdigest()[:SYMBOL_DIGEST_CHARS]
+    digest = hashlib.blake2s(symbol.encode("utf-8"), digest_size=SYMBOL_DIGEST_BYTES).hexdigest()[:SYMBOL_DIGEST_CHARS]
     return f"{symbol[: FORTRAN_SYMBOL_LIMIT - SYMBOL_DIGEST_CHARS - 1]}_{digest}"

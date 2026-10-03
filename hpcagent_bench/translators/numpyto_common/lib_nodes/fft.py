@@ -2,6 +2,8 @@
 
 import ast
 import copy
+import math
+from collections.abc import Sequence
 
 from hpcagent_bench.translators.numpyto_common.ast_build import name_
 from hpcagent_bench.translators.numpyto_common.lib_nodes.call_args import kwarg_or_pos
@@ -42,7 +44,7 @@ FFT_LIBRARY_MARKER = "__fft_1d_library"
 FFTN_LIBRARY_MARKER = "__fftn_library"
 
 
-def read_fft_norm(args: list[ast.expr], kwargs: list[ast.keyword] | None) -> str:
+def read_fft_norm(args: Sequence[ast.expr], kwargs: list[ast.keyword] | None) -> str:
     """``norm`` of an ``np.fft.*`` call -- ``'backward'`` (default)/``'forward'``/
     ``'ortho'`` -- from keyword ``norm=`` or positional slot 3. Missing /
     non-literal / ``None`` falls back to ``'backward'`` (unnormalized forward,
@@ -53,7 +55,7 @@ def read_fft_norm(args: list[ast.expr], kwargs: list[ast.keyword] | None) -> str
     return "backward"
 
 
-def read_fft_axes(args: list[ast.expr], kwargs: list[ast.keyword] | None, rank: int, is_n: bool) -> list[int]:
+def read_fft_axes(args: Sequence[ast.expr], kwargs: list[ast.keyword] | None, rank: int, is_n: bool) -> list[int]:
     """Resolve the transform axes for an ``np.fft.*`` call. ``fft``/``ifft`` take
     a single ``axis`` (default last); ``fftn``/``ifftn`` take an ``axes``
     sequence (default all axes); ``fft2``/``ifft2`` are ``fftn`` over the last
@@ -64,7 +66,6 @@ def read_fft_axes(args: list[ast.expr], kwargs: list[ast.keyword] | None, rank: 
         # reshapes through a ``.ndim``-conditional tuple that never folds, so the spilled operand is
         # recorded rank 1 and ``axes=(0, 1, 2)`` indexed past the iterator list. Declining is the
         # sizer's contract.
-        a = int(a)
         pos = a + rank if a < 0 else a
         if not 0 <= pos < rank:
             raise NotImplementedError(f"np.fft.*: axis {a} is outside the operand rank {rank}")
@@ -73,10 +74,10 @@ def read_fft_axes(args: list[ast.expr], kwargs: list[ast.keyword] | None, rank: 
     if is_n:
         spec = kwarg_or_pos(args, kwargs, 2, "axes")
         if isinstance(spec, (ast.Tuple, ast.List)):
-            return [norm_(e.value) for e in spec.elts if isinstance(e, ast.Constant)]
+            return [norm_(e.value) for e in spec.elts if isinstance(e, ast.Constant) and isinstance(e.value, int)]
         return list(range(rank))  # default: every axis
     spec = kwarg_or_pos(args, kwargs, 2, "axis")
-    if isinstance(spec, ast.Constant):
+    if isinstance(spec, ast.Constant) and isinstance(spec.value, int):
         return [norm_(spec.value)]
     return [rank - 1]  # default: last axis
 
@@ -88,7 +89,7 @@ def read_fft_axes(args: list[ast.expr], kwargs: list[ast.keyword] | None, rank: 
 NORM_KIND = {"backward": 0, "forward": 1, "ortho": 2}
 
 
-def expand_dft_1d_library(target: ast.expr, src: ast.expr, n: str, inverse: bool, norm: str) -> list[ast.stmt]:
+def expand_dft_1d_library(target: ast.Name, src: ast.Name, n: str, inverse: bool, norm: str) -> list[ast.stmt]:
     """Whole-array 1-D DFT via :data:`FFT_LIBRARY_MARKER` -- O(N log N). One call does the WHOLE transform
     (norm included -- each backend's marker renderer applies it, see FFT_LIBRARY_MARKER's own
     docstring), so this returns a single statement, never wrapped in a per-element loop."""
@@ -107,7 +108,7 @@ def expand_dft_1d_library(target: ast.expr, src: ast.expr, n: str, inverse: bool
 
 
 def expand_dftn_library(
-    target: ast.expr, src: ast.expr, shape: tuple[str, ...], taxes: list[int], inverse: bool, norm: str
+    target: ast.Name, src: ast.Name, shape: tuple[str, ...], taxes: list[int], inverse: bool, norm: str
 ) -> list[ast.stmt]:
     """N-D (or batched 1-D) DFT via :data:`FFTN_LIBRARY_MARKER` -- O(P log P) per transform. The
     transform axes must be one contiguous run touching either end of the shape; the caller checks."""
@@ -129,8 +130,8 @@ def expand_dftn_library(
 
 
 def expand_dftn(
-    target: ast.expr,
-    args: list[ast.expr],
+    target: ast.Name,
+    args: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     inverse: bool,
     is_n: bool = True,
@@ -162,9 +163,9 @@ def expand_dftn(
     by output iterator ``o``. The inverse uses ``+2j*pi`` and divides by
     ``prod(N_t)``. Both operands are complex; the phase numerator is float
     (``2.0 * pi * ...``) so ``/ N_t`` is real division, not C truncation."""
-    if not args or not isinstance(args[0], ast.Name):
+    src = args[0] if args else None
+    if not isinstance(src, ast.Name):
         raise NotImplementedError("np.fft.* needs a bare Name operand")
-    src = args[0]
     shape = shape_table.get(src.id)
     if not shape:
         raise NotImplementedError("np.fft.*: source shape unknown")
@@ -181,15 +182,15 @@ def expand_dftn(
     o_iters = [f"__fk{i}" for i in range(rank)]
     n_iters = {t: f"__fn{t}" for t in taxes}
     o_slot = name_(o_iters[0]) if rank == 1 else ast.Tuple(elts=[name_(o) for o in o_iters], ctx=ast.Load())
-    src_idx = [(name_(n_iters[d]) if d in taxes else name_(o_iters[d])) for d in range(rank)]
+    src_idx: list[ast.expr] = [(name_(n_iters[d]) if d in taxes else name_(o_iters[d])) for d in range(rank)]
     src_slot = src_idx[0] if rank == 1 else ast.Tuple(elts=src_idx, ctx=ast.Load())
     out_k = ast.Subscript(value=name_(target.id), slice=o_slot, ctx=ast.Store())
     out_k_load = ast.Subscript(value=name_(target.id), slice=o_slot, ctx=ast.Load())
     # Emit pi as a numeric literal (backend-agnostic): this expander runs after
     # MathRewriter, so an ``np.pi`` Attribute would reach the emitter unlowered.
-    pi = const_(3.141592653589793)
+    pi = const_(math.pi)
     # total phase = sum_{t in T} (2.0 * pi * o_t * n_t) / N_t
-    phase = None
+    phase: ast.expr | None = None
     for t in taxes:
         num = ast.BinOp(
             left=ast.BinOp(
@@ -200,6 +201,8 @@ def expand_dftn(
         )
         term = ast.BinOp(left=num, op=ast.Div(), right=const_or_name(shape[t]))
         phase = term if phase is None else ast.BinOp(left=phase, op=ast.Add(), right=term)
+    if phase is None:
+        raise NotImplementedError("np.fft.*: no transform axes")
     sign = const_(1j) if inverse else const_(-1j)
     # Emit the already-lowered bare ``exp`` (not ``np.exp``): this expander runs
     # after ``MathRewriter`` (np.exp -> exp), so ``np.exp`` here would reach the
@@ -208,15 +211,14 @@ def expand_dftn(
     src_n = ast.Subscript(value=name_(src.id), slice=src_slot, ctx=ast.Load())
     acc = ast.AugAssign(target=out_k, op=ast.Add(), value=ast.BinOp(left=src_n, op=ast.Mult(), right=twiddle))
     inner = wrap_for_loops([n_iters[t] for t in taxes], [shape[t] for t in taxes], [acc])
-    body: list[ast.stmt] = [ast.Assign(targets=[out_k], value=const_(0j))] + inner
+    body: list[ast.stmt] = [ast.Assign(targets=[out_k], value=const_(0j)), *inner]
     # numpy ``norm``: 'backward' (default) puts ``1/prod(N)`` on the INVERSE; 'forward' puts it on
     # the FORWARD; 'ortho' puts ``1/sqrt(prod(N))`` on BOTH. Divide when this direction carries it.
     norm = read_fft_norm(args, kwargs)
     if norm == "ortho" or ((norm == "forward") != inverse):
-        denom = None
-        for t in taxes:
-            ext = const_or_name(shape[t])
-            denom = ext if denom is None else ast.BinOp(left=denom, op=ast.Mult(), right=ext)
+        denom = const_or_name(shape[taxes[0]])
+        for t in taxes[1:]:
+            denom = ast.BinOp(left=denom, op=ast.Mult(), right=const_or_name(shape[t]))
         if norm == "ortho":
             # ``prod(N_t)`` is an integer extent product; ``sqrt`` of an integer is
             # rejected by gfortran (must be REAL or COMPLEX). C/C++ promote silently;
@@ -229,8 +231,8 @@ def expand_dftn(
 
 
 def expand_fftn(
-    target: ast.expr,
-    args: list[ast.expr],
+    target: ast.Name,
+    args: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     kwargs: list[ast.keyword] | None = None,
     library: bool = False,
@@ -242,8 +244,8 @@ def expand_fftn(
 
 
 def expand_ifftn(
-    target: ast.expr,
-    args: list[ast.expr],
+    target: ast.Name,
+    args: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     kwargs: list[ast.keyword] | None = None,
     library: bool = False,
@@ -255,8 +257,8 @@ def expand_ifftn(
 
 
 def expand_fft(
-    target: ast.expr,
-    args: list[ast.expr],
+    target: ast.Name,
+    args: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     kwargs: list[ast.keyword] | None = None,
     library: bool = False,
@@ -269,8 +271,8 @@ def expand_fft(
 
 
 def expand_ifft(
-    target: ast.expr,
-    args: list[ast.expr],
+    target: ast.Name,
+    args: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     kwargs: list[ast.keyword] | None = None,
     library: bool = False,
@@ -282,8 +284,8 @@ def expand_ifft(
 
 
 def expand_fftfreq(
-    target: ast.expr,
-    args: list[ast.expr],
+    target: ast.Name,
+    args: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     kwargs: list[ast.keyword] | None = None,
 ) -> list[ast.stmt]:
@@ -308,7 +310,7 @@ def expand_fftfreq(
         orelse=ast.BinOp(left=name_(it), op=ast.Sub(), right=copy.deepcopy(n)),
     )
     denom = ast.BinOp(left=copy.deepcopy(n), op=ast.Mult(), right=copy.deepcopy(d_node))
-    body = [
+    body: list[ast.stmt] = [
         ast.Assign(
             targets=[ast.Subscript(value=name_(target.id), slice=name_(it), ctx=ast.Store())],
             value=ast.BinOp(left=numer, op=ast.Div(), right=denom),

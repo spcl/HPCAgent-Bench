@@ -1,6 +1,7 @@
 """``None`` handling: static ``is None`` folds and first-iteration ``None``-seeded accumulators."""
 
 import ast
+from collections.abc import Sequence
 
 from hpcagent_bench.translators.numpyto_common.ast_build import NESTED_BLOCK_FIELDS, name_, nested_blocks, store_
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
@@ -9,7 +10,7 @@ __all__ = [
     "FoldStaticNoneBranches",
     "PeelNoneSeededAccumulators",
     "assigns_name",
-    "bare_none_assign_target",
+    "bare_none_assign",
     "flag_guard",
     "flag_set_stmt",
     "none_compare",
@@ -44,6 +45,8 @@ class FoldStaticNoneBranches(ast.NodeTransformer):
     an ``is`` operand.
     """
 
+    __slots__ = ()
+
     #: Expression forms that cannot evaluate to ``None`` whatever their operands are bound to:
     #: indexing/attribute access yields an element, arithmetic yields a number, a comparison
     #: yields a bool, a display yields a container. Deliberately excludes ``Name`` (may be bound
@@ -51,11 +54,11 @@ class FoldStaticNoneBranches(ast.NodeTransformer):
     NEVER_NONE = (ast.Subscript, ast.Attribute, ast.BinOp, ast.UnaryOp, ast.Compare, ast.Tuple, ast.List)
 
     @staticmethod
-    def is_static_none(node: ast.AST) -> bool:
+    def is_static_none(node: ast.expr) -> bool:
         return isinstance(node, ast.Constant) and node.value is None
 
     @classmethod
-    def never_none(cls, node: ast.AST) -> bool:
+    def never_none(cls, node: ast.expr) -> bool:
         return isinstance(node, cls.NEVER_NONE) or (isinstance(node, ast.Constant) and node.value is not None)
 
     def visit_Compare(self, node: ast.Compare) -> ast.AST:
@@ -87,8 +90,8 @@ class FoldStaticNoneBranches(ast.NodeTransformer):
         return node
 
 
-def bare_none_assign_target(stmt: ast.stmt) -> str | None:
-    """The name ``X`` when ``stmt`` is exactly ``X = None``, else ``None``."""
+def bare_none_assign(stmt: ast.stmt) -> tuple[ast.Assign, ast.Name] | None:
+    """``(stmt, X)`` when ``stmt`` is exactly ``X = None``, else ``None``."""
     if (
         isinstance(stmt, ast.Assign)
         and len(stmt.targets) == 1
@@ -96,7 +99,7 @@ def bare_none_assign_target(stmt: ast.stmt) -> str | None:
         and isinstance(stmt.value, ast.Constant)
         and stmt.value.value is None
     ):
-        return stmt.targets[0].id
+        return stmt, stmt.targets[0]
     return None
 
 
@@ -126,7 +129,7 @@ def none_toggle_op(test: ast.expr, name: str) -> bool | None:
     return decoded[1]
 
 
-def assigns_name(stmts: list[ast.stmt], name: str) -> bool:
+def assigns_name(stmts: Sequence[ast.stmt], name: str) -> bool:
     """Whether some statement in ``stmts`` writes ``name`` directly -- ``name = <expr>`` (the seed
     branch, ``out = patch.copy()``) or ``name += <expr>`` (the combiner branch: avgpool_core's
     running sum keeps its own ``+=`` rather than an ``np.add(acc, patch, out=acc)`` roundtrip)."""
@@ -239,6 +242,8 @@ class PeelNoneSeededAccumulators(ast.NodeTransformer):
     returned or read as ``None`` is a different, unhandled shape, not this one.
     """
 
+    __slots__ = ()
+
     def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.AST:
         self.generic_visit(node)
         taken = OrderedSet(n.id for n in ast.walk(node) if isinstance(n, ast.Name))
@@ -249,14 +254,16 @@ class PeelNoneSeededAccumulators(ast.NodeTransformer):
         i = 0
         while i < len(stmts):
             stmt = stmts[i]
-            name = bare_none_assign_target(stmt)
-            if name is not None:
+            bare = bare_none_assign(stmt)
+            if bare is not None:
+                assign, target = bare
+                name = target.id
                 flag = unique_name(f"__{name}_seen", taken)
                 if rewrite_none_toggle(stmts, i + 1, name, flag, in_loop=False):
                     taken.add(flag)
-                    stmt.targets[0].id = flag
-                    stmt.value = ast.Constant(value=0)
-                    ast.fix_missing_locations(stmt)
+                    target.id = flag
+                    assign.value = ast.Constant(value=0)
+                    ast.fix_missing_locations(assign)
             else:
                 # The bind itself may sit inside a branch/loop rather than at this exact level
                 # (a guarded accumulator init); keep looking one level down for more starts.

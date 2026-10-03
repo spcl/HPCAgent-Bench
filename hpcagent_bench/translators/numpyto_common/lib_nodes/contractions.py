@@ -2,6 +2,7 @@
 
 import ast
 import copy
+from collections.abc import Sequence
 
 from hpcagent_bench.translators.numpyto_common.ast_build import name_, store_
 from hpcagent_bench.translators.numpyto_common.lib_nodes.blas import expand_dot
@@ -73,7 +74,7 @@ OP_SPILL_TEMP = [0]
 
 
 def materialize_operands(
-    operands: list[ast.expr],
+    operands: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     prefix: str,
     local_dtypes: dict[str, str] | None = None,
@@ -118,7 +119,7 @@ def materialize_operands(
             if base_name and local_dtypes.get(base_name):
                 local_dtypes[tmp] = local_dtypes[base_name]
         cp_iters = [f"{prefix}c{i}" for i in range(len(op_ext))]
-        cp_nodes = [name_(c) for c in cp_iters]
+        cp_nodes: list[ast.expr] = [name_(c) for c in cp_iters]
         cp_slot = cp_nodes[0] if len(cp_nodes) == 1 else ast.Tuple(elts=cp_nodes, ctx=ast.Load())
         cp_src = scalarize_at_iters(op, cp_nodes, shape_table)
         cp_dst = ast.Subscript(value=name_(tmp), slice=cp_slot, ctx=ast.Store())
@@ -129,8 +130,8 @@ def materialize_operands(
 
 
 def expand_einsum(
-    target: ast.expr,
-    args: list[ast.expr],
+    target: ast.Name,
+    args: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     local_dtypes: dict[str, str] | None = None,
     fresh_local_allocs: dict[str, tuple[str, ...]] | None = None,
@@ -176,7 +177,7 @@ def expand_einsum(
     var_of = {c: f"__es_{c}" for c in letter_extent}
 
     def subscript_(name: str, spec: str) -> ast.expr:
-        idx = [name_(var_of[c]) for c in spec]
+        idx: list[ast.expr] = [name_(var_of[c]) for c in spec]
         sl = idx[0] if len(idx) == 1 else ast.Tuple(elts=idx, ctx=ast.Load())
         return ast.Subscript(value=name_(name), slice=sl, ctx=ast.Load())
 
@@ -186,8 +187,9 @@ def expand_einsum(
         product = ast.BinOp(left=product, op=ast.Mult(), right=subscript_(name, spec))
 
     # Output write target.
+    out_store: ast.Name | ast.Subscript
     if out_letters:
-        out_idx = [name_(var_of[c]) for c in out_letters]
+        out_idx: list[ast.expr] = [name_(var_of[c]) for c in out_letters]
         out_sl = out_idx[0] if len(out_idx) == 1 else ast.Tuple(elts=out_idx, ctx=ast.Load())
         out_store = ast.Subscript(value=name_(target.id), slice=out_sl, ctx=ast.Store())
     else:
@@ -209,7 +211,7 @@ def expand_einsum(
     return prelude + inner
 
 
-def explicit_einsum_spec(spec: str, operands: list[ast.expr], shape_table: dict[str, tuple[str, ...]]) -> str:
+def explicit_einsum_spec(spec: str, operands: Sequence[ast.expr], shape_table: dict[str, tuple[str, ...]]) -> str:
     """``spec`` with ``...`` expanded to explicit letters from each operand's rank (the parser stays
     ellipsis-free)."""
     ranks = []
@@ -235,8 +237,8 @@ def einsum_letter_extents(
 
 
 def expand_tensordot(
-    target: ast.expr,
-    args: list[ast.expr],
+    target: ast.Name,
+    args: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     kwargs: list[ast.keyword] | None = None,
     local_dtypes: dict[str, str] | None = None,
@@ -269,13 +271,13 @@ def expand_tensordot(
     a_ax, b_ax = tensordot_axes(axes_node, ra, rb)
     letters = "abcdefghijklmnopqrstuvwxyz"
     a_spec = list(letters[:ra])
-    b_spec = [None] * rb
+    b_spec = [""] * rb
     # Shared contraction letters: pair a_ax[i] <-> b_ax[i].
     nxt = ra
     for ca, cb in zip(a_ax, b_ax):
         b_spec[cb] = a_spec[ca]
     for i in range(rb):
-        if b_spec[i] is None:
+        if not b_spec[i]:
             b_spec[i] = letters[nxt]
             nxt += 1
     out_spec = [c for i, c in enumerate(a_spec) if i not in a_ax] + [c for i, c in enumerate(b_spec) if i not in b_ax]
@@ -285,7 +287,7 @@ def expand_tensordot(
     )
 
 
-def expand_inner(target: ast.expr, args: list[ast.expr], shape_table: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
+def expand_inner(target: ast.Name, args: Sequence[ast.expr], shape_table: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
     """``np.inner(a, b)`` -> contract the LAST axis of each operand.
 
     Rank-1 x rank-1 is the plain dot product (routes to :func:`expand_dot`)."""
@@ -308,8 +310,8 @@ def expand_inner(target: ast.expr, args: list[ast.expr], shape_table: dict[str, 
 
 
 def expand_vdot(
-    target: ast.expr,
-    args: list[ast.expr],
+    target: ast.Name,
+    args: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     local_dtypes: dict[str, str] | None = None,
 ) -> list[ast.stmt]:
@@ -335,5 +337,5 @@ def expand_vdot(
     prod = ast.BinOp(
         left=a_elem, op=ast.Mult(), right=ast.Subscript(value=name_(b.id), slice=name_(it), ctx=ast.Load())
     )
-    body = [ast.AugAssign(target=store_(target.id), op=ast.Add(), value=prod)]
+    body: list[ast.stmt] = [ast.AugAssign(target=store_(target.id), op=ast.Add(), value=prod)]
     return [ast.Assign(targets=[store_(target.id)], value=const_(0.0)), *wrap_for_loops([it], [shape[0]], body)]

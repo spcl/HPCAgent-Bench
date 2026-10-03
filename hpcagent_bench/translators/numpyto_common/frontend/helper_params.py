@@ -3,11 +3,12 @@
 import ast
 import dataclasses
 import types
+from collections.abc import Sequence
 from typing import Literal
 
 from hpcagent_bench.translators.numpyto_common import dtypes
-from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc, ScalarDesc, SymbolDesc
 from hpcagent_bench.translators.numpyto_common.frontend.shapes import resolve_array_ref
+from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc, ScalarDesc, SymbolDesc, descs
 from hpcagent_bench.translators.numpyto_common.lib_nodes.dims import DIM_IDENT_RE
 
 __all__ = [
@@ -53,7 +54,7 @@ ParamKind = Literal["array", "scalar", "symbol"]
 
 
 def resolved_array_param(
-    fn: ast.FunctionDef | None, arg: ast.AST, pname: str, arr_by: dict[str, ArrayDesc]
+    fn: ast.FunctionDef | None, arg: ast.expr, pname: str, arr_by: dict[str, ArrayDesc]
 ) -> tuple[ParamKind, DescEntry] | None:
     res = resolve_array_ref(fn, arg, arr_by) if fn is not None else None
     if res is None:
@@ -101,7 +102,7 @@ def constant_param(arg: ast.Constant, pname: str) -> tuple[ParamKind, DescEntry]
 
 
 def infer_param_desc(
-    arg: ast.AST,
+    arg: ast.expr,
     pname: str,
     arr_by: dict[str, ArrayDesc],
     sca_by: dict[str, ScalarDesc],
@@ -130,7 +131,7 @@ def infer_param_desc(
 
 
 def boolean_valued_argument(
-    arg: ast.AST, fn: ast.FunctionDef | None, sca_by: dict[str, ScalarDesc], depth: int = 0
+    arg: ast.expr, fn: ast.FunctionDef | None, sca_by: dict[str, ScalarDesc], depth: int = 0
 ) -> bool:
     """Whether ``arg`` is a PREDICATE -- a comparison, an and/or/not, or a local bound to one.
 
@@ -174,7 +175,7 @@ def boolean_valued_argument(
 
 
 def integer_valued_argument(
-    arg: ast.AST,
+    arg: ast.expr,
     fn: ast.FunctionDef | None,
     sca_by: dict[str, ScalarDesc],
     sym_by: dict[str, SymbolDesc],
@@ -222,7 +223,7 @@ def integer_valued_argument(
 
 def infer_helper_params(
     pnames: list[str],
-    args: list[ast.expr],
+    args: Sequence[ast.expr],
     arr_by: dict[str, ArrayDesc],
     sca_by: dict[str, ScalarDesc],
     sym_by: dict[str, SymbolDesc],
@@ -240,16 +241,21 @@ def infer_helper_params(
     scalars: list[ScalarDesc] = []
     symbols: list[SymbolDesc] = []
     for pname, arg in zip(pnames, args):
-        kind, desc = infer_param_desc(arg, pname, arr_by, sca_by, sym_by, fn)
-        if kind == "array" and isinstance(desc, ArrayDesc) and is_temporary(arg, formal) and desc.dtype:
-            desc = dataclasses.replace(desc, dtype=dtypes.compute_dtype(desc.dtype))
-        (arrays if kind == "array" else symbols if kind == "symbol" else scalars).append(desc)
-    renamed = bound_names(pnames, args, {d.name for d in (*scalars, *symbols)})
+        unused, desc = infer_param_desc(arg, pname, arr_by, sca_by, sym_by, fn)
+        if isinstance(desc, ArrayDesc):
+            if is_temporary(arg, formal) and desc.dtype:
+                desc = dataclasses.replace(desc, dtype=dtypes.compute_dtype(desc.dtype))
+            arrays.append(desc)
+        elif isinstance(desc, SymbolDesc):
+            symbols.append(desc)
+        else:
+            scalars.append(desc)
+    renamed = bound_names(pnames, args, {d.name for d in descs(scalars, symbols)})
     arrays = [dataclasses.replace(a, shape=tuple(rename_dims(dim, renamed) for dim in a.shape)) for a in arrays]
     return arrays, scalars, symbols
 
 
-def bound_names(pnames: list[str], args: list[ast.expr], params: set[str]) -> dict[str, str]:
+def bound_names(pnames: list[str], args: Sequence[ast.expr], params: set[str]) -> dict[str, str]:
     """Caller name -> the helper's scalar or symbol parameter bound to it at this call site (``c_in``
     for ``in_channels``). An array argument's shape arrives in the CALLER's vocabulary, so a helper
     computing ``c_in // groups`` could not prove it equal to its weight's ``in_channels //
@@ -322,7 +328,7 @@ def widen_counting_scalar_params(hfn: ast.FunctionDef, scalars: list[ScalarDesc]
         return
     counted: set[str] = set()
     for node in ast.walk(hfn):
-        positions: list[ast.AST] = []
+        positions: list[ast.expr] = []
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "range":
             positions.extend(node.args)
         elif isinstance(node, ast.Subscript):

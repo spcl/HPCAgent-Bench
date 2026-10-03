@@ -53,7 +53,7 @@ def einsum_inline_stmts(subs: str, operands: list[str], ctr: int, dtype_of: str)
     return ast.parse("\n".join(src)).body, p
 
 
-def hoist_einsum(node: ast.AST, hoist: ValueHoist) -> ast.expr | None:
+def hoist_einsum(node: ast.expr, hoist: ValueHoist) -> ast.expr | None:
     """``np.einsum("<subs>", *names)`` -> the temp its contraction loop nest fills, also inside larger expressions."""
     if not isinstance(node, ast.Call) or numpy_call_attr(node) != "einsum" or not node.args:
         return None
@@ -69,7 +69,7 @@ def hoist_einsum(node: ast.AST, hoist: ValueHoist) -> ast.expr | None:
     widest = max(range(len(kinds)), key=lambda at: KIND_RANK.get(kinds[at] or "", -1))
     dtype_of = names[widest] if None not in kinds or kinds[widest] == "complex" else names[0]
     stmts, temp = einsum_inline_stmts(subs.value, names, hoist.ctr, dtype_of)
-    if stmts is None:
+    if stmts is None or temp is None:
         return None
     hoist.ctr += 1
     hoist.pre.extend(stmts)

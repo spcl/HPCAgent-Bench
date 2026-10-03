@@ -82,6 +82,8 @@ class SsaRename(ast.NodeTransformer):
     DaCe refuses rebinding a name to a different shape/dtype. Only names :func:`ssa_versionable`
     clears are touched, so no version is merged across a branch."""
 
+    __slots__ = ("changed", "fn", "pinned", "seen", "version", "versionable")
+
     def __init__(self, fn: ast.AST, pinned: set[str]) -> None:
         self.fn = fn
         self.pinned = pinned

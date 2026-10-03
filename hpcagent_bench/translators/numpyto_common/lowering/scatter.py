@@ -2,6 +2,8 @@
 
 import ast
 import copy
+from collections.abc import Sequence
+from collections.abc import Set as AbstractSet
 
 from hpcagent_bench.translators.numpyto_common.ast_build import const_int, name_, range_for
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
@@ -34,6 +36,8 @@ class ScatterAtRewriter(ast.NodeTransformer):
     than mis-lowered. Used by edge_laplacian, vexx_k, azimint_naive.
     """
 
+    __slots__ = ("_n", "bool_names", "shapes", "wrapper_defs")
+
     #: arithmetic ufuncs -> the compound-assign operator (``t[i] op= v``).
     AUG = {"add": ast.Add, "subtract": ast.Sub, "multiply": ast.Mult, "divide": ast.Div, "true_divide": ast.Div}
     #: max/min ufuncs -> a builtin folded into ``t[i] = fn(t[i], v)``.
@@ -41,7 +45,7 @@ class ScatterAtRewriter(ast.NodeTransformer):
 
     def __init__(
         self,
-        shapes: dict[str, list[str]],
+        shapes: dict[str, tuple[str, ...]],
         bool_names: set[str] | None = None,
         wrapper_defs: dict[str, ast.expr] | None = None,
     ) -> None:
@@ -52,7 +56,7 @@ class ScatterAtRewriter(ast.NodeTransformer):
         #: through 0/1 truth values instead of refusing. Empty by default so the
         #: unit tests that build this rewriter directly (no bool-name harvest)
         #: keep their prior bare-Name-only behaviour.
-        self.bool_names = bool_names or frozenset()
+        self.bool_names: AbstractSet[str] = bool_names or frozenset()
         #: name -> its ``.reshape(-1)`` / ``np.broadcast_to(...)`` RHS, for a local
         #: alias assigned once then read (possibly more than once) bare inside
         #: ``.at()`` -- icon_scatter's ``vals = np.broadcast_to(...)``. Looking
@@ -152,7 +156,7 @@ class ScatterAtRewriter(ast.NodeTransformer):
             )
         return peeled, tuple(ast.unparse(e) for e in ext)
 
-    def val_at(self, vals: ast.expr, iters: list[ast.expr]) -> ast.expr:
+    def val_at(self, vals: ast.expr, iters: Sequence[ast.expr]) -> ast.expr:
         if isinstance(vals, ast.UnaryOp) and isinstance(vals.op, ast.USub):
             return ast.UnaryOp(op=ast.USub(), operand=self.val_at(vals.operand, iters))
         if isinstance(vals, ast.Constant):
@@ -172,7 +176,7 @@ class ScatterAtRewriter(ast.NodeTransformer):
             "np.<op>.at value must be an array name, its negation, a scalar constant, or a resolvable array expression"
         )
 
-    def validate_target(self, target: ast.expr, op: str) -> None:
+    def validate_target(self, target: ast.expr, op: str) -> ast.Name | ast.Subscript:
         """A target is a bare Name, or a slice VIEW of one -- ``base[:, ii]``
         (vexx_k's ``deexx[:, ii]``), numpy's own scatter-through-a-view
         semantics, since a basic-indexing slice is a view onto the same
@@ -182,19 +186,21 @@ class ScatterAtRewriter(ast.NodeTransformer):
         partial/strided slice, a fancy index, more than one full-slice axis)
         is refused by naming the form rather than mis-lowered."""
         if isinstance(target, ast.Name):
-            return
+            return target
         if isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name):
             lead = list(target.slice.elts) if isinstance(target.slice, ast.Tuple) else [target.slice]
             if sum(1 for e in lead if is_full_slice(e)) == 1 and all(
                 is_full_slice(e) or not isinstance(e, ast.Slice) for e in lead
             ):
-                return
+                return target
         raise NotImplementedError(
             f"np.{op}.at needs a Name target or a slice view of one with exactly one "
             f"full-slice axis, not {ast.unparse(target)!r}"
         )
 
-    def write_through_target(self, target: ast.expr, idx_expr: ast.expr, ctx: ast.expr_context) -> ast.Subscript:
+    def write_through_target(
+        self, target: ast.Name | ast.Subscript, idx_expr: ast.expr, ctx: ast.expr_context
+    ) -> ast.Subscript:
         """``target``'s element-write Subscript with ``idx_expr`` substituted at
         its (single, validated) full-slice axis; every other lead component
         (a scalar like ``ii``) passes through unchanged. For a bare-Name
@@ -204,7 +210,7 @@ class ScatterAtRewriter(ast.NodeTransformer):
         lead = list(target.slice.elts) if isinstance(target.slice, ast.Tuple) else [target.slice]
         new_lead = [copy.deepcopy(idx_expr) if is_full_slice(e) else copy.deepcopy(e) for e in lead]
         slot = new_lead[0] if len(new_lead) == 1 else ast.Tuple(elts=new_lead, ctx=ast.Load())
-        return ast.Subscript(value=name_(target.value.id), slice=slot, ctx=ctx)
+        return ast.Subscript(value=copy.deepcopy(target.value), slice=slot, ctx=ctx)
 
     def visit_Expr(self, node: ast.Expr) -> ast.AST:
         call = node.value
@@ -226,7 +232,7 @@ class ScatterAtRewriter(ast.NodeTransformer):
             if not isinstance(target, ast.Name):
                 raise NotImplementedError(f"np.{op}.at needs a Name target for a multi-index scatter")
             return self.multi_index_scatter(node, op, target, idx, vals)
-        self.validate_target(target, op)
+        target = self.validate_target(target, op)
         self.refuse_boolean_index(idx, op)
         idx_peeled, bound = self.index_extent(idx, op)
         self._n += 1
@@ -257,13 +263,13 @@ class ScatterAtRewriter(ast.NodeTransformer):
         idx_k = scalarize_at_iters(idx_peeled, iter_nodes, self.shapes)
         val_k = self.val_at(vals, iter_nodes + trail_nodes)
 
-        def cell(ctx: ast.expr_context) -> ast.expr:
+        def cell(ctx: ast.expr_context) -> ast.Subscript:
             base = self.write_through_target(target, idx_k, ctx)
             if not trail_nodes:
                 return base
             lead = list(base.slice.elts) if isinstance(base.slice, ast.Tuple) else [base.slice]
             elts = [copy.deepcopy(e) for e in lead] + [copy.deepcopy(t) for t in trail_nodes]
-            return ast.Subscript(value=name_(base.value.id), slice=ast.Tuple(elts=elts, ctx=ast.Load()), ctx=ctx)
+            return ast.Subscript(value=copy.deepcopy(base.value), slice=ast.Tuple(elts=elts, ctx=ast.Load()), ctx=ctx)
 
         if op in self.AUG:
             stmt: ast.stmt = ast.AugAssign(target=cell(ast.Store()), op=self.AUG[op](), value=val_k)
@@ -277,7 +283,9 @@ class ScatterAtRewriter(ast.NodeTransformer):
             body = [range_for(it, [const_or_name(ext)], body)]
         return ast.copy_location(body[0], node)
 
-    def multi_index_scatter(self, node, op, target: ast.Name, idx_tuple: ast.Tuple, vals: ast.expr) -> ast.AST:
+    def multi_index_scatter(
+        self, node: ast.Expr, op: str, target: ast.Name, idx_tuple: ast.Tuple, vals: ast.expr
+    ) -> ast.stmt:
         """Lower a TUPLE-index ``np.<op>.at(out, (i0, i1, ...), vals)`` scatter.
 
         Each tuple component is an INDIRECT axis (a 2-D index array slice such

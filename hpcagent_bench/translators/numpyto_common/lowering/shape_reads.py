@@ -2,6 +2,7 @@
 
 import ast
 import copy
+from collections.abc import Sequence
 
 from hpcagent_bench.translators.numpyto_common.ast_build import name_
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
@@ -22,7 +23,7 @@ __all__ = [
 ]
 
 
-def negative_literal_offset(node: ast.AST) -> int | None:
+def negative_literal_offset(node: ast.expr) -> int | None:
     """``K`` for a negative integer literal ``-K`` -- a signed ``Constant`` or ``UnaryOp(USub, Constant)``, the
     form numpy source parses to -- else None. Numpy counts such an index from the end of its axis."""
     if isinstance(node, ast.Constant) and isinstance(node.value, int) and node.value < 0:
@@ -37,7 +38,7 @@ def negative_literal_offset(node: ast.AST) -> int | None:
     return None
 
 
-def const_int_index(node: ast.AST) -> int | None:
+def const_int_index(node: ast.expr) -> int | None:
     """Return the integer value of a constant subscript index (``arr[3]`` /
     ``arr[-1]``), or ``None`` for a non-constant one. Numpy spells a negative
     literal index as ``UnaryOp(USub, Constant)``, not a signed ``Constant``."""
@@ -72,7 +73,7 @@ def is_newaxis_result_axis(sub: ast.Subscript, k: int) -> bool:
     return is_newaxis(elts[k])
 
 
-def is_newaxis(elt: ast.expr) -> bool:
+def is_newaxis(elt: ast.AST) -> bool:
     """``np.newaxis`` in a subscript, which parses as a ``None`` constant."""
     return isinstance(elt, ast.Constant) and elt.value is None
 
@@ -95,6 +96,8 @@ class ShapeMidExpressionRewriter(ast.NodeTransformer):
     broadcast subscript's static extent folds the same way a declared
     array's does. The Name-base path is unchanged.
     """
+
+    __slots__ = ("arrays_shapes",)
 
     def __init__(self, arrays_shapes) -> None:
         self.arrays_shapes = arrays_shapes
@@ -192,7 +195,7 @@ class ShapeMidExpressionRewriter(ast.NodeTransformer):
         return node
 
 
-def fold_shape_reads_in_table(shapes: dict[str, object]) -> None:
+def fold_shape_reads_in_table(shapes: dict[str, tuple[str, ...]]) -> None:
     """Fold ``<expr>.shape[k]`` inside the shape TABLE's own tokens, exactly as
     :class:`ShapeMidExpressionRewriter` folds them in the body.
 
@@ -212,7 +215,7 @@ def fold_shape_reads_in_table(shapes: dict[str, object]) -> None:
     rewriter = ShapeMidExpressionRewriter(shapes)
     for name in list(shapes):
         tokens = shapes[name]
-        folded = []
+        folded: list[str] = []
         for tok in tokens:
             text = str(tok)
             if ".shape" in text:
@@ -223,10 +226,10 @@ def fold_shape_reads_in_table(shapes: dict[str, object]) -> None:
                 if ".shape" not in new:
                     text = new
             folded.append(text)
-        shapes[name] = folded if isinstance(tokens, list) else tuple(folded)
+        shapes[name] = tuple(folded)
 
 
-def resolve_shape_token(node: ast.AST, shape_table: dict[str, tuple[str, ...]]) -> str:
+def resolve_shape_token(node: ast.expr, shape_table: dict[str, tuple[str, ...]]) -> str:
     """Stringify a shape-tuple element, resolving ``arr.shape[i]``
     references against the known shape of ``arr``.
 
@@ -251,7 +254,7 @@ def resolve_shape_token(node: ast.AST, shape_table: dict[str, tuple[str, ...]]) 
     return ast.unparse(node)
 
 
-def resolve_arr_shape_subscript(node: ast.AST, shape_table: dict[str, tuple[str, ...]]) -> str | None:
+def resolve_arr_shape_subscript(node: ast.expr, shape_table: dict[str, tuple[str, ...]]) -> str | None:
     """Return the resolved shape token for ``arr.shape[i]``, or None
     if the form does not match or the source array is unknown."""
     if not (
@@ -285,9 +288,11 @@ class ResolveArrShape(ast.NodeTransformer):
     expression node, not an unparsable string.
     """
 
+    __slots__ = ("_reassign_shapes", "current", "shapes", "zeros_locals")
+
     def __init__(
         self,
-        shapes: dict[str, list[str]],
+        shapes: dict[str, tuple[str, ...]],
         param_shapes: dict[str, tuple[str, ...]] | None = None,
         zeros_locals: dict[str, tuple[str, ...]] | None = None,
         reassign_shapes: dict[str, list[tuple[str, ...]]] | None = None,
@@ -330,11 +335,13 @@ class ResolveArrShape(ast.NodeTransformer):
             return tok
 
         class Sub_(ast.NodeTransformer):
-            def __init__(self_inner, current) -> None:
-                self_inner.current = current
+            __slots__ = ("current",)
 
-            def visit_Subscript(self_inner, node):
-                self_inner.generic_visit(node)
+            def __init__(self, current: dict[str, tuple[str, ...]]) -> None:
+                self.current = current
+
+            def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
+                self.generic_visit(node)
                 if not (
                     isinstance(node.value, ast.Attribute)
                     and node.value.attr == "shape"
@@ -343,7 +350,7 @@ class ResolveArrShape(ast.NodeTransformer):
                     and isinstance(node.slice.value, int)
                 ):
                     return node
-                src = self_inner.current.get(node.value.value.id)
+                src = self.current.get(node.value.value.id)
                 if not src or node.slice.value >= len(src):
                     return node
                 return const_or_name(src[node.slice.value])
@@ -367,16 +374,20 @@ class ResolveArrShape(ast.NodeTransformer):
         return node
 
     def visit_If(self, node: ast.If) -> ast.AST:
+        return self.visit_conditional(node)
+
+    def visit_While(self, node: ast.While) -> ast.AST:
+        return self.visit_conditional(node)
+
+    def visit_conditional(self, node: ast.If | ast.While) -> ast.AST:
         node.test = self.visit(node.test)
         node.body = self.visit_stmt_list(node.body)
         node.orelse = self.visit_stmt_list(node.orelse)
         return node
 
-    visit_While = visit_If
-
-    def visit_stmt_list(self, stmts: list[ast.stmt]) -> list[ast.stmt]:
+    def visit_stmt_list(self, node: Sequence[ast.stmt]) -> list[ast.stmt]:
         out: list[ast.stmt] = []
-        for stmt in stmts:
+        for stmt in node:
             new_stmt = self.visit(stmt)
             self.update_shape_for(stmt)
             if isinstance(new_stmt, list):
@@ -415,7 +426,7 @@ class ResolveArrShape(ast.NodeTransformer):
             isinstance(rhs, ast.Call)
             and isinstance(rhs.func, ast.Attribute)
             and is_numpy_module(rhs.func.value)
-            and self.update_constructor_shape(target, rhs)
+            and self.update_constructor_shape(target, rhs, rhs.func.attr)
         ):
             return
         # An all-size-1 result is a scalar, not a broadcast shape (see extent_is_scalar).
@@ -440,10 +451,9 @@ class ResolveArrShape(ast.NodeTransformer):
             return True
         return False
 
-    def update_constructor_shape(self, target: str, rhs: ast.Call) -> bool:
+    def update_constructor_shape(self, target: str, rhs: ast.Call, attr: str) -> bool:
         """``np.zeros((N, M))`` / ``np.zeros(x.shape)`` / ``np.empty_like(other)`` / ``np.linspace(a, b,
         n)``: the shape the constructor states. False when it states none this reads."""
-        attr = rhs.func.attr
         if attr in NP_ZEROS_ALIASES and rhs.args:
             if attr.endswith("_like") and isinstance(rhs.args[0], ast.Name):
                 src = self.current.get(rhs.args[0].id)
