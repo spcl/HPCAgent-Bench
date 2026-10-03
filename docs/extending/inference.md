@@ -70,10 +70,8 @@ SUBMIT=0 MODEL=<tag> hpcagent_bench/cluster/serve-only.sbatch   # print the plan
 MODEL=<tag> hpcagent_bench/cluster/serve-only.sbatch            # serve; the log reaches "endpoint is live" and prints a curl
 ```
 
-For tool-call, reasoning and long-context accuracy gates, run the smokes in
-`containers/inference/` from that directory: `smoke-kimi-sglang.sbatch` takes
-`MODEL_REPO`, `SERVED_MODEL`, `TOOL_PARSER`, `REASONING_PARSER`, `MEM_FRACTION`, `CONTEXT_LEN`.
-A failure prints `SMOKE FAILED`.
+For tool-call, reasoning and long-context accuracy gates, run `containers/inference/verify-tools-reasoning.py`
+and `accuracy-gate.py` against the live endpoint.
 
 **4. Name it in launchers.** `hpcagent_bench/cluster/submit.sh` renders `<experiment>:<tag>`, so
 `MODELS=<tag>` suffices.

@@ -147,7 +147,7 @@ ROLE=judge-agent-amd sbatch --partition=mi200 --gpus-per-node=8 verify_image.sba
 ```
 
 Build gates prove that an engine imports, not that it serves, so a serving candidate is smoked
-before promotion: an SGLang candidate through `inference/smoke-kimi-sglang.sbatch`. A vLLM candidate is smoked with `hpcagent_bench/cluster/serve-only.sbatch`,
+before promotion with `hpcagent_bench/cluster/serve-only.sbatch` (SGLang and vLLM alike),
 which serves what an experiment serves: copy `~/.edf/hpcagent-bench-vllm-mi300-latest.toml` to
 `~/.edf/candidate-vllm.toml` with `image` pointing at the vllm role's candidate squashfs, then
 run `SERVE_ENV_FILE=<copy of serve-only.env plus INFERENCE_CE_ENV=candidate-vllm> MODEL=oss120b
@@ -261,7 +261,6 @@ when editing. Per-model settings: [docs/serving/](../docs/serving/README.md).
 | `fetch_weights.sbatch` | downloads into `$HF_HOME` inside an image, restripes on the host, fails unless every large blob is wide-striped |
 | `serve-private.sbatch` | a private Qwen3.8 endpoint on one beverin node ([private-endpoint.md](../docs/serving/private-endpoint.md)) |
 | `serve-daint.sbatch`, `alps-endpoint.sh` | GH200 serving and the client-side endpoint check |
-| `smoke-kimi-sglang.sbatch` | multi-node SGLang serving smoke |
 | `verify-tools-reasoning.py`, `accuracy-gate.py` | tool-call/reasoning, long-context accuracy and throughput gates against a live server |
 | `moe-configs/` | tuned fused-MoE kernel configs, build input for `sglang/` and `vllm/` |
 

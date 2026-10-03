@@ -188,8 +188,6 @@ registered EDF as-is. A model that serves here and fails in an experiment run: s
 
 - `hpcagent_bench/cluster/serve-only.sbatch`, `experiments/serve-only.env`: the launcher on this page.
 - `experiments/layers/model-<m>.env`, `experiments/setups.yaml`: per-model launch lines with inline reasons.
-- `containers/inference/`: `smoke-kimi-sglang.sbatch` (serving smoke with accuracy
-  gate and concurrency sweep), `accuracy-gate.py`,
-  `verify-tools-reasoning.py`.
+- `containers/inference/`: `accuracy-gate.py`, `verify-tools-reasoning.py` (gates against a live server).
 
 Node-to-node spread is about 30%. Re-measure a flag change **on one node, back to back**.

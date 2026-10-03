@@ -411,5 +411,5 @@ WORKDIR /workspace
 #   * the transport a cross-node collective chooses is only visible in an NCCL_DEBUG=INFO log from
 #     a real two-node run: NET/OFI is the goal, NET/Socket is the silent
 #     fallback.
-#   * whether SGLang SERVES is a separate question from whether it imports. Run
-#     inference/smoke-kimi-sglang.sbatch before promoting a rebuild.
+#   * whether SGLang SERVES is a separate question from whether it imports. Serve it with
+#     hpcagent_bench/cluster/serve-only.sbatch before promoting a rebuild.
