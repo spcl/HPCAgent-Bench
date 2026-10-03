@@ -157,6 +157,7 @@ dev = [
     "pytest-mpi",
     "coverage",
     "ruff",
+    "mypy",
     "pyright",
     "fprettify",
     "clang-format",
@@ -224,8 +225,9 @@ format = "flat"
 explicit = true
 
 [tool.uv]
-# Linux only: the toolchain, the seal and the images are.
-environments = ["sys_platform == 'linux'"]
+# Linux only: the toolchain, the seal and the images are. CPython 3.15 is out until the GPU extras ship wheels
+# for it (cupy-cuda13x has none), so the lock resolves 3.12 to 3.14; the images run 3.12.
+environments = ["sys_platform == 'linux' and python_full_version < '3.15'"]
 # One environment per framework set, and each group is its own venv (litellm's judge-proxy stack needs
 # rich<14; harbor and the OpenHands tools need rich>=14).
 conflicts = [
@@ -326,6 +328,14 @@ line-length = 120
 target-version = "py312"
 extend-exclude = ["*_generated.py"]
 
-# Type-check against the requires-python floor.
+# Type-check against the requires-python floor. The benchmark references are task text agents read (original
+# sources and NumPy references), not package code, so neither checker edits them into another task.
 [tool.pyright]
 pythonVersion = "3.12"
+exclude = ["hpcagent_bench/benchmarks", "third_party", "**/node_modules", "**/__pycache__", "**/.*", "**/*_generated.py"]
+
+[tool.mypy]
+python_version = "3.12"
+follow_imports = "silent"
+ignore_missing_imports = true
+exclude = ["^hpcagent_bench/benchmarks/", "^third_party/", "_generated\\.py$"]
