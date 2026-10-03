@@ -291,10 +291,8 @@ def figure_pair(frame: pd.DataFrame, title: str, out: pathlib.Path) -> pathlib.P
     return write(fig, out)
 
 
-def load(path: pathlib.Path, prefix: str, card: cost.CostModel = cost.resolve()) -> pd.DataFrame:
-    frame = cost.priced(studies.read_observations(path), card)
-    if prefix:
-        frame = frame[frame["setup"].astype(str).str.startswith(prefix)]
+def load(path: pathlib.Path, prefix: str, card: cost.CostModel = cost.resolve(), setups: str = "") -> pd.DataFrame:
+    frame = population.select_setups(cost.priced(studies.read_observations(path), card), prefix, setups)
     # NO filter on speedup or tokens here. The two metrics come off DIFFERENT record types -- the
     # speedup from the graded submissions, the cost from the task rows that carry a token count
     # (population.kernel_tokens) -- and one predicate over both columns keeps only the rows that
@@ -314,30 +312,16 @@ def load(path: pathlib.Path, prefix: str, card: cost.CostModel = cost.resolve())
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("observations", type=pathlib.Path)
-    parser.add_argument("--experiment", dest="experiment", required=True, help="setup prefix naming ONE experiment")
-    parser.add_argument("--setups", dest="setups", default="", help="regex; keep only setups whose full name matches")
+    population.add_selection_arguments(parser, experiment_help="setup prefix naming ONE experiment (required)")
     parser.add_argument("--label", default="", help="figure title; defaults to the experiment's display name")
     parser.add_argument("--out", type=pathlib.Path, default=pathlib.Path("figures/setup_summary.pdf"))
     parser.add_argument("--table", type=pathlib.Path, default=pathlib.Path("data/setup_summary.csv"))
-    parser.add_argument(
-        "--include-incomplete",
-        action="store_true",
-        default=False,
-        help="draw a setup even without a row for every tag kernel (default: dropped, named on stderr)",
-    )
-    parser.add_argument(
-        "--repeats",
-        type=population.RepeatPolicy,
-        choices=population.REPEAT_POLICIES,
-        default=population.RepeatPolicy.LATEST,
-        help="a kernel run more than once: latest run counts (reruns, default) or median over runs (designed repeats)",
-    )
     cost.add_arguments(parser)
     args = parser.parse_args()
 
-    rows = load(args.observations, args.experiment, cost.resolve(args.cost_model, args.cost_models))
-    if args.setups:
-        rows = rows[rows["setup"].astype(str).str.fullmatch(args.setups)]
+    if not args.experiment:
+        parser.error("--experiment is required")
+    rows = load(args.observations, args.experiment, cost.resolve(args.cost_model, args.cost_models), args.setups)
     rows = eligible_rows(rows, args.include_incomplete)
     frame = setup_points(rows, args.repeats)
     if frame.empty:

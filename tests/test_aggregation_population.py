@@ -851,3 +851,27 @@ def test_the_costs_behind_a_ratio_come_from_the_delivered_kernels_only() -> None
     assert point is not None
     assert (point["kernels"], point["delivered"]) == (2, 1)
     assert point["baseline_ns"] == pytest.approx(100.0)
+
+
+def test_select_setups_keeps_the_experiment_prefix_and_the_full_regex_match() -> None:
+    frame = pd.DataFrame(
+        {"setup": ["llr40-qwen38-c", "llr40-qwen38-c-skills", "llr40-oss120b-c", "scicomp40-qwen38-c"]}
+    )
+    assert list(population.select_setups(frame)["setup"]) == list(frame["setup"])
+    assert list(population.select_setups(frame, "llr40")["setup"]) == list(frame["setup"][:3])
+    assert list(population.select_setups(frame, "llr40", r".*-c")["setup"]) == ["llr40-qwen38-c", "llr40-oss120b-c"]
+
+
+def test_the_selection_arguments_parse_to_the_documented_defaults() -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    population.add_selection_arguments(parser)
+    args = parser.parse_args([])
+    assert (args.experiment, args.setups, args.include_incomplete, args.repeats) == (
+        "",
+        "",
+        False,
+        population.RepeatPolicy.LATEST,
+    )
+    assert parser.parse_args(["--repeats", "median"]).repeats is population.RepeatPolicy.MEDIAN

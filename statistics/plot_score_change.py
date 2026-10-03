@@ -133,10 +133,9 @@ def load_all(paths: Sequence[pathlib.Path], card: cost.CostModel = cost.resolve(
     return population.condition_rows(cost.priced(frame, card))
 
 
-def load(path: pathlib.Path, prefix: str, card: cost.CostModel = cost.resolve()) -> pd.DataFrame:
+def load(path: pathlib.Path, prefix: str, card: cost.CostModel = cost.resolve(), setups: str = "") -> pd.DataFrame:
     frame = population.condition_rows(cost.priced(studies.read_observations(path), card))
-    if prefix:
-        frame = frame[frame["setup"].astype(str).str.startswith(prefix)]
+    frame = population.select_setups(frame, prefix, setups)
     # No filter on speedup or tokens here: score and cost come from different record types, and a
     # predicate over both columns would drop every graded submission.
     #
@@ -646,11 +645,8 @@ def build_parser() -> argparse.ArgumentParser:
     ``--experiment`` + ``--treatment``) and the figure's look."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("observations", type=pathlib.Path, nargs="+", help="extracted observations; repeatable")
-    parser.add_argument(
-        "--experiment",
-        dest="experiment",
-        default="",
-        help="setup prefix naming ONE experiment; required without --pairs-csv/--comparison",
+    population.add_selection_arguments(
+        parser, experiment_help="setup prefix naming ONE experiment; required without --pairs-csv/--comparison"
     )
     parser.add_argument(
         "--pairs-csv",
@@ -711,13 +707,6 @@ def build_parser() -> argparse.ArgumentParser:
         "and 'placeholders=' deliveries (default: the slot stays empty)",
     )
     parser.add_argument(
-        "--include-incomplete",
-        action="store_true",
-        default=False,
-        help=
-        "draw a setup even without a row for every tag kernel (default: dropped, named on stderr)",
-    )  # fmt: skip
-    parser.add_argument(
         "--speedup-over",
         default=efficacy_figures.SPEEDUP_OVER,
         type=population.KernelPolicy,
@@ -755,14 +744,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--out", type=pathlib.Path, default=pathlib.Path("figures/score_change.pdf"))
     parser.add_argument("--table", type=pathlib.Path, default=pathlib.Path("data/score_change.csv"))
-    parser.add_argument(
-        "--repeats",
-        type=population.RepeatPolicy,
-        choices=population.REPEAT_POLICIES,
-        default=population.RepeatPolicy.LATEST,
-        help=
-        "a kernel run more than once: latest run counts (reruns, default) or median over runs (designed repeats)",
-    )  # fmt: skip
     cost.add_arguments(parser)
     return parser
 
@@ -882,7 +863,7 @@ def figure_from_treatments(
     if not args.experiment:
         raise SystemExit("--experiment names the experiment to split; pass it, or --pairs-csv/--comparison")
     treatments = args.treatment or ["lang-skills"]
-    frame_all = load(args.observations[0], args.experiment, card)
+    frame_all = load(args.observations[0], args.experiment, card, args.setups)
     control = control_rows(frame_all)
     if control.empty:
         raise SystemExit(f"no no-packet control rows for experiment {args.experiment!r}")
