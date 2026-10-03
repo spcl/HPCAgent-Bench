@@ -20,10 +20,9 @@ wholesale if a target ever needs a different dispatch.
 
 import ast
 import copy
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from functools import cached_property
 from typing import NamedTuple
-from collections.abc import Sequence
 
 from hpcagent_bench.translators.numpyto_common import dtypes, narrow_int
 from hpcagent_bench.translators.numpyto_common.ir import KernelIR, numpy_origin
@@ -106,7 +105,7 @@ def fp8_dtypes_used(kir: KernelIR) -> list[str]:
     return seen
 
 
-def tuple_element(node: ast.AST, i: int, n: int) -> ast.expr | None:
+def tuple_element(node: ast.expr, i: int, n: int) -> ast.expr | None:
     """Element ``i`` of an ``n``-wide tuple-valued expression, or None when it is not one.
 
     A conditional over tuples is projected by pushing the index through it, so the guards are
@@ -136,7 +135,7 @@ class TupleTargetSplitter(SplitTupleUnpack):
 
     __slots__ = ()
 
-    def values(self, targets: list[ast.expr], value: ast.expr) -> Spelled | None:
+    def values(self, targets: Sequence[ast.expr], value: ast.expr) -> Spelled | None:
         if isinstance(value, ast.Tuple):
             return super().values(targets, value)
         parts: list[ast.expr] = []
@@ -191,9 +190,24 @@ class BaseEmitter:
         text = self.emit_stmt(node, indent)
         return (self.numpy_note(node, indent) + text) if text else text
 
-    def emit_block(self, stmts: list[ast.stmt], indent: str) -> str:
+    def emit_block(self, stmts: Sequence[ast.stmt], indent: str) -> str:
         out = [self.emit_stmt_with_note(s, indent) for s in stmts]
         return "\n".join(line for line in out if line)
+
+    def emit_for(self, node: ast.For, indent: str) -> str:
+        raise NotImplementedError("a target emitter renders a for loop")
+
+    def emit_while(self, node: ast.While, indent: str) -> str:
+        raise NotImplementedError("a target emitter renders a while loop")
+
+    def emit_if(self, node: ast.If, indent: str) -> str:
+        raise NotImplementedError("a target emitter renders an if")
+
+    def emit_assign(self, node: ast.Assign, indent: str) -> str:
+        raise NotImplementedError("a target emitter renders an assignment")
+
+    def emit_augassign(self, node: ast.AugAssign, indent: str) -> str:
+        raise NotImplementedError("a target emitter renders an augmented assignment")
 
     def emit_stmt(self, node: ast.stmt, indent: str) -> str:
         if isinstance(node, ast.For):
@@ -241,7 +255,7 @@ class BaseEmitter:
         emit a bare ``return`` statement."""
         return ""
 
-    def emit_expr_inner(self, node: ast.AST) -> str:
+    def emit_expr_inner(self, node: ast.expr) -> str:
         raise NotImplementedError
 
     def name_dtype(self, name: str) -> str | None:
@@ -251,7 +265,7 @@ class BaseEmitter:
         """``text`` (computed in the wide int64) narrowed back to the ``wrap`` element dtype."""
         raise NotImplementedError
 
-    def emit_expr(self, node: ast.AST) -> str:
+    def emit_expr(self, node: ast.expr) -> str:
         """Emit an expression, re-rounding a float BinOp result to the fp8 grid (per-op in numpy)
         and re-wrapping a narrow-int +/-/* result back to its element width (numpy wraps there;
         the promoting read computes wide, so an intermediate that overflows would not)."""
@@ -293,7 +307,7 @@ class BaseEmitter:
             )
         return self.fp8_fns(used[0]) if used else None
 
-    def touches_fp8(self, node: ast.AST) -> bool:
+    def touches_fp8(self, node: ast.expr) -> bool:
         """True when the subtree reads an fp8 array/scalar/local, so the enclosing op yields an fp8 float to re-round."""
         for sub in ast.walk(node):
             if isinstance(sub, ast.Subscript) and isinstance(sub.value, ast.Name):
@@ -313,7 +327,7 @@ class BaseEmitter:
         fns = self.fp8_fns(self.name_dtype(node.id) or "")
         return f"{fns.promote}({access})" if fns is not None else access
 
-    def store_fns(self, target: ast.AST) -> Fp8Fns | None:
+    def store_fns(self, target: ast.expr) -> Fp8Fns | None:
         """:class:`Fp8Fns` when an assignment target is an fp8 element/name, else None (the store half of promote/demote)."""
         base = target
         while isinstance(base, ast.Subscript):

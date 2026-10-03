@@ -2,9 +2,11 @@
 
 import ast
 import copy
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from hpcagent_bench.translators.numpyto_common.ast_build import const_int, name_
+from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import DesugarError
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
 
 __all__ = [
@@ -28,14 +30,14 @@ __all__ = [
 ]
 
 
-def list_display_elts(node: ast.AST) -> list[ast.expr] | None:
+def list_display_elts(node: ast.expr) -> list[ast.expr] | None:
     """A 1-D ``[e0, e1, ...]`` display -> its elements; a nested display or a star is refused."""
     if not isinstance(node, ast.List) or any(isinstance(e, (ast.List, ast.Tuple, ast.Starred)) for e in node.elts):
         return None
     return list(node.elts)
 
 
-def is_len_of(node: ast.AST, name: str) -> bool:
+def is_len_of(node: ast.expr, name: str) -> bool:
     """``len(name)`` -- the list's running length."""
     return (
         isinstance(node, ast.Call)
@@ -49,6 +51,8 @@ def is_len_of(node: ast.AST, name: str) -> bool:
 
 class SubstituteLen(ast.NodeTransformer):
     """``len(name)`` -> the fill index: the element landing at ``i`` was appended at length ``i``."""
+
+    __slots__ = ("index", "name")
 
     def __init__(self, name: str, index: str) -> None:
         self.name = name
@@ -233,7 +237,7 @@ class ListSegment:
 
 
 def plan_list_build(
-    block: list[ast.stmt], start: int, fn: ast.FunctionDef, vectors: frozenset[str], index: str
+    block: Sequence[ast.stmt], start: int, fn: ast.FunctionDef, vectors: frozenset[str], index: str
 ) -> tuple[list[ast.stmt], int] | None:
     """The fold of the list bound at ``block[start]`` -> ``(replacement, end)``, or None to leave it.
 
@@ -324,12 +328,15 @@ def list_build_statements(name: str, segments: list[ListSegment], length: str, p
     for segment in segments:
         if segment.kind == "while":
             store = f"{name}[{segment.counter}] = {ast.unparse(segment.elements[0])}"
-            lines.append(
-                f"for {segment.counter} in range({segment.base}, ({ast.unparse(segment.bound)})):\n    {store}"
-            )
+            bound = segment.bound
+            if bound is None:
+                raise DesugarError("a while segment of a list build needs its bound")
+            lines.append(f"for {segment.counter} in range({segment.base}, ({ast.unparse(bound)})):\n    {store}")
             continue
         indent = "    " if segment.kind == "for" else ""
         if segment.kind == "for":
+            if segment.bound is None:
+                raise DesugarError("a for segment of a list build needs its bound")
             lines.append(f"for {segment.counter} in range({ast.unparse(segment.bound)}):")
         stride = len(segment.elements)
         for k, element in enumerate(segment.elements):

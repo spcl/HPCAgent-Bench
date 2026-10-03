@@ -39,6 +39,8 @@ from hpcagent_bench.frameworks import Benchmark, Framework
 from hpcagent_bench.frameworks import utilities as util
 from hpcagent_bench.frameworks.errors import NotSupportedByFramework
 from hpcagent_bench.frameworks.framework import (
+    MS_PER_S,
+    US_PER_MS,
     AnyArray,
     ArgValue,
     ArrayLike,
@@ -54,7 +56,7 @@ from hpcagent_bench.frameworks.framework import (
     is_numpy_array,
 )
 from hpcagent_bench.frameworks.test import njit_reference, tolerance_datatype, tolerances_for
-from hpcagent_bench.fuzz import safe_eval
+from hpcagent_bench.fuzz import FuzzValue, safe_eval
 
 __all__ = [
     "ABSENT_PINS_REPORTED",
@@ -69,6 +71,7 @@ __all__ = [
     "NEW_GPU_OFFLOADING",
     "PARALLEL_FUSION_ROUNDS",
     "PIPELINES_BY_NAME",
+    "PROBE_TIMEOUT_S",
     "RANK_ENV",
     "READABLE_CODEGEN",
     "SINGLE_STREAM",
@@ -134,12 +137,15 @@ def bind_free_symbols(
             if s in missing and s not in extra:
                 extra[s] = int(dim)
     if symbol_recipes:
-        values: dict[str, int] = {n: int(v) for n, v in bound.items() if isinstance(v, (int, np.integer))}
+        values: dict[str, FuzzValue] = {n: int(v) for n, v in bound.items() if isinstance(v, (int, np.integer))}
         values.update(extra)
         for name, expr in symbol_recipes:
-            values[name] = int(safe_eval(expr, values))
+            evaluated = safe_eval(expr, values)
+            if not isinstance(evaluated, (int, float)):
+                raise TypeError(f"symbol recipe {expr!r} for {name!r} evaluates to {evaluated!r}, not a number")
+            values[name] = int(evaluated)
             if name in missing:
-                extra[name] = values[name]
+                extra[name] = int(evaluated)
     return extra
 
 
@@ -205,6 +211,9 @@ def pin_cpp_standard(arch: str = "cpu") -> None:
 #: One GPU stream: concurrent streams overlap kernels, which breaks per-kernel counter brackets and
 #: timeline attribution, and adds timing variance.
 SINGLE_STREAM = 1
+
+#: Seconds the compiler-family probe binary may run.
+PROBE_TIMEOUT_S: int = 30
 
 
 def pin_single_stream() -> None:
@@ -272,7 +281,9 @@ def local_gpu_arch(rocm_root: pathlib.Path) -> str:
     probe = rocm_root / "llvm" / "bin" / "amdgpu-arch"
     if probe.is_file():
         try:
-            out = subprocess.run([str(probe)], capture_output=True, text=True, timeout=30, check=False).stdout
+            out = subprocess.run(
+                [str(probe)], capture_output=True, text=True, timeout=PROBE_TIMEOUT_S, check=False
+            ).stdout
         except (OSError, subprocess.SubprocessError):
             out = ""
         found = sorted({line.strip() for line in out.splitlines() if line.strip()})
@@ -728,7 +739,9 @@ class DaceFramework(Framework):
         parts.append(framework_cache.dace_tree_fingerprint().encode())
         return framework_cache.fingerprint_bytes(b"\x00".join(parts))
 
-    def build_with_cache(self, bench: Benchmark, tag: str, build: Callable[[], dace.SDFG]) -> dace.SDFG:
+    def build_with_cache(  # pyright: ignore[reportIncompatibleMethodOverride]  # narrows the hook to the SDFG DaCe caches
+        self, bench: Benchmark, tag: str, build: Callable[[], dace.SDFG]
+    ) -> dace.SDFG:
         """Load the parsed base SDFG from ``<kernel_dir>/.cache/<module>_<tag>.sdfgz`` when fresh, else build
         and save it. The parse is deterministic, so grading is unchanged. Cache errors degrade to a rebuild."""
         from hpcagent_bench import framework_cache, paths
@@ -755,7 +768,7 @@ class DaceFramework(Framework):
             try:
                 apply_pipeline_config(pipe)
                 sdfg = copy.deepcopy(base_sdfg)
-                sdfg._name = pipe.name
+                sdfg.name = pipe.name  # pyright: ignore[reportAttributeAccessIssue]  # dace types Property, not its str
                 pipe.transform(sdfg, ctx)
                 # The residency contract, once, after every GPU pipeline.
                 if self.info["arch"] == "gpu":
@@ -829,7 +842,7 @@ class DaceFramework(Framework):
         that failed verification."""
         strict = copy.deepcopy(sdfg)
         # A new name is a new build: the build cache would otherwise hand back the contracted binary.
-        strict.name = f"{sdfg.name}_strict_fp"
+        strict.name = f"{sdfg.name}_strict_fp"  # pyright: ignore[reportAttributeAccessIssue]  # dace types Property, not its str
         keys = [("compiler", "cpu", "args")]
         if self.info["arch"] == "gpu":
             keys += [("compiler", "cuda", "args"), ("compiler", "cuda", "hip_args")]
@@ -875,8 +888,7 @@ class DaceFramework(Framework):
         except Exception as exc:
             print(f"DaCe optimize: variant {variant.name!r} raised during verify: {exc}")
             return False
-        copy_back = self.copy_back_func()
-        host = [copy_back(a) for a in out]
+        host = [np.asarray(self.copy_back_output(a)) for a in out]
         # Grade at the compared arrays' precision, not fp64.
         present = {a.dtype.type for a in host if a.dtype.name in ("float32", "float64")}
         band = tolerance_datatype(self.datatype, present.pop() if len(present) == 1 else None)
@@ -927,7 +939,7 @@ class DaceFramework(Framework):
     def stop_timer(self, timer: Timer) -> TimingResult:
         """Return DaCe's latest instrumentation report as native time; ``None`` if not instrumented/parseable."""
         self.synchronize_device()
-        python_t = (time.perf_counter() - timer.t0) * 1.0e3  # s -> ms
+        python_t = (time.perf_counter() - timer.t0) * MS_PER_S
         native_t: float | None = None
         program = timer.program
         if isinstance(program, TimedCompiledSDFG):
@@ -937,7 +949,7 @@ class DaceFramework(Framework):
                 events = report.events if report is not None else []
                 durations_us = [float(ev.duration) for ev in events if isinstance(ev, DurationEvent)]
                 if durations_us:
-                    native_t = durations_us[-1] / 1.0e3  # us -> ms
+                    native_t = durations_us[-1] / US_PER_MS
             except Exception:
                 native_t = None
         return TimingResult(python=python_t, native=native_t)

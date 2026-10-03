@@ -2,6 +2,7 @@
 
 import ast
 
+from hpcagent_bench.translators.numpyto_common.ast_build import name_ids
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import DesugarError, as_stmts
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.constants import fd_step, working_float_dtype
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.lists import fold_list_accumulators
@@ -126,7 +127,7 @@ CURVE_FIT_IGNORED_KW = frozenset({"maxfev", "p0", "method", "full_output"})
 CURVE_FIT_ITERS = 100
 
 
-def curve_fit_call(node: ast.AST) -> ast.Call | None:
+def curve_fit_call(node: ast.expr) -> ast.Call | None:
     """A ``curve_fit(...)`` call -- bare, ``scipy.optimize.``- or ``optimize.``-
     qualified -- else None."""
     if not isinstance(node, ast.Call):
@@ -162,6 +163,8 @@ class CurveFitRewriter(ast.NodeTransformer):
     ``pcov`` is not computed; a target binding it to anything but ``_`` raises.
     """
 
+    __slots__ = ("changed", "ctr", "fitted", "kernel", "precision", "tree")
+
     def __init__(self, tree: ast.Module, kernel: ast.FunctionDef, precision: str | None = None) -> None:
         self.tree = tree
         self.kernel = kernel
@@ -194,6 +197,7 @@ class CurveFitRewriter(ast.NodeTransformer):
                 and isinstance(sub.slice, ast.UnaryOp)
                 and isinstance(sub.slice.op, ast.USub)
                 and isinstance(sub.slice.operand, ast.Constant)
+                and isinstance(sub.slice.operand.value, int)
             ):
                 sub.slice = ast.parse(f"{nexpr} - {sub.slice.operand.value}", mode="eval").body
         ast.fix_missing_locations(fdef)
@@ -204,14 +208,15 @@ class CurveFitRewriter(ast.NodeTransformer):
             return node
         tgt = node.targets[0]
         if isinstance(tgt, ast.Tuple):
-            if len(tgt.elts) != 2 or not all(isinstance(e, ast.Name) for e in tgt.elts):
+            target_names = name_ids(tgt.elts)
+            if len(tgt.elts) != 2 or target_names is None:
                 raise DesugarError(f"curve_fit: unsupported target {ast.unparse(tgt)}")
-            if tgt.elts[1].id != "_":
+            if target_names[1] != "_":
                 raise DesugarError(
                     "curve_fit: the pcov covariance output is not computed by the LM "
-                    f"lowering, but {tgt.elts[1].id!r} binds it"
+                    f"lowering, but {target_names[1]!r} binds it"
                 )
-            popt = tgt.elts[0].id
+            popt = target_names[0]
         elif isinstance(tgt, ast.Name):
             popt = tgt.id
         else:
@@ -226,7 +231,9 @@ class CurveFitRewriter(ast.NodeTransformer):
         if len(call.args) < 3 or p0 is None:
             raise DesugarError("curve_fit: need f, xdata, ydata and an explicit p0")
         f, x, y = call.args[0], call.args[1], call.args[2]
-        if not all(isinstance(v, ast.Name) for v in (f, x, y, p0)):
+        if not (
+            isinstance(f, ast.Name) and isinstance(x, ast.Name) and isinstance(y, ast.Name) and isinstance(p0, ast.Name)
+        ):
             raise DesugarError("curve_fit: f / xdata / ydata / p0 must be plain names")
         model = self.find_model(f.id)
         if model is None:
@@ -248,6 +255,8 @@ class NegParamIndexFold(ast.NodeTransformer):
     against a static extent.
     """
 
+    __slots__ = ("name", "nexpr")
+
     def __init__(self, name: str, nexpr: str) -> None:
         self.name = name
         self.nexpr = nexpr
@@ -260,6 +269,7 @@ class NegParamIndexFold(ast.NodeTransformer):
             and isinstance(node.slice, ast.UnaryOp)
             and isinstance(node.slice.op, ast.USub)
             and isinstance(node.slice.operand, ast.Constant)
+            and isinstance(node.slice.operand.value, int)
         ):
             node.slice = ast.parse(f"{self.nexpr} - {node.slice.operand.value}", mode="eval").body
             ast.fix_missing_locations(node)

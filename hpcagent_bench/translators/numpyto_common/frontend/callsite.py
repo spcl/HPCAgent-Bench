@@ -2,13 +2,13 @@
 
 import ast
 import copy
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 
-from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc, KernelIR
+from hpcagent_bench.translators.numpyto_common.emit_helpers.tokens import IDENT_RE
 from hpcagent_bench.translators.numpyto_common.frontend.helper_specialize import substitute_names
 from hpcagent_bench.translators.numpyto_common.frontend.inlining import collect_assigned_names
-from hpcagent_bench.translators.numpyto_common.frontend.shape_arith import literal_axis, fold_shape_expr
-from hpcagent_bench.translators.numpyto_common.emit_helpers.tokens import IDENT_RE
+from hpcagent_bench.translators.numpyto_common.frontend.shape_arith import fold_shape_expr, literal_axis
+from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc, KernelIR
 
 __all__ = [
     "EXTRA_SYM_DEPTH",
@@ -57,7 +57,7 @@ def held_before_table(owner_fn: ast.FunctionDef) -> dict[int | None, set[str]]:
     return table
 
 
-def shape_symbols(arrays: list[ArrayDesc]) -> set[str]:
+def shape_symbols(arrays: Iterable[ArrayDesc]) -> set[str]:
     """Free identifiers appearing in array-param shape expressions (``ngm`` in a
     ``(3, ngm)`` shape) -- the symbols a helper must receive to size its loops."""
     syms: set[str] = set()
@@ -135,12 +135,15 @@ def fold_caller_shape_reads(text: str, arr_by: dict[str, "ArrayDesc"] | None) ->
     """
     if not arr_by or ".shape" not in text:
         return text
+    declared: dict[str, ArrayDesc] = arr_by
 
     class Fold(ast.NodeTransformer):
+        __slots__ = ()
+
         def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
             base = node.value
             if isinstance(base, ast.Attribute) and base.attr == "shape" and isinstance(base.value, ast.Name):
-                desc = arr_by.get(base.value.id)
+                desc = declared.get(base.value.id)
                 axis = literal_axis(node.slice)
                 if desc is not None and axis is not None and -len(desc.shape) <= axis < len(desc.shape):
                     return ast.copy_location(ast.parse(str(desc.shape[axis]), mode="eval").body, node)
@@ -157,7 +160,7 @@ def caller_side_symbol(
     sym: str,
     held: set[str],
     decl_pnames: list[str],
-    site_args: list[ast.expr],
+    site_args: Sequence[ast.expr],
     hfn: ast.FunctionDef,
     hname: str,
     depth: int = 0,
@@ -238,7 +241,7 @@ def caller_side_shape(
     tokens: Sequence[str],
     held: set[str],
     decl_pnames: list[str],
-    site_args: list[ast.expr],
+    site_args: Sequence[ast.expr],
     hfn: ast.FunctionDef,
     hname: str,
     arr_by: dict[str, "ArrayDesc"] | None = None,
@@ -278,7 +281,7 @@ def build_callsite_stmts(
     lhs: ast.expr,
     name: str,
     pnames: list[str],
-    kept_args: list[ast.expr],
+    kept_args: Sequence[ast.expr],
     extra_srcs: list[str],
     param_info: dict[str, tuple[list[str], str]],
     hret_shape: list[str],
@@ -395,6 +398,8 @@ def reorder_helper_call_args(trees: list[ast.AST], helpers: list[KernelIR]) -> N
 
 class ReplaceStmts(ast.NodeTransformer):
     """Replace specific ``Assign`` nodes (keyed by ``id``) with a stmt list."""
+
+    __slots__ = ("mapping",)
 
     def __init__(self, mapping: dict[int, list[ast.stmt]]) -> None:
         self.mapping = mapping

@@ -4,8 +4,10 @@
 import ast
 import copy
 import enum
+from collections.abc import Sequence
+from collections.abc import Set as AbstractSet
 
-from hpcagent_bench.translators.numpyto_common.ast_build import name_, numpy_attribute, store_
+from hpcagent_bench.translators.numpyto_common.ast_build import name_, name_ids, numpy_attribute, store_
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.parallelism import is_timestep_loop
 from hpcagent_bench.translators.numpyto_common.subscripts import is_full_slice
@@ -47,7 +49,6 @@ __all__ = [
     "index_in_shape",
     "is_const_literal",
     "is_index_i",
-    "is_return_only",
     "is_static_iterable",
     "local_const_seq_names",
     "loop_vars",
@@ -57,6 +58,7 @@ __all__ = [
     "row_reduce_rewrite",
     "row_reduce_target",
     "scatter_at_assign",
+    "sole_return_value",
     "split_on_break",
     "unroll_loop_vars",
 ]
@@ -122,7 +124,7 @@ def classify_for(node: ast.For) -> LoopKind:
             return LoopKind.FORI
     # also: a var written as a plain Name and read => carried
     for s in node.body:
-        if isinstance(s.targets[0], ast.Name) and s.targets[0].id in stored:
+        if isinstance(s, ast.Assign) and isinstance(s.targets[0], ast.Name) and s.targets[0].id in stored:
             return LoopKind.FORI
     # A whole-array rebind is correct only if the loop writes EVERY index; a partial range
     # (explicit start, explicit step, or an offset stop like N-1) leaves some elements
@@ -132,7 +134,7 @@ def classify_for(node: ast.For) -> LoopKind:
     return LoopKind.VECTORIZE
 
 
-def range_covers_full_extent(it: ast.AST) -> bool:
+def range_covers_full_extent(it: ast.expr) -> bool:
     """True for a ``range(stop)`` that spans an array's whole first axis: a single argument
     (start 0, step 1) that is a bare size symbol, ``len(x)``, ``x.shape[k]``, or a literal.
     Two+ args (explicit start/step) or an arithmetic stop (``N-1``, ``N//2``) are partial."""
@@ -152,11 +154,11 @@ def range_covers_full_extent(it: ast.AST) -> bool:
     return isinstance(arg, ast.Subscript) and isinstance(arg.value, ast.Attribute) and arg.value.attr == "shape"
 
 
-def is_index_i(sl: ast.AST, i: str) -> bool:
+def is_index_i(sl: ast.expr, i: str) -> bool:
     return isinstance(sl, ast.Name) and sl.id == i
 
 
-def carried_vars(body: list[ast.stmt], extra_live: set[str], cond_names: set[str] = frozenset()) -> list[str]:
+def carried_vars(body: list[ast.stmt], extra_live: set[str], cond_names: AbstractSet[str] = frozenset()) -> list[str]:
     """Variables that genuinely thread across iterations.
 
     Carried iff read-before-written in the body (a cross-iteration dependency,
@@ -251,7 +253,7 @@ def functionalize_stmt(s: ast.stmt) -> list[ast.stmt]:
         # ``a[i, j]`` (numpy-equivalent for basic indices): a naive
         # ``a[i].at[j].set(v)`` would rebind ``a`` to just the row ``a[i]``.
         indices: list[ast.expr] = []
-        base = tgt
+        base: ast.expr = tgt
         while isinstance(base, ast.Subscript):
             indices.append(base.slice)
             base = base.value
@@ -315,7 +317,7 @@ def scatter_at_assign(call: ast.Call) -> ast.Assign | None:
     return ast.copy_location(ast.Assign(targets=[store_(base_name(target))], value=rebind), call)
 
 
-def broadcast_astype(arr: ast.AST, value: ast.expr) -> ast.Call:
+def broadcast_astype(arr: ast.expr, value: ast.expr) -> ast.Call:
     """``jnp.broadcast_to(value, arr.shape).astype(arr.dtype)`` -- faithful
     lowering of ``arr[:] = value`` (broadcasts + casts to ``arr``'s shape/dtype,
     inferred from the live array, never hardcoded)."""
@@ -330,7 +332,9 @@ def broadcast_astype(arr: ast.AST, value: ast.expr) -> ast.Call:
     return ast.Call(func=ast.Attribute(value=bcast, attr="astype", ctx=ast.Load()), args=[dtype], keywords=[])
 
 
-def emit_body(body: list[ast.stmt], live_out: set[str], indent: str, defined: set[str] = frozenset()) -> list[str]:
+def emit_body(
+    body: Sequence[ast.stmt], live_out: set[str], indent: str, defined: AbstractSet[str] = frozenset()
+) -> list[str]:
     """Emit a straight-line/looped statement list to JAX source lines.
 
     ``defined``: names already bound entering this body (params, or the loop
@@ -392,7 +396,7 @@ def emit_body(body: list[ast.stmt], live_out: set[str], indent: str, defined: se
     return lines
 
 
-def is_static_iterable(node: ast.AST) -> bool:
+def is_static_iterable(node: ast.expr) -> bool:
     """Is ``node`` a compile-time-constant iterable a jit trace can unroll: a
     literal tuple/list, a module constant sequence, or ``enumerate``/``zip``/
     ``reversed`` over such (ls3df's ``for m, w in enumerate(_CW, start=1)``)?
@@ -411,7 +415,7 @@ def is_static_iterable(node: ast.AST) -> bool:
     return False
 
 
-def is_const_literal(node: ast.AST) -> bool:
+def is_const_literal(node: ast.expr) -> bool:
     """A compile-time constant literal: a ``Constant``, a signed constant, or a
     ``list``/``tuple`` nesting of such (lulesh's ``[(0, 1, 2, 3), (4, 5, 6, 7),
     ...]`` face-index table)."""
@@ -441,7 +445,7 @@ def local_const_seq_names(fn: ast.FunctionDef) -> set[str]:
     return {n for n in literal if counts.get(n) == 1}
 
 
-def emit_if(node: ast.If, live_out: set[str], indent: str, defined: set[str] = frozenset()) -> list[str]:
+def emit_if(node: ast.If, live_out: set[str], indent: str, defined: AbstractSet[str] = frozenset()) -> list[str]:
     """Lower an ``if`` to ``jnp.where`` selects, or keep a real Python branch
     when the condition is static (contour_integral's ``if NR == NM`` picks
     ``inv`` vs ``solve``, whose incompatible-shape branches can't ``where``-merge).
@@ -460,9 +464,10 @@ def emit_if(node: ast.If, live_out: set[str], indent: str, defined: set[str] = f
         return lines
     cond = cond_str(node.test)
     # if/else that simply returns -> a single selected return
-    if is_return_only(node.body) and is_return_only(node.orelse):
-        a = unparse_jnp(node.body[0].value)
-        b = unparse_jnp(node.orelse[0].value)
+    then_value, else_value = sole_return_value(node.body), sole_return_value(node.orelse)
+    if then_value is not None and else_value is not None:
+        a = unparse_jnp(then_value)
+        b = unparse_jnp(else_value)
         return [f"{indent}return jnp.where({cond}, {a}, {b})"]
 
     if any(isinstance(s, ast.Return) for s in node.body + node.orelse):
@@ -510,11 +515,13 @@ def emit_if(node: ast.If, live_out: set[str], indent: str, defined: set[str] = f
     return lines
 
 
-def is_return_only(body: list[ast.stmt]) -> bool:
-    return len(body) == 1 and isinstance(body[0], ast.Return) and body[0].value is not None
+def sole_return_value(body: Sequence[ast.stmt]) -> ast.expr | None:
+    """The value of ``body`` when it is exactly one ``return <value>``, else ``None``."""
+    only = body[0] if len(body) == 1 else None
+    return only.value if isinstance(only, ast.Return) else None
 
 
-def split_on_break(body: list[ast.stmt]):
+def split_on_break(body: Sequence[ast.stmt]):
     """Split the loop body around the ``if`` whose branch ENDS in ``break``.
 
     Returns ``(before, cond, on_break, after)``:
@@ -565,7 +572,7 @@ def parse_range(rng: ast.Call):
     raise EmitError("malformed range()")
 
 
-def emit_for(node: ast.For, live_out: set[str], indent: str, defined: set[str] = frozenset()) -> list[str]:
+def emit_for(node: ast.For, live_out: set[str], indent: str, defined: AbstractSet[str] = frozenset()) -> list[str]:
     kind = classify_for(node)
     i = node.target.id if isinstance(node.target, ast.Name) else "_i"
     rng = node.iter
@@ -610,7 +617,7 @@ def emit_for(node: ast.For, live_out: set[str], indent: str, defined: set[str] =
     return emit_while_break(node, carried, lo, hi, i, indent)
 
 
-def emit_iterable_for(node: ast.For, live_out: set[str], indent: str, defined: set[str]) -> list[str]:
+def emit_iterable_for(node: ast.For, live_out: set[str], indent: str, defined: AbstractSet[str]) -> list[str]:
     """A loop over a non-``range`` iterable. A compile-time-constant iterable (ls3df's
     ``enumerate(_CW, start=1)``) emits as a literal Python for the tracer unrolls; a carried rebind
     just threads as a normal value. A literal tuple/list of Names (lulesh's face-corner
@@ -632,9 +639,13 @@ def emit_iterable_for(node: ast.For, live_out: set[str], indent: str, defined: s
 
 def emit_vectorized(node: ast.For, i: str, indent: str) -> list[str]:
     """``a[i] = f(b[i], ...)`` -> ``a = f(b, ...)`` (drop the ``[i]`` indexing)."""
-    out = []
+    out: list[str] = []
     for s in node.body:
+        if not (isinstance(s, ast.Assign) and isinstance(s.targets[0], ast.Subscript)):
+            raise EmitError(f"a vectorised loop body is element assignments, not {type(s).__name__}")
         t = s.targets[0]
+        if not isinstance(t.value, ast.Name):
+            raise EmitError("a vectorised loop writes a named array")
         arr = t.value.id
         rhs = devectorize_index(s.value, i)
         # A RHS reading `i` (only inside ``x[i]`` subscripts) devectorises
@@ -672,7 +683,7 @@ def emit_fori(node: ast.For, carried: list[str], rng: tuple[str, str, bool, str]
     return lines
 
 
-def expand_parallel_assigns(stmts: list[ast.stmt]) -> list[ast.stmt]:
+def expand_parallel_assigns(stmts: Sequence[ast.stmt]) -> list[ast.stmt]:
     """Split a parallel Name-tuple assign ``a, b = e0, e1`` into ``__pa = (e0,
     e1); a = __pa[0]; b = __pa[1]`` so each target becomes a single Name rebind
     (ls3df's Lanczos ``v_prev, v = v, w / beta``). The temp snapshots the whole
@@ -680,18 +691,18 @@ def expand_parallel_assigns(stmts: list[ast.stmt]) -> list[ast.stmt]:
     break-guard's per-var ``jnp.where`` freeze."""
     out: list[ast.stmt] = []
     for s in stmts:
-        if (
-            isinstance(s, ast.Assign)
-            and len(s.targets) == 1
-            and isinstance(s.targets[0], (ast.Tuple, ast.List))
-            and all(isinstance(e, ast.Name) for e in s.targets[0].elts)
-        ):
+        unpacked = (
+            name_ids(s.targets[0].elts)
+            if isinstance(s, ast.Assign) and len(s.targets) == 1 and isinstance(s.targets[0], (ast.Tuple, ast.List))
+            else None
+        )
+        if isinstance(s, ast.Assign) and unpacked is not None:
             STATE.tuple_ctr += 1
             tmp = f"__pa{STATE.tuple_ctr}"
             out.append(ast.Assign(targets=[store_(tmp)], value=s.value))
-            for k, e in enumerate(s.targets[0].elts):
+            for k, target_name in enumerate(unpacked):
                 item = ast.Subscript(value=name_(tmp), slice=ast.Constant(value=k), ctx=ast.Load())
-                out.append(ast.Assign(targets=[store_(e.id)], value=item))
+                out.append(ast.Assign(targets=[store_(target_name)], value=item))
         else:
             out.append(s)
     return [ast.fix_missing_locations(x) for x in out]
@@ -744,7 +755,7 @@ def emit_while_break(node, carried, lo, hi, i, indent):
     return lines
 
 
-def emit_while(node: ast.While, live_out: set[str], indent: str, defined: set[str] = frozenset()) -> list[str]:
+def emit_while(node: ast.While, live_out: set[str], indent: str, defined: AbstractSet[str] = frozenset()) -> list[str]:
     carried = carried_vars(node.body, live_out, names_loaded(node.test))
     if not carried:
         raise EmitError("while-loop carries no observable state")
@@ -804,9 +815,12 @@ def row_reduce_rewrite(node: ast.AST, i: str) -> ast.expr | None:
     guessing how that interacts with the added batch axis would be guesswork,
     so the caller refuses to vectorise instead of risking another miscompile."""
     base = row_reduce_target(node, i)
-    if base is None:
+    if base is None or not isinstance(node, ast.Call):
         return None
-    is_method = not (isinstance(node.func.value, ast.Name) and node.func.value.id in ("np", "jnp"))
+    func = node.func
+    if not isinstance(func, ast.Attribute):
+        return None
+    is_method = not (isinstance(func.value, ast.Name) and func.value.id in ("np", "jnp"))
     extra_args = node.args if is_method else node.args[1:]
     if extra_args or node.keywords:
         return None
@@ -822,32 +836,34 @@ def row_reduce_rewrite(node: ast.AST, i: str) -> ast.expr | None:
         keywords=[],
     )
     call = ast.Call(
-        func=numpy_attribute(node.func.attr),
+        func=numpy_attribute(func.attr),
         args=[copy.deepcopy(base)],
         keywords=[ast.keyword(arg="axis", value=axis)],
     )
     return ast.copy_location(call, node)
 
 
-def devectorize_index(node: ast.AST, i: str) -> ast.AST:
+def devectorize_index(node: ast.expr, i: str) -> ast.expr:
     """Drop ``[i]`` subscripts so an independent elementwise loop body becomes
     a whole-array expression. A row-reduction (``np.sum(a[i])``) is rewritten
     to the equivalent axis reduction first (``row_reduce_rewrite``) -- a bare
     subscript-strip alone would collapse it to a full-array scalar."""
 
     class Rewriter(ast.NodeTransformer):
-        def visit_Call(self, n: ast.Call) -> ast.expr:
-            rewritten = row_reduce_rewrite(n, i)
+        __slots__ = ()
+
+        def visit_Call(self, node: ast.Call) -> ast.expr:
+            rewritten = row_reduce_rewrite(node, i)
             if rewritten is not None:
                 return rewritten
-            self.generic_visit(n)
-            return n
+            self.generic_visit(node)
+            return node
 
-        def visit_Subscript(self, n: ast.Subscript) -> ast.expr:
-            self.generic_visit(n)
-            if is_index_i(n.slice, i):
-                return n.value
-            return n
+        def visit_Subscript(self, node: ast.Subscript) -> ast.expr:
+            self.generic_visit(node)
+            if is_index_i(node.slice, i):
+                return node.value
+            return node
 
     return Rewriter().visit(ast.fix_missing_locations(ast.parse(ast.unparse(node), mode="eval"))).body
 

@@ -42,12 +42,12 @@ import numpy as np
 import numpy.typing as npt
 
 __all__ = [
-    "EXACT_MAX_N",
     "DEFAULT_ALPHA",
     "DEFAULT_CI_METHOD",
     "DEFAULT_CONFIDENCE",
     "DEFAULT_MAD_Z",
     "DEFAULT_RESAMPLES",
+    "EXACT_MAX_N",
     "MAD_TO_SIGMA",
     "MEANAD_TO_SIGMA",
     "MIN_INTERVAL_SAMPLES",
@@ -71,8 +71,8 @@ __all__ = [
     "rank_sum_test",
     "signed_change",
     "signed_rank_test",
-    "use_exact",
     "usable_ratios",
+    "use_exact",
     "walsh_averages",
 ]
 
@@ -306,10 +306,11 @@ def rank_sum_test(a: Samples, b: Samples, alternative: str = "two-sided") -> tup
         result = mannwhitneyu(np.asarray(a, dtype=np.float64), np.asarray(b, dtype=np.float64), alternative=alternative)
     except ValueError:
         return math.nan, 1.0
-    pvalue = float(result.pvalue)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
+    # scipy's result classes are typed `_` / partially unknown in its stubs
+    pvalue = float(result.pvalue)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownArgumentType]
     if not math.isfinite(pvalue):
         return math.nan, 1.0
-    return float(result.statistic), pvalue  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
+    return float(result.statistic), pvalue  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownArgumentType]
 
 
 #: Sample sizes up to this get the exact signed-rank null; above it the tie- and continuity-corrected normal
@@ -348,7 +349,8 @@ def signed_rank_test(differences: Samples, alternative: str = "two-sided") -> tu
         alternative=alternative,
     )
     method = "signed-rank-exact" if exact else "signed-rank-approx"
-    return float(result.statistic), float(result.pvalue), method, n  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
+    # scipy's result classes are typed `_` in its stubs
+    return float(result.statistic), float(result.pvalue), method, n  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownArgumentType]
 
 
 def usable_ratios(values: Samples, label: str = "", warn: bool = True) -> FloatArray:
@@ -419,7 +421,8 @@ def geomean_ci(values: Samples, confidence: float = 1.0 - DEFAULT_ALPHA) -> Inte
 
     logs: FloatArray = np.log(x)
     centre = math.fsum(logs.tolist()) / x.size
-    half = float(t.ppf(0.5 + confidence / 2.0, x.size - 1)) * float(np.std(logs, ddof=1)) / math.sqrt(x.size)
+    # scipy.stats distributions are partially unknown in its stubs (ppf / sf)
+    half = float(t.ppf(0.5 + confidence / 2.0, x.size - 1)) * float(np.std(logs, ddof=1)) / math.sqrt(x.size)  # pyright: ignore[reportUnknownMemberType]
     return Interval(
         "geomean", point, math.exp(centre - half), math.exp(centre + half), confidence, "log-t", int(x.size)
     )
@@ -525,7 +528,7 @@ def paired_change(differences: Samples, alpha: float = DEFAULT_ALPHA) -> PairedC
     walsh = walsh_averages(nonzero)
     mean = n * (n + 1) / 4.0
     sd = math.sqrt(n * (n + 1) * (2 * n + 1) / 24.0)
-    z = float(norm.ppf(1.0 - alpha / 2.0))
+    z = float(norm.ppf(1.0 - alpha / 2.0))  # pyright: ignore[reportUnknownMemberType]
     cutoff = min(max(math.floor(mean - z * sd), 0), walsh.size // 2 - 1)
     low, high = float(walsh[cutoff]), float(walsh[walsh.size - 1 - cutoff])
     return PairedChange(point, low, high, pvalue, n, wins, losses, ties, method)
@@ -561,6 +564,6 @@ def paired_geomean(log_ratios: Samples, alpha: float = DEFAULT_ALPHA) -> PairedC
     from scipy.stats import t  # pyright: ignore[reportMissingTypeStubs, reportUnknownVariableType]
 
     error = spread / math.sqrt(n)
-    pvalue = float(2.0 * t.sf(abs(point / error), n - 1))
-    half = float(t.ppf(1.0 - alpha / 2.0, n - 1)) * error
+    pvalue = float(2.0 * t.sf(abs(point / error), n - 1))  # pyright: ignore[reportUnknownMemberType]
+    half = float(t.ppf(1.0 - alpha / 2.0, n - 1)) * error  # pyright: ignore[reportUnknownMemberType]
     return PairedChange(point, point - half, point + half, pvalue, n, wins, losses, ties, "paired-t")

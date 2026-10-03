@@ -8,7 +8,6 @@ import contextlib
 import pathlib
 from collections.abc import Callable, Iterator
 
-from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc, KernelIR
 from hpcagent_bench.translators.numpyto_common.frontend.axes import AxisReshapeToIndexing, FoldConstantSymbols
 from hpcagent_bench.translators.numpyto_common.frontend.body_rewrites import (
     FoldSliceLocals,
@@ -33,10 +32,10 @@ from hpcagent_bench.translators.numpyto_common.frontend.kernel_ir import build_k
 from hpcagent_bench.translators.numpyto_common.frontend.manifest import (
     PinnedValue,
     collect_bool_preset_names,
-    parse_shape_expression,
     declared_dtypes,
     declared_shapes,
     field_nodes,
+    parse_shape_expression,
     symbol_sign_from_bindings,
 )
 from hpcagent_bench.translators.numpyto_common.frontend.module_constants import (
@@ -45,15 +44,15 @@ from hpcagent_bench.translators.numpyto_common.frontend.module_constants import 
 )
 from hpcagent_bench.translators.numpyto_common.frontend.shape_arith import (
     collect_inlined_scalar_defs,
+    fold_shape_expr,
     resolve_shape_attr_tokens,
     substitute_inlined_scalar_defs,
-    fold_shape_expr,
 )
 from hpcagent_bench.translators.numpyto_common.frontend.shapes import (
     apply_subscript_axes,
     local_array_def,
-    shape_from_reduction,
     resolve_shape_reads,
+    shape_from_reduction,
 )
 from hpcagent_bench.translators.numpyto_common.frontend.sparse import PruneSparseDispatch
 from hpcagent_bench.translators.numpyto_common.frontend.tuple_helpers import (
@@ -61,48 +60,50 @@ from hpcagent_bench.translators.numpyto_common.frontend.tuple_helpers import (
     return_expression,
     tuple_leaves,
 )
+from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc, KernelIR
 
 __all__ = [
-    "ArrayDesc",
     "HELPERS_KEPT_DISABLED",
     "INLINABLE_STMTS",
-    "PinnedValue",
-    "PruneSparseDispatch",
+    "ArrayDesc",
     "AxisReshapeToIndexing",
     "FoldConstantSymbols",
     "FoldSliceLocals",
+    "PinnedValue",
+    "PruneSparseDispatch",
     "SubstituteParamAliases",
     "apply_subscript_axes",
     "bare_index_list",
     "collect_bool_preset_names",
     "collect_inlinable_helpers",
     "collect_inlined_scalar_defs",
+    "declared_dtypes",
+    "declared_shapes",
     "dtype_from_constructor",
     "dtypes_from_initialize",
+    "emit_with_inline_fallback",
+    "field_nodes",
     "fold_default_args",
+    "fold_shape_expr",
     "folded_straight_line",
     "fuse_guarded_returns",
     "inline_module_constants",
     "is_static_flag_test",
     "local_array_def",
     "names_used_as_int",
+    "parse_kernel",
     "parse_shape_expression",
     "resolve_shape_attr_tokens",
+    "resolve_shape_reads",
     "return_expression",
     "shape_from_constructor",
     "shape_from_reduction",
     "strip_framework_dtype_rebinding",
     "substitute_inlined_scalar_defs",
-    "tuple_leaves",
-    "declared_dtypes",
-    "declared_shapes",
-    "emit_with_inline_fallback",
-    "field_nodes",
-    "fold_shape_expr",
-    "parse_kernel",
-    "resolve_shape_reads",
     "symbol_sign_from_bindings",
+    "tuple_leaves",
     "widen_counting_scalar_params",
+    "without_kept_helpers",
 ]
 
 

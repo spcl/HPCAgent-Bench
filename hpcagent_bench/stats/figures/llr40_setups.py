@@ -12,18 +12,18 @@ from collections.abc import Sequence
 
 import pandas as pd
 
-from hpcagent_bench import study_tags, packets
+from hpcagent_bench import packets, study_tags
 from hpcagent_bench.stats import population
 
 __all__ = [
-    "SETUP_PATTERN",
     "CANON_BASELINE",
     "CONDITION_ORDER",
-    "setup_tokens",
+    "SETUP_PATTERN",
     "candidate_setups",
     "condition_label",
     "parse_setup",
     "rank_condition",
+    "setup_tokens",
     "tag_of",
 ]
 
@@ -68,7 +68,7 @@ def setup_tokens(
     entered at any stand-in value. Under ``latest`` one task IS the
     kernel's value, so the range dicts come back empty -- there is nothing to bracket.
     """
-    subset = frame[frame["setup"].astype(str) == setup]
+    subset = frame.loc[frame["setup"].astype(str) == setup]
     totals = population.kernel_tokens(subset, ("setup", "kernel"), repeats=repeats)
     values = {str(kernel): float(value) for kernel, value in totals.droplevel(0).items() if value > 0}
     if population.repeat_policy(repeats) != population.RepeatPolicy.MEDIAN or not values:

@@ -5,6 +5,7 @@ import copy
 
 from hpcagent_bench.translators.numpyto_common.ast_build import name_, numpy_attribute, range_for
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import numpy_call_attr
+from hpcagent_bench.translators.numpyto_common.limits import CALL_GRAPH_ROUNDS
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import DesugarError, RankedRewritePass
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.hoist import HoistForm, ValueHoist
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.kinds import dtype_kind
@@ -29,9 +30,9 @@ __all__ = [
 ]
 
 
-def matmul_pairs(node: ast.AST) -> list[ast.AST]:
+def matmul_pairs(node: ast.expr) -> list[ast.expr]:
     """Every matmul (``@`` BinOp or ``np.matmul`` call) under ``node``."""
-    out: list[ast.AST] = []
+    out: list[ast.expr] = []
     for n in ast.walk(node):
         if isinstance(n, ast.BinOp) and isinstance(n.op, ast.MatMult):
             out.append(n)
@@ -40,15 +41,19 @@ def matmul_pairs(node: ast.AST) -> list[ast.AST]:
     return out
 
 
-def matmul_operands(mm: ast.AST):
+def matmul_operands(mm: ast.expr) -> tuple[ast.expr, ast.expr]:
     if isinstance(mm, ast.BinOp):
         return mm.left, mm.right
-    return mm.args[0], mm.args[1]
+    if isinstance(mm, ast.Call):
+        return mm.args[0], mm.args[1]
+    raise TypeError(f"{type(mm).__name__} is not a matmul")
 
 
 class IndexLeadingAxis(ast.NodeTransformer):
     """Subscript every rank > 2 ``Name`` by ``[bv]`` (its batch axis); rank <= 2 names
     stay whole, so a shared 2-D operand broadcasts across the batch."""
+
+    __slots__ = ("bv", "ranks")
 
     def __init__(self, bv: str, ranks: dict[str, int]) -> None:
         self.bv = bv
@@ -71,9 +76,9 @@ class BatchedMatmulToLoop(RankedRewritePass):
     """``Q[:] = Q + I @ S`` (I rank-3) -> a loop over the batch axis doing a 2-D GEMM per
     element. numba / pythran / Fortran have 2-D matmul but no stacked (>=3-D) form."""
 
-    __slots__ = ("_ctr", "changed")
+    __slots__ = ()
 
-    def batch_source(self, value: ast.AST) -> ast.Name | None:
+    def batch_source(self, value: ast.expr) -> ast.Name | None:
         """First rank > 2 Name feeding a batched matmul; its leading axis is the batch extent."""
         for mm in matmul_pairs(value):
             for op in matmul_operands(mm):
@@ -82,7 +87,7 @@ class BatchedMatmulToLoop(RankedRewritePass):
                         return n
         return None
 
-    def is_batched(self, value: ast.AST) -> bool:
+    def is_batched(self, value: ast.expr) -> bool:
         """True iff some matmul has a rank > 2 operand and every matmul operand is a bare ``Name``.
         A ``reshape`` / ``transpose`` operand restructures axes, so indexing its leading axis
         would miscompile; such statements stay verbatim."""
@@ -95,7 +100,7 @@ class BatchedMatmulToLoop(RankedRewritePass):
                 return True
         return False
 
-    def index_target(self, target: ast.AST, bv: str) -> ast.AST | None:
+    def index_target(self, target: ast.expr, bv: str) -> ast.Subscript | None:
         """``T[:]`` or bare rank > 2 ``T`` -> ``T[bv]``."""
         if (
             isinstance(target, ast.Subscript)
@@ -113,7 +118,7 @@ class BatchedMatmulToLoop(RankedRewritePass):
             return ast.Subscript(value=name_(target.id), slice=name_(bv), ctx=ast.Store())
         return None
 
-    def allocation(self, name: str, value: ast.AST) -> ast.stmt | None:
+    def allocation(self, name: str, value: ast.expr) -> ast.stmt | None:
         """The ``np.empty`` that binds a bare-Name target, or None when its extents are not exact.
         The loop only writes into the target, so a binding target needs this allocation first.
         Exact means equal-rank operands: ``A``'s extents with ``B``'s last."""
@@ -129,14 +134,15 @@ class BatchedMatmulToLoop(RankedRewritePass):
         dims = [f"{a.id}.shape[{k}]" for k in range(rank - 1)] + [f"{b.id}.shape[{rank - 1}]"]
         return ast.parse(f"{name} = np.empty(({', '.join(dims)}), {a.id}.dtype)").body[0]
 
-    def visit_Assign(self, node: ast.Assign) -> ast.AST:
+    def visit_Assign(self, node: ast.Assign) -> ast.AST | list[ast.stmt]:
         self.generic_visit(node)
         if len(node.targets) != 1 or not self.is_batched(node.value):
             return node
         bsrc = self.batch_source(node.value)
         if bsrc is None:
             return node
-        new_target = self.index_target(node.targets[0], "")  # probe form first
+        bv = f"__bm{self._ctr}"
+        new_target = self.index_target(node.targets[0], bv)
         if new_target is None:
             return node  # target not a recognised batched whole-array write
         # A bare-Name target is a binding: without an exact shape to allocate, stay verbatim.
@@ -145,10 +151,8 @@ class BatchedMatmulToLoop(RankedRewritePass):
             alloc = self.allocation(node.targets[0].id, node.value)
             if alloc is None:
                 return node
-        bv = f"__bm{self._ctr}"
         self._ctr += 1
         self.changed = True
-        new_target = self.index_target(node.targets[0], bv)
         new_value = IndexLeadingAxis(bv, self.ranks).visit(copy.deepcopy(node.value))
         extent = ast.Subscript(
             value=ast.Attribute(value=name_(bsrc.id), attr="shape", ctx=ast.Load()),
@@ -226,7 +230,7 @@ def int_matmul_temp(a: ast.expr, b: ast.expr, hoist: ValueHoist) -> ast.expr | N
     return name_(temp)
 
 
-def hoist_int_matmul(node: ast.AST, hoist: ValueHoist) -> ast.expr | None:
+def hoist_int_matmul(node: ast.expr, hoist: ValueHoist) -> ast.expr | None:
     """An integer/bool ``a @ b`` / ``np.matmul`` / ``np.dot`` -> the temp its explicit loop fills.
     numba's ``@`` is BLAS-backed and float-only; float matmul is left for it. >2-D operands raise DesugarError."""
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.MatMult):
@@ -239,7 +243,7 @@ def hoist_int_matmul(node: ast.AST, hoist: ValueHoist) -> ast.expr | None:
 INT_MATMUL_HOIST = HoistForm(frozenset({"matmul", "dot"}), (ast.MatMult,), hoist_int_matmul)
 
 
-def is_transpose_expr(v: ast.AST) -> bool:
+def is_transpose_expr(v: ast.expr) -> bool:
     """``np.transpose(x, ...)`` / ``x.transpose(...)`` / ``x.T``: a non-contiguous view."""
     return (
         numpy_call_attr(v) == "transpose"
@@ -251,7 +255,7 @@ def is_transpose_expr(v: ast.AST) -> bool:
 def noncontig_names(tree: ast.AST) -> set:
     """Names bound to a transpose, directly or through another such name (bounded fixpoint)."""
     nc: set = set()
-    for unused in range(6):
+    for unused in range(CALL_GRAPH_ROUNDS):
         grew = False
         for node in ast.walk(tree):
             if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
@@ -269,14 +273,16 @@ class ReshapeContiguousInline(ast.NodeTransformer):
     """Wrap a reshape's operand in ``np.ascontiguousarray`` when it is a transpose or
     transpose-derived name: numba's reshape requires a contiguous array."""
 
+    __slots__ = ("changed", "noncontig")
+
     def __init__(self, noncontig: set) -> None:
         self.noncontig = noncontig
         self.changed = False
 
-    def noncontig_(self, x: ast.AST) -> bool:
+    def noncontig_(self, x: ast.expr) -> bool:
         return (isinstance(x, ast.Name) and x.id in self.noncontig) or is_transpose_expr(x)
 
-    def wrap(self, x: ast.AST) -> ast.Call:
+    def wrap(self, x: ast.expr) -> ast.Call:
         self.changed = True
         acont = numpy_attribute("ascontiguousarray")
         return ast.Call(func=acont, args=[x], keywords=[])
@@ -290,7 +296,7 @@ class ReshapeContiguousInline(ast.NodeTransformer):
         return node
 
 
-def as_matmul(node: ast.AST):
+def as_matmul(node: ast.expr):
     """``a @ b`` / ``np.matmul(a, b)`` / ``np.dot(a, b)`` -> ``(a, b)`` else None."""
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.MatMult):
         return node.left, node.right
@@ -299,9 +305,9 @@ def as_matmul(node: ast.AST):
     return None
 
 
-def as_reshape(node: ast.AST):
+def as_reshape(node: ast.expr):
     """``np.reshape(x, shape)`` / ``x.reshape(shape)`` -> ``(x, shape_node)`` else None."""
-    if numpy_call_attr(node) == "reshape" and len(node.args) >= 2:
+    if isinstance(node, ast.Call) and numpy_call_attr(node) == "reshape" and len(node.args) >= 2:
         return node.args[0], node.args[1]
     if (
         isinstance(node, ast.Call)
@@ -322,7 +328,7 @@ class ReshapeMatmulInline(RankedRewritePass):
     (``mid[-2] == 1``, ``len(mid) == X.ndim + 1``); other reshapes stay verbatim. A matched
     form with Y not 2-D or X below 2-D raises DesugarError rather than miscompiling."""
 
-    __slots__ = ("_ctr", "changed")
+    __slots__ = ()
 
     def visit_Assign(self, node: ast.Assign):
         self.generic_visit(node)

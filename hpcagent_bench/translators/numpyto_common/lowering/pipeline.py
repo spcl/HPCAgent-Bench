@@ -5,7 +5,7 @@ import copy
 import operator
 import os
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 
 from hpcagent_bench.translators.numpyto_common import dtypes
 from hpcagent_bench.translators.numpyto_common.frontend import (
@@ -13,13 +13,14 @@ from hpcagent_bench.translators.numpyto_common.frontend import (
     resolve_shape_attr_tokens,
     substitute_inlined_scalar_defs,
 )
-from hpcagent_bench.translators.numpyto_common.ir import KernelIR, stamp_symbol_assumptions
+from hpcagent_bench.translators.numpyto_common.ir import KernelIR, descs, stamp_symbol_assumptions
 from hpcagent_bench.translators.numpyto_common.lib_nodes.array_methods import ArrayMethodRewriter
 from hpcagent_bench.translators.numpyto_common.lib_nodes.dims import DIM_IDENT_RE
 from hpcagent_bench.translators.numpyto_common.lib_nodes.fft import FFT_LIBRARY_MARKER, FFTN_LIBRARY_MARKER
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import const_or_name
 from hpcagent_bench.translators.numpyto_common.lib_nodes.linalg import reset_temp_counters
 from hpcagent_bench.translators.numpyto_common.lib_nodes.rewriter import LibNodeRewriter
+from hpcagent_bench.translators.numpyto_common.limits import FIXPOINT_ROUNDS, SHALLOW_ROUNDS
 from hpcagent_bench.translators.numpyto_common.lowering.calls import (
     AstypeRewriter,
     ConditionalNoneAllocRewriter,
@@ -109,7 +110,7 @@ __all__ = [
     "LoweringContext",
     "assert_lowering_invariants",
     "dtype_verdict",
-    "elementwise_store_base",
+    "elementwise_store",
     "fix_real_scalar_dtypes",
     "fold_local_shape_attr_tokens",
     "lower",
@@ -129,6 +130,7 @@ __all__ = [
     "lp_slice_fusion_and_resolve",
     "lp_slice_normalize_and_lift",
     "lp_whole_array_and_zeros",
+    "required",
     "scalar_return_helpers",
     "tag_complex_locals",
 ]
@@ -201,25 +203,32 @@ class LoweringContext:
         #: ``I[i] = ...`` and cannot prove ``I`` boolean (mandelbrot1).
         self.bool_names: set[str] = collect_bool_names(lowered.tree, lowered.arrays)
         # Shape / dtype tables built up across phases and consumed downstream.
-        self.arrays_shapes: dict[str, list[str]] = {}
-        self.lib_shape_table: dict[str, object] = {}
+        self.arrays_shapes: dict[str, tuple[str, ...]] = {}
+        self.lib_shape_table: dict[str, tuple[str, ...]] = {}
         self.local_dtypes: dict[str, str] = {}
         self.zeros_locals: dict[str, tuple[str, ...]] = {}
-        self.shapes: dict[str, list[str]] = {}
+        self.shapes: dict[str, tuple[str, ...]] = {}
         self.scalar_temps: dict[str, tuple[str, ...]] = {}
-        self.inl_defs: dict[str, object] = {}
+        self.inl_defs: dict[str, str] = {}
         #: Dimension local -> its definition (``channels`` -> ``embed_dim``), for the matmul
         #: hoister's token comparison. See :func:`collect_dim_aliases`.
         self.dim_aliases: dict[str, str] = {}
         self.param_seed: dict[str, tuple[str, ...]] = {}
         #: Bound ``resolve_inl_table_`` closure, set in the resolve-inl phase and
         #: re-used by the slice-normalise phase (both resolve ``__inl`` tokens).
-        self.resolve_inl_table: Callable[[dict], None] | None = None
+        self.resolve_inl_table: Callable[[dict[str, tuple[str, ...]]], None] | None = None
         # Rewriter handles whose post-visit state a later phase consumes.
         self.iter_rewriter: DesugarArrayIteration | None = None
         self.wa_rewriter: WholeArrayAssignRewriter | None = None
-        self.lib_rewriter: object = None
+        self.lib_rewriter: LibNodeRewriter | None = None
         self.zeros: ZerosRewriter | None = None
+
+
+def required[T](value: T | None, what: str) -> T:
+    """``value``, which an earlier lowering phase must already have built."""
+    if value is None:
+        raise RuntimeError(f"lowering phase order: {what} is not built yet")
+    return value
 
 
 def lp_seed_shape_table(ctx: LoweringContext) -> None:
@@ -230,7 +239,7 @@ def lp_seed_shape_table(ctx: LoweringContext) -> None:
     bare symbol names.
     """
     lowered = ctx.kir
-    ctx.arrays_shapes = {a.name: list(a.shape) for a in lowered.arrays}
+    ctx.arrays_shapes = {a.name: tuple(a.shape) for a in lowered.arrays}
     # Sparse arrays carry CSR/etc. buffers, not a dense ArrayDesc, so they
     # are absent from ``lowered.arrays`` -- but the body still reads
     # ``A.shape[i]`` (cg/bicgstab/minres' ``n = A.shape[0]``). Seed the
@@ -238,7 +247,7 @@ def lp_seed_shape_table(ctx: LoweringContext) -> None:
     # maps ``A.shape[0]`` -> the logical dim symbol.
     for sname, sd in (lowered.sparse or {}).items():
         if sd.logical_shape:
-            ctx.arrays_shapes.setdefault(sname, list(sd.logical_shape))
+            ctx.arrays_shapes.setdefault(sname, tuple(sd.logical_shape))
     ShapeMidExpressionRewriter(ctx.arrays_shapes).visit(ctx.tree)
     # Index-access normalisation (chained-flatten / ellipsis-expand / trailing-slice
     # pad) is deferred to the single ``normalize-index-access`` phase, which runs
@@ -309,7 +318,7 @@ def lp_normalize_calls(ctx: LoweringContext) -> None:
     DaceMapRewriter().visit(tree)
     # ``a = b = v``: ``v`` once -- a temp for a scalar, one name for an array's one buffer.
     chain_ranks = {name: len(shape) for name, shape in ash.items()}
-    chain_ranks.update((desc.name, 0) for desc in (*ctx.kir.scalars, *ctx.kir.symbols))
+    chain_ranks.update((desc.name, 0) for desc in descs(ctx.kir.scalars, ctx.kir.symbols))
     SplitChainedAssign(lambda ordinal: f"__chain{ordinal}", seed_ranks=chain_ranks).visit(tree)
     tuple_rewriter = ShapeTableTupleSplit(ash)
     tuple_rewriter.visit(tree)
@@ -460,7 +469,7 @@ def lp_resolve_inlined_shapes(ctx: LoweringContext) -> None:
     ctx.param_seed = {n: tuple(s) for n, s in ctx.arrays_shapes.items()}
     ctx.dim_aliases = collect_dim_aliases(tree, set(ctx.arrays_shapes) | set(ctx.lib_shape_table))
 
-    def resolve_inl(shape):
+    def resolve_inl(shape: tuple[str, ...]) -> tuple[str, ...]:
         """Substitute ``__inl<k>_`` dim-locals away then resolve
         ``param.shape[i]`` -> a pure-param shape tuple.
 
@@ -476,9 +485,9 @@ def lp_resolve_inlined_shapes(ctx: LoweringContext) -> None:
         resolved = resolve_shape_attr_tokens(subbed, ctx.param_seed)
         return tuple(new if not INL_RE.search(new) else str(orig) for orig, new in zip(shape, resolved))
 
-    def resolve_inl_table_(table) -> None:
+    def resolve_inl_table_(table: dict[str, tuple[str, ...]]) -> None:
         for nm in list(table):
-            table[nm] = list(resolve_inl(table[nm])) if isinstance(table[nm], list) else resolve_inl(table[nm])
+            table[nm] = resolve_inl(table[nm])
 
     ctx.resolve_inl_table = resolve_inl_table_
     # Resolve the harvest table now so the passes that consume it (notably
@@ -492,7 +501,7 @@ def lp_resolve_inlined_shapes(ctx: LoweringContext) -> None:
     # Loop-var dtype inheritance: ``for b in data:`` (where ``data`` is
     # uint8) declares ``b`` as the element dtype of ``data``.
     array_dtypes_by_name = {a.name: a.dtype for a in ctx.kir.arrays}
-    for loop_var, source_arr in ctx.iter_rewriter.var_to_array.items():
+    for loop_var, source_arr in required(ctx.iter_rewriter, "iter_rewriter").var_to_array.items():
         src_dt = array_dtypes_by_name.get(source_arr) or ctx.local_dtypes.get(source_arr)
         if src_dt is not None:
             ctx.local_dtypes[loop_var] = src_dt
@@ -695,7 +704,7 @@ def fix_real_scalar_dtypes(ctx: LoweringContext) -> None:
     writes: dict[str, list[ast.expr]] = {}
     for stmt in ast.walk(tree):
         if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1:
-            tgt: ast.AST = stmt.targets[0]
+            tgt: ast.expr = stmt.targets[0]
         elif isinstance(stmt, ast.AugAssign):
             tgt = stmt.target
         else:
@@ -710,7 +719,7 @@ def fix_real_scalar_dtypes(ctx: LoweringContext) -> None:
         if base in candidates:
             writes.setdefault(base, []).append(stmt.value)
 
-    def all_writes_real(name: str, vals: list[ast.expr]) -> bool:
+    def all_writes_real(name: str, vals: Sequence[ast.expr]) -> bool:
         # The candidate's own self-reference is neutral (resolved real): it carries
         # the running accumulator value, so a mean / sum of a real array is real,
         # yet every OTHER operand must resolve real for the write to be real.
@@ -778,6 +787,8 @@ def lp_scatter_at(ctx: LoweringContext) -> None:
     if dead:
 
         class DropDeadWrapperAssign(ast.NodeTransformer):
+            __slots__ = ()
+
             def visit_Assign(self, node: ast.Assign) -> ast.Assign | None:
                 if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and node.targets[0].id in dead:
                     return None
@@ -821,8 +832,9 @@ def lp_whole_array_and_zeros(ctx: LoweringContext) -> None:
     # Merge matmul-hoisted temps with the np.zeros locals -- both become C stack
     # arrays / Fortran locals in the prelude.
     zeros_locals = dict(ctx.zeros.zeros)
-    zeros_locals.update(ctx.lib_rewriter.matmul_temps)
-    zeros_locals.update(ctx.lib_rewriter.fresh_local_allocs)
+    lib_rewriter = required(ctx.lib_rewriter, "lib_rewriter")
+    zeros_locals.update(lib_rewriter.matmul_temps)
+    zeros_locals.update(lib_rewriter.fresh_local_allocs)
     zeros_locals.update(ctx.scalar_temps)
     # setdefault, not update: an alias local is DERIVED (``padded = x``) while the entry already
     # here came from an allocation (``padded = np.zeros((n, c_in, length + 2 * pa))``). Letting the
@@ -849,17 +861,17 @@ def lp_whole_array_and_zeros(ctx: LoweringContext) -> None:
     # Scalar call-hoist temps: declared as plain double locals by the emit walker
     # via its implicit-local logic (they appear as a bare Name on the LHS of an
     # Assign whose RHS is a Call).
-    ctx.kir.scalar_call_temps = list(ctx.lib_rewriter.scalar_call_temps)
+    ctx.kir.scalar_call_temps = list(lib_rewriter.scalar_call_temps)
     # Re-collect the shape table -- np.zeros locals are included for slice fusion.
-    shapes: dict[str, list[str]] = dict(ctx.arrays_shapes)
+    shapes: dict[str, tuple[str, ...]] = dict(ctx.arrays_shapes)
     for name, shape in ctx.zeros.zeros.items():
-        shapes[name] = list(shape) if shape else ["1"]
+        shapes[name] = tuple(shape) if shape else ("1",)
     # Also include any shapes harvested by the pre-pass (np.eye / np.copy /
     # np.transpose / np.linalg.* etc) that aren't in arrays_shapes / zeros locals --
     # needed when slice fusion encounters omitted-stop slices on such temps.
     for name, shape in ctx.lib_shape_table.items():
         if name not in shapes:
-            shapes[name] = list(shape)
+            shapes[name] = tuple(shape)
     ctx.shapes = shapes
 
 
@@ -898,7 +910,7 @@ def lp_slice_normalize_and_lift(ctx: LoweringContext) -> None:
     new_locals = lifter.run(tree)
     if new_locals:
         for name, shape in new_locals.items():
-            shapes[name] = list(shape)
+            shapes[name] = tuple(shape)
             ctx.zeros_locals[name] = tuple(shape)
     # ``zeros_locals`` / ``local_dtypes`` are the same objects the IR already holds
     # (bound in earlier phases), so the lifter's in-place additions -- and the
@@ -917,12 +929,13 @@ def lp_slice_normalize_and_lift(ctx: LoweringContext) -> None:
     # so the top-of-function malloc is sized from real parameters (not yet-unassigned
     # ``__inl1_N`` locals).
     if ctx.inl_defs:
-        ctx.resolve_inl_table(ctx.zeros_locals)
-        ctx.resolve_inl_table(shapes)
+        resolve_inl_table = required(ctx.resolve_inl_table, "resolve_inl_table")
+        resolve_inl_table(ctx.zeros_locals)
+        resolve_inl_table(shapes)
 
 
 def fold_local_shape_attr_tokens(
-    tuple_tables: list[dict[str, object]], reassign_shapes: dict[str, list] | None
+    tuple_tables: list[dict[str, tuple[str, ...]]], reassign_shapes: dict[str, list[tuple[str, ...]]] | None
 ) -> None:
     """Fold surviving ``arr.shape[i]`` STRING tokens in the finalised shape tables
     against the now-resolved shapes of the LOCAL arrays they name.
@@ -940,23 +953,21 @@ def fold_local_shape_attr_tokens(
     never on source). Iterated to a bounded fixpoint so a temp whose dimension names
     ANOTHER temp still converges; never-worse (a token whose base is unknown is
     left untouched)."""
-    tables = [t for t in tuple_tables if t is not None]
-    for unused in range(4):
+    for unused in range(SHALLOW_ROUNDS):
         seed: dict[str, tuple[str, ...]] = {}
-        for t in tables:
-            for nm, shp in t.items():
-                seed[nm] = tuple(shp)
+        for t in tuple_tables:
+            seed.update(t)
         changed = False
-        for t in tables:
+        for t in tuple_tables:
             for nm in list(t):
-                new = resolve_shape_attr_tokens(tuple(t[nm]), seed)
-                if new != tuple(t[nm]):
-                    t[nm] = list(new) if isinstance(t[nm], list) else new
+                new = resolve_shape_attr_tokens(t[nm], seed)
+                if new != t[nm]:
+                    t[nm] = new
                     changed = True
         if reassign_shapes:
             for nm in list(reassign_shapes):
-                new_list = [tuple(resolve_shape_attr_tokens(tuple(s), seed)) for s in reassign_shapes[nm]]
-                if new_list != [tuple(s) for s in reassign_shapes[nm]]:
+                new_list = [tuple(resolve_shape_attr_tokens(s, seed)) for s in reassign_shapes[nm]]
+                if new_list != reassign_shapes[nm]:
                     reassign_shapes[nm] = new_list
                     changed = True
         if not changed:
@@ -986,12 +997,13 @@ def lp_slice_fusion_and_resolve(ctx: LoweringContext) -> None:
     # Stash a fresh copy of the reassign FIFO on the IR -- the emit walker consumes
     # it in source order to thread per-statement shape into multi-D subscript
     # flattening. The resolver below consumes its OWN copy (a fresh dict).
-    ctx.kir.reassign_shapes = {k: list(v) for k, v in ctx.wa_rewriter._reassign_shapes.items()}
+    wa_rewriter = required(ctx.wa_rewriter, "wa_rewriter")
+    ctx.kir.reassign_shapes = {k: list(v) for k, v in wa_rewriter._reassign_shapes.items()}
     ResolveArrShape(
         shapes,
         param_shapes={k: tuple(v) for k, v in ctx.arrays_shapes.items()},
         zeros_locals={k: tuple(v) for k, v in ctx.zeros_locals.items()},
-        reassign_shapes={k: list(v) for k, v in ctx.wa_rewriter._reassign_shapes.items()},
+        reassign_shapes={k: list(v) for k, v in wa_rewriter._reassign_shapes.items()},
     ).visit(tree)
     ast.fix_missing_locations(tree)
     # Force index-array LOCALS to int64. A local whose VALUES index another array
@@ -1001,7 +1013,7 @@ def lp_slice_fusion_and_resolve(ctx: LoweringContext) -> None:
     # integral, so this is sound.
     # Ordered: the loop below inserts into ``ctx.local_dtypes``, and that dict's order is what
     # the fp8 prelude and the Fortran declaration block iterate.
-    idx_locals = OrderedSet()
+    idx_locals: OrderedSet[str] = OrderedSet()
     for node in ast.walk(tree):
         if isinstance(node, ast.Subscript):
             sl = node.slice
@@ -1191,19 +1203,18 @@ def dtype_verdict(tag: str) -> str | None:
         return None
 
 
-def elementwise_store_base(node: ast.AST) -> str | None:
-    """``name`` written by an elementwise store, or None. AugAssign counts: a matmul temp is ZEROED by
-    a plain assign and then ACCUMULATED into, so the accumulate is the only statement that carries
-    its operands' dtype."""
-    tgt = (
-        node.targets[0]
-        if isinstance(node, ast.Assign) and len(node.targets) == 1
-        else node.target
-        if isinstance(node, ast.AugAssign)
-        else None
-    )
+def elementwise_store(node: ast.AST) -> tuple[str, ast.expr] | None:
+    """``(name, value)`` of an elementwise store into ``name[...]``, or None. AugAssign counts: a matmul temp
+    is ZEROED by a plain assign and then ACCUMULATED into, so the accumulate is the only statement that
+    carries its operands' dtype."""
+    if isinstance(node, ast.Assign) and len(node.targets) == 1:
+        tgt = node.targets[0]
+    elif isinstance(node, ast.AugAssign):
+        tgt = node.target
+    else:
+        return None
     if isinstance(tgt, ast.Subscript) and isinstance(tgt.value, ast.Name):
-        return tgt.value.id
+        return tgt.value.id, node.value
     return None
 
 
@@ -1240,8 +1251,8 @@ def tag_complex_locals(
     pinned_real = {n for n, lit in dtype_literal.items() if dtype_verdict(lit) == "real"}
     seed.update({n: "float" for n in pinned_real})
 
-    stores = [(name, n.value) for n in ast.walk(kir.tree) for name in [elementwise_store_base(n)] if name is not None]
-    for unused in range(8):
+    stores = [store for store in map(elementwise_store, ast.walk(kir.tree)) if store is not None]
+    for unused in range(FIXPOINT_ROUNDS):
         # The WHOLE mapping, not its size: after the first pass propagation stops adding names and
         # only flips a name real -> complex, so a size comparison calls a fixpoint that has not been
         # reached. A chain whose stores do not appear in dependency order then stops one link short

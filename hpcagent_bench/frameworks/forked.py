@@ -32,13 +32,22 @@ __all__ = [
     "ABANDONED",
     "ABANDON_POLL_S",
     "ARM_GRACE_S",
+    "CHILD_ENV_LOCK",
     "CONCRETE_CONTEXTS",
     "COREDUMP_GRACE_S",
     "DRAIN_S",
     "ERROR_BYTES",
     "EXCEPTION_HEADER",
     "PR_SET_PDEATHSIG",
+    "RESULT_POLL_S",
     "TERM_GRACE_S",
+    "ChildMessage",
+    "ChildQueue",
+    "ErrorReader",
+    "ErrorWriter",
+    "ProcessContext",
+    "ProgressQueue",
+    "ResultMessage",
     "RunResult",
     "abandoned_by",
     "child_environment",
@@ -98,6 +107,9 @@ CONCRETE_CONTEXTS = (
 
 #: Grace period (seconds) to drain the result queue after the child exits cleanly.
 DRAIN_S = 5.0
+
+#: Seconds between the parent's looks at a running child's result queue.
+RESULT_POLL_S: float = 0.1
 
 #: How long the child may take to say it started before the deadline is armed anyway. An
 #: unbounded wait on a child that never runs is worse than a slightly wrong clock.
@@ -456,18 +468,19 @@ def finished_result[ResultT](
     return RunResult(ok=False, exit_code=ec, error=result_item[1], result=last_progress)
 
 
-def run_forked[**P, ResultT](
-    fn: Callable[P, ResultT],
-    *args: P.args,
+def run_forked[ResultT](
+    fn: Callable[..., ResultT],
+    *args: object,
     label: str = "",
     timeout: float | None = None,
     stream_progress: bool = False,
     mp_context: str | None = None,
     seal: SealPlan | None = None,
     env: Mapping[str, str] | None = None,
-    **kwargs: P.kwargs,
+    **kwargs: object,
 ) -> RunResult[ResultT]:
-    """Run ``fn(*args, **kwargs)`` in a forked child; returns a failed RunResult (cause logged to stdout) on
+    """Run ``fn(*args, **kwargs)`` in a forked child; the options after ``*args`` are this function's own, which
+    a ParamSpec cannot express, so ``fn``'s arguments are typed loosely. Returns a failed RunResult (cause logged to stdout) on
     a fatal signal, exception, or timeout overrun, else ``ok=True`` with the picklable return value.
     ``stream_progress=True`` preserves the child's last ``progress`` snapshot even if it is later killed.
     ``seal`` runs the child sealed (:func:`hpcagent_bench.seal.enter`) before ``fn`` sees it. A non-empty
@@ -502,7 +515,7 @@ def run_forked[**P, ResultT](
     limit = None if timeout is None else time.monotonic() + timeout + ARM_GRACE_S
     # Poll so the result queue drains while the child is alive -- a payload bigger than the OS
     # pipe buffer would otherwise block the child's feeder thread forever (join-then-read deadlocks).
-    poll = 0.1
+    poll = RESULT_POLL_S
     #: The child's single result message, once received.
     result_item: ResultMessage[ResultT] | None = None
     while p.is_alive():

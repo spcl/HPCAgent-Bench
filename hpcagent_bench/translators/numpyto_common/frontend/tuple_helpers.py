@@ -5,15 +5,15 @@ import copy
 from collections.abc import Sequence
 
 from hpcagent_bench.translators.numpyto_common import dtypes
-from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc, KernelIR, ScalarDesc, SymbolDesc
-from hpcagent_bench.translators.numpyto_common.numpy_desugar import rank_table
-from hpcagent_bench.translators.numpyto_common.tuple_desugar import desugar_tuples
 from hpcagent_bench.translators.numpyto_common.frontend.axes import AxisReshapeToIndexing
 from hpcagent_bench.translators.numpyto_common.frontend.body_rewrites import native_desugar
 from hpcagent_bench.translators.numpyto_common.frontend.helper_params import infer_helper_params
 from hpcagent_bench.translators.numpyto_common.frontend.helper_specialize import bind_call_constants, substitute_names
 from hpcagent_bench.translators.numpyto_common.frontend.inlining import strip_docstrings_
 from hpcagent_bench.translators.numpyto_common.frontend.module_constants import inline_module_constants
+from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc, KernelIR, ScalarDesc, SymbolDesc
+from hpcagent_bench.translators.numpyto_common.numpy_desugar import rank_table
+from hpcagent_bench.translators.numpyto_common.tuple_desugar import desugar_tuples
 
 __all__ = [
     "InlineTupleHelperCalls",
@@ -62,10 +62,13 @@ def fold_call_arg_constant(
     on a throwaway one-line probe) rather than a second constant-arithmetic implementation.
     """
     probe = ast.parse("def __probe():\n return __ARG__\n").body[0]
+    if not (isinstance(probe, ast.FunctionDef) and isinstance(probe.body[0], ast.Return)):
+        raise TypeError("the probe source is a one-line function returning a value")
     probe.body[0].value = copy.deepcopy(arg)
     ast.fix_missing_locations(probe)
     desugar_helper_tuples(probe, arrays, scalars, symbols)
-    folded = probe.body[0].value
+    returned = probe.body[0]
+    folded = returned.value if isinstance(returned, ast.Return) else None
     return folded if isinstance(folded, ast.Constant) else None
 
 
@@ -82,7 +85,7 @@ def rewrite_helper_axes(hfn: ast.FunctionDef, arrays: list[ArrayDesc], scalars: 
     ast.fix_missing_locations(hfn)
 
 
-def folded_straight_line(body: list[ast.stmt]) -> list[ast.stmt] | None:
+def folded_straight_line(body: Sequence[ast.stmt]) -> list[ast.stmt] | None:
     """``body`` with its leading single-assignment locals folded into the statements that read them.
 
     A tuple-returning helper has no ABI to be called across, so it is spliced into each call site as
@@ -119,7 +122,7 @@ def folded_straight_line(body: list[ast.stmt]) -> list[ast.stmt] | None:
     return out
 
 
-def return_expression(body: list[ast.stmt]) -> ast.expr | None:
+def return_expression(body: Sequence[ast.stmt]) -> ast.expr | None:
     """A body that only ever returns, collapsed into ONE expression, or ``None``.
 
     A guard the helper-level fold could not decide stays in that expression as an ``IfExp``, for
@@ -184,7 +187,7 @@ def tuple_template_for_call(
         if folded is not None:
             consts[pname] = folded
     bind_call_constants(hfn, consts)
-    arrays, unused, unused = infer_helper_params(pnames, call.args, arr_by, sca_by, sym_by, kernel_fn)
+    arrays, unused_scalars, unused_symbols = infer_helper_params(pnames, call.args, arr_by, sca_by, sym_by, kernel_fn)
     desugar_helper_tuples(hfn, arrays, [], [])
     straight = folded_straight_line(hfn.body)
     expr = return_expression(straight) if straight is not None else None
@@ -209,6 +212,8 @@ class InlineTupleHelperCalls(ast.NodeTransformer):
     holding the real value and left every later ``stride[i]`` reading the ``None`` it was seeded
     with, which is a wrong loop nest rather than a refusal.
     """
+
+    __slots__ = ("pnames", "templates")
 
     def __init__(self, pnames: list[str], templates: dict[int, ast.expr]) -> None:
         self.pnames = pnames

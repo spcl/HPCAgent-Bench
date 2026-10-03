@@ -52,7 +52,7 @@ def require_costs(table: pd.DataFrame, ratio: str, costs: Sequence[str]) -> pd.D
         raise RuleViolation(4, f"{ratio!r} is summarized with no costs behind it; add {missing}")
     if table.empty:
         return table
-    empty = [c for c in costs if not table[c].notna().any()]
+    empty = [c for c in costs if not table[c].notna().to_numpy().any()]
     if empty:
         raise RuleViolation(4, f"{ratio!r} has cost columns {empty} that are entirely missing")
     return table
@@ -69,7 +69,7 @@ def require_interval(table: pd.DataFrame, point: str, low: str, high: str, deter
     if missing:
         raise RuleViolation(5, f"nondeterministic data plotted without an interval; add columns {missing}")
     usable = table[point].notna()
-    if not usable.any():
+    if not usable.to_numpy().any():
         return table
     bare = table.index[usable & (table[low].isna() | table[high].isna())]
     if len(bare) == len(table.index[usable]):

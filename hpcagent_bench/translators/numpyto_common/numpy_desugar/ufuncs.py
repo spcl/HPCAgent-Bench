@@ -34,7 +34,7 @@ class CallFixups(RankedRewritePass):
     builtin ``abs(<array>)`` -> ``np.abs(<array>)`` (numba's builtin ``abs``
     types scalars only)."""
 
-    __slots__ = ("changed",)
+    __slots__ = ()
 
     def visit_Call(self, node: ast.Call):
         self.generic_visit(node)
@@ -56,9 +56,9 @@ class CallFixups(RankedRewritePass):
         attr = numpy_call_attr(node)
         # numba/pythran want a tuple shape, not a list literal. ``array`` is not in this set: its
         # list is data, not a shape.
-        shape_pos = {"zeros": 0, "ones": 0, "empty": 0, "full": 0, "reshape": 1}.get(attr)
-        if shape_pos is not None and len(node.args) > shape_pos and isinstance(node.args[shape_pos], ast.List):
-            lst = node.args[shape_pos]
+        shape_pos = {"zeros": 0, "ones": 0, "empty": 0, "full": 0, "reshape": 1}.get(attr) if attr is not None else None
+        lst = node.args[shape_pos] if shape_pos is not None and len(node.args) > shape_pos else None
+        if shape_pos is not None and isinstance(lst, ast.List):
             node.args[shape_pos] = ast.copy_location(ast.Tuple(elts=lst.elts, ctx=ast.Load()), lst)
             self.changed = True
             return node
@@ -66,7 +66,7 @@ class CallFixups(RankedRewritePass):
             self.changed = True
             node.keywords = [k for k in node.keywords if k.arg != "order"]
             return node
-        if attr == "ndarray" and node.args:
+        if attr == "ndarray" and node.args and isinstance(node.func, ast.Attribute):
             kw = {k.arg: k.value for k in node.keywords}
             dt = kw.get("dtype") or (node.args[1] if len(node.args) > 1 else None)
             self.changed = True
@@ -102,11 +102,11 @@ class CallFixups(RankedRewritePass):
         if attr == "swapaxes" and len(node.args) == 3 and not node.keywords:
             # np.swapaxes -> np.transpose: no backend implements swapaxes, dace makes it a callback.
             rank = expr_rank(node.args[0], self.ranks)
-            axes = [a.value for a in node.args[1:] if isinstance(a, ast.Constant) and isinstance(a.value, int)]
-            if rank is None or len(axes) != 2:
+            swapped = [a.value for a in node.args[1:] if isinstance(a, ast.Constant) and isinstance(a.value, int)]
+            if rank is None or len(swapped) != 2:
                 return node
             perm = list(range(rank))
-            i, j = axes[0] % rank, axes[1] % rank
+            i, j = swapped[0] % rank, swapped[1] % rank
             perm[i], perm[j] = perm[j], perm[i]
             self.changed = True
             order = ", ".join(str(p) for p in perm)
@@ -119,7 +119,7 @@ class CallFixups(RankedRewritePass):
 OUTER_OPS = {"add": "+", "subtract": "-", "multiply": "*", "divide": "/", "true_divide": "/"}
 
 
-def ufunc_method_op(node: ast.AST, method: str) -> str | None:
+def ufunc_method_op(node: ast.expr, method: str) -> str | None:
     """``np.<op>.<method>(...)`` (``np.add.outer`` / ``np.subtract.at``) -> ``<op>``, else None."""
     if (
         isinstance(node, ast.Call)
@@ -132,7 +132,7 @@ def ufunc_method_op(node: ast.AST, method: str) -> str | None:
     return None
 
 
-def hoist_ufunc_outer(node: ast.AST, hoist: ValueHoist) -> ast.expr | None:
+def hoist_ufunc_outer(node: ast.expr, hoist: ValueHoist) -> ast.expr | None:
     """``np.add.outer(a, b)`` (1-D operands) -> a reshape+broadcast temp ``a[:, None] op b[None, :]``
     (numba has no ufunc.outer). Both operands are copied into hoisted temps first."""
     if not isinstance(node, ast.Call):
@@ -188,6 +188,8 @@ class FillDiagonalInline(ast.NodeTransformer):
     ``wrap=True`` fills a different set of cells again, so neither may be assumed here.
     """
 
+    __slots__ = ()
+
     def visit_Expr(self, node: ast.Expr) -> ast.AST:
         call = node.value
         if not (
@@ -230,7 +232,9 @@ class UfuncOutInline(ast.NodeTransformer):
     have no BinOp form) -> ``c = np.maximum(a, b)``. The C/Fortran backends have no ufunc dispatch,
     so the ``out=`` form must become a store. ``c`` may be a slice; the target is that slice."""
 
-    def rewrite_(self, call: ast.AST):
+    __slots__ = ()
+
+    def rewrite_(self, call: ast.expr):
         if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute) and len(call.args) == 2):
             return None
         # ``np.<ufunc>.outer(a, b, out=c)``: an outer product has no BinOp spelling, so the call is
@@ -273,6 +277,8 @@ class ComplexAccessorToFunc(ast.NodeTransformer):
 
     ``conjugate_only`` restricts the rewrite to ``.conjugate()``/``.conj()``, for Python backends that
     run ``.real``/``.imag`` verbatim but whose pythran path lacks the ``.conjugate()`` method."""
+
+    __slots__ = ("changed", "conjugate_only")
 
     def __init__(self, conjugate_only: bool = False) -> None:
         self.changed = False
@@ -335,7 +341,7 @@ class ElementalUfuncToPrimitive(RewritePass):
 
     Reused operands are deep-copied so no AST node is shared between two positions."""
 
-    __slots__ = ("changed",)
+    __slots__ = ()
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
         self.generic_visit(node)

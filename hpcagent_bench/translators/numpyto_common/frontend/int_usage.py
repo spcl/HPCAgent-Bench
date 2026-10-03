@@ -16,7 +16,7 @@ __all__ = [
 ]
 
 
-def pure_int_arith(n: ast.AST) -> bool:
+def pure_int_arith(n: ast.expr) -> bool:
     """True when ``n`` is a value-preserving integer computation over Names
     and int literals: ``+ - * // %``, unary ``+ -``, and ``min``/``max``/
     ``abs`` (int in -> int out). Bounds the backward int-ness closure in

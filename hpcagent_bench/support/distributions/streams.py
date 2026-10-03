@@ -23,7 +23,17 @@ from typing import Any
 import numpy as np
 from numpy.random import PCG64, PCG64DXSM, SFC64, Generator, Philox, SeedSequence
 
-__all__ = ["ROUND_ROBIN", "THREAD_MIN_ELEMENTS", "clip_to_precision", "fill", "spawn_streams"]
+__all__ = [
+    "DEFAULT_FILL_WORKERS",
+    "ROUND_ROBIN",
+    "THREAD_MIN_ELEMENTS",
+    "clip_to_precision",
+    "fill",
+    "spawn_streams",
+]
+
+#: Threads :func:`fill` runs the per-array fills on when the caller gives no count.
+DEFAULT_FILL_WORKERS: int = 8
 
 #: Cycled over the spawned children, so consecutive arrays draw from different algorithms.
 #: Philox is the slow one (+38%) but it is the counter-based member of the set, and it is the only
@@ -45,7 +55,7 @@ def spawn_streams(seed: int | None, count: int) -> list[Generator]:
     ]
 
 
-def fill(tasks: Sequence[Callable[[], Any]], elements: int, workers: int = 8) -> list[Any]:
+def fill(tasks: Sequence[Callable[[], Any]], elements: int, workers: int = DEFAULT_FILL_WORKERS) -> list[Any]:
     """Run the per-array fills, on threads once there is enough work to pay for them.
 
     Order-preserving, and identical to calling each task in turn: the tasks draw from streams that

@@ -2,6 +2,7 @@
 
 import ast
 import copy
+from collections.abc import Sequence
 
 from hpcagent_bench.translators.numpyto_common.ast_build import const_int, name_, store_
 from hpcagent_bench.translators.numpyto_common.lib_nodes.call_args import kwarg_or_pos, pad_widths
@@ -46,7 +47,7 @@ def pad_src_base_and_lead(src_node: ast.expr) -> tuple[str, list[ast.expr]] | No
     return None
 
 
-def pad_mode_str(args: list[ast.expr], kwargs: list[ast.keyword] | None) -> str:
+def pad_mode_str(args: Sequence[ast.expr], kwargs: list[ast.keyword] | None) -> str:
     """The ``mode`` string of an ``np.pad`` call (default numpy ``constant``)."""
     m = kwarg_or_pos(args, kwargs or [], 2, "mode")
     if isinstance(m, ast.Constant) and isinstance(m.value, str):
@@ -71,8 +72,8 @@ def pad_fill(kwargs: list[ast.keyword] | None) -> ast.expr:
 
 
 def expand_pad(
-    target: ast.expr,
-    args: list[ast.expr],
+    target: ast.Name,
+    args: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     kwargs: list[ast.keyword] | None = None,
     local_dtypes: dict[str, str] | None = None,
@@ -114,25 +115,33 @@ def expand_pad(
     def dim_(k: int) -> ast.expr:
         return copy.deepcopy(view[k])
 
-    out_bounds = [b for b in pad_output_extent(tuple(dim_(k) for k in range(rank)), pad_arg)]
+    out_bounds = pad_output_extent(tuple(dim_(k) for k in range(rank)), pad_arg)
+    if out_bounds is None:
+        raise NotImplementedError("np.pad needs scalar or per-axis tuple pad_width")
 
     def store_target(idx_nodes: list[ast.expr]) -> ast.Subscript:
         sl = idx_nodes[0] if rank == 1 else ast.Tuple(elts=idx_nodes, ctx=ast.Load())
         return ast.Subscript(value=name_(target.id), slice=sl, ctx=ast.Store())
 
-    def src_read(idx_nodes: list[ast.expr]) -> ast.Subscript:
-        full = [copy.deepcopy(e) for e in lead] + idx_nodes
+    def src_read(idx_nodes: Sequence[ast.expr]) -> ast.Subscript:
+        full = [*(copy.deepcopy(e) for e in lead), *idx_nodes]
         sl = full[0] if len(full) == 1 else ast.Tuple(elts=full, ctx=ast.Load())
         return ast.Subscript(value=name_(base_name), slice=sl, ctx=ast.Load())
 
     if mode == "constant":
         # Fill the whole padded buffer with the pad value, then copy the interior shifted by before.
         zero_iters = [f"__pz{k}" for k in range(rank)]
-        zero_body = [ast.Assign(targets=[store_target([name_(v) for v in zero_iters])], value=pad_fill(kwargs))]
+        zero_body: list[ast.stmt] = [
+            ast.Assign(targets=[store_target([name_(v) for v in zero_iters])], value=pad_fill(kwargs))
+        ]
         stmts = wrap_for_loops(zero_iters, out_bounds, zero_body)
         cp_iters = [f"__pc{k}" for k in range(rank)]
-        dst_idx = [ast.BinOp(left=name_(cp_iters[k]), op=ast.Add(), right=before_(k)) for k in range(rank)]
-        cp_body = [ast.Assign(targets=[store_target(dst_idx)], value=src_read([name_(v) for v in cp_iters]))]
+        dst_idx: list[ast.expr] = [
+            ast.BinOp(left=name_(cp_iters[k]), op=ast.Add(), right=before_(k)) for k in range(rank)
+        ]
+        cp_body: list[ast.stmt] = [
+            ast.Assign(targets=[store_target(dst_idx)], value=src_read([name_(v) for v in cp_iters]))
+        ]
         stmts += wrap_for_loops(cp_iters, [dim_(k) for k in range(rank)], cp_body)
         return stmts
 

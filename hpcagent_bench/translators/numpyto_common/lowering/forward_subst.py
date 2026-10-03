@@ -2,6 +2,7 @@
 
 import ast
 import copy
+from collections.abc import Sequence
 
 from hpcagent_bench.translators.numpyto_common.lowering.mathfuncs import MATH_INTRINSIC_NAMES
 from hpcagent_bench.translators.numpyto_common.lowering.ssa import live_on_loop_reentry, read_in
@@ -37,6 +38,8 @@ class SelfAssignDropper(ast.NodeTransformer):
     version marker the shape FIFO counts off. Only a bare ``Name = Name`` pair qualifies:
     ``A[i] = A[i]`` is a real store and drives the same output detection.
     """
+
+    __slots__ = ("keep",)
 
     def __init__(self, keep: set[str]) -> None:
         self.keep = keep
@@ -85,7 +88,7 @@ FWD_SUBST_MAX_SUBSCRIPTS = 3
 FWD_SUBST_MAX_NODES = 20
 
 
-def stmt_exprs_by_depth(stmts: list[ast.stmt], depth: int):
+def stmt_exprs_by_depth(stmts: Sequence[ast.stmt], depth: int):
     """Yield ``(expr, loop_depth)`` per expression; a loop header sits OUTSIDE its own body."""
     for stmt in stmts:
         if isinstance(stmt, (ast.For, ast.While)):
@@ -124,6 +127,8 @@ class ForwardSubstituteInvariantScalars(ast.NodeTransformer):
     ``qualifies`` carries the guards; one name is substituted per round against the CURRENT
     tree, so a chain (``first_i`` -> ``ai`` -> ``rv[...]``) resolves with no read left dangling.
     """
+
+    __slots__ = ("array_names", "expr_", "name_", "params", "stmt_", "substituted")
 
     def __init__(self, array_names: set[str], params: set[str]) -> None:
         self.array_names = array_names
@@ -241,10 +246,10 @@ class CandidateSearch:
 
     def scan(
         self,
-        stmts: list[ast.stmt],
+        stmts: Sequence[ast.stmt],
         depth: int,
-        after: tuple[list[ast.stmt], ...],
-        reentry: tuple[tuple[list[ast.stmt], int], ...],
+        after: tuple[Sequence[ast.stmt], ...],
+        reentry: tuple[tuple[Sequence[ast.stmt], int], ...],
         loop_vars: frozenset[str],
     ) -> None:
         """Walk ``stmts`` (at loop ``depth``, ``after`` the code that runs after them, ``reentry``
@@ -253,27 +258,28 @@ class CandidateSearch:
             if self.found:
                 return
             if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name):
-                if self.try_candidate(stmts, i, depth, after, reentry, loop_vars):
+                if self.try_candidate(stmt, stmt.targets[0], stmts, i, depth, after, reentry, loop_vars):
                     return
             if isinstance(stmt, (ast.For, ast.While, ast.If)):
                 self.scan_block(stmts, i, depth, after, reentry, loop_vars)
 
     def try_candidate(
         self,
-        stmts: list[ast.stmt],
+        stmt: ast.Assign,
+        target: ast.Name,
+        stmts: Sequence[ast.stmt],
         i: int,
         depth: int,
-        after: tuple[list[ast.stmt], ...],
-        reentry: tuple[tuple[list[ast.stmt], int], ...],
+        after: tuple[Sequence[ast.stmt], ...],
+        reentry: tuple[tuple[Sequence[ast.stmt], int], ...],
         loop_vars: frozenset[str],
     ) -> bool:
         """Record ``stmts[i]`` when it qualifies and its name is dead in every block that runs after it
         (checked last: it walks every such block)."""
-        stmt = stmts[i]
-        name = stmt.targets[0].id
+        name = target.id
         if not self.qualifies(name, stmt.value, depth, loop_vars):
             return False
-        outside = after
+        outside: tuple[Sequence[ast.AST], ...] = after
         for blk, idx in reentry:
             outside = outside + live_on_loop_reentry(blk, idx, name)
         if depth:
@@ -285,11 +291,11 @@ class CandidateSearch:
 
     def scan_block(
         self,
-        stmts: list[ast.stmt],
+        stmts: Sequence[ast.stmt],
         i: int,
         depth: int,
-        after: tuple[list[ast.stmt], ...],
-        reentry: tuple[tuple[list[ast.stmt], int], ...],
+        after: tuple[Sequence[ast.stmt], ...],
+        reentry: tuple[tuple[Sequence[ast.stmt], int], ...],
         loop_vars: frozenset[str],
     ) -> None:
         """Recurse into an If's branches (the sibling branch counted as "after", which only declines
@@ -301,6 +307,8 @@ class CandidateSearch:
         if isinstance(stmt, ast.If):
             self.scan(stmt.body, depth, (stmt.orelse,) + tail, inner_reentry, loop_vars)
             self.scan(stmt.orelse, depth, (stmt.body,) + tail, inner_reentry, loop_vars)
+            return
+        if not isinstance(stmt, (ast.For, ast.While)):
             return
         body_vars = loop_vars
         if isinstance(stmt, ast.For):

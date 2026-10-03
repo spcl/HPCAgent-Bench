@@ -160,7 +160,7 @@ def outermost_chains(tree: ast.AST) -> list[tuple[ast.AST, str, int | None, ast.
             kind = type(value)
             if kind in LEAF_TYPES:
                 continue
-            for pos, item in enumerate(value) if kind is list else ((None, value),):
+            for pos, item in list(enumerate(value)) if isinstance(value, list) else [(None, value)]:
                 if type(item) in LEAF_TYPES:
                     continue
                 if type(item) is ast.Subscript and type(item.value) is ast.Subscript:
@@ -191,6 +191,8 @@ class ChainedSubscriptFlattener(ast.NodeTransformer):
     masks: ``A[mask][j]`` is not ``A[mask[j]]``.
     """
 
+    __slots__ = ("bool_names", "explicit_trailing_axes", "shape_table")
+
     def __init__(
         self,
         shape_table: Mapping[str, Sequence[str]],
@@ -214,14 +216,14 @@ class ChainedSubscriptFlattener(ast.NodeTransformer):
                 vars(parent)[field][pos] = rewritten
         return node
 
-    def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
+    def visit_Subscript(self, node: ast.Subscript) -> ast.expr:
         self.generic_visit(node)  # bottom-up: a longer chain arrives with its inner already rewritten
         if not isinstance(node.value, ast.Subscript):
             return node
         rewritten = self.rewrite_chain(node, node.value)
         return node if rewritten is None else ast.copy_location(rewritten, node)
 
-    def entry_ranks(self, elts: list[ast.expr]) -> list[int] | None:
+    def entry_ranks(self, elts: Sequence[ast.expr]) -> list[int] | None:
         """:func:`index_rank` per entry, or ``None`` when one is unsized or may be a mask."""
         ranks: list[int] = []
         for elt in elts:
@@ -361,7 +363,7 @@ class ChainedSubscriptFlattener(ast.NodeTransformer):
         else:
             tail.extend((ast.Constant(value=None), ("newaxis", (("new", i),))) for i in pending)
 
-    def same_broadcast_extents(self, arrays: list[ast.expr]) -> bool:
+    def same_broadcast_extents(self, arrays: Sequence[ast.expr]) -> bool:
         """Whether index arrays share every broadcast axis at one extent, so indexing one axis of each
         never indexes a length-1 axis that was only broadcast."""
         extents: list[tuple[ast.expr, ...]] = []
@@ -406,7 +408,7 @@ class ChainedSubscriptFlattener(ast.NodeTransformer):
 
 
 def flat_entries(
-    slots: list[ast.expr],
+    slots: Sequence[ast.expr],
     slot_models: list["IndexEntry"],
     slot_newaxes: list[list[int]],
     tail: list[tuple[ast.expr, "IndexEntry"]],
@@ -457,7 +459,8 @@ class ChainFold:
             return
         bounded = isinstance(elt, ast.Slice) and not is_full_slice(elt)
         if kind == "axis":
-            composed = compose_onto_view(self.inner_elts[index], elt, elt_rank > 0)
+            inner = self.inner_elts[index]
+            composed = compose_onto_view(inner, elt, elt_rank > 0) if isinstance(inner, ast.Slice) else None
             if composed is None:
                 self.flat_ok = False
                 return

@@ -22,7 +22,9 @@ class ShapeAttrToReshape(ast.NodeTransformer):
     splitting into per-target reshapes (mandelbrot2 canonical pattern).
     """
 
-    def visit_Assign(self, node: ast.Assign) -> ast.AST:
+    __slots__ = ()
+
+    def visit_Assign(self, node: ast.Assign) -> ast.AST | list[ast.stmt]:
         self.generic_visit(node)
         # Detect ``x.shape = expr`` -- one or more LHS targets that are
         # all ``Attribute(Name(x), 'shape')``.

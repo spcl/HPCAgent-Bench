@@ -20,8 +20,8 @@ if a backend import creeps back into this module.
 import importlib
 from typing import Any
 
-from hpcagent_bench.frameworks.errors import NotSupportedByFramework as NotSupportedByFramework
 from hpcagent_bench.frameworks.benchmark import *
+from hpcagent_bench.frameworks.errors import NotSupportedByFramework as NotSupportedByFramework
 from hpcagent_bench.frameworks.framework import *
 from hpcagent_bench.frameworks.utilities import *
 
@@ -51,9 +51,11 @@ _LAZY_EXPORTS: dict[str, str] = {
 }
 
 
-def __getattr__(
-    name: str, eager_names: frozenset[str] = frozenset(n for n in globals() if not n.startswith("_"))
-) -> Any:
+#: The namespace before any backend loaded: what ``__all__`` lists beside the lazy names.
+_EAGER_NAMES: frozenset[str] = frozenset(name for name in globals() if not name.startswith("_"))
+
+
+def __getattr__(name: str, eager_names: frozenset[str] = _EAGER_NAMES) -> Any:
     """Resolve a lazily-exported backend name (PEP 562), then cache it in the module.
 
     ``__all__`` resolves here as well: a backend class's exact spelling (``TVMFramework``) is known

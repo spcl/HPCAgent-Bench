@@ -21,12 +21,13 @@ import numpy as np
 from hpcagent_bench import config, precision
 from hpcagent_bench.columns import ALL_PRECISIONS, FRAMEWORKS, IEEE_PRECISIONS
 from hpcagent_bench.frameworks import Benchmark
-from hpcagent_bench.precision import Precision
 from hpcagent_bench.vocabulary import FrameworkMeta
 
 __all__ = [
     "ALL_PRECISIONS",
     "IEEE_PRECISIONS",
+    "MS_PER_S",
+    "US_PER_MS",
     "AnyArray",
     "ArgValue",
     "ArrayLike",
@@ -63,6 +64,7 @@ __all__ = [
     "framework_class",
     "framework_flavors",
     "generate_framework",
+    "is_array_value",
     "is_dense",
     "is_numpy_array",
     "load_impl",
@@ -124,14 +126,14 @@ class SparseArray(Protocol):
 AnyArray = ArrayLike | SparseArray
 
 #: One entry of a benchmark's data dict: an array, a scalar parameter, the resolved dtype, or a
-#: variant-spec block.
-ArgValue = AnyArray | complex | str | type[np.generic] | Mapping[str, object] | None
+#: variant-spec block, or a framework's imported module (:meth:`Framework.imports`).
+ArgValue = AnyArray | complex | str | type[np.generic] | Mapping[str, object] | ModuleType | None
 
 #: A benchmark's materialized data, name -> value (:meth:`Benchmark.get_data`).
 BenchData = dict[str, ArgValue]
 
-#: One value a kernel produces: an array or a reduction's scalar.
-OutputValue = ArrayLike | complex
+#: One value a kernel produces: an array (a mutated sparse buffer included) or a reduction's scalar.
+OutputValue = AnyArray | complex
 
 #: What a kernel returns: its outputs, or ``None`` when it writes through its buffers
 #: (:func:`hpcagent_bench.frameworks.utilities.resolve_outputs` binds either).
@@ -143,6 +145,12 @@ KernelImpl = Callable[..., KernelResult]
 #: The per-framework copy applied to every mutable array input before each timed call.
 CopyFunc = Callable[[AnyArray], AnyArray]
 
+#: Milliseconds per second: the harness reports every time in milliseconds.
+MS_PER_S: float = 1.0e3
+
+#: Microseconds per millisecond, for a device report given in microseconds.
+US_PER_MS: float = 1.0e3
+
 #: The artifact :meth:`Framework.build_with_cache` builds and a caching framework persists.
 ArtifactT = TypeVar("ArtifactT")
 
@@ -150,6 +158,11 @@ ArtifactT = TypeVar("ArtifactT")
 def is_numpy_array(value: ArgValue) -> TypeGuard[ArrayLike]:
     """Whether ``value`` is a numpy array (copied fresh per timed call by :meth:`CallPlan.before_each`)."""
     return isinstance(value, np.ndarray)
+
+
+def is_array_value(value: ArgValue) -> TypeGuard[AnyArray]:
+    """Whether ``value`` is an array (dense or sparse) rather than a scalar, string, dtype, variant block or None."""
+    return value is not None and not isinstance(value, (str, Mapping, ModuleType, type, int, float, complex))
 
 
 @runtime_checkable
@@ -180,6 +193,8 @@ class CudaEvent(Protocol):
     """A CUDA timing event pair (torch.cuda.Event, or CuPy's read through ``cupy.cuda.get_elapsed_time``)."""
 
     def record(self) -> None: ...
+
+    def synchronize(self) -> None: ...
 
     def elapsed_time(self, end_event: Self, /) -> float: ...
 
@@ -325,7 +340,7 @@ def start_event_timer(timer: Timer) -> None:
 
 def cupy_event_timer(program: KernelImpl) -> Timer:
     """A timer carrying a start/stop CuPy event pair for device-side timing."""
-    import cupy
+    import cupy  # pyright: ignore[reportMissingImports]  # optional dep, not in the dev env
 
     timer = Timer(program)
     timer.state = (cupy.cuda.Event(), cupy.cuda.Event())
@@ -334,12 +349,12 @@ def cupy_event_timer(program: KernelImpl) -> Timer:
 
 def stop_cupy_event_timer(timer: Timer) -> TimingResult:
     """Record + sync the stop event; native = device-only kernel time, python = host wall-clock."""
-    import cupy
+    import cupy  # pyright: ignore[reportMissingImports]  # optional dep, not in the dev env
 
     start_ev, stop_ev = event_pair(timer)
     stop_ev.record()
     stop_ev.synchronize()
-    python_t = (time.perf_counter() - timer.t0) * 1.0e3  # s -> ms
+    python_t = (time.perf_counter() - timer.t0) * MS_PER_S
     native_t = cupy.cuda.get_elapsed_time(start_ev, stop_ev)  # already ms
     return TimingResult(python=python_t, native=native_t)
 
@@ -367,7 +382,7 @@ class TorchCudaEventTiming:
         start_ev, stop_ev = event_pair(timer)
         stop_ev.record()
         torch.cuda.synchronize()
-        python_t = (time.perf_counter() - timer.t0) * 1.0e3  # s -> ms
+        python_t = (time.perf_counter() - timer.t0) * MS_PER_S
         native_t = start_ev.elapsed_time(stop_ev)  # already ms
         return TimingResult(python=python_t, native=native_t)
 
@@ -487,6 +502,10 @@ class Framework:
 
         return inner
 
+    def copy_back_output(self, value: OutputValue) -> OutputValue:
+        """``value`` on the host: an array through :meth:`copy_back_func`, a reduction's scalar as it is."""
+        return value if isinstance(value, (int, float, complex)) else self.copy_back_func()(value)
+
     def copy_back_func(self) -> CopyFunc:
         """Returns the copy-method used for copying benchmark outputs back to the host."""
         return lambda x: x
@@ -595,7 +614,7 @@ class Framework:
     def stop_timer(self, timer: Timer) -> TimingResult:
         """End one measurement and return its value in ms (default: python wall-clock, native=None)."""
         self.synchronize_device()
-        return TimingResult(python=(time.perf_counter() - timer.t0) * 1.0e3)
+        return TimingResult(python=(time.perf_counter() - timer.t0) * MS_PER_S)
 
     def free_timer(self, timer: Timer) -> None:
         """Release timer state after the repeat loop (default no-op)."""

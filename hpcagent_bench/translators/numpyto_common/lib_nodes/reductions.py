@@ -10,6 +10,7 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
     const_,
     const_or_name,
     falsy,
+    first_name,
     if_set,
     make_iter_name,
     resolve_shape,
@@ -19,6 +20,11 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
 )
 
 __all__ = [
+    "Lvalue",
+    "OpFn",
+    "PostFn",
+    "UpdateFn",
+    "divide_in_place",
     "expand_all",
     "expand_any",
     "expand_arg_reduction",
@@ -42,6 +48,7 @@ __all__ = [
     "reduction_output_index",
     "reduction_output_refs",
     "reduction_source_index",
+    "reduction_update",
     "refuse_dropped_reduction_kwargs",
     "refuse_unreadable_axis",
     "reject_zero_size_reduction",
@@ -85,15 +92,42 @@ def reduction_output_index(
     return out
 
 
+#: What a reduction writes its result to: the bare target, or one element of it.
+type Lvalue = ast.Name | ast.Subscript
+type OpFn = Callable[[ast.expr, ast.expr], ast.expr]
+type PostFn = Callable[[Lvalue, ast.expr], ast.stmt]
+type UpdateFn = Callable[[Lvalue, ast.expr, ast.expr], ast.stmt]
+
+
+def reduction_update(
+    op_fn: OpFn | None, update_fn: UpdateFn | None, store: Lvalue, load: ast.expr, src: ast.expr
+) -> ast.stmt:
+    """One step of a reduction: ``update_fn``'s statement when given, else ``store = op_fn(load, src)``."""
+    if update_fn is not None:
+        return update_fn(store, load, src)
+    if op_fn is None:
+        raise ValueError("a reduction needs op_fn or update_fn")
+    return ast.Assign(targets=[store], value=op_fn(load, src))
+
+
+def divide_in_place(lvalue: Lvalue, divisor: ast.expr) -> ast.stmt:
+    """``lvalue = lvalue / divisor`` (the mean's closing divide)."""
+    if isinstance(lvalue, ast.Name):
+        load: ast.expr = lvalue
+    else:
+        load = ast.Subscript(value=copy.deepcopy(lvalue.value), slice=copy.deepcopy(lvalue.slice), ctx=ast.Load())
+    return ast.Assign(targets=[lvalue], value=ast.BinOp(left=load, op=ast.Div(), right=divisor))
+
+
 def expand_axis_reduction(
-    target: ast.expr,
-    args: list[ast.expr],
+    target: ast.Name,
+    args: Sequence[ast.expr],
     kwargs: list[ast.keyword] | None,
     shape_table: dict[str, tuple[str, ...]],
     init: ast.expr,
-    op_fn: Callable[[ast.expr, ast.expr], ast.expr] | None,
-    post_fn: Callable[[ast.expr, ast.expr], ast.stmt] | None = None,
-    update_fn: Callable[[ast.expr, ast.expr, ast.expr], ast.stmt] | None = None,
+    op_fn: OpFn | None,
+    post_fn: PostFn | None = None,
+    update_fn: UpdateFn | None = None,
 ) -> list[ast.stmt]:
     """Generic axis-aware reduction. Lowers ``out = np.X(arr, axis=k,
     keepdims=True)`` into a nested loop, non-reduction axes outside and the
@@ -112,7 +146,9 @@ def expand_axis_reduction(
     blocking: reassociation is sanctioned, so the extra block loop bought only a scop that pet
     refuses (POLYCC-008) and a scop-external block accumulator it silently drops (POLYCC-009).
     """
-    arr = args[0]
+    arr = first_name(args)
+    if arr is None:
+        raise NotImplementedError("reduction operand is not a bare Name")
     shape = resolve_shape(arr, shape_table)
     refuse_unreadable_axis(args)
     axes, keepdims = read_axis_keepdims(args, kwargs)
@@ -146,6 +182,7 @@ def expand_axis_reduction(
     src_sub = ast.Subscript(value=name_(arr.id), slice=src_slot, ctx=ast.Load())
     # Init for axis-reductions: ``out[outer..] = init`` (or the
     # zero-th element of the reduction axes for max/min).
+    init_node: ast.expr
     if isinstance(init, ast.Subscript):
         init_src_elts = reduction_source_index(n_dim, axes_set, {}, outer_iter_names, reduced=lambda k: const_(0))
         init_slot = init_src_elts[0] if n_dim == 1 else ast.Tuple(elts=init_src_elts, ctx=ast.Load())
@@ -153,11 +190,7 @@ def expand_axis_reduction(
     else:
         init_node = init
     init_stmt = ast.Assign(targets=[out_sub], value=init_node)
-    update_stmt = (
-        update_fn(out_sub, out_load, src_sub)
-        if update_fn
-        else ast.Assign(targets=[out_sub], value=op_fn(out_load, src_sub))
-    )
+    update_stmt = reduction_update(op_fn, update_fn, out_sub, out_load, src_sub)
     # Inner loop nest over the reduction axes, deepest first.
     inner_stmts: list[ast.stmt] = [update_stmt]
     for ax, rn in zip(reversed(axes_norm), reversed(red_iter_names)):
@@ -176,7 +209,7 @@ def expand_axis_reduction(
     return wrap_for_loops(outer_iter_names, bounds, body)
 
 
-def refuse_unreadable_axis(args: list[ast.expr]) -> None:
+def refuse_unreadable_axis(args: Sequence[ast.expr]) -> None:
     """Here slot 1 REALLY is the axis (``np.sum(a, 1)``), unlike the shared reader's general case, so
     an unreadable one is refused rather than silently becoming a reduction over every axis."""
     if len(args) >= 2 and not (isinstance(args[1], ast.Constant) and args[1].value is None):
@@ -199,13 +232,13 @@ def refuse_dropped_reduction_kwargs(kwargs: list[ast.keyword] | None) -> None:
 
 
 def full_reduction(
-    target: ast.expr,
-    arr: ast.expr,
+    target: ast.Name,
+    arr: ast.Name,
     shape: tuple[str, ...],
     init: ast.expr,
-    op_fn: Callable[[ast.expr, ast.expr], ast.expr] | None,
-    post_fn: Callable[[ast.expr, ast.expr], ast.stmt] | None,
-    update_fn: Callable[[ast.expr, ast.expr, ast.expr], ast.stmt] | None,
+    op_fn: OpFn | None,
+    post_fn: PostFn | None,
+    update_fn: UpdateFn | None,
 ) -> list[ast.stmt]:
     """``axis=None``: every axis walked, one scalar written to ``target``."""
     n_dim = len(shape)
@@ -216,13 +249,9 @@ def full_reduction(
         ctx=ast.Load(),
     )
     target_load = name_(target.id)
-    body = [
-        update_fn(target, target_load, subscript)
-        if update_fn
-        else ast.Assign(targets=[target], value=op_fn(target_load, subscript))
-    ]
+    body = [reduction_update(op_fn, update_fn, target, target_load, subscript)]
     loops = wrap_for_loops(iters, shape, body)
-    stmts = [ast.Assign(targets=[target], value=init_for(init, arr, n_dim))]
+    stmts: list[ast.stmt] = [ast.Assign(targets=[target], value=init_for(init, arr, n_dim))]
     stmts.extend(loops)
     if post_fn is not None:
         stmts.append(post_fn(target, shape_total_product(shape)))
@@ -243,7 +272,7 @@ def normalized_axes(axes: Sequence[int], n_dim: int) -> list[int]:
     return axes_norm
 
 
-def reduction_output_refs(target: ast.expr, out_elts: list[ast.expr]) -> tuple[ast.expr, ast.expr]:
+def reduction_output_refs(target: ast.Name, out_elts: list[ast.expr]) -> tuple[Lvalue, ast.expr]:
     """The (store, load) references of the reduction result: the target itself when no axis is kept
     and keepdims is off (a scalar result), else the target subscripted at ``out_elts``."""
     if len(out_elts) == 0:
@@ -260,7 +289,7 @@ def reduction_output_refs(target: ast.expr, out_elts: list[ast.expr]) -> tuple[a
     )
 
 
-def init_for(init: ast.expr, arr: ast.expr, n_dim: int) -> ast.expr:
+def init_for(init: ast.expr, arr: ast.Name, n_dim: int) -> ast.expr:
     """Resolve init for full reduction: rewrite max/min first-element to
     a fully-zeroed subscript if needed."""
     if isinstance(init, ast.Subscript):
@@ -273,7 +302,7 @@ def init_for(init: ast.expr, arr: ast.expr, n_dim: int) -> ast.expr:
     return init
 
 
-def reduction_elem_is_integer(args: list[ast.expr], local_dtypes: dict[str, str] | None) -> bool:
+def reduction_elem_is_integer(args: Sequence[ast.expr], local_dtypes: dict[str, str] | None) -> bool:
     """True when the reduced array (first arg, a bare Name) is tagged an
     integer / boolean dtype -- numpy upcasts int8/16/32/bool to int64 for
     ``sum`` / ``prod``, so the accumulator must be an integer, not a float."""
@@ -307,8 +336,8 @@ def nan_reduce_op(cmp: type[ast.cmpop]) -> Callable[[ast.expr, ast.expr], ast.ex
 
 
 def expand_sum(
-    target: ast.expr,
-    args: list[ast.expr],
+    target: ast.Name,
+    args: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     kwargs: list[ast.keyword] | None = None,
     local_dtypes: dict[str, str] | None = None,
@@ -327,8 +356,8 @@ def expand_sum(
 
 
 def expand_max(
-    target: ast.expr,
-    args: list[ast.expr],
+    target: ast.Name,
+    args: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     kwargs: list[ast.keyword] | None = None,
 ) -> list[ast.stmt]:
@@ -345,8 +374,8 @@ def expand_max(
 
 
 def expand_min(
-    target: ast.expr,
-    args: list[ast.expr],
+    target: ast.Name,
+    args: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     kwargs: list[ast.keyword] | None = None,
 ) -> list[ast.stmt]:
@@ -363,7 +392,7 @@ def expand_min(
 
 
 def reject_zero_size_reduction(
-    args: list[ast.expr], kwargs: list[ast.keyword] | None, shape_table: dict[str, tuple[str, ...]]
+    args: Sequence[ast.expr], kwargs: list[ast.keyword] | None, shape_table: dict[str, tuple[str, ...]]
 ) -> None:
     """Refuse to lower ``np.max``/``np.min`` over a statically zero-length
     reduction axis: numpy raises ``zero-size array to reduction ... which has no
@@ -384,8 +413,8 @@ def reject_zero_size_reduction(
 
 
 def expand_mean(
-    target: ast.expr,
-    args: list[ast.expr],
+    target: ast.Name,
+    args: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     kwargs: list[ast.keyword] | None = None,
 ) -> list[ast.stmt]:
@@ -406,7 +435,7 @@ def expand_mean(
             iter_name = "__mn_i"
             sum_name = "__mn_sum"
             cnt_name = "__mn_cnt"
-            body = [
+            body: list[ast.stmt] = [
                 ast.If(
                     test=ast.Subscript(value=name_(mask.id), slice=name_(iter_name), ctx=ast.Load()),
                     body=[
@@ -436,24 +465,13 @@ def expand_mean(
         shape_table,
         init=const_(0.0),
         op_fn=lambda acc, x: ast.BinOp(left=acc, op=ast.Add(), right=x),
-        post_fn=lambda lvalue, divisor: ast.Assign(
-            targets=[lvalue],
-            value=ast.BinOp(
-                left=(
-                    lvalue
-                    if isinstance(lvalue, ast.Name)
-                    else ast.Subscript(value=lvalue.value, slice=lvalue.slice, ctx=ast.Load())
-                ),
-                op=ast.Div(),
-                right=divisor,
-            ),
-        ),
+        post_fn=divide_in_place,
     )
 
 
 def expand_prod(
-    target: ast.expr,
-    args: list[ast.expr],
+    target: ast.Name,
+    args: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     kwargs: list[ast.keyword] | None = None,
     local_dtypes: dict[str, str] | None = None,
@@ -472,8 +490,8 @@ def expand_prod(
 
 
 def expand_any(
-    target: ast.expr,
-    args: list[ast.expr],
+    target: ast.Name,
+    args: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     kwargs: list[ast.keyword] | None = None,
 ) -> list[ast.stmt]:
@@ -491,8 +509,8 @@ def expand_any(
 
 
 def expand_all(
-    target: ast.expr,
-    args: list[ast.expr],
+    target: ast.Name,
+    args: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     kwargs: list[ast.keyword] | None = None,
 ) -> list[ast.stmt]:
@@ -504,8 +522,8 @@ def expand_all(
 
 
 def expand_count_nonzero(
-    target: ast.expr,
-    args: list[ast.expr],
+    target: ast.Name,
+    args: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     kwargs: list[ast.keyword] | None = None,
 ) -> list[ast.stmt]:
@@ -523,8 +541,8 @@ def expand_count_nonzero(
 
 
 def expand_argmax(
-    target: ast.expr,
-    args: list[ast.expr],
+    target: ast.Name,
+    args: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     kwargs: list[ast.keyword] | None = None,
 ) -> list[ast.stmt]:
@@ -536,8 +554,8 @@ def expand_argmax(
 
 
 def expand_argmin(
-    target: ast.expr,
-    args: list[ast.expr],
+    target: ast.Name,
+    args: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     kwargs: list[ast.keyword] | None = None,
 ) -> list[ast.stmt]:
@@ -545,8 +563,8 @@ def expand_argmin(
 
 
 def expand_arg_reduction(
-    target: ast.expr,
-    args: list[ast.expr],
+    target: ast.Name,
+    args: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     kwargs: list[ast.keyword] | None,
     op: str,
@@ -561,9 +579,9 @@ def expand_arg_reduction(
     the reduction-axis sizes). ``keepdims=True`` adds a size-1 axis at each
     reduced position in all three forms.
     """
-    if not args or not isinstance(args[0], ast.Name):
+    a = first_name(args)
+    if a is None:
         raise NotImplementedError(f"np.{op} needs Name first arg")
-    a = args[0]
     shape = resolve_shape(a, shape_table)
     axes, keepdims = read_axis_keepdims(args, kwargs)
     n_dim = len(shape)
@@ -641,8 +659,8 @@ def expand_arg_reduction(
 
 
 def expand_std(
-    target: ast.expr,
-    args: list[ast.expr],
+    target: ast.Name,
+    args: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     kwargs: list[ast.keyword] | None = None,
 ) -> list[ast.stmt]:
@@ -658,8 +676,8 @@ def expand_std(
 
 
 def expand_var(
-    target: ast.expr,
-    args: list[ast.expr],
+    target: ast.Name,
+    args: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     kwargs: list[ast.keyword] | None = None,
 ) -> list[ast.stmt]:
@@ -670,8 +688,8 @@ def expand_var(
 
 
 def expand_var_or_std(
-    target: ast.expr,
-    args: list[ast.expr],
+    target: ast.Name,
+    args: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     kwargs: list[ast.keyword] | None,
     finish: str,
@@ -682,9 +700,9 @@ def expand_var_or_std(
     inside (deepest first), writes back ``sqrt(sum_of_squared_dev / divisor)``
     per kept-axis position (``divisor`` = product of the reduction-axis sizes).
     """
-    if not args or not isinstance(args[0], ast.Name):
+    a = first_name(args)
+    if a is None:
         raise NotImplementedError(f"np.{finish or 'var'} needs Name first arg")
-    a = args[0]
     shape = resolve_shape(a, shape_table)
     axes, keepdims = read_axis_keepdims(args, kwargs)
     n_dim = len(shape)
@@ -710,18 +728,7 @@ def expand_var_or_std(
         shape_table,
         init=const_(0.0),
         op_fn=lambda acc, x: ast.BinOp(left=acc, op=ast.Add(), right=x),
-        post_fn=lambda lvalue, divisor: ast.Assign(
-            targets=[lvalue],
-            value=ast.BinOp(
-                left=(
-                    lvalue
-                    if isinstance(lvalue, ast.Name)
-                    else ast.Subscript(value=lvalue.value, slice=lvalue.slice, ctx=ast.Load())
-                ),
-                op=ast.Div(),
-                right=divisor,
-            ),
-        ),
+        post_fn=divide_in_place,
     )
 
     # Step 2: accumulate squared deviations into ``__sd_acc`` (scalar per

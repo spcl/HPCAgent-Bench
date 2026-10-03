@@ -1,14 +1,15 @@
 """SSA-style renaming of names rebound with different shapes."""
 
 import ast
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from hpcagent_bench.translators.numpyto_common.lib_nodes.dims import shape_exprs_equal
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of
 from hpcagent_bench.translators.numpyto_common.lowering.shape_harvest import (
     branch_pin_,
-    shapes_agree_under,
     collect_dim_aliases,
+    shapes_agree_under,
 )
 
 __all__ = [
@@ -24,7 +25,7 @@ __all__ = [
 ]
 
 
-def read_in(name: str, blocks: "tuple[list[ast.stmt], ...]") -> bool:
+def read_in(name: str, blocks: tuple[Sequence[ast.AST], ...]) -> bool:
     """True when ``name`` is READ anywhere in ``blocks`` (the code that runs after a nested block).
 
     Liveness is what decides whether a shape re-binding inside an if/loop body is ambiguous. A name
@@ -67,7 +68,7 @@ def rebinds(stmt: ast.stmt, name: str) -> bool:
     return False
 
 
-def binds_name(target: ast.AST, name: str) -> bool:
+def binds_name(target: ast.expr, name: str) -> bool:
     """True when an assignment TARGET binds ``name``, through any nesting.
 
     Covers ``x``, ``a, x = ...``, ``a, *x = ...`` and ``(a, (x, b)) = ...``. Missing a form here is
@@ -83,7 +84,7 @@ def binds_name(target: ast.AST, name: str) -> bool:
     return False
 
 
-def live_on_loop_reentry(stmts: list[ast.stmt], i: int, name: str) -> "tuple[list[ast.stmt], ...]":
+def live_on_loop_reentry(stmts: Sequence[ast.stmt], i: int, name: str) -> tuple[Sequence[ast.AST], ...]:
     """The loop-body prefix whose reads of ``name`` can see the binding made at
     ``stmts[i]``.
 
@@ -107,7 +108,7 @@ def live_on_loop_reentry(stmts: list[ast.stmt], i: int, name: str) -> "tuple[lis
     return (prefix,)
 
 
-def ssa_rename_reassigned(tree: ast.AST, arrays_shapes: dict[str, list[str]]) -> None:
+def ssa_rename_reassigned(tree: ast.FunctionDef, arrays_shapes: dict[str, tuple[str, ...]]) -> None:
     """SSA-style rename for Names reassigned with different broadcast
     extents.
 
@@ -145,9 +146,9 @@ class SsaScope:
     and ``general_side`` whether this is the side holding the general spelling of an extent."""
 
     nested: bool = False
-    live_after: tuple[list[ast.stmt], ...] = ()
+    live_after: tuple[Sequence[ast.AST], ...] = ()
     loop_body: bool = False
-    reentry: tuple[tuple[list[ast.stmt], int], ...] = ()
+    reentry: tuple[tuple[Sequence[ast.stmt], int], ...] = ()
     pin: dict[str, int] | None = None
     general_side: bool = True
 
@@ -163,14 +164,14 @@ class SsaRenamer:
 
     __slots__ = ("dim_aliases", "shape_rank", "shape_toks_of", "shapes")
 
-    def __init__(self, arrays_shapes: dict[str, list[str]], dim_aliases: dict[str, str]) -> None:
+    def __init__(self, arrays_shapes: dict[str, tuple[str, ...]], dim_aliases: dict[str, str]) -> None:
         self.shapes: dict[str, tuple[str, ...]] = {name: tuple(shape) for name, shape in arrays_shapes.items()}
         self.dim_aliases = dim_aliases
         #: Which shape each buffer is currently DECLARED with, and how general each recorded shape is.
         self.shape_toks_of: dict[str, tuple[str, ...]] = {}
         self.shape_rank: dict[str, dict[tuple[str, ...], int]] = {}
 
-    def register_alloc(self, target_id: str, rhs: ast.AST) -> None:
+    def register_alloc(self, target_id: str, rhs: ast.expr) -> None:
         """Register the shape of ``np.zeros((...))`` / ``np.empty((...))``
         style allocators so subsequent reads see the allocated extent
         when the SSA pass computes broadcast extents inside loop
@@ -202,7 +203,7 @@ class SsaRenamer:
 
     def walk(
         self,
-        stmts: list[ast.stmt],
+        stmts: Sequence[ast.stmt],
         rename_map: dict[str, str],
         last_shape: dict[str, tuple[str, ...]],
         version: dict[str, dict[tuple[str, ...], str]],
@@ -213,13 +214,15 @@ class SsaRenamer:
             # (the assignment's RHS reads the old version's storage).
             rename_reads(stmt, rename_map)
             if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name):
-                self.rebind(stmts, i, rename_map, last_shape, version, scope)
+                self.rebind(stmt, stmt.targets[0], stmts, i, rename_map, last_shape, version, scope)
             if isinstance(stmt, (ast.For, ast.If, ast.While)):
-                self.walk_branches(stmts, i, rename_map, last_shape, version, scope)
+                self.walk_branches(stmt, stmts, i, rename_map, last_shape, version, scope)
 
     def rebind(
         self,
-        stmts: list[ast.stmt],
+        stmt: ast.Assign,
+        target: ast.Name,
+        stmts: Sequence[ast.stmt],
         i: int,
         rename_map: dict[str, str],
         last_shape: dict[str, tuple[str, ...]],
@@ -228,8 +231,7 @@ class SsaRenamer:
     ) -> None:
         """Decide the name a plain ``Name = expr`` binds: the original, the version already holding
         this shape, or a freshly minted ``<name>__v<n>``."""
-        stmt = stmts[i]
-        orig = stmt.targets[0].id
+        orig = target.id
         # Allocator-style RHS -- register the allocated shape so later reads inside loop bodies
         # resolve their extents. Allocations themselves don't trigger a rename.
         self.register_alloc(orig, stmt.value)
@@ -257,7 +259,7 @@ class SsaRenamer:
             name_for_shape = self.mint(stmts, i, orig, version[orig], shape_toks, scope)
             version[orig][shape_toks] = name_for_shape
         if name_for_shape != orig:
-            stmt.targets[0].id = name_for_shape
+            target.id = name_for_shape
             rename_map[orig] = name_for_shape
         else:
             rename_map.pop(orig, None)
@@ -295,7 +297,7 @@ class SsaRenamer:
 
     def mint(
         self,
-        stmts: list[ast.stmt],
+        stmts: Sequence[ast.stmt],
         i: int,
         orig: str,
         versions: dict[tuple[str, ...], str],
@@ -328,7 +330,8 @@ class SsaRenamer:
 
     def walk_branches(
         self,
-        stmts: list[ast.stmt],
+        stmt: ast.For | ast.If | ast.While,
+        stmts: Sequence[ast.stmt],
         i: int,
         rename_map: dict[str, str],
         last_shape: dict[str, tuple[str, ...]],
@@ -341,12 +344,11 @@ class SsaRenamer:
         its condition and both loop forms may run an ``else`` after the body. The enclosing loops'
         RE-ENTRY POINTS are carried down (not a pre-truncated prefix: the truncation depends on the
         name being minted, known only at the mint site)."""
-        stmt = stmts[i]
         inner_after = (stmts[i + 1 :],) + scope.live_after
         if isinstance(stmt, ast.While):
-            inner_after = ([ast.Expr(value=stmt.test)],) + inner_after
+            inner_after = ([ast.Expr(value=stmt.test)], *inner_after)
         if stmt.orelse and isinstance(stmt, (ast.For, ast.While)):
-            inner_after = (stmt.orelse,) + inner_after
+            inner_after = (stmt.orelse, *inner_after)
         is_loop = isinstance(stmt, (ast.For, ast.While))
         inner_reentry = (scope.reentry + ((stmts, i),)) if scope.loop_body else scope.reentry
         branch_pin, zero_on_taken = branch_pin_(stmt)
@@ -387,7 +389,7 @@ def rename_reads(stmt: ast.stmt, rename_map: dict[str, str]) -> None:
             apply_renames(stmt.value, rename_map)
 
 
-def apply_renames(node: ast.AST, rename_map: dict[str, str]) -> None:
+def apply_renames(node: ast.expr, rename_map: dict[str, str]) -> None:
     if not rename_map:
         return
     for sub in ast.walk(node):

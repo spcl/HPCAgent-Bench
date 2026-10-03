@@ -2,8 +2,8 @@
 
 import ast
 
-from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import is_integer_expr
 from hpcagent_bench.translators.numpyto_common.ast_build import numpy_attribute
+from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import is_integer_expr
 
 __all__ = ["BuiltinCastRewriter", "ScalarFloatTagger", "TrueDivisionPromoter"]
 
@@ -30,6 +30,8 @@ class BuiltinCastRewriter(ast.NodeTransformer):
     both correct and faithful.
     """
 
+    __slots__ = ()
+
     def visit_BinOp(self, node: ast.BinOp) -> ast.AST:
         # True-division barrier: a ``float(x)`` operand of ``/`` must be
         # PRESERVED, not dropped -- numpy ``/`` is true division, so an int/int
@@ -43,7 +45,7 @@ class BuiltinCastRewriter(ast.NodeTransformer):
         return node
 
     @staticmethod
-    def keep_float_as_cast(operand: ast.AST) -> ast.AST:
+    def keep_float_as_cast(operand: ast.expr) -> ast.expr:
         if (
             isinstance(operand, ast.Call)
             and isinstance(operand.func, ast.Name)
@@ -79,6 +81,8 @@ class ScalarFloatTagger(ast.NodeVisitor):
     Visits in source order so a tag is available to the statements that follow it, and only
     ever ADDS float tags it can prove (an integer expression stays untagged and keeps the
     old reading). So this can only turn a false promotion OFF -- never a new one on."""
+
+    __slots__ = ("array_names", "tags")
 
     def __init__(self, tags: dict[str, str], array_names: set[str]) -> None:
         self.tags = tags
@@ -116,6 +120,8 @@ class TrueDivisionPromoter(ast.NodeTransformer):
     float/int rule), and a bare integer left here would read as that case and pull an
     int/int divide down to float32 on an fp32 emit. It also leaves no implicit int -> double
     for the conversion gate; the divide's value is unchanged either way."""
+
+    __slots__ = ("array_names", "local_dtypes")
 
     def __init__(self, local_dtypes, array_names) -> None:
         self.local_dtypes = local_dtypes or {}

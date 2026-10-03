@@ -2,6 +2,7 @@
 
 import ast
 import copy
+from collections.abc import Callable
 
 from hpcagent_bench.translators.numpyto_common.ast_build import name_, range_for, store_
 from hpcagent_bench.translators.numpyto_common.lib_nodes.dims import shape_exprs_equal
@@ -57,7 +58,12 @@ def strided_trip_count(start: ast.expr, stop: ast.expr, step) -> ast.expr:
         if multiple is not None:
             return multiple
         return binop(binop(binop(span, ast.Add(), step), ast.Sub(), const_(1)), ast.FloorDiv(), step)
-    if isinstance(start, ast.Constant) and isinstance(stop, ast.Constant):
+    if (
+        isinstance(start, ast.Constant)
+        and isinstance(stop, ast.Constant)
+        and isinstance(start.value, int)
+        and isinstance(stop.value, int)
+    ):
         return const_(max(0, -(-(stop.value - start.value) // step)))
     span = stop if (isinstance(start, ast.Constant) and start.value == 0) else binop(stop, ast.Sub(), start)
     return binop(binop(span, ast.Add(), const_(step - 1)), ast.FloorDiv(), const_(step))
@@ -92,33 +98,41 @@ class SliceFusion(ast.NodeTransformer):
       shape info too).
     """
 
-    def __init__(self, array_shapes: dict[str, list[str]]) -> None:
+    __slots__ = ("array_shapes", "invariant_ctr")
+
+    def __init__(self, array_shapes: dict[str, tuple[str, ...]]) -> None:
         self.array_shapes = array_shapes
         #: Monotonic id for the invariant-read temps staged ahead of a fused nest.
         self.invariant_ctr: list[int] = [0]
 
-    def visit_Assign(self, node: ast.Assign) -> ast.AST:
+    def visit_Assign(self, node: ast.Assign) -> ast.AST | list[ast.stmt]:
         self.generic_visit(node)
         if len(node.targets) != 1:
             return node
         return self.rewrite_(node.targets[0], node.value, aug_op=None) or node
 
-    def visit_AugAssign(self, node: ast.AugAssign) -> ast.AST:
+    def visit_AugAssign(self, node: ast.AugAssign) -> ast.AST | list[ast.stmt]:
         self.generic_visit(node)
         return self.rewrite_(node.target, node.value, aug_op=node.op) or node
 
-    def target_axis_range(self, d: ast.AST, lhs_name: str, axis: int) -> tuple[ast.AST, ast.AST, int, ast.AST]:
+    def target_axis_range(
+        self, d: ast.expr, lhs_name: str, axis: int
+    ) -> tuple[ast.expr, ast.expr, int | ast.expr, ast.expr]:
         """``(loop_lo, loop_hi, step, slice_start)`` of one LHS axis, negative bounds resolved (a scalar
         index is its own one-point range). For a unit step the iter var IS the destination coordinate
         (``loop_lo == slice_start``); for a strided target it is the logical position and ``loop_lo``
         is 0."""
         if not isinstance(d, ast.Slice):
             return (d, d, 1, d)
-        step = 1 if d.step is None else slice_step_any(d)
-        if step is None:
-            raise NotImplementedError(
-                f"slice step {ast.unparse(d.step)!r} on an assignment target must be a compile-time integer"
-            )
+        if d.step is None:
+            step: int | ast.expr = 1
+        else:
+            resolved_step = slice_step_any(d)
+            if resolved_step is None:
+                raise NotImplementedError(
+                    f"slice step {ast.unparse(d.step)!r} on an assignment target must be a compile-time integer"
+                )
+            step = resolved_step
         start = self.resolve_bound(d.lower, lhs_name, axis, default=const_(0))
         stop = self.resolve_bound(d.upper, lhs_name, axis, default=lambda: self.axis_length(lhs_name, axis))
         if step == 1:
@@ -127,7 +141,9 @@ class SliceFusion(ast.NodeTransformer):
             raise NotImplementedError(f"negative slice step {step} on an assignment target is not supported")
         return (const_(0), strided_trip_count(start, stop, step), step, start)
 
-    def rewrite_(self, target: ast.AST, value: ast.expr, aug_op: ast.AST | None) -> ast.AST | None:
+    def rewrite_(
+        self, target: ast.expr, value: ast.expr, aug_op: ast.operator | None
+    ) -> ast.stmt | list[ast.stmt] | None:
         """Common slice-fusion path for both Assign and AugAssign.
 
         ``aug_op`` is ``None`` for plain Assign or the augmented operator
@@ -193,12 +209,14 @@ class SliceFusion(ast.NodeTransformer):
                 continue
             lo, hi = ranges[axis][0], ranges[axis][1]
             ivar = iter_vars[axis]
+            if ivar is None:
+                continue
             body = [range_for(ivar.id, [lo, hi], body)]
         if hoister.staged:
             return [*hoister.staged, *body]
         return body[0] if len(body) == 1 else body
 
-    def axis_length(self, array_name: str, axis: int) -> ast.AST:
+    def axis_length(self, array_name: str, axis: int) -> ast.expr:
         shape = self.array_shapes.get(array_name)
         if shape is None or axis >= len(shape):
             raise NotImplementedError(
@@ -206,7 +224,9 @@ class SliceFusion(ast.NodeTransformer):
             )
         return const_or_name(shape[axis])
 
-    def resolve_bound(self, bound: ast.AST | None, array_name: str, axis: int, default) -> ast.AST:
+    def resolve_bound(
+        self, bound: ast.expr | None, array_name: str, axis: int, default: ast.expr | Callable[[], ast.expr]
+    ) -> ast.expr:
         """Resolve a slice bound, expanding numpy's negative-index form.
 
         A bound of ``None`` -> ``default`` (typically 0 for start,
@@ -222,16 +242,16 @@ class SliceFusion(ast.NodeTransformer):
         omitted -- not on every explicit-stop slice (e.g. ``a[:n]``).
         """
         if bound is None:
-            return default() if callable(default) else default
+            return default if isinstance(default, ast.expr) else default()
         k = negative_literal_offset(bound)
         if k is not None:
             return binop(self.axis_length(array_name, axis), ast.Sub(), const_(k))
         return bound
 
-    def scalar_slice(self, lhs_dims, iter_vars, ranges, name) -> ast.AST:
+    def scalar_slice(self, lhs_dims, iter_vars, ranges, name) -> ast.expr:
         """Build the LHS scalar subscript: iter vars per slice dim,
         original (negative-resolved) index per non-slice dim."""
-        idx_nodes: list[ast.AST] = []
+        idx_nodes: list[ast.expr] = []
         for axis, d in enumerate(lhs_dims):
             if isinstance(d, ast.Slice):
                 ivar = name_(iter_vars[axis].id)
@@ -251,7 +271,7 @@ class SliceFusion(ast.NodeTransformer):
             return idx_nodes[0]
         return ast.Tuple(elts=idx_nodes, ctx=ast.Load())
 
-    def resolve_scalar_index(self, idx: ast.AST, name: str, axis: int) -> ast.AST:
+    def resolve_scalar_index(self, idx: ast.expr, name: str, axis: int) -> ast.expr:
         """A negative constant scalar index ``-K`` (e.g. ``y[:, -1]``)
         wraps to ``axis_length - K`` -- numpy semantics. C has no
         wrap-around, so leaving it literal indexes ``arr[... + (-1)]``
@@ -284,7 +304,9 @@ class HoistInvariantSelfReads(ast.NodeTransformer):
     that exists to keep the element from being addressed would fault where numpy does not.
     """
 
-    def __init__(self, lhs_name: str, array_shapes: dict[str, list[str]], counter: list[int]) -> None:
+    __slots__ = ("_by_source", "array_shapes", "counter", "lhs_name", "staged")
+
+    def __init__(self, lhs_name: str, array_shapes: dict[str, tuple[str, ...]], counter: list[int]) -> None:
         self.lhs_name = lhs_name
         self.array_shapes = array_shapes
         self.counter = counter
@@ -349,13 +371,15 @@ class LiftFreshArrayFromSlices(ast.NodeTransformer):
     ``__hpcagent_bench_zeros__()`` (which the emitter already swallows).
     """
 
+    __slots__ = ("local_dtypes", "new_locals", "scalar_helpers", "shapes")
+
     def __init__(
         self,
-        shapes: dict[str, list[str]],
+        shapes: dict[str, tuple[str, ...]],
         local_dtypes: dict[str, str] | None = None,
         scalar_helpers: set[str] | None = None,
     ) -> None:
-        self.shapes: dict[str, list[str]] = dict(shapes)
+        self.shapes: dict[str, tuple[str, ...]] = dict(shapes)
         #: By-value scalar helpers -- see :func:`is_scalar_helper_call`. A call to one is rank 0
         #: even though its ARGUMENTS carry slices (``bratu_dot(Q[p, :, :], w, N)``).
         self.scalar_helpers: set[str] = set(scalar_helpers or ())
@@ -370,7 +394,7 @@ class LiftFreshArrayFromSlices(ast.NodeTransformer):
         self.visit(tree)
         return self.new_locals
 
-    def visit_Assign(self, node: ast.Assign) -> ast.AST:
+    def visit_Assign(self, node: ast.Assign) -> ast.AST | list[ast.stmt]:
         self.generic_visit(node)
         if len(node.targets) != 1:
             return node
@@ -392,14 +416,14 @@ class LiftFreshArrayFromSlices(ast.NodeTransformer):
         # already deduced C's shape via broadcasting). Otherwise the
         # target must be a fresh local.
         rebind = existing is not None
-        if rebind:
+        if existing is not None:
             if len(existing) != len(shape_toks) or not all(
                 shape_exprs_equal(a, b) for a, b in zip(existing, shape_toks)
             ):
                 return node
         else:
             self.new_locals[target.id] = shape_toks
-        self.shapes[target.id] = list(shape_toks)
+        self.shapes[target.id] = shape_toks
         # Infer complex dtype when the RHS contains any complex literal
         # ``1j`` (or operates on an already-complex array). C99
         # ``_Complex`` is assignment-compatible with real ``double`` in

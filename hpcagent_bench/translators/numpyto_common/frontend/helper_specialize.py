@@ -2,6 +2,8 @@
 
 import ast
 import copy
+from collections.abc import Sequence
+from typing import overload
 
 from hpcagent_bench.translators.numpyto_common.ast_build import SubstituteLoads, map_blocks, name_, store_
 from hpcagent_bench.translators.numpyto_common.frontend.helper_params import ConstArg
@@ -85,13 +87,20 @@ def specialise_helper_by_call_signature(
         tree.body.append(clone)
         clones.append(clone)
         for site in by_key[key]:
-            site.func.id = name
+            if isinstance(site.func, ast.Name):
+                site.func.id = name
     if clones:
         ast.fix_missing_locations(tree)
     return clones
 
 
-def substitute_names(node: ast.Expression, consts: dict[str, ast.expr]) -> ast.Expression:
+@overload
+def substitute_names(node: ast.expr, consts: dict[str, ast.expr]) -> ast.expr: ...
+@overload
+def substitute_names(node: ast.Expression, consts: dict[str, ast.expr]) -> ast.Expression: ...
+@overload
+def substitute_names(node: ast.stmt, consts: dict[str, ast.expr]) -> ast.stmt: ...
+def substitute_names(node: ast.AST, consts: dict[str, ast.expr]) -> ast.AST:
     """Replace each ``Load`` use of a name in ``consts`` with its constant expr.
 
     Returns the (possibly replaced) root so a bare-Name ``node`` is not lost."""
@@ -99,7 +108,7 @@ def substitute_names(node: ast.Expression, consts: dict[str, ast.expr]) -> ast.E
     return SubstituteLoads(consts).visit(node)
 
 
-def drop_unreachable_after_return(stmts: list[ast.stmt]) -> list[ast.stmt]:
+def drop_unreachable_after_return(stmts: Sequence[ast.stmt]) -> list[ast.stmt]:
     """Truncate ``stmts`` right after its first unconditional ``return``, recursing into every
     nested block (``If``/``For``/``While`` body + orelse) so the same trim applies there too.
 
@@ -127,9 +136,11 @@ def rewrite_returns_to_outparam(hfn: ast.FunctionDef, hret: str) -> None:
     the helper emits as a ``void`` out-param function."""
 
     class Ret(ast.NodeTransformer):
-        def visit_Return(self, n: ast.Return) -> ast.stmt | list[ast.stmt]:
-            if n.value is None:
-                return n
+        __slots__ = ()
+
+        def visit_Return(self, node: ast.Return) -> ast.stmt | list[ast.stmt]:
+            if node.value is None:
+                return node
             store = ast.Assign(
                 targets=[
                     ast.Subscript(
@@ -138,11 +149,11 @@ def rewrite_returns_to_outparam(hfn: ast.FunctionDef, hret: str) -> None:
                         ctx=ast.Store(),
                     )
                 ],
-                value=n.value,
+                value=node.value,
             )
             bare = ast.Return(value=None)
-            ast.copy_location(store, n)
-            ast.copy_location(bare, n)
+            ast.copy_location(store, node)
+            ast.copy_location(bare, node)
             return [store, bare]
 
     Ret().visit(hfn)

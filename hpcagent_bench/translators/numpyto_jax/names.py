@@ -2,6 +2,7 @@
 
 import ast
 import copy
+from collections.abc import Sequence
 
 __all__ = [
     "as_store",
@@ -32,12 +33,12 @@ def names_loaded(node: ast.AST) -> set[str]:
     return out
 
 
-def store_target_names(t: ast.AST, out: set[str]) -> None:
+def store_target_names(t: ast.expr, out: set[str]) -> None:
     """Names one assignment target binds: a ``Name``, a ``Subscript``'s base
     array (``a[i] = ..`` mutates ``a``), each element of a tuple/list unpack
     (lulesh's ``x, y, z, .. = _lagrange_nodal(..)``), or a starred target."""
     if isinstance(t, ast.Subscript):
-        base = t
+        base: ast.expr = t
         while isinstance(base, ast.Subscript):
             base = base.value
         if isinstance(base, ast.Name):
@@ -63,7 +64,7 @@ def names_stored(node: ast.AST) -> set[str]:
     return out
 
 
-def has_break(body: list[ast.stmt]) -> bool:
+def has_break(body: Sequence[ast.stmt]) -> bool:
     for s in body:
         for n in ast.walk(s):
             if isinstance(n, ast.Break):
@@ -71,7 +72,7 @@ def has_break(body: list[ast.stmt]) -> bool:
     return False
 
 
-def definite_writes(stmts: list[ast.stmt]) -> set[str]:
+def definite_writes(stmts: Sequence[ast.stmt]) -> set[str]:
     """Names DEFINITELY written by straight-line execution of ``stmts``. A write
     inside a loop (may run zero times) is not definite; a write inside an ``if``
     counts only when it happens on BOTH arms."""
@@ -86,7 +87,7 @@ def definite_writes(stmts: list[ast.stmt]) -> set[str]:
     return out
 
 
-def upward_exposed(stmts: list[ast.stmt]) -> set[str]:
+def upward_exposed(stmts: Sequence[ast.stmt]) -> set[str]:
     """Live-in of a straight-line block: names read before being definitely
     written. Decides which vars a preceding loop must thread OUT -- a plain
     ``names_loaded`` over the rest-of-body over-approximates (vadv/cloudsc's
@@ -141,18 +142,18 @@ def stmt_rhs_loads(s: ast.stmt) -> set[str]:
     return names_loaded(s)
 
 
-def base_name(t: ast.AST) -> str:
+def base_name(t: ast.expr) -> str:
     while isinstance(t, ast.Subscript):
         t = t.value
     return t.id if isinstance(t, ast.Name) else "<expr>"
 
 
-def load(t: ast.AST) -> ast.AST:
+def load(t: ast.expr) -> ast.expr:
     t2 = ast.fix_missing_locations(ast.parse(ast.unparse(t), mode="eval").body)
     return t2
 
 
-def reads_before_write(stmts: list[ast.stmt], v: str) -> bool:
+def reads_before_write(stmts: Sequence[ast.stmt], v: str) -> bool:
     """Does ``v`` appear as an input (RHS / container / index read) in ``stmts``
     before any statement writes it? A nested compound statement is treated
     conservatively -- any load of ``v`` inside it counts as a read."""
@@ -164,7 +165,7 @@ def reads_before_write(stmts: list[ast.stmt], v: str) -> bool:
     return False
 
 
-def is_identity_test(test: ast.AST) -> bool:
+def is_identity_test(test: ast.expr) -> bool:
     """A pure identity check (``x is None``/``is not None``, fv3_dycore's
     optional ``if del6_v is not None:``). Trace-time-concrete (never a value on
     a traced array), so the ``if`` stays a REAL Python branch -- ``jnp.where``
@@ -179,21 +180,22 @@ def tuple_expr(names: list[str]) -> str:
     return "()" if not names else "(" + ", ".join(names) + ",)"
 
 
-def is_assignable(node: ast.AST) -> bool:
+def is_assignable(node: ast.expr) -> bool:
     """An expression that can be an assignment target (so a mutating helper's
     in-place arg can be rebound from its return)."""
     return isinstance(node, (ast.Name, ast.Subscript, ast.Attribute))
 
 
-def as_store(node: ast.AST) -> ast.AST:
+def as_store(node: ast.expr) -> ast.expr:
     """A copy of an assignable expression with Store context -- the original stays
     a Load arg inside the call, so it must not be mutated in place."""
     n = copy.deepcopy(node)
-    n.ctx = ast.Store()
+    if isinstance(n, (ast.Name, ast.Subscript, ast.Attribute)):
+        n.ctx = ast.Store()
     return n
 
 
-def is_np_attr(node: ast.AST, name: str) -> bool:
+def is_np_attr(node: ast.expr, name: str) -> bool:
     return (
         isinstance(node, ast.Attribute)
         and node.attr == name
@@ -202,5 +204,5 @@ def is_np_attr(node: ast.AST, name: str) -> bool:
     )
 
 
-def deep_copy(node: ast.AST) -> ast.AST:
+def deep_copy(node: ast.expr) -> ast.expr:
     return ast.parse(ast.unparse(node), mode="eval").body

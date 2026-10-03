@@ -1,10 +1,10 @@
 """``eigh`` / ``eigvalsh`` lowered to a Jacobi eigen-solver loop nest."""
 
 import ast
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 
 from hpcagent_bench.translators.numpyto_common import dtypes
-from hpcagent_bench.translators.numpyto_common.ast_build import name_, store_
+from hpcagent_bench.translators.numpyto_common.ast_build import name_, name_ids, store_
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import eigh_call_kind, is_eigh_assign_target
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.kinds import dtype_kind, dtype_table_
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.linalg import cholesky_lines
@@ -204,8 +204,9 @@ def eigh_c_stmts(
     ``None``. ``is_real`` must not be set with ``b``: the generalized ``Cm`` takes ``b.dtype``."""
     n = f"{a}.shape[0]"
     lines: list[str] = []
+    Li = f"{p}_Li"
     if b is not None:
-        L, Li = f"{p}_L", f"{p}_Li"
+        L = f"{p}_L"
         lines += cholesky_lines(L, b, n, f"{p}c", hermitian=True)
         lines += [  # explicit lower-triangular inverse L^-1 by forward substitution
             f"{Li} = np.zeros(({n}, {n}), {b}.dtype)",
@@ -268,22 +269,22 @@ def eigh_c_stmts(
     return lines
 
 
-def eigh_operand_is_real(a_node: ast.AST, b_node: ast.AST | None, dtypes: dict[str, str]) -> bool:
+def eigh_operand_is_real(a_node: ast.expr, b_node: ast.expr | None, dtypes: dict[str, str]) -> bool:
     """True iff every present eigh operand is provably non-complex per the kind table ``dtypes``.
     An unknown kind is not proof of real: it keeps the always-correct complex path."""
 
-    def known_real(node: ast.AST) -> bool:
+    def known_real(node: ast.expr) -> bool:
         kind = dtype_kind(node, dtypes)
         return kind is not None and kind != "complex"
 
     return known_real(a_node) and (b_node is None or known_real(b_node))
 
 
-def operand_names(p: str, a_node: ast.AST, b_node: ast.AST | None) -> tuple[list[str], str, str | None]:
+def operand_names(p: str, a_node: ast.expr, b_node: ast.expr | None) -> tuple[list[str], str, str | None]:
     """Names of the eigh operands, and the lines materialising a non-Name one as ``<p>_a`` / ``<p>_b``."""
     pre: list[str] = []
 
-    def name_of(nd: ast.AST, tag: str) -> str:
+    def name_of(nd: ast.expr, tag: str) -> str:
         if isinstance(nd, ast.Name):
             return nd.id
         pre.append(f"{p}_{tag} = np.ascontiguousarray({ast.unparse(nd)})")
@@ -310,6 +311,8 @@ class EighLoopRewriter(ast.NodeTransformer):
     Runs on the whole module before kernel inlining, so alias imports are still in scope and a
     helper's names are known only through ``kind_tables`` (:func:`module_kind_tables`).
     ``dtypes`` is the declared kind table (manifest arrays and preset scalars)."""
+
+    __slots__ = ("_ctr", "alias_names", "array_dtypes", "declared", "dtypes", "kind_tables")
 
     def __init__(
         self,
@@ -356,8 +359,9 @@ class EighLoopRewriter(ast.NodeTransformer):
         kind, a_node, b_node, kw = hit
         tgt = node.targets[0]
         # ``w, v = eigh(...)`` or eigenvalues-only ``w = eigvalsh(...)``.
-        if isinstance(tgt, ast.Tuple) and len(tgt.elts) == 2 and all(isinstance(e, ast.Name) for e in tgt.elts):
-            w, v = tgt.elts[0].id, tgt.elts[1].id
+        pair = name_ids(tgt.elts) if isinstance(tgt, ast.Tuple) else None
+        if pair is not None and len(pair) == 2:
+            w, v = pair
         elif kind == "eigvalsh" and isinstance(tgt, ast.Name):
             w, v = tgt.id, None
         else:
@@ -380,6 +384,8 @@ class EighCallHoister(ast.NodeTransformer):
     into its own ``__eigv<k> = <call>`` statement so :class:`EighLoopRewriter` can lower it.
     Runs on the whole module before the loop rewriter; an eligible eigh-assign stays whole."""
 
+    __slots__ = ("_ctr", "alias_names", "pre")
+
     def __init__(self, alias_names: set) -> None:
         self.alias_names = alias_names
         self.pre: list[ast.stmt] = []
@@ -394,7 +400,7 @@ class EighCallHoister(ast.NodeTransformer):
         self.pre.append(ast.Assign(targets=[store_(name)], value=node))
         return name_(name)
 
-    def flush(self, node: ast.stmt):
+    def flush(self, node: ast.stmt) -> ast.AST | list[ast.stmt]:
         # Descending into a direct eigh-assign would hoist its own RHS and hide it from the rewriter.
         if is_eigh_assign_target(node, self.alias_names):
             return node
@@ -410,9 +416,9 @@ class EighCallHoister(ast.NodeTransformer):
             ast.fix_missing_locations(s)
         return pre + [node]
 
-    def visit_stmts(self, stmts: list[ast.stmt]) -> list[ast.stmt]:
+    def visit_stmts(self, node: Sequence[ast.stmt]) -> list[ast.stmt]:
         out: list[ast.stmt] = []
-        for s in stmts:
+        for s in node:
             r = self.visit(s)
             if r is None:
                 continue
@@ -426,12 +432,23 @@ class EighCallHoister(ast.NodeTransformer):
         node.orelse = self.visit_stmts(node.orelse)
         return node
 
-    visit_Assign = flush
-    visit_AugAssign = flush
-    visit_Expr = flush
-    visit_Return = flush
-    visit_If = flush
-    visit_For = flush
+    def visit_Assign(self, node: ast.Assign) -> ast.AST | list[ast.stmt]:
+        return self.flush(node)
+
+    def visit_AugAssign(self, node: ast.AugAssign) -> ast.AST | list[ast.stmt]:
+        return self.flush(node)
+
+    def visit_Expr(self, node: ast.Expr) -> ast.AST | list[ast.stmt]:
+        return self.flush(node)
+
+    def visit_Return(self, node: ast.Return) -> ast.AST | list[ast.stmt]:
+        return self.flush(node)
+
+    def visit_If(self, node: ast.If) -> ast.AST | list[ast.stmt]:
+        return self.flush(node)
+
+    def visit_For(self, node: ast.For) -> ast.AST | list[ast.stmt]:
+        return self.flush(node)
 
 
 class EighInline(ast.NodeTransformer):
@@ -440,6 +457,8 @@ class EighInline(ast.NodeTransformer):
 
     Runs before :data:`LINALG_HOIST` so the cholesky/inv it emits are lowered for pythran.
     ``dtypes`` is the per-function kind table (:func:`dtype_table_`)."""
+
+    __slots__ = ("_ctr", "alias_names", "array_dtypes", "changed", "dtypes", "ranks")
 
     def __init__(
         self,
@@ -466,8 +485,9 @@ class EighInline(ast.NodeTransformer):
         tgt = node.targets[0]
         evo = kw.get("eigvals_only")
         eigvals_only = kind == "eigvalsh" or (isinstance(evo, ast.Constant) and evo.value is True)
-        if isinstance(tgt, ast.Tuple) and len(tgt.elts) == 2 and all(isinstance(e, ast.Name) for e in tgt.elts):
-            w, v = tgt.elts[0].id, tgt.elts[1].id
+        pair = name_ids(tgt.elts) if isinstance(tgt, ast.Tuple) else None
+        if pair is not None and len(pair) == 2:
+            w, v = pair
         elif isinstance(tgt, ast.Name) and eigvals_only:
             w, v = tgt.id, None
         else:
@@ -488,8 +508,11 @@ class EighInline(ast.NodeTransformer):
         self.changed = True
         return [ast.copy_location(s, node) for s in ast.parse("\n".join(lines)).body]
 
-    def visit_AugAssign(self, node):
+    def visit_AugAssign(self, node: ast.AugAssign) -> ast.AST:
         return node
 
-    visit_Return = visit_AugAssign
-    visit_Expr = visit_AugAssign
+    def visit_Return(self, node: ast.Return) -> ast.AST:
+        return node
+
+    def visit_Expr(self, node: ast.Expr) -> ast.AST:
+        return node

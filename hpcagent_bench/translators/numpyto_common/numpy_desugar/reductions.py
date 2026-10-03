@@ -39,7 +39,7 @@ __all__ = [
 ]
 
 
-def axis_list(ax: ast.AST | None, rank: int) -> list[int] | None:
+def axis_list(ax: ast.expr | None, rank: int) -> list[int] | None:
     """An ``axis=k`` / ``axis=(1, 2)`` node -> sorted non-negative axis indices, or None when it is not all
     constant ints in range."""
     if ax is None:
@@ -50,12 +50,12 @@ def axis_list(ax: ast.AST | None, rank: int) -> list[int] | None:
         return v is not None and -rank <= v < rank
 
     if isinstance(ax, (ast.Tuple, ast.List)):
-        vals = [const_int(e) for e in ax.elts]
-        if not vals or any(not in_range(v) for v in vals):
+        vals = [v for v in (const_int(e) for e in ax.elts) if v is not None and in_range(v)]
+        if not vals or len(vals) != len(ax.elts):
             return None
         return sorted({v % rank for v in vals})
     v = const_int(ax)
-    return [v % rank] if in_range(v) else None
+    return [v % rank] if v is not None and in_range(v) else None
 
 
 def reduce_axis_stmts(
@@ -190,7 +190,7 @@ def reduce_ddof(op: str, ddof: ast.expr | None) -> int | None:
     return None
 
 
-def hoist_reduce_axis(node: ast.AST, hoist: ValueHoist) -> ast.expr | None:
+def hoist_reduce_axis(node: ast.expr, hoist: ValueHoist) -> ast.expr | None:
     """``np.<reduce>(x, axis=k)`` or ``x.<reduce>(axis=k)`` -> the temp its reduction loop fills.
 
     A non-Name ``x`` is hoisted to a temp first. Left verbatim: a non-constant axis or ddof, a rank<2 operand,
@@ -241,7 +241,7 @@ REDUCE_AXIS_HOIST = HoistForm(frozenset(REDUCE_FNS), (), hoist_reduce_axis)
 DACE_NATIVE_REDUCE_FNS = frozenset({"sum", "prod", "mean", "min", "max", "amin", "amax"})
 
 
-def hoist_reduce_axis_unless_native(node: ast.AST, hoist: ValueHoist) -> ast.expr | None:
+def hoist_reduce_axis_unless_native(node: ast.expr, hoist: ValueHoist) -> ast.expr | None:
     """:func:`hoist_reduce_axis`, keeping a float reduction the DaCe frontend lowers itself.
 
     A kept METHOD form is respelled ``np.<op>(x, axis=k)``: DaCe's ``ndarray.max``/``min``
@@ -281,10 +281,11 @@ def keepdims_index(axes: list[int]) -> list[ast.expr] | None:
     """
     if all(a >= 0 for a in axes):
         entries: list[ast.expr] = [ast.Constant(value=None) if i in axes else ast.Slice() for i in range(max(axes) + 1)]
-        return entries + [ast.Constant(value=Ellipsis)]
+        return [*entries, ast.Constant(value=Ellipsis)]
     if all(a < 0 for a in axes):
-        return [ast.Constant(value=Ellipsis)] + [
-            ast.Constant(value=None) if i in axes else ast.Slice() for i in range(min(axes), 0)
+        return [
+            ast.Constant(value=Ellipsis),
+            *(ast.Constant(value=None) if i in axes else ast.Slice() for i in range(min(axes), 0)),
         ]
     return None
 
@@ -299,7 +300,7 @@ class KeepdimsToNewaxis(RewritePass):
     Left alone: no axis (every axis kept needs the rank), a non-constant or mixed-sign axis, the
     ``x.sum(...)`` method form, and a ``keepdims`` that is not a literal ``True``."""
 
-    __slots__ = ("changed",)
+    __slots__ = ()
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
         self.generic_visit(node)
@@ -312,8 +313,9 @@ class KeepdimsToNewaxis(RewritePass):
             node.args[1] if len(node.args) > 1 else None
         )
         given = ax.elts if isinstance(ax, (ast.Tuple, ast.List)) else ([ax] if ax is not None else [])
-        axes = [const_int(e) for e in given]
-        if not axes or None in axes:
+        maybe_axes = [const_int(e) for e in given]
+        axes = [a for a in maybe_axes if a is not None]
+        if not axes or len(axes) != len(maybe_axes):
             return node
         entries = keepdims_index(sorted(axes))
         if entries is None:
@@ -328,7 +330,7 @@ class KeepdimsToNewaxis(RewritePass):
 MASKED_REDUCE_OPS = {"mean"}
 
 
-def masked_reduce_of(node: ast.AST, gathers: dict[str, tuple]):
+def masked_reduce_of(node: ast.AST, gathers: dict[str, tuple]) -> tuple[str, str] | None:
     """``v.mean()`` / ``np.mean(v)`` (a full reduction of a name in ``gathers``) -> ``(op, name)``, else None."""
     if not isinstance(node, ast.Call) or node.keywords:
         return None
@@ -341,13 +343,15 @@ def masked_reduce_of(node: ast.AST, gathers: dict[str, tuple]):
         and f.value.id in gathers
     ):
         return f.attr, f.value.id
+    np_op = numpy_call_attr(node)
     if (
-        numpy_call_attr(node) in MASKED_REDUCE_OPS
+        np_op is not None
+        and np_op in MASKED_REDUCE_OPS
         and len(node.args) == 1
         and isinstance(node.args[0], ast.Name)
         and node.args[0].id in gathers
     ):
-        return numpy_call_attr(node), node.args[0].id
+        return np_op, node.args[0].id
     return None
 
 
@@ -366,7 +370,7 @@ def masked_reduce_lines(temp: str, a: str, mask: str, rank: int, op: str, p: str
     return lines
 
 
-def is_bool_mask(mask: ast.AST, a: ast.AST, ranks: dict[str, int], dtypes: dict[str, str]) -> bool:
+def is_bool_mask(mask: ast.expr, a: ast.expr, ranks: dict[str, int], dtypes: dict[str, str]) -> bool:
     """True iff ``mask`` is a bool-kind array of ``a``'s rank, i.e. ``a[mask]`` is a boolean select."""
     if isinstance(mask, (ast.Tuple, ast.Slice)) or is_newaxis(mask):
         return False
@@ -399,7 +403,7 @@ def masked_reduce_map(fn: ast.AST, ranks: dict[str, int], dtypes: dict[str, str]
     return ok
 
 
-def hoist_masked_reduce(node: ast.AST, hoist: ValueHoist) -> ast.expr | None:
+def hoist_masked_reduce(node: ast.expr, hoist: ValueHoist) -> ast.expr | None:
     """``v.mean()`` / ``np.mean(v)`` over a vetted ``v = a[mask]`` -> the temp its accumulate loop fills.
 
     The select is a dynamic-length array pythran cannot type and dace cannot shape."""
@@ -412,7 +416,10 @@ def hoist_masked_reduce(node: ast.AST, hoist: ValueHoist) -> ast.expr | None:
     p = f"__mr{hoist.ctr}"
     hoist.ctr += 1
     temp = f"{p}_o"
-    hoist.queue(masked_reduce_lines(temp, a.id, ast.unparse(mask), expr_rank(a, hoist.tables.ranks), op, p))
+    rank = expr_rank(a, hoist.tables.ranks)
+    if rank is None:
+        return None
+    hoist.queue(masked_reduce_lines(temp, a.id, ast.unparse(mask), rank, op, p))
     return name_(temp)
 
 
@@ -465,7 +472,7 @@ class NormalizeNegativeAxis(RankedRewritePass):
     the first operand's rank, plus one for an axis-ADDING op; an unknown rank is left verbatim. Only the
     ``axis=`` keyword is normalized: the positional slot differs per op (``np.roll``'s second is the shift)."""
 
-    __slots__ = ("changed",)
+    __slots__ = ()
 
     def operand_rank(self, node: ast.Call) -> int | None:
         # A sequence operand (``np.stack((a, b))``) takes its first element's rank.
@@ -518,7 +525,7 @@ class UfuncReduceToReducer(RewritePass):
     ``ufunc.reduce`` defaults to ``axis=0``, the reducer to a full reduction, so a missing axis becomes an
     explicit ``axis=0``. Runs before the elementwise-ufunc desugars, which would read ``np.add`` as an add."""
 
-    __slots__ = ("changed",)
+    __slots__ = ()
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
         self.generic_visit(node)

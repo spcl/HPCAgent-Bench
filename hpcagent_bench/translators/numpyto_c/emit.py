@@ -6,9 +6,9 @@ import dataclasses
 import math
 import pathlib
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from functools import lru_cache
-from typing import NamedTuple
+from typing import NamedTuple, TypeGuard
 
 from hpcagent_bench.translators.numpyto_c.pluto_predicate import if_convert
 from hpcagent_bench.translators.numpyto_common import dtypes, operators, parallelism
@@ -36,12 +36,13 @@ from hpcagent_bench.translators.numpyto_common.emitter import (
     index_rank_error,
 )
 from hpcagent_bench.translators.numpyto_common.frontend import names_used_as_int
-from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc, KernelIR
+from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc, KernelIR, descs
 from hpcagent_bench.translators.numpyto_common.lib_nodes import (
     BLAS_GEMM_MARKER,
     FFT_LIBRARY_MARKER,
     FFTN_LIBRARY_MARKER,
 )
+from hpcagent_bench.translators.numpyto_common.limits import FIXPOINT_ROUNDS
 from hpcagent_bench.translators.numpyto_common.lowering import helper_returns_int, integer_valued_locals, walk_complex
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
 from hpcagent_bench.translators.numpyto_common.statement_desugar import binding_names
@@ -95,6 +96,7 @@ __all__ = [
     "IsoparRef",
     "LocalGroups",
     "ReservedNameRespelling",
+    "alloc_check",
     "alloc_marker_target",
     "arith_header_source",
     "array_signature",
@@ -115,6 +117,7 @@ __all__ = [
     "declared_names",
     "default_float_dtype",
     "emit_body",
+    "emit_body_parts",
     "emit_c",
     "emit_c_helper",
     "emit_c_helpers",
@@ -369,7 +372,7 @@ def default_float_dtype(kir: KernelIR) -> str:
     if len(storage) == 1:
         return storage.pop()
     cts: set[str] = set()
-    for desc in (*kir.arrays, *kir.scalars):
+    for desc in descs(kir.arrays, kir.scalars):
         if desc.dtype:
             cts.add(c_type_(dtypes.compute_dtype(desc.dtype)))
     if cts & {"float", "double"} == {"float"}:
@@ -384,7 +387,7 @@ def array_signature(arr: ArrayDesc) -> str:
     return f"{qual}{base} *restrict {arr.name}"
 
 
-def assigned_names(tree: ast.AST) -> OrderedSet:
+def assigned_names(tree: ast.AST) -> OrderedSet[str]:
     """Names the body writes to, so a by-value parameter it reuses as a local is not declared const.
 
     A kernel may recompute a size symbol it also receives (spmv's ``M = ((M + 1) - 1)``), and C
@@ -393,7 +396,7 @@ def assigned_names(tree: ast.AST) -> OrderedSet:
     on a by-value parameter is not part of C's function type, so the ABI is identical either way and
     the two backends stay in step.
     """
-    names = OrderedSet()
+    names: OrderedSet[str] = OrderedSet()
     for n in ast.walk(tree):
         if isinstance(n, ast.Assign):
             names.update(t.id for t in n.targets if isinstance(t, ast.Name))
@@ -489,7 +492,7 @@ class IsoparRef(NamedTuple):
         return (self.name, self.key, self.const)
 
 
-def isopar_elem_ok(dtype: str | None) -> bool:
+def isopar_elem_ok(dtype: str | None) -> TypeGuard[str]:
     """True when an element of ``dtype`` READS as its own stored value.
 
     A narrow int promotes to int64 and an fp8 byte decodes to float on every read (promote_read),
@@ -506,7 +509,7 @@ def isopar_elem_ok(dtype: str | None) -> bool:
     return not (is_narrow_int(dtype) or fp8_functions(dtype, C_FP8_NAMES) is not None or "_Complex" in ct)
 
 
-def join_offset(inner: tuple[ast.AST | None, int], node: ast.AST, op) -> tuple[ast.AST | None, int]:
+def join_offset(inner: tuple[ast.expr | None, int], node: ast.expr, op) -> tuple[ast.expr | None, int]:
     """Fold one more ``+ node`` / ``- node`` term into an ``(offset, const)`` split."""
     off, const = inner
     if isinstance(node, ast.Constant) and isinstance(node.value, int) and not isinstance(node.value, bool):
@@ -518,7 +521,7 @@ def join_offset(inner: tuple[ast.AST | None, int], node: ast.AST, op) -> tuple[a
     return ast.copy_location(term, node), const
 
 
-def unit_stride_offset(expr: ast.AST, idx: str):
+def unit_stride_offset(expr: ast.expr, idx: str):
     """``(offset, const)`` when ``expr`` is ``idx + offset + const`` with ``offset`` free of ``idx``,
     else None.
 
@@ -543,7 +546,7 @@ def unit_stride_offset(expr: ast.AST, idx: str):
     return None if inner is None else join_offset(inner, expr.right, type(expr.op))
 
 
-def reduction_operand(value: ast.AST, acc: str) -> ast.AST | None:
+def reduction_operand(value: ast.expr, acc: str) -> ast.expr | None:
     """The non-accumulator operand of a combine :func:`parallelism.reduction_op` already accepted."""
     if isinstance(value, ast.BinOp):
         return value.right if (isinstance(value.left, ast.Name) and value.left.id == acc) else value.left
@@ -559,6 +562,8 @@ class ElementSubst(ast.NodeTransformer):
     Only the recorded subscripts are rewritten; nothing else is, so an invariant element read
     (``bias[oc]``) survives into the lambda body as itself.
     """
+
+    __slots__ = ("by_id",)
 
     def __init__(self, by_id: dict[int, str]) -> None:
         self.by_id = by_id
@@ -691,7 +696,7 @@ class CBodyEmitter(BaseEmitter):
         """
         return "" if self.isopar else super().numpy_note(node, indent)
 
-    def emit_block(self, stmts: list[ast.stmt], indent: str) -> str:
+    def emit_block(self, stmts: Sequence[ast.stmt], indent: str) -> str:
         """The base walk, plus (pluto only) a ``#pragma scop`` around each scopable run of the block."""
         texts = [t for t in (self.emit_stmt_with_note(s, indent) for s in stmts) if t]
         if not self.pluto:
@@ -728,7 +733,7 @@ class CBodyEmitter(BaseEmitter):
 
     def emit_for(self, node: ast.For, indent: str) -> str:
         var, lo, hi, step = self.range_loop_bounds(node)
-        args = node.iter.args
+        args = parallelism.range_args(node)
 
         # A loop whose step SIGN is only known at runtime is emitted with a ternary controlling
         # predicate below, which is not an OpenMP canonical loop form -- `#pragma omp parallel for`
@@ -813,7 +818,7 @@ class CBodyEmitter(BaseEmitter):
         """
         if len(node.body) != 1:
             return None
-        idx = node.target.id
+        idx = parallelism.loop_index(node)
         stmt = copy.deepcopy(node.body[0])
         if isinstance(stmt, ast.AugAssign):
             op = {ast.Add: "+", ast.Mult: "*"}.get(type(stmt.op))
@@ -842,16 +847,16 @@ class CBodyEmitter(BaseEmitter):
             value = ElementSubst({id(n): "__acc" for n in hits}).visit(value)
             if parallelism.reads_name(value, acc[2]):
                 return None  # the accumulator's array is read elsewhere too: not a plain reduction
-        name = "__acc" if isinstance(target, ast.Subscript) else target.id
+        name = target.id if isinstance(target, ast.Name) else "__acc"
         # reduction_op admits only the associative combines (+, *, max, min) and only when the
         # accumulator appears exactly once, so ``s = s + s*x`` (a recurrence) is refused there.
         op = parallelism.reduction_op(value, name)
         other = None if op is None else reduction_operand(value, name)
-        if other is None:
+        if op is None or other is None:
             return None
         return self.isopar_reduce(acc, op, other, idx, indent, lo, hi)
 
-    def isopar_acc(self, target: ast.AST, idx: str) -> tuple[str, str, str] | None:
+    def isopar_acc(self, target: ast.expr, idx: str) -> tuple[str, str, str] | None:
         """``(lvalue, C type, owning name)`` of a reduction accumulator -- a scalar, or an array cell
         that does not move with ``idx``. The owning name is the array's (the scalar's own, for a
         scalar): reading it anywhere else in the combine is what disqualifies a plain reduction."""
@@ -870,8 +875,8 @@ class CBodyEmitter(BaseEmitter):
     def isopar_ref(self, sub: ast.Subscript, idx: str, lo: str) -> IsoparRef | None:
         """The contiguous range ``sub`` sweeps as ``idx`` runs from ``lo``, or None if it sweeps none."""
         self.normalize_negative_indices(sub)  # a[-1] -> a[N-1], as emit_subscript does
-        axes: list[ast.AST] = []
-        cur: ast.AST = sub
+        axes: list[ast.expr] = []
+        cur: ast.expr = sub
         while isinstance(cur, ast.Subscript):
             sl = cur.slice
             axes = (list(sl.elts) if isinstance(sl, ast.Tuple) else [sl]) + axes
@@ -917,12 +922,12 @@ class CBodyEmitter(BaseEmitter):
         key = "|".join((*head, "" if off is None else ast.dump(off)))
         return IsoparRef(name, ptr, f"{name}[{flat_(-1)}]", key, const, dtype)
 
-    def isopar_sources(self, expr: ast.AST, idx: str, lo: str):
+    def isopar_sources(self, expr: ast.expr, idx: str, lo: str):
         """``[(node, ref)]`` for every ``idx``-varying element read in ``expr``, in source order, or
         None when one of them is not a contiguous range -- or when ``idx`` is read as a VALUE, which
         no algorithm can supply (it hands the callable elements, not indices)."""
         found: list[tuple[ast.Subscript, IsoparRef]] = []
-        stack = [expr]
+        stack: list[ast.AST] = [expr]
         while stack:
             cur = stack.pop()
             if isinstance(cur, ast.Subscript):
@@ -948,7 +953,7 @@ class CBodyEmitter(BaseEmitter):
         return f"{indent}const {c_type_('int')} {name} = {test} ? {span} : 0;", name
 
     def isopar_lambda(
-        self, expr: ast.AST, by_id: dict[int, str], param_dtypes: dict[str, str], cast_to: str
+        self, expr: ast.expr, by_id: dict[int, str], param_dtypes: dict[str, str], cast_to: str
     ) -> str | None:
         """The element-wise callable for ``expr``: its element reads become parameters, and the
         result is cast to the type the loop's assignment would have converted it to anyway.
@@ -976,7 +981,7 @@ class CBodyEmitter(BaseEmitter):
         return f"[{'&' if free else ''}]({params}) {{ return static_cast<{cast_to}>({body}); }}"
 
     def isopar_callable(
-        self, expr: ast.AST, found: list[tuple[ast.Subscript, IsoparRef]], distinct: list[IsoparRef], cast_to: str
+        self, expr: ast.expr, found: list[tuple[ast.Subscript, IsoparRef]], distinct: list[IsoparRef], cast_to: str
     ) -> str | None:
         """:meth:`isopar_lambda` over ``expr`` with parameter ``__v<k>`` standing for ``distinct[k]``."""
         pos = {r.identity: k for k, r in enumerate(distinct)}
@@ -991,7 +996,7 @@ class CBodyEmitter(BaseEmitter):
             first.setdefault(r.identity, r)
         return list(first.values())
 
-    def isopar_map(self, target: ast.Subscript, rhs: ast.AST, idx: str, indent: str, lo: str, hi: str) -> str | None:
+    def isopar_map(self, target: ast.Subscript, rhs: ast.expr, idx: str, indent: str, lo: str, hi: str) -> str | None:
         """One store per iteration over a contiguous range: fill / copy / transform, or a scan when
         the destination reads its own PREVIOUS element."""
         dst = self.isopar_ref(target, idx, lo)
@@ -1046,7 +1051,7 @@ class CBodyEmitter(BaseEmitter):
             f"{dst.ptr}, {lam});"
         )
 
-    def isopar_scan(self, dst: IsoparRef, rhs: ast.AST, found, indent: str, lo: str, hi: str) -> str | None:
+    def isopar_scan(self, dst: IsoparRef, rhs: ast.expr, found, indent: str, lo: str, hi: str) -> str | None:
         """``dst[j] = dst[j-1] <+|*> src[j]`` -> ``std::inclusive_scan``.
 
         Only the bare associative combine converts: ``dst[j-1]*0.9 + src[j]`` is a first-order
@@ -1079,7 +1084,7 @@ class CBodyEmitter(BaseEmitter):
         return None
 
     def isopar_reduce(
-        self, acc: tuple[str, str, str], op: str, other: ast.AST, idx: str, indent: str, lo: str, hi: str
+        self, acc: tuple[str, str, str], op: str, other: ast.expr, idx: str, indent: str, lo: str, hi: str
     ) -> str | None:
         """One value accumulated under an associative, commutative combine -> ``std::reduce`` /
         ``std::transform_reduce``.
@@ -1209,8 +1214,11 @@ class CBodyEmitter(BaseEmitter):
         chained = bool(node.orelse) and len(node.orelse) == 1 and isinstance(node.orelse[0], ast.If)
         else_str = ""
         if node.orelse:
+            only_else = node.orelse[0]
             else_str = (
-                self.emit_if(node.orelse[0], indent) if chained else self.branch_block(node.orelse, indent + "  ")
+                self.emit_if(only_else, indent)
+                if chained and isinstance(only_else, ast.If)
+                else self.branch_block(node.orelse, indent + "  ")
             )
         # A guard whose branches are both empty (a dropped validation raise) has no effect; drop the whole if.
         if not then.strip() and not else_str.strip():
@@ -1254,7 +1262,7 @@ class CBodyEmitter(BaseEmitter):
             decls.append(f"{indent}{c_type} {name}[{flat_size(shape)}];")
         return "\n".join(decls)
 
-    def branch_block(self, stmts: list[ast.stmt], indent: str) -> str:
+    def branch_block(self, stmts: Sequence[ast.stmt], indent: str) -> str:
         """Emit one ``if`` branch, then free the buffers that branch declared.
 
         The free sits on the SAME path as the malloc, so a branch that never runs neither allocates
@@ -1304,7 +1312,7 @@ class CBodyEmitter(BaseEmitter):
             rhs = f"{fns.demote}({rhs})"
         return f"{indent}{lhs} = {rhs};"
 
-    def emit_zeros_marker(self, t: str, marker_args: list[ast.expr], indent: str) -> str:
+    def emit_zeros_marker(self, t: str, marker_args: Sequence[ast.expr], indent: str) -> str:
         """The allocation / declaration / refill a local's zeros marker stands for at this point of
         the body; empty when the local is already declared at the top of the function."""
         # Per-statement shape update: each marker for a reassigned local advances the FIFO of shapes.
@@ -1406,7 +1414,7 @@ class CBodyEmitter(BaseEmitter):
     def wrap_narrow(self, text: str, wrap: str) -> str:
         return f"(({c_type_(wrap)})({text}))"
 
-    def emit_expr_inner(self, node: ast.AST) -> str:
+    def emit_expr_inner(self, node: ast.expr) -> str:
         if isinstance(node, ast.Constant):
             return self.emit_constant(node.value)
         if isinstance(node, ast.Name):
@@ -1508,7 +1516,7 @@ class CBodyEmitter(BaseEmitter):
                 )
         return f"({self.emit_expr(node.left)} * {self.emit_expr(node.right)})"
 
-    def unchain_subscript(self, node: ast.Subscript) -> tuple[ast.AST, list[str]]:
+    def unchain_subscript(self, node: ast.Subscript) -> tuple[ast.expr, list[str]]:
         """Collapse a subscript chain a[i][j]... into (base_node, [i, j, ...]) for row-major flattening.
 
         Concatenating the levels is numpy's combined basic indexing only while every index BELOW
@@ -1519,7 +1527,7 @@ class CBodyEmitter(BaseEmitter):
         rather than guessed at.
         """
         chain: list[str] = []
-        cur: ast.AST = node
+        cur: ast.expr = node
         # Index texts are marked so a pluto scop can hoist a call out of one (see pluto_call_free).
         self._index_depth += 1
         try:
@@ -1538,7 +1546,7 @@ class CBodyEmitter(BaseEmitter):
             self._index_depth -= 1
         return cur, chain
 
-    def dim_minus_k(self, dim_token: str, k: int, orig: ast.AST) -> ast.AST:
+    def dim_minus_k(self, dim_token: str, k: int, orig: ast.expr) -> ast.expr:
         """Build the index AST <dim> - k from a shape token, or return the original node if it won't parse."""
         try:
             dim_ast = ast.parse(str(dim_token), mode="eval").body
@@ -1790,8 +1798,11 @@ class CBodyEmitter(BaseEmitter):
 
     def emit_attribute_call(self, node: ast.Call, attr: str) -> str | None:
         """``np.X(...)`` / ``arr.X(...)`` in scalar context; None when unsupported."""
+        func = node.func
+        if not isinstance(func, ast.Attribute):
+            return None
         # np.<dtype>(x) scalar constructor is a typecast; emit the C cast via the registry (np.bool_ needs stripping).
-        if is_numpy_module(node.func.value) and len(node.args) == 1:
+        if is_numpy_module(func.value) and len(node.args) == 1:
             key = attr[:-1] if attr.endswith("_") else attr
             if key in dtypes.REGISTRY or key in dtypes.SCALAR_KINDS:
                 return f"(({dtypes.c_type(key)})({self.emit_expr(node.args[0])}))"
@@ -1811,7 +1822,7 @@ class CBodyEmitter(BaseEmitter):
             a = self.emit_expr(node.args[1])
             b = self.emit_expr(node.args[2])
             return f"({c} ? {a} : {b})"
-        if is_numpy_module(node.func.value):
+        if is_numpy_module(func.value):
             return self.emit_numpy_scalar_call(node, attr)
         return None
 
@@ -1833,12 +1844,12 @@ class CBodyEmitter(BaseEmitter):
             return f"__npb_sign({self.emit_expr(node.args[0])})"
         # np.abs(x) in scalar context: complex -> cabs, float -> fabs, integer -> llabs (mirrors builtin abs).
         if attr in ("abs", "absolute", "fabs") and len(node.args) == 1:
-            x = node.args[0]
-            if self.is_complex_operand(x):
-                return f"cabs({self.emit_expr(x)})"
-            if attr == "fabs" or self.is_float_operand(x):
-                return f"{self.math_name('fabs')}({self.emit_expr(x)})"
-            return f"llabs({self.emit_expr(x)})"
+            operand = node.args[0]
+            if self.is_complex_operand(operand):
+                return f"cabs({self.emit_expr(operand)})"
+            if attr == "fabs" or self.is_float_operand(operand):
+                return f"{self.math_name('fabs')}({self.emit_expr(operand)})"
+            return f"llabs({self.emit_expr(operand)})"
         # np.hypot(a, b) -> C99 hypot (both operands real).
         if attr == "hypot" and len(node.args) == 2:
             return f"{self.math_name('hypot')}({self.emit_expr(node.args[0])}, {self.emit_expr(node.args[1])})"
@@ -1850,7 +1861,10 @@ class CBodyEmitter(BaseEmitter):
         Operands are row-major and C-contiguous by ABI, so each leading dimension is the row
         length: ``k`` for ``a`` (m, k), ``n`` for ``b`` (k, n), ``n`` for the (m, n) output.
         """
-        a, b, out = (arg.id for arg in node.args[:3])
+        operands = [arg.id for arg in node.args[:3] if isinstance(arg, ast.Name)]
+        if len(operands) != 3:
+            raise NotImplementedError("the gemm marker takes three array names")
+        a, b, out = operands
         m, n, k = (self.emit_expr(arg) for arg in node.args[3:])
         f32 = self.is_float32_kernel()
         gemm = "cblas_sgemm" if f32 else "cblas_dgemm"
@@ -1996,7 +2010,7 @@ class CBodyEmitter(BaseEmitter):
             return f"({cast}({self.emit_expr(left)}) / {self.emit_expr(right)})"
         return f"({self.emit_expr(left)} / {self.emit_expr(right)})"
 
-    def emit_pow(self, left: ast.AST, right: ast.AST) -> str:
+    def emit_pow(self, left: ast.expr, right: ast.expr) -> str:
         """The ONE real-valued exponentiation route: integer operands take the exact
         int64 binary-exponentiation helper, everything else libm's ``pow``.
 
@@ -2008,16 +2022,16 @@ class CBodyEmitter(BaseEmitter):
             return f"__npb_int_pow({self.emit_expr(left)}, {self.emit_expr(right)})"
         return f"{self.math_name('pow')}({self.emit_expr(left)}, {self.emit_expr(right)})"
 
-    def emit_floordiv(self, left: ast.AST, right: ast.AST) -> str:
+    def emit_floordiv(self, left: ast.expr, right: ast.expr) -> str:
         """``a // b``: ``floord`` in a pluto scop over provably signed ints, else ``int_floor``."""
         return self.emit_rounded_division(left, right, "floord", pluto_floordiv, "int_floor")
 
-    def emit_ceildiv(self, left: ast.AST, right: ast.AST) -> str:
+    def emit_ceildiv(self, left: ast.expr, right: ast.expr) -> str:
         """``emit_floordiv``'s ceiling counterpart: ``ceild`` in a pluto scop, else ``int_ceil``."""
         return self.emit_rounded_division(left, right, "ceild", pluto_ceildiv, "int_ceil")
 
     def emit_rounded_division(
-        self, left: ast.AST, right: ast.AST, scop_call: str, scop_form: Callable[[str, str], str], helper: str
+        self, left: ast.expr, right: ast.expr, scop_call: str, scop_form: Callable[[str, str], str], helper: str
     ) -> str:
         """Integer division rounded one way: pluto's ``scop_call`` form in a scop over provably
         signed ints, else the numpy-semantics ``helper``."""
@@ -2030,12 +2044,12 @@ class CBodyEmitter(BaseEmitter):
             return scop_form(lhs, rhs)
         return f"{helper}({lhs}, {rhs})"
 
-    def reads_symbols_only(self, node: ast.AST) -> bool:
+    def reads_symbols_only(self, node: ast.expr) -> bool:
         """Every Name read by ``node`` is a kernel SYMBOL -- so the expression is scop-invariant."""
         symbols = {s.name for s in self.kir.symbols}
         return all(n.id in symbols for n in ast.walk(node) if isinstance(n, ast.Name))
 
-    def is_signed_int_operand(self, node: ast.AST) -> bool:
+    def is_signed_int_operand(self, node: ast.expr) -> bool:
         """Provably a SIGNED integer built from Python ints -- no arrays, no unsigned scalar."""
         if not self.is_int_operand(node, allow_array=False):
             return False
@@ -2044,7 +2058,7 @@ class CBodyEmitter(BaseEmitter):
                 return False
         return True
 
-    def is_int_operand(self, node: ast.AST, *, allow_array: bool = True) -> bool:
+    def is_int_operand(self, node: ast.expr, *, allow_array: bool = True) -> bool:
         """Conservative int-typed operand detection: int Constant, an int-typed Name or
         array element, or a BinOp/UnaryOp of only those.
 
@@ -2096,7 +2110,7 @@ class CBodyEmitter(BaseEmitter):
         # Implicit int scalar locals flagged via the needs_int promotion path.
         return n in self.all_int_locals()
 
-    def floor_ceil_div_operand_is_int(self, node: ast.AST) -> bool:
+    def floor_ceil_div_operand_is_int(self, node: ast.expr) -> bool:
         """``is_int_operand`` plus ``int(x)``-cast Calls, scoped to the floor/ceil divide above."""
         if is_int_cast(node):
             return True
@@ -2124,7 +2138,7 @@ class CBodyEmitter(BaseEmitter):
         self._int_locals_cache = out
         return out
 
-    def refuse_whole_array_operand(self, attr: str, operand: ast.AST) -> None:
+    def refuse_whole_array_operand(self, attr: str, operand: ast.expr) -> None:
         """Refuse an elementwise complex accessor that reached emit on a whole array.
 
         These take a VALUE (``__npb_conj(double _Complex)``, ``creal``), so a bare array Name here
@@ -2139,7 +2153,7 @@ class CBodyEmitter(BaseEmitter):
                 f"it takes one element, so the operand must be scalarised first"
             )
 
-    def is_scalar_operand(self, node: ast.AST) -> bool:
+    def is_scalar_operand(self, node: ast.expr) -> bool:
         """True when ``node`` reads a single VALUE, not a whole array: a literal, a scalar name, or
         a fully-indexed element. A bare array Name or a slice-bearing subscript is not."""
         if isinstance(node, ast.Constant):
@@ -2159,11 +2173,11 @@ class CBodyEmitter(BaseEmitter):
     def array_names(self) -> set[str]:
         return {a.name for a in self.kir.arrays} | set(self.kir.zeros_locals)
 
-    def is_complex_operand(self, node: ast.AST) -> bool:
+    def is_complex_operand(self, node: ast.expr) -> bool:
         """True when node's element dtype is complex; delegates to walk_complex so a real-returning accessor stays real."""
         return walk_complex(node, self.dtype_for_name) is not None
 
-    def is_float_operand(self, node: ast.AST, scalars_=None) -> bool:
+    def is_float_operand(self, node: ast.expr, scalars_=None) -> bool:
         """True when node is provably floating-point (float Constant or float-dtype array/local); unknown -> False.
 
         Integer-cast subtrees are PRUNED: ``int(a[i])`` is an integer however float ``a``
@@ -2173,7 +2187,7 @@ class CBodyEmitter(BaseEmitter):
         (``int(-7.5) // 2`` -> -3 instead of numpy's -4).
         """
         scalars = self.float_scalar_names() if scalars_ is None else scalars_
-        stack = [node]
+        stack: list[ast.AST] = [node]
         while stack:
             sub = stack.pop()
             if is_int_cast(sub):
@@ -2199,7 +2213,7 @@ class CBodyEmitter(BaseEmitter):
         if cache is not None:
             return cache
         floats: set = set()
-        for unused in range(8):  # small fixpoint
+        for unused in range(FIXPOINT_ROUNDS):
             changed = False
             for node in ast.walk(self.kir.tree):
                 if (
@@ -2239,7 +2253,7 @@ class CBodyEmitter(BaseEmitter):
                     return a.dtype
         return dt
 
-    def operand_is_bool(self, node: ast.AST) -> bool:
+    def operand_is_bool(self, node: ast.expr) -> bool:
         """True when node is a boolean value; used to emit ~mask as logical ! rather than bitwise ~ (truthy -2 on 0/1)."""
         if isinstance(node, (ast.Compare, ast.BoolOp)):
             return True
@@ -2260,7 +2274,7 @@ class CBodyEmitter(BaseEmitter):
 # Top-level emitters
 
 
-def negative_const_k(node: ast.AST):
+def negative_const_k(node: ast.expr):
     """If node is a negative integer index constant, return its magnitude k > 0 (the index is -k), else None."""
     if (
         isinstance(node, ast.Constant)
@@ -2280,7 +2294,7 @@ def negative_const_k(node: ast.AST):
     return None
 
 
-def is_newaxis_or_ellipsis(e: ast.AST) -> bool:
+def is_newaxis_or_ellipsis(e: ast.expr) -> bool:
     """True for a None/np.newaxis/... element -- negative-index normalization must not fire when one is present."""
     if isinstance(e, ast.Constant) and (e.value is None or e.value is Ellipsis):
         return True
@@ -2317,8 +2331,9 @@ def render_c_shape(node: ast.AST) -> str | None:
         op = C_SHAPE_BINOPS.get(type(node.op))
         return None if op is None else f"({left} {op} {right})"
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and not node.keywords:
-        args = [render_c_shape(a) for a in node.args]
-        if any(a is None for a in args):
+        rendered = [render_c_shape(a) for a in node.args]
+        args = [a for a in rendered if a is not None]
+        if len(args) != len(rendered):
             return None
         # ``int(x)`` is a no-op on an already-integral extent in Python and a SYNTAX ERROR in C --
         # ``int`` is a type, not a function, so it reached the compiler as "expected ')' before
@@ -2425,7 +2440,7 @@ def collect_implicit_locals(kir: KernelIR) -> list[tuple[str, str]]:
     # so the emitted result could not match the reference it is graded against.
     acc_type = c_type_(dtypes.accumulator_dtype(default_float_dtype(kir)))
 
-    def ctype_for(name: str, value: ast.AST | None = None) -> str:
+    def ctype_for(name: str, value: ast.expr | None = None) -> str:
         # Highest priority: explicit dtype from the lowering pipeline.
         if name in local_dtypes:
             return c_type_(local_dtypes[name])
@@ -2597,7 +2612,7 @@ def branch_scoped_locals(tree: ast.FunctionDef, candidates: set[str]) -> dict[st
 
 
 def collect_marker_parents(
-    stmts: list[ast.stmt], parent_id: int, candidates: set[str], marker_parent: dict[str, list[int]]
+    stmts: Sequence[ast.stmt], parent_id: int, candidates: set[str], marker_parent: dict[str, list[int]]
 ) -> None:
     """Map each candidate's allocation markers to the id of the statement list that holds them."""
     for stmt in stmts:
@@ -2609,7 +2624,7 @@ def collect_marker_parents(
             collect_marker_parents(stmt.orelse, id(stmt.orelse), candidates, marker_parent)
 
 
-def collect_loop_free_branches(stmts: list[ast.stmt], in_loop: bool, branches: list[list[ast.stmt]]) -> None:
+def collect_loop_free_branches(stmts: Sequence[ast.stmt], in_loop: bool, branches: list[list[ast.stmt]]) -> None:
     """Every ``if`` branch not under a loop, except the ``orelse`` of an ``elif`` chain."""
     for stmt in stmts:
         if isinstance(stmt, ast.If):
@@ -2625,7 +2640,7 @@ def collect_loop_free_branches(stmts: list[ast.stmt], in_loop: bool, branches: l
             collect_loop_free_branches(stmt.orelse, True, branches)
 
 
-def branch_census(stmts: list[ast.stmt], candidates: set[str]) -> tuple[dict[str, int], set[str], int]:
+def branch_census(stmts: Sequence[ast.stmt], candidates: set[str]) -> tuple[dict[str, int], set[str], int]:
     """``(references per candidate, directly allocated names, node count)`` of one branch."""
     counts: dict[str, int] = {}
     markers: set[str] = set()
@@ -2663,13 +2678,32 @@ def emit_body(
     indent: str = "  ",
     multidim_arrays: set[str] | None = None,
     pluto: bool = False,
-    return_parts: bool = False,
     return_mode: str | None = None,
     parallel: bool = False,
     isopar: bool = False,
     return_ctype: str | None = None,
     helper_params: dict[str, tuple[list[str], set[str]]] | None = None,
-):
+) -> str:
+    """The function body: local declarations, the statements, then the closing frees."""
+    decls, body, frees = emit_body_parts(
+        kir, indent, multidim_arrays, pluto, return_mode, parallel, isopar, return_ctype, helper_params
+    )
+    return "\n".join(part for part in (decls, body, frees) if part)
+
+
+def emit_body_parts(
+    kir: KernelIR,
+    indent: str = "  ",
+    multidim_arrays: set[str] | None = None,
+    pluto: bool = False,
+    return_mode: str | None = None,
+    parallel: bool = False,
+    isopar: bool = False,
+    return_ctype: str | None = None,
+    helper_params: dict[str, tuple[list[str], set[str]]] | None = None,
+) -> tuple[str, str, str]:
+    """``(declarations, body, frees)``: Pluto keeps allocations and frees out of the loop body so the caller
+    can place them outside ``#pragma scop``."""
     emitter = CBodyEmitter(kir, multidim_arrays=multidim_arrays)
     if helper_params is not None:
         emitter.helper_params = helper_params
@@ -2760,10 +2794,7 @@ def emit_body(
     # unreachable -- emit them only where control can actually fall out of the body.
     falls_through = not (return_mode is not None and kir.tree.body and isinstance(kir.tree.body[-1], ast.Return))
     frees = [f"{indent}free({name});" for name in heap] if falls_through else []
-    if return_parts:
-        # Pluto: keep allocations/frees out of the loop body so the caller can place them outside #pragma scop.
-        return ("\n".join(d for d in decls if d), body, "\n".join(f for f in frees if f))
-    return "\n".join(d for d in (*decls, body, *frees) if d)
+    return ("\n".join(d for d in decls if d), body, "\n".join(f for f in frees if f))
 
 
 def flat_size(shape: tuple[str, ...]) -> str:
@@ -3551,7 +3582,7 @@ def declared_names(kir: KernelIR) -> OrderedSet[str]:
     declared: OrderedSet[str] = OrderedSet(helper.kernel_name for helper in kir.helpers)
     for unit in (kir, *kir.helpers):
         declared.update(unit.input_args)
-        declared.update(desc.name for desc in (*unit.symbols, *unit.arrays, *unit.scalars))
+        declared.update(desc.name for desc in descs(unit.symbols, unit.arrays, unit.scalars))
         declared.update((*unit.pinned_consts, *unit.zeros_locals, *unit.int_locals, *unit.local_dtypes))
         declared.update(names_bound_by(unit.tree))
     return declared
@@ -3591,6 +3622,8 @@ def reserved_name_respellings(kir: KernelIR) -> dict[str, str]:
 
 class ReservedNameRespelling(ast.NodeTransformer):
     """Respell each name in ``respellings``, except the callee of a call into C: ``exp(x)`` stays libm's ``exp``."""
+
+    __slots__ = ("helpers", "respellings")
 
     def __init__(self, respellings: dict[str, str], helpers: OrderedSet[str]) -> None:
         self.respellings = respellings
@@ -3843,7 +3876,7 @@ def emit_pluto(kir: KernelIR, fn_name: str | None = None) -> str:
     # Rank>=2 array params are direct VLA parameters so polycc/pet see affine references; rank-1 stays flat/cast-view.
     multidim = {a.name for a in kir.arrays if len(a.shape) >= 2}
     signature = emit_pluto_signature(kir, name, multidim)
-    decls, body, frees = emit_body(kir, indent="        ", multidim_arrays=multidim, pluto=True, return_parts=True)
+    decls, body, frees = emit_body_parts(kir, indent="        ", multidim_arrays=multidim, pluto=True)
     # Local allocations/frees live outside #pragma scop (malloc/free are non-affine); only affine loop nests stay
     # inside, and the body already carries its own scop markers (see CBodyEmitter.emit_block).
     decl_block = (decls + "\n") if decls else ""

@@ -39,6 +39,8 @@ class AstypeRewriter(ast.NodeTransformer):
       and ``(level == d).astype(np.int64)`` (bfs) lowerable.
     """
 
+    __slots__ = ("array_dtypes", "default_float")
+
     def __init__(self, array_dtypes: dict[str, str] | None = None, default_float: str = "") -> None:
         #: ``{array_name: dtype}`` so ``(cmp).astype(X.dtype)`` can resolve
         #: ``X.dtype`` to a concrete cast when the receiver is logical.
@@ -97,7 +99,7 @@ class AstypeRewriter(ast.NodeTransformer):
         )
 
 
-def match_reshape(node: ast.AST):
+def match_reshape(node: ast.expr):
     """If ``node`` is a reshape call (method ``X.reshape(shape...)`` OR func
     ``np.reshape(X, shape)``), return ``(base_expr, shape_elts)`` -- the array
     being reshaped and the list of shape AST elements. Else ``None``.
@@ -123,6 +125,8 @@ class ReshapeMethodRewriter(ast.NodeTransformer):
     """Normalize the method form ``X.reshape(a, b)`` / ``X.reshape((a, b))`` to
     the function form ``np.reshape(X, (a, b))`` so the single ``expand_reshape``
     path handles every spelling (lulesh uses the varargs method form)."""
+
+    __slots__ = ()
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
         self.generic_visit(node)
@@ -151,7 +155,7 @@ class ReshapeMethodRewriter(ast.NodeTransformer):
 FFT_FNS = {"fftn": (False, True), "ifftn": (True, True), "fft": (False, False), "ifft": (True, False)}
 
 
-def match_fft(node: ast.AST):
+def match_fft(node: ast.expr):
     """If ``node`` is ``np.fft.{fftn,ifftn,fft,ifft}(arg, ...)``, return
     ``(fn_name, arg, keywords)``; else ``None``."""
     if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in FFT_FNS):
@@ -180,6 +184,8 @@ class NpAliasRewriter(ast.NodeTransformer):
     single lowering path serves every spelling (e.g. ``np.permute_dims`` ->
     ``np.transpose``)."""
 
+    __slots__ = ()
+
     def visit_Call(self, node: ast.Call) -> ast.AST:
         self.generic_visit(node)
         f = node.func
@@ -201,6 +207,8 @@ class ConditionalNoneAllocRewriter(ast.NodeTransformer):
     observed. Left untouched when ``X`` is later tested with ``is None`` / ``is not None``
     (there its None-ness is observable, so allocating unconditionally would flip the
     guard); that case is the separate is-None allocation-check handling."""
+
+    __slots__ = ("_none_checked",)
 
     def __init__(self) -> None:
         self._none_checked: set[str] = set()
@@ -245,6 +253,8 @@ class MatmulCallRewriter(ast.NodeTransformer):
     the existing matmul machinery (the ``MatmulHoister`` loop lowering and the
     Fortran ``MATMUL`` / ``DOT_PRODUCT`` emit path) -- no parallel detector."""
 
+    __slots__ = ()
+
     def visit_Call(self, node: ast.Call) -> ast.AST:
         self.generic_visit(node)
         f = node.func
@@ -273,7 +283,9 @@ class ScalarTimesMatmulRewriter(ast.NodeTransformer):
     A's shape so we can declare the temp.
     """
 
-    def __init__(self, shape_table: dict[str, list[str]], temps: dict[str, tuple[str, ...]], counter) -> None:
+    __slots__ = ("counter", "pre_stmts", "shape_table", "temps")
+
+    def __init__(self, shape_table: dict[str, tuple[str, ...]], temps: dict[str, tuple[str, ...]], counter) -> None:
         self.shape_table = shape_table
         self.temps = temps
         self.counter = counter
@@ -315,7 +327,7 @@ class ScalarTimesMatmulRewriter(ast.NodeTransformer):
                             ),
                         )
                     ]
-                    out = body
+                    out: list[ast.stmt] = [*body]
                     for v, b in zip(reversed(iters), reversed(shape)):
                         out = [
                             range_for(
@@ -336,6 +348,8 @@ class EnumerateZipRewriter(ast.NodeTransformer):
     inlined as the first statement of the loop body.
     """
 
+    __slots__ = ("extent_of",)
+
     def __init__(self, extent_of: Callable[[str], ast.expr | None]) -> None:
         self.extent_of = extent_of
 
@@ -349,9 +363,10 @@ class EnumerateZipRewriter(ast.NodeTransformer):
             return call.args[1]
         return ast.Constant(value=0)
 
-    def visit_For(self, node: ast.For) -> ast.AST:
+    def visit_For(self, node: ast.For) -> ast.AST | list[ast.stmt]:
         self.generic_visit(node)
         it = node.iter
+        pair = pair_names(node.target)
         if isinstance(it, ast.Call) and isinstance(it.func, ast.Name):
             # ``for m, w in enumerate((a, b, c), start=s):`` over a LITERAL/const
             # sequence (the finite-difference-stencil idiom ``enumerate(_CW)``):
@@ -361,23 +376,21 @@ class EnumerateZipRewriter(ast.NodeTransformer):
                 it.func.id == "enumerate"
                 and it.args
                 and isinstance(it.args[0], (ast.Tuple, ast.List))
-                and isinstance(node.target, ast.Tuple)
-                and len(node.target.elts) == 2
+                and pair is not None
             ):
-                idx_name, val_name = node.target.elts[0], node.target.elts[1]
+                idx_name, val_name = pair
                 start = self.enumerate_start(it)
                 out: list[ast.stmt] = []
                 for i, elt in enumerate(it.args[0].elts):
                     out.append(
                         ast.Assign(
-                            targets=[store_(idx_name.id)],
+                            targets=[store_(idx_name)],
                             value=ast.BinOp(left=copy.deepcopy(start), op=ast.Add(), right=ast.Constant(value=i)),
                         )
                     )
-                    out.append(ast.Assign(targets=[store_(val_name.id)], value=copy.deepcopy(elt)))
+                    out.append(ast.Assign(targets=[store_(val_name)], value=copy.deepcopy(elt)))
                     out.extend(copy.deepcopy(stmt) for stmt in node.body)
                 return out
-            pair = pair_names(node.target)
             if pair is not None and it.func.id == "enumerate" and it.args and isinstance(it.args[0], ast.Name):
                 sequence = it.args[0].id
                 extent = self.extent_of(sequence)
@@ -390,13 +403,9 @@ class EnumerateZipRewriter(ast.NodeTransformer):
                     )
                     binds = [bind(pair[0], position), bind(pair[1], element_read(sequence, "__ei"))]
                     return indexed_loop(node, "__ei", extent, binds)
-            if (
-                pair is not None
-                and it.func.id == "zip"
-                and len(it.args) == 2
-                and all(isinstance(a, ast.Name) for a in it.args)
-            ):
-                left, right = it.args[0].id, it.args[1].id
+            zipped = [a.id for a in it.args if isinstance(a, ast.Name)]
+            if pair is not None and it.func.id == "zip" and len(it.args) == 2 and len(zipped) == 2:
+                left, right = zipped
                 extent = self.extent_of(left)
                 if extent is not None:
                     binds = [bind(pair[0], element_read(left, "__zi")), bind(pair[1], element_read(right, "__zi"))]
@@ -412,6 +421,8 @@ class TransposeRewriter(ast.NodeTransformer):
     * the method ``A.transpose()`` / ``A.transpose(axes)`` / ``A.transpose(1, 0)``
       -> ``np.transpose(A[, (axes)])`` (the varargs ints are packed into a tuple).
     """
+
+    __slots__ = ("sparse_names",)
 
     def __init__(self, sparse_names=None) -> None:
         #: Logical sparse matrices whose ``A.T`` / ``A.transpose()`` must stay a

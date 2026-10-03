@@ -1,6 +1,7 @@
 """Render an array-valued expression at scalar loop indices."""
 
 import ast
+from collections.abc import Sequence
 
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import (
     advanced_index_rank,
@@ -11,14 +12,15 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
     const_,
     const_or_name,
     name_id,
+    slice_axes,
     slice_step_any,
     step_is_negative,
     step_node,
-    slice_axes,
 )
 
 __all__ = [
     "SubscriptIndexer",
+    "resolved_bound",
     "scalarize_at_iters",
     "scalarize_children",
     "scalarize_name",
@@ -29,7 +31,15 @@ __all__ = [
 ]
 
 
-def slice_start(ax: ast.Slice, axis_len: ast.expr | None, step: int | ast.expr | None) -> ast.expr | None:
+def resolved_bound(bound: ast.expr, axis_len: ast.expr | None) -> ast.expr:
+    """``bound`` with a negative literal resolved against ``axis_len``; refused when that length is unknown."""
+    resolved = resolve_negative(bound, axis_len)
+    if resolved is None:
+        raise NotImplementedError("negative index needs a known axis length (shape untracked)")
+    return resolved
+
+
+def slice_start(ax: ast.Slice, axis_len: ast.expr | None, step: int | ast.expr | None) -> ast.expr:
     """First SOURCE index a slice reads. ``lower`` when given (negative resolved
     against ``axis_len``), else 0 -- except under a NEGATIVE step, where numpy
     flips the default and starts at the last element ``axis_len - 1``
@@ -39,7 +49,7 @@ def slice_start(ax: ast.Slice, axis_len: ast.expr | None, step: int | ast.expr |
 
     ``step`` is a literal int or a symbolic step expression; only a literal can be the reverse."""
     if ax.lower is not None:
-        return resolve_negative(ax.lower, axis_len)
+        return resolved_bound(ax.lower, axis_len)
     if step_is_negative(step):
         if axis_len is None:
             raise NotImplementedError("reverse slice needs a known axis length (shape untracked)")
@@ -47,22 +57,24 @@ def slice_start(ax: ast.Slice, axis_len: ast.expr | None, step: int | ast.expr |
     return const_(0)
 
 
-def strided_index(ivar: ast.expr, start: ast.expr | None, step: int | ast.expr | None) -> ast.expr:
+def strided_index(ivar: ast.expr, start: ast.expr, step: int | ast.expr | None) -> ast.expr:
     """Source index of result position ``ivar`` within a slice ``[start::step]``:
     ``start + ivar * step``. Must stay in lockstep with :func:`iter_extent_of`,
     which counts ``ceil(extent / |step|)`` elements -- an index that ignored
     ``step`` would walk a DIFFERENT (contiguous) run of the same length.
 
     ``step`` is a literal int or a symbolic step expression; both multiply the position."""
-    unit = step is None or (isinstance(step, int) and step == 1)
-    pos: ast.expr = ivar if unit else ast.BinOp(left=ivar, op=ast.Mult(), right=step_node(step))
+    if step is None or (isinstance(step, int) and step == 1):
+        pos = ivar
+    else:
+        pos = ast.BinOp(left=ivar, op=ast.Mult(), right=step_node(step))
     if isinstance(start, ast.Constant) and start.value == 0:
         return pos
     return ast.BinOp(left=pos, op=ast.Add(), right=start)
 
 
 def subscript_result_rank(
-    axes: list[ast.expr], shape: tuple[str, ...] | None, shape_table: dict[str, tuple[str, ...]]
+    axes: Sequence[ast.expr], shape: tuple[str, ...] | None, shape_table: dict[str, tuple[str, ...]]
 ) -> int:
     """Result-axis count of a subscript, counted by the SAME rules that consume iters below.
 
@@ -96,7 +108,7 @@ def subscript_result_rank(
     return rank + max(0, (len(shape) if shape else 0) - src)
 
 
-def scalarize_at_iters(expr: ast.expr, iters: list[ast.expr], shape_table: dict[str, tuple[str, ...]]) -> ast.expr:
+def scalarize_at_iters(expr: ast.expr, iters: Sequence[ast.expr], shape_table: dict[str, tuple[str, ...]]) -> ast.expr:
     """Render an array-valued expression at the given iter indices. Recursive
     structural lowering, independent of any one numpy op: ``Name(A)`` ->
     ``A[iters]``; ``Subscript(A, axes)`` -> walk axes, each Slice axis consumes
@@ -122,7 +134,7 @@ def scalarize_at_iters(expr: ast.expr, iters: list[ast.expr], shape_table: dict[
     return scalarize_children(expr, iters, shape_table)
 
 
-def scalarize_children(expr: ast.expr, iters: list[ast.expr], shape_table: dict[str, tuple[str, ...]]) -> ast.expr:
+def scalarize_children(expr: ast.expr, iters: Sequence[ast.expr], shape_table: dict[str, tuple[str, ...]]) -> ast.expr:
     """An operator node rebuilt over its scalarised operands; anything else (a Constant) unchanged."""
     if isinstance(expr, ast.BinOp):
         return ast.BinOp(
@@ -149,7 +161,7 @@ def scalarize_children(expr: ast.expr, iters: list[ast.expr], shape_table: dict[
     return expr
 
 
-def scalarize_name(expr: ast.Name, iters: list[ast.expr], shape_table: dict[str, tuple[str, ...]]) -> ast.expr:
+def scalarize_name(expr: ast.Name, iters: Sequence[ast.expr], shape_table: dict[str, tuple[str, ...]]) -> ast.expr:
     """``A`` -> ``A[iters]``, the operand's axes right-aligned against the iter nest (numpy broadcasts
     along the leading axes). A size-1 axis broadcasts and is indexed with constant 0 instead of
     consuming an iter: a keepdims ``tmp_max`` of (N, H, SM, 1) reads ``tmp_max[i, j, k, 0]``."""
@@ -163,7 +175,7 @@ def scalarize_name(expr: ast.Name, iters: list[ast.expr], shape_table: dict[str,
 
 
 def scalarize_subscript(
-    expr: ast.Subscript, iters: list[ast.expr], shape_table: dict[str, tuple[str, ...]]
+    expr: ast.Subscript, iters: Sequence[ast.expr], shape_table: dict[str, tuple[str, ...]]
 ) -> ast.expr:
     """``A[axes]`` at the iters: each axis indexed by :class:`SubscriptIndexer`, the source's uncovered
     trailing axes taking the remaining iters. numpy broadcasts RIGHT-aligned, so a subscript whose
@@ -209,7 +221,7 @@ class SubscriptIndexer:
 
     def __init__(
         self,
-        iters: list[ast.expr],
+        iters: Sequence[ast.expr],
         iter_idx: int,
         shape: tuple[str, ...] | None,
         shape_table: dict[str, tuple[str, ...]],
@@ -258,7 +270,7 @@ class SubscriptIndexer:
         else:
             # Concrete scalar index -- a negative ``arr[-1]`` resolved against the axis length
             # (C / Fortran have no negative indexing).
-            self.axes.append(resolve_negative(ax, self.axis_len()))
+            self.axes.append(resolved_bound(ax, self.axis_len()))
         self.src_axis += 1
         return True
 
@@ -267,7 +279,7 @@ class SubscriptIndexer:
         if self.group_iters is None:
             if self.iter_idx + rank > len(self.iters):
                 return None
-            self.group_iters = self.iters[self.iter_idx : self.iter_idx + rank]
+            self.group_iters = list(self.iters[self.iter_idx : self.iter_idx + rank])
             self.iter_idx += rank
         return self.group_iters[-rank:]
 

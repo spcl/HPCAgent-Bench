@@ -380,7 +380,7 @@ def llr40_rows(
     if observations is None:
         return rows
     candidates = llr40_setups.candidate_setups(observations, pattern)
-    frame = observations[observations["setup"].astype(str).isin(candidates)]
+    frame = observations.loc[observations["setup"].astype(str).isin(candidates)]
     kept, dropped = population.complete_setups(frame, tag_kernels)
     if mark_pending:
         kept = [*kept, *dropped]

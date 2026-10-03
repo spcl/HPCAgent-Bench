@@ -1,6 +1,7 @@
 """Emission of one function (kernel or helper), jit or eager."""
 
 import ast
+from collections.abc import Sequence
 
 from hpcagent_bench.translators.numpyto_common.ast_build import store_
 from hpcagent_bench.translators.numpyto_jax.errors import EmitError
@@ -137,7 +138,7 @@ def emit_function_eager(fn: ast.FunctionDef, decorate: str | None, mutated: list
     return head + body_lines
 
 
-def emit_eager_body(body: list[ast.stmt], indent: str) -> list[str]:
+def emit_eager_body(body: Sequence[ast.stmt], indent: str) -> list[str]:
     """Recursively emit a statement list with control flow kept literal."""
     lines: list[str] = []
     for s in body:
@@ -146,8 +147,8 @@ def emit_eager_body(body: list[ast.stmt], indent: str) -> list[str]:
         elif isinstance(s, (ast.Return, ast.Break, ast.Continue, ast.Pass)):
             lines.append(indent + unparse_jnp(s))
         elif isinstance(s, (ast.Assign, ast.AugAssign)):
-            for fs in functionalize_stmt(s):
-                lines.append(indent + unparse_jnp(fs))
+            for rewritten in functionalize_stmt(s):
+                lines.append(indent + unparse_jnp(rewritten))
         elif isinstance(s, ast.Expr):
             if isinstance(s.value, ast.Constant):  # docstring / bare constant
                 continue
@@ -188,7 +189,7 @@ def emit_eager_compound(s: ast.For | ast.While | ast.If | ast.FunctionDef, inden
     return lines
 
 
-def functionalize_bare_expr(call: ast.AST) -> ast.Assign | None:
+def functionalize_bare_expr(call: ast.expr) -> ast.Assign | None:
     """A bare ``np.<ufunc>(.., out)`` has effect only through its out array --
     rebind it: ``np.multiply(Z, Z, Z)`` -> ``Z = np.multiply(Z, Z)``,
     ``np.add(Z, C, out=Z)`` -> ``Z = np.add(Z, C)``. None when there's no

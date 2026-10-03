@@ -27,6 +27,7 @@ from hpcagent_bench.translators.numpyto_common.frontend.helper_params import (
     widen_counting_scalar_params,
 )
 from hpcagent_bench.translators.numpyto_common.frontend.helper_shapes import (
+    ReturnArray,
     call_specialized_body,
     desc_key,
     helper_call_local_arrays,
@@ -255,7 +256,7 @@ class ArraySpec:
     param_info: dict[str, tuple[tuple[str, ...], str]]
     extra_syms: list[str]
     hret_shape: list[str]
-    hret_dtype: str | None
+    hret_dtype: str
     inout: bool
 
 
@@ -313,14 +314,15 @@ class HelperKirBuilder:
             site = self.first_site(hdef, self.hidx_of[id(hdef)])
             if site is not None:
                 self.build_helper(site)
-        for owner_fn, unused, unused, unused in self.scopes:
+        for owner_fn, unused_arrays, unused_scalars, unused_symbols in self.scopes:
             rewrites = self.callsite_rewrites.get(id(owner_fn))
             if rewrites:
                 ReplaceStmts(rewrites).visit(owner_fn)
                 ast.fix_missing_locations(owner_fn)
         self.refuse_unemitted_callees()
         # Last, once every helper's param_order() is final and the call sites are rewritten.
-        reorder_helper_call_args([self.kernel_fn] + [h.tree for h in self.out], self.out)
+        trees: list[ast.AST] = [self.kernel_fn, *(h.tree for h in self.out)]
+        reorder_helper_call_args(trees, self.out)
         # Built callers-first, emitted callee-first so a C caller sees a definition.
         defn_order = {h.name: i for i, h in enumerate(self.helper_defs)}
         self.out.sort(key=lambda ir: defn_order[ir.kernel_name])
@@ -329,7 +331,7 @@ class HelperKirBuilder:
     def split_by_call_signature(self, hdef: ast.FunctionDef) -> list[ast.FunctionDef]:
         """One clone of ``hdef`` per further set of constant arguments its calls pass, among the kernel and the
         helpers built so far (its callers, all built before it); the clones follow it in ``helper_defs``."""
-        owners = [(fn, {a.name: a for a in arrays}) for fn, arrays, unused, unused in self.scopes]
+        owners = [(fn, {a.name: a for a in arrays}) for fn, arrays, unused_scalars, unused_symbols in self.scopes]
         clones = specialise_helper_by_call_signature(self.tree, hdef, owners)
         at = self.helper_defs.index(hdef)
         for offset, clone in enumerate(clones, start=1):
@@ -400,14 +402,14 @@ class HelperKirBuilder:
         return chased
 
     def build_helper(self, site: Site) -> None:
-        hret_shape, hret_dtype = helper_return_array_shape(site.lhs, site.oarr_by, site.owner_fn)
+        returned = helper_return_array_shape(site.lhs, site.oarr_by, site.owner_fn)
         # Every extent comes off the first call site, so an argument rebound to another shape
         # elsewhere makes the inference unsound.
         for node in ([site.lhs] if site.lhs is not None else []) + list(site.call.args):
             clash = conflicting_rebind_shapes(site.owner_fn, node, site.oarr_by, ignore=site.assign)
             if clash is not None:
                 raise NotImplementedError(
-                    f"helper {site.hdef.name!r} is called on {node.id!r}, which is rebound to both {clash[0]} and "
+                    f"helper {site.hdef.name!r} is called on {ast.unparse(node)!r}, which is rebound to both {clash[0]} and "
                     f"{clash[1]}; the helper's extents are emitted as constants and cannot serve both"
                 )
         # The parent's folded names carry over: array params reuse the parent's folded shapes.
@@ -418,33 +420,31 @@ class HelperKirBuilder:
         # ufunc-out / roll rewrite counts as a write.
         native_desugar(site.hfn)
         unroll_const_list_loops(site.hfn)
-        if hret_shape is None or target_shape_is_the_call_itself(site.owner_fn, site.lhs, site.oarr_by, site.hdef.name):
-            hret_shape, hret_dtype = self.return_shape_from_body(site, hret_shape, hret_dtype)
-        if hret_shape is None:
+        if returned is None or target_shape_is_the_call_itself(site.owner_fn, site.lhs, site.oarr_by, site.hdef.name):
+            returned = self.return_shape_from_body(site, returned)
+        if returned is None:
             self.build_by_value(site)
         else:
-            self.build_array_return(site, hret_shape, hret_dtype)
+            self.build_array_return(site, *returned)
 
     @staticmethod
-    def return_shape_from_body(
-        site: Site, hret_shape: list[str] | None, hret_dtype: str | None
-    ) -> tuple[list[str] | None, str | None]:
+    def return_shape_from_body(site: Site, returned: ReturnArray | None) -> ReturnArray | None:
         """The helper body's own answer when the call-site target says nothing: it wins when it sizes
         the return, when the target gave nothing, or when every return is provably rank 0 (a
         reduction must stay by-value even though the target guess broadcast it)."""
         probe = call_specialized_body(site.hfn, site.pnames, site.call.args)
-        body_shape, body_dtype = helper_return_shape_from_body(
+        from_body = helper_return_shape_from_body(
             probe, site.pnames, site.call.args, site.oarr_by, site.osca_by, site.osym_by, site.owner_fn
         )
         if (
-            body_shape is not None
-            or hret_shape is None
+            from_body is not None
+            or returned is None
             or helper_returns_rank0(
                 probe, site.pnames, site.call.args, site.oarr_by, site.osca_by, site.osym_by, site.owner_fn
             )
         ):
-            return body_shape, body_dtype
-        return hret_shape, hret_dtype
+            return from_body
+        return returned
 
     def build_by_value(self, site: Site) -> None:
         """A scalar (by-value) or void helper. Compile-time call arguments are bound into the body
@@ -592,15 +592,14 @@ class HelperKirBuilder:
             call.args.extend(name_(s) for s in extra_syms)
             self.rewrote(owner)
 
-    def build_array_return(self, site: Site, hret_shape: list[str], hret_dtype: str | None) -> None:
+    def build_array_return(self, site: Site, hret_shape: list[str], hret_dtype: str) -> None:
         """An array-returning helper: specialised on the first site's literal arguments, unused params
         dropped, the return written into an out-param (or into the argument it already updates).
 
         A fresh out-param is a TEMPORARY, and temporaries live in the compute dtype: a helper returning
         into a bf16 / fp8 target returns float, and the caller demotes on its copy into the target."""
         hfn, hdef = site.hfn, site.hdef
-        if hret_dtype is not None:
-            hret_dtype = dtypes.compute_dtype(hret_dtype)
+        hret_dtype = dtypes.compute_dtype(hret_dtype)
         call_consts = {pn: a for pn, a in zip(site.pnames, site.call.args) if literal_call_arg(a)}
         # Also prunes what the substitution makes dead, so ``used`` below sees no dead reads.
         bind_call_constants(hfn, call_consts)
@@ -673,7 +672,7 @@ class HelperKirBuilder:
 
     @staticmethod
     def inout_param_(
-        site: Site, pnames: list[str], kept_args: list[ast.expr], arrays: list[ArrayDesc], hret_shape: list[str]
+        site: Site, pnames: list[str], kept_args: Sequence[ast.expr], arrays: list[ArrayDesc], hret_shape: list[str]
     ) -> str | None:
         """``X = h(X, ...)``: the parameter the result is written back into, which then takes the one
         ABI slot (a second out-param would alias it under ``restrict``). Both extents must agree."""
@@ -743,7 +742,7 @@ class HelperKirBuilder:
             site_param_info,
             respell(spec.hret_shape),
             spec.hret_dtype,
-            f"{site.hidx}_{sidx}" if sidx else site.hidx,
+            f"{site.hidx}_{sidx}" if sidx else str(site.hidx),
             inout=spec.inout,
             live_buffers=frozenset(a.name for a in site.oarrays),
         )

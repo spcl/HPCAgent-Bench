@@ -51,6 +51,8 @@ class ArrayMethodRewriter(ast.NodeTransformer):
     ``np.sum(A)`` over them would index a CSR triple as a 2-D matrix.
     """
 
+    __slots__ = ("sparse_names",)
+
     def __init__(self, sparse_names: Iterable[str] | None = None) -> None:
         self.sparse_names = set(sparse_names or ())
 

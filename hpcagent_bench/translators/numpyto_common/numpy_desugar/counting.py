@@ -41,7 +41,7 @@ class DiffToSliceDifference(RewritePass):
     something else and are left standing.
     """
 
-    __slots__ = ("changed",)
+    __slots__ = ()
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
         self.generic_visit(node)
@@ -69,7 +69,7 @@ class StripAstypeCopyKwarg(RewritePass):
     the value is the same. dace's astype replacement rejects the keyword.
     """
 
-    __slots__ = ("changed",)
+    __slots__ = ()
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
         self.generic_visit(node)
@@ -92,20 +92,20 @@ class RepeatCountsInline(RankedRewritePass):
     left standing.
     """
 
-    __slots__ = ("_ctr", "changed")
+    __slots__ = ()
 
-    def visit_Assign(self, node: ast.Assign) -> ast.AST:
+    def visit_Assign(self, node: ast.Assign) -> ast.AST | list[ast.stmt]:
         self.generic_visit(node)
         calls = [
-            n for n in ast.walk(node.value) if numpy_call_attr(n) == "repeat" and len(n.args) == 2 and not n.keywords
+            n
+            for n in ast.walk(node.value)
+            if isinstance(n, ast.Call) and numpy_call_attr(n) == "repeat" and len(n.args) == 2 and not n.keywords
         ]
         pre: list[ast.stmt] = []
         for call in calls:
             counts = call.args[1]
-            if numpy_call_attr(counts) != "diff" or len(counts.args) != 1:
+            if not isinstance(counts, ast.Call) or numpy_call_attr(counts) != "diff" or len(counts.args) != 1:
                 continue  # scalar count, or a sum we cannot derive -- not ours
-            if (expr_rank(call.args[1], self.ranks) or 0) < 1 and not isinstance(counts, ast.Call):
-                continue
             ptr = ast.unparse(counts.args[0])
             name = f"__rp{self._ctr}"
             self._ctr += 1
@@ -142,11 +142,13 @@ class BincountInline(RankedRewritePass):
     the result into an M-sized buffer already requires.
     """
 
-    __slots__ = ("_ctr", "changed")
+    __slots__ = ()
 
-    def visit_Assign(self, node: ast.Assign) -> ast.AST:
+    def visit_Assign(self, node: ast.Assign) -> ast.AST | list[ast.stmt]:
         self.generic_visit(node)
-        calls = [n for n in ast.walk(node.value) if numpy_call_attr(n) == "bincount" and n.args]
+        calls = [
+            n for n in ast.walk(node.value) if isinstance(n, ast.Call) and numpy_call_attr(n) == "bincount" and n.args
+        ]
         if not calls:
             return node
         pre: list[ast.stmt] = []
@@ -183,16 +185,19 @@ class AddAtInline(RankedRewritePass):
     (unlike ``A[idx] += vals``). ``idx`` is one index array or a tuple of index arrays and scalar
     indices; the first index array drives the loop, scalars ride each iteration."""
 
-    __slots__ = ("_ctr", "changed")
+    __slots__ = ()
 
-    def visit_Expr(self, node: ast.Expr):
+    def visit_Expr(self, node: ast.Expr) -> ast.AST | list[ast.stmt]:
         self.generic_visit(node)
         call = node.value
-        op = ufunc_method_op(call, "at") if isinstance(call, ast.Call) else None
-        if op not in AT_OPS or len(call.args) < 2 or not isinstance(call.args[0], ast.Name):
+        if not isinstance(call, ast.Call):
             return node
-        A = call.args[0].id
-        elts = call.args[1].elts if isinstance(call.args[1], ast.Tuple) else [call.args[1]]
+        op = ufunc_method_op(call, "at")
+        first, second = (call.args[0], call.args[1]) if len(call.args) >= 2 else (None, None)
+        if op not in AT_OPS or not isinstance(first, ast.Name) or second is None:
+            return node
+        A = first.id
+        elts = second.elts if isinstance(second, ast.Tuple) else [second]
         vals = call.args[2] if len(call.args) > 2 else None
         driver_rank = next((r for e in elts if (r := expr_rank(e, self.ranks)) and r >= 1), None)
         if driver_rank is None:
@@ -213,6 +218,7 @@ class AddAtInline(RankedRewritePass):
             else:
                 idx_exprs.append(ast.unparse(e))
         trail_iters: list[str] = []
+        tv = ""
         if vals is None:
             rhs = "1"
         else:
@@ -260,9 +266,9 @@ class SearchsortedMaterialize(RewritePass):
     is a no-op for an already-contiguous array.
     """
 
-    __slots__ = ("_ctr", "changed")
+    __slots__ = ()
 
-    def visit_Assign(self, node: ast.Assign) -> ast.AST:
+    def visit_Assign(self, node: ast.Assign) -> ast.AST | list[ast.stmt]:
         self.generic_visit(node)
         calls = [
             n
@@ -295,7 +301,7 @@ class SearchsortedMaterialize(RewritePass):
         return out
 
 
-def hoist_histogram(node: ast.AST, hoist: ValueHoist) -> ast.expr | None:
+def hoist_histogram(node: ast.expr, hoist: ValueHoist) -> ast.expr | None:
     """``np.histogram(a, bins[, lo, hi][, weights=w])[0]`` -> the temp its binning loop fills.
 
     A min/max scan for the default range, the bin edges, then per-element binning
@@ -374,7 +380,7 @@ def hoist_histogram(node: ast.AST, hoist: ValueHoist) -> ast.expr | None:
 HISTOGRAM_HOIST = HoistForm(frozenset({"histogram"}), (), hoist_histogram)
 
 
-def hoist_repeat_axis(node: ast.AST, hoist: ValueHoist) -> ast.expr | None:
+def hoist_repeat_axis(node: ast.expr, hoist: ValueHoist) -> ast.expr | None:
     """``np.repeat(x, m, axis=k)`` (literal axis, scalar count) -> the temp its gather loop ``out[..., j, ...] =
     x[..., j // m, ...]`` fills. numba rejects ``axis=`` on np.repeat."""
     if not isinstance(node, ast.Call) or numpy_call_attr(node) != "repeat" or len(node.args) < 2:

@@ -9,6 +9,7 @@ from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import (
     AUG_OP_SRC,
     REDUCE_FNS,
     DesugarError,
+    DesugarPass,
     eigh_alias_names,
     eigh_call_ab,
 )
@@ -125,22 +126,22 @@ from hpcagent_bench.translators.numpyto_common.numpy_desugar.ufuncs import (
 )
 
 __all__ = [
-    "CallKinds",
-    "DesugarError",
-    "IxWriteToLoop",
+    "AUG_OP_SRC",
     "NO_CALLS",
     "REDUCE_FNS",
-    "AUG_OP_SRC",
     "AddAtInline",
     "BincountInline",
+    "CallKinds",
     "ComplexAccessorToFunc",
     "DecomposeRollSlice",
+    "DesugarError",
     "DiffToSliceDifference",
     "DropValidationGuards",
     "EighCallHoister",
     "EighLoopRewriter",
     "ElementalUfuncToPrimitive",
     "FillDiagonalInline",
+    "IxWriteToLoop",
     "NormalizeNegativeAxis",
     "RepeatCountsInline",
     "SpliceErrstate",
@@ -148,25 +149,25 @@ __all__ = [
     "UfuncOutInline",
     "UfuncReduceToReducer",
     "axis_list",
+    "desugar_for_python_backend",
     "dtype_kind",
     "dtype_table_",
     "eigh_alias_names",
     "eigh_call_ab",
     "eigh_stmts",
-    "int_matmul_stmts",
-    "kind_of_dtype_str",
-    "param_body_rank_evidence",
-    "promote_kind",
-    "reduce_axis_stmts",
-    "desugar_for_python_backend",
     "expr_rank",
     "extent_tokens",
     "fold_finfo_eps",
     "fold_list_accumulators",
+    "int_matmul_stmts",
+    "kind_of_dtype_str",
     "module_kind_tables",
     "name_binding_index",
     "name_value_pairs",
+    "param_body_rank_evidence",
+    "promote_kind",
     "rank_table",
+    "reduce_axis_stmts",
     "rewrite_curve_fit",
     "shape_table",
 ]
@@ -198,14 +199,16 @@ def desugar_for_python_backend(source: str, kir, backend: str | None = None) -> 
     all_funcs = [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]
     if backend == "numba":
         changed = fold_constant_helper_arguments(tree, kir.kernel_name) or changed
-        for fn in all_funcs:
-            inline = SliceObjectInline(fn)
-            inline.visit(fn)
+        for func in all_funcs:
+            inline = SliceObjectInline(func)
+            inline.visit(func)
             changed = changed or inline.changed
     kir_seed: dict[str, int] = {a.name: len(a.shape) for a in kir.arrays}
-    kir_dtype_seed: dict[str, str] = {
-        a.name: kind_of_dtype_str(a.dtype) for a in kir.arrays if kind_of_dtype_str(a.dtype)
-    }
+    kir_dtype_seed: dict[str, str] = {}
+    for a in kir.arrays:
+        kind = kind_of_dtype_str(a.dtype)
+        if kind:
+            kir_dtype_seed[a.name] = kind
     # Exact dtypes (not just kind) for passes that need a width, e.g. FftInline's complex64/128 cast.
     # Read through ``vars()``: rank-only callers pass KIR arrays without a dtype attribute.
     kir_array_dtypes: dict[str, str] = {a.name: a.dtype for a in kir.arrays}
@@ -220,9 +223,11 @@ def desugar_for_python_backend(source: str, kir, backend: str | None = None) -> 
         else {}
     )
     eigh_aliases = eigh_alias_names(tree)
-    for fn in all_funcs or [tree]:
-        is_kernel = vars(fn).get("name") == kir.kernel_name
-        seed = dict(param_ranks.get(vars(fn).get("name"), {}))
+    scopes: list[ast.FunctionDef | ast.Module] = [*all_funcs] or [tree]
+    for fn in scopes:
+        fn_name = fn.name if isinstance(fn, ast.FunctionDef) else None
+        is_kernel = fn_name == kir.kernel_name
+        seed = dict(param_ranks.get(fn_name or "", {}))
         if is_kernel:
             seed.update(kir_seed)
         if return_ranks is not None and isinstance(fn, ast.FunctionDef):
@@ -235,7 +240,12 @@ def desugar_for_python_backend(source: str, kir, backend: str | None = None) -> 
         masked_gathers = masked_reduce_map(fn, ranks, dtypes)
         consts = const_name_values(fn)
         tables = HoistTables(ranks, dtypes, masked_gathers, lower_linalg, lower_solve_rhs_ranks)
-        passes = [
+        numba_reshape_passes: list[DesugarPass] = (
+            [ReshapeFortranOrderInline(), NumbaDtypeFixups(dtype_table_(fn, param_kinds.get(fn_name or "", {})))]
+            if backend == "numba"
+            else []
+        )
+        passes: list[DesugarPass] = [
             DropGuards(),
             # First: splices statements out of a ``with`` body; every pass below walks only top-level statements.
             SpliceErrstate(),
@@ -276,14 +286,7 @@ def desugar_for_python_backend(source: str, kir, backend: str | None = None) -> 
             ValueHoist(REPEAT_AXIS_HOIST, tables),
             ReshapeContiguousInline(noncontig),
             # numba only: its reshape takes no ``order=`` and its ``@`` / dtype typing is strict.
-            *(
-                [
-                    ReshapeFortranOrderInline(),
-                    NumbaDtypeFixups(dtype_table_(fn, param_kinds.get(vars(fn).get("name"), {}))),
-                ]
-                if backend == "numba"
-                else []
-            ),
+            *numba_reshape_passes,
             ValueHoist(INT_MATMUL_HOIST, tables),
             ComplexAccessorToFunc(conjugate_only=True),
             ElementalUfuncToPrimitive(),
@@ -295,7 +298,7 @@ def desugar_for_python_backend(source: str, kir, backend: str | None = None) -> 
         ]
         for p in passes:
             # A nested def is its own ``all_funcs`` entry with its own ranks; skip it here.
-            new_body = []
+            new_body: list[ast.stmt] = []
             for stmt in fn.body:
                 if isinstance(stmt, ast.FunctionDef):
                     new_body.append(stmt)

@@ -24,6 +24,8 @@ class TupleSubscriptFolder(ast.NodeTransformer):
     after the shape harvest -- the Tuple is a constant-folded shape
     expression and the index picks one element."""
 
+    __slots__ = ()
+
     def visit_Subscript(self, node: ast.Subscript) -> ast.AST:
         self.generic_visit(node)
         if isinstance(node.value, ast.Tuple):
@@ -95,6 +97,8 @@ class TupleLocalPropagator(ast.NodeTransformer):
     assign never leaves an empty block: :func:`fill_empty_blocks` back-fills a
     ``pass`` if the tuple assign was a block's sole statement.
     """
+
+    __slots__ = ("tuples",)
 
     def __init__(self) -> None:
         self.tuples: dict[str, ast.Tuple] = {}
@@ -178,7 +182,7 @@ class ShapeTableTupleSplit(SplitTupleUnpack):
         #: Names introduced as integer scalar locals, for the emitter to declare.
         self.int_locals: list[str] = []
 
-    def values(self, targets: list[ast.expr], value: ast.expr) -> Spelled | None:
+    def values(self, targets: Sequence[ast.expr], value: ast.expr) -> Spelled | None:
         names = [target.id for target in targets if isinstance(target, ast.Name)]
         if len(names) != len(targets):
             return super().values(targets, value)

@@ -2,6 +2,7 @@
 
 import ast
 import copy
+from collections.abc import Sequence
 
 from hpcagent_bench.translators.numpyto_common.ast_build import RenameNames, const_int, name_, range_for
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of
@@ -22,8 +23,8 @@ __all__ = [
 
 
 def expand_copy(
-    target: ast.expr,
-    args: list[ast.expr],
+    target: ast.Name,
+    args: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     local_dtypes: dict[str, str] | None = None,
 ) -> list[ast.stmt]:
@@ -62,15 +63,17 @@ def expand_copy(
             if src_dt:
                 local_dtypes[target.id] = src_dt
     iters = [f"__r{i}" for i in range(len(shape))]
-    iter_nodes = [name_(i) for i in iters]
+    iter_nodes: list[ast.expr] = [name_(i) for i in iters]
     idx = iter_nodes[0] if len(iters) == 1 else ast.Tuple(elts=iter_nodes, ctx=ast.Load())
     sub_src = scalarize_at_iters(src, iter_nodes, shape_table)
     sub_dst = ast.Subscript(value=name_(target.id), slice=idx, ctx=ast.Store())
-    body = [ast.Assign(targets=[sub_dst], value=sub_src)]
+    body: list[ast.stmt] = [ast.Assign(targets=[sub_dst], value=sub_src)]
     return [alloc_marker(target.id)] + wrap_for_loops(iters, shape, body)
 
 
-def expand_linspace(target: ast.expr, args: list[ast.expr], shape_table: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
+def expand_linspace(
+    target: ast.Name, args: Sequence[ast.expr], shape_table: dict[str, tuple[str, ...]]
+) -> list[ast.stmt]:
     """``out = np.linspace(start, stop, n)`` -> ``for i in range(n): out[i] =
     (stop - start) / max(n - 1, 1) * i + start``, then ``out[n - 1] = stop`` when ``n > 1``.
 
@@ -97,7 +100,7 @@ def expand_linspace(target: ast.expr, args: list[ast.expr], shape_table: dict[st
     expr = ast.BinOp(
         left=ast.BinOp(left=step, op=ast.Mult(), right=name_("__i")), op=ast.Add(), right=copy.deepcopy(start)
     )
-    body = [
+    body: list[ast.stmt] = [
         ast.Assign(targets=[ast.Subscript(value=name_(target.id), slice=name_("__i"), ctx=ast.Store())], value=expr)
     ]
     last = ast.Subscript(
@@ -113,7 +116,7 @@ def expand_linspace(target: ast.expr, args: list[ast.expr], shape_table: dict[st
     ]
 
 
-def arange_count(args: list[ast.expr]) -> ast.expr:
+def arange_count(args: Sequence[ast.expr]) -> ast.expr:
     """Element count of ``np.arange(*args)``: ``ceil(span / step)``, clamped at zero.
 
     The obvious ``(span + step - 1) // step`` is a POSITIVE-STEP identity. Under a negative step
@@ -137,9 +140,10 @@ def arange_count(args: list[ast.expr]) -> ast.expr:
     else:
         raise NotImplementedError("np.arange needs 1-3 args")
     literals = [const_int(a) for a in args]  # accepts a negated literal: step=-1 is UnaryOp(USub, 1)
-    if all(v is not None for v in literals):
-        start, stop = (0, literals[0]) if len(args) == 1 else (literals[0], literals[1])
-        istep = literals[2] if len(args) == 3 else 1
+    ints = [v for v in literals if v is not None]
+    if len(ints) == len(literals):
+        start, stop = (0, ints[0]) if len(args) == 1 else (ints[0], ints[1])
+        istep = ints[2] if len(args) == 3 else 1
         if istep == 0:
             raise NotImplementedError("np.arange step must be nonzero")
         return const_(max(0, -((start - stop) // istep)))
@@ -153,12 +157,16 @@ def arange_count(args: list[ast.expr]) -> ast.expr:
     )
 
 
-def expand_arange(target: ast.expr, args: list[ast.expr], shape_table: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
+def expand_arange(
+    target: ast.Name, args: Sequence[ast.expr], shape_table: dict[str, tuple[str, ...]]
+) -> list[ast.stmt]:
     """``out = np.arange(stop)`` -> ``for i in range(stop): out[i] = i``;
     ``np.arange(start, stop)`` -> ``out[i] = start + i``;
     ``np.arange(start, stop, step)`` -> ``out[i] = start + i*step`` over
     :func:`arange_count` elements. The iota value casts to ``out``'s declared dtype on
     assignment. Mirrors :func:`expand_linspace`."""
+    start: ast.expr
+    step: ast.expr | None
     if len(args) == 1:
         start, step = const_(0), None
     elif len(args) == 2:
@@ -172,14 +180,14 @@ def expand_arange(target: ast.expr, args: list[ast.expr], shape_table: dict[str,
     idx = name_("__i")
     scaled = idx if step is None else ast.BinOp(left=idx, op=ast.Mult(), right=step)
     value = scaled if (len(args) == 1) else ast.BinOp(left=start, op=ast.Add(), right=scaled)
-    body = [
+    body: list[ast.stmt] = [
         ast.Assign(targets=[ast.Subscript(value=name_(target.id), slice=name_("__i"), ctx=ast.Store())], value=value)
     ]
     return [range_for("__i", [count], body)]
 
 
 def expand_fromfunction(
-    target: ast.expr, args: list[ast.expr], shape_table: dict[str, tuple[str, ...]]
+    target: ast.Name, args: Sequence[ast.expr], shape_table: dict[str, tuple[str, ...]]
 ) -> list[ast.stmt]:
     """``out = np.fromfunction(lambda i, j: f(i, j), (N, M))`` -> ``for i in
     range(N): for j in range(M): out[i, j] = f(i, j)``. The lambda body is
@@ -195,9 +203,11 @@ def expand_fromfunction(
         raise NotImplementedError("np.fromfunction: lambda arity != shape rank")
     iters = [f"__ff{i}" for i in range(len(params))]
     body_expr = RenameNames(dict(zip(params, iters))).visit(copy.deepcopy(lam.body))
-    slot_elts = [name_(v) for v in iters]
+    slot_elts: list[ast.expr] = [name_(v) for v in iters]
     slot = slot_elts[0] if len(iters) == 1 else ast.Tuple(elts=slot_elts, ctx=ast.Load())
-    body = [ast.Assign(targets=[ast.Subscript(value=name_(target.id), slice=slot, ctx=ast.Store())], value=body_expr)]
+    body: list[ast.stmt] = [
+        ast.Assign(targets=[ast.Subscript(value=name_(target.id), slice=slot, ctx=ast.Store())], value=body_expr)
+    ]
     return wrap_for_loops(iters, shape_elts, body)
 
 
@@ -208,8 +218,8 @@ MESHGRID_AXIS_KW = "__meshgrid_axis__"
 
 
 def expand_meshgrid(
-    target: ast.expr,
-    args: list[ast.expr],
+    target: ast.Name,
+    args: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     kwargs: list[ast.keyword] | None = None,
 ) -> list[ast.stmt]:
@@ -229,8 +239,8 @@ def expand_meshgrid(
     axis: int | None = None
     for kw in kwargs:
         if kw.arg == "indexing" and isinstance(kw.value, ast.Constant):
-            indexing = kw.value.value
-        elif kw.arg == MESHGRID_AXIS_KW and isinstance(kw.value, ast.Constant):
+            indexing = str(kw.value.value)
+        elif kw.arg == MESHGRID_AXIS_KW and isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, int):
             axis = kw.value.value
     if indexing not in ("ij", "xy"):
         raise NotImplementedError(f"np.meshgrid indexing={indexing!r} not supported")
@@ -256,16 +266,18 @@ def expand_meshgrid(
     read_iter = name_(iters[perm[axis]])
     src = scalarize_at_iters(copy.deepcopy(args[axis]), [read_iter], shape_table)
     out_slot = name_(iters[0]) if k == 1 else ast.Tuple(elts=[name_(v) for v in iters], ctx=ast.Load())
-    body = [ast.Assign(targets=[ast.Subscript(value=name_(target.id), slice=out_slot, ctx=ast.Store())], value=src)]
+    body: list[ast.stmt] = [
+        ast.Assign(targets=[ast.Subscript(value=name_(target.id), slice=out_slot, ctx=ast.Store())], value=src)
+    ]
     return wrap_for_loops(iters, [copy.deepcopy(d) for d in out_dims], body)
 
 
-def expand_eye(target: ast.expr, args: list[ast.expr], shape_table: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
+def expand_eye(target: ast.Name, args: Sequence[ast.expr], shape_table: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
     """``out = np.eye(n)`` -> ``out[i, j] = (i == j) ? 1.0 : 0.0``."""
     if not args:
         raise NotImplementedError("np.eye needs at least 1 arg")
     n = args[0]
-    body = [
+    body: list[ast.stmt] = [
         ast.Assign(
             targets=[
                 ast.Subscript(

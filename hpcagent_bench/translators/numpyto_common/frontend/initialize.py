@@ -75,7 +75,7 @@ NP_DTYPE_NAMES: dict[str, str] = {
 FRAMEWORK_DTYPE_ALIASES = frozenset(("np_float", "np_complex"))
 
 
-def dtype_from_constructor(rhs: ast.AST) -> str | None:
+def dtype_from_constructor(rhs: ast.expr) -> str | None:
     """Inspect a constructor call's ``dtype=`` kwarg or astype receiver
     and return the matching internal dtype tag (e.g. ``float64``).
 
@@ -105,7 +105,7 @@ def dtype_from_constructor(rhs: ast.AST) -> str | None:
     return None
 
 
-def dtype_from_dtype_arg(node: ast.AST) -> str | None:
+def dtype_from_dtype_arg(node: ast.expr) -> str | None:
     """Resolve a ``dtype=`` kwarg expression to an internal dtype tag.
 
     Handles three shapes:
@@ -275,7 +275,7 @@ AXES_AS_ARGS = {"rand", "randn"}
 SHARE_SHAPE_OF_FIRST = {"copy", "asarray", "ascontiguousarray", "array", "ravel", "flatten", "abs", "absolute"}
 
 
-def elementwise_operands(node: ast.AST) -> list[ast.expr] | None:
+def elementwise_operands(node: ast.expr) -> list[ast.expr] | None:
     """Operands of a shape-preserving wrapper -- a comparison, arithmetic, a unary op, or
     ``np.where`` / ``clip`` / ``minimum`` / ``maximum`` -- whose array operand carries the shape
     (``(rng.random((N, N)) < 0.15).astype(int)``); ``None`` for anything else."""
@@ -319,7 +319,7 @@ def shape_first_arg(node: ast.Call, attr: str) -> str | None:
     return unparse_shape_arg(node.args[0])
 
 
-def shape_from_constructor(node: ast.AST, so_far: dict[str, str]) -> str | None:
+def shape_from_constructor(node: ast.expr, so_far: dict[str, str]) -> str | None:
     """``"(N, M)"`` shape text of one array-building expression, or ``None``.
 
     Sees through ``.astype(...)`` and shape-preserving wrappers; ``x.copy()``, ``*_like(x)`` and
@@ -355,7 +355,7 @@ def shape_from_constructor(node: ast.AST, so_far: dict[str, str]) -> str | None:
     return unparse_shape_arg(shape) if shape is not None else None
 
 
-def unparse_shape_arg(node: ast.AST) -> str | None:
+def unparse_shape_arg(node: ast.expr) -> str | None:
     """Turn a shape AST (tuple / single symbol) into ``"(N,M)"`` text."""
     if isinstance(node, ast.Tuple):
         return "(" + ", ".join(ast.unparse(e) for e in node.elts) + ")"

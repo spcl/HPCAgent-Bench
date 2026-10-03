@@ -23,10 +23,12 @@ class FftObjmodeRewriter(ast.NodeTransformer):
     instead of failing to type in nopython mode.
     """
 
+    __slots__ = ("used",)
+
     def __init__(self) -> None:
         self.used = False
 
-    def visit_Assign(self, node: ast.Assign) -> ast.AST:
+    def visit_Assign(self, node: ast.Assign) -> ast.AST | list[ast.stmt]:
         self.generic_visit(node)
         call = node.value
         if not (

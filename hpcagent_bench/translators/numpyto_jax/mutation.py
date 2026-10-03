@@ -2,6 +2,7 @@
 every call site rebinds them."""
 
 import ast
+from typing import TypeGuard
 
 from hpcagent_bench.translators.numpyto_common.ast_build import name_
 from hpcagent_bench.translators.numpyto_jax.names import as_store, base_name, is_assignable
@@ -75,7 +76,9 @@ def rewrite_inplace_helper_calls(fn: ast.FunctionDef, helper_mut: dict) -> None:
     that flows through ``functionalize_stmt`` into ``.at[:, ii].set(..)``);
     a ``("val",)`` slot comes from the call's LHS."""
 
-    def rebind_targets(call: ast.Call, lhs_elts: list[ast.AST]) -> list[ast.AST] | None:
+    def rebind_targets(call: ast.Call, lhs_elts: list[ast.expr]) -> list[ast.expr] | None:
+        if not isinstance(call.func, ast.Name):
+            return None
         slots = helper_mut[call.func.id]
         if sum(1 for s in slots if s[0] == "val") != len(lhs_elts):
             return None  # LHS arity must match the genuine return values
@@ -85,17 +88,19 @@ def rewrite_inplace_helper_calls(fn: ast.FunctionDef, helper_mut: dict) -> None:
         vi = iter(lhs_elts)
         return [as_store(next(vi) if s[0] == "val" else call.args[s[1]]) for s in slots]
 
-    def rebind(call: ast.Call, lhs_elts: list[ast.AST], node: ast.stmt) -> ast.stmt:
+    def rebind(call: ast.Call, lhs_elts: list[ast.expr], node: ast.stmt) -> ast.stmt:
         tgts = rebind_targets(call, lhs_elts)
         if tgts is None:
             return node
         tgt = tgts[0] if len(tgts) == 1 else ast.Tuple(elts=tgts, ctx=ast.Store())
         return ast.copy_location(ast.Assign(targets=[tgt], value=call), node)
 
-    def is_mut_call(c: ast.AST) -> bool:
+    def is_mut_call(c: ast.expr) -> TypeGuard[ast.Call]:
         return isinstance(c, ast.Call) and isinstance(c.func, ast.Name) and c.func.id in helper_mut
 
     class Rewriter(ast.NodeTransformer):
+        __slots__ = ()
+
         def visit_Expr(self, node: ast.Expr) -> ast.stmt:  # bare call: no captured return values
             return rebind(node.value, [], node) if is_mut_call(node.value) else node
 
@@ -152,7 +157,7 @@ def mutated_params(fn: ast.FunctionDef, params: list[str]) -> list[str]:
         if isinstance(s, ast.AugAssign):
             # ``p += x`` (whole array) and ``p[i] += x`` are both numpy in-place
             # updates that DO propagate to the caller's buffer.
-            base = s.target
+            base: ast.expr = s.target
             while isinstance(base, ast.Subscript):
                 base = base.value
             if isinstance(base, ast.Name) and base.id in params:
@@ -167,11 +172,11 @@ def mutated_params(fn: ast.FunctionDef, params: list[str]) -> list[str]:
                 # _upper_bound(..)`` call site with ``tuple * float``).
                 if not isinstance(t, ast.Subscript):
                     continue
-                base = t.value
-                while isinstance(base, ast.Subscript):
-                    base = base.value
-                if isinstance(base, ast.Name) and base.id in params:
-                    mutated.add(base.id)
+                inner: ast.expr = t.value
+                while isinstance(inner, ast.Subscript):
+                    inner = inner.value
+                if isinstance(inner, ast.Name) and inner.id in params:
+                    mutated.add(inner.id)
         # np.add.at(target, idx, val) mutates its first arg through a Call,
         # not an assign target -- later rewritten to ``.at[idx].add(val)``,
         # so the param IS mutated and must be returned.

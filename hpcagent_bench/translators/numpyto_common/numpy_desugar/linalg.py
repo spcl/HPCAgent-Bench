@@ -166,7 +166,7 @@ LINALG_LOWERINGS: dict[str, Callable[[ast.Call, ValueHoist], ast.expr | None]] =
 }
 
 
-def hoist_linalg(node: ast.AST, hoist: ValueHoist) -> ast.expr | None:
+def hoist_linalg(node: ast.expr, hoist: ValueHoist) -> ast.expr | None:
     """A lowerable ``np.linalg.cholesky/solve/inv(...)`` -> the temp its loop nest fills.
 
     The temp is filled before the statement runs, so ``A[:] = np.linalg.cholesky(A) + ...`` stays safe.

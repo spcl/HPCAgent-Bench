@@ -3,19 +3,23 @@
 
 import ast
 import copy
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
+from types import EllipsisType
 
 __all__ = [
     "ALL_BLOCK_FIELDS",
     "NESTED_BLOCK_FIELDS",
+    "ConstantValue",
     "RenameNames",
     "SubstituteLoads",
+    "callee_attribute",
     "const_int",
     "expr_of",
     "literal_loads",
     "map_blocks",
     "map_statement_lists",
     "name_",
+    "name_ids",
     "nested_blocks",
     "numpy_attribute",
     "numpy_call",
@@ -49,7 +53,22 @@ def numpy_call(fn: str, args: list[ast.expr]) -> ast.Call:
     return ast.Call(func=numpy_attribute(fn), args=args, keywords=[])
 
 
-def const_int(node: ast.AST | None) -> int | None:
+def callee_attribute(call: ast.Call) -> ast.Attribute:
+    """The ``Attribute`` ``call`` dispatches on (``np.sum(x)`` -> ``np.sum``; ``x.sum()`` -> ``x.sum``); the
+    dispatchers only route such calls here, so any other callee is a bug in the caller."""
+    func = call.func
+    if not isinstance(func, ast.Attribute):
+        raise TypeError(f"expected an attribute call, got {ast.unparse(call)}")
+    return func
+
+
+def name_ids(elts: Sequence[ast.expr]) -> tuple[str, ...] | None:
+    """The names of ``elts`` when every one is a bare Name, else ``None``."""
+    ids = tuple(e.id for e in elts if isinstance(e, ast.Name))
+    return ids if len(ids) == len(elts) else None
+
+
+def const_int(node: ast.expr | None) -> int | None:
     """``node`` as a Python int, or ``None``. Accepts a signed literal (``-1`` parses as a UnaryOp)."""
     if isinstance(node, ast.Constant) and isinstance(node.value, int) and not isinstance(node.value, bool):
         return node.value
@@ -74,7 +93,11 @@ class SubstituteLoads(ast.NodeTransformer):
         return node
 
 
-def literal_loads(values: Mapping[str, object]) -> SubstituteLoads:
+#: What an ``ast.Constant`` holds.
+type ConstantValue = str | bytes | bool | int | float | complex | EllipsisType | None
+
+
+def literal_loads(values: Mapping[str, ConstantValue]) -> SubstituteLoads:
     """A :class:`SubstituteLoads` that reads each name in ``values`` as its literal."""
     return SubstituteLoads({name: ast.Constant(value=value) for name, value in values.items()})
 

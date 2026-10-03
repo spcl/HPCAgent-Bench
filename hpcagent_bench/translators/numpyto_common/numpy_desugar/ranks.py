@@ -1,7 +1,7 @@
 """Static rank (and tuple-length) inference over a function body."""
 
 import ast
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 
 from hpcagent_bench.translators.numpyto_common.ast_build import const_int
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import numpy_call_attr, numpy_submodule_attr
@@ -11,6 +11,7 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes import (
     iter_extent_of,
     parse_einsum_subscripts,
 )
+from hpcagent_bench.translators.numpyto_common.limits import CALL_GRAPH_ROUNDS, FIXPOINT_ROUNDS
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import (
     LIKE_CTORS,
     REDUCE_FNS,
@@ -83,7 +84,7 @@ __all__ = [
 active_tuple_lengths: dict[str, int | None] | None = None
 
 
-def newaxis_singletons(value: ast.AST, rank: int) -> frozenset:
+def newaxis_singletons(value: ast.expr, rank: int) -> frozenset:
     """Axes of ``value`` a literal ``None`` in its own subscript pins to extent 1.
 
     Index arrays in one gather broadcast against each other, so an open mesh (``g_z[:, None, None]``,
@@ -110,7 +111,7 @@ def newaxis_singletons(value: ast.AST, rank: int) -> frozenset:
     return frozenset(a for a in axes if a < rank)
 
 
-def axis_count(args: list[ast.expr], keywords: list[ast.keyword]) -> int | None:
+def axis_count(args: Sequence[ast.expr], keywords: list[ast.keyword]) -> int | None:
     """How many axes an ``axis=`` argument names. ``None`` when it is absent (numpy's "every
     size-1 axis", which is not a compile-time count) or not a literal."""
     kw = {k.arg: k.value for k in keywords}
@@ -173,7 +174,7 @@ def boolop_rank(value: ast.BoolOp, ranks: dict[str, int]) -> int | None:
     return max([r for r in rs if r is not None], default=None)
 
 
-def tuple_index_drop(elts: list[ast.expr], ranks: dict[str, int]) -> int:
+def tuple_index_drop(elts: Sequence[ast.expr], ranks: dict[str, int]) -> int:
     """Axes a tuple index removes from its base.
 
     A slice or an ellipsis drops nothing and a newaxis adds one. The advanced indices (scalars and index
@@ -351,7 +352,8 @@ def diag_rank(value: ast.Call, attr: str, ranks: dict[str, int]) -> int | None:
     # 2-D in extracts the diagonal (1-D out), 1-D in builds the matrix (2-D out).
     if not value.args:
         return np_fallthrough_rank(value, attr, ranks)
-    return {1: 2, 2: 1}.get(expr_rank(value.args[0], ranks))
+    operand_rank = expr_rank(value.args[0], ranks)
+    return {1: 2, 2: 1}.get(operand_rank) if operand_rank is not None else None
 
 
 def take_rank(value: ast.Call, attr: str, ranks: dict[str, int]) -> int | None:
@@ -455,7 +457,7 @@ def tensordot_contracted(value: ast.Call) -> int | None:
     return None
 
 
-def call_return_rank(value: ast.AST, call_returns: dict[str, int]) -> int | None:
+def call_return_rank(value: ast.expr, call_returns: dict[str, int]) -> int | None:
     """Rank of ``helper(...)`` for a local function with a known return rank, which ``expr_rank`` cannot see."""
     if isinstance(value, ast.Call) and isinstance(value.func, ast.Name):
         return call_returns.get(value.func.id)
@@ -484,7 +486,7 @@ def name_value_pairs(tree: ast.AST) -> Iterator[tuple[str, ast.expr]]:
 
 
 def extent_tokens(
-    value: ast.AST,
+    value: ast.expr,
     table: dict[str, tuple[str, ...]],
     tuple_locals: frozenset[str] = frozenset(),
     arrays: frozenset[str] = frozenset(),
@@ -539,7 +541,7 @@ def shape_table(tree: ast.AST, seed: dict[str, tuple[str, ...]]) -> dict[str, tu
     symbols = {ident for shape in seed.values() for tok in shape for ident in IDENT_RE.findall(str(tok))}
     arrays = (frozenset(n for n, unused in pairs if ranks.get(n, 1) >= 1) | frozenset(seed)) - symbols
     table: dict[str, tuple[str, ...]] = {k: tuple(v) for k, v in seed.items()}
-    for unused in range(8):
+    for unused in range(FIXPOINT_ROUNDS):
         changed = False
         for name, value in pairs:
             if name in seed:
@@ -568,7 +570,7 @@ def rank_table(tree: ast.AST, seed: dict[str, int], call_returns: dict[str, int]
     ranks = dict(seed)
     # The tree does not change while the table converges: index its bindings once, not every round.
     bindings, first_values = name_binding_index(tree)
-    for unused in range(8):
+    for unused in range(FIXPOINT_ROUNDS):
         changed = False
         active_tuple_lengths = tuple_lengths(bindings, first_values, ranks, seed)
         for name, value in bindings:
@@ -607,7 +609,7 @@ def drop_rank_conflicts(tree: ast.AST, ranks: dict[str, int], seed: dict[str, in
             ranks.pop(name, None)
 
 
-def int_expr(value: ast.AST, ranks: dict[str, int], seed_ranks: dict[str, int] | None = None) -> int | None:
+def int_expr(value: ast.expr, ranks: dict[str, int], seed_ranks: dict[str, int] | None = None) -> int | None:
     """Evaluate a small integer expression used as a tuple length or repeat count: constants, names (array
     rank), ``arr.ndim``, unary minus and ``+ - * / //``.
 
@@ -642,7 +644,7 @@ def int_expr(value: ast.AST, ranks: dict[str, int], seed_ranks: dict[str, int] |
 
 
 def tuple_expr_len(
-    value: ast.AST,
+    value: ast.expr,
     ranks: dict[str, int],
     assigns: dict[str, ast.expr],
     visited: set[str] | None = None,
@@ -729,7 +731,7 @@ def tuple_lengths(
     return lengths
 
 
-def tuple_valued(value: ast.AST, assigns: dict[str, ast.expr], visited: frozenset[str] = frozenset()) -> bool:
+def tuple_valued(value: ast.expr, assigns: dict[str, ast.expr], visited: frozenset[str] = frozenset()) -> bool:
     """True iff ``value`` is one of the tuple forms :func:`tuple_expr_len` sizes, whether or not its
     length is known yet: ``shp = Y.shape`` is a tuple before ``Y`` has a rank, never one dimension.
     """
@@ -776,8 +778,8 @@ def return_rank(fn: ast.FunctionDef, ranks: dict[str, int], seed_ranks: dict[str
     active_tuple_lengths = build_tuple_lengths(fn, ranks, seed_ranks=seed_ranks)
     try:
         rs = [expr_rank(n.value, ranks) for n in ast.walk(fn) if isinstance(n, ast.Return) and n.value is not None]
-        rs = [r for r in rs if r is not None]
-        return max(rs) if rs else None
+        known = [r for r in rs if r is not None]
+        return max(known) if known else None
     finally:
         active_tuple_lengths = prev
 
@@ -794,7 +796,7 @@ def infer_param_ranks(
     params = {fn.name: [a.arg for a in fn.args.args] for fn in funcs}
     seeds: dict[str, dict[str, int]] = {fn.name: dict(param_body_rank_evidence(fn)) for fn in funcs}
     ret_rank: dict[str, int] = {}
-    for unused in range(6):
+    for unused in range(CALL_GRAPH_ROUNDS):
         changed = False
         for fn in funcs:
             base = dict(seeds[fn.name])

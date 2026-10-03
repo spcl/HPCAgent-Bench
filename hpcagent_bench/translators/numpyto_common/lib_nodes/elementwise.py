@@ -1,7 +1,7 @@
 """Elementwise ufuncs (arithmetic, comparisons, logic, libm calls), clip and where."""
 
 import ast
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 
 from hpcagent_bench.translators.numpyto_common.ast_build import name_
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import (
@@ -10,12 +10,11 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import (
     broadcast_extents,
     iter_extent_of,
 )
-from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import cmp_, wrap_for_loops
+from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import cmp_, first_name, wrap_for_loops
 from hpcagent_bench.translators.numpyto_common.lib_nodes.scalarize import scalarize_at_iters
 
 __all__ = [
     "UNARY_C_MATH",
-    "args_one_name",
     "binary_call_expander",
     "expand_add",
     "expand_clip",
@@ -50,8 +49,8 @@ __all__ = [
 
 
 def expand_elementwise(
-    target: ast.expr,
-    args: list[ast.expr],
+    target: ast.Name,
+    args: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     op_fn: Callable[[ast.expr, ast.expr], ast.expr],
 ) -> list[ast.stmt]:
@@ -74,14 +73,14 @@ def expand_elementwise(
     # missing leading axis with a constant 0.
     ea = iter_extent_of(a, shape_table)
     eb = iter_extent_of(b, shape_table)
-    if ea is None and eb is None:
-        raise NotImplementedError("elementwise: extent unknown for both args")
     if ea is None:
         extent = eb
     elif eb is None:
         extent = ea
     else:
         extent = broadcast_extents(ea, eb)
+    if extent is None:
+        raise NotImplementedError("elementwise: extent unknown for both args")
     iters = [name_(f"__r{i}") for i in range(len(extent))]
 
     # Constants / scalar Names broadcast; arrays scalarize.
@@ -95,29 +94,29 @@ def expand_elementwise(
     sa = maybe_scalar(a)
     sb = maybe_scalar(b)
     idx = iters[0] if len(iters) == 1 else ast.Tuple(elts=list(iters), ctx=ast.Load())
-    body = [
+    body: list[ast.stmt] = [
         ast.Assign(targets=[ast.Subscript(value=name_(target.id), slice=idx, ctx=ast.Store())], value=op_fn(sa, sb))
     ]
     return wrap_for_loops([i.id for i in iters], extent, body)
 
 
-def expand_minimum(t: ast.expr, a: list[ast.expr], s: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
+def expand_minimum(t: ast.Name, a: Sequence[ast.expr], s: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
     return expand_elementwise(t, a, s, lambda x, y: ast.Call(func=name_("min"), args=[x, y], keywords=[]))
 
 
-def expand_maximum(t: ast.expr, a: list[ast.expr], s: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
+def expand_maximum(t: ast.Name, a: Sequence[ast.expr], s: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
     return expand_elementwise(t, a, s, lambda x, y: ast.Call(func=name_("max"), args=[x, y], keywords=[]))
 
 
-def expand_add(t: ast.expr, a: list[ast.expr], s: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
+def expand_add(t: ast.Name, a: Sequence[ast.expr], s: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
     return expand_elementwise(t, a, s, lambda x, y: ast.BinOp(left=x, op=ast.Add(), right=y))
 
 
-def expand_multiply(t: ast.expr, a: list[ast.expr], s: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
+def expand_multiply(t: ast.Name, a: Sequence[ast.expr], s: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
     return expand_elementwise(t, a, s, lambda x, y: ast.BinOp(left=x, op=ast.Mult(), right=y))
 
 
-def expand_power(t: ast.expr, a: list[ast.expr], s: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
+def expand_power(t: ast.Name, a: Sequence[ast.expr], s: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
     """``out = np.power(a, b)`` -> per-element ``a[i] ** b[i]``.
 
     A ``**`` BinOp, NOT a bare ``pow(...)`` call: each backend's ``**`` routing already
@@ -127,13 +126,13 @@ def expand_power(t: ast.expr, a: list[ast.expr], s: dict[str, tuple[str, ...]]) 
     return expand_elementwise(t, a, s, lambda x, y: ast.BinOp(left=x, op=ast.Pow(), right=y))
 
 
-def expand_subtract(t: ast.expr, a: list[ast.expr], s: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
+def expand_subtract(t: ast.Name, a: Sequence[ast.expr], s: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
     return expand_elementwise(t, a, s, lambda x, y: ast.BinOp(left=x, op=ast.Sub(), right=y))
 
 
 def expand_divide(
-    target: ast.expr,
-    args: list[ast.expr],
+    target: ast.Name,
+    args: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     local_dtypes: dict[str, str] | None = None,
 ) -> list[ast.stmt]:
@@ -153,83 +152,79 @@ def expand_divide(
     return expand_elementwise(target, args, shape_table, op_fn)
 
 
-def expand_less(t: ast.expr, a: list[ast.expr], s: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
+def expand_less(t: ast.Name, a: Sequence[ast.expr], s: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
     return expand_elementwise(t, a, s, cmp_(ast.Lt))
 
 
-def expand_less_equal(t: ast.expr, a: list[ast.expr], s: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
+def expand_less_equal(t: ast.Name, a: Sequence[ast.expr], s: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
     return expand_elementwise(t, a, s, cmp_(ast.LtE))
 
 
-def expand_greater(t: ast.expr, a: list[ast.expr], s: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
+def expand_greater(t: ast.Name, a: Sequence[ast.expr], s: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
     return expand_elementwise(t, a, s, cmp_(ast.Gt))
 
 
-def expand_greater_equal(t: ast.expr, a: list[ast.expr], s: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
+def expand_greater_equal(t: ast.Name, a: Sequence[ast.expr], s: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
     return expand_elementwise(t, a, s, cmp_(ast.GtE))
 
 
-def expand_equal(t: ast.expr, a: list[ast.expr], s: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
+def expand_equal(t: ast.Name, a: Sequence[ast.expr], s: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
     return expand_elementwise(t, a, s, cmp_(ast.Eq))
 
 
-def expand_not_equal(t: ast.expr, a: list[ast.expr], s: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
+def expand_not_equal(t: ast.Name, a: Sequence[ast.expr], s: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
     return expand_elementwise(t, a, s, cmp_(ast.NotEq))
 
 
-def expand_logical_and(t: ast.expr, a: list[ast.expr], s: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
+def expand_logical_and(t: ast.Name, a: Sequence[ast.expr], s: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
     return expand_elementwise(t, a, s, lambda x, y: ast.BoolOp(op=ast.And(), values=[x, y]))
 
 
-def expand_logical_or(t: ast.expr, a: list[ast.expr], s: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
+def expand_logical_or(t: ast.Name, a: Sequence[ast.expr], s: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
     return expand_elementwise(t, a, s, lambda x, y: ast.BoolOp(op=ast.Or(), values=[x, y]))
 
 
 def expand_logical_not(
-    target: ast.expr, args: list[ast.expr], shape_table: dict[str, tuple[str, ...]]
+    target: ast.Name, args: Sequence[ast.expr], shape_table: dict[str, tuple[str, ...]]
 ) -> list[ast.stmt]:
     """``out = np.logical_not(a)`` -> per-element ``out[i] = not a[i]``."""
     return unary_elementwise(target, args, shape_table, lambda x: ast.UnaryOp(op=ast.Not(), operand=x))
 
 
-def expand_negative(t: ast.expr, a: list[ast.expr], s: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
+def expand_negative(t: ast.Name, a: Sequence[ast.expr], s: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
     """``out = np.negative(a)`` -> ``out[i] = -a[i]``."""
-    if not args_one_name(a):
+    if first_name(a) is None:
         raise NotImplementedError("np.negative needs a Name arg")
     return unary_elementwise(t, a, s, lambda x: ast.UnaryOp(op=ast.USub(), operand=x))
 
 
-def expand_tanh(t: ast.expr, a: list[ast.expr], s: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
+def expand_tanh(t: ast.Name, a: Sequence[ast.expr], s: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
     return unary_elementwise(t, a, s, lambda x: ast.Call(func=name_("tanh"), args=[x], keywords=[]))
 
 
-def expand_sin_arr(t: ast.expr, a: list[ast.expr], s: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
+def expand_sin_arr(t: ast.Name, a: Sequence[ast.expr], s: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
     return unary_elementwise(t, a, s, lambda x: ast.Call(func=name_("sin"), args=[x], keywords=[]))
 
 
-def expand_cos_arr(t: ast.expr, a: list[ast.expr], s: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
+def expand_cos_arr(t: ast.Name, a: Sequence[ast.expr], s: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
     return unary_elementwise(t, a, s, lambda x: ast.Call(func=name_("cos"), args=[x], keywords=[]))
 
 
-def expand_exp_arr(t: ast.expr, a: list[ast.expr], s: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
+def expand_exp_arr(t: ast.Name, a: Sequence[ast.expr], s: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
     return unary_elementwise(t, a, s, lambda x: ast.Call(func=name_("exp"), args=[x], keywords=[]))
 
 
-def expand_log_arr(t: ast.expr, a: list[ast.expr], s: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
+def expand_log_arr(t: ast.Name, a: Sequence[ast.expr], s: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
     return unary_elementwise(t, a, s, lambda x: ast.Call(func=name_("log"), args=[x], keywords=[]))
 
 
-def expand_sqrt_arr(t: ast.expr, a: list[ast.expr], s: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
+def expand_sqrt_arr(t: ast.Name, a: Sequence[ast.expr], s: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
     return unary_elementwise(t, a, s, lambda x: ast.Call(func=name_("sqrt"), args=[x], keywords=[]))
 
 
-def args_one_name(args: list[ast.expr]) -> bool:
-    return args and isinstance(args[0], ast.Name)
-
-
 def unary_elementwise(
-    target: ast.expr,
-    args: list[ast.expr],
+    target: ast.Name,
+    args: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     op_fn: Callable[[ast.expr], ast.expr],
 ) -> list[ast.stmt]:
@@ -247,19 +242,21 @@ def unary_elementwise(
     iters = [name_(f"__r{i}") for i in range(len(extent))]
     sa = scalarize_at_iters(a, iters, shape_table)
     idx = iters[0] if len(iters) == 1 else ast.Tuple(elts=list(iters), ctx=ast.Load())
-    body = [ast.Assign(targets=[ast.Subscript(value=name_(target.id), slice=idx, ctx=ast.Store())], value=op_fn(sa))]
+    body: list[ast.stmt] = [
+        ast.Assign(targets=[ast.Subscript(value=name_(target.id), slice=idx, ctx=ast.Store())], value=op_fn(sa))
+    ]
     return wrap_for_loops([i.id for i in iters], extent, body)
 
 
-def expand_clip(target: ast.expr, args: list[ast.expr], shape_table: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
+def expand_clip(target: ast.Name, args: Sequence[ast.expr], shape_table: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
     """``out = np.clip(a, lo, hi)`` -> ``out[i] = min(hi, max(lo, a[i]))``. numpy
     defines clip as ``minimum(a_max, maximum(a, a_min))``, so a degenerate
     ``lo > hi`` resolves to hi -- matched by the outer ``min`` (the reversed
     order would return ``lo`` instead).
     """
-    if len(args) != 3 or not isinstance(args[0], ast.Name):
+    a = first_name(args)
+    if len(args) != 3 or a is None:
         raise NotImplementedError("np.clip needs Name + 2 scalar args")
-    a = args[0]
     shape = shape_table.get(a.id)
     if not shape:
         raise NotImplementedError("np.clip: shape unknown")
@@ -269,11 +266,13 @@ def expand_clip(target: ast.expr, args: list[ast.expr], shape_table: dict[str, t
     clamped = ast.Call(
         func=name_("min"), args=[args[2], ast.Call(func=name_("max"), args=[args[1], a_sub], keywords=[])], keywords=[]
     )
-    body = [ast.Assign(targets=[ast.Subscript(value=name_(target.id), slice=idx, ctx=ast.Store())], value=clamped)]
+    body: list[ast.stmt] = [
+        ast.Assign(targets=[ast.Subscript(value=name_(target.id), slice=idx, ctx=ast.Store())], value=clamped)
+    ]
     return wrap_for_loops(iters, shape, body)
 
 
-def expand_where(target: ast.expr, args: list[ast.expr], shape_table: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
+def expand_where(target: ast.Name, args: Sequence[ast.expr], shape_table: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
     """``out = np.where(cond, a, b)`` -> elementwise ternary. ``cond`` may be a
     bare mask Name or a whole-array comparison (lulesh's BC selection ``sel ==
     XI_M_SYMM``); ``a``/``b`` may be a Name or any whole-array expression (incl.
@@ -296,7 +295,9 @@ def expand_where(target: ast.expr, args: list[ast.expr], shape_table: dict[str, 
         return scalarize_at_iters(arg, iter_nodes, shape_table)
 
     ternary = ast.IfExp(test=maybe_sub(args[0]), body=maybe_sub(args[1]), orelse=maybe_sub(args[2]))
-    body = [ast.Assign(targets=[ast.Subscript(value=name_(target.id), slice=idx, ctx=ast.Store())], value=ternary)]
+    body: list[ast.stmt] = [
+        ast.Assign(targets=[ast.Subscript(value=name_(target.id), slice=idx, ctx=ast.Store())], value=ternary)
+    ]
     return wrap_for_loops(iters, shape, body)
 
 
@@ -365,7 +366,7 @@ def binary_call_expander(c_name: str) -> Callable:
     call (``np.arctan2(a, b)`` -> ``out[i] = atan2(a[i], b[i])``).
     Broadcasts a scalar second operand. Mirrors :func:`expand_power`."""
 
-    def expand_(target: ast.expr, args: list[ast.expr], shape_table: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
+    def expand_(target: ast.Name, args: Sequence[ast.expr], shape_table: dict[str, tuple[str, ...]]) -> list[ast.stmt]:
         if len(args) != 2:
             raise NotImplementedError(f"np.{c_name} needs 2 args")
         a, b = args

@@ -3,12 +3,12 @@
 import ast
 import copy
 import inspect
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING
 
 from hpcagent_bench.translators.numpyto_common.ast_build import const_int, store_
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
-from hpcagent_bench.translators.numpyto_common.ir import tag_numpy_origin
+from hpcagent_bench.translators.numpyto_common.ir import SparseArrayDesc, tag_numpy_origin
 from hpcagent_bench.translators.numpyto_common.lib_nodes.call_hoist import CallHoister, numpy_call_key
 from hpcagent_bench.translators.numpyto_common.lib_nodes.dims import NP_ZEROS_ALIASES
 from hpcagent_bench.translators.numpyto_common.lib_nodes.elementwise import UNARY_C_MATH
@@ -42,7 +42,7 @@ if TYPE_CHECKING:
 def call_expander(
     expander: Callable,
     target: ast.expr,
-    args: list[ast.expr],
+    args: Sequence[ast.expr],
     keywords: list[ast.keyword],
     shape_table: dict[str, tuple[str, ...]],
     local_dtypes: dict[str, str] | None = None,
@@ -181,6 +181,8 @@ def reduction_misses_target(target: ast.Subscript, loop: ast.For, body: ast.expr
     runs from ``i + 1``, so the accumulating cell is never read back. ``symm``
     takes the first (``temp2`` is write-only in the body).
     """
+    if not isinstance(target.value, ast.Name):
+        return False
     base = target.value.id
     mentions = [n for n in ast.walk(body) if isinstance(n, ast.Name) and n.id == base]
     if not mentions:
@@ -198,6 +200,7 @@ def reduction_misses_target(target: ast.Subscript, loop: ast.For, body: ast.expr
         and isinstance(loop.iter.func, ast.Name)
         and loop.iter.func.id == "range"
         and len(loop.iter.args) == 1
+        and isinstance(loop.target, ast.Name)
     ):
         return False
     # Deferred: sympy import costs ~100s of ms and only this narrow shape needs it.
@@ -210,8 +213,10 @@ def reduction_misses_target(target: ast.Subscript, loop: ast.For, body: ast.expr
         if read_axes is None or len(read_axes) != len(axes):
             return False
         try:
+            # the sympy stubs' ``sympify`` overloads omit the ``locals`` parameter
             diffs = [
-                sympy.sympify(r, locals={iter_name: it}) - sympy.sympify(t, locals={iter_name: it})
+                sympy.sympify(r, locals={iter_name: it})  # pyright: ignore[reportCallIssue]
+                - sympy.sympify(t, locals={iter_name: it})  # pyright: ignore[reportCallIssue]
                 for r, t in zip(read_axes, axes)
             ]
         except (SyntaxError, TypeError, AttributeError, ValueError, sympy.SympifyError):
@@ -242,7 +247,7 @@ def accumulation_addend(step: ast.stmt, scalar: str) -> ast.expr | None:
     return None
 
 
-def retarget_scalar_accumulator(node: ast.stmt, prelude: list[ast.stmt]) -> list[ast.stmt] | None:
+def retarget_scalar_accumulator(node: ast.stmt, prelude: Sequence[ast.stmt]) -> list[ast.stmt] | None:
     """Fold ``s = 0.0; for k: s += f(k); T[idx] (+)= s`` into an in-place
     reduction on ``T[idx]``, dropping the scalar. Returns ``None`` when the
     statement is not that shape.
@@ -259,17 +264,23 @@ def retarget_scalar_accumulator(node: ast.stmt, prelude: list[ast.stmt]) -> list
     the transformed output entirely (POLYCC-009), so the same fold is what keeps a full
     ``np.sum`` into an array cell computing at all.
     """
-    if len(prelude) < 2 or not isinstance(node.value, ast.Name):
+    if len(prelude) < 2:
         return None
-    augmented = isinstance(node, ast.AugAssign)
-    if augmented:
+    target: ast.expr
+    if isinstance(node, ast.AugAssign):
         if not isinstance(node.op, ast.Add):
             return None
+        augmented = True
         target = node.target
-    else:
+    elif isinstance(node, ast.Assign):
         if len(node.targets) != 1:
             return None
+        augmented = False
         target = node.targets[0]
+    else:
+        return None
+    if not isinstance(node.value, ast.Name):
+        return None
     # A single cell is the whole point: a slice destination is a different lowering
     # (slice fusion) and would not give pet the affine reduction carrier we are after.
     if not (
@@ -304,10 +315,10 @@ def retarget_scalar_accumulator(node: ast.stmt, prelude: list[ast.stmt]) -> list
     # An ``AugAssign`` target already holds the running value: zero-initialising
     # it would drop what the reduction must add to.
     if augmented:
-        return prelude[:-2] + [loop]
+        return [*prelude[:-2], loop]
     zero = copy.deepcopy(target)
     zero.ctx = ast.Store()
-    return prelude[:-2] + [ast.Assign(targets=[zero], value=const_(0.0)), loop]
+    return [*prelude[:-2], ast.Assign(targets=[zero], value=const_(0.0)), loop]
 
 
 class LibNodeRewriter(ast.NodeTransformer):
@@ -322,12 +333,30 @@ class LibNodeRewriter(ast.NodeTransformer):
     matmul-hoisted/scalarised.
     """
 
+    __slots__ = (
+        "_counter",
+        "blas",
+        "dim_aliases",
+        "fft_library",
+        "fft_library_nd",
+        "fresh_local_allocs",
+        "known_arrays",
+        "local_dtypes",
+        "matmul_temps",
+        "native_call",
+        "native_dtypes",
+        "scalar_call_temps",
+        "scalar_helpers",
+        "shape_table",
+        "sparse",
+    )
+
     def __init__(
         self,
         shape_table: dict[str, tuple[str, ...]],
         known_arrays: set[str] | None = None,
         local_dtypes: dict[str, str] | None = None,
-        sparse: dict[str, object] | None = None,
+        sparse: dict[str, SparseArrayDesc] | None = None,
         dim_aliases: dict[str, str] | None = None,
         native_call: Callable[[tuple[str, str], ast.Call, dict, dict], bool] | None = None,
         native_dtypes: dict[str, str] | None = None,
@@ -365,7 +394,7 @@ class LibNodeRewriter(ast.NodeTransformer):
         self.dim_aliases: dict[str, str] = dim_aliases or {}
         #: Logical-name -> SparseArrayDesc, threaded to the matmul hoister so
         #: ``A @ B`` on sparse operands routes to the per-format sparse emitter.
-        self.sparse: dict[str, object] = sparse or {}
+        self.sparse: dict[str, SparseArrayDesc] = sparse or {}
         #: Names already known as signature-declared arrays (kernel
         #: parameters/outputs) -- the auto-alloc path skips these to avoid
         #: re-declaring an already-declared input.
@@ -436,28 +465,31 @@ class LibNodeRewriter(ast.NodeTransformer):
             if rhs_dt and target_id not in self.local_dtypes:
                 self.local_dtypes[target_id] = rhs_dt
             return
+        rhs_call = rhs if isinstance(rhs, ast.Call) else None
         np_attr = (
-            rhs.func.attr
-            if isinstance(rhs, ast.Call) and isinstance(rhs.func, ast.Attribute) and is_numpy_module(rhs.func.value)
+            rhs_call.func.attr
+            if rhs_call is not None
+            and isinstance(rhs_call.func, ast.Attribute)
+            and is_numpy_module(rhs_call.func.value)
             else None
         )
-        if np_attr in NP_ZEROS_ALIASES:
+        if rhs_call is not None and np_attr is not None and np_attr in NP_ZEROS_ALIASES:
             # The ZerosRewriter owns the ALLOCATION, in a later phase. The _like forms still publish
             # their EXTENT here: the source array's shape may only become known during this pass
             # (``scaled = np.zeros_like(bu)`` with ``bu`` an eigh output this rewriter expands), and a
             # local with no shape declines every matmul it feeds.
-            if np_attr.endswith("_like") and rhs.args and isinstance(rhs.args[0], ast.Name):
-                src = self.shape_table.get(rhs.args[0].id)
+            if np_attr.endswith("_like") and rhs_call.args and isinstance(rhs_call.args[0], ast.Name):
+                src = self.shape_table.get(rhs_call.args[0].id)
                 if src is not None:
                     self.shape_table[target_id] = tuple(src)
             return
-        if np_attr in {"reshape", "repeat", "transpose"}:
+        if rhs_call is not None and np_attr in {"reshape", "repeat", "transpose"}:
             # Shape-CHANGING ops: ``iter_extent_of`` would report the source operand's extent. A
             # reshape with a readable newshape publishes it; otherwise (and for repeat/transpose)
             # the dedicated expander plus the harvested declaration shape are authoritative --
             # never downgrade a known shape from the source operand's extent.
-            if np_attr == "reshape" and len(rhs.args) >= 2:
-                toks = self.reshape_result_tokens(rhs)
+            if np_attr == "reshape" and len(rhs_call.args) >= 2:
+                toks = self.reshape_result_tokens(rhs_call)
                 if toks is not None:
                     self.shape_table[target_id] = toks
             return
@@ -507,7 +539,7 @@ class LibNodeRewriter(ast.NodeTransformer):
         if target_id not in self.local_dtypes and reads_complex(rhs, self.local_dtypes):
             self.local_dtypes[target_id] = "complex128"
 
-    def visit_Assign(self, node: ast.Assign) -> ast.AST:
+    def visit_Assign(self, node: ast.Assign) -> ast.AST | list[ast.stmt]:
         # Captured BEFORE any rewriting: once the RHS is hoisted its arguments are temps, and the
         # note is meant to read as the numpy the kernel was written in.
         numpy_text = ast.unparse(node.value)
@@ -524,17 +556,17 @@ class LibNodeRewriter(ast.NodeTransformer):
             self.update_shape_for_assign(node.targets[0].id, node.value)
         self.propagate_alias(node)
         if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name) and isinstance(node.value, ast.Call):
-            lowered = self.expand_call_assign(node, prelude, numpy_text)
+            lowered = self.expand_call_assign(node, node.targets[0], node.value, prelude, numpy_text)
             if lowered is not None:
                 return lowered
         expanded = self.expand_slice_target_call(node)
         if expanded is not None:
-            return prelude + expanded
+            return [*prelude, *expanded]
         retargeted = retarget_scalar_accumulator(node, prelude)
         if retargeted is not None:
             return retargeted
         if prelude:
-            return prelude + [node]
+            return [*prelude, node]
         return node
 
     def propagate_alias(self, node: ast.Assign) -> None:
@@ -553,24 +585,23 @@ class LibNodeRewriter(ast.NodeTransformer):
                 self.local_dtypes[node.targets[0].id] = rhs_dt
 
     def expand_call_assign(
-        self, node: ast.Assign, prelude: list[ast.stmt], numpy_text: str
+        self, node: ast.Assign, target: ast.Name, call: ast.Call, prelude: Sequence[ast.stmt], numpy_text: str
     ) -> ast.Assign | list[ast.stmt] | None:
         """``name = np.<call>(...)`` through its registered expander: the node itself when the target
         renders the call natively, the prelude plus the expansion, or None (no expander, or it
         declined) to fall through."""
-        target = node.targets[0]
-        key = numpy_call_key(node.value)
+        key = numpy_call_key(call)
         expander = NP_CALL_EXPANDERS.get(key) if key else None
         if expander is None:
             return None
-        if self.target_renders(key, node.value):
+        if self.target_renders(key, call):
             return node
         try:
             expanded = call_expander(
                 expander,
                 target,
-                node.value.args,
-                node.value.keywords,
+                call.args,
+                call.keywords,
                 self.shape_table,
                 local_dtypes=self.local_dtypes,
                 fresh_local_allocs=self.fresh_local_allocs,
@@ -589,17 +620,17 @@ class LibNodeRewriter(ast.NodeTransformer):
             # fn-top-malloc'd local, so it is emitted unconditionally (as ``prepend_alloc_markers``
             # does for matmul temps).
             self.fresh_local_allocs.setdefault(target.id, tuple(self.shape_table[target.id]))
-            prelude = prelude + [alloc_marker(target.id)]
+            prelude = [*prelude, alloc_marker(target.id)]
         # ``np.arange`` over integer bounds yields an integer iota (numpy intp) -- int64, so a gather
         # index built from it (``q = j % nx``) is integer, not the float default.
         if (
             key == ("np", "arange")
             and target.id not in self.local_dtypes
-            and all(is_integer_expr(a, self.local_dtypes) for a in node.value.args)
+            and all(is_integer_expr(a, self.local_dtypes) for a in call.args)
         ):
             self.local_dtypes[target.id] = "int64"
         tag_numpy_origin(expanded, numpy_text)
-        return prelude + expanded
+        return [*prelude, *expanded]
 
     def expand_slice_target_call(self, node: ast.Assign) -> list[ast.stmt] | None:
         """A cumulative scan into a partial-slice target (``row_offsets[1:] = np.cumsum(m_sizes)``):
@@ -640,7 +671,7 @@ class LibNodeRewriter(ast.NodeTransformer):
             return False
         return self.native_call(key, call, self.shape_table, self.native_dtypes)
 
-    def lower_prelude_calls(self, prelude: list[ast.stmt]) -> list[ast.stmt]:
+    def lower_prelude_calls(self, prelude: Sequence[ast.stmt]) -> list[ast.stmt]:
         """Recursively lower any registered-call assigns inside the prelude
         that the call-hoister produced. The hoister synthesises ``__cb<n> =
         np.<op>(args)`` statements, each an Assign-to-Name with a registered
@@ -706,10 +737,10 @@ class LibNodeRewriter(ast.NodeTransformer):
             out.append(stmt)
         return out
 
-    def flatten_visit_list(self, stmts: list[ast.stmt]) -> list[ast.stmt]:
+    def flatten_visit_list(self, stmts: Sequence[ast.stmt]) -> list[ast.stmt]:
         """Visit each stmt; flatten any nested lists returned by visits
         (visit_Assign can return ``[prelude..., assign]`` lists)."""
-        out = []
+        out: list[ast.stmt] = []
         for s in stmts:
             r = self.visit(s)
             if isinstance(r, list):
@@ -718,7 +749,13 @@ class LibNodeRewriter(ast.NodeTransformer):
                 out.append(r)
         return out
 
-    def visit_If(self, node: ast.If) -> ast.AST:
+    def visit_If(self, node: ast.If) -> ast.AST | list[ast.stmt]:
+        return self.hoist_test_call(node)
+
+    def visit_While(self, node: ast.While) -> ast.AST | list[ast.stmt]:
+        return self.hoist_test_call(node)
+
+    def hoist_test_call(self, node: ast.If | ast.While) -> ast.AST | list[ast.stmt]:
         """Hoist any registered ``np.X(...)`` call inside the ``if`` test
         expression -- the common iterative-solver pattern ``if
         np.linalg.norm(r) < tol: break`` puts the call on the Compare LHS,
@@ -729,12 +766,10 @@ class LibNodeRewriter(ast.NodeTransformer):
         node.test, prelude = self.hoist_value(node.test)
         prelude = self.lower_prelude_calls(prelude)
         if prelude:
-            return prelude + [node]
+            return [*prelude, node]
         return node
 
-    visit_While = visit_If
-
-    def visit_AugAssign(self, node: ast.AugAssign) -> ast.AST:
+    def visit_AugAssign(self, node: ast.AugAssign) -> ast.AST | list[ast.stmt]:
         self.generic_visit(node)
         node.value, prelude = self.hoist_value(node.value)
         prelude = self.lower_prelude_calls(prelude)
@@ -742,7 +777,7 @@ class LibNodeRewriter(ast.NodeTransformer):
         if retargeted is not None:
             return retargeted
         if prelude:
-            return prelude + [node]
+            return [*prelude, node]
         return node
 
 

@@ -1,6 +1,7 @@
 """Harvest local array shapes from constructor assignments."""
 
 import ast
+from collections.abc import Sequence
 from types import NotImplementedType
 
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module, numpy_submodule_attr
@@ -70,6 +71,8 @@ def substitute_ints(token: str, values: dict[str, int]) -> str:
     """``token`` with each named scalar replaced by its assumed integer value."""
 
     class Sub_(ast.NodeTransformer):
+        __slots__ = ()
+
         def visit_Name(self, node: ast.Name) -> ast.AST:
             if node.id not in values:
                 return node
@@ -115,7 +118,7 @@ def ctor_shape_arg(call: ast.Call) -> ast.expr | None:
     return None
 
 
-def is_scalar_helper_call(node: ast.AST, scalar_helpers: set[str] | None) -> bool:
+def is_scalar_helper_call(node: ast.expr, scalar_helpers: set[str] | None) -> bool:
     """Whether ``node`` calls a kernel helper emitted as a by-value SCALAR function.
 
     Such a call is rank 0 whatever its arguments are. :func:`iter_extent_of` reads a call it does
@@ -124,7 +127,7 @@ def is_scalar_helper_call(node: ast.AST, scalar_helpers: set[str] | None) -> boo
     call over that buffer, one invocation per element.
     """
     return (
-        bool(scalar_helpers)
+        scalar_helpers is not None
         and isinstance(node, ast.Call)
         and isinstance(node.func, ast.Name)
         and node.func.id in scalar_helpers
@@ -211,7 +214,7 @@ def harvest_assign(
     # matches: register what the solve / inv / cholesky expanders write -- ``solve`` returns x with
     # b's shape (not the square A's); ``inv`` / ``cholesky`` are shape-preserving.
     linalg_op = numpy_submodule_attr(rhs, "linalg")
-    if linalg_op in ("solve", "inv", "cholesky"):
+    if linalg_op in ("solve", "inv", "cholesky") and isinstance(rhs, ast.Call):
         source_arg = rhs.args[1] if linalg_op == "solve" and len(rhs.args) >= 2 else (rhs.args[0] if rhs.args else None)
         if isinstance(source_arg, ast.Name):
             linalg_source_shape = shape_table.get(source_arg.id)
@@ -219,7 +222,7 @@ def harvest_assign(
                 shape_table[target_id] = tuple(linalg_source_shape)
         return
     if isinstance(rhs, ast.Call) and isinstance(rhs.func, ast.Attribute) and is_numpy_module(rhs.func.value):
-        harvest_np_call(target_id, rhs, shape_table, dtype_table)
+        harvest_np_call(target_id, rhs, rhs.func.attr, shape_table, dtype_table)
         return
     if is_scalar_helper_call(rhs, scalar_helpers):
         return
@@ -239,7 +242,11 @@ def harvest_assign(
 
 
 def harvest_np_call(
-    target_id: str, rhs: ast.Call, shape_table: dict[str, tuple[str, ...]], dtype_table: dict[str, str] | None
+    target_id: str,
+    rhs: ast.Call,
+    attr: str,
+    shape_table: dict[str, tuple[str, ...]],
+    dtype_table: dict[str, str] | None,
 ) -> None:
     """``target = np.<attr>(...)``: its dtype from a ``dtype=`` hint, and the output shape the call
     determines from its args."""
@@ -247,9 +254,8 @@ def harvest_np_call(
         dt = dtype_from_constructor(rhs)
         if dt is not None:
             dtype_table[target_id] = dt
-    attr = rhs.func.attr
     if attr in NP_ZEROS_ALIASES:
-        harvest_zeros_like(target_id, rhs, shape_table)
+        harvest_zeros_like(target_id, rhs, attr, shape_table)
     elif (counted := counted_constructor_shape(attr, rhs.args)) is not UNHANDLED:
         if counted is not None:
             shape_table[target_id] = counted
@@ -267,7 +273,7 @@ def harvest_np_call(
         if src_shape:
             shape_table[target_id] = tuple(src_shape)
     elif attr == "transpose" and rhs.args and isinstance(rhs.args[0], ast.Name):
-        harvest_transpose(target_id, rhs, shape_table)
+        harvest_transpose(target_id, rhs.args[0], rhs, shape_table)
     elif target_id not in shape_table:
         # Any other ``np.<func>(...)`` whose result shape ``iter_extent_of`` derives: axis-aware
         # reductions (``rsq = np.sum(dpos * dpos, axis=2)``) and elementwise math wrapping one.
@@ -280,7 +286,7 @@ def harvest_np_call(
 UNHANDLED = NotImplemented
 
 
-def counted_constructor_shape(attr: str, args: list[ast.expr]) -> tuple[str, ...] | None | NotImplementedType:
+def counted_constructor_shape(attr: str, args: Sequence[ast.expr]) -> tuple[str, ...] | None | NotImplementedType:
     """The shape a constructor states in its count arguments: ``np.eye(M[, N])`` -> ``(M, M | N)``,
     ``np.linspace(start, stop, n)`` -> ``(n,)`` (numpy's default of 50 is refused by the expander),
     ``np.arange(stop)`` -> ``(stop,)`` (None for the multi-argument form), ``np.identity(n)`` ->
@@ -298,11 +304,10 @@ def counted_constructor_shape(attr: str, args: list[ast.expr]) -> tuple[str, ...
     return UNHANDLED
 
 
-def harvest_zeros_like(target_id: str, rhs: ast.Call, shape_table: dict[str, tuple[str, ...]]) -> None:
+def harvest_zeros_like(target_id: str, rhs: ast.Call, attr: str, shape_table: dict[str, tuple[str, ...]]) -> None:
     """``np.zeros_like(other)`` -> other's shape; ``np.zeros((N, M))`` / ``np.ndarray(shape=(N, M))`` ->
     the first positional arg or the ``shape=`` keyword: a tuple, a Name, an int, ``x.shape``, or a
     scalar ``arr.shape[i]`` (or arithmetic over it) resolved like a shape-tuple element."""
-    attr = rhs.func.attr
     if attr.endswith("_like") and rhs.args and isinstance(rhs.args[0], ast.Name):
         src_shape = shape_table.get(rhs.args[0].id)
         if src_shape:
@@ -326,9 +331,9 @@ def harvest_zeros_like(target_id: str, rhs: ast.Call, shape_table: dict[str, tup
         shape_table[target_id] = (resolve_shape_token(shape_arg, shape_table),)
 
 
-def harvest_transpose(target_id: str, rhs: ast.Call, shape_table: dict[str, tuple[str, ...]]) -> None:
+def harvest_transpose(target_id: str, source: ast.Name, rhs: ast.Call, shape_table: dict[str, tuple[str, ...]]) -> None:
     """``np.transpose(A[, axes])``: A's shape permuted, or reversed without an axes tuple."""
-    src_shape = shape_table.get(rhs.args[0].id)
+    src_shape = shape_table.get(source.id)
     if not src_shape:
         return
     if len(rhs.args) >= 2 and isinstance(rhs.args[1], ast.Tuple):
@@ -339,7 +344,7 @@ def harvest_transpose(target_id: str, rhs: ast.Call, shape_table: dict[str, tupl
         shape_table[target_id] = tuple(reversed(src_shape))
 
 
-def collect_dim_aliases(tree: ast.AST, array_names: set[str]) -> dict[str, str]:
+def collect_dim_aliases(tree: ast.FunctionDef, array_names: set[str]) -> dict[str, str]:
     """Map each DIMENSION local to its definition, for :func:`lib_nodes.dims_agree`.
 
     A kernel names its own dimensions off a parameter's shape -- ``batch, channels, h, w =

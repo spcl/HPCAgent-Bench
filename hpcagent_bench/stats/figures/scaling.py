@@ -46,24 +46,27 @@ An aggregate line is the GEOMEAN over the setup's kernels at that P with its 95%
 rule every ratio in this repo is summarized under.
 """
 
-import enum
 import dataclasses
+import enum
 import math
 import pathlib
 from collections.abc import Callable, Iterable, Sequence
+from typing import TypedDict
 
 import matplotlib.axes
 import matplotlib.figure
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 from matplotlib.lines import Line2D
 from matplotlib.ticker import FixedFormatter, FixedLocator, FuncFormatter, LogLocator, NullFormatter
+from matplotlib.typing import LineStyleType
 
 from hpcagent_bench import study_tags
 from hpcagent_bench.harness import metric
-from hpcagent_bench.stats import palette, summary
+from hpcagent_bench.stats import palette, population, summary
 from hpcagent_bench.stats import style as plotstyle
-from hpcagent_bench.stats.figures.helpers.series import TORCH_DIST_SETUP, series_style, torch_dist_style
+from hpcagent_bench.stats.figures.helpers.series import TORCH_DIST_SETUP, SeriesStyle, series_style, torch_dist_style
 
 __all__ = [
     "AGENT_LINE_SCALE",
@@ -91,6 +94,7 @@ __all__ = [
     "Curve",
     "Point",
     "Quantity",
+    "ReferenceStyle",
     "axis_label",
     "baseline_anchored",
     "canvas_height",
@@ -358,7 +362,7 @@ def place_legend(
     ``xlabel`` is one X label for every column, set between the tick labels and the legend."""
     width, body = (float(value) for value in fig.get_size_inches())
     below = max(plotstyle.below_protrusion_in(fig, ax) for ax in axes) + 0.04
-    label_in = type_.label_pt * 1.5 / 72.0 if xlabel else 0.0
+    label_in = type_.label_pt * 1.5 / plotstyle.POINTS_PER_INCH if xlabel else 0.0
     below += label_in
     height = plotstyle.legend_below(fig, handles, ncol=2, y=0.01, fontsize=type_.legend_pt, markerscale=1.0)
     top = fig.subplotpars.top * body
@@ -421,21 +425,21 @@ def scaling_rows(frame: pd.DataFrame) -> pd.DataFrame:
     """
     if frame.empty or not set(REQUIRED_COLUMNS) <= set(frame.columns):
         return frame.iloc[0:0]
-    rows = frame[frame["row_kind"].astype(str) == SCALING_RECORD].copy()
+    rows = frame.loc[frame["row_kind"].astype(str) == SCALING_RECORD].copy()
     if rows.empty:
         return rows
     setups = [str(setup) for setup in rows["setup"].tolist()]
     stated = rows["scaling_mode"].tolist() if "scaling_mode" in rows.columns else [""] * len(setups)
     rows["scaling_mode"] = [mode_of(setup, mode) for setup, mode in zip(setups, stated)]
-    rows = rows[rows["scaling_mode"].isin(MODES)]
+    rows = rows.loc[rows["scaling_mode"].isin(MODES)]
     if rows.empty or "ts_ms" not in rows.columns:
         return rows
     rows = baseline_anchored(rows)
     # A stamp that will not parse sorts oldest rather than dropping the row: an unstamped grade is
     # still a measurement, and it only loses to one that says it is newer.
-    rows["scaling_ts"] = pd.to_numeric(rows["ts_ms"], errors="coerce").fillna(0)
+    rows["scaling_ts"] = pd.Series(pd.to_numeric(population.series_of(rows, "ts_ms"), errors="coerce")).fillna(0)
     newest = rows.groupby(["setup", "kernel", "scaling_mode"])["scaling_ts"].transform("max")
-    return rows[rows["scaling_ts"] == newest].drop(columns=["scaling_ts"])
+    return rows.loc[rows["scaling_ts"] == newest].drop(columns=["scaling_ts"])
 
 
 def baseline_anchored(rows: pd.DataFrame) -> pd.DataFrame:
@@ -522,7 +526,8 @@ def curves(frame: pd.DataFrame) -> list[Curve]:
     if rows.empty:
         return []
     out: list[Curve] = []
-    for (setup, kernel, mode), group in rows.groupby(["setup", "kernel", "scaling_mode"], sort=True):
+    for key, group in rows.groupby(["setup", "kernel", "scaling_mode"], sort=True):
+        setup, kernel, mode = population.key_parts(key, 3)
         points: list[Point] = []
         dropped: list[tuple[int, str]] = []
         for index in range(len(group)):
@@ -656,8 +661,8 @@ def measured_axis(ax: matplotlib.axes.Axes, quantity: Quantity) -> None:
     if quantity == Quantity.SPEEDUP:
         # log10 with 1-2-5 ticks: anchored at PyTorch a speedup spans 0.002x-8x, and a log2 axis
         # labels every octave of that (0.0078x, 0.0156x, ...).
-        ax.set_yscale("log", base=10)
-        plotstyle.value_axis(ax, "y", log_base=10.0)
+        ax.set_yscale("log", base=plotstyle.LOG_BASE)
+        plotstyle.value_axis(ax, "y", log_base=plotstyle.LOG_BASE)
         ax.yaxis.set_major_formatter(FuncFormatter(lambda value, _: f"{value:g}x"))
         return
     ax.set_ylim(bottom=0.0)
@@ -671,9 +676,18 @@ RANK_MARGIN: float = 1.3
 IDEAL_LABEL: str = "Ideal Scaling of the PyTorch Baseline"
 
 
+class ReferenceStyle(TypedDict):
+    """The matplotlib keywords the ideal reference line is drawn with."""
+
+    color: str
+    linewidth: float
+    linestyle: LineStyleType
+    zorder: float
+
+
 def ideal_mark(ax: matplotlib.axes.Axes, quantity: Quantity, ranks: Sequence[int]) -> Line2D:
     """The ideal reference: eta = 1, or sigma = P. Returns its legend handle."""
-    style = {"color": plotstyle.REFERENCE, "linewidth": 1.1, "linestyle": (0, (4, 3)), "zorder": 2}
+    style: ReferenceStyle = {"color": plotstyle.REFERENCE, "linewidth": 1.1, "linestyle": (0, (4, 3)), "zorder": 2}
     if quantity == Quantity.EFFICIENCY:
         ax.axhline(1.0, **style)
         return Line2D([], [], label="Ideal (Efficiency = 1)", **style)
@@ -686,11 +700,11 @@ def ideal_mark(ax: matplotlib.axes.Axes, quantity: Quantity, ranks: Sequence[int
 def draw_series(
     ax: matplotlib.axes.Axes,
     points: dict[int, summary.Interval],
-    style: dict[str, object],
+    style: SeriesStyle,
     label: str,
     band: bool = True,
     type_: plotstyle.TypeScale = plotstyle.AUTHOR_SCALE,
-    linestyle: str = "-",
+    linestyle: LineStyleType = "-",
 ) -> None:
     """One series' line: the per-P geomean, its marks, and its interval as a band."""
     if not points:
@@ -830,7 +844,7 @@ def figure_speedup(
     type_: plotstyle.TypeScale = plotstyle.AUTHOR_SCALE,
 ) -> matplotlib.figure.Figure | None:
     """sigma(P) against P -- work-scaled on the weak panel -- with the ideal y = P line."""
-    return figure_modes(curves_, "speedup", width=width, type_=type_)
+    return figure_modes(curves_, Quantity.SPEEDUP, width=width, type_=type_)
 
 
 def figure_per_kernel(
@@ -881,13 +895,17 @@ def decade_ticks(ax: matplotlib.axes.Axes) -> None:
     one-inch panel, decades alone leave it bare. A panel whose fitted range (:func:`fit_y`) holds
     fewer than two of those gets the 1-2-5 ruling labelled instead, so every panel reads a scale."""
     # numticks set: the default ("auto") yields no ticks at all on a short panel spanning 4+ decades
-    ax.yaxis.set_major_locator(LogLocator(base=10.0, subs=(1.0, 3.0), numticks=40))
-    ax.yaxis.set_minor_locator(LogLocator(base=10.0, subs=(2.0, 5.0), numticks=40))
+    ax.yaxis.set_major_locator(LogLocator(base=plotstyle.LOG_BASE, subs=(1.0, 3.0), numticks=plotstyle.LOG_NUMTICKS))
+    ax.yaxis.set_minor_locator(LogLocator(base=plotstyle.LOG_BASE, subs=(2.0, 5.0), numticks=plotstyle.LOG_NUMTICKS))
     ax.yaxis.set_minor_formatter(NullFormatter())
     low, high = ax.get_ylim()
     if sum(low <= tick <= high for tick in ax.yaxis.get_majorticklocs()) < 2:
-        ax.yaxis.set_major_locator(LogLocator(base=10.0, subs=(1.0, 2.0, 5.0), numticks=40))
-        ax.yaxis.set_minor_locator(LogLocator(base=10.0, subs=(1.5, 3.0, 7.0), numticks=40))
+        ax.yaxis.set_major_locator(
+            LogLocator(base=plotstyle.LOG_BASE, subs=(1.0, 2.0, 5.0), numticks=plotstyle.LOG_NUMTICKS)
+        )
+        ax.yaxis.set_minor_locator(
+            LogLocator(base=plotstyle.LOG_BASE, subs=(1.5, 3.0, 7.0), numticks=plotstyle.LOG_NUMTICKS)
+        )
 
 
 #: Headroom around a panel's fitted Y range, as a factor on a log axis: the extreme marks stay whole.
@@ -897,9 +915,16 @@ Y_FIT_PAD: float = 1.12
 def fit_y(ax: matplotlib.axes.Axes) -> None:
     """Fit ``ax``'s log Y to what it draws: every line and band, padded by :data:`Y_FIT_PAD`, instead
     of the whole decades autoscaling rounds out to, which leave a small-range panel mostly empty."""
-    values = [float(y) for line in ax.get_lines() for y in line.get_ydata() if math.isfinite(float(y)) and y > 0]
+    values = [
+        float(y)
+        for line in ax.get_lines()
+        for y in np.asarray(line.get_ydata(), dtype=float)
+        if math.isfinite(y) and y > 0
+    ]
     for band in ax.collections:
-        values += [float(v) for path in band.get_paths() for v in path.vertices[:, 1] if math.isfinite(v) and v > 0]
+        values += [
+            float(v) for path in band.get_paths() for v in np.asarray(path.vertices)[:, 1] if math.isfinite(v) and v > 0
+        ]
     if values:
         ax.set_ylim(min(values) / Y_FIT_PAD, max(values) * Y_FIT_PAD)
 
@@ -958,7 +983,7 @@ def figure_mode_grid(
         decade_ticks(ax)
     # Room for the shared label's one line and no more: tight_layout's own pad would sit between it
     # and the row labels.
-    ylabel_in = type_.label_pt * 1.25 / 72.0
+    ylabel_in = type_.label_pt * 1.25 / plotstyle.POINTS_PER_INCH
     fig.tight_layout(pad=0.2, w_pad=0.15, h_pad=0.3, rect=(ylabel_in / width, 0.0, 1.0, 1.0))
     handles = [ideals[0], *series_handles(drawn, type_.line_width, counted=geomean_panel)]
     place_legend(fig, handles, list(axes[-1]), type_, xlabel="GPUs $P$")

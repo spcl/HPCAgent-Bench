@@ -40,7 +40,7 @@ def is_concurrent_schema_race(exc: OperationalError) -> bool:
 class Result(SQLModel, table=True):
     """One (framework, flavor, build, benchmark, preset, datatype, variant) runtime sample."""
 
-    __tablename__: ClassVar[str] = RESULTS_TABLE
+    __tablename__: ClassVar[str] = RESULTS_TABLE  # pyright: ignore[reportIncompatibleVariableOverride]  # sqlmodel types it declared_attr; a str is the documented form
 
     id: int | None = Field(default=None, primary_key=True)
     timestamp: int  # epoch seconds; groups the rows of one run
@@ -80,7 +80,7 @@ class KernelMetric(SQLModel, table=True):
     ``parallelism.map``, ...). Long format: a new metric is a new ``metric`` value, so existing DBs
     need no migration. Counts only; rates belong to the report."""
 
-    __tablename__: ClassVar[str] = KERNEL_METRICS_TABLE
+    __tablename__: ClassVar[str] = KERNEL_METRICS_TABLE  # pyright: ignore[reportIncompatibleVariableOverride]  # sqlmodel types it declared_attr; a str is the documented form
 
     id: int | None = Field(default=None, primary_key=True)
     timestamp: int  # epoch seconds; groups the rows of one run

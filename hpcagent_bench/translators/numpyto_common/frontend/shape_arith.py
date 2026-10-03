@@ -51,7 +51,7 @@ def binding_counts(fn: ast.FunctionDef) -> dict[str, int]:
     counts twice, so an updated name is never single-assignment."""
     counts: dict[str, int] = {}
 
-    def count(tgt: ast.AST, inc: int) -> None:
+    def count(tgt: ast.expr, inc: int) -> None:
         if isinstance(tgt, ast.Name):
             counts[tgt.id] = counts.get(tgt.id, 0) + inc
         elif isinstance(tgt, (ast.Tuple, ast.List)):
@@ -107,7 +107,7 @@ def collect_inlined_scalar_defs(fn: ast.FunctionDef, prefix: str | None = "__inl
     return defs
 
 
-def is_scalar_dim_rhs(node: ast.AST) -> bool:
+def is_scalar_dim_rhs(node: ast.expr) -> bool:
     """``True`` when ``node`` is a scalar-dimension expression (the RHS of
     an inlined ``__inl<k>_`` size local) rather than an array value.
 
@@ -235,13 +235,14 @@ def exact_quotient_with_remainder(numerator: ast.expr, divisor: int) -> ast.expr
     if not terms:
         return None
     quotients = [(sign, divide_multiple_term(term, divisor)) for sign, term in terms]
-    if any(q is None for sign_, q in quotients):
+    exact = [(sign, q) for sign, q in quotients if q is not None]
+    if len(exact) != len(quotients):
         return None
-    lead = next((i for i, (sign, q_) in enumerate(quotients) if sign > 0), None)
+    lead = next((i for i, (sign, q_) in enumerate(exact) if sign > 0), None)
     if lead is None:
         return None  # the identity still holds; there is just no leading term to rebuild the sum from
-    out = quotients[lead][1]
-    for i, (sign, quotient) in enumerate(quotients):
+    out = exact[lead][1]
+    for i, (sign, quotient) in enumerate(exact):
         if i != lead:
             out = ast.BinOp(left=out, op=ast.Add() if sign > 0 else ast.Sub(), right=quotient)
     remainder = constant // divisor  # floor division, so a negative constant carries its own -1
@@ -264,6 +265,8 @@ class ShapeArithFolder(ast.NodeTransformer):
     ``x // 2 + 1`` when x is not a multiple of 2, and floor division rounds toward -inf, so
     distributing it is wrong in general -- those divisions stay exactly where they were.
     """
+
+    __slots__ = ()
 
     def visit_BinOp(self, node: ast.BinOp) -> ast.expr:
         self.generic_visit(node)

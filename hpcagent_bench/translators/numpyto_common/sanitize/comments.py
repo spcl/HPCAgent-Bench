@@ -20,6 +20,7 @@ import importlib.util
 import io
 import re
 import tokenize
+from typing import Any
 
 __all__ = [
     "ATTRIBUTION_RE",
@@ -74,7 +75,7 @@ def tree_sitter_available() -> bool:
 # children are reached via ``child(i)``/``child_count`` (no ``.children`` list),
 # and ``Parser.parse`` takes ``str``. These helpers normalize both shapes; byte
 # offsets are utf-8 byte indices in every variant, so span math is unaffected.
-def ts_attr(obj, name):
+def ts_attr(obj: object, name: str) -> Any:  # the bindings' node objects are untyped C extensions
     """Read ``obj.name`` whether the binding exposes it as a property or a
     nullary method (the two tree-sitter bindings disagree on which).
 
@@ -83,33 +84,33 @@ def ts_attr(obj, name):
     return v() if callable(v) else v
 
 
-def ts_get_parser(grammar: str):
+def ts_get_parser(grammar: str) -> Any:
     from tree_sitter_language_pack import get_parser
 
     return get_parser(grammar)
 
 
-def ts_parse(parser, src: str):
+def ts_parse(parser: Any, src: str) -> Any:
     try:
         return parser.parse(src)  # language-pack: str
     except TypeError:
         return parser.parse(src.encode("utf-8"))  # official: bytes
 
 
-def ts_root(tree):
+def ts_root(tree: Any) -> Any:
     return ts_attr(tree, "root_node")
 
 
-def ts_type(node) -> str:
+def ts_type(node: Any) -> str:
     t = ts_attr(node, "type")  # official binding
-    return t if isinstance(t, str) else ts_attr(node, "kind")  # language-pack
+    return t if isinstance(t, str) else str(ts_attr(node, "kind"))  # language-pack
 
 
-def ts_span(node):
+def ts_span(node: Any) -> tuple[int, int]:
     return ts_attr(node, "start_byte"), ts_attr(node, "end_byte")
 
 
-def ts_children(node):
+def ts_children(node: Any) -> list[Any]:
     ch = ts_attr(node, "children")  # official: list property
     if ch is not None:
         return ch
@@ -136,7 +137,7 @@ def strip_with_tree_sitter(src: str, lang: str) -> str:
 
     spans: list[tuple] = []
 
-    def walk(node) -> None:
+    def walk(node: Any) -> None:
         if "comment" in ts_type(node):
             spans.append(ts_span(node))
             return

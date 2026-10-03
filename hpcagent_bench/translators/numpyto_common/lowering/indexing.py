@@ -33,7 +33,7 @@ __all__ = [
 ]
 
 
-def slice_dims(node: ast.Subscript) -> list[ast.AST]:
+def slice_dims(node: ast.Subscript) -> list[ast.expr]:
     """Return per-axis slice entries (either ``Slice`` or non-slice index)."""
     sl = node.slice
     if isinstance(sl, ast.Tuple):
@@ -41,14 +41,14 @@ def slice_dims(node: ast.Subscript) -> list[ast.AST]:
     return [sl]
 
 
-def has_any_slice(node: ast.AST) -> bool:
+def has_any_slice(node: ast.expr) -> bool:
     """``True`` iff ``node`` is a subscript whose dim list contains a ``Slice``."""
     if not isinstance(node, ast.Subscript):
         return False
     return any(isinstance(d, ast.Slice) for d in slice_dims(node))
 
 
-def advanced_runs(dims: list[ast.AST]) -> list[list[int]]:
+def advanced_runs(dims: Sequence[ast.expr]) -> list[list[int]]:
     """Group subscript ``dims`` positions into maximal runs of ADVANCED entries.
 
     numpy counts a plain scalar index as "advanced" for this purpose, same as an
@@ -72,8 +72,8 @@ def advanced_runs(dims: list[ast.AST]) -> list[list[int]]:
 
 
 def slice_free_gather_layout(
-    dims: list[ast.AST], run_rank: int, source_rank: int
-) -> tuple[list[ast.AST], int, int, int]:
+    dims: Sequence[ast.expr], run_rank: int, source_rank: int
+) -> tuple[list[ast.expr], int, int, int]:
     """``(entries that read a source axis, first result axis of the broadcast block, result rank, implicit
     trailing axes)`` of a gather with no slice. A newaxis inserts a unit result axis and reads nothing. The
     block stays behind the newaxes before it, and moves to the FRONT once a newaxis separates advanced entries."""
@@ -84,7 +84,7 @@ def slice_free_gather_layout(
     return kept, before, len(dims) - len(kept) + run_rank + trailing, trailing
 
 
-def basic_axis_count(dims: Sequence[ast.AST]) -> int:
+def basic_axis_count(dims: Sequence[ast.expr]) -> int:
     """Result axes the slices and newaxes of a subscript add, one each."""
     return sum(1 for d in dims if isinstance(d, ast.Slice) or is_newaxis(d))
 
@@ -117,11 +117,11 @@ def np_func_name(func: ast.AST) -> str | None:
     return None
 
 
-def binop(left: ast.AST, op, right: ast.AST) -> ast.BinOp:
+def binop(left: ast.expr, op: ast.operator, right: ast.expr) -> ast.BinOp:
     return ast.BinOp(left=left, op=op, right=right)
 
 
-def gather_slice_offset(e: ast.Slice) -> ast.AST | None:
+def gather_slice_offset(e: ast.Slice) -> ast.expr | None:
     """Source offset of result element 0 of a step-free slice, or ``None`` when the axis is not one
     a gather can bind at ``offset + iter``: a strided slice reads every ``step``-th element and a
     negative start counts from the end, neither of which a bare ``offset + iter`` expresses."""
@@ -135,7 +135,7 @@ def gather_slice_offset(e: ast.Slice) -> ast.AST | None:
     return None if isinstance(e.lower, ast.UnaryOp) and isinstance(e.lower.op, ast.USub) else e.lower
 
 
-def shift_index(idx: ast.AST, offset: ast.AST) -> ast.AST:
+def shift_index(idx: ast.expr, offset: ast.expr) -> ast.expr:
     """``idx + offset``, or just ``idx`` when the offset is a literal zero."""
     if isinstance(offset, ast.Constant) and offset.value == 0:
         return idx
@@ -208,7 +208,7 @@ def compose_kept_axis(view_slice: ast.Slice, use_dim: ast.expr) -> ast.expr:
     return view_offset(vstart, vstep, use_dim)
 
 
-def has_negative_step(elts: list[ast.expr]) -> bool:
+def has_negative_step(elts: Sequence[ast.expr]) -> bool:
     """``True`` iff any ``Slice`` among ``elts`` carries a literal NEGATIVE step.
 
     A negative step flips numpy's default bounds (``a[::-2]`` starts at the LAST
@@ -221,7 +221,7 @@ def has_negative_step(elts: list[ast.expr]) -> bool:
     return any(isinstance(e, ast.Slice) and step_is_negative(slice_step_any(e)) for e in elts)
 
 
-def is_fancy_dim(e: ast.expr, array_shapes: dict[str, list[str]]) -> bool:
+def is_fancy_dim(e: ast.expr, array_shapes: dict[str, tuple[str, ...]]) -> bool:
     """``True`` for a subscript element that is an ADVANCED (gather) index rather than
     a basic scalar/slice one: an index-array Name, or a newaxis/Ellipsis."""
     if isinstance(e, ast.Slice):

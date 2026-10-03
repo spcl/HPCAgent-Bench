@@ -1,10 +1,11 @@
 """``np.reshape`` as a rank-aware copy nest."""
 
 import ast
+from collections.abc import Sequence
 
 from hpcagent_bench.translators.numpyto_common.ast_build import name_, range_for
 from hpcagent_bench.translators.numpyto_common.lib_nodes.dims import dims_agree
-from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import const_or_name, shape_total_product
+from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import const_or_name, first_name, shape_total_product
 
 __all__ = [
     "axis_stride",
@@ -130,8 +131,8 @@ def reshape_grouped_copy(
 
 
 def expand_reshape(
-    target: ast.expr,
-    args: list[ast.expr],
+    target: ast.Name,
+    args: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     kwargs: list[ast.keyword] | None = None,
     dim_aliases: dict[str, str] | None = None,
@@ -149,9 +150,9 @@ def expand_reshape(
     Fortran-order reshape lowers correctly (QE vexx_k uses ``order="F"``
     throughout its FFT band-pair convolution).
     """
-    if not args or not isinstance(args[0], ast.Name):
+    a = first_name(args)
+    if a is None:
         raise NotImplementedError("np.reshape needs Name first arg")
-    a = args[0]
     a_shape = shape_table.get(a.id)
     if not a_shape:
         raise NotImplementedError("np.reshape: source shape unknown")
@@ -181,6 +182,7 @@ def expand_reshape(
     src_axes = decoded_source_axes(a_shape, flat_expr, fortran)
 
     # ``out[t0, t1, ...] = A[<computed-axes>]``.
+    lhs_slice: ast.expr
     if tgt_rank == 1:
         lhs_slice = name_(tgt_iters[0])
     else:
@@ -204,7 +206,7 @@ def expand_reshape(
 def flat_copy(target_id: str, source_id: str, a_shape: tuple[str, ...]) -> list[ast.stmt]:
     """``target[__r] = source[__r]`` over the source's element count."""
     total = shape_total_product(a_shape)
-    body = [
+    body: list[ast.stmt] = [
         ast.Assign(
             targets=[ast.Subscript(value=name_(target_id), slice=name_("__r"), ctx=ast.Store())],
             value=ast.Subscript(value=name_(source_id), slice=name_("__r"), ctx=ast.Load()),
@@ -226,12 +228,12 @@ def reshape_order(kwargs: list[ast.keyword] | None) -> str:
 
 def token_product(*toks: str) -> str:
     """Parenthesised product of the non-unit shape tokens (``"1"`` for none)."""
-    toks = [t for t in toks if t and t != "1"]
-    if not toks:
+    kept = [t for t in toks if t and t != "1"]
+    if not kept:
         return "1"
-    if len(toks) == 1:
-        return toks[0]
-    return "(" + " * ".join(f"({t})" for t in toks) + ")"
+    if len(kept) == 1:
+        return kept[0]
+    return "(" + " * ".join(f"({t})" for t in kept) + ")"
 
 
 def axis_stride(shape: tuple[str, ...], i: int, fortran: bool) -> str:

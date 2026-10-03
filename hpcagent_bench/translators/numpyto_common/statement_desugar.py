@@ -13,7 +13,8 @@ Entry points: :class:`DesugarArrayIteration`, :class:`SplitChainedAssign` and :c
 
 import ast
 import copy
-from collections.abc import Callable, Collection, Mapping
+from collections.abc import Callable, Collection, Mapping, Sequence
+from typing import TypeGuard
 
 from hpcagent_bench.translators.numpyto_common.ast_build import name_, store_
 from hpcagent_bench.translators.numpyto_common.numpy_desugar import expr_rank, rank_table
@@ -82,7 +83,7 @@ def pair_names(target: ast.expr) -> tuple[str, str] | None:
     return None
 
 
-def indexed_loop(node: ast.For, index: str, extent: ast.expr, binds: list[ast.stmt]) -> ast.For:
+def indexed_loop(node: ast.For, index: str, extent: ast.expr, binds: Sequence[ast.stmt]) -> ast.For:
     """``node`` respelled ``for index in range(extent): *binds; *node.body``, its ``else`` kept."""
     loop = ast.For(
         target=store_(index),
@@ -99,13 +100,15 @@ STATEMENT_LISTS = ("body", "orelse", "finalbody")
 STATEMENT_FIELDS = ("body", "handlers", "orelse", "finalbody", "cases")
 
 
-def statement_blocks(node: ast.AST) -> list[list[ast.AST]]:
+def statement_blocks(node: ast.AST) -> list[list[ast.stmt]]:
     fields = vars(node)
     return [block for name in STATEMENT_FIELDS if isinstance(block := fields.get(name), list)]
 
 
 class StatementTransformer(ast.NodeTransformer):
     """A transformer that walks statements only: no statement sits inside an expression, so skip them all."""
+
+    __slots__ = ()
 
     def generic_visit(self, node: ast.AST) -> ast.AST:
         for block in statement_blocks(node):
@@ -143,7 +146,7 @@ class DesugarArrayIteration(StatementTransformer):
         return indexed_loop(node, index, extent, [bind(node.target.id, element_read(node.iter.id, index))])
 
 
-def placed(origin: ast.stmt, stmts: list[ast.stmt]) -> list[ast.stmt]:
+def placed(origin: ast.stmt, stmts: Sequence[ast.stmt]) -> list[ast.stmt]:
     return [ast.fix_missing_locations(ast.copy_location(stmt, origin)) for stmt in stmts]
 
 
@@ -194,7 +197,7 @@ def read_name(node: ast.AST, names: Collection[str]) -> str | None:
     return None
 
 
-def is_plain_rebinding(stmt: ast.stmt, rebound: Collection[str]) -> bool:
+def is_plain_rebinding(stmt: ast.stmt, rebound: Collection[str]) -> TypeGuard[ast.Assign]:
     """``stmt`` is an assignment whose targets bind every name in ``rebound``, and nothing else in it does."""
     if not isinstance(stmt, ast.Assign):
         return False
@@ -297,12 +300,15 @@ class SplitChainedAssign(StatementTransformer):
             return position + len(node.targets)
         rank = self.rank_of(node.value)
         first = node.targets[0]
+        head: list[ast.stmt]
         if rank != 0 and isinstance(first, ast.Name):
-            holder, targets, head = first.id, node.targets[1:], [ast.Assign(targets=[first], value=node.value)]
+            holder, targets = first.id, node.targets[1:]
+            head = [ast.Assign(targets=[first], value=node.value)]
         else:
             holder = self.temp_name(self.temps)
             self.temps += 1
-            targets, head = node.targets, [bind(holder, node.value)]
+            targets = node.targets
+            head = [bind(holder, node.value)]
         aliases: list[str] = []
         for target in targets:
             if rank != 0 and isinstance(target, ast.Name):
@@ -386,7 +392,7 @@ def is_self_copy(target: ast.expr, value: ast.expr) -> bool:
     return isinstance(target, ast.Name) and isinstance(value, ast.Name) and value.id == target.id
 
 
-def races(targets: list[ast.expr], values: list[ast.expr], changed: list[int]) -> bool:
+def races(targets: Sequence[ast.expr], values: Sequence[ast.expr], changed: list[int]) -> bool:
     """A changed value reads a name a changed target writes, so a sequential split could read it updated."""
     written = OrderedSet(base_name(targets[position]) for position in changed)
     return any(
@@ -416,7 +422,7 @@ class SplitTupleUnpack(StatementTransformer):
         #: Racing statements met so far.
         self.racing = 0
 
-    def values(self, targets: list[ast.expr], value: ast.expr) -> Spelled | None:
+    def values(self, targets: Sequence[ast.expr], value: ast.expr) -> Spelled | None:
         """The per-target spelling of ``value``, or ``None`` when it has none."""
         return ([], value.elts) if isinstance(value, ast.Tuple) else None
 
@@ -426,12 +432,14 @@ class SplitTupleUnpack(StatementTransformer):
 
     def generic_visit(self, node: ast.AST) -> ast.AST:
         for block in statement_blocks(node):
-            spliced: list[ast.AST] = []
+            spliced: list[ast.stmt] = []
             for stmt in block:
                 if isinstance(stmt, ast.Assign):
                     spliced.extend(self.split(stmt))
                 else:
-                    spliced.append(self.generic_visit(stmt))
+                    visited = self.generic_visit(stmt)
+                    if isinstance(visited, ast.stmt):
+                        spliced.append(visited)
             block[:] = spliced
         return node
 
@@ -459,7 +467,9 @@ class SplitTupleUnpack(StatementTransformer):
         latched = self.latched(targets, values, changed)
         return [node] if latched is None else placed(node, [*prelude, *latched])
 
-    def latched(self, targets: list[ast.expr], values: list[ast.expr], changed: list[int]) -> list[ast.stmt] | None:
+    def latched(
+        self, targets: Sequence[ast.expr], values: Sequence[ast.expr], changed: list[int]
+    ) -> list[ast.stmt] | None:
         """Temps for the changed values, the changed targets bound from them, then the self-copies."""
         self.racing += 1
         holders: list[str] = []

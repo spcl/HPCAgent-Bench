@@ -10,7 +10,7 @@ import numpy as np
 import numpy.typing as npt
 
 from hpcagent_bench import config, fuzz
-from hpcagent_bench.emit_bridge import legacy_bench_info_dict
+from hpcagent_bench.emit_bridge import RawInit, legacy_bench_info_dict
 from hpcagent_bench.spec import BenchSpec
 
 __all__ = [
@@ -169,17 +169,17 @@ class Benchmark:
         from hpcagent_bench.support.distributions import noise
 
         # The legacy dict carries no track; the loaded manifest's decides the track's input defaults.
-        spec = replace(BenchSpec.from_dict(self.info, source=self.bname), track=self.spec.track)
+        spec = replace(BenchSpec.from_dict(dict(self.info), source=self.bname), track=self.spec.track)
         # Fuzz cycling, else the config/uniform default.
         dist_name = ""
         is_fuzz = preset == fuzz.FUZZED_PRESET
         if not dist_name and is_fuzz:
             dist_name = fuzz.pick_data_distribution(spec.fuzz, int(fuzz_iteration or 0))
         if not dist_name:
-            dist_name = config.get("fuzz.data_distribution", "uniform") if is_fuzz else "uniform"
+            dist_name = config.get_str("fuzz.data_distribution", "uniform") if is_fuzz else "uniform"
         precision = precision_from_datatype(datatype)
-        init = self.info["init"]
-        if init.get("func_name"):
+        init = self.info.get("init")
+        if init is not None and init.get("func_name"):
             # A custom initialize() has no per-array spec surface, so a hidden variant does not reach it.
             self.call_initializer(data, init, datatype, seed, dist_name, scenarios)
         else:
@@ -192,6 +192,8 @@ class Benchmark:
                 params_override=params_override,
                 hidden_variant=hidden_variant,
             )
+            if spec.init is None:
+                raise ValueError(f"{self.bname} declares no init block to materialize its inputs from")
             data.update(zip(spec.init.output_args, values))
         # The sizes the preset omits (lulesh numNode, vexx_k maxbox) first: they set the extents of the
         # buffers the next two calls expand and allocate. A sparse layout's buffers are named in
@@ -208,7 +210,7 @@ class Benchmark:
     def call_initializer(
         self,
         data: dict[str, Any],
-        init: dict[str, Any],
+        init: RawInit,
         datatype: str | None,
         seed: int,
         dist_name: str,
@@ -224,11 +226,14 @@ class Benchmark:
         initializer still yield distinct timed inputs."""
         from hpcagent_bench.support.distributions.perturbation import Perturbation
 
-        init_func = vars(importlib.import_module(self.impl_module()))[init["func_name"]]
+        func_name, input_args, out_names = init.get("func_name"), init.get("input_args"), init.get("output_args")
+        if func_name is None or input_args is None or out_names is None:
+            raise KeyError(f"{self.bname}: init needs func_name, input_args and output_args, has {sorted(init)}")
+        init_func = vars(importlib.import_module(self.impl_module()))[func_name]
         # Declared init scalars seed the data; an existing value wins.
         for name, value in (init.get("scalars") or {}).items():
             data.setdefault(name, value)
-        init_inputs = [data[a] for a in init["input_args"]]
+        init_inputs = [data[a] for a in input_args]
         params = inspect.signature(init_func).parameters
         has_kwargs = any(p.kind == p.VAR_KEYWORD for p in params.values())
         extras: dict[str, Any] = {}
@@ -248,7 +253,6 @@ class Benchmark:
         if "dist" in params or has_kwargs:
             extras["dist"] = dist_name
         result = init_func(*init_inputs, **extras)
-        out_names = init["output_args"]
         values = [result] if len(out_names) == 1 else list(result)
         data.update(zip(out_names, (demote_to(value, compute, storage) for value in values)))
 

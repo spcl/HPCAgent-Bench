@@ -142,6 +142,8 @@ class MathRewriter(ast.NodeTransformer):
     loop). Scalar args fall through to the renamed math intrinsic.
     """
 
+    __slots__ = ("array_names", "defer_array_capable")
+
     #: Renamed to a 2-arg libm call ONLY when both operands are scalars; on arrays the LibNode
     #: expander owns them instead. They are the ufuncs whose scalar and array forms differ.
     ARRAY_CAPABLE = frozenset({"maximum", "minimum"})

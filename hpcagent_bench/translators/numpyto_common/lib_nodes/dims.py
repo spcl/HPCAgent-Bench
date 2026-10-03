@@ -2,6 +2,7 @@
 
 import ast
 import re
+from collections.abc import Callable
 from functools import lru_cache
 from typing import TYPE_CHECKING
 
@@ -104,10 +105,10 @@ def substitute_dim_aliases(
 
         return DIM_IDENT_RE.sub(repl, text)
 
-    def resolve_shape_reads(text: str) -> str:
+    def resolve_shape_reads(text: str, table: dict[str, tuple[str, ...]]) -> str:
 
         def repl(m: "re.Match") -> str:
-            shape = shape_table.get(m.group(1))
+            shape = table.get(m.group(1))
             idx = int(m.group(2))
             if shape is None or idx >= len(shape):
                 return m.group(0)
@@ -124,7 +125,7 @@ def substitute_dim_aliases(
         grown = expand(text, ())
         if not shape_table:
             return grown
-        resolved = resolve_shape_reads(grown)
+        resolved = resolve_shape_reads(grown, shape_table)
         if resolved == grown:
             return grown
         text = resolved
@@ -161,7 +162,7 @@ def sympify_shape(text: str) -> "sympy.Expr | None":
     # across the two answered "not equal" for extents that are the same number. Normalise onto
     # sympy's own head, never the other way: ``floor`` over integer symbols CANCELS
     # (``floor(2*oh/2)`` is ``oh``), and an opaque ``int_floor`` does not -- measured both ways.
-    names = {
+    names: dict[str, Callable[..., sympy.Expr] | sympy.Symbol] = {
         "int_floor": lambda a, b: sympy.floor(a / b),
         "int_ceil": lambda a, b: sympy.ceiling(a / b),
     }
@@ -169,7 +170,8 @@ def sympify_shape(text: str) -> "sympy.Expr | None":
         if text[m.end() : m.end() + 1] != "(":  # a call target is a function, not a dimension
             names[m.group()] = sympy.Symbol(m.group(), integer=True, nonnegative=True)
     try:
-        return sympy.sympify(text, locals=names)
+        # the sympy stubs' ``sympify`` overloads omit the ``locals`` parameter
+        return sympy.sympify(text, locals=names)  # pyright: ignore[reportCallIssue]
     except (SyntaxError, TypeError, AttributeError, ValueError, IndexError, sympy.SympifyError):
         # ``sympify`` EVALUATES the token, so any exception the expression can raise is on this
         # path: a token that reads past the end of a tuple literal arrives as a bare ``IndexError``
@@ -197,7 +199,7 @@ def shape_exprs_differ_numerically(ea: "sympy.Expr", eb: "sympy.Expr") -> bool:
     if not symbols or len(symbols) > len(DIM_PROBE_POINTS[0]):
         return False
     for values in DIM_PROBE_POINTS:
-        point = dict(zip(symbols, values))
+        point: dict[sympy.Basic | complex, sympy.Basic | complex] = dict(zip(symbols, values))
         try:
             va, vb = ea.subs(point), eb.subs(point)
         except (TypeError, ValueError, ZeroDivisionError):

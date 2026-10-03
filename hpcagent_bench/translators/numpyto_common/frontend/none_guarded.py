@@ -2,6 +2,7 @@
 
 import ast
 import copy
+from collections.abc import Sequence
 
 from hpcagent_bench.translators.numpyto_common.ast_build import NESTED_BLOCK_FIELDS, name_, nested_blocks, store_
 from hpcagent_bench.translators.numpyto_common.frontend.inlining import (
@@ -25,7 +26,7 @@ def is_none_sentinel(value: ast.expr | None) -> bool:
     return False
 
 
-def find_none_guard(mid: list[ast.stmt]) -> int | None:
+def find_none_guard(mid: Sequence[ast.stmt]) -> int | None:
     """Index of the ONE ``if <cond>: return <None sentinel>`` (no ``elif``/``else``) in ``mid``, or
     ``None`` when there is not exactly one such guard."""
     hits = [
@@ -105,18 +106,24 @@ class SpliceNoneGuardedCalls:
         self.fn_ = fn
         return self.rewrite_block(fn.body)
 
+    def current_fn(self) -> ast.FunctionDef:
+        """The function :meth:`apply` is walking."""
+        if self.fn_ is None:
+            raise RuntimeError("apply() has not set the function being walked")
+        return self.fn_
+
     def ordered_stmts(self) -> list[ast.stmt]:
         """Every statement of the enclosing function in SOURCE order (a plain ``ast.walk`` is
         breadth-first, which cannot answer "does the unpack run after the call")."""
         out: list[ast.stmt] = []
 
-        def walk(block: list[ast.stmt]) -> None:
+        def walk(block: Sequence[ast.stmt]) -> None:
             for st in block:
                 out.append(st)
                 for nested in nested_blocks(st):
                     walk(nested)
 
-        walk(self.fn_.body)
+        walk(self.current_fn().body)
         return out
 
     def deferred_unpack(self, call_stmt: ast.Assign, name: str) -> ast.Assign | None:
@@ -156,7 +163,7 @@ class SpliceNoneGuardedCalls:
         # Every other read of ``name`` would survive the splice with nothing to bind it to.
         readers = sum(
             1
-            for sub in ast.walk(self.fn_)
+            for sub in ast.walk(self.current_fn())
             if isinstance(sub, ast.Name) and sub.id == name and isinstance(sub.ctx, ast.Load)
         )
         guard = stmts[stmts.index(call_stmt) + 1] if stmts.index(call_stmt) + 1 < len(stmts) else None
@@ -195,7 +202,7 @@ class SpliceNoneGuardedCalls:
         return changed
 
     def call_shape(
-        self, stmts: list[ast.stmt], i: int
+        self, stmts: Sequence[ast.stmt], i: int
     ) -> tuple[ast.Assign, ast.If, list[ast.expr], int, ast.Assign | None] | None:
         """``(call_stmt, guard_stmt, final_targets, consumed, deferred)`` for a recognised call at
         ``stmts[i]``, or ``None``. ``consumed`` is 2 for the direct-destructure spelling, 3 when a
@@ -241,7 +248,7 @@ class SpliceNoneGuardedCalls:
         return None
 
     def try_splice(
-        self, stmts: list[ast.stmt], i: int
+        self, stmts: Sequence[ast.stmt], i: int
     ) -> tuple[list[ast.stmt], int, ast.Assign | None, ast.Assign] | None:
         shape = self.call_shape(stmts, i)
         if shape is None:
@@ -253,8 +260,11 @@ class SpliceNoneGuardedCalls:
             and isinstance(guard_stmt.body[0], (ast.Continue, ast.Break, ast.Pass, ast.Return))
         ):
             return None
-        helper = self.helpers[call_stmt.value.func.id]
-        call_args = resolve_call_args(call_stmt.value, helper)
+        call = call_stmt.value
+        if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Name)):
+            return None
+        helper = self.helpers[call.func.id]
+        call_args = resolve_call_args(call, helper)
         if call_args is None:
             return None
         body = strip_docstrings_(helper.body)
@@ -262,7 +272,10 @@ class SpliceNoneGuardedCalls:
         guard_idx = find_none_guard(mid)
         if guard_idx is None:
             return None  # re-validated defensively; collect_none_guarded_helpers already checked
-        ret_value = body[-1].value
+        last = body[-1]
+        if not isinstance(last, ast.Return) or last.value is None:
+            return None
+        ret_value = last.value
         ret_elts = ret_value.elts if isinstance(ret_value, (ast.Tuple, ast.List)) else [ret_value]
         if len(final_targets) != len(ret_elts):
             return None
@@ -270,7 +283,7 @@ class SpliceNoneGuardedCalls:
         param_names = [a.arg for a in helper.args.args]
         local_names = collect_assigned_names(mid[:guard_idx] + mid[guard_idx + 1 :])
         arg_map = dict(zip(param_names, call_args))
-        rename: dict[str, ast.AST] = dict(arg_map)
+        rename: dict[str, ast.expr] = dict(arg_map)
         self._counter[0] += 1
         prefix = f"__inl{self._counter[0]}_"
         reassigned_params = []
@@ -302,7 +315,10 @@ class SpliceNoneGuardedCalls:
             new_stmts.append(init)
         for stmt in mid[:guard_idx]:
             new_stmts.append(clone_rename(stmt))
-        cond = clone_rename_expr(mid[guard_idx].test)
+        guard_if = mid[guard_idx]
+        if not isinstance(guard_if, ast.If):
+            return None
+        cond = clone_rename_expr(guard_if.test)
         handler = ast.parse(ast.unparse(guard_stmt.body[0])).body[0]
         new_stmts.append(ast.copy_location(ast.If(test=cond, body=[handler], orelse=[]), call_stmt))
         for stmt in mid[guard_idx + 1 :]:

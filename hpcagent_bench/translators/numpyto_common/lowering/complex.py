@@ -148,7 +148,7 @@ def call_complex(node: ast.Call, name_dtype: "Callable[[str], str | None]") -> s
     return None
 
 
-def infer_complex_dtype(expr: ast.AST, local_dtypes: dict[str, str]) -> str | None:
+def infer_complex_dtype(expr: ast.expr, local_dtypes: dict[str, str]) -> str | None:
     """Return a complex dtype string if ``expr`` produces a complex value, else
     ``None``. Delegates to the call-aware :func:`walk_complex` so a real-returning
     ufunc / accessor of a complex operand is correctly REAL."""
@@ -165,7 +165,7 @@ for flt, cplx in COMPLEX_FOR_FLOAT.items():
     REAL_FOR_COMPLEX.setdefault(cplx, flt)
 
 
-def is_conj_call(node: ast.AST) -> ast.expr | None:
+def is_conj_call(node: ast.expr) -> ast.expr | None:
     """If ``node`` is a conjugation -- ``np.conj(x)`` / ``np.conjugate(x)`` (free
     function) or ``x.conjugate()`` (method) -- return its single operand ``x``;
     else ``None``. The operand is the value whose conjugate is taken."""
@@ -189,6 +189,8 @@ class RealConjDropper(ast.NodeTransformer):
     wrapped in ``np.conj`` for the general Hermitian form). Removing the no-op
     conjugation on a real operand keeps both native backends valid; a genuinely
     complex operand keeps its conjugation."""
+
+    __slots__ = ("local_dtypes",)
 
     def __init__(self, local_dtypes: dict[str, str]) -> None:
         self.local_dtypes = local_dtypes
@@ -220,7 +222,7 @@ def ctor_complex_tag(call: ast.Call, local_dtypes: dict[str, str]) -> str | None
     return None
 
 
-def scalar_expr_complex(expr: ast.AST, local_dtypes: dict[str, str]) -> bool:
+def scalar_expr_complex(expr: ast.expr, local_dtypes: dict[str, str]) -> bool:
     """True iff a SCALAR arithmetic ``expr`` is complex, by its DIRECT operands
     (recursing only through BinOp/UnaryOp). It deliberately does NOT descend into
     ``.real``/``.imag`` accessors or calls (``hypot``/``abs`` produce a real from a
@@ -283,7 +285,7 @@ def seed_complex_work_dtypes(
     since a derived scalar's dtype depends on the temp it reads (``m`` / ``ephi``
     <- ``apq`` <- ``Cm``'s constructor)."""
     assigns = [
-        s
+        (s.targets[0].id, s.value)
         for s in ast.walk(tree)
         if isinstance(s, ast.Assign) and len(s.targets) == 1 and isinstance(s.targets[0], ast.Name)
     ]
@@ -291,11 +293,10 @@ def seed_complex_work_dtypes(
     changed = True
     while changed:
         changed = False
-        for s in assigns:
-            name = s.targets[0].id
+        for name, value in assigns:
             if name in local_dtypes:
                 continue
-            dt = seed.dtype_for(s.value)
+            dt = seed.dtype_for(value)
             if dt is not None:
                 local_dtypes[name] = dt
                 changed = True
@@ -380,6 +381,8 @@ class PromoteMixedComplexIfExp(ast.NodeTransformer):
     cast-free ``+ 0j`` (a complex-literal add, NOT a C-style cast), so every
     backend sees a uniform-type select. Numerically identical: the promoted branch
     carries a zero imaginary part. (QE vexx ``_add_nlxx_pot`` gamma_only path.)"""
+
+    __slots__ = ("local_dtypes",)
 
     def __init__(self, local_dtypes: dict[str, str]) -> None:
         self.local_dtypes = local_dtypes

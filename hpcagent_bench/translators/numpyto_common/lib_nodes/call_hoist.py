@@ -1,12 +1,13 @@
 """Hoist registered numpy calls out of expressions into temporaries."""
 
 import ast
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from types import NotImplementedType
 
 from hpcagent_bench.translators.numpyto_common import dtypes
 from hpcagent_bench.translators.numpyto_common.ast_build import const_int, name_, store_
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
+from hpcagent_bench.translators.numpyto_common.ir import SparseArrayDesc
 from hpcagent_bench.translators.numpyto_common.lib_nodes.call_args import const_axis, kwarg_or_pos, read_axis_keepdims
 from hpcagent_bench.translators.numpyto_common.lib_nodes.constructors import arange_count
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import (
@@ -32,6 +33,8 @@ __all__ = [
     "SPILL_FIRST_OPERAND",
     "UNHANDLED",
     "CallHoister",
+    "RuleResult",
+    "ShapeTokens",
     "allocator_shape",
     "bincount_shape",
     "concatenate_shape",
@@ -74,7 +77,7 @@ type RuleResult = ShapeTokens | None | NotImplementedType
 
 
 def routed_extent(
-    hoister: "CallHoister", op: str, args: list[ast.expr], keywords: list[ast.keyword] | None
+    hoister: "CallHoister", op: str, args: Sequence[ast.expr], keywords: list[ast.keyword] | None
 ) -> RuleResult:
     """Size ``np.<op>(*args, **keywords)`` with :func:`iter_extent_of`, so the shape logic lives in
     one place: contractions (``tensordot``'s ``axes`` is often a KEYWORD; dropping it would default to
@@ -90,7 +93,7 @@ def routed_extent(
 
 
 def bincount_shape(
-    hoister: "CallHoister", op: str, args: list[ast.expr], keywords: list[ast.keyword] | None
+    hoister: "CallHoister", op: str, args: Sequence[ast.expr], keywords: list[ast.keyword] | None
 ) -> RuleResult:
     """``np.bincount(idx, weights=w, minlength=M)`` -> exactly M slots (see expand_bincount)."""
     minlength = kwarg_or_pos(args, keywords or [], 2, "minlength") if args else None
@@ -98,7 +101,7 @@ def bincount_shape(
 
 
 def values_operand_shape(
-    hoister: "CallHoister", op: str, args: list[ast.expr], keywords: list[ast.keyword] | None
+    hoister: "CallHoister", op: str, args: Sequence[ast.expr], keywords: list[ast.keyword] | None
 ) -> RuleResult:
     """``np.searchsorted(a, v)``: one index per element of the VALUES operand ``v``."""
     ext = iter_extent_of(args[1], hoister.shape_table) if len(args) >= 2 else None
@@ -106,7 +109,7 @@ def values_operand_shape(
 
 
 def allocator_shape(
-    hoister: "CallHoister", op: str, args: list[ast.expr], keywords: list[ast.keyword] | None
+    hoister: "CallHoister", op: str, args: Sequence[ast.expr], keywords: list[ast.keyword] | None
 ) -> RuleResult:
     """linspace(start, stop, n) -> (n,); arange(stop) -> (stop,); arange(start, stop[, step]) -> its
     element count. The 3-arg form goes through arange_count: ``stop - start`` ignores the step, which
@@ -123,7 +126,7 @@ def allocator_shape(
 
 
 def fromfunction_shape(
-    hoister: "CallHoister", op: str, args: list[ast.expr], keywords: list[ast.keyword] | None
+    hoister: "CallHoister", op: str, args: Sequence[ast.expr], keywords: list[ast.keyword] | None
 ) -> RuleResult:
     """``np.fromfunction(lambda..., (N, M))``: the SECOND arg is the shape."""
     if len(args) < 2:
@@ -134,7 +137,7 @@ def fromfunction_shape(
 
 
 def leading_count_shape(
-    hoister: "CallHoister", op: str, args: list[ast.expr], keywords: list[ast.keyword] | None
+    hoister: "CallHoister", op: str, args: Sequence[ast.expr], keywords: list[ast.keyword] | None
 ) -> RuleResult:
     """A 1-D result whose length is an argument: ``np.histogram(a, bins)`` -> ``hist`` of ``bins``
     (the ``[0]`` unwrap selects it); ``np.fft.fftfreq(n, d=...)`` -> ``n`` frequencies."""
@@ -147,17 +150,22 @@ def named_operand_shape(position: int) -> Callable[..., RuleResult]:
     ``np.linalg.inv``, ``cholesky``, the ``np.fft`` transforms, ``roll``, ``tril``, ``triu`` (first
     operand) and ``np.linalg.solve`` (x has b's shape)."""
 
-    def rule(hoister: "CallHoister", op: str, args: list[ast.expr], keywords: list[ast.keyword] | None) -> RuleResult:
-        if len(args) <= position or not isinstance(args[position], ast.Name):
+    def rule(
+        hoister: "CallHoister", op: str, args: Sequence[ast.expr], keywords: list[ast.keyword] | None
+    ) -> RuleResult:
+        if len(args) <= position:
             return UNHANDLED
-        shape = hoister.shape_table.get(args[position].id)
+        operand = args[position]
+        if not isinstance(operand, ast.Name):
+            return UNHANDLED
+        shape = hoister.shape_table.get(operand.id)
         return tuple(shape) if shape else UNHANDLED
 
     return rule
 
 
 def reshape_name_shape(
-    hoister: "CallHoister", op: str, args: list[ast.expr], keywords: list[ast.keyword] | None
+    hoister: "CallHoister", op: str, args: Sequence[ast.expr], keywords: list[ast.keyword] | None
 ) -> RuleResult:
     """``np.reshape(a, shape)`` of a known Name: the shape arg, a single ``-1`` resolved to prod(source)
     / prod(other dims) -- lets ``a.ravel() @ a.ravel()`` (lowered to reshape) hoist out of the matmul."""
@@ -182,7 +190,7 @@ def reshape_name_shape(
 
 
 def concatenate_shape(
-    hoister: "CallHoister", op: str, args: list[ast.expr], keywords: list[ast.keyword] | None
+    hoister: "CallHoister", op: str, args: Sequence[ast.expr], keywords: list[ast.keyword] | None
 ) -> RuleResult:
     """``np.concatenate((a, b, ...), axis=k)`` -> the common shape, axis k summed."""
     if not args:
@@ -190,7 +198,7 @@ def concatenate_shape(
     try:
         unused, shapes, axis = concat_operands_axis(args, keywords, hoister.shape_table)
     except NotImplementedError:
-        shapes = None
+        return UNHANDLED
     if not shapes:
         return UNHANDLED
     base = list(shapes[0])
@@ -199,7 +207,7 @@ def concatenate_shape(
 
 
 def elementwise_shape(
-    hoister: "CallHoister", op: str, args: list[ast.expr], keywords: list[ast.keyword] | None
+    hoister: "CallHoister", op: str, args: Sequence[ast.expr], keywords: list[ast.keyword] | None
 ) -> RuleResult:
     """Elementwise ops: the broadcast of ALL operand extents, not the first operand's -- the temp for
     ``np.maximum(a(M,), B(N, M))`` is ``(N, M)``, matching the expander's own broadcast iteration."""
@@ -213,7 +221,7 @@ def elementwise_shape(
 
 
 def hstack_shape(
-    hoister: "CallHoister", op: str, args: list[ast.expr], keywords: list[ast.keyword] | None
+    hoister: "CallHoister", op: str, args: Sequence[ast.expr], keywords: list[ast.keyword] | None
 ) -> RuleResult:
     """``np.hstack((a, b, c))``: axis 1 for 2-D Name operands, axis 0 for 1-D; the widths sum and the
     other axis is shared."""
@@ -238,7 +246,9 @@ def hstack_shape(
     return None
 
 
-def diff_shape(hoister: "CallHoister", op: str, args: list[ast.expr], keywords: list[ast.keyword] | None) -> RuleResult:
+def diff_shape(
+    hoister: "CallHoister", op: str, args: Sequence[ast.expr], keywords: list[ast.keyword] | None
+) -> RuleResult:
     """``np.diff(a[, n=1][, axis])``: one fewer element along the axis (the last by default)."""
     if not args or not isinstance(args[0], ast.Name):
         return UNHANDLED
@@ -260,7 +270,7 @@ def diff_shape(hoister: "CallHoister", op: str, args: list[ast.expr], keywords: 
 
 
 def permuted_shape(
-    hoister: "CallHoister", op: str, args: list[ast.expr], keywords: list[ast.keyword] | None
+    hoister: "CallHoister", op: str, args: Sequence[ast.expr], keywords: list[ast.keyword] | None
 ) -> RuleResult:
     """``triu`` / ``flip`` keep the Name operand's shape; ``np.transpose(A[, axes])`` honours the perm
     (positional or ``axes=``) and otherwise reverses the axes."""
@@ -280,7 +290,7 @@ def permuted_shape(
 
 
 def reduction_shape(
-    hoister: "CallHoister", op: str, args: list[ast.expr], keywords: list[ast.keyword] | None
+    hoister: "CallHoister", op: str, args: Sequence[ast.expr], keywords: list[ast.keyword] | None
 ) -> RuleResult:
     """Axis-aware reductions: the reduced axes removed (size 1 under keepdims). ``argmax`` / ``argmin``
     return the index array over the kept axes; axis-aware ``linalg.norm`` is a per-line L2 reduction;
@@ -308,7 +318,7 @@ def reduction_shape(
 
 
 def reshape_tuple_shape(
-    hoister: "CallHoister", op: str, args: list[ast.expr], keywords: list[ast.keyword] | None
+    hoister: "CallHoister", op: str, args: Sequence[ast.expr], keywords: list[ast.keyword] | None
 ) -> RuleResult:
     """``np.reshape(x, (...))`` of any source: the tuple's entries, a ``-1`` resolved against a Name
     source's element count over the product of the other target dims (``/`` renders as integer
@@ -335,7 +345,7 @@ def reshape_tuple_shape(
 
 
 def outer_shape(
-    hoister: "CallHoister", op: str, args: list[ast.expr], keywords: list[ast.keyword] | None
+    hoister: "CallHoister", op: str, args: Sequence[ast.expr], keywords: list[ast.keyword] | None
 ) -> RuleResult:
     """``np.outer(a, b)`` / ``np.add.outer(a, b)`` of two 1-D operands: ``(len(a), len(b))``."""
     if len(args) != 2:
@@ -348,7 +358,7 @@ def outer_shape(
 
 
 def diagonal_shape(
-    hoister: "CallHoister", op: str, args: list[ast.expr], keywords: list[ast.keyword] | None
+    hoister: "CallHoister", op: str, args: Sequence[ast.expr], keywords: list[ast.keyword] | None
 ) -> RuleResult:
     """``np.diagonal(a)`` of a SQUARE rank-2 operand: one element per row. Unsized, the diagonal would
     stay inline inside e.g. ``np.tanh(...)``, where the elementwise scalariser has no cell to read."""
@@ -499,6 +509,20 @@ class CallHoister(ast.NodeTransformer):
     shape is inferred from its arguments.
     """
 
+    __slots__ = (
+        "_cur_axis",
+        "_cur_keepdims",
+        "array_temps",
+        "blas",
+        "counter",
+        "dim_aliases",
+        "local_dtypes",
+        "pre_stmts",
+        "scalar_temps",
+        "shape_table",
+        "sparse",
+    )
+
     def __init__(
         self,
         shape_table: dict[str, tuple[str, ...]],
@@ -523,7 +547,7 @@ class CallHoister(ast.NodeTransformer):
         self.pre_stmts: list[ast.stmt] = []
         #: Never populated on this class; forwarded to the nested ``MatmulHoister``,
         #: which treats ``None`` the same as an empty sparse-array table.
-        self.sparse: dict[str, object] | None = None
+        self.sparse: dict[str, SparseArrayDesc] | None = None
         #: Axis/keepdims of the reduction call ``visit_Call`` is currently hoisting;
         #: read back by ``derive_output_shape`` within that same call.
         self._cur_axis: list[int] | None = None
@@ -706,7 +730,7 @@ class CallHoister(ast.NodeTransformer):
                 self.local_dtypes[temp] = src_dt
 
     def derive_output_shape(
-        self, key: tuple[str, str], args: list[ast.expr], keywords: list[ast.keyword] | None = None
+        self, key: tuple[str, str], args: Sequence[ast.expr], keywords: list[ast.keyword] | None = None
     ) -> tuple[str, ...] | None:
         """Shape tokens of the temp a hoisted ``np.<op>(*args)`` fills, from the first rule in
         :data:`OUTPUT_SHAPE_RULES` that answers for the op; None declines the hoist."""

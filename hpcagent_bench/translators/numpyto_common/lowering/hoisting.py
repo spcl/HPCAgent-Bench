@@ -29,6 +29,8 @@ class StmtHoister(ast.NodeTransformer):
     statement.
     """
 
+    __slots__ = ("_hoist_ctr", "pre_stmts")
+
     def __init__(self) -> None:
         #: Temp assignments staged for the statement currently being flushed.
         self.pre_stmts: list[ast.stmt] = []
@@ -42,7 +44,7 @@ class StmtHoister(ast.NodeTransformer):
         self.pre_stmts.append(ast.Assign(targets=[store_(name)], value=expr))
         return name_(name)
 
-    def flush(self, node: ast.stmt):
+    def flush(self, node: ast.stmt) -> ast.AST | list[ast.stmt]:
         saved = self.pre_stmts
         self.pre_stmts = []
         self.generic_visit(node)
@@ -55,13 +57,26 @@ class StmtHoister(ast.NodeTransformer):
             ast.fix_missing_locations(s)
         return pre + [node]
 
-    visit_Assign = flush
-    visit_AugAssign = flush
-    visit_Expr = flush
-    visit_Return = flush
-    visit_If = flush
-    visit_While = flush
-    visit_For = flush
+    def visit_Assign(self, node: ast.Assign) -> ast.AST | list[ast.stmt]:
+        return self.flush(node)
+
+    def visit_AugAssign(self, node: ast.AugAssign) -> ast.AST | list[ast.stmt]:
+        return self.flush(node)
+
+    def visit_Expr(self, node: ast.Expr) -> ast.AST | list[ast.stmt]:
+        return self.flush(node)
+
+    def visit_Return(self, node: ast.Return) -> ast.AST | list[ast.stmt]:
+        return self.flush(node)
+
+    def visit_If(self, node: ast.If) -> ast.AST | list[ast.stmt]:
+        return self.flush(node)
+
+    def visit_While(self, node: ast.While) -> ast.AST | list[ast.stmt]:
+        return self.flush(node)
+
+    def visit_For(self, node: ast.For) -> ast.AST | list[ast.stmt]:
+        return self.flush(node)
 
 
 class MethodCallRewriter(StmtHoister):
@@ -185,8 +200,8 @@ class ComputedIndexCallHoister(StmtHoister):
         self.generic_visit(node)
         sl = node.slice
         is_tuple = isinstance(sl, ast.Tuple)
-        elts = list(sl.elts) if is_tuple else [sl]
-        new_elts = [self.hoist_index(e) if self.should_hoist(e) else e for e in elts]
+        elts = list(sl.elts) if isinstance(sl, ast.Tuple) else [sl]
+        new_elts = [self.hoist_index(e) if isinstance(e, ast.Call) and self.should_hoist(e) else e for e in elts]
         if new_elts != elts:
             node.slice = ast.Tuple(elts=new_elts, ctx=ast.Load()) if is_tuple else new_elts[0]
         return node

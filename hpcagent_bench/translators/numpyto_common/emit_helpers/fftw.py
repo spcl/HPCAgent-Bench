@@ -66,7 +66,9 @@ def fftw_prefix(single: bool) -> str:
 
 def marker_constant(node: ast.expr) -> int:
     """A literal marker argument (the lowering only ever writes constants there)."""
-    return cast(ast.Constant, node).value
+    if not (isinstance(node, ast.Constant) and isinstance(node.value, int)):
+        raise TypeError(f"marker argument {ast.unparse(node)} is not an int literal")
+    return node.value
 
 
 def marker_operands(node: ast.Call) -> tuple[str, str]:

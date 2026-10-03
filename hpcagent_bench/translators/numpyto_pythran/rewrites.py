@@ -29,6 +29,8 @@ class SubstitutePrecisionGlobals(ast.NodeTransformer):
     ``np.float64``/``np.complex128``. numba resolves them at import time;
     pythran needs a concrete dtype and can't import the framework."""
 
+    __slots__ = ("subs",)
+
     def __init__(self, subs: dict[str, str]) -> None:
         self.subs = subs
 
@@ -105,11 +107,13 @@ class PythranMaterialize(ast.NodeTransformer):
     wrapping a plain/concrete arg is a harmless no-op. Native backends never
     see this pass."""
 
+    __slots__ = ("local_funcs",)
+
     def __init__(self, local_funcs: set) -> None:
         self.local_funcs = local_funcs
 
     @staticmethod
-    def ascontig(node: ast.AST) -> ast.Call:
+    def ascontig(node: ast.expr) -> ast.Call:
         fn = numpy_attribute("ascontiguousarray")
         return ast.Call(func=fn, args=[node], keywords=[])
 
@@ -158,14 +162,16 @@ class NanAwareMinMaxSign(ast.NodeTransformer):
     matches), and reductions ``np.max``/``np.min`` (axis handling + type
     unification make a general guard unsafe; known pythran gap)."""
 
+    __slots__ = ()
+
     BINARY = frozenset({"maximum", "minimum"})
 
     @staticmethod
-    def is_nan(node: ast.AST) -> ast.Compare:
+    def is_nan(node: ast.expr) -> ast.Compare:
         # ``node != node`` -- True only for a NaN element (dtype-agnostic).
         return ast.Compare(left=copy.deepcopy(node), ops=[ast.NotEq()], comparators=[copy.deepcopy(node)])
 
-    def np_where(self, cond: ast.AST, true_val: ast.AST, false_val: ast.AST) -> ast.Call:
+    def np_where(self, cond: ast.expr, true_val: ast.expr, false_val: ast.expr) -> ast.Call:
         return ast.Call(func=numpy_attribute("where"), args=[cond, true_val, false_val], keywords=[])
 
     def visit_Call(self, node: ast.Call) -> ast.AST:
@@ -213,6 +219,8 @@ class PythranSafeMatVec(ast.NodeTransformer):
     (2-D, 1-D) shape this corpus hits -- 1-D dot (pythran's own, unaffected ddot path) and 2-D-by
     2-D matmul are left as ``@``."""
 
+    __slots__ = ("ranks",)
+
     def __init__(self, ranks: dict[str, int]) -> None:
         self.ranks = ranks
 
@@ -243,6 +251,8 @@ class EllipsisToSlice(ast.NodeTransformer):
     the kir array table) is left untouched -- pythran still rejects it, but
     no kernel currently emits that form."""
 
+    __slots__ = ("ranks",)
+
     def __init__(self, ranks: dict[str, int]) -> None:
         self.ranks = ranks
 
@@ -260,7 +270,7 @@ class EllipsisToSlice(ast.NodeTransformer):
                 # so it became ``p[:, None]`` -- rank 2 where numpy gives rank 3, and the operand
                 # then broadcast against a different set of axes.
                 fill = rank - sum(1 for e in sl.elts if not is_ellipsis(e) and not is_newaxis(e))
-                elts: list[ast.AST] = []
+                elts: list[ast.expr] = []
                 for e in sl.elts:
                     if is_ellipsis(e):
                         elts.extend(ast.Slice() for unused in range(max(fill, 0)))
@@ -285,6 +295,8 @@ class DeadCodePrune(ast.NodeTransformer):
     targets, so a helper passed as a first-class value is still kept.
     Non-function module statements (imports, PPM constants) are always kept.
     No-op when the entry is absent or the whole module is reachable."""
+
+    __slots__ = ("entry",)
 
     def __init__(self, entry: str) -> None:
         self.entry = entry
@@ -318,6 +330,8 @@ class KwargsToPositional(ast.NodeTransformer):
     keyword, or an unfilled required parameter. Only module-local ``def``
     targets are considered -- library calls (``np.zeros(.., dtype=..)``)
     keep their keywords."""
+
+    __slots__ = ("signatures",)
 
     def __init__(self, signatures: dict[str, tuple]) -> None:
         # name -> (param_names, {param_name: default_ast})
