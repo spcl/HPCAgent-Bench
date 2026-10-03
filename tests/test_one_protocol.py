@@ -93,17 +93,17 @@ def test_only_the_final_grade_is_credited_and_an_old_protocol_only_kernel_is_una
     assert answers(tmp_path) == {"gemm": pytest.approx(4.0)}
 
 
-def test_an_owed_submission_is_listed_final_graded_and_applied_back_beside_it(tmp_path: pathlib.Path) -> None:
+def test_an_owed_submission_is_listed_final_graded_and_rewrites_its_older_final_row(tmp_path: pathlib.Path) -> None:
     """``worklist --scope owed`` lists the episode's final submission no credited final grade re-timed;
-    the pass's shard, applied to the DB it was listed from, links the final grade to that very grade,
-    and the submission is owed no more. An older final pass does not settle it."""
+    the pass's shard, applied to the DB it was listed from, rewrites that submission's older final row
+    (same id, the credited values), and the submission is owed no more. An older final pass does not settle it."""
     db = shard(tmp_path)
     earlier = submission(db, 0, "gemm", T0 + 10)
     last = submission(db, 0, "gemm", T0 + 20)
     with contextlib.closing(results_db.open_db(db)) as conn:
         run, bench = conn.execute("SELECT episode_id, kernel FROM grades WHERE id = ?", (last,)).fetchone()
         older = {**results_seed.STAMP, **final_values(2.0), "timing_reduction": "mwd-v3", "of_grade_id": last}
-        results_db.add_grade(conn, run, bench, "final", ts_ms=T0 + 25, values=older)
+        older_id, _ts = results_db.add_grade(conn, run, bench, "final", ts_ms=T0 + 25, values=older)
         conn.commit()
 
     (item,) = grade_under.build_owed_worklist([db], [])[0]
@@ -118,9 +118,9 @@ def test_an_owed_submission_is_listed_final_graded_and_applied_back_beside_it(tm
     assert grade_under.build_owed_worklist([db], [])[0] == []
     with results_db.reading(db) as conn:
         linked = conn.execute(
-            "SELECT of_grade_id, timing_reduction FROM grades WHERE kind = 'final' ORDER BY ts_ms"
+            "SELECT id, of_grade_id, timing_reduction FROM grades WHERE kind = 'final' ORDER BY ts_ms"
         ).fetchall()
-    assert [tuple(row) for row in linked] == [(last, "mwd-v3"), (last, timing.FINAL_GRADE_REDUCTION)]
+    assert [tuple(row) for row in linked] == [(older_id, last, timing.FINAL_GRADE_REDUCTION)]
 
 
 def test_a_final_grade_under_another_denominator_leaves_its_submission_owed(tmp_path: pathlib.Path) -> None:

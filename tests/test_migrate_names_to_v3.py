@@ -203,3 +203,17 @@ if __name__ == "__main__":
     ):
         with tempfile.TemporaryDirectory() as directory:
             test(pathlib.Path(directory))
+
+
+def test_a_stamp_count_that_moves_anywhere_but_its_rename_refuses_the_file() -> None:
+    """Each retired stamp's grades must land whole on its replacement: a lost or misfiled grade refuses."""
+    import pytest
+
+    from scripts import migrate_names_to_v3 as migrate
+
+    before = migrate.Snapshot({}, {}, {}, {"mw4x5-final-v2": 2, "mwd-final": 3, None: 1})
+    migrate.check_content(before, migrate.Snapshot({}, {"setups": 0}, {}, {"mw4x5": 2, "mwd-final": 3, None: 1}), {})
+    with pytest.raises(migrate.Refused, match="timing_reduction"):
+        migrate.check_content(
+            before, migrate.Snapshot({}, {"setups": 0}, {}, {"mw4x5": 1, "mwd-final": 4, None: 1}), {}
+        )

@@ -14,6 +14,8 @@ PINNED_STAMPS = {
     "mw4x5": "final",
     "md1x5": "preview",
     "mw4x5-aa": "calibration",
+    "mwd-final": "retired",
+    "mw4x5-final": "retired",
     "mwd-v3": "live",
     "mok-v1-varied": "live",
     "medk-v1-varied": "live",

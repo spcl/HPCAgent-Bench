@@ -25,7 +25,7 @@ the code no longer reads:
 * ``PRAGMA user_version`` goes 2 -> 3.
 
 Before the commit the migrated file is checked: integrity_check, foreign_key_check, the table and column lists
-against hpcagent_bench/harness/schema.sql, the row counts, a SHA-256 over every table whose content must not
+against hpcagent_bench/harness/schema.sql, the row counts, the grades per ``timing_reduction`` value (each renamed stamp's count moves whole), a SHA-256 over every table whose content must not
 change (rows in rowid order, columns mapped), and over ``episodes`` without ``label`` and ``setup``. Any difference
 rolls the file back untouched. A v3 file is reported and left alone, so a second run changes nothing.
 
@@ -383,6 +383,7 @@ class Snapshot:
     columns: dict[str, tuple[str, ...]]
     counts: dict[str, int]
     digests: dict[str, str]
+    stamps: dict[str | None, int]
 
 
 def quote(name: str) -> str:
@@ -441,7 +442,8 @@ def snapshot(conn: sqlite3.Connection, hashed: dict[str, Sequence[str]]) -> Snap
     columns = {name: cols for name, cols in table_columns(conn).items() if name in tables}
     counts = {name: int(conn.execute(f"SELECT COUNT(*) FROM {quote(name)}").fetchone()[0]) for name in sorted(tables)}
     digests = {name: digest(conn, name, cols) for name, cols in hashed.items() if name in tables}
-    return Snapshot(columns, counts, digests)
+    stamps = dict(conn.execute("SELECT timing_reduction, COUNT(*) FROM grades GROUP BY timing_reduction").fetchall())
+    return Snapshot(columns, counts, digests, stamps)
 
 
 def describe(conn: sqlite3.Connection) -> list[str]:
@@ -641,6 +643,12 @@ def check_content(before: Snapshot, after: Snapshot, mapping: dict[str, str]) ->
     if digests != after.digests:
         bad = sorted(k for k in set(digests) | set(after.digests) if digests.get(k) != after.digests.get(k))
         raise Refused(f"row checksums differ after the migration in: {bad}")
+    stamps: dict[str | None, int] = {}
+    for stamp, n in before.stamps.items():
+        renamed = STAMP_RENAMES.get(stamp, stamp) if stamp is not None else None
+        stamps[renamed] = stamps.get(renamed, 0) + n
+    if stamps != after.stamps:
+        raise Refused(f"grades per timing_reduction differ after the migration: {stamps} != {after.stamps}")
 
 
 def checks(conn: sqlite3.Connection) -> None:

@@ -39,6 +39,7 @@ __all__ = [
     "add_grade",
     "add_scaling",
     "call_index",
+    "collapse_finals",
     "copy_grade",
     "delete_setups",
     "ensure_episode",
@@ -432,6 +433,43 @@ GRADE_CHILDREN: tuple[str, ...] = (
     "grade_cells",
     "grade_sources",
 )
+
+
+def collapse_finals(conn: sqlite3.Connection, credited: str, apart: str) -> int:
+    """Keep ONE ``final`` grade per submission, so a regrade rewrites the row it re-times instead of adding one.
+
+    The winner is the ``credited`` stamp first, then the newest. Its values (cells and every child included) move
+    into the submission's oldest final row id; the other final rows and their children go. Rows stamped ``apart``
+    (the A/A calibration, never a grade) are left alone. Returns the rows removed; the caller commits."""
+    groups = conn.execute(
+        "SELECT of_grade_id, group_concat(id) FROM (SELECT id, of_grade_id FROM grades WHERE kind = 'final' "
+        "AND of_grade_id IS NOT NULL AND timing_reduction IS NOT ? "
+        "ORDER BY of_grade_id, timing_reduction IS ? DESC, ts_ms DESC, id DESC) "
+        "GROUP BY of_grade_id HAVING count(*) > 1",
+        (apart, credited),
+    ).fetchall()
+    columns = [str(row[1]) for row in conn.execute("PRAGMA table_info(grades)") if row[1] != "id"]
+    removed = 0
+    for _of, ids_text in groups:
+        ranked = [int(i) for i in str(ids_text).split(",")]
+        winner, keep = ranked[0], min(ranked)
+        doomed = [i for i in ranked if i not in (winner, keep)]
+        stale = [i for i in ranked if i != winner]
+        marks = ", ".join("?" * len(stale))
+        for table in GRADE_CHILDREN:
+            conn.execute(f"DELETE FROM {table} WHERE grade_id IN ({marks})", stale)
+        if winner != keep:
+            values = conn.execute(f"SELECT {', '.join(columns)} FROM grades WHERE id = ?", (winner,)).fetchone()
+            for table in GRADE_CHILDREN:
+                conn.execute(f"UPDATE {table} SET grade_id = ? WHERE grade_id = ?", (keep, winner))
+            doomed.append(winner)
+            conn.executemany("DELETE FROM grades WHERE id = ?", [(i,) for i in doomed])
+            assignments = ", ".join(f"{name} = ?" for name in columns)
+            conn.execute(f"UPDATE grades SET {assignments} WHERE id = ?", (*values, keep))
+        else:
+            conn.executemany("DELETE FROM grades WHERE id = ?", [(i,) for i in doomed])
+        removed += len(doomed)
+    return removed
 
 
 def delete_setups(conn: sqlite3.Connection, setups: Sequence[str]) -> dict[str, int]:

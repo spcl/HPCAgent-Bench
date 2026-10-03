@@ -1207,7 +1207,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     applying = sub.add_parser("apply", help="merge finished shards into the results DB they were listed from")
     applying.add_argument("--into", required=True, type=pathlib.Path, help="the results DB (v1) to write into")
-    applying.add_argument("outputs", nargs="+", type=pathlib.Path, help="shard DBs or their --out-dir")
+    applying.add_argument("outputs", nargs="*", type=pathlib.Path, help="shard DBs or their --out-dir")
     args = parser.parse_args(argv)
 
     if args.command == "worklist":
@@ -1265,10 +1265,18 @@ def write_worklist(args: argparse.Namespace) -> int:
 
 def apply_shards(into: pathlib.Path, outputs: Sequence[pathlib.Path]) -> int:
     """``apply``: merge every results DB under ``outputs`` (shard files or their directories) into
-    ``into`` by natural key (:func:`results_db.merge`); returns the rows merged."""
+    ``into`` by natural key (:func:`results_db.merge`), then keep one final grade per submission
+    (:func:`results_db.collapse_finals`): a regrade rewrites the final row it re-timed. With no ``outputs`` it
+    only collapses. Returns the rows merged."""
     shards = sorted({db for out in outputs for db in ([out] if out.is_file() else out.rglob("*.db"))})
     copied = results_db.merge(into, shards)
-    print(f"{len(shards)} shard(s) -> {into}: {sum(copied.values())} rows {dict(sorted(copied.items()))}")
+    with contextlib.closing(results_db.open_db(into)) as conn:
+        removed = results_db.collapse_finals(conn, FINAL.stamp, timing.AA_REDUCTION)
+        conn.commit()
+    print(
+        f"{len(shards)} shard(s) -> {into}: {sum(copied.values())} rows {dict(sorted(copied.items()))}; "
+        f"{removed} superseded final rows rewritten away"
+    )
     return sum(copied.values())
 
 
