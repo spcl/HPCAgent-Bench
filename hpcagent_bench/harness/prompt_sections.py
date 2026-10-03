@@ -92,7 +92,8 @@ def pick_sections(given: Mapping[str, SectionValue] | None = None) -> tuple[tupl
     known = section_templates()
     block = as_block(config.get("prompt.sections", {}))
     chosen: dict[str, SectionValue] = {}
-    for name in sorted({*known, *block, *(given or {})}):
+    names: set[str] = {*known, *block, *(given or {})}
+    for name in sorted(names):
         if given is not None and name in given:
             raw: object = given[name]
         else:
@@ -103,7 +104,8 @@ def pick_sections(given: Mapping[str, SectionValue] | None = None) -> tuple[tupl
             chosen[name] = value
     unknown = sorted(set(chosen) - set(known))
     if unknown:
-        raise ValueError(f"unknown prompt section(s) {unknown}; known: {', '.join(sorted(known))}")
+        message = f"unknown prompt section(s) {unknown}; known: {', '.join(sorted(known))}"
+        raise ValueError(message)
     return tuple(chosen.items())
 
 

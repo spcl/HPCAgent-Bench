@@ -14,6 +14,7 @@ import io
 import pathlib
 import re
 import tempfile
+from collections.abc import Callable
 
 import pytest
 
@@ -39,6 +40,8 @@ KEY_CASES = (
     ("tools/web-search.md", "tools_web_search"),
 )
 OFF_CASES = ("off", "false", "none", "disabled")
+#: The tool fragments that include partials/source-file-note.j2.
+NOTE_INCLUDERS = ("score", "submit")
 LAYOUT_CASES = (
     Task("gemm", "restricted", "c"),
     Task("gemm", "restricted", "cpp"),
@@ -143,7 +146,7 @@ def test_an_unknown_section_key_is_refused_and_the_known_ones_are_listed(monkeyp
 
 def test_a_missing_replacement_names_the_template() -> None:
     prompt_config = PromptConfig.from_config(sections={"timing": "no/such/template.j2"})
-    with pytest.raises(Exception, match="no/such/template.j2"):
+    with pytest.raises(Exception, match=re.escape("no/such/template.j2")):
         build_prompt(TASK, prompt_config=prompt_config)
 
 
@@ -156,7 +159,7 @@ def test_a_disabled_tool_fragment_is_dropped_without_a_gap() -> None:
 def test_one_partial_switch_removes_its_text_from_every_tool_that_includes_it() -> None:
     needle = "To send a source file instead of inline text"
     off_config = PromptConfig.from_config(sections={"partials_source_file_note": False})
-    assert service_prompt("gemm", "c", JUDGE).count(needle) == 2
+    assert service_prompt("gemm", "c", JUDGE).count(needle) == len(NOTE_INCLUDERS)
     assert service_prompt("gemm", "c", JUDGE, prompt_config=off_config).count(needle) == 0
 
 
@@ -219,7 +222,7 @@ def test_each_section_starts_at_its_heading_after_one_blank_line(task: Task) -> 
         assert not glued and "\n\n\n" not in text and text.endswith("\n") and not text.endswith("\n\n")
 
 
-def run_case(test, *args) -> None:  # noqa: ANN001 -- the explicit calls below name each test
+def run_case(test: Callable[..., None], *args: object) -> None:
     """Call ``test`` with the fixtures it names, a fresh MonkeyPatch and temp directory, then the parameters."""
     with pytest.MonkeyPatch.context() as monkeypatch, tempfile.TemporaryDirectory() as directory:
         fixtures = {"monkeypatch": monkeypatch, "tmp_path": pathlib.Path(directory)}
@@ -228,10 +231,10 @@ def run_case(test, *args) -> None:  # noqa: ANN001 -- the explicit calls below n
 
 
 if __name__ == "__main__":
-    for template, key in KEY_CASES:
-        run_case(test_a_section_key_is_its_path_without_extension_and_separators, template, key)
-    for word in OFF_CASES:
-        run_case(test_the_environment_turns_a_section_off, word)
+    for template_path, section_key in KEY_CASES:
+        run_case(test_a_section_key_is_its_path_without_extension_and_separators, template_path, section_key)
+    for off_word in OFF_CASES:
+        run_case(test_the_environment_turns_a_section_off, off_word)
     for layout_task in LAYOUT_CASES:
         run_case(test_each_section_starts_at_its_heading_after_one_blank_line, layout_task)
     run_case(test_every_section_the_top_level_templates_include_has_a_key)
