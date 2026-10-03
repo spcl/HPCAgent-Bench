@@ -12,7 +12,7 @@ import time
 import types
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, cast
 
 import numpy as np
 import yaml
@@ -771,8 +771,8 @@ def bind_kernel_outputs(
     by_name = dict(zip(input_args, call_args))
     inplace = [by_name[o] for o in output_args if o in by_name]
     values = resolve_outputs(result, inplace, output_args)
-    # resolve_outputs (frameworks/utilities.py) is unannotated and infers Optional members.
-    return dict(zip(output_args, values))  # pyright: ignore[reportReturnType]
+    # A python kernel's outputs are arrays here; a sparse or scalar one is compared as it came back.
+    return dict(zip(output_args, cast("list[np.ndarray]", values)))
 
 
 @functools.lru_cache(maxsize=None, typed=True)

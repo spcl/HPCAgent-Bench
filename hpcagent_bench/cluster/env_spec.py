@@ -35,7 +35,7 @@ EXTENDS = re.compile(r"^# extends: (.+)$", re.MULTILINE)
 MODEL_LAYER = re.compile(r"^model-([a-z0-9]+)\.env$")
 
 #: One member per ``layers/model-<model>.env``: adding a model is adding its layer.
-Model = enum.Enum(
+Model = enum.Enum(  # type: ignore[misc]  # members come from the layer files, so mypy cannot list them
     "Model", sorted((m[1], m[1]) for path in LAYERS.glob("model-*.env") if (m := MODEL_LAYER.match(path.name)))
 )
 
