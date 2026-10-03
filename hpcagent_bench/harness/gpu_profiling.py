@@ -1214,7 +1214,7 @@ def profile_gpu_submission(
         # Backstop for a child that wedges outside a rep, plus the profiler's post-processing.
         outer = rep_timeout * (reps + warmup + 2)
         run = profile_gpu_once(
-            profiling.sandbox_root(sandbox),
+            sandbox.require_root(),
             request,
             language=task.language,
             profiler=profiler,

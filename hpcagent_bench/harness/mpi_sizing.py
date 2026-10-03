@@ -25,13 +25,16 @@ unit-test with no cluster. A size symbol that sizes several array axes at once (
 symbol to keep weak scaling proportional to ``R``.
 """
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
+
+from hpcagent_bench.fuzz import FuzzValue
 
 __all__ = [
     "MAX_GRADED_RANKS",
     "RANK_BLOCK_QUANTUM",
     "aligned_multiple",
     "aligned_symbols",
+    "extent",
     "integer_kth_root",
     "sized_params",
     "strong",
@@ -50,7 +53,18 @@ RANK_BLOCK_QUANTUM: int = 64
 MAX_GRADED_RANKS: int = 16
 
 
-def strong(params: dict[str, int]) -> dict[str, int]:
+type Params = Mapping[str, FuzzValue]
+
+
+def extent(params: Params, symbol: str) -> int:
+    """The integer size of ``symbol`` in ``params``; a size symbol that is not a number is a manifest error."""
+    value = params[symbol]
+    if isinstance(value, (int, float, str)):
+        return int(value)
+    raise ValueError(f"size symbol {symbol!r} is {value!r}, not a number")
+
+
+def strong(params: Params) -> dict[str, FuzzValue]:
     """Strong scaling: total problem fixed (XL) and decomposed over the ranks, so size is
     unchanged. Returned as a fresh dict so callers may mutate it."""
     return dict(params)
@@ -79,12 +93,12 @@ def aligned_multiple(value: float, quantum: int) -> int:
 
 
 def weak(
-    params: dict[str, int],
+    params: Params,
     axis_symbols: Iterable[str],
     ranks: int,
     work_exponent: int | None = None,
     aligned: Iterable[str] = (),
-) -> dict[str, int]:
+) -> dict[str, FuzzValue]:
     """Weak scaling: grow the total problem with ``ranks`` so each rank keeps the 1-node XL work.
     ``k = work_exponent`` is the decomposition-axis tuple's exponent in the kernel WORK (a
     ``d``-dimensional decomposed domain has ``k = d``: ``NxN`` grid ``k=2``, cube ``k=3``).
@@ -120,19 +134,17 @@ def weak(
         if sym not in scaled:
             continue
         if m is not None:
-            scaled[sym] = int(params[sym]) * m
+            scaled[sym] = extent(params, sym) * m
         else:
             # P is not a k-th power: the grown extent is rounded and eta corrects by the work ratio.
-            scaled[sym] = max(1, round(int(params[sym]) * r ** (1.0 / k)))
+            scaled[sym] = max(1, round(extent(params, sym) * r ** (1.0 / k)))
     for sym in set(aligned) & set(axis_symbols):
         if sym in scaled:
-            scaled[sym] = aligned_multiple(scaled[sym], RANK_BLOCK_QUANTUM * r)
+            scaled[sym] = aligned_multiple(extent(scaled, sym), RANK_BLOCK_QUANTUM * r)
     return scaled
 
 
-def work_ratio(
-    base_params: dict[str, int], grown_params: dict[str, int], axis_symbols: Iterable[str], work_exponent: int
-) -> float:
+def work_ratio(base_params: Params, grown_params: Params, axis_symbols: Iterable[str], work_exponent: int) -> float:
     """The REALIZED work ratio ``W(N_P)/W(N_1)`` between a (possibly weak-grown) problem and its
     base, from the ACTUAL (rounded) per-symbol sizes rather than the continuous rank count.
 
@@ -152,16 +164,16 @@ def work_ratio(
     d = len(axes)
     ratio = 1.0
     for sym in axes:
-        base = int(base_params[sym])
+        base = extent(base_params, sym)
         if base <= 0:
             raise ValueError(f"work_ratio needs a positive base size for {sym!r}; got {base}")
-        ratio *= int(grown_params[sym]) / base
+        ratio *= extent(grown_params, sym) / base
     return ratio ** (k / d)
 
 
 def weak_rounding_note(
-    base_params: dict[str, int],
-    grown_params: dict[str, int],
+    base_params: Params,
+    grown_params: Params,
     axis_symbols: Iterable[str],
     ranks: int,
     work_exponent: int,
@@ -172,7 +184,7 @@ def weak_rounding_note(
     r, k = max(1, int(ranks)), int(work_exponent)
     m = integer_kth_root(r, k)
     axes = sorted(sym for sym in set(axis_symbols) if sym in grown_params and sym in base_params)
-    if m is not None and all(int(grown_params[sym]) == int(base_params[sym]) * m for sym in axes):
+    if m is not None and all(extent(grown_params, sym) == extent(base_params, sym) * m for sym in axes):
         return None
     sizes = {sym: grown_params[sym] for sym in sorted(set(axis_symbols)) if sym in grown_params}
     ratio = work_ratio(base_params, grown_params, axis_symbols, k)
@@ -181,13 +193,13 @@ def weak_rounding_note(
 
 
 def sized_params(
-    params: dict[str, int],
+    params: Params,
     mode: str,
     axis_symbols: Iterable[str],
     ranks: int,
     work_exponent: int | None = None,
     aligned: Iterable[str] = (),
-) -> dict[str, int]:
+) -> dict[str, FuzzValue]:
     """Dispatch ``mode`` (``"strong"`` / ``"weak"``) to the matching transform.
 
     The scorer's single call site, so the mode string is validated in one place; an unknown
@@ -209,7 +221,8 @@ def aligned_symbols(mpi: dict[str, object] | None) -> frozenset[str]:
     expert is a unit, never a 64-element block)."""
     block = mpi or {}
     split = block.get("split") or {}
-    exempt = {str(s) for s in (block.get("rank_block_exempt") or ())}
+    exempt_raw = block.get("rank_block_exempt")
+    exempt = {str(s) for s in exempt_raw} if isinstance(exempt_raw, (list, tuple)) else set()
     if not isinstance(split, dict):
         return frozenset()
     return frozenset(str(v) for v in split.values() if v is not None) - exempt

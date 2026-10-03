@@ -19,7 +19,7 @@ import functools
 import json
 import os
 import pathlib
-from collections.abc import Generator, Mapping
+from collections.abc import Generator, Mapping, Sequence
 from typing import Any, ClassVar, Self, cast
 
 import yaml
@@ -39,8 +39,13 @@ __all__ = [
     "get",
     "get_bool",
     "get_float",
+    "get_float_or_none",
     "get_int",
+    "get_int_or_none",
+    "get_number_map",
     "get_str",
+    "get_str_list",
+    "get_str_map",
     "overridden",
     "override_snapshot",
     "reload",
@@ -269,6 +274,51 @@ def get_float(dotted: str, default: float = 0.0) -> float:
     if isinstance(value, str):
         return float(value.strip())
     raise TypeError(f"config {dotted} is {value!r}, not a number")
+
+
+def get_int_or_none(dotted: str) -> int | None:
+    """:func:`get_int` for a key that may be unset (``None`` when it is)."""
+    return None if get(dotted) is None else get_int(dotted)
+
+
+def get_float_or_none(dotted: str) -> float | None:
+    """:func:`get_float` for a key that may be unset (``None`` when it is)."""
+    return None if get(dotted) is None else get_float(dotted)
+
+
+def get_str_list(dotted: str, default: Sequence[str] = ()) -> list[str]:
+    """The list of text at ``dotted`` (``default`` when unset)."""
+    value = get(dotted)
+    if value is None:
+        return list(default)
+    if not isinstance(value, list):
+        raise TypeError(f"config {dotted} is {value!r}, not a list")
+    return [str(item) for item in value]
+
+
+def get_str_map(dotted: str) -> dict[str, str]:
+    """The text-to-text map at ``dotted`` (empty when unset)."""
+    value = get(dotted)
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise TypeError(f"config {dotted} is {value!r}, not a map")
+    return {str(key): str(item) for key, item in value.items()}
+
+
+def get_number_map(dotted: str) -> dict[str, float]:
+    """The map at ``dotted`` from text keys (YAML int keys included) to numbers (empty when unset)."""
+    value = get(dotted)
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise TypeError(f"config {dotted} is {value!r}, not a map")
+    numbers: dict[str, float] = {}
+    for key, item in value.items():
+        if not isinstance(item, (int, float, str)):
+            raise TypeError(f"config {dotted}[{key!r}] is {item!r}, not a number")
+        numbers[str(key)] = float(item)
+    return numbers
 
 
 @dataclasses.dataclass(slots=True)

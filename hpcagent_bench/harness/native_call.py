@@ -89,7 +89,6 @@ __all__ = [
     "call_failure",
     "capture_child_stderr",
     "check_launch_env",
-    "launch_env_problems",
     "device_free_bytes",
     "device_ordinal",
     "forward_child_stderr",
@@ -103,6 +102,7 @@ __all__ = [
     "import_device_array_module",
     "is_host_oom",
     "kernel_entry",
+    "launch_env_problems",
     "mapped_device_runtimes",
     "memory_cap_crash_hint",
     "no_device_settle",
@@ -445,7 +445,7 @@ def _ptr_cdecl(dtype: "str | np.dtype[np.generic]") -> str:
 WORKSPACE_PTYPE = _ptr_cdecl(WORKSPACE_DTYPE)
 
 
-def _workspace_bytes(expr: str | None, binding: Binding, data: KernelData) -> int:
+def _workspace_bytes(expr: str | None, binding: Binding, data: Mapping[str, KernelValue]) -> int:
     """Resolve the submission's scratch request (ABI Sec. 11) to bytes for this call's sizes.
 
     ``expr`` is an arithmetic expression over scalar / size-symbol names (e.g. ``"8*NI*NJ + 256"``),

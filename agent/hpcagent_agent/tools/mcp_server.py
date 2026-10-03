@@ -185,7 +185,7 @@ def handle(request: dict[str, Any]) -> dict[str, Any] | None:
 
     if method == "tools/call":
         name = params.get("name")
-        module = TOOLS.get(name)
+        module = TOOLS.get(name) if isinstance(name, str) else None
         if module is None:
             return error(f"unknown tool: {name}", request_id, -32602)
         return call_tool(module, params.get("arguments") or {}, request_id)

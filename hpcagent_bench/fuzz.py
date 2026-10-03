@@ -82,6 +82,7 @@ __all__ = [
     "enumerate_configs",
     "eval_call",
     "eval_compare",
+    "eval_int",
     "eval_node",
     "fuzzed_shape",
     "initializer_seed",
@@ -104,11 +105,11 @@ __all__ = [
     "safe_eval",
     "sample_leaf",
     "sample_one",
-    "snap_divisible",
     "sample_params",
     "sample_set",
     "secret_shape_seed",
     "smooth_numbers",
+    "snap_divisible",
     "snap_smooth",
 ]
 
@@ -487,7 +488,7 @@ def apply_func(name: str, args: list[FuzzValue], expr: str) -> FuzzValue:
 EVAL_ERRORS: tuple[type[Exception], ...] = (SyntaxError, NameError, ValueError, TypeError, ArithmeticError)
 
 
-def safe_eval(expr: str, names: dict[str, FuzzValue]) -> FuzzValue:
+def safe_eval(expr: str, names: Mapping[str, FuzzValue]) -> FuzzValue:
     """Evaluate a fuzz expression against ``names`` WITHOUT Python ``eval``.
 
     Supports arithmetic, comparisons, boolean / ternary logic, literals,
@@ -504,7 +505,15 @@ def safe_eval(expr: str, names: dict[str, FuzzValue]) -> FuzzValue:
     return eval_node(ast.parse(expr, mode="eval").body, names, expr)
 
 
-def eval_node(node: ast.expr, names: dict[str, FuzzValue], expr: str) -> FuzzValue:
+def eval_int(expr: str, names: Mapping[str, FuzzValue]) -> int:
+    """:func:`safe_eval` of an expression that must be a number, truncated to an int."""
+    value = safe_eval(expr, names)
+    if isinstance(value, (bool, int, float)):
+        return int(value)
+    raise TypeError(f"{expr!r} evaluates to {value!r}, not a number")
+
+
+def eval_node(node: ast.expr, names: Mapping[str, FuzzValue], expr: str) -> FuzzValue:
     """One node of :func:`safe_eval`'s walk; ``expr`` is the whole source, for error messages."""
     if isinstance(node, ast.Constant):
         if isinstance(node.value, (bool, int, float, str)):
@@ -534,7 +543,7 @@ def eval_node(node: ast.expr, names: dict[str, FuzzValue], expr: str) -> FuzzVal
     raise ValueError(f"unsupported expression in {expr!r}: {ast.dump(node)}")
 
 
-def eval_compare(node: ast.Compare, names: dict[str, FuzzValue], expr: str) -> bool:
+def eval_compare(node: ast.Compare, names: Mapping[str, FuzzValue], expr: str) -> bool:
     """A comparison chain, short-circuiting like Python's own."""
     left = eval_node(node.left, names, expr)
     for op, comparator in zip(node.ops, node.comparators, strict=True):
@@ -547,7 +556,7 @@ def eval_compare(node: ast.Compare, names: dict[str, FuzzValue], expr: str) -> b
     return True
 
 
-def eval_call(node: ast.Call, names: dict[str, FuzzValue], expr: str) -> FuzzValue:
+def eval_call(node: ast.Call, names: Mapping[str, FuzzValue], expr: str) -> FuzzValue:
     """A call to one of the whitelisted builtins in :data:`_EVAL_FUNCS`, positional arguments only."""
     if (not isinstance(node.func, ast.Name)) or node.func.id not in _EVAL_FUNCS:
         raise ValueError(f"disallowed call in {expr!r}")

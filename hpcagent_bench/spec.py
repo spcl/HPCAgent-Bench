@@ -78,8 +78,8 @@ __all__ = [
     "PRESET_CHOICES",
     "RESERVED_BACKEND_NAMES",
     "RUNGS",
-    "SCOPE_NODES",
     "SCENARIO_KEYS",
+    "SCOPE_NODES",
     "SPARSE_RANK",
     "SUPPORTED_DWARFS",
     "SUPPORTED_SCALES",
@@ -95,6 +95,7 @@ __all__ = [
     "InitSpec",
     "KernelRegistry",
     "LayoutChoice",
+    "MpiDecomposition",
     "Preset",
     "PresetTable",
     "ResolvedBench",
@@ -159,10 +160,8 @@ __all__ = [
     "shape_dims",
     "shape_identifiers",
     "shape_reads_init_scalars",
-    "stem_aliases",
     "sparse_alignment_constraints",
-    "validate_scenario_layouts",
-    "validate_sparse_layouts",
+    "stem_aliases",
     "str_block_of",
     "target_names",
     "track_datatype",
@@ -173,6 +172,8 @@ __all__ = [
     "validate_level",
     "validate_min_precision",
     "validate_scale",
+    "validate_scenario_layouts",
+    "validate_sparse_layouts",
     "value_of",
 ]
 
@@ -1871,6 +1872,15 @@ def parse_mpi(raw: object, sparse: bool, source: str) -> dict[str, object]:
 
 
 @dataclass(frozen=True, slots=True)
+class MpiDecomposition:
+    """The ``mpi.decomposition`` block: the size symbols sizing the block-partitioned axes, and the degree
+    ``k`` of the kernel's work in them (``None`` = strong-only: weak scaling refuses it)."""
+
+    axis: tuple[str, ...]
+    work_exponent: int | None
+
+
+@dataclass(frozen=True, slots=True)
 class BenchSpec:
     """Validated descriptor for one kernel.
 
@@ -2334,6 +2344,16 @@ class BenchSpec:
         axis and stays a real parameter, as does every entry of a curated ``config:`` LIST.
         """
         return {sym: knob.representative for sym, knob in self.config.items() if knob.domain is None}
+
+    @property
+    def mpi_decomposition(self) -> MpiDecomposition:
+        """The manifest's ``mpi.decomposition`` block (empty axes and no exponent when absent)."""
+        block = as_block(self.mpi.get("decomposition"))
+        exponent = block.get("work_exponent")
+        return MpiDecomposition(
+            axis=tuple(str(a) for a in as_list(block.get("axis"))),
+            work_exponent=int(exponent) if isinstance(exponent, (int, float, str)) else None,
+        )
 
     @property
     def resolved_level(self) -> int | None:

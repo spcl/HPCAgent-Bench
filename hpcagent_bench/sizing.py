@@ -46,14 +46,14 @@ import os
 import re
 from collections.abc import Iterator, Mapping, Sequence, Set
 from dataclasses import dataclass, replace
-from typing import cast
+from typing import TypeGuard, cast
 
 import numpy as np
 import yaml
 
 from hpcagent_bench import config, flags
 from hpcagent_bench.dtypes import storage_dtype
-from hpcagent_bench.fuzz import EVAL_ERRORS, safe_eval
+from hpcagent_bench.fuzz import EVAL_ERRORS, FuzzValue, eval_int, safe_eval
 from hpcagent_bench.precision import numpy_dtype, precision_from_datatype
 from hpcagent_bench.spec import (
     BenchSpec,
@@ -185,6 +185,26 @@ def is_plain_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
+def is_real(value: object) -> TypeGuard[int | float]:
+    """Whether ``value`` is a real number (``bool`` is not)."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def real_of(value: FuzzValue) -> int | float:
+    """``value`` as a number; a size symbol that is not one is a manifest error."""
+    if is_real(value):
+        return value
+    raise ValueError(f"expected a number, got {value!r}")
+
+
+def integer_dims(shape: FuzzValue) -> list[int] | None:
+    """The extents of an evaluated shape (a scalar is a rank-1 shape), or ``None`` when any is not a number."""
+    dims = list(shape) if isinstance(shape, (tuple, list)) else [shape]
+    if not all(is_real(d) for d in dims):
+        return None
+    return [int(real_of(d)) for d in dims]
+
+
 def is_power_of_two(value: int) -> bool:
     """Whether ``value`` is a positive power of two."""
     return value > 0 and value & (value - 1) == 0
@@ -197,9 +217,7 @@ def snap_power_of_two(value: float) -> int:
     return 1 << round(math.log2(value))
 
 
-def interpolate_symbol(
-    small: bool | float | str, large: bool | float | str, fraction: float
-) -> bool | int | float | str:
+def interpolate_symbol(small: FuzzValue, large: FuzzValue, fraction: float) -> FuzzValue:
     """One symbol's value at ``fraction`` of the way from ``small`` to ``large``, geometrically.
 
     Equal ends carry through unchanged, which is how a non-size symbol (a stride, a flag, a
@@ -236,7 +254,7 @@ def interpolate_symbol(
     return clamped
 
 
-def interpolate(small: Mapping[str, object], large: Mapping[str, object]) -> dict[str, dict[str, object]]:
+def interpolate(small: Mapping[str, FuzzValue], large: Mapping[str, FuzzValue]) -> dict[str, dict[str, FuzzValue]]:
     """The rungs in :data:`DERIVED`, interpolated between the two authored ends ``M`` and ``XL``.
 
     :raises ValueError: When the two ends declare different symbol sets. A ladder whose rungs
@@ -252,7 +270,7 @@ def interpolate(small: Mapping[str, object], large: Mapping[str, object]) -> dic
     }
 
 
-def raise_to_floor(floor: Mapping[str, object], values: Mapping[str, object]) -> dict[str, object]:
+def raise_to_floor(floor: Mapping[str, FuzzValue], values: Mapping[str, FuzzValue]) -> dict[str, FuzzValue]:
     """``values`` with every numeric symbol raised to at least its ``floor`` counterpart.
 
     A handful of kernels already declare an ``S`` larger than the timed rung a work/depth model
@@ -270,11 +288,11 @@ def raise_to_floor(floor: Mapping[str, object], values: Mapping[str, object]) ->
 
 
 def build_ladder(
-    kept: Mapping[str, object], mid: Mapping[str, object], large: Mapping[str, object]
-) -> dict[str, dict[str, object]]:
+    kept: Mapping[str, FuzzValue], mid: Mapping[str, FuzzValue], large: Mapping[str, FuzzValue]
+) -> dict[str, dict[str, FuzzValue]]:
     """The four rungs: ``S`` kept verbatim, ``M`` and ``XL`` as authored, ``L`` interpolated."""
     mid = raise_to_floor(kept, mid)
-    ladder: dict[str, dict[str, object]] = {KEPT: dict(kept), "M": dict(mid), "XL": dict(large)}
+    ladder: dict[str, dict[str, FuzzValue]] = {KEPT: dict(kept), "M": dict(mid), "XL": dict(large)}
     ladder.update(interpolate(mid, large))
     return {preset: ladder[preset] for preset in PRESETS}
 
@@ -297,8 +315,11 @@ def fraction_probes(fraction: float) -> Iterator[float]:
 
 
 def constrain_derived(
-    spec: BenchSpec, ladder: Mapping[str, Mapping[str, object]], mid: Mapping[str, object], large: Mapping[str, object]
-) -> dict[str, dict[str, object]]:
+    spec: BenchSpec,
+    ladder: Mapping[str, Mapping[str, FuzzValue]],
+    mid: Mapping[str, FuzzValue],
+    large: Mapping[str, FuzzValue],
+) -> dict[str, dict[str, FuzzValue]]:
     """``ladder`` with every DERIVED rung moved to the nearest position its constraints hold at.
 
     The midpoint is a default, not a requirement: the ladder owes a rung between ``M`` and ``XL``
@@ -320,7 +341,7 @@ def constrain_derived(
     return out
 
 
-def ladder_violations(ladder: Mapping[str, Mapping[str, object]]) -> list[str]:
+def ladder_violations(ladder: Mapping[str, Mapping[str, FuzzValue]]) -> list[str]:
     """Every way ``ladder`` is not monotone, as human-readable strings (empty when it is).
 
     A rung that shrinks where its neighbours grow is the failure this catches: it makes ``M``
@@ -345,20 +366,13 @@ def ladder_violations(ladder: Mapping[str, Mapping[str, object]]) -> list[str]:
         if lo_name not in ladder or hi_name not in ladder:
             continue
         lo_vals, hi_vals = ladder[lo_name], ladder[hi_name]
-        grown = any(
-            isinstance(v, (int, float))
-            and not isinstance(v, bool)
-            and isinstance(hi_vals.get(k), (int, float))
-            and not isinstance(hi_vals.get(k), bool)
-            and hi_vals[k] > v
-            for k, v in lo_vals.items()
-        )
+        grown = any(is_real(v) and is_real(top := hi_vals.get(k)) and top > v for k, v in lo_vals.items())
         if not grown:
             out.append(f"{lo_name}->{hi_name}: no symbol strictly increases, not a ladder")
     return out
 
 
-def format_scalar(value: bool | float | str) -> str:
+def format_scalar(value: FuzzValue) -> str:
     """A YAML scalar for ``value`` in the corpus's manifest style (``true``/``false``, plain ints)."""
     if isinstance(value, bool):
         return "true" if value else "false"
@@ -394,7 +408,7 @@ def preset_span(lines: Sequence[str], block: tuple[int, int], preset: str) -> tu
     return at, stop
 
 
-def rewrite_parameters(text: str, ladder: Mapping[str, Mapping[str, object]]) -> str:
+def rewrite_parameters(text: str, ladder: Mapping[str, Mapping[str, FuzzValue]]) -> str:
     """``text`` with the ``parameters:`` block's scalars replaced by ``ladder``.
 
     Every other byte of the manifest survives, comments included: a symbol already present is
@@ -417,6 +431,8 @@ def rewrite_parameters(text: str, ladder: Mapping[str, Mapping[str, object]]) ->
         if not values:
             continue
         block = parameters_span(lines)  # re-resolve: a previous insertion moved every later index
+        if block is None:
+            raise ValueError("manifest has no top-level 'parameters:' block")
         span = preset_span(lines, block, preset)
         if span is None:
             # A missing preset goes after the last rung that precedes it, so the block stays in
@@ -447,7 +463,7 @@ def rewrite_parameters(text: str, ladder: Mapping[str, Mapping[str, object]]) ->
     return "".join(lines)
 
 
-def variant_bytes(variant: SparseLayoutVariant, namespace: Mapping[str, object]) -> int | None:
+def variant_bytes(variant: SparseLayoutVariant, namespace: Mapping[str, FuzzValue]) -> int | None:
     """Bytes one sparse format's physical buffers occupy, or ``None`` when a shape does not resolve.
 
     Buffer dtypes are always declared, so unlike a dense array none of them fall back to the run's
@@ -459,15 +475,16 @@ def variant_bytes(variant: SparseLayoutVariant, namespace: Mapping[str, object])
             shape = safe_eval("(" + ", ".join(buf.shape) + ",)", namespace)
         except EVAL_ERRORS:  # a shape naming an underivable symbol is not a byte count
             return None
-        if not all(isinstance(d, (int, float)) and not isinstance(d, bool) for d in shape):
+        dims = integer_dims(shape)
+        if dims is None:
             return None
-        total += int(math.prod(int(d) for d in shape)) * int(np.dtype(storage_dtype(buf.dtype)).itemsize)
+        total += math.prod(dims) * int(np.dtype(storage_dtype(buf.dtype)).itemsize)
     return total
 
 
 def layout_bound_namespace(
-    spec: BenchSpec, namespace: Mapping[str, object], block_size: int
-) -> dict[str, object] | None:
+    spec: BenchSpec, namespace: Mapping[str, FuzzValue], block_size: int
+) -> dict[str, FuzzValue] | None:
     """``namespace`` plus an UPPER BOUND on every padded-format scalar (``A_nnzb``,
     ``A_ndiag``, ``A_width``, ...) sized by the entries the matrix stores (its count symbol plus one
     diagonal), not by padding: a padded layout is never refused, and one whose padding outgrows the
@@ -475,7 +492,7 @@ def layout_bound_namespace(
     out = dict(namespace)
     for logical, layout in spec.sparse_layouts.items():
         try:
-            rows, cols, nnz = (int(safe_eval(str(e), namespace)) for e in (*layout.logical_shape, layout.nnz))
+            rows, cols, nnz = (eval_int(str(e), namespace) for e in (*layout.logical_shape, layout.nnz))
         except EVAL_ERRORS:
             return None
         stored = nnz + max(rows, cols)
@@ -494,7 +511,7 @@ def layout_bound_namespace(
 
 def sparse_bytes(
     spec: BenchSpec,
-    namespace: Mapping[str, object],
+    namespace: Mapping[str, FuzzValue],
     dense: Mapping[str, int],
     wanted: Set[str] | None = None,
     layout: ResolvedLayout | None = None,
@@ -520,8 +537,8 @@ def sparse_bytes(
 
 def configuration_bytes(
     spec: BenchSpec,
-    arrays: Mapping[str, object],
-    namespace: Mapping[str, object],
+    arrays: Mapping[str, FuzzValue],
+    namespace: Mapping[str, FuzzValue],
     dense: Mapping[str, int],
     wanted: Set[str] | None,
 ) -> int | None:
@@ -558,7 +575,7 @@ def working_bytes(
     working set would let any size past a ceiling check. A non-empty ``names`` that matches no
     declared array is unknown too (``output_args`` and ``init.shapes`` are different namespaces).
     """
-    if not spec.init.shapes:
+    if spec.init is None or not spec.init.shapes:
         return None
     undeclared = numpy_dtype(precision_from_datatype(datatype))
     wanted = None if names is None else set(names)
@@ -571,14 +588,14 @@ def working_bytes(
             shape = safe_eval(str(expr), namespace)
         except EVAL_ERRORS:  # an unresolvable shape is not a byte count; report unknown
             return None
-        dims = tuple(shape) if isinstance(shape, (tuple, list)) else (shape,)
-        if not all(isinstance(d, (int, float)) and not isinstance(d, bool) for d in dims):
+        dims = integer_dims(shape)
+        if dims is None:
             return None
         declared = spec.init.dtypes.get(array)
         # A DECLARED dtype is sized by its STORAGE (int4 lives one value per int8 byte, and
         # numpy has no "int4"), so the width is the buffer's, not the logical format's.
         width = int(np.dtype(storage_dtype(declared) if declared else undeclared).itemsize)
-        dense[array] = int(math.prod(int(d) for d in dims)) * width
+        dense[array] = math.prod(dims) * width
     if wanted and not dense:
         return None
     if not spec.sparse_layouts:
@@ -586,7 +603,19 @@ def working_bytes(
     return sparse_bytes(spec, namespace, dense, wanted, layout)
 
 
-def shape_namespace(spec: BenchSpec, values: Mapping[str, object]) -> dict[str, object]:
+def scalar_values(values: Mapping[str, object]) -> dict[str, FuzzValue]:
+    """The scalars among ``values`` (a kernel's data holds arrays beside its sizes), numpy scalars as the
+    Python numbers they hold: arrays cannot appear in a shape or constraint expression."""
+    out: dict[str, FuzzValue] = {}
+    for name, value in values.items():
+        if isinstance(value, np.generic):
+            value = value.item()
+        if isinstance(value, (bool, int, float, str, Mapping, list, tuple)):
+            out[name] = value
+    return out
+
+
+def shape_namespace(spec: BenchSpec, values: Mapping[str, object]) -> dict[str, FuzzValue]:
     """Every name a shape or constraint expression may reference at ``values``.
 
     Exactly the sources the manifest validator accepts
@@ -595,15 +624,16 @@ def shape_namespace(spec: BenchSpec, values: Mapping[str, object]) -> dict[str, 
     (``cloudsc`` shapes arrays by a module-level ``nclv``). Declared values win over a module
     constant of the same name.
     """
-    names: dict[str, object] = {
+    names: dict[str, FuzzValue] = {
         name: value
         for name, value in module_level_constants(spec.relative_path, spec.module_name).items()
         if value is not None
     }
     if spec.config_space:
         names.update(spec.config_space[0])
-    names.update(spec.init.scalars)
-    names.update(values)
+    if spec.init is not None:
+        names.update(spec.init.scalars)
+    names.update(scalar_values(values))
     return names
 
 
@@ -661,7 +691,8 @@ def kernel_memory_gb(
         try:
             # ARRAY_BYTES as native_call resolves it (grade_under.UNKNOWN_WORKSPACE), so the cap holds it
             namespace = {**shape_namespace(spec, values), "ARRAY_BYTES": arrays}
-            request = max(0, math.ceil(safe_eval(str(workspace), namespace)))
+            requested = safe_eval(str(workspace), namespace)
+            request = max(0, math.ceil(real_of(requested)))
         except Exception:  # noqa: BLE001 -- native_call validates the request for real (a scored
             request = 0  # error); an unresolvable one simply adds nothing to the cap here
     return max((MEMORY_COPIES * arrays + request) / BYTES_PER_GB, floor)
@@ -701,7 +732,7 @@ def reference_memory_gb(kernel_gb: float) -> float:
     return max(kernel_gb, fraction * rank_memory_share_bytes() / BYTES_PER_GB)
 
 
-def footprint_symbols(spec: BenchSpec, values: Mapping[str, object]) -> list[str]:
+def footprint_symbols(spec: BenchSpec, values: Mapping[str, FuzzValue]) -> list[str]:
     """The symbols of ``values`` the declared working set actually depends on, MEASURED by doubling
     each and asking whether the byte count moves.
 
@@ -725,14 +756,16 @@ def footprint_symbols(spec: BenchSpec, values: Mapping[str, object]) -> list[str
     return out
 
 
-def scaled(values: Mapping[str, object], scalable: Sequence[str], factor: float) -> dict[str, object]:
+def scaled(values: Mapping[str, FuzzValue], scalable: Sequence[str], factor: float) -> dict[str, FuzzValue]:
     """``values`` with every name in ``scalable`` multiplied by ``factor`` (never below 1)."""
-    return {name: (max(1, int(value * factor)) if name in scalable else value) for name, value in values.items()}
+    return {
+        name: (max(1, int(real_of(value) * factor)) if name in scalable else value) for name, value in values.items()
+    }
 
 
 def fit_to_ceiling(
-    spec: BenchSpec, values: Mapping[str, object], ceiling: int, floor: int = MIN_TIMED_BYTES
-) -> dict[str, object]:
+    spec: BenchSpec, values: Mapping[str, FuzzValue], ceiling: int, floor: int = MIN_TIMED_BYTES
+) -> dict[str, FuzzValue]:
     """``values`` shrunk uniformly to the LARGEST size that still fits ``ceiling``.
 
     Every symbol the FOOTPRINT depends on is divided by the same factor, so the kernel keeps its
@@ -758,7 +791,7 @@ def fit_to_ceiling(
     # working set one byte over is refused exactly like one a gigabyte over.
     target = CEILING_MARGIN * ceiling
     lo, hi = 0.0, 1.0  # lo always fits (in the limit every symbol clamps to 1), hi never does
-    best: dict[str, object] | None = None
+    best: dict[str, FuzzValue] | None = None
     for _ in range(FIT_BISECTIONS):
         mid = 0.5 * (lo + hi)
         probe = scaled(values, scalable, mid)
@@ -773,7 +806,7 @@ def fit_to_ceiling(
     return dict(values) if fitted is not None and fitted < floor else best
 
 
-def problem_size(spec: BenchSpec, values: Mapping[str, object]) -> float:
+def problem_size(spec: BenchSpec, values: Mapping[str, FuzzValue]) -> float:
     """A scalar standing for "how big this problem is" at ``values``.
 
     The declared-array footprint when it resolves AND some symbol moves it, else the product of the
@@ -795,7 +828,7 @@ def problem_size(spec: BenchSpec, values: Mapping[str, object]) -> float:
     return product
 
 
-def constraint_violations(spec: BenchSpec, preset: str, values: Mapping[str, object]) -> list[str]:
+def constraint_violations(spec: BenchSpec, preset: str, values: Mapping[str, FuzzValue]) -> list[str]:
     """Every ``constraints:`` expression ``values`` fails at ``preset``.
 
     An expression that cannot be evaluated counts as a failure. A constraint the checker cannot
@@ -813,7 +846,7 @@ def constraint_violations(spec: BenchSpec, preset: str, values: Mapping[str, obj
     return out
 
 
-def structural_shrinks(spec: BenchSpec, small: Mapping[str, object], large: Mapping[str, object]) -> list[str]:
+def structural_shrinks(spec: BenchSpec, small: Mapping[str, FuzzValue], large: Mapping[str, FuzzValue]) -> list[str]:
     """The int symbols no declared shape depends on (measured at ``small``) that SHRINK to ``large``.
 
     Shrinking a structural symbol (a tile, a vector length, a kernel width) buys no bytes and
@@ -828,11 +861,14 @@ def structural_shrinks(spec: BenchSpec, small: Mapping[str, object], large: Mapp
     return sorted(
         name
         for name in set(small) & set(large)
-        if name not in sized and is_plain_int(small[name]) and is_plain_int(large[name]) and large[name] < small[name]
+        if name not in sized
+        and is_plain_int(small[name])
+        and is_plain_int(large[name])
+        and real_of(large[name]) < real_of(small[name])
     )
 
 
-def growth_problems(spec: BenchSpec, ladder: Mapping[str, Mapping[str, object]]) -> list[str]:
+def growth_problems(spec: BenchSpec, ladder: Mapping[str, Mapping[str, FuzzValue]]) -> list[str]:
     """Every rung pair over which the PROBLEM (:func:`problem_size`) shrinks, or among the timed
     rungs does not grow at all -- one benchmark measured twice.
 
@@ -853,8 +889,8 @@ def growth_problems(spec: BenchSpec, ladder: Mapping[str, Mapping[str, object]])
 
 
 def derive_ladder(
-    spec: BenchSpec, small: Mapping[str, object], large: Mapping[str, object]
-) -> tuple[dict[str, dict[str, object]], list[str]]:
+    spec: BenchSpec, small: Mapping[str, FuzzValue], large: Mapping[str, FuzzValue]
+) -> tuple[dict[str, dict[str, FuzzValue]], list[str]]:
     """The validated four-rung ladder for ``spec`` from its two proposed ends.
 
     Returns ``(ladder, problems)``. A non-empty ``problems`` means the ladder must NOT be applied;
@@ -1132,7 +1168,9 @@ def alignment(value: int) -> int:
     return value & -value
 
 
-def grown(authored: Mapping[str, object], axes: Sequence[str], fraction: float, per_axis: float) -> dict[str, object]:
+def grown(
+    authored: Mapping[str, FuzzValue], axes: Sequence[str], fraction: float, per_axis: float
+) -> dict[str, FuzzValue]:
     """``authored`` with each of ``axes`` taken ``fraction`` of the way to ``per_axis`` times its value,
     rounded down to its own alignment (never below the authored value)."""
     out = dict(authored)
@@ -1151,7 +1189,7 @@ def cast_int(value: object) -> int:
     return int(cast("int", value))
 
 
-def admissible(spec: BenchSpec, rung: Mapping[str, object], datatype: str) -> bool:
+def admissible(spec: BenchSpec, rung: Mapping[str, FuzzValue], datatype: str) -> bool:
     """Whether a grown rung keeps the manifest's constraints and the XL byte ceiling."""
     if constraint_violations(spec, GROWN_RUNG, rung):
         return False
@@ -1159,7 +1197,7 @@ def admissible(spec: BenchSpec, rung: Mapping[str, object], datatype: str) -> bo
     return nbytes is None or nbytes <= XL_BYTE_CEILING
 
 
-def datatype_rung(spec: BenchSpec, datatype: str) -> tuple[dict[str, object], float]:
+def datatype_rung(spec: BenchSpec, datatype: str) -> tuple[dict[str, FuzzValue], float]:
     """``(the XL rung for a grade in datatype, the factor the scaled axes grew by)``: CONSTANT BYTES.
 
     The factor :func:`size_scale` is spread over the kernel's ``scale_axes`` (else its
@@ -1167,13 +1205,13 @@ def datatype_rung(spec: BenchSpec, datatype: str) -> tuple[dict[str, object], fl
     manifest's constraints or the XL byte ceiling refuse the full growth, the largest admissible
     fraction of it is taken (bisection); the authored rung when none is. The factor returned is what the
     axes' product actually grew by, so a grade records the size it ran at, not the one intended."""
-    authored: dict[str, object] = dict(spec.parameters.get(GROWN_RUNG) or {})
+    authored: dict[str, FuzzValue] = dict(spec.parameters.get(GROWN_RUNG) or {})
     factor = size_scale(spec, datatype)
     axes = spec.scale_axes or leading_axis(spec)
     if factor == 1.0 or not authored or not axes:
         return authored, 1.0
     per_axis = factor ** (1.0 / len(axes))
-    best: dict[str, object] = authored
+    best: dict[str, FuzzValue] = authored
     if admissible(spec, grown(authored, axes, 1.0, per_axis), datatype):
         best = grown(authored, axes, 1.0, per_axis)
     else:
