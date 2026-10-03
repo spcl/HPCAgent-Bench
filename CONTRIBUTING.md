@@ -19,7 +19,7 @@ pre-commit install
 To develop against a dace checkout of your own, change the `dace` line of `[tool.uv.sources]` in your working copy to
 `dace = { path = "/path/to/dace", editable = true }` and `uv sync --extra cpu` (without `--frozen`, since the lock names
 the pin). That is a local edit: do not commit it or the `uv.lock` it rewrites (`git checkout pyproject.toml uv.lock`
-restores both). After changing a dependency or the dace pin, run `uv lock` and commit `uv.lock` with it.
+restores both). After changing a dependency, run `uv lock` and commit `uv.lock` with it; `scripts/dace_pin.sh --bump` moves the dace pin to the spcl/dace@extended head and relocks.
 
 On a cluster, source `hpcagent_bench/cluster/env.sh`: it loads the site layer, names the host interpreter
 (`HPCAGENT_BENCH_HOST_PYTHON`) and sets `PYTHONHASHSEED=0` ([docs/configuration.md](docs/configuration.md)).
