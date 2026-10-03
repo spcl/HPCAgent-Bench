@@ -168,10 +168,13 @@ def env_value(path: pathlib.Path, name: str) -> str:
 
 
 def single_submission_setup(setup: str, env_dirs: Iterable[pathlib.Path]) -> bool:
-    """Whether ``setup``'s env (:func:`grade_under.env_files`) sets ``AGENT_SINGLE_SUBMISSION=1``; a setup without
-    an env file keeps the multi-submission rule."""
-    path = next(grade_under.env_files(setup, env_dirs), None)
-    return path is not None and env_value(path, SINGLE_SUBMISSION_KEY) == "1"
+    """Whether ``setup``'s env (:func:`grade_under.env_files`: an env file, else what ``submit.sh`` stages for it)
+    sets ``AGENT_SINGLE_SUBMISSION=1``; a setup with neither keeps the multi-submission rule."""
+    try:
+        path = next(grade_under.env_files(setup, env_dirs))
+    except grade_under.SetupEnvMissing:  # build_worklist reports the setup when it reads its grading keys
+        return False
+    return env_value(path, SINGLE_SUBMISSION_KEY) == "1"
 
 
 def job_of(row: Mapping[str, Any]) -> int:
@@ -227,12 +230,13 @@ def build_worklist(
     dirs = list(env_dirs)
     single = frozenset(setup for setup in {str(row["setup"]) for row in rows} if single_submission_setup(setup, dirs))
     finals, problems = final_rows(rows, single)
-    envs: dict[str, dict[str, str]] = {}
+    envs: dict[str, dict[str, str] | None] = {}
     items: list[Item] = []
     for row, submissions in finals:
-        setup = str(row["setup"])
-        envs.setdefault(setup, grade_under.setup_env(setup, dirs))
-        item, problem = item_of(row, envs[setup])
+        env = grade_under.setup_env_or_problem(str(row["setup"]), dirs, envs, problems)
+        if env is None:
+            continue
+        item, problem = item_of(row, env)
         if item is None:
             problems.append(problem)
         else:

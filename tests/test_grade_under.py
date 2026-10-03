@@ -52,6 +52,18 @@ from hpcagent_bench import observations_extract as extract  # noqa: E402
 
 RUN = "llr40-qwen38-hip.n0.p0.w0"
 SETUP = "llr40-qwen38-hip"
+#: The real submit.sh staging; every other test stages an empty env (:func:`stage_nothing`).
+REAL_STAGED_ENV = grade_under.staged_env
+
+
+@pytest.fixture(autouse=True)
+def stage_nothing(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A setup without an env file stages an empty one: these tests grade fixtures, not launches."""
+    empty = tmp_path_factory.mktemp("staged") / ".env"
+    empty.write_text("", encoding="utf-8")
+    monkeypatch.setattr(grade_under, "staged_env", lambda _setup: empty)
+
+
 JOB = 631272
 HOST, DEVICE = "host half", "device half"
 
@@ -194,7 +206,79 @@ def test_another_setup_sharing_the_name_prefix_is_not_the_setup_env(tmp_path: pa
     (tmp_path / f".env.{SETUP}-skills").write_text(
         f"SETUP={SETUP}-skills\nHPCAGENT_BENCH_OFFLOAD=openmp\n", encoding="utf-8"
     )
-    assert grade_under.setup_env(SETUP, [tmp_path]) == {}
+    assert grade_under.setup_env(SETUP, [tmp_path]) == {}, "the staged env, not the -skills file"
+
+
+# ------------------------------------------------------------------- setups staged by submit.sh
+
+
+@pytest.mark.parametrize(
+    ("setup", "knobs"),
+    [
+        ("llr40-qwen38-c", ("experiment", "llr40", "qwen38", "c", "", "host", "", "")),
+        ("llr40-qwen38-c-skills-blind", ("llrblind", "llr40", "qwen38", "c", "", "host", "", "-blind")),
+        ("llr40-qwen38-c-openmp-device-skills", ("experiment", "llr40", "qwen38", "c", "openmp", "device", "", "")),
+        ("llr40-qwen38-c-openmp", ("experiment", "llr40", "qwen38", "c", "openmp", "host", "", "")),
+        ("llr40-qwen38-triton-device-skills", ("experiment", "llr40", "qwen38", "triton-device", "", "host", "", "")),
+        ("harness20-oss120b-c-miniswe", ("harness", "harness20", "oss120b", "c", "", "host", "miniswe", "")),
+        ("mlscale20-kimi27sglang-hip-gemmhint", ("mlscale", "mlscale20", "kimi27sglang", "hip", "", "host", "", "")),
+    ],
+)
+def test_a_setup_name_reads_back_into_the_knobs_submit_staged_it_with(setup: str, knobs: tuple[str, ...]) -> None:
+    launch = grade_under.launch_of(setup)
+    assert launch is not None
+    got = (launch.base, launch.experiment, launch.model, launch.language, launch.offload, launch.residency)
+    assert got + (launch.harness, launch.suffix) == knobs
+    packet_free = setup.removesuffix(launch.suffix)
+    assert packet_free.startswith(launch.setup.removesuffix(launch.suffix)), "submit.sh names the same setup"
+
+
+@pytest.mark.parametrize(
+    "setup", ["llr40-pluto-c", "llr40-ppcg-hip", "harness20-caveman-c-qwen38-c", "nostudy-qwen38-c"]
+)
+def test_a_name_submit_never_writes_has_no_launch(setup: str) -> None:
+    assert grade_under.launch_of(setup) is None
+
+
+def test_no_packet_carries_a_key_a_final_grade_reads() -> None:
+    """Why a staging drops the packet: what a packet sets changes the prompt, the tools or the /score route,
+    never the final grade, so a setup whose packet no longer exists still regrades exactly."""
+    from hpcagent_bench import packets
+
+    listing = subprocess.run(
+        [sys.executable, str(REPO / "hpcagent_bench" / "cluster" / "packet_env.py"), "--list"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    for key in (line.split("\t")[0] for line in listing.splitlines()):
+        for language in ("c", "cpp", "fortran", "hip", "triton"):
+            try:
+                resolved = packets.resolve(key, language)
+            except ValueError:
+                continue
+            assert grade_under.grading_env(dict(resolved.env)) == {}, (key, language)
+
+
+def test_a_setup_without_an_env_file_is_staged_by_submit_sh(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The real launcher in ENV_ONLY mode: the ML track's distributed grading keys come from setups.yaml, the
+    offload keys from the setup's own name; neither lives in an env file any more."""
+    monkeypatch.setenv("HPCAGENT_BENCH_SYSTEM", "beverin")
+    monkeypatch.setattr(grade_under, "staged_env", REAL_STAGED_ENV)
+    ml = grade_under.setup_env("mlscale20-kimi27sglang-hip-gemmhint", [])
+    assert ml["HPCAGENT_BENCH_MPI_GRADE_DISTRIBUTED"] == "true" and ml["HPCAGENT_BENCH_MPI_RANK_COUNTS"] == "[1,2,4]"
+    offload = grade_under.setup_env("llr40-qwen38-c-openmp-device", [])
+    assert offload["HPCAGENT_BENCH_OFFLOAD"] == "openmp" and offload["HPCAGENT_BENCH_OFFLOAD_RESIDENCY"] == "device"
+    assert grade_under.setup_env("llr40-qwen38-triton-device-skills", [])["HPCAGENT_BENCH_PYTHON_DEVICE"] == "1"
+
+
+def test_a_setup_that_cannot_be_staged_is_a_problem_and_not_an_item(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(grade_under, "staged_env", REAL_STAGED_ENV)
+    envs: dict[str, dict[str, str] | None] = {}
+    problems: list[str] = []
+    assert grade_under.setup_env_or_problem("llr40-pluto-c", [], envs, problems) is None
+    assert grade_under.setup_env_or_problem("llr40-pluto-c", [], envs, problems) is None
+    assert problems == ["no grading env: llr40-pluto-c: no env file, and its name is not one submit.sh stages"]
 
 
 def fake_row(item: grade_under.Item) -> dict[str, Any]:
