@@ -62,7 +62,8 @@ for role in judge-agent-amd judge sglang vllm; do sbatch containers/images/regis
 containers/images/install_edfs.sh
 # build natively instead, then run on the -native EDFs: set the same variable for both
 export CE_IMAGE_FLAVOR=native
-sbatch -p mi300 containers/images/build_and_verify.sbatch judge-agent-amd
+sbatch -p mi300 containers/images/build_and_verify.sbatch judge-agent-amd   # ~3.5 h
+sbatch -p mi300 containers/images/build_and_verify.sbatch judge-agent-cpu   # ~1 h, on the CPU it will run on
 containers/images/registry.sh promote judge-agent-amd judge   # after it passes; renders the -native EDFs
 ```
 
@@ -123,6 +124,9 @@ held by its inode, so promotion is safe while jobs run. There is no layer cache 
 Run everything below from `containers/images/` of a checkout under `$SCRATCH` (the EDFs
 mount `$SCRATCH` and the iopsstor scratch, not `$HOME`). The judge stage COPYs `third_party/KernelBench`, so check
 the submodule out first (`git submodule update --init third_party/KernelBench`); a build says so before it starts.
+A build reads the checkout until its last stage (COPY steps run hours in), so start it from a worktree nothing
+edits while it runs, e.g. `git worktree add --detach $SCRATCH/hpcagent-bench-wt/frozen-<sha> <sha>`, and remove
+that worktree once the build and its verification are done.
 
 ### AMD (beverin)
 
@@ -137,7 +141,7 @@ for role in judge-agent-amd judge sglang vllm; do sbatch registry.sbatch pull ${
 Build when changing an image:
 
 ```bash
-sbatch -p mi300 build_and_verify.sbatch judge-agent-amd   # both targets, ~2 h warm
+sbatch -p mi300 build_and_verify.sbatch judge-agent-amd   # agent and judge roles, ~3.5 h
 sbatch -p mi300 build_and_verify.sbatch sglang            # ~1 h
 sbatch -p mi300 build_and_verify.sbatch vllm              # < 1 h, the official base
 # the same AMD images on the other partition, before promotion
@@ -337,7 +341,9 @@ context per toolchain family under `/opt/omp` (`lib/omp_contexts.sh`, the last O
 Dockerfile): `gnu` (the image default, libgomp and the `/opt/view` libraries), `llvm` (libomp,
 `libgomp.so.1` as a link to it inside `/opt/omp/llvm/lib` only, and `/opt/omp/llvm/view`,
 the OpenMP-linking libraries rebuilt with clang by a second spack environment with `shared_linking:
-runpath`) and, on the CUDA image, `nvhpc`. The judge starts a grading child of a family with that
+runpath`) and, on the CUDA image, `nvhpc`. A library whose build can only run on one runtime lives in that
+context alone and declares it (`openmp:` in `hpcagent_bench/envs/libraries.yaml`): MAGMA's HIP host code is
+hipcc code on libomp, so the AMD image builds it in the llvm view only, and only the llvm family is offered it. The judge starts a grading child of a family with that
 context's `lib/` first on `LD_LIBRARY_PATH` (`hpcagent_bench/omp_context.py`), so numpy, scipy, numba
 and every library resolve inside the family's context. `lib/omp_context_gate.py` proves one context in
 one process (each of the family's compilers, BLAS, numba, torch multi-threaded, one runtime mapped),
