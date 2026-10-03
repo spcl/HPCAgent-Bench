@@ -28,16 +28,12 @@ import pytest
 
 from hpcagent_bench import study_tags, paths
 from hpcagent_bench.stats import palette
-from hpcagent_bench.stats.figures import results, signed
+from hpcagent_bench.stats.figures import results
 
 #: The tags the figure modules hard-code and then colour. A name typed into a builder is the one
 #: kind of unregistered value no data-driven check can see, because no row has to exist for it to
 #: reach a legend.
 FIGURE_FRAMEWORKS: dict[str, tuple[str, ...]] = {
-    "figures.signed.SETUPS": tuple(signed.SETUPS),
-    "figures.signed.COMPARISONS": tuple(signed.COMPARISONS),
-    "figures.signed.BASELINE": (signed.BASELINE,),
-    "figures.signed.REFERENCE": (signed.REFERENCE,),
     "figures.results.DEFAULT_BASELINE": (results.DEFAULT_BASELINE,),
 }
 

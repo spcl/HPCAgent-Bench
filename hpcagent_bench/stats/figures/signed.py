@@ -1,75 +1,46 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Signed-change figures: one row per setup, and the paired comparison of two tools.
-
-:func:`setups_figure` puts several setups on a common denominator to compare how fast each setup is.
-:func:`paired_figure` compares two tools directly, per kernel, on the kernels both compiled --
-dividing geomeans taken over different kernel sets is not a speedup of anything.
+"""Signed-change per-kernel figures of the llr40 compiler and agent comparison (:func:`llr40_figure`,
+:func:`llr40_two_row_figure`; ``statistics/plot_llr40_compilers.py`` draws them).
 
 The axis is the signed relative change (:func:`hpcagent_bench.stats.summary.signed_change`), not
 the ratio: 2x faster sits at +1, 2x slower at -1. Follows Hoefler and Belli (SC15) rules 4 (report
 costs), 5/7 (report intervals) and 12 (no line between unordered rows), checked by
 :mod:`hpcagent_bench.stats.rules`.
-
-Usage::
-
-    python -m hpcagent_bench.stats.figures.signed <sweep-directory> --out DIR
 """
 
-import argparse
-import collections
-import csv
 import dataclasses
 import math
 import pathlib
-import random
 import re
-import sys
 from collections.abc import Collection, Mapping, Sequence
 
 import matplotlib.figure
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd  # pyright: ignore[reportMissingTypeStubs] -- pandas ships none
 from matplotlib.artist import Artist
-from matplotlib.axes import Axes
 from matplotlib.lines import Line2D
 
-from hpcagent_bench import study_tags, flags
+from hpcagent_bench import study_tags
 from hpcagent_bench.stats import canon, palette, population, rules, style
 from hpcagent_bench.stats.figures import llr40_setups, per_kernel
-from hpcagent_bench.stats.summary import DEFAULT_CONFIDENCE, geomean_ci, signed_change, usable_ratios
+from hpcagent_bench.stats.summary import geomean_ci, signed_change, usable_ratios
 
 __all__ = [
-    "BASELINE",
-    "CLOUD_KEY_MARK_PT",
-    "CLOUD_MARK_AREA",
-    "COMPARISONS",
     "DEAD_BAND",
-    "GEOMEAN_MARK_PT",
-    "INTERVAL_CAP_PT",
-    "INTERVAL_LINE_WIDTH",
     "LLR40_BASELINE",
     "LLR40_CANON_COLUMNS",
     "LLR40_CONDITIONS",
     "LLR40_PANEL_HEIGHT_IN",
-    "REFERENCE",
-    "RULE_LINE_WIDTH",
-    "SETUPS",
     "SUMMARY_COLUMNS",
     "TABLE_COLUMNS",
     "TOKEN_SUMMARY_COLUMNS",
-    "TSVC_PREFIX",
     "Row",
-    "Setup",
-    "against_baseline",
     "agent_kernel_row",
     "answer_ratios",
     "canon_kernel_row",
     "canon_label",
     "distinct_canon_labels",
-    "draw",
-    "draw_row",
     "fallback_note",
     "kernel_intervals",
     "legend_handles",
@@ -78,58 +49,20 @@ __all__ = [
     "llr40_metrics",
     "llr40_rows",
     "llr40_two_row_figure",
-    "main",
-    "paired",
-    "paired_figure",
-    "paired_rows",
     "pending_note",
-    "read_setup",
     "row_color",
-    "setup_rows",
-    "setups_figure",
-    "shard_paths",
     "sign_test",
     "solved_ratios",
     "summary_table",
     "table",
-    "tally",
     "token_summary_table",
     "unattempted_kernels",
     "write_tables",
 ]
 
-#: Framework -> the name a reader knows it by. Insertion order is the order on the axis.
-SETUPS: dict[str, str] = {
-    "dace_cpu_canonicalize": "dace canon",
-    "dace_cpu": "dace main",
-    "cc_llvm_autopar": "llvm + polly",
-}
-
-#: The speedup denominator: a serial optimizing compile, not the interpreted reference. cc exists
-#: for every kernel (unlike llvm+polly, undefined on a non-affine loop), so every setup keeps full n
-#: and llvm+polly stays visible as a setup instead of hiding in the denominator.
-BASELINE: str = "cc"
-
-#: Kernels these figures are about. tsvc_2_5* sources are already under this prefix.
-TSVC_PREFIX: str = "tsvc_2"
-
-#: The numerator of every ratio on the paired figure: the setup the ablation is about.
-REFERENCE: str = "dace_cpu_canonicalize"
-
-#: Denominator -> the row label, for the paired figure. Insertion order is the order on the axis.
-COMPARISONS: dict[str, str] = {"dace_cpu": "vs dace main", "cc_llvm_autopar": "vs llvm + polly"}
 
 #: Dead band of the sign test. Below 1% the two setups are the same code and the difference is jitter.
 DEAD_BAND: float = 1.01
-
-
-@dataclasses.dataclass(frozen=True, slots=True)
-class Setup:
-    """One framework's usable TSVC timings in ms, and a tally of what was thrown away and why."""
-
-    framework: str
-    times: dict[str, float]
-    rejected: collections.Counter[str]
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -154,54 +87,6 @@ class Row:
     tokens: dict[str, float] = dataclasses.field(default_factory=dict)  # per-kernel token spend
     delivered: dict[str, bool] = dataclasses.field(default_factory=dict)  # ratio vs 1x placeholder
     pending: frozenset[str] = frozenset()  # kernels not attempted yet (mark_pending only)
-
-
-def shard_paths(root: pathlib.Path, framework: str) -> list[pathlib.Path]:
-    """The framework's CSVs: the unsharded file, the per-rank shards, or both, in a stable order."""
-    single = root / f"{framework}.csv"
-    return ([single] if single.is_file() else []) + sorted(root.glob(f"{framework}.rank*.csv"))
-
-
-def read_setup(root: pathlib.Path, framework: str) -> Setup:
-    """Concatenate the framework's shards into ``kernel -> ms``, tallying every rejected TSVC row.
-
-    A crashed, unvalidated, or untimed row is not a data point and is counted, never plotted as
-    1.0. Only TSVC rows count as rejects; a non-TSVC row is out of scope, not excluded.
-    """
-    times: dict[str, float] = {}
-    rejected: collections.Counter[str] = collections.Counter()
-    for path in shard_paths(root, framework):
-        with path.open(newline="") as handle:
-            for row in csv.DictReader(handle):
-                kernel = row["kernel"]
-                if not kernel.startswith(TSVC_PREFIX):
-                    continue
-                if row["status"] != "ok":
-                    rejected[f"status={row['status']}"] += 1
-                elif row["validated"] != "True":
-                    rejected["not validated"] += 1
-                elif not row["median_ms"] or float(row["median_ms"]) <= 0:
-                    rejected["no timing"] += 1
-                else:
-                    # A kernel repeated across shards (a re-run rank) keeps its fastest time.
-                    ms = float(row["median_ms"])
-                    times[kernel] = min(times.get(kernel, ms), ms)
-    return Setup(framework, times, rejected)
-
-
-def tally(setup: Setup) -> str:
-    """One phrase naming every row the setup lost and why; empty when it lost none."""
-    return ", ".join(f"{n} {why}" for why, n in sorted(setup.rejected.items()))
-
-
-def against_baseline(setup: Setup, baseline: Mapping[str, float]) -> dict[str, float]:
-    """``kernel -> baseline_ms / setup_ms`` over the kernels BOTH the setup and the reference timed."""
-    return {k: baseline[k] / ms for k, ms in sorted(setup.times.items()) if k in baseline}
-
-
-def paired(reference: Mapping[str, float], other: Mapping[str, float]) -> dict[str, float]:
-    """``kernel -> other_ms / reference_ms`` over the kernels both timed; above 1 the reference wins."""
-    return {k: other[k] / ms for k, ms in sorted(reference.items()) if k in other}
 
 
 def sign_test(ratios: Mapping[str, float]) -> tuple[int, int]:
@@ -297,144 +182,6 @@ SUMMARY_COLUMNS: tuple[str, ...] = (
     "losses",
     "excluded",
 )
-
-
-#: The signed figure's mark and line sizes, in points.
-CLOUD_MARK_AREA: float = 11.0
-CLOUD_KEY_MARK_PT: float = 3.5
-GEOMEAN_MARK_PT: float = 5.5
-INTERVAL_LINE_WIDTH: float = 1.1
-INTERVAL_CAP_PT: float = 3.5
-RULE_LINE_WIDTH: float = 1.0
-
-
-def draw_row(ax: Axes, index: int, row: Row, color: str, jitter: random.Random) -> None:
-    """One setup's cloud of kernels, its geomean with interval, and its median tick.
-
-    Rule 12: no line joins the kernels, since a kernel axis has no order.
-    """
-    values = usable_ratios(list(row.ratios.values()), label=row.label)
-    if values.size == 0:
-        style.right_label(ax, index, "no data")
-        return
-    ax.scatter(  # pyright: ignore[reportUnknownMemberType]
-        [signed_change(v) for v in values.tolist()],
-        [index - 0.22 + jitter.uniform(-0.10, 0.10) for _ in range(values.size)],
-        s=CLOUD_MARK_AREA,
-        color=color,
-        alpha=0.45,
-        linewidth=0,
-        zorder=2,
-    )
-    interval = geomean_ci(values)
-    centre = signed_change(interval.point)
-    ax.errorbar(  # pyright: ignore[reportUnknownMemberType]
-        centre,
-        index + 0.24,
-        xerr=[[centre - signed_change(interval.low)], [signed_change(interval.high) - centre]],
-        fmt="o",
-        markersize=GEOMEAN_MARK_PT,
-        color=color,
-        ecolor=style.REFERENCE,
-        elinewidth=INTERVAL_LINE_WIDTH,
-        capsize=INTERVAL_CAP_PT,
-        zorder=4,
-    )
-    middle = signed_change(float(np.median(values)))
-    ax.plot(  # pyright: ignore[reportUnknownMemberType]
-        [middle, middle], [index + 0.10, index + 0.38], color=style.INK, linewidth=RULE_LINE_WIDTH, zorder=3
-    )
-    style.right_label(ax, index, f"n={values.size}")
-
-
-def draw(rows: Sequence[Row], title: str, xlabel: str, stem: pathlib.Path) -> pathlib.Path:
-    """Render the rows onto the signed axis and write the figure. Returns ``stem``."""
-    style.apply()
-    tall = 1.35 + 0.62 * len(rows)
-    fig, ax = plt.subplots(figsize=(6.8, tall))
-    fig.subplots_adjust(left=0.20, right=0.885, top=1.0 - 0.86 / tall, bottom=1.30 / tall)
-    # Seeded, so the same CSVs draw the same cloud instead of faking two measurements.
-    jitter = random.Random(0)
-    style.row_axis(ax, [row.label for row in rows])
-    ax.set_xlabel(xlabel)
-    colors = palette.framework_colors([row.framework for row in rows])
-    for index, row in enumerate(rows):
-        draw_row(ax, index, row, colors[row.framework], jitter)
-    ax.axvline(  # pyright: ignore[reportUnknownMemberType]
-        0.0, color=style.REFERENCE, linewidth=RULE_LINE_WIDTH, zorder=1
-    )
-    ax.margins(x=0.08)
-    style.value_axis(ax, axis="x")
-    handles: list[Line2D] = [
-        Line2D([], [], marker="o", linestyle="none", color=style.MUTED, markersize=CLOUD_KEY_MARK_PT, alpha=0.5),
-        Line2D([], [], marker="o", linestyle="none", color=style.MUTED, markersize=GEOMEAN_MARK_PT),
-        Line2D([], [], color=style.INK, linewidth=RULE_LINE_WIDTH),
-    ]
-    for handle, label in zip(handles, ("One Kernel", f"Geomean, {DEFAULT_CONFIDENCE:.0%} t-Interval", "Median")):
-        handle.set_label(label)
-    style.legend_below(fig, handles, ncol=3, y=0.015)
-    style.title(fig, title)
-    return style.save(fig, stem, formats=("pdf", "svg"))
-
-
-def setup_rows(root: pathlib.Path, setups: Mapping[str, str] = SETUPS, baseline: str = BASELINE) -> list[Row]:
-    """Every setup's ratios against the common ``baseline``, in ``setups`` order."""
-    reference = read_setup(root, baseline)
-    if not reference.times:
-        raise SystemExit(
-            f"no {baseline} baseline in {root}: looked for {baseline}.csv and {baseline}.rank*.csv. "
-            f"Every speedup here is a ratio against it, so there is nothing to plot without it."
-        )
-    rows: list[Row] = []
-    for framework, label in setups.items():
-        setup = read_setup(root, framework)
-        ratios = against_baseline(setup, reference.times)
-        missing = len(setup.times) - len(ratios)
-        excluded = [tally(setup)] if tally(setup) else []
-        if missing:
-            excluded.append(f"{missing} not timed by {baseline}")
-        rows.append(
-            Row(
-                framework,
-                label,
-                ratios,
-                {k: reference.times[k] for k in ratios},
-                {k: setup.times[k] for k in ratios},
-                "; ".join(excluded) or "none",
-            )
-        )
-    return rows
-
-
-def paired_rows(
-    root: pathlib.Path, reference: str = REFERENCE, comparisons: Mapping[str, str] = COMPARISONS
-) -> list[Row]:
-    """Each comparison setup's ratios against ``reference``, restricted to the shared kernels."""
-    numerator = read_setup(root, reference)
-    if not numerator.times:
-        raise SystemExit(
-            f"no {reference} setup in {root}: looked for {reference}.csv and {reference}.rank*.csv. "
-            f"It is the numerator of every ratio here, so there is nothing to plot without it."
-        )
-    rows: list[Row] = []
-    for framework, label in comparisons.items():
-        setup = read_setup(root, framework)
-        ratios = paired(numerator.times, setup.times)
-        unpaired = len(numerator.times) - len(ratios)
-        excluded = [f"{unpaired} {reference} kernels unpaired"] if unpaired else []
-        if tally(setup):
-            excluded.append(f"comparison setup lost {tally(setup)}")
-        rows.append(
-            Row(
-                framework,
-                label,
-                ratios,
-                {k: setup.times[k] for k in ratios},
-                {k: numerator.times[k] for k in ratios},
-                "; ".join(excluded) or "none",
-            )
-        )
-    return rows
 
 
 #: The baseline every llr40 compiler row is measured against.
@@ -830,31 +577,6 @@ def llr40_two_row_figure(
     return style.save(fig, out, formats=("pdf", "png"), fixed=True, dpi=dpi)
 
 
-def setups_figure(root: pathlib.Path, out: pathlib.Path) -> pathlib.Path:
-    """The three setups on a common serial denominator, with their tables beside the figure."""
-    rows = setup_rows(root)
-    write_tables(rows, out)
-    return draw(
-        rows,
-        f"TSVC Kernels, Signed Speedup Against Serial gcc {flags.OPT_LEVEL}",
-        f"signed relative speedup vs serial gcc {flags.OPT_LEVEL}\n"
-        "$+1$ = 2$\\times$ faster, 0 = no change, $-1$ = 2$\\times$ slower",
-        out,
-    )
-
-
-def paired_figure(root: pathlib.Path, out: pathlib.Path) -> pathlib.Path:
-    """Canonicalized dace against each tool it is paired with, with its tables."""
-    rows = paired_rows(root)
-    write_tables(rows, out)
-    return draw(
-        rows,
-        "TSVC Kernels, Canonicalized dace Against Each Tool It Is Paired With",
-        "signed relative speedup of dace canon\n$+1$ = 2$\\times$ faster, 0 = no change, $-1$ = 2$\\times$ slower",
-        out,
-    )
-
-
 def write_tables(rows: Sequence[Row], stem: pathlib.Path) -> tuple[pathlib.Path, pathlib.Path]:
     """Write the per-kernel and per-row tables beside the figure. Returns both paths.
 
@@ -867,21 +589,3 @@ def write_tables(rows: Sequence[Row], stem: pathlib.Path) -> tuple[pathlib.Path,
     table(rows).to_csv(per_kernel, index=False)
     summary_table(rows).to_csv(per_row, index=False)
     return per_kernel, per_row
-
-
-def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Signed-change TSVC figures for one sweep directory.")
-    parser.add_argument("sweep", type=pathlib.Path, help="directory of <framework>[.rank<N>].csv files")
-    parser.add_argument("--out", type=pathlib.Path, required=True, help="directory for the figures and tables")
-    args = parser.parse_args(argv)
-    # The source directory is in the file name: two sweeps of the same three setups are two
-    # measurements, and one silently overwriting the other is how a stale figure reaches a paper.
-    name = args.sweep.resolve().name
-    out = args.out
-    print(setups_figure(args.sweep, out / f"tsvc_signed_speedup_{name}"))
-    print(paired_figure(args.sweep, out / f"tsvc_canon_paired_{name}"))
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())
