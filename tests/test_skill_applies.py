@@ -1,15 +1,15 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The ``applies:`` frontmatter block, and the packet keys that resolve through it.
 
 ``*`` (the ``lang-skills`` packet, and ``--skills``) stages every shipped page that
-:func:`hpcagent_bench.packets.applies_to` admits for the arm, so that one block decides whether a
+:func:`hpcagent_bench.packets.applies_to` admits for the setup, so that one block decides whether a
 page reaches an agent at all. It is read by name -- an unknown key, a misspelled language or an
 image name the resolver does not know is not an error anywhere in the resolve path, it just does
-not restrict, and the page silently rides on every arm again.
+not restrict, and the page silently rides on every setup again.
 
 The other half is the packet table: :func:`hpcagent_bench.packets.resolve` raises on a page that
-does not exist, so resolving every registered key over every arm shape is what turns a typo in
+does not exist, so resolving every registered key over every setup shape is what turns a typo in
 ``envs/registry.yaml`` into a test failure instead of a launch-time ``SystemExit`` after the
 allocation is held.
 
@@ -25,8 +25,8 @@ import re
 import pytest
 import yaml
 
-from hpcagent_bench import experiment_tags as tags
 from hpcagent_bench import packets, paths
+from hpcagent_bench import study_tags as tags
 
 SKILLS = paths.ROOT / "hpcagent_bench" / "skills"
 
@@ -38,11 +38,11 @@ KNOWN_KEYS: frozenset[str] = frozenset({"languages", "images", "multinode", "exp
 #: that owns a device language.
 IMAGES: tuple[str, ...] = ("cpu", *sorted(packets.DEVICE_LANGUAGES))
 
-#: Every arm shape a page can be selected for. ``omp`` is a registered language for a FRAMEWORK
+#: Every setup shape a page can be selected for. ``omp`` is a registered language for a FRAMEWORK
 #: column and no page is written for it, so it is dropped rather than demanding a ``lang-omp``.
 LANGUAGES: tuple[str, ...] = tuple(name for name in tags.names("languages") if name != "omp")
 
-ARMS: tuple[tuple[str, str, bool], ...] = tuple(itertools.product(LANGUAGES, IMAGES, (False, True)))
+SETUPS: tuple[tuple[str, str, bool], ...] = tuple(itertools.product(LANGUAGES, IMAGES, (False, True)))
 
 PAGES: tuple[str, ...] = tuple(sorted(entry.name for entry in SKILLS.iterdir() if (entry / "SKILL.md").is_file()))
 
@@ -57,7 +57,7 @@ def applies_block(page: str) -> dict[str, object]:
 
 @pytest.mark.parametrize("page", PAGES)
 def test_an_applies_block_names_only_keys_the_resolver_reads(page: str) -> None:
-    """A key outside :data:`KNOWN_KEYS` is ignored in silence, so the page keeps riding on arms the
+    """A key outside :data:`KNOWN_KEYS` is ignored in silence, so the page keeps riding on setups the
     author believed they had excluded."""
     unknown = sorted(set(applies_block(page)) - KNOWN_KEYS)
     assert not unknown, f"{page}: applies names {unknown}, which packets.applies_to never reads"
@@ -67,7 +67,7 @@ def test_an_applies_block_names_only_keys_the_resolver_reads(page: str) -> None:
 def test_an_applies_block_names_only_registered_languages_and_real_images(page: str) -> None:
     """``languages`` is matched against the run's language and ``images`` against the image name the
     launcher passes, both by equality. A value neither side ever produces excludes the page from
-    every arm without saying so."""
+    every setup without saying so."""
     rule = applies_block(page)
     bad_languages = sorted(set(map(str, rule.get("languages") or ())) - set(LANGUAGES))
     bad_images = sorted(set(map(str, rule.get("images") or ())) - set(IMAGES))
@@ -80,25 +80,25 @@ def test_an_applies_block_names_only_registered_languages_and_real_images(page: 
 
 @pytest.mark.parametrize("page", [p for p in PAGES if p.startswith(("lang-", "openmp-")) and "-offload" not in p])
 def test_a_language_page_applies_to_its_own_language(page: str) -> None:
-    """``lang-c`` that stops admitting ``c`` is removed from every C arm while the arm still reports
-    as a skills arm. The suffix IS the language for these two families."""
+    """``lang-c`` that stops admitting ``c`` is removed from every C setup while the setup still reports
+    as a skills setup. The suffix IS the language for these two families."""
     language = page.split("-", 1)[1]
     admitted = applies_block(page).get("languages")
-    assert admitted, f"{page}: no applies.languages, so it rides on every arm including other languages"
+    assert admitted, f"{page}: no applies.languages, so it rides on every setup including other languages"
     assert language in set(map(str, admitted)), f"{page}: applies.languages is {list(admitted)}, without {language!r}"
 
 
 @pytest.mark.parametrize("page", PAGES)
-def test_every_shipped_page_reaches_some_arm(page: str) -> None:
-    """A page no arm shape admits is written, tested and staged nowhere. ``explicit`` pages are the
+def test_every_shipped_page_reaches_some_setup(page: str) -> None:
+    """A page no setup shape admits is written, tested and staged nowhere. ``explicit`` pages are the
     deliberate exception -- they ARE a treatment and are reached by name -- so they must instead be
     named by a registered packet, or nothing can stage them either."""
     if applies_block(page).get("explicit"):
         named_by = sorted(key for key, d in tags.registry().packet_defs.items() if page in d.skills)
         assert named_by, f"{page}: applies.explicit keeps it out of `*` and no registered packet names it"
         return
-    reached = [arm for arm in ARMS if packets.applies_to(page, *arm)]
-    assert reached, f"{page}: applies admits no (language, image, multinode) arm at all"
+    reached = [setup for setup in SETUPS if packets.applies_to(page, *setup)]
+    assert reached, f"{page}: applies admits no (language, image, multinode) setup at all"
 
 
 @pytest.mark.parametrize("key", sorted(tags.registry().packet_defs))
@@ -108,17 +108,15 @@ def test_every_registered_packet_resolves_or_refuses_by_device(key: str) -> None
     launch abort with the allocation already held. The only refusal allowed here is the intended
     one: a ``device:`` packet handed a language that device does not run."""
     resolved_any = False
-    for language, image, multinode in ARMS:
+    for language, image, multinode in SETUPS:
         try:
-            packet = packets.resolve(
-                key, language, {"CPF_VIEW": "/view", "REPO_LAYOUT_PYTHON": "python3"}, image=image, multinode=multinode
-            )
+            packet = packets.resolve(key, language, {"CPF_VIEW": "/view"}, image=image, multinode=multinode)
         except ValueError as exc:
             assert "teaches CPU tools" in str(exc) or "is for" in str(exc), f"{key} on {language}/{image}: {exc}"
             continue
         resolved_any = True
         assert packet.key == key, f"{key} on {language}/{image}: records itself as {packet.key!r}"
-    assert resolved_any, f"{key}: refuses every arm shape, so no arm can ever run it"
+    assert resolved_any, f"{key}: refuses every setup shape, so no setup can ever run it"
 
 
 @pytest.mark.parametrize("key", sorted(tags.registry().packet_defs))
@@ -128,12 +126,12 @@ def test_a_method_packet_names_a_directory_that_ships(key: str) -> None:
     method = tags.registry().packet_defs[key].method
     if not method:
         return
-    directory = paths.ROOT / "containers" / "agent" / "packets" / method
-    assert directory.is_dir(), f"{key}: method {method!r} has no directory under containers/agent/packets/"
+    directory = paths.ROOT / "agent" / "hpcagent_agent" / "packets" / method
+    assert directory.is_dir(), f"{key}: method {method!r} has no directory under agent/hpcagent_agent/packets/"
 
 
 def test_the_pages_a_packet_tool_owns_are_the_ones_kept_out_of_the_wildcard() -> None:
-    """:func:`packets.tool_pages` is what stops ``*`` handing an arm the manual for a tool it was
+    """:func:`packets.tool_pages` is what stops ``*`` handing a setup the manual for a tool it was
     never served. Pinned against the registry directly so a page that joins a ``tools:`` packet is
     dropped from the wildcard in the same commit."""
     expected = {page for d in tags.registry().packet_defs.values() if d.tools for page in d.skills}
@@ -143,8 +141,8 @@ def test_the_pages_a_packet_tool_owns_are_the_ones_kept_out_of_the_wildcard() ->
 
 
 def test_the_wildcard_never_stages_a_page_for_another_language() -> None:
-    """The narrowing `*` exists for: a C CPU arm was handed 21 triggers, 16 of them for situations
-    it cannot be in. A language page for a language the arm is not writing is the loudest case."""
+    """The narrowing `*` exists for: a C CPU setup was handed 21 triggers, 16 of them for situations
+    it cannot be in. A language page for a language the setup is not writing is the loudest case."""
     for language in LANGUAGES:
         staged = packets.expand_skill_token("*", language, "cpu")
         wrong = [p for p in staged if p.startswith("lang-") and not packets.applies_to(p, language, "cpu", False)]
@@ -173,15 +171,13 @@ def pages_sent_to(page: str) -> frozenset[str]:
 
 @pytest.mark.parametrize("key", sorted(tags.registry().packet_defs))
 def test_a_packet_stages_every_page_the_pages_it_stages_send_the_reader_to(key: str) -> None:
-    """A staged page that says "read `lang-cpp` first" on an arm where `lang-cpp` was not staged
+    """A staged page that says "read `lang-cpp` first" on a setup where `lang-cpp` was not staged
     costs a turn on a failed read and then leaves the reader without the contract it was sent for.
-    ``*`` gets this right through :func:`packets.arm_order`; the ``lang`` token had to be taught the
+    ``*`` gets this right through :func:`packets.setup_order`; the ``lang`` token had to be taught the
     same rule, which is what this pins."""
-    for language, image, multinode in ARMS:
+    for language, image, multinode in SETUPS:
         try:
-            packet = packets.resolve(
-                key, language, {"CPF_VIEW": "/view", "REPO_LAYOUT_PYTHON": "python3"}, image=image, multinode=multinode
-            )
+            packet = packets.resolve(key, language, {"CPF_VIEW": "/view"}, image=image, multinode=multinode)
         except ValueError:
             continue
         staged = set(packet.skills)
@@ -193,7 +189,7 @@ def test_the_amd_tracer_page_applies_to_exactly_the_languages_its_route_traces(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """``rocprof`` is the manual for a device trace the route serves for ``hip`` and, on an offload
-    arm, for the host languages it builds for the GPU. Staged on a ``python`` or ``triton`` arm it
+    setup, for the host languages it builds for the GPU. Staged on a ``python`` or ``triton`` setup it
     is a manual for a call that comes back 400, which costs a turn to find out. Derived from
     :func:`gpu_profiling.traces_amd` rather than restated, so a language joining or leaving the
     offload build moves the page's own filter with it."""
@@ -225,7 +221,7 @@ def test_the_page_files_a_packet_stages_are_all_under_the_skills_tree() -> None:
         assert pathlib.Path(page).name == page, f"{page!r} is not a plain directory name"
 
 
-def test_the_device_triton_arm_gets_the_triton_language_pages() -> None:
+def test_the_device_triton_setup_gets_the_triton_language_pages() -> None:
     """triton-device is its own language key; its skills leg must still carry the Triton pages, or the
     skills-vs-plain comparison measures a packet with no language page in it."""
     from hpcagent_bench import packets

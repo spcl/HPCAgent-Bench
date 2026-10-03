@@ -1,31 +1,146 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Shared visual style for every figure: type sizes, tick and spine weight, grid colour, neutral
 inks. Colour belongs to the entity and lives in :mod:`hpcagent_bench.stats.palette`.
 """
 
-import enum
 import dataclasses
+import enum
 import itertools
 import logging
 import math
 import pathlib
 from collections.abc import Iterator, Sequence
-from typing import Literal
+from typing import Literal, TypedDict
 
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.artist import Artist
 from matplotlib.axes import Axes
-from matplotlib.axis import Axis, YAxis
+from matplotlib.axis import Axis, Tick, YAxis
 from matplotlib.backend_bases import RendererBase
+from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.collections import LineCollection, PathCollection
-from matplotlib.figure import Figure
+from matplotlib.figure import Figure, SubFigure
 from matplotlib.lines import Line2D
 from matplotlib.text import Annotation, Text
 from matplotlib.ticker import FuncFormatter, Locator, LogLocator, MaxNLocator, NullFormatter
 from matplotlib.transforms import Bbox, Transform
+
+from hpcagent_bench.stats.palette import marker_style
+from hpcagent_bench.study_tags import Marker
+
+__all__ = [
+    "ACM_COLUMN_WIDTH_IN",
+    "ACM_TEXT_WIDTH_IN",
+    "ANNOTATION_PT",
+    "AUTHOR_SCALE",
+    "CLEAR_GID",
+    "CLEAR_PAD_PT",
+    "COMPACT_KEY",
+    "CONNECTOR_Z",
+    "COUNT_DIVISIONS",
+    "CROSS_SCALE",
+    "DOUBLE_COLUMN_WIDTH",
+    "FAINT",
+    "FILL_Z",
+    "ICLR_TEXT_WIDTH_IN",
+    "ICLR_WRAP_WIDTH_IN",
+    "INK",
+    "LABEL_PT",
+    "LOG",
+    "LOG_BASE",
+    "LOG_NUMTICKS",
+    "MARKER_AREA_SCALE",
+    "MARK_Z",
+    "MINOR_GRID_WIDTH",
+    "MINOR_RULE",
+    "MINOR_TICK_LENGTH",
+    "MINOR_TICK_WIDTH",
+    "MIN_TITLE_PT",
+    "MUTED",
+    "NOT_DELIVERED_LABEL",
+    "OCTAVE_SUBS",
+    "OCTAVE_TOLERANCE",
+    "PENDING_GID",
+    "PENDING_LABEL",
+    "PENDING_MARKER",
+    "PENDING_SCALE",
+    "PLACED_SIDE_PAD_IN",
+    "PLACED_WIDTH_RTOL",
+    "POINTS_PER_INCH",
+    "PRINT_BODY_HEIGHT_IN",
+    "PRINT_LABEL_PT",
+    "PRINT_LEGEND_PT",
+    "PRINT_MIN_PT",
+    "PRINT_SCALE",
+    "PRINT_TICK_PT",
+    "REFERENCE",
+    "RULE",
+    "SAVE_DPI",
+    "STAT_INK",
+    "SUBTITLE_PT",
+    "SVG_HASH_SALT",
+    "TICK_PT",
+    "TITLE_BAND_IN",
+    "TITLE_GAP_IN",
+    "TITLE_PT",
+    "TITLE_TOP_IN",
+    "UNDATED",
+    "VALUE_LOG_NUMTICKS",
+    "KeySpacing",
+    "MinorKind",
+    "MinorLocator",
+    "StatInk",
+    "TypeScale",
+    "above_protrusion_in",
+    "apply",
+    "below_protrusion_in",
+    "centred_box",
+    "clear_labels",
+    "clear_place",
+    "count_minor_values",
+    "crowded_ticks",
+    "decade_label",
+    "despine",
+    "edge_width",
+    "fallback_places",
+    "left_protrusion_in",
+    "legend_below",
+    "line_marker_boxes",
+    "log2_ratio_tick",
+    "mark_boxes",
+    "minor_positions",
+    "minor_ticks",
+    "near_boxes",
+    "panel_obstacles",
+    "pending_legend_mark",
+    "pending_mark",
+    "placed_box",
+    "point_mark",
+    "print_type_violations",
+    "ratio_label",
+    "ratio_minor_candidates",
+    "ratio_minor_exponents",
+    "ratio_tick",
+    "ratio_tick_label",
+    "renderer_of",
+    "right_label",
+    "right_protrusion_in",
+    "row_axis",
+    "save",
+    "scatter_boxes",
+    "segment_boxes",
+    "settle_clear_labels",
+    "shrink_crowded_ticks",
+    "text_sizes",
+    "tick_pad",
+    "tight_bbox",
+    "title",
+    "token_minor_values",
+    "value_axis",
+]
 
 LOG = logging.getLogger(__name__)
 
@@ -39,6 +154,18 @@ RULE: str = "#d6d6da"
 #: Text that labels the chart rather than the data (quadrant captions and the like).
 FAINT: str = "#a8a8ae"
 #: The zero/parity reference line, darker than the grid because it is a statement.
+#: Typographic points per inch: the unit of every font size and line width against the inch figure sizes.
+POINTS_PER_INCH: float = 72.0
+
+#: Base of every logarithmic value axis.
+LOG_BASE: float = 10.0
+
+#: Tick budget matplotlib's log locator needs stated: its default (auto) can yield no ticks on a short panel.
+LOG_NUMTICKS: int = 40
+
+#: Tick budget of :func:`value_axis`'s log locator.
+VALUE_LOG_NUMTICKS: int = 20
+
 REFERENCE: str = "#3a3a3e"
 #: Minor grid colour and line weight (:func:`minor_ticks`), lighter and thinner than the major grid.
 MINOR_RULE: str = "#e8e8ea"
@@ -200,7 +327,7 @@ def title(fig: Figure, text: str) -> float:
     # A title wider than the canvas is clipped at both ends: shrink it to fit.
     size = TITLE_PT
     while size > MIN_TITLE_PT:
-        box = artist.get_window_extent(fig.canvas.get_renderer()).transformed(fig.dpi_scale_trans.inverted())
+        box = artist.get_window_extent(renderer_of(fig)).transformed(fig.dpi_scale_trans.inverted())
         if box.width <= width:
             break
         size -= 0.5
@@ -209,7 +336,14 @@ def title(fig: Figure, text: str) -> float:
 
 
 #: ``columnspacing`` and ``handlelength`` of a key that must fit two columns in a wrap figure.
-COMPACT_KEY: dict[str, float] = {"columnspacing": 0.8, "handlelength": 1.2}
+class KeySpacing(TypedDict, total=False):
+    """The :func:`legend_below` spacing keywords a caller may override together."""
+
+    columnspacing: float
+    handlelength: float
+
+
+COMPACT_KEY: KeySpacing = {"columnspacing": 0.8, "handlelength": 1.2}
 
 
 def legend_below(
@@ -250,7 +384,7 @@ def legend_below(
             # matplotlib's default 0.4 padding reads as a blank band under the ticks.
             borderpad=0.1,
         )
-        box = legend.get_window_extent(fig.canvas.get_renderer()).transformed(fig.dpi_scale_trans.inverted())
+        box = legend.get_window_extent(renderer_of(fig)).transformed(fig.dpi_scale_trans.inverted())
         if columns <= 1 or box.width <= limit:
             # Fill the box: the fewest columns that give this many rows (12 entries: 4, not 5).
             full = -(-len(handles) // max(1, -(-len(handles) // columns)))
@@ -405,6 +539,8 @@ class MinorLocator(Locator):
     """:func:`minor_positions` as a matplotlib locator, derived fresh from the axis' current majors
     and view on every draw."""
 
+    __slots__ = ("kind",)
+
     def __init__(self, kind: MinorKind) -> None:
         self.kind: MinorKind = kind
 
@@ -439,7 +575,7 @@ def minor_ticks(axis: Axis, kind: MinorKind, color: str = MINOR_RULE, width: flo
     axis.grid(True, which="minor", color=color, linewidth=width, zorder=0)  # pyright: ignore[reportUnknownMemberType]
 
 
-def value_axis(ax: Axes, axis: Literal["x", "y"] = "y", log_base: float = 10.0, major: bool = True) -> None:
+def value_axis(ax: Axes, axis: Literal["x", "y"] = "y", log_base: float = LOG_BASE, major: bool = True) -> None:
     """Ticks and a major grid for the axis carrying the measured quantity; on a log axis, also the
     shared minor ruling (:func:`minor_ticks`).
 
@@ -454,7 +590,7 @@ def value_axis(ax: Axes, axis: Literal["x", "y"] = "y", log_base: float = 10.0, 
             # (ratio) axis gets 1 only: a 1.5 sub would label ticks a reader cannot place on a log2
             # grid by eye (:func:`ratio_tick_label`).
             subs = (1.0, 2.0, 5.0) if log_base == 10.0 else (1.0,)
-            target.set_major_locator(LogLocator(base=log_base, subs=subs, numticks=20))
+            target.set_major_locator(LogLocator(base=log_base, subs=subs, numticks=VALUE_LOG_NUMTICKS))
         if log_base == 10.0 and major:
             # Not LogFormatterSciNotation: it blanks a 5x10^n tick even with labelOnlyBase=False.
             target.set_major_formatter(FuncFormatter(decade_label))
@@ -503,7 +639,7 @@ def point_mark(
     x: float,
     y: float,
     color: str,
-    marker: str,
+    marker: Marker,
     filled: bool,
     size: float = 110.0,
     delivered: bool = True,
@@ -518,14 +654,15 @@ def point_mark(
     """
     filled = filled and delivered
     size *= MARKER_AREA_SCALE.get(marker, 1.0) if isinstance(marker, str) else 1.0
+    drawn = marker_style(marker)
     ax.scatter(  # pyright: ignore[reportUnknownMemberType]
-        x, y, s=size, marker=marker, color="white", edgecolor="none", zorder=FILL_Z, clip_on=clip
+        x, y, s=size, marker=drawn, color="white", edgecolor="none", zorder=FILL_Z, clip_on=clip
     )
     ax.scatter(  # pyright: ignore[reportUnknownMemberType]
         x,
         y,
         s=size,
-        marker=marker,
+        marker=drawn,
         color=color if filled else "none",
         edgecolor=color,
         linewidth=edge_width(size, 1.8),
@@ -550,7 +687,6 @@ def pending_mark(
 ) -> None:
     """A :data:`PENDING_MARKER` in ``color`` at ``(x, y)``; data coordinates unless ``transform``
     says otherwise."""
-    extra = {} if transform is None else {"transform": transform}
     ax.scatter(  # pyright: ignore[reportUnknownMemberType]
         x,
         y,
@@ -560,7 +696,7 @@ def pending_mark(
         linewidth=0.0,
         zorder=MARK_Z,
         gid=PENDING_GID,
-        **extra,
+        transform=ax.transData if transform is None else transform,
     )
 
 
@@ -610,28 +746,6 @@ SVG_HASH_SALT: str = "hpcagent-bench"
 PLACED_SIDE_PAD_IN: float = 0.02
 
 
-def fill_width(fig: Figure, pad_in: float = PLACED_SIDE_PAD_IN, rounds: int = 3) -> None:
-    """Stretch the axes horizontally so their ink spans the canvas less ``pad_in`` per side.
-
-    Figure-level artists (legends, figure texts) stay put; a figure with a figure-level label
-    beside its axes must not call this.
-    """
-    width = float(fig.get_size_inches()[0])
-    axes = [ax for ax in fig.axes if ax.get_visible()]
-    for _ in range(rounds):
-        renderer = fig.canvas.get_renderer()
-        ink = Bbox.union([ax.get_tightbbox(renderer) for ax in axes])
-        left, right = ink.x0 / fig.dpi, ink.x1 / fig.dpi
-        if abs(left - pad_in) < 0.005 and abs(width - pad_in - right) < 0.005:
-            return
-        scale = (width - 2.0 * pad_in) / (right - left)
-        for ax in axes:
-            box = ax.get_position()
-            x0 = (pad_in + (box.x0 * width - left) * scale) / width
-            x1 = (pad_in + (box.x1 * width - left) * scale) / width
-            ax.set_position((x0, box.y0, x1 - x0, box.height))
-
-
 def placed_box(fig: Figure, width_in: float) -> Bbox:
     """The saved box of a paper figure placed at ``width_in``: the ink's own height, the canvas's width.
 
@@ -642,7 +756,7 @@ def placed_box(fig: Figure, width_in: float) -> Bbox:
     width = float(fig.get_size_inches()[0])
     if abs(width - width_in) > PLACED_WIDTH_RTOL * width_in:
         raise ValueError(f"figure is {width:.3f}in wide, placed at {width_in:.3f}in")
-    ink = fig.get_tightbbox(fig.canvas.get_renderer())
+    ink = fig.get_tightbbox(renderer_of(fig))
     slack = PLACED_WIDTH_RTOL * width_in
     if ink.x0 < -slack or ink.x1 > width + slack:
         raise ValueError(f"ink spans {ink.x0:.3f}..{ink.x1:.3f}in, outside the {width:.3f}in canvas")
@@ -694,25 +808,49 @@ def save(
 # ---------------------------------------------------------------------------------------------
 
 
+def renderer_of(fig: Figure | SubFigure) -> RendererBase:
+    """The renderer ``fig``'s text extents are measured with: every figure is rasterised by Agg."""
+    canvas = fig.canvas
+    if not isinstance(canvas, FigureCanvasAgg):
+        raise TypeError(f"figure canvas {type(canvas).__name__} is not Agg, so has no renderer to measure with")
+    return canvas.get_renderer()
+
+
+def tight_bbox(artist: Axes | Axis, renderer: RendererBase) -> Bbox:
+    """``artist``'s extent including its decorations; an invisible artist has none."""
+    box = artist.get_tightbbox(renderer)
+    if box is None:
+        raise ValueError(f"{type(artist).__name__} is not visible, so it has no extent")
+    return box
+
+
 def left_protrusion_in(fig: Figure, ax: Axes) -> float:
     """How far ``ax``'s Y tick labels and axis label reach left of its frame, in inches."""
-    renderer = fig.canvas.get_renderer()
-    return max(0.0, ax.get_window_extent(renderer).x0 - ax.yaxis.get_tightbbox(renderer).x0) / fig.dpi
+    renderer = renderer_of(fig)
+    return max(0.0, ax.get_window_extent(renderer).x0 - tight_bbox(ax.yaxis, renderer).x0) / fig.dpi
 
 
 def below_protrusion_in(fig: Figure, ax: Axes) -> float:
     """How far everything ``ax`` draws (X tick labels, axis label, annotations under the frame)
     reaches below its frame, in inches."""
-    renderer = fig.canvas.get_renderer()
-    return max(0.0, ax.get_window_extent(renderer).y0 - ax.get_tightbbox(renderer).y0) / fig.dpi
+    renderer = renderer_of(fig)
+    return max(0.0, ax.get_window_extent(renderer).y0 - tight_bbox(ax, renderer).y0) / fig.dpi
 
 
 def above_protrusion_in(fig: Figure, ax: Axes) -> float:
     """How far everything ``ax`` draws reaches above its frame, in inches: all three title slots
     (a ``loc="left"`` title is not ``ax.title``), and annotations placed over the frame, such as a
     panel name or a summary column's statistic."""
-    renderer = fig.canvas.get_renderer()
-    return max(0.0, ax.get_tightbbox(renderer).y1 - ax.get_window_extent(renderer).y1) / fig.dpi
+    renderer = renderer_of(fig)
+    return max(0.0, tight_bbox(ax, renderer).y1 - ax.get_window_extent(renderer).y1) / fig.dpi
+
+
+def tick_pad(tick: Tick) -> float:
+    """``tick``'s label pad in points. The matplotlib stub declares ``Tick.get_pad() -> None``; it returns the float."""
+    pad: object = tick.get_pad()  # type: ignore[func-returns-value]  # stub says None, runtime returns the pad
+    if not isinstance(pad, (int, float)):
+        raise TypeError(f"tick pad is {pad!r}, not a number")
+    return float(pad)
 
 
 def crowded_ticks(ax: Axes, renderer: RendererBase, gap: float) -> bool:
@@ -721,7 +859,7 @@ def crowded_ticks(ax: Axes, renderer: RendererBase, gap: float) -> bool:
     lines: dict[float, list[Bbox]] = {}
     for tick in ax.xaxis.get_major_ticks():
         if tick.label1.get_text():
-            lines.setdefault(tick.get_pad(), []).append(tick.label1.get_window_extent(renderer))
+            lines.setdefault(tick_pad(tick), []).append(tick.label1.get_window_extent(renderer))
     return any(
         left.x1 + gap > right.x0
         for boxes in lines.values()
@@ -737,13 +875,13 @@ def shrink_crowded_ticks(fig: Figure, axes: Sequence[Axes], start_pt: float, flo
 
     Two labels closer than a third of their type size read as one word ("OMPTriton").
     """
-    renderer = fig.canvas.get_renderer()
+    renderer = renderer_of(fig)
     size = start_pt
     while True:
         for ax in axes:
             for label in ax.get_xticklabels():
                 label.set_fontsize(size)
-        gap = size / 3.0 * fig.dpi / 72.0
+        gap = size / 3.0 * fig.dpi / POINTS_PER_INCH
         if not any(crowded_ticks(ax, renderer, gap) for ax in axes):
             return size
         if size <= floor_pt:
@@ -778,7 +916,10 @@ def scatter_boxes(collection: PathCollection, dpi: float) -> list[Bbox]:
         return []
     centres = collection.get_offset_transform().transform(collection.get_offsets())
     sizes = np.broadcast_to(collection.get_sizes(), (len(centres),))
-    return [centred_box(x, y, math.sqrt(size) / 2.0 * dpi / 72.0) for (x, y), size in zip(centres, sizes, strict=True)]
+    return [
+        centred_box(x, y, math.sqrt(size) / 2.0 * dpi / POINTS_PER_INCH)
+        for (x, y), size in zip(centres, sizes, strict=True)
+    ]
 
 
 def segment_boxes(collection: LineCollection) -> list[Bbox]:
@@ -794,7 +935,7 @@ def line_marker_boxes(line: Line2D, dpi: float) -> list[Bbox]:
     """One box per marker of a visible plotted line; none for a line drawn without markers."""
     if line.get_marker() in (None, "", "None", " ") or not line.get_visible():
         return []
-    radius = line.get_markersize() / 2.0 * dpi / 72.0
+    radius = line.get_markersize() / 2.0 * dpi / POINTS_PER_INCH
     # A line's data may arrive as Python lists of mixed int/float (an errorbar's caps), which
     # stack into an OBJECT array that a log transform cannot take.
     xs, ys = (np.asarray(values, dtype=float) for values in line.get_data())
@@ -824,8 +965,8 @@ def settle_clear_labels(fig: Figure) -> None:
     if not tagged:
         return
     fig.canvas.draw()
-    renderer = fig.canvas.get_renderer()
-    pad = CLEAR_PAD_PT * fig.dpi / 72.0
+    renderer = renderer_of(fig)
+    pad = CLEAR_PAD_PT * fig.dpi / POINTS_PER_INCH
     labels = {id(label) for ax, label in tagged}
     obstacles: dict[int, list[Bbox]] = {}
     for ax, label in tagged:
@@ -837,7 +978,10 @@ def settle_clear_labels(fig: Figure) -> None:
         box = clear_place(drawn, taken, frame, pad)
         taken.append(box)
         x, y = label.xyann
-        label.xyann = (x + (box.x0 - drawn.x0) * 72.0 / fig.dpi, y + (box.y0 - drawn.y0) * 72.0 / fig.dpi)
+        label.xyann = (
+            x + (box.x0 - drawn.x0) * POINTS_PER_INCH / fig.dpi,
+            y + (box.y0 - drawn.y0) * POINTS_PER_INCH / fig.dpi,
+        )
 
 
 def clear_labels(fig: Figure) -> list[tuple[Axes, Annotation]]:
@@ -904,5 +1048,5 @@ def right_protrusion_in(fig: Figure, ax: Axes) -> float:
     """How far everything ``ax`` draws reaches right of its frame, in inches: a label centred on the
     last column (a summary column's statistic) overruns it by half its own width, and a fixed right
     pad cut it off at the canvas edge."""
-    renderer = fig.canvas.get_renderer()
-    return max(0.0, ax.get_tightbbox(renderer).x1 - ax.get_window_extent(renderer).x1) / fig.dpi
+    renderer = renderer_of(fig)
+    return max(0.0, tight_bbox(ax, renderer).x1 - ax.get_window_extent(renderer).x1) / fig.dpi

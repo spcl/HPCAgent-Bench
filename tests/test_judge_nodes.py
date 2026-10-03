@@ -1,6 +1,6 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""experiments/judge_nodes.py: judges are sized by concurrent agents, one rank per five."""
+"""hpcagent_bench/cluster/judge_nodes.py: judges are sized by concurrent agents, one rank per five."""
 
 import pathlib
 import subprocess
@@ -8,10 +8,9 @@ import sys
 
 import pytest
 
-REPO = pathlib.Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO / "experiments"))
+from hpcagent_bench.cluster import judge_nodes
 
-import judge_nodes  # noqa: E402
+REPO = pathlib.Path(__file__).resolve().parents[1]
 
 
 @pytest.mark.parametrize(
@@ -33,11 +32,17 @@ def test_a_wave_without_agents_is_refused_rather_than_sized_to_zero() -> None:
         judge_nodes.judge_nodes(0)
 
 
-def test_the_cli_counts_roster_names_times_repeat_and_ignores_notes(tmp_path: pathlib.Path) -> None:
-    roster = tmp_path / "kernels.txt"
-    roster.write_text("# header\n" + "".join(f"k{i}  # note\n" for i in range(15)) + "\n")
+def test_the_cli_counts_tag_names_times_repeat_and_ignores_notes(tmp_path: pathlib.Path) -> None:
+    tag_kernels = tmp_path / "kernels.txt"
+    tag_kernels.write_text("# header\n" + "".join(f"k{i}  # note\n" for i in range(15)) + "\n")
     out = subprocess.run(
-        [sys.executable, str(REPO / "experiments" / "judge_nodes.py"), str(roster), "--repeat", "3"],
+        [
+            sys.executable,
+            str(REPO / "hpcagent_bench" / "cluster" / "judge_nodes.py"),
+            str(tag_kernels),
+            "--repeat",
+            "3",
+        ],
         check=True,
         capture_output=True,
         text=True,

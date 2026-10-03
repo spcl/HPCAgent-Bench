@@ -121,10 +121,10 @@ threading that runs on the CPU, use OpenMP (`openmp-c` / `openmp-cpp` /
 
 ## References
 
-Consulted 2026-08-26:
+Consulted:
 - OpenACC Getting Started Guide (`-acc=gpu` is `-acc=gpu,host`; `NVCOMPILER_ACC_NOTIFY`) -- https://docs.nvidia.com/hpc-sdk/compilers/openacc-gs/
 - NVIDIA HPC Compilers User's Guide (`-acc`, `-gpu=ccXX`, `-Minfo=accel`) -- https://docs.nvidia.com/hpc-sdk/compilers/hpc-compilers-user-guide/
 - NVIDIA HPC Compilers Reference Guide -- https://docs.nvidia.com/hpc-sdk/compilers/hpc-compilers-ref-guide/
-- Measured on this box 2026-08-26: gcc 15.2 `-fopenacc` links and runs host-only with
+- Measured on this box: gcc 15.2 `-fopenacc` links and runs host-only with
   no diagnostic; `-foffload=nvptx-none` fails at LINK with "could not find
   accel/nvptx-none/mkoffload".

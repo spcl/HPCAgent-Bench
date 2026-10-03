@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """agent_driver.judge_ranks: every judge gets an even share of each kernel level.
 
@@ -8,7 +8,6 @@ judge count, while the other judges idled.
 """
 
 import collections
-import importlib.util
 import json
 import pathlib
 import subprocess
@@ -17,16 +16,14 @@ from types import ModuleType
 
 import pytest
 
-EXAMPLE = pathlib.Path(__file__).resolve().parents[1] / "experiments"
+from tests.fresh_module import fresh
+
+EXAMPLE = pathlib.Path(__file__).resolve().parents[1] / "hpcagent_bench" / "cluster"
 
 
 @pytest.fixture(name="driver")
 def driver_fixture() -> ModuleType:
-    spec = importlib.util.spec_from_file_location("agent_driver", EXAMPLE / "agent_driver.py")
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
+    module = fresh("agent_driver")
     return module
 
 

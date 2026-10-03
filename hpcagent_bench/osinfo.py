@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """Host-OS facts that keep the build + runtime portable across Linux, macOS, and WSL2.
@@ -15,6 +15,19 @@ import sys
 from functools import lru_cache
 
 from hpcagent_bench import config
+
+__all__ = [
+    "IS_LINUX",
+    "IS_MACOS",
+    "cpu_model",
+    "default_mp_context",
+    "gpu_model",
+    "is_arm",
+    "machine",
+    "mp_context",
+    "node_name",
+    "unblock_sigchld",
+]
 
 #: True on macOS (Darwin). fork-after-threads is unsafe here and the glibc-only
 #: build flags (``libgomp``/``libmvec``) do not exist.
@@ -63,10 +76,10 @@ def node_name() -> str:
 
     The only column that tells two machines of the SAME model apart. :func:`cpu_model` and
     :func:`gpu_model` name the hardware MODEL, so on a homogeneous cluster every node reports one
-    string and a partition on ``(cpu, gpu)`` folds the whole campaign into one group -- a candidate
+    string and a partition on ``(cpu, gpu)`` folds the whole experiment into one group -- a candidate
     timed on one node can then be divided by a baseline timed on another with nothing downstream
     able to notice, and the measured node-to-node spread is larger than most effects claimed.
-    Recorded per ROW rather than per run, because one run_id spans ranks and a multi-node run
+    Recorded per ROW rather than per run, because one episode_id spans ranks and a multi-node run
     writes one shard per rank.
     """
     import os
@@ -82,7 +95,7 @@ def gpu_model() -> str:
     ``""`` when the host has no discoverable device -- not an error, just a CPU-only box.
 
     Pairs with :func:`cpu_model` to name the NODE a measurement came from. Two nodes are two
-    experiments: a baseline timed on one machine against a candidate timed on another is a hardware
+    studies: a baseline timed on one machine against a candidate timed on another is a hardware
     comparison wearing a software label. Cached, because this is read once per recorded row and a
     subprocess per row would cost more than the measurement.
     """
@@ -120,7 +133,7 @@ def mp_context() -> str:
     :func:`default_mp_context`. A concrete ``runtime.mp_context`` (``fork`` / ``spawn``
     / ``forkserver``, or ``HPCAGENT_BENCH_RUNTIME_MP_CONTEXT``) wins -- e.g. the threaded judge
     service pins ``forkserver`` (fork-from-a-thread is unsafe)."""
-    value = config.get("runtime.mp_context", "auto")
+    value = config.get_str("runtime.mp_context", "auto")
     return default_mp_context() if value == "auto" else value
 
 

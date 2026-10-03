@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The benchmarking rules a figure in this repo has to obey, as checks rather than as prose.
 
@@ -9,6 +9,8 @@ SC15 (see :data:`RULE_TEXT`). A check raises :class:`RuleViolation` at the point
 from collections.abc import Sequence
 
 import pandas as pd  # pyright: ignore[reportMissingTypeStubs] -- pandas ships none
+
+__all__ = ["CITATION", "RULE_TEXT", "RuleViolation", "require_costs", "require_interval"]
 
 #: Paper and rule text this module enforces, for a caption or an error message.
 CITATION: str = 'Hoefler and Belli, "Scientific Benchmarking of Parallel Computing Systems", SC15'
@@ -50,7 +52,7 @@ def require_costs(table: pd.DataFrame, ratio: str, costs: Sequence[str]) -> pd.D
         raise RuleViolation(4, f"{ratio!r} is summarized with no costs behind it; add {missing}")
     if table.empty:
         return table
-    empty = [c for c in costs if not table[c].notna().any()]
+    empty = [c for c in costs if not table[c].notna().to_numpy().any()]
     if empty:
         raise RuleViolation(4, f"{ratio!r} has cost columns {empty} that are entirely missing")
     return table
@@ -67,7 +69,7 @@ def require_interval(table: pd.DataFrame, point: str, low: str, high: str, deter
     if missing:
         raise RuleViolation(5, f"nondeterministic data plotted without an interval; add columns {missing}")
     usable = table[point].notna()
-    if not usable.any():
+    if not usable.to_numpy().any():
         return table
     bare = table.index[usable & (table[low].isna() | table[high].isna())]
     if len(bare) == len(table.index[usable]):

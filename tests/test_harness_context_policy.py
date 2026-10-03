@@ -1,27 +1,22 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""One context policy for every harness (USER 2026-09-22): no episode may die on the window.
+"""One context policy for every harness: no episode may die on the window.
 
 ``harnesses.context_policy`` gives the runners L = min(served window, 262144), the reply cap
 R = min(launcher cap, L // 8) and the compaction trigger T = L - R - round(0.12 * L);
 ``agent_driver.claude_context_env`` gives claude the same three numbers through the CLI's own
-variables. Two computations of one policy, so this holds them equal on every committed arm and on
+variables. Two computations of one policy, so this holds them equal on every committed setup and on
 the reply caps a launcher may configure: a harness comparison must not also compare compaction
 points.
 """
 
-import importlib.util
 import math
-import pathlib
-import sys
 from types import ModuleType
 
 import pytest
 
-from tests.env_render import rendered
-
-EXPERIMENTS = pathlib.Path(__file__).resolve().parents[1] / "experiments"
-ARM_ENVS = sorted(EXPERIMENTS.glob(".env.*"))
+from tests.env_render import BASES, rendered
+from tests.fresh_module import fresh
 
 #: (served window, launcher reply cap) -> (L, R, T).
 POLICY = {
@@ -33,11 +28,7 @@ POLICY = {
 
 
 def load(name: str) -> ModuleType:
-    spec = importlib.util.spec_from_file_location(name, EXPERIMENTS / f"{name}.py")
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
+    module = fresh(name)
     return module
 
 
@@ -51,8 +42,8 @@ def harnesses_fixture() -> ModuleType:
     return load("harnesses")
 
 
-def env_values(path: pathlib.Path) -> dict[str, str]:
-    """The flat KEY=VALUE environment a job sources for ``path``, quotes stripped, with the launcher's
+def env_values(path: str) -> dict[str, str]:
+    """The flat KEY=VALUE environment a job sources for base ``path``, quotes stripped, with the launcher's
     reply cap (run_cluster.sh exports it)."""
     values = {"CLAUDE_CODE_MAX_OUTPUT_TOKENS": "32768"}
     for line in rendered(path).splitlines():
@@ -78,9 +69,9 @@ def test_the_policy_leaves_the_reply_and_one_turn_under_the_capped_window(
     assert tuple(harnesses.context_policy(environment)) == POLICY[served, configured]
 
 
-@pytest.mark.parametrize("path", ARM_ENVS, ids=lambda path: path.name)
-def test_every_arm_gives_every_harness_claudes_window_reply_and_trigger(
-    driver: ModuleType, harnesses: ModuleType, path: pathlib.Path
+@pytest.mark.parametrize("path", BASES)
+def test_every_setup_gives_every_harness_claudes_window_reply_and_trigger(
+    driver: ModuleType, harnesses: ModuleType, path: str
 ) -> None:
     """The window is read from the same keys; claude's percentage is truncated to 4 decimals, so its
     trigger may land a token or two before the runners', never after."""
@@ -101,5 +92,5 @@ def test_the_smallest_window_any_source_names_wins(harnesses: ModuleType) -> Non
     assert harnesses.served_context(environment) == 131072
 
 
-def test_an_arm_naming_no_window_gets_the_policy_cap(harnesses: ModuleType) -> None:
+def test_a_setup_naming_no_window_gets_the_policy_cap(harnesses: ModuleType) -> None:
     assert harnesses.context_policy({}) == (262144, 32768, 197919)

@@ -1,6 +1,6 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""What is COMMON to every model lives in the launcher, and what is per-model lives in its .env.
+"""What is COMMON to every model lives in the launcher, and what is per-model lives in its base (setups.yaml).
 
 The client timeouts were duplicated per model and drifted: kimi and glm53 set them, qwen38 and
 oss120b set neither and silently ran on the CLI's 15-minute idle default, which ended healthy Qwen
@@ -9,7 +9,6 @@ so these tests state which place each one belongs in and that the per-model valu
 server arguments they describe.
 """
 
-import importlib.util
 import pathlib
 import re
 import subprocess
@@ -17,14 +16,16 @@ import sys
 import types
 
 import pytest
-from tests.env_render import rendered
+
+from tests.env_render import BASES, rendered
+from tests.fresh_module import fresh
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-EXPERIMENTS = REPO / "experiments"
-LAUNCHER = EXPERIMENTS / "run_cluster.sh"
+CLUSTER_DIR = REPO / "hpcagent_bench" / "cluster"
+LAUNCHER = CLUSTER_DIR / "run_cluster.sh"
 
 #: Settings that are the same for every model and every harness: the launcher owns them, and a .env
-#: that repeats one is how two arms end up on different values.
+#: that repeats one is how two setups end up on different values.
 COMMON_VARS = (
     "API_TIMEOUT_MS",
     "CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS",
@@ -34,12 +35,12 @@ COMMON_VARS = (
 )
 
 #: The launcher's default for each of them. The idle watchdog is the wall that fires first in Claude
-#: Code 2.1.197; its default is DERIVED (stream_idle_timeout.py, 2026-09-19) from the arm's own
-#: CONTEXT_LENGTH and AGENTS_PER_NODE rather than copied, but every arm that named neither still
+#: Code 2.1.197; its default is DERIVED (hpcagent_agent.driver.stream_idle_timeout) from the setup's own
+#: CONTEXT_LENGTH and AGENTS_PER_NODE rather than copied, but every setup that named neither still
 #: lands on 1800000 ms, the CLI's ceiling for it -- see test_stream_idle_timeout.py.
 LAUNCHER_DEFAULTS = {
     "API_TIMEOUT_MS": "3600000",
-    "CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS": '$(python3 "${SCRIPT_DIR}/stream_idle_timeout.py")',
+    "CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS": '$("${HPCAGENT_BENCH_IMAGE_PYTHON}" -m hpcagent_agent.driver.stream_idle_timeout)',
     # The byte watchdog above is installed only for api.anthropic.com. Against SGLang/vLLM the walls
     # that fire are the SSE-event watchdog (floor 300 s) and Bun's own ~300 s fetch socket timeout,
     # which the CLI lifts only when API_FORCE_IDLE_TIMEOUT is falsy -- both unset cut qwen38 streams
@@ -60,10 +61,7 @@ LADDERS = {
     "oss120b": "low medium high",
     "kimi27sglang": "",
     "glm53": "",
-    "fable51": "low medium high xhigh max",
-    "gpt6astra": "low medium high xhigh max",
     "musespark": "low medium high xhigh max",
-    "unionalpha": "",
 }
 
 #: What the policy resolves each ladder to: xhigh where the ladder has it, else its top rung, else
@@ -73,32 +71,26 @@ RESOLVED = {
     "oss120b": "high",
     "kimi27sglang": "",
     "glm53": "",
-    "fable51": "xhigh",
-    "gpt6astra": "xhigh",
     "musespark": "xhigh",
-    "unionalpha": "",
 }
 
-BASE_ENVS = sorted(EXPERIMENTS.glob(".env.base-*"))
+#: The experiment base of every model (setups.yaml ``experiment:<model>``).
+BASE_ENVS = [name for name in BASES if name.startswith("experiment:")]
 
 
 def load_effort() -> types.ModuleType:
-    """``experiments/effort.py``, loaded by path: it ships in the agent image, not the package."""
-    spec = importlib.util.spec_from_file_location("effort", EXPERIMENTS / "effort.py")
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
+    """``agent/hpcagent_agent/driver/effort.py``, loaded by path: it ships in the agent image, not the package."""
+    module = fresh("effort")
     return module
 
 
 effort = load_effort()
 
 
-def env_values(path: pathlib.Path) -> dict[str, str]:
-    """``KEY=VALUE`` lines of the rendered env file, quotes stripped."""
+def env_values(name: str) -> dict[str, str]:
+    """``KEY=VALUE`` lines of the rendered base, quotes stripped."""
     values: dict[str, str] = {}
-    for line in rendered(path).splitlines():
+    for line in rendered(name).splitlines():
         stripped = line.strip()
         if not stripped or stripped.startswith("#") or "=" not in stripped:
             continue
@@ -107,70 +99,70 @@ def env_values(path: pathlib.Path) -> dict[str, str]:
     return values
 
 
-def is_inference_service_env(path: pathlib.Path) -> bool:
+def is_inference_service_env(name: str) -> bool:
     """True for a base env that runs its model behind a hosted provider API (INFERENCE_SOURCE=service)
     rather than an SGLang/vLLM job the launcher starts on a node."""
-    return env_values(path).get("INFERENCE_SOURCE", "node") == "service"
+    return env_values(name).get("INFERENCE_SOURCE", "node") == "service"
 
 
 #: Base envs whose model is served by an engine the launcher starts on a node. A hosted service env
 #: has no such engine to name a context window for.
-ENGINE_BASE_ENVS = [path for path in BASE_ENVS if not is_inference_service_env(path)]
+ENGINE_BASE_ENVS = [name for name in BASE_ENVS if not is_inference_service_env(name)]
 
 
 def test_the_launcher_carries_every_base_env() -> None:
     """A model whose .env is not in this parametrisation is a model these rules never checked."""
-    assert {path.name.removeprefix(".env.base-") for path in BASE_ENVS} == set(LADDERS)
+    assert {name.removeprefix("experiment:") for name in BASE_ENVS} == set(LADDERS)
 
 
-@pytest.mark.parametrize("path", BASE_ENVS, ids=lambda path: path.name)
+@pytest.mark.parametrize("path", BASE_ENVS)
 @pytest.mark.parametrize("name", COMMON_VARS)
-def test_a_base_env_sets_none_of_the_common_client_settings(path: pathlib.Path, name: str) -> None:
-    assert name not in env_values(path), f"{path.name} repeats the launcher's {name}"
+def test_a_base_env_sets_none_of_the_common_client_settings(path: str, name: str) -> None:
+    assert name not in env_values(path), f"{path} repeats the launcher's {name}"
 
 
 @pytest.mark.parametrize("name", COMMON_VARS)
 def test_the_launcher_exports_each_common_setting_with_its_default(name: str) -> None:
-    """The .env files no longer carry these, so the launcher's default IS what every arm runs at."""
+    """The .env files no longer carry these, so the launcher's default IS what every setup runs at."""
     default = LAUNCHER_DEFAULTS[name]
     assert f'export {name}="${{{name}:-{default}}}"' in LAUNCHER.read_text(encoding="utf-8")
 
 
-@pytest.mark.parametrize("path", ENGINE_BASE_ENVS, ids=lambda path: path.name)
-def test_a_base_env_names_the_context_window_its_server_is_started_with(path: pathlib.Path) -> None:
+@pytest.mark.parametrize("path", ENGINE_BASE_ENVS)
+def test_a_base_env_names_the_context_window_its_server_is_started_with(path: str) -> None:
     """The harnesses size their prompt budget off CONTEXT_LENGTH; an engine started with a different
     window makes every one of them wrong in the same invisible way. Scoped to envs that start an
     engine: a hosted-service env (INFERENCE_SOURCE=service) serves through a provider API and starts
     no engine to name a window for."""
     values = env_values(path)
     served = re.findall(r"(?:--context-length|--max-model-len)[= ](\d+)", rendered(path))
-    assert served, f"{path.name} starts no engine with a context window"
-    assert len(set(served)) == 1, f"{path.name} names several context windows: {served}"
+    assert served, f"{path} starts no engine with a context window"
+    assert len(set(served)) == 1, f"{path} names several context windows: {served}"
     assert values.get("CONTEXT_LENGTH") == served[0]
 
 
-@pytest.mark.parametrize("path", BASE_ENVS, ids=lambda path: path.name)
-def test_a_base_env_declares_the_ladder_its_server_accepts_and_no_rung(path: pathlib.Path) -> None:
+@pytest.mark.parametrize("path", BASE_ENVS)
+def test_a_base_env_declares_the_ladder_its_server_accepts_and_no_rung(path: str) -> None:
     """The .env states what the SERVER accepts; the launcher states which rung of it to take. A .env
     that also spelled the rung is how oss120b and qwen38 came to be compared at rungs nobody had
     written down together. A model with no ladder declares an empty one rather than omitting the key,
     because a MISSING AGENT_EFFORT still defaults to xhigh in agent_driver.py."""
     values = env_values(path)
-    assert "AGENT_EFFORT" not in values, f"{path.name} spells a rung the launcher resolves"
-    assert values.get("EFFORT_LADDER") == LADDERS[path.name.removeprefix(".env.base-")]
+    assert "AGENT_EFFORT" not in values, f"{path} spells a rung the launcher resolves"
+    assert values.get("EFFORT_LADDER") == LADDERS[path.removeprefix("experiment:")]
 
 
-@pytest.mark.parametrize("path", BASE_ENVS, ids=lambda path: path.name)
-def test_the_policy_resolves_each_declared_ladder_to_the_rung_that_model_runs_at(path: pathlib.Path) -> None:
-    """The ladders are only right if the rung they resolve to is the one the campaign meant to run."""
-    model = path.name.removeprefix(".env.base-")
+@pytest.mark.parametrize("path", BASE_ENVS)
+def test_the_policy_resolves_each_declared_ladder_to_the_rung_that_model_runs_at(path: str) -> None:
+    """The ladders are only right if the rung they resolve to is the one the experiment meant to run."""
+    model = path.removeprefix("experiment:")
     assert effort.resolve(env_values(path)["EFFORT_LADDER"]) == RESOLVED[model]
 
 
 def test_every_cli_idle_wall_resolves_to_the_one_derived_value() -> None:
     """Run the launcher's own idle-timeout export lines: the SSE-event watchdog must land on the
     same number as the byte watchdog, and Bun's fetch socket timeout must be switched off (the CLI
-    reads "0" as falsy and then passes ``timeout: false`` to fetch). A 262144-token qwen38 arm at 40
+    reads "0" as falsy and then passes ``timeout: false`` to fetch). A 262144-token qwen38 setup at 40
     agents per node derives the CLI's 30-minute ceiling."""
     names = ("CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS", "CLAUDE_STREAM_IDLE_TIMEOUT_MS", "API_FORCE_IDLE_TIMEOUT")
     lines = [
@@ -184,7 +176,8 @@ def test_every_cli_idle_wall_resolves_to_the_one_derived_value() -> None:
         ["bash", "-c", script],
         env={
             "PATH": "/usr/bin:/bin",
-            "SCRIPT_DIR": str(EXPERIMENTS),
+            "SCRIPT_DIR": str(CLUSTER_DIR),
+            "HPCAGENT_BENCH_IMAGE_PYTHON": sys.executable,  # the image interpreter the EDF names
             "CONTEXT_LENGTH": "262144",
             "AGENTS_PER_NODE": "40",
         },

@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """agent_driver.py: the judge URL list when a node runs several judges.
 
@@ -13,22 +13,16 @@ The port stride mirrors ``run_cluster.sh``'s ``judge_router_port``: slot ``s`` o
 previous judge's upstream; a +1 stride collided the moment a node ran more than one judge.
 """
 
-import importlib.util
-import pathlib
-import sys
 from types import ModuleType
 
 import pytest
 
-EXAMPLE = pathlib.Path(__file__).resolve().parents[1] / "experiments"
+from tests.fresh_module import fresh
 
 
 def load_example_module(name: str) -> ModuleType:
     """``sys.modules`` must carry the module BEFORE exec, matching tests/test_validate_run.py."""
-    spec = importlib.util.spec_from_file_location(name, EXAMPLE / f"{name}.py")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
+    module = fresh(name)
     return module
 
 

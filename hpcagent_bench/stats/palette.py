@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """One colour and one shape per entity, decided by its identity and by nothing else.
 
@@ -25,16 +25,16 @@ a MODEL (a figure whose only axis is which LLM ran).
 
 ONE GLOBAL PALETTE: matplotlib's ``tab20``, extended by ``tab20b`` once its twenty slots are spent,
 and nothing else. Every entity a figure colours -- packet, framework, model, harness, language --
-takes a SLOT decided by its position in
-``envs/registry.yaml``, so a colour is looked up in exactly one table and no figure, script or
-registry entry carries a hex literal of its own.
+takes a SLOT decided by the explicit ``order`` of its registered class (:mod:`hpcagent_bench.vocabulary`;
+the yaml kinds, studies and frameworks, by position), so a colour is looked up in exactly one table and no
+figure, script or registry entry carries a hex literal of its own.
 
 A packet's colour is :func:`color`: its LEAD packet's slot and one lightness step per additional
 packet, so ``cpfsrc`` and ``cpfsrc+lang-skills`` read as the same treatment family at two
 strengths, and neutral grey for the no-packet control.
 
-THE VOCABULARY AND THE ORDER ARE DATA, in ``envs/registry.yaml``, beside the display names: one
-registry for one vocabulary.
+THE VOCABULARY AND THE ORDER ARE REGISTERED in code, beside the display names: one registry for one
+vocabulary. The pools (neutral colour, marker shapes, lightness step) are ``envs/registry.yaml``.
 """
 
 import colorsys
@@ -45,9 +45,45 @@ from collections.abc import Iterable
 
 import matplotlib
 import matplotlib.colors
+from matplotlib.markers import MarkerStyle
 
 from hpcagent_bench import packets
-from hpcagent_bench.experiment_tags import Registry, canonical, order, registry
+from hpcagent_bench.study_tags import Marker, Registry, canonical, order, registry, slot
+
+__all__ = [
+    "CONTROL_MARKER",
+    "CONTROL_SHADE",
+    "LOG",
+    "TAB20",
+    "TAB20B",
+    "TAB20B_ORDER",
+    "TAB20_ORDER",
+    "color",
+    "colormap_slot",
+    "colors",
+    "control_color",
+    "fixed_packet_markers",
+    "framework_color",
+    "framework_colors",
+    "harness_marker",
+    "hue_order",
+    "hues",
+    "in_order",
+    "lighten",
+    "marker",
+    "marker_style",
+    "markers",
+    "model_color",
+    "model_markers",
+    "model_shade",
+    "ordered_color",
+    "packet_marker",
+    "shape_table",
+    "slot_color",
+    "tab20_slot",
+    "treatment_shape",
+    "warn_on_collision",
+]
 
 LOG = logging.getLogger(__name__)
 
@@ -113,17 +149,17 @@ def slot_color(kind: str, name: str) -> str:
 
     CRC, never ``hash()``: ``hash`` is salted by PYTHONHASHSEED and would hand the same entity a
     different colour in two runs of the same script."""
-    known, ramp = hue_order(kind), hues()
-    resolved = canonical(kind, name)
-    if resolved in known:
-        return ramp[known.index(resolved) % len(ramp)]
+    ramp = hues()
+    index = slot(kind, name)
+    if index is not None:
+        return ramp[index % len(ramp)]
     return ramp[zlib.crc32(str(name).encode()) % len(ramp)]
 
 
 def ordered_color(kind: str, name: str) -> str:
     """``name``'s tab20 slot within one entity ``kind``, warning when the registry does not name it."""
     if canonical(kind, name) not in hue_order(kind):
-        LOG.warning("palette: %s %r is not in registry.yaml; using a hash colour", kind, name)
+        LOG.warning("palette: %s %r is not registered; using a hash colour", kind, name)
     return slot_color(kind, name)
 
 
@@ -159,11 +195,11 @@ def color(packet: str) -> str:
     """The one colour ``packet`` wears, in every figure and every process: the control grey for the
     control, otherwise the lead part's tab20 slot lightened one step per extra part.
 
-    Warns for each part registry.yaml does not name, since an unregistered part draws in a hash slot."""
+    Warns for each part the vocabulary does not register, since an unregistered part draws in a hash slot."""
     known = set(hue_order("packets"))
     for part in packets.spec_parts(packet):
         if part not in known:
-            LOG.warning("palette: packets %r is not in registry.yaml; using a hash colour", part)
+            LOG.warning("palette: packets %r is not registered; using a hash colour", part)
     parts = packets.spec_parts(packet)
     if not parts:
         return control_color()
@@ -196,29 +232,14 @@ def marker(model: str) -> str:
     standalone optimizers from the BACK, so registering another model never repaints a figure that
     already carries DaCe or CPF. Pairs with :func:`color` so identity is never colour alone."""
     shapes = markers()
-    models = order("models")
-    resolved = canonical("models", model)
-    if resolved in models:
-        return shapes[models.index(resolved) % len(shapes)]
-    standalone = order("optimizers")
-    resolved = canonical("optimizers", model)
-    if resolved in standalone:
-        return shapes[-1 - (standalone.index(resolved) % len(shapes))]
-    LOG.warning("palette: optimizer %r is not in registry.yaml; using a hash marker", model)
+    index = slot("models", model)
+    if index is not None:
+        return shapes[index % len(shapes)]
+    index = slot("optimizers", model)
+    if index is not None:
+        return shapes[-1 - (index % len(shapes))]
+    LOG.warning("palette: optimizer %r is not registered; using a hash marker", model)
     return shapes[zlib.crc32(str(model).encode()) % len(shapes)]
-
-
-def language_marker(language: str) -> str:
-    """The one SHAPE a delivery language wears in a figure whose colour is the model (the transfer
-    scatter): the registry's ``markers`` in ``languages`` order, so appending a language never
-    reshapes another."""
-    shapes = markers()
-    languages = order("languages")
-    resolved = canonical("languages", str(language).lower())
-    if resolved in languages:
-        return shapes[languages.index(resolved) % len(shapes)]
-    LOG.warning("palette: language %r is not in registry.yaml; using a hash marker", language)
-    return shapes[zlib.crc32(str(language).encode()) % len(shapes)]
 
 
 #: The control's shape, reserved: no packet or harness is ever assigned it, and the control is drawn
@@ -227,7 +248,7 @@ CONTROL_MARKER: str = "o"
 
 
 @functools.lru_cache(maxsize=1, typed=True)
-def shape_table() -> dict[tuple[str, str], object]:
+def shape_table() -> dict[tuple[str, str], Marker]:
     """``(kind, key) -> shape`` for every registered treatment: harnesses, then packets, each taking
     the next free shape of the registry's pool in file order, or its packet entry's own ``marker:``.
     The control's circle is never handed out. Registering a treatment therefore gives it a shape of
@@ -248,29 +269,39 @@ def shape_table() -> dict[tuple[str, str], object]:
     return {entity: table[entity] for entity in entities}
 
 
-def fixed_packet_markers(reg: Registry) -> dict[tuple[str, str], object]:
+def fixed_packet_markers(reg: Registry) -> dict[tuple[str, str], Marker]:
     """``("packets", key) -> shape`` for every packet whose registry entry names its own ``marker:``;
     raises when two share one or one takes the control's :data:`CONTROL_MARKER`."""
-    fixed = {("packets", key): d.marker for key, d in reg.packet_defs.items() if key and d.marker}
+    fixed: dict[tuple[str, str], Marker] = {
+        ("packets", key): d.marker for key, d in reg.packet_defs.items() if key and d.marker
+    }
     taken = list(fixed.values())
     if CONTROL_MARKER in taken or len(set(taken)) != len(taken):
         raise ValueError(f"registry: packet markers must be distinct and never {CONTROL_MARKER!r}: {fixed}")
     return fixed
 
 
-def treatment_shape(kind: str, name: str) -> object:
+def treatment_shape(kind: str, name: str) -> Marker:
     """``name``'s registered shape among ``kind`` (packets, harnesses); an unregistered one warns and
     takes a stable pool slot by CRC."""
     resolved = canonical(kind, name)
     table = shape_table()
     if (kind, resolved) in table:
         return table[(kind, resolved)]
-    LOG.warning("palette: %s %r is not in registry.yaml; using a hash marker", kind, name)
+    LOG.warning("palette: %s %r is not registered; using a hash marker", kind, name)
     pool = [shape for shape in registry().shapes if shape != CONTROL_MARKER]
     return pool[zlib.crc32(str(name).encode()) % len(pool)]
 
 
-def packet_marker(packet: str) -> object:
+def marker_style(marker: Marker) -> MarkerStyle:
+    """A registry marker as the object matplotlib draws: a code, or a ``(sides, style, angle)`` polygon."""
+    if isinstance(marker, str):
+        return MarkerStyle(marker)
+    # The stubs type the angle as int; matplotlib accepts any float degrees.
+    return MarkerStyle(marker)  # pyright: ignore[reportArgumentType]
+
+
+def packet_marker(packet: str) -> Marker:
     """The one SHAPE ``packet`` wears (:func:`shape_table`): its lead part's, or the control's hollow
     circle for no packet. Colour is spent on the model (:func:`model_color`), so shape alone tells
     treatments apart, and no two registered treatments share one."""
@@ -280,7 +311,7 @@ def packet_marker(packet: str) -> object:
     return treatment_shape("packets", packets.lead(parts))
 
 
-def harness_marker(harness: str) -> object:
+def harness_marker(harness: str) -> Marker:
     """The one SHAPE an agent HARNESS wears (:func:`shape_table`), from the same pool as the packets,
     so a harness and a packet in one figure never share a shape."""
     return treatment_shape("harnesses", harness)

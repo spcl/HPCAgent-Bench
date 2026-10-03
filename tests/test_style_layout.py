@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The measured-layout layer of :mod:`hpcagent_bench.stats.style`: the protrusions every figure
 module sizes its chrome from, the crowded-tick shrink, the mark boxes, the save-time placement of
@@ -204,7 +204,7 @@ def ruled_axis(kind: style.MinorKind, majors: Locator, view: tuple[float, float]
 def test_minor_ticks_fall_where_the_shared_rule_puts_them(
     kind: style.MinorKind, majors: Locator, view: tuple[float, float], want: list[float]
 ) -> None:
-    """User, 2026-09-22: more minor ticks on every value axis. A ratio axis reads its octave spacing
+    """more minor ticks on every value axis. A ratio axis reads its octave spacing
     off the majors (one-octave majors take the quarters, wider ones every octave between), a token
     axis takes every whole multiple of a power of ten, a count axis whole-number parts of a step."""
     fig, ax = ruled_axis(kind, majors, view)

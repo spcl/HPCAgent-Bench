@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Every rank of a multi-rank job builds into its OWN folder and its own PCH cache.
 
@@ -48,7 +48,7 @@ def fake_config(monkeypatch, *, native: bool, folder: str = ".dacecache") -> dic
 @pytest.fixture(autouse=True)
 def no_inherited_rank(monkeypatch) -> None:
     """The test process may itself have been launched by mpirun; start from a clean slate."""
-    for name in LAUNCHERS + ("DACE_BUILD_CACHE_DIR",):
+    for name in (*dace_framework.RANK_ENV, "DACE_BUILD_CACHE_DIR"):
         monkeypatch.delenv(name, raising=False)
 
 

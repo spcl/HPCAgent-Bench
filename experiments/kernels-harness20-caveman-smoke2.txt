@@ -1,2 +1,0 @@
-tsvc_2_s235  # LLR, in kernels-harness20.txt, qwen38 C plain baseline job 640076
-heat_3d  # scicomp, in kernels-harness20.txt, qwen38 C plain baseline job 641742

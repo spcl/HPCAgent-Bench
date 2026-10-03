@@ -1,8 +1,8 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Every function gets type hints -- ratcheted, because 12,759 of them do not yet.
 
-USER RULE: write Python as if it were statically typed. Every function annotated, no name rebound
+Rule: write Python as if it were statically typed. Every function annotated, no name rebound
 to a different type, no dynamic instance attributes. Turning ruff's ANN rules on repo-wide would
 report ~12.7k violations at once and block every other change, so this measures the direction of
 travel instead: a file may not gain violations, and a file that loses them must say so.

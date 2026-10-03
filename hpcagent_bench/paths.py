@@ -1,10 +1,27 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """Single source for repo-relative paths, so a layout change touches one file."""
 
 import os
 import pathlib
+
+__all__ = [
+    "BENCHMARKS",
+    "PLOTS_DIR",
+    "RESULTS_DIR",
+    "ROOT",
+    "SCRATCH_ENV",
+    "fast_scratch_root",
+    "repo_root",
+    "scratch_dir",
+    "scratch_or_repo",
+    "scratch_root",
+]
+
+#: The environment variable naming the root of everything a run writes that belongs to no experiment:
+#: logs, core dumps and native-mode submissions.
+SCRATCH_ENV: str = "HPCAGENT_BENCH_SCRATCH"
 
 #: Repository root (the directory containing ``pyproject.toml``).
 ROOT: pathlib.Path = pathlib.Path(__file__).resolve().parents[1]
@@ -22,7 +39,7 @@ PLOTS_DIR: str = RESULTS_DIR + "/plots"
 
 def repo_root() -> pathlib.Path:
     """This checkout's root: ``$HPCAGENT_BENCH_REPO`` if a caller already resolved one (every shell
-    entry point does -- ``experiments/env.sh`` exports it before sourcing anything else), else
+    entry point does -- ``hpcagent_bench/cluster/env.sh`` exports it before sourcing anything else), else
     this file's own location.
 
     The one fallback TARGET for every script that needs a durable root and has no ``$SCRATCH`` --
@@ -31,9 +48,17 @@ def repo_root() -> pathlib.Path:
     return pathlib.Path(repo) if repo else ROOT
 
 
+def scratch_dir() -> pathlib.Path:
+    """``$HPCAGENT_BENCH_SCRATCH`` if set, else ``<repo_root>/.scratch`` (git-ignored, its ``.gitkeep``
+    tracked). Where logs, core dumps and native-mode submissions go; ``$SCRATCH`` is the site's bulk
+    storage and is a different thing."""
+    scratch = os.environ.get(SCRATCH_ENV)
+    return pathlib.Path(scratch) if scratch else repo_root() / ".scratch"
+
+
 def scratch_or_repo() -> pathlib.Path:
     """``$SCRATCH`` if set, else :func:`repo_root`. For a caller that wants the scratch root
-    ITSELF (a directory to glob campaign output under) rather than one rebuildable subtree under
+    ITSELF (a directory to glob experiment output under) rather than one rebuildable subtree under
     it -- see :func:`scratch_root` for that case."""
     scratch = os.environ.get("SCRATCH")
     return pathlib.Path(scratch) if scratch else repo_root()
@@ -54,7 +79,7 @@ def scratch_root(name: str) -> pathlib.Path:
 
 
 def fast_scratch_root(name: str) -> pathlib.Path:
-    """``$FAST_SCRATCH/<name>`` (iopsstor on beverin: flash, with a p95 small-file latency a tenth
-    of the general scratch's and its own inode quota), else :func:`scratch_root`."""
+    """``$FAST_SCRATCH/<name>`` (the site's fast tier for weights and read-mostly caches, set by
+    the site layer), else :func:`scratch_root`."""
     fast = os.environ.get("FAST_SCRATCH")
     return pathlib.Path(fast) / name if fast else scratch_root(name)

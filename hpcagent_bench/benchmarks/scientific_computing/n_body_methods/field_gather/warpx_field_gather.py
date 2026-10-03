@@ -10,7 +10,6 @@ physical constants it uses stay in the numpy module and are imported here.
 """
 
 import math
-from typing import Optional
 
 import numpy as np
 
@@ -32,7 +31,7 @@ def initialize(
     geom,
     n_rz_azimuthal_modes,
     datatype=np.float64,
-    rng: Optional[np.random.Generator] = None,
+    rng: np.random.Generator | None = None,
 ):
     """Build a guard-padded Yee grid of random E/B fields and a set of particle
     positions placed safely inside the domain (so every shape stencil stays in

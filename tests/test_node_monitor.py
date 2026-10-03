@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """node_monitor.sh's CSV shape and monitor_report.py's parser for it.
 
@@ -9,7 +9,6 @@ monitor_report.py must keep reading both the old 8-column files (already on disk
 from past runs) and the new extended ones -- pinned here so neither format regresses.
 """
 
-import importlib.util
 import os
 import shutil
 import signal
@@ -20,7 +19,9 @@ from pathlib import Path
 
 import pytest
 
-EXAMPLE = Path(__file__).resolve().parents[1] / "experiments"
+from tests.fresh_module import fresh
+
+EXAMPLE = Path(__file__).resolve().parents[1] / "hpcagent_bench" / "cluster"
 SCRIPT = EXAMPLE / "node_monitor.sh"
 REPORT = EXAMPLE / "monitor_report.py"
 
@@ -69,7 +70,12 @@ def run_monitor(tmp_path: Path, path_dirs: list[Path], interval: str = "0.2", ro
     env["INTERVAL"] = interval
     proc = subprocess.Popen([BASH, str(SCRIPT)], env=env)
     try:
-        time.sleep(float(interval) * 2 + 0.5)
+        # Wait for the first sample row, not a fixed time: a loaded node can take seconds to start.
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline and not any(
+            len(f.read_text().splitlines()) >= 2 for f in out_dir.glob("*.csv")
+        ):
+            time.sleep(float(interval))
         proc.send_signal(signal.SIGTERM)
         proc.wait(timeout=10)
     finally:
@@ -153,10 +159,7 @@ def test_header_is_fixed_for_the_life_of_the_csv_file(tmp_path) -> None:
 
 
 def monitor_report():
-    spec = importlib.util.spec_from_file_location("monitor_report", REPORT)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module  # registered before exec, as a real import does
-    spec.loader.exec_module(module)
+    module = fresh("hpcagent_bench.cluster.monitor_report")
     return module
 
 

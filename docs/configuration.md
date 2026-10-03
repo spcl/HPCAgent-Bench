@@ -1,0 +1,173 @@
+# Configuration: site, storage and job shape
+
+Nothing in this repository names a cluster's filesystems, Slurm account, partition or node shape. Those
+values resolve in one order, for every script:
+
+1. a command-line flag (`hpcagent-bench job submit --cpus-per-task 72`, `NICE=10 submit.sh`);
+2. an environment variable (`export SBATCH_PARTITION=gpu`);
+3. the site layer, `experiments/layers/site.env`, which holds this cluster's values;
+4. a generic default (for a job's node shape: the named system's entry, [below](#job-shape-per-system)).
+
+The site layer keeps the `VAR="${VAR:-value}"` form, so a value already exported beats the file
+and sourcing it twice changes nothing.
+
+## Set up on your system
+
+```bash
+cd hpcagent-bench
+cp experiments/layers/site-example.env experiments/layers/site.env   # gitignored
+$EDITOR experiments/layers/site.env                                  # fill in your cluster's values
+export SCRATCH=/path/to/your/scratch                                 # most HPC sites already set it
+. hpcagent_bench/cluster/env.sh                                      # loads the layer, caches, interpreter
+echo "$FAST_SCRATCH $SBATCH_PARTITION $SBATCH_ACCOUNT $HF_HOME"
+```
+
+A minimal `site.env` for a cluster with a flash tier and a GPU partition named `gpu`:
+
+```bash
+FAST_SCRATCH="${FAST_SCRATCH:-/flash/${USER}}"
+SBATCH_PARTITION="${SBATCH_PARTITION:-gpu}"
+SALLOC_PARTITION="${SALLOC_PARTITION:-${SBATCH_PARTITION}}"
+```
+
+To keep the layer outside the checkout, point `HPCAGENT_BENCH_SITE_ENV` at it. With no layer every variable
+takes its generic default, which runs wherever `SCRATCH` is set. `experiments/layers/site-cscs.env` is the layer
+of the CSCS Alps MI300A partition, the reference setup of this repository's experiments.
+
+| Where | What it resolves |
+|---|---|
+| `experiments/layers/site-<name>.env`, loaded by `scripts/site_env.sh` | this cluster's values: account, partition, fast storage, node exclusions, the host interpreter |
+| `scripts/cache_env.sh` | every cache and work directory, from `SCRATCH` and `FAST_SCRATCH` |
+| `scripts/host_python.sh` | the host-side interpreter (`HPCAGENT_BENCH_HOST_PYTHON`), checked to be Python >= 3.10 |
+| each image's EDF | the interpreter of every step inside it (`HPCAGENT_BENCH_IMAGE_PYTHON`) and `PYTHONHASHSEED=0` |
+| `hpcagent_bench/cluster/env.sh` | the checkout; sources the two scripts above |
+| `pyproject.toml` (`[tool.uv.sources] dace`) | the dace commit a release installs, bakes and runs ([below](#dace)) |
+| `hpcagent_bench/paths.py` | the Python side of the same roots |
+
+Experiment knobs (models, agents, judges, budgets) are not site values: they live in `experiments/layers/common.env`
+and the model layers ([launch.md](launch.md), [`experiments/LAUNCH.md`](../experiments/LAUNCH.md)).
+
+## Job shape per system
+
+Tasks per node, cores per task and GPUs per node or per task differ between machines, so a sample in
+[`docs/jobs/`](jobs/README.md) is started with `hpcagent-bench job submit`, which passes every field as an
+`sbatch` option (overriding the script's `#SBATCH` lines):
+
+```bash
+hpcagent-bench job submit --system daint.alps docs/jobs/grade-under.sbatch worklist.jsonl out
+hpcagent-bench job submit --ntasks-per-node 2 --cpus-per-task 32 --gpus-per-task 1 docs/jobs/baseline.sbatch ...
+```
+
+| Field | Flag | Environment variable |
+|---|---|---|
+| partition, account | `--partition`, `--account` | `SBATCH_PARTITION`, `SBATCH_ACCOUNT` |
+| nodes, time | `--nodes`, `--time` | `HPCAGENT_BENCH_JOB_NODES`, `HPCAGENT_BENCH_JOB_TIME` |
+| tasks per node, cores per task | `--ntasks-per-node`, `--cpus-per-task` | `HPCAGENT_BENCH_JOB_NTASKS_PER_NODE`, `HPCAGENT_BENCH_JOB_CPUS_PER_TASK` |
+| GPUs | `--gpus-per-node` or `--gpus-per-task` | `HPCAGENT_BENCH_JOB_GPUS_PER_NODE`, `HPCAGENT_BENCH_JOB_GPUS_PER_TASK` |
+
+A field nothing sets comes from the system's entry in `hpcagent_bench/cluster/systems.yaml`: `beverin` (MI300A,
+partition `mi300`), `beverin-mi200` and `daint.alps` (GH200) ship. The system is `--system`, else
+`HPCAGENT_BENCH_SYSTEM`, else the entry whose `cluster` is `SLURM_CLUSTER_NAME`, else none: a cluster with no entry
+runs from flags and the environment alone. A new machine is a file of the same shape named by
+`HPCAGENT_BENCH_SYSTEMS_FILE` (its entries add to or replace the shipped ones). An explicit `--gpus-per-task`
+replaces the system's `gpus_per_node`, since Slurm takes one.
+
+The experiment submitter (`hpcagent_bench/cluster/submit.sh`) resolves the same way, through the same code
+(`hpcagent-bench job options`): `--partition`, `--account`, `--gpus-per-node`, `--system` and `--hardware` over their
+variables over the system's entry. Its node count is the sum of its roles and its time limit comes from the tag
+(`--time` overrides it), so neither is resolved. An experiment cannot run without an account and a GPU count: a
+missing one is an error naming its flag and its variable (`--account` / `SBATCH_ACCOUNT`, `--gpus-per-node` /
+`HPCAGENT_BENCH_JOB_GPUS_PER_NODE`). The partition may stay unset, which is the cluster's default partition. The
+hardware (`--hardware`, `HPCAGENT_BENCH_HARDWARE`, the entry's `hardware`) is not an `sbatch` option: it names
+the GPU generation whose images and serving layers the experiment uses ([below](#hardware-is-not-a-site-value)).
+
+## Variables
+
+### Site layer
+
+| Variable | Default | Controls |
+|---|---|---|
+| `HPCAGENT_BENCH_SITE_ENV` | `experiments/layers/site.env` when it exists | which layer `scripts/site_env.sh` loads; a named file that does not exist is an error |
+| `SBATCH_PARTITION`, `SALLOC_PARTITION` | unset (the cluster's default) | the partition of every `sbatch` / `salloc`; Slurm reads it and it overrides a script's `#SBATCH --partition`, and `--partition=` on the command line overrides it (the submitters resolve it with their `--partition` flag, over this variable, over the system's entry) |
+| `SBATCH_ACCOUNT` | empty | the account every `sbatch` bills; `hpcagent_bench/cluster/submit.sh` refuses to submit without one, and `root`. `SLURM_ACCOUNT` and `SALLOC_ACCOUNT` follow it. No script passes `-A` |
+| `HPCAGENT_BENCH_EXCLUDE_NODES` | empty | a Slurm hostlist regrade jobs avoid |
+| `HPCAGENT_BENCH_CI_PARTITION` | `SBATCH_PARTITION` | partition of the CI replay, `scripts/run_tests.sh --container` |
+| `HPCAGENT_BENCH_LOGIN_HOST`, `HPCAGENT_BENCH_SSH_JUMP` | empty: a placeholder | the login host and ssh jump chain in the laptop tunnel commands `containers/inference/serve-private.sbatch` prints |
+| `HPCAGENT_BENCH_NICE` | `100` | the `--nice` every submitter passes (`NICE=<n>` for one submission); Slurm has no environment variable for it, so a bare `sbatch` runs at nice 0 |
+
+### Storage
+
+| Variable | Default | Controls |
+|---|---|---|
+| `SCRATCH` | set by the site | bulk storage: runs, result DBs, logs, JIT caches, the venv |
+| `HPCAGENT_BENCH_SCRATCH` | `<checkout>/.scratch` (git-ignored) | submitter Slurm output (`logs/`), the judge core dump of a crash-diagnosis setup (`core/`), native-mode submissions (`native_runs/`) |
+| `FAST_SCRATCH` | `SCRATCH`, else `<checkout>/.cache` | model weights and large read-mostly caches (`HF_HOME`, the judge's disk result store) |
+| `HPCAGENT_BENCH_CACHE` | `$FAST_SCRATCH/.hpcagentbench-cache` | root of the read-mostly caches; `HF_HOME` is `$HPCAGENT_BENCH_CACHE/hf` |
+| `JIT_CACHE_ROOT` | `$SCRATCH/.hpcagentbench-cache`, else `<checkout>/.cache/jit` | compile/JIT caches (aiter, triton, inductor, vLLM), keyed by image below it |
+| `HPCAGENT_BENCH_CPF_PRERENDER_DIR`, `HPCAGENT_BENCH_CPF_CACHE` | under `$JIT_CACHE_ROOT` | Canonical Parallel Form views and their content-addressed cache (the judge renders a kernel on its first request, `python -m hpcagent_bench.cpf_prerender` warms it) |
+| `HPCAGENT_BENCH_TOOLS_DIR` | `$JIT_CACHE_ROOT/tools` | build tools not in the images (e.g. `ppcg`) |
+| `HPCAGENT_BENCH_RUNS_ROOT`, `HPCAGENT_BENCH_RESULTS_DIR` | under `$JIT_CACHE_ROOT` | per-job work directories of deterministic-framework jobs, and the persistent results they merge into |
+| `HPCAGENT_BENCH_DATA_ROOTS` | derived: top-level filesystems of `SCRATCH` and `FAST_SCRATCH` | what container EDFs bind-mount |
+| `HPCAGENT_BENCH_FROZEN_OBSERVATIONS` | a directory under `SCRATCH` | frozen observation CSVs the extractor merges |
+
+### Checkout, Python and containers
+
+| Variable | Default | Controls |
+|---|---|---|
+| `HPCAGENT_BENCH_REPO` | the checkout `cluster/env.sh` lives in | the tree scripts and jobs run from |
+| `HPCAGENT_BENCH_HOST_PYTHON` | `python3` on PATH | the host-side interpreter, with the package installed (`uv sync`) |
+| `HPCAGENT_BENCH_IMAGE_PYTHON` | the image's EDF | the interpreter of every step inside a container |
+| `EDF_PATH` | `$HOME/.edf` | where container EDFs are looked up |
+| `CONTAINER_RUNTIME` | `ce` | how `cluster/services.sbatch` starts containers, through one seam (`cluster/container_runtime.sh`, [runtime.md](runtime.md)): `ce`, `apptainer`, `podman` or `docker` |
+| `HPCAGENT_BENCH_HARDWARE`, `HPCAGENT_BENCH_MAX_TIME_HOURS` | the system's `hardware`, `max_time_hours`; else unset | the hardware, and the longest time limit of the partition, which clamps a scaled wall clock (`TIME_SCALE`, minus `STAGING_HOURS`); unset, nothing is clamped |
+| `HPCAGENT_BENCH_HOST` | `SLURMD_NODENAME`, else the host name | the node name recorded with each result |
+
+Every command runs `<python> -m hpcagent_bench...` (or `-m hpcagent_agent...` in an agent step) with one of the two
+interpreters, never a PATH lookup. Nothing sets `PYTHONPATH` or edits `sys.path` (`tests/test_import_paths.py`): both
+packages are installed, editable in a checkout (`uv sync`) and through the image hooks in a container.
+
+### Container image builds
+
+Defaults are in `containers/images/images.env` and `build_common.sh`; `IMAGE_REQUIREMENTS.md` says what the knobs do.
+
+| Variable | Default | Controls |
+|---|---|---|
+| `CE_IMAGES` | `$SCRATCH/ce-images` | squashfs images, their sidecars and build logs |
+| `CE_TMPFS` | `/dev/shm/$USER` | per-user tmpfs for podman stores and image mounts (Lustre cannot hold them) |
+| `CE_BUILD_CACHE` | `1` | keep the node's podman layer store and mount the spack and pip caches; `0` builds cold |
+| `CE_PULL` | `1` | pull a registry image whose build-inputs label matches instead of building; `only`, `0` |
+| `REGISTRY_REPO`, `PULL_REPO` | `docker.io/spcleth/hpcagent-bench`, `PUSH_REPO` | the published image repository, and the one pull-first reads |
+| `SPACK_BUILDCACHE`, `UV_BUILD_CACHE`, `BASE_CACHE`, `GIT_MIRRORS` | under `$SCRATCH` | the binary, wheel, base-image and git caches the builds mount |
+
+### dace
+
+DaCe comes from the spcl/dace `extended` branch, pinned by the `dace` entry of `[tool.uv.sources]` in
+`pyproject.toml` (the one place it is written; the published metadata says plain `dace`). `uv sync` installs the pin
+(point `[tool.uv.sources]` at a checkout of your own for development); the judge and agent images bake it, every
+job runs the image's dace as baked, and another dace means another image: move the pin (only to an extended commit whose CI is
+green) and rebuild. The installed dace records its commit in its PEP 610 `direct_url.json`, which the judge prints into the job log;
+canon columns stamp `dace <sha>` into `record.build` and `canon.db`'s `build` column.
+
+## Hardware is not a site value
+
+`mi300` and `mi200` in image and EDF names (`hpcagent-bench-agent-mi300-latest`), in `--hardware mi200` and in
+`experiments/layers/hardware-mi200.env` name a GPU generation, not a site's Slurm partition: they select the image
+built for that architecture and its serving layers. The partition that hardware sits in (`--partition`) and the
+GPUs per node (`--gpus-per-node`) are job-shape values, so a cluster whose MI250X partition is called `gpu` runs
+`submit.sh --hardware mi200 --partition gpu --gpus-per-node 8`, or names the three in a `systems.yaml` entry.
+
+The Container Engine names its images by EDF, and the EDF name carries the hardware. `layers/common.env` names the
+EDFs of its base hardware (`HPCAGENT_BENCH_BASE_HARDWARE=mi300`); `submit.sh` pins `HPCAGENT_BENCH_HARDWARE` and, for
+any other hardware, renames every `*_CE_ENV` to the `-<hardware>-` EDF and pins `layers/hardware-<hardware>.env`
+(and `hardware-<hardware>-<model>.env` for a model served on our nodes). A recorded experiment on another hardware
+must name it, so its rows never pool with the base hardware's. Under the Container Engine no hardware is an error;
+the other runtimes name an image per role (`INFERENCE_IMAGE`, `BENCH_IMAGE`) and need none.
+
+## The guard
+
+`tests/test_no_hardcoded_user_paths.py` scans every tracked file for storage mounts, home directories, user names,
+site emails, Slurm accounts, `#SBATCH` partition/account/node directives, node and login host names, literal
+partitions, one experiment's run directories and the site image registry, in live code (comments and docstrings may
+name a site to explain it). A file that legitimately carries such a value is allowlisted in the test with one
+reason: the CSCS site layer, the system entries, the hardware layer, this page, and the MI300A serving
+recipe's partition check.

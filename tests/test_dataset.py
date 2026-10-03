@@ -1,29 +1,29 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""The extract -> fuse -> write -> load pipeline one experiment's figures read.
+"""The extract -> fuse -> write -> load pipeline one study's figures read.
 
 Every rule here was a way the old ad-hoc merging produced a plausible wrong number rather than an
-error: a frozen row shadowing a live one, a column silently filled with NaN, a retired arm counted."""
+error: a frozen row shadowing a live one, a column silently filled with NaN, a retired setup counted."""
 
 import pathlib
 
 import pandas as pd
 import pytest
 
-from hpcagent_bench import campaigns, dataset, frozen_observations
+from hpcagent_bench import experiments, dataset, frozen_observations
 
-ARM = "git-scicomp-qwen38-repo"
-RETIRED = "cpf-llr-focus40-qwen38-c-cpfsrc"
-FOREIGN = "cpf-llr-focus40-qwen38-c"
+SETUP = "gitscicomp10-qwen38-c-repo"
+RETIRED = "llr40-qwen38-c-cpfsrc"
+FOREIGN = "llr40-qwen38-c"
 
 
-def row(job: str, benchmark: str, arm: str = ARM, frozen: str = "0", **extra: object) -> dict[str, object]:
+def row(job: str, kernel: str, setup: str = SETUP, frozen: str = "0", **extra: object) -> dict[str, object]:
     return {
-        "run_root": "git-scicomp-20260917",
+        "run_root": "gitscicomp10-20260917",
         "job": job,
-        "record": "submission",
-        "arm": arm,
-        "benchmark": benchmark,
+        "row_kind": "submission",
+        "setup": setup,
+        "kernel": kernel,
         "speedup": 2.0,
         frozen_observations.COLUMN: frozen,
         **extra,
@@ -31,12 +31,12 @@ def row(job: str, benchmark: str, arm: str = ARM, frozen: str = "0", **extra: ob
 
 
 @pytest.fixture
-def selection(tmp_path: pathlib.Path) -> campaigns.Selection:
-    return campaigns.resolve("git-scicomp", root=tmp_path)
+def selection(tmp_path: pathlib.Path) -> experiments.Selection:
+    return experiments.resolve("gitscicomp10", root=tmp_path)
 
 
 def test_a_fused_frame_keeps_the_live_row_and_drops_the_frozen_one_for_the_same_job(
-    selection: campaigns.Selection,
+    selection: experiments.Selection,
 ) -> None:
     """A job read from both sides would double every one of its kernels, which reads as twice the
     coverage rather than as a merge fault."""
@@ -48,9 +48,9 @@ def test_a_fused_frame_keeps_the_live_row_and_drops_the_frozen_one_for_the_same_
     assert provenance.frozen_rows == 0
 
 
-def test_a_frozen_row_keeps_its_flag_through_the_fuse(selection: campaigns.Selection) -> None:
+def test_a_frozen_row_keeps_its_flag_through_the_fuse(selection: experiments.Selection) -> None:
     """Without the flag a reader cannot tell a measurement that still has its judge DB from one
-    whose only surviving record is the 2026-09-19 extract."""
+    whose only surviving record is the extract."""
     frame, provenance = dataset.fuse(
         selection, pd.DataFrame([row("100", "dfa")]), pd.DataFrame([row("200", "kmp", frozen="1")])
     )
@@ -60,7 +60,7 @@ def test_a_frozen_row_keeps_its_flag_through_the_fuse(selection: campaigns.Selec
 
 
 def test_frozen_rows_missing_a_live_column_raise_instead_of_filling_nan(
-    selection: campaigns.Selection,
+    selection: experiments.Selection,
 ) -> None:
     """pandas fills an absent column with NaN, and a NaN speedup reads downstream as a kernel
     nobody ran rather than as a column that was never extracted."""
@@ -70,27 +70,27 @@ def test_frozen_rows_missing_a_live_column_raise_instead_of_filling_nan(
         dataset.fuse(selection, live, frozen)
 
 
-def test_a_retired_arm_is_dropped_and_counted_apart_from_a_foreign_one(
-    selection: campaigns.Selection,
+def test_a_retired_setup_is_dropped_and_counted_apart_from_a_foreign_one(
+    selection: experiments.Selection,
 ) -> None:
-    """Retired means the user took a real arm out; foreign means another experiment shares the run
+    """Retired means the user took a real setup out; foreign means another study shares the run
     root. Reporting them as one number hides which of the two shrank a population."""
-    live = pd.DataFrame([row("100", "dfa"), row("101", "dfa", arm=RETIRED), row("102", "dfa", arm=FOREIGN)])
+    live = pd.DataFrame([row("100", "dfa"), row("101", "dfa", setup=RETIRED), row("102", "dfa", setup=FOREIGN)])
     frame, provenance = dataset.fuse(selection, live, pd.DataFrame())
-    assert list(frame["arm"]) == [ARM]
+    assert list(frame["setup"]) == [SETUP]
     assert (provenance.dropped_retired, provenance.dropped_foreign) == (0, 2)
 
 
-def test_every_row_carries_the_time_it_was_extracted(selection: campaigns.Selection) -> None:
-    """Two extractions of one experiment were previously told apart only by file mtime, which a
+def test_every_row_carries_the_time_it_was_extracted(selection: experiments.Selection) -> None:
+    """Two extractions of one study were previously told apart only by file mtime, which a
     copy destroys."""
     frame, provenance = dataset.fuse(selection, pd.DataFrame([row("100", "dfa")]), pd.DataFrame())
     assert set(frame[dataset.EXTRACTED_AT]) == {provenance.extracted_at}
-    assert frame[dataset.EXPERIMENT_COLUMN].eq("git-scicomp").all()
+    assert frame[dataset.STUDY_COLUMN].eq("gitscicomp10").all()
 
 
 def test_a_frame_written_as_a_db_and_as_a_csv_reads_back_the_same(
-    selection: campaigns.Selection, tmp_path: pathlib.Path
+    selection: experiments.Selection, tmp_path: pathlib.Path
 ) -> None:
     """A figure takes either file and must not be able to tell which it was given."""
     frame, provenance = dataset.fuse(selection, pd.DataFrame([row("100", "dfa"), row("100", "kmp")]), pd.DataFrame())
@@ -98,14 +98,14 @@ def test_a_frame_written_as_a_db_and_as_a_csv_reads_back_the_same(
     dataset.write_db(frame, tmp_path / "x.db")
     dataset.write_csv(frame, tmp_path / "x.csv")
     from_db, from_csv = dataset.load(tmp_path / "x.db"), dataset.load(tmp_path / "x.csv")
-    assert list(from_db["benchmark"]) == list(from_csv["benchmark"]) == ["dfa", "kmp"]
-    assert list(from_db["arm"]) == list(from_csv["arm"])
+    assert list(from_db["kernel"]) == list(from_csv["kernel"]) == ["dfa", "kmp"]
+    assert list(from_db["setup"]) == list(from_csv["setup"])
 
 
 def test_writing_a_db_twice_replaces_it_rather_than_appending(
-    selection: campaigns.Selection, tmp_path: pathlib.Path
+    selection: experiments.Selection, tmp_path: pathlib.Path
 ) -> None:
-    """An appending write doubled a re-extracted experiment, and the duplicate rows are identical,
+    """An appending write doubled a re-extracted study, and the duplicate rows are identical,
     so nothing downstream could flag them."""
     frame, provenance = dataset.fuse(selection, pd.DataFrame([row("100", "dfa")]), pd.DataFrame())
     assert provenance.live_rows == 1
@@ -114,12 +114,12 @@ def test_writing_a_db_twice_replaces_it_rather_than_appending(
     assert len(dataset.load(tmp_path / "x.db")) == 1
 
 
-def test_a_row_on_a_kernel_outside_the_roster_is_dropped_and_counted(tmp_path: pathlib.Path) -> None:
-    """The SciComp waves served scicomp40 plus the 09-13 kernels; the campaigns name scicomp35, and a
-    figure counts an arm over every kernel its rows touch, so an atax row must not reach it."""
-    selection = campaigns.resolve("scicomp-focus40", root=tmp_path)
-    arm = "scicomp-perf-playbook-qwen38-plain"
-    live = pd.DataFrame([row("100", "gemm", arm=arm), row("101", "atax", arm=arm)])
+def test_a_row_on_a_kernel_outside_the_tag_is_dropped_and_counted(tmp_path: pathlib.Path) -> None:
+    """The SciComp waves served more kernels than the tag; the experiments name scicomp40, and a
+    figure counts a setup over every kernel its rows touch, so an atax row must not reach it."""
+    selection = experiments.resolve("scicomp40", root=tmp_path)
+    setup = "scicomp40-qwen38-c"
+    live = pd.DataFrame([row("100", "gemm", setup=setup), row("101", "atax", setup=setup)])
     frame, provenance = dataset.fuse(selection, live, pd.DataFrame())
-    assert list(frame["benchmark"]) == ["gemm"]
-    assert provenance.dropped_off_roster == 1
+    assert list(frame["kernel"]) == ["gemm"]
+    assert provenance.dropped_off_tag == 1

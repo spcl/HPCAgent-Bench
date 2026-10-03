@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The private serving launcher, inference/serve-private.sbatch, for both presets.
 
@@ -15,15 +15,27 @@ import subprocess
 
 import pytest
 
+from tests.env_render import rendered
+
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-LAUNCHER = ROOT / "containers" / "cluster" / "ce-images" / "inference" / "serve-private.sbatch"
-CAMPAIGN_ENV = ROOT / "experiments" / ".env.llrbase-qwen38-c"
+LAUNCHER = ROOT / "containers" / "inference" / "serve-private.sbatch"
+#: The qwen38 experiment base whose serving flags the mi300 preset mirrors.
+EXPERIMENT_BASE = "llrbase-c:qwen38"
 KEY = "0123456789abcdef" * 4
 PRESETS = ("mi300", "mi200")
 #: The partition each preset must refuse.
 OTHER_PARTITION = {"mi300": "mi200", "mi200": "mi300"}
 #: How many servers each preset's default LEGS start in smoke mode.
-DEFAULT_LEG_COUNT = {"mi300": 1, "mi200": 3}
+DEFAULT_LEG_COUNT = {"mi300": 1, "mi200": 1}
+#: The engine each preset serves with.
+ENGINE = {"mi300": "sglang", "mi200": "vllm"}
+#: The presets that may bind a non-loopback address: vLLM serves /metrics and more without the key.
+ALPS_PRESETS = tuple(preset for preset in PRESETS if ENGINE[preset] == "sglang")
+#: Each engine's tensor-parallel and memory-fraction flags, as a leg "tp<N>:<fraction>" sets them.
+LEG_FLAGS = {
+    "sglang": ("--tp-size", "--mem-fraction-static"),
+    "vllm": ("--tensor-parallel-size", "--gpu-memory-utilization"),
+}
 SECRETS = {"sglang-auth.yaml", "api.key", "auth.header"}
 HSN0_ADDRESS = "172.28.9.16"
 #: `ip -4 -o addr show dev hsn0` on a beverin node, verbatim.
@@ -80,11 +92,11 @@ def flags(words: list[str]) -> dict[str, str]:
     return {word: ("" if nxt.startswith("--") else nxt) for word, nxt in zip(words, following) if word.startswith("--")}
 
 
-def campaign_sglang_flags() -> dict[str, str]:
-    """SGLANG_EXTRA_ARGS of the qwen38 campaign, with ${SCRIPT_DIR} expanded as sourcing does."""
-    found = re.findall(r'^SGLANG_EXTRA_ARGS="([^"]*)"$', CAMPAIGN_ENV.read_text(encoding="utf-8"), re.MULTILINE)
-    assert len(found) == 1, CAMPAIGN_ENV
-    return flags(found[0].replace("${SCRIPT_DIR}", str(ROOT / "experiments")).split())
+def experiment_sglang_flags() -> dict[str, str]:
+    """SGLANG_EXTRA_ARGS of the qwen38 experiment, with ${HPCAGENT_BENCH_REPO} expanded as sourcing does."""
+    found = re.findall(r'^SGLANG_EXTRA_ARGS="([^"]*)"$', rendered(EXPERIMENT_BASE), re.MULTILINE)
+    assert len(found) == 1, EXPERIMENT_BASE
+    return flags(found[0].replace("${HPCAGENT_BENCH_REPO}", str(ROOT)).split())
 
 
 def test_the_launcher_refuses_to_start_without_a_preset(tmp_path: pathlib.Path) -> None:
@@ -130,18 +142,19 @@ def test_the_launcher_refuses_a_key_file_that_is_not_mode_600_before_touching_an
 
 
 @pytest.mark.parametrize("preset", PRESETS)
-def test_each_preset_passes_the_key_only_through_a_config_file_in_a_mode_700_run_dir(
+def test_each_preset_passes_the_key_only_through_a_file_in_a_mode_700_run_dir(
     tmp_path: pathlib.Path, preset: str
 ) -> None:
+    """sglang reads it from --config <yaml>; vLLM from VLLM_API_KEY, set in the step from api.key."""
     done = launch(tmp_path, preset)
     assert done.returncode == 0, done.stderr
     (run_dir,) = (tmp_path / "runs").iterdir()
     assert run_dir.stat().st_mode & 0o777 == 0o700
-    assert f"config:   {run_dir}/sglang-auth.yaml (mode 600)" in done.stdout
     argvs = argv_lines(done.stdout)
     assert len(argvs) == DEFAULT_LEG_COUNT[preset]
+    carrier = {"sglang": f"--config {run_dir}/sglang-auth.yaml", "vllm": f"key-loader {run_dir}/api.key"}
     for argv in argvs:
-        assert f"--config {run_dir}/sglang-auth.yaml" in argv
+        assert carrier[ENGINE[preset]] in argv
         assert "--api-key" not in argv
     assert KEY not in done.stdout + done.stderr
     assert [path.name for path in run_dir.iterdir() if path.name in SECRETS] == []
@@ -157,7 +170,8 @@ def test_every_leg_of_each_preset_binds_loopback_last_on_the_command_line(tmp_pa
         ["--host", "127.0.0.1", "--port", "30000"],
         ["--host", "127.0.0.1", "--port", "30001"],
     ]
-    assert "--tp-size 2 --mem-fraction-static 0.85" in argvs[1]
+    tp_flag, fraction_flag = LEG_FLAGS[ENGINE[preset]]
+    assert f"{tp_flag} 2 {fraction_flag} 0.85" in argvs[1]
     assert "0.0.0.0" not in LAUNCHER.read_text(encoding="utf-8")
 
 
@@ -194,51 +208,69 @@ def test_the_mi300_preset_refuses_a_leg_wider_than_its_four_gpus(tmp_path: pathl
     assert_untouched(tmp_path, done)
 
 
-def test_the_mi300_preset_serves_the_qwen38_campaign_flags_on_fp8_weights_with_aiter(tmp_path: pathlib.Path) -> None:
+def test_the_mi300_preset_serves_the_qwen38_experiment_flags_on_fp8_weights_with_aiter(tmp_path: pathlib.Path) -> None:
     done = launch(tmp_path, "mi300")
     assert done.returncode == 0, done.stderr
     (argv,) = argv_lines(done.stdout)
     served = flags(argv.split())
-    campaign = campaign_sglang_flags()
-    assert {name: served.get(name) for name in campaign} == campaign
+    experiment = experiment_sglang_flags()
+    assert {name: served.get(name) for name in experiment} == experiment
     assert (served["--attention-backend"], served["--mem-fraction-static"]) == ("aiter", "0.306")
     assert (served["--model-path"], served["--tp-size"]) == ("Qwen/Qwen3.8-27B-FP8", "4")
     assert "--disable-custom-all-reduce" not in served
     assert "image:    hpcagent-bench-sglang-mi300-latest\n" in done.stdout
-    assert "env:      SGLANG_USE_AITER=1 SGLANG_SET_CPU_AFFINITY=0\n" in done.stdout
+    assert "engine:   sglang, env SGLANG_USE_AITER=1 SGLANG_SET_CPU_AFFINITY=0\n" in done.stdout
 
 
-def test_the_mi200_preset_serves_bf16_weights_with_triton_attention_aiter_off_and_no_custom_all_reduce(
+def test_the_mi200_preset_serves_bf16_weights_on_vllm_with_the_experiment_parsers_across_all_eight_gcds(
     tmp_path: pathlib.Path,
 ) -> None:
     done = launch(tmp_path, "mi200")
     assert done.returncode == 0, done.stderr
-    served = flags(argv_lines(done.stdout)[0].split())
-    assert served["--attention-backend"] == "triton"
-    assert "--disable-custom-all-reduce" in served
-    assert (served["--model-path"], served["--tp-size"], served["--mem-fraction-static"]) == (
-        "Qwen/Qwen3.8-27B",
-        "4",
-        "0.80",
+    (argv,) = argv_lines(done.stdout)
+    words = argv.split()
+    assert words[words.index("serve") + 1] == "Qwen/Qwen3.8-27B"
+    served = flags(words)
+    assert (served["--tensor-parallel-size"], served["--gpu-memory-utilization"], served["--dtype"]) == (
+        "8",
+        "0.85",
+        "bfloat16",
     )
-    shared = {name: value for name, value in campaign_sglang_flags().items() if name != "--mem-fraction-static"}
-    shared.pop("--attention-backend")
-    assert {name: served.get(name) for name in shared} == shared
-    assert "image:    hpcagent-bench-sglang-mi200-latest\n" in done.stdout
-    assert "env:      SGLANG_USE_AITER=0 SGLANG_SET_CPU_AFFINITY=0\n" in done.stdout
+    experiment = experiment_sglang_flags()
+    for name in ("--chat-template", "--reasoning-parser", "--tool-call-parser"):
+        assert served[name] == experiment[name], name
+    assert "--enable-auto-tool-choice" in served
+    assert "image:    hpcagent-bench-vllm-mi200-latest\n" in done.stdout
+    assert "engine:   vllm, env VLLM_ROCM_USE_AITER=0\n" in done.stdout
+
+
+def test_the_vllm_preset_refuses_alps_access_before_touching_anything(tmp_path: pathlib.Path) -> None:
+    """vLLM checks the key only under /v1, /v2, /inference and /cohere; an hsn0 bind would publish the rest."""
+    done = launch(tmp_path, "mi200", ACCESS="alps")
+    assert done.returncode == 2
+    assert "ACCESS=alps: vllm serves /metrics and other routes without the key" in done.stderr
+    assert_untouched(tmp_path, done)
 
 
 @pytest.mark.parametrize("preset", PRESETS)
 def test_serve_mode_starts_one_server_and_prints_a_loopback_tunnel_but_never_the_key(
     tmp_path: pathlib.Path, preset: str
 ) -> None:
-    done = launch(tmp_path, preset, MODE="serve", API_PORT="30123")
+    done = launch(
+        tmp_path,
+        preset,
+        MODE="serve",
+        API_PORT="30123",
+        HPCAGENT_BENCH_SSH_JUMP="jumphost",
+        HPCAGENT_BENCH_LOGIN_HOST="loginhost",
+    )
     assert done.returncode == 0, done.stderr
     assert len(argv_lines(done.stdout)) == 1
-    tunnels = [line.strip() for line in done.stdout.splitlines() if "ssh -N -J ela,beverin" in line]
+    # The hosts come from the site layer (experiments/layers/site-*.env), never from the script.
+    tunnels = [line.strip() for line in done.stdout.splitlines() if "ssh -N -J jumphost,loginhost" in line]
     assert len(tunnels) == 1
     assert "-L 127.0.0.1:30123:127.0.0.1:30123 serve-private-test-user@" in tunnels[0]
-    assert f"scp beverin:{tmp_path}/endpoint.key " in done.stdout
+    assert f"scp loginhost:{tmp_path}/endpoint.key " in done.stdout
     assert "Authorization: Bearer %s" in done.stdout
     assert KEY not in done.stdout + done.stderr
     (run_dir,) = (tmp_path / "runs").iterdir()
@@ -253,7 +285,7 @@ def test_the_launcher_refuses_an_unknown_access(tmp_path: pathlib.Path) -> None:
     assert_untouched(tmp_path, done)
 
 
-@pytest.mark.parametrize("preset", PRESETS)
+@pytest.mark.parametrize("preset", ALPS_PRESETS)
 def test_alps_access_binds_every_leg_to_this_nodes_hsn0_address_last(tmp_path: pathlib.Path, preset: str) -> None:
     done = launch(tmp_path, preset, ACCESS="alps", LEGS="tp4:0.80 tp2:0.85")
     assert done.returncode == 0, done.stderr
@@ -264,7 +296,7 @@ def test_alps_access_binds_every_leg_to_this_nodes_hsn0_address_last(tmp_path: p
     assert f"access:   alps, --host {HSN0_ADDRESS}\n" in done.stdout
 
 
-@pytest.mark.parametrize("preset", PRESETS)
+@pytest.mark.parametrize("preset", ALPS_PRESETS)
 def test_alps_access_serves_no_metrics(tmp_path: pathlib.Path, preset: str) -> None:
     """sglang answers /metrics without the key, and every Alps node can reach an hsn0 bind."""
     done = launch(tmp_path, preset, ACCESS="alps", LEGS="tp4:0.80 tp2:0.85")
@@ -275,13 +307,13 @@ def test_alps_access_serves_no_metrics(tmp_path: pathlib.Path, preset: str) -> N
 
 
 def test_alps_access_refuses_a_node_without_an_hsn0_address_before_touching_anything(tmp_path: pathlib.Path) -> None:
-    done = launch(tmp_path, "mi200", ACCESS="alps", HSN0_LINE="", SLURMD_NODENAME="nid002536")
+    done = launch(tmp_path, "mi300", ACCESS="alps", HSN0_LINE="", SLURMD_NODENAME="nid002536")
     assert done.returncode == 2
     assert "ACCESS=alps: nid002536 has no hsn0 IPv4 address" in done.stderr
     assert_untouched(tmp_path, done)
 
 
-@pytest.mark.parametrize("preset", PRESETS)
+@pytest.mark.parametrize("preset", ALPS_PRESETS)
 def test_alps_serve_mode_publishes_the_url_model_and_key_path_but_never_the_key(
     tmp_path: pathlib.Path, preset: str
 ) -> None:
@@ -297,16 +329,14 @@ def test_alps_serve_mode_publishes_the_url_model_and_key_path_but_never_the_key(
         "job_id": "dry-run",
     }
     (run_dir,) = (tmp_path / "runs").iterdir()
-    assert (
-        f"source {ROOT}/containers/cluster/ce-images/inference/alps-endpoint.sh {run_dir}/endpoint.json" in done.stdout
-    )
+    assert f"source {ROOT}/containers/inference/alps-endpoint.sh {run_dir}/endpoint.json" in done.stdout
     assert "ssh -N -J" not in done.stdout
     assert KEY not in done.stdout + done.stderr
 
 
 def test_alps_serve_mode_deletes_endpoint_json_with_the_secrets_when_the_job_exits(tmp_path: pathlib.Path) -> None:
     """A Daint job that finds endpoint.json must be able to trust the server behind it is still there."""
-    done = launch(tmp_path, "mi200", ACCESS="alps", MODE="serve")
+    done = launch(tmp_path, "mi300", ACCESS="alps", MODE="serve")
     assert done.returncode == 0, done.stderr
     assert "endpoint.json: {" in done.stdout
     (run_dir,) = (tmp_path / "runs").iterdir()
@@ -314,7 +344,7 @@ def test_alps_serve_mode_deletes_endpoint_json_with_the_secrets_when_the_job_exi
 
 
 def test_alps_serve_mode_refuses_a_served_model_that_would_break_endpoint_json(tmp_path: pathlib.Path) -> None:
-    done = launch(tmp_path, "mi200", ACCESS="alps", MODE="serve", SERVED_MODEL='qwen"38')
+    done = launch(tmp_path, "mi300", ACCESS="alps", MODE="serve", SERVED_MODEL='qwen"38')
     assert done.returncode == 2
     assert "may not contain a quote or a backslash" in done.stderr
     assert_untouched(tmp_path, done)

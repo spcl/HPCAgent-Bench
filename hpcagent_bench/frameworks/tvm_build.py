@@ -1,4 +1,4 @@
-# Copyright 2025 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """Shared TVM build/tune plumbing (target construction, the tune_tir/compile_tir/tvm.compile autotuning
@@ -6,18 +6,40 @@ pipeline, a shape-keyed compile cache, output allocation) so a per-kernel file i
 
 import os
 import tempfile
-from typing import Callable
+from collections.abc import Callable
 
 import numpy as np
 import tvm
+from tvm.s_tir import SBlock, Schedule
 from tvm.s_tir.meta_schedule import tune_tir
 from tvm.s_tir.meta_schedule.tir_integration import compile_tir
 
-from hpcagent_bench.frameworks.tvm_framework import metaschedule_trials
+from hpcagent_bench.frameworks.tvm_framework import metaschedule_trials, tvm_device
+
+__all__ = [
+    "DEFAULT_MAX_THREADS",
+    "REGISTERS_PER_BLOCK",
+    "TvmKernel",
+    "active_kernel",
+    "active_target_device",
+    "cpu_target",
+    "default_compile",
+    "default_gpu_schedule",
+    "empty",
+    "gpu_target",
+    "tune_compile",
+    "tvm_backend",
+]
 
 # Active TVM backend ("cpu"/"gpu"), set by the running framework; a unified <kernel>_tvm.py
 # builds both a CPU and GPU TvmKernel and picks the matching one via active_kernel().
 tvm_backend: str = "cpu"
+
+#: Threads per block :func:`default_gpu_schedule` splits off when the caller gives none.
+DEFAULT_MAX_THREADS: int = 256
+
+#: Registers per block a cuda target is told it may use (the architecture-wide ceiling the tuner needs stated).
+REGISTERS_PER_BLOCK: int = 65536
 
 
 def active_kernel(cpu_kernel: "TvmKernel", gpu_kernel: "TvmKernel") -> "TvmKernel":
@@ -28,9 +50,7 @@ def active_kernel(cpu_kernel: "TvmKernel", gpu_kernel: "TvmKernel") -> "TvmKerne
 def active_target_device() -> tuple[Callable[[], "tvm.target.Target"], "tvm.runtime.Device"]:
     """Return ``(target_fn, device)`` for the active backend, for kernels that pass a target/device
     into a host driver instead of holding a module-level :class:`TvmKernel`."""
-    if tvm_backend == "gpu":
-        return gpu_target, tvm.cuda(0)
-    return cpu_target, tvm.cpu(0)
+    return (gpu_target, tvm_device(True)) if tvm_backend == "gpu" else (cpu_target, tvm_device(False))
 
 
 def cpu_target() -> "tvm.target.Target":
@@ -43,14 +63,14 @@ def cpu_target() -> "tvm.target.Target":
 def gpu_target() -> "tvm.target.Target":
     """cuda target with the device attrs meta_schedule's tuning rules require (queries the live
     device for warp size/shared-mem/registers); raises if no GPU is present."""
-    dev = tvm.cuda(0)
+    dev = tvm_device(True)
     return tvm.target.Target(
         {
             "kind": "cuda",
             "max_threads_per_block": dev.max_threads_per_block,
             "thread_warp_size": dev.warp_size,
             "max_shared_memory_per_block": dev.max_shared_memory_per_block,
-            "registers_per_block": 65536,
+            "registers_per_block": REGISTERS_PER_BLOCK,
         }
     )
 
@@ -76,12 +96,10 @@ def tune_compile(
     return tvm.compile(sch.mod, target=target)
 
 
-def default_gpu_schedule(prim_func: "tvm.tirx.PrimFunc", max_threads: int = 256) -> "tvm.s_tir.Schedule":
+def default_gpu_schedule(prim_func: "tvm.tirx.PrimFunc", max_threads: int = DEFAULT_MAX_THREADS) -> Schedule:
     """A minimal generic GPU schedule: fuse each block's spatial loops, split off ``max_threads``,
     and bind to blockIdx.x/threadIdx.x (reductions stay sequential); enough thread environment for
     tvm.compile when meta_schedule is unavailable or declines to schedule it."""
-    from tvm.s_tir import Schedule
-
     sch = Schedule(prim_func)
     try:
         blocks = sch.get_child_blocks(sch.get_sblock("root"))
@@ -92,12 +110,15 @@ def default_gpu_schedule(prim_func: "tvm.tirx.PrimFunc", max_threads: int = 256)
             "structure (sequential/non-te kernel); unsupported on GPU"
         ) from e
     for blk in blocks:
-        ivs = sch.get(blk).iter_vars
+        block = sch.get(blk)
+        if not isinstance(block, SBlock):
+            raise TypeError(f"schedule block {blk} resolved to {type(block).__name__}, not an SBlock")
+        ivs = block.iter_vars
         loops = sch.get_loops(blk)
         spatial = [lp for lp, iv in zip(loops, ivs) if int(iv.iter_type) == 0]
         if not spatial:
             continue
-        fused = sch.fuse(*spatial) if len(spatial) > 1 else spatial[0]
+        fused = sch.fuse(*spatial) if len(spatial) > 1 else spatial[0]  # pyright: ignore[reportArgumentType]  # tvm stubs type each variadic loop as a list
         outer, inner = sch.split(fused, factors=[None, max_threads])
         sch.bind(outer, "blockIdx.x")
         sch.bind(inner, "threadIdx.x")
@@ -127,6 +148,8 @@ class TvmKernel:
     changes and the result is tuned + compiled once and reused. Instantiated at module scope by every
     ``*_tvm*.py`` file; the GPU file reuses the same ``build`` as the CPU file for identical numerics."""
 
+    __slots__ = ("_exe", "_key", "build", "device_fn", "name", "target_fn")
+
     def __init__(
         self,
         name: str,
@@ -138,7 +161,7 @@ class TvmKernel:
         self.build = build
         self.target_fn = target_fn
         self.device_fn = device_fn
-        self._exe: "tvm.runtime.Executable | None" = None
+        self._exe: tvm.runtime.Executable | None = None
         self._key: tuple[int | float | str, ...] | None = None
 
     def get(self, key: tuple[int | float | str, ...]) -> "tvm.runtime.Executable":

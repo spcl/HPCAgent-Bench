@@ -1,6 +1,6 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Capture the claude-path goldens of experiments/agent_driver.py (plus token_cost, promote_unsubmitted) at a git ref.
+"""Capture the claude-path goldens of agent/hpcagent_agent/driver/agent_driver.py (plus token_cost, promote_unsubmitted) at a git ref.
 Usage: python tests/fixtures/claude_driver_golden/regen.py [REF], REF default 9e9bbf97c^ (before HARNESS dispatch)."""
 
 import argparse
@@ -27,7 +27,6 @@ GOLDEN = HERE / "golden"
 DEFAULT_REF = "9e9bbf97c^"
 #: The driver and the sibling modules it imports lazily, all read from the same ref.
 SOURCES = ("agent_driver.py", "token_cost.py", "promote_unsubmitted.py", "harnesses.py", "effort.py", "seal_worker.py")
-RUNTIME_MARK = "<AGENT_RUNTIME>"
 #: Stands in for a wall-clock field of tokens.json, which cannot be a golden value.
 EPOCH_MARK = "<epoch-ms>"
 #: Fields of tokens.json holding a clock reading rather than a measurement of the run.
@@ -51,7 +50,7 @@ BASE_ENV: tuple[tuple[str, str], ...] = (
     ("CLAUDE_CODE_ENTRYPOINT", "sdk-py"),
     ("CLAUDE_EFFORT", "high"),
     ("CLAUDE_CODE_EFFORT_LEVEL", "low"),
-    ("CAMPAIGN_ARM", "golden-arm"),
+    ("SETUP", "golden-setup"),
     ("AGENT_NODE_RANK", "1"),
     ("HPCAGENT_BENCH_SHARED_DIR", "shared"),
     ("VLLM_REPLICA_URLS", "http://n0:8000/v1,http://n1:8000/v1,http://n2:8000/v1"),
@@ -141,12 +140,6 @@ def launch_env(scenario: str) -> tuple[tuple[str, str], ...]:
     return tuple(env.items())
 
 
-def agent_runtime(driver_path: pathlib.Path) -> pathlib.Path:
-    """The runtime directory run_agent resolves mcp_server.py under: the driver's checkout, since the
-    golden environment binds no HPCAGENT_BENCH_AGENT_DIR."""
-    return driver_path.resolve().parents[1] / "containers" / "agent"
-
-
 class RecordedProcess:
     """A claude process whose transcript is already written; ``wait`` returns its exit code."""
 
@@ -225,7 +218,6 @@ def run_claude(
         with contextlib.redirect_stdout(summary):
             returncode = driver.run_agent(problem, 2, NODE_DIR, list(JUDGES), 7, 3)
     workdir = root / WORKDIR
-    mcp_server = str((agent_runtime(driver_path) / "tools" / "mcp_server.py").resolve())
     logs = sorted(workdir.glob("*.log"))
     return {
         "returncode": returncode,
@@ -233,7 +225,7 @@ def run_claude(
         "prompt.txt": (workdir / "prompt.txt").read_text(encoding="utf-8"),
         "mcp.json": (workdir / "mcp.json")
         .read_text(encoding="utf-8")
-        .replace(mcp_server, f"{RUNTIME_MARK}/tools/mcp_server.py"),
+        .replace(json.dumps(sys.executable), '"<PYTHON>"'),
         "tokens.json": stable_cost_record(json.loads((workdir / "tokens.json").read_text(encoding="utf-8"))),
         "files": sorted(path.name for path in workdir.iterdir()),
         "notes": {
@@ -386,10 +378,10 @@ def main() -> int:
                 ["git", "-C", str(REPO), "show", f"{args.ref}:experiments/{name}"], check=True, capture_output=True
             ).stdout
             (experiments / name).write_bytes(source)
-        # The driver reads its tool registry from <tree>/containers/agent (agent_runtime), so the
+        # The driver reads its tool registry from <tree>/agent (agent_runtime), so the
         # payload is exported beside the sources at the same ref.
         archive = subprocess.run(
-            ["git", "-C", str(REPO), "archive", "--format=tar", args.ref, "containers/agent"],
+            ["git", "-C", str(REPO), "archive", "--format=tar", args.ref, "agent"],
             check=True,
             capture_output=True,
         ).stdout

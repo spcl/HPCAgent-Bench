@@ -1,5 +1,5 @@
 # HPCAgent-Bench C / C++ formatting. A neutral base (LLVM) with the repo-wide 120-column
 # limit (matching .style.yapf for Python and .fprettify.rc for Fortran). Enforced
-# on changed files by the CI `format-check` job (scripts/check_format.py).
+# on changed files by the CI `format-check` job (scripts/checks/check_format.py).
 BasedOnStyle: LLVM
 ColumnLimit: 120

@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """``run_forked`` must survive a live OpenMP pool in the parent -- whichever runtime holds it.
 
@@ -24,7 +24,6 @@ import subprocess
 import sys
 import warnings
 from collections.abc import Callable
-from typing import Dict, List, Tuple
 
 import numpy as np
 import pytest
@@ -38,8 +37,7 @@ from hpcagent_bench.isolation import (
     OMP_RUNTIME_SONAMES,
     pause_openmp_pools,
 )
-
-REPO = pathlib.Path(__file__).resolve().parents[1]
+from tests.own_process import isolated
 
 OMP_SRC = """#include <omp.h>
 void kern(double *a, int n) {
@@ -59,7 +57,7 @@ N = 4096
 #: the child's pool), which is precisely why "the child didn't hang" is too weak an observable
 #: to pin tear-down with. The default -- libgomp + soft -- is the one that must genuinely tear
 #: down, and does.
-TEARS_DOWN_POOL: Dict[Tuple[str, str], bool] = {
+TEARS_DOWN_POOL: dict[tuple[str, str], bool] = {
     ("gomp", "soft"): True,
     ("gomp", "hard"): True,
     ("omp", "soft"): False,
@@ -103,10 +101,13 @@ def build(tmp_path: pathlib.Path, runtime: str) -> pathlib.Path:
         search = [f"-L{lib_dir}", f"-Wl,-rpath,{lib_dir}"] if lib_dir else []
         extra = [*search, f"-Wl,--push-state,--no-as-needed,-l{runtime},--pop-state"]
     proc = subprocess.run(
-        ["gcc", "-O2", "-fPIC", "-shared", "-fopenmp", *extra, str(src), "-o", str(so)], capture_output=True, text=True
+        ["gcc", "-O2", "-fPIC", "-shared", "-fopenmp", *extra, str(src), "-o", str(so)],
+        capture_output=True,
+        text=True,
+        check=False,
     )
     assert proc.returncode == 0, proc.stderr[-800:]
-    needed = subprocess.run(["readelf", "-d", str(so)], capture_output=True, text=True).stdout
+    needed = subprocess.run(["readelf", "-d", str(so)], capture_output=True, text=True, check=False).stdout
     # DT_NEEDED may show libomp.so.5 for a libiomp5 request (ABI-compat symlink); accept the
     # resolved one.
     assert any(f"[lib{r}.so" in needed for r in (runtime, "omp")), f"expected lib{runtime} in DT_NEEDED, got:\n{needed}"
@@ -144,6 +145,7 @@ def kernel_total(so_path: str) -> float:
 
 @pytest.mark.integration
 @pytest.mark.parametrize("runtime", ["gomp", "omp"])
+@isolated
 def test_forked_child_runs_openmp_after_the_parent_already_did(tmp_path: pathlib.Path, runtime: str) -> None:
     """THE regression: parent enters a parallel region, THEN forks a child that enters one.
 
@@ -162,6 +164,7 @@ def test_forked_child_runs_openmp_after_the_parent_already_did(tmp_path: pathlib
 @pytest.mark.integration
 @pytest.mark.parametrize("runtime", ["gomp", "omp"])
 @pytest.mark.parametrize("mode", sorted(OMP_PAUSE_MODES))
+@isolated
 def test_the_parent_can_still_use_openmp_after_pausing(tmp_path: pathlib.Path, runtime: str, mode: str) -> None:
     """Pausing must not cost the parent anything, under EITHER tear-down mode: a paused runtime
     re-initialises on its next parallel region. Otherwise run_forked would fix the fork by
@@ -176,6 +179,7 @@ def test_the_parent_can_still_use_openmp_after_pausing(tmp_path: pathlib.Path, r
 @pytest.mark.integration
 @pytest.mark.parametrize("runtime", ["gomp", "omp"])
 @pytest.mark.parametrize("mode", sorted(OMP_PAUSE_MODES))
+@isolated
 def test_both_teardown_modes_make_the_fork_safe(tmp_path: pathlib.Path, runtime: str, mode: str) -> None:
     """BOTH omp_pause_resource_t options must buy fork safety -- but NOT always by tearing the
     pool down: libgomp drops it under either mode, whereas libomp's SOFT pause leaves the whole
@@ -212,7 +216,7 @@ def test_both_teardown_modes_make_the_fork_safe(tmp_path: pathlib.Path, runtime:
     assert got == b"ok", f"lib{runtime} + omp_pause_{mode}: child {why}"
 
 
-def mapped_omp() -> List[str]:
+def mapped_omp() -> list[str]:
     with open("/proc/self/maps") as fh:
         maps = fh.read()
     return sorted({n for n in ("libgomp", "libomp", "libiomp5", "libnvomp") if n + ".so" in maps})
@@ -283,6 +287,7 @@ def test_a_mapped_runtime_without_the_pause_symbol_is_warned_not_silent(monkeypa
 
 
 @pytest.mark.integration
+@isolated
 def test_a_second_pause_of_an_idle_libomp_is_not_reported_as_a_live_pool(tmp_path: pathlib.Path) -> None:
     """libomp refuses a pause with no parallel region since the last one. run_forked pauses before
     EVERY fork, so reading that refusal as a live pool warned on each fork after the first."""
@@ -307,7 +312,7 @@ def test_a_mapped_but_never_started_libomp_is_not_reported_as_a_live_pool(tmp_pa
         "pause_openmp_pools()\n"
         "print('libomp.so' in pathlib.Path('/proc/self/maps').read_text())\n"
     )
-    env = {**os.environ, "PYTHONPATH": os.pathsep.join(filter(None, (str(REPO), os.environ.get("PYTHONPATH"))))}
+    env = dict(os.environ)
     proc = subprocess.run([sys.executable, "-c", script, str(so)], capture_output=True, text=True, env=env, check=False)
     assert proc.returncode == 0, proc.stderr[-800:]
     assert proc.stdout.strip() == "True", f"libomp was never mapped, so its refusal went untested: {proc.stdout!r}"

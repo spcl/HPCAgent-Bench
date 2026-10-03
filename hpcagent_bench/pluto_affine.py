@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Affine-index detection for a ``#pragma scop`` Pluto input.
 
@@ -10,7 +10,7 @@ make.
 
 This lives in the package (not under ``tests/``) so both the numerical oracle AND external consumers
 (e.g. the nest-forge arena's Pluto lane) import the SAME detector rather than reimplementing it.
-``tests.numerical_oracle`` re-exports it under its historical private name.
+``hpcagent_bench.numerical_oracle`` re-exports it under its historical private name.
 
 Beside the detector sits :data:`KNOWN_POLYCC_ISSUES`, the registry of what pet / Pluto / polycc were
 MEASURED to do wrong, and of the standing caveats that make a green polycc run mean less than it
@@ -19,7 +19,15 @@ looks. Both are consumed the same way: import from here, never restate.
 
 import re
 from dataclasses import dataclass
-from typing import Dict, Optional
+
+__all__ = [
+    "KNOWN_POLYCC_ISSUES",
+    "TRANS_TESTS",
+    "PolyccIssue",
+    "body_nonaffine_reason",
+    "has_scop",
+    "scop_nonaffine_reason",
+]
 
 
 def has_scop(scop_c: str) -> bool:
@@ -33,7 +41,7 @@ def has_scop(scop_c: str) -> bool:
     return "#pragma scop" in scop_c
 
 
-def scop_nonaffine_reason(scop_c: str) -> Optional[str]:
+def scop_nonaffine_reason(scop_c: str) -> str | None:
     """Return the first non-affine array-subscript pattern across EVERY ``#pragma scop`` body in
     ``scop_c``, or ``None`` when every subscript index in every region is affine.
 
@@ -44,7 +52,7 @@ def scop_nonaffine_reason(scop_c: str) -> Optional[str]:
     scops (``numpyto_c.emit.pluto_scop_regions``) and what sits between them is plain C polycc never
     models. When no ``#pragma scop``/``#pragma endscop`` pair is present the whole string is scanned
     (an already-extracted scop body)."""
-    bodies = re.findall(r"#pragma scop(.*?)#pragma endscop", scop_c, re.S) or [scop_c]
+    bodies = re.findall(r"#pragma scop(.*?)#pragma endscop", scop_c, re.DOTALL) or [scop_c]
     for body in bodies:
         reason = body_nonaffine_reason(body)
         if reason is not None:
@@ -52,7 +60,7 @@ def scop_nonaffine_reason(scop_c: str) -> Optional[str]:
     return None
 
 
-def body_nonaffine_reason(body: str) -> Optional[str]:
+def body_nonaffine_reason(body: str) -> str | None:
     """:func:`scop_nonaffine_reason` for ONE already-delimited scop body."""
     i, n = 0, len(body)
     while i < n:
@@ -110,12 +118,12 @@ class PolyccIssue:
 
 
 _BENCH = "hpcagent_bench/benchmarks/scientific_computing"
-_TRANS_TESTS = "hpcagent_bench/numpy_translators/tests"
+TRANS_TESTS = "tests/translators"
 
 #: Insertion-ordered registry of measured polycc/pet/Pluto defects (``POLYCC-nnn``) followed by the
 #: standing caveats (``C-nnn``). Keyed by id. Every entry states what was OBSERVED; an entry with an
 #: empty ``avoided_by`` is a bug we currently ship into polycc's input.
-KNOWN_POLYCC_ISSUES: Dict[str, PolyccIssue] = {
+KNOWN_POLYCC_ISSUES: dict[str, PolyccIssue] = {
     i.id: i
     for i in (
         PolyccIssue(
@@ -130,7 +138,7 @@ KNOWN_POLYCC_ISSUES: Dict[str, PolyccIssue] = {
                 "lowering replays its RHS at the deeper use sites and deletes it."
             ),
             repro=f"{_BENCH}/structured_grids/conv_2d -- polycc --pet --tile --parallel on its pluto input",
-            avoided_by="numpyto_common.lowering._ForwardSubstituteInvariantScalars",
+            avoided_by="hpcagent_bench.translators.numpyto_common.lowering.forward_subst.ForwardSubstituteInvariantScalars",
             upstream="not filed",
         ),
         PolyccIssue(
@@ -142,8 +150,8 @@ KNOWN_POLYCC_ISSUES: Dict[str, PolyccIssue] = {
                 "A scop-external scalar used as an accumulator carries false WAW/WAR dependences "
                 "and stays SHARED across threads under --parallel (symm, trmm)."
             ),
-            repro=f"{_TRANS_TESTS}/test_scalar_accumulator_retarget.py",
-            avoided_by="numpyto_common.lib_nodes._retarget_scalar_accumulator",
+            repro=f"{TRANS_TESTS}/test_scalar_accumulator_retarget.py",
+            avoided_by="hpcagent_bench.translators.numpyto_common.lib_nodes.retarget_scalar_accumulator",
             upstream="not filed",
         ),
         PolyccIssue(
@@ -156,8 +164,8 @@ KNOWN_POLYCC_ISSUES: Dict[str, PolyccIssue] = {
                 "condition (pet_to_pluto.cpp:565) and aborts on an isl assert "
                 "(constraints_isl.c:429) -- a core dump, not a refusal."
             ),
-            repro=f"{_TRANS_TESTS}/test_no_self_assign_in_scop.py",
-            avoided_by="numpyto_common.lowering._SelfAssignDropper",
+            repro=f"{TRANS_TESTS}/test_no_self_assign_in_scop.py",
+            avoided_by="hpcagent_bench.translators.numpyto_common.lowering.forward_subst.SelfAssignDropper",
             upstream="not filed",
         ),
         PolyccIssue(
@@ -187,7 +195,7 @@ KNOWN_POLYCC_ISSUES: Dict[str, PolyccIssue] = {
                 "it is closed rather than filed."
             ),
             repro=f"{_BENCH}/dense_linear_algebra/trmm -- polycc --pet --tile --parallel on its pluto input",
-            avoided_by="numpyto_common.lib_nodes._retarget_scalar_accumulator",
+            avoided_by="hpcagent_bench.translators.numpyto_common.lib_nodes.retarget_scalar_accumulator",
             upstream="n/a",
         ),
         PolyccIssue(
@@ -202,7 +210,7 @@ KNOWN_POLYCC_ISSUES: Dict[str, PolyccIssue] = {
                 "subscript carries the gather literally and the detector declines the kernel."
             ),
             repro=f"{_BENCH}/n_body_methods/lavamd -- its pluto input fails scop_nonaffine_reason",
-            avoided_by="numpyto_common.lowering._ForwardSubstituteInvariantScalars",
+            avoided_by="hpcagent_bench.translators.numpyto_common.lowering.forward_subst.ForwardSubstituteInvariantScalars",
             upstream="n/a",
         ),
         PolyccIssue(
@@ -222,15 +230,15 @@ KNOWN_POLYCC_ISSUES: Dict[str, PolyccIssue] = {
                 "hoisting the assign above the scop makes M a SECOND pluto parameter and the "
                 "schedule comes back with 2**64-scale coefficients that divide by zero (SIGFPE); "
                 "hoisting only the malloc leaves the assign to be dropped by POLYCC-009. Removing M "
-                "by forward substitution transforms and validates, but _ForwardSubstituteInvariantScalars "
+                "by forward substitution transforms and validates, but ForwardSubstituteInvariantScalars "
                 "excludes a function-level assign by design (it would replay deriche's exp() "
                 "coefficients down a nest), so there is no fix on this entry's own ground. CLOSED "
-                "on other ground 08-10: the scop no longer spans the program, so the malloc sits "
+                "on other ground: the scop no longer spans the program, so the malloc sits "
                 "BETWEEN regions and costs only the nest it is in."
             ),
             repro=f"{_BENCH}/dynamic_programming/needleman_wunsch -- polycc --pet extracts no scop from "
             "its pluto input; invariant stated in numpyto_c.emit.emit_pluto",
-            avoided_by="numpyto_c.emit.pluto_scop_regions",
+            avoided_by="hpcagent_bench.translators.numpyto_c.emit.pluto_scop_regions",
             upstream="n/a",
         ),
         PolyccIssue(
@@ -240,16 +248,16 @@ KNOWN_POLYCC_ISSUES: Dict[str, PolyccIssue] = {
             severity="refusal",
             symptom=(
                 "An int_floor call in a scop LOOP BOUND is read as a data-dependent condition "
-                "(pet_to_pluto.cpp:565) and aborts pet; first measured 08-07 on pagerank, whose "
+                "(pet_to_pluto.cpp:565) and aborts pet; first measured on pagerank, whose "
                 "blocked-reduction lowering put int_floor(N, 128) there. pet name-matches a call "
                 "spelled floord and models it as quasi-affine, so the pluto emit spells integer "
                 "floor division that way and the same scop transforms. The blocked lowering is "
                 "gone (reassociation is sanctioned), but the spelling stays load-bearing for the "
                 "divisions the SOURCE writes -- tsvc_2_s128's floord(LEN_1D, 2) bound transforms "
-                "clean 08-07, and int_floor there would abort pet the same way."
+                "clean, and int_floor there would abort pet the same way."
             ),
-            repro=f"{_TRANS_TESTS}/test_pluto_named_div_builtins.py",
-            avoided_by="numpyto_c.emit.pluto_floordiv",
+            repro=f"{TRANS_TESTS}/test_pluto_named_div_builtins.py",
+            avoided_by="hpcagent_bench.translators.numpyto_c.emit.pluto_floordiv",
             upstream="n/a",
         ),
         PolyccIssue(
@@ -261,7 +269,7 @@ KNOWN_POLYCC_ISSUES: Dict[str, PolyccIssue] = {
                 "Every statement whose only write is a scop-EXTERNAL scalar is dropped from the "
                 "transformed output, so its consumers read an uninitialized value; rc 0, no "
                 "diagnostic. Reduced to a 12-line scop (s = 0.0; s += a[i]; out[i] = a[i] / s "
-                "loses both writes to s), so no floor division is involved. Remeasured 08-07 with "
+                "loses both writes to s), so no floor division is involved. Remeasured with "
                 "the blocked reduction removed: NOT collapsed. pagerank still keeps 4 of its 7 "
                 "statements (teleport, __cb2 = 0.0 and the __cb2 accumulation loop go) and still "
                 "computes inf; tsvc_2_s128 drops all three writes to its induction scalars j / k "
@@ -269,7 +277,7 @@ KNOWN_POLYCC_ISSUES: Dict[str, PolyccIssue] = {
                 "retarget reaches: a full np.sum whose result IS an array cell now accumulates "
                 "into that cell and mints no scalar -- one corpus kernel, fft_3d (__cb7 gone). "
                 "pagerank is not in it: its sum feeds an elementwise divide, so the scalar stays. "
-                "09-24: pagerank validates once POLYCC-014's respelling hands its scalars to polycc "
+                "Since then pagerank validates once POLYCC-014's respelling hands its scalars to polycc "
                 "as pointer cells, and tsvc_2_s128 once POLYCC-017 turns its induction scalars into "
                 "closed forms. An index scalar the DATA advances (tsvc_2_s341's packing j) is "
                 "neither and still loses its writes."
@@ -286,7 +294,7 @@ KNOWN_POLYCC_ISSUES: Dict[str, PolyccIssue] = {
             symptom=(
                 "pet mints a return temporary __pet_ret_0 and never declares it, so polycc exits 0 "
                 "and the transformed output does not compile ('__pet_ret_0' undeclared). Measured "
-                "08-07 on 4 kernels once POLYCC-008 let them reach the transform: "
+                "on 4 kernels once POLYCC-008 let them reach the transform: "
                 "disjoint_halves_gather, ext_floordiv_offset, triplet_margin_loss, tsvc_2_s173. "
                 "The trigger is a static inline call pet can see the BODY of -- it outlines that; "
                 "libm calls (pow, sqrt) have no body in the TU and survive verbatim. Reduced to two "
@@ -296,12 +304,12 @@ KNOWN_POLYCC_ISSUES: Dict[str, PolyccIssue] = {
                 "prelude's own NaN-propagating macro, which pet expands away; all 4 now compile and "
                 "3 agree with the oracle. triplet_margin_loss agrees only up to POLYCC-009, which "
                 "compiling unmasks: its __cb8 accumulator is dropped from the transformed output. "
-                "09-24: the cases the emitter leaves (a variant floord in a subscript, a python_mod "
+                "The cases the emitter leaves (a variant floord in a subscript, a python_mod "
                 "value call) reach polycc through pluto_normalize.floord_subscripts and "
                 "opaque_helper_calls (tsvc_2_s4117, tsvc_2_s315)."
             ),
-            repro=f"{_TRANS_TESTS}/test_pluto_no_helper_calls_in_scop.py",
-            avoided_by="numpyto_c.emit.pluto_call_free",
+            repro=f"{TRANS_TESTS}/test_pluto_no_helper_calls_in_scop.py",
+            avoided_by="hpcagent_bench.translators.numpyto_c.emit.pluto_call_free",
             upstream="not filed",
         ),
         PolyccIssue(
@@ -314,7 +322,7 @@ KNOWN_POLYCC_ISSUES: Dict[str, PolyccIssue] = {
                 "own output for the next one -- and that output opens with the #include <omp.h> "
                 "polycc itself prepends, which pet's flag-less libclang does not find. Every scop "
                 "after the first is then lost with 'No SCoPs extracted or error extracting SCoPs'. "
-                "Measured 08-10 on correlation the moment scope-aware emission produced 2 regions; "
+                "Measured on correlation the moment scope-aware emission produced 2 regions; "
                 "with a parse-only omp.h on C_INCLUDE_PATH the same file transforms (rc 0, 9 omp "
                 "pragmas). Nothing polycc emits CALLS the runtime, so the stub costs nothing."
             ),
@@ -331,7 +339,7 @@ KNOWN_POLYCC_ISSUES: Dict[str, PolyccIssue] = {
             symptom=(
                 "polycc declares its scratch counters (t1..tN, lb/ub/lbp/ubp/lb2/ub2, register lbv/"
                 "ubv) at FUNCTION scope for each scop it transforms, so a SECOND transformed scop in "
-                "the same function redeclares them. Measured 08-10 the moment scope-aware emission "
+                "the same function redeclares them. Measured the moment scope-aware emission "
                 "produced several regions. Two faces: the OUTPUT does not compile ('redeclaration of "
                 "t1' -- correlation, force_lj, mandelbrot1, needleman_wunsch), which is repaired by "
                 "merging the declarations, and polycc's own re-parse of that output fails the same "
@@ -355,15 +363,15 @@ KNOWN_POLYCC_ISSUES: Dict[str, PolyccIssue] = {
                 "An if whose condition is not integer-affine -- it reads an array element or a float "
                 "-- is 'data dependent conditions not supported' (pet_to_pluto.cpp:565) followed by "
                 "an isl assert (constraints_isl.c:429), a core dump rather than a refusal. Reduced "
-                "08-10 to `if (b[i] > 0.0) c[i] = b[i];` and to `if (t > 0.5)` on a float scalar; "
+                "to `if (b[i] > 0.0) c[i] = b[i];` and to `if (t > 0.5)` on a float scalar; "
                 "`if (i < K)` on integers and the ternary form both transform. Measured over the "
                 "corpus, 67 kernels carry one and every one of them was already rejected outright, "
                 "so excluding the nest that holds it costs nothing and recovers its neighbours -- "
                 "correlation goes from no transform at all to rc 0 with 9 parallel loops."
             ),
-            repro=f"{_TRANS_TESTS}/test_pluto_scope_aware_regions.py -- "
+            repro=f"{TRANS_TESTS}/test_pluto_scope_aware_regions.py -- "
             "test_an_unmodellable_nest_does_not_cost_its_scopable_neighbours",
-            avoided_by="numpyto_c.emit.pluto_scop_regions",
+            avoided_by="hpcagent_bench.translators.numpyto_c.emit.pluto_scop_regions",
             upstream="not filed",
         ),
         PolyccIssue(
@@ -377,7 +385,7 @@ KNOWN_POLYCC_ISSUES: Dict[str, PolyccIssue] = {
                 "hyp_search_mode assertion (tsvc_2_s316, s3110, s3111, argmax_with_index), and a "
                 "carried local is dropped or shared in the output otherwise (s252, s255, s3112, "
                 "s319, s2710). The same code on a POINTER-PARAMETER cell transforms and validates. "
-                "Measured 09-24 on polycc 0.12.0-33-gdc46216."
+                "Measured on polycc 0.12.0-33-gdc46216."
             ),
             repro="tests/test_pluto_normalize.py",
             avoided_by="hpcagent_bench.pluto_normalize.externalize_scop_scalars",
@@ -392,7 +400,7 @@ KNOWN_POLYCC_ISSUES: Dict[str, PolyccIssue] = {
                 "A literal non-unit loop stride (for (i = 1; i < N; i += 2)) is dropped: the "
                 "transformed loop is t2++ over every element, rc 0 and no diagnostic "
                 "(quasi_affine_reduce_odd sums twice the elements); a reverse --i loop goes wrong the "
-                "same way (tsvc_2_s1112, s112, neg_stride_rev, thomas_solve). Measured 09-24."
+                "same way (tsvc_2_s1112, s112, neg_stride_rev, thomas_solve)."
             ),
             repro="tests/test_pluto_normalize.py",
             avoided_by="hpcagent_bench.pluto_normalize.normalize_strided_loops",
@@ -406,7 +414,7 @@ KNOWN_POLYCC_ISSUES: Dict[str, PolyccIssue] = {
             symptom=(
                 "The emitter's file-scope C23 constexpr knob (constexpr int64_t K = 1;) is not C "
                 "pet's libclang 17 parses, and the whole unit is refused (cond_reduce_sym, "
-                "fission_dep_sym_offset). Measured 09-24."
+                "fission_dep_sym_offset)."
             ),
             repro="tests/test_pluto_normalize.py",
             avoided_by="hpcagent_bench.pluto_normalize.inline_pinned_constants",
@@ -422,7 +430,7 @@ KNOWN_POLYCC_ISSUES: Dict[str, PolyccIssue] = {
                 "(tsvc_2_s4117's j = floord(i, 2)), a literal tile width (jacobi_2d_tile_w7's W = 7) "
                 "or advanced by literals every iteration (tsvc_2_s128's j and k) -- is data to pet: "
                 "its subscripts read as indirect and its writes are dropped (POLYCC-009). "
-                "Substituting the expression or the closed form of the counter validates. Measured 09-24."
+                "Substituting the expression or the closed form of the counter validates."
             ),
             repro="tests/test_pluto_normalize.py",
             avoided_by="hpcagent_bench.pluto_normalize.substitute_induction_scalars",
@@ -437,7 +445,7 @@ KNOWN_POLYCC_ISSUES: Dict[str, PolyccIssue] = {
                 "--parallel privatizes only Pluto's own tile counters -- any scalar live across the "
                 "scop stays shared between threads."
             ),
-            repro=f"{_TRANS_TESTS}/test_scalar_accumulator_retarget.py -- POLYCC-002 is this caveat's instance",
+            repro=f"{TRANS_TESTS}/test_scalar_accumulator_retarget.py -- POLYCC-002 is this caveat's instance",
             avoided_by="",
             upstream="n/a",
         ),
@@ -476,7 +484,7 @@ KNOWN_POLYCC_ISSUES: Dict[str, PolyccIssue] = {
                 "The numerical oracle invokes polycc --pet WITHOUT --tile --parallel, so an "
                 "oracle-green kernel does not certify the production schedule."
             ),
-            repro="tests/numerical_oracle.py:1154",
+            repro="hpcagent_bench/numerical_oracle.py:1154",
             avoided_by="",
             upstream="n/a",
         ),

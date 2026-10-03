@@ -1,0 +1,6 @@
+# Quantum ESPRESSO kernels.
+addusxx_g
+cegterg
+newdxx_g
+vexx_k
+vloc_psi_k_acc

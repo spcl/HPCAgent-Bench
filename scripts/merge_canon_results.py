@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Fold ONE column's canon CSV shards into the persistent, cross-run canon results DB.
 
 ``scripts/collect_canon.py`` REBUILDS a fresh ``--db`` from a whole sweep's directory -- the tool
-the paper's reproducibility repos call once a campaign is done, and it must keep doing exactly
+the paper's reproducibility repos call once an experiment is done, and it must keep doing exactly
 that for them. This is a different tool for a different moment: the per-job step
-``experiments/canon_column.sh`` runs at the END OF EACH COLUMN'S Slurm job, while the sweep is
+``hpcagent-bench job baseline --phase finish`` runs at the END OF EACH COLUMN'S Slurm job, while the sweep is
 still in progress and other columns' jobs may still be writing beside this one, so the tiny
 per-kernel score row survives after the run's DaCe build tree (``dacecache-<column>[_rank<N>]``,
 routinely the bulk of a canon work dir) is deleted.
 
-APPEND-only against a DB every column of every campaign shares: a ``(run, column, kernel, preset,
+APPEND-only against a DB every column of every experiment shares: a ``(run, column, kernel, preset,
 datatype)`` row is ``INSERT OR REPLACE``, so re-running this script after a partial write (or a
 requeued job) never doubles a row, and rebuilding it here (as collect_canon.py does) would erase
 every other column's rows the moment the first column's job finished.
@@ -22,7 +22,7 @@ every other column's rows the moment the first column's job finished.
 ``--expected``, when given, is an INDEPENDENTLY counted row total (the caller's own ``wc -l`` over
 the same shards) that must equal what this script's own CSV parse finds -- two different counts of
 the same claim, not one number trusted twice. Prints ``merged <n> rows (<m> expected)`` and exits 0
-only when they agree; the caller (canon_column.sh) treats any other outcome as "do not delete this
+only when they agree; the caller (``job baseline``) treats any other outcome as "do not delete this
 column's work-dir artifacts."
 """
 
@@ -51,7 +51,7 @@ SCHEMA: tuple[tuple[str, str], ...] = (
     #: HPCAGENT_BENCH_RECORD_BUILD stamps into the per-rank shard DB's Result.build -- but that
     #: shard DB is deleted once its column is merged, so without a copy here a re-render after a
     #: dace fix could not be told apart from the run before it. One value per (column, run) --
-    #: canon_column.sh's whole job runs against one checked-out dace tree -- not one per kernel, so
+    #: a sweep's whole job runs against one checked-out dace tree -- not one per kernel, so
     #: it is stamped onto every row of a merge from :func:`main`'s ``--build``, never read out of
     #: the CSV shards themselves. Nullable: a caller that does not pass ``--build`` (or an older
     #: canon.db row from before this column existed) leaves it NULL rather than fabricating a value.
@@ -61,11 +61,11 @@ SCHEMA: tuple[tuple[str, str], ...] = (
 
 def rows_for(run_dir: pathlib.Path, column: str, run: str, build: str | None = None) -> list[dict[str, object]]:
     """Every rank shard of ``column`` in ``run_dir``, as tidy rows. A column with no shard (a rank
-    whose kernel share was empty writes none at all -- see canon_column.sh's zero-kernel-rank
+    whose kernel share was empty writes none at all -- see baseline.run's zero-kernel-rank
     guard) yields an empty list, which is a fact, not an error.
 
     Shards are read OLDEST-write-last (mtime ascending, filename as a stable tiebreaker for equal
-    mtimes), not alphabetically. canon_column.sh's ``outer`` mode now rotates any of this column's
+    mtimes), not alphabetically. the sweep's ``begin`` phase now rotates any of this column's
     PRE-EXISTING shards aside before a fresh run ever opens a CSV path (a fresh column run never
     appends to an old one), so every shard this function sees for a given call normally belongs to
     the SAME run; this ordering is kept as defense-in-depth for a caller that points this script
@@ -90,7 +90,7 @@ def rows_for(run_dir: pathlib.Path, column: str, run: str, build: str | None = N
     return out
 
 
-def _ensure_schema(conn: sqlite3.Connection) -> None:
+def ensure_schema(conn: sqlite3.Connection) -> None:
     """Create ``canon`` if it does not exist, else add any :data:`SCHEMA` column an EXISTING table
     predates -- the idempotent migration a canon.db written before ``build`` existed needs, without
     which every reader that names ``build`` explicitly would fail on an old database, and without
@@ -117,7 +117,7 @@ def merge(rows: list[dict[str, object]], db_path: pathlib.Path) -> int:
     placeholders = ", ".join(f":{name}" for name in names)
     with contextlib.closing(sqlite3.connect(db_path, timeout=30.0)) as conn:
         conn.execute("PRAGMA journal_mode = WAL")
-        _ensure_schema(conn)
+        ensure_schema(conn)
         conn.execute(
             f"CREATE UNIQUE INDEX IF NOT EXISTS ux_{TABLE}_row ON {TABLE}(run, column, kernel, preset, datatype)"
         )
@@ -133,7 +133,7 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--run-dir", type=pathlib.Path, required=True)
     ap.add_argument("--column", required=True)
-    ap.add_argument("--run", required=True, help="the run/campaign label recorded on every row")
+    ap.add_argument("--run", required=True, help="the run/experiment label recorded on every row")
     ap.add_argument("--db", type=pathlib.Path, required=True)
     ap.add_argument(
         "--expected",

@@ -1,7 +1,7 @@
 # Private Qwen3.8 endpoint on Beverin
 
-`containers/cluster/ce-images/inference/serve-private.sbatch` starts a keyed, OpenAI-compatible
-Qwen3.8 SGLang server on one Beverin node that only you can use. `experiments/serve-only.sbatch`, by
+`containers/inference/serve-private.sbatch` starts a keyed, OpenAI-compatible
+Qwen3.8 SGLang server on one Beverin node that only you can use. `hpcagent_bench/cluster/serve-only.sbatch`, by
 contrast, serves every interface without a key ([`README.md`](README.md)). Contributors:
 [`extending-private-inference.md`](extending-private-inference.md).
 
@@ -27,31 +27,30 @@ contrast, serves every interface without a key ([`README.md`](README.md)). Contr
   On exit the launcher deletes `endpoint.json` first, then `sglang-auth.yaml`, `api.key`,
   `auth.header`.
 
-### Presets
+### Preset
 
-| `PRESET` | Hardware | EDF | Weights | Attention | Default `LEGS` | Serve with |
+| `PRESET` | Hardware | Engine | EDF | Weights | Default `LEGS` | Serve with |
 |---|---|---|---|---|---|---|
-| `mi300` | 4x MI300A | `hpcagent-bench-sglang-mi300-latest` | `Qwen/Qwen3.8-27B-FP8` | aiter | `tp4:0.306` | `tp4:0.306` |
-| `mi200` | 8x MI250X, 64 GiB each | `hpcagent-bench-sglang-mi200-latest` | `Qwen/Qwen3.8-27B` (BF16) | triton | `tp4:0.80 tp4:0.88 tp8:0.80` | `tp8:0.80` |
+| `mi300` | 4x MI300A | SGLang | `hpcagent-bench-sglang-mi300-latest` | `Qwen/Qwen3.8-27B-FP8` | `tp4:0.306` | `tp4:0.306` |
+| `mi200` | 8x MI250X, 64 GiB each | vLLM 0.28 | `hpcagent-bench-vllm-mi200-latest` | `Qwen/Qwen3.8-27B` (BF16) | `tp8:0.85` | `tp8:0.85` |
 
-Both pass `--context-length 262144 --max-running-requests 128 --mamba-full-memory-ratio 0.5
---reasoning-parser qwen3 --tool-call-parser qwen3_coder`, the chat template
-`experiments/chat-template-qwen38.jinja`, and serve as `hpcagent-bench-vllm`.
+Both serve a 262144-token context and 128 running requests with the qwen3 reasoning and qwen3_coder
+tool parsers and the chat template `containers/inference/chat-template-qwen38.jinja`, as `hpcagent-bench-vllm`.
 
-- `mi300` matches `SGLANG_EXTRA_ARGS` in `experiments/.env.llrbase-qwen38-c`
+- `mi300` matches `SGLANG_EXTRA_ARGS` of `llrbase-c:qwen38` in `experiments/setups.yaml`
   (`tests/test_serve_private.py` fails if they diverge). 0.306 is node-wide on the APU and derated
   to 0.26 by aiter; move it only with the backend and mamba ratio ([`qwen38.md`](qwen38.md)).
-- `mi200`: MI250X has neither FP8 nor aiter kernels, so BF16, triton attention,
-  `--disable-custom-all-reduce`, `SGLANG_USE_AITER=0`. Its fraction is per 64 GiB GPU; mi300
-  values do not transfer. Image: `containers/cluster/ce-images/sglang-mi200/README.md`.
+- `mi200`: MI250X has neither FP8 nor aiter kernels, so BF16 on the AMD vLLM image (the same one
+  that serves oss120b on mi300), `VLLM_ROCM_USE_AITER=0`. The fraction is vLLM's
+  `--gpu-memory-utilization`, per 64 GiB GPU. vLLM checks the key only under `/v1`, `/v2`,
+  `/inference` and `/cohere`, so the mi200 preset is tunnel-only (`ACCESS=alps` refuses).
 
 Measured per leg (401/200 check, tool and reasoning gate, 16 concurrent 256-token requests):
 
 | Preset, leg | KV pool | Max running | Load probe |
 |---|---|---|---|
 | mi300 `tp4:0.306` | 3.36 M tokens, 714 Mamba slots | not recorded | 84 tok/s, cold (first leg, warm-up included) |
-| mi200 `tp4:0.88` | 1.86 M | 78 | 315 tok/s |
-| mi200 `tp8:0.80` | 1.91 M | 128 | 322 tok/s |
+| mi200 `tp8:0.85` (vLLM 0.28) | not recorded | 128 | 421 tok/s |
 
 Each leg writes SGLang's KV and Mamba allocation lines to `<leg dir>/memory.txt`. A clearly different
 pool: compare the job's `argv:` line with section 3.
@@ -63,13 +62,13 @@ On Beverin:
 ```bash
 umask 077
 mkdir -p ~/.config/hpcagent-bench
-openssl rand -hex 32 > ~/.config/hpcagent-bench/mi300-endpoint.key     # or mi200-endpoint.key
+openssl rand -hex 32 > ~/.config/hpcagent-bench/mi300-endpoint.key
 ```
 
 - `KEY_FILE` defaults to `~/.config/hpcagent-bench/<preset>-endpoint.key`. Refused unless mode 600,
   owned by you, at least 32 characters, and only `[A-Za-z0-9._~+/=-]`.
 - Weights must already be in `$HF_HOME/hub` (default from `scripts/cache_env.sh`); the server runs
-  with `HF_HUB_OFFLINE=1`. Fetch with `containers/cluster/ce-images/inference/fetch_weights.sbatch`.
+  with `HF_HUB_OFFLINE=1`. Fetch with `containers/inference/fetch_weights.sbatch`.
 - To rotate the key, overwrite the file and restart the job.
 
 On your laptop (`ACCESS=tunnel`), `~/.ssh/config`:
@@ -99,26 +98,25 @@ day). `ssh beverin hostname` should print a Beverin login node.
 
 ## 3. Start the server
 
-The script sets neither partition nor GPU count, and each preset refuses the other partition, so pass
+The script sets neither partition nor GPU count, and the preset refuses another partition, so pass
 both on every submission:
 
 ```bash
 cd "$REPO"
-L=containers/cluster/ce-images/inference/serve-private.sbatch
+L=containers/inference/serve-private.sbatch
 
 PRESET=mi300 MODE=serve sbatch --partition=mi300 --gpus-per-node=4 --time=08:00:00 "$L"               # laptop
 PRESET=mi300 MODE=serve ACCESS=alps sbatch --partition=mi300 --gpus-per-node=4 --time=08:00:00 "$L"   # Daint jobs
-PRESET=mi200 MODE=serve LEGS=tp8:0.80 sbatch --partition=mi200 --gpus-per-node=8 --time=08:00:00 "$L"
-PRESET=mi200 sbatch --partition=mi200 --gpus-per-node=8 "$L"                  # smoke every LEGS entry
+PRESET=mi300 sbatch --partition=mi300 --gpus-per-node=4 "$L"                  # smoke every LEGS entry
 PRESET=mi300 MODE=serve DRY_RUN=1 bash "$L"                                   # checks + argv, starts nothing
 ```
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `PRESET` | required | `mi300` or `mi200` |
+| `PRESET` | required | `mi300` |
 | `MODE` | `smoke` | `smoke`: start, check (401/200, tool gate, load probe) and stop each leg. `serve`: first leg only, held until the job ends |
 | `ACCESS` | `tunnel` | `tunnel` or `alps` |
-| `LEGS` | per preset | `tp<N>:<mem-fraction-static>` entries, N in 1, 2, 4, 8; entry i listens on `API_PORT + i` |
+| `LEGS` | per preset | `tp<N>:<mem-fraction-static>` entries, N up to the node's GPUs; entry i listens on `API_PORT + i` |
 | `API_PORT` | `30000` | first entry's port |
 | `KEY_FILE` | `~/.config/hpcagent-bench/<preset>-endpoint.key` | key file |
 | `SERVED_MODEL` | `hpcagent-bench-vllm` | name clients send |
@@ -131,6 +129,9 @@ PRESET=mi300 MODE=serve DRY_RUN=1 bash "$L"                                   # 
 Job output: `serve-private-<jobid>.out` in the submit directory. Node:
 `squeue -u "$USER" -n serve-private -o '%i %T %N'`. In `serve` mode the connection block follows
 `unauthenticated POST: 401` and `authenticated POST: 200`; it names the key file, never the key.
+
+To check a running server from anywhere, `containers/inference/ping-endpoint.sh <node> <preset>`
+([`mi200-endpoint.md`](mi200-endpoint.md), section 3).
 
 ## 4. Connect from your laptop (`ACCESS=tunnel`)
 
@@ -174,7 +175,7 @@ endpoint.json: {"url": "http://172.28.9.16:30000/v1", "served_model": "hpcagent-
 In your Daint job, before the client starts:
 
 ```bash
-source "$REPO"/containers/cluster/ce-images/inference/alps-endpoint.sh <run dir>/endpoint.json || exit 1
+source "$REPO"/containers/inference/alps-endpoint.sh <run dir>/endpoint.json || exit 1
 ```
 
 `alps-endpoint.sh` reads `url`, `served_model` and `key_file` from `endpoint.json` (a path, not the

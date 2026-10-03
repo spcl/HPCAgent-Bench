@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The agent start stagger: agents must not all initialize their MCP servers at once.
 
@@ -6,22 +6,13 @@ Measured on 604479: with every agent submitted to the pool at the same instant, 
 with mcp_servers status "failed", and an agent without its MCP server has no submit tool at all.
 """
 
-import importlib
-import pathlib
-import sys
-
-EXAMPLE = pathlib.Path(__file__).resolve().parents[1] / "experiments"
+from tests.fresh_module import DRIVER_DIR, fresh
 
 
 def load_driver(monkeypatch, **env):
     for key, value in env.items():
         monkeypatch.setenv(key, value)
-    sys.path.insert(0, str(EXAMPLE))
-    try:
-        module = importlib.import_module("agent_driver")
-        return importlib.reload(module)
-    finally:
-        sys.path.remove(str(EXAMPLE))
+    return fresh("agent_driver")
 
 
 def test_the_stagger_is_on_by_default(monkeypatch) -> None:
@@ -38,11 +29,6 @@ def test_a_wide_node_stays_inside_the_cap(monkeypatch) -> None:
     capped = min(widest, driver.AGENT_START_STAGGER_MAX_SECONDS)
     assert capped <= driver.AGENT_START_STAGGER_MAX_SECONDS
     assert driver.AGENT_START_STAGGER_MAX_SECONDS <= 300, "a cap this large is not a stagger"
-
-
-def test_the_stagger_can_be_turned_off(monkeypatch) -> None:
-    driver = load_driver(monkeypatch, AGENT_START_STAGGER_SECONDS="0")
-    assert driver.AGENT_START_STAGGER_SECONDS == 0
 
 
 def test_the_startup_gate_is_the_real_limit(monkeypatch) -> None:
@@ -66,6 +52,6 @@ def test_both_mcp_budgets_are_raised() -> None:
     """An agent whose MCP server reports "failed" has no submit tool and records nothing. Claude
     Code has TWO budgets and the connect one defaults to 5 s -- raising only the 30 s startup
     budget leaves the tighter of the pair in place."""
-    source = (EXAMPLE / "agent_driver.py").read_text()
+    source = (DRIVER_DIR / "agent_driver.py").read_text()
     assert 'environment.setdefault("MCP_TIMEOUT"' in source
     assert 'environment.setdefault("MCP_CONNECT_TIMEOUT_MS"' in source

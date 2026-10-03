@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The canon speedup figure: baseline selection, missing-kernel reporting, and reproducibility."""
 
@@ -15,7 +15,7 @@ import pytest
 matplotlib.use("Agg")  # before any pyplot import -- a headless test must never touch a display
 import matplotlib.pyplot as plt  # noqa: E402
 
-from hpcagent_bench import experiment_tags, paths
+from hpcagent_bench import study_tags, paths
 from hpcagent_bench.stats import canon
 
 SPEC = importlib.util.spec_from_file_location("plot_canon_speedup", paths.ROOT / "statistics" / "plot_canon_speedup.py")
@@ -198,7 +198,7 @@ def test_the_title_is_the_canon_llr40_headline() -> None:
 
 def test_distribution_gives_a_compiler_baseline_a_different_color_than_a_dace_column() -> None:
     """cc and dace_cpu_canonicalize wrap onto the SAME slot of the palette's 6-hue ramp
-    (registry.yaml has 30 frameworks); drawn as two lines of one color they would read as one
+    (studies.yaml has 30 frameworks); drawn as two lines of one color they would read as one
     series. draw_distribution must tell them apart (a neutral grey for the non-dace column)."""
     times = {
         "numba": {"k1": 10.0, "k2": 20.0},
@@ -224,7 +224,7 @@ def test_columns_option_draws_dace_gpu_with_its_own_label(tmp_path: pathlib.Path
     rc = plot_canon_speedup.run(db_path, tmp_path / "out", "numba", columns=["dace_gpu"])
 
     assert rc == 0
-    label = experiment_tags.framework_name("dace_gpu")
+    label = study_tags.framework_name("dace_gpu")
     assert label != "dace_gpu"
     table = (tmp_path / "out" / "canon_speedup.csv").read_text()
     assert label in table
@@ -241,7 +241,7 @@ def test_the_measured_speedup_is_on_the_y_axis_not_the_x_axis() -> None:
         assert ax.get_yscale() == "log"
         assert ax.get_xscale() == "linear"
         labels = [tick.get_text() for tick in ax.get_xticklabels()]
-        assert labels == [f"{experiment_tags.framework_name('cc')}  (n=2)"]
+        assert labels == [f"{study_tags.framework_name('cc')}  (n=2)"]
     finally:
         plt.close(fig)
 

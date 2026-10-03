@@ -1,6 +1,6 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""experiments/judge_upstream.py: a judge rank that loses its upstream gets it back.
+"""hpcagent_bench/cluster/judge_upstream.py: a judge rank that loses its upstream gets it back.
 
 The bug this closes: the upstream was a bare background child of the judge step's shell. When
 641799's judge node ran out of memory and the OOM killer took rank 4's upstream, the router in
@@ -20,8 +20,8 @@ from collections.abc import Callable
 import pytest
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-SUPERVISOR = REPO / "experiments" / "judge_upstream.py"
-RUN_CLUSTER = REPO / "experiments" / "run_cluster.sh"
+SUPERVISOR = REPO / "hpcagent_bench" / "cluster" / "judge_upstream.py"
+RUN_CLUSTER = REPO / "hpcagent_bench" / "cluster" / "run_cluster.sh"
 
 #: An upstream that records every start and then dies the way the OOM killer ends one.
 OOM_KILLED = "import os, signal, sys; open(sys.argv[1], 'a').write('start\\n'); os.kill(os.getpid(), signal.SIGKILL)"
@@ -125,12 +125,11 @@ def test_a_fatal_signal_in_the_judge_leaves_a_traceback() -> None:
     """Both ranks 641799 lost ended their log mid-line and said nothing. faulthandler is what turns
     the next one into evidence instead of a guess."""
     probe = (
-        "import faulthandler, os, signal, sys;"
-        "sys.path.insert(0, %r);"
+        "import faulthandler, os, signal;"
         "from hpcagent_bench.harness.service import enable_crash_traces;"
         "enable_crash_traces();"
         "print(faulthandler.is_enabled(), flush=True);"
-        "os.kill(os.getpid(), signal.SIGSEGV)" % str(REPO)
+        "os.kill(os.getpid(), signal.SIGSEGV)"
     )
     done = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, check=False)
     assert done.stdout.strip() == "True", done.stdout

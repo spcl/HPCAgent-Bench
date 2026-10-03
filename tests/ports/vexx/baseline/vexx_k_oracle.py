@@ -452,6 +452,6 @@ def vexx_all_paths(
     if rc == 1:
         raise NotImplementedError("vexx_k_oracle: " + msg.value.decode())
     if rc != 0:
-        raise RuntimeError("vexx_k_oracle failed (rc=%d): %s" % (rc, msg.value.decode()))
+        raise RuntimeError(f"vexx_k_oracle failed (rc={rc}): {msg.value.decode()}")
     hpsi[...] = hpsi_f
     return hpsi

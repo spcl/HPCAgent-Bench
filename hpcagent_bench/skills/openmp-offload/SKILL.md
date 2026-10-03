@@ -11,10 +11,10 @@ Offloading with `omp target`. The CPU threading pages (`openmp-c` / `openmp-cpp`
 decide WHICH loop may be parallel -- a dependence is a dependence on either processor. This page is only what
 changes when the work leaves the host, and the device it leaves for decides most of it.
 
-## A device-resident arm: the arrays are already GPU memory
+## A device-resident setup: the arrays are already GPU memory
 
 If your prompt says the ABI arrays arrive as DEVICE pointers (`c-openmp-device`), the map-clause and
-data-movement advice further down is for host-pointer arms and is refused on yours. Your rules:
+data-movement advice further down is for host-pointer setups and is refused on yours. Your rules:
 
 - **`is_device_ptr` is mandatory.** Every `target` construct that touches an ABI array names it in
   `is_device_ptr(...)` or `has_device_addr(...)`; a submission whose regions declare none is refused at
@@ -28,7 +28,7 @@ data-movement advice further down is for host-pointer arms and is refused on you
 - Check the region left the host with `omp_is_initial_device()` inside it; `OMP_TARGET_OFFLOAD=MANDATORY`
   does not catch a silent host fallback.
 
-The question on this arm is whether the loop belongs on the CU array at all: enough parallelism to fill
+The question on this setup is whether the loop belongs on the CU array at all: enough parallelism to fill
 it, a launch the work pays for, coalesced indexing, `collapse` when the outer trip count cannot fill it.
 The APU facts below still hold; the map and data-movement sections do not.
 
@@ -102,7 +102,7 @@ no kernel ran.
 #pragma omp requires unified_shared_memory   /* ... and every map clause deleted */
 ```
 
-Not available here, and it does not fail gracefully. Every arm runs the `explicit` memory model: the harness
+Not available here, and it does not fail gracefully. Every setup runs the `explicit` memory model: the harness
 builds for `gfx942:xnack-` and runs with `HSA_XNACK=0`. Against that target the directive COMPILES AND LINKS
 CLEANLY, which is what makes it dangerous, and then dies at run time: a warning about "using an OS-allocated
 pointer inside a target region", the kernel launches, and the process aborts with
@@ -115,7 +115,7 @@ There is no diagnostic naming the directive, so if you reach for it the fault yo
 your indexing. Explicit maps against the same target run and are correct. Both measured on this box.
 
 So write the map clauses, always. There is no measurement that makes dropping them win, because there is no
-arm in which they can be dropped.
+setup in which they can be dropped.
 
 Do not reach for the target feature yourself either. An `xnack+` image run with XNACK off prints `Image is not
 compatible with current XNACK mode`, reports `omp_get_num_devices()` = 0, and then computes the right answer ON
@@ -148,7 +148,7 @@ with `HSA_XNACK`; set neither by hand.
   on a loop the `openmp-*` legality test already cleared. `teams` makes the blocks, `distribute` splits the
   outer iterations across them, `parallel for` splits within one. Keep it combined: separating `teams` from
   `parallel` (a `distribute` here, a `parallel for` further in) is a documented way to lose performance, so
-  treat the split as a deliberate experiment and reach for `collapse` first.
+  treat the split as a deliberate study and reach for `collapse` first.
 - `collapse(n)` on perfectly nested loops when the outer trip count alone cannot fill the device. A GPU wants
   far more parallelism than a CPU, so `collapse` pays here where on the host it often does not. This is the
   usual answer to "the kernel offloaded and it is still slow".
@@ -197,17 +197,17 @@ The language rules themselves are in `lang-c` / `lang-cpp` / `lang-fortran`; the
 
 ## References
 
-Measured on this box 2026-09-04, ROCm 7.2.3 / AMD clang 22.0.0git, MI300A: the host-fallback build, the
+Measured on this box, ROCm 7.2.3 / AMD clang 22.0.0git, MI300A: the host-fallback build, the
 `MANDATORY` non-fire, the four-way xnack matrix (622425), the wrong-arch fatal error, the 3.1x hoisting result,
 the single-pass offload LOSS (raw 0.83x, measured through the judge), and the `num_teams` null result.
 
-Re-checked 2026-09-07 (job 626529, same image) by compiling and RUNNING every sample and every testable claim
+Re-checked on the same image by compiling and RUNNING every sample and every testable claim
 on this page: 22 cases, 21 held. The two that did not are corrected above -- `declare target` is implicit for a
 same-translation-unit callee, and `requires unified_shared_memory` faults at run time rather than being
 rejected for the XNACK mode. The map-clause rules, the enter/exit map-type restrictions, the unmapped-scalar
 trap, every construct, and the Fortran spellings all reproduced as written.
 
-Consulted 2026-09-04:
+Consulted:
 - OMP_TARGET_OFFLOAD (MANDATORY / DISABLED / DEFAULT) -- https://www.openmp.org/spec-html/5.0/openmpse65.html
 - LIBOMPTARGET_INFO bit field and the other runtime knobs -- https://openmp.llvm.org/design/Runtimes.html
 - HSA_XNACK, requires unified_shared_memory, implicit zero-copy on MI300A --

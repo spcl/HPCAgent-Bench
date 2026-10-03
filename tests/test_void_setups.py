@@ -1,0 +1,35 @@
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""``results_db.delete_setups``: a setup declared void leaves no row behind, and nothing of another setup goes."""
+
+import contextlib
+import pathlib
+
+from hpcagent_bench.harness import results_db
+from tests import results_seed
+
+VOID = "void-setup"
+KEPT = "kept-setup"
+
+
+def test_a_void_setup_leaves_no_row_and_the_other_setup_keeps_every_one(tmp_path: pathlib.Path) -> None:
+    db = tmp_path / "r.db"
+    shared = "void gemm(void) { /* both */ }"
+    void = results_seed.submission(db, f"{VOID}.n0.p0.w0", "gemm", 10, source="void gemm(void) { /* void */ }")
+    results_seed.submission(db, f"{KEPT}.n0.p0.w0", "gemm", 11, source=shared)
+    results_seed.submission(db, f"{VOID}.n0.p1.w1", "gemm", 12, source=shared)
+    with contextlib.closing(results_db.open_db(db)) as conn:
+        run = conn.execute("SELECT episode_id FROM grades WHERE id = ?", (void,)).fetchone()[0]
+        final, _ts = results_db.add_grade(conn, run, "gemm", "final", ts_ms=20, values={"of_grade_id": void})
+        results_db.add_cells(conn, final, [{"cell": 0, "ratio": 2.0}])
+        conn.commit()
+        removed = results_db.delete_setups(conn, [VOID])
+        conn.commit()
+        left = {table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] for table in results_db.TABLES}
+        setups = [row[0] for row in conn.execute("SELECT setup FROM setups")]
+        texts = [row[0] for row in conn.execute("SELECT text FROM sources")]
+    assert (
+        removed["grades"] == 3 and removed["episodes"] == 2 and removed["setups"] == 1 and removed["grade_cells"] == 1
+    )
+    assert setups == [KEPT] and texts == [shared]
+    assert (left["episodes"], left["grades"], left["grade_sources"], left["grade_cells"]) == (1, 1, 1, 0)

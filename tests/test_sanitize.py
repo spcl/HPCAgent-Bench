@@ -1,14 +1,11 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Tests for hpcagent_bench.support.sanitize (Workstream J).
 
-Covers comment-stripping + name-mangling for a small C snippet and a small
-Python snippet:
+Covers comment-stripping for a small C snippet and a small Python snippet:
 
 * all comments removed;
-* mapped names rewritten everywhere and consistently;
-* mangled C still compiles (``gcc -fsyntax-only``; skipped if gcc absent);
-* a non-mapped keyword / identifier is left untouched.
+* stripped C still compiles (``gcc -fsyntax-only``; skipped if gcc absent).
 
 tree-sitter-only assertions are guarded behind ``find_spec`` so the suite
 passes on the stdlib fallback (tree-sitter is not installed in CI here).
@@ -21,7 +18,7 @@ import tempfile
 
 import pytest
 
-from hpcagent_bench.support.sanitize import build_name_map, mangle, strip_comments, tree_sitter_available
+from hpcagent_bench.support.sanitize import strip_comments, tree_sitter_available
 
 TREE_SITTER = tree_sitter_available()
 
@@ -31,7 +28,7 @@ C_SRC = """\
 // leading comment mentioning relu and kernel
 #include <stdint.h>
 
-/* block comment: do not mangle the word relu in here */
+/* block comment mentioning relu */
 double helper(double x) {
     return x * 2.0;  // inline comment with relu word
 }
@@ -176,94 +173,17 @@ def test_paren_c_only_notice_preserved() -> None:
     assert "(c) 2020 Jane Doe" in out
 
 
-# Name map construction
-
-
-def test_build_name_map_ordering_and_precedence() -> None:
-    nm = build_name_map(["relu", "conv"], ["helper", "pad", "relu"])
-    assert nm["relu"] == "kernel1"
-    assert nm["conv"] == "kernel2"
-    assert nm["helper"] == "f1"
-    assert nm["pad"] == "f2"
-    # "relu" already an entry kernel -> not re-numbered as an f-name.
-    assert nm["relu"] == "kernel1"
-
-
-def test_build_name_map_dedups() -> None:
-    nm = build_name_map(["relu", "relu"], ["helper", "helper"])
-    assert nm["relu"] == "kernel1"
-    assert nm["helper"] == "f1"
-    assert len(nm) == 2
-
-
-# Mangling
-
-
-def test_mangle_c_consistent_and_boundary_safe() -> None:
-    name_map = build_name_map(["relu"], ["helper"])
-    stripped = strip_comments(C_SRC, "c")
-    out = mangle(stripped, "c", name_map)
-
-    # Mapped names rewritten everywhere they appear as identifiers.
-    assert "void kernel1(double *a, int64_t n)" in out
-    assert "double f1(double x)" in out
-    assert "a[i] = f1(a[i]);" in out
-    # Original identifiers gone from code.
-    assert "relu(" not in out
-    assert "helper(" not in out
-    # Non-mapped keyword / identifier untouched.
-    assert "double" in out
-    assert "for (int i = 0; i < n; i++)" in out
-    assert "int64_t" in out
-
-
-def test_mangle_does_not_touch_strings_or_substrings() -> None:
-    name_map = build_name_map(["relu"], ["helper"])
-    stripped = strip_comments(C_SRC, "c")
-    out = mangle(stripped, "c", name_map)
-    # The word "relu" inside the surviving string literal must NOT be mangled.
-    assert "relu stays in this string" in out
-
-
-def test_mangle_substring_not_corrupted() -> None:
-    # "relu" must not be rewritten inside "relufoo" or "prerelu".
-    src = "int relu; int relufoo; int prerelu;"
-    name_map = build_name_map(["relu"], [])
-    out = mangle(src, "c", name_map)
-    assert "int kernel1;" in out
-    assert "relufoo" in out
-    assert "prerelu" in out
-    assert "kernel1foo" not in out
-    assert "prekernel1" not in out
-
-
-def test_mangle_python_consistent() -> None:
-    name_map = build_name_map(["relu"], ["helper"])
-    stripped = strip_comments(PY_SRC, "python")
-    out = mangle(stripped, "python", name_map)
-    assert "def kernel1(a):" in out
-    assert "def f1(x):" in out
-    assert "f1(v) for v in a" in out
-    # The "relu" inside the surviving string literal stays.
-    assert "relu in a string" in out
-    # def / for / return keywords untouched.
-    assert "return" in out
-    assert "for v in a" in out
-
-
 # Compilation gate
 
 
 @pytest.mark.skipif(shutil.which("gcc") is None, reason="gcc not available")
-def test_mangled_c_still_compiles() -> None:
-    name_map = build_name_map(["relu"], ["helper"])
-    stripped = strip_comments(C_SRC, "c")
-    out = mangle(stripped, "c", name_map)
+def test_stripped_c_still_compiles() -> None:
+    out = strip_comments(C_SRC, "c")
     with tempfile.NamedTemporaryFile("w", suffix=".c", delete=True) as fh:
         fh.write(out)
         fh.flush()
         proc = subprocess.run(["gcc", "-fsyntax-only", fh.name], capture_output=True, text=True)
-    assert proc.returncode == 0, f"gcc rejected mangled C:\n{proc.stderr}"
+    assert proc.returncode == 0, f"gcc rejected stripped C:\n{proc.stderr}"
 
 
 # tree-sitter parity (only when installed)
@@ -275,23 +195,18 @@ def test_mangled_c_still_compiles() -> None:
 )
 def test_tree_sitter_path_used_when_available() -> None:
     assert TREE_SITTER is True
-    # Comment strip + mangle still satisfy the core contract on the ts path.
-    out = mangle(strip_comments(C_SRC, "c"), "c", build_name_map(["relu"], ["helper"]))
+    # Comment strip still satisfies the core contract on the ts path.
+    out = strip_comments(C_SRC, "c")
     # Every comment is gone (line, block, inline).
     assert "leading comment" not in out
     assert "block comment" not in out
     assert "inline comment" not in out
     assert "call helper" not in out
-    # The entry kernel is renamed.
-    assert "void kernel1(" in out
-    # The string literal is untouched -- its `//` and the word `relu` survive
-    # (mangle never rewrites inside strings; strip never treats `//` in a string
-    # as a comment).
+    assert "void relu(" in out
+    # The string literal is untouched -- strip never treats `//` in a string as a comment.
     assert "relu stays in this string // not a comment" in out
 
 
 def test_unsupported_lang_rejected() -> None:
     with pytest.raises(ValueError):
         strip_comments("x", "haskell")
-    with pytest.raises(ValueError):
-        mangle("x", "haskell", {"a": "b"})

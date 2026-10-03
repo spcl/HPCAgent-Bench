@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Per-kernel figures: one column per kernel, one mark per series, one summary slot per series.
 
@@ -19,8 +19,8 @@ geometric mean over the solved kernels (:func:`summary_geomean`). The canvas is 
 fixed (:func:`fit_canvas`): margins come from what the chrome actually prints.
 """
 
-import enum
 import dataclasses
+import enum
 import logging
 import math
 import pathlib
@@ -35,9 +35,92 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from hpcagent_bench import experiment_tags
+from hpcagent_bench import study_tags
 from hpcagent_bench.stats import population, summary
 from hpcagent_bench.stats import style as plotstyle
+
+__all__ = [
+    "AUTHOR_TYPE",
+    "BOX_LINE_WIDTH",
+    "CHROME_PAD_IN",
+    "CROSS_EDGE_WIDTH",
+    "DODGE_SPAN",
+    "FLAGGED_ANNOTATION",
+    "FLAGGED_EDGE_WIDTH",
+    "FLAGGED_MARKER",
+    "FLAGGED_MARK_PT",
+    "GRID_LINE_WIDTH",
+    "INTERVAL_Z",
+    "LEGEND_MARK_PT",
+    "LOG",
+    "MARK_GAP_RATIO",
+    "MARK_PT",
+    "MAX_SPEEDUP_TICKS",
+    "MIN_EPISODES_FOR_SPREAD",
+    "MIN_MARK_PT",
+    "MIN_NAME_SCALE",
+    "PANEL_HEIGHT_IN",
+    "PRINT_PANEL_HEIGHT_IN",
+    "PROBE_BAND_IN",
+    "REFERENCE_LINE_WIDTH",
+    "STACK_GAP_IN",
+    "SUMMARY_GAP",
+    "SUMMARY_LINE_WIDTH",
+    "SUMMARY_SLOT",
+    "TOKEN_PAD_DECADES",
+    "VALUE_PAD_OCTAVES",
+    "KernelCell",
+    "Metric",
+    "Series",
+    "Style",
+    "SummaryReducer",
+    "answer_cells",
+    "bootstrap_point",
+    "box_cells",
+    "cell_point",
+    "column_pitch_in",
+    "compact_tick_label",
+    "dodge_offsets",
+    "draw_box",
+    "draw_ci",
+    "draw_flagged",
+    "draw_marks",
+    "draw_status",
+    "draw_summary_column",
+    "draw_summary_mark",
+    "drawn_values",
+    "exp2_or_nan",
+    "figure_one",
+    "figure_panels",
+    "fit_canvas",
+    "fit_ylabels",
+    "grid_125",
+    "kernel_cells",
+    "kernel_interval",
+    "kernel_medians",
+    "kernel_tick_label",
+    "label_kernel_ticks",
+    "mark_size",
+    "min_text_pt",
+    "ordered_kernels",
+    "save",
+    "size_defaults",
+    "speedup_series_metric",
+    "speedup_yticks",
+    "split_in_two",
+    "status_handles",
+    "style_panel",
+    "style_speedup_axis",
+    "style_token_axis",
+    "style_value_axis",
+    "summary_centre_x",
+    "summary_geomean",
+    "summary_separator_x",
+    "summary_slot_x",
+    "token_limits",
+    "token_series_metric",
+    "usable",
+]
 
 LOG = logging.getLogger(__name__)
 
@@ -174,7 +257,11 @@ def answer_cells(
     answers = population.kernel_answers(frame, repeats=repeats, policy=population.KernelPolicy.SOLVED)
     if "speedup" not in answers.columns:
         return []
-    return [KernelCell(str(kernel), (float(value),)) for kernel, value in answers["speedup"].items() if value > 0]
+    return [
+        KernelCell(str(kernel), (float(value),))
+        for kernel, value in population.series_of(answers, "speedup").items()
+        if value > 0
+    ]
 
 
 def exp2_or_nan(value: float) -> float:
@@ -300,7 +387,7 @@ def style_token_axis(
     """A log10 value axis over the plotted values (:func:`token_limits`), majors at 1-2-5."""
     ax.set_yscale("log")
     ax.set_ylim(*token_limits(cells))
-    plotstyle.value_axis(ax, "y", log_base=10.0)
+    plotstyle.value_axis(ax, "y", log_base=plotstyle.LOG_BASE)
     ax.tick_params(axis="y", labelsize=tick_pt)
 
 
@@ -344,7 +431,7 @@ def mark_size(pitch_in: float, n_series: int, span: float = DODGE_SPAN) -> float
     """A mark's area in points squared: :data:`MARK_PT` across where the marks have room, shrinking
     with the gap to the nearest neighbour down to :data:`MIN_MARK_PT` where they do not."""
     dodged = n_series > 1 and span > 0.0
-    gap_pt = 72.0 * pitch_in * (span / (n_series - 1) if dodged else 1.0)
+    gap_pt = plotstyle.POINTS_PER_INCH * pitch_in * (span / (n_series - 1) if dodged else 1.0)
     return max(MIN_MARK_PT, min(MARK_PT, MARK_GAP_RATIO * gap_pt)) ** 2
 
 
@@ -545,17 +632,17 @@ def draw_summary_mark(
 
 
 def kernel_tick_label(kernel: str) -> str:
-    """The kernel's short manifest name (:func:`experiment_tags.kernel_short_display_name`), folded
+    """The kernel's short manifest name (:func:`study_tags.kernel_short_display_name`), folded
     at the short-name limit onto as many lines as it needs, never cut."""
-    name = experiment_tags.kernel_short_display_name(kernel)
-    return "\n".join(textwrap.wrap(name, experiment_tags.SHORT_NAME_MAX, break_long_words=False))
+    name = study_tags.kernel_short_display_name(kernel)
+    return "\n".join(textwrap.wrap(name, study_tags.SHORT_NAME_MAX, break_long_words=False))
 
 
 def compact_tick_label(kernel: str) -> str:
     """:func:`kernel_tick_label` at print size: the compact name
-    (:func:`experiment_tags.kernel_compact_display_name`), folded like it, never cut."""
-    name = experiment_tags.kernel_compact_display_name(kernel)
-    return "\n".join(textwrap.wrap(name, experiment_tags.COMPACT_NAME_MAX, break_long_words=False))
+    (:func:`study_tags.kernel_compact_display_name`), folded like it, never cut."""
+    name = study_tags.kernel_compact_display_name(kernel)
+    return "\n".join(textwrap.wrap(name, study_tags.COMPACT_NAME_MAX, break_long_words=False))
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -796,7 +883,7 @@ def fit_ylabels(
     """Keep every Y label within its own panel's height: broken onto two lines, then stepped down
     to its floor (:func:`min_text_pt`). A label still too tall at the floor is logged; the caller
     has to shorten it."""
-    renderer = fig.canvas.get_renderer()
+    renderer = plotstyle.renderer_of(fig)
     for ax in axes:
         label = ax.yaxis.label
         if not label.get_text() or label.get_window_extent(renderer).height / fig.dpi <= panel_height_in:

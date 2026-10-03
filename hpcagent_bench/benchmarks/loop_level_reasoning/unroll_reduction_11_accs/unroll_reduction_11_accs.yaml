@@ -1,4 +1,5 @@
 # HPCAgent-Bench benchmark manifest -- adding a benchmark: see README.md.
+# provenance: {kind: original}
 name: Reduction, 11 Accumulators
 level: 1
 parameters:

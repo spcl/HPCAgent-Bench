@@ -1,13 +1,14 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Per-rank results DBs and their aggregation.
 
 A distributed run cannot share one SQLite file: WAL needs a ``-shm`` mapping that Lustre/NFS do not
 provide, and rollback-journal locking over them is unreliable. Each rank therefore writes its own
-persistent shard and the shards are merged afterwards -- on demand, by
-:func:`recording.ensure_aggregated`, so no caller has to remember an aggregation step.
+persistent shard and the shards are merged afterwards by natural key (:func:`results_db.merge`) --
+on demand, by :func:`recording.ensure_aggregated`, so no caller has to remember an aggregation step.
 """
 
+import contextlib
 import os
 import pathlib
 import sqlite3
@@ -16,53 +17,39 @@ import time
 
 import pytest
 
-from hpcagent_bench.harness import recording
+from hpcagent_bench.harness import recording, results_db
+from tests.results_rows import attempts, submissions
 
 
 def _seed(path: str, *, run: str, kernels: list[str], with_results: bool = True, language: str = "c") -> None:
-    """Write one shard: dimension rows, the run identity, and one row in each id-bearing log table.
+    """Write one shard: the run's setup and identity, one credited and one failed grade per kernel.
 
-    The measurement tables carry no ``language`` of their own -- the identity a figure groups by is
-    one ``runs`` row joined by ``run_id`` -- so the shard has to hold that row or the merged DB
-    describes rows nothing can attribute."""
-    conn = recording.connect(path)
-    try:
-        conn.execute(
-            "INSERT OR IGNORE INTO runs(run_id, experiment, model, language, device, packet, rep, arm, first_seen) "
-            "VALUES (?,?,?,?,?,?,?,?,?)",
-            (run, "agg", "stub-model", language, "cpu", "", 1, run.split(".")[0], 1),
-        )
+    The grades carry no ``language`` of their own -- the identity a figure groups by is the setup the
+    run belongs to -- so the shard has to hold that row or the merged DB describes grades nothing
+    can attribute."""
+    setup = run.split(".")[0]
+    with contextlib.closing(recording.connect(path)) as conn:
+        results_db.ensure_setup(conn, results_db.Setup(setup, language, "cpu", study="agg", model="stub-model"))
+        episode_id = results_db.ensure_episode(conn, setup, run, None)
         for kernel in kernels:
-            conn.execute(
-                "INSERT OR REPLACE INTO benchmarks(name, track, dwarf, source) VALUES (?,?,?,?)",
-                (kernel, "scientific_computing", "dense_la", None),
-            )
-            conn.execute(
-                "INSERT INTO submissions(run_id, ts, benchmark, preset, datatype, "
-                "source_mode, optimizer, baseline, speedup) VALUES (?,?,?,?,?,?,?,?,?)",
-                (run, 1, kernel, "S", "float64", "restricted", "noop", "c", 1.5),
-            )
-            conn.execute(
-                "INSERT INTO attempts(run_id, ts, benchmark, preset, datatype, "
-                "source_mode, build_ok, correct, reason) VALUES (?,?,?,?,?,?,?,?,?)",
-                (run, 1, kernel, "S", "float64", "restricted", 0, 0, "build"),
-            )
+            stamp = {"preset": "S", "datatype": "float64", "source_mode": "restricted", "baseline": "c"}
+            credited = {"build_ok": 1, "correct": 1, "speedup": 1.5, "credited_speedup": 1.5}
+            results_db.add_grade(conn, episode_id, kernel, "submit", ts_ms=1, values=stamp | credited)
+            failed = {"build_ok": 0, "correct": 0, "reason": "build"}
+            results_db.add_grade(conn, episode_id, kernel, "submit", ts_ms=2, values=stamp | failed)
             if with_results:
                 # The framework ``results`` table belongs to another module's schema but lives in the
                 # same file; aggregation must carry it even though recording.py never creates it.
                 conn.execute(
                     "CREATE TABLE IF NOT EXISTS results ("
-                    "id INTEGER PRIMARY KEY, timestamp INTEGER, benchmark TEXT, preset TEXT, "
+                    "id INTEGER PRIMARY KEY, timestamp INTEGER, kernel TEXT, preset TEXT, "
                     "framework TEXT, validated INTEGER, time REAL)"
                 )
                 conn.execute(
-                    "INSERT INTO results(timestamp, benchmark, preset, framework, validated, time) "
-                    "VALUES (?,?,?,?,?,?)",
+                    "INSERT INTO results(timestamp, kernel, preset, framework, validated, time) VALUES (?,?,?,?,?,?)",
                     (1, kernel, "S", "numpy", 1, 2.0),
                 )
         conn.commit()
-    finally:
-        conn.close()
 
 
 def _count(path: str, table: str) -> int:
@@ -97,68 +84,59 @@ def test_aggregate_merges_every_table_and_reassigns_ids(tmp_path) -> None:
 
     recording.aggregate(base)
 
-    # Row logs concatenate; the dimension table dedups on its natural key (gemm seen by both shards).
-    assert _count(base, "submissions") == 4
-    assert _count(base, "attempts") == 4
+    # Every grade is its own natural key; the runs and setups keep one row per key.
+    assert len(submissions(base)) == 4
+    assert len(attempts(base)) == 4
     assert _count(base, "results") == 4
-    assert _count(base, "benchmarks") == 3
+    assert _count(base, "episodes") == 2
 
-    conn = sqlite3.connect(base)
-    try:
-        ids = [r[0] for r in conn.execute("SELECT id FROM submissions")]
-        runs = {r[0] for r in conn.execute("SELECT run_id FROM submissions")}
+    ids = [row["id"] for row in submissions(base)]
+    runs = {row["label"] for row in submissions(base)}
+    with results_db.reading(base) as conn:
         tagged = sorted(
-            conn.execute("SELECT runs.language, COUNT(*) FROM submissions JOIN runs USING (run_id) GROUP BY 1")
+            tuple(row)
+            for row in conn.execute("SELECT language, COUNT(*) FROM grades_flat WHERE credited_speedup > 0 GROUP BY 1")
         )
-    finally:
-        conn.close()
     # Both shards number their own rows from 1; the destination must reassign, not collide.
     assert len(set(ids)) == 4
     assert runs == {"r0", "r1"}
-    # A merged measurement row must still reach its arm: the identity is on `runs`, so a merge that
-    # carried the measurements and dropped the identity would leave four rows nothing can group.
+    # A merged grade must still reach its setup: the identity is on `setups`, so a merge that carried the
+    # grades and dropped the identity would leave four rows nothing can group.
     assert tagged == [("c", 2), ("fortran", 2)]
 
 
 def test_two_ranks_of_one_run_merge_instead_of_colliding(tmp_path: pathlib.Path) -> None:
-    """``runs`` is keyed by ``run_id`` and every rank of a run writes its own shard with that same
-    row -- :func:`recording.upsert_run` calls a second rank writing it "the normal case". Merged
-    with a plain INSERT the second copy raises UNIQUE and takes the WHOLE merge down, so a
-    multi-rank campaign would lose every table, not one row."""
+    """A run is keyed by its job and label, and every rank of a run writes its own shard with that
+    same row. Merged with a plain INSERT the second copy raises UNIQUE and takes the WHOLE merge
+    down, so a multi-rank experiment would lose every table, not one row. The same grade seen by two
+    ranks is one grade too."""
     base = str(tmp_path / "hpcagent_bench.db")
     for rank in (0, 1):
         _seed(recording.shard_db_path(rank, base), run="llr2-c.n0.p3.w1", kernels=["gemm"], language="c")
 
     recording.aggregate(base)
 
-    assert _count(base, "runs") == 1
-    assert _count(base, "submissions") == 2
-    conn = sqlite3.connect(base)
-    try:
-        assert [r[0] for r in conn.execute("SELECT language FROM runs")] == ["c"]
-    finally:
-        conn.close()
+    assert _count(base, "episodes") == 1
+    assert len(submissions(base)) == 1
+    with results_db.reading(base) as conn:
+        assert [r[0] for r in conn.execute("SELECT language FROM setups")] == ["c"]
 
 
-def test_aggregate_merges_a_run_id_shared_by_multiple_shards(tmp_path) -> None:
-    """A run served by several ranks writes the SAME run_id into every rank's own shard (upsert_run
-    is INSERT OR IGNORE per shard, not a cross-shard dedup), so the second shard's identity row for
-    that run_id must not collide with the first's on ``runs.run_id`` -- it is the same fact."""
+def test_aggregate_merges_a_episode_id_shared_by_multiple_shards(tmp_path) -> None:
+    """A run served by several ranks writes the SAME run into every rank's own shard, so the second
+    shard's row for it must not collide with the first's -- it is the same fact."""
     base = str(tmp_path / "hpcagent_bench.db")
     _seed(recording.shard_db_path(0, base), run="shared", kernels=["gemm"])
     _seed(recording.shard_db_path(1, base), run="shared", kernels=["spmv"])
 
     recording.aggregate(base)
 
-    assert _count(base, "runs") == 1
-    conn = sqlite3.connect(base)
-    try:
-        rows = conn.execute("SELECT run_id, model, arm FROM runs").fetchall()
-    finally:
-        conn.close()
+    assert _count(base, "episodes") == 1
+    with results_db.reading(base) as conn:
+        rows = [tuple(r) for r in conn.execute("SELECT label, model, setup FROM episodes JOIN setups USING (setup)")]
     assert rows == [("shared", "stub-model", "shared")]
-    # The row logs still concatenate; only the run's identity dedups.
-    assert _count(base, "submissions") == 2
+    # The grades still concatenate; only the run's identity dedups.
+    assert len(submissions(base)) == 2
 
 
 def test_aggregate_survives_a_shard_missing_a_column(tmp_path) -> None:
@@ -194,26 +172,26 @@ def test_aggregate_is_idempotent(tmp_path) -> None:
     _seed(recording.shard_db_path(1, base), run="r1", kernels=["spmv"])
 
     recording.aggregate(base)
-    first = _count(base, "submissions")
+    first = len(submissions(base))
     recording.aggregate(base)
-    assert _count(base, "submissions") == first == 2
+    assert len(submissions(base)) == first == 2
 
 
-def test_aggregate_merges_the_prompt_store(tmp_path) -> None:
-    """A copied ``prompts`` row whose file stayed beside the shard would be a dangling pointer."""
+def test_aggregate_carries_the_sources_inside_the_db(tmp_path) -> None:
+    """A source is a row of the DB, so the merged file holds the text itself: no store beside it."""
     base = str(tmp_path / "hpcagent_bench.db")
     shard = recording.shard_db_path(0, base)
-    conn = recording.connect(shard)
-    try:
-        digest = recording.store_prompt(conn, "optimize this", "gemm", store_dir=str(recording.prompt_store_dir(shard)))
-    finally:
-        conn.close()
+    _seed(shard, run="r0", kernels=["gemm"])
+    with contextlib.closing(recording.connect(shard)) as conn:
+        results_db.store_source(conn, 1, "host", "c", "optimize this")
+        conn.commit()
 
     recording.aggregate(base)
 
-    assert _count(base, "prompts") == 1
-    stored = recording.prompt_store_dir(base) / f"{digest[:2]}/{digest}.txt"
-    assert stored.read_text() == "optimize this"
+    with results_db.reading(base) as conn:
+        texts = conn.execute("SELECT s.text FROM grade_sources gs JOIN sources s USING (hash)").fetchall()
+    assert [tuple(row) for row in texts] == [("optimize this",)]
+    assert not list(tmp_path.glob("*_prompts"))
 
 
 def test_ensure_aggregated_builds_when_the_aggregate_is_missing(tmp_path) -> None:
@@ -222,7 +200,7 @@ def test_ensure_aggregated_builds_when_the_aggregate_is_missing(tmp_path) -> Non
     assert not os.path.exists(base)
 
     assert recording.ensure_aggregated(base) == base
-    assert _count(base, "submissions") == 1
+    assert len(submissions(base)) == 1
 
 
 def test_ensure_aggregated_rebuilds_when_a_shard_is_newer(tmp_path) -> None:
@@ -230,14 +208,14 @@ def test_ensure_aggregated_rebuilds_when_a_shard_is_newer(tmp_path) -> None:
     base = str(tmp_path / "hpcagent_bench.db")
     _seed(recording.shard_db_path(0, base), run="r0", kernels=["gemm"])
     recording.ensure_aggregated(base)
-    assert _count(base, "submissions") == 1
+    assert len(submissions(base)) == 1
 
     late = recording.shard_db_path(1, base)
     _seed(late, run="r1", kernels=["spmv"])
     os.utime(late, (time.time() + 10, time.time() + 10))
 
     recording.ensure_aggregated(base)
-    assert _count(base, "submissions") == 2
+    assert len(submissions(base)) == 2
 
 
 def test_ensure_aggregated_is_a_noop_without_shards(tmp_path) -> None:
@@ -247,7 +225,7 @@ def test_ensure_aggregated_is_a_noop_without_shards(tmp_path) -> None:
     before = os.path.getmtime(base)
     assert recording.ensure_aggregated(base) == base
     assert os.path.getmtime(base) == before
-    assert _count(base, "submissions") == 1
+    assert len(submissions(base)) == 1
 
 
 def test_a_single_writer_run_still_writes_a_shard(monkeypatch, tmp_path) -> None:
@@ -264,55 +242,6 @@ def test_a_single_writer_run_still_writes_a_shard(monkeypatch, tmp_path) -> None
     finally:
         config.clear_override("record.db_path")
         config.clear_override("record.allow_memory_db")
-
-
-def test_a_pre_sharding_db_is_adopted_rather_than_erased(tmp_path) -> None:
-    """The rebuild unlinks the destination, so a run from before sharding -- whose results ARE the
-    base file -- has to become an input first, or reading the DB destroys it."""
-    base = str(tmp_path / "hpcagent_bench.db")
-    _seed(base, run="legacy", kernels=["gemm"])
-    _seed(recording.shard_db_path(0, base), run="r0", kernels=["spmv"])
-
-    recording.ensure_aggregated(base)
-
-    assert _count(base, "submissions") == 2
-    conn = sqlite3.connect(base)
-    try:
-        assert {r[0] for r in conn.execute("SELECT run_id FROM submissions")} == {"legacy", "r0"}
-    finally:
-        conn.close()
-
-
-def test_adoption_happens_once(tmp_path) -> None:
-    """The rebuilt aggregate is marked derived, so re-reading cannot adopt it as its own input and
-    double every legacy row."""
-    base = str(tmp_path / "hpcagent_bench.db")
-    _seed(base, run="legacy", kernels=["gemm"])
-    _seed(recording.shard_db_path(0, base), run="r0", kernels=["spmv"])
-
-    recording.aggregate(base)
-    recording.aggregate(base)
-    recording.aggregate(base)
-
-    assert _count(base, "submissions") == 2
-    assert recording.user_version(base) == recording.DERIVED_MARK
-
-
-def test_adoption_carries_the_prompt_store(tmp_path) -> None:
-    """The store is named after the DB beside it, so a base adopted under a new name leaves its
-    prompt rows pointing at files that are no longer there."""
-    base = str(tmp_path / "hpcagent_bench.db")
-    conn = recording.connect(base)
-    try:
-        digest = recording.store_prompt(conn, "legacy prompt", "gemm", store_dir=str(recording.prompt_store_dir(base)))
-    finally:
-        conn.close()
-    _seed(recording.shard_db_path(0, base), run="r0", kernels=["spmv"])
-
-    recording.aggregate(base)
-
-    assert _count(base, "prompts") == 1
-    assert (recording.prompt_store_dir(base) / f"{digest[:2]}/{digest}.txt").read_text() == "legacy prompt"
 
 
 def test_db_shard_prefers_the_explicit_override(monkeypatch) -> None:

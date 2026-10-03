@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The one save idiom every figure goes through."""
 
@@ -42,7 +42,7 @@ def test_a_figure_saved_at_two_times_is_byte_identical(tmp_path: pathlib.Path, m
 ])  # fmt: skip
 def test_the_value_axis_helper_rules_minors_on_a_log_axis_only(scale: str, minor_grid: bool) -> None:
     """One helper, one grid. Every figure goes through ``value_axis``, so the minor ruling it draws
-    on a log axis (user, 2026-09-22) is what every log value axis gets; a linear axis does not know
+    on a log axis is what every log value axis gets; a linear axis does not know
     whether it holds log2 units or a count, so its caller names that to ``minor_ticks``."""
     fig, ax = plt.subplots()
     try:
@@ -72,7 +72,7 @@ def test_a_log_value_axis_labels_no_minor_tick_in_scientific_notation() -> None:
 
 
 def test_a_point_mark_that_never_delivered_an_answer_carries_a_cross_on_the_model_shape() -> None:
-    """A kernel the arm was served and never solved enters every aggregate at 1x and keeps its
+    """A kernel the setup was served and never solved enters every aggregate at 1x and keeps its
     tokens, so the mark is a PLACEHOLDER, not a measurement. The cross says so while the shape still
     names the model and the colour still names the intervention."""
     fig, ax = plt.subplots()

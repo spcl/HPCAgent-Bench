@@ -4,7 +4,7 @@ import numpy as np
 def _as_tuple(value, dims):
     if isinstance(value, tuple):
         return value
-    return tuple((value for _ in range(dims)))
+    return tuple(value for _ in range(dims))
 
 
 def _ceildiv(a, b):

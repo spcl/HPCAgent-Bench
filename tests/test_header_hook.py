@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The copyright/SPDX header must sit at the top of every core ``.py`` AND survive the formatter.
 
@@ -17,20 +17,19 @@ import shutil
 import subprocess
 import types
 from pathlib import Path
-from typing import List
 
 REPO = Path(__file__).resolve().parent.parent
 #: Passed explicitly rather than discovered, so the test formats the way check_format.py does.
 LINE_LENGTH = "120"
 HEADER: tuple = (
-    "# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.",
+    "# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.",
     "# SPDX-License-Identifier: GPL-3.0-or-later",
 )
 
 
 def _load_check_headers() -> types.ModuleType:
-    """Import ``scripts/check_headers.py`` as a module (it is not an installed package)."""
-    spec = importlib.util.spec_from_file_location("check_headers", REPO / "scripts" / "check_headers.py")
+    """Import ``scripts/checks/check_headers.py`` as a module (it is not an installed package)."""
+    spec = importlib.util.spec_from_file_location("check_headers", REPO / "scripts" / "checks" / "check_headers.py")
     module = importlib.util.module_from_spec(spec)
     # Registered BEFORE exec: dataclasses resolves a string annotation through
     # sys.modules[cls.__module__], which is None for a module loaded by path alone.
@@ -81,7 +80,7 @@ def test_the_formatter_leaves_the_header_byte_for_byte(tmp_path: Path) -> None:
     top = "#!/usr/bin/env python\n" + HEADER[0] + "\n" + HEADER[1] + "\n"
     f.write_text(top + "import   os,sys\ndef  f( x ):\n        return x+1\n", encoding="utf-8")
     subprocess.run([ruff, "format", "--line-length", LINE_LENGTH, str(f)], check=True)
-    out: List[str] = f.read_text(encoding="utf-8").splitlines()
+    out: list[str] = f.read_text(encoding="utf-8").splitlines()
     assert out[0] == "#!/usr/bin/env python"
     assert out[1] == HEADER[0] and out[2] == HEADER[1]
     assert "def f(x):" in f.read_text(encoding="utf-8")  # body WAS reformatted (test is meaningful)

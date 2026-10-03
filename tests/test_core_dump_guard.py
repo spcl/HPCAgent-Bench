@@ -1,10 +1,10 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Nothing this repo runs may leave core dumps in the checkout.
 
 Beverin's ``core_pattern`` is the machine-global ``core_%h_%p``, so a crashing process writes a
-multi-GB dump into its CWD -- the checkout -- on a filesystem whose quota is inodes. One campaign
-left 131 of them, 43 GB; a login-node CPF repro left 21.6 GB in two files on 2026-09-20. The guard
+multi-GB dump into its CWD -- the checkout -- on a filesystem whose quota is inodes. One experiment
+left 131 of them, 43 GB; a login-node CPF repro left 21.6 GB in two files. The guard
 is ``ulimit -c 0`` in every shell entry point, plus :func:`hpcagent_bench.core_dumps.disable` for a
 python process started by a script outside the repo. These tests keep both there, including in
 scripts that are GENERATED rather than checked in, and prove the check FAILS on a regression.
@@ -20,12 +20,14 @@ import pytest
 
 from hpcagent_bench import core_dumps, paths
 
-SPEC = importlib.util.spec_from_file_location("check_core_dumps", paths.ROOT / "scripts" / "check_core_dumps.py")
+SPEC = importlib.util.spec_from_file_location(
+    "check_core_dumps", paths.ROOT / "scripts" / "checks" / "check_core_dumps.py"
+)
 check_core_dumps = importlib.util.module_from_spec(SPEC)
 sys.modules["check_core_dumps"] = check_core_dumps
 SPEC.loader.exec_module(check_core_dumps)
 
-CHECKER = paths.ROOT / "scripts" / "check_core_dumps.py"
+CHECKER = paths.ROOT / "scripts" / "checks" / "check_core_dumps.py"
 
 
 def checker_rc(target: pathlib.Path) -> int:
@@ -36,13 +38,13 @@ def checker_rc(target: pathlib.Path) -> int:
 
 def test_every_tracked_shell_script_disables_core_dumps() -> None:
     """Every .sbatch, .sh and shell shebang: wrappers, login-node helpers and the agent's own tool."""
-    missing = [p for p in check_core_dumps.shell_scripts([]) if check_core_dumps.GUARD not in p.read_text()]
+    missing = [p for p in check_core_dumps.shell_scripts([]) if not check_core_dumps.guarded(p.read_text())]
     assert not missing, f"shell scripts without `{check_core_dumps.GUARD}`: {[str(p) for p in missing]}"
 
 
 def test_every_sbatch_emitter_disables_core_dumps() -> None:
     """A .py/.sh that writes an SBATCH header submits a job too, and the suffix check misses it."""
-    missing = [p for p in check_core_dumps.emitters([]) if check_core_dumps.GUARD not in p.read_text()]
+    missing = [p for p in check_core_dumps.emitters([]) if not check_core_dumps.guarded(p.read_text())]
     assert not missing, f"sbatch emitters without `{check_core_dumps.GUARD}`: {[str(p) for p in missing]}"
 
 
@@ -101,7 +103,7 @@ def test_nothing_samples_stacks_with_the_faulthandler_watchdog() -> None:
     Its watchdog is a C thread that walks every other thread's ``_PyInterpreterFrame`` chain with
     no GIL and no synchronisation. Against an interpreter churning frames -- a dace parse, a sympy
     rewrite -- it dereferences a frame the main thread has already popped and the process dies in
-    ``dump_frame``. Measured 2026-09-20: a 20-line recursion loop plus a 10 ms sampler segfaults in
+    ``dump_frame``. Measured: a 20-line recursion loop plus a 10 ms sampler segfaults in
     seconds on 3.12.3 and 3.14.7, and the same sampler killed a ``warpx_field_gather``
     canonicalize twice for 21.6 GB of core files. The SAFE sampler is
     ``faulthandler.register(signal.SIGUSR1)`` plus an external ``kill -USR1``: that dumps
@@ -166,8 +168,8 @@ def judge_core_limits(extra: dict[str, str]) -> tuple[int, int, int]:
     return soft, hard, child
 
 
-def test_the_judge_keeps_its_own_core_only_when_the_arm_asks() -> None:
-    """A crash-diagnosis arm wants the judge's core; every other arm keeps the floor."""
+def test_the_judge_keeps_its_own_core_only_when_the_setup_asks() -> None:
+    """A crash-diagnosis setup wants the judge's core; every other setup keeps the floor."""
     soft, hard = judge_core_limits({core_dumps.JUDGE: "1"})[:2]
     assert hard != 0, "precondition: this shell's hard limit forbids any core, nothing to test"
     assert soft == hard
@@ -180,17 +182,16 @@ def test_a_grading_child_of_a_core_keeping_judge_still_dumps_nothing() -> None:
     assert judge_core_limits({core_dumps.JUDGE: "1"})[2] == 0
 
 
-FLOORED = ["scripts/cscs/enroot_srun.sh", "scripts/cscs/enroot_forward.sh", "experiments/run_cluster.sh"]
+FLOORED = ["hpcagent_bench/cluster/run_cluster.sh"]
 
 
 @pytest.mark.parametrize("script", FLOORED)
-@pytest.mark.parametrize(("flag", "hard_is_zero"), [("", True), ("1", False)], ids=["floor", "judge-arm"])
-def test_the_shell_floor_leaves_the_hard_limit_only_for_a_judge_core_arm(
+@pytest.mark.parametrize(("flag", "hard_is_zero"), [("", True), ("1", False)], ids=["floor", "judge-setup"])
+def test_the_shell_floor_leaves_the_hard_limit_only_for_a_judge_core_setup(
     script: str, flag: str, hard_is_zero: bool
 ) -> None:
     """``ulimit -c 0`` sets BOTH limits, after which nothing below can raise its own. Every script on
-    the judge's launch path must floor the soft limit alone on a judge-core arm (enroot_forward.sh
-    is sourced INSIDE the step, so missing it there zeroes the container's hard limit)."""
+    the judge's launch path must floor the soft limit alone on a judge-core setup."""
     text = (paths.ROOT / script).read_text()
     (guard,) = [line for line in text.splitlines() if line.startswith("if [[") and "ulimit" in line]
     done = subprocess.run(

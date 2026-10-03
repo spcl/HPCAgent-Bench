@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """A kernel's canonical SDFG, produced once per (generated program, dace commit) and cached.
 
@@ -12,18 +12,42 @@ edit there re-renders without re-canonicalizing.
 
 import hashlib
 import importlib
+import json
 import os
 import pathlib
 import subprocess
 import tempfile
-from collections.abc import Sequence
+import urllib.parse
+from collections.abc import Mapping, Sequence
+from importlib import metadata
 from types import ModuleType
-from typing import TYPE_CHECKING
-
-from numpyto_common.naming import fptype_tag
+from typing import TYPE_CHECKING, Any
 
 from hpcagent_bench import cpf_cache, paths
 from hpcagent_bench.spec import BenchSpec
+from hpcagent_bench.translators.numpyto_common.naming import fptype_tag
+
+__all__ = [
+    "DACE_PATH_VARIABLES",
+    "IMPL_POSTFIXES",
+    "bind_precision",
+    "canonical_key",
+    "canonical_sdfg",
+    "canonicalize_for",
+    "checkout_head",
+    "commit_of",
+    "dace_commit",
+    "dace_environment",
+    "emit_program",
+    "entry_program_name",
+    "failure",
+    "parse_kernel",
+    "parse_program",
+    "produce",
+    "producer_digest",
+    "program_name",
+    "resolve_program",
+]
 
 if TYPE_CHECKING:
     from dace import SDFG
@@ -34,7 +58,7 @@ if TYPE_CHECKING:
 IMPL_POSTFIXES = ("_dace_gpu", "_dace_cpu", "_dace")
 
 #: ``DACE_*`` variables that name locations rather than behaviour, left out of every key.
-DACE_PATH_VARIABLES = frozenset({"DACE_TREE", "DACE_default_build_folder", "DACE_BUILD_CACHE_DIR"})
+DACE_PATH_VARIABLES = frozenset({"DACE_default_build_folder", "DACE_BUILD_CACHE_DIR"})
 
 
 def program_name(path: pathlib.Path) -> str:
@@ -80,14 +104,28 @@ def failure(exc: BaseException) -> dict[str, str]:
     return {"verdict": "fail", "error": f"{type(exc).__name__}: {exc}"[:400]}
 
 
-def dace_commit(dace_root: pathlib.Path) -> str:
-    """The dace checkout's HEAD commit, which keys every cache entry; a tree with no commit is refused."""
-    done = subprocess.run(
-        ["git", "-C", str(dace_root), "rev-parse", "HEAD"], capture_output=True, text=True, check=False
-    )
-    commit = done.stdout.strip()
-    if done.returncode != 0 or not commit:
-        raise RuntimeError(f"dace at {dace_root} is not a git checkout; the CPF cache keys on its commit")
+def checkout_head(root: pathlib.Path) -> str:
+    """The HEAD commit of the git checkout at ``root``; empty when ``root`` is not one."""
+    done = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True, check=False)
+    return done.stdout.strip() if done.returncode == 0 else ""
+
+
+def commit_of(record: Mapping[str, Any]) -> str:
+    """The commit a PEP 610 ``direct_url.json`` record names: the git revision of a VCS install (what uv records
+    for the pinned spcl/dace), else an editable checkout's HEAD; empty when it names neither."""
+    vcs = record.get("vcs_info", {})
+    if vcs.get("vcs") == "git" and vcs.get("commit_id"):
+        return str(vcs["commit_id"])
+    if record.get("dir_info", {}).get("editable"):
+        return checkout_head(pathlib.Path(urllib.parse.urlparse(str(record.get("url", ""))).path))
+    return ""
+
+
+def dace_commit() -> str:
+    """The installed dace's commit, which keys every cache entry; a dace that names none is refused."""
+    commit = commit_of(json.loads(metadata.distribution("dace").read_text("direct_url.json") or "{}"))
+    if not commit:
+        raise RuntimeError("the installed dace names no git commit (direct_url.json); the CPF cache keys on its commit")
     return commit
 
 

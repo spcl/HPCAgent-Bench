@@ -4,7 +4,7 @@
 import hashlib
 import sys
 import importlib.util
-from typing import Callable
+from collections.abc import Callable
 
 import numpy as np
 

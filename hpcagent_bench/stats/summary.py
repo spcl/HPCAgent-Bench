@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Every statistic a figure or a table in this repo reports, defined exactly once.
 
@@ -27,9 +27,8 @@ Reported defaults (so a run's rigor is documented, not implicit):
   :data:`DEFAULT_CONFIDENCE` (0.95), ``n_resamples`` :data:`DEFAULT_RESAMPLES` (9999),
   ``method`` :data:`DEFAULT_CI_METHOD` (``"percentile"`` -- the robust choice for a median,
   whose BCa acceleration estimate is unstable);
-* paired test -- Wilcoxon signed-rank, exact or approximate by the ONE rule in
-  :mod:`hpcagent_bench.stats.signed_rank`, whose threshold ``statistics/ablation_stats.py``
-  obeys too; the method is passed to scipy explicitly rather than left to its ``auto`` heuristic.
+* paired test -- Wilcoxon signed-rank, exact or approximate by :func:`use_exact` (:data:`EXACT_MAX_N`);
+  the method is passed to scipy explicitly rather than left to its ``auto`` heuristic.
 """
 
 import enum
@@ -42,7 +41,40 @@ from typing import TYPE_CHECKING
 import numpy as np
 import numpy.typing as npt
 
-from hpcagent_bench.stats import signed_rank
+__all__ = [
+    "DEFAULT_ALPHA",
+    "DEFAULT_CI_METHOD",
+    "DEFAULT_CONFIDENCE",
+    "DEFAULT_MAD_Z",
+    "DEFAULT_RESAMPLES",
+    "EXACT_MAX_N",
+    "MAD_TO_SIGMA",
+    "MEANAD_TO_SIGMA",
+    "MIN_INTERVAL_SAMPLES",
+    "MIN_PAIRS_FOR_INTERVAL",
+    "FloatArray",
+    "Interval",
+    "PairedChange",
+    "Samples",
+    "Statistic",
+    "Unusable",
+    "bootstrap_ci",
+    "drop_outliers",
+    "geomean",
+    "geomean_ci",
+    "geomean_interval",
+    "hodges_lehmann",
+    "log2_change",
+    "median_ci",
+    "paired_change",
+    "paired_geomean",
+    "rank_sum_test",
+    "signed_change",
+    "signed_rank_test",
+    "usable_ratios",
+    "use_exact",
+    "walsh_averages",
+]
 
 # scipy and pandas are imported INSIDE the three functions that need them, not here. The grading
 # path takes its geometric mean from this module and already pays for numpy; making it pay for
@@ -196,7 +228,7 @@ class PairedChange:
 
     Each producer keeps the three on one quantity: :func:`paired_change` the Hodges-Lehmann location
     its signed-rank test inverts, :func:`paired_geomean` the mean log its t test is on. A bootstrap
-    mean beside a rank test does not: the two can disagree about which arm is ahead, and a reader
+    mean beside a rank test does not: the two can disagree about which setup is ahead, and a reader
     cannot tell which to believe.
     """
 
@@ -274,20 +306,32 @@ def rank_sum_test(a: Samples, b: Samples, alternative: str = "two-sided") -> tup
         result = mannwhitneyu(np.asarray(a, dtype=np.float64), np.asarray(b, dtype=np.float64), alternative=alternative)
     except ValueError:
         return math.nan, 1.0
-    pvalue = float(result.pvalue)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
+    # scipy's result classes are typed `_` / partially unknown in its stubs
+    pvalue = float(result.pvalue)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownArgumentType]
     if not math.isfinite(pvalue):
         return math.nan, 1.0
-    return float(result.statistic), pvalue  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
+    return float(result.statistic), pvalue  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownArgumentType]
+
+
+#: Sample sizes up to this get the exact signed-rank null; above it the tie- and continuity-corrected normal
+#: approximation. 200 covers every paired-kernel count these tables reach while the exact DP stays fast.
+EXACT_MAX_N: int = 200
+
+
+def use_exact(absolute: Sequence[float]) -> bool:
+    """Whether the exact null is affordable (``n <= EXACT_MAX_N``) and valid (no ties in ``absolute``): a tie breaks
+    the rank lattice the exact count assumes."""
+    n = len(absolute)
+    return 0 < n <= EXACT_MAX_N and len(set(absolute)) == n
 
 
 def signed_rank_test(differences: Samples, alternative: str = "two-sided") -> tuple[float, float, str, int]:
     """``(statistic, p, method, n)`` of the Wilcoxon signed-rank test, the one signed-rank call here.
 
     Non-finite and zero differences are dropped (Wilcoxon's original treatment). Exact or approximate
-    is decided by :func:`hpcagent_bench.stats.signed_rank.use_exact` and passed to scipy EXPLICITLY:
-    scipy's ``auto`` is a library default that has moved before, and the moment it moves this path
-    stops agreeing with the stdlib one. ``correction=True`` for the same reason: the stdlib
-    ``normal_p`` applies the half-step. Nothing left to test returns ``(nan, 1.0, "degenerate", 0)``.
+    is decided by :func:`use_exact` and passed to scipy EXPLICITLY: scipy's ``auto`` is a library default
+    that has moved before. ``correction=True``: the approximation takes the half-step continuity
+    correction. Nothing left to test returns ``(nan, 1.0, "degenerate", 0)``.
     """
     x: FloatArray = np.asarray(differences, dtype=np.float64)
     nonzero: FloatArray = x[np.isfinite(x) & (x != 0.0)]
@@ -296,7 +340,7 @@ def signed_rank_test(differences: Samples, alternative: str = "two-sided") -> tu
         return math.nan, 1.0, "degenerate", 0
     from scipy.stats import wilcoxon  # pyright: ignore[reportMissingTypeStubs, reportUnknownVariableType]
 
-    exact = signed_rank.use_exact(np.abs(nonzero).tolist())
+    exact = use_exact(np.abs(nonzero).tolist())
     result = wilcoxon(
         nonzero,
         method="exact" if exact else "approx",
@@ -305,7 +349,8 @@ def signed_rank_test(differences: Samples, alternative: str = "two-sided") -> tu
         alternative=alternative,
     )
     method = "signed-rank-exact" if exact else "signed-rank-approx"
-    return float(result.statistic), float(result.pvalue), method, n  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
+    # scipy's result classes are typed `_` in its stubs
+    return float(result.statistic), float(result.pvalue), method, n  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownArgumentType]
 
 
 def usable_ratios(values: Samples, label: str = "", warn: bool = True) -> FloatArray:
@@ -376,7 +421,8 @@ def geomean_ci(values: Samples, confidence: float = 1.0 - DEFAULT_ALPHA) -> Inte
 
     logs: FloatArray = np.log(x)
     centre = math.fsum(logs.tolist()) / x.size
-    half = float(t.ppf(0.5 + confidence / 2.0, x.size - 1)) * float(np.std(logs, ddof=1)) / math.sqrt(x.size)
+    # scipy.stats distributions are partially unknown in its stubs (ppf / sf)
+    half = float(t.ppf(0.5 + confidence / 2.0, x.size - 1)) * float(np.std(logs, ddof=1)) / math.sqrt(x.size)  # pyright: ignore[reportUnknownMemberType]
     return Interval(
         "geomean", point, math.exp(centre - half), math.exp(centre + half), confidence, "log-t", int(x.size)
     )
@@ -482,7 +528,7 @@ def paired_change(differences: Samples, alpha: float = DEFAULT_ALPHA) -> PairedC
     walsh = walsh_averages(nonzero)
     mean = n * (n + 1) / 4.0
     sd = math.sqrt(n * (n + 1) * (2 * n + 1) / 24.0)
-    z = float(norm.ppf(1.0 - alpha / 2.0))
+    z = float(norm.ppf(1.0 - alpha / 2.0))  # pyright: ignore[reportUnknownMemberType]
     cutoff = min(max(math.floor(mean - z * sd), 0), walsh.size // 2 - 1)
     low, high = float(walsh[cutoff]), float(walsh[walsh.size - 1 - cutoff])
     return PairedChange(point, low, high, pvalue, n, wins, losses, ties, method)
@@ -493,7 +539,7 @@ def paired_geomean(log_ratios: Samples, alpha: float = DEFAULT_ALPHA) -> PairedC
     interval and the paired t-test p, all three on that one mean.
 
     ``exp(estimate)`` is the geomean ratio, the statistic an overall ratio is reported as everywhere
-    in this repo, so an arm comparison reads "a is X times b on the geomean over the shared kernels".
+    in this repo, so a setup comparison reads "a is X times b on the geomean over the shared kernels".
     The interval and the test are on the same mean, so the interval excludes 0 exactly when
     ``p < alpha``. A zero log (no change on a kernel) stays in: dropping the kernels that did not
     change would overstate the change of the rest.
@@ -518,6 +564,6 @@ def paired_geomean(log_ratios: Samples, alpha: float = DEFAULT_ALPHA) -> PairedC
     from scipy.stats import t  # pyright: ignore[reportMissingTypeStubs, reportUnknownVariableType]
 
     error = spread / math.sqrt(n)
-    pvalue = float(2.0 * t.sf(abs(point / error), n - 1))
-    half = float(t.ppf(1.0 - alpha / 2.0, n - 1)) * error
+    pvalue = float(2.0 * t.sf(abs(point / error), n - 1))  # pyright: ignore[reportUnknownMemberType]
+    half = float(t.ppf(1.0 - alpha / 2.0, n - 1)) * error  # pyright: ignore[reportUnknownMemberType]
     return PairedChange(point, point - half, point + half, pvalue, n, wins, losses, ties, "paired-t")

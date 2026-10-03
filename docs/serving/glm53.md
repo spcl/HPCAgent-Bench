@@ -1,22 +1,17 @@
 # Serving GLM-5.3 on MI300A
 
 `zai-org/GLM-5.3`, fp8, about 755 GB of weights, on SGLang across four nodes (`tp=4`, `pp=4`).
-Source of truth: `experiments/layers/model-glm53.env` plus `SGLANG_EXTRA_ARGS` in
-`experiments/.env.base-glm53`; render with `experiments/env_layers.sh render .env.base-glm53`.
+Source of truth: `experiments/layers/model-glm53.env` plus the `glm53` entries of
+`experiments/setups.yaml`; render with `hpcagent_bench/cluster/env_layers.sh render experiment:glm53`.
 Background: [`knobs.md`](knobs.md).
 
 ```bash
-cd experiments && MODEL=glm53 ./serve-only.sbatch
+MODEL=glm53 hpcagent_bench/cluster/serve-only.sbatch
 ```
 
-**Image prerequisite.** GLM-5.3 needs the `sglang-candidate` EDF, and that EDF currently has no
-image: `install_edfs.sh` does not render it. Rebuild the sglang role
-(`containers/cluster/ce-images/sglang/build.sbatch`, output `hpcagent-bench-sglang-candidate.sqsh`),
-then render the EDF. See "Known traps" in [`SUBMITTING.md`](../../SUBMITTING.md#known-traps).
-The image must bake in a guard keeping `torch.Tensor.format_ue8m0` false and
-`HIPCC_COMPILE_FLAGS_APPEND=-U__HIP_NO_HALF_CONVERSIONS__ -U__HIP_NO_HALF_OPERATORS__`. The other
-sglang EDFs reach that patch through a `PYTHONPATH` under `$SCRATCH`, which the inference role's
-mount policy drops, so they fail to load the model.
+**Image.** The same `hpcagent-bench-sglang-mi300-latest` as Qwen3.8 and Kimi K2.7: the sglang image
+bakes in what GLM-5.3 needs (`torch.Tensor.format_ue8m0` kept false, and
+`HIPCC_COMPILE_FLAGS_APPEND=-U__HIP_NO_HALF_CONVERSIONS__ -U__HIP_NO_HALF_OPERATORS__`).
 
 ## Configuration
 
@@ -37,63 +32,31 @@ Environment: `SGLANG_ATTENTION_BACKEND=` (assigned empty), `SGLANG_USE_AITER=1`,
 `SGLANG_ROCM_FUSED_DECODE_MLA=0`, `SGLANG_SET_CPU_AFFINITY=0`, `NCCL_NET_GDR_LEVEL=0`,
 `AITER_LOG_TUNED_CONFIG=1`.
 
-## Memory
-
-`--mem-fraction-static` is a ceiling on weights plus KV, so the pool is what the fraction leaves over
-the weights:
-
-```
-pool(f) = 39.0M * (f - 0.4838) tokens      (tp4 x pp4)
-```
+The fraction caps weights plus KV, so `pool(f) = 39.0M * (f - 0.4838)` tokens:
 
 | `f` | Outcome |
 |---|---|
 | below 0.486 | refuses: weights alone exceed the budget |
 | 0.50 | 632,384-token pool |
 | 0.55 | 2.58 M pool; OOM-killed on a PP node at concurrency 20 |
-| **0.57 + `--max-total-tokens 2800000`** | pool pinned at 2.8 M; served concurrency 40, peak 485 of 501 GiB step cgroup |
+| **0.57 + `--max-total-tokens 2800000`** | pool pinned at 2.8 M; concurrency 40, peak 485 of 501 GiB step cgroup |
 | 0.62 | OOM killer takes the heaviest stage |
 
-Host memory, not the pool, is what kills a stage. `--chunked-prefill-size 4096` and
-`--max-running-requests 48` bound the prefill buffers and `req_to_token` that grow with load.
-Stage weights are uneven (172.4 / 197.2 / 203.8 / 206.1 GB): size against the heaviest and read
-`avail mem=` on every rank.
+Host memory, not the pool, kills a stage; `--chunked-prefill-size` and `--max-running-requests` bound
+what grows with load. Stages are uneven (172.4 / 197.2 / 203.8 / 206.1 GB). Time to a live API is the
+slowest stage's weight load (up to 5400 s) plus about 130 s KV allocation and 1080 s graph capture;
+`AGENT_READY_TIMEOUT_SECONDS=10800` covers it.
 
-## Startup
+## Rules
 
-Time to a live API = slowest stage's weight load (up to 5400 s) + about 130 s KV allocation + about
-1080 s graph capture. `AGENT_READY_TIMEOUT_SECONDS=10800` in the layer covers it; judge readiness by
-the slowest stage, never the first to report.
-
-## DO
-
-- **Assign `SGLANG_ATTENTION_BACKEND=` empty.** An absent key makes `run_cluster.sh` append
-  `--attention-backend aiter` ([README](README.md#6-how-configuration-becomes-flags)).
-- **Allocate four nodes.** At `pp=2` each stage holds about 378 GB of the roughly 412 GB free.
-- **Keep `SGLANG_USE_AITER=1`.** Without aiter ops the ROCm DSA path forces `page_size` 1.
-- **Pass both parsers**, `glm45` and `glm47`; the mismatched versions are correct.
-- **Give an accuracy gate 2048 tokens.** The model reasons first; below about 512 the gate reports
-  truncation as corruption.
-- **Read back every launch:**
-  ```bash
-  grep -aiE "attention.backend|Use dsa attention" server-0.log
-  grep -a "max_total_num_tokens\|KV Cache is allocated\|Using network" server-0.log
-  ```
-  `Using network` must say `AWS Libfabric`.
-
-## DO NOT
-
-- **Do not pass `--attention-backend`.** Any explicit value suppresses `dsa`; `aiter` also derates
-  the fraction by 0.85 (0.588 reads back as 0.4998).
-- **Do not template the key with `${VAR:-default}`**; `:-` reverts the deliberate empty value.
-- **Do not set `SGLANG_AITER_HONOR_EXPLICIT_MEM_FRACTION`** to escape the derate; that reserve is
-  workspace long-context serving needs.
-- **Do not pass `--language-only`.** It selects the vision-encoder receiver role, and this
-  architecture is off its allowlist: the server refuses to start.
-- **Do not enable HiCache** ([`knobs.md`](knobs.md#hicache-never)).
-- **Do not carry `AITER_USE_FLYDSL_MOE_SORTING` over from Kimi K2.7**; those weights are int4, these fp8.
-- **Do not change `--kv-cache-dtype` on a short accuracy check.** No calibrated KV scales ship with
-  the checkpoint; gate on long context.
-- **Do not decide a KV knob from a cold smoke**; use per-stream distinct prefixes re-sent across
-  rounds and report the hit rate ([`knobs.md`](knobs.md#the-kv-pool-threshold)).
-- **Do not serve GLM-5.3-Flash.** Its `index_kpool` forces `IndexerKPool`, which is CUDA-only.
+- Assign `SGLANG_ATTENTION_BACKEND=` empty, never `${VAR:-default}`: an absent key appends
+  `--attention-backend aiter` ([README](README.md#6-how-configuration-becomes-flags)), and any explicit
+  backend suppresses `dsa`.
+- Keep `SGLANG_USE_AITER=1` (without it the DSA path forces `page_size` 1); do not set
+  `SGLANG_AITER_HONOR_EXPLICIT_MEM_FRACTION`.
+- Do not pass `--language-only` (the server refuses to start) or enable HiCache. Do not carry
+  `AITER_USE_FLYDSL_MOE_SORTING` over from Kimi K2.7. GLM-5.3-Flash is CUDA-only (`IndexerKPool`).
+- Pass both parsers, `glm45` and `glm47`. Give an accuracy gate 2048 tokens (the model reasons first),
+  and gate a `--kv-cache-dtype` change on long context.
+- Read back every launch; `Using network` must say `AWS Libfabric`:
+  `grep -aiE "attention.backend|Use dsa attention|max_total_num_tokens|Using network" server-0.log`.

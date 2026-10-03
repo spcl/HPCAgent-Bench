@@ -1,13 +1,13 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """A figure may only colour an entity the registry can also NAME.
 
-Sibling of ``tests/test_display_names.py``, which checks the identity an arm RECORDS. This checks
+Sibling of ``tests/test_display_names.py``, which checks the identity a setup RECORDS. This checks
 the identity a figure DRAWS, which is the other half and fails differently: an unregistered value
 still draws, in a stable hash colour, under a raw-string label, so the plot looks finished and the
 legend quietly says ``cpfsrc`` where every other entry says a sentence.
 
-The fallback is deliberate -- a new campaign must never break a plot -- so it is loud rather than
+The fallback is deliberate -- a new experiment must never break a plot -- so it is loud rather than
 absent, and these are what stop the loudness from being the only thing between a hash colour and a
 paper.
 """
@@ -26,18 +26,14 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import pytest
 
-from hpcagent_bench import experiment_tags, paths
+from hpcagent_bench import study_tags, paths
 from hpcagent_bench.stats import palette
-from hpcagent_bench.stats.figures import results, signed
+from hpcagent_bench.stats.figures import results
 
 #: The tags the figure modules hard-code and then colour. A name typed into a builder is the one
 #: kind of unregistered value no data-driven check can see, because no row has to exist for it to
 #: reach a legend.
 FIGURE_FRAMEWORKS: dict[str, tuple[str, ...]] = {
-    "figures.signed.ARMS": tuple(signed.ARMS),
-    "figures.signed.COMPARISONS": tuple(signed.COMPARISONS),
-    "figures.signed.BASELINE": (signed.BASELINE,),
-    "figures.signed.REFERENCE": (signed.REFERENCE,),
     "figures.results.DEFAULT_BASELINE": (results.DEFAULT_BASELINE,),
 }
 
@@ -45,19 +41,19 @@ FIGURE_FRAMEWORKS: dict[str, tuple[str, ...]] = {
 @pytest.mark.parametrize("source", sorted(FIGURE_FRAMEWORKS))
 def test_every_framework_a_figure_names_is_registered(source: str) -> None:
     """A builder that colours a framework the registry does not carry puts a raw tag on a legend."""
-    named = experiment_tags.names("frameworks")
-    unknown = [tag for tag in FIGURE_FRAMEWORKS[source] if experiment_tags.canonical("frameworks", tag) not in named]
-    assert not unknown, f"{source} colours {unknown}, which no `frameworks` key of registry.yaml names"
+    named = study_tags.names("frameworks")
+    unknown = [tag for tag in FIGURE_FRAMEWORKS[source] if study_tags.canonical("frameworks", tag) not in named]
+    assert not unknown, f"{source} colours {unknown}, which no `frameworks` key of studies.yaml names"
 
 
 def test_every_packet_the_palette_hues_is_named() -> None:
     """The hue ramp and the name block are two halves of one identity and must hold one vocabulary."""
-    named = set(experiment_tags.names("packets"))
+    named = set(study_tags.names("packets"))
     assert set(palette.hue_order("packets")) <= named
 
 
 def test_every_framework_the_palette_hues_is_named() -> None:
-    named = set(experiment_tags.names("frameworks"))
+    named = set(study_tags.names("frameworks"))
     assert set(palette.hue_order("frameworks")) <= named
 
 
@@ -66,20 +62,20 @@ def test_colouring_an_unregistered_packet_is_never_silent(caplog: pytest.LogCapt
     with caplog.at_level(logging.WARNING, logger=palette.LOG.name):
         colour = palette.color("a-packet-nobody-registered")
     assert colour
-    assert "registry.yaml" in caplog.text and "a-packet-nobody-registered" in caplog.text
+    assert "is not registered" in caplog.text and "a-packet-nobody-registered" in caplog.text
 
 
 def test_colouring_an_unregistered_framework_is_never_silent(caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.WARNING, logger=palette.LOG.name):
         palette.framework_color("a-framework-nobody-registered")
-    assert "registry.yaml" in caplog.text
+    assert "is not registered" in caplog.text
 
 
 def test_shaping_an_unregistered_model_is_never_silent(caplog: pytest.LogCaptureFixture) -> None:
     """Shape is the model in every figure, so an unregistered model loses its identity twice."""
     with caplog.at_level(logging.WARNING, logger=palette.LOG.name):
         palette.marker("a-model-nobody-registered")
-    assert "registry.yaml" in caplog.text
+    assert "is not registered" in caplog.text
 
 
 def test_a_figure_that_colours_a_whole_unregistered_set_warns_once_per_entity(
@@ -89,16 +85,16 @@ def test_a_figure_that_colours_a_whole_unregistered_set_warns_once_per_entity(
     call and not only the scalar one."""
     with caplog.at_level(logging.WARNING, logger=palette.LOG.name):
         palette.colors(["cpfsrc", "mystery-one", "mystery-two"])
-    assert caplog.text.count("registry.yaml") == 2
+    assert caplog.text.count("is not registered") == 2
 
 
-def test_an_arm_name_resolves_to_a_registered_model_or_to_nothing() -> None:
+def test_a_setup_name_resolves_to_a_registered_model_or_to_nothing() -> None:
     """`model_of` is the last resort for a CSV that predates the identity columns. It must return a
     tag the palette can shape, or the explicit `other` -- never a half-parsed fragment."""
-    registered = set(experiment_tags.order("models"))
-    for arm in ("llr40-oss120b-c-skills", "cpf-kimi27sglang-fortran", "llr40-gpt-oss-120b-c", "llr4-qwen30b-c"):
-        resolved = experiment_tags.model_of(arm)
-        assert resolved in registered or resolved == "other", f"{arm} -> {resolved!r}"
+    registered = set(study_tags.order("models"))
+    for setup in ("llr40-oss120b-c-skills", "cpf-kimi27sglang-fortran", "llr40-gpt-oss-120b-c", "llr4-qwen30b-c"):
+        resolved = study_tags.model_of(setup)
+        assert resolved in registered or resolved == "other", f"{setup} -> {resolved!r}"
 
 
 def load_script(name: str) -> ModuleType:
@@ -111,8 +107,8 @@ def load_script(name: str) -> ModuleType:
     return module
 
 
-def arm_frame(conditions: list[str]) -> pd.DataFrame:
-    """``plot_arm_summary.arm_points`` rows, one per (model, language, condition)."""
+def setup_frame(conditions: list[str]) -> pd.DataFrame:
+    """``plot_setup_summary.setup_points`` rows, one per (model, language, condition)."""
     rows = []
     for model in ("qwen38", "oss120b"):
         for condition in conditions:
@@ -136,28 +132,28 @@ def arm_frame(conditions: list[str]) -> pd.DataFrame:
 
 
 def identity_warnings(summary: ModuleType, conditions: list[str], caplog: pytest.LogCaptureFixture) -> list[str]:
-    """The palette warnings the arm-summary figure raises while drawing ``conditions``."""
+    """The palette warnings the setup-summary figure raises while drawing ``conditions``."""
     fig, ax = plt.subplots()
     with caplog.at_level(logging.WARNING, logger=palette.LOG.name):
-        summary.draw_metric(ax, arm_frame(conditions), "log2_speedup", "Speedup", log=False)
+        summary.draw_metric(ax, setup_frame(conditions), "log2_speedup", "Speedup", log=False)
     plt.close(fig)
-    return [r.getMessage() for r in caplog.records if r.name == palette.LOG.name and "registry.yaml" in r.getMessage()]
+    return [
+        r.getMessage() for r in caplog.records if r.name == palette.LOG.name and "is not registered" in r.getMessage()
+    ]
 
 
-def test_every_packet_the_arm_summary_can_colour_is_registered() -> None:
+def test_every_packet_the_setup_summary_can_colour_is_registered() -> None:
     """The condition vocabulary is typed into the script, so no row has to exist for it to reach a legend."""
-    summary = load_script("plot_arm_summary")
-    named = set(experiment_tags.names("packets"))
+    summary = load_script("plot_setup_summary")
+    named = set(study_tags.names("packets"))
     packets = list(summary.CONDITION_ORDER)
-    unknown = [p for p in packets if any(part not in named for part in experiment_tags.packet_parts(p))]
-    assert not unknown, (
-        f"plot_arm_summary.CONDITION_ORDER colours {unknown}, which no `packets` key of registry.yaml names"
-    )
+    unknown = [p for p in packets if any(part not in named for part in study_tags.packet_parts(p))]
+    assert not unknown, f"plot_setup_summary.CONDITION_ORDER colours {unknown}, which no registered packet names"
 
 
 @pytest.mark.parametrize("width", [2, 4], ids=["joined pair", "unjoined conditions"])
-def test_the_arm_summary_figure_colours_only_registered_packets(width: int, caplog: pytest.LogCaptureFixture) -> None:
-    summary = load_script("plot_arm_summary")
+def test_the_setup_summary_figure_colours_only_registered_packets(width: int, caplog: pytest.LogCaptureFixture) -> None:
+    summary = load_script("plot_setup_summary")
     conditions = list(summary.CONDITION_ORDER)[:width]
     assert identity_warnings(summary, conditions, caplog) == []
 
@@ -167,19 +163,19 @@ def test_the_registry_check_catches_a_figure_colouring_an_unregistered_packet(
 ) -> None:
     """A check that cannot fail guards nothing. The condition vocabulary is the only route a packet has into
     this figure, so an unregistered one is added there and must come back as a warning."""
-    summary = load_script("plot_arm_summary")
+    summary = load_script("plot_setup_summary")
     monkeypatch.setattr(summary, "CONDITION_ORDER", (*summary.CONDITION_ORDER, "a-packet-nobody-registered"))
     warnings = identity_warnings(summary, ["", "a-packet-nobody-registered"], caplog)
     assert any("a-packet-nobody-registered" in message for message in warnings), warnings
 
 
-def test_arm_summary_load_reads_the_condition_off_the_recorded_packet(tmp_path: pathlib.Path) -> None:
-    """An arm renamed away from the ``-cpf`` suffix, but recording the ``cpf`` packet, must still
-    load under that condition -- the arm name used to be the only route in (``condition_of``)."""
-    summary = load_script("plot_arm_summary")
+def test_setup_summary_load_reads_the_condition_off_the_recorded_packet(tmp_path: pathlib.Path) -> None:
+    """A setup renamed away from the ``-cpf`` suffix, but recording the ``cpf`` packet, must still
+    load under that condition -- the setup name used to be the only route in (``condition_of``)."""
+    summary = load_script("plot_setup_summary")
     path = tmp_path / "observations.csv"
-    pd.DataFrame([{"arm": "renamed-qwen38-c", "packet": "cpf"}]).to_csv(path, index=False)
+    pd.DataFrame([{"setup": "renamed-qwen38-c", "packet": "cpf"}]).to_csv(path, index=False)
 
     frame = summary.load(path, prefix="")
 
-    assert frame.set_index("arm").condition["renamed-qwen38-c"] == "cpf"
+    assert frame.set_index("setup").condition["renamed-qwen38-c"] == "cpf"

@@ -73,7 +73,7 @@ dies to the OOM killer with no traceback. No `experiments/` env sets it.
 Name `--reasoning-parser` **and** `--tool-call-parser`. With one missing the server starts normally,
 then the first request using the other feature fails: a 400 the client logs as success, or a tool
 call returned as prose instead of `tool_calls`. Nothing in the log says "parser". Verify with
-`containers/cluster/ce-images/inference/verify-tools-reasoning.py`, which asserts
+`containers/inference/verify-tools-reasoning.py`, which asserts
 `choices[0].message.tool_calls[0]` and non-empty reasoning. Parser names are on each model page.
 
 ## Topology

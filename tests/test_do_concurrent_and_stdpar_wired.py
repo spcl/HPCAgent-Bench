@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Every Fortran column threads `do concurrent`, and every C++ column links TBB.
 
@@ -8,7 +8,7 @@ runs, and answers correctly -- serially, under a parallel name; libstdc++ picks 
 without `-ltbb` fall back to the sequential overloads just as quietly. Neither shows up as a build
 error, so nothing catches them except a check that the wiring is declared -- which is what this
 file is. Both gaps were real: mpifort carried no do-concurrent flag and mpicxx no stdpar link ref
-until 2026-08-19, so an MPI kernel using either construct was timed single-threaded.
+before this was wired, so an MPI kernel using either construct was timed single-threaded.
 """
 
 import pytest
@@ -18,9 +18,7 @@ from hpcagent_bench import flags, languages
 #: Blocks exempt from a `doconcurrent_ref`, each with the reason it needs no second flag. An
 #: exemption is a claim about the compiler, so it is spelled out here rather than inferred from
 #: the absence of a key -- absence is what the bug looked like.
-DO_CONCURRENT_EXEMPT = {
-    "ifx": "ifx parallelizes do concurrent on the host off -qopenmp, already in CPU_BASELINE_ICPX",
-}
+DO_CONCURRENT_EXEMPT: dict[str, str] = {}
 
 
 def fortran_blocks() -> dict:

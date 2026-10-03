@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """Shared TVM CSR sparse mat-vec for the sparse-solver kernels.
@@ -15,14 +15,17 @@ vector arithmetic of the Krylov iteration stays on the host -- only the sparse
 mat-vec, the part that actually fits TVM, is compiled.
 """
 
-from typing import Callable
+from collections.abc import Callable
 
 import numpy as np
 import scipy.sparse
 import tvm
 from tvm import te
 
-from hpcagent_bench.frameworks.tvm_build import tune_compile, cpu_target
+from hpcagent_bench.frameworks.tvm_build import cpu_target, tune_compile
+from hpcagent_bench.support.helpers.sparse.generators import shape_of
+
+__all__ = ["EXE_CACHE", "TvmSpMV", "spmv_primfunc", "to_numpy"]
 
 # exe cache keyed by (n, nnz, max_nnz, dtype, target_kind) -- the compiled
 # SpMV depends only on shapes; the buffers are runtime inputs.
@@ -41,17 +44,24 @@ def spmv_primfunc(n: int, nnz: int, max_nnz: int, dtype: np.dtype | str) -> tvm.
     x = te.placeholder((n,), name="x", dtype=dtype)
     j = te.reduce_axis((0, max_nnz), name="j")
 
-    def row(i: tvm.tirx.PrimExpr) -> tvm.tirx.PrimExpr:
+    def row(i: "tvm.tirx.Var") -> "tvm.tirx.Reduce | tuple[tvm.tirx.Reduce, ...]":
         valid = j < (indptr[i + 1] - indptr[i])
         k = te.if_then_else(valid, indptr[i] + j, 0)
         return te.sum(te.if_then_else(valid, data[k] * x[indices[k]], 0.0), axis=j)
 
     y = te.compute((n,), row, name="y")
-    return te.create_prim_func([indptr, indices, data, x, y]).with_attr("global_symbol", "spmv")
+    if isinstance(y, tuple):
+        raise TypeError("a single-output compute returned several tensors")
+    func = te.create_prim_func([indptr, indices, data, x, y]).with_attr("global_symbol", "spmv")
+    if not isinstance(func, tvm.tirx.PrimFunc):
+        raise TypeError(f"create_prim_func returned a {type(func).__name__}, not a PrimFunc")
+    return func
 
 
 class TvmSpMV:
     """Compiled CSR SpMV bound to one matrix; ``self(x_np) -> y_np``."""
+
+    __slots__ = ("_data", "_indices", "_indptr", "device", "dtype", "exe", "n")
 
     def __init__(
         self,
@@ -60,13 +70,13 @@ class TvmSpMV:
         target_fn: Callable[[], tvm.target.Target] = cpu_target,
         device: tvm.runtime.Device | None = None,
     ) -> None:
-        A = A.tocsr()
-        self.n = int(A.shape[0])
+        csr = scipy.sparse.csr_matrix(A)
+        self.n = shape_of(csr)[0]
         self.dtype = str(dtype)
         self.device = device if device is not None else tvm.cpu(0)
-        indptr = np.ascontiguousarray(A.indptr, dtype=np.int32)
-        indices = np.ascontiguousarray(A.indices, dtype=np.int32)
-        data = np.ascontiguousarray(A.data, dtype=self.dtype)
+        indptr = np.ascontiguousarray(csr.indptr, dtype=np.int32)
+        indices = np.ascontiguousarray(csr.indices, dtype=np.int32)
+        data = np.ascontiguousarray(csr.data, dtype=self.dtype)
         if indices.size == 0:  # guard empty rows/matrix
             indices = np.zeros(1, np.int32)
             data = np.zeros(1, self.dtype)

@@ -1,0 +1,197 @@
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""``results_engine`` builds the framework-sweep ``results`` table and holds no connection open.
+
+Every rank of a sweep writes through its own shard file, and the first writes of four ranks race the
+CREATE TABLE of one file; the plot loader reads the rows back, folding ``flavor`` and ``build`` into the
+series name and partitioning by machine.
+"""
+
+import multiprocessing
+import multiprocessing.queues
+import multiprocessing.synchronize
+import pathlib
+import sqlite3
+
+import pytest
+from sqlmodel import Session, select
+
+from hpcagent_bench import osinfo
+from hpcagent_bench.frameworks.schema import Result, results_engine
+from tests.sqlite_closing import connect
+
+
+def create_schema_race_worker(
+    path: str,
+    start: multiprocessing.synchronize.Barrier,
+    outcome: multiprocessing.queues.Queue[str],
+) -> None:
+    """One rank's ``results_engine(path)`` call, synchronized to start with its siblings so the
+    CREATE TABLE race is real OS-level file contention, not a simulated ordering."""
+    start.wait()
+    try:
+        results_engine(path)
+        outcome.put("ok")
+    except Exception as exc:  # noqa: BLE001 -- ANY exception here is the race under test
+        outcome.put(f"{type(exc).__name__}: {exc}")
+
+
+@pytest.mark.skipif(not osinfo.IS_LINUX, reason="fork start method is Linux-only")
+def test_four_ranks_racing_the_first_write_to_one_shard_do_not_crash(tmp_path: pathlib.Path) -> None:
+    """Cholesky crashed the compiler-baseline sweep on EVERY column. Every column's
+    ranks write results through ONE shard file each (recording.db_path, sharded by SLURM_PROCID);
+    ``results_engine``'s ``create_all`` reads ``sqlite_master`` and then issues CREATE TABLE --
+    check-then-act, not atomic -- and cholesky, always the first kernel a fresh rank writes, was
+    always the one caught racing that first CREATE against a sibling rank's own first write. The
+    loser raised ``sqlalchemy.exc.OperationalError: ... table results already exists``, and cholesky
+    itself (cholesky_numpy.py has no DB code at all) was never the cause. Reproduced here with real
+    forked processes racing ONE not-yet-existing file, matching the production shape exactly."""
+    path = str(tmp_path / "hpcagent_bench0.db")
+    ctx = multiprocessing.get_context("fork")
+    barrier = ctx.Barrier(4)
+    outcome: multiprocessing.queues.Queue[str] = ctx.Queue()
+    workers = [ctx.Process(target=create_schema_race_worker, args=(path, barrier, outcome)) for rank in range(4)]
+    for worker in workers:
+        worker.start()
+    outcomes = [outcome.get(timeout=30) for worker in workers]
+    for worker in workers:
+        worker.join(timeout=30)
+    assert outcomes == ["ok"] * 4, outcomes
+    with connect(path) as conn:
+        names = {row[1] for row in conn.execute("PRAGMA table_info(results)")}
+    assert names == set(Result.__table__.columns.keys())
+
+
+def test_a_fresh_db_gets_the_whole_model(tmp_path: pathlib.Path) -> None:
+    engine = results_engine(str(tmp_path / "fresh.db"))
+    with engine.connect() as conn:
+        names = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(results)")}
+    assert set(Result.__table__.columns.keys()) == names
+
+
+def test_the_plot_loader_folds_flavor_and_build_back_into_one_series(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Stored apart, plotted together. Without the fold, dace_cpu's three optimizers -- and the
+    same optimizer measured on two DaCe trees -- average into one silently wrong line."""
+    import pandas as pd
+
+    from hpcagent_bench.stats.figures import results
+
+    path = str(tmp_path / "hpcagent_bench.db")
+    engine = results_engine(path)
+    rows = [
+        ("numpy", None, None),
+        ("dace_cpu", "parallel", "main"),
+        ("dace_cpu", "parallel", "extended"),
+        ("dace_cpu", "canonicalize", "extended"),
+        ("dace_cpu", None, None),
+    ]
+    with Session(engine) as session:
+        for framework, flavor, build in rows:
+            session.add(
+                Result(
+                    timestamp=1,
+                    kernel="gemm",
+                    domain="LinAlg",
+                    preset="S",
+                    framework=framework,
+                    flavor=flavor,
+                    build=build,
+                    validated=True,
+                    time=1.0,
+                    datatype="float64",
+                    cpu="test-cpu",
+                )
+            )
+        session.commit()
+
+    monkeypatch.setattr(results.recording, "ensure_aggregated", lambda p: p)
+    data = results.load_results(path, preset="S")
+    assert isinstance(data, pd.DataFrame)
+    assert sorted(data["framework"]) == [
+        "dace_cpu",
+        "dace_cpu/canonicalize/extended",
+        "dace_cpu/parallel/extended",
+        "dace_cpu/parallel/main",
+        "numpy",
+    ]
+
+
+def test_the_plot_loader_partitions_machines_instead_of_folding_them(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The counterpart to the fold above, and deliberately the opposite operation.
+
+    ``flavor``/``build`` FOLD into the framework name so two pipelines read as two series in one
+    figure. Hardware may not: a speedup divides a candidate by the numpy baseline, so pairing a
+    candidate timed on one node with a baseline timed on another yields a hardware comparison that
+    every row still looks well-formed under. So machines PARTITION into separate figures.
+    """
+    from hpcagent_bench.stats.figures import results
+
+    path = str(tmp_path / "hpcagent_bench.db")
+    engine = results_engine(path)
+    rows = [
+        ("numpy", "epyc", None),
+        ("dace_cpu", "epyc", None),
+        ("numpy", "xeon", None),
+        ("dace_gpu", "xeon", "A100"),
+        ("numpy", "xeon", "A100"),
+    ]
+    with Session(engine) as session:
+        for framework, cpu, gpu in rows:
+            session.add(
+                Result(
+                    timestamp=1,
+                    kernel="gemm",
+                    domain="LinAlg",
+                    preset="S",
+                    framework=framework,
+                    validated=True,
+                    time=1.0,
+                    datatype="float64",
+                    cpu=cpu,
+                    gpu=gpu,
+                )
+            )
+        session.commit()
+
+    monkeypatch.setattr(results.recording, "ensure_aggregated", lambda p: p)
+    groups = results.machine_groups(results.load_results(path, preset="S"))
+
+    # Three machines: two CPU-only boxes, plus the xeon's GPU runs -- which are a DIFFERENT
+    # study from the same xeon's CPU runs and must not share a figure with them.
+    assert [label for label, _ in groups] == ["epyc", "xeon", "xeon-A100"]
+    assert [len(frame) for _, frame in groups] == [2, 1, 2]
+    for _, frame in groups:
+        assert "cpu" not in frame.columns and "gpu" not in frame.columns
+
+    # Every machine gets its own file, so one cannot silently overwrite another.
+    names = [results.machine_output("plots/heatmap.pdf", label) for label, _ in groups]
+    assert len(set(names)) == len(names)
+    assert names[0] == "plots/heatmap.epyc.pdf"
+
+
+def test_a_results_engine_holds_no_open_connection_once_its_session_closes(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The engine outlives its Session here and still owns no open sqlite handle: a pooled one would be
+    garbage-collected later as a ResourceWarning (Python 3.13+)."""
+    opened: list[sqlite3.Connection] = []
+    real_connect = sqlite3.dbapi2.connect  # the entry SQLAlchemy's pysqlite dialect opens its connections through
+
+    def recording_connect(*args: object, **kwargs: object) -> sqlite3.Connection:
+        conn = real_connect(*args, **kwargs)
+        opened.append(conn)
+        return conn
+
+    monkeypatch.setattr(sqlite3.dbapi2, "connect", recording_connect)
+    engine = results_engine(str(tmp_path / "r.db"))
+    with Session(engine) as session:
+        assert session.exec(select(Result)).all() == []
+
+    assert opened
+    for conn in opened:
+        with pytest.raises(sqlite3.ProgrammingError):
+            conn.execute("SELECT 1")

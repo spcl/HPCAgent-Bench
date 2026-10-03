@@ -1,0 +1,164 @@
+#!/usr/bin/env bash
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Inference only: one OpenAI-compatible endpoint and nothing else. The payload is run_cluster.sh's
+# own --vllm-node role, so this serves what an experiment serves, without the judge and agent roles.
+#   hpcagent_bench/cluster/serve-only.sbatch                      qwen38 on the nodes its env file asks for
+#   MODEL=kimi27sglang hpcagent_bench/cluster/serve-only.sbatch   another model (any experiments/layers/model-<MODEL>.env)
+#   SUBMIT=0 hpcagent_bench/cluster/serve-only.sbatch             print what would be submitted, submit nothing
+# It derives --nodes from the env file, so never pass --nodes yourself. Account, partition and GPUs per node resolve as
+# for an experiment job (`hpcagent-bench job options`: $SBATCH_ACCOUNT, $SBATCH_PARTITION,
+# $HPCAGENT_BENCH_JOB_GPUS_PER_NODE or the system's systems.yaml entry); the time limit is SERVE_TIME (default 04:00:00).
+#SBATCH --job-name=serve-only
+#SBATCH --ntasks-per-node=1
+#SBATCH --mem=0
+# NODE_FAIL auto-requeue reruns this job id into the same RUN_DIR and stacks rows.
+#SBATCH --no-requeue
+#SBATCH --output=%x-%j.out
+#SBATCH --error=%x-%j.out
+
+set -euo pipefail
+
+# A core dump lands in the crashing process's CWD (the checkout) and Slurm propagates the
+# SUBMITTER's core limit, so the floor has to be set here.
+ulimit -c 0
+
+# Under sbatch BASH_SOURCE is the spooled copy in /var/spool/slurmd, not this file.
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -n "${SLURM_JOB_ID:-}" ]]; then
+    SCRIPT_DIR="${CLUSTER_SCRIPT_DIR:-${HPCAGENT_BENCH_REPO:-${SLURM_SUBMIT_DIR}}/hpcagent_bench/cluster}"
+fi
+export SCRIPT_DIR
+REPO_DIR="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
+
+MODEL="${MODEL:-qwen38}"
+# <base>:<model> (setups.yaml) or an env file
+BASE_ENV="${SERVE_BASE_ENV:-experiment:${MODEL}}"
+SERVE_ENV="${SERVE_ENV_FILE:-${REPO_DIR}/experiments/serve-only.env}"
+[[ -f "${SERVE_ENV}" ]] || { echo "missing env file ${SERVE_ENV}" >&2; exit 2; }
+
+# Experiment values first, role split second: last assignment wins, as the submit scripts do it.
+# Flatten the base once, source and record the flat form.
+. "${SCRIPT_DIR}/env_layers.sh"
+BASE_FLAT="$(render_env "${BASE_ENV}")" || exit 2
+set -a
+# shellcheck disable=SC1090
+. <(printf '%s\n' "${BASE_FLAT}")
+# shellcheck disable=SC1090
+. "${SERVE_ENV}"
+set +a
+
+INFERENCE_NODES="${INFERENCE_NODES:-1}"
+INFERENCE_MODE="${INFERENCE_MODE:-replicas}"
+VLLM_PORT="${VLLM_PORT:-8000}"
+SERVED_MODEL="${VLLM_SERVED_MODEL:-hpcagent-bench-vllm}"
+# same precedence the cluster path uses, so one key covers both; 2400 could not hold a
+# GLM-5.3 start, whose slowest stage alone reaches 4200 s before KV alloc and graph capture
+READY_TIMEOUT="${VLLM_READY_TIMEOUT_SECONDS:-${AGENT_READY_TIMEOUT_SECONDS:-7200}}"
+RUN_ROOT="${RUN_ROOT:?RUN_ROOT must name a writable directory}"
+
+if [[ -z "${SLURM_JOB_ID:-}" ]]; then
+    . "${REPO_DIR}/scripts/site_env.sh"
+    . "${REPO_DIR}/scripts/host_python.sh"
+    shape="$("${HPCAGENT_BENCH_HOST_PYTHON}" -m hpcagent_bench job options)" || exit 2
+    mapfile -t shape <<<"${shape}"
+    gpus_per_node="$("${HPCAGENT_BENCH_HOST_PYTHON}" -m hpcagent_bench job options --print gpus_per_node)" || exit 2
+    submit=(sbatch --nodes="${INFERENCE_NODES}" --time="${SERVE_TIME:-04:00:00}" --nice="${NICE:-${HPCAGENT_BENCH_NICE}}"
+        "${shape[@]}"
+        --export=ALL,MODEL="${MODEL}",GPUS_PER_NODE="${gpus_per_node}",CLUSTER_SCRIPT_DIR="${SCRIPT_DIR}"
+        "${SCRIPT_DIR}/serve-only.sbatch")
+    if [[ "${SUBMIT:-1}" != 1 ]]; then
+        printf 'would serve %s on %s node(s)\n' "${MODEL}" "${INFERENCE_NODES}"
+        printf '  env      %s + %s\n' "${BASE_ENV##*/}" "${SERVE_ENV##*/}"
+        printf '  image    %s\n' "${INFERENCE_CE_ENV:-unset}"
+        printf '  engine   %s (%s), port %s, model name %s\n' \
+            "${INFERENCE_ENGINE:-vllm}" "${INFERENCE_MODE}" "${VLLM_PORT}" "${SERVED_MODEL}"
+        printf '  weights  %s\n' "${VLLM_MODEL:-unset}"
+        printf '  submit   %s\n' "${submit[*]}"
+        exit 0
+    fi
+    mkdir -p "${RUN_ROOT}/slurm" "${SCRATCH:?}/inference-server/slurm"
+    exec "${submit[@]}"
+fi
+
+mapfile -t nodes < <(scontrol show hostnames "${SLURM_JOB_NODELIST}")
+if (( ${#nodes[@]} != INFERENCE_NODES )); then
+    echo "allocation has ${#nodes[@]} nodes; ${BASE_ENV##*/} asks for ${INFERENCE_NODES}" >&2
+    echo "submit with hpcagent_bench/cluster/serve-only.sbatch, which derives --nodes from that file" >&2
+    exit 2
+fi
+
+# The cache roots (FAST_SCRATCH, JIT_CACHE_ROOT, HF_HOME, ...) every role step reads, as run_cluster.sh's
+# batch shell resolves them for an experiment job.
+. "${SCRIPT_DIR}/env.sh"
+RUN_DIR="${RUN_ROOT}/${SLURM_JOB_ID}"
+mkdir -p "${RUN_DIR}"
+# The one file run_cluster.sh re-reads in the container, and the record of what this job served.
+{ printf '%s\n' "${BASE_FLAT}"; cat -- "${SERVE_ENV}"; printf 'GPUS_PER_NODE=%s\n' "${GPUS_PER_NODE:?}"; } >"${RUN_DIR}/serve.env"
+
+export CLUSTER_ENV_FILE="${RUN_DIR}/serve.env"
+export HPCAGENT_BENCH_REPO="${HPCAGENT_BENCH_REPO:-${REPO_DIR}}"
+export VLLM_MASTER_HOST="${nodes[0]}"
+BASE_URL="http://${VLLM_MASTER_HOST}:${VLLM_PORT}"
+
+cat <<EOF
+job:     ${SLURM_JOB_ID}
+model:   ${VLLM_MODEL:-unset} as "${SERVED_MODEL}"
+engine:  ${INFERENCE_ENGINE:-vllm} (${INFERENCE_MODE}) on ${INFERENCE_NODES} node(s): ${nodes[*]}
+image:   ${INFERENCE_CE_ENV:-unset}
+logs:    ${RUN_DIR}
+EOF
+
+# The image's GPU arch against this partition's, before hours of weight loading: without a site.env
+# naming the partition, Slurm's default can place the job on GPUs the image was not built for.
+bash "${HPCAGENT_BENCH_REPO}/containers/images/gpu_arch_check.sh" "${INFERENCE_CE_ENV:?INFERENCE_CE_ENV must name a registered EDF}"
+
+# Without --cpus-per-task the step claims ONE core of 192 and the engine's host-side work degrades
+# with load rather than failing. --environment takes the registered EDF by name.
+srun --nodes="${INFERENCE_NODES}" --ntasks="${INFERENCE_NODES}" --ntasks-per-node=1 \
+    --cpus-per-task="${SLURM_CPUS_ON_NODE:-$(nproc)}" --exclusive --kill-on-bad-exit=1 \
+    --export=ALL --environment="${INFERENCE_CE_ENV:?INFERENCE_CE_ENV must name a registered EDF}" \
+    --output="${RUN_DIR}/server-%t.log" --error="${RUN_DIR}/server-%t.log" \
+    "${SCRIPT_DIR}/run_cluster.sh" --vllm-node &
+SERVER_PID=$!
+
+echo "waiting for the API (up to ${READY_TIMEOUT}s); weight load dominates this"
+deadline=$(( $(date +%s) + READY_TIMEOUT ))
+until curl -sf "${BASE_URL}/v1/models" -o "${RUN_DIR}/models.json"; do
+    if ! kill -0 "${SERVER_PID}" 2>/dev/null; then
+        echo "FAIL: the serving step exited before the API came up" >&2
+        tail -n 40 "${RUN_DIR}"/server-*.log >&2 || true
+        exit 1
+    fi
+    if (( $(date +%s) > deadline )); then
+        echo "FAIL: API not ready within ${READY_TIMEOUT}s" >&2
+        tail -n 40 "${RUN_DIR}"/server-*.log >&2 || true
+        exit 1
+    fi
+    sleep 15
+done
+
+endpoints=("${BASE_URL}/v1")
+if [[ "${INFERENCE_MODE}" == "replicas" ]]; then
+    endpoints=()
+    for node in "${nodes[@]}"; do endpoints+=("http://${node}:${VLLM_PORT}/v1"); done
+fi
+
+cat <<EOF
+
+===== endpoint is live =====
+base URL:   ${endpoints[0]}
+model name: ${SERVED_MODEL}
+replicas:   ${endpoints[*]}
+health:     curl -s ${BASE_URL}/v1/models
+metrics:    curl -s ${BASE_URL}/metrics
+server log: ${RUN_DIR}/server-0.log
+
+curl -s ${BASE_URL}/v1/chat/completions \\
+  -H 'Content-Type: application/json' \\
+  -d '{"model":"${SERVED_MODEL}","max_tokens":128,"messages":[{"role":"user","content":"Say hi."}]}'
+
+The endpoint takes no API key. It stays up until this job ends; scancel ${SLURM_JOB_ID} to stop it.
+EOF
+
+wait "${SERVER_PID}"

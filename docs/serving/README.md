@@ -10,32 +10,35 @@ carry to MI300X.
 | [`qwen38.md`](qwen38.md), [`kimi27sglang.md`](kimi27sglang.md), [`glm53.md`](glm53.md), [`oss120b.md`](oss120b.md) | one model each: configuration, DO / DO NOT, the numbers behind them |
 | [`knobs.md`](knobs.md) | cross-model: APU memory model, KV pool threshold, aiter derate, HiCache, fabric, Slurm shape |
 | [`private-endpoint.md`](private-endpoint.md) | a keyed Qwen3.8 server only you can use, from your laptop or your own Daint jobs |
+| [`mi200-endpoint.md`](mi200-endpoint.md) | the same server in BF16 on an mi200 node, and the one-command ping test that checks it from anywhere |
 | [`extending-private-inference.md`](extending-private-inference.md) | contributors: the private launcher's security contract, new presets, access paths, engines |
 
-The authoritative launch line per model is the rendered `experiments/.env.base-<model>`. If a page
-here and that file disagree, the file wins.
+The authoritative launch line per model is the render of `experiment:<model>`
+(`hpcagent_bench/cluster/env_layers.sh render experiment:<model>`). If a page here and the render disagree, the
+render wins.
 
 ## 1. Shortest path
 
-Once per account, register the EDFs (container definitions) and resolve your Slurm account:
+Once per account, register the EDFs (container definitions) and set your Slurm account:
 
 ```bash
 cd "$REPO"
-containers/cluster/ce-images/install_edfs.sh          # renders into ~/.edf
-sbatch containers/cluster/ce-images/pull_images.sbatch  # only if install_edfs.sh reports a missing image
-. scripts/cscs/account_env.sh                          # Beverin rejects jobs without an account
+containers/images/install_edfs.sh          # renders into ~/.edf
+sbatch containers/images/registry.sbatch pull <role>  # only if install_edfs.sh reports a missing image
+export SBATCH_ACCOUNT=<project>; . hpcagent_bench/cluster/env.sh    # Beverin rejects jobs without an account
 ```
 
-Then, from `experiments/`:
+Then:
 
 ```bash
-SUBMIT=0 ./serve-only.sbatch                  # print what would be submitted
-./serve-only.sbatch                           # Qwen3.8 (default MODEL)
-MODEL=kimi27sglang ./serve-only.sbatch        # any .env.base-<MODEL>: qwen38, kimi27sglang, glm53, oss120b
-SBATCH_TIMELIMIT=08:00:00 ./serve-only.sbatch # longer than the 4 h default
+S=hpcagent_bench/cluster/serve-only.sbatch
+SUBMIT=0 $S                  # print what would be submitted
+$S                           # Qwen3.8 (default MODEL)
+MODEL=kimi27sglang $S        # any experiments/layers/model-<MODEL>.env: qwen38, kimi27sglang, glm53, oss120b
+SBATCH_TIMELIMIT=08:00:00 $S # longer than the 4 h default
 ```
 
-`serve-only.sbatch` renders `.env.base-<MODEL>`, reads the node count from it, submits itself with
+`serve-only.sbatch` renders `experiment:<MODEL>` (`SERVE_BASE_ENV` overrides), reads the node count from it, submits itself with
 that `--nodes`, starts the server, polls `/v1/models`, then prints:
 
 ```
@@ -50,11 +53,10 @@ followed by a ready-to-paste `curl`. The job output is `serve-only-<jobid>.out`;
 `$SCRATCH/inference-server/<jobid>/server-<rank>.log`, and `serve.env` there is the merged env that
 actually ran.
 
-**Runtime caveat.** `serve-only.sbatch` always launches through the CE (`srun --environment=`). Under
-the CE, a single-node server (qwen38, oss120b) can fail building its tensor-parallel group with
-`Failed to initialize any NET plugin`, and pyxis needs the site `ENROOT_CACHE_PATH` to be creatable.
-The campaign launcher avoids both through `enroot`; see
-[`experiments/README.md`](../../experiments/README.md#container-runtimes).
+**Runtime caveat.** `serve-only.sbatch` launches the registered EDF as is. A single-node server
+(qwen38, oss120b) can fail building its tensor-parallel group with `Failed to initialize any NET
+plugin` when the EDF forces the fabric plugin; the experiment launcher switches the hooks off for a
+single-node server, see [`experiments/README.md`](../../experiments/README.md#container-runtimes).
 
 ## 2. Images (EDFs)
 
@@ -65,9 +67,9 @@ plugin, multi-node RCCL silently falls back to TCP.
 
 | EDF | Engine | Models | Rendered by `install_edfs.sh` |
 |---|---|---|---|
-| `hpcagent-bench-sglang-mi300-latest` | SGLang 0.5.19 | Qwen3.8, Kimi K2.7 | yes |
-| `hpcagent-bench-vllm-mi300-latest` | vLLM 0.23.0 | gpt-oss-120b | yes |
-| `sglang-candidate` | SGLang | GLM-5.3 only | **no**; needs a rebuilt image, see [`glm53.md`](glm53.md) |
+| `hpcagent-bench-sglang-mi300-latest` | SGLang 0.5.20 | Qwen3.8, Kimi K2.7, GLM-5.3 | yes |
+| `hpcagent-bench-vllm-mi300-latest` | vLLM 0.28.0 | gpt-oss-120b | yes |
+| `hpcagent-bench-vllm-mi200-latest` | vLLM 0.28.0 (same image) | Qwen3.8 on mi200 | yes |
 
 ## 3. Slurm shape
 
@@ -75,12 +77,12 @@ plugin, multi-node RCCL silently falls back to TCP.
 
 | Setting | Why |
 |---|---|
-| `--partition=mi300` | default partition is `mi200`, different hardware |
-| no `-A` | `scripts/cscs/account_env.sh` exports `SBATCH_ACCOUNT`; naming one yourself splits identical jobs across accounts |
+| `--partition=mi300` | every recipe here is MI300A-only |
+| no `-A` | Slurm reads `SBATCH_ACCOUNT`; naming one yourself splits identical jobs across accounts |
 | `--mem=0` | otherwise the step's memory cgroup follows its CPU share and the server dies in weight load |
 | `--gpus-per-node=4`, `--ntasks-per-node=1` | every recipe is `tp=4` inside a node |
 | `--cpus-per-task="${SLURM_CPUS_ON_NODE}"` on the server step | see below |
-| `ulimit -c 0` | machine-global `core_pattern` drops multi-GB core files in the CWD; `scripts/check_core_dumps.py` enforces it |
+| `ulimit -c 0` | machine-global `core_pattern` drops multi-GB core files in the CWD; `scripts/checks/check_core_dumps.py` enforces it |
 
 **The CPU trap.** `--exclusive` gives the job the node, not the step its CPUs. A step without
 `--cpus-per-task` gets one core plus its SMT sibling (2 of 192). A starved server does not crash, it
@@ -115,13 +117,15 @@ The served name is `hpcagent-bench-vllm` for every model, not the HuggingFace id
 | `zai-org/GLM-5.3` | `glm53` | SGLang | 4 (`pp=4`) | [`glm53.md`](glm53.md) |
 | `openai/gpt-oss-120b` | `oss120b` | vLLM | 1 | [`oss120b.md`](oss120b.md) |
 
-The engine is per model: Qwen3.8 on vLLM is about 19x slower than on SGLang; Kimi K2.7 on vLLM
-collapses above concurrency 1.
+The engine is per model and partition: on mi300, Qwen3.8 on vLLM is about 19x slower than on SGLang
+and Kimi K2.7 on vLLM collapses above concurrency 1. On mi200 (MI250X, BF16) the SGLang base has no
+kernels, and Qwen3.8 serves on the AMD vLLM image (`layers/hardware-mi200-qwen38.env`, 421 tok/s at
+16 concurrent requests).
 
 ## 5. Healthy or sick
 
 **Readiness.** `serve-only.sbatch` waits `VLLM_READY_TIMEOUT_SECONDS`, else
-`AGENT_READY_TIMEOUT_SECONDS`, else 7200 s. Each `.env.base-*` sets one high enough for that model
+`AGENT_READY_TIMEOUT_SECONDS`, else 7200 s. Each model layer sets one high enough for that model
 (GLM-5.3: 10800 s). Both keys are set inside the model file, so a value on the command line is
 overwritten when the file is sourced. To override, copy `experiments/serve-only.env`, add the key,
 and pass `SERVE_ENV_FILE=<copy>` (sourced last, so it wins). The same applies to
@@ -170,22 +174,20 @@ colon-dash):
 Deleting a key turns the default **on**. To omit a flag, assign it empty (GLM-5.3 does this). When
 templating a flag, use the dash form.
 
-**Layers, last assignment wins.** `layers/common.env` < `layers/model-<m>.env` < `.env.base-<m>`
+**Layers, last assignment wins.** `layers/common.env` < `setups.yaml` experiment < `layers/model-<m>.env` < `setups.yaml` `models.<m>`
 ([Env layers](../../experiments/README.md#env-layers)); a layer can override a key, never unset it.
-Render one with `./env_layers.sh render .env.base-<m>`. `serve-only.sbatch` sources the render, then
+Render one with `hpcagent_bench/cluster/env_layers.sh render experiment:<m>`. `serve-only.sbatch` sources the render, then
 `serve-only.env` (zero judge and agent nodes, `RUN_ROOT`), under `set -a`.
 
-**Arm `.env.<arm>` files are renders.** Fix the layer that owns a key, never the render.
+**Setup `.env.<setup>` files are renders.** Fix the layer that owns a key, never the render.
 
-**Mounts.** A campaign job narrows the inference container's mounts; `serve-only.sbatch` uses the
-registered EDF as-is. A model that serves here and fails in a campaign run: suspect the mounts first.
+**Mounts.** An experiment job narrows the inference container's mounts; `serve-only.sbatch` uses the
+registered EDF as-is. A model that serves here and fails in an experiment run: suspect the mounts first.
 
 ## 7. Where the numbers live
 
-- `experiments/serve-only.sbatch`, `experiments/serve-only.env`: the launcher on this page.
-- `experiments/layers/model-<m>.env`, `experiments/.env.base-<m>`: per-model launch lines with inline reasons.
-- `containers/cluster/ce-images/inference/`: `smoke-kimi-sglang.sbatch` (serving smoke with accuracy
-  gate and concurrency sweep), `agentlike-probe.py` (multi-stream load), `accuracy-gate.py`,
-  `verify-tools-reasoning.py`.
+- `hpcagent_bench/cluster/serve-only.sbatch`, `experiments/serve-only.env`: the launcher on this page.
+- `experiments/layers/model-<m>.env`, `experiments/setups.yaml`: per-model launch lines with inline reasons.
+- `containers/inference/`: `accuracy-gate.py`, `verify-tools-reasoning.py` (gates against a live server).
 
 Node-to-node spread is about 30%. Re-measure a flag change **on one node, back to back**.

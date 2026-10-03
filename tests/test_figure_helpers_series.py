@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The one series look every overlay figure reads: colour from the model, shape from the packet,
 the control hollow, the torch.distributed baseline grey. The control case is pinned in
@@ -24,11 +24,10 @@ def test_a_treated_setup_wears_its_models_full_colour_and_its_packets_filled_sha
 def test_the_torch_dist_baseline_is_the_control_grey_filled_x_whatever_its_packet() -> None:
     grey = palette.control_color()
     expected = {"color": grey, "marker": series.TORCH_DIST_MARKER, "markerfacecolor": grey, "markeredgecolor": grey}
-    assert series.series_style("", series.TORCH_DIST_ARM) == expected
-    assert series.series_style("anything", series.TORCH_DIST_ARM) == expected
+    assert series.series_style("", series.TORCH_DIST_SETUP) == expected
+    assert series.series_style("anything", series.TORCH_DIST_SETUP) == expected
 
 
 def test_the_scaling_figures_read_the_shared_series_look_not_a_copy() -> None:
     assert scaling.series_style is series.series_style
     assert scaling.torch_dist_style is series.torch_dist_style
-    assert scaling.TORCH_DIST_ARM == series.TORCH_DIST_ARM

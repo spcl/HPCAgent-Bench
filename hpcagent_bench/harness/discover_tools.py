@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """Probe the host for the compilers + libraries hpcagent_bench/agent-bench can use; stdlib-only detection."""
@@ -16,18 +16,46 @@ import shutil
 import subprocess
 import sys
 from collections.abc import Callable
-from typing import TypeAlias, TypedDict, cast
+from typing import TypedDict, cast
 
 import yaml
 
-_PKG = pathlib.Path(__file__).resolve().parent.parent  # the hpcagent_bench/ package dir
-TOOLSET = _PKG / "envs" / "toolset.yaml"
+__all__ = [
+    "DETECTORS",
+    "PKG",
+    "TARGETS",
+    "TOOLSET",
+    "VERSION_RE",
+    "DetectResult",
+    "Evidence",
+    "PlatformInfo",
+    "Report",
+    "ToolEntry",
+    "ToolSpec",
+    "accel_roots",
+    "as_block",
+    "detect_binary",
+    "detect_header",
+    "detect_library",
+    "detect_platform",
+    "discover",
+    "include_dirs",
+    "ldconfig_index",
+    "lib_dirs",
+    "linux_distro",
+    "main",
+    "missing_for_target",
+    "print_human",
+]
+
+PKG = pathlib.Path(__file__).resolve().parent.parent  # the hpcagent_bench/ package dir
+TOOLSET = PKG / "envs" / "toolset.yaml"
 TARGETS = ("cpu", "nvidia", "amd")
-_VERSION_RE = re.compile(r"\d+(?:\.\d+)+")
+VERSION_RE = re.compile(r"\d+(?:\.\d+)+")
 
 #: One ``toolset.yaml`` tool entry as the loader hands it over. A YAML mapping proves nothing about
 #: its values, so they stay ``object`` until :func:`_as_list` converts the one being read.
-ToolSpec: TypeAlias = "dict[str, object]"
+type ToolSpec = dict[str, object]
 
 
 class PlatformInfo(TypedDict):
@@ -93,13 +121,13 @@ def detect_platform() -> PlatformInfo:
             info["wsl"] = "microsoft" in rel
         except OSError:
             pass
-        info["distro"] = _linux_distro()
+        info["distro"] = linux_distro()
     else:
         info["distro"] = sysname.lower()
     return info
 
 
-def _linux_distro() -> str:
+def linux_distro() -> str:
     try:
         release = pathlib.Path("/etc/os-release").read_text()
     except OSError:
@@ -114,7 +142,7 @@ def _linux_distro() -> str:
     return f"{name} {ver}".strip()
 
 
-def _accel_roots() -> list[str]:
+def accel_roots() -> list[str]:
     """CUDA + ROCm roots (which are usually NOT on the default loader path)."""
     roots: list[str] = []
     for env in ("CUDA_HOME", "CUDA_PATH", "CUDA_ROOT"):
@@ -129,23 +157,23 @@ def _accel_roots() -> list[str]:
 
 
 @functools.lru_cache(maxsize=1, typed=True)
-def _lib_dirs() -> list[str]:
+def lib_dirs() -> list[str]:
     dirs = ["/usr/lib", "/usr/local/lib", "/lib", "/usr/lib64", "/lib64", "/opt/homebrew/lib", "/usr/local/opt"]
-    dirs += [os.path.join(r, sub) for r in _accel_roots() for sub in ("lib", "lib64", "targets/x86_64-linux/lib")]
+    dirs += [os.path.join(r, sub) for r in accel_roots() for sub in ("lib", "lib64", "targets/x86_64-linux/lib")]
     dirs += [p for p in os.environ.get("LD_LIBRARY_PATH", "").split(os.pathsep) if p]
     return [d for d in dirs if os.path.isdir(d)]
 
 
 @functools.lru_cache(maxsize=1, typed=True)
-def _include_dirs() -> list[str]:
+def include_dirs() -> list[str]:
     dirs = ["/usr/include", "/usr/local/include", "/opt/homebrew/include"]
-    dirs += [os.path.join(r, "include") for r in _accel_roots()]
+    dirs += [os.path.join(r, "include") for r in accel_roots()]
     dirs += [p for p in os.environ.get("CPATH", "").split(os.pathsep) if p]
     return [d for d in dirs if os.path.isdir(d)]
 
 
 @functools.lru_cache(maxsize=1, typed=True)
-def _ldconfig_index() -> dict[str, str]:
+def ldconfig_index() -> dict[str, str]:
     """soname -> path map from `ldconfig -p` (Linux glibc only; empty elsewhere)."""
     if not shutil.which("ldconfig"):
         return {}
@@ -171,7 +199,7 @@ def _run_version(cmd: str, args: list[str] | None) -> str | None:
         except (OSError, subprocess.SubprocessError):
             continue
         text = (r.stdout or "") + (r.stderr or "")
-        m = _VERSION_RE.search(text)
+        m = VERSION_RE.search(text)
         if m:
             return m.group(0)
     return None
@@ -212,18 +240,18 @@ def detect_library(spec: ToolSpec) -> DetectResult:
             except (OSError, subprocess.SubprocessError):
                 pass
     # 2) shared object on the loader path / accel lib dirs
-    ld = _ldconfig_index()
+    ld = ldconfig_index()
     for so in _as_list(spec.get("soname", [])):
         for known, path in ld.items():
             if known == so or known.startswith(so + "."):
                 return {"found": True, "via": "ldconfig", "path": path}
-        for d in _lib_dirs():
+        for d in lib_dirs():
             hits = glob.glob(os.path.join(d, so)) + glob.glob(os.path.join(d, so + ".*"))
             if hits:
                 return {"found": True, "via": "libdir", "path": sorted(hits)[-1]}
     # 3) header on the include path
     for hdr in _as_list(spec.get("header", [])):
-        for d in _include_dirs():
+        for d in include_dirs():
             if os.path.exists(os.path.join(d, hdr)):
                 return {"found": True, "via": "header", "path": os.path.join(d, hdr)}
     return {"found": False}

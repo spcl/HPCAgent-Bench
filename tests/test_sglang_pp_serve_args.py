@@ -1,10 +1,10 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """SGLang pipeline-parallel serve arguments in run_cluster.sh.
 
 SGLang hands ``--dist-timeout`` to every model-parallel subgroup it creates (parallel_state's
 ``_MODEL_PARALLEL_GROUP_TIMEOUT``), ``pp:device`` included. Left unset those groups run at torch's
-600 s default, and a ``pp:device`` SEND watchdog at exactly that bound aborted the four-node kimi arm
+600 s default, and a ``pp:device`` SEND watchdog at exactly that bound aborted the four-node kimi setup
 633011. ``run_vllm_node`` cannot be sourced, so the argv is pinned against the shipped text, as
 tests/test_vllm_pp_serve_args.py does for the vLLM branch.
 """
@@ -12,7 +12,7 @@ tests/test_vllm_pp_serve_args.py does for the vLLM branch.
 import pathlib
 import re
 
-SCRIPT = pathlib.Path(__file__).resolve().parents[1] / "experiments/run_cluster.sh"
+SCRIPT = pathlib.Path(__file__).resolve().parents[1] / "hpcagent_bench/cluster/run_cluster.sh"
 # The SGLang pipeline branch: the multi-node, non-replica `if` inside the sglang engine branch.
 PP_BRANCH = re.compile(
     r'^(\s*)if \[\[ "\$\{INFERENCE_MODE\}" != "replicas" \]\] && \(\( INFERENCE_NODES > 1 \)\); then$(.*?)^\1fi$',

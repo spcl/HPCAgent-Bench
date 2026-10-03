@@ -1,0 +1,571 @@
+"""Compile-time folds: ``finfo`` eps, constant comprehensions, list-comprehension unrolls, defaults."""
+
+import ast
+import copy
+import math
+import operator
+from collections.abc import Callable, Iterator, Sequence
+from typing import Any
+
+from hpcagent_bench.translators.numpyto_common import dtypes
+from hpcagent_bench.translators.numpyto_common.ast_build import SubstituteLoads, const_int, literal_loads
+from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
+from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import name_store_counts
+
+__all__ = [
+    "BINARY_OPS",
+    "COMPARE_OPS",
+    "CONST_BUILTINS",
+    "DEFAULT_FOLDING_BACKENDS",
+    "UNARY_OPS",
+    "UNROLL_MAX",
+    "ConstComprehensionFold",
+    "ConstEvaluator",
+    "FinfoEpsFold",
+    "ListCompUnroll",
+    "Value",
+    "const_iterable",
+    "const_literal_ast",
+    "const_name_values",
+    "constant_parameters",
+    "fd_step",
+    "fold_constant_helper_arguments",
+    "fold_finfo_eps",
+    "fold_kernel_defaults",
+    "has_defaulted_parameters",
+    "helper_call_sites",
+    "substitutable_helper",
+    "substitute_loads",
+    "working_float_dtype",
+]
+
+
+def fd_step(precision: str | None = None) -> str:
+    """``sqrt(machine epsilon)`` of the working float type, as a source literal.
+
+    MINPACK's ``fdjac2`` forward-difference step (``h = sqrt(eps) * |p_j|``); :func:`curve_fit_lm_lines`
+    shares it so the emitted fit has scipy's Jacobian truncation error and stationary point.
+
+    Must track ``precision``: the literal is emitted into the body, which ``apply_precision`` never
+    rewrites, and an fp64 step added to an fp32 parameter rounds away, zeroing the Jacobian. A float
+    with no numpy finfo (fp8 storage) gets the fp64 step.
+    """
+    return repr(math.sqrt(dtypes.float_eps(working_float_dtype(precision))))
+
+
+class FinfoEpsFold(ast.NodeTransformer):
+    """``np.finfo(<anything>).eps`` -> the machine epsilon of the working float dtype, as a literal.
+
+    A round-off bound (MINPACK's ftol/xtol, a finite-difference step) must follow the precision the
+    kernel is lowered to; an accuracy requirement (a solver's ``tol=1e-6``) is fixed at every width
+    and must not go through here. Folded because the emitters write source text: there is no
+    ``finfo`` at native run time.
+    """
+
+    __slots__ = ("eps",)
+
+    def __init__(self, precision: str | None = None) -> None:
+        self.eps = dtypes.float_eps(working_float_dtype(precision))
+
+    def visit_Attribute(self, node: ast.Attribute) -> ast.AST:
+        self.generic_visit(node)
+        call = node.value
+        if (
+            node.attr == "eps"
+            and isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Attribute)
+            and call.func.attr == "finfo"
+            and is_numpy_module(call.func.value)
+        ):
+            return ast.copy_location(ast.Constant(value=self.eps), node)
+        return node
+
+
+def fold_finfo_eps(tree: ast.Module, precision: str | None = None) -> None:
+    """Fold every ``np.finfo(...).eps`` in ``tree`` to the working precision's epsilon."""
+    FinfoEpsFold(precision).visit(tree)
+
+
+def working_float_dtype(precision: str | None = None) -> str:
+    """The float dtype a lowering allocates its own scratch in: ``precision``, else ``float64``.
+
+    A hardcoded ``float64`` would run an fp32 kernel's scratch at double width and narrow on the
+    store back into its fp32 target.
+    """
+    return dtypes.canonical(precision) if precision else "float64"
+
+
+#: builtins a constant comprehension may call: pure, side-effect free, and identical
+#: at desugar time and at runtime.
+CONST_BUILTINS = {
+    "abs": abs,
+    "bool": bool,
+    "divmod": divmod,
+    "enumerate": enumerate,
+    "float": float,
+    "int": int,
+    "len": len,
+    "list": list,
+    "max": max,
+    "min": min,
+    "pow": pow,
+    "range": range,
+    "reversed": reversed,
+    "round": round,
+    "sorted": sorted,
+    "str": str,
+    "sum": sum,
+    "tuple": tuple,
+    "zip": zip,
+}
+
+
+#: A Python value the constant folder evaluates: dynamic by design (it mirrors the interpreter's own
+#: semantics over whatever literals the kernel binds), so no narrower static type exists.
+type Value = Any
+
+
+def const_name_values(fn: ast.AST) -> dict[str, object]:
+    """Names bound EXACTLY once inside ``fn``, to a literal -> that literal's value.
+    A name stored anywhere else (a second assignment, a loop target, a parameter)
+    is dropped: this table is flow-insensitive, so it may only hold values that are
+    the same at every program point."""
+    stores: dict[str, int] = {}
+    values: dict[str, object] = {}
+    if isinstance(fn, ast.FunctionDef):
+        for a in fn.args.posonlyargs + fn.args.args + fn.args.kwonlyargs:
+            stores[a.arg] = stores.get(a.arg, 0) + 1
+    for node in ast.walk(fn):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+            stores[node.id] = stores.get(node.id, 0) + 1
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            try:
+                values[node.targets[0].id] = ast.literal_eval(node.value)
+            except (ValueError, TypeError, SyntaxError, MemoryError, RecursionError):
+                continue
+    return {n: v for n, v in values.items() if stores.get(n) == 1}
+
+
+def const_literal_ast(value: object) -> ast.expr | None:
+    """A folded python value -> its literal AST, or None when it has no literal
+    spelling (an empty set, a non-scalar leaf such as a range/generator)."""
+    if value is None or isinstance(value, (bool, int, float, complex, str, bytes)):
+        return ast.Constant(value=value)
+    if isinstance(value, (list, tuple, set, frozenset)):
+        if isinstance(value, (set, frozenset)):
+            try:
+                value = sorted(value)  # set iteration is hash order -- the emitted source must not vary
+            except TypeError:
+                return None
+            members = [const_literal_ast(v) for v in value]
+            literal_members = [e for e in members if e is not None]
+            return ast.Set(elts=literal_members) if members and len(literal_members) == len(members) else None
+        items = [const_literal_ast(v) for v in value]
+        elts = [e for e in items if e is not None]
+        if len(elts) != len(items):
+            return None
+        if isinstance(value, list):
+            return ast.List(elts=elts, ctx=ast.Load())
+        return ast.Tuple(elts=elts, ctx=ast.Load())
+    if isinstance(value, dict):
+        keys = [const_literal_ast(k) for k in value]
+        literal_keys = [k for k in keys if k is not None]
+        literal_vals = [v for v in (const_literal_ast(v) for v in value.values()) if v is not None]
+        if len(literal_keys) != len(keys) or len(literal_vals) != len(value):
+            return None
+        return ast.Dict(keys=list(literal_keys), values=literal_vals)
+    return None
+
+
+class ConstComprehensionFold(ast.NodeTransformer):
+    """``[int(round(fr * 4)) for fr in (0.5, 1.0)]`` -> the literal ``[2, 4]``. The
+    DaCe frontend refuses every comprehension.
+
+    A comprehension touching any runtime value (a parameter, an array element, a
+    symbol) is left alone: unrolling it would pin a trip count only the runtime
+    knows. Attribute and subscript reads, lambdas, and calls to anything but a
+    whitelisted pure builtin count as runtime. Inner comprehensions fold first."""
+
+    __slots__ = ("changed", "consts")
+
+    def __init__(self, consts: dict[str, object]) -> None:
+        self.consts = consts
+        self.changed = False
+
+    def foldable(self, node: ast.ListComp | ast.SetComp | ast.DictComp | ast.GeneratorExp) -> bool:
+        bound = {n.id for g in node.generators for n in ast.walk(g.target) if isinstance(n, ast.Name)}
+        for n in ast.walk(node):
+            if isinstance(
+                n,
+                (
+                    ast.Attribute,
+                    ast.Subscript,
+                    ast.Lambda,
+                    ast.Starred,
+                    ast.NamedExpr,
+                    ast.Await,
+                    ast.Yield,
+                    ast.YieldFrom,
+                    ast.JoinedStr,
+                ),
+            ):
+                return False
+            if isinstance(n, ast.Call) and not (isinstance(n.func, ast.Name) and n.func.id in CONST_BUILTINS):
+                return False
+            if isinstance(n, ast.Name) and not (n.id in bound or n.id in self.consts or n.id in CONST_BUILTINS):
+                return False
+            if isinstance(n, ast.comprehension) and n.is_async:
+                return False
+        return True
+
+    def fold_(self, node: ast.ListComp | ast.SetComp | ast.DictComp | ast.GeneratorExp) -> ast.expr:
+        if not self.foldable(node):
+            return node
+        try:
+            value = ConstEvaluator({**CONST_BUILTINS, **self.consts}).value(node, {})
+        except Exception:  # noqa: BLE001 -- any failure to evaluate just means "not foldable"
+            return node
+        if isinstance(node, ast.GeneratorExp):
+            value = tuple(value)  # a genexp yields once; a tuple literal is the constant form of that
+        lit = const_literal_ast(value)
+        if lit is None:
+            return node
+        self.changed = True
+        return ast.copy_location(lit, node)
+
+    def visit_ListComp(self, node: ast.ListComp | ast.SetComp | ast.DictComp | ast.GeneratorExp) -> ast.AST:
+        self.generic_visit(node)
+        return self.fold_(node)
+
+    visit_SetComp = visit_ListComp
+    visit_DictComp = visit_ListComp
+    visit_GeneratorExp = visit_ListComp
+
+
+BINARY_OPS: dict[type[ast.operator], Callable[[Value, Value], Value]] = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.MatMult: operator.matmul,
+    ast.Div: operator.truediv,
+    ast.FloorDiv: operator.floordiv,
+    ast.Mod: operator.mod,
+    ast.Pow: operator.pow,
+    ast.LShift: operator.lshift,
+    ast.RShift: operator.rshift,
+    ast.BitOr: operator.or_,
+    ast.BitXor: operator.xor,
+    ast.BitAnd: operator.and_,
+}
+UNARY_OPS: dict[type[ast.unaryop], Callable[[Value], Value]] = {
+    ast.UAdd: operator.pos,
+    ast.USub: operator.neg,
+    ast.Not: operator.not_,
+    ast.Invert: operator.invert,
+}
+COMPARE_OPS: dict[type[ast.cmpop], Callable[[Value, Value], Value]] = {
+    ast.Eq: operator.eq,
+    ast.NotEq: operator.ne,
+    ast.Lt: operator.lt,
+    ast.LtE: operator.le,
+    ast.Gt: operator.gt,
+    ast.GtE: operator.ge,
+    ast.Is: operator.is_,
+    ast.IsNot: operator.is_not,
+    ast.In: lambda a, b: a in b,
+    ast.NotIn: lambda a, b: a not in b,
+}
+
+
+class ConstEvaluator:
+    """Python's own semantics for the expressions :meth:`ConstComprehensionFold.foldable` admits:
+    literals, displays, operators, conditionals, calls to ``CONST_BUILTINS`` and comprehensions,
+    over names bound in ``names``. A comprehension runs in its own scope, a generator expression
+    stays lazy, and any other node raises, which the caller reads as "not foldable"."""
+
+    __slots__ = ("names",)
+
+    def __init__(self, names: dict[str, Value]) -> None:
+        self.names = names
+
+    def value(self, node: ast.expr, scope: dict[str, Value]) -> Value:
+        if isinstance(node, ast.Constant):
+            return node.value
+        if isinstance(node, ast.Name):
+            return scope[node.id] if node.id in scope else self.names[node.id]
+        if isinstance(node, (ast.Tuple, ast.List, ast.Set)):
+            items = [self.value(e, scope) for e in node.elts]
+            return {ast.Tuple: tuple, ast.List: list, ast.Set: set}[type(node)](items)
+        if isinstance(node, ast.Dict):
+            return self.display_dict(node, scope)
+        if isinstance(node, ast.BinOp):
+            return BINARY_OPS[type(node.op)](self.value(node.left, scope), self.value(node.right, scope))
+        if isinstance(node, ast.UnaryOp):
+            return UNARY_OPS[type(node.op)](self.value(node.operand, scope))
+        if isinstance(node, ast.BoolOp):
+            return self.boolop(node, scope)
+        if isinstance(node, ast.Compare):
+            return self.compare(node, scope)
+        if isinstance(node, ast.IfExp):
+            chosen = node.body if self.value(node.test, scope) else node.orelse
+            return self.value(chosen, scope)
+        if isinstance(node, ast.Call):
+            return self.call(node, scope)
+        if isinstance(node, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
+            return self.comprehension(node, scope)
+        raise NotImplementedError(type(node).__name__)
+
+    def display_dict(self, node: ast.Dict, scope: dict[str, Value]) -> dict[Value, Value]:
+        result: dict[Value, Value] = {}
+        for key, item in zip(node.keys, node.values):
+            if key is None:
+                result.update(self.value(item, scope))
+            else:
+                result[self.value(key, scope)] = self.value(item, scope)
+        return result
+
+    def boolop(self, node: ast.BoolOp, scope: dict[str, Value]) -> Value:
+        result: Value = None
+        for operand in node.values:
+            result = self.value(operand, scope)
+            if bool(result) != isinstance(node.op, ast.And):
+                return result
+        return result
+
+    def compare(self, node: ast.Compare, scope: dict[str, Value]) -> Value:
+        left = self.value(node.left, scope)
+        result: Value = True
+        for op, comparator in zip(node.ops, node.comparators):
+            right = self.value(comparator, scope)
+            result = COMPARE_OPS[type(op)](left, right)
+            if not result:
+                return result
+            left = right
+        return result
+
+    def call(self, node: ast.Call, scope: dict[str, Value]) -> Value:
+        func = self.value(node.func, scope)
+        args = [self.value(a, scope) for a in node.args]
+        kwargs: dict[str, Value] = {}
+        for kw in node.keywords:
+            if kw.arg is None:
+                kwargs.update(self.value(kw.value, scope))
+            else:
+                kwargs[kw.arg] = self.value(kw.value, scope)
+        return func(*args, **kwargs)
+
+    def comprehension(
+        self, node: ast.ListComp | ast.SetComp | ast.DictComp | ast.GeneratorExp, scope: dict[str, Value]
+    ) -> Value:
+        # The first iterable is evaluated in the enclosing scope, before the comprehension runs.
+        first = iter(self.value(node.generators[0].iter, scope))
+        if isinstance(node, ast.DictComp):
+            pairs = self.generate(node.generators, 0, first, scope)
+            return {self.value(node.key, inner): self.value(node.value, inner) for inner in pairs}
+        elements = (self.value(node.elt, inner) for inner in self.generate(node.generators, 0, first, scope))
+        if isinstance(node, ast.GeneratorExp):
+            return elements
+        return list(elements) if isinstance(node, ast.ListComp) else set(elements)
+
+    def generate(
+        self, generators: list[ast.comprehension], index: int, iterable: Iterator[Value], scope: dict[str, Value]
+    ) -> Iterator[dict[str, Value]]:
+        """Each scope the comprehension's element is evaluated in, in iteration order."""
+        gen = generators[index]
+        for item in iterable:
+            inner = dict(scope)
+            self.bind(gen.target, item, inner)
+            if not all(self.value(cond, inner) for cond in gen.ifs):
+                continue
+            if index + 1 == len(generators):
+                yield inner
+            else:
+                yield from self.generate(
+                    generators, index + 1, iter(self.value(generators[index + 1].iter, inner)), inner
+                )
+
+    def bind(self, target: ast.expr, item: Value, scope: dict[str, Value]) -> None:
+        if isinstance(target, ast.Name):
+            scope[target.id] = item
+            return
+        if not isinstance(target, (ast.Tuple, ast.List)):
+            raise NotImplementedError(type(target).__name__)
+        values = list(item)
+        if len(values) != len(target.elts):
+            raise ValueError("unpack length mismatch")
+        for elt, value in zip(target.elts, values):
+            self.bind(elt, value, scope)
+
+
+#: An unrolled comprehension copies its body once per element; this caps the source (and SDFG) blow-up.
+UNROLL_MAX = 64
+
+
+def const_iterable(node: ast.expr, consts: dict[str, object]) -> Sequence[object] | None:
+    """A comprehension iterable already fixed at desugar time -> its values, else None.
+    Covers a literal list/tuple, a ``range`` of literal bounds, and a name the const
+    table resolved."""
+    if isinstance(node, ast.Name):
+        value = consts.get(node.id)
+        return value if isinstance(value, (list, tuple)) else None
+    if isinstance(node, (ast.List, ast.Tuple)):
+        try:
+            return ast.literal_eval(node)
+        except (ValueError, TypeError, SyntaxError, MemoryError, RecursionError):
+            return None
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "range"
+        and node.args
+        and len(node.args) < 4
+        and not node.keywords
+    ):
+        bounds = [const_int(a) for a in node.args]
+        ints = [b for b in bounds if b is not None]
+        if len(ints) != len(bounds) or ints[2:] == [0]:
+            return None  # a zero step is a ValueError, not an iterable
+        return range(*ints)
+    return None
+
+
+class ListCompUnroll(ast.NodeTransformer):
+    """``[f(x, i) for i in range(3)]`` -> ``[f(x, 0), f(x, 1), f(x, 2)]``.
+
+    A constant iterable driving a runtime body (a comprehension constant end to end is
+    :class:`ConstComprehensionFold`'s). Only the loop goes away; the body stays verbatim.
+
+    Left alone: a non-constant iterable, any ``if`` guard, more than one ``for`` clause,
+    a non-Name target, an element with no literal spelling, and a body holding a lambda
+    or rebinding the target -- either would capture the substituted literal instead of
+    shadowing it."""
+
+    __slots__ = ("changed", "consts")
+
+    def __init__(self, consts: dict[str, object]) -> None:
+        self.consts = consts
+        self.changed = False
+
+    def visit_ListComp(self, node: ast.ListComp) -> ast.AST:
+        self.generic_visit(node)  # an inner comprehension folds/unrolls first
+        if len(node.generators) != 1:
+            return node
+        gen = node.generators[0]
+        if gen.ifs or gen.is_async or not isinstance(gen.target, ast.Name):
+            return node
+        values = const_iterable(gen.iter, self.consts)
+        if values is None or len(values) > UNROLL_MAX:
+            return node
+        name = gen.target.id
+        shadowed = any(
+            isinstance(n, ast.Lambda) or (isinstance(n, ast.Name) and n.id == name and not isinstance(n.ctx, ast.Load))
+            for n in ast.walk(node.elt)
+        )
+        if shadowed:
+            return node
+        elts: list[ast.expr] = []
+        for v in values:
+            lit = const_literal_ast(v)
+            if lit is None:
+                return node
+            elts.append(SubstituteLoads({name: lit}).visit(copy.deepcopy(node.elt)))
+        self.changed = True
+        return ast.copy_location(ast.List(elts=elts, ctx=ast.Load()), node)
+
+
+#: Backends whose kernel is called positionally through ``kir.input_args`` and nothing else, so a
+#: defaulted parameter outside that list is a constant -- the fold the native frontend already does.
+DEFAULT_FOLDING_BACKENDS = frozenset({"numba", "pythran"})
+
+
+def has_defaulted_parameters(fn: ast.FunctionDef) -> bool:
+    """True when ``fn`` declares a positional or keyword-only parameter with a default."""
+    return bool(fn.args.defaults) or any(d is not None for d in fn.args.kw_defaults)
+
+
+def fold_kernel_defaults(fn: ast.FunctionDef, input_args: Sequence[str]) -> bool:
+    """Fold the kernel's defaulted parameters the harness never passes into body constants, through the
+    native frontend's own :func:`numpyto_common.frontend.module_constants.fold_default_args`. True when one folded.
+
+    numba counts a keyword-only parameter as required, so an unfolded one breaks the entry's arity."""
+    # Imported here: frontend imports this module at its top.
+    from hpcagent_bench.translators.numpyto_common.frontend import fold_default_args
+
+    before = ast.dump(fn.args)
+    fold_default_args(fn, list(input_args))
+    return ast.dump(fn.args) != before
+
+
+def fold_constant_helper_arguments(tree: ast.Module, kernel_name: str) -> bool:
+    """Substitute a helper parameter that EVERY call site passes the same ``True``/``False``/``None``
+    literal into that helper's body (numba only). True when one was substituted.
+
+    numba types both arms of ``if flag:`` even when every caller passes ``False``, so a ``None`` buffer
+    read under the dead arm fails typing; the substituted literal lets :class:`DeadBranchElim` drop that
+    arm first. A helper whose name escapes as a value, a call with keywords or a starred argument, or a
+    parameter the body rebinds is left alone."""
+    helpers = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name != kernel_name}
+    sites, escaped = helper_call_sites(tree, helpers)
+    changed = False
+    for name, fn in helpers.items():
+        calls = sites.get(name, [])
+        if not calls or name in escaped or not substitutable_helper(fn, calls):
+            continue
+        changed = substitute_loads(fn, constant_parameters(fn, calls)) or changed
+    return changed
+
+
+def helper_call_sites(
+    tree: ast.Module, helpers: dict[str, ast.FunctionDef]
+) -> tuple[dict[str, list[ast.Call]], set[str]]:
+    """Every call of a helper by name, and the helpers whose name is read any other way."""
+    sites: dict[str, list[ast.Call]] = {}
+    callee_names: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in helpers:
+            sites.setdefault(node.func.id, []).append(node)
+            callee_names.add(id(node.func))
+    escaped = {
+        n.id for n in ast.walk(tree) if isinstance(n, ast.Name) and n.id in helpers and id(n) not in callee_names
+    }
+    return sites, escaped
+
+
+def substitutable_helper(fn: ast.FunctionDef, calls: list[ast.Call]) -> bool:
+    """True when every parameter of ``fn`` binds positionally at every call and ``fn`` nests no scope."""
+    if fn.args.vararg or fn.args.kwarg or fn.args.posonlyargs:
+        return False
+    if any(c.keywords or any(isinstance(a, ast.Starred) for a in c.args) for c in calls):
+        return False
+    return not any(isinstance(n, (ast.Lambda, ast.FunctionDef)) and n is not fn for n in ast.walk(fn))
+
+
+def constant_parameters(fn: ast.FunctionDef, calls: list[ast.Call]) -> dict[str, object]:
+    """Parameters of ``fn`` every call passes the same ``True``/``False``/``None`` -> that value."""
+    stores = name_store_counts(fn)
+    # A literal spelled as a subscript base, attribute owner or callee (``None[:, 0]``) is a
+    # SyntaxWarning at compile time even under a dead arm, so such a parameter stays a name.
+    structural: set[str] = set()
+    for n in ast.walk(fn):
+        if isinstance(n, (ast.Subscript, ast.Attribute)) and isinstance(n.value, ast.Name):
+            structural.add(n.value.id)
+        elif isinstance(n, ast.Call) and isinstance(n.func, ast.Name):
+            structural.add(n.func.id)
+    subst: dict[str, object] = {}
+    for i, param in enumerate(fn.args.args):
+        if stores.get(param.arg, 0) != 1 or param.arg in structural:
+            continue
+        passed = [c.args[i] if i < len(c.args) else None for c in calls]
+        if not all(isinstance(p, ast.Constant) and (p.value is None or isinstance(p.value, bool)) for p in passed):
+            continue
+        values = {repr(p.value) for p in passed if isinstance(p, ast.Constant)}
+        if len(values) == 1 and isinstance(passed[0], ast.Constant):
+            subst[param.arg] = passed[0].value
+    return subst
+
+
+def substitute_loads(fn: ast.FunctionDef, subst: dict[str, Value]) -> bool:
+    """Replace every load of a name in ``subst`` inside ``fn`` by its literal. True when one was replaced."""
+    changed = any(isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load) and n.id in subst for n in ast.walk(fn))
+    literal_loads(subst).visit(fn)
+    return changed
