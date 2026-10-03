@@ -1,21 +1,16 @@
-{# Skills are INDEXED, never inlined, and never filtered. Every page contributes one line: its
-   name, the file it lives in, and the `when:` trigger that says who should open it.
-
-   No gating. The trigger does that job -- `lang-c` says "you are writing C", `rocprof` says "you
-   are about to profile an AMD device" -- so the prompt does not need to know a task's language to
-   decide what to show it. Seven constants used to make that decision, and they existed only
-   because an inlined body cost hundreds of lines; a trigger line costs one.
-
-   `when` falls back to `description` so a page that has not authored a trigger still gets a
-   usable line rather than a bare name. #}
+{# Skills are indexed, never inlined and never filtered: one line per page with its name, its file and
+   the `when:` trigger that says who should open it. The trigger does the gating (`lang-c` says "you
+   write C", `rocprof` says "you are about to profile an AMD device"), so the prompt need not know a
+   task's language to decide what to show. `when` falls back to `description`, so a page without an
+   authored trigger still gets a usable line. #}
 {% if other_skills %}
-
 ## Skills
-Each line below names a page under `{{ shared_dir }}/skills/`. READ THE PAGE before acting on its
-subject -- the line is the trigger, not the guidance itself. No page is repeated in this prompt.
+Each line below names a page under `{{ shared_dir }}/skills/`. Read the page before you act on its
+subject: the line is the trigger and not the guidance. No page is repeated in this prompt.
 {% for skill in other_skills %}
 - **{{ skill.name }}** ({{ skill.file or skill.name }}.md) -- {{ skill.when or skill.description }}
 {% if debug %}# Generated from: {{ skill.path }}
 {% endif %}
 {% endfor %}
+
 {% endif %}
