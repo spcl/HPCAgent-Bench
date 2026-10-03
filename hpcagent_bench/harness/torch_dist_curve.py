@@ -121,7 +121,7 @@ class Point:
     that P is sized to (:func:`scoring.ml_law_runs`), with the weak law's realized work ratio."""
 
     kernel: str
-    law: str
+    law: mpi_sizing.ScalingLaw
     ranks: int
     params: tuple[tuple[str, Any], ...]
     work_ratio: float | None = None
@@ -155,7 +155,7 @@ def stack() -> Stack:
 
 def row_key(point: Point, where: Stack) -> tuple[object, ...]:
     """``point``'s :data:`KEY` value on ``where``."""
-    return (SOURCE, point.kernel, point.law, point.ranks, point.params_json, where.arch, where.image)
+    return (SOURCE, point.kernel, point.law.value, point.ranks, point.params_json, where.arch, where.image)
 
 
 def problem_key(point: Point, where: Stack) -> tuple[object, ...]:
@@ -167,7 +167,7 @@ def claim_key(point: Point, where: Stack) -> tuple[str, str, str, int]:
     """``point``'s work-item key in ``scaling-claims.db`` (``scaling_claims.Key``): ``db`` is
     :data:`SOURCE`, so it never collides with a submission's judge-DB path."""
     digest = hashlib.sha256(json.dumps(row_key(point, where)).encode()).hexdigest()[:16]
-    return (SOURCE, f"{point.law}:P={point.ranks}:{digest}", point.kernel, 0)
+    return (SOURCE, f"{point.law.value}:P={point.ranks}:{digest}", point.kernel, 0)
 
 
 def planned_points(kernel: str, counts: Sequence[int], preset: str) -> list[Point]:
@@ -189,7 +189,7 @@ def planned_points(kernel: str, counts: Sequence[int], preset: str) -> list[Poin
         anchor = next((sized for p, sized in asked if p == 1), None)
         for p, sized in asked:
             ratio: float | None = None
-            if law == "weak" and work_exp is not None and anchor is not None:
+            if law is mpi_sizing.ScalingLaw.WEAK and work_exp is not None and anchor is not None:
                 ratio = mpi_sizing.work_ratio(anchor, sized, axis_syms, work_exp)
             points.append(Point(kernel, law, p, tuple(sorted(sized.items())), ratio))
     return points
@@ -289,7 +289,7 @@ def row_of(
     return {
         "source": SOURCE,
         "kernel": point.kernel,
-        "mode": point.law,
+        "mode": point.law.value,
         "ranks": point.ranks,
         "params": point.params_json,
         "arch": where.arch,
@@ -312,7 +312,7 @@ def row_of(
 def shared_timing(point: Point, where: Stack, stored: Mapping[tuple[object, ...], Mapping[str, Any]]) -> Timing | None:
     """The other law's stored timing of the SAME problem at the same P, or None."""
     for key, row in stored.items():
-        if key[2] != point.law and (key[1], key[3], key[4], key[5], key[6]) == problem_key(point, where):
+        if key[2] != point.law.value and (key[1], key[3], key[4], key[5], key[6]) == problem_key(point, where):
             samples = tuple(int(s) for s in json.loads(str(row["samples"] or "[]")))
             shared = f"the {key[2]} law's launch of the same problem"
             note = "; ".join(x for x in (str(row["note"] or ""), shared) if x)
@@ -339,7 +339,9 @@ def fill_point(
         results_db.insert(conn, TABLE, row)
         conn.commit()
     shown = f"{row['ranked_ns'] / NS_PER_MS:.3f} ms ({row['compile_mode']})" if row["ranked_ns"] else "hole"
-    print(f"torch_dist {point.kernel} {point.law} P={point.ranks}: {shown} {row['note'] or ''}".rstrip(), flush=True)
+    print(
+        f"torch_dist {point.kernel} {point.law.value} P={point.ranks}: {shown} {row['note'] or ''}".rstrip(), flush=True
+    )
     return row
 
 

@@ -180,7 +180,7 @@ class ScalingPoint:
     achieved_speedup: float  # sigma_i(P) = T_i(1) / T_i(P)
     ideal_speedup: float  # sigma*_i(P): P for strong (Amdahl), P/r for weak (Gustafson; r = P at P = m**k)
     efficiency: float  # eta_i(P) = sigma_i(P) / sigma*_i(P): strong T_1/(P*T_P), weak r*T_1/(P*T_P)
-    mode: str  # "strong" | "weak" -- SELECTS the ideal_speedup formula (see ideal_speedup)
+    mode: mpi_sizing.ScalingLaw  # SELECTS the ideal_speedup formula (see ideal_speedup)
     work_ratio: float | None = None  # weak r = W(N_P)/W(N_1) the ideal was corrected by; None = exact / strong
     # Nodes the launch was placed on (mpi_gang.launch_nodes); None when the launcher did not say.
     nodes: int | None = None
@@ -206,7 +206,7 @@ class ScalingScore:
     """A distributed kernel's multi-rank scaling score: the per-P curve plus a geomean efficiency disclosure."""
 
     kernel: str
-    mode: str  # "strong" | "weak"
+    mode: mpi_sizing.ScalingLaw
     work_exponent: int | None  # k_i from the manifest (weak runs only at P = m**k); None = strong-only
     single_rank_ns: int  # T_i(1): the single-PE anchor, timed once on the base problem N_1, shared by every P
     points: tuple[ScalingPoint, ...]  # one per tested rank count, ascending P
@@ -262,16 +262,16 @@ class SuiteScore:
     task_scores: tuple[TaskScore, ...] = field(default_factory=tuple)
 
 
-def ideal_speedup(ranks: int, mode: str = "strong", work_ratio: float | None = None) -> float:
+def ideal_speedup(
+    ranks: int, mode: mpi_sizing.ScalingLaw = mpi_sizing.ScalingLaw.STRONG, work_ratio: float | None = None
+) -> float:
     """sigma*_i(P), the denominator of eta_i(P) = sigma_i(P) / sigma*_i(P): ``P`` for strong scaling
     (Amdahl) and ``P / r`` for weak, with ``r = W(N_P)/W(N_1)`` the realized work ratio
     (:func:`hpcagent_bench.harness.mpi_sizing.work_ratio`); at exact growth ``r = P`` and sigma* = 1
     (Gustafson). ``work_ratio=None`` means exact growth. Floors P at 1."""
     p = max(1, int(ranks))
-    if mode == "strong":
+    if mode is mpi_sizing.ScalingLaw.STRONG:
         return float(p)
-    if mode != "weak":
-        raise ValueError(f"ideal_speedup needs mode 'strong' or 'weak'; got {mode!r}")
     if work_ratio is None:
         return 1.0
     if work_ratio <= 0:
@@ -280,7 +280,7 @@ def ideal_speedup(ranks: int, mode: str = "strong", work_ratio: float | None = N
 
 
 def scaling_point(
-    mode: str, ranks: int, single_rank_ns: int, ranked_ns: int, *, work_ratio: float | None = None
+    mode: mpi_sizing.ScalingLaw, ranks: int, single_rank_ns: int, ranked_ns: int, *, work_ratio: float | None = None
 ) -> ScalingPoint:
     """One scaling-curve point: speedup T_i(1)/T_i(P) and efficiency, uncapped; ValueError if either time
     <= 0. ``mode`` selects :func:`ideal_speedup`."""
@@ -297,7 +297,7 @@ def scaling_point(
         ideal_speedup=star,
         efficiency=sigma / star,
         mode=mode,
-        work_ratio=None if mode == "strong" or work_ratio is None else float(work_ratio),
+        work_ratio=None if mode is mpi_sizing.ScalingLaw.STRONG or work_ratio is None else float(work_ratio),
     )
 
 
@@ -330,7 +330,7 @@ def scaling_drops(
 
 def scaling_score(
     kernel: str,
-    mode: str,
+    mode: mpi_sizing.ScalingLaw,
     single_rank_ns: int,
     measured_ns: dict[int, int],
     *,
@@ -548,7 +548,7 @@ def curve_disclosure(runs: ScalingRuns, notes: Sequence[str]) -> dict[str, objec
     """The disclosure behind one law's recorded curve: mode, T_1, every measured ``{P: T_i(P)}`` with its
     realized work ratio, and the reason each dropped P was dropped."""
     return {
-        "mode": runs.mode,
+        "mode": runs.mode.value,
         "single_rank_ns": int(runs.single_rank_ns),
         "measured_ns": {str(p): int(ns) for p, ns in sorted(runs.measured_ns.items())},
         "work_ratio": {str(p): float(r) for p, r in sorted(runs.work_ratio.items())},
@@ -562,7 +562,7 @@ class LawCurve:
     fewer than :data:`MIN_CURVE_POINTS` points), per-P ``notes``, the ``dropped`` holes and the JSON
     ``disclosure`` (:func:`curve_disclosure`)."""
 
-    mode: str
+    mode: mpi_sizing.ScalingLaw
     curve: ScalingScore | None
     notes: tuple[str, ...]
     dropped: tuple[ScalingDrop, ...]
@@ -591,7 +591,7 @@ def law_curve(kernel: str, runs: ScalingRuns, requested: Sequence[int]) -> LawCu
     )
     if curve is not None and (1 not in runs.measured_ns or len(runs.measured_ns) < MIN_CURVE_POINTS):
         reason = (
-            f"{runs.mode} curve invalid: measured P={sorted(runs.measured_ns)} of requested {list(requested)}; "
+            f"{runs.mode.value} curve invalid: measured P={sorted(runs.measured_ns)} of requested {list(requested)}; "
             f"a curve needs P=1 and at least {MIN_CURVE_POINTS - 1} further points"
         )
         notes.append(reason)
@@ -606,7 +606,7 @@ def curve_summary(curves: Sequence[LawCurve]) -> str:
     for law in curves:
         measured = law.disclosure.get("measured_ns", {})
         points = ", ".join(f"P={p} {int(ns) / NS_PER_MS:.3f} ms" for p, ns in cast("dict[str, int]", measured).items())
-        parts.append(f"{law.mode}: {points or 'no point measured'}")
+        parts.append(f"{law.mode.value}: {points or 'no point measured'}")
     return "; ".join(parts)
 
 
@@ -644,14 +644,16 @@ def score_ml_distributed(
         return ml_stamped(graded.score, task), ()
     curves = tuple(law_curve(task.kernel, runs, rank_counts) for runs in graded.laws)
     # Each note names its law: both laws' sweeps report the same P.
-    notes = [note if note.startswith(law.mode) else f"{law.mode} {note}" for law in curves for note in law.notes]
+    notes = [
+        note if note.startswith(law.mode.value) else f"{law.mode.value} {note}" for law in curves for note in law.notes
+    ]
     widest = max((p.ranks for law in curves if law.curve is not None for p in law.curve.points), default=0)
     scored = replace(
         graded.score,
         detail="; ".join(x for x in (graded.score.detail, curve_summary(curves), *notes) if x),
-        scaling_mode=",".join(law.mode for law in curves),
+        scaling_mode=",".join(law.mode.value for law in curves),
         scaling_ranks=widest,
-        scaling_curve=json.dumps({law.mode: law.disclosure for law in curves}, sort_keys=True),
+        scaling_curve=json.dumps({law.mode.value: law.disclosure for law in curves}, sort_keys=True),
     )
     return ml_stamped(scored, task), curves
 
@@ -699,7 +701,7 @@ def score_task_distributed(
     if ml_track:
         score, curves = score_ml_distributed(submission, task, datatype=datatype, repeat=repeat, rtol=rtol, atol=atol)
         # TaskScore carries the strong law's curve (the law S_i is measured under); both are recorded.
-        strong = next((law for law in curves if law.mode == "strong"), None)
+        strong = next((law for law in curves if law.mode is mpi_sizing.ScalingLaw.STRONG), None)
         if strong is not None:
             scaling, scaling_notes, scaling_dropped = strong.curve, strong.notes, strong.dropped
     else:

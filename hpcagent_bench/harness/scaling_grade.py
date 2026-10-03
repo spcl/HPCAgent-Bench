@@ -322,15 +322,15 @@ def curve_lines(item: Item, graded: Graded) -> list[str]:
         lines.append(f"  no curve: {graded.detail}"[:2000])
     for law in graded.curves:
         if law.curve is None:
-            lines.append(f"  {law.mode}: no curve")
+            lines.append(f"  {law.mode.value}: no curve")
         else:
             for point in law.curve.points:
                 # The nodes the launch actually used (recorded at launch), never derived from P.
                 lines.append(
-                    f"  {law.mode} P={point.ranks:<3} nodes={point.nodes} T={point.ranked_ns / 1e6:.3f} ms "
+                    f"  {law.mode.value} P={point.ranks:<3} nodes={point.nodes} T={point.ranked_ns / 1e6:.3f} ms "
                     f"speedup={point.achieved_speedup:.3f} ideal={point.ideal_speedup:.3f} eff={point.efficiency:.3f}"
                 )
-            lines.append(f"  {law.mode} mean_efficiency={law.curve.mean_efficiency:.3f}")
+            lines.append(f"  {law.mode.value} mean_efficiency={law.curve.mean_efficiency:.3f}")
         lines.extend(f"  note: {note}" for note in law.notes)
     return lines
 
@@ -359,7 +359,7 @@ def submission_key(item: Item) -> scaling_claims.Key:
 
 def fully_graded(item: Item, done: set[tuple[object, ...]]) -> bool:
     """Whether every law of ``item`` is in ``done`` (:func:`graded_keys`)."""
-    return all((item.episode_id, item.kernel, item.ts_ms, law) in done for law in ML_LAWS)
+    return all((item.episode_id, item.kernel, item.ts_ms, law.value) in done for law in ML_LAWS)
 
 
 def grade_into(
@@ -401,7 +401,7 @@ def grade_into(
                     notes=notes,
                 )
             else:
-                laws_row = {"mode": mode, "status": law_status, "disclosure": disclosure, "notes": notes}
+                laws_row = {"mode": mode.value, "status": law_status, "disclosure": disclosure, "notes": notes}
                 results_db.add_scaling(conn, grade_id, laws_row, [])
         conn.commit()
     lines = curve_lines(item, graded) if graded is not None else [f"error {reason}"]
@@ -718,7 +718,7 @@ def unclaimed_points(
         for db, episode_id, bench, stamp_ms in held
         if db == torch_dist_curve.SOURCE
     }
-    return [point for point in missing if (point.kernel, f"{point.law}:P={point.ranks}") not in claimed]
+    return [point for point in missing if (point.kernel, f"{point.law.value}:P={point.ranks}") not in claimed]
 
 
 def run_auto_main(
