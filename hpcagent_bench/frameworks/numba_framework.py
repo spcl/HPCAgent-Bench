@@ -13,7 +13,7 @@ __all__ = ["IMPL_NAME", "NumbaFramework"]
 if TYPE_CHECKING:
     pass
 
-#: The implementation name of the parallel (``np``) ``@nb.njit`` build in ``<module>_numba_np.py`` (a
+#: The implementation name of the parallel (``np``) ``@nb.njit`` build in ``<module>_numba.py`` (a
 #: hand-written file at that name overrides the generated one). It is one reference of the configured
 #: speedup denominator (``measurement.denominator``, best-of(numba,c) by default).
 IMPL_NAME = "nopython-mode-parallel"
@@ -25,7 +25,7 @@ class NumbaFramework(Framework):
     __slots__ = ()
 
     def autogen_targets(self) -> tuple[str, ...]:
-        return ("numba_np",)
+        return ("numba",)
 
     def call_args(
         self, bench: Benchmark, impl: Callable, resolved: dict[str, Any], bdata: dict[str, Any]
@@ -63,7 +63,7 @@ class NumbaFramework(Framework):
         return [], bound
 
     def implementations(self, bench: Benchmark) -> Sequence[tuple[Callable, str]]:
-        """The ``<module>_numba_np.py`` kernel (generated when missing); none when it cannot be generated."""
+        """The ``<module>_numba.py`` kernel (generated when missing); none when it cannot be generated."""
         self.ensure_impls(bench)
         try:
             return [(load_impl(bench, self.info["postfix"]), IMPL_NAME)]

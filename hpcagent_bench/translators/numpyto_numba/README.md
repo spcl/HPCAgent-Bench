@@ -4,7 +4,7 @@ Python (numpy) -> Python (numba) emitter. A dense kernel keeps its body; every t
 gains `@nb.njit(parallel=True, cache=True)` (`fastmath=True` with `--fastmath`).
 
 ```bash
-numpyto --target numba --kernel k_numpy.py --bench-info k.json --out DIR   # writes DIR/k_numba_np.py
+numpyto --target numba --kernel k_numpy.py --bench-info k.json --out DIR   # writes DIR/k_numba.py
 ```
 
 | module | does |
