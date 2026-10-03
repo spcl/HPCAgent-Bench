@@ -49,7 +49,7 @@ Formatting and lint are enforced by [pre-commit](https://pre-commit.com/) and ev
 |---|---|
 | format (ruff format, clang-format, fprettify; 120 columns) | `python scripts/checks/check_format.py --fix <files>` |
 | lint | `ruff check <files>` |
-| types | `pyright <files>`; files in `pyrightconfig.strict.json` also pass `pyright --project pyrightconfig.strict.json` |
+| types (package and `agent/`, minus the benchmark references) | `mypy <files>` and `pyright <files>`; files in `pyrightconfig.strict.json` also pass `pyright --project pyrightconfig.strict.json` (all three are pre-commit hooks) |
 | every hook (format, headers, naming, YAML style, manifest structure, ...) | `pre-commit run --files <files>` |
 
 **Conventions the hooks do not catch:**
