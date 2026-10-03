@@ -184,30 +184,17 @@ so the CE's `aws_ofi_nccl` plugin variant is `cuda13`; `vllm-cuda` is CUDA 12.9 
 serving smoke checks the plugin loads. nvcc uses the image's own gcc 16 and LLVM 22 as its host compilers
 (CUDA 13.4 supports GCC 6-16 and Clang 7-22), with no compiler waiver.
 
-Weights and serving (`containers/inference/serve-daint.sbatch`; same served name, window and parsers
-as beverin):
+Weights:
 
 ```bash
 cd ../inference
 EDF=hpcagent-bench-vllm-gh200-latest HF_TOKEN=<token> \
   MODELS="Qwen/Qwen3.8-27B-FP8 openai/gpt-oss-120b moonshotai/Kimi-K2.7-Code" \
   sbatch --time=08:00:00 fetch_weights.sbatch
-cd ../..
-umask 077; mkdir -p ~/.config/hpcagent-bench; openssl rand -hex 32 > ~/.config/hpcagent-bench/daint-endpoint.key
-MODEL=qwen38  MODE=smoke sbatch -N 1 --time=01:00:00 containers/inference/serve-daint.sbatch
-MODEL=oss120b MODE=smoke sbatch -N 1 --time=01:00:00 containers/inference/serve-daint.sbatch
-MODEL=kimi    MODE=smoke sbatch -N 4 --time=02:00:00 containers/inference/serve-daint.sbatch
-MODEL=kimi             sbatch -N 4 --time=12:00:00 containers/inference/serve-daint.sbatch
-MODEL=kimi DRY_RUN=1 bash containers/inference/serve-daint.sbatch   # print the command only
 ```
 
-| `MODEL` | nodes | TP x PP | window | tool / reasoning parser |
-|---|---|---|---|---|
-| `qwen38` | 1 | 4 x 1 | 262144 | `qwen3_coder` / `qwen3` |
-| `oss120b` | 1 | 4 x 1 | 131072 | `openai` / `openai_gptoss` |
-| `kimi` | 4 (`SERVE_NODES=2` allowed) | 4 x 4 | 262144 | `kimi_k2` / `kimi_k2` |
-
-From another Daint job, `source containers/inference/alps-endpoint.sh <run dir>/endpoint.json`
+From a Daint job, a Beverin endpoint served with `serve-private.sbatch` (`ACCESS=alps`) is reached through
+`source containers/inference/alps-endpoint.sh <run dir>/endpoint.json`, which
 checks the endpoint and exports `VLLM_BASE_URL`, `VLLM_API_KEY` and `VLLM_MODEL`. For an experiment the
 endpoint is a service setup (`hpcagent_bench/cluster/inference_service.py`) with
 `AMD_CE_ENV=hpcagent-bench-agent-gh200-latest` and `JUDGE_CE_ENV=hpcagent-bench-judge-gh200-latest`.
@@ -260,7 +247,7 @@ when editing. Per-model settings: [docs/serving/](../docs/serving/README.md).
 |---|---|
 | `fetch_weights.sbatch` | downloads into `$HF_HOME` inside an image, restripes on the host, fails unless every large blob is wide-striped |
 | `serve-private.sbatch` | a private Qwen3.8 endpoint on one beverin node ([private-endpoint.md](../docs/serving/private-endpoint.md)) |
-| `serve-daint.sbatch`, `alps-endpoint.sh` | GH200 serving and the client-side endpoint check |
+| `alps-endpoint.sh` | the client-side check of a `serve-private.sbatch` endpoint from an Alps job |
 | `verify-tools-reasoning.py`, `accuracy-gate.py` | tool-call/reasoning, long-context accuracy and throughput gates against a live server |
 | `moe-configs/` | tuned fused-MoE kernel configs, build input for `sglang/` and `vllm/` |
 

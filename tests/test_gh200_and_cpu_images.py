@@ -4,8 +4,7 @@
 
 Nothing here builds an image. The properties are the ones that fail an experiment silently when they
 drift: which EDFs a platform renders and onto which image, which toolchain the EDF PATH resolves to,
-which candidate a promotion moves, what the verifier asks of each profile, and whether the Daint
-serve command keeps the served model name, window and parsers the agent side keys on.
+which candidate a promotion moves and what the verifier asks of each profile.
 """
 
 import importlib.util
@@ -20,7 +19,6 @@ import tomllib
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 CE = ROOT / "containers" / "images"
-SERVE = ROOT / "containers" / "inference" / "serve-daint.sbatch"
 ARCH = os.uname().machine
 
 #: Platform -> (EDF name, template, image) it renders, as images.env names them.
@@ -65,23 +63,6 @@ TOOLCHAIN_EDFS = {
         "/usr/bin/",
     ),
 }
-
-#: Daint serve: model -> (default nodes, served window, tool-call parser, reasoning parser), the beverin
-#: configs' windows and parsers; kimi's default width is beverin's four nodes.
-SERVED = {
-    "qwen38": (1, 262144, "qwen3_coder", "qwen3"),
-    "oss120b": (1, 131072, "openai", "openai_gptoss"),
-    "kimi": (4, 262144, "kimi_k2", "kimi_k2"),
-}
-
-
-def load(path: pathlib.Path, name: str) -> ModuleType:
-    spec = importlib.util.spec_from_file_location(name, path)
-    assert spec is not None and spec.loader is not None, path
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
 
 
 def install(tmp_path: pathlib.Path, platform: str, images: list[str]) -> subprocess.CompletedProcess[str]:
@@ -174,6 +155,15 @@ def test_promotion_moves_exactly_the_candidates_the_builds_write(tmp_path: pathl
         assert (ce / image).is_file(), image
 
 
+def load(path: pathlib.Path, name: str) -> ModuleType:
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec is not None and spec.loader is not None, path
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 @pytest.fixture(name="verify", scope="module")
 def verify_fixture() -> ModuleType:
     return load(CE / "verify_image.py", "gh200_cpu_verify_image")
@@ -204,79 +194,3 @@ def test_the_gh200_serving_profile_checks_the_engine_and_the_hook_fabric(verify:
     names = {check.name for check in verify.checks("vllm-cuda")}
     assert {"vllm", "triton", "libfabric", "libcxi", "torch"} <= names, names
     assert names.isdisjoint({"aiter", "flydsl", "rocBLAS"}), names
-
-
-def serve(model: str, **extra: str) -> subprocess.CompletedProcess[str]:
-    """serve-daint.sbatch in DRY_RUN, with nothing of the caller's job or node choice leaking in.
-
-    SCRATCH is a fixed path, never the caller's: the script names its run dir and (through
-    scripts/cache_env.sh) its JIT cache under it, and a host with no SCRATCH -- a CI runner --
-    otherwise refuses before printing the command this test reads. A dry run creates neither."""
-    inherited = {k: v for k, v in os.environ.items() if not k.startswith("SLURM_") and k != "SERVE_NODES"}
-    env = inherited | {"MODEL": model, "DRY_RUN": "1", "SCRATCH": "/serve-daint-dry-run", **extra}
-    return subprocess.run(["bash", str(SERVE)], capture_output=True, text=True, check=False, env=env, cwd=ROOT)
-
-
-def argv(done: subprocess.CompletedProcess[str]) -> str:
-    return next(line for line in done.stdout.splitlines() if line.startswith("argv: "))
-
-
-@pytest.mark.parametrize("model", sorted(SERVED))
-def test_the_daint_serve_keeps_the_served_name_window_and_parsers(model: str) -> None:
-    _, window, tool, reasoning = SERVED[model]
-    done = serve(model)
-    assert done.returncode == 0, done.stderr
-    line = argv(done)
-    for words in (
-        "--served-model-name hpcagent-bench-vllm",
-        f"--max-model-len {window}",
-        f"--tool-call-parser {tool}",
-        f"--reasoning-parser {reasoning}",
-        "--enable-auto-tool-choice",
-    ):
-        assert words in line, (words, line)
-
-
-@pytest.mark.parametrize("model", sorted(SERVED))
-def test_the_agent_driver_reads_the_daint_window_off_the_serve_command(model: str) -> None:
-    """claude-code compacts against agent_driver.served_context; a spelling it cannot read falls back to
-    the 262144 cap and overflows a 131072 server."""
-    _, window, _, _ = SERVED[model]
-    driver = load(ROOT / "agent" / "hpcagent_agent" / "driver" / "agent_driver.py", "gh200_cpu_agent_driver")
-    assert driver.served_context({"VLLM_EXTRA_ARGS": argv(serve(model))}) == window
-
-
-@pytest.mark.parametrize("model", sorted(SERVED))
-def test_a_daint_serve_is_one_pipeline_across_its_default_width(model: str) -> None:
-    nodes = SERVED[model][0]
-    line = argv(serve(model))
-    assert "--tensor-parallel-size 4" in line, line
-    if nodes == 1:
-        assert "--pipeline-parallel-size" not in line and "--nnodes" not in line, line
-    else:
-        assert f"--pipeline-parallel-size {nodes}" in line and f"--nnodes {nodes}" in line, line
-
-
-def test_kimi_may_run_on_the_two_node_floor_when_asked() -> None:
-    line = argv(serve("kimi", SERVE_NODES="2"))
-    assert "--pipeline-parallel-size 2" in line and "--nnodes 2" in line, line
-
-
-def test_kimi_is_refused_on_a_node_that_cannot_hold_its_weights() -> None:
-    done = serve("kimi", SERVE_NODES="1")
-    assert done.returncode == 2
-    assert "kimi needs at least 2 node(s)" in done.stderr
-
-
-def test_a_job_whose_node_count_is_not_the_serve_width_is_refused() -> None:
-    """-N and the engine's PP must agree: fewer nodes than PP never comes up, more sit idle."""
-    done = serve("kimi", SLURM_JOB_ID="1", SLURM_JOB_NUM_NODES="2")
-    assert done.returncode == 2
-    assert "submit with -N 4, or set SERVE_NODES" in done.stderr
-
-
-@pytest.mark.parametrize("word", ["--host=0.0.0.0", "--port", "--api-key=x"])
-def test_the_daint_serve_refuses_extra_args_that_rebind_or_rekey_it(word: str) -> None:
-    done = serve("qwen38", EXTRA_ARGS=word)
-    assert done.returncode == 2
-    assert f"EXTRA_ARGS may not set {word.split('=')[0]}" in done.stderr

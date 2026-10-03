@@ -1,7 +1,7 @@
 # CSCS Container Engine EDF for the image vllm-cuda/Dockerfile builds, on Daint (GH200).
 #
 # `CE_PLATFORM=gh200 install_edfs.sh` renders it into ~/.edf as hpcagent-bench-vllm-gh200-latest:
-# it fills ${SCRATCH}, the mount list and the `image` line. inference/serve-daint.sbatch serves
+# it fills ${SCRATCH}, the mount list and the `image` line. a serving job serves
 # through it.
 image = "${SCRATCH}/ce-images/hpcagent-bench-vllm-gh200.sqsh"
 
@@ -22,7 +22,7 @@ entrypoint = false
 #   aws_ofi_nccl  the NCCL net plugin over libfabric/CXI. Without it NCCL does not fail -- it falls
 #                 back to TCP sockets over hsn* and multi-node serving is merely slow.
 #                 Single-node serving never loads a net plugin.
-# The image is CUDA 12.9 so this cuda12 plugin matches its runtime major; serve-daint.sbatch forces
+# The image is CUDA 12.9 so this cuda12 plugin matches its runtime major; the serving job forces
 # NCCL_NET for a multi-node serve, so a plugin that does not load fails init loudly.
 com.hooks.cxi.enabled = "true"
 com.hooks.aws_ofi_nccl.enabled = "true"

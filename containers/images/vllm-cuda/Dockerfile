@@ -43,7 +43,7 @@ LABEL org.opencontainers.image.title="hpcagent-bench-vllm-cuda" \
       org.opencontainers.image.base.name="${BASE_IMAGE_REF}"
 
 # What can be checked WITHOUT a GPU. The device half (NCCL over CXI, a real serve) is the smoke in
-# inference/serve-daint.sbatch MODE=smoke; build_and_verify.sbatch runs verify_image.py --profile vllm-cuda inside the image.
+# a two-node serving run; build_and_verify.sbatch runs verify_image.py --profile vllm-cuda inside the image.
 RUN python3 - <<'PY'
 import importlib
 import importlib.metadata as md

@@ -63,6 +63,6 @@ com.hooks.cxi.enabled = "true"
 # sockets over hsn* and is merely slow. The image is CUDA 13.4 so that
 # this cuda13 plugin matches its runtime major -- a plugin one major behind (rocm6 against
 # ROCm 7) failed to load and fell back silently. The check is still an NCCL_DEBUG=INFO log naming
-# "NET/OFI" and not "NET/Socket" (inference/serve-daint.sbatch MODE=smoke).
+# "NET/OFI" and not "NET/Socket" (a two-node NCCL_DEBUG=INFO serving run).
 com.hooks.aws_ofi_nccl.enabled = "true"
 com.hooks.aws_ofi_nccl.variant = "cuda13"
