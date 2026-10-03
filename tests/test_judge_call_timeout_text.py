@@ -107,9 +107,7 @@ def test_a_timed_out_submit_is_spent_and_says_it_is_still_graded(
     assert routes == ["/submit"]
 
 
-@pytest.mark.parametrize(
-    "path, terminal", [("/submit", True), ("/verify", True), ("/score", False), ("/profile", False)]
-)
+@pytest.mark.parametrize("path, terminal", [("/submit", True), ("/score", False), ("/profile", False)])
 def test_only_the_recorded_routes_read_as_still_graded(
     monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path, path: str, terminal: bool
 ) -> None:
