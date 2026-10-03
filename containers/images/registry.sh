@@ -48,7 +48,11 @@ push_one() {
     archive="${archive%.sqsh}.oci.tar"
     [[ -f "${archive}" ]] || { echo "${role}: no ${archive}; build and promote the role first" >&2; return 1; }
     root="${CE_TMPFS}/registry-$$-${role}"
+    # podman's events and pause state go under XDG_RUNTIME_DIR; the login node's /run/user/<uid> does not
+    # exist on a compute node, and the first podman call there fails (0 GB, no digest) instead of pushing.
+    export XDG_RUNTIME_DIR="${root}/xdg"
     mkdir -p "${root}/root" "${root}/run"
+    mkdir -p -m 0700 "${XDG_RUNTIME_DIR}"
     local -a pm=(podman --root "${root}/root" --runroot "${root}/run" --storage-driver overlay
                  --storage-opt ignore_chown_errors=true)
     local_tag="$("${pm[@]}" pull "oci-archive:${archive}" | tail -1)"
