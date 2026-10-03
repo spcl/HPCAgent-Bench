@@ -94,6 +94,7 @@ __all__ = [
     "render_sdfg",
     "render_timeout_s",
     "render_track",
+    "return_slot",
     "returned_slots",
     "run_child",
     "timeout_error",
@@ -362,7 +363,8 @@ def drop_returned_arguments(
     never passes. Dropped: a container only ever filled by a whole copy of an ABI argument, and one
     whose slot in ``returned`` names a value outside ``graded`` (cegterg's iteration counts). Any
     other container (an unnamed or graded computed value, a partial copy) or one read by anything
-    is kept, and the ordered render refuses it instead of discarding a result the caller needs.
+    is kept, and the ordered render refuses it instead of discarding a result the caller needs. The kept
+    tuple slots are renumbered from ``__return_0``.
 
     :returns: the containers removed.
     """
@@ -402,7 +404,16 @@ def drop_returned_arguments(
                 state.remove_node(src)
         sdfg.remove_data(name, validate=False)
         dropped.append(name)
+    # The kept tuple slots are renumbered without gaps: DaCe refuses ``__return_1`` with no ``__return_0``.
+    # Their numbers carry nothing past here, since the ordered render refuses any return container left.
+    kept = sorted((n for n in sdfg.arrays if n != RETURN_PREFIX and is_return_name(n)), key=return_slot)
+    sdfg.replace_dict({old: f"{RETURN_PREFIX}_{i}" for i, old in enumerate(kept) if old != f"{RETURN_PREFIX}_{i}"})
     return tuple(dropped)
+
+
+def return_slot(name: str) -> int:
+    """The tuple slot of a ``__return_<i>`` container."""
+    return int(name.rsplit("_", 1)[1])
 
 
 def privatize_rebound_arguments(sdfg: "SDFG", by_value: Sequence[str]) -> tuple[str, ...]:
