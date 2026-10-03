@@ -23,6 +23,7 @@ place, without pretending to a pooling it does not do.
 """
 
 import pathlib
+from hpcagent_bench.units import BYTES_PER_KIB
 
 __all__ = ["GB", "MEMINFO", "MEMINFO_KEY", "host_available_bytes", "reserve", "reserve_device", "reserve_host"]
 
@@ -41,7 +42,7 @@ def host_available_bytes() -> int | None:
         return None
     for line in MEMINFO.read_text().splitlines():
         if line.startswith(MEMINFO_KEY):
-            return int(line.split()[1]) * 1024  # /proc/meminfo reports kB
+            return int(line.split()[1]) * BYTES_PER_KIB  # /proc/meminfo reports kB
     return None
 
 
@@ -53,7 +54,7 @@ def reserve_device(total_bytes: int, device: int = 0) -> tuple[bool, str]:
     the reservation raises instead: that is the plan being wrong about this machine.
     """
     try:
-        import cupy as cp
+        import cupy as cp  # pyright: ignore[reportMissingImports] -- optional GPU dependency, absent from the dev env
     except Exception:  # noqa: BLE001 -- no cupy is a host-only judge, not an error
         return False, "cupy is absent; nothing to pool on a device"
     try:

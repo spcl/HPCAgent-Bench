@@ -83,15 +83,11 @@ class Evidence(TypedDict, total=False):
 class DetectResult(Evidence):
     """One detector's answer: whether the tool is here, plus its evidence."""
 
-    __slots__ = ()
-
     found: bool
 
 
 class ToolEntry(DetectResult):
     """One detection filed under its tool name, with the requirement the toolset declares."""
-
-    __slots__ = ()
 
     required_on: list[str]
     optional: bool

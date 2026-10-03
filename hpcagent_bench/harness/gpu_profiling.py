@@ -55,6 +55,7 @@ from hpcagent_bench.harness.sandbox import OFFLOAD_VENDOR, Sandbox
 from hpcagent_bench.harness.task import Task
 from hpcagent_bench.spec import BenchSpec
 from hpcagent_bench.support.bindings.contract import binding_from_spec
+from hpcagent_bench.units import NS_PER_MS, NS_PER_US
 
 __all__ = [
     "AGENT_INFO_CSV",
@@ -1120,8 +1121,8 @@ def render_report(payload: GpuPayload) -> str:
         f"{payload['kernel']} ({payload['language']}, preset {payload['preset']}) -- "
         f"symbol {payload['symbol']}, {payload['reps']} reps traced by {payload['tool']} ({payload['trace']})",
         "",
-        f"  measured  {payload['elapsed_ns'] / 1e6:.4f} ms/rep (fastest rep, {timer})",
-        f"  device    {payload['device_ns_per_rep'] / 1e6:.4f} ms/rep in {payload['launch_count']} launches "
+        f"  measured  {payload['elapsed_ns'] / NS_PER_MS:.4f} ms/rep (fastest rep, {timer})",
+        f"  device    {payload['device_ns_per_rep'] / NS_PER_MS:.4f} ms/rep in {payload['launch_count']} launches "
         f"({payload['device_pct']:.2f}% of the measured time)",
         "",
         f"  {'kernel':<44}  {'calls':>6}  {'mean (us)':>10}  {'total (ms)':>10}  {'share':>7}",
@@ -1130,7 +1131,7 @@ def render_report(payload: GpuPayload) -> str:
     for k in payload["kernels"]:
         lines.append(
             f"  {k['name'][:44]:<44}  {k['instances']:6d}  {k['mean_ns'] / 1e3:10.2f}  "
-            f"{k['total_ns'] / 1e6:10.4f}  {k['time_pct']:6.2f}%"
+            f"{k['total_ns'] / NS_PER_MS:10.4f}  {k['time_pct']:6.2f}%"
         )
     if payload["kernels_omitted"]:
         lines.append(f"  ({payload['kernels_omitted']} kernel(s) below {payload['min_percent']:g}% omitted)")
@@ -1140,7 +1141,7 @@ def render_report(payload: GpuPayload) -> str:
             volume = "--" if m["total"] is None else f"{m['total']:.3f} {m['unit'] or ''}".strip()
             lines.append(
                 f"  {m['direction'] + ' ' + m['operation']:<44.44}  {m['count']:6d}  "
-                f"{m['total_ns'] / 1e6:10.4f}  {volume:>14}"
+                f"{m['total_ns'] / NS_PER_MS:10.4f}  {volume:>14}"
             )
     if payload["launches"]:
         lines += ["", "  launch geometry"]
@@ -1156,7 +1157,7 @@ def render_report(payload: GpuPayload) -> str:
         lines += ["", f"  {'ROCTX range (host push to pop)':<44}  {'count':>6}  {'mean (us)':>10}  {'total (ms)':>10}"]
         for r in payload["ranges"]:
             lines.append(
-                f"  {r['name'][:44]:<44}  {r['count']:6d}  {r['mean_ns'] / 1e3:10.2f}  {r['total_ns'] / 1e6:10.4f}"
+                f"  {r['name'][:44]:<44}  {r['count']:6d}  {r['mean_ns'] / NS_PER_US:10.2f}  {r['total_ns'] / NS_PER_MS:10.4f}"
             )
     lines += ["", f"  {payload['occupancy_note']}"]
     return "\n".join(lines)
@@ -1214,7 +1215,7 @@ def profile_gpu_submission(
         # Backstop for a child that wedges outside a rep, plus the profiler's post-processing.
         outer = rep_timeout * (reps + warmup + 2)
         run = profile_gpu_once(
-            profiling.sandbox_root(sandbox),
+            sandbox.require_root(),
             request,
             language=task.language,
             profiler=profiler,

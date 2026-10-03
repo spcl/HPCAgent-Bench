@@ -119,9 +119,10 @@ def judge_endpoints() -> list[str]:
 def agent_workers(vllm_urls: list[str | None], judge_urls: list[str]) -> int:
     """Concurrent agent workers: ``$HPCAGENT_BENCH_AGENT_WORKERS`` / ``agent.workers`` if set, else
     one per endpoint (``max`` of the two lists) so every endpoint gets at least one worker."""
-    raw = os.environ.get("HPCAGENT_BENCH_AGENT_WORKERS") or config.get("agent.workers", None)
-    if raw:
-        return max(1, int(raw))
+    env = os.environ.get("HPCAGENT_BENCH_AGENT_WORKERS")
+    configured = int(env) if env else config.get_int("agent.workers", 0)
+    if env or configured:
+        return max(1, configured)
     return max(len(vllm_urls), len(judge_urls), 1)
 
 
@@ -190,9 +191,6 @@ def run_static(
     vllm_urls = list(vllm_urls) or [None]
     judge_urls = list(judge_urls) or [DEFAULT_JUDGE_URL]
     workers = max(1, workers)
-    think_params = dict(
-        preset=preset, datatype=datatype, repeat=repeat, oracle=oracle, baseline=baseline, max_rounds=max_rounds
-    )
     n = len(tasks)
     variants = list(prompt_variants) if prompt_variants else [None] * n
     if len(variants) != n:
@@ -216,9 +214,17 @@ def run_static(
                 return
             try:
                 think_row, submission = solve_task(
-                    agent_builder(vurl), task, prompt_variant=variants[i], **think_params
+                    agent_builder(vurl),
+                    task,
+                    prompt_variant=variants[i],
+                    preset=preset,
+                    datatype=datatype,
+                    repeat=repeat,
+                    oracle=oracle,
+                    baseline=baseline,
+                    max_rounds=max_rounds,
                 )
-                if jurl and gradable(submission):
+                if jurl and submission is not None and gradable(submission):
                     rows[i] = merge_graded_row(think_row, http_grade(jurl, jrank, submission, task, preset=preset))
                 else:
                     rows[i] = think_row
@@ -232,8 +238,8 @@ def run_static(
     # does next (an in-process run afterwards would then fork its kernels under forkserver too).
     with config.overridden("runtime.mp_context", "forkserver"):
         threads = [threading.Thread(target=worker, args=(w,), name=f"agent-{w}", daemon=True) for w in range(workers)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
     return [r if r is not None else error_row(RuntimeError("task not scheduled")) for r in rows]

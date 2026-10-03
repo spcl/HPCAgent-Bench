@@ -28,7 +28,13 @@ import dataclasses
 from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
-__all__ = ["Field", "Kind", "RegistryError", "fields_of"]
+__all__ = [
+    "REQUIRED",
+    "Field",
+    "Kind",
+    "RegistryError",
+    "fields_of",
+]
 
 
 class RegistryError(ValueError):
@@ -124,7 +130,7 @@ class Kind[Entry]:
 
     def keys(self) -> tuple[str, ...]:
         """The registered keys in slot order; an entry with no slot comes first."""
-        return tuple(sorted(self.entries, key=lambda key: -1 if self.orders[key] is None else self.orders[key]))
+        return tuple(sorted(self.entries, key=lambda key: -1 if (order := self.orders[key]) is None else order))
 
     def canonical(self, tag: str) -> str:
         """``tag`` with an alias resolved to the key it names; an unregistered tag passes through."""

@@ -28,6 +28,17 @@ safety margin -- clamped into what the CLI will actually honour.
 import os
 import sys
 
+__all__ = [
+    "CEILING_MS",
+    "FLOOR_MS",
+    "MEASURED_NODE_PROMPT_TOK_S",
+    "SAFETY_MARGIN",
+    "clamp_ms",
+    "derive_ms",
+    "main",
+    "positive_int",
+]
+
 #: The CLI's own hard clamp on this setting (2.1.224 bundle: ``ViS=1e4``, ``KiS=1800000``). A
 #: request outside it is not accepted -- ``Math.min(Math.max(n, ViS), KiS)`` -- so neither bound is
 #: a policy choice here, both are read off the installed binary.

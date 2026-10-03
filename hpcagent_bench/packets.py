@@ -42,7 +42,7 @@ __all__ = [
     "SKILL_TREATMENTS",
     "Packet",
     "applies_to",
-    "setup_order",
+    "applies_values",
     "canonical",
     "companion_language_pages",
     "control_label",
@@ -60,6 +60,7 @@ __all__ = [
     "reached_keys",
     "refuse_frozen",
     "resolve",
+    "setup_order",
     "spec_parts",
     "tool_pages",
 ]
@@ -128,6 +129,12 @@ def page_applies(page: str) -> Mapping[str, object]:
     return MappingProxyType(dict((meta or {}).get("applies") or {}))
 
 
+def applies_values(rule: Mapping[str, object], key: str) -> tuple[object, ...]:
+    """The members of the ``applies:`` list ``key`` (empty when the key is absent)."""
+    value = rule.get(key)
+    return tuple(value) if isinstance(value, (list, tuple)) else ()
+
+
 def applies_to(page: str, language: str, image: str | None, multinode: bool) -> bool:
     """Whether ``page`` can be of use to a setup writing ``language`` on ``image``.
 
@@ -138,10 +145,10 @@ def applies_to(page: str, language: str, image: str | None, multinode: bool) -> 
     rule = page_applies(page)
     if rule.get("explicit"):
         return False
-    languages = rule.get("languages")
+    languages = applies_values(rule, "languages")
     if languages and language not in ("", "any") and language not in languages:
         return False
-    images = rule.get("images")
+    images = applies_values(rule, "images")
     if images and image is not None and image not in images:
         return False
     return not rule.get("multinode") or multinode
@@ -169,7 +176,7 @@ def companion_language_pages(language: str, image: str | None = None, multinode:
         if entry.is_dir()
         and entry.name.startswith("lang-")
         and entry.name != own
-        and language in (page_applies(entry.name).get("languages") or ())
+        and language in applies_values(page_applies(entry.name), "languages")
         and applies_to(entry.name, language, image, multinode)
     )
 

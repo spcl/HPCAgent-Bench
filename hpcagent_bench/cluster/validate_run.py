@@ -29,6 +29,19 @@ from collections.abc import Callable
 
 from hpcagent_bench.cluster import merge_results, monitor_report
 
+__all__ = [
+    "CHECKS",
+    "CREDITED_COUNT",
+    "CheckResult",
+    "check_agent_logs",
+    "check_db_shards",
+    "check_monitor",
+    "check_submissions_disk",
+    "main",
+    "print_report",
+    "run_checks",
+]
+
 
 @dataclasses.dataclass(slots=True)
 class CheckResult:

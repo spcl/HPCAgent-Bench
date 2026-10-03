@@ -32,6 +32,13 @@ from typing import Any
 
 from hpcagent_agent.tools import http_json
 
+__all__ = [
+    "DESCRIPTION",
+    "INPUT_SCHEMA",
+    "PROMPT",
+    "run",
+]
+
 DESCRIPTION = (
     "Look up something you are not sure of before you write code that depends on it: an "
     "unfamiliar API, a compiler/OpenMP/HIP pragma's exact spelling, a library's call signature "

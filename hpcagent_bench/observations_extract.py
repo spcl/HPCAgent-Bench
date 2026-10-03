@@ -72,6 +72,7 @@ __all__ = [
     "CELL_TALLY",
     "C_LANGUAGE",
     "C_REFERENCE_FIX_MS",
+    "EPISODE_ROWS",
     "ERRORED",
     "FALLBACK_REASON",
     "FINAL_ROWS",
@@ -88,7 +89,6 @@ __all__ = [
     "SCALING_RECORD",
     "SCALING_ROWS",
     "SOURCE_SUFFIX",
-    "EPISODE_ROWS",
     "TORCH_DIST_SETUP",
     "UNSOLVED",
     "Agent",
@@ -102,7 +102,6 @@ __all__ = [
     "RegradeKey",
     "apply_final_regrades",
     "apply_promotions",
-    "setup_admitted",
     "baseline_entries",
     "baseline_rows",
     "before_the_c_fix",
@@ -115,15 +114,16 @@ __all__ = [
     "credited_cells",
     "discover_databases",
     "distinct",
+    "episode_rows",
     "export_agent",
     "export_sources",
     "extract",
+    "final_episodes",
     "final_key",
     "final_outcome",
     "final_preference",
     "final_rank",
     "final_stamp",
-    "final_episodes",
     "floor_override",
     "frozen_rows",
     "grade_columns",
@@ -138,6 +138,7 @@ __all__ = [
     "load_regrades",
     "main",
     "manifest_kernels",
+    "named_databases",
     "parse_args",
     "platform_glob",
     "platform_rows",
@@ -146,18 +147,18 @@ __all__ = [
     "read_db",
     "readable_job",
     "rederived_cell_suspect",
-    "rederived_row_suspect",
     "rederived_episode",
+    "rederived_row_suspect",
     "regrade_files",
     "regrade_patterns",
     "regraded",
     "results_database",
     "row_key",
     "scaling_rows",
+    "setup_admitted",
     "source_entry",
     "source_roots",
     "sql_value",
-    "episode_rows",
     "uses_skills",
     "verdict_row",
     "write_csv",
@@ -533,6 +534,8 @@ def clocks_agree_on_delta(host_minus_event_ns: object) -> bool:
     slack, i.e. delta <= (factor - 1) * event + slack; with factor >= 1 a delta within the slack
     passes for ANY event time, and a larger one cannot be decided here, so it reads as disagreeing
     (the stored flag stands). A gate switched off (factor 0) always agrees, as the live one does."""
+    if not isinstance(host_minus_event_ns, (int, float, str)):
+        raise TypeError(f"host_event_delta_ns is {host_minus_event_ns!r}, not a number")
     factor = config.get_float("measurement.quiescence.divergence_factor", 0.0)
     if factor <= 0:
         return True
@@ -1382,13 +1385,13 @@ def export_agent(
     if workspace is not None and workspace.is_dir():
         for origin in sorted(p for p in workspace.iterdir() if p.is_file() and p.stem == agent.kernel):
             rel = rel_dir / f"candidate_last_saved{origin.suffix}"
-            stat = copy_into(origin, out / rel)
-            if stat is not None:
+            copied = copy_into(origin, out / rel)
+            if copied is not None:
                 yield {
                     **stem,
                     "kind": "candidate",
                     "provenance": "last_saved",
-                    "sha256": stat[1],
+                    "sha256": copied[1],
                     "rel_path": str(rel),
                     "origin": str(origin),
                 }

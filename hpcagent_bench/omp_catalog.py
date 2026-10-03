@@ -31,7 +31,16 @@ from collections.abc import Sequence
 
 from hpcagent_bench import languages, omp_context, openmp_runtimes
 
-__all__ = ["CONTEXT_FAMILY", "REQUIRED_EVERYWHERE", "main", "scan", "scan_entry"]
+__all__ = [
+    "CONTEXT_FAMILY",
+    "REQUIRED_EVERYWHERE",
+    "TOOL_TIMEOUT_S",
+    "TRIAL_LANGUAGES",
+    "main",
+    "refusals",
+    "scan",
+    "scan_entry",
+]
 
 #: The toolchain family whose driver links a context's builds.
 CONTEXT_FAMILY = {omp_context.GNU: "gcc", omp_context.LLVM: "llvm", omp_context.NVHPC: "nvhpc"}
@@ -133,8 +142,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         staged.replace(path)
         print(f"wrote {path}")
     found = refusals(record)
-    for context, entries in found.items():
-        for name, why in entries.items():
+    for context, reasons in found.items():
+        for name, why in reasons.items():
             print(f"REFUSED in {context}: {why}", file=sys.stderr)
     missing = [(c, n) for c, entries in found.items() for n in entries if n in REQUIRED_EVERYWHERE]
     if args.check and missing:

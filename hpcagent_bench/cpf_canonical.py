@@ -34,6 +34,8 @@ __all__ = [
     "canonical_key",
     "canonical_sdfg",
     "canonicalize_for",
+    "checkout_head",
+    "commit_of",
     "dace_commit",
     "dace_environment",
     "emit_program",

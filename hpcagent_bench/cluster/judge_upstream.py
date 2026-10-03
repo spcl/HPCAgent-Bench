@@ -27,6 +27,16 @@ import time
 from collections.abc import Sequence
 from types import FrameType
 
+__all__ = [
+    "GAVE_UP",
+    "TERM_GRACE_S",
+    "Supervisor",
+    "announce",
+    "describe",
+    "main",
+    "parse",
+]
+
 #: Exit code for a supervisor that gave up on a crash-looping upstream.
 GAVE_UP = 1
 #: How long the supervisor waits for a signalled child before it escalates to SIGKILL.

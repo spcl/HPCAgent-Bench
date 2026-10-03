@@ -208,6 +208,19 @@ class BuildResult:
     exe: pathlib.Path | None = None
     commands: tuple[str, ...] = ()
 
+    def require_lib(self) -> pathlib.Path:
+        """The built library; a successful single-node build always has one."""
+        if self.lib is None:
+            raise RuntimeError(f"the build produced no library: {self.log[-400:]}")
+        return self.lib
+
+    def require_artifact(self) -> pathlib.Path:
+        """The distributed ``bench`` executable, else the library (a python MPI delivery)."""
+        artifact = self.exe if self.exe is not None else self.lib
+        if artifact is None:
+            raise RuntimeError(f"the build produced no artifact: {self.log[-400:]}")
+        return artifact
+
 
 #: The module a python (JIT) delivery's framework is imported as, per JIT language. ``python`` is
 #: the plain NumPy delivery, recorded when the source imports none of the others.
@@ -436,10 +449,15 @@ class Sandbox:
         self.root = pathlib.Path(self._tmp.name)
         return self
 
-    def __exit__(self, *exc) -> bool:
+    def require_root(self) -> pathlib.Path:
+        """The workdir of the open sandbox; ``root`` is ``None`` only outside its ``with`` block."""
+        if self.root is None:
+            raise RuntimeError("the sandbox was used outside its context manager")
+        return self.root
+
+    def __exit__(self, *exc: object) -> None:
         if self._tmp is not None:
             self._tmp.cleanup()
-        return False
 
     def build(
         self,
@@ -478,8 +496,8 @@ class Sandbox:
             return BuildResult(True, py, "", commands=jit_commands(submission.source or ""))
 
         if submission.source is None:
-            src_lib = pathlib.Path(submission.library)
-            if not src_lib.exists():
+            src_lib = pathlib.Path(submission.library) if submission.library is not None else None
+            if src_lib is None or not src_lib.exists():
                 return BuildResult(False, None, f"library not found: {src_lib}")
             shutil.copy2(src_lib, lib)
             return BuildResult(True, lib, "")

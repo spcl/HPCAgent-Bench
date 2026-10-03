@@ -27,10 +27,10 @@ from hpcagent_bench.observation_columns import OBSERVATION_FIELDS
 from hpcagent_bench.stats import databases, population
 
 __all__ = [
-    "STUDY_COLUMN",
     "EXTRACTED_AT",
     "LOG",
     "PROVENANCE",
+    "STUDY_COLUMN",
     "Provenance",
     "build",
     "check_columns",
@@ -110,7 +110,7 @@ def keep_owned(frame: "pd.DataFrame", selection: experiments.Selection) -> tuple
     setups = frame["setup"].astype(str)
     mine = setups.map(lambda setup: experiments.prefix_of(setup) in selection.prefixes)
     retired = setups.map(experiments.dropped)
-    return frame[mine & ~retired], int((mine & retired).sum()), int((~mine).sum())
+    return frame.loc[mine & ~retired], int((mine & retired).to_numpy().sum()), int((~mine).to_numpy().sum())
 
 
 def keep_tag(frame: "pd.DataFrame", selection: experiments.Selection) -> tuple["pd.DataFrame", int]:
@@ -124,7 +124,7 @@ def keep_tag(frame: "pd.DataFrame", selection: experiments.Selection) -> tuple["
         return frame, 0
     names = frame["kernel"].fillna("").astype(str)
     off = names.ne("") & ~names.isin(selection.tag_kernels)
-    return frame[~off], int(off.sum())
+    return frame.loc[~off], int(off.sum())
 
 
 def extract(
@@ -220,7 +220,8 @@ def write_db(frame: "pd.DataFrame", path: pathlib.Path) -> pathlib.Path:
     names = [name for name in OBSERVATION_FIELDS if name in frame.columns]
     extra = [name for name in frame.columns if name not in names]
     rows = frame.to_dict("records")
-    return observations_extract.write_db(path, [*names, *extra], rows) and path
+    observations_extract.write_db(path, [*names, *extra], rows)
+    return path
 
 
 def write_csv(frame: "pd.DataFrame", path: pathlib.Path) -> pathlib.Path:

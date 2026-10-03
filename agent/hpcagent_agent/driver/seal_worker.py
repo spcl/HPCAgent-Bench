@@ -37,6 +37,53 @@ import sys
 from collections.abc import Callable, Sequence
 from typing import NamedTuple
 
+__all__ = [
+    "HOME_NAME",
+    "LOCKED_OPTIONS",
+    "MNT_DETACH",
+    "MOUNTINFO",
+    "MS_BIND",
+    "MS_NOATIME",
+    "MS_NODEV",
+    "MS_NODIRATIME",
+    "MS_NOEXEC",
+    "MS_NOSUID",
+    "MS_RDONLY",
+    "MS_REC",
+    "MS_RELATIME",
+    "MS_REMOUNT",
+    "PER_WORKER_ENTRIES",
+    "PRIVATE_TMP",
+    "REAL",
+    "SEAL_ROOT",
+    "STASH_DIR",
+    "VIEW_DIR",
+    "Layout",
+    "LockedCall",
+    "MountCall",
+    "MountOp",
+    "Syscalls",
+    "UmountCall",
+    "apply_plan",
+    "as_bytes",
+    "existing_dirs",
+    "libc",
+    "locked_flags",
+    "locked_flags_at",
+    "main",
+    "make_target",
+    "mount_syscall",
+    "parse_args",
+    "seal_plan",
+    "set_affinity",
+    "shared_root_entries",
+    "stage_two",
+    "umount_syscall",
+    "under",
+    "unescape",
+    "worker_argv",
+]
+
 #: mount(2) flags. Spelled out rather than imported: python exposes none of them.
 MS_RDONLY = 0x1
 MS_NOSUID = 0x2

@@ -49,6 +49,8 @@ __all__ = [
     "ML_TRACK",
     "SPARSE_BUFFERS_KEY",
     "UNIT_HALF_RANGE",
+    "InitValue",
+    "SpecBlock",
     "abi_input_args",
     "allocate_declared_buffers",
     "as_array",
@@ -433,9 +435,7 @@ def allocate_declared_buffers(spec: "BenchSpec", data: dict[str, object], precis
     if spec.init is None or not spec.init.shapes:
         return []
     sizes = {n: v for n, v in data.items() if isinstance(v, (int, float))}
-    # shape_namespace answers `dict[str, object]` while safe_eval asks for its own value union;
-    # the two say the same thing about a shape namespace, so the seam is named once here.
-    namespace = cast("dict[str, FuzzValue]", sizing.shape_namespace(spec, sizes))
+    namespace = sizing.shape_namespace(spec, sizes)
     # Undeclared dtype follows the INITIALIZER, not the nominal precision: it may default to fp32
     # while the run passes no datatype, and a mixed-width set is rejected outright.
     undeclared: np.dtype[np.generic] = np.dtype(numpy_dtype(precision))

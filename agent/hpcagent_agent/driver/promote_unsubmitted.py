@@ -28,6 +28,47 @@ import time
 import urllib.error
 import urllib.request
 
+__all__ = [
+    "DEFAULT_RANK",
+    "DETAIL_CHARS",
+    "DEVICE_EXT",
+    "ENVELOPE_FIELDS",
+    "HARVESTED_TAG",
+    "HEALTH_TIMEOUT_S",
+    "PASSING_GRADES",
+    "PROMOTED_TAG",
+    "PROMOTE_BUDGET_S",
+    "SUBMIT_KINDS",
+    "SUBMIT_TIMEOUT_S",
+    "TEARDOWN_MARGIN_S",
+    "WORKER_TOKEN_ENV",
+    "WORKER_TOKEN_HEADER",
+    "WORKSPACE_LANGUAGES",
+    "best_speedups",
+    "built_and_correct",
+    "candidates",
+    "db_files",
+    "declared_episode_id",
+    "grade_detail",
+    "harvest_enabled",
+    "judge_rank",
+    "last_passing",
+    "main",
+    "promotable",
+    "promote",
+    "promote_one_worker",
+    "read_json",
+    "refusal_reason",
+    "shard_rows",
+    "short_name",
+    "submit_timeout",
+    "submitted_pairs",
+    "swept_candidates",
+    "worker_cuts",
+    "workspace_candidate",
+    "workspace_dir",
+]
+
 #: One promotion is a full grade, so it waits as long as the ROUTER waits on the judge for one
 #: (judge_service.UPSTREAM_TIMEOUT_SECONDS, same variable). Stopping sooner saves the judge nothing: it
 #: keeps grading, and teardown kills the grade. Grades of 1616-2030 s are on record.

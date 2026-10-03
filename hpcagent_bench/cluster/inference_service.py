@@ -40,6 +40,36 @@ import shlex
 import sys
 from collections.abc import Mapping
 
+__all__ = [
+    "ANTHROPIC_VERSION",
+    "API_ANTHROPIC",
+    "API_OPENAI",
+    "AUTH_BEARER",
+    "AUTH_KEY_HEADER",
+    "CLAUDE_KEY_VARIABLE",
+    "CLAUDE_MODEL_PINS",
+    "FREE_ONLY_KEY",
+    "HARNESSES_BY_API",
+    "RECORD_NAME",
+    "REQUIRED",
+    "SOURCES",
+    "SOURCE_NODE",
+    "SOURCE_SERVICE",
+    "Service",
+    "check_free",
+    "claude_key_variable",
+    "from_environ",
+    "launcher_env",
+    "main",
+    "not_free",
+    "pricing_url",
+    "provenance",
+    "record",
+    "required_value",
+    "shell_block",
+    "source",
+]
+
 SOURCE_NODE = "node"
 SOURCE_SERVICE = "service"
 SOURCES = (SOURCE_NODE, SOURCE_SERVICE)

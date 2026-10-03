@@ -66,6 +66,7 @@ from hpcagent_bench.harness.native_call import (
     import_device_array_module,
 )
 from hpcagent_bench.support.bindings.contract import Binding
+from hpcagent_bench.units import BYTES_PER_GIB, NS_PER_MS, NS_PER_S
 
 __all__ = [
     "AMD_DEVICE",
@@ -397,8 +398,6 @@ class Placement(TypedDict):
 class ThreadRow(Placement):
     """One counted thread's cycles, instructions and the two ratios, plus its placement."""
 
-    __slots__ = ()
-
     tid: int
     cycles: int
     instructions: int
@@ -423,8 +422,6 @@ class Spread(TypedDict):
 
 class Imbalance(Spread):
     """:class:`Spread` plus the thread every other thread waits for."""
-
-    __slots__ = ()
 
     critical_tid: int
     critical_cpus: list[int]
@@ -863,7 +860,7 @@ def derive(rows: Sequence[MetricRow]) -> Derived:
             unavailable[name] = f"no count for {', '.join(absent)} in this run"
             continue
         inputs = {metric: float(counts[metric]) for metric in ratio.needs}
-        seconds = counted[ratio.needs[0]].get("elapsed_ns", 0) / 1e9
+        seconds = counted[ratio.needs[0]].get("elapsed_ns", 0) / NS_PER_S
         value = ratio.compute({**inputs, "line_bytes": float(line), "seconds": seconds})
         if value is None:
             unavailable[name] = f"the denominator of '{ratio.formula}' counted 0"
@@ -1144,7 +1141,7 @@ def count_metric(
         reps,
         warmup,
         rep_timeout,
-        int(memory_gb * (1024**3)),
+        int(memory_gb * BYTES_PER_GIB),
         label=f"papi:{metric}",
         timeout=max(1.0, rep_timeout) * (warmup + max(1, reps) + 2),
     )
@@ -1308,18 +1305,18 @@ def measurement_caveats(
     ``idle`` counted nothing; the split is itself a caveat."""
     notes: list[str] = []
     if idle:
-        tids = ", ".join(str(row["tid"]) for row in idle)
+        idle_tids = ", ".join(str(row["tid"]) for row in idle)
         notes.append(
-            f"IDLE: thread(s) {tids} counted 0 cycles and are EXCLUDED from the imbalance below. From "
+            f"IDLE: thread(s) {idle_tids} counted 0 cycles and are EXCLUDED from the imbalance below. From "
             "outside the .so a worker that got no iterations and a thread that was never in the pool "
             "read the same zero; if the kernel was asked for more threads than are listed above, the "
             "excluded ones are workers and the real imbalance is worse than the figure"
         )
     loose = [row for row in rows if not row["pinned"]]
     if loose:
-        tids = ", ".join(str(row["tid"]) for row in loose)
+        unpinned = ", ".join(str(row["tid"]) for row in loose)
         notes.append(
-            f"UNPINNED: thread(s) {tids} may run on more than one CORE, so their counters mix the cores "
+            f"UNPINNED: thread(s) {unpinned} may run on more than one CORE, so their counters mix the cores "
             f"they migrated across; set OMP_PLACES/OMP_PROC_BIND ({dict(PINNED_ENV)}) before the "
             ".so loads -- after it has loaded, the runtime has already placed its pool"
         )
@@ -1516,6 +1513,7 @@ def count_per_thread(
     Absence carries a ``cause`` from :data:`CAUSES` (``papi_missing``, ``perf_event_paranoid``,
     ``no_perf_events``, ``not_native``, ``not_openmp``, ``attach_refused``); a segfault or timeout is
     ``run_failed``. Never raises for a measurement failure."""
+    report: PerThreadReport
     if lang == "python":
         report = missing_report(
             "not_native",
@@ -1533,7 +1531,7 @@ def count_per_thread(
             reps,
             warmup,
             rep_timeout,
-            int(memory_gb * (1024**3)),
+            int(memory_gb * BYTES_PER_GIB),
             label="papi:per_thread",
             timeout=max(1.0, rep_timeout) * (warmup + max(1, reps) + 2),
         )
@@ -1556,13 +1554,14 @@ def render_thread_report(report: PerThreadReport) -> str:
     """The human view: per-thread table, aggregate, imbalance, caveats (shipped with the payload). An
     absent report renders as its reason."""
     if "missing" in report:
-        return f"per-thread counters unavailable [{report['cause']}]: {report['missing']}"
+        # mypy does not narrow a TypedDict union on ``"key" in``; pyright does.
+        return f"per-thread counters unavailable [{report['cause']}]: {report['missing']}"  # type: ignore[typeddict-item]
     aggregate, spread = report["aggregate"], report["imbalance"]
     events = " / ".join(report["expressions"][metric] for metric in PER_THREAD_METRICS)
     idle = f", {report['threads_idle']} idle (excluded)" if report["threads_idle"] else ""
     lines = [
         f"per-thread counters -- {aggregate['threads']} working thread(s){idle}, {events}, best of "
-        f"{report['reps_counted']} rep(s) at {report['elapsed_ns'] / 1e6:.4f} ms"
+        f"{report['reps_counted']} rep(s) at {report['elapsed_ns'] / NS_PER_MS:.4f} ms"
         f"{' (MULTIPLEXED ESTIMATES)' if report['multiplexed'] else ''}",
         "",
         f"  {'tid':>8}  {'core':>10}  {'cycles':>16}  {'instructions':>16}  {'CPI':>7}  {'IPC':>7}  {'share':>7}",
@@ -2260,7 +2259,7 @@ def count_gpu_metric(
         reps,
         warmup,
         rep_timeout,
-        int(memory_gb * (1024**3)),
+        int(memory_gb * BYTES_PER_GIB),
         label=f"papi-gpu:{metric}",
         timeout=max(1.0, rep_timeout) * (warmup + max(1, reps) + 2),
     )

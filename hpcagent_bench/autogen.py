@@ -37,6 +37,7 @@ __all__ = [
     "EMITTERS",
     "NATIVE_FRAMEWORKS",
     "NATIVE_PRECISIONS",
+    "Emitter",
     "emit_cli",
     "emit_native",
     "emit_targets",

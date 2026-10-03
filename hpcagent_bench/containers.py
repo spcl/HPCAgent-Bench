@@ -38,7 +38,7 @@ import shutil
 import subprocess
 import sys
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 
 from hpcagent_bench import config
@@ -189,7 +189,7 @@ def resolve_backend(explicit: str | None = None) -> str:
     backend = (
         explicit
         or os.environ.get("HPCAGENT_BENCH_RUNTIME_BACKEND")
-        or config.get("runtime.backend", DEFAULT_BACKEND)
+        or config.get_str("runtime.backend", DEFAULT_BACKEND)
         or DEFAULT_BACKEND
     ).strip()
     if backend in FAMILIES:
@@ -352,7 +352,7 @@ def install_apptainer(prefix: str = "~/.local", attempts: int = 4) -> int:
     return returncode
 
 
-def clean_partial_install(prefix: str, preexisting: Sequence[str]) -> None:
+def clean_partial_install(prefix: str, preexisting: Collection[str]) -> None:
     """Remove what a failed :func:`install_apptainer` attempt left in ``prefix`` -- and ONLY that.
 
     ``preexisting`` is the prefix's entries from before the first attempt, left alone: ``prefix``

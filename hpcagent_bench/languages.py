@@ -46,7 +46,7 @@ import yaml
 
 from hpcagent_bench import config, flags, omp_context, osinfo, paths, seal
 from hpcagent_bench.flags import Mode
-from hpcagent_bench.spec import BenchSpec
+from hpcagent_bench.spec import BenchSpec, as_list
 
 __all__ = [
     "ALWAYS_LINKED_LANGS",
@@ -105,6 +105,7 @@ __all__ = [
     "VECT_UNLIMITED_REFS",
     "XNACK_SUFFIX",
     "Language",
+    "StrPath",
     "Toolchain",
     "agent_offload_flags",
     "available_libraries",
@@ -125,6 +126,8 @@ __all__ = [
     "compiler_launcher",
     "compiler_names",
     "compiler_version",
+    "context_view_lib",
+    "declared_runtime",
     "default_family",
     "discover_variants",
     "driver_library_dir",
@@ -141,6 +144,7 @@ __all__ = [
     "library_linkable",
     "library_links",
     "library_offered",
+    "library_served",
     "library_tokens",
     "link_lang_for",
     "load_libraries",
@@ -151,7 +155,6 @@ __all__ = [
     "named_identifiers",
     "offload_arch",
     "offload_arch_spelling",
-    "offload_setup_language",
     "offload_build_driver",
     "offload_device_refusal",
     "offload_device_residency",
@@ -164,13 +167,15 @@ __all__ = [
     "offload_probe",
     "offload_runtime_env",
     "offload_runtime_rpath",
+    "offload_setup_language",
     "offload_target",
+    "offload_vendor",
     "openmp_link_for_block",
     "pkg_config_answer",
     "pkg_modules",
     "probe_succeeds",
-    "python_device_setup",
     "python_device_refusal",
+    "python_device_setup",
     "report_flags",
     "resolve_compiler",
     "resolve_family",
@@ -183,8 +188,6 @@ __all__ = [
     "std_flag",
     "stdpar_link_flags",
     "strip_launcher",
-    "declared_runtime",
-    "offload_vendor",
     "submission_context",
     "submission_toolchain",
     "subst_map",
@@ -193,6 +196,9 @@ __all__ = [
     "unknown_language",
     "vect_cost_model",
 ]
+
+#: A filesystem path as the build helpers accept it.
+type StrPath = str | os.PathLike[str]
 
 #: Repo-relative location of the flat per-compiler table.
 COMPILERS_YAML: pathlib.Path = paths.ROOT / "hpcagent_bench" / "envs" / "compilers.yaml"
@@ -212,8 +218,20 @@ LANG_EXT: dict[str, str] = {
     "hip": "hip",
 }
 
+
 #: A submission language, one member per :data:`LANG_EXT` entry (``Language.CUDA.value == "cuda"``).
-Language = enum.Enum("Language", [(name.upper(), name) for name in LANG_EXT])
+class Language(enum.Enum):
+    """A submission language: the :data:`LANG_EXT` keys, as members."""
+
+    C = "c"
+    CPP = "cpp"
+    FORTRAN = "fortran"
+    CUDA = "cuda"
+    HIP = "hip"
+
+
+if {member.value for member in Language} != set(LANG_EXT):
+    raise RuntimeError("languages.Language and languages.LANG_EXT list different languages")
 
 #: GPU language -> the host language its C-ABI entry is written in. A GPU submission is TWO
 #: translation units: the host half holds the entry point the harness dlopens and the launch
@@ -284,7 +302,7 @@ def default_family() -> str:
 def resolve_family(lang: str, requested: str | None = None) -> str:
     """The toolchain family for ``lang``: setup pin (``build.compiler.<lang>``) beats submission's
     ``requested``, which beats :func:`default_family`."""
-    pin = config.get(FAMILY_PIN_KEY.format(lang=lang)) or ""
+    pin = config.get_str(FAMILY_PIN_KEY.format(lang=lang))
     for value, origin in ((pin, FAMILY_PIN_KEY.format(lang=lang)), (requested or "", "submission 'compiler'")):
         if value and value not in COMPILER_FAMILIES:
             raise KeyError(f"unknown compiler {value!r} from {origin}; expected one of {family_names()}")
@@ -751,10 +769,10 @@ def python_device_refusal(sources: Sequence[str], arrays: Sequence[str]) -> str:
                         f"torch.as_tensor(x) wraps one for a triton launch without copying."
                     )
         for method in PYTHON_HOST_COPY_METHODS:
-            match = re.search(rf"\b([A-Za-z_]\w*)\s*\.\s*{re.escape(method)}\s*\(", source)
-            if match and match.group(1) in names:
+            hit = re.search(rf"\b([A-Za-z_]\w*)\s*\.\s*{re.escape(method)}\s*\(", source)
+            if hit and hit.group(1) in names:
                 return (
-                    f"this setup grades DEVICE-RESIDENT: {match.group(1)}.{method}() copies an ABI "
+                    f"this setup grades DEVICE-RESIDENT: {hit.group(1)}.{method}() copies an ABI "
                     f"array off the GPU inside the timed section. The arrays arrive on the device "
                     f"and the harness reads them back after the bracket; keep them there."
                 )
@@ -907,6 +925,7 @@ def offload_arch(model: str, vendor: str, *, run: bool = True) -> str:
     pinned = os.environ.get(OFFLOAD_ARCH_ENV.format(vendor=vendor.upper()))
     if pinned:
         return pinned if offload_probe(model, vendor, pinned, run=run) else ""
+    candidates: tuple[str, ...]
     if vendor == "amd":
         candidates = (flags.detect_gfx(),)
     else:
@@ -1010,7 +1029,7 @@ def grading_ncores() -> int:
     The slot count comes from the same ``judge.gpus_per_node`` key ``grading_cpus`` divides by,
     so the two cannot disagree about how the node is split.
     """
-    nslots = int(config.get("judge.gpus_per_node", 0) or 0)
+    nslots = config.get_int("judge.gpus_per_node", 0)
     if nslots < 2:
         return flags.ncores()
     return max(1, flags.ncores() // nslots)
@@ -1294,7 +1313,14 @@ def library_linkable(soname: str) -> bool:
 
 
 def subst_map(
-    cc: str, *, baseline: str = "", src: str = "", obj: str = "", objs: str = "", lib: str = "", exe: str = ""
+    cc: str,
+    *,
+    baseline: str = "",
+    src: StrPath = "",
+    obj: StrPath = "",
+    objs: StrPath = "",
+    lib: StrPath = "",
+    exe: StrPath = "",
 ) -> dict[str, str]:
     """The token map a compile/link template renders against. Every key is always present:
     :func:`_render_argv` does a plain ``str.format``, so a template naming ``{exe}`` on a
@@ -1710,7 +1736,7 @@ def library_tokens(name: str, lang: str, context: str = "") -> tuple[tuple[str, 
         # Toolkit-resident: CUDA and ROCm ship no pkg-config files, but their own compiler already
         # searches the toolkit's lib and include directories, so a bare -l is the whole answer and
         # no -L or rpath is wanted. The trial link below is what decides whether it is really here.
-        compile_tokens: tuple[str, ...] = ()
+        compile_tokens = ()
         link_tokens = toolset_link_tokens(str(entry["toolset"]))
         if not link_tokens:
             return (), ()
@@ -1846,7 +1872,7 @@ def context_view_lib(entry: dict[str, object], context: str) -> str:
     view = omp_context.context_view(context) if context else None
     if view is None:
         return ""
-    wanted = [str(t)[2:] for t in entry.get("link") or () if str(t).startswith("-l")]
+    wanted = [str(t)[2:] for t in as_list(entry.get("link")) if str(t).startswith("-l")]
     for libdir in (view / "lib", view / "lib64"):
         if wanted and all(any(libdir.glob(f"lib{name}.so*")) for name in wanted):
             return str(libdir)
@@ -1902,8 +1928,8 @@ def library_offered(name: str, lang: str, context: str = "") -> bool:
     if not entry.get("header_only"):
         return any(library_tokens(name, lang, context))
     compile_tokens, _link = library_tokens(name, lang, context)
-    headers = entry.get("headers") or ()
-    return bool(headers) and library_compiles(lang, compile_tokens, headers[0])
+    headers = as_list(entry.get("headers"))
+    return bool(headers) and library_compiles(lang, compile_tokens, str(headers[0]))
 
 
 def available_libraries(lang: str, context: str = "") -> tuple[str, ...]:
@@ -2362,7 +2388,7 @@ def build_mpi_executable_commands(
         src = pathlib.Path(src)
         obj = build_dir / f"{src.name}.o"
         subst = subst_map(
-            cc_override.get(lang, block["cc"]),
+            cc_override.get(lang, str(block["cc"])),
             baseline=_resolve_baseline(block, mode),
             src=src,
             obj=obj,
@@ -2379,7 +2405,7 @@ def build_mpi_executable_commands(
 
     link_lang = link_lang_for(langs_present)
     _, link_block = _compiler_for_lang(compilers, link_lang, mpi=True)
-    link_cc = cc_override.get(link_lang, link_block["cc"])
+    link_cc = cc_override.get(link_lang, str(link_block["cc"]))
     link_subst = subst_map(link_cc, objs=" ".join(objs), exe=out_exe)
     link_argv = _render_argv(link_block["link"], link_subst)
     link_argv.extend(link_block.get("link_extra") or [])

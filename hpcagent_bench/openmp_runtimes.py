@@ -19,7 +19,10 @@ import sys
 from collections.abc import Sequence
 
 __all__ = [
+    "DELETED",
+    "MAPS_FIELDS",
     "MAPS_PATH",
+    "NVHPC_RUNTIME",
     "RUNTIME_FILE",
     "OpenMPRuntimeConflict",
     "assert_single_runtime",

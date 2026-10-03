@@ -26,7 +26,7 @@ import re
 from collections.abc import Callable, Iterator, KeysView
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import cast
+from typing import TypeGuard, cast
 
 import yaml
 
@@ -78,8 +78,8 @@ __all__ = [
     "PRESET_CHOICES",
     "RESERVED_BACKEND_NAMES",
     "RUNGS",
-    "SCOPE_NODES",
     "SCENARIO_KEYS",
+    "SCOPE_NODES",
     "SPARSE_RANK",
     "SUPPORTED_DWARFS",
     "SUPPORTED_SCALES",
@@ -95,6 +95,7 @@ __all__ = [
     "InitSpec",
     "KernelRegistry",
     "LayoutChoice",
+    "MpiDecomposition",
     "Preset",
     "PresetTable",
     "ResolvedBench",
@@ -122,6 +123,8 @@ __all__ = [
     "function_parameters",
     "init_arrays_raw",
     "int_of",
+    "is_list",
+    "is_mapping",
     "layout_configurations",
     "layout_tokens",
     "list_block_of",
@@ -159,10 +162,8 @@ __all__ = [
     "shape_dims",
     "shape_identifiers",
     "shape_reads_init_scalars",
-    "stem_aliases",
     "sparse_alignment_constraints",
-    "validate_scenario_layouts",
-    "validate_sparse_layouts",
+    "stem_aliases",
     "str_block_of",
     "target_names",
     "track_datatype",
@@ -173,6 +174,8 @@ __all__ = [
     "validate_level",
     "validate_min_precision",
     "validate_scale",
+    "validate_scenario_layouts",
+    "validate_sparse_layouts",
     "value_of",
 ]
 
@@ -196,6 +199,16 @@ ArrayEntry = str | dict[str, str | bool | domain_mod.RawDomain]
 #: integer a knob takes for kernels that enumerate their execution paths this way (fv3_dycore,
 #: fv3_xppm bind ``hord`` / ``grid_type``, not a layout).
 LayoutChoice = str | int
+
+
+def is_mapping(raw: object) -> TypeGuard[dict[object, object]]:
+    """Whether ``raw`` is a YAML mapping, narrowed to the weakest true type of its members."""
+    return isinstance(raw, dict)
+
+
+def is_list(raw: object) -> TypeGuard[list[object]]:
+    """Whether ``raw`` is a YAML sequence, narrowed to the weakest true type of its members."""
+    return isinstance(raw, list)
 
 
 def as_block(raw: object) -> dict[str, object]:
@@ -537,7 +550,7 @@ def sparse_alignment_constraints(layouts: dict[str, "SparseLayout"]) -> tuple[st
 def bsr_block_sizes() -> tuple[int, ...]:
     """The block edges a bsr request may name (``sparse.bsr_block_sizes``)."""
     raw = config.get("sparse.bsr_block_sizes", [])
-    return tuple(int(v) for v in as_list(raw))
+    return tuple(int(v) for v in as_list(raw) if isinstance(v, (int, float, str)))
 
 
 def parse_configurations(raw: dict[str, object], source: str) -> dict[str, "SparseConfiguration"]:
@@ -1267,17 +1280,21 @@ def _validate_chain_length(
                 # RANGE spec straight through unresolved -- same "nothing to check yet" case
                 # _validate_packed_shapes skips, not a type error in the expression itself.
                 continue
-            is_whole = isinstance(value, (int, float)) and not isinstance(value, bool)
-            if is_whole and isinstance(value, float):
-                is_whole = value.is_integer()
-            if not is_whole:
+            whole = (
+                value
+                if isinstance(value, (int, float))
+                and not isinstance(value, bool)
+                and not (isinstance(value, float) and not value.is_integer())
+                else None
+            )
+            if whole is None:
                 raise ValueError(
                     f"{source}: chain_length[{name!r}] = {expr!r} does not evaluate to an integer "
                     f"at preset {preset!r} (got {value!r})"
                 )
-            if int(value) <= 0:
+            if int(whole) <= 0:
                 raise ValueError(
-                    f"{source}: chain_length[{name!r}] = {expr!r} evaluates to {int(value)} at "
+                    f"{source}: chain_length[{name!r}] = {expr!r} evaluates to {int(whole)} at "
                     f"preset {preset!r}; the accumulation length must be positive"
                 )
             resolved_any = True
@@ -1685,7 +1702,7 @@ def parse_scenarios(init_raw: dict[str, object], source: str) -> tuple[dict[str,
     raw = init_raw.get("scenarios")
     if raw is None:
         return {}, {}
-    if not isinstance(raw, dict) or not raw:
+    if not is_mapping(raw) or not raw:
         raise ValueError(f"{source}: init.scenarios must be a non-empty mapping of name -> description")
     if not init_raw.get("func_name"):
         raise ValueError(
@@ -1695,7 +1712,7 @@ def parse_scenarios(init_raw: dict[str, object], source: str) -> tuple[dict[str,
     scenarios: dict[str, str] = {}
     layouts: dict[str, tuple[str, ...]] = {}
     for name, entry in as_block(raw).items():
-        described = as_block(entry) if isinstance(entry, dict) else {"description": entry}
+        described = as_block(entry) if is_mapping(entry) else {"description": entry}
         description = described.get("description")
         unknown = sorted(set(described) - SCENARIO_KEYS)
         if not name.isidentifier() or not isinstance(description, str) or not description.strip() or unknown:
@@ -1744,7 +1761,7 @@ def validate_scenario_layouts(init: "InitSpec | None", layouts: dict[str, "Spars
 
 def parse_parameters(params_raw: object, source: str) -> PresetTable:
     """The ``parameters:`` block -> ``{preset: {symbol: value}}``."""
-    if not isinstance(params_raw, dict) or not params_raw:
+    if not is_mapping(params_raw) or not params_raw:
         raise ValueError(f"{source}: 'parameters' must be a non-empty mapping of preset -> {{symbol: value}}")
     return {
         preset: {
@@ -1760,9 +1777,9 @@ def parse_config_space(
 ) -> tuple[dict[str, ConfigKnob], tuple[ConfigRow, ...]]:
     """The ``config:`` block -> ``(knobs, curated rows)``. YAML shape decides: a mapping is per-knob
     axes, a list is curated whole configs, so one manifest can never declare both."""
-    if isinstance(config_raw, list):
+    if is_list(config_raw):
         return {}, parse_config_list(as_list(config_raw), short_name, source)
-    if isinstance(config_raw, dict):
+    if is_mapping(config_raw):
         knobs = {sym: _parse_config_knob(entry, short_name, sym, source) for sym, entry in as_block(config_raw).items()}
         return knobs, ()
     raise ValueError(
@@ -1868,6 +1885,15 @@ def parse_mpi(raw: object, sparse: bool, source: str) -> dict[str, object]:
             f"a sparse kernel runs multi-node only replicated, so omit 'mpi:'."
         )
     return mpi_blk
+
+
+@dataclass(frozen=True, slots=True)
+class MpiDecomposition:
+    """The ``mpi.decomposition`` block: the size symbols sizing the block-partitioned axes, and the degree
+    ``k`` of the kernel's work in them (``None`` = strong-only: weak scaling refuses it)."""
+
+    axis: tuple[str, ...]
+    work_exponent: int | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -2209,7 +2235,7 @@ class BenchSpec:
             level=None if level is None else int_of(level, "level", source),
             timeout_s=None if timeout_s is None else number_of(timeout_s, "timeout_s", source),
             memory_cap_gb=None if memory_cap_gb is None else number_of(memory_cap_gb, "memory_cap_gb", source),
-            floor_bytes_fraction=float(floor_fraction),
+            floor_bytes_fraction=number_of(floor_fraction, "floor_bytes_fraction", source),
             scale_axes=scale_axes_of(bench.get("scale_axes"), parameters_view, config_syms, source),
             min_precision=None if min_precision is None else str(min_precision),
             track=track,
@@ -2334,6 +2360,16 @@ class BenchSpec:
         axis and stays a real parameter, as does every entry of a curated ``config:`` LIST.
         """
         return {sym: knob.representative for sym, knob in self.config.items() if knob.domain is None}
+
+    @property
+    def mpi_decomposition(self) -> MpiDecomposition:
+        """The manifest's ``mpi.decomposition`` block (empty axes and no exponent when absent)."""
+        block = as_block(self.mpi.get("decomposition"))
+        exponent = block.get("work_exponent")
+        return MpiDecomposition(
+            axis=tuple(str(a) for a in as_list(block.get("axis"))),
+            work_exponent=int(exponent) if isinstance(exponent, (int, float, str)) else None,
+        )
 
     @property
     def resolved_level(self) -> int | None:
@@ -2880,9 +2916,7 @@ def shape_reads_init_scalars(spec: BenchSpec) -> list[str]:
     read = {name for shape in shapes for name in IDENTIFIER.findall(str(shape))}
     config = raw.get("config")
     # A variant-sweep manifest spells config as a list of whole knob assignments.
-    visible = (
-        {k for entry in as_list(config) for k in as_block(entry)} if isinstance(config, list) else set(as_block(config))
-    )
+    visible = {k for entry in as_list(config) for k in as_block(entry)} if is_list(config) else set(as_block(config))
     for values in as_block(raw.get("parameters")).values():
         visible |= set(as_block(values))
     return [
@@ -2913,12 +2947,12 @@ def validate_kernel(spec: BenchSpec) -> list[str]:
             hit = bound_names(fn) & RESERVED_BACKEND_NAMES
             if hit:
                 problems.append(f"{spec.short_name}:{fn.name} uses reserved C/C++ name(s) {sorted(hit)}; rename them")
-    for fn in ast.walk(tree):
-        if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            leaked = loop_vars_read_outside_loop(fn)
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            leaked = loop_vars_read_outside_loop(node)
             if leaked:
                 problems.append(
-                    f"{spec.short_name}:{fn.name} reads loop var(s) {sorted(leaked)} outside their loop; "
+                    f"{spec.short_name}:{node.name} reads loop var(s) {sorted(leaked)} outside their loop; "
                     "rewrite to a fresh symbol"
                 )
     return problems

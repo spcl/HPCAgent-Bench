@@ -133,7 +133,7 @@ def mp_context() -> str:
     :func:`default_mp_context`. A concrete ``runtime.mp_context`` (``fork`` / ``spawn``
     / ``forkserver``, or ``HPCAGENT_BENCH_RUNTIME_MP_CONTEXT``) wins -- e.g. the threaded judge
     service pins ``forkserver`` (fork-from-a-thread is unsafe)."""
-    value = config.get("runtime.mp_context", "auto")
+    value = config.get_str("runtime.mp_context", "auto")
     return default_mp_context() if value == "auto" else value
 
 
