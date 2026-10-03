@@ -116,8 +116,9 @@ pull_one() {
     sha256sum "${out}" | tee "${out}.sha256"
     echo "PULLED ${out}; verify it (verify_image.sbatch) before an experiment mounts it"
 }
-
-# promote_one <role>: rename a verified candidate (and its sidecars and archive) over the live name.
+# promote_one <role>: rename a verified candidate (and its sidecars and archive) over the live name. A rename is
+# atomic and a running job keeps the inode it mounted, so promoting over a mounted image is safe (ce_refuse_mounted
+# guards only the in-place writes: build, export, pull).
 promote_one() {
     local role="$1" cand live marker ext
     : "${CE_IMAGES:?set SCRATCH or CE_IMAGES}"
@@ -133,7 +134,6 @@ promote_one() {
         echo "${role}: REFUSING, ${cand##*/} was rebuilt after it was verified; re-verify it" >&2
         return 1
     fi
-    ce_refuse_mounted "${live}" || return 1
     printf '%s: %s -> %s\n' "${role}" "${cand##*/}" "${live##*/}"
     for ext in "" .digest .sha256; do
         [[ ! -e "${cand}${ext}" ]] || mv -f -- "${cand}${ext}" "${live}${ext}"
