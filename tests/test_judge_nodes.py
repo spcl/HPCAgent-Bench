@@ -8,8 +8,7 @@ import sys
 
 import pytest
 
-
-import judge_nodes  # noqa: E402
+from hpcagent_bench.cluster import judge_nodes
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 

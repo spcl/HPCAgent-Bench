@@ -345,7 +345,7 @@ def test_the_scan_catches_every_kind_of_hit(tmp_path: pathlib.Path) -> None:
         "PARTITION:-normal",
         "beverin",
         "nid002664",
-        "hpcagent-bench-runs/cpf-llr",
+        "hpcagent-bench-runs/llr40-20260916",
         "canon-648131",
         "jfrog.svc.cscs.ch",
     ):

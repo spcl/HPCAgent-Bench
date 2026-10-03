@@ -48,6 +48,7 @@ DESIGN_microapp_config_fuzzing
 :caption: Extending
 :maxdepth: 1
 
+extending/registry
 extending/benchmark
 extending/optimizer
 extending/agent-harness
