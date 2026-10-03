@@ -1,8 +1,6 @@
-{# Skills are indexed, never inlined and never filtered: one line per page with its name, its file and
-   the `when:` trigger that says who should open it. The trigger does the gating (`lang-c` says "you
-   write C", `rocprof` says "you are about to profile an AMD device"), so the prompt need not know a
-   task's language to decide what to show. `when` falls back to `description`, so a page without an
-   authored trigger still gets a usable line. #}
+{# Skills are indexed, never inlined: one line per page the setup's skill packet stages (record.packet,
+   prompts.packet_skills), with its name, its file and the `when:` trigger that says who should open it.
+   A setup with no skill packet gets no section. `when` falls back to `description`. #}
 {% if other_skills %}
 ## Skills
 Each line below names a page under `{{ shared_dir }}/skills/`. Read the page before you act on its
