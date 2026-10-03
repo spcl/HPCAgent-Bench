@@ -40,7 +40,7 @@ import tempfile
 import textwrap
 import types
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, NamedTuple
 
 import yaml
 
@@ -104,6 +104,7 @@ __all__ = [
     "VECT_COST_MODELS",
     "VECT_UNLIMITED_REFS",
     "XNACK_SUFFIX",
+    "CompilerChoice",
     "Language",
     "StrPath",
     "Toolchain",
@@ -345,8 +346,15 @@ def compiler_driver(name: str) -> str:
     return _load_compilers()[name].get("cc", "")
 
 
-def resolved_compiler_for(lang: str, compiler: str | None = None) -> tuple[str, dict[str, Any]]:
-    """The ``(name, block)`` :func:`compiler_block` a compile of ``lang`` will use -- ``compiler``
+class CompilerChoice(NamedTuple):
+    """A ``compilers.yaml`` block and its name."""
+
+    name: str
+    block: dict[str, Any]
+
+
+def resolved_compiler_for(lang: str, compiler: str | None = None) -> CompilerChoice:
+    """The :func:`compiler_block` a compile of ``lang`` will use -- ``compiler``
     when given (validated the same way :func:`build_kernel_lib_commands` validates it), else
     whatever :func:`_compiler_for_lang`'s default resolution (the setup's family pin, else the first
     matching block) would pick.
@@ -362,7 +370,7 @@ def resolved_compiler_for(lang: str, compiler: str | None = None) -> tuple[str, 
     if compiler is not None:
         if compiler not in compilers:
             raise KeyError(f"no such compiler {compiler!r} in compilers.yaml")
-        return compiler, compilers[compiler]
+        return CompilerChoice(compiler, compilers[compiler])
     return _compiler_for_lang(compilers, lang)
 
 
@@ -1087,19 +1095,19 @@ def _resolve_baseline(block: dict, mode: Mode) -> str:
     return f"{composed} {flag_vars[warnings_ref]}"
 
 
-def _compiler_for_lang(compilers: dict[str, dict], lang: str, *, mpi: bool = False) -> tuple[str, dict]:
+def _compiler_for_lang(compilers: dict[str, dict], lang: str, *, mpi: bool = False) -> CompilerChoice:
     """Pick the compiler block for ``lang``: :func:`resolve_family`'s family, else the first matching
     block; ``mpi=True`` picks the ``mpi: true`` wrapper block instead of the single-node one."""
     if not mpi:
         family = resolve_family(lang)
         name = compiler_for_family(lang, family)
         if name is not None:
-            return name, compilers[name]
+            return CompilerChoice(name, compilers[name])
         if config.get(FAMILY_PIN_KEY.format(lang=lang)):
             raise KeyError(f"compiler family {family!r} builds no {lang!r} in this image")
     for cname, block in compilers.items():
         if block.get("lang") == lang and bool(block.get("mpi")) == mpi:
-            return cname, block
+            return CompilerChoice(cname, block)
     raise KeyError(f"no {'MPI ' if mpi else ''}compiler in compilers.yaml for lang {lang!r}")
 
 
@@ -1968,7 +1976,7 @@ def isopar_capability() -> flags.AutoparProbe:
     this module rather than beside :func:`flags.polly_capability` because the cpp block's compiler
     is nameable only here, and :func:`stdpar_link_flags` (which must AGREE with it) is right above.
     """
-    block = _compiler_for_lang(_load_compilers(), Language.CPP.value)[1]
+    block = _compiler_for_lang(_load_compilers(), Language.CPP.value).block
     composed = f"{baseline_flags('cpp')} {std_flag('cpp')}"
     return flags.probe_autopar(
         block["cc"],
@@ -2226,7 +2234,7 @@ def build_kernel_lib_commands(
     for lang, src in sources:
         if lang not in LANG_EXT:
             raise unknown_language(lang)
-        block = forced if forced is not None else _compiler_for_lang(compilers, lang)[1]
+        block = forced if forced is not None else _compiler_for_lang(compilers, lang).block
         src = pathlib.Path(src)
         obj = build_dir / f"{src.name}.o"
         baseline = _resolve_baseline(block, mode)

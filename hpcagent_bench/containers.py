@@ -40,6 +40,7 @@ import sys
 import time
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
+from typing import NamedTuple
 
 from hpcagent_bench import config
 
@@ -51,6 +52,7 @@ __all__ = [
     "FAMILIES",
     "KNOWN_BACKENDS",
     "SELECTABLE",
+    "Backends",
     "WrapperSpelling",
     "clean_partial_install",
     "collect_env",
@@ -128,8 +130,15 @@ class WrapperSpelling:
     srun_flag: str  # "--environment" for srun_env; "" for an exec wrapper
 
 
-def load_backends(path: pathlib.Path = BACKENDS_PATH) -> tuple[dict, tuple[str, ...]]:
-    """Parse the spelling file into ``({backend: WrapperSpelling}, passthrough_env)``.
+class Backends(NamedTuple):
+    """The parsed spelling file: each backend's wrapper spelling and the env names every launch passes through."""
+
+    spellings: dict[str, WrapperSpelling]
+    passthrough: tuple[str, ...]
+
+
+def load_backends(path: pathlib.Path = BACKENDS_PATH) -> Backends:
+    """Parse the spelling file.
 
     Both the Python fold and the bash fold read this one file, so the launch argv is
     byte-identical across the language boundary."""
@@ -167,7 +176,7 @@ def load_backends(path: pathlib.Path = BACKENDS_PATH) -> tuple[dict, tuple[str, 
         )
         for name, f in rows.items()
     }
-    return spellings, passthrough
+    return Backends(spellings, passthrough)
 
 
 SPELLINGS, PASSTHROUGH_ENV = load_backends()
