@@ -1086,9 +1086,10 @@ RUN set -eux; \
 # the workspace member is the directory an agent step binds. uv comes from the pins (agent/harness/pins.env,
 # sha256-checked by install_tools.sh).
 #
-# The extra carries the ML stack too: torch and triton from PyTorch's ROCm 7.2 index, jax with AMD's ROCm
-# plugin from repo.radeon.com, and dace at the pinned commit. The base's own torch and triton are replaced
-# by the lock's, and the install is asserted to be a HIP build. cupy is built from source in its own layer
+# The extra carries the ML stack too: torch, triton and jax's ROCm plugin from AMD's repo.radeon.com ROCm 7.2 page,
+# and dace at the pinned commit. The base's own torch and triton are replaced by the lock's, and the install is
+# asserted to be a HIP build that links this image's /opt/rocm: a torch bundling its own libamdhip64 or librccl
+# puts a second HIP runtime and RCCL into every grading rank that loads an agent's HIP library. cupy is built from source in its own layer
 # below, once the numpy rebuild has run.
 COPY agent/harness/pins.env agent/harness/install_tools.sh /opt/harness/
 COPY pyproject.toml uv.lock /opt/hpcagent-bench/
@@ -1104,6 +1105,9 @@ RUN set -eux; \
     python3 -c "import triton; print('triton', triton.__version__, triton.__file__)"; \
     python3 -c "import torch; assert torch.version.hip, 'torch lost its HIP build'; \
       print('torch', torch.__version__, 'hip', torch.version.hip)"; \
+    python3 -c "import glob, os, torch; lib = os.path.join(os.path.dirname(torch.__file__), 'lib'); \
+      own = sorted(glob.glob(lib + '/libamdhip64*') + glob.glob(lib + '/librccl*') + glob.glob(lib + '/libhsa-runtime64*')); \
+      assert not own, f'torch bundles its own HIP runtime: {own}'"; \
     python3 -c "import jaxlib, jax; assert 'rocm' in jaxlib.__version__, jaxlib.__version__; \
       print('jax', jax.__version__, 'jaxlib', jaxlib.__version__)"; \
     python3 -c "import mpi4py.MPI as M; print('mpi4py', M.Get_library_version().splitlines()[0])"

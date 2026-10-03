@@ -76,7 +76,8 @@ and prints the locked numpy/scipy/pandas/astunparse versions.
 
 * cupy: the lock's wheel on CUDA, a HIP source build (part of the `amdgpu` extra) on AMD; jax: the plugin for the
   base's CUDA major, and AMD's ROCm 7.2 wheels (a flat index in `[tool.uv.index]`) on AMD.
-* torch and triton: the lock's, from PyTorch's index for the hardware (CPU, ROCm 7.2, cu132), triton-rocm on AMD.
+* torch and triton: the lock's, from PyTorch's index on CPU and CUDA (cpu, cu132) and AMD's repo.radeon.com ROCm 7.2
+  page on AMD, whose torch links the image's `/opt/rocm` rather than bundling a second HIP runtime and RCCL.
 * dace: `spcl/dace@extended` at the release pin (`[tool.uv.sources] dace` in `pyproject.toml`); jobs run it as baked.
 * islpy and z3 back `WavefrontSkew` and the `LoopToMap` dependence proof, and both gates fail
   closed and silent. The build asserts `polyhedral_isl.HAVE_ISL` and `smt_dependence.has_z3()`, not

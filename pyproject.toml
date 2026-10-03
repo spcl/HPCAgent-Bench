@@ -127,15 +127,17 @@ numpyto_pythran = "hpcagent_bench.translators.numpyto_pythran.cli:main"
 # The framework sets differ in torch and jax, triton and cupy; [tool.uv.sources] picks each one's wheel index.
 # cpu: PyTorch's CPU index, jax's CPU jaxlib, triton for its CPU interpreter.
 cpu = ["hpcagent_bench[dev]", "torch", "jax", "triton"]
-# amdgpu: torch for ROCm 7.2 and triton-rocm (AMD's triton, the same `triton` module) from PyTorch's ROCm index;
-# jaxlib and the ROCm plugin from AMD's repo.radeon.com page, where 0.8.0+rocm7.2.0 is the newest for ROCm 7.2 and
-# holds jax itself at 0.8.0; cupy built from the PyPI sdist for HIP (no ROCm wheel exists; CUPY_INSTALL_USE_HIP=1
+# amdgpu: torch, triton, jaxlib and the jax ROCm plugin from AMD's repo.radeon.com page for ROCm 7.2. Its torch is
+# the lightweight build that links the image's /opt/rocm: PyTorch's ROCm wheel bundles its own libamdhip64 and
+# librccl, and a grading rank that also loads an agent's HIP/RCCL library then maps two HIP runtimes and two RCCLs
+# (every ML grade crashed); AMD builds it for CPython 3.10 to 3.13, the images run 3.12. jax 0.8.0+rocm7.2.0 is the
+# newest there and holds jax itself at 0.8.0; cupy built from the PyPI sdist for HIP (no ROCm wheel exists; CUPY_INSTALL_USE_HIP=1
 # and --no-binary-package cupy). x86_64 only, and ROCm jax on CPython 3.12 only: AMD publishes no aarch64 wheels
 # and a cp311 and cp312 plugin.
 amdgpu = [
     "hpcagent_bench[dev]",
-    "torch ; platform_machine == 'x86_64'",
-    "triton-rocm ; platform_machine == 'x86_64'",
+    "torch ; platform_machine == 'x86_64' and python_version < '3.14'",
+    "triton ; platform_machine == 'x86_64' and python_version < '3.14'",
     "jax ; platform_machine == 'x86_64' and python_version == '3.12'",
     "jaxlib ; platform_machine == 'x86_64' and python_version == '3.12'",
     "jax-rocm7-plugin ; platform_machine == 'x86_64' and python_version == '3.12'",
@@ -192,23 +194,18 @@ dace = { git = "https://github.com/spcl/dace.git", rev = "11e1c8598428ee387e4240
 hpcagent-agent = { workspace = true }
 torch = [
     { index = "pytorch-cpu", extra = "cpu" },
-    { index = "pytorch-rocm", extra = "amdgpu" },
+    { index = "rocm-radeon", extra = "amdgpu" },
     { index = "pytorch-cuda", extra = "nvgpu" },
 ]
-triton-rocm = [{ index = "pytorch-rocm", extra = "amdgpu" }]
-jaxlib = [{ index = "rocm-jax", extra = "amdgpu" }]
-jax-rocm7-plugin = [{ index = "rocm-jax", extra = "amdgpu" }]
-jax-rocm7-pjrt = [{ index = "rocm-jax", extra = "amdgpu" }]
+triton = [{ index = "rocm-radeon", extra = "amdgpu" }]
+jaxlib = [{ index = "rocm-radeon", extra = "amdgpu" }]
+jax-rocm7-plugin = [{ index = "rocm-radeon", extra = "amdgpu" }]
+jax-rocm7-pjrt = [{ index = "rocm-radeon", extra = "amdgpu" }]
 
 # PyPI's torch is the CUDA 12 build: every framework set takes it from PyTorch's index for its hardware.
 [[tool.uv.index]]
 name = "pytorch-cpu"
 url = "https://download.pytorch.org/whl/cpu"
-explicit = true
-
-[[tool.uv.index]]
-name = "pytorch-rocm"
-url = "https://download.pytorch.org/whl/rocm7.2"
 explicit = true
 
 # cu132 is the newest CUDA 13 index that carries torch (cu134 carries none yet); a CUDA 13.4 driver runs it.
@@ -217,9 +214,10 @@ name = "pytorch-cuda"
 url = "https://download.pytorch.org/whl/cu132"
 explicit = true
 
-# AMD's flat page of ROCm wheels (links, no index pages): the only source of jaxlib and its plugin for ROCm.
+# AMD's flat page of ROCm 7.2 wheels (links, no index pages): torch and triton built on the system ROCm, and the
+# only source of jaxlib and its plugin for ROCm.
 [[tool.uv.index]]
-name = "rocm-jax"
+name = "rocm-radeon"
 url = "https://repo.radeon.com/rocm/manylinux/rocm-rel-7.2/"
 format = "flat"
 explicit = true

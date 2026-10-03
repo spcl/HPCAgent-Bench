@@ -136,14 +136,15 @@ def test_the_extras_are_three_exclusive_framework_sets_that_each_carry_dev() -> 
     assert {entry["extra"] for entry in sources["torch"]} == {"cpu", "amdgpu", "nvgpu"}
     indexes = {index["name"]: index["url"] for index in project["tool"]["uv"]["index"]}  # type: ignore[index]
     assert {entry["index"] for entry in sources["torch"]} <= set(indexes)
-    assert indexes["pytorch-rocm"].rstrip("/").rsplit("/", 1)[1].startswith("rocm7.")
+    assert "rocm-rel-7." in indexes["rocm-radeon"], "AMD's torch links the image's ROCm (no bundled HIP runtime)"
+    assert {entry["index"] for entry in sources["torch"] if entry["extra"] == "amdgpu"} == {"rocm-radeon"}
     assert indexes["pytorch-cuda"].rstrip("/").rsplit("/", 1)[1].startswith("cu13")
 
 
 def test_rocm_jax_and_hip_cupy_are_part_of_the_amdgpu_extra() -> None:
     amdgpu = pyproject()["project"]["optional-dependencies"]["amdgpu"]  # type: ignore[index]
     names = {re.split(r"[=;\s\[<>]", item, maxsplit=1)[0] for item in amdgpu}
-    assert {"jaxlib", "jax-rocm7-plugin", "jax-rocm7-pjrt", "cupy", "torch", "triton-rocm"} <= names
+    assert {"jaxlib", "jax-rocm7-plugin", "jax-rocm7-pjrt", "cupy", "torch", "triton"} <= names
     assert "cupy-rocm" not in pyproject()["dependency-groups"]  # type: ignore[operator]
 
 

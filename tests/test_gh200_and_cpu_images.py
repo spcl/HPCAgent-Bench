@@ -176,6 +176,15 @@ def test_every_new_judge_agent_profile_requires_the_agent_runtimes(verify: Modul
     assert set(agent) == want and all(agent.values()), agent
 
 
+@pytest.mark.parametrize(("profile", "gated"), [("judge", True), ("judge-cuda", False), ("judge-cpu", False)])
+def test_the_amd_judge_maps_one_hip_runtime_and_one_rccl(verify: ModuleType, profile: str, gated: bool) -> None:
+    """An ML grading rank loads torch and an agent's /opt/rocm HIP library together: a torch bundling its own
+    libamdhip64 and librccl crashed every ML grade, so the AMD judge image is held to one copy of each."""
+    one = [check for check in verify.checks(profile) if check.kind == "one-hip"]
+    assert [check.required for check in one] == ([True] if gated else []), one
+    assert "libamdhip64" in verify.ONE_HIP_PROBE and "librccl" in verify.ONE_HIP_PROBE
+
+
 @pytest.mark.parametrize(("profile", "required"), [("judge", True), ("judge-cuda", False), ("judge-cpu", False)])
 def test_the_library_registry_is_held_to_a_record_only_where_one_was_measured(
     verify: ModuleType, profile: str, required: bool
