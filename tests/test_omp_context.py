@@ -345,7 +345,7 @@ def test_a_library_whose_build_maps_the_contexts_own_runtime_or_none_is_served(r
 def test_a_library_that_maps_another_runtime_than_the_contexts_is_refused_with_both_named(
     root: pathlib.Path,
 ) -> None:
-    """The live AMD image's PETSc, SLEPc and MAGMA: HIP host code links libomp, OpenBLAS and hypre link libgomp."""
+    """The live AMD image's PETSc and SLEPc: HIP host code links libomp, OpenBLAS and hypre link libgomp."""
     runtimes = runtime_links(root)
     write_record(
         root,

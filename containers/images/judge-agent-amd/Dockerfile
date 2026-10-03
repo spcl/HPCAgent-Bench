@@ -17,7 +17,7 @@
 #   2  spack bootstrap              minutes
 #   3  gcc 16 + llvm 22 (spack)     HOURS. The most expensive and the least likely to change.
 #   4  MPI + core HPC libraries
-#   5  sparse solvers + MAGMA
+#   5  sparse solvers
 #   6  PETSc + SLEPc                its OWN layer -- it pulls hypre/METIS/ParMETIS/Scotch and
 #                                   builds against the vendor stack, so nothing downstream of it
 #                                   may invalidate it
@@ -547,11 +547,10 @@ RUN set -eux; \
       '  # units are hipcc code on libomp, and a process of the gnu family runs on libgomp alone (the llvm view builds' \
       '  # the device variants). the gnu petsc takes ~superlu-dist ~strumpack: those gcc builds still link libomp' \
       '  # (superlu-dist, butterflypack), which would refuse petsc and slepc to the gnu family; without them nothing pins' \
-      '  # its compiler, and spack picked rocmcc, so petsc and slepc name the gcc. magma is GPU-only and stays' \
-      '  # +rocm, refused to the gnu family.' \
+      '  # its compiler, and spack picked rocmcc, so petsc and slepc name the gcc. magma is GPU-only: its' \
+      '  # host code is hipcc code on libomp, so it is built in the llvm view (7b) alone, where hip builds.' \
       '  - hypre +mpi +openmp' \
       '  - arpack-ng +mpi +shared' \
-      "  - magma ~cuda +rocm amdgpu_target=$(echo "${ROCM_ARCH}" | tr ";" ",") +fortran" \
       "  - petsc +mpi +metis +hypre +mumps ~superlu-dist ~strumpack +suite-sparse +scalapack +hdf5 +fftw ~rocm +shared %gcc@${GCC_VERSION}" \
       "  - slepc +arpack %gcc@${GCC_VERSION}" \
       '  # sundials had no provider at all: its entry declares -lsundials_core, which exists only' \
@@ -787,18 +786,16 @@ RUN set -eux; \
     rm -f /tmp/mpichversion.txt
 
 # ---------------------------------------------------------------------------------------------
-# 6. Sparse-direct solvers, iterative kernels and MAGMA.
+# 6. Sparse-direct solvers and iterative kernels.
 #
 # The partitioners are NOT optional extras: MUMPS and SuperLU_DIST want METIS/ParMETIS/Scotch,
-# and omitting them silently drops solver features rather than failing a build. MAGMA is the HIP
-# backend -- rocSOLVER covers dense-on-device and nothing sparse or iterative, so it is not a
-# substitute for any of this.
+# and omitting them silently drops solver features rather than failing a build. MAGMA, the HIP
+# dense solver, is not here: it is GPU-only and lives in the llvm view (7b).
 RUN set -eux; \
     "${SPACK_ROOT}/bin/spack" -e "${SPACK_ENV_DIR}" install --fail-fast \
-      superlu-dist mumps strumpack hypre arpack-ng magma sundials; \
+      superlu-dist mumps strumpack hypre arpack-ng sundials; \
     "${SPACK_ROOT}/bin/spack" clean --stage; \
-    ls /opt/view/lib/libmagma.so /opt/view/lib/libsuperlu_dist.so /opt/view/lib/libHYPRE.so \
-      /opt/view/lib/libsundials_core.so
+    ls /opt/view/lib/libsuperlu_dist.so /opt/view/lib/libHYPRE.so /opt/view/lib/libsundials_core.so
 
 # ---------------------------------------------------------------------------------------------
 # 7. PETSc and SLEPc -- their OWN layer, on purpose.
@@ -918,7 +915,7 @@ RUN set -eux; \
       "${spack}" -e "${OMP_LLVM_ENV_DIR}" buildcache push --unsigned --update-index /spack-buildcache || true; \
     fi; \
     "${spack}" clean --stage; \
-    ls /opt/omp/llvm/view/lib/libopenblas.so
+    ls /opt/omp/llvm/view/lib/libopenblas.so /opt/omp/llvm/view/lib/libmagma.so
 
 # ---------------------------------------------------------------------------------------------
 # 8. The stack that must stay OUT of that environment, plus the two source-built libraries.
