@@ -183,6 +183,8 @@ __all__ = [
     "std_flag",
     "stdpar_link_flags",
     "strip_launcher",
+    "declared_runtime",
+    "offload_vendor",
     "submission_context",
     "submission_toolchain",
     "subst_map",
@@ -1856,9 +1858,22 @@ def library_served(name: str, context: str = "") -> str:
     OpenMP runtime its entry declares it runs on alone (``openmp:``, :func:`hpcagent_bench.omp_context.declared_refusal`),
     then the image's record of the runtimes its build maps in that context
     (:func:`hpcagent_bench.omp_context.library_refusal`)."""
-    runtime = (load_libraries().get(name) or {}).get("openmp")
+    runtime = declared_runtime(name)
     declared = omp_context.declared_refusal(name, runtime, context) if runtime else ""
     return declared or omp_context.library_refusal(name, context)
+
+
+def declared_runtime(name: str) -> str:
+    """The OpenMP runtime catalog library ``name`` declares it runs on alone here (``openmp:`` in libraries.yaml,
+    per :func:`offload_vendor` when it is a map), ``""`` when it declares none."""
+    openmp = (load_libraries().get(name) or {}).get("openmp") or ""
+    return openmp.get(offload_vendor(), "") if isinstance(openmp, dict) else openmp
+
+
+def offload_vendor() -> str:
+    """The GPU vendor of this host's toolchain (:data:`OFFLOAD_VENDORS`): ``amd`` with ROCm's, else ``nvidia``
+    (:func:`gpu_backend`)."""
+    return "amd" if gpu_backend() == Language.HIP.value else "nvidia"
 
 
 def submission_context(lang: str) -> str:
