@@ -7,34 +7,13 @@ population the claim was not about. Each test below states one of the contracts 
 shape unexpressible, so a later simplification cannot quietly restore it.
 """
 
-import importlib.util
 import math
-import pathlib
-import sys
 
 import pandas as pd
 import pytest
 
 from hpcagent_bench.harness import timing
 from hpcagent_bench.stats import population
-
-REPO = pathlib.Path(__file__).resolve().parents[1]
-ABLATION = REPO / "statistics" / "ablation_stats.py"
-
-
-def load_by_path(path: pathlib.Path, name: str):
-    spec = importlib.util.spec_from_file_location(name, path)
-    module = importlib.util.module_from_spec(spec)
-    # Registered BEFORE exec: dataclasses resolves a string annotation through
-    # sys.modules[cls.__module__], which is None for a module loaded by path alone.
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-@pytest.fixture(scope="module")
-def ablation():
-    return load_by_path(ABLATION, "ablation_stats")
 
 
 def submissions(rows: list[dict[str, object]]) -> pd.DataFrame:
@@ -250,19 +229,6 @@ def test_the_discordant_kernel_counts_carry_an_exact_test(only_left: int, only_r
     """Counting the drops is not enough to publish: 5 kernels solved by one setup and none by the other
     is a real difference in capability, and it has to arrive as a p rather than as a footnote."""
     assert population.mcnemar_exact(only_left, only_right) == pytest.approx(expected, rel=1e-9)
-
-
-def test_the_mcnemar_definition_here_agrees_with_the_login_node_copy(ablation) -> None:
-    """``ablation_stats.py`` keeps a stdlib copy because it runs from a shell with no venv. Two
-    definitions of one number is a number nobody can check, so the two must not be free to drift."""
-    for only_left in range(6):
-        for only_right in range(6):
-            mine = population.mcnemar_exact(only_left, only_right)
-            theirs = ablation.mcnemar_exact(only_left, only_right)
-            assert mine == pytest.approx(theirs), f"{only_left}/{only_right}: {mine} against {theirs}"
-
-
-# Defect 3: the episode key is what the docstring claims it is.
 
 
 def test_two_jobs_that_reused_one_episode_id_stay_two_episodes() -> None:

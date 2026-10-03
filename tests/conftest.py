@@ -28,8 +28,8 @@ resource.setrlimit(resource.RLIMIT_STACK, (resource.getrlimit(resource.RLIMIT_ST
 # Before any module that imports dace: the per-worker build folder is a process-wide pin.
 pin_per_worker_dace_build_folder()
 
-#: Where a standalone script may live. Scripts move between these (plot_score_change.py and
-#: ablation_stats.py both landed in statistics/), and a test that PINS one directory does not fail
+#: Where a standalone script may live. Scripts move between these (plot_score_change.py
+#: landed in statistics/), and a test that PINS one directory does not fail
 #: as one red test: importing at module scope makes it a COLLECTION error, which aborts the whole
 #: run. That is how the full container suite reported "1 error, 0 tests" for days while targeted
 #: login-node selections stayed green. Searched, so the next move costs nothing.

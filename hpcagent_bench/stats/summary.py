@@ -27,9 +27,8 @@ Reported defaults (so a run's rigor is documented, not implicit):
   :data:`DEFAULT_CONFIDENCE` (0.95), ``n_resamples`` :data:`DEFAULT_RESAMPLES` (9999),
   ``method`` :data:`DEFAULT_CI_METHOD` (``"percentile"`` -- the robust choice for a median,
   whose BCa acceleration estimate is unstable);
-* paired test -- Wilcoxon signed-rank, exact or approximate by the ONE rule in
-  :mod:`hpcagent_bench.stats.signed_rank`, whose threshold ``statistics/ablation_stats.py``
-  obeys too; the method is passed to scipy explicitly rather than left to its ``auto`` heuristic.
+* paired test -- Wilcoxon signed-rank, exact or approximate by :func:`use_exact` (:data:`EXACT_MAX_N`);
+  the method is passed to scipy explicitly rather than left to its ``auto`` heuristic.
 """
 
 import enum
@@ -42,9 +41,8 @@ from typing import TYPE_CHECKING
 import numpy as np
 import numpy.typing as npt
 
-from hpcagent_bench.stats import signed_rank
-
 __all__ = [
+    "EXACT_MAX_N",
     "DEFAULT_ALPHA",
     "DEFAULT_CI_METHOD",
     "DEFAULT_CONFIDENCE",
@@ -73,6 +71,7 @@ __all__ = [
     "rank_sum_test",
     "signed_change",
     "signed_rank_test",
+    "use_exact",
     "usable_ratios",
     "walsh_averages",
 ]
@@ -313,14 +312,25 @@ def rank_sum_test(a: Samples, b: Samples, alternative: str = "two-sided") -> tup
     return float(result.statistic), pvalue  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
 
 
+#: Sample sizes up to this get the exact signed-rank null; above it the tie- and continuity-corrected normal
+#: approximation. 200 covers every paired-kernel count these tables reach while the exact DP stays fast.
+EXACT_MAX_N: int = 200
+
+
+def use_exact(absolute: Sequence[float]) -> bool:
+    """Whether the exact null is affordable (``n <= EXACT_MAX_N``) and valid (no ties in ``absolute``): a tie breaks
+    the rank lattice the exact count assumes."""
+    n = len(absolute)
+    return 0 < n <= EXACT_MAX_N and len(set(absolute)) == n
+
+
 def signed_rank_test(differences: Samples, alternative: str = "two-sided") -> tuple[float, float, str, int]:
     """``(statistic, p, method, n)`` of the Wilcoxon signed-rank test, the one signed-rank call here.
 
     Non-finite and zero differences are dropped (Wilcoxon's original treatment). Exact or approximate
-    is decided by :func:`hpcagent_bench.stats.signed_rank.use_exact` and passed to scipy EXPLICITLY:
-    scipy's ``auto`` is a library default that has moved before, and the moment it moves this path
-    stops agreeing with the stdlib one. ``correction=True`` for the same reason: the stdlib
-    ``normal_p`` applies the half-step. Nothing left to test returns ``(nan, 1.0, "degenerate", 0)``.
+    is decided by :func:`use_exact` and passed to scipy EXPLICITLY: scipy's ``auto`` is a library default
+    that has moved before. ``correction=True``: the approximation takes the half-step continuity
+    correction. Nothing left to test returns ``(nan, 1.0, "degenerate", 0)``.
     """
     x: FloatArray = np.asarray(differences, dtype=np.float64)
     nonzero: FloatArray = x[np.isfinite(x) & (x != 0.0)]
@@ -329,7 +339,7 @@ def signed_rank_test(differences: Samples, alternative: str = "two-sided") -> tu
         return math.nan, 1.0, "degenerate", 0
     from scipy.stats import wilcoxon  # pyright: ignore[reportMissingTypeStubs, reportUnknownVariableType]
 
-    exact = signed_rank.use_exact(np.abs(nonzero).tolist())
+    exact = use_exact(np.abs(nonzero).tolist())
     result = wilcoxon(
         nonzero,
         method="exact" if exact else "approx",

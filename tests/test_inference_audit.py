@@ -21,7 +21,7 @@ import pytest
 
 from hpcagent_bench import cli
 from hpcagent_bench.harness import efficacy, metric
-from hpcagent_bench.stats import signed_rank, summary
+from hpcagent_bench.stats import summary
 
 #: The real paired set the published C-vs-Fortran claim rests on: ``log(c_best_su / fortran_best_su)``
 #: for every kernel of the llr40 experiment's per-language kernel table that both languages
@@ -206,28 +206,12 @@ def test_every_p_value_column_sits_beside_the_estimate_it_tests() -> None:
 def test_the_reported_effect_and_the_p_value_describe_the_same_parameter(
     deltas: list[float], pseudo_median: float
 ) -> None:
-    """A pairs-table row's ``p_value`` inverts the signed-rank test, so the effect it names in
-    ``parameter`` and carries beside it must be that test's pseudo-median, not a ratio of geomeans;
-    on a skewed set the two straddle 1.0, and a reader would take the effect from one parameter and
-    the significance from the other."""
-    import importlib.util
-    import sys
-
-    spec = importlib.util.spec_from_file_location(
-        "ablation_stats", pathlib.Path(__file__).resolve().parents[1] / "statistics" / "ablation_stats.py"
-    )
-    ablation = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = ablation
-    spec.loader.exec_module(ablation)
-
-    kernels = [f"k{i}" for i in range(len(deltas))]
-    after = {kernel: math.exp(delta) for kernel, delta in zip(kernels, deltas, strict=True)}
-    before = dict.fromkeys(kernels, 1.0)
-    speed = ablation.pair_stats("after", "before", after, before, kernels, len(kernels))[0]
-    effect = math.exp(speed["hl_log_ratio"])
-    assert speed["parameter"] == "hl_log_speedup_ratio", speed
-    assert effect == pytest.approx(math.exp(pseudo_median), rel=1e-12), speed
-    assert (effect - 1.0) * pseudo_median > 0.0, speed
+    """A paired change's p value inverts the signed-rank test, so the effect it carries beside it must be that
+    test's pseudo-median (Hodges-Lehmann), not a ratio of geomeans; on a skewed set the two straddle 1.0, and a
+    reader would take the effect from one parameter and the significance from the other."""
+    change = summary.paired_change(deltas)
+    assert change.estimate == pytest.approx(pseudo_median, rel=1e-12), change
+    assert math.exp(change.estimate) < 1.0 < math.exp(sum(deltas) / len(deltas)), change
 
 
 SIGNED_RANK_SIZES = [
@@ -242,6 +226,23 @@ ALPHAS = (0.001, 0.01, 0.05, 0.10)
 MAX_ANTICONSERVATIVE_GAP = 1e-3
 
 
+def signed_rank_ps(n: int, w_plus: float) -> tuple[float, float]:
+    """``(exact, approximate)`` two-sided p of scipy's Wilcoxon on the ranks 1..n signed so the positive ones sum to
+    ``w_plus`` (no ties, no zeros): the two methods :func:`summary.signed_rank_test` chooses between."""
+    from scipy.stats import wilcoxon
+
+    positive, left = set(), int(w_plus)
+    for rank in range(n, 0, -1):
+        if rank <= left:
+            positive.add(rank)
+            left -= rank
+    assert left == 0, (n, w_plus)
+    sample = [float(r if r in positive else -r) for r in range(1, n + 1)]
+    exact = float(wilcoxon(sample, method="exact", zero_method="wilcox").pvalue)
+    approximate = float(wilcoxon(sample, method="approx", zero_method="wilcox", correction=True).pvalue)
+    return exact, approximate
+
+
 @pytest.mark.parametrize("n, w_plus, exact, approximate", SIGNED_RANK_SIZES)
 def test_the_normal_signed_rank_approximation_never_manufactures_a_significant_verdict(
     n: int, w_plus: float, exact: float, approximate: float
@@ -249,8 +250,7 @@ def test_the_normal_signed_rank_approximation_never_manufactures_a_significant_v
     """A normal approximation to a lattice variable sits below the exact null at some sizes, so it
     cannot be required to bound it from above; what a reader relies on is that no threshold reads
     significant in the approximation alone."""
-    got_exact = signed_rank.exact_p(w_plus, n)
-    got_approx = signed_rank.normal_p(w_plus, n, [float(i) for i in range(n)])
+    got_exact, got_approx = signed_rank_ps(n, w_plus)
     assert got_exact == pytest.approx(exact, abs=5e-6), got_exact
     assert got_approx == pytest.approx(approximate, abs=5e-6), got_approx
     for alpha in ALPHAS:
@@ -266,8 +266,7 @@ def test_the_normal_signed_rank_approximation_stays_within_a_bounded_gap_of_the_
 ) -> None:
     """Without the continuity term the gap runs five to eleven times wider in the decision region,
     so an unbounded gap is how that correction would be dropped again without any test failing."""
-    got_exact = signed_rank.exact_p(w_plus, n)
-    got_approx = signed_rank.normal_p(w_plus, n, [float(i) for i in range(n)])
+    got_exact, got_approx = signed_rank_ps(n, w_plus)
     assert got_exact - got_approx <= MAX_ANTICONSERVATIVE_GAP, (
         f"the approximation is {got_exact - got_approx:.2e} below the exact null at n={n}, past "
         f"the {MAX_ANTICONSERVATIVE_GAP:.0e} the continuity-corrected form holds to"
