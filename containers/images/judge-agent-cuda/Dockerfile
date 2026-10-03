@@ -139,15 +139,6 @@ ENV LC_ALL=C \
     SPACK_DISABLE_LOCAL_CONFIG=true \
     SPACK_USER_CACHE_PATH=/opt/spack-cache
 
-# The base is a MINIMIZED Ubuntu: dpkg drops /usr/share/man. unminimize runs FIRST, on the bare base: it restores
-# the base's pages and lifts the exclusion, so every package installed below keeps its own. Run after the other
-# layers it would reinstall all of them, fontconfig too, whose fc-cache postinst fails in a rootless build.
-RUN set -eux; \
-    apt-get update; \
-    apt-get install -y --no-install-recommends unminimize man-db manpages manpages-dev; \
-    yes | unminimize; \
-    rm -rf /var/lib/apt/lists/*
-
 # gitretry and the /git-mirrors rewrite for every clone below (git_mirror.sh says why).
 COPY containers/lib/git_mirror.sh /tmp/git_mirror.sh
 RUN sh /tmp/git_mirror.sh setup && rm -f /tmp/git_mirror.sh
@@ -939,7 +930,7 @@ RUN set -eux; \
     python3 -c "import dace; print('dace', dace.__version__)"
 
 # ---------------------------------------------------------------------------------------------
-# 14. The agent side: node, the claude CLI, uv and man pages, from the checked-in pins shared with
+# 14. The agent side: node, the claude CLI and uv, from the checked-in pins shared with
 # judge-agent-amd (the npm lock carries the linux-arm64 binaries). claude-code stays 2.1.197.
 COPY agent/harness/node/package.json agent/harness/node/package-lock.json /opt/harness/node/
 RUN set -eux; \
@@ -949,20 +940,6 @@ RUN set -eux; \
     for cli in claude; do \
       ln -sf "/opt/harness/node/node_modules/.bin/${cli}" "/usr/local/bin/${cli}"; \
     done
-
-# Every layer kept its pages (unminimize ran first). MANPATH ends in ':' so the distro and PATH-derived roots
-# stay; man_gate.sh fails the build when a root below holds pages man cannot reach.
-# NVHPC's pages live under a versioned prefix; /opt/nvhpc-man is the stable name for them.
-ENV MANPATH=/opt/gcc/share/man:/opt/view/share/man:/opt/papi/share/man:/usr/local/cuda/share/man:/usr/local/cuda/doc/man:/opt/nvhpc-man:
-COPY containers/lib/man_gate.sh /tmp/man_gate.sh
-RUN set -eux; \
-    for dir in /opt/nvidia/hpc_sdk/Linux_*/*/compilers/man; do \
-      [ -d "${dir}" ] && ln -sfn "${dir}" /opt/nvhpc-man; \
-    done; \
-    man -w gcc >/dev/null || { echo "manpages missing: unminimize did not take" >&2; exit 1; }; \
-    sh /tmp/man_gate.sh /opt/gcc/share/man /opt/view/share/man /opt/papi/share/man /usr/local/cuda/share/man \
-      /usr/local/cuda/doc/man /opt/nvhpc-man; \
-    rm -f /tmp/man_gate.sh
 
 # 14a. The hpcagent_agent hook (driver, MCP tools, harness runners) in the image python, and the isolated venvs
 # for the Python harnesses on the base's python${HARNESS_PYTHON}, kept off the system python so their deps

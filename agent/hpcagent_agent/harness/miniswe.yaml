@@ -72,7 +72,6 @@ agent:
 environment:
   env:
     PAGER: cat
-    MANPAGER: cat
     LESS: -R
     UV_NO_PROGRESS: '1'
     TQDM_DISABLE: '1'

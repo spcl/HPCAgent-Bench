@@ -33,8 +33,6 @@ LC_ALL = "C"
 # the workdir; see judge-agent-amd/agent.edf.toml.in.
 PYTHONSAFEPATH = "1"
 PATH = "/opt/gcc/bin:/opt/view/bin:/opt/papi/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-# Man roots outside /usr, declared here because the CE drops the image ENV; the trailing ':' keeps the default roots.
-MANPATH = "/opt/gcc/share/man:/opt/view/share/man:/opt/papi/share/man:/usr/local/cuda/share/man:/usr/local/cuda/doc/man:/opt/nvhpc-man:"
 # CUDA first; the distro libdir last but present, as on judge-agent-amd. The base's
 # /usr/local/cuda/compat/lib is left OUT: that forward-compat libcuda is for drivers older than the
 # toolkit and loses to a newer host driver. The image is CUDA 13.4, which any driver >= 580 runs by

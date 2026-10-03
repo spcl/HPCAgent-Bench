@@ -170,15 +170,6 @@ ENV LC_ALL=C \
     SPACK_DISABLE_LOCAL_CONFIG=true \
     SPACK_USER_CACHE_PATH=/opt/spack-cache
 
-# The base is a MINIMIZED Ubuntu: dpkg drops /usr/share/man. unminimize runs FIRST, on the bare base: it restores
-# the base's pages and lifts the exclusion, so every package installed below keeps its own. Run after the other
-# layers it would reinstall all of them, fontconfig too, whose fc-cache postinst fails in a rootless build.
-RUN set -eux; \
-    apt-get update; \
-    apt-get install -y --no-install-recommends unminimize man-db manpages manpages-dev; \
-    yes | unminimize; \
-    rm -rf /var/lib/apt/lists/*
-
 # /opt/gpu-arch records the ROCM_ARCH list as a FILE, because the CE does not reliably keep image ENV.
 RUN set -eu; \
     test -n "${ROCM_ARCH:-}" || { echo "ROCM_ARCH is unset: build with build.sh, which reads gpu_arch.env" >&2; exit 2; }; \
@@ -1214,7 +1205,7 @@ RUN set -eux; \
     python3 -c "import dace; print('dace', dace.__version__)"
 
 # ---------------------------------------------------------------------------------------------
-# 13. The agent side: node, the claude CLI, uv, and man pages.
+# 13. The agent side: node, the claude CLI and uv.
 #
 # Every harness version is a checked-in pin shared with judge-agent-cuda, so nothing here floats:
 # uv and node come from agent/harness/pins.env (versioned URLs, sha256-checked by
@@ -1233,16 +1224,6 @@ RUN set -eux; \
     for cli in claude; do \
       ln -sf "/opt/harness/node/node_modules/.bin/${cli}" "/usr/local/bin/${cli}"; \
     done
-
-# Every layer kept its pages (unminimize ran first). MANPATH ends in ':' so the distro and PATH-derived roots
-# stay; man_gate.sh fails the build when a root below holds pages man cannot reach.
-ENV MANPATH=/opt/gcc/share/man:/opt/view/share/man:/opt/papi/share/man:/opt/rocm/share/man:/opt/rocm/llvm/share:/opt/openmpi/share/man:
-COPY containers/lib/man_gate.sh /tmp/man_gate.sh
-RUN set -eux; \
-    man -w gcc >/dev/null || { echo "manpages missing: unminimize did not take" >&2; exit 1; }; \
-    sh /tmp/man_gate.sh /opt/gcc/share/man /opt/view/share/man /opt/papi/share/man /opt/rocm/share/man \
-      /opt/rocm/llvm/share /opt/openmpi/share/man; \
-    rm -f /tmp/man_gate.sh
 
 # ---------------------------------------------------------------------------------------------
 # 13a. The hpcagent_agent hook (driver, MCP tools, harness runners) in the image python, and the isolated venvs
