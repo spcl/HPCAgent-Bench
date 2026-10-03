@@ -183,6 +183,7 @@ __all__ = [
     "std_flag",
     "stdpar_link_flags",
     "strip_launcher",
+    "submission_context",
     "submission_toolchain",
     "subst_map",
     "toolchain_env",
@@ -1851,10 +1852,22 @@ def context_view_lib(entry: dict[str, object], context: str) -> str:
 
 
 def library_served(name: str, context: str = "") -> str:
-    """``""`` when catalog library ``name`` may be linked by a ``context`` build, else the reason it may not:
-    the image's record of the OpenMP runtimes its build maps in that context
+    """``""`` when catalog library ``name`` may be linked by a ``context`` build, else the reason it may not: the
+    OpenMP runtime its entry declares it runs on alone (``openmp:``, :func:`hpcagent_bench.omp_context.declared_refusal`),
+    then the image's record of the runtimes its build maps in that context
     (:func:`hpcagent_bench.omp_context.library_refusal`)."""
-    return omp_context.library_refusal(name, context)
+    runtime = (load_libraries().get(name) or {}).get("openmp")
+    declared = omp_context.declared_refusal(name, runtime, context) if runtime else ""
+    return declared or omp_context.library_refusal(name, context)
+
+
+def submission_context(lang: str) -> str:
+    """The OpenMP context a submission in ``lang`` builds and runs in: its toolchain family's, the default for a
+    language without one (python)."""
+    try:
+        return omp_context.context_for_toolchain(submission_toolchain(lang))
+    except KeyError:
+        return omp_context.DEFAULT_CONTEXT
 
 
 def library_offered(name: str, lang: str, context: str = "") -> bool:
