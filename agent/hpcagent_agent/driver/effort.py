@@ -25,6 +25,15 @@ import os
 import sys
 from collections.abc import Collection
 
+__all__ = [
+    "POLICY_MAX",
+    "PREFERRED",
+    "for_client",
+    "ladder",
+    "main",
+    "resolve",
+]
+
 #: The rung the policy prefers wherever a ladder offers it.
 PREFERRED = "xhigh"
 #: The only policy so far: take the top of the ladder. Named rather than implied, so an experiment that

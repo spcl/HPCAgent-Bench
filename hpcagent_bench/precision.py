@@ -140,7 +140,7 @@ DATATYPE_ALIAS = {
 }
 
 
-def precision_from_datatype(datatype) -> Precision:
+def precision_from_datatype(datatype: str | None) -> Precision:
     """Resolve a datatype string to a :class:`Precision`.
 
     Accepts the numpy-style (``"float32"``) or Precision-enum (``"fp32"`` /

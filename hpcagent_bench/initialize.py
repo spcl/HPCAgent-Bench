@@ -49,6 +49,8 @@ __all__ = [
     "ML_TRACK",
     "SPARSE_BUFFERS_KEY",
     "UNIT_HALF_RANGE",
+    "InitValue",
+    "SpecBlock",
     "abi_input_args",
     "allocate_declared_buffers",
     "as_array",

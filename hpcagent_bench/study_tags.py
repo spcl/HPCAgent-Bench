@@ -26,7 +26,7 @@ from typing import cast
 import yaml
 
 from hpcagent_bench import columns, models, skill_packets, spec
-from hpcagent_bench.spec import as_list
+from hpcagent_bench.spec import as_list, is_list, is_mapping
 from hpcagent_bench.vocabulary import (
     KINDS,
     MODELS,
@@ -41,26 +41,24 @@ from hpcagent_bench.vocabulary import (
 __all__ = [
     "COMPACT_NAMES",
     "COMPACT_NAME_MAX",
-    "OFFLOAD_SETUP_TOKEN",
     "OFFLOAD_DELIVERY_NAME",
+    "OFFLOAD_SETUP_TOKEN",
     "REGISTRY",
-    "STUDIES",
-    "VOCABULARY_MODULES",
     "SHORT_NAME_MAX",
+    "STUDIES",
     "SUITE_PREFIXES",
+    "VOCABULARY_MODULES",
     "BaselineSpec",
     "ExperimentEntry",
     "Marker",
     "Names",
     "Registry",
-    "setup_delivery_name",
-    "setup_suffix",
     "as_block",
-    "control_setups_of",
     "baselines_of",
-    "experiments_of",
     "canonical",
+    "control_setups_of",
     "display_name",
+    "experiments_of",
     "framework_name",
     "harness_name",
     "kernel_compact_display_name",
@@ -88,6 +86,8 @@ __all__ = [
     "packet_spellings",
     "registered",
     "registry",
+    "setup_delivery_name",
+    "setup_suffix",
     "slot",
 ]
 
@@ -166,9 +166,9 @@ class Registry:
     aliases: dict[str, Names]
     #: ``track/device/language`` -> {"setup": template on ``{model}``, <model>: that model's own setup}:
     #: the one control setup a treatment on such a kernel pairs against (:func:`control_setups_of`).
-    control_setups: dict[str, dict[str, str]] = dataclasses.field(default_factory=dict)
+    control_setups: dict[str, dict[str, str]] = dataclasses.field(default_factory=dict[str, dict[str, str]])
     #: study -> the run-root prefixes its fused owed waves write (:func:`owed_run_roots_of`).
-    owed_run_roots: dict[str, tuple[str, ...]] = dataclasses.field(default_factory=dict)
+    owed_run_roots: dict[str, tuple[str, ...]] = dataclasses.field(default_factory=dict[str, tuple[str, ...]])
 
 
 def as_block(raw: object) -> dict[object, object]:
@@ -186,8 +186,8 @@ Marker = str | tuple[int, int, float]
 
 def marker_of(raw: object) -> Marker:
     """One shape-pool entry: a list ``[sides, style, angle]`` becomes the tuple matplotlib reads."""
-    if isinstance(raw, list):
-        sides, kind, angle = raw
+    if is_list(raw):
+        sides, kind, angle = [v for v in raw if isinstance(v, (int, float))]
         return (int(sides), int(kind), float(angle))
     return str(raw)
 
@@ -200,7 +200,7 @@ def names_of(raw: object, key: str) -> Names:
     (a packet's definition), in which case its ``name`` field is the display name."""
     out: Names = {}
     for tag, entry in as_block(raw).items():
-        out[str(tag)] = str(as_block(entry).get("name", tag)) if isinstance(entry, dict) else str(entry)
+        out[str(tag)] = str(as_block(entry).get("name", tag)) if is_mapping(entry) else str(entry)
     return out
 
 

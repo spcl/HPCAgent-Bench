@@ -91,6 +91,7 @@ __all__ = [
     "prompt_env",
     "render_hints",
     "score_sampling",
+    "sparse_layout_context",
     "strip_host_paths",
     "tool_fragment_offered",
     "tool_fragments",

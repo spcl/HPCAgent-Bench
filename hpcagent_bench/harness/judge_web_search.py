@@ -260,7 +260,7 @@ async def crawl_with_crawl4ai(
     if fake:
         debug("using WEBSEARCH_FAKE_CRAWL_JSON instead of Crawl4AI")
         mapping = json.loads(fake)
-        pages = []
+        pages: list[CrawledPage] = []
         for result in list(results)[:max_pages]:
             content = str(mapping.get(result.url, ""))
             pages.append(
@@ -310,7 +310,7 @@ async def crawl_with_crawl4ai(
         semaphore_count=semaphore_count,
     )
     browser_config = BrowserConfig(headless=True, verbose=False)
-    pages: list[CrawledPage] = []
+    pages = []
     selected = list(results)[:max_pages]
     debug(f"crawling {len(selected)} page(s) with Crawl4AI")
     by_url = {result.url: result for result in selected}
@@ -429,6 +429,8 @@ def call_llm(query: str, pages: list[CrawledPage], timeout: float) -> str:
             if finish_reason == "length":
                 retry_multiplier = env_int("WEBSEARCH_LLM_EMPTY_RETRY_MULTIPLIER", 4)
                 current_limit = payload.get("max_completion_tokens", payload.get("max_tokens", max_tokens))
+                if not isinstance(current_limit, (int, float, str)):
+                    raise ValueError(f"the output limit {current_limit!r} is not a number")
                 retry_limit = int(current_limit) * retry_multiplier
                 debug(f"LLM returned empty length-limited response; retrying with output limit={retry_limit}")
                 if "max_completion_tokens" in payload:

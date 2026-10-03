@@ -216,7 +216,7 @@ VARIADIC_KINDS = (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWOR
 
 def init_parameter_names(cls: type) -> tuple[str, ...]:
     """``Model.__init__``'s argument names, minus ``self`` and variadics."""
-    parameters = inspect.signature(cls.__init__).parameters
+    parameters = inspect.signature(cls).parameters
     return tuple(n for n, p in parameters.items() if n != "self" and p.kind not in VARIADIC_KINDS)
 
 
@@ -247,7 +247,7 @@ def resolve_init_args(
     """The keyword arguments ``Model(...)`` is built with: the manifest first, the upstream constants only
     where it is silent. A parameter neither supplies and without a default is a refusal."""
     upstream = upstream_init_values(module, cls)
-    signature = inspect.signature(cls.__init__).parameters
+    signature = inspect.signature(cls).parameters
     out: dict[str, Any] = {}
     missing = []
     for name in init_parameter_names(cls):

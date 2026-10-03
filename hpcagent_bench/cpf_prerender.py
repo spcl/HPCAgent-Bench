@@ -27,7 +27,7 @@ import threading
 from collections.abc import Sequence
 
 from hpcagent_bench import cpf_bridge, cpf_cache, cpf_canonical
-from hpcagent_bench.spec import BenchSpec
+from hpcagent_bench.spec import BenchSpec, as_block
 from hpcagent_bench.translators.numpyto_common.naming import fptype_tag
 
 __all__ = [
@@ -132,8 +132,8 @@ def render_kernel(
     try:
         spec = BenchSpec.load(kernel)
     except Exception as exc:  # noqa: BLE001 -- an unloadable tag name is a recorded verdict
-        outcome = {"key": None, "verdict": "fail", "error": f"{type(exc).__name__}: {exc}"[:400]}
-        modes = {mode: outcome for mode in cpf_cache.MODES}
+        outcome: dict[str, object] = {"key": None, "verdict": "fail", "error": f"{type(exc).__name__}: {exc}"[:400]}
+        modes: dict[str, dict[str, object]] = {mode: outcome for mode in cpf_cache.MODES}
         for language in languages:
             cpf_cache.record(view, kernel, language, fptype, modes)
         return cpf_cache.short_name(kernel), dict.fromkeys(languages, modes)
@@ -176,7 +176,8 @@ def settled(view: pathlib.Path, cache: pathlib.Path, kernel: str, target: str, f
         pointer = cpf_cache.recorded(view, kernel, dialect, fptype)
         if pointer is None:
             return False
-        for outcome in pointer.get("modes", {}).values():
+        for recorded in as_block(pointer.get("modes")).values():
+            outcome = as_block(recorded)
             if outcome.get("verdict") == "ok" and not cpf_cache.is_hit(cache, str(outcome.get("key"))):
                 return False
     return True

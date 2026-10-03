@@ -23,9 +23,11 @@ __all__ = [
     "RECORD_GLOB",
     "TOKEN_COLUMNS",
     "episode_values",
+    "fill",
     "ingest",
     "read_record",
     "trusted_fold",
+    "whole",
 ]
 
 #: Every worker's record under a job directory: ``agents/node-<n>/problem-<p>-worker-<w>/tokens.json``.

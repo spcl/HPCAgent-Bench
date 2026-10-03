@@ -17,8 +17,32 @@ import csv
 import re
 import statistics
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+
+__all__ = [
+    "COLUMNS",
+    "GPU_COL_RE",
+    "HIGH_CPU_P95_PCT",
+    "IDLE_CPU_PCT",
+    "LOW_GPU_PCT",
+    "ROLES",
+    "SATURATED_CPU_PCT",
+    "NodeStats",
+    "compute_node_stats",
+    "fmt",
+    "gpu_columns",
+    "gpu_index",
+    "main",
+    "parse_role_host",
+    "percentile",
+    "print_gpu_balance",
+    "print_role_summary",
+    "print_table",
+    "print_verdicts",
+    "read_columns",
+]
 
 ROLES = ("vllm", "judge", "agent")
 
@@ -57,10 +81,18 @@ def parse_role_host(path: Path) -> tuple[str, str]:
     return "unknown", stem
 
 
-def gpu_columns(fieldnames: list[str]) -> list[str]:
+def gpu_index(column: str) -> int:
+    """The N of a ``gpuN_pct`` column name."""
+    match = GPU_COL_RE.match(column)
+    if match is None:
+        raise ValueError(f"{column!r} is not a per-GPU column")
+    return int(match.group(1))
+
+
+def gpu_columns(fieldnames: Sequence[str]) -> list[str]:
     # header-driven: whatever gpuN_pct columns this file's header declares, in GPU index order
     found = [name for name in fieldnames if GPU_COL_RE.match(name)]
-    return sorted(found, key=lambda name: int(GPU_COL_RE.match(name).group(1)))
+    return sorted(found, key=gpu_index)
 
 
 def read_columns(path: Path) -> tuple[dict[str, list[float]], list[str]]:
@@ -82,7 +114,7 @@ def read_columns(path: Path) -> tuple[dict[str, list[float]], list[str]]:
     return values, gpu_cols
 
 
-@dataclass
+@dataclass(slots=True)
 class NodeStats:
     role: str
     host: str
@@ -150,8 +182,8 @@ def print_gpu_balance(nodes: list[NodeStats]) -> None:
     print()
     print("gpu balance (per-GPU mean %, spread = max-min):")
     for node in sorted(extended, key=lambda n: (n.role, n.host)):
-        cols = sorted(node.per_gpu_mean, key=lambda name: int(GPU_COL_RE.match(name).group(1)))
-        per_gpu = " ".join(f"gpu{GPU_COL_RE.match(c).group(1)}={fmt(node.per_gpu_mean[c])}" for c in cols)
+        cols = sorted(node.per_gpu_mean, key=gpu_index)
+        per_gpu = " ".join(f"gpu{gpu_index(c)}={fmt(node.per_gpu_mean[c])}" for c in cols)
         print(f"  {node.role:<7} {node.host:<20} spread={fmt(node.gpu_imbalance):>6} {per_gpu}")
 
 

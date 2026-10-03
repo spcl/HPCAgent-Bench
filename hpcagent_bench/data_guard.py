@@ -26,6 +26,7 @@ from hpcagent_bench import frozen_observations
 __all__ = [
     "DB_SUFFIXES",
     "ENV",
+    "PathLike",
     "ProtectedPathError",
     "check_output",
     "check_removable",

@@ -69,6 +69,7 @@ __all__ = [
     "kernel_track",
     "main",
     "merged_shard",
+    "numeric",
     "observations",
     "read_database",
     "read_observations",

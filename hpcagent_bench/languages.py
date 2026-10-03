@@ -105,6 +105,7 @@ __all__ = [
     "VECT_UNLIMITED_REFS",
     "XNACK_SUFFIX",
     "Language",
+    "StrPath",
     "Toolchain",
     "agent_offload_flags",
     "available_libraries",
@@ -125,6 +126,7 @@ __all__ = [
     "compiler_launcher",
     "compiler_names",
     "compiler_version",
+    "context_view_lib",
     "declared_runtime",
     "default_family",
     "discover_variants",
@@ -142,6 +144,7 @@ __all__ = [
     "library_linkable",
     "library_links",
     "library_offered",
+    "library_served",
     "library_tokens",
     "link_lang_for",
     "load_libraries",
@@ -766,10 +769,10 @@ def python_device_refusal(sources: Sequence[str], arrays: Sequence[str]) -> str:
                         f"torch.as_tensor(x) wraps one for a triton launch without copying."
                     )
         for method in PYTHON_HOST_COPY_METHODS:
-            match = re.search(rf"\b([A-Za-z_]\w*)\s*\.\s*{re.escape(method)}\s*\(", source)
-            if match and match.group(1) in names:
+            hit = re.search(rf"\b([A-Za-z_]\w*)\s*\.\s*{re.escape(method)}\s*\(", source)
+            if hit and hit.group(1) in names:
                 return (
-                    f"this setup grades DEVICE-RESIDENT: {match.group(1)}.{method}() copies an ABI "
+                    f"this setup grades DEVICE-RESIDENT: {hit.group(1)}.{method}() copies an ABI "
                     f"array off the GPU inside the timed section. The arrays arrive on the device "
                     f"and the harness reads them back after the bracket; keep them there."
                 )
@@ -922,6 +925,7 @@ def offload_arch(model: str, vendor: str, *, run: bool = True) -> str:
     pinned = os.environ.get(OFFLOAD_ARCH_ENV.format(vendor=vendor.upper()))
     if pinned:
         return pinned if offload_probe(model, vendor, pinned, run=run) else ""
+    candidates: tuple[str, ...]
     if vendor == "amd":
         candidates = (flags.detect_gfx(),)
     else:
@@ -1732,7 +1736,7 @@ def library_tokens(name: str, lang: str, context: str = "") -> tuple[tuple[str, 
         # Toolkit-resident: CUDA and ROCm ship no pkg-config files, but their own compiler already
         # searches the toolkit's lib and include directories, so a bare -l is the whole answer and
         # no -L or rpath is wanted. The trial link below is what decides whether it is really here.
-        compile_tokens: tuple[str, ...] = ()
+        compile_tokens = ()
         link_tokens = toolset_link_tokens(str(entry["toolset"]))
         if not link_tokens:
             return (), ()
@@ -1924,8 +1928,8 @@ def library_offered(name: str, lang: str, context: str = "") -> bool:
     if not entry.get("header_only"):
         return any(library_tokens(name, lang, context))
     compile_tokens, _link = library_tokens(name, lang, context)
-    headers = entry.get("headers") or ()
-    return bool(headers) and library_compiles(lang, compile_tokens, headers[0])
+    headers = as_list(entry.get("headers"))
+    return bool(headers) and library_compiles(lang, compile_tokens, str(headers[0]))
 
 
 def available_libraries(lang: str, context: str = "") -> tuple[str, ...]:

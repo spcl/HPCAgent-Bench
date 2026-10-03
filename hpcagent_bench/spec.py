@@ -26,7 +26,7 @@ import re
 from collections.abc import Callable, Iterator, KeysView
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import cast
+from typing import TypeGuard, cast
 
 import yaml
 
@@ -123,6 +123,8 @@ __all__ = [
     "function_parameters",
     "init_arrays_raw",
     "int_of",
+    "is_list",
+    "is_mapping",
     "layout_configurations",
     "layout_tokens",
     "list_block_of",
@@ -197,6 +199,16 @@ ArrayEntry = str | dict[str, str | bool | domain_mod.RawDomain]
 #: integer a knob takes for kernels that enumerate their execution paths this way (fv3_dycore,
 #: fv3_xppm bind ``hord`` / ``grid_type``, not a layout).
 LayoutChoice = str | int
+
+
+def is_mapping(raw: object) -> TypeGuard[dict[object, object]]:
+    """Whether ``raw`` is a YAML mapping, narrowed to the weakest true type of its members."""
+    return isinstance(raw, dict)
+
+
+def is_list(raw: object) -> TypeGuard[list[object]]:
+    """Whether ``raw`` is a YAML sequence, narrowed to the weakest true type of its members."""
+    return isinstance(raw, list)
 
 
 def as_block(raw: object) -> dict[str, object]:
@@ -1690,7 +1702,7 @@ def parse_scenarios(init_raw: dict[str, object], source: str) -> tuple[dict[str,
     raw = init_raw.get("scenarios")
     if raw is None:
         return {}, {}
-    if not isinstance(raw, dict) or not raw:
+    if not is_mapping(raw) or not raw:
         raise ValueError(f"{source}: init.scenarios must be a non-empty mapping of name -> description")
     if not init_raw.get("func_name"):
         raise ValueError(
@@ -1700,7 +1712,7 @@ def parse_scenarios(init_raw: dict[str, object], source: str) -> tuple[dict[str,
     scenarios: dict[str, str] = {}
     layouts: dict[str, tuple[str, ...]] = {}
     for name, entry in as_block(raw).items():
-        described = as_block(entry) if isinstance(entry, dict) else {"description": entry}
+        described = as_block(entry) if is_mapping(entry) else {"description": entry}
         description = described.get("description")
         unknown = sorted(set(described) - SCENARIO_KEYS)
         if not name.isidentifier() or not isinstance(description, str) or not description.strip() or unknown:
@@ -1749,7 +1761,7 @@ def validate_scenario_layouts(init: "InitSpec | None", layouts: dict[str, "Spars
 
 def parse_parameters(params_raw: object, source: str) -> PresetTable:
     """The ``parameters:`` block -> ``{preset: {symbol: value}}``."""
-    if not isinstance(params_raw, dict) or not params_raw:
+    if not is_mapping(params_raw) or not params_raw:
         raise ValueError(f"{source}: 'parameters' must be a non-empty mapping of preset -> {{symbol: value}}")
     return {
         preset: {
@@ -1765,9 +1777,9 @@ def parse_config_space(
 ) -> tuple[dict[str, ConfigKnob], tuple[ConfigRow, ...]]:
     """The ``config:`` block -> ``(knobs, curated rows)``. YAML shape decides: a mapping is per-knob
     axes, a list is curated whole configs, so one manifest can never declare both."""
-    if isinstance(config_raw, list):
+    if is_list(config_raw):
         return {}, parse_config_list(as_list(config_raw), short_name, source)
-    if isinstance(config_raw, dict):
+    if is_mapping(config_raw):
         knobs = {sym: _parse_config_knob(entry, short_name, sym, source) for sym, entry in as_block(config_raw).items()}
         return knobs, ()
     raise ValueError(
@@ -2904,9 +2916,7 @@ def shape_reads_init_scalars(spec: BenchSpec) -> list[str]:
     read = {name for shape in shapes for name in IDENTIFIER.findall(str(shape))}
     config = raw.get("config")
     # A variant-sweep manifest spells config as a list of whole knob assignments.
-    visible = (
-        {k for entry in as_list(config) for k in as_block(entry)} if isinstance(config, list) else set(as_block(config))
-    )
+    visible = {k for entry in as_list(config) for k in as_block(entry)} if is_list(config) else set(as_block(config))
     for values in as_block(raw.get("parameters")).values():
         visible |= set(as_block(values))
     return [

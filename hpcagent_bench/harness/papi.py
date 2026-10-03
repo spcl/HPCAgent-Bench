@@ -66,6 +66,7 @@ from hpcagent_bench.harness.native_call import (
     import_device_array_module,
 )
 from hpcagent_bench.support.bindings.contract import Binding
+from hpcagent_bench.units import BYTES_PER_GIB, NS_PER_MS, NS_PER_S
 
 __all__ = [
     "AMD_DEVICE",
@@ -859,7 +860,7 @@ def derive(rows: Sequence[MetricRow]) -> Derived:
             unavailable[name] = f"no count for {', '.join(absent)} in this run"
             continue
         inputs = {metric: float(counts[metric]) for metric in ratio.needs}
-        seconds = counted[ratio.needs[0]].get("elapsed_ns", 0) / 1e9
+        seconds = counted[ratio.needs[0]].get("elapsed_ns", 0) / NS_PER_S
         value = ratio.compute({**inputs, "line_bytes": float(line), "seconds": seconds})
         if value is None:
             unavailable[name] = f"the denominator of '{ratio.formula}' counted 0"
@@ -1140,7 +1141,7 @@ def count_metric(
         reps,
         warmup,
         rep_timeout,
-        int(memory_gb * (1024**3)),
+        int(memory_gb * BYTES_PER_GIB),
         label=f"papi:{metric}",
         timeout=max(1.0, rep_timeout) * (warmup + max(1, reps) + 2),
     )
@@ -1530,7 +1531,7 @@ def count_per_thread(
             reps,
             warmup,
             rep_timeout,
-            int(memory_gb * (1024**3)),
+            int(memory_gb * BYTES_PER_GIB),
             label="papi:per_thread",
             timeout=max(1.0, rep_timeout) * (warmup + max(1, reps) + 2),
         )
@@ -1560,7 +1561,7 @@ def render_thread_report(report: PerThreadReport) -> str:
     idle = f", {report['threads_idle']} idle (excluded)" if report["threads_idle"] else ""
     lines = [
         f"per-thread counters -- {aggregate['threads']} working thread(s){idle}, {events}, best of "
-        f"{report['reps_counted']} rep(s) at {report['elapsed_ns'] / 1e6:.4f} ms"
+        f"{report['reps_counted']} rep(s) at {report['elapsed_ns'] / NS_PER_MS:.4f} ms"
         f"{' (MULTIPLEXED ESTIMATES)' if report['multiplexed'] else ''}",
         "",
         f"  {'tid':>8}  {'core':>10}  {'cycles':>16}  {'instructions':>16}  {'CPI':>7}  {'IPC':>7}  {'share':>7}",
@@ -2258,7 +2259,7 @@ def count_gpu_metric(
         reps,
         warmup,
         rep_timeout,
-        int(memory_gb * (1024**3)),
+        int(memory_gb * BYTES_PER_GIB),
         label=f"papi-gpu:{metric}",
         timeout=max(1.0, rep_timeout) * (warmup + max(1, reps) + 2),
     )

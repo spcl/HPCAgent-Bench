@@ -22,11 +22,223 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Generator, Mapping, Sequence
+from http import HTTPStatus
 from typing import Any, NamedTuple, NotRequired, TextIO, TypedDict, cast
 
 from hpcagent_agent.driver import harnesses, promote_unsubmitted, stream_idle_timeout, token_cost
 from hpcagent_agent.driver.harnesses import Closing, Context, Harness
+
+__all__ = [
+    "AGENT_CRASH_ATTEMPTS",
+    "AGENT_DIR_ENV",
+    "AGENT_EFFORT",
+    "AGENT_ENV_DENYLIST",
+    "AGENT_MCP_ATTEMPTS",
+    "AGENT_MCP_READY_SECONDS",
+    "AGENT_START_CONCURRENCY",
+    "AGENT_START_STAGGER_MAX_SECONDS",
+    "AGENT_START_STAGGER_SECONDS",
+    "AGGREGATE_LOG_EVERY",
+    "AGGREGATE_MIN_INTERVAL_SECONDS",
+    "AGGREGATE_PROBE_SECONDS",
+    "AGGREGATE_SATURATED_FRACTION",
+    "API_TIMEOUT_MARK",
+    "ATTEMPTS_NAME",
+    "CANCELLED_MARKER",
+    "CLAUDE_BACKGROUND_TASKS_OFF",
+    "CLAUDE_CONTEXT_CAP",
+    "CLAUDE_NATIVE_TOOLS",
+    "CLAUDE_REPLY_FRACTION_DENOMINATOR",
+    "CLAUDE_SUMMARY_RESERVE",
+    "CLAUDE_TURN_HEADROOM_FRACTION",
+    "CLEAN_ENDS",
+    "CONTEXT_OVERFLOW_MARK",
+    "COST_KEYS",
+    "CPF_PAGE",
+    "DRIVER_KILLS",
+    "ENGINE_SERIES",
+    "FUSED_PROBLEM_FLAG",
+    "FUSED_PROBLEM_KEYS",
+    "GRADE_FIELD",
+    "JOB_CANCELLED",
+    "JOB_END_MARGIN_S",
+    "MATERIAL_DIR_ENV",
+    "MCP_SERVER_NAME",
+    "METRICS_TIMEOUT_SECONDS",
+    "METRIC_GENERATION",
+    "METRIC_PROMPT",
+    "METRIC_RUNNING",
+    "METRIC_WAITING",
+    "OFFLOAD_LANGUAGES",
+    "PROBE_MAX_TOKENS",
+    "PROBE_PROMPT",
+    "RC_API_TIMEOUT",
+    "RC_CONTEXT",
+    "RC_SUBMITTED",
+    "RC_TIMEOUT",
+    "RC_TOKEN_BUDGET",
+    "RELAUNCH_KEEPS",
+    "RELAUNCH_POLICY",
+    "RESUBMIT_PROMISES",
+    "RESULT_TAIL_BYTES",
+    "SEAL_UNSHARE",
+    "SETUPS_DIR_ENV",
+    "SETUP_ID",
+    "SKILL_PAGE_PATH",
+    "START_GATE",
+    "START_GATE_DIR_ENV",
+    "START_GATE_POLL_SECONDS",
+    "SUBMISSION_MARKER",
+    "TOKEN_DIR_NAME",
+    "TOKEN_FOLD",
+    "TOKEN_POLL_SECONDS",
+    "WORKER_TOKEN_ENV",
+    "AgentState",
+    "AggregateState",
+    "Problem",
+    "ProblemValue",
+    "ResultEvent",
+    "accumulate_total_tokens",
+    "acquire_start_slot",
+    "agent_cpus",
+    "agent_environment",
+    "agent_runtime",
+    "agent_tools",
+    "aggregate_intervals",
+    "aggregate_probe_seconds",
+    "api_timeout",
+    "append_attempt",
+    "as_block",
+    "as_entries",
+    "as_float",
+    "as_int",
+    "as_list",
+    "as_problem",
+    "await_mcp",
+    "budget_note",
+    "budget_seconds",
+    "budget_tokens",
+    "build_command_text",
+    "build_list_status_text",
+    "cancelled_by_the_job",
+    "claude_bare",
+    "claude_closing",
+    "claude_command",
+    "claude_context_env",
+    "claude_env",
+    "claude_supports_flag",
+    "clear_for_relaunch",
+    "closing_crashed",
+    "closing_returncode",
+    "context_overflow",
+    "cost_breakdown",
+    "cost_record_fields",
+    "counter_notes",
+    "crashed",
+    "crashed_attempt_records",
+    "dead_stream_threshold_seconds",
+    "directive_page",
+    "ended_reason",
+    "engine_totals",
+    "env_flag",
+    "experiment_setup",
+    "fetch_problems",
+    "final_attempt_start_of",
+    "final_result",
+    "fused_child_env",
+    "fused_problem_main",
+    "fused_problems",
+    "harness_spec",
+    "hints_text",
+    "hit_turn_cap",
+    "host_home_root",
+    "identity_env",
+    "issue_worker_token",
+    "job_is_ending",
+    "judge_ranks",
+    "judge_urls",
+    "kernel_stem",
+    "load_problem_file",
+    "load_problems",
+    "main",
+    "mark_cancelled",
+    "material_dir",
+    "mcp_failed",
+    "metrics_url",
+    "node_exit_status",
+    "node_rank",
+    "normalize_problem",
+    "note_job_cancellation",
+    "note_relaunch",
+    "open_tool_use_index",
+    "open_tool_use_stall_seconds",
+    "own_page",
+    "packet_dir",
+    "packet_tools",
+    "parse_prometheus",
+    "pin",
+    "problem_env_file",
+    "problem_text",
+    "promote_at_agent_exit",
+    "read_new_lines",
+    "read_setup_overlay",
+    "refuse_prompt_disagreeing_with_the_submission_mode",
+    "remove_entries",
+    "render_prompt",
+    "report_aggregate_throughput",
+    "report_throughput",
+    "resolve_problems_path",
+    "resolve_shared_file",
+    "response_closed",
+    "result_event",
+    "round_clean",
+    "run_agent",
+    "run_fused_problem",
+    "sample_aggregate_throughput",
+    "scrape_aggregate",
+    "scrape_metrics",
+    "seal_argv",
+    "served_context",
+    "server_root",
+    "set_aside_crash",
+    "shared_dir",
+    "shared_paths",
+    "skill_reminder",
+    "spent_its_submission",
+    "stagger_start",
+    "start_agent",
+    "start_gate",
+    "start_gate_dir",
+    "start_runner",
+    "start_watchers",
+    "submission_graded",
+    "submission_policy_text",
+    "submit_single_submission",
+    "task_dir",
+    "task_token_totals",
+    "terminate",
+    "throughput_probe",
+    "tool_registry",
+    "transcript_closing",
+    "transcript_total_tokens",
+    "usage_total",
+    "vllm_urls",
+    "wait_for_agent",
+    "wait_for_engine",
+    "wait_for_json",
+    "wait_for_ready_replicas",
+    "watch_dead_stream",
+    "watch_for_job_cancellation",
+    "watch_submission",
+    "watch_token_budget",
+    "watched_returncode",
+    "window_totals",
+    "worker_cache_root",
+    "worker_home",
+    "write_cost_record",
+    "write_mcp_config",
+]
 
 #: One value a problem record carries: whatever ``json.loads`` produced for it. The record is an
 #: OPEN object -- make_problems.py writes keys this driver never reads and :func:`problem_text`
@@ -179,7 +391,7 @@ def wait_for_json(name: str, url: str, timeout: float, headers: dict[str, str] |
     while time.monotonic() < deadline:
         try:
             with urllib.request.urlopen(request, timeout=5) as response:
-                if response.status < 500:
+                if response.status < HTTPStatus.INTERNAL_SERVER_ERROR:
                     json.load(response)
                     print(f"{name} ready: {url}", flush=True)
                     return
@@ -205,7 +417,7 @@ def wait_for_engine(name: str, replica: str, timeout: float, headers: dict[str, 
     while time.monotonic() < deadline:
         try:
             with urllib.request.urlopen(request, timeout=10) as response:
-                if response.status < 400:
+                if response.status < HTTPStatus.BAD_REQUEST:
                     print(f"{name} warm: {health}", flush=True)
                     return
         except (OSError, ValueError, urllib.error.URLError) as exc:
@@ -506,7 +718,7 @@ def acquire_start_slot(directory: pathlib.Path, slots: int) -> int:
 
 
 @contextlib.contextmanager
-def start_gate() -> Iterator[None]:
+def start_gate() -> Generator[None]:
     """Hold one MCP-startup slot: :data:`START_GATE`, or a file slot under a fused parent."""
     directory = os.environ.get(START_GATE_DIR_ENV, "").strip()
     if not directory:
@@ -1276,7 +1488,7 @@ def skill_reminder(task_text: str, language: str, device: str = "cpu") -> str:
         if language != "python"
         else "the module the judge imports, its ABI, and which rewrites survive it"
     )
-    parts = []
+    parts: list[str] = []
     if lang_page:
         parts.append(
             f"IMPORTANT: you are writing {language}. Before you touch the kernel, read "

@@ -68,6 +68,8 @@ __all__ = [
     "PRESET_SEED_KEY",
     "UNARYOPS",
     "UNCAPPED",
+    "FuzzValue",
+    "ParameterTable",
     "Sentinel",
     "apply_func",
     "as_expr",

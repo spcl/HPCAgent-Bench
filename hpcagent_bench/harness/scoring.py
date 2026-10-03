@@ -131,6 +131,7 @@ from hpcagent_bench.support.helpers.sparse.request import (
     resolve_layout,
     uncovered,
 )
+from hpcagent_bench.units import BYTES_PER_GIB, NS_PER_S
 
 __all__ = [
     "BASELINE_LEADERS",
@@ -143,6 +144,7 @@ __all__ = [
     "ML_NOT_LAUNCHED",
     "ORACLE_OUTPUT_CACHE",
     "PYTHON_BASELINES",
+    "PYTHON_ORACLES",
     "REP_VERIFY_DETAIL",
     "REVERIFY_LABEL",
     "TORCH_NOTE_CHARS",
@@ -151,6 +153,7 @@ __all__ = [
     "MlLaunch",
     "MpiBuildError",
     "MpiLaunch",
+    "Reference",
     "ScalingRuns",
     "Score",
     "TimedCell",
@@ -166,15 +169,18 @@ __all__ = [
     "drawn_params",
     "dual_oracle_check",
     "early_stop_line",
+    "first_oracle",
     "floor_bandwidth_gbps",
     "floor_suspect",
     "graded_protocol",
     "graded_score",
     "guillotine_seconds",
+    "identity",
     "implausibility",
     "implausible_speedup",
     "in_layout",
     "independent_verify",
+    "laid_out",
     "layout_label",
     "lost_candidates_line",
     "measure_baselines",
@@ -188,11 +194,13 @@ __all__ = [
     "one_line",
     "oracle_cache_get",
     "oracle_cache_put",
+    "oracle_function",
     "physical_floor_for",
     "primary_baseline",
     "probe_unsynchronized",
     "public_detail",
     "python_baseline_samples",
+    "python_oracle",
     "race_record",
     "realized_tiles_refusal",
     "remember_baseline_timing",
@@ -202,6 +210,7 @@ __all__ = [
     "retime_baseline",
     "reverify_check",
     "run_built_sharded",
+    "sanitized_run",
     "sanitizer_check",
     "score",
     "score_cells",
@@ -209,11 +218,13 @@ __all__ = [
     "score_from_response",
     "score_ml",
     "score_scaling",
+    "single_node_samples",
     "suspect_threshold",
     "suspect_timing",
     "time_scaling_anchor",
     "timed_structure_digest",
     "torch_anchored",
+    "uncovered_grade",
     "unsynchronized_timing",
     "verify_references",
     "verify_result",
@@ -250,7 +261,7 @@ def oracle_cache_get(key: tuple) -> dict[str, np.ndarray] | None:
 def oracle_cache_put(key: tuple, outputs: dict[str, np.ndarray]) -> None:
     """Cache outputs under key, evicting least-recently-used until it fits; an entry over the whole
     cap is not cached. Bounded by size, not count: one entry can be gigabytes."""
-    cap = int(config.get_float("limits.oracle_cache_gb", 4) * 1024**3)
+    cap = int(config.get_float("limits.oracle_cache_gb", 4) * BYTES_PER_GIB)
     size = sum(int(np.asarray(v).nbytes) for v in outputs.values())
     if size > cap:
         return
@@ -2011,7 +2022,7 @@ def graded_score(
         def record_cut(kind: str, budget_s: float) -> None:
             """A best-of-v3 candidate cut by the early stop: no time, and not lost either."""
             baseline_samples[kind] = []
-            baseline_samples[cut_key(kind)] = [int(budget_s * 1e9)]
+            baseline_samples[cut_key(kind)] = [int(budget_s * NS_PER_S)]
             leader = fastest_baseline(baseline_samples, kinds)
             sys.stderr.write(early_stop_line(spec.short_name, kind, budget_s, leader))
             sys.stderr.flush()

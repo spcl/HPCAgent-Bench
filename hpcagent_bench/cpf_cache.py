@@ -499,7 +499,9 @@ def on_demand_plan(
     for miss in missing(view, kernels, language, fptype, "form", target):
         kernel = miss.split(":", 1)[0]
         pointer = recorded(view, kernel, served_dialect({"target": target}, language), fptype)
-        outcome = pointer.get("modes", {}).get("form", {}) if pointer else {}
+        modes = pointer.get("modes") if pointer else None
+        form = modes.get("form") if isinstance(modes, dict) else None
+        outcome = form if isinstance(form, dict) else {}
         if pointer and outcome.get("verdict") != "ok":
             lines.append(
                 f"{kernel}: recorded {outcome.get('verdict')!r}, answered unavailable: {outcome.get('error', '')}"
@@ -571,10 +573,10 @@ def stage(
     if reason := wrong_target(view, target):
         raise CacheMiss(reason)
     source, _ = resolve(view, kernel, language, fptype, "dropin")
-    target = dest / f"{name or short_name(kernel)}{source.suffix}"
+    staged = dest / f"{name or short_name(kernel)}{source.suffix}"
     dest.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(source, target)
-    return target
+    shutil.copyfile(source, staged)
+    return staged
 
 
 def main(argv: Sequence[str] | None = None) -> int:

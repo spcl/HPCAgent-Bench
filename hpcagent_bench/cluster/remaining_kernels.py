@@ -81,12 +81,64 @@ import re
 import sqlite3
 from collections.abc import Iterable
 
-from hpcagent_agent.driver import (
+from hpcagent_agent.driver import (  # pyright: ignore[reportMissingImports] -- the sibling agent/ tree is not on the checker's path
     agent_driver,  # noqa: E402  -- path insert above must run first
     promote_unsubmitted,  # noqa: E402  -- same
 )
 
 from hpcagent_bench import frozen_observations, tags
+
+__all__ = [
+    "CONCLUSIVE_RETURNCODES",
+    "CONTEXT_OVERFLOW_EVIDENCE",
+    "DONE_TABLE",
+    "FUSED_SETUPS_DIR",
+    "HARNESS_FAULT_REASON",
+    "LAUNCHER_EPISODE_ID",
+    "LOG_TAIL_BYTES",
+    "NOT_RERUN_REASON",
+    "PROGRESS_TABLES",
+    "RECORDS",
+    "RERUN_REASONS",
+    "SETUP_EPISODE_IDS",
+    "SMOKE_JOBS",
+    "SMOKE_SETUP",
+    "SUBMIT_KINDS",
+    "WORKER_DIR",
+    "ExitClass",
+    "classify_exit",
+    "collect_setups",
+    "context_overflow_in_tail",
+    "covered",
+    "credited",
+    "episode_cut",
+    "episode_records",
+    "final_attempt_cuts",
+    "frozen_coverage",
+    "fused_setups",
+    "genuine_attempts",
+    "graded_since",
+    "is_fused",
+    "is_smoke",
+    "job_setup",
+    "job_setups",
+    "main",
+    "marked_classes",
+    "open_shard",
+    "owed_classes",
+    "owed_exit_classes",
+    "owed_names",
+    "progress_rows",
+    "recorded_setups",
+    "records",
+    "report_setup",
+    "setup_filter",
+    "setup_selected",
+    "shard_dbs",
+    "table_counts",
+    "tag_kernels",
+    "touched",
+]
 
 #: agent_driver.py is imported for its own exit-code constants and CANCELLED_MARKER name, the one
 #: place that assigns them, so this script's classification cannot desync from what actually wrote
@@ -425,9 +477,9 @@ def genuine_attempts(job_dir: str, setup: str = "") -> set:
     return graded_since(job_dir, query, (HARNESS_FAULT_REASON, *args))
 
 
-def progress_rows(job_dir: str, done: set, setup: str = "") -> list:
+def progress_rows(job_dir: str, done: set, setup: str = "") -> list[tuple[str, str, str, int]]:
     """(table, episode_id, benchmark, count) for every row of a NOT-done kernel in this job dir."""
-    rows = []
+    rows: list[tuple[str, str, str, int]] = []
     for table in PROGRESS_TABLES:
         for (episode_id, kernel), count in table_counts(job_dir, table, setup).items():
             if kernel not in done:
@@ -733,7 +785,7 @@ def report_setup(
         f"owed {len(owed):2d} (budget {len(budget):2d}, infra {len(infra):2d})"
     )
     if list_progress:
-        rows = []
+        rows: list[tuple[str, str, str, str, int]] = []
         for job, job_dir, setup in jobs:
             rows.extend((job, *row) for row in progress_rows(job_dir, seen, setup_filter(job_dir, setup)))
         for job, table, episode_id, kernel, count in sorted(rows):

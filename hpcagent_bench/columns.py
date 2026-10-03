@@ -27,7 +27,45 @@ from hpcagent_bench.languages import gpu_backend
 from hpcagent_bench.precision import Precision
 from hpcagent_bench.vocabulary import FRAMEWORKS, RETIRED_FRAMEWORKS, framework, retired_framework
 
-__all__ = ["ALL_PRECISIONS", "FRAMEWORKS", "IEEE_PRECISIONS", "RETIRED_FRAMEWORKS"]
+__all__ = [
+    "ALL_PRECISIONS",
+    "FRAMEWORKS",
+    "IEEE_PRECISIONS",
+    "RETIRED_FRAMEWORKS",
+    "Cc",
+    "CcAutopar",
+    "CcLlvm",
+    "CcLlvmAutopar",
+    "CcNvhpc",
+    "CcNvhpcAutopar",
+    "CcOneapi",
+    "Cpp",
+    "Cupy",
+    "DaceCpu",
+    "DaceCpuAutoopt",
+    "DaceCpuCanonicalize",
+    "DaceCpuParallel",
+    "DaceGpu",
+    "DaceGpuAutoopt",
+    "DaceGpuCanonicalize",
+    "DaceGpuParallel",
+    "Flang",
+    "Fortran",
+    "FortranAutopar",
+    "Jax",
+    "Llvm",
+    "Numba",
+    "Numpy",
+    "Pluto",
+    "Polly",
+    "Ppcg",
+    "PpcgCuda",
+    "PpcgHip",
+    "Pythran",
+    "Triton",
+    "Tvm",
+    "TvmCpu",
+]
 
 #: The IEEE pair every non-ml_dtypes-aware framework can execute (C/C++/Fortran, Numba, Pythran).
 IEEE_PRECISIONS = frozenset({Precision.FP32, Precision.FP64})
@@ -47,6 +85,8 @@ ALL_PRECISIONS = frozenset(
 
 @framework("numpy", order=0)
 class Numpy:
+    __slots__ = ()
+
     display = "NumPy"
     adapter = "hpcagent_bench.frameworks.framework:Framework"
     base = "numpy"
@@ -59,6 +99,8 @@ class Numpy:
 
 @framework("numba", order=1)
 class Numba:
+    __slots__ = ()
+
     display = "Numba"
     adapter = "hpcagent_bench.frameworks.numba_framework:NumbaFramework"
     base = "numba"
@@ -71,6 +113,8 @@ class Numba:
 
 @framework("cupy", order=25)
 class Cupy:
+    __slots__ = ()
+
     display = "CuPy"
     adapter = "hpcagent_bench.frameworks.cupy_framework:CupyFramework"
     base = "cupy"
@@ -83,6 +127,8 @@ class Cupy:
 
 @framework("jax", order=13, aliases=("jax_cpu", "jax_gpu"))
 class Jax:
+    __slots__ = ()
+
     display = "JAX"
     adapter = "hpcagent_bench.frameworks.jax_framework:JaxFramework"
     base = "jax"
@@ -95,6 +141,8 @@ class Jax:
 
 @framework("pythran", order=6)
 class Pythran:
+    __slots__ = ()
+
     display = "Pythran"
     adapter = "hpcagent_bench.frameworks.pythran_framework:PythranFramework"
     base = "pythran"
@@ -109,6 +157,8 @@ class Pythran:
 class DaceCpu:
     """The numerical-correctness gate and the parent the other CPU columns are read against: the CloudSC
     pipeline, a single defined one rather than a search."""
+
+    __slots__ = ()
 
     display = "DaCe (CPU)"
     adapter = "hpcagent_bench.frameworks.dace_framework:DaceFramework"
@@ -125,6 +175,8 @@ class DaceCpu:
 class DaceGpu:
     """GPU uses upstream ``autoopt``; the canonicalize GPU path is its own flavor."""
 
+    __slots__ = ()
+
     display = "DaCe (GPU)"
     adapter = "hpcagent_bench.frameworks.dace_framework:DaceFramework"
     base = "dace"
@@ -139,6 +191,8 @@ class DaceGpu:
 @framework("dace_cpu_autoopt", order=9)
 class DaceCpuAutoopt:
     """Upstream DaCe's auto_optimize, which also runs on stock DaCe."""
+
+    __slots__ = ()
 
     display = "DaCe (CPU, auto-opt)"
     adapter = "hpcagent_bench.frameworks.dace_framework:DaceFramework"
@@ -155,6 +209,8 @@ class DaceCpuAutoopt:
 
 @framework("dace_gpu_autoopt", order=23)
 class DaceGpuAutoopt:
+    __slots__ = ()
+
     display = "DaCe (GPU, auto-opt)"
     adapter = "hpcagent_bench.frameworks.dace_framework:DaceFramework"
     base = "dace"
@@ -170,6 +226,8 @@ class DaceGpuAutoopt:
 
 @framework("dace_cpu_canonicalize", order=8)
 class DaceCpuCanonicalize:
+    __slots__ = ()
+
     display = "DaCe (CPU, canonicalized)"
     adapter = "hpcagent_bench.frameworks.dace_framework:DaceFramework"
     base = "dace"
@@ -185,6 +243,8 @@ class DaceCpuCanonicalize:
 
 @framework("dace_gpu_canonicalize", order=24)
 class DaceGpuCanonicalize:
+    __slots__ = ()
+
     display = "DaCe (GPU, canonicalized)"
     adapter = "hpcagent_bench.frameworks.dace_framework:DaceFramework"
     base = "dace"
@@ -203,6 +263,8 @@ class DaceCpuParallel:
     """The loop2map optimizer (``dace_framework.pipeline_loop2map``): a separate, shorter recipe than
     ``parallel_cpu``, built only from upstream passes, so it runs on a stock install."""
 
+    __slots__ = ()
+
     display = "DaCe CPU parallel (loop2map)"
     adapter = "hpcagent_bench.frameworks.dace_framework:DaceFramework"
     base = "dace"
@@ -218,6 +280,8 @@ class DaceCpuParallel:
 
 @framework("dace_gpu_parallel", order=32)
 class DaceGpuParallel:
+    __slots__ = ()
+
     display = "DaCe GPU parallel (loop2map)"
     adapter = "hpcagent_bench.frameworks.dace_framework:DaceFramework"
     base = "dace"
@@ -236,6 +300,8 @@ class Cc:
     """Native backend: one flavor per (language, compiler), each building its own .so. ``polly`` is the C++
     flavor with a polyhedral flags preset; ``pluto`` is a separate source-to-source base."""
 
+    __slots__ = ()
+
     display = "GCC"
     adapter = "hpcagent_bench.frameworks.native_framework:NativeFramework"
     base = "native"
@@ -250,6 +316,8 @@ class Cc:
 @framework("cc_autopar", order=7, aliases=("c-autopar",))
 class CcAutopar:
     """gcc's auto-parallelizer, the GCC half of the autopar axis clang already had via polly."""
+
+    __slots__ = ()
 
     display = "GCC (autopar)"
     adapter = "hpcagent_bench.frameworks.native_framework:NativeFramework"
@@ -268,6 +336,8 @@ class CcLlvm:
     """The C family across the graded vendors, named ``cc_<vendor>`` (``llvm`` and ``polly`` already name the
     clang C++ columns)."""
 
+    __slots__ = ()
+
     display = "Clang"
     adapter = "hpcagent_bench.frameworks.native_framework:NativeFramework"
     base = "native"
@@ -282,6 +352,8 @@ class CcLlvm:
 
 @framework("cc_llvm_autopar", order=16)
 class CcLlvmAutopar:
+    __slots__ = ()
+
     display = "Clang (autopar)"
     adapter = "hpcagent_bench.frameworks.native_framework:NativeFramework"
     base = "native"
@@ -298,6 +370,8 @@ class CcLlvmAutopar:
 
 @framework("cc_nvhpc", order=17)
 class CcNvhpc:
+    __slots__ = ()
+
     display = "NVHPC"
     adapter = "hpcagent_bench.frameworks.native_framework:NativeFramework"
     base = "native"
@@ -312,6 +386,8 @@ class CcNvhpc:
 
 @framework("cc_nvhpc_autopar", order=18)
 class CcNvhpcAutopar:
+    __slots__ = ()
+
     display = "NVHPC (autopar)"
     adapter = "hpcagent_bench.frameworks.native_framework:NativeFramework"
     base = "native"
@@ -328,6 +404,8 @@ class CcNvhpcAutopar:
 
 @framework("llvm", order=10)
 class Llvm:
+    __slots__ = ()
+
     display = "Clang"
     adapter = "hpcagent_bench.frameworks.native_framework:NativeFramework"
     base = "native"
@@ -344,6 +422,8 @@ class Llvm:
 class Cpp:
     """The gcc C++ column, completing gcc/g++/gfortran as one family (``llvm`` and ``polly`` are clang)."""
 
+    __slots__ = ()
+
     display = "g++"
     adapter = "hpcagent_bench.frameworks.native_framework:NativeFramework"
     base = "native"
@@ -358,6 +438,8 @@ class Cpp:
 
 @framework("fortran", order=4)
 class Fortran:
+    __slots__ = ()
+
     display = "gfortran"
     adapter = "hpcagent_bench.frameworks.native_framework:NativeFramework"
     base = "native"
@@ -372,6 +454,8 @@ class Fortran:
 @framework("fortran_autopar", order=21)
 class FortranAutopar:
     """The Fortran half of the autopar axis (same emitted Fortran as ``fortran``, autopar flags differ)."""
+
+    __slots__ = ()
 
     display = "gfortran (autopar)"
     adapter = "hpcagent_bench.frameworks.native_framework:NativeFramework"
@@ -389,6 +473,8 @@ class FortranAutopar:
 class Flang:
     """LLVM Fortran, the flang half of the gfortran/flang pair (declines cleanly if the driver is absent)."""
 
+    __slots__ = ()
+
     display = "Flang"
     adapter = "hpcagent_bench.frameworks.native_framework:NativeFramework"
     base = "native"
@@ -403,6 +489,8 @@ class Flang:
 
 @framework("polly", order=12)
 class Polly:
+    __slots__ = ()
+
     display = "Polly"
     adapter = "hpcagent_bench.frameworks.native_framework:NativeFramework"
     base = "native"
@@ -421,6 +509,8 @@ class Polly:
 class Pluto:
     """Tiled OpenMP C. Pluto and PPCG share the pet/isl front end but run on different hardware, so they stay
     separate columns; polycc reads the C target's ``_pluto_input.c`` and writes C (VLA ``restrict`` parameters)."""
+
+    __slots__ = ()
 
     display = "Pluto"
     adapter = "hpcagent_bench.frameworks.pluto_framework:PlutoFramework"
@@ -442,6 +532,8 @@ class Ppcg:
     """ppcg emits CUDA; the compiled language is the local GPU toolchain's (hipify on ROCm,
     ``hpcagent_bench.ppcg_transform``), and compilers.yaml maps it to its compiler."""
 
+    __slots__ = ()
+
     display = "PPCG"
     adapter = "hpcagent_bench.frameworks.pluto_framework:PlutoFramework"
     base = "pluto"
@@ -458,6 +550,8 @@ class Ppcg:
 @framework("ppcg_cuda", order=28)
 class PpcgCuda:
     """The ppcg transform with the GPU vendor pinned, so a row's vendor is a property of the column."""
+
+    __slots__ = ()
 
     display = "PPCG (CUDA)"
     adapter = "hpcagent_bench.frameworks.pluto_framework:PlutoFramework"
@@ -480,6 +574,8 @@ class PpcgHip:
     "PPCG (HIP)": ppcg has no AMD target (``--target`` takes c, cuda or opencl), so a reader comparing it with a
     hand-written HIP column is comparing against a translated source, not what a polyhedral compiler emits."""
 
+    __slots__ = ()
+
     display = "PPCG (CUDA via hipify)"
     adapter = "hpcagent_bench.frameworks.pluto_framework:PlutoFramework"
     base = "pluto"
@@ -499,6 +595,8 @@ class PpcgHip:
 class Triton:
     """No fp64 path; runs the low-precision matrix instead."""
 
+    __slots__ = ()
+
     display = "Triton"
     adapter = "hpcagent_bench.frameworks.triton_framework:TritonFramework"
     base = "triton"
@@ -513,6 +611,8 @@ class Triton:
 class Tvm:
     """One base, two hardware flavors sharing the unified ``<kernel>_tvm.py`` (``tvm_build.active_kernel``)."""
 
+    __slots__ = ()
+
     display = "TVM"
     adapter = "hpcagent_bench.frameworks.tvm_framework:TVMFramework"
     base = "tvm"
@@ -525,6 +625,8 @@ class Tvm:
 
 @framework("tvm_cpu", order=30)
 class TvmCpu:
+    __slots__ = ()
+
     display = "TVM (CPU)"
     adapter = "hpcagent_bench.frameworks.tvm_framework:TVMFramework"
     base = "tvm"
@@ -540,6 +642,8 @@ class CcOneapi:
     """No oneAPI setup exists any more (the Intel compilers are in no image and no compilers.yaml block), but
     the key keeps its hue slot: a removal would repaint every entry after it in every figure already drawn
     (tests/test_vocabulary.py), and it keeps a recorded ``cc_oneapi`` row resolvable to a name."""
+
+    __slots__ = ()
 
     display = "oneAPI (retired)"
     reason = "the Intel compilers are in no image"

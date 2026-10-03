@@ -16,6 +16,7 @@ import asyncio
 import json
 import os
 import sys
+from http import HTTPStatus
 from typing import Any
 
 import httpx
@@ -27,6 +28,49 @@ from pydantic import BaseModel, Field
 
 from hpcagent_bench import fused
 from hpcagent_bench.harness import judge_web_search
+
+__all__ = [
+    "CLIENT_CLOSED_REQUEST",
+    "EPISODE_ID_MISSING",
+    "FOREIGN_SETUP",
+    "GRADED_WITHOUT_CLIENT",
+    "IMPLEMENTED",
+    "JUDGE_UNREACHABLE",
+    "JUDGE_UNREACHABLE_CAUSE",
+    "SEARCH_NOT_PROVISIONED",
+    "SINGLE_SUBMISSION_KEY",
+    "SPENT_SUBMISSIONS",
+    "SUBMISSION_SPENT",
+    "UPSTREAM_TIMEOUT_SECONDS",
+    "UPSTREAM_URL",
+    "JSONValue",
+    "SearchRequest",
+    "app",
+    "baseline",
+    "body_episode_id",
+    "body_object",
+    "caller_setup",
+    "canonical_parallel_form",
+    "client_left",
+    "contract_value",
+    "episode_id_refusal",
+    "forward",
+    "graded_nothing",
+    "health",
+    "profile",
+    "read_route",
+    "refuse_foreign_setup",
+    "relay",
+    "relayed_routes",
+    "score",
+    "search",
+    "send_upstream",
+    "submission_key",
+    "submission_spent",
+    "submit",
+    "terminal_grade",
+    "verdict_of",
+]
 
 #: A JSON value as decoded by ``json.loads``: request bodies and the recursive scrub below both
 #: carry this shape.
@@ -193,7 +237,8 @@ async def forward(request: Request, path: str, setup: str | None = None) -> http
         # Named by type: a read timeout's message is empty, and "failed: " alone cannot tell a judge
         # still grading past the relay's wait from one that died mid-request.
         raise HTTPException(
-            status_code=502, detail=f"judge upstream {UPSTREAM_URL}{path} failed: {type(exc).__name__}: {exc}"
+            status_code=HTTPStatus.BAD_GATEWAY,
+            detail=f"judge upstream {UPSTREAM_URL}{path} failed: {type(exc).__name__}: {exc}",
         ) from exc
 
 
@@ -313,7 +358,7 @@ async def search(request: SearchRequest) -> dict[str, Any]:
             status_code=SEARCH_NOT_PROVISIONED, detail={"cause": "not_provisioned", "error": str(exc)}
         ) from exc
     except Exception as exc:  # noqa: BLE001 - return a stable HTTP service error.
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        raise HTTPException(status_code=HTTPStatus.BAD_GATEWAY, detail=str(exc)) from exc
 
 
 def verdict_of(graded: dict[str, Any]) -> dict[str, object]:
@@ -379,7 +424,7 @@ def graded_nothing(status: int) -> bool:
     request's own fault, and :data:`JUDGE_UNREACHABLE` means the judge never saw it. Any other 5xx or
     a lost answer may follow a grade that ran, so it spends the submission, as ``tools/submit.py``
     counts it."""
-    return 400 <= status < 500 or status == JUDGE_UNREACHABLE
+    return HTTPStatus.BAD_REQUEST <= status < HTTPStatus.INTERNAL_SERVER_ERROR or status == JUDGE_UNREACHABLE
 
 
 async def terminal_grade(request: Request) -> Response:
@@ -406,7 +451,7 @@ async def terminal_grade(request: Request) -> Response:
         raise
     if key is not None and graded_nothing(upstream.status_code):
         SPENT_SUBMISSIONS.discard(key)
-    if upstream.status_code != 200:
+    if upstream.status_code != HTTPStatus.OK:
         return relay(upstream)  # a refusal describes the request, not the answer
     return JSONResponse(verdict_of(upstream.json()))
 
@@ -435,7 +480,7 @@ async def profile(request: Request) -> Response:
     return relay(await forward(request, "/profile"))
 
 
-@app.exception_handler(404)
+@app.exception_handler(HTTPStatus.NOT_FOUND)
 async def read_route(request: Request, exc: HTTPException) -> Response:
     """A GET no route matched, relayed as it came, so a new judge read route needs no handler here.
 

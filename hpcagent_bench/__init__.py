@@ -61,7 +61,7 @@ _API_EXPORTS = (
     "InputMode",
 )
 
-__all__ = list(_API_EXPORTS)
+__all__ = list(_API_EXPORTS)  # pyright: ignore[reportUnsupportedDunderAll] -- the list is the lazy-export table
 
 
 def __getattr__(name: str) -> object:

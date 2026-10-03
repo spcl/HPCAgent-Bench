@@ -33,6 +33,27 @@ import subprocess
 import sys
 import time
 
+__all__ = [
+    "ALIVE",
+    "HEARTBEAT_S",
+    "POLL_S",
+    "SLURM_CALL_S",
+    "STALE_MARK",
+    "STALL_S",
+    "TERM_GRACE_S",
+    "claim",
+    "finish",
+    "kill",
+    "main",
+    "serve",
+    "signal_group",
+    "stale",
+    "start",
+    "step",
+    "step_id",
+    "touch",
+]
+
 #: Seconds either side may go without touching its heartbeat before the other declares it dead.
 #: These files live on Lustre; a tighter window reads propagation delay as a death, and a
 #: filesystem stall can freeze the relay and the judges together for minutes.
