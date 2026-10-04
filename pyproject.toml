@@ -190,7 +190,7 @@ members = ["agent", "adapters/hpcagent_bench"]
 [tool.uv.sources]
 # The spcl/dace@extended commit this release is tested with, and the ONE place it is written: uv.lock
 # records it, and the image builds and jobs read it through scripts/dace_pin.sh.
-dace = { git = "https://github.com/spcl/dace.git", rev = "3a9c4a99b140f52d438fc69ec1f012e4f41bf32a" }
+dace = { git = "https://github.com/spcl/dace.git", rev = "b6b7804d754dc1fb0b85979483989d7d0db21d1f" }
 hpcagent-agent = { workspace = true }
 torch = [
     { index = "pytorch-cpu", extra = "cpu" },
