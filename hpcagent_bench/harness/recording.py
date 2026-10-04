@@ -797,7 +797,7 @@ def record(
             results_db.add_cells(conn, grade_id, [cell_values(cell) for cell in score.cells])
         for law in curves:
             if law.curve is not None or law.dropped:
-                record_scaling(conn, grade_id, law.curve, law.mode, dropped=law.dropped)
+                record_scaling(conn, grade_id, law.curve, law.mode, dropped=law.dropped, label=law.label)
         conn.commit()
     return Recorded(outcome, detail, grade_id)
 
@@ -951,12 +951,13 @@ def record_scaling(
     status: str | None = None,
     disclosure: str | None = None,
     notes: str | None = None,
+    label: str = "",
 ) -> int:
-    """Persist one grade's scaling curve under law ``mode`` -- every measured point AND every dropped
-    P -- and return the number of ``scaling_points`` rows written.
+    """Persist one grade's scaling curve under law ``mode`` on its input ``label`` ('' = the preset) --
+    every measured point AND every dropped P -- and return the number of ``scaling_points`` rows written.
 
-    Idempotent per grade and law (:func:`results_db.add_scaling` replaces what the grade held for the
-    law). ``mode`` must be the curve's own (``scaling.mode``); a disagreement is refused rather than
+    Idempotent per grade, law and input (:func:`results_db.add_scaling` replaces what the grade held for
+    them). ``mode`` must be the curve's own (``scaling.mode``); a disagreement is refused rather than
     recorded. ``dropped`` defaults to the curve's holes (``scaling.dropped``); pass
     ``TaskScore.scaling_dropped`` when ``scaling`` is None -- every P dropped -- so a curve that is all
     hole is still on record. ``status`` defaults to ``graded`` for a curve, ``no-curve`` for none;
@@ -982,6 +983,7 @@ def record_scaling(
     rows += [{"ranks": h.ranks, "nodes": h.nodes, "note": h.note} for h in holes]
     law: dict[str, results_db.Value] = {
         "mode": mode.value,
+        "input": label,
         "status": status or ("graded" if scaling is not None else "no-curve"),
         "single_rank_ns": scaling.single_rank_ns if scaling is not None else None,
         "disclosure": disclosure,

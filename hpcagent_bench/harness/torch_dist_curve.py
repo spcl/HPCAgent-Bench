@@ -29,15 +29,12 @@ re-launched eager; ``compile_mode`` records which ran (the eager row names the c
 ``note``). A point neither launch could time is a HOLE -- ``ranked_ns`` NULL and the reason in
 ``note`` -- never a fabricated time; a hole is final like a time (delete its row to re-time it).
 
-Rows missing from every ``scaling-grade-*.db`` of an out dir are the grade job's WORK ITEMS, one
-per (kernel, law, P): :func:`missing_points` lists them for ``scaling_grade pending`` (the feeder's
-test) and the chunk jobs claim them in ``scaling-claims.db`` (:func:`claim_key`) after the
-submissions, so grades written before this table existed get their curve from the next chunk.
+Rows missing from every ``scaling-grade-*.db`` of an out dir are a scaling shard's last work items, one
+per (kernel, law, P) of the items it graded (:func:`missing_points`, ``scaling_grade.run_shard``).
 """
 
 import contextlib
 import dataclasses
-import hashlib
 import json
 import math
 import os
@@ -57,7 +54,6 @@ from hpcagent_bench.harness import (
     mpi_shard_driver,
     mpi_sizing,
     results_db,
-    scaling_claims,
     scoring,
     timing,
     torch_reference,
@@ -79,7 +75,6 @@ __all__ = [
     "Point",
     "Stack",
     "Timing",
-    "claim_key",
     "fill_point",
     "launch_once",
     "main",
@@ -96,8 +91,8 @@ __all__ = [
     "time_point",
 ]
 
-#: ``source`` of a torch.distributed baseline row, and the claim DB's ``db`` of its work items.
-SOURCE: str = scaling_claims.BASELINE_DB
+#: ``source`` of a torch.distributed baseline row.
+SOURCE: str = "torch_dist"
 #: The grade DB's table of reference curve points (a results DB, schema v1); ``source`` names the
 #: reference that was timed.
 TABLE: str = "reference_scaling_points"
@@ -161,13 +156,6 @@ def row_key(point: Point, where: Stack) -> tuple[object, ...]:
 def problem_key(point: Point, where: Stack) -> tuple[object, ...]:
     """The key WITHOUT the law: two laws' points with one problem at one P are one launch."""
     return (point.kernel, point.ranks, point.params_json, where.arch, where.image)
-
-
-def claim_key(point: Point, where: Stack) -> tuple[str, str, str, int]:
-    """``point``'s work-item key in ``scaling-claims.db`` (``scaling_claims.Key``): ``db`` is
-    :data:`SOURCE`, so it never collides with a submission's judge-DB path."""
-    digest = hashlib.sha256(json.dumps(row_key(point, where)).encode()).hexdigest()[:16]
-    return (SOURCE, f"{point.law.value}:P={point.ranks}:{digest}", point.kernel, 0)
 
 
 def planned_points(kernel: str, counts: Sequence[int], preset: str) -> list[Point]:

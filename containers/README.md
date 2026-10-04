@@ -69,7 +69,7 @@ containers/images/registry.sh promote judge-agent-amd judge   # after it passes;
 
 With `CE_IMAGE_FLAVOR=native` set at submission, an experiment's agent and judge EDFs become the
 `-native` ones (`hpcagent_bench/cluster/submit_common.sh` `apply_flavor`), as do the default EDFs of the
-standalone scripts (regrade, mlscale-grade, preflight).
+standalone scripts (regrade, preflight).
 
 A plain `podman build` / `docker build` of a Dockerfile, without the build scripts, is a native
 build too: `SPACK_TARGET` defaults to empty, which is spack's host detection. Every image records

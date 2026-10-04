@@ -516,8 +516,32 @@ def drop_reason(row: pd.Series) -> str:
     return note or "no measured time recorded at this P"
 
 
+def folded_point(points: Sequence[Point]) -> Point:
+    """One P of a law swept from several graded inputs: the geomean over the inputs of every ratio and
+    time (each input's own anchor T(1) stays inside its own ratios)."""
+    first = points[0]
+    if len(points) == 1:
+        return first
+
+    def mean(values: Iterable[float]) -> float:
+        return summary.geomean([float(v) for v in values])
+
+    return dataclasses.replace(
+        first,
+        nodes=max(point.nodes for point in points),
+        single_rank_ns=round(mean(point.single_rank_ns for point in points)),
+        ranked_ns=round(mean(point.ranked_ns for point in points)),
+        achieved_speedup=mean(point.achieved_speedup for point in points),
+        ideal_speedup=mean(point.ideal_speedup for point in points),
+        efficiency=mean(point.efficiency for point in points),
+        work_ratio=mean(point.work_ratio for point in points),
+    )
+
+
 def curves(frame: pd.DataFrame) -> list[Curve]:
-    """Every (setup, kernel, mode) curve in the frame, ascending in P, with its dropped points.
+    """Every (setup, kernel, mode) curve in the frame, ascending in P, with its dropped points. A law swept
+    from several graded inputs (``scaling_input``) is one curve: each P folds its inputs' points by
+    geomean (:func:`folded_point`), and an input that missed a P names it among the dropped.
 
     An empty or column-less frame yields an empty list rather than raising: an experiment that has not
     run its scaling sweep yet is a normal state of the table, not a broken one.
@@ -528,15 +552,18 @@ def curves(frame: pd.DataFrame) -> list[Curve]:
     out: list[Curve] = []
     for key, group in rows.groupby(["setup", "kernel", "scaling_mode"], sort=True):
         setup, kernel, mode = population.key_parts(key, 3)
-        points: list[Point] = []
+        by_rank: dict[int, list[Point]] = {}
         dropped: list[tuple[int, str]] = []
         for index in range(len(group)):
             row = group.iloc[index]
             point = point_of(row, str(mode))
+            label = text_cell(row, "scaling_input")
             if point is None:
-                dropped.append((int(cell(row, "scaling_ranks", 0.0)), drop_reason(row)))
+                reason = drop_reason(row)
+                dropped.append((int(cell(row, "scaling_ranks", 0.0)), f"{label}: {reason}" if label else reason))
             else:
-                points.append(point)
+                by_rank.setdefault(point.ranks, []).append(point)
+        points = [folded_point(found) for found in by_rank.values()]
         model = (
             TORCH_DIST_SETUP
             if setup == TORCH_DIST_SETUP
