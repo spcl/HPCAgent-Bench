@@ -274,7 +274,6 @@ verdicts are the stars; the figure recomputes only the drawn point through
 | `title`, `intervention` | panel title; registered packet key the treated side wears (shape, name); `packets`/`harness`: each column wears its own packet's or harness's shape |
 | `observations=a.db,b.db` | observations for this panel; default the positional files |
 | `control-label=...` | legend name of a control that is not "no packet" |
-| `repeats=median` | median over designed repeats instead of latest run |
 | `placeholders=Fortran` | empty column for a leg with no data yet |
 | `pending=kimi27sglang,qwen38` | empty column per model with no pair yet; `?` with `--mark-pending` |
 | `difference=HIP:qwen38,...` | grey bar between a named pair's two marks, with its factor |
