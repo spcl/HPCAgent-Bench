@@ -390,9 +390,8 @@ def test_default_argument_sentinel_numeric() -> None:
 def test_default_argument_sentinel_survives_broken_adjacency() -> None:
     # An unrelated statement (``unrelated = other + 1.0``) sits between the reassigned param's
     # ``None`` init and the guard that resolves it, so the STRICT adjacency rule does not fire and
-    # the init IS read again through the guard's own rebind. This used to refuse; the branch-rebind
-    # rule now settles it, because the folded guard rebinds ``stride`` and no surviving test
-    # inspects the sentinel. Checked numerically -- the whole point is that the value the rebind
+    # the init IS read again through the guard's own rebind. The branch-rebind rule settles it,
+    # because the folded guard rebinds ``stride`` and no surviving test inspects the sentinel. Checked numerically -- the whole point is that the value the rebind
     # writes is the only one any reader ever sees.
     src = (
         "import numpy as np\n"

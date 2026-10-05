@@ -126,8 +126,7 @@ def test_computed_index_call_in_subscript() -> None:
 # ComputedIndexCallHoister); here it is the assignment RHS whose OPERAND is a
 # non-Name expression. The reduction-operand hoist must spill ``np.abs(v)`` into a
 # fresh ``__cb`` temp before the arg-reduction scaffold (which needs a Name operand)
-# runs -- argmax / argmin were previously excluded from that hoist set, so this
-# raised ``call to np.argmax not supported`` at emit.
+# runs; without the hoist this raises ``call to np.argmax not supported`` at emit.
 
 
 def test_argreduction_over_computed_operand() -> None:

@@ -120,10 +120,10 @@ def test_a_name_read_inside_a_store_target_is_not_a_rebinding() -> None:
 
 
 def test_a_bounded_or_strided_slice_is_sized_not_passed_through() -> None:
-    # A slice axis used to keep the SOURCE extent, which is right only for a whole-axis slice.
-    # raman_fitting reads ``centres.shape[0]`` off ``p[0:3 * npeaks:3]``: passed through it came
-    # back the full ``3 * npeaks + 1``, so the jacobian was allocated three times over and strided
-    # against a count it does not have. Wrong numbers, and nothing downstream reports it.
+    # A slice axis keeps the SOURCE extent only for a whole-axis slice. raman_fitting reads
+    # ``centres.shape[0]`` off ``p[0:3 * npeaks:3]``; the full ``3 * npeaks + 1`` there would allocate
+    # the jacobian three times over and stride it against a count it does not have -- wrong numbers,
+    # and nothing downstream reports it.
     assert axes_(("M",), "a[0:3 * npeaks:3]") == ["((3 * npeaks) + 2) // 3"]
     assert axes_(("M",), "a[:npeaks]") == ["npeaks"]
     assert axes_(("M",), "a[2:7]") == ["(7) - (2)"]

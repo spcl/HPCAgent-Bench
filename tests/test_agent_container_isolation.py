@@ -185,7 +185,7 @@ def test_vllm_node_mounts_only_the_jit_category_subdirs_not_the_whole_cache_root
     what the role sees) stays pinned alongside it: nothing ever wrote there.
     """
     jit_root = tmp_path / "jit-cache"
-    # Stand in for the sensitive subtrees the whole-root mount used to expose alongside the JIT
+    # Stand in for the sensitive subtrees a whole-root mount would expose alongside the JIT
     # categories.
     (jit_root / "results").mkdir(parents=True)
     (jit_root / "results" / "canon.db").write_text("stand-in")

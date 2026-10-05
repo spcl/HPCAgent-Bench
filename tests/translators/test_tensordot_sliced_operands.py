@@ -60,8 +60,8 @@ def test_iter_extent_of_sliced_tensordot_uses_the_slice_bound() -> None:
 
 
 def test_expand_tensordot_materializes_non_name_operands() -> None:
-    # Unit-level: expand_tensordot used to raise "operands must be bare Names" for exactly
-    # this shape. It now spills each into a __td_ scratch buffer and contracts those.
+    # Unit-level: expand_tensordot spills each non-Name operand into a __td_ scratch buffer and
+    # contracts those.
     a = ast.parse("x[:, ki:ki + H_out, kj:kj + W_out, :]", mode="eval").body
     b = ast.parse("w[ki, kj]", mode="eval").body
     shape_table = {"x": ("N", "H", "W", "Cin"), "w": ("K", "K", "Cin", "Cout")}

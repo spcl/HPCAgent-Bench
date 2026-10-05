@@ -10,8 +10,8 @@ scale-invariant geometric mean:
 
     rho_S = G_S(after) / G_S(before)        rho_C = G_C(before) / G_C(after)
 
-so 1 is no effect and > 1 is an improvement on both axes. An intervention is a point in the plane,
-compared by Pareto dominance (:func:`dominates`); ``Q`` is a single-number ranking proxy.
+so 1 is no effect and > 1 is an improvement on both axes. An intervention is a point in the plane;
+``Q`` is a single-number ranking proxy.
 
 ``rho`` is ``exp`` of the mean per-task log delta and :func:`bootstrap_interval` bounds only that.
 Significance is a different parameter: the Hodges-Lehmann pseudo-median of the same deltas with its
@@ -48,13 +48,11 @@ __all__ = [
     "axis_columns",
     "bootstrap_interval",
     "correct_family",
-    "dominates",
     "efficacy",
     "family_rows",
     "geometric_mean",
     "log_deltas",
     "log_to_pct",
-    "pareto_front",
     "ratio",
     "standard_error",
 ]
@@ -265,25 +263,8 @@ class Efficacy:
 
     @property
     def point(self) -> tuple[float, float]:
-        """``(rho_S, rho_C)`` -- the pair Pareto dominance is decided on, not ``Q``."""
+        """``(rho_S, rho_C)``: the intervention's point in the score-cost plane."""
         return (self.score.rho, self.cost.rho)
-
-
-def dominates(a: Efficacy, b: Efficacy) -> bool:
-    """Whether ``a`` Pareto-dominates ``b``: at least as good on both ratios and strictly better on one
-    (the pairs no weighting of ``Q`` can reorder)."""
-    better_or_equal = a.score.rho >= b.score.rho and a.cost.rho >= b.cost.rho
-    strictly_better = a.score.rho > b.score.rho or a.cost.rho > b.cost.rho
-    return better_or_equal and strictly_better
-
-
-def pareto_front(efficacies: Mapping[str, Efficacy]) -> tuple[str, ...]:
-    """The names in ``efficacies`` that nothing else dominates, in the input's own order."""
-    return tuple(
-        name
-        for name, item in efficacies.items()
-        if not any(other is not item and dominates(other, item) for other in efficacies.values())
-    )
 
 
 def ratio(

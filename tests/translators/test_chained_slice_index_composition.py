@@ -87,8 +87,8 @@ def test_an_index_tuple_composes_position_by_position_with_the_inner_slices() ->
 
 
 def test_arithmetic_in_an_index_is_basic_indexing() -> None:
-    # ``hn[2 * l][:]``: the inner index is a BinOp, which used to read as "not scalar" and block
-    # both the flatten and the trailing-slice pad. It selects one axis exactly as ``hn[l]`` does.
+    # ``hn[2 * l][:]``: the inner index is a BinOp, a scalar index all the same, so the flatten and
+    # the trailing-slice pad both apply. It selects one axis exactly as ``hn[l]`` does.
     src = (
         "import numpy as np\n"
         "def f(a, out):\n"

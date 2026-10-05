@@ -26,9 +26,8 @@ def assert_native_ok(res: dict[str, str]) -> None:
 def test_compound_int_floordiv_and_mod_match_numpy() -> None:
     # //= and %= over the full sign matrix: numpy // floors toward -inf and % takes the
     # divisor's sign, unlike C/Fortran's native truncate/dividend-sign forms.
-    # The compound ops run DIRECTLY on the output buffers -- the shape a real kernel writes.
-    # (This used to be routed through scalar locals to dodge run_op's complex-scratch probe,
-    # which raised TypeError on `//=` over complex; the probe now skips itself instead.)
+    # The compound ops run DIRECTLY on the output buffers -- the shape a real kernel writes
+    # (run_op's complex-scratch probe skips itself for `//=` / `%=`, which have no complex loop).
     src = (
         "import numpy as np\n"
         "def f(a, b, q, r):\n"
@@ -80,10 +79,9 @@ def test_floordiv_float_matches_numpy_over_overflow_range() -> None:
 
 def test_int_cast_floordiv_and_mod_floor_like_numpy() -> None:
     # int(a[i]) is an INTEGER however float a is, so ``int(a[i]) // 2`` must take the
-    # integer floor-div branch. The float-operand test used to walk into the cast, see
-    # float ``a`` and pick the float path ``floor((x) / (y))`` -- but both emitted operands
-    # are already int64 there, so C truncated toward zero and the floor was a no-op:
-    # int(-7.5) // 2 gave -3 instead of numpy's -4 (same for the divisor-sign %).
+    # integer floor-div branch. A float-operand test that walks into the cast sees float ``a`` and
+    # picks ``floor((x) / (y))``, but both emitted operands are int64 there, so C truncates toward
+    # zero and the floor is a no-op: int(-7.5) // 2 gives -3 instead of numpy's -4 (same for %).
     src = (
         "import numpy as np\n"
         "def f(a, q, r):\n"

@@ -49,7 +49,6 @@ __all__ = [
     "NAME_FIRST",
     "NAME_READERS",
     "OBSERVATIONS_TABLE",
-    "RECORD_TABLES",
     "RECORD_WHERE",
     "SHARD_DEPTH",
     "AgentIndices",
@@ -84,9 +83,6 @@ if TYPE_CHECKING:
     import pandas as pd
 
 LOG = logging.getLogger(__name__)
-
-#: The records a grade reads as (:data:`RECORD_WHERE`).
-RECORD_TABLES: tuple[str, ...] = ("calls", "submissions", "attempts")
 
 #: Databases whose name says they are not a judge record. Everything else under a run root that
 #: ends in .db is one -- searched RECURSIVELY rather than at a list of known depths, because the
