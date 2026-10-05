@@ -167,14 +167,14 @@ def test_a_rerun_job_is_a_separate_run_and_the_latest_run_stands(paired_setups: 
 
 
 def test_designed_repeats_score_the_median_run(paired_setups: ModuleType) -> None:
-    """git-scicomp gives each kernel three agents by design, so all three are the setup's result and the
-    kernel scores their median, whatever order they finished in."""
+    """A designed repeat gives each kernel one agent per slot, so all of them are the setup's result and
+    the kernel scores their median, whatever order they finished in."""
     rows = [
-        graded("a", "k1", 5.0, job="j1", ts=1000),
-        graded("a", "k1", 3.0, job="j1", ts=2000) | {"episode_id": "a.n0.p0.w1"},
-        graded("a", "k1", 9.0, job="j1", ts=3000) | {"episode_id": "a.n0.p0.w2"},
+        graded("a", "k1", 5.0, job="j1", ts=1000) | {"slot": 1},
+        graded("a", "k1", 3.0, job="j1", ts=2000) | {"episode_id": "a.n0.p0.w1.s2", "slot": 2},
+        graded("a", "k1", 9.0, job="j1", ts=3000) | {"episode_id": "a.n0.p0.w2.s3", "slot": 3},
     ]
-    assert paired_setups.best_by_setup_kernel(frame(rows), population.RepeatPolicy.MEDIAN).speedup.tolist() == [5.0]
+    assert paired_setups.best_by_setup_kernel(frame(rows)).speedup.tolist() == [5.0]
 
 
 def test_the_score_leg_keeps_a_kernel_that_has_no_call_row(paired_setups: ModuleType, tmp_path: pathlib.Path) -> None:
@@ -228,7 +228,7 @@ def test_usage_counts_every_call_of_the_selected_tasks_per_episode(paired_setups
         graded("a", "k2", 2.0, job="j1", ts=1300),
         call("a", "k1", 50.0, job="j2", ts=5000) | {"route": "submit"},
     ]
-    usage = paired_setups.episode_usage(frame(rows), population.RepeatPolicy.LATEST).loc["a"]
+    usage = paired_setups.episode_usage(frame(rows)).loc["a"]
     assert usage.tasks == 2
     assert usage.score_calls_per_episode == pytest.approx(1.0)
     assert usage.submit_calls_per_episode == pytest.approx(1.0)
@@ -458,9 +458,7 @@ def test_a_teardown_harvest_does_not_make_the_agent_a_non_submitter(
     served = paired_setups.served_by_setup(obs)
     table = paired_setups.setup_aggregates(best, served, "numba")
     tokens = paired_setups.tokens_by_setup_kernel(obs)
-    row = paired_setups.setup_rows(
-        best, graded_frame, table, served, tokens, paired_setups.episode_usage(obs, population.RepeatPolicy.LATEST)
-    )[0]
+    row = paired_setups.setup_rows(best, graded_frame, table, served, tokens, paired_setups.episode_usage(obs))[0]
 
     assert row["n_solved"] == 3
     assert row["n_final_harvest"] == 2
@@ -484,9 +482,7 @@ def test_a_promoted_row_is_not_a_submission_either(paired_setups: ModuleType, tm
     served = paired_setups.served_by_setup(obs)
     table = paired_setups.setup_aggregates(best, served, "numba")
     tokens = paired_setups.tokens_by_setup_kernel(obs)
-    row = paired_setups.setup_rows(
-        best, graded_frame, table, served, tokens, paired_setups.episode_usage(obs, population.RepeatPolicy.LATEST)
-    )[0]
+    row = paired_setups.setup_rows(best, graded_frame, table, served, tokens, paired_setups.episode_usage(obs))[0]
 
     assert (row["n_final_harvest"], row["n_never_submitted"]) == (0, 1)
 
@@ -602,7 +598,7 @@ def test_usage_reports_how_many_tasks_were_relaunched_and_what_the_crashes_spent
     ]
     for task_row, attempts, crashed in zip(rows[2::3], (1, 2, 3, 1), (0, 40, 90, 0), strict=True):
         task_row |= {"episode_attempts": attempts, "tokens_crashed": crashed}
-    usage = paired_setups.episode_usage(frame(rows), population.RepeatPolicy.LATEST).loc["a"]
+    usage = paired_setups.episode_usage(frame(rows)).loc["a"]
     assert usage.tasks == 4
     assert usage.attempts_per_episode == pytest.approx(1.75)
     assert usage.relaunched_episodes == 2
@@ -728,7 +724,7 @@ def test_the_setup_row_counts_what_the_setup_delivered_not_the_size_of_its_popul
     best = paired_setups.best_by_setup_kernel(paired_setups.graded_rows(obs, ["a"]))
     served = paired_setups.served_by_setup(obs)
     table = paired_setups.setup_aggregates(best, served, "numba")
-    usage = paired_setups.episode_usage(obs, population.RepeatPolicy.LATEST)
+    usage = paired_setups.episode_usage(obs)
     row = paired_setups.setup_rows(best, paired_setups.graded_rows(obs, ["a"]), table, served, {}, usage)[0]
     assert (row["n_served"], row["n_solved"]) == (8, 5)
     assert row["coverage"] == pytest.approx(5 / 8)
@@ -753,7 +749,7 @@ def test_a_kernel_the_setup_never_ran_leaves_its_completion_and_its_pairs_while_
     assert (served["a"], served["b"]) == (frozenset(KERNELS[:7]), frozenset(KERNELS))
     best = paired_setups.best_by_setup_kernel(paired_setups.graded_rows(obs, ["a", "b"]))
     table = paired_setups.setup_aggregates(best, served, "numba")
-    usage = paired_setups.episode_usage(obs, population.RepeatPolicy.LATEST)
+    usage = paired_setups.episode_usage(obs)
     setup = paired_setups.setup_rows(best, paired_setups.graded_rows(obs, ["a"]), table, served, {}, usage)[0]
     assert (setup["n_served"], setup["n_solved"], setup["coverage"]) == (7, 6, pytest.approx(6 / 7))
     tokens = paired_setups.tokens_by_setup_kernel(obs)
@@ -796,7 +792,7 @@ def test_no_submit_rate_is_over_every_episode_not_the_kernels_final_one(
         table,
         served,
         tokens,
-        paired_setups.episode_usage(obs, population.RepeatPolicy.LATEST),
+        paired_setups.episode_usage(obs),
         no_submit=rate,
     )[0]
     assert row["n_never_submitted"] == 0
