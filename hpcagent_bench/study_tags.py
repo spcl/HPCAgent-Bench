@@ -74,7 +74,6 @@ __all__ = [
     "model_spellings",
     "names",
     "names_of",
-    "optimizer_name",
     "order",
     "owed_run_roots_of",
     "packet_name",
@@ -335,14 +334,6 @@ def model_name(model: str) -> str:
     """The display spelling of a model. Unknown ones pass through unchanged."""
     entry = registry().models.get(canonical("models", str(model).lower()))
     return entry.name if entry is not None else str(model)
-
-
-def optimizer_name(optimizer: str) -> str:
-    """The display spelling of an optimizer: an LLM (a ``models`` tag) or a standalone optimizer
-    (an ``optimizers`` tag or one of its aliases, e.g. ``dace_cpu_canonicalize``). Unknown ones pass
-    through unchanged."""
-    standalone = names("optimizers").get(canonical("optimizers", str(optimizer)))
-    return standalone if standalone is not None else model_name(optimizer)
 
 
 def model_checkpoint(model: str) -> str:

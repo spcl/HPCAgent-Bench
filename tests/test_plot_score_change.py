@@ -458,7 +458,7 @@ def y_axis_left_margin(low: float, high: float) -> float:
     ax.set_yscale("log", base=2.0)
     ax.set_ylim(low, high)
     plotstyle.value_axis(ax, "y", log_base=2.0)
-    ax.yaxis.set_major_formatter(FuncFormatter(plotstyle.ratio_tick))
+    ax.yaxis.set_major_formatter(FuncFormatter(lambda value, _: plotstyle.ratio_tick_label(value)))
     ax.set_ylabel("Token-Cost Ratio, Treated / Control", fontsize=plotstyle.LABEL_PT * 0.68)
     ax.tick_params(axis="both", labelsize=plotstyle.TICK_PT * 0.6)
     try:
@@ -788,9 +788,9 @@ def test_parse_spec_reads_semicolon_separated_key_value_pairs() -> None:
 
 
 def test_the_token_cost_axis_formatter_spells_a_ratio_below_one_as_a_fraction() -> None:
-    assert plotstyle.ratio_tick(0.125) == "0.125x"
-    assert plotstyle.ratio_tick(1.0) == "1x"
-    assert plotstyle.ratio_tick(8.0) == "8x"
+    assert plotstyle.ratio_tick_label(0.125) == "0.125x"
+    assert plotstyle.ratio_tick_label(1.0) == "1x"
+    assert plotstyle.ratio_tick_label(8.0) == "8x"
 
 
 # ---------------------------------------------------------------------------

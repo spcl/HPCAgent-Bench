@@ -123,7 +123,6 @@ __all__ = [
     "ratio_label",
     "ratio_minor_candidates",
     "ratio_minor_exponents",
-    "ratio_tick",
     "ratio_tick_label",
     "renderer_of",
     "right_protrusion_in",
@@ -418,12 +417,6 @@ def ratio_tick_label(value: float) -> str:
     if value > 1.0:
         return f"{value:g}x"
     return f"{float(f'{value:.3g}'):g}x"
-
-
-def ratio_tick(value: float, position: int = 0) -> str:
-    """:func:`ratio_tick_label` as a :class:`~matplotlib.ticker.FuncFormatter` on a log ratio axis."""
-    del position
-    return ratio_tick_label(value)
 
 
 def log2_ratio_tick(value: float, position: int = 0) -> str:

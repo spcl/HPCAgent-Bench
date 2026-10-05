@@ -225,5 +225,3 @@ def test_llms_and_standalone_optimizers_never_share_a_shape() -> None:
     shapes = [palette.marker(tag) for tag in tags]
     assert len(set(shapes)) == len(shapes), dict(zip(tags, shapes, strict=True))
     assert palette.marker("dace_gpu_canonicalize") == palette.marker("cpf")
-    assert study_tags.optimizer_name("dace_cpu_canonicalize") == "Canonical Parallel Form"
-    assert study_tags.optimizer_name("qwen38") == study_tags.model_name("qwen38")
