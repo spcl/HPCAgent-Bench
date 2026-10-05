@@ -98,7 +98,6 @@ __all__ = [
     "record_final",
     "record_scaling",
     "record_trajectory",
-    "rep_tag",
     "setup_of",
     "setup_tag",
     "shard_db_path",
@@ -327,21 +326,6 @@ def setup_tag() -> str | None:
     return setup or None
 
 
-def rep_tag() -> int:
-    """``record.rep`` -- which REPETITION of this setup is running; 1 when unset.
-
-    An episode id is ``<setup>.n<node>.p<agent>.w<worker>``, so three repetitions of one setup write rows
-    identical in every other recorded column. Without this an experiment that reports a spread across
-    repetitions has to infer them from which directory the shard landed in."""
-    raw = str(config.get("record.rep", "") or "").strip()
-    if not raw:
-        return 1
-    rep = int(raw)
-    if rep < 1:
-        raise ValueError(f"record.rep {rep!r} is not a 1-based repetition index")
-    return rep
-
-
 def harness_tag() -> str | None:
     """``record.harness`` -- the agent harness that drove the setup (``claude``, ``miniswe``,
     ``openhands``), or None when the setup named none."""
@@ -384,7 +368,6 @@ class Identity(NamedTuple):
     language: str | None
     device: RecordDevice
     packet: str
-    rep: int
     setup: str | None
     harness: str | None
 
@@ -397,7 +380,6 @@ def identity() -> Identity:
         language_tag(),
         device_tag(),
         packet_tag(),
-        rep_tag(),
         setup_tag(),
         harness_tag(),
     )
@@ -496,8 +478,8 @@ def connect(path: str | None = None) -> sqlite3.Connection:
 ADHOC_EPISODE_ID = "adhoc"
 #: The Slurm job a judge records its episodes under.
 JOB_ENV = "SLURM_JOB_ID"
-#: An episode's episode id, ``<setup>.n<node>.p<problem>.w<worker>``.
-LABEL = re.compile(r"(?P<setup>[^.]+)\.n\d+\.p\d+\.w\d+")
+#: An episode's episode id, ``<setup>.n<node>.p<problem>.w<worker>``, then ``.s<slot>`` for a designed repeat's run.
+LABEL = re.compile(r"(?P<setup>[^.]+)\.n\d+\.p\d+\.w\d+(?:\.s\d+)?")
 #: ``optimizer`` markers a replayed request carries: how its source was obtained, the grade's kind.
 ORIGIN_KINDS: dict[str, str] = {
     "promoted-unsubmitted": "promoted",
@@ -558,7 +540,7 @@ def open_episode_in_job(
             packet=who.packet,
         ),
     )
-    return results_db.ensure_episode(conn, setup, episode_id, job, who.rep)
+    return results_db.ensure_episode(conn, setup, episode_id, job)
 
 
 # ---- what a grade records -----------------------------------------------------------------------

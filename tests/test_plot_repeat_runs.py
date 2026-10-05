@@ -163,7 +163,7 @@ def test_the_script_refuses_owed_runs_by_default(tmp_path: pathlib.Path) -> None
     command = [sys.executable, str(SCRIPT), str(observations), "--out", str(tmp_path / "runs.pdf")]
     done = subprocess.run(command, check=False, capture_output=True, text=True, cwd=paths.ROOT)
     assert done.returncode != 0
-    assert "owe their final grade" in done.stderr
+    assert "owed runs" in done.stderr
     assert not (tmp_path / "runs.pdf").exists()
 
 

@@ -47,7 +47,6 @@ WHERE: dict[str, str] = {
             "validate_run",
             "inference_service",
             "gang_relay",
-            "remaining_kernels",
         )
     },
 }

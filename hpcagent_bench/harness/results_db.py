@@ -218,9 +218,10 @@ def ensure_setup(conn: sqlite3.Connection, setup: Setup) -> None:
     upsert(conn, "setups", "setup", ("setup",), dataclasses.asdict(setup))
 
 
-def ensure_episode(conn: sqlite3.Connection, setup: str, label: str, job: int | None, rep: int = 1) -> int:
-    """The id of the episode ``(job, label, rep)`` of ``setup``, created on first sight."""
-    values: dict[str, Value] = {"setup": setup, "job": job, "label": label, "rep": rep}
+def ensure_episode(conn: sqlite3.Connection, setup: str, label: str, job: int | None) -> int:
+    """The id of the episode ``(job, label)`` of ``setup``, created on first sight. A live episode is
+    ``rep`` 1; only a merge of episodes with no recorded job numbers further ones under one label."""
+    values: dict[str, Value] = {"setup": setup, "job": job, "label": label, "rep": 1}
     return upsert(conn, "episodes", "coalesce(job, -1), label, rep", ("job", "label", "rep"), values)
 
 

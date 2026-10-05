@@ -165,7 +165,7 @@ def agent_indices(episode_id: str | None) -> AgentIndices:
 #: The identity a row is selected and grouped by, read off ``episodes`` rather than off a name. The
 #: launcher writes every one of these into the setup's .env (``hpcagent_bench/cluster/record_identity.sh``) and
 #: the judge copies them onto the run, so a query filters on columns.
-IDENTITY: tuple[str, ...] = ("study", "model", "language", "device", "packet", "rep", "setup", "harness")
+IDENTITY: tuple[str, ...] = ("study", "model", "language", "device", "packet", "setup", "harness")
 
 
 def discover_databases(run_globs: Iterable[str]) -> list[Database]:
@@ -285,7 +285,7 @@ def observations(run_globs: Iterable[str], **identity: str | Iterable[str]) -> "
 
 
 #: Identity columns worth filling per setup when an experiment recorded them on only part of a setup's
-#: rows. Not the whole of :data:`IDENTITY`: "study", "model", "device", "rep", "setup" and
+#: rows. Not the whole of :data:`IDENTITY`: "study", "model", "device", "setup" and
 #: "harness" have never shown this gap, and filling them silently would hide a real difference
 #: between two runs a caller assumed were one setup.
 FILLABLE_IDENTITY: tuple[str, ...] = ("language", "packet")
@@ -445,7 +445,7 @@ def drop_adhoc_rows(frame: "pd.DataFrame") -> "pd.DataFrame":
 
     See :data:`hpcagent_bench.frozen_observations.ADHOC_EPISODE_ID`: a grade filed
     with no episode id has no agent-episode identity, so it answers no setup's kernel; the kernel is owed a
-    rerun (experiments/remaining_kernels.covered skips the same rows). It runs BEFORE
+    rerun (``hpcagent-bench owed`` skips the same rows, :func:`hpcagent_bench.owed.delivered`). It runs BEFORE
     :func:`fill_setup_identity`, so a retagged row cannot lend its recorded identity to a real setup. Only
     the frame changes, never the database, and the count is warned about.
     """

@@ -552,9 +552,9 @@ RUN_SPREAD: float = 0.8
 #: An owed run's "?" area against a run dot's: a glyph inks less of its box than a disc.
 OWED_SCALE: float = 2.5
 
-#: Key entries of the runs mode: the box statistic, and a run still owed its final grade.
+#: Key entries of the runs mode: the box statistic, and an owed run (a final grade or a rerun to come).
 RUNS_BOX_LABEL: str = "Box: Median and Quartiles of the Graded Runs, Whiskers to 1.5 IQR"
-OWED_LABEL: str = "Final Grade Owed (Drawn at 1x)"
+OWED_LABEL: str = "Owed a Final Grade or a Rerun (Drawn at 1x)"
 
 
 def box_width(n_series: int, span: float = DODGE_SPAN) -> float:
@@ -619,7 +619,7 @@ def box_cells(
 
 
 def run_count_label(runs: Sequence[Run]) -> str:
-    """``solved/graded``, then ``+N?`` for the runs still owed their final grade."""
+    """``solved/graded``, then ``+N?`` for the owed runs."""
     solved = sum(run.state == population.RunState.SOLVED for run in runs)
     owed = sum(run.state == population.RunState.OWED for run in runs)
     label = f"{solved}/{len(runs) - owed}"
@@ -1121,8 +1121,8 @@ def runs_figure(
     allow_owed: bool = False,
 ) -> matplotlib.figure.Figure:
     """Every designed run (:func:`population.designed_runs`) per kernel of ``kernels``: per setup a box
-    over the graded runs, each run a dot on top, "solved/graded" above. Refuses runs still owed their
-    final grade (:class:`reliability.OwedRunsError`) unless ``allow_owed``, which draws them as "?"."""
+    over the graded runs, each run a dot on top, "solved/graded" above. Refuses owed runs (a final grade
+    or a rerun still to come, :class:`reliability.OwedRunsError`) unless ``allow_owed``, which draws them as "?"."""
     if not allow_owed:
         reliability.cell_runs(runs)
     series = runs_series(runs, kernels)

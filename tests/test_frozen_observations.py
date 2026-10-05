@@ -1,39 +1,21 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Frozen observations (data loss): the extracted rows of job dirs whose judge DBs were
-deleted join the live rows everywhere a reader walks judge DBs -- the extractor and
-remaining_kernels.py -- and the live DB wins, job by job."""
+deleted join the live rows where the extractor walks judge DBs, and the live DB wins, job by job."""
 
 import contextlib
 import csv
-import importlib.util
 import json
 import pathlib
-import sys
-import types
+import tempfile
 
 import pytest
 
+from hpcagent_bench import frozen_observations
 from hpcagent_bench.harness import results_db
 from tests import results_seed
 
-REPO = pathlib.Path(__file__).resolve().parents[1]
-CLUSTER_DIR = REPO / "hpcagent_bench" / "cluster"
 
-
-def load(name: str, path: pathlib.Path) -> types.ModuleType:
-    spec = importlib.util.spec_from_file_location(name, path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-#: Registered under its import name, so remaining_kernels and the extractor share this object.
-from hpcagent_bench import frozen_observations  # noqa: E402
-
-MODELS = ("kimi27sglang", "oss120b", "qwen38", "glm53")
 SETUP = "llr40-qwen38-fortran"
 
 ROOT = "llr40-20260917"
@@ -51,11 +33,6 @@ FIELDS = (
     "speedup",
     "tokens",
 )
-
-
-@pytest.fixture(name="kernels", scope="module")
-def kernels_fixture() -> types.ModuleType:
-    return load("remaining_kernels", CLUSTER_DIR / "remaining_kernels.py")
 
 
 def frozen_row(
@@ -106,94 +83,6 @@ def test_the_directory_comes_from_one_env_var_with_a_scratch_default(
     assert frozen_observations.default_dir() == tmp_path / frozen_observations.DEFAULT_SUBPATH
     assert frozen_observations.resolve("") is None
     assert frozen_observations.resolve(str(tmp_path)) == tmp_path
-
-
-def test_delivered_is_a_submission_or_a_genuine_attempt() -> None:
-    """The same rule as remaining_kernels.touched + genuine_attempts: a harness-fault attempt is not a grade."""
-    rows = [
-        frozen_row("1", "submission", "a"),
-        frozen_row("1", "attempt", "b", reason="incorrect"),
-        frozen_row("1", "attempt", "c", reason="score_error"),
-        frozen_row("1", "call", "e"),
-        frozen_row("1", "episode", "f"),
-    ]
-    assert frozen_observations.delivered(rows) == {"a", "b"}
-    assert frozen_observations.delivered(rows, setup="other-setup") == set()
-
-
-def test_delivered_drops_a_grade_made_before_its_episodes_final_attempt() -> None:
-    """Spec X7: a crashed attempt's grade answers nothing the relaunch delivered, and every figure
-    drops it (hpcagent_bench.studies.drop_pre_relaunch_rows), so a frozen job's copy of it is no
-    delivery either; a grade inside the final attempt still is."""
-    task = {**frozen_row("1", "episode", "a"), "episode_final_attempt_start_ms": "100"}
-    rows = [task, frozen_row("1", "submission", "a", ts=50), frozen_row("1", "attempt", "b", reason="incorrect", ts=99)]
-    assert frozen_observations.delivered(rows) == set()
-    rows.append(frozen_row("1", "submission", "b", ts=100))
-    assert frozen_observations.delivered(rows) == {"b"}
-
-
-def test_delivered_never_counts_a_row_stored_under_adhoc() -> None:
-    """A grade the judge filed under ``adhoc`` (or an extraction retagged
-    from it) has no episode identity, so a lost job's frozen copy of it is no delivery either."""
-    rows = [
-        {**frozen_row("1", "submission", "a"), "episode_id": "adhoc", "setup": "adhoc"},
-        {**frozen_row("1", "attempt", "b", reason="incorrect"), "retagged": "transcript"},
-        frozen_row("1", "submission", "c"),
-    ]
-    assert frozen_observations.delivered(rows) == {"c"}
-
-
-def test_a_frozen_job_counts_only_when_its_live_directory_is_gone(tmp_path: pathlib.Path) -> None:
-    runs_root = tmp_path / "runs" / ROOT
-    live_job(runs_root, "200", ["a"])
-    frozen = write_frozen(tmp_path, [frozen_row("100", "submission", "a"), frozen_row("200", "submission", "b")])
-
-    lost = frozen_observations.lost_jobs(frozen, [runs_root])
-
-    assert list(lost) == [(ROOT, "100")]
-    assert frozen_observations.lost_jobs(frozen, [tmp_path / "runs" / "another-root"]) == {}
-    assert frozen_observations.lost_jobs(None, [runs_root]) == {}
-
-
-# --- remaining_kernels.py ---------------------------------------------------------------------
-
-
-def test_remaining_kernels_counts_a_deleted_jobs_frozen_rows_as_coverage(
-    kernels: types.ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
-) -> None:
-    """Job 100 was deleted with its DB; its frozen rows cover a and b. Job 200 is live and covers c.
-    The live job's frozen copy (claiming d) is ignored: the live DB wins. Owed = d only."""
-    runs_root = tmp_path / "runs" / ROOT
-    live_job(runs_root, "200", ["c"])
-    frozen = write_frozen(
-        tmp_path,
-        [frozen_row("100", "submission", "a"), frozen_row("100", "attempt", "b", reason="incorrect"),
-         frozen_row("200", "submission", "d")],
-    )  # fmt: skip
-    out = tmp_path / "owed"
-    monkeypatch.setattr(kernels, "tag_kernels", lambda tag: ["a", "b", "c", "d"])
-    argv = ["remaining_kernels.py", "--run-root", str(runs_root), "--tag", "t", "--out-dir", str(out)]
-    monkeypatch.setattr(sys, "argv", [*argv, "--frozen-observations", str(frozen)])
-    assert kernels.main() == 0
-    assert (out / f"{SETUP}.txt").read_text(encoding="utf-8").split() == ["d"]
-
-    monkeypatch.setattr(sys, "argv", [*argv, "--frozen-observations", ""])
-    assert kernels.main() == 0
-    assert (out / f"{SETUP}.txt").read_text(encoding="utf-8").split() == ["a", "b", "d"]
-
-
-def test_collect_setups_names_a_deleted_job_under_its_frozen_setup(
-    kernels: types.ModuleType, tmp_path: pathlib.Path
-) -> None:
-    runs_root = tmp_path / "runs" / ROOT
-    runs_root.mkdir(parents=True)
-    frozen = write_frozen(tmp_path, [frozen_row("100", "submission", "a", setup=SETUP)])
-
-    setups, _, _ = kernels.collect_setups([str(runs_root)], set(), frozen_dir=frozen)
-
-    assert setups == {SETUP: [("100", str(runs_root / "100"), SETUP)]}
-    assert kernels.covered(setups[SETUP], frozen) == {"a"}
-    assert kernels.covered(setups[SETUP]) == set()  # without the frozen dir nothing is known
 
 
 # --- hpcagent_bench.observations_extract -------------------------------------------------------------------------
@@ -278,3 +167,9 @@ def test_the_extractor_adds_a_deleted_jobs_frozen_rows_and_marks_them(tmp_path: 
     ]
     tasks = sorted((row["episode_id"], row["tokens"], row["frozen"]) for row in rows if row["row_kind"] == "episode")
     assert tasks == [(f"{SETUP}.n0.p0.w0", "7", "0"), (f"{SETUP}.n0.p2.w2", "3", "0")]
+
+
+if __name__ == "__main__":
+    with pytest.MonkeyPatch.context() as patch:
+        test_the_directory_comes_from_one_env_var_with_a_scratch_default(patch, pathlib.Path(tempfile.mkdtemp()))
+    test_the_extractor_adds_a_deleted_jobs_frozen_rows_and_marks_them(pathlib.Path(tempfile.mkdtemp()))
