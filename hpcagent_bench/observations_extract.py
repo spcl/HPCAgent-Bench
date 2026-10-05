@@ -349,7 +349,7 @@ def blank(value: Any) -> Any:
     return "" if value is None else value
 
 
-def unmeasured(value: Any) -> Any:
+def unmeasured(value: float | None) -> float | str:
     """A number whose schema default 0 means "not recorded" (a time, a speedup, a token count) as the
     CSV's empty cell, so a reader never averages the default in."""
     return "" if value is None or value == 0 else value

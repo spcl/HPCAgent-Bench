@@ -286,7 +286,7 @@ def test_the_build_cache_pins_are_applied_and_survive_a_hostile_conf() -> None:
             dace.Config.set(*key, value=original)
 
 
-def test_a_codegen_key_the_environment_names_keeps_its_value(monkeypatch) -> None:
+def test_a_codegen_key_the_environment_names_keeps_its_value(monkeypatch: pytest.MonkeyPatch) -> None:
     """A ``DACE_*`` variable is applied when DaCe loads and ``Config.set`` overrides it afterwards, so a codegen
     A/B (``DACE_compiler_cuda_implementation=legacy`` under ``canon_gpu``) only holds when the pipeline config
     skips the keys the environment names; the keys it does not name are still set."""
