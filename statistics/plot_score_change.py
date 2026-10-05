@@ -48,7 +48,6 @@ def compare_slice(
     leg: str,
     control: pd.DataFrame,
     treated: pd.DataFrame,
-    repeats: population.RepeatPolicy = population.RepeatPolicy.LATEST,
     over: population.KernelPolicy = efficacy_figures.SPEEDUP_OVER,
     card: cost.CostModel | None = None,
 ) -> dict[str, float | str | int] | None:  # fmt: skip
@@ -57,7 +56,7 @@ def compare_slice(
     graded = pd.concat([control, treated])
     graded = graded[graded.row_kind == "submission"]
     population.one_denominator(graded.baseline.tolist(), label=f"{model}/{leg}")
-    paired = efficacy_figures.paired_kernels(control, treated, repeats, card)
+    paired = efficacy_figures.paired_kernels(control, treated, card)
     if paired.empty:
         return None
     timed = efficacy_figures.speedup_mask(paired, over)
@@ -80,7 +79,6 @@ def compare_slice(
 def points(
     control: pd.DataFrame,
     treated: pd.DataFrame,
-    repeats: population.RepeatPolicy = population.RepeatPolicy.LATEST,
     over: population.KernelPolicy = efficacy_figures.SPEEDUP_OVER,
     card: cost.CostModel | None = None,
 ) -> pd.DataFrame:
@@ -101,7 +99,6 @@ def points(
             study_tags.language_name(str(language)),
             control[(control.model == model) & (control.language == language)],
             treated[(treated.model == model) & (treated.language == language)],
-            repeats,
             over,
             card,
         )  # fmt: skip
@@ -185,7 +182,6 @@ def one_treatment_panel(
     treatment: str,
     tag_kernels: Sequence[str],
     include_incomplete: bool = False,
-    repeats: population.RepeatPolicy = population.RepeatPolicy.LATEST,
     over: population.KernelPolicy = efficacy_figures.SPEEDUP_OVER,
     card: cost.CostModel | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame] | None:
@@ -199,7 +195,7 @@ def one_treatment_panel(
     treated = treated[treated["setup"].astype(str).isin(keep)]
     if control.empty or treated.empty:
         return None
-    stats = points(control, treated, repeats, over, card)
+    stats = points(control, treated, over, card)
     if stats.empty:
         return None
     frame = treatment_frame(frame_all, treatment)
@@ -394,7 +390,7 @@ def write_dot_rows(
     one column per (LLM, delivery)."""
     args.out.parent.mkdir(parents=True, exist_ok=True)
     return efficacy_figures.figure_setup_dots(
-        frame, stats, treatment, args.out, control_name=args.control_label, repeats=args.repeats,
+        frame, stats, treatment, args.out, control_name=args.control_label,
         config=config, differences=args.difference, over=args.speedup_over, measures=dot_measures(args), card=card,
         **({"row_height_in": args.dots_row_height} if args.dots_row_height else {}),
         labels={
@@ -408,7 +404,6 @@ def write_row(
     args: argparse.Namespace,
     config: efficacy_figures.FigureConfig,
     panels: Sequence[efficacy_figures.Panel],
-    repeats: population.RepeatPolicy | Sequence[population.RepeatPolicy],
     card: cost.CostModel,
     row_width: float | None,
     comparators: Sequence[Sequence[efficacy_figures.Comparator]] = (),
@@ -417,7 +412,7 @@ def write_row(
     """Several comparisons to ``--out`` as one row of columns; ``columns`` are
     :func:`~hpcagent_bench.stats.figures.efficacy.figure_dot_row`'s per-column lists."""
     return efficacy_figures.figure_dot_row(
-        panels, args.out, repeats=repeats, config=config,
+        panels, args.out, config=config,
         row_width_in=row_width or plotstyle.ACM_TEXT_WIDTH_IN,
         **({"row_height_in": args.dots_row_height} if args.dots_row_height else {}),
         over=args.speedup_over, measures=dot_measures(args), card=card, comparators=comparators,
@@ -433,9 +428,8 @@ def figure_from_pairs(args: argparse.Namespace, config: efficacy_figures.FigureC
     """The ``--pairs-csv`` route: an EXPLICIT pair list drawn as the same figure every packet
     comparison goes through.
 
-    ``config`` and ``--repeats`` are passed on EXPLICITLY. Left to their defaults, this route drew
-    its marks under ``latest`` while the table beside it was written under the requested policy, so
-    a gitscicomp10 panel (REPEAT=3, median) showed Kimi at 3.57x where its own CSV said 0.67x."""
+    ``config`` is passed on EXPLICITLY: left to its default, the figure and the table beside it would be
+    drawn under two configurations."""
     table = pd.read_csv(args.pairs_csv)
     pairs = family_pairs(table)
     if not pairs:
@@ -451,7 +445,7 @@ def figure_from_pairs(args: argparse.Namespace, config: efficacy_figures.FigureC
     stats = family_stats(table, args.intervention, setup_languages(frame_all))
     args.table.parent.mkdir(parents=True, exist_ok=True)
     stats.to_csv(args.table, index=False)
-    efficacy_figures.pairs_table(frame, args.repeats, args.speedup_over, card).to_csv(
+    efficacy_figures.pairs_table(frame, args.speedup_over, card).to_csv(
         args.table.with_name(f"{args.table.stem}-absolute{args.table.suffix}"), index=False
     )
     written = write_dot_rows(args, config, frame, stats, args.intervention, card)
@@ -462,7 +456,6 @@ def figure_from_pairs(args: argparse.Namespace, config: efficacy_figures.FigureC
 
 def safe_pairs_table(
     frame: pd.DataFrame,
-    repeats: population.RepeatPolicy,
     label: str,
     over: population.KernelPolicy = efficacy_figures.SPEEDUP_OVER,
     card: cost.CostModel | None = None,
@@ -473,7 +466,7 @@ def safe_pairs_table(
     over. The drawn marks are unaffected: they come from the caller's own pre-corrected ``stats``
     table, never from this recompute, which exists only for the informational per-point CSV."""
     try:
-        return efficacy_figures.pairs_table(frame, repeats, over, card)
+        return efficacy_figures.pairs_table(frame, over, card)
     except population.MixedPopulationError as error:
         print(f"{label}: -absolute table skipped ({error})", file=sys.stderr)
         return pd.DataFrame()
@@ -484,7 +477,6 @@ def write_panel_tables(
     suffix: str,
     stats: pd.DataFrame | dict[str, pd.DataFrame],
     frame: pd.DataFrame | dict[str, pd.DataFrame],
-    repeats: population.RepeatPolicy,
     over: population.KernelPolicy = efficacy_figures.SPEEDUP_OVER,
     card: cost.CostModel | None = None,
 ) -> None:
@@ -501,14 +493,14 @@ def write_panel_tables(
         )
         combined_points = pd.concat(
             [
-                safe_pairs_table(one_frame, repeats, name, over, card).assign(packet=name)
+                safe_pairs_table(one_frame, name, over, card).assign(packet=name)
                 for name, one_frame in frame.items()
                 if not one_frame.empty
             ],
             ignore_index=True,
         )
     else:
-        combined_stats, combined_points = stats, safe_pairs_table(frame, repeats, suffix or "panel", over, card)
+        combined_stats, combined_points = stats, safe_pairs_table(frame, suffix or "panel", over, card)
     combined_stats.to_csv(table.with_name(f"{table.stem}{suffix}{table.suffix}"), index=False)
     combined_points.to_csv(table.with_name(f"{table.stem}{suffix}-absolute{table.suffix}"), index=False)
 
@@ -562,7 +554,6 @@ def build_multi_comparison(
     spec: dict[str, str],
     default_observations: Sequence[pathlib.Path],
     default_experiment: str,
-    repeats: population.RepeatPolicy,
     include_incomplete: bool,
     card: cost.CostModel,
     over: population.KernelPolicy = efficacy_figures.SPEEDUP_OVER,
@@ -581,7 +572,7 @@ def build_multi_comparison(
     stats_by_treatment: dict[str, pd.DataFrame] = {}
     frame_by_treatment: dict[str, pd.DataFrame] = {}
     for treatment in treatments:
-        built = one_treatment_panel(frame_all, control, treatment, tag_kernels, include_incomplete, repeats, over, card)
+        built = one_treatment_panel(frame_all, control, treatment, tag_kernels, include_incomplete, over, card)
         if built is None:
             continue
         stats_by_treatment[treatment], frame_by_treatment[treatment] = built
@@ -594,7 +585,6 @@ def build_comparison(
     spec: dict[str, str],
     default_observations: Sequence[pathlib.Path],
     default_experiment: str,
-    repeats: population.RepeatPolicy,
     include_incomplete: bool,
     card: cost.CostModel,
     over: population.KernelPolicy = efficacy_figures.SPEEDUP_OVER,
@@ -610,7 +600,7 @@ def build_comparison(
         return spec.get("title", ""), spec.get("intervention", ""), pd.DataFrame(), pd.DataFrame()
     if "treatments" in spec:
         return build_multi_comparison(
-            spec, default_observations, default_experiment, repeats, include_incomplete, card, over
+            spec, default_observations, default_experiment, include_incomplete, card, over
         )
     intervention = spec["intervention"]
     title = spec.get("title") or study_tags.packet_name(intervention)
@@ -633,7 +623,7 @@ def build_comparison(
         return None
     frame_all, control, tag_kernels = loaded
     treatment = spec.get("treatment", intervention)
-    built = one_treatment_panel(frame_all, control, treatment, tag_kernels, include_incomplete, repeats, over, card)
+    built = one_treatment_panel(frame_all, control, treatment, tag_kernels, include_incomplete, over, card)
     if built is None:
         return None
     stats, frame = built
@@ -767,20 +757,10 @@ def figure_config(args: argparse.Namespace, row_width: float | None) -> efficacy
 
 def comparison_panel(
     raw: str, args: argparse.Namespace, card: cost.CostModel
-) -> tuple[efficacy_figures.Panel, population.RepeatPolicy, dict[str, str]] | None:
-    """One ``--comparison`` spec as ``(panel, its repeat policy, its spec)``; ``None`` (named on
-    stdout) when it draws nothing. A spec's own ``repeats=`` overrides ``--repeats``: gitscicomp10's
-    designed-3x-repeats median sits beside llr40's reruns-take-latest in one row."""
+) -> tuple[efficacy_figures.Panel, dict[str, str]] | None:
+    """One ``--comparison`` spec as ``(panel, its spec)``; ``None`` (named on stdout) when it draws nothing."""
     spec = parse_spec(raw)
-    try:
-        repeats = population.RepeatPolicy(spec.get("repeats", args.repeats))
-    except ValueError:
-        raise SystemExit(
-            f"comparison {raw!r}: repeats={spec['repeats']!r} not in {[p.value for p in population.REPEAT_POLICIES]}"
-        ) from None
-    built = build_comparison(
-        spec, args.observations, args.experiment, repeats, args.include_incomplete, card, args.speedup_over
-    )
+    built = build_comparison(spec, args.observations, args.experiment, args.include_incomplete, card, args.speedup_over)
     if built is None and spec.get("pending"):
         # A comparison whose setups have not run yet is a STUB: its box, its axes and a "?" per
         # pending model, so the row keeps its final layout until the data lands.
@@ -789,7 +769,7 @@ def comparison_panel(
     if built is None:
         print(f"skipping comparison {raw!r}: empty side, or no (model, language) shared with control")
         return None
-    return built, repeats, spec
+    return built, spec
 
 
 def comparator_entries(spec: dict[str, str]) -> list[tuple[str, str]]:
@@ -830,12 +810,12 @@ def figure_from_comparisons(
     built = [one for one in (comparison_panel(raw, args, card) for raw in args.comparison) if one is not None]
     if not built:
         raise SystemExit(f"no --comparison of {args.comparison} produced a panel")
-    panels, repeats, specs = (list(part) for part in zip(*built, strict=True))
+    panels, specs = (list(part) for part in zip(*built, strict=True))
     args.table.parent.mkdir(parents=True, exist_ok=True)
-    for (title, _treatment, stats, frame), one_repeats in zip(panels, repeats, strict=True):
+    for title, _treatment, stats, frame in panels:
         # The CSV is keyed by title, not by the packet(s) shaping the panel.
         suffix = f"-{title.lower().replace(' ', '-')}"
-        write_panel_tables(args.table, suffix, stats, frame, one_repeats, args.speedup_over, card)
+        write_panel_tables(args.table, suffix, stats, frame, args.speedup_over, card)
     comparators = [spec_comparators(spec) for spec in specs]
     drawn = [comparator for column in comparators for comparator in column]
     if drawn:
@@ -843,7 +823,7 @@ def figure_from_comparisons(
         table.to_csv(args.table.with_name(f"{args.table.stem}-comparators{args.table.suffix}"), index=False)
         print(table.to_string(index=False))
     written = write_row(
-        args, config, panels, repeats, card, row_width, comparators,
+        args, config, panels, card, row_width, comparators,
         control_names=spec_column(specs, "control-label"),
         differences=spec_column(specs, "difference", args.difference),
         placeholders=spec_column(specs, "placeholders"), pending=spec_column(specs, "pending"),
@@ -874,7 +854,7 @@ def figure_from_treatments(
     panels: list[tuple[str, str, pd.DataFrame, pd.DataFrame]] = []
     for treatment in treatments:
         built = one_treatment_panel(
-            frame_all, control, treatment, tag_kernels, args.include_incomplete, args.repeats, args.speedup_over, card
+            frame_all, control, treatment, tag_kernels, args.include_incomplete, args.speedup_over, card
         )
         if built is None:
             print(f"skipping {treatment!r}: empty side, or no (model, language) shared with control")
@@ -884,7 +864,7 @@ def figure_from_treatments(
         # suffixed by treatment so nothing overwrites its sibling.
         suffix = "" if len(treatments) == 1 else f"-{treatment}"
         stats.to_csv(args.table.with_name(f"{args.table.stem}{suffix}{args.table.suffix}"), index=False)
-        efficacy_figures.pairs_table(frame, args.repeats, args.speedup_over, card).to_csv(
+        efficacy_figures.pairs_table(frame, args.speedup_over, card).to_csv(
             args.table.with_name(f"{args.table.stem}{suffix}-absolute{args.table.suffix}"), index=False
         )
         panels.append((packets.label(treatment), treatment, stats, frame))
@@ -895,7 +875,7 @@ def figure_from_treatments(
         _title, treatment, stats, frame = panels[0]
         written = write_dot_rows(args, config, frame, stats, treatment, card)
     else:
-        written = write_row(args, config, panels, args.repeats, card, row_width)
+        written = write_row(args, config, panels, card, row_width)
     for _title, treatment, stats, _frame in panels:
         report(treatment, stats)
     print(f"table  -> {args.table}")

@@ -4,9 +4,9 @@
 
 ``hpcagent-bench owed collect`` reads every job directory under the run roots. What a setup owes is a
 :class:`Run`: a tag kernel, and for a designed repeat (``make_problems.py --repeat``) one run slot of it,
-read off the episode label's ``.s<slot>``; every slot the setup's launch problems gave is owed until a
+recorded in ``episodes.slot``; every slot the setup's launch problems gave is owed until a
 job delivers it. A job's setup is
-``episodes.setup`` in its judge shards (results DBs, schema v3); a setup is one identity, covered by the union of all its jobs, because a rerun runs only the kernels
+``episodes.setup`` in its judge shards (results DBs); a setup is one identity, covered by the union of all its jobs, because a rerun runs only the kernels
 still owed. A kernel is delivered when a job graded it: a credited /submit grade, or one the judge
 graded and refused. A refusal reasoned ``score_error`` (the judge's own reference failed) and any
 grade under the ``adhoc`` episode id (no episode) deliver nothing. Every other tag kernel is owed, classed
@@ -36,7 +36,8 @@ from typing import NamedTuple
 from hpcagent_bench import tags
 from hpcagent_bench.frozen_observations import ADHOC_EPISODE_ID, RERUN_PREFIXES
 from hpcagent_bench.harness import results_db
-from hpcagent_bench.stats.population import HARNESS_FAULT_REASON, run_slot
+from hpcagent_bench.harness.recording import slot_of
+from hpcagent_bench.stats.population import HARNESS_FAULT_REASON
 
 __all__ = [
     "BUDGET_RETURNCODES",
@@ -93,26 +94,26 @@ class OwedClass(enum.Enum):
 
 
 class Run(NamedTuple):
-    """One owed unit: a kernel, and its run slot for a designed repeat (None outside one)."""
+    """One owed unit: a kernel and its slot (``episodes.slot``: 1 outside a designed repeat)."""
 
     kernel: str
-    slot: int | None = None
+    slot: int = 1
 
     def line(self) -> str:
-        """The listing line: the kernel, then its slot."""
-        return self.kernel if self.slot is None else f"{self.kernel} {self.slot}"
+        """The listing line: the kernel, then its slot when it is not the default."""
+        return self.kernel if self.slot == 1 else f"{self.kernel} {self.slot}"
 
 
 def parse_run(line: str) -> Run:
     """A listing line back as its :class:`Run`."""
     kernel, _, slot = line.strip().partition(" ")
-    return Run(kernel, int(slot) if slot else None)
+    return Run(kernel, int(slot) if slot else 1)
 
 
 def problem_run(problem: dict[str, object]) -> Run:
     """The :class:`Run` a problems-file line is."""
     slot = problem.get("slot")
-    return Run(kernel_stem(problem.get("kernel")), slot if isinstance(slot, int) else None)
+    return Run(kernel_stem(problem.get("kernel")), slot if isinstance(slot, int) else 1)
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -167,8 +168,8 @@ def delivered(job_dir: pathlib.Path) -> set[Run]:
     voided = " ".join("and g.reason not like ?" for _ in RERUN_PREFIXES)
     graded = shard_rows(
         job_dir,
-        "select distinct g.kernel, r.label from grades g join episodes r on r.id = g.episode_id where r.label != ? "
-        f"and g.kind in ({kinds}) and (g.credited_speedup is not null or (g.reason is not null and g.reason != ? "
+        "select distinct g.kernel, r.slot from grades g join episodes r on r.id = g.episode_id where r.label != ? "
+        f"and g.kind in ({kinds}) and (g.credited_speedup != 0 or (g.reason != '' and g.reason != ? "
         f"{voided})) and g.id not in (select grade_id from disqualifications)",
         (
             ADHOC_EPISODE_ID,
@@ -177,7 +178,7 @@ def delivered(job_dir: pathlib.Path) -> set[Run]:
             *(f"{prefix}%" for prefix in RERUN_PREFIXES),
         ),
     )
-    return {Run(str(kernel), run_slot(str(label))) for kernel, label in graded}
+    return {Run(str(kernel), int(slot)) for kernel, slot in graded}
 
 
 def kernel_stem(kernel: object) -> str:
@@ -196,7 +197,7 @@ def latest_classes(job_dirs: Iterable[pathlib.Path]) -> dict[Run, OwedClass]:
             kernel = kernel_stem(record.get("kernel"))
             if not kernel:
                 continue
-            run = Run(kernel, run_slot(str(record.get("episode_id") or "")))
+            run = Run(kernel, slot_of(str(record.get("episode_id") or "")))
             order = int(record.get("final_attempt_start_ms") or path.stat().st_mtime * 1000)
             budget = record.get("returncode") in BUDGET_RETURNCODES and not (path.parent / CANCELLED_MARKER).exists()
             if run not in latest or order >= latest[run][0]:
@@ -207,13 +208,12 @@ def latest_classes(job_dirs: Iterable[pathlib.Path]) -> dict[Run, OwedClass]:
 def designed_runs(jobs: Sequence[Job], tag_kernels: Sequence[str]) -> list[Run]:
     """Every run the identity owes until delivered: each tag kernel at every slot its jobs' launch
     problems gave (``make_problems.py --repeat``), or once when they gave none."""
-    slots: set[int | None] = set()
+    slots: set[int] = {1}
     for job in jobs:
         problems = launch_problems(job.path)
         if problems is not None:
             slots.update(problem_run(problem).slot for problem in read_problems(problems))
-    designed: list[int | None] = [*sorted(slot for slot in slots if slot is not None)] or [None]
-    return [Run(kernel, slot) for kernel in tag_kernels for slot in designed]
+    return [Run(kernel, slot) for kernel in tag_kernels for slot in sorted(slots)]
 
 
 def owed(jobs: Sequence[Job], runs: Sequence[Run]) -> dict[Run, OwedClass]:

@@ -283,12 +283,10 @@ def ordered_kernels(cells: Sequence[KernelCell]) -> list[str]:
     return sorted(grouped, key=lambda kernel: float(np.median(grouped[kernel])) if grouped[kernel] else math.inf)
 
 
-def answer_cells(
-    frame: pd.DataFrame, repeats: population.RepeatPolicy = population.RepeatPolicy.LATEST
-) -> list[KernelCell]:
-    """One single-value cell per SOLVED kernel: its final answer under ``repeats``
-    (:func:`population.kernel_answers`), the policy the tables score a kernel by."""
-    answers = population.kernel_answers(frame, repeats=repeats, policy=population.KernelPolicy.SOLVED)
+def answer_cells(frame: pd.DataFrame) -> list[KernelCell]:
+    """One single-value cell per SOLVED kernel: its final answer (:func:`population.kernel_answers`), the rule
+    the tables score a kernel by."""
+    answers = population.kernel_answers(frame, policy=population.KernelPolicy.SOLVED)
     if "speedup" not in answers.columns:
         return []
     return [
@@ -1067,7 +1065,7 @@ def run_cells(runs: pd.DataFrame, kernels: Sequence[str]) -> tuple[KernelCell, .
     runs in run order, and its graded runs' values (unsolved at 1x) as the episodes its box is over."""
     cells: list[KernelCell] = []
     for kernel in kernels:
-        mine = runs.loc[runs["kernel"] == kernel].sort_values(["run_root", "job", population.RUN_COLUMN], kind="stable")
+        mine = runs.loc[runs["kernel"] == kernel].sort_values(["run_root", "job", population.SLOT_COLUMN], kind="stable")
         if mine.empty:
             continue
         made = tuple(
@@ -1077,7 +1075,7 @@ def run_cells(runs: pd.DataFrame, kernels: Sequence[str]) -> tuple[KernelCell, .
                 state,
             )
             for index, value, state in zip(
-                mine[population.RUN_COLUMN].tolist(),
+                mine[population.SLOT_COLUMN].tolist(),
                 mine["speedup"].tolist(),
                 mine[population.RUN_STATE_COLUMN].tolist(),
                 strict=True,

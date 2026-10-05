@@ -32,7 +32,6 @@ import argparse
 import enum
 import math
 import numbers
-import re
 import statistics
 from collections.abc import Collection, Hashable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
@@ -63,10 +62,8 @@ __all__ = [
     "RAN_RECORDS",
     "RAW_SPEEDUP_COLUMN",
     "REDUCTION_COLUMN",
-    "REPEAT_POLICIES",
-    "RUN_COLUMN",
+    "SLOT_COLUMN",
     "RUN_STATE_COLUMN",
-    "SLOT_LABEL",
     "SOLVED_COLUMN",
     "SUBMISSION_ORDER",
     "SUSPECT_COLUMN",
@@ -76,7 +73,6 @@ __all__ = [
     "Coverage",
     "KernelPolicy",
     "MixedPopulationError",
-    "RepeatPolicy",
     "RunState",
     "SetupAggregate",
     "add_selection_arguments",
@@ -114,12 +110,9 @@ __all__ = [
     "per_episode_max",
     "platform_of",
     "policies_agree",
-    "problem_index",
     "ran_rows",
     "ratio",
     "refused_attempts",
-    "repeat_policy",
-    "run_slot",
     "run_states",
     "scored_answers",
     "select_setups",
@@ -521,8 +514,7 @@ def per_episode_max(frame: "pd.DataFrame", column: str, keep: Sequence[str] = ()
     For a cumulative counter this is the episode's own total. ``calls.tokens`` is cumulative through
     a call, so summing its rows counts every earlier call once per later one and inflates a long
     repair loop quadratically; taking the maximum reads the total the episode actually reached.
-    How a kernel run more than once becomes one spend is the :data:`RepeatPolicy` of
-    :func:`kernel_tokens`.
+    How a kernel run more than once becomes one spend is :func:`kernel_tokens`' rule.
 
     ``keep`` names columns that are constant within an episode -- the setup, the model, the condition
     -- so a caller can group on them afterwards without a second join.
@@ -534,22 +526,14 @@ def per_episode_max(frame: "pd.DataFrame", column: str, keep: Sequence[str] = ()
     return frame.loc[:, [*keys, column]].groupby(keys, as_index=False).max()
 
 
-#: How a kernel that one setup ran MORE THAN ONCE becomes one value. ``latest``: a rerun -- a later wave
-#: resubmitting a kernel whose earlier run did not complete or submitted a broken answer -- supersedes
-#: the earlier run, so only the latest run counts; a max or a sum over reruns would pay a setup for how
-#: often it was resubmitted. ``median``: runs that repeat BY DESIGN (gitscicomp10 gives each kernel
-#: three agents) are all the setup's result, so the kernel's value is their median.
-class RepeatPolicy(enum.Enum):
-    LATEST = "latest"
-    MEDIAN = "median"
-
-
-REPEAT_POLICIES: tuple[RepeatPolicy, ...] = tuple(RepeatPolicy)
+#: The column naming which designed agent of a repeat an episode is (``episodes.slot``): 1..REPEAT, 1
+#: outside a designed repeat. A rerun keeps its slot, so it supersedes that slot's earlier run.
+SLOT_COLUMN: str = "slot"
 
 
 def add_selection_arguments(parser: argparse.ArgumentParser, *, experiment_help: str = "") -> None:
     """The setup selection every figure and table script takes: ``--experiment`` (setup prefix), ``--setups``
-    (regex on the full setup name), ``--include-incomplete`` and ``--repeats``; apply the first two with
+    (regex on the full setup name) and ``--include-incomplete``; apply the first two with
     :func:`select_setups`."""
     parser.add_argument(
         "--experiment", default="", help=experiment_help or "setup prefix selecting one experiment; blank keeps all"
@@ -559,13 +543,6 @@ def add_selection_arguments(parser: argparse.ArgumentParser, *, experiment_help:
         "--include-incomplete",
         action="store_true",
         help="keep a setup even without a row for every tag kernel (default: dropped, named on stderr)",
-    )
-    parser.add_argument(
-        "--repeats",
-        type=RepeatPolicy,
-        choices=REPEAT_POLICIES,
-        default=RepeatPolicy.LATEST,
-        help="a kernel run more than once: latest run counts (reruns, default) or median over runs",
     )
 
 
@@ -577,15 +554,6 @@ def select_setups(frame: "pd.DataFrame", experiment: str = "", setups: str = "")
     if setups:
         keep &= names.str.fullmatch(setups)
     return frame.loc[keep]
-
-
-def repeat_policy(repeats: RepeatPolicy | str) -> RepeatPolicy:
-    """``repeats`` as a :data:`RepeatPolicy`, or raise naming the ones there are."""
-    try:
-        return RepeatPolicy(repeats)
-    except ValueError:
-        pass
-    raise MixedPopulationError(f"repeats must be one of {[p.value for p in REPEAT_POLICIES]}, got {repeats!r}")
 
 
 def credited(frame: "pd.DataFrame") -> "pd.Series":
@@ -621,7 +589,8 @@ def valid_submission_rows(frame: "pd.DataFrame") -> "pd.Series":
 
 
 def latest_episodes(frame: "pd.DataFrame", by: Sequence[str] = ("setup", "kernel")) -> "pd.DataFrame":
-    """Every row, of any record type, of each ``by`` group's chosen run: the run holding the group's
+    """Every row, of any record type, of each ``by`` group's chosen run in each :data:`SLOT_COLUMN` (a
+    frame without the column is one slot, the schema's default): the run holding the group's
     NEWEST VALID submission (:func:`valid_submission_rows`), across all runs. A
     rerun that crashed or timed out without a valid answer therefore does not erase an older valid
     one. When no run of the group holds a valid submission, the newest run is chosen, and the
@@ -634,6 +603,9 @@ def latest_episodes(frame: "pd.DataFrame", by: Sequence[str] = ("setup", "kernel
     """
     import pandas as pd
 
+    if SLOT_COLUMN not in frame.columns:
+        frame = frame.assign(**{SLOT_COLUMN: 1})
+    by = (*by, SLOT_COLUMN)
     keys = list(dict.fromkeys((*by, *EPISODE_KEY)))
     missing = [name for name in (*keys, "ts_ms") if name not in frame.columns]
     if missing:
@@ -765,29 +737,22 @@ DELIVERED_COLUMN: str = "delivered"
 SOLVED_COLUMN: str = "solved"
 
 
-def setup_kernel_answers(
-    frame: "pd.DataFrame",
-    order: Sequence[str] = SUBMISSION_ORDER,
-    *,
-    repeats: RepeatPolicy = RepeatPolicy.LATEST,
-) -> "pd.DataFrame":
-    """One whole row per ``(setup, benchmark)``: the setup's FINAL answer on that kernel under ``repeats``.
+def setup_kernel_answers(frame: "pd.DataFrame", order: Sequence[str] = SUBMISSION_ORDER) -> "pd.DataFrame":
+    """One whole row per ``(setup, benchmark)``: the setup's FINAL answer on that kernel.
 
-    ``frame`` should hold every record type, so ``latest`` sees a rerun that never had a submission
-    persisted (:func:`latest_episodes`); a frame without ``row_kind`` is read as graded rows only. WITHIN a
-    run the last verified submission counts (:func:`graded_episode_rows`); when the judge flagged that
-    answer suspect the run answered nothing. ACROSS runs ``latest``
-    keeps the latest run's answer -- none, when that run verified nothing -- and ``median`` keeps the
-    median run's row (the lower middle one for an even count) carrying the median speedup over all
-    of them, so its timings are that run's own.
+    One rule for every study: the latest run of each slot (:func:`latest_episodes`; ``frame`` should hold
+    every record type, so it sees a rerun that never had a submission persisted; a frame without
+    ``row_kind`` is read as graded rows only), then the median over the slots. WITHIN a run the last
+    verified submission counts (:func:`graded_episode_rows`); when the judge flagged that answer suspect
+    the run answered nothing. The kernel's row is the median slot's (the lower middle one for an even
+    count) carrying the median speedup, so its timings are that run's own; with one slot it is that run.
     """
-    policy = repeat_policy(repeats)
-    runs = latest_episodes(frame) if policy == RepeatPolicy.LATEST else frame
+    runs = latest_episodes(frame)
     graded = runs.loc[runs["row_kind"] == "submission"] if "row_kind" in runs.columns else runs
     episodes = graded_episode_rows(graded, order)
     # A final answer the judge flagged suspect solved nothing: the kernel reads as unanswered.
     episodes = episodes.loc[episodes[SUSPECT_COLUMN].map(is_reportable).astype(bool)]
-    if policy == RepeatPolicy.LATEST or episodes.empty:
+    if episodes.empty:
         return episodes
     group = ["setup", "kernel"]
     ordered = episodes.sort_values([*group, "speedup"], kind="stable")
@@ -802,12 +767,11 @@ def kernel_answers(
     frame: "pd.DataFrame",
     order: Sequence[str] = SUBMISSION_ORDER,
     *,
-    repeats: RepeatPolicy = RepeatPolicy.LATEST,
     policy: KernelPolicy = KernelPolicy.SERVED,
 ) -> "pd.DataFrame":
     """One row per kernel of ``frame``: the FINAL answer, with the costs behind its speedup.
 
-    Each ``(setup, benchmark)`` reduced by :func:`setup_kernel_answers` under ``repeats``, then the best
+    Each ``(setup, benchmark)`` reduced by :func:`setup_kernel_answers`, then the best
     setup per kernel, so a slice holding several setups of one condition keeps its best answer. A
     ``call`` row carries a speedup for a round the judge never persisted, and a median over those
     rows weights a kernel by how many rounds the agent spent on it. Indexed by ``kernel``, sorted.
@@ -833,7 +797,7 @@ def kernel_answers(
     # the stamp rides with each value
     columns = [c for c in (*ANSWER_COLUMNS, REDUCTION_COLUMN) if c in frame.columns]
     if not graded.empty:
-        best = setup_kernel_answers(frame, order, repeats=repeats)
+        best = setup_kernel_answers(frame, order)
         best = best.sort_values("speedup", ascending=False).drop_duplicates("kernel", keep="first")
         answered = best.set_index("kernel")[columns].sort_index()
         answered = answered.assign(**{DELIVERED_COLUMN: True, SOLVED_COLUMN: True})
@@ -890,10 +854,6 @@ class RunState(enum.Enum):
     OWED = "owed"
 
 
-#: :func:`designed_runs`' 1-based run slot: the label's ``.s<slot>``, else its rank within its ``(setup, run_root, job, kernel)``.
-RUN_COLUMN: str = "run"
-#: The run slot an episode label ends in (``<setup>.n<N>.p<P>.w<W>.s<slot>``, agent_driver.identity_env).
-SLOT_LABEL: re.Pattern[str] = re.compile(r"\.s(?P<slot>\d+)$")
 #: :func:`designed_runs`' :class:`RunState` of the run.
 RUN_STATE_COLUMN: str = "run_state"
 #: The extractor's mark on a submission the final grade left unsolved
@@ -901,24 +861,6 @@ RUN_STATE_COLUMN: str = "run_state"
 FINAL_UNSOLVED: str = "unsolved"
 #: The extractor's column for that mark.
 FINAL_STATUS_COLUMN: str = "grade_final_status"
-
-
-def problem_index(episode_id: str) -> int:
-    """The ``p<problem>`` index of an episode id (``<setup>.n<N>.p<P>.w<W>``), or raise: the run index
-    of a designed repeat is read from it."""
-    # import cycle: hpcagent_bench.studies imports this module
-    from hpcagent_bench import studies
-
-    problem = studies.agent_indices(episode_id).problem
-    if not problem:
-        raise MixedPopulationError(f"episode id {episode_id!r} carries no p<problem> index to number its run by")
-    return int(problem)
-
-
-def run_slot(episode_id: str) -> int | None:
-    """The run slot an episode label carries; None for a label written before slots existed."""
-    found = SLOT_LABEL.search(episode_id)
-    return int(found["slot"]) if found else None
 
 
 def run_states(answers: "pd.DataFrame") -> list[RunState]:
@@ -960,7 +902,7 @@ def refused_attempts(rows: "pd.DataFrame") -> "pd.DataFrame":
 
 def designed_runs(frame: "pd.DataFrame") -> "pd.DataFrame":
     """One row per RUN of every ``(setup, kernel)`` of a designed repeat (R5, R8): its ``setup``, ``kernel``,
-    :data:`EPISODE_KEY`, :data:`RUN_COLUMN`, :data:`RUN_STATE_COLUMN` and ``speedup``.
+    :data:`EPISODE_KEY`, :data:`SLOT_COLUMN`, :data:`RUN_STATE_COLUMN` and ``speedup``.
 
     An episode's answer is its last positive submission or final-graded-unsolved attempt
     (:data:`SUBMISSION_ORDER`). Credited and believable, the run is SOLVED at S_i; graded unsolved or
@@ -968,17 +910,14 @@ def designed_runs(frame: "pd.DataFrame") -> "pd.DataFrame":
     ``/submit`` the judge genuinely refused (:func:`refused_attempts`). A submission the final grade has
     not credited yet, and a run that submitted nothing the judge graded, are OWED, with no speedup.
 
-    The run is the episode label's slot (:func:`run_slot`), which an owed rerun in a later job keeps; a slot
-    run more than once is the episode holding an answer, the newest such, else the newest episode
-    (R4's rule within one slot). A label written before slots existed is numbered by the rank of its
-    ``p<problem>`` among its ``(setup, run_root, job, kernel)``: a job's REPEAT problems of one kernel are
-    consecutive problem ids, so their order is the launch order, not the order the rows were written.
+    A slot run more than once is the episode holding an answer, the newest such, else the newest episode
+    (R4's rule within one slot).
     """
     import pandas as pd
 
     missing = [
         name
-        for name in ("setup", "row_kind", "speedup", SUSPECT_COLUMN, *EPISODE_KEY, *SUBMISSION_ORDER)
+        for name in ("setup", "row_kind", "speedup", SLOT_COLUMN, SUSPECT_COLUMN, *EPISODE_KEY, *SUBMISSION_ORDER)
         if name not in frame.columns
     ]
     if missing:
@@ -986,7 +925,7 @@ def designed_runs(frame: "pd.DataFrame") -> "pd.DataFrame":
     labels = frame["setup"].fillna("").astype(str).str.strip()
     rows = frame.loc[~labels.isin(list(PSEUDO_SETUPS)) & frame["kernel"].notna()]
     keys = ["setup", *EPISODE_KEY]
-    episodes = rows.loc[:, keys].drop_duplicates(ignore_index=True)
+    episodes = rows.loc[:, [*keys, SLOT_COLUMN]].drop_duplicates(keys, ignore_index=True)
     final = rows[FINAL_STATUS_COLUMN].astype(str) if FINAL_STATUS_COLUMN in rows.columns else ""
     speedup = pd.Series(pd.to_numeric(rows["speedup"], errors="coerce"), index=rows.index, dtype=float)
     candidates = rows.loc[
@@ -1010,19 +949,10 @@ def designed_runs(frame: "pd.DataFrame") -> "pd.DataFrame":
     runs = episodes.merge(graded, on=keys, how="left").merge(starts, on=keys, how="left")
     runs["answered"] = runs[RUN_STATE_COLUMN].notna()
     runs.loc[~runs["answered"], RUN_STATE_COLUMN] = RunState.OWED
-    slots = [run_slot(label) for label in runs["episode_id"].astype(str).tolist()]
-    runs["slotted"] = [slot is not None for slot in slots]
-    runs[RUN_COLUMN] = [slot or 0 for slot in slots]
-    legacy = runs.loc[~runs["slotted"]]
-    if not legacy.empty:
-        problems = legacy["episode_id"].astype(str).map(problem_index)
-        ranks = problems.groupby([legacy[name] for name in ("setup", "run_root", "job", "kernel")], dropna=False)
-        runs.loc[legacy.index, RUN_COLUMN] = ranks.rank(method="first").astype(int)
     ordered = runs.sort_values(["answered", "start", "job", "episode_id"], kind="stable", na_position="first")
-    slotted = ordered.loc[ordered["slotted"]].drop_duplicates(["setup", "kernel", RUN_COLUMN], keep="last")
-    runs = pd.concat([ordered.loc[~ordered["slotted"]], slotted])
-    order = ["setup", "kernel", RUN_COLUMN, "run_root", "job"]
-    return runs.drop(columns=["answered", "start", "slotted"]).sort_values(order, ignore_index=True)
+    runs = ordered.drop_duplicates(["setup", "kernel", SLOT_COLUMN], keep="last")
+    order = ["setup", "kernel", SLOT_COLUMN, "run_root", "job"]
+    return runs.drop(columns=["answered", "start"]).sort_values(order, ignore_index=True)
 
 
 def episode_tokens(frame: "pd.DataFrame", by: Sequence[str] = ("kernel",)) -> "pd.DataFrame":
@@ -1061,31 +991,27 @@ def episode_tokens(frame: "pd.DataFrame", by: Sequence[str] = ("kernel",)) -> "p
     return episodes.loc[episodes.tokens > 0]
 
 
-def kernel_tokens(
-    frame: "pd.DataFrame", by: Sequence[str] = ("kernel",), *, repeats: RepeatPolicy = RepeatPolicy.LATEST
-) -> "pd.Series":
+def kernel_tokens(frame: "pd.DataFrame", by: Sequence[str] = ("kernel",)) -> "pd.Series":
     """The tokens spent on each kernel of ``frame``: one task's total (:func:`episode_tokens`).
 
-    A task is one agent optimizing one kernel, and its cost is everything that run spent. A kernel
-    one setup ran more than once is reduced by ``repeats``: ``latest`` charges the latest run's total
-    (:func:`latest_episodes`), never the sum over reruns, which would bill a setup for being resubmitted;
-    ``median`` charges the median over runs that repeat by design. ``by`` groups the result,
+    A task is one agent optimizing one kernel, and its cost is everything that run spent. The rule is
+    :func:`setup_kernel_answers`': the latest run of each slot, never the sum over reruns (which would
+    bill a setup for being resubmitted), then the median over the slots. ``by`` groups the result,
     ``("setup", "kernel")`` for a table over setups; a slice grouped by kernel alone that holds several
-    setups of one condition adds their latest runs.
+    setups of one condition adds them.
     """
     import pandas as pd
 
-    policy = repeat_policy(repeats)
-    if policy == RepeatPolicy.LATEST:
-        frame = latest_episodes(frame, tuple(name for name in ("setup", "kernel") if name in frame.columns))
-    episodes = episode_tokens(frame, by)
+    frame = latest_episodes(frame, tuple(name for name in ("setup", "kernel") if name in frame.columns))
+    setup = [] if "setup" in by or "setup" not in frame.columns else ["setup"]
+    episodes = episode_tokens(frame, (*by, *setup))
     if episodes.empty:
         return pd.Series(dtype=float, name="tokens")
-    grouped = episodes.groupby(list(by)).tokens
-    return grouped.median() if policy == RepeatPolicy.MEDIAN else grouped.sum()
+    per_setup = episodes.groupby([*by, *setup]).tokens.median()
+    return per_setup.groupby(level=list(range(len(by)))).sum() if setup else per_setup
 
 
-def kernel_medians(frame: "pd.DataFrame", *, repeats: RepeatPolicy = RepeatPolicy.LATEST) -> dict[str, float] | None:
+def kernel_medians(frame: "pd.DataFrame") -> dict[str, float] | None:
     """One slice's point over its KERNELS: the GEOMETRIC MEAN speedup and the GEOMETRIC MEAN token
     spend, each with its 95% log-t interval (:func:`hpcagent_bench.stats.summary.geomean_interval`,
     withheld below ``summary.MIN_PAIRS_FOR_INTERVAL`` kernels), and the two median times every
@@ -1095,10 +1021,10 @@ def kernel_medians(frame: "pd.DataFrame", *, repeats: RepeatPolicy = RepeatPolic
     numbers describe one population. Tokens are whatever card the caller priced ``frame`` with
     (:func:`hpcagent_bench.stats.cost.priced`).
     """
-    answers = kernel_answers(frame, repeats=repeats)
+    answers = kernel_answers(frame)
     answers = answers.loc[answers.speedup > 0]
     delivered = answers.loc[answers[DELIVERED_COLUMN]] if DELIVERED_COLUMN in answers else answers
-    tokens = kernel_tokens(frame, repeats=repeats)
+    tokens = kernel_tokens(frame)
     if answers.empty or tokens.empty:
         return None
     speed = summary.geomean_interval(answers.speedup.to_numpy(dtype=float))
