@@ -38,7 +38,7 @@ link and return wrong numbers, so one rule and one implementation cover both. Ex
   value.
 - A call whose arity differs from its definition (inlined twice, keyword arguments, an unpassed shape
   symbol) stays in source order; the arity mismatch is a hard compile error. A call with matching
-  arity that skips the permutation is a silent transposition, so `_reorder_helper_call_args` raises
+  arity that skips the permutation is a silent transposition, so `reorder_helper_call_args` raises
   there.
 - C and C++ return a scalar helper result by value; Fortran uses an out-param dummy. DaCe and Pluto
   backends emit helper calls without helper bodies.
