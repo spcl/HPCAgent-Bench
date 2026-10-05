@@ -32,6 +32,31 @@ about 8x (40 x 60k on 3.32 M: hit 0.984, 254 tok/s; on 2.42 M: hit 0.35-0.45, 30
 Mamba slot peak is 315-322, so 427 covers 40 streams. Read slots and pool from the log
 (`grep -a "Mamba Cache is allocated\|max_total_num_tokens" server-0.log`), never infer them.
 
+## Measured 2026-10-05: 40 agents, one node (pre-tuning controls)
+
+Load: 40 long-lived conversations, 16 turns, 12k shared + ~22k unique prefix, prompts 35k-50k (p50
+~38k), 300-500 output tokens per turn; one server per leg, back to back on one node, tool and
+long-context gates on every leg. Harness and raw numbers:
+`$SCRATCH/hpcagent-bench-runs/inference-tuning-20261005/` (`bench.sbatch`, `summarize.py`).
+
+Every leg below still logged aiter's untuned bf16 GEMM fallback (700-930 lines, the Gated-DeltaNet
+`ba` projection to torch), so these are controls, not the shipped numbers; the tuned rerun is pending
+(see [knobs.md](knobs.md#aiter-always-on-no-fallback)).
+
+| Leg (job) | out tok/s | tok/s per agent | TTFT p50/p90 s | ITL p50 ms | gates |
+|---|---|---|---|---|---|
+| base, 3 nodes (668269/668270/668364/668567) | 241-272 | 6.5-7.4 | 1.2-2.7 / 7.8-19 | 130-146 | pass |
+| `--kv-cache-dtype fp8_e4m3` (668269, 668567) | 284.9, 283.5 | 7.84, 7.72 | 1.2 / 8.6-10 | 123-125 | pass |
+
+- **fp8 KV: +11% aggregate, +18% per agent** against the same node's base and base2 (257.5/256.6,
+  drift under 1%), reproduced on a second node; gates pass. Candidate for the shipped line.
+- Rejected: MTP/NEXTN 3-4 (-36%), `--mamba-full-memory-ratio 0.5` (233 vs 241-255), `--schedule-policy
+  lpm` (inside the 6% same-node drift), `--tp-size 2 --dp-size 2` (78 tok/s: DP round-robin splits a
+  conversation, hit 0.48), `--mamba-radix-cache-strategy no_buffer --disable-overlap-schedule` (132 tok/s,
+  hit 0.79; ReplaySSM needs it), `--mamba-ssm-dtype bfloat16` (263, within noise).
+- No SGLang source patch is involved: the speed comes from SGLang over vLLM, the KV pool above the
+  working set, aiter, and the chat template.
+
 ## Rules
 
 - Serve on SGLang: about 19x vLLM's throughput for this hybrid backbone.
@@ -79,7 +104,7 @@ The NGC pair shares CUDA 13.4.1 with `judge-agent-cuda`'s NGC PyTorch 26.09 base
 needs `com.hooks.aws_ofi_nccl.variant = "cuda13"`, while `vllm-cuda` uses `"cuda12"`
 ([IMAGE_REQUIREMENTS.md](../../containers/images/IMAGE_REQUIREMENTS.md)). On Clariden (GH200),
 swiss-ai's `model-launch` builds its own CUDA 13.0 images from source (`images/sglang_0.5.20`,
-`images/vllm_cuda13`) with `variant = "cuda13"` and `/capstor` and `/iopsstor` mounted.
+`images/vllm_cuda13`) with `variant = "cuda13"` and both Alps scratch filesystems mounted.
 
 **Published launch lines.**
 
