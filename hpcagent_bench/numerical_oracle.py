@@ -209,8 +209,7 @@ from hpcagent_bench.translators.numpyto_common.dtypes import canonical, compute_
 # The emitter's own fp-tag helper, so this file's globs match what it names emitted files.
 from hpcagent_bench.translators.numpyto_common.naming import fptype_tag  # noqa: E402
 
-# Shared with the nest-forge Pluto lane; kept under its historical private name for callers here.
-from hpcagent_bench.pluto_affine import scop_nonaffine_reason as _scop_nonaffine_reason  # noqa: E402,F401
+from hpcagent_bench.pluto_affine import scop_nonaffine_reason  # noqa: E402
 
 # The polycc invocation the TIMED pluto column builds from -- flags, pet-parse env and process-group
 # bound. Imported rather than restated so this gate cannot validate a different binary. See _run_pluto.
@@ -405,7 +404,6 @@ _CONFIG_DEFAULTS: dict[str, int | bool | dict[str, object]] = {
     # polycc gets its own, longer bound: pluto's schedule search is not a compiler hang, and adi
     # legitimately needs minutes where 75 s only ever caught wedged builds.
     "polycc_timeout_s": 360,
-    "kernel_timeout_s": 180,
     "numba_fastmath": False,
     "overrides": {},
 }
@@ -813,7 +811,7 @@ def run_kernel(
     tdp = pathlib.Path(td_ctx.name)
     try:
         # Canonical native name via the SAME helper the emitter names files with, so the glob below
-        # can't drift (a hardcoded fp32-else-fp64 ternary here previously mismatched fp16 files).
+        # cannot drift from the emitted fp16 / fp32 / fp64 file names.
         fptype = fptype_tag(emit_prec)
         # Native (C/C++/Fortran) emit is shared by those three backends; a failure here must not
         # short-circuit the oracle since jax/py emit independently and may still validate the kernel.
@@ -1496,7 +1494,7 @@ def _run_pluto(
     if not inputs:
         return "skip:unsupported:no-scop"
     src = inputs[0]
-    nonaffine = _scop_nonaffine_reason(src.read_text())
+    nonaffine = scop_nonaffine_reason(src.read_text())
     if nonaffine:
         # Outside pluto's model; skip rather than let polycc miscompile it into a spurious FAIL.
         return f"skip:unsupported:non-affine:{nonaffine}"
