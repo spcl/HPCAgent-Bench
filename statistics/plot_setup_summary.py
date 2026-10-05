@@ -58,14 +58,12 @@ TYPE: plotstyle.TypeScale = plotstyle.AUTHOR_SCALE
 MARK_PT: float = 2.0 * TYPE.marker_size
 
 #: Legend columns for a ONE-panel figure. Five entries in a row are wider than a single panel, and
-#: now that the canvas is fixed the overflow falls off the edge instead of widening the figure.
+#: the canvas is fixed, so the overflow would fall off the edge instead of widening the figure.
 #: The pair figure is twice as wide and takes them all in one row.
 LEGEND_COLS_SINGLE: int = 3
 
 
-def setup_points(
-    frame: pd.DataFrame
-) -> pd.DataFrame:
+def setup_points(frame: pd.DataFrame) -> pd.DataFrame:
     """One row per (model, language, condition): :func:`~hpcagent_bench.stats.population.kernel_medians`
     checked against SC15 Rules 4 and 5 before it is drawn."""
     rows = []
@@ -260,10 +258,8 @@ def write(fig: matplotlib.figure.Figure, out: pathlib.Path) -> pathlib.Path:
     return out
 
 
-#: (column, axis label, log y). A "which way is better" arrow used to ride in the axis label; it
-#: was dropped because it did not earn the space -- more speedup and fewer tokens are not facts a
-#: reader of this figure needs told, and the label is the one place on the panel where an extra
-#: clause pushes the axis around.
+#: (column, axis label, log y). No "which way is better" arrow in the label: more speedup and fewer
+#: tokens need no telling, and an extra clause in the label pushes the axis around.
 SPEEDUP = ("log2_speedup", r"Geomean $\log_2$ Speedup", False)
 TOKENS = ("tokens", "Median Tokens per Task", True)
 

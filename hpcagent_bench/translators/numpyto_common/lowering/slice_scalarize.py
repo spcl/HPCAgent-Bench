@@ -467,9 +467,8 @@ class SliceToScalarRewriter(ast.NodeTransformer):
         rhs_slice_idx = 0
         # ``axis`` below is the SOURCE axis a dim reads, not its position in ``dims``: a newaxis
         # inserts a RESULT axis and consumes no source axis, so ``conv1[np.newaxis, :, :, :]``
-        # reads source axes 0, 1, 2 where enumerate() would say 1, 2, 3. The distinction only
-        # cost a bound lookup before; now that the axis picks which extent decides a broadcast
-        # PIN, getting it wrong would pin the wrong axis.
+        # reads source axes 0, 1, 2 where enumerate() would say 1, 2, 3. The axis picks which
+        # extent decides a broadcast PIN, so getting it wrong would pin the wrong axis.
         source_axes = []
         consumed = 0
         for d in dims:

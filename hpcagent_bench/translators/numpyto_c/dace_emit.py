@@ -4498,7 +4498,7 @@ def render_program(
     # ... and every remaining .shape read, including on a transient: one unresolved read makes the
     # enclosing size expression non-symbolic, and promotion is all-or-nothing.
     # A declared scalar or size symbol is rank 0 -- it broadcasts against anything and decides no
-    # extent -- so it has to be KNOWN, now that one unknown operand poisons the whole expression.
+    # extent -- so it has to be KNOWN, because one unknown operand poisons the whole expression.
     value_shapes = {**arr_shapes, **{nm: [] for nm in list(scalars) + symbol_names}}
     fn_ast = ResolveShapeReads(value_shapes).visit(fn_ast)
     ast.fix_missing_locations(fn_ast)
