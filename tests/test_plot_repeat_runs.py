@@ -113,7 +113,7 @@ def test_several_series_box_side_by_side_rather_than_falling_back_to_points() ->
     cells = [pk.KernelCell("k1", (1.0, 2.0, 4.0, 8.0))]
     series = [pk.Series(name, tuple(cells), color) for name, color in (("a", "#1155cc"), ("b", "#cc5511"))]
     metric = pk.speedup_series_metric(series, "Speedup")
-    fig = pk.figure_one(metric, ["k1"], pk.Style.BOX, False, "")
+    fig = pk.figure_panels([metric], ["k1"], pk.Style.BOX, False, "")
     try:
         centres = sorted(patch.get_path().get_extents().x0 for patch in fig.axes[0].patches)
         assert len(centres) == 2 and centres[0] < centres[1]

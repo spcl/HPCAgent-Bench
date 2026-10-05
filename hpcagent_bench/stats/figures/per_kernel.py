@@ -90,7 +90,6 @@ __all__ = [
     "Series",
     "Style",
     "SummaryReducer",
-    "answer_cells",
     "bootstrap_point",
     "box_cells",
     "box_width",
@@ -108,7 +107,6 @@ __all__ = [
     "draw_summary_mark",
     "drawn_values",
     "exp2_or_nan",
-    "figure_one",
     "figure_panels",
     "fit_canvas",
     "fit_ylabels",
@@ -120,7 +118,6 @@ __all__ = [
     "label_kernel_ticks",
     "mark_size",
     "min_text_pt",
-    "ordered_kernels",
     "run_cells",
     "run_count_label",
     "runs_figure",
@@ -268,32 +265,6 @@ def kernel_cells(
         elif fill:
             cells.append(KernelCell(kernel, (population.NOT_DELIVERED,), delivered=False))
     return tuple(cells)
-
-
-def ordered_kernels(cells: Sequence[KernelCell]) -> list[str]:
-    """Kernels ascending by median, each named once (a panel may carry several series over one
-    kernel axis, so a kernel appears in ``cells`` once per series)."""
-    grouped: dict[str, list[float]] = {}
-    for cell in cells:
-        value = cell.median()
-        if math.isfinite(value):
-            grouped.setdefault(cell.kernel, []).append(value)
-    for cell in cells:
-        grouped.setdefault(cell.kernel, [])
-    return sorted(grouped, key=lambda kernel: float(np.median(grouped[kernel])) if grouped[kernel] else math.inf)
-
-
-def answer_cells(frame: pd.DataFrame) -> list[KernelCell]:
-    """One single-value cell per SOLVED kernel: its final answer (:func:`population.kernel_answers`), the rule
-    the tables score a kernel by."""
-    answers = population.kernel_answers(frame, policy=population.KernelPolicy.SOLVED)
-    if "speedup" not in answers.columns:
-        return []
-    return [
-        KernelCell(str(kernel), (float(value),))
-        for kernel, value in population.series_of(answers, "speedup").items()
-        if value > 0
-    ]
 
 
 def exp2_or_nan(value: float) -> float:
@@ -893,25 +864,6 @@ def status_handles(metrics: Sequence[Metric]) -> list[matplotlib.artist.Artist]:
     return handles
 
 
-def figure_one(
-    metric: Metric,
-    kernels: Sequence[str],
-    style_: Style,
-    summary_column: bool,
-    title: str,
-    width_in: float | None = None,
-    legend: Sequence[matplotlib.artist.Artist] = (),
-    panel_height_in: float | None = None,
-    tick_label: Callable[[str], str] | None = None,
-    summary_values: bool = True,
-) -> matplotlib.figure.Figure:
-    """A single metric's panel as its own figure (:func:`figure_panels` with one panel)."""
-    return figure_panels(
-        [metric], kernels, style_, summary_column, title, width_in, legend, panel_height_in=panel_height_in,
-        tick_label=tick_label, summary_values=summary_values,
-    )  # fmt: skip
-
-
 def figure_panels(
     metrics: Sequence[Metric],
     kernels: Sequence[str],
@@ -1065,7 +1017,9 @@ def run_cells(runs: pd.DataFrame, kernels: Sequence[str]) -> tuple[KernelCell, .
     runs in run order, and its graded runs' values (unsolved at 1x) as the episodes its box is over."""
     cells: list[KernelCell] = []
     for kernel in kernels:
-        mine = runs.loc[runs["kernel"] == kernel].sort_values(["run_root", "job", population.SLOT_COLUMN], kind="stable")
+        mine = runs.loc[runs["kernel"] == kernel].sort_values(
+            ["run_root", "job", population.SLOT_COLUMN], kind="stable"
+        )
         if mine.empty:
             continue
         made = tuple(
