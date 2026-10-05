@@ -4,7 +4,7 @@
 #
 # Rebuild the numpy and scipy that uv.lock pins against the image's OpenBLAS.
 #
-#   numpy_on_openblas.sh <view prefix> <workspace> [uv sync flags]      (e.g. /opt/view /opt/hpcagent-bench --extra cpu)
+#   numpy_on_openblas.sh <view prefix> <workspace> [uv sync flags]      (e.g. /opt/view /opt/hpcagent-bench --only-group image-python)
 #
 # The PyPI wheels bundle their own scipy-openblas: a pthreads build with MAX_THREADS=64 that crashed
 # when numba's prange threads (192 on an mi300 node) called np.linalg at once, and a second BLAS
@@ -13,9 +13,9 @@
 # numba (NUMBA_THREADING_LAYER=omp, set by the Dockerfile). uv.lock decides the versions, so this is the
 # same numpy that computes every CPU reference, only linked differently. <workspace> holds the COPY'd
 # pyproject.toml, uv.lock and agent/pyproject.toml; the environment is the interpreter's prefix unless
-# UV_PROJECT_ENVIRONMENT names one. The uv sync flags are the ones the image's install used (its --extra and
-# --group): a sync that selects other extras swaps the packages those extras pick (torch's CPU wheel for PyPI's,
-# rich for another release). The gate at the end checks both link the view's OpenBLAS by soname.
+# UV_PROJECT_ENVIRONMENT names one. The uv sync flags are the ones the image's install used (its --only-group):
+# --no-install-project alone would still install every dependency of the project. The gate at the end checks both
+# link the view's OpenBLAS by soname.
 set -eux
 ulimit -c 0
 view="$1"
@@ -29,8 +29,8 @@ PKG_CONFIG_PATH="${view}/lib/pkgconfig:${view}/lib64/pkgconfig${PKG_CONFIG_PATH:
 export PKG_CONFIG_PATH
 pkg-config --exists openblas
 sync() {
-    (cd "${workspace}" && uv sync --frozen --inexact --no-cache --python "${py}" --no-install-project \
-        --no-install-package hpcagent-agent --group openblas-build ${sync_flags} "$@")
+    (cd "${workspace}" && uv sync --frozen --inexact --no-cache --python "${py}" \
+        --only-group openblas-build ${sync_flags} "$@")
 }
 # numpy first: scipy's build imports the installed numpy, which one combined reinstall removes mid-build.
 sync --reinstall-package numpy --no-binary-package numpy \

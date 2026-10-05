@@ -1088,8 +1088,8 @@ RUN set -eux; \
     ln -s /opt/hpcagent-bench-agent /opt/hpcagent-bench/agent; \
     cd /opt/hpcagent-bench; \
     MPICC=/opt/view/bin/mpicc UV_PROJECT_ENVIRONMENT=/opt/venv \
-      uv sync --frozen --exact --no-cache --python "$(command -v python3)" --no-install-project \
-      --no-default-groups --group image-python --no-binary-package mpi4py; \
+      uv sync --frozen --exact --no-cache --python "$(command -v python3)" \
+      --only-group image-python --no-binary-package mpi4py; \
     python3 -c "import mpi4py.MPI as M; print('mpi4py', M.Get_library_version().splitlines()[0])"
 
 # numpy and scipy on the image's OpenBLAS rather than their wheels' bundled scipy-openblas (a second,
@@ -1097,7 +1097,7 @@ RUN set -eux; \
 # caller shares one OpenMP runtime (containers/lib/numpy_on_openblas.sh).
 ENV NUMBA_THREADING_LAYER=omp
 COPY containers/lib/numpy_on_openblas.sh containers/lib/one_openmp.sh containers/lib/openmp_gate.py /tmp/one-openmp/
-RUN sh /tmp/one-openmp/numpy_on_openblas.sh /opt/view /opt/hpcagent-bench --no-default-groups --group image-python && rm -rf /tmp/one-openmp
+RUN sh /tmp/one-openmp/numpy_on_openblas.sh /opt/view /opt/hpcagent-bench --only-group image-python && rm -rf /tmp/one-openmp
 
 # cupy is the GPU track's array module: every arch == "gpu" flavor stages its arrays through it,
 # so without it the GPU legs die at import and no dace_gpu column can exist at all. Built from
@@ -1115,9 +1115,9 @@ RUN set -eux; \
     cd /opt/hpcagent-bench; \
     CUPY_INSTALL_USE_HIP=1 ROCM_HOME=/opt/rocm HCC_AMDGPU_TARGET="$(echo "${ROCM_ARCH}" | tr ";" ",")" \
     CUPY_NUM_BUILD_JOBS="$(nproc)" UV_PROJECT_ENVIRONMENT=/opt/venv \
-      uv sync --frozen --inexact --cache-dir /uv-cache --python "$(command -v python3)" --no-install-project \
+      uv sync --frozen --inexact --cache-dir /uv-cache --python "$(command -v python3)" \
       --no-install-package numpy --no-install-package scipy \
-      --no-default-groups --group image-python --group image-cupy-rocm --no-binary-package cupy; \
+      --only-group image-python --only-group image-cupy-rocm --no-binary-package cupy; \
     python3 -c "import cupy; print('cupy', cupy.__version__)"
 
 # Gate: cupy's device code targets exactly the ROCM_ARCH list.
@@ -1158,7 +1158,9 @@ RUN set -eux; \
     PYTHONSAFEPATH=1 rocprof-compute --version >/dev/null
 
 # ---------------------------------------------------------------------------------------------
-# 12. The launch venv (containers/lib/launch_venv.sh, the ENTRYPOINT set at the end of this stage).
+# 12. The launch venv (containers/lib/launch_venv.sh): the EDFs put /opt/launch/bin first on PATH, and every command there
+# (python3, pytest, litellm, ...) is launch_exec.sh, which runs it from the node's venv. The ENTRYPOINT at the end
+# of this stage does the same for a plain `podman run`; under the Container Engine the EDF's [env] replaces its PATH.
 #
 # /opt/launch holds what the hook needs: the image python the venv is made from, the image's sync arguments, an
 # id that changes with every build (a new image never reuses an old image's venv), and one_openmp.sh, which links
@@ -1166,13 +1168,15 @@ RUN set -eux; \
 # (--no-install-project: hpcagent_bench is never in an agent's environment; the agent package comes in editable as
 # a dependency, from the agent/ a step binds); the judge stage drops that flag, so a judge job also installs
 # hpcagent_bench editable from its mounted checkout. The packages this image built are never reinstalled.
-COPY containers/lib/launch_venv.sh containers/lib/one_openmp.sh containers/lib/openmp_gate.py /opt/launch/
+COPY containers/lib/launch_venv.sh containers/lib/launch_exec.sh containers/lib/one_openmp.sh containers/lib/openmp_gate.py /opt/launch/
 RUN set -eux; \
     command -v python3 > /opt/launch/python; \
     echo "--no-install-project --extra amdgpu --group judge-proxy --no-install-package numpy --no-install-package scipy \
 --no-install-package mpi4py --no-install-package cupy" > /opt/launch/sync.args; \
     date +%s%N > /opt/launch/image.id; \
-    chmod +x /opt/launch/launch_venv.sh
+    chmod +x /opt/launch/launch_venv.sh /opt/launch/launch_exec.sh; \
+    mkdir -p /opt/launch/bin; \
+    for command in python python3 pytest litellm pythran uvicorn playwright; do ln -s ../launch_exec.sh "/opt/launch/bin/${command}"; done
 
 # ---------------------------------------------------------------------------------------------
 # 13. The agent side: node, the claude CLI and uv.

@@ -71,19 +71,21 @@ def launch_args(text: str) -> str:
 
 @pytest.mark.parametrize("image", JUDGE_AGENT)
 def test_a_judge_agent_image_installs_only_what_it_builds_from_source(image: str) -> None:
-    """Every other locked package is installed when a job starts; an image sync never selects a framework extra."""
+    """Every other locked package is installed when a job starts. An image sync names its groups with --only-group:
+    --no-install-project alone still installs the project's dependencies (dace and torch were baked that way)."""
     text = recipe(image)
     assert "COPY pyproject.toml uv.lock /opt/hpcagent-bench/" in text
     assert "COPY agent/pyproject.toml /opt/hpcagent-bench-agent/pyproject.toml" in text
     sync = re.search(
-        r"uv sync --frozen --(?:exact|inexact)[^;]*--no-default-groups --group image-python "
+        r"uv sync --frozen --(?:exact|inexact)[^;]*--only-group image-python "
         r"--no-binary-package mpi4py;",
         text,
         re.DOTALL,
     )
     assert sync is not None, image
-    image_syncs = [one for one in re.findall(r"uv sync [^;]*?(?=; \\)", text, re.DOTALL) if "/opt/rocprof" not in one]
-    assert [one for one in image_syncs if "--extra" in one] == [], image
+    image_syncs = re.findall(r"UV_PROJECT_ENVIRONMENT=(?!/opt/rocprof)[^\n]*\\\s+(uv sync [^;]*)", text)
+    assert image_syncs, image
+    assert [one for one in image_syncs if "--extra" in one or "--only-group" not in one] == [], image
 
 
 @pytest.mark.parametrize("image", JUDGE_AGENT)
@@ -95,6 +97,8 @@ def test_the_launch_venv_installs_the_extra_and_the_proxy_and_never_an_image_bui
         f"--no-install-package {word}" for word in args.split("--no-install-package ")[1:] for word in [word.strip()]
     }, args
     assert 'ENTRYPOINT ["/opt/launch/launch_venv.sh"]' in text
+    # The Container Engine applies the EDF [env] after an ENTRYPOINT, undoing its PATH: /opt/launch/bin, first on the EDFs' PATH, is the way in.
+    assert re.search(r'ln -s \.\./launch_exec\.sh "/opt/launch/bin/\$\{command\}"', text)
     assert re.search(r"^COPY .*containers/lib/launch_venv.sh.* /opt/launch/$", text, re.MULTILINE)
     judge = text[text.index("FROM agent AS judge") :]
     assert "sed -i 's/^--no-install-project //' /opt/launch/sync.args" in judge, "a judge job installs hpcagent_bench"
@@ -139,12 +143,12 @@ def test_the_openblas_rebuild_syncs_the_image_group_only(image: str) -> None:
     """A sync that selects an extra would put the framework wheels into the image (they install at launch)."""
     rebuild = re.search(r"numpy_on_openblas\.sh /opt/view /opt/hpcagent-bench ([^&]*)&&", recipe(image))
     assert rebuild is not None, image
-    assert rebuild.group(1).split() == ["--no-default-groups", "--group", "image-python"]
+    assert rebuild.group(1).split() == ["--only-group", "image-python"]
 
 
 def test_the_amd_image_builds_cupy_from_its_group_after_the_numpy_rebuild() -> None:
     text = recipe("judge-agent-amd")
-    assert text.index("numpy_on_openblas.sh") < text.index("--group image-cupy-rocm --no-binary-package cupy")
+    assert text.index("numpy_on_openblas.sh") < text.index("--only-group image-cupy-rocm --no-binary-package cupy")
     cupy = text[text.index("CUPY_INSTALL_USE_HIP=1") : text.index("--no-binary-package cupy")]
     assert "--no-install-package numpy --no-install-package scipy" in cupy
 
