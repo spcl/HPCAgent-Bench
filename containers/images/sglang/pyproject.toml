@@ -5,7 +5,7 @@
 [project]
 name = "sglang-image-extras"
 version = "0"
-requires-python = "==3.10.*"
+requires-python = "==3.12.*"
 dependencies = [
     "flydsl==0.3.2",  # FlyDSL ships its own LLVM/MLIR and the MLIR python bindings, so it is the wheel
     "cupy==14.2.0",  # no ROCm wheel exists: the PyPI sdist, built for HIP

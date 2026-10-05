@@ -5,6 +5,8 @@
 # Output: aiter-configs/bf16_tuned_gemm_gfx942.csv beside this script; run_cluster.sh merges it after
 # aiter's own file (AITER_CONFIG_GEMM_BF16). Re-run after an aiter bump or for a new model's shapes.
 #   sbatch -A <account> -p mi300 --gpus-per-node=4 containers/inference/tune-aiter-gemm.sbatch
+# Candidates are aiter's own kernels (asm, skinny, triton, ck): hipBLASLt is the torch path a row replaces,
+# and enumerating its 1363 solutions per shape alone outran the job (668576).
 # SHAPES: "N,K" pairs, from the "shape is M:.., N:.., K:.." lines of a server log (AITER_LOG_TUNED_CONFIG=1).
 #SBATCH --job-name=tune-aiter-gemm
 #SBATCH --nodes=1
@@ -39,6 +41,6 @@ for nk in "${SHAPES}".split():
     print(n, k, len(ms), "buckets", flush=True)
 open("${WORK}/untuned.csv", "w").write("\n".join(rows) + "\n")
 PY
-/opt/venv/bin/python3 gemm_tuner.py -i "${WORK}/untuned.csv" -o "${OUT}" --mp 4 --sort True --with-hipblaslt
+/opt/venv/bin/python3 gemm_tuner.py -i "${WORK}/untuned.csv" -o "${OUT}" --mp 4 --sort True
 '
 echo "tuned rows: $(($(wc -l < "${here}/aiter-configs/bf16_tuned_gemm_gfx942.csv") - 1))"

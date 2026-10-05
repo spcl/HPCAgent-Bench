@@ -85,7 +85,7 @@ COPY containers/lib/device_arch_gate.sh /usr/local/bin/device_arch_gate.sh
 # it: AMD measure fused_moe at 87.8-89.7% of GPU time on this shape, and their W4A16 FlyDSL kernel at +162%
 # throughput / -47% TTFT. aiter reaches it when AITER_USE_FLYDSL_MOE_SORTING=1 and the package imports. The
 # wheel, not a source build: FlyDSL ships its own LLVM/MLIR and embeds the MLIR python bindings, and
-# pointing MLIR_PATH at a foreign one is a documented build failure. There is a cp310 manylinux_2_27 wheel,
+# pointing MLIR_PATH at a foreign one is a documented build failure. There is a cp312 manylinux wheel,
 # which is this image's interpreter.
 #
 # cupy: the base ships none. From SOURCE: there is no ROCm wheel, the cupy-rocm-* names are dead and PyPI
