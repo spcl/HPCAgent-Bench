@@ -165,7 +165,6 @@ __all__ = [
     "shape_reads_init_scalars",
     "sparse_alignment_constraints",
     "stem_aliases",
-    "str_block_of",
     "target_names",
     "track_datatype",
     "unimportable_module_path",
@@ -236,17 +235,6 @@ def block_of(raw: object, field_name: str, source: str) -> dict[str, object]:
     if raw is not None and not isinstance(raw, dict):
         raise ValueError(f"{source}: {field_name}: expected a mapping (got {type(raw).__name__})")
     return block
-
-
-def str_block_of(raw: object, field_name: str, source: str) -> dict[str, str]:
-    """One manifest block whose values are all strings. Every entry across the corpus is, so a
-    non-string is a typo caught here rather than an attribute error where the value is read."""
-    out: dict[str, str] = {}
-    for key, value in block_of(raw, field_name, source).items():
-        if not isinstance(value, str):
-            raise ValueError(f"{source}: {field_name}.{key}: expected a string (got {type(value).__name__})")
-        out[key] = value
-    return out
 
 
 def list_block_of(raw: object, field_name: str, source: str) -> dict[str, list[str]]:
