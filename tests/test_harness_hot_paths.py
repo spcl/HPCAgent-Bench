@@ -115,7 +115,7 @@ def test_a_whole_measurement_runs_in_one_child(monkeypatch) -> None:
 
     monkeypatch.setattr(native_call, "run_forked", counting)
     kernel = _python_kernel()
-    _, samples, _, _ = native_call._call_isolated(
+    _, samples, _, _, _timed = native_call._call_isolated(
         kernel,
         _BINDING,
         {"x": np.zeros(4)},
@@ -155,7 +155,7 @@ def test_the_warmup_reps_are_discarded_not_returned(monkeypatch) -> None:
     toward its cold first-touch time."""
     kernel = _python_kernel()
     for warmup in (0, 1, 5):
-        _, samples, _, _ = native_call._call_isolated(
+        _, samples, _, _, _timed = native_call._call_isolated(
             kernel,
             _BINDING,
             {"x": np.zeros(4)},
@@ -175,7 +175,7 @@ def test_every_rep_sees_the_reference_inputs(tmp_path) -> None:
     the same one."""
     kernel = tmp_path / "accumulate.py"
     kernel.write_text("def kern(x):\n    x += 1.0\n    return x\n")
-    _, samples, _, _ = native_call._call_isolated(
+    _, samples, _, _, _timed = native_call._call_isolated(
         str(kernel),
         _BINDING,
         {"x": np.zeros(4)},
@@ -186,7 +186,7 @@ def test_every_rep_sees_the_reference_inputs(tmp_path) -> None:
         reps=5,
         warmup=0,
     )
-    outputs, _, _, _ = native_call._call_isolated(
+    outputs, _, _, _, _timed = native_call._call_isolated(
         str(kernel),
         _BINDING,
         {"x": np.zeros(4)},
@@ -258,7 +258,7 @@ def test_a_slow_but_finite_run_is_not_killed_by_the_per_rep_guard(tmp_path) -> N
     survive, or every slow kernel is a false timeout."""
     kernel = tmp_path / "slow.py"
     kernel.write_text("import time\ndef kern(x):\n    time.sleep(0.05)\n    return x + 1.0\n")
-    _, samples, _, _ = native_call._call_isolated(
+    _, samples, _, _, _timed = native_call._call_isolated(
         str(kernel),
         _BINDING,
         {"x": np.zeros(4)},

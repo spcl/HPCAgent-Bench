@@ -95,7 +95,7 @@ def capture_caps(monkeypatch: pytest.MonkeyPatch) -> list[float]:
 
     def fake_call(_lib: object, _binding: object, _data: object, *_a: object, memory_gb: float, **_kw: object) -> tuple:
         caps.append(memory_gb)
-        return {}, [1000, 1001], 0, []
+        return native_call.IsolatedCall({}, [1000, 1001], 0, [], ({}, {}))
 
     monkeypatch.setattr(grading, "_call_isolated", fake_call)
     monkeypatch.setattr(sizing, "rank_memory_share_bytes", lambda: 128 * GIB)
@@ -141,7 +141,7 @@ def call_scratch(tmp_path: pathlib.Path, memory_gb: float) -> np.ndarray:
     """The scratch-allocating delivery through the real grading child under ``memory_gb``."""
     kernel = tmp_path / "scratch.py"
     kernel.write_text(SCRATCH_SOURCE.format(n=SCRATCH_BYTES))
-    outs, _samples, _mem, _ = native_call._call_isolated(
+    outs, _samples, _mem, _, _timed = native_call._call_isolated(
         str(kernel),
         BINDING,
         {"x": np.zeros(1, dtype=np.float64)},

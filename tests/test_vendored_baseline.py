@@ -462,7 +462,7 @@ def test_vendored_source_builds_a_usable_shared_library(tmp_path) -> None:
         # the cap keeps this test on the number production uses instead of one that only the test
         # can be wrong about.
         memory_gb = sizing.kernel_memory_gb(spec, "S")
-        outputs, samples, _mem, _ = _call_isolated(
+        outputs, samples, _mem, _, _timed = _call_isolated(
             built,
             binding,
             data,
