@@ -251,10 +251,10 @@ class FakeSandbox:
         self.root = root
         self.built = built
 
-    def __call__(self, binding: object) -> "FakeSandbox":
+    def __call__(self, binding: object) -> Self:
         return self
 
-    def __enter__(self) -> "FakeSandbox":
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *exc: object) -> bool:
@@ -262,6 +262,9 @@ class FakeSandbox:
 
     def build(self, submission: object, *, judge_compile: object = (), judge_link: object = ()) -> BuildResult:
         return self.built
+
+    def require_root(self) -> pathlib.Path:
+        return self.root
 
 
 def test_a_traced_submission_answers_with_the_payload_of_the_run_it_asked_for(

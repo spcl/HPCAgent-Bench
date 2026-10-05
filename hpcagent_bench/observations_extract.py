@@ -532,9 +532,10 @@ def clocks_agree_on_delta(host_minus_event_ns: object) -> bool:
     """:func:`timing.clocks_agree` from what a ``regrade_cells`` row keeps: the host bracket minus the
     event time (``host_event_delta_ns``), not the two clocks. The rule is host <= factor * event +
     slack, i.e. delta <= (factor - 1) * event + slack; with factor >= 1 a delta within the slack
-    passes for ANY event time, and a larger one cannot be decided here, so it reads as disagreeing
-    (the stored flag stands). A gate switched off (factor 0) always agrees, as the live one does."""
-    if not isinstance(host_minus_event_ns, (int, float, str)):
+    passes for ANY event time, and a larger one (or no reading, ``None``) cannot be decided here, so it
+    reads as disagreeing (the stored flag stands). A gate switched off (factor 0) always agrees, as the
+    live one does."""
+    if host_minus_event_ns is not None and not isinstance(host_minus_event_ns, (int, float, str)):
         raise TypeError(f"host_event_delta_ns is {host_minus_event_ns!r}, not a number")
     factor = config.get_float("measurement.quiescence.divergence_factor", 0.0)
     if factor <= 0:

@@ -276,7 +276,7 @@ def test_a_control_is_the_hollow_circle_in_a_lighter_shade_of_its_models_colour_
     from hpcagent_bench.stats.figures import scaling
 
     style = scaling.series_style("", "qwen38")
-    assert style["marker"] == palette.CONTROL_MARKER and style["markerfacecolor"] == "none"
+    assert style["marker"].get_marker() == palette.CONTROL_MARKER and style["markerfacecolor"] == "none"
     assert style["color"] == palette.model_shade("qwen38", palette.CONTROL_SHADE)
     assert palette.packet_marker("") == palette.CONTROL_MARKER
 

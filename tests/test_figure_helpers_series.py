@@ -9,11 +9,16 @@ from hpcagent_bench.stats.figures import scaling
 from hpcagent_bench.stats.figures.helpers import series
 
 
+def drawn(style: series.SeriesStyle) -> dict[str, object]:
+    """``style`` with its marker as the registry code matplotlib was handed."""
+    return {**style, "marker": style["marker"].get_marker()}
+
+
 def test_a_treated_setup_wears_its_models_full_colour_and_its_packets_filled_shape() -> None:
     packet = palette.hue_order("packets")[0]
     style = series.series_style(packet, "qwen38")
     hue = palette.model_shade("qwen38", 0)
-    assert style == {
+    assert drawn(style) == {
         "color": hue,
         "marker": palette.packet_marker(packet),
         "markerfacecolor": hue,
@@ -24,8 +29,8 @@ def test_a_treated_setup_wears_its_models_full_colour_and_its_packets_filled_sha
 def test_the_torch_dist_baseline_is_the_control_grey_filled_x_whatever_its_packet() -> None:
     grey = palette.control_color()
     expected = {"color": grey, "marker": series.TORCH_DIST_MARKER, "markerfacecolor": grey, "markeredgecolor": grey}
-    assert series.series_style("", series.TORCH_DIST_SETUP) == expected
-    assert series.series_style("anything", series.TORCH_DIST_SETUP) == expected
+    assert drawn(series.series_style("", series.TORCH_DIST_SETUP)) == expected
+    assert drawn(series.series_style("anything", series.TORCH_DIST_SETUP)) == expected
 
 
 def test_the_scaling_figures_read_the_shared_series_look_not_a_copy() -> None:
