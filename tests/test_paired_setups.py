@@ -282,7 +282,7 @@ def test_the_impact_table_carries_usage_and_the_setup_aggregates(
     paired_setups: ModuleType, tmp_path: pathlib.Path
 ) -> None:
     """Attempts come off the task rows, speedup is the geomean (A1), cost the geomean task total with
-    its log-t interval (A2), each over the 8 selected tasks."""
+    its bootstrap interval (A2) and, beside it, the arithmetic mean, each over the 8 selected tasks."""
     table = impact_table(paired_setups, tmp_path).set_index("setup")
     treated, control = table.loc["x-qwen38-c-cpf"], table.loc["x-qwen38-c"]
     assert (treated.tasks, treated.n_solved, treated.n_token_kernels) == (8, 8, 8)
@@ -290,6 +290,7 @@ def test_the_impact_table_carries_usage_and_the_setup_aggregates(
     assert treated.accepted_submissions_per_episode == pytest.approx(1.0)
     assert treated.geomean_speedup == pytest.approx(3.0) and control.gm_tokens == pytest.approx(100.0)
     assert treated.gm_tokens_ci_low == pytest.approx(50.0) == treated.gm_tokens_ci_high
+    assert (treated.mean_tokens, control.mean_tokens) == pytest.approx((50.0, 100.0))
 
 
 def test_counts_are_written_as_integers_and_ratios_at_full_precision(
@@ -417,7 +418,7 @@ def test_the_estimate_is_the_geomean_of_the_paired_ratios(paired_setups: ModuleT
     change, _ = paired_setups.score_leg(table["a"], table["b"])
 
     assert math.exp(change.estimate) == pytest.approx(summary.geomean(values))
-    assert change.method == "paired-t"
+    assert change.method == "sign-flip-exact"
 
 
 @pytest.mark.parametrize("pseudo", ["adhoc", ""], ids=["adhoc", "blank"])

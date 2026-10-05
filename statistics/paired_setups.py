@@ -143,6 +143,9 @@ SETUP_COLUMNS = (
     "accepted_submissions_per_episode",
     "gm_tokens_ci_low",
     "gm_tokens_ci_high",
+    "mean_tokens",
+    "mean_tokens_ci_low",
+    "mean_tokens_ci_high",
     "n_token_kernels",
     "cpf_uptake",
 )
@@ -172,6 +175,9 @@ IMPACT_COLUMNS = (
     "gm_tokens",
     "gm_tokens_ci_low",
     "gm_tokens_ci_high",
+    "mean_tokens",
+    "mean_tokens_ci_low",
+    "mean_tokens_ci_high",
     "speedup_ratio",
     "speedup_ci_low",
     "speedup_ci_high",
@@ -206,6 +212,9 @@ IMPACT_SETUP_COLUMNS = {
     "gm_tokens": "gm_tokens",
     "gm_tokens_ci_low": "gm_tokens_ci_low",
     "gm_tokens_ci_high": "gm_tokens_ci_high",
+    "mean_tokens": "mean_tokens",
+    "mean_tokens_ci_low": "mean_tokens_ci_low",
+    "mean_tokens_ci_high": "mean_tokens_ci_high",
 }
 
 #: Pairs-table leg -> impact-table column prefix, and the pairs-table column behind each suffix.
@@ -649,7 +658,9 @@ def setup_rows(
     never over the full tag, because a kernel a setup was never given is a scheduling fact.
 
     ``gm_tokens`` is the setup's typical task cost: the geometric mean over EVERY kernel it has a token
-    total for (``K``, solved or not), priced with the table's cost card (spec A2).
+    total for (``K``, solved or not), priced with the table's cost card (spec A2). ``mean_tokens`` is the
+    arithmetic mean over the same kernels, the cost a reader pays per task (Hoefler and Belli Rule 3);
+    the geometric mean stays the reported default.
     """
     no_submit = no_submit or {}
     uptake = uptake or {}
@@ -664,6 +675,7 @@ def setup_rows(
         n_served = len(served.get(setup, frozenset(item.kernels)))
         spend = [value for (owner, _kernel), value in tokens.items() if owner == setup]
         spend_interval = floored_geomean(spend)
+        bill = summary.mean_interval(spend)
         used = usage.loc[setup] if setup in usage.index else None
         rows.append(
             {
@@ -686,6 +698,9 @@ def setup_rows(
                 "gm_tokens": spend_interval[0],
                 "gm_tokens_ci_low": spend_interval[1],
                 "gm_tokens_ci_high": spend_interval[2],
+                "mean_tokens": bill.point,
+                "mean_tokens_ci_low": bill.low,
+                "mean_tokens_ci_high": bill.high,
                 "n_token_kernels": len(spend),
                 "attempts_per_episode": float(used.attempts_per_episode) if used is not None else math.nan,
                 "relaunched_episodes": int(used.relaunched_episodes) if used is not None else 0,

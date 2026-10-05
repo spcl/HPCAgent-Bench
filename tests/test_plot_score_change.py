@@ -170,13 +170,14 @@ def one_setup_stats(
 
 
 def test_a_raw_threshold_that_would_have_starred_a_point_does_not_survive_the_correction() -> None:
-    """One cell reaching p = 0.020 on its own is what a per-row ``p < 0.05`` reads as a finding. It
-    is one of twelve tests on the figure, and corrected across them the value is 0.12 -- so the star
-    it would have drawn is not supported by the figure it would have been drawn on."""
+    """One cell reaching p = 2/64 = 0.031 on its own (six kernels, all faster: the smallest exact sign-flip p)
+    is what a per-row ``p < 0.05`` reads as a finding. It is one of twelve tests on the figure, and
+    corrected across them the value is 0.19 -- so the star it would have drawn is not supported by the
+    figure it would have been drawn on."""
     before, after = observations(MARGINAL, winner=("qwen38", "c"))
     frame = plot.points(before, after)
     winner = frame[(frame.model == "qwen38") & (frame.language == "c")].iloc[0]
-    assert winner.score_p == pytest.approx(0.019747, abs=1e-5), "the fixture has to cross a raw 5% threshold"
+    assert winner.score_p == pytest.approx(2 / 64), "the fixture has to cross a raw 5% threshold"
     assert winner.score_p_adjusted > 0.05
     assert winner.score_verdict == efficacy.NOT_SIGNIFICANT
     assert not (frame.score_verdict == efficacy.SIGNIFICANT).any()
