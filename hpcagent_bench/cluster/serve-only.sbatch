@@ -6,6 +6,7 @@
 #   hpcagent_bench/cluster/serve-only.sbatch                      qwen38 on the nodes its env file asks for
 #   MODEL=kimi27sglang hpcagent_bench/cluster/serve-only.sbatch   another model (any experiments/layers/model-<MODEL>.env)
 #   SUBMIT=0 hpcagent_bench/cluster/serve-only.sbatch             print what would be submitted, submit nothing
+#   PREWARM=1 MODEL=glm53 hpcagent_bench/cluster/serve-only.sbatch  boot, run every served shape once, exit: fills the kernel caches
 # It derives --nodes from the env file, so never pass --nodes yourself. Account, partition and GPUs per node resolve as
 # for an experiment job (`hpcagent-bench job options`: $SBATCH_ACCOUNT, $SBATCH_PARTITION,
 # $HPCAGENT_BENCH_JOB_GPUS_PER_NODE or the system's systems.yaml entry); the time limit is SERVE_TIME (default 04:00:00).
@@ -137,6 +138,29 @@ until curl -sf "${BASE_URL}/v1/models" -o "${RUN_DIR}/models.json"; do
     fi
     sleep 15
 done
+
+if [[ "${PREWARM:-0}" == 1 ]]; then
+    # Prewarm: run the shapes a served model meets so every kernel aiter and Triton JIT-compile for
+    # them lands in the persistent caches (run_cluster.sh: <JIT_CACHE_ROOT>/.aiter/aiter-<ver>-<arch>,
+    # .triton/<EDF>), then end the job. Boot covers weights, KV sizing and decode graph capture; the
+    # gates cover a tool call, reasoning, and prefill plus prefix-hit extend up to ~51k tokens; the
+    # burst covers a mixed prefill batch. On a warm cache it compiles nothing and only costs the boot.
+    echo "prewarm: API up after $(( $(date +%s) - deadline + READY_TIMEOUT )) s"
+    gates="${HPCAGENT_BENCH_REPO}/containers/inference"
+    py="${HPCAGENT_BENCH_HOST_PYTHON:-python3}"
+    rc=0
+    "${py}" "${gates}/verify-tools-reasoning.py" --base "${BASE_URL}" --model "${SERVED_MODEL}" || rc=1
+    "${py}" "${gates}/accuracy-gate.py" --base "${BASE_URL}" --model "${SERVED_MODEL}" || rc=1
+    body="{\"model\":\"${SERVED_MODEL}\",\"max_tokens\":64,\"messages\":[{\"role\":\"user\",\"content\":\"Count to twenty.\"}]}"
+    seq 48 | xargs -P 48 -I{} curl -sf -o /dev/null -H 'Content-Type: application/json' -d "${body}" \
+        "${BASE_URL}/v1/chat/completions" || rc=1
+    printf 'prewarm: %s aiter builds this boot; cache %s\n' \
+        "$(grep -ah 'start build' "${RUN_DIR}"/server-*.log | wc -l)" \
+        "$(du -sh "${JIT_CACHE_ROOT:-${SCRATCH:?}/.hpcagentbench-cache}"/.aiter/aiter-* 2>/dev/null | tr '\n' ' ')"
+    kill "${SERVER_PID}" 2>/dev/null || true
+    wait "${SERVER_PID}" 2>/dev/null || true
+    exit "${rc}"
+fi
 
 endpoints=("${BASE_URL}/v1")
 if [[ "${INFERENCE_MODE}" == "replicas" ]]; then

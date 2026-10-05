@@ -64,7 +64,7 @@ use_preset() {  # sets the PRESET_* values; key file, triton cache and run root 
             PRESET_PARTITION=mi300 PRESET_GPUS=4 PRESET_ENGINE=sglang PRESET_MODEL=Qwen/Qwen3.8-27B-FP8
             PRESET_EDF=hpcagent-bench-sglang-mi300-latest PRESET_LEGS="tp4:0.306"
             PRESET_FLAGS=(--attention-backend aiter)
-            PRESET_ENV=(SGLANG_USE_AITER=1 SGLANG_SET_CPU_AFFINITY=0)
+            PRESET_ENV=(SGLANG_USE_AITER=1 SGLANG_SET_CPU_AFFINITY=0 SGLANG_WARMUP_TIMEOUT=1800)
             ;;
         mi200)  # MI250X: no aiter gfx90a kernels, no FP8; the AMD vLLM image (layers/partition-mi200-qwen38.env)
             PRESET_PARTITION=mi200 PRESET_GPUS=8 PRESET_ENGINE=vllm PRESET_MODEL=Qwen/Qwen3.8-27B
