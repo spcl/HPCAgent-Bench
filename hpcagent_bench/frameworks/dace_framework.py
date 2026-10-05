@@ -558,10 +558,11 @@ READABLE_CODEGEN: tuple[tuple[tuple[str, ...], str | bool], ...] = (
 
 def apply_pipeline_config(pipe: SdfgPipeline) -> None:
     """Set the pipeline's codegen configuration globally for the rest of the process: the generator is
-    chosen at codegen time (compile and report replays), not during the transform. ``Config.set``, so
-    a ``DACE_*`` environment variable still wins."""
+    chosen at codegen time (compile and report replays), not during the transform. A key its ``DACE_*``
+    environment variable names keeps that value (a codegen A/B), since ``Config.set`` would override it."""
     for path, value in pipe.config:
-        dace.Config.set(*path, value=value)
+        if "_".join(("DACE", *path)) not in os.environ:
+            dace.Config.set(*path, value=value)
 
 
 DACE_PIPELINES: tuple[SdfgPipeline, ...] = (
