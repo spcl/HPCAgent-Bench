@@ -15,6 +15,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable, Mapping
 from http.server import ThreadingHTTPServer
+from typing import Self
 
 import pytest
 
