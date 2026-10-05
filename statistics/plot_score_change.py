@@ -599,9 +599,7 @@ def build_comparison(
         # the paper at its final width and the panel fills in later without re-laying out the page.
         return spec.get("title", ""), spec.get("intervention", ""), pd.DataFrame(), pd.DataFrame()
     if "treatments" in spec:
-        return build_multi_comparison(
-            spec, default_observations, default_experiment, include_incomplete, card, over
-        )
+        return build_multi_comparison(spec, default_observations, default_experiment, include_incomplete, card, over)
     intervention = spec["intervention"]
     title = spec.get("title") or study_tags.packet_name(intervention)
     observations = spec_observations(spec, default_observations)

@@ -52,7 +52,6 @@ __all__ = [
     "ensure_setup",
     "grade_sources",
     "insert",
-    "main",
     "merge",
     "merge_one",
     "merge_rows",

@@ -1079,8 +1079,6 @@ SUCCESS_HEADROOM: float = 0.05
 SERVED_SPEEDUP_LABEL: str = "Speedup (1x Fallback)"
 
 
-
-
 def speedup_row_label(over: population.KernelPolicy) -> str:
     """The speedup row's Y label under ``over``."""
     return SERVED_SPEEDUP_LABEL if over == population.KernelPolicy.SERVED else MEASURE_LABELS["speedup"]
