@@ -28,6 +28,7 @@ from typing import Any, NamedTuple, NotRequired, TextIO, TypedDict, cast
 
 from hpcagent_agent.driver import harnesses, promote_unsubmitted, stream_idle_timeout, token_cost
 from hpcagent_agent.driver.harnesses import Closing, Context, Harness
+from hpcagent_agent.driver.token_cost import as_block
 
 __all__ = [
     "AGENT_CRASH_ATTEMPTS",
@@ -251,21 +252,9 @@ ProblemValue = str | int | float | bool | list[object] | dict[str, object] | Non
 Problem = dict[str, ProblemValue]
 
 
-def as_block(raw: object) -> dict[str, object]:
-    """One parsed JSON object, with the weakest TRUE statement about its contents.
-
-    ``isinstance(raw, dict)`` proves it is a mapping and nothing about what is in it, so its members
-    stay ``object`` until each one is converted. This is the single place that says so; everything
-    downstream reads a real type. A value that is not an object reads as an empty one, which is what
-    every caller here already spelled as ``or {}``."""
-    if not isinstance(raw, dict):
-        return {}
-    return {str(key): value for key, value in cast("dict[object, object]", raw).items()}
-
-
 def as_list(raw: object) -> list[object]:
     """One parsed JSON array, with the weakest TRUE statement about its members (see
-    :func:`as_block`). A value that is not an array reads as an empty one."""
+    :func:`token_cost.as_block`). A value that is not an array reads as an empty one."""
     return cast("list[object]", raw) if isinstance(raw, list) else []
 
 
