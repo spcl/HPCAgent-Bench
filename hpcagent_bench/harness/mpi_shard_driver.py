@@ -420,7 +420,7 @@ def check_gpu_binding(placements: Sequence[tuple[str, int]]) -> None:
         seen[key] = rank
 
 
-def init_torch_distributed(dist: ModuleType, comm: "MPI.Cartcomm", device: "torch.device") -> None:
+def init_torch_distributed(dist: ModuleType, comm: "MPI.Intracomm", device: "torch.device") -> None:
     """torch.distributed (nccl = RCCL on a cuda ``device``, gloo on a cpu one) over the SAME
     ranks, rendezvous address from MPI rank 0. gloo takes no ``device_id`` (it is a cuda-only
     eager-init hint), so the kwarg is cuda-only -- the cuda branch is unchanged from before this
