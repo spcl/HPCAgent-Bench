@@ -860,7 +860,7 @@ RUN set -eux; \
 # numpy and scipy (on the image's OpenBLAS, below) and mpi4py (on its MPICH): the `image-python` group of
 # pyproject.toml, at the versions uv.lock pins. Every other locked package -- torch from PyTorch's cu132 index,
 # CUDA 13's jax and cupy wheels, triton, dace, the judge proxy, ... -- is installed when a job starts, into a
-# node-local venv that sees these through a .pth (containers/lib/launch_venv.sh via /opt/launch/bin, step 13),
+# node-local venv that sees these through a .pth (containers/lib/launch_venv.sh, the image's ENTRYPOINT, step 13),
 # so a moved pin needs no rebuild. --inexact: the prefix is the system python's, whose other packages stay (the
 # launch venv's own wheels come first). uv comes from the pins.
 COPY agent/harness/pins.env agent/harness/install_tools.sh /opt/harness/
@@ -883,16 +883,14 @@ COPY containers/lib/numpy_on_openblas.sh containers/lib/one_openmp.sh containers
 RUN sh /tmp/one-openmp/numpy_on_openblas.sh /opt/view /opt/hpcagent-bench --only-group image-python && rm -rf /tmp/one-openmp
 
 # ---------------------------------------------------------------------------------------------
-# 13. The launch venv (containers/lib/launch_venv.sh via /opt/launch/bin; judge-agent-amd step 12 explains /opt/launch).
-COPY containers/lib/launch_venv.sh containers/lib/launch_exec.sh containers/lib/one_openmp.sh containers/lib/openmp_gate.py /opt/launch/
+# 13. The launch venv (containers/lib/launch_venv.sh, the ENTRYPOINT; judge-agent-amd step 12 explains /opt/launch).
+COPY containers/lib/launch_venv.sh containers/lib/one_openmp.sh containers/lib/openmp_gate.py /opt/launch/
 RUN set -eux; \
     command -v python3 > /opt/launch/python; \
     echo "--no-install-project --extra nvgpu --group judge-proxy --no-install-package numpy --no-install-package scipy \
 --no-install-package mpi4py" > /opt/launch/sync.args; \
     date +%s%N > /opt/launch/image.id; \
-    chmod +x /opt/launch/launch_venv.sh /opt/launch/launch_exec.sh; \
-    mkdir -p /opt/launch/bin; \
-    for command in python python3 pytest litellm pythran uvicorn playwright; do ln -s ../launch_exec.sh "/opt/launch/bin/${command}"; done
+    chmod +x /opt/launch/launch_venv.sh
 
 # ---------------------------------------------------------------------------------------------
 # 14. The agent side: node, the claude CLI and uv, from the checked-in pins shared with

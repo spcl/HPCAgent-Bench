@@ -97,8 +97,6 @@ def test_the_launch_venv_installs_the_extra_and_the_proxy_and_never_an_image_bui
         f"--no-install-package {word}" for word in args.split("--no-install-package ")[1:] for word in [word.strip()]
     }, args
     assert 'ENTRYPOINT ["/opt/launch/launch_venv.sh"]' in text
-    # The Container Engine applies the EDF [env] after an ENTRYPOINT, undoing its PATH: /opt/launch/bin, first on the EDFs' PATH, is the way in.
-    assert re.search(r'ln -s \.\./launch_exec\.sh "/opt/launch/bin/\$\{command\}"', text)
     assert re.search(r"^COPY .*containers/lib/launch_venv.sh.* /opt/launch/$", text, re.MULTILINE)
     judge = text[text.index("FROM agent AS judge") :]
     assert "sed -i 's/^--no-install-project //' /opt/launch/sync.args" in judge, "a judge job installs hpcagent_bench"

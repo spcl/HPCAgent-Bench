@@ -4,7 +4,7 @@ The specification the Dockerfiles in this directory implement. Build commands ar
 [`containers/README.md`](../README.md). Each image is built by one Dockerfile and carries the toolchains and the
 Python it builds from source against them (numpy and scipy on its OpenBLAS, mpi4py on its MPICH, cupy for ROCm).
 Every other locked Python package changes too often to bake: a job installs it at start from the job's `uv.lock`
-into a node-local venv (`lib/launch_venv.sh`; below). Nothing is reached through a
+into a node-local venv (`lib/launch_venv.sh`, the image's ENTRYPOINT; below). Nothing is reached through a
 `PYTHONPATH`.
 
 | image | base | serves |
@@ -21,16 +21,14 @@ plus the KernelBench data, and its EDF mounts the checkout at `/opt/hpcagent-ben
 from which a judge job's launch venv installs it editable; an agent's never does. Held-out tests are in no image
 (`scripts/checks/check_no_hidden_in_image.py`).
 
-**The launch venv.** The Container Engine applies an EDF's `[env]` after the image's ENTRYPOINT, replacing the `PATH`
-it exported, so the EDFs put `/opt/launch/bin` first on `PATH` instead: every command there (`python3`, `pytest`, `litellm`, ...) is `lib/launch_exec.sh`,
-which runs it through `lib/launch_venv.sh` (the ENTRYPOINT does the same under a plain `podman run`). On the
+**The launch venv.** Every container step starts through `lib/launch_venv.sh` (EDF `entrypoint = true`). The CE
+applies an EDF's `[env]` after it, so the EDFs set no `PATH`, `VIRTUAL_ENV` or `HPCAGENT_BENCH_IMAGE_PYTHON`. On the
 first step of a node it runs `uv sync --frozen` from `/opt/hpcagent-bench/uv.lock` (the judge's mounted checkout; an
 agent binds the checkout's `uv.lock` and `pyproject.toml` there) with the image's `/opt/launch/sync.args` (the
 framework extra and the judge proxy, never a package the image built) into `/dev/shm/hpcagent-bench-launch-<role>/<key>`,
 keyed by the lock, the arguments and the image build; a `.pth` lists the image's site-packages after the venv's own,
 and every wheel's bundled libgomp is linked to the image's (`one_openmp.sh --link-only`). Later steps and jobs on the
-node with the same pins reuse it (a cold build is ~45 s); `HPCAGENT_BENCH_IMAGE_PYTHON` is `/opt/launch/bin/python3` in the EDF and the venv's own
-python inside a step. An agent's
+node with the same pins reuse it (a cold build is ~45 s); `HPCAGENT_BENCH_IMAGE_PYTHON` names its python. An agent's
 sealed tool calls hide the judge's root. Every check that needs the wheels runs at build time in such a venv, which
 the image does not keep (the launch gate at the end of the agent stage).
 
