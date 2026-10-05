@@ -1290,18 +1290,7 @@ RUN set -eux; \
       'int main(void) { puts(bli_info_get_version_str()); return 0; }' > /tmp/blis_probe.c; \
     /opt/gcc/bin/gcc /tmp/blis_probe.c -lblis -lm -o /tmp/blis_probe; \
     /tmp/blis_probe; \
-    rm -f /tmp/blis_probe.c /tmp/blis_probe; \
-    python3 -c "import ctypes, sys; \
-from dace.libraries.blas.environments.openblas import OpenBLAS; \
-libs = [str(x) for x in OpenBLAS.cmake_libraries()]; \
-print('dace blas mode', OpenBLAS._mode(), 'libs', libs); \
-[ctypes.CDLL(lib) for lib in libs]; \
-lines = open('/proc/self/maps').read().splitlines(); \
-mapped = sorted({ln.rsplit(' ', 1)[-1] for ln in lines if '.so' in ln and ('blas' in ln or 'blis' in ln)}); \
-print('dace loads', mapped); \
-bad = [m for m in mapped if 'openblas' not in m]; \
-sys.exit('DaCe would link a BLAS that is not OpenBLAS: %s' % (bad or 'nothing at all')) \
-  if (bad or not libs or not mapped) else None"
+    rm -f /tmp/blis_probe.c /tmp/blis_probe
 
 # The BLAS gate: tall GEMMs under every kernel family and concurrent callers past the host's thread
 # count, against the OpenBLAS every -lblas / -lopenblas link now resolves to (containers/lib/blas_gate.sh).
@@ -1464,6 +1453,14 @@ RUN HPCAGENT_BENCH_LAUNCH_ROOT=/opt/launch-gate UV_CACHE_DIR=/uv-cache /opt/laun
     python3 -c "import dace.sdfg.analysis.polyhedral_isl; \
       from dace.transformation.passes.analysis import smt_dependence; \
       assert smt_dependence.has_z3(), \"z3 gate closed\""; \
+    python3 -c "import ctypes, os, sys; \
+      from dace.libraries.blas.environments.openblas import OpenBLAS; \
+      libs = [str(x) for x in OpenBLAS.cmake_libraries()]; [ctypes.CDLL(lib) for lib in libs]; \
+      lines = open(\"/proc/self/maps\").read().splitlines(); \
+      mapped = sorted({os.path.realpath(ln.rsplit(\" \", 1)[-1]) for ln in lines if \".so\" in ln and (\"blas\" in ln or \"blis\" in ln or \"lapack\" in ln)}); \
+      bad = [m for m in mapped if \"openblas\" not in m and \"liblapacke\" not in os.path.basename(m)]; \
+      sys.exit(\"DaCe would link a BLAS that is not OpenBLAS: %s\" % (bad or \"nothing at all\")) \
+        if (bad or not libs or not any(\"openblas\" in m for m in mapped)) else None"; \
     python3 -c "import importlib.metadata as m; \
       want = {\"litellm\": \"1.94.0\", \"httpx2\": \"2.12.0\", \"anyio\": \"4.14.2\"}; \
       got = {name: m.version(name) for name in want}; assert got == want, got"; \
