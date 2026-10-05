@@ -46,3 +46,80 @@ Mamba slot peak is 315-322, so 427 covers 40 streams. Read slots and pool from t
   role, not "text only".
 - Measure with 40 long-lived streams at your p50 and p90 prompt sizes, back to back on one node; never
   trust a cold smoke ([`knobs.md`](knobs.md#the-kv-pool-threshold)).
+
+## GH200 (Daint): published recipes, not yet measured here
+
+No Qwen3.8 GH200 number on this page comes from this repo; nothing here has served it on Daint.
+`containers/images/vllm-cuda` (vLLM 0.28.0) gates the `qwen3` / `qwen3_coder` parsers but has no
+qwen38 serving layer. The 19x SGLang-over-vLLM gap above is a ROCm result and does not carry to
+CUDA. Collected 2026-10-05 (registry digests read from the registries, nothing pulled).
+
+**Model.** `Qwen/Qwen3.8-27B-FP8` (fine-grained FP8, block 128, about 28.5 GB) or `Qwen/Qwen3.8-27B`
+(BF16, about 54 GB). The architecture is `Qwen3_5ForConditionalGeneration`, a VL model with 48 Gated
+DeltaNet layers, 16 attention layers and one in-checkpoint MTP layer. Native context is 262144 tokens.
+Parsers: `--reasoning-parser qwen3`, plus `--tool-call-parser qwen3_coder` on SGLang or
+`--enable-auto-tool-choice --tool-call-parser qwen3_xml` on vLLM (the vLLM recipe's choice, and
+`llrbase-c:qwen38`'s). The model card's thinking-mode sampling is `temperature=1.0 top_p=0.95 top_k=20`.
+Both FP8 and BF16 fit one 96 GB GH200 GPU.
+
+**Images** (all ship an arm64 manifest):
+
+| Image | Engine | CUDA | Pushed | Digest |
+|---|---|---|---|---|
+| `vllm/vllm-openai:v0.28.0-aarch64-cu129` (our `vllm-cuda` base) | vLLM 0.28.0 | 12.9 | 2026-08-26 | `sha256:60fa2715937e604931086a790fff2978c09995eff93439261ba09a79f02e9e68` |
+| `vllm/vllm-openai:v0.31.0-aarch64-cu129` | vLLM 0.31.0 (latest release) | 12.9 | 2026-10-04 | `sha256:ff7c43dcb2059e8f3c3235a09b0963cc241c3a05806377f79e089ea2a8eac194` |
+| `vllm/vllm-openai:v0.31.0-aarch64` | vLLM 0.31.0 | 13 | 2026-10-04 | `sha256:3f7dd5b777d34d1724456ce71f87385dca288c3bb23029ab27dee358f5d2b971` |
+| `lmsysorg/sglang:v0.5.21` (multi-arch index) | SGLang 0.5.21 (latest) | 13.0 | 2026-10-01 | `sha256:b1259f3ea3275f66237c498ea388919729018bc9f01c3d638391e06e2cf3f469` |
+| `lmsysorg/sglang:v0.5.19-cu129` (newest CUDA 12.9 build) | SGLang 0.5.19 | 12.9 | 2026-09-04 | `sha256:59e11312666e1c5c155210ea335589b91daa0d70848521b390b93b1b1e8fb0ef` |
+| `lmsysorg/sglang:qwen38-27b-cu129` (model-pinned) | SGLang | 12.9 | 2026-08-14 | `sha256:e35dfb0beaf6b1fb6619ae0dac9474b5cdda24b81cee7202316e371301425e46` |
+| `nvcr.io/nvidia/vllm:26.09-py3` (index; arm64 `sha256:fa68ef92...`) | vLLM 0.29.0 | 13.4.1 | 2026-09-23 | `sha256:557747337846eecf34486866f3d992383c6f8af869fdb0e365b5093fcaee02c2` |
+| `nvcr.io/nvidia/sglang:26.09-py3` (index; arm64 `sha256:5f92f380...`) | SGLang 0.5.19 | 13.4.1 | 2026-09-17 | `sha256:edb36119c3c7568692cff32e8c1240cabea9810be2664671c6f88d1ae654b514` |
+
+The NGC pair shares CUDA 13.4.1 with `judge-agent-cuda`'s NGC PyTorch 26.09 base. A CUDA 13 image
+needs `com.hooks.aws_ofi_nccl.variant = "cuda13"`, while `vllm-cuda` uses `"cuda12"`
+([IMAGE_REQUIREMENTS.md](../../containers/images/IMAGE_REQUIREMENTS.md)). On Clariden (GH200),
+swiss-ai's `model-launch` builds its own CUDA 13.0 images from source (`images/sglang_0.5.20`,
+`images/vllm_cuda13`) with `variant = "cuda13"` and `/capstor` and `/iopsstor` mounted.
+
+**Published launch lines.**
+
+- swiss-ai `model-launch`, Clariden GH200, one node, SGLang 0.5.20, gate passed 2026-09-24
+  ([recipe](https://github.com/swiss-ai/model-launch/blob/main/mfa_examples/clariden/Qwen/Qwen3.8-27B/sglang/Qwen3.8-27B-sglang.sh)):
+  `--tp-size 4 --context-length 131072 --reasoning-parser qwen3 --tool-call-parser qwen3_coder
+  --attention-backend flashinfer --mm-attention-backend triton_attn`. The aarch64 `sgl-kernel` ships
+  without FA3, which is SGLang's Hopper default, and FA4 crashes on this model's head_dim 256. The
+  vision tower imports FA3 unless `--mm-attention-backend` is set.
+- `model-launch`, Clariden, vLLM nightly (CUDA 13), gate passed 2026-09-22
+  ([recipe](https://github.com/swiss-ai/model-launch/blob/main/mfa_examples/clariden/Qwen/Qwen3.8-27B/vllm/Qwen3.8-27B-vllm.sh)):
+  `--tensor-parallel-size 4 --max-model-len 131072 --max-num-seqs 16 --gpu-memory-utilization 0.85
+  --reasoning-parser qwen3`. It names no tool parser, and `max-num-seqs 16` is too low for 40 agents.
+- SGLang cookbook, H200 (SM90), one GPU, FP8
+  ([cookbook](https://github.com/sgl-project/sglang/blob/main/docs/cookbook/autoregressive/Qwen/Qwen3.8-27B.mdx)):
+  `--kv-cache-dtype fp8_e4m3 --mem-fraction-static 0.85 --attention-backend flashinfer
+  --chunked-prefill-size 32768 --max-prefill-tokens 32768 --reasoning-parser qwen3
+  --tool-call-parser qwen3_coder`. MTP: `--speculative-algorithm EAGLE --speculative-num-steps 3
+  --speculative-eagle-topk 1 --speculative-num-draft-tokens 4`. Size `--mamba-full-memory-ratio` as
+  `(S + D) x state_bytes / (L x kv_bytes_per_token)`: S state slots per request (no_buffer 3,
+  extra_buffer 5), D = 4 with MTP, a 153.9 MB fp32 state slot, 32.8 KB per token of fp8 KV, and L the
+  average request length.
+- vLLM recipe ([recipes.vllm.ai](https://recipes.vllm.ai/Qwen/Qwen3.8-27B), updated 2026-10-02):
+  `vllm serve Qwen/Qwen3.8-27B-FP8 --tensor-parallel-size 4 --max-model-len 262144 --kv-cache-dtype fp8
+  --reasoning-parser qwen3`. MTP: `--speculative-config '{"method":"mtp","num_speculative_tokens":3}'`.
+  The recipe has no Hopper-specific line.
+
+**Published speed numbers.** None for GH200 or for an agentic long-context load. model-launch's
+Clariden `benchmarks/summary.txt` says "perf: skipped". The nearest numbers:
+
+| Source | Hardware, engine | Load | Result |
+|---|---|---|---|
+| [g factor on dev.to](https://dev.to/g_factor/benchmarking-qwen-38-27b-across-inference-providers-together-fireworks-doubleword-and-g-factor-4c1i) | 2x H100 SXM, vLLM, FP8, DP2 | ~564 input / 128 output tokens | aggregate 69 tok/s at c1, 459 at c8, 1601 at c32, 2462 at c64 |
+| [vLLM recipe](https://recipes.vllm.ai/Qwen/Qwen3.8-27B) | 2x RTX 5090, FP8 | 262K context | MTP acceptance 0.771 |
+| [SGLang cookbook](https://github.com/sgl-project/sglang/blob/main/docs/cookbook/autoregressive/Qwen/Qwen3.8-27B.mdx) | SM120 card, FP8 + EAGLE | ISL 8192 / OSL 1024, c1 | 106.3 (fp32 state) vs 116.1 (bf16 state) tok/s per user |
+
+**Starting point for one GH200 node: an estimate, unmeasured.** Each GPU holds the FP8 weights with
+about 50 GB left for KV and state at 0.85. Four TP1 replicas with sticky agents need no all-reduce
+and give each replica a full prefix cache. This repo has no in-node replica router yet:
+`run_cluster.sh` serves one port per node. Until it does, use TP4 on one port, with the cookbook's
+flags plus `--attention-backend flashinfer --mm-attention-backend triton_attn` on SGLang (or the
+vLLM recipe line), `--max-running-requests` / `--max-num-seqs` 128, and MTP as the first candidate
+to measure. Measure it with a multi-turn load (40 long-lived conversations, 35k-50k prompts) before any setup uses it.
