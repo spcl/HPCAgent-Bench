@@ -14,6 +14,7 @@ scipy and numba, which every image (containers/images/verify_image.py runs this 
 CI unit and integration jobs carry; they FAIL where those are missing.
 """
 
+import tempfile
 import os
 import pathlib
 import re
@@ -138,42 +139,32 @@ def agent_stage(image: str) -> str:
     return docker[: docker.index("FROM agent AS judge")]
 
 
-@pytest.mark.parametrize("image", IMAGES)
-def test_every_image_links_one_runtime_after_its_last_python_install(image: str) -> None:
-    """A wheel installed after the linker runs would put its bundled libgomp back; the contexts, their gates
-    and the scan run in the same last step, so they see the final image."""
+def launch_gate(image: str) -> str:
+    """The agent stage's last OpenMP step: run under the launch venv, so it sees every wheel a job will load."""
     agent = agent_stage(image)
-    step = agent.rindex("sh /tmp/one-openmp/one_openmp.sh /opt/view;")
+    start = agent.rindex("/opt/launch/launch_venv.sh sh -eux")
+    return agent[start : agent.index("rm -rf /opt/launch-gate", start)]
+
+
+@pytest.mark.parametrize("image", IMAGES)
+def test_every_image_gates_one_runtime_over_the_launch_venv_after_its_last_install(image: str) -> None:
+    """A wheel installed after the linker runs would put its bundled libgomp back."""
+    agent = agent_stage(image)
     code = "\n".join(line for line in agent.splitlines() if not line.lstrip().startswith("#"))
-    installs = [match.start() for match in re.finditer(r"uv sync |package_hook\.sh /opt", code)]
-    assert installs and max(installs) < code.rindex("sh /tmp/one-openmp/one_openmp.sh /opt/view;"), (
-        "a uv sync runs after the one-runtime step"
-    )
-    assert step < agent.index("ENV LD_PRELOAD"), "the step runs under the mimalloc preload"
-    for script in (
-        "one_openmp.sh",
-        "openmp_gate.py",
-        "numpy_on_openblas.sh",
-        "omp_contexts.sh",
-        "openmp_probe.c",
-        "openmp_probe.f90",
-    ):
-        assert f"containers/lib/{script}" in agent, script
+    after = code[code.rindex("/opt/launch/launch_venv.sh sh -eux") :]
+    assert not re.search(r"uv sync |package_hook\.sh /opt", after), "an install runs after the one-runtime gate"
+    gate = launch_gate(image)
+    assert "one_openmp.sh /opt/view" in gate and "openmp_gate.py scan" in gate
+    assert "omp_contexts.sh /opt/view /opt/omp/llvm/view" in gate
+    assert "openmp_gate.py context --context gnu --wheels --torch" in gate
+    assert "openmp_gate.py context --context llvm --blas-in-context" in gate
+    # nvc is on the CUDA image's PATH, so its nvhpc context is required there, never conditional.
+    assert ("OMP_REQUIRE_NVHPC=1" in gate and "--context nvhpc" in gate) == (image == "judge-agent-cuda")
 
 
-@pytest.mark.parametrize("image", IMAGES)
-def test_every_image_builds_the_contexts_gates_them_and_scans_them_in_its_last_openmp_step(image: str) -> None:
-    agent = agent_stage(image)
-    last = agent[agent.rindex("sh /tmp/one-openmp/one_openmp.sh /opt/view;") :]
-    last = last[: last.index("rm -rf /tmp/one-openmp")]
-    assert "omp_contexts.sh /opt/view /opt/omp/llvm/view" in last
-    assert "openmp_gate.py scan" in last
-    assert "openmp_gate.py context --context gnu --wheels --torch" in last
-    assert "openmp_gate.py context --context llvm --blas-in-context" in last
-    assert ("openmp_gate.py context --context nvhpc --blas-in-context" in last) == (image == "judge-agent-cuda")
-    # nvc is asserted on the CUDA image's PATH, so a missing nvhpc context is a bug: required, never conditional
-    assert ("OMP_REQUIRE_NVHPC=1 sh /tmp/one-openmp/omp_contexts.sh" in last) == (image == "judge-agent-cuda")
-    assert "/opt/omp/nvhpc ]" not in last
+def test_the_launch_venv_links_its_wheels_to_the_one_runtime_after_syncing() -> None:
+    launch = (REPO / "containers" / "lib" / "launch_venv.sh").read_text(encoding="utf-8")
+    assert launch.index("uv sync") < launch.index('one_openmp.sh" --link-only')
 
 
 @pytest.mark.parametrize("image", IMAGES)
@@ -311,3 +302,35 @@ def test_clang_compiles_the_pragma_away_under_the_libgomp_spelling(tmp_path: pat
         )
         counts[spelling] = "__kmpc_fork_call" in undefined.stdout or "GOMP_parallel" in undefined.stdout
     assert counts == {"-fopenmp=libomp": True, "-fopenmp=libgomp": False}
+
+
+if __name__ == "__main__":
+    test_one_file_reached_through_two_symlinks_is_one_runtime(pathlib.Path(tempfile.mkdtemp()))
+    test_libgomp_and_libomp_are_two_runtimes(pathlib.Path(tempfile.mkdtemp()))
+    test_a_wheels_hashed_libgomp_that_is_its_own_file_is_a_second_runtime(pathlib.Path(tempfile.mkdtemp()))
+    test_the_llvm_libgomp_shim_counts_as_the_libomp_it_links_to(pathlib.Path(tempfile.mkdtemp()))
+    for name in [
+        "libomptarget.so.22.1",
+        "libompd.so",
+        "libompi.so.40",
+        "libgomp_shim.so",
+        "libc.so.6",
+        "libopenblas.so.0",
+    ]:
+        test_libraries_that_are_not_an_openmp_runtime_are_not_counted(pathlib.Path(tempfile.mkdtemp()), name)
+    test_the_nvhpc_runtime_counts_beside_the_others(pathlib.Path(tempfile.mkdtemp()))
+    test_iomp5_counts_and_anonymous_and_deleted_mappings_are_handled(pathlib.Path(tempfile.mkdtemp()))
+    test_the_counter_reads_a_maps_file_and_reports_nothing_for_an_unreadable_one(pathlib.Path(tempfile.mkdtemp()))
+    test_more_than_one_runtime_raises_and_names_every_file()
+    test_the_image_build_carries_the_same_counter_as_the_package()
+    for image in IMAGES:
+        test_every_image_gates_one_runtime_over_the_launch_venv_after_its_last_install(image)
+    test_the_launch_venv_links_its_wheels_to_the_one_runtime_after_syncing()
+    for image in IMAGES:
+        test_every_image_builds_the_llvm_variants_with_runpath_and_clang_only_where_openmp_is_reached(image)
+    test_the_linker_points_every_gnu_copy_at_the_compilers_and_leaves_the_llvm_shim(pathlib.Path(tempfile.mkdtemp()))
+    test_the_linker_skips_a_libgomp_link_whose_target_directory_is_gone(pathlib.Path(tempfile.mkdtemp()))
+    test_the_linker_refuses_a_copy_that_needs_a_newer_libgomp_than_the_compilers(pathlib.Path(tempfile.mkdtemp()))
+    test_numpy_scipy_numba_prange_and_a_gcc_openmp_library_map_one_runtime()
+    if shutil.which("clang"):
+        test_clang_compiles_the_pragma_away_under_the_libgomp_spelling(pathlib.Path(tempfile.mkdtemp()))
