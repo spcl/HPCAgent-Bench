@@ -1166,7 +1166,7 @@ RUN set -eux; \
 # (--no-install-project: hpcagent_bench is never in an agent's environment; the agent package comes in editable as
 # a dependency, from the agent/ a step binds); the judge stage drops that flag, so a judge job also installs
 # hpcagent_bench editable from its mounted checkout. The packages this image built are never reinstalled.
-COPY containers/lib/launch_venv.sh containers/lib/one_openmp.sh /opt/launch/
+COPY containers/lib/launch_venv.sh containers/lib/one_openmp.sh containers/lib/openmp_gate.py /opt/launch/
 RUN set -eux; \
     command -v python3 > /opt/launch/python; \
     echo "--no-install-project --extra amdgpu --group judge-proxy --no-install-package numpy --no-install-package scipy \
@@ -1477,7 +1477,8 @@ RUN HPCAGENT_BENCH_LAUNCH_ROOT=/opt/launch-gate UV_CACHE_DIR=/uv-cache /opt/laun
     python3 /tmp/one-openmp/openmp_gate.py scan; \
     python3 /tmp/one-openmp/openmp_gate.py context --context gnu --wheels --torch; \
     python3 /tmp/one-openmp/openmp_gate.py context --context llvm --blas-in-context' \
-    && rm -rf /opt/launch-gate /tmp/one-openmp /uv-cache
+    && rm -rf /opt/launch-gate /tmp/one-openmp \
+    && { mountpoint -q /uv-cache || rm -rf /uv-cache; }
 
 # Drop the build-time mirror rewrite from the SHIPPED image.
 COPY containers/lib/git_mirror.sh /tmp/git_mirror.sh

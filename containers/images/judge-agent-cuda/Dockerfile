@@ -884,7 +884,7 @@ RUN sh /tmp/one-openmp/numpy_on_openblas.sh /opt/view /opt/hpcagent-bench --no-d
 
 # ---------------------------------------------------------------------------------------------
 # 13. The launch venv (containers/lib/launch_venv.sh, the ENTRYPOINT; judge-agent-amd step 12 explains /opt/launch).
-COPY containers/lib/launch_venv.sh containers/lib/one_openmp.sh /opt/launch/
+COPY containers/lib/launch_venv.sh containers/lib/one_openmp.sh containers/lib/openmp_gate.py /opt/launch/
 RUN set -eux; \
     command -v python3 > /opt/launch/python; \
     echo "--no-install-project --extra nvgpu --group judge-proxy --no-install-package numpy --no-install-package scipy \
@@ -1090,7 +1090,7 @@ RUN set -eux; \
 # playwright's chromium; then one OpenMP runtime file and the gnu, llvm and nvhpc contexts.
 COPY containers/lib/openmp_gate.py containers/lib/omp_contexts.sh \
      containers/lib/openmp_probe.c containers/lib/openmp_probe.f90 /tmp/one-openmp/
-RUN HPCAGENT_BENCH_LAUNCH_ROOT=/opt/launch-gate /opt/launch/launch_venv.sh sh -eux -c '\
+RUN HPCAGENT_BENCH_LAUNCH_ROOT=/opt/launch-gate UV_CACHE_DIR=/uv-cache /opt/launch/launch_venv.sh sh -eux -c '\
     cuda_major="$(nvcc --version | sed -n "s/.*release \([0-9]*\).*/\1/p")"; \
     python3 -c "import torch; assert torch.version.cuda, \"torch lost its CUDA build\"; print(\"torch\", torch.__version__, \"cuda\", torch.version.cuda)"; \
     python3 -c "import importlib.metadata as m; \
@@ -1126,7 +1126,8 @@ RUN HPCAGENT_BENCH_LAUNCH_ROOT=/opt/launch-gate /opt/launch/launch_venv.sh sh -e
     python3 /tmp/one-openmp/openmp_gate.py context --context gnu --wheels --torch; \
     python3 /tmp/one-openmp/openmp_gate.py context --context llvm --blas-in-context; \
     python3 /tmp/one-openmp/openmp_gate.py context --context nvhpc --blas-in-context' \
-    && rm -rf /opt/launch-gate /tmp/one-openmp
+    && rm -rf /opt/launch-gate /tmp/one-openmp \
+    && { mountpoint -q /uv-cache || rm -rf /uv-cache; }
 
 # Drop the build-time mirror rewrite from the SHIPPED image.
 COPY containers/lib/git_mirror.sh /tmp/git_mirror.sh
