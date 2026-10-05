@@ -486,9 +486,8 @@ ce_build_args() {
     for name in "$@"; do BUILD_ARGS+=(--build-arg "${name}=${!name}"); done
 }
 
-# Exports DACE_COMMIT, the release's dace pin (pyproject.toml [tool.uv.sources] dace). Resolved here and passed in
-# because the Dockerfile's layer cache keys on the command string: a '--branch extended' clone would
-# be reused forever and the image would age into a pin nothing records.
+# Exports DACE_COMMIT, the release's dace pin (pyproject.toml [tool.uv.sources] dace): the commit the git mirror must
+# hold for the build's launch gate (the image carries no dace; a job installs it, containers/lib/launch_venv.sh).
 ce_dace_commit() {
     DACE_COMMIT="$("${CE_IMAGES_DIR}/../../scripts/dace_pin.sh")"
     [[ "${DACE_COMMIT}" =~ ^[0-9a-f]{40}$ ]] || { echo "could not resolve spcl/dace@${DACE_COMMIT}" >&2; return 2; }

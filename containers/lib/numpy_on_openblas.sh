@@ -15,9 +15,7 @@
 # pyproject.toml, uv.lock and agent/pyproject.toml; the environment is the interpreter's prefix unless
 # UV_PROJECT_ENVIRONMENT names one. The uv sync flags are the ones the image's install used (its --extra and
 # --group): a sync that selects other extras swaps the packages those extras pick (torch's CPU wheel for PyPI's,
-# rich for another release). The gate at the end runs 2 x nproc numba prange iterations that each
-# call np.dot and scipy.linalg.lu_factor concurrently, in one process that maps a single OpenMP runtime
-# (one_openmp.sh, which also links every wheel's bundled libgomp to the image's).
+# rich for another release). The gate at the end checks both link the view's OpenBLAS by soname.
 set -eux
 ulimit -c 0
 view="$1"
@@ -88,32 +86,8 @@ for mod in (numpy, scipy):
 print("numpy", numpy.__version__, "scipy", scipy.__version__, "on", view)
 PY
 
-# One OpenMP runtime: spack links OpenBLAS against its gcc-runtime copy of libgomp, numba's pool
-# against the system one, and two runtimes cannot see each other's parallel region (nproc^2 threads).
-# one_openmp.sh links every libgomp copy to the compiler's and gates on a single mapped runtime.
+# One OpenMP runtime file: spack links OpenBLAS against its gcc-runtime copy of libgomp, and two runtimes cannot
+# see each other's parallel region (nproc^2 threads). one_openmp.sh links every libgomp copy to the compiler's; its
+# gate (numba prange calling BLAS) runs with the wheel packages, in the image's launch gate.
 here="$(cd "$(dirname "$0")" && pwd)"
-sh "${here}/one_openmp.sh" "${view}"
-NUMBA_THREADING_LAYER=omp "${py}" - <<'PY'
-import os
-
-import numba
-import numpy as np
-from scipy.linalg import lu_factor
-
-callers = 2 * (os.cpu_count() or 1)
-
-
-@numba.njit(parallel=True)
-def concurrent(a, out):
-    for i in numba.prange(out.shape[0]):
-        out[i] = np.dot(a, a)[0, 0]
-
-
-a = np.random.default_rng(0).random((256, 256))
-out = np.empty(callers)
-concurrent(a, out)
-assert np.allclose(out, (a @ a)[0, 0]), out
-assert numba.threading_layer() == "omp", numba.threading_layer()
-lu_factor(np.eye(512) + a[0, 0])
-print("numba omp:", callers, "concurrent BLAS callers ok")
-PY
+sh "${here}/one_openmp.sh" --link-only "${view}"

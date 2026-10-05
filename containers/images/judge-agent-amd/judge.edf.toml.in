@@ -28,9 +28,13 @@ mounts = [
 ]
 workdir = "${SCRATCH}"
 writable = true
-entrypoint = false
+# The image's ENTRYPOINT is the launch hook (containers/lib/launch_venv.sh): the node's venv of the locked wheel
+# packages in front of the image python, HPCAGENT_BENCH_IMAGE_PYTHON naming it.
+entrypoint = true
 
 [env]
+# uv's wheel cache for the launch venv, on a filesystem every node mounts.
+UV_CACHE_DIR = "${SCRATCH}/.cache/uv"
 # The interpreter every hpcagent-bench step in this image runs (run_cluster.sh).
 HPCAGENT_BENCH_IMAGE_PYTHON = "/opt/venv/bin/python3"
 FI_CXI_RX_MATCH_MODE = "software"

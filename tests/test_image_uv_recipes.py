@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The image recipes and the tooling around them install Python only through uv sync from uv.lock.
 
-uv.lock decides every version, numpy/scipy/pandas and torch included, so no recipe carries a constraint file, a
-guard that protects a base image's numpy, or a skip list for a base image's torch. Static: the checks read files.
+uv.lock decides every version. An image installs only what it builds from source (the image-python groups); every
+other locked package is installed when a job starts (containers/lib/launch_venv.sh). Static: the checks read files.
 """
 
 import pathlib
@@ -54,64 +54,109 @@ def test_no_installer_uses_the_pip_interface() -> None:
     assert {path: lines for path, lines in hits.items() if lines} == {}
 
 
+#: What each image builds from source and so never takes from the launch venv.
+IMAGE_BUILT: dict[str, tuple[str, ...]] = {
+    "judge-agent-amd": ("numpy", "scipy", "mpi4py", "cupy"),
+    "judge-agent-cpu": ("numpy", "scipy", "mpi4py"),
+    "judge-agent-cuda": ("numpy", "scipy", "mpi4py"),
+}
+
+
+def launch_args(text: str) -> str:
+    """The agent stage's /opt/launch/sync.args, as the Dockerfile writes it."""
+    found = re.search(r'echo "([^"]*)" > /opt/launch/sync\.args', text, re.DOTALL)
+    assert found is not None
+    return " ".join(found.group(1).replace("\\\n", " ").split())
+
+
 @pytest.mark.parametrize("image", JUDGE_AGENT)
-def test_a_judge_agent_image_syncs_its_extra_and_the_proxy_group_from_the_lock(image: str) -> None:
+def test_a_judge_agent_image_installs_only_what_it_builds_from_source(image: str) -> None:
+    """Every other locked package is installed when a job starts; an image sync never selects a framework extra."""
     text = recipe(image)
     assert "COPY pyproject.toml uv.lock /opt/hpcagent-bench/" in text
     assert "COPY agent/pyproject.toml /opt/hpcagent-bench-agent/pyproject.toml" in text
     sync = re.search(
-        r"uv sync --frozen --inexact[^;]*--extra " + EXTRA_OF[image] + r" --group judge-proxy;", text, re.DOTALL
+        r"uv sync --frozen --(?:exact|inexact)[^;]*--no-default-groups --group image-python "
+        r"--no-binary-package mpi4py;",
+        text,
+        re.DOTALL,
     )
     assert sync is not None, image
-    assert "--no-install-project" in sync.group(0) and "--no-install-package hpcagent-agent" in sync.group(0)
-    assert "--no-binary-package mpi4py" in sync.group(0)
+    image_syncs = [one for one in re.findall(r"uv sync [^;]*?(?=; \\)", text, re.DOTALL) if "/opt/rocprof" not in one]
+    assert [one for one in image_syncs if "--extra" in one] == [], image
 
 
 @pytest.mark.parametrize("image", JUDGE_AGENT)
-def test_the_lock_installs_torch_and_triton_over_the_base_and_dace_without_a_checkout(image: str) -> None:
+def test_the_launch_venv_installs_the_extra_and_the_proxy_and_never_an_image_build(image: str) -> None:
     text = recipe(image)
-    assert [name for name in ("--no-install-package torch", "--no-install-package triton") if name in text] == []
-    for name in ("NUMPY_VERSION", "numpy_before", "constraint.txt", "image-pins", "torch_before", "/opt/dace"):
+    args = launch_args(text)
+    assert args.startswith(f"--no-install-project --extra {EXTRA_OF[image]} --group judge-proxy"), args
+    assert {f"--no-install-package {name}" for name in IMAGE_BUILT[image]} <= {
+        f"--no-install-package {word}" for word in args.split("--no-install-package ")[1:] for word in [word.strip()]
+    }, args
+    assert 'ENTRYPOINT ["/opt/launch/launch_venv.sh"]' in text
+    assert "COPY containers/lib/launch_venv.sh containers/lib/one_openmp.sh /opt/launch/" in text
+    judge = text[text.index("FROM agent AS judge") :]
+    assert "sed -i 's/^--no-install-project //' /opt/launch/sync.args" in judge, "a judge job installs hpcagent_bench"
+    assert "package_hook.sh" not in judge
+    for name in ("DACE_COMMIT", "direct_url.json", "/opt/dace", "constraint.txt", "image-pins"):
         assert name not in "\n".join(code_lines(text)), name
-    assert "direct_url.json" in text and "${DACE_COMMIT}" in text
 
 
 @pytest.mark.parametrize("image", JUDGE_AGENT)
-def test_the_hooks_are_uv_sync_runs_from_the_empty_skeleton(image: str) -> None:
+def test_every_wheel_gate_runs_in_a_launch_venv_the_image_does_not_keep(image: str) -> None:
+    text = recipe(image)
+    gate = re.search(
+        r"RUN HPCAGENT_BENCH_LAUNCH_ROOT=/opt/launch-gate [^\n]*/opt/launch/launch_venv\.sh sh -eux -c '(.*?)' \\\n"
+        r"    && rm -rf /opt/launch-gate",
+        text,
+        re.DOTALL,
+    )
+    assert gate is not None, image
+    for check in (
+        "import torch",
+        "playwright install",
+        "one_openmp.sh /opt/view",
+        "omp_contexts.sh",
+        "openmp_gate.py context --context gnu --wheels --torch",
+        "HAVE_ISL",
+    ):
+        assert check in gate.group(1), check
+    after = text[gate.end() :]
+    assert 'python3 -c "import torch' not in after and "import dace" not in after
+
+
+@pytest.mark.parametrize("image", JUDGE_AGENT)
+def test_the_package_hook_serves_only_the_harness_venvs(image: str) -> None:
     text = recipe(image)
     assert "ln -s /opt/hpcagent-bench-agent /opt/hpcagent-bench/agent" in text
-    assert "--package hpcagent-agent" in text and "--no-install-package hpcagent-agent" in text
-    hook = (LIB / "package_hook.sh").read_text(encoding="utf-8")
-    assert "uv sync --frozen --inexact" in hook
-    assert 'rm -rf "${package_dir:?}"' in hook
+    hooks = re.findall(r"sh /tmp/package_hook\.sh [^;]*", text)
+    assert hooks and all('"/opt/harness/${venv}"' in hook and '--group "harness-${venv}"' in hook for hook in hooks)
 
 
 @pytest.mark.parametrize("image", JUDGE_AGENT)
-def test_every_sync_after_the_openblas_rebuild_keeps_its_extra_and_leaves_numpy_and_scipy_alone(image: str) -> None:
-    """A sync that selects other extras swaps torch and rich (660464), and one that may reinstall numpy puts the
-    wheel and its bundled BLAS back, because uv reinstalls a package whose build settings changed."""
-    text = recipe(image)
-    after = text[text.index("numpy_on_openblas.sh /opt/view") :]
-    rebuild = re.search(r"numpy_on_openblas\.sh /opt/view /opt/hpcagent-bench ([^&]*)&&", text)
+def test_the_openblas_rebuild_syncs_the_image_group_only(image: str) -> None:
+    """A sync that selects an extra would put the framework wheels into the image (they install at launch)."""
+    rebuild = re.search(r"numpy_on_openblas\.sh /opt/view /opt/hpcagent-bench ([^&]*)&&", recipe(image))
     assert rebuild is not None, image
-    assert f"--extra {EXTRA_OF[image]}" in rebuild.group(1) and "--group judge-proxy" in rebuild.group(1)
-    # amdgpu's cupy is built from source in its own layer, after this step.
-    assert ("--no-install-package cupy" in rebuild.group(1)) == (image == "judge-agent-amd")
-    # The image environment's syncs; rocprof-compute's is its own project in its own venv.
-    for sync in re.findall(r"uv sync [^;]*?(?=; \\)", after, re.DOTALL):
-        if "--no-install-project" not in sync:
-            continue
-        assert f"--extra {EXTRA_OF[image]}" in sync or "--package hpcagent-agent" in sync, sync
-        assert "--no-install-package numpy --no-install-package scipy" in sync or "--package" in sync, sync
-    judge = text[text.index("FROM agent AS judge") :]
-    assert "--no-install-package numpy --no-install-package scipy" in judge
+    assert rebuild.group(1).split() == ["--no-default-groups", "--group", "image-python"]
 
 
-def test_the_amd_image_builds_cupy_from_the_amdgpu_extra_after_the_numpy_rebuild() -> None:
+def test_the_amd_image_builds_cupy_from_its_group_after_the_numpy_rebuild() -> None:
     text = recipe("judge-agent-amd")
-    assert "--no-install-package cupy" in text
-    assert text.index("numpy_on_openblas.sh") < text.index("--group judge-proxy --no-binary-package cupy")
-    assert "CUPY_INSTALL_USE_HIP=1" in text
+    assert text.index("numpy_on_openblas.sh") < text.index("--group image-cupy-rocm --no-binary-package cupy")
+    cupy = text[text.index("CUPY_INSTALL_USE_HIP=1") : text.index("--no-binary-package cupy")]
+    assert "--no-install-package numpy --no-install-package scipy" in cupy
+
+
+def test_the_launch_hook_builds_one_locked_venv_per_pin_beside_the_image_python() -> None:
+    hook = (LIB / "launch_venv.sh").read_text(encoding="utf-8")
+    assert 'cat "${workspace}/uv.lock" "${launch}/sync.args" "${launch}/image.id" | sha256sum' in hook
+    assert "flock 9" in hook and 'touch "${home}/ready"' in hook
+    assert "zz-image-site.pth" in hook, "the image's source builds stay visible after the venv's own packages"
+    assert "uv sync -q --frozen --inexact --no-install-project" not in hook, "the judge installs the project"
+    assert 'one_openmp.sh" --link-only' in hook
+    assert 'HPCAGENT_BENCH_IMAGE_PYTHON="${venv}/bin/python3"' in hook and 'exec "$@"' in hook
 
 
 def test_the_rocprof_compute_environment_is_a_locked_project_synced_into_its_venv() -> None:
@@ -184,11 +229,13 @@ def test_the_sglang_image_syncs_its_tiny_locked_project_into_the_vendor_venv() -
 if __name__ == "__main__":
     test_no_installer_uses_the_pip_interface()
     for name in JUDGE_AGENT:
-        test_a_judge_agent_image_syncs_its_extra_and_the_proxy_group_from_the_lock(name)
-        test_the_lock_installs_torch_and_triton_over_the_base_and_dace_without_a_checkout(name)
-        test_the_hooks_are_uv_sync_runs_from_the_empty_skeleton(name)
-        test_every_sync_after_the_openblas_rebuild_keeps_its_extra_and_leaves_numpy_and_scipy_alone(name)
-    test_the_amd_image_builds_cupy_from_the_amdgpu_extra_after_the_numpy_rebuild()
+        test_a_judge_agent_image_installs_only_what_it_builds_from_source(name)
+        test_the_launch_venv_installs_the_extra_and_the_proxy_and_never_an_image_build(name)
+        test_every_wheel_gate_runs_in_a_launch_venv_the_image_does_not_keep(name)
+        test_the_package_hook_serves_only_the_harness_venvs(name)
+        test_the_openblas_rebuild_syncs_the_image_group_only(name)
+    test_the_amd_image_builds_cupy_from_its_group_after_the_numpy_rebuild()
+    test_the_launch_hook_builds_one_locked_venv_per_pin_beside_the_image_python()
     test_the_rocprof_compute_environment_is_a_locked_project_synced_into_its_venv()
     test_the_extras_are_three_exclusive_framework_sets_that_each_carry_dev()
     test_rocm_jax_and_hip_cupy_are_part_of_the_amdgpu_extra()

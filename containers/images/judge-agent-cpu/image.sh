@@ -14,7 +14,7 @@ ce_image_args() {
     ce_march
     ce_dace_commit
     IMAGE_VERSION="${IMAGE_VERSION:-dev}"
-    ce_build_args IMAGE_VERSION SPACK_TARGET MARCH DACE_COMMIT
+    ce_build_args IMAGE_VERSION SPACK_TARGET MARCH
 }
 
 # Base cache, spack buildcache and uv cache per CPU family: an x86_64 layer is no use to aarch64.

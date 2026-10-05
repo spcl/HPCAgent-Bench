@@ -2581,6 +2581,14 @@ harbor = [
     { name = "harbor" },
     { name = "podman-compose" },
 ]
+image-cupy-rocm = [
+    { name = "cupy", marker = "platform_machine == 'x86_64' or (extra == 'extra-14-hpcagent-bench-amdgpu' and extra == 'extra-14-hpcagent-bench-cpu') or (extra == 'extra-14-hpcagent-bench-amdgpu' and extra == 'extra-14-hpcagent-bench-nvgpu') or (extra == 'extra-14-hpcagent-bench-cpu' and extra == 'extra-14-hpcagent-bench-nvgpu') or (extra == 'group-14-hpcagent-agent-harness-miniswe' and extra == 'group-14-hpcagent-agent-harness-openhands') or (extra == 'group-14-hpcagent-agent-harness-miniswe' and extra == 'group-14-hpcagent-bench-harbor') or (extra == 'group-14-hpcagent-agent-harness-miniswe' and extra == 'group-14-hpcagent-bench-judge-proxy') or (extra == 'group-14-hpcagent-agent-harness-openhands' and extra == 'group-14-hpcagent-bench-harbor') or (extra == 'group-14-hpcagent-agent-harness-openhands' and extra == 'group-14-hpcagent-bench-judge-proxy') or (extra == 'group-14-hpcagent-bench-harbor' and extra == 'group-14-hpcagent-bench-judge-proxy')" },
+]
+image-python = [
+    { name = "mpi4py" },
+    { name = "numpy" },
+    { name = "scipy" },
+]
 judge-proxy = [
     { name = "anyio" },
     { name = "httpx2" },
@@ -2681,6 +2689,12 @@ provides-extras = ["cpu", "amdgpu", "nvgpu", "docs", "dev"]
 harbor = [
     { name = "harbor", specifier = ">=0.23.0" },
     { name = "podman-compose", specifier = ">=1.6" },
+]
+image-cupy-rocm = [{ name = "cupy", marker = "platform_machine == 'x86_64'" }]
+image-python = [
+    { name = "mpi4py" },
+    { name = "numpy" },
+    { name = "scipy" },
 ]
 judge-proxy = [
     { name = "anyio", specifier = "==4.14.2" },

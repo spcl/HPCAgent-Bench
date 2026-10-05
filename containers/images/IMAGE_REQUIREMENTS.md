@@ -1,9 +1,11 @@
 # What every image must carry
 
 The specification the Dockerfiles in this directory implement. Build commands are in
-[`containers/README.md`](../README.md). Each image is built by one Dockerfile with everything
-baked in: nothing is reached through an out-of-image `PYTHONPATH` or a post-build step, because
-anything outside the image is invisible to its digest.
+[`containers/README.md`](../README.md). Each image is built by one Dockerfile and carries the toolchains and the
+Python it builds from source against them (numpy and scipy on its OpenBLAS, mpi4py on its MPICH, cupy for ROCm).
+Every other locked Python package changes too often to bake: a job installs it at start from the job's `uv.lock`
+into a node-local venv (`lib/launch_venv.sh`, the image's ENTRYPOINT; below). Nothing is reached through a
+`PYTHONPATH`.
 
 | image | base | serves |
 |---|---|---|
@@ -14,10 +16,20 @@ anything outside the image is invisible to its digest.
 | `vllm` | official vLLM 0.28.0 ROCm | oss120b on mi300, qwen38 on mi200 |
 | `vllm-cuda` | `vllm/vllm-openai:v0.28.0-aarch64-cu129` | qwen38, kimi, oss120b on Daint |
 
-The `agent` target never contains `hpcagent_bench` (it ships the references agents are graded
-against); `judge` is `agent` plus the KernelBench data and an editable-install hook at `/opt/hpcagent-bench`
-(`lib/package_hook.sh`); its EDF mounts the checkout there (`tests/test_judge_package_mount.py`). Held-out tests are in no image
+Neither target contains `hpcagent_bench` (it ships the references agents are graded against); `judge` is `agent`
+plus the KernelBench data, and its EDF mounts the checkout at `/opt/hpcagent-bench` (`tests/test_judge_package_mount.py`),
+from which a judge job's launch venv installs it editable; an agent's never does. Held-out tests are in no image
 (`scripts/checks/check_no_hidden_in_image.py`).
+
+**The launch venv.** Every container step starts through `lib/launch_venv.sh` (EDF `entrypoint = true`). On the
+first step of a node it runs `uv sync --frozen` from `/opt/hpcagent-bench/uv.lock` (the judge's mounted checkout; an
+agent binds the checkout's `uv.lock` and `pyproject.toml` there) with the image's `/opt/launch/sync.args` (the
+framework extra and the judge proxy, never a package the image built) into `/dev/shm/hpcagent-bench-launch-<role>/<key>`,
+keyed by the lock, the arguments and the image build; a `.pth` lists the image's site-packages after the venv's own,
+and every wheel's bundled libgomp is linked to the image's (`one_openmp.sh --link-only`). Later steps and jobs on the
+node with the same pins reuse it (a cold build is ~45 s); `HPCAGENT_BENCH_IMAGE_PYTHON` names its python. An agent's
+sealed tool calls hide the judge's root. Every check that needs the wheels runs at build time in such a venv, which
+the image does not keep (the launch gate at the end of the agent stage).
 
 AMD and CUDA stay separate images: different base, architecture, compiler (`hipcc` vs `nvcc`), cupy
 build and library backends. Every judge/agent image uses its base's Python 3.12 (no second
@@ -78,7 +90,8 @@ and prints the locked numpy/scipy/pandas/astunparse versions.
   base's CUDA major, and AMD's ROCm 7.2 wheels (a flat index in `[tool.uv.index]`) on AMD.
 * torch and triton: the lock's, from PyTorch's index on CPU and CUDA (cpu, cu132) and AMD's repo.radeon.com ROCm 7.2
   page on AMD, whose torch links the image's `/opt/rocm` rather than bundling a second HIP runtime and RCCL.
-* dace: `spcl/dace@extended` at the release pin (`[tool.uv.sources] dace` in `pyproject.toml`); jobs run it as baked.
+* dace: `spcl/dace@extended` at the release pin (`[tool.uv.sources] dace` in `pyproject.toml`), installed by the
+  launch venv: a moved pin needs no rebuild.
 * islpy and z3 back `WavefrontSkew` and the `LoopToMap` dependence proof, and both gates fail
   closed and silent. The build asserts `polyhedral_isl.HAVE_ISL` and `smt_dependence.has_z3()`, not
   merely the imports.
