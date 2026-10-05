@@ -394,6 +394,8 @@ if __name__ == "__main__":
     test_images_env_points_every_amd_partition_edf_at_the_one_image()
     test_install_edfs_renders_each_partition_edf_with_its_own_arch(pathlib.Path(tempfile.mkdtemp()))
     test_the_mlscale_edf_is_the_judge_edf_plus_the_hwloc_preload(pathlib.Path(tempfile.mkdtemp()))
+    for role, target in [("judge-agent-amd", "agent"), ("judge", "judge")]:
+        test_promote_moves_each_candidate_over_its_live_name(pathlib.Path(tempfile.mkdtemp()), role, target)
     test_promote_refuses_a_candidate_rebuilt_after_it_was_verified(pathlib.Path(tempfile.mkdtemp()))
     test_verify_only_reverifies_the_candidates_without_building(pathlib.Path(tempfile.mkdtemp()))
     test_verify_stage_carries_the_any_host_cpu_rows_on_a_gpu_partition(pathlib.Path(tempfile.mkdtemp()))
@@ -405,5 +407,3 @@ if __name__ == "__main__":
     for recipe in ["judge-agent-amd", "judge-agent-cpu"]:
         test_every_spack_image_labels_its_cpu_target_after_declaring_it(recipe)
     test_push_refuses_a_native_build()
-    for role, target in [("judge-agent-amd", "agent"), ("judge", "judge")]:
-        test_promote_moves_each_candidate_over_its_live_name(pathlib.Path(tempfile.mkdtemp()), role, target)
