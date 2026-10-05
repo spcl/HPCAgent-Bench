@@ -175,9 +175,9 @@ def test_an_unknown_device_is_refused(tmp_path: pathlib.Path) -> None:
         config.clear_override("record.device")
 
 
-def test_an_untagged_run_stores_null_rather_than_an_empty_string(tmp_path: pathlib.Path) -> None:
-    """An empty study would silently join with every other untagged experiment under one key. An
-    setup that named none is its episode id, and its harness the one every setup ran before the column."""
+def test_an_untagged_run_stores_the_empty_default(tmp_path: pathlib.Path) -> None:
+    """A blank study and no model are the columns' '' default, never NULL. A setup that named none is
+    its episode id, and its harness the one every setup ran before the column."""
     db = str(tmp_path / "r.db")
     config.set_override("record.study", "   ")
     try:
@@ -185,7 +185,7 @@ def test_an_untagged_run_stores_null_rather_than_an_empty_string(tmp_path: pathl
     finally:
         config.clear_override("record.study")
     assert _runs(db, ("study", "model", "setup", "harness")) == [
-        (None, None, recording.ADHOC_EPISODE_ID, results_db.DEFAULT_HARNESS)
+        ("", "", recording.ADHOC_EPISODE_ID, results_db.DEFAULT_HARNESS)
     ]
 
 
@@ -439,7 +439,7 @@ if __name__ == "__main__":
     test_the_base_setup_records_an_empty_packet_not_null(scratch())
     test_device_defaults_to_cpu(scratch())
     test_an_unknown_device_is_refused(scratch())
-    test_an_untagged_run_stores_null_rather_than_an_empty_string(scratch())
+    test_an_untagged_run_stores_the_empty_default(scratch())
     test_two_setups_in_one_db_stay_separable(scratch())
     test_a_setup_that_declares_no_language_records_none_rather_than_the_request(scratch())
     test_a_live_episode_is_the_first_under_its_label(scratch())

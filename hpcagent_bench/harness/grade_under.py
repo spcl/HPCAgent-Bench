@@ -1246,7 +1246,7 @@ def shard_provenance() -> tuple[str, str]:
     return socket.gethostname(), commit
 
 
-def done_keys(path: pathlib.Path, kind: str, score_rules: Sequence[str | None]) -> set[tuple[str, str, int]]:
+def done_keys(path: pathlib.Path, kind: str, score_rules: Sequence[str]) -> set[tuple[str, str, int]]:
     """``(run label, kernel, ts)`` of every grade ``path`` already holds a ``kind`` grade of, under one
     of ``score_rules``: what a resumed shard skips."""
     if not path.is_file():
@@ -1339,7 +1339,7 @@ def run_shard(
     """Grade this shard's items not yet in its database; returns how many were graded now. The shard DB
     is never open while ``grader`` runs (see :func:`run_cells_shard`)."""
     path = out_dir / f"regrade-{shard}.db"
-    done = done_keys(path, PROMOTION_KIND, (None,))
+    done = done_keys(path, PROMOTION_KIND, ("",))
     applied: set[str] = set()
     graded = 0
     with environment_scope():
