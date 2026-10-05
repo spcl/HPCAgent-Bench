@@ -51,6 +51,8 @@ __all__ = [
     "DENOMINATOR_COLUMN",
     "EPISODE_KEY",
     "EPISODE_RECORD",
+    "FINAL_STATUS_COLUMN",
+    "FINAL_UNSOLVED",
     "HARNESS_FAULT_REASON",
     "NOT_DELIVERED",
     "PLATFORM_COLUMN",
@@ -61,6 +63,8 @@ __all__ = [
     "RAW_SPEEDUP_COLUMN",
     "REDUCTION_COLUMN",
     "REPEAT_POLICIES",
+    "RUN_COLUMN",
+    "RUN_STATE_COLUMN",
     "SOLVED_COLUMN",
     "SUBMISSION_ORDER",
     "SUSPECT_COLUMN",
@@ -71,6 +75,7 @@ __all__ = [
     "KernelPolicy",
     "MixedPopulationError",
     "RepeatPolicy",
+    "RunState",
     "SetupAggregate",
     "add_selection_arguments",
     "aggregate_setup",
@@ -82,6 +87,7 @@ __all__ = [
     "condition_rows",
     "coverage",
     "credited",
+    "designed_runs",
     "episode_tokens",
     "genuinely_attempted",
     "graded_episode_rows",
@@ -95,6 +101,7 @@ __all__ = [
     "latest_episodes",
     "log_differences",
     "mcnemar_exact",
+    "numbers_of",
     "on_platform",
     "one_baseline_policy",
     "one_bracket",
@@ -105,9 +112,11 @@ __all__ = [
     "per_episode_max",
     "platform_of",
     "policies_agree",
+    "problem_index",
     "ran_rows",
     "ratio",
     "repeat_policy",
+    "run_states",
     "scored_answers",
     "select_setups",
     "series_of",
@@ -864,6 +873,113 @@ def genuinely_attempted(frame: "pd.DataFrame") -> set:
 #: tokens of its FINAL attempt. What the attempts before it spent rides on the separate
 #: ``tokens_crashed`` column and is never added in (docs/token_accounting.md).
 EPISODE_RECORD: str = "episode"
+
+
+class RunState(enum.Enum):
+    """What one designed run (an episode of a REPEAT>1 setup) delivered: an answer its final grade
+    credited and believed, no answer (none submitted, graded unsolved, or flagged suspect: all score
+    1x), or an answer still owed its final grade, which is no outcome yet."""
+
+    SOLVED = "solved"
+    UNSOLVED = "unsolved"
+    OWED = "owed"
+
+
+#: :func:`designed_runs`' 1-based run index within its ``(setup, run_root, job, kernel)``.
+RUN_COLUMN: str = "run"
+#: :func:`designed_runs`' :class:`RunState` of the run.
+RUN_STATE_COLUMN: str = "run_state"
+#: The extractor's mark on a submission the final grade left unsolved
+#: (:data:`hpcagent_bench.observations_extract.UNSOLVED`).
+FINAL_UNSOLVED: str = "unsolved"
+#: The extractor's column for that mark.
+FINAL_STATUS_COLUMN: str = "grade_final_status"
+
+
+def problem_index(episode_id: str) -> int:
+    """The ``p<problem>`` index of an episode id (``<setup>.n<N>.p<P>.w<W>``), or raise: the run index
+    of a designed repeat is read from it."""
+    # import cycle: hpcagent_bench.studies imports this module
+    from hpcagent_bench import studies
+
+    problem = studies.agent_indices(episode_id).problem
+    if not problem:
+        raise MixedPopulationError(f"episode id {episode_id!r} carries no p<problem> index to number its run by")
+    return int(problem)
+
+
+def run_states(answers: "pd.DataFrame") -> list[RunState]:
+    """The :class:`RunState` of each episode's last answer row (:func:`designed_runs`)."""
+    has_final = FINAL_STATUS_COLUMN in answers.columns
+    finals = answers[FINAL_STATUS_COLUMN].astype(str).tolist() if has_final else [""] * len(answers)
+    rows = zip(
+        answers["row_kind"].tolist(), finals, credited(answers).tolist(), answers[SUSPECT_COLUMN].tolist(), strict=True
+    )
+    states: list[RunState] = []
+    for kind, final, is_credited, suspect in rows:
+        if kind == ATTEMPT_RECORD or final == FINAL_UNSOLVED:
+            states.append(RunState.UNSOLVED)
+        elif is_credited:
+            states.append(RunState.SOLVED if is_reportable(suspect) else RunState.UNSOLVED)
+        else:
+            states.append(RunState.OWED)
+    return states
+
+
+def numbers_of(column: "pd.Series") -> list[float]:
+    """``column`` as floats, NaN where a cell is blank or not a number."""
+    import pandas as pd
+
+    return pd.Series(pd.to_numeric(column, errors="coerce"), index=column.index, dtype=float).tolist()
+
+
+def designed_runs(frame: "pd.DataFrame") -> "pd.DataFrame":
+    """One row per EPISODE of every ``(setup, kernel)``, each a run of a designed repeat (R5): its
+    ``setup``, ``kernel``, :data:`EPISODE_KEY`, :data:`RUN_COLUMN`, :data:`RUN_STATE_COLUMN` and ``speedup``.
+
+    An episode's answer is its last positive submission or final-graded-unsolved attempt
+    (:data:`SUBMISSION_ORDER`). Credited and believable, the run is SOLVED at S_i; graded unsolved,
+    flagged suspect or never submitted, it is UNSOLVED at :data:`NOT_DELIVERED`; a submission the final
+    grade has not credited yet is OWED, with no speedup. The run index is the rank of the episode's
+    ``p<problem>`` among its ``(setup, run_root, job, kernel)``: a job's REPEAT problems of one kernel are
+    consecutive problem ids, so their order is the launch order, not the order the rows were written.
+    """
+    import pandas as pd
+
+    missing = [
+        name
+        for name in ("setup", "row_kind", "speedup", SUSPECT_COLUMN, *EPISODE_KEY, *SUBMISSION_ORDER)
+        if name not in frame.columns
+    ]
+    if missing:
+        raise MixedPopulationError(f"cannot number designed runs without {missing}")
+    labels = frame["setup"].fillna("").astype(str).str.strip()
+    rows = frame.loc[~labels.isin(list(PSEUDO_SETUPS)) & frame["kernel"].notna()]
+    keys = ["setup", *EPISODE_KEY]
+    episodes = rows.loc[:, keys].drop_duplicates(ignore_index=True)
+    final = rows[FINAL_STATUS_COLUMN].astype(str) if FINAL_STATUS_COLUMN in rows.columns else ""
+    speedup = pd.Series(pd.to_numeric(rows["speedup"], errors="coerce"), index=rows.index, dtype=float)
+    candidates = rows.loc[
+        ((rows["row_kind"] == "submission") & (speedup > 0))
+        | ((rows["row_kind"] == ATTEMPT_RECORD) & (final == FINAL_UNSOLVED))
+    ]
+    answers = last_per_episode(candidates, SUBMISSION_ORDER)
+    states = run_states(answers)
+    solved = [state == RunState.SOLVED for state in states]
+    one_reduction(answers.loc[solved, REDUCTION_COLUMN].tolist(), label="designed runs")
+    values = [
+        float(value) if state == RunState.SOLVED else NOT_DELIVERED if state == RunState.UNSOLVED else math.nan
+        for value, state in zip(numbers_of(series_of(answers, "speedup")), states, strict=True)
+    ]
+    graded = answers.loc[:, keys].assign(**{RUN_STATE_COLUMN: states, "speedup": values})
+    runs = episodes.merge(graded, on=keys, how="left")
+    unanswered = runs[RUN_STATE_COLUMN].isna()
+    runs.loc[unanswered, RUN_STATE_COLUMN] = RunState.UNSOLVED
+    runs.loc[unanswered, "speedup"] = NOT_DELIVERED
+    runs["problem"] = runs["episode_id"].astype(str).map(problem_index)
+    scope = ["setup", "run_root", "job", "kernel"]
+    runs[RUN_COLUMN] = runs.groupby(scope, dropna=False)["problem"].rank(method="first").astype(int)
+    return runs.drop(columns=["problem"]).sort_values([*scope, RUN_COLUMN], ignore_index=True)
 
 
 def episode_tokens(frame: "pd.DataFrame", by: Sequence[str] = ("kernel",)) -> "pd.DataFrame":
