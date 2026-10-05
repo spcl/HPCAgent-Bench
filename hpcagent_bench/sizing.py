@@ -1128,7 +1128,7 @@ def pack_lpt(
     return partition
 
 
-# ---------------------------------------------------------------- the datatype rule: constant bytes
+# the datatype rule: constant bytes
 
 #: Bytes per element of the datatype every manifest's XL rung is authored at.
 AUTHORED_ELEMENT_BYTES: int = int(np.dtype(DEFAULT_DTYPE).itemsize)

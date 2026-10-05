@@ -742,7 +742,7 @@ def test_suspect_threshold_follows_config_at_call_time(monkeypatch) -> None:
     assert scoring.suspect_threshold(42.0) == 42.0, "an explicit override must still win over config"
 
 
-# ------------------------------------------------- S1: host/device plausibility bounds
+# S1: host/device plausibility bounds
 
 
 def test_suspect_threshold_reads_the_host_or_device_key_by_the_device_flag() -> None:

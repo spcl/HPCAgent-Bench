@@ -391,7 +391,6 @@ def test_include_incomplete_keeps_a_short_setup_and_prints_nothing(capsys: pytes
     assert capsys.readouterr().err == ""
 
 
-# ---------------------------------------------------------------------------
 # The paired interval, the stars, the tick budget, the left margin and the key.
 
 
@@ -566,7 +565,6 @@ def test_an_undelivered_kernel_still_counts_in_the_served_geomean() -> None:
     assert not efficacy_figures.paired_kernels(control, treated).delivered.all()
 
 
-# ---------------------------------------------------------------------------
 # The EXPLICIT-PAIR entry point: a comparison whose two sides are two experiments, or whose condition
 # is not a packet suffix at all, drawn through the same figure.
 
@@ -681,7 +679,6 @@ def test_pair_frame_tags_each_setup_by_name_and_which_side_of_the_pair_it_is() -
     assert series.y == pytest.approx(150e3 / 200e3)
 
 
-# ---------------------------------------------------------------------------
 # The control's own shape, and the arrow a named comparison carries.
 
 
@@ -783,7 +780,6 @@ def test_parse_spec_reads_semicolon_separated_key_value_pairs() -> None:
     }  # fmt: skip
 
 
-# ---------------------------------------------------------------------------
 # Ratio tick labels: a ratio below 1 is spelled in full, never rounded to 0x.
 
 
@@ -793,7 +789,6 @@ def test_the_token_cost_axis_formatter_spells_a_ratio_below_one_as_a_fraction() 
     assert plotstyle.ratio_tick_label(8.0) == "8x"
 
 
-# ---------------------------------------------------------------------------
 # Several packets sharing ONE panel (``treatments=``): read and recorded per packet.
 
 

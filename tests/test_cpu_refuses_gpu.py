@@ -541,8 +541,8 @@ def test_the_score_route_redacts_the_refusal_reason_too(
     assert "refused" not in payload["detail"]
 
 
-# --- the third layer: a request cannot claim a device-residency language an undeclared/host-only
-# setup never asked for (gpu_language_refusal, setup_declared_host_only) ---------------------------
+# the third layer: a request cannot claim a device-residency language an undeclared/host-only
+# setup never asked for (gpu_language_refusal, setup_declared_host_only)
 
 
 def test_setup_declared_host_only_reads_record_device_not_the_file_default(monkeypatch: pytest.MonkeyPatch) -> None:

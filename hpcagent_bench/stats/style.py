@@ -765,11 +765,9 @@ def save(
     return stem
 
 
-# ---------------------------------------------------------------------------------------------
 # Measured layout. Every figure module sizes its chrome from what its text MEASURES on the laid-out
 # figure, never from a fixed fraction: a fixed band is right for one width and one label length,
 # and on any other it either wastes the page or prints the chrome over the data.
-# ---------------------------------------------------------------------------------------------
 
 
 def renderer_of(fig: Figure | SubFigure) -> RendererBase:

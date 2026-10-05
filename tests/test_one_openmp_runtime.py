@@ -125,10 +125,9 @@ def test_the_image_build_carries_the_same_counter_as_the_package() -> None:
     package = pathlib.Path(openmp_runtimes.__file__).read_text(encoding="utf-8")
     counter = package[package.index("#: Runtime library files") : package.index("\ndef main(")].rstrip("\n")
     gate = GATE.read_text(encoding="utf-8")
-    start = gate.index("verbatim from here to the END marker. ---\n") + len(
-        "verbatim from here to the END marker. ---\n"
-    )
-    assert gate[start : gate.index("# --- END of the verbatim counter. ---")].rstrip("\n") == counter
+    marker = "verbatim from here to the END marker.\n"
+    start = gate.index(marker) + len(marker)
+    assert gate[start : gate.index("# END of the verbatim counter.")].rstrip("\n") == counter
 
 
 IMAGES = ["judge-agent-amd", "judge-agent-cpu", "judge-agent-cuda"]

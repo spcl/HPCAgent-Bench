@@ -125,7 +125,7 @@ def stage_fused_job(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> 
     }
 
 
-# ------------------------------------------------------------------ config scope + resolution
+# config scope + resolution
 
 
 def test_a_scoped_environment_overrides_and_unsets_only_inside_its_context(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -189,7 +189,7 @@ def test_outside_a_fused_job_nothing_is_fused(monkeypatch: pytest.MonkeyPatch) -
     assert not fused.fused()
 
 
-# ------------------------------------------------------------------ GOLDEN: recorded identity
+# GOLDEN: recorded identity
 
 
 def graded() -> Score:
@@ -269,7 +269,7 @@ def test_a_fused_judge_records_the_row_a_single_setup_judge_records(
     assert fused_rows["joined"][0][5] == identity and fused_rows["joined"][0][1] == "qwen38"
 
 
-# ------------------------------------------------------------------ the upstream judge
+# the upstream judge
 
 
 def upstream_get(url: str, setup: str | None) -> tuple[int, dict[str, object]]:
@@ -312,7 +312,7 @@ def test_the_upstream_score_route_follows_the_setup(fused_job: dict[str, str], m
         assert "disabled" in refused.value.read().decode()
 
 
-# ------------------------------------------------------------------ the clients send the token
+# the clients send the token
 
 
 class HeaderEcho(BaseHTTPRequestHandler):

@@ -123,7 +123,6 @@ def test_a_setup_short_of_the_tag_is_not_drawn() -> None:
     assert set(plot.eligible_rows(rows, include_incomplete=True).setup) == {"demo-setup", "short-setup"}
 
 
-# ---------------------------------------------------------------------------
 # The drawing conventions, pinned: colour is the packet, shape is the model, the measured value is
 # on Y, the legend belongs to the FIGURE, and the grid is major only.
 

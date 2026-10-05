@@ -35,11 +35,9 @@ def token_metric(cells: list[pk.KernelCell], color: str = "#cc5511") -> pk.Metri
     return pk.token_series_metric([pk.Series("", tuple(cells), color)], "Tokens")
 
 
-# ---------------------------------------------------------------------------
 # Reduction: which population speedup_cells / token_cells read.
 
 
-# ---------------------------------------------------------------------------
 # The log2 speedup axis.
 
 
@@ -72,7 +70,6 @@ def test_speedup_yticks_grows_to_cover_a_wide_range() -> None:
     assert min(ticks) <= 0.1 and max(ticks) >= 20.0
 
 
-# ---------------------------------------------------------------------------
 # ci vs box drawing.
 
 
@@ -106,7 +103,6 @@ def test_ci_style_never_draws_a_box_patch() -> None:
         plt.close(fig)
 
 
-# ---------------------------------------------------------------------------
 # The --summary column.
 
 
@@ -171,11 +167,9 @@ def test_a_stacked_speedup_and_token_figure_names_its_one_summary_statistic_once
         plt.close(fig)
 
 
-# ---------------------------------------------------------------------------
 # --layout separate vs stacked, and which files a run writes.
 
 
-# ---------------------------------------------------------------------------
 # Reproducibility.
 
 
@@ -222,7 +216,6 @@ def test_a_ratio_below_one_prints_as_a_decimal(value: float, want: str) -> None:
     assert style.ratio_tick_label(value) == want
 
 
-# ---------------------------------------------------------------------------
 # The one per-kernel API every per-kernel figure draws through: cells, ticks, marks, summary, canvas.
 
 

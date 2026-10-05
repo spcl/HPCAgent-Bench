@@ -102,7 +102,7 @@ def test_collapse_expands_an_inner_ellipsis_against_the_base_rank() -> None:
     assert collapse("A[..., j][k]", {"A": ("n", "m", "p")}) == "A[k, :, j]"
 
 
-# ---- chained index arrays: composed into one subscript, two-step where numpy transposes ----
+# chained index arrays: composed into one subscript, two-step where numpy transposes
 
 ABI_BACKENDS = ("c", "fortran")
 
