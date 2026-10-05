@@ -245,12 +245,14 @@ class CacheLayer:
         return cls(work_root() / key, archive_root() / f"{key}{ARCHIVE_SUFFIX}")
 
     def archive_state(self) -> str:
-        """``mtime_ns:size`` of the archive, or ``""`` when there is none."""
+        """``inode:mtime_ns:size`` of the archive, or ``""`` when there is none. Every publish replaces the file,
+        so the inode tells two publishes apart where mtime cannot (Lustre keeps whole seconds) and size cannot
+        (a tar pads to whole records)."""
         try:
             stat = self.archive.stat()
         except FileNotFoundError:
             return ""
-        return f"{stat.st_mtime_ns}:{stat.st_size}"
+        return f"{stat.st_ino}:{stat.st_mtime_ns}:{stat.st_size}"
 
     def seed(self) -> None:
         """Unpack the archive into the working directory unless this state of it is already in."""
