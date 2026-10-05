@@ -92,9 +92,9 @@ and prints the locked numpy/scipy/pandas/astunparse versions.
   page on AMD, whose torch links the image's `/opt/rocm` rather than bundling a second HIP runtime and RCCL.
 * dace: `spcl/dace@extended` at the release pin (`[tool.uv.sources] dace` in `pyproject.toml`), installed by the
   launch venv: a moved pin needs no rebuild.
-* islpy and z3 back `WavefrontSkew` and the `LoopToMap` dependence proof, and both gates fail
-  closed and silent. The build asserts `polyhedral_isl.HAVE_ISL` and `smt_dependence.has_z3()`, not
-  merely the imports.
+* islpy and z3 back `WavefrontSkew` and the `LoopToMap` dependence proof. islpy is a hard import of
+  `dace.sdfg.analysis.polyhedral_isl`, so importing it is the check; the z3 gate fails closed and silent, so
+  the build asserts `smt_dependence.has_z3()`, not merely the import.
 
 ## Load-bearing details
 

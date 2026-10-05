@@ -1461,9 +1461,9 @@ RUN HPCAGENT_BENCH_LAUNCH_ROOT=/opt/launch-gate UV_CACHE_DIR=/uv-cache /opt/laun
       assert all(m.__file__.startswith(\"/opt/venv/\") for m in (numpy, scipy, cupy, mpi4py)), \"a wheel shadows an image build\""; \
     python3 -c "import dace, pathlib; \
       p = pathlib.Path(dace.__file__).parent / \"runtime\" / \"include\" / \"dace\" / \"ska_sort.hpp\"; assert p.is_file(), p"; \
-    python3 -c "from dace.sdfg.analysis.polyhedral_isl import HAVE_ISL; \
+    python3 -c "import dace.sdfg.analysis.polyhedral_isl; \
       from dace.transformation.passes.analysis import smt_dependence; \
-      assert HAVE_ISL, \"islpy gate closed\"; assert smt_dependence.has_z3(), \"z3 gate closed\""; \
+      assert smt_dependence.has_z3(), \"z3 gate closed\""; \
     python3 -c "import importlib.metadata as m; \
       want = {\"litellm\": \"1.94.0\", \"httpx2\": \"2.12.0\", \"anyio\": \"4.14.2\"}; \
       got = {name: m.version(name) for name in want}; assert got == want, got"; \

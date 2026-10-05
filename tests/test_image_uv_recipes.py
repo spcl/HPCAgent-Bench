@@ -119,7 +119,7 @@ def test_every_wheel_gate_runs_in_a_launch_venv_the_image_does_not_keep(image: s
         "one_openmp.sh /opt/view",
         "omp_contexts.sh",
         "openmp_gate.py context --context gnu --wheels --torch",
-        "HAVE_ISL",
+        "import dace.sdfg.analysis.polyhedral_isl",
     ):
         assert check in gate.group(1), check
     after = text[gate.end() :]
