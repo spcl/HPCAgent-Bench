@@ -1,13 +1,14 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""``hpcagent-bench job submit``, ``job options`` and ``containers/images/submit.sh``: a field is its flag, else its
-environment variable, else the system's entry."""
+"""``hpcagent-bench job submit`` and ``job options``: a field is its flag, else Slurm's own ``SBATCH_*`` variable,
+else the job script's ``#SBATCH`` line, else its other variable, else the system's entry."""
 
 import os
 import pathlib
 import shlex
 import subprocess
 import sys
+from collections.abc import Callable, Mapping
 
 import pytest
 
@@ -15,6 +16,11 @@ from hpcagent_bench.cluster import systems
 
 SHIPPED = systems.load_systems({})
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+
+
+def site_environment(values: dict[str, str]) -> Callable[[Mapping[str, str]], dict[str, str]]:
+    """A stand-in for ``systems.site_environment`` whose environment and site layer hold ``values`` alone."""
+    return lambda environ: dict(values)
 
 
 def test_the_shipped_systems_name_every_shape_field_a_job_needs() -> None:
@@ -49,6 +55,9 @@ def test_the_cluster_name_picks_the_system_and_an_unknown_cluster_picks_none() -
     assert systems.resolve(None, {}, {"SLURM_CLUSTER_NAME": str(cluster)}).system == "daint.alps"
     assert systems.resolve(None, {}, {"HPCAGENT_BENCH_SYSTEM": "beverin-mi200"}).system == "beverin-mi200"
     assert systems.resolve(None, {}, {"SLURM_CLUSTER_NAME": "elsewhere"}).system == ""
+    assert systems.resolve(None, {"partition": "mi200"}, {"SLURM_CLUSTER_NAME": "beverin"}).system == "beverin-mi200"
+    unserved = systems.resolve(None, {"partition": "debug"}, {"HPCAGENT_BENCH_SYSTEM": "beverin"})
+    assert (unserved.system, unserved.values["gpus_per_node"]) == ("beverin", "4")
 
 
 def test_a_cluster_with_no_entry_runs_from_flags_and_the_environment_alone() -> None:
@@ -116,7 +125,7 @@ def test_the_longest_time_limit_is_the_systems_unless_set_and_has_no_default() -
 def test_the_options_command_prints_one_option_per_line_or_the_hardware(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    monkeypatch.setattr(systems, "site_environment", lambda environ: {"SBATCH_ACCOUNT": "proj"})
+    monkeypatch.setattr(systems, "site_environment", site_environment({"SBATCH_ACCOUNT": "proj"}))
     assert systems.options_main(["--system", "beverin", "--partition", "gpu"]) == 0
     assert capsys.readouterr().out.splitlines() == ["--partition=gpu", "--account=proj", "--gpus-per-node=4"]
     assert systems.options_main(["--system", "beverin-mi200", "--print", "hardware"]) == 0
@@ -131,7 +140,7 @@ def test_print_names_one_resolved_value_and_require_refuses_it_unset(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """`--print` answers one value (empty when unset); `--require` makes unset an error naming flag and variable."""
-    monkeypatch.setattr(systems, "site_environment", lambda environ: {})
+    monkeypatch.setattr(systems, "site_environment", site_environment({}))
     assert systems.options_main(["--print", "gpus_per_node"]) == 0
     assert capsys.readouterr().out == "\n"
     with pytest.raises(SystemExit, match=r"--gpus-per-node or set \$HPCAGENT_BENCH_JOB_GPUS_PER_NODE"):
@@ -144,67 +153,87 @@ def test_print_names_one_resolved_value_and_require_refuses_it_unset(
 
 
 def test_the_sbatch_command_puts_the_options_before_the_script_and_keeps_its_arguments() -> None:
-    command = systems.sbatch_command(
-        "job.sbatch", {"cpus_per_task": "5", "gpus_per_task": "1"}, ["a", "--aa"], nice="100"
-    )
-    assert command == ["sbatch", "--cpus-per-task=5", "--gpus-per-task=1", "--nice=100", "job.sbatch", "a", "--aa"]
+    command = systems.sbatch_command("job.sbatch", {"cpus_per_task": "5", "nice": "100"}, ["a", "--aa"])
+    assert command == ["sbatch", "--cpus-per-task=5", "--nice=100", "job.sbatch", "a", "--aa"]
 
 
-def test_a_dry_run_prints_the_command_and_submits_nothing(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    monkeypatch.setattr(systems, "site_environment", lambda environ: {})
-    monkeypatch.setattr(systems.subprocess, "run", lambda *a, **k: pytest.fail("submitted"))
-    assert (
-        systems.main(["--system", "daint.alps", "--time", "01:00:00", "--dry-run", "job.sbatch", "w.jsonl", "out"]) == 0
-    )
-    err = capsys.readouterr().err
-    assert "--time=01:00:00" in err and "job.sbatch w.jsonl out" in err and "--partition=" in err
-
-
-def container_dry_run(tmp_path: pathlib.Path, job: str, *args: str, **knobs: str) -> list[str]:
-    """The sbatch command ``containers/images/submit.sh <job> --dry-run <args>`` prints under the CSCS site layer
-    (system beverin) and account ``proj``, with no Slurm or HPCAgent-Bench value inherited from the caller. An
+def dry_run(tmp_path: pathlib.Path, *args: str, **knobs: str) -> tuple[str, list[str]]:
+    """The system and the sbatch command ``hpcagent-bench job submit --dry-run <args>`` prints under the CSCS site
+    layer (system beverin) and account ``proj``, with no Slurm or HPCAgent-Bench value inherited from the caller. An
     ``sbatch`` that fails stands first on PATH, so a launcher that submitted would fail the test, not queue a job."""
     (tmp_path / "sbatch").write_text("#!/bin/sh\necho 'sbatch called' >&2\nexit 3\n", encoding="utf-8")
     (tmp_path / "sbatch").chmod(0o755)
     inherited = {
         key: value
         for key, value in os.environ.items()
-        if not key.startswith(("SBATCH_", "SLURM_", "HPCAGENT_BENCH_")) and key not in {"NICE", "TIME_LIMIT", "ROLE"}
+        if not key.startswith(("SBATCH_", "SLURM_", "HPCAGENT_BENCH_")) and key != "ROLE"
     }
     environ = inherited | {
         "PATH": f"{tmp_path}{os.pathsep}{os.environ['PATH']}",
         "HPCAGENT_BENCH_SITE_ENV": str(ROOT / "experiments" / "layers" / "site-cscs.env"),
-        "HPCAGENT_BENCH_HOST_PYTHON": sys.executable,
         "SBATCH_ACCOUNT": "proj",
         **knobs,
     }
-    launcher = ROOT / "containers" / "images" / "submit.sh"
     done = subprocess.run(
-        [str(launcher), job, "--dry-run", *args], capture_output=True, text=True, check=False, env=environ, cwd=ROOT
+        [sys.executable, "-m", "hpcagent_bench", "job", "submit", "--dry-run", *args],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=environ,
+        cwd=ROOT,
     )
     assert done.returncode == 0, done.stderr
-    return shlex.split(done.stdout)
+    system, command = done.stderr.splitlines()[-1].removeprefix("# system ").split(": ", 1)
+    return system, shlex.split(command)
 
 
-def test_the_container_launcher_resolves_the_system_its_flags_and_an_image_roles_partition(
+def job_script(tmp_path: pathlib.Path, *header: str) -> str:
+    script = tmp_path / "job.sbatch"
+    script.write_text("\n".join(["#!/bin/bash", "# a job", *header, "echo start", "#SBATCH --gpus-per-task=1"]))
+    return str(script)
+
+
+def test_a_script_keeps_the_fields_its_header_pins_and_the_system_fills_the_rest(tmp_path: pathlib.Path) -> None:
+    """One task of 96 cores stays one task of 96 cores under Beverin's 4 x 24; an #SBATCH line past the first
+    command is no header line, so the system's GPUs per node still apply."""
+    script = job_script(tmp_path, "#SBATCH --ntasks=1", "#SBATCH --cpus-per-task 96", "#SBATCH -t 02:00:00  # short")
+    assert dry_run(tmp_path, script) == (
+        "beverin",
+        ["sbatch", "--partition=mi300", "--account=proj", "--gpus-per-node=4", "--nice=100", script],
+    )
+
+
+def test_a_flag_beats_the_header_which_beats_our_variables_but_not_slurms(tmp_path: pathlib.Path) -> None:
+    script = job_script(tmp_path, "#SBATCH --partition=hdr", "#SBATCH --cpus-per-task=96")
+    assert "--cpus-per-task=8" in dry_run(tmp_path, "--cpus-per-task", "8", script)[1]
+    system, command = dry_run(tmp_path, script, HPCAGENT_BENCH_JOB_CPUS_PER_TASK="7")
+    assert system == "beverin" and not [word for word in command if word.startswith(("--cpus", "--partition"))]
+    assert "--partition=envpart" in dry_run(tmp_path, script, SBATCH_PARTITION="envpart")[1]
+
+
+def test_a_partition_picks_the_system_of_the_cluster_that_serves_it(tmp_path: pathlib.Path) -> None:
+    """Without --system, mi200 on Beverin is beverin-mi200's shape; an explicit --system keeps its own."""
+    script = job_script(tmp_path)
+    mi200 = ["--partition=mi200", "--account=proj", "--ntasks-per-node=4", "--cpus-per-task=16", "--gpus-per-node=8"]
+    assert dry_run(tmp_path, "--partition", "mi200", script) == (
+        "beverin-mi200",
+        ["sbatch", *mi200, "--nice=100", script],
+    )
+    assert dry_run(tmp_path, script, SBATCH_PARTITION="mi200")[0] == "beverin-mi200"
+    system, command = dry_run(tmp_path, "--system", "beverin", "--partition", "mi200", script)
+    assert system == "beverin" and {"--cpus-per-task=24", "--gpus-per-node=4"} <= set(command), command
+
+
+def test_an_image_job_runs_on_its_roles_partition_unless_a_flag_or_a_system_names_another(
     tmp_path: pathlib.Path,
 ) -> None:
-    """Beverin's options by default, a flag over them, and a build or verify job on its images.env partition unless
-    --partition or --system names one."""
     build = "containers/images/build_and_verify.sbatch"
-    assert container_dry_run(tmp_path, "containers/images/registry.sbatch", "--", "pull", "sglang") == [
-        "sbatch", "--partition=mi300", "--account=proj", "--gpus-per-node=4", "--nice=100",
-        "containers/images/registry.sbatch", "pull", "sglang",
-    ]  # fmt: skip
-    overridden = container_dry_run(
-        tmp_path, build, "--partition", "p", "--account=a", "--time", "1:00:00", "--", "vllm"
+    assert dry_run(tmp_path, build, "vllm") == (
+        "beverin",
+        ["sbatch", "--partition=mi300", "--account=proj", "--gpus-per-node=4", "--nice=100", build, "vllm"],
     )
-    assert overridden == [
-        "sbatch", "--partition=p", "--account=a", "--gpus-per-node=4", "--time=1:00:00", "--nice=100", build, "vllm",
-    ]  # fmt: skip
-    verify = "containers/images/verify_image.sbatch"
-    assert "--partition=mi200" in container_dry_run(tmp_path, verify, ROLE="judge-mi200")
-    named = container_dry_run(tmp_path, build, "--system", "beverin-mi200", "--", "judge-agent-amd")
-    assert {"--partition=mi200", "--gpus-per-node=8"} <= set(named), named
+    system, command = dry_run(tmp_path, "containers/images/verify_image.sbatch", ROLE="judge-mi200")
+    assert system == "beverin-mi200" and {"--partition=mi200", "--gpus-per-node=8"} <= set(command), command
+    assert "--partition=p" in dry_run(tmp_path, "--partition", "p", build, "vllm")[1]
+    system, command = dry_run(tmp_path, "--system", "beverin-mi200", build, "judge-agent-amd")
+    assert system == "beverin-mi200" and "--partition=mi200" in command, command

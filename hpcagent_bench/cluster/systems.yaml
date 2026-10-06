@@ -1,8 +1,9 @@
 # The job shape of each system: the sbatch words that differ between machines (hpcagent_bench/cluster/systems.py).
-# `hpcagent-bench job submit --system <name>` starts from one entry; a flag, then an environment variable
-# (HPCAGENT_BENCH_JOB_<FIELD>, SBATCH_PARTITION, SBATCH_ACCOUNT, or the site layer's value of it), overrides a field.
-# Add a system in a file of the same shape named by HPCAGENT_BENCH_SYSTEMS_FILE. `cluster` is matched against
-# SLURM_CLUSTER_NAME to pick the system when none is named; with no entry a job runs from flags and the environment.
+# `hpcagent-bench job submit --system <name>` fills a field from one entry only when nothing above sets it: a flag,
+# SBATCH_PARTITION / SBATCH_ACCOUNT, the job script's own #SBATCH line, then HPCAGENT_BENCH_JOB_<FIELD> (or the site
+# layer's value of it). Add a system in a file of the same shape named by HPCAGENT_BENCH_SYSTEMS_FILE. `cluster` is
+# matched against SLURM_CLUSTER_NAME to pick the system when none is named, and without --system a partition picks the
+# entry of that cluster that names it; with no entry a job runs from flags and the environment.
 # `hardware` is the hardware whose images and serving layers an experiment uses (HPCAGENT_BENCH_HARDWARE,
 # --hardware). `max_time_hours` is the longest --time the partition grants, less a margin
 # (HPCAGENT_BENCH_MAX_TIME_HOURS, --max-time-hours). One task per GPU, each with its share of the cores.
