@@ -5,6 +5,7 @@
 #   registry.sh push --check <role>... | --all  preflight only: sizes, flavor, tag (nothing published)
 #   registry.sh push <role>... | --all        publish each role's live OCI archive as REGISTRY_REPO:<tag>
 #   registry.sh pull <role> [sha256:<digest>] import the role's tag (or a pinned digest) as its squashfs
+#   registry.sh describe                      publish DOCKERHUB.md as the Docker Hub repository overview
 #
 # Roles, tags and file names come from images.env; --all means every role of CE_PLATFORM (amd, gh200,
 # cpu; default amd) that has what the action needs. A push reads the OCI archive the build saved beside
@@ -20,7 +21,7 @@ source "${HERE}/build_common.sh"
 MAX_LAYER_GB="${MAX_LAYER_GB:-10}"
 MAX_IMAGE_GB="${MAX_IMAGE_GB:-100}"
 
-usage() { sed -n '4,7p' "${BASH_SOURCE[0]}" >&2; exit 2; }
+usage() { sed -n '4,8p' "${BASH_SOURCE[0]}" >&2; exit 2; }
 
 # roles_for <column> <args>: the roles named, or with --all every CE_PLATFORM role with that column.
 roles_for() {
@@ -123,6 +124,21 @@ pull_one() {
 # promote_one <role>: rename a verified candidate (and its sidecars and archive) over the live name. A rename is
 # atomic and a running job keeps the inode it mounted, so promoting over a mounted image is safe (ce_refuse_mounted
 # guards only the in-place writes: build, export, pull).
+# describe_repository: the Docker Hub overview of REGISTRY_REPO (DOCKERHUB.md, plus a one-line description), through
+# Docker Hub's API with the same credentials a push uses.
+describe_repository() {
+    : "${REGISTRY_USER:?set REGISTRY_USER}" "${REGISTRY_TOKEN:?set REGISTRY_TOKEN}"
+    local repo="${REGISTRY_REPO#docker.io/}" jwt body
+    jwt="$(python3 -c 'import json, os; print(json.dumps({"username": os.environ["REGISTRY_USER"], "password": os.environ["REGISTRY_TOKEN"]}))' \
+        | curl -fsS -H 'Content-Type: application/json' -d @- https://hub.docker.com/v2/users/login \
+        | python3 -c 'import json, sys; print(json.load(sys.stdin)["token"])')" || { echo "Docker Hub login failed" >&2; return 1; }
+    body="$(python3 -c 'import json, pathlib, sys; print(json.dumps({"full_description": pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"), "description": sys.argv[2]}))' \
+        "${HERE}/DOCKERHUB.md" "Judge, agent and model-serving images of HPCAgent-Bench (AMD, NVIDIA GH200, x86-64)")"
+    curl -fsS -X PATCH -H "Authorization: JWT ${jwt}" -H 'Content-Type: application/json' -d "${body}" \
+        "https://hub.docker.com/v2/repositories/${repo}/" >/dev/null || { echo "overview update failed" >&2; return 1; }
+    echo "${REGISTRY_REPO}: overview updated from DOCKERHUB.md"
+}
+
 promote_one() {
     local role="$1" cand live marker ext
     : "${CE_IMAGES:?set SCRATCH or CE_IMAGES}"
@@ -175,6 +191,9 @@ case "${action}" in
         ;;
     pull)
         pull_one "${1:?usage: registry.sh pull <role> [sha256:<digest>]}" "${2:-}" || failed=1
+        ;;
+    describe)
+        describe_repository || failed=1
         ;;
     *) usage ;;
 esac

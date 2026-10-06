@@ -11,8 +11,10 @@
 # other partitions.
 #
 # One job builds and verifies, so a build that cannot pass verification never reports success.
-# The build pulls first and keeps its caches by default (CE_PULL, CE_BUILD_CACHE in build_common.sh);
-# a pulled image is verified exactly like a built one.
+# With no CE_IMAGE_FLAVOR / CE_PULL given, a judge/agent image is the PUBLISHED one: the registry tag is pulled,
+# and only when that fails is the native flavor built for this machine. CE_IMAGE_FLAVOR=latest builds the
+# portable image (pull-first by build-inputs label, CE_PULL in build_common.sh). A pulled image is verified
+# exactly like a built one.
 # Every role the build wrote is verified (verify_image.sbatch) and marked .verified for
 # `registry.sh promote`.
 #
@@ -34,6 +36,15 @@ ulimit -c 0
 SCRATCH="${SCRATCH:?set SCRATCH}"
 REPO="${REPO:-${SLURM_SUBMIT_DIR:?submit from the checkout root or set REPO}}"
 IMAGE="${1:?usage: build_and_verify.sbatch <image directory under containers/images>}"
+# No flavor asked for: use the published image (pull the registry tag, CE_PULL=only), and only when it cannot
+# be pulled build the native flavor for this machine (an image whose names carry no flavor, the serving
+# engines, builds as it always does). Decided before build_common.sh is sourced, which fixes the names.
+pull_or_native=0
+if [[ -z "${CE_IMAGE_FLAVOR:-}" && -z "${CE_PULL:-}" && "${VERIFY_ONLY:-0}" != 1 ]] \
+    && grep -q "^[^#]*[[:space:]]${IMAGE}[[:space:]].*CE_IMAGE_FLAVOR" "${REPO}/containers/images/images.env"; then
+    pull_or_native=1
+    export CE_IMAGE_FLAVOR=latest CE_PULL=only
+fi
 # shellcheck source=build_common.sh
 source "${REPO}/containers/images/build_common.sh"
 
@@ -42,7 +53,16 @@ if [[ "${VERIFY_ONLY:-0}" == 1 ]]; then
 else
     echo "=== stage 1/2: build ${IMAGE}"
     mkdir -p "${CE_IMAGES:?}/logs"
-    bash "${REPO}/containers/images/build.sh" "${IMAGE}" 2>&1 | tee "${CE_IMAGES}/logs/build-${IMAGE}-${SLURM_JOB_ID}.log"
+    log="${CE_IMAGES}/logs/build-${IMAGE}-${SLURM_JOB_ID}.log"
+    if ! bash "${REPO}/containers/images/build.sh" "${IMAGE}" 2>&1 | tee "${log}"; then
+        [[ "${pull_or_native}" == 1 ]] || exit 1
+        echo "=== ${IMAGE}: the published image could not be pulled; building the native flavor for this machine"
+        export CE_IMAGE_FLAVOR=native CE_PULL=0
+        unset CE_IMAGE_TABLE
+        # shellcheck source=build_common.sh
+        source "${REPO}/containers/images/build_common.sh"
+        bash "${REPO}/containers/images/build.sh" "${IMAGE}" 2>&1 | tee -a "${log}"
+    fi
 fi
 
 # The roles the build wrote, as build.sh reads them from <image>/image.sh.
@@ -66,4 +86,4 @@ for role in ${roles}; do
 done
 [[ "${failed}" -eq 0 ]] || { echo "${failed} role(s) FAILED verification; nothing to promote" >&2; exit 1; }
 echo "BUILT AND VERIFIED: ${roles//$'\n'/ }. They keep their candidate names; promote with"
-echo "  containers/images/registry.sh promote ${roles//$'\n'/ }"
+echo "  CE_IMAGE_FLAVOR=${CE_IMAGE_FLAVOR} containers/images/registry.sh promote ${roles//$'\n'/ }"
