@@ -33,6 +33,7 @@ __all__ = [
     "Binding",
     "PackedGroup",
     "binding_from_spec",
+    "c_param",
     "declared_float_dtype",
     "dense_dtype",
     "dense_shape",
@@ -73,6 +74,16 @@ RESTRICT_KEYWORD = {"c": "restrict", "cpp": "__restrict__", "cuda": "__restrict_
 def restrict_kw(lang: str) -> str:
     """The no-alias qualifier as ``lang`` spells it (Sec. 5); C99 ``restrict`` for anything not C++-parsed."""
     return RESTRICT_KEYWORD.get(lang, "restrict")
+
+
+def c_param(arg: "Arg", lang: str = "c", element: str | None = None) -> str:
+    """``arg`` as a C parameter declaration in ``lang``'s ``restrict`` spelling (Sec. 5): a pointer
+    ``const``-qualified when read-only, a scalar always ``const``. ``element`` replaces a pointer's
+    element type (a GPU language's vendor type for a storage-only dtype)."""
+    if arg.kind == "ptr":
+        const = "const " if arg.is_const else ""
+        return f"{const}{element or c_type(arg.dtype)} *{restrict_kw(lang)} {arg.name}"
+    return f"const {c_type(arg.dtype)} {arg.name}"
 
 
 def workspace_c_params(lang: str = "c") -> tuple[str, str]:

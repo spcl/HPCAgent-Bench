@@ -15,7 +15,6 @@ import warnings
 __all__ = [
     "KMP_PAUSE_SYMBOL",
     "OMP_PAUSE_HARD",
-    "OMP_PAUSE_MODES",
     "OMP_PAUSE_SOFT",
     "OMP_RUNTIME_SONAMES",
     "exports",
@@ -32,8 +31,6 @@ OMP_RUNTIME_SONAMES = ("libgomp.so.1", "libomp.so.5", "libomp.so", "libiomp5.so"
 OMP_PAUSE_SOFT = 1
 OMP_PAUSE_HARD = 2
 
-#: name -> ``omp_pause_resource_t`` value, for a config/CLI knob.
-OMP_PAUSE_MODES = {"soft": OMP_PAUSE_SOFT, "hard": OMP_PAUSE_HARD}
 
 #: Exported by LLVM's libomp and Intel's libiomp5, never by libgomp. That family returns 1 from
 #: omp_pause_resource_all when the runtime was never initialised or is already paused, and it

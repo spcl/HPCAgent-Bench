@@ -3,9 +3,8 @@
 """``tests/data/observations-mini.db`` read through the real loader -- the small, committed,
 multi-treatment fixture the other test files' synthetic frames stand in for
 (:mod:`tests.data.make_observations_mini` documents how it was built). Exercised here end to end
-through :func:`hpcagent_bench.studies.read_observations` and the two scripts whose behaviour
-this session changed, so at least one test in the suite reads a REAL ``.db`` rather than a frame
-built in the test body.
+through :func:`hpcagent_bench.studies.setup_rows` and ``plot_score_change``, so at least one test in
+the suite reads a REAL ``.db`` rather than a frame built in the test body.
 """
 
 import pathlib
@@ -35,9 +34,9 @@ def test_read_observations_reads_the_extracted_db_the_same_shape_as_a_csv() -> N
 
 
 def test_a_perf_playbook_setup_from_the_real_shaped_fixture_never_enters_the_control_side() -> None:
-    """The regression this session's fix guards, read off a fixture shaped like a real extraction
-    rather than a hand-built frame in the test body."""
-    frame_all = score_change.load(FIXTURE, prefix="")
+    """A perf-playbook setup is a treatment, never the control, read off a fixture shaped like a real
+    extraction rather than a hand-built frame in the test body."""
+    frame_all = studies.setup_rows(FIXTURE, prefix="")
     control = score_change.control_rows(frame_all)
     assert not any("perf-playbook-cpu" in setup for setup in control.setup.unique())
     assert set(control.packet.unique()) == {""}
@@ -49,7 +48,7 @@ def test_three_treatments_against_the_fixtures_control_all_produce_a_panel() -> 
     panels side by side. ``tag`` is every kernel ANY setup of the experiment touched, built the same
     way :func:`plot_score_change.main` builds it, since :func:`one_treatment_panel` gates setup
     coverage against exactly this list (:func:`hpcagent_bench.stats.population.complete_setups`)."""
-    frame_all = score_change.load(FIXTURE, prefix="")
+    frame_all = studies.setup_rows(FIXTURE, prefix="")
     control = score_change.control_rows(frame_all)
     tag_kernels = sorted(frame_all["kernel"].dropna().astype(str).unique())
     built = {

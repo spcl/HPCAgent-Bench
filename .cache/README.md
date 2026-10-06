@@ -40,9 +40,7 @@ content-addressed in `cache/` and read through `views/<name>`, filled by
 
 A deterministic-framework sweep (`hpcagent-bench job baseline`, `docs/jobs/baseline.sbatch`) works under
 `${HPCAGENT_BENCH_RUNS_ROOT}/<job-kind>/<name>-<stamp>` (default root `${JIT_CACHE_ROOT}/runs`), never
-a bare `${SCRATCH}/<name>`. `job baseline` then points each column's shard DB at
-`<out_root>/db/<column>/`, merges the column's CSV rows into `${HPCAGENT_BENCH_RESULTS_DIR}/canon.db`
-(default `${JIT_CACHE_ROOT}/results`; `scripts/merge_canon_results.py`), and deletes the column's
-`dacecache-<column>*` build tree and shard DB only when the merged row count matches an independent
-count of the CSVs. The CSVs and the job log are never deleted; the CSVs are the hand-off
-`scripts/collect_canon.py` reads. Another framework family adds its own `<family>.db` there.
+a bare `${SCRATCH}/<name>`. `job baseline` points each column's shard DB at `<out_root>/db/<column>/`,
+records every kernel's row into `${HPCAGENT_BENCH_RESULTS_DIR}/canon.db` (default `${JIT_CACHE_ROOT}/results`)
+as it finishes, and deletes the column's `dacecache-<column>*` build tree and shard DB at the column's end.
+The job log is never deleted. Another framework family adds its own `<family>.db` there.

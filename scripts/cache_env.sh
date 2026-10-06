@@ -88,8 +88,8 @@ export HPCAGENT_BENCH_RUNS_ROOT="${HPCAGENT_BENCH_RUNS_ROOT:-${JIT_CACHE_ROOT}/r
 # before the work dir (build trees, per-rank shard DBs) is deleted -- never the destination a job
 # writes its OWN per-rank shards to directly (those still need one file per rank per job; see the
 # job-work-dir note above), or two jobs' rank 0 would race the same file. Consumers derive their own
-# table/filename under this root (`job baseline --phase finish` uses
-# ${HPCAGENT_BENCH_RESULTS_DIR}/canon.db via scripts/merge_canon_results.py) rather than a single
+# table/filename under this root (`job baseline` records into
+# ${HPCAGENT_BENCH_RESULTS_DIR}/canon.db) rather than a single
 # hardcoded name, so a second deterministic-framework family can add its own file here without
 # renaming this one.
 export HPCAGENT_BENCH_RESULTS_DIR="${HPCAGENT_BENCH_RESULTS_DIR:-${JIT_CACHE_ROOT}/results}"

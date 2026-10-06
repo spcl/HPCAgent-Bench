@@ -13,7 +13,6 @@ install, so a fork gate that fired on every ``dace_*`` name would make that impo
 column still looked fine locally.
 """
 
-import csv
 import types
 
 import pytest
@@ -165,94 +164,62 @@ def test_ranks_per_node_splits_the_node() -> None:
     assert preflight.thread_env(ranks_per_node=1) == whole
 
 
-def test_absent_shard_csvs_report_instead_of_tracebacking(tmp_path, capsys) -> None:
-    """The rollup is handed a shell GLOB, which bash passes through verbatim when nothing matches.
-
-    So "every rank died before writing a row" arrives as a path containing a `*`. It must say that
-    and return NO_ROWS -- an empty summary read as a clean run, or as an ordinary failure count of
-    zero-or-more, is the failure mode this guards."""
-    from hpcagent_bench.support.collect.sweep import NO_ROWS, summarize_csv
-
-    missing = str(tmp_path / "shard-*.csv")
-    assert summarize_csv([missing]) == NO_ROWS
-    out = capsys.readouterr().out
-    assert "absent" in out
-    assert "no rows in any shard CSV" in out and "produced nothing" in out
-
-
-def _sweep_row(**overrides):
-    """One CSV_FIELDS-shaped row for the summarize_csv tests below, all-green unless overridden."""
-    from hpcagent_bench.support.collect.sweep import CSV_FIELDS
-
-    row = dict.fromkeys(CSV_FIELDS, "")
-    row.update(
-        framework="dace_cpu",
+def _canon_row(**overrides):
+    """One canon row for the summarize tests below, all-green unless overridden."""
+    row = dict(
+        run="r",
+        column="dace_cpu",
         preset="p",
         datatype="float64",
         kernel="k",
         impl="parallel_cpu",
         status="ok",
         validated="True",
-        median_ms="1.0",
+        median_ms=1.0,
+        failure="",
+        error="",
     )
     row.update(overrides)
     return row
 
 
-def test_summarize_csv_separates_no_rows_from_a_real_failure_count(tmp_path, capsys) -> None:
-    """A missing/header-only CSV and a CSV with known failures must land on DIFFERENT signals: the
-    caller has to tolerate "56 kernels ran, 3 are known-broken" (a real count) without also
-    tolerating "the CSV does not exist because nothing ran" (NO_ROWS) -- collapsing both into the
-    same value is exactly the bug this fixes."""
-    from hpcagent_bench.support.collect.sweep import CSV_FIELDS, NO_ROWS, summarize_csv, write_csv_rows
+def test_summarize_separates_no_rows_from_a_real_failure_count(capsys) -> None:
+    """No row and rows with known failures land on DIFFERENT signals: a caller tolerates "56 kernels ran,
+    3 are known-broken" (a real count) without also tolerating "nothing ran" (NO_ROWS)."""
+    from hpcagent_bench.support.collect.sweep import NO_ROWS, summarize
 
-    header_only = tmp_path / "header-only.csv"
-    with open(header_only, "w", newline="") as fh:
-        csv.writer(fh).writerow(CSV_FIELDS)
-    assert summarize_csv([str(header_only)]) == NO_ROWS
-    out = capsys.readouterr().out
-    assert "no rows in any shard CSV" in out and "produced nothing" in out
-
-    all_green = tmp_path / "all-green.csv"
-    write_csv_rows([_sweep_row()], str(all_green))
-    assert summarize_csv([str(all_green)]) == 0
-
-    one_crash = tmp_path / "one-crash.csv"
-    write_csv_rows([_sweep_row(), _sweep_row(kernel="k2", status="crash", error="signal 11")], str(one_crash))
-    result = summarize_csv([str(one_crash)])
-    assert result == 1
-    out = capsys.readouterr().out
-    assert "1 CRASHES" in out
+    assert summarize([]) == NO_ROWS
+    assert "produced nothing" in capsys.readouterr().out
+    assert summarize([_canon_row()]) == 0
+    assert summarize([_canon_row(), _canon_row(kernel="k2", status="crash", error="signal 11")]) == 1
+    assert "1 CRASHES" in capsys.readouterr().out
 
 
 def test_cmd_run_framework_summarize_maps_to_the_0_1_2_contract(tmp_path, monkeypatch, capsys) -> None:
-    """The CLI must not collapse summarize_csv's verdict into a plain 0/1: 0 all green, 1 a real
-    measurement with known failures, 2 the sweep produced nothing (missing or header-only CSV). A
-    CI gate that tolerates case 1 must never also tolerate case 2 landing on the same exit code."""
+    """The CLI keeps summarize's verdict three-way: 0 all green, 1 a real measurement with known failures,
+    2 the sweep produced nothing. A CI gate that tolerates case 1 must never also tolerate case 2."""
     from hpcagent_bench import cli
     from hpcagent_bench.harness import recording
-    from hpcagent_bench.support.collect.sweep import CSV_FIELDS, write_csv_rows
+    from hpcagent_bench.support.collect import canon_db
 
     monkeypatch.setattr(recording, "aggregate", lambda *a, **k: 0)
 
-    missing = tmp_path / "missing.csv"
-    assert cli.cmd_run_framework(types.SimpleNamespace(summarize=[str(missing)])) == 2
+    def verdict(db, run=None) -> int:
+        return cli.cmd_run_framework(types.SimpleNamespace(summarize=[db], canon_run=run))
+
+    empty = tmp_path / "empty.db"
+    assert verdict(empty) == 2
     assert "produced nothing" in capsys.readouterr().out
 
-    header_only = tmp_path / "header-only.csv"
-    with open(header_only, "w", newline="") as fh:
-        csv.writer(fh).writerow(CSV_FIELDS)
-    assert cli.cmd_run_framework(types.SimpleNamespace(summarize=[str(header_only)])) == 2
-    assert "produced nothing" in capsys.readouterr().out
-
-    one_crash = tmp_path / "one-crash.csv"
-    write_csv_rows([_sweep_row(), _sweep_row(kernel="k2", status="crash", error="signal 11")], str(one_crash))
-    assert cli.cmd_run_framework(types.SimpleNamespace(summarize=[str(one_crash)])) == 1
+    one_crash = tmp_path / "one-crash.db"
+    canon_db.record(one_crash, [_canon_row(), _canon_row(kernel="k2", status="crash", error="signal 11")])
+    assert verdict(one_crash) == 1
     assert "CRASHES" in capsys.readouterr().out
+    assert verdict(one_crash, run="another") == 2
 
-    all_green = tmp_path / "all-green.csv"
-    write_csv_rows([_sweep_row()], str(all_green))
-    assert cli.cmd_run_framework(types.SimpleNamespace(summarize=[str(all_green)])) == 0
+    all_green = tmp_path / "all-green.db"
+    canon_db.record(all_green, [_canon_row()])
+    assert verdict(all_green) == 0
 
 
 def test_the_build_cache_pins_are_applied_and_survive_a_hostile_conf() -> None:

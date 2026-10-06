@@ -35,7 +35,7 @@ A proposal that breaks any of them is returned with its reasons rather than appl
 alternative -- applying the parts that pass -- writes a manifest nobody proposed.
 
 The last section is the consumer of all of the above: once every kernel has a resolved footprint
-at every rung, a corpus sweep no longer has to GUESS which rank gets which kernel.
+at every rung, a corpus sweep need not GUESS which rank gets which kernel.
 :func:`cost_vector` turns the ladder into a per-kernel prediction and :func:`pack_lpt` splits the
 corpus across ranks by it, as a pure function so every rank computes the same answer alone.
 """
@@ -112,13 +112,11 @@ __all__ = [
     "is_power_of_two",
     "is_real",
     "kernel_memory_gb",
-    "ladder_violations",
     "layout_bound_namespace",
     "leading_axis",
     "node_footprint_violations",
     "pack_lpt",
     "parameters_span",
-    "partition_loads",
     "preset_cost",
     "preset_span",
     "problem_size",
@@ -343,37 +341,6 @@ def constrain_derived(
             if not constraint_violations(spec, preset, candidate):
                 out[preset] = candidate
                 break
-    return out
-
-
-def ladder_violations(ladder: Mapping[str, Mapping[str, FuzzValue]]) -> list[str]:
-    """Every way ``ladder`` is not monotone, as human-readable strings (empty when it is).
-
-    A rung that shrinks where its neighbours grow is the failure this catches: it makes ``M``
-    slower than ``L``, or puts the fuzzer's ``[L, XL]`` interval the wrong way round. A pair of
-    rungs where no symbol grows is caught too: three presets at one size are one benchmark
-    measured three times, not a ladder.
-    """
-    out: list[str] = []
-    for name in sorted(ladder.get("S", {})):
-        series = [(preset, ladder[preset][name]) for preset in PRESETS if preset in ladder and name in ladder[preset]]
-        numeric = [
-            (preset, value)
-            for preset, value in series
-            if isinstance(value, (int, float)) and not isinstance(value, bool)
-        ]
-        for (lo_name, lo), (hi_name, hi) in zip(numeric, numeric[1:]):
-            if hi < lo:
-                out.append(f"{name}: {lo_name}={lo} > {hi_name}={hi}")
-    # Timed rungs only: the kept S is a smoke rung the test suite runs at, and a proposal whose M
-    # lands on the size S already declares is not thereby a broken ladder.
-    for lo_name, hi_name in zip(PRESETS[1:], PRESETS[2:]):
-        if lo_name not in ladder or hi_name not in ladder:
-            continue
-        lo_vals, hi_vals = ladder[lo_name], ladder[hi_name]
-        grown = any(is_real(v) and is_real(top := hi_vals.get(k)) and top > v for k, v in lo_vals.items())
-        if not grown:
-            out.append(f"{lo_name}->{hi_name}: no symbol strictly increases, not a ladder")
     return out
 
 
@@ -1022,14 +989,6 @@ def stride_partition(names: Sequence[str], ranks: int) -> list[list[str]]:
     if ranks < 1:
         raise ValueError(f"a partition needs at least one rank, got {ranks}")
     return [list(names[index::ranks]) for index in range(ranks)]
-
-
-def partition_loads(partition: Sequence[Sequence[str]], costs: Mapping[str, KernelCost]) -> list[float]:
-    """Each rank's summed :attr:`KernelCost.predicted_time`. A kernel with no prediction adds 0."""
-    return [
-        sum(costs[name].predicted_time for name in kernels if name in costs and costs[name].resolved)
-        for kernels in partition
-    ]
 
 
 def node_footprint_violations(

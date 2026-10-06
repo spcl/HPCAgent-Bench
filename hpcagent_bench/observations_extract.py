@@ -56,6 +56,8 @@ import sys
 from collections.abc import Iterable, Iterator, Mapping
 from typing import Any, NamedTuple
 
+from hpcagent_agent.driver.agent_driver import CANCELLED_MARKER
+from hpcagent_agent.driver.promote_unsubmitted import PROMOTED_TAG
 from hpcagent_bench import config, data_guard, frozen_observations
 from hpcagent_bench.harness import denominator, results_db, scoring, timing
 from hpcagent_bench.harness.native_call import TimingProbe
@@ -67,7 +69,6 @@ from hpcagent_bench.studies import agent_indices, judge_database, setup_of
 
 __all__ = [
     "ADHOC_SETUP",
-    "CANCELLED_MARKER",
     "CANON_MARKER",
     "CELL_TALLY",
     "C_LANGUAGE",
@@ -81,7 +82,6 @@ __all__ = [
     "KIND_OPTIMIZER",
     "NO_MEASUREMENT_REASON",
     "PLATFORM",
-    "PROMOTED_OPTIMIZER",
     "REGRADE_ROWS",
     "REQUEST_KINDS",
     "RETIMED",
@@ -189,10 +189,6 @@ C_REFERENCE_FIX_MS = 1787702400000
 #: Language the C reference defect applies to. `cpp` shared the defect but no cpp setup appears in the
 #: llr8 experiment, so widening this would be untested rather than safer.
 C_LANGUAGE = "c"
-
-
-#: The driver's marker for a task the JOB took down (``agent_driver.CANCELLED_MARKER``, T6).
-CANCELLED_MARKER = "cancelled"
 
 
 #: Prefix marking each canonicalization result line in a canon log.
@@ -565,10 +561,6 @@ def rederived_cell_suspect(cell: dict[str, Any]) -> int:
     shape = json.loads(str(cell.get("shape") or "{}"))
     device = cell.get("residency") == "device"
     return int(scoring.floor_suspect(spec, shape, ratio, float(cell.get("baseline_ns") or 0), native, device=device))
-
-
-#: ``optimizer`` of a promoted answer, spelled as ``agent/hpcagent_agent/driver/promote_unsubmitted.py`` writes it.
-PROMOTED_OPTIMIZER = "promoted-unsubmitted"
 
 
 PLATFORM: str = population.PLATFORM_COLUMN
@@ -1205,7 +1197,7 @@ def apply_promotions(
     """Rows plus one graded row per PROMOTION regrade (``grade-under worklist``).
 
     A promotion that verified becomes the episode's ``submission``, tagged
-    :data:`PROMOTED_OPTIMIZER`; one that failed the held-out inputs becomes an ``attempt`` with its
+    :data:`PROMOTED_TAG`; one that failed the held-out inputs becomes an ``attempt`` with its
     reason, so the episode stays unsolved. Identity columns come from the episode's newest ``call``
     row in the same job. An episode that already holds a submission or attempt is left alone -- it
     spent its own submission, which is why the promotion was never owed -- unless that row is a
@@ -1240,7 +1232,7 @@ def apply_promotions(
                 "judge_db": new["db"],
                 "ts_ms": key[3],
                 "row_kind": "submission" if verified else "attempt",
-                "optimizer": PROMOTED_OPTIMIZER,
+                "optimizer": PROMOTED_TAG,
                 "correct": blank(new.get("correct")),
                 "build_ok": blank(new.get("build_ok")),
                 "reason": "" if verified else new.get("reason", ""),

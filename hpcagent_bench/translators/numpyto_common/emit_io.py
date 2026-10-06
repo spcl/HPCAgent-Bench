@@ -13,9 +13,9 @@ refreshes it but never clobbers an override. To turn a generated file into
 an override, delete the marker line (or replace the file).
 """
 
-import os
 import pathlib
 
+from hpcagent_bench.framework_cache import write_atomic
 from hpcagent_bench.translators.numpyto_common.naming import short_for
 
 __all__ = [
@@ -24,7 +24,6 @@ __all__ = [
     "first_line",
     "is_generated",
     "is_override",
-    "write_atomic_text",
     "write_generated",
     "write_python_sibling",
 ]
@@ -80,15 +79,6 @@ def is_override(out_path: str | pathlib.Path) -> bool:
     return p.exists() and not is_generated(p)
 
 
-def write_atomic_text(path: str | pathlib.Path, text: str) -> None:
-    """Replace ``path`` with ``text`` through a temp file and a rename, so a reader never sees a
-    half-written file."""
-    p = pathlib.Path(path)
-    tmp = p.with_name(f".{p.name}.tmp{os.getpid()}")
-    tmp.write_text(text)
-    os.replace(tmp, p)
-
-
 def write_generated(out_path: str | pathlib.Path, src: str, *, line_comment: str = "# ", source: str = "") -> str:
     """Write ``src`` to ``out_path`` with the auto marker prepended, unless
     a hand-written override already occupies that name.
@@ -107,8 +97,7 @@ def write_generated(out_path: str | pathlib.Path, src: str, *, line_comment: str
         f"edit the numpy reference and regenerate, or delete this line to keep "
         f"local edits as a hand override.\n"
     )
-    p.parent.mkdir(parents=True, exist_ok=True)
-    write_atomic_text(p, note + src)
+    write_atomic(p, (note + src).encode())
     return "ok"
 
 

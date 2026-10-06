@@ -1,14 +1,8 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""``model_of`` is a CONSUMED function, and deleting it breaks two figures at import time.
-
-THE FAILURE THIS PREVENTS. A consolidation commit deleted this function while
-``statistics/plot_tokens.py``, ``plot_score_change.py``, ``plot_setup_summary.py`` and
-``plot_single_shot_score.py`` still called it, so all four died with ``AttributeError`` the next
-time anyone drew a figure -- and nothing in the suite noticed, because no test called it and the
-scripts have no import-time consumer. These are that consumer: the parametrised cases below fail if
-the function disappears again, and the scripts are named so the next person to move it knows who
-pays.
+"""``model_of`` is a CONSUMED function: the figure scripts call it only when they run, so no import
+fails when it goes. The parametrised cases below are that consumer, and name the callers so whoever
+moves it knows who pays.
 """
 
 import importlib
@@ -21,12 +15,12 @@ from hpcagent_bench import study_tags
 #: The scripts that call it. A figure that cannot resolve its model draws every setup as one series.
 CALLERS = (
     "statistics/plot_score_change.py",
-    "statistics/plot_setup_summary.py",
+    "hpcagent_bench/studies.py",
 )
 
 
 def test_model_of_exists_and_is_importable() -> None:
-    """The bare existence check, because the regression was an AttributeError and nothing else."""
+    """The bare existence check: losing it is an AttributeError at figure time and nothing else."""
     module = importlib.import_module("hpcagent_bench.study_tags")
     assert callable(module.model_of)
 

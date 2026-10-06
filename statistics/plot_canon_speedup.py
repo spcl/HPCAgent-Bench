@@ -2,9 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Median speedup over the track baseline, one bar per framework, from one canon sweep.
 
-Ported from the reproducibility artifact's ``plot_canon_speedup.py``, reading the ``canon`` table
-scripts/collect_canon.py writes instead of a CSV, and drawn with :mod:`hpcagent_bench.stats.style`
-instead of the artifact's own (removed) ``benchlib.style``. The table reader itself lives in
+Reads the ``canon`` table a baseline sweep records (:mod:`hpcagent_bench.support.collect.canon_db`)
+and draws with :mod:`hpcagent_bench.stats.style`. The table reader itself lives in
 :mod:`hpcagent_bench.stats.canon`, shared with the kernel-comparison figure.
 
 Median is what the bars show, and on its own it would mislead: a framework can sit near 1.00x
@@ -37,7 +36,7 @@ if TYPE_CHECKING:
     import matplotlib.axes
     import matplotlib.figure
 
-#: The table scripts/collect_canon.py writes.
+#: The table a baseline sweep records into.
 TABLE: str = "canon"
 
 #: Baselines the figure may be drawn against. Numba is one reference of the configured
@@ -46,8 +45,8 @@ TABLE: str = "canon"
 BASELINES: tuple[str, ...] = ("numba", "cc")
 
 #: Columns on the figure, in axis order; each is labelled by :func:`study_tags.framework_name`.
-#: dace_cpu / dace_gpu -- the non-canonicalized DaCe columns -- are collected by
-#: scripts/collect_canon.py but drawn only on --columns request: this figure answers what
+#: dace_cpu / dace_gpu -- the non-canonicalized DaCe columns -- are recorded by every sweep that
+#: runs them but drawn only on --columns request: this figure answers what
 #: canonicalization is worth against the compilers, not what DaCe is worth against itself.
 DRAW: tuple[str, ...] = ("cc", "cc_autopar", "numba", "dace_cpu_canonicalize", "dace_gpu_canonicalize")
 

@@ -13,6 +13,7 @@ import contextlib
 import json
 import pathlib
 
+from hpcagent_agent.driver import agent_driver
 from hpcagent_bench import observations_extract as extract_llr40
 from hpcagent_bench import studies
 from hpcagent_bench.cluster import merge_results
@@ -159,7 +160,7 @@ def test_an_episode_the_job_cancelled_is_flagged_on_its_row(tmp_path: pathlib.Pa
     """T6/X8: an agent still running when the job went down ends ``cancelled``, and the flag has to
     reach the row -- the analysis drops the task off it."""
     job_dir = job(tmp_path)
-    write_record(job_dir, 0, result=extract_llr40.CANCELLED_MARKER)
+    write_record(job_dir, 0, result=agent_driver.CANCELLED_MARKER)
     write_record(job_dir, 1)
 
     rows = {row["episode_id"]: row["episode_cancelled"] for row in episode_rows(merged(job_dir))}

@@ -28,7 +28,8 @@ from typing import Any, NamedTuple, NotRequired, TextIO, TypedDict, cast
 
 from hpcagent_agent.driver import harnesses, promote_unsubmitted, stream_idle_timeout, token_cost
 from hpcagent_agent.driver.harnesses import Closing, Context, Harness
-from hpcagent_agent.driver.token_cost import as_block
+from hpcagent_agent.driver.token_cost import ATTEMPTS_NAME, as_block
+from hpcagent_agent.tools import http_json
 
 __all__ = [
     "AGENT_CRASH_ATTEMPTS",
@@ -45,7 +46,6 @@ __all__ = [
     "AGGREGATE_PROBE_SECONDS",
     "AGGREGATE_SATURATED_FRACTION",
     "API_TIMEOUT_MARK",
-    "ATTEMPTS_NAME",
     "CANCELLED_MARKER",
     "CLAUDE_BACKGROUND_TASKS_OFF",
     "CLAUDE_CONTEXT_CAP",
@@ -95,7 +95,6 @@ __all__ = [
     "TOKEN_DIR_NAME",
     "TOKEN_FOLD",
     "TOKEN_POLL_SECONDS",
-    "WORKER_TOKEN_ENV",
     "AgentState",
     "AggregateState",
     "Problem",
@@ -280,8 +279,6 @@ def as_problem(raw: object) -> Problem | None:
 
 def as_int(raw: object) -> int:
     """One JSON value as an integer. A value carrying no number at all reads 0."""
-    if isinstance(raw, bool):
-        return int(raw)
     if isinstance(raw, (int, float)):
         return int(raw)
     if isinstance(raw, str) and raw.strip():
@@ -291,8 +288,6 @@ def as_int(raw: object) -> int:
 
 def as_float(raw: object) -> float:
     """One JSON value as a float. A value carrying no number at all reads 0.0."""
-    if isinstance(raw, bool):
-        return float(raw)
     if isinstance(raw, (int, float)):
         return float(raw)
     if isinstance(raw, str) and raw.strip():
@@ -1729,10 +1724,6 @@ def mark_cancelled(workdir: pathlib.Path, returncode: int) -> None:
     except OSError:
         pass
 
-
-#: The attempt ledger, one JSON line per attempt in the worker directory. It outlives the wipe
-#: below, so it is the only place that says how many attempts a task took and when each one ran.
-ATTEMPTS_NAME = "attempts.jsonl"
 
 #: What a fresh relaunch KEEPS in the worker directory: the task's inputs, the ledger, and (added at
 #: the call site) the submission marker plus every transcript already moved aside.
@@ -3175,7 +3166,6 @@ FUSED_PROBLEM_KEYS = ("env_file", "setup")
 FUSED_PROBLEM_FLAG = "--fused-problem"
 #: The same names hpcagent_bench.fused reads on the judge side (restated: this driver is stdlib-only).
 SETUPS_DIR_ENV = "HPCAGENT_BENCH_FUSED_SETUPS_DIR"
-WORKER_TOKEN_ENV = "HPCAGENT_BENCH_WORKER_TOKEN"
 TOKEN_DIR_NAME = "fused-tokens"
 SETUP_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
@@ -3222,7 +3212,7 @@ def fused_child_env(
             environment.pop(key, None)
         else:
             environment[key] = value
-    environment[WORKER_TOKEN_ENV] = token
+    environment[http_json.WORKER_TOKEN_ENV] = token
     environment[MATERIAL_DIR_ENV] = material
     environment[START_GATE_DIR_ENV] = gate
     return environment

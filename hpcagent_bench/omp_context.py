@@ -27,7 +27,6 @@ Nothing here reads the image: a host without ``<root>/<context>/`` (a login node
 :func:`context_env` is empty there and children run as before.
 """
 
-import ast
 import functools
 import json
 import os
@@ -35,7 +34,7 @@ import pathlib
 import re
 import subprocess
 import sys
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Set as AbstractSet
 from typing import Protocol
 
 from hpcagent_bench import config, openmp_runtimes
@@ -66,7 +65,7 @@ __all__ = [
     "context_env",
     "context_for_family",
     "context_for_library",
-    "context_for_python_source",
+    "context_for_python_imports",
     "context_for_toolchain",
     "context_root",
     "context_runtime",
@@ -142,19 +141,9 @@ def context_for_toolchain(toolchain: HasFamily) -> str:
     return context_for_family(toolchain.family) if toolchain.family else DEFAULT_CONTEXT
 
 
-def context_for_python_source(source: str) -> str:
-    """The context of a python delivery: llvm when it imports numba, else gnu (numpy on OpenBLAS, torch,
-    dace, cupy and triton run on the image default)."""
-    try:
-        tree = ast.parse(source)
-    except (SyntaxError, ValueError):
-        return DEFAULT_CONTEXT
-    imported: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            imported.update(alias.name.split(".")[0] for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
-            imported.add(node.module.split(".")[0])
+def context_for_python_imports(imported: AbstractSet[str]) -> str:
+    """The context of a python delivery importing the top-level modules ``imported``: llvm when it imports
+    numba, else gnu (numpy on OpenBLAS, torch, dace, cupy and triton run on the image default)."""
     return LLVM if imported & LLVM_MODULES else DEFAULT_CONTEXT
 
 

@@ -280,7 +280,7 @@ def test_a_promotion_is_verified_by_its_run_row_and_timed_by_its_cells_row(
     call = {**submission(12, 0.5), "row_kind": "call", "optimizer": "qwen"}
     by_ts, counts, promotions = extracted([call], str(tmp_path / "promote"), str(tmp_path / "promote-v5-cells"))
     row = by_ts[20]
-    assert (row["row_kind"], row["optimizer"]) == (record, extract.PROMOTED_OPTIMIZER)
+    assert (row["row_kind"], row["optimizer"]) == (record, extract.PROMOTED_TAG)
     assert promotions["promoted" if verified else "promotion_failed"] == 1
     if verified:
         assert (row["speedup"], row["timing_reduction"], row["grade_final_status"]) == (

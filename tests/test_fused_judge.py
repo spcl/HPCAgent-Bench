@@ -166,7 +166,10 @@ def test_a_request_without_a_token_is_told_where_the_token_is(fused_job: dict[st
     with pytest.raises(fused.FusedRefusal) as refused:
         fused.token_setup("")
     assert refused.value.status == 403
-    assert fused.TOKEN_HEADER in refused.value.message and f"${fused.TOKEN_ENV}" in refused.value.message
+    assert (
+        http_json.WORKER_TOKEN_HEADER in refused.value.message
+        and f"${http_json.WORKER_TOKEN_ENV}" in refused.value.message
+    )
 
 
 def test_a_episode_id_of_another_setup_is_refused(fused_job: dict[str, str]) -> None:
@@ -323,7 +326,7 @@ class HeaderEcho(BaseHTTPRequestHandler):
         pass
 
     def reply(self) -> None:
-        HeaderEcho.headers_seen.append(self.headers.get(fused.TOKEN_HEADER, ""))
+        HeaderEcho.headers_seen.append(self.headers.get(http_json.WORKER_TOKEN_HEADER, ""))
         self.rfile.read(int(self.headers.get("Content-Length") or 0))
         data = b'{"ok": true, "correct": true}'
         self.send_response(200)
@@ -360,16 +363,11 @@ def test_every_judge_client_sends_the_token_only_inside_a_fused_job(
     token: str, echo: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The agent tools, JudgeClient and the exit promotion all name the worker."""
-    monkeypatch.setenv(fused.TOKEN_ENV, token)
-    assert (http_json.WORKER_TOKEN_ENV, http_json.WORKER_TOKEN_HEADER) == (fused.TOKEN_ENV, fused.TOKEN_HEADER)
+    monkeypatch.setenv(http_json.WORKER_TOKEN_ENV, token)
     http_json.call_json(f"{echo}/score", b"{}", 10)
     client = tools.JudgeClient(echo)
     client.health()
     client.submit(Submission(language="c", source="x", build=[]), KERNEL)
-    assert (promote_unsubmitted.WORKER_TOKEN_ENV, promote_unsubmitted.WORKER_TOKEN_HEADER) == (
-        fused.TOKEN_ENV,
-        fused.TOKEN_HEADER,
-    )
     promote_unsubmitted.promote(echo, {"kernel": KERNEL, "language": "c", "source": "x", "episode_id": "r"}, False, 0)
     assert HeaderEcho.headers_seen == [token] * 4
 

@@ -186,7 +186,6 @@ __all__ = [
     "source_units",
     "std_flag",
     "stdpar_link_flags",
-    "strip_launcher",
     "submission_context",
     "submission_toolchain",
     "subst_map",
@@ -1117,24 +1116,6 @@ def compiler_launcher() -> tuple[str, ...]:
         return ()
     os.environ.setdefault("CCACHE_NAMESPACE", osinfo.cpu_model())
     return (exe,)
-
-
-def strip_launcher(argv: Sequence[str]) -> tuple[str, ...]:
-    """``argv`` with a leading :func:`compiler_launcher` prefix removed, else ``argv`` unchanged.
-
-    The inverse of :func:`compiler_launcher`, for a caller that reads a RECORDED compile line
-    (an opt report's ``$ <argv>`` banner, a compile database) and needs the compiler that ran
-    rather than the cache in front of it. The recorded token may be the launcher's path or a bare
-    name found on PATH, so it is matched by its NAME -- ccache's own rule for launcher mode
-    (``is_ccache_executable``: the file name, not what it resolves to). A masquerade symlink such
-    as ``/usr/lib/ccache/g++`` resolves to the ccache binary yet IS the compiler: ccache runs the
-    next ``g++`` on PATH through it, so dropping it would leave a flag as the compiler.
-    """
-    argv = tuple(argv)
-    launcher = compiler_launcher()
-    if not argv or not launcher:
-        return argv
-    return argv[1:] if pathlib.Path(argv[0]).name == pathlib.Path(launcher[0]).name else argv
 
 
 def _render_argv(tokens: list[str], subst: dict[str, str], *, cacheable_lang: str | None = None) -> list[str]:

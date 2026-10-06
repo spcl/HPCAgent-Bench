@@ -15,7 +15,8 @@ are in [DESIGN_data_collection_and_scoring.md](DESIGN_data_collection_and_scorin
 | study run roots (`<root>/<experiment>-<stamp>/<job>/judge/rank-N/*.db`, agent metadata) | `$SCRATCH/hpcagent-bench-runs` | `--runs` |
 | regrade shards (`regrade-*.db`, `regrade-cells-*.db`) and mlscale grades (`scaling-grade-*.db`) | wherever the regrade/grade jobs wrote them | `--db-root`, `--regrades` |
 | frozen observations (the extracted rows of jobs whose judge DBs are gone) | `$HPCAGENT_BENCH_FROZEN_OBSERVATIONS` | `--frozen-observations` (`''` = none) |
-| other frozen CSV sweeps (e.g. a canon sweep's `<column>.rank<N>.csv`) | none | `--csv-root` |
+| the canon baselines (`canon.db`) | `$HPCAGENT_BENCH_RESULTS_DIR` | `--db-root` |
+| other frozen CSV roots | none | `--csv-root` |
 
 The runs root and the frozen directory are protected: no collection, extraction or cleanup tool
 writes into them or removes anything under them. Add more protected roots with
@@ -29,7 +30,7 @@ export REPO=$PWD RUNS=$SCRATCH/hpcagent-bench-runs DATA=$SCRATCH/hb-data-$(date 
 
 # 1. collect: copy run metadata, every DB (as a consistent snapshot) and the frozen CSVs, checksum
 hpcagent-bench collect copy --out "$DATA" --runs "$RUNS" --db-root "$SCRATCH/regrades" \
-    --csv-root "$SCRATCH/canon-sweep"
+    --db-root "$HPCAGENT_BENCH_RESULTS_DIR"
 hpcagent-bench collect archive "$DATA"          # verify, then $DATA.tar.zst beside it
 
 # elsewhere: unpack, verify, and point the tools at the copy
