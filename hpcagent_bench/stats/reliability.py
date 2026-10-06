@@ -9,8 +9,9 @@ never over kernels: a handful of kernels supports no corpus claim, twenty runs o
 * Median speedup over all graded runs (unsolved at 1x, the score), and over the solved runs alone,
   each with the exact distribution-free order-statistic interval (:func:`median_interval`).
 * Spread: the log2 interquartile range and log2 range of the solved runs.
-* Two setups on one kernel: Fisher's exact test on the solve counts and the Mann-Whitney U test on
-  the scored runs (:func:`compare_setups`), Holm-adjusted across the kernels compared.
+* Two setups on one kernel: the configured proportion test on the solve counts (``statistics.proportion_test``,
+  Fisher's exact by default) and the Mann-Whitney U test on the scored runs (:func:`compare_setups`), both
+  adjusted across the kernels compared by ``statistics.correction`` (Benjamini-Hochberg by default).
 
 A cell holding any OWED run -- an answer still owed its final grade, or a run that submitted nothing and
 is owed a rerun in its slot -- is refused (:class:`OwedRunsError`): an owed run is neither solved nor
@@ -20,13 +21,12 @@ unsolved, and dropping it would bias the rate toward whichever outcome lands fir
 import dataclasses
 import math
 from collections.abc import Sequence
-from typing import NamedTuple
 
 import numpy as np
 import pandas as pd
-from scipy.stats import binom, binomtest, fisher_exact  # pyright: ignore[reportMissingTypeStubs]
+from scipy.stats import binom, binomtest  # pyright: ignore[reportMissingTypeStubs]
 
-from hpcagent_bench.stats import population, summary
+from hpcagent_bench.stats import population, significance, summary
 
 __all__ = [
     "CONFIDENCE",
@@ -39,7 +39,6 @@ __all__ = [
     "clopper_pearson",
     "compare_cells",
     "compare_setups",
-    "holm",
     "log2_spread",
     "median_interval",
     "median_ranks",
@@ -179,22 +178,8 @@ def reliability_table(cells: Sequence[CellReliability]) -> pd.DataFrame:
     )
 
 
-def holm(pvalues: Sequence[float]) -> list[float]:
-    """Holm's step-down adjustment of ``pvalues``, in their own order."""
-    order = sorted(range(len(pvalues)), key=lambda index: pvalues[index])
-    adjusted = [math.nan] * len(pvalues)
-    running = 0.0
-    for rank, index in enumerate(order):
-        running = max(running, min(1.0, (len(pvalues) - rank) * pvalues[index]))
-        adjusted[index] = running
-    return adjusted
-
-
-class SolveCount(NamedTuple):
-    """How many of a cell's graded runs solved."""
-
-    solved: int
-    runs: int
+#: How many of a cell's graded runs solved: the proportion tests' input.
+SolveCount = significance.SolveCount
 
 
 def solve_count(group: pd.DataFrame) -> SolveCount:
@@ -204,38 +189,44 @@ def solve_count(group: pd.DataFrame) -> SolveCount:
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class SetupComparison:
-    """``left`` against ``right`` on one kernel, each over its own runs."""
+    """``left`` against ``right`` on one kernel, each over its own runs. ``proportion_test`` names the test
+    behind ``proportion_p``, ``correction`` the one behind both adjusted values."""
 
     kernel: str
     left: SolveCount
     right: SolveCount
-    fisher_p: float
+    proportion_test: str
+    proportion_p: float
     mann_whitney_p: float
-    #: Both p values Holm-adjusted across the kernels of one :func:`compare_setups` call.
-    fisher_p_holm: float = math.nan
-    mann_whitney_p_holm: float = math.nan
+    #: Both p values adjusted across the kernels of one :func:`compare_setups` call.
+    correction: str = ""
+    proportion_p_adjusted: float = math.nan
+    mann_whitney_p_adjusted: float = math.nan
 
 
 def compare_cells(kernel: str, one: pd.DataFrame, other: pd.DataFrame) -> SetupComparison:
-    """One kernel's two cells: Fisher's exact test on solved/unsolved, Mann-Whitney U on the scored runs."""
+    """One kernel's two cells: the configured proportion test on solved/unsolved, Mann-Whitney U on the
+    scored runs."""
     left, right = solve_count(one), solve_count(other)
-    table = [[left.solved, left.runs - left.solved], [right.solved, right.runs - right.solved]]
-    fisher = float(fisher_exact(table).pvalue)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownArgumentType]
+    tested = significance.proportion(left, right)
     _, mann_whitney = summary.rank_sum_test(one["speedup"].tolist(), other["speedup"].tolist())
-    return SetupComparison(kernel, left, right, fisher, mann_whitney)
+    return SetupComparison(kernel, left, right, tested.label, tested.pvalue, mann_whitney)
 
 
 def compare_setups(runs: pd.DataFrame, left: str, right: str) -> list[SetupComparison]:
-    """``left`` against ``right`` on every kernel both ran (:func:`compare_cells`), both p values
-    Holm-adjusted across those kernels. Refuses owed runs (:class:`OwedRunsError`)."""
+    """``left`` against ``right`` on every kernel both ran (:func:`compare_cells`), both p values adjusted
+    across those kernels by ``statistics.correction``. Refuses owed runs (:class:`OwedRunsError`)."""
     cells = cell_runs(runs.loc[runs["setup"].isin([left, right])])
     kernels = sorted(
         {kernel for setup, kernel in cells if setup == left} & {kernel for setup, kernel in cells if setup == right}
     )
     raw = [compare_cells(kernel, cells[(left, kernel)], cells[(right, kernel)]) for kernel in kernels]
-    fisher = holm([row.fisher_p for row in raw])
-    mann_whitney = holm([row.mann_whitney_p for row in raw])
+    name = significance.configured().correction.name
+    proportion = significance.correct([row.proportion_p for row in raw], test=name)
+    mann_whitney = significance.correct([row.mann_whitney_p for row in raw], test=name)
     return [
-        dataclasses.replace(row, fisher_p_holm=fisher[index], mann_whitney_p_holm=mann_whitney[index])
+        dataclasses.replace(
+            row, correction=name, proportion_p_adjusted=proportion[index], mann_whitney_p_adjusted=mann_whitney[index]
+        )
         for index, row in enumerate(raw)
     ]

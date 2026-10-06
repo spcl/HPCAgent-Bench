@@ -15,11 +15,13 @@ so 1 is no effect and > 1 is an improvement on both axes. An intervention is a p
 
 ``rho`` is ``exp`` of the mean per-task log delta and :func:`bootstrap_interval` bounds only that.
 Significance is a different parameter: the Hodges-Lehmann pseudo-median of the same deltas with its
-Walsh interval and signed-rank p (:func:`hpcagent_bench.stats.summary.paired_change`), withheld as
-``underpowered`` below :data:`hpcagent_bench.stats.summary.MIN_PAIRS_FOR_INTERVAL`.
+Walsh interval and signed-rank p, the registered ``wilcoxon`` paired test (:data:`TEST`,
+:mod:`hpcagent_bench.stats.significance`), withheld as ``underpowered`` below
+:data:`hpcagent_bench.stats.summary.MIN_PAIRS_FOR_INTERVAL`.
 
-Verdicts need a declared family: :func:`family_rows` corrects across it (Benjamini-Hochberg), since
-per-row 5% thresholds over twelve tests fire on 46% of null tables."""
+Verdicts need a declared family: :func:`family_rows` corrects across it with the configured correction
+(``statistics.correction``, Benjamini-Hochberg by default), since per-row 5% thresholds over twelve tests
+fire on 46% of null tables."""
 
 import math
 import random
@@ -27,8 +29,7 @@ import statistics
 from dataclasses import dataclass
 from collections.abc import Mapping, Sequence
 
-from hpcagent_bench.stats import inference
-from hpcagent_bench.stats import summary
+from hpcagent_bench.stats import significance, summary
 
 __all__ = [
     "ALPHA",
@@ -39,6 +40,7 @@ __all__ = [
     "NOT_INDEPENDENT",
     "NOT_SIGNIFICANT",
     "SIGNIFICANT",
+    "TEST",
     "UNCORRECTED",
     "UNDERPOWERED",
     "Efficacy",
@@ -72,6 +74,10 @@ DEFAULT_SCORE_WEIGHT = 0.5
 
 #: Two-sided error rate a verdict is decided at. One definition, in :mod:`..stats.summary`.
 ALPHA = summary.DEFAULT_ALPHA
+
+#: The paired test a :class:`Ratio` is tested with: its ``change`` is the Hodges-Lehmann pseudo-median, which is
+#: what the signed-rank test inverts, so this module names it rather than taking ``statistics.paired_test``.
+TEST = "wilcoxon"
 
 #: What a verdict column may say ("no interval" is not "no effect", so strings, not a boolean).
 SIGNIFICANT = "significant"
@@ -157,22 +163,29 @@ def bootstrap_interval(
 @dataclass(frozen=True, slots=True)
 class Verdict:
     """One test's outcome after its family's multiplicity correction. Only ``label`` is a finding;
-    ``pvalue`` is raw and ``adjusted`` corrected, both NaN when no test was performed."""
+    ``pvalue`` is raw and ``adjusted`` corrected, both NaN when no test was performed; ``correction`` names
+    the registered correction behind ``adjusted``."""
 
     pvalue: float
     adjusted: float
     label: str
+    correction: str = ""
 
 
-def correct_family(pvalues: Sequence[float], *, alpha: float = ALPHA) -> list[Verdict]:
-    """Benjamini-Hochberg verdicts for one declared family of tests, in input order
-    (:func:`hpcagent_bench.stats.inference.adjust_pvalues`). A non-finite p is a test never performed
-    (too few pairs): it does not enter ``m`` and comes back :data:`UNDERPOWERED`."""
-    tested = [i for i, value in enumerate(pvalues) if math.isfinite(value)]
-    out = [Verdict(value, math.nan, UNDERPOWERED) for value in pvalues]
-    for index, adjusted in zip(tested, inference.adjust_pvalues([pvalues[i] for i in tested], method="fdr_bh")):
-        out[index] = Verdict(pvalues[index], adjusted, SIGNIFICANT if adjusted < alpha else NOT_SIGNIFICANT)
-    return out
+def correct_family(pvalues: Sequence[float], *, alpha: float = ALPHA, test: str | None = None) -> list[Verdict]:
+    """Verdicts for one declared family of tests, in input order, under the correction ``test`` (default:
+    ``statistics.correction``, :func:`hpcagent_bench.stats.significance.correct`). A non-finite p is a test
+    never performed (too few pairs): it does not enter ``m`` and comes back :data:`UNDERPOWERED`."""
+    name = test if test is not None else significance.configured().correction.name
+    return [
+        Verdict(
+            value,
+            adjusted,
+            UNDERPOWERED if not math.isfinite(adjusted) else SIGNIFICANT if adjusted < alpha else NOT_SIGNIFICANT,
+            name,
+        )
+        for value, adjusted in zip(pvalues, significance.correct(pvalues, test=name), strict=True)
+    ]
 
 
 @dataclass(frozen=True, slots=True)
@@ -180,10 +193,10 @@ class Ratio:
     """One setup-vs-setup ratio: two parameters, each with its own point and interval.
 
     ``rho`` (the ratio of geometric means, > 1 an improvement) is the plane coordinate and ``Q``'s
-    input, bounded by ``ci_low``/``ci_high``, untested. ``change`` is the Hodges-Lehmann pseudo-median
-    with its distribution-free interval and signed-rank p; every significance statement comes from
-    it. They can disagree on skewed data, so they are reported separately. ``median_delta``, ``wins``
-    and ``losses`` show whether one outlier task carries the mean."""
+    input, bounded by ``ci_low``/``ci_high``, untested. ``change`` is the :data:`TEST` result: the
+    Hodges-Lehmann pseudo-median with its distribution-free interval and signed-rank p; every significance
+    statement comes from it. They can disagree on skewed data, so they are reported separately.
+    ``median_delta``, ``wins`` and ``losses`` show whether one outlier task carries the mean."""
 
     rho: float
     log_rho: float
@@ -191,22 +204,23 @@ class Ratio:
     ci_low: float
     ci_high: float
     tasks: int
-    change: summary.PairedChange
+    change: significance.Result
+    signs: summary.Signs
 
     @property
     def wins(self) -> int:
         """Tasks the intervention helped on."""
-        return self.change.wins
+        return self.signs.wins
 
     @property
     def losses(self) -> int:
         """Tasks the intervention hurt on."""
-        return self.change.losses
+        return self.signs.losses
 
     @property
     def ties(self) -> int:
         """Tasks that moved by exactly nothing; the signed-rank test drops them."""
-        return self.change.ties
+        return self.signs.ties
 
     @property
     def pct_change(self) -> float:
@@ -278,7 +292,7 @@ def ratio(
 ) -> Ratio:
     """One quantity's :class:`Ratio` over a paired series (``lower_is_better`` inverts it, as for cost).
     Both parameters come from the same ``deltas`` at the same level: the mean and its bootstrap for
-    ``rho``, :func:`hpcagent_bench.stats.summary.paired_change` for the tested estimate."""
+    ``rho``, the :data:`TEST` paired test for the tested estimate."""
     deltas = log_deltas(before, after, lower_is_better=lower_is_better)
     if lower_is_better:
         rho = geometric_mean(before) / geometric_mean(after)
@@ -293,7 +307,8 @@ def ratio(
         ci_low=ci_low,
         ci_high=ci_high,
         tasks=len(deltas),
-        change=summary.paired_change(deltas, alpha=1.0 - confidence),
+        change=significance.paired(deltas, alpha=1.0 - confidence, test=TEST),
+        signs=summary.signs(deltas),
     )
 
 
@@ -366,7 +381,9 @@ def axis_columns(prefix: str, item: Ratio, adjusted: Verdict, family: str) -> di
         f"{prefix}_hl_ci_low_pct": item.hl_ci_pct[0],
         f"{prefix}_hl_ci_high_pct": item.hl_ci_pct[1],
         f"{prefix}_pairs_tested": item.change.n,
+        f"{prefix}_test": item.change.label,
         f"{prefix}_p_value": item.pvalue,
+        f"{prefix}_correction": adjusted.correction,
         f"{prefix}_p_adjusted": adjusted.adjusted,
         f"{prefix}_verdict": UNDERPOWERED if item.underpowered else adjusted.label,
         f"{prefix}_family": family,

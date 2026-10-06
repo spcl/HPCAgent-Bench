@@ -21,7 +21,7 @@ import pytest
 
 from hpcagent_bench import cli
 from hpcagent_bench.harness import efficacy, metric
-from hpcagent_bench.stats import summary
+from hpcagent_bench.stats import significance, summary
 
 #: The real paired set the published C-vs-Fortran claim rests on: ``log(c_best_su / fortran_best_su)``
 #: for every kernel of the llr40 experiment's per-language kernel table that both languages
@@ -90,11 +90,11 @@ def verdict_false_positive_rate(population: np.ndarray, n: int, trials: int, see
 
 
 def paired_change_false_positive_rate(population: np.ndarray, n: int, trials: int, seed: int) -> float:
-    """The same for :func:`summary.paired_change`, whose interval inverts the signed-rank test."""
+    """The same for the registered ``wilcoxon`` paired test, whose interval inverts the signed-rank test."""
     rng = np.random.default_rng(seed)
     misses = 0
     for _ in range(trials):
-        change = summary.paired_change(rng.choice(population, size=n, replace=True))
+        change = significance.paired(rng.choice(population, size=n, replace=True), test=efficacy.TEST)
         if math.isfinite(change.low) and not change.low <= 0.0 <= change.high:
             misses += 1
     return misses / trials
@@ -115,7 +115,7 @@ def test_the_efficacy_significance_flag_holds_its_nominal_level_on_skewed_paired
     under a true null turns an absent effect into a published finding. It is measured on the verdict
     itself, not on the bootstrap bar around ``rho``: that bar carries no test, and reading a verdict
     off it is exactly the regression this would catch."""
-    population = ZERO_MEAN_DELTAS - summary.paired_change(ZERO_MEAN_DELTAS).estimate
+    population = ZERO_MEAN_DELTAS - significance.paired(ZERO_MEAN_DELTAS, test=efficacy.TEST).estimate
     rate = verdict_false_positive_rate(population, n_pairs, trials=1500, seed=20260911)
     assert rate <= max_false_positive_rate, (
         f"the efficacy verdict fired on {rate:.1%} of samples at n={n_pairs} under a zero pseudo-median; "
@@ -136,10 +136,10 @@ def test_the_hodges_lehmann_interval_holds_its_nominal_level_on_skewed_paired_de
 ) -> None:
     """The rank interval is the one the figures draw and the one the signed-rank p inverts; if it
     drifted off its level the whole paired half of the analysis would move with it."""
-    population = ZERO_MEAN_DELTAS - summary.paired_change(ZERO_MEAN_DELTAS).estimate
+    population = ZERO_MEAN_DELTAS - significance.paired(ZERO_MEAN_DELTAS, test=efficacy.TEST).estimate
     rate = paired_change_false_positive_rate(population, n_pairs, trials=1500, seed=20260911)
     assert rate <= max_false_positive_rate, (
-        f"summary.paired_change missed its own pseudo-median on {rate:.1%} of samples at n={n_pairs}"
+        f"the wilcoxon paired test missed its own pseudo-median on {rate:.1%} of samples at n={n_pairs}"
     )
 
 
@@ -209,7 +209,7 @@ def test_the_reported_effect_and_the_p_value_describe_the_same_parameter(
     """A paired change's p value inverts the signed-rank test, so the effect it carries beside it must be that
     test's pseudo-median (Hodges-Lehmann), not a ratio of geomeans; on a skewed set the two straddle 1.0, and a
     reader would take the effect from one parameter and the significance from the other."""
-    change = summary.paired_change(deltas)
+    change = significance.paired(deltas, test=efficacy.TEST)
     assert change.estimate == pytest.approx(pseudo_median, rel=1e-12), change
     assert math.exp(change.estimate) < 1.0 < math.exp(sum(deltas) / len(deltas)), change
 

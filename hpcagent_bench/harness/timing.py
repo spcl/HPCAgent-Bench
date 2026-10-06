@@ -7,13 +7,16 @@ A backend reduces the repeated candidate and baseline run times to one credited 
 
 * ``min_of_k`` -- ``speedup = min(baseline) / min(candidate)``.
 * ``mannwhitney_delta`` -- ``speedup = median(baseline) / median(candidate)``, credited only when
-  a one-sided Mann-Whitney U test in the medians' direction clears the protocol's alpha
+  the timing test (``measurement.timing_test``, :mod:`hpcagent_bench.stats.significance`; the one-sided
+  Mann-Whitney U test by default) in the medians' direction clears the protocol's alpha
   (``measurement.final.alpha`` unless a grading scope sets ``measurement.mannwhitney.p``);
   otherwise exactly 1.0 with ``significant=False``. A significant slow-down credits below 1.
 
 The reduced ``native_ns`` / ``baseline_ns`` are the statistics the credit divides.
 :data:`REDUCTIONS` names each reduction's version, stamped on every row so rows under two
-reductions are never pooled. Pure: sample arrays in, a :class:`ReducedTiming` out."""
+reductions are never pooled; a timing test other than the default appends its name and version to the stamp
+(:attr:`ReducedTiming.reduction`), so its grades are never credited under the default's protocol. Pure: sample
+arrays in, a :class:`ReducedTiming` out."""
 
 import os
 import statistics
@@ -22,6 +25,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 
 from hpcagent_bench import config, protocols
+from hpcagent_bench.stats import significance
 
 __all__ = [
     "AA_REDUCTION",
@@ -58,7 +62,7 @@ __all__ = [
 ]
 
 #: Backend -> the version stamp of its reduction (``timing_reduction``). Changed arithmetic means a
-#: new stamp; the older ``mwd-v1`` rows predate the stamp and read NULL.
+#: new stamp; an unstamped row reads NULL.
 REDUCTIONS: dict[str, str] = {"min_of_k": "mok-v1", "mannwhitney_delta": "mwd-v2", "median_of_k": "medk-v1"}
 
 #: The same backends when every timed repeat ran on varied inputs
@@ -78,6 +82,10 @@ REDUCTIONS_VARIED: dict[str, str] = {
 #: (:func:`hpcagent_bench.stats.score_rule.credit`). Written by ``grade-under run``.
 #: It is the protocol ``measurement.credited_protocol`` names, registered in :mod:`hpcagent_bench.protocols`.
 FINAL_GRADE_REDUCTION: str = protocols.credited_name()
+
+# An unknown test name in the configuration stops every grading path here, at import, listing the registered
+# names; a misspelled test never falls back to the default.
+significance.configured()
 
 
 def credited_protocol(stamp: object) -> bool:
@@ -206,14 +214,18 @@ class ReducedTiming:
     backend: str
     significant: bool = True  # mannwhitney: the difference cleared the p gate (min_of_k: always True)
     varied: bool = False  # every timed repeat ran on DIFFERENT content (see REDUCTIONS_VARIED)
-    #: mannwhitney_delta only: the one-sided U-test p; None when no test ran.
+    #: mannwhitney_delta only: the one-sided timing test's p; None when no test ran.
     p_value: float | None = None
+    #: The timing test that gated the credit, ``name-vVERSION``, when it is not the default
+    #: (:data:`hpcagent_bench.stats.significance.DEFAULT_TIMING`); empty otherwise.
+    test: str = ""
 
     @property
     def reduction(self) -> str:
         """The version stamp of the reduction behind this credit (:data:`REDUCTIONS` /
-        :data:`REDUCTIONS_VARIED`)."""
-        return (REDUCTIONS_VARIED if self.varied else REDUCTIONS)[self.backend]
+        :data:`REDUCTIONS_VARIED`), with a non-default timing test appended (``mwd-v3+ttest_ind-v1``)."""
+        stamp = (REDUCTIONS_VARIED if self.varied else REDUCTIONS)[self.backend]
+        return f"{stamp}+{self.test}" if self.test else stamp
 
 
 def warmup_count() -> int:
@@ -275,27 +287,28 @@ def reduce_min_of_k(candidate_ns: Sequence[float], baseline_ns: Sequence[float])
 def reduce_mannwhitney_delta(
     candidate_ns: Sequence[float], baseline_ns: Sequence[float], *, p: float = 0.1
 ) -> ReducedTiming:
-    """Median ratio, credited when a one-sided Mann-Whitney U test agrees with its direction.
+    """Median ratio, credited when the one-sided timing test (``measurement.timing_test``) agrees with its
+    direction.
 
     ``speedup = median(baseline) / median(candidate)``, tested ``less`` for a win and ``greater`` for a
-    slow-down (a two-sided test at level ``2 * p``). No significant difference, or fewer than two
-    samples a side, credits 1.0 with ``significant=False``; the medians are still disclosed."""
-    # function-local: numpy and scipy are heavy deps and only the distributional backend needs them
-    from hpcagent_bench.stats import summary
-
+    slow-down (a two-sided test at level ``2 * p``). No significant difference (a p that is not below ``p``,
+    NaN included), or fewer than two samples a side, credits 1.0 with ``significant=False``; the medians
+    are still disclosed."""
+    entry = significance.configured().timing
+    test = "" if entry.name == significance.DEFAULT_TIMING else f"{entry.name}-v{entry.version}"
     a = _positive(candidate_ns)
     b = _positive(baseline_ns)
     a_ns = statistics.median(a) if a else 0.0
     b_ns = statistics.median(b) if b else 0.0
     if len(a) < 2 or len(b) < 2 or a_ns == b_ns:
-        return ReducedTiming(a_ns, b_ns, 1.0, "mannwhitney_delta", significant=False)
+        return ReducedTiming(a_ns, b_ns, 1.0, "mannwhitney_delta", significant=False, test=test)
     ratio = b_ns / a_ns
-    # alternative="less": candidate times stochastically smaller (= faster); no rank information is p = 1.
-    alternative = "less" if ratio > 1.0 else "greater"
-    pvalue = float(summary.rank_sum_test(a, b, alternative=alternative)[1])
-    if pvalue >= p:
-        return ReducedTiming(a_ns, b_ns, 1.0, "mannwhitney_delta", significant=False, p_value=pvalue)
-    return ReducedTiming(a_ns, b_ns, ratio, "mannwhitney_delta", significant=True, p_value=pvalue)
+    # LESS: candidate times stochastically smaller (= faster); no rank information is p = 1.
+    side = significance.Side.LESS if ratio > 1.0 else significance.Side.GREATER
+    pvalue = significance.timing(a, b, side, test=entry.name).pvalue
+    if not pvalue < p:
+        return ReducedTiming(a_ns, b_ns, 1.0, "mannwhitney_delta", significant=False, p_value=pvalue, test=test)
+    return ReducedTiming(a_ns, b_ns, ratio, "mannwhitney_delta", significant=True, p_value=pvalue, test=test)
 
 
 def reduce_stopped(

@@ -90,8 +90,8 @@ Further conventions:
   `billed` card unless `--cost-model` names another (`stats.cost.add_arguments`). A summary over
   kernels is the geometric mean, never a median, and never over episodes in a cell.
 - **Intervals.** No normality is assumed (Hoefler and Belli Rule 6). A summary interval is the 95% BCa
-  bootstrap over kernels (`summary.geomean_interval`); a paired one inverts the sign-flip test
-  (`summary.paired_geomean`). Both are withheld below `summary.MIN_PAIRS_FOR_INTERVAL` (6) values.
+  bootstrap over kernels (`summary.geomean_interval`); a paired one inverts the configured paired test
+  (`sign-flip` by default, [the test registry](measurement_statistics.md#the-test-registry)). Both are withheld below `summary.MIN_PAIRS_FOR_INTERVAL` (6) values.
 - **Labels.** Title Case (identifiers keep their spelling). Ticks at 0 or 90 degrees. Values print
   with one decimal (`style.ratio_label`: `6.3x`, `0.04x` below 0.1x); tokens with
   `style.decade_label` (`35.5K`). Labels beside marks are tagged `style.CLEAR_GID` and settled clear

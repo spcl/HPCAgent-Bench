@@ -5,9 +5,11 @@ its own control: treated setups against the no-packet setups of the same experim
 list (``--pairs-csv``) for llrblind or gitscicomp10 style comparisons. Both routes feed the same raw
 tagged frame :mod:`hpcagent_bench.stats.figures.efficacy` draws from.
 
-Significance is corrected once per figure: :func:`points` tests every (model, leg) on both axes via
-:func:`hpcagent_bench.stats.summary.paired_geomean`, the p values are Benjamini-Hochberg adjusted
-across the whole family, and the star is gated on the adjusted value.
+Significance is corrected once per figure: :func:`points` tests every (model, leg) on both axes with the
+configured paired test (``statistics.paired_test``, sign-flip by default,
+:func:`hpcagent_bench.stats.significance.paired`), the p values are adjusted across the whole family by the
+configured correction (``statistics.correction``, Benjamini-Hochberg by default), and the star is gated on
+the adjusted value. The stats table names both in its ``test`` and ``correction`` columns.
 
 Several comparisons join as one row of columns: repeat ``--treatment``, or give several
 ``--comparison`` specs (``title=...;intervention=...;treatment=...`` or
@@ -26,7 +28,7 @@ import pandas as pd
 
 from hpcagent_bench import study_tags, studies, packets
 from hpcagent_bench.harness import efficacy
-from hpcagent_bench.stats import cost, population, score_rule, style as plotstyle, summary
+from hpcagent_bench.stats import cost, population, score_rule, significance, style as plotstyle
 from hpcagent_bench.stats.figures import efficacy as efficacy_figures
 
 #: :func:`points`' row shape, so an empty family still carries these columns for ``.dropna`` to use.
@@ -37,6 +39,7 @@ POINT_COLUMNS: tuple[str, ...] = (
     "score",
     "cost",
     "kernels",
+    "test",
     "score_p",
     "cost_p",
 )
@@ -62,7 +65,7 @@ def compare_slice(
     timed = efficacy_figures.speedup_mask(paired, over)
     log_score = np.log((paired.treated_speedup / paired.control_speedup).to_numpy(dtype=float)[timed])
     log_cost = np.log((paired.treated_tokens / paired.control_tokens).to_numpy(dtype=float))
-    score, cost = summary.paired_geomean(log_score), summary.paired_geomean(log_cost)
+    score, cost = significance.paired(log_score), significance.paired(log_cost)
     return {
         "model": model,
         "language": language,
@@ -71,6 +74,7 @@ def compare_slice(
         "cost": math.exp(cost.estimate) if math.isfinite(cost.estimate) else math.nan,
         "kernels": int(timed.sum()),
         # Raw p values; the corrected verdict columns come from the whole family at once.
+        "test": score.label,
         "score_p": score.pvalue,
         "cost_p": cost.pvalue,
     }
@@ -108,7 +112,7 @@ def points(
 
 
 def corrected(rows: Sequence[dict[str, float | str | int]]) -> pd.DataFrame:
-    """``rows`` as the stats table, with Benjamini-Hochberg run ONCE over the whole family."""
+    """``rows`` as the stats table, with the configured correction run ONCE over the whole family."""
     frame = pd.DataFrame(list(rows), columns=list(POINT_COLUMNS)).dropna(subset=["score", "cost"])
     if frame.empty:
         return frame
@@ -120,6 +124,7 @@ def corrected(rows: Sequence[dict[str, float | str | int]]) -> pd.DataFrame:
         cost_p_adjusted=[v.adjusted for v in verdicts[1::2]],
         score_verdict=[v.label for v in verdicts[0::2]],
         cost_verdict=[v.label for v in verdicts[1::2]],
+        correction=[v.correction for v in verdicts[0::2]],
         family_size=sum(1 for v in verdicts if math.isfinite(v.adjusted)),
     )
 
@@ -347,7 +352,9 @@ def family_stats(table: pd.DataFrame, intervention: str, languages: dict[str, st
             }
         )
     tested = [row for row in table.itertuples(index=False) if math.isfinite(float(row.p_adjusted))]
-    return pd.DataFrame(rows).assign(family_size=len(tested))
+    # the tests that produced the CSV's p values, carried beside the verdicts drawn from them
+    named = {column: str(table[column].iloc[0]) for column in ("test", "correction") if column in table and len(table)}
+    return pd.DataFrame(rows).assign(family_size=len(tested), **named)
 
 
 def pair_frame(frame_all: pd.DataFrame, pairs: Sequence[tuple[str, str]], intervention: str) -> pd.DataFrame:
@@ -513,8 +520,10 @@ def report(treatment: str, stats: pd.DataFrame) -> None:
     score_hits = int((stats.score_verdict == efficacy.SIGNIFICANT).sum())
     cost_hits = int((stats.cost_verdict == efficacy.SIGNIFICANT).sum())
     withheld = int((stats.score_verdict == efficacy.UNDERPOWERED).sum())
+    correction = str(stats.correction.iloc[0]) if "correction" in stats else "corrected"
+    of_test = f" ({stats.test.iloc[0]})" if "test" in stats else ""
     print(
-        f"{treatment}: {len(stats)} points; BH over {efficacy_figures.family_size(stats)} tests: "
+        f"{treatment}: {len(stats)} points; {correction} over {efficacy_figures.family_size(stats)} tests{of_test}: "
         f"{score_hits} score-significant, {cost_hits} cost-significant, "
         f"{withheld} underpowered"
     )
@@ -882,6 +891,7 @@ def figure_from_treatments(
 
 def main() -> None:
     args = build_parser().parse_args()
+    significance.configured()  # an unknown test name stops here, before any data is read
     card = cost.resolve(args.cost_model, args.cost_models)
     row_width = ROW_WIDTHS[args.row_width]
     config = figure_config(args, row_width)
