@@ -278,8 +278,7 @@ def test_a_perf_playbook_setup_never_enters_the_control_side(tmp_path: pathlib.P
 
 
 def test_treatment_frame_tags_the_control_false_and_the_treatment_true() -> None:
-    """The figure reads an on/off ``skills`` flag; ``treatment_frame`` builds it from the packet
-    split rather than the historical column name."""
+    """The figure reads an on/off ``skills`` flag; ``treatment_frame`` builds it from the packet split."""
     frame_all = pd.DataFrame(
         [
             {"setup": "a-control", "packet": "", "model": "qwen38", "language": "c"},

@@ -3,9 +3,8 @@
 """``tests/data/observations-mini.db`` read through the real loader -- the small, committed,
 multi-treatment fixture the other test files' synthetic frames stand in for
 (:mod:`tests.data.make_observations_mini` documents how it was built). Exercised here end to end
-through :func:`hpcagent_bench.studies.read_observations` and the two scripts whose behaviour
-this session changed, so at least one test in the suite reads a REAL ``.db`` rather than a frame
-built in the test body.
+through :func:`hpcagent_bench.studies.setup_rows` and ``plot_score_change``, so at least one test in
+the suite reads a REAL ``.db`` rather than a frame built in the test body.
 """
 
 import pathlib
