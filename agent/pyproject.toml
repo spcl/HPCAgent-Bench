@@ -3,8 +3,11 @@
 # it (containers/lib/package_hook.sh) and each agent step binds this directory over it; the judge and
 # development installs get it as a workspace member of hpcagent-bench.
 [build-system]
-requires = ["setuptools>=77"]
-build-backend = "setuptools.build_meta"
+# uv's own backend: an editable install writes nothing into the source tree. The agent's launch venv builds
+# this package from a read-only mount (container_runtime.agent_ro_binds), where setuptools' egg-info cannot be
+# written or refreshed.
+requires = ["uv_build>=0.12,<0.13"]
+build-backend = "uv_build"
 
 [project]
 name = "hpcagent-agent"
@@ -28,8 +31,6 @@ harness-openhands = [
     "openhands-tools==1.47.0",  # the harness the recorded openhands setups ran
 ]
 
-[tool.setuptools.packages.find]
-include = ["hpcagent_agent*"]
-
-[tool.setuptools.package-data]
-hpcagent_agent = ["harness/bash-norc", "harness/miniswe.yaml", "packets/*/packet.md", "packets/*/LICENSE", "packets/*/SOURCE"]
+[tool.uv.build-backend]
+module-name = "hpcagent_agent"
+module-root = ""

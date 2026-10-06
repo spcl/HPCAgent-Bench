@@ -300,7 +300,7 @@ def test_run_nonzero_exit_is_scored_runtimeerror(tmp_path) -> None:
 # device residency (E1): the launch argv + the H2D/D2H staging
 
 
-def _cuda_available() -> bool:
+def cupy_device_available() -> bool:
     """A usable NVIDIA device + cupy attached to it (the device-residency e2e gate)."""
     import importlib.util
 
@@ -338,7 +338,7 @@ def test_stage_host_returns_numpy_and_sizes_workspace() -> None:
 
 def test_stage_device_mask_copies_only_selected_tiles() -> None:
     """`_stage` per-array path: only tiles in `on_device` become cupy (H2D); host-located tiles stay numpy."""
-    if not _cuda_available():
+    if not cupy_device_available():
         pytest.skip("no CUDA device / cupy")
     import cupy as cp
 

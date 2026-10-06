@@ -158,6 +158,24 @@ RUN set -eux; \
     cmp "${built}" "${installed}"; \
     /usr/local/bin/device_arch_gate.sh --exact "${ROCM_ARCH}" "${installed}"
 
+# GLM-5.3's aiter DSA decode (--dsa-decode-backend aiter), fixed in the package. _forward_aiter hands
+# aiter its whole kv_indptr buffer (max_bs + 1 entries), and get_mla_metadata_v1 takes the batch
+# count from that size, so every decode below max_bs plans work for stale batches and writes past
+# the output: an illegal memory access in CUDA-graph capture at bs 40 (jobs 668640, 668739), wrong
+# or NaN output when it does not fault. Upstream main has the same line; the single-GPU reproducer
+# and the issue text are in $SCRATCH/archives/glm53-aiter-dsa-repro (docs/serving/glm53.md).
+RUN /opt/venv/bin/python3 <<'PY'
+import pathlib
+import sys
+
+SRC = pathlib.Path("/sgl-workspace/sglang/python/sglang/srt/layers/attention/dsa_backend.py")
+OLD = "        kv_indptr = self.kv_indptr\n"
+text = SRC.read_text()
+if text.count(OLD) != 1:
+    sys.exit(f"{SRC}: expected one {OLD!r}, found {text.count(OLD)}; upstream changed, re-derive the edit")
+SRC.write_text(text.replace(OLD, "        kv_indptr = self.kv_indptr[: bs + 1]\n"))
+PY
+
 # No RCCL plugin is shipped. CSCS provides one through com.hooks.aws_ofi_nccl.enabled (measured:
 # /opt/cscs/netstack/librccl-net.so, "Using network AWS Libfabric", GPU Direct RDMA on cxi0-2).
 # This image ships no libfabric, libcxi or plugin of its own.
@@ -414,7 +432,8 @@ ENV HSA_ENABLE_IPC_MODE_LEGACY=1 \
 #
 # No SGLang SOURCE is patched for qwen38. What made it fast is serving choices: SGLang (vLLM cannot
 # serve its Gated-DeltaNet layers at long context), the KV pool above the working set, aiter, and the
-# chat template in containers/inference/. The edits this file makes are the sgl_kernel build above.
+# chat template in containers/inference/. The edits this file makes are the sgl_kernel build and the DSA
+# kv_indptr slice above.
 
 RUN /opt/venv/bin/python3 <<'PY'
 import json

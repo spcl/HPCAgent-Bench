@@ -29,7 +29,6 @@ import importlib.util
 import pathlib
 import sys
 import tempfile
-import types
 
 import numpy as np
 import pytest
@@ -38,26 +37,7 @@ from hpcagent_bench.translators.numpyto_cupy.emit import emit_cupy
 from hpcagent_bench.translators.numpyto_numba.emit import emit_numba
 from hpcagent_bench.translators.numpyto_pythran.export import pythran_scalar_type
 from tests.translators.source_module import run_source
-
-
-# Shared oracle loader (mirrors test_jax_semantics_fixes).                     #
-def oracle() -> types.ModuleType:
-    import shutil
-
-    if not (shutil.which("gcc") and shutil.which("gfortran") and shutil.which("g++")):
-        pytest.skip("gcc/g++/gfortran needed for the native oracle emit step")
-    try:
-        from tests.translators import op_oracle
-    except ImportError:
-        spec = importlib.util.spec_from_file_location(
-            "op_oracle", pathlib.Path(__file__).resolve().parent / "op_oracle.py"
-        )
-        op_oracle = importlib.util.module_from_spec(spec)
-        # Registered BEFORE exec: dataclasses resolves a string annotation through
-        # sys.modules[cls.__module__], which is None for a module loaded by path alone.
-        sys.modules[spec.name] = op_oracle
-        spec.loader.exec_module(op_oracle)
-    return op_oracle
+from tests.translators import op_oracle
 
 
 def assert_ok(status: dict[str, str], backend: str, label: str) -> None:
@@ -122,7 +102,7 @@ def test_numba_parallel_refuses_dependent_loops(body: str, label: str) -> None:
 def test_numba_scan_via_oracle() -> None:
     # End-to-end through run_op: the prefix sum must match
     # numpy exactly on the numba backend.
-    no = oracle()
+    no = op_oracle.native()
     st = no.run_op(
         SCAN,
         "scan",
@@ -175,7 +155,7 @@ def test_pythran_scalar_type_unknown_fails_loud() -> None:
 def test_pythran_int_param_roundtrips() -> None:
     # ``k`` (used only as a ``range`` bound) is declared ``int`` and drives the
     # loop count; the result must match numpy on the pythran backend.
-    no = oracle()
+    no = op_oracle.native()
     src = "import numpy as np\ndef f(x, k, out):\n    for i in range(k):\n        out[i] = x[i] * 2.0\n"
     st = no.run_op(
         src,
@@ -192,7 +172,7 @@ def test_pythran_int_param_roundtrips() -> None:
 def test_pythran_maximum_propagates_nan() -> None:
     # numpy's np.maximum propagates NaN; pythran's suppresses it. The rewrite
     # restores propagation -- checked with equal_nan comparison in the oracle.
-    no = oracle()
+    no = op_oracle.native()
     src = "import numpy as np\ndef f(a, b, out):\n    out[:] = np.maximum(a, b)\n"
     st = no.run_op(
         src,
@@ -207,7 +187,7 @@ def test_pythran_maximum_propagates_nan() -> None:
 
 
 def test_pythran_sign_propagates_nan() -> None:
-    no = oracle()
+    no = op_oracle.native()
     src = "import numpy as np\ndef f(a, out):\n    out[:] = np.sign(a)\n"
     st = no.run_op(
         src,
