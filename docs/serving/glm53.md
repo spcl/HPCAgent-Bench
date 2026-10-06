@@ -60,3 +60,34 @@ slowest stage's weight load (up to 5400 s) plus about 130 s KV allocation and 10
   and gate a `--kv-cache-dtype` change on long context.
 - Read back every launch; `Using network` must say `AWS Libfabric`:
   `grep -aiE "attention.backend|Use dsa attention|max_total_num_tokens|Using network" server-0.log`.
+
+## aiter DSA kernels (`--dsa-prefill-backend aiter --dsa-decode-backend aiter`)
+
+GLM-5.3's sparse attention runs through SGLang's `dsa` backend; `--attention-backend aiter` is not a
+substitute (`AiterAttnBackend.forward_decode() got an unexpected keyword argument 'topk_indices'`,
+job 668580). The aiter route is the two `--dsa-*-backend aiter` flags. Both aiter paths call
+`aiter.mla_decode_fwd` in persistent mode (kernel `mla_a16w8_qh16_m16x4_n16x1_coex0_mask1_ps`: bf16 q,
+fp8 KV, 16 heads per rank) with metadata from `get_mla_metadata_v1`, and both crashed for a
+different reason:
+
+| path | symptom | cause |
+|---|---|---|
+| decode | illegal memory access in CUDA-graph capture at bs 40, right after bs 48 (668640, 668739); a scheduler rank aborts (-6) | `_forward_aiter` passes the whole `self.kv_indptr` buffer (`max_bs + 1` entries) and `get_mla_metadata_v1` sets `num_batches = kv_indptr.size(0) - 1`. Below `max_bs` the planner schedules the stale tail batches; stage 1 and `mla_reduce_v1` write output rows past `bs`. Where that lands in mapped memory the result is wrong (NaN) instead of a fault, so a run that did not crash was not correct either. |
+| prefill | illegal memory access on the first 4096-token chunk (the 12.8k-token accuracy step, 668739) | `get_mla_metadata_v1` (sparse, `intra_batch_mode`) plans garbage for 4096 or more batches; the extend path makes every token a batch. 4095 tokens is correct, 4096 and 4100 fault, 8192 returns wrong values with `kv_end <= 1` in the work list, independent of KV length. |
+
+Neither is MoE sorting, CUDA-graph capture, RCCL or PP: the single-GPU reproducer below, which has no
+model, no graph and no collectives, faults and fixes the same way (`moe_sorting` and `fused_qk_rmsnorm`
+in the server stacks were only the next HIP call after the faulting kernel).
+
+**Fix.** Decode: the SGLang recipe (`containers/images/sglang/Dockerfile`) edits
+`kv_indptr = self.kv_indptr` to `self.kv_indptr[: bs + 1]` in `_forward_aiter`; the slice is a view, so
+graph capture and the in-place cumsum are unchanged. Prefill: `--chunked-prefill-size 2048` keeps every
+extend batch below 4096 tokens (the scheduler debits `rem_chunk_tokens` per request) and halves the
+transient fp32 split buffer aiter allocates per layer (8 GiB at 4096 tokens). Both are needed for the
+aiter pair; no path falls back (`summarize.py` counts aiter fallback lines per leg).
+
+**Reproduce** (one mi300 node, no model): `$SCRATCH/archives/glm53-aiter-dsa-repro/` holds
+`repro_aiter_dsa.py` (replays `_forward_aiter`/`_forward_aiter_extend` for GLM-5.3 at TP4 against a
+float32 reference), `repro.sbatch` and the case lists. `decode --bs 48 40 32 24 16 ...` faults at the
+first bs below the metadata capacity; `--slice` (the fix) passes every bs eager and in graph replay;
+`extend --tokens 4096` faults, `--tokens 4095` passes; `--audit` prints the planner's work list bounds.
