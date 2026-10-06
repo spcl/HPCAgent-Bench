@@ -9,8 +9,34 @@ Security design, key handling and every launcher variable: [`private-endpoint.md
 | Image | `hpcagent-bench-vllm-mi200-latest`: the AMD vLLM 0.28 image ([`containers/images/vllm/`](../../containers/images/vllm/Dockerfile)), the one that serves oss120b on mi300 |
 | Weights | `Qwen/Qwen3.8-27B`, BF16 (MI250X has no FP8), in `$HF_HOME/hub` |
 | Shape | `tp8:0.85`: tensor parallel over all 8 GCDs, 0.85 of each GCD's 64 GiB (`--gpu-memory-utilization`) |
-| Measured | 128 concurrent requests, 300-420 tok/s on 16 concurrent 256-token requests, about 60 tok/s for one request |
+| Attention | `--attention-backend TRITON_ATTN` (3.4x the default backend; aiter has no gfx90a kernels, so it cannot run here) |
+| Measured | 40 agents (the experiment load, below): 345 tok/s aggregate, 8.8 tok/s per agent, both gates pass; 128 concurrent requests fit |
 | Binds | `127.0.0.1:30000` on the node; every `/v1` request needs the key (vLLM leaves `/health` and `/metrics` open, so this endpoint is tunnel-only) |
+
+## Measured at the experiment load
+
+40 concurrent agentic conversations, 16 turns each, 35k-50k-token prompts (p50 about 38k), 300-500 output
+tokens per turn, on one node (bench jobs 667941, 668271; harness and loads in
+`$SCRATCH/hpcagent-bench-runs/inference-tuning-20261005`). Every row passed the long-context accuracy gate
+and the tool-call gate.
+
+| Configuration | tok/s aggregate | tok/s per agent | TTFT p50 / p90 | ITL p50 | prefix-cache hit |
+|---|---|---|---|---|---|
+| `--attention-backend TRITON_ATTN` (shipped) | 345.2 | 8.78 | 1.4 s / 10.6 s | 108 ms | 0.86 |
+| default backend, tp8 | 101.7-107.3 | 2.70-2.90 | 2.6 s / 31-41 s | 328-344 ms | 0.85-0.87 |
+| tp4 x dp2 | 94.6 | 2.88 | 3.6 s / 85 s | 334 ms | 0.82 |
+| tp2 x dp4 | 94.7 | 2.67 | 4.3 s / 47 s | 322 ms | 0.68 |
+| `--max-num-batched-tokens 8192` | 89.8 | 2.50 | 2.4 s / 19 s | 391 ms | 0.88 |
+| MTP speculative decoding (1 token) | 24.7 | 0.60 | 29 s / 62 s | 1589 ms | 0.87 |
+
+Data parallelism splits each conversation across replicas, so the prefix cache stops hitting; one tp8
+replica is the shape. vLLM logs one fallback of its own here ("Falling back to the Triton GDN decode path:
+`fused_gdn_decode_post_conv_mtp` is not built"): the Gated DeltaNet decode runs Triton on gfx90a.
+
+aiter cannot run on gfx90a: it ships asm kernels for gfx942, gfx950 and gfx1250 only, its
+`get_device_name()` raises for gfx90a, and vLLM refuses a forced `ROCM_AITER_FA` with "compute capability not
+supported" (668579). So mi200 is the one AMD platform that serves qwen3.8 on vLLM rather than SGLang (the
+mi300 engine; SGLang's `sgl_kernel` in the current image carries gfx942 code only and segfaults here).
 
 ## 1. One-time setup
 
