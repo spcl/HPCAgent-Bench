@@ -185,7 +185,7 @@ WT=$SCRATCH/hpcagent-bench-wt/regrade
 "$HPCAGENT_BENCH_HOST_PYTHON" -m hpcagent_bench.harness.grade-under worklist --db results.db --system beverin \
     --out worklist.jsonl
 for i in 1 2 3 4; do   # 4 h continuations, one at a time, same shards
-  sbatch --partition=<partition> --no-requeue --nodes=3 --time=04:00:00 \
+  sbatch $("$HPCAGENT_BENCH_HOST_PYTHON" -m hpcagent_bench job options) --no-requeue --nodes=3 --time=04:00:00 \
       --job-name=grade-under --dependency=singleton --export=ALL,HPCAGENT_BENCH_REPO=$WT \
       grade-under.sbatch worklist.jsonl out
 done
@@ -235,7 +235,9 @@ cd $HB/containers/images
 ./registry.sh promote --all          # verified candidate -> live name; pending jobs pick it up at start
 ```
 
-Build, verify and promote: [`containers/README.md`](../containers/README.md). Never write over a live
+Build, verify and promote: [`containers/README.md`](../containers/README.md). `./submit.sh <job.sbatch> [-- args]`
+submits any job there or in `containers/inference/` with the partition, account and GPUs `hpcagent-bench job
+options` resolves (a build on its role's `images.env` partition). Never write over a live
 `.sqsh`; promote by rename (`containers/images/registry.sh promote`). A started job keeps the image it
 mounted.
 

@@ -14,6 +14,7 @@ containers/
     registry.sh              promote a verified candidate; push to / pull from the registry
     registry.sbatch          registry.sh on a compute node
     install_edfs.sh          render ~/.edf/<edf>.toml for every row of a platform
+    submit.sh <job.sbatch>   sbatch a job here or in inference/ with the system's partition, account and GPUs
     <image>/                 Dockerfile, image.sh (its own build inputs) and the EDF template(s):
                              edf.toml.in, or agent.edf.toml.in + judge.edf.toml.in for a pair
   lib/                     build steps the Dockerfiles COPY (HPTT, tblis, Pluto, git retry, image gates)
@@ -147,14 +148,20 @@ for role in judge-agent-amd judge sglang vllm; do sbatch registry.sbatch pull ${
 Build when changing an image:
 
 ```bash
-sbatch -p mi300 build_and_verify.sbatch judge-agent-amd   # agent and judge roles, ~3.5 h
-sbatch -p mi300 build_and_verify.sbatch sglang            # ~1 h
-sbatch -p mi300 build_and_verify.sbatch vllm              # < 1 h, the official base
+./submit.sh build_and_verify.sbatch -- judge-agent-amd   # agent and judge roles, ~3.5 h
+./submit.sh build_and_verify.sbatch -- sglang            # ~1 h
+./submit.sh build_and_verify.sbatch -- vllm              # < 1 h, the official base
 # the same AMD images on the other partition, before promotion
-ROLE=judge-agent-amd sbatch --partition=mi200 --gpus-per-node=8 verify_image.sbatch
+ROLE=judge-agent-amd ./submit.sh verify_image.sbatch --system beverin-mi200
 
 ./registry.sh promote --all             # verified candidates -> live names + sidecars + EDFs
 ```
+
+`submit.sh <job.sbatch> [--system S] [--partition P] [--account A] [--time T] [--gpus-per-node N] [--nice N]
+[--dry-run] [-- job args]` resolves the sbatch options with `hpcagent-bench job options` (a flag, else the site
+layer, else `systems.yaml`; [configuration.md](../docs/configuration.md#job-shape-per-system)); a build or verify
+job runs on its role's `images.env` partition unless `--partition` or `--system` names one, and `--dry-run` prints
+the sbatch line. Plain `sbatch -p mi300 -A <account> build_and_verify.sbatch judge-agent-amd` still works.
 
 Build gates prove that an engine imports, not that it serves, so a serving candidate is smoked
 before promotion with `hpcagent_bench/cluster/serve-only.sbatch` (SGLang and vLLM alike),
@@ -173,7 +180,8 @@ ROLE=<role> IMAGE=$SCRATCH/ce-images/<file>.sqsh sbatch verify_image.sbatch
 
 ### NVIDIA GH200 (daint)
 
-The scripts write no account or partition; sbatch reads both from the environment. A podman
+The scripts write no account or partition; sbatch reads both from the environment (or
+`./submit.sh <job.sbatch> --system daint.alps --account <project>` passes them). A podman
 storage config on `/dev/shm` is created on first use if the account has none.
 
 ```bash

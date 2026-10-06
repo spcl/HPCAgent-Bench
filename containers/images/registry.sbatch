@@ -2,6 +2,7 @@
 # Run registry.sh on a compute node: pushes and pulls move tens of GB through podman and mksquashfs,
 # which the login node has neither the tmpfs nor the patience for.
 #
+#   containers/images/submit.sh containers/images/registry.sbatch -- pull judge-agent-amd   # the system's options
 #   sbatch containers/images/registry.sbatch push --check --all
 #   REGISTRY_USER=... REGISTRY_TOKEN=... sbatch containers/images/registry.sbatch push --all
 #   sbatch containers/images/registry.sbatch pull judge-agent-amd

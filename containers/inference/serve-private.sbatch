@@ -32,13 +32,15 @@
 #
 #   umask 077; mkdir -p ~/.config/hpcagent-bench; openssl rand -hex 32 > ~/.config/hpcagent-bench/mi300-endpoint.key
 #   cd <hpcagent-bench checkout or worktree>
+#   PRESET=mi300 containers/images/submit.sh containers/inference/serve-private.sbatch   # mi200: --system beverin-mi200
 #   PRESET=mi300 sbatch --partition=mi300 --gpus-per-node=4 containers/inference/serve-private.sbatch
 #   PRESET=mi200 sbatch --partition=mi200 --gpus-per-node=8 containers/inference/serve-private.sbatch
 #   PRESET=mi300 MODE=serve sbatch --partition=mi300 --gpus-per-node=4 --time=08:00:00 <same path>
 #   PRESET=mi300 ACCESS=alps MODE=serve sbatch --partition=mi300 --gpus-per-node=4 --time=08:00:00 <same path>
 #   PRESET=mi300 MODE=serve DRY_RUN=1 bash containers/inference/serve-private.sbatch
 #
-# The header names no partition or GPU count; pass both, the preset refuses a wrong partition.
+# The header names no partition or GPU count: containers/images/submit.sh takes both from the system (beverin:
+# mi300 and 4; beverin-mi200: mi200 and 8), or pass both to sbatch. The preset refuses a wrong partition.
 # Connecting from the laptop or from Daint: docs/serving/private-endpoint.md.
 #SBATCH --job-name=serve-private
 #SBATCH --nodes=1

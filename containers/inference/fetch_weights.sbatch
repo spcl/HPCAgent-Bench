@@ -11,12 +11,13 @@
 # that same directory, came down with all 141 blobs at stripe_count 1 / 1 MiB. Inheritance is not
 # a property of hf download. RESTRIPE EVERY NEW MODEL AND VERIFY; never assume.
 #
+#   containers/images/submit.sh containers/inference/fetch_weights.sbatch   # the system's partition and account
 #   sbatch fetch_weights.sbatch                     # the four models the experiment serves
 #   MODELS="zai-org/GLM-5.3" sbatch fetch_weights.sbatch
 #   AUDIT_ONLY=1 sbatch fetch_weights.sbatch        # check layout, change nothing
 #
-# The partition is SBATCH_PARTITION (site layer). On Daint (GH200) the partition and the image
-# differ; -p overrides it:
+# Under plain sbatch the partition is SBATCH_PARTITION (site layer). On Daint (GH200) the partition and the
+# image differ; -p (submit.sh --system daint.alps) overrides it:
 #   EDF=hpcagent-bench-vllm-gh200-latest MODELS="Qwen/Qwen3.8-27B-FP8" \
 #     sbatch -A <project> -p normal fetch_weights.sbatch
 #
