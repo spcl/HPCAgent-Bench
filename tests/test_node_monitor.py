@@ -20,6 +20,7 @@ from pathlib import Path
 import pytest
 
 from tests.fresh_module import fresh
+from tests.bash_stub import bash_stub
 
 EXAMPLE = Path(__file__).resolve().parents[1] / "hpcagent_bench" / "cluster"
 SCRIPT = EXAMPLE / "node_monitor.sh"
@@ -51,12 +52,7 @@ def fake_smi(tmp_path: Path, name: str, body: str) -> Path:
     """A directory holding one fake smi executable that always answers with ``body``,
     so node_monitor.sh's ``command -v`` probe finds a controlled tool instead of
     whatever rocm-smi/amd-smi happen to be installed on the test host."""
-    bin_dir = tmp_path / f"fake_{name}"
-    bin_dir.mkdir()
-    tool = bin_dir / name
-    tool.write_text(f"#!/usr/bin/env bash\n{body}\n")
-    tool.chmod(0o755)
-    return bin_dir
+    return bash_stub(tmp_path / f"fake_{name}", name, body).parent
 
 
 def run_monitor(tmp_path: Path, path_dirs: list[Path], interval: str = "0.2", role: str = "judge") -> str:
