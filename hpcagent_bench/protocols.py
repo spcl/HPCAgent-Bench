@@ -164,7 +164,7 @@ class Mw4x5FinalV1:
     __slots__ = ()
 
     role = "retired"
-    meaning = "the first final-grade pass (4 x 5, base seed timed); grade-under apply rewrites each row under mw4x5"
+    meaning = "the first final-grade pass (4 x 5, base seed timed); a regrade adds an mw4x5 row beside each"
 
 
 # The live reductions: the stamps of ``timing.REDUCTIONS_VARIED`` (a fresh draw per run), then ``timing.REDUCTIONS``

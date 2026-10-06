@@ -13,6 +13,7 @@ copying those rows; a legacy results database (``calls``, ``submissions``, ``att
 
 import contextlib
 import dataclasses
+import enum
 import functools
 import hashlib
 import pathlib
@@ -36,6 +37,7 @@ __all__ = [
     "IdMap",
     "SchemaVersionError",
     "Setup",
+    "ProtocolChange",
     "Value",
     "add_cells",
     "add_grade",
@@ -48,6 +50,7 @@ __all__ = [
     "copy_one_grade",
     "ensure_episode",
     "ensure_setup",
+    "final_row_groups",
     "grade_sources",
     "insert",
     "merge",
@@ -466,38 +469,63 @@ GRADE_CHILDREN: tuple[str, ...] = (
 )
 
 
-def collapse_finals(conn: sqlite3.Connection, credited: str, apart: str) -> int:
-    """Keep ONE ``final`` grade per submission, so a regrade rewrites the row it re-times instead of adding one.
+class ProtocolChange(enum.Enum):
+    """What a regrade under protocol B does to a submission's final grade recorded under protocol A != B."""
 
-    The winner is the ``credited`` stamp first, then the newest. Its values (cells and every child included) move
-    into the submission's oldest final row id; the other final rows and their children go. Rows stamped ``apart``
-    (the A/A calibration, never a grade) are left alone. Returns the rows removed; the caller commits."""
-    groups = conn.execute(
-        "SELECT of_grade_id, group_concat(id) FROM (SELECT id, of_grade_id FROM grades WHERE kind = 'final' "
-        "AND of_grade_id IS NOT NULL AND timing_reduction IS NOT ? "
-        "ORDER BY of_grade_id, timing_reduction IS ? DESC, ts_ms DESC, id DESC) "
-        "GROUP BY of_grade_id HAVING count(*) > 1",
-        (apart, credited),
-    ).fetchall()
+    #: Keep the old row and write a new one: rows under two stamps are never pooled; a reader picks the credited one.
+    NEW_ROW = "new-row"
+    #: Delete the old row: the regrade rewrites it.
+    REPLACE = "replace"
+
+
+def final_row_groups(rows: Sequence[tuple[int, str, int]], on_change: ProtocolChange) -> list[list[int]]:
+    """One submission's ``final`` rows ``(id, stamp, ts_ms)`` as the groups that each collapse to ONE row.
+
+    Rows under one stamp are one row. A row with no stamp has no protocol to differ by, so it joins the
+    newest stamped row's group. Under :attr:`ProtocolChange.REPLACE` every row is one group; under
+    :attr:`ProtocolChange.NEW_ROW` each stamp keeps its own. Each group is ordered winner first: a
+    stamped row before an unstamped one (a fault, or an unnamed older row), then the newest."""
+    ranked = sorted(rows, key=lambda row: (bool(row[1]), row[2], row[0]), reverse=True)
+    if on_change is ProtocolChange.REPLACE or not ranked[0][1]:
+        return [[row[0] for row in ranked]]
+    groups: dict[str, list[int]] = {}
+    for row_id, stamp, _ts in ranked:
+        groups.setdefault(stamp or ranked[0][1], []).append(row_id)
+    return list(groups.values())
+
+
+def collapse_finals(conn: sqlite3.Connection, apart: str, on_change: ProtocolChange = ProtocolChange.NEW_ROW) -> int:
+    """Rewrite each submission's ``final`` rows into one row per protocol (:func:`final_row_groups`).
+
+    A group's winner's values (cells and every child included) move into its oldest row id; the group's other
+    rows and their children go. Rows stamped ``apart`` (the A/A calibration, never a grade) are left alone.
+    Returns the rows removed; the caller commits."""
+    by_submission: dict[int, list[tuple[int, str, int]]] = {}
+    for row_id, of_grade, stamp, ts in conn.execute(
+        "SELECT id, of_grade_id, timing_reduction, ts_ms FROM grades WHERE kind = 'final' "
+        "AND of_grade_id IS NOT NULL AND timing_reduction IS NOT ?",
+        (apart,),
+    ):
+        by_submission.setdefault(int(of_grade), []).append((int(row_id), str(stamp or ""), int(ts)))
     columns = [str(row[1]) for row in conn.execute("PRAGMA table_info(grades)") if row[1] != "id"]
     removed = 0
-    for _of, ids_text in groups:
-        ranked = [int(i) for i in str(ids_text).split(",")]
-        winner, keep = ranked[0], min(ranked)
-        doomed = [i for i in ranked if i not in (winner, keep)]
-        stale = [i for i in ranked if i != winner]
-        marks = ", ".join("?" * len(stale))
-        for table in GRADE_CHILDREN:
-            conn.execute(f"DELETE FROM {table} WHERE grade_id IN ({marks})", stale)
-        if winner != keep:
-            values = conn.execute(f"SELECT {', '.join(columns)} FROM grades WHERE id = ?", (winner,)).fetchone()
+    for rows in by_submission.values():
+        for ranked in final_row_groups(rows, on_change):
+            if len(ranked) < 2:
+                continue
+            winner, keep = ranked[0], min(ranked)
+            stale = [i for i in ranked if i != winner]
+            doomed = [i for i in ranked if i != keep]
+            marks = ", ".join("?" * len(stale))
             for table in GRADE_CHILDREN:
-                conn.execute(f"UPDATE {table} SET grade_id = ? WHERE grade_id = ?", (keep, winner))
-            doomed.append(winner)
+                conn.execute(f"DELETE FROM {table} WHERE grade_id IN ({marks})", stale)
+            values = conn.execute(f"SELECT {', '.join(columns)} FROM grades WHERE id = ?", (winner,)).fetchone()
+            if winner != keep:
+                for table in GRADE_CHILDREN:
+                    conn.execute(f"UPDATE {table} SET grade_id = ? WHERE grade_id = ?", (keep, winner))
             conn.executemany("DELETE FROM grades WHERE id = ?", [(i,) for i in doomed])
-            assignments = ", ".join(f"{name} = ?" for name in columns)
-            conn.execute(f"UPDATE grades SET {assignments} WHERE id = ?", (*values, keep))
-        else:
-            conn.executemany("DELETE FROM grades WHERE id = ?", [(i,) for i in doomed])
-        removed += len(doomed)
+            if winner != keep:
+                assignments = ", ".join(f"{name} = ?" for name in columns)
+                conn.execute(f"UPDATE grades SET {assignments} WHERE id = ?", (*values, keep))
+            removed += len(doomed)
     return removed

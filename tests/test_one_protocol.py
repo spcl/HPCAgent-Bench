@@ -102,10 +102,10 @@ def test_only_the_final_grade_is_credited_and_an_old_protocol_only_kernel_is_una
     assert answers(tmp_path) == {"gemm": pytest.approx(4.0)}
 
 
-def test_an_owed_submission_is_listed_final_graded_and_rewrites_its_older_final_row(tmp_path: pathlib.Path) -> None:
+def test_an_owed_submission_is_listed_final_graded_beside_its_older_protocols_final_row(tmp_path: pathlib.Path) -> None:
     """``worklist --scope owed`` lists the episode's final submission no credited final grade re-timed;
-    the pass's shard, applied to the DB it was listed from, rewrites that submission's older final row
-    (same id, the credited values), and the submission is owed no more. An older final pass does not settle it."""
+    the pass's shard, applied to the DB it was listed from, adds the credited final row beside the older
+    protocol's row (never pooled), and the submission is owed no more. An older final pass does not settle it."""
     db = shard(tmp_path)
     earlier = submission(db, 0, "gemm", T0 + 10)
     last = submission(db, 0, "gemm", T0 + 20)
@@ -129,7 +129,8 @@ def test_an_owed_submission_is_listed_final_graded_and_rewrites_its_older_final_
         linked = conn.execute(
             "SELECT id, of_grade_id, timing_reduction FROM grades WHERE kind = 'final' ORDER BY ts_ms"
         ).fetchall()
-    assert [tuple(row) for row in linked] == [(older_id, last, timing.FINAL_GRADE_REDUCTION)]
+    assert [tuple(row) for row in linked][0] == (older_id, last, "mwd-v3")
+    assert [tuple(row)[1:] for row in linked][1] == (last, timing.FINAL_GRADE_REDUCTION)
 
 
 def test_a_final_grade_under_another_denominator_leaves_its_submission_owed(tmp_path: pathlib.Path) -> None:
