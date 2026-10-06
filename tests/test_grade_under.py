@@ -81,12 +81,13 @@ def add_grade(
     kind: str = "submit",
     units: tuple[str, ...] = (HOST,),
     language: str = "hip",
+    episode: str = RUN,
     **values: Any,
 ) -> int:
-    """One grade of episode ``RUN`` in ``db`` with its stored source ``units`` (host, then device),
+    """One grade of ``episode`` (slot 1) in ``db`` with its stored source ``units`` (host, then device),
     delivered in ``language``."""
     with contextlib.closing(recording.connect(str(db))) as conn:
-        run = results_db.ensure_episode(conn, SETUP, RUN, JOB)
+        run = results_db.ensure_episode(conn, SETUP, episode, JOB)
         stamp = {"preset": "XL", "datatype": "float64", "source_mode": "restricted"}
         grade_id, _ts = results_db.add_grade(conn, run, kernel, kind, ts_ms=ts, values=stamp | values)
         for part, text in zip(("host", "device"), units, strict=False):
@@ -844,6 +845,14 @@ def test_a_correct_submission_of_the_slot_leaves_no_score_owed_a_promotion(tmp_p
     rows = [("submit", "k1", 1, 3.0, 12), ("score", "k1", 1, 2.0, 18)]
     items, problems = grade_under.build_promotion_worklist([promotion_db(tmp_path, rows, cut=15)], [])
     assert (items, problems) == ([], [])
+
+
+def test_a_slot_relaunched_after_a_crash_is_owed_one_promotion_of_its_newest_score(tmp_path: pathlib.Path) -> None:
+    """Both episodes of slot 1 scored correct and neither submitted: the slot has one answer, the newest."""
+    db = promotion_db(tmp_path, [("score", "k1", 1, 2.0, 12)])
+    add_grade(db, "k1", 30, "score", (HOST, DEVICE), episode=f"{RUN}.relaunch", correct=1, speedup=1.5, status="ok")
+    (item,), _ = grade_under.build_promotion_worklist([db], [])
+    assert (item.episode_id, item.ts_ms) == (f"{RUN}.relaunch", 30)
 
 
 def test_a_submission_from_the_final_attempt_still_spends_it(tmp_path: pathlib.Path) -> None:

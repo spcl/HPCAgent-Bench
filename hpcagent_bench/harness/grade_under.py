@@ -623,12 +623,12 @@ def build_worklist(dbs: Iterable[pathlib.Path], env_dirs: list[pathlib.Path]) ->
     return items, problems
 
 
-#: Per episode (run, kernel) of a results DB whose slot has no correct submission of the kernel: the
-#: newest PASSING /score grade with a stored source at or after the final attempt's start, the best
+#: Per episode (run, kernel) of a results DB whose slot has no correct submission of the kernel: every
+#: PASSING /score grade with a stored source at or after the final attempt's start, the best
 #: speedup of those, and whether the final attempt spent its answer -- a graded submit the judge did not
 #: fault, or a promotion already credited.
 UNPROMOTED_EPISODES = f"""
-SELECT g.id AS grade_id, r.id AS run, r.label AS episode_id, r.job, r.setup, g.kernel, g.ts_ms, g.source_mode,
+SELECT g.id AS grade_id, r.id AS run, r.label AS episode_id, r.job, r.setup, r.slot, g.kernel, g.ts_ms, g.source_mode,
        coalesce(r.final_attempt_start_ms, 0) AS cut, g.workspace_bytes, g.distribution, g.requested_libraries, gs.language, gs.hash,
        (SELECT max(c.speedup) FROM grades c WHERE c.episode_id = g.episode_id AND c.kernel = g.kernel
             AND c.kind = 'score' AND c.correct = 1 AND c.ts_ms >= coalesce(r.final_attempt_start_ms, 0)) AS speedup
@@ -641,7 +641,7 @@ WHERE g.kind = 'score' AND g.correct = 1 AND r.label != '{ADHOC_EPISODE_ID}'
                   WHERE o.setup = r.setup AND o.slot = r.slot AND s.kernel = g.kernel
                     AND s.kind IN {results_db.SUBMIT_KINDS} AND s.correct = 1
                     AND EXISTS (SELECT 1 FROM grade_sources ss WHERE ss.grade_id = s.id AND ss.part = 'host'))
-ORDER BY r.id, g.kernel, g.ts_ms
+ORDER BY g.ts_ms
 """
 
 
@@ -714,17 +714,21 @@ def build_owed_worklist(dbs: Iterable[pathlib.Path], env_dirs: list[pathlib.Path
 
 
 def build_promotion_worklist(dbs: Iterable[pathlib.Path], env_dirs: list[pathlib.Path]) -> tuple[list[Item], list[str]]:
-    """One item per episode that scored correct in its final attempt and never spent its answer
-    (:func:`spent`): its newest passing source. Correct is enough, slower included."""
+    """One item per (setup, kernel, slot) whose newest episode scored correct in its final attempt and
+    never spent its answer (:func:`spent`): its newest passing source. Correct is enough, slower included."""
     items: list[Item] = []
     problems: list[str] = []
     envs: dict[str, dict[str, str] | None] = {}
     for db in dbs:
         with results_db.reading(db) as conn:
-            newest: dict[tuple[int, str], dict[str, Any]] = {}
+            newest: dict[tuple[str, str, int], dict[str, Any]] = {}
             for row in conn.execute(UNPROMOTED_EPISODES):
-                newest[(int(row["run"]), str(row["kernel"]))] = {**dict(row), "db": str(db)}
-            owed = [row for key, row in sorted(newest.items()) if not spent(conn, *key, since_ms=int(row["cut"]))]
+                newest[(str(row["setup"]), str(row["kernel"]), int(row["slot"]))] = {**dict(row), "db": str(db)}
+            owed = [
+                row
+                for _, row in sorted(newest.items())
+                if not spent(conn, int(row["run"]), str(row["kernel"]), since_ms=int(row["cut"]))
+            ]
         for row in owed:
             env = setup_env_or_problem(str(row["setup"]), env_dirs, envs, problems)
             if env is not None:
