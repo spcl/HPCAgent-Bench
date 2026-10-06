@@ -133,6 +133,33 @@ def test_an_owed_submission_is_listed_final_graded_beside_its_older_protocols_fi
     assert [tuple(row)[1:] for row in linked][1] == (last, timing.FINAL_GRADE_REDUCTION)
 
 
+def test_re_applying_an_older_final_wave_keeps_one_final_row(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two final waves re-time one submission, and the older wave is applied again afterwards: the DB
+    holds one final row of that (setup, kernel, slot), under the one final protocol, with the newer wave's grade."""
+    db = shard(tmp_path)
+    submission(db, 0, "gemm", T0 + 10)
+    (item,) = grade_under.build_owed_worklist([db], [env_dir(tmp_path)])[0]
+    waves = []
+    for index, speedup in enumerate((3.0, 4.0)):
+        monkeypatch.setattr(grade_under, "now_ms", lambda index=index: T0 + 100 + index)
+        wave = tmp_path / f"final-wave-{index}"
+        wave.mkdir()
+        grade_under.write_regrade(wave / "regrade-cells-0.db", item, "final", final_values(speedup))
+        waves.append(wave)
+
+    for wave in (*waves, waves[0]):
+        grade_under.apply_shards(db, [wave])
+
+    with results_db.reading(db) as conn:
+        finals = conn.execute(
+            "SELECT e.setup, f.kernel, e.slot, f.timing_reduction, f.speedup FROM grades f "
+            "JOIN episodes e ON e.id = f.episode_id WHERE f.kind = 'final'"
+        ).fetchall()
+    assert [tuple(row) for row in finals] == [(SETUP, "gemm", 1, timing.FINAL_GRADE_REDUCTION, 4.0)]
+
+
 def test_a_final_grade_under_another_denominator_leaves_its_submission_owed(tmp_path: pathlib.Path) -> None:
     """A final grade that divided by numba alone is not the configured best-of(numba,c): the
     submission has no credited answer and is owed a regrade."""
