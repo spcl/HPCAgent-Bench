@@ -9,18 +9,14 @@ desugars a body-level memset into the affine loop it is (``fill_loop_stmt``), so
 translation unit is the normal output.
 """
 
-import json
-import pathlib
 import re
-import tempfile
 
 from hpcagent_bench.pluto_affine import KNOWN_POLYCC_ISSUES, has_scop, scop_nonaffine_reason
 from hpcagent_bench.pluto_transform import dedupe_scratch_declarations
 from hpcagent_bench.translators.numpyto_c.emit import emit_pluto
-from hpcagent_bench.translators.numpyto_common.frontend import parse_kernel
 from hpcagent_bench.translators.numpyto_common.ir import KernelIR
 from hpcagent_bench.translators.numpyto_common.lowering import lower
-from tests.translators.op_oracle import bench_info_
+from tests.translators import op_oracle
 
 #: Every construct that must never appear inside a region, per PLUTO_UNSCOPABLE_RE.
 UNSCOPABLE = ("malloc(", "calloc(", "free(", "memset(", "memcpy(", "while (")
@@ -29,10 +25,7 @@ UNSCOPABLE = ("malloc(", "calloc(", "free(", "memset(", "memcpy(", "while (")
 def lower_src(
     src: str, fn: str, inputs: list[str], outputs: list[str], shapes: dict[str, str], syms: dict[str, int]
 ) -> KernelIR:
-    d = pathlib.Path(tempfile.mkdtemp())
-    (d / "k_numpy.py").write_text(src)
-    (d / "bi.json").write_text(json.dumps(bench_info_(fn, inputs, outputs, shapes, syms)))
-    return lower(parse_kernel(d / "k_numpy.py", d / "bi.json"))
+    return lower(op_oracle.parse_source(src, fn, inputs, outputs, shapes, syms))
 
 
 def regions_(text: str) -> list[str]:

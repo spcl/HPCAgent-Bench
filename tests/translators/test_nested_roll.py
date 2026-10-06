@@ -20,9 +20,7 @@ numpy (any axis, positive / negative shift, positional / kw axis).
 """
 
 import ast
-import pathlib
 import shutil
-import tempfile
 
 import numpy as np
 import pytest
@@ -51,20 +49,11 @@ def lower_source(src: str, func: str, shapes: dict[str, str], syms: dict[str, in
     structural regression (a surviving ``np.roll`` Call) points straight at the
     hoister rather than at a downstream backend error.
     """
-    import json
-
-    from hpcagent_bench.translators.numpyto_common.frontend import parse_kernel
     from hpcagent_bench.translators.numpyto_common.lowering import lower
-    from tests.translators.op_oracle import bench_info_
+    from tests.translators.op_oracle import parse_source
 
     inputs = [n for n in shapes if n != "out"]
-    bi = bench_info_(func, inputs, ["out"], shapes, syms, {})
-    with tempfile.TemporaryDirectory() as td:
-        tdp = pathlib.Path(td)
-        (tdp / f"{func}_numpy.py").write_text(src)
-        (tdp / "bi.json").write_text(json.dumps(bi))
-        kir = lower(parse_kernel(tdp / f"{func}_numpy.py", tdp / "bi.json"))
-    return ast.unparse(kir.tree)
+    return ast.unparse(lower(parse_source(src, func, inputs, ["out"], shapes, syms)).tree)
 
 
 # Registration / structural                                                   #
