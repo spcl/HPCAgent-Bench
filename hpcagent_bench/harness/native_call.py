@@ -1129,9 +1129,9 @@ def repair_hiprtc_include_path(cupy: types.ModuleType) -> None:
     scrape: Callable[[], Sequence[str]] | None = vars(environment).get("_get_hipcc_include_dirs")
     if scrape is None:
         raise RuntimeError(
-            "cupy no longer exposes _get_hipcc_include_dirs, so the cuda_wrappers workaround in "
-            "repair_hiprtc_include_path did not apply. Re-test whether it is still needed (a "
-            "device grade fails inside <initializer_list> when it is) before deleting it."
+            "cupy does not expose _get_hipcc_include_dirs, so the cuda_wrappers workaround in "
+            "repair_hiprtc_include_path cannot apply. Re-test whether it is needed (a device grade "
+            "fails inside <initializer_list> when it is) before deleting it."
         )
     kept = hiprtc_include_dirs(scrape())
     # Assigning the module's __dict__ entry is the attribute assignment.
