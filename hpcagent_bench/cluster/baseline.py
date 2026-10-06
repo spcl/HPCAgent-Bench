@@ -33,7 +33,7 @@ import sys
 import time
 from collections.abc import Callable, Mapping, Sequence
 
-from hpcagent_bench import cpf_canonical
+from hpcagent_bench import cpf_canonical, paths
 from hpcagent_bench.cluster import jobs
 from hpcagent_bench.units import BYTES_PER_KIB
 
@@ -297,9 +297,7 @@ def rank_environment(sweep: Sweep, rank: jobs.Rank) -> dict[str, str]:
     (sweep.out_root / f"{sweep.column}.rank{rank.index}.dace").write_text(
         env["HPCAGENT_BENCH_RECORD_BUILD"] + "\n", encoding="utf-8"
     )
-    harness = subprocess.run(
-        ["git", "-C", str(sweep.opt), "rev-parse", "--short", "HEAD"], capture_output=True, text=True, check=False
-    ).stdout.strip()
+    harness = paths.git_head(sweep.opt, short=True)
     print(f"canon {sweep.column} rank {rank.index}: dace @{sha} harness {harness or 'notree'}")
     env["DACE_BUILD_CACHE_DIR"] = f"/dev/shm/{env.get('USER', 'user')}/dace_bc_{sweep.column}_{sha}"
     build = sweep.out_root / f"dacecache-{sweep.column}"
