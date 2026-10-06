@@ -17,6 +17,8 @@ import ast
 import pathlib
 import re
 
+from tests.test_no_hardcoded_user_paths import docstring_constant_ids
+
 REPO = pathlib.Path(__file__).resolve().parents[1]
 _PATTERN = re.compile(r"-O3|-march=native|-ffast-math")
 _SCAN_DIRS = ("hpcagent_bench", "scripts")
@@ -28,9 +30,6 @@ _ALLOW = {
     "hpcagent_bench/benchmarks/scientific_computing/n_body_methods/lavamd/tests/test_lavamd.py",
     "hpcagent_bench/benchmarks/scientific_computing/map_reduce/xsbench/tests/test_xsbench.py",
 }
-
-#: AST nodes that carry a leading docstring (module / class / def / async def).
-_DOCSTRING_OWNERS = (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
 
 
 def _candidates():
@@ -44,23 +43,6 @@ def _candidates():
                 yield p, rel
 
 
-def _docstring_constant_ids(tree):
-    """``id()`` of the string-constant nodes that are docstrings, so the scan skips
-    the prose that legitimately documents a flag."""
-    ids = set()
-    for node in ast.walk(tree):
-        if isinstance(node, _DOCSTRING_OWNERS):
-            body = node.body
-            if (
-                body
-                and isinstance(body[0], ast.Expr)
-                and isinstance(body[0].value, ast.Constant)
-                and isinstance(body[0].value.value, str)
-            ):
-                ids.add(id(body[0].value))
-    return ids
-
-
 def _py_offenders(text, rel):
     """Flags inside live (non-docstring) string literals of a Python file. Comments
     never reach the AST, so they are excluded for free; docstrings are excluded by id."""
@@ -68,7 +50,7 @@ def _py_offenders(text, rel):
         tree = ast.parse(text)
     except SyntaxError:
         return _raw_offenders(text, rel)  # un-parseable: fall back to a comment-stripped scan
-    skip = _docstring_constant_ids(tree)
+    skip = docstring_constant_ids(tree)
     offenders = []
     for node in ast.walk(tree):
         if (
