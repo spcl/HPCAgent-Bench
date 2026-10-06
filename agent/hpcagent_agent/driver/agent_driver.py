@@ -29,6 +29,7 @@ from typing import Any, NamedTuple, NotRequired, TextIO, TypedDict, cast
 from hpcagent_agent.driver import harnesses, promote_unsubmitted, stream_idle_timeout, token_cost
 from hpcagent_agent.driver.harnesses import Closing, Context, Harness
 from hpcagent_agent.driver.token_cost import as_block
+from hpcagent_agent.tools import http_json
 
 __all__ = [
     "AGENT_CRASH_ATTEMPTS",
@@ -95,7 +96,6 @@ __all__ = [
     "TOKEN_DIR_NAME",
     "TOKEN_FOLD",
     "TOKEN_POLL_SECONDS",
-    "WORKER_TOKEN_ENV",
     "AgentState",
     "AggregateState",
     "Problem",
@@ -3175,7 +3175,6 @@ FUSED_PROBLEM_KEYS = ("env_file", "setup")
 FUSED_PROBLEM_FLAG = "--fused-problem"
 #: The same names hpcagent_bench.fused reads on the judge side (restated: this driver is stdlib-only).
 SETUPS_DIR_ENV = "HPCAGENT_BENCH_FUSED_SETUPS_DIR"
-WORKER_TOKEN_ENV = "HPCAGENT_BENCH_WORKER_TOKEN"
 TOKEN_DIR_NAME = "fused-tokens"
 SETUP_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
@@ -3222,7 +3221,7 @@ def fused_child_env(
             environment.pop(key, None)
         else:
             environment[key] = value
-    environment[WORKER_TOKEN_ENV] = token
+    environment[http_json.WORKER_TOKEN_ENV] = token
     environment[MATERIAL_DIR_ENV] = material
     environment[START_GATE_DIR_ENV] = gate
     return environment

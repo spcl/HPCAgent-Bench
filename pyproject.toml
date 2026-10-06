@@ -336,6 +336,8 @@ extend-exclude = ["*_generated.py"]
 # sources and NumPy references), not package code, so neither checker edits them into another task.
 [tool.pyright]
 pythonVersion = "3.12"
+# agent/ is a workspace member installed editable, which pyright cannot follow through the import hook.
+extraPaths = ["agent"]
 exclude = ["hpcagent_bench/benchmarks", "third_party", "**/node_modules", "**/__pycache__", "**/.*", "**/*_generated.py"]
 
 [tool.mypy]

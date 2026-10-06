@@ -92,7 +92,7 @@ def test_an_unreachable_judge_falls_back_rather_than_skipping(promoter, monkeypa
 
     monkeypatch.setattr(promoter.urllib.request, "urlopen", boom)
     monkeypatch.delenv("JUDGE_RANK", raising=False)
-    assert promoter.judge_rank("http://judge:8800") == promoter.DEFAULT_RANK
+    assert promoter.judge_rank("http://judge:8800") == promoter.http_json.DEFAULT_RANK
     monkeypatch.setenv("JUDGE_RANK", "5")
     assert promoter.judge_rank("http://judge:8800") == 5
 
