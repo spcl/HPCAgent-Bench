@@ -345,7 +345,7 @@ def native_build_command(backend: str, src, so, short: str = "", extra_compile=(
 
 #: Pluto backend: polyhedral auto-parallelization of the emitted scop via ``polycc`` (see
 #: :func:`_run_pluto`). Opt-in: only runs (and appears in the status dict) when requested via
-#: ``only_backends``, so legacy suites scanning for ``FAIL`` never see it.
+#: ``only_backends``, so a suite scanning for ``FAIL`` never sees it unasked.
 PLUTO = "pluto"
 PLUTO_EXTRA_FLAGS = ["-D_POSIX_C_SOURCE=199309L", "-fopenmp"]
 
@@ -358,7 +358,7 @@ _ISOPAR_LINK = list(languages.stdpar_link_flags("cpp"))
 
 #: DaCe backend: the generated ``*_dace.py`` lowered with ``to_sdfg(simplify=True)``, compiled and
 #: run against the same numpy reference every other backend is graded on. Opt-in via
-#: ``only_backends`` like :data:`PLUTO` / :data:`ISOPAR`, so legacy suites never see it.
+#: ``only_backends`` like :data:`PLUTO` / :data:`ISOPAR`.
 DACE = "dace"
 
 #: Wall-clock cap (s) on one kernel's whole DaCe leg (parse + compile + run). Generous by design,
@@ -614,16 +614,10 @@ ERROR_LINE_RE = re.compile(r"\b(?:error|fatal)\b", re.IGNORECASE)
 
 
 def exc_status(exc: BaseException, limit: int = 240) -> str:
-    """``FAIL:<Type>: <message>`` -- the exception TYPE alone is not a diagnosis.
-
-    Every one of these sites used to record only ``type(exc).__name__`` and drop ``str(exc)``
-    on the floor, at the single point where the cause was in hand. ``FAIL:OSError`` was the entire
-    verdict for three fft_1d cases whose ``.so`` carried an undefined ``fftwf_plan_dft_1d``; the
-    message that said so exactly was discarded, and the status read like a missing file.
-
-    The ``FAIL:`` prefix and the type are unchanged, so every consumer that buckets on
-    ``startswith("FAIL:")`` / ``split(":")[1]`` / ``== "ok"`` reads this the same way. Same shape
-    the sibling op oracle already records (``tests/translators/op_oracle.py``).
+    """``FAIL:<Type>: <message>`` -- the exception TYPE alone is not a diagnosis: a ``.so`` with an
+    undefined ``fftwf_plan_dft_1d`` is a bare ``FAIL:OSError`` without its message, which reads like a
+    missing file. Consumers bucket on ``startswith("FAIL:")`` / ``split(":")[1]`` / ``== "ok"``; the op
+    oracle (``tests/translators/op_oracle.py``) records the same shape.
     """
     text = " ".join(str(exc).split())
     return f"FAIL:{type(exc).__name__}" + (f": {text[:limit]}" if text else "")
@@ -632,16 +626,11 @@ def exc_status(exc: BaseException, limit: int = 240) -> str:
 def _diag(proc, limit: int = 240) -> str:
     """The shortest decisive line of a failed subprocess, as a ``": ..."`` status suffix.
 
-    A bare ``FAIL:compile`` names the phase but not the cause, so every investigation began by
-    monkeypatching subprocess.run to see the message the oracle had already been handed.
-
     Neither the first nor the last line is reliably the cause -- the compilers disagree. gcc LEADS
-    with ``file:line:col: error: msg`` and TRAILS with the source excerpt and caret art; gfortran
-    leads with the location and ENDS on ``Error: msg``. Taking the last line, as this first did,
-    returned ``|             ^~~~`` for every gcc failure -- a suffix carrying no information, so
-    the investigation it was written to end still needed a monkeypatch. Prefer the first line that
-    announces an error; fall back to the last non-empty line, which is where a python traceback
-    puts its exception.
+    with ``file:line:col: error: msg`` and TRAILS with the source excerpt and caret art (its last line
+    is ``|   ^~~~``); gfortran leads with the location and ENDS on ``Error: msg``. So: the first line
+    that announces an error, else the last non-empty line, which is where a python traceback puts
+    its exception.
     """
     for stream in (proc.stderr, proc.stdout):
         lines = [ln.strip() for ln in (stream or "").splitlines() if ln.strip()]
@@ -668,7 +657,7 @@ def _emit(
     from hpcagent_bench.emit_bridge import bench_info_tempfile
 
     npy = paths.BENCHMARKS / info["relative_path"] / f"{info['module_name']}_numpy.py"
-    # The legacy bench_info JSON the emitter reads is synthesized on the fly from the co-located YAML.
+    # The emitter reads a bench_info JSON, written from the co-located YAML for this call.
     with bench_info_tempfile(BenchSpec.load(short)) as bi:
         for mod in mods:
             cmd = [sys.executable, "-m", mod, "emit", "--kernel", str(npy), "--bench-info", str(bi), "--out", str(out)]
@@ -692,8 +681,8 @@ def run_kernel(
 ) -> dict[str, str]:
     """Return ``{backend: "ok" | "skip:..." | "FAIL:..."}`` for ``short``.
 
-    ``max_size`` caps every size dimension (used to run JAX small, since eager JAX is impractically
-    slow at full preset size; correctness is size-independent). ``only_backends`` restricts which
+    ``max_size`` caps every size dimension (JAX runs small: eager JAX is impractically slow at full
+    preset size, and correctness is size-independent). ``only_backends`` restricts which
     backends are built/run. ``precision`` drives input dtype, emit, and comparison tolerance together.
     ``seed`` makes input data reproducible; pass a different one to fuzz.
     """
