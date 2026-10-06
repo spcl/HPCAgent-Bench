@@ -7,15 +7,15 @@ an empty set or a zero ratio give two plots of the same data that do not match.
 
 WHAT LIVES HERE. Robust outlier rejection, the median and its bootstrap interval, the geometric
 mean and its bootstrap interval, the arithmetic mean and its bootstrap interval, the signed-change axis
-transform, the one-value-per-kernel reduction, the paired geomean with its sign-flip test, and the paired
-Hodges-Lehmann estimate with its signed-rank test.
+transform, the one-value-per-kernel reduction, and the building blocks of the paired tests (sign flips, Walsh
+averages, the Hodges-Lehmann estimate, the signed-rank and rank-sum calls). Which test a comparison runs is
+the test registry's choice (:mod:`hpcagent_bench.stats.significance`), which builds on these and is never
+imported from here.
 
 NO NORMALITY IS ASSUMED (Hoefler and Belli, SC15, Rule 6). Per-kernel ratios are often two spikes (many
 kernels at 1x, a few at 40x), so a Student-t interval on their logs would rest on an assumption the data
-breaks. Every interval over kernels is a BCa bootstrap over the kernels, and every paired comparison is a
-sign-flip permutation test with the interval that inverts it. :mod:`..inference`
-sits on top of this for hypothesis testing across a corpus; it imports from here and never the
-other way round.
+breaks. Every interval over kernels is a BCa bootstrap over the kernels, and the default paired comparison is
+a sign-flip permutation test with the interval that inverts it.
 
 Timing samples are right-skewed -- a run is never faster than the hardware minimum, but an OS
 hiccup can make a single run arbitrarily slow. So a sample is summarized with the MEDIAN and a
@@ -35,9 +35,9 @@ Reported defaults (so a run's rigor is documented, not implicit):
   whose BCa acceleration estimate is unstable);
 * interval over kernels -- BCa bootstrap of the statistic (:func:`geomean_ci`, :func:`mean_ci`), 9999
   resamples, seed 0, withheld below :data:`MIN_PAIRS_FOR_INTERVAL` values;
-* paired geomean -- sign-flip permutation test, exact up to :data:`SIGN_FLIP_EXACT_MAX_N` pairs, else
-  :data:`SIGN_FLIP_DRAWS` seeded sign vectors; its interval is the set of shifts the test does not reject;
-* paired test -- Wilcoxon signed-rank, exact or approximate by :func:`use_exact` (:data:`EXACT_MAX_N`);
+* sign flips -- exact up to :data:`SIGN_FLIP_EXACT_MAX_N` pairs, else :data:`SIGN_FLIP_DRAWS` seeded sign
+  vectors; :func:`sign_flip_interval` is the set of shifts the test does not reject;
+* signed rank -- Wilcoxon, exact or approximate by :func:`use_exact` (:data:`EXACT_MAX_N`);
   the method is passed to scipy explicitly rather than left to its ``auto`` heuristic.
 """
 
@@ -46,7 +46,7 @@ import math
 import warnings
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import NamedTuple
 
 import numpy as np
 import numpy.typing as npt
@@ -66,7 +66,7 @@ __all__ = [
     "SIGN_FLIP_EXACT_MAX_N",
     "FloatArray",
     "Interval",
-    "PairedChange",
+    "Signs",
     "Samples",
     "Statistic",
     "Unusable",
@@ -80,11 +80,10 @@ __all__ = [
     "mean_ci",
     "mean_interval",
     "median_ci",
-    "paired_change",
-    "paired_geomean",
     "rank_sum_test",
     "signed_change",
     "signed_rank_test",
+    "signs",
     "sign_flip_interval",
     "sign_flip_pvalue",
     "sign_flips",
@@ -93,12 +92,9 @@ __all__ = [
     "walsh_averages",
 ]
 
-# scipy and pandas are imported INSIDE the three functions that need them, not here. The grading
-# path takes its geometric mean from this module and already pays for numpy; making it pay for
-# scipy as well would put a second of import into every judge process to reach ten lines of
-# arithmetic. pandas is only ever an annotation here, so it never loads at runtime at all.
-if TYPE_CHECKING:
-    pass
+# scipy is imported INSIDE the functions that need it: the grading path takes its geometric mean from
+# this module and already pays for numpy; a second of scipy import per judge process for ten lines of
+# arithmetic is not worth it.
 
 #: One timing sample per element. float64 is what ``np.asarray(..., dtype=float)`` produces.
 FloatArray = npt.NDArray[np.float64]
@@ -237,31 +233,6 @@ class Interval:
     def label(self) -> str:
         """One-line figure/table label naming both the statistic and the interval kind."""
         return f"{int(round(self.confidence * 100))}% {self.method} CI for {self.statistic}"
-
-
-@dataclass(frozen=True, slots=True)
-class PairedChange:
-    """The paired per-kernel change: one estimate, one interval and one p value that agree.
-
-    Each producer keeps the three on one quantity: :func:`paired_change` the Hodges-Lehmann location
-    its signed-rank test inverts, :func:`paired_geomean` the mean log its sign-flip test is on. A bootstrap
-    mean beside a rank test does not: the two can disagree about which setup is ahead, and a reader
-    cannot tell which to believe.
-    """
-
-    estimate: float
-    low: float
-    high: float
-    pvalue: float
-    n: int
-    wins: int
-    losses: int
-    ties: int
-    method: str  # "signed-rank-exact" | "signed-rank-approx" | "sign-flip-exact" | "sign-flip-sampled" | "underpowered" | "degenerate"
-
-    def interval(self, name: str, confidence: float = 1.0 - DEFAULT_ALPHA) -> Interval:
-        """The same estimate as an :class:`Interval`, for a figure that draws one."""
-        return Interval(name, self.estimate, self.low, self.high, confidence, self.method, self.n)
 
 
 def bootstrap_ci(
@@ -516,47 +487,19 @@ def hodges_lehmann(values: Samples) -> float:
     return float(np.median(walsh_averages(values)))
 
 
-def paired_change(differences: Samples, alpha: float = DEFAULT_ALPHA) -> PairedChange:
-    """Hodges-Lehmann estimate, distribution-free interval and signed-rank p for paired ``differences``.
+class Signs(NamedTuple):
+    """How many paired changes favour the first setup, the second, and neither."""
 
-    ``differences`` is one number per KERNEL, already paired -- typically ``log(after / before)``,
-    which makes the estimate a ratio once mapped back through ``exp`` and makes a win and its exact
-    inverse cancel. Pairing is most of the precision: per-kernel spread is far larger than any
-    treatment effect this repo measures, and the unpaired sibling of this test sees almost nothing
-    at n = 40.
+    wins: int
+    losses: int
+    ties: int
 
-    The interval is the k-th smallest and k-th largest Walsh average, k taken from the signed-rank
-    null -- no normality assumption and no resampling, so a published end point cannot move because
-    a seed changed. Zero differences are dropped (Wilcoxon's original treatment): they support
-    neither direction, and keeping them would inflate n and shrink the p value for free.
 
-    The ESTIMATOR DOES NOT CHANGE WITH n. Below :data:`MIN_PAIRS_FOR_INTERVAL` the interval and the
-    p value are withheld and ``method`` says ``underpowered``, but the point is still the
-    Hodges-Lehmann estimate. Switching to a plain median down there -- which one caller did -- makes
-    the marks on one figure two different statistics, and the reader is told which only by counting
-    the kernels behind each row.
-    """
+def signs(differences: Samples) -> Signs:
+    """The :class:`Signs` of the finite ``differences``: a win is above 0, a loss below, a tie exactly 0."""
     x: FloatArray = np.asarray(differences, dtype=np.float64)
     x = x[np.isfinite(x)]
-    wins, losses = int(np.count_nonzero(x > 0.0)), int(np.count_nonzero(x < 0.0))
-    ties = int(np.count_nonzero(x == 0.0))
-    nonzero: FloatArray = x[x != 0.0]
-    n = int(nonzero.size)
-    if n == 0:
-        return PairedChange(0.0, math.nan, math.nan, 1.0, 0, wins, losses, ties, "degenerate")
-    point = hodges_lehmann(nonzero)
-    if n < MIN_PAIRS_FOR_INTERVAL:
-        return PairedChange(point, math.nan, math.nan, math.nan, n, wins, losses, ties, "underpowered")
-    from scipy.stats import norm  # pyright: ignore[reportMissingTypeStubs, reportUnknownVariableType]
-
-    pvalue, method = signed_rank_test(nonzero)[1:3]
-    walsh = walsh_averages(nonzero)
-    mean = n * (n + 1) / 4.0
-    sd = math.sqrt(n * (n + 1) * (2 * n + 1) / 24.0)
-    z = float(norm.ppf(1.0 - alpha / 2.0))  # pyright: ignore[reportUnknownMemberType]
-    cutoff = min(max(math.floor(mean - z * sd), 0), walsh.size // 2 - 1)
-    low, high = float(walsh[cutoff]), float(walsh[walsh.size - 1 - cutoff])
-    return PairedChange(point, low, high, pvalue, n, wins, losses, ties, method)
+    return Signs(int(np.count_nonzero(x > 0.0)), int(np.count_nonzero(x < 0.0)), int(np.count_nonzero(x == 0.0)))
 
 
 #: Up to this many pairs the sign-flip test enumerates every sign vector (2**16 = 65536 of them).
@@ -610,36 +553,3 @@ def sign_flip_interval(differences: Samples, flips: FloatArray, alpha: float = D
         return inner
 
     return edge(float(np.min(x)) - span), edge(float(np.max(x)) + span)
-
-
-def paired_geomean(log_ratios: Samples, alpha: float = DEFAULT_ALPHA) -> PairedChange:
-    """The GEOMETRIC MEAN of paired per-kernel ratios, given as their logs: the mean log, its sign-flip
-    permutation p and the interval that inverts that test, all three on that one mean.
-
-    ``exp(estimate)`` is the geomean ratio, the statistic an overall ratio is reported as everywhere in
-    this repo, so a setup comparison reads "a is X times b on the geomean over the shared kernels". No
-    normality is assumed: the test and its interval are exact under the paired null (a kernel's log ratio
-    as likely positive as negative), and the interval excludes 0 exactly when ``p < alpha``. A zero log
-    (no change on a kernel) stays in: dropping the kernels that did not change would overstate the change
-    of the rest.
-
-    Below :data:`MIN_PAIRS_FOR_INTERVAL` the interval and p are withheld (``underpowered``); a set with no
-    spread reads ``degenerate`` with no interval and no p, so neither enters a correction. No pairs at all
-    has no estimate either: NaN, never 0 (a 1x ratio).
-    """
-    x: FloatArray = np.asarray(log_ratios, dtype=np.float64)
-    x = x[np.isfinite(x)]
-    wins, losses = int(np.count_nonzero(x > 0.0)), int(np.count_nonzero(x < 0.0))
-    ties = int(np.count_nonzero(x == 0.0))
-    n = int(x.size)
-    if n == 0:
-        return PairedChange(math.nan, math.nan, math.nan, math.nan, 0, wins, losses, ties, "degenerate")
-    point = math.fsum(x.tolist()) / n
-    if n < MIN_PAIRS_FOR_INTERVAL:
-        return PairedChange(point, math.nan, math.nan, math.nan, n, wins, losses, ties, "underpowered")
-    if float(np.ptp(x)) == 0.0:
-        return PairedChange(point, math.nan, math.nan, math.nan, n, wins, losses, ties, "degenerate")
-    flips = sign_flips(n)
-    low, high = sign_flip_interval(x, flips, alpha)
-    method = "sign-flip-exact" if n <= SIGN_FLIP_EXACT_MAX_N else "sign-flip-sampled"
-    return PairedChange(point, low, high, sign_flip_pvalue(x, flips), n, wins, losses, ties, method)

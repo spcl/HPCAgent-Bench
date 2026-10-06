@@ -9,8 +9,9 @@ scored setup of the same model, language and tag) has nowhere to be formed. This
 an ARGUMENT and runs them through the same reduction and the same guards:
 :func:`~hpcagent_bench.stats.population.setup_kernel_answers` for the one value per kernel,
 :func:`~hpcagent_bench.stats.population.align` and :func:`~hpcagent_bench.stats.population.coverage`
-for the kernel set, :func:`~hpcagent_bench.stats.summary.paired_geomean` for the geomean ratio, its
-interval and its p, and :func:`~hpcagent_bench.harness.efficacy.correct_family` for the family. A kernel
+for the kernel set, the configured paired test (``statistics.paired_test``, the sign-flip test on the geomean
+ratio by default, :func:`~hpcagent_bench.stats.significance.paired`) for the estimate, its interval and its p,
+and :func:`~hpcagent_bench.harness.efficacy.correct_family` for the family. A kernel
 run more than once is reduced by one rule: the latest run of each slot, then the median over slots.
 
 A FAILED EPISODE IS NOT A SPEEDUP, AND IT STILL COSTS ITS TOKENS (``--policy``, default
@@ -24,9 +25,10 @@ The score leg is therefore paired over the kernels both setups SOLVED and the co
 both setups have a token count for, each with its own n. Intersecting them drops graded kernels for
 want of a call row, which is the defect that withdrew the CPF cost claim.
 
-The family is every test in the output: the ``speedup`` and ``tokens`` legs of every pair.
-Benjamini-Hochberg runs across it once, and a leg with fewer than ``summary.MIN_PAIRS_FOR_INTERVAL``
-pairs reports ``underpowered`` rather than a verdict.
+The family is every test in the output: the ``speedup`` and ``tokens`` legs of every pair. The configured
+correction (``statistics.correction``, Benjamini-Hochberg by default) runs across it once, and a leg with
+fewer than ``summary.MIN_PAIRS_FOR_INTERVAL`` pairs reports ``underpowered`` rather than a verdict. The
+``test`` and ``correction`` columns name what produced ``p_value`` and ``p_adjusted``.
 
     python3 paired_setups.py --observations scored.db --observations blind.db \\
         --pair llr40-oss120b-c,llrblind-oss120b-c \\
@@ -41,12 +43,13 @@ import math
 import pathlib
 import sys
 import warnings
+from typing import NamedTuple
 
 import pandas as pd
 
 from hpcagent_bench import study_tags, studies
 from hpcagent_bench.harness import efficacy
-from hpcagent_bench.stats import cost, population, score_rule, summary
+from hpcagent_bench.stats import cost, population, score_rule, significance, summary
 
 #: Order every episode's graded rows are read in; ``attempt_index`` breaks a same-millisecond tie in
 #: the order the agent made the submissions.
@@ -109,7 +112,10 @@ PAIR_COLUMNS = (
     "wins_b",
     "ties",
     "method",
+    # the registered paired test behind p_value and the interval, and the correction behind p_adjusted
+    "test",
     "p_value",
+    "correction",
     "p_adjusted",
     "verdict",
 )
@@ -377,11 +383,23 @@ def setup_aggregates(
     return out
 
 
-def score_leg(left: population.SetupAggregate, right: population.SetupAggregate) -> tuple[summary.PairedChange, int]:
-    """The geomean speedup ratio over the kernels BOTH setups solved, and how many that was."""
+class Leg(NamedTuple):
+    """One leg of a pair: the paired test over its log ratios, how many kernels it paired, and their signs."""
+
+    change: significance.Result
+    n_pairs: int
+    signs: summary.Signs
+
+
+def paired_leg(differences: list[float], n_pairs: int) -> Leg:
+    """``differences`` through the configured paired test."""
+    return Leg(significance.paired(differences), n_pairs, summary.signs(differences))
+
+
+def score_leg(left: population.SetupAggregate, right: population.SetupAggregate) -> Leg:
+    """The speedup leg over the kernels BOTH setups solved."""
     aligned = population.align([left, right])
-    differences = population.log_differences(aligned[0], aligned[1])
-    return summary.paired_geomean(differences), aligned[0].n
+    return paired_leg(population.log_differences(aligned[0], aligned[1]), aligned[0].n)
 
 
 def shared_token_kernels(left: str, right: str, tokens: dict[tuple[str, str], float]) -> list[str]:
@@ -389,19 +407,19 @@ def shared_token_kernels(left: str, right: str, tokens: dict[tuple[str, str], fl
     return sorted({k[1] for k in tokens if k[0] == left} & {k[1] for k in tokens if k[0] == right})
 
 
-def cost_leg(left: str, right: str, tokens: dict[tuple[str, str], float]) -> tuple[summary.PairedChange, int] | None:
+def cost_leg(left: str, right: str, tokens: dict[tuple[str, str], float]) -> Leg | None:
     """The paper's ``rho_C = GM(C_b / C_a)`` over the kernels both setups have a token count for (``K``):
     control over treated, so above 1 means setup ``a`` is CHEAPER, the same direction as ``rho_S``."""
     shared = shared_token_kernels(left, right, tokens)
     if not shared:
         return None
-    return summary.paired_geomean([math.log(tokens[(right, k)] / tokens[(left, k)]) for k in shared]), len(shared)
+    return paired_leg([math.log(tokens[(right, k)] / tokens[(left, k)]) for k in shared], len(shared))
 
 
-def tested_p(change: summary.PairedChange) -> float:
+def tested_p(change: significance.Result) -> float:
     """The leg's p, or NaN when no test was performed on it.
 
-    ``paired_geomean`` withholds p from a leg whose ratios have no spread (``degenerate``) and from one
+    The paired tests withhold p from a leg whose ratios have no spread (``degenerate``) and from one
     below the interval floor (``underpowered``). Neither
     is a test: entering them into the correction would raise ``m`` for members that cannot reach any
     alpha and weaken every real one. ``correct_family`` skips a non-finite p and labels it
@@ -435,7 +453,7 @@ def pair_rows(
     family: str,
     served: dict[str, frozenset[str]] | None = None,
 ) -> list[dict[str, object]]:
-    """One row per leg per pair, with the family's Benjamini-Hochberg verdicts already applied.
+    """One row per leg per pair, with the family's corrected verdicts already applied.
 
     ``served`` is each setup's served kernels (:func:`served_by_setup`), the ``K`` the tokens leg is
     checked against; without it every setup was served ``tag``."""
@@ -460,12 +478,11 @@ def pair_rows(
             "n_only_b": gap.n_only_right,
             "coverage_p": population.mcnemar_exact(gap.n_only_left, gap.n_only_right),
         }
-        score, n_score = score_leg(left, right)
-        legs: list[tuple[str, summary.PairedChange, int]] = [("speedup", score, n_score)]
+        legs = [("speedup", score_leg(left, right))]
         cost = cost_leg(setup_a, setup_b, tokens)
         if cost is not None:
-            legs.append(("tokens", cost[0], cost[1]))
-        for name, change, n_pairs in legs:
+            legs.append(("tokens", cost))
+        for name, (change, n_pairs, signs) in legs:
             rows.append(
                 {
                     **head,
@@ -475,15 +492,17 @@ def pair_rows(
                     "rho": math.exp(change.estimate),
                     "ci_low": math.exp(change.low) if math.isfinite(change.low) else math.nan,
                     "ci_high": math.exp(change.high) if math.isfinite(change.high) else math.nan,
-                    "wins_a": change.wins,
-                    "wins_b": change.losses,
-                    "ties": change.ties,
+                    "wins_a": signs.wins,
+                    "wins_b": signs.losses,
+                    "ties": signs.ties,
                     "method": change.method,
+                    "test": change.label,
                     "p_value": tested_p(change),
                 }
             )
     verdicts = efficacy.correct_family([float(row["p_value"]) for row in rows])
     for row, verdict in zip(rows, verdicts, strict=True):
+        row["correction"] = verdict.correction
         row["p_adjusted"] = verdict.adjusted
         row["verdict"] = verdict.label
     return rows
@@ -844,6 +863,7 @@ def setup_language(observations: pd.DataFrame, setup: str) -> str:
 
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
+    significance.configured()  # an unknown test name stops here, before any data is read
     pairs = [parse_pair(spec) for spec in args.pair]
     setups = sorted({setup for pair in pairs for setup in pair})
 

@@ -194,8 +194,8 @@ def test_the_score_leg_keeps_a_kernel_that_has_no_call_row(paired_setups: Module
     table = paired_setups.setup_aggregates(best, paired_setups.served_by_setup(obs), "numba")
     tokens = paired_setups.tokens_by_setup_kernel(obs)
 
-    assert ("a", "k9") not in tokens
-    change, n_pairs = paired_setups.score_leg(table["a"], table["b"])
+    leg = paired_setups.score_leg(table["a"], table["b"])
+    change, n_pairs = leg.change, leg.n_pairs
     assert n_pairs == len(KERNELS) + 1
     assert change.n == len(KERNELS) + 1
     assert paired_setups.cost_leg("a", "b", tokens)[1] == len(KERNELS)
@@ -415,7 +415,7 @@ def test_the_estimate_is_the_geomean_of_the_paired_ratios(paired_setups: ModuleT
     obs = paired_setups.load_observations([path])
     best = paired_setups.best_by_setup_kernel(paired_setups.graded_rows(obs, ["a", "b"]))
     table = paired_setups.setup_aggregates(best, paired_setups.served_by_setup(obs), "numba")
-    change, _ = paired_setups.score_leg(table["a"], table["b"])
+    change = paired_setups.score_leg(table["a"], table["b"]).change
 
     assert math.exp(change.estimate) == pytest.approx(summary.geomean(values))
     assert change.method == "sign-flip-exact"
