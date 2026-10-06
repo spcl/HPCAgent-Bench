@@ -105,7 +105,7 @@ def canon_rows(sweep: baseline.Sweep) -> dict[str, dict]:
         return {row["kernel"]: dict(row) for row in conn.execute("SELECT * FROM canon WHERE column = 'fakecol'")}
 
 
-# ------------------------------------------------------------------------------------------- the rank split
+# the rank split
 
 
 @pytest.mark.parametrize("size", [1, 2, 3, 4, 7])
@@ -132,7 +132,7 @@ def test_a_rank_with_no_kernels_is_a_no_op_that_needs_no_dace_tree(
     assert "no kernels assigned" in out and "0 rows" in out
 
 
-# -------------------------------------------------------------------------------------------- the per-kernel caps
+# the per-kernel caps
 
 
 def test_a_hung_kernel_is_killed_and_recorded_as_a_timeout_row_not_a_silent_gap(
@@ -192,7 +192,7 @@ def test_each_rank_is_masked_to_one_hip_device_of_the_jobs_list() -> None:
     assert baseline.hip_device({}, 0) is None, "a CPU column inherits no list and keeps the step's binding"
 
 
-# ------------------------------------------------------------------------------------------ the CSV summary
+# the CSV summary
 
 
 def test_the_summary_counts_what_the_csv_says_not_the_exit_codes(tmp_path: pathlib.Path) -> None:
@@ -212,7 +212,7 @@ def test_the_summary_counts_what_the_csv_says_not_the_exit_codes(tmp_path: pathl
     )
 
 
-# -------------------------------------------------------------------------------------- the managed work dir
+# the managed work dir
 
 
 def test_a_managed_work_dir_is_derived_from_the_cache_root_never_from_scratch(tmp_path: pathlib.Path) -> None:
@@ -341,7 +341,7 @@ def test_begin_forgets_the_previous_runs_dace_labels(tmp_path: pathlib.Path) -> 
     assert not label.exists()
 
 
-# --------------------------------------------------------------------------------------- the tag and phases
+# the tag and phases
 
 
 def test_a_kernels_file_narrows_the_tag_and_is_read_sorted(tmp_path: pathlib.Path) -> None:

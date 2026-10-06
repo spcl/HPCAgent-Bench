@@ -20,6 +20,9 @@
 # that exists is ever overwritten: entries are content-addressed, so an existing one is either the
 # same bytes or another engine's equally valid result. Staging names start with STAGE_PREFIX and
 # seed skips them, so a publisher killed mid-copy leaves nothing a later seed would pick up.
+#
+# Copies keep mode and timestamps only, never owner or xattrs: inside a container a cp -a that cannot
+# restore them (a mapped root's chown, Lustre's lustre.lov xattr) exits nonzero, and the entry was dropped.
 set -uo pipefail
 
 # A core dump lands in the crashing process's CWD (the checkout) and Slurm propagates the
@@ -54,7 +57,7 @@ seed() {
     # -n: a local entry (a previous seed on this node) is never replaced by a shared one mid-run.
     (cd "${shared}" && find . -mindepth 1 -maxdepth 1 ! -name "${STAGE_PREFIX}*" -print0) |
         while IFS= read -r -d '' entry; do
-            cp -an -- "${shared}/${entry#./}" "${local_dir}/" 2>/dev/null || true
+            cp -dRn --preserve=mode,timestamps -- "${shared}/${entry#./}" "${local_dir}/" 2>/dev/null || true
         done
     scrub_dead_entries "${local_dir}"
     return 0
@@ -65,7 +68,7 @@ seed() {
 stage_rename() {
     local src="$1" dst="$2" stage
     stage="$(dirname -- "${dst}")/${STAGE_PREFIX}.$(hostname -s).$$.$(basename -- "${dst}")"
-    cp -a -- "${src}" "${stage}" 2>/dev/null || { rm -rf -- "${stage}"; return 0; }
+    cp -dR --preserve=mode,timestamps -- "${src}" "${stage}" 2>/dev/null || { rm -rf -- "${stage}"; return 0; }
     if [[ -e "${dst}" ]]; then
         rm -rf -- "${stage}"
     else

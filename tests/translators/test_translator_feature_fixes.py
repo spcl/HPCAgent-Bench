@@ -156,10 +156,9 @@ def test_variadic_minmax_folds_to_nested_2arg(fn) -> None:
     from hpcagent_bench.translators.numpyto_c.emit import CBodyEmitter
     from hpcagent_bench.translators.numpyto_common.ir import KernelIR
 
-    # Built through __init__, not __new__. The bypass used to set by hand only the two attributes
-    # this call happened to read, so every new attribute the emitter grew broke this test with an
-    # AttributeError from inside emit -- twice already (kir, then isopar_param_dtypes). An empty
-    # kernel gives the constructor everything it needs; the call under test is still scalar-only.
+    # Built through __init__, not __new__: a bypass that sets only the attributes this call reads
+    # breaks on every attribute the emitter grows. An empty kernel gives the constructor everything
+    # it needs; the call under test is still scalar-only.
     em = CBodyEmitter(KernelIR(tree=ast.parse("def f(): pass").body[0], kernel_name="f"))
     out = em.emit_call(expr_(f"{fn}(a, b, c)"))
     assert out == f"{fn}({fn}(a, b), c)"
@@ -826,9 +825,8 @@ def test_fortran_abi_param_order_matches_binding() -> None:
         params = [p.strip() for p in sig.split(",")]
     assert params == order, f"Fortran sig {params} != binding {order}"
     # No synthesized name carries a leading underscore (cross-backend-invalid).
-    # (The corpus has since moved several kernels to an explicit in-place ``out``
-    # parameter, so a synthesized ``ret_arr0`` is no longer guaranteed; the
-    # ABI-order equality above is the invariant the matvec-cluster fix protects.)
+    # (Kernels with an explicit in-place ``out`` parameter synthesize no ``ret_arr0``;
+    # the ABI-order equality above is the invariant.)
     assert not any(p.startswith("__") for p in params)
 
 

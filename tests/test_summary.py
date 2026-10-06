@@ -80,43 +80,55 @@ def test_geomean_interval_brackets_the_centre() -> None:
     assert interval.low < interval.point < interval.high
 
 
-def test_the_geomean_interval_is_asymmetric_on_the_ratio_scale() -> None:
-    """exp is not linear, so a symmetric +/- half-width would be wrong on a ratio axis. The ends
-    are equidistant in LOG space and therefore not in ratio space."""
-    interval = summary.geomean_ci([1.5, 3.0, 0.25, 8.0])
-    assert interval.point - interval.low != pytest.approx(interval.high - interval.point)
-    assert math.log(interval.point) - math.log(interval.low) == pytest.approx(
-        math.log(interval.high) - math.log(interval.point)
-    )
+def test_the_geomean_interval_is_the_bootstrap_of_the_mean_log_mapped_back() -> None:
+    """The interval is resampled in LOG space and its ends exponentiated: the bootstrap interval of the mean
+    log, never a +/- half-width on the ratio axis (exp is not linear)."""
+    values = [1.5, 3.0, 0.25, 8.0]
+    interval = summary.geomean_ci(values)
+    logs = summary.bootstrap_ci(np.log(values), np.mean)
+    assert (math.log(interval.low), math.log(interval.high)) == pytest.approx((logs.low, logs.high))
+    assert interval.low < interval.point < interval.high
 
 
-def test_the_geomean_interval_is_the_95_percent_log_t_interval() -> None:
-    """Ratios 1,2,4,1,2,4: log2 values 0,1,2,0,1,2, mean 1, sd sqrt(0.8), t(0.975, 5) = 2.5706.
-    The ends are 2^(1 -/+ 2.5706 * sqrt(0.8/6)) = 1.04345 and 3.83345, by hand."""
-    interval = summary.geomean_ci([1.0, 2.0, 4.0, 1.0, 2.0, 4.0])
-    assert (interval.point, interval.low, interval.high) == pytest.approx((2.0, 1.0434462081689584, 3.833451086107456))
+def test_the_geomean_interval_is_the_95_percent_bca_bootstrap_and_reproducible() -> None:
+    """Ratios 1,2,4,1,2,4: log2 values 0,1,2,0,1,2. Every BCa resample mean is a multiple of 1/6 in log2,
+    and the ends land on 2^(1/3) and 2^(5/3); the fixed seed makes a second call identical."""
+    first = summary.geomean_ci([1.0, 2.0, 4.0, 1.0, 2.0, 4.0])
+    assert (first.point, first.low, first.high) == pytest.approx((2.0, 2.0 ** (1 / 3), 2.0 ** (5 / 3)))
+    assert first.method == "bootstrap-BCa"
+    assert summary.geomean_ci([1.0, 2.0, 4.0, 1.0, 2.0, 4.0]) == first
 
 
 @pytest.mark.parametrize(("n", "has_interval"), [(5, False), (6, True)])
-def test_a_figure_geomean_draws_its_log_t_interval_only_from_six_values(n: int, has_interval: bool) -> None:
-    """Below 6 values the point stays and the interval is withheld; from 6 it is the log-t interval."""
+def test_a_figure_geomean_draws_its_interval_only_from_six_values(n: int, has_interval: bool) -> None:
+    """Below 6 values the point stays and the interval is withheld; from 6 it is the bootstrap interval."""
     interval = summary.geomean_interval([1.0, 2.0, 4.0, 1.0, 2.0, 4.0][:n])
-    assert interval.method == ("log-t" if has_interval else "underpowered")
+    assert interval.method == ("bootstrap-BCa" if has_interval else "underpowered")
     assert math.isfinite(interval.low) == has_interval == math.isfinite(interval.high)
 
 
-def test_the_paired_geomean_is_a_paired_t_test_with_a_log_t_interval() -> None:
-    """The same six log ratios as a paired leg: the same interval, and the paired t p at
-    t = 1 / sqrt(0.8/6) = 2.7386 on 5 degrees of freedom, 0.04086."""
+def test_the_paired_geomean_is_an_exact_sign_flip_test() -> None:
+    """Six log ratios 0, 1, 2, 0, 1, 2 (x ln 2), mean ln 2. Of the 64 sign vectors, a flipped mean as far from
+    0 as the observed one needs the four nonzero ratios to share a sign: 2 x 4 vectors (the two zeros flip
+    freely), so p = 8/64 = 0.125 by hand. The interval inverts the test, so it holds no change (1x) exactly
+    because p is above 0.05."""
     change = summary.paired_geomean([math.log(2.0) * value for value in (0, 1, 2, 0, 1, 2)])
-    assert change.method == "paired-t"
-    assert math.exp(change.low) == pytest.approx(1.0434462081689584)
-    assert math.exp(change.high) == pytest.approx(3.833451086107456)
-    assert change.pvalue == pytest.approx(0.040859403859295894)
+    assert change.method == "sign-flip-exact"
+    assert change.pvalue == pytest.approx(8 / 64)
+    assert change.low == pytest.approx(0.0, abs=1e-11) and change.high > 0.0
+
+
+def test_a_cost_has_an_arithmetic_mean_with_its_own_interval() -> None:
+    """Hoefler and Belli Rule 3: a cost is summarized by its arithmetic mean. One expensive kernel moves it
+    as it moves the bill; the interval is withheld below six values like every other."""
+    interval = summary.mean_interval([100.0, 200.0, 300.0, 400.0, 500.0, 10000.0])
+    assert interval.point == pytest.approx(1916.6666666666667)
+    assert interval.low < interval.point < interval.high
+    assert summary.mean_interval([1.0, 2.0]).method == "underpowered"
 
 
 def test_the_interval_names_what_it_is_for() -> None:
-    assert summary.geomean_ci([2.0, 4.0]).label() == "95% log-t CI for geomean"
+    assert summary.geomean_ci([2.0, 4.0]).label() == "95% bootstrap-BCa CI for geomean"
 
 
 def test_hodges_lehmann_is_the_median_of_the_walsh_averages() -> None:

@@ -99,7 +99,6 @@ __all__ = [
     "TimingProbe",
     "TorchTensor",
     "alloc_workspace",
-    "arg_residence",
     "arm_memory_cap",
     "assigned",
     "assigned_device",
@@ -531,15 +530,6 @@ def alloc_workspace(nbytes: int, xp: types.ModuleType = np) -> "ArrayBuffer | No
     backing: ArrayBuffer = xp.empty(nbytes + WORKSPACE_ALIGN, dtype=xp.uint8)
     off = (-scratch_ptr(backing)) % WORKSPACE_ALIGN
     return backing[off : off + nbytes]
-
-
-def arg_residence(binding: Binding, residency: str) -> dict[str, str]:
-    """Storage location (``"host"``/``"device"``) of each ABI arg (abi_contract Sec. 10): pointers
-    share the task residency, scalars are always host.
-
-    Nothing calls this; the call path encodes the rule structurally, and ``tests/test_agent_bench``
-    checks the contract against it."""
-    return {a.name: (residency if a.kind == "ptr" else "host") for a in binding.args}
 
 
 def rep_guard(

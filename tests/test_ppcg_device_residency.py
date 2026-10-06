@@ -43,7 +43,7 @@ from hpcagent_bench.frameworks import pluto_framework
 from hpcagent_bench.frameworks.errors import NotSupportedByFramework
 from hpcagent_bench.ppcg_transform import device_resident_host
 
-# --------------------------------------------------------------------------------------- fixture
+# fixture
 
 #: A hand-written stand-in for what hipify-perl produces from ppcg's ``--target=cuda`` output on a
 #: trivial ``axpy``-shaped kernel: two array arguments (one in, one in/out) and a scalar. This is
@@ -253,7 +253,7 @@ def test_a_passthrough_is_published_and_declined_not_crashed_on(
         ppcg_transform.transformed_sources(cpp_backend, "red", "hip")
 
 
-# ------------------------------------------------------------------------- ctypes device pointers
+# ctypes device pointers
 
 
 class FakeCupyArray:
@@ -314,7 +314,7 @@ def test_call_selects_fp64_off_a_device_array_too() -> None:
     assert is_double
 
 
-# ------------------------------------------------------------------- PlutoFramework wiring (fake)
+# PlutoFramework wiring (fake)
 
 
 class FakeEvent:
@@ -412,7 +412,7 @@ def test_a_cpu_pluto_column_keeps_the_host_clock() -> None:
     assert timer.state is None
 
 
-# ------------------------------------------------------------------ end-to-end (real hipcc + cupy)
+# end-to-end (real hipcc + cupy)
 
 HIP_KERNEL_SRC = textwrap.dedent("""\
     #include <hip/hip_runtime.h>

@@ -9,7 +9,6 @@ import math
 import pathlib
 
 import matplotlib
-import pandas as pd
 import pytest
 
 matplotlib.use("Agg")
@@ -36,11 +35,9 @@ def token_metric(cells: list[pk.KernelCell], color: str = "#cc5511") -> pk.Metri
     return pk.token_series_metric([pk.Series("", tuple(cells), color)], "Tokens")
 
 
-# ---------------------------------------------------------------------------
 # Reduction: which population speedup_cells / token_cells read.
 
 
-# ---------------------------------------------------------------------------
 # The log2 speedup axis.
 
 
@@ -73,7 +70,6 @@ def test_speedup_yticks_grows_to_cover_a_wide_range() -> None:
     assert min(ticks) <= 0.1 and max(ticks) >= 20.0
 
 
-# ---------------------------------------------------------------------------
 # ci vs box drawing.
 
 
@@ -107,7 +103,6 @@ def test_ci_style_never_draws_a_box_patch() -> None:
         plt.close(fig)
 
 
-# ---------------------------------------------------------------------------
 # The --summary column.
 
 
@@ -133,7 +128,7 @@ def test_a_figure_with_one_summary_statistic_names_it_as_a_horizontal_x_tick() -
     """ "Geomean" belongs on the x axis under its column, read like a kernel name,
     not floating above the frame."""
     speed = speed_metric([pk.KernelCell("k1", (2.0,)), pk.KernelCell("k2", (4.0,))])
-    fig = pk.figure_one(speed, ["k1", "k2"], pk.Style.CI, True, "")
+    fig = pk.figure_panels([speed], ["k1", "k2"], pk.Style.CI, True, "")
     try:
         (ax,) = fig.axes
         ticks = ax.get_xticklabels()
@@ -148,7 +143,9 @@ def test_a_caller_spells_the_kernel_ticks() -> None:
     """A text-width figure of forty kernels needs names shorter than the manifest's, and those are
     the caller's to choose; the library's own spelling is only the default."""
     speed = speed_metric([pk.KernelCell("tsvc_2_s115", (2.0,))])
-    fig = pk.figure_one(speed, ["tsvc_2_s115"], pk.Style.CI, True, "", tick_label=lambda kernel: kernel.split("_")[-1])
+    fig = pk.figure_panels(
+        [speed], ["tsvc_2_s115"], pk.Style.CI, True, "", tick_label=lambda kernel: kernel.split("_")[-1]
+    )
     try:
         assert fig.axes[0].get_xticklabels()[0].get_text() == "s115"
     finally:
@@ -170,11 +167,9 @@ def test_a_stacked_speedup_and_token_figure_names_its_one_summary_statistic_once
         plt.close(fig)
 
 
-# ---------------------------------------------------------------------------
 # --layout separate vs stacked, and which files a run writes.
 
 
-# ---------------------------------------------------------------------------
 # Reproducibility.
 
 
@@ -221,25 +216,7 @@ def test_a_ratio_below_one_prints_as_a_decimal(value: float, want: str) -> None:
     assert style.ratio_tick_label(value) == want
 
 
-# ---------------------------------------------------------------------------
 # The one per-kernel API every per-kernel figure draws through: cells, ticks, marks, summary, canvas.
-
-
-def answer_rows(kernel: str, run: str, ts_ms: int, speedup: float) -> dict[str, object]:
-    """One graded submission of one run, the columns ``population.kernel_answers`` reads."""
-    return {
-        "setup": "demo-setup", "kernel": kernel, "run_root": run, "job": run, "episode_id": run, "row_kind": "submission",
-        "speedup": speedup, "baseline_ns": 1000.0, "native_ns": 1000.0 / speedup, "baseline": "numba",
-        "timing_suspect": 0, "ts_ms": ts_ms, "attempt_index": 1, "timing_reduction": "mw4x5",
-        "denominator": "best-of(numba,c)",
-    }  # fmt: skip
-
-
-def test_answer_cells_takes_a_rerun_kernels_latest_run_not_its_first() -> None:
-    """A rerun supersedes the run it replaced: a stale first answer drawn beside the rerun's would
-    credit the setup with a result its latest run did not deliver."""
-    frame = pd.DataFrame([answer_rows("k1", "first", 10, 8.0), answer_rows("k1", "rerun", 30, 2.0)])
-    assert [(cell.kernel, cell.episodes) for cell in pk.answer_cells(frame)] == [("k1", (2.0,))]
 
 
 @pytest.mark.parametrize(
@@ -390,7 +367,7 @@ def three_series_metric() -> pk.Metric:
 def test_every_series_gets_one_summary_slot_and_one_settled_value_label() -> None:
     """Summaries that agree to a few percent, drawn in one column, hid all but the top mark; and the
     value a caption quotes has to be on the figure, tagged so it settles clear of the marks."""
-    fig = pk.figure_one(three_series_metric(), ["k1", "k2"], pk.Style.CI, True, "")
+    fig = pk.figure_panels([three_series_metric()], ["k1", "k2"], pk.Style.CI, True, "")
     try:
         (ax,) = fig.axes
         separator = pk.summary_separator_x(2)
@@ -408,7 +385,7 @@ def test_every_series_gets_one_summary_slot_and_one_settled_value_label() -> Non
 def test_a_summary_value_label_prints_the_geomean_over_solved_kernels_only() -> None:
     """Series b solved k1 at 3x and failed k2: its printed value is 3x, not the geomean with the
     placeholder's 1x (1.7x)."""
-    fig = pk.figure_one(three_series_metric(), ["k1", "k2"], pk.Style.CI, True, "")
+    fig = pk.figure_panels([three_series_metric()], ["k1", "k2"], pk.Style.CI, True, "")
     try:
         texts = [t.get_text() for t in fig.axes[0].texts if t.get_gid() == style.CLEAR_GID]
     finally:
@@ -450,8 +427,8 @@ def test_a_key_grows_the_canvas_and_never_overprints_the_kernel_names() -> None:
     kernels = [f"k{i}" for i in range(12)]
     metric = speed_metric([pk.KernelCell(k, (2.0,)) for k in kernels])
     key = [matplotlib.lines.Line2D([], [], marker="o", linestyle="none", label=f"series {i}") for i in range(9)]
-    bare = pk.figure_one(metric, kernels, pk.Style.CI, False, "", width_in=3.3)
-    keyed = pk.figure_one(metric, kernels, pk.Style.CI, False, "", width_in=3.3, legend=key)
+    bare = pk.figure_panels([metric], kernels, pk.Style.CI, False, "", width_in=3.3)
+    keyed = pk.figure_panels([metric], kernels, pk.Style.CI, False, "", width_in=3.3, legend=key)
     try:
         assert keyed.get_size_inches()[1] > bare.get_size_inches()[1]
         keyed.canvas.draw()
@@ -551,7 +528,7 @@ def test_a_print_size_figure_gets_the_short_print_panel() -> None:
     """a paper figure of forty kernels is a strip 30% shorter than the authored
     panel, and the height is the library's to set, not each caller's."""
     speed = speed_metric([pk.KernelCell("k1", (2.0,))])
-    fig = pk.figure_one(speed, ["k1"], pk.Style.CI, True, "", width_in=5.5)
+    fig = pk.figure_panels([speed], ["k1"], pk.Style.CI, True, "", width_in=5.5)
     try:
         height = fig.axes[0].get_position().height * fig.get_size_inches()[1]
         assert height == pytest.approx(pk.PRINT_PANEL_HEIGHT_IN, abs=1e-3)
@@ -581,7 +558,7 @@ def test_a_rerun_writes_byte_identical_png_and_pdf(tmp_path: pathlib.Path, monke
     speed = speed_metric(speed_cells)
     for epoch, folder in (("0", "first"), ("86400", "second")):
         monkeypatch.setenv("SOURCE_DATE_EPOCH", epoch)
-        fig = pk.figure_one(speed, pk.ordered_kernels(speed_cells), pk.Style.BOX, True, "demo")
+        fig = pk.figure_panels([speed], ["k2", "k1"], pk.Style.BOX, True, "demo")
         pk.save(fig, tmp_path / folder / "figure.pdf")
     for name in ("figure.pdf", "figure.png"):
         first, second = (tmp_path / folder / name for folder in ("first", "second"))

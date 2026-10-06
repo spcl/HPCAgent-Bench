@@ -136,25 +136,18 @@ ce_partition_arch() {
     printf '%s\n' "${arch}"
 }
 
-# Exports ROCM_ARCH and CE_PARTITION for this job's partition (ROCM_PARTITION outside Slurm): the
-# one arch of an image whose base supports only that partition's GPU (sglang).
-ce_gpu_arch() {
-    local partition="${SLURM_JOB_PARTITION:-${ROCM_PARTITION:-}}" arch
-    if [[ -z "${partition}" ]]; then
-        echo "ce_gpu_arch: no SLURM_JOB_PARTITION; set ROCM_PARTITION for a dry run outside Slurm" >&2
+# Exports ROCM_ARCH as the ;-list of every partition's arch in gpu_arch.env (the GPUs this site has),
+# with ROCM_ARCH_CSV: for an image whose code cannot target every vendor arch in one binary (sglang:
+# sgl_kernel picks one FP8 type), so it carries the site's archs rather than AMD_GPU_TARGETS.
+ce_partition_targets() {
+    ROCM_ARCH="$(sed -n 's/^GPU_ARCH_[A-Za-z0-9_]*=//p' "${CE_IMAGES_DIR}/gpu_arch.env" | sort -u | paste -sd';')"
+    if [[ ! "${ROCM_ARCH}" =~ ^gfx[0-9a-f]+(\;gfx[0-9a-f]+)*$ ]]; then
+        echo "gpu_arch.env: no GPU_ARCH_<partition> rows give a gfx list (got '${ROCM_ARCH}')" >&2
         return 2
     fi
-    if [[ -n "${ROCM_PARTITION:-}" && "${ROCM_PARTITION}" != "${partition}" ]]; then
-        echo "ce_gpu_arch: ROCM_PARTITION=${ROCM_PARTITION} but this job runs on ${partition}" >&2
-        return 2
-    fi
-    arch="$(ce_partition_arch "${partition}")" || return 2
-    if [[ -n "${ROCM_ARCH:-}" && "${ROCM_ARCH}" != "${arch}" ]]; then
-        echo "ce_gpu_arch: ROCM_ARCH=${ROCM_ARCH} disagrees with gpu_arch.env: ${partition} is ${arch}" >&2
-        return 2
-    fi
-    export ROCM_ARCH="${arch}" CE_PARTITION="${partition}"
-    printf 'gpu arch %s for partition %s\n' "${ROCM_ARCH}" "${partition}"
+    ROCM_ARCH_CSV="${ROCM_ARCH//;/,}"
+    export ROCM_ARCH ROCM_ARCH_CSV
+    printf 'gpu targets %s\n' "${ROCM_ARCH}"
 }
 
 # Exports ROCM_ARCH as gpu_arch.env's AMD_GPU_TARGETS: the ;-separated list a portable AMD image
@@ -486,9 +479,8 @@ ce_build_args() {
     for name in "$@"; do BUILD_ARGS+=(--build-arg "${name}=${!name}"); done
 }
 
-# Exports DACE_COMMIT, the release's dace pin (pyproject.toml [tool.uv.sources] dace). Resolved here and passed in
-# because the Dockerfile's layer cache keys on the command string: a '--branch extended' clone would
-# be reused forever and the image would age into a pin nothing records.
+# Exports DACE_COMMIT, the release's dace pin (pyproject.toml [tool.uv.sources] dace): the commit the git mirror must
+# hold for the build's launch gate (the image carries no dace; a job installs it, containers/lib/launch_venv.sh).
 ce_dace_commit() {
     DACE_COMMIT="$("${CE_IMAGES_DIR}/../../scripts/dace_pin.sh")"
     [[ "${DACE_COMMIT}" =~ ^[0-9a-f]{40}$ ]] || { echo "could not resolve spcl/dace@${DACE_COMMIT}" >&2; return 2; }

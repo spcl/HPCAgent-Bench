@@ -14,9 +14,7 @@ from sqlmodel import Field, SQLModel, create_engine
 
 __all__ = [
     "CONCURRENT_SCHEMA_RACE",
-    "KERNEL_METRICS_TABLE",
     "RESULTS_TABLE",
-    "KernelMetric",
     "Result",
     "is_concurrent_schema_race",
     "results_engine",
@@ -68,33 +66,6 @@ class Result(SQLModel, table=True):
     gpu: str | None = None
     # Node name (osinfo.node_name); ``cpu`` cannot separate two nodes of one cluster. NULL on
     # rows recorded before the column existed.
-    node: str | None = None
-
-
-#: The per-kernel static metrics table; one row per (kernel, column, implementation, metric).
-KERNEL_METRICS_TABLE = "kernel_metrics"
-
-
-class KernelMetric(SQLModel, table=True):
-    """One named count about a column's compiled kernel (``autovec.loops_vectorized``,
-    ``parallelism.map``, ...). Long format: a new metric is a new ``metric`` value, so existing DBs
-    need no migration. Counts only; rates belong to the report."""
-
-    __tablename__: ClassVar[str] = KERNEL_METRICS_TABLE  # pyright: ignore[reportIncompatibleVariableOverride]  # sqlmodel types it declared_attr; a str is the documented form
-
-    id: int | None = Field(default=None, primary_key=True)
-    timestamp: int  # epoch seconds; groups the rows of one run
-    kernel: str  # kernel short_name
-    framework: str  # the column WITHOUT its flavor suffix, as in results
-    flavor: str | None = None
-    impl: str  # the implementation name the report hooks key on
-    datatype: str | None = None
-    metric: str  # <family>.<count>
-    value: float
-    # Conditions of the count as "key=value" pairs (compiler family, cost model).
-    detail: str | None = None
-    build: str | None = None
-    cpu: str
     node: str | None = None
 
 

@@ -212,7 +212,6 @@ __all__ = [
     "ratio_ticks",
     "reduce_pair",
     "required_left_margin",
-    "resolve_row_repeats",
     "retyped",
     "row_label",
     "row_verdict",
@@ -442,7 +441,6 @@ def solved_flags(answers: pd.DataFrame, kernels: pd.Index) -> "pd.Series | bool"
 def paired_kernels(
     control: pd.DataFrame,
     treated: pd.DataFrame,
-    repeats: population.RepeatPolicy = population.RepeatPolicy.LATEST,
     card: cost_models.CostModel | None = None,
 ) -> pd.DataFrame:
     """One row per kernel BOTH sides cover on speedup; its tokens are NaN where either side has no
@@ -463,10 +461,10 @@ def paired_kernels(
     """
     card = card or cost_models.resolve()
     control, treated = cost_models.priced(control, card), cost_models.priced(treated, card)
-    control_answers = population.kernel_answers(control, repeats=repeats)
-    treated_answers = population.kernel_answers(treated, repeats=repeats)
-    control_tokens = population.kernel_tokens(control, repeats=repeats)
-    treated_tokens = population.kernel_tokens(treated, repeats=repeats)
+    control_answers = population.kernel_answers(control)
+    treated_answers = population.kernel_answers(treated)
+    control_tokens = population.kernel_tokens(control)
+    treated_tokens = population.kernel_tokens(treated)
     kernels = control_answers.index.intersection(treated_answers.index)
     if len(kernels) == 0:
         return pd.DataFrame(columns=PAIRED_COLUMNS)
@@ -529,7 +527,6 @@ class Series:
 def reduce_pair(
     control: pd.DataFrame,
     treated: pd.DataFrame,
-    repeats: population.RepeatPolicy = population.RepeatPolicy.LATEST,
     over: population.KernelPolicy = SPEEDUP_OVER,
     card: cost_models.CostModel | None = None,
 ) -> Series | None:
@@ -539,7 +536,7 @@ def reduce_pair(
     ``x`` is over every paired kernel, ``y`` over the ones with both token totals
     (:func:`paired_kernels`); ``token_kernels`` says how many that is.
     """
-    paired = paired_kernels(control, treated, repeats, card)
+    paired = paired_kernels(control, treated, card)
     if paired.empty:
         return None
     score_ratio = (paired.treated_speedup / paired.control_speedup).to_numpy(dtype=float)
@@ -624,7 +621,6 @@ def setup_point(
 def setup_points(
     control: pd.DataFrame,
     treated: pd.DataFrame,
-    repeats: population.RepeatPolicy = population.RepeatPolicy.LATEST,
     over: population.KernelPolicy = SPEEDUP_OVER,
     card: cost_models.CostModel | None = None,
 ) -> tuple[SetupPoint, SetupPoint] | None:
@@ -636,7 +632,7 @@ def setup_points(
     ``x`` -- a geomean of ratios is the ratio of the geomeans. That is the reading "HIP reached
     3.2x" needs and a ratio alone cannot give.
     """
-    paired = paired_kernels(control, treated, repeats, card)
+    paired = paired_kernels(control, treated, card)
     if paired.empty:
         return None
     control_tokens = paired.control_tokens.to_numpy(dtype=float)
@@ -1062,21 +1058,6 @@ def flat_treatments(spec: str | Sequence[str]) -> list[str]:
     return [spec] if isinstance(spec, str) else list(spec)
 
 
-def resolve_row_repeats(
-    repeats: population.RepeatPolicy | Sequence[population.RepeatPolicy], n: int
-) -> list[population.RepeatPolicy]:
-    """``repeats`` as one policy per panel: a bare policy repeats for all ``n``; a sequence must
-    already have length ``n`` -- a gitscicomp10 panel (designed 3x repeats, median) and an
-    llr40 panel (reruns, latest) share no policy, so ONE row's panels are never forced onto
-    ONE value."""
-    if isinstance(repeats, (str, population.RepeatPolicy)):
-        return [population.repeat_policy(repeats)] * n
-    resolved = [population.repeat_policy(policy) for policy in repeats]
-    if len(resolved) != n:
-        raise ValueError(f"repeats names {len(resolved)} polic{'y' if len(resolved) == 1 else 'ies'}, panels {n}")
-    return resolved
-
-
 #: The measures a dot-row figure stacks, top to bottom: what each setup REACHED over the experiment
 #: baseline, how many of its kernels it got RIGHT, and what it SPENT. One row each, over one shared
 #: categorical X.
@@ -1140,7 +1121,6 @@ class SetupRow:
 
 def setup_rows(
     frame: pd.DataFrame,
-    repeats: population.RepeatPolicy = population.RepeatPolicy.LATEST,
     over: population.KernelPolicy = SPEEDUP_OVER,
     card: cost_models.CostModel | None = None,
 ) -> list[SetupRow]:
@@ -1153,7 +1133,7 @@ def setup_rows(
     """
     rows: list[SetupRow] = []
     for model, leg, pair in setup_groups(frame):
-        points = setup_points(*skill_halves(pair), repeats, over, card)
+        points = setup_points(*skill_halves(pair), over, card)
         if points is None:
             continue
         rows.append(SetupRow(model, leg, palette.model_color(model), points[0], points[1]))
@@ -1890,7 +1870,6 @@ def figure_setup_dots(
     treatment: str,
     out: pathlib.Path,
     control_name: str = "",
-    repeats: population.RepeatPolicy = population.RepeatPolicy.LATEST,
     config: FigureConfig = DEFAULT_CONFIG,
     measures: Sequence[str] = MEASURES,
     width_in: float = style.DOUBLE_COLUMN_WIDTH,
@@ -1912,7 +1891,7 @@ def figure_setup_dots(
     """
     import matplotlib.pyplot as plt
 
-    rows = setup_rows(frame, repeats, over, card)
+    rows = setup_rows(frame, over, card)
     if not rows:
         raise ValueError("no (model, leg) pair draws a point")
     texts = {**MEASURE_LABELS, **(labels or {})}
@@ -2024,13 +2003,12 @@ def comma_list(spec: str) -> list[str]:
 
 def panel_rows(
     frame: pd.DataFrame | dict[str, pd.DataFrame],
-    repeats: population.RepeatPolicy,
     over: population.KernelPolicy,
     card: cost_models.CostModel | None = None,
 ) -> list[SetupRow]:
     """A panel's drawn categories; none for a STUB panel (an empty frame)."""
     if isinstance(frame, pd.DataFrame) and not frame.empty:
-        return setup_rows(frame, repeats, over, card)
+        return setup_rows(frame, over, card)
     return []
 
 
@@ -2057,7 +2035,6 @@ def column_shape(treatment: str) -> Marker:
 
 def dot_columns(
     panels: Sequence[Panel],
-    repeats: Sequence[population.RepeatPolicy],
     references: Sequence[str],
     control_names: Sequence[str] = (),
     differences: Sequence[str] = (),
@@ -2072,7 +2049,7 @@ def dot_columns(
     for index, (title, treatment, stats, frame) in enumerate(panels):
         key = str(treatment if isinstance(treatment, str) else (flat_treatments(treatment) or [""])[0])
         table = stats if isinstance(stats, pd.DataFrame) else pd.concat(stats.values(), ignore_index=True)
-        rows = panel_rows(frame, repeats[index], over, card)
+        rows = panel_rows(frame, over, card)
         named = comma_list(str(nth(placeholders, index)))
         stub_leg = named[0] if named and not rows else ""
         rows = placeholder_rows(rows, named) if rows else rows
@@ -2420,7 +2397,6 @@ def fit_legend(
 def figure_dot_row(
     panels: Sequence[Panel],
     out: pathlib.Path,
-    repeats: population.RepeatPolicy | Sequence[population.RepeatPolicy] = population.RepeatPolicy.LATEST,
     config: FigureConfig = PAPER_CONFIG,
     measures: Sequence[str] = MEASURES,
     row_width_in: float = style.ACM_TEXT_WIDTH_IN,
@@ -2444,7 +2420,7 @@ def figure_dot_row(
     """
     n = len(panels)
     columns = dot_columns(
-        panels, resolve_row_repeats(repeats, n), references, control_names, differences, placeholders, over, pending,
+        panels, references, control_names, differences, placeholders, over, pending,
         card,
     )  # fmt: skip
     columns = with_comparators(columns, comparators)
@@ -2620,7 +2596,6 @@ def fit_column_gaps(fig: Figure, axes: np.ndarray) -> None:
 
 def pairs_table(
     frame: pd.DataFrame,
-    repeats: population.RepeatPolicy = population.RepeatPolicy.LATEST,
     over: population.KernelPolicy = SPEEDUP_OVER,
     card: cost_models.CostModel | None = None,
 ) -> pd.DataFrame:
@@ -2633,8 +2608,8 @@ def pairs_table(
     rows = []
     for model, leg, pair in setup_groups(frame):
         control, treated = skill_halves(pair)
-        series = reduce_pair(control, treated, repeats, over, card)
-        setups = setup_points(control, treated, repeats, over, card)
+        series = reduce_pair(control, treated, over, card)
+        setups = setup_points(control, treated, over, card)
         if series is None or setups is None:
             continue
         rows.append(

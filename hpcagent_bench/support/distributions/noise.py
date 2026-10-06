@@ -37,7 +37,6 @@ if TYPE_CHECKING:
 
 __all__ = [
     "DEFAULT_EPS",
-    "NOISE_SPEC_SEED",
     "SEED_LIMIT",
     "apply_to_inputs",
     "default_eps",
@@ -49,9 +48,6 @@ __all__ = [
 #: smaller step would round away, and 1e-6 (4.5e9 ulps) for float64, where the step is visible only to a kernel
 #: that reads its input exactly. A format without an entry (float8) has no step that is both seen and small.
 DEFAULT_EPS = {"float64": 1e-6, "float32": 1e-5, "float16": 4e-3, "bfloat16": 3e-2}
-
-#: The stream a registered ``noise`` draw takes its seed from in the array's own generator.
-NOISE_SPEC_SEED = "noise_seed"
 
 #: Exclusive upper bound of the 63-bit seed a noise draw takes from the array's generator.
 SEED_LIMIT: int = 2**63

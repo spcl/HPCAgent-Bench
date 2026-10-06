@@ -262,8 +262,8 @@ def test_var_float_input_preserves_dtype_in_desugar() -> None:
 
 
 def test_axis_sum_prod_integer_input_allocates_int64() -> None:
-    # The axis-reduction TEMP used to be allocated at the INPUT width (``s.dtype``), so an
-    # int32 column sum wrapped past 2^31. numpy upcasts an integer accumulator to int64.
+    # numpy upcasts an integer accumulator to int64: an axis-reduction TEMP at the INPUT width
+    # (``s.dtype``) would wrap an int32 column sum past 2^31.
     for op in ("sum", "prod"):
         assert "np.int64" in src_(reduce_axis_stmts("t", "s", op, [0], 2, 0, elem_kind="int"))
         assert "np.int64" in src_(reduce_axis_stmts("t", "s", op, [0], 2, 0, elem_kind="bool"))

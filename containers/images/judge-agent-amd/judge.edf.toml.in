@@ -21,6 +21,8 @@ mounts = [
     # the filesystems of $SCRATCH and $FAST_SCRATCH.
     "<hpcagent_bench_edf_mounts>",
     "${SCRATCH}:${SCRATCH}",
+    # The node's /dev/shm with exec (the CE mounts the container's own noexec): the launch venv's home.
+    "/dev/shm:/opt/node-shm",
     # The image carries the editable-install hook of hpcagent_bench and none of its code
     # (containers/lib/package_hook.sh): the checkout that renders this EDF is the package. A run rewrites
     # the source to its own checkout.
@@ -28,11 +30,15 @@ mounts = [
 ]
 workdir = "${SCRATCH}"
 writable = true
-entrypoint = false
+# The image's ENTRYPOINT is the launch hook (containers/lib/launch_venv.sh): it puts the node's venv of the locked
+# wheel packages in front of the image's PATH and names its python in HPCAGENT_BENCH_IMAGE_PYTHON. The CE applies
+# [env] after the ENTRYPOINT, so [env] never sets PATH, VIRTUAL_ENV or HPCAGENT_BENCH_IMAGE_PYTHON: PATH is the
+# image's ENV (its /etc/environment), which the image's build gates check (tests/test_edf_contract.py).
+entrypoint = true
 
 [env]
-# The interpreter every hpcagent-bench step in this image runs (run_cluster.sh).
-HPCAGENT_BENCH_IMAGE_PYTHON = "/opt/venv/bin/python3"
+# uv's wheel cache for the launch venv, on a filesystem every node mounts.
+UV_CACHE_DIR = "${SCRATCH}/.cache/uv"
 FI_CXI_RX_MATCH_MODE = "software"
 FI_MR_CACHE_MONITOR = "disabled"
 # FI_PROVIDER is deliberately NOT set: this image also runs MPI, and MPICH inherits it and
@@ -55,14 +61,6 @@ HIP_PATH = "/opt/rocm"
 # install_edfs.sh renders ${GPU_ARCH} from gpu_arch.env for the partition the images.env row names.
 PYTORCH_ROCM_ARCH = "${GPU_ARCH}"
 HCC_AMDGPU_TARGET = "${GPU_ARCH}"
-# Absolute, never inherited: host SLES/spack binaries leak in through ${PATH} otherwise. Order
-# matches the Dockerfile's own ENV PATH -- toolchain, then the spack view, then PAPI, then ROCm,
-# then the distro. Anything the image builds must come BEFORE /usr/bin.
-# /opt/venv/bin is NOT optional: the rocm/pytorch base image ships a venv and puts it on PATH, and
-# every `uv sync` in the Dockerfile -- the locked packages, cupy, dace -- lands
-# there, not in the system python. Drop this entry and python3 resolves to the system interpreter,
-# which imports none of them -- the judge fails at `import dace` before it reaches any kernel.
-PATH = "/opt/gcc/bin:/opt/view/bin:/opt/papi/bin:/opt/rocm/bin:/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 # ORDER IS LOAD-BEARING both ways. ROCm first: the distro libdir carries an ancient
 # libhsa-runtime64.so.1.11 that leaves every ROCR_1 symbol in libamdhip64 undefined at link. The
 # distro libdir last but present: the CXI hook's ld.so.conf.d entry otherwise lands a stale SLES

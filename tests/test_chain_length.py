@@ -57,9 +57,7 @@ def _raw(short_name: str = "chaintest", **overrides: Any) -> dict[str, Any]:
     return base
 
 
-# --------------------------------------------------------------------------------------------
 # Parser: accept
-# --------------------------------------------------------------------------------------------
 
 
 def test_accepts_a_declared_output_resolving_to_a_positive_int() -> None:
@@ -80,9 +78,7 @@ def test_absent_chain_length_defaults_empty() -> None:
     assert spec.chain_length == {}
 
 
-# --------------------------------------------------------------------------------------------
 # Parser: reject
-# --------------------------------------------------------------------------------------------
 
 
 def test_rejects_a_key_that_is_not_a_declared_output() -> None:
@@ -128,9 +124,7 @@ def test_a_preset_only_the_fuzzed_range_leaves_symbolic_is_skipped_not_rejected(
     assert spec.chain_length == {"x": "N"}
 
 
-# --------------------------------------------------------------------------------------------
 # declared_chain_length() against every manifest in the corpus that declares chain_length
-# --------------------------------------------------------------------------------------------
 
 
 def _kernels_with_chain_length() -> list[str]:

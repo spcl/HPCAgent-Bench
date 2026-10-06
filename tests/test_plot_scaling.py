@@ -341,9 +341,9 @@ def test_the_mode_grid_is_one_row_per_law_one_column_per_picked_kernel_and_the_g
         plt.close(fig)
 
 
-def test_the_band_at_a_rank_count_is_the_log_t_interval_of_the_kernels_geomean() -> None:
-    """Six kernels at P = 2 with efficiency 1, 0.5, 0.25 twice: GM = 0.5, log2 sd = sqrt(0.8),
-    t(0.975, 5) = 2.5706, so the band is 0.5 * 2^(-/+ 0.93865) = 0.26086 .. 0.95836 (scipy t quantile, worked by hand)."""
+def test_the_band_at_a_rank_count_is_the_bootstrap_interval_of_the_kernels_geomean() -> None:
+    """Six kernels at P = 2 with efficiency 1, 0.5, 0.25 twice: GM = 0.5, log2 values 0, -1, -2 twice. The BCa
+    resample means are multiples of 1/6 in log2 and the band lands on 0.5 * 2^(-/+ 2/3)."""
     setup = "mlscale-strong-qwen38-hip"
     t1 = 4096.0
     rows = [
@@ -354,8 +354,8 @@ def test_the_band_at_a_rank_count_is_the_log_t_interval_of_the_kernels_geomean()
 
     band = scaling.series(scaling.curves(frame(rows)), scaling.Quantity.EFFICIENCY)[2]
 
-    assert (band.point, band.low, band.high) == pytest.approx((0.5, 0.2608615520422396, 0.958362771526864))
-    assert band.method == "log-t"
+    assert (band.point, band.low, band.high) == pytest.approx((0.5, 0.5 * 2 ** (-2 / 3), 0.5 * 2 ** (2 / 3)))
+    assert band.method == "bootstrap-BCa"
 
 
 def test_each_mode_grid_panel_scales_its_own_y_axis() -> None:

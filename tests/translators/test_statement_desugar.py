@@ -94,10 +94,8 @@ def kernel_program(text: str) -> ast.FunctionDef:
     return program
 
 
-# --------------------------------------------------------------------------- #
 # Native lowering: the repeated right-hand side gave each name its own buffer #
 # and ran the value once per target.                                          #
-# --------------------------------------------------------------------------- #
 
 
 def test_a_write_through_one_chained_array_name_is_seen_through_the_other_natively() -> None:
@@ -154,9 +152,7 @@ def test_array_enumerate_and_zip_iteration_walk_the_declared_extent_natively() -
     assert run_native(emitted(source, ["a", "b"], native), inputs) == [10.0, 30.0, 70.0, 0.0]
 
 
-# --------------------------------------------------------------------------- #
 # dace: emitted text, since dace itself is not JIT-run here.                  #
-# --------------------------------------------------------------------------- #
 
 
 def test_dace_walks_an_array_through_an_index_over_its_declared_extent() -> None:
@@ -176,10 +172,8 @@ def test_dace_binds_a_chained_array_to_one_name() -> None:
     assert "out[0] = a[0]" in [ast.unparse(stmt) for stmt in program.body]
 
 
-# --------------------------------------------------------------------------- #
 # jax: run the translation. Functional updates rebind the written name, so a  #
 # temp shared by two names loses the write.                                   #
-# --------------------------------------------------------------------------- #
 
 
 def test_a_write_through_one_chained_array_name_is_seen_through_the_other_in_jax() -> None:
@@ -193,9 +187,7 @@ def test_traced_jax_walks_an_array_by_index() -> None:
     assert run_jax(source, {"a": [1.0, 2.0, 3.0, 4.0]}, jit=True) == [10.0, 0.0, 0.0, 0.0]
 
 
-# --------------------------------------------------------------------------- #
 # The shared passes on source text: what each backend above is handed.       #
-# --------------------------------------------------------------------------- #
 
 
 def function_tree(body: str) -> ast.Module:

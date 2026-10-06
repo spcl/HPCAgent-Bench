@@ -10,8 +10,11 @@ where applicable.
 """
 
 import ctypes
+import functools
+import hashlib
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -37,7 +40,6 @@ ATOL = 1.0e-10
 MULTREC_LIMITS = [1, 2, 4, 8, 32]
 STACK_CAPACITIES = [1, 2, 4, 8, 64]
 FORTRAN_SOURCE = HERE / "dbcsr_ref.f90"
-FORTRAN_LIBRARY = HERE / "libdbcsr_ref.so"
 
 pytestmark = pytest.mark.skipif(shutil.which("gfortran") is None, reason="gfortran missing")
 
@@ -809,22 +811,26 @@ def assert_manifest_kernel_matches_dense() -> None:
         assert result is C
 
 
-def build_fortran_reference():
-    if not FORTRAN_LIBRARY.exists() or FORTRAN_LIBRARY.stat().st_mtime < FORTRAN_SOURCE.stat().st_mtime:
-        subprocess.run(
-            [
-                "gfortran",
-                "-O3",
-                "-shared",
-                "-fPIC",
-                str(FORTRAN_SOURCE),
-                "-o",
-                str(FORTRAN_LIBRARY),
-            ],
-            cwd=HERE,
-            check=True,
-        )
-    return FORTRAN_LIBRARY
+@functools.cache
+def build_fortran_reference() -> Path:
+    """The Fortran reference built by THIS host's gfortran into the temp dir, never the checkout: a
+    library built elsewhere links that compiler's libgfortran soname, which this host may not have.
+    Keyed by the source and the compiler version."""
+    version = subprocess.run(["gfortran", "-dumpfullversion"], capture_output=True, text=True, check=True).stdout
+    key = hashlib.sha256(FORTRAN_SOURCE.read_bytes() + version.encode()).hexdigest()[:16]
+    out = Path(tempfile.gettempdir()) / f"dbcsr_ref-{key}"
+    library = out / "libdbcsr_ref.so"
+    if not library.exists():
+        # Built in a private directory and renamed into place: parallel test workers race here.
+        with tempfile.TemporaryDirectory(dir=out.parent, prefix=f"{out.name}.") as staging:
+            built = Path(staging) / library.name
+            subprocess.run(
+                ["gfortran", "-O3", "-shared", "-fPIC", f"-J{staging}", str(FORTRAN_SOURCE), "-o", str(built)],
+                check=True,
+            )
+            out.mkdir(exist_ok=True)
+            built.replace(library)
+    return library
 
 
 def normalize_index(index):

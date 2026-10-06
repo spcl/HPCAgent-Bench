@@ -170,13 +170,14 @@ def one_setup_stats(
 
 
 def test_a_raw_threshold_that_would_have_starred_a_point_does_not_survive_the_correction() -> None:
-    """One cell reaching p = 0.020 on its own is what a per-row ``p < 0.05`` reads as a finding. It
-    is one of twelve tests on the figure, and corrected across them the value is 0.12 -- so the star
-    it would have drawn is not supported by the figure it would have been drawn on."""
+    """One cell reaching p = 2/64 = 0.031 on its own (six kernels, all faster: the smallest exact sign-flip p)
+    is what a per-row ``p < 0.05`` reads as a finding. It is one of twelve tests on the figure, and
+    corrected across them the value is 0.19 -- so the star it would have drawn is not supported by the
+    figure it would have been drawn on."""
     before, after = observations(MARGINAL, winner=("qwen38", "c"))
     frame = plot.points(before, after)
     winner = frame[(frame.model == "qwen38") & (frame.language == "c")].iloc[0]
-    assert winner.score_p == pytest.approx(0.019747, abs=1e-5), "the fixture has to cross a raw 5% threshold"
+    assert winner.score_p == pytest.approx(2 / 64), "the fixture has to cross a raw 5% threshold"
     assert winner.score_p_adjusted > 0.05
     assert winner.score_verdict == efficacy.NOT_SIGNIFICANT
     assert not (frame.score_verdict == efficacy.SIGNIFICANT).any()
@@ -390,7 +391,6 @@ def test_include_incomplete_keeps_a_short_setup_and_prints_nothing(capsys: pytes
     assert capsys.readouterr().err == ""
 
 
-# ---------------------------------------------------------------------------
 # The paired interval, the stars, the tick budget, the left margin and the key.
 
 
@@ -457,7 +457,7 @@ def y_axis_left_margin(low: float, high: float) -> float:
     ax.set_yscale("log", base=2.0)
     ax.set_ylim(low, high)
     plotstyle.value_axis(ax, "y", log_base=2.0)
-    ax.yaxis.set_major_formatter(FuncFormatter(plotstyle.ratio_tick))
+    ax.yaxis.set_major_formatter(FuncFormatter(lambda value, _: plotstyle.ratio_tick_label(value)))
     ax.set_ylabel("Token-Cost Ratio, Treated / Control", fontsize=plotstyle.LABEL_PT * 0.68)
     ax.tick_params(axis="both", labelsize=plotstyle.TICK_PT * 0.6)
     try:
@@ -565,7 +565,6 @@ def test_an_undelivered_kernel_still_counts_in_the_served_geomean() -> None:
     assert not efficacy_figures.paired_kernels(control, treated).delivered.all()
 
 
-# ---------------------------------------------------------------------------
 # The EXPLICIT-PAIR entry point: a comparison whose two sides are two experiments, or whose condition
 # is not a packet suffix at all, drawn through the same figure.
 
@@ -680,51 +679,6 @@ def test_pair_frame_tags_each_setup_by_name_and_which_side_of_the_pair_it_is() -
     assert series.y == pytest.approx(150e3 / 200e3)
 
 
-def test_resolve_row_repeats_broadcasts_a_bare_policy_and_checks_a_sequences_length() -> None:
-    """A joined row's comparisons need not share ONE repeat policy: git-scicomp's designed-3x-repeats
-    median and llr-focus40's reruns-take-latest sit in the same row."""
-    latest, median = population.RepeatPolicy.LATEST, population.RepeatPolicy.MEDIAN
-    assert efficacy_figures.resolve_row_repeats(median, 3) == [median, median, median]
-    assert efficacy_figures.resolve_row_repeats([latest, median], 2) == [latest, median]
-    with pytest.raises(ValueError, match="panels 3"):
-        efficacy_figures.resolve_row_repeats(["latest"], 3)
-
-
-def test_a_comparison_specs_own_repeats_overrides_the_row_default(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """``repeats=`` on one ``--comparison`` spec reaches ONLY that panel; a spec without it keeps
-    ``--repeats``. A policy dropped on the way to the row builder is the same bug the
-    ``--pairs-csv`` route already shipped once."""
-    obs = tmp_path / "obs.csv"
-    pd.DataFrame(observation_rows(SCICOMP_PAIR[0], 1.1, 1.4e6) + observation_rows(SCICOMP_PAIR[1], 0.6, 900e3)).to_csv(
-        obs, index=False
-    )
-    table = tmp_path / "pairs.csv"
-    family_csv([SCICOMP_PAIR], efficacy.NOT_SIGNIFICANT, efficacy.NOT_SIGNIFICANT).to_csv(table, index=False)
-
-    seen_repeats: list[object] = []
-    real = efficacy_figures.figure_dot_row
-
-    def record(*args: object, **kwargs: object) -> object:
-        seen_repeats.append(kwargs["repeats"])
-        return real(*args, **kwargs)  # pyright: ignore[reportArgumentType, reportCallIssue]
-
-    monkeypatch.setattr(plot.efficacy_figures, "figure_dot_row", record)
-    old_argv = sys.argv
-    sys.argv = [
-        "plot_score_change.py", str(obs), "--comparison",
-        f"title=Kernel Formulation;intervention=repo;pairs={table};repeats=median",
-        "--out", str(tmp_path / "fig.pdf"), "--table", str(tmp_path / "table.csv"),
-    ]  # fmt: skip
-    try:
-        plot.main()
-    finally:
-        sys.argv = old_argv
-    assert seen_repeats == [[population.RepeatPolicy.MEDIAN]]
-
-
-# ---------------------------------------------------------------------------
 # The control's own shape, and the arrow a named comparison carries.
 
 
@@ -826,17 +780,15 @@ def test_parse_spec_reads_semicolon_separated_key_value_pairs() -> None:
     }  # fmt: skip
 
 
-# ---------------------------------------------------------------------------
 # Ratio tick labels: a ratio below 1 is spelled in full, never rounded to 0x.
 
 
 def test_the_token_cost_axis_formatter_spells_a_ratio_below_one_as_a_fraction() -> None:
-    assert plotstyle.ratio_tick(0.125) == "0.125x"
-    assert plotstyle.ratio_tick(1.0) == "1x"
-    assert plotstyle.ratio_tick(8.0) == "8x"
+    assert plotstyle.ratio_tick_label(0.125) == "0.125x"
+    assert plotstyle.ratio_tick_label(1.0) == "1x"
+    assert plotstyle.ratio_tick_label(8.0) == "8x"
 
 
-# ---------------------------------------------------------------------------
 # Several packets sharing ONE panel (``treatments=``): read and recorded per packet.
 
 
@@ -860,7 +812,7 @@ def one_setup_observations_csv(tmp_path: pathlib.Path) -> pathlib.Path:
 def test_build_multi_comparison_reads_treatments_as_a_comma_list() -> None:
     obs = one_setup_observations_csv(pathlib.Path(tempfile.mkdtemp()))
     built = plot.build_multi_comparison(
-        {"treatments": "skills,cpf", "title": "CPU"}, [obs], "exp", "latest", False, plot.cost.resolve()
+        {"treatments": "skills,cpf", "title": "CPU"}, [obs], "exp", False, plot.cost.resolve()
     )
     assert built is not None
     title, treatments, stats, frame = built
@@ -902,13 +854,11 @@ def test_write_panel_tables_merges_a_multi_treatment_panel_into_one_packet_tagge
     tmp_path: pathlib.Path,
 ) -> None:
     obs = one_setup_observations_csv(tmp_path)
-    built = plot.build_multi_comparison(
-        {"treatments": "skills,cpf"}, [obs], "exp", "latest", False, plot.cost.resolve()
-    )
+    built = plot.build_multi_comparison({"treatments": "skills,cpf"}, [obs], "exp", False, plot.cost.resolve())
     assert built is not None
     _, _, stats, frame = built
     table = tmp_path / "table.csv"
-    plot.write_panel_tables(table, "-cpu", stats, frame, "latest")
+    plot.write_panel_tables(table, "-cpu", stats, frame)
     written = pd.read_csv(table.with_name("table-cpu.csv"))
     absolute = pd.read_csv(table.with_name("table-cpu-absolute.csv"))
     assert set(written.packet) == {"skills", "cpf"}
@@ -935,82 +885,6 @@ def test_a_kernel_without_a_token_total_keeps_its_speed_up_and_the_table_says_n(
     table = efficacy_figures.pairs_table(frame.assign(baseline_ns=2.0e6, native_ns=1.0e6))
     assert table.token_kernels.tolist() == [series.token_kernels]
     assert table.kernels.tolist() == [KERNELS]
-
-
-def test_the_pairs_csv_route_draws_its_marks_under_the_repeat_policy_it_was_asked_for(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """``figure_from_pairs`` once passed neither ``--repeats`` nor the figure config on to the
-    figure, so its marks were drawn under the default ``latest`` while the table written
-    one line above used the policy the caller asked for. On git-scicomp, whose experiment rule is the
-    median of three repeats, that put Kimi-K2.7-Code at 3.57x where its own CSV said 0.67x -- the
-    difference between the repository helping and hurting."""
-    rows: list[dict] = []
-    for index in range(KERNELS):
-        # Three runs per kernel that disagree: the LATEST is fast, their median is slow, so a
-        # figure drawn under the wrong policy lands on the far side of 1x.
-        for run, speedup in (("r1", 0.5), ("r2", 0.5), ("r3", 8.0)):
-            rows += episode("git-repo", "qwen38", "c", index, f"k{index}-{run}", speedup, 100.0)
-        rows += episode("git-kernel", "qwen38", "c", index, f"k{index}-c", 1.0, 100.0)
-    observations_csv = tmp_path / "obs.csv"
-    pd.DataFrame(rows).to_csv(observations_csv, index=False)
-
-    pairs_csv = tmp_path / "pairs.csv"
-    pd.DataFrame(
-        [
-            {
-                "family": "f",
-                "cost_model": "effective",
-                "score_rule": score_rule.SCORE_RULE,
-                "kernel_policy": efficacy_figures.SPEEDUP_OVER.value,
-                "setup_a": "git-repo",
-                "setup_b": "git-kernel",
-                "leg": leg,
-                "verdict": efficacy.NOT_SIGNIFICANT,
-                "n_pairs": KERNELS,
-                "p_adjusted": 0.9,
-            }
-            for leg in (plot.SPEEDUP_LEG, plot.TOKENS_LEG)
-        ]
-    ).to_csv(pairs_csv, index=False)
-
-    frame = plot.pair_frame(plot.load_all([observations_csv]), [("git-repo", "git-kernel")], "repo")
-
-    def treated_x(policy: str) -> float:
-        points = efficacy_figures.setup_points(frame[~frame.skills], frame[frame.skills], policy)
-        assert points is not None
-        return points[1].x
-
-    by_policy = {policy: treated_x(policy) for policy in ("median", "latest")}
-    assert by_policy["median"] != pytest.approx(by_policy["latest"]), by_policy
-
-    drawn: list[float] = []
-    real = efficacy_figures.setup_points
-
-    def spy(*args, **kwargs):
-        points = real(*args, **kwargs)
-        drawn.append(points[1].x)
-        return points
-
-    monkeypatch.setattr(efficacy_figures, "setup_points", spy)
-    args = argparse.Namespace(
-        speedup_over=efficacy_figures.SPEEDUP_OVER,
-        pairs_csv=pairs_csv,
-        observations=[observations_csv],
-        intervention="repo",
-        control_label="Kernel Formulation",
-        cost_model="effective",
-        cost_models=None,
-        repeats="median",
-        out=tmp_path / "f.pdf",
-        table=tmp_path / "f.csv",
-        difference="",
-        success_row=True,
-        dots_row_height=2.3,
-    )
-    plot.figure_from_pairs(args, efficacy_figures.DEFAULT_CONFIG)
-    # The figure and the -absolute table beside it: both under the requested policy.
-    assert drawn and drawn == pytest.approx([by_policy["median"]] * len(drawn)), (drawn, by_policy)
 
 
 def solved_and_failed_pair() -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -1328,7 +1202,7 @@ def test_a_per_column_panel_never_asks_the_registry_for_its_pseudo_intervention(
     stub = ("Per Column", intervention, pd.DataFrame(), pd.DataFrame())
     config = dataclasses.replace(efficacy_figures.PAPER_CONFIG, mark_pending=True)
     with caplog.at_level("WARNING", logger=palette.__name__):
-        (column,) = efficacy_figures.dot_columns([stub], ["latest"], [], placeholders=[leg],
+        (column,) = efficacy_figures.dot_columns([stub], [], placeholders=[leg],
                                                  pending=["qwen38"])  # fmt: skip
         efficacy_figures.figure_dot_row([stub], tmp_path / "dots.pdf", config=config, placeholders=[leg],
                                         pending=["qwen38"])  # fmt: skip

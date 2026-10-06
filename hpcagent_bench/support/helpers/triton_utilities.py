@@ -339,10 +339,7 @@ def kernel_compute_stddev(
 
 @triton.autotune(
     configs=[
-        # triton.Config({'BLOCK_SIZE_M': 32, 'BLOCK_SIZE_N': 16, 'BLOCK_SIZE_K': 16}),
         triton.Config({"BLOCK_SIZE_M": 16, "BLOCK_SIZE_N": 32, "BLOCK_SIZE_K": 16}),
-        # triton.Config({'BLOCK_SIZE_M': 16, 'BLOCK_SIZE_N': 16, 'BLOCK_SIZE_K': 32}),
-        # triton.Config({'BLOCK_SIZE_M': 16, 'BLOCK_SIZE_N': 16, 'BLOCK_SIZE_K': 16}),
     ],
     key=["M", "N", "K"],
     cache_results=True,
@@ -497,16 +494,15 @@ def matmul_kernel_float32(
     K,
     # stride_am is how much to increase a_ptr per row (A has M rows), etc.
     stride_am,
-    stride_ak,  #
+    stride_ak,
     stride_bk,
-    stride_bn,  #
+    stride_bn,
     stride_cm,
     stride_cn,
     BLOCK_SIZE_M: tl.constexpr,
     BLOCK_SIZE_N: tl.constexpr,
-    BLOCK_SIZE_K: tl.constexpr,  #
-    GROUP_SIZE_M: tl.constexpr,  #
-    ACTIVATION: tl.constexpr,  #
+    BLOCK_SIZE_K: tl.constexpr,
+    GROUP_SIZE_M: tl.constexpr,
 ) -> None:
     """Kernel for computing the matmul C = A x B: A (M, K), B (K, N), C (M, N)."""
     # Map program ids to C blocks in a grouped ordering to promote L2 data reuse.
@@ -547,7 +543,6 @@ def matmul_kernel_float32(
         accumulator = tl.dot(a, b, accumulator)
         a_ptrs += BLOCK_SIZE_K * stride_ak
         b_ptrs += BLOCK_SIZE_K * stride_bk
-    # An activation function could be fused here while accumulator is still fp32.
     c = accumulator
 
     offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
@@ -557,7 +552,7 @@ def matmul_kernel_float32(
     tl.store(c_ptrs, c, mask=c_mask)
 
 
-def matmul_float32(a: torch.Tensor, b: torch.Tensor, activation: str = ""):
+def matmul_float32(a: torch.Tensor, b: torch.Tensor):
     assert a.shape[1] == b.shape[0], "Incompatible dimensions"
     M, K = a.shape
     K, N = b.shape
@@ -567,17 +562,16 @@ def matmul_float32(a: torch.Tensor, b: torch.Tensor, activation: str = ""):
     matmul_kernel_float32[grid](
         a,
         b,
-        c,  #
+        c,
         M,
         N,
-        K,  #
+        K,
         a.stride(0),
-        a.stride(1),  #
+        a.stride(1),
         b.stride(0),
-        b.stride(1),  #
+        b.stride(1),
         c.stride(0),
-        c.stride(1),  #
-        ACTIVATION=activation,  #
+        c.stride(1),
     )
     return c
 

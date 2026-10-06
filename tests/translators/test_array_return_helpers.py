@@ -142,13 +142,10 @@ def test_array_return_specialized_config_flag() -> None:
 
 
 def test_array_return_helper_native_desugar_bug3() -> None:
-    # BUG-3: a NON-inlined array-returning helper used to keep native constructs
-    # the kernel body had already shed -- the desugars only ran on the kernel, not
-    # on ``build_helper_kirs`` bodies. This helper is non-inlinable (an early
-    # ``if s < 0: return`` inside the body) and carries a ``.ndim`` validation
-    # guard plus an ``np.newaxis``; both must be desugared away on the HELPER for
-    # the native backends to emit. Before DI-2 the ``.ndim`` / ``newaxis`` reached
-    # the emitter and it failed.
+    # A NON-inlined array-returning helper gets the same desugars as the kernel body
+    # (``build_helper_kirs``). This helper is non-inlinable (an early ``if s < 0: return``
+    # inside the body) and carries a ``.ndim`` validation guard plus an ``np.newaxis``;
+    # both must be desugared away on the HELPER for the native backends to emit.
     src = (
         "import numpy as np\n"
         "def scale_row(v, s):\n"
@@ -300,8 +297,8 @@ def test_fp64_helper_buffers_are_unchanged() -> None:
 
 
 def test_an_unresolvable_buffer_dtype_refuses() -> None:
-    # A refusal beats a silently wrong emit: a dtype expression nothing can resolve used to be
-    # stored verbatim and rendered as double. No emitter can pick a width for it, so it stops here.
+    # A refusal beats a silently wrong emit: a dtype expression nothing can resolve has no width
+    # any emitter can pick (stored verbatim it would render as double), so it stops here.
     import pytest
 
     src = DTYPE_OF_SRC.replace("dtype=x.dtype", "dtype=SOME_DTYPE")

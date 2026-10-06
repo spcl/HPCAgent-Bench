@@ -558,10 +558,11 @@ READABLE_CODEGEN: tuple[tuple[tuple[str, ...], str | bool], ...] = (
 
 def apply_pipeline_config(pipe: SdfgPipeline) -> None:
     """Set the pipeline's codegen configuration globally for the rest of the process: the generator is
-    chosen at codegen time (compile and report replays), not during the transform. ``Config.set``, so
-    a ``DACE_*`` environment variable still wins."""
+    chosen at codegen time (compile and report replays), not during the transform. A key its ``DACE_*``
+    environment variable names keeps that value (a codegen A/B), since ``Config.set`` would override it."""
     for path, value in pipe.config:
-        dace.Config.set(*path, value=value)
+        if "_".join(("DACE", *path)) not in os.environ:
+            dace.Config.set(*path, value=value)
 
 
 DACE_PIPELINES: tuple[SdfgPipeline, ...] = (
@@ -594,7 +595,11 @@ class DeviceStagingModule(DeviceArrayModule, Protocol):
     """The cupy slice a GPU flavor stages arguments with (``asarray`` plus the stream the copy must finish
     on); declared because cupy ships no stubs."""
 
+    ndarray: type
+
     def asarray(self, a: AnyArray, /) -> ArrayLike: ...
+
+    def asnumpy(self, a: AnyArray, /) -> np.ndarray: ...
 
 
 def device_staging_module() -> DeviceStagingModule:
@@ -698,6 +703,14 @@ class DaceFramework(Framework):
             return stage_to_device(cupy, arr)
 
         return cp_copy_func
+
+    def copy_back_func(self) -> CopyFunc:
+        # cupy refuses an implicit device-to-host conversion, so a GPU flavor's device output comes back
+        # through ``asnumpy``; a host array is already where it belongs.
+        if self.info["arch"] != "gpu":
+            return super().copy_back_func()
+        cupy = device_staging_module()
+        return lambda arr: cupy.asnumpy(arr) if isinstance(arr, cupy.ndarray) else arr
 
     # Pipeline assembly
 

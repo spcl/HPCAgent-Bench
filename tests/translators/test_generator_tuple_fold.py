@@ -161,10 +161,9 @@ def test_runtime_dims_declines_the_fold_and_still_refuses() -> None:
 
 
 def test_bare_comprehension_over_literal_range_unrolls_in_tuple_desugar() -> None:
-    # The narrower unit-level pin: :func:`tuple_desugar.tuple_of` used to unroll a generator/list
-    # comprehension only when it sat directly inside a ``tuple(...)``/``list(...)`` call; a bare
-    # comprehension bound straight to a name (as the helper-inlining fix above produces mid-fold)
-    # fell through unrecognised. Both forms must unroll identically.
+    # The narrower unit-level pin: :func:`tuple_desugar.tuple_of` unrolls a generator/list
+    # comprehension inside a ``tuple(...)``/``list(...)`` call and one bound straight to a name (as
+    # the helper inlining above produces mid-fold) identically.
     fn = ast.parse(
         "def k(v):\n a = tuple(v for _ in range(3))\n b = [v for _ in range(3)]\n return a[1] + b[2]\n"
     ).body[0]

@@ -129,7 +129,7 @@ def test_a_timing_store_in_scope_serves_a_fresh_process(
     assert timed == []
 
 
-# ---------------------------------------------------------------- the key itself
+# the key itself
 
 BINDING = binding_from_spec(BenchSpec.load("spmv"))
 

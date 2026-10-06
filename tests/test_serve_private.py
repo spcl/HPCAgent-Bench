@@ -219,7 +219,9 @@ def test_the_mi300_preset_serves_the_qwen38_experiment_flags_on_fp8_weights_with
     assert (served["--model-path"], served["--tp-size"]) == ("Qwen/Qwen3.8-27B-FP8", "4")
     assert "--disable-custom-all-reduce" not in served
     assert "image:    hpcagent-bench-sglang-mi300-latest\n" in done.stdout
-    assert "engine:   sglang, env SGLANG_USE_AITER=1 SGLANG_SET_CPU_AFFINITY=0\n" in done.stdout
+    assert (
+        "engine:   sglang, env SGLANG_USE_AITER=1 SGLANG_SET_CPU_AFFINITY=0 SGLANG_WARMUP_TIMEOUT=1800\n" in done.stdout
+    )
 
 
 def test_the_mi200_preset_serves_bf16_weights_on_vllm_with_the_experiment_parsers_across_all_eight_gcds(

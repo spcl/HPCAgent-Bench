@@ -79,8 +79,8 @@ def test_out_of_range_negative_left_verbatim() -> None:
 
 def test_flip_negative_axis_lowers_to_reverse_slice() -> None:
     # normalized to axis 1, the existing flip pass turns it into ``a[:, ::-1]``
-    # (it previously BAILED on ``axis=-1`` -- a UnaryOp, not a Constant -- leaving
-    # ``np.flip(a, axis=-1)`` for pythran to mishandle).
+    # (``axis=-1`` is a UnaryOp, not a Constant; left as ``np.flip(a, axis=-1)`` pythran
+    # mishandles it).
     out = desugar(" out[:] = np.flip(a, axis=-1)\n", a=("M", "N"), b=("M", "N"), out=("M", "N"))
     assert "[:, ::-1]" in out and "flip" not in out
 

@@ -1486,7 +1486,7 @@ wheels = [
 [[package]]
 name = "dace"
 version = "2.0.0a10"
-source = { git = "https://github.com/spcl/dace.git?rev=b6b7804d754dc1fb0b85979483989d7d0db21d1f#b6b7804d754dc1fb0b85979483989d7d0db21d1f" }
+source = { git = "https://github.com/spcl/dace.git?rev=aa47834d9f35bb6238975354fd2d3c9af82c3715#aa47834d9f35bb6238975354fd2d3c9af82c3715" }
 dependencies = [
     { name = "astunparse" },
     { name = "click" },
@@ -2581,6 +2581,14 @@ harbor = [
     { name = "harbor" },
     { name = "podman-compose" },
 ]
+image-cupy-rocm = [
+    { name = "cupy", marker = "platform_machine == 'x86_64' or (extra == 'extra-14-hpcagent-bench-amdgpu' and extra == 'extra-14-hpcagent-bench-cpu') or (extra == 'extra-14-hpcagent-bench-amdgpu' and extra == 'extra-14-hpcagent-bench-nvgpu') or (extra == 'extra-14-hpcagent-bench-cpu' and extra == 'extra-14-hpcagent-bench-nvgpu') or (extra == 'group-14-hpcagent-agent-harness-miniswe' and extra == 'group-14-hpcagent-agent-harness-openhands') or (extra == 'group-14-hpcagent-agent-harness-miniswe' and extra == 'group-14-hpcagent-bench-harbor') or (extra == 'group-14-hpcagent-agent-harness-miniswe' and extra == 'group-14-hpcagent-bench-judge-proxy') or (extra == 'group-14-hpcagent-agent-harness-openhands' and extra == 'group-14-hpcagent-bench-harbor') or (extra == 'group-14-hpcagent-agent-harness-openhands' and extra == 'group-14-hpcagent-bench-judge-proxy') or (extra == 'group-14-hpcagent-bench-harbor' and extra == 'group-14-hpcagent-bench-judge-proxy')" },
+]
+image-python = [
+    { name = "mpi4py" },
+    { name = "numpy" },
+    { name = "scipy" },
+]
 judge-proxy = [
     { name = "anyio" },
     { name = "httpx2" },
@@ -2605,7 +2613,7 @@ requires-dist = [
     { name = "crawl4ai" },
     { name = "cupy", marker = "platform_machine == 'x86_64' and extra == 'amdgpu'" },
     { name = "cupy-cuda13x", marker = "extra == 'nvgpu'" },
-    { name = "dace", git = "https://github.com/spcl/dace.git?rev=b6b7804d754dc1fb0b85979483989d7d0db21d1f" },
+    { name = "dace", git = "https://github.com/spcl/dace.git?rev=aa47834d9f35bb6238975354fd2d3c9af82c3715" },
     { name = "datasets", specifier = ">=2.17" },
     { name = "einops" },
     { name = "fastapi" },
@@ -2681,6 +2689,12 @@ provides-extras = ["cpu", "amdgpu", "nvgpu", "docs", "dev"]
 harbor = [
     { name = "harbor", specifier = ">=0.23.0" },
     { name = "podman-compose", specifier = ">=1.6" },
+]
+image-cupy-rocm = [{ name = "cupy", marker = "platform_machine == 'x86_64'" }]
+image-python = [
+    { name = "mpi4py" },
+    { name = "numpy" },
+    { name = "scipy" },
 ]
 judge-proxy = [
     { name = "anyio", specifier = "==4.14.2" },

@@ -111,9 +111,9 @@ def test_tuple_axis_argmax_refused() -> None:
 
 
 def test_non_literal_ddof_leaves_the_reduction_and_its_operand_verbatim() -> None:
-    # A non-literal ddof cannot fold into the divisor, so the call stays. Its operand temp used to be
-    # queued before that refusal: a dead ``__rsrc0 = a + b`` preceded the statement, and the next
-    # reduction's own ``__rsrc0`` clashed with it and came out SSA-renamed.
+    # A non-literal ddof cannot fold into the divisor, so the call stays, and no operand temp may be
+    # queued before that refusal: a dead ``__rsrc0 = a + b`` would clash with the next reduction's
+    # own ``__rsrc0`` and come out SSA-renamed.
     src = "def k(a, b, out, d):\n    out[:] = np.var(a + b, axis=0, ddof=d)\n    out[:] = out + np.max(a + b, axis=0)\n"
     kir = kir_("k", a=("M", "N"), b=("M", "N"), out=("N",))
     a, b = np.arange(12.0).reshape(3, 4), np.ones((3, 4))

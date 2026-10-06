@@ -91,6 +91,18 @@ def test_a_count_above_the_pool_intersection_raises() -> None:
         tags.sample(((THREE, 2),), 0, pool)
 
 
+def test_an_excluded_selector_is_never_drawn() -> None:
+    assert set(tags.sample(((THREE, 2),), 0, exclude=["kmp"])) == keys("dfa", "heat_3d")
+    with pytest.raises(ValueError, match="only 2 are available"):
+        tags.sample(((THREE, 3),), 0, exclude=["kmp"])
+
+
+def test_the_saved_note_records_the_exclusion(monkeypatch: pytest.MonkeyPatch, temp_tags: pathlib.Path) -> None:
+    assert run_cli(monkeypatch, "sample", f"{THREE}:2", "--exclude", "kmp", "--save", "control") == 0
+    assert set(tags.resolve("control")) == keys("dfa", "heat_3d")
+    assert f"# tags sample {THREE}:2 seed=0 exclude=kmp on " in (temp_tags / "control.txt").read_text()
+
+
 def test_a_tag_and_a_selector_are_both_valid_rule_selectors() -> None:
     assert set(tags.sample(((THREE, 3),), 0)) == keys("kmp", "dfa", "heat_3d")
     assert set(tags.sample((("kmp", 1),), 0)) == keys("kmp")

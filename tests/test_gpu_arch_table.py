@@ -29,9 +29,10 @@ SHELL_PATH = "/usr/bin:/bin"
 GFX_LITERAL = re.compile(r"\bgfx[0-9a-f]{3,4}\b")
 #: The AMD image directories; each builds with ROCM_ARCH from the table.
 AMD_IMAGES = ("judge-agent-amd", "sglang", "vllm")
-#: Portable AMD images: every AMD_GPU_TARGETS arch (ce_amd_targets). The others carry their build
-#: partition's arch only (ce_gpu_arch), because their base supports no other.
-PORTABLE = frozenset({"judge-agent-amd", "vllm"})
+#: How each AMD image looks its arch list up: portable images take every AMD_GPU_TARGETS arch
+#: (ce_amd_targets); sglang takes the site's partition archs (ce_partition_targets), because sgl_kernel
+#: compiles one FP8 type into the whole binary.
+TARGET_LOOKUP = {"judge-agent-amd": "ce_amd_targets", "vllm": "ce_amd_targets", "sglang": "ce_partition_targets"}
 #: Image directories outside the table, with the reason.
 NOT_AMD = {
     "judge-agent-cuda": "GH200 image built on another Alps cluster; its arch is a CUDA capability",
@@ -43,7 +44,29 @@ NOT_AMD = {
 VENDOR_DEVICE_CODE = frozenset({"vllm"})
 ARCH_VARS = ("HCC_AMDGPU_TARGET", "PYTORCH_ROCM_ARCH", "GPU_ARCHS", "GPU_ARCH_LIST")
 #: Non-comment gfx literals that must stay, keyed by (file, stripped line), with the reason.
-LITERAL_EXCEPTIONS: dict[tuple[str, str], str] = {}
+REASON_SETUP_ROCM = "verbatim upstream setup_rocm.py text the sglang recipe's asserted multi-arch edit matches"
+LITERAL_EXCEPTIONS: dict[tuple[str, str], str] = {
+    (
+        "containers/images/sglang/Dockerfile",
+        '(\'if amdgpu_target not in ["gfx942", "gfx950", "gfx1250"]:\\n\',',
+    ): REASON_SETUP_ROCM,
+    (
+        "containers/images/sglang/Dockerfile",
+        '\'if not set(amdgpu_target.split(";")) <= {"gfx90a", "gfx942", "gfx950", "gfx1250"}:\\n\'),',
+    ): REASON_SETUP_ROCM,
+    (
+        "containers/images/sglang/Dockerfile",
+        '(\'if amdgpu_target == "gfx942" else "-DHIP_FP8_TYPE_E4M3"\',',
+    ): REASON_SETUP_ROCM,
+    (
+        "containers/images/sglang/Dockerfile",
+        '\'if "gfx942" in amdgpu_target.split(";") else "-DHIP_FP8_TYPE_E4M3"\'),',
+    ): REASON_SETUP_ROCM,
+    (
+        "containers/images/sglang/Dockerfile",
+        '(\'48 * 1024 if amdgpu_target == "gfx942" else\', \'48 * 1024 if "gfx942" in amdgpu_target.split(";") else\'),',
+    ): REASON_SETUP_ROCM,
+}
 #: rocminfo with a CPU agent first and one GPU agent, whose arch is filled in.
 ROCMINFO = """\
 *******
@@ -123,31 +146,12 @@ def test_every_table_row_maps_a_partition_to_one_gfx_arch() -> None:
     assert not bad, f"not a gfx arch: {bad}"
 
 
-CE_GPU_ARCH = 'source "$1"; ce_gpu_arch || exit $?; printf "ROCM_ARCH=%s\\n" "${ROCM_ARCH}"'
-
-
-@pytest.mark.parametrize("variable", ["SLURM_JOB_PARTITION", "ROCM_PARTITION"])
-def test_ce_gpu_arch_exports_the_table_arch_of_the_job_partition(variable: str) -> None:
-    for partition, arch in table().items():
-        done = run(["bash", "-c", CE_GPU_ARCH, "bash", str(CE / "build_common.sh")], {variable: partition})
-        assert done.returncode == 0, done.stderr
-        assert f"ROCM_ARCH={arch}" in done.stdout.splitlines()
-
-
-@pytest.mark.parametrize(
-    ("env", "reason"),
-    [
-        ({}, "no SLURM_JOB_PARTITION"),
-        ({"SLURM_JOB_PARTITION": "normal"}, "names no GPU arch for partition 'normal'"),
-        ({"SLURM_JOB_PARTITION": "mi300", "ROCM_PARTITION": "mi200"}, "but this job runs on mi300"),
-        ({"SLURM_JOB_PARTITION": "mi300", "ROCM_ARCH": "gfx000"}, "disagrees with gpu_arch.env"),
-    ],
-)
-def test_ce_gpu_arch_refuses_a_missing_unknown_or_contradicted_partition(env: dict[str, str], reason: str) -> None:
-    done = run(["bash", "-c", CE_GPU_ARCH, "bash", str(CE / "build_common.sh")], env)
-    assert done.returncode == 2
-    assert reason in done.stderr
-    assert "ROCM_ARCH=" not in done.stdout
+def test_ce_partition_targets_exports_every_partition_arch_of_the_table() -> None:
+    script = 'source "$1"; ce_partition_targets || exit $?; printf "%s %s\\n" "${ROCM_ARCH}" "${ROCM_ARCH_CSV}"'
+    done = run(["bash", "-c", script, "bash", str(CE / "build_common.sh")], {})
+    assert done.returncode == 0, done.stderr
+    archs = sorted(set(table().values()))
+    assert f"{';'.join(archs)} {','.join(archs)}" in done.stdout.splitlines()
 
 
 def test_every_amd_image_builds_on_exactly_one_partition_the_table_names() -> None:
@@ -166,7 +170,7 @@ def test_every_amd_image_takes_rocm_arch_from_the_table_refuses_none_stamps_it_a
     image: str,
 ) -> None:
     build = code_lines(CE / image / "image.sh")
-    lookup = "ce_amd_targets" if image in PORTABLE else "ce_gpu_arch"
+    lookup = TARGET_LOOKUP[image]
     assert re.search(rf"^\s*{lookup}$", build, re.M), f"{image}/image.sh never looks the arch up with {lookup}"
     assert re.search(r"^\s*ce_build_args .*\bROCM_ARCH\b", build, re.M)
     docker = code_lines(CE / image / "Dockerfile")
@@ -175,14 +179,11 @@ def test_every_amd_image_takes_rocm_arch_from_the_table_refuses_none_stamps_it_a
     assert "printf '%s\\n' \"${ROCM_ARCH}\" > /opt/gpu-arch" in docker
     # spack, clang, cupy and hipcc take the list ,-separated: that derivation IS the table's value.
     comma_list = docker.replace('$(echo "${ROCM_ARCH}" | tr ";" ",")', "${ROCM_ARCH}")
-    if image in PORTABLE:
-        # A list has a ';' hipcc would hand to sh: image.sh passes the ,-form, which the image gates.
-        assert re.search(r"^\s*ce_build_args .*\bROCM_ARCH_CSV\b", build, re.M)
-        assert 'test "${ROCM_ARCH_CSV}" = "$(echo "${ROCM_ARCH}" | tr ";" ",")"' in docker
-        assert not re.search(r"HCC_AMDGPU_TARGET=\$\{ROCM_ARCH\}(\s|$)", docker, re.M), (
-            "HCC_AMDGPU_TARGET takes the ,-form"
-        )
-        comma_list = comma_list.replace("${ROCM_ARCH_CSV}", "${ROCM_ARCH}")
+    # A list has a ';' hipcc would hand to sh: image.sh passes the ,-form, which the image gates.
+    assert re.search(r"^\s*ce_build_args .*\bROCM_ARCH_CSV\b", build, re.M)
+    assert 'test "${ROCM_ARCH_CSV}" = "$(echo "${ROCM_ARCH}" | tr ";" ",")"' in docker
+    assert not re.search(r"HCC_AMDGPU_TARGET=\$\{ROCM_ARCH\}(\s|$)", docker, re.M), "HCC_AMDGPU_TARGET takes the ,-form"
+    comma_list = comma_list.replace("${ROCM_ARCH_CSV}", "${ROCM_ARCH}")
     for var in ARCH_VARS:
         values = {value.strip('"') for value in re.findall(rf"\b{var}=(\S+)", comma_list)}
         assert values == {"${ROCM_ARCH}"}, (image, var, values)

@@ -177,7 +177,7 @@ def test_every_cli_idle_wall_resolves_to_the_one_derived_value() -> None:
         env={
             "PATH": "/usr/bin:/bin",
             "SCRIPT_DIR": str(CLUSTER_DIR),
-            "HPCAGENT_BENCH_IMAGE_PYTHON": sys.executable,  # the image interpreter the EDF names
+            "HPCAGENT_BENCH_IMAGE_PYTHON": sys.executable,  # the interpreter the image's launch hook names
             "CONTEXT_LENGTH": "262144",
             "AGENTS_PER_NODE": "40",
         },

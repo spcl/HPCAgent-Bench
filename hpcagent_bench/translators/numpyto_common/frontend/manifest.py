@@ -7,6 +7,7 @@ import re
 from collections.abc import Mapping
 from typing import cast
 
+from hpcagent_bench.spec import as_block, as_list
 from hpcagent_bench.translators.numpyto_common.emit_helpers.tokens import IDENT_RE
 from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc
 
@@ -15,8 +16,6 @@ __all__ = [
     "SHAPE_TUPLE_RE",
     "JsonBlock",
     "PinnedValue",
-    "as_block",
-    "as_list",
     "as_text_block",
     "collect_bool_preset_names",
     "collect_float_preset_names",
@@ -61,19 +60,6 @@ PinnedValue = int | float | str
 #: so every value stays ``object`` until :func:`as_block` / :func:`as_list` / a type test converts
 #: it. ``hpcagent_bench.emit_bridge`` writes the schema these blocks follow.
 JsonBlock = dict[str, object]
-
-
-def as_block(raw: object) -> JsonBlock:
-    """One JSON mapping, keyed by text, with the weakest TRUE statement about its values.
-
-    Keys are forced to text because a JSON object's keys always are; a node that is not a mapping
-    reads as empty, which is what every caller here already treated a missing block as."""
-    return {str(k): v for k, v in cast("dict[object, object]", raw).items()} if isinstance(raw, dict) else {}
-
-
-def as_list(raw: object) -> list[object]:
-    """One JSON sequence, with the weakest TRUE statement about its members (see :func:`as_block`)."""
-    return cast("list[object]", raw) if isinstance(raw, list) else []
 
 
 def field_nodes(raw: object) -> list[object]:

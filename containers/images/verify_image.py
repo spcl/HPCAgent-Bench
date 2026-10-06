@@ -863,12 +863,12 @@ def one_hip_runtime(_target: str) -> tuple[bool, str]:
 def dace_solver_gate(gate: str) -> tuple[bool, str]:
     """Whether one of DaCe's two solver gates is OPEN, asked of DaCe rather than of the module.
 
-    ``islpy``/``z3`` importing is necessary but not sufficient: both gates FAIL CLOSED AND
-    SILENT (WavefrontSkew returns early without islpy; LoopToMap etc. answer "cannot prove"
-    without z3), so the probe reads the flags the passes themselves read.
+    islpy is a hard import of ``polyhedral_isl``, so importing it is the probe. ``z3`` importing is
+    necessary but not sufficient: its gate FAILS CLOSED AND SILENT (LoopToMap etc. answer "cannot
+    prove" without z3), so the probe reads the flag the passes themselves read.
     """
     probes = {
-        "isl": "from dace.sdfg.analysis.polyhedral_isl import HAVE_ISL; print('open' if HAVE_ISL else 'CLOSED')",
+        "isl": "import dace.sdfg.analysis.polyhedral_isl; print('open')",
         "z3": (
             "from dace.transformation.passes.analysis import smt_dependence; "
             "print('open' if smt_dependence.has_z3() else 'CLOSED')"

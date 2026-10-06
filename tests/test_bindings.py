@@ -204,8 +204,8 @@ def test_phantom_np_arg_filtered() -> None:
 
 
 # Scalar dtype honesty, over the WHOLE corpus
-# The binding used to guess scalar dtype (int64 vs float64) and got it backwards for some kernels
-# (e.g. nbody's dt=0.05 -> 0); asserted corpus-wide since both bugs were invisible per-kernel.
+# A guessed scalar dtype (int64 vs float64) gets it backwards for some kernels (nbody's dt=0.05 -> 0),
+# invisibly per kernel, so it is asserted corpus-wide.
 
 
 def _declared_value(spec, name):

@@ -533,13 +533,11 @@ def test_a_compaction_charges_the_rebuilt_prompt_as_fresh_and_is_counted(
     assert token_cost.fold_prompt(1500, 1000) == (500, 1000, 0)
 
 
-# -------------------------------------------------------------------------------------------------
 # a proactive compaction's own REQUEST -- the call that reads the transcript and
 # asks for a summary -- never appears as an "assistant" stream event the way a normal turn's does.
 # Its tokens land only in the closing `result` event's `modelUsage` (claude-code's own
 # session-cumulative tally, camelCase, distinct from the `usage` block `result_line` above writes),
 # so every per-turn fold is blind to it unless a `compact_boundary` marker says to look there.
-# -------------------------------------------------------------------------------------------------
 
 
 def compact_boundary_line() -> str:

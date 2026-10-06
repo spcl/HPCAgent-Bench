@@ -20,6 +20,8 @@ from typing import TypedDict, cast
 
 import yaml
 
+from hpcagent_bench.spec import as_block
+
 __all__ = [
     "DETECTORS",
     "PKG",
@@ -98,15 +100,6 @@ class Report(TypedDict):
 
     platform: PlatformInfo
     categories: dict[str, dict[str, ToolEntry]]
-
-
-def as_block(raw: object) -> dict[str, object]:
-    """One YAML mapping, keyed by text, with the weakest TRUE statement about its values.
-
-    ``isinstance(raw, dict)`` proves it is a mapping and nothing about what is in it, so every
-    value stays ``object`` until it is converted. A node that is not a mapping reads as empty.
-    """
-    return {str(k): v for k, v in cast("dict[object, object]", raw).items()} if isinstance(raw, dict) else {}
 
 
 def detect_platform() -> PlatformInfo:

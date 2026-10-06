@@ -21,12 +21,11 @@ import dataclasses
 import functools
 import pathlib
 import re
-from typing import cast
 
 import yaml
 
 from hpcagent_bench import columns, models, skill_packets, spec
-from hpcagent_bench.spec import as_list, is_list, is_mapping
+from hpcagent_bench.spec import as_block, as_list, is_list, is_mapping
 from hpcagent_bench.vocabulary import (
     KINDS,
     MODELS,
@@ -53,7 +52,6 @@ __all__ = [
     "Marker",
     "Names",
     "Registry",
-    "as_block",
     "baselines_of",
     "canonical",
     "control_setups_of",
@@ -76,7 +74,6 @@ __all__ = [
     "model_spellings",
     "names",
     "names_of",
-    "optimizer_name",
     "order",
     "owed_run_roots_of",
     "packet_name",
@@ -171,15 +168,6 @@ class Registry:
     control_setups: dict[str, dict[str, str]] = dataclasses.field(default_factory=dict[str, dict[str, str]])
     #: study -> the run-root prefixes its fused owed waves write (:func:`owed_run_roots_of`).
     owed_run_roots: dict[str, tuple[str, ...]] = dataclasses.field(default_factory=dict[str, tuple[str, ...]])
-
-
-def as_block(raw: object) -> dict[object, object]:
-    """One YAML mapping, with the weakest TRUE statement about its contents.
-
-    ``isinstance(raw, dict)`` proves it is a mapping and nothing about what is in it, so its members
-    are ``object`` until each one is converted. This is the single place that says so; everything
-    downstream reads a real type."""
-    return cast("dict[object, object]", raw) if isinstance(raw, dict) else {}
 
 
 #: A matplotlib marker: a code such as ``"s"``, or ``(sides, style, angle)``.
@@ -346,14 +334,6 @@ def model_name(model: str) -> str:
     """The display spelling of a model. Unknown ones pass through unchanged."""
     entry = registry().models.get(canonical("models", str(model).lower()))
     return entry.name if entry is not None else str(model)
-
-
-def optimizer_name(optimizer: str) -> str:
-    """The display spelling of an optimizer: an LLM (a ``models`` tag) or a standalone optimizer
-    (an ``optimizers`` tag or one of its aliases, e.g. ``dace_cpu_canonicalize``). Unknown ones pass
-    through unchanged."""
-    standalone = names("optimizers").get(canonical("optimizers", str(optimizer)))
-    return standalone if standalone is not None else model_name(optimizer)
 
 
 def model_checkpoint(model: str) -> str:

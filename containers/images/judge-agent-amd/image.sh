@@ -19,7 +19,7 @@ ce_image_args() {
     ce_dace_commit
     ce_libfabric_commit
     IMAGE_VERSION="${IMAGE_VERSION:-dev}"
-    ce_build_args IMAGE_VERSION DACE_COMMIT LIBFABRIC_REF LIBFABRIC_COMMIT ROCM_ARCH ROCM_ARCH_CSV SPACK_TARGET
+    ce_build_args IMAGE_VERSION LIBFABRIC_REF LIBFABRIC_COMMIT ROCM_ARCH ROCM_ARCH_CSV SPACK_TARGET
 }
 
 # The 30 GB rocm/pytorch base comes from the scratch cache; spack's binary buildcache (gcc 16 and

@@ -36,7 +36,7 @@ __all__ = [
     "Triton",
 ]
 
-# ---- LLMs -----------------------------------------------------------------------------------------
+# LLMs
 # A tag, its display name and the checkpoint the tag is expected to serve. The serving engine and the
 # quantisation are deliberately NOT in a name: `kimi27sglang` names SGLang only because the runner had
 # to tell two setups apart, and `-FP8` is a precision; neither is the model. Where the engine or the
@@ -75,7 +75,7 @@ class Glm53:
     serves = "zai-org/GLM-5.3"
 
 
-# ---- Standalone optimizers ------------------------------------------------------------------------
+# Standalone optimizers
 # A compiler or a pipeline that stands where an LLM stands on a figure. Their markers count from the
 # end of the pool, so a new LLM never repaints them. A skill packet an agent is given (cpf, cpfsrc) is
 # a packet and a colour, never an optimizer. A standalone optimizer's row keeps its framework's colour;
@@ -110,7 +110,7 @@ class PpcgHip:
     name = "PPCG (CUDA via hipify)"
 
 
-# ---- Agent harnesses ------------------------------------------------------------------------------
+# Agent harnesses
 # The ``harness`` column value. The model is a separate column: a setup that swaps the harness keeps
 # its model.
 
@@ -136,7 +136,7 @@ class Openhands:
     name = "OpenHands"
 
 
-# ---- Languages ------------------------------------------------------------------------------------
+# Languages
 # The language the SETUP asked for, in proper names: str.title() would give "Cpp" and "Hip". A GPU-only
 # language (hip, triton, cuda) is a language here, not a framework: it is what the agent was asked to
 # write.
@@ -198,7 +198,7 @@ class Omp:
     name = "OpenMP"
 
 
-# ---- Devices --------------------------------------------------------------------------------------
+# Devices
 # Where the kernel was TIMED. `cpu` is the default a launcher stamps when it says nothing.
 
 

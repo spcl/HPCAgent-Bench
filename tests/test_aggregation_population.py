@@ -523,15 +523,22 @@ def test_picking_the_latest_run_without_timestamps_refuses_to_guess() -> None:
 def test_designed_repeats_answer_with_the_median_and_carry_one_real_runs_row(
     speedups: tuple[float, ...], median: float, carrier: str
 ) -> None:
-    """git-scicomp gives each kernel three agents by design: the kernel's speedup is their median, and
+    """A designed repeat gives each kernel one agent per slot: the kernel's speedup is their median, and
     the row it travels on is one run's own, so its source and timings are not a blend of runs."""
     rows = submissions(
         [
-            {"row_kind": "submission", "episode_id": f"w{i}", "speedup": value, "ts_ms": i, "source_path": f"run-{i}"}
+            {
+                "row_kind": "submission",
+                "episode_id": f"w{i}",
+                "slot": i + 1,
+                "speedup": value,
+                "ts_ms": i,
+                "source_path": f"run-{i}",
+            }
             for i, value in enumerate(speedups)
         ]
     )
-    answers = population.setup_kernel_answers(rows, repeats=population.RepeatPolicy.MEDIAN)
+    answers = population.setup_kernel_answers(rows)
     assert (answers.speedup.tolist(), answers.source_path.tolist()) == ([median], [carrier])
 
 
@@ -582,25 +589,6 @@ def test_an_untimed_row_carries_no_reduction_and_does_not_mix_with_a_timed_one()
     )
     best = population.graded_episode_rows(rows, ("ts_ms", "attempt_index"))
     assert best.speedup.tolist() == [0.5]
-
-
-@pytest.mark.parametrize(
-    "nodes, expected",
-    [
-        pytest.param(["nid001", "nid001"], "nid001", id="one-node"),
-        pytest.param(["nid001", None, ""], "nid001", id="blank-rows-constrain-nothing"),
-        pytest.param([None, float("nan")], None, id="recorded-before-the-column"),
-    ],
-)
-def test_a_ratio_over_rows_from_one_node_names_that_node(nodes: list[object], expected: str | None) -> None:
-    assert population.one_node(nodes) == expected
-
-
-def test_a_ratio_over_rows_from_two_nodes_is_refused() -> None:
-    """The node-to-node spread on one homogeneous cluster is about 30%, larger than most claimed
-    effects, so a candidate from one node over a baseline from another is not a speedup."""
-    with pytest.raises(population.MixedPopulationError, match=r"different nodes \['nid001', 'nid002'\]"):
-        population.one_node(["nid001", "nid002", None], label="gemm")
 
 
 def test_the_score_change_figure_scores_graded_rows_and_costs_task_rows() -> None:
@@ -742,18 +730,12 @@ def test_designed_repeats_charge_a_kernel_its_median_run() -> None:
     run -- not their total, and not whichever of them happened to start last."""
     rows = submissions(
         [
-            {"row_kind": "episode", "episode_id": "w0", "tokens": 100.0, "ts_ms": 10},
-            {"row_kind": "episode", "episode_id": "w1", "tokens": 400.0, "ts_ms": 11},
-            {"row_kind": "episode", "episode_id": "w2", "tokens": 250.0, "ts_ms": 12},
+            {"row_kind": "episode", "episode_id": "w0", "slot": 1, "tokens": 100.0, "ts_ms": 10},
+            {"row_kind": "episode", "episode_id": "w1", "slot": 2, "tokens": 400.0, "ts_ms": 11},
+            {"row_kind": "episode", "episode_id": "w2", "slot": 3, "tokens": 250.0, "ts_ms": 12},
         ]
     )
-    assert population.kernel_tokens(rows, repeats=population.RepeatPolicy.MEDIAN).to_dict() == {"k": 250.0}
-
-
-def test_an_unknown_repeat_policy_is_refused() -> None:
-    rows = submissions([{"row_kind": "episode", "episode_id": "w0", "tokens": 1.0, "ts_ms": 1}])
-    with pytest.raises(population.MixedPopulationError, match="repeats"):
-        population.kernel_tokens(rows, repeats="max")  # pyright: ignore[reportArgumentType]
+    assert population.kernel_tokens(rows).to_dict() == {"k": 250.0}
 
 
 def test_episode_tokens_keeps_every_tasks_own_total_before_the_kernel_reduction() -> None:
@@ -868,10 +850,4 @@ def test_the_selection_arguments_parse_to_the_documented_defaults() -> None:
     parser = argparse.ArgumentParser()
     population.add_selection_arguments(parser)
     args = parser.parse_args([])
-    assert (args.experiment, args.setups, args.include_incomplete, args.repeats) == (
-        "",
-        "",
-        False,
-        population.RepeatPolicy.LATEST,
-    )
-    assert parser.parse_args(["--repeats", "median"]).repeats is population.RepeatPolicy.MEDIAN
+    assert (args.experiment, args.setups, args.include_incomplete) == ("", "", False)

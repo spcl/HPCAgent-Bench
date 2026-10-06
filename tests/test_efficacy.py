@@ -245,28 +245,6 @@ def test_a_weighting_can_favour_either_axis_without_moving_the_point() -> None:
     assert score_led.q > even.q, "the cost got worse, so weighting it out must raise Q"
 
 
-def test_dominance_needs_both_axes_and_a_strict_gain_on_one() -> None:
-    def at(rho_s, rho_c):
-        b, a, bc, ac = setups([1.0], [rho_s], [1.0], [1.0 / rho_c])
-        return eff.efficacy(b, a, bc, ac)
-
-    strong, weak, traded = at(2.0, 2.0), at(1.5, 1.5), at(4.0, 0.5)
-    assert eff.dominates(strong, weak)
-    assert not eff.dominates(weak, strong)
-    assert not eff.dominates(strong, traded), "faster but costlier is a trade no weighting settles"
-    assert not eff.dominates(traded, strong)
-    assert not eff.dominates(strong, strong), "dominance is strict; nothing dominates itself"
-
-
-def test_the_front_keeps_every_intervention_nothing_dominates() -> None:
-    def at(rho_s, rho_c):
-        b, a, bc, ac = setups([1.0], [rho_s], [1.0], [1.0 / rho_c])
-        return eff.efficacy(b, a, bc, ac)
-
-    front = eff.pareto_front({"cheap": at(1.2, 4.0), "fast": at(4.0, 1.2), "dominated": at(1.1, 1.1)})
-    assert set(front) == {"cheap", "fast"}
-
-
 def test_the_row_reports_percentages_and_carries_the_robustness_checks() -> None:
     """What lands in the CSV is what a reader sees. A row that dropped the counts would let a
     tail-carried result print as a clean percentage."""

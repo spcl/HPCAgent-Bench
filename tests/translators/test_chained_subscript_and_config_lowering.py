@@ -102,7 +102,7 @@ def test_collapse_expands_an_inner_ellipsis_against_the_base_rank() -> None:
     assert collapse("A[..., j][k]", {"A": ("n", "m", "p")}) == "A[k, :, j]"
 
 
-# ---- chained index arrays: composed into one subscript, two-step where numpy transposes ----
+# chained index arrays: composed into one subscript, two-step where numpy transposes
 
 ABI_BACKENDS = ("c", "fortran")
 
@@ -118,8 +118,8 @@ def test_an_outer_row_and_column_land_on_the_gathered_row_and_the_base_column() 
 
 
 def test_a_gather_then_a_row_index_reads_the_gathered_row() -> None:
-    # ``A[idx][j]`` is row ``idx[j]`` of A. The last flattening phase used to emit ``A[idx, j]``, a
-    # column read that compiles on a square A and returns wrong numbers.
+    # ``A[idx][j]`` is row ``idx[j]`` of A, not ``A[idx, j]``: that column read compiles on a square A
+    # and returns wrong numbers.
     src = "import numpy as np\ndef f(A, idx, out):\n    for j in range(idx.shape[0]):\n        out[j, :] = A[idx][j]\n"
     M = 4
     A = np.random.default_rng(3).standard_normal((M, M))
@@ -138,8 +138,8 @@ def test_a_gather_then_a_row_index_reads_the_gathered_row() -> None:
 
 
 def test_a_gather_through_a_partial_slice_offsets_the_index_array() -> None:
-    # ``a[1:5][jdx]`` is ``a[1 + jdx]``. Every flattening phase used to decline it, and the chain
-    # reached the emitter as an index with more axes than ``a`` has.
+    # ``a[1:5][jdx]`` is ``a[1 + jdx]``; left unflattened the chain reaches the emitter as an index
+    # with more axes than ``a`` has.
     src = "import numpy as np\ndef f(a, jdx, out):\n    out[:] = a[1:5][jdx]\n"
     N, P = 6, 4
     a = np.random.default_rng(4).standard_normal(N)
@@ -281,9 +281,8 @@ VIEW_GATHERS = {
 
 @pytest.mark.parametrize("name", list(VIEW_GATHERS))
 def test_an_index_array_split_from_a_scalar_by_a_slice_keeps_its_axis_order(name: str, tmp_path: pathlib.Path) -> None:
-    # ``A[2][:3, idx]`` is (3, P), the flat ``A[2, :3, idx]`` is (P, 3). The pre-harvest phase used to emit
-    # the flat form (SIG11 in C); the two-step form then reached the emitter as a 5-axis index. Lowering now
-    # reads the view's axes at the statement iterators and composes them onto the base, one element read.
+    # ``A[2][:3, idx]`` is (3, P), the flat ``A[2, :3, idx]`` is (P, 3) (SIG11 in C). Lowering reads the
+    # view's axes at the statement iterators and composes them onto the base, one element read.
     chained, flat = VIEW_PREMISES[name]
     assert chained != flat
     check_chain_case(VIEW_GATHERS[name], VIEW_SYMS, tmp_path)
@@ -291,7 +290,7 @@ def test_an_index_array_split_from_a_scalar_by_a_slice_keeps_its_axis_order(name
 
 def test_adjacent_index_arrays_behind_a_slice_share_one_broadcast_block(tmp_path: pathlib.Path) -> None:
     # ``C[:3, pair, jdx]``: pair (Q, 1) and jdx (R,) broadcast to ONE (Q, R) block after the slice axis.
-    # Each array used to take iterators of its own, so ``jdx`` was left unindexed.
+    # The index arrays share the broadcast iterators; one iterator per array would leave ``jdx`` unindexed.
     case = ChainCase(
         "out[:, :, :] = C[:3, pair, jdx]",
         {"C": VIEW_B[0], "pair": VIEW_PAIR, "jdx": VIEW_JDX},
@@ -365,9 +364,9 @@ NEWAXIS_GATHERS = {
 
 @pytest.mark.parametrize("name", list(NEWAXIS_GATHERS))
 def test_a_newaxis_beside_a_gathered_axis_reads_each_gathered_row(name: str, tmp_path: pathlib.Path) -> None:
-    # xsbench's ``num_nucs[mat][:, None]`` now flattens to ``num_nucs[mat, None]``. A newaxis in a slice-free
+    # xsbench's ``num_nucs[mat][:, None]`` flattens to ``num_nucs[mat, None]``. A newaxis in a slice-free
     # gather inserts a unit axis and reads no source axis, and one inside an index array is a result axis of
-    # that array; both used to shift the gather onto the column iterator.
+    # that array; neither may shift the gather onto the column iterator.
     check_chain_case(NEWAXIS_GATHERS[name], GATHER_SYMS, tmp_path)
 
 

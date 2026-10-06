@@ -71,7 +71,7 @@ def upstream_routes() -> list[str]:
     return [path for path, _ in StubJudge.calls]
 
 
-# ------------------------------------------------------------------ refuse / accept on the wire
+# refuse / accept on the wire
 
 
 @pytest.mark.parametrize("route", ROUTES)
@@ -135,7 +135,7 @@ def test_a_fused_judge_never_consults_the_jobs_experiment_setup(
         fused.read_overlay.cache_clear()
 
 
-# ------------------------------------------------------------------ every legitimate caller
+# every legitimate caller
 
 
 def load_tool(name: str) -> ModuleType:

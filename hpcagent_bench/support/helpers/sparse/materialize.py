@@ -51,13 +51,11 @@ __all__ = [
     "Materialized",
     "Plan",
     "apply_layout",
-    "block_count",
     "buffer_map",
     "canonical_csr",
     "check_layout",
     "convert",
     "converted",
-    "diagonal_count",
     "divisibility_refusal",
     "ell_width",
     "expand_default",
@@ -70,7 +68,6 @@ __all__ = [
     "record",
     "row_ids",
     "source_matrix",
-    "stored_values",
     "to_bsr",
     "to_coo",
     "to_csc",
@@ -119,37 +116,9 @@ def row_ids(m: sp.csr_matrix) -> npt.NDArray[np.int64]:
     return np.repeat(np.arange(shape_of(m)[0], dtype=np.int64), np.diff(m.indptr))
 
 
-def diagonal_count(m: sp.csr_matrix) -> int:
-    """How many distinct diagonals (``j - i``) hold an entry: ``dia``'s ``ndiag``. O(nnz), no sort."""
-    rows, cols = shape_of(m)
-    occupied = np.zeros(rows + cols, dtype=bool)
-    occupied[m.indices - row_ids(m) + rows] = True
-    return int(occupied.sum())
-
-
 def ell_width(m: sp.csr_matrix) -> int:
     """The longest row: ``ell``'s slots per row."""
     return int(np.diff(m.indptr).max()) if shape_of(m)[0] else 0
-
-
-def block_count(m: sp.csr_matrix, edge: int) -> int:
-    """How many ``edge x edge`` blocks hold an entry: ``bsr``'s ``nnzb``."""
-    block_cols = -(-shape_of(m)[1] // edge)
-    return int(np.unique(row_ids(m) // edge * block_cols + m.indices // edge).size)
-
-
-def stored_values(m: sp.csr_matrix, layout: ArrayLayout) -> tuple[int, str]:
-    """How many values ``layout`` stores for ``m`` (padding included), and what they are."""
-    rows, cols = shape_of(m)
-    if layout.format == BLOCK_FORMAT:
-        edge = layout.block_size
-        nnzb = block_count(m, edge)
-        return nnzb * edge * edge, f"{nnzb} blocks x {edge}x{edge}"
-    if layout.format == "dia":
-        ndiag = diagonal_count(m)
-        return ndiag * cols, f"{ndiag} diagonals x {cols} columns"
-    width = ell_width(m)
-    return rows * width, f"{rows} rows x {width} slots (the longest row)"
 
 
 def divisibility_refusal(shape: tuple[int, int], logical: str, block_size: int) -> str | None:

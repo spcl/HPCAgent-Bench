@@ -1,6 +1,7 @@
 # syntax=docker/dockerfile:1
 #
-# SGLang inference on AMD MI300A (gfx942). It serves qwen38, kimi and GLM-5.3; oss120b is on vLLM.
+# SGLang inference on AMD: MI300A (gfx942) and MI250X (gfx90a), one image. It serves qwen38, kimi and
+# GLM-5.3; oss120b is on vLLM (SGLang refuses mxfp4 below gfx950).
 #
 # Build context is the REPOSITORY ROOT, because the tuned fused_moe configs are baked in from
 # there:
@@ -58,14 +59,18 @@ LABEL org.opencontainers.image.title="hpcagent-bench-sglang" \
       org.opencontainers.image.licenses="GPL-3.0-or-later" \
       org.opencontainers.image.base.name="${BASE_IMAGE_REF}"
 
-# The GPU arch every AOT device build below targets. build.sh passes it from ../gpu_arch.env for the
-# build job's partition; there is no default. /opt/gpu-arch records it as a FILE, because the CE does
-# not reliably keep image ENV. The ENV overrides the base's GPU_ARCH_LIST and PYTORCH_ROCM_ARCH.
+# The GPU archs every AOT device build below targets: the ;-list of every partition in ../gpu_arch.env
+# (image.sh, ce_partition_targets), with its ,-form for hipcc; there is no default. /opt/gpu-arch
+# records the list as a FILE, because the CE does not reliably keep image ENV. The ENV overrides the
+# base's GPU_ARCH_LIST and PYTORCH_ROCM_ARCH, which name gfx942 only.
 ARG ROCM_ARCH
+ARG ROCM_ARCH_CSV
 RUN set -eu; \
     test -n "${ROCM_ARCH:-}" || { echo "ROCM_ARCH is unset: build with build.sh, which reads gpu_arch.env" >&2; exit 2; }; \
+    test "${ROCM_ARCH_CSV}" = "$(echo "${ROCM_ARCH}" | tr ";" ",")" \
+      || { echo "ROCM_ARCH_CSV '${ROCM_ARCH_CSV}' is not ROCM_ARCH '${ROCM_ARCH}' comma-separated" >&2; exit 2; }; \
     printf '%s\n' "${ROCM_ARCH}" > /opt/gpu-arch
-ENV HCC_AMDGPU_TARGET=${ROCM_ARCH} \
+ENV HCC_AMDGPU_TARGET=${ROCM_ARCH_CSV} \
     PYTORCH_ROCM_ARCH=${ROCM_ARCH} \
     GPU_ARCHS=${ROCM_ARCH} \
     GPU_ARCH_LIST=${ROCM_ARCH}
@@ -80,7 +85,7 @@ COPY containers/lib/device_arch_gate.sh /usr/local/bin/device_arch_gate.sh
 # it: AMD measure fused_moe at 87.8-89.7% of GPU time on this shape, and their W4A16 FlyDSL kernel at +162%
 # throughput / -47% TTFT. aiter reaches it when AITER_USE_FLYDSL_MOE_SORTING=1 and the package imports. The
 # wheel, not a source build: FlyDSL ships its own LLVM/MLIR and embeds the MLIR python bindings, and
-# pointing MLIR_PATH at a foreign one is a documented build failure. There is a cp310 manylinux_2_27 wheel,
+# pointing MLIR_PATH at a foreign one is a documented build failure. There is a cp312 manylinux wheel,
 # which is this image's interpreter.
 #
 # cupy: the base ships none. From SOURCE: there is no ROCm wheel, the cupy-rocm-* names are dead and PyPI
@@ -93,7 +98,7 @@ RUN set -eux; \
     sh /tmp/uv-install/install_tools.sh /usr/local uv; \
     rm -rf /tmp/uv-install; \
     cd /opt/sglang-extras; \
-    HCC_AMDGPU_TARGET="${ROCM_ARCH}" CUPY_NUM_BUILD_JOBS="$(nproc)" UV_PROJECT_ENVIRONMENT=/opt/venv \
+    HCC_AMDGPU_TARGET="${ROCM_ARCH_CSV}" CUPY_NUM_BUILD_JOBS="$(nproc)" UV_PROJECT_ENVIRONMENT=/opt/venv \
       uv sync --frozen --inexact --no-cache --python /opt/venv/bin/python3 --no-install-package numpy \
       --no-binary-package cupy; \
     /opt/venv/bin/python3 -c 'import flydsl; print("flydsl", flydsl.__version__)'; \
@@ -109,6 +114,67 @@ RUN /opt/venv/bin/python3 -c "import cupy, flydsl; \
     assert cupy.__file__.startswith('/opt/'), cupy.__file__; \
     assert flydsl.__file__.startswith('/opt/'), flydsl.__file__; \
     print('self-contained: cupy', cupy.__version__, '| flydsl', flydsl.__version__)"
+
+# sgl_kernel common_ops, REBUILT for every ROCM_ARCH. The base's copy is gfx942-only, and it is on the
+# serve path of every model: SiluAndMul calls sgl_kernel.silu_and_mul, which segfaulted on an MI250X
+# node during graph capture (job 668579). setup_rocm.py builds for ONE arch, so five asserted edits;
+# a pattern that is not there exactly once fails the build (re-derive them on an SGLang bump):
+#   * AMDGPU_TARGET wins over the visible GPU (stock: overwritten by gcnArchName).
+#   * the allow-list accepts the ;-list (stock: sys.exit(1) for anything but gfx942/gfx950/gfx1250).
+#   * one --offload-arch per arch instead of one --amdgpu-target.
+#   * FP8 type and TopK LDS budget stay gfx942's while gfx942 is in the list. The FP8 macro names only
+#     a host-side c10 alias (include/utils.h), and gfx90a's 64 KiB LDS takes gfx942's 48 KiB budget.
+RUN /opt/venv/bin/python3 <<'PY'
+import pathlib
+import sys
+
+SETUP = pathlib.Path("/sgl-workspace/sglang/python/sglang/kernels/aot/setup_rocm.py")
+EDITS = (
+    ("if torch.cuda.is_available():\n", 'if "AMDGPU_TARGET" not in os.environ and torch.cuda.is_available():\n'),
+    ('if amdgpu_target not in ["gfx942", "gfx950", "gfx1250"]:\n',
+     'if not set(amdgpu_target.split(";")) <= {"gfx90a", "gfx942", "gfx950", "gfx1250"}:\n'),
+    ('    f"--amdgpu-target={amdgpu_target}",\n', '    *[f"--offload-arch={a}" for a in amdgpu_target.split(";")],\n'),
+    ('if amdgpu_target == "gfx942" else "-DHIP_FP8_TYPE_E4M3"',
+     'if "gfx942" in amdgpu_target.split(";") else "-DHIP_FP8_TYPE_E4M3"'),
+    ('48 * 1024 if amdgpu_target == "gfx942" else', '48 * 1024 if "gfx942" in amdgpu_target.split(";") else'),
+)
+text = SETUP.read_text()
+for old, new in EDITS:
+    if text.count(old) != 1:
+        sys.exit(f"{SETUP}: expected one {old!r}, found {text.count(old)}; upstream changed, re-derive the edit")
+    text = text.replace(old, new)
+SETUP.write_text(text)
+PY
+RUN set -eux; \
+    cd /sgl-workspace/sglang/python/sglang/kernels/aot; \
+    rm -rf build; \
+    AMDGPU_TARGET="${ROCM_ARCH}" MAX_JOBS="$(nproc)" /opt/venv/bin/python3 setup_rocm.py build_ext; \
+    built="$(find build -name 'common_ops.*.so')"; \
+    test "$(printf '%s\n' "${built}" | wc -l)" -eq 1; \
+    pkg="$(/opt/venv/bin/python3 -P -c 'import importlib.util as u; print(u.find_spec("sgl_kernel").submodule_search_locations[0])')"; \
+    installed="${pkg}/$(basename "${built}")"; \
+    test -f "${installed}"; \
+    cp -f "${built}" "${installed}"; \
+    cmp "${built}" "${installed}"; \
+    /usr/local/bin/device_arch_gate.sh --exact "${ROCM_ARCH}" "${installed}"
+
+# GLM-5.3's aiter DSA decode (--dsa-decode-backend aiter), fixed in the package. _forward_aiter hands
+# aiter its whole kv_indptr buffer (max_bs + 1 entries), and get_mla_metadata_v1 takes the batch
+# count from that size, so every decode below max_bs plans work for stale batches and writes past
+# the output: an illegal memory access in CUDA-graph capture at bs 40 (jobs 668640, 668739), wrong
+# or NaN output when it does not fault. Upstream main has the same line; the single-GPU reproducer
+# and the issue text are in $SCRATCH/archives/glm53-aiter-dsa-repro (docs/serving/glm53.md).
+RUN /opt/venv/bin/python3 <<'PY'
+import pathlib
+import sys
+
+SRC = pathlib.Path("/sgl-workspace/sglang/python/sglang/srt/layers/attention/dsa_backend.py")
+OLD = "        kv_indptr = self.kv_indptr\n"
+text = SRC.read_text()
+if text.count(OLD) != 1:
+    sys.exit(f"{SRC}: expected one {OLD!r}, found {text.count(OLD)}; upstream changed, re-derive the edit")
+SRC.write_text(text.replace(OLD, "        kv_indptr = self.kv_indptr[: bs + 1]\n"))
+PY
 
 # No RCCL plugin is shipped. CSCS provides one through com.hooks.aws_ofi_nccl.enabled (measured:
 # /opt/cscs/netstack/librccl-net.so, "Using network AWS Libfabric", GPU Direct RDMA on cxi0-2).
@@ -175,7 +241,16 @@ RUN set -eux; \
 ENV AITER_JIT_DIR=/opt/aiter-jit \
     AITER_ROOT_DIR=/opt/aiter-root
 RUN mkdir -p /opt/aiter-jit /opt/aiter-root /tmp/aiter-home
+# The prebuild compiles for the BUILD node's GPU only (/opt/aiter-jit-arch records it): aiter's
+# hand-written asm kernels exist for gfx942/gfx950 and not gfx90a, so a gfx90a node JIT-builds its own
+# modules into the persistent host cache (run_cluster.sh), which never seeds from another arch's prebuild.
 RUN HOME=/tmp/aiter-home /opt/venv/bin/python3 <<'PY'
+import os
+
+import torch
+
+os.environ["GPU_ARCHS"] = torch.cuda.get_device_properties(0).gcnArchName.split(":")[0]
+open("/opt/aiter-jit-arch", "w").write(os.environ["GPU_ARCHS"] + "\n")
 import aiter
 
 print("aiter core built at", aiter.__file__, flush=True)
@@ -195,10 +270,7 @@ for name in ("aiter.ops.rmsnorm", "aiter.ops.norm", "aiter.ops.gemm_op_a8w8", "a
 # module_rmsnorm_quant costs 74 s and the sampling template ops another 77 s; these calls build
 # them here in 78 s total, and the sampling artefact hashes match the ones the server asks for, so
 # a serve is a cache hit rather than a near-miss.
-import os
 import pathlib
-
-import torch
 
 _dev = torch.device("cuda")
 _jit = pathlib.Path(os.environ["AITER_JIT_DIR"])
@@ -317,13 +389,13 @@ PY
 # The prebuild step above already fails the build if it produced no op module. What is left for
 # the shell is the AITER_ROOT_DIR pin: aiter's template ops default to $HOME/.aiter, so if the pin
 # does not hold, HOME grows a .aiter and the artefacts are outside the image. aiter takes its arch
-# from rocminfo, not GPU_ARCHS, so the prebuilt modules are gated on ROCM_ARCH as well.
+# from rocminfo, not GPU_ARCHS, so the prebuilt modules are gated on the build GPU's arch.
 RUN set -eux; \
     find /opt/aiter-jit -name '*.so' | wc -l | xargs printf 'aiter prebuilt modules: %s\n'; \
     find /opt/aiter-root -mindepth 1 -maxdepth 2 | head -20; \
     test ! -e /tmp/aiter-home/.aiter; \
     rm -rf /tmp/aiter-home; \
-    /usr/local/bin/device_arch_gate.sh --exact "${ROCM_ARCH}" /opt/aiter-jit
+    /usr/local/bin/device_arch_gate.sh --exact "$(cat /opt/aiter-jit-arch)" /opt/aiter-jit
 
 # GLM-5.3 and every other GlmMoeDsa/DeepSeek fp8 checkpoint, fixed IN THE PACKAGE.
 #
@@ -354,8 +426,14 @@ ENV HSA_ENABLE_IPC_MODE_LEGACY=1 \
 #   * BOTH --reasoning-parser AND --tool-call-parser are required. With only one, turn 1 comes back
 #     400 and the launcher logs it as SUCCESS. kimi uses `kimi_k2` for both; qwen38 uses `qwen3`
 #     and `qwen3_coder`. There is no --enable-auto-tool-choice on SGLang -- that is a vLLM flag.
-#   * --mem-fraction-static runs BACKWARDS on an APU. It sizes KV against NODE-WIDE RAM per rank,
-#     so the value is LOWERED, not raised: 0.42 for kimi, 0.18 for qwen38.
+#   * --mem-fraction-static is NODE-WIDE on an APU (it sizes KV against the whole node's RAM per
+#     rank) and --attention-backend aiter scales it by 0.85: per-model values and the pool they give
+#     are in docs/serving/ (qwen38.md, glm53.md, knobs.md).
+#
+# No SGLang SOURCE is patched for qwen38. What made it fast is serving choices: SGLang (vLLM cannot
+# serve its Gated-DeltaNet layers at long context), the KV pool above the working set, aiter, and the
+# chat template in containers/inference/. The edits this file makes are the sgl_kernel build and the DSA
+# kv_indptr slice above.
 
 RUN /opt/venv/bin/python3 <<'PY'
 import json

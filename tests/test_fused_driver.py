@@ -278,7 +278,7 @@ def test_a_setup_that_sets_no_key_unsets_it_whatever_the_job_env_holds(tmp_path:
     assert "AGENT_HINTS_FILE" not in run.env
 
 
-# ------------------------------------------------------------------ isolation per worker
+# isolation per worker
 
 
 def tool_names(env: dict[str, str]) -> set[str]:
@@ -359,7 +359,7 @@ def test_the_driver_names_the_material_root_to_the_seal_only_in_a_fused_wave(
     assert driver.resolve_shared_file("prompt.md") == pathlib.Path("/shared/setups/s/prompt.md")
 
 
-# ------------------------------------------------------------------ dispatch plumbing
+# dispatch plumbing
 
 
 def test_a_problem_list_is_fused_all_or_none() -> None:

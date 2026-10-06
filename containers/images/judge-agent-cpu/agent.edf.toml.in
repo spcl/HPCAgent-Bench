@@ -1,8 +1,8 @@
 # CSCS Container Engine EDF for the AGENT target of judge-agent-cpu/Dockerfile, either architecture.
 # `CE_PLATFORM=cpu install_edfs.sh` renders it into ~/.edf as hpcagent-bench-agent-cpu-<arch>-latest.
 #
-# PATH is set explicitly (tests/test_edf_contract.py): the CE does not reliably keep the image's own
-# ENV. /usr/local/bin is the gcc 16 symlinks (ahead of distro gcc 13), /usr/lib/llvm-22/bin clang/flang;
+# PATH is the image's own ENV (the CE reads its /etc/environment) with the launch venv in front.
+# /usr/local/bin is the gcc 16 symlinks (ahead of distro gcc 13), /usr/lib/llvm-22/bin clang/flang;
 # keep in sync with the Dockerfile's GCC_MAJOR / LLVM_MAJOR.
 #
 # No hooks: grades on one node with the image's spack MPICH over its own libfabric.
@@ -12,19 +12,23 @@ mounts = [
     # the filesystems of $SCRATCH and $FAST_SCRATCH.
     "<hpcagent_bench_edf_mounts>",
     "${SCRATCH}:${SCRATCH}",
+    # The node's /dev/shm with exec (the CE mounts the container's own noexec): the launch venv's home.
+    "/dev/shm:/opt/node-shm",
 ]
 workdir = "${SCRATCH}"
 writable = true
-entrypoint = false
+# The image's ENTRYPOINT is the launch hook (containers/lib/launch_venv.sh): it puts the node's venv of the locked
+# wheel packages in front of the image's PATH and names its python in HPCAGENT_BENCH_IMAGE_PYTHON. The CE applies
+# [env] after the ENTRYPOINT, so [env] never sets PATH, VIRTUAL_ENV or HPCAGENT_BENCH_IMAGE_PYTHON: PATH is the
+# image's ENV (its /etc/environment), which the image's build gates check (tests/test_edf_contract.py).
+entrypoint = true
 
 [env]
-# The interpreter every hpcagent-bench step in this image runs (run_cluster.sh).
-HPCAGENT_BENCH_IMAGE_PYTHON = "/opt/venv/bin/python3"
+# uv's wheel cache for the launch venv, on a filesystem every node mounts.
+UV_CACHE_DIR = "${SCRATCH}/.cache/uv"
 LC_ALL = "C"
 # Image's dace must win over a same-named directory in the workdir.
 PYTHONSAFEPATH = "1"
-VIRTUAL_ENV = "/opt/venv"
-PATH = "/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/opt/view/bin:/usr/lib/llvm-22/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 # The spack MPI stack (Dockerfile step 1c): the CE drops the image ENV that names it.
 LD_LIBRARY_PATH = "/opt/view/lib"
 # Named, not left to PATH: a stale configure cache beats PATH.

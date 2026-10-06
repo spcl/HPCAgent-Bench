@@ -101,8 +101,8 @@ class Point(NamedTuple):
     #: The framework was ASKED for this kernel and produced no usable time (a crash, a build
     #: failure, a kernel it cannot lower). Drawn as an X on the zero line in the framework's colour
     #: -- a POSITION, not a value: it carries no ``ratio`` and is excluded from every limit and
-    #: statistic. Before this, such a cell was dropped with a warning and the figure was silent
-    #: about it, which reads as "this framework was never run here" rather than "it failed here".
+    #: statistic. Dropping the cell would read as "this framework was never run here" rather than
+    #: "it failed here".
     crashed: bool = False
 
 

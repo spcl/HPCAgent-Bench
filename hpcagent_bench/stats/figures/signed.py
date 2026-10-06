@@ -288,17 +288,16 @@ def agent_kernel_row(
     model: str,
     condition: str,
     tag_kernels: Sequence[str],
-    repeats: population.RepeatPolicy = population.RepeatPolicy.LATEST,
     pending: frozenset[str] = frozenset(),
 ) -> Row:
     """One CPF setup's row, restricted to ``tag``: its final answer per kernel, plus each kernel's
     own confidence interval over every graded episode it ran (SC15 rules 5/7)."""
     subset = frame.loc[frame["setup"].astype(str) == setup]
-    answers = population.kernel_answers(subset, repeats=repeats, policy=population.KernelPolicy.SOLVED)
+    answers = population.kernel_answers(subset, policy=population.KernelPolicy.SOLVED)
     kernels = set(tag_kernels)
     ratios, numerator_ms, denominator_ms = answer_ratios(answers, kernels)
     ratios_low, ratios_high = kernel_intervals(subset, ratios.keys(), setup)
-    raw_tokens, tokens_low, tokens_high = llr40_setups.setup_tokens(subset, setup, repeats)
+    raw_tokens, tokens_low, tokens_high = llr40_setups.setup_tokens(subset, setup)
     del tokens_low, tokens_high  # under "latest" both are empty; a repeat's own range is not this figure's concern
     tokens = {k: v for k, v in raw_tokens.items() if k in kernels}
     label = f"{study_tags.model_name(model)} - {llr40_setups.condition_label(condition)}"
@@ -359,7 +358,6 @@ def llr40_rows(
     canon_columns: Sequence[str] = LLR40_CANON_COLUMNS,
     conditions: Sequence[str] = LLR40_CONDITIONS,
     pattern: re.Pattern[str] = llr40_setups.SETUP_PATTERN,
-    repeats: population.RepeatPolicy = population.RepeatPolicy.LATEST,
     mark_pending: bool = False,
     baseline_fallback: str = "",
 ) -> list[Row]:
@@ -394,7 +392,7 @@ def llr40_rows(
             model_tag, condition = candidates[setup]
             served = set(frame.loc[frame["setup"].astype(str) == setup, "kernel"].astype(str))
             pending = frozenset(k for k in tag_kernels if k not in served)
-            rows.append(agent_kernel_row(frame, setup, model_tag, condition, tag_kernels, repeats, pending))
+            rows.append(agent_kernel_row(frame, setup, model_tag, condition, tag_kernels, pending))
     return rows
 
 
@@ -539,7 +537,6 @@ def llr40_two_row_figure(
     canon_columns: Sequence[str] = LLR40_CANON_COLUMNS,
     conditions: Sequence[str] = LLR40_CONDITIONS,
     pattern: re.Pattern[str] = llr40_setups.SETUP_PATTERN,
-    repeats: population.RepeatPolicy = population.RepeatPolicy.LATEST,
     title: str = "",
     dpi: float = 150.0,
     labels: Mapping[str, str] | None = None,
@@ -564,7 +561,6 @@ def llr40_two_row_figure(
         canon_columns,
         conditions,
         pattern,
-        repeats,
         mark_pending,
         baseline_fallback,
     )

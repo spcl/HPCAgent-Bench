@@ -56,11 +56,11 @@ referenced() { objdump -T "$1" | awk 'NF >= 7 && $4 == "*UND*" && $NF ~ /^(GOMP_
 
 link() { ln -sfn "$1" "$2"; }
 
-# ---- gnu ---------------------------------------------------------------------------------------------------
+# gnu
 gomp="$(readlink -f "$("${CC:-gcc}" -print-file-name=libgomp.so.1)")"
 test -f "${gomp}"
 
-# ---- llvm: which libomp -------------------------------------------------------------------------------------
+# llvm: which libomp
 libomp=""
 if [ -n "${ONE_OMP_LIBOMP:-}" ]; then
     libomp="$(readlink -f "${ONE_OMP_LIBOMP}")"
@@ -115,7 +115,7 @@ if [ -n "${libomp}" ]; then
 fi
 [ "${check_only}" = 1 ] && exit 0
 
-# ---- write: gnu -------------------------------------------------------------------------------------------
+# write: gnu
 mkdir -p "${root}/gnu/lib"
 link "${gomp}" "${root}/gnu/lib/libgomp.so.1"
 link "${gomp}" "${root}/gnu/lib/libgomp.so.1.0.0"
@@ -123,7 +123,7 @@ link "${gomp}" "${root}/gnu/lib/libgomp.so"
 link "${gnu_view}" "${root}/gnu/view"
 echo "omp_contexts: gnu -> ${gomp}"
 
-# ---- write: llvm ------------------------------------------------------------------------------------------
+# write: llvm
 if [ -n "${libomp}" ]; then
     mkdir -p "${root}/llvm/lib"
     for name in "${soname}" libomp.so libgomp.so.1 libgomp.so.1.0.0 libgomp.so; do
@@ -149,7 +149,7 @@ if [ -n "${libomp}" ]; then
     echo "omp_contexts: llvm -> ${libomp}, $(find "${root}/llvm/lib" -type l | wc -l) links"
 fi
 
-# ---- write: nvhpc -------------------------------------------------------------------------------------------
+# write: nvhpc
 # OMP_REQUIRE_NVHPC=1 (the CUDA image, whose Dockerfile asserts nvc on PATH): a missing nvc is a bug, not a
 # context this image lacks.
 nvc="$(command -v nvc 2>/dev/null || true)"

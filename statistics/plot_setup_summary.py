@@ -58,19 +58,17 @@ TYPE: plotstyle.TypeScale = plotstyle.AUTHOR_SCALE
 MARK_PT: float = 2.0 * TYPE.marker_size
 
 #: Legend columns for a ONE-panel figure. Five entries in a row are wider than a single panel, and
-#: now that the canvas is fixed the overflow falls off the edge instead of widening the figure.
+#: the canvas is fixed, so the overflow would fall off the edge instead of widening the figure.
 #: The pair figure is twice as wide and takes them all in one row.
 LEGEND_COLS_SINGLE: int = 3
 
 
-def setup_points(
-    frame: pd.DataFrame, repeats: population.RepeatPolicy = population.RepeatPolicy.LATEST
-) -> pd.DataFrame:
+def setup_points(frame: pd.DataFrame) -> pd.DataFrame:
     """One row per (model, language, condition): :func:`~hpcagent_bench.stats.population.kernel_medians`
-    under ``repeats``, checked against SC15 Rules 4 and 5 before it is drawn."""
+    checked against SC15 Rules 4 and 5 before it is drawn."""
     rows = []
     for (model, language, condition), part in frame.groupby(["model", "language", "condition"]):
-        point = population.kernel_medians(part, repeats=repeats)
+        point = population.kernel_medians(part)
         if point is not None:
             rows.append({"model": model, "language": language, "condition": str(condition), **point})
     table = pd.DataFrame(rows)
@@ -260,10 +258,8 @@ def write(fig: matplotlib.figure.Figure, out: pathlib.Path) -> pathlib.Path:
     return out
 
 
-#: (column, axis label, log y). A "which way is better" arrow used to ride in the axis label; it
-#: was dropped because it did not earn the space -- more speedup and fewer tokens are not facts a
-#: reader of this figure needs told, and the label is the one place on the panel where an extra
-#: clause pushes the axis around.
+#: (column, axis label, log y). No "which way is better" arrow in the label: more speedup and fewer
+#: tokens need no telling, and an extra clause in the label pushes the axis around.
 SPEEDUP = ("log2_speedup", r"Geomean $\log_2$ Speedup", False)
 TOKENS = ("tokens", "Median Tokens per Task", True)
 
@@ -323,7 +319,7 @@ def main() -> None:
         parser.error("--experiment is required")
     rows = load(args.observations, args.experiment, cost.resolve(args.cost_model, args.cost_models), args.setups)
     rows = eligible_rows(rows, args.include_incomplete)
-    frame = setup_points(rows, args.repeats)
+    frame = setup_points(rows)
     if frame.empty:
         raise SystemExit(f"no setups for experiment {args.experiment!r}")
     args.table.parent.mkdir(parents=True, exist_ok=True)

@@ -16,6 +16,7 @@ def rewrite_eigh(fn: ast.FunctionDef) -> None:
     reduction runs on jnp.linalg.cholesky/inv/matmul, ending in a native
     ``np.linalg.eigh(C)`` standard step (np->jnp happens downstream). In place."""
     from hpcagent_bench.translators.numpyto_common import numpy_desugar
+    from hpcagent_bench.translators.numpyto_common.numpy_desugar import eigh
 
     class Rewriter(ast.NodeTransformer):
         __slots__ = ("ctr",)
@@ -37,21 +38,8 @@ def rewrite_eigh(fn: ast.FunctionDef) -> None:
             w, v = pair
             p = f"__eigh{self.ctr}"
             self.ctr += 1
-            pre: list[str] = []
-
-            def name_of(nd: ast.expr, tag: str) -> str:
-                if isinstance(nd, ast.Name):
-                    return nd.id
-                pre.append(f"{p}_{tag} = np.ascontiguousarray({ast.unparse(nd)})")
-                return f"{p}_{tag}"
-
-            aname = name_of(a_node, "a")
-            bname = name_of(b_node, "b") if b_node is not None else None
-            s = kw.get("subset_by_index")
-            if isinstance(s, (ast.List, ast.Tuple)) and len(s.elts) == 2:
-                lo, hi = ast.unparse(s.elts[0]), f"({ast.unparse(s.elts[1])}) + 1"
-            else:
-                lo, hi = "None", "None"
+            pre, aname, bname = eigh.operand_names(p, a_node, b_node)
+            lo, hi = eigh.subset_bounds(kw)
             lines = pre + numpy_desugar.eigh_stmts(w, v, aname, bname, lo, hi, p, native_std=True)
             return [ast.copy_location(st, node) for st in ast.parse("\n".join(lines)).body]
 

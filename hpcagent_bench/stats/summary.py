@@ -6,8 +6,14 @@ A number with two definitions is a number nobody can check: two geometric means 
 an empty set or a zero ratio give two plots of the same data that do not match.
 
 WHAT LIVES HERE. Robust outlier rejection, the median and its bootstrap interval, the geometric
-mean and its log-space interval, the signed-change axis transform, the one-value-per-kernel
-reduction, and the paired Hodges-Lehmann estimate with its signed-rank test. :mod:`..inference`
+mean and its bootstrap interval, the arithmetic mean and its bootstrap interval, the signed-change axis
+transform, the one-value-per-kernel reduction, the paired geomean with its sign-flip test, and the paired
+Hodges-Lehmann estimate with its signed-rank test.
+
+NO NORMALITY IS ASSUMED (Hoefler and Belli, SC15, Rule 6). Per-kernel ratios are often two spikes (many
+kernels at 1x, a few at 40x), so a Student-t interval on their logs would rest on an assumption the data
+breaks. Every interval over kernels is a BCa bootstrap over the kernels, and every paired comparison is a
+sign-flip permutation test with the interval that inverts it. :mod:`..inference`
 sits on top of this for hypothesis testing across a corpus; it imports from here and never the
 other way round.
 
@@ -27,6 +33,10 @@ Reported defaults (so a run's rigor is documented, not implicit):
   :data:`DEFAULT_CONFIDENCE` (0.95), ``n_resamples`` :data:`DEFAULT_RESAMPLES` (9999),
   ``method`` :data:`DEFAULT_CI_METHOD` (``"percentile"`` -- the robust choice for a median,
   whose BCa acceleration estimate is unstable);
+* interval over kernels -- BCa bootstrap of the statistic (:func:`geomean_ci`, :func:`mean_ci`), 9999
+  resamples, seed 0, withheld below :data:`MIN_PAIRS_FOR_INTERVAL` values;
+* paired geomean -- sign-flip permutation test, exact up to :data:`SIGN_FLIP_EXACT_MAX_N` pairs, else
+  :data:`SIGN_FLIP_DRAWS` seeded sign vectors; its interval is the set of shifts the test does not reject;
 * paired test -- Wilcoxon signed-rank, exact or approximate by :func:`use_exact` (:data:`EXACT_MAX_N`);
   the method is passed to scipy explicitly rather than left to its ``auto`` heuristic.
 """
@@ -52,6 +62,8 @@ __all__ = [
     "MEANAD_TO_SIGMA",
     "MIN_INTERVAL_SAMPLES",
     "MIN_PAIRS_FOR_INTERVAL",
+    "SIGN_FLIP_DRAWS",
+    "SIGN_FLIP_EXACT_MAX_N",
     "FloatArray",
     "Interval",
     "PairedChange",
@@ -65,12 +77,17 @@ __all__ = [
     "geomean_interval",
     "hodges_lehmann",
     "log2_change",
+    "mean_ci",
+    "mean_interval",
     "median_ci",
     "paired_change",
     "paired_geomean",
     "rank_sum_test",
     "signed_change",
     "signed_rank_test",
+    "sign_flip_interval",
+    "sign_flip_pvalue",
+    "sign_flips",
     "usable_ratios",
     "use_exact",
     "walsh_averages",
@@ -227,7 +244,7 @@ class PairedChange:
     """The paired per-kernel change: one estimate, one interval and one p value that agree.
 
     Each producer keeps the three on one quantity: :func:`paired_change` the Hodges-Lehmann location
-    its signed-rank test inverts, :func:`paired_geomean` the mean log its t test is on. A bootstrap
+    its signed-rank test inverts, :func:`paired_geomean` the mean log its sign-flip test is on. A bootstrap
     mean beside a rank test does not: the two can disagree about which setup is ahead, and a reader
     cannot tell which to believe.
     """
@@ -240,7 +257,7 @@ class PairedChange:
     wins: int
     losses: int
     ties: int
-    method: str  # "signed-rank-exact" | "signed-rank-approx" | "underpowered" | "degenerate"
+    method: str  # "signed-rank-exact" | "signed-rank-approx" | "sign-flip-exact" | "sign-flip-sampled" | "underpowered" | "degenerate"
 
     def interval(self, name: str, confidence: float = 1.0 - DEFAULT_ALPHA) -> Interval:
         """The same estimate as an :class:`Interval`, for a figure that draws one."""
@@ -407,38 +424,46 @@ def geomean(values: Samples, unusable: Unusable = Unusable.RAISE) -> float:
 
 
 def geomean_ci(values: Samples, confidence: float = 1.0 - DEFAULT_ALPHA) -> Interval:
-    """Geometric mean and its Student-t interval, computed in LOG space and mapped back.
+    """Geometric mean and its BCa bootstrap interval over the values, resampled in LOG space and mapped back.
 
-    The ends come back as ratios, not as a half-width: ``exp`` is not linear, so a symmetric
-    ``+/-`` would be wrong on a ratio axis and on the signed-change axis alike. A single
-    observation has no spread to estimate, so its interval is the point itself.
+    No distribution is assumed: per-kernel ratios are often two spikes (many at 1x, a few at 40x), which a
+    Student-t interval on their logs would misstate. The ends come back as ratios; ``exp`` is not linear,
+    so they are not symmetric about the point. Fewer than 3 values, or no spread, has no interval: the
+    point itself.
     """
     x: FloatArray = np.asarray(values, dtype=np.float64)
     point = geomean(x)
-    if x.size < 2:
-        return Interval("geomean", point, point, point, confidence, "log-t", int(x.size))
-    from scipy.stats import t  # pyright: ignore[reportMissingTypeStubs, reportUnknownVariableType]
-
-    logs: FloatArray = np.log(x)
-    centre = math.fsum(logs.tolist()) / x.size
-    # scipy.stats distributions are partially unknown in its stubs (ppf / sf)
-    half = float(t.ppf(0.5 + confidence / 2.0, x.size - 1)) * float(np.std(logs, ddof=1)) / math.sqrt(x.size)  # pyright: ignore[reportUnknownMemberType]
-    return Interval(
-        "geomean", point, math.exp(centre - half), math.exp(centre + half), confidence, "log-t", int(x.size)
-    )
+    logs = bootstrap_ci(np.log(x), np.mean, name="geomean", confidence=confidence)
+    return Interval("geomean", point, math.exp(logs.low), math.exp(logs.high), confidence, logs.method, int(x.size))
 
 
 def geomean_interval(values: Samples, confidence: float = 1.0 - DEFAULT_ALPHA) -> Interval:
     """The geometric mean and the interval every figure and table draws for it: :func:`geomean_ci`'s
-    95% log-t interval, withheld (NaN ends, ``method`` ``"underpowered"``) below
+    bootstrap interval, withheld (NaN ends, ``method`` ``"underpowered"``) below
     :data:`MIN_PAIRS_FOR_INTERVAL` values. An empty set is all NaN."""
     x: FloatArray = np.asarray(values, dtype=np.float64)
     if x.size == 0:
         return Interval("geomean", math.nan, math.nan, math.nan, confidence, "underpowered", 0)
-    interval = geomean_ci(x, confidence=confidence)
-    if interval.n < MIN_PAIRS_FOR_INTERVAL:
-        return Interval("geomean", interval.point, math.nan, math.nan, confidence, "underpowered", interval.n)
-    return interval
+    if x.size < MIN_PAIRS_FOR_INTERVAL:
+        return Interval("geomean", geomean(x), math.nan, math.nan, confidence, "underpowered", int(x.size))
+    return geomean_ci(x, confidence=confidence)
+
+
+def mean_ci(values: Samples, confidence: float = 1.0 - DEFAULT_ALPHA) -> Interval:
+    """Arithmetic mean and its BCa bootstrap interval: the summary of a COST (Hoefler and Belli Rule 3),
+    where the total is what the reader pays. Fewer than 3 values, or no spread, has no interval."""
+    return bootstrap_ci(np.asarray(values, dtype=np.float64), np.mean, name="mean", confidence=confidence)
+
+
+def mean_interval(values: Samples, confidence: float = 1.0 - DEFAULT_ALPHA) -> Interval:
+    """:func:`mean_ci`, withheld below :data:`MIN_PAIRS_FOR_INTERVAL` values exactly as
+    :func:`geomean_interval` is. An empty set is all NaN."""
+    x: FloatArray = np.asarray(values, dtype=np.float64)
+    if x.size == 0:
+        return Interval("mean", math.nan, math.nan, math.nan, confidence, "underpowered", 0)
+    if x.size < MIN_PAIRS_FOR_INTERVAL:
+        return Interval("mean", float(np.mean(x)), math.nan, math.nan, confidence, "underpowered", int(x.size))
+    return mean_ci(x, confidence=confidence)
 
 
 def signed_change(ratio: float) -> float:
@@ -534,19 +559,73 @@ def paired_change(differences: Samples, alpha: float = DEFAULT_ALPHA) -> PairedC
     return PairedChange(point, low, high, pvalue, n, wins, losses, ties, method)
 
 
+#: Up to this many pairs the sign-flip test enumerates every sign vector (2**16 = 65536 of them).
+SIGN_FLIP_EXACT_MAX_N: int = 16
+
+#: Above :data:`SIGN_FLIP_EXACT_MAX_N`, the seeded sign vectors drawn (plus the identity): a p value's
+#: Monte Carlo error at p = 0.05 is about 0.0015, and the same seed gives the same published value.
+SIGN_FLIP_DRAWS: int = 19_999
+
+
+def sign_flips(n: int, seed: int = 0) -> FloatArray:
+    """The sign vectors of a sign-flip test on ``n`` pairs, one per row, the identity first: every one of
+    the ``2**n`` up to :data:`SIGN_FLIP_EXACT_MAX_N`, else the identity and :data:`SIGN_FLIP_DRAWS` drawn
+    with ``default_rng(seed)``."""
+    if n <= SIGN_FLIP_EXACT_MAX_N:
+        bits: npt.NDArray[np.int64] = (np.arange(2**n, dtype=np.int64)[:, None] >> np.arange(n, dtype=np.int64)) & 1
+        return np.where(bits == 1, -1.0, 1.0)
+    drawn = np.random.default_rng(seed).choice((-1.0, 1.0), size=(SIGN_FLIP_DRAWS, n))
+    return np.vstack([np.ones((1, n)), drawn])
+
+
+def sign_flip_pvalue(differences: Samples, flips: FloatArray) -> float:
+    """Two-sided sign-flip p of the mean of paired ``differences``: the share of sign vectors whose flipped
+    mean is at least as far from 0 as the observed one. Exact under the null that each difference is as
+    likely positive as negative, which pairing makes the natural null: swapping the two setups' labels on a
+    kernel must not change anything if neither is better."""
+    x: FloatArray = np.asarray(differences, dtype=np.float64)
+    observed = abs(float(np.mean(x)))
+    flipped = np.abs(flips @ x) / x.size
+    return float(np.mean(flipped >= observed - 1e-12 * max(observed, 1.0)))
+
+
+def sign_flip_interval(differences: Samples, flips: FloatArray, alpha: float = DEFAULT_ALPHA) -> tuple[float, float]:
+    """The shifts ``delta`` the sign-flip test does NOT reject at ``alpha`` on ``differences - delta``: the
+    interval that inverts :func:`sign_flip_pvalue`, so it excludes 0 exactly when that test rejects. Found by
+    bisection on each side of the mean: the test cannot reject at the mean, and rejects a sample's range
+    beyond its extremes once there are :data:`MIN_PAIRS_FOR_INTERVAL` pairs. An end on a closed boundary (a
+    shift the test only just fails to reject) reads within the p comparison's 1e-12 tolerance of it."""
+    x: FloatArray = np.asarray(differences, dtype=np.float64)
+    centre = float(np.mean(x))
+    span = float(np.ptp(x))
+
+    def edge(outer: float) -> float:
+        inner = centre
+        for _ in range(60):
+            middle = (inner + outer) / 2.0
+            if sign_flip_pvalue(x - middle, flips) > alpha:
+                inner = middle
+            else:
+                outer = middle
+        return inner
+
+    return edge(float(np.min(x)) - span), edge(float(np.max(x)) + span)
+
+
 def paired_geomean(log_ratios: Samples, alpha: float = DEFAULT_ALPHA) -> PairedChange:
-    """The GEOMETRIC MEAN of paired per-kernel ratios, given as their logs: the mean log, its Student-t
-    interval and the paired t-test p, all three on that one mean.
+    """The GEOMETRIC MEAN of paired per-kernel ratios, given as their logs: the mean log, its sign-flip
+    permutation p and the interval that inverts that test, all three on that one mean.
 
-    ``exp(estimate)`` is the geomean ratio, the statistic an overall ratio is reported as everywhere
-    in this repo, so a setup comparison reads "a is X times b on the geomean over the shared kernels".
-    The interval and the test are on the same mean, so the interval excludes 0 exactly when
-    ``p < alpha``. A zero log (no change on a kernel) stays in: dropping the kernels that did not
-    change would overstate the change of the rest.
+    ``exp(estimate)`` is the geomean ratio, the statistic an overall ratio is reported as everywhere in
+    this repo, so a setup comparison reads "a is X times b on the geomean over the shared kernels". No
+    normality is assumed: the test and its interval are exact under the paired null (a kernel's log ratio
+    as likely positive as negative), and the interval excludes 0 exactly when ``p < alpha``. A zero log
+    (no change on a kernel) stays in: dropping the kernels that did not change would overstate the change
+    of the rest.
 
-    Below :data:`MIN_PAIRS_FOR_INTERVAL` the interval and p are withheld (``underpowered``); a set with
-    no spread has no t statistic and reads ``degenerate`` with no interval and no p, so neither enters
-    a correction. No pairs at all has no estimate either: NaN, never 0 (a 1x ratio).
+    Below :data:`MIN_PAIRS_FOR_INTERVAL` the interval and p are withheld (``underpowered``); a set with no
+    spread reads ``degenerate`` with no interval and no p, so neither enters a correction. No pairs at all
+    has no estimate either: NaN, never 0 (a 1x ratio).
     """
     x: FloatArray = np.asarray(log_ratios, dtype=np.float64)
     x = x[np.isfinite(x)]
@@ -558,12 +637,9 @@ def paired_geomean(log_ratios: Samples, alpha: float = DEFAULT_ALPHA) -> PairedC
     point = math.fsum(x.tolist()) / n
     if n < MIN_PAIRS_FOR_INTERVAL:
         return PairedChange(point, math.nan, math.nan, math.nan, n, wins, losses, ties, "underpowered")
-    spread = float(np.std(x, ddof=1))
-    if spread == 0.0:
+    if float(np.ptp(x)) == 0.0:
         return PairedChange(point, math.nan, math.nan, math.nan, n, wins, losses, ties, "degenerate")
-    from scipy.stats import t  # pyright: ignore[reportMissingTypeStubs, reportUnknownVariableType]
-
-    error = spread / math.sqrt(n)
-    pvalue = float(2.0 * t.sf(abs(point / error), n - 1))  # pyright: ignore[reportUnknownMemberType]
-    half = float(t.ppf(1.0 - alpha / 2.0, n - 1)) * error  # pyright: ignore[reportUnknownMemberType]
-    return PairedChange(point, point - half, point + half, pvalue, n, wins, losses, ties, "paired-t")
+    flips = sign_flips(n)
+    low, high = sign_flip_interval(x, flips, alpha)
+    method = "sign-flip-exact" if n <= SIGN_FLIP_EXACT_MAX_N else "sign-flip-sampled"
+    return PairedChange(point, low, high, sign_flip_pvalue(x, flips), n, wins, losses, ties, method)

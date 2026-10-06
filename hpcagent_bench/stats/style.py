@@ -123,12 +123,9 @@ __all__ = [
     "ratio_label",
     "ratio_minor_candidates",
     "ratio_minor_exponents",
-    "ratio_tick",
     "ratio_tick_label",
     "renderer_of",
-    "right_label",
     "right_protrusion_in",
-    "row_axis",
     "save",
     "scatter_boxes",
     "segment_boxes",
@@ -422,12 +419,6 @@ def ratio_tick_label(value: float) -> str:
     return f"{float(f'{value:.3g}'):g}x"
 
 
-def ratio_tick(value: float, position: int = 0) -> str:
-    """:func:`ratio_tick_label` as a :class:`~matplotlib.ticker.FuncFormatter` on a log ratio axis."""
-    del position
-    return ratio_tick_label(value)
-
-
 def log2_ratio_tick(value: float, position: int = 0) -> str:
     """:func:`ratio_tick_label` for an axis that holds ``log2(ratio)`` (``+1`` is 2x, ``-1`` 0.5x)."""
     del position
@@ -707,33 +698,6 @@ def pending_legend_mark(markersize: float) -> Line2D:
     )
 
 
-def row_axis(ax: Axes, labels: Sequence[str]) -> None:
-    """A categorical y axis with one named row per series, top row first, no grid.
-
-    Limits keep half a row of air at each end so the topmost and bottommost marks are not clipped.
-    """
-    ax.set_yticks(range(len(labels)))  # pyright: ignore[reportUnknownMemberType]
-    ax.set_yticklabels(list(labels), fontsize=LABEL_PT, color=INK)  # pyright: ignore[reportUnknownMemberType]
-    ax.set_ylim(len(labels) - 0.5, -0.5)
-    ax.tick_params(axis="y", length=0)
-    despine(ax)
-
-
-def right_label(ax: Axes, row: int, text: str, color: str = MUTED) -> None:
-    """A short annotation just outside the right edge of ``row`` (e.g. an n), outside the frame so
-    it is never mistaken for data on the value axis."""
-    ax.annotate(  # pyright: ignore[reportUnknownMemberType]
-        text,
-        xy=(1.006, 1.0 - (row + 0.5) / max(len(ax.get_yticks()), 1)),
-        xycoords="axes fraction",
-        fontsize=ANNOTATION_PT,
-        color=color,
-        ha="left",
-        va="center",
-        annotation_clip=False,
-    )
-
-
 #: Per-suffix metadata that keeps a written figure a pure function of its content; otherwise PDF
 #: and SVG stamp the time of the write.
 UNDATED: dict[str, dict[str, None]] = {"pdf": {"CreationDate": None}, "svg": {"Date": None}}
@@ -801,11 +765,9 @@ def save(
     return stem
 
 
-# ---------------------------------------------------------------------------------------------
 # Measured layout. Every figure module sizes its chrome from what its text MEASURES on the laid-out
 # figure, never from a fixed fraction: a fixed band is right for one width and one label length,
 # and on any other it either wastes the page or prints the chrome over the data.
-# ---------------------------------------------------------------------------------------------
 
 
 def renderer_of(fig: Figure | SubFigure) -> RendererBase:

@@ -25,7 +25,6 @@ from typing import Any
 __all__ = [
     "ATTRIBUTION_RE",
     "COMMENT_STARTS",
-    "C_FAMILY",
     "TS_GRAMMAR",
     "block_comment_end",
     "carries_attribution",
@@ -47,9 +46,6 @@ __all__ = [
     "ts_span",
     "ts_type",
 ]
-
-# Languages handled by the C-family block-and-line comment scanner.
-C_FAMILY = frozenset({"c", "cpp", "c++", "cuda", "hip"})
 
 
 def normalize_lang(lang: str) -> str:
