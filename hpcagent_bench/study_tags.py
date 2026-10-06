@@ -64,14 +64,14 @@ __all__ = [
     "kernel_names",
     "kernel_short_display_name",
     "language_name",
+    "dash_spellings",
     "language_of",
-    "language_spellings",
     "manifest_names",
     "marker_of",
     "model_checkpoint",
     "model_name",
     "model_of",
-    "model_spellings",
+    "token_of",
     "names",
     "names_of",
     "order",
@@ -375,14 +375,24 @@ def packet_parts(packet: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys(p for p in found if p))
 
 
-@functools.lru_cache(maxsize=1, typed=True)
-def model_spellings() -> tuple[tuple[str, tuple[str, ...]], ...]:
-    """``(model, its dash-bounded spellings)`` in registry order -- the table :func:`model_of` scans."""
-    aliases = registry().aliases.get("models", {})
+@functools.lru_cache(maxsize=None, typed=True)
+def dash_spellings(kind: str) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    """``(tag, its dash-bounded spellings)`` of every ``kind`` entry in registry order, aliases
+    included -- the table :func:`model_of` and :func:`language_of` scan."""
+    aliases = registry().aliases.get(kind, {})
     return tuple(
-        (model, tuple(f"-{name}-" for name in (model, *(a for a, target in aliases.items() if target == model))))
-        for model in order("models")
+        (tag, tuple(f"-{name}-" for name in (tag, *(a for a, target in aliases.items() if target == tag))))
+        for tag in order(kind)
     )
+
+
+def token_of(setup: str, kind: str, unknown: str) -> str:
+    """The first ``kind`` tag (registry order) whose spelling is a whole dash-delimited token of ``setup``."""
+    padded = f"-{setup}-"
+    for tag, spellings in dash_spellings(kind):
+        if any(spelling in padded for spelling in spellings):
+            return tag
+    return unknown
 
 
 def model_of(setup: str, unknown: str = "other") -> str:
@@ -397,24 +407,7 @@ def model_of(setup: str, unknown: str = "other") -> str:
     columns landed records its model in the database instead; parse the setup only for a CSV that
     predates them.
     """
-    padded = f"-{setup}-"
-    for model, spellings in model_spellings():
-        if any(spelling in padded for spelling in spellings):
-            return model
-    return unknown
-
-
-@functools.lru_cache(maxsize=1, typed=True)
-def language_spellings() -> tuple[tuple[str, tuple[str, ...]], ...]:
-    """``(language, its dash-bounded spellings)`` in registry order -- the table :func:`language_of` scans."""
-    aliases = registry().aliases.get("languages", {})
-    return tuple(
-        (
-            language,
-            tuple(f"-{name}-" for name in (language, *(a for a, target in aliases.items() if target == language))),
-        )
-        for language in order("languages")
-    )
+    return token_of(setup, "models", unknown)
 
 
 def language_of(setup: str, unknown: str = "") -> str:
@@ -428,11 +421,7 @@ def language_of(setup: str, unknown: str = "") -> str:
     predates the column has nothing :func:`hpcagent_bench.studies.fill_setup_identity` could fill
     from, and the setup name is the only place the language still is.
     """
-    padded = f"-{setup}-"
-    for language, spellings in language_spellings():
-        if any(spelling in padded for spelling in spellings):
-            return language
-    return unknown
+    return token_of(setup, "languages", unknown)
 
 
 def setup_suffix(setup: str) -> str:
@@ -440,7 +429,7 @@ def setup_suffix(setup: str) -> str:
     "" when the name names no registered model. The study prefix before the model can spell a packet
     (``cpf-llr-focus40``), so a packet is only ever read from this suffix."""
     padded = f"-{setup}-"
-    ends = [padded.find(s) + len(s) - 1 for _, spellings in model_spellings() for s in spellings if s in padded]
+    ends = [padded.find(s) + len(s) - 1 for _, spellings in dash_spellings("models") for s in spellings if s in padded]
     return padded[min(ends) :] if ends else ""
 
 
