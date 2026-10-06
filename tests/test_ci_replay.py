@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """scripts/ci_replay.py renders tests.yml the way GitHub does for a push and runs its test steps."""
 
+import os
 import pathlib
 import re
 import subprocess
@@ -57,6 +58,7 @@ def test_the_workflow_expands_into_legs_with_rendered_steps(tmp_path: pathlib.Pa
     workflow = yaml.safe_load(ci_replay.WORKFLOW.read_text())
     legs = list(ci_replay.legs(workflow, tmp_path, 1.0))
     labels = {leg.label for leg in legs}
+    assert len(labels) == len(legs), "two legs share a label, so they write one log file"
     unit = sorted(leg.label for leg in legs if leg.job == "unit")
     assert len(unit) == len(ci_replay.matrix_combinations(workflow["jobs"]["unit"]["strategy"]))
     assert "coverage" not in {leg.job for leg in legs}, "the coverage job has no test step"
@@ -68,6 +70,14 @@ def test_the_workflow_expands_into_legs_with_rendered_steps(tmp_path: pathlib.Pa
             assert step.timeout_s > 0
     shard_one = next(leg for leg in legs if leg.label.startswith("unit[") and "[shard=1]" in leg.label)
     assert re.search(r"awk 'NR % \d+ == 1'", shard_one.steps[-1].script), "shard 1 is not dealt its slice"
+
+
+def test_concurrent_legs_get_disjoint_cpu_slices() -> None:
+    """Each running leg is bound to its own CPUs, so no leg sizes its thread pools off the whole node."""
+    slices = ci_replay.cpu_slices(2)
+    assert len(slices) == 2 and all(slices)
+    if len(os.sched_getaffinity(0)) >= 2:
+        assert not set(slices[0]) & set(slices[1])
 
 
 def test_list_mode_runs_nothing_and_honours_skip() -> None:

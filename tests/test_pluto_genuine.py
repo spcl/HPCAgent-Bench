@@ -2,10 +2,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The Pluto column times what polycc wrote, or it times nothing.
 
-The bug these pin is one the column shipped with: ``pluto`` built the same ``<base>_fpNN.cpp`` as
-``llvm``, with the same clang, and never ran polycc -- so every pluto-vs-llvm number in the results
-DB was llvm-vs-llvm under a polyhedral label. What makes that hard to keep fixed is that each way of
-reintroducing it is silent. A fallback to the untransformed source compiles and runs. A positional
+The failure these pin: ``pluto`` building the same ``<base>_fpNN.cpp`` as ``llvm``, with the same
+clang, and never running polycc -- every pluto-vs-llvm number is then llvm-vs-llvm under a
+polyhedral label. Each way of getting there is silent. A fallback to the untransformed source compiles and runs. A positional
 call in the canonical ABI order against polycc's symbols-first VLA signature returns numbers. A
 cached ``.so`` from before the column was rebuilt loads. None of them raise.
 
@@ -149,16 +148,14 @@ def test_polycc_rejection_declines_and_surfaces_its_own_diagnostic(tmp_path, mon
 def test_a_failed_polycc_never_writes_out_directly(tmp_path, monkeypatch) -> None:
     """polycc is pointed at a private scratch name, never ``out``, so a failed (or killed mid-emit)
     run cannot leave a truncated ``out`` behind -- there is nothing at ``out`` for it to truncate.
-    Pinned after a real race: ``out`` is a FIXED, shared path (a tracked override's ``cpp_backend``
-    sibling, not a caller's private temp dir), so two overlapping callers handing polycc the same
-    ``-o`` argument used to be able to truncate each other's output -- measured, six concurrent runs
-    of one scop through the old direct-write path came back with five different byte counts,
-    including a 0-byte file, from identical inputs and an otherwise-deterministic polycc (a serial
-    repeat of the same run is always byte-identical). A failed run must therefore leave a
-    PRE-EXISTING ``out`` -- e.g. a stale-but-complete transform from an earlier successful run --
-    untouched rather than deleted: with polycc never writing to ``out`` directly, there is no
-    truncated content there for the old "delete on failure" cleanup to be protecting against, and
-    deleting a good cached transform on a transient failure would only be waste."""
+    ``out`` is a FIXED, shared path (a tracked override's ``cpp_backend`` sibling, not a caller's
+    private temp dir), so two overlapping callers handing polycc the same ``-o`` argument truncate
+    each other's output: six concurrent direct-write runs of one scop give five different byte
+    counts, a 0-byte file among them, from identical inputs and an otherwise-deterministic polycc.
+    A failed run therefore leaves a PRE-EXISTING ``out`` -- e.g. a stale-but-complete transform from
+    an earlier successful run -- untouched rather than deleted: with polycc never writing to ``out``
+    directly, there is no truncated content there for a "delete on failure" cleanup to protect
+    against, and deleting a good cached transform on a transient failure would only be waste."""
     scop = write_scop(tmp_path)
     out = pluto_transform.transformed_path(scop)
     out.write_text("/* stale but complete, from an earlier good run */\n")
@@ -290,7 +287,7 @@ def test_every_ppcg_column_compiles_ppcg_output_for_its_own_vendor(monkeypatch) 
 
     Two failures this catches, both silent: a new flavor missing from the dispatch falls through to
     ``cpp_backend/<short>_fpNN.<ext>`` and compiles the UNTRANSFORMED translator output -- an nvcc
-    column wearing PPCG's label, exactly the bug ``pluto`` shipped with -- and a flavor that reaches
+    column wearing PPCG's label, the failure the module docstring describes -- and a flavor that reaches
     the transform with the wrong vendor generates ``.cu`` for a column that then asks hipcc for
     ``.hip``, which fails as a missing file rather than as a wrong answer.
     """
@@ -1122,11 +1119,10 @@ def test_ppcg_run_env_is_a_noop_with_no_lib_dir_beside_the_exe(
     assert ppcg_transform._ppcg_run_env(str(lone)) is None
 
 
-# A MISSING TOOL IS NOT A KERNEL VERDICT. One sweep shipped 248 ppcg rows and no ppcg: 193 of them
-# read "ppcg is not installed on this host" and 55 read "the translator emitted no #pragma scop",
-# and every one of them reached the results DB as the same `unsupported` decline a kernel outside
-# the polyhedral model gets. The tests below pin the three things that stop that repeating: the
-# recorded WORD differs, the tool is asked about BEFORE the kernel, and the job refuses to start.
+# A MISSING TOOL IS NOT A KERNEL VERDICT. A sweep on a host without ppcg must not record its rows as
+# the `unsupported` decline a kernel outside the polyhedral model gets, nor blame a kernel's missing
+# scop. The tests below pin the three things that keep them apart: the recorded WORD differs, the
+# tool is asked about BEFORE the kernel, and the job refuses to start.
 
 
 def test_a_missing_ppcg_is_recorded_as_tool_missing_and_a_real_decline_is_not(tmp_path, monkeypatch) -> None:
@@ -1159,10 +1155,8 @@ def test_the_ppcg_column_asks_about_its_tool_before_it_asks_about_the_kernel(tmp
     """With no ppcg on the host, EVERY kernel's reason is the missing tool -- including the ones
     that also have no scop.
 
-    This is the exact conflation one ppcg sweep published: 55 of its rows blamed the kernels ("the
-    translator emitted no #pragma scop") on a node where the one true answer, which the other 193
-    rows gave, was that the image shipped no ppcg. A host without the compiler has nothing to say
-    about any kernel, so the tool question comes first."""
+    A host without the compiler has nothing to say about any kernel, so the tool question comes first:
+    "the translator emitted no #pragma scop" on such a host blames the kernel for the image's gap."""
     from hpcagent_bench.frameworks.errors import ToolMissing
 
     monkeypatch.setattr(ppcg_transform, "ppcg_lookup", lambda: (None, "ppcg is not installed on this host: nowhere"))
@@ -1290,13 +1284,18 @@ def test_preflight_refuses_a_ppcg_column_whose_toolchain_is_absent(monkeypatch) 
 @pytest.mark.ppcg
 def test_the_ppcg_hip_column_times_and_validates_one_kernel(tmp_path) -> None:
     """The whole chain with nothing faked: ppcg transforms the scop to CUDA, hipify-perl rewrites it
-    as HIP, hipcc builds it for this GPU, it RUNS, it agrees with numpy, and it produces a time.
+    as HIP, hipcc builds it for this GPU, it RUNS on device-resident arrays, it agrees with numpy,
+    and it produces a time.
 
-    The transformed source is checked for both marks before the arithmetic is: a ``__global__`` (so
-    ppcg really offloaded, rather than copying the serial nest through -- its silent refusal) and
+    The transformed source is checked for its marks before the arithmetic is: a ``__global__`` (so
+    ppcg really offloaded, rather than copying the serial nest through -- its silent refusal),
     ``hip``-prefixed runtime calls with no ``cuda`` ones left (so the file hipcc compiled is the
-    translated one). Without those, a library that happened to answer correctly on the host would
-    pass this as a GPU measurement."""
+    translated one), and none of ppcg's device mirrors (the column's contract: the caller's arrays
+    are already on the device, ``device_resident_host``). Without those, a library that happened to
+    answer correctly on the host would pass this as a GPU measurement. The arrays are staged the way
+    the column's ``copy_func`` stages them."""
+    from hpcagent_bench.harness.native_call import import_device_array_module
+
     write_scop(tmp_path)
 
     so_path = cpp_runtime._ensure_built(tmp_path, "mm", "ppcg_hip")
@@ -1305,8 +1304,9 @@ def test_the_ppcg_hip_column_times_and_validates_one_kernel(tmp_path) -> None:
     device = (tmp_path / "mm_fp64_pluto_input_kernel.hip").read_text()
     host = (tmp_path / "mm_fp64_pluto_input_host.hip").read_text()
     assert "__global__" in device, "ppcg offloaded nothing: it copied the scop through unchanged"
-    assert re.search(r"hip(Malloc|Memcpy|Free)", host), "the host half was not translated to HIP"
-    assert not re.search(r"cuda(Malloc|Memcpy|Free)", host), "CUDA runtime calls survived hipify"
+    assert re.search(r"\bhip(GetLastError|Success)\b", host), "the host half was not translated to HIP"
+    assert not re.search(r"\bcuda(Malloc|Memcpy|Free|GetLastError)\b", host), "CUDA runtime calls survived hipify"
+    assert not re.search(r"\bhip(Malloc|Memcpy|Free)\b", host), "a device mirror of a parameter survived"
 
     lib = ctypes.CDLL(str(so_path))
     kernel = lib["mm_fp64"]
@@ -1318,12 +1318,15 @@ def test_the_ppcg_hip_column_times_and_validates_one_kernel(tmp_path) -> None:
     rng = np.random.default_rng(0)
     a = np.ascontiguousarray(rng.random((n, n)))
     b = np.ascontiguousarray(rng.random((n, n)))
-    c = np.zeros((n, n))
+    cupy = import_device_array_module()
+    staged = [cupy.asarray(arr) for arr in (a, b, np.zeros((n, n)))]
+    cupy.cuda.runtime.deviceSynchronize()
     start = time.perf_counter()
-    kernel(n, *(arr.ctypes.data_as(ptr) for arr in (a, b, c)))
+    kernel(n, *(ctypes.cast(arr.data.ptr, ptr) for arr in staged))
+    cupy.cuda.runtime.deviceSynchronize()
     elapsed_ms = (time.perf_counter() - start) * 1e3
 
-    np.testing.assert_allclose(c, a @ b, rtol=1e-12, atol=1e-12)
+    np.testing.assert_allclose(cupy.asnumpy(staged[2]), a @ b, rtol=1e-12, atol=1e-12)
     assert elapsed_ms > 0.0, "the column produced no time for a kernel it just ran"
 
 
@@ -1373,11 +1376,10 @@ def test_a_validation_that_could_not_run_is_not_recorded_as_validated(tmp_path, 
     """A comparison that raised is not a comparison that passed.
 
     ``valid`` starts optimistic so an unvalidated run still produces timings, and under
-    ``ignore_errors`` -- which every canon column runs with -- the except branch used to leave it
-    that way: the row said ``validated=True`` about a comparison that never completed. Measured on
-    a sweep where two ``ppcg_hip`` kernels whose own ``np.allclose`` raised
-    ``ArrayMemoryError`` (the per-kernel RLIMIT_AS cap, on arrays that size) came out of the sweep
-    marked validated -- a compiler column publishing agreement with NumPy that was never checked.
+    ``ignore_errors`` -- which every canon column runs with -- the except branch must not leave it
+    that way: a ``ppcg_hip`` kernel whose own ``np.allclose`` raises ``ArrayMemoryError`` (the
+    per-kernel RLIMIT_AS cap, on arrays that size) would be recorded ``validated=True`` -- a compiler
+    column publishing agreement with NumPy that was never checked.
 
     Driven through NUMBA with the numpy oracle handed in as the third constructor argument --
     the shape ``collect.sweep`` uses. Both halves are load-bearing and both were measured: numpy

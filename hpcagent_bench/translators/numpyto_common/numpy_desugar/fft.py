@@ -46,10 +46,14 @@ def fft_axes(fattr: str, call: ast.Call, rank: int):
 def fft_inline_stmts(
     tname: str, sname: str, taxes: list[int], rank: int, inverse: bool, ctr: int, alloc: bool, real_dtype: str
 ) -> list[ast.stmt]:
-    """Statements computing ``np.fft.*`` of ``sname`` into ``tname`` as a naive DFT loop nest.
+    """Statements computing ``np.fft.*`` of ``sname`` into ``tname`` as naive DFT loop nests, one per
+    transformed axis.
 
-    Output indices iterate every axis, summation indices only ``taxes``; inverse uses ``+1j`` and
-    divides by ``prod(N_t)``. ``alloc`` allocates ``tname``; otherwise the existing buffer is written.
+    A multi-axis DFT is separable: each pass sums over ONE axis of the previous pass's output, into a
+    ``__ft<ctr>_s<j>`` temporary, the last pass into ``tname``. One nest summing every axis at once costs
+    ``prod(N)`` per output element instead of ``sum(N_t)`` (a 16^3 grid: 4096 against 48). Output indices
+    iterate every axis; inverse uses ``+1j`` and divides each pass by its ``N_t``. ``alloc`` allocates
+    ``tname``; otherwise the existing buffer is written.
 
     ``real_dtype`` (real half of the transform's complex dtype) casts the phase divisor: dace folds the
     leading ``1j`` into the product and emits a ``complex/int64`` division that its complex.h has no
@@ -61,28 +65,27 @@ def fft_inline_stmts(
     # numpy_expr into ``range(...)`` and fails type inference.
     d = [f"{p}_d{i}" for i in range(rank)]
     lines: list[str] = [f"{d[i]} = {sname}.shape[{i}]" for i in range(rank)]
-    if alloc:
-        # The transform's own complex width; complex128 here would widen an fp32 port.
-        lines.append(f"{tname} = np.zeros(({', '.join(d)},), np.{dtypes.complex_dtype_for(real_dtype)})")
     o = [f"{p}_k{i}" for i in range(rank)]
-    ind = ""
-    for i in range(rank):
-        lines.append(f"{ind}for {o[i]} in range({d[i]}):")
-        ind += "    "
     oidx = ", ".join(o)
-    lines.append(f"{ind}{tname}[{oidx}] = 0j")
-    n = {t: f"{p}_n{t}" for t in taxes}
-    cind = ind
-    for t in taxes:
-        lines.append(f"{cind}for {n[t]} in range({d[t]}):")
-        cind += "    "
-    terms = [f"(2.0 * 3.141592653589793 * {o[t]} * {n[t]} / np.{real_dtype}({d[t]}))" for t in taxes]
-    phase = " + ".join(terms)
-    sidx = ", ".join((n[ax] if ax in taxes else o[ax]) for ax in range(rank))
-    lines.append(f"{cind}{tname}[{oidx}] += {sname}[{sidx}] * np.exp({sign} * ({phase}))")
-    if inverse:
-        denom = " * ".join(d[t] for t in taxes)
-        lines.append(f"{ind}{tname}[{oidx}] = {tname}[{oidx}] / ({denom})")
+    source = sname
+    for j, t in enumerate(taxes):
+        target = tname if j == len(taxes) - 1 else f"{p}_s{j}"
+        if alloc or target != tname:
+            # The transform's own complex width; complex128 here would widen an fp32 port.
+            lines.append(f"{target} = np.zeros(({', '.join(d)},), np.{dtypes.complex_dtype_for(real_dtype)})")
+        ind = ""
+        for i in range(rank):
+            lines.append(f"{ind}for {o[i]} in range({d[i]}):")
+            ind += "    "
+        n = f"{p}_n{t}"
+        sidx = ", ".join(n if ax == t else o[ax] for ax in range(rank))
+        phase = f"(2.0 * 3.141592653589793 * {o[t]} * {n} / np.{real_dtype}({d[t]}))"
+        lines.append(f"{ind}{target}[{oidx}] = 0j")
+        lines.append(f"{ind}for {n} in range({d[t]}):")
+        lines.append(f"{ind}    {target}[{oidx}] += {source}[{sidx}] * np.exp({sign} * {phase})")
+        if inverse:
+            lines.append(f"{ind}{target}[{oidx}] = {target}[{oidx}] / {d[t]}")
+        source = target
     return ast.parse("\n".join(lines)).body
 
 

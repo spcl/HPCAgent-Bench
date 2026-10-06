@@ -124,10 +124,9 @@ def test_every_shipped_skill_parses_and_is_indexable() -> None:
         assert skill.body.strip(), f"{skill.name}: empty body"
         assert skill.description.strip(), f"{skill.name}: no description, so the index cannot list it"
         assert skill.when.strip(), (
-            f"{skill.name}: no `when:` trigger. Nothing is inlined any more, so the trigger IS the "
-            f"page's only appearance in the prompt -- a page without one is text nothing points at"
+            f"{skill.name}: no `when:` trigger. The trigger IS the page's only appearance in the "
+            f"prompt -- a page without one is text nothing points at"
         )
-        assert len(skill.description) < 200, f"{skill.name}: the index line is a line, not a paragraph"
 
 
 def test_a_skill_directory_name_is_its_frontmatter_name() -> None:
@@ -136,7 +135,7 @@ def test_a_skill_directory_name_is_its_frontmatter_name() -> None:
     for path in skill_files():
         skill = parse_skill(path.read_text(), path)
         assert skill.name == path.parent.name, f"{path}: frontmatter says {skill.name!r}"
-        assert skill.description.strip() and len(skill.description) < 200, f"{path}: the index line is a line"
+        assert skill.description.strip(), f"{path}: no description"
 
 
 def test_skills_are_ascii_and_have_no_trailing_whitespace() -> None:

@@ -271,13 +271,21 @@ def entry_params(host: str, entry: str) -> list[str]:
     """The parameter NAMES of ``entry``'s definition in ``host``, in order; ``[]`` if it is not there.
 
     A name is the last identifier before any ``[``: a rank>=2 array arrives as a VLA parameter
-    (``double aa[restrict N][N]``), whose brackets hold no comma, so splitting on commas is exact.
+    (``double aa[restrict N][N]``) or a pointer to a VLA row (``double (*restrict A)[N]``, the scop
+    form), whose brackets hold no comma, so splitting on commas is exact. The list is read to its
+    BALANCED closing parenthesis: the pointer form's own ``)`` does not end it.
     """
-    match = re.search(rf"\b{re.escape(entry)}\s*\(([^)]*)\)\s*{{", host)
-    if match is None:
-        return []
-    names = [re.findall(r"[A-Za-z_]\w*", param.split("[", 1)[0]) for param in match.group(1).split(",")]
-    return [found[-1] for found in names if found]
+    for match in re.finditer(rf"\b{re.escape(entry)}\s*\(", host):
+        depth, end = 1, match.end()
+        while depth and end < len(host):
+            depth += {"(": 1, ")": -1}.get(host[end], 0)
+            end += 1
+        if depth or not re.match(r"\s*\{", host[end:]):
+            continue  # a call or a declaration, not the definition
+        params = host[match.end() : end - 1].split(",")
+        names = [re.findall(r"[A-Za-z_]\w*", param.split("[", 1)[0]) for param in params]
+        return [found[-1] for found in names if found]
+    return []
 
 
 def device_resident_host(host: str, entry: str) -> str:

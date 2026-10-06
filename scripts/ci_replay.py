@@ -7,8 +7,9 @@ Every job is expanded over its matrix into legs; a leg runs its test steps (``ru
 call ``python -m pytest`` or ``python -c``) in order, with the workflow, job and step ``env`` and
 ``${{ }}`` expressions rendered the way GitHub would for a push. Setup steps (``uses:``, apt, pip)
 are skipped: the caller provides the environment (scripts/run_tests.sh, or the judge image through
-scripts/ci_mi200.sbatch). Legs run concurrently, each step under ``timeout``; the verdict is one
-line per step plus the failing test ids, in ``<out>/summary.txt``.
+scripts/ci_mi200.sbatch). Legs run concurrently, each bound to its own slice of the CPUs as a runner
+owns its cores, each step under ``timeout``; the verdict is one line per step plus the failing test
+ids, in ``<out>/summary.txt``.
 
     python scripts/ci_replay.py --list
     python scripts/ci_replay.py --out ci-out --parallel 8 --skip lint,coverage,integration/Phase 6 -- container launch
@@ -23,6 +24,7 @@ import dataclasses
 import itertools
 import os
 import pathlib
+import queue
 import re
 import subprocess
 import sys
@@ -117,7 +119,11 @@ def legs(workflow: Mapping[Any, Any], scratch: pathlib.Path, timeout_factor: flo
     for job_name, job in workflow["jobs"].items():
         for matrix in matrix_combinations(job.get("strategy")):
             label = job_name + "".join(f"[{k}={v}]" for k, v in matrix.items() if not isinstance(v, dict))
-            label += "".join(f"[{v.get('id', k)}]" for k, v in matrix.items() if isinstance(v, dict))
+            # A dict leg is named by its id, else by its values: its key alone is shared by every leg,
+            # and the label names the leg's log file.
+            label += "".join(
+                f"[{v.get('id', '-'.join(map(str, v.values())))}]" for v in matrix.values() if isinstance(v, dict)
+            )
             temp = scratch / re.sub(r"[^\w.=-]+", "_", label)
             contexts: dict[str, Any] = {
                 "matrix": Context(matrix),
@@ -177,7 +183,37 @@ class Outcome:
     log: pathlib.Path
 
 
-def run_leg(leg: Leg, out: pathlib.Path, base_env: Mapping[str, str], skip: list[str], coverage: bool) -> list[Outcome]:
+#: Runs argv[2:] bound to the comma-separated CPUs of argv[1].
+PIN = "import os, sys; os.sched_setaffinity(0, map(int, sys.argv[1].split(','))); os.execvp(sys.argv[2], sys.argv[2:])"
+
+
+def cpu_slices(count: int) -> list[tuple[int, ...]]:
+    """``count`` disjoint slices of this process's CPUs, one per concurrently running leg. A runner owns
+    its few cores; a leg that sees the whole node sizes every OpenMP, BLAS and numba pool off all of
+    them, and a dozen legs doing so at once are slow enough to read as hangs."""
+    cpus = sorted(os.sched_getaffinity(0))
+    size = max(1, len(cpus) // count)
+    return [tuple(cpus[i * size : (i + 1) * size]) or tuple(cpus) for i in range(count)]
+
+
+def run_leg(
+    leg: Leg,
+    out: pathlib.Path,
+    base_env: Mapping[str, str],
+    skip: list[str],
+    coverage: bool,
+    slots: "queue.Queue[tuple[int, ...]]",
+) -> list[Outcome]:
+    cpus = slots.get()
+    try:
+        return run_steps(leg, out, base_env, skip, coverage, ",".join(map(str, cpus)))
+    finally:
+        slots.put(cpus)
+
+
+def run_steps(
+    leg: Leg, out: pathlib.Path, base_env: Mapping[str, str], skip: list[str], coverage: bool, cpus: str
+) -> list[Outcome]:
     outcomes = []
     for index, step in enumerate(leg.steps):
         if selected(leg, step, skip):
@@ -194,7 +230,8 @@ def run_leg(leg: Leg, out: pathlib.Path, base_env: Mapping[str, str], skip: list
             sink.write(f"# {leg.label} :: {step.name}\n{step.script}\n")
             sink.flush()
             proc = subprocess.run(
-                ["timeout", "--kill-after=60", str(step.timeout_s), "bash", "-eo", "pipefail", "-c", step.script],
+                [sys.executable, "-c", PIN, cpus, "timeout", "--kill-after=60", str(step.timeout_s)]
+                + ["bash", "-eo", "pipefail", "-c", step.script],
                 cwd=REPO,
                 env=env,
                 stdout=sink,
@@ -247,14 +284,17 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"{leg.label} :: {step.name} [{step.timeout_s // 60} min]{mark}")
         return 0
 
-    # Each leg's `-n auto` gets its share of the machine.
+    # Each leg runs on its own slice of the machine, and its `-n auto` gets one worker per CPU of it.
+    slots: queue.Queue[tuple[int, ...]] = queue.Queue()
+    for cpus in cpu_slices(args.parallel):
+        slots.put(cpus)
     base_env = dict(os.environ)
-    base_env.setdefault("PYTEST_XDIST_AUTO_NUM_WORKERS", str(max(1, (os.cpu_count() or 1) // args.parallel)))
+    base_env.setdefault("PYTEST_XDIST_AUTO_NUM_WORKERS", str(len(cpu_slices(args.parallel)[0])))
     # Longest budget first, so the tail is short legs.
     chosen.sort(key=lambda leg: -sum(step.timeout_s for step in leg.steps))
     outcomes: list[Outcome] = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.parallel) as pool:
-        futures = [pool.submit(run_leg, leg, args.out, base_env, skip, args.coverage) for leg in chosen]
+        futures = [pool.submit(run_leg, leg, args.out, base_env, skip, args.coverage, slots) for leg in chosen]
         for future in concurrent.futures.as_completed(futures):
             for outcome in future.result():
                 outcomes.append(outcome)
