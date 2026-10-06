@@ -317,8 +317,8 @@ def signed_rank_test(differences: Samples, alternative: str = "two-sided") -> tu
     """``(statistic, p, method, n)`` of the Wilcoxon signed-rank test, the one signed-rank call here.
 
     Non-finite and zero differences are dropped (Wilcoxon's original treatment). Exact or approximate
-    is decided by :func:`use_exact` and passed to scipy EXPLICITLY: scipy's ``auto`` is a library default
-    that has moved before. ``correction=True``: the approximation takes the half-step continuity
+    is decided by :func:`use_exact` and passed to scipy EXPLICITLY, never left to scipy's ``auto``: a
+    library default is not a published method. ``correction=True``: the approximation takes the half-step continuity
     correction. Nothing left to test returns ``(nan, 1.0, "degenerate", 0)``.
     """
     x: FloatArray = np.asarray(differences, dtype=np.float64)
@@ -345,9 +345,9 @@ def usable_ratios(values: Samples, label: str = "", warn: bool = True) -> FloatA
     """The entries of ``values`` a geometric mean may be taken over: finite and strictly positive.
 
     A zero, a negative or a non-finite ratio is a MISSING measurement, not a slow one. Dropping it
-    is the only defensible reading, and clamping it to a small epsilon -- which one copy of this
-    did by way of :func:`scipy.stats.gmean`, whose ``log(0)`` sends the whole geomean to 0.0 --
-    enters an absent datum as a catastrophic regression that never happened.
+    is the only defensible reading. Do not clamp it to a small epsilon or hand it to
+    :func:`scipy.stats.gmean`, whose ``log(0)`` sends the whole geomean to 0.0: either enters an absent
+    datum as a catastrophic regression that never happened.
 
     Every drop is warned about, naming the count and the values. ``label`` prefixes the warning.
     """

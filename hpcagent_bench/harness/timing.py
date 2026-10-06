@@ -62,7 +62,7 @@ __all__ = [
 ]
 
 #: Backend -> the version stamp of its reduction (``timing_reduction``). Changed arithmetic means a
-#: new stamp; the older ``mwd-v1`` rows predate the stamp and read NULL.
+#: new stamp; an unstamped row reads NULL.
 REDUCTIONS: dict[str, str] = {"min_of_k": "mok-v1", "mannwhitney_delta": "mwd-v2", "median_of_k": "medk-v1"}
 
 #: The same backends when every timed repeat ran on varied inputs

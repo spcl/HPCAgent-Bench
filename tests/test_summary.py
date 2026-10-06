@@ -159,8 +159,8 @@ def test_paired_change_agrees_with_its_own_test() -> None:
 
 
 def test_paired_change_uses_the_exact_null_where_one_exists() -> None:
-    """A normal approximation above n=25 was one copy's cutoff and scipy's exact test disagreed
-    with it by 4e-3 in p at n=40. The exact distribution is computed wherever it is available."""
+    """The exact distribution is computed wherever it is available: at n=40 a normal approximation
+    differs from scipy's exact test by 4e-3 in p."""
     rng = np.random.default_rng(7)
     rng.normal(0.2, 1.0, 12)
     rng.normal(0.15, 0.8, 25)
@@ -262,8 +262,7 @@ def test_a_paired_change_reports_the_shared_signed_rank_p() -> None:
 
 def test_a_tied_sample_takes_the_corrected_approximation_not_an_exact_count() -> None:
     """The exact null counts subsets of DISTINCT ranks, so on tied differences it is wrong rather than
-    precise. scipy's automatic choice counted exactly there: llr40v11-oss120b-c read p = 0.38052
-    instead of 0.38708."""
+    precise; the tie- and continuity-corrected approximation is the right null there."""
     differences = [0.1, 0.1, 0.2, -0.3, 0.4, 0.4, 0.5, -0.1, 0.6, 0.7]
     _, pvalue, method, n = summary.signed_rank_test(differences)
     assert (method, n) == ("signed-rank-approx", 10)
