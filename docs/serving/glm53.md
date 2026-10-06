@@ -9,7 +9,7 @@ Background: [`knobs.md`](knobs.md).
 MODEL=glm53 hpcagent_bench/cluster/serve-only.sbatch
 ```
 
-**Image.** The same `hpcagent-bench-sglang-mi300-latest` as Qwen3.8 and Kimi K2.7: the sglang image
+**Image.** The same `hpcagent-bench-sglang-mi300-latest` as Kimi K2.7: the sglang image
 bakes in what GLM-5.3 needs (`torch.Tensor.format_ue8m0` kept false, and
 `HIPCC_COMPILE_FLAGS_APPEND=-U__HIP_NO_HALF_CONVERSIONS__ -U__HIP_NO_HALF_OPERATORS__`).
 

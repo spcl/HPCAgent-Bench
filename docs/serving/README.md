@@ -67,8 +67,8 @@ plugin, multi-node RCCL silently falls back to TCP.
 
 | EDF | Engine | Models | Rendered by `install_edfs.sh` |
 |---|---|---|---|
-| `hpcagent-bench-sglang-mi300-latest` | SGLang 0.5.20 | Qwen3.8, Kimi K2.7, GLM-5.3 | yes |
-| `hpcagent-bench-vllm-mi300-latest` | vLLM 0.28.0 | gpt-oss-120b | yes |
+| `hpcagent-bench-sglang-mi300-latest` | SGLang 0.5.20 | Kimi K2.7, GLM-5.3 | yes |
+| `hpcagent-bench-vllm-mi300-latest` | vLLM 0.28.0 | Qwen3.8, gpt-oss-120b | yes |
 | `hpcagent-bench-vllm-mi200-latest` | vLLM 0.28.0 (same image) | Qwen3.8 on mi200 | yes |
 
 ## 3. Slurm shape
@@ -112,15 +112,15 @@ The served name is `hpcagent-bench-vllm` for every model, not the HuggingFace id
 
 | Model | `MODEL=` | Engine | Nodes | Page |
 |---|---|---|---|---|
-| `Qwen/Qwen3.8-27B-FP8` | `qwen38` | SGLang | 1 | [`qwen38.md`](qwen38.md) |
+| `Qwen/Qwen3.8-27B-FP8` | `qwen38` | vLLM | 1 | [`qwen38.md`](qwen38.md) |
 | `moonshotai/Kimi-K2.7-Code` | `kimi27sglang` | SGLang | 4 (`pp=4`) | [`kimi27sglang.md`](kimi27sglang.md) |
 | `zai-org/GLM-5.3` | `glm53` | SGLang | 4 (`pp=4`) | [`glm53.md`](glm53.md) |
 | `openai/gpt-oss-120b` | `oss120b` | vLLM | 1 | [`oss120b.md`](oss120b.md) |
 
-The engine is per model and partition: on mi300, Qwen3.8 on vLLM is about 19x slower than on SGLang
-and Kimi K2.7 on vLLM collapses above concurrency 1. On mi200 (MI250X, BF16) the SGLang base has no
-kernels, and Qwen3.8 serves on the AMD vLLM image (`layers/hardware-mi200-qwen38.env`, 421 tok/s at
-16 concurrent requests).
+The engine is per model and partition, measured at the experiment load: on mi300 Qwen3.8 serves 1.77x
+faster on vLLM (`ROCM_AITER_FA`) than on SGLang ([`qwen38.md`](qwen38.md)). On mi200 (MI250X, BF16)
+the SGLang base has no kernels, and Qwen3.8 serves on the AMD vLLM image with `TRITON_ATTN`
+(`layers/hardware-mi200-qwen38.env`); every other model runs on mi300 only.
 
 ## 5. Healthy or sick
 
