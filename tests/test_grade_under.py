@@ -456,9 +456,7 @@ def test_main_keeps_a_submission_no_final_grade_retimed_on_record_uncredited(
     """A live grade under an older protocol is neither refused nor dropped: the extraction keeps it
     as recorded, and the reader credits only final grades (``timing.credited_protocol``)."""
     fake_db = extract.Database(path=tmp_path / "d.db", run_root="root", job_dir=tmp_path, job="j1")
-    result = extract.DbResult(
-        observations=[{**obs(1, 3.0, ""), "run_root": "root", "job": "j1"}], sources=[]
-    )
+    result = extract.DbResult(observations=[{**obs(1, 3.0, ""), "run_root": "root", "job": "j1"}], sources=[])
     monkeypatch.setattr(extract, "discover_databases", lambda globs, skip=(): [fake_db])
     monkeypatch.setattr(extract, "manifest_kernels", lambda bench_root: {})
     monkeypatch.setattr(extract, "read_db", lambda *args, **kwargs: result)
