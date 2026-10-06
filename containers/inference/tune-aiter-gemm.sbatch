@@ -5,6 +5,7 @@
 # Output: aiter-configs/bf16_tuned_gemm_gfx942.csv beside this script, which the SGLang image installs as
 # one of aiter's model_configs files (containers/images/sglang/Dockerfile); rebuild the image after a
 # re-run. Re-run after an aiter bump or for a new model's shapes.
+#   containers/images/submit.sh containers/inference/tune-aiter-gemm.sbatch   # the system's options (beverin: mi300)
 #   sbatch -A <account> -p mi300 --gpus-per-node=4 containers/inference/tune-aiter-gemm.sbatch
 # Candidates are aiter's own kernels (--libtype: asm, flydsl, skinny, triton, opus), never torch or hipBLASLt:
 # a row exists to keep the GEMM in aiter (torch, allowed, wins only prefill shapes with M >= 7424, and

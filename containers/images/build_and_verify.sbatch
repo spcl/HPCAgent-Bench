@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # Build an image AND prove it works, in one job -- the end-to-end entry point.
 #
-#   sbatch -p mi300 containers/images/build_and_verify.sbatch judge-agent-amd
+#   containers/images/submit.sh containers/images/build_and_verify.sbatch -- judge-agent-amd
+#   sbatch -p mi300 -A <account> containers/images/build_and_verify.sbatch judge-agent-amd
 #   sbatch -p <cpu partition> containers/images/build_and_verify.sbatch judge-agent-cpu
 #   VERIFY_ONLY=1 sbatch ... <image>        re-verify the candidates an earlier build wrote
 #
-# The partition is SBATCH_PARTITION (site layer) unless the command line names one.
+# submit.sh takes the partition from the image's images.env row and the account and GPUs from the system (its
+# flags override them); plain sbatch takes SBATCH_PARTITION (site layer) unless the command line names one.
 # An AMD image is portable (every gpu_arch.env target, cpu_target.env's baseline CPU), so it builds
 # once, on the partition its images.env row names, and verify_image.sbatch then checks it on the
 # other partitions.

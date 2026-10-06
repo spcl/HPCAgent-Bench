@@ -81,6 +81,12 @@ missing one is an error naming its flag and its variable (`--account` / `SBATCH_
 hardware (`--hardware`, `HPCAGENT_BENCH_HARDWARE`, the entry's `hardware`) is not an `sbatch` option: it names
 the GPU generation whose images and serving layers the experiment uses ([below](#hardware-is-not-a-site-value)).
 
+The container jobs (`containers/images/*.sbatch`, `containers/inference/*.sbatch`) keep their own task shape and
+take the same partition, account and GPUs per node from `containers/images/submit.sh <job.sbatch> [--system S]
+[--partition P] [--account A] [--time T] [--gpus-per-node N] [--nice N] [--dry-run] [-- job args]`, which reads
+them from `hpcagent-bench job options`; an image build or verify job defaults to its role's `images.env` partition
+([containers/README.md](../containers/README.md#amd-beverin)).
+
 ## Variables
 
 ### Site layer

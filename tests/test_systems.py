@@ -1,14 +1,20 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""``hpcagent-bench job submit``: a field is its flag, else its environment variable, else the system's entry."""
+"""``hpcagent-bench job submit``, ``job options`` and ``containers/images/submit.sh``: a field is its flag, else its
+environment variable, else the system's entry."""
 
+import os
 import pathlib
+import shlex
+import subprocess
+import sys
 
 import pytest
 
 from hpcagent_bench.cluster import systems
 
 SHIPPED = systems.load_systems({})
+ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
 def test_the_shipped_systems_name_every_shape_field_a_job_needs() -> None:
@@ -154,3 +160,51 @@ def test_a_dry_run_prints_the_command_and_submits_nothing(
     )
     err = capsys.readouterr().err
     assert "--time=01:00:00" in err and "job.sbatch w.jsonl out" in err and "--partition=" in err
+
+
+def container_dry_run(tmp_path: pathlib.Path, job: str, *args: str, **knobs: str) -> list[str]:
+    """The sbatch command ``containers/images/submit.sh <job> --dry-run <args>`` prints under the CSCS site layer
+    (system beverin) and account ``proj``, with no Slurm or HPCAgent-Bench value inherited from the caller. An
+    ``sbatch`` that fails stands first on PATH, so a launcher that submitted would fail the test, not queue a job."""
+    (tmp_path / "sbatch").write_text("#!/bin/sh\necho 'sbatch called' >&2\nexit 3\n", encoding="utf-8")
+    (tmp_path / "sbatch").chmod(0o755)
+    inherited = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith(("SBATCH_", "SLURM_", "HPCAGENT_BENCH_")) and key not in {"NICE", "TIME_LIMIT", "ROLE"}
+    }
+    environ = inherited | {
+        "PATH": f"{tmp_path}{os.pathsep}{os.environ['PATH']}",
+        "HPCAGENT_BENCH_SITE_ENV": str(ROOT / "experiments" / "layers" / "site-cscs.env"),
+        "HPCAGENT_BENCH_HOST_PYTHON": sys.executable,
+        "SBATCH_ACCOUNT": "proj",
+        **knobs,
+    }
+    launcher = ROOT / "containers" / "images" / "submit.sh"
+    done = subprocess.run(
+        [str(launcher), job, "--dry-run", *args], capture_output=True, text=True, check=False, env=environ, cwd=ROOT
+    )
+    assert done.returncode == 0, done.stderr
+    return shlex.split(done.stdout)
+
+
+def test_the_container_launcher_resolves_the_system_its_flags_and_an_image_roles_partition(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Beverin's options by default, a flag over them, and a build or verify job on its images.env partition unless
+    --partition or --system names one."""
+    build = "containers/images/build_and_verify.sbatch"
+    assert container_dry_run(tmp_path, "containers/images/registry.sbatch", "--", "pull", "sglang") == [
+        "sbatch", "--partition=mi300", "--account=proj", "--gpus-per-node=4", "--nice=100",
+        "containers/images/registry.sbatch", "pull", "sglang",
+    ]  # fmt: skip
+    overridden = container_dry_run(
+        tmp_path, build, "--partition", "p", "--account=a", "--time", "1:00:00", "--", "vllm"
+    )
+    assert overridden == [
+        "sbatch", "--partition=p", "--account=a", "--gpus-per-node=4", "--time=1:00:00", "--nice=100", build, "vllm",
+    ]  # fmt: skip
+    verify = "containers/images/verify_image.sbatch"
+    assert "--partition=mi200" in container_dry_run(tmp_path, verify, ROLE="judge-mi200")
+    named = container_dry_run(tmp_path, build, "--system", "beverin-mi200", "--", "judge-agent-amd")
+    assert {"--partition=mi200", "--gpus-per-node=8"} <= set(named), named
