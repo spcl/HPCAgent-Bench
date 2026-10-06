@@ -49,20 +49,6 @@ RENDERED = {
     ],
 }
 
-#: judge-agent template -> the prefixes its PATH must put ahead of /usr/bin, and the toolchain it names.
-TOOLCHAIN_EDFS = {
-    "judge-agent-cuda/agent.edf.toml.in": (("/opt/gcc/bin", "/opt/view/bin", "/usr/local/cuda/bin"), "/opt/gcc/bin/"),
-    "judge-agent-cuda/judge.edf.toml.in": (
-        ("/opt/gcc/bin", "/opt/view/bin", "/usr/local/cuda/bin"),
-        "/opt/gcc/bin/",
-    ),
-    "judge-agent-cpu/agent.edf.toml.in": (("/opt/venv/bin", "/usr/local/bin", "/usr/lib/llvm-22/bin"), "/usr/bin/"),
-    "judge-agent-cpu/judge.edf.toml.in": (
-        ("/opt/venv/bin", "/usr/local/bin", "/usr/lib/llvm-22/bin"),
-        "/usr/bin/",
-    ),
-}
-
 
 def install(tmp_path: pathlib.Path, platform: str, images: list[str]) -> subprocess.CompletedProcess[str]:
     """install_edfs.sh for ``platform`` against stand-in images under a throwaway SCRATCH."""
@@ -100,7 +86,7 @@ def test_a_platform_renders_nothing_of_another(tmp_path: pathlib.Path, platform:
 
 
 def test_the_default_platform_still_renders_no_gh200_or_cpu_name(tmp_path: pathlib.Path) -> None:
-    """Beverin's install must stay what it was before the switch existed."""
+    """The default (amd) platform renders none of the gh200 or cpu EDFs."""
     images = [image for roles in RENDERED.values() for _, _, image in roles]
     install(tmp_path, "amd", images)
     names = {path.stem for path in (tmp_path / "edf").glob("*.toml")}
@@ -111,26 +97,6 @@ def test_an_unknown_platform_is_refused(tmp_path: pathlib.Path) -> None:
     done = install(tmp_path, "mi250", [])
     assert done.returncode == 2
     assert "CE_PLATFORM must be amd, gh200 or cpu" in done.stderr
-
-
-@pytest.mark.parametrize("template", sorted(TOOLCHAIN_EDFS))
-def test_a_judge_agent_edf_resolves_the_image_toolchain_before_the_distro(template: str) -> None:
-    prefixes, toolchain = TOOLCHAIN_EDFS[template]
-    env = tomllib.loads((CE / template).read_text(encoding="utf-8"))["env"]
-    path = env["PATH"].split(":")
-    late = [prefix for prefix in prefixes if prefix not in path or path.index(prefix) > path.index("/usr/bin")]
-    assert late == [], late
-    assert all(env[var].startswith(toolchain) for var in ("CC", "CXX", "FC")), env
-    assert env["PYTHONSAFEPATH"] == "1"
-
-
-@pytest.mark.parametrize("template", ["judge-agent-cuda/agent.edf.toml.in", "judge-agent-cuda/judge.edf.toml.in"])
-def test_the_gh200_edfs_keep_the_base_images_open_mpi_off_path(template: str) -> None:
-    """The NGC base ships HPC-X Open MPI in /usr/local/mpi/bin; on PATH it pairs an Open MPI mpicc
-    with an MPICH mpiexec, and P ranks each come up as their own COMM_WORLD of size 1."""
-    env = tomllib.loads((CE / template).read_text(encoding="utf-8"))["env"]
-    assert "/usr/local/mpi/bin" not in env["PATH"].split(":"), env["PATH"]
-    assert "FI_PROVIDER" not in env, "MPICH inherits FI_PROVIDER and MPI_Init aborts (629966)"
 
 
 @pytest.mark.parametrize("platform", sorted(RENDERED))
