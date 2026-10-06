@@ -14,7 +14,6 @@ import csv
 import dataclasses
 import functools
 import hashlib
-import importlib.util
 import itertools
 import os
 import pathlib
@@ -34,6 +33,7 @@ from hpcagent_bench.harness import grade_under, native_call, recording, rep_vari
 from hpcagent_bench.harness.scoring import Score, TimedCell, VerifyResult, score
 from hpcagent_bench.spec import BenchSpec
 from hpcagent_bench.stats import score_rule
+from tests.fresh_module import module_at
 from tests.results_rows import cells, grades
 from tests.sqlite_closing import connect
 
@@ -41,12 +41,7 @@ REPO = pathlib.Path(__file__).resolve().parents[1]
 
 
 def load(name: str, relative: str) -> types.ModuleType:
-    spec = importlib.util.spec_from_file_location(name, REPO / relative)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
-    spec.loader.exec_module(module)
-    return module
+    return module_at(REPO / relative, name)
 
 
 from hpcagent_bench import observations_extract as extract

@@ -27,15 +27,13 @@ lowered AST, and a negative case per guard that must keep declining.
 """
 
 import ast
-import json
-import pathlib
-import tempfile
 
 import numpy as np
 
-from hpcagent_bench.translators.numpyto_common.frontend import bare_index_list, parse_kernel
+from hpcagent_bench.translators.numpyto_common.frontend import bare_index_list
 from hpcagent_bench.translators.numpyto_common.lowering import lower
-from tests.translators.op_oracle import bench_info_, run_op
+from tests.translators.op_oracle import run_op
+from tests.translators import op_oracle
 
 BACKENDS = ("c", "fortran")
 TOL = 1e-12
@@ -48,12 +46,7 @@ def ok(res):
 
 def lowered(src: str, func: str, inputs, outputs, shapes, syms):
     """The lowered KernelIR for a throwaway source, via the real file-reading entry point."""
-    d = pathlib.Path(tempfile.mkdtemp())
-    npy = d / f"{func}_numpy.py"
-    npy.write_text(src)
-    bi = d / "bi.json"
-    bi.write_text(json.dumps(bench_info_(func, inputs, outputs, shapes, syms)))
-    return lower(parse_kernel(npy, bi))
+    return lower(op_oracle.parse_source(src, func, inputs, outputs, shapes, syms))
 
 
 # a slice indexing THROUGH a partial slice

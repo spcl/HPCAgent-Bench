@@ -8,20 +8,16 @@ carries the same semantics, so the fix is a spelling; these tests pin both halve
 pluto emit writes, and that the prelude still defines the name for the compiler.
 """
 
-import json
-import pathlib
 import re
-import tempfile
 
 import pytest
 
 from hpcagent_bench.pluto_affine import KNOWN_POLYCC_ISSUES
 from hpcagent_bench.translators.numpyto_c.emit import C_HEADER, emit_c, emit_pluto, pluto_floordiv
-from hpcagent_bench.translators.numpyto_common.frontend import parse_kernel
 from hpcagent_bench.translators.numpyto_common.ir import KernelIR
 from hpcagent_bench.translators.numpyto_common.lowering import lower
 from tests.translators.native_tu import build_run_c, have_gcc
-from tests.translators.op_oracle import bench_info_
+from tests.translators import op_oracle
 
 #: (a, b) with every sign combination, plus exact division and a zero dividend.
 PAIRS = [(7, 2), (-7, 2), (7, -2), (-7, -2), (8, 4), (-8, 4), (0, 5)]
@@ -34,11 +30,7 @@ def lower_src(
     syms: dict[str, int],
     dtypes: dict[str, str] | None = None,
 ) -> KernelIR:
-    d = pathlib.Path(tempfile.mkdtemp())
-    (d / "k_numpy.py").write_text(src)
-    bi = bench_info_(fn, ["a"], ["out"], shapes, syms, dtypes)
-    (d / "bi.json").write_text(json.dumps(bi))
-    return lower(parse_kernel(d / "k_numpy.py", d / "bi.json"))
+    return lower(op_oracle.parse_source(src, fn, ["a"], ["out"], shapes, syms, dtypes))
 
 
 def int_bound_kir() -> KernelIR:

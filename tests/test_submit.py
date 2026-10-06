@@ -19,6 +19,7 @@ import sys
 import pytest
 
 from tests.env_render import SPEC_INPUTS
+from tests.bash_stub import bash_stub
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 
@@ -74,13 +75,6 @@ printf '%s\\n' "$*" >> "${STUB_MARKERS}/sbatch.calls"
 echo 4242"""
 
 
-def stub(directory: pathlib.Path, name: str, body: str) -> None:
-    directory.mkdir(parents=True, exist_ok=True)
-    path = directory / name
-    path.write_text(f"#!/usr/bin/env bash\n{body}\n")
-    path.chmod(0o755)
-
-
 def tree(root: pathlib.Path) -> pathlib.Path:
     """A temp checkout holding the submitter's inputs, and the stub sbatch."""
     for name in INPUTS:
@@ -89,7 +83,7 @@ def tree(root: pathlib.Path) -> pathlib.Path:
     (root / "experiments" / "subset.txt").write_text("\n".join(SUBSET) + "\n")
     # An empty site layer: the checkout's own (gitignored) site.env must not reach the test.
     (root / "site.env").write_text("")
-    stub(root / "bin", "sbatch", SBATCH)
+    bash_stub(root / "bin", "sbatch", SBATCH)
     return root
 
 

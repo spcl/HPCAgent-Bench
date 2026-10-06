@@ -12,10 +12,8 @@ absent, and these are what stop the loudness from being the only thing between a
 paper.
 """
 
-import importlib.util
 import logging
 import pathlib
-import sys
 from types import ModuleType
 
 import matplotlib
@@ -29,6 +27,7 @@ import pytest
 from hpcagent_bench import study_tags, paths
 from hpcagent_bench.stats import palette
 from hpcagent_bench.stats.figures import results
+from tests.fresh_module import module_at
 
 #: The tags the figure modules hard-code and then colour. A name typed into a builder is the one
 #: kind of unregistered value no data-driven check can see, because no row has to exist for it to
@@ -99,12 +98,7 @@ def test_a_setup_name_resolves_to_a_registered_model_or_to_nothing() -> None:
 
 def load_script(name: str) -> ModuleType:
     """A figure script under ``statistics/``, which is not a package."""
-    spec = importlib.util.spec_from_file_location(name, paths.ROOT / "statistics" / f"{name}.py")
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
-    spec.loader.exec_module(module)
-    return module
+    return module_at(paths.ROOT / "statistics" / f"{name}.py", name)
 
 
 def setup_frame(conditions: list[str]) -> pd.DataFrame:

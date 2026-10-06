@@ -5,21 +5,15 @@ inside the judge image). Runs the real script against a stub `sbatch` that recor
 
 import pathlib
 import subprocess
+from tests.bash_stub import bash_stub
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 RUN_TESTS = REPO / "scripts" / "run_tests.sh"
 CONTAINER_SBATCH = REPO / "scripts" / "ci_mi200.sbatch"
 
 
-def stub(directory: pathlib.Path, name: str, body: str) -> None:
-    directory.mkdir(parents=True, exist_ok=True)
-    script = directory / name
-    script.write_text(f"#!/usr/bin/env bash\n{body}\n")
-    script.chmod(0o755)
-
-
 def stub_sbatch(bin_dir: pathlib.Path, marker: pathlib.Path) -> None:
-    stub(bin_dir, "sbatch", f'printf \'%s\\n\' "$@" > "{marker}"\nexit 0')
+    bash_stub(bin_dir, "sbatch", f'printf \'%s\\n\' "$@" > "{marker}"\nexit 0')
 
 
 def run_container(

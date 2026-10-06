@@ -13,7 +13,6 @@ and is never added to anything.
 """
 
 import ast
-import importlib.util
 import json
 import os
 import pathlib
@@ -23,6 +22,7 @@ from types import ModuleType
 import pytest
 
 from tests.fresh_module import fresh
+from tests.fresh_module import module_at
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 
@@ -82,11 +82,7 @@ def usage_line(call_input: int, output: int, reasoning: int = 0) -> str:
 def load_http_json() -> ModuleType:
     """The container's ``http_json`` tool, loaded the way the container does: by path, stdlib only."""
     path = REPO / "agent" / "hpcagent_agent" / "tools" / "http_json.py"
-    spec = importlib.util.spec_from_file_location("http_json", path)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
+    return module_at(path, "http_json")
 
 
 def test_a_legacy_dir_without_attempts_jsonl_also_counts_only_its_final_attempt(

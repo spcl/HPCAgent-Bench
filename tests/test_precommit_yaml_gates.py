@@ -10,16 +10,15 @@ the checkers THEMSELVES the way ``tests/test_header_hook.py`` pins ``check_heade
 a deliberately good fixture passes, a deliberately bad one is caught with a clear message.
 """
 
-import importlib.util
 import os
 import subprocess
-import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from tests.check_yaml_style import violations as yaml_style_violations
+from tests.fresh_module import module_at
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -27,15 +26,7 @@ REPO = Path(__file__).resolve().parent.parent
 def load_check_manifest_structure() -> Any:
     """Import ``scripts/checks/check_manifest_structure.py`` as a module (it is not an installed
     package, same technique ``test_header_hook.py`` uses for ``check_headers.py``)."""
-    spec = importlib.util.spec_from_file_location(
-        "check_manifest_structure", REPO / "scripts" / "checks" / "check_manifest_structure.py"
-    )
-    module = importlib.util.module_from_spec(spec)
-    # Registered BEFORE exec: dataclasses resolves a string annotation through
-    # sys.modules[cls.__module__], which is None for a module loaded by path alone.
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
+    return module_at(REPO / "scripts" / "checks" / "check_manifest_structure.py")
 
 
 # hpcagent_bench-yaml-style (tests/check_yaml_style.py)

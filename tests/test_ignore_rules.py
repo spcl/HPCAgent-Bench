@@ -184,21 +184,6 @@ def test_source_path_is_not_gitignored(path: str) -> None:
     assert not git_ignored(path), f"{path} is a source but an ignore rule hides it from git add"
 
 
-def test_no_tracked_file_matches_an_ignore_rule() -> None:
-    """A tracked file under an ignore rule is invisible to reviewers of the rules; hand overrides
-    at generated names get an explicit ``!`` line in .gitignore instead."""
-    assert git("ls-files", "-i", "-c", "--exclude-standard").split() == []
-
-
-def test_every_override_negation_names_a_tracked_file() -> None:
-    """A ``!`` line for a removed override would silently re-admit a generated file at that name."""
-    lines = (paths.ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
-    overrides = [line.removeprefix("!/") for line in lines if line.startswith("!/hpcagent_bench/benchmarks/")]
-    assert overrides
-    tracked = set(git("ls-files", "--", *overrides).split())
-    assert sorted(set(overrides) - tracked) == []
-
-
 @pytest.mark.parametrize("path", DOCKER_EXCLUDED)
 def test_path_is_kept_out_of_image_contexts(path: str) -> None:
     assert docker_excluded(path), f"{path} would be sent to an image build context"

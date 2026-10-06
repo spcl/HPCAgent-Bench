@@ -11,12 +11,11 @@ the two fixers cannot fight -- restamping or shifting the notice on every commit
 * a format pass leaves those header lines BYTE-FOR-BYTE identical while it reformats the code below.
 """
 
-import sys
-import importlib.util
 import shutil
 import subprocess
 import types
 from pathlib import Path
+from tests.fresh_module import module_at
 
 REPO = Path(__file__).resolve().parent.parent
 #: Passed explicitly rather than discovered, so the test formats the way check_format.py does.
@@ -29,13 +28,7 @@ HEADER: tuple = (
 
 def _load_check_headers() -> types.ModuleType:
     """Import ``scripts/checks/check_headers.py`` as a module (it is not an installed package)."""
-    spec = importlib.util.spec_from_file_location("check_headers", REPO / "scripts" / "checks" / "check_headers.py")
-    module = importlib.util.module_from_spec(spec)
-    # Registered BEFORE exec: dataclasses resolves a string annotation through
-    # sys.modules[cls.__module__], which is None for a module loaded by path alone.
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
+    return module_at(REPO / "scripts" / "checks" / "check_headers.py")
 
 
 def test_fix_inserts_header_at_content_top(tmp_path: Path) -> None:

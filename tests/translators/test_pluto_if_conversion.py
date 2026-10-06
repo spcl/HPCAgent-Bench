@@ -11,10 +11,7 @@ argument is checked by running it, not by reading the emitted text.
 """
 
 import ast
-import json
-import pathlib
 import re
-import tempfile
 import textwrap
 from collections.abc import Callable
 
@@ -23,18 +20,14 @@ import pytest
 
 from hpcagent_bench.translators.numpyto_c.emit import emit_pluto
 from hpcagent_bench.translators.numpyto_c.pluto_predicate import FLAG_PREFIX, if_convert
-from hpcagent_bench.translators.numpyto_common.frontend import parse_kernel
 from hpcagent_bench.translators.numpyto_common.lowering import lower
-from tests.translators.op_oracle import bench_info_
 from tests.translators.source_module import run_source
+from tests.translators import op_oracle
 
 
 def pluto_c(src: str, fn: str, inputs: list[str], outputs: list[str], shapes: dict[str, str]) -> str:
     """The pluto translation unit of the kernel ``src``, sized by one symbol ``N``."""
-    d = pathlib.Path(tempfile.mkdtemp())
-    (d / "k_numpy.py").write_text(src)
-    (d / "bi.json").write_text(json.dumps(bench_info_(fn, inputs, outputs, shapes, {"N": 64})))
-    return emit_pluto(lower(parse_kernel(d / "k_numpy.py", d / "bi.json")), fn_name=fn)
+    return emit_pluto(lower(op_oracle.parse_source(src, fn, inputs, outputs, shapes, {"N": 64})), fn_name=fn)
 
 
 def regions(text: str) -> list[str]:

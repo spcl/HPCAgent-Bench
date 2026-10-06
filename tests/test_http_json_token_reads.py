@@ -8,12 +8,11 @@ recorded on :data:`http_json.TOKENS_READ_OK`, so a caller IN THIS PROCESS (a dia
 can tell the two apart.
 """
 
-import importlib.util
 import pathlib
-import sys
 from types import ModuleType
 
 import pytest
+from tests.fresh_module import module_at
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 
@@ -21,11 +20,7 @@ REPO = pathlib.Path(__file__).resolve().parents[1]
 def load_http_json() -> ModuleType:
     """The container's ``http_json`` tool, loaded the way the container does: by path, stdlib only."""
     path = REPO / "agent" / "hpcagent_agent" / "tools" / "http_json.py"
-    spec = importlib.util.spec_from_file_location("http_json_token_reads", path)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
+    return module_at(path, "http_json_token_reads")
 
 
 def test_a_missing_usage_file_is_flagged_unreadable_though_it_still_counts_zero(

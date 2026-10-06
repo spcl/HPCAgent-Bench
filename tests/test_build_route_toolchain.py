@@ -57,8 +57,8 @@ def sandbox_commands(monkeypatch: pytest.MonkeyPatch, submission: Submission) ->
 def test_the_build_route_answers_with_the_family_the_request_names(
     make_judge: JudgeFactory, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The route ignored ``compiler`` and showed the default family's line, so an agent that asked
-    for llvm checked its code locally against gcc while the grade compiled it with clang."""
+    """The route honours ``compiler``: showing the default family's line would have an agent that
+    asked for llvm check its code locally against gcc while the grade compiles it with clang."""
     monkeypatch.delenv(languages.OFFLOAD_MODEL_ENV, raising=False)
     body = build_route(make_judge, "cpp", "&compiler=llvm")
     built = sandbox_commands(monkeypatch, Submission(language="cpp", source="void k(void) {}", compiler="llvm"))
@@ -69,18 +69,17 @@ def test_the_build_route_answers_with_the_family_the_request_names(
 def test_an_offload_setup_is_shown_its_legs_driver_and_offload_flags(
     make_judge: JudgeFactory, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """An OpenMP-offload setup compiles with the leg's driver and offload flags on both argvs; the
-    route showed gcc's plain line, which builds a host-only object."""
+    """An OpenMP-offload setup compiles with the leg's driver and offload flags on both argvs; gcc's
+    plain line would build a host-only object."""
     monkeypatch.setenv(languages.OFFLOAD_MODEL_ENV, "openmp")
+    monkeypatch.setattr(languages, "compiler_launcher", tuple)  # no ccache ahead of the driver
     monkeypatch.setattr(languages, "offload_build_driver", lambda model, vendor, lang: LEG_DRIVER)
     monkeypatch.setattr(languages, "agent_offload_flags", lambda vendor="amd": list(LEG_FLAGS))
     body = build_route(make_judge, "c")
     built = sandbox_commands(monkeypatch, Submission(language="c", source="void k(void) {}"))
     assert (body["driver"], body["family"]) == (LEG_DRIVER, "llvm"), body
-    # A launcher (ccache, when on PATH) may still sit ahead of the driver on the compile argv;
-    # the route and the real build must agree on the driver BEHIND it.
-    route_drivers = [languages.strip_launcher(argv)[0] for argv in body["commands"]]
-    built_drivers = [languages.strip_launcher(argv)[0] for argv in built]
+    route_drivers = [argv[0] for argv in body["commands"]]
+    built_drivers = [argv[0] for argv in built]
     assert route_drivers == built_drivers == [LEG_DRIVER] * len(built)
     missing = [argv for argv in body["commands"] if not set(LEG_FLAGS) <= set(argv)]
     assert not missing, f"argvs without the offload flags: {missing}"

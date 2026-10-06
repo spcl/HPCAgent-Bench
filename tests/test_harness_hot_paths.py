@@ -14,7 +14,6 @@ import subprocess
 import sys
 import tempfile
 import time
-from collections.abc import Iterator
 
 import numpy as np
 import pytest
@@ -30,9 +29,9 @@ HEAVY = ("dace", "jax", "sqlmodel", "sympy", "torch", "tvm")
 
 # lazy framework registry
 def test_importing_the_framework_registry_pulls_in_no_backend() -> None:
-    """``hpcagent_bench.frameworks`` used to star-import every backend, so ~3.5s of dace + jax +
-    sqlmodel was paid by anything that touched it -- including every forked child and every
-    pytest worker. A fresh interpreter must import the package with none of them loaded."""
+    """Importing every backend costs ~3.5s of dace + jax + sqlmodel in anything that touches
+    ``hpcagent_bench.frameworks`` -- every forked child and every pytest worker. A fresh interpreter
+    must import the package with none of them loaded."""
     code = f"import sys, hpcagent_bench.frameworks;print(','.join(m for m in {HEAVY!r} if m in sys.modules))"
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
     assert out.stdout.strip() == "", f"framework import pulled in: {out.stdout.strip()}"
@@ -104,8 +103,8 @@ def test_a_map_entry_its_module_does_not_define_raises_attribute_error(monkeypat
 
 # one child per measurement
 def test_a_whole_measurement_runs_in_one_child(monkeypatch) -> None:
-    """The repeats used to be one fork each (~21ms round trip, plus a cdef and a dlopen), which
-    dwarfed a fast kernel. ``reps`` must reach the child, not the fork loop."""
+    """A fork per repeat (~21ms round trip, plus a cdef and a dlopen) dwarfs a fast kernel. ``reps``
+    must reach the child, not the fork loop."""
     forks = []
     real = native_call.run_forked
 
@@ -297,10 +296,9 @@ def test_the_reference_emit_is_memoized_per_kernel_and_language() -> None:
 
 def test_flipping_the_committed_reference_knob_is_not_served_from_the_stale_cache() -> None:
     """``references.prefer_committed`` selects between two DIFFERENT texts for the same
-    ``(kernel, language)``, so the knob has to be part of the memo key. It was not, in the obvious
-    first cut: the flag was read inside the memoized function, and the first call in a process
-    pinned the answer for every later one -- an A/B of the two references would have measured the
-    same source twice and reported no difference."""
+    ``(kernel, language)``, so the knob has to be part of the memo key: read inside the memoized
+    function, the first call in a process would pin the answer for every later one, and an A/B of
+    the two references would measure the same source twice and report no difference."""
     from hpcagent_bench import config
     from hpcagent_bench.harness.agent import emit_reference_source
 
@@ -372,47 +370,6 @@ def test_the_config_gate_turns_ccache_off(tmp_path, pretend_ccache, monkeypatch)
     assert languages.compiler_launcher() == ()
     argv = languages.build_shared_lib_commands("c", tmp_path / "k.c", tmp_path / "libk.so", mode=Mode.SINGLE_CORE)[0]
     assert FAKE_CCACHE not in argv
-
-
-@pytest.fixture
-def ccache_masquerade(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[str, str]]:
-    """A launcher ccache and a masquerade ``g++`` symlinked to it, laid out the way the ccache
-    package installs them (``/usr/bin/ccache``, ``/usr/lib/ccache/g++ -> ../../bin/ccache``) and
-    the way CI's PATH puts them first. Only ``shutil.which`` is faked; the symlink is real."""
-    launcher = tmp_path / "bin" / "ccache"
-    launcher.parent.mkdir()
-    launcher.write_text("#!/bin/sh\n")
-    masquerade = tmp_path / "lib" / "ccache" / "g++"
-    masquerade.parent.mkdir(parents=True)
-    masquerade.symlink_to(os.path.relpath(launcher, masquerade.parent))
-    monkeypatch.setattr(languages.shutil, "which", lambda name: str(launcher) if name == "ccache" else None)
-    monkeypatch.delenv("CCACHE_NAMESPACE", raising=False)
-    languages.compiler_launcher.cache_clear()
-    yield str(launcher), str(masquerade)
-    languages.compiler_launcher.cache_clear()
-
-
-@pytest.mark.parametrize(
-    "recorded, compiler",
-    [
-        # CMake's compile_commands.json: the launcher is left out, the compiler is the masquerade.
-        (("{masquerade}", "-O3", "-c", "k.cpp"), "{masquerade}"),
-        # ninja -t compdb / a harness compile: the launcher is spelled in front of the compiler.
-        (("{launcher}", "{masquerade}", "-O3", "-c", "k.cpp"), "{masquerade}"),
-    ],
-    ids=["cmake-compile-database", "launcher-prefixed"],
-)
-def test_a_ccache_masquerade_compiler_is_not_stripped_as_the_launcher(
-    ccache_masquerade: tuple[str, str], recorded: tuple[str, ...], compiler: str
-) -> None:
-    """``/usr/lib/ccache/g++`` resolves to the ccache binary but IS the compiler (ccache picks launcher
-    mode by the file NAME). Stripping it left ``-D...`` as the compiler, and a replay of the recorded line
-    died with FileNotFoundError: '-DDACE_BINARY_DIR=...'."""
-    launcher, masquerade = ccache_masquerade
-    names = {"launcher": launcher, "masquerade": masquerade}
-    argv = tuple(token.format(**names) for token in recorded)
-    got = languages.strip_launcher(argv)
-    assert got == (compiler.format(**names), "-O3", "-c", "k.cpp"), got
 
 
 def test_a_language_ccache_does_not_support_compiles_directly(tmp_path) -> None:

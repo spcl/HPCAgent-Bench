@@ -14,6 +14,7 @@ import subprocess
 import sys
 
 import pytest
+from tests.bash_stub import bash_stub
 
 BASH = shutil.which("bash")
 assert BASH is not None
@@ -22,19 +23,12 @@ REPO = pathlib.Path(__file__).resolve().parents[1]
 CLUSTER_DIR = REPO / "hpcagent_bench" / "cluster"
 
 
-def stub(directory: pathlib.Path, name: str, body: str) -> None:
-    directory.mkdir(parents=True, exist_ok=True)
-    path = directory / name
-    path.write_text(f"#!/usr/bin/env bash\n{body}\n")
-    path.chmod(0o755)
-
-
 def run_probe(
     tmp_path: pathlib.Path, script: str, queue_body: str, sacct_body: str
 ) -> subprocess.CompletedProcess[str]:
     """Source submit_common.sh and run ``script`` against a stub squeue/sacct."""
-    stub(tmp_path / "bin", "squeue", queue_body)
-    stub(tmp_path / "bin", "sacct", sacct_body)
+    bash_stub(tmp_path / "bin", "squeue", queue_body)
+    bash_stub(tmp_path / "bin", "sacct", sacct_body)
     probe = tmp_path / "probe.sh"
     probe.write_text(f"set -eu\n. {CLUSTER_DIR / 'submit_common.sh'}\n{script}\n")
     return subprocess.run(
@@ -264,7 +258,7 @@ def run_submit_setup_job_probe(
     env_file.write_text("INFERENCE_NODES=2\nAGENT_NODES=1\nJUDGE_NODES=1\n" + env_text)
     calls = tmp_path / "sbatch-calls"
     calls.mkdir()
-    stub(
+    bash_stub(
         tmp_path / "bin",
         "sbatch",
         f'n=$(ls "{calls}" | wc -l); printf "%s\\n" "$@" > "{calls}/$n"\nprintf "99900$n\\n"\n',
