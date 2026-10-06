@@ -12,6 +12,8 @@ import json
 import threading
 import time
 
+import pytest
+
 from tests.fresh_module import fresh
 
 
@@ -90,14 +92,13 @@ def test_a_failed_server_is_relaunched_until_it_connects(monkeypatch, tmp_path) 
     assert driver.mcp_failed(log_path) is False, "the surviving transcript is the connected attempt"
 
 
-def test_the_retries_are_bounded_and_the_agent_still_runs(monkeypatch, tmp_path) -> None:
-    """Exhausting the attempts must not lose the agent -- a crippled run still beats no run, and the
-    log has to say which one this was."""
+def test_the_retries_are_bounded_and_an_agent_without_its_tools_never_runs(monkeypatch, tmp_path) -> None:
+    """An agent without the judge tools finishes rc 0 and grades nothing it was meant to, so spent
+    attempts end it loudly, and the log says why."""
     driver = load_driver(monkeypatch, AGENT_MCP_ATTEMPTS="2")
-    process, attempts, log_path = start(driver, monkeypatch, tmp_path, ["failed"])
-    assert attempts == 2
-    assert process is not None
-    assert "MCP still not connected" in log_path.read_text(encoding="utf-8")
+    with pytest.raises(driver.McpUnavailable, match="after 2 attempt"):
+        start(driver, monkeypatch, tmp_path, ["failed"])
+    assert "MCP still not connected" in (tmp_path / "claude.log").read_text(encoding="utf-8")
 
 
 def test_a_retry_leaves_no_half_transcript(monkeypatch, tmp_path) -> None:
