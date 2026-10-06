@@ -98,7 +98,7 @@ GRADE_KEY = ("episode_id", "kernel", "ts_ms", "kind")
 type Value = str | int | float | None
 
 
-@functools.cache
+@functools.lru_cache(maxsize=None, typed=True)
 def column_defaults(table: str) -> dict[str, str]:
     """``table``'s columns and their DEFAULT as SQL text (``'NULL'`` for a column without one), from
     ``schema.sql``: what :func:`upsert` compares a stored value with to tell an unset column."""
