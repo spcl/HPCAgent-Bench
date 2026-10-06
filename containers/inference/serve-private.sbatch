@@ -66,10 +66,11 @@ use_preset() {  # sets the PRESET_* values; key file, triton cache and run root 
             PRESET_FLAGS=(--attention-backend aiter)
             PRESET_ENV=(SGLANG_USE_AITER=1 SGLANG_SET_CPU_AFFINITY=0)
             ;;
-        mi200)  # MI250X: no aiter gfx90a kernels, no FP8; the AMD vLLM image (layers/partition-mi200-qwen38.env)
+        mi200)  # MI250X: no aiter gfx90a kernels, no FP8; the AMD vLLM image (layers/hardware-mi200-qwen38.env).
+            # TRITON_ATTN: 3.4x the default backend at 40 agents, both gates pass (docs/serving/mi200-endpoint.md)
             PRESET_PARTITION=mi200 PRESET_GPUS=8 PRESET_ENGINE=vllm PRESET_MODEL=Qwen/Qwen3.8-27B
             PRESET_EDF=hpcagent-bench-vllm-mi200-latest PRESET_LEGS="tp8:0.85"
-            PRESET_FLAGS=(--dtype bfloat16)
+            PRESET_FLAGS=(--dtype bfloat16 --attention-backend TRITON_ATTN)
             PRESET_ENV=(VLLM_ROCM_USE_AITER=0)
             ;;
         *) refuse "PRESET must be mi300 or mi200, got '${PRESET:-}'" ;;
