@@ -23,13 +23,13 @@ plot_canon_speedup = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = plot_canon_speedup
 SPEC.loader.exec_module(plot_canon_speedup)
 
-#: The ``canon`` table's columns, in the order scripts/collect_canon.py writes them.
+#: The ``canon`` table columns the plot reads.
 CANON_FIELDS = ("run", "column", "kernel", "preset", "datatype", "median_ms", "validated")
 
 
 def make_db(db_path: pathlib.Path, rows: list[tuple]) -> None:
-    """A minimal ``canon`` table, built directly rather than through collect_canon.py: the plot
-    script's contract is the table shape, not the collector that happens to produce it."""
+    """A minimal ``canon`` table, built directly: the plot script's contract is the table shape, not the
+    sweep that records it."""
     with contextlib.closing(sqlite3.connect(db_path)) as conn:
         conn.execute(
             "CREATE TABLE canon (run TEXT, column TEXT, kernel TEXT, preset TEXT, datatype TEXT, "
@@ -162,7 +162,7 @@ def test_read_status_keeps_an_unvalidated_row_as_false_not_dropped() -> None:
 
 
 def test_columns_option_draws_a_column_not_in_the_default_draw_set(tmp_path: pathlib.Path) -> None:
-    """dace_cpu (the non-canonicalized DaCe column) is collected by collect_canon.py but not in the
+    """dace_cpu (the non-canonicalized DaCe column) is recorded but not in the
     default DRAW set; --columns must be able to add it back for a sweep that wants it drawn."""
     db_path = tmp_path / "canon.db"
     make_db(db_path, [row("numba", "k1", 100.0), row("dace_cpu", "k1", 25.0)])

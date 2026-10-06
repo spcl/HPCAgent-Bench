@@ -85,14 +85,14 @@ against the registry, and so is the column, before a node is held.
 
 | Phase | Tasks | What it does |
 | --- | --- | --- |
-| `begin` | one | rotates the column's shard CSVs of an earlier run into `<out-root>/.stale-shards/`, forgets its `.dace` labels |
-| `run` | every task | task `r` of `n` runs `kernels[r::n]`, one `run-framework` process per kernel, into `<out-root>/<col>.rank<r>.csv` |
-| `finish` | one | merges the shards into `$HPCAGENT_BENCH_RESULTS_DIR/canon.db`; deletes the build tree and shard DB only after the merge is verified |
+| `begin` | one | deletes the column's `canon.db` rows of an earlier run into the same `<out-root>` |
+| `run` | every task | task `r` of `n` runs `kernels[r::n]`, one `run-framework` process per kernel, each recording its row into `$HPCAGENT_BENCH_RESULTS_DIR/canon.db` |
+| `finish` | one | deletes the column's DaCe build tree and shard DB |
 | `all` | one (default) | the three in order; refused with more than one task, where there is no barrier between them |
 
-Only an `--out-root` under `$HPCAGENT_BENCH_RUNS_ROOT` is managed (shard DB redirected to
-`<out-root>/db/<col>/`, rotation, merge, deletion); any other directory is the accumulating hand-off to
-`scripts/collect_canon.py` and is left as it is.
+Every row carries the run label `<out-root>`'s name. Only an `--out-root` under `$HPCAGENT_BENCH_RUNS_ROOT` is
+managed (shard DB redirected to `<out-root>/db/<col>/`, earlier rows dropped, build tree deleted); any other
+directory accumulates rows run after run and is left as it is.
 
 - **Environment.** `HPCAGENT_BENCH_IMAGE_PYTHON` (the interpreter that runs the kernels),
   `CANON_KERNEL_TIMEOUT_SEC` (wall cap of one kernel, 7200; a kill is a `status=timeout` row),
@@ -100,8 +100,9 @@ Only an `--out-root` under `$HPCAGENT_BENCH_RUNS_ROOT` is managed (shard DB redi
   `CANON_OPT_REPORTS=1` (compile-only opt/vectorization reports under `<out-root>/reports/<col>`), the installed dace's
   commit (its PEP 610 record) stamps `HPCAGENT_BENCH_RECORD_BUILD` unless set, `ROCR_VISIBLE_DEVICES` (rank `r`
   times on device `r mod len`).
-- **Output.** Per task one CSV shard and a `<col>.rank<r>.dace` label; a per-rank summary line (`N rows -- ok,
-  unsupported, tool-missing, crashed, failed-in-column, nonzero-exit`); `canon.db`'s `canon` table.
+- **Output.** `canon.db`'s `canon` table (`hpcagent_bench/support/collect/canon_db.py`: time, validation,
+  `status`, `failure`, the dace `build`); a per-rank summary line (`N rows -- ok, unsupported, tool-missing,
+  crashed, failed-in-column, nonzero-exit`); `run-framework --summarize canon.db --canon-run <run>` reports a run.
   A missing column compiler ends the task with status 2 and says so (`failure=tool_missing`, not a decline).
 
 ## Adding an action
