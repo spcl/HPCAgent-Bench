@@ -49,6 +49,7 @@ __all__ = [
     "MS_NOEXEC",
     "MS_NOSUID",
     "MS_RDONLY",
+    "MS_PRIVATE",
     "MS_REC",
     "MS_RELATIME",
     "MS_REMOUNT",
@@ -62,6 +63,7 @@ __all__ = [
     "LockedCall",
     "MountCall",
     "MountOp",
+    "SealError",
     "Syscalls",
     "UmountCall",
     "apply_plan",
@@ -72,13 +74,13 @@ __all__ = [
     "locked_flags_at",
     "main",
     "make_target",
-    "mount_syscall",
+    "mount",
     "parse_args",
     "seal_plan",
     "set_affinity",
     "shared_root_entries",
     "stage_two",
-    "umount_syscall",
+    "umount",
     "under",
     "unescape",
     "worker_argv",
@@ -94,6 +96,7 @@ MS_NOATIME = 0x400
 MS_NODIRATIME = 0x800
 MS_BIND = 0x1000
 MS_REC = 0x4000
+MS_PRIVATE = 0x40000
 MS_RELATIME = 0x200000
 #: umount2(2): drop the mount from the tree now and let it go when the last user does.
 MNT_DETACH = 0x2
@@ -122,6 +125,10 @@ STASH_DIR = f"{SEAL_ROOT}/workdir"
 #: The private home inside the workdir. The driver creates it and wipes it between attempts;
 #: stage 1 only exports it.
 HOME_NAME = "home"
+
+
+class SealError(RuntimeError):
+    """The kernel refused a step of a seal: the process cannot be isolated, not a fault of what runs in it."""
 
 
 class MountOp(NamedTuple):
@@ -174,7 +181,7 @@ class Syscalls(NamedTuple):
 
 
 def libc() -> ctypes.CDLL:
-    handle = ctypes.CDLL("libc.so.6", use_errno=True)
+    handle = ctypes.CDLL(None, use_errno=True)
     handle.mount.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_ulong, ctypes.c_void_p]
     handle.mount.restype = ctypes.c_int
     handle.umount2.argtypes = [ctypes.c_char_p, ctypes.c_int]
@@ -186,19 +193,18 @@ def as_bytes(value: str | None) -> bytes | None:
     return None if value is None else value.encode("utf-8")
 
 
-def mount_syscall(source: str | None, target: str, fstype: str | None, flags: int) -> None:
-    """mount(2), or die saying which mount was refused and why."""
+def mount(source: str | None, target: str, fstype: str | None, flags: int) -> None:
+    """mount(2), or :class:`SealError` naming the refused mount and why."""
     if libc().mount(as_bytes(source), as_bytes(target), as_bytes(fstype), flags, None) != 0:
         errno = ctypes.get_errno()
-        raise SystemExit(
-            f"seal_worker: mount({source!r}, {target!r}, {fstype!r}, {flags:#x}) failed: {os.strerror(errno)}"
-        )
+        raise SealError(f"mount({source!r}, {target!r}, {fstype!r}, {flags:#x}): {os.strerror(errno)}")
 
 
-def umount_syscall(target: str) -> None:
+def umount(target: str) -> None:
+    """umount2(2) with :data:`MNT_DETACH`, or :class:`SealError`."""
     if libc().umount2(as_bytes(target), MNT_DETACH) != 0:
         errno = ctypes.get_errno()
-        raise SystemExit(f"seal_worker: umount2({target!r}) failed: {os.strerror(errno)}")
+        raise SealError(f"umount2({target!r}): {os.strerror(errno)}")
 
 
 def unescape(field: str) -> str:
@@ -233,13 +239,13 @@ def locked_flags_at(target: str) -> int:
         return locked_flags(handle.read(), target)
 
 
-REAL = Syscalls(mount=mount_syscall, umount=umount_syscall, locked=locked_flags_at)
+REAL = Syscalls(mount=mount, umount=umount, locked=locked_flags_at)
 
 
 def under(parent: str, child: str) -> bool:
-    """Whether ``child`` is ``parent`` or sits inside it."""
+    """Whether ``child`` is ``parent`` or sits inside it (everything is under ``/``)."""
     parent = parent.rstrip("/")
-    return child == parent or child.startswith(f"{parent}/")
+    return not parent or child == parent or child.startswith(f"{parent}/")
 
 
 #: Shared-root names never passed through whole: ``tasks`` is bound per kernel, and ``setups`` holds
@@ -420,7 +426,10 @@ def main(argv: Sequence[str]) -> int:
         hide_files=tuple(str(path) for path in list(args.hide_file) if os.path.isfile(path)),
     )
     command = worker_argv(list(args.command))
-    apply_plan(seal_plan(layout, shared_root_entries(pathlib.Path(layout.material or layout.shared))))
+    try:
+        apply_plan(seal_plan(layout, shared_root_entries(pathlib.Path(layout.material or layout.shared))))
+    except SealError as exc:
+        raise SystemExit(f"seal_worker: {exc}") from exc
     set_affinity(str(args.cpus))
     os.chdir(workdir)
     environment = dict(os.environ)
