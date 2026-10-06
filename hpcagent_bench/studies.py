@@ -29,7 +29,7 @@ import sys
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, NamedTuple
 
-from hpcagent_bench import study_tags, frozen_observations
+from hpcagent_bench import frozen_observations, packets, study_tags
 from hpcagent_bench.spec import Track
 from hpcagent_bench.stats import population
 
@@ -74,6 +74,7 @@ __all__ = [
     "read_database",
     "read_observations",
     "read_table",
+    "setup_rows",
     "selects",
     "setup_of",
     "setup_value",
@@ -81,6 +82,8 @@ __all__ = [
 
 if TYPE_CHECKING:
     import pandas as pd
+
+    from hpcagent_bench.stats import cost
 
 LOG = logging.getLogger(__name__)
 
@@ -370,6 +373,25 @@ def read_table(path: pathlib.Path, table: str) -> "pd.DataFrame":
 
     with contextlib.closing(sqlite3.connect(f"file:{path}?mode=ro", uri=True)) as conn:
         return pd.read_sql_query(f"SELECT * FROM {table} ORDER BY rowid", conn)
+
+
+def setup_rows(
+    path: pathlib.Path, prefix: str, card: "cost.CostModel | None" = None, setups: str = ""
+) -> "pd.DataFrame":
+    """The priced rows (``card``, default :func:`~hpcagent_bench.stats.cost.resolve`) of the real
+    setups (:func:`~hpcagent_bench.stats.population.condition_rows`) ``prefix``/``setups`` select in
+    the observations at ``path``, with ``model`` read off the setup name and ``packet`` canonical
+    (blank, a row recorded without one, is the control). Rows of no registered model are dropped.
+
+    No filter on speedup or tokens: the speedup comes off the graded submissions and the cost off
+    the task rows, so a predicate over both columns keeps neither."""
+    from hpcagent_bench.stats import cost
+
+    frame = population.condition_rows(cost.priced(read_observations(path), card or cost.resolve()))
+    frame = population.select_setups(frame, prefix, setups)
+    packet = frame["packet"].fillna("").astype(str).map(packets.canonical) if "packet" in frame else ""
+    frame = frame.assign(model=frame["setup"].astype(str).map(study_tags.model_of), packet=packet)
+    return frame.loc[frame["model"] != "other"]
 
 
 def read_observations(path: pathlib.Path, platform: str = population.DEFAULT_PLATFORM) -> "pd.DataFrame":

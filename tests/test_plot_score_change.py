@@ -25,6 +25,7 @@ from matplotlib.axes import Axes
 from matplotlib.collections import LineCollection, PathCollection
 from matplotlib.figure import Figure
 
+from hpcagent_bench import studies
 from hpcagent_bench.harness import efficacy
 from hpcagent_bench.stats import cost, palette, population, score_rule
 from hpcagent_bench.stats import style as plotstyle
@@ -201,9 +202,9 @@ def test_the_family_the_marks_are_corrected_over_is_every_test_the_figure_could_
 PACKET_ONLY = cost.resolve("effective")
 
 
-def test_load_reads_skills_off_the_recorded_packet_before_the_setup_name(tmp_path: pathlib.Path) -> None:
-    """A setup renamed away from the ``-skills`` suffix but recording ``lang-skills`` loads as skilled, and a recorded
-    packet beats a ``-skills`` name."""
+def test_skills_are_read_off_the_recorded_packet_before_the_setup_name(tmp_path: pathlib.Path) -> None:
+    """A setup whose name lacks the ``-skills`` suffix but which records ``lang-skills`` is the skilled side, and a
+    recorded packet beats a ``-skills`` name."""
     path = tmp_path / "observations.csv"
     pd.DataFrame(
         [
@@ -213,18 +214,17 @@ def test_load_reads_skills_off_the_recorded_packet_before_the_setup_name(tmp_pat
         ]
     ).to_csv(path, index=False)
 
-    frame = plot.load(path, prefix="", card=PACKET_ONLY)
+    frame = plot.treatment_frame(studies.setup_rows(path, prefix="", card=PACKET_ONLY), "lang-skills")
 
     by_setup = frame.set_index("setup").skills
     assert bool(by_setup["renamed-qwen38-c"]) is True
-    assert bool(by_setup["qwen38-fortran-lang-skills"]) is False
+    assert "qwen38-fortran-lang-skills" not in by_setup.index
     assert bool(by_setup["qwen38-c-lang-skills"]) is True
 
 
-def test_load_counts_a_composite_packet_as_skilled(tmp_path: pathlib.Path) -> None:
-    """``llrsingle`` records ``lang-skills+no-score-tool``; comparing the whole packet for
-    equality against the bare ``lang-skills`` key read every one of its skilled setups as
-    unskilled."""
+def test_a_composite_packet_counts_as_skilled(tmp_path: pathlib.Path) -> None:
+    """``llrsingle`` records ``lang-skills+no-score-tool``: the packet holds the ``lang-skills`` part, so
+    it is the skilled side, which a whole-packet equality against ``lang-skills`` would miss."""
     path = tmp_path / "observations.csv"
     pd.DataFrame(
         [
@@ -233,11 +233,11 @@ def test_load_counts_a_composite_packet_as_skilled(tmp_path: pathlib.Path) -> No
         ]
     ).to_csv(path, index=False)
 
-    frame = plot.load(path, prefix="", card=PACKET_ONLY)
+    frame = plot.treatment_frame(studies.setup_rows(path, prefix="", card=PACKET_ONLY), "lang-skills")
 
     by_setup = frame.set_index("setup").skills
     assert bool(by_setup["llrsingle-qwen38-c-lang-skills"]) is True
-    assert bool(by_setup["llrsingle-qwen38-c"]) is False
+    assert "llrsingle-qwen38-c" not in by_setup.index
 
 
 def test_control_rows_is_exactly_the_no_packet_setup(tmp_path: pathlib.Path) -> None:
@@ -253,15 +253,15 @@ def test_control_rows_is_exactly_the_no_packet_setup(tmp_path: pathlib.Path) -> 
         ]
     ).to_csv(path, index=False)
 
-    frame_all = plot.load(path, prefix="", card=PACKET_ONLY)
+    frame_all = studies.setup_rows(path, prefix="", card=PACKET_ONLY)
     control = plot.control_rows(frame_all)
 
     assert set(control.setup) == {"llr40-qwen38-c"}  # read under its configuration name
 
 
 def test_a_perf_playbook_setup_never_enters_the_control_side(tmp_path: pathlib.Path) -> None:
-    """The bug this guards: a setup recording a treatment ``control_rows`` does not name by string
-    must never be silently counted as part of the no-packet control."""
+    """A setup recording a treatment ``control_rows`` does not name by string is never counted as part
+    of the no-packet control."""
     path = tmp_path / "observations.csv"
     pd.DataFrame(
         [
@@ -270,7 +270,7 @@ def test_a_perf_playbook_setup_never_enters_the_control_side(tmp_path: pathlib.P
         ]
     ).to_csv(path, index=False)
 
-    frame_all = plot.load(path, prefix="", card=PACKET_ONLY)
+    frame_all = studies.setup_rows(path, prefix="", card=PACKET_ONLY)
     control = plot.control_rows(frame_all)
 
     assert "llr40-qwen38-c-perf-playbook-cpu" not in set(control.setup)
@@ -342,7 +342,7 @@ def test_a_treatment_setup_that_never_recorded_its_language_still_pairs_against_
             rows.append({**base, "row_kind": "episode", "speedup": None, **spent(1000.0)})
     pd.DataFrame(rows).to_csv(path, index=False)
 
-    frame_all = plot.load(path, prefix="")
+    frame_all = studies.setup_rows(path, prefix="")
     treated = frame_all[frame_all.setup == "llr40-oss120b-c-cpf"]
     assert set(treated.language) == {"c"}, "the setup name is the last resort when no row ever recorded it"
 

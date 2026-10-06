@@ -130,25 +130,6 @@ def load_all(paths: Sequence[pathlib.Path], card: cost.CostModel = cost.resolve(
     return population.condition_rows(cost.priced(frame, card))
 
 
-def load(path: pathlib.Path, prefix: str, card: cost.CostModel = cost.resolve(), setups: str = "") -> pd.DataFrame:
-    frame = population.condition_rows(cost.priced(studies.read_observations(path), card))
-    frame = population.select_setups(frame, prefix, setups)
-    # No filter on speedup or tokens here: score and cost come from different record types, and a
-    # predicate over both columns would drop every graded submission.
-    #
-    # ``packet`` is canonicalized through packets.canonical; blank (pre-dating the column) reads as
-    # the control. ``has_part`` also catches a composite like ``lang-skills+no-score-tool``.
-    if "packet" not in frame:
-        frame = frame.assign(packet="")
-    packet = frame["packet"].fillna("").astype(str).map(packets.canonical)
-    frame = frame.assign(
-        model=frame["setup"].astype(str).map(study_tags.model_of),
-        packet=packet,
-        skills=packet.map(lambda p: packets.has_part(p, "lang-skills")),
-    )
-    return frame[frame.model != "other"]
-
-
 def control_rows(frame_all: pd.DataFrame) -> pd.DataFrame:
     """The control side: the setup recording no packet at all (canonical packet ``""``)."""
     return frame_all[frame_all.packet == ""]
@@ -543,7 +524,7 @@ def spec_experiment(
     """``(every row, the no-packet control, the tag)`` of the spec's ONE experiment, the tag
     being every kernel any of its setups touched; ``None`` without a control."""
     observations = spec_observations(spec, default_observations)
-    frame_all = load(observations[0], spec.get("experiment", default_experiment), card)
+    frame_all = studies.setup_rows(observations[0], spec.get("experiment", default_experiment), card)
     control = control_rows(frame_all)
     if control.empty:
         return None
@@ -841,7 +822,7 @@ def figure_from_treatments(
     if not args.experiment:
         raise SystemExit("--experiment names the experiment to split; pass it, or --pairs-csv/--comparison")
     treatments = args.treatment or ["lang-skills"]
-    frame_all = load(args.observations[0], args.experiment, card, args.setups)
+    frame_all = studies.setup_rows(args.observations[0], args.experiment, card, args.setups)
     control = control_rows(frame_all)
     if control.empty:
         raise SystemExit(f"no no-packet control rows for experiment {args.experiment!r}")

@@ -287,24 +287,6 @@ def figure_pair(frame: pd.DataFrame, title: str, out: pathlib.Path) -> pathlib.P
     return write(fig, out)
 
 
-def load(path: pathlib.Path, prefix: str, card: cost.CostModel = cost.resolve(), setups: str = "") -> pd.DataFrame:
-    frame = population.select_setups(cost.priced(studies.read_observations(path), card), prefix, setups)
-    # NO filter on speedup or tokens here. The two metrics come off DIFFERENT record types -- the
-    # speedup from the graded submissions, the cost from the task rows that carry a token count
-    # (population.kernel_tokens) -- and one predicate over both columns keeps only the rows that
-    # have both, which is neither. That silently dropped every graded submission.
-    #
-    # ``condition`` is the row's RECORDED packet (see hpcagent_bench.harness.recording),
-    # canonicalized through packets.canonical (aliases included); blank for a row written before
-    # that column existed, which reads as the control -- the setup name is never parsed for this.
-    condition = frame["packet"].fillna("").astype(str).map(packets.canonical) if "packet" in frame else ""
-    frame = frame.assign(
-        model=frame["setup"].astype(str).map(study_tags.model_of),
-        condition=condition,
-    )
-    return frame[frame.model != "other"]
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("observations", type=pathlib.Path)
@@ -317,7 +299,9 @@ def main() -> None:
 
     if not args.experiment:
         parser.error("--experiment is required")
-    rows = load(args.observations, args.experiment, cost.resolve(args.cost_model, args.cost_models), args.setups)
+    card = cost.resolve(args.cost_model, args.cost_models)
+    rows = studies.setup_rows(args.observations, args.experiment, card, args.setups)
+    rows = rows.rename(columns={"packet": "condition"})
     rows = eligible_rows(rows, args.include_incomplete)
     frame = setup_points(rows)
     if frame.empty:
