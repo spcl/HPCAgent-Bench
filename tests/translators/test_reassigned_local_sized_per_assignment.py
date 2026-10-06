@@ -8,15 +8,10 @@ took the last shape, so the matvec copy wrote N doubles into an m-double buffer 
 SIGSEGV at preset S. The reassign marker knows the shape of its own assignment, so it sizes the buffer.
 """
 
-import json
-import pathlib
-import tempfile
-
 from hpcagent_bench.translators.numpyto_c.emit import emit_c
-from hpcagent_bench.translators.numpyto_common.frontend import parse_kernel
 from hpcagent_bench.translators.numpyto_common.lowering import lower
 from tests.translators.native_tu import build_run_c, have_gcc
-from tests.translators.op_oracle import bench_info_
+from tests.translators.op_oracle import parse_source
 
 #: ``y`` holds N values first and m < N values after ``m`` shrinks, like gmres' matvec then lstsq.
 SOURCE = (
@@ -47,12 +42,8 @@ DRIVER = (
 
 
 def emitted() -> str:
-    bench_info = bench_info_("k", ["a"], ["out"], {"a": "(N,)", "out": "(N,)"}, {"N": 64}, None)
-    with tempfile.TemporaryDirectory() as td:
-        d = pathlib.Path(td)
-        (d / "k_numpy.py").write_text(SOURCE)
-        (d / "bi.json").write_text(json.dumps(bench_info))
-        return emit_c(lower(parse_kernel(d / "k_numpy.py", d / "bi.json")), fn_name="k")
+    kir = parse_source(SOURCE, "k", ["a"], ["out"], {"a": "(N,)", "out": "(N,)"}, {"N": 64})
+    return emit_c(lower(kir), fn_name="k")
 
 
 def test_the_first_binding_is_allocated_at_its_own_extent() -> None:

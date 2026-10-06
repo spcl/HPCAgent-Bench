@@ -15,19 +15,16 @@ SOURCE (cheap, runs everywhere) and the other actually hands the program to dace
 """
 
 import ast
-import importlib.util
-import json
 import pathlib
-import sys
 import tempfile
 
 import numpy as np
 import pytest
 
 from hpcagent_bench.translators.numpyto_c.dace_emit import emit_dace
-from hpcagent_bench.translators.numpyto_common.frontend import parse_kernel
 from hpcagent_bench.translators.numpyto_common.lowering import lower
-from tests.translators.op_oracle import bench_info_
+from tests.fresh_module import module_at
+from tests.translators.op_oracle import parse_source
 
 M, N = 2, 3
 
@@ -43,23 +40,15 @@ SRC = (
 )
 
 
-def emit_(tmp: pathlib.Path) -> tuple:
-    npy = tmp / "k_numpy.py"
-    npy.write_text(SRC)
-    bi = tmp / "bench_info.json"
-    bi.write_text(
-        json.dumps(
-            bench_info_("k", ["a", "b"], ["out"], {"a": "(M, N)", "b": "(M, N)", "out": "(2, M, N)"}, {"M": M, "N": N})
-        )
-    )
-    kir = lower(parse_kernel(npy, bi))
+def emit_() -> tuple:
+    shapes = {"a": "(M, N)", "b": "(M, N)", "out": "(2, M, N)"}
+    kir = lower(parse_source(SRC, "k", ["a", "b"], ["out"], shapes, {"M": M, "N": N}))
     return kir, emit_dace(kir, fn_name="k")
 
 
 def test_the_stack_temp_is_allocated_before_it_is_written() -> None:
     """No emitted dace program may read or write a local it never binds."""
-    with tempfile.TemporaryDirectory() as td:
-        kir, src = emit_(pathlib.Path(td))
+    kir, src = emit_()
     fn = next(n for n in ast.parse(src).body if isinstance(n, ast.FunctionDef))
     params = {a.arg for a in fn.args.args}
     bound = {t.id for a in ast.walk(fn) if isinstance(a, ast.Assign) for t in a.targets if isinstance(t, ast.Name)}
@@ -90,21 +79,16 @@ def test_the_emitted_program_parses_and_runs_in_dace() -> None:
     got = np.zeros_like(expect)
     with tempfile.TemporaryDirectory() as td:
         tmp = pathlib.Path(td)
-        kir_, src = emit_(tmp)
+        src = emit_()[1]
         # From a FILE, not exec: dace reads a program's SOURCE back off disk to parse it, and
         # refuses outright ("Cannot obtain source code for dace program") for anything it cannot
         # locate that way -- which is exactly how the harness ships these programs anyway.
         mod_path = tmp / "emitted_dace_stack.py"
         mod_path.write_text(src)
-        spec = importlib.util.spec_from_file_location("emitted_dace_stack", mod_path)
-        mod = importlib.util.module_from_spec(spec)
-        # Registered BEFORE exec: dataclasses resolves a string annotation through
-        # sys.modules[cls.__module__], which is None for a module loaded by path alone.
-        sys.modules[spec.name] = mod
-        spec.loader.exec_module(mod)
-        mod.k(a=a, b=b, out=got, M=M, N=N)
+        module_at(mod_path).k(a=a, b=b, out=got, M=M, N=N)
     assert np.array_equal(got, expect), f"dace disagrees with numpy:\ngot {got}\nexpect {expect}"
 
 
 if __name__ == "__main__":
-    raise SystemExit(pytest.main([__file__, "-v"]))
+    test_the_stack_temp_is_allocated_before_it_is_written()
+    test_the_emitted_program_parses_and_runs_in_dace()

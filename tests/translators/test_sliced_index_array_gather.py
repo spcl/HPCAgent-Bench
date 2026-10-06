@@ -18,18 +18,13 @@ both index arrays at the gather iters, and the semi-structured read must pin its
 literal 0 it was written with.
 """
 
-import json
-import pathlib
-import tempfile
-
 import numpy as np
 import pytest
 
 from hpcagent_bench.translators.numpyto_c.emit import emit_c
-from hpcagent_bench.translators.numpyto_common.frontend import parse_kernel
 from hpcagent_bench.translators.numpyto_common.lowering import lower
 from hpcagent_bench.translators.numpyto_fortran.emit import emit_fortran
-from tests.translators.op_oracle import bench_info_, run_op
+from tests.translators.op_oracle import parse_source, run_op
 
 SYMS = {"NPROMA": 3, "NLEV": 2, "NBLKS": 4, "NNBR": 2}
 SHAPES = {
@@ -76,12 +71,7 @@ NBR_BLK = np.array(
 
 
 def emit(target: str) -> str:
-    d = pathlib.Path(tempfile.mkdtemp())
-    (d / "sg_numpy.py").write_text(SRC)
-    (d / "bi.json").write_text(
-        json.dumps(bench_info_("sg", ["a", "nbr_idx", "nbr_blk"], ["out", "out_semi"], SHAPES, SYMS, DTYPES))
-    )
-    kir = lower(parse_kernel(d / "sg_numpy.py", d / "bi.json"))
+    kir = lower(parse_source(SRC, "sg", ["a", "nbr_idx", "nbr_blk"], ["out", "out_semi"], SHAPES, SYMS, DTYPES))
     return emit_c(kir, fn_name="sg") if target == "c" else emit_fortran(kir, fn_name="sg")
 
 

@@ -40,7 +40,7 @@ import pytest
 from hpcagent_bench.translators.numpyto_c.emit import emit_cpp, emit_cpp_isopar
 from hpcagent_bench.translators.numpyto_common.frontend import parse_kernel
 from hpcagent_bench.translators.numpyto_common.lowering import lower
-from tests.translators.op_oracle import bench_info_, run_op
+from tests.translators.op_oracle import bench_info_, parse_source, run_op
 
 #: Every algorithm this backend may emit. A conversion outside this set is a bug, not a feature.
 ALGORITHMS = (
@@ -69,13 +69,8 @@ def emit_(body: str, args: str = "a, b, out", shapes=None, syms=None, dtypes=Non
     src = f"import numpy as np\n\n\ndef k({args}, N):\n{body}"
     names = [a.strip() for a in args.split(",")]
     shapes = shapes or {n: "(N,)" for n in names}
-    with tempfile.TemporaryDirectory() as td:
-        d = pathlib.Path(td)
-        (d / "k_numpy.py").write_text(src)
-        info = bench_info_("k", names[:-1], names[-1:], shapes, syms or SYMS, dtypes)
-        (d / "bi.json").write_text(json.dumps(info))
-        kir = lower(parse_kernel(d / "k_numpy.py", d / "bi.json"))
-        return (emit_cpp_isopar if isopar else emit_cpp)(kir, fn_name="k")
+    kir = lower(parse_source(src, "k", names[:-1], names[-1:], shapes, syms or SYMS, dtypes))
+    return (emit_cpp_isopar if isopar else emit_cpp)(kir, fn_name="k")
 
 
 def signature(text: str) -> str:
@@ -668,7 +663,7 @@ CONVERSION_CASES = [
 def test_emitted_source_has_no_implicit_conversion(name, body, dtypes) -> None:
     """Every width or signedness change in the emitted C++ is written as an explicit
     ``static_cast``. Inside a lambda that is load-bearing: the callable's result is converted on the
-    way into the output range, where the loop form's assignment used to hide it."""
+    way into the output range, where a loop form's assignment would hide it."""
     from hpcagent_bench import languages
 
     text = emit_(body, dtypes=dtypes)

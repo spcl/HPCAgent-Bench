@@ -2,17 +2,17 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """A range step whose sign is only known at RUNTIME must still iterate the Python direction.
 
-Both native emitters used to decide the loop direction from the emitted TEXT of the step
-(``step.startswith("-")``), which is only right for a literal. With ``s = -1`` held in a variable
-the text is ``s``, so both picked the positive-step form and diverged silently:
+Deciding the loop direction from the emitted TEXT of the step (``step.startswith("-")``) is only
+right for a literal. With ``s = -1`` held in a variable the text is ``s``, and the positive-step
+form diverges silently:
 
-* C emitted ``for (i = lo; i < hi; i += s)`` -- the guard is false at entry, so the loop ran ZERO
-  times and the output kept whatever it was initialised with.
-* Fortran emitted ``do i = lo, hi - 1, s``. Fortran's DO honours the runtime sign, but the
-  inclusive-bound adjustment went the wrong way, so ``range(n, 0, -1)`` ran two iterations too far
-  (down to ``-1``) -- out-of-range indices, not merely a wrong count.
+* C ``for (i = lo; i < hi; i += s)`` -- the guard is false at entry, so the loop runs ZERO times
+  and the output keeps whatever it was initialised with.
+* Fortran ``do i = lo, hi - 1, s`` honours the runtime sign, but the inclusive-bound adjustment
+  goes the wrong way, so ``range(n, 0, -1)`` runs two iterations too far (down to ``-1``) --
+  out-of-range indices, not merely a wrong count.
 
-Neither failed loudly, which is why this is pinned per backend rather than left to a kernel test.
+Neither fails loudly, which is why this is pinned per backend rather than left to a kernel test.
 """
 
 import numpy as np
@@ -96,21 +96,11 @@ def test_literal_negative_step_unaffected() -> None:
 # a runtime-sign loop must not be tagged for OpenMP
 def emit_omp_c(body: str, shapes: dict[str, str], syms: dict[str, int], *, cpp: bool = False) -> str:
     """Emit the PARALLEL C/C++ variant of a one-function kernel."""
-    import json
-    import pathlib
-    import tempfile
-
     from hpcagent_bench.translators.numpyto_c.emit import emit_c_omp, emit_cpp_omp
-    from hpcagent_bench.translators.numpyto_common.frontend import parse_kernel
     from hpcagent_bench.translators.numpyto_common.lowering import lower
-    from tests.translators.op_oracle import bench_info_
+    from tests.translators.op_oracle import parse_source
 
-    d = pathlib.Path(tempfile.mkdtemp())
-    (d / "k.py").write_text(body)
-    (d / "bi.json").write_text(
-        json.dumps(bench_info_("f", ["x"], ["out"], shapes, syms, {"x": "float64", "out": "float64"}))
-    )
-    kir = lower(parse_kernel(d / "k.py", d / "bi.json"))
+    kir = lower(parse_source(body, "f", ["x"], ["out"], shapes, syms, {"x": "float64", "out": "float64"}))
     return (emit_cpp_omp if cpp else emit_c_omp)(kir, fn_name="f")
 
 

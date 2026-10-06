@@ -25,7 +25,7 @@ from hpcagent_bench.translators.numpyto_c.emit import emit_c
 from hpcagent_bench.translators.numpyto_common.frontend import parse_kernel
 from hpcagent_bench.translators.numpyto_common.lowering import lower
 from hpcagent_bench.translators.numpyto_fortran.emit import emit_fortran
-from tests.translators.op_oracle import bench_info_, run_op
+from tests.translators.op_oracle import bench_info_, parse_source, run_op
 
 SYMS = {"NR": 3, "NC": 5}
 SHAPES = {"a": "(NR, NC)", "idx": "(NC,)", "out": "(NR, NC)"}
@@ -46,10 +46,7 @@ def kernel(store: str) -> str:
 
 
 def emit(store: str, target: str) -> str:
-    d = pathlib.Path(tempfile.mkdtemp())
-    (d / "am_numpy.py").write_text(kernel(store))
-    (d / "bi.json").write_text(json.dumps(bench_info_("am", ["a", "idx"], ["out"], SHAPES, SYMS, DTYPES)))
-    kir = lower(parse_kernel(d / "am_numpy.py", d / "bi.json"))
+    kir = lower(parse_source(kernel(store), "am", ["a", "idx"], ["out"], SHAPES, SYMS, DTYPES))
     return emit_c(kir, fn_name="am") if target == "c" else emit_fortran(kir, fn_name="am")
 
 

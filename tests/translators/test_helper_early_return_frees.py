@@ -11,17 +11,12 @@ enough to measure is a run long enough to exhaust the box.
 Under AddressSanitizer, which fails the run on a leak rather than asking a human to read a number.
 """
 
-import json
-import pathlib
-import tempfile
-
 import pytest
 
 from hpcagent_bench.translators.numpyto_c.emit import emit_c, emit_cpp
-from hpcagent_bench.translators.numpyto_common.frontend import parse_kernel
 from hpcagent_bench.translators.numpyto_common.lowering import lower
 from tests.translators.native_tu import build_run_c, have_gcc, have_gpp
-from tests.translators.op_oracle import bench_info_
+from tests.translators.op_oracle import parse_source
 
 #: ``scratch`` allocates a workspace AFTER a guard that returns early, so one call in three exits
 #: with the buffer live and one exits with it allocated. The early return is also what stops the
@@ -54,12 +49,7 @@ DRIVER = (
 
 
 def emitted(cpp: bool, source: str = SOURCE) -> str:
-    bench_info = bench_info_("k", ["a"], ["out"], {"a": "(N,)", "out": "(N,)"}, {"N": 8}, None)
-    with tempfile.TemporaryDirectory() as td:
-        d = pathlib.Path(td)
-        (d / "k_numpy.py").write_text(source)
-        (d / "bi.json").write_text(json.dumps(bench_info))
-        kir = lower(parse_kernel(d / "k_numpy.py", d / "bi.json"))
+    kir = lower(parse_source(source, "k", ["a"], ["out"], {"a": "(N,)", "out": "(N,)"}, {"N": 8}))
     return emit_cpp(kir, fn_name="k") if cpp else emit_c(kir, fn_name="k")
 
 

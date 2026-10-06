@@ -12,17 +12,12 @@ The fix is twofold, both pinned here: the read flattens when the rank is known (
 kernels emit and run), and the emitter RAISES rather than emit the chained form when it cannot.
 """
 
-import json
-import pathlib
-import tempfile
-
 import numpy as np
 import pytest
 
 from hpcagent_bench.translators.numpyto_c.emit import emit_c
-from hpcagent_bench.translators.numpyto_common.frontend import parse_kernel
 from hpcagent_bench.translators.numpyto_common.lowering import lower
-from tests.translators.op_oracle import bench_info_, run_op
+from tests.translators.op_oracle import parse_source, run_op
 
 NATIVE = ("c", "cpp", "fortran")
 
@@ -42,12 +37,8 @@ WEIGHTED_STENCIL = (
 
 
 def emit_c_source(body, shapes, syms):
-    d = pathlib.Path(tempfile.mkdtemp())
-    (d / "k.py").write_text(body)
-    (d / "bi.json").write_text(
-        json.dumps(bench_info_("f", ["g", "w"], ["out"], shapes, syms, {a: "float64" for a in ("g", "w", "out")}))
-    )
-    return emit_c(lower(parse_kernel(d / "k.py", d / "bi.json")), fn_name="f")
+    dtypes = {a: "float64" for a in ("g", "w", "out")}
+    return emit_c(lower(parse_source(body, "f", ["g", "w"], ["out"], shapes, syms, dtypes)), fn_name="f")
 
 
 def test_two_d_weight_read_flattens_and_does_not_chain() -> None:

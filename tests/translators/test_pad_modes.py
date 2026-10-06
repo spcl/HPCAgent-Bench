@@ -19,18 +19,14 @@ data-dependent control flow inside the loop body, which pet/pluto refuses to
 schedule -- measured, the whole scop came back with empty statement bodies.
 """
 
-import json
-import pathlib
 import re
-import tempfile
 
 import numpy as np
 import pytest
 
 from hpcagent_bench.translators.numpyto_c.emit import emit_c
-from hpcagent_bench.translators.numpyto_common.frontend import parse_kernel
 from hpcagent_bench.translators.numpyto_common.lowering import lower
-from tests.translators.op_oracle import bench_info_, run_op
+from tests.translators.op_oracle import parse_source, run_op
 
 NATIVE = ("c", "cpp", "fortran")
 
@@ -75,13 +71,9 @@ def test_pad_reflect_size1_axis_repeats() -> None:
 def emit_c_(mode: str) -> str:
     """The C the minimal 1-D pad fixture emits, from ``void pad_op(`` on (the
     preamble's own helpers are full of ``if``s and are not what is asserted)."""
-    d = pathlib.Path(tempfile.mkdtemp())
-    (d / "k_numpy.py").write_text(
-        f"import numpy as np\ndef pad_op(a, out):\n    out[:] = np.pad(a, 2, mode='{mode}')\n"
-    )
-    bi = bench_info_("pad_op", ["a"], ["out"], {"a": "(N,)", "out": "(N + 4,)"}, {"N": 6})
-    (d / "bi.json").write_text(json.dumps(bi))
-    text = emit_c(lower(parse_kernel(d / "k_numpy.py", d / "bi.json")), fn_name="pad_op")
+    src = f"import numpy as np\ndef pad_op(a, out):\n    out[:] = np.pad(a, 2, mode='{mode}')\n"
+    kir = parse_source(src, "pad_op", ["a"], ["out"], {"a": "(N,)", "out": "(N + 4,)"}, {"N": 6})
+    text = emit_c(lower(kir), fn_name="pad_op")
     return text[text.index("void pad_op(") :]
 
 

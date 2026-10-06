@@ -105,11 +105,7 @@ SYM_SRC = (
 
 
 def sym_kir() -> KernelIR:
-    d = pathlib.Path(tempfile.mkdtemp())
-    (d / "k.py").write_text(SYM_SRC)
-    bi = d / "bi.json"
-    bi.write_text(json.dumps(oo.bench_info_("g", ["a"], ["out"], {"a": "(N, K)", "out": "(N, K)"}, {"N": 8, "K": 4})))
-    return lower(parse_kernel(d / "k.py", bi))
+    return lower(oo.parse_source(SYM_SRC, "g", ["a"], ["out"], {"a": "(N, K)", "out": "(N, K)"}, {"N": 8, "K": 4}))
 
 
 def test_pluto_mode_keeps_the_floord_spelling_for_np_floor_of_symbols() -> None:

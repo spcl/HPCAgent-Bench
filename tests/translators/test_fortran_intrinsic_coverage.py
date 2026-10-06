@@ -20,11 +20,6 @@ The dict may only SHRINK. An op that starts reaching its intrinsic and is still 
 so the list cannot rot into a description of the past.
 """
 
-import json
-import pathlib
-import tempfile
-
-from hpcagent_bench.translators.numpyto_common.frontend import parse_kernel
 from hpcagent_bench.translators.numpyto_common.lowering import lower
 from hpcagent_bench.translators.numpyto_fortran.emit import emit_fortran
 from hpcagent_bench.translators.numpyto_fortran.intrinsics import renders_natively
@@ -119,12 +114,9 @@ def emitted(body: str, spec: tuple[dict[str, str], dict[str, int]]) -> str:
     shapes, syms = spec
     args = [k for k in shapes if k != "out"]
     src = "import numpy as np\ndef f(" + ", ".join(args + ["out"]) + "):\n" + body
-    d = pathlib.Path(tempfile.mkdtemp())
-    npy = d / "f.py"
-    npy.write_text(src)
-    bi = d / "bi.json"
-    bi.write_text(json.dumps(oo.bench_info_("f", args, ["out"], shapes, syms)))
-    return emit_fortran(lower(parse_kernel(npy, bi), native_call=renders_natively), fn_name="f")
+    return emit_fortran(
+        lower(oo.parse_source(src, "f", args, ["out"], shapes, syms), native_call=renders_natively), fn_name="f"
+    )
 
 
 def reaches_intrinsic(name: str) -> bool:

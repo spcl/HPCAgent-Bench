@@ -13,14 +13,9 @@ It is a comment and nothing else: no statement changes, so a backend that ignore
 exactly what it emitted before.
 """
 
-import json
-import pathlib
-import tempfile
-
 import numpy as np
 
 from hpcagent_bench.translators.numpyto_c.emit import emit_c
-from hpcagent_bench.translators.numpyto_common.frontend import parse_kernel
 from hpcagent_bench.translators.numpyto_common.ir import NUMPY_NOTE_CHARS
 from hpcagent_bench.translators.numpyto_common.lowering import lower
 from hpcagent_bench.translators.numpyto_fortran.emit import emit_fortran
@@ -35,12 +30,7 @@ SYMS = {"N": 8, "M": 4}
 
 def emit(body: str, target: str, shapes=None, syms=None) -> str:
     src = "import numpy as np\ndef f(a, out):\n" + body
-    d = pathlib.Path(tempfile.mkdtemp())
-    npy = d / "f.py"
-    npy.write_text(src)
-    bi = d / "bi.json"
-    bi.write_text(json.dumps(oo.bench_info_("f", ["a"], ["out"], shapes or SHAPES, syms or SYMS)))
-    kir = lower(parse_kernel(npy, bi))
+    kir = lower(oo.parse_source(src, "f", ["a"], ["out"], shapes or SHAPES, syms or SYMS))
     return emit_c(kir, fn_name="f") if target == "c" else emit_fortran(kir, fn_name="f")
 
 

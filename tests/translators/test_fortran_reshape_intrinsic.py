@@ -22,18 +22,13 @@ named ``K`` beside a subroutine named ``k`` is the same identifier, and every ar
 then fails to compile as "explicit shaped array with nonconstant bounds".
 """
 
-import json
-import pathlib
-import tempfile
-
 import numpy as np
 import pytest
 
-from hpcagent_bench.translators.numpyto_common.frontend import parse_kernel
 from hpcagent_bench.translators.numpyto_common.lowering import lower
 from hpcagent_bench.translators.numpyto_fortran.emit import emit_fortran
 from hpcagent_bench.translators.numpyto_fortran.intrinsics import renders_natively
-from tests.translators.op_oracle import bench_info_, run_op
+from tests.translators.op_oracle import parse_source, run_op
 
 RNG = np.random.default_rng(0)
 
@@ -49,11 +44,8 @@ def emit(body: str, out_shape: str) -> str:
     ``native_call=renders_natively`` is the point: it is what leaves the call unexpanded for the
     emitter to render, so an emit without it would test nothing.
     """
-    d = pathlib.Path(tempfile.mkdtemp())
-    (d / "k_numpy.py").write_text(body)
-    (d / "bi.json").write_text(json.dumps(bench_info_("rs", ["a"], ["out"], {"a": SRC_SHAPE, "out": out_shape}, SYMS)))
-    kir = lower(parse_kernel(d / "k_numpy.py", d / "bi.json"), native_call=renders_natively)
-    return emit_fortran(kir, fn_name="rs")
+    kir = parse_source(body, "rs", ["a"], ["out"], {"a": SRC_SHAPE, "out": out_shape}, SYMS)
+    return emit_fortran(lower(kir, native_call=renders_natively), fn_name="rs")
 
 
 def kernel(newshape: str) -> str:

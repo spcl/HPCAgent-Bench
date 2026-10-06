@@ -22,14 +22,9 @@ The emitted text IS the product here, so the C and Fortran sources are asserted 
 that vanished from the subscript leaves a kernel that still compiles and still fills the buffer.
 """
 
-import json
-import pathlib
-import tempfile
-
 import numpy as np
 
 from hpcagent_bench.translators.numpyto_c.emit import emit_c
-from hpcagent_bench.translators.numpyto_common.frontend import parse_kernel
 from hpcagent_bench.translators.numpyto_common.lowering import lower
 from hpcagent_bench.translators.numpyto_fortran.emit import emit_fortran
 from tests.translators import op_oracle as oo
@@ -56,12 +51,7 @@ def signature(text: str) -> str:
 
 
 def emit_(target: str) -> str:
-    d = pathlib.Path(tempfile.mkdtemp())
-    npy = d / "f.py"
-    npy.write_text(SRC)
-    bi = d / "bi.json"
-    bi.write_text(json.dumps(oo.bench_info_("f", ["x", "stride"], ["out"], SHAPES, {"N": 12})))
-    kir = lower(parse_kernel(npy, bi))
+    kir = lower(oo.parse_source(SRC, "f", ["x", "stride"], ["out"], SHAPES, {"N": 12}))
     return emit_c(kir, fn_name="f") if target == "c" else emit_fortran(kir, fn_name="f")
 
 

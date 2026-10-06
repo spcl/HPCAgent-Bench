@@ -2,24 +2,20 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The emitted body never contains a tautological ``X = X``.
 
-Shape resolution used to leave one behind per unpacked dimension: ``H, W = a.shape``
-became ``H = H; W = W`` once the shape symbols resolved to the parameter names. In the
-pluto input those statements WRITE a signature parameter inside ``#pragma scop``, which
+Shape resolution can mint one per unpacked dimension: ``H, W = a.shape`` becomes
+``H = H; W = W`` when the shape symbols resolve to the parameter names. In the pluto input
+those statements WRITE a signature parameter inside ``#pragma scop``, which
 pet reads as a data-dependent condition and turns into an isl assert -- polycc core
 dumps instead of refusing (POLYCC-003 in ``hpcagent_bench.pluto_affine``). Dropping them
 in the shared lowering is what keeps the scop schedulable, so the property is asserted
 on the emitted text rather than on the AST.
 """
 
-import json
-import pathlib
 import re
-import tempfile
 
 from hpcagent_bench.translators.numpyto_c.emit import emit_c, emit_pluto
-from hpcagent_bench.translators.numpyto_common.frontend import parse_kernel
 from hpcagent_bench.translators.numpyto_common.lowering import lower
-from tests.translators.op_oracle import bench_info_
+from tests.translators.op_oracle import parse_source
 
 #: A whole-statement ``name = name;`` -- the only form the dropper removes.
 SELF_ASSIGN = re.compile(r"^\s*([A-Za-z_]\w*) = ([A-Za-z_]\w*);$", re.M)
@@ -28,8 +24,7 @@ SELF_ASSIGN = re.compile(r"^\s*([A-Za-z_]\w*) = ([A-Za-z_]\w*);$", re.M)
 def lower_shape_unpack_fixture():
     """The minimal kernel that mints the self-assigns: a 2-D unpack whose targets ARE
     the declared shape symbols, so both resolve back to their own names."""
-    d = pathlib.Path(tempfile.mkdtemp())
-    (d / "k_numpy.py").write_text(
+    src = (
         "import numpy as np\n"
         "def shape_op(a, out):\n"
         "    H, W = a.shape\n"
@@ -37,9 +32,7 @@ def lower_shape_unpack_fixture():
         "        for j in range(W):\n"
         "            out[i, j] = a[i, j] * 2.0\n"
     )
-    bi = bench_info_("shape_op", ["a"], ["out"], {"a": "(H, W)", "out": "(H, W)"}, {"H": 4, "W": 5})
-    (d / "bi.json").write_text(json.dumps(bi))
-    return lower(parse_kernel(d / "k_numpy.py", d / "bi.json"))
+    return lower(parse_source(src, "shape_op", ["a"], ["out"], {"a": "(H, W)", "out": "(H, W)"}, {"H": 4, "W": 5}))
 
 
 def self_assigns(text: str):

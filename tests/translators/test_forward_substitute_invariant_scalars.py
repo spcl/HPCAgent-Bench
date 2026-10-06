@@ -16,7 +16,7 @@ from hpcagent_bench.pluto_affine import KNOWN_POLYCC_ISSUES, scop_nonaffine_reas
 from hpcagent_bench.translators.numpyto_c.emit import emit_c, emit_pluto
 from hpcagent_bench.translators.numpyto_common.frontend import parse_kernel
 from hpcagent_bench.translators.numpyto_common.lowering import lower
-from tests.translators.op_oracle import bench_info_
+from tests.translators.op_oracle import bench_info_, parse_source
 
 #: conv_2d's own ``w = w_box[di + R, dj + R]``, with the pad already materialised.
 CONV = (
@@ -33,13 +33,10 @@ CONV = (
 
 def emit_(src: str, func: str, extra_args=(), dtypes=None) -> str:
     """Emit C for a throwaway kernel over ``w_box`` / ``padded`` / ``out_grid``."""
-    d = pathlib.Path(tempfile.mkdtemp())
-    (d / "k_numpy.py").write_text(src)
     shapes = {"w_box": "(K, K)", "padded": "(N + K, N + K)", "out_grid": "(N, N)"}
     shapes.update({a: "(N,)" for a in extra_args})
-    bi = bench_info_(func, ["w_box", "padded", *extra_args], ["out_grid"], shapes, {"K": 3, "N": 8}, dtypes)
-    (d / "bi.json").write_text(json.dumps(bi))
-    return emit_c(lower(parse_kernel(d / "k_numpy.py", d / "bi.json")), fn_name=func)
+    kir = parse_source(src, func, ["w_box", "padded", *extra_args], ["out_grid"], shapes, {"K": 3, "N": 8}, dtypes)
+    return emit_c(lower(kir), fn_name=func)
 
 
 def assigns_to(text: str, name: str):

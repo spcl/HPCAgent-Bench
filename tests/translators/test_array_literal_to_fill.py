@@ -15,27 +15,20 @@ index, which makes it an index vector. Anything else keeps the refusal, which is
 negative cases below matter as much as the positive ones.
 """
 
-import json
-import pathlib
 import re
-import tempfile
 
 import numpy as np
 import pytest
 
 from hpcagent_bench.translators.numpyto_c.emit import emit_c
-from hpcagent_bench.translators.numpyto_common.frontend import parse_kernel
 from hpcagent_bench.translators.numpyto_common.lowering import lower
-from tests.translators.op_oracle import bench_info_, run_op
+from tests.translators.op_oracle import parse_source, run_op
 
 
 def emit_c_for(src: str, func: str, shapes=None, syms=None, inputs=("src",), outputs=("out",)) -> str:
-    d = pathlib.Path(tempfile.mkdtemp())
-    (d / "k_numpy.py").write_text(src)
     shapes = shapes or {"src": "(N, M)", "out": "(N, M)"}
     syms = syms or {"N": 8, "M": 4}
-    (d / "bi.json").write_text(json.dumps(bench_info_(func, list(inputs), list(outputs), shapes, syms, None)))
-    return emit_c(lower(parse_kernel(d / "k_numpy.py", d / "bi.json")), fn_name=func)
+    return emit_c(lower(parse_source(src, func, list(inputs), list(outputs), shapes, syms)), fn_name=func)
 
 
 def decl_of(text: str, name: str) -> str:
