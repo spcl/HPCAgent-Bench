@@ -277,7 +277,7 @@ def test_reduce_stamps_min_of_k_varied_too() -> None:
     assert r2.reduction == "mok-v1"
 
 
-# the per-input test at level alpha (mw4x5-final), and the p it was gated on
+# the per-input test at level alpha (mw4x5), and the p it was gated on
 def test_the_per_input_credit_follows_alpha_and_discloses_its_p() -> None:
     """Five runs a side, candidate 2x faster but overlapping twice: p sits between 0.01 and 0.1, so
     alpha 0.1 credits the median ratio and alpha 0.01 credits exactly 1.0 -- same p either way."""

@@ -15,7 +15,6 @@ PINNED_STAMPS = {
     "md1x5": "preview",
     "mw4x5-aa": "calibration",
     "mwd-final": "retired",
-    "mw4x5-final": "retired",
     "mwd-v3": "live",
     "mok-v1-varied": "live",
     "medk-v1-varied": "live",
@@ -90,3 +89,6 @@ if __name__ == "__main__":
     ):
         test()
         print("ok", test.__name__)
+    with pytest.MonkeyPatch.context() as patch:
+        test_one_current_protocol_per_single_role(patch)
+    print("ok", test_one_current_protocol_per_single_role.__name__)

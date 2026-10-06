@@ -1214,10 +1214,12 @@ def test_a_finalize_resume_redoes_rows_of_an_earlier_final_rule(
     tmp_path: pathlib.Path, final_cells: list[dict[str, Any]]
 ) -> None:
     """A resumed finalize shard counts an item done only when it holds a final grade of it under the
-    CURRENT final score rule: one the v1 pass wrote (s-mw4x5-v1) is re-timed beside it."""
+    CURRENT final score rule: one under another rule is re-timed beside it."""
     (item,) = [i for i in grade_under.build_worklist([shard_db(tmp_path)], [])[0] if i.ts_ms == 10]
     out = tmp_path / "out"
-    grade_under.write_regrade(out / "regrade-cells-0.db", item, grade_under.FINAL_KIND, {"score_rule": "s-mw4x5-v1"})
+    grade_under.write_regrade(
+        out / "regrade-cells-0.db", item, grade_under.FINAL_KIND, {"score_rule": "an-earlier-rule"}
+    )
     calls: list[str] = []
 
     def grader(one: grade_under.Item) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -1228,7 +1230,7 @@ def test_a_finalize_resume_redoes_rows_of_an_earlier_final_rule(
     assert grade_under.run_cells_shard([item], 0, 1, out, grader) == 0  # now current: done
     assert calls == [item.episode_id]
     rules = sorted(row["score_rule"] for row in grades(out / "regrade-cells-0.db", "kind = 'final'"))
-    assert rules == sorted(["s-mw4x5-v1", score_rule.SCORE_RULE])
+    assert rules == sorted(["an-earlier-rule", score_rule.SCORE_RULE])
 
 
 def test_the_final_columns_reach_the_shard_database(tmp_path: pathlib.Path, final_cells: list[dict[str, Any]]) -> None:
@@ -1551,14 +1553,14 @@ def test_a_regrade_under_another_protocol_adds_a_row_unless_told_to_replace(
     ``--on-protocol-change replace`` deletes A's row and keeps B's values in its id."""
     db = judge_shard(tmp_path)
     submission = add_grade(db, "k1", 10, **credited(2.0, "mwd-final"))
-    old = final_of(db, submission, 100, "mw4x5-final", 1.5, [1.4, 1.6])
+    old = final_of(db, submission, 100, "mwd-v3", 1.5, [1.4, 1.6])
     new = final_of(db, submission, 200, timing.FINAL_GRADE_REDUCTION, 1.8, [1.7, 1.9])
 
     grade_under.apply_shards(db, [], on_change)
 
     if on_change is results_db.ProtocolChange.NEW_ROW:
         assert finals_of(db) == [
-            (old, submission, "mw4x5-final", 1.5, 100),
+            (old, submission, "mwd-v3", 1.5, 100),
             (new, submission, timing.FINAL_GRADE_REDUCTION, 1.8, 200),
         ]
         assert ratios_of(db, old) == [1.4, 1.6]
