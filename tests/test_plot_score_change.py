@@ -26,9 +26,9 @@ from matplotlib.collections import LineCollection, PathCollection
 from matplotlib.figure import Figure
 
 from hpcagent_bench import studies
-from hpcagent_bench.harness import efficacy
 from hpcagent_bench.stats import cost, palette, population, score_rule
 from hpcagent_bench.stats import style as plotstyle
+from hpcagent_bench.stats.significance import Finding
 from hpcagent_bench.stats.figures import efficacy as efficacy_figures
 from tests.fresh_module import module_at
 
@@ -152,8 +152,8 @@ def one_setup_raw(
 def one_setup_stats(
     model: str = "qwen38",
     language: str = "c",
-    score_verdict: str = efficacy.NOT_SIGNIFICANT,
-    cost_verdict: str = efficacy.NOT_SIGNIFICANT,
+    score_verdict: str = Finding.NOT_SIGNIFICANT.value,
+    cost_verdict: str = Finding.NOT_SIGNIFICANT.value,
     family_size: int = 2,
 ) -> pd.DataFrame:  # fmt: skip
     return pd.DataFrame([{
@@ -175,8 +175,8 @@ def test_a_raw_threshold_that_would_have_starred_a_point_does_not_survive_the_co
     winner = frame[(frame.model == "qwen38") & (frame.language == "c")].iloc[0]
     assert winner.score_p == pytest.approx(2 / 64), "the fixture has to cross a raw 5% threshold"
     assert winner.score_p_adjusted > 0.05
-    assert winner.score_verdict == efficacy.NOT_SIGNIFICANT
-    assert not (frame.score_verdict == efficacy.SIGNIFICANT).any()
+    assert winner.score_verdict == Finding.NOT_SIGNIFICANT.value
+    assert not (frame.score_verdict == Finding.SIGNIFICANT.value).any()
 
 
 def test_an_effect_every_setup_shows_still_survives_the_correction() -> None:
@@ -184,7 +184,7 @@ def test_an_effect_every_setup_shows_still_survives_the_correction() -> None:
     agrees on, which is what separates it from simply refusing to mark anything."""
     before, after = observations(DECISIVE, winner=None)
     frame = plot.points(before, after)
-    assert (frame.score_verdict == efficacy.SIGNIFICANT).all()
+    assert (frame.score_verdict == Finding.SIGNIFICANT.value).all()
     assert (frame.score_p_adjusted < 0.05).all()
 
 
@@ -418,7 +418,7 @@ def test_a_marks_significance_superscript_reads_off_the_corrected_verdict_per_ax
         return drawn
 
     neither = symbols_of(one_setup_stats())
-    both = symbols_of(one_setup_stats(score_verdict=efficacy.SIGNIFICANT, cost_verdict=efficacy.SIGNIFICANT))
+    both = symbols_of(one_setup_stats(score_verdict=Finding.SIGNIFICANT.value, cost_verdict=Finding.SIGNIFICANT.value))
     assert neither == {"speedup": [], "cost": []}, neither
     assert both == {
         "speedup": [efficacy_figures.SCORE_SIG_MARK],
@@ -611,20 +611,20 @@ def test_a_pairs_leg_never_names_the_intervention_the_two_sides_differ_in() -> N
 def test_the_stars_come_off_the_family_csv_and_are_never_recomputed_here() -> None:
     """``statistics/paired_setups.py`` already ran the paired test and the Benjamini-Hochberg
     correction over exactly this family, and the paper's table is printed from the same CSV."""
-    table = family_csv([BLIND_PAIR], efficacy.SIGNIFICANT, efficacy.NOT_SIGNIFICANT)
+    table = family_csv([BLIND_PAIR], Finding.SIGNIFICANT.value, Finding.NOT_SIGNIFICANT.value)
     stats = plot.family_stats(table, "no-score-tool")
 
     assert list(stats.leg) == ["C +lang-skills"]
     assert list(stats.model) == ["qwen38"]
-    assert list(stats.score_verdict) == [efficacy.SIGNIFICANT]
-    assert list(stats.cost_verdict) == [efficacy.NOT_SIGNIFICANT]
+    assert list(stats.score_verdict) == [Finding.SIGNIFICANT.value]
+    assert list(stats.cost_verdict) == [Finding.NOT_SIGNIFICANT.value]
     assert list(stats.kernels) == [40]
     assert plot.efficacy_figures.family_size(stats) == 2
 
 
 def test_the_family_csv_declares_the_pairs_in_the_order_it_wrote_them() -> None:
     """The family's own declared order, not a re-sort."""
-    table = family_csv([BLIND_PAIR, SCICOMP_PAIR], efficacy.NOT_SIGNIFICANT, efficacy.NOT_SIGNIFICANT)
+    table = family_csv([BLIND_PAIR, SCICOMP_PAIR], Finding.NOT_SIGNIFICANT.value, Finding.NOT_SIGNIFICANT.value)
     assert plot.family_pairs(table) == [BLIND_PAIR, SCICOMP_PAIR]
 
 
@@ -1429,8 +1429,8 @@ def test_the_paper_key_sets_five_columns(tmp_path: pathlib.Path, monkeypatch: py
 def test_the_solved_row_is_never_starred_because_the_solved_rate_is_not_tested() -> None:
     """Only the speedup and cost legs are in the family: a speedup verdict must not leak onto the
     solved row as if the solved rate had been tested."""
-    stats = pd.DataFrame([{"model": "qwen38", "leg": "C", "score_verdict": efficacy.SIGNIFICANT,
-                           "cost_verdict": efficacy.SIGNIFICANT}])  # fmt: skip
+    stats = pd.DataFrame([{"model": "qwen38", "leg": "C", "score_verdict": Finding.SIGNIFICANT.value,
+                           "cost_verdict": Finding.SIGNIFICANT.value}])  # fmt: skip
     significance = efficacy_figures.axis_significance(stats)
     row = efficacy_figures.SetupRow("qwen38", "C", "#000000", setup(1.0, 1.5), setup(2.0, 2.5))
     texts = {}

@@ -10,8 +10,9 @@ never over kernels: a handful of kernels supports no corpus claim, twenty runs o
   each with the exact distribution-free order-statistic interval (:func:`median_interval`).
 * Spread: the log2 interquartile range and log2 range of the solved runs.
 * Two setups on one kernel: the configured proportion test on the solve counts (``statistics.proportion_test``,
-  Fisher's exact by default) and the Mann-Whitney U test on the scored runs (:func:`compare_setups`), both
-  adjusted across the kernels compared by ``statistics.correction`` (Benjamini-Hochberg by default).
+  Fisher's exact by default) and the configured two-sample test on the scored runs
+  (``statistics.two_sample_test``, Mann-Whitney U by default) (:func:`compare_setups`), both adjusted across the
+  kernels compared by ``statistics.correction`` (Benjamini-Hochberg by default).
 
 A cell holding any OWED run -- an answer still owed its final grade, or a run that submitted nothing and
 is owed a rerun in its slot -- is refused (:class:`OwedRunsError`): an owed run is neither solved nor
@@ -189,28 +190,30 @@ def solve_count(group: pd.DataFrame) -> SolveCount:
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class SetupComparison:
-    """``left`` against ``right`` on one kernel, each over its own runs. ``proportion_test`` names the test
-    behind ``proportion_p``, ``correction`` the one behind both adjusted values."""
+    """``left`` against ``right`` on one kernel, each over its own runs. ``proportion_test`` and
+    ``two_sample_test`` name the tests behind the two p values, ``correction`` the one behind both adjusted
+    values."""
 
     kernel: str
     left: SolveCount
     right: SolveCount
     proportion_test: str
     proportion_p: float
-    mann_whitney_p: float
+    two_sample_test: str
+    two_sample_p: float
     #: Both p values adjusted across the kernels of one :func:`compare_setups` call.
     correction: str = ""
     proportion_p_adjusted: float = math.nan
-    mann_whitney_p_adjusted: float = math.nan
+    two_sample_p_adjusted: float = math.nan
 
 
 def compare_cells(kernel: str, one: pd.DataFrame, other: pd.DataFrame) -> SetupComparison:
-    """One kernel's two cells: the configured proportion test on solved/unsolved, Mann-Whitney U on the
-    scored runs."""
+    """One kernel's two cells: the configured proportion test on solved/unsolved, the configured two-sample
+    test on the scored runs."""
     left, right = solve_count(one), solve_count(other)
-    tested = significance.proportion(left, right)
-    _, mann_whitney = summary.rank_sum_test(one["speedup"].tolist(), other["speedup"].tolist())
-    return SetupComparison(kernel, left, right, tested.label, tested.pvalue, mann_whitney)
+    solves = significance.proportion(left, right)
+    scores = significance.two_sample(one["speedup"].tolist(), other["speedup"].tolist())
+    return SetupComparison(kernel, left, right, solves.label, solves.pvalue, scores.label, scores.pvalue)
 
 
 def compare_setups(runs: pd.DataFrame, left: str, right: str) -> list[SetupComparison]:
@@ -223,10 +226,10 @@ def compare_setups(runs: pd.DataFrame, left: str, right: str) -> list[SetupCompa
     raw = [compare_cells(kernel, cells[(left, kernel)], cells[(right, kernel)]) for kernel in kernels]
     name = significance.configured().correction.name
     proportion = significance.correct([row.proportion_p for row in raw], test=name)
-    mann_whitney = significance.correct([row.mann_whitney_p for row in raw], test=name)
+    scores = significance.correct([row.two_sample_p for row in raw], test=name)
     return [
         dataclasses.replace(
-            row, correction=name, proportion_p_adjusted=proportion[index], mann_whitney_p_adjusted=mann_whitney[index]
+            row, correction=name, proportion_p_adjusted=proportion[index], two_sample_p_adjusted=scores[index]
         )
         for index, row in enumerate(raw)
     ]

@@ -8,7 +8,7 @@ an empty set or a zero ratio give two plots of the same data that do not match.
 WHAT LIVES HERE. Robust outlier rejection, the median and its bootstrap interval, the geometric
 mean and its bootstrap interval, the arithmetic mean and its bootstrap interval, the signed-change axis
 transform, the one-value-per-kernel reduction, and the building blocks of the paired tests (sign flips, Walsh
-averages, the Hodges-Lehmann estimate, the signed-rank and rank-sum calls). Which test a comparison runs is
+averages, the Hodges-Lehmann estimate, the signed-rank call). Which test a comparison runs is
 the test registry's choice (:mod:`hpcagent_bench.stats.significance`), which builds on these and is never
 imported from here.
 
@@ -80,7 +80,6 @@ __all__ = [
     "mean_ci",
     "mean_interval",
     "median_ci",
-    "rank_sum_test",
     "signed_change",
     "signed_rank_test",
     "signs",
@@ -280,25 +279,6 @@ def bootstrap_ci(
         if math.isfinite(low) and math.isfinite(high):
             return Interval(name, point, low, high, confidence, f"bootstrap-{attempt}", n)
     return Interval(name, point, point, point, confidence, "bootstrap-degenerate", n)
-
-
-def rank_sum_test(a: Samples, b: Samples, alternative: str = "two-sided") -> tuple[float, float]:
-    """``(U, p)`` of the Mann-Whitney U test for INDEPENDENT ``a`` and ``b``, the one Mann-Whitney here.
-
-    Every value identical on both sides carries no rank information, so that returns ``(nan, 1.0)``
-    whether scipy raises or hands back a NaN p.
-    """
-    from scipy.stats import mannwhitneyu  # pyright: ignore[reportMissingTypeStubs, reportUnknownVariableType]
-
-    try:
-        result = mannwhitneyu(np.asarray(a, dtype=np.float64), np.asarray(b, dtype=np.float64), alternative=alternative)
-    except ValueError:
-        return math.nan, 1.0
-    # scipy's result classes are typed `_` / partially unknown in its stubs
-    pvalue = float(result.pvalue)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownArgumentType]
-    if not math.isfinite(pvalue):
-        return math.nan, 1.0
-    return float(result.statistic), pvalue  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownArgumentType]
 
 
 #: Sample sizes up to this get the exact signed-rank null; above it the tie- and continuity-corrected normal

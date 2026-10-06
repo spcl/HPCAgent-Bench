@@ -59,7 +59,7 @@ def test_every_stamp_a_reduction_writes_is_registered() -> None:
 
 
 def test_one_current_protocol_per_single_role(monkeypatch: pytest.MonkeyPatch) -> None:
-    second = protocols.Protocol("mw9x9", "final", "a second final grade")
+    second = protocols.Protocol("mw9x9", "final", "a second final grade", "mannwhitney_delta")
     monkeypatch.setitem(PROTOCOLS.entries, "mw9x9", second)
     monkeypatch.setitem(PROTOCOLS.orders, "mw9x9", 99)
     with pytest.raises(RegistryError, match="exactly one must have role 'final'"):
@@ -67,10 +67,10 @@ def test_one_current_protocol_per_single_role(monkeypatch: pytest.MonkeyPatch) -
 
 
 def test_a_protocol_must_provide_a_known_role_and_a_meaning() -> None:
-    assert build("probe", {"role": "live", "meaning": "x"}).role == "live"
+    assert build("probe", {"role": "live", "meaning": "x", "timing_test": None}).role == "live"
     for attrs, message in (
-        ({"role": "credited", "meaning": "x"}, "role must be one of"),
-        ({"role": "live", "meaning": " "}, "meaning is empty"),
+        ({"role": "credited", "meaning": "x", "timing_test": None}, "role must be one of"),
+        ({"role": "live", "meaning": " ", "timing_test": None}, "meaning is empty"),
     ):
         with pytest.raises(RegistryError, match=message):
             build("probe", attrs)

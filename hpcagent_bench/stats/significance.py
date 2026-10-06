@@ -2,18 +2,20 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The test registry: every statistical test is a named entry, and the configuration picks one by name.
 
-Four registries, one decorator each (``docs/measurement_statistics.md#the-test-registry``):
+Five registries, one decorator each (``docs/measurement_statistics.md#the-test-registry``):
 
 * :func:`paired_test` -- per-kernel log ratios of two setups (speed or tokens); ``statistics.paired_test``.
 * :func:`proportion_test` -- solved and total runs of two setups; ``statistics.proportion_test``.
-* :func:`correction` -- the p values of one family; ``statistics.correction`` (every reported family: the
-  paired comparisons and the per-kernel reliability comparisons).
-* :func:`timing_test` -- two samples of run times on one input; ``measurement.timing_test``. It decides each
-  credit inside the judge, so a test other than :data:`DEFAULT_TIMING` stamps every grade differently
-  (:attr:`hpcagent_bench.harness.timing.ReducedTiming.reduction`).
+* :func:`paired_proportion_test` -- the kernels exactly one of two setups solved; ``statistics.paired_proportion_test``.
+* :func:`correction` -- the p values of one family; ``statistics.correction`` (every reported family).
+* :func:`timing_test` -- two independent samples, one input. A grading protocol names the test that decides
+  each credit (:attr:`hpcagent_bench.protocols.Protocol.timing_test`): another test is another protocol, never a
+  config switch. The same tests serve one reporting comparison, two setups' scored runs on one kernel
+  (``statistics.two_sample_test``), which never touches a grade.
 
 A test registers itself and every caller reaches it through :func:`paired`, :func:`proportion`,
-:func:`correct` or :func:`timing`, never by importing the function::
+:func:`paired_proportion`, :func:`correct`, :func:`verdicts`, :func:`two_sample` or :func:`timing`, never by
+importing the function::
 
     @significance.paired_test("trimmed-mean", version="1")
     def trimmed(log_ratios: FloatArray, alpha: float) -> significance.Result: ...
@@ -43,13 +45,18 @@ __all__ = [
     "CORRECTIONS",
     "DEFAULT_CORRECTION",
     "DEFAULT_PAIRED",
+    "DEFAULT_PAIRED_PROPORTION",
     "DEFAULT_PROPORTION",
-    "DEFAULT_TIMING",
+    "DEFAULT_TWO_SAMPLE",
+    "PAIRED_PROPORTION_TESTS",
     "PAIRED_TESTS",
     "PROPORTION_TESTS",
     "TIMING_TESTS",
     "Configured",
     "Correction",
+    "Discordant",
+    "Finding",
+    "PairedProportionTest",
     "PairedTest",
     "ProportionTest",
     "Registered",
@@ -57,16 +64,21 @@ __all__ = [
     "Side",
     "SolveCount",
     "TimingTest",
+    "Verdict",
     "configured",
     "correct",
     "correction",
     "named",
     "paired",
+    "paired_proportion",
+    "paired_proportion_test",
     "paired_test",
     "proportion",
     "proportion_test",
     "timing",
     "timing_test",
+    "two_sample",
+    "verdicts",
 ]
 
 
@@ -100,20 +112,31 @@ class SolveCount(NamedTuple):
     runs: int
 
 
-class Side(enum.Enum):
-    """The direction a one-sided timing test looks in; the value is scipy's ``alternative``."""
+class Discordant(NamedTuple):
+    """The kernels of a paired comparison that exactly one setup solved; the ones both or neither solved carry
+    no information about a difference."""
 
-    LESS = "less"  # candidate faster
-    GREATER = "greater"  # candidate slower
+    only_left: int
+    only_right: int
+
+
+class Side(enum.Enum):
+    """The alternative a two-sample test looks at; the value is scipy's ``alternative``."""
+
+    LESS = "less"  # the first sample (the candidate) faster
+    GREATER = "greater"  # the first sample slower
+    TWO_SIDED = "two-sided"
 
 
 #: ``(log_ratios, alpha) -> Result``: finite log ratios, one per kernel.
 PairedTest = Callable[["FloatArray", float], Result]
 #: ``(left, right) -> Result`` on two setups' solve counts.
 ProportionTest = Callable[[SolveCount, SolveCount], Result]
+#: ``(discordant) -> Result`` on the kernels exactly one setup solved.
+PairedProportionTest = Callable[[Discordant], Result]
 #: Finite p values of one family -> their adjusted values, in input order.
 Correction = Callable[[Sequence[float]], list[float]]
-#: ``(candidate, baseline, side) -> Result`` on two independent samples of run times.
+#: ``(first, second, side) -> Result`` on two independent samples.
 TimingTest = Callable[[Sequence[float], Sequence[float], Side], Result]
 
 
@@ -133,6 +156,7 @@ def refuse_class(key: str, attrs: dict[str, Any]) -> NoReturn:
 
 PAIRED_TESTS: Kind[Registered[PairedTest]] = Kind("paired test", {}, refuse_class)
 PROPORTION_TESTS: Kind[Registered[ProportionTest]] = Kind("proportion test", {}, refuse_class)
+PAIRED_PROPORTION_TESTS: Kind[Registered[PairedProportionTest]] = Kind("paired proportion test", {}, refuse_class)
 CORRECTIONS: Kind[Registered[Correction]] = Kind("correction", {}, refuse_class)
 TIMING_TESTS: Kind[Registered[TimingTest]] = Kind("timing test", {}, refuse_class)
 
@@ -152,6 +176,7 @@ def registrar[F](kind: Kind[Registered[F]]) -> Callable[..., Callable[[F], F]]:
 
 paired_test = registrar(PAIRED_TESTS)
 proportion_test = registrar(PROPORTION_TESTS)
+paired_proportion_test = registrar(PAIRED_PROPORTION_TESTS)
 correction = registrar(CORRECTIONS)
 timing_test = registrar(TIMING_TESTS)
 
@@ -166,18 +191,21 @@ def named[F](kind: Kind[Registered[F]], name: str) -> Registered[F]:
 
 DEFAULT_PAIRED = "sign-flip"
 DEFAULT_PROPORTION = "fisher"
+DEFAULT_PAIRED_PROPORTION = "mcnemar"
 DEFAULT_CORRECTION = "benjamini-hochberg"
-DEFAULT_TIMING = "mannwhitney_delta"
+DEFAULT_TWO_SAMPLE = "mannwhitney_delta"
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class Configured:
-    """The tests the configuration names, each resolved."""
+    """The reporting tests the configuration names, each resolved. The timing test is not here: the grading
+    protocol names it."""
 
     paired: Registered[PairedTest]
     proportion: Registered[ProportionTest]
+    paired_proportion: Registered[PairedProportionTest]
     correction: Registered[Correction]
-    timing: Registered[TimingTest]
+    two_sample: Registered[TimingTest]
 
 
 def configured() -> Configured:
@@ -185,8 +213,9 @@ def configured() -> Configured:
     return Configured(
         named(PAIRED_TESTS, config.get_str("statistics.paired_test", DEFAULT_PAIRED)),
         named(PROPORTION_TESTS, config.get_str("statistics.proportion_test", DEFAULT_PROPORTION)),
+        named(PAIRED_PROPORTION_TESTS, config.get_str("statistics.paired_proportion_test", DEFAULT_PAIRED_PROPORTION)),
         named(CORRECTIONS, config.get_str("statistics.correction", DEFAULT_CORRECTION)),
-        named(TIMING_TESTS, config.get_str("measurement.timing_test", DEFAULT_TIMING)),
+        named(TIMING_TESTS, config.get_str("statistics.two_sample_test", DEFAULT_TWO_SAMPLE)),
     )
 
 
@@ -213,6 +242,13 @@ def proportion(left: SolveCount, right: SolveCount, *, test: str | None = None) 
     return stamped(entry, entry.run(left, right))
 
 
+def paired_proportion(pairs: Discordant, *, test: str | None = None) -> Result:
+    """The change in kernels solved, on the discordant kernels ``pairs``, under ``test`` (default: the
+    configured one)."""
+    entry = named(PAIRED_PROPORTION_TESTS, test) if test is not None else configured().paired_proportion
+    return stamped(entry, entry.run(pairs))
+
+
 def correct(pvalues: Sequence[float], *, test: str | None = None) -> list[float]:
     """``pvalues`` adjusted for multiplicity by ``test`` (default: ``statistics.correction``), in input order.
     A non-finite p is a test never performed: it stays NaN and does not count toward the family size."""
@@ -224,10 +260,57 @@ def correct(pvalues: Sequence[float], *, test: str | None = None) -> list[float]
     return out
 
 
-def timing(candidate: Sequence[float], baseline: Sequence[float], side: Side, *, test: str | None = None) -> Result:
-    """The one-sided test of ``candidate`` against ``baseline`` run times under ``test`` (default:
-    ``measurement.timing_test``)."""
-    entry = named(TIMING_TESTS, test) if test is not None else configured().timing
+class Finding(enum.Enum):
+    """What a verdict column says; the value is what a table prints. No test is not "no effect", so this is
+    not a boolean."""
+
+    SIGNIFICANT = "significant"
+    NOT_SIGNIFICANT = "not-significant"
+    #: Too few pairs for any test: no p, and no member of the family.
+    UNDERPOWERED = "underpowered"
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class Verdict:
+    """One test's outcome after its family's correction. Only ``finding`` is a claim; ``pvalue`` is raw and
+    ``adjusted`` corrected, both NaN when no test was performed; ``correction`` names the correction."""
+
+    pvalue: float
+    adjusted: float
+    finding: Finding
+    correction: str
+
+
+def verdicts(pvalues: Sequence[float], *, alpha: float = 0.05, test: str | None = None) -> list[Verdict]:
+    """The verdicts of one declared family, in input order, at ``alpha`` after the correction ``test`` (default:
+    ``statistics.correction``). A non-finite p does not enter the family and reads :attr:`Finding.UNDERPOWERED`."""
+    entry = named(CORRECTIONS, test) if test is not None else configured().correction
+    return [
+        Verdict(
+            value,
+            adjusted,
+            Finding.UNDERPOWERED
+            if not math.isfinite(adjusted)
+            else Finding.SIGNIFICANT
+            if adjusted < alpha
+            else Finding.NOT_SIGNIFICANT,
+            entry.name,
+        )
+        for value, adjusted in zip(pvalues, correct(pvalues, test=entry.name), strict=True)
+    ]
+
+
+def two_sample(first: Sequence[float], second: Sequence[float]) -> Result:
+    """The two-sided reporting comparison of two independent samples under ``statistics.two_sample_test``. It
+    shares the timing tests but never a grade: the grading protocols name their own."""
+    entry = configured().two_sample
+    return stamped(entry, entry.run(first, second, Side.TWO_SIDED))
+
+
+def timing(candidate: Sequence[float], baseline: Sequence[float], side: Side, *, test: str) -> Result:
+    """The one-sided ``test`` (a grading protocol's timing test) of ``candidate`` against ``baseline`` run
+    times."""
+    entry = named(TIMING_TESTS, test)
     return stamped(entry, entry.run(candidate, baseline, side))
 
 
@@ -413,6 +496,45 @@ def binomtest(left: SolveCount, right: SolveCount) -> Result:
     )
 
 
+@paired_proportion_test("mcnemar")
+def mcnemar(pairs: Discordant) -> Result:
+    """Two-sided exact McNemar on the discordant kernels: under no change each disagreement is equally likely to go
+    either way, so the p is the binomial(n, 1/2) tail of the smaller count, doubled and capped at 1. Exact
+    integer arithmetic (statistic: ``only_left``, estimate: ``only_left - only_right``)."""
+    n = pairs.only_left + pairs.only_right
+    if n == 0:
+        return Result(0.0, 0.0, 1.0, math.nan, math.nan, 0, "mcnemar-exact")
+    tail = sum(math.comb(n, k) for k in range(min(pairs.only_left, pairs.only_right) + 1))
+    pvalue = min(1.0, 2.0 * tail / (2**n))
+    return Result(
+        float(pairs.only_left - pairs.only_right),
+        float(pairs.only_left),
+        pvalue,
+        math.nan,
+        math.nan,
+        n,
+        "mcnemar-exact",
+    )
+
+
+@paired_proportion_test("binomtest")
+def discordant_binomtest(pairs: Discordant) -> Result:
+    """scipy's two-sided exact binomial test of ``only_left`` out of the discordant kernels against 1/2."""
+    n = pairs.only_left + pairs.only_right
+    if n == 0:
+        return Result(0.0, math.nan, 1.0, math.nan, math.nan, 0, "binomial-exact")
+    result: Any = scipy_stats().binomtest(pairs.only_left, n, 0.5)
+    return Result(
+        float(pairs.only_left - pairs.only_right),
+        float(result.statistic),
+        float(result.pvalue),
+        math.nan,
+        math.nan,
+        n,
+        "binomial-exact",
+    )
+
+
 @correction("benjamini-hochberg")
 def benjamini_hochberg(pvalues: Sequence[float]) -> list[float]:
     """Benjamini-Hochberg false-discovery-rate adjusted p values (scipy's ``false_discovery_control``)."""
@@ -450,12 +572,22 @@ def uncorrected(pvalues: Sequence[float]) -> list[float]:
 
 @timing_test("mannwhitney_delta")
 def mannwhitney(candidate: Sequence[float], baseline: Sequence[float], side: Side) -> Result:
-    """The one-sided Mann-Whitney U test (:func:`~hpcagent_bench.stats.summary.rank_sum_test`): two
-    processes, skewed and multi-modal times, so ranks and no normality. Identical samples read p = 1."""
-    from hpcagent_bench.stats import summary
+    """The Mann-Whitney U test: two processes, skewed and multi-modal times, so ranks and no normality. Every
+    value identical on both sides carries no rank information and reads ``(nan, 1.0)``, whether scipy raises
+    or returns a NaN p."""
+    import numpy as np  # heavy dependency deferred: see the module docstring
 
-    statistic, pvalue = summary.rank_sum_test(candidate, baseline, alternative=side.value)
-    return Result(math.nan, statistic, pvalue, math.nan, math.nan, len(candidate) + len(baseline), "mann-whitney")
+    n = len(candidate) + len(baseline)
+    try:
+        result: Any = scipy_stats().mannwhitneyu(
+            np.asarray(candidate, dtype=np.float64), np.asarray(baseline, dtype=np.float64), alternative=side.value
+        )
+    except ValueError:
+        return Result(math.nan, math.nan, 1.0, math.nan, math.nan, n, "mann-whitney")
+    pvalue = float(result.pvalue)
+    if not math.isfinite(pvalue):
+        return Result(math.nan, math.nan, 1.0, math.nan, math.nan, n, "mann-whitney")
+    return Result(math.nan, float(result.statistic), pvalue, math.nan, math.nan, n, "mann-whitney")
 
 
 def scipy_two_sample(
