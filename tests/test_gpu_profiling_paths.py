@@ -261,7 +261,7 @@ class FakeSandbox:
     def __exit__(self, *exc: object) -> bool:
         return False
 
-    def build(self, submission: object, *, judge_compile: object = (), judge_link: object = ()) -> BuildResult:
+    def build(self, submission: object, **_flags: object) -> BuildResult:
         return self.built
 
     def require_root(self) -> pathlib.Path:
@@ -275,7 +275,7 @@ def test_a_traced_submission_answers_with_the_payload_of_the_run_it_asked_for(
     in that request are the run the payload describes."""
     lib = tmp_path / "libgemm.so"
     monkeypatch.setattr(gpu_profiling, "gpu_check", lambda language: ("nsys", "/fake/bin/nsys"))
-    monkeypatch.setattr(gpu_profiling, "Sandbox", FakeSandbox(tmp_path, BuildResult(ok=True, lib=lib, log="")))
+    monkeypatch.setattr(profiling, "Sandbox", FakeSandbox(tmp_path, BuildResult(ok=True, lib=lib, log="")))
     traced: dict[str, object] = {}
 
     def trace(
@@ -312,7 +312,7 @@ def test_a_submission_that_does_not_build_answers_with_the_compiler_log_and_trac
 
     log = "kernel.hip:3: error: expected ';'"
     monkeypatch.setattr(gpu_profiling, "gpu_check", lambda language: ("rocprofv3", "/fake/bin/rocprofv3"))
-    monkeypatch.setattr(gpu_profiling, "Sandbox", FakeSandbox(tmp_path, BuildResult(ok=False, lib=None, log=log)))
+    monkeypatch.setattr(profiling, "Sandbox", FakeSandbox(tmp_path, BuildResult(ok=False, lib=None, log=log)))
     monkeypatch.setattr(gpu_profiling, "profile_gpu_once", trace)
     payload = gpu_profiling.profile_gpu_submission(gpu_submission("hip"), Task("gemm", "restricted", "hip"), preset="S")
     assert payload == {"build_ok": False, "kernel": "gemm", "language": "hip", "detail": log}, payload
@@ -362,7 +362,7 @@ def test_each_amd_profile_request_probes_the_device_once_and_the_next_request_pr
     monkeypatch.setattr(gpu_profiling.subprocess, "run", rocminfo)
     monkeypatch.setattr(gpu_profiling, "run_command", record)
     built = BuildResult(ok=True, lib=tmp_path / "libgemm.so", log="")
-    monkeypatch.setattr(gpu_profiling, "Sandbox", FakeSandbox(tmp_path, built))
+    monkeypatch.setattr(profiling, "Sandbox", FakeSandbox(tmp_path, built))
 
     def probes_in_one_request() -> int:
         probes.clear()
