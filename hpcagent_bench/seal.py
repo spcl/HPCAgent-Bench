@@ -8,9 +8,10 @@ run root (databases, other agents' folders, logs), the judge's ``/proc/<pid>`` (
 root view, its environment), and it writes anywhere the judge writes -- the repo, the shared mount
 the agent reads, a node-local /tmp the next grade reads.
 
-:func:`enter` turns the calling process into a sealed one, the way ``agent/hpcagent_agent/driver/seal_worker.py``
-seals an agent worker (mount(2) through ctypes, then a nested user namespace so the sealed code
-holds no capability over the mounts that hide things):
+:func:`enter` turns the calling process into a sealed one with the mount primitives the agent worker's
+seal uses (:mod:`hpcagent_agent.driver.seal_worker`: mount(2) through ctypes, the flags a user namespace
+keeps locked), then a nested user namespace so the sealed code holds no capability over the mounts that
+hide things:
 
 * new user, mount, pid, network and ipc namespaces;
 * ``hide`` directories covered with an empty tmpfs (private /tmp, /dev/shm and $TMPDIR among them) and
@@ -23,7 +24,7 @@ User namespaces refuse a multi-threaded caller, and a multiprocessing child alre
 BLAS pool when it runs, so :func:`enter` forks first when it has to. The pid namespace needs one
 more fork. Each parent left behind only waits and exits the way its child did.
 
-Standard library only: :func:`main` runs by file path, before anything else is imported.
+Standard library and the stdlib-only seal_worker: :func:`main` runs by file path, before the package loads.
 """
 
 import argparse
@@ -41,25 +42,14 @@ import tempfile
 import warnings
 from collections.abc import Sequence
 
+from hpcagent_agent.driver import seal_worker
+
 __all__ = [
     "CPF_VIEW_ENV",
     "DEVICE_NODE_GLOBS",
-    "LOCKED_SAME_BITS",
-    "MS_BIND",
-    "MS_NOATIME",
-    "MS_NODEV",
-    "MS_NODIRATIME",
-    "MS_NOEXEC",
-    "MS_NOSUID",
-    "MS_PRIVATE",
-    "MS_RDONLY",
-    "MS_REC",
-    "MS_RELATIME",
-    "MS_REMOUNT",
     "NAMESPACES",
     "PR_SET_PDEATHSIG",
     "SECRET_ENV_PREFIXES",
-    "ST_RELATIME",
     "SealError",
     "SealPlan",
     "build_view",
@@ -75,35 +65,16 @@ __all__ = [
     "fused_cpf_views",
     "grading_plan",
     "job_tmpdir",
-    "libc",
-    "locked_flags",
     "main",
     "map_ids",
-    "mount",
     "probe",
     "relay",
     "scrub_environment",
     "submounts",
-    "under",
     "wrap",
     "write_text",
 ]
 
-MS_RDONLY = 0x1
-MS_NOSUID = 0x2
-MS_NODEV = 0x4
-MS_NOEXEC = 0x8
-MS_REMOUNT = 0x20
-MS_NOATIME = 0x400
-MS_NODIRATIME = 0x800
-MS_BIND = 0x1000
-MS_REC = 0x4000
-MS_PRIVATE = 0x40000
-MS_RELATIME = 0x200000
-#: statvfs reports relatime as ST_RELATIME (0x1000); mount(2) takes MS_RELATIME.
-ST_RELATIME = 0x1000
-#: statvfs bits equal to their MS_* twin that a user namespace keeps locked on a remount.
-LOCKED_SAME_BITS = MS_RDONLY | MS_NOSUID | MS_NODEV | MS_NOEXEC | MS_NOATIME | MS_NODIRATIME
 PR_SET_PDEATHSIG = 1
 
 NAMESPACES = os.CLONE_NEWUSER | os.CLONE_NEWNS | os.CLONE_NEWPID | os.CLONE_NEWNET | os.CLONE_NEWIPC
@@ -117,8 +88,9 @@ SECRET_ENV_PREFIXES = ("HPCAGENT_BENCH_SEEDS_",)
 DEVICE_NODE_GLOBS = ("/dev/kfd", "/dev/dri", "/dev/nvidia*")
 
 
-class SealError(RuntimeError):
-    """The kernel refused a step of the seal: the JUDGE cannot isolate, not a submission fault."""
+#: The refusal :func:`enter` raises, shared with the agent worker's seal. The code below reaches it
+#: through the module, so a reloaded seal_worker raises and catches one class.
+SealError = seal_worker.SealError
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -131,30 +103,9 @@ class SealPlan:
     workdir: str = "/"
 
 
-def under(parent: str, child: str) -> bool:
-    """Whether ``child`` is ``parent`` or sits inside it."""
-    parent = parent.rstrip("/")
-    return not parent or child == parent or child.startswith(f"{parent}/")
-
-
-def libc() -> ctypes.CDLL:
-    handle = ctypes.CDLL(None, use_errno=True)
-    handle.mount.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_ulong, ctypes.c_void_p]
-    handle.mount.restype = ctypes.c_int
-    return handle
-
-
-def mount(source: str | None, target: str, fstype: str | None, flags: int) -> None:
-    """mount(2), or :class:`SealError` naming the refused mount."""
-    encoded = [None if value is None else value.encode() for value in (source, target, fstype)]
-    if libc().mount(encoded[0], encoded[1], encoded[2], flags, None) != 0:
-        errno = ctypes.get_errno()
-        raise SealError(f"seal: mount({source!r}, {target!r}, {fstype!r}, {flags:#x}): {os.strerror(errno)}")
-
-
 def die_with_parent() -> None:
     """SIGKILL this process when its parent dies, so a killed relay takes the sealed child along."""
-    libc().prctl(PR_SET_PDEATHSIG, ctypes.c_ulong(signal.SIGKILL), 0, 0, 0)
+    seal_worker.libc().prctl(PR_SET_PDEATHSIG, ctypes.c_ulong(signal.SIGKILL), 0, 0, 0)
 
 
 def write_text(path: str, text: str) -> None:
@@ -224,12 +175,6 @@ def device_nodes() -> tuple[str, ...]:
     return tuple(sorted({path for pattern in DEVICE_NODE_GLOBS for path in glob.glob(pattern)}))
 
 
-def locked_flags(path: str) -> int:
-    """The flags of ``path``'s mount a user-namespace remount must carry (see seal_worker)."""
-    flags = os.statvfs(path).f_flag
-    return (flags & LOCKED_SAME_BITS) | (MS_RELATIME if flags & ST_RELATIME else 0)
-
-
 def submounts(path: str) -> list[str]:
     """Every mountpoint at or under ``path`` in THIS process's own mount table, deepest first.
 
@@ -258,7 +203,7 @@ def build_view(plan: SealPlan) -> None:
 
     A hidden DIRECTORY takes an empty tmpfs; a hidden FILE (a device node) takes a bind of
     /dev/null, which a tmpfs cannot cover."""
-    mount(None, "/", None, MS_REC | MS_PRIVATE)
+    seal_worker.mount(None, "/", None, seal_worker.MS_REC | seal_worker.MS_PRIVATE)
     hide = existing(plan.hide)
     readonly = set(existing(plan.readonly))
     binds = sorted(set(existing(plan.keep)) | readonly, key=len)
@@ -266,15 +211,15 @@ def build_view(plan: SealPlan) -> None:
     handles = {path: os.open(path, os.O_PATH | os.O_DIRECTORY) for path in binds}
     try:
         for path in hide:
-            if not any(under(outer, path) for outer in hide if outer != path):
-                mount("tmpfs", path, "tmpfs", MS_NOSUID | MS_NODEV)
+            if not any(seal_worker.under(outer, path) for outer in hide if outer != path):
+                seal_worker.mount("tmpfs", path, "tmpfs", seal_worker.MS_NOSUID | seal_worker.MS_NODEV)
         for path in existing_files(plan.hide):
-            mount("/dev/null", path, None, MS_BIND)
+            seal_worker.mount("/dev/null", path, None, seal_worker.MS_BIND)
         for path in binds:
-            if path not in readonly and not any(under(outer, path) for outer in hide):
+            if path not in readonly and not any(seal_worker.under(outer, path) for outer in hide):
                 continue  # still visible and writable
             os.makedirs(path, exist_ok=True)
-            mount(f"/proc/self/fd/{handles[path]}", path, None, MS_BIND | MS_REC)
+            seal_worker.mount(f"/proc/self/fd/{handles[path]}", path, None, seal_worker.MS_BIND | seal_worker.MS_REC)
             if path in readonly:
                 # One remount per mountpoint the recursive bind just brought in, not one call on
                 # ``path`` alone: MS_REMOUNT ignores MS_REC, so a nested mount under a read-only
@@ -282,9 +227,14 @@ def build_view(plan: SealPlan) -> None:
                 # outside the seal (a login node's /opt carries dozens: autofs, cray libs, secrets).
                 for mount_point in submounts(path):
                     try:
-                        remount_flags = locked_flags(mount_point)
-                        mount(None, mount_point, None, MS_REMOUNT | MS_BIND | MS_RDONLY | remount_flags)
-                    except (OSError, SealError):
+                        remount_flags = seal_worker.locked_flags_at(mount_point)
+                        seal_worker.mount(
+                            None,
+                            mount_point,
+                            None,
+                            seal_worker.MS_REMOUNT | seal_worker.MS_BIND | seal_worker.MS_RDONLY | remount_flags,
+                        )
+                    except seal_worker.SealError:
                         if mount_point == path:
                             raise  # the root the caller actually asked to seal: fail closed
                         # An INCIDENTAL nested mount this real uid cannot even stat (some node
@@ -295,8 +245,8 @@ def build_view(plan: SealPlan) -> None:
                         # unrelated node mount under the readonly root would be worse than either.
                         continue
         for path in hide:
-            if any(under(bound, path) and bound != path for bound in binds) and os.path.isdir(path):
-                mount("tmpfs", path, "tmpfs", MS_NOSUID | MS_NODEV)
+            if any(seal_worker.under(bound, path) and bound != path for bound in binds) and os.path.isdir(path):
+                seal_worker.mount("tmpfs", path, "tmpfs", seal_worker.MS_NOSUID | seal_worker.MS_NODEV)
     finally:
         for handle in handles.values():
             os.close(handle)
@@ -313,12 +263,12 @@ def enter(plan: SealPlan) -> None:
         os.unshare(NAMESPACES)
         map_ids(0, uid, 0, gid)
     except OSError as exc:
-        raise SealError(f"seal: cannot enter new namespaces: {exc}") from exc
+        raise seal_worker.SealError(f"seal: cannot enter new namespaces: {exc}") from exc
     build_view(plan)
     signals, signalled = os.pipe()
     fork_and_relay(signals=signals, child_end=signalled)  # the child is pid 1 of the new pid namespace
     os.close(signals)
-    mount("proc", "/proc", "proc", MS_NOSUID | MS_NODEV | MS_NOEXEC)
+    seal_worker.mount("proc", "/proc", "proc", seal_worker.MS_NOSUID | seal_worker.MS_NODEV | seal_worker.MS_NOEXEC)
     # Init ignores a signal it has no handler for, so the sealed code runs as pid 2, not pid 1.
     fork_and_relay(signalled=signalled)
     os.close(signalled)
@@ -326,7 +276,7 @@ def enter(plan: SealPlan) -> None:
         os.unshare(os.CLONE_NEWUSER)
         map_ids(uid, 0, gid, 0)
     except OSError as exc:
-        raise SealError(f"seal: cannot drop to a nested user namespace: {exc}") from exc
+        raise seal_worker.SealError(f"seal: cannot drop to a nested user namespace: {exc}") from exc
     os.chdir(plan.workdir if os.path.isdir(plan.workdir) else "/")
 
 
@@ -425,7 +375,7 @@ def job_tmpdir(roots: Sequence[str]) -> str:
     process keeps the same ``$TMPDIR`` value but writes into a fresh tmpfs private to its seal; kept
     paths under it (the call's own spill directory) are bound back as usual."""
     tmp = os.path.abspath(tempfile.gettempdir())
-    if under("/tmp", tmp) or any(under(tmp, root) for root in roots):
+    if seal_worker.under("/tmp", tmp) or any(seal_worker.under(tmp, root) for root in roots):
         return ""
     return tmp
 
@@ -531,7 +481,7 @@ def main(argv: Sequence[str]) -> int:
     plan = SealPlan(tuple(args.hide), tuple(args.keep), tuple(args.readonly), str(args.workdir))
     try:
         enter(plan)
-    except SealError as exc:
+    except seal_worker.SealError as exc:
         raise SystemExit(str(exc)) from exc
     scrub_environment()
     os.execvp(command[0], command)

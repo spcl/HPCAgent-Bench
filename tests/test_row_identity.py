@@ -16,6 +16,7 @@ import sqlite3
 import tempfile
 from collections.abc import Iterator
 
+import pandas as pd
 import pytest
 
 from hpcagent_bench import config, studies
@@ -245,8 +246,8 @@ def test_every_graded_row_reads_its_language_from_its_run(
 ) -> None:
     """The DDL saying ``episodes`` has the column proves nothing: what an analysis needs is that every
     WRITER reaches it from a measurement row. ``record`` (submissions and attempts) and
-    ``record_call`` (calls) are the three, and all three must land on the ONE value -- the copies on
-    the measurement tables were removed exactly because they could disagree for one run.
+    ``record_call`` (calls) are the three, and all three must land on the ONE value: a copy on a
+    measurement table could disagree for one run.
 
     The expected value is pinned through ``record.language`` rather than read back off the writer,
     and the task deliberately asks for a DIFFERENT language: a row that adopted the request's claim
@@ -384,14 +385,7 @@ def _harness_db(db: str, monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
-def test_the_observations_reader_selects_on_harness(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    db = tmp_path / "r.db"
-    _harness_db(str(db), monkeypatch)
-    rows = list(studies.read_database(studies.Database(db, "root", "job"), {"harness": frozenset({"miniswe"})}))
-    assert [(r["episode_id"], r["harness"]) for r in rows] == [("new.n0.p0.w0", "miniswe")]
-
-
-def test_the_observations_reader_never_returns_an_adhoc_grade(
+def test_the_observations_read_never_returns_an_adhoc_grade(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """In one job, a grade sent with no episode id lands under the recorder's ``adhoc`` default, and its
@@ -403,8 +397,10 @@ def test_the_observations_reader_never_returns_an_adhoc_grade(
     recording.record_call(_score(), task, status="ok", route="score", episode_id="gpu.n0.p4.w4", path=str(db))
     recording.record_call(_score(), task, status="ok", route="score", path=str(db))
     assert ("adhoc", "llr40-qwen38-hip") in _runs(str(db), ("label", "setup"))
-    rows = list(studies.read_database(studies.Database(db, "root", "job"), {}))
-    assert [r["episode_id"] for r in rows] == ["gpu.n0.p4.w4"]
+    extracted = extract.read_db(extract.Database(db, "root", db.parent, "job"), "", frozenset(), 0).observations
+    with pytest.warns(UserWarning, match="adhoc"):
+        kept = studies.drop_adhoc_rows(pd.DataFrame(extracted))
+    assert list(kept["episode_id"]) == ["gpu.n0.p4.w4"]
 
 
 def _extracted(db: pathlib.Path) -> list[tuple[object, object]]:
@@ -448,8 +444,7 @@ if __name__ == "__main__":
         test_the_harness_comes_from_the_launcher_env,
         test_the_submitting_commit_comes_from_the_launcher_env,
         test_the_job_commit_wins_over_the_planned_one,
-        test_the_observations_reader_selects_on_harness,
-        test_the_observations_reader_never_returns_an_adhoc_grade,
+        test_the_observations_read_never_returns_an_adhoc_grade,
         test_the_artifact_extraction_carries_the_harness,
     ):
         with pytest.MonkeyPatch.context() as patch:

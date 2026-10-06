@@ -24,6 +24,7 @@ import subprocess
 import pytest
 
 from hpcagent_bench import framework_cache as fc
+from hpcagent_bench.cache_files import sha256_hex
 from tests.optional_imports import import_or_skip
 
 # freshness key
@@ -46,14 +47,14 @@ def test_source_fingerprint_folds_in_the_translator_tree(tmp_path) -> None:
     numpy_py = tmp_path / "x_numpy.py"
     numpy_py.write_text("def kernel(A):\n    return A\n")
     key = fc.source_fingerprint(numpy_py, b"bench-info-1")
-    reference_only = fc.fingerprint_bytes(numpy_py.read_bytes() + b"\x00" + b"bench-info-1")
+    reference_only = sha256_hex(numpy_py.read_bytes() + b"\x00" + b"bench-info-1")
     assert key != reference_only, "the translator sources are not part of the freshness key"
     assert fc.translator_fingerprint() == fc.translator_fingerprint()  # memoized, one walk per process
 
 
 def test_dace_tree_fingerprint_is_memoized_and_well_defined() -> None:
     """A DaCe upgrade (or a switch between trees) must move the SDFG cache key even when the kernel's
-    own files are untouched -- otherwise a stale SDFG parsed by the OLD tree is served forever."""
+    own files are untouched -- otherwise an SDFG another tree parsed is served."""
     import_or_skip("dace")
     assert fc.dace_tree_fingerprint() == fc.dace_tree_fingerprint()  # memoized, one git call per process
 
@@ -75,7 +76,7 @@ def test_generated_source_cache_hit_restore_and_invalidation(tmp_path) -> None:
     cache = fc.kernel_cache_dir(kdir)
     canonical = kdir / "k_dace.py"
     canonical.write_text("# gen v1\nX = 1\n")
-    fp1 = fc.fingerprint_bytes(b"source-v1")
+    fp1 = sha256_hex(b"source-v1")
 
     assert fc.load_generated(cache, canonical, fp1) is False, "empty cache must MISS"
     fc.save_generated(cache, canonical, fp1)
@@ -86,7 +87,7 @@ def test_generated_source_cache_hit_restore_and_invalidation(tmp_path) -> None:
     assert canonical.read_text() == "# gen v1\nX = 1\n"
 
     # The guard: a changed source fingerprint MISSES -- a stale entry is never served.
-    assert fc.load_generated(cache, canonical, fc.fingerprint_bytes(b"source-v2")) is False
+    assert fc.load_generated(cache, canonical, sha256_hex(b"source-v2")) is False
 
 
 def _widget_kernel(benchmarks_root):
@@ -316,7 +317,7 @@ def test_sdfg_cache_roundtrip_invalidation_and_corruption(tmp_path, monkeypatch)
 
     cache = tmp_path / "sdfg"
     cache.mkdir()
-    fp = fc.fingerprint_bytes(b"gemm-fp64-v1")
+    fp = sha256_hex(b"gemm-fp64-v1")
 
     assert fc.load_sdfg(cache, "gemm", "cpu", fp) is None, "empty cache must MISS"
     fc.save_sdfg(cache, "gemm", "cpu", fp, fresh)
@@ -329,7 +330,7 @@ def test_sdfg_cache_roundtrip_invalidation_and_corruption(tmp_path, monkeypatch)
     assert loaded.hash_sdfg() == fresh.hash_sdfg()
 
     # A changed fingerprint MISSES even though the file is present (source/precision moved on).
-    assert fc.load_sdfg(cache, "gemm", "cpu", fc.fingerprint_bytes(b"gemm-fp64-v2")) is None
+    assert fc.load_sdfg(cache, "gemm", "cpu", sha256_hex(b"gemm-fp64-v2")) is None
 
     # A corrupt/incompatible .sdfgz degrades to a rebuild (None), never a crash.
     saved.write_bytes(b"this is not a valid sdfgz")

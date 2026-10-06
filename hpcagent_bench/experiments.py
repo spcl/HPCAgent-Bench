@@ -9,7 +9,7 @@ reader.
 A figure asks for a STUDY and gets back where to look and what to keep:
 
     selection = experiments.resolve("gitscicomp10")
-    frame = studies.observations(selection.run_globs(), study=selection.study)
+    selection.run_globs()  # the run roots ``hpcagent-bench extract --runs`` reads
 """
 
 import dataclasses

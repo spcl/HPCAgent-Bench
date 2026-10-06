@@ -28,7 +28,6 @@ under the :data:`ADOPTED` renderer, so a setup rerun can read exactly what finis
 import argparse
 import contextlib
 import fcntl
-import hashlib
 import json
 import os
 import pathlib
@@ -36,6 +35,8 @@ import shutil
 import sys
 import tempfile
 from collections.abc import Callable, Generator, Mapping, Sequence
+
+from hpcagent_bench.cache_files import file_sha256, json_digest, sha256_hex, write_atomic
 
 __all__ = [
     "ADOPTED",
@@ -59,7 +60,6 @@ __all__ = [
     "canonical_entry",
     "canonical_key",
     "canonical_path",
-    "digest",
     "entry_path",
     "install",
     "is_hit",
@@ -130,19 +130,14 @@ class CacheMiss(LookupError):
     """A form a consumer asked for is not in the cache; the message names the entry and the key."""
 
 
-def digest(value: object) -> str:
-    """SHA-256 of ``value`` as canonical JSON, so dict insertion order never moves a key."""
-    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-
-
 def cache_key(input_hash: str, dace_commit: str, options: Mapping[str, object]) -> str:
     """The key of one artefact: what it renders (a canonical entry's key, or an adopted file's hash), the dace that renders it, and how."""
-    return digest({"layout": LAYOUT, "sdfg": input_hash, "dace": dace_commit, "options": dict(options)})
+    return json_digest({"layout": LAYOUT, "sdfg": input_hash, "dace": dace_commit, "options": dict(options)})
 
 
 def canonical_key(program_hash: str, dace_commit: str, options: Mapping[str, object]) -> str:
     """The key of one canonical SDFG: the generated program, the dace commit that canonicalizes it, and how."""
-    return digest({"layout": LAYOUT, "program": program_hash, "dace": dace_commit, "options": dict(options)})
+    return json_digest({"layout": LAYOUT, "program": program_hash, "dace": dace_commit, "options": dict(options)})
 
 
 def canonical_path(cache_root: pathlib.Path, key: str) -> pathlib.Path:
@@ -166,7 +161,7 @@ def canonical_entry(cache_root: pathlib.Path, key: str) -> tuple[dict[str, objec
         return manifest, None
     stored = where / CANONICAL_SDFG_NAME
     try:
-        actual = hashlib.sha256(stored.read_bytes()).hexdigest()
+        actual = file_sha256(stored)
     except OSError:
         return None
     return (manifest, stored) if actual == manifest.get("sha256") else None
@@ -212,7 +207,7 @@ def publish_canonical(
     if sdfg_file is not None:
         stored = staging / CANONICAL_SDFG_NAME
         shutil.move(sdfg_file, stored)
-        full["sha256"] = hashlib.sha256(stored.read_bytes()).hexdigest()
+        full["sha256"] = file_sha256(stored)
     (staging / MANIFEST_NAME).write_text(json.dumps(full, indent=2, sort_keys=True) + "\n")
     install(staging, final, lambda: canonical_entry(cache_root, key) is not None)
 
@@ -236,7 +231,7 @@ def verified_manifest(cache_root: pathlib.Path, key: str) -> dict[str, object]:
     for role, artefact in artefacts.items():
         path = where / str(artefact["name"])
         try:
-            actual = hashlib.sha256(path.read_bytes()).hexdigest()
+            actual = file_sha256(path)
         except OSError as exc:
             raise CacheMiss(f"cache entry {key} lost its {role} {path.name}") from exc
         if actual != artefact["sha256"]:
@@ -275,7 +270,7 @@ def publish(
     for role, (name, text) in (("source", source), ("binding", binding)):
         payload = text.encode()
         (staging / name).write_bytes(payload)
-        artefacts[role] = {"name": name, "sha256": hashlib.sha256(payload).hexdigest()}
+        artefacts[role] = {"name": name, "sha256": sha256_hex(payload)}
     full = {**manifest, "key": key, "layout": LAYOUT, "artefacts": artefacts}
     (staging / MANIFEST_NAME).write_text(json.dumps(full, indent=2, sort_keys=True) + "\n")
     install(staging, final, lambda: is_hit(cache_root, key))
@@ -283,13 +278,8 @@ def publish(
 
 
 def write_json(path: pathlib.Path, value: object) -> None:
-    """Replace ``path`` atomically, so a concurrent reader never sees half a file."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    handle, name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    with os.fdopen(handle, "w") as out:
-        out.write(json.dumps(value, indent=2, sort_keys=True) + "\n")
-    os.chmod(name, 0o644)
-    os.replace(name, path)
+    """``value`` as indented JSON, replacing ``path`` atomically (world-readable: other jobs read views)."""
+    write_atomic(path, (json.dumps(value, indent=2, sort_keys=True) + "\n").encode(), mode=0o644)
 
 
 def open_view(view: pathlib.Path, cache_root: pathlib.Path, target: str, dace_commit: str) -> None:
@@ -369,7 +359,7 @@ def recorded(view: pathlib.Path, kernel: str, dialect: str, fptype: str) -> dict
 def render_lock(cache_root: pathlib.Path, view: pathlib.Path, kernel: str, fptype: str) -> Generator[None]:
     """Hold the one render of ``kernel`` into ``view`` at ``fptype``, across threads, processes and
     nodes (flock on a file in the cache root); a second caller blocks until the first is done."""
-    name = digest({"view": str(view.resolve()), "kernel": short_name(kernel), "precision": fptype})
+    name = json_digest({"view": str(view.resolve()), "kernel": short_name(kernel), "precision": fptype})
     lock = cache_root / LOCKS_DIR / f"{name}.lock"
     lock.parent.mkdir(parents=True, exist_ok=True)
     with lock.open("a") as handle:
@@ -553,9 +543,9 @@ def adopt(
                 "precision": fptype,
                 "target": target,
                 "mode": mode,
-                "binding": hashlib.sha256(bound.encode()).hexdigest(),
+                "binding": sha256_hex(bound.encode()),
             }
-            key = cache_key(hashlib.sha256(text.encode()).hexdigest(), ADOPTED, options)
+            key = cache_key(sha256_hex(text.encode()), ADOPTED, options)
             manifest = {"kernel": short_name(kernel), "entry": stem, "adopted_from": str(source.resolve())}
             publish(cache_root, key, manifest, (source.name, text), (binding.name, bound))
             try:

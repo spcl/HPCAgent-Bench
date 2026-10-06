@@ -11,7 +11,7 @@ auto-generated and is refreshed (``"ok"``).
 
 These tests pin that contract -- new write, refresh-of-generated, refuse-to-clobber-
 override, the subtle "a marker MENTIONED in a line-1 docstring is NOT a marker",
-legacy-marker recognition, the C/Fortran comment leads, missing-path classification,
+DaCe-marker recognition, the C/Fortran comment leads, missing-path classification,
 and parent-dir creation. No toolchain is involved, so they always run; all writes are
 confined to ``tmp_path``.
 """
@@ -68,12 +68,11 @@ def test_marker_mention_in_line1_docstring_is_not_generated(tmp_path: pathlib.Pa
     assert out.read_text() == original
 
 
-def test_legacy_marker_is_recognized_as_generated(tmp_path: pathlib.Path) -> None:
-    """A file stamped by an earlier generator (legacy marker on line 1) is recognized
-    as generated, so migration to the canonical name refreshes it rather than mistaking
-    it for a hand override."""
-    out = tmp_path / "legacy.py"
-    out.write_text("# auto-generated from the numpy reference; do not edit\ncode = 1\n")
+def test_the_dace_marker_is_recognized_as_generated(tmp_path: pathlib.Path) -> None:
+    """A file stamped by the DaCe emitter (its docstring marker on line 1) is generated, so it is
+    refreshed rather than mistaken for a hand override."""
+    out = tmp_path / "k_dace.py"
+    out.write_text('"""DaCe program auto-generated from the numpy reference by numpyto_c.dace_emit."""\ncode = 1\n')
     assert is_generated(out) and not is_override(out)
     assert write_generated(out, "code = 2\n") == "ok"
     assert "code = 2" in out.read_text()
