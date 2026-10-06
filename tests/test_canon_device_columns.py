@@ -32,9 +32,7 @@ def _shell_says_device(column: str) -> bool:
     return any(fnmatch.fnmatchcase(column, pattern) for pattern in _shell_device_patterns())
 
 
-@pytest.mark.parametrize(
-    "column", sorted(c for c, lang in FRAMEWORK_LANG.items() if lang in DEVICE_LANGUAGES)
-)
+@pytest.mark.parametrize("column", sorted(c for c, lang in FRAMEWORK_LANG.items() if lang in DEVICE_LANGUAGES))
 def test_every_device_column_the_framework_builds_is_given_gpus(column: str) -> None:
     assert _shell_says_device(column), (
         f"{column} builds {FRAMEWORK_LANG[column]} but submit-canon-llr40.sh would submit it with "
@@ -64,7 +62,7 @@ def _packed_needs_gpu(packed: str) -> bool:
 @pytest.mark.parametrize(
     "packed, wants_gpu",
     [
-        ("numba,ppcg_hip", True),   # the smoke job that exposed this: a device column packed second
+        ("numba,ppcg_hip", True),  # the smoke job that exposed this: a device column packed second
         ("ppcg_hip,numba", True),
         ("numba,cc,fortran", False),
         ("dace_cpu,dace_gpu", True),
@@ -75,5 +73,5 @@ def test_a_packed_job_gets_gpus_if_any_member_is_a_device_column(packed: str, wa
     missed "numba,ppcg_hip" -- it neither contains "gpu" nor starts with "ppcg" -- so the submitter
     has to test each member, and this checks the per-member rule rather than the joined one."""
     text = SUBMITTER.read_text()
-    assert 'for one in ${col//,/ }' in text, "submitter no longer tests each packed column separately"
+    assert "for one in ${col//,/ }" in text, "submitter no longer tests each packed column separately"
     assert _packed_needs_gpu(packed) is wants_gpu
