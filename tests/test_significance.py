@@ -26,9 +26,8 @@ def test_every_registry_resolves_its_documented_default() -> None:
         chosen.paired.name,
         chosen.proportion.name,
         chosen.correction.name,
-        chosen.reliability_correction.name,
         chosen.timing.name,
-    ) == ("sign-flip", "fisher", "benjamini-hochberg", "holm", "mannwhitney_delta")
+    ) == ("sign-flip", "fisher", "benjamini-hochberg", "mannwhitney_delta")
 
 
 @pytest.mark.parametrize(

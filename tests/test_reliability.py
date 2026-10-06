@@ -90,7 +90,8 @@ def test_the_table_has_one_full_precision_row_per_cell() -> None:
 
 
 def test_the_comparison_runs_fisher_on_each_kernels_solve_counts() -> None:
-    """The default proportion test is Fisher's exact and the default correction across kernels Holm; the row
+    """The default proportion test is Fisher's exact and the correction across kernels the one configured family
+    correction, Benjamini-Hochberg; the row
     names both, so a table cannot print a p without the test behind it."""
     left, right = stub.SETUPS[0], stub.SETUPS[2]
     found = {row.kernel: row for row in reliability.compare_setups(settled_runs(), left, right)}
@@ -99,7 +100,7 @@ def test_the_comparison_runs_fisher_on_each_kernels_solve_counts() -> None:
     one, other = stub.PLAN[(left, "heat_3d")].solved, stub.PLAN[(right, "heat_3d")].solved
     want = fisher_exact([[one, stub.RUNS - one], [other, stub.RUNS - other]]).pvalue
     assert (row.left, row.right) == (reliability.SolveCount(one, stub.RUNS), reliability.SolveCount(other, stub.RUNS))
-    assert (row.proportion_test, row.correction) == ("fisher v1", "holm")
+    assert (row.proportion_test, row.correction) == ("fisher v1", "benjamini-hochberg")
     assert row.proportion_p == pytest.approx(want)
     assert row.proportion_p_adjusted >= row.proportion_p
 

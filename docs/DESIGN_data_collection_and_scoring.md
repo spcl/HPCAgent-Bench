@@ -284,7 +284,9 @@ can mark the placeholder.
   corrected verdict is starred. A test without a p is not a family member. A `paired_setups.py` family
   is every pair's `speedup` and `tokens` legs; the solved rate is reported, not tested. One `plot_score_change.py`
   `--treatment` per invocation is one family; one `paired_setups.py` invocation (all `--pair` legs) is
-  one family; tests from different invocations are never corrected together.
+  one family; tests from different invocations are never corrected together. The same one key corrects a
+  per-kernel reliability comparison (`reliability.compare_setups`, repeat5): its family is the kernels compared,
+  one family for the solve-count p values and one for the Mann-Whitney p values.
 
 ## 9. Token accounting
 
