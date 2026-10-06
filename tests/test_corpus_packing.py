@@ -29,7 +29,6 @@ from hpcagent_bench.sizing import (
     KernelCost,
     node_footprint_violations,
     pack_lpt,
-    partition_loads,
     preset_cost,
     PRESETS,
     stride_partition,
@@ -170,12 +169,9 @@ def test_a_corpus_with_no_resolvable_cost_falls_back_to_the_stride() -> None:
 def test_a_zero_byte_footprint_is_an_unknown_not_a_free_kernel(corpus) -> None:
     """A footprint that evaluates to zero is an unknown wearing a number, never a free kernel.
 
-    ``lulesh`` used to be the live example -- ``init.scalars`` carried placeholder zeros for the
-    extents its arrays are shaped by, so it resolved to 0 bytes and the classification could be
-    read straight off the corpus. Those scalars are real now and no shipped kernel resolves to
-    zero any more, so the EXAMPLE went stale while the rule it stood for did not. Zero a spec on
-    purpose to drive the rule, and keep the corpus itself under the invariant the example was
-    standing in for: a kernel packed as free is one the packer has silently decided costs nothing.
+    No shipped kernel resolves to zero, so a spec is zeroed on purpose to drive the rule, and the
+    corpus itself is held to the invariant: a kernel packed as free is one the packer has silently
+    decided costs nothing.
     """
     spec = next(s for s in corpus.values() if s.short_name == "lulesh")
     zeroed = dataclasses.replace(spec, parameters={**spec.parameters, "M": dict.fromkeys(spec.parameters["M"], 0)})
@@ -197,6 +193,11 @@ def test_one_rank_still_runs_the_whole_selection_in_order(corpus) -> None:
     the packing: the same kernels in the same order the selector gave them."""
     names = sorted(corpus)
     assert shard_names(names, (0, 1), "M") == names
+
+
+def partition_loads(partition: Sequence[Sequence[str]], costs: Mapping[str, KernelCost]) -> list[float]:
+    """Each rank's summed predicted time; a kernel with no prediction adds 0."""
+    return [sum(costs[n].predicted_time for n in kernels if n in costs and costs[n].resolved) for kernels in partition]
 
 
 # The packer earns its place, or it does not.                                  #

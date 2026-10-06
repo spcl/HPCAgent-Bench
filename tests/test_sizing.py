@@ -28,7 +28,6 @@ from hpcagent_bench.sizing import (
     footprint_symbols,
     interpolate,
     interpolate_symbol,
-    ladder_violations,
     parameters_span,
     problem_size,
     rewrite_parameters,
@@ -109,38 +108,6 @@ def test_interpolate_symbol_never_leaves_the_bracket() -> None:
     for small, large in ((3, 4), (7, 8), (1, 2), (1000, 1001)):
         for fraction in (1.0 / 3.0, 2.0 / 3.0):
             assert small <= interpolate_symbol(small, large, fraction) <= large
-
-
-def test_a_monotone_ladder_reports_no_violations() -> None:
-    assert ladder_violations(build_ladder({"N": 10, "T": 4}, {"N": 100, "T": 4}, {"N": 100000, "T": 4})) == []
-
-
-def test_a_ladder_that_shrinks_mid_way_is_reported() -> None:
-    """A hand-edited middle rung that goes backwards makes M slower than L and inverts the
-    fuzzer's ``[L, XL]`` interval, so it must not pass silently."""
-    broken = {"S": {"N": 10}, "M": {"N": 900}, "L": {"N": 100}, "XL": {"N": 1000}}
-    assert ladder_violations(broken) == ["N: M=900 > L=100", "M->L: no symbol strictly increases, not a ladder"]
-
-
-def test_a_flat_ladder_is_rejected() -> None:
-    """Three presets at one size are one benchmark measured three times, not a ladder."""
-    flat = {"S": {"N": 1942}, "M": {"N": 1942}, "L": {"N": 1942}, "XL": {"N": 1942}}
-    assert ladder_violations(flat) == [
-        "M->L: no symbol strictly increases, not a ladder",
-        "L->XL: no symbol strictly increases, not a ladder",
-    ]
-
-
-def test_an_m_that_lands_on_the_kept_s_is_not_a_violation() -> None:
-    """seissol_batched_gemm's manifest S already sits at the batch the proposal names as M. S is
-    the smoke rung the test suite runs at, not a timed one, so that pair is not a broken ladder."""
-    assert ladder_violations({"S": {"N": 1024}, "M": {"N": 1024}, "L": {"N": 16384}, "XL": {"N": 524288}}) == []
-
-
-def test_a_ladder_growing_in_one_symbol_while_another_stays_fixed_is_accepted() -> None:
-    """TSTEPS is a fixed knob at every rung; N alone growing is enough to make a rung a rung."""
-    ladder = build_ladder({"N": 10, "TSTEPS": 20}, {"N": 100, "TSTEPS": 20}, {"N": 100000, "TSTEPS": 20})
-    assert ladder_violations(ladder) == []
 
 
 def test_rewriting_keeps_every_comment_and_touches_only_the_scalars() -> None:
@@ -305,10 +272,8 @@ def test_working_bytes_is_unknown_not_zero_for_a_hand_written_initializer() -> N
     """A spec that declares no shapes must report None, never 0: reporting an empty working set
     would let any size slip past the ceiling check.
 
-    The corpus no longer supplies an example -- every hand-written initializer has since had its
-    shapes MEASURED and declared alongside ``init.func_name`` (``scripts/declare_init_shapes.py``),
-    which is what made the ceiling violations below visible in the first place. The rule still has
-    to hold for the next manifest someone writes, so it is asserted against a spec built here."""
+    Every shipped initializer declares its shapes, so the rule is asserted against a spec built
+    here."""
     spec = dataclasses.replace(
         spec_for("argmax_value"), init=dataclasses.replace(spec_for("argmax_value").init, shapes={})
     )
@@ -330,7 +295,6 @@ def test_the_timed_rung_is_lifted_when_s_already_exceeds_it() -> None:
     assert ladder["S"]["batch_size"] == 128
     assert ladder["M"]["batch_size"] == 128  # lifted from the proposed 32
     assert ladder["M"]["N"] == 4096  # untouched where the proposal was already larger
-    assert ladder_violations(ladder) == []
 
 
 def test_a_symbol_may_shrink_when_the_problem_still_grows() -> None:

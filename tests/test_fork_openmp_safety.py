@@ -32,7 +32,7 @@ from hpcagent_bench import languages
 from hpcagent_bench.frameworks.forked import forked_failure_reason, run_forked
 from hpcagent_bench.isolation import (
     KMP_PAUSE_SYMBOL,
-    OMP_PAUSE_MODES,
+    OMP_PAUSE_HARD,
     OMP_PAUSE_SOFT,
     OMP_RUNTIME_SONAMES,
     pause_openmp_pools,
@@ -73,8 +73,8 @@ def thread_count() -> int:
 
 
 # The runtime lookup lives in hpcagent_bench.languages so this test and the CI provisioning gate
-# ask the SAME question -- a gate that probes differently from the code it guards is how `flang`
-# came up MISS while every test used it fine.
+# ask the SAME question: a gate that probes differently from the code it guards reports a tool
+# missing that every test uses.
 runtime_dir = languages.resolve_library_dir
 lib_linkable = languages.library_linkable
 
@@ -163,24 +163,24 @@ def test_forked_child_runs_openmp_after_the_parent_already_did(tmp_path: pathlib
 
 @pytest.mark.integration
 @pytest.mark.parametrize("runtime", ["gomp", "omp"])
-@pytest.mark.parametrize("mode", sorted(OMP_PAUSE_MODES))
+@pytest.mark.parametrize("mode", [OMP_PAUSE_HARD, OMP_PAUSE_SOFT], ids=["hard", "soft"])
 @isolated
-def test_the_parent_can_still_use_openmp_after_pausing(tmp_path: pathlib.Path, runtime: str, mode: str) -> None:
+def test_the_parent_can_still_use_openmp_after_pausing(tmp_path: pathlib.Path, runtime: str, mode: int) -> None:
     """Pausing must not cost the parent anything, under EITHER tear-down mode: a paused runtime
     re-initialises on its next parallel region. Otherwise run_forked would fix the fork by
     breaking every caller that later runs a kernel itself -- the pool is a cache, and tearing it
     down is not the same as disabling OpenMP."""
     so = build(tmp_path, runtime)
     call_kernel(so)
-    pause_openmp_pools(OMP_PAUSE_MODES[mode])
+    pause_openmp_pools(mode)
     np.testing.assert_allclose(call_kernel(so), np.ones(N))  # pool rebuilt, still correct
 
 
 @pytest.mark.integration
 @pytest.mark.parametrize("runtime", ["gomp", "omp"])
-@pytest.mark.parametrize("mode", sorted(OMP_PAUSE_MODES))
+@pytest.mark.parametrize("mode", [OMP_PAUSE_HARD, OMP_PAUSE_SOFT], ids=["hard", "soft"])
 @isolated
-def test_both_teardown_modes_make_the_fork_safe(tmp_path: pathlib.Path, runtime: str, mode: str) -> None:
+def test_both_teardown_modes_make_the_fork_safe(tmp_path: pathlib.Path, runtime: str, mode: int) -> None:
     """BOTH omp_pause_resource_t options must buy fork safety -- but NOT always by tearing the
     pool down: libgomp drops it under either mode, whereas libomp's SOFT pause leaves the whole
     pool up (see TEARS_DOWN_POOL) and the child runs anyway on libomp's pthread_atfork handler.
@@ -194,7 +194,7 @@ def test_both_teardown_modes_make_the_fork_safe(tmp_path: pathlib.Path, runtime:
     """
     so = build(tmp_path, runtime)
     call_kernel(so)  # poison the parent
-    pause_openmp_pools(OMP_PAUSE_MODES[mode])
+    pause_openmp_pools(mode)
 
     # fork by hand: run_forked pauses internally, which would mask whether THIS mode did the work.
     r, w = os.pipe()

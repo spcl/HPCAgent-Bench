@@ -37,6 +37,8 @@ SECRET = "sk-test-1nf3r3nc3-s3rv1c3-l34k-c4n4ry"
 
 #: The request header each service auth scheme authenticates with (what a Claude client sends).
 AUTH_HEADERS = {"bearer": "Authorization", "x-api-key": "x-api-key"}
+#: The Messages API version a client sends; the fake service refuses a request without one.
+ANTHROPIC_VERSION = "2023-06-01"
 
 
 def messages_url(base_url: str) -> str:
@@ -390,7 +392,7 @@ def test_an_anthropic_service_setup_sends_the_key_header_the_launcher_chose(
     body = http_chat_json(
         f"{messages_url(exported['VLLM_BASE_URL'])}",
         {"model": exported["VLLM_SERVED_MODEL"], "max_tokens": 16, "messages": [{"role": "user", "content": "hi"}]},
-        {AUTH_HEADERS[resolved.auth]: SECRET, "anthropic-version": service.ANTHROPIC_VERSION},
+        {AUTH_HEADERS[resolved.auth]: SECRET, "anthropic-version": ANTHROPIC_VERSION},
         10.0,
         "fake service unreachable",
     )
@@ -417,7 +419,7 @@ def test_the_muse_spark_setup_reaches_metas_messages_surface_with_a_bearer_key(
     http_chat_json(
         messages_url(exported["VLLM_BASE_URL"]),
         {"model": exported["VLLM_SERVED_MODEL"], "max_tokens": 16, "messages": [{"role": "user", "content": "hi"}]},
-        {"Authorization": f"Bearer {SECRET}", "x-api-key": SECRET, "anthropic-version": service.ANTHROPIC_VERSION},
+        {"Authorization": f"Bearer {SECRET}", "x-api-key": SECRET, "anthropic-version": ANTHROPIC_VERSION},
         10.0,
         "fake service unreachable",
     )
