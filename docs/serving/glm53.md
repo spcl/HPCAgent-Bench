@@ -86,6 +86,30 @@ extend batch below 4096 tokens (the scheduler debits `rem_chunk_tokens` per requ
 transient fp32 split buffer aiter allocates per layer (8 GiB at 4096 tokens). Both are needed for the
 aiter pair; no path falls back (`summarize.py` counts aiter fallback lines per leg).
 
+**Measured 2026-10-06** (job 669901: one 4-node allocation, legs back to back, 12 agents,
+`agentic-c12.json`; image built at 4f1468da8; `HPCAGENT_BENCH_AITER_TUNED_GEMM=0`, see below):
+
+| Leg | out tok/s | tok/s per agent | TTFT p50/p90 s | ITL p50/p90 ms | hit | gates |
+|---|---|---|---|---|---|---|
+| tilelang, chunk 4096 (shipped line) | 37.5 | 3.94 | 4.3 / 48.7 | 227 / 478 | 0.886 | pass |
+| **aiter DSA pair, chunk 2048** | 37.2 | 3.30 | 7.6 / 22.2 | 276 / 433 | 0.886 | pass (9/9, 51k context) |
+| tilelang, chunk 2048 | 47.0 | 4.96 | 3.1 / 27.7 | 191 / 491 | 0.887 | tools pass; accuracy 8/9 |
+
+- The aiter pair serves, passes both gates and logs no DSA fallback; it matches tilelang at the shipped
+  chunk size and is 21% behind tilelang at the same chunk size (ITL 276 against 191 ms), so the
+  shipped DSA backend stays tilelang. The first tilelang leg is not in the table: one client lost its
+  connection and the load generator stopped after 21 requests, which leaves no same-config control;
+  2026-10-05's tilelang baseline on other nodes was 44.6 tok/s.
+- tilelang at chunk 2048 is the fastest leg; its one accuracy miss found the right buffer and kept
+  reasoning past the 2048-token budget. One sample, no repeat: a candidate, not a result.
+- Every leg logs 3300 aiter `using torch solution` lines, all untuned bf16 GEMMs (router `N=256` and
+  indexer `N=32`, `K=6144`), none from the DSA path. The tuned rows for these shapes exist
+  (`containers/inference/aiter-configs/bf16_tuned_gemm_gfx942.csv`) but cannot be enabled: they name
+  opus kernel ids (10314) that the JIT `module_deepgemm_opus` never compiles, because its
+  `gen_instances.py --tune_files` reads only aiter's own `configs/*bf16_tuned_gemm.csv`, not
+  `AITER_CONFIG_GEMM_BF16`; the first prefill on such a shape aborts with
+  `Kernel id 10314 not found in a16w16 bf16 tune lookup table (gfx942)`.
+
 **Reproduce** (one mi300 node, no model): `$SCRATCH/archives/glm53-aiter-dsa-repro/` holds
 `repro_aiter_dsa.py` (replays `_forward_aiter`/`_forward_aiter_extend` for GLM-5.3 at TP4 against a
 float32 reference), `repro.sbatch` and the case lists. `decode --bs 48 40 32 24 16 ...` faults at the
