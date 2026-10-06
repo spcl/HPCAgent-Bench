@@ -1486,7 +1486,7 @@ wheels = [
 [[package]]
 name = "dace"
 version = "2.0.0a10"
-source = { git = "https://github.com/spcl/dace.git?rev=dea0b39c61458826b54d3cdb19db111f97cd53e6#dea0b39c61458826b54d3cdb19db111f97cd53e6" }
+source = { git = "https://github.com/spcl/dace.git?rev=5585229898f56728bba0cfcb327e0eeaf2fa5f05#5585229898f56728bba0cfcb327e0eeaf2fa5f05" }
 dependencies = [
     { name = "astunparse" },
     { name = "click" },
@@ -2613,7 +2613,7 @@ requires-dist = [
     { name = "crawl4ai" },
     { name = "cupy", marker = "platform_machine == 'x86_64' and extra == 'amdgpu'" },
     { name = "cupy-cuda13x", marker = "extra == 'nvgpu'" },
-    { name = "dace", git = "https://github.com/spcl/dace.git?rev=dea0b39c61458826b54d3cdb19db111f97cd53e6" },
+    { name = "dace", git = "https://github.com/spcl/dace.git?rev=5585229898f56728bba0cfcb327e0eeaf2fa5f05" },
     { name = "datasets", specifier = ">=2.17" },
     { name = "einops" },
     { name = "fastapi" },
