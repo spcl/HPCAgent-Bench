@@ -24,13 +24,12 @@ asserts round-trip each idiom through the ``run_op`` oracle against numpy.
 """
 
 import ast
-import sys
-import types
 
 import numpy as np
 import pytest
 
 from hpcagent_bench.translators.numpyto_jax.core import emit_jax
+from tests.translators import op_oracle
 
 
 # Source-level: the emitted module text carries each fix.                      #
@@ -102,29 +101,6 @@ def test_carried_future_import_leads_the_emitted_module(src: str, jit: bool) -> 
     compile(out, "<jax>", "exec")
 
 
-# Numerical: each idiom round-trips through the run_op oracle vs numpy (jax).  #
-def oracle() -> types.ModuleType:
-    import shutil
-
-    if not (shutil.which("gcc") and shutil.which("gfortran") and shutil.which("g++")):
-        pytest.skip("gcc/g++/gfortran needed for the native oracle emit step")
-    try:
-        from tests.translators import op_oracle
-    except ImportError:
-        import importlib.util
-        import pathlib
-
-        spec = importlib.util.spec_from_file_location(
-            "op_oracle", pathlib.Path(__file__).resolve().parent / "op_oracle.py"
-        )
-        op_oracle = importlib.util.module_from_spec(spec)
-        # Registered BEFORE exec: dataclasses resolves a string annotation through
-        # sys.modules[cls.__module__], which is None for a module loaded by path alone.
-        sys.modules[spec.name] = op_oracle
-        spec.loader.exec_module(op_oracle)
-    return op_oracle
-
-
 def assert_jax_ok(status: dict[str, str], label: str) -> None:
     s = status["jax"]
     if s.startswith("skip"):
@@ -136,7 +112,7 @@ def test_float64_precision_kernel() -> None:
     # ``a / 3.0`` differs beyond rtol between float32 (~0.33333334) and float64
     # (0.3333333333333333); without x64 the emitted module would silently
     # narrow and disagree with the numpy reference.
-    no = oracle()
+    no = op_oracle.native()
     st = no.run_op(
         "import numpy as np\ndef f(a, out):\n    out[:] = a / 3.0\n",
         "f",
@@ -152,7 +128,7 @@ def test_float64_precision_kernel() -> None:
 def test_or_default_idiom() -> None:
     # ``n = n or N`` with n=2 must yield 2 (Python truthiness); the old bitwise
     # rewrite ``n | N`` = 2 | 7 = 7 would be wrong.
-    no = oracle()
+    no = op_oracle.native()
     st = no.run_op(
         "import numpy as np\ndef f(n, a, out):\n    n = n or a.shape[0]\n    out[0] = float(n)\n",
         "f",
@@ -168,7 +144,7 @@ def test_or_default_idiom() -> None:
 def test_full_slice_row_broadcast() -> None:
     # ``out[:] = row`` broadcasts the (N,) row across every row of the (M, N)
     # output buffer, keeping its declared shape.
-    no = oracle()
+    no = op_oracle.native()
     st = no.run_op(
         "import numpy as np\ndef f(row, out):\n    out[:] = row\n",
         "f",
@@ -184,7 +160,7 @@ def test_full_slice_row_broadcast() -> None:
 def test_chained_subscript_2d_store() -> None:
     # ``a[1][2] = 9.0`` must set that one element and leave the rest of the 2-D
     # array intact (a row-collapse would shrink ``a`` to ``a[1]``).
-    no = oracle()
+    no = op_oracle.native()
     st = no.run_op(
         "import numpy as np\ndef f(a, out):\n    a[1][2] = 9.0\n    out[:] = a\n",
         "f",
@@ -246,7 +222,7 @@ def test_row_reduction_accidentally_safe_cases_unchanged() -> None:
 def test_partial_range_preserves_head_end_to_end() -> None:
     # out[0] is set, then only out[1:] is written; the head must survive (the old
     # whole-array rebind set out[0] to b[0]*2 instead).
-    no = oracle()
+    no = op_oracle.native()
     st = no.run_op(
         "import numpy as np\n"
         "def f(b, out):\n"
@@ -266,7 +242,7 @@ def test_partial_range_preserves_head_end_to_end() -> None:
 def test_row_reduction_matches_numpy_end_to_end() -> None:
     # ``out[i] = np.sum(a[i])`` over a[3, 4] must yield the 3 per-row sums, not
     # the single scalar 66.0 the old ``jnp.sum(a)`` collapse produced.
-    no = oracle()
+    no = op_oracle.native()
     a = np.arange(12.0).reshape(3, 4)
     for fn in ("sum", "max", "min", "mean", "prod"):
         st = no.run_op(
