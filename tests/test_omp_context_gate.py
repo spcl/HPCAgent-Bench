@@ -11,7 +11,6 @@ scipy and numba (images and CI carry them and FAIL without); the llvm test needs
 where clang is absent (a login node) and runs in every image and in CI, which install it.
 """
 
-import importlib.util
 import os
 import pathlib
 import shutil
@@ -22,6 +21,7 @@ import types
 import pytest
 
 from hpcagent_bench import omp_context
+from tests.fresh_module import module_at
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 GATE_PATH = REPO / "containers" / "lib" / "openmp_gate.py"
@@ -33,11 +33,7 @@ THREAD_PINS = ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NU
 
 
 def load_gate() -> types.ModuleType:
-    spec = importlib.util.spec_from_file_location("omp_context_gate_under_test", GATE_PATH)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return module_at(GATE_PATH, "omp_context_gate_under_test")
 
 
 def real(driver: str, name: str) -> pathlib.Path:

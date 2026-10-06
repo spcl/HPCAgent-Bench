@@ -18,11 +18,9 @@ property: one that reports back the exact ``timeout=`` it was given, one whose `
 blocks so a live watcher thread has real wall-clock time to poll before the attempt ends.
 """
 
-import importlib.util
 import json
 import pathlib
 import subprocess
-import sys
 import time
 import types
 from collections.abc import Callable
@@ -30,6 +28,7 @@ from types import ModuleType
 from typing import TextIO
 
 import pytest
+from tests.fresh_module import module_at
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 FIXTURES = REPO / "tests" / "fixtures" / "claude_driver_golden"
@@ -38,13 +37,7 @@ DRIVER = REPO / "agent" / "hpcagent_agent" / "driver" / "agent_driver.py"
 
 def load_capture() -> ModuleType:
     """The golden capture harness beside the fixtures: env/paths shared with the fresh-relaunch test."""
-    spec = importlib.util.spec_from_file_location("relaunch_budgets_capture", FIXTURES / "regen.py")
-    if spec is None or spec.loader is None:
-        raise ImportError(f"cannot load {FIXTURES / 'regen.py'}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
+    return module_at(FIXTURES / "regen.py", "relaunch_budgets_capture")
 
 
 capture = load_capture()

@@ -13,16 +13,15 @@ launcher derives it from the rank layout, so a reduction keyed on ``episode_id``
 one replicate. They must come out as two episodes whose MAXIMUM stands.
 """
 
-import importlib.util
 import math
 import pathlib
-import sys
 from types import ModuleType
 
 import pandas as pd
 import pytest
 
 from hpcagent_bench.stats import population, summary
+from tests.fresh_module import module_at
 
 CLUSTER_DIR = pathlib.Path(__file__).resolve().parents[1] / "hpcagent_bench" / "cluster"
 #: paired_setups.py moved to statistics/ (a12a5881); promote_unsubmitted.py stays in experiments/.
@@ -33,12 +32,7 @@ KERNELS = ("k1", "k2", "k3", "k4", "k5", "k6", "k7", "k8")
 
 
 def load_study_module(name: str, folder: pathlib.Path = CLUSTER_DIR) -> ModuleType:
-    spec = importlib.util.spec_from_file_location(name, folder / f"{name}.py")
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
+    return module_at(folder / f"{name}.py", name)
 
 
 @pytest.fixture(name="paired_setups")

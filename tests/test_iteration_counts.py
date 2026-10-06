@@ -3,15 +3,14 @@
 """iteration_counts.py: turns and tool calls per episode, read from the agents' stream-json logs."""
 
 import csv
-import importlib.util
 import json
 import pathlib
-import sys
 from types import ModuleType
 
 from tests.conftest import script_path
 
 import pytest
+from tests.fresh_module import module_at
 
 
 def tool_use(index: int, name: str) -> dict[str, object]:
@@ -80,11 +79,7 @@ TEXT_MODE_LOG = "The kernel has been optimized and submitted.\n\n**Implementatio
 
 def load_example_module(name: str) -> ModuleType:
     """``sys.modules`` must carry the module BEFORE exec, matching tests/test_validate_run.py."""
-    spec = importlib.util.spec_from_file_location(name, script_path(name))
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
+    return module_at(script_path(name), name)
 
 
 @pytest.fixture(name="iteration_counts")

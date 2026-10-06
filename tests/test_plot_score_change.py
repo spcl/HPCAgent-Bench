@@ -10,7 +10,6 @@ itself lives in :mod:`hpcagent_bench.stats.figures.efficacy` -- this script only
 
 import argparse
 import dataclasses
-import importlib.util
 import math
 import pathlib
 import sys
@@ -30,6 +29,7 @@ from hpcagent_bench.harness import efficacy
 from hpcagent_bench.stats import cost, palette, population, score_rule
 from hpcagent_bench.stats import style as plotstyle
 from hpcagent_bench.stats.figures import efficacy as efficacy_figures
+from tests.fresh_module import module_at
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 
@@ -44,12 +44,7 @@ KERNELS: int = 8
 
 def load_script():
     """Import ``statistics/plot_score_change.py`` as a module (scripts/ is not a package)."""
-    spec = importlib.util.spec_from_file_location("plot_score_change", REPO / "statistics" / "plot_score_change.py")
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
+    return module_at(REPO / "statistics" / "plot_score_change.py")
 
 
 plot = load_script()

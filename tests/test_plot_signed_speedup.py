@@ -9,8 +9,6 @@ value of "measured, and nothing changed". Both are pure functions, so both are t
 rendering anything.
 """
 
-import sys
-import importlib.util
 import itertools
 import math
 import pathlib
@@ -22,6 +20,7 @@ import pytest
 from hpcagent_bench.stats import summary
 from hpcagent_bench.stats.figures import per_kernel
 from hpcagent_bench.stats.figures import results as plotting
+from tests.fresh_module import module_at
 
 #: The synthetic DB uses REAL short_names so the shared report ordering resolves them.
 KERNELS: tuple[tuple[str, str], ...] = (("heat_3d", "Physics"), ("jacobi_2d", "Physics"))
@@ -65,13 +64,7 @@ REPO = pathlib.Path(__file__).resolve().parents[1]
 
 def load_script():
     """Import ``statistics/plot_speedup.py`` as a module (scripts/ is not a package)."""
-    spec = importlib.util.spec_from_file_location("plot_speedup", REPO / "statistics" / "plot_speedup.py")
-    module = importlib.util.module_from_spec(spec)
-    # Registered BEFORE exec: dataclasses resolves a string annotation through
-    # sys.modules[cls.__module__], which is None for a module loaded by path alone.
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
+    return module_at(REPO / "statistics" / "plot_speedup.py")
 
 
 speedup = load_script()

@@ -7,15 +7,14 @@ drift: which EDFs a platform renders and onto which image, which toolchain the E
 which candidate a promotion moves and what the verifier asks of each profile.
 """
 
-import importlib.util
 import os
 import pathlib
 import subprocess
-import sys
 from types import ModuleType
 
 import pytest
 import tomllib
+from tests.fresh_module import module_at
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 CE = ROOT / "containers" / "images"
@@ -156,12 +155,7 @@ def test_promotion_moves_exactly_the_candidates_the_builds_write(tmp_path: pathl
 
 
 def load(path: pathlib.Path, name: str) -> ModuleType:
-    spec = importlib.util.spec_from_file_location(name, path)
-    assert spec is not None and spec.loader is not None, path
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
+    return module_at(path, name)
 
 
 @pytest.fixture(name="verify", scope="module")

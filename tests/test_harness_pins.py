@@ -15,15 +15,14 @@ verify_image.py, which is the only gate a PULLED image passes through.
 """
 
 import functools
-import importlib.util
 import json
 import os
 import pathlib
 import re
-import sys
 
 import pytest
 import tomllib
+from tests.fresh_module import module_at
 
 ROOT: pathlib.Path = pathlib.Path(__file__).resolve().parents[1]
 HARNESS: pathlib.Path = ROOT / "agent" / "harness"
@@ -244,12 +243,7 @@ def test_the_unpinned_install_scan_flags_each_floating_fetch(text: str, flagged:
 
 def module(path: pathlib.Path, name: str) -> object:
     """Load a repo script by file location; neither directory is an importable package."""
-    spec = importlib.util.spec_from_file_location(name, path)
-    assert spec is not None and spec.loader is not None, path
-    loaded = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = loaded
-    spec.loader.exec_module(loaded)
-    return loaded
+    return module_at(path, name)
 
 
 @functools.lru_cache(maxsize=1)
