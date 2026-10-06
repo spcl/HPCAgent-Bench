@@ -283,7 +283,3 @@ def test_a_bootstrap_over_log_ratios_keeps_the_negative_values() -> None:
     assert interval.n == len(logs)
     assert interval.point == pytest.approx(-0.45)
     assert interval.low < interval.point < interval.high
-
-
-def test_a_rank_sum_over_two_identical_samples_finds_no_difference() -> None:
-    assert summary.rank_sum_test([3.0, 3.0, 3.0], [3.0, 3.0, 3.0])[1] == pytest.approx(1.0)

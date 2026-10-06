@@ -27,7 +27,6 @@ import numpy as np
 import pandas as pd
 
 from hpcagent_bench import study_tags, studies, packets
-from hpcagent_bench.harness import efficacy
 from hpcagent_bench.stats import cost, population, score_rule, significance, style as plotstyle
 from hpcagent_bench.stats.figures import efficacy as efficacy_figures
 
@@ -118,12 +117,12 @@ def corrected(rows: Sequence[dict[str, float | str | int]]) -> pd.DataFrame:
         return frame
     # Interleaved score, cost, score, cost ... so each row's pair of verdicts comes back adjacent.
     family = [value for row in frame.itertuples(index=False) for value in (row.score_p, row.cost_p)]
-    verdicts = efficacy.correct_family(family)
+    verdicts = significance.verdicts(family)
     return frame.assign(
         score_p_adjusted=[v.adjusted for v in verdicts[0::2]],
         cost_p_adjusted=[v.adjusted for v in verdicts[1::2]],
-        score_verdict=[v.label for v in verdicts[0::2]],
-        cost_verdict=[v.label for v in verdicts[1::2]],
+        score_verdict=[v.finding.value for v in verdicts[0::2]],
+        cost_verdict=[v.finding.value for v in verdicts[1::2]],
         correction=[v.correction for v in verdicts[0::2]],
         family_size=sum(1 for v in verdicts if math.isfinite(v.adjusted)),
     )
@@ -498,9 +497,9 @@ def report(treatment: str, stats: pd.DataFrame) -> None:
     if stats.empty or "score_verdict" not in stats.columns:
         print(f"{treatment or '(stub)'}: placeholder panel, nothing drawn")
         return
-    score_hits = int((stats.score_verdict == efficacy.SIGNIFICANT).sum())
-    cost_hits = int((stats.cost_verdict == efficacy.SIGNIFICANT).sum())
-    withheld = int((stats.score_verdict == efficacy.UNDERPOWERED).sum())
+    score_hits = int((stats.score_verdict == significance.Finding.SIGNIFICANT.value).sum())
+    cost_hits = int((stats.cost_verdict == significance.Finding.SIGNIFICANT.value).sum())
+    withheld = int((stats.score_verdict == significance.Finding.UNDERPOWERED.value).sum())
     correction = str(stats.correction.iloc[0]) if "correction" in stats else "corrected"
     of_test = f" ({stats.test.iloc[0]})" if "test" in stats else ""
     print(

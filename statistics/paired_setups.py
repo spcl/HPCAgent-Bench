@@ -11,7 +11,7 @@ an ARGUMENT and runs them through the same reduction and the same guards:
 :func:`~hpcagent_bench.stats.population.align` and :func:`~hpcagent_bench.stats.population.coverage`
 for the kernel set, the configured paired test (``statistics.paired_test``, the sign-flip test on the geomean
 ratio by default, :func:`~hpcagent_bench.stats.significance.paired`) for the estimate, its interval and its p,
-and :func:`~hpcagent_bench.harness.efficacy.correct_family` for the family. A kernel
+and :func:`~hpcagent_bench.stats.significance.verdicts` for the family. A kernel
 run more than once is reduced by one rule: the latest run of each slot, then the median over slots.
 
 A FAILED EPISODE IS NOT A SPEEDUP, AND IT STILL COSTS ITS TOKENS (``--policy``, default
@@ -48,7 +48,6 @@ from typing import NamedTuple
 import pandas as pd
 
 from hpcagent_bench import study_tags, studies
-from hpcagent_bench.harness import efficacy
 from hpcagent_bench.stats import cost, population, score_rule, significance, summary
 
 #: Order every episode's graded rows are read in; ``attempt_index`` breaks a same-millisecond tie in
@@ -99,6 +98,8 @@ PAIR_COLUMNS = (
     "n_both",
     "n_only_a",
     "n_only_b",
+    # the registered paired proportion test behind coverage_p (McNemar by default)
+    "coverage_test",
     "coverage_p",
     "leg",
     "n_pairs",
@@ -422,7 +423,7 @@ def tested_p(change: significance.Result) -> float:
     The paired tests withhold p from a leg whose ratios have no spread (``degenerate``) and from one
     below the interval floor (``underpowered``). Neither
     is a test: entering them into the correction would raise ``m`` for members that cannot reach any
-    alpha and weaken every real one. ``correct_family`` skips a non-finite p and labels it
+    alpha and weaken every real one. ``significance.verdicts`` skips a non-finite p and labels it
     ``underpowered``, which is what both of these are.
     """
     if change.n < summary.MIN_PAIRS_FOR_INTERVAL:
@@ -464,6 +465,7 @@ def pair_rows(
         # solved-or-not is paired over the kernels BOTH setups ran, never one only a single setup ran
         both_ran = kernels_a & kernels_b
         gap = population.coverage(left, right, tag_kernels=both_ran, within=both_ran)
+        coverage = significance.paired_proportion(significance.Discordant(gap.n_only_left, gap.n_only_right))
         if served is not None:
             warn_missing_tokens(setup_a, setup_b, kernels_a & kernels_b, tokens)
         head = {
@@ -476,7 +478,8 @@ def pair_rows(
             "n_both": gap.n_both,
             "n_only_a": gap.n_only_left,
             "n_only_b": gap.n_only_right,
-            "coverage_p": population.mcnemar_exact(gap.n_only_left, gap.n_only_right),
+            "coverage_test": coverage.label,
+            "coverage_p": coverage.pvalue,
         }
         legs = [("speedup", score_leg(left, right))]
         cost = cost_leg(setup_a, setup_b, tokens)
@@ -500,11 +503,11 @@ def pair_rows(
                     "p_value": tested_p(change),
                 }
             )
-    verdicts = efficacy.correct_family([float(row["p_value"]) for row in rows])
-    for row, verdict in zip(rows, verdicts, strict=True):
+    family = significance.verdicts([float(row["p_value"]) for row in rows])
+    for row, verdict in zip(rows, family, strict=True):
         row["correction"] = verdict.correction
         row["p_adjusted"] = verdict.adjusted
-        row["verdict"] = verdict.label
+        row["verdict"] = verdict.finding.value
     return rows
 
 

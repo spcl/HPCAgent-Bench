@@ -51,9 +51,9 @@ from matplotlib.transforms import blended_transform_factory
 from matplotlib.typing import LineStyleType
 
 from hpcagent_bench import packets, study_tags
-from hpcagent_bench.harness import efficacy
 from hpcagent_bench.stats import cost as cost_models
 from hpcagent_bench.stats import palette, population, rules, style, summary
+from hpcagent_bench.stats.significance import Finding
 from hpcagent_bench.study_tags import Marker
 
 __all__ = [
@@ -711,8 +711,8 @@ def axis_significance(stats: pd.DataFrame) -> dict[tuple[str, str], Significance
         return flags
     legs = leg_labels(stats)
     for (_, row), leg in zip(stats.iterrows(), legs, strict=True):
-        score_sig = str(row.get("score_verdict", "")) == efficacy.SIGNIFICANT
-        cost_sig = str(row.get("cost_verdict", "")) == efficacy.SIGNIFICANT
+        score_sig = str(row.get("score_verdict", "")) == Finding.SIGNIFICANT.value
+        cost_sig = str(row.get("cost_verdict", "")) == Finding.SIGNIFICANT.value
         flags[(str(row["model"]), str(leg))] = (score_sig, cost_sig)
     return flags
 

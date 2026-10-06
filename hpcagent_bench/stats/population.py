@@ -98,7 +98,6 @@ __all__ = [
     "last_per_episode",
     "latest_episodes",
     "log_differences",
-    "mcnemar_exact",
     "numbers_of",
     "on_platform",
     "one_baseline_policy",
@@ -1185,21 +1184,6 @@ def coverage(
         only_left=tuple(sorted(lhs - rhs)),
         only_right=tuple(sorted(rhs - lhs)),
     )
-
-
-def mcnemar_exact(only_left: int, only_right: int) -> float:
-    """Two-sided exact McNemar p on the DISCORDANT counts of a paired success outcome.
-
-    The concordant pairs carry no information about a difference, so the null is that each of the
-    ``only_left + only_right`` disagreements was equally likely to go either way: a binomial(n, 1/2)
-    tail on the smaller count, doubled. This is what turns the kernels an intersection dropped into
-    a tested claim rather than a footnote.
-    """
-    n = only_left + only_right
-    if n == 0:
-        return 1.0
-    tail = sum(math.comb(n, k) for k in range(min(only_left, only_right) + 1))
-    return min(1.0, 2.0 * tail / (2**n))
 
 
 def ratio(left: SetupAggregate, right: SetupAggregate) -> float:

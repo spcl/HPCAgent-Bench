@@ -108,7 +108,7 @@ def test_the_comparison_runs_fisher_on_each_kernels_solve_counts() -> None:
 def test_a_setup_compared_with_itself_finds_no_difference() -> None:
     setup = stub.SETUPS[1]
     for row in reliability.compare_setups(settled_runs(), setup, setup):
-        assert (row.proportion_p, row.mann_whitney_p) == (1.0, 1.0), row.kernel
+        assert (row.proportion_p, row.two_sample_p) == (1.0, 1.0), row.kernel
 
 
 def test_a_comparison_over_an_owed_cell_is_refused() -> None:
