@@ -38,8 +38,8 @@ A preset is one partition + image + weights combination.
    `PRESET_LEGS`, `PRESET_AITER`, `PRESET_FLAGS`.
 2. `server_argv` hard-codes Qwen3.8 flags for every preset (chat template, `--reasoning-parser qwen3`,
    `--tool-call-parser qwen3_coder`, `--mamba-full-memory-ratio 0.5`, `--context-length 262144`,
-   `--language-only`). Another model family moves these into `PRESET_FLAGS`; the tests that pin the
-   template, parsers and context to `llrbase-c:qwen38` must still pass.
+   `--language-only`). Another model family moves these into `PRESET_FLAGS`; the mi300 test against
+   `llrbase-c:qwen38` must still pass.
 3. A new AMD partition needs `GPU_ARCH_<partition>` in `containers/images/gpu_arch.env`, an arch
    the images already carry (`AMD_GPU_TARGETS`; add it there and rebuild otherwise), and its EDF
    rows in `images.env`.

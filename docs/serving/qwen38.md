@@ -1,8 +1,8 @@
 # Serving Qwen3.8 on MI300A
 
-`Qwen/Qwen3.8-27B-FP8` on vLLM, one node, `tp=4`. The cheapest useful endpoint here. Source of
-truth: `layers/model-qwen38.env` (rendered by `experiment:qwen38` in `experiments/setups.yaml`).
-Background: [`knobs.md`](knobs.md).
+`Qwen/Qwen3.8-27B-FP8` on SGLang, one node, `tp=4`. The cheapest useful endpoint here. Source of
+truth: `experiment:qwen38` in `experiments/setups.yaml` over `layers/model-qwen38.env`. Background:
+[`knobs.md`](knobs.md).
 
 ```bash
 hpcagent_bench/cluster/serve-only.sbatch     # qwen38 is the default MODEL
@@ -10,64 +10,94 @@ hpcagent_bench/cluster/serve-only.sbatch     # qwen38 is the default MODEL
 
 ## Configuration
 
-EDF `hpcagent-bench-vllm-mi300-latest` (vLLM 0.28.0); env `VLLM_ROCM_USE_AITER=1`. `run_cluster.sh`
-adds `--tensor-parallel-size 4 --host 0.0.0.0 --port 8000 --served-model-name hpcagent-bench-vllm`.
+EDF `hpcagent-bench-sglang-mi300-latest`; env `SGLANG_USE_AITER=1`, `SGLANG_SET_CPU_AFFINITY=0`.
+`run_cluster.sh` adds `--tp-size 4 --host 0.0.0.0 --port 8000 --served-model-name hpcagent-bench-vllm`.
 
 ```
---dtype auto --attention-backend ROCM_AITER_FA
 --chat-template containers/inference/chat-template-qwen38.jinja --trust-remote-code
---max-model-len 262144 --gpu-memory-utilization 0.70 --max-num-seqs 128
---language-model-only --enable-prefix-caching
---enable-auto-tool-choice --tool-call-parser qwen3_coder --reasoning-parser qwen3
+--attention-backend aiter --language-only --watchdog-timeout 1800
+--context-length 262144 --mem-fraction-static 0.306 --mamba-full-memory-ratio 0.25
+--max-running-requests 128 --enable-metrics
+--reasoning-parser qwen3 --tool-call-parser qwen3_coder --enable-cache-report
 ```
 
-On mi200 (MI250X, BF16) `layers/hardware-mi200-qwen38.env` serves the BF16 checkpoint on the same
-vLLM image with `--attention-backend TRITON_ATTN` and `VLLM_ROCM_USE_AITER=0`: aiter's attention has
-no gfx90a kernels.
+| Mamba ratio | KV pool | Mamba slots | Captured decode batch | Used by |
+|---|---|---|---|---|
+| **0.25** | **4.03 M tokens** | 427 | up to 85 | `experiment:qwen38`, `serve-only.sbatch` |
+| 0.5 | 3.32-3.36 M tokens | 704 | full 128 | `llrbase-c:qwen38`, private `mi300` preset |
+| 0.9 (engine default) | 1.91 M tokens | | | never: hit rate 0.20, 25 tok/s at 40 x 60k |
 
-## vLLM against SGLang, measured 2026-10-06
+Keep the pool above the working set (concurrent conversations x largest prompt): crossing it is worth
+about 8x (40 x 60k on 3.32 M: hit 0.984, 254 tok/s; on 2.42 M: hit 0.35-0.45, 30-34 tok/s). Live
+Mamba slot peak is 315-322, so 427 covers 40 streams. Read slots and pool from the log
+(`grep -a "Mamba Cache is allocated\|max_total_num_tokens" server-0.log`), never infer them.
 
-Load: 40 long-lived conversations (`agentic-c40.json`), 16 turns, 12k shared + ~22k unique prefix,
-prompts 35k-50k (p50 ~38k), 300-500 output tokens per turn; one server per leg, back to back on one
-node, tool and long-context gates on every leg. Harness and raw numbers:
-`$SCRATCH/hpcagent-bench-runs/inference-tuning-20261005/` (`bench.sbatch`, `summarize.py`,
-`q38eng-*.legs`, `q38abba-mi300.legs`). SGLang 0.5.20 ran its best line: `--attention-backend aiter`,
-`SGLANG_USE_AITER=1`, `--mem-fraction-static 0.306 --mamba-full-memory-ratio 0.25` (a 4.03 M-token KV
-pool) and `--kv-cache-dtype fp8_e4m3`.
+## Measured 2026-10-05: 40 agents, one node (pre-tuning controls)
 
-| Leg (job) | out tok/s | tok/s per agent | TTFT p50/p90 s | ITL p50/p90 ms | hit | gates | fallback lines |
+Load: 40 long-lived conversations, 16 turns, 12k shared + ~22k unique prefix, prompts 35k-50k (p50
+~38k), 300-500 output tokens per turn; one server per leg, back to back on one node, tool and
+long-context gates on every leg. Harness and raw numbers:
+`$SCRATCH/hpcagent-bench-runs/inference-tuning-20261005/` (`bench.sbatch`, `summarize.py`).
+
+These legs logged aiter's untuned bf16 GEMM fallback (700-930 lines, the Gated-DeltaNet `ba`
+projection to torch); the engine comparison below runs with the tuned GEMM rows merged and logs none
+(see [knobs.md](knobs.md#aiter-always-on-no-fallback)).
+
+| Leg (job) | out tok/s | tok/s per agent | TTFT p50/p90 s | ITL p50 ms | gates |
+|---|---|---|---|---|---|
+| base, 3 nodes (668269/668270/668364/668567) | 241-272 | 6.5-7.4 | 1.2-2.7 / 7.8-19 | 130-146 | pass |
+| `--kv-cache-dtype fp8_e4m3` (668269, 668567) | 284.9, 283.5 | 7.84, 7.72 | 1.2 / 8.6-10 | 123-125 | pass |
+
+- **fp8 KV: +11% aggregate, +18% per agent** against the same node's base and base2 (257.5/256.6,
+  drift under 1%), reproduced on a second node; gates pass. Candidate for the shipped line.
+- Rejected: MTP/NEXTN 3-4 (-36%), `--mamba-full-memory-ratio 0.5` (233 vs 241-255), `--schedule-policy
+  lpm` (inside the 6% same-node drift), `--tp-size 2 --dp-size 2` (78 tok/s: DP round-robin splits a
+  conversation, hit 0.48), `--mamba-radix-cache-strategy no_buffer --disable-overlap-schedule` (132 tok/s,
+  hit 0.79; ReplaySSM needs it), `--mamba-ssm-dtype bfloat16` (263, within noise).
+
+## Measured 2026-10-06: vLLM against SGLang, current images
+
+Same load and harness as above (40 agents, `agentic-c40.json`, tool and long-context gates per leg),
+one node per job, `$SCRATCH/hpcagent-bench-runs/inference-tuning-20261005/` (`q38eng-*.legs`,
+`q38abba-mi300.legs`). SGLang runs the `experiment:qwen38` line with the tuned bf16 GEMM rows merged
+(`HPCAGENT_BENCH_AITER_TUNED_GEMM` unset). vLLM 0.28.0 (`hpcagent-bench-vllm-mi300-latest`) runs the
+same FP8 checkpoint, chat template and parsers with `VLLM_ROCM_USE_AITER=1 --max-model-len 262144
+--gpu-memory-utilization 0.70 --max-num-seqs 128 --language-model-only --enable-prefix-caching
+--enable-auto-tool-choice --tool-call-parser qwen3_coder --reasoning-parser qwen3`.
+
+| Leg (job, node) | out tok/s | tok/s per agent | TTFT p50/p90 s | ITL p50/p90 ms | hit | gates | fallback lines |
 |---|---|---|---|---|---|---|---|
-| SGLang, bf16 KV / repeat (669808) | 283.6 / 292.9 | 7.93 / 7.83 | 1.0 / 12.5, 0.9 / 9.5 | 123 / 161 | 0.87 | pass | 0 |
-| SGLang, fp8 KV (669808) | 310.3 | 8.38 | 0.9 / 8.4 | 116 / 144 | 0.87 | pass | 0 |
+| SGLang base / base2 (669808) | 283.6 / 292.9 | 7.93 / 7.83 | 1.0 / 12.5, 0.9 / 9.5 | 123 / 161 | 0.87 | pass | 0 |
+| SGLang `--kv-cache-dtype fp8_e4m3` (669808) | 310.3 | 8.38 | 0.9 / 8.4 | 116 / 144 | 0.87 | pass | 0 |
 | vLLM `ROCM_AITER_FA` / repeat (669809) | 541.6 / 472.3 | 13.44 / 12.86 | 1.4 / 7.4, 1.3 / 9.6 | 69-70 / 76-117 | 0.86 | pass | 3 |
 | vLLM `TRITON_ATTN` (669809) | 300.3 | 7.59 | 2.0 / 14.3 | 121 / 149 | 0.87 | pass | 3 |
-| vLLM `ROCM_AITER_FA`, fp8 KV (669809) | 548.5 | 13.60 | 1.6 / 9.0 | 69 / 76 | 0.85 | pass | 3 |
+| vLLM `ROCM_AITER_FA --kv-cache-dtype fp8` (669809) | 548.5 | 13.60 | 1.6 / 9.0 | 69 / 76 | 0.85 | pass | 3 |
 | **same node, A-B-B-A (669893)**: SGLang fp8 KV | 306.1, 302.7 | 8.18, 8.23 | 1.0 / 9.3, 1.0 / 8.6 | 117 / 150 | 0.87 | pass | 0 |
 | **same node, A-B-B-A (669893)**: vLLM `ROCM_AITER_FA` | 542.4, 537.7 | 13.57, 13.21 | 1.3 / 8.8 | 69 / 76-80 | 0.86 | pass | 3 |
 
-- **vLLM is 1.77x SGLang's best line on one node** (540 vs 304 tok/s, under 1.5% drift within each
-  engine), all of it decode: ITL 69 ms against 117 ms at equal hit rate, TTFT about equal.
-  `ROCM_AITER_FA` is 1.8x vLLM's `TRITON_ATTN`; fp8 KV adds nothing on vLLM (548 vs 542).
-- Rejected on SGLang (2026-10-05, same load): MTP/NEXTN 3-4 (-36%), `--mamba-full-memory-ratio 0.5`,
-  `--schedule-policy lpm`, `--tp-size 2 --dp-size 2` (DP round-robin splits a conversation, hit 0.48),
-  `--mamba-radix-cache-strategy no_buffer`, `--mamba-ssm-dtype bfloat16`.
+- **vLLM is the faster engine: 1.77x SGLang's best leg on one node** (540 vs 304 tok/s, drift under
+  1.5% within each engine), from decode: ITL 69 ms against 117 ms at equal hit rate, with TTFT about
+  equal. `ROCM_AITER_FA` is 1.8x vLLM's `TRITON_ATTN`; fp8 KV adds nothing on vLLM (548 vs 542) and
+  9% on SGLang.
+- vLLM's three fallback lines, every leg: the Gated-DeltaNet decode runs the Triton kernel
+  (`fused_gdn_decode_post_conv_mtp is not built`, the MTP-fused variant), the aiter sampler hands
+  requests that carry a seed to PyTorch, and an unused GELU-tanh. vLLM also logs about 5300 aiter
+  `a8w8_blockscale` shapes with no tuned row, which run aiter's default kernel, not torch.
 - Not yet run on vLLM: MTP, `--max-num-batched-tokens`, the agent harness end to end.
-
-**vLLM's three fallback lines.** None is an aiter-to-torch GEMM or attention fallback.
-
-| Line | What runs instead | Fixable here |
-|---|---|---|
-| `Falling back to the Triton GDN decode path: torch.ops._C.fused_gdn_decode_post_conv_mtp is not built` | vLLM's Triton Gated-DeltaNet decode, the kernel SGLang also runs | no: the fused op is CUDA C++ that the ROCm wheel does not build; it would need a HIP port of vLLM's `csrc` kernel |
-| `aiter sampler does not support per-request generators; falling back to PyTorch-native` | logged once, at the startup sampler warmup, which passes a generator; a request without `seed` samples on aiter | only by not sending `seed` (our harnesses do not) |
-| `[ROCm] PyTorch's native GELU with tanh approximation is unstable. Falling back to GELU(approximate='none')` | the vision tower's GELU, built and never run under `--language-model-only` | not needed: the language model uses SiLU |
-
-vLLM also logs about 5300 aiter `a8w8_blockscale` shapes without a tuned row; they run aiter's default
-blockscale kernel, not torch.
 
 ## Rules
 
-- Serve on vLLM with `--attention-backend ROCM_AITER_FA` and `VLLM_ROCM_USE_AITER=1`; pass the chat
-  template and both parsers.
+- Serve on vLLM with `--attention-backend ROCM_AITER_FA` and `VLLM_ROCM_USE_AITER=1`: 1.77x SGLang's
+  best leg on the same node (below).
+- Move `--mem-fraction-static` together with `--mamba-full-memory-ratio` (with ratio `r` the budget
+  `R` splits mamba `R*r/(1+r)`, KV `R/(1+r)`) and with `--attention-backend aiter` (aiter derates by
+  0.85, so 0.306 is an effective 0.26). Never above 0.306: the OOM killer takes the process without a
+  traceback.
+- Name `--attention-backend aiter` (ROCm default is triton; aiter is about +5%). Pass the chat template
+  and both parsers.
+- `--page-size 64`, `--chunked-prefill-size 16384` and HiCache do not help
+  ([`knobs.md`](knobs.md#hicache-never)). `--language-only` selects SGLang's vision-encoder receiver
+  role, not "text only".
 - Measure with 40 long-lived streams at your p50 and p90 prompt sizes, back to back on one node; never
   trust a cold smoke ([`knobs.md`](knobs.md#the-kv-pool-threshold)).
 

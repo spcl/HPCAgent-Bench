@@ -35,8 +35,8 @@ replica is the shape. vLLM logs one fallback of its own here ("Falling back to t
 
 aiter cannot run on gfx90a: it ships asm kernels for gfx942, gfx950 and gfx1250 only, its
 `get_device_name()` raises for gfx90a, and vLLM refuses a forced `ROCM_AITER_FA` with "compute capability not
-supported". So mi200 serves qwen3.8 on vLLM with `TRITON_ATTN` and aiter off, where mi300 runs vLLM's
-aiter attention.
+supported" (668579). So mi200 is the one AMD platform that serves qwen3.8 on vLLM rather than SGLang (the
+mi300 engine; SGLang's `sgl_kernel` in the current image carries gfx942 code only and segfaults here).
 
 ## 1. One-time setup
 

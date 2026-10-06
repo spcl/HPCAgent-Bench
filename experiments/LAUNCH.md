@@ -120,11 +120,12 @@ also needs the judge-side switch, or an agent's own HTTP call still reaches `/sc
 | --- | --- |
 | oss120b on vLLM, aiter off | completes reliably |
 | Kimi K2.7 on SGLang, `--attention-backend triton`, `SGLANG_USE_AITER=1` | completes |
-| qwen38 on vLLM, `ROCM_AITER_FA`, `VLLM_ROCM_USE_AITER=1` | 1.77x SGLang's best line at 40 agents; full accuracy up to 51,200-token cases |
+| qwen38 on SGLang, same attention config | full accuracy up to 51,200-token cases |
 | `JUDGE_NODES=1` (4 ranks) for 40 agents | no judge backlog |
 | `--language-only` | experiments are text-only; a vision stack only costs KV cache |
 | weights on `iopsstor` | much higher concurrent-read throughput than general scratch |
-| aiter on, vLLM path, cold kernel cache | fails: kernels JIT-build behind a lock and outlive the engine's RPC deadline; serve on a warm cache (`PREWARM=1`) |
+| aiter on, vLLM path | fails: kernels JIT-build behind a lock and outlive the engine's RPC deadline |
+| qwen38 on vLLM | fails: a fraction of SGLang throughput; `mtp`, `fp8kv+mtp`, aiter legs do not serve |
 | aiter MLA on gfx942 | fails: `fmha_v3_varlen_fwd invalid argument` |
 | `INFERENCE_ENGINE=sglang` with a vLLM `INFERENCE_CE_ENV` | fails: the image has no sglang |
 
@@ -152,8 +153,8 @@ Each model's `setups.yaml` entry declares the rungs its server accepts in `EFFOR
 
 Never delete the line: `agent_driver.py` defaults a missing `AGENT_EFFORT` to `xhigh`. A harness
 whose client types fewer rungs gets the top one it can spell; `harness-end.json` records it. qwen38
-setups pass `--chat-template ${HPCAGENT_BENCH_REPO}/containers/inference/chat-template-qwen38.jinja` (the
-stock template rejects `max`, which the engine maps `xhigh` to); re-apply it when the weights change.
+setups pass `--chat-template ${SCRIPT_DIR}/chat-template-qwen38.jinja` in `SGLANG_EXTRA_ARGS` (the
+stock template rejects `max`, which SGLang maps `xhigh` to); re-apply it when the weights change.
 
 
 ## Problem lists

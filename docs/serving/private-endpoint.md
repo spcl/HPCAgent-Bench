@@ -37,10 +37,9 @@ contrast, serves every interface without a key ([`README.md`](README.md)). Contr
 Both serve a 262144-token context and 128 running requests with the qwen3 reasoning and qwen3_coder
 tool parsers and the chat template `containers/inference/chat-template-qwen38.jinja`, as `hpcagent-bench-vllm`.
 
-- `mi300` serves the chat template, parsers and context of `llrbase-c:qwen38`
-  (`tests/test_serve_private.py` fails if they diverge) on SGLang, not the experiment's vLLM: vLLM
-  checks the key only under `/v1` and a few other prefixes, so `ACCESS=alps` needs SGLang. 0.306 is
-  node-wide on the APU and derated to 0.26 by aiter; move it only with the backend and mamba ratio.
+- `mi300` matches `SGLANG_EXTRA_ARGS` of `llrbase-c:qwen38` in `experiments/setups.yaml`
+  (`tests/test_serve_private.py` fails if they diverge). 0.306 is node-wide on the APU and derated
+  to 0.26 by aiter; move it only with the backend and mamba ratio ([`qwen38.md`](qwen38.md)).
 - `mi200`: MI250X has neither FP8 nor aiter kernels, so BF16 on the AMD vLLM image (the same one
   that serves oss120b on mi300), `VLLM_ROCM_USE_AITER=0`. The fraction is vLLM's
   `--gpu-memory-utilization`, per 64 GiB GPU. vLLM checks the key only under `/v1`, `/v2`,
