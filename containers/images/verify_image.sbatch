@@ -11,12 +11,12 @@
 # required failure. The one verification entry: build_and_verify.sbatch runs this body in its own
 # allocation for every role it built.
 #
-#   ROLE=judge containers/images/submit.sh containers/images/verify_image.sbatch   # on the role's partition
+#   ROLE=judge hpcagent-bench job submit containers/images/verify_image.sbatch   # on the role's partition
 #   ROLE=judge sbatch containers/images/verify_image.sbatch                 # the role's candidate
 #   ROLE=judge IMAGE=$SCRATCH/ce-images/<file>.sqsh sbatch ...              # any squashfs as that role
 #   ROLE=judge-agent-amd sbatch --partition=mi200 --gpus-per-node=8 ...     # a portable AMD image on
 #                                                                             # the other partition
-#                                                                             # (submit.sh --system beverin-mi200)
+#                                                                             # (job submit --partition mi200)
 #
 # ROLE is an images.env role: it names the verify_image.py profile, the production EDF template, the
 # platform and the partition. The EDF is rendered from that template (build_common.sh

@@ -14,7 +14,6 @@ containers/
     registry.sh              promote a verified candidate; push to / pull from the registry
     registry.sbatch          registry.sh on a compute node
     install_edfs.sh          render ~/.edf/<edf>.toml for every row of a platform
-    submit.sh <job.sbatch>   sbatch a job here or in inference/ with the system's partition, account and GPUs
     <image>/                 Dockerfile, image.sh (its own build inputs) and the EDF template(s):
                              edf.toml.in, or agent.edf.toml.in + judge.edf.toml.in for a pair
   lib/                     build steps the Dockerfiles COPY (HPTT, tblis, Pluto, git retry, image gates)
@@ -148,20 +147,21 @@ for role in judge-agent-amd judge sglang vllm; do sbatch registry.sbatch pull ${
 Build when changing an image:
 
 ```bash
-./submit.sh build_and_verify.sbatch -- judge-agent-amd   # agent and judge roles, ~3.5 h
-./submit.sh build_and_verify.sbatch -- sglang            # ~1 h
-./submit.sh build_and_verify.sbatch -- vllm              # < 1 h, the official base
+hpcagent-bench job submit build_and_verify.sbatch judge-agent-amd   # agent and judge roles, ~3.5 h
+hpcagent-bench job submit build_and_verify.sbatch sglang            # ~1 h
+hpcagent-bench job submit build_and_verify.sbatch vllm              # < 1 h, the official base
 # the same AMD images on the other partition, before promotion
-ROLE=judge-agent-amd ./submit.sh verify_image.sbatch --system beverin-mi200
+ROLE=judge-agent-amd hpcagent-bench job submit --partition mi200 verify_image.sbatch
 
 ./registry.sh promote --all             # verified candidates -> live names + sidecars + EDFs
 ```
 
-`submit.sh <job.sbatch> [--system S] [--partition P] [--account A] [--time T] [--gpus-per-node N] [--nice N]
-[--dry-run] [-- job args]` resolves the sbatch options with `hpcagent-bench job options` (a flag, else the site
-layer, else `systems.yaml`; [configuration.md](../docs/configuration.md#job-shape-per-system)); a build or verify
-job runs on its role's `images.env` partition unless `--partition` or `--system` names one, and `--dry-run` prints
-the sbatch line. Plain `sbatch -p mi300 -A <account> build_and_verify.sbatch judge-agent-amd` still works.
+`hpcagent-bench job submit [flags] <job.sbatch> [job args]` is the one launcher of every job here and in
+`inference/` ([configuration.md](../docs/configuration.md#job-shape-per-system)): a field the job's `#SBATCH` header
+pins stays, the system fills the rest, and a flag (`--partition`, `--account`, `--time`, `--nice`, ...) beats both.
+A build or verify job runs on its role's `images.env` partition unless `--partition` or `--system` names another;
+`--dry-run` prints the sbatch line. Plain `sbatch -p mi300 -A <account> build_and_verify.sbatch judge-agent-amd`
+still works.
 
 Build gates prove that an engine imports, not that it serves, so a serving candidate is smoked
 before promotion with `hpcagent_bench/cluster/serve-only.sbatch` (SGLang and vLLM alike),
@@ -181,7 +181,7 @@ ROLE=<role> IMAGE=$SCRATCH/ce-images/<file>.sqsh sbatch verify_image.sbatch
 ### NVIDIA GH200 (daint)
 
 The scripts write no account or partition; sbatch reads both from the environment (or
-`./submit.sh <job.sbatch> --system daint.alps --account <project>` passes them). A podman
+`hpcagent-bench job submit --system daint.alps --account <project> <job.sbatch>` passes them). A podman
 storage config on `/dev/shm` is created on first use if the account has none.
 
 ```bash

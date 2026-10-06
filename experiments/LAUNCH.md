@@ -42,8 +42,9 @@ Every `SUBMIT=1` refuses to call `sbatch` without an account (`--account <projec
 (`BASE`) over one tag (`TAG` or `KERNELS_FILE`) and, with `SUBMIT=1`, submits each as a read-only
 snapshot `.rendered/<setup>-<UTC time>-<hash>.env`. Its header comment lists its knobs (environment) and its job
 flags: `--system`, `--account`, `--partition`, `--gpus-per-node`, `--hardware`, `--time`, `--nice`. A flag beats its
-environment variable, which beats the system's `systems.yaml` entry; a missing required value (account, GPUs per
-node) is an error naming its flag and variable. All of it resolves in `hpcagent-bench job options`, the one resolver.
+environment variable, which beats the system's `systems.yaml` entry; without `--system`, a partition picks the entry
+of the same cluster that serves it (`--partition mi200` on Beverin is `beverin-mi200`). A missing required value
+(account, GPUs per node) is an error naming its flag and variable. All of it resolves in `hpcagent-bench job options`, the one resolver.
 
 ```bash
 J="--system beverin --account <project>"
@@ -235,9 +236,9 @@ cd $HB/containers/images
 ./registry.sh promote --all          # verified candidate -> live name; pending jobs pick it up at start
 ```
 
-Build, verify and promote: [`containers/README.md`](../containers/README.md). `./submit.sh <job.sbatch> [-- args]`
-submits any job there or in `containers/inference/` with the partition, account and GPUs `hpcagent-bench job
-options` resolves (a build on its role's `images.env` partition). Never write over a live
+Build, verify and promote: [`containers/README.md`](../containers/README.md). `hpcagent-bench job submit <job.sbatch>
+[args]` submits any job there or in `containers/inference/` with the system's shape around what its `#SBATCH`
+header pins (a build on its role's `images.env` partition). Never write over a live
 `.sqsh`; promote by rename (`containers/images/registry.sh promote`). A started job keeps the image it
 mounted.
 

@@ -4,7 +4,8 @@ Nothing in this repository names a cluster's filesystems, Slurm account, partiti
 values resolve in one order, for every script:
 
 1. a command-line flag (`hpcagent-bench job submit --cpus-per-task 72`, `NICE=10 submit.sh`);
-2. an environment variable (`export SBATCH_PARTITION=gpu`);
+2. an environment variable (`export SBATCH_PARTITION=gpu`); a job script's own `#SBATCH` line beats every one but
+   Slurm's `SBATCH_*` ([below](#job-shape-per-system));
 3. the site layer, `experiments/layers/site.env`, which holds this cluster's values;
 4. a generic default (for a job's node shape: the named system's entry, [below](#job-shape-per-system)).
 
@@ -49,9 +50,9 @@ and the model layers ([launch.md](launch.md), [`experiments/LAUNCH.md`](../exper
 
 ## Job shape per system
 
-Tasks per node, cores per task and GPUs per node or per task differ between machines, so a sample in
-[`docs/jobs/`](jobs/README.md) is started with `hpcagent-bench job submit`, which passes every field as an
-`sbatch` option (overriding the script's `#SBATCH` lines):
+Tasks per node, cores per task and GPUs per node or per task differ between machines, so every job script (the
+samples in [`docs/jobs/`](jobs/README.md), the container jobs in `containers/`) is started with
+`hpcagent-bench job submit`, which passes each field the script does not pin as an `sbatch` option:
 
 ```bash
 hpcagent-bench job submit --system daint.alps docs/jobs/grade-under.sbatch worklist.jsonl out
@@ -61,16 +62,22 @@ hpcagent-bench job submit --ntasks-per-node 2 --cpus-per-task 32 --gpus-per-task
 | Field | Flag | Environment variable |
 |---|---|---|
 | partition, account | `--partition`, `--account` | `SBATCH_PARTITION`, `SBATCH_ACCOUNT` |
-| nodes, time | `--nodes`, `--time` | `HPCAGENT_BENCH_JOB_NODES`, `HPCAGENT_BENCH_JOB_TIME` |
-| tasks per node, cores per task | `--ntasks-per-node`, `--cpus-per-task` | `HPCAGENT_BENCH_JOB_NTASKS_PER_NODE`, `HPCAGENT_BENCH_JOB_CPUS_PER_TASK` |
+| nodes, time, nice | `--nodes`, `--time`, `--nice` | `HPCAGENT_BENCH_JOB_NODES`, `HPCAGENT_BENCH_JOB_TIME`, `HPCAGENT_BENCH_NICE` |
+| tasks, tasks per node, cores per task | `--ntasks`, `--ntasks-per-node`, `--cpus-per-task` | `HPCAGENT_BENCH_JOB_NTASKS`, `HPCAGENT_BENCH_JOB_NTASKS_PER_NODE`, `HPCAGENT_BENCH_JOB_CPUS_PER_TASK` |
 | GPUs | `--gpus-per-node` or `--gpus-per-task` | `HPCAGENT_BENCH_JOB_GPUS_PER_NODE`, `HPCAGENT_BENCH_JOB_GPUS_PER_TASK` |
 
-A field nothing sets comes from the system's entry in `hpcagent_bench/cluster/systems.yaml`: `beverin` (MI300A,
-partition `mi300`), `beverin-mi200` and `daint.alps` (GH200) ship. The system is `--system`, else
+A field's value is its flag, else Slurm's own `SBATCH_*` variable (which beats an `#SBATCH` line under plain
+`sbatch` too), else the script's leading `#SBATCH` line (long or short form), else its `HPCAGENT_BENCH_*` variable,
+else the system's entry in `hpcagent_bench/cluster/systems.yaml`: `beverin` (MI300A, partition `mi300`),
+`beverin-mi200` and `daint.alps` (GH200) ship. So `build_and_verify.sbatch`'s one task of 96 cores stays one task
+of 96 cores, and a sample that pins no shape gets the system's. The system is `--system`, else
 `HPCAGENT_BENCH_SYSTEM`, else the entry whose `cluster` is `SLURM_CLUSTER_NAME`, else none: a cluster with no entry
-runs from flags and the environment alone. A new machine is a file of the same shape named by
-`HPCAGENT_BENCH_SYSTEMS_FILE` (its entries add to or replace the shipped ones). An explicit `--gpus-per-task`
-replaces the system's `gpus_per_node`, since Slurm takes one.
+runs from flags and the environment alone. Without `--system`, a partition picks the entry of the same cluster that
+serves it (`--partition mi200` on Beverin is `beverin-mi200`: 8 GPUs, 16 cores per task). A new machine is a file of
+the same shape named by `HPCAGENT_BENCH_SYSTEMS_FILE` (its entries add to or replace the shipped ones). The GPU pair
+(`--gpus-per-task`, `--gpus-per-node`) and the task pair (`--ntasks`, `--ntasks-per-node`) each come whole from the
+highest source that sets either one. An image build or verify job runs on its role's `images.env` partition, as if
+its header named it, unless `--system` names a machine ([containers/README.md](../containers/README.md#amd-beverin)).
 
 The experiment submitter (`hpcagent_bench/cluster/submit.sh`) resolves the same way, through the same code
 (`hpcagent-bench job options`): `--partition`, `--account`, `--gpus-per-node`, `--system` and `--hardware` over their
@@ -80,12 +87,6 @@ missing one is an error naming its flag and its variable (`--account` / `SBATCH_
 `HPCAGENT_BENCH_JOB_GPUS_PER_NODE`). The partition may stay unset, which is the cluster's default partition. The
 hardware (`--hardware`, `HPCAGENT_BENCH_HARDWARE`, the entry's `hardware`) is not an `sbatch` option: it names
 the GPU generation whose images and serving layers the experiment uses ([below](#hardware-is-not-a-site-value)).
-
-The container jobs (`containers/images/*.sbatch`, `containers/inference/*.sbatch`) keep their own task shape and
-take the same partition, account and GPUs per node from `containers/images/submit.sh <job.sbatch> [--system S]
-[--partition P] [--account A] [--time T] [--gpus-per-node N] [--nice N] [--dry-run] [-- job args]`, which reads
-them from `hpcagent-bench job options`; an image build or verify job defaults to its role's `images.env` partition
-([containers/README.md](../containers/README.md#amd-beverin)).
 
 ## Variables
 
