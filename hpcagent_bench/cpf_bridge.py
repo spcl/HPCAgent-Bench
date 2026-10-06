@@ -380,7 +380,7 @@ def drop_returned_arguments(
         ungraded = slot < len(returned) and returned[slot] is not None and returned[slot] not in graded
         found = [
             (state, node)
-            for state in sdfg.all_states()
+            for state in sdfg.states()
             if state.sdfg is sdfg
             for node in state.data_nodes()
             if node.data == name

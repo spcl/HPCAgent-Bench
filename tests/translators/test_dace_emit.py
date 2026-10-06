@@ -2743,7 +2743,7 @@ def test_an_augmented_store_parses_to_an_sdfg_without_a_wcr_edge(form: str, tmp_
     wcr = [
         f"{edge.src} -> {edge.dst}: {edge.data.wcr}"
         for sub in sdfg.all_sdfgs_recursive()
-        for state in sub.all_states()
+        for state in sub.states()
         for edge in state.edges()
         if edge.data.wcr is not None
     ]
