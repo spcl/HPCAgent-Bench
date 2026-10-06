@@ -57,6 +57,7 @@ def test_the_workflow_expands_into_legs_with_rendered_steps(tmp_path: pathlib.Pa
     workflow = yaml.safe_load(ci_replay.WORKFLOW.read_text())
     legs = list(ci_replay.legs(workflow, tmp_path, 1.0))
     labels = {leg.label for leg in legs}
+    assert len(labels) == len(legs), "two legs share a label, so they write one log file"
     unit = sorted(leg.label for leg in legs if leg.job == "unit")
     assert len(unit) == len(ci_replay.matrix_combinations(workflow["jobs"]["unit"]["strategy"]))
     assert "coverage" not in {leg.job for leg in legs}, "the coverage job has no test step"

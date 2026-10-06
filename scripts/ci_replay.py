@@ -117,7 +117,11 @@ def legs(workflow: Mapping[Any, Any], scratch: pathlib.Path, timeout_factor: flo
     for job_name, job in workflow["jobs"].items():
         for matrix in matrix_combinations(job.get("strategy")):
             label = job_name + "".join(f"[{k}={v}]" for k, v in matrix.items() if not isinstance(v, dict))
-            label += "".join(f"[{v.get('id', k)}]" for k, v in matrix.items() if isinstance(v, dict))
+            # A dict leg is named by its id, else by its values: its key alone is shared by every leg,
+            # and the label names the leg's log file.
+            label += "".join(
+                f"[{v.get('id', '-'.join(map(str, v.values())))}]" for v in matrix.values() if isinstance(v, dict)
+            )
             temp = scratch / re.sub(r"[^\w.=-]+", "_", label)
             contexts: dict[str, Any] = {
                 "matrix": Context(matrix),
