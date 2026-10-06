@@ -6,7 +6,7 @@
     hpcagent-bench grade-under run --worklist worklist.jsonl --shard 0 --shards 4 --out-dir out/
     hpcagent-bench grade-under apply --into results.db out/ [...]
 
-``worklist`` scans results DBs (schema v1) for every episode the final protocol has no credited grade of
+``worklist`` scans results DBs for every episode the final protocol has no credited grade of
 (:func:`final_graded`: the final rule under the kernel's configured denominator, not faulted, not stale
 after its kernel's cut) and lists what to grade, with the setup's grading env (an ``--env-dir`` file, else
 what ``submit.sh`` stages for the setup today, :func:`staged_env`, with ``--system``'s job shape): the episode's final
@@ -19,20 +19,25 @@ database and id, and the grade's stored sources are what is graded.
 call per input) with ``measurement.final.repeat`` runs a side, written into
 ``<out-dir>/regrade-cells-<shard>.db`` as one ``final`` grade with one ``grade_cells`` row per input; it
 does not re-verify (the row already passed) and runs no held-out cases. ``--aa`` is its A/A calibration.
-A promotion is first graded as ``POST /submit`` graded before it was the final grade (:func:`grade`: one
-input on ``measurement.repeat`` runs, then the independent re-verify) into ``<out-dir>/regrade-<shard>.db``
+A promotion is first graded on one input (:func:`grade`: ``measurement.repeat`` runs, then the
+independent re-verify) into ``<out-dir>/regrade-<shard>.db``
 as one ``regrade`` grade, which becomes the episode's submission once applied; the next ``worklist``
 finds it owed a final grade.
 
 The judge's ``POST /submit`` is graded as the final grade is (:func:`submit_grade`, the same
 :func:`final_grade` under the same :func:`final_settings`) and records that grade beside the submit
-grade, so a correct ``/submit`` needs no ``run``: it is the submissions an older ``/submit``
-protocol recorded, a grade before its kernel's cut and any owed one that do.
+grade, so a correct ``/submit`` needs no ``run``; ``run`` is for a final grade under another protocol,
+one before its kernel's cut, and a promotion.
 
 Each output is a results DB of its own: it carries a copy of the grade it re-timed (setup, run, sources)
 so it merges into any other by natural key (:func:`results_db.merge`); ``apply`` merges finished
 shards into the results DB their worklist was built from, each final grade linked to the submission it
 re-timed. Every shard skips the grades it already holds, so a killed shard resumes.
+
+One protocol rule decides which row a final grade lands in (:func:`results_db.collapse_finals`): a regrade
+under the protocol of the submission's existing final row, or over a row with no protocol name, rewrites
+that row; one under another protocol adds a new row (``apply --on-protocol-change new-row``, the default),
+or deletes the old one (``replace``).
 
 Also reachable as ``python -m hpcagent_bench.harness.grade_under``; see ``docs/measurement_statistics.md``."""
 
@@ -1400,7 +1405,7 @@ def main(argv: list[str] | None = None) -> int:
         action="append",
         required=True,
         type=pathlib.Path,
-        help="a results DB (v1); repeatable: the core database, plus e.g. the CPF archive",
+        help="a results DB; repeatable: the core database, plus e.g. the CPF archive",
     )
     listing.add_argument(
         "--env-dir", action="append", default=[], type=pathlib.Path, help="setup env files that override the staging"
@@ -1455,14 +1460,23 @@ def main(argv: list[str] | None = None) -> int:
         "--no-torch-dist", action="store_true", help="scaling items: do not time the torch.distributed baseline curve"
     )
     applying = sub.add_parser("apply", help="merge finished shards into the results DB they were listed from")
-    applying.add_argument("--into", required=True, type=pathlib.Path, help="the results DB (v1) to write into")
+    applying.add_argument("--into", required=True, type=pathlib.Path, help="the results DB to write into")
     applying.add_argument("outputs", nargs="*", type=pathlib.Path, help="shard DBs or their --out-dir")
+    applying.add_argument(
+        "--on-protocol-change",
+        type=results_db.ProtocolChange,
+        choices=list(results_db.ProtocolChange),
+        metavar="{" + ",".join(change.value for change in results_db.ProtocolChange) + "}",
+        default=results_db.ProtocolChange.NEW_ROW,
+        help="a regrade under another protocol than the final row it re-timed: new-row (default) keeps both "
+        "rows, replace deletes the old one. Same protocol, or an old row with no protocol name: always the same row",
+    )
     args = parser.parse_args(argv)
 
     if args.command == "worklist":
         return write_worklist(args)
     if args.command == "apply":
-        apply_shards(args.into, args.outputs)
+        apply_shards(args.into, args.outputs, args.on_protocol_change)
         return 0
     from hpcagent_bench.harness import scaling_grade  # imports this module
 
@@ -1569,15 +1583,21 @@ def write_worklist(args: argparse.Namespace) -> int:
     return 0
 
 
-def apply_shards(into: pathlib.Path, outputs: Sequence[pathlib.Path]) -> int:
+def apply_shards(
+    into: pathlib.Path,
+    outputs: Sequence[pathlib.Path],
+    on_change: results_db.ProtocolChange = results_db.ProtocolChange.NEW_ROW,
+) -> int:
     """``apply``: merge every results DB under ``outputs`` (shard files or their directories) into
-    ``into`` by natural key (:func:`results_db.merge`), then keep one final grade per submission
-    (:func:`results_db.collapse_finals`): a regrade rewrites the final row it re-timed. With no ``outputs`` it
-    only collapses. Returns the rows merged."""
+    ``into`` by natural key (:func:`results_db.merge`), then keep one final grade per submission and
+    protocol (:func:`results_db.collapse_finals`): a regrade under the protocol of the final row it
+    re-timed, or of a row with no protocol name, rewrites that row; one under another protocol adds a
+    row, or with ``on_change`` :attr:`~results_db.ProtocolChange.REPLACE` rewrites it too. With no
+    ``outputs`` it only collapses. Returns the rows merged."""
     shards = sorted({db for out in outputs for db in ([out] if out.is_file() else out.rglob("*.db"))})
     copied = results_db.merge(into, shards)
     with contextlib.closing(results_db.open_db(into)) as conn:
-        removed = results_db.collapse_finals(conn, FINAL.stamp, timing.AA_REDUCTION)
+        removed = results_db.collapse_finals(conn, timing.AA_REDUCTION, on_change)
         conn.commit()
     print(
         f"{len(shards)} shard(s) -> {into}: {sum(copied.values())} rows {dict(sorted(copied.items()))}; "
