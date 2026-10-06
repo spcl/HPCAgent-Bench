@@ -1411,6 +1411,9 @@ def test_the_final_grade_times_fresh_draws_five_a_side_and_grades_the_base_untim
     with (
         config.overridden("measurement.baseline", "c"),
         config.overridden("measurement.final.alpha", 0.2),
+        # Unsealed, the host call forks and inherits the spy. A sealed call from a parent that mapped a GPU
+        # runtime starts from the forkserver, which neither sees the patch nor can unpickle a closure.
+        config.overridden("grading.seal", False),
         grade_under.environment_scope(),
     ):
         grade_under.apply_env(grade_under.final_env(item), set())
