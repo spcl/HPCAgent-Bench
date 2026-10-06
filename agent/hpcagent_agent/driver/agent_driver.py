@@ -280,8 +280,6 @@ def as_problem(raw: object) -> Problem | None:
 
 def as_int(raw: object) -> int:
     """One JSON value as an integer. A value carrying no number at all reads 0."""
-    if isinstance(raw, bool):
-        return int(raw)
     if isinstance(raw, (int, float)):
         return int(raw)
     if isinstance(raw, str) and raw.strip():
@@ -291,8 +289,6 @@ def as_int(raw: object) -> int:
 
 def as_float(raw: object) -> float:
     """One JSON value as a float. A value carrying no number at all reads 0.0."""
-    if isinstance(raw, bool):
-        return float(raw)
     if isinstance(raw, (int, float)):
         return float(raw)
     if isinstance(raw, str) and raw.strip():
