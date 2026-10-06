@@ -755,9 +755,6 @@ class EpisodeTotals(NamedTuple):
     tokens_effective_crashed: int
     tokens_billed_crashed: int
     final_attempt_start_ms: int
-    #: The provider-priced reading (PROVIDER_CACHE_DISCOUNT) of the same attempts, final and crashed.
-    tokens_provider: int | None = None
-    tokens_provider_crashed: int = 0
     #: The FINAL attempt's components, which a cost card weights (hpcagent_bench.stats.cost).
     tokens_fresh_input: int | None = None
     tokens_cached_input: int | None = None
@@ -768,7 +765,6 @@ class AttemptTotals(NamedTuple):
     """One attempt's three readings and the components they are made of."""
 
     effective: int
-    provider: int
     billed: int
     fresh_input: int
     cached_input: int
@@ -776,7 +772,7 @@ class AttemptTotals(NamedTuple):
 
 
 def attempt_totals(log: pathlib.Path) -> AttemptTotals:
-    """One attempt's effective, provider and billed tokens (8.1) and their components, from ONE read of its transcript: the
+    """One attempt's effective and billed tokens (8.1) and their components, from ONE read of its transcript: the
     effective cost model of :func:`events_cost` and the last-usage-per-message-id fold of
     :func:`fold_billed_event` (plus :func:`fold_compaction_recovery`, the same as
     :func:`accumulate_total_tokens`) over the same parsed events. Each attempt folds fresh, since the
@@ -794,7 +790,6 @@ def attempt_totals(log: pathlib.Path) -> AttemptTotals:
         billed = billed_total(billed_by_message)
     return AttemptTotals(
         int(cast("float", cost["effective"])),
-        int(cast("float", cost["effective_provider"])),
         billed,
         int(cast("float", cost["fresh_input"])),
         int(cast("float", cost["cached_input"])),
@@ -861,8 +856,6 @@ def episode_totals(worker_dir: pathlib.Path) -> EpisodeTotals:
         tokens_effective_crashed=sum(attempt.effective for attempt in per_attempt[:-1]),
         tokens_billed_crashed=sum(attempt.billed for attempt in per_attempt[:-1]),
         final_attempt_start_ms=final_attempt_start(worker_dir, logs),
-        tokens_provider=final.provider,
-        tokens_provider_crashed=sum(attempt.provider for attempt in per_attempt[:-1]),
         tokens_fresh_input=final.fresh_input,
         tokens_cached_input=final.cached_input,
         tokens_output=final.output,

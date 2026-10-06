@@ -58,7 +58,6 @@ class Result(SQLModel, table=True):
     # Which build ran it (dace main vs extended, another BLAS or image), stamped by the launcher via
     # HPCAGENT_BENCH_RECORD_BUILD. NULL == single-build run.
     build: str | None = None
-    prompt_hash: str | None = None  # -> the content-addressed prompt store (None if no prompt)
     execution: str = "native"  # native (no container) | container -- where the runtime was measured
     # CPU model that measured it (osinfo.cpu_model); required, so every row names its hardware.
     cpu: str

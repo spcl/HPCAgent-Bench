@@ -626,11 +626,10 @@ def source_roots(args: argparse.Namespace) -> list[pathlib.Path]:
 
 
 class DbResult(NamedTuple):
-    """What one database yielded, plus the C rows that could not be dated and so not be cleared."""
+    """What one database yielded."""
 
     observations: list[dict[str, Any]]
     sources: list[dict[str, Any]]
-    undated_c: int
 
 
 #: Grade kinds a request made: every one is a call of the agent's trajectory, and a submit-kind one
@@ -969,8 +968,8 @@ def read_db(
             observations += baseline_rows(conn, db)
     except (sqlite3.Error, results_db.SchemaVersionError) as exc:
         broken = {"run_root": db.run_root, "job": db.job, "judge_db": str(db.path), "row_kind": f"unreadable:{exc}"}
-        return DbResult([broken], [], 0)
-    return DbResult(observations, sources, 0)
+        return DbResult([broken], [])
+    return DbResult(observations, sources)
 
 
 #: What makes two observation rows one: a grade read from a shard and from the job DB merged from it.

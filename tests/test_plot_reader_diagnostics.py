@@ -79,7 +79,6 @@ def test_a_written_shard_is_aggregated_and_read(tmp_path: pathlib.Path) -> None:
                 native_time=None,
                 datatype="float64",
                 variant=None,
-                prompt_hash=None,
                 execution="native",
             )
         )
@@ -112,7 +111,6 @@ def write_row(shard: pathlib.Path, framework: str, build: str, time: float) -> N
                 native_time=None,
                 datatype="float64",
                 variant=None,
-                prompt_hash=None,
                 execution="native",
             )
         )
