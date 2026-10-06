@@ -3,10 +3,10 @@
 """Module-level constant folding over BITWISE expressions (native backends).
 
 Module constants are inlined into the kernel body by ``inline_module_constants``
-(``BET_M = 0.5`` -> ``0.5``). It already folded ``+ - * / // % **``; GROMACS /
-lulesh flag masks use bit-ops (``CI_DO_COUL = 1 << 1``, ``0x1 | 0x2``,
-``~mask``) and composed flags (``BOTH = A | B``), which previously left the
-constant name unresolved (``FAIL:unresolved:CI_DO_COUL``). These pin the fold.
+(``BET_M = 0.5`` -> ``0.5``). GROMACS / lulesh flag masks use bit-ops
+(``CI_DO_COUL = 1 << 1``, ``0x1 | 0x2``, ``~mask``) and composed flags
+(``BOTH = A | B``); an unfolded one leaves the constant name unresolved
+(``FAIL:unresolved:CI_DO_COUL``). These pin the fold.
 """
 
 import ast
@@ -14,9 +14,8 @@ import ast
 import numpy as np
 
 from hpcagent_bench.translators.numpyto_c.emit import emit_c
-from hpcagent_bench.translators.numpyto_common.frontend import parse_kernel
 from hpcagent_bench.translators.numpyto_common.lowering import lower
-from tests.translators.op_oracle import run_op
+from tests.translators.op_oracle import parse_source, run_op
 
 ALL = ("c", "cpp", "fortran", "numba", "pythran", "jax")
 
@@ -44,29 +43,8 @@ def test_bitops_fold_numerically() -> None:
 
 
 def emit_(src: str) -> str:
-    import json
-    import pathlib
-    import tempfile
-
-    d = pathlib.Path(tempfile.mkdtemp())
-    npy = d / "k_numpy.py"
-    npy.write_text(src)
-    bi = {
-        "benchmark": {
-            "name": "k",
-            "short_name": "k",
-            "relative_path": "",
-            "module_name": "k",
-            "func_name": "f",
-            "parameters": {"S": {"N": 3}},
-            "input_args": ["flags", "out"],
-            "array_args": ["flags", "out"],
-            "output_args": ["out"],
-            "init": {"shapes": {"flags": "(N,)", "out": "(3,)"}, "dtypes": {"flags": "int32"}},
-        }
-    }
-    (d / "bi.json").write_text(json.dumps(bi))
-    return emit_c(lower(parse_kernel(npy, d / "bi.json")), fn_name="f")
+    shapes = {"flags": "(N,)", "out": "(3,)"}
+    return emit_c(lower(parse_source(src, "f", ["flags"], ["out"], shapes, {"N": 3}, {"flags": "int32"})), fn_name="f")
 
 
 def test_bitops_folded_to_literals_in_emit() -> None:

@@ -8,14 +8,10 @@ declaration; the contained helper mapped every non-int64 integer local to ``int3
 ``integer(c_int16_t)`` local met a ``3_c_int32_t`` literal and gfortran rejected the ``IAND``.
 """
 
-import json
-import pathlib
-import tempfile
-
-from hpcagent_bench.translators.numpyto_common.frontend import parse_kernel
 from hpcagent_bench.translators.numpyto_common.lowering import lower
 from hpcagent_bench.translators.numpyto_fortran.emit import emit_fortran
 from hpcagent_bench.translators.numpyto_fortran.intrinsics import renders_natively
+from tests.translators.op_oracle import parse_source
 
 # The early return keeps ``h`` a contained subroutine instead of inlining it.
 SRC = (
@@ -34,23 +30,8 @@ SRC = (
 
 
 def emitted() -> str:
-    d = pathlib.Path(tempfile.mkdtemp())
-    (d / "k_numpy.py").write_text(SRC)
-    bench = {
-        "name": "k",
-        "short_name": "k",
-        "relative_path": "",
-        "module_name": "k",
-        "func_name": "f",
-        "parameters": {"S": {"N": 8}},
-        "input_args": ["x", "out"],
-        "array_args": ["x", "out"],
-        "output_args": ["out"],
-        "init": {"shapes": {"x": "(N,)", "out": "(1,)"}},
-    }
-    (d / "bi.json").write_text(json.dumps({"benchmark": bench}))
-    kir = lower(parse_kernel(d / "k_numpy.py", d / "bi.json"), native_call=renders_natively)
-    return emit_fortran(kir, fn_name="f")
+    kir = parse_source(SRC, "f", ["x"], ["out"], {"x": "(N,)", "out": "(1,)"}, {"N": 8})
+    return emit_fortran(lower(kir, native_call=renders_natively), fn_name="f")
 
 
 def test_helper_and_kernel_suffix_an_int16_bitwise_literal_alike() -> None:

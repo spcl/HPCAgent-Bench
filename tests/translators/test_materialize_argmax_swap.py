@@ -26,17 +26,13 @@ The spec requires c + fortran; c++ rides along (native, free). A wrong answer on
 any native backend is a real bug, so each must validate bit-close to numpy.
 """
 
-import json
-import pathlib
 import shutil
-import tempfile
 
 import numpy as np
 import pytest
 
-from hpcagent_bench.translators.numpyto_common.frontend import parse_kernel
 from hpcagent_bench.translators.numpyto_common.lowering import lower
-from tests.translators.op_oracle import run_op, run_return_op
+from tests.translators.op_oracle import parse_source, run_op, run_return_op
 
 NATIVE = ("c", "cpp", "fortran")
 
@@ -55,28 +51,7 @@ def lower_local_dtypes(src, func, shapes, syms, inputs, outputs, dtypes):
     """Lower ``src`` through the c-frontend pipeline and return the finalised
     ``local_dtypes`` table -- so a dtype-tagging fix is asserted directly on the
     lowered IR the emitters read (no compiler needed)."""
-    all_args = inputs + outputs
-    bench_info = {
-        "benchmark": {
-            "name": func,
-            "short_name": func,
-            "relative_path": "",
-            "module_name": func,
-            "func_name": func,
-            "parameters": {"S": dict(syms)},
-            "input_args": all_args,
-            "array_args": [a for a in all_args if a in shapes],
-            "output_args": outputs,
-            "init": {"shapes": shapes, "dtypes": dict(dtypes)},
-        }
-    }
-    with tempfile.TemporaryDirectory() as td:
-        tdp = pathlib.Path(td)
-        npy = tdp / f"{func}.py"
-        npy.write_text(src)
-        bi = tdp / "bi.json"
-        bi.write_text(json.dumps(bench_info))
-        return dict(lower(parse_kernel(npy, bi)).local_dtypes)
+    return dict(lower(parse_source(src, func, inputs, outputs, shapes, syms, dtypes)).local_dtypes)
 
 
 # (a) reduction method on a Call receiver: np.abs(x - y).sum()                 #

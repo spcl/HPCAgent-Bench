@@ -28,7 +28,7 @@ import tempfile
 import numpy as np
 import pytest
 
-from tests.translators.op_oracle import run_op, run_return_op
+from tests.translators.op_oracle import parse_source, run_op, run_return_op
 
 ALL = ("c", "cpp", "fortran", "numba", "pythran", "jax")
 NATIVE = ("c", "cpp", "fortran")
@@ -165,30 +165,11 @@ def test_return_transposed_axes_3d() -> None:
 
 def binding_ptr_args(src: str, inputs: list[str], shapes: dict[str, str], syms: dict[str, int]) -> list[str]:
     from hpcagent_bench.translators.numpyto_c.bindings import emit_binding
-    from hpcagent_bench.translators.numpyto_common.frontend import parse_kernel
     from hpcagent_bench.translators.numpyto_common.lowering import lower
 
-    d = pathlib.Path(tempfile.mkdtemp())
-    npy = d / "k_numpy.py"
-    npy.write_text(src)
-    bi = {
-        "benchmark": {
-            "name": "k",
-            "short_name": "k",
-            "relative_path": "",
-            "module_name": "k",
-            "func_name": "f",
-            "parameters": {"S": dict(syms)},
-            "input_args": inputs,
-            "array_args": [a for a in inputs if a in shapes],
-            "output_args": [],
-            "init": {"shapes": shapes},
-        }
-    }
-    (d / "bi.json").write_text(json.dumps(bi))
-    emit_binding(lower(parse_kernel(npy, d / "bi.json")), d / "b.json", base_name="f")
-    args = json.loads((d / "b.json").read_text())["args"]
-    return [a["name"] for a in args if a["kind"].startswith("ptr_")]
+    binding = pathlib.Path(tempfile.mkdtemp()) / "b.json"
+    emit_binding(lower(parse_source(src, "f", inputs, [], shapes, syms)), binding, base_name="f")
+    return [a["name"] for a in json.loads(binding.read_text())["args"] if a["kind"].startswith("ptr_")]
 
 
 def test_tuple_return_promotes_both_into_the_abi() -> None:

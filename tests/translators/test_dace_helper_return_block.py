@@ -17,12 +17,9 @@ what makes the text assertions here worth more than a frontend gate.
 """
 
 import ast
-import json
-import pathlib
-import tempfile
 
 from hpcagent_bench.translators.numpyto_c.dace_emit import emit_dace, without_valueless_returns
-from hpcagent_bench.translators.numpyto_common.frontend import parse_kernel
+from tests.translators.op_oracle import parse_source
 
 #: A helper the emitter must KEEP: it returns a whole array, and its two call sites have different
 #: extents, so there is no single inlinable body. The early ``return`` is a second shape of the same
@@ -63,24 +60,8 @@ def k(a, b, oa, ob):
 
 
 def emitted(source: str) -> str:
-    d = pathlib.Path(tempfile.mkdtemp())
-    (d / "k_numpy.py").write_text(source)
-    bench = {
-        "name": "k",
-        "short_name": "k",
-        "relative_path": ".",
-        "module_name": "k",
-        "func_name": "k",
-        "dwarf": "d",
-        "level": 3,
-        "parameters": {"S": {"n": 8, "m": 4}},
-        "input_args": ["a", "b", "oa", "ob"],
-        "array_args": ["a", "b", "oa", "ob"],
-        "output_args": ["oa", "ob"],
-        "init": {"shapes": {"a": "(n,)", "b": "(m,)", "oa": "(n,)", "ob": "(m,)"}, "dtypes": {}},
-    }
-    (d / "k.json").write_text(json.dumps({"benchmark": bench}))
-    return emit_dace(parse_kernel(d / "k_numpy.py", d / "k.json"))
+    shapes = {"a": "(n,)", "b": "(m,)", "oa": "(n,)", "ob": "(m,)"}
+    return emit_dace(parse_source(source, "k", ["a", "b"], ["oa", "ob"], shapes, {"n": 8, "m": 4}))
 
 
 def valueless_returns(src: str) -> list[ast.Return]:

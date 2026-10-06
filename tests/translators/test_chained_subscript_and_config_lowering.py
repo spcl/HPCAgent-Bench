@@ -21,19 +21,16 @@ translation is orthogonal to the config flags -- one binary handles all of them)
 
 import ast
 import dataclasses
-import json
-import pathlib
 from collections.abc import Mapping
 
 import numpy as np
 import pytest
 
 from hpcagent_bench.translators.numpyto_common import lowering
-from hpcagent_bench.translators.numpyto_common.frontend import collect_bool_preset_names, parse_kernel
+from hpcagent_bench.translators.numpyto_common.frontend import collect_bool_preset_names
 from hpcagent_bench.translators.numpyto_common.lib_nodes import reads_complex
 from hpcagent_bench.translators.numpyto_common.lowering import ChainedSubscriptFlattener, lower
-from tests.translators.op_oracle import bench_info_ as synthesize_bench_info
-from tests.translators.op_oracle import run_op
+from tests.translators.op_oracle import parse_source, run_op
 
 ALL = ("c", "cpp", "fortran", "numba", "pythran", "jax")
 
@@ -163,17 +160,12 @@ def lowered_source(
     outputs: Mapping[str, tuple[int, ...]],
     shapes: Mapping[str, str],
     syms: Mapping[str, int],
-    workdir: pathlib.Path,
 ) -> str:
     """Kernel ``gather`` after lowering, as source, through the real file-reading entry point."""
-    kernel = workdir / "gather_numpy.py"
-    kernel.write_text(src)
-    info = workdir / "bench_info.json"
     dtypes = {name: str(array.dtype) for name, array in arrays.items() if array.dtype.kind == "i"}
-    info.write_text(
-        json.dumps(synthesize_bench_info("gather", list(arrays), list(outputs), dict(shapes), dict(syms), dtypes))
+    return ast.unparse(
+        lower(parse_source(src, "gather", list(arrays), list(outputs), dict(shapes), dict(syms), dtypes)).tree
     )
-    return ast.unparse(lower(parse_kernel(kernel, info)).tree)
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -187,10 +179,10 @@ class ChainCase:
     lowered: str
 
 
-def check_chain_case(case: ChainCase, syms: Mapping[str, int], workdir: pathlib.Path) -> None:
+def check_chain_case(case: ChainCase, syms: Mapping[str, int]) -> None:
     src = f"import numpy as np\ndef gather({', '.join(case.arrays)}, out):\n    {case.body}\n"
     shapes = {**case.shapes, "out": "(" + ",".join(str(extent) for extent in case.out) + ")"}
-    assert case.lowered in lowered_source(src, case.arrays, {"out": case.out}, shapes, syms, workdir)
+    assert case.lowered in lowered_source(src, case.arrays, {"out": case.out}, shapes, syms)
     dtypes = {name: str(array.dtype) for name, array in case.arrays.items() if array.dtype.kind == "i"}
     res = run_op(
         src,
@@ -280,15 +272,15 @@ VIEW_GATHERS = {
 
 
 @pytest.mark.parametrize("name", list(VIEW_GATHERS))
-def test_an_index_array_split_from_a_scalar_by_a_slice_keeps_its_axis_order(name: str, tmp_path: pathlib.Path) -> None:
+def test_an_index_array_split_from_a_scalar_by_a_slice_keeps_its_axis_order(name: str) -> None:
     # ``A[2][:3, idx]`` is (3, P), the flat ``A[2, :3, idx]`` is (P, 3) (SIG11 in C). Lowering reads the
     # view's axes at the statement iterators and composes them onto the base, one element read.
     chained, flat = VIEW_PREMISES[name]
     assert chained != flat
-    check_chain_case(VIEW_GATHERS[name], VIEW_SYMS, tmp_path)
+    check_chain_case(VIEW_GATHERS[name], VIEW_SYMS)
 
 
-def test_adjacent_index_arrays_behind_a_slice_share_one_broadcast_block(tmp_path: pathlib.Path) -> None:
+def test_adjacent_index_arrays_behind_a_slice_share_one_broadcast_block() -> None:
     # ``C[:3, pair, jdx]``: pair (Q, 1) and jdx (R,) broadcast to ONE (Q, R) block after the slice axis.
     # The index arrays share the broadcast iterators; one iterator per array would leave ``jdx`` unindexed.
     case = ChainCase(
@@ -298,7 +290,7 @@ def test_adjacent_index_arrays_behind_a_slice_share_one_broadcast_block(tmp_path
         VIEW_B[0][:3, VIEW_PAIR, VIEW_JDX].shape,
         "out[si0, si1, si2] = C[si0, pair[si1, 0], jdx[si2]]",
     )
-    check_chain_case(case, VIEW_SYMS, tmp_path)
+    check_chain_case(case, VIEW_SYMS)
 
 
 GATHER_RNG = np.random.default_rng(11)
@@ -363,11 +355,11 @@ NEWAXIS_GATHERS = {
 
 
 @pytest.mark.parametrize("name", list(NEWAXIS_GATHERS))
-def test_a_newaxis_beside_a_gathered_axis_reads_each_gathered_row(name: str, tmp_path: pathlib.Path) -> None:
+def test_a_newaxis_beside_a_gathered_axis_reads_each_gathered_row(name: str) -> None:
     # xsbench's ``num_nucs[mat][:, None]`` flattens to ``num_nucs[mat, None]``. A newaxis in a slice-free
     # gather inserts a unit axis and reads no source axis, and one inside an index array is a result axis of
     # that array; neither may shift the gather onto the column iterator.
-    check_chain_case(NEWAXIS_GATHERS[name], GATHER_SYMS, tmp_path)
+    check_chain_case(NEWAXIS_GATHERS[name], GATHER_SYMS)
 
 
 # pure: a boolean preset value is a config-flag name (typed bool)

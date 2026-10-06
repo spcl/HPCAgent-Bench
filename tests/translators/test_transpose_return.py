@@ -19,6 +19,7 @@ import pytest
 
 from hpcagent_bench.translators.numpyto_common.lib_nodes import expand_transpose
 from hpcagent_bench.translators.numpyto_common.lowering import TransposeRewriter
+from tests.translators.op_oracle import parse_source
 
 
 def rewrite_(src, sparse=()):
@@ -62,29 +63,9 @@ def test_sparse_transpose_not_densified() -> None:
 
 
 def parse_(src, input_args, shapes, syms):
-    from hpcagent_bench.translators.numpyto_common.frontend import parse_kernel
     from hpcagent_bench.translators.numpyto_common.lowering import lower
 
-    d = pathlib.Path(tempfile.mkdtemp())
-    npy = d / "k_numpy.py"
-    npy.write_text(src)
-    bi = {
-        "benchmark": {
-            "name": "k",
-            "short_name": "k",
-            "relative_path": "",
-            "module_name": "k",
-            "func_name": "f",
-            "parameters": {"S": dict(syms)},
-            "input_args": input_args,
-            "array_args": [a for a in input_args if a in shapes],
-            "output_args": [],
-            "init": {"shapes": shapes},
-        }
-    }
-    p = d / "bi.json"
-    p.write_text(json.dumps(bi))
-    return lower(parse_kernel(npy, p))
+    return lower(parse_source(src, "f", input_args, [], shapes, syms))
 
 
 def test_return_transpose_promotes_reversed_shape() -> None:

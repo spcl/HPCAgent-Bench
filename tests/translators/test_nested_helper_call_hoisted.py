@@ -11,17 +11,12 @@ nussinov's shape: its ``match`` sits inside a ``max(...)`` argument). Hoisting i
 C needs none of this -- it emits helpers as ordinary by-value functions.
 """
 
-import json
-import pathlib
-import tempfile
-
 import numpy as np
 
-from hpcagent_bench.translators.numpyto_common.frontend import parse_kernel
 from hpcagent_bench.translators.numpyto_common.ir import KernelIR
 from hpcagent_bench.translators.numpyto_common.lowering import lower
 from hpcagent_bench.translators.numpyto_fortran.emit import emit_fortran
-from tests.translators.op_oracle import run_op
+from tests.translators.op_oracle import parse_source, run_op
 
 NESTED = (
     "import numpy as np\n"
@@ -36,26 +31,7 @@ NESTED = (
 
 
 def kir_(src: str, dtypes: dict[str, str] | None = None) -> KernelIR:
-    d = pathlib.Path(tempfile.mkdtemp())
-    (d / "k_numpy.py").write_text(src)
-    bench = {
-        "name": "k",
-        "short_name": "k",
-        "relative_path": "",
-        "module_name": "k",
-        "func_name": "f",
-        "level": 3,
-        "parameters": {"S": {"n": 8}},
-        "input_args": ["x", "out"],
-        "array_args": ["x", "out"],
-        "output_args": ["out"],
-        "init": {
-            "shapes": {"x": "(n,)", "out": "(n,)"},
-            "dtypes": dtypes or {},
-        },
-    }
-    (d / "bi.json").write_text(json.dumps({"benchmark": bench}))
-    return lower(parse_kernel(d / "k_numpy.py", d / "bi.json"))
+    return lower(parse_source(src, "f", ["x"], ["out"], {"x": "(n,)", "out": "(n,)"}, {"n": 8}, dtypes))
 
 
 def test_the_nested_call_becomes_a_statement_call_inside_its_loop() -> None:

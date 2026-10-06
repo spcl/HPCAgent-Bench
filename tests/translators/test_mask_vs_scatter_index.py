@@ -4,47 +4,21 @@
 """``arr[idx] = v`` is a boolean-MASK select or an integer-index SCATTER, and only the index
 array's DTYPE separates them -- shape equality cannot.
 
-``BooleanMaskRewriter.is_mask_expr`` used to accept a bare ``Name`` index on shape equality
-alone, so an int64 index array whose declared shape happened to match the target lowered to
-``if (idx[i]) arr[i] = v``: the values are read as truth, at the wrong positions, and the loop
-runs to the target's extent rather than the index set's -- reading off the end whenever the
-index set is shorter. That is what silently miscompiled lulesh's ``xdd[symmX] = 0.0``
-(``symmX`` is a node-index set of length ``edgeNodes**2`` declared ``(numNode,)``).
-
-``collect_bool_names`` is the shared criterion; ``BooleanMaskReductionRewriter`` already used
-it, ``BooleanMaskRewriter`` did not.
+Accepting a bare ``Name`` index on shape equality alone would lower an int64 index array whose
+declared shape matches the target to ``if (idx[i]) arr[i] = v``: the values are read as truth, at
+the wrong positions, and the loop runs to the target's extent rather than the index set's --
+reading off the end whenever the index set is shorter (lulesh's ``xdd[symmX] = 0.0``: ``symmX`` is
+a node-index set of length ``edgeNodes**2`` declared ``(numNode,)``). ``collect_bool_names`` is
+the one criterion both mask rewriters use.
 """
 
-import json
-import pathlib
-import tempfile
-from typing import Any
-
 from hpcagent_bench.translators.numpyto_c.emit import emit_c
-from hpcagent_bench.translators.numpyto_common.frontend import parse_kernel
 from hpcagent_bench.translators.numpyto_common.lowering import lower
+from tests.translators.op_oracle import parse_source
 
 
 def emit_c_(src: str, inputs: list[str], shapes: dict[str, str], syms: dict[str, int], dtypes: dict[str, str]) -> str:
-    d = pathlib.Path(tempfile.mkdtemp())
-    npy = d / "k_numpy.py"
-    npy.write_text(src)
-    bi: dict[str, Any] = {
-        "benchmark": {
-            "name": "k",
-            "short_name": "k",
-            "relative_path": "",
-            "module_name": "k",
-            "func_name": "f",
-            "parameters": {"S": dict(syms)},
-            "input_args": inputs,
-            "array_args": [a for a in inputs if a in shapes],
-            "output_args": [],
-            "init": {"shapes": shapes, "dtypes": dtypes},
-        }
-    }
-    (d / "bi.json").write_text(json.dumps(bi))
-    return emit_c(lower(parse_kernel(npy, d / "bi.json")), fn_name="f")
+    return emit_c(lower(parse_source(src, "f", inputs, [], shapes, syms, dtypes)), fn_name="f")
 
 
 SRC = "import numpy as np\ndef f(out, idx):\n out[idx] = 0.0\n"
