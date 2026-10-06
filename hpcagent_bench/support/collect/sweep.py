@@ -8,8 +8,7 @@ layout) through the judge's own grading path instead (docs/sparse_abi.md).
 
 ``run_framework_sweep`` also takes ``shard``/``csv_path``: cost-pack the selection across ranks
 (:func:`shard_names`), run this rank's slice, write one CSV row per (kernel, framework, impl)
-(:func:`write_csv_rows`), then merge every rank's CSV with ``--summarize`` (:func:`summarize_csv`),
-as ``tests/corpus/measure_parallelization.py`` does on the DaCe side."""
+(:func:`write_csv_rows`), then merge every rank's CSV with ``--summarize`` (:func:`summarize_csv`)."""
 
 import contextlib
 import csv
