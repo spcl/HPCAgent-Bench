@@ -99,7 +99,7 @@ repos:
       # floor -- --propagate can only carry the submitter's limit, never override it. The scope is
       # EVERY .sbatch AND .sh, not just the submitters: keying on .sbatch left the container launch
       # wrappers, the login-node helpers and the sourced env layers open. The check also
-      # rejects a later `ulimit -c unlimited` (the old substring test passed straight through one)
+      # rejects a later `ulimit -c unlimited` (a substring test would pass straight through one)
       # unless the line says why with `# core-dumps-ok: <reason>`.
       - id: hpcagent_bench-core-dumps
         name: shell entry points disable core dumps (ulimit -c 0)
