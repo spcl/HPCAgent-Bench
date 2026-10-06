@@ -290,9 +290,13 @@ def test_a_live_episode_is_the_first_under_its_label(tmp_path: pathlib.Path) -> 
     assert _runs(db, ("rep",)) == [(1,)]
 
 
-def test_episodes_of_one_label_with_no_job_stay_apart_by_rep(tmp_path: pathlib.Path) -> None:
+def test_episodes_of_one_label_with_no_job_stay_apart_by_rep(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Episodes recovered from merged databases lost their job, and several share a label: ``rep`` is
-    the only column that keeps them two episodes rather than one."""
+    the only column that keeps them two episodes rather than one. Recorded outside any Slurm job, so
+    the first episode carries no job either (inside one it takes ``SLURM_JOB_ID``)."""
+    monkeypatch.delenv(recording.JOB_ENV, raising=False)
     db = str(tmp_path / "r.db")
     recording.record_call(_score(), Task(KERNEL, "restricted", "c"), status="ok", route="score", path=db)
     insert = "INSERT INTO episodes (setup, job, label, rep) VALUES (?, NULL, ?, ?)"
