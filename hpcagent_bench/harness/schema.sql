@@ -230,7 +230,7 @@ CREATE TABLE reference_scaling_points (
     image        TEXT NOT NULL DEFAULT '',
     compile_mode TEXT NOT NULL DEFAULT '',
     nodes        INTEGER NOT NULL DEFAULT 0,
-    ranked_ns    INTEGER NOT NULL DEFAULT 0,            -- the time the curve used
+    ranked_ns    INTEGER,                               -- the time the curve used; NULL = a hole (never 0)
     samples      TEXT NOT NULL DEFAULT '',              -- JSON: every repetition's time (ns)
     work_ratio   REAL,
     note         TEXT NOT NULL DEFAULT '',
