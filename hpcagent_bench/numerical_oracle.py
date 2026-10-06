@@ -1281,9 +1281,9 @@ def fork_a_single_threaded_child() -> int:
         return os.fork()
 
 
-def _forked_status(compute, timeout_s: float) -> str:
+def _forked_status(compute, timeout_s: float, expired: str = "skip:too-long") -> str:
     """Run ``compute()`` in a forked child (contains RSS growth, segfaults, JAX fork-after-threads
-    deadlock); SIGKILLed and reported ``skip:too-long`` past ``timeout_s``."""
+    deadlock); SIGKILLed and reported as ``expired`` past ``timeout_s``."""
     r, w = os.pipe()
     pid = fork_a_single_threaded_child()
     if pid == 0:  # child
@@ -1309,7 +1309,7 @@ def _forked_status(compute, timeout_s: float) -> str:
             except ProcessLookupError:
                 pass
             os.waitpid(pid, 0)
-            return "skip:too-long"
+            return expired
         if not select.select([r], [], [], remaining)[0]:
             continue  # nothing yet -> re-check the deadline
         b = os.read(r, 4096)
@@ -1630,46 +1630,13 @@ def _run_isopar(
 
 def _invoke_isolated(backend, binding, so, by, syms, expected, compare, rtol, atol, index_names) -> str:
     """Run a compiled backend's ctypes call in a forked child, so a miscompile (heap corruption,
-    segfault) reports ``FAIL:crash:SIG<n>`` instead of killing the whole sweep."""
-    r, w = os.pipe()
-    pid = fork_a_single_threaded_child()
-    if pid == 0:  # child
-        die_with_parent()
-        os.close(r)
-        try:
-            res = _invoke(backend, binding, so, by, syms, expected, compare, rtol, atol, index_names)
-        except Exception as exc:  # noqa: BLE001
-            res = exc_status(exc)
-        try:
-            os.write(w, res.encode()[:4096])
-        finally:
-            os._exit(0)
-    os.close(w)  # parent
-    # Bound the wait: a miscompiled kernel can spin forever, so poll the pipe against a
-    # deadline and SIGKILL on expiry (FAIL:timeout) rather than block on os.read.
-    deadline = time.monotonic() + INVOKE_TIMEOUT_S
-    chunks = []
-    while True:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            os.close(r)
-            try:
-                os.kill(pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            os.waitpid(pid, 0)
-            return "FAIL:timeout"
-        if not select.select([r], [], [], remaining)[0]:
-            continue
-        b = os.read(r, 4096)
-        if not b:
-            break
-        chunks.append(b)
-    os.close(r)
-    _, st = os.waitpid(pid, 0)
-    if os.WIFSIGNALED(st):
-        return f"FAIL:crash:SIG{os.WTERMSIG(st)}"
-    return b"".join(chunks).decode() or "FAIL:no-result"
+    segfault) reports ``FAIL:crash:SIG<n>`` instead of killing the whole sweep, and one that spins
+    forever is killed at :data:`INVOKE_TIMEOUT_S` as ``FAIL:timeout``."""
+    return _forked_status(
+        lambda: _invoke(backend, binding, so, by, syms, expected, compare, rtol, atol, index_names),
+        INVOKE_TIMEOUT_S,
+        expired="FAIL:timeout",
+    )
 
 
 def _invoke(backend, binding, so, by, syms, expected, compare, rtol, atol, index_names=frozenset()) -> str:
