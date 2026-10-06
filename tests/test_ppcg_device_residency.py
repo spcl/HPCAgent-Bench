@@ -216,6 +216,14 @@ def test_entry_params_reads_vla_and_restrict_parameters() -> None:
     assert ppcg_transform.entry_params(PPCG_VLA_TRANSIENT_HOST, "other") == []
 
 
+def test_entry_params_reads_pointer_to_row_parameters_past_their_own_parenthesis() -> None:
+    """The emitted scop passes a rank-2 array as a pointer to a VLA row; its ``(*restrict A)`` closes a
+    parenthesis inside the list, which must not end it -- else no mirror is found and the ppcg_hip
+    column refuses every rank-2 kernel."""
+    host = 'f(1);\nextern "C" void mm_fp64(int64_t N, double (*restrict A)[N], double (*restrict C)[N]) {\n}\n'
+    assert ppcg_transform.entry_params(host, "mm_fp64") == ["N", "A", "C"]
+
+
 def test_a_passthrough_is_published_and_declined_not_crashed_on(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
