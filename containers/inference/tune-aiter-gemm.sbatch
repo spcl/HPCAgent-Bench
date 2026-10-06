@@ -2,12 +2,13 @@
 # Tune aiter's bf16 GEMM dispatch for the shapes our served models run, on one MI300A node, inside the
 # SGLang image. aiter ships bf16_tuned_gemm.csv rows for gfx950 and gfx1250 only, so on gfx942 every
 # bf16 GEMM without a row logs "not found tuned config ... using torch solution" and leaves aiter.
-# Output: aiter-configs/bf16_tuned_gemm_gfx942.csv beside this script; run_cluster.sh merges it after
-# aiter's own file (AITER_CONFIG_GEMM_BF16). Re-run after an aiter bump or for a new model's shapes.
+# Output: aiter-configs/bf16_tuned_gemm_gfx942.csv beside this script, which the SGLang image installs as
+# one of aiter's model_configs files (containers/images/sglang/Dockerfile); rebuild the image after a
+# re-run. Re-run after an aiter bump or for a new model's shapes.
 #   sbatch -A <account> -p mi300 --gpus-per-node=4 containers/inference/tune-aiter-gemm.sbatch
 # Candidates are aiter's own kernels (--libtype: asm, flydsl, skinny, triton, opus), never torch or hipBLASLt:
-# a row exists to keep the GEMM in aiter. With torch allowed it won 53 of 564 rows, all prefill shapes with
-# M >= 7424 (668633); hipBLASLt's 1363 solutions per shape alone outran a 4 h job (668576).
+# a row exists to keep the GEMM in aiter (torch, allowed, wins only prefill shapes with M >= 7424, and
+# hipBLASLt's 1363 solutions per shape outrun a 4 h job).
 # SHAPES: "N,K" pairs, from the "shape is M:.., N:.., K:.." lines of a server log (AITER_LOG_TUNED_CONFIG=1).
 #SBATCH --job-name=tune-aiter-gemm
 #SBATCH --nodes=1

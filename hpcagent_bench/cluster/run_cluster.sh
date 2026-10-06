@@ -314,16 +314,6 @@ run_vllm_node() {
         else
             echo "aiter: seeding ${aiter_dst} FAILED; using the in-image prebuild only" >&2
         fi
-        # Our tuned bf16 GEMM rows for this arch (containers/inference/tune-aiter-gemm.sbatch), merged
-        # after aiter's own file: aiter ships none for gfx942, so an untuned shape runs torch's GEMM.
-        local gemm_rows="${REPO_DIR}/containers/inference/aiter-configs/bf16_tuned_gemm_${aiter_arch:-none}.csv"
-        local aiter_pkg
-        aiter_pkg="$("${HPCAGENT_BENCH_IMAGE_PYTHON:-python3}" -c \
-            'import aiter, os; print(os.path.dirname(aiter.__file__))' 2>/dev/null)" || aiter_pkg=""
-        if [[ "${HPCAGENT_BENCH_AITER_TUNED_GEMM:-1}" == 1 && -f "${gemm_rows}" && -f "${aiter_pkg}/configs/bf16_tuned_gemm.csv" ]]; then
-            export AITER_CONFIG_GEMM_BF16="${AITER_CONFIG_GEMM_BF16:-${aiter_pkg}/configs/bf16_tuned_gemm.csv:${gemm_rows}}"
-            echo "aiter: bf16 GEMM configs ${AITER_CONFIG_GEMM_BF16}"
-        fi
     fi
     export VLLM_CACHE_ROOT="${VLLM_CACHE_ROOT:-${cache_root}/.vllm/${cache_key}}"
     # Triton's cache is SEPARATE from VLLM_CACHE_ROOT. Unset it defaults to ~/.triton, so every job
