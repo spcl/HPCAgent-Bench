@@ -3,12 +3,11 @@
 """One table names the AMD GPU archs; builds, gates, EDF templates and the harness take them from there.
 
 containers/images/gpu_arch.env maps a Slurm partition to the gfx arch of its GPUs and lists the
-targets a portable AMD image carries. These pin the table and its shell lookups, the absence of gfx literals wherever an arch could be spelled instead,
-the rendered EDF arch variables, the runtime three-way check on a stub srun, the device-code gate on
+targets a portable AMD image carries. These pin the table and its shell lookups (the hook
+scripts/checks/check_repo_rules.py keeps gfx literals out of everything else), the rendered EDF arch variables, the runtime three-way check on a stub srun, the device-code gate on
 stand-in binaries, and detect_gfx refusing to guess.
 """
 
-import ast
 import pathlib
 import re
 import subprocess
@@ -25,8 +24,6 @@ TABLE = CE / "gpu_arch.env"
 GATE = ROOT / "containers" / "lib" / "device_arch_gate.sh"
 CHECK = CE / "gpu_arch_check.sh"
 SHELL_PATH = "/usr/bin:/bin"
-#: A gfx arch spelled out.
-GFX_LITERAL = re.compile(r"\bgfx[0-9a-f]{3,4}\b")
 #: The AMD image directories; each builds with ROCM_ARCH from the table.
 AMD_IMAGES = ("judge-agent-amd", "sglang", "vllm")
 #: How each AMD image looks its arch list up: portable images take every AMD_GPU_TARGETS arch
@@ -39,34 +36,10 @@ NOT_AMD = {
     "vllm-cuda": "GH200 inference image built on another Alps cluster; its arch is a CUDA capability",
     "judge-agent-cpu": "CPU-only image with no GPU code at all, built on whichever host architecture",
 }
-#: The arch variables an image ENV sets and an EDF template may restate.
 #: AMD images that compile no device code: the vendor base's fat binary must CONTAIN the arch.
 VENDOR_DEVICE_CODE = frozenset({"vllm"})
+#: The arch variables an image ENV sets and an EDF template may restate.
 ARCH_VARS = ("HCC_AMDGPU_TARGET", "PYTORCH_ROCM_ARCH", "GPU_ARCHS", "GPU_ARCH_LIST")
-#: Non-comment gfx literals that must stay, keyed by (file, stripped line), with the reason.
-REASON_SETUP_ROCM = "verbatim upstream setup_rocm.py text the sglang recipe's asserted multi-arch edit matches"
-LITERAL_EXCEPTIONS: dict[tuple[str, str], str] = {
-    (
-        "containers/images/sglang/Dockerfile",
-        '(\'if amdgpu_target not in ["gfx942", "gfx950", "gfx1250"]:\\n\',',
-    ): REASON_SETUP_ROCM,
-    (
-        "containers/images/sglang/Dockerfile",
-        '\'if not set(amdgpu_target.split(";")) <= {"gfx90a", "gfx942", "gfx950", "gfx1250"}:\\n\'),',
-    ): REASON_SETUP_ROCM,
-    (
-        "containers/images/sglang/Dockerfile",
-        '(\'if amdgpu_target == "gfx942" else "-DHIP_FP8_TYPE_E4M3"\',',
-    ): REASON_SETUP_ROCM,
-    (
-        "containers/images/sglang/Dockerfile",
-        '\'if "gfx942" in amdgpu_target.split(";") else "-DHIP_FP8_TYPE_E4M3"\'),',
-    ): REASON_SETUP_ROCM,
-    (
-        "containers/images/sglang/Dockerfile",
-        '(\'48 * 1024 if amdgpu_target == "gfx942" else\', \'48 * 1024 if "gfx942" in amdgpu_target.split(";") else\'),',
-    ): REASON_SETUP_ROCM,
-}
 #: rocminfo with a CPU agent first and one GPU agent, whose arch is filled in.
 ROCMINFO = """\
 *******
@@ -197,64 +170,6 @@ def test_no_dockerfile_gives_rocm_arch_a_default() -> None:
     assert dockerfiles
     pattern = re.compile(r"^\s*ARG\s+ROCM_ARCH\s*=", re.M)
     assert [str(path) for path in dockerfiles if pattern.search(path.read_text(encoding="utf-8"))] == []
-
-
-def tracked_files() -> list[str]:
-    out = subprocess.run(["git", "-C", str(ROOT), "ls-files", "-z"], capture_output=True, check=True).stdout
-    return [name for name in out.decode().split("\0") if name]
-
-
-def in_literal_scope(rel: str) -> bool:
-    """The files where a spelled-out arch would be a second source of truth."""
-    name = rel.rsplit("/", 1)[-1]
-    parts = rel.split("/")
-    if rel == "containers/images/gpu_arch.env" or name.endswith(".md") or {"skills", "tests"} & set(parts):
-        return False
-    if (
-        name in ("Dockerfile", "build.sh", "image.sh")
-        or name.endswith(".sbatch")
-        or re.fullmatch(r"edf.*\.toml\.example", name)
-    ):
-        return True
-    if parts[0] == "hpcagent_bench":
-        return name.endswith(".py")
-    return parts[0] in ("experiments", "scripts")
-
-
-def python_literals(text: str) -> list[str]:
-    """String constants that are not docstrings or other bare string statements."""
-    tree = ast.parse(text)
-    bare = {id(node.value) for node in ast.walk(tree) if isinstance(node, ast.Expr)}
-    return [
-        node.value
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in bare
-    ]
-
-
-def code_pieces(rel: str, text: str) -> list[str]:
-    """What a file says outside its comments: string literals for Python, comment-stripped lines otherwise."""
-    if rel.endswith(".py"):
-        return python_literals(text)
-    return [re.sub(r"(^|\s)#.*$", "", line).strip() for line in text.splitlines()]
-
-
-def test_no_gfx_arch_is_spelled_outside_the_table_in_builds_launchers_scripts_or_the_harness() -> None:
-    found: list[str] = []
-    scanned = 0
-    for rel in tracked_files():
-        path = ROOT / rel
-        if not in_literal_scope(rel) or not path.is_file():
-            continue
-        scanned += 1
-        text = path.read_bytes().decode("utf-8", "replace")
-        if not GFX_LITERAL.search(text):
-            continue
-        for piece in code_pieces(rel, text):
-            if GFX_LITERAL.search(piece) and (rel, piece) not in LITERAL_EXCEPTIONS:
-                found.append(f"{rel}: {piece}")
-    assert scanned > 100, f"only {scanned} files in scope; the scan checks nothing"
-    assert not found, "gfx arch literals outside gpu_arch.env:\n" + "\n".join(found)
 
 
 def amd_rows() -> list[list[str]]:

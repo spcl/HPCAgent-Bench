@@ -123,7 +123,7 @@ the GPU generation whose images and serving layers the experiment uses ([below](
 | `HPCAGENT_BENCH_HOST` | `SLURMD_NODENAME`, else the host name | the node name recorded with each result |
 
 Every command runs `<python> -m hpcagent_bench...` (or `-m hpcagent_agent...` in an agent step) with one of the two
-interpreters, never a PATH lookup. Nothing sets `PYTHONPATH` or edits `sys.path` (`tests/test_import_paths.py`): both
+interpreters, never a PATH lookup. Nothing sets `PYTHONPATH` or edits `sys.path` (the `import-path` rule of `scripts/checks/check_repo_rules.py`): both
 packages are installed, editable in a checkout (`uv sync`) and through the image hooks in a container.
 
 ### Container image builds
@@ -165,9 +165,9 @@ the other runtimes name an image per role (`INFERENCE_IMAGE`, `BENCH_IMAGE`) and
 
 ## The guard
 
-`tests/test_no_hardcoded_user_paths.py` scans every tracked file for storage mounts, home directories, user names,
+The `site-values` rule of `scripts/checks/check_repo_rules.py` (a pre-commit hook) scans every tracked file for storage mounts, home directories, user names,
 site emails, Slurm accounts, `#SBATCH` partition/account/node directives, node and login host names, literal
 partitions, one experiment's run directories and the site image registry, in live code (comments and docstrings may
-name a site to explain it). A file that legitimately carries such a value is allowlisted in the test with one
+name a site to explain it). A file that legitimately carries such a value is allowlisted in the check with one
 reason: the CSCS site layer, the system entries, the hardware layer, this page, and the MI300A serving
 recipe's partition check.
