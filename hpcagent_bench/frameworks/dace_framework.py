@@ -595,7 +595,11 @@ class DeviceStagingModule(DeviceArrayModule, Protocol):
     """The cupy slice a GPU flavor stages arguments with (``asarray`` plus the stream the copy must finish
     on); declared because cupy ships no stubs."""
 
+    ndarray: type
+
     def asarray(self, a: AnyArray, /) -> ArrayLike: ...
+
+    def asnumpy(self, a: AnyArray, /) -> np.ndarray: ...
 
 
 def device_staging_module() -> DeviceStagingModule:
@@ -699,6 +703,14 @@ class DaceFramework(Framework):
             return stage_to_device(cupy, arr)
 
         return cp_copy_func
+
+    def copy_back_func(self) -> CopyFunc:
+        # cupy refuses an implicit device-to-host conversion, so a GPU flavor's device output comes back
+        # through ``asnumpy``; a host array is already where it belongs.
+        if self.info["arch"] != "gpu":
+            return super().copy_back_func()
+        cupy = device_staging_module()
+        return lambda arr: cupy.asnumpy(arr) if isinstance(arr, cupy.ndarray) else arr
 
     # Pipeline assembly
 
