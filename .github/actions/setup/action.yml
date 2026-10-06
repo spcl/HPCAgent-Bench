@@ -324,15 +324,6 @@ runs:
         dace_rev=$(git -C "${RUNNER_TEMP}/dace" rev-parse HEAD)
         echo "dace @ ${dace_rev}" >> "$GITHUB_STEP_SUMMARY"
 
-        # DELIBERATELY no `DACE_compiler_build_mode=native` here. It used to be exported for speed
-        # (native skips the per-SDFG cmake configure), and it silently DEFEATED the build cache the
-        # framework pins: a DACE_* environment variable outranks Config.set, so
-        # dace_framework.BUILD_CACHE_PINS asked for `cmake` on every job and got `native` -- which
-        # writes per-object .o.cmd files, produces no compile_commands.json, and therefore makes
-        # `compiler.command_cache` inert while still reporting True. The two optimizations are
-        # mutually exclusive and only one of them is the framework's stated design, so the env var
-        # goes and the pin decides. tests/test_dace_flavors.py fails if that inverts again.
-
     - name: Verify common toolchain (fail fast on a missing dependency)
       shell: bash
       run: |

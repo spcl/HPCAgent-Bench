@@ -156,27 +156,19 @@ def strip_output_args(argv: Sequence[str]) -> list[str]:
 def recorded_compiles(folder: pathlib.Path) -> list[tuple[str, list[str]]]:
     """``(directory, argv)`` for every translation unit DaCe compiled from ``<folder>/src``.
 
-    WHICH record exists is decided by ``compiler.build_mode``, so both are read here: ``cmake`` leaves
-    CMake's ``build/compile_commands.json``, while ``native`` never runs CMake and instead writes the
-    exact command per object to ``build/<tag>.o.cmd`` (its own staleness check reads them back).
-    Native records a plain space-join of the argv, NOT the shell-quoted line it executes, so
-    :func:`shlex.split` recovers the tokens only while none of them needs quoting -- the one quoted
-    token it emits, ``-DDACE_BINARY_DIR="..."``, is referenced by no generated source, and a build
-    path containing a space would defeat this reader. Units compiled from outside ``src`` (an
-    environment's own sources) are dropped either way -- they are not the code DaCe generated.
+    The record is CMake's ``build/compile_commands.json``; a folder without one yields nothing. Units
+    compiled from outside ``src`` (an environment's own sources) are dropped -- they are not the code
+    DaCe generated.
     """
     build = folder / "build"
     src_root = str(folder / "src")
     db = build / "compile_commands.json"
-    if db.is_file():
-        entries = [as_block(e) for e in as_list(json.loads(db.read_text()))]
-        return [
-            (str(e["directory"]), shlex.split(str(e["command"])))
-            for e in entries
-            if str(e["file"]).startswith(src_root)
-        ]
-    recorded = [shlex.split(cmd.read_text()) for cmd in sorted(build.glob("*.o.cmd"))]
-    return [(str(build), argv) for argv in recorded if any(token.startswith(src_root) for token in argv)]
+    if not db.is_file():
+        return []
+    entries = [as_block(e) for e in as_list(json.loads(db.read_text()))]
+    return [
+        (str(e["directory"]), shlex.split(str(e["command"]))) for e in entries if str(e["file"]).startswith(src_root)
+    ]
 
 
 def report_flags_for(compiler: str) -> str:
@@ -287,8 +279,6 @@ def pin_single_stream() -> None:
 
 #: The build-cache config this framework requires, and what each one buys.
 #:
-#: * ``build_mode: cmake``    -- ``native`` skips CMake and writes per-object ``.o.cmd`` files, which
-#:                              means no ``compile_commands.json`` and therefore no command cache.
 #: * ``configure_cache``      -- seeds a fresh build folder with an earlier build's compiler/ABI
 #:                              detection and ``find_package`` results instead of re-running them.
 #: * ``command_cache``        -- records the first build of a shape via ``ninja -t compdb`` and
@@ -298,11 +288,9 @@ def pin_single_stream() -> None:
 #: reason :func:`pin_cpp_standard` pins the C++ standard: a user's ``~/.dace.conf`` must not be able
 #: to change what a graded baseline costs to build.
 #:
-#: NOT every key exists on every tree: ``build_mode`` is declared only by the FORK -- upstream
-#: spcl/dace@main has no such key anywhere in its ``config_schema.yml``. A pin is therefore a
-#: request, not an assumption; see :func:`pin_build_caching`.
+#: NOT every key exists on every tree: a pin is a request, not an assumption; see
+#: :func:`pin_build_caching`.
 BUILD_CACHE_PINS = (
-    ("compiler", "build_mode", "cmake"),
     ("compiler", "configure_cache", True),
     ("compiler", "command_cache", True),
 )
@@ -471,8 +459,8 @@ def pin_build_caching() -> None:
     covers the build DaCe is about to run without touching DaCe.
     """
     for *key, value in BUILD_CACHE_PINS:
-        # A key the installed DaCe does not declare is SKIPPED, not fatal. `build_mode` exists only
-        # on the fork, so pinning it unconditionally made every dace column raise KeyError on
+        # A key the installed DaCe does not declare is SKIPPED, not fatal. A key that exists only
+        # on the fork, pinned unconditionally, made every dace column raise KeyError on
         # upstream main -- which is the tree the `parallel` and `autoopt` columns are meant to run
         # on, and whose numbers are the control the fork's canonicalize column is read against
         # (samples/npbench_dace_flavors.sbatch). Reported rather than passed over in silence: a
@@ -1362,9 +1350,8 @@ class DaceFramework(Framework):
     #   empty file that reads as "DaCe did nothing" -- strictly worse than no file.
     # * The GENERATED C++ is the real answer, and it is on disk at ``<build_folder>/src/cpu``.
     # * The C++ COMPILER's own opt-report is recovered by replaying the exact compile command DaCe
-    #   recorded as it built -- CMake's ``build/compile_commands.json`` under ``build_mode=cmake``, or
-    #   native mode's per-object ``build/<tag>.o.cmd`` (see :func:`recorded_compiles`) -- with the
-    #   report flags appended.
+    #   recorded as it built -- CMake's ``build/compile_commands.json`` (see :func:`recorded_compiles`)
+    #   -- with the report flags appended.
     #
     # Which pipeline won is not in any of those files, so every report is prefixed with it -- a
     # ``dace_cpu`` row that searched three pipelines is otherwise unattributable.
@@ -1424,8 +1411,7 @@ class DaceFramework(Framework):
         """The C++ compiler's vectorization report for the code DaCe generated, or ``None``.
 
         The flags are not ours to choose -- but DaCe records the exact command per translation unit as
-        it builds (CMake's ``compile_commands.json``, or native mode's per-object ``.cmd`` files; see
-        :func:`recorded_compiles`), and replaying that command with the repo's report flags appended
+        it builds (CMake's ``compile_commands.json``; see :func:`recorded_compiles`), and replaying that command with the repo's report flags appended
         reports on the SAME compilation. The flags come
         from :func:`hpcagent_bench.languages.report_flags` (``languages.REPORT_REFS``), which is
         the same decision the native backend already made -- gcc ``-fopt-info-vec-*``, clang
