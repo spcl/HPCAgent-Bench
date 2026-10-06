@@ -400,7 +400,7 @@ def test_the_rendered_table_carries_the_expression_and_the_ratio() -> None:
 
 
 def test_check_names_a_cause_a_caller_can_branch_on() -> None:
-    """Shaped like perf_reports.PerfUnavailable on purpose, so one handler covers both."""
+    """A ``perf_reports.ProfilerUnavailable``, so the one /profile handler answers it with its cause."""
     if osinfo.IS_LINUX and PAPI_LIBRARY:
         assert papi.check() is not None
         return

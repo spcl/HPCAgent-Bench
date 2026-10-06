@@ -30,6 +30,7 @@ __all__ = [
     "CallNode",
     "Hotspot",
     "PerfUnavailable",
+    "ProfilerUnavailable",
     "call_graph",
     "fold",
     "hotspots",
@@ -86,18 +87,21 @@ UNKNOWN: str = "[unknown]"
 CALL_GRAPH_NODE_LIMIT: int = 200
 
 
-class PerfUnavailable(RuntimeError):
-    """``perf`` cannot sample here. ``cause`` is the machine-readable reason
-    (``not_linux`` / ``perf_missing`` / ``no_perf_events`` / ``perf_event_paranoid`` /
-    ``perf_record_failed`` / ``no_samples`` / ``timed_out``); the message names the fix. Raised instead of
-    returning an empty profile -- a profile nobody can tell apart from "nothing was hot" is
-    worse than an error."""
+class ProfilerUnavailable(RuntimeError):
+    """A profiler cannot answer here. ``cause`` is the machine-readable reason, the message names the
+    fix; ``/profile`` answers every subclass as a 503 carrying the cause. Raised instead of returning an
+    empty profile -- a profile nobody can tell apart from "nothing was hot" is worse than an error."""
 
     cause: str
 
     def __init__(self, cause: str, message: str) -> None:
         super().__init__(message)
         self.cause = cause
+
+
+class PerfUnavailable(ProfilerUnavailable):
+    """``perf`` cannot sample here. ``cause`` is ``not_linux`` / ``perf_missing`` / ``no_perf_events`` /
+    ``perf_event_paranoid`` / ``perf_record_failed`` / ``no_samples`` / ``timed_out``."""
 
 
 def perf_check() -> str:
