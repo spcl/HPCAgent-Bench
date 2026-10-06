@@ -15,12 +15,12 @@ an override, delete the marker line (or replace the file).
 
 import pathlib
 
-from hpcagent_bench.framework_cache import write_atomic
+from hpcagent_bench.cache_files import write_atomic
 from hpcagent_bench.translators.numpyto_common.naming import short_for
 
 __all__ = [
     "AUTO_MARKER",
-    "LEGACY_MARKERS",
+    "DACE_MARKERS",
     "first_line",
     "is_generated",
     "is_override",
@@ -29,15 +29,12 @@ __all__ = [
 ]
 
 #: Token written on the first line of every generated file. Absence of this
-#: token (and of any legacy marker below) in an existing file marks it a
+#: token (and of the DaCe emitter's marker below) in an existing file marks it a
 #: hand-written override.
 AUTO_MARKER = "hpcagent_bench-autogen"
 
-#: Markers written by earlier generators (before the unified one). An existing
-#: file carrying one of these is still recognised as auto-generated -- so the
-#: migration to the canonical name refreshes it instead of mistaking it for a
-#: hand override. (DaCe's ``dace_emit`` stamps its own docstring marker.)
-LEGACY_MARKERS = ("auto-generated from the numpy reference",)
+#: The line-1 docstring ``numpyto_c.dace_emit`` stamps on a DaCe program: a file carrying it is generated.
+DACE_MARKERS = ("auto-generated from the numpy reference",)
 
 
 def first_line(path: pathlib.Path) -> str:
@@ -56,7 +53,7 @@ def is_generated(out_path: str | pathlib.Path) -> bool:
     (``# `` / ``// `` / ``! ``) -- exactly how :func:`write_generated` writes it
     -- so a hand override that merely *mentions* ``hpcagent_bench-autogen`` in a line-1
     docstring is NOT misclassified as generated (the whole point of the guard).
-    The legacy dace marker is matched as a substring: it is a distinctive phrase
+    The DaCe marker is matched as a substring: it is a distinctive phrase
     that a hand file would not carry on line 1."""
     p = pathlib.Path(out_path)
     if not p.exists():
@@ -69,7 +66,7 @@ def is_generated(out_path: str | pathlib.Path) -> bool:
             break
     if body.startswith(AUTO_MARKER):
         return True
-    return any(m in first for m in LEGACY_MARKERS)
+    return any(m in first for m in DACE_MARKERS)
 
 
 def is_override(out_path: str | pathlib.Path) -> bool:

@@ -19,22 +19,20 @@ entry is therefore never served for a source it was not built from -- a changed
 ``<module>_numpy.py`` regenerates, an unchanged one is a hit.
 
 Sidecars are per-artifact (``<name>.fp``), so concurrent kernels never contend
-on a shared manifest, and writes are atomic (temp + ``os.replace``) so a killed
-run leaves either the old artifact or none -- never a truncated one. Pure
-``pathlib`` + ``hashlib`` (cross-platform); DaCe is imported lazily inside the
-SDFG helpers so importing this module stays cheap and dependency-free.
+on a shared manifest, and writes are atomic (:mod:`hpcagent_bench.cache_files`) so a
+killed run leaves either the old artifact or none -- never a truncated one. DaCe is imported lazily
+inside the SDFG helpers so importing this module stays cheap and dependency-free.
 """
 
 import functools
-import hashlib
-import os
 import pathlib
 import subprocess
 from typing import TYPE_CHECKING
 
+from hpcagent_bench.cache_files import replacing, sha256_hex, write_atomic
+
 __all__ = [
     "dace_tree_fingerprint",
-    "fingerprint_bytes",
     "kernel_cache_dir",
     "load_generated",
     "load_sdfg",
@@ -45,7 +43,6 @@ __all__ = [
     "source_fingerprint",
     "stored_fingerprint",
     "translator_fingerprint",
-    "write_atomic",
 ]
 
 if TYPE_CHECKING:
@@ -65,11 +62,6 @@ def kernel_cache_dir(kernel_dir: pathlib.Path) -> pathlib.Path:
     return cache
 
 
-def fingerprint_bytes(data: bytes) -> str:
-    """The ``sha256`` hex digest of ``data`` -- the freshness key stored in a ``.fp`` sidecar."""
-    return hashlib.sha256(data).hexdigest()
-
-
 @functools.lru_cache(maxsize=None, typed=True)
 def translator_fingerprint() -> str:
     """The sha256 over every ``*.py`` file (relative path + bytes, sorted) under
@@ -78,13 +70,13 @@ def translator_fingerprint() -> str:
     An absent tree (translators not installed) contributes nothing rather than raising."""
     root = pathlib.Path(__file__).resolve().parent / "translators"
     if not root.is_dir():
-        return fingerprint_bytes(b"")
+        return sha256_hex(b"")
     blob = bytearray()
     for path in sorted(root.glob("numpyto_*/**/*.py")):
         if "__pycache__" in path.parts:
             continue
         blob += path.relative_to(root).as_posix().encode() + b"\x00" + path.read_bytes() + b"\x00"
-    return fingerprint_bytes(bytes(blob))
+    return sha256_hex(bytes(blob))
 
 
 @functools.lru_cache(maxsize=None, typed=True)
@@ -107,9 +99,9 @@ def dace_tree_fingerprint() -> str:
             ).stdout
             != ""
         )
-        return fingerprint_bytes(f"{sha}\x00{dirty}".encode())
+        return sha256_hex(f"{sha}\x00{dirty}".encode())
     except (OSError, subprocess.SubprocessError):
-        return fingerprint_bytes(f"{root}\x00{dace.__version__}".encode())
+        return sha256_hex(f"{root}\x00{dace.__version__}".encode())
 
 
 def source_fingerprint(numpy_py: pathlib.Path, extra: bytes = b"") -> str:
@@ -118,7 +110,7 @@ def source_fingerprint(numpy_py: pathlib.Path, extra: bytes = b"") -> str:
     (:func:`translator_fingerprint`) -- so an emitter change is itself a cache miss. A missing
     reference hashes as empty so the key is still well-defined."""
     body = numpy_py.read_bytes() if numpy_py.exists() else b""
-    return fingerprint_bytes(body + b"\x00" + extra + b"\x00" + translator_fingerprint().encode())
+    return sha256_hex(body + b"\x00" + extra + b"\x00" + translator_fingerprint().encode())
 
 
 def sidecar_path(artifact: pathlib.Path) -> pathlib.Path:
@@ -132,15 +124,6 @@ def stored_fingerprint(artifact: pathlib.Path) -> str | None:
         return sidecar_path(artifact).read_text().strip()
     except OSError:
         return None
-
-
-def write_atomic(path: pathlib.Path, data: bytes) -> None:
-    """Write ``data`` to ``path`` atomically (temp file in the same dir, then ``os.replace``), so a
-    concurrent reader never sees a half-written artifact and a crash leaves no truncated file."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f"{path.name}.tmp{os.getpid()}")
-    tmp.write_bytes(data)
-    os.replace(tmp, path)
 
 
 # Generated framework SIBLING sources (dace/jax/cupy/numba/pythran)
@@ -205,12 +188,9 @@ def save_sdfg(cache_dir: pathlib.Path, module_name: str, device_tag: str, finger
     matching sidecar) is a MISS on the next load. A failed save is swallowed and its partial file
     removed -- caching is a pure speed optimization and must never break a run."""
     path = sdfg_cache_path(cache_dir, module_name, device_tag)
-    # Saved beside and renamed over, as write_atomic, so a reader never sees a half-written file.
-    tmp = path.with_name(f"{path.name}.tmp{os.getpid()}")
     try:
-        sdfg.save(str(tmp), compress=True)
-        os.replace(tmp, path)
+        with replacing(path) as tmp:
+            sdfg.save(str(tmp), compress=True)
         write_atomic(sidecar_path(path), fingerprint.encode())
     except Exception:  # noqa: BLE001 -- never let a cache write fail a run
-        tmp.unlink(missing_ok=True)
         path.unlink(missing_ok=True)
