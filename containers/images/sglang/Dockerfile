@@ -29,8 +29,8 @@ ARG BASE_IMAGE=docker.io/lmsysorg/sglang-rocm:v0.5.20-rocm724-mi30x-20260926\
 # ------------------------------------------------------------------------------------------------
 # One stage. This image builds NO fabric software at all -- no libfabric, no libcxi, no RCCL net
 # plugin. CSCS ships all three as one internally consistent artifact, matched to the host driver,
-# and the CE hooks install it when the EDF sets com.hooks.netstack / .cxi / .aws_ofi_nccl.
-# Measured on an unmodified image:
+# and the CE hooks install it when the EDF sets com.hooks.netstack / .cxi / .aws_ofi_nccl. With them
+# RCCL reports:
 #
 #     plugin:    /opt/cscs/netstack/librccl-net.so
 #     transport: NET/OFI, "Using network AWS Libfabric"
@@ -116,8 +116,8 @@ RUN /opt/venv/bin/python3 -c "import cupy, flydsl; \
     print('self-contained: cupy', cupy.__version__, '| flydsl', flydsl.__version__)"
 
 # sgl_kernel common_ops, REBUILT for every ROCM_ARCH. The base's copy is gfx942-only, and it is on the
-# serve path of every model: SiluAndMul calls sgl_kernel.silu_and_mul, which segfaulted on an MI250X
-# node during graph capture (job 668579). setup_rocm.py builds for ONE arch, so five asserted edits;
+# serve path of every model: SiluAndMul calls sgl_kernel.silu_and_mul, which segfaults on gfx90a in
+# graph capture without a gfx90a build. setup_rocm.py builds for ONE arch, so five asserted edits;
 # a pattern that is not there exactly once fails the build (re-derive them on an SGLang bump):
 #   * AMDGPU_TARGET wins over the visible GPU (stock: overwritten by gcnArchName).
 #   * the allow-list accepts the ;-list (stock: sys.exit(1) for anything but gfx942/gfx950/gfx1250).
@@ -158,12 +158,11 @@ RUN set -eux; \
     cmp "${built}" "${installed}"; \
     /usr/local/bin/device_arch_gate.sh --exact "${ROCM_ARCH}" "${installed}"
 
-# GLM-5.3's aiter DSA decode (--dsa-decode-backend aiter), fixed in the package. _forward_aiter hands
-# aiter its whole kv_indptr buffer (max_bs + 1 entries), and get_mla_metadata_v1 takes the batch
-# count from that size, so every decode below max_bs plans work for stale batches and writes past
-# the output: an illegal memory access in CUDA-graph capture at bs 40 (jobs 668640, 668739), wrong
-# or NaN output when it does not fault. Upstream main has the same line; the single-GPU reproducer
-# and the issue text are in $SCRATCH/archives/glm53-aiter-dsa-repro (docs/serving/glm53.md).
+# The DSA aiter decode (GLM-5.3, --dsa-decode-backend aiter) hands aiter exactly bs + 1 kv_indptr
+# entries. get_mla_metadata_v1 takes the batch count from the tensor's size, so the whole max_bs + 1
+# buffer makes every decode below max_bs plan stale batches and write past the output: an illegal
+# memory access in graph capture, or NaN where it does not fault. Upstream main has the unsliced
+# line (docs/serving/glm53.md has the reproducer).
 RUN /opt/venv/bin/python3 <<'PY'
 import pathlib
 import sys
@@ -176,8 +175,8 @@ if text.count(OLD) != 1:
 SRC.write_text(text.replace(OLD, "        kv_indptr = self.kv_indptr[: bs + 1]\n"))
 PY
 
-# No RCCL plugin is shipped. CSCS provides one through com.hooks.aws_ofi_nccl.enabled (measured:
-# /opt/cscs/netstack/librccl-net.so, "Using network AWS Libfabric", GPU Direct RDMA on cxi0-2).
+# No RCCL plugin is shipped. CSCS provides one through com.hooks.aws_ofi_nccl.enabled
+# (/opt/cscs/netstack/librccl-net.so, "Using network AWS Libfabric", GPU Direct RDMA on cxi0-2).
 # This image ships no libfabric, libcxi or plugin of its own.
 #
 # The gate checks only prefixes WE control, not the whole filesystem:
@@ -418,7 +417,7 @@ ENV HSA_ENABLE_IPC_MODE_LEGACY=1 \
     HIP_FORCE_DEV_KERNARG=1 \
     TOKENIZERS_PARALLELISM=false \
     LD_LIBRARY_PATH=/opt/rocm/lib:/opt/rocm/lib64 \
-    PATH=/usr/local/bin:/opt/rocm/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    PATH=/opt/venv/bin:/usr/local/bin:/opt/rocm/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 # TWO SERVING FACTS that no ENV can carry, because they are per-model CLI arguments. They live in
 # SGLANG_EXTRA_ARGS in the env files and must survive any edit of those:
@@ -430,10 +429,7 @@ ENV HSA_ENABLE_IPC_MODE_LEGACY=1 \
 #     rank) and --attention-backend aiter scales it by 0.85: per-model values and the pool they give
 #     are in docs/serving/ (qwen38.md, glm53.md, knobs.md).
 #
-# No SGLang SOURCE is patched for qwen38. What made it fast is serving choices: SGLang (vLLM cannot
-# serve its Gated-DeltaNet layers at long context), the KV pool above the working set, aiter, and the
-# chat template in containers/inference/. The edits this file makes are the sgl_kernel build and the DSA
-# kv_indptr slice above.
+# The only SGLang source edits are the sgl_kernel build and the DSA kv_indptr slice above.
 
 RUN /opt/venv/bin/python3 <<'PY'
 import json

@@ -28,10 +28,9 @@ HSA_ENABLE_IPC_MODE_LEGACY = "1"
 SAFETENSORS_FAST_GPU = "1"
 HIP_FORCE_DEV_KERNARG = "1"
 TOKENIZERS_PARALLELISM = "false"
-# DECLARED, not inherited, for the same reason PATH is: the CE does not preserve the image's
-# own ENV, so the Dockerfile's ENV AITER_JIT_DIR=/opt/aiter-jit never arrives and
-# run_cluster.sh's ${AITER_JIT_DIR:-<scratch>} default wins -- which loads module_aiter_core
-# from a HOST directory and leaves the image's prebuilt copy unused (measured).
+# DECLARED, not inherited, like PATH and LD_LIBRARY_PATH below: the CE does not preserve the
+# image's own ENV, and without it run_cluster.sh's ${AITER_JIT_DIR:-<scratch>} default loads
+# module_aiter_core from a HOST directory instead of the image's prebuilt copy.
 AITER_JIT_DIR = "/opt/aiter-jit"
 # aiter's TEMPLATE ops ignore AITER_JIT_DIR and default to $HOME/.aiter, where they build at 77 s
 # per serve. Pinned into the image, nothing lands in HOME and the artefact hashes match.
@@ -42,6 +41,9 @@ AITER_ROOT_DIR = "/opt/aiter-root"
 # plus /dev/cxi*. Declaring LD_LIBRARY_PATH here is not optional: the CE does not preserve the
 # image's own ENV, so this file re-declares it absolutely.
 LD_LIBRARY_PATH = "/opt/rocm/lib:/opt/rocm/lib64"
+# /opt/venv/bin first, so a bare `python3` (verify_image.sbatch, an interactive step) is the vendor
+# venv that holds torch, sglang and aiter, not the bare /usr/bin/python3.
+PATH = "/opt/venv/bin:/usr/local/bin:/opt/rocm/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 # The three that make RCCL take Slingshot rather than answer correctly over TCP, as in the vLLM
 # EDF. NCCL_NET_PLUGIN/NCCL_NET name the plugin the aws_ofi_nccl hook installs, so RCCL ERRORS
