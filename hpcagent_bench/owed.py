@@ -262,12 +262,12 @@ def cmd_collect(args: argparse.Namespace) -> int:
 
 
 def read_env(path: pathlib.Path) -> dict[str, str]:
-    """The ``KEY=VALUE`` lines of an env file, the last value of a key winning."""
+    """The ``KEY=VALUE`` lines of an env file, values unquoted, the last value of a key winning."""
     values: dict[str, str] = {}
     for line in path.read_text(encoding="utf-8").splitlines():
         key, sep, value = line.partition("=")
         if sep and key and not key.lstrip().startswith("#"):
-            values[key.strip()] = value
+            values[key.strip()] = value.strip().strip("\"'")
     return values
 
 
