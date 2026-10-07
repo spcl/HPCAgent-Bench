@@ -25,7 +25,7 @@ ROWS = [
         "kernel": "k2",
         "speedup": 2.5,
         "tokens": None,
-        "packet": "cpf",
+        "packet": "cpf-tool",
         "timing_suspect": False,
     },
     {
@@ -80,4 +80,4 @@ def test_a_missing_numeric_cell_is_null_and_a_missing_text_cell_stays_empty(tmp_
     extract_llr40.write_db(db, extract_llr40.OBSERVATION_FIELDS, ROWS)
     with connect(db) as conn:
         rows = conn.execute("SELECT tokens, speedup, packet FROM observations ORDER BY kernel").fetchall()
-    assert rows == [(900, None, ""), (None, 2.5, "cpf")]
+    assert rows == [(900, None, ""), (None, 2.5, "cpf-tool")]

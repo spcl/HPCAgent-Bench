@@ -77,7 +77,7 @@ class Glm53:
 
 # Standalone optimizers
 # A compiler or a pipeline that stands where an LLM stands on a figure. Their markers count from the
-# end of the pool, so a new LLM never repaints them. A skill packet an agent is given (cpf, cpfsrc) is
+# end of the pool, so a new LLM never repaints them. A skill packet an agent is given (cpf, cpf-src) is
 # a packet and a colour, never an optimizer. A standalone optimizer's row keeps its framework's colour;
 # device variants are aliases, since the optimizer is the same one on either device.
 

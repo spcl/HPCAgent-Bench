@@ -17,7 +17,7 @@ from hpcagent_bench.stats import palette
 
 def test_every_registered_packet_has_a_name():
     """A packet a figure can colour must also be a packet it can label; an unnamed one would put a
-    raw tag like `cpfsrc` on a legend."""
+    raw tag like `cpf-src` on a legend."""
     named = {key for key, entry in vocabulary.PACKETS.entries.items() if entry.name}
     assert set(palette.hue_order("packets")) <= named, sorted(set(palette.hue_order("packets")) - named)
 
@@ -37,26 +37,26 @@ def test_the_control_has_a_name_and_a_neutral_colour():
 
 def test_colour_does_not_depend_on_the_other_series():
     """Dropping a series must not repaint the survivors."""
-    many = palette.colors(["", "cpfsrc", "cpf", "lang-skills"])
-    few = palette.colors(["", "cpf"])
-    assert few[""] == many[""] and few["cpf"] == many["cpf"]
+    many = palette.colors(["", "cpf-src", "cpf-tool", "lang-skills"])
+    few = palette.colors(["", "cpf-tool"])
+    assert few[""] == many[""] and few["cpf-tool"] == many["cpf-tool"]
 
 
 def test_a_combination_keeps_its_lead_packets_family():
-    """`cpfsrc+lang-skills` is a CPF setup carrying a second packet, and reads as one."""
-    assert packets.lead(packets.spec_parts("cpfsrc+lang-skills")) == "cpfsrc"
-    assert palette.color("cpfsrc+lang-skills") != palette.color("cpfsrc")
-    assert palette.color("cpfsrc+lang-skills") != palette.color("lang-skills")
+    """`cpf-src+lang-skills` is a CPF setup carrying a second packet, and reads as one."""
+    assert packets.lead(packets.spec_parts("cpf-src+lang-skills")) == "cpf-src"
+    assert palette.color("cpf-src+lang-skills") != palette.color("cpf-src")
+    assert palette.color("cpf-src+lang-skills") != palette.color("lang-skills")
 
 
 def test_order_within_a_combination_does_not_change_the_colour():
-    assert palette.color("cpfsrc+lang-skills") == palette.color("lang-skills+cpfsrc")
+    assert palette.color("cpf-src+lang-skills") == palette.color("lang-skills+cpf-src")
 
 
 def test_each_extra_packet_is_one_step_lighter():
-    base = palette.color("cpfsrc")
-    one = palette.color("cpfsrc+lang-skills")
-    two = palette.color("cpfsrc+lang-skills+profiling")
+    base = palette.color("cpf-src")
+    one = palette.color("cpf-src+lang-skills")
+    two = palette.color("cpf-src+lang-skills+profiling")
     assert base != one != two
     assert palette.lighten(base, 1) == one and palette.lighten(base, 2) == two
 
@@ -107,7 +107,7 @@ def test_two_entities_sharing_a_colour_in_one_figure_warn(caplog):
     itself rather than through a pair that happens to wrap today, so the guard keeps being tested
     on the day the registry grows."""
     with caplog.at_level("WARNING"):
-        palette.warn_on_collision({"cpfsrc": palette.color("cpfsrc"), "twin": palette.color("cpfsrc")}, "packet")
+        palette.warn_on_collision({"cpf-src": palette.color("cpf-src"), "twin": palette.color("cpf-src")}, "packet")
     assert "both draw" in caplog.text
 
 
@@ -124,8 +124,8 @@ def test_two_entities_sharing_a_colour_in_one_figure_warn(caplog):
 #: Repainted wholesale once: one global palette, matplotlib's tab20, is the user's decision.
 PUBLISHED_PACKET_COLORS = {
     "": "#4d4d4d",
-    "cpfsrc": "#1f77b4",
-    "cpf": "#ff7f0e",
+    "cpf-src": "#1f77b4",
+    "cpf-tool": "#ff7f0e",
     "lang-skills": "#2ca02c",
     "divide-and-conquer": "#d62728",
     "profiling": "#9467bd",
@@ -133,7 +133,7 @@ PUBLISHED_PACKET_COLORS = {
     "no-score-tool": "#e377c2",
     "perf-playbook-cpu": "#ff9896",
     "kernel": "#9edae5",
-    "cpfsrc+lang-skills": "#389add",
+    "cpf-src+lang-skills": "#389add",
     "divide-and-conquer+profiling": "#e25e5e",
     "caveman": "#393b79",
 }
@@ -189,8 +189,8 @@ def test_an_alias_wears_what_it_aliases():
 #: six-hue ramp wraps at seven packets and `warn_on_collision` only ever sees one figure at a time.
 PAPER_FIGURE_PACKETS: tuple[str, ...] = (
     "",  # the no-packet control, on every paired figure
-    "cpf",  # llr40_paired_cpf
-    "cpfsrc",  # llr40_paired_cpfsrc
+    "cpf-tool",  # llr40_paired_cpf
+    "cpf-src",  # llr40_paired_cpf_src
     "lang-skills",  # llr40_paired_skills, gpu_paired_skills
     "divide-and-conquer",  # scicomp perf-playbook panels
     "profiling",  # scicomp perf-playbook panels
@@ -204,7 +204,7 @@ PAPER_FIGURE_PACKETS: tuple[str, ...] = (
 def test_the_packets_the_paper_draws_have_pairwise_distinct_hues() -> None:
     """Colour is the entity's, and a reader carries it ACROSS figures: two interventions the paper
     draws in the same colour read as one treatment however far apart their pages are. The committed
-    PDFs once had `cpfsrc` and `no-score-tool` in one blue and `cpf`, `perf-playbook-cpu` and
+    PDFs once had `cpf-src` and `no-score-tool` in one blue and `cpf-tool`, `perf-playbook-cpu` and
     `kernel` in one orange, because the six-hue ramp wrapped. tab20 has a slot for every packet."""
     chosen = {name: palette.color(name) for name in PAPER_FIGURE_PACKETS}
     clashes = {

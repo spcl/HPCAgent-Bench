@@ -40,7 +40,7 @@ ROWS = [
         "speedup": "",
         "tokens": 1200,
         "tokens_crashed": 48_000,
-        "packet": "cpf",
+        "packet": "cpf-tool",
     },
 ]
 

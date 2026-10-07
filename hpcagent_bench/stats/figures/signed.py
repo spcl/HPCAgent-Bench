@@ -193,7 +193,7 @@ LLR40_BASELINE: str = llr40_setups.CANON_BASELINE
 LLR40_CANON_COLUMNS: tuple[str, ...] = ("dace_cpu", "dace_cpu_canonicalize")
 
 #: The two CPF conditions this figure draws, per model -- never the no-packet control.
-LLR40_CONDITIONS: tuple[str, ...] = ("cpf", "cpfsrc")
+LLR40_CONDITIONS: tuple[str, ...] = ("cpf-tool", "cpf-src")
 
 #: Column order of the emitted token summary table.
 TOKEN_SUMMARY_COLUMNS: tuple[str, ...] = (

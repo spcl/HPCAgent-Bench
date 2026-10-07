@@ -1342,8 +1342,7 @@ KNOWN_MANIFEST_KEYS = frozenset(
 def validate_dwarf(dwarf: str | None, source: str = "<spec>") -> None:
     """Raise ``ValueError`` if ``dwarf`` is not in :data:`SUPPORTED_DWARFS`.
 
-    ``None`` is allowed (a not-yet-classified kernel); the migration's
-    ``--suggest-dwarf`` pass fills these with the majority dwarf.
+    ``None`` is allowed (a not-yet-classified kernel).
     """
     if dwarf is not None and dwarf not in SUPPORTED_DWARFS:
         raise ValueError(
@@ -2679,8 +2678,8 @@ class KernelRegistry:
         return out
 
     def refresh(self) -> None:
-        """Drop every manifest-derived cache (after a migration writes new ones). A cache left
-        behind keeps serving pre-migration data with nothing to show it is stale."""
+        """Drop every manifest-derived cache (after manifests change on disk). A cache left
+        behind keeps serving the old manifests with nothing to show it is stale."""
         _scan_kernels.cache_clear()
         stem_aliases.cache_clear()
         _key_to_short_name.cache_clear()

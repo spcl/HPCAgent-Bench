@@ -114,8 +114,8 @@ def canon_frame(rows: list[tuple[str, str, float, str]]) -> pd.DataFrame:
     ("setup", "expected"),
     [
         ("llr40-qwen38-c", ("qwen38", "")),
-        ("llr40-qwen38-c-cpf", ("qwen38", "cpf")),
-        ("llr40-oss120b-c-cpfsrc", ("oss120b", "cpfsrc")),
+        ("llr40-qwen38-c-cpf-tool", ("qwen38", "cpf-tool")),
+        ("llr40-oss120b-c-cpf-src", ("oss120b", "cpf-src")),
         ("llr40-qwen38-fortran", None),
         ("llr40-qwen38-c-skills", None),
     ],
@@ -190,11 +190,11 @@ def test_the_control_condition_reads_no_packet_not_the_registry_skill_wording() 
     assert llr40_setups.condition_label("") == "No Packet"
 
 
-def test_cpfsrc_reads_as_source_and_cpf_reads_as_the_page() -> None:
+def test_cpf_src_reads_as_source_and_cpf_tool_reads_as_the_tool() -> None:
     """The two treatments the paper contrasts must read as two different THINGS, not two
     abbreviations of the same phrase."""
-    assert llr40_setups.condition_label("cpfsrc") == "Canonical Parallel Form as Source"
-    assert llr40_setups.condition_label("cpf") == "Canonical Parallel Form Page"
+    assert llr40_setups.condition_label("cpf-src") == "Canonical Parallel Form as Source"
+    assert llr40_setups.condition_label("cpf-tool") == "Canonical Parallel Form Tool"
 
 
 def test_git_scicomps_two_conditions_both_read_as_proper_names() -> None:
@@ -212,15 +212,15 @@ def test_tag_of_reads_every_kernel_the_canon_frame_names() -> None:
 
 
 def test_rank_condition_keeps_the_declared_order_for_known_conditions() -> None:
-    order = ("", "cpf", "cpfsrc")
-    ranked = sorted(("cpfsrc", "", "cpf"), key=lambda condition: llr40_setups.rank_condition(condition, order))
-    assert ranked == ["", "cpf", "cpfsrc"]
+    order = ("", "cpf-tool", "cpf-src")
+    ranked = sorted(("cpf-src", "", "cpf-tool"), key=lambda condition: llr40_setups.rank_condition(condition, order))
+    assert ranked == ["", "cpf-tool", "cpf-src"]
 
 
 def test_rank_condition_sorts_an_axis_outside_the_declared_order_alphabetically() -> None:
     """git-scicomp's setup names carry ``kernel``/``repo``, neither a skill packet; the default
     CONDITION_ORDER must not raise on them, and unknowns sort after every known condition."""
-    order = ("", "cpf", "cpfsrc")
+    order = ("", "cpf-tool", "cpf-src")
     ranked = sorted(("repo", "kernel"), key=lambda condition: llr40_setups.rank_condition(condition, order))
     assert ranked == ["kernel", "repo"]
 
@@ -228,4 +228,4 @@ def test_rank_condition_sorts_an_axis_outside_the_declared_order_alphabetically(
 def test_the_control_is_read_under_its_configuration_name_and_its_recorded_one() -> None:
     assert llr40_setups.parse_setup("llr40-qwen38-c") == ("qwen38", "")
     assert llr40_setups.parse_setup("llr40-qwen38-c") == ("qwen38", "")
-    assert llr40_setups.parse_setup("llr40-qwen38-c-cpfsrc") == ("qwen38", "cpfsrc")
+    assert llr40_setups.parse_setup("llr40-qwen38-c-cpf-src") == ("qwen38", "cpf-src")

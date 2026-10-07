@@ -30,7 +30,7 @@ def test_read_observations_reads_the_extracted_db_the_same_shape_as_a_csv() -> N
     frame = studies.read_observations(FIXTURE)
     assert not frame.empty
     assert {"setup", "packet", "kernel", "row_kind", "speedup", "tokens"} <= set(frame.columns)
-    assert set(frame.packet.unique()) == {"", "lang-skills", "cpfsrc", "perf-playbook-cpu"}
+    assert set(frame.packet.unique()) == {"", "lang-skills", "cpf-src", "perf-playbook-cpu"}
 
 
 def test_a_perf_playbook_setup_from_the_real_shaped_fixture_never_enters_the_control_side() -> None:
@@ -43,7 +43,7 @@ def test_a_perf_playbook_setup_from_the_real_shaped_fixture_never_enters_the_con
 
 
 def test_three_treatments_against_the_fixtures_control_all_produce_a_panel() -> None:
-    """llr-focus40's real treatments -- skills, cpfsrc, perf-playbook-cpu -- each read against
+    """llr-focus40's real treatments -- skills, cpf-src, perf-playbook-cpu -- each read against
     the SAME no-packet control and each yield a comparison, which is what lets them join as square
     panels side by side. ``tag`` is every kernel ANY setup of the experiment touched, built the same
     way :func:`plot_score_change.main` builds it, since :func:`one_treatment_panel` gates setup
@@ -53,7 +53,7 @@ def test_three_treatments_against_the_fixtures_control_all_produce_a_panel() -> 
     tag_kernels = sorted(frame_all["kernel"].dropna().astype(str).unique())
     built = {
         treatment: score_change.one_treatment_panel(frame_all, control, treatment, tag_kernels)
-        for treatment in ("lang-skills", "cpfsrc", "perf-playbook-cpu")
+        for treatment in ("lang-skills", "cpf-src", "perf-playbook-cpu")
     }
     assert all(panel is not None for panel in built.values())
     # The tag argument must actually gate coverage, not merely be accepted: a tag kernel no

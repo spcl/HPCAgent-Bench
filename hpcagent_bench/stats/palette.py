@@ -30,7 +30,7 @@ the yaml kinds, studies and frameworks, by position), so a colour is looked up i
 figure, script or registry entry carries a hex literal of its own.
 
 A packet's colour is :func:`color`: its LEAD packet's slot and one lightness step per additional
-packet, so ``cpfsrc`` and ``cpfsrc+lang-skills`` read as the same treatment family at two
+packet, so ``cpf-src`` and ``cpf-src+lang-skills`` read as the same treatment family at two
 strengths, and neutral grey for the no-packet control.
 
 THE VOCABULARY AND THE ORDER ARE REGISTERED in code, beside the display names: one registry for one

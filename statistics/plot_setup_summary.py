@@ -8,7 +8,7 @@ hollow and filled, joined by a thin dashed line whose LENGTH and DIRECTION is th
 which the eye reads directly where two numbers to subtract are not.
 
 With THREE OR MORE, the connector is dropped and the marker carries the condition instead. A line
-through three points asserts an order they do not have: no-packet, cpf and cpfsrc are three
+through three points asserts an order they do not have: no-packet, cpf and cpf-src are three
 treatments against one control, not a path, and the segment a reader would measure would depend on
 which two happened to be adjacent. Colour stays the model and shape becomes the condition, so the
 two are still separable without either being colour-alone.
@@ -94,7 +94,7 @@ def eligible_rows(rows: pd.DataFrame, include_incomplete: bool = False) -> pd.Da
 #: Fixed display order for the known conditions: the control, then the treatments in the order the
 #: experiments introduced them. A condition outside this set (an unregistered packet combination)
 #: still plots, just after every named one -- see :func:`condition_order`.
-CONDITION_ORDER: tuple[str, ...] = ("", "lang-skills", "cpf", "cpfsrc")
+CONDITION_ORDER: tuple[str, ...] = ("", "lang-skills", "cpf-tool", "cpf-src")
 
 #: Below this many conditions a control and its treatment are joined by a dashed connector, which
 #: draws the DIFFERENCE between them. Two is a treatment and its control, which is a segment; three

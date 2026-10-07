@@ -133,7 +133,7 @@ describe_repository() {
         | curl -fsS -H 'Content-Type: application/json' -d @- https://hub.docker.com/v2/users/login \
         | python3 -c 'import json, sys; print(json.load(sys.stdin)["token"])')" || { echo "Docker Hub login failed" >&2; return 1; }
     body="$(python3 -c 'import json, pathlib, sys; print(json.dumps({"full_description": pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"), "description": sys.argv[2]}))' \
-        "${HERE}/DOCKERHUB.md" "Judge, agent and model-serving images of HPCAgent-Bench (AMD, NVIDIA GH200, x86-64)")"
+        "${HERE}/DOCKERHUB.md" "Judge, agent and LLM-serving images of HPCAgent-Bench (AMD, NVIDIA GH200, x86-64, aarch64)")"
     curl -fsS -X PATCH -H "Authorization: JWT ${jwt}" -H 'Content-Type: application/json' -d "${body}" \
         "https://hub.docker.com/v2/repositories/${repo}/" >/dev/null || { echo "overview update failed" >&2; return 1; }
     echo "${REGISTRY_REPO}: overview updated from DOCKERHUB.md"

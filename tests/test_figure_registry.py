@@ -5,7 +5,7 @@
 Sibling of ``tests/test_display_names.py``, which checks the identity a setup RECORDS. This checks
 the identity a figure DRAWS, which is the other half and fails differently: an unregistered value
 still draws, in a stable hash colour, under a raw-string label, so the plot looks finished and the
-legend quietly says ``cpfsrc`` where every other entry says a sentence.
+legend quietly says ``cpf-src`` where every other entry says a sentence.
 
 The fallback is deliberate -- a new experiment must never break a plot -- so it is loud rather than
 absent, and these are what stop the loudness from being the only thing between a hash colour and a
@@ -83,7 +83,7 @@ def test_a_figure_that_colours_a_whole_unregistered_set_warns_once_per_entity(
     """A builder hands the palette a whole column at once, so the warning has to survive the batch
     call and not only the scalar one."""
     with caplog.at_level(logging.WARNING, logger=palette.LOG.name):
-        palette.colors(["cpfsrc", "mystery-one", "mystery-two"])
+        palette.colors(["cpf-src", "mystery-one", "mystery-two"])
     assert caplog.text.count("is not registered") == 2
 
 
@@ -164,13 +164,13 @@ def test_the_registry_check_catches_a_figure_colouring_an_unregistered_packet(
 
 
 def test_setup_rows_read_the_condition_off_the_recorded_packet(tmp_path: pathlib.Path) -> None:
-    """A setup whose name carries no ``-cpf`` suffix but which records the ``cpf`` packet loads under
+    """A setup whose name carries no ``-cpf`` suffix but which records the ``cpf-tool`` packet loads under
     that packet: the recorded column decides, never the setup name."""
     path = tmp_path / "observations.csv"
-    pd.DataFrame([{"setup": "renamed-qwen38-c", "packet": "cpf", "kernel": "k", "row_kind": "submission"}]).to_csv(
+    pd.DataFrame([{"setup": "renamed-qwen38-c", "packet": "cpf-tool", "kernel": "k", "row_kind": "submission"}]).to_csv(
         path, index=False
     )
 
     frame = studies.setup_rows(path, prefix="")
 
-    assert frame.set_index("setup").packet["renamed-qwen38-c"] == "cpf"
+    assert frame.set_index("setup").packet["renamed-qwen38-c"] == "cpf-tool"

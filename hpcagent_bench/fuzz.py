@@ -37,8 +37,8 @@ declares a knob as a manifest ``config:`` block (``spec.py``'s ``ConfigKnob``);
 every function below that resolves a range accepts the resulting name set as
 ``config_names`` and keeps those names fixed at their declared value no matter
 how large the int, in every branch (default range, size cap, edge probes,
-timed large shapes). ``config_names`` defaults to empty, so a manifest that
-has not migrated to ``config:`` is unaffected.
+timed large shapes). ``config_names`` defaults to empty, so a manifest
+without a ``config:`` block is unaffected.
 """
 
 import ast

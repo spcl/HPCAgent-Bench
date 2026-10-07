@@ -128,7 +128,7 @@ def two_condition_points() -> pd.DataFrame:
             {"model": "qwen38", "language": "c", "condition": condition, **point}
             for condition, point in (
                 ("", {"log2_speedup": 1.0, "log2_speedup_low": 0.8, "log2_speedup_high": 1.2}),
-                ("cpf", {"log2_speedup": 1.6, "log2_speedup_low": 1.4, "log2_speedup_high": 1.8}),
+                ("cpf-tool", {"log2_speedup": 1.6, "log2_speedup_low": 1.4, "log2_speedup_high": 1.8}),
             )
         ]
     )
@@ -165,7 +165,7 @@ def test_the_treated_mark_wears_the_packet_colour_and_the_control_mark_the_contr
             edges.update(matplotlib.colors.to_hex(rgba) for rgba in collection.get_edgecolor())
     finally:
         plt.close(fig)
-    assert palette.color("cpf") in faces
+    assert palette.color("cpf-tool") in faces
     assert palette.control_color() in edges
     assert palette.model_color("qwen38") not in faces
 

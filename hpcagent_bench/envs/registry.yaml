@@ -64,7 +64,7 @@ shapes:
   - "3"
   - "4"
 
-# How much lighter each packet BEYOND the lead makes the colour, so `cpfsrc` and
-# `cpfsrc+lang-skills` read as one treatment family at two strengths. Large enough to read as a
+# How much lighter each packet BEYOND the lead makes the colour, so `cpf-src` and
+# `cpf-src+lang-skills` read as one treatment family at two strengths. Large enough to read as a
 # step, small enough that three steps stay clearly the lead's hue.
 lightness_step: 0.13

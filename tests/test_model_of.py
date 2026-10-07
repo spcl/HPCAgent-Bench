@@ -41,7 +41,7 @@ def test_every_caller_still_reaches_it(script: str) -> None:
     [
         ("llr40v10-oss120b-c-skills", "oss120b"),
         ("llr40v9-qwen38-fortran", "qwen38"),
-        ("llr40-kimi27sglang-c-cpfsrc", "kimi27sglang"),
+        ("llr40-kimi27sglang-c-cpf-src", "kimi27sglang"),
         ("glm53llr20-glm53-c", "glm53"),
         ("llr4-qwen30b-c", "other"),
         ("", "other"),

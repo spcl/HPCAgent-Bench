@@ -54,8 +54,8 @@ PINNED_DEVICES = {
 }
 
 PINNED_PACKETS = {
-    "cpfsrc": 0,
-    "cpf": 1,
+    "cpf-src": 0,
+    "cpf-tool": 1,
     "lang-skills": 2,
     "divide-and-conquer": 3,
     "profiling": 4,
@@ -75,7 +75,6 @@ PINNED_PACKETS = {
     "all-in-nvidia": 18,
     "kernel": 19,
     "caveman": 20,
-    "cpfsrc-v2": 21,
     "distributed-amd": 22,
     "dist-rccl-amd": 23,
 }

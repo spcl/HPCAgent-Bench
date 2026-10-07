@@ -320,7 +320,7 @@ def test_a_control_workers_view_holds_nothing_of_another_setup(tmp_path: pathlib
     shared = tmp_path / "shared"
     for name in ("cpf-setup", "control-setup"):
         stage(shared / "setups" / name)
-    (shared / "setups" / "cpf-setup" / "skills" / "canonical-parallel-form.md").write_text("x\n", encoding="utf-8")
+    (shared / "setups" / "cpf-setup" / "skills" / "cpf-tool.md").write_text("x\n", encoding="utf-8")
     (shared / "agent-3").mkdir()
     (shared / "agent-4").mkdir()
     material = shared / "setups" / "control-setup"

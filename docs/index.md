@@ -12,7 +12,6 @@ runtime
 configuration
 benchmarks
 prompts
-agents_and_tool_access
 writing_an_agent
 jobs/README
 ```
@@ -48,6 +47,7 @@ DESIGN_microapp_config_fuzzing
 :caption: Extending
 :maxdepth: 1
 
+extending/protocol
 extending/registry
 extending/benchmark
 extending/optimizer

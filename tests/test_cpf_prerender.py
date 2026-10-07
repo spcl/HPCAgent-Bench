@@ -97,7 +97,7 @@ def test_a_gpu_prerender_records_hip_entries_the_launch_gates_accept(
     language: str,
     mode: str,
 ) -> None:
-    """A hip cpf setup's gate asks for a c++ form and a hip cpfsrc setup's for a hip drop-in; a gpu view
+    """A hip cpf setup's gate asks for a c++ form and a hip cpf-src setup's for a hip drop-in; a gpu view
     that answered either with a miss would refuse every device setup of the wave."""
     package, before = tmp_path / "dace", "digest"
     package.mkdir()

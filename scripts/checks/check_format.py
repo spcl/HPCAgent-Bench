@@ -18,9 +18,9 @@ Generated sources are never style-gated (``*_generated.*``). NATIVE kernel refer
 transcriptions of an upstream source and reformatting them breaks the line-level correspondence
 with it. Their Python siblings ARE gated -- see :data:`SKIP_PREFIXES`.
 
-Python goes through ONE ``ruff format`` invocation for the whole file list (0.4s over 684 files,
-against 105s for a yapf process per file). C / C++ / Fortran keep the process-per-file thread pool,
-because neither clang-format nor fprettify reports which of a batch it would rewrite.
+Python goes through ONE ``ruff format`` invocation for the whole file list; ruff is the repo's only Python
+formatter. C / C++ / Fortran keep the process-per-file thread pool, because neither clang-format nor
+fprettify reports which of a batch it would rewrite.
 
 Exit status: 0 when every checked file is already formatted; 1 when one or more
 need reformatting (the offenders and the fix command are printed); 2 on a setup

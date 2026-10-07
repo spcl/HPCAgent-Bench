@@ -110,20 +110,20 @@ def llr40_canon_fixture() -> pd.DataFrame:
 
 @pytest.fixture(name="llr40_observations")
 def llr40_observations_fixture() -> pd.DataFrame:
-    """Two models, each with a ``cpf`` and a ``cpfsrc`` setup, complete over TAG_TOKENS (and so
-    over TAG40); qwen38's cpfsrc setup runs k1 twice (a repeat, for the per-kernel interval),
+    """Two models, each with a ``cpf-tool`` and a ``cpf-src`` setup, complete over TAG_TOKENS (and so
+    over TAG40); qwen38's cpf-src setup runs k1 twice (a repeat, for the per-kernel interval),
     everything else once."""
     rows: list[dict[str, object]] = []
     for model in ("qwen38", "oss120b"):
         for condition, suffix, speedups in (
-            ("cpf", "c-cpf", {"k1": 2.0, "k2": 3.0, "k3": 1.5, "k4": 1.2, "k5": 4.0, "k6": 1.4}),
-            ("cpfsrc", "c-cpfsrc", {"k1": 2.5, "k2": 3.5, "k3": 1.8, "k4": 1.1, "k5": 5.0, "k6": 1.6}),
+            ("cpf-tool", "c-cpf-tool", {"k1": 2.0, "k2": 3.0, "k3": 1.5, "k4": 1.2, "k5": 4.0, "k6": 1.4}),
+            ("cpf-src", "c-cpf-src", {"k1": 2.5, "k2": 3.5, "k3": 1.8, "k4": 1.1, "k5": 5.0, "k6": 1.6}),
         ):
             setup = f"llr40-{model}-{suffix}"
             for index, (kernel, speedup) in enumerate(speedups.items()):
                 rows.append(episode_row(setup, kernel, speedup))
                 rows.append(token_row(setup, kernel, 1000.0 + 100.0 * index))
-            if model == "qwen38" and condition == "cpfsrc":
+            if model == "qwen38" and condition == "cpf-src":
                 # A second, slightly different episode of k1: the per-kernel interval this row's
                 # ratios_low/ratios_high bound is over THESE repeats, not over the kernel axis.
                 # Its own task row, or "latest" would supersede k1's only token measurement with a
@@ -159,23 +159,23 @@ def test_canon_row_ignores_kernels_outside_the_tag(llr40_canon: pd.DataFrame) ->
 
 def test_two_setups_of_one_model_share_shape_and_differ_in_hue(llr40_observations: pd.DataFrame) -> None:
     """Channel rule: SHAPE is the LLM, COLOUR is the packet/condition."""
-    cpf = signed.agent_kernel_row(llr40_observations, "llr40-qwen38-c-cpf", "qwen38", "cpf", TAG40)
-    cpfsrc = signed.agent_kernel_row(llr40_observations, "llr40-qwen38-c-cpfsrc", "qwen38", "cpfsrc", TAG40)
-    assert cpf.marker == cpfsrc.marker == palette.marker("qwen38")
-    assert cpf.color != cpfsrc.color
-    assert cpf.color == palette.color("cpf") and cpfsrc.color == palette.color("cpfsrc")
+    cpf_tool = signed.agent_kernel_row(llr40_observations, "llr40-qwen38-c-cpf-tool", "qwen38", "cpf-tool", TAG40)
+    cpf_src = signed.agent_kernel_row(llr40_observations, "llr40-qwen38-c-cpf-src", "qwen38", "cpf-src", TAG40)
+    assert cpf_tool.marker == cpf_src.marker == palette.marker("qwen38")
+    assert cpf_tool.color != cpf_src.color
+    assert cpf_tool.color == palette.color("cpf-tool") and cpf_src.color == palette.color("cpf-src")
 
 
 def test_two_models_same_condition_share_hue_and_differ_in_shape(llr40_observations: pd.DataFrame) -> None:
-    qwen = signed.agent_kernel_row(llr40_observations, "llr40-qwen38-c-cpfsrc", "qwen38", "cpfsrc", TAG40)
-    oss = signed.agent_kernel_row(llr40_observations, "llr40-oss120b-c-cpfsrc", "oss120b", "cpfsrc", TAG40)
-    assert qwen.color == oss.color == palette.color("cpfsrc")
+    qwen = signed.agent_kernel_row(llr40_observations, "llr40-qwen38-c-cpf-src", "qwen38", "cpf-src", TAG40)
+    oss = signed.agent_kernel_row(llr40_observations, "llr40-oss120b-c-cpf-src", "oss120b", "cpf-src", TAG40)
+    assert qwen.color == oss.color == palette.color("cpf-src")
     assert qwen.marker != oss.marker
     assert qwen.marker == palette.marker("qwen38") and oss.marker == palette.marker("oss120b")
 
 
 def test_agent_row_carries_rule4_costs_and_a_repeat_interval(llr40_observations: pd.DataFrame) -> None:
-    row = signed.agent_kernel_row(llr40_observations, "llr40-qwen38-c-cpfsrc", "qwen38", "cpfsrc", TAG40)
+    row = signed.agent_kernel_row(llr40_observations, "llr40-qwen38-c-cpf-src", "qwen38", "cpf-src", TAG40)
     assert row.ratios["k1"] > 0.0 and row.numerator_ms["k1"] == pytest.approx(1.0)
     # k1 ran twice (2.5x and 2.7x) and k2 once: a bootstrap needs three runs to resample, so both intervals
     # collapse onto the point (geomean_ci's own contract) rather than being omitted or fabricated.
@@ -208,8 +208,8 @@ def test_rows_keep_only_tag_complete_conditions(llr40_canon: pd.DataFrame, llr40
     setups = {row.framework for row in rows}
     assert setups == {
         "dace_cpu", "dace_cpu_canonicalize",
-        "llr40-qwen38-c-cpf", "llr40-qwen38-c-cpfsrc",
-        "llr40-oss120b-c-cpf", "llr40-oss120b-c-cpfsrc",
+        "llr40-qwen38-c-cpf-tool", "llr40-qwen38-c-cpf-src",
+        "llr40-oss120b-c-cpf-tool", "llr40-oss120b-c-cpf-src",
     }  # fmt: skip
 
 
@@ -496,13 +496,13 @@ def test_mark_pending_keeps_a_setup_not_yet_served_every_kernel(
     llr40_canon: pd.DataFrame, llr40_observations: pd.DataFrame
 ) -> None:
     partial = llr40_observations[
-        ~((llr40_observations["setup"] == "llr40-oss120b-c-cpf") & (llr40_observations["kernel"] == "k3"))
+        ~((llr40_observations["setup"] == "llr40-oss120b-c-cpf-tool") & (llr40_observations["kernel"] == "k3"))
     ]
-    setup = "llr40-oss120b-c-cpf"
+    setup = "llr40-oss120b-c-cpf-tool"
     assert setup not in {row.framework for row in signed.llr40_rows(llr40_canon, partial, TAG40)}
     rows = {row.framework: row for row in signed.llr40_rows(llr40_canon, partial, TAG40, mark_pending=True)}
     assert rows[setup].pending == frozenset({"k3"}) and set(rows[setup].ratios) == {"k1", "k2"}
-    assert rows["llr40-qwen38-c-cpf"].pending == frozenset()
+    assert rows["llr40-qwen38-c-cpf-tool"].pending == frozenset()
 
 
 def test_the_legend_keys_pending_apart_from_the_cross(pending_canon: pd.DataFrame) -> None:

@@ -15,7 +15,7 @@ fixture is instead hand-built to the shape a fresher extraction produces: the re
 the real setup-naming convention (``llr-focus40-<model>-<language>[-<packet suffix>]``, a CPF setup
 prefixed ``cpf-``), real
 kernel short-names and plausible speedup/token magnitudes, covering the four packets this
-session's multi-treatment work needs -- the no-packet control, ``skills``, ``cpfsrc`` and
+session's multi-treatment work needs -- the no-packet control, ``skills``, ``cpf-src`` and
 ``perf-playbook-cpu`` -- across two models and a handful of kernels.
 
 Every row is stamped ``timing_reduction="mw4x5"``, the final grade and the one stamp a reader
@@ -41,7 +41,7 @@ DB_PATH = pathlib.Path(__file__).with_name("observations-mini.db")
 MODELS: tuple[str, ...] = ("qwen38", "oss120b")
 
 #: The four packets this fixture exists to cover: the no-packet control, then three treatments.
-PACKETS: tuple[str, ...] = ("", "lang-skills", "cpfsrc", "perf-playbook-cpu")
+PACKETS: tuple[str, ...] = ("", "lang-skills", "cpf-src", "perf-playbook-cpu")
 
 #: Real llr40 short names, kept small on purpose but AT or ABOVE
 #: summary.MIN_INTERVAL_SAMPLES (5): population.kernel_medians withholds its interval below that
@@ -61,7 +61,7 @@ COLUMNS: tuple[str, ...] = (
 PACKET_SUFFIX: dict[str, str] = {
     "": "",
     "lang-skills": "-lang-skills",
-    "cpfsrc": "-cpfsrc",
+    "cpf-src": "-cpf-src",
     "perf-playbook-cpu": "-perf-playbook-cpu",
 }
 

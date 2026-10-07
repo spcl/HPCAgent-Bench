@@ -10,10 +10,12 @@ recipes (`containers/images/<image>/Dockerfile`) and published here as one movin
 |---|---|---|
 | `judge-amd-latest` | the judge: builds, runs and grades submissions (compilers, MPI, BLAS/FFT/sparse libraries, ROCm, profilers) | AMD MI300A / MI250X |
 | `agent-amd-latest` | the agent's sandbox: the same toolchain without the grader or its references | AMD MI300A / MI250X |
-| `judge-cpu-x86_64-latest` | the judge for CPU-only nodes | x86-64 |
-| `agent-cpu-x86_64-latest` | the agent's sandbox for CPU-only nodes | x86-64 |
-| `judge-nvidia-latest`, `agent-nvidia-latest` | the judge and agent images for NVIDIA GH200 | aarch64 + Hopper |
-| `sglang-mi300-latest`, `vllm-amd-latest`, `vllm-gh200-latest` | the model-serving engines the experiments use | AMD / NVIDIA |
+| `judge-nvidia-latest`, `agent-nvidia-latest` | the judge and agent images for NVIDIA GPUs | GH200 (aarch64 + Hopper) |
+| `judge-cpu-x86_64-latest`, `agent-cpu-x86_64-latest` | the judge and agent images for CPU-only nodes | x86-64 |
+| `judge-cpu-aarch64-latest`, `agent-cpu-aarch64-latest` | the judge and agent images for CPU-only nodes | aarch64 |
+| `sglang-mi300-latest` | SGLang model server (Qwen3.8, Kimi K2.7, GLM-5.3) | AMD MI300A |
+| `vllm-amd-latest` | vLLM model server (gpt-oss-120b; Qwen3.8 on MI250X) | AMD MI300A / MI250X |
+| `vllm-gh200-latest` | vLLM model server | NVIDIA GH200 |
 
 The `-latest` images are portable: built for a baseline CPU and every supported GPU architecture. A site that
 cannot pull them builds a `-native` flavor for its own machine from the same recipe; native images are never
@@ -25,6 +27,10 @@ Python packages that change often (DaCe, PyTorch, JAX, Triton, the HPCAgent-Benc
 in. A job installs them at start from the repository's `uv.lock` into a per-node environment
 (`containers/lib/launch_venv.sh`, the image ENTRYPOINT), so one image serves every commit of the benchmark.
 Held-out test inputs are in no image.
+
+The serving images favor correctness over speed: they ship no tuned GEMM tables and accept the engines'
+exact fallback kernels, and an engine is used for a model only after it passes a long multi-turn coherence
+check under agent load.
 
 ## Using them
 

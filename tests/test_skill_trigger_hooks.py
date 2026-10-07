@@ -67,7 +67,7 @@ SETUPS = _packet_setup_triples()
 
 def test_the_registry_offers_skill_packets_to_check() -> None:
     """Guards the parametrization: an empty table would make every test below vacuously green."""
-    assert {"lang-skills", "cpf"} <= {spec for spec, _, _ in SETUPS}, SETUPS
+    assert {"lang-skills", "cpf-tool"} <= {spec for spec, _, _ in SETUPS}, SETUPS
 
 
 @pytest.mark.parametrize("spec, language, image", SETUPS)
@@ -197,7 +197,7 @@ def test_a_trigger_never_sends_the_agent_to_a_page_the_setup_did_not_stage(
     # Case-sensitively, because a trigger cites a page by the name it is STAGED under
     # (`lang-cpp`), while "a HIP or OpenMP-offload submission" names a build kind and not the
     # `openmp-offload` page -- the difference between a pointer and a noun is the spelling. A name
-    # followed by "packet" is a noun too: canonical-parallel-form contrasts itself with "the `cpfsrc`
+    # followed by "packet" is a noun too: cpf-tool contrasts itself with "the `cpf-src`
     # packet", another setup's setup, and sends the agent to no file.
     staged = set(packets.resolve(spec, language, fill=False, image=image).pages)
     for page in staged:
@@ -258,7 +258,7 @@ SETUP_PACKETS = [
     ("lang-skills", "fortran", "cpu"),
     ("lang-skills", "hip", "amd"),
     ("lang-skills", "c", "amd"),
-    ("cpf", "c", "cpu"),
+    ("cpf-tool", "c", "cpu"),
     ("perf-playbook-cpu", "c", "cpu"),
     # The device language packet: its own page plus the host page that page's trigger names, both
     # of which have to exist under /shared/skills for the trigger to be followable.

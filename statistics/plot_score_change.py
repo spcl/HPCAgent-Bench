@@ -448,7 +448,7 @@ def safe_pairs_table(
     card: cost.CostModel | None = None,
 ) -> pd.DataFrame:
     """:func:`~hpcagent_bench.stats.figures.efficacy.pairs_table`, but a raw-row population that
-    mixes timing-reduction stamps (some episodes pre-date the mwd-v2 migration) is named on stderr
+    mixes timing-reduction stamps is named on stderr
     and skipped -- an extraction issue in the SOURCE data, never this figure's to silently paper
     over. The drawn marks are unaffected: they come from the caller's own pre-corrected ``stats``
     table, never from this recompute, which exists only for the informational per-point CSV."""
@@ -651,7 +651,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         help=
-        "packet naming a TREATED side (skills, cpf, cpfsrc, ...); repeatable -- each is read "
+        "packet naming a TREATED side (skills, cpf, cpf-src, ...); repeatable -- each is read "
         "against the SAME no-packet control, one at a time. Default: skills. Two or more join as "
         "columns of one row",
     )  # fmt: skip

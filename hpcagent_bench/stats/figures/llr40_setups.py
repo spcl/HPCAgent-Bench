@@ -28,13 +28,13 @@ __all__ = [
 ]
 
 #: A setup an llr40 figure may draw, and its (model, condition) in one match: ``-c`` is the control
-#: (condition ``""``), ``-c-cpf`` the CPF page, ``-c-cpfsrc`` CPF as source; the control is ``llr40-``
+#: (condition ``""``), ``-c-cpf-tool`` the CPF tool, ``-c-cpf-src`` CPF as source; the control is ``llr40-``
 #: and a CPF setup keeps the ``llr40-`` prefix. C only
 #: -- Fortran has no CPF spelling (mpr-artifacts/experiments/llr-focus40-cpf/README.md).
-SETUP_PATTERN: re.Pattern[str] = re.compile(r"^llr40-(?P<model>[a-z0-9]+)-c(?:-(?P<condition>cpf|cpfsrc))?$")
+SETUP_PATTERN: re.Pattern[str] = re.compile(r"^llr40-(?P<model>[a-z0-9]+)-c(?:-(?P<condition>cpf-tool|cpf-src))?$")
 
 #: Draw order within one model's own slot, control first.
-CONDITION_ORDER: tuple[str, ...] = ("", "cpf", "cpfsrc")
+CONDITION_ORDER: tuple[str, ...] = ("", "cpf-tool", "cpf-src")
 
 #: What every canon column is measured against.
 CANON_BASELINE: str = "numba"
@@ -84,7 +84,7 @@ def tag_of(canon_frame: pd.DataFrame) -> list[str]:
 
 
 def condition_label(condition: str) -> str:
-    """The display text for a condition tag (``""`` control, ``cpf``, ``cpfsrc``).
+    """The display text for a condition tag (``""`` control, ``cpf-tool``, ``cpf-src``).
 
     The control reads "No Packet", never the registry's "No Skill Packet": the llr40 treatments
     (CPF page, CPF as source) are not skills, and borrowing the skills studies' wording for

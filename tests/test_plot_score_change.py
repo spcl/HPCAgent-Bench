@@ -209,7 +209,7 @@ def test_skills_are_read_off_the_recorded_packet_before_the_setup_name(tmp_path:
     pd.DataFrame(
         [
             {"setup": "renamed-qwen38-c", "packet": "lang-skills"},
-            {"setup": "qwen38-fortran-lang-skills", "packet": "cpf"},
+            {"setup": "qwen38-fortran-lang-skills", "packet": "cpf-tool"},
             {"setup": "qwen38-c-lang-skills", "packet": ""},
         ]
     ).to_csv(path, index=False)
@@ -247,7 +247,7 @@ def test_control_rows_is_exactly_the_no_packet_setup(tmp_path: pathlib.Path) -> 
     pd.DataFrame(
         [
             {"setup": "llr40-qwen38-c-perf-playbook-cpu", "packet": "perf-playbook-cpu"},
-            {"setup": "llr40-qwen38-c-cpfsrc", "packet": "cpfsrc"},
+            {"setup": "llr40-qwen38-c-cpf-src", "packet": "cpf-src"},
             {"setup": "llr40-qwen38-c-lang-skills", "packet": "lang-skills"},
             {"setup": "llr40-qwen38-c", "packet": ""},
         ]
@@ -282,14 +282,14 @@ def test_treatment_frame_tags_the_control_false_and_the_treatment_true() -> None
     frame_all = pd.DataFrame(
         [
             {"setup": "a-control", "packet": "", "model": "qwen38", "language": "c"},
-            {"setup": "a-cpfsrc", "packet": "cpfsrc", "model": "qwen38", "language": "c"},
+            {"setup": "a-cpf-src", "packet": "cpf-src", "model": "qwen38", "language": "c"},
             {"setup": "a-lang-skills", "packet": "lang-skills", "model": "qwen38", "language": "c"},
         ]
     )
-    tagged = plot.treatment_frame(frame_all, "cpfsrc")
+    tagged = plot.treatment_frame(frame_all, "cpf-src")
     by_setup = tagged.set_index("setup").skills
     assert bool(by_setup["a-control"]) is False
-    assert bool(by_setup["a-cpfsrc"]) is True
+    assert bool(by_setup["a-cpf-src"]) is True
     assert "a-lang-skills" not in by_setup.index
 
 
@@ -328,7 +328,7 @@ def test_a_treatment_setup_that_never_recorded_its_language_still_pairs_against_
         }  # fmt: skip
         for setup, packet, language, speedup in (
             ("llr40-oss120b-c", "", "c", 2.0),
-            ("llr40-oss120b-c-cpf", "cpf", "", 2.4),
+            ("llr40-oss120b-c-cpf-tool", "cpf-tool", "", 2.4),
         ):
             run = f"{setup}-{kernel}"
             base = {**common, "setup": setup, "packet": packet, "language": language, "episode_id": run}
@@ -342,12 +342,12 @@ def test_a_treatment_setup_that_never_recorded_its_language_still_pairs_against_
     pd.DataFrame(rows).to_csv(path, index=False)
 
     frame_all = studies.setup_rows(path, prefix="")
-    treated = frame_all[frame_all.setup == "llr40-oss120b-c-cpf"]
+    treated = frame_all[frame_all.setup == "llr40-oss120b-c-cpf-tool"]
     assert set(treated.language) == {"c"}, "the setup name is the last resort when no row ever recorded it"
 
     control = plot.control_rows(frame_all)
     tag_kernels = sorted(frame_all.kernel.dropna().unique())
-    built = plot.one_treatment_panel(frame_all, control, "cpf", tag_kernels)
+    built = plot.one_treatment_panel(frame_all, control, "cpf-tool", tag_kernels)
 
     assert built is not None
     stats, frame = built
@@ -364,24 +364,27 @@ def test_complete_side_setups_drops_a_setup_short_of_the_tag_and_names_it_on_std
     tag_kernels = ["k0", "k1", "k2"]
     control = pd.DataFrame({"setup": ["ctrl"] * 3, "kernel": tag_kernels})
     treated = pd.DataFrame(
-        {"setup": ["good-cpf", "good-cpf", "good-cpf", "short-cpf"], "kernel": ["k0", "k1", "k2", "k0"]}
+        {
+            "setup": ["good-cpf-tool", "good-cpf-tool", "good-cpf-tool", "short-cpf-tool"],
+            "kernel": ["k0", "k1", "k2", "k0"],
+        }
     )
 
-    kept = plot.complete_side_setups(control, treated, tag_kernels, "cpf", include_incomplete=False)
+    kept = plot.complete_side_setups(control, treated, tag_kernels, "cpf-tool", include_incomplete=False)
 
-    assert kept == {"ctrl", "good-cpf"}
+    assert kept == {"ctrl", "good-cpf-tool"}
     err = capsys.readouterr().err
-    assert "cpf: dropping short-cpf (1/3 tag kernels)" in err
+    assert "cpf-tool: dropping short-cpf-tool (1/3 tag kernels)" in err
 
 
 def test_include_incomplete_keeps_a_short_setup_and_prints_nothing(capsys: pytest.CaptureFixture[str]) -> None:
     tag_kernels = ["k0", "k1", "k2"]
     control = pd.DataFrame({"setup": ["ctrl"] * 3, "kernel": tag_kernels})
-    treated = pd.DataFrame({"setup": ["short-cpf"], "kernel": ["k0"]})
+    treated = pd.DataFrame({"setup": ["short-cpf-tool"], "kernel": ["k0"]})
 
-    kept = plot.complete_side_setups(control, treated, tag_kernels, "cpf", include_incomplete=True)
+    kept = plot.complete_side_setups(control, treated, tag_kernels, "cpf-tool", include_incomplete=True)
 
-    assert kept == {"ctrl", "short-cpf"}
+    assert kept == {"ctrl", "short-cpf-tool"}
     assert capsys.readouterr().err == ""
 
 
@@ -676,7 +679,7 @@ def test_pair_frame_tags_each_setup_by_name_and_which_side_of_the_pair_it_is() -
 # The control's own shape, and the arrow a named comparison carries.
 
 
-@pytest.mark.parametrize("treatment", ["lang-skills", "cpf", "cpfsrc", "repo", "no-score-tool"])
+@pytest.mark.parametrize("treatment", ["lang-skills", "cpf-tool", "cpf-src", "repo", "no-score-tool"])
 def test_no_packet_is_ever_given_the_shape_the_control_wears(treatment: str) -> None:
     """The control is HOLLOW, and hollow-versus-filled alone does not separate two marks once a
     figure is reduced to a column: it is a different OUTLINE. A packet handed
@@ -788,12 +791,12 @@ def test_the_token_cost_axis_formatter_spells_a_ratio_below_one_as_a_fraction() 
 
 def one_setup_observations_csv(tmp_path: pathlib.Path) -> pathlib.Path:
     """One tiny experiment as an extracted-observations CSV: a control, a ``skills`` setup and a
-    ``cpf`` setup, two models -- what :func:`plot.build_multi_comparison` reads off disk. Reuses
+    ``cpf-tool`` setup, two models -- what :func:`plot.build_multi_comparison` reads off disk. Reuses
     :func:`observation_rows`'s own shape so the emitted rows carry the ``baseline_ns``/``native_ns``
     columns :func:`~hpcagent_bench.stats.figures.efficacy.pairs_table` requires (SC15 Rule 4)."""
     rows: list[dict[str, object]] = []
     for model, base in (("qwen38", 2.0), ("oss120b", 3.0)):
-        for packet, suffix, factor in (("", "", 1.0), ("skills", "-skills", 1.2), ("cpf", "-cpf", 0.8)):
+        for packet, suffix, factor in (("", "", 1.0), ("skills", "-skills", 1.2), ("cpf-tool", "-cpf-tool", 0.8)):
             setup = f"exp-{model}-c{suffix}"
             rows += [
                 {**row, "language": "c", "packet": packet} for row in observation_rows(setup, base * factor, 1000.0 / factor)
@@ -806,14 +809,14 @@ def one_setup_observations_csv(tmp_path: pathlib.Path) -> pathlib.Path:
 def test_build_multi_comparison_reads_treatments_as_a_comma_list() -> None:
     obs = one_setup_observations_csv(pathlib.Path(tempfile.mkdtemp()))
     built = plot.build_multi_comparison(
-        {"treatments": "skills,cpf", "title": "CPU"}, [obs], "exp", False, plot.cost.resolve()
+        {"treatments": "skills,cpf-tool", "title": "CPU"}, [obs], "exp", False, plot.cost.resolve()
     )
     assert built is not None
     title, treatments, stats, frame = built
     assert title == "CPU"
-    assert list(treatments) == ["skills", "cpf"]
-    assert set(frame) == {"skills", "cpf"}
-    assert set(stats) == {"skills", "cpf"}
+    assert list(treatments) == ["skills", "cpf-tool"]
+    assert set(frame) == {"skills", "cpf-tool"}
+    assert set(stats) == {"skills", "cpf-tool"}
     assert set(frame["skills"].model.unique()) == {"qwen38", "oss120b"}
 
 
@@ -833,14 +836,14 @@ def test_several_treatments_of_one_experiment_draw_one_dot_row(
     out = tmp_path / "fig.pdf"
     old_argv = sys.argv
     sys.argv = [
-        "plot_score_change.py", str(obs), "--experiment", "exp", "--treatment", "skills", "--treatment", "cpf",
+        "plot_score_change.py", str(obs), "--experiment", "exp", "--treatment", "skills", "--treatment", "cpf-tool",
         "--out", str(out), "--table", str(tmp_path / "table.csv"),
     ]  # fmt: skip
     try:
         plot.main()
     finally:
         sys.argv = old_argv
-    assert drawn == [["skills", "cpf"]]
+    assert drawn == [["skills", "cpf-tool"]]
     assert out.exists()
 
 
@@ -848,15 +851,15 @@ def test_write_panel_tables_merges_a_multi_treatment_panel_into_one_packet_tagge
     tmp_path: pathlib.Path,
 ) -> None:
     obs = one_setup_observations_csv(tmp_path)
-    built = plot.build_multi_comparison({"treatments": "skills,cpf"}, [obs], "exp", False, plot.cost.resolve())
+    built = plot.build_multi_comparison({"treatments": "skills,cpf-tool"}, [obs], "exp", False, plot.cost.resolve())
     assert built is not None
     _, _, stats, frame = built
     table = tmp_path / "table.csv"
     plot.write_panel_tables(table, "-cpu", stats, frame)
     written = pd.read_csv(table.with_name("table-cpu.csv"))
     absolute = pd.read_csv(table.with_name("table-cpu-absolute.csv"))
-    assert set(written.packet) == {"skills", "cpf"}
-    assert set(absolute.packet) == {"skills", "cpf"}
+    assert set(written.packet) == {"skills", "cpf-tool"}
+    assert set(absolute.packet) == {"skills", "cpf-tool"}
 
 
 def test_a_kernel_without_a_token_total_keeps_its_speed_up_and_the_table_says_n() -> None:
@@ -1221,7 +1224,7 @@ def pending_dot_row(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, mar
     kept: list[Figure] = []
     monkeypatch.setattr(plotstyle, "save", lambda fig, stem, fixed=False, **options: kept.append(fig) or stem)
     config = dataclasses.replace(efficacy_figures.PAPER_CONFIG, mark_pending=mark)
-    stub = ("Scientific", "cpfsrc", pd.DataFrame(), pd.DataFrame())
+    stub = ("Scientific", "cpf-src", pd.DataFrame(), pd.DataFrame())
     efficacy_figures.figure_dot_row([stub], tmp_path / "dots.pdf", config=config, pending=["oss120b,kimi27sglang"])
     return kept[0]
 

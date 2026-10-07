@@ -413,7 +413,7 @@ def model_of(setup: str, unknown: str = "other") -> str:
 def language_of(setup: str, unknown: str = "") -> str:
     """The language tag a setup ran, read out of its name; ``unknown`` when none is found.
 
-    Setups are ``<study>-<model>-<language>[-skills|-cpf|-cpfsrc|...]``, so the language is a
+    Setups are ``<study>-<model>-<language>[-skills|-cpf-tool|-cpf-src|...]``, so the language is a
     whole dash-delimited token, same rule as :func:`model_of` and for the same reason.
 
     THE LAST RESORT, same as :func:`model_of`: a recorded ``language`` column is provenance, and
@@ -425,7 +425,7 @@ def language_of(setup: str, unknown: str = "") -> str:
 
 
 def setup_suffix(setup: str) -> str:
-    """The dash-padded part of a setup name after its model token (``-c-cpf-`` of ``llr40-qwen38-c-cpf``);
+    """The dash-padded part of a setup name after its model token (``-c-cpf-`` of ``llr40-qwen38-c-cpf-tool``);
     "" when the name names no registered model. The study prefix before the model can spell a packet
     (``cpf-llr-focus40``), so a packet is only ever read from this suffix."""
     padded = f"-{setup}-"

@@ -243,14 +243,23 @@ def impact_table(paired_setups: ModuleType, tmp_path: pathlib.Path) -> pd.DataFr
     took two attempts per task, the control one."""
     rows: list[dict[str, object]] = []
     for kernel in KERNELS:
-        control, treated = episode("x-qwen38-c", kernel, 2.0, 100.0), episode("x-qwen38-c-cpf", kernel, 3.0, 50.0)
+        control, treated = episode("x-qwen38-c", kernel, 2.0, 100.0), episode("x-qwen38-c-cpf-tool", kernel, 3.0, 50.0)
         control[2] |= {"episode_attempts": 1}
         treated[2] |= {"episode_attempts": 2}
         rows += control + treated
     path = observations(rows, tmp_path)
     out = tmp_path / "impact.csv"
     rc = paired_setups.main(
-        ["--observations", str(path), "--pair", "x-qwen38-c-cpf,x-qwen38-c", "--family", "f", "--impact-out", str(out)]
+        [
+            "--observations",
+            str(path),
+            "--pair",
+            "x-qwen38-c-cpf-tool,x-qwen38-c",
+            "--family",
+            "f",
+            "--impact-out",
+            str(out),
+        ]
     )
     assert rc == 0
     return pd.read_csv(out)
@@ -263,13 +272,13 @@ def test_the_impact_table_has_one_row_per_setup_with_the_ratio_on_the_treatment_
     the paper's rho on both legs -- speedup treatment/control 3/2, cost control/treated 100/50 = 2
     (above 1: the treatment is cheaper)."""
     table = impact_table(paired_setups, tmp_path).set_index("setup")
-    assert list(table.index) == ["x-qwen38-c-cpf", "x-qwen38-c"]
+    assert list(table.index) == ["x-qwen38-c-cpf-tool", "x-qwen38-c"]
     assert list(table.columns) == [c for c in paired_setups.IMPACT_COLUMNS if c != "setup"]
-    treated, control = table.loc["x-qwen38-c-cpf"], table.loc["x-qwen38-c"]
+    treated, control = table.loc["x-qwen38-c-cpf-tool"], table.loc["x-qwen38-c"]
     assert treated.control == "x-qwen38-c" and pd.isna(control.control)
     assert treated.speedup_ratio == pytest.approx(1.5) and treated.token_ratio == pytest.approx(2.0)
     assert pd.isna(control.speedup_ratio) and pd.isna(control.token_ratio)
-    assert (treated.model, treated.language, treated.packet) == ("qwen38", "c", "cpf")
+    assert (treated.model, treated.language, treated.packet) == ("qwen38", "c", "cpf-tool")
 
 
 def test_the_impact_table_carries_usage_and_the_setup_aggregates(
@@ -278,7 +287,7 @@ def test_the_impact_table_carries_usage_and_the_setup_aggregates(
     """Attempts come off the task rows, speedup is the geomean (A1), cost the geomean task total with
     its bootstrap interval (A2) and, beside it, the arithmetic mean, each over the 8 selected tasks."""
     table = impact_table(paired_setups, tmp_path).set_index("setup")
-    treated, control = table.loc["x-qwen38-c-cpf"], table.loc["x-qwen38-c"]
+    treated, control = table.loc["x-qwen38-c-cpf-tool"], table.loc["x-qwen38-c"]
     assert (treated.tasks, treated.n_solved, treated.n_token_kernels) == (8, 8, 8)
     assert (treated.attempts_per_episode, control.attempts_per_episode) == (2.0, 1.0)
     assert treated.accepted_submissions_per_episode == pytest.approx(1.0)
@@ -605,7 +614,7 @@ def test_the_impact_table_carries_the_relaunch_rate_beside_every_token_ratio(
 ) -> None:
     """The fixture relaunches every treated task once and never relaunches a control one."""
     table = impact_table(paired_setups, tmp_path).set_index("setup")
-    treated, control = table.loc["x-qwen38-c-cpf"], table.loc["x-qwen38-c"]
+    treated, control = table.loc["x-qwen38-c-cpf-tool"], table.loc["x-qwen38-c"]
     assert (treated.relaunched_episodes, control.relaunched_episodes) == (8, 0)
     assert treated.share_relaunched == pytest.approx(1.0) and control.share_relaunched == pytest.approx(0.0)
 
@@ -627,7 +636,7 @@ def test_a_setup_short_of_the_declared_tag_leaves_the_family(paired_setups: Modu
     the pair is dropped rather than compared over a tag that quietly shrank to fit."""
     rows: list[dict[str, object]] = []
     for kernel in KERNELS:
-        rows += episode("x-qwen38-c", kernel, 2.0, 100.0) + episode("x-qwen38-c-cpf", kernel, 3.0, 50.0)
+        rows += episode("x-qwen38-c", kernel, 2.0, 100.0) + episode("x-qwen38-c-cpf-tool", kernel, 3.0, 50.0)
     path = observations(rows, tmp_path)
     tag_kernels = tmp_path / "tag.txt"
     tag_kernels.write_text("\n".join([*KERNELS, "never_served"]) + "\n", encoding="utf-8")
@@ -637,7 +646,7 @@ def test_a_setup_short_of_the_declared_tag_leaves_the_family(paired_setups: Modu
                 "--observations",
                 str(path),
                 "--pair",
-                "x-qwen38-c-cpf,x-qwen38-c",
+                "x-qwen38-c-cpf-tool,x-qwen38-c",
                 "--family",
                 "f",
                 "--tag-file",
@@ -806,7 +815,7 @@ def test_cpf_uptake_reads_the_iteration_counts_call_column(paired_setups: Module
     """``cpf_uptake_by_setup`` reads an ``iteration_counts.py`` CSV per setup: the fraction of its rows
     (one per transcript) whose ``canonical_parallel_form_calls`` is nonzero. 2 of 3 episodes here
     called the tool at least once."""
-    csv_path = tmp_path / "iters-cpf.csv"
+    csv_path = tmp_path / "iters-cpf-tool.csv"
     pd.DataFrame(
         [
             {"agent_dir": "w0", "canonical_parallel_form_calls": 2},
@@ -814,7 +823,9 @@ def test_cpf_uptake_reads_the_iteration_counts_call_column(paired_setups: Module
             {"agent_dir": "w2", "canonical_parallel_form_calls": 1},
         ]
     ).to_csv(csv_path, index=False)
-    assert paired_setups.cpf_uptake_by_setup({"x-qwen38-c-cpf": csv_path}) == {"x-qwen38-c-cpf": pytest.approx(2 / 3)}
+    assert paired_setups.cpf_uptake_by_setup({"x-qwen38-c-cpf-tool": csv_path}) == {
+        "x-qwen38-c-cpf-tool": pytest.approx(2 / 3)
+    }
 
 
 def test_cpf_uptake_is_absent_without_the_call_column(paired_setups: ModuleType, tmp_path: pathlib.Path) -> None:
@@ -822,12 +833,12 @@ def test_cpf_uptake_is_absent_without_the_call_column(paired_setups: ModuleType,
     than a misleading 0.0."""
     csv_path = tmp_path / "iters-old.csv"
     pd.DataFrame([{"agent_dir": "w0", "turns": 4}]).to_csv(csv_path, index=False)
-    assert paired_setups.cpf_uptake_by_setup({"x-qwen38-c-cpf": csv_path}) == {}
+    assert paired_setups.cpf_uptake_by_setup({"x-qwen38-c-cpf-tool": csv_path}) == {}
 
 
 def test_parse_iteration_counts_splits_setup_and_path(paired_setups: ModuleType) -> None:
-    setup, path = paired_setups.parse_iteration_counts("x-qwen38-c-cpf=/tmp/iters.csv")
-    assert (setup, path) == ("x-qwen38-c-cpf", pathlib.Path("/tmp/iters.csv"))
+    setup, path = paired_setups.parse_iteration_counts("x-qwen38-c-cpf-tool=/tmp/iters.csv")
+    assert (setup, path) == ("x-qwen38-c-cpf-tool", pathlib.Path("/tmp/iters.csv"))
     with pytest.raises(SystemExit):
         paired_setups.parse_iteration_counts("no-equals-sign")
 
@@ -839,7 +850,7 @@ def test_the_impact_table_carries_cpf_uptake_only_for_the_setup_it_was_given(
     control -- never passed one -- reports NaN rather than 0.0 (it did not run with the tool at all)."""
     rows: list[dict[str, object]] = []
     for kernel in KERNELS:
-        control, treated = episode("x-qwen38-c", kernel, 2.0, 100.0), episode("x-qwen38-c-cpf", kernel, 3.0, 50.0)
+        control, treated = episode("x-qwen38-c", kernel, 2.0, 100.0), episode("x-qwen38-c-cpf-tool", kernel, 3.0, 50.0)
         rows += control + treated
     obs_path = observations(rows, tmp_path)
     iters_path = tmp_path / "iters.csv"
@@ -850,15 +861,15 @@ def test_the_impact_table_carries_cpf_uptake_only_for_the_setup_it_was_given(
     rc = paired_setups.main(
         [
             "--observations", str(obs_path),
-            "--pair", "x-qwen38-c-cpf,x-qwen38-c",
+            "--pair", "x-qwen38-c-cpf-tool,x-qwen38-c",
             "--family", "f",
             "--impact-out", str(out),
-            "--iteration-counts", f"x-qwen38-c-cpf={iters_path}",
+            "--iteration-counts", f"x-qwen38-c-cpf-tool={iters_path}",
         ]
     )  # fmt: skip
     assert rc == 0
     table = pd.read_csv(out).set_index("setup")
-    assert table.loc["x-qwen38-c-cpf", "cpf_uptake"] == pytest.approx(6 / 8)
+    assert table.loc["x-qwen38-c-cpf-tool", "cpf_uptake"] == pytest.approx(6 / 8)
     assert pd.isna(table.loc["x-qwen38-c", "cpf_uptake"])
 
 
@@ -875,11 +886,11 @@ def cost_fixture(tmp_path: pathlib.Path) -> pathlib.Path:
     rows: list[dict[str, object]] = []
     for index, kernel in enumerate(KERNELS[:6]):
         rows += [
-            graded("x-qwen38-c-cpf", kernel, 2.0 if index % 2 == 0 else 4.0),
-            priced_task("x-qwen38-c-cpf", kernel, 100.0, 0.0),
+            graded("x-qwen38-c-cpf-tool", kernel, 2.0 if index % 2 == 0 else 4.0),
+            priced_task("x-qwen38-c-cpf-tool", kernel, 100.0, 0.0),
         ]
         rows += [graded("x-qwen38-c", kernel, 1.0), priced_task("x-qwen38-c", kernel, 100.0, 1000.0)]
-    rows += [graded("x-qwen38-c-cpf", "k7", 100.0), priced_task("x-qwen38-c-cpf", "k7", 400.0, 0.0)]
+    rows += [graded("x-qwen38-c-cpf-tool", "k7", 100.0), priced_task("x-qwen38-c-cpf-tool", "k7", 400.0, 0.0)]
     rows += [call("x-qwen38-c", "k7", 100.0), priced_task("x-qwen38-c", "k7", 100.0, 0.0)]
     return observations(rows, tmp_path)
 
@@ -896,7 +907,7 @@ def test_the_speedup_leg_is_over_the_kernels_both_solved_and_the_cost_leg_over_e
     rc = paired_setups.main(
         [
             "--observations", str(cost_fixture(tmp_path)),
-            "--pair", "x-qwen38-c-cpf,x-qwen38-c",
+            "--pair", "x-qwen38-c-cpf-tool,x-qwen38-c",
             "--family", "f",
             "--out", str(out),
             "--setups-out", str(setups_out),
