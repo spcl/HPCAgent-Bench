@@ -103,7 +103,7 @@ class AgentIndices(NamedTuple):
 def agent_indices(episode_id: str | None) -> AgentIndices:
     """The indices parsed out of an episode id."""
     node = problem = worker = ""
-    for part in (episode_id or "").split(".")[1:]:
+    for part in (episode_id or "").split(".")[-4:]:  # the fixed suffix; a setup name may hold dots
         if len(part) > 1 and part[1:].isdigit():
             if part[0] == "n":
                 node = part[1:]
