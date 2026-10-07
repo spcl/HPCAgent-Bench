@@ -9,6 +9,7 @@ import ctypes
 import multiprocessing
 import multiprocessing.connection
 import multiprocessing.context
+import multiprocessing.forkserver
 import multiprocessing.process
 import multiprocessing.queues
 import os
@@ -56,6 +57,7 @@ __all__ = [
     "drain_progress",
     "exception_header",
     "finished_result",
+    "forget_inherited_forkserver",
     "forked_failure_reason",
     "is_core_dumping",
     "kill_group",
@@ -299,6 +301,18 @@ def child_environment(env: Mapping[str, str]) -> Iterator[None]:
                     os.environ.pop(key, None)
                 else:
                     os.environ[key] = value
+
+
+def forget_inherited_forkserver() -> None:
+    """A forked child inherits its parent's forkserver handle, but that server is not ITS child: the first
+    forkserver start in the child would ``waitpid`` a stranger and raise ``ChildProcessError``. Forgetting the
+    handle makes the child start a server of its own. CPython keeps no public reset for this."""
+    # The module's one ForkServer instance; its handle fields are private and absent from the type stubs.
+    server = multiprocessing.forkserver._forkserver  # noqa: SLF001
+    vars(server).update(_forkserver_pid=None, _forkserver_address=None, _forkserver_alive_fd=None)
+
+
+os.register_at_fork(after_in_child=forget_inherited_forkserver)
 
 
 def process_context(method: str) -> ProcessContext:

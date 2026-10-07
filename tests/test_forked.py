@@ -5,6 +5,7 @@ structured result instead of eating it -- the native-collection contract."""
 
 import faulthandler
 import inspect
+import multiprocessing
 import multiprocessing.queues
 import os
 import pathlib
@@ -435,3 +436,18 @@ def test_a_refused_seal_is_reported_even_when_the_child_cannot_start_a_thread(
     assert "SealError" in (run.error or ""), run.error
     assert "cannot enter new namespaces" in (run.error or ""), run.error
     assert "no result" not in (run.error or ""), "the generic no-payload message replaced the real cause"
+
+
+def run_under_forkserver() -> bool:
+    """A grade nested in a forked child, the way a forked test calls ``score``: its own forkserver start."""
+    return run_forked(_ok, mp_context="forkserver", timeout=60).ok
+
+
+def test_a_forked_child_starts_its_own_forkserver_when_its_parent_runs_one() -> None:
+    """The child inherits the parent's forkserver handle; without forgetting it, the child's first forkserver
+    start ``waitpid``s a process that is not its child and raises ``ChildProcessError`` (CI replay 671509)."""
+    started = multiprocessing.get_context("forkserver").Process(target=_ok)
+    started.start()
+    started.join()
+    run = run_forked(run_under_forkserver, mp_context="fork", timeout=120)
+    assert run.ok and run.result is True, run.error

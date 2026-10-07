@@ -471,6 +471,11 @@ RUN set -eux; \
       '  packages:' \
       '    all:' \
       "      prefer: [\"%gcc@${GCC_VERSION}\"]" \
+      '    # fftw: ONE build with every precision. petsc +fftw names no precision, and under' \
+      '    # unify:when_possible it concretized a second, double-only fftw that the view linked, so' \
+      '    # /opt/view had no libfftw3f and the fp32 fftwf_* symbols of the fftw library request failed.' \
+      '    fftw:' \
+      '      require: ["precision=float,double,long_double +mpi +openmp"]' \
       '    yaksa:' \
       "      require: [\"amdgpu_target=$(echo "${ROCM_ARCH}" | tr ";" ",")\"]" \
       '    # libfabric: OURS. Two separate mechanisms had to be closed to make that stick, and' \
@@ -715,6 +720,7 @@ RUN set -eux; \
     test -f /opt/view/include/cblas.h; \
     test -f /opt/view/include/lapacke.h; \
     test -f /opt/view/include/fftw3.h; \
+    test -f /opt/view/lib/libfftw3f.so; \
     test -f /opt/view/include/tbb/tbb.h; \
     test -f /opt/view/include/blaze/Blaze.h; \
     mpicc -show
