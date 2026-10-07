@@ -71,21 +71,13 @@ python -m pytest -q -n 4 tests/test_framework_flavors.py          # a targeted s
 scripts/run_tests.sh -q -n 4 tests/test_opt_reports.py            # same, with the derived env (BLAS, MPI, PATH)
 ```
 
-The login node runs targeted selections only (at most `-n 4`). Anything that compiles many kernels,
-and the full suite, runs on a compute node inside the judge image (its gcc 16 accepts `-std=c23`;
-about 720 translator cases fail outside it for that reason alone):
+The login node runs targeted selections only (at most `-n 4`). Anything that compiles many kernels, and the
+full suite, runs on a compute node inside the judge image (its gcc 16 accepts `-std=c23`; about 720 translator
+cases fail outside it for that reason alone), with the checkout mounted as the image's EDF does:
 
 ```sh
-. hpcagent_bench/cluster/env.sh
-P=--partition="$HPCAGENT_BENCH_CI_PARTITION"
-sbatch $P scripts/ci_mi200.sbatch                                  # every CI job, about 3 hours
-sbatch $P scripts/ci_mi200.sbatch --ci --jobs unit,mpi             # chosen CI jobs
-sbatch $P scripts/ci_mi200.sbatch -q -n 16 tests/translators       # a pytest selection
+srun --partition=<partition> --environment=hpcagent-bench-judge-mi300-latest scripts/run_tests.sh -n 64
 ```
-
-With no arguments it replays `.github/workflows/tests.yml` through `scripts/ci_replay.py` and writes
-per-step logs and `summary.txt` to `$SCRATCH/ci-replay/<jobid>`; `scripts/run_tests.sh --ci --list`
-prints what it would run, and `scripts/run_tests.sh --container <args>` submits it and waits.
 
 **`-m sealed`.** The judge grades agent code in a child that unshares a user, mount and pid
 namespace (`hpcagent_bench/seal.py`). Tests of that child carry the `sealed` marker and skip on a

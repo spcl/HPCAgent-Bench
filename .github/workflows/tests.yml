@@ -19,8 +19,6 @@ name: CI
 #
 # --timeout-method=thread on sweeps that fork: SIGALRM never lands in a process blocked on a child.
 #
-# The same jobs run on a cluster node through scripts/ci_replay.py (scripts/ci_mi200.sbatch).
-#
 # Runners are pinned to ubuntu-24.04, not ubuntu-latest: the setup steps rely on 24.04 specifics (the
 # AppArmor userns restriction seal.py works around, apt package names, mmap_rnd_bits). Move the pin
 # once a run on ubuntu-26.04 is green.
@@ -750,7 +748,7 @@ jobs:
           coverage: njit-oracle
 
   # Hardware-marked tests and the GPU codegen columns on a real GPU. Manual only: a self-hosted
-  # GPU runner is not always attached. scripts/ci_mi200.sbatch runs the same steps on a cluster node.
+  # GPU runner is not always attached.
   gpu:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.gpu }}
     name: gpu (hardware groups + tvm-gpu / triton codegen)

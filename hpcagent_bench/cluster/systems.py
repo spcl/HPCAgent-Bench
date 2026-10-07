@@ -226,9 +226,20 @@ def resolve(
     return Resolved(name, values, extras)
 
 
-def sbatch_command(script: str, values: Mapping[str, str], script_args: Sequence[str]) -> list[str]:
-    """``sbatch`` with every resolved field as an option, then ``script`` and its arguments."""
-    return ["sbatch", *(f"{FIELDS[field][0]}={value}" for field, value in values.items()), script, *script_args]
+def sbatch_command(
+    script: str, values: Mapping[str, str], script_args: Sequence[str], logs: pathlib.Path | None = None
+) -> list[str]:
+    """``sbatch`` with every resolved field as an option, its Slurm output under ``logs`` when given (a
+    script's own ``%x-%j.out`` lands wherever sbatch ran, the checkout included), then ``script`` and its
+    arguments."""
+    output = [f"--output={logs}/%x-%j.out", f"--error={logs}/%x-%j.err"] if logs is not None else []
+    return [
+        "sbatch",
+        *(f"{FIELDS[field][0]}={value}" for field, value in values.items()),
+        *output,
+        script,
+        *script_args,
+    ]
 
 
 def main(argv: Sequence[str]) -> int:
@@ -251,7 +262,10 @@ def main(argv: Sequence[str]) -> int:
         pinned["partition"] = partition
     resolved = resolve(args.system, vars(args), environ, pinned=pinned)
     options = {field: value for field, value in resolved.values.items() if header.get(field) != value}
-    command = sbatch_command(str(args.script), options, args.script_args)
+    logs = paths.scratch_dir() / "logs"
+    if not args.dry_run:
+        logs.mkdir(parents=True, exist_ok=True)
+    command = sbatch_command(str(args.script), options, args.script_args, logs)
     print(f"# system {resolved.system or 'none'}: {shlex.join(command)}", file=sys.stderr)
     return 0 if args.dry_run else subprocess.run(command, check=False).returncode
 

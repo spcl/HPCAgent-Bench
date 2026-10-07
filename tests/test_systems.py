@@ -184,7 +184,11 @@ def dry_run(tmp_path: pathlib.Path, *args: str, **knobs: str) -> tuple[str, list
     )
     assert done.returncode == 0, done.stderr
     system, command = done.stderr.splitlines()[-1].removeprefix("# system ").split(": ", 1)
-    return system, shlex.split(command)
+    words = shlex.split(command)
+    # every job's Slurm output goes to the scratch logs, never to wherever sbatch ran
+    logs = str(ROOT / ".scratch" / "logs")
+    assert {f"--output={logs}/%x-%j.out", f"--error={logs}/%x-%j.err"} <= set(words), words
+    return system, [word for word in words if not word.startswith(("--output=", "--error="))]
 
 
 def job_script(tmp_path: pathlib.Path, *header: str) -> str:
