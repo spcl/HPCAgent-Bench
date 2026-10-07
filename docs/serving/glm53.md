@@ -86,25 +86,8 @@ extend batch below 4096 tokens (the scheduler debits `rem_chunk_tokens` per requ
 transient fp32 split buffer aiter allocates per layer (8 GiB at 4096 tokens). Both are needed for the
 aiter pair; no path falls back (`summarize.py` counts aiter fallback lines per leg).
 
-**Measured 2026-10-06** (job 669901: one 4-node allocation, legs back to back, 12 agents,
-`agentic-c12.json`; image built at 4f1468da8):
-
-| Leg | out tok/s | tok/s per agent | TTFT p50/p90 s | ITL p50/p90 ms | hit | gates |
-|---|---|---|---|---|---|---|
-| tilelang, chunk 4096 (shipped line) | 37.5 | 3.94 | 4.3 / 48.7 | 227 / 478 | 0.886 | pass |
-| **aiter DSA pair, chunk 2048** | 37.2 | 3.30 | 7.6 / 22.2 | 276 / 433 | 0.886 | pass (9/9, 51k context) |
-| tilelang, chunk 2048 | 47.0 | 4.96 | 3.1 / 27.7 | 191 / 491 | 0.887 | tools pass; accuracy 8/9 |
-
-- The aiter pair serves, passes both gates and logs no DSA fallback; it matches tilelang at the shipped
-  chunk size and is 21% behind tilelang at the same chunk size (ITL 276 against 191 ms), so the
-  shipped DSA backend stays tilelang. The first tilelang leg is not in the table: one client lost its
-  connection and the load generator stopped after 21 requests, which leaves no same-config control;
-  2026-10-05's tilelang baseline on other nodes was 44.6 tok/s.
-- tilelang at chunk 2048 is the fastest leg; its one accuracy miss found the right buffer and kept
-  reasoning past the 2048-token budget. One sample, no repeat: a candidate, not a result.
-- Every leg logs 3300 aiter `using torch solution` lines, all bf16 GEMMs aiter has no gfx942 row for
-  (router `N=256` and indexer `N=32`, `K=6144`), none from the DSA path. They run hipBLASLt, which is
-  correct ([knobs.md](knobs.md#aiter-correctness-first-fallbacks-accepted)).
+No measured numbers are kept here: the 10-06 legs ran before the GEMM-table removal and are re-measured
+when agent tuning is done.
 
 **Reproduce** (one mi300 node, no model): `$SCRATCH/archives/glm53-aiter-dsa-repro/` holds
 `repro_aiter_dsa.py` (replays `_forward_aiter`/`_forward_aiter_extend` for GLM-5.3 at TP4 against a

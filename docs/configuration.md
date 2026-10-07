@@ -97,7 +97,6 @@ the GPU generation whose images and serving layers the experiment uses ([below](
 | `HPCAGENT_BENCH_SITE_ENV` | `experiments/layers/site.env` when it exists | which layer `scripts/site_env.sh` loads; a named file that does not exist is an error |
 | `SBATCH_PARTITION`, `SALLOC_PARTITION` | unset (the cluster's default) | the partition of every `sbatch` / `salloc`; Slurm reads it and it overrides a script's `#SBATCH --partition`, and `--partition=` on the command line overrides it (the submitters resolve it with their `--partition` flag, over this variable, over the system's entry) |
 | `SBATCH_ACCOUNT` | empty | the account every `sbatch` bills; `hpcagent_bench/cluster/submit.sh` refuses to submit without one, and `root`. `SLURM_ACCOUNT` and `SALLOC_ACCOUNT` follow it. No script passes `-A` |
-| `HPCAGENT_BENCH_EXCLUDE_NODES` | empty | a Slurm hostlist regrade jobs avoid |
 | `HPCAGENT_BENCH_CI_PARTITION` | `SBATCH_PARTITION` | partition of the CI replay, `scripts/run_tests.sh --container` |
 | `HPCAGENT_BENCH_LOGIN_HOST`, `HPCAGENT_BENCH_SSH_JUMP` | empty: a placeholder | the login host and ssh jump chain in the laptop tunnel commands `containers/inference/serve-private.sbatch` prints |
 | `HPCAGENT_BENCH_NICE` | `100` | the `--nice` every submitter passes (`NICE=<n>` for one submission); Slurm has no environment variable for it, so a bare `sbatch` runs at nice 0 |
