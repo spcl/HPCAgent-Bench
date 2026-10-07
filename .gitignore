@@ -145,8 +145,6 @@ results/plots/*
 hpcagent_bench*.db
 hpcagent_bench.db-*
 *.csv
-# aiter's tuned GEMM tables: aiter reads CSV only, and the SGLang image bakes them in.
-!containers/inference/aiter-configs/*.csv
 !tests/data/llr40/data/*.csv
 /opt_reports/
 # Documented default outputs of `hf export`, `harbor generate/run` and `grade-under worklist/run`.

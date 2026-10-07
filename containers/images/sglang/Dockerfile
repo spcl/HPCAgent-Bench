@@ -219,14 +219,6 @@ RUN set -eux; \
     cp /opt/moe-configs/E=*.json "${d}/triton_3_7_0/"; \
     ls "${d}/triton_3_7_0/"
 
-# Our tuned bf16 GEMM rows for MI300A (containers/inference/tune-aiter-gemm.sbatch), installed as one of
-# aiter's own model_configs files: aiter merges every model_configs/*bf16_tuned_gemm.csv at lookup, and its
-# opus GEMM module compiles exactly the kernel ids those files name. Don't hand the rows in through
-# AITER_CONFIG_GEMM_BF16: the lookup then picks opus kernels the module never compiled and the first
-# prefill aborts with "Kernel id ... not found in a16w16 bf16 tune lookup table".
-COPY containers/inference/aiter-configs/bf16_tuned_gemm_gfx942.csv \
-     /sgl-workspace/aiter/aiter/configs/model_configs/hpcagentbench_gfx942_bf16_tuned_gemm.csv
-
 # aiter's JIT, built HERE instead of on the first request.
 #
 # SGLANG_USE_AITER=1 is set by every kimi and GLM-5.3 setup, so unlike the vLLM image this engine
@@ -383,32 +375,6 @@ _prebuild("greedy_sample", _greedy_sample)
 _prebuild("get_padded_m", lambda: aiter.get_padded_m(128, 7168, 7168, 1))
 _prebuild("moe_sorting_opus_get_workspace_size",
           lambda: aiter.moe_sorting_opus_get_workspace_size(128, 256, 8))
-
-
-def _tuned_gemms():
-    # One call per (N, K, libtype) of our rows for this GPU's CU count, so every kernel family they name
-    # (opus among them) is compiled; a row that still resolves to torch fails the build.
-    import csv
-
-    from aiter.tuned_gemm import get_GEMM_A16W16_config, tgemm
-
-    cus = torch.cuda.get_device_properties(0).multi_processor_count
-    ours = pathlib.Path(aiter.__file__).parent / "configs/model_configs/hpcagentbench_gfx942_bf16_tuned_gemm.csv"
-    rows = csv.DictReader(ours.open())
-    picked = {(r["N"], r["K"], r["libtype"]): int(r["M"]) for r in rows if int(r["cu_num"]) == cus}
-    assert picked, f"no tuned bf16 GEMM row for {cus} CUs"
-    for (n, k, lib), m in sorted(picked.items()):
-        n, k = int(n), int(k)
-        cfg = get_GEMM_A16W16_config(m, n, k, False, str(_bf16), str(_bf16))
-        assert cfg and cfg["libtype"] == lib, (m, n, k, lib, cfg)
-        tgemm.mm(torch.randn(m, k, dtype=_bf16, device=_dev), torch.randn(n, k, dtype=_bf16, device=_dev),
-                 None, otype=_bf16)
-    torch.cuda.synchronize()
-
-
-# Unguarded, unlike _prebuild: a row that does not resolve, or a kernel that does not build, fails the image.
-_tuned_gemms()
-print("prebuilt: tuned bf16 GEMMs", flush=True)
 
 # The defect this step exists to catch, stated as the build's own assertion: an import-only
 # prebuild left module_aiter_core.so and nothing else, and the shell gate below cannot tell that

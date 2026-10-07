@@ -62,22 +62,21 @@ or a shorter context, the configured value is the effective one.
   `python3 -m sglang.launch_server --help` inside the image first (an unknown value kills every rank),
   and read `attention_backend=` back from the server log.
 
-## aiter: always on, no fallback
+## aiter: correctness first, fallbacks accepted
 
-AMD serving runs aiter: `SGLANG_USE_AITER=1` and `--attention-backend aiter` (GLM-5.3 keeps its own
-`dsa` attention with aiter ops on). A leg that falls back to another kernel is invalid, not a result.
+AMD serving runs aiter where it is exact: `SGLANG_USE_AITER=1` and `--attention-backend aiter` (GLM-5.3
+keeps its own `dsa` attention with aiter ops on). A shape aiter has no kernel for runs the engine's
+default path, which is correct, and that is accepted: a fallback costs speed, a wrong kernel costs the
+experiment.
 
-**Fallbacks to watch.** `grep -a "using torch solution\|[Ff]alling back" server-0.log` must be empty.
-- aiter's bf16 GEMM dispatch (`aiter/tuned_gemm.py`) runs any shape without a row in
+- aiter's bf16 GEMM dispatch (`aiter/tuned_gemm.py`) runs a shape without a row in its
   `bf16_tuned_gemm.csv` through torch (hipBLASLt) and logs `not found tuned config ... using torch
-  solution`. aiter ships rows for gfx950 and gfx1250 only, so on MI300A every bf16 GEMM without one
-  falls back: qwen38's Gated-DeltaNet `ba` projection (N=24, K=5120 at tp4), GLM-5.3's MoE router
-  (N=256, K=6144) and DSA indexer (N=32, K=6144). `containers/inference/tune-aiter-gemm.sbatch` tunes
-  those shapes with aiter's own tuner into `containers/inference/aiter-configs/bf16_tuned_gemm_gfx942.csv`,
-  and `run_cluster.sh` merges it after aiter's file (`AITER_CONFIG_GEMM_BF16=<aiter's>:<ours>`). A new
-  model: read its `shape is M:..` lines (`AITER_LOG_TUNED_CONFIG=1`) and pass them as `SHAPES`.
-- Not a fallback: qwen38's 48 Gated-DeltaNet layers run SGLang's Triton GDN kernels. SGLang 0.5.20 has
-  no aiter GDN backend (`--linear-attn-backend` offers triton and NVIDIA/Intel-only choices).
+  solution`. aiter ships rows for gfx950 and gfx1250 only, so on MI300A qwen38's Gated-DeltaNet `ba`
+  projection, GLM-5.3's MoE router and its DSA indexer run hipBLASLt. Don't add our own tuned rows: a
+  tuned table chosen for speed picked split-K kernels with bf16 accumulation (up to 3.75% of elements
+  out of tolerance), and qwen38 agents served under it ended in degenerate reasoning loops (10-07).
+- qwen38's 48 Gated-DeltaNet layers run SGLang's Triton GDN kernels; SGLang 0.5.20 has no aiter GDN
+  backend (`--linear-attn-backend` offers triton and NVIDIA/Intel-only choices).
 
 **Kernel cache.** aiter compiles a module the first time a shape needs it, behind a lock file, and the
 build used to vanish with the container. `run_cluster.sh` now keeps one cache per aiter build and GPU
@@ -146,9 +145,8 @@ call returned as prose instead of `tool_calls`. Nothing in the log says "parser"
 |---|---|---|
 | `SGLANG_USE_AITER` | `1` | aiter ops; does not pick the attention backend |
 | `SGLANG_SET_CPU_AFFINITY` | `0` | SGLang's own pinning is rejected by the Slurm cgroup; dies on a `psutil` error |
-| `AITER_JIT_DIR`, `AITER_ROOT_DIR`, `GPU_ARCHS` | set by `run_cluster.sh` | the persistent aiter kernel cache and the arch it compiles for; see [aiter](#aiter-always-on-no-fallback) |
+| `AITER_JIT_DIR`, `AITER_ROOT_DIR`, `GPU_ARCHS` | set by `run_cluster.sh` | the persistent aiter kernel cache and the arch it compiles for; see [aiter](#aiter-correctness-first-fallbacks-accepted) |
 | `SGLANG_WARMUP_TIMEOUT` | `1800` (`run_cluster.sh`) | the warmup request's read timeout, 600 s unset; a cold aiter cache compiles on that request |
-| `AITER_CONFIG_GEMM_BF16` | aiter's file + ours (`run_cluster.sh`) | tuned bf16 GEMM rows for gfx942; see [aiter](#aiter-always-on-no-fallback) |
 | `TRITON_CACHE_DIR` | persistent (`run_cluster.sh` derives it from `JIT_CACHE_ROOT`) | unset, every job re-JITs kernels during inference and generation stalls in bursts |
 | `HF_HOME` | on `iopsstor` (`$FAST_SCRATCH`, default from `scripts/cache_env.sh`) | 11x faster than general scratch at 16 concurrent readers; `run_cluster.sh` stripes `$HF_HOME/hub` wide |
 | `NCCL_NET_GDR_LEVEL` | `0` | multi-node only |

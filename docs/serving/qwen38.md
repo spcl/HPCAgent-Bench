@@ -39,9 +39,8 @@ Load: 40 long-lived conversations, 16 turns, 12k shared + ~22k unique prefix, pr
 long-context gates on every leg. Harness and raw numbers:
 `$SCRATCH/hpcagent-bench-runs/inference-tuning-20261005/` (`bench.sbatch`, `summarize.py`).
 
-These legs logged aiter's untuned bf16 GEMM fallback (700-930 lines, the Gated-DeltaNet `ba`
-projection to torch); the engine comparison below runs with the tuned GEMM rows merged and logs none
-(see [knobs.md](knobs.md#aiter-always-on-no-fallback)).
+These legs run the Gated-DeltaNet `ba` projection on torch's GEMM (aiter has no gfx942 row for it; 700-930
+log lines), which is the shipped configuration ([knobs.md](knobs.md#aiter-correctness-first-fallbacks-accepted)).
 
 | Leg (job) | out tok/s | tok/s per agent | TTFT p50/p90 s | ITL p50 ms | gates |
 |---|---|---|---|---|---|
@@ -59,8 +58,8 @@ projection to torch); the engine comparison below runs with the tuned GEMM rows 
 
 Same load and harness as above (40 agents, `agentic-c40.json`, tool and long-context gates per leg),
 one node per job, `$SCRATCH/hpcagent-bench-runs/inference-tuning-20261005/` (`q38eng-*.legs`,
-`q38abba-mi300.legs`). SGLang runs the `experiment:qwen38` line with the tuned bf16 GEMM rows merged
-(`HPCAGENT_BENCH_AITER_TUNED_GEMM` unset). vLLM 0.28.0 (`hpcagent-bench-vllm-mi300-latest`) runs the
+`q38abba-mi300.legs`). SGLang runs the `experiment:qwen38` line with a tuned bf16 GEMM table that has since been removed
+(it selected inexact kernels; [knobs.md](knobs.md#aiter-correctness-first-fallbacks-accepted)). vLLM 0.28.0 (`hpcagent-bench-vllm-mi300-latest`) runs the
 same FP8 checkpoint, chat template and parsers with `VLLM_ROCM_USE_AITER=1 --max-model-len 262144
 --gpu-memory-utilization 0.70 --max-num-seqs 128 --language-model-only --enable-prefix-caching
 --enable-auto-tool-choice --tool-call-parser qwen3_coder --reasoning-parser qwen3`.
