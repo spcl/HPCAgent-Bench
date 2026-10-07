@@ -8,7 +8,7 @@ alternatives that lost (DP4, MTP): [`qwen38.md`](qwen38.md#gh200-daint).
 
 ## 1. One-time setup
 
-The weights are already in `/iopsstor/scratch/cscs/$USER/.hpcagentbench-cache/hf` (fetch others with
+The weights are already in `$FAST_SCRATCH/.hpcagentbench-cache/hf` (fetch others with
 `containers/inference/fetch_weights.sbatch`). Write the EDF once:
 
 ```bash
@@ -16,7 +16,7 @@ mkdir -p ~/.edf
 cat > ~/.edf/qwen38-gh200.toml <<EOF
 image = "$SCRATCH/ce-images/hpcagent-bench-vllm-gh200-latest.sqsh"
 mounts = [
-  "/iopsstor/scratch/cscs/$USER/.hpcagentbench-cache/hf:/hf",
+  "$FAST_SCRATCH/.hpcagentbench-cache/hf:/hf",
   "$SCRATCH/.hpcagentbench-cache:$SCRATCH/.hpcagentbench-cache",
   "$SCRATCH/hpcagent-bench-daint/containers/inference:/tmpl",
 ]
@@ -46,7 +46,7 @@ exec vllm serve Qwen/Qwen3.8-27B-FP8 --host 127.0.0.1 --port 8000 --served-model
 ```
 
 ```bash
-sbatch -A g34 -p normal --nodes=1 --gpus-per-node=4 --time=04:00:00 -o q38-%j.out \
+sbatch -A "$SBATCH_ACCOUNT" -p normal --nodes=1 --gpus-per-node=4 --time=04:00:00 -o q38-%j.out \
   --wrap "srun --ntasks=1 --environment=qwen38-gh200 bash $SCRATCH/serve-qwen38.sh"
 ```
 
