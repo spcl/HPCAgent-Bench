@@ -300,7 +300,13 @@ basenames.
 
 A service step that dies while agents run triggers: TERM to the agent step (each worker writes a
 `cancelled` marker), a bounded wait (`STEP_STOP_GRACE_SECONDS`, default 120 s), stop of the other
-services, then extraction. Cancelled episodes are owed as `infra`.
+services, then extraction. Cancelled episodes are owed as `infra`. The same path runs when nothing
+under `agents/` or `judge/` changed for `AGENT_STALL_ABORT_SECONDS` (default 3600 s, 0 = off): a
+frozen agent container.
+
+After the agents exit, the job waits for every judge rank's in-flight `/submit` grades
+(`drain_judges.py`) before the merge, keeping `JUDGE_DRAIN_RESERVE_SECONDS` (default 900 s) of the
+allocation for the merge and extraction.
 
 ## Troubleshooting
 
