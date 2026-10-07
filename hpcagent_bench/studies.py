@@ -17,6 +17,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, NamedTuple
 
 from hpcagent_bench import packets, recorded_rows, study_tags
+from hpcagent_bench.harness import recording
 from hpcagent_bench.stats import population
 
 __all__ = [
@@ -84,9 +85,11 @@ def judge_database(db: pathlib.Path) -> bool:
 
 
 def setup_of(episode_id: str | None) -> str:
-    """The setup label. An episode id is ``<setup>.n<N>.p<P>.w<W>``; the setup is the only experiment condition
-    label that reaches the judge database."""
-    return (episode_id or "").split(".")[0]
+    """The setup label. An episode id is ``<setup>.n<N>.p<P>.w<W>`` (:data:`recording.LABEL`; a setup name may hold
+    dots); the setup is the only experiment condition label that reaches the judge database. Any other id is its
+    own first dotted part."""
+    match = recording.LABEL.fullmatch(episode_id or "")
+    return match["setup"] if match else (episode_id or "").split(".")[0]
 
 
 class AgentIndices(NamedTuple):

@@ -53,6 +53,14 @@ def test_the_run_is_the_slot_the_label_carries() -> None:
     )
 
 
+def test_a_setup_name_with_a_dot_keeps_its_slot_and_its_name() -> None:
+    """``-t1.5`` put a dot in the setup name: the episode id then parsed as no label, every run of the
+    temperature study landed in slot 1, and the observations named the setup ``...-t1``."""
+    label = "temperature3-qwen38-c-t1.5.n0.p41.w41.s7"
+    assert recording.slot_of(label) == 7
+    assert recording.setup_of(label) == studies.setup_of(label) == "temperature3-qwen38-c-t1.5"
+
+
 def test_a_rerun_with_an_answer_fills_the_slot_its_unanswered_run_left() -> None:
     """A slot whose run never submitted is rerun in a later job under the same slot; the cell keeps twenty runs."""
     frame = stub.stub_observations()
@@ -166,6 +174,7 @@ def test_the_runs_read_back_from_an_observations_csv_match_the_frame(tmp_path: p
 if __name__ == "__main__":
     test_every_planned_cell_counts_its_solved_owed_and_unsolved_runs()
     test_the_run_is_the_slot_the_label_carries()
+    test_a_setup_name_with_a_dot_keeps_its_slot_and_its_name()
     test_a_rerun_with_an_answer_fills_the_slot_its_unanswered_run_left()
     test_a_rerun_without_an_answer_never_replaces_an_answered_run()
     test_a_suspect_credited_answer_is_an_unsolved_run_at_one_x()
