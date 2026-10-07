@@ -55,8 +55,8 @@ engines with nothing to tune, so they are always `-latest`, whichever flavor the
 `build_and_verify.sbatch` with neither `CE_IMAGE_FLAVOR` nor `CE_PULL` set does this for you: it pulls the
 published `-latest` judge/agent image and, only when that pull fails, builds the `-native` flavor on the node and
 verifies it (promote it with `CE_IMAGE_FLAVOR=native`, as the job's last line says). Set `CE_IMAGE_FLAVOR=latest`
-to build the portable image instead. `registry.sh describe` publishes `containers/images/DOCKERHUB.md` as the
-repository's Docker Hub overview (credentials as for a push).
+to build the portable image instead. `containers/images/DOCKERHUB.md` is the repository's Docker Hub overview; an
+admin of the `spcleth` organization pastes it in (editing the overview needs admin rights, a push does not).
 
 Code an agent writes and every baseline the judge compiles (C, C++, Fortran, Pluto, PPCG, pythran,
 DaCe) are built on the node with `-march=native` either way; the choice only changes the
