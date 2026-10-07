@@ -142,8 +142,10 @@ results/*
 !results/plots/
 results/plots/*
 !results/plots/.gitkeep
-hpcagent_bench*.db
-hpcagent_bench.db-*
+# Every SQLite database (results, shards, canon) is data, never source; the fixtures tests read are the exception.
+*.db
+*.db-*
+!tests/data/*.db
 *.csv
 !tests/data/llr40/data/*.csv
 /opt_reports/
@@ -159,6 +161,8 @@ adapters/hpcagent_bench/runs/
 # --- Job output and crash dumps that land wherever sbatch was run ---
 slurm-*.out
 /*.out
+/*.err
+/*.txt
 core_*
 core.[0-9]*
 !core_*.py

@@ -13,12 +13,11 @@ from tests.fresh_module import fresh
 
 @pytest.fixture
 def scratch(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> pathlib.Path:
-    """A scratch whose runs root is ``<tmp>/hpcagent-bench-runs`` and whose frozen dir is ``<tmp>/frozen``."""
+    """A scratch whose runs root is ``<tmp>/hpcagent-bench-runs``, beside an unprotected ``<tmp>/corpus``."""
     monkeypatch.setenv("SCRATCH", str(tmp_path))
-    monkeypatch.setenv("HPCAGENT_BENCH_FROZEN_OBSERVATIONS", str(tmp_path / "frozen"))
     monkeypatch.delenv(data_guard.ENV, raising=False)
     (tmp_path / "hpcagent-bench-runs" / "camp" / "123" / "judge").mkdir(parents=True)
-    (tmp_path / "frozen").mkdir()
+    (tmp_path / "corpus").mkdir()
     return tmp_path
 
 
@@ -56,15 +55,13 @@ def test_check_output_refuses_a_source_file(tmp_path: pathlib.Path) -> None:
         data_guard.check_output(db, [db])
 
 
-def test_protected_roots_are_runs_frozen_and_env(scratch: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The runs root, the frozen dir and every $HPCAGENT_BENCH_PROTECTED_ROOTS entry are protected."""
+def test_protected_roots_are_runs_and_env(scratch: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The runs root and every $HPCAGENT_BENCH_PROTECTED_ROOTS entry are protected."""
     monkeypatch.setenv(data_guard.ENV, f"{scratch / 'a'}:{scratch / 'b'}")
-    assert data_guard.protected_roots() == tuple(
-        (scratch / n).resolve() for n in ("hpcagent-bench-runs", "frozen", "a", "b")
-    )
+    assert data_guard.protected_roots() == tuple((scratch / n).resolve() for n in ("hpcagent-bench-runs", "a", "b"))
 
 
-@pytest.mark.parametrize("victim", ["hpcagent-bench-runs", "hpcagent-bench-runs/camp", "frozen", "."])
+@pytest.mark.parametrize("victim", ["hpcagent-bench-runs", "hpcagent-bench-runs/camp", "."])
 def test_removal_refused_at_or_under_or_above_a_protected_root(scratch: pathlib.Path, victim: str) -> None:
     """A protected root, anything inside it, and any ancestor of it are never removed."""
     with pytest.raises(data_guard.ProtectedPathError):
@@ -110,7 +107,7 @@ def test_extract_refuses_an_unscanned_output_that_is_a_source_or_holds_a_judge_d
     runs = scratch / "hpcagent-bench-runs"
     make_db(runs / "camp" / "123" / "judge" / "hpcagent_bench0.db")
     rc = observations_extract.main(
-        ["--runs", str(runs / "camp"), "--benchmarks", str(scratch / "frozen"), "--out", str(runs / out)]
+        ["--runs", str(runs / "camp"), "--benchmarks", str(scratch / "corpus"), "--out", str(runs / out)]
     )
     assert rc == 1
     assert "overlaps source" in capsys.readouterr().err
@@ -122,7 +119,7 @@ def test_extract_writes_a_jobs_own_record_inside_the_run_root_it_reads(scratch: 
     runs = scratch / "hpcagent-bench-runs"
     job = runs / "camp" / "123"
     out = job / "observations"
-    argv = ["--runs", str(job), "--benchmarks", str(scratch / "frozen"), "--out", str(out)]
+    argv = ["--runs", str(job), "--benchmarks", str(scratch / "corpus"), "--out", str(out)]
     assert observations_extract.main([*argv, "--db", str(out / "observations.sqlite")]) == 0
     assert (out / "llr40_observations.csv").is_file() and (out / "observations.sqlite").is_file()
     # Again over its own earlier record, as a re-run of the extraction does.

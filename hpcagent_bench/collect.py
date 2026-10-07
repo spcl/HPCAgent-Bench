@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Collect an experiment's recorded data into one self-describing directory, verify it, archive it.
 
-    hpcagent-bench collect copy --out $DATA          # run roots + their DBs + frozen observations
+    hpcagent-bench collect copy --out $DATA          # run roots + their DBs
     hpcagent-bench collect verify $DATA              # re-hash every file, quick_check every DB
     hpcagent-bench collect archive $DATA             # verify, then $DATA.tar.zst (or .tar.gz)
 
@@ -10,12 +10,11 @@ Copy-only: sources are opened read-only, nothing is moved or deleted, and an out
 a source is refused (:func:`hpcagent_bench.data_guard.check_output`). Deleting the sources after a
 verified archive is a separate, manual step.
 
-Three kinds of source (:class:`DataSource`), each copied under ``<out>/<kind>/<root name>/``:
+Two kinds of source (:class:`DataSource`), each copied under ``<out>/<kind>/<root name>/``:
 
 * ``episodes``        experiment run roots: run metadata (setup env, prompts, token files, JSON/JSONL/CSV
                   records, mlscale observations) and every SQLite DB, agent homes and caches skipped;
-* ``db``          directories whose SQLite DBs are wanted alone (regrade shards, mlscale grades);
-* ``frozen-csv``  frozen extracted observations and sweep CSVs (``hpcagent_bench.frozen_observations``).
+* ``db``          directories whose SQLite DBs are wanted alone (regrade shards, mlscale grades).
 
 A DB is copied with SQLite's online backup API, so a DB a job is still writing arrives as one
 consistent snapshot. ``<out>/env.sh`` points the extractor at the copy.
@@ -36,11 +35,10 @@ import sys
 import tarfile
 from collections.abc import Iterable, Iterator, Sequence
 
-from hpcagent_bench import experiments, data_guard, frozen_observations, paths
+from hpcagent_bench import data_guard, experiments, paths
 
 __all__ = [
     "DB_SUFFIXES",
-    "FROZEN_SUFFIXES",
     "RUN_FILE_GLOBS",
     "SKIP_DIRS",
     "SKIP_DIR_GLOBS",
@@ -74,7 +72,6 @@ class DataSource(enum.Enum):
 
     RUNS = "runs"
     DB = "db"
-    FROZEN_CSV = "frozen-csv"
 
 
 #: Directory names never descended into: agent homes, model and build caches.
@@ -85,8 +82,6 @@ SKIP_DIR_GLOBS = ("rocprof_out*", "dacecache-*", "dbg*")
 DB_SUFFIXES = frozenset({".db", ".sqlite"})
 #: Run-root files kept besides the DBs.
 RUN_FILE_GLOBS = (".env", ".env.*", "*.resolved", "*.json", "*.jsonl", "*.csv", "prompt.txt")
-#: Frozen-root files kept besides the DBs.
-FROZEN_SUFFIXES = frozenset({".csv", ".tsv", ".json", ".jsonl", ".txt", ".md"})
 
 SUMS = "SHA256SUMS"
 SOURCES = "SOURCES.tsv"
@@ -123,8 +118,6 @@ def wanted(kind: DataSource, rel: pathlib.PurePath) -> bool:
             return "observations" in rel.parts[:-1] or any(fnmatch.fnmatch(rel.name, g) for g in RUN_FILE_GLOBS)
         case DataSource.DB:
             return False
-        case DataSource.FROZEN_CSV:
-            return rel.suffix in FROZEN_SUFFIXES
 
 
 def walk(root: Root) -> Iterator[pathlib.PurePosixPath]:
@@ -173,9 +166,6 @@ def sha256(path: pathlib.Path) -> str:
 def roots_of(args: argparse.Namespace) -> list[Root]:
     roots = [Root(kind=DataSource.RUNS, path=pathlib.Path(p)) for p in args.runs or [experiments.runs_root()]]
     roots += [Root(kind=DataSource.DB, path=pathlib.Path(p)) for p in args.db_root]
-    frozen = frozen_observations.resolve(args.frozen_observations)
-    roots += [Root(kind=DataSource.FROZEN_CSV, path=p) for p in ([frozen] if frozen else [])]
-    roots += [Root(kind=DataSource.FROZEN_CSV, path=pathlib.Path(p)) for p in args.csv_root]
     return roots
 
 
@@ -197,13 +187,11 @@ def check_roots(roots: Sequence[Root], out: pathlib.Path) -> None:
 
 
 def env_script(roots: Sequence[Root]) -> str:
-    """``env.sh`` for the unpacked copy: the extractor's run roots and frozen directory."""
+    """``env.sh`` for the unpacked copy: the extractor's run roots."""
     lines = ['DATA=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)', "export DATA"]
     runs = [r for r in roots if r.kind is DataSource.RUNS]
     if runs:
         lines.append(f'export RUNS="$DATA/{runs[0].dest}"')
-    frozen = [r for r in roots if r.kind is DataSource.FROZEN_CSV]
-    lines.append(f'export {frozen_observations.ENV}="{f"$DATA/{frozen[0].dest}" if frozen else ""}"')
     return "\n".join(lines) + "\n"
 
 
@@ -288,13 +276,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="run root; repeatable (default the experiment runs root)",
     )
     cp.add_argument("--db-root", action="append", default=[], metavar="DIR", help="directory of SQLite DBs; repeatable")
-    cp.add_argument(
-        "--frozen-observations",
-        default=None,
-        metavar="DIR",
-        help=f"frozen observations (default ${frozen_observations.ENV}; '' collects none)",
-    )
-    cp.add_argument("--csv-root", action="append", default=[], metavar="DIR", help="frozen CSV root; repeatable")
     for p in (
         cp,
         *(sub.add_parser(name, help=h) for name, h in (("verify", "re-check a copy"), ("archive", "verify, then tar"))),

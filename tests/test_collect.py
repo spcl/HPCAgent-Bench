@@ -1,6 +1,6 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""hpcagent_bench.collect: copy-only collection of run roots, DBs and frozen CSVs, then verify and archive."""
+"""hpcagent_bench.collect: copy-only collection of run roots and DBs, then verify and archive."""
 
 import hashlib
 import pathlib
@@ -28,7 +28,7 @@ def tree_digest(root: pathlib.Path) -> dict[str, str]:
 
 @pytest.fixture
 def sources(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[pathlib.Path]:
-    """A runs root with one job (a WAL judge DB, metadata, an agent home), a regrade dir and a frozen dir."""
+    """A runs root with one job (a WAL judge DB, metadata, an agent home) and a regrade dir."""
     monkeypatch.setenv("SCRATCH", str(tmp_path / "scratch"))
     src = tmp_path / "src"
     job = src / "runs" / "camp-1" / "900"
@@ -50,9 +50,6 @@ def sources(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> Iterator
     with connect(src / "regrades" / "w1" / "regrade-cells-0.db") as c:
         c.execute("create table regrade_cells (x)")
     (src / "regrades" / "w1" / "worklist.jsonl").write_text("{}\n")
-    (src / "frozen" / "llr").mkdir(parents=True)
-    (src / "frozen" / "llr" / "llr40_observations.csv").write_text("a,b\n1,2\n")
-    (src / "frozen" / "llr" / "build.so").write_bytes(b"\0")
     yield src
     conn.close()
 
@@ -61,7 +58,6 @@ def roots(src: pathlib.Path) -> list[collect.Root]:
     return [
         collect.Root(kind=DataSource.RUNS, path=src / "runs"),
         collect.Root(kind=DataSource.DB, path=src / "regrades"),
-        collect.Root(kind=DataSource.FROZEN_CSV, path=src / "frozen"),
     ]
 
 
@@ -77,8 +73,6 @@ def roots(src: pathlib.Path) -> list[collect.Root]:
         (DataSource.RUNS, "900/dacecache-cc/x.csv", False),
         (DataSource.DB, "w1/regrade-cells-0.db", True),
         (DataSource.DB, "w1/worklist.jsonl", False),
-        (DataSource.FROZEN_CSV, "llr/llr40_observations.csv", True),
-        (DataSource.FROZEN_CSV, "llr/build.so", False),
     ],
 )
 def test_wanted(kind: DataSource, rel: str, kept: bool) -> None:
@@ -100,14 +94,13 @@ def test_copy_collects_every_kind_and_leaves_sources_untouched(sources: pathlib.
         "runs/runs/camp-1/900/agents/p0/tokens.json",
         "runs/runs/camp-1/900/observations/curve.bin",
         "db/regrades/w1/regrade-cells-0.db",
-        "frozen-csv/frozen/llr/llr40_observations.csv",
         "SHA256SUMS",
         "SOURCES.tsv",
         "env.sh",
         "COMMIT",
     }
-    assert not any("home/" in c or c.endswith(("claude.log", "build.so", "worklist.jsonl")) for c in copied)
-    assert n == 6
+    assert not any("home/" in c or c.endswith(("claude.log", "worklist.jsonl")) for c in copied)
+    assert n == 5
     with connect(out / "runs/runs/camp-1/900/judge/rank-0/hpcagent_bench0.db") as conn:
         assert conn.execute("select x from submissions").fetchall() == [(42,)]
     assert collect.verify(out) == []
@@ -115,24 +108,23 @@ def test_copy_collects_every_kind_and_leaves_sources_untouched(sources: pathlib.
     assert [(DataSource(row[0]), row[1]) for row in listed] == [(r.kind, str(r.dest)) for r in roots(sources)]
     env = (out / "env.sh").read_text()
     assert 'RUNS="$DATA/runs/runs"' in env
-    assert 'HPCAGENT_BENCH_FROZEN_OBSERVATIONS="$DATA/frozen-csv/frozen"' in env
 
 
 def test_verify_reports_tampering(sources: pathlib.Path, tmp_path: pathlib.Path) -> None:
     """A changed, a missing and an unlisted file are each reported."""
     out = tmp_path / "data"
     collect.copy(roots(sources), out)
-    (out / "frozen-csv/frozen/llr/llr40_observations.csv").write_text("changed\n")
+    (out / "runs/runs/camp-1/900/agents/p0/tokens.json").write_text("changed\n")
     (out / "runs/runs/camp-1/900/.env").unlink()
     (out / "extra.txt").write_text("x")
     assert sorted(collect.verify(out)) == [
-        "checksum frozen-csv/frozen/llr/llr40_observations.csv",
+        "checksum runs/runs/camp-1/900/agents/p0/tokens.json",
         "missing runs/runs/camp-1/900/.env",
         "not in SHA256SUMS: extra.txt",
     ]
 
 
-@pytest.mark.parametrize("inside", ["runs/data", "frozen/data", "."])
+@pytest.mark.parametrize("inside", ["runs/data", "regrades/data", "."])
 def test_copy_refuses_an_output_overlapping_a_source(sources: pathlib.Path, inside: str) -> None:
     """An output inside, or wrapping, a source is refused before anything is written."""
     before = tree_digest(sources)
@@ -167,7 +159,6 @@ def test_archive_cli_verifies_then_tars_and_keeps_the_copy(sources: pathlib.Path
     assert (
         collect.main(
             ["copy", "--out", str(out), "--runs", str(sources / "runs"), "--db-root", str(sources / "regrades")]
-            + ["--frozen-observations", str(sources / "frozen")]
         )
         == 0
     )

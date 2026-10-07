@@ -2,11 +2,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """One study's observations, from judge databases to the file a figure reads.
 
-    db(s) --extract--> frame --fuse(csv...)--> frame --> .db  (and .csv)  --load--> figure
+    db(s) --extract--> frame --select--> frame --> .db  (and .csv)  --load--> figure
 
-`extract` reads only the rows :mod:`hpcagent_bench.experiments` says belong to the study.
-`fuse` joins those live rows with frozen CSVs of jobs whose directories are gone, LIVE WINNING job
-by job. `build` is the two of them plus the write, which is what a caller normally wants.
+`extract` reads the study's rows, `select` keeps the ones :mod:`hpcagent_bench.experiments` says belong to
+it and stamps them, and `build` is the two of them plus the write, which is what a caller normally wants.
 
 Every step is read-only with respect to its inputs, and every run stamps :data:`EXTRACTED_AT` so
 two extractions of the same study are told apart by more than a file mtime.
@@ -22,9 +21,9 @@ import sys
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, NamedTuple
 
-from hpcagent_bench import experiments, studies, frozen_observations, observations_extract, paths
+from hpcagent_bench import experiments, studies, observations_extract, paths
 from hpcagent_bench.observation_columns import OBSERVATION_FIELDS
-from hpcagent_bench.stats import databases, population
+from hpcagent_bench.stats import databases
 
 __all__ = [
     "EXTRACTED_AT",
@@ -34,14 +33,13 @@ __all__ = [
     "Owned",
     "Provenance",
     "build",
-    "check_columns",
     "extract",
-    "fuse",
     "keep_owned",
     "keep_tag",
     "load",
     "main",
     "now",
+    "select",
     "stamp",
     "write_csv",
     "write_db",
@@ -69,15 +67,13 @@ def now() -> str:
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class Provenance:
-    """What went into a fused frame, and what did not."""
+    """What went into a study's frame, and what did not."""
 
     study: str
-    live_rows: int
-    frozen_rows: int
+    rows: int
     dropped_retired: int
     dropped_foreign: int
     setups: tuple[str, ...]
-    frozen_jobs: tuple[str, ...]
     extracted_at: str
     #: Rows on a kernel outside the selection's tag (a wave that served more than the tag).
     dropped_off_tag: int = 0
@@ -87,8 +83,7 @@ class Provenance:
         lines = [
             f"study     {self.study}",
             f"extracted_at   {self.extracted_at}",
-            f"live rows      {self.live_rows}",
-            f"frozen rows    {self.frozen_rows} from {len(self.frozen_jobs)} job(s) whose directory is gone",
+            f"rows           {self.rows}",
             f"dropped        {self.dropped_retired} retired, {self.dropped_foreign} not this study's, "
             f"{self.dropped_off_tag} off its tag",
             f"setups ({len(self.setups)})      {', '.join(self.setups)}",
@@ -138,12 +133,10 @@ def keep_tag(frame: "pd.DataFrame", selection: experiments.Selection) -> tuple["
 
 def extract(
     selection: experiments.Selection,
-    frozen: pathlib.Path | None = None,
     runs: Sequence[str] = (),
     **options: object,
 ) -> "pd.DataFrame":
-    """Every row of the study: judge rows, task rows with their token totals, and the frozen
-    rows of jobs whose directories are gone or unreadable.
+    """Every row of the study: judge rows and task rows with their token totals.
 
     One extractor (:mod:`hpcagent_bench.observations_extract`), because there were two and they
     disagreed: the other wrote the plural table name into its row kind and no ``task`` rows at all,
@@ -155,64 +148,32 @@ def extract(
         observations_extract.Options(
             runs=tuple(runs) or selection.run_globs(),
             benchmarks=paths.BENCHMARKS,
-            frozen_dir=frozen,
             **options,  # type: ignore[arg-type]
         )
     )
     return pd.DataFrame(got.observations)
 
 
-def check_columns(live: "pd.DataFrame", frozen: "pd.DataFrame") -> None:
-    """Raise when the frozen rows do not carry the columns the live ones do.
-
-    Concatenating mismatched frames silently fills the gap with NaN, and a NaN speedup reads as a
-    kernel nobody ran rather than as a column that was never extracted."""
-    if live.empty or frozen.empty:
-        return
-    missing = sorted(set(live.columns) - set(frozen.columns) - set(PROVENANCE))
-    if missing:
-        raise ValueError(f"frozen rows lack {len(missing)} live column(s): {missing}")
-
-
-def fuse(
+def select(
     selection: experiments.Selection,
-    live: "pd.DataFrame",
-    frozen: "pd.DataFrame",
+    frame: "pd.DataFrame",
     extracted_at: str = "",
 ) -> tuple["pd.DataFrame", Provenance]:
-    """One frame for the study, with a count of everything the selection left behind."""
-    import pandas as pd
-
+    """The study's own rows of ``frame``, stamped, with a count of everything the selection left behind."""
     extracted_at = extracted_at or now()
-    # a CSV extracted before the platform column holds MI300A rows only
-    if not frozen.empty and population.PLATFORM_COLUMN not in frozen.columns:
-        frozen = frozen.assign(**{population.PLATFORM_COLUMN: population.DEFAULT_PLATFORM})
-    check_columns(live, frozen)
-    live, live_retired, live_foreign = keep_owned(live, selection)
-    frozen, frozen_retired, frozen_foreign = keep_owned(frozen, selection)
-    parts = [part for part in (live, frozen) if not part.empty]
-    frame = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
+    frame, retired, foreign = keep_owned(frame, selection)
     frame, off_tag = keep_tag(frame, selection)
     # Stamped HERE, on the result, not on the way in: a caller that built its own frame still gets
     # provenance, and re-stamping an already-stamped frame is the same value.
     if not frame.empty:
         frame = stamp(frame, selection.study, extracted_at)
-    # Counted off the FUSED frame's own flag, not off the `frozen` argument: the extractor merges
-    # the frozen rows of gone-or-unreadable jobs itself, so they arrive inside `live` and a count
-    # taken from the argument reported 0 while hundreds sat in the frame.
-    flag = frame.get(frozen_observations.COLUMN) if not frame.empty else None
-    is_frozen = flag.astype(str).eq("1") if flag is not None else None
-    frozen_rows = int(is_frozen.sum()) if is_frozen is not None else 0
-    jobs = tuple(sorted(frame.loc[is_frozen, "job"].astype(str).unique())) if frozen_rows else ()
     setups = tuple(sorted(frame["setup"].astype(str).unique())) if not frame.empty else ()
     return frame, Provenance(
         study=selection.study,
-        live_rows=len(frame) - frozen_rows,
-        frozen_rows=frozen_rows,
-        dropped_retired=live_retired + frozen_retired,
-        dropped_foreign=live_foreign + frozen_foreign,
+        rows=len(frame),
+        dropped_retired=retired,
+        dropped_foreign=foreign,
         setups=setups,
-        frozen_jobs=jobs,
         extracted_at=extracted_at,
         dropped_off_tag=off_tag,
     )
@@ -252,25 +213,20 @@ def build(
     study: str,
     out: pathlib.Path,
     csv_out: pathlib.Path | None = None,
-    frozen: pathlib.Path | None = None,
     root: pathlib.Path | None = None,
-    csvs: Sequence[pathlib.Path] = (),
     regrades: Sequence[str] = (),
     platform_regrades: Sequence[tuple[str, str]] = (),
     dbs: Sequence[pathlib.Path] = (),
 ) -> tuple["pd.DataFrame", Provenance]:
     """Extract ``study`` -- from the results databases ``dbs`` read as one
-    (:func:`hpcagent_bench.stats.databases.union`), else from its run roots -- fuse any extra CSVs in,
-    write ``out`` (and ``csv_out``)."""
-    import pandas as pd
-
+    (:func:`hpcagent_bench.stats.databases.union`), else from its run roots -- and write ``out`` (and
+    ``csv_out``)."""
     selection = experiments.resolve(study, root)
     extracted_at = now()
     with contextlib.ExitStack() as stack:
         runs = (str(stack.enter_context(databases.union(dbs))),) if dbs else ()
-        live = extract(selection, frozen, runs, regrades=tuple(regrades), platform_regrades=tuple(platform_regrades))
-    extra = pd.concat([load(path) for path in csvs], ignore_index=True) if csvs else pd.DataFrame()
-    frame, provenance = fuse(selection, live, extra, extracted_at)
+        rows = extract(selection, runs, regrades=tuple(regrades), platform_regrades=tuple(platform_regrades))
+    frame, provenance = select(selection, rows, extracted_at)
     if frame.empty:
         raise SystemExit(f"no observations for study {study!r} under {list(selection.run_globs())}")
     write_db(frame, out) if out.suffix == ".db" else write_csv(frame, out)
@@ -289,13 +245,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--out", type=pathlib.Path, required=True, help="observations .db (or .csv) to write")
     parser.add_argument("--csv", dest="csv_out", type=pathlib.Path, help="also write the frame as a CSV here")
-    parser.add_argument(
-        "--fuse-csv",
-        type=pathlib.Path,
-        action="append",
-        default=[],
-        help="extra observations CSV to fuse in; repeatable",
-    )
     parser.add_argument(
         "--regrades",
         action="append",
@@ -318,13 +267,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         type=pathlib.Path,
         action="append",
         default=[],
-        help="a results database to read instead of the run roots; repeatable, read as one: the core "
-        "database, plus e.g. the CPF archive for the historical CPF setups",
-    )
-    parser.add_argument(
-        "--frozen-observations",
-        default=None,
-        help=f"frozen extraction dir; default ${frozen_observations.ENV}, '' to read none",
+        help="a results database to read instead of the run roots; repeatable, read as one",
     )
     args = parser.parse_args(argv)
 
@@ -333,15 +276,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.study,
         args.out,
         csv_out=args.csv_out,
-        frozen=frozen_observations.resolve(args.frozen_observations),
         root=args.runs_root,
-        csvs=tuple(args.fuse_csv),
         regrades=tuple(args.regrades),
         platform_regrades=tuple(args.platform_regrades),
         dbs=tuple(args.db),
     )
     print(provenance.report())
-    LOG.debug("fused frame: %d rows", len(frame))
+    LOG.debug("frame: %d rows", len(frame))
     print(f"wrote          {args.out}" + (f" and {args.csv_out}" if args.csv_out else ""))
     return 0
 

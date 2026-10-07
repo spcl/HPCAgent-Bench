@@ -44,7 +44,6 @@ import concurrent.futures
 import contextlib
 import csv
 import dataclasses
-import fnmatch
 import functools
 import glob
 import hashlib
@@ -58,7 +57,7 @@ from typing import Any, NamedTuple
 
 from hpcagent_agent.driver.agent_driver import CANCELLED_MARKER
 from hpcagent_agent.driver.promote_unsubmitted import PROMOTED_TAG
-from hpcagent_bench import config, data_guard, frozen_observations
+from hpcagent_bench import config, data_guard, recorded_rows
 from hpcagent_bench.harness import denominator, results_db, scoring, timing
 from hpcagent_bench.harness.native_call import TimingProbe
 from hpcagent_bench.observation_columns import CANON_FIELDS, NUMERIC_COLUMNS, OBSERVATION_FIELDS, SOURCE_FIELDS
@@ -125,7 +124,6 @@ __all__ = [
     "final_rank",
     "final_stamp",
     "floor_override",
-    "frozen_rows",
     "grade_columns",
     "graded_rows",
     "graded_text",
@@ -145,7 +143,6 @@ __all__ = [
     "promotion_episode",
     "read_all",
     "read_db",
-    "readable_job",
     "rederived_cell_suspect",
     "rederived_episode",
     "rederived_row_suspect",
@@ -174,7 +171,7 @@ RegradeKey = tuple[str, str, str, int]
 FinalKey = tuple[str, str, str, int, str]
 
 #: Pseudo-setup the harness writes for a grade with no episode id; never a real condition.
-ADHOC_SETUP = frozen_observations.ADHOC_EPISODE_ID
+ADHOC_SETUP = recorded_rows.ADHOC_EPISODE_ID
 
 
 #: Epoch ms (2026-08-26 00:00 UTC) of the C reference sources' regeneration
@@ -256,48 +253,6 @@ def uses_skills(setup: str) -> str:
     the column a reader should prefer -- :mod:`hpcagent_bench.packets` resolves it, this script
     does not, since it ships without that package as a dependency)."""
     return "1" if "skills" in setup.split("-") else "0"
-
-
-def readable_job(job_dir: pathlib.Path) -> bool:
-    """Whether ``job_dir`` still holds a results DB this extractor reads (:func:`results_database`).
-
-    A directory that survives with only databases of another schema reads as a live job that
-    produced nothing, and its rows are dropped in silence while its frozen copy sits unused.
-    Unreadable counts as gone."""
-    return job_dir.is_dir() and any(judge_database(db) and results_database(db) for db in job_dir.rglob("*.db"))
-
-
-def frozen_rows(
-    frozen_dir: pathlib.Path | None,
-    run_globs: Iterable[str],
-    setup_prefix: str,
-    excluded: frozenset[str],
-) -> list[dict[str, Any]]:
-    """The frozen observations (``hpcagent_bench/frozen_observations.py``) of the jobs the ``run_globs``
-    cover whose live run directory no longer holds a results DB: such a job contributes every frozen
-    row, and a job still on disk none (its DB wins, episodes included: a row deleted from it on purpose
-    stays deleted). A run root is matched by name against each glob's last component."""
-    if frozen_dir is None:
-        return []
-    out: list[dict[str, Any]] = []
-    for (run_root, job), rows in sorted(frozen_observations.by_job(str(frozen_dir)).items()):
-        parents = [pathlib.Path(p).parent for p in run_globs if fnmatch.fnmatch(run_root, pathlib.Path(p).name)]
-        if not parents:
-            continue
-        live = any(readable_job(parent / run_root / job) for parent in parents)
-        for row in rows:
-            setup = row.get("setup") or ""
-            if not setup.startswith(setup_prefix) or not excluded.isdisjoint(setup.split("-")):
-                continue
-            if live:
-                continue
-            kept: dict[str, Any] = {field: row.get(field, "") for field in OBSERVATION_FIELDS}
-            kept[frozen_observations.COLUMN] = "1"
-            if frozen_observations.stored_adhoc(row.get("episode_id"), row.get(frozen_observations.RETAGGED_COLUMN)):
-                # an older extraction re-attributed this adhoc grade; it goes back under the episode id it was stored with
-                kept["episode_id"] = kept["setup"] = ADHOC_SETUP
-            out.append(kept)
-    return out
 
 
 class JobAssets(NamedTuple):
@@ -619,10 +574,9 @@ def write_db(path: pathlib.Path, fields: Iterable[str], rows: Iterable[dict[str,
 
 
 def source_roots(args: argparse.Namespace) -> list[pathlib.Path]:
-    """Everything the extraction reads: the protected roots, the run roots, the regrade shards, the frozen rows."""
-    frozen = frozen_observations.resolve(args.frozen_observations)
+    """Everything the extraction reads: the protected roots, the run roots, the regrade shards."""
     globbed = [pathlib.Path(p) for pattern in (*args.runs, *args.regrades) for p in glob.glob(pattern)]
-    return [*data_guard.protected_roots(), *globbed, *([frozen] if frozen else [])]
+    return [*data_guard.protected_roots(), *globbed]
 
 
 class DbResult(NamedTuple):
@@ -956,7 +910,7 @@ def read_db(
     a setup by one of its hyphen-separated tokens, which is how a model is named in the label; a token
     test rather than a substring keeps it from matching a longer name by accident. The ``adhoc``
     pseudo-setup (a grade with no episode id rather than a condition) is read like any setup and dropped by
-    every reader that credits (:func:`frozen_observations.stored_adhoc`).
+    every reader that credits (:func:`recorded_rows.stored_adhoc`).
 
     ``c_fix_ms`` drops a C setup's grades stamped before the reference regeneration. It is a TIMESTAMP
     rule, not a name rule, because a setup can straddle the date."""
@@ -1200,14 +1154,14 @@ def apply_promotions(
     reason, so the episode stays unsolved. Identity columns come from the episode's newest ``call``
     row in the same job. An episode that already holds a submission or attempt is left alone -- it
     spent its own submission, which is why the promotion was never owed -- unless that row is a
-    judge fault (:func:`frozen_observations.is_judge_fault`), which graded nothing.
+    judge fault (:func:`recorded_rows.is_judge_fault`), which graded nothing.
     """
     kept = list(rows)
     episode = promotion_episode
     spent = {
         episode(row)
         for row in kept
-        if row.get("row_kind") in ("submission", "attempt") and not frozen_observations.is_judge_fault(row)
+        if row.get("row_kind") in ("submission", "attempt") and not recorded_rows.is_judge_fault(row)
     }
     calls: dict[tuple[str, str, str], dict[str, Any]] = {}
     for row in kept:
@@ -1485,15 +1439,6 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "results>/*/*/rank-*/*.db: each re-timed submission gains a second row stamped platform=PLATFORM "
         "beside its MI300A row; repeatable",
     )
-    ap.add_argument(
-        "--frozen-observations",
-        default=None,
-        metavar="DIR",
-        help="frozen extracted observations of job dirs whose results DBs were deleted (experiments/"
-        "frozen_observations.py); a job whose live directory is gone is read from here, marked frozen=1. "
-        "Default $HPCAGENT_BENCH_FROZEN_OBSERVATIONS, else $SCRATCH/<frozen_observations.DEFAULT_SUBPATH>; "
-        "'' reads none",
-    )
     return ap.parse_args(argv)
 
 
@@ -1511,7 +1456,6 @@ class Options:
     #: ``(platform, glob)``: final-grade results DBs that re-timed the answers on another machine
     #: (:func:`platform_rows`).
     platform_regrades: tuple[tuple[str, str], ...] = ()
-    frozen_dir: pathlib.Path | None = None
     #: Directories the run-root scan skips: the extraction's own output, when it lies in a run root.
     skip: tuple[pathlib.Path, ...] = ()
 
@@ -1556,8 +1500,8 @@ def named_databases(runs: Iterable[str]) -> list[pathlib.Path]:
 
 
 def extract(options: Options) -> Extracted:
-    """Every observation row the run globs hold: grade rows, task rows with their token totals, scaling
-    rows, and the frozen rows of jobs whose directories are gone or unreadable.
+    """Every observation row the run globs hold: grade rows, task rows with their token totals and scaling
+    rows.
 
     A figure's pipeline calls this for the ROWS instead of reading back the CSV ``main`` writes."""
     args = options
@@ -1578,16 +1522,6 @@ def extract(options: Options) -> Extracted:
         (str(r["run_root"]), str(r["job"])) for r in observations if (str(r["run_root"]), str(r["job"])) in job_dirs
     }
     assets = {key: job_assets(job_dirs[key], corpus) for key in sorted(in_scope)}
-    for row in observations:
-        row["frozen"] = "0"
-    lost = frozen_rows(args.frozen_dir, args.runs, args.setup_prefix, frozenset(args.exclude_setup))
-    lost_jobs = {(str(row["run_root"]), str(row["job"])) for row in lost}
-    print(
-        f"frozen: {len(lost)} rows of {len(lost_jobs)} job(s) with no live directory, from {args.frozen_dir}",
-        file=sys.stderr,
-    )
-    observations.extend(lost)
-    # after the frozen rows join, so a submission of a gone job counts as not re-timed too
     observations, retimed = apply_final_regrades(observations, final)
     print(f"final grade: {retimed}", file=sys.stderr)
     for row in observations:
@@ -1635,7 +1569,6 @@ def main(argv: list[str]) -> int:
                 threads=args.threads,
                 regrades=tuple(args.regrades),
                 platform_regrades=tuple(args.platform_regrades),
-                frozen_dir=frozen_observations.resolve(args.frozen_observations),
                 skip=(args.out,),
             )
         )

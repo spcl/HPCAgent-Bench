@@ -16,7 +16,7 @@ import sqlite3
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, NamedTuple
 
-from hpcagent_bench import frozen_observations, packets, study_tags
+from hpcagent_bench import packets, recorded_rows, study_tags
 from hpcagent_bench.stats import population
 
 __all__ = [
@@ -285,23 +285,19 @@ def episode_rows(frame: "pd.DataFrame", column: str) -> "pd.DataFrame | None":
 
 
 def drop_adhoc_rows(frame: "pd.DataFrame") -> "pd.DataFrame":
-    """``frame`` without every row stored under the judge's ``adhoc`` episode id, retagged ones included.
+    """``frame`` without every row stored under the judge's ``adhoc`` episode id.
 
-    See :data:`hpcagent_bench.frozen_observations.ADHOC_EPISODE_ID`: a grade filed
+    See :data:`hpcagent_bench.recorded_rows.ADHOC_EPISODE_ID`: a grade filed
     with no episode id has no agent-episode identity, so it answers no setup's kernel; the kernel is owed a
     rerun (``hpcagent-bench owed`` skips the same rows, :func:`hpcagent_bench.owed.delivered`). It runs BEFORE
-    :func:`fill_setup_identity`, so a retagged row cannot lend its recorded identity to a real setup. Only
+    :func:`fill_setup_identity`, so an adhoc row cannot lend its recorded identity to a real setup. Only
     the frame changes, never the database, and the count is warned about.
     """
     import warnings
 
     if frame.empty or "episode_id" not in frame.columns:
         return frame
-    column = frozen_observations.RETAGGED_COLUMN
-    retagged = frame[column] if column in frame.columns else [""] * len(frame)
-    adhoc = [
-        frozen_observations.stored_adhoc(episode_id, tag) for episode_id, tag in zip(frame["episode_id"], retagged)
-    ]
+    adhoc = [recorded_rows.stored_adhoc(episode_id) for episode_id in frame["episode_id"]]
     count = sum(adhoc)
     if count:
         warnings.warn(f"dropped {count} row(s) stored under episode id 'adhoc' (no episode identity)", stacklevel=2)

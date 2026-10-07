@@ -90,8 +90,8 @@ def test_the_loader_reads_the_cpf_setups_only_when_the_archive_is_passed(tmp_pat
     core, archive = tmp_path / "core.db", tmp_path / "cpf.db"
     seed(core, CORE_SETUP, (2.0,))
     seed(archive, CPF_SETUP, (4.0,))
-    alone, _ = dataset.build("llr40", tmp_path / "alone.db", frozen=None, root=tmp_path, dbs=(core,))
-    both, _ = dataset.build("llr40", tmp_path / "both.db", frozen=None, root=tmp_path, dbs=(core, archive))
+    alone, _ = dataset.build("llr40", tmp_path / "alone.db", root=tmp_path, dbs=(core,))
+    both, _ = dataset.build("llr40", tmp_path / "both.db", root=tmp_path, dbs=(core, archive))
     assert set(alone["setup"]) == {CORE_SETUP}
     assert set(both["setup"]) == {CORE_SETUP, CPF_SETUP}
 

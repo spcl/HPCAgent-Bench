@@ -259,38 +259,28 @@ def test_a_frame_without_a_cancelled_column_is_left_alone() -> None:
 
 
 def adhoc_frame() -> pd.DataFrame:
-    """The production shape: worker w4 graded under its own episode id, a curl without one filed two
-    ``tsvc_2_s323`` grades under the judge's ``adhoc`` default, and a ``--retags`` extraction moved
-    a third adhoc grade onto worker w5."""
+    """The production shape: worker w4 graded under its own episode id, and a curl without one filed two
+    ``tsvc_2_s323`` grades under the judge's ``adhoc`` default."""
     common = {"run_root": "r", "job": "640078", "row_kind": "submission"}
     return pd.DataFrame(
         [
-            {**common, "episode_id": "a.n0.p4.w4", "setup": "a", "kernel": "tsvc_2_s1113", "retagged": ""},
-            {**common, "episode_id": "adhoc", "setup": "adhoc", "kernel": "tsvc_2_s323", "retagged": ""},
-            {**common, "episode_id": "adhoc", "setup": "adhoc", "kernel": "tsvc_2_s323", "retagged": None},
-            {**common, "episode_id": "a.n0.p5.w5", "setup": "a", "kernel": "tsvc_2_s323", "retagged": "transcript"},
+            {**common, "episode_id": "a.n0.p4.w4", "setup": "a", "kernel": "tsvc_2_s1113"},
+            {**common, "episode_id": "adhoc", "setup": "adhoc", "kernel": "tsvc_2_s323"},
+            {**common, "episode_id": "adhoc", "setup": "adhoc", "kernel": "tsvc_2_s323"},
         ]
     )
 
 
 def test_every_row_stored_under_adhoc_is_dropped_with_a_warning() -> None:
-    """A grade filed with no episode id has no episode identity, so it answers
-    no setup's kernel -- retagged onto a worker or not -- and the kernel is owed a rerun instead."""
-    with pytest.warns(UserWarning, match="dropped 3 row"):
+    """A grade filed with no episode id has no episode identity, so it answers no setup's kernel, and the
+    kernel is owed a rerun instead."""
+    with pytest.warns(UserWarning, match="dropped 2 row"):
         kept = studies.drop_adhoc_rows(adhoc_frame())
     assert kept.episode_id.tolist() == ["a.n0.p4.w4"]
 
 
-def test_a_frame_without_a_retagged_column_is_screened_by_episode_id() -> None:
-    """An extraction predating ``retagged`` still names the adhoc episode id on every such row."""
-    with pytest.warns(UserWarning, match="dropped 2 row"):
-        kept = studies.drop_adhoc_rows(adhoc_frame().drop(columns=["retagged"]))
-    assert kept.episode_id.tolist() == ["a.n0.p4.w4", "a.n0.p5.w5"]
-
-
 def test_read_observations_never_returns_an_adhoc_row(tmp_path: pathlib.Path) -> None:
-    """Every figure reads through here, and a CSV reads a blank ``retagged`` back as NaN, which must
-    stay blank rather than read as retag evidence."""
+    """Every figure reads through here."""
     path = tmp_path / "obs.csv"
     adhoc_frame().to_csv(path, index=False)
     with pytest.warns(UserWarning, match="stored under episode id 'adhoc'"):
