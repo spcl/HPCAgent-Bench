@@ -67,6 +67,7 @@ serving/mi200-endpoint
 serving/extending-private-inference
 serving/knobs
 serving/qwen38
+serving/qwen38-gh200
 serving/glm53
 serving/kimi27sglang
 serving/oss120b

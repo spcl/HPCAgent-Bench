@@ -55,7 +55,11 @@ push_one() {
     mkdir -p -m 0700 "${XDG_RUNTIME_DIR}"
     local -a pm=(podman --root "${root}/root" --runroot "${root}/run" --storage-driver overlay
                  --storage-opt ignore_chown_errors=true)
-    local_tag="$("${pm[@]}" pull "oci-archive:${archive}" | tail -1)"
+    if ! local_tag="$("${pm[@]}" pull "oci-archive:${archive}" | tail -1)" || [[ -z "${local_tag}" ]]; then
+        echo "${role}: loading ${archive} into ${root} failed (a full tmpfs? run registry.sbatch)" >&2
+        podman unshare rm -rf "${root}" 2>/dev/null || rm -rf "${root}"
+        return 1
+    fi
     total="$("${pm[@]}" image inspect --format '{{.Size}}' "${local_tag}")"
     # The largest layer as the registry sees it: compressed, from the archive's own manifest.
     biggest="$(python3 - "${archive}" <<'PY'

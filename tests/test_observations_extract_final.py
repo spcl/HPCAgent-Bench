@@ -310,7 +310,7 @@ def test_main_extracts_the_final_grade_and_reports_the_counts(
     monkeypatch.setattr(extract, "manifest_kernels", lambda bench_root: {})
     monkeypatch.setattr(extract, "read_db", lambda *args, **kwargs: result)
     argv = ["--runs", "unused", "--benchmarks", str(tmp_path), "--out", str(tmp_path / "out")]
-    argv += ["--regrades", str(wave / "*-v5*"), "--frozen-observations", "", "--no-sources"]
+    argv += ["--regrades", str(wave / "*-v5*"), "--no-sources"]
     assert extract.main(argv) == 0
     with (tmp_path / "out" / "llr40_observations.csv").open(newline="", encoding="utf-8") as handle:
         written = {row["ts_ms"]: row for row in csv.DictReader(handle) if row["row_kind"] == "submission"}
@@ -359,7 +359,7 @@ def extract_main(
     monkeypatch.setattr(extract, "manifest_kernels", lambda bench_root: {})
     monkeypatch.setattr(extract, "read_db", lambda *args, **kwargs: result)
     argv = ["--runs", "unused", "--benchmarks", str(tmp_path), "--out", str(tmp_path / "out")]
-    assert extract.main([*argv, "--frozen-observations", "", "--no-sources", *extra]) == 0
+    assert extract.main([*argv, "--no-sources", *extra]) == 0
     with (tmp_path / "out" / "llr40_observations.csv").open(newline="", encoding="utf-8") as handle:
         return [row for row in csv.DictReader(handle) if row["row_kind"] in ("submission", "attempt")]
 
