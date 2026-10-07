@@ -46,8 +46,8 @@ __all__ = [
     "numeric",
     "read_observations",
     "read_table",
-    "setup_rows",
     "setup_of",
+    "setup_rows",
     "setup_value",
 ]
 

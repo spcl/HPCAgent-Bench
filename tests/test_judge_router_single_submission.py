@@ -5,7 +5,7 @@
 ``tools/submit.py``'s marker and ``agent_driver.watch_submission`` guard only the tool: a raw
 ``curl`` to ``/submit`` went around both and was graded again. The
 router now refuses a second terminal grade of one episode's kernel while the caller's setup contract
-says ``AGENT_SINGLE_SUBMISSION=1`` -- the job env on a single-setup judge, the setup's overlay on a
+runs a single-submission mode (``AGENT_SUBMISSION_MODE`` single or blind) -- the job env on a single-setup judge, the setup's overlay on a
 fused one -- with a 409 that names the cause and before anything reaches the judge. A request that
 never became a grade (a 4xx refusal, a judge the router could not reach) spends nothing, and an
 upstream it could not reach is a DISTINCT 503 the agent tool leaves unspent.
@@ -43,7 +43,7 @@ def router_fixture(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[ModuleType
 
     monkeypatch.delenv(fused.SETUPS_DIR_ENV, raising=False)
     monkeypatch.setenv("HPCAGENT_BENCH_RECORD_ENABLED", "false")
-    monkeypatch.setenv("AGENT_SINGLE_SUBMISSION", "1")
+    monkeypatch.setenv("AGENT_SUBMISSION_MODE", "single")
     monkeypatch.setenv("SETUP", SETUP)
     with stub_judge() as url:
         module = load_router("judge_service_single_submission")
@@ -115,16 +115,16 @@ def test_a_judge_fault_still_spends_the_submission(router: tuple[ModuleType, "Te
     assert client.post("/submit", json=body()).status_code == 409
 
 
-@pytest.mark.parametrize("mode", ["0", ""])
+@pytest.mark.parametrize("mode", ["multi", ""])
 def test_a_multi_submission_judge_relays_every_submit(
     router: tuple[ModuleType, "TestClient"], monkeypatch: pytest.MonkeyPatch, mode: str
 ) -> None:
     """Multi-submission setups are unchanged: every submit is graded, the latest one scored."""
     _, client = router
     if mode:
-        monkeypatch.setenv("AGENT_SINGLE_SUBMISSION", mode)
+        monkeypatch.setenv("AGENT_SUBMISSION_MODE", mode)
     else:
-        monkeypatch.delenv("AGENT_SINGLE_SUBMISSION")
+        monkeypatch.delenv("AGENT_SUBMISSION_MODE")
     assert [client.post("/submit", json=body()).status_code for _ in range(3)] == [200] * 3
     assert upstream_routes() == ["/submit"] * 3
 
@@ -147,9 +147,9 @@ def test_an_unreachable_judge_is_a_distinct_503_that_spends_nothing(
     assert upstream_routes() == ["/submit"]
 
 
-def write_setup(setups: pathlib.Path, name: str, single: str) -> None:
+def write_setup(setups: pathlib.Path, name: str, mode: str) -> None:
     setups.mkdir(parents=True, exist_ok=True)
-    (setups / f"{name}.resolved").write_text(f"SETUP={name}\nAGENT_SINGLE_SUBMISSION={single}\n", encoding="utf-8")
+    (setups / f"{name}.resolved").write_text(f"SETUP={name}\nAGENT_SUBMISSION_MODE={mode}\n", encoding="utf-8")
 
 
 def test_a_fused_setup_takes_its_mode_from_its_own_overlay(
@@ -158,20 +158,24 @@ def test_a_fused_setup_takes_its_mode_from_its_own_overlay(
     """A fused wave serves setups of both modes from one judge: the WORKER'S setup decides, never the job."""
     _, client = router
     setups, run_dir = tmp_path / "setups", tmp_path / "run"
-    write_setup(setups, "blind-setup", "1")
-    write_setup(setups, "multi-setup", "0")
+    write_setup(setups, "blind-setup", "blind")
+    write_setup(setups, "multi-setup", "multi")
     (run_dir / fused.TOKEN_DIR_NAME).mkdir(parents=True)
     for setup in ("blind-setup", "multi-setup"):
         (run_dir / fused.TOKEN_DIR_NAME / fused.token_digest(f"{setup}-token")).write_text(setup, encoding="utf-8")
     monkeypatch.setenv(fused.SETUPS_DIR_ENV, str(setups))
     monkeypatch.setenv("RUN_DIR", str(run_dir))
-    monkeypatch.setenv("AGENT_SINGLE_SUBMISSION", "0")
+    monkeypatch.setenv("AGENT_SUBMISSION_MODE", "multi")
     fused.read_overlay.cache_clear()
 
-    def submit(setup: str) -> int:
+    def post(route: str, setup: str) -> int:
         headers = {http_json.WORKER_TOKEN_HEADER: f"{setup}-token"}
-        return client.post("/submit", json=body(episode_id=f"{setup}.n0.p0.w0"), headers=headers).status_code
+        return client.post(route, json=body(episode_id=f"{setup}.n0.p0.w0"), headers=headers).status_code
 
-    assert [submit("blind-setup"), submit("blind-setup")] == [200, 409]
-    assert [submit("multi-setup"), submit("multi-setup")] == [200, 200]
+    assert [post("/submit", "blind-setup"), post("/submit", "blind-setup")] == [200, 409]
+    assert [post("/submit", "multi-setup"), post("/submit", "multi-setup")] == [200, 200]
+    # blind serves no preview: the router refuses /score and /profile before the judge sees them
+    assert [post("/score", "blind-setup"), post("/profile", "blind-setup")] == [403, 403]
+    assert upstream_routes().count("/score") == 0
+    assert post("/score", "multi-setup") == 200
     fused.read_overlay.cache_clear()

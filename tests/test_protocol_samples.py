@@ -40,8 +40,12 @@ def test_the_sample_experiment_renders_for_every_model_with_its_budget() -> None
     (name,) = sample
     for model in env_spec.Model:
         env = env_spec.render_experiment(name, model.value, spec)
-        assert (env["AGENT_MAX_TOKENS"], env["AGENT_TIMEOUT_SECONDS"], env["SUBMIT_REPEAT"]) == ("2000000", "7200", "10")
-        assert (env["AGENT_SINGLE_SUBMISSION"], env["AGENT_SUBMISSION_POLICY_FILE"]) == ("1", "submission-single.md")
+        assert (env["AGENT_MAX_TOKENS"], env["AGENT_TIMEOUT_SECONDS"], env["SUBMIT_REPEAT"]) == (
+            "2000000",
+            "7200",
+            "10",
+        )
+        assert env["AGENT_SUBMISSION_MODE"] == "single"
 
 
 def test_the_sample_study_entries_parse_and_point_at_the_sample_files() -> None:
@@ -59,7 +63,9 @@ def test_the_sample_submit_names_the_sample_base_and_tag() -> None:
 
 def test_the_sample_grading_protocol_registers() -> None:
     scratch = Kind("grading protocols", PROTOCOLS.fields, protocols.build)
-    exec(SAMPLES["grading protocol"], {"grading_protocol": lambda stamp, *, order: scratch.register(stamp, order=order)})  # noqa: S102
+    exec(
+        SAMPLES["grading protocol"], {"grading_protocol": lambda stamp, *, order: scratch.register(stamp, order=order)}
+    )  # noqa: S102
     (stamp,) = scratch.entries
     assert stamp not in PROTOCOLS.entries and scratch.entries[stamp].role in protocols.ROLES
 

@@ -72,9 +72,9 @@ DRIVER_TOOLS_RE = re.compile(r'"--tools",\n\s+"([A-Za-z,]+)"')
 DRIVER = pathlib.Path(__file__).resolve().parents[1] / "agent/hpcagent_agent/driver/agent_driver.py"
 
 
-@pytest.mark.parametrize("policy", sorted(path.name for path in PROMPT.parent.glob("submission-*.md")))
+@pytest.mark.parametrize("mode", ["multi", "single", "blind"])
 def test_the_prompt_has_a_bullet_for_exactly_the_tools_the_agent_is_served(
-    policy: str, monkeypatch: pytest.MonkeyPatch
+    mode: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A bullet for a tool that does not exist costs turns and reads as a broken run, and a served
     tool with no bullet is one the agent is never told about.
@@ -83,11 +83,10 @@ def test_the_prompt_has_a_bullet_for_exactly_the_tools_the_agent_is_served(
     curling three different guesses at the route before concluding it was not exposed.
     """
     assert "{{TOOLS}}" in PROMPT.read_text(encoding="utf-8"), f"{PROMPT.name} lost the tool-list slot"
-    monkeypatch.setenv("AGENT_SUBMISSION_POLICY_FILE", str(PROMPT.parent / policy))
+    monkeypatch.setenv("AGENT_SUBMISSION_MODE", mode)
     driver = driver_module()
-    policy_bullet = driver.submission_policy_text()[0]
     registry = driver.tool_registry()
-    tool_list = registry["prompt"].replace("{{SUBMISSION_POLICY_TOOL}}", policy_bullet)
+    tool_list = driver.fill_mode_slots(registry["prompt"])
     listed = set(TOOL_BULLET_RE.findall(tool_list))
     # What the server SERVES under this environment, not merely every tool module that exists:
     # ``search`` is off by default (no ``AGENT_SEARCH_TOOL`` here, as in every shipped setup) and a
@@ -364,4 +363,4 @@ def test_the_grade_tool_descriptions_hold_under_every_submission_mode(
 
     description = getattr(load_tools(monkeypatch, "source", "c"), module).DESCRIPTION.lower()
     assert not re.search(r"\bonce\b", description), description
-    assert not any(promise in description for promise in driver_module().RESUBMIT_PROMISES), description
+    assert not any(promise in description for promise in ("submit again", "resubmit", "something better")), description
