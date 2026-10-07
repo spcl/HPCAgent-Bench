@@ -5,8 +5,8 @@
 numpy's ``len(a)`` is ``a.shape[0]``. C / C++ have no array ``len`` (the emitted
 literal ``len(a)`` fails to compile) and Fortran's ``len`` is the CHARACTER-length
 intrinsic, so a native kernel that reads ``len(a)`` -- e.g. the GROMACS NBNxM
-kernel's ``len(coulomb_table_f)`` bound -- did not compile. ``_ShapeMidExpression
-Rewriter`` now maps it to the first-dim shape symbol, alongside ``a.shape[k]`` /
+kernel's ``len(coulomb_table_f)`` bound -- would not compile. ``_ShapeMidExpression
+Rewriter`` maps it to the first-dim shape symbol, alongside ``a.shape[k]`` /
 ``a.size`` / ``a.ndim``. The python backends (numba / pythran / jax) run the body
 verbatim and keep the builtin, so they are unaffected.
 """

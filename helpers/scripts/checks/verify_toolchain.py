@@ -46,7 +46,7 @@ PKG_CONFIG_MODULES: tuple[str, ...] = ("openblas", "fftw3")
 
 #: Runtimes linked by ``-l<name>``. Both OpenMP runtimes are required, not optional:
 #: test_fork_openmp_safety asserts on libomp because libgomp deadlocks across fork() and libomp
-#: recovers, so a suite that only ever sees libgomp cannot tell the fix from the forgiving runtime.
+#: recovers, so a suite that only ever sees libgomp cannot tell a fork-safe harness from the forgiving runtime.
 #: ``libomp-dev`` is a METAPACKAGE -- the linker name lives under /usr/lib/llvm-<major>/lib.
 #:
 #: ``tbb`` is here because its absence is SILENT in the worst way: libstdc++ answers

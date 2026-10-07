@@ -21,7 +21,7 @@ from hpcagent_bench import flags, languages
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 CE = ROOT / "containers" / "images"
 TABLE = CE / "gpu_arch.env"
-GATE = ROOT / "containers" / "lib" / "device_arch_gate.sh"
+GATE = ROOT / "containers" / "images" / "lib" / "device_arch_gate.sh"
 CHECK = CE / "gpu_arch_check.sh"
 SHELL_PATH = "/usr/bin:/bin"
 #: The AMD image directories; each builds with ROCM_ARCH from the table.
@@ -160,7 +160,7 @@ def test_every_amd_image_takes_rocm_arch_from_the_table_refuses_none_stamps_it_a
     for var in ARCH_VARS:
         values = {value.strip('"') for value in re.findall(rf"\b{var}=(\S+)", comma_list)}
         assert values == {"${ROCM_ARCH}"}, (image, var, values)
-    assert "COPY containers/lib/device_arch_gate.sh /usr/local/bin/device_arch_gate.sh" in docker
+    assert "COPY containers/images/lib/device_arch_gate.sh /usr/local/bin/device_arch_gate.sh" in docker
     mode = "--contains" if image in VENDOR_DEVICE_CODE else "--exact"
     assert f'/usr/local/bin/device_arch_gate.sh {mode} "${{ROCM_ARCH}}"' in docker
 
@@ -242,10 +242,10 @@ def test_the_runtime_check_exits_2_and_prints_all_three_when_one_source_disagree
     assert f"rocminfo = {gpu}" in done.stderr
 
 
-def test_the_runtime_check_warns_and_passes_an_image_built_before_the_stamp(tmp_path: pathlib.Path) -> None:
+def test_the_runtime_check_refuses_an_image_without_its_stamp(tmp_path: pathlib.Path) -> None:
     done = run_check(tmp_path, "mi300", "", table()["mi200"])
-    assert done.returncode == 0
-    assert "WARNING" in done.stderr and "no /opt/gpu-arch" in done.stderr
+    assert done.returncode == 2
+    assert "no /opt/gpu-arch stamp" in done.stderr
     assert len((tmp_path / "srun.log").read_text(encoding="utf-8").splitlines()) == 1, "rocminfo ran without a stamp"
 
 

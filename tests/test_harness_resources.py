@@ -3,9 +3,8 @@
 """Direct tests for :func:`available_resources`, the prompt-facing condensation of a discovery
 report into "what may this agent build with".
 
-No test file named this module. What incidental coverage it had came from other tests exercising
-``build_context``/``build_prompt``, which calls it as a side effect and therefore probes the REAL
-host -- non-deterministic (depends on what happens to be installed here) and blind to the one
+Coverage through ``build_context``/``build_prompt``, which call it as a side effect, probes the
+REAL host -- non-deterministic (depends on what happens to be installed here) and blind to the one
 branch that matters most: discovery failing must never break prompt assembly. This pins the
 condensation contract against a synthetic report instead.
 """

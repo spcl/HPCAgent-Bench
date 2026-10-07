@@ -4,15 +4,14 @@
 
 Fortran has no ternary. GROMACS' ``ci_sh = ci if ish == 0 else -1`` -- where ``ci`` is an
 ``integer(c_int64_t)`` local (assigned ``int(cluster_array[i])``) and the ``-1`` literal defaults
-to int32 -- is a kind clash whichever way the conditional is lowered, and the two lowerings put
-the fix in different places:
+to int32 -- is a kind clash whichever way the conditional is lowered:
 
-* ``merge(t, f, cond)`` is strict on TYPE *and* KIND at the CALL SITE, so it needed the literal
-  itself kind-suffixed (``-1_c_int64_t``). That lowering is gone: ``merge`` is an ordinary
-  function call, so it evaluates BOTH branches and defeats the guard an ``IfExp`` is usually
-  written for (see ``test_fortran_ifexp_guard_not_eager``).
-* the ``if/else`` over a fresh temp that replaced it puts the same join on the temp's
-  DECLARATION. A Fortran assignment converts silently, so the declaration is now the only thing
+* ``merge(t, f, cond)`` is strict on TYPE *and* KIND at the CALL SITE, so it would need the
+  literal itself kind-suffixed (``-1_c_int64_t``); it is not used, because ``merge`` is an
+  ordinary function call that evaluates BOTH branches and defeats the guard an ``IfExp`` is
+  usually written for (see ``test_fortran_ifexp_guard_not_eager``).
+* the ``if/else`` over a fresh temp puts the same join on the temp's DECLARATION. A Fortran
+  assignment converts silently, so the declaration is the only thing
   standing between an int64 partner and a wrapped-at-32-bit value -- and a bare ``-1`` in the
   else branch is legal precisely because the temp is declared int64.
 

@@ -515,7 +515,7 @@ def test_nested_full_is_spilled_so_triu_sees_a_name() -> None:
     spilled, rest = tree.body
     assert isinstance(spilled, ast.Assign) and spilled.targets[0].id.startswith("__full")
     assert ast.unparse(spilled.value).startswith("np.full(")
-    # triu's first argument is now the spilled Name, which every expander requires.
+    # triu's first argument is the spilled Name, which every expander requires.
     assert f"np.triu({spilled.targets[0].id}, 1)" in ast.unparse(rest)
 
 
@@ -530,7 +530,7 @@ def test_direct_full_assign_is_left_for_the_full_rewriter() -> None:
 def test_linalg_norm_ord1_inf_vector_and_matrix() -> None:
     """np.linalg.norm ord=1 -> sum|v| (vector) / max column abs-sum (matrix),
     ord=inf -> max|v| / max row abs-sum, all without sqrt. A POSITIONAL ord must
-    not be misread as ``axis`` (the pre-fix bug returned the L2 norm); an
+    not be misread as ``axis`` (which returns the L2 norm); an
     unsupported ord or a >2-D operand raises rather than miscompute."""
     vec = {"a": ("N",)}
     l1 = unparse_(expand_linalg_norm(name_("s"), [name_("a"), ast.Constant(value=1)], vec))

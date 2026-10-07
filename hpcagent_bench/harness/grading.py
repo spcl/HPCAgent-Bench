@@ -66,8 +66,6 @@ __all__ = [
     "NUMBA_C_BASELINE_SET",
     "NUMBA_FIRST_BASELINE_SET",
     "NUMBA_ORACLE_TIMEOUT_S",
-    "NUMPY_BASELINE_TRACKS",
-    "ORACLE_CHOICES",
     "ORACLE_KINDS",
     "ORACLE_OPTIONS",
     "PROBE_MASK_CACHE",
@@ -88,12 +86,10 @@ __all__ = [
     "baseline_policy",
     "baseline_policy_stamp",
     "baseline_uses_numba",
-    "baseline_uses_numpy",
     "baseline_uses_torch",
     "benchmark_module",
     "bind_kernel_outputs",
     "build_reference_lib",
-    "c_reference_available",
     "collapsed_axis_positions",
     "combine_grades",
     "compare_on",
@@ -119,7 +115,6 @@ __all__ = [
     "numba_impl_module",
     "numba_reference_outputs",
     "numba_reference_path",
-    "numpy_baseline_allowed",
     "oracle_kinds",
     "other_compiled",
     "probe_initializer",
@@ -145,7 +140,6 @@ __all__ = [
     "time_python_reference",
     "torch_autotune_kind",
     "track_baseline_set",
-    "track_forces_c",
     "typed_contracted_extents",
     "untouched_mask",
     "untouched_note",
@@ -700,16 +694,6 @@ def import_reference(spec: BenchSpec) -> types.ModuleType:
     return benchmark_module(spec, "_numpy")
 
 
-def _time_numpy_samples(
-    spec: BenchSpec, data: dict, repeat: int, warmup: int = 0, rep_data: Callable[[int], dict] | None = None
-) -> list[int]:
-    """Per-repeat wall-clock (ns) of the NumPy reference on data, warmup reps discarded. ``rep_data``
-    (None = reuse ``data``) gives each repeat's inputs (:mod:`hpcagent_bench.harness.rep_variation`);
-    ``scoring.score`` passes the candidate's, so the ratio is paired."""
-    func = vars(import_reference(spec))[spec.func_name]
-    return time_python_reference(func, spec.input_args, data, repeat, warmup, rep_data)
-
-
 def time_python_reference(
     func: Callable[..., object],
     call_order: Sequence[str],
@@ -736,11 +720,6 @@ def time_python_reference(
     return samples
 
 
-def _time_numpy(spec: BenchSpec, data: dict, repeat: int, warmup: int = 0) -> int:
-    """Best (min) wall-clock (ns) of the NumPy reference on data -- the baseline."""
-    return min(_time_numpy_samples(spec, data, repeat, warmup=warmup))
-
-
 #: The numba flavor a ``numba`` baseline times: the ``parallel=True`` build, what the machine does
 #: without an agent.
 NUMBA_BASELINE_TARGET = "numba"
@@ -748,7 +727,7 @@ NUMBA_BASELINE_TARGET = "numba"
 
 def numba_impl_module(spec: BenchSpec) -> types.ModuleType:
     """Import the kernel's parallel-numba sibling, generating it first if missing. Raises when the kernel
-    has no emittable numba form; the caller degrades to numpy."""
+    has no emittable numba form."""
     from hpcagent_bench import autogen
 
     key = f"{spec.relative_path}/{spec.module_name}"
@@ -788,7 +767,8 @@ def _time_numba_samples(
     spec: BenchSpec, data: dict, repeat: int, warmup: int = 0, rep_data: Callable[[int], dict] | None = None
 ) -> list[int]:
     """Per-repeat wall-clock (ns) of the parallel-numba reference, warmup reps discarded. At least one
-    warmup always runs (the first call compiles). ``rep_data``: see :func:`_time_numpy_samples`."""
+    warmup always runs (the first call compiles). ``rep_data`` (None = reuse ``data``) gives each repeat's inputs
+    (:mod:`hpcagent_bench.harness.rep_variation`)."""
     func = vars(numba_impl_module(spec))[spec.func_name]
     order = numba_call_order(spec, func, data)
     return time_python_reference(func, order, data, repeat, max(warmup, 1), rep_data)
@@ -892,15 +872,12 @@ ORACLE_KINDS = ("numba", "c", "torch")
 #: ``compiled``: numba and C in :func:`compiled_order`, the second when the first is unavailable.
 COMPILED_ORACLE = "compiled"
 
-#: What an oracle knob may name. ``numpy`` and ``both`` are the spellings of the interpreter: no track
-#: grades against it, and a request for either lands on the track's default (:func:`resolve_oracle`).
-ORACLE_CHOICES = (*ORACLE_KINDS, COMPILED_ORACLE, "numpy", "both")
 
 #: Sentinel meaning "resolve the oracle from the kernel's track"; see resolve_oracle.
 AUTO_ORACLE = "auto"
 
 #: Everything the CLI / config / API / service accept for the oracle knob.
-ORACLE_OPTIONS = ORACLE_CHOICES + (AUTO_ORACLE,)
+ORACLE_OPTIONS = (*ORACLE_KINDS, COMPILED_ORACLE, AUTO_ORACLE)
 
 #: Per-track default correctness oracle: the compiled best-of(numba, c) references on the two numpy
 #: tracks, the compiled PyTorch reference on machine_learning. Interpreted NumPy grades nothing: its
@@ -933,10 +910,6 @@ KERNEL_COMPILED_HEAD: dict[str, str] = {"bdf_newton_krylov": "numba"}
 #: the declared output shape. Every other track runs it against whichever reference graded.
 BASIC_ORACLE_TRACKS: frozenset[str] = frozenset({"loop_level_reasoning"})
 
-#: Tracks that may still ask for interpreted NumPy as a speedup denominator (an explicit request; the
-#: default is ``torch-autotune``). The numpy tracks never time it.
-NUMPY_BASELINE_TRACKS: frozenset[str] = frozenset({"machine_learning"})
-
 
 def default_oracle_for_track(track: str | None) -> str:
     """The default correctness oracle for a kernel on track."""
@@ -946,18 +919,6 @@ def default_oracle_for_track(track: str | None) -> str:
 def runs_write_probe(spec: BenchSpec) -> bool:
     """Whether spec's grade runs the write probe against its oracle (see :data:`BASIC_ORACLE_TRACKS`)."""
     return (spec.track or "") not in BASIC_ORACLE_TRACKS
-
-
-def numpy_baseline_allowed(spec: BenchSpec) -> bool:
-    """Whether numpy may be timed as spec's speedup denominator (requested or as a degradation)."""
-    return (spec.track or "") in NUMPY_BASELINE_TRACKS
-
-
-def track_forces_c(spec: BenchSpec, knob: str, requested: str) -> None:
-    """Log that spec's track overrode an explicit numpy ``requested`` for ``knob``."""
-    logging.getLogger(__name__).info(
-        "track %s forbids the numpy %s; %r overridden for %s", spec.track, knob, requested, spec.short_name
-    )
 
 
 def compiled_order(spec: BenchSpec, preset: str | None = None) -> tuple[str, str]:
@@ -980,14 +941,11 @@ def compiled_order(spec: BenchSpec, preset: str | None = None) -> tuple[str, str
 def resolve_oracle(oracle: str | None, spec: BenchSpec) -> str:
     """Resolve an oracle selection to the reference name a grade of spec runs under: ``numba``, ``c``,
     ``torch`` or ``compiled`` (numba and C, :func:`oracle_kinds` orders them). ``None`` / ``auto`` take
-    the track default; an explicit compiled or torch choice wins; ``numpy`` / ``both`` never do."""
+    the track default; an explicit choice wins."""
     if oracle is None or oracle == AUTO_ORACLE:
         return default_oracle_for_track(spec.track)
-    if oracle not in ORACLE_CHOICES:
+    if oracle not in ORACLE_OPTIONS:
         raise ValueError(f"oracle must be one of {ORACLE_OPTIONS}; got {oracle!r}")
-    if oracle in ("numpy", "both"):
-        track_forces_c(spec, "oracle", oracle)
-        return default_oracle_for_track(spec.track)
     return oracle
 
 
@@ -1024,7 +982,7 @@ TORCH_AUTOTUNE: str = "torch-autotune"
 VENDORED_BASELINE = "vendored"
 
 #: Concrete speedup-denominator kinds (one reference each), the values a grade records.
-BASELINE_CHOICES = ("numpy", "numba", "c") + tuple(AUTOPAR_BASELINES) + tuple(TORCH_BASELINES)
+BASELINE_CHOICES = ("numba", "c") + tuple(AUTOPAR_BASELINES) + tuple(TORCH_BASELINES)
 
 #: Sentinel meaning "resolve the baseline from the kernel's track"; see resolve_baseline.
 AUTO_BASELINE = "auto"
@@ -1076,13 +1034,13 @@ NUMBA_FIRST_BASELINE_SET: tuple[str, ...] = ("numba", "c")
 #: Best-of kinds compiled from the kernel's emitted C: losing one is a judge failure.
 COMPILED_BEST_OF_KINDS: frozenset[str] = frozenset({"c", "c-autopar"})
 
-#: Kinds a best-of set may hold (timeable in the candidate's child bracket); never numpy.
+#: Kinds a best-of set may hold (timeable in the candidate's child bracket).
 BEST_OF_KINDS: tuple[str, ...] = ("numba", "c") + tuple(AUTOPAR_BASELINES)
 
 
 def default_baseline_for_track(track: str | None) -> str:
-    """The one kind a kernel on ``track`` is timed against when one kind is asked for (a sweep cell,
-    the numpy degradation): the head of the configured denominator's references
+    """The one kind a kernel on ``track`` is timed against when one kind is asked for (a sweep cell):
+    the head of the configured denominator's references
     (:func:`track_baseline_set`), its tie-break winner."""
     return track_baseline_set(track)[0]
 
@@ -1193,9 +1151,7 @@ def resolve_baseline_set(baseline: str | None, spec: BenchSpec, *, on_gpu: bool 
     """Every denominator candidate this grade times, in tie-break order. Only ``auto`` on a multi-kind
     track is best-of; an explicit kind stays one kind, and a vendored reference stays alone.
     ``on_gpu``: the grade runs on a GPU (:attr:`Task.on_gpu`), which picks the torch kind."""
-    # numpy where the track forbids it degrades to the configured denominator, raced like ``auto``.
-    forbidden_numpy = baseline is not None and baseline_uses_numpy(baseline) and not numpy_baseline_allowed(spec)
-    if baseline is not None and baseline != AUTO_BASELINE and not forbidden_numpy:
+    if baseline is not None and baseline != AUTO_BASELINE:
         return (resolve_baseline(baseline, spec, on_gpu=on_gpu),)
     if spec.baseline is not None:
         return (VENDORED_BASELINE,)
@@ -1303,15 +1259,7 @@ def resolve_baseline(baseline: str | None, spec: BenchSpec, *, on_gpu: bool = Fa
         return VENDORED_BASELINE
     if baseline not in BASELINE_CHOICES:
         raise ValueError(f"baseline must be one of {BASELINE_OPTIONS}; got {baseline!r}")
-    if baseline_uses_numpy(baseline) and not numpy_baseline_allowed(spec):
-        track_forces_c(spec, "baseline", baseline)  # same rule as the oracle: numpy never divides here
-        return resolve_baseline(default_baseline_for_track(spec.track), spec, on_gpu=on_gpu)
     return baseline
-
-
-def baseline_uses_numpy(baseline: str) -> bool:
-    """Whether the resolved baseline times the numpy reference."""
-    return baseline == "numpy"
 
 
 def baseline_uses_torch(baseline: str) -> bool:
@@ -1405,16 +1353,6 @@ def reference_compiler(submission: Submission, language: str) -> str | None:
     except KeyError:
         return None
     return languages.compiler_for_family(language, family)
-
-
-def c_reference_available(task: Task) -> bool:
-    """Whether the sequential-C reference can be emitted for task's kernel (no build); cheap because
-    ``emit_reference_source`` memoizes."""
-    try:
-        reference_submission(task, "c")
-        return True
-    except Exception:  # noqa: BLE001 -- any emit failure means "no compiled baseline here"
-        return False
 
 
 def vendored_reference_source(spec: BenchSpec) -> str:

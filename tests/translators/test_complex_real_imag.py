@@ -196,12 +196,11 @@ def test_eigh_keeps_its_rotation_unitary_through_a_view(view: str) -> None:
 def test_conj_survives_a_local_copied_off_a_complex_parameter() -> None:
     """``np.conj`` of a local taken off a complex PARAMETER must still conjugate.
 
-    Sibling of the eigh view test above, and the same silent failure one step earlier:
-    ``seed_complex_work_dtypes`` resolved a copy's source through ``local_dtypes`` alone, where a
-    kernel parameter's dtype does not live, and the whole-array pass had already rewritten
-    ``exxbuff.copy()`` into ``np.empty_like(exxbuff)``. The local stayed UNTYPED, ``RealConjDropper``
-    reads untyped as real, and the conjugation was deleted -- vexx_k's exchange term computed
-    without it, wrong on C, C++ and Fortran alike while jax and numpy stayed right.
+    Sibling of the eigh view test above, and the same silent failure one step earlier: a copy's
+    source must resolve through the kernel parameters' dtypes, not ``local_dtypes`` alone, after the
+    whole-array pass rewrites ``exxbuff.copy()`` into ``np.empty_like(exxbuff)``. An UNTYPED local
+    reads as real to ``RealConjDropper``, which deletes the conjugation -- vexx_k's exchange term
+    then goes wrong on C, C++ and Fortran alike while jax and numpy stay right.
 
     Reshaping the copy before conjugating it is vexx_k's own spelling (``exxbuff_w[:, buf,
     ikq].reshape(npol, nrxxs)``): the receiver of a shape method carries the element type too.

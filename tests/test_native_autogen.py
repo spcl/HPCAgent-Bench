@@ -21,9 +21,9 @@ KERNEL = "tsvc_2_s212"  # 1-D: a,b outputs; c,d inputs; LEN_1D symbol
 #: A kernel whose NAME differs from its module stem: ``sp_bicg.yaml`` and
 #: ``bicg_solvers.yaml`` are two benchmarks over the one ``sp_bicg_numpy.py``, so the
 #: emitted artifact stem cannot be derived from the name. ``sp_bicg`` itself is NOT the
-#: divergent one -- its name and stem coincide (fb26d7e61 renamed the module to break a
-#: stem collision with the dense ``bicg``), which is exactly what the premise test below
-#: rejects; ``bicg_solvers`` is the sibling manifest that still differs.
+#: divergent one -- its name and stem coincide (no stem collision with the dense ``bicg``),
+#: which is exactly what the premise test below rejects; ``bicg_solvers`` is the sibling
+#: manifest that differs.
 DIVERGENT = "bicg_solvers"
 #: A plain dense kernel, one native target and no sparse configuration.
 DENSE = "arc_distance"
@@ -42,9 +42,8 @@ def _emitter_present() -> bool:
 def test_divergent_kernel_premise() -> None:
     """Guard for the two tests below: only meaningful while the NAME differs from the directory.
 
-    This used to guard a manifest ``short_name:`` that abbreviated the stem. That second identity
-    is gone (tests/test_kernel_identity.py). What survives is a directory holding several
-    benchmarks, where the emitted artifact is still named after the directory."""
+    A benchmark has one name (tests/test_kernel_identity.py), but a directory can hold several
+    benchmarks, and the emitted artifact is named after the directory."""
     spec = BenchSpec.load(DIVERGENT)
     assert spec.short_name == DIVERGENT
     assert spec.module_name != DIVERGENT, "pick a kernel whose name differs from its module stem"

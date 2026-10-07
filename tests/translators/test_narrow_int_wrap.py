@@ -8,7 +8,7 @@ dtype and wraps there, so results diverge when an intermediate overflows before 
 for int8 ``a = b = 100``, numpy's ``a + b`` wraps to -56 and ``// 2`` gives -28, while the wide form
 would compute 200 // 2 = 100.
 
-The fix (``numpyto_common.narrow_int``) re-wraps the wide result of every narrow-int ``+``/``-``/``*``
+``numpyto_common.narrow_int`` re-wraps the wide result of every narrow-int ``+``/``-``/``*``
 (and unary ``-``) back to its element width: a ``(int8_t)`` cast in C/C++, ``INT(x, c_int8_t)`` (which
 two's-complement wraps) in Fortran. WHEN to wrap is decided by ONE shared oracle that infers the numpy
 result dtype of a subtree -- so integer true division and int*float stay FLOAT (no wrap), a call result

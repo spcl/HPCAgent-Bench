@@ -403,9 +403,8 @@ def model_of(setup: str, unknown: str = "other") -> str:
     decides which token wins when a setup somehow carries two, and an alias resolves to the entity
     it names so two spellings of one model never split into two series.
 
-    This is the LAST resort. A setup string is provenance, and every experiment since the identity
-    columns landed records its model in the database instead; parse the setup only for a CSV that
-    predates them.
+    This is the LAST resort. A setup string is provenance, and an experiment with the identity
+    columns records its model in the database instead; parse the setup only for a CSV without them.
     """
     return token_of(setup, "models", unknown)
 

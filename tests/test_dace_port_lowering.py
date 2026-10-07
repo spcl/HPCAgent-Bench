@@ -5,8 +5,8 @@
 Lowering is ``to_sdfg()`` with simplification, and it is the port's structural check. The ports
 are generated and gitignored, so the kernels are chosen from the MANIFESTS and each test emits its
 own port with :func:`tests.test_dace_frontend_validity.ensure_dace_program`: collection generates
-nothing. This gate used to parametrize over ports already on disk, so a CI checkout collected an
-empty list and skipped the whole file; and a lowering error or timeout was a ``pytest.skip``.
+nothing. Parametrizing over ports already on disk would collect an empty list on a CI checkout and
+skip the whole file; and a lowering error or timeout is a failure, not a ``pytest.skip``.
 
 A frontend refusal is :data:`REFUSED`'s business, and those kernels are not selected here. A port
 that parses and still does not lower FAILS, unless :data:`LOWERING_REFUSED` records how it fails:
@@ -41,9 +41,9 @@ MPI_ENV = {
     "MPI4PY_RC_INITIALIZE": "0",
 }
 
-# Measured against dace extended 62ba39a, one port at a time on a dev box shared with
+# Measured one port at a time on a dev box shared with
 # other jobs: 103 of 104 ports lower, densenet121 slowest at 764 s, then swin_transformer_v2 304 s
-# and lulesh 286 s. 180 s, the old budget, would have failed four of them. 1500 gives densenet121
+# and lulesh 286 s. 180 s would fail four of them. 1500 gives densenet121
 # about 2x; densenet201 (DESELECTED), the one port that does not finish, is still parsing past it (its PARSE
 # alone is 787 s idle, see test_dace_frontend_validity.PARSE_TIMEOUT_S).
 LOWER_TIMEOUT_S = 1500.0

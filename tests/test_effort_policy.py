@@ -2,11 +2,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Which reasoning rung a setup runs at, and which one a client that cannot spell it is sent.
 
-A rung is a measured condition, so it has to be decided once, from data, for every model. It used to
-be spelled per model in four .env files, which is how oss120b ran at `high` and qwen38 at `xhigh`
-without anyone having written down that those are both the top of their own ladder. The policy is
-now one rule over a declared ladder, and the clamp a narrower client needs is the same rule over the
-part of the ladder that client can spell.
+A rung is a measured condition, so it has to be decided once, from data, for every model -- not
+spelled per model in .env files, where `high` for one model and `xhigh` for another hide that both
+are the top of their own ladder. The policy is one rule over a declared ladder, and the clamp a
+narrower client needs is the same rule over the part of the ladder that client can spell.
 """
 
 import subprocess

@@ -12,8 +12,8 @@ period)``) compiles clean here -- but ``shifted / period`` still runs as C's tru
 ``int64_t / int64_t`` before ``floor()`` ever sees it. Silent, and only visible on data where
 truncation and flooring disagree: a negative numerator.
 
-The fix routes a provably-int/int divide reaching ``floor``/``ceil`` through
-``emit_floordiv``/``emit_ceildiv`` -- the SAME pluto-aware machinery ``a // b`` already uses
+So a provably-int/int divide reaching ``floor``/``ceil`` goes through
+``emit_floordiv``/``emit_ceildiv`` -- the SAME pluto-aware machinery ``a // b`` uses
 (POLYCC-008's ``floord``/``ceild`` spelling in a scop, else the exact ``int_floor``/``int_ceil``
 ``_Generic`` macro) -- rather than a float cast, which would throw the divide out of scop
 affinity. The pluto-mode test below pins that the ``floord`` spelling still fires.

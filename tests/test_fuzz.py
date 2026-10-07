@@ -221,7 +221,7 @@ CONFIG_NAMES = frozenset({"seed", "multrec_limit"})
 
 def test_fixture_carries_both_a_dimension_and_a_config_knob() -> None:
     # Non-vacuity: if the fixture collapsed to all-fixed or all-ranged, every
-    # assertion below would pass trivially without exercising the fix.
+    # assertion below would pass trivially without exercising config_names.
     r = fuzz.resolve_ranges(CONFIG_AND_DIM_PARAMS, config_names=CONFIG_NAMES)
     assert fuzz.is_range(r["N"]) and r["N"][1] > r["N"][0]  # a genuine dimension range
     assert r["seed"] == 7 and not fuzz.is_range(r["seed"])  # config scalar, untouched
@@ -229,7 +229,7 @@ def test_fixture_carries_both_a_dimension_and_a_config_knob() -> None:
 
 
 def test_config_names_absent_keeps_legacy_default_branch_behavior() -> None:
-    # Backward compat: omitting config_names must reproduce today's (pre-fix)
+    # Backward compat: omitting config_names must reproduce the default-branch
     # resolution exactly -- a constant-across-presets int still collapses to a
     # degenerate [v, v] "range" via the existing max(hi, value) floor.
     r = fuzz.resolve_ranges(CONFIG_AND_DIM_PARAMS)
@@ -266,7 +266,7 @@ def test_edge_shapes_never_perturbs_a_declared_config_knob() -> None:
 
 
 def test_edge_shapes_without_config_names_corrupts_the_knob() -> None:
-    # Documents the LIVE bug the fix closes: absent config_names, a degenerate
+    # Why config_names exists: absent it, a degenerate
     # [512, 512] "range" reads as fuzzable to edge_shapes, so the structural size
     # edge probe (1/3/5/6/7) overrides multrec_limit -- an algorithm-changing
     # perturbation during a CORRECTNESS check, not a size probe.

@@ -9,7 +9,7 @@ operands to binary + (have 'double *' and 'double *')" -- the whole kernel lost.
 
 Two ways in, one per test below. The operand is an inlined helper's LOCAL, whose shape is not yet
 known on the first rewrite pass, so it is indistinguishable from a scalar there; or the array is
-simply not the FIRST argument, which is the only one the guard used to look at.
+simply not the FIRST argument.
 """
 
 import ast
@@ -42,7 +42,7 @@ def test_undeferred_pass_with_no_shapes_still_renames() -> None:
 
 
 def test_array_in_any_argument_blocks_the_rename() -> None:
-    """The guard used to look only at argument one, so an array in argument two was renamed."""
+    """The guard looks at every argument, so an array in argument two is not renamed."""
     assert rewrite("np.maximum(0.0, x)", array_names=("x",), defer=False) == "np.maximum(0.0, x)"
     assert rewrite("np.minimum(1.0, x)", array_names=("x",), defer=False) == "np.minimum(1.0, x)"
 

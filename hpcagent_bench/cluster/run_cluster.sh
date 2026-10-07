@@ -289,10 +289,10 @@ run_vllm_node() {
         if [[ ! -e "${aiter_dst}/.seeded" ]]; then
             local aiter_tmp="${aiter_dst}.seeding.$$"
             mkdir -p "${aiter_tmp}"
-            # Only a prebuild for THIS arch seeds (/opt/aiter-jit-arch, the build GPU's; an older image
-            # built for one arch has only /opt/gpu-arch): the gfx942 .so once seeded the gfx90a cache.
+            # Only a prebuild for THIS arch seeds (/opt/aiter-jit-arch, the build GPU's): a gfx942 .so
+            # in a gfx90a cache fails at load.
             local seed_arch
-            seed_arch="$(cat /opt/aiter-jit-arch 2>/dev/null || cat /opt/gpu-arch 2>/dev/null)" || seed_arch=""
+            seed_arch="$(cat /opt/aiter-jit-arch 2>/dev/null)" || seed_arch=""
             if { [[ ! -d /opt/aiter-jit ]] || [[ "${seed_arch}" != "${aiter_arch:-none}" ]] \
                     || cp -an /opt/aiter-jit/. "${aiter_tmp}/" 2>/dev/null; } \
                     && touch "${aiter_tmp}/.seeded"; then

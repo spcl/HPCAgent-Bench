@@ -4,8 +4,8 @@
 
 A second runtime in one process (libgomp beside libomp, or two libgomp files) cannot see the
 enclosing parallel region, so OpenBLAS inside a numba prange thread opens a team per caller. The
-counter reads realpaths out of ``/proc/self/maps``; ``containers/lib/one_openmp.sh`` links every
-libgomp copy to the compiler's (the gnu context); ``containers/lib/openmp_gate.py one`` proves one is
+counter reads realpaths out of ``/proc/self/maps``; ``containers/images/lib/one_openmp.sh`` links every
+libgomp copy to the compiler's (the gnu context); ``containers/images/lib/openmp_gate.py one`` proves one is
 mapped. The other families' runtimes live in their own contexts: tests/test_omp_context.py and
 tests/test_omp_context_gate.py.
 
@@ -27,7 +27,7 @@ import pytest
 from hpcagent_bench import openmp_runtimes
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-LIB = REPO / "containers" / "lib"
+LIB = REPO / "containers" / "images" / "lib"
 GATE = LIB / "openmp_gate.py"
 LINKER = LIB / "one_openmp.sh"
 
@@ -162,7 +162,7 @@ def test_every_image_gates_one_runtime_over_the_launch_venv_after_its_last_insta
 
 
 def test_the_launch_venv_links_its_wheels_to_the_one_runtime_after_syncing() -> None:
-    launch = (REPO / "containers" / "lib" / "launch_venv.sh").read_text(encoding="utf-8")
+    launch = (REPO / "containers" / "images" / "lib" / "launch_venv.sh").read_text(encoding="utf-8")
     assert launch.index("uv sync") < launch.index('one_openmp.sh" --link-only')
 
 

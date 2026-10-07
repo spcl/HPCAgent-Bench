@@ -111,8 +111,8 @@ GNU_SPELLINGS = ("__builtin_", "__real__", "__imag__", "__restrict__", "__attrib
 
 def test_c_header_uses_no_gnu_only_spellings() -> None:
     """The C prelude is standard C23. It includes ``<complex.h>``, so the conjugate helper is
-    ``conj``; it used to be hand-rolled out of ``__builtin_complex(__real__ z, -__imag__ z)``, which
-    is portable to exactly gcc and clang and compiles clean under every gate we run."""
+    ``conj``, not ``__builtin_complex(__real__ z, -__imag__ z)``, which is portable to exactly gcc
+    and clang."""
     src = arith_header_source("c")
     found = [name for name in GNU_SPELLINGS if name in src]
     assert not found, f"GNU-only spellings in the C prelude: {found}"

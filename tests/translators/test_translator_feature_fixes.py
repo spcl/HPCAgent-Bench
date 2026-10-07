@@ -510,7 +510,7 @@ def test_fancy_gather_separated_advanced_indices_refused() -> None:
     ``blk`` locals) still refuses advanced indices SEPARATED by a real slice:
     it has no front-placement implementation of its own. ``SliceToScalarRewriter``
     (the path a literal ``:`` in the RHS actually takes, e.g. zekin_gather's
-    ``z_kin_hor_e[edge_blk[:, :, e], :, edge_idx[:, :, e]]``) now implements
+    ``z_kin_hor_e[edge_blk[:, :, e], :, edge_idx[:, :, e]]``) implements
     front placement -- see ``test_front_placed_gather_separated_by_real_slice``."""
     tree = ast.parse("A[idx, :, blk]", mode="eval").body
     shapes = {"A": ("nproma", "nlev", "nblks"), "idx": ("nproma",), "blk": ("nproma",)}
@@ -523,8 +523,8 @@ def test_front_placed_gather_separated_by_real_slice() -> None:
     to the FRONT (numpy rule): each operand consumes the SAME leading iters
     as one shared block, and the slice consumes the iter after that block --
     zekin_gather's ``z_kin_hor_e[edge_blk[:, :, e], :, edge_idx[:, :, e]]``,
-    whose C emit used to read the index arrays at the wrong (trailing)
-    iters and segfault."""
+    whose C emit segfaults if it reads the index arrays at the wrong
+    (trailing) iters."""
     z = ast.Constant(value=0)
     iv0, iv1, iv2 = (ast.Name(id=f"__w{i}", ctx=ast.Load()) for i in range(3))
     rw = SliceToScalarRewriter(
@@ -800,8 +800,8 @@ def test_fortran_abi_param_order_matches_binding() -> None:
 
     Uses ``gesummv`` (``return alpha * A @ x + beta * B @ x`` -- a returned
     EXPRESSION, so the frontend synthesizes the ``ret_arr0`` output temp).
-    ``atax`` no longer qualifies: its source now writes an in-place ``out``
-    parameter, so nothing is synthesized."""
+    Not ``atax``: its source writes an in-place ``out`` parameter, so nothing
+    is synthesized."""
     no = oracle()
     import json
     import pathlib

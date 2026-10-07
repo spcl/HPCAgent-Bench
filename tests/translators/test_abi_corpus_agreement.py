@@ -25,17 +25,13 @@ There is no waiver list for any of the three: each category is asserted EMPTY ou
 name that shows up is a regression, not a backlog -- and a kernel the translator still refuses
 fails HERE, with its own name, rather than being excused.
 
-Measured, the refusals are not one cause: ``eigh_test`` declined at the matmul
-hoister (an operand allocated by ``np.zeros_like`` off an ``eigh`` output carried no extent) and
-``conv_transpose3d_scaling_avg_pool_bias_add_scaling`` at the None-sentinel splice (the helper's
-unpack sits two loops below its call). Both lower now. What is left is ONE cause, not five: a
-helper's parameter and return EXTENTS are read off its first call site, and every remaining
-kernel calls a helper on a local whose shape exists only as a previous helper's return -- which
+The remaining refusals have ONE cause: a helper's parameter and return EXTENTS are read off its
+first call site, and every such kernel calls a helper on a local whose shape exists only as a previous helper's return -- which
 resolves to nothing (vgg16, resnet101, conv2d_gelu_global_avg_pool,
 conv_transpose3d_scale_batch_norm_global_avg_pool) or, worse, to the wrong operand's shape
 (convolutional_vision_transformer sizes ``layernorm``'s out-param from its ``bias`` argument and
 only trips a guard later). Silencing any of those emits an extent the helper's other call sites
-do not have; the fix is shape-GENERIC helpers, extents passed per call site.
+do not have; the remedy is shape-GENERIC helpers, extents passed per call site.
 
 Marked ``integration``: it lowers the whole registry, far too slow for the default suite.
 """
@@ -100,7 +96,7 @@ def classify(short: str, lowered) -> str | None:
 
 @dataclasses.dataclass(frozen=True)
 class CorpusFindings:
-    """What ONE lowering sweep of the registry found, split by the fix each class needs."""
+    """What ONE lowering sweep of the registry found, split by the remedy each class needs."""
 
     names: list[str]
     dtypes: list[str]
@@ -113,12 +109,12 @@ class CorpusFindings:
 def findings() -> CorpusFindings:
     """Lower the whole registry ONCE and hand every gate below its own slice.
 
-    The three sweeps used to lower the corpus independently -- three full parses of 655 kernels to
-    ask three questions about the same IR -- which is what put this phase over its CI step cap, with
-    no duration table to show for it, because the table only prints on a run that finishes.
+    Three independent sweeps would be three full parses of the corpus to ask three questions about
+    the same IR, over the CI step cap -- with no duration table to show for it, because the table
+    only prints on a run that finishes.
 
-    FINDINGS rather than the IRs: 655 lowered KernelIRs is an AST apiece, and this job has been
-    OOM-killed before, so what survives the sweep is the short strings the assertions read.
+    FINDINGS rather than the IRs: every lowered KernelIR is an AST, and holding the corpus's worth
+    risks an OOM kill, so what survives the sweep is the short strings the assertions read.
 
     A refusal is CAUGHT rather than allowed to propagate: the ordering gates check a property OF an
     emitted signature, so a kernel with none is out of scope there, and an exception would abort the

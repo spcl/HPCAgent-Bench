@@ -179,10 +179,9 @@ def test_a_non_positive_median_is_marked_a_crash_and_never_claims_a_speedup() ->
     """A framework that produced no usable time is DRAWN, at zero, as a crash -- and cannot be
     mistaken for a cell that measured 1.0x.
 
-    Zero used to be forbidden outright, which kept a failure from wearing "nothing changed" but
-    also made the figure silent about it: a crashed cell and a framework that was never run there
-    looked identical. It occupies zero as a POSITION now, marked `crashed` and carrying a NaN
-    ratio, and :func:`draw_band` gives it its own glyph. The value it must never carry is a ratio,
+    Forbidding zero outright keeps a failure from wearing "nothing changed" but makes the figure
+    silent about it: a crashed cell and a framework never run there look identical. It occupies
+    zero as a POSITION, marked `crashed` and carrying a NaN ratio, and :func:`draw_band` gives it its own glyph. The value it must never carry is a ratio,
     and that is what this asserts.
     """
     frame = summary_for([("heat_3d", plotting.DEFAULT_BASELINE, 10.0), ("heat_3d", "dace_cpu", 0.0)])
@@ -581,4 +580,4 @@ def test_grid_and_reference_lines_come_from_the_shared_style_module() -> None:
     source = inspect.getsource(speedup)
     assert 'color="0.85"' not in source, "grid colour must come from style.RULE"
     assert 'color="0.35"' not in source, "zero-reference colour must come from style.REFERENCE"
-    assert plotstyle.RULE and plotstyle.REFERENCE  # the constants this module now draws with
+    assert plotstyle.RULE and plotstyle.REFERENCE  # the constants this module draws with

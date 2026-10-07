@@ -48,8 +48,8 @@ def test_scratch_root_lands_under_scratch_when_set(monkeypatch: pytest.MonkeyPat
 
 
 def test_scratch_root_falls_back_to_repo_cache_without_scratch(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The old default (~/.cache/<name>) is gone: a container or CI box with no $SCRATCH now lands
-    under the checkout it is actually running from, not a guess at the invoking user's home."""
+    """A container or CI box with no $SCRATCH lands under the checkout it is actually running from,
+    not a guess at the invoking user's home (~/.cache/<name>)."""
     monkeypatch.setenv("HPCAGENT_BENCH_REPO", "/some/checkout")
     assert paths.scratch_root("hpcagent_sizing") == pathlib.Path("/some/checkout/.cache/hpcagent_sizing")
 

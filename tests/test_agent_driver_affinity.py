@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """agent_driver.py: how the agent node's CPUs are shared out between its agents.
 
-The agent step owns the whole node and every agent used to inherit that full mask, so which CPUs
-40 of them landed on was the scheduler's guess. The setup measures wall clock, so the guess is not
+The agent step owns the whole node, and an agent inheriting that full mask leaves which CPUs 40 of
+them land on to the scheduler's guess. The setup measures wall clock, so the guess is not
 free -- and the CLI plus its MCP servers are real processes, not just sockets waiting on HTTP.
 
 The share is dealt round-robin. These tests pin the three properties that makes it worth having:

@@ -39,14 +39,14 @@ def canon_fixture() -> pd.DataFrame:
 def test_two_device_variants_of_one_optimizer_get_distinct_row_labels(canon: pd.DataFrame) -> None:
     """The compiler per-kernel figure labels a canon row by its optimizer, and the registry aliases
     both DaCe device variants to one. Drawn together they printed one name twice in the legend."""
-    rows = signed.llr40_rows(canon, None, TAG_KERNELS, canon_columns=("dace_cpu_canonicalize", "dace_gpu_canonicalize"))
+    rows = signed.kernel_rows(canon, None, TAG_KERNELS, ("dace_cpu_canonicalize", "dace_gpu_canonicalize"))
     labels = [row.label for row in rows]
     assert len(set(labels)) == 2, labels
 
 
 def test_one_device_variant_keeps_its_optimizer_name(canon: pd.DataFrame) -> None:
     """The fallback fires only on a collision; a figure drawing one variant is unchanged."""
-    (row,) = signed.llr40_rows(canon, None, TAG_KERNELS, canon_columns=("dace_cpu_canonicalize",))
+    (row,) = signed.kernel_rows(canon, None, TAG_KERNELS, ("dace_cpu_canonicalize",))
     assert row.label == "Canonical Parallel Form"
 
 

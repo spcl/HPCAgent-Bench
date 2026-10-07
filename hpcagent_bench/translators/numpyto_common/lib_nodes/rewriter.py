@@ -550,7 +550,7 @@ class LibNodeRewriter(ast.NodeTransformer):
         prelude = self.lower_prelude_calls(prelude)
         # Reassigned local (lenet's ``x = relu(conv2d(x))`` chain): refresh shape_table[target] so
         # the NEXT statement sees the new shape. Strictly AFTER hoisting this RHS -- Python evaluates
-        # the RHS against the OLD binding, and refreshing first made ``x = x @ w.T + b`` contract over
+        # the RHS against the OLD binding, and refreshing first makes ``x = x @ w.T + b`` contract over
         # the RESULT's extent.
         if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
             self.update_shape_for_assign(node.targets[0].id, node.value)

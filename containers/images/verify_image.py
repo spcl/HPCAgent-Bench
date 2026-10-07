@@ -336,10 +336,12 @@ def one_openmp_gate(_target: str) -> tuple[bool, str]:
     """One process imports numpy, scipy, runs numba prange + BLAS, loads a gcc -fopenmp library and imports
     every wheel that may bundle an OpenMP runtime (torch, xgboost, jax, ...): one runtime file may be mapped.
 
-    The build's own gate (containers/lib/one_openmp.sh), asked again of the finished image, so a copy a
+    The build's own gate (containers/images/lib/one_openmp.sh), asked again of the finished image, so a copy a
     later layer or a pulled image reintroduced is caught. Exit 3 is two runtimes; anything else is a crash."""
     code, out = run(
-        [sys.executable, str(REPO_ROOT / "containers" / "lib" / "openmp_gate.py"), "one"], timeout=900.0, cwd="/"
+        [sys.executable, str(REPO_ROOT / "containers" / "images" / "lib" / "openmp_gate.py"), "one"],
+        timeout=900.0,
+        cwd="/",
     )
     tail = out.splitlines()[-1][:300] if out else "no output"
     return code == 0, tail
@@ -350,9 +352,15 @@ def omp_context_gate(target: str) -> tuple[bool, str]:
     torch (gnu) all run multi-threaded on the ONE runtime the context names, every wheel that may bundle a
     runtime is imported, and the BLAS numpy maps is the context's own (llvm, nvhpc).
 
-    `containers/lib/openmp_gate.py context` re-executes itself under the context's environment, as the judge
+    `containers/images/lib/openmp_gate.py context` re-executes itself under the context's environment, as the judge
     starts a grading child of that family. ``target`` is the context. Exit 3 is a second runtime, 4 a serial team."""
-    argv = [sys.executable, str(REPO_ROOT / "containers" / "lib" / "openmp_gate.py"), "context", "--context", target]
+    argv = [
+        sys.executable,
+        str(REPO_ROOT / "containers" / "images" / "lib" / "openmp_gate.py"),
+        "context",
+        "--context",
+        target,
+    ]
     argv += ["--wheels", "--torch"] if target == "gnu" else ["--blas-in-context"]
     code, out = run(argv, timeout=1800.0, cwd="/")
     tail = out.splitlines()[-1][:300] if out else "no output"
@@ -363,7 +371,7 @@ def omp_context_scan(_target: str) -> tuple[bool, str]:
     """Every OpenMP-linked library of every context resolves ONLY that context's runtime (`openmp_gate.py scan`),
     and numpy, scipy and numba carry no absolute RPATH that would pin them to one context's BLAS."""
     code, out = run(
-        [sys.executable, str(REPO_ROOT / "containers" / "lib" / "openmp_gate.py"), "scan"],
+        [sys.executable, str(REPO_ROOT / "containers" / "images" / "lib" / "openmp_gate.py"), "scan"],
         timeout=1800.0,
         cwd="/",
     )

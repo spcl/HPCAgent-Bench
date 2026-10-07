@@ -63,7 +63,7 @@ ARG LIBFABRIC_COMMIT=
 USER root
 
 # gitretry and the /git-mirrors rewrite for every clone below (git_mirror.sh says why).
-COPY containers/lib/git_mirror.sh /tmp/git_mirror.sh
+COPY containers/images/lib/git_mirror.sh /tmp/git_mirror.sh
 RUN sh /tmp/git_mirror.sh setup && rm -f /tmp/git_mirror.sh
 
 RUN apt-get update \
@@ -176,10 +176,10 @@ RUN set -eu; \
     test "${ROCM_ARCH_CSV}" = "$(echo "${ROCM_ARCH}" | tr ";" ",")" \
       || { echo "ROCM_ARCH_CSV '${ROCM_ARCH_CSV}' is not ROCM_ARCH '${ROCM_ARCH}' comma-separated" >&2; exit 2; }; \
     printf '%s\n' "${ROCM_ARCH}" > /opt/gpu-arch
-COPY containers/lib/device_arch_gate.sh /usr/local/bin/device_arch_gate.sh
+COPY containers/images/lib/device_arch_gate.sh /usr/local/bin/device_arch_gate.sh
 
 # gitretry and the /git-mirrors rewrite for every clone below (git_mirror.sh says why).
-COPY containers/lib/git_mirror.sh /tmp/git_mirror.sh
+COPY containers/images/lib/git_mirror.sh /tmp/git_mirror.sh
 RUN sh /tmp/git_mirror.sh setup && rm -f /tmp/git_mirror.sh
 
 # ---------------------------------------------------------------------------------------------
@@ -334,10 +334,10 @@ RUN set -eux; \
     test -s /opt/ofi-sdk/VERSION; \
     echo "libfabric SDK $(cat /opt/ofi-sdk/VERSION) -- link target only, host provides runtime"
 
-# The hpcagent overlay repo (containers/lib/spack-overlay) sits ahead of builtin: its openblas keeps
+# The hpcagent overlay repo (containers/images/lib/spack-overlay) sits ahead of builtin: its openblas keeps
 # runtime dispatch whole (no NO_AVX512 under +dynamic_dispatch). OpenBLAS is pinned to 0.3.30:
 # 0.3.34 segfaults row-major dgemm at M >= 8192, K >= 512 in its Haswell/Zen kernels (blas_gate.sh).
-COPY containers/lib/spack-overlay /opt/spack-overlay
+COPY containers/images/lib/spack-overlay /opt/spack-overlay
 RUN set -eux; \
     git init -q "${SPACK_ROOT}"; \
     git -C "${SPACK_ROOT}" remote add origin https://github.com/spack/spack.git; \
@@ -593,9 +593,9 @@ RUN set -eux; \
       > /tmp/lockgate.py; \
     python3 /tmp/lockgate.py "${SPACK_ENV_DIR}/spack.lock"; \
     rm -f /tmp/lockgate.py; \
-    # -pipe: no /tmp/cc*.s files; 12 llvm units failed on truncated ones in the podman build (daint 4957900). \
+    # -pipe: no /tmp/cc*.s files; llvm units fail on truncated ones in the podman build. \
     # Through the compiler wrapper's own override variables, not as `cflags=-pipe cxxflags=-pipe` on the \
-    # spec: llvm then failed in python's build hook with KeyError: no compiler-wrapper in the llvm spec (660463). \
+    # spec: llvm then fails in python's build hook with KeyError: no compiler-wrapper in the llvm spec. \
     SPACK_ALWAYS_CFLAGS=-pipe SPACK_ALWAYS_CXXFLAGS=-pipe \
       "${spack}" -e "${SPACK_ENV_DIR}" install --fail-fast "llvm@${LLVM_VERSION}"; \
     spack-cache-push; \
@@ -752,8 +752,8 @@ RUN set -eux; \
       esac; \
     done; \
     mpichversion | tee /tmp/mpichversion.txt; \
-    # WHICH libfabric does this MPI actually link? The one question the old gate never asked, and
-    # the reason cross-node MPI ran on sockets undetected: a libfabric with providers
+    # WHICH libfabric does this MPI actually link? Without this check cross-node MPI can run on
+    # sockets undetected: a libfabric with providers
     # `psm3 sockets verbs` satisfies every check about MPICH itself. RPATH is what decides, so
     # read it off the binary rather than trusting PATH or LD_LIBRARY_PATH.
     readelf -d /opt/view/lib/libmpi.so | grep -q 'NEEDED.*libfabric\.so\.1' \
@@ -826,7 +826,7 @@ RUN set -eux; \
 # A process maps ONE OpenMP runtime, and clang, flang and hipcc cannot use libgomp, so the llvm family runs in
 # a context of its own: libomp, and every library of the gnu view that links -- or, through OpenBLAS, reaches --
 # an OpenMP runtime built AGAIN by the llvm compiler, same versions, variants and sonames, into
-# /opt/omp/llvm/view (containers/lib/omp_contexts.sh links their shared libraries into the context's lib/).
+# /opt/omp/llvm/view (containers/images/lib/omp_contexts.sh links their shared libraries into the context's lib/).
 # numpy and scipy were built once, against libopenblas.so.0 by soname, so they pick the variant of the context
 # they run in through LD_LIBRARY_PATH.
 #
@@ -838,8 +838,7 @@ RUN set -eux; \
 # that maps none (METIS, Scotch, HDF5, MPICH ...) is the gnu build installed above, reused. A package that
 # fails to build with llvm fails this layer: it is then reported, and the catalog record
 # (hpcagent_bench/omp_catalog.py) refuses it to llvm-family submissions rather than the image dropping it.
-# STRUMPACK is built ~butterflypack here: flang cannot parse ButterflyPACK's fixed-form ScaLAPACK sources
-# (judge-agent-amd 655985).
+# STRUMPACK is built ~butterflypack here: flang cannot parse ButterflyPACK's fixed-form ScaLAPACK sources.
 ENV OMP_LLVM_ENV_DIR=/opt/omp/llvm/env
 RUN set -eux; \
     spack="${SPACK_ROOT}/bin/spack"; \
@@ -911,7 +910,7 @@ RUN set -eux; \
       '      link_type: symlink' \
       > "${OMP_LLVM_ENV_DIR}/spack.yaml"; \
     # A package's own `require` replaces `all: require`, so the portable target is named on each
-    # one: without it sundials was built for the build node's zen4 (656016).
+    # one: without it sundials is built for the build node's zen4.
     if [ -n "${SPACK_TARGET}" ]; then \
       sed -i "s/^\\( *require: \\[\\\"%.*\\)\\]\$/\\1, \\\"target=${SPACK_TARGET}\\\"]/" "${OMP_LLVM_ENV_DIR}/spack.yaml"; \
     fi; \
@@ -937,8 +936,8 @@ RUN set -eux; \
 # `+openshmem` is not a request for OpenSHMEM. Spack only ever ADDS `--enable-oshmem`, never
 # `--disable-oshmem`, and OpenMPI 5 builds OSHMEM whenever an SPML is present -- `fabrics=ucx`
 # guarantees one. So it is compiled either way, and the variant's only effect at 5.0.0:5.0.10 is
-# whether spack applies its gcc-16 patch (ompi 13757). `~openshmem` paid for the build and
-# skipped the fix.
+# whether spack applies its gcc-16 patch (ompi 13757). `~openshmem` pays for the build and
+# skips the patch.
 RUN set -eux; \
     spack="${SPACK_ROOT}/bin/spack"; \
     "${spack}" install --fail-fast \
@@ -959,8 +958,8 @@ RUN set -eux; \
 # The library is asserted alongside the header: header-only success is how a half-install ships.
 # Comment here, not inside the RUN -- one between line continuations is passed to the shell and
 # comments out the rest.
-COPY containers/lib/build-hptt.sh /build-hptt.sh
-COPY containers/lib/build-tblis.sh /build-tblis.sh
+COPY containers/images/lib/build-hptt.sh /build-hptt.sh
+COPY containers/images/lib/build-tblis.sh /build-tblis.sh
 ARG TBLIS_REF=v1.3.0
 RUN set -eux; \
     sh /build-hptt.sh; \
@@ -1013,9 +1012,9 @@ RUN set -eux; \
 
 # ---------------------------------------------------------------------------------------------
 # 10. Pluto -- polycc, the polyhedral source-to-source tool the `pluto` framework shells out to,
-# built against distro clang 17 by containers/lib/build-pluto.sh (which says why).
+# built against distro clang 17 by containers/images/lib/build-pluto.sh (which says why).
 ARG PLUTO_CLANG_MAJOR=17
-COPY containers/lib/build-pluto.sh /build-pluto.sh
+COPY containers/images/lib/build-pluto.sh /build-pluto.sh
 RUN PLUTO_CLANG_MAJOR="${PLUTO_CLANG_MAJOR}" sh /build-pluto.sh && rm -rf /build-pluto.sh /var/lib/apt/lists/*
 
 # ---------------------------------------------------------------------------------------------
@@ -1083,7 +1082,7 @@ RUN set -eux; \
 # numpy, scipy (on the image's OpenBLAS, below), mpi4py (on its MPICH) and cupy (for HIP, below): the
 # `image-python` and `image-cupy-rocm` groups of pyproject.toml, at the versions uv.lock pins. Every other locked
 # package -- torch, triton and jax's ROCm plugin from AMD's ROCm 7.2 page, dace, the judge proxy, ... -- is
-# installed when a job starts, into a node-local venv that sees these through a .pth (containers/lib/launch_venv.sh,
+# installed when a job starts, into a node-local venv that sees these through a .pth (containers/images/lib/launch_venv.sh,
 # the image's ENTRYPOINT, step 12), so a moved pin needs no rebuild. --exact also removes the base image's own
 # torch and triton from /opt/venv. uv comes from the pins (agent/harness/pins.env, sha256-checked by install_tools.sh).
 COPY agent/harness/pins.env agent/harness/install_tools.sh /opt/harness/
@@ -1100,9 +1099,9 @@ RUN set -eux; \
 
 # numpy and scipy on the image's OpenBLAS rather than their wheels' bundled scipy-openblas (a second,
 # pthreads MAX_THREADS=64 BLAS that crashed under numba prange), and numba on OpenMP, so every BLAS
-# caller shares one OpenMP runtime (containers/lib/numpy_on_openblas.sh).
+# caller shares one OpenMP runtime (containers/images/lib/numpy_on_openblas.sh).
 ENV NUMBA_THREADING_LAYER=omp
-COPY containers/lib/numpy_on_openblas.sh containers/lib/one_openmp.sh containers/lib/openmp_gate.py /tmp/one-openmp/
+COPY containers/images/lib/numpy_on_openblas.sh containers/images/lib/one_openmp.sh containers/images/lib/openmp_gate.py /tmp/one-openmp/
 RUN sh /tmp/one-openmp/numpy_on_openblas.sh /opt/view /opt/hpcagent-bench --only-group image-python && rm -rf /tmp/one-openmp
 
 # cupy is the GPU track's array module: every arch == "gpu" flavor stages its arrays through it,
@@ -1164,7 +1163,7 @@ RUN set -eux; \
     PYTHONSAFEPATH=1 rocprof-compute --version >/dev/null
 
 # ---------------------------------------------------------------------------------------------
-# 12. The launch venv (containers/lib/launch_venv.sh, the ENTRYPOINT set at the end of this stage).
+# 12. The launch venv (containers/images/lib/launch_venv.sh, the ENTRYPOINT set at the end of this stage).
 #
 # /opt/launch holds what the hook needs: the image python the venv is made from, the image's sync arguments, an
 # id that changes with every build (a new image never reuses an old image's venv), and one_openmp.sh, which links
@@ -1172,7 +1171,7 @@ RUN set -eux; \
 # (--no-install-project: hpcagent_bench is never in an agent's environment; the agent package comes in editable as
 # a dependency, from the agent/ a step binds); the judge stage drops that flag, so a judge job also installs
 # hpcagent_bench editable from its mounted checkout. The packages this image built are never reinstalled.
-COPY containers/lib/launch_venv.sh containers/lib/one_openmp.sh containers/lib/openmp_gate.py /opt/launch/
+COPY containers/images/lib/launch_venv.sh containers/images/lib/one_openmp.sh containers/images/lib/openmp_gate.py /opt/launch/
 RUN set -eux; \
     command -v python3 > /opt/launch/python; \
     echo "--no-install-project --extra amdgpu --group judge-proxy --no-install-package numpy --no-install-package scipy \
@@ -1206,10 +1205,10 @@ RUN set -eux; \
 # system python so their deps cannot displace system litellm[proxy]==1.94.0. Each venv is
 # `uv sync --package hpcagent-agent --group harness-<name>` from uv.lock, which carries none of the
 # project's own dependencies and gives the venv the same hook. An agent step binds the submitting checkout's
-# agent/ at /opt/hpcagent-bench-agent, and that is the whole setup (containers/lib/package_hook.sh). No
+# agent/ at /opt/hpcagent-bench-agent, and that is the whole setup (containers/images/lib/package_hook.sh). No
 # agent code is in the image; prompts and tool scripts are bound at launch, so the image carries their
 # dependencies only.
-COPY containers/lib/package_hook.sh /tmp/package_hook.sh
+COPY containers/images/lib/package_hook.sh /tmp/package_hook.sh
 RUN set -eux; \
     . /opt/harness/pins.env; \
     for venv in miniswe openhands; do \
@@ -1299,8 +1298,8 @@ RUN set -eux; \
     rm -f /tmp/blis_probe.c /tmp/blis_probe
 
 # The BLAS gate: tall GEMMs under every kernel family and concurrent callers past the host's thread
-# count, against the OpenBLAS every -lblas / -lopenblas link now resolves to (containers/lib/blas_gate.sh).
-COPY containers/lib/blas_gate.sh /tmp/blas_gate.sh
+# count, against the OpenBLAS every -lblas / -lopenblas link now resolves to (containers/images/lib/blas_gate.sh).
+COPY containers/images/lib/blas_gate.sh /tmp/blas_gate.sh
 RUN sh /tmp/blas_gate.sh /opt/view/include /opt/view/lib && rm -f /tmp/blas_gate.sh
 
 # 13c. The `.mpich` wrapper names the MPI compiler blocks actually spell.
@@ -1375,8 +1374,8 @@ RUN set -eux; \
     esac; \
     rm -f omp_probe.c libompprobe.so libgompprobe.so
 
-COPY containers/lib/stdpar-gate.sh /stdpar-gate.sh
-COPY containers/lib/parallelizer-gate.sh /parallelizer-gate.sh
+COPY containers/images/lib/stdpar-gate.sh /stdpar-gate.sh
+COPY containers/images/lib/parallelizer-gate.sh /parallelizer-gate.sh
 RUN set -eux; \
     mimalloc_so="$(find /opt/view/lib /opt/view/lib64 -maxdepth 1 \
       -name 'libmimalloc.so*' 2>/dev/null | sort | head -1)"; \
@@ -1437,11 +1436,14 @@ RUN set -eux; \
 # jax is the ROCm build, every framework adapter's module imports, islpy and z3 open dace's solver gates (both fail
 # closed and SILENT: without them WavefrontSkew and LoopToMap's proof are no-ops), the judge proxy is the pinned
 # stack, and playwright's chromium is installed for crawl4ai. Then one OpenMP runtime file (one_openmp.sh) and the
-# contexts (containers/lib/omp_contexts.sh): gnu, llvm, each gated in its own process and scanned so that no
+# contexts (containers/images/lib/omp_contexts.sh): gnu, llvm, each gated in its own process and scanned so that no
 # library on disk maps another family's runtime. containers/images/verify_image.py runs the same in a job.
-COPY containers/lib/openmp_gate.py containers/lib/omp_contexts.sh \
-     containers/lib/openmp_probe.c containers/lib/openmp_probe.f90 /tmp/one-openmp/
-RUN HPCAGENT_BENCH_LAUNCH_ROOT=/opt/launch-gate UV_CACHE_DIR=/uv-cache /opt/launch/launch_venv.sh sh -eux -c '\
+COPY containers/images/lib/openmp_gate.py containers/images/lib/omp_contexts.sh \
+     containers/images/lib/openmp_probe.c containers/images/lib/openmp_probe.f90 /tmp/one-openmp/
+# The gate's venv installs hpcagent-agent editable, and uv_build needs its module root; an agent step binds the
+# real agent/ over /opt/hpcagent-bench-agent, so the stub lives only for this step.
+RUN mkdir -p /opt/hpcagent-bench-agent/hpcagent_agent && touch /opt/hpcagent-bench-agent/hpcagent_agent/__init__.py \
+    && HPCAGENT_BENCH_LAUNCH_ROOT=/opt/launch-gate UV_CACHE_DIR=/uv-cache /opt/launch/launch_venv.sh sh -eux -c '\
     python3 -c "import torch, glob, os; assert torch.version.hip, \"torch lost its HIP build\"; \
       lib = os.path.join(os.path.dirname(torch.__file__), \"lib\"); \
       own = sorted(glob.glob(lib + \"/libamdhip64*\") + glob.glob(lib + \"/librccl*\") + glob.glob(lib + \"/libhsa-runtime64*\")); \
@@ -1480,11 +1482,11 @@ RUN HPCAGENT_BENCH_LAUNCH_ROOT=/opt/launch-gate UV_CACHE_DIR=/uv-cache /opt/laun
     python3 /tmp/one-openmp/openmp_gate.py scan; \
     python3 /tmp/one-openmp/openmp_gate.py context --context gnu --wheels --torch; \
     python3 /tmp/one-openmp/openmp_gate.py context --context llvm --blas-in-context' \
-    && rm -rf /opt/launch-gate /tmp/one-openmp \
+    && rm -rf /opt/launch-gate /tmp/one-openmp /opt/hpcagent-bench-agent/hpcagent_agent \
     && { mountpoint -q /uv-cache || rm -rf /uv-cache; }
 
 # Drop the build-time mirror rewrite from the SHIPPED image.
-COPY containers/lib/git_mirror.sh /tmp/git_mirror.sh
+COPY containers/images/lib/git_mirror.sh /tmp/git_mirror.sh
 RUN sh /tmp/git_mirror.sh drop && rm -f /tmp/git_mirror.sh
 
 WORKDIR /work

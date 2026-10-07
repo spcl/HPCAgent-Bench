@@ -43,8 +43,8 @@ LAUNCHER_DEFAULTS = {
     "CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS": '$("${HPCAGENT_BENCH_IMAGE_PYTHON}" -m hpcagent_agent.driver.stream_idle_timeout)',
     # The byte watchdog above is installed only for api.anthropic.com. Against SGLang/vLLM the walls
     # that fire are the SSE-event watchdog (floor 300 s) and Bun's own ~300 s fetch socket timeout,
-    # which the CLI lifts only when API_FORCE_IDLE_TIMEOUT is falsy -- both unset cut qwen38 streams
-    # at 4-5 min of silence mid tool_use ("API Error: The operation timed out.", mlscale 649795).
+    # which the CLI lifts only when API_FORCE_IDLE_TIMEOUT is falsy -- both unset cut streams at
+    # 4-5 min of silence mid tool_use ("API Error: The operation timed out.").
     # The event watchdog takes the SAME derived number, never a second one.
     "CLAUDE_STREAM_IDLE_TIMEOUT_MS": "${CLAUDE_BYTE_STREAM_IDLE_TIMEOUT_MS}",
     "API_FORCE_IDLE_TIMEOUT": "0",
@@ -123,7 +123,7 @@ def test_a_base_env_sets_none_of_the_common_client_settings(path: str, name: str
 
 @pytest.mark.parametrize("name", COMMON_VARS)
 def test_the_launcher_exports_each_common_setting_with_its_default(name: str) -> None:
-    """The .env files no longer carry these, so the launcher's default IS what every setup runs at."""
+    """The .env files do not carry these, so the launcher's default IS what every setup runs at."""
     default = LAUNCHER_DEFAULTS[name]
     assert f'export {name}="${{{name}:-{default}}}"' in LAUNCHER.read_text(encoding="utf-8")
 

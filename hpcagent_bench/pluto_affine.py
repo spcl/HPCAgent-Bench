@@ -33,7 +33,7 @@ __all__ = [
 def has_scop(scop_c: str) -> bool:
     """True when ``scop_c`` marks at least one region for polycc.
 
-    A translation unit can now come back with NONE -- the emitter scopes each nest on its own merits
+    A translation unit can come back with NONE -- the emitter scopes each nest on its own merits
     (``numpyto_c.emit.pluto_scop_regions``) and a kernel built entirely from constructs pet cannot
     model has no scopable nest at all. Handing such a file to polycc gets a byte-identical file back,
     so a caller that did not check would compile and grade UNtransformed C under Pluto's name.

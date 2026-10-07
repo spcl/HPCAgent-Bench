@@ -5,16 +5,15 @@
 
 fv3's finite-volume edge fixups name the two rows they touch out of order and then write a
 whole plane through each: ``al[ia, :, :] = C1 * q[ia - 2, :, :] + ...``. The scatter expander
-used to decline the moment any component was a ``:``, so the statement reached emit unlowered.
-
-Two spellings behaved differently, and only one of them announced itself:
+must lower a component that is a ``:`` rather than leave the statement to reach emit unlowered,
+where two spellings fail differently, and only one of them announces itself:
 
 * ``out[ia, :] = src[ia, :]``     -- refused at emit (``expression Slice``)
-* ``out[ia, :] = src[ia - 1, :]`` -- MISCOMPILED: the index array was left bare inside the
-  arithmetic, so C emitted ``src[(ia - 1) * M + s]`` (pointer arithmetic, no build) and Fortran
-  read it as a vector subscript and crashed with SIGSEGV.
+* ``out[ia, :] = src[ia - 1, :]`` -- MISCOMPILED: the index array is left bare inside the
+  arithmetic, so C emits ``src[(ia - 1) * M + s]`` (pointer arithmetic, no build) and Fortran
+  reads it as a vector subscript and crashes with SIGSEGV.
 
-Asserted numerically against numpy rather than on the emitted text: the defect was a wrong
+Asserted numerically against numpy rather than on the emitted text: the failure is a wrong
 subscript, and only running it proves the right elements moved.
 """
 
@@ -72,7 +71,7 @@ def test_scatter_with_trailing_slice_matches_numpy() -> None:
 
 
 def test_scatter_with_index_expression_and_slice_matches_numpy() -> None:
-    """The spelling that used to emit invalid pointer arithmetic instead of declining."""
+    """A spelling that must not emit invalid pointer arithmetic instead of declining."""
     ok_(run2("    out[ia, :] = src[ia - 1, :] * 2.0\n"))
 
 
@@ -96,8 +95,7 @@ def test_duplicate_index_is_last_write_wins() -> None:
 def test_index_behind_a_slice_matches_numpy() -> None:
     """``out[:, ia]`` puts the index array BEHIND a ``:``, which numpy answers by moving that
     axis to the FRONT of the result. Filling the loop iters in SUBSCRIPT order there writes the
-    wrong axes -- a silently wrong answer, which is why this used to decline. The iters are now
-    emitted in result order, so the right-hand side (right-aligned against them by the shared
+    wrong axes -- a silently wrong answer. The iters are emitted in result order, so the right-hand side (right-aligned against them by the shared
     scalarizer) pairs element for element whatever axis it carries its own index array on."""
     ok_(run2("    out[:, ia] = src[:, ia] * 2.0\n"))
 

@@ -421,7 +421,7 @@ jobs:
           set -euo pipefail
           sudo apt-get install -y --no-install-recommends libstdc++-14-dev
           sudo env PLUTO_SRC="$RUNNER_TEMP/pluto" PLUTO_GCC_INSTALL_DIR=/usr/lib/gcc/x86_64-linux-gnu/14 \
-            sh containers/lib/build-pluto.sh
+            sh containers/images/lib/build-pluto.sh
 
       - name: Phase 4 -- codegen frameworks + fp16 (build + run + validate a kernel)
         if: ${{ !cancelled() }}

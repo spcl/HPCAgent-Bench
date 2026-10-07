@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The Wilcoxon signed-rank test reports exact only where the exact null applies.
 
-The same test on the same 40 kernels was once published as p = 0.18329 and p = 0.18762 because two paths used
-different exact/approximate cutoffs, and the approximation is the anti-conservative side. The cutoff is one
-constant (:data:`summary.EXACT_MAX_N`) and a tie always takes the corrected approximation.
+Two paths with different exact/approximate cutoffs give the same test on the same kernels two p-values, and the
+approximation is the anti-conservative side. The cutoff is one constant (:data:`summary.EXACT_MAX_N`) and a tie
+always takes the corrected approximation.
 """
 
 import numpy as np

@@ -1256,8 +1256,8 @@ def tag_complex_locals(
         # The WHOLE mapping, not its size: after the first pass propagation stops adding names and
         # only flips a name real -> complex, so a size comparison calls a fixpoint that has not been
         # reached. A chain whose stores do not appear in dependency order then stops one link short
-        # and the last buffer is declared real -- the imaginary-part loss this function exists to
-        # prevent, now silent.
+        # and the last buffer is declared real -- a silent form of the imaginary-part loss this
+        # function exists to prevent.
         before = dict(seed)
         seed.update({n: k for n, k in dtype_table_(kir.tree, seed).items() if k})
         for name, src in dtype_src.items():

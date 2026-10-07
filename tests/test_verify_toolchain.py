@@ -77,7 +77,7 @@ def test_a_missing_library_fails_loudly(fake_toolchain, capsys) -> None:
 
 def test_an_unlinkable_runtime_fails_loudly(fake_toolchain, monkeypatch, capsys) -> None:
     """libomp is a HARD requirement, not an extra: libgomp deadlocks across fork() and libomp
-    recovers, so a runner with only libgomp cannot tell the fix from the forgiving runtime.
+    recovers, so a runner with only libgomp cannot tell a fork-safe harness from the forgiving runtime.
     apt's libomp-dev is a metapackage, so `installed` and `linkable` are different questions."""
     monkeypatch.setattr(languages, "library_linkable", lambda soname: soname != "omp")
     assert load_script().main() == 1

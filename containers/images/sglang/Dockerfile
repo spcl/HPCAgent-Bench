@@ -74,7 +74,7 @@ ENV HCC_AMDGPU_TARGET=${ROCM_ARCH_CSV} \
     PYTORCH_ROCM_ARCH=${ROCM_ARCH} \
     GPU_ARCHS=${ROCM_ARCH} \
     GPU_ARCH_LIST=${ROCM_ARCH}
-COPY containers/lib/device_arch_gate.sh /usr/local/bin/device_arch_gate.sh
+COPY containers/images/lib/device_arch_gate.sh /usr/local/bin/device_arch_gate.sh
 
 # flydsl and cupy, PINNED and INSIDE the image, as one tiny uv project (pyproject.toml and uv.lock beside
 # this file) synced into the vendor venv /opt/venv. `--inexact` removes nothing the vendor environment holds,

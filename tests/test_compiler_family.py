@@ -238,8 +238,8 @@ def test_the_pin_moves_the_baseline_flags_the_agent_is_shown(_reset_pin) -> None
 
 
 def test_a_pin_naming_a_family_this_image_lacks_is_an_error(_reset_pin, monkeypatch) -> None:
-    """Named against a SYNTHETIC family rather than whichever real one happens to be unwired: this
-    used to pin nvhpc, and stopped testing anything the day nvhpc got its blocks."""
+    """Named against a SYNTHETIC family rather than whichever real one happens to be unwired: a
+    real one stops testing anything the day it gets its blocks."""
     monkeypatch.setitem(languages.COMPILER_FAMILIES, "unbuilt", "no-such-spack-package")
     assert languages.compiler_for_family("fortran", "unbuilt") is None
     config.set_override("build.compiler.fortran", "unbuilt")

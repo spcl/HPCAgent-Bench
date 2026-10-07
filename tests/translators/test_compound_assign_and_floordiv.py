@@ -2,12 +2,11 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Compound-assign and float floor-division emit gaps (C / C++ / Fortran).
 
-* ``t //= v`` / ``t %= v`` had no numpy-faithful compound form: C ``//=`` raised, C ``%=``
-  emitted raw dividend-sign modulo, Fortran ``//=`` did truncating ``/`` and ``%=`` emitted
-  the invalid infix ``x MOD y``. Both emitters now expand to ``t = t <op> v`` through the
-  BinOp path (int_floor / python_mod).
-* Fortran float ``a // b`` lowered to ``FLOOR(.., int64)`` -- an integer, undefined for
-  ``|a/b| > 2^63`` (1e20 // 2 wrapped instead of 5e19). It now yields a real floor.
+* ``t //= v`` / ``t %= v`` have no direct numpy-faithful form (C ``%=`` is dividend-sign modulo,
+  Fortran ``/`` truncates and ``x MOD y`` is invalid infix), so both emitters expand to
+  ``t = t <op> v`` through the BinOp path (int_floor / python_mod).
+* Fortran float ``a // b`` yields a real floor, not ``FLOOR(.., int64)`` -- an integer, undefined
+  for ``|a/b| > 2^63`` (1e20 // 2 must be 5e19).
 """
 
 import numpy as np
@@ -61,7 +60,7 @@ def test_literal_grid_unpack_does_not_overflow_int32() -> None:
 
 
 def test_floordiv_float_matches_numpy_over_overflow_range() -> None:
-    # 1e20 // 2 == 5e19 in numpy; the old Fortran FLOOR(.., int64) overflowed int64 here.
+    # 1e20 // 2 == 5e19 in numpy; a Fortran FLOOR(.., int64) overflows int64 here.
     src = "import numpy as np\ndef f(a, b, out):\n    for i in range(a.shape[0]):\n        out[i] = a[i] // b[i]\n"
     a = np.array([1e20, -7.5, 7.5, 3.0], dtype=np.float64)
     b = np.array([2.0, 2.0, -2.0, 2.0], dtype=np.float64)

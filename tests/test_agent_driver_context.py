@@ -19,8 +19,8 @@ OVERFLOW = (
     '{"type":"result","subtype":"success","is_error":true,"num_turns":61,'
     '"result":"API Error: 500 Input length (66001) exceeds model\'s maximum context length (65536)"}\n'
 )
-#: The same death on SGLang, verbatim in shape from 643179/problem-0-worker-0 (autokernel): "the
-#: model's", which the old "exceeds model's maximum context length" mark did not match.
+#: The same death on SGLang, verbatim in shape from an autokernel worker: "the model's", which an
+#: "exceeds model's maximum context length" mark does not match.
 SGLANG_OVERFLOW = (
     '{"type":"result","subtype":"success","is_error":true,"num_turns":61,'
     '"result":"API Error: 400 Requested token count exceeds the model\'s maximum context length of 262144 '

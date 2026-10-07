@@ -333,7 +333,7 @@ def compiler_for_family(lang: str, family: str) -> str | None:
 
 def compiler_block(name: str) -> dict[str, Any]:
     """One ``compilers.yaml`` block, by name: the public read of the table the build runs from, so
-    ``containers/lib/parallelizer-gate.sh`` and ``tests/test_parallelizer_gate.py`` walk that table and
+    ``containers/images/lib/parallelizer-gate.sh`` and ``tests/test_parallelizer_gate.py`` walk that table and
     no second list. :raises KeyError: for an unknown block name."""
     return _load_compilers()[name]
 

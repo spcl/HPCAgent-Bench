@@ -16,8 +16,7 @@ Security design, key handling and every launcher variable: [`private-endpoint.md
 ## Measured at the experiment load
 
 40 concurrent agentic conversations, 16 turns each, 35k-50k-token prompts (p50 about 38k), 300-500 output
-tokens per turn, on one node (bench jobs 667941, 668271; harness and loads in
-`$SCRATCH/hpcagent-bench-runs/inference-tuning-20261005`). Every row passed the long-context accuracy gate
+tokens per turn, on one node. Every row passed the long-context accuracy gate
 and the tool-call gate.
 
 | Configuration | tok/s aggregate | tok/s per agent | TTFT p50 / p90 | ITL p50 | prefix-cache hit |

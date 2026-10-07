@@ -1,20 +1,18 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Regression tests for ``dtypes_from_initialize`` return-target mapping.
+"""``dtypes_from_initialize`` return-target mapping.
 
-The cloudsc flux-accumulation miscompile (native c/cpp/fortran emitted a
-spurious ``(int64_t)`` cast on float flux arrays, truncating their tiny values
-to 0) was caused by an UNGATED positional ``zip`` between the kernel's array
-args and the ``initialize`` return tuple. When those two lists differ in length
-or order, the zip mis-assigns one array's dtype to an unrelated array. cloudsc's
-``initialize`` returns 58 values while the kernel takes 53 array args in a
-different order, so ``ktype``/``ldcum`` (int32) leaked onto ``pfsqrf`` /
-``pfsqltur`` / ``pvfi`` (float64).
+An UNGATED positional ``zip`` between the kernel's array args and the ``initialize``
+return tuple mis-assigns one array's dtype to an unrelated array when the two lists
+differ in length or order. cloudsc's ``initialize`` returns 58 values while the
+kernel takes 53 array args in a different order, so ``ktype``/``ldcum`` (int32)
+would leak onto ``pfsqrf`` / ``pfsqltur`` / ``pvfi`` (float64) and native backends
+would emit a spurious ``(int64_t)`` cast truncating their tiny values to 0.
 
-The fix gates the positional fallback on EQUAL lengths (the only case where the
+The positional fallback is gated on EQUAL lengths (the only case where the
 correspondence is provably 1:1); the by-name ``init.dtypes`` block stays the
 authoritative source. These tests pin both directions of that gate. A full
-emit+compile+run numerical check of the fix lives in
+emit+compile+run numerical check lives in
 the corpus gate (``tests/test_e2e_numerical.py``, cloudsc is a pinned kernel).
 """
 

@@ -3,8 +3,8 @@
 """A single-setup judge grades only its own setup: a body whose ``episode_id`` names another is refused.
 
 Every mlscale setup runs its own judge, and rows are attributed by ``episode_id``. A request that reaches
-the wrong setup's judge (a stale ``JUDGE_URL``, a copied curl line) used to be graded and recorded in
-that setup's DB under a foreign identity. The router now refuses, before anything is graded, a POST
+the wrong setup's judge (a stale ``JUDGE_URL``, a copied curl line) must not be graded and recorded
+in that setup's DB under a foreign identity. The router refuses, before anything is graded, a POST
 whose ``episode_id`` does not start with ``"$SETUP."`` of the job it serves. A fused judge keeps
 its own per-worker check (``fused.check_episode_id``) and never reads the job's ``SETUP``; a judge
 with no ``SETUP`` (a local ``serve``) checks nothing.

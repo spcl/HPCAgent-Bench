@@ -90,10 +90,8 @@ def test_selector_returns_db_short_names_not_stems() -> None:
     """``select_short_names`` (the plot table filter) must return the value the results DB stores in
     its ``kernel`` column, which is ``BenchSpec.load(k).short_name``.
 
-    This used to guard a DIVERGENCE: 34 manifests carried a ``short_name:`` that differed from
-    their stem, and returning the stem filtered a plot to zero rows. That second identity is gone
-    -- a benchmark now has one name, the manifest stem -- so what is left to hold is that the
-    selector still returns exactly what the DB writer records, and that a name resolves to itself.
+    A benchmark has one name, the manifest stem, so what is left to hold is that the selector
+    returns exactly what the DB writer records, and that a name resolves to itself.
     See tests/test_kernel_identity.py for the one-name invariant itself."""
     from hpcagent_bench.spec import select_short_names
 

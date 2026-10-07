@@ -1341,9 +1341,8 @@ def run_jax_backend(
     if importlib.util.find_spec("jax") is None:
         return "skip:not-installed"
     # SPAWNED, not forked: a pytest-xdist worker already runs threads (execnet I/O, BLAS and OpenMP
-    # pools), and a jax child forked from it intermittently deadlocks on a lock one of them held --
-    # both tries of test_jax_only_request_is_not_blocked_by_native_emit ran into their caps on run
-    # 34703271829 for a kernel that takes ~10 s. A fresh interpreter inherits no locks; run_forked
+    # pools), and a jax child forked from it intermittently deadlocks on a lock one of them held.
+    # A fresh interpreter inherits no locks; run_forked
     # starts the clock only once that child reports in, so its import time is not billed to jax.
     outcome = run_forked(
         jax_compute,

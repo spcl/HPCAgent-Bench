@@ -3,7 +3,7 @@
 """Per-kernel figures: one column per kernel, one mark per series, one summary slot per series.
 
 The one per-kernel drawing API: the compiler figure
-(:func:`hpcagent_bench.stats.figures.signed.llr40_figure`) and the paper's per-kernel figures both
+(:func:`hpcagent_bench.stats.figures.signed.kernel_figure`) and the paper's per-kernel figures both
 draw through this module, so a column, a mark, a summary slot and a margin mean the same thing
 everywhere. A caller turns its data into :class:`KernelCell` s (:func:`kernel_cells`), groups them
 into :class:`Series`, picks one :class:`Metric` per panel and calls :func:`figure_panels`.

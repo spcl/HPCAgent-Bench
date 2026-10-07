@@ -3,7 +3,7 @@
 """C5: ``http_json.transcript_tokens`` / ``usage_jsonl_tokens`` return a bare ``0`` on a missing or
 unreadable token file, indistinguishable from an episode that genuinely spent nothing. Both keep
 returning that same ``0`` -- every caller (``post_judge``) sums it straight into a judge body, so
-neither function's numeric contract can change -- but the read failure is now loud on stderr and
+neither function's numeric contract can change -- but the read failure is loud on stderr and
 recorded on :data:`http_json.TOKENS_READ_OK`, so a caller IN THIS PROCESS (a diagnostic, a test)
 can tell the two apart.
 """

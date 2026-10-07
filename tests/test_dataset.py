@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The extract -> select -> write -> load pipeline one study's figures read.
 
-Every rule here was a way the old ad-hoc merging produced a plausible wrong number rather than an
-error: a retired setup counted, a duplicated write, a kernel outside the tag."""
+Every rule here stops a plausible wrong number that ad-hoc merging produces rather than an error:
+a retired setup counted, a duplicated write, a kernel outside the tag."""
 
 import pathlib
 
@@ -46,7 +46,7 @@ def test_a_retired_setup_is_dropped_and_counted_apart_from_a_foreign_one(
 
 
 def test_every_row_carries_the_time_it_was_extracted(selection: experiments.Selection) -> None:
-    """Two extractions of one study were previously told apart only by file mtime, which a
+    """Two extractions of one study are told apart by this stamp, not by file mtime, which a
     copy destroys."""
     frame, provenance = dataset.select(selection, pd.DataFrame([row("100", "dfa")]))
     assert set(frame[dataset.EXTRACTED_AT]) == {provenance.extracted_at}

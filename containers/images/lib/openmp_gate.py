@@ -17,10 +17,10 @@ together).
 ``one`` imports numpy and scipy, runs a numba prange whose threads call BLAS, loads a ``gcc -fopenmp``
 library, imports each ``--optional`` module that is installed (default: :data:`ONE_OPTIONAL_USERS`; and
 runs a torch op when torch is one), then asserts a single OpenMP runtime realpath is mapped. Run by
-containers/lib/one_openmp.sh at image build and by containers/images/verify_image.py in the finished
+containers/images/lib/one_openmp.sh at image build and by containers/images/verify_image.py in the finished
 image; tests/test_one_openmp_runtime.py runs it with no optional module.
 
-``context`` is run by containers/lib/omp_contexts.sh at image build and by containers/images/verify_image.py in the
+``context`` is run by containers/images/lib/omp_contexts.sh at image build and by containers/images/verify_image.py in the
 finished image, once per context the image carries. It re-executes itself under the context's
 environment (``LD_LIBRARY_PATH`` led by ``<root>/<context>/lib``, the way the judge starts a grading child of
 that family), then, in ONE process:

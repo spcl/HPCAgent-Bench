@@ -33,6 +33,13 @@ def test_read_observations_reads_the_extracted_db_the_same_shape_as_a_csv() -> N
     assert set(frame.packet.unique()) == {"", "lang-skills", "cpf-src", "perf-playbook-cpu"}
 
 
+def test_read_observations_reads_the_extractors_sqlite_name_as_a_database(tmp_path: pathlib.Path) -> None:
+    """``observations_extract --db obs/observations.sqlite`` (LAUNCH.md) is a database, not a CSV."""
+    sqlite = tmp_path / "observations.sqlite"
+    sqlite.write_bytes(FIXTURE.read_bytes())
+    assert studies.read_observations(sqlite).equals(studies.read_observations(FIXTURE))
+
+
 def test_a_perf_playbook_setup_from_the_real_shaped_fixture_never_enters_the_control_side() -> None:
     """A perf-playbook setup is a treatment, never the control, read off a fixture shaped like a real
     extraction rather than a hand-built frame in the test body."""
@@ -57,7 +64,7 @@ def test_three_treatments_against_the_fixtures_control_all_produce_a_panel() -> 
     }
     assert all(panel is not None for panel in built.values())
     # The tag argument must actually gate coverage, not merely be accepted: a tag kernel no
-    # setup ran drops every setup from the coverage check, so the same call now yields nothing.
+    # setup ran drops every setup from the coverage check, so the same call yields nothing.
     unreachable_tag = [*tag_kernels, "kernel-no-setup-ever-ran"]
     assert score_change.one_treatment_panel(frame_all, control, "lang-skills", unreachable_tag) is None, (
         "a tag kernel with zero coverage must fail complete_side_setups for every setup"

@@ -49,7 +49,7 @@ ENV HCC_AMDGPU_TARGET=${ROCM_ARCH_CSV} \
     GPU_ARCHS=${ROCM_ARCH} \
     GPU_ARCH_LIST=${ROCM_ARCH}
 # vLLM's compiled ops are a fat binary: every listed arch has to be one of its device targets.
-COPY containers/lib/device_arch_gate.sh /usr/local/bin/device_arch_gate.sh
+COPY containers/images/lib/device_arch_gate.sh /usr/local/bin/device_arch_gate.sh
 RUN /usr/local/bin/device_arch_gate.sh --contains "${ROCM_ARCH}" "$(python3 -c 'import os, vllm; print(os.path.dirname(vllm.__file__))')" >/dev/null
 
 # Tuned fused_moe Triton configs, keyed by (experts, N, device, dtype). E=128,N=192 is oss120b's.

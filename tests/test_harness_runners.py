@@ -132,9 +132,8 @@ class TerminalExecutor:
 
 
 def test_every_mcp_tool_waits_past_the_judges_own_deadline(harness) -> None:
-    """harness20 643335: OpenHands gave up on a /score after the SDK's 300 s while the judge kept grading
-    for up to its 1800 s, and the busy stdio server timed out every later call too (285 timed-out
-    calls, 18 of 20 agents). The runner sets each MCP executor's wait to the judge call's wait, and
+    """OpenHands gives up on a /score after the SDK's 300 s while the judge keeps grading for up to
+    its 1800 s, and the busy stdio server then times out every later call too. The runner sets each MCP executor's wait to the judge call's wait, and
     leaves every other tool's executor alone."""
     tools = [
         types.SimpleNamespace(name="score", executor=MCPToolExecutor()),
@@ -161,7 +160,7 @@ def run_as_local_environment(harness: types.SimpleNamespace, command: str) -> su
 
 
 def test_a_miniswe_command_runs_under_bash(harness: types.SimpleNamespace) -> None:
-    """dash rejected ``time`` (rc 127) and ``[[ ]]`` in smoke 634022."""
+    """dash rejects ``time`` (rc 127) and ``[[ ]]``."""
     result = run_as_local_environment(harness, '[[ 1 == 1 ]] && time true && echo "bash=${BASH_VERSION}"')
     assert result.returncode == 0, result.stderr
     assert result.stdout.startswith("bash=") and result.stdout.strip() != "bash="

@@ -9,7 +9,7 @@ A. a WRITTEN array indexed by the loop var on TWO different axes (``A[i,j] = A[j
    -- an in-place transpose): every ``A[i,j]`` looked idx-safe in isolation, but the
    per-iteration regions overlap.
 B. a loop-carried scalar READ before it is WRITTEN in the body (``b[i] = s; s = a[i]``
-   -- a lag): not self-referential and not an aug-assign, so the old guards missed it.
+   -- a lag): not self-referential and not an aug-assign, so those guards miss it.
 C. a reduction accumulator whose LIVE value is captured each iteration (``s = s + a[i];
    out[i] = s`` -- a prefix scan): accepted as ``reduction(+:s)``, which hands ``out`` racy
    partial sums.

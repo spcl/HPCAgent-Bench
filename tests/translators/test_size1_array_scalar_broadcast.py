@@ -2,19 +2,19 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """A scalar-used local assigned an all-size-1 broadcast is a SCALAR, not a ``(1,)`` array.
 
-The TSVC s315 argmax nest (a max/argmax over ``a`` seeded from a ``(1,)`` buffer ``x``) lowered to::
+The TSVC s315 argmax nest (a max/argmax over ``a`` seeded from a ``(1,)`` buffer ``x``) lowers to::
 
     for i in range(N):
         c = (a[i] > x)      # x is shape (1,): numpy broadcasts -> c is a (1,) bool array
         if c:
             ...
 
-numpyto typed ``c`` from the broadcast extent as a size-1 array (``bool c[1]`` + a ``for __w0`` write),
-yet ``c`` is USED as a scalar (``c = 0`` init, ``if (c)``, ``out[0] = c``). The declaration (scalar) and
-the array-style writes (``memset(c, ...)`` / ``c[__w0] = ...``) disagreed, so the emitted C / Fortran did
-not compile. numpyto already reads a size-1 array element-wise as ``x[0]`` / ``x(1)``, so an all-size-1
-broadcast is a SCALAR: the fix stops registering such a local as an array (``extent_is_scalar``) and
-scalarises a bare size-1-array READ to ``x[0]`` / ``x(1)`` (without double-indexing an explicit ``x[0]``).
+Typing ``c`` from the broadcast extent as a size-1 array (``bool c[1]`` + a ``for __w0`` write) while
+``c`` is USED as a scalar (``c = 0`` init, ``if (c)``, ``out[0] = c``) makes the declaration and the
+array-style writes (``memset(c, ...)`` / ``c[__w0] = ...``) disagree, and the C / Fortran does not
+compile. numpyto reads a size-1 array element-wise as ``x[0]`` / ``x(1)``, so an all-size-1 broadcast
+is a SCALAR: such a local is not registered as an array (``extent_is_scalar``) and a bare size-1-array
+READ is scalarised to ``x[0]`` / ``x(1)`` (without double-indexing an explicit ``x[0]``).
 """
 
 import ast

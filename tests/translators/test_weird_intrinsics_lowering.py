@@ -37,9 +37,9 @@ except ImportError:
 ALL = ("c", "cpp", "fortran", "numba", "pythran", "jax")
 
 # Backends that mis-lower a given edge, keyed to the deep-review finding so the gap is documented,
-# not hidden. C / C++ now route np.maximum/minimum through the NaN-propagating __npb_fmax/__npb_fmin
+# not hidden. C / C++ route np.maximum/minimum through the NaN-propagating __npb_fmax/__npb_fmin
 # helpers (numpyto_c/emit.py) and Fortran emits the NaN-propagating MERGE form (numpyto_fortran/
-# emit.py), so both are NO LONGER skipped; only pythran (max/min drop NaN) remains.
+# emit.py), so only pythran (max/min drop NaN) is skipped.
 NAN_SUPPRESS = {"pythran": "pythran max/min do not propagate NaN"}
 
 
@@ -138,7 +138,7 @@ CASES = [
         {"a": "(N,)", "out": "(N,)"},
         {},
     ),
-    # -- np.round on exact halves -- numpy is half-to-EVEN. Fortran now emits a half-even form
+    # -- np.round on exact halves -- numpy is half-to-EVEN. Fortran emits a half-even form
     #    (ANINT + tie-to-even correction), C/C++ round are half-even, so no backend is skipped.
     (
         "round_half_even",

@@ -4,8 +4,6 @@
 `llr40_observations.csv` (and the `observations` table of an extracted `.db`), that every figure
 and statistic reads. The names live in `hpcagent_bench/observation_columns.py`.
 
-`retagged` is not written any more, but a non-blank one still means the row was stored under the `adhoc` episode id, and no reader credits it.
-
 ## Row kinds
 
 `row_kind` says what a row is, and which column groups it fills:
@@ -15,7 +13,7 @@ and statistic reads. The names live in `hpcagent_bench/observation_columns.py`.
 | `call` | judge call (a grade with a `call_index`): `/score` or `/submit` | identity, grade |
 | `submission` | credited `/submit` (a grade with `credited_speedup`) | identity, grade, grade_* |
 | `attempt` | `/submit` the judge graded and refused (a grade with a `reason`) | identity, grade |
-| `task` | agent episode (an `episodes` row with its record) | identity, tokens, tokens_*, task_* |
+| `episode` | agent episode (an `episodes` row with its record) | identity, tokens, tokens_*, episode_* |
 | `scaling` | (grade, rank count P) of a distributed kernel, and the torch.distributed baseline curve | identity, scaling_* |
 
 A blank cell means the column does not apply to that row kind unless the table below says more.
@@ -26,9 +24,10 @@ A blank cell means the column does not apply to that row kind unless the table b
 |---|---|---|
 | `run_root` | name of the run root the job sits under | |
 | `job` | job directory name (the Slurm job id) | |
-| `judge_db` | path of the judge database the row came from; on a `task` row, the worker directory | |
-| `row_kind` | `call`, `submission`, `attempt`, `task` or `scaling` (see above) | |
-| `episode_id` | `<setup>.n<N>.p<P>.w<W>`; `adhoc` for a grade filed with no episode id (never credited) | |
+| `judge_db` | path of the judge database the row came from; on an `episode` row, the worker directory | |
+| `row_kind` | `call`, `submission`, `attempt`, `episode` or `scaling` (see above) | |
+| `episode_id` | `<setup>.n<N>.p<P>.w<W>[.s<slot>]`; `adhoc` for a grade filed with no episode id (never credited) | |
+| `slot` | which designed agent of a repeat the episode is (`results_db.md`); 1 outside a repeat | |
 | `setup` | the setup label, the episode id's first segment | |
 | `harness` | agent harness the run recorded (`setups.harness`, else the launch env) | not recorded |
 | `packet` | skill/tool packet the run recorded, raw | `""` is the control setup (no packet) |
@@ -48,7 +47,7 @@ A blank cell means the column does not apply to that row kind unless the table b
 | `speedup` | the recorded speedup; after the final grade, its S_i | no speedup (unsolved, refused, or not a grade) |
 | `baseline_ns` | the denominator's time, ns | |
 | `native_ns` | the candidate's time, ns | |
-| `tokens` | `call`: the attempt's running count at the call; `task`: the final attempt's effective total | `task`: no token total found |
+| `tokens` | `call`: the attempt's running count at the call; `episode`: the final attempt's effective total | `episode`: no token total found |
 | `baseline` | the denominator's name (e.g. `c-autopar`) | |
 | `build_commands` | `call`: JSON list of the compile and link commands the grade ran, or `["<framework>==<version>"]` for a python (JIT) delivery | prebuilt library, no build, or recorded before the column |
 | `route` | judge route of a `call` row (`score` / `submit`) | in-process call |
@@ -57,9 +56,9 @@ A blank cell means the column does not apply to that row kind unless the table b
 | `baseline_policy` | the versioned stamp of how the denominator was chosen (`grading.baseline_policy_stamp`), history only | recorded before the stamp |
 | `denominator` | the speedup denominator (`harness.denominator.Denominator`); a row is credited only under its kernel's configured one | not known: never credited |
 | `cpu` | CPU model the grade ran on | |
-| `node` | host a final-grade platform row was re-timed on | not a platform row (the judge tables no longer record a node) |
+| `node` | host a final-grade platform row was re-timed on | not a platform row (judge tables record no node) |
 | `commit_sha` | repository commit the judge ran | |
-| `ts_ms` | epoch ms of the row (`task`: when the task started) | |
+| `ts_ms` | epoch ms of the row (`episode`: when the final attempt started) | |
 | `source_blob` | stored candidate text of the graded attempt | none stored |
 | `grade_regraded` | 1 when a regrade or the final grade replaced the recorded speedup | not regraded |
 | `grade_live_speedup` | the speedup the judge first recorded, before any regrade | |
@@ -76,6 +75,7 @@ A blank cell means the column does not apply to that row kind unless the table b
 | `scaling_ranks` | `scaling`: the rank count P | |
 | `scaling_nodes` | `scaling`: the node count the launcher reported | not reported; never derived from P |
 | `scaling_mode` | `scaling`: `weak` or `strong` | |
+| `scaling_input` | `scaling`: the graded input the law was swept from | blank: the preset |
 | `scaling_ranked_ns` | `scaling`: T(P), ns | P dropped (a hole, never zero) |
 | `scaling_single_rank_ns` | `scaling`: T(1), ns | torch.distributed rows: joined by the reader |
 | `scaling_work_ratio` | `scaling`: r = W(N_P)/W(N_1), weak only | weak: the problem grew exactly (r = P) |

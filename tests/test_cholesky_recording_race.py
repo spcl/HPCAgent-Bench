@@ -73,10 +73,9 @@ def run_framework_worker(
 
 @pytest.mark.skipif(not osinfo.IS_LINUX, reason="fork start method is Linux-only")
 def test_cholesky_survives_four_ranks_recording_through_run_framework_sweep(tmp_path: pathlib.Path) -> None:
-    """The literal failing shape: four ranks each running ``run-framework -b cholesky -f numba``
-    (what canon_column.sh's inner loop invokes) against ONE shared, not-yet-existing results shard.
-    Before the schema.py fix this failed nondeterministically with the exact reported symptom;
-    forked_failure_reason(result) used to read as an unhelpful sqlalche.me URL for the same reason."""
+    """The production shape: four ranks each running ``run-framework -b cholesky -f numba``
+    (what canon_column.sh's inner loop invokes) against ONE shared, not-yet-existing results shard
+    must all record."""
     db_path = str(tmp_path / "hpcagent_bench0.db")
     ctx = multiprocessing.get_context("fork")
     barrier = ctx.Barrier(4)

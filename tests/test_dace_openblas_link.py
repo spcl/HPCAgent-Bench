@@ -67,8 +67,8 @@ def toolchain_id() -> str:
 
     OpenBLAS's ``getarch`` probe writes its OWN ``Makefile.conf`` on the first ``make``, compiler
     and link flags baked in, and every later ``make`` reuses it -- so a tree built once on a host
-    that resolved the system gcc keeps linking against it even after the environment is fixed
-    (gate 607164 lost 19 of 20 failures to exactly that). Key the prefix on the compiler and a
+    that resolved the system gcc keeps linking against it even after the environment is fixed. Key
+    the prefix on the compiler and a
     toolchain change gets a fresh tree instead of a silently wrong one.
     """
     cc, _ = toolchain()

@@ -1,10 +1,10 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Signed-change per-kernel figures of the llr40 compiler and agent comparison (:func:`llr40_figure`,
-:func:`llr40_two_row_figure`; ``statistics/plot_llr40_compilers.py`` draws them).
+"""Signed-change per-kernel figure: canon-sweep columns (compilers) and agent setups on one kernel axis
+(:func:`kernel_figure`, :func:`kernel_comparison`; ``statistics/plot_score_change.py --per-kernel`` draws it).
 
-The axis is the signed relative change (:func:`hpcagent_bench.stats.summary.signed_change`), not
-the ratio: 2x faster sits at +1, 2x slower at -1. Follows Hoefler and Belli (SC15) rules 4 (report
+The speedup axis is log2 of the ratio (:mod:`per_kernel`): 2x faster sits at +1, 2x slower at -1; the
+tables also carry the signed relative change (:func:`hpcagent_bench.stats.summary.signed_change`). Follows Hoefler and Belli (SC15) rules 4 (report
 costs), 5/7 (report intervals) and 12 (no line between unordered rows), checked by
 :mod:`hpcagent_bench.stats.rules`.
 """
@@ -23,32 +23,30 @@ from matplotlib.lines import Line2D
 
 from hpcagent_bench import study_tags
 from hpcagent_bench.stats import canon, palette, population, rules, style
-from hpcagent_bench.stats.figures import llr40_setups, per_kernel
+from hpcagent_bench.stats.figures import per_kernel, setup_names
 from hpcagent_bench.stats.summary import geomean_ci, signed_change, usable_ratios
 
 __all__ = [
+    "BASELINE",
     "DEAD_BAND",
-    "LLR40_BASELINE",
-    "LLR40_CANON_COLUMNS",
-    "LLR40_CONDITIONS",
-    "LLR40_PANEL_HEIGHT_IN",
+    "PANEL_HEIGHT_IN",
     "SUMMARY_COLUMNS",
     "TABLE_COLUMNS",
     "TOKEN_SUMMARY_COLUMNS",
     "Row",
     "agent_kernel_row",
     "answer_ratios",
+    "baseline_label",
     "canon_kernel_row",
     "canon_label",
     "distinct_canon_labels",
     "fallback_note",
+    "kernel_comparison",
+    "kernel_figure",
     "kernel_intervals",
+    "kernel_metrics",
+    "kernel_rows",
     "legend_handles",
-    "llr40_baseline_label",
-    "llr40_figure",
-    "llr40_metrics",
-    "llr40_rows",
-    "llr40_two_row_figure",
     "pending_note",
     "row_color",
     "sign_test",
@@ -69,7 +67,7 @@ DEAD_BAND: float = 1.01
 class Row:
     """One drawn row: its ratios per kernel, the costs behind them, and what it excluded.
 
-    ``color``/``marker`` and the trailing five fields are set only by the llr40 compiler
+    ``color``/``marker`` and the trailing five fields are set only by the per-kernel
     figure rows (:func:`canon_kernel_row`, :func:`agent_kernel_row`); plain TSVC rows leave them
     at their defaults.
     """
@@ -184,16 +182,8 @@ SUMMARY_COLUMNS: tuple[str, ...] = (
 )
 
 
-#: The baseline every llr40 compiler row is measured against.
-LLR40_BASELINE: str = llr40_setups.CANON_BASELINE
-
-#: The two canon-sweep columns this figure draws as their own rows: DaCe's parallel-CPU backend,
-#: then its canonicalizing pass. A caller wanting the polyhedral baselines too (Pluto, PPCG-on-AMD)
-#: passes its own ``canon_columns`` (as :data:`statistics.plot_llr40_compilers`'s CLI default does).
-LLR40_CANON_COLUMNS: tuple[str, ...] = ("dace_cpu", "dace_cpu_canonicalize")
-
-#: The two CPF conditions this figure draws, per model -- never the no-packet control.
-LLR40_CONDITIONS: tuple[str, ...] = ("cpf-tool", "cpf-src")
+#: The speedup denominator when none is named: every track times its kernels against Numba.
+BASELINE: str = "numba"
 
 #: Column order of the emitted token summary table.
 TOKEN_SUMMARY_COLUMNS: tuple[str, ...] = (
@@ -205,7 +195,7 @@ def canon_kernel_row(
     canon_frame: pd.DataFrame,
     column: str,
     tag_kernels: Sequence[str],
-    baseline: str = LLR40_BASELINE,
+    baseline: str = BASELINE,
     mark_pending: bool = False,
     baseline_fallback: str = "",
 ) -> Row:
@@ -289,18 +279,19 @@ def agent_kernel_row(
     condition: str,
     tag_kernels: Sequence[str],
     pending: frozenset[str] = frozenset(),
+    treatments: Sequence[str] = (),
 ) -> Row:
-    """One CPF setup's row, restricted to ``tag``: its final answer per kernel, plus each kernel's
+    """One setup's row, restricted to ``tag``: its final answer per kernel, plus each kernel's
     own confidence interval over every graded episode it ran (SC15 rules 5/7)."""
     subset = frame.loc[frame["setup"].astype(str) == setup]
     answers = population.kernel_answers(subset, policy=population.KernelPolicy.SOLVED)
     kernels = set(tag_kernels)
     ratios, numerator_ms, denominator_ms = answer_ratios(answers, kernels)
     ratios_low, ratios_high = kernel_intervals(subset, ratios.keys(), setup)
-    raw_tokens, tokens_low, tokens_high = llr40_setups.setup_tokens(subset, setup)
+    raw_tokens, tokens_low, tokens_high = setup_names.setup_tokens(subset, setup)
     del tokens_low, tokens_high  # under "latest" both are empty; a repeat's own range is not this figure's concern
     tokens = {k: v for k, v in raw_tokens.items() if k in kernels}
-    label = f"{study_tags.model_name(model)} - {llr40_setups.condition_label(condition)}"
+    label = f"{study_tags.model_name(model)} - {setup_names.condition_label(condition, treatments)}"
     return Row(
         setup, label, ratios, numerator_ms, denominator_ms, pending_note(pending),
         palette.color(condition), palette.marker(model), ratios_low, ratios_high, tokens, pending=pending,
@@ -350,22 +341,22 @@ def kernel_intervals(
     return ratios_low, ratios_high
 
 
-def llr40_rows(
+def kernel_rows(
     canon_frame: pd.DataFrame,
     observations: pd.DataFrame | None,
     tag_kernels: Sequence[str],
-    baseline: str = LLR40_BASELINE,
-    canon_columns: Sequence[str] = LLR40_CANON_COLUMNS,
-    conditions: Sequence[str] = LLR40_CONDITIONS,
-    pattern: re.Pattern[str] = llr40_setups.SETUP_PATTERN,
+    canon_columns: Sequence[str],
+    pattern: re.Pattern[str] | None = None,
+    conditions: Collection[str] | None = None,
+    baseline: str = BASELINE,
     mark_pending: bool = False,
     baseline_fallback: str = "",
 ) -> list[Row]:
-    """DaCe's own canon-sweep rows, then every model's TAG-COMPLETE CPF setup rows
-    (:func:`~hpcagent_bench.stats.population.complete_setups`), all against ``baseline`` -- the
-    llr40 compiler figure's row source. ``observations=None`` draws the canon rows alone: the
-    experiment DB is not always reachable, and a figure with only the deterministic columns is still
-    a real, if partial, answer -- never a raised error.
+    """The canon-sweep rows of ``canon_columns``, then every TAG-COMPLETE setup row
+    (:func:`~hpcagent_bench.stats.population.complete_setups`) ``pattern`` names
+    (:func:`~hpcagent_bench.stats.figures.setup_names.setup_pattern`), all against ``baseline``.
+    ``conditions`` keeps only those setup conditions (``""`` is the control); ``None`` keeps all.
+    ``observations=None`` draws the canon rows alone.
 
     ``mark_pending`` also keeps a setup that has not been served every tag kernel yet, its missing
     kernels in ``pending``, where the default drops it."""
@@ -377,31 +368,33 @@ def llr40_rows(
     )
     if observations is None:
         return rows
-    candidates = llr40_setups.candidate_setups(observations, pattern)
+    if pattern is None:
+        raise ValueError("observations need a setup pattern (setup_names.setup_pattern)")
+    candidates = setup_names.candidate_setups(observations, pattern)
     frame = observations.loc[observations["setup"].astype(str).isin(candidates)]
     kept, dropped = population.complete_setups(frame, tag_kernels)
     if mark_pending:
         kept = [*kept, *dropped]
+    kept = [setup for setup in kept if conditions is None or candidates[setup][1] in conditions]
+    treatments = sorted({candidates[setup][1] for setup in kept} - {""})
     by_model: dict[str, list[str]] = {}
     for setup in kept:
-        model, condition = candidates[setup]
-        if condition in conditions:
-            by_model.setdefault(model, []).append(setup)
+        by_model.setdefault(candidates[setup][0], []).append(setup)
     for model in palette.in_order(by_model.keys(), "models"):
-        for setup in sorted(by_model[model], key=lambda a: llr40_setups.rank_condition(candidates[a][1])):
-            model_tag, condition = candidates[setup]
+        for setup in sorted(by_model[model], key=lambda a: setup_names.rank_condition(candidates[a][1])):
             served = set(frame.loc[frame["setup"].astype(str) == setup, "kernel"].astype(str))
             pending = frozenset(k for k in tag_kernels if k not in served)
-            rows.append(agent_kernel_row(frame, setup, model_tag, condition, tag_kernels, pending))
+            condition = candidates[setup][1]
+            rows.append(agent_kernel_row(frame, setup, model, condition, tag_kernels, pending, treatments))
     return rows
 
 
-#: A panel's height in the llr40 compiler figure, inches: what 40 kernels need to read at the
+#: A panel's height in the per-kernel figure, inches: what 40 kernels need to read at the
 #: text width the figure prints at, not what the canvas can spare.
-LLR40_PANEL_HEIGHT_IN: float = 1.5
+PANEL_HEIGHT_IN: float = 1.5
 
 
-def llr40_baseline_label(baseline: str) -> str:
+def baseline_label(baseline: str) -> str:
     """The speedup axis label, naming the baseline by its registry display name."""
     return f"Speedup over {study_tags.names('frameworks').get(baseline, baseline)}"
 
@@ -411,8 +404,8 @@ def row_color(row: Row) -> str:
     return row.color or palette.framework_color(row.framework)
 
 
-def llr40_metrics(
-    rows: Sequence[Row], tag_kernels: Sequence[str], baseline: str = LLR40_BASELINE
+def kernel_metrics(
+    rows: Sequence[Row], tag_kernels: Sequence[str], baseline: str = BASELINE
 ) -> list[per_kernel.Metric]:
     """The compiler figure's panels over ``sorted(tag)``, as :mod:`per_kernel` draws them.
 
@@ -436,9 +429,7 @@ def llr40_metrics(
         )
         for row in rows
     ]  # fmt: skip
-    metrics = [
-        per_kernel.speedup_series_metric(speed, llr40_baseline_label(baseline), palette.framework_color(baseline))
-    ]
+    metrics = [per_kernel.speedup_series_metric(speed, baseline_label(baseline), palette.framework_color(baseline))]
     if any(row.tokens for row in rows):
         tokens = [
             per_kernel.Series(
@@ -451,7 +442,7 @@ def llr40_metrics(
 
 
 def legend_handles(rows: Sequence[Row], metrics: Sequence[per_kernel.Metric]) -> list[Artist]:
-    """One legend entry per row -- its own colour and shape, and the display name :func:`llr40_rows`
+    """One legend entry per row -- its own colour and shape, and the display name :func:`kernel_rows`
     built into ``row.label`` -- plus the status marks ``metrics`` actually draw
     (:func:`per_kernel.status_handles`). The interval method and its n belong to the caption: every
     whisker on this figure is a 95% interval."""
@@ -465,17 +456,16 @@ def legend_handles(rows: Sequence[Row], metrics: Sequence[per_kernel.Metric]) ->
     return handles + per_kernel.status_handles(metrics)
 
 
-def llr40_figure(
+def kernel_figure(
     rows: Sequence[Row],
     tag_kernels: Sequence[str],
     title: str = "",
-    baseline: str = LLR40_BASELINE,
+    baseline: str = BASELINE,
     offset: float = 0.0,
-    panel_height_in: float = LLR40_PANEL_HEIGHT_IN,
+    panel_height_in: float = PANEL_HEIGHT_IN,
 ) -> matplotlib.figure.Figure:
-    """The llr40 compiler figure: DaCe's own canon-sweep columns and every model's CPF setup on
-    ONE kernel axis, a speedup panel (log2, ratio-labelled ticks) over a tokens-spent panel when
-    any row spends tokens (:func:`llr40_metrics`), each with per_kernel's summary column past a
+    """The per-kernel figure: canon-sweep columns and setups on ONE kernel axis, a speedup panel (log2, ratio-labelled ticks) over a tokens-spent panel when
+    any row spends tokens (:func:`kernel_metrics`), each with per_kernel's summary column past a
     dashed separator -- one slot per row, the geomean with its 95% interval on both panels, over
     the kernels the row solved, value printed.
 
@@ -487,7 +477,7 @@ def llr40_figure(
     if not rows:
         raise ValueError("no row to draw")
     style.apply()
-    metrics = llr40_metrics(rows, tag_kernels, baseline)
+    metrics = kernel_metrics(rows, tag_kernels, baseline)
     return per_kernel.figure_panels(
         metrics,
         sorted(tag_kernels),
@@ -528,39 +518,39 @@ def token_summary_table(rows: Sequence[Row]) -> pd.DataFrame:
     return rules.require_interval(frame, "gm_tokens", "gm_tokens_low", "gm_tokens_high")
 
 
-def llr40_two_row_figure(
+def kernel_comparison(
     canon_frame: pd.DataFrame,
     observations: pd.DataFrame | None,
     tag_kernels: Sequence[str],
     out: pathlib.Path,
-    baseline: str = LLR40_BASELINE,
-    canon_columns: Sequence[str] = LLR40_CANON_COLUMNS,
-    conditions: Sequence[str] = LLR40_CONDITIONS,
-    pattern: re.Pattern[str] = llr40_setups.SETUP_PATTERN,
+    canon_columns: Sequence[str],
+    pattern: re.Pattern[str] | None = None,
+    conditions: Collection[str] | None = None,
+    baseline: str = BASELINE,
     title: str = "",
     dpi: float = 150.0,
     labels: Mapping[str, str] | None = None,
     offset: float = 0.0,
     mark_pending: bool = False,
     baseline_fallback: str = "",
-    panel_height_in: float = LLR40_PANEL_HEIGHT_IN,
+    panel_height_in: float = PANEL_HEIGHT_IN,
 ) -> pathlib.Path:
-    """Build the llr40 compiler rows, write their tables (Rule 4's costs, rules 5/7's
+    """Build the per-kernel rows (:func:`kernel_rows`), write their tables (Rule 4's costs, rules 5/7's
     intervals -- :func:`write_tables`, :func:`token_summary_table`) and render the two-panel
-    figure. The ONE function a script calls; ``statistics/plot_llr40_compilers.py`` only parses args.
+    figure. The ONE function ``statistics/plot_score_change.py --per-kernel`` calls.
     ``labels`` renames a row by its framework or setup key (a paper's own name for a column); the
     tables carry the same names the legend does.
     ``dpi`` defaults to 150 -- this figure's own review/paper convention, not
     :func:`~hpcagent_bench.stats.style.save`'s general-purpose 200.
     """
-    rows = llr40_rows(
+    rows = kernel_rows(
         canon_frame,
         observations,
         tag_kernels,
-        baseline,
         canon_columns,
-        conditions,
         pattern,
+        conditions,
+        baseline,
         mark_pending,
         baseline_fallback,
     )
@@ -569,7 +559,7 @@ def llr40_two_row_figure(
     tokens = token_summary_table(rows)
     if not tokens.empty:
         tokens.to_csv(out.with_name(f"{out.name}-tokens-summary.csv"), index=False)
-    fig = llr40_figure(rows, tag_kernels, title, baseline, offset, panel_height_in)
+    fig = kernel_figure(rows, tag_kernels, title, baseline, offset, panel_height_in)
     return style.save(fig, out, formats=("pdf", "png"), fixed=True, dpi=dpi)
 
 

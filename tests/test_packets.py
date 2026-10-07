@@ -40,7 +40,7 @@ def test_resolve_cpf_stages_the_page_and_the_dir_env() -> None:
 def test_resolve_cpf_src_stages_its_own_page_and_sets_the_dropin_env() -> None:
     """cpf-src stages exactly the ``cpf-src`` page -- the drop-in's own comment reference -- alongside
     the drop-in directory env; the drop-in file itself is staged by materialize_shared.sh, not by a
-    skill page, so the packet's only page is the one explaining what is now sitting in that file."""
+    skill page, so the packet's only page is the one explaining what sits in that file."""
     resolved = packets.resolve("cpf-src", "c", environ={"CPF_VIEW": "/views/dropin"})
     assert resolved.key == "cpf-src"
     assert resolved.skills == ("cpf-src",)

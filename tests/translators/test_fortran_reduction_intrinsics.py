@@ -5,10 +5,10 @@
 
 Lowering expands a numpy call to explicit loops for every target. That is the only choice C has,
 and in Fortran it throws away the compiler's own ``SUM`` / ``MAXVAL`` / ``PRODUCT`` -- vectorized,
-and self-documenting where a loop nest is anonymous. ``emit_call`` could already render every one
-of these; nothing ever reached it, because lowering had consumed the call first.
+and self-documenting where a loop nest is anonymous. ``emit_call`` renders every one of these, but
+only if lowering does not consume the call first.
 
-The Fortran driver now hands ``lower()`` :func:`numpyto_fortran.intrinsics.renders_natively`, so the
+The Fortran driver hands ``lower()`` :func:`numpyto_fortran.intrinsics.renders_natively`, so the
 claimed calls survive to emit. The test is in two halves and needs both: the emitted TEXT must be
 the intrinsic (an equally-correct loop would pass a numbers-only test and defeat the point), and the
 numbers must still match numpy (an intrinsic spelled wrong compiles fine).

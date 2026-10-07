@@ -5,9 +5,9 @@
 
 numpy's ``f = field`` is the same buffer, so a helper that fills halo corners through ``f`` writes the
 caller's array. Inlining that helper into a time-step loop leaves the alias INSIDE the loop body, where
-the fold used to look only at the function's top-level statements: the native backends then copied
-``q`` into a fresh ``f``, the corner fills never reached ``q`` and every later read of ``q`` saw
-unfilled corners (fv3_dycore's C result disagreed with numpy from the first step on).
+a fold over only the function's top-level statements misses it: the native backends then copy ``q``
+into a fresh ``f``, the corner fills never reach ``q`` and every later read of ``q`` sees unfilled
+corners (fv3_dycore's C result disagrees with numpy from the first step on).
 """
 
 import ast

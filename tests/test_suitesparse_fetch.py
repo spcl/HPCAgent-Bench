@@ -2,9 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """A SuiteSparse fetch publishes the matrix by one rename, so no reader sees a partial file.
 
-Two jobs sharing a cache fetched Schmid/thermal1 at once; one process read the ``.mtx`` while the other
-was still extracting it ("Not a Matrix Market file", "Truncated file"). The fetch now stages the
-download and extraction privately and renames the finished directory into the cache.
+Two jobs sharing a cache can fetch one matrix at once; a process reading the ``.mtx`` while the other is
+still extracting it sees "Not a Matrix Market file" / "Truncated file". The fetch stages the download and extraction privately and renames the finished directory into the cache.
 """
 
 import io

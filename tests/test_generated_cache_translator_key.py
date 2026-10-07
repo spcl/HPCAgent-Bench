@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The generated-reference cache (``references.generated_cache_dir``) is keyed on the translator.
 
-Its key hashed only ``<module>_numpy.py``, so a translator fix never reached the judge: after the
-N-D FFT lowering landed, the cache kept serving the naive-DFT C of ls3df_scf, cegterg, vexx_k and
-vloc_psi_k_acc. A translator source edit must now miss and re-emit; an unchanged translator must hit.
+A key over ``<module>_numpy.py`` alone keeps serving stale output after a translator change (e.g.
+naive-DFT C after an FFT lowering lands). A translator source edit must miss and re-emit; an
+unchanged translator must hit.
 """
 
 import pathlib

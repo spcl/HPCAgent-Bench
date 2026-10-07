@@ -9,7 +9,6 @@ ratio with a ``population.py`` speedup.
 
 import collections
 import math
-import warnings
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
@@ -18,7 +17,6 @@ from hpcagent_bench.stats.population import NOT_DELIVERED, series_of
 __all__ = [
     "read_status",
     "read_times",
-    "speedups",
     "tag_speedups",
     "with_fallback",
 ]
@@ -56,21 +54,6 @@ def with_fallback(
     if not filled:
         return times, filled
     return {**times, baseline: {**base, **{k: spare[k] for k in filled}}}, filled
-
-
-def speedups(times: dict[str, dict[str, float]], baseline: str, column: str) -> list[float]:
-    """Per-kernel baseline/column ratios, over the kernels both measured.
-
-    A column absent from ``times`` contributes nothing. A measured column that missed a baseline
-    kernel drops it with a warning.
-    """
-    base = times.get(baseline, {})
-    cur = times.get(column, {})
-    if column in times:
-        missing = sorted(k for k in base if k not in cur)
-        if missing:
-            warnings.warn(f"{column}: missing {len(missing)} kernel(s) {baseline} measured: {missing}")
-    return [base[k] / cur[k] for k in sorted(base) if k in cur]
 
 
 def tag_speedups(

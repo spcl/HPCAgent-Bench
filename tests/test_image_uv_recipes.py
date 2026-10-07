@@ -3,7 +3,7 @@
 """The image recipes and the tooling around them install Python only through uv sync from uv.lock.
 
 uv.lock decides every version. An image installs only what it builds from source (the image-python groups); every
-other locked package is installed when a job starts (containers/lib/launch_venv.sh). Static: the checks read files.
+other locked package is installed when a job starts (containers/images/lib/launch_venv.sh). Static: the checks read files.
 """
 
 import pathlib
@@ -14,7 +14,7 @@ import pytest
 
 ROOT: pathlib.Path = pathlib.Path(__file__).resolve().parents[1]
 IMAGES: pathlib.Path = ROOT / "containers" / "images"
-LIB: pathlib.Path = ROOT / "containers" / "lib"
+LIB: pathlib.Path = ROOT / "containers" / "images" / "lib"
 JUDGE_AGENT: tuple[str, ...] = ("judge-agent-amd", "judge-agent-cpu", "judge-agent-cuda")
 EXTRA_OF: dict[str, str] = {"judge-agent-amd": "amdgpu", "judge-agent-cpu": "cpu", "judge-agent-cuda": "nvgpu"}
 HARNESS_GROUPS: tuple[str, ...] = ("harness-miniswe", "harness-openhands")
@@ -97,7 +97,7 @@ def test_the_launch_venv_installs_the_extra_and_the_proxy_and_never_an_image_bui
         f"--no-install-package {word}" for word in args.split("--no-install-package ")[1:] for word in [word.strip()]
     }, args
     assert 'ENTRYPOINT ["/opt/launch/launch_venv.sh"]' in text
-    assert re.search(r"^COPY .*containers/lib/launch_venv.sh.* /opt/launch/$", text, re.MULTILINE)
+    assert re.search(r"^COPY .*containers/images/lib/launch_venv.sh.* /opt/launch/$", text, re.MULTILINE)
     judge = text[text.index("FROM agent AS judge") :]
     assert "sed -i 's/^--no-install-project //' /opt/launch/sync.args" in judge, "a judge job installs hpcagent_bench"
     assert "package_hook.sh" not in judge
@@ -109,8 +109,8 @@ def test_the_launch_venv_installs_the_extra_and_the_proxy_and_never_an_image_bui
 def test_every_wheel_gate_runs_in_a_launch_venv_the_image_does_not_keep(image: str) -> None:
     text = recipe(image)
     gate = re.search(
-        r"RUN HPCAGENT_BENCH_LAUNCH_ROOT=/opt/launch-gate [^\n]*/opt/launch/launch_venv\.sh sh -eux -c '(.*?)' \\\n"
-        r"    && rm -rf /opt/launch-gate",
+        r"HPCAGENT_BENCH_LAUNCH_ROOT=/opt/launch-gate [^\n]*/opt/launch/launch_venv\.sh sh -eux -c '(.*?)' \\\n"
+        r"    && rm -rf /opt/launch-gate[^\n]* /opt/hpcagent-bench-agent/hpcagent_agent",
         text,
         re.DOTALL,
     )

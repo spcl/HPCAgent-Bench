@@ -61,8 +61,8 @@ def test_axis_list_normalizes_negative_and_tuple() -> None:
 
 
 def test_negative_axis_now_reduces() -> None:
-    # Before the fix ``axis=-1`` was left verbatim (parsed as a UnaryOp, not a
-    # constant), so numba/pythran saw the unsupported axis form.
+    # ``axis=-1`` parses as a UnaryOp, not a constant; left verbatim, numba/pythran
+    # see the unsupported axis form.
     src = "def k(x, out):\n out[:] = np.max(x, axis=-1)\n"
     kir = kir_("k", x=("M", "N"), out=("M",))
     got = desugar_for_python_backend(src, kir, backend="numba")
@@ -169,7 +169,7 @@ def test_body_evidence_overrides_poisoned_callsite_rank() -> None:
 
 # numerical: bit-exact vs numpy on numba (the reduction the raw njit rejects)  #
 # numba is the backend these reductions block (keepdims / tuple axis raise a
-# TypingError when njit'd verbatim); the op-oracle now emits through the same
+# TypingError when njit'd verbatim); the op-oracle emits through the same
 # desugar the real oracle uses, so ``ok`` here means genuinely-lowered-and-exact.
 
 
@@ -202,10 +202,9 @@ def test_tuple_axis_pool_matches_numpy_on_numba() -> None:
 
 
 # method-form reductions on an EXPRESSION receiver                            #
-# ``X.sum(...)`` only ever reached the expanders when X was a bare Name. An
-# expression receiver walked through to the emitter and died there as "call to
-# ((data - mean) ** 2).sum not supported" (correlation, nbody, vgg16, srad and
-# six more). Lowering now normalises every such method to np.<op>(X, ...).
+# An expression receiver must not walk through to the emitter and die there as
+# "call to ((data - mean) ** 2).sum not supported" (correlation, nbody, vgg16,
+# srad, ...). Lowering normalises every such method to np.<op>(X, ...).
 
 
 def lowered_c(src, func, arrays, shapes):

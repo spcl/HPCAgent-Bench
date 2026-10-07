@@ -329,7 +329,7 @@ def test_a_helpers_own_recipe_collapses_through_to_the_caller_symbol() -> None:
     # ``_bottleneck``'s ``oh2``/``ow2`` are a SECOND spelling of the same extent the second conv's
     # own OUT-param already carries as ``sh1``/``sw1`` (both mean "this bottleneck's spatial
     # size"). Once inlined, the specialised third ``_conv2d`` reads ``oh2``/``ow2`` for its own
-    # ``h``/``w``, and the fix must chase that all the way to ``sh1``/``sw1`` -- stopping one hop
+    # ``h``/``w``, and binding must chase that all the way to ``sh1``/``sw1`` -- stopping one hop
     # short leaves the intermediate ``__inl<k>_oh2`` name in the body with no declaration.
     source = emit_dace(kir_of(CONV_CHAIN_KERNEL, CONV_CHAIN_BENCH, "conv_chain_demo"))
     programs = [n.name for n in ast.parse(source).body if isinstance(n, ast.FunctionDef)]

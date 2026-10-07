@@ -36,7 +36,7 @@ def test_the_material_step_runs_in_the_setups_language_and_target(
     problems.write_text('{"kernel": "k", "task": "t"}\n')
     env_file = tmp_path / ".env.setup"
     env_file.write_text(f"SETUP=setup\nPROBLEMS_FILE={problems}\nLANGUAGE={language}\n{AGENT_EDF}\n")
-    # prepare_job.sh now refuses to start a step before its EDF exists on disk (6348a57ff), so the
+    # prepare_job.sh refuses to start a step before its EDF exists on disk, so the
     # staging container needs one at the default $HOME/.edf path it resolves to.
     edf_dir = tmp_path / ".edf"
     edf_dir.mkdir()
@@ -57,10 +57,10 @@ def test_the_material_step_runs_in_the_setups_language_and_target(
 
 
 def test_host_steps_run_the_hosts_python311_not_the_sles_python3(tmp_path: pathlib.Path) -> None:
-    """The batch host's python3 is SLES 3.6 (the login node's too since), which cannot
-    import hpcagent_bench: a job whose inherited PATH lacked the venv died in the host-side CPF gate,
-    which, like the manifest step, ran the bare ``python3``. Every host step now runs
-    ``HPCAGENT_BENCH_HOST_PYTHON`` (run_cluster.sh exports it), never whatever python3 PATH finds."""
+    """The batch host's python3 (and the login node's) is SLES 3.6, which cannot import
+    hpcagent_bench, so a host step on the bare ``python3`` dies when the inherited PATH lacks the
+    venv. Every host step runs ``HPCAGENT_BENCH_HOST_PYTHON`` (run_cluster.sh exports it), never
+    whatever python3 PATH finds."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     sles = bin_dir / "python3"

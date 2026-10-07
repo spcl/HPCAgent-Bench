@@ -8,8 +8,7 @@ synchronised -- a 2.2x undercount, reported as a speedup. It also leaves the dev
 next setup's sample, so an A/B between two setups mixes them.
 
 The test drives the two timer entry points with a fake device module, because the property under
-test is "was the device waited for", which is observable without a GPU and is exactly what
-regressed. The CPU direction is asserted too: a synchronize there would import a device module on
+test is "was the device waited for", which is observable without a GPU. The CPU direction is asserted too: a synchronize there would import a device module on
 a host-only run, which is its own failure.
 """
 
@@ -81,12 +80,11 @@ def test_both_timer_ends_synchronize(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_every_gpu_framework_reaches_a_synchronize() -> None:
-    """The fix lives in the BASE, so a GPU framework cannot miss it by not overriding a timer.
+    """The synchronize lives in the BASE, so a GPU framework cannot miss it by not overriding a timer.
 
-    TVMFramework rides the default host clock and carried the identical undercount until the hook
-    moved down here. CuPy and the torch mixin replace the timer ends outright and synchronize with
+    TVMFramework rides the default host clock, so it relies on the base hook. CuPy and the torch mixin replace the timer ends outright and synchronize with
     device events instead, which is why they are checked for a synchronize of their OWN rather than
-    for the inherited one. PlutoFramework is a THIRD shape now: ``ppcg_hip`` also does its own
+    for the inherited one. PlutoFramework is a THIRD shape: ``ppcg_hip`` also does its own
     device-event wait (the same technique CupyFramework uses, see
     tests/test_ppcg_device_residency.py), while ``pluto``/``ppcg``/``ppcg_cuda`` still fall through
     to the inherited timer -- so its ``stop_timer`` source has to carry BOTH.
@@ -99,7 +97,7 @@ def test_every_gpu_framework_reaches_a_synchronize() -> None:
 
     import inspect
 
-    # Riding the default timer is now safe: the base synchronizes at both ends.
+    # Riding the default timer is safe: the base synchronizes at both ends.
     for cls in (TVMFramework, dace_framework.DaceFramework):
         assert "synchronize_device" in inspect.getsource(cls.stop_timer) or (cls.stop_timer is Framework.stop_timer), (
             f"{cls.__name__} reads the clock without waiting for the device"
@@ -120,7 +118,7 @@ def test_every_gpu_framework_reaches_a_synchronize() -> None:
 
 
 def test_the_base_timer_synchronizes(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The base is where the fix lives now, so it is what the test pins."""
+    """The base is where the synchronize lives, so it is what the test pins."""
     from hpcagent_bench.frameworks.framework import Framework
 
     log = []

@@ -480,7 +480,7 @@ ce_build_args() {
 }
 
 # Exports DACE_COMMIT, the release's dace pin (pyproject.toml [tool.uv.sources] dace): the commit the git mirror must
-# hold for the build's launch gate (the image carries no dace; a job installs it, containers/lib/launch_venv.sh).
+# hold for the build's launch gate (the image carries no dace; a job installs it, containers/images/lib/launch_venv.sh).
 ce_dace_commit() {
     DACE_COMMIT="$("${CE_IMAGES_DIR}/../../helpers/scripts/dace_pin.sh")"
     [[ "${DACE_COMMIT}" =~ ^[0-9a-f]{40}$ ]] || { echo "could not resolve spcl/dace@${DACE_COMMIT}" >&2; return 2; }

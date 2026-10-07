@@ -2,16 +2,14 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """A STRIDED slice is a legal ASSIGNMENT TARGET, not only a legal read.
 
-``SliceFusion`` scalarises a slice-assign into one loop per slice axis, but it read
-only ``lower``/``upper`` and refused outright when a ``step`` was present --
-``NotImplementedError: slice step != 1 not supported``. The read side has carried the
-stride for a while (``lo[:] = b[0::2]``), so the deinterleave half of every
-wavelet/FFT/pack kernel lowered while the interleave half did not, and the reference
-had to spell the store as an index loop.
+``SliceFusion`` scalarises a slice-assign into one loop per slice axis, and must honour a
+``step`` on the target as the read side does (``lo[:] = b[0::2]``), or the interleave half of
+every wavelet/FFT/pack kernel refuses (``NotImplementedError: slice step != 1 not supported``)
+while the deinterleave half lowers.
 
-The fix iterates the LOGICAL position ``k`` and writes ``start + k * step``, which is
+The store iterates the LOGICAL position ``k`` and writes ``start + k * step``, which is
 also why the RHS mapping needs no division: it already reads the iter var as the
-position. A unit step keeps the old shape exactly -- iter var IS the coordinate, no
+position. A unit step keeps the plain shape exactly -- iter var IS the coordinate, no
 stray ``* 1``, no extra bound arithmetic.
 
 A NEGATIVE step on the target stays refused: numpy seeds the reverse start at

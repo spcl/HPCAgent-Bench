@@ -117,7 +117,7 @@ def test_a_served_policy_scores_a_non_delivery_at_one_rather_than_dropping_it() 
 
 def test_the_served_tag_is_what_the_setup_was_given_not_the_full_tag() -> None:
     """A kernel the setup never saw is a scheduling fact. Entering one at 1.0 would score a setup on
-    how long its job ran: the llr40v9 setups were served 1 to 6 of the 40 kernels before being cut."""
+    how long its job ran: a setup cut early is served only a few of the tag's kernels."""
     with pytest.raises(population.MixedPopulationError, match="never served"):
         population.aggregate_setup("a", "c", {"k1": 4.0, "k9": 2.0}, ["k1", "k2"], population.KernelPolicy.SERVED)
 
@@ -430,7 +430,7 @@ def test_among_valid_answers_the_newest_wins_even_when_an_older_one_was_faster()
 
 
 def test_a_rerun_whose_every_row_is_a_failed_grade_never_supersedes_the_run_before_it() -> None:
-    """A contract-void rerun (09-22 fused waves: the judge refused Triton, the agent shipped C) is
+    """A contract-void rerun (e.g. the judge refused Triton, the agent shipped C) is
     recorded as failed grades (reason ``tainted: ...``); it must not erase the answer of the run it
     was meant to repeat."""
     rows = rerun(
@@ -581,8 +581,8 @@ def test_an_untimed_row_carries_no_reduction_and_does_not_mix_with_a_timed_one()
 
 
 def test_the_score_change_figure_scores_graded_rows_and_costs_task_rows() -> None:
-    """Its loader filtered on ``speedup > 0 and tokens > 0``, and only a ``call`` row has both, so
-    every graded submission was dropped and the figure scored intermediate rounds. The two axes come
+    """Only a ``call`` row has both ``speedup > 0`` and ``tokens > 0``, so filtering on both drops
+    every graded submission and scores intermediate rounds. The two axes come
     off different record types -- the answer off submissions, the cost off the task record -- and
     neither may be read from a call row."""
     rows = submissions(
@@ -698,7 +698,7 @@ def test_a_frame_with_call_rows_and_no_task_records_is_refused_for_cost() -> Non
     """Costing a frame extracted before task records existed off its call rows would report the last
     attempt's running count as the task's spend, so it is refused and names the re-extraction."""
     rows = submissions([{"row_kind": "call", "episode_id": "w0", "tokens": 900.0, "ts_ms": 5}])
-    with pytest.raises(population.MixedPopulationError, match="no task records"):
+    with pytest.raises(population.MixedPopulationError, match="no episode records"):
         population.kernel_tokens(rows)
 
 

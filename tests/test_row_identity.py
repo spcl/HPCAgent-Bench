@@ -324,7 +324,7 @@ def test_one_run_writing_many_rows_keeps_one_identity(tmp_path: pathlib.Path, ta
 
 
 def test_every_measurement_row_resolves_to_a_run(tmp_path: pathlib.Path, tagged: tuple[str, ...]) -> None:
-    """The join is the only way to an identity now, so a measurement row without a run row is a row
+    """The join is the only way to an identity, so a measurement row without a run row is a row
     no figure can attribute to anything."""
     db = str(tmp_path / "r.db")
     recording.record(

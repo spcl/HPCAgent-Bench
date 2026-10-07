@@ -1,18 +1,14 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """``hpcagent_bench/cluster/run_cluster.sh`` sets an EXIT trap where it creates ``JOB_ENV_FILE`` (the tmpfs
-copy of the job env that podman/docker read; it carries the inference key) and a SECOND, unrelated
-EXIT trap later where it defined ``cleanup_steps``. Bash keeps only the LAST trap registered for a
-given signal, so the second trap silently replaced the first one and the mktemp'd env file was never
-removed -- on a real job or a plain successful exit. The fix folded the removal into that later
-trap.
+copy of the job env that podman/docker read; it carries the inference key). Bash keeps only the LAST
+trap registered for a given signal, so a creation-site EXIT trap is silently replaced by the later
+one and the env file is never removed; the removal lives in ``cleanup_steps_on_exit`` instead.
 
-``cleanup_steps`` has since split into two: ``cleanup_steps_on_exit`` (EXIT only) and
-``cleanup_steps_on_signal`` (INT/TERM). JOB_ENV_FILE is removed ONLY on EXIT: an INT/TERM here falls
-through into the mandatory token-record extraction further down in the real file instead of exiting,
-and that extraction's containerized call still needs the file (podman/docker only) to exist at that
-point, so removing it from the signal path would recreate a version of the very bug this test file
-exists to catch -- just moved from "never removed" to "removed too early". These tests lift the
+JOB_ENV_FILE is removed ONLY on EXIT, never by ``cleanup_steps_on_signal`` (INT/TERM): an INT/TERM
+falls through into the mandatory token-record extraction further down in the real file instead of
+exiting, and that extraction's containerized call still needs the file (podman/docker only) --
+removing it on the signal path removes it too early. These tests lift the
 exact creation lines and the exact ``cleanup_steps_on_exit`` / ``cleanup_steps_on_signal`` / `trap`
 lines straight out of the file (never retyped) and run only those, the same "read the real text, run
 only the real text" approach ``test_run_cluster_cache_env.py`` and ``test_run_cluster_frozen_tree.py``
@@ -35,9 +31,8 @@ CLEANUP_START = "step_pids=()\n"
 CLEANUP_END = "trap cleanup_steps_on_signal INT TERM\n"
 CLEANUP_BLOCK = TEXT[TEXT.index(CLEANUP_START) : TEXT.index(CLEANUP_END) + len(CLEANUP_END)]
 
-# JOB_ENV_FILE is never removed by its own creation-site trap any more (see docstring); this test
-# pins that the old, now-dead `trap ... EXIT` line stays gone rather than quietly creeping back in
-# and shadowing cleanup_steps_on_exit's removal again.
+# JOB_ENV_FILE is never removed by a creation-site trap (see docstring); such a `trap ... EXIT`
+# line would shadow cleanup_steps_on_exit's removal.
 assert "trap 'rm -f " not in CREATE_BLOCK, "a creation-site EXIT trap on JOB_ENV_FILE reappeared"
 assert 'rm -f "${JOB_ENV_FILE:-}"' in CLEANUP_BLOCK, "cleanup_steps_on_exit no longer removes JOB_ENV_FILE"
 # The removal must stay EXIT-only: an INT/TERM falls through into extraction in the real file, which
@@ -80,7 +75,7 @@ def test_a_plain_exit_removes_the_job_env_file(tmp_path: pathlib.Path) -> None:
 def test_a_sigterm_still_removes_the_job_env_file(tmp_path: pathlib.Path) -> None:
     """The file is still gone once the process actually exits after a TERM (scancel, or the job's
     time limit), not only on a clean exit -- even though cleanup_steps_on_signal (the INT/TERM trap)
-    itself no longer removes it directly (see docstring). Bash still runs the EXIT trap
+    itself does not remove it directly (see docstring). Bash still runs the EXIT trap
     (cleanup_steps_on_exit) once the script falls off its own end, which is what actually removes
     the file here, the same way falling through to the real file's mandatory extraction ends in its
     own `exit` and the same EXIT trap.

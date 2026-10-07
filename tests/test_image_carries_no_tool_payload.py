@@ -3,7 +3,7 @@
 """The judge-agent images carry tool dependencies and the hpcagent_agent hook, never the tool code.
 
 The agent runtime (hpcagent_agent) is bound from the submitting checkout at launch; the image holds only its
-editable-install hook (containers/lib/package_hook.sh). A tool script or registry copied
+editable-install hook (containers/images/lib/package_hook.sh). A tool script or registry copied
 into an image goes stale the next commit, which is how a stale registry reached the suite. Static checks
 over the recipes and the verifier, plus a run of the launch check against a fake agent tree.
 """

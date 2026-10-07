@@ -3,12 +3,12 @@
 """``np.minimum`` / ``np.maximum`` keep integer operands EXACT (C and C++).
 
 Both lower to the ``__npb_fmin`` / ``__npb_fmax`` prelude helpers, which exist because libm's
-``fmin`` / ``fmax`` suppress NaN while numpy propagates it. Those helpers took ``double``
-arguments, so an integer kernel converted both operands to double first -- exact only up to
-2**53. ``min(2**53 + 1, 2**53 + 2)`` returned 2**53: not the smaller operand, not either operand.
+``fmin`` / ``fmax`` suppress NaN while numpy propagates it. Taking ``double`` arguments would
+convert an integer kernel's operands to double first -- exact only up to 2**53, so
+``min(2**53 + 1, 2**53 + 2)`` would return 2**53: not the smaller operand, not either operand.
 
-The numerical oracle compares with a tolerance, so it rated that a pass; only an exact check
-catches it. The helpers now dispatch on the operand type the same way ``int_floor`` does
+The numerical oracle compares with a tolerance, so it would rate that a pass; only an exact check
+catches it. The helpers dispatch on the operand type the same way ``int_floor`` does
 (``_Generic`` in C, ``if constexpr`` in C++), so integers compare as integers and floats keep the
 NaN-propagating form -- which is what the second half of this test pins.
 """

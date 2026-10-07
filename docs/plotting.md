@@ -17,7 +17,7 @@ Every figure in the HPCAgent-Bench papers follows these rules. A figure that bre
    ticks labeled back in ratios (`style.ratio_tick_label`). Never `signed_change` (ratio - 1), never a
    bare ratio axis.
 3. **Statistics per Hoefler and Belli (SC15)**, as `stats.rules` encodes them: paired per kernel, the
-   geomean of per-kernel ratios with the log-space t 95% interval (`summary.geomean_ci`) for speedup
+   geomean of per-kernel ratios with the 95% BCa bootstrap interval (`summary.geomean_ci`) for speedup
    and cost. Nothing is joined by a trend line (rule 12); the emitted table carries raw milliseconds
    and token counts (rule 4). Speedup and token cost never share one axis.
 4. **Colour = model, shape = treatment.** One registry, one lookup per channel, the same answer in
@@ -45,11 +45,11 @@ Every figure in the HPCAgent-Bench papers follows these rules. A figure that bre
    rule between languages. Several packets in one panel (`intervention=packets`) sit under their
    language's tick in their own shapes; a harness panel (`intervention=harness`) gives each harness
    its own group and shape. Speedup and cost are geometric means over kernels with 95% bootstrap
-   intervals from five kernels. Compiler/framework comparators (`comparators=`) sit after the
+   intervals from `summary.MIN_PAIRS_FOR_INTERVAL` (6) kernels. Compiler/framework comparators (`comparators=`) sit after the
    models of their delivery on the speedup and solved rows only, in `palette.framework_color` and
    an optimizer shape no packet wears (`figures.efficacy.comparator_shapes`). The paper key has four
    columns (`PAPER_CONFIG.legend_ncol`, compact spacing).
-6. **Per-kernel figure** (MPR/CPF): wide, two rows on one kernel axis: log2 speedup per kernel with
+6. **Per-kernel figure** (`plot_score_change.py --per-kernel`): wide, two rows on one kernel axis: log2 speedup per kernel with
    its interval on top, tokens per kernel below. Past a dashed separator, one summary slot per
    series: speedup = geomean with 95% bootstrap interval over the SOLVED kernels, tokens = median over
    the served kernels. The tokens row is omitted when no series carries tokens.
@@ -86,7 +86,7 @@ Further conventions:
   stay out of names.
 - **Baseline is a property of the data**: `population.one_denominator` reads the column the judge
   stamped and refuses a mix; `DEFAULT_BASELINE` (`numba`) is only the fallback.
-- **Costs.** A kernel's tokens come from its task row (`population.kernel_tokens`), priced with the
+- **Costs.** A kernel's tokens come from its episode row (`population.kernel_tokens`), priced with the
   `billed` card unless `--cost-model` names another (`stats.cost.add_arguments`). A summary over
   kernels is the geometric mean, never a median, and never over episodes in a cell.
 - **Intervals.** No normality is assumed (Hoefler and Belli Rule 6). A summary interval is the 95% BCa
@@ -115,7 +115,7 @@ Registered studies (`hpcagent_bench.experiments`) extract by name, reading their
 roots and the owed waves' `owed-<study>-<date>` roots, and fuse final-grade rows:
 
 ```bash
-python -m hpcagent_bench.dataset --study llr40-blind \
+python -m hpcagent_bench.dataset --study llr-focus40-blind \
     --regrades "$RUN_ROOT/regrades/regrade-*.db" --out data/llrblind.db --csv data/llrblind.csv
 ```
 
@@ -130,7 +130,7 @@ python -m hpcagent_bench.dataset --study llr40 --db hpcagent-bench-v1-final2.db 
 Regrade precedence, exempt submissions and promotion:
 [measurement_statistics.md](measurement_statistics.md#the-final-grade-mw4x5) and
 [experiments/README.md](../experiments/README.md#owed-kernels). Speedup comes from `submission`
-rows, cost from `task` rows, both reduced by `hpcagent_bench.stats.population` (latest valid
+rows, cost from `episode` rows, both reduced by `hpcagent_bench.stats.population` (latest valid
 submission per kernel; the task's final-attempt tokens); the one-reduction checks run over each
 episode's answer only.
 
@@ -139,19 +139,19 @@ episode's answer only.
 | script | figure | library |
 |---|---|---|
 | `plot_score_change.py` | efficacy: speedup, tasks completed and token cost per comparison | `figures.efficacy.figure_dot_row` |
-| `plot_llr40_compilers.py` | llr40 per kernel: canon columns, Pluto, PPCG-HIP, optional CPF setups | `figures.signed.llr40_two_row_figure` |
+| `plot_score_change.py --per-kernel` | every kernel of a tag: canon columns (compilers) and setups over one baseline, tokens below | `figures.signed.kernel_comparison` |
 | `plot_setup_summary.py` | per-setup geomean speedup and median spend, one slot per language | `stats.summary`, `palette` |
 | `plot_scaling.py` | distributed track: eta(P), sigma(P), per-kernel, per-setup summary | `figures.scaling` |
-| `plot_canon_speedup.py` | median speedup per framework from one canon sweep (`--db`) | `stats.canon` |
 | `plot_repeats.py` | every run of a designed repeat per kernel (repeat5): a box per setup, each run a dot | `figures.per_kernel.runs_figure`, `stats.reliability` |
 | `plot_speedup.py` | corpus figures from the results DB | see [measurement_statistics.md](measurement_statistics.md) |
 
-Run any script with `-h` for its flags.
-
-Quick looks at one experiment:
+Run any script with `-h` for its flags. Worked commands for every figure, with the default protocol
+behind the numbers: [statistics/README.md](../statistics/README.md#examples). Every command writes the
+PDF, a PNG beside it and the CSV behind every mark; open the PNG and check the CSV's `solved` column
+before quoting a figure.
 
 ```bash
-python statistics/plot_setup_summary.py data/observations.csv --experiment llr40v11 \
+python statistics/plot_setup_summary.py data/llr40.db --experiment llr40 --setups 'llr40-(qwen38|oss120b)-.*' \
     --out figures/setups.pdf --table data/setups.csv
 ```
 
@@ -170,81 +170,9 @@ python statistics/plot_repeats.py data/repeat5.db --tag repeat5 --out figures/re
     --table data/repeat5-reliability.csv
 ```
 
-## The paper figures, end to end
-
-Every command writes the PDF, a PNG beside it and the CSV behind every mark. Before using a figure,
-open the PNG (legend, ticks and value labels must not collide) and check the CSV's `solved` column
-against what the text claims.
-
-### Setup and inputs
-
-```bash
-export HPCAGENT_BENCH_REPO=$PWD
-. "$HPCAGENT_BENCH_REPO/hpcagent_bench/cluster/env.sh"     # PYTHONHASHSEED=0: byte-reproducible
-export MPLBACKEND=Agg                             # headless
-export AR=/path/to/reproducibility-artifact       # per-track observations + pair tables
-export CANON_DB=/path/to/results/canon.db         # canon sweep, table `canon`
-```
-
-| input | what | from |
-|---|---|---|
-| `$AR/experiments/<track>/data/<track>.{csv,db}` | observations | extraction, above |
-| `$AR/experiments/<track>/tables/*_billed.csv` | pair tables | `statistics/paired_setups.py` |
-| `$CANON_DB` | median time per (compiler column, kernel), validated only | canon sweep |
-| tag file | kernels a track is scored over, one per line | derived below |
-
-Derive the llr40 tag from the kernels its control setup was served:
-
-```bash
-python3 -c "
-import pandas as pd
-d = pd.read_csv('$AR/experiments/llr-cpu/data/llr-cpu.csv', low_memory=False)
-print('\n'.join(sorted(set(d[d.setup == 'llr40-kimi27sglang-c'].kernel.astype(str)))))
-" > tag-llr40.txt
-```
-
-Build a pair table (one per comparison; `--policy solved` is the default and is stamped on the CSV,
-and the figure refuses a table built under another policy or card):
-
-```bash
-python statistics/paired_setups.py --observations "$AR/experiments/llr-cpu/data/llr-cpu.csv" \
-    --pair llr40-qwen38-c,llr40-qwen38-c-skills --family skills \
-    --cost-model billed --out "$AR/experiments/llr-cpu/tables/skills_billed.csv"
-```
-
-### 1. Compilers per kernel
-
-![compilers per kernel](figures/example-compilers-per-kernel.png)
-
-```bash
-python3 statistics/plot_llr40_compilers.py \
-    --canon-db "$CANON_DB" --tag-file tag-llr40.txt \
-    --canon-columns pluto,dace_cpu_canonicalize,dace_gpu_canonicalize,ppcg_hip \
-    --offset 0.6 --out figures/compilers-per-kernel
-```
-
-- Numba is the denominator (the 1x line, `--baseline` changes it). Pluto and PPCG are comparators.
-- Filled mark = measured. Hollow crossed mark = no validated result, drawn at 1x, kept as a row of
-  `-kernels.csv` (`canon.tag_speedups`), left out of the summary; read the `n` column of
-  `-summary.csv` before quoting a geomean.
-- `--observations` adds every model's CPF setup. `--offset` spreads a kernel's series across its slot;
-  0 stacks them.
-- When both DaCe device columns appear, each falls back to its `frameworks` name, which carries the
-  device (`signed.distinct_canon_labels`).
-
-### 2. Efficacy figure (`efficacy-packets-and-scope`)
+## Efficacy figure
 
 ![efficacy packets and scope](figures/example-efficacy-packets-and-scope.png)
-
-```bash
-python3 statistics/plot_score_change.py "$AR/experiments/llr-gpu/data/llr-gpu.db" \
-  --comparison "title=Loop Reasoning CPU (LLR);intervention=lang-skills;pairs=$AR/experiments/llr-cpu/tables/skills_billed.csv;observations=$AR/experiments/llr-cpu/data/llr-cpu.db;placeholders=Fortran" \
-  --comparison "title=Loop Reasoning GPU (LLR);intervention=lang-skills;pairs=$AR/experiments/llr-gpu/tables/skills_billed.csv;observations=$AR/experiments/llr-gpu/data/llr-gpu.db;difference=HIP:qwen38,HIP:kimi27sglang" \
-  --comparison "title=Blind (LLR CPU);intervention=lang-skills;pairs=$AR/experiments/llrblind/tables/skills_billed.csv;observations=$AR/experiments/llrblind/data/llrblind.db" \
-  --comparison "title=Repo. Context;intervention=repo;pairs=$AR/experiments/git-scicomp/tables/repo-vs-kernel_billed.csv;observations=$AR/experiments/git-scicomp/data/git-scicomp.db;repeats=median;control-label=Kernel Formulation" \
-  --cost-model billed --row-width acm-text \
-  --out figures/efficacy-packets-and-scope.pdf --table figures/efficacy-packets-and-scope.csv
-```
 
 Drawn by `figures.efficacy.figure_dot_row`. Each column is one model and delivery: control = hollow
 circle, treated = the packet's shape. Rows:
@@ -288,6 +216,24 @@ python statistics/plot_score_change.py scored.csv blind.csv \
 `--row-width {natural,iclr,iclr-wrap,acm-column,acm-text}` sizes a joined row to a page budget.
 `--no-success-row` drops the solved row.
 
+## Per-kernel figure
+
+![compilers per kernel](figures/example-compilers-per-kernel.png)
+
+`--per-kernel` draws one row per `--canon-columns` column of the canon DB and per setup of
+`--experiment` (`<experiment>-<model>-<language>[-<packet>]`, narrowed by `--setups` and
+`--conditions`), every kernel of `--tag-file` on one axis:
+
+- Numba is the denominator (the 1x line; `--baseline` changes it, `--baseline-fallback` times a kernel
+  the baseline did not verify). Compiler columns are comparators.
+- Filled mark = measured. Hollow crossed mark = no validated result, drawn at 1x, kept as a row of
+  `-kernels.csv` (`canon.tag_speedups`), left out of the summary; read the `n` column of
+  `-summary.csv` before quoting a geomean.
+- Without observations only the compiler columns are drawn. `--offset` spreads a kernel's rows across
+  its slot; 0 stacks them. `--mark-pending` draws a kernel a row has not attempted yet as `?`.
+- When both DaCe device columns appear, each falls back to its `frameworks` name, which carries the
+  device (`signed.distinct_canon_labels`).
+
 ## Scaling figures
 
 `statistics/plot_scaling.py` draws the distributed track from the same observations, rows with
@@ -312,7 +258,7 @@ as scaling rows under the pseudo-setup `torch_dist`, and every overlay panel dra
 control's grey, dashed, beside the models; `--no-torch-dist` leaves it out.
 
 ```bash
-OBS="$AR/data/mlscale_observations.csv"
+OBS=data/mlscale20.db  # python -m hpcagent_bench.dataset --study mlscale20 --out data/mlscale20.db
 python statistics/plot_scaling.py "$OBS" --experiment mlscale --out figures/scaling --table data/scaling.csv
 python statistics/plot_scaling.py "$OBS" --experiment mlscale --figure efficiency --out figures/scaling
 python statistics/plot_scaling.py "$OBS" --experiment mlscale --figure speedup --out figures/scaling

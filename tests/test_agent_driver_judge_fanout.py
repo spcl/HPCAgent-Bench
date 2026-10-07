@@ -83,8 +83,8 @@ def test_a_single_judge_with_no_nodelist_falls_back_to_the_base_url(
 def test_one_node_running_several_judges_is_not_the_single_judge_fallback(
     driver: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The old guard was ``len(nodes) < 2``, which collapsed a four-judge single node onto
-    JUDGE_BASE_URL -- three of its four judges would have gone unused."""
+    """A ``len(nodes) < 2`` guard would collapse a four-judge single node onto JUDGE_BASE_URL,
+    leaving three of its four judges unused."""
     monkeypatch.setenv("JUDGE_NODELIST", "nidA")
     monkeypatch.setenv("JUDGES_PER_NODE", "4")
     monkeypatch.setenv("JUDGE_PORT", "8800")

@@ -21,7 +21,7 @@ import pytest
 
 from tests.fresh_module import fresh
 
-#: The closing event of a timed-out agent, verbatim in shape from a 626523 claude.log.
+#: The closing event of a timed-out agent, verbatim in shape from a real claude.log.
 TIMED_OUT = (
     '{"type":"result","subtype":"success","is_error":true,"num_turns":52,'
     '"duration_ms":8922712,"duration_api_ms":8138067,"result":"API Error: The operation timed out."}\n'

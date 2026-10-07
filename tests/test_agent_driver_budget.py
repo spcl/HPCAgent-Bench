@@ -209,17 +209,13 @@ def claude_log_content(input_tokens: int, output_tokens: int) -> str:
 def test_tokens_json_keeps_its_old_keys_and_gains_the_relaunch_record(
     driver: ModuleType, tmp_path: pathlib.Path
 ) -> None:
-    """T1-T2/T5: tokens.json still carries the final attempt's own numbers under their old names
-    unchanged -- they ARE the task's cost now -- and gains what the relaunch did to the task:
-    attempts, the policy, when the final attempt started, and what the crashed ones spent.
+    """T1-T2/T5: tokens.json carries the final attempt's own numbers under their original names
+    -- they ARE the task's cost -- plus what the relaunch did to the task: attempts, the policy,
+    when the final attempt started, and what the crashed ones spent.
 
-    PROPERTY CHANGED on purpose: this asserted tokens_effective_all_attempts /
-    tokens_billed_all_attempts, the sum over every attempt. A fresh relaunch throws the earlier
-    attempts' work away, so that sum prices work no answer was built from.
-
-    Two breakdown names CHANGED with token fold 2 (T7-T9, F8): ``thinking`` is now
-    ``thinking_estimate`` because it is added to nothing, and ``generated`` is gone because it had
-    become a second copy of ``output``.
+    No sum over every attempt: a fresh relaunch throws the earlier attempts' work away, so that sum
+    prices work no answer was built from. Under token fold 2 (T7-T9, F8) the breakdown names
+    ``thinking_estimate`` (added to nothing) and carries no ``generated`` (a copy of ``output``).
     """
     (tmp_path / "claude.attempt1.log").write_text(claude_log_content(1000, 100), encoding="utf-8")
     (tmp_path / "claude.log").write_text(claude_log_content(2000, 200), encoding="utf-8")

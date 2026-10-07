@@ -38,7 +38,7 @@ def native_sources(cpp_backend: pathlib.Path, short: str, framework: str) -> lis
     Most frameworks compile what the translator emitted. The polyhedral columns do not: ``pluto``
     compiles what POLYCC emitted FROM that and the PPCG columns what ppcg emitted, both generated
     here on demand, because a Pluto column built from the untransformed source is a clang column
-    wearing Pluto's label, which is what this used to be. Keyed on the framework rather than the
+    wearing Pluto's label. Keyed on the framework rather than the
     language for exactly that reason: which sources a column compiles is a property of the column,
     not of the file extension."""
     transform = FRAMEWORKS.entries[framework].get("transform")

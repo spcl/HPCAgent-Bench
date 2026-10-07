@@ -11,14 +11,14 @@ division while both operands are still opaque Names it cannot prove integer, so 
 the ``/`` untouched -- correct, since Fortran's default-to-REAL local declaration made
 that division real anyway. ``ForwardSubstituteInvariantScalars`` (POLYCC-001/006) then
 replays each Name's RAW definition straight into the divide, past the point the promoter
-ran. The Fortran emitter's OWN (Call-aware) ``expr_is_integer`` now reads that replayed
-text as genuinely integer and renders the divide as literal Fortran ``/`` between two
-INTEGER operands, which (a) truncates instead of flooring and (b) fails ``aint()``'s
-REAL-only argument check outright -- ``'a' argument of 'aint' intrinsic ... must be REAL``.
+ran. The Fortran emitter's OWN (Call-aware) ``expr_is_integer`` reads that replayed text as
+genuinely integer, and a literal Fortran ``/`` between two INTEGER operands (a) truncates
+instead of flooring and (b) fails ``aint()``'s REAL-only argument check outright --
+``'a' argument of 'aint' intrinsic ... must be REAL``.
 
-The fix promotes an int/int true-division to double kind at the BinOp emission site
-itself (mirroring numpy's own int/int -> float64 rule), so it holds regardless of which
-earlier pass produced the operand text. Asserted twice: the division must (1) not exercise
+So an int/int true-division is promoted to double kind at the BinOp emission site itself
+(mirroring numpy's own int/int -> float64 rule), which holds regardless of which earlier
+pass produced the operand text. Asserted twice: the division must (1) not exercise
 a Fortran integer truncation on data where trunc and floor disagree (a negative wrapped
 index), and (2) compile at all, which segments-that-truncate never do.
 """

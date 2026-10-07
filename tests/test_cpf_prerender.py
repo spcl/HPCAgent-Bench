@@ -2,11 +2,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """A shard's rank must finish and record a verdict for every kernel it owns, never kill its siblings.
 
-A job died because a rank returned nonzero for a per-kernel render failure inside its own
-shard; srun's kill-on-bad-exit took the other ranks down mid-render, and the tag-wide check that
-ran afterward mistook their unfinished kernels for misses. The fix moves failure reporting to the
-recorded verdict (:mod:`hpcagent_bench.cpf_cache`) and leaves the rank's own exit status to signal
-only an internal error.
+A rank that returns nonzero for a per-kernel render failure inside its own shard lets srun's
+kill-on-bad-exit take the other ranks down mid-render, and the tag-wide check that runs afterward
+mistakes their unfinished kernels for misses. So failure reporting is the recorded verdict
+(:mod:`hpcagent_bench.cpf_cache`), and the rank's own exit status signals only an internal error.
 """
 
 import argparse
@@ -147,9 +146,9 @@ def _fake_compiler(tmp_path: pathlib.Path, name: str = "cc") -> str:
 def test_require_toolchain_accepts_the_agent_images_own_toolchain(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The render now always runs inside the agent image, whose EDF sets CXX under /opt/gcc and
+    """The render always runs inside the agent image, whose EDF sets CXX under /opt/gcc and
     OPENBLAS_ROOT (not OPENBLAS_DIR) for its baked-in spack view -- prerender_cpf.sbatch's `inner`
-    step maps OPENBLAS_ROOT across, and neither name involves the host's old /spack/ toolchain."""
+    step maps OPENBLAS_ROOT across, and neither name involves a host /spack/ toolchain."""
     monkeypatch.setenv("CXX", _fake_compiler(tmp_path))
     monkeypatch.setenv("OPENBLAS_DIR", str(tmp_path))
     cpf_prerender.require_toolchain()  # must not raise

@@ -3,25 +3,20 @@
 """``hpcagent_bench/cluster/run_cluster.sh``'s service-death handling, right after it launches the three role
 steps and waits on whichever dies first.
 
-Bugs this covers:
+Invariants this covers:
 
-1. When a service step (vLLM or the judge) died while the agents were still running, the batch step
-   used to ``exit 1`` immediately -- before the mandatory results-DB merge below it ever ran,
-   and without writing ``MERGE_FAILED``, so nothing on disk said the merge was skipped.
-2. The merge's own success/failure marker was written only AT that point, which races a SIGTERM
-   (scancel, or the job's time limit) against SIGKILL (KillWait): if the process is killed before it
-   gets there, no marker is left at all. The fix writes the marker unconditionally, before either
-   step can die, and only clears it once the merge actually succeeds -- so every exit from here on
-   leaves the run either merged or visibly marked for a re-merge, with nothing depending on
-   catching the signal that ends it.
-3. Stopping the agent step used to be a raw `kill` on the srun FRONTEND, which srun turns straight
-   into a SIGKILL of its tasks ("srun: forcing job termination") -- never delivering the SIGTERM
-   agent_driver's own handler (note_job_cancellation) needs to write a cancelled marker. The fix
-   resolves the agent step's Slurm step id and signals it through `scancel` instead, which reaches
-   the step's TASKS cleanly through slurmstepd.
-4. A surviving service step (e.g. multi-node inference) used to keep holding its nodes through the
-   reports and the results-DB merge after a service death; only the old `exit 1` released
-   it. The fix stops it too, once the agent step is confirmed down.
+1. When a service step (vLLM or the judge) dies while the agents are still running, the batch step
+   does not ``exit 1``: the mandatory results-DB merge below still runs.
+2. The merge marker is written unconditionally, before either step can die, and cleared only once
+   the merge succeeds -- a marker written at the merge races a SIGTERM (scancel, or the job's time
+   limit) against SIGKILL (KillWait). So every exit leaves the run either merged or visibly marked
+   for a re-merge, with nothing depending on catching the signal that ends it.
+3. The agent step is stopped through `scancel` on its resolved Slurm step id, which reaches the
+   step's TASKS cleanly through slurmstepd. A raw `kill` on the srun FRONTEND becomes a SIGKILL of
+   its tasks ("srun: forcing job termination") and never delivers the SIGTERM agent_driver's own
+   handler (note_job_cancellation) needs to write a cancelled marker.
+4. A surviving service step (e.g. multi-node inference) is stopped too, once the agent step is
+   confirmed down, rather than holding its nodes through the reports and the merge.
 
 These tests lift the exact block -- the marker write, the ``wait -n``, ``resolve_step_id`` /
 ``signal_step``, and the branch that stops the agent step before falling through instead of exiting
@@ -137,10 +132,9 @@ def test_a_dying_service_step_stops_the_agent_and_falls_through_instead_of_exiti
 
 
 def test_a_dying_service_step_also_stops_a_surviving_service_step(tmp_path: pathlib.Path) -> None:
-    """F14: before this, only the removed `exit 1` released a surviving service step's nodes; the
-    agent step going down on its own left a still-running inference/judge step holding them through
-    the reports and the results-DB merge. `other_service_pid` here stands in for that step:
-    nothing in the OLD code touched it at all."""
+    """F14: the agent step going down on its own must not leave a still-running inference/judge
+    step holding its nodes through the reports and the results-DB merge. `other_service_pid` here
+    stands in for that step."""
     run_dir = tmp_path / "run"
     run_dir.mkdir()
     bin_dir = tmp_path / "fakebin"
@@ -169,7 +163,7 @@ def test_a_dying_service_step_also_stops_a_surviving_service_step(tmp_path: path
 
 def test_an_agent_step_that_outlives_its_term_is_force_stopped_after_the_grace(tmp_path: pathlib.Path) -> None:
     """A plain `scancel --signal=TERM` is never followed by a KillWait SIGKILL the way a real job
-    cancellation is, so an agent step whose tasks ignore the TERM used to leave the branch's bare
+    cancellation is, so an agent step whose tasks ignore the TERM would leave the branch's bare
     `wait` hanging -- with the job holding every node -- until the time limit. The stand-ins model
     the two halves of a real step: `task_pid` is the step's TASK (ignores TERM, the only thing
     scancel reaches), `agent_step_pid` the srun FRONTEND, which answers its own TERM by SIGKILLing

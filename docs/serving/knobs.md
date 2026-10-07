@@ -74,12 +74,12 @@ experiment.
   solution`. aiter ships rows for gfx950 and gfx1250 only, so on MI300A qwen38's Gated-DeltaNet `ba`
   projection, GLM-5.3's MoE router and its DSA indexer run hipBLASLt. Don't add our own tuned rows: a
   tuned table chosen for speed picked split-K kernels with bf16 accumulation (up to 3.75% of elements
-  out of tolerance), and qwen38 agents served under it ended in degenerate reasoning loops (10-07).
+  out of tolerance), and qwen38 agents served under it end in degenerate reasoning loops.
 - qwen38's 48 Gated-DeltaNet layers run SGLang's Triton GDN kernels; SGLang 0.5.20 has no aiter GDN
   backend (`--linear-attn-backend` offers triton and NVIDIA/Intel-only choices).
 
-**Kernel cache.** aiter compiles a module the first time a shape needs it, behind a lock file, and the
-build used to vanish with the container. `run_cluster.sh` now keeps one cache per aiter build and GPU
+**Kernel cache.** aiter compiles a module the first time a shape needs it, behind a lock file, and a
+build inside the container dies with it. `run_cluster.sh` keeps one cache per aiter build and GPU
 arch on scratch, `$JIT_CACHE_ROOT/.aiter/aiter-<version>-<gfx>` (`AITER_JIT_DIR`, and `AITER_ROOT_DIR`
 for template ops such as `pa_ragged`), seeded once from the image prebuild of the same arch. The first
 server compiles, every later server and node loads the `.so`: aiter installs a module by atomic copy

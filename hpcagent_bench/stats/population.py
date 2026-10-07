@@ -957,9 +957,11 @@ def episode_tokens(frame: "pd.DataFrame", by: Sequence[str] = ("kernel",)) -> "p
     tasks = frame[frame.row_kind == EPISODE_RECORD]
     if tasks.empty:
         if (frame.row_kind == "call").any():
+            setups = sorted(frame["setup"].dropna().astype(str).unique()) if "setup" in frame else []
             raise MixedPopulationError(
-                "no task records: a task's token cost is its final attempt's effective total (row_kind = "
-                "task); calls.tokens is not a cost -- re-extract with task rows"
+                f"no episode records for {', '.join(setups) or 'these rows'}: a task's token cost is its final "
+                "attempt's total (row_kind = episode) and call tokens are not a cost -- leave these setups out "
+                "(--setups) or re-extract with episode rows"
             )
         return pd.DataFrame(columns=empty_columns)
     tokens = pd.to_numeric(tasks.tokens, errors="coerce")

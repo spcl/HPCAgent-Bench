@@ -67,7 +67,7 @@ class Judge(http.server.BaseHTTPRequestHandler):
 
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
         # THE judge's own guard, imported rather than restated: a request naming no rank is refused
-        # before anything is graded, and that is the whole failure being reproduced here.
+        # before anything is graded, which is the failure this exercises.
         refusal = rank_error(JUDGE_RANK, body.get("rank"))
         if refusal is not None:
             return self.reply(*refusal)
@@ -193,7 +193,7 @@ def add_blind_worker(rank_dir: pathlib.Path, episode_id: str, bench: str, submit
 
     Its calls carry tokens and no verdict, because /score answers 403 there, so no grade holds a
     source for it and ``candidates`` returns nothing -- which is the state the workspace fallback
-    exists for, and the state in which it used to fire even over a submission.
+    exists for, and in which it must still not fire over a submission.
     """
     shard = rank_dir / "hpcagent_bench0.db"
     results_seed.grade(shard, episode_id, bench, "score", 1, call_index=1, tokens_so_far=120000, status="score_error")
@@ -247,8 +247,8 @@ ORPHAN_HOLD_LIMIT_S = 30.0
 class OneSlotJudge(Judge):
     """The COLOCATE judge: ONE grade slot, held by the killed agent's last request.
 
-    ``/profile`` is that request. It keeps the slot until ``release`` is set, as the instrumented run
-    633871's agent sent before its kill kept it when that worker's promotion arrived.
+    ``/profile`` is that request. It keeps the slot until ``release`` is set, as a killed agent's
+    instrumented run keeps it when that worker's promotion arrives.
     """
 
     slot: ClassVar[threading.Semaphore] = threading.Semaphore(1)
@@ -333,9 +333,9 @@ def test_a_promotion_the_job_end_cuts_short_says_the_judge_did_not_answer(
 ) -> None:
     """The job's end bounds the wait, and the report line names what happened.
 
-    633871 logged "unreachable (timed out)" for a judge that had taken the body and was busy, which
-    sends a reader after the network. A promoter with a fixed cap instead waits out the orphan here
-    and reports SUBMITTED for a grade the real teardown would have killed."""
+    "unreachable (timed out)" for a judge that has taken the body and is busy sends a reader after
+    the network. A promoter with a fixed cap instead waits out the orphan here and reports SUBMITTED
+    for a grade the real teardown would kill."""
     monkeypatch.setenv("SLURM_JOB_END_TIME", str(int(time.time() + promoter.TEARDOWN_MARGIN_S + 3)))
     rank_dir = tmp_path / "judge" / "rank-0"
     rank_dir.mkdir(parents=True)

@@ -220,14 +220,14 @@ def test_a_header_only_library_is_offered_without_link_tokens() -> None:
 
 def test_header_only_availability_is_not_token_emptiness() -> None:
     """A header on the default include path yields no tokens and is still usable, so emptiness
-    cannot be the signal -- which is exactly what available_libraries used to ask."""
+    cannot be the signal."""
     for name, entry in languages.load_libraries().items():
         if not entry.get("header_only"):
             continue
         for lang in entry["langs"]:
             offered = languages.library_offered(name, lang)
             if offered and languages.library_tokens(name, lang) == ((), ()):
-                return  # the case the old predicate got wrong is reachable here
+                return  # a header-only library offered with no tokens is reachable here
     # Nothing on this host exercises it; the language gate must still hold.
     assert not languages.library_offered("eigen", "fortran")
 

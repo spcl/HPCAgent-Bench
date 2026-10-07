@@ -490,11 +490,8 @@ def pytest_runtest_logreport(report: pytest.TestReport) -> None:
     pytest defers every traceback to the FAILURES section, which is written by
     ``pytest_terminal_summary`` after the session ends. Two endings this suite reaches routinely
     never get there: a job or step cap is a SIGKILL, and an xdist INTERNALERROR aborts the session
-    outright. The failure is then a bare ``F`` with no reason attached -- in run 34221523664 both
-    reds were unreadable this way, and both had failed ten minutes before their job died:
-    ``test_openmp_pragmas_dispatch_into_a_runtime[c]`` (the session then lost a worker to
-    ``KeyError: <WorkerController gw2>``) and ``test_njit_reference_agrees[cloudsc]`` (the job hit
-    its cap while the sweep ran on).
+    outright. The failure is then a bare ``F`` with no reason attached, even when the test failed
+    long before the job died.
 
     This is the argument the ``-v`` on the sweeps already makes, carried to the other half: the
     name has to be printed BEFORE the test runs, and the reason has to be printed WHEN it fails.

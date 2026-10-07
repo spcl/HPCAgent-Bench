@@ -3,8 +3,8 @@
 """A pluto translation unit scopes each NEST on its own merits, not the whole program at once.
 
 pet rejects the entire scop a construct it cannot model lands in, so wrapping the kernel in one
-region cost every loop nest in it whenever a single allocation or zero-fill prologue sat anywhere
-inside. The emitter now splits at those statements (``numpyto_c.emit.pluto_scop_regions``) and
+region costs every loop nest in it whenever a single allocation or zero-fill prologue sits
+anywhere inside. The emitter splits at those statements (``numpyto_c.emit.pluto_scop_regions``) and
 desugars a body-level memset into the affine loop it is (``fill_loop_stmt``), so several scops per
 translation unit is the normal output.
 """
@@ -145,8 +145,8 @@ def test_a_nest_between_two_others_splits_the_kernel_into_several_regions() -> N
 def test_an_unmodellable_nest_does_not_cost_its_scopable_neighbours() -> None:
     """Per-NEST, never per-program: the while nest is excluded, the nests around it are still scoped.
 
-    The value-dependent clamp used to be the example here; since 95f9ae0be the emitter if-converts
-    it into a ternary and keeps it IN the scop (the test below), so it no longer splits anything."""
+    Not the value-dependent clamp: the emitter if-converts it into a ternary and keeps it IN the
+    scop (the test below), so it splits nothing."""
     text = emit_pluto(while_kir(), fn_name="wl")
     regions = regions_(text)
     assert len(regions) == 2, f"expected the while nest to split, not to swallow, the kernel:\n{text}"
@@ -179,7 +179,7 @@ def test_emitting_twice_gives_byte_identical_c() -> None:
 
 
 def test_the_affine_detector_reads_every_region_not_just_the_first() -> None:
-    """A gather in the SECOND region used to go unseen, and polycc may miscompile rather than refuse."""
+    """A gather in the SECOND region must not go unseen: polycc may miscompile rather than refuse."""
     text = (
         "#pragma scop\nfor (i = 0; i < N; i++) a[i] = 1.0;\n#pragma endscop\n"
         "#pragma scop\nfor (i = 0; i < N; i++) b[i] = a[ip[i]];\n#pragma endscop\n"

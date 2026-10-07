@@ -22,7 +22,7 @@
 # seed skips them, so a publisher killed mid-copy leaves nothing a later seed would pick up.
 #
 # Copies keep mode and timestamps only, never owner or xattrs: inside a container a cp -a that cannot
-# restore them (a mapped root's chown, Lustre's lustre.lov xattr) exits nonzero, and the entry was dropped.
+# restore them (a mapped root's chown, Lustre's lustre.lov xattr) exits nonzero and drops the entry.
 set -uo pipefail
 
 # A core dump lands in the crashing process's CWD (the checkout) and Slurm propagates the

@@ -35,23 +35,22 @@ THE MODEL, and its three assumptions:
    than a convenient fiction -- but it IS an upper bound, and an episode whose context was evicted
    is charged less here than it truly cost.
 2. A CACHE READ COSTS NOTHING (``CACHE_DISCOUNT`` = 0), so every token is counted ONCE, in the
-   turn it first appeared. This began at 50 percent, an older published cache-read rate (vendors now bill 0.1x), which was
-   wrong for a reason worth stating: ``cached`` is a sum over TURNS, and the thing it sums existed
-   only once. One episode here summed 10,329,254 cached tokens against a context that reached
-   98,723 -- the KV cache held one copy and the rest is that copy re-counted per turn. Any nonzero
+   turn it first appeared. Not a published cache-read rate (vendors bill 0.1x), for a reason worth
+   stating: ``cached`` is a sum over TURNS, and the thing it sums exists only once. An episode can
+   sum ~10M cached tokens against a context that reaches ~100k -- the KV cache holds one copy and
+   the rest is that copy re-counted per turn. Any nonzero
    fraction of it prices a phantom, and prices it in proportion to turn count, which differs by
    model.
 
    What zero omits is the KV re-read on each decode step. That is real, but it is memory traffic
-   rather than a forward pass, and it is second-order beside a 106x double count.
+   rather than a forward pass, and it is second-order beside a ~100x double count.
 3. REASONING IS OUTPUT, AND THE SERVER ALREADY COUNTED IT. SGLang and vLLM both serve
    ``/v1/messages`` with an ``output_tokens`` that is every generated token -- reasoning, answer
    text and tool-call arguments alike -- so reasoning is billed at the output rate by construction
    and nothing is added on top. The client's streamed ``estimated_tokens_delta`` is kept as
    ``thinking_estimate``, informational and never summed: it is a client-side character estimate
-   that does not agree with the server (one episode: estimate 34,517 against a server output of
-   24,153, of which chars/4 puts 22,234 in thinking blocks). Adding it was a DOUBLE
-   COUNT -- see 13/F8 of docs/DESIGN_data_collection_and_scoring.md.
+   that does not agree with the server and already counted in its output, so adding it is a DOUBLE
+   COUNT -- see 13/F8 of docs/scoring.md.
 
 TWO NUMBERS, AND BOTH ARE RIGHT -- for different questions. This matters because the published
 convention is the OPPOSITE of the model above, and not by mistake:

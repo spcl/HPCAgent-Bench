@@ -331,8 +331,8 @@ def test_gather_front_placed_broadcast_separated_by_real_slice() -> None:
     """``t = A[blk[:, :, 0], :, idx[:, :, 0]]``: two COMPOUND array-valued
     advanced indices with a real slice sitting BETWEEN them in the source
     text. numpy moves their broadcast result to the FRONT -- result shape
-    (NB, NPROMA, NLEV) -- instead of the in-place layout the C emit used to
-    read the index arrays at (a segfaulting off-by-one-axis misalignment).
+    (NB, NPROMA, NLEV) -- not the in-place layout (reading the index arrays
+    there is a segfaulting off-by-one-axis misalignment).
     zekin_gather's ``z_kin_hor_e[edge_blk[:, :, e], :, edge_idx[:, :, e]]``
     in miniature."""
     src = (

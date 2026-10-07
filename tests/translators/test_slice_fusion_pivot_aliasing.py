@@ -2,11 +2,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """A fused slice assignment reads its own array's invariant element BEFORE the nest.
 
-``SliceFusion`` stores one element per iteration, so ``A[k, k:] = A[k, k:] / A[k, k]``
-used to scalarise into a loop whose ``si1 == k`` iteration overwrites the pivot and whose
-every later iteration then divides by the ``1.0`` it just stored. numpy evaluates the whole
-RHS against the pre-assignment array, so all three native backends disagreed with it by
-1.86e+00 on a 6x6 -- silently, since nothing in the emitted code looks wrong. This is the
+``SliceFusion`` stores one element per iteration, so a naive ``A[k, k:] = A[k, k:] / A[k, k]``
+loop's ``si1 == k`` iteration overwrites the pivot and every later iteration divides by the
+``1.0`` it just stored. numpy evaluates the whole RHS against the pre-assignment array, so the
+native backends would disagree with it -- silently, since nothing in the emitted code looks wrong. This is the
 Gauss-elimination shape (``row = row - factor * pivot_row`` with the pivot IN the row being
 written), and the pivot is what has to be read once, ahead of the nest.
 
@@ -72,7 +71,7 @@ def test_an_iterated_read_of_the_written_array_is_not_staged() -> None:
 
 def test_a_read_of_another_array_is_left_alone() -> None:
     # gaussian's elimination step: the pivot row belongs to the SAME array but is read at a
-    # moving column, and ``mult`` is a different array. Byte for byte the old lowering.
+    # moving column, and ``mult`` is a different array. Byte for byte the plain lowering.
     assert fuse("A[k + 1:, k:] -= mult[:, None] * A[k, k:]", {"A": ["N", "N"], "mult": ["N"]}) == (
         "for si0 in range(k + 1, N):\n"
         "    for si1 in range(k, N):\n"

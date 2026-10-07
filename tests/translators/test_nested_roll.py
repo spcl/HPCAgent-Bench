@@ -5,13 +5,12 @@
 A whole-array ``np.roll(A, shift, axis)`` must be hoisted to its own temp and
 lowered by :func:`expand_roll` -- never scalarized element-wise. When the roll's
 operand is a NON-Name (a ``Subscript`` such as ``psi_frag[f]`` -- the ls3df_scf
-``_hpsi`` periodic finite-difference stencil applied to a state block), the
-hoister previously refused it (``derive_output_shape`` only sized a bare-Name
-operand), so the roll stayed buried in the broadcast BinOp and the per-element
-scalarizer produced the nonsensical ``np.roll(<scalar element>, ...)`` -- which
-the emitter rejects with ``NotImplementedError: call to np.roll not supported``.
+``_hpsi`` periodic finite-difference stencil applied to a state block), a hoister
+that sizes only a bare-Name operand leaves the roll buried in the broadcast BinOp,
+and the per-element scalarizer produces the nonsensical ``np.roll(<scalar element>, ...)``
+-- which the emitter rejects with ``NotImplementedError: call to np.roll not supported``.
 
-The fix spills a non-Name roll operand to a fresh ``__cb`` temp (the same
+So a non-Name roll operand is spilled to a fresh ``__cb`` temp (the same
 materialization the reductions use), so the operand becomes a Name and the
 existing top-level roll expansion handles it.
 

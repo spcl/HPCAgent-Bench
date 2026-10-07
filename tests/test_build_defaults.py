@@ -18,7 +18,7 @@ CE = ROOT / "containers" / "images"
 SHELL_PATH = "/usr/bin:/bin"
 DOCKERFILE = """\
 FROM ${BASE_IMAGE} AS agent
-COPY containers/lib/agent.sh /agent.sh
+COPY containers/images/lib/agent.sh /agent.sh
 RUN python3 - <<'PY'
 from pathlib import Path
 PY
@@ -55,8 +55,8 @@ def repo(tmp_path: pathlib.Path) -> pathlib.Path:
     for name in ("build_common.sh", "images.env"):
         shutil.copy2(CE / name, images / name)
     (images / "Dockerfile").write_text(DOCKERFILE, encoding="utf-8")
-    (tmp_path / "containers" / "lib").mkdir()
-    (tmp_path / "containers" / "lib" / "agent.sh").write_text("echo agent\n", encoding="utf-8")
+    (tmp_path / "containers" / "images" / "lib").mkdir()
+    (tmp_path / "containers" / "images" / "lib" / "agent.sh").write_text("echo agent\n", encoding="utf-8")
     (tmp_path / "pkg").mkdir()
     (tmp_path / "pkg" / "mod.py").write_text("X = 1\n", encoding="utf-8")
     git(tmp_path, "init", "-q")
@@ -132,7 +132,7 @@ def test_a_committed_edit_to_a_copied_file_moves_only_the_stages_that_copy_it(re
 
 def test_an_uncommitted_edit_to_a_copied_file_makes_the_inputs_unknown(repo: pathlib.Path) -> None:
     """The fingerprint reads git blobs; a dirty file would be built but not fingerprinted."""
-    (repo / "containers" / "lib" / "agent.sh").write_text("echo edited\n", encoding="utf-8")
+    (repo / "containers" / "images" / "lib" / "agent.sh").write_text("echo edited\n", encoding="utf-8")
     done = bash('ce_build_fingerprint "$(dirname "$1")/Dockerfile" agent', repo)
     assert done.returncode == 1, done.stdout
     assert "no pull" in done.stderr

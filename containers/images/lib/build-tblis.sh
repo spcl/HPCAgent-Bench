@@ -21,11 +21,10 @@ ulimit -c 0
 REPO="${TBLIS_REPO:-https://github.com/devinamatthews/tblis.git}"
 # PINNED to the last autotools release. master is v2.0-beta, which VENDORS BLIS through CMake
 # FetchContent, and gcc 16 rejects that BLIS's haswell sup kernels -- "bp cannot be used in `asm`
-# here" on bli_gemmsup_rv_haswell_asm_{d6x8m,s6x16m,d6x8n,s6x16n} (621401). Removing blis from the
-# image's spack list did not help, because this is a second copy reached through here. v1.3.0
+# here" on bli_gemmsup_rv_haswell_asm_{d6x8m,s6x16m,d6x8n,s6x16n}, and removing blis from the
+# image's spack list does not help, because this is a second copy reached through here. v1.3.0
 # carries its own kernels, has no submodules and no vendored BLIS; only its knl config touches
-# %rbp, and the config list below never selects knl. Verified to build under the image's gcc 16.2
-# in 621508.
+# %rbp, and the config list below never selects knl. Builds under the image's gcc 16.2.
 # v1.3.0 is x86-only: marray includes <x86intrin.h> unconditionally. Elsewhere take develop at a
 # pinned commit, whose vendored BLIS builds its armsve kernels under gcc 16 (the haswell problem
 # above does not arise off x86).

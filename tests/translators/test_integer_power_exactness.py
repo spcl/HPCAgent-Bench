@@ -2,22 +2,20 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Integer exponentiation stays EXACT -- it must never round through libm's double ``pow``.
 
-Two spellings both used to land on the double ``pow``:
+Two spellings must both reach the ``__npb_int_pow`` binary-exponentiation helper:
 
-* ``np.power(a, b)`` -- its expander emitted a bare ``pow(...)`` Name call, which fell
-  through the C emitter's generic call path straight to libm, bypassing the
-  ``__npb_int_pow`` binary-exponentiation helper the ``a ** b`` BinOp already routed to;
-* ``a[i] ** b[i]`` on int64 arrays -- ``is_int_operand`` recognised int Constants and
-  int-typed Names but not a Subscript, so an element read looked non-integer.
+* ``np.power(a, b)`` -- a bare ``pow(...)`` Name call falls through the C emitter's generic
+  call path straight to libm;
+* ``a[i] ** b[i]`` on int64 arrays -- ``is_int_operand`` must recognise a Subscript as well as
+  int Constants and int-typed Names, or an element read looks non-integer.
 
-Above 2**53 a double cannot hold the result: ``3 ** 39`` came back 4052555153018976256
-instead of ...267, and ``2 ** 62`` saturated to INT64_MIN where numpy wraps. The
-value-returning form additionally parked the result in a ``double`` temp, which threw the
-bits away again -- so the hoisted temp of an all-integer elementwise ufunc is now declared
-integer, matching numpy's promoted result dtype.
+Above 2**53 a double cannot hold the result: ``3 ** 39`` comes back 4052555153018976256
+instead of ...267, and ``2 ** 62`` saturates to INT64_MIN where numpy wraps. A ``double``
+temp would throw the bits away again, so the hoisted temp of an all-integer elementwise ufunc
+is declared integer, matching numpy's promoted result dtype.
 
-Fixed in the SHARED routing (``emit_pow`` + ``expand_power`` emitting ``**``), so both
-spellings and both native backends move together.
+The routing is SHARED (``emit_pow`` + ``expand_power`` emitting ``**``), so both spellings and
+both native backends move together.
 """
 
 import ast

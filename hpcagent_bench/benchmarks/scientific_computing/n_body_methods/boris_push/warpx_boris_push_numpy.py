@@ -51,7 +51,7 @@ ELECTRON_MASS = 9.1093837015e-31
 def _update_momentum_boris(ux, uy, uz, Ex, Ey, Ez, Bx, By, Bz, q, m, dt, momentum_push_type):
     """Boris momentum update over the whole particle arrays -- a line-for-line
     port of the body of ``UpdateMomentumBoris`` in ``UpdateMomentumBoris.H``,
-    each line now an elementwise array op instead of a per-particle scalar op.
+    each line an elementwise array op instead of a per-particle scalar op.
     Mutates ``ux``/``uy``/``uz`` in place and returns them."""
 
     econst = 0.5 * q * dt / m
@@ -79,7 +79,7 @@ def _update_momentum_boris(ux, uy, uz, Ex, Ey, Ez, Bx, By, Bz, q, m, dt, momentu
         #   |t_half|/|t_full| = (sqrt(1 + |t_full|^2) - 1) / |t_full|^2.
         tsq = tx * tx + ty * ty + tz * tz
         # tsq == 0 only where B is exactly zero for that particle; guard the
-        # division per-lane instead of a scalar ternary (tsq is now an array).
+        # division per-lane instead of a scalar ternary (tsq is an array).
         has_field = tsq > 0.0
         safe_tsq = np.where(has_field, tsq, 1.0)
         factor = np.where(has_field, (np.sqrt(1.0 + tsq) - 1.0) / safe_tsq, 0.5)

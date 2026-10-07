@@ -12,11 +12,11 @@ KernelBench's conv/pool ports normalise a stride/padding/dilation knob with a ti
 ``dims`` is a compile-time constant at every call site (``_as_tuple(stride, 2)``), but the helper
 has an early ``return`` in its guard, so it never qualifies for the ordinary single-return-expr
 inliner (:func:`frontend.inlining.collect_inlinable_helpers`) and survives as its own :class:`KernelIR`
-(:func:`frontend.helper_kirs.build_helper_kirs`). There it folded the ``isinstance`` guard away (the argument's
-kind is known) but left ``dims`` an unsubstituted parameter Name, so the generator's trip count
-never resolved and the emitter refused with ``NotImplementedError: expression GeneratorExp``.
+(:func:`frontend.helper_kirs.build_helper_kirs`). Folding the ``isinstance`` guard away (the argument's
+kind is known) while leaving ``dims`` an unsubstituted parameter Name leaves the generator's trip
+count unresolved, and the emitter refuses with ``NotImplementedError: expression GeneratorExp``.
 Once ``dims`` folds, the return is a bare tuple literal -- which has no C/Fortran ABI either, so
-the fix does not stop at folding: the helper is spliced into each call site instead of emitted.
+folding is not enough: the helper is spliced into each call site instead of emitted.
 
 These tests pin the AST after the fold (not just "it did not raise"), plus one numeric check
 through the real C/C++/Fortran backends via the existing oracle harness.

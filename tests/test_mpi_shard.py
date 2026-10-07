@@ -360,8 +360,8 @@ def fake_clock_kernel(monkeypatch: pytest.MonkeyPatch, call_s: float) -> tuple[l
 
 
 def test_a_call_too_slow_for_the_launch_budget_is_timed_on_fewer_repeats(monkeypatch: pytest.MonkeyPatch) -> None:
-    """650923: dist_gemm_gn_swish takes ~43 s a call at P=1 (XL), so 1 warmup + 20 repeats outran
-    the 900 s launch timeout and the anchor was lost. Under the 675 s budget (0.75 x 900) the
+    """dist_gemm_gn_swish takes ~43 s a call at P=1 (XL), so 1 warmup + 20 repeats would outrun
+    the 900 s launch timeout and lose the anchor. Under the 675 s budget (0.75 x 900) the
     warmup says 14 repeats fit: 15 calls, 645 s, and the point is measured."""
     calls, call = fake_clock_kernel(monkeypatch, 43.0)
     samples = mpi_shard_driver.time_kernel(

@@ -36,7 +36,7 @@ REPO="${REPO:-${SLURM_SUBMIT_DIR:?submit from the checkout root or set REPO}}"
 # shellcheck source=build_common.sh
 source "${REPO}/containers/images/build_common.sh"
 # HPCAGENT_BENCH_DATA_ROOTS for selfcontained_check.py: ce_render_edf sources this too, but in a pipeline
-# subshell whose exports never reach the srun below (judge-cpu 655841 failed verification on it).
+# subshell whose exports never reach the srun below.
 # shellcheck source=../../helpers/scripts/cache_env.sh
 source "${REPO}/helpers/scripts/cache_env.sh"
 IMAGE="${IMAGE:-${CE_IMAGES:?}/$(ce_image "${ROLE}" candidate)}"

@@ -74,8 +74,7 @@ def test_the_ramp_is_tab20_dark_first_and_every_slot_is_distinct():
 
 
 def test_no_registered_packet_shares_a_slot_with_another():
-    """Forty slots (tab20, then tab20b) for every packet, so nothing wraps and no packet needs an override. This is
-    what three hand-picked hex colours used to buy one packet at a time."""
+    """Forty slots (tab20, then tab20b) for every packet, so nothing wraps and no packet needs an override."""
     leads = palette.hue_order("packets")
     assert len({palette.color(p) for p in leads}) == len(leads)
 
@@ -139,8 +138,7 @@ PUBLISHED_PACKET_COLORS = {
 }
 
 #: Models are assigned from the front of `markers`, standalone optimizers from the back, so a new
-#: model shifts neither. dace and cpf moved off "v"/"P" once, when that rule replaced one shared
-#: front-to-back sequence; figures drawn before that carry the old two shapes.
+#: model shifts neither.
 PUBLISHED_MODEL_MARKERS = {
     "qwen38": "o",
     "oss120b": "s",
@@ -264,8 +262,8 @@ def test_an_unregistered_packet_marker_is_stable_and_warns(caplog: pytest.LogCap
 
 
 def test_model_colour_is_reused_by_the_packet_efficacy_panels() -> None:
-    """``model_color`` used to serve only a figure whose sole axis was the model; the packet
-    efficacy panels now read colour off it too, so a model's hue is the same one everywhere."""
+    """The packet efficacy panels read colour off ``model_color`` too, so a model's hue is the same
+    one everywhere."""
     assert palette.model_color("qwen38") == palette.ordered_color("models", "qwen38")
     assert len({palette.model_color(m) for m in ("qwen38", "oss120b", "kimi27sglang")}) == 3
 

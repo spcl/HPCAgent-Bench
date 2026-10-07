@@ -13,10 +13,9 @@ that inlines into the body::
 
     padded[:, :, ky:ky + (oh - 1) * stride + 1:stride, kx:...]
 
-That step was once folded to its manifest value, because ``slice_step_const`` read a non-literal
-step as 1 and the stride was silently lost. The symbolic lowering removed that premise, so the fold
-was removed with it: a signature that takes ``stride`` and ignores it is the failure the ABI
-ratchets exist to catch, and it is the same reason the AXIS slot was never folded.
+That step is not folded to its manifest value: the symbolic lowering carries a non-literal step, and a
+signature that takes ``stride`` and ignores it is the failure the ABI ratchets exist to catch -- the
+same reason the AXIS slot is never folded.
 
 A manifest-constant symbol that is NOT an ABI argument still folds -- ``FoldConstantSymbols`` --
 because nothing passes it at run time. Only names the binding passes are excluded.
@@ -75,7 +74,7 @@ def parse(src: str, args: list[str], arrays: list[str], shapes: dict[str, str], 
 def steps(kir) -> list[object | None]:
     """Every slice step in the parsed body, as a literal value (``None`` when not a literal).
 
-    The helper trees too: a helper is KEPT as its own function now, so the pooling slice these
+    The helper trees too: a helper is KEPT as its own function, so the pooling slice these
     kernels are named for sits in the helper rather than spliced into the caller. Reading only the
     kernel body would report no steps at all and pass the fold check vacuously.
     """
@@ -186,12 +185,11 @@ def test_a_bounded_step_absent_from_the_manifest_matches_numpy() -> None:
 
 
 def test_a_rebound_step_name_is_not_folded() -> None:
-    """Once the body assigns to it, the manifest default is no longer what the slice reads.
+    """Once the body assigns to it, the manifest default is not what the slice reads.
 
-    Folding is still refused -- a wrong stride that compiles is the worst outcome of the three, and
-    the same rule ``FoldConstantSymbols`` applies to its own substitution. What changed is the
-    fallback: the step is now carried symbolically instead of refusing the kernel outright, so the
-    slice reads the REBOUND value.
+    Folding is refused -- a wrong stride that compiles is the worst outcome of the three, and the
+    same rule ``FoldConstantSymbols`` applies to its own substitution. The step is carried
+    symbolically instead of refusing the kernel outright, so the slice reads the REBOUND value.
     """
     src = (
         "import numpy as np\n"

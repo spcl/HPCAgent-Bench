@@ -54,7 +54,7 @@ def tracked_numpy_references() -> list[str]:
 def test_wheel_is_pip_installable_and_complete(tmp_path: pathlib.Path) -> None:
     """Build a wheel offline the way the judge image does, from hpcagent_bench/ and pyproject.toml alone
     (no MANIFEST.in), and assert it carries every subpackage, every data file and the console-script
-    entry point. Smoke 634867 ran such an install and could not load a single kernel manifest."""
+    entry point: an incomplete wheel installs fine and then cannot load a single kernel manifest."""
     source = tmp_path / "src"
     shutil.copytree(
         _ROOT / "hpcagent_bench",
@@ -127,8 +127,8 @@ def locked_base_dependencies() -> tuple[list[str], str]:
 
 
 def assert_the_installed_wheel_imports_without_the_checkout(whl: pathlib.Path, tmp_path: pathlib.Path) -> None:
-    """The installed package imports its translators and the modules that used to reach into
-    ``tests/`` and ``experiments/``, from outside the checkout: a throwaway uv project synced into a fresh venv,
+    """The installed package imports its translators and every module, none reaching into
+    ``tests/`` or ``experiments/``, from outside the checkout: a throwaway uv project synced into a fresh venv,
     with the wheel, the agent runtime from agent/ and dace at the pin, and every other dependency held to the
     version uv.lock pins."""
     venv = tmp_path / "venv"

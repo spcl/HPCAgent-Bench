@@ -39,9 +39,9 @@ def test_pluto_skips_when_native_emit_fails(monkeypatch) -> None:
 _JAX_RETRY_TIMEOUT_S = 600
 
 #: A test that retries owns BOTH budgets, so its own pytest timeout covers the first try, the retry and
-#: the kernel's other backends. Under the sweep's ``--timeout=600`` the retry outlived the test: the
-#: worker was exited with the retry child still running (run 34690017930 wedged unit shard 0 at 99%), and
-#: shrinking the retry to fit instead left it too short to finish on the runner (run 34694810993).
+#: the kernel's other backends. Under the sweep's ``--timeout=600`` the retry outlives the test and the
+#: worker exits with the retry child still running, wedging the shard; shrinking the retry to fit leaves
+#: it too short to finish on the runner.
 JAX_RETRY_TEST_TIMEOUT_S = no.JAX_FORK_TIMEOUT_S + _JAX_RETRY_TIMEOUT_S + 120
 
 

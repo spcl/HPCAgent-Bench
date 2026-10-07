@@ -7,7 +7,7 @@ Three related-but-distinct idioms, all unlowerable as written (neither C nor For
 
 * (a) a helper that returns ``None`` OR a tuple (``_tap_range``-style conv/pool tap-range
   helpers): an early ``if <empty range>: return None`` disqualifies it from the ordinary
-  single/multi-return inliner (:func:`frontend.inlining.collect_inlinable_helpers`), so it used to survive
+  single/multi-return inliner (:func:`frontend.inlining.collect_inlinable_helpers`), which would leave it
   as its own un-emittable :class:`KernelIR`. :func:`frontend.none_guarded.collect_none_guarded_helpers` +
   :class:`frontend.none_guarded.SpliceNoneGuardedCalls` splice the helper INTO each call site together with the
   caller's own ``if tap is None: continue`` guard and tuple unpack, so no ``None``-or-tuple value

@@ -206,7 +206,7 @@ def test_the_token_panel_puts_its_measured_value_on_a_log_y_axis_with_a_major_an
         (0.5, "0.5x"),
         (1.0, "1x"),
         (2.0, "2x"),
-        # Not a power of two, and not a whole reciprocal: the old 1/n spelling rounded this to
+        # Not a power of two, and not a whole reciprocal: a 1/n spelling would round this to
         # "1/1x", a ratio of one marking a point 30% below it.
         (0.5**0.5, "0.707x"),
         (0.35, "0.35x"),

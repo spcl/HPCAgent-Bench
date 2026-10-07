@@ -65,9 +65,8 @@ def _scaled(center, n: int = 20):
 
 @pytest.mark.parametrize("true", [118.0, 126.0, 400.0, 2500.0])
 def test_a_large_win_is_credited_at_its_measured_ratio(true: float) -> None:
-    """The pessimistic grid this backend used to search capped every credit at its last point
-    (1007.75x) and recorded two focus40 kernels measuring ~118x and ~126x as exactly 100x in an
-    earlier spelling. A ratio of medians has no grid and no ceiling."""
+    """A pessimistic grid search caps every credit at its last point. A ratio of medians has no
+    grid and no ceiling."""
     r = timing.reduce_mannwhitney_delta(_scaled(1000.0 / true), _scaled(1000.0), p=0.1)
     assert r.significant
     assert r.speedup == pytest.approx(true, rel=1e-12)

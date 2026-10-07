@@ -4,12 +4,12 @@
 
 C arrays passed across the ABI are flat ``double *`` pointers, so ``w[i][j]`` is a hard compile
 error ("subscripted value is neither array nor pointer"), not a slower-but-correct access. The
-emitter flattens ``w[i, j]`` to ``w[i*stride + j]`` using the array's declared shape -- but when the
-shape was missing or the wrong rank it silently fell back to the chained ``w[i][j]`` and shipped
-uncompilable C. conv_2d hit exactly this: its ``w_box`` was inferred 1-D but indexed 2-D.
+emitter flattens ``w[i, j]`` to ``w[i*stride + j]`` using the array's declared shape; a missing or
+wrong-rank shape (conv_2d's ``w_box`` inferred 1-D but indexed 2-D) must not fall back to the
+chained ``w[i][j]`` and ship uncompilable C.
 
-The fix is twofold, both pinned here: the read flattens when the rank is known (so conv-style
-kernels emit and run), and the emitter RAISES rather than emit the chained form when it cannot.
+Both halves are pinned here: the read flattens when the rank is known (so conv-style kernels emit
+and run), and the emitter RAISES rather than emit the chained form when it cannot.
 """
 
 import numpy as np
@@ -82,7 +82,7 @@ def test_multi_index_without_a_matching_rank_raises_not_chains() -> None:
         "        for j in range(3):\n"
         "            out[i] = w[i, j]\n"
     )
-    # The message names the offending array, both ranks and the fix; pinned so the raise cannot
+    # The message names the offending array, both ranks and the remedy; pinned so the raise cannot
     # decay into a generic one that leaves the reader to find which array is under-declared.
     with pytest.raises(NotImplementedError, match=r"cannot index 'w' with 2 axes.*rank 1"):
         emit_c_source(body, {"w": "(3,)", "out": "(3,)"}, {"n": 3})

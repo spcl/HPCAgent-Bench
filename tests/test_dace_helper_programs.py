@@ -3,11 +3,10 @@
 """A kept helper is emitted as its OWN ``@dc.program``, not inlined into the kernel.
 
 DaCe's frontend binds a nested program call and rebinds the callee's shape symbols per call site,
-so one shape-generic helper serves call sites of different extents. The emitter used to refuse the
-un-inlined form outright ("the DaCe module is one @dc.program and binds no helper"), which sent
-every level-3 kernel back through :func:`emit_with_inline_fallback` -- specialising the helper to
-one call site's shapes and recopying its body once per call, or, where no inlinable shape existed,
-emitting no program at all.
+so one shape-generic helper serves call sites of different extents. Refusing the un-inlined form
+would send every level-3 kernel back through :func:`emit_with_inline_fallback` -- specialising the
+helper to one call site's shapes and recopying its body once per call, or, where no inlinable
+shape exists, emitting no program at all.
 
 These tests pin the emitted TEXT, because the shape of the module is the thing under test: which
 programs it declares, and how the call reaches each one.

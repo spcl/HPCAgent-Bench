@@ -10,10 +10,10 @@ constant OF THE ARTIFACT must not be in the signature at all, or the caller is h
 code has already decided. "Folded AND passed" is the one state that is wrong read either way: the
 prototype promises a choice, and nothing downstream can tell that the choice is not honoured.
 
-Fourteen kernels sat in it. Nine were constants of their artifact -- the declared ``out`` extent
-list is the reduction over ONE axis and no other, so no other value could ever have been passed --
-and now say so with a keyword-only default the manifest does not mention, which keeps them out of
-``input_args`` and so out of the binding. Five are genuine run-time axes (a scan's output has the
+Some such values are constants of their artifact -- the declared ``out`` extent list is the
+reduction over ONE axis and no other, so no other value could be passed -- and say so with a
+keyword-only default the manifest does not mention, which keeps them out of ``input_args`` and so
+out of the binding. Others are genuine run-time axes (a scan's output has the
 same shape whichever axis it runs along, so the buffers pin nothing) and are emitted as one nest per
 axis with the choice made at run time.
 
@@ -22,11 +22,10 @@ with the binding the harness calls through. The crossing must come back EMPTY --
 list, as in ``test_abi_corpus_agreement.py``: a kernel that starts folding an ABI argument is
 emitting a signature that lies, which is a regression to fix rather than a backlog to record.
 
-``FoldConstantSymbols`` is now the ONLY pass that folds a preset constant into the body, and it is
-handed ``runtime_args=input_args`` so an ABI name is excluded before it ever sees it. The sibling
-pass that folded an ABI name into a slice STEP is gone: a bounded symbolic step lowers as
-``lo + pos * step`` on every backend, so the slot the fold existed for now has a runtime form, the
-same reason the AXIS slot was never folded.
+``FoldConstantSymbols`` is the ONLY pass that folds a preset constant into the body, and it is
+handed ``runtime_args=input_args`` so an ABI name is excluded before it ever sees it. No pass folds
+an ABI name into a slice STEP: a bounded symbolic step lowers as ``lo + pos * step`` on every
+backend, the same reason the AXIS slot is never folded.
 
 Marked ``integration``: it parses the whole registry.
 """

@@ -236,9 +236,9 @@ def test_a_none_binding_that_is_still_read_survives() -> None:
 
 
 def test_a_bare_shape_expands_wherever_it_stands() -> None:
-    """``.reshape(x.shape)`` -- the argument is not a tuple context, so nothing used to force the
-    expansion, and the reshape reached lowering with no compile-time rank. Group-norm then kept the
-    PREVIOUS statement's rank-5 extent for the target and indexed past the end of it."""
+    """``.reshape(x.shape)`` -- the argument is not a tuple context, so without forcing the
+    expansion the reshape reaches lowering with no compile-time rank, and group-norm keeps the
+    PREVIOUS statement's rank-5 extent for the target and indexes past the end of it."""
     got = desugared("""
         def k(x, p, out):
             out[:] = x.reshape(x.shape)

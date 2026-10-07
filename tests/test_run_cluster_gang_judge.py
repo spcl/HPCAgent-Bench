@@ -40,7 +40,7 @@ def test_one_node_is_a_gang_and_unset_is_the_ordinary_judge(gang_nodes, colocate
 
 def test_every_gang_step_asks_the_one_predicate() -> None:
     """The judge topology, the judge's launcher exports and the relay all switch on gang_judge; a
-    step left on the old ``> 1`` test would split a width-1 gang between two regimes."""
+    step testing ``> 1`` instead would split a width-1 gang between two regimes."""
     text = SCRIPT.read_text()
     assert not re.search(r"JUDGE_GANG_NODES(:-\d+)?\}?\s*>\s*1", text), "a gang step still tests > 1"
     assert text.count("if gang_judge; then") == 3

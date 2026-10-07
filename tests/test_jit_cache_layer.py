@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """hpcagent_bench/cluster/jit_cache_layer.sh: engines compile node-locally and publish add-only to the shared cache.
 
-The shared cache is NFS; engines writing it concurrently turned each other's rewrites into ESTALE
-(640074/640075/640090). These tests pin the contract that makes the layer safe to share.
+The shared cache is NFS; engines writing it concurrently turn each other's rewrites into ESTALE.
+These tests pin the contract that makes the layer safe to share.
 """
 
 import pathlib
@@ -107,7 +107,7 @@ def compile_cache(artifacts: list[pathlib.Path]) -> str:
 
 def test_seeding_drops_an_entry_whose_recorded_artifact_path_is_gone(tmp_path: pathlib.Path) -> None:
     """A vLLM entry compiled under another job's node-local root is a TRAP, not a miss: the engine
-    opens the recorded path and dies with FileNotFoundError (640572 -> 640611/640613/640638-640640).
+    opens the recorded path and dies with FileNotFoundError.
     """
     local, shared = tmp_path / "local", tmp_path / "shared"
     entry = shared / "95ea305896" / "rank_0_0" / "backbone"

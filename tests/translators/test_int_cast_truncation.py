@@ -10,16 +10,16 @@ The GROMACS NBNxM kernel computes a floating-point distance chain and then uses
     rs   = rsq * rinv * tab_scale    # float, feeds int()
     ri   = int(rs)                   # TRUNCATION -> table index (int)
 
-Two coupled bugs made every force come out zero:
+Two coupled mistakes make every force come out zero:
 
-1. The lowering dropped ``int(x)`` entirely (relying on the target being
-   int-declared to truncate implicitly). That erased the barrier the
-   used-as-int analysis needs: from the index ``ri`` it walked BACKWARD across
-   ``ri = int(rs)`` into ``rs`` and mistyped the whole chain (``rsq`` / ``rinv``
-   / ``dx``) as integer, so each sub-1.0 coordinate difference truncated to 0.
-2. The backward int-ness closure had no ``pure_int_arith`` guard on that step.
+1. Dropping ``int(x)`` (relying on the target being int-declared to truncate
+   implicitly) erases the barrier the used-as-int analysis needs: from the index
+   ``ri`` it walks BACKWARD across ``ri = int(rs)`` into ``rs`` and mistypes the
+   whole chain (``rsq`` / ``rinv`` / ``dx``) as integer, so each sub-1.0
+   coordinate difference truncates to 0.
+2. A backward int-ness closure without a ``pure_int_arith`` guard on that step.
 
-``int(x)`` is now KEPT (rendered ``(int64_t)(x)`` / ``INT(x, kind)``) and the closure
+``int(x)`` is KEPT (rendered ``(int64_t)(x)`` / ``INT(x, kind)``) and the closure
 is bounded, so the float chain stays ``double`` and the result is bit-exact. This
 pins both the numerical result and the emitted C types.
 """

@@ -11,6 +11,9 @@ configured paired test (``statistics.paired_test``, sign-flip by default,
 configured correction (``statistics.correction``, Benjamini-Hochberg by default), and the star is gated on
 the adjusted value. The stats table names both in its ``test`` and ``correction`` columns.
 
+``--per-kernel`` draws the other view: every kernel of a tag, canon-sweep columns (compilers) and an
+experiment's setups as rows of speedups over one baseline (:func:`hpcagent_bench.stats.figures.signed.kernel_comparison`).
+
 Several comparisons join as one row of columns: repeat ``--treatment``, or give several
 ``--comparison`` specs (``title=...;intervention=...;treatment=...`` or
 ``title=...;intervention=...;pairs=<csv>[;control-label=...][;observations=a.csv,b.csv]``).
@@ -29,6 +32,7 @@ import pandas as pd
 from hpcagent_bench import study_tags, studies, packets
 from hpcagent_bench.stats import cost, population, score_rule, significance, style as plotstyle
 from hpcagent_bench.stats.figures import efficacy as efficacy_figures
+from hpcagent_bench.stats.figures import setup_names, signed
 
 #: :func:`points`' row shape, so an empty family still carries these columns for ``.dropna`` to use.
 POINT_COLUMNS: tuple[str, ...] = (
@@ -621,7 +625,12 @@ def build_parser() -> argparse.ArgumentParser:
     """The command line: the observations, the route (``--comparison``, ``--pairs-csv`` or
     ``--experiment`` + ``--treatment``) and the figure's look."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("observations", type=pathlib.Path, nargs="+", help="extracted observations; repeatable")
+    parser.add_argument(
+        "observations",
+        type=pathlib.Path,
+        nargs="*",
+        help="extracted observations; repeatable (optional with --per-kernel)",
+    )
     population.add_selection_arguments(
         parser, experiment_help="setup prefix naming ONE experiment; required without --pairs-csv/--comparison"
     )
@@ -681,7 +690,8 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         help="draw a '?' in every category with no measurement yet: a comparison's 'pending=' models "
-        "and 'placeholders=' deliveries (default: the slot stays empty)",
+        "and 'placeholders=' deliveries (default: the slot stays empty); with --per-kernel, a kernel a row "
+        "has not attempted yet, left out of its geomean",
     )
     parser.add_argument(
         "--speedup-over",
@@ -699,12 +709,6 @@ def build_parser() -> argparse.ArgumentParser:
         "say it per panel instead, as a --comparison spec's own 'difference=' key",
     )
     parser.add_argument(
-        "--mode",
-        default="dots",
-        choices=("dots",),
-        help="the figure form: stacked 1-D rows, the only one (accepted so recorded commands still run)",
-    )
-    parser.add_argument(
         "--success-row",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -719,6 +723,42 @@ def build_parser() -> argparse.ArgumentParser:
         "gets a tall row, a joined row of comparisons a short one, since the joined figure spends "
         "its height on two rows across the whole page",
     )
+    kernel = parser.add_argument_group(
+        "per-kernel view",
+        "--per-kernel draws every kernel of a tag: canon-sweep columns (compilers) and the --experiment setups, "
+        "each a row of speedups over --baseline, with tokens spent below",
+    )
+    kernel.add_argument(
+        "--per-kernel", action="store_true", help="draw the per-kernel view instead of the efficacy rows"
+    )
+    kernel.add_argument("--canon-db", type=pathlib.Path, default=None, help="the canon table a baseline sweep records")
+    kernel.add_argument(
+        "--canon-columns", default="", help="comma-separated canon columns drawn as rows, e.g. pluto,dace_cpu"
+    )
+    kernel.add_argument("--baseline", default=signed.BASELINE, help="speedup denominator (default: numba)")
+    kernel.add_argument(
+        "--baseline-fallback", default="cc_autopar", help="canon column timing a kernel the baseline did not verify"
+    )
+    kernel.add_argument(
+        "--language", default="c", help="setup language suffix, <experiment>-<model>-<language>[-<packet>]"
+    )
+    kernel.add_argument(
+        "--conditions", default="", help="comma-separated setup conditions to draw ('' control); default all"
+    )
+    kernel.add_argument(
+        "--tag-file", type=pathlib.Path, default=None, help="one kernel per line; default every canon kernel"
+    )
+    kernel.add_argument(
+        "--series-label",
+        action="append",
+        default=[],
+        metavar="KEY=LABEL",
+        help="rename a row by column or setup; repeatable",
+    )
+    kernel.add_argument(
+        "--offset", type=float, default=0.0, help="spread a kernel's rows over this fraction of its slot"
+    )
+    kernel.add_argument("--title", default="", help="figure title; default none")
     parser.add_argument("--out", type=pathlib.Path, default=pathlib.Path("figures/score_change.pdf"))
     parser.add_argument("--table", type=pathlib.Path, default=pathlib.Path("data/score_change.csv"))
     cost.add_arguments(parser)
@@ -847,8 +887,7 @@ def figure_from_treatments(
             print(f"skipping {treatment!r}: empty side, or no (model, language) shared with control")
             continue
         stats, frame = built
-        # Single treatment keeps the ORIGINAL file names (back-compatible); two or more are
-        # suffixed by treatment so nothing overwrites its sibling.
+        # Two or more treatments are suffixed by treatment so nothing overwrites its sibling.
         suffix = "" if len(treatments) == 1 else f"-{treatment}"
         stats.to_csv(args.table.with_name(f"{args.table.stem}{suffix}{args.table.suffix}"), index=False)
         efficacy_figures.pairs_table(frame, args.speedup_over, card).to_csv(
@@ -869,10 +908,58 @@ def figure_from_treatments(
     print(f"figure -> {written} (+ .png)")
 
 
+def figure_per_kernel(args: argparse.Namespace, card: cost.CostModel) -> None:
+    """The ``--per-kernel`` route: one row per canon column and per ``--experiment`` setup over the tag."""
+    if args.canon_db is None:
+        raise SystemExit("--per-kernel needs --canon-db")
+    if len(args.observations) > 1:
+        raise SystemExit("--per-kernel reads one observations file")
+    if args.observations and not args.experiment:
+        raise SystemExit("--per-kernel with observations needs --experiment (the setup prefix)")
+    canon_frame = studies.read_table(args.canon_db, "canon")
+    tag_kernels = (
+        [line.strip() for line in args.tag_file.read_text().splitlines() if line.strip()]
+        if args.tag_file is not None
+        else setup_names.tag_of(canon_frame)
+    )
+    if not tag_kernels:
+        raise SystemExit("no tag kernel named: pass --tag-file or a --canon-db with rows")
+    observations = None
+    if args.observations:
+        observations = population.select_setups(
+            studies.read_observations(args.observations[0]), args.experiment, args.setups
+        )
+        observations = cost.priced(observations, card)
+    stem = signed.kernel_comparison(
+        canon_frame,
+        observations,
+        tag_kernels,
+        args.out.with_suffix(""),
+        canon_columns=[c for c in args.canon_columns.split(",") if c],
+        pattern=setup_names.setup_pattern(args.experiment, args.language) if observations is not None else None,
+        conditions=[study_tags.canonical("packets", c) for c in args.conditions.split(",")]
+        if args.conditions
+        else None,
+        baseline=args.baseline,
+        title=args.title,
+        labels=dict(item.split("=", 1) for item in args.series_label),
+        offset=args.offset,
+        mark_pending=args.mark_pending,
+        baseline_fallback=args.baseline_fallback,
+    )
+    print(f"figure -> {stem}.pdf (+ .png)")
+    print(f"tables -> {stem}-kernels.csv, {stem}-summary.csv")
+
+
 def main() -> None:
     args = build_parser().parse_args()
     significance.configured()  # an unknown test name stops here, before any data is read
     card = cost.resolve(args.cost_model, args.cost_models)
+    if args.per_kernel:
+        figure_per_kernel(args, card)
+        return
+    if not args.observations:
+        raise SystemExit("pass at least one observations file")
     row_width = ROW_WIDTHS[args.row_width]
     config = figure_config(args, row_width)
     if args.comparison:

@@ -2,9 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """An agent step runs from a per-job launch directory and loads its tools from the payload bound at launch.
 
-run_cluster.sh used to bind all of experiments/ into the agent container, because run_cluster.sh and
-agent_driver.py live there -- and with them every setup's .env and problems file. stage_agent_launch now
-copies only what the step executes, and agent_driver.py takes its tools, packets and prompts from
+Binding all of experiments/ into the agent container would expose every setup's .env and problems
+file beside run_cluster.sh and agent_driver.py. stage_agent_launch copies only what the step executes, and agent_driver.py takes its tools, packets and prompts from
 ``$HPCAGENT_BENCH_AGENT_DIR`` (the checkout's agent, bound by the launcher) instead of probing for
 a copy baked into the image. The shell function is cut out of the shipped script and run as-is.
 """
@@ -104,10 +103,9 @@ def test_restaging_the_same_job_replaces_the_launch_directory(tmp_path: pathlib.
 
 def test_concurrent_staging_of_the_same_job_never_leaves_a_readonly_partial_env(tmp_path: pathlib.Path) -> None:
     """Every role of a job (inference, agent, judge) runs its own run_cluster.sh and each one calls
-    stage_agent_launch on the SAME AGENT_LAUNCH_DIR (keyed by job id, not role). The in-place
-    rm-rf + populate + chmod version let one caller's chmod a-w land between another caller's cp
-    and its later `>>` append, so the append hit a file it no longer had permission to write --
-    "Permission denied", the whole job dead before any agent work. Runs several stagers of the SAME setup in parallel; every one must still exit 0 and
+    stage_agent_launch on the SAME AGENT_LAUNCH_DIR (keyed by job id, not role). An in-place
+    rm-rf + populate + chmod lets one caller's chmod a-w land between another caller's cp and its
+    later `>>` append -- "Permission denied", the whole job dead before any agent work. Runs several stagers of the SAME setup in parallel; every one must still exit 0 and
     the launch directory must end up complete and read-only, not truncated mid-write."""
     scripts = tmp_path / "experiments"
     scripts.mkdir()

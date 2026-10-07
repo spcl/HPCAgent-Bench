@@ -88,9 +88,9 @@ def load_http_json() -> ModuleType:
 def test_a_legacy_dir_without_attempts_jsonl_also_counts_only_its_final_attempt(
     token_cost: ModuleType, tmp_path: pathlib.Path
 ) -> None:
-    """PROPERTY CHANGED on purpose: this asserted the sum over attempts. One rule holds for every
-    directory now, old runs included -- the last agent ran the task from nothing to its end, so the
-    total is its attempt's and the earlier ones are reported as crashed spend (T2/T5)."""
+    """Not the sum over attempts: one rule holds for every directory, legacy ones included -- the
+    last agent ran the task from nothing to its end, so the total is its attempt's and the earlier
+    ones are reported as crashed spend (T2/T5)."""
     write_claude_log(tmp_path / "claude.attempt1.log", input_tokens=1000, output_tokens=100)
     write_claude_log(tmp_path / "claude.log", input_tokens=2000, output_tokens=200)
 
@@ -225,10 +225,8 @@ def test_the_streamed_thinking_estimate_is_reported_but_never_added_to_the_effec
 ) -> None:
     """Both engines' ``/v1/messages`` fills ``output_tokens`` with EVERY generated token -- reasoning,
     answer text and tool arguments alike -- so adding the client's ``estimated_tokens_delta`` on top
-    charged the same reasoning twice (13/F8). Measured on one episode the estimate was
-    34,517 against a server output of 24,153, which is why the old effective ran ~1.4x high.
-
-    The property CHANGED here: before this, ``effective`` was ``fresh + output + thinking``.
+    charges the same reasoning twice (13/F8): ``effective`` is ``fresh + output``, not
+    ``fresh + output + thinking``.
     """
     log = tmp_path / "claude.log"
     log.write_text(
@@ -508,8 +506,7 @@ def test_a_compaction_charges_the_rebuilt_prompt_as_fresh_and_is_counted(
 ) -> None:
     """the claude setups compact proactively (agent_driver.claude_context_env). After a
     compaction the prompt is SHORTER than the previous one and shares no prefix with it -- a full
-    cache miss -- so the whole rebuilt prompt is fresh. The old fold charged it at zero
-    (max(0, 400 - 1500))."""
+    cache miss -- so the whole rebuilt prompt is fresh, not charged at zero (max(0, 400 - 1500))."""
     lines = [
         assistant_line("m1", 1000, 0),
         assistant_line("m2", 1500, 0),

@@ -9,18 +9,16 @@ result feeds a NON-ring op: ``+``/``-``/``*`` compose as a ring homomorphism mod
 but ``//`` (floor-division) is not a homomorphism and reads the un-wrapped
 intermediate, so ``(a + b) // 2`` at int8 diverges (numpy -28, wide 100).
 
-The fix is to re-wrap the wide result of every narrow-int ``+``/``-``/``*``/``**``/
-``<<`` (and unary ``-``) back to its element width. To decide WHEN, an emitter
+So the wide result of every narrow-int ``+``/``-``/``*``/``**``/
+``<<`` (and unary ``-``) is re-wrapped back to its element width. To decide WHEN, an emitter
 needs the numpy result dtype of a subtree; this module is the ONE
-differentially-tested definition of that inference. The first attempt used two
-divergent hand-rolled oracles, which truncated integer true division and int*float
--- both FLOAT results this inference reports as non-integer, so no wrap fires on
-them.
+differentially-tested definition of that inference: integer true division and
+int*float are FLOAT results it reports as non-integer, so no wrap fires on them.
 
 The inference is deliberately CONSERVATIVE: an operand it cannot resolve to a
 concrete dtype (a call result, an unknown name) makes the whole subtree UNKNOWN and
-no wrap fires -- matching today's behaviour for that subtree rather than risking a
-wrong wrap. ``+``/``-``/``*``/``**``/``<<`` and unary ``-`` are wrapped because each
+no wrap fires -- the unwrapped emit for that subtree rather than risking a wrong
+wrap. ``+``/``-``/``*``/``**``/``<<`` and unary ``-`` are wrapped because each
 can produce a magnitude exceeding its narrow operands (``**`` is exponential and
 ``<<`` shifts set bits past the top of the width, exactly like ``*`` by a power of
 two -- int8 ``16 ** 2`` wraps 256 -> 0 and ``50 << 2`` wraps 200 -> -56 the same way

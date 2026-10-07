@@ -65,7 +65,7 @@ def test_every_rank_is_a_valid_judge_and_the_deal_is_deterministic(driver: Modul
 
 
 def test_a_file_without_levels_keeps_the_index_stripe(driver: ModuleType) -> None:
-    """Rendered before make_problems stamped ``level``: one missing level keeps the old stripe."""
+    """A problems file without ``level``: one missing level keeps the index stripe."""
     problems = problems_with([3, 3, 3, 1, 1])
     del problems[4]["level"]
     assert driver.judge_ranks(problems, 2) == [0, 1, 0, 1, 0]

@@ -53,8 +53,8 @@ def test_qwen38s_own_perf_playbook_config_already_needs_the_full_ceiling(module:
 def test_a_small_low_concurrency_setup_derives_under_the_ceiling(module: types.ModuleType) -> None:
     """git-scicomp's qwen38 setups cap AGENTS_PER_NODE at 30, not 40 -- still not enough headroom at
     the full served context, but a SHORT context on a lightly-loaded node derives well under the
-    ceiling, which is the case this module exists to speed up: a dead stream on that setup is now
-    caught in less than the blanket 30 minutes every setup used to sit at."""
+    ceiling, which is the case this module exists to speed up: a dead stream on that setup is
+    caught in less than a blanket 30 minutes."""
     assert module.FLOOR_MS < module.derive_ms(8192, 4) < module.CEILING_MS
 
 

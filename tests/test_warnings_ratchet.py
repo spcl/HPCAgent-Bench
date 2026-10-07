@@ -58,10 +58,9 @@ _FLAVORS: tuple[tuple[str, str, str, str | None], ...] = (
 #: gfortran) with:
 #:   OMP_NUM_THREADS=1 OMPI_MCA_pml=ob1 OMPI_MCA_btl=self,vader,tcp PMIX_MCA_gds=hash \
 #:   UCX_VFS_ENABLE=n HWLOC_COMPONENTS=-gl python3 -m pytest tests/test_warnings_ratchet.py
-#: ZERO, and it starts at zero deliberately -- the first measurement was 40, every one of
-#: them clang++'s -Wunused-const-variable on the C++ prelude's file-scope M_PI/M_E, which
-#: numpyto_c/emit.py now marks [[maybe_unused]]. Starting a ratchet at a number that a
-#: one-line emitter fix removes would have frozen that warning in as acceptable.
+#: ZERO, deliberately: numpyto_c/emit.py marks the C++ prelude's file-scope M_PI/M_E
+#: [[maybe_unused]] (clang++'s -Wunused-const-variable), and starting a ratchet at a number a
+#: one-line emitter change removes would freeze that warning in as acceptable.
 #: MAY ONLY BE LOWERED: a change needing a higher number is a regression to fix, never a
 #: ratchet bump.
 _KNOWN_BAD_COUNT = 0
@@ -96,7 +95,7 @@ def toolchain_versions() -> str:
 def _run_build(cmds: list[list[str]], cwd: pathlib.Path) -> tuple[str | None, int, list[str]]:
     """Run a compile/link argv sequence, returning ``(failure, warning_count, warning_lines)``
     summed over every step's stderr. ``failure`` is None when every step exited zero, else the
-    failing command and its stderr -- the new -Wall -Wextra flags being REJECTED is a build break,
+    failing command and its stderr -- the -Wall -Wextra flags being REJECTED is a build break,
     not a warning to count, and must fail loudly.
 
     The lines come back alongside the count because the count alone is unactionable: this ratchet
@@ -104,12 +103,10 @@ def _run_build(cmds: list[list[str]], cwd: pathlib.Path) -> tuple[str | None, in
     has), so it can be zero on a dev box and nonzero on a CI runner. A failure that reports only
     a number leaves the CI log with nothing to fix -- the text is the whole diagnostic.
 
-    That reasoning applies to a BROKEN build at least as strongly, and this returned a bare
-    ``False`` for one earlier: clang selecting a GCC install with no libstdc++ headers
-    reached CI as "the new -Wall -Wextra flags broke the build" and nothing else, when clang had
-    said exactly what was wrong ("fatal error: 'cstdint' file not found", plus a
-    -Wgcc-install-dir-libstdcxx note naming the directory it picked). Diagnosing it took a log
-    from a different job that happened to print its stderr. Carry the text.
+    That reasoning applies to a BROKEN build at least as strongly: clang selecting a GCC install
+    with no libstdc++ headers says exactly what is wrong ("fatal error: 'cstdint' file not found",
+    plus a -Wgcc-install-dir-libstdcxx note naming the directory it picked), and a bare ``False``
+    would reduce that to "the build broke". Carry the text.
     """
     warnings = 0
     lines: list[str] = []

@@ -47,7 +47,7 @@ def bound(source: str, **values: object) -> dict[str, object]:
 
 @pytest.mark.parametrize("make", EVERY_BACKEND)
 def test_a_starred_element_has_no_per_target_spelling(make: Callable[[], SplitTupleUnpack]) -> None:
-    """``a = *p`` is not python, and every split used to emit it."""
+    """``a = *p`` is not python, so no split may emit it."""
     assert split(make(), "a, b = *p, q") == unchanged("a, b = *p, q")
 
 

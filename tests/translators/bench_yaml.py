@@ -29,8 +29,7 @@ REPO = pathlib.Path(__file__).resolve().parents[2]
 #:
 #: Two tests here lower every kernel in the registry to ask one question about the result, and both
 #: are minutes-per-hundred-kernels through the frontend. CI runs each of them as a matrix over this
-#: variable so no container carries a whole sweep: run 33626484866 got through 2 of the tree's 59
-#: integration tests in 45m53s, and those 2 were these.
+#: variable so no container carries a whole sweep (the two alone exceed a 45-minute container cap).
 #:
 #: Sharding is sound for exactly these sweeps because their findings are PER KERNEL and asserted
 #: empty -- the union of the shards' findings is the single sweep's, so a kernel that regresses

@@ -53,8 +53,8 @@ def shape_from_iter_extent(node: ast.expr, known: dict[str, str], route_calls: b
     @ W + b, 0)``, ``np.reshape(x, (N, M))`` -- lenet's MLP tail):
     ``iter_extent_of`` resolves matmul rank / broadcast / reshape-to-
     newshape / elementwise and bails (``None``) on reductions / transpose
-    / repeat. This is OFF by default because newly resolving a Call shape
-    can newly-PROMOTE a return that previously fell back to bench_info
+    / repeat. This is OFF by default because resolving a Call shape can
+    PROMOTE a return that otherwise falls back to bench_info
     (softmax/mlp/resnet); the caller enables it only for the shape-VALUE
     pass, gated by the conservative promote decision."""
     accepted = (

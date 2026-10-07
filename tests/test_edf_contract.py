@@ -3,7 +3,7 @@
 """The EDF and the image's ENV PATH are one contract, so both are tested here.
 
 At run time PATH is the image's own ENV (the CE reads the /etc/environment build_common.ce_squash_mounted
-writes) with the launch venv in front: the ENTRYPOINT (containers/lib/launch_venv.sh) prepends it and names
+writes) with the launch venv in front: the ENTRYPOINT (containers/images/lib/launch_venv.sh) prepends it and names
 its python in HPCAGENT_BENCH_IMAGE_PYTHON. The CE applies an EDF's [env] AFTER the ENTRYPOINT, so an EDF that
 sets PATH, VIRTUAL_ENV or HPCAGENT_BENCH_IMAGE_PYTHON silently undoes the venv: every step then runs the image
 python, which imports none of the packages installed at launch.

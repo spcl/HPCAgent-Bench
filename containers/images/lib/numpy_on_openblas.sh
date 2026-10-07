@@ -36,16 +36,16 @@ sync() {
 sync --reinstall-package numpy --no-binary-package numpy \
     --config-settings-package numpy:setup-args=-Dblas=openblas --config-settings-package numpy:setup-args=-Dlapack=openblas
 # scipy without build isolation, so it compiles against the numpy just rebuilt: an isolated build env
-# builds a numpy of its own from source (--no-binary), which scipy's meson then failed to import (AMD 655840).
+# builds a numpy of its own from source (--no-binary), which scipy's meson then fails to import.
 # Its build tools are the locked openblas-build group, already in the environment. numpy is skipped here and by
 # every later sync of this environment (the Dockerfile passes --no-install-package numpy --no-install-package
 # scipy): uv reinstalls a package whose build settings differ from the ones it was installed with, and without
-# the setup-args above a plain sync puts the wheel and its bundled scipy-openblas back (660464).
+# the setup-args above a plain sync puts the wheel and its bundled scipy-openblas back.
 sync --no-install-package numpy --reinstall-package scipy --no-binary-package scipy --no-build-isolation-package scipy \
     --config-settings-package scipy:setup-args=-Dblas=openblas --config-settings-package scipy:setup-args=-Dlapack=openblas
 
-# A spack-built gcc writes its runtime directory as DT_RPATH into everything it links (AMD 656542), and
-# DT_RPATH is searched before LD_LIBRARY_PATH: the llvm context could not put its own libgomp.so.1 and
+# A spack-built gcc writes its runtime directory as DT_RPATH into everything it links, and
+# DT_RPATH is searched before LD_LIBRARY_PATH: the llvm context cannot put its own libgomp.so.1 and
 # libopenblas.so.0 first. patchelf rewrites the same path as DT_RUNPATH, which is searched after it.
 site="$("${py}" -c 'import sysconfig; print(sysconfig.get_paths()["platlib"])')"
 patchelf="$(command -v patchelf || echo "$(dirname "${py}")/patchelf")"

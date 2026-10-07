@@ -38,14 +38,12 @@ def create_schema_race_worker(
 
 @pytest.mark.skipif(not osinfo.IS_LINUX, reason="fork start method is Linux-only")
 def test_four_ranks_racing_the_first_write_to_one_shard_do_not_crash(tmp_path: pathlib.Path) -> None:
-    """Cholesky crashed the compiler-baseline sweep on EVERY column. Every column's
-    ranks write results through ONE shard file each (recording.db_path, sharded by SLURM_PROCID);
-    ``results_engine``'s ``create_all`` reads ``sqlite_master`` and then issues CREATE TABLE --
-    check-then-act, not atomic -- and cholesky, always the first kernel a fresh rank writes, was
-    always the one caught racing that first CREATE against a sibling rank's own first write. The
-    loser raised ``sqlalchemy.exc.OperationalError: ... table results already exists``, and cholesky
-    itself (cholesky_numpy.py has no DB code at all) was never the cause. Reproduced here with real
-    forked processes racing ONE not-yet-existing file, matching the production shape exactly."""
+    """Every column's ranks write results through ONE shard file each (recording.db_path, sharded
+    by SLURM_PROCID); ``results_engine``'s ``create_all`` reads ``sqlite_master`` and then issues
+    CREATE TABLE -- check-then-act, not atomic -- so the first kernel a fresh rank writes (cholesky)
+    races that first CREATE against a sibling rank's, and the loser must not raise
+    ``sqlalchemy.exc.OperationalError: ... table results already exists``. Real forked processes
+    race ONE not-yet-existing file here, matching the production shape exactly."""
     path = str(tmp_path / "hpcagent_bench0.db")
     ctx = multiprocessing.get_context("fork")
     barrier = ctx.Barrier(4)

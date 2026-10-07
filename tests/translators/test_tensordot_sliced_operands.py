@@ -44,9 +44,8 @@ def unparse_(stmts):
 
 
 def test_iter_extent_of_sliced_tensordot_uses_the_slice_bound() -> None:
-    # Regression pin for the root cause: the output extent along a sliced axis must be the
-    # slice's own bound (H_out), not the full base axis (H) the old operand-shape helper fell
-    # back to when it saw a non-Name operand.
+    # The output extent along a sliced axis must be the slice's own bound (H_out), not the full
+    # base axis (H) an operand-shape helper falls back to on a non-Name operand.
     call = ast.parse(
         "np.tensordot(x[:, ki:ki + H_out, kj:kj + W_out, :], w[ki, kj], axes=([3], [0]))", mode="eval"
     ).body

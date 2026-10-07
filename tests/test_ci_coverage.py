@@ -339,8 +339,8 @@ def integration_shards() -> list[dict]:
 
 
 def test_the_integration_shards_partition_tests_dir() -> None:
-    """``-m integration tests/`` was ONE step until it measured 30m05s against its 30-minute cap
-    with every test passing; it is now dealt over shards by naming files on some shards and
+    """``-m integration tests/`` does not fit one 30-minute step, so it is dealt over shards by
+    naming files on some shards and
     ``--ignore``-ing exactly those files on the one shard that sweeps ``tests/``.
 
     The union has to be exactly what the single step ran: a named file the sweeping shard forgot

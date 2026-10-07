@@ -145,7 +145,7 @@ _FP_ASSOC = "-fassociative-math" if config.get("flags.fp_associative", False) el
 _FP_CONTRACT = "-ffp-contract=fast"
 
 #: nvc's spelling of the same thing: ``-Mfma``, on by default at ``-O2`` and above, so this states the
-#: default. Unverified without the NVIDIA HPC SDK (INSTALL_NVHPC); ``containers/lib/parallelizer-gate.sh``
+#: default. Unverified without the NVIDIA HPC SDK (INSTALL_NVHPC); ``containers/images/lib/parallelizer-gate.sh``
 #: checks it at image build.
 FP_CONTRACT_NVHPC = "-Mfma"
 

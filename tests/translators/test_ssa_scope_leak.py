@@ -217,9 +217,9 @@ def assert_refused(body: str) -> None:
 
 
 def test_rebinding_nested_below_the_loop_body_is_refused() -> None:
-    """The guard consulted only the IMMEDIATELY enclosing block, so a rebinding one level deeper
-    escaped it -- the same miscompile the guard exists for, just nested. Every enclosing loop's
-    re-entry POINT is carried down now and truncated per name at the mint site (the truncation
+    """A guard consulting only the IMMEDIATELY enclosing block lets a rebinding one level deeper
+    escape -- the same miscompile the guard exists for, just nested. Every enclosing loop's
+    re-entry POINT is carried down and truncated per name at the mint site (the truncation
     depends on the name, so a pre-truncated prefix cannot be passed down)."""
     assert_refused("""
 def k(a, out, n, m, iters):

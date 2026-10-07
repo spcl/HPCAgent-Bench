@@ -6,8 +6,7 @@
 #
 #   gpu_arch_check.sh <edf name or path>        (inside a Slurm allocation)
 #
-# Exit 2 on a mismatch, printing all three. An image built before the stamp existed has no
-# /opt/gpu-arch: that WARNS and exits 0, so experiments on those images keep launching.
+# Exit 2 on a mismatch, printing all three, or on an image with no /opt/gpu-arch stamp (rebuild it).
 set -euo pipefail
 ulimit -c 0
 
@@ -23,8 +22,8 @@ main() {
     table="$(ce_partition_arch "${SLURM_JOB_PARTITION:?gpu_arch_check.sh runs inside a Slurm allocation}")"
     stamp="$(in_image "${edf}" sh -c 'cat /opt/gpu-arch 2>/dev/null || true')"
     if [[ -z "${stamp}" ]]; then
-        echo "gpu_arch_check: WARNING: ${edf} has no /opt/gpu-arch (image predates the stamp); arch not checked" >&2
-        return 0
+        echo "gpu_arch_check: ${edf} has no /opt/gpu-arch stamp; rebuild the image" >&2
+        exit 2
     fi
     info="$(in_image "${edf}" /opt/rocm/bin/rocminfo)" || { echo "gpu_arch_check: rocminfo failed in ${edf}" >&2; exit 2; }
     probe="$(sed -nE 's/^[[:space:]]*Name:[[:space:]]+(gfx[0-9a-f]+)[[:space:]]*$/\1/p' <<< "${info}" | sed -n 1p)"

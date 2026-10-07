@@ -45,7 +45,7 @@ versions "${gomp}" > "${gomp_versions}"
 find ${roots} -xdev \( -type f -o -type l \) \( -name 'libgomp.so.1*' -o -name 'libgomp-*.so*' \) \
         -not -path '*/lib32/*' -not -path '*/libx32/*' -not -path '*/32/*' -not -path '*/x32/*' \
         -print | sort -u | while read -r copy; do
-    # A dangling link maps nothing (apt llvm's libgomp.so.1 shim without libomp: silent set -e exit, daint 4952006).
+    # A dangling link maps nothing (apt llvm's libgomp.so.1 shim without libomp: silent set -e exit).
     real="$(readlink -f "${copy}")" || continue
     case "$(basename "${real}")" in libgomp*) ;; *) continue ;; esac
     [ "${real}" = "${gomp}" ] && continue
