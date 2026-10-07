@@ -70,9 +70,10 @@ log lines), which is the shipped configuration ([knobs.md](knobs.md#aiter-correc
 - Measure with 40 long-lived streams at your p50 and p90 prompt sizes, back to back on one node; never
   trust a cold smoke ([`knobs.md`](knobs.md#the-kv-pool-threshold)).
 
-## GH200 (Daint): unmeasured
+## GH200 (Daint)
 
-Nothing here has served Qwen3.8 on GH200. `Qwen/Qwen3.8-27B-FP8` (about 28.5 GB) fits one 96 GB GPU;
+Served on Daint (TP4, vLLM): how to run it is in [`qwen38-gh200.md`](qwen38-gh200.md).
+`Qwen/Qwen3.8-27B-FP8` (about 28.5 GB) fits one 96 GB GPU;
 native context is 262144 tokens. Parsers: `--reasoning-parser qwen3`, plus `--tool-call-parser qwen3_coder`
 on SGLang or `--enable-auto-tool-choice --tool-call-parser qwen3_xml` on vLLM. A CUDA 13 image needs
 `com.hooks.aws_ofi_nccl.variant = "cuda13"` ([IMAGE_REQUIREMENTS.md](../../containers/images/IMAGE_REQUIREMENTS.md)).

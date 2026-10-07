@@ -8,6 +8,8 @@
 #   CE_PULL=1         before building, pull the registry image whose build-inputs label matches
 #                     this checkout (ce_pull_wanted); only = pull the tag or fail; 0 = always build.
 #   PULL_REPO         where ce_pull_wanted looks: PUSH_REPO when set, else images.env REGISTRY_REPO.
+#   CE_LAYER_CACHE=1  keep podman's layers between jobs in a registry on scratch (ce_layer_registry), so a
+#                     failed build on any node resumes from its last unchanged step; 0 (default) does not.
 
 # No core dumps: they land in the CWD on an inode-quota filesystem.
 ulimit -c 0
@@ -16,6 +18,8 @@ CE_IMAGES_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 [[ -n "${CE_IMAGE_TABLE:-}" ]] || source "${CE_IMAGES_DIR}/images.env"
 CE_BUILD_CACHE="${CE_BUILD_CACHE:-1}"
 CE_PULL="${CE_PULL:-1}"
+CE_LAYER_CACHE="${CE_LAYER_CACHE:-0}"
+CE_LAYER_PORT="${CE_LAYER_PORT:-5000}"
 PULL_REPO="${PULL_REPO:-${PUSH_REPO:-${REGISTRY_REPO}}}"
 # The image label that records ce_build_fingerprint; ce_pull_wanted compares against it.
 CE_INPUTS_LABEL="org.hpcagent-bench.build-inputs"
@@ -40,6 +44,7 @@ ce_podman_env() {
         export CONTAINERS_STORAGE_CONF="${CE_TMPFS}/storage.conf"
     fi
     CE_BUILD_FLAGS=(--layers=true)
+    ce_layer_registry || return 2
     if [[ "${CE_BUILD_CACHE}" == 1 ]] && podman images >/dev/null 2>&1; then
         printf 'podman layer cache %s/root on %s (%s); resubmit with --nodelist=%s to resume\n' \
             "${CE_TMPFS}" "$(hostname)" "$(du -sh "${CE_TMPFS}/root" 2>/dev/null | cut -f1)" "$(hostname)"
@@ -48,6 +53,49 @@ ce_podman_env() {
     podman unshare rm -rf "${CE_TMPFS}/root" 2>/dev/null || true
     rm -rf "${CE_TMPFS}/root"
     [[ "${CE_BUILD_CACHE}" == 1 ]] || CE_BUILD_FLAGS=(--no-cache)
+}
+
+# CE_LAYER_CACHE=1: a registry (distribution v3) on 127.0.0.1:CE_LAYER_PORT over
+# ${SCRATCH}/.hpcagentbench-cache/container-layers, which ce_build passes as --cache-from/--cache-to. The node's
+# layer store under CE_TMPFS is wiped when the job ends (daint /dev/shm), so without it every build redoes every
+# step. Sets CE_LAYER_REPO; the registry binary is fetched once into the cache's tools/, checksum-pinned.
+ce_layer_registry() {
+    CE_LAYER_REPO=""
+    [[ "${CE_LAYER_CACHE}" == 1 && "${CE_BUILD_CACHE}" == 1 ]] || return 0
+    local root="${JIT_CACHE_ROOT:-${SCRATCH:?}/.hpcagentbench-cache}" arch sum staging
+    local tools="${root}/tools/registry-3.0.0" store="${root}/container-layers" conf="${CE_TMPFS}/layer-registry.yml"
+    case "$(uname -m)" in
+        aarch64) arch=arm64 sum=6c2ee1d135626fa42e0d6fb66a0e0f42e22439e5050087d04f4c5ff53655892e ;;
+        x86_64) arch=amd64 sum=61c9a2c0d5981a78482025b6b69728521fbc78506d68b223d4a2eb825de5ca3d ;;
+        *) echo "ce_layer_registry: no registry build for $(uname -m)" >&2; return 2 ;;
+    esac
+    if [[ ! -x "${tools}/registry" ]]; then
+        mkdir -p "${root}/tools"
+        staging="$(mktemp -d "${root}/tools/registry.XXXXXX")"
+        curl -fsSL -o "${staging}/registry.tgz" \
+            "https://github.com/distribution/distribution/releases/download/v3.0.0/registry_3.0.0_linux_${arch}.tar.gz"
+        echo "${sum}  ${staging}/registry.tgz" | sha256sum -c --quiet - \
+            || { echo "ce_layer_registry: registry download fails its checksum" >&2; rm -rf "${staging}"; return 2; }
+        tar -xzf "${staging}/registry.tgz" -C "${staging}" registry
+        mkdir -p "${tools}" && mv -f "${staging}/registry" "${tools}/registry" && rm -rf "${staging}"
+    fi
+    mkdir -p "${store}"
+    printf 'version: 0.1\nlog:\n  level: warn\nstorage:\n  filesystem:\n    rootdirectory: %s\nhttp:\n  addr: 127.0.0.1:%s\n' \
+        "${store}" "${CE_LAYER_PORT}" > "${conf}"
+    "${tools}/registry" serve "${conf}" > "${CE_TMPFS}/layer-registry.log" 2>&1 &
+    CE_LAYER_PID=$!
+    for _ in $(seq 30); do
+        curl -fs "http://127.0.0.1:${CE_LAYER_PORT}/v2/" >/dev/null && break
+        sleep 1
+    done
+    curl -fs "http://127.0.0.1:${CE_LAYER_PORT}/v2/" >/dev/null \
+        || { echo "ce_layer_registry: registry did not start" >&2; tail -5 "${CE_TMPFS}/layer-registry.log" >&2; return 2; }
+    # Plain HTTP on loopback: the system registries plus this one marked insecure.
+    { cat /etc/containers/registries.conf 2>/dev/null
+      printf '\n[[registry]]\nlocation = "127.0.0.1:%s"\ninsecure = true\n' "${CE_LAYER_PORT}"; } > "${CE_TMPFS}/registries.conf"
+    export CONTAINERS_REGISTRIES_CONF="${CE_TMPFS}/registries.conf"
+    CE_LAYER_REPO="127.0.0.1:${CE_LAYER_PORT}"
+    printf 'podman layer cache registry %s (%s) at %s\n' "${store}" "$(du -sh "${store}" 2>/dev/null | cut -f1)" "${CE_LAYER_REPO}"
 }
 
 # Sets CACHE_ARGS: the spack binary buildcache and uv wheel cache as build mounts. The Dockerfiles
@@ -366,6 +414,10 @@ ce_build() {
     fp="${CE_FINGERPRINT[${target:-_}]:-}"
     [[ -z "${fp}" ]] || extra+=(--label "${CE_INPUTS_LABEL}=${fp}")
     [[ -z "${target}" ]] || extra+=(--target "${target}")
+    # One cache repository per Dockerfile: its agent and judge targets share their common layers.
+    [[ -z "${CE_LAYER_REPO:-}" ]] \
+        || extra+=(--cache-from "${CE_LAYER_REPO}/$(basename "$(dirname "${dockerfile}")")" \
+                   --cache-to "${CE_LAYER_REPO}/$(basename "$(dirname "${dockerfile}")")")
     printf '\n===== building %s -> %s =====\n' "${target:-${tag}}" "${out}"
     # cgroupfs: with the systemd manager a dying logind session reaps podman mid-pull (silent rc=1).
     (cd -- "${CE_IMAGES_DIR}/../.." && podman --cgroup-manager=cgroupfs build "${CE_BUILD_FLAGS[@]}" "$@" \

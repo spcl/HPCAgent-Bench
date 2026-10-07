@@ -10,7 +10,7 @@
 #    OPENBLAS_CORETYPE can force: spack's NO_AVX512 with DYNAMIC_ARCH segfaulted row-major dgemm at
 #    M >= 8192, K >= 512 on Zen 4 (spack-overlay/.../openblas/package.py).
 # 2. Concurrent callers from plain pthreads (what numba's TBB pool and an agent's own threads do):
-#    one per hardware thread with OpenBLAS threading on, then twice that with each call single-
+#    one per hardware thread with OpenBLAS threading on (4 threads each), then twice that with each call single-
 #    threaded. A build whose MAX_THREADS is below the caller count overflows its buffer table
 #    (Ubuntu's MAX_THREADS=64 OpenBLAS crashed at 192 callers).
 # Any crash fails the build; the gate prints what it ran.
@@ -83,6 +83,7 @@ for coretype in "" ${coretypes}; do
   done
 done
 echo "blas_gate: tall GEMMs pass (coretypes: default ${coretypes})"
-"${work}/callers" "$(nproc)" || { echo "blas_gate: $(nproc) concurrent callers crashed" >&2; exit 1; }
+# Four threads per call keeps OpenBLAS threading on without nproc^2 threads (libgomp EAGAIN).
+OMP_NUM_THREADS=4 "${work}/callers" "$(nproc)" || { echo "blas_gate: $(nproc) concurrent callers crashed" >&2; exit 1; }
 OMP_NUM_THREADS=1 "${work}/callers" "$(( 2 * $(nproc) ))" \
   || { echo "blas_gate: $(( 2 * $(nproc) )) single-threaded concurrent callers crashed" >&2; exit 1; }

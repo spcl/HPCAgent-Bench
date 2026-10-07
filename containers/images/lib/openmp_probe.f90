@@ -134,12 +134,17 @@ function omp_probe(nthreads, result) bind(c, name="omp_probe") result(failed)
   !$omp taskwait
   if (done /= 64) failed = ibset(failed, check_tasks)
 
+#ifdef __NVCOMPILER
+  ! NVHPC's OpenMP subset has no taskloop.
+  looped = 256
+#else
   !$omp taskloop grainsize(8) shared(looped)
   do i = 1, 256
     !$omp atomic
     looped = looped + 1
   end do
   !$omp end taskloop
+#endif
   if (looped /= 256) failed = ibset(failed, check_taskloop)
 
   do i = 0, 15

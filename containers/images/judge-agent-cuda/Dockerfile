@@ -132,7 +132,7 @@ ARG NSIGHT_COMPUTE_PKG=nsight-compute-2026.3.0
 ENV LC_ALL=C \
     PLAYWRIGHT_BROWSERS_PATH=/opt/playwright \
     NVIDIA_VISIBLE_DEVICES=all \
-    NVIDIA_DRIVER_CAPABILITIES=compute,utility,profiler \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility \
     CUDA_HOME=/usr/local/cuda \
     SPACK_ROOT=/opt/spack \
     SPACK_ENV_DIR=/opt/spack-env \
@@ -385,7 +385,25 @@ RUN set -eux; \
       '  "${SPACK_ROOT}/bin/spack" -e "${SPACK_ENV_DIR}" buildcache push --unsigned --update-index /spack-buildcache || true' \
       'fi' \
       > /usr/local/bin/spack-cache-push; \
-    chmod 0755 /usr/local/bin/spack-cache-push
+    chmod 0755 /usr/local/bin/spack-cache-push; \
+    printf '%s\n' \
+      '#!/bin/sh' \
+      '# Give the next environment install a view directory no lower layer holds, behind the /opt/view symlink.' \
+      '# Replacing a view a lower layer holds is unreliable under overlayfs: spack'"'"'s rmtree failed with ENOTEMPTY' \
+      '# and a removed-then-recreated /opt/view showed the old .spack-view.' \
+      'set -eu' \
+      'next="/opt/views/$(date +%s%N)"' \
+      '# concretize leaves an empty /opt/view; a non-empty directory there is not ours to replace.' \
+      'if [ -e /opt/view ] && [ ! -L /opt/view ]; then' \
+      '  rmdir /opt/view || { echo "spack-view-next: /opt/view is a non-empty directory, not the view symlink" >&2; exit 1; }' \
+      'fi' \
+      'sed -i "s|^      root: .*|      root: ${next}|" "${SPACK_ENV_DIR}/spack.yaml"' \
+      'grep -qx "      root: ${next}" "${SPACK_ENV_DIR}/spack.yaml"' \
+      'mkdir -p /opt/views' \
+      'ln -sfn "${next}" /opt/view.next' \
+      'mv -Tf /opt/view.next /opt/view' \
+      > /usr/local/bin/spack-view-next; \
+    chmod 0755 /usr/local/bin/spack-view-next
 
 # ---------------------------------------------------------------------------------------------
 # 5. gcc 16 with Graphite, then llvm 22 with MLIR, Polly, flang and the nvptx OpenMP offload
@@ -458,6 +476,8 @@ RUN set -eux; \
       '      link: roots' \
       '      link_type: symlink' \
       > "${SPACK_ENV_DIR}/spack.yaml"; \
+    # concretize writes the view too: /opt/view is the symlink from the first write on.
+    spack-view-next; \
     "${spack}" -e "${SPACK_ENV_DIR}" concretize -f | tail -80; \
     printf '%s\n' \
       'import json, sys' \
@@ -482,6 +502,7 @@ RUN set -eux; \
     # -pipe: no /tmp/cc*.s files; llvm units fail on truncated ones in the podman build. \
     # Through the compiler wrapper's own override variables, not as `cflags=-pipe cxxflags=-pipe` on the \
     # spec: llvm then fails in python's build hook with KeyError: no compiler-wrapper in the llvm spec. \
+    spack-view-next; \
     SPACK_ALWAYS_CFLAGS=-pipe SPACK_ALWAYS_CXXFLAGS=-pipe \
       "${spack}" -e "${SPACK_ENV_DIR}" install --fail-fast "llvm@${LLVM_VERSION}"; \
     spack-cache-push; \
@@ -582,6 +603,7 @@ RUN set -eux; \
 # ---------------------------------------------------------------------------------------------
 # 6. MPI and the core HPC libraries DaCe codegen can emit a call to. judge-agent-amd step 5.
 RUN set -eux; \
+    spack-view-next; \
     "${SPACK_ROOT}/bin/spack" -e "${SPACK_ENV_DIR}" install --fail-fast \
       mpich openblas netlib-scalapack fftw hdf5 blaze metis parmetis scotch suite-sparse superlu; \
     spack-cache-push; \
@@ -633,6 +655,7 @@ RUN set -eux; \
 # ---------------------------------------------------------------------------------------------
 # 7. Sparse-direct solvers, iterative kernels and MAGMA (CUDA backend). judge-agent-amd step 6.
 RUN set -eux; \
+    spack-view-next; \
     "${SPACK_ROOT}/bin/spack" -e "${SPACK_ENV_DIR}" install --fail-fast \
       superlu-dist mumps strumpack hypre arpack-ng magma sundials; \
     spack-cache-push; \
@@ -642,6 +665,7 @@ RUN set -eux; \
 
 # 8. PETSc and SLEPc -- their OWN layer, the expensive node. judge-agent-amd step 7.
 RUN set -eux; \
+    spack-view-next; \
     "${SPACK_ROOT}/bin/spack" -e "${SPACK_ENV_DIR}" install --fail-fast petsc slepc; \
     spack-cache-push; \
     "${SPACK_ROOT}/bin/spack" clean --stage; \
@@ -772,6 +796,7 @@ RUN set -eux; \
     spack="${SPACK_ROOT}/bin/spack"; \
     "${spack}" install --fail-fast \
       "openmpi@5 +cuda cuda_arch=${CUDA_ARCHS} +openshmem fabrics=ucx %gcc@${GCC_VERSION} ^ucx +cuda cuda_arch=${CUDA_ARCHS}"; \
+    spack-cache-push openmpi; \
     "${spack}" clean --stage; \
     if [ -n "${SPACK_TARGET}" ]; then \
       stray="$(ls /opt/spack-install | grep -vx -e bin -e "linux-${SPACK_TARGET}" || true)"; \
@@ -801,6 +826,8 @@ RUN set -eux; \
 # up needs a driver and a device; verify_image.sbatch asks that on the node after the import. Only
 # ENUMERATED counter names resolve (`cuda:::dram__bytes_read`, not ncu's `.sum` spelling).
 # --allow-multiple-definition: the cuda and nvml components define the same helper symbols.
+# --with-tests=no: the cuda component's tests call the CUDA 12 three-argument cuCtxCreate, which CUDA 13
+# no longer has; the image runs none of PAPI's tests.
 ARG PAPI_REF=papi-7-2-0-t
 RUN set -eux; \
     git init -q /tmp/papi; \
@@ -809,7 +836,7 @@ RUN set -eux; \
     git -C /tmp/papi checkout -q FETCH_HEAD; \
     cd /tmp/papi/src; \
     PAPI_NVML_ROOT=/usr/local/cuda ./configure --prefix=/opt/papi \
-      --with-components="perf_event perf_event_uncore sysdetect cuda nvml" \
+      --with-components="perf_event perf_event_uncore sysdetect cuda nvml" --with-tests=no \
       LDFLAGS="-Wl,--allow-multiple-definition"; \
     PAPI_NVML_ROOT=/usr/local/cuda make -j"$(nproc)"; \
     make install; \
@@ -832,6 +859,8 @@ ARG PLUTO_CLANG_MAJOR=17
 COPY containers/images/lib/build-pluto.sh /build-pluto.sh
 RUN PLUTO_CLANG_MAJOR="${PLUTO_CLANG_MAJOR}" sh /build-pluto.sh && rm -rf /build-pluto.sh /var/lib/apt/lists/*
 
+# ppcg's isl configures its interface generator with CXX_FOR_BUILD, not CXX: left unset it is g++ -std=c++11,
+# which cannot compile clang 17's headers ("unable to link against libclang-cpp").
 ARG PPCG_COMMIT=7cbf785210cdc1bd68fd277d2ecf7dd824da874a
 RUN set -eux; \
     gitretry clone --recursive https://repo.or.cz/ppcg.git /opt/ppcg; \
@@ -841,7 +870,8 @@ RUN set -eux; \
     ./autogen.sh; \
     ./configure --prefix=/opt/ppcg-install --with-clang-prefix="/usr/lib/llvm-${PLUTO_CLANG_MAJOR}" \
       CC="clang-${PLUTO_CLANG_MAJOR}" CXX="clang++-${PLUTO_CLANG_MAJOR}" \
-      CXXFLAGS='-std=c++17 -include cstdint'; \
+      CXXFLAGS='-std=c++17 -include cstdint' \
+      CXX_FOR_BUILD="clang++-${PLUTO_CLANG_MAJOR}" CXXFLAGS_FOR_BUILD='-std=c++17 -include cstdint'; \
     make -j"$(nproc)"; \
     make install; \
     ln -sf /opt/ppcg-install/bin/ppcg /usr/local/bin/ppcg; \
@@ -927,10 +957,20 @@ RUN set -eux; \
 
 # 14b. The generic BLAS/LAPACK names point at the spack OpenBLAS, not at blis and not at netlib.
 # If blis owns libblas.so.3, every LAPACKE factorization fails to link.
+# The NGC base ships ATLAS (libatlas3-base, libatlas-base-dev), whose libcblas.so.3 is what DaCe's OpenBLAS
+# environment found instead; it goes, and only it -- a purge that takes anything else fails.
 RUN set -eux; \
     multiarch="$(uname -m)-linux-gnu"; \
     openblas_so="$(readlink -f /opt/view/lib/libopenblas.so)"; \
     test -f "${openblas_so}"; \
+    if dpkg -s libatlas3-base >/dev/null 2>&1; then \
+      others="$(apt-get -s purge libatlas-base-dev libatlas3-base | sed -n 's/^Purg \([^ ]*\).*/\1/p' \
+        | grep -vx -e libatlas-base-dev -e libatlas3-base | tr '\n' ' ' || true)"; \
+      [ -z "${others}" ] || { echo "purging ATLAS would also remove: ${others}" >&2; exit 1; }; \
+      apt-get purge -y libatlas-base-dev libatlas3-base; \
+    fi; \
+    ! ls /usr/lib/${multiarch}/libatlas.so* /usr/lib/${multiarch}/libcblas.so.3* 2>/dev/null \
+      || { echo "ATLAS libraries remain after the purge" >&2; exit 1; }; \
     for group in libblas.so.3 libblas.so liblapack.so.3 liblapack.so libcblas.so liblapacke.so; do \
       link="/usr/lib/${multiarch}/${group}"; \
       if update-alternatives --list "${group}-${multiarch}" >/dev/null 2>&1; then \
@@ -1044,11 +1084,20 @@ RUN set -eux; \
     done; \
     rm -f /tmp/h.cu /tmp/h.out; \
     printf '%s\n' 'int main(void){return 0;}' > /tmp/l.c; \
-    for lib in -lopenblas -llapack -lscalapack -lfftw3 -lhdf5 -ltbb -lhptt -ltblis -lmetis \
-               -lparmetis -lscotch -lsuperlu -lsuperlu_dist -ldmumps -lHYPRE -lmagma -lpetsc \
-               -lslepc -lumfpack -larpack -lsundials_core -lmvec; do \
-      gcc /tmp/l.c -o /tmp/l.out "${lib}" || { echo "trial link failed for ${lib}" >&2; exit 1; }; \
+    # Each entry is the link line envs/libraries.yaml gives: libscotch.so leaves SCOTCH_errorPrint to libscotcherr.
+    # The driver's libcuda.so.1 and libnvidia-ml.so.1 (PETSc NEEDs both) come from the node at run time; here
+    # the toolkit stubs stand in for them, by soname, only for this link.
+    drv="$(mktemp -d)"; \
+    for so in cuda nvidia-ml; do \
+      test -f "/usr/local/cuda/lib64/stubs/lib${so}.so"; \
+      ln -s "/usr/local/cuda/lib64/stubs/lib${so}.so" "${drv}/lib${so}.so.1"; \
     done; \
+    for lib in -lopenblas -llapack -lscalapack -lfftw3 -lhdf5 -ltbb -lhptt -ltblis -lmetis \
+               -lparmetis "-lscotch -lscotcherr" -lsuperlu -lsuperlu_dist -ldmumps -lHYPRE -lmagma -lpetsc \
+               -lslepc -lumfpack -larpack -lsundials_core -lmvec; do \
+      gcc /tmp/l.c -o /tmp/l.out ${lib} -Wl,-rpath-link,"${drv}" || { echo "trial link failed for ${lib}" >&2; exit 1; }; \
+    done; \
+    rm -rf "${drv}"; \
     echo '#include <ska_sort.hpp>' > /tmp/l.cpp; \
     echo 'int main(){return 0;}' >> /tmp/l.cpp; \
     g++ -std=c++20 /tmp/l.cpp -o /tmp/l.out || { echo "ska_sort.hpp not usable" >&2; exit 1; }; \

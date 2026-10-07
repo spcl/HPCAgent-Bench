@@ -151,7 +151,7 @@ RUN set -eux; \
 # specs are in the view; their dependencies stay rpath'd under /opt/spack-install). MPICH has no
 # +slurm: its built-in PMI-1/2 client serves any host srun --mpi=pmi2, and netmod=ofi lets a site
 # bind its own libfabric (containers/README.md, "Running outside CSCS"). OpenBLAS is spack's too, the
-# same pinned build as the GPU images (0.3.30, OpenMP, 512 threads, locking, runtime dispatch through
+# same pinned build as the GPU images (0.3.30, 0.3.33 on aarch64, OpenMP, 512 threads, locking, runtime dispatch through
 # the hpcagent overlay): Ubuntu's MAX_THREADS=64 build crashes past 64 concurrent callers, which a
 # numba pool or an agent's own threads reach on any large node. Pins match judge-agent-cuda.
 ARG SPACK_REF=66ff2229e4ff1fbae9006dddd067e45120a5cba8
@@ -216,6 +216,11 @@ RUN set -eux; \
       '  - mumps ~mpi +shared' \
       '  view:' '    default:' '      root: /opt/view' '      link: roots' '      link_type: symlink' \
       > "${SPACK_ENV_DIR}/spack.yaml"; \
+    # aarch64 takes 0.3.33: 0.3.30 there has no bfloat16 sbgemm_, which the torch wheel resolves from this
+    # libopenblas.so.0 through LD_LIBRARY_PATH (ImportError). x86_64 stays on 0.3.30.
+    if [ "$(uname -m)" = aarch64 ]; then \
+      sed -i 's/openblas@0\.3\.30/openblas@0.3.33/' "${SPACK_ENV_DIR}/spack.yaml"; \
+    fi; \
     "${spack}" -e "${SPACK_ENV_DIR}" concretize -f | tail -60; \
     python3 -c "import json, sys; specs = json.load(open(sys.argv[1]))['concrete_specs'].values(); \
 bad = sorted({n['name'] for n in specs if n['name'] in ('armpl-gcc', 'curl', 'perl', 'cmake') \
