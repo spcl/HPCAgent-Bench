@@ -1,6 +1,6 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Shared helpers for the scripts/checks/check_*.py pre-commit hooks.
+"""Shared helpers for the helpers/scripts/checks/check_*.py pre-commit hooks.
 
 Each hook falls back to scanning the tracked tree when pre-commit hands it no positional files (a
 standalone run, or ``--all-files``).

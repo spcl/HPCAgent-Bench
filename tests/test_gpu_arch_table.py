@@ -4,7 +4,7 @@
 
 containers/images/gpu_arch.env maps a Slurm partition to the gfx arch of its GPUs and lists the
 targets a portable AMD image carries. These pin the table and its shell lookups (the hook
-scripts/checks/check_repo_rules.py keeps gfx literals out of everything else), the rendered EDF arch variables, the runtime three-way check on a stub srun, the device-code gate on
+helpers/scripts/checks/check_repo_rules.py keeps gfx literals out of everything else), the rendered EDF arch variables, the runtime three-way check on a stub srun, the device-code gate on
 stand-in binaries, and detect_gfx refusing to guess.
 """
 

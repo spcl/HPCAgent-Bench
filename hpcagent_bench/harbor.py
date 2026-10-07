@@ -1565,7 +1565,7 @@ HARBOR_AGENTS = {"claude": "claude-code", "openai": "terminus-2", "vllm": "termi
 
 NOT_HARBOR_HINT = (
     "Harbor runs these tasks on docker or podman. For another runtime use the container "
-    "launcher (scripts/run_agent_in_container.sh, docs/launch.md) or --execution native."
+    "launcher (helpers/scripts/run_agent_in_container.sh, docs/launch.md) or --execution native."
 )
 
 

@@ -14,7 +14,7 @@ checked by reading, not by running:
   string joined with ``|`` or subscripted), and none postpones annotations: on the floor a future
   import only adds a second annotation semantics that hides exactly those faults.
 
-    python scripts/checks/check_interpreter_floor.py [FILE ...]
+    python helpers/scripts/checks/check_interpreter_floor.py [FILE ...]
 """
 
 import ast
@@ -24,7 +24,7 @@ import re
 import subprocess
 import sys
 
-REPO = pathlib.Path(__file__).resolve().parents[2]
+REPO = pathlib.Path(__file__).resolve().parents[3]
 
 #: The oldest interpreter an experiment may hand the package to. Raise it only when every container
 #: that runs a setup has been rebuilt past it.

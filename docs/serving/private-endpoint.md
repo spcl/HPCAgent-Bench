@@ -67,7 +67,7 @@ openssl rand -hex 32 > ~/.config/hpcagent-bench/mi300-endpoint.key
 
 - `KEY_FILE` defaults to `~/.config/hpcagent-bench/<preset>-endpoint.key`. Refused unless mode 600,
   owned by you, at least 32 characters, and only `[A-Za-z0-9._~+/=-]`.
-- Weights must already be in `$HF_HOME/hub` (default from `scripts/cache_env.sh`); the server runs
+- Weights must already be in `$HF_HOME/hub` (default from `helpers/scripts/cache_env.sh`); the server runs
   with `HF_HUB_OFFLINE=1`. Fetch with `containers/inference/fetch_weights.sbatch`.
 - To rotate the key, overwrite the file and restart the job.
 

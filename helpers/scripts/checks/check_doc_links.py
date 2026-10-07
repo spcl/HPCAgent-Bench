@@ -16,7 +16,7 @@ import sys
 from collections.abc import Iterator
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parents[2]
+REPO = Path(__file__).resolve().parents[3]
 ROOT_FILES = ("README.md", "CONTRIBUTING.md")
 INLINE = re.compile(r"\]\(<?([^)\s>]+)>?(?:\s+\"[^\"]*\")?\)")
 DEFINITION = re.compile(r"^\s*\[[^\]]+\]:\s*<?(\S+?)>?\s*$")

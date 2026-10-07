@@ -37,9 +37,9 @@ of the CSCS Alps MI300A partition, the reference setup of this repository's expe
 
 | Where | What it resolves |
 |---|---|
-| `experiments/layers/site-<name>.env`, loaded by `scripts/site_env.sh` | this cluster's values: account, partition, fast storage, node exclusions, the host interpreter |
-| `scripts/cache_env.sh` | every cache and work directory, from `SCRATCH` and `FAST_SCRATCH` |
-| `scripts/host_python.sh` | the host-side interpreter (`HPCAGENT_BENCH_HOST_PYTHON`), checked to be Python >= 3.10 |
+| `experiments/layers/site-<name>.env`, loaded by `helpers/scripts/site_env.sh` | this cluster's values: account, partition, fast storage, node exclusions, the host interpreter |
+| `helpers/scripts/cache_env.sh` | every cache and work directory, from `SCRATCH` and `FAST_SCRATCH` |
+| `helpers/scripts/host_python.sh` | the host-side interpreter (`HPCAGENT_BENCH_HOST_PYTHON`), checked to be Python >= 3.10 |
 | each image's EDF | the interpreter of every step inside it (`HPCAGENT_BENCH_IMAGE_PYTHON`) and `PYTHONHASHSEED=0` |
 | `hpcagent_bench/cluster/env.sh` | the checkout; sources the two scripts above |
 | `pyproject.toml` (`[tool.uv.sources] dace`) | the dace commit a release installs, bakes and runs ([below](#dace)) |
@@ -94,7 +94,7 @@ the GPU generation whose images and serving layers the experiment uses ([below](
 
 | Variable | Default | Controls |
 |---|---|---|
-| `HPCAGENT_BENCH_SITE_ENV` | `experiments/layers/site.env` when it exists | which layer `scripts/site_env.sh` loads; a named file that does not exist is an error |
+| `HPCAGENT_BENCH_SITE_ENV` | `experiments/layers/site.env` when it exists | which layer `helpers/scripts/site_env.sh` loads; a named file that does not exist is an error |
 | `SBATCH_PARTITION`, `SALLOC_PARTITION` | unset (the cluster's default) | the partition of every `sbatch` / `salloc`; Slurm reads it and it overrides a script's `#SBATCH --partition`, and `--partition=` on the command line overrides it (the submitters resolve it with their `--partition` flag, over this variable, over the system's entry) |
 | `SBATCH_ACCOUNT` | empty | the account every `sbatch` bills; `hpcagent_bench/cluster/submit.sh` refuses to submit without one, and `root`. `SLURM_ACCOUNT` and `SALLOC_ACCOUNT` follow it. No script passes `-A` |
 | `HPCAGENT_BENCH_LOGIN_HOST`, `HPCAGENT_BENCH_SSH_JUMP` | empty: a placeholder | the login host and ssh jump chain in the laptop tunnel commands `containers/inference/serve-private.sbatch` prints |
@@ -127,7 +127,7 @@ the GPU generation whose images and serving layers the experiment uses ([below](
 | `HPCAGENT_BENCH_HOST` | `SLURMD_NODENAME`, else the host name | the node name recorded with each result |
 
 Every command runs `<python> -m hpcagent_bench...` (or `-m hpcagent_agent...` in an agent step) with one of the two
-interpreters, never a PATH lookup. Nothing sets `PYTHONPATH` or edits `sys.path` (the `import-path` rule of `scripts/checks/check_repo_rules.py`): both
+interpreters, never a PATH lookup. Nothing sets `PYTHONPATH` or edits `sys.path` (the `import-path` rule of `helpers/scripts/checks/check_repo_rules.py`): both
 packages are installed, editable in a checkout (`uv sync`) and through the image hooks in a container.
 
 ### Container image builds
@@ -169,7 +169,7 @@ the other runtimes name an image per role (`INFERENCE_IMAGE`, `BENCH_IMAGE`) and
 
 ## The guard
 
-The `site-values` rule of `scripts/checks/check_repo_rules.py` (a pre-commit hook) scans every tracked file for storage mounts, home directories, user names,
+The `site-values` rule of `helpers/scripts/checks/check_repo_rules.py` (a pre-commit hook) scans every tracked file for storage mounts, home directories, user names,
 site emails, Slurm accounts, `#SBATCH` partition/account/node directives, node and login host names, literal
 partitions, one experiment's run directories and the site image registry, in live code (comments and docstrings may
 name a site to explain it). A file that legitimately carries such a value is allowlisted in the check with one

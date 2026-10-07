@@ -5,7 +5,7 @@
 # bakes and every job runs. `--bump` first moves the pin to the spcl/dace@extended head and relocks dace only.
 set -euo pipefail
 ulimit -c 0
-root="$(dirname -- "${BASH_SOURCE[0]}")/.."
+root="$(dirname -- "${BASH_SOURCE[0]}")/../.."
 pin="$(sed -n 's/^dace = { git = "https:\/\/github.com\/spcl\/dace.git", rev = "\([0-9a-f]\{40\}\)" }$/\1/p' "${root}/pyproject.toml")"
 [[ -n "${pin}" ]] || { echo "dace_pin.sh: pyproject.toml holds no 40-character dace rev" >&2; exit 2; }
 if [[ "${1:-}" == "--bump" ]]; then

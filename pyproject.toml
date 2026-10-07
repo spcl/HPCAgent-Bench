@@ -195,7 +195,7 @@ members = ["agent", "adapters/hpcagent_bench"]
 
 [tool.uv.sources]
 # The spcl/dace@extended commit this release is tested with, and the ONE place it is written: uv.lock
-# records it, and the image builds and jobs read it through scripts/dace_pin.sh.
+# records it, and the image builds and jobs read it through helpers/scripts/dace_pin.sh.
 dace = { git = "https://github.com/spcl/dace.git", rev = "11d27d22e143ce45c2d647a6255f5f047185ed2a" }
 hpcagent-agent = { workspace = true }
 torch = [
@@ -326,7 +326,7 @@ exclude_also = [
     "if __name__ == .__main__.:",
 ]
 
-# scripts/checks/check_format.py routes every .py to ruff (pre-commit and CI call it).
+# helpers/scripts/checks/check_format.py routes every .py to ruff (pre-commit and CI call it).
 [tool.ruff]
 line-length = 120
 target-version = "py312"

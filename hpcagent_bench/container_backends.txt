@@ -1,6 +1,6 @@
 # Container backend spellings -- the SINGLE source of truth for how each runtime
 # spells its launch flags. Read by BOTH hpcagent_bench/containers.py (Python) and
-# scripts/run_agent_in_container.sh (pure bash, for a host with no Python), so the
+# helpers/scripts/run_agent_in_container.sh (pure bash, for a host with no Python), so the
 # two launch paths cannot drift. Format: `<backend>.<field>=<value>`, one per line
 # (a .properties/.env shape -- deliberately NOT JSON/YAML so bash can read it with a
 # three-line `while IFS='=' read` loop). Blank lines and `#` comments are ignored.

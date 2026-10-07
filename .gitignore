@@ -1,7 +1,7 @@
 # Every group below is output of a tool, never source. tests/test_ignore_rules.py pins one
 # representative path per group, and that no tracked file matches a rule.
 
-# --- Python bytecode, packaging and build trees (pip, build, setuptools, scripts/do_release.sh) ---
+# --- Python bytecode, packaging and build trees (pip, build, setuptools, helpers/scripts/do_release.sh) ---
 __pycache__/
 *.py[cod]
 *$py.class
@@ -108,7 +108,7 @@ sdfg.sdfg
 .gt_cache/
 *.mod
 
-# --- Framework siblings emitted from <kernel>_numpy.py (framework loaders, scripts/emit_all_siblings.py) ---
+# --- Framework siblings emitted from <kernel>_numpy.py (framework loaders, helpers/scripts/emit_all_siblings.py) ---
 # Deterministic, so only the numpy reference, manifest and hand overrides are committed. A hand
 # override at one of these names gets a `!` line in the last group of this file. TVM and Triton
 # have no translator, so their committed hand siblings are not matched here.
@@ -179,7 +179,7 @@ scratchpad/
 # --- Machine-local config and secrets: never committed ---
 .env
 .claude/
-scripts/cscs/env.toml
+helpers/scripts/cscs/env.toml
 *.pem
 *.key
 *_key
@@ -199,8 +199,8 @@ dmidecode_output
 agent_out/
 _session_scratch/
 *.ritom-orig
-scripts/infer_output_args.py
-scripts/verify_tvm.py
+helpers/scripts/infer_output_args.py
+helpers/scripts/verify_tvm.py
 tools/pluto_affine_survey_results.txt
 
 # --- Hand overrides at generated names: committed on purpose, the regenerator leaves them alone ---

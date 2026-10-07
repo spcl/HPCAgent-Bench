@@ -59,8 +59,8 @@ READY_TIMEOUT="${VLLM_READY_TIMEOUT_SECONDS:-${AGENT_READY_TIMEOUT_SECONDS:-7200
 RUN_ROOT="${RUN_ROOT:?RUN_ROOT must name a writable directory}"
 
 if [[ -z "${SLURM_JOB_ID:-}" ]]; then
-    . "${REPO_DIR}/scripts/site_env.sh"
-    . "${REPO_DIR}/scripts/host_python.sh"
+    . "${REPO_DIR}/helpers/scripts/site_env.sh"
+    . "${REPO_DIR}/helpers/scripts/host_python.sh"
     shape="$("${HPCAGENT_BENCH_HOST_PYTHON}" -m hpcagent_bench job options)" || exit 2
     mapfile -t shape <<<"${shape}"
     gpus_per_node="$("${HPCAGENT_BENCH_HOST_PYTHON}" -m hpcagent_bench job options --print gpus_per_node)" || exit 2

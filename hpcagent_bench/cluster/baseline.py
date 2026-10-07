@@ -109,7 +109,7 @@ class Sweep:
         """``$HPCAGENT_BENCH_RESULTS_DIR/canon.db``, the DB every column of every experiment records into."""
         results_dir = self.environ.get("HPCAGENT_BENCH_RESULTS_DIR")
         if not results_dir:
-            raise SystemExit("baseline: HPCAGENT_BENCH_RESULTS_DIR is unset (source scripts/cache_env.sh)")
+            raise SystemExit("baseline: HPCAGENT_BENCH_RESULTS_DIR is unset (source helpers/scripts/cache_env.sh)")
         return pathlib.Path(results_dir) / "canon.db"
 
 
@@ -261,7 +261,7 @@ def rank_environment(sweep: Sweep, rank: jobs.Rank) -> dict[str, str]:
     graded thread count, a device, and the build label every row carries."""
     env = dict(sweep.environ)
     env["OMP_NUM_THREADS"] = env.get("SLURM_CPUS_PER_TASK") or str(cores_per_socket(env))
-    env = shell_environment(sweep.opt / "scripts" / "cache_env.sh", env)
+    env = shell_environment(sweep.opt / "helpers" / "scripts" / "cache_env.sh", env)
     if dataclasses.replace(sweep, environ=env).managed:
         db_dir = sweep.out_root / "db" / sweep.column
         db_dir.mkdir(parents=True, exist_ok=True)
@@ -434,8 +434,8 @@ def check_column(column: str) -> None:
 
 def cache_environment(opt: pathlib.Path, environ: Mapping[str, str]) -> dict[str, str]:
     """``environ`` with the cache roots the sweep reads (``HPCAGENT_BENCH_RUNS_ROOT``, ``..._RESULTS_DIR``), from
-    ``scripts/cache_env.sh``: a step started without it sourced gets them here."""
-    return shell_environment(opt / "scripts" / "cache_env.sh", environ)
+    ``helpers/scripts/cache_env.sh``: a step started without it sourced gets them here."""
+    return shell_environment(opt / "helpers" / "scripts" / "cache_env.sh", environ)
 
 
 def run_action(args: argparse.Namespace, rank: jobs.Rank) -> int:

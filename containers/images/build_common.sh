@@ -482,7 +482,7 @@ ce_build_args() {
 # Exports DACE_COMMIT, the release's dace pin (pyproject.toml [tool.uv.sources] dace): the commit the git mirror must
 # hold for the build's launch gate (the image carries no dace; a job installs it, containers/lib/launch_venv.sh).
 ce_dace_commit() {
-    DACE_COMMIT="$("${CE_IMAGES_DIR}/../../scripts/dace_pin.sh")"
+    DACE_COMMIT="$("${CE_IMAGES_DIR}/../../helpers/scripts/dace_pin.sh")"
     [[ "${DACE_COMMIT}" =~ ^[0-9a-f]{40}$ ]] || { echo "could not resolve spcl/dace@${DACE_COMMIT}" >&2; return 2; }
     export DACE_COMMIT
     printf 'dace @ %s\n' "${DACE_COMMIT}"
@@ -530,15 +530,15 @@ ce_require_arch() {
 
 # ce_render_edf <template under containers/images/> <image .sqsh> <partition|-> [preload lib] [mount]...
 # Prints the EDF a job mounts: the production template with SCRATCH, the checkout (a judge EDF mounts it
-# at the package hook), the checkout's data bind mounts (scripts/cache_env.sh) plus any extra mount, the partition's GPU arch and the image filled in, and
+# at the package hook), the checkout's data bind mounts (helpers/scripts/cache_env.sh) plus any extra mount, the partition's GPU arch and the image filled in, and
 # the preload appended to its one LD_PRELOAD line. install_edfs.sh writes it into ~/.edf;
 # verify_image.sbatch verifies an image under exactly what production mounts.
 ce_render_edf() {
     local template="${CE_IMAGES_DIR}/$1" image="$2" partition="$3" preload="${4:-}" arch="" mounts
     shift 3
     [[ $# -eq 0 ]] || shift
-    # shellcheck source=../../scripts/cache_env.sh
-    . "${CE_IMAGES_DIR}/../../scripts/cache_env.sh"
+    # shellcheck source=../../helpers/scripts/cache_env.sh
+    . "${CE_IMAGES_DIR}/../../helpers/scripts/cache_env.sh"
     mounts="$(hpcagent_bench_edf_mounts)"
     local mount
     for mount in "$@"; do mounts+=", \"${mount}\""; done

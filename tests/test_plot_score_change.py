@@ -44,7 +44,7 @@ KERNELS: int = 8
 
 
 def load_script():
-    """Import ``statistics/plot_score_change.py`` as a module (scripts/ is not a package)."""
+    """Import ``statistics/plot_score_change.py`` as a module (helpers/scripts/ is not a package)."""
     return module_at(REPO / "statistics" / "plot_score_change.py")
 
 

@@ -39,13 +39,13 @@ select one with `HPCAGENT_BENCH_RUNTIME_BACKEND`:
 | `apptainer` | a SIF converted from the OCI image | yes | `singularity` | shared/HPC sites |
 | `ce` | the OCI image as a SquashFS file | n/a | none | CSCS Alps; chosen by `srun --environment=<edf>`, no wrapper command |
 
-`scripts/run_agent_in_container.sh` probes `podman`, `docker`, `apptainer` in that order when no
+`helpers/scripts/run_agent_in_container.sh` probes `podman`, `docker`, `apptainer` in that order when no
 backend is pinned. A Harbor run needs `docker` or `podman`: the generated tasks are compose tasks,
 which Harbor's `singularity` provider cannot build, and `ce` has no Harbor provider.
 
 ```bash
 # run the agent CLI inside the image; the device flags (--nv, --rocm + kfd/dri) are added per hardware
-scripts/run_agent_in_container.sh cpu -- stub --kernels gemm --preset S
+helpers/scripts/run_agent_in_container.sh cpu -- stub --kernels gemm --preset S
 ```
 
 For NVIDIA GPUs podman uses `--device nvidia.com/gpu=all`,

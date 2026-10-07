@@ -1,6 +1,6 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""The rules of ``scripts/checks/check_interpreter_floor.py`` on synthetic text: each is shown the
+"""The rules of ``helpers/scripts/checks/check_interpreter_floor.py`` on synthetic text: each is shown the
 exact source a py3.12 judge failed to import, and the fallback or ordering that makes it safe."""
 
 from collections.abc import Callable
@@ -10,7 +10,9 @@ import pytest
 from hpcagent_bench import paths
 from tests.fresh_module import module_at
 
-floor = module_at(paths.ROOT / "scripts" / "checks" / "check_interpreter_floor.py", "check_interpreter_floor")
+floor = module_at(
+    paths.ROOT / "helpers" / "scripts" / "checks" / "check_interpreter_floor.py", "check_interpreter_floor"
+)
 
 #: Defects that reached a py3.12 judge while the venv imported them clean, each with its verdict.
 FLOOR_DEFECTS = (

@@ -95,7 +95,7 @@ jobs:
         run: |
           base="${{ github.event.pull_request.base.ref || 'main' }}"
           git fetch --no-tags origin "$base"
-          python scripts/checks/check_format.py --base "origin/$base"
+          python helpers/scripts/checks/check_format.py --base "origin/$base"
 
       # The floor interpreter evaluates module-level annotations eagerly: importing every module
       # and collecting every test is what catches a 3.13+-only construct.
@@ -799,7 +799,7 @@ jobs:
           "$HOME/.local/bin/uv" sync --frozen --extra docs --python "$(command -v python)"
           echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
       - name: Markdown links resolve to existing repo paths
-        run: python scripts/checks/check_doc_links.py
+        run: python helpers/scripts/checks/check_doc_links.py
       - name: Sphinx build (warnings are errors)
         if: ${{ !cancelled() }}
         run: sphinx-build -W --keep-going -b html docs docs/_build

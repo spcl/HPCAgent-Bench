@@ -21,7 +21,7 @@ all. The container is selected by ``srun --environment=<edf>`` and the command r
 :func:`local_run_command` returns it untouched.
 
 The per-backend flag SPELLINGS live in the language-neutral ``container_backends.txt`` (this
-directory), read here by Python and by ``scripts/run_agent_in_container.sh`` in pure bash --
+directory), read here by Python and by ``helpers/scripts/run_agent_in_container.sh`` in pure bash --
 one source of truth for both the Python callers and the python-less HPC login host.
 
 Harbor is an orchestrator, not a wrapper; :func:`harbor_env_for` only supplies its provider
@@ -322,7 +322,7 @@ def harbor_env_for(backend: str | None = None) -> str:
     if not name:
         raise ValueError(
             f"{chosen!r} is not a Harbor backend (Harbor provides docker, podman, singularity); "
-            "run it directly via local_run_command / scripts/run_agent_in_container.sh"
+            "run it directly via local_run_command / helpers/scripts/run_agent_in_container.sh"
         )
     return name
 

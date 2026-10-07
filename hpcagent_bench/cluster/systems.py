@@ -109,9 +109,9 @@ def load_systems(environ: Mapping[str, str]) -> dict[str, dict[str, object]]:
 
 
 def site_environment(environ: Mapping[str, str]) -> dict[str, str]:
-    """``environ`` with the site layer applied under it (``scripts/site_env.sh``: the layer keeps what the
+    """``environ`` with the site layer applied under it (``helpers/scripts/site_env.sh``: the layer keeps what the
     environment already holds), so a layer's ``SBATCH_PARTITION`` counts as if it were exported."""
-    script = paths.repo_root() / "scripts" / "site_env.sh"
+    script = paths.repo_root() / "helpers" / "scripts" / "site_env.sh"
     if not script.is_file():
         return dict(environ)
     done = subprocess.run(

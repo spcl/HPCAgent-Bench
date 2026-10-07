@@ -26,7 +26,7 @@ entry carries its reason and must still name a tracked file:
 
 Python files are read as live text: string literals that are not docstrings, never comments.
 
-    python scripts/checks/check_repo_rules.py [FILE ...]
+    python helpers/scripts/checks/check_repo_rules.py [FILE ...]
 """
 
 import ast
@@ -37,8 +37,8 @@ import subprocess
 import sys
 from collections.abc import Callable, Iterable
 
-REPO = pathlib.Path(__file__).resolve().parents[2]
-SELF = "scripts/checks/check_repo_rules.py"
+REPO = pathlib.Path(__file__).resolve().parents[3]
+SELF = "helpers/scripts/checks/check_repo_rules.py"
 
 
 @functools.cache

@@ -93,7 +93,7 @@ for both.
 ## 6. Testing
 
 ```bash
-scripts/run_tests.sh -W error tests/test_serve_private.py tests/test_alps_endpoint.py
+helpers/scripts/run_tests.sh -W error tests/test_serve_private.py tests/test_alps_endpoint.py
 ```
 
 - Launcher tests run the script with `DRY_RUN=1`, an empty environment, and stub `srun`, `sbatch`,

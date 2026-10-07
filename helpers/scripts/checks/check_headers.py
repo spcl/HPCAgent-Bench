@@ -16,7 +16,7 @@ second notice on top of an existing one. ``--fix`` inserts the canonical 2021
 header only into files that have no such block at all.
 
 Scope -- the CORE package only: ``hpcagent_bench/`` (EXCLUDING ``benchmarks/`` and
-the ``translators/`` packages), plus ``scripts/`` and ``tests/``. Ported
+the ``translators/`` packages), plus ``helpers/scripts/`` and ``tests/``. Ported
 kernels under ``benchmarks/`` and the translator's generated sources carry their
 own provenance and are a separate, deferred header pass -- the same dirs the format
 hook skips.
@@ -35,7 +35,7 @@ from pathlib import Path
 
 from hpcagent_bench.precommit_support import git_tracked
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
 SPDX_LINE = "# SPDX-License-Identifier: GPL-3.0-or-later"
 # What --fix writes into a headerless file (the canonical year).
@@ -50,7 +50,7 @@ HEADER = (
 COPYRIGHT_RE = re.compile(r"^# Copyright \d{4} ETH Zurich and the [\w.-]+ authors\.$")
 
 # Included roots and the sub-prefixes carved back out (their headers are deferred).
-SCOPE_PREFIXES = ("hpcagent_bench/", "scripts/", "tests/")
+SCOPE_PREFIXES = ("hpcagent_bench/", "helpers/scripts/", "tests/")
 EXCLUDE_PREFIXES = ("hpcagent_bench/benchmarks/", "hpcagent_bench/translators/")
 
 CODING_RE = re.compile(r"^[ \t\f]*#.*?coding[:=]")
@@ -128,7 +128,7 @@ def main(argv=None):
     print(f"check-headers: {len(offenders)} of {len(targets)} in-scope file(s) missing the copyright/SPDX header:\n")
     for rel in offenders:
         print(f"  {rel}")
-    print("\nFix with:  python scripts/checks/check_headers.py --fix")
+    print("\nFix with:  python helpers/scripts/checks/check_headers.py --fix")
     return 1
 
 

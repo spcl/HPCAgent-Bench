@@ -86,7 +86,7 @@ HIPIFY = "hipify-perl"
 #: that built it somewhere :func:`ppcg_exe` would not otherwise look.
 PPCG_HOME_ENV = "HPCAGENT_BENCH_PPCG_HOME"
 
-#: Where a build script installs tools this image does not ship (see ``scripts/cache_env.sh``).
+#: Where a build script installs tools this image does not ship (see ``helpers/scripts/cache_env.sh``).
 #: ``ppcg`` is not in the agent/judge image yet -- it needs building from source -- so this is the
 #: env-var indirection the module docstring's "honour a prefix rather than a hardcoded path" means:
 #: a cache path lives in ONE place (a shell resolver, keyed by ``$SCRATCH``, never a literal in this
@@ -137,7 +137,7 @@ def ppcg_lookup() -> tuple[str | None, str]:
     never fire on a host that has not built ppcg, so a host that installs ``ppcg`` onto PATH the
     ordinary way is unaffected; what they add is that a ppcg built into
     ``$HPCAGENT_BENCH_TOOLS_DIR/ppcg-<version>`` (a ``<tool>`` symlink pointed at the current build,
-    see ``scripts/cache_env.sh``) is found WITHOUT the image's EDF ``PATH`` -- re-declared
+    see ``helpers/scripts/cache_env.sh``) is found WITHOUT the image's EDF ``PATH`` -- re-declared
     absolutely at run time, and not including that cache -- ever naming the directory.
 
     A candidate has to RUN, not merely exist, and that is what makes the ORDER safe. The cache

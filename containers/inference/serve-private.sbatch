@@ -108,7 +108,7 @@ LOAD_CONCURRENCY="${LOAD_CONCURRENCY:-16}"
 REASONING_EFFORT="${REASONING_EFFORT:-}"
 # Operator words placed before --host/--port; they may not name the host, port, key or config.
 EXTRA_ARGS="${EXTRA_ARGS:-}"
-. "${REPO}/scripts/cache_env.sh"
+. "${REPO}/helpers/scripts/cache_env.sh"
 RUN_ROOT="${RUN_ROOT:-${SCRATCH:?set SCRATCH}/inference-server/${PRESET}-private}"
 RUN_DIR="${RUN_ROOT}/${SLURM_JOB_ID:-dry-$$}"
 SERVE_CPUS="${SLURM_CPUS_ON_NODE:-$(nproc)}"

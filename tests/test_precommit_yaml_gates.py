@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Pin the pass/fail BEHAVIOR of the two pre-commit YAML gates on crafted fixtures --
 ``tests/check_yaml_style.py`` (house style, hook id ``hpcagent_bench-yaml-style``) and
-``scripts/checks/check_manifest_structure.py`` (manifest schema, hook id
+``helpers/scripts/checks/check_manifest_structure.py`` (manifest schema, hook id
 ``hpcagent_bench-manifest-structure``, reusing ``hpcagent_bench.spec.BenchSpec``).
 
 ``tests/test_yaml_style.py`` already pins that the CURRENT tree conforms; this file pins
@@ -24,9 +24,9 @@ REPO = Path(__file__).resolve().parent.parent
 
 
 def load_check_manifest_structure() -> Any:
-    """Import ``scripts/checks/check_manifest_structure.py`` as a module (it is not an installed
+    """Import ``helpers/scripts/checks/check_manifest_structure.py`` as a module (it is not an installed
     package, same technique ``test_header_hook.py`` uses for ``check_headers.py``)."""
-    return module_at(REPO / "scripts" / "checks" / "check_manifest_structure.py")
+    return module_at(REPO / "helpers" / "scripts" / "checks" / "check_manifest_structure.py")
 
 
 # hpcagent_bench-yaml-style (tests/check_yaml_style.py)
@@ -56,7 +56,7 @@ def test_yaml_style_catches_a_tab_and_trailing_whitespace(tmp_path: Path) -> Non
     assert any("trailing whitespace" in p for p in probs)
 
 
-# hpcagent_bench-manifest-structure (scripts/checks/check_manifest_structure.py)
+# hpcagent_bench-manifest-structure (helpers/scripts/checks/check_manifest_structure.py)
 
 GOOD_NUMPY = "def kern(a, out):\n    out[0] = a[0]\n    return out\n"
 
@@ -144,15 +144,15 @@ def test_manifest_hook_imports_the_checkout_through_run_hook() -> None:
     """The hook must run on an interpreter that has never installed the package.
 
     It is wired ``language: system``, so pre-commit hands it the ambient interpreter. The entry is
-    ``scripts/checks/run_hook.sh``, which sources ``hpcagent_bench/cluster/env.sh`` and runs the check on
+    ``helpers/scripts/checks/run_hook.sh``, which sources ``hpcagent_bench/cluster/env.sh`` and runs the check on
     ``HPCAGENT_BENCH_HOST_PYTHON``; run exactly that way with no PYTHONPATH, the check imports.
     """
     config = (REPO / ".pre-commit-config.yaml").read_text(encoding="utf-8")
-    assert "entry: bash scripts/checks/run_hook.sh scripts/checks/check_manifest_structure.py" in config
+    assert "entry: bash helpers/scripts/checks/run_hook.sh helpers/scripts/checks/check_manifest_structure.py" in config
     manifest = load_check_manifest_structure().tracked_manifests()[0]
     env = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
     proc = subprocess.run(
-        ["bash", "scripts/checks/run_hook.sh", "scripts/checks/check_manifest_structure.py", manifest],
+        ["bash", "helpers/scripts/checks/run_hook.sh", "helpers/scripts/checks/check_manifest_structure.py", manifest],
         cwd=REPO,
         env=env,
         capture_output=True,

@@ -45,11 +45,11 @@ DOCKER_PROBE_PATHS = (
 
 
 def repo_root() -> Path:
-    """Repo root = two levels above this script (``scripts/checks/``).
+    """Repo root = two levels above this script (``helpers/scripts/checks/``).
 
     No hardcoded absolute paths; derived from the file location.
     """
-    return Path(__file__).resolve().parents[2]
+    return Path(__file__).resolve().parents[3]
 
 
 def find_container_files(root: Path) -> list[Path]:

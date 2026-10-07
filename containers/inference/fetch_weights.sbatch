@@ -37,8 +37,8 @@ ulimit -c 0
 
 SCRATCH="${SCRATCH:?set SCRATCH}"
 REPO="${REPO:-$(git -C "${SLURM_SUBMIT_DIR:-${PWD}}" rev-parse --show-toplevel 2>/dev/null || true)}"
-[[ -n "${REPO}" && -f "${REPO}/scripts/cache_env.sh" ]] || { echo "FAIL: no checkout: set REPO or submit from inside one" >&2; exit 1; }
-. "${REPO}/scripts/cache_env.sh"
+[[ -n "${REPO}" && -f "${REPO}/helpers/scripts/cache_env.sh" ]] || { echo "FAIL: no checkout: set REPO or submit from inside one" >&2; exit 1; }
+. "${REPO}/helpers/scripts/cache_env.sh"
 EDF="${EDF:-${HOME}/.edf/hpcagent-bench-sglang-mi300-latest.toml}"
 AUDIT_ONLY="${AUDIT_ONLY:-0}"
 

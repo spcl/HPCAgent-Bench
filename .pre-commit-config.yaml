@@ -1,10 +1,10 @@
 # Pre-commit formatting for HPCAgent-Bench (column limit 120).
 #
 #   one-time:   uv sync --extra dev && pre-commit install
-#   all files:  pre-commit run --all-files   (== python scripts/checks/check_format.py --fix --all)
+#   all files:  pre-commit run --all-files   (== python helpers/scripts/checks/check_format.py --fix --all)
 #   on commit:  runs automatically over staged files
 #
-# The single hook delegates to scripts/checks/check_format.py --fix -- the SAME script
+# The single hook delegates to helpers/scripts/checks/check_format.py --fix -- the SAME script
 # the CI `format-check` job runs in check mode -- so local and CI share one
 # routing table (ruff format for .py, clang-format for C/C++, fprettify for Fortran,
 # all at 120 cols) and one skip policy (*_generated.*, plus the NATIVE references under
@@ -16,19 +16,19 @@ repos:
     hooks:
       - id: hpcagent_bench-format
         name: format (ruff / clang-format / fprettify @ 120 cols)
-        entry: python scripts/checks/check_format.py --fix
+        entry: python helpers/scripts/checks/check_format.py --fix
         language: system
         require_serial: true
         # Extensions check_format can route; the skip policy lives in that script.
         files: '\.([cC]|cc|cpp|cxx|hpp|hh|hxx|[hH]|py|[fF]|[fF]90|[fF]03|[fF]08|[fF]95|[fF]or)$'
       # Copyright / SPDX header on the CORE package (scope + skip policy live in the
-      # script: hpcagent_bench/ minus benchmarks/ + translators/, plus scripts/ tests/).
+      # script: hpcagent_bench/ minus benchmarks/ + translators/, plus helpers/scripts/ tests/).
       - id: hpcagent_bench-headers
         name: copyright / SPDX header (core package)
         # --fix ADDS the header (as the first content line, after any shebang) rather than only
         # failing -- the same auto-fix contract as the format hook. ruff leaves the header
         # byte-for-byte (locked by tests/test_header_hook.py), so the two fixers never fight.
-        entry: bash scripts/checks/run_hook.sh scripts/checks/check_headers.py --fix
+        entry: bash helpers/scripts/checks/run_hook.sh helpers/scripts/checks/check_headers.py --fix
         language: system
         require_serial: true
         files: '\.py$'
@@ -60,27 +60,27 @@ repos:
       # Reject an oversized staged file: 500 KiB for a binary blob (datasets / dumps), 1 MiB for source.
       - id: hpcagent_bench-large-files
         name: block oversized files (500 KiB binary / 1 MiB text)
-        entry: python scripts/checks/check_large_files.py
+        entry: python helpers/scripts/checks/check_large_files.py
         language: system
       # The gate at the end of an image Dockerfile is python in a heredoc, so no python hook sees
       # it and a name typed once and never bound costs the whole build.
       - id: hpcagent_bench-dockerfile-python
         name: no unbound names in embedded Dockerfile python
-        entry: python scripts/checks/check_dockerfile_python.py
+        entry: python helpers/scripts/checks/check_dockerfile_python.py
         language: system
         files: '^containers/images/[^/]+/Dockerfile$'
-      # Call spellings a kernel may not use (scripts/checks/check_kernel_calls.py RULES): numpy out=
+      # Call spellings a kernel may not use (helpers/scripts/checks/check_kernel_calls.py RULES): numpy out=
       # (numba rejects it, pythran ignores it) and astype(copy=) in the *_numpy.py references (may alias).
       - id: hpcagent_bench-kernel-calls
         name: banned call spellings in kernel sources
-        entry: bash scripts/checks/run_hook.sh scripts/checks/check_kernel_calls.py
+        entry: bash helpers/scripts/checks/run_hook.sh helpers/scripts/checks/check_kernel_calls.py
         language: system
         files: '^hpcagent_bench/benchmarks/.*\.py$'
       # Co-located kernel reference sources must be canonically named <stem>_reference.<ext>
       # (the prompt glob + test_<stem>_reference.py both key on it); ban _original/_orig/_golden/...
       - id: hpcagent_bench-reference-naming
         name: canonical <stem>_reference.<ext> reference sources
-        entry: bash scripts/checks/run_hook.sh scripts/checks/check_reference_naming.py
+        entry: bash helpers/scripts/checks/run_hook.sh helpers/scripts/checks/check_reference_naming.py
         language: system
         files: '^hpcagent_bench/benchmarks/.*\.([cC]|cc|cpp|cxx|hpp|[hH]|py|[fF]|[fF]90|cu)$'
       # Repo-wide YAML house style (CONTRIBUTING.md "YAML house style"): '#' header, 2-space
@@ -103,40 +103,40 @@ repos:
       # unless the line says why with `# core-dumps-ok: <reason>`.
       - id: hpcagent_bench-core-dumps
         name: shell entry points disable core dumps (ulimit -c 0)
-        entry: python scripts/checks/check_core_dumps.py --fix
+        entry: python helpers/scripts/checks/check_core_dumps.py --fix
         language: system
         require_serial: true
         # NO `files` filter on purpose: the script owns the scope, because the scope is not a
         # suffix. It is .sbatch, .sh, any shebang naming a shell (hpcagent-bench-tool and bash-norc
         # have no suffix at all), and any .py that EMITS an SBATCH header.
-      # Repo-wide rules over tracked files (scripts/checks/check_repo_rules.py lists them): the
+      # Repo-wide rules over tracked files (helpers/scripts/checks/check_repo_rules.py lists them): the
       # PYTHONHASHSEED homes, no import-path edits, the one container-runtime seam, --no-requeue,
       # .scratch and .gitignore hygiene, no gfx arch outside gpu_arch.env, no literal optimization
       # flags outside flags.py, no hardcoded site or user values. Checks the staged files; the
       # allowlists are checked against the whole tree.
       - id: hpcagent_bench-repo-rules
         name: repo-wide rules (seed, import path, container seam, requeue, ignores, gfx, flags, site values)
-        entry: python scripts/checks/check_repo_rules.py
+        entry: python helpers/scripts/checks/check_repo_rules.py
         language: system
         require_serial: true
       # The package imports on the oldest interpreter a job's container may hand it
-      # (scripts/checks/check_interpreter_floor.py FLOOR): floor grammar, compile, no newer construct
+      # (helpers/scripts/checks/check_interpreter_floor.py FLOOR): floor grammar, compile, no newer construct
       # or typing name, no annotation the floor evaluates at import that raises, no postponed
       # annotations. Checks the staged modules; --all-files adds the untracked generated references.
       - id: hpcagent_bench-interpreter-floor
         name: interpreter floor (grammar, compile, typing names, eager annotations)
-        entry: python scripts/checks/check_interpreter_floor.py
+        entry: python helpers/scripts/checks/check_interpreter_floor.py
         language: system
         require_serial: true
         files: '\.py$'
-      # Unannotated functions are ratcheted per file (scripts/checks/annotation_baseline.json): a file
+      # Unannotated functions are ratcheted per file (helpers/scripts/checks/annotation_baseline.json): a file
       # may not gain one, and a file that loses one lowers its entry (--write).
       - id: hpcagent_bench-annotation-ratchet
         name: annotation ratchet (no new unannotated functions)
-        entry: python scripts/checks/check_annotation_ratchet.py
+        entry: python helpers/scripts/checks/check_annotation_ratchet.py
         language: system
         require_serial: true
-        files: '\.py$|^scripts/checks/annotation_baseline\.json$'
+        files: '\.py$|^helpers/scripts/checks/annotation_baseline\.json$'
       # No prompt material may name a benchmark kernel: a page written while looking at one
       # kernel teaches that kernel's shape, and the score then measures how well the packet was
       # fitted to the corpus rather than how well the agent optimizes -- invisibly, because the
@@ -145,7 +145,7 @@ repos:
       # "matmul_gelu_softmax" by accident).
       - id: hpcagent_bench-no-corpus-leak
         name: no benchmark kernel names in prompt material
-        entry: python scripts/checks/check_no_corpus_leak.py
+        entry: python helpers/scripts/checks/check_no_corpus_leak.py
         language: system
         files: '^(hpcagent_bench/skills/.*/SKILL\.md|hpcagent_bench/benchmarks/hints.*\.j2|hpcagent_bench/harness/prompts/.*\.j2|agent/.*\.md)$'
       # Every co-located kernel manifest must satisfy the schema hpcagent_bench.spec.BenchSpec
@@ -154,7 +154,7 @@ repos:
       # re-declared here), so a broken manifest fails the commit instead.
       - id: hpcagent_bench-manifest-structure
         name: benchmark manifest structure (hpcagent_bench.spec.BenchSpec schema)
-        entry: bash scripts/checks/run_hook.sh scripts/checks/check_manifest_structure.py
+        entry: bash helpers/scripts/checks/run_hook.sh helpers/scripts/checks/check_manifest_structure.py
         language: system
         files: '^hpcagent_bench/benchmarks/.*\.yaml$'
       # No leading-underscore module/variable/parameter names, no `import x as x` (redundant
@@ -162,6 +162,6 @@ repos:
       # needed) checks only lines this commit adds, so pre-existing `_private` code is untouched.
       - id: hpcagent_bench-no-leading-underscore-names
         name: no leading-underscore names / redundant import aliases (added lines)
-        entry: python scripts/checks/check_names.py
+        entry: python helpers/scripts/checks/check_names.py
         language: system
         files: '\.py$'

@@ -82,7 +82,7 @@ plugin, multi-node RCCL silently falls back to TCP.
 | `--mem=0` | otherwise the step's memory cgroup follows its CPU share and the server dies in weight load |
 | `--gpus-per-node=4`, `--ntasks-per-node=1` | every recipe is `tp=4` inside a node |
 | `--cpus-per-task="${SLURM_CPUS_ON_NODE}"` on the server step | see below |
-| `ulimit -c 0` | machine-global `core_pattern` drops multi-GB core files in the CWD; `scripts/checks/check_core_dumps.py` enforces it |
+| `ulimit -c 0` | machine-global `core_pattern` drops multi-GB core files in the CWD; `helpers/scripts/checks/check_core_dumps.py` enforces it |
 
 **The CPU trap.** `--exclusive` gives the job the node, not the step its CPUs. A step without
 `--cpus-per-task` gets one core plus its SMT sibling (2 of 192). A starved server does not crash, it

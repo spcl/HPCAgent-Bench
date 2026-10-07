@@ -26,7 +26,7 @@ REPO = pathlib.Path(__file__).resolve().parents[1]
 
 
 def load_script() -> types.ModuleType:
-    """Import ``statistics/plot_setup_summary.py`` as a module (scripts/ is not a package)."""
+    """Import ``statistics/plot_setup_summary.py`` as a module (helpers/scripts/ is not a package)."""
     return module_at(REPO / "statistics" / "plot_setup_summary.py")
 
 

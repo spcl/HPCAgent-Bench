@@ -1,6 +1,6 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""The patterns of ``scripts/checks/check_repo_rules.py`` on synthetic text: each must catch the
+"""The patterns of ``helpers/scripts/checks/check_repo_rules.py`` on synthetic text: each must catch the
 offence it names and pass its lookalikes, or the hook is green for nothing."""
 
 import types
@@ -10,7 +10,7 @@ from tests.fresh_module import module_at
 
 
 def rules() -> types.ModuleType:
-    return module_at(paths.ROOT / "scripts" / "checks" / "check_repo_rules.py", "check_repo_rules")
+    return module_at(paths.ROOT / "helpers" / "scripts" / "checks" / "check_repo_rules.py", "check_repo_rules")
 
 
 def test_the_import_path_pattern_tells_an_edit_from_a_read() -> None:
@@ -63,7 +63,7 @@ def test_the_site_scan_catches_every_kind_of_hit() -> None:
         "good.sh": (
             "#!/usr/bin/env bash\n"
             "#SBATCH --nodes=1\n"
-            '. "${HPCAGENT_BENCH_REPO}/scripts/site_env.sh"\n'
+            '. "${HPCAGENT_BENCH_REPO}/helpers/scripts/site_env.sh"\n'
             'FAST_SCRATCH="${FAST_SCRATCH:-${SCRATCH}}"\n'
             'sbatch ${part:+--partition="${part}"} --partition="${PARTITION}" job.sbatch\n'
             'HOST_HOME="/users/someone"\n'

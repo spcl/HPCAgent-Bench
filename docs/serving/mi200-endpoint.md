@@ -47,7 +47,7 @@ umask 077; mkdir -p ~/.config/hpcagent-bench
 openssl rand -hex 32 > ~/.config/hpcagent-bench/mi200-endpoint.key
 ```
 
-The weights must already be in `$HF_HOME/hub` (`scripts/cache_env.sh` sets `HF_HOME`; fetch with
+The weights must already be in `$HF_HOME/hub` (`helpers/scripts/cache_env.sh` sets `HF_HOME`; fetch with
 `containers/inference/fetch_weights.sbatch`).
 
 ## 2. Start the server

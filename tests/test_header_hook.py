@@ -27,8 +27,8 @@ HEADER: tuple = (
 
 
 def _load_check_headers() -> types.ModuleType:
-    """Import ``scripts/checks/check_headers.py`` as a module (it is not an installed package)."""
-    return module_at(REPO / "scripts" / "checks" / "check_headers.py")
+    """Import ``helpers/scripts/checks/check_headers.py`` as a module (it is not an installed package)."""
+    return module_at(REPO / "helpers" / "scripts" / "checks" / "check_headers.py")
 
 
 def test_fix_inserts_header_at_content_top(tmp_path: Path) -> None:

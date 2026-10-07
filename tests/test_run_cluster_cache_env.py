@@ -39,7 +39,7 @@ def test_the_cache_root_derivation_still_reads_jit_cache_root_then_scratch() -> 
 
 
 def test_cache_root_fails_loudly_when_neither_jit_cache_root_nor_scratch_is_set() -> None:
-    """Same contract as scripts/cache_env.sh's own JIT_CACHE_ROOT: an inference node with no SCRATCH
+    """Same contract as helpers/scripts/cache_env.sh's own JIT_CACHE_ROOT: an inference node with no SCRATCH
     must refuse to pick a cache root rather than silently compiling into $HOME or an ephemeral /tmp
     that vanishes with the container."""
     expr = _assignment("cache_root")

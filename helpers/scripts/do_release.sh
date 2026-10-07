@@ -4,9 +4,9 @@
 #
 # Build, check and smoke-test the PyPI release of hpcagent-bench and hpcagent-agent; upload only when asked.
 #
-#   scripts/do_release.sh                          # dry run: build + twine check + wheel smoke
-#   scripts/do_release.sh --upload testpypi        # same, then upload to TestPyPI
-#   scripts/do_release.sh --upload pypi            # same, then upload to PyPI
+#   helpers/scripts/do_release.sh                          # dry run: build + twine check + wheel smoke
+#   helpers/scripts/do_release.sh --upload testpypi        # same, then upload to TestPyPI
+#   helpers/scripts/do_release.sh --upload pypi            # same, then upload to PyPI
 #
 # Options:
 #   --outdir DIR    where the sdist + wheel land (default: <repo>/dist)
@@ -17,22 +17,22 @@
 # dir, so untracked build products never reach the wheel. `uv build` builds both distributions, twine runs
 # through uvx, and the smoke venv is a fresh uv venv under that temp dir; the shared repo venv is never
 # touched. The smoke installs both wheels with their dependencies from PyPI and dace at the pin from GitHub
-# (scripts/dace_pin.sh), so it needs network access.
+# (helpers/scripts/dace_pin.sh), so it needs network access.
 #
 # Credentials for --upload come from the environment (TWINE_USERNAME=__token__ plus
 # TWINE_PASSWORD=<api token>) or ~/.pypirc; this script never asks for or stores one.
 #
 # On a Beverin mi200 node (the login gcc is 7.5; point PATH at a gcc >= 14 first):
 #   sbatch --partition=mi200 -N1 --time=00:30:00 --no-requeue \
-#       --output=release-smoke-%j.out --wrap "PATH=<gcc14-bin>:\$PATH scripts/do_release.sh"
+#       --output=release-smoke-%j.out --wrap "PATH=<gcc14-bin>:\$PATH helpers/scripts/do_release.sh"
 #
 # Env:
-#   HPCAGENT_BENCH_HOST_PYTHON   interpreter the temp venvs are created from (scripts/host_python.sh; >= 3.12)
+#   HPCAGENT_BENCH_HOST_PYTHON   interpreter the temp venvs are created from (helpers/scripts/host_python.sh; >= 3.12)
 set -euo pipefail
 ulimit -c 0
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-. "${REPO_ROOT}/scripts/host_python.sh"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+. "${REPO_ROOT}/helpers/scripts/host_python.sh"
 PY="${HPCAGENT_BENCH_HOST_PYTHON}"
 OUTDIR="${REPO_ROOT}/dist"
 UPLOAD=""
@@ -144,7 +144,7 @@ package = false
 [tool.uv.sources]
 hpcagent-bench = { path = "${WHEEL}" }
 hpcagent-agent = { path = "${AGENT_WHEEL}" }
-dace = { git = "https://github.com/spcl/dace.git", rev = "$("${REPO_ROOT}/scripts/dace_pin.sh")" }
+dace = { git = "https://github.com/spcl/dace.git", rev = "$("${REPO_ROOT}/helpers/scripts/dace_pin.sh")" }
 TOML
   (cd "${WORK}/smoke-project" && UV_PROJECT_ENVIRONMENT="${WORK}/smoke" uv sync --quiet --python "${PY}")
   SPY="${WORK}/smoke/bin/python"
