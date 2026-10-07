@@ -188,6 +188,8 @@ class InFlight:
     """How many requests of one route this judge is serving right now: the job waits for /submit's to
     reach 0 before it stops the judge (hpcagent_bench/cluster/drain_judges.py)."""
 
+    __slots__ = ("_count", "_lock")
+
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._count = 0
