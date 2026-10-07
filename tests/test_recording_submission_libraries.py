@@ -41,13 +41,13 @@ def _requests(db: str) -> list[tuple[object, object]]:
     return [(row["requested_build"], row["requested_libraries"]) for row in grades(db)]
 
 
-def test_a_plain_submission_with_no_request_records_null(tmp_path) -> None:
+def test_a_plain_submission_with_no_request_records_the_empty_default(tmp_path) -> None:
     db = str(tmp_path / "r.db")
     submission = Submission(language="c", source="/* x */", build=[], libraries=[])
     recording.record(
         _score(), submission, Task(KERNEL, "restricted", "c"), judgement=Judgement(), episode_id="t", path=db
     )
-    assert _requests(db) == [(None, None)]
+    assert _requests(db) == [("", "")]
 
 
 def test_a_successful_request_records_what_was_asked(tmp_path) -> None:
