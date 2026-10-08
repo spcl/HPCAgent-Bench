@@ -287,6 +287,14 @@ def test_the_mcp_server_advertises_the_judge_routes_and_relays_a_refusal(agent_t
     core tools and no packet tool. It also pins the ABSENCE of ``task``: the spec is rendered into the
     prompt, so a ``task`` in this list would mean the route returned without the prompt being updated.
     """
+    started = agent_tools.mcp_server.handle({"jsonrpc": "2.0", "id": 0, "method": "initialize"})
+    instructions = started["result"]["instructions"]
+    assert instructions.startswith(agent_tools.mcp_server.MCP_HEAD), (
+        "the server names its tools as the client lists them"
+    )
+    assert instructions == agent_tools.mcp_server.prompt_tool_list(), (
+        "the server instructions are the prompt's tool list"
+    )
     listed = agent_tools.mcp_server.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
     tools = {tool["name"]: tool for tool in listed["result"]["tools"]}
     assert list(tools) == list(agent_tools.mcp_server.TOOLS)
