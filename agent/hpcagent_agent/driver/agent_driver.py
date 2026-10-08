@@ -2082,6 +2082,10 @@ class McpUnavailable(RuntimeError):
     """The agent's MCP server never connected: the judge tools are missing, so the agent must not run."""
 
 
+#: Characters of the last attempt's transcript an :class:`McpUnavailable` carries: why the init never landed.
+MCP_FAILURE_TAIL_CHARS = 600
+
+
 def start_agent(
     command: list[str],
     workdir: pathlib.Path,
@@ -2112,9 +2116,11 @@ def start_agent(
             # nothing it was meant to.
             terminate(process)
             message = f"agent_driver: MCP still not connected after {attempt} attempt(s); the agent is not run"
+            log.flush()
+            tail = log_path.read_text(encoding="utf-8", errors="replace")[-MCP_FAILURE_TAIL_CHARS:]
             log.write(f"\n{message}\n")
             log.flush()
-            raise McpUnavailable(message)
+            raise McpUnavailable(f"{message}; the last attempt's transcript ends: {tail!r}")
         terminate(process)
         attempt += 1
         log.seek(0)
