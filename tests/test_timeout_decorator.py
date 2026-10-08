@@ -11,6 +11,7 @@ overruns really does raise ``KeyboardInterrupt``.
 
 import time
 import types
+from typing import ClassVar
 
 import pytest
 
@@ -20,7 +21,7 @@ from hpcagent_bench.frameworks import timeout_decorator
 class _FakeTimer:
     """Records start()/cancel() instead of scheduling a real background alarm."""
 
-    instances = []
+    instances: ClassVar[list["_FakeTimer"]] = []
 
     def __init__(self, interval, function, args=None) -> None:
         self.interval = interval

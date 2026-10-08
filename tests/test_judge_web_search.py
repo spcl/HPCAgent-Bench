@@ -11,7 +11,7 @@ import sys
 import threading
 import types
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 
@@ -28,7 +28,7 @@ def load_web_search() -> types.ModuleType:
 
 
 class FakeHandler(BaseHTTPRequestHandler):
-    serpapi_payload: dict[str, Any] = {
+    serpapi_payload: ClassVar[dict[str, Any]] = {
         "organic_results": [
             {
                 "title": "Crawl4AI docs",
@@ -42,7 +42,7 @@ class FakeHandler(BaseHTTPRequestHandler):
             },
         ]
     }
-    llm_payload: dict[str, Any] = {
+    llm_payload: ClassVar[dict[str, Any]] = {
         "choices": [
             {
                 "message": {

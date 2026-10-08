@@ -80,10 +80,11 @@ def dtype_carrying_operands(call: ast.Call) -> tuple[str, ...]:
     for node in ([func.value] if func.attr in DTYPE_PRESERVING_METHODS else []) + (
         [call.args[0]] if func.attr in DTYPE_PRESERVING_FUNCS and call.args else []
     ):
-        while isinstance(node, ast.Subscript):
-            node = node.value
-        if isinstance(node, ast.Name):
-            out.append(node.id)
+        base = node
+        while isinstance(base, ast.Subscript):
+            base = base.value
+        if isinstance(base, ast.Name):
+            out.append(base.id)
     return tuple(out)
 
 

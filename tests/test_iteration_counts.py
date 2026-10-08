@@ -87,12 +87,12 @@ def iteration_counts_fixture() -> ModuleType:
 
 
 def read_csv(path: pathlib.Path) -> list[dict[str, str]]:
-    with open(path, encoding="utf-8", newline="") as handle:
+    with pathlib.Path(path).open(encoding="utf-8", newline="") as handle:
         return list(csv.DictReader(handle))
 
 
 def csv_header(path: pathlib.Path) -> list[str]:
-    with open(path, encoding="utf-8", newline="") as handle:
+    with pathlib.Path(path).open(encoding="utf-8", newline="") as handle:
         return next(csv.reader(handle))
 
 

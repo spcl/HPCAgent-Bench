@@ -493,8 +493,8 @@ def usage_episode_cost(path: pathlib.Path) -> CostRow:
     fresh = cached = previous_input = output = thinking = calls = compactions = 0
     with path.open(errors="replace") as handle:
         lines = list(handle)
-    for line in lines:
-        line = line.strip()
+    for raw in lines:
+        line = raw.strip()
         if not line.startswith("{"):
             continue
         try:

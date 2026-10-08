@@ -169,8 +169,8 @@ def accumulate_usage_tokens(lines: list[str], total_by_call: dict[str, int]) -> 
 
     Same shape as the driver's stream-json fold, so the one budget watcher serves both. Every line
     is its own call, so the key is simply the call's position. Non-JSON lines are skipped."""
-    for line in lines:
-        line = line.strip()
+    for raw in lines:
+        line = raw.strip()
         if not line.startswith("{"):
             continue
         try:

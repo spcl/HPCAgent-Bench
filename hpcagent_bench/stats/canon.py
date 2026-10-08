@@ -32,12 +32,12 @@ def read_times(frame: "pd.DataFrame") -> dict[str, dict[str, float]]:
     """
     out: dict[str, dict[str, float]] = collections.defaultdict(dict)
     columns = (series_of(frame, name) for name in ("validated", "median_ms", "column", "kernel"))
-    for validated, ms, column, kernel in zip(*columns, strict=False):
+    for validated, cell, column, kernel in zip(*columns, strict=False):
         if str(validated).strip().lower() not in ("true", "1", "yes"):
             continue
-        if ms is None or (isinstance(ms, float) and math.isnan(ms)):
+        if cell is None or (isinstance(cell, float) and math.isnan(cell)):
             continue
-        ms = float(ms)
+        ms = float(cell)
         if ms > 0:
             out[str(column)][str(kernel)] = ms
     return out

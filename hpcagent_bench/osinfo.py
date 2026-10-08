@@ -9,6 +9,7 @@ The lowest layers -- the flag matrix, the fork primitive -- import it;
 WSL2 is a real Linux kernel, so it is ``IS_LINUX`` and needs no special casing.
 """
 
+import pathlib
 import platform
 import signal
 import sys
@@ -60,7 +61,7 @@ def cpu_model() -> str:
     if env:
         return env
     try:
-        with open("/proc/cpuinfo") as fh:
+        with pathlib.Path("/proc/cpuinfo").open() as fh:
             for line in fh:
                 if line.startswith("model name"):
                     return line.split(":", 1)[1].strip()

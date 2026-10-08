@@ -217,7 +217,7 @@ def test_both_teardown_modes_make_the_fork_safe(tmp_path: pathlib.Path, runtime:
 
 
 def mapped_omp() -> list[str]:
-    with open("/proc/self/maps") as fh:
+    with pathlib.Path("/proc/self/maps").open() as fh:
         maps = fh.read()
     return sorted({n for n in ("libgomp", "libomp", "libiomp5", "libnvomp") if n + ".so" in maps})
 

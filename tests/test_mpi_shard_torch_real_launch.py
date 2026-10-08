@@ -67,7 +67,7 @@ def worker(rank: int, job: WorkerJob) -> None:
         if rank == 0:
             (whole,) = shard_torch.make_tiles(specs, {"x": None}, job.seed, "cpu", torch.float32, None)
             torch.testing.assert_close(gathered, whole)
-            with open(job.result_path, "w") as f:
+            with pathlib.Path(job.result_path).open("w") as f:
                 f.write("ok")
     finally:
         dist.destroy_process_group()

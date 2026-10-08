@@ -296,7 +296,7 @@ class FakeOpenAIService(RecordingHandler):
 
     required = ("Authorization",)
     path_wanted = "/v1/chat/completions"
-    body = {
+    body: ClassVar[dict[str, object]] = {
         "choices": [{"message": {"content": "ok"}}],
         "usage": {
             "prompt_tokens": 1000,
@@ -313,7 +313,7 @@ class FakeAnthropicService(RecordingHandler):
 
     required = ("x-api-key", "anthropic-version")
     path_wanted = "/v1/messages"
-    body = {
+    body: ClassVar[dict[str, object]] = {
         "content": [{"type": "text", "text": "ok"}],
         "usage": {
             "input_tokens": 100,

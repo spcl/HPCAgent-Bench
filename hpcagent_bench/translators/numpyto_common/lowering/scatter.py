@@ -4,6 +4,7 @@ import ast
 import copy
 from collections.abc import Sequence
 from collections.abc import Set as AbstractSet
+from typing import ClassVar
 
 from hpcagent_bench.translators.numpyto_common.ast_build import const_int, name_, range_for
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
@@ -39,9 +40,15 @@ class ScatterAtRewriter(ast.NodeTransformer):
     __slots__ = ("_n", "bool_names", "shapes", "wrapper_defs")
 
     #: arithmetic ufuncs -> the compound-assign operator (``t[i] op= v``).
-    AUG = {"add": ast.Add, "subtract": ast.Sub, "multiply": ast.Mult, "divide": ast.Div, "true_divide": ast.Div}
+    AUG: ClassVar[dict[str, type[ast.operator]]] = {
+        "add": ast.Add,
+        "subtract": ast.Sub,
+        "multiply": ast.Mult,
+        "divide": ast.Div,
+        "true_divide": ast.Div,
+    }
     #: max/min ufuncs -> a builtin folded into ``t[i] = fn(t[i], v)``.
-    FOLD = {"maximum": "max", "minimum": "min"}
+    FOLD: ClassVar[dict[str, str]] = {"maximum": "max", "minimum": "min"}
 
     def __init__(
         self,

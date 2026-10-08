@@ -6,7 +6,7 @@ import dataclasses
 import functools
 import math
 from collections.abc import Callable, Sequence
-from typing import Optional
+from typing import ClassVar, Optional
 
 from hpcagent_bench.translators.numpyto_common import dtypes, operators, parallelism
 from hpcagent_bench.translators.numpyto_common.ast_build import ALL_BLOCK_FIELDS, map_blocks, name_, store_
@@ -2403,7 +2403,7 @@ class FortranBodyEmitter(BaseEmitter):
             return self.emit_sign(args_e[0])
         return None
 
-    INT_KIND_SUFFIX: dict[str, str] = {
+    INT_KIND_SUFFIX: ClassVar[dict[str, str]] = {
         "int64": "_c_int64_t",
         "int32": "_c_int32_t",
         "int16": "_c_int16_t",

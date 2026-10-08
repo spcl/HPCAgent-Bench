@@ -262,7 +262,7 @@ def node_key() -> str:
     process's affinity: timing pins the judge process for a while, and a key read then would differ."""
     model = ""
     try:
-        with open("/proc/cpuinfo", encoding="utf-8") as fh:
+        with pathlib.Path("/proc/cpuinfo").open(encoding="utf-8") as fh:
             model = next((line.split(":", 1)[1].strip() for line in fh if line.startswith("model name")), "")
     except OSError:
         pass
@@ -307,7 +307,7 @@ def load(kind: str, code: str, key: Hashable) -> dict[str, np.ndarray] | None:
     """The stored arrays for ``key``, or None when absent or unreadable."""
     try:
         # Opened here, not by np.load: a zip that fails to parse leaves np.load's own handle open.
-        with open(entry_path(kind, code, key), "rb") as fh, np.load(fh, allow_pickle=False) as npz:
+        with pathlib.Path(entry_path(kind, code, key)).open("rb") as fh, np.load(fh, allow_pickle=False) as npz:
             return as_loaded({name: npz[name] for name in npz.files})
     except (OSError, ValueError, EOFError, zipfile.BadZipFile):
         return None
@@ -318,7 +318,7 @@ def store(kind: str, code: str, key: Hashable, arrays: Mapping[str, npt.ArrayLik
     next grade recomputes, which is all a miss costs."""
     # ValueError: an object array, which only pickle could store.
     with contextlib.suppress(OSError, ValueError), replacing(entry_path(kind, code, key), parent_mode=0o700) as tmp:
-        with open(tmp, "wb") as fh:
+        with pathlib.Path(tmp).open("wb") as fh:
             np.savez(fh, allow_pickle=False, **as_stored(arrays))
             fh.flush()
             os.fsync(fh.fileno())

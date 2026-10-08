@@ -2180,8 +2180,8 @@ def result_event(log_path: pathlib.Path) -> ResultEvent | None:
             tail = handle.read().decode("utf-8", "replace")
     except OSError:
         return None
-    for line in reversed(tail.splitlines()):
-        line = line.strip()
+    for raw in reversed(tail.splitlines()):
+        line = raw.strip()
         if not line.startswith("{"):
             continue
         try:
@@ -2236,8 +2236,8 @@ def api_timeout(log_path: pathlib.Path) -> bool:
 def open_tool_use_index(tail: str) -> int | None:
     """The ``content_block`` index left open by a ``tool_use`` start with no matching stop, if any."""
     open_index: int | None = None
-    for line in tail.splitlines():
-        line = line.strip()
+    for raw in tail.splitlines():
+        line = raw.strip()
         if not line.startswith("{"):
             continue
         try:

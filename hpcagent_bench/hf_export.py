@@ -264,7 +264,7 @@ def validate(rows: Sequence[ExportRow], selector: str = "all") -> list[str]:
 
 def write_jsonl(rows: Sequence[ExportRow], path: str | pathlib.Path) -> int:
     """Write rows as JSON lines (stdlib only); returns the row count."""
-    with open(path, "w") as f:
+    with pathlib.Path(path).open("w") as f:
         f.writelines(json.dumps(r.to_dict(), sort_keys=True) + "\n" for r in rows)
     return len(rows)
 

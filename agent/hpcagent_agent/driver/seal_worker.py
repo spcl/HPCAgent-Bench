@@ -260,7 +260,7 @@ def locked_flags(mountinfo: str, target: str) -> int:
 
 
 def locked_flags_at(target: str) -> int:
-    with open(MOUNTINFO, encoding="utf-8") as handle:
+    with pathlib.Path(MOUNTINFO).open(encoding="utf-8") as handle:
         return locked_flags(handle.read(), target)
 
 

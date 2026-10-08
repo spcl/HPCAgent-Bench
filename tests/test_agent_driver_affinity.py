@@ -18,6 +18,7 @@ idle, with every property above still holding.
 
 import ast
 import os
+import pathlib
 from types import ModuleType
 
 import pytest
@@ -114,7 +115,7 @@ def test_pinning_a_process_that_already_exited_is_survivable(driver, tmp_path) -
         pid = -1
 
     log_path = tmp_path / "claude.log"
-    with open(log_path, "w") as log:
+    with pathlib.Path(log_path).open("w") as log:
         driver.pin(Dead(), [0, 1], log)
     assert "could not pin" in log_path.read_text()
 
@@ -127,7 +128,7 @@ def test_no_cpus_means_no_syscall_and_no_log_noise(driver, tmp_path) -> None:
         pid = -1
 
     log_path = tmp_path / "claude.log"
-    with open(log_path, "w") as log:
+    with pathlib.Path(log_path).open("w") as log:
         driver.pin(Dead(), [], log)
     assert log_path.read_text() == ""
 

@@ -13,6 +13,7 @@ import multiprocessing.forkserver
 import multiprocessing.process
 import multiprocessing.queues
 import os
+import pathlib
 import queue
 import re
 import signal
@@ -191,7 +192,7 @@ def is_core_dumping(pid: int) -> bool:
     """True when the kernel reports ``pid`` is writing a core image (Linux >= 4.15); False when
     that is not knowable (another OS, a reaped pid, a hidepid mount), so the caller escalates."""
     try:
-        with open(f"/proc/{pid}/status") as fh:
+        with pathlib.Path(f"/proc/{pid}/status").open() as fh:
             for line in fh:
                 if line.startswith("CoreDumping:"):
                     return line.split(":", 1)[1].strip() == "1"

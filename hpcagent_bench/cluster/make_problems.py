@@ -320,7 +320,7 @@ def selection(args: argparse.Namespace) -> tuple[list[str], set[str]]:
         # A name is whatever precedes a `#`, so a tag that annotates each line with its dwarf
         # reads the same as a bare list. Matching the whole line silently kept NOTHING from an
         # annotated tag and reported a file with no kernels in it.
-        with open(args.kernels_file) as fh:
+        with pathlib.Path(args.kernels_file).open() as fh:
             lines = [name for name in (ln.split("#", 1)[0].strip() for ln in fh) if name]
         if not lines:
             raise SystemExit(f"--kernels-file {args.kernels_file} listed no kernels")

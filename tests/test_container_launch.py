@@ -4,6 +4,7 @@
 
 import json
 import os
+import pathlib
 import shlex
 import shutil
 import signal
@@ -88,7 +89,7 @@ def _exec(sif, *cmd, env=None, background: bool = False, log=None):
     if background:
         assert log is not None, "a background container must be given a log path"
         # A FILE, never a PIPE: an undrained pipe would wedge on a chatty container's output.
-        sink = open(log, "wb")
+        sink = pathlib.Path(log).open("wb")
         try:
             # New session so the whole process tree can be signalled as a group at teardown.
             return subprocess.Popen(argv, stdout=sink, stderr=subprocess.STDOUT, start_new_session=True)

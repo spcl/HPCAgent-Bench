@@ -19,6 +19,7 @@ refuses to broadcast against the rest of the statement.
 """
 
 import ast
+from typing import ClassVar
 
 import numpy as np
 
@@ -51,7 +52,7 @@ class Kir:
         def __init__(self, name: str, shape: tuple[str, ...], dtype: str) -> None:
             self.name, self.shape, self.dtype = name, shape, dtype
 
-    arrays = [
+    arrays: ClassVar[list[Arr]] = [
         Arr("g", ("NG", "NG", "NG"), "float64"),
         Arr("iz", ("NZ",), "int64"),
         Arr("iy", ("NY",), "int64"),
@@ -118,7 +119,7 @@ def test_a_same_shape_gather_keeps_its_one_shape_token() -> None:
     src = "import numpy as np\ndef flat(g, q, r, s, out):\n    out[:] = g[q, r, s]\n"
 
     class K(Kir):
-        arrays = [
+        arrays: ClassVar[list[Kir.Arr]] = [
             Kir.Arr("g", ("NG", "NG", "NG"), "float64"),
             Kir.Arr("q", ("NZ",), "int64"),
             Kir.Arr("r", ("NZ",), "int64"),

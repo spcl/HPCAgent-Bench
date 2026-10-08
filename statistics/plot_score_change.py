@@ -517,8 +517,8 @@ def report(treatment: str, stats: pd.DataFrame) -> None:
 def parse_spec(spec: str) -> dict[str, str]:
     """``key=value;key=value`` -> a plain dict, for one ``--comparison``."""
     fields: dict[str, str] = {}
-    for token in spec.split(";"):
-        token = token.strip()
+    for raw_token in spec.split(";"):
+        token = raw_token.strip()
         if not token or "=" not in token:
             continue
         key, value = token.split("=", 1)

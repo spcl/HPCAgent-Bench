@@ -18,7 +18,7 @@ import threading
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import ModuleType
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 from urllib.parse import urlparse
 
 import pytest
@@ -70,7 +70,7 @@ TASK = {
 class StubJudge(BaseHTTPRequestHandler):
     """Records what reached it and answers the configured (status, payload)."""
 
-    calls: list[dict[str, Any]] = []
+    calls: ClassVar[list[dict[str, Any]]] = []
     reply: tuple[int, dict[str, Any]] = (200, GRADE)
     protocol_version = "HTTP/1.1"
 

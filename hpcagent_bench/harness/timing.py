@@ -18,6 +18,7 @@ reductions are never pooled. Another timing test is another protocol, never a se
 in, a :class:`ReducedTiming` out."""
 
 import os
+import pathlib
 import statistics
 import sys
 from collections.abc import Callable, Sequence
@@ -181,7 +182,7 @@ def physical_core_affinity(allowed: set[int]) -> set[int]:
     seen_cores: set[int] = set()
     for cpu in sorted(allowed):
         try:
-            with open(f"/sys/devices/system/cpu/cpu{cpu}/topology/thread_siblings_list") as f:
+            with pathlib.Path(f"/sys/devices/system/cpu/cpu{cpu}/topology/thread_siblings_list").open() as f:
                 core = min(parse_cpu_list(f.read()))
         except OSError:
             return set(allowed)  # topology unavailable -> keep the full mask

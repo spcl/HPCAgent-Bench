@@ -325,13 +325,14 @@ def closed_form_body(
     before any value is known for it. ``steps`` maps each base to ``(init literal, per-iteration step)``."""
     cur: dict[str, tuple[str, int]] = {b: (b, 0) for b in steps}
     new_lines: list[str] = []
-    for line in lines:
-        sm = _STEP_ASSIGN_RE.match(line.strip())
-        if sm is not None and sm.group("var") in cands and line in step_lines:
+    for source_line in lines:
+        sm = _STEP_ASSIGN_RE.match(source_line.strip())
+        if sm is not None and sm.group("var") in cands and source_line in step_lines:
             src, c = step_delta(sm)
             b, off = cur[src]
             cur[sm.group("var")] = (b, off + c)
             continue
+        line = source_line
         for v in cands:
             if ident_re(v).search(line):
                 if v not in cur:

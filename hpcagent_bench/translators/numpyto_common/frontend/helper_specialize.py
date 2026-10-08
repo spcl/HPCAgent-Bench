@@ -76,7 +76,8 @@ def specialise_helper_by_call_signature(
     existing = {node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
     clones: list[ast.FunctionDef] = []
     # The first key keeps the original name, so a helper called one way is untouched.
-    for index, key in enumerate(list(by_key)[1:], start=2):
+    for first, key in enumerate(list(by_key)[1:], start=2):
+        index = first
         name = f"{hdef.name}__s{index}"
         while name in existing:
             index += 1

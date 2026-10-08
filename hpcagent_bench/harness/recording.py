@@ -225,7 +225,7 @@ def memory_backed_fstype(path: str) -> str | None:
     does not exist yet (the DB is created on first write). Returns ``None`` where ``/proc/mounts``
     is unavailable -- non-Linux hosts get no guard rather than a false alarm."""
     try:
-        with open("/proc/mounts", encoding="utf-8") as handle:
+        with pathlib.Path("/proc/mounts").open(encoding="utf-8") as handle:
             mounts = [line.split()[:3] for line in handle]
     except OSError:
         return None

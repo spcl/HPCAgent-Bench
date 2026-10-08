@@ -221,7 +221,7 @@ def cache_key(kind: str, torch_mod: ModuleType) -> str:
 def locked(path: pathlib.Path) -> Iterator[None]:
     """An exclusive ``flock`` on ``path`` (created) for the duration."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "a", encoding="ascii") as handle:
+    with pathlib.Path(path).open("a", encoding="ascii") as handle:
         fcntl.flock(handle, fcntl.LOCK_EX)
         try:
             yield

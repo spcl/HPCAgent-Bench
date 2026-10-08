@@ -9,6 +9,8 @@ arrays: npbench bicgstab died on every call with ``'numpy.ndarray' object has no
 '__cuda_array_interface__'``.
 """
 
+from typing import ClassVar
+
 import dace
 import numpy as np
 import pytest
@@ -63,13 +65,13 @@ class FakeSpec:
 
 class FakeBench:
     spec = FakeSpec()
-    info = {"input_args": ["A", "x"]}
+    info: ClassVar[dict[str, list[str]]] = {"input_args": ["A", "x"]}
 
 
 class FakeFramework:
     """The members ``DaceFramework.call_args`` reads, for a GPU flavor."""
 
-    info = {"arch": "gpu"}
+    info: ClassVar[dict[str, str]] = {"arch": "gpu"}
 
     def arg_renames(self, bench: FakeBench) -> dict[str, str]:
         return {}

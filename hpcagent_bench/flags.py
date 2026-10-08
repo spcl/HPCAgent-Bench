@@ -624,7 +624,7 @@ def physical_cores(cpus: set[int]) -> int:
     groups: set[str] = set()
     for cpu in cpus:
         try:
-            with open(SIBLINGS.format(cpu=cpu)) as fh:
+            with pathlib.Path(SIBLINGS.format(cpu=cpu)).open() as fh:
                 groups.add(fh.read().strip())
         except OSError:
             groups.add(str(cpu))

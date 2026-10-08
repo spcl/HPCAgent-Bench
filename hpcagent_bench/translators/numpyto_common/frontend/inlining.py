@@ -646,12 +646,12 @@ class HoistMultiStmtHelpers(ast.NodeTransformer):
                 out.append(stmt)
                 continue
             # Recurse into nested control flow first.
-            stmt = self.visit(stmt)
-            if isinstance(stmt, (ast.Assign, ast.AugAssign, ast.Expr, ast.Return)) and stmt.value is not None:
-                stmt.value = self.rewrite_expr(stmt.value)
+            visited = self.visit(stmt)
+            if isinstance(visited, (ast.Assign, ast.AugAssign, ast.Expr, ast.Return)) and visited.value is not None:
+                visited.value = self.rewrite_expr(visited.value)
             out.extend(self._pending)
             self._pending = []
-            out.append(stmt)
+            out.append(visited)
         return out
 
     def rewrite_expr(self, expr: ast.expr) -> ast.expr:

@@ -22,7 +22,7 @@ import pathlib
 import re
 import sys
 import textwrap
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import numpy as np
 import pytest
@@ -432,7 +432,7 @@ def test_resolvezeros_shape_change_reemits() -> None:
     ).body[0]
 
     class ShapeSeq(dict):  # yields a new shape for t on each lookup
-        seq = [("A",), ("B", "C")]
+        seq: ClassVar[list[tuple[str, ...]]] = [("A",), ("B", "C")]
         i = 0
 
         def __getitem__(self, key: str) -> tuple[str, ...]:

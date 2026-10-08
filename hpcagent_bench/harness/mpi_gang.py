@@ -310,7 +310,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     timeout = config.get_float("mpi.launch_timeout_s", 1800)
     lock = lock_path(gang, os.environ)
     lock.parent.mkdir(parents=True, exist_ok=True)
-    with open(lock, "a", encoding="ascii") as handle:
+    with Path(lock).open("a", encoding="ascii") as handle:
         fcntl.flock(handle, fcntl.LOCK_EX)
         ident = request_id()
         cmd = srun_argv(gang, ranks, [*relay_env_prefix(os.environ), *program], timeout, ident)

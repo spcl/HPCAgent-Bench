@@ -14,6 +14,7 @@ column still looked fine locally.
 """
 
 import types
+from typing import ClassVar
 
 import pytest
 
@@ -327,14 +328,14 @@ def test_a_minted_size_symbol_is_bound_from_its_recorded_recipe(monkeypatch) -> 
     impl = TimedCompiledSDFG(None, minted.to_sdfg(simplify=False), "minted")
 
     class Bench:
-        info = {"input_args": ["a"]}
+        info: ClassVar[dict[str, list[str]]] = {"input_args": ["a"]}
 
     resolved = {"a": np.zeros(8)}
     framework = DaceFramework.__new__(DaceFramework)
     monkeypatch.setattr(DaceFramework, "kernel_module", lambda self, bench: recipes)
 
     class recipes:
-        __hpcagent_bench_symbol_defs__ = [("m", "N // 2")]
+        __hpcagent_bench_symbol_defs__: ClassVar[list[tuple[str, str]]] = [("m", "N // 2")]
 
     got = framework.shape_symbols(impl, Bench(), resolved, {})
     assert got["N"] == 8, "the array shape still binds what it always bound"
