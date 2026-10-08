@@ -88,8 +88,7 @@ def registry_view(**env: str) -> dict[str, object]:
 
 def load_driver() -> ModuleType:
     """agent/hpcagent_agent/driver/agent_driver.py as a module; it imports its sibling harnesses.py by bare name."""
-    module = fresh("agent_driver")
-    return module
+    return fresh("agent_driver")
 
 
 def test_without_a_packet_the_server_serves_the_core_tools_only() -> None:
@@ -221,7 +220,8 @@ def test_an_unknown_packet_stops_the_server() -> None:
     serving a core-only setup that records itself as the packet setup."""
     result = served_tools(AGENT_PACKET="nosuchpacket")
     assert result.returncode != 0
-    assert "nosuchpacket" in result.stderr and "packet.md" in result.stderr
+    assert "nosuchpacket" in result.stderr
+    assert "packet.md" in result.stderr
 
 
 def test_without_a_packet_the_driver_adds_no_tools_and_no_text(

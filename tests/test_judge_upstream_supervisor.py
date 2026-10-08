@@ -113,7 +113,7 @@ def test_an_upstream_that_cannot_start_ends_the_supervisor_instead_of_looping() 
     assert output.count("rc=2") == 2, output
 
 
-@pytest.mark.parametrize("needle", ("judge_upstream.py", "--min-uptime-seconds", "--max-quick-restarts"))
+@pytest.mark.parametrize("needle", ["judge_upstream.py", "--min-uptime-seconds", "--max-quick-restarts"])
 def test_the_launcher_starts_the_upstream_through_the_supervisor(needle: str) -> None:
     """run_cluster.sh must not go back to a bare background `hpcagent_bench serve`."""
     text = RUN_CLUSTER.read_text(encoding="utf-8")

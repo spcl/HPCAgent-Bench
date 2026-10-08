@@ -68,7 +68,7 @@ def bench_info_(
     outputs: list[str],
     shapes: dict[str, str],
     syms: dict[str, int],
-    dtypes: dict[str, str] = None,
+    dtypes: dict[str, str] | None = None,
 ) -> dict:
     """Synthesize the legacy bench_info the translator front end consumes.
 
@@ -153,12 +153,12 @@ def run_op(
     inputs: dict[str, np.ndarray],
     outputs: dict[str, tuple],
     syms: dict[str, int],
-    shapes: dict[str, str] = None,
+    shapes: dict[str, str] | None = None,
     rtol: float = 1e-9,
     atol: float = 1e-9,
     backends: Sequence[str] = ("c", "cpp", "fortran", "numba", "pythran", "jax"),
-    skip_backends: dict[str, str] = None,
-    dtypes: dict[str, str] = None,
+    skip_backends: dict[str, str] | None = None,
+    dtypes: dict[str, str] | None = None,
     fft_library: bool = False,
     fft_library_nd: bool = False,
 ) -> dict[str, str]:
@@ -596,7 +596,7 @@ def jax_child(
         got = map_returns(ret, list(outputs))
         return got if isinstance(got, str) else cmp_(got, expected, rtol, atol)
     rv = list(ret) if isinstance(ret, tuple) else [ret]
-    by_ret = dict(zip(ret_names, rv)) if len(ret_names) == len(rv) else {}
+    by_ret = dict(zip(ret_names, rv, strict=False)) if len(ret_names) == len(rv) else {}
     arr_iter = iter(r for r in rv if isinstance(r, (np.ndarray, jnp.ndarray)) and np.ndim(r) > 0)
     got = {}
     for nm in outputs:
@@ -632,7 +632,7 @@ def map_returns(ret: object, out_names: list[str]) -> dict[str, np.ndarray] | st
     -- the promoted ``hpcagent_bench_ret`` buffer is a 1-element array."""
     rv = list(ret) if isinstance(ret, tuple) else [ret] if ret is not None else []
     if len(rv) == len(out_names):
-        pairs = list(zip(out_names, rv))
+        pairs = list(zip(out_names, rv, strict=False))
     else:
         arr = iter(r for r in rv if np.ndim(r) > 0)
         pairs = [(nm, next(arr, None)) for nm in out_names]
@@ -651,11 +651,11 @@ def run_return_op(
     inputs: dict[str, np.ndarray],
     returns: dict[str, tuple],
     syms: dict[str, int],
-    shapes: dict[str, str] = None,
+    shapes: dict[str, str] | None = None,
     rtol: float = 1e-9,
     atol: float = 1e-9,
     backends: Sequence[str] = ("c", "cpp", "fortran", "numba", "pythran", "jax"),
-    skip_backends: dict[str, str] = None,
+    skip_backends: dict[str, str] | None = None,
 ) -> dict[str, str]:
     """Validate a RETURN-style kernel (``def f(x): return <expr>``) across backends.
 

@@ -418,7 +418,7 @@ class LiftFreshArrayFromSlices(ast.NodeTransformer):
         rebind = existing is not None
         if existing is not None:
             if len(existing) != len(shape_toks) or not all(
-                shape_exprs_equal(a, b) for a, b in zip(existing, shape_toks)
+                shape_exprs_equal(a, b) for a, b in zip(existing, shape_toks, strict=False)
             ):
                 return node
         else:

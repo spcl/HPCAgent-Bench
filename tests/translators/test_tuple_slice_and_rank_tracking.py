@@ -158,8 +158,10 @@ def test_desugar_tuples_entry_point_agrees() -> None:
     [
         ("def k(p, f):\n    shp = p[f].shape\n    X = (p[f] * 2.0).reshape(shp)\n", "X", 3),
         (
-            "def k(p, m):\n    Y = p * 1.0\n    for i in range(m):\n        shp = Y.shape\n"
-            "        Y = (Y * 2.0).reshape(shp)\n",
+            (
+                "def k(p, m):\n    Y = p * 1.0\n    for i in range(m):\n        shp = Y.shape\n"
+                "        Y = (Y * 2.0).reshape(shp)\n"
+            ),
             "Y",
             4,
         ),

@@ -12,11 +12,14 @@ import pathlib
 import re
 import subprocess
 import tomllib
-from collections.abc import Iterator
+from typing import TYPE_CHECKING
 
 import pytest
 
 from hpcagent_bench import flags, languages
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 CE = ROOT / "containers" / "images"
@@ -144,18 +147,20 @@ def test_every_amd_image_takes_rocm_arch_from_the_table_refuses_none_stamps_it_a
 ) -> None:
     build = code_lines(CE / image / "image.sh")
     lookup = TARGET_LOOKUP[image]
-    assert re.search(rf"^\s*{lookup}$", build, re.M), f"{image}/image.sh never looks the arch up with {lookup}"
-    assert re.search(r"^\s*ce_build_args .*\bROCM_ARCH\b", build, re.M)
+    assert re.search(rf"^\s*{lookup}$", build, re.MULTILINE), f"{image}/image.sh never looks the arch up with {lookup}"
+    assert re.search(r"^\s*ce_build_args .*\bROCM_ARCH\b", build, re.MULTILINE)
     docker = code_lines(CE / image / "Dockerfile")
-    assert re.findall(r"^ARG ROCM_ARCH\b.*$", docker, re.M) == ["ARG ROCM_ARCH"]
+    assert re.findall(r"^ARG ROCM_ARCH\b.*$", docker, re.MULTILINE) == ["ARG ROCM_ARCH"]
     assert 'test -n "${ROCM_ARCH:-}" ||' in docker
     assert "printf '%s\\n' \"${ROCM_ARCH}\" > /opt/gpu-arch" in docker
     # spack, clang, cupy and hipcc take the list ,-separated: that derivation IS the table's value.
     comma_list = docker.replace('$(echo "${ROCM_ARCH}" | tr ";" ",")', "${ROCM_ARCH}")
     # A list has a ';' hipcc would hand to sh: image.sh passes the ,-form, which the image gates.
-    assert re.search(r"^\s*ce_build_args .*\bROCM_ARCH_CSV\b", build, re.M)
+    assert re.search(r"^\s*ce_build_args .*\bROCM_ARCH_CSV\b", build, re.MULTILINE)
     assert 'test "${ROCM_ARCH_CSV}" = "$(echo "${ROCM_ARCH}" | tr ";" ",")"' in docker
-    assert not re.search(r"HCC_AMDGPU_TARGET=\$\{ROCM_ARCH\}(\s|$)", docker, re.M), "HCC_AMDGPU_TARGET takes the ,-form"
+    assert not re.search(r"HCC_AMDGPU_TARGET=\$\{ROCM_ARCH\}(\s|$)", docker, re.MULTILINE), (
+        "HCC_AMDGPU_TARGET takes the ,-form"
+    )
     comma_list = comma_list.replace("${ROCM_ARCH_CSV}", "${ROCM_ARCH}")
     for var in ARCH_VARS:
         values = {value.strip('"') for value in re.findall(rf"\b{var}=(\S+)", comma_list)}
@@ -168,7 +173,7 @@ def test_every_amd_image_takes_rocm_arch_from_the_table_refuses_none_stamps_it_a
 def test_no_dockerfile_gives_rocm_arch_a_default() -> None:
     dockerfiles = sorted((ROOT / "containers").rglob("Dockerfile"))
     assert dockerfiles
-    pattern = re.compile(r"^\s*ARG\s+ROCM_ARCH\s*=", re.M)
+    pattern = re.compile(r"^\s*ARG\s+ROCM_ARCH\s*=", re.MULTILINE)
     assert [str(path) for path in dockerfiles if pattern.search(path.read_text(encoding="utf-8"))] == []
 
 
@@ -331,7 +336,8 @@ def test_contains_accepts_a_vendor_fat_binary_that_exact_refuses(tmp_path: pathl
     assert gate("--contains", "gfx90a", fat).returncode == 0
     assert gate("--contains", "gfx950", fat).returncode == 1
     exact = gate("--exact", "gfx90a", fat)
-    assert exact.returncode == 1 and "gfx1030 gfx942" in exact.stderr
+    assert exact.returncode == 1
+    assert "gfx1030 gfx942" in exact.stderr
 
 
 @pytest.mark.parametrize(
@@ -382,7 +388,7 @@ def test_detect_gfx_raises_instead_of_guessing_when_rocminfo_is_missing(
 def test_detect_gfx_raises_when_rocminfo_lists_only_a_cpu_agent(
     monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
 ) -> None:
-    fake_rocminfo(monkeypatch, ROCMINFO.split("*******\nAgent 2")[0], tmp_path / "gpu-arch")
+    fake_rocminfo(monkeypatch, ROCMINFO.split("*******\nAgent 2", maxsplit=1)[0], tmp_path / "gpu-arch")
     with pytest.raises(RuntimeError, match="no gfx GPU agent"):
         flags.detect_gfx()
 

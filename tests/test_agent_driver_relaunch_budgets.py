@@ -28,6 +28,7 @@ from types import ModuleType
 from typing import TextIO
 
 import pytest
+
 from tests.fresh_module import module_at
 
 REPO = pathlib.Path(__file__).resolve().parents[1]

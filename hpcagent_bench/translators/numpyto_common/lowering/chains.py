@@ -259,7 +259,7 @@ class ChainedSubscriptFlattener(ast.NodeTransformer):
         adv_rank = max(inner_ranks, default=0)
         inner_model = [
             entry_model(elt, elt_rank, ("axis", pos), adv_rank, "adv")
-            for pos, (elt, elt_rank) in enumerate(zip(inner_elts, inner_ranks))
+            for pos, (elt, elt_rank) in enumerate(zip(inner_elts, inner_ranks, strict=False))
         ]
         consuming = sum(1 for elt in outer_elts if not is_newaxis(elt))
         trail_count = rank - len(inner_elts) if rank is not None else consuming
@@ -282,7 +282,7 @@ class ChainedSubscriptFlattener(ast.NodeTransformer):
         outer_model: list[IndexEntry] = []
         pending: list[int] = []
         consumed = 0
-        for i, (elt, elt_rank) in enumerate(zip(outer_elts, outer_ranks)):
+        for i, (elt, elt_rank) in enumerate(zip(outer_elts, outer_ranks, strict=False)):
             if is_newaxis(elt):
                 outer_model.append(("newaxis", (("new", i),)))
                 pending.append(i)

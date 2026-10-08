@@ -80,7 +80,7 @@ def test_docs_name_no_variant_that_is_not_registered() -> None:
     stale = []
     for path, text in doc_text():
         # Names the doc itself declares under `variants:` are legitimate examples.
-        declared = set(re.findall(r"^\s{4}([a-z_]\w*):\s*\{", text, re.M))
+        declared = set(re.findall(r"^\s{4}([a-z_]\w*):\s*\{", text, re.MULTILINE))
         for m in re.finditer(r"--variant\s+([a-z_]+)", text):
             name = m.group(1)
             if name not in PROMPT_VARIANTS and name not in declared and not name.startswith("var"):

@@ -172,7 +172,7 @@ def expand_axis_reduction(
     kept_axes = [k for k in range(n_dim) if k not in axes_set]
     outer_iter_names = [make_iter_name("__ax", i) for i in range(len(kept_axes))]
     red_iter_names = [make_iter_name("__rd", i) for i in range(len(axes_norm))]
-    red_iter_map = dict(zip(axes_norm, red_iter_names))
+    red_iter_map = dict(zip(axes_norm, red_iter_names, strict=False))
 
     src_elts = reduction_source_index(n_dim, axes_set, red_iter_map, outer_iter_names)
     src_slot = src_elts[0] if n_dim == 1 else ast.Tuple(elts=src_elts, ctx=ast.Load())
@@ -193,7 +193,7 @@ def expand_axis_reduction(
     update_stmt = reduction_update(op_fn, update_fn, out_sub, out_load, src_sub)
     # Inner loop nest over the reduction axes, deepest first.
     inner_stmts: list[ast.stmt] = [update_stmt]
-    for ax, rn in zip(reversed(axes_norm), reversed(red_iter_names)):
+    for ax, rn in zip(reversed(axes_norm), reversed(red_iter_names), strict=False):
         inner_stmts = [range_for(rn, [const_or_name(shape[ax])], inner_stmts)]
     if post_fn is not None:
         # Divisor for mean: product of the reduction-axis sizes.
@@ -201,7 +201,7 @@ def expand_axis_reduction(
         for ax in axes_norm[1:]:
             divisor = ast.BinOp(left=divisor, op=ast.Mult(), right=const_or_name(shape[ax]))
         inner_stmts.append(post_fn(out_sub, divisor))
-    body = [init_stmt] + inner_stmts
+    body = [init_stmt, *inner_stmts]
     bounds = tuple(shape[k] for k in kept_axes)
     if not bounds:
         # No kept axes (all reduced; equivalent to full reduction).
@@ -602,7 +602,7 @@ def expand_arg_reduction(
     kept_axes = [k for k in range(n_dim) if k not in axes_set]
     outer_iter_names = [make_iter_name("__aax", i) for i in range(len(kept_axes))]
     red_iter_names = [make_iter_name("__ard", i) for i in range(len(axes_norm))]
-    red_iter_map = dict(zip(axes_norm, red_iter_names))
+    red_iter_map = dict(zip(axes_norm, red_iter_names, strict=False))
     src_elts = reduction_source_index(n_dim, axes_set, red_iter_map, outer_iter_names)
     src_slot = src_elts[0] if n_dim == 1 else ast.Tuple(elts=src_elts, ctx=ast.Load())
     src_sub = ast.Subscript(value=name_(a.id), slice=src_slot, ctx=ast.Load())
@@ -649,7 +649,7 @@ def expand_arg_reduction(
     )
     # Wrap the comparison in nested reduction loops, deepest first.
     inner_body: list[ast.stmt] = [update]
-    for ax, rn in zip(reversed(axes_norm), reversed(red_iter_names)):
+    for ax, rn in zip(reversed(axes_norm), reversed(red_iter_names), strict=False):
         inner_body = [range_for(rn, [const_or_name(shape[ax])], inner_body)]
     body_stmts = init_stmts + inner_body
     if not kept_axes:
@@ -737,7 +737,7 @@ def expand_var_or_std(
     # reduction loops; only the outer (kept) loop nest overwrites it.
     outer_iter_names = [make_iter_name("__sax", i) for i in range(len(kept_axes))]
     red_iter_names = [make_iter_name("__srd", i) for i in range(len(axes_norm))]
-    red_iter_map = dict(zip(axes_norm, red_iter_names))
+    red_iter_map = dict(zip(axes_norm, red_iter_names, strict=False))
 
     src_elts = reduction_source_index(n_dim, axes_set, red_iter_map, outer_iter_names)
     src_slot = src_elts[0] if n_dim == 1 else ast.Tuple(elts=src_elts, ctx=ast.Load())
@@ -775,7 +775,7 @@ def expand_var_or_std(
     finalize = ast.Assign(targets=[out_sub], value=finalize_value)
     # Wrap inner reduction iters around add_acc, deepest first.
     inner_body: list[ast.stmt] = [add_acc]
-    for ax, rn in zip(reversed(axes_norm), reversed(red_iter_names)):
+    for ax, rn in zip(reversed(axes_norm), reversed(red_iter_names), strict=False):
         inner_body = [range_for(rn, [const_or_name(shape[ax])], inner_body)]
     body_stmts = [init_acc, *inner_body, finalize]
     if is_scalar_target:

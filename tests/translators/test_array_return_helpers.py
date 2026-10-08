@@ -191,7 +191,8 @@ def test_array_helper_emitted_as_outparam_c_function() -> None:
         "  out[i, :] = clamp_row(x[i, :], thr)\n"
     )
     kir = helper_kir(src, shape="(M,n)", params={"M": 4, "n": 5})
-    assert len(kir.helpers) == 1 and kir.helpers[0].return_kind == "__hret_0"
+    assert len(kir.helpers) == 1
+    assert kir.helpers[0].return_kind == "__hret_0"
     c = emit_c(kir, fn_name="f")
     # Helper ABI == kernel ABI (abi_contract.md Sec. 4): pointers by name, then scalars by name,
     # the out buffer sorting like any other pointer (``__hret_0`` < ``v``).
@@ -349,7 +350,8 @@ def test_inout_target_takes_one_abi_slot() -> None:
     kir = helper_kir(INOUT_SRC)
     helper = kir.helpers[0]
     assert [a.name for a in helper.arrays] == ["v"], "the in-out buffer must not gain a second descriptor"
-    assert helper.return_kind == "v" and helper.arrays[0].is_output
+    assert helper.return_kind == "v"
+    assert helper.arrays[0].is_output
     assert helper.param_order() == ["v", "s"]
     c = emit_c(kir, fn_name="f")
     assert "static void scale_in_place(double *restrict v, const double s)" in c

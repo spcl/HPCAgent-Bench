@@ -173,7 +173,7 @@ class Signature:
         fn_param_names = [a.arg for a in fn.args.args]
         if len(self.input_args) != len(fn_param_names) or self.input_args == fn_param_names:
             return
-        rename = dict(zip(self.input_args, fn_param_names))
+        rename = dict(zip(self.input_args, fn_param_names, strict=False))
         self.input_args = list(fn_param_names)
         self.array_args = [rename.get(a, a) for a in self.array_args]
         self.output_args = [rename.get(a, a) for a in self.output_args]
@@ -352,7 +352,7 @@ def inline_helpers(
         # Every owner: a sentinel-returning helper has no ABI anywhere.
         owners = [fn] + [n for n in tree.body if isinstance(n, ast.FunctionDef) and n is not fn]
         splicer = SpliceNoneGuardedCalls(none_guarded, counters.inl)
-        if not any([splicer.apply(owner) for owner in owners if owner.name not in none_guarded]):
+        if not any(splicer.apply(owner) for owner in owners if owner.name not in none_guarded):
             break
         ast.fix_missing_locations(fn)
         inline_regular_helpers(tree, fn, input_args, keep_helpers, inlined_consts, counters)

@@ -60,7 +60,8 @@ def test_native_base_follows_the_module_stem() -> None:
     assert _native_targets(dense) == [(None, "arc_distance")]
     # The divergent case is where name-keying would actually break: two benchmarks, one module.
     spec = BenchSpec.load(DIVERGENT)
-    assert spec.native_base() == "sp_bicg" and spec.native_base("csr") == "sp_bicg_csr"
+    assert spec.native_base() == "sp_bicg"
+    assert spec.native_base("csr") == "sp_bicg_csr"
 
 
 @pytest.mark.skipif(not _emitter_present(), reason="translators absent")
@@ -151,7 +152,7 @@ _WRAP_FRAMEWORKS = ["cc", "llvm", "fortran", "polly"]
 
 
 @pytest.mark.parametrize("framework", _WRAP_FRAMEWORKS)
-@pytest.mark.parametrize("dtype,fptype", [(np.float64, "fp64"), (np.float32, "fp32")])
+@pytest.mark.parametrize(("dtype", "fptype"), [(np.float64, "fp64"), (np.float32, "fp32")])
 def test_wrap_kernel_matches_numpy(framework, dtype, fptype) -> None:
     if not _emitter_present() or not shutil.which(_COMPILER[framework]):
         pytest.skip(f"translators or {_COMPILER[framework]} absent")
@@ -196,7 +197,7 @@ def test_wrap_kernel_matches_numpy(framework, dtype, fptype) -> None:
 
 # A sparse kernel is emitted ONE source per configuration; the layout IS the sub-benchmark.
 @pytest.mark.parametrize("framework", ["cc", "llvm"])
-@pytest.mark.parametrize("dtype,fptype", [(np.float64, "fp64"), (np.float32, "fp32")])
+@pytest.mark.parametrize(("dtype", "fptype"), [(np.float64, "fp64"), (np.float32, "fp32")])
 def test_sparse_layout_is_a_subbenchmark(framework, dtype, fptype) -> None:
     if not _emitter_present() or not shutil.which(_COMPILER[framework]):
         pytest.skip(f"translators or {_COMPILER[framework]} absent")
@@ -260,8 +261,10 @@ def test_symbols_and_iterators_are_int64() -> None:
         c = (out / "gemm_fp64.c").read_text()
         f = (out / "gemm_fp64.f90").read_text()
         # C: symbols are int64_t scalars; loop iterators are int64_t (not `int`).
-        assert "int64_t NI" in c and "int64_t NJ" in c
-        assert "for (int64_t " in c and "for (int " not in c
+        assert "int64_t NI" in c
+        assert "int64_t NJ" in c
+        assert "for (int64_t " in c
+        assert "for (int " not in c
         # Fortran: symbols + iterators are integer(c_int64_t); no bare `integer ::`.
         assert "integer(c_int64_t), value" in f
         assert "integer(c_int64_t) ::" in f
@@ -374,7 +377,7 @@ _INT32_BENCH = {
 
 
 @pytest.mark.parametrize(
-    "framework,target,compiler,ext",
+    ("framework", "target", "compiler", "ext"),
     [
         ("cc", "c", "gcc", "c"),
         ("llvm", "c", "clang++", "cpp"),

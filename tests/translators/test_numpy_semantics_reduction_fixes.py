@@ -31,7 +31,7 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes import (
     expand_std,
     expand_sum,
 )
-from hpcagent_bench.translators.numpyto_common.numpy_desugar import reduce_axis_stmts, expr_rank
+from hpcagent_bench.translators.numpyto_common.numpy_desugar import expr_rank, reduce_axis_stmts
 from tests.translators.op_oracle import run_op
 
 ALL = ("c", "cpp", "fortran", "numba", "pythran", "jax")
@@ -65,7 +65,8 @@ def test_sum_integer_uses_int_accumulator_and_int64_dtype() -> None:
     stmts = expand_sum(target(), args, {"a": ("N",)}, kws, local_dtypes=ld)
     init = stmts[0]
     assert isinstance(init.value, ast.Constant)
-    assert init.value.value == 0 and isinstance(init.value.value, int)  # not 0.0
+    assert init.value.value == 0
+    assert isinstance(init.value.value, int)
     assert ld["out"] == "int64"  # result upcast to int64 (numpy rule)
 
 
@@ -74,7 +75,8 @@ def test_prod_integer_uses_int_accumulator() -> None:
     ld = {"a": "int32"}
     stmts = expand_prod(target(), args, {"a": ("N",)}, kws, local_dtypes=ld)
     init = stmts[0]
-    assert init.value.value == 1 and isinstance(init.value.value, int)
+    assert init.value.value == 1
+    assert isinstance(init.value.value, int)
     assert ld["out"] == "int64"
 
 
@@ -142,7 +144,8 @@ def test_max_min_nan_propagation_all_backends() -> None:
 
 def test_argmax_argmin_first_nan_index_all_backends() -> None:
     a = np.array([1.0, 5.0, np.nan, 2.0, np.nan])  # first NaN at index 2
-    assert np.argmax(a) == 2 and np.argmin(a) == 2
+    assert np.argmax(a) == 2
+    assert np.argmin(a) == 2
     src = "import numpy as np\ndef f(a, i, j):\n i[0] = np.argmax(a)\n j[0] = np.argmin(a)\n"
     res = run_op(
         src,
@@ -248,7 +251,8 @@ def test_initial_numeric_all_backends() -> None:
 
 def test_mean_float_input_preserves_dtype_in_desugar() -> None:
     float_src = src_(reduce_axis_stmts("t", "s", "mean", [0], 2, 0, elem_is_float=True))
-    assert "s.dtype" in float_src and "np.float64" not in float_src
+    assert "s.dtype" in float_src
+    assert "np.float64" not in float_src
     int_src = src_(reduce_axis_stmts("t", "s", "mean", [0], 2, 0, elem_is_float=False))
     assert "np.float64" in int_src  # integer input upcasts to float64
 

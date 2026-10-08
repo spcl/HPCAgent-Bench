@@ -34,14 +34,14 @@ CONV = (
 def emit_(src: str, func: str, extra_args=(), dtypes=None) -> str:
     """Emit C for a throwaway kernel over ``w_box`` / ``padded`` / ``out_grid``."""
     shapes = {"w_box": "(K, K)", "padded": "(N + K, N + K)", "out_grid": "(N, N)"}
-    shapes.update({a: "(N,)" for a in extra_args})
+    shapes.update(dict.fromkeys(extra_args, "(N,)"))
     kir = parse_source(src, func, ["w_box", "padded", *extra_args], ["out_grid"], shapes, {"K": 3, "N": 8}, dtypes)
     return emit_c(lower(kir), fn_name=func)
 
 
 def assigns_to(text: str, name: str):
     """Whole-statement ``<name> = ...;`` lines, the form the substitution deletes."""
-    return re.findall(rf"^\s*{name} = .*;$", text, re.M)
+    return re.findall(rf"^\s*{name} = .*;$", text, re.MULTILINE)
 
 
 def test_invariant_scalar_is_replayed_at_the_deeper_use_site() -> None:

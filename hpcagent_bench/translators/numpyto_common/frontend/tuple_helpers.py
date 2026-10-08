@@ -138,7 +138,7 @@ def return_expression(body: Sequence[ast.stmt]) -> ast.expr | None:
     if not isinstance(head, ast.If):
         return None
     taken = return_expression(head.body)
-    other = return_expression(head.orelse if head.orelse else body[1:])
+    other = return_expression(head.orelse or body[1:])
     if taken is None or other is None:
         return None
     return ast.IfExp(test=head.test, body=taken, orelse=other)
@@ -178,7 +178,7 @@ def tuple_template_for_call(
     inline_module_constants(tree, hfn, pnames)
     native_desugar(hfn)
     consts: dict[str, ast.expr] = {}
-    for pname, arg in zip(pnames, call.args):
+    for pname, arg in zip(pnames, call.args, strict=False):
         folded = (
             arg
             if isinstance(arg, ast.Constant)
@@ -224,5 +224,5 @@ class InlineTupleHelperCalls(ast.NodeTransformer):
         template = self.templates.get(id(node))
         if template is None:
             return node
-        substituted = substitute_names(copy.deepcopy(template), dict(zip(self.pnames, node.args)))
+        substituted = substitute_names(copy.deepcopy(template), dict(zip(self.pnames, node.args, strict=False)))
         return ast.copy_location(substituted, node)

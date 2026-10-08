@@ -227,8 +227,19 @@ def run_cpf(args: argparse.Namespace, rank: Rank) -> int:
     kernels = ",".join(names)
     ranks = ["--rank", str(rank.index), "--ranks", str(rank.size)]
     status = cpf_prerender.main(
-        ["--cache", str(args.cache), "--view", str(args.view), "--kernels", kernels, "--target", args.target]
-        + ["--precision", args.precision, *ranks]
+        [
+            "--cache",
+            str(args.cache),
+            "--view",
+            str(args.view),
+            "--kernels",
+            kernels,
+            "--target",
+            args.target,
+            "--precision",
+            args.precision,
+            *ranks,
+        ]
     )
     for language in filter(None, args.verify.split(",")):
         verify = ["--view", str(args.view), "--kernels", kernels, "--language", language]

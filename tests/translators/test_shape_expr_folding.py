@@ -68,27 +68,27 @@ NOT_EXACT = [
 ]
 
 
-@pytest.mark.parametrize("expr,expected", CASES)
+@pytest.mark.parametrize(("expr", "expected"), CASES)
 def test_folds_to_expected(expr: str, expected: str) -> None:
     assert fold_shape_expr(expr) == expected
 
 
-@pytest.mark.parametrize("expr,expected", CASES)
+@pytest.mark.parametrize(("expr", "expected"), CASES)
 def test_folding_preserves_value(expr: str, expected: str) -> None:
     """The folded form must agree with the original on every input, not just on a lucky one."""
     names = sorted({n.id for n in ast.walk(ast.parse(expr, mode="eval")) if isinstance(n, ast.Name)})
     folded = fold_shape_expr(expr)
     for combo in itertools.product(range(1, 12), repeat=len(names)):
-        env = dict(zip(names, combo))
+        env = dict(zip(names, combo, strict=False))
         assert evaluate(folded, env) == evaluate(expr, env), (expr, folded, env)
 
 
-@pytest.mark.parametrize("expr,reason", NOT_EXACT)
+@pytest.mark.parametrize(("expr", "reason"), NOT_EXACT)
 def test_an_inexact_numerator_keeps_its_division(expr: str, reason: str) -> None:
     assert fold_shape_expr(expr) == expr, reason
 
 
-@pytest.mark.parametrize("expr,expected", CASES)
+@pytest.mark.parametrize(("expr", "expected"), CASES)
 def test_folding_preserves_value_for_negative_operands_too(expr: str, expected: str) -> None:
     """``//`` rounds toward -inf, so a rewrite can agree on every positive input and still be wrong.
 
@@ -100,7 +100,7 @@ def test_folding_preserves_value_for_negative_operands_too(expr: str, expected: 
     names = sorted({n.id for n in ast.walk(ast.parse(expr, mode="eval")) if isinstance(n, ast.Name)})
     folded = fold_shape_expr(expr)
     for combo in itertools.product(range(-9, 3), repeat=len(names)):
-        env = dict(zip(names, combo))
+        env = dict(zip(names, combo, strict=False))
         assert evaluate(folded, env) == evaluate(expr, env), (expr, folded, env)
 
 

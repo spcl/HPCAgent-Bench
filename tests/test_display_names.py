@@ -12,7 +12,7 @@ import re
 
 import pytest
 
-from hpcagent_bench import study_tags, paths, tags
+from hpcagent_bench import paths, study_tags, tags
 from hpcagent_bench.stats import palette
 from tests.env_render import BASES, rendered
 

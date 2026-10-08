@@ -45,8 +45,7 @@ MOUNTINFO = """\
 
 
 def load(name: str) -> ModuleType:
-    module = fresh(name)
-    return module
+    return fresh(name)
 
 
 @pytest.fixture(name="seal")
@@ -209,7 +208,8 @@ def test_the_shared_files_every_agent_reads_stay_in_the_view(
     got = launch(monkeypatch, tmp_path, [])
     entries = seal.shared_root_entries(got.shared)
     assert {"prompt.md", "hints.md", "build-c.md", "submission-multi.md", "skills"} <= set(entries)
-    assert "tasks" not in entries and not [name for name in entries if name.startswith("agent-")]
+    assert "tasks" not in entries
+    assert not [name for name in entries if name.startswith("agent-")]
     plan = seal.seal_plan(layout_of(seal, got), entries)
     bound = {op.source for op in plan if op.kind == "bind"}
     assert str(got.shared / "skills") in bound

@@ -37,9 +37,9 @@ import pytest
 from hpcagent_bench.translators.numpyto_c.emit import emit_c
 from hpcagent_bench.translators.numpyto_common.ir import KernelIR
 from hpcagent_bench.translators.numpyto_common.lowering import lower
-from hpcagent_bench.translators.numpyto_common.tuple_desugar import drop_dead_none_bindings, desugar_tuples
-from tests.translators.op_oracle import run_op
+from hpcagent_bench.translators.numpyto_common.tuple_desugar import desugar_tuples, drop_dead_none_bindings
 from tests.translators import op_oracle
+from tests.translators.op_oracle import run_op
 
 NATIVE = ("c", "cpp", "fortran")
 

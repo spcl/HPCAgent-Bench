@@ -11,6 +11,7 @@ records rc=0 and the data point is simply gone, so the driver has to notice and 
 import json
 import threading
 import time
+from typing import Self
 
 import pytest
 
@@ -237,7 +238,7 @@ def crashing_popen_class(exit_codes):
         def communicate(self, input: str | None = None, timeout: float | None = None) -> tuple[str, str]:
             return self.captured, ""
 
-        def __enter__(self) -> "FakePopen":
+        def __enter__(self) -> Self:
             return self
 
         def __exit__(self, *exc_info: object) -> bool:

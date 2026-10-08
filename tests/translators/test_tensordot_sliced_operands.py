@@ -20,7 +20,7 @@ import ast
 
 import numpy as np
 
-from hpcagent_bench.translators.numpyto_common.lib_nodes import iter_extent_of, expand_tensordot
+from hpcagent_bench.translators.numpyto_common.lib_nodes import expand_tensordot, iter_extent_of
 from tests.translators.op_oracle import parse_source, run_op
 
 NATIVE = ("c", "cpp", "fortran")
@@ -69,7 +69,8 @@ def test_expand_tensordot_materializes_non_name_operands() -> None:
     )
     out = unparse_(stmts)
     # Both operands spilled under the tensordot-specific prefix, sized off the RESOLVED extents.
-    assert "__td_op1" in out and "__td_op2" in out
+    assert "__td_op1" in out
+    assert "__td_op2" in out
     assert "for __td_c1 in range(H_out):" in out
     assert "for __td_c1 in range(Cout):" in out
     # Mapped onto einsum's own accumulation loop, contracting the shared Cin axis.
@@ -94,7 +95,8 @@ def test_hoisted_tensordot_loop_nest_is_labelled_and_scoped() -> None:
     # ``w[ki, kj]`` picks up implicit trailing full slices upstream of the hoist
     # (``w[ki, kj, :, :]``), so match on the stable prefix only.
     assert "numpy: np.tensordot(x[:, ki:ki + H_out, kj:kj + W_out, :], w[ki, kj" in c
-    assert "__td_op1" in c and "__td_op2" in c
+    assert "__td_op1" in c
+    assert "__td_op2" in c
 
 
 def test_conv_tap_tensordot_matches_numpy() -> None:

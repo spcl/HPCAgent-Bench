@@ -22,8 +22,7 @@ SCRIPT = pathlib.Path(__file__).resolve().parents[1] / "agent" / "hpcagent_agent
 
 @pytest.fixture(name="module", scope="module")
 def module_fixture() -> types.ModuleType:
-    mod = fresh("stream_idle_timeout")
-    return mod
+    return fresh("stream_idle_timeout")
 
 
 def test_no_setup_ever_gets_a_value_the_cli_would_silently_clamp(module: types.ModuleType) -> None:

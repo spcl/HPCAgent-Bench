@@ -12,6 +12,7 @@ import re
 import shutil
 import subprocess
 import sys
+
 from tests.bash_stub import bash_stub
 
 REPO = pathlib.Path(__file__).resolve().parents[1]

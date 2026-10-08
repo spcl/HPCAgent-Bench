@@ -16,9 +16,9 @@ import logging
 import pathlib
 from types import ModuleType
 
-import matplotlib
+import matplotlib as mpl
 
-matplotlib.use("Agg")
+mpl.use("Agg")
 
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -61,7 +61,8 @@ def test_colouring_an_unregistered_packet_is_never_silent(caplog: pytest.LogCapt
     with caplog.at_level(logging.WARNING, logger=palette.LOG.name):
         colour = palette.color("a-packet-nobody-registered")
     assert colour
-    assert "is not registered" in caplog.text and "a-packet-nobody-registered" in caplog.text
+    assert "is not registered" in caplog.text
+    assert "a-packet-nobody-registered" in caplog.text
 
 
 def test_colouring_an_unregistered_framework_is_never_silent(caplog: pytest.LogCaptureFixture) -> None:

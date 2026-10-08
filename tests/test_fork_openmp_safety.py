@@ -340,7 +340,9 @@ class RefusingRuntime:
         raise AttributeError(symbol)
 
 
-@pytest.mark.parametrize("kmp, rc, warns", [(False, -1, True), (True, 1, False)], ids=["gomp-family", "llvm-family"])
+@pytest.mark.parametrize(
+    ("kmp", "rc", "warns"), [(False, -1, True), (True, 1, False)], ids=["gomp-family", "llvm-family"]
+)
 def test_only_a_refusal_from_a_runtime_without_libomps_recovery_is_warned(
     monkeypatch: pytest.MonkeyPatch, kmp: bool, rc: int, warns: bool
 ) -> None:

@@ -308,7 +308,7 @@ def forget_inherited_forkserver() -> None:
     forkserver start in the child would ``waitpid`` a stranger and raise ``ChildProcessError``. Forgetting the
     handle makes the child start a server of its own. CPython keeps no public reset for this."""
     # The module's one ForkServer instance; its handle fields are private and absent from the type stubs.
-    server = multiprocessing.forkserver._forkserver  # noqa: SLF001
+    server = multiprocessing.forkserver._forkserver
     vars(server).update(_forkserver_pid=None, _forkserver_address=None, _forkserver_alive_fd=None)
 
 

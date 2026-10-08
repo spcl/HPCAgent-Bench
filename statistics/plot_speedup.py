@@ -46,22 +46,19 @@ import argparse
 import math
 import pathlib
 import warnings
-from typing import NamedTuple
 from collections.abc import Sequence
+from typing import NamedTuple
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from hpcagent_bench.stats import palette
-from hpcagent_bench.stats.figures import per_kernel
-from hpcagent_bench.stats.summary import drop_outliers, signed_change
-from hpcagent_bench.stats import rules
-from hpcagent_bench.stats import style
 from hpcagent_bench.paths import PLOTS_DIR
 from hpcagent_bench.reporting_order import BY_DWARF, ORDER_MODES, order_rows, row_meta_for
+from hpcagent_bench.stats import palette, rules, style
+from hpcagent_bench.stats.figures import per_kernel
 from hpcagent_bench.stats.figures import results as plotting  # also selects the headless Agg backend on import
-
-import matplotlib.pyplot as plt  # noqa: E402 -- must follow plotting's backend setup
+from hpcagent_bench.stats.summary import drop_outliers, signed_change
 
 #: This figure is dense (many kernels, three stacked panels) and drawn at paper size, so its type
 #: and strokes are the shared print scale.
@@ -213,11 +210,15 @@ def baseline_time(rows: pd.DataFrame, baseline: str) -> float:
 def warn_unplotted(crashed: Sequence[str], unusable: Sequence[str]) -> None:
     """Name the cells drawn as a crash X, and the cells dropped for want of a baseline."""
     if crashed:
-        warnings.warn(f"{len(crashed)} cell(s) produced no usable time and are drawn as X at 0: {', '.join(crashed)}")
+        warnings.warn(
+            f"{len(crashed)} cell(s) produced no usable time and are drawn as X at 0: {', '.join(crashed)}",
+            stacklevel=2,
+        )
     if unusable:
         warnings.warn(
             f"dropped {len(unusable)} cell(s) with no usable speedup "
-            f"(missing baseline, or a non-positive / non-finite median): {', '.join(unusable)}"
+            f"(missing baseline, or a non-positive / non-finite median): {', '.join(unusable)}",
+            stacklevel=2,
         )
 
 
@@ -242,7 +243,7 @@ def data_table(summary: pd.DataFrame, points: Sequence[Point], baseline: str) ->
         base = times.get((point.kernel, baseline))
         cell = times.get((point.kernel, point.framework))
         base_time = base[0] if base else math.nan
-        candidate, low, high = cell if cell else (math.nan, math.nan, math.nan)
+        candidate, low, high = cell or (math.nan, math.nan, math.nan)
         records.append(
             {
                 "kernel": point.kernel,
@@ -286,8 +287,7 @@ def plotted_kernels(points: Sequence[Point], order: str = BY_DWARF) -> list[str]
     were already named by :func:`speedup_points`'s warning.
     """
     names = list(dict.fromkeys(point.kernel for point in points))
-    ordered = order_rows(row_meta_for(names), order)[0]
-    return ordered
+    return order_rows(row_meta_for(names), order)[0]
 
 
 def framework_colors(points: Sequence[Point]) -> dict[str, str]:
@@ -368,7 +368,9 @@ def draw_boxes(ax, points: Sequence[Point], x_of: dict[str, int], colors: dict[s
 
 def framework_offsets(frameworks: Sequence[str], slot: float) -> dict[str, float]:
     """Each framework's x offset from its kernel, so their boxes tile ``slot`` of the kernel's unit."""
-    return dict(zip(frameworks, per_kernel.dodge_offsets(len(frameworks), box_span(len(frameworks), slot))))
+    return dict(
+        zip(frameworks, per_kernel.dodge_offsets(len(frameworks), box_span(len(frameworks), slot)), strict=False)
+    )
 
 
 def paint_boxes(artists: dict[str, list], color: str, alpha: float, width: float) -> None:
@@ -516,7 +518,7 @@ def banded_figure(
         squeeze=False,
         gridspec_kw={"height_ratios": panel_heights(points, present, compact)},
     )
-    for row, band in zip(axes, present):
+    for row, band in zip(axes, present, strict=False):
         draw_band(row[0], band, [point for point in points if point.band == band], x_of, colors, boxes=boxes)
     label_kernels(axes[-1][0], kernels)
     fig.supylabel("Signed Relative Change (+1 = 2x Faster, -1 = 2x Slower)", fontsize=DENSE.annotation_pt)
@@ -613,7 +615,7 @@ def mini_figure(points: Sequence[Point], kernels: Sequence[str], output: str, bo
     present = [band for band in BANDS if any(point.band == band for point in points)]
     style.apply()
     fig, axes = plt.subplots(len(present), 1, sharex=True, figsize=(3.4, max(1.3, 0.95 * len(present))), squeeze=False)
-    for row, band in zip(axes, present):
+    for row, band in zip(axes, present, strict=False):
         ax = row[0]
         draw_band(ax, band, [point for point in points if point.band == band], x_of, colors, boxes=boxes)
         ax.title.set_fontsize(DENSE.annotation_pt)
@@ -684,7 +686,8 @@ def plot_signed_speedup(
             present = ", ".join(sorted(set(rows["framework"].astype(str)))) or "(none)"
             warnings.warn(
                 f"machine {label}: no kernel has a plottable speedup over "
-                f"{baseline!r}; frameworks present: {present}. No figure written for it"
+                f"{baseline!r}; frameworks present: {present}. No figure written for it",
+                stacklevel=2,
             )
             continue
         if boxes:
@@ -693,7 +696,8 @@ def plot_signed_speedup(
                 warnings.warn(
                     f"machine {label}: {thin} of {len(points)} cell(s) have fewer than "
                     f"{MIN_BOX_SAMPLES} cleaned repetitions and are drawn as their median marker, "
-                    f"not as a box -- re-run those cells with more repetitions for a spread"
+                    f"not as a box -- re-run those cells with more repetitions for a spread",
+                    stacklevel=2,
                 )
         kernels = plotted_kernels(points, order)
         table_path = pathlib.Path(plotting.machine_output(output, label)).with_suffix(".csv")

@@ -65,7 +65,7 @@ def classify(key, fw):
     # two happen to be bit-identical, which depends on the BLAS build and the vectorisation. That is
     # what made gemm read "agree" in the container and "disagree" on the login node: 11 ULP of fp32
     # over a 1200-term dot product, which is what a reordered fp32 accumulation looks like.
-    for name, a, b in zip(names_i, want, got):
+    for name, a, b in zip(names_i, want, got, strict=False):
         ok, ratio, detail = reassociation_agrees(a, b, int(np.asarray(a).size))
         if not ok:
             return module, "disagree", f"output {name!r}: {detail}"

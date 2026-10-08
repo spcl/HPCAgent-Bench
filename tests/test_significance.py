@@ -131,7 +131,7 @@ def test_the_corrections_match_the_hand_worked_values() -> None:
     )
     assert significance.correct([], test="holm") == []
     raw = [0.001, 0.01, 0.03, 0.2, 0.5, 0.9]
-    for name in significance.CORRECTIONS.keys():
+    for name in significance.CORRECTIONS:
         adjusted = significance.correct(raw, test=name)
         assert all(p - 1e-12 <= q <= 1.0 for p, q in zip(raw, adjusted, strict=True)), name
 

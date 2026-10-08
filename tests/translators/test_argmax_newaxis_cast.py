@@ -73,7 +73,8 @@ def hoist(src, shapes):
 
 def test_argmax_axis_hoists_to_int64_array_temp() -> None:
     arr, scal, dts = hoist("np.argmax(scores, axis=0)", {"scores": ("K", "K")})
-    assert arr and not scal  # array-returning, not scalar
+    assert arr
+    assert not scal
     ((name, shape),) = arr.items()
     assert shape == ("K",)  # kept axis (axis 1)
     assert dts[name] == "int64"  # index dtype, not double
@@ -82,13 +83,15 @@ def test_argmax_axis_hoists_to_int64_array_temp() -> None:
 def test_argmin_axis_hoists_to_int64_array_temp() -> None:
     arr, scal, dts = hoist("np.argmin(scores, axis=1)", {"scores": ("K", "M")})
     ((name, shape),) = arr.items()
-    assert shape == ("K",) and dts[name] == "int64"
+    assert shape == ("K",)
+    assert dts[name] == "int64"
 
 
 def test_argmax_no_axis_stays_scalar() -> None:
     # Regression guard: full argmax (axis=None) is still a scalar temp.
     arr, scal, dts = hoist("np.argmax(V)", {"V": ("K",)})
-    assert scal and not arr
+    assert scal
+    assert not arr
 
 
 # C. Partial-subscript LHS row copy: ``back[t] = cb``                          #

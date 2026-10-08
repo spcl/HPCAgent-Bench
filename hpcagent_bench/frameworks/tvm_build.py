@@ -103,7 +103,7 @@ def default_gpu_schedule(prim_func: "tvm.tirx.PrimFunc", max_threads: int = DEFA
     sch = Schedule(prim_func)
     try:
         blocks = sch.get_child_blocks(sch.get_sblock("root"))
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         # No standard "root" block (e.g. a hand-written sequential TVMScript kernel): nothing to auto-bind.
         raise NotImplementedError(
             "default_gpu_schedule: kernel has no auto-bindable spatial "
@@ -115,7 +115,7 @@ def default_gpu_schedule(prim_func: "tvm.tirx.PrimFunc", max_threads: int = DEFA
             raise TypeError(f"schedule block {blk} resolved to {type(block).__name__}, not an SBlock")
         ivs = block.iter_vars
         loops = sch.get_loops(blk)
-        spatial = [lp for lp, iv in zip(loops, ivs) if int(iv.iter_type) == 0]
+        spatial = [lp for lp, iv in zip(loops, ivs, strict=False) if int(iv.iter_type) == 0]
         if not spatial:
             continue
         fused = sch.fuse(*spatial) if len(spatial) > 1 else spatial[0]  # pyright: ignore[reportArgumentType]  # tvm stubs type each variadic loop as a list

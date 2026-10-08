@@ -89,7 +89,8 @@ def test_a_section_off_in_config_renders_nothing_and_leaves_no_gap(monkeypatch: 
     on = build_prompt(TASK)
     yaml_config(monkeypatch, {"sections": {"timing": False}})
     off = build_prompt(TASK)
-    assert "## Timing" in on and "## Timing" not in off
+    assert "## Timing" in on
+    assert "## Timing" not in off
     assert off == on.replace(on[on.index("## Timing") : on.index("## Correctness")], "")
 
 
@@ -105,7 +106,8 @@ def test_the_environment_wins_over_config_in_both_directions(monkeypatch: pytest
     monkeypatch.setenv("HPCAGENT_BENCH_PROMPT_SECTIONS_TIMING", "on")
     monkeypatch.setenv("HPCAGENT_BENCH_PROMPT_SECTIONS_SCORING", "off")
     text = build_prompt(TASK)
-    assert "## Timing" in text and "## Scoring" not in text
+    assert "## Timing" in text
+    assert "## Scoring" not in text
 
 
 def test_a_section_replaced_by_a_file_renders_that_file(tmp_path: pathlib.Path) -> None:
@@ -152,7 +154,8 @@ def test_a_missing_replacement_names_the_template() -> None:
 
 def test_a_disabled_tool_fragment_is_dropped_without_a_gap() -> None:
     off = service_prompt("gemm", "c", JUDGE, prompt_config=PromptConfig.from_config(sections={"tools_baseline": False}))
-    assert "### `baseline`" in service_prompt("gemm", "c", JUDGE) and "### `baseline`" not in off
+    assert "### `baseline`" in service_prompt("gemm", "c", JUDGE)
+    assert "### `baseline`" not in off
     assert "\n\n\n" not in off
 
 
@@ -197,7 +200,8 @@ def test_a_variant_declared_in_config_can_carry_sections(monkeypatch: pytest.Mon
     quiet = PromptConfig.variant("quiet")
     assert dict(quiet.sections) == {"fuzzing": False, "timing": False}
     text = build_prompt(TASK, prompt_config=quiet)
-    assert "## Timing" not in text and "## Performance sizes" not in text
+    assert "## Timing" not in text
+    assert "## Performance sizes" not in text
 
 
 def test_the_cli_turns_a_section_off_and_lists_the_keys() -> None:
@@ -209,7 +213,8 @@ def test_the_cli_turns_a_section_off_and_lists_the_keys() -> None:
 
     assert "## Timing" not in run("prompt", "gemm", "--section", "timing=off")
     listing = run("prompt", "--sections")
-    assert "build_flags" in listing and "sections/build_flags.j2" in listing
+    assert "build_flags" in listing
+    assert "sections/build_flags.j2" in listing
 
 
 @pytest.mark.parametrize("task", LAYOUT_CASES, ids=lambda task: f"{task.language}-{task.source_mode}")
@@ -219,7 +224,10 @@ def test_each_section_starts_at_its_heading_after_one_blank_line(task: Task) -> 
     for text in (build_prompt(task), service_prompt("gemm", task.language, JUDGE)):
         lines = text.split("\n")
         glued = [line for i, line in enumerate(lines) if line.startswith(("## ", "### ")) and i and lines[i - 1]]
-        assert not glued and "\n\n\n" not in text and text.endswith("\n") and not text.endswith("\n\n")
+        assert not glued
+        assert "\n\n\n" not in text
+        assert text.endswith("\n")
+        assert not text.endswith("\n\n")
 
 
 def run_case(test: Callable[..., None], *args: object) -> None:

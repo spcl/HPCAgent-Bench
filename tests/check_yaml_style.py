@@ -68,7 +68,7 @@ def violations(path: pathlib.Path) -> list[str]:
     probs: list[str] = []
     try:
         yaml.safe_load(text)
-    except yaml.YAMLError as e:  # noqa: PERF203
+    except yaml.YAMLError as e:
         return [f"does not parse: {str(e).splitlines()[0]}"]
     lines = text.splitlines()
     if not lines or not lines[0].lstrip().startswith("#"):

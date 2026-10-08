@@ -141,7 +141,8 @@ def test_einsum_bare_name_fast_path_unchanged() -> None:
     st = {"a": ("M", "K"), "b": ("K", "N")}
     out = unparse_(expand_einsum(name_("o"), [ast.Constant("ij,jk->ik"), name_("a"), name_("b")], st))
     # No spill machinery when the operands are already bare Names.
-    assert "__es_op" not in out and "__es_c" not in out
+    assert "__es_op" not in out
+    assert "__es_c" not in out
     assert "o[__es_i, __es_k] +=" in out
 
 

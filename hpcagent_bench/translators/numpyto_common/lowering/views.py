@@ -374,7 +374,7 @@ def flatten_view_chains(good: dict[str, tuple[str, list[ast.expr]]]) -> dict[str
                 ast.Slice(lower=None, upper=None, step=None) for unused in range(len(kept_positions) - len(elts))
             ]
             composed = [copy.deepcopy(e) for e in root_elts]
-            for pos, u in zip(kept_positions, padded):
+            for pos, u in zip(kept_positions, padded, strict=False):
                 root_axis = root_elts[pos]
                 if isinstance(root_axis, ast.Slice):
                     composed[pos] = compose_kept_axis(root_axis, u)
@@ -502,7 +502,7 @@ class SliceViewFold(AliasFold):
             ast.Slice(lower=None, upper=None, step=None) for unused in range(len(kept_positions) - len(use_elts))
         ]
         composed = [copy.deepcopy(e) for e in view_elts]
-        for pos, u in zip(kept_positions, use_elts):
+        for pos, u in zip(kept_positions, use_elts, strict=False):
             composed[pos] = compose_kept_axis(view_elts[pos], u)
         sl = ast.Tuple(elts=composed, ctx=ast.Load()) if len(composed) > 1 else composed[0]
         return ast.copy_location(ast.Subscript(value=name_(base_name), slice=sl, ctx=node.ctx), node)

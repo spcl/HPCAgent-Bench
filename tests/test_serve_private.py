@@ -89,7 +89,11 @@ def argv_lines(stdout: str) -> list[str]:
 def flags(words: list[str]) -> dict[str, str]:
     """Each --flag mapped to the word after it, or to "" when the next word is another flag."""
     following = [*words[1:], ""]
-    return {word: ("" if nxt.startswith("--") else nxt) for word, nxt in zip(words, following) if word.startswith("--")}
+    return {
+        word: ("" if nxt.startswith("--") else nxt)
+        for word, nxt in zip(words, following, strict=False)
+        if word.startswith("--")
+    }
 
 
 def experiment_sglang_flags() -> dict[str, str]:

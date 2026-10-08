@@ -41,7 +41,7 @@ _FORTRAN_CASES = [
 ]
 
 
-@pytest.mark.parametrize("name,exe,baseline,ext,src", _CC_CASES, ids=[c[0] for c in _CC_CASES])
+@pytest.mark.parametrize(("name", "exe", "baseline", "ext", "src"), _CC_CASES, ids=[c[0] for c in _CC_CASES])
 def test_cpu_baseline_compiles_and_runs(name, exe, baseline, ext, src) -> None:
     if shutil.which(exe) is None:
         pytest.skip(f"{exe} not installed")
@@ -57,7 +57,7 @@ def test_cpu_baseline_compiles_and_runs(name, exe, baseline, ext, src) -> None:
         assert run.returncode in (0, 1), f"{name} program crashed (rc={run.returncode})"
 
 
-@pytest.mark.parametrize("name,baseline", _FORTRAN_CASES, ids=[c[0] for c in _FORTRAN_CASES])
+@pytest.mark.parametrize(("name", "baseline"), _FORTRAN_CASES, ids=[c[0] for c in _FORTRAN_CASES])
 def test_fortran_baseline_compiles_and_runs(name, baseline) -> None:
     exe = languages.resolve_compiler(name)
     if exe is None:
@@ -182,7 +182,8 @@ def test_gcc_autopar_carries_graphite_and_gcc_accepts_it() -> None:
     if shutil.which("gcc") is None:
         pytest.fail("gcc is required for the native cc/cc_autopar flavors")
     autopar = flags.GCC_AUTOPAR.format(n=flags.ncores())
-    assert "-fgraphite-identity" in autopar and "-floop-nest-optimize" in autopar
+    assert "-fgraphite-identity" in autopar
+    assert "-floop-nest-optimize" in autopar
     # Must NOT smuggle in the correctness-breaking escape hatch.
     assert "graphite-allow-codegen-errors" not in autopar
     with tempfile.TemporaryDirectory() as d:

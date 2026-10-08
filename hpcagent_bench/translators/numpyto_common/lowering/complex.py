@@ -1,12 +1,15 @@
 """Complex dtype inference and seeding for locals and temporaries."""
 
 import ast
-from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.frontend import dtype_from_constructor
 from hpcagent_bench.translators.numpyto_common.ir import COMPLEX_FOR_FLOAT
 from hpcagent_bench.translators.numpyto_common.lib_nodes.array_methods import ARRAY_METHOD_SHAPE_OPS
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 __all__ = [
     "DTYPE_PRESERVING_FUNCS",

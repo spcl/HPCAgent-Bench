@@ -75,14 +75,16 @@ def test_ok_returns_value() -> None:
     r = run_forked(_ok)
     assert r.ok
     assert r.result == 42
-    assert r.signal is None and r.error is None
+    assert r.signal is None
+    assert r.error is None
 
 
 def test_exception_is_surfaced_not_eaten() -> None:
     r = run_forked(_boom, label="boom")
     assert not r.ok
     assert r.signal is None
-    assert "ValueError" in r.error and "kaboom" in r.error
+    assert "ValueError" in r.error
+    assert "kaboom" in r.error
 
 
 def test_failure_reason_keeps_the_exception_type_and_message_not_the_last_line() -> None:
@@ -136,7 +138,8 @@ def test_timeout_reports_signal_and_detail() -> None:
     r = run_forked(_hang, timeout=0.5, label="hang")
     assert not r.ok
     assert r.signal == "TIMEOUT"
-    assert r.error is not None and "timed out" in r.error
+    assert r.error is not None
+    assert "timed out" in r.error
     assert forked_failure_reason(r) == "TIMEOUT"
 
 
@@ -199,8 +202,8 @@ def test_a_host_oom_is_told_apart_from_a_bad_submission() -> None:
     # parent as traceback TEXT, so the classifier matches on the name. A host OOM is contention
     # between concurrent grades, not a property of the submission, and is retried rather than
     # recorded as a wrong answer.
-    from hpcagent_bench.harness import native_call
     from hpcagent_bench.frameworks.forked import RunResult
+    from hpcagent_bench.harness import native_call
 
     oom = RunResult(
         ok=False, error="Traceback...\nnumpy._core._exceptions._ArrayMemoryError: Unable to allocate 1.06 GiB"
@@ -209,7 +212,8 @@ def test_a_host_oom_is_told_apart_from_a_bad_submission() -> None:
     assert native_call.is_host_oom(oom) is True
     assert native_call.is_host_oom(plain) is False
     assert native_call.is_host_oom(RunResult(ok=True)) is False
-    assert native_call.OOM_RETRIES >= 1 and native_call.OOM_BACKOFF_S > 0
+    assert native_call.OOM_RETRIES >= 1
+    assert native_call.OOM_BACKOFF_S > 0
 
 
 @pytest.mark.skipif(not osinfo.IS_LINUX, reason="PR_SET_PDEATHSIG is a Linux facility")
@@ -267,7 +271,7 @@ def test_a_forked_child_does_not_outlive_the_process_that_forked_it(tmp_path, fo
 
 
 @pytest.mark.parametrize(
-    "parent_at_entry,parent_now,expected",
+    ("parent_at_entry", "parent_now", "expected"),
     [
         (5000, 5000, False),  # ordinary live parent: unchanged
         (1, 1, False),  # sealed worker (PID 1 of its own namespace): its children start at 1 too
@@ -292,7 +296,7 @@ def test_die_with_parent_survives_a_pid_namespace_init_as_the_real_parent(monkey
         forked.ctypes, "CDLL", lambda *a, **k: type("Libc", (), {"prctl": staticmethod(lambda *a: 0)})()
     )
     exited = []
-    monkeypatch.setattr(forked.os, "_exit", lambda code: exited.append(code))
+    monkeypatch.setattr(forked.os, "_exit", exited.append)
     forked.die_with_parent()
     assert exited == [], "a live PID-1 parent (the sealed worker) must not be mistaken for a dead one"
 
@@ -305,7 +309,7 @@ def test_die_with_parent_survives_a_normal_live_parent(monkeypatch) -> None:
         forked.ctypes, "CDLL", lambda *a, **k: type("Libc", (), {"prctl": staticmethod(lambda *a: 0)})()
     )
     exited = []
-    monkeypatch.setattr(forked.os, "_exit", lambda code: exited.append(code))
+    monkeypatch.setattr(forked.os, "_exit", exited.append)
     forked.die_with_parent()
     assert exited == []
 
@@ -319,7 +323,7 @@ def test_die_with_parent_exits_when_the_parent_died_in_the_arming_gap(monkeypatc
         forked.ctypes, "CDLL", lambda *a, **k: type("Libc", (), {"prctl": staticmethod(lambda *a: 0)})()
     )
     exited = []
-    monkeypatch.setattr(forked.os, "_exit", lambda code: exited.append(code))
+    monkeypatch.setattr(forked.os, "_exit", exited.append)
     forked.die_with_parent()
     assert exited == [0]
 

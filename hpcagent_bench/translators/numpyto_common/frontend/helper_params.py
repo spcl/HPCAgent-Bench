@@ -216,9 +216,9 @@ def integer_valued_argument(
     if isinstance(arg, ast.UnaryOp) and isinstance(arg.op, (ast.UAdd, ast.USub)):
         return integer_valued_argument(arg.operand, fn, sca_by, sym_by, depth + 1)
     # ``int(...)`` says so outright.
-    if isinstance(arg, ast.Call) and isinstance(arg.func, ast.Name) and arg.func.id == "int" and len(arg.args) == 1:
-        return True
-    return False
+    return bool(
+        isinstance(arg, ast.Call) and isinstance(arg.func, ast.Name) and arg.func.id == "int" and len(arg.args) == 1
+    )
 
 
 def infer_helper_params(
@@ -240,7 +240,7 @@ def infer_helper_params(
     arrays: list[ArrayDesc] = []
     scalars: list[ScalarDesc] = []
     symbols: list[SymbolDesc] = []
-    for pname, arg in zip(pnames, args):
+    for pname, arg in zip(pnames, args, strict=False):
         unused, desc = infer_param_desc(arg, pname, arr_by, sca_by, sym_by, fn)
         if isinstance(desc, ArrayDesc):
             if is_temporary(arg, formal) and desc.dtype:
@@ -261,7 +261,7 @@ def bound_names(pnames: list[str], args: Sequence[ast.expr], params: set[str]) -
     computing ``c_in // groups`` could not prove it equal to its weight's ``in_channels //
     conv2d_groups``; renamed, both sides speak the helper's."""
     renamed: dict[str, str] = {}
-    for pname, arg in zip(pnames, args):
+    for pname, arg in zip(pnames, args, strict=False):
         if pname in params and isinstance(arg, ast.Name) and arg.id != pname:
             renamed.setdefault(arg.id, pname)
     return renamed

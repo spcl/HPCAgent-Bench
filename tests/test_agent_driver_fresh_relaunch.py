@@ -21,6 +21,7 @@ from types import ModuleType
 from typing import TextIO
 
 import pytest
+
 from tests.fresh_module import module_at
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
@@ -98,7 +99,7 @@ def relaunched_fixture(tmp_path: pathlib.Path) -> Iterator[pathlib.Path]:
         problem = {"id": 7, "kernel": capture.KERNEL, "language": "c", "task": capture.TASK}
         driver.run_agent(problem, 2, capture.NODE_DIR, list(capture.JUDGES), 7, 3)
     assert launches == [0, 1]
-    yield tmp_path
+    return tmp_path
 
 
 def ledger(workdir: pathlib.Path) -> list[dict[str, object]]:

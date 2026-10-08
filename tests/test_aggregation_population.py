@@ -172,7 +172,8 @@ def test_an_intersection_reports_what_it_dropped() -> None:
     right = population.aggregate_setup("b", "c", {"k2": 2.0, "k3": 2.0}, ["k2", "k3"], population.KernelPolicy.SOLVED)
     gap = population.coverage(left, right, tag_kernels=["k1", "k2", "k3", "k4"])
     assert (gap.n_both, gap.n_only_left, gap.n_only_right, gap.n_neither) == (1, 1, 1, 1)
-    assert gap.only_left == ("k1",) and gap.only_right == ("k3",)
+    assert gap.only_left == ("k1",)
+    assert gap.only_right == ("k3",)
 
 
 def test_complete_setups_keeps_only_setups_with_a_row_for_every_tag_kernel() -> None:
@@ -665,7 +666,8 @@ def test_a_setup_point_reports_the_geometric_mean_speed_up_not_the_median() -> N
 def test_a_setup_point_over_too_few_kernels_withholds_its_interval() -> None:
     point = population.kernel_medians(kernel_slice(3))
     assert point is not None
-    assert pd.isna(point["log2_speedup_low"]) and pd.isna(point["tokens_high"])
+    assert pd.isna(point["log2_speedup_low"])
+    assert pd.isna(point["tokens_high"])
 
 
 def test_a_rerun_kernels_token_spend_is_its_latest_runs_total_not_the_sum() -> None:

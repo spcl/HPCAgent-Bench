@@ -441,7 +441,7 @@ class ResolveArrShape(ast.NodeTransformer):
         in ``zeros_locals``, whose ``arr.shape[i]`` tokens are re-resolved against ``self.current`` so
         a reassigned source array contributes its THEN-current axis lengths -- written back so the
         emitter's declaration uses them). False when neither knows the name."""
-        if target in self._reassign_shapes and self._reassign_shapes[target]:
+        if self._reassign_shapes.get(target):
             self.current[target] = self._reassign_shapes[target].pop(0)
             return True
         if target in self.zeros_locals:
@@ -500,7 +500,6 @@ class ResolveArrShape(ast.NodeTransformer):
         # Try parsing as a pure expression -- ``H - K + 1`` / ``N`` /
         # ``(N + 1)``. Strip any surrounding parens for cleanliness.
         try:
-            parsed = ast.parse(str(tok), mode="eval").body
-            return parsed
+            return ast.parse(str(tok), mode="eval").body
         except (SyntaxError, ValueError):
             return name_(str(tok))

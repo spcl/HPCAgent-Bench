@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import types
 from pathlib import Path
+
 from tests.fresh_module import module_at
 
 REPO = Path(__file__).resolve().parent.parent
@@ -38,7 +39,8 @@ def test_fix_inserts_header_at_content_top(tmp_path: Path) -> None:
     f.write_text("import os\n\n\ndef g():\n    return os.getpid()\n", encoding="utf-8")
     assert ch.insert_header(f) is True
     lines = f.read_text(encoding="utf-8").splitlines()
-    assert lines[0] == HEADER[0] and lines[1] == HEADER[1]
+    assert lines[0] == HEADER[0]
+    assert lines[1] == HEADER[1]
 
 
 def test_fix_is_idempotent_and_never_double_stamps(tmp_path: Path) -> None:
@@ -61,7 +63,8 @@ def test_fix_places_header_after_a_shebang(tmp_path: Path) -> None:
     assert ch.insert_header(f) is True
     lines = f.read_text(encoding="utf-8").splitlines()
     assert lines[0] == "#!/usr/bin/env python"
-    assert lines[1] == HEADER[0] and lines[2] == HEADER[1]
+    assert lines[1] == HEADER[0]
+    assert lines[2] == HEADER[1]
 
 
 def test_the_formatter_leaves_the_header_byte_for_byte(tmp_path: Path) -> None:
@@ -75,7 +78,8 @@ def test_the_formatter_leaves_the_header_byte_for_byte(tmp_path: Path) -> None:
     subprocess.run([ruff, "format", "--line-length", LINE_LENGTH, str(f)], check=True)
     out: list[str] = f.read_text(encoding="utf-8").splitlines()
     assert out[0] == "#!/usr/bin/env python"
-    assert out[1] == HEADER[0] and out[2] == HEADER[1]
+    assert out[1] == HEADER[0]
+    assert out[2] == HEADER[1]
     assert "def f(x):" in f.read_text(encoding="utf-8")  # body WAS reformatted (test is meaningful)
 
 
@@ -90,4 +94,5 @@ def test_header_hook_and_the_formatter_compose(tmp_path: Path) -> None:
     assert ch.insert_header(f) is True
     subprocess.run([ruff, "format", "--line-length", LINE_LENGTH, str(f)], check=True)
     lines = f.read_text(encoding="utf-8").splitlines()
-    assert lines[0] == HEADER[0] and lines[1] == HEADER[1]
+    assert lines[0] == HEADER[0]
+    assert lines[1] == HEADER[1]

@@ -96,7 +96,7 @@ def test_the_folded_expression_computes_what_the_helper_computes(stride) -> None
     run_source(ast.Module(body=[fn], type_ignores=[]), scope, "<tap>")
     original = scope["_tap_span"]
     folded = ast.unparse(return_expression(folded_straight_line(fn.body)))
-    for in_size, out_size, padding, k in itertools.product(range(1, 7), range(1, 9), range(0, 3), range(0, 4)):
+    for in_size, out_size, padding, k in itertools.product(range(1, 7), range(1, 9), range(3), range(4)):
         env = {"in_size": in_size, "out_size": out_size, "stride": stride, "padding": padding, "k": k}
         assert tuple(original(in_size, out_size, stride, padding, k)) == tuple(evaluate(folded, {"min": min, **env})), (
             env

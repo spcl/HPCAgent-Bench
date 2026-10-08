@@ -19,8 +19,8 @@ from pathlib import Path
 
 import pytest
 
-from tests.fresh_module import fresh
 from tests.bash_stub import bash_stub
+from tests.fresh_module import fresh
 
 EXAMPLE = Path(__file__).resolve().parents[1] / "hpcagent_bench" / "cluster"
 SCRIPT = EXAMPLE / "node_monitor.sh"
@@ -111,7 +111,7 @@ def test_rocm_smi_appends_one_column_per_card_after_the_fixed_8(tmp_path) -> Non
     text = run_monitor(tmp_path, [rocm_bin, restricted_bin(tmp_path)])
     lines = text.strip().splitlines()
     header = lines[0].split(",")
-    assert header == OLD_HEADER.split(",") + ["gpu0_pct", "gpu1_pct"]
+    assert header == [*OLD_HEADER.split(","), "gpu0_pct", "gpu1_pct"]
     row = lines[1].split(",")
     assert len(row) == len(header)
     assert row[5] == "50.0"  # gpu_pct: cross-GPU average of 10 and 90
@@ -123,7 +123,7 @@ def test_amd_smi_fallback_also_appends_per_gpu_columns(tmp_path) -> None:
     text = run_monitor(tmp_path, [amdsmi_bin, restricted_bin(tmp_path)])
     lines = text.strip().splitlines()
     header = lines[0].split(",")
-    assert header == OLD_HEADER.split(",") + ["gpu0_pct", "gpu1_pct", "gpu2_pct"]
+    assert header == [*OLD_HEADER.split(","), "gpu0_pct", "gpu1_pct", "gpu2_pct"]
     row = lines[1].split(",")
     assert row[8:11] == ["15", "55", "35"]
     assert row[6:8] == ["", ""]  # amd-smi metric -u carries no vram fields, same as before
@@ -155,8 +155,7 @@ def test_header_is_fixed_for_the_life_of_the_csv_file(tmp_path) -> None:
 
 
 def monitor_report():
-    module = fresh("hpcagent_bench.cluster.monitor_report")
-    return module
+    return fresh("hpcagent_bench.cluster.monitor_report")
 
 
 def write_csv(path: Path, header: str, rows: list[str]) -> None:
@@ -203,8 +202,10 @@ def test_extended_format_reports_per_gpu_mean_and_imbalance_spread(tmp_path, cap
     # decision needs to see, invisible in gpu_mean (57.5)
     mod.print_gpu_balance([node])
     printed = capsys.readouterr().out
-    assert "spread=" in printed and "80.0" in printed
-    assert "gpu0=15.0" in printed and "gpu1=95.0" in printed
+    assert "spread=" in printed
+    assert "80.0" in printed
+    assert "gpu0=15.0" in printed
+    assert "gpu1=95.0" in printed
 
 
 def test_gpu_columns_are_read_header_driven_not_by_position(tmp_path) -> None:
@@ -240,6 +241,8 @@ def test_report_cli_prints_gpu_balance_only_for_extended_files(tmp_path) -> None
     assert "judge   new" in proc.stdout
     after_heading = proc.stdout.split("gpu balance", 1)[1]
     balance_section = after_heading.split("\n\n", 1)[0]  # up to the next blank-line-separated section
-    assert "spread=" in balance_section and "90.0" in balance_section
-    assert "gpu0=10.0" in balance_section and "gpu1=100.0" in balance_section
+    assert "spread=" in balance_section
+    assert "90.0" in balance_section
+    assert "gpu0=10.0" in balance_section
+    assert "gpu1=100.0" in balance_section
     assert "agent" not in balance_section  # agent-old.csv has no per-GPU columns

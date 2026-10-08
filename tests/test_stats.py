@@ -11,7 +11,7 @@ from hpcagent_bench.stats.summary import DEFAULT_MAD_Z, drop_outliers, median_ci
 
 def test_drop_removes_slow_hiccup() -> None:
     tight = [1.0, 1.0, 1.01, 0.99, 1.02, 0.98, 1.0, 1.0]
-    kept, dropped = drop_outliers(tight + [10.0], warn=False)
+    kept, dropped = drop_outliers([*tight, 10.0], warn=False)
     assert dropped.tolist() == [10.0]
     assert 10.0 not in kept.tolist()
 
@@ -25,7 +25,7 @@ def test_keeps_ordinary_jitter() -> None:
 def test_lower_sample_is_kept() -> None:
     # A fast run is real signal (never below the hardware minimum), so the low side is never trimmed.
     around_ten = [10.0, 10.1, 9.9, 10.2, 9.8, 10.0, 10.1, 9.9]
-    kept, dropped = drop_outliers(around_ten + [1.0], warn=False)
+    kept, dropped = drop_outliers([*around_ten, 1.0], warn=False)
     assert dropped.size == 0
     assert 1.0 in kept.tolist()
 
@@ -34,8 +34,10 @@ def test_drop_warns_and_names_values() -> None:
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         drop_outliers([1.0] * 8 + [10.0], warn=True, label="kern@dace")
-    assert caught and "outlier" in str(caught[0].message)
-    assert "kern@dace" in str(caught[0].message) and "10.0" in str(caught[0].message)
+    assert caught
+    assert "outlier" in str(caught[0].message)
+    assert "kern@dace" in str(caught[0].message)
+    assert "10.0" in str(caught[0].message)
 
 
 def test_degenerate_and_tiny_samples_no_drop() -> None:

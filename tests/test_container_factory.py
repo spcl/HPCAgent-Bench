@@ -16,7 +16,6 @@ def clean_backend_env(monkeypatch):
     for key in list(os.environ):
         if key.startswith("HPCAGENT_BENCH_") or key == "ANTHROPIC_API_KEY":
             monkeypatch.delenv(key, raising=False)
-    yield
 
 
 def test_load_backends_lists_every_backend() -> None:
@@ -50,7 +49,8 @@ def test_oci_is_a_standard_not_a_program() -> None:
     )
     assert podman.image_form == docker.image_form == "tag"
     assert podman.gpu["nvidia"] != docker.gpu["nvidia"]  # the one flag spelling that differs
-    assert podman.rootless and not docker.rootless  # and the one property that decides defaults
+    assert podman.rootless
+    assert not docker.rootless
 
 
 def test_a_family_name_resolves_to_whichever_flavour_is_installed(monkeypatch) -> None:
@@ -89,7 +89,8 @@ def test_ce_is_a_different_shape_of_backend_not_just_different_flags() -> None:
     that cannot run, so local_run_command must hand the command back untouched."""
     spellings, _ = containers.load_backends()
     assert spellings["ce"].kind == "srun_env"
-    assert spellings["ce"].verb == () and spellings["ce"].bind_flag == ""
+    assert spellings["ce"].verb == ()
+    assert spellings["ce"].bind_flag == ""
     assert containers.local_run_command(["hpcagent-bench", "run"], backend="ce") == ["hpcagent-bench", "run"]
     assert all(spellings[name].kind == "exec" for name in containers.EXEC_BACKENDS)
 
@@ -184,13 +185,16 @@ def test_local_run_command_podman_nvidia_gpu_tokens() -> None:
     argv = containers.local_run_command(["run"], backend="podman", hardware="nvidia", repo_root="/r")
     # podman run --rm --network host --device nvidia.com/gpu=all ...
     assert argv[:5] == ["podman", "run", "--rm", "--network", "host"]
-    assert "--device" in argv and "nvidia.com/gpu=all" in argv
+    assert "--device" in argv
+    assert "nvidia.com/gpu=all" in argv
     assert argv[-2:] == ["hpcagent_bench:nvidia", "run"]
 
 
 def test_local_run_command_podman_amd_gpu_tokens() -> None:
     argv = containers.local_run_command(["x"], backend="podman", hardware="amd", repo_root="/r")
-    assert "/dev/kfd" in argv and "--group-add" in argv and "keep-groups" in argv
+    assert "/dev/kfd" in argv
+    assert "--group-add" in argv
+    assert "keep-groups" in argv
 
 
 def test_local_run_command_rejects_dropped_backend() -> None:
@@ -203,7 +207,8 @@ def test_local_run_command_docker_nvidia_uses_the_docker_gpu_spelling() -> None:
     """docker and podman differ on exactly one thing that matters here: the NVIDIA flag."""
     argv = containers.local_run_command(["run"], backend="docker", hardware="nvidia", repo_root="/r")
     assert argv[:5] == ["docker", "run", "--rm", "--network", "host"]
-    assert "--gpus" in argv and "all" in argv
+    assert "--gpus" in argv
+    assert "all" in argv
     assert "nvidia.com/gpu=all" not in argv  # that is podman's spelling, not docker's
     assert argv[-2:] == ["hpcagent_bench:nvidia", "run"]
 
@@ -275,7 +280,7 @@ def _stub_installer(monkeypatch, bash_returncodes, curl_error=None):
         return subprocess.CompletedProcess(argv, returncode, stdout=stdout)
 
     monkeypatch.setattr(containers.subprocess, "run", fake_run)
-    monkeypatch.setattr(containers.time, "sleep", lambda s: sleeps.append(s))
+    monkeypatch.setattr(containers.time, "sleep", sleeps.append)
     return calls, sleeps
 
 

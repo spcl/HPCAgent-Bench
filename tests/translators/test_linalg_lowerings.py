@@ -8,8 +8,8 @@ truth approach as ``test_sparse_matvec``).
 """
 
 import ast
-from typing import Any
 from collections.abc import Callable
+from typing import Any
 
 import numpy as np
 

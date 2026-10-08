@@ -267,8 +267,10 @@ def map_parameters(model, wanted: list[str], shapes: dict[str, list[int]]) -> tu
     positional: list[str] = []
     if leftover_tensors:
         tail = leftover_args[-len(leftover_tensors) :] if len(leftover_tensors) <= len(leftover_args) else []
-        if tail and all(list(t.shape) == list(shapes.get(a) or []) for (_, t), a in zip(leftover_tensors, tail)):
-            for (name, tensor), arg in zip(leftover_tensors, tail):
+        if tail and all(
+            list(t.shape) == list(shapes.get(a) or []) for (_, t), a in zip(leftover_tensors, tail, strict=False)
+        ):
+            for (name, tensor), arg in zip(leftover_tensors, tail, strict=False):
                 mapping[arg] = tensor
                 positional.append(f"{name}->{arg}")
             leftover_args = [a for a in leftover_args if a not in mapping]

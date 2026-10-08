@@ -64,7 +64,7 @@ def test_fp8_excludes_the_native_backends() -> None:
     assert not set(FP8_FRAMEWORKS) & set(NON_FP8_FRAMEWORKS)
 
 
-@pytest.mark.parametrize("datatype", ("fp8_e4m3", "fp8_e5m2"))
+@pytest.mark.parametrize("datatype", ["fp8_e4m3", "fp8_e5m2"])
 @pytest.mark.parametrize("kernel", FP8_KERNELS)
 def test_fp8_kernel_executes_via_jax(kernel, datatype) -> None:
     """An fp8-safe kernel runs at fp8 through JAX and validates against the numpy reference."""

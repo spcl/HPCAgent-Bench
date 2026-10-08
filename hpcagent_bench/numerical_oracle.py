@@ -195,26 +195,28 @@ os.environ.setdefault("BLIS_NUM_THREADS", "1")
 # each preallocate a slice of it. setdefault so a caller can still force JAX_PLATFORMS=cuda.
 os.environ.setdefault("JAX_PLATFORMS", "cpu")
 
+import contextlib
+
 from hpcagent_bench import dtypes as _dtypes  # noqa: E402
-from hpcagent_bench import languages  # noqa: E402
-from hpcagent_bench import omp_context  # noqa: E402
-from hpcagent_bench import paths  # noqa: E402
+
+# The polycc invocation the TIMED pluto column builds from -- flags, pet-parse env and process-group
+# bound. Imported rather than restated so this gate cannot validate a different binary. See _run_pluto.
+from hpcagent_bench import (
+    languages,
+    omp_context,
+    paths,
+    pluto_transform,
+)
 from hpcagent_bench.frameworks.forked import die_with_parent, run_forked  # noqa: E402
+from hpcagent_bench.initialize import auto_initialize  # noqa: E402
+from hpcagent_bench.pluto_affine import scop_nonaffine_reason  # noqa: E402
+from hpcagent_bench.precision import Precision  # noqa: E402
 from hpcagent_bench.spec import BenchSpec, as_block  # noqa: E402
 from hpcagent_bench.support.bindings.contract import index_base  # noqa: E402
-from hpcagent_bench.initialize import auto_initialize  # noqa: E402
-from hpcagent_bench.precision import Precision  # noqa: E402
-
 from hpcagent_bench.translators.numpyto_common.dtypes import canonical, compute_dtype  # noqa: E402
 
 # The emitter's own fp-tag helper, so this file's globs match what it names emitted files.
 from hpcagent_bench.translators.numpyto_common.naming import fptype_tag  # noqa: E402
-
-from hpcagent_bench.pluto_affine import scop_nonaffine_reason  # noqa: E402
-
-# The polycc invocation the TIMED pluto column builds from -- flags, pet-parse env and process-group
-# bound. Imported rather than restated so this gate cannot validate a different binary. See _run_pluto.
-from hpcagent_bench import pluto_transform  # noqa: E402
 from hpcagent_bench.units import BYTES_PER_GIB  # noqa: E402
 
 #: by-value scalar ``kind`` -> ctypes type, sourced from the shared dtype registry so marshalling
@@ -396,7 +398,7 @@ def dace_build_root() -> pathlib.Path:
 
 def all_backend_status(reason: str) -> dict[str, str]:
     """``{backend: reason}`` for every gated backend (native + PY_BACKENDS + jax); pluto is opt-in."""
-    return {b: reason for b in (*BACKENDS, *PY_BACKENDS, "jax")}
+    return dict.fromkeys((*BACKENDS, *PY_BACKENDS, "jax"), reason)
 
 
 #: Defaults for ``hpcagent_bench/config.yaml``'s ``oracle:`` block when a key is absent.
@@ -543,13 +545,13 @@ def custom_initialize(info, syms, datatype: type[np.floating] = np.float64) -> d
         raise AttributeError(f"{src} defines no {init['func_name']!r} -- {hint}.")
     # Pass args as-is (already typed int/float); int()-ing everything truncated float params before
     # (nbody's dt=0.05 -> 0 -> div-by-zero).
-    args = [syms[a] if a in syms else None for a in init.get("input_args", [])]
+    args = [syms.get(a, None) for a in init.get("input_args", [])]
     kwargs = {}
     if "datatype" in inspect.signature(fn).parameters:
         kwargs["datatype"] = datatype
     res = fn(*args, **kwargs)
     outs = list(res) if isinstance(res, tuple) else [res]
-    by = dict(zip(init["output_args"], outs))
+    by = dict(zip(init["output_args"], outs, strict=False))
     # ONE ``datatype`` builds every array the initializer returns, so an array the manifest declares
     # with a different KIND comes back wrong: floyd_warshall's int32 ``path`` arrived float64. The
     # native legs never saw it -- they re-coerce each argument to the binding's declared element type
@@ -730,7 +732,7 @@ def run_kernel(
             # Small radix/exponent params (v <= 48) are left alone -- scaling would floor them to
             # 10 and blow up a derived size like stockham_fft's N = R**K.
             def _scale_dim(v):
-                t = max(int(round(v * f)), 10)
+                t = max(round(v * f), 10)
                 is_pow2 = v > 1 and (v & (v - 1)) == 0
                 is_cube = is_perfect_cube(v)
                 # Cube AND power-of-two (lulesh's numElem) -> round down to the nearest power of 8
@@ -775,6 +777,7 @@ def run_kernel(
                     auto_initialize(
                         spec, preset, prec_enum, "uniform", variant_spec={"low": -8.0, "high": 8.0}, seed=seed
                     ),
+                    strict=False,
                 )
             )
         else:
@@ -847,7 +850,7 @@ def run_kernel(
                 arr = by.get(a["name"])
                 if not isinstance(arr, np.ndarray):
                     continue
-                for tok, dim in zip(a.get("shape", []) or [], arr.shape):
+                for tok, dim in zip(a.get("shape", []) or [], arr.shape, strict=False):
                     tok = str(tok)
                     if tok.isidentifier():
                         syms[tok] = int(dim)
@@ -857,7 +860,7 @@ def run_kernel(
                 if not isinstance(arr, np.ndarray):
                     continue
                 toks = [t.strip() for t in str(shp).strip("()").split(",") if t.strip()]
-                for tok, dim in zip(toks, arr.shape):
+                for tok, dim in zip(toks, arr.shape, strict=False):
                     if tok.isidentifier():
                         syms[tok] = int(dim)
         # An output the initializer didn't provide is one the kernel writes (a return value or
@@ -877,7 +880,7 @@ def run_kernel(
         values = {**{nm: syms[nm] for nm in info["input_args"] if nm in syms}, **npd}
         unresolved = [nm for nm in info["input_args"] if nm not in values]
         if unresolved:
-            return {b: f"skip:unresolved-arg:{unresolved[0]}" for b in BACKENDS}
+            return dict.fromkeys(BACKENDS, f"skip:unresolved-arg:{unresolved[0]}")
         # Set precision globals before loading the reference: some references use np_complex as a
         # dtype at import time (mandelbrot), which is None until set_datatype runs.
         from hpcagent_bench.frameworks import framework
@@ -897,7 +900,7 @@ def run_kernel(
         expected: dict[str, np.ndarray] = {}
         compare: list[str] = []
         array_rets = [rv for rv in ret_vals if isinstance(rv, np.ndarray) and np.ndim(rv) > 0]
-        for nm, rv in zip(extra_outputs, array_rets):  # promoted returns
+        for nm, rv in zip(extra_outputs, array_rets, strict=False):  # promoted returns
             expected[nm] = comparison_array(rv)
             compare.append(nm)
         for nm in out_args:  # in-place outputs
@@ -922,7 +925,7 @@ def run_kernel(
                 dt = _np_dtype_for_kind(a["kind"], np_float)
             by[nm] = np.zeros(shape, dtype=dt)
         if not compare:
-            return {b: "skip:no-output" for b in BACKENDS}
+            return dict.fromkeys(BACKENDS, "skip:no-output")
 
         _ext = {"c": ".c", "cpp": ".cpp", "fortran": ".f90"}
         for backend in BACKENDS:
@@ -1306,10 +1309,8 @@ def _forked_status(compute, timeout_s: float, expired: str = "skip:too-long") ->
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             os.close(r)
-            try:
+            with contextlib.suppress(ProcessLookupError):
                 os.kill(pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
             os.waitpid(pid, 0)
             return expired
         if not select.select([r], [], [], remaining)[0]:
@@ -1373,9 +1374,11 @@ def jax_compute(short, info, by, syms, expected, compare, rtol, atol, emit_prec:
     """Emit + run + compare the jax kernel, only in the forked child. JAX is functional -- outputs are
     read from the return tuple even for an in-place numpy reference."""
     import ast
-    from hpcagent_bench.translators.numpyto_jax.core import emit_jax
+
     import jax  # pyright: ignore[reportMissingImports] -- optional JAX dependency, absent from the dev env
     import jax.numpy as jnp  # pyright: ignore[reportMissingImports] -- optional JAX dependency
+
+    from hpcagent_bench.translators.numpyto_jax.core import emit_jax
 
     jax.config.update("jax_enable_x64", emit_prec != "float32")
     npy = paths.BENCHMARKS / info["relative_path"] / f"{info['module_name']}_numpy.py"
@@ -1424,7 +1427,7 @@ def jax_compute(short, info, by, syms, expected, compare, rtol, atol, emit_prec:
         return f"skip:unsupported:{type(exc).__name__}"
     rv = list(ret) if isinstance(ret, tuple) else [ret] if ret is not None else []
     # Fall back to positional order over array-valued returns when names can't be recovered.
-    by_ret = dict(zip(ret_names, rv)) if len(ret_names) == len(rv) else {}
+    by_ret = dict(zip(ret_names, rv, strict=False)) if len(ret_names) == len(rv) else {}
     array_rets = iter(r for r in rv if isinstance(r, np.ndarray) and r.ndim > 0)
     for nm in compare:
         g = by_ret.get(nm)

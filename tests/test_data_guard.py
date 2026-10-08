@@ -121,7 +121,8 @@ def test_extract_writes_a_jobs_own_record_inside_the_run_root_it_reads(scratch: 
     out = job / "observations"
     argv = ["--runs", str(job), "--benchmarks", str(scratch / "corpus"), "--out", str(out)]
     assert observations_extract.main([*argv, "--db", str(out / "observations.sqlite")]) == 0
-    assert (out / "llr40_observations.csv").is_file() and (out / "observations.sqlite").is_file()
+    assert (out / "llr40_observations.csv").is_file()
+    assert (out / "observations.sqlite").is_file()
     # Again over its own earlier record, as a re-run of the extraction does.
     assert observations_extract.main([*argv, "--db", str(out / "observations.sqlite")]) == 0
 

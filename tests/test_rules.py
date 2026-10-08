@@ -70,7 +70,8 @@ def test_every_enforced_rule_quotes_the_paper() -> None:
     """The error message carries the rule's own words and the citation, so a reader who has not
     read the paper still learns what is being asked and where to check it."""
     assert set(rules.RULE_TEXT) == {4, 5, 7, 12}
-    assert "SC15" in rules.CITATION and "Hoefler" in rules.CITATION
+    assert "SC15" in rules.CITATION
+    assert "Hoefler" in rules.CITATION
     message = str(rules.RuleViolation(12, "detail"))
     assert "Only connect measurements by lines if they indicate trends" in message
     assert rules.CITATION in message

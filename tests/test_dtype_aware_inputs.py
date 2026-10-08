@@ -46,7 +46,8 @@ def test_a_bf16_array_keeps_its_declared_domain() -> None:
     image = data["x"].astype(np.float64)
     weight = data["features_0_weight"].astype(np.float64)
     assert data["x"].dtype == np.dtype(ml_dtypes.bfloat16)
-    assert image.min() >= -1.0 and image.max() <= 1.0
+    assert image.min() >= -1.0
+    assert image.max() <= 1.0
     assert np.abs(weight).max() <= FIRST_WEIGHT_BOUND * (1 + dtype_eps(ml_dtypes.bfloat16))
 
 
@@ -86,7 +87,8 @@ def test_the_ml_default_is_a_unit_activation_and_fan_in_weights() -> None:
     assert ml_default_domain(True, (64, 3, 224, 224)) == (-UNIT_HALF_RANGE, UNIT_HALF_RANGE)
     assert ml_default_domain(False, (128,)) == (-UNIT_HALF_RANGE, UNIT_HALF_RANGE)
     low, high = ml_default_domain(False, (96, 3, 11, 11))
-    assert high == pytest.approx(1.0 / math.sqrt(3 * 11 * 11)) and low == -high
+    assert high == pytest.approx(1.0 / math.sqrt(3 * 11 * 11))
+    assert low == -high
 
 
 def test_an_undomained_ml_kernel_is_fed_as_a_network() -> None:

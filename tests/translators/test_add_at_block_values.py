@@ -14,7 +14,7 @@ import ast
 import numpy as np
 import pytest
 
-from hpcagent_bench.translators.numpyto_common.numpy_desugar import DesugarError, AddAtInline
+from hpcagent_bench.translators.numpyto_common.numpy_desugar import AddAtInline, DesugarError
 from tests.translators.source_module import run_source
 
 

@@ -45,11 +45,13 @@ def test_the_web_search_client_closes_the_refusal_it_reports(refusing_url: str) 
     with pytest.raises(RuntimeError, match="HTTP 400") as raised:
         judge_web_search.post_json(refusing_url, {}, 5.0)
     cause = raised.value.__cause__
-    assert isinstance(cause, urllib.error.HTTPError) and cause.closed
+    assert isinstance(cause, urllib.error.HTTPError)
+    assert cause.closed
 
 
 def test_the_chat_client_closes_the_refusal_it_reports(refusing_url: str) -> None:
     with pytest.raises(RuntimeError, match="unreachable") as raised:
         http_chat_json(refusing_url, {}, {}, 5.0, "service unreachable")
     cause = raised.value.__cause__
-    assert isinstance(cause, urllib.error.HTTPError) and cause.closed
+    assert isinstance(cause, urllib.error.HTTPError)
+    assert cause.closed

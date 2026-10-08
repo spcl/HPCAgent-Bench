@@ -191,7 +191,13 @@ def scalarize_subscript(
     axes = slice_axes(expr)
     full = [isinstance(a, ast.Slice) and a.lower is None and a.upper is None and a.step is None for a in axes]
     newax = [isinstance(a, ast.Constant) and a.value is None for a in axes]
-    if name is None and axes and all(f or n for f, n in zip(full, newax)) and any(full) and len(axes) <= len(iters):
+    if (
+        name is None
+        and axes
+        and all(f or n for f, n in zip(full, newax, strict=False))
+        and any(full)
+        and len(axes) <= len(iters)
+    ):
         offset = len(iters) - len(axes)
         base_iters = [iters[offset + k] for k, f in enumerate(full) if f]
         return scalarize_at_iters(expr.value, base_iters, shape_table)

@@ -109,8 +109,7 @@ class BooleanMaskRewriter(ast.NodeTransformer):
         else:
             inner = ast.AugAssign(target=lhs_sub, op=aug_op, value=rhs_scalar)
         guarded = ast.If(test=mask_scalar, body=[inner], orelse=[])
-        out = wrap_for_loops(iters, list(shape), [guarded])
-        return out
+        return wrap_for_loops(iters, list(shape), [guarded])
 
     def axis_mask(self, tup: ast.Tuple, lhs_shape: tuple[str, ...], lhs_name: str) -> tuple[int, ast.expr] | None:
         """``A[:, mask] = v`` -- one mask position, every other axis a bare ``:``.
@@ -378,7 +377,7 @@ class BooleanMaskReductionRewriter(ast.NodeTransformer):
                     scratch = f"__msk_res_{i}"
                     replacement = self.emit_masked(scratch, arr, mask, op)
                     if replacement is not None:
-                        replacement = list(replacement) + [ast.Assign(targets=[tgt], value=name_(scratch))]
+                        replacement = [*list(replacement), ast.Assign(targets=[tgt], value=name_(scratch))]
                         ast.fix_missing_locations(replacement[-1])
                 if replacement is not None:
                     out.extend(replacement)
@@ -446,7 +445,7 @@ class BooleanMaskReductionRewriter(ast.NodeTransformer):
             value = ast.Call(func=cast, args=[value], keywords=[])
         tail = ast.Assign(targets=[tgt], value=value)
         ast.fix_missing_locations(tail)
-        return list(emitted) + [tail]
+        return [*list(emitted), tail]
 
     def masked_source(self, arr: str | ast.expr, mask: str):
         """Element-load builder and iteration extent for a masked select's source.
@@ -558,8 +557,7 @@ class BooleanMaskReductionRewriter(ast.NodeTransformer):
         if not isinstance(call, ast.Call):
             return None
         if not (
-            isinstance(call.args, list)
-            and len(call.args) == 0
+            (isinstance(call.args, list) and len(call.args) == 0)
             or (len(call.args) == 1 and isinstance(call.args[0], ast.Name) and call.args[0].id == expected_name)
         ):
             return None

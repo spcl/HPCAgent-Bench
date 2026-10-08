@@ -12,7 +12,6 @@ import pytest
 
 from hpcagent_bench import config
 
-
 #: The typed accessors, by name, so a table-driven case names one without reaching for getattr.
 ACCESSORS = {
     "get_str": config.get_str,
@@ -38,7 +37,7 @@ def pinned():
 
 
 @pytest.mark.parametrize(
-    "stored, want",
+    ("stored", "want"),
     [("hello", "hello"), (7, "7"), (1.5, "1.5"), (True, "True"), ("", "")],
 )
 def test_a_value_read_as_text_arrives_as_text(pinned, stored, want):
@@ -47,7 +46,7 @@ def test_a_value_read_as_text_arrives_as_text(pinned, stored, want):
 
 
 @pytest.mark.parametrize(
-    "stored, want",
+    ("stored", "want"),
     [
         ("true", True),
         ("1", True),
@@ -68,21 +67,21 @@ def test_a_flag_reads_the_spellings_an_env_var_can_carry(pinned, stored, want):
     assert config.get_bool("t.flag") is want
 
 
-@pytest.mark.parametrize("stored, want", [(7, 7), ("7", 7), (7.0, 7), (True, 1), (" 8 ", 8)])
+@pytest.mark.parametrize(("stored", "want"), [(7, 7), ("7", 7), (7.0, 7), (True, 1), (" 8 ", 8)])
 def test_an_integer_reads_through_the_spellings(pinned, stored, want):
     pinned("t.n", stored)
     assert config.get_int("t.n") == want
 
 
 @pytest.mark.parametrize(
-    "accessor, default", [("get_str", "d"), ("get_bool", True), ("get_int", 5), ("get_float", 2.5)]
+    ("accessor", "default"), [("get_str", "d"), ("get_bool", True), ("get_int", 5), ("get_float", 2.5)]
 )
 def test_a_missing_key_returns_the_default(accessor, default):
     assert ACCESSORS[accessor]("t.absent.entirely", default) == default
 
 
 @pytest.mark.parametrize(
-    "accessor, default", [("get_str", "d"), ("get_bool", True), ("get_int", 5), ("get_float", 2.5)]
+    ("accessor", "default"), [("get_str", "d"), ("get_bool", True), ("get_int", 5), ("get_float", 2.5)]
 )
 def test_a_key_holding_none_returns_the_default(pinned, accessor, default):
     """A key present but null is absent as far as a caller is concerned, and must not become the
@@ -92,7 +91,7 @@ def test_a_key_holding_none_returns_the_default(pinned, accessor, default):
 
 
 @pytest.mark.parametrize(
-    "accessor, stored",
+    ("accessor", "stored"),
     [
         ("get_str", ["a", "b"]),
         ("get_str", {"a": 1}),

@@ -57,7 +57,8 @@ def test_config_valid_picks_an_enumerated_tuple() -> None:
         )
         for it in range(30)
     }
-    assert seen <= {(1, 2), (3, 4)} and len(seen) >= 1
+    assert seen <= {(1, 2), (3, 4)}
+    assert len(seen) >= 1
 
 
 def test_config_flag_is_visible_to_derive() -> None:
@@ -124,7 +125,8 @@ def test_config_space_survives_benchspec_roundtrip_and_reaches_sample_params() -
     for it in range(fuzz.iterations()):
         out = fuzz.sample_params(info["parameters"], it, configs=spec.config_space, constraints=spec.constraints)
         assert (out["okvan"], out["noncolin"]) in valid_pairs  # a valid config tuple ...
-        assert 8 <= out["ngrid"] <= 16 and out["npol"] in (1, 2)  # ... crossed with sampled sizes
+        assert 8 <= out["ngrid"] <= 16
+        assert out["npol"] in (1, 2)
         seen.add((out["okvan"], out["noncolin"]))
     assert seen <= valid_pairs
 

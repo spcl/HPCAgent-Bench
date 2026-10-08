@@ -99,7 +99,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("files", nargs="*", help="manifests to check (default: every tracked manifest)")
     args = ap.parse_args(argv)
 
-    candidates = args.files if args.files else tracked_manifests()
+    candidates = args.files or tracked_manifests()
     # A staged DELETION is still passed as a positional arg by pre-commit; there is nothing
     # left to validate, so drop paths that no longer exist (same guard check_headers.py uses).
     manifests = sorted({rel for rel in candidates if is_manifest(rel) and (REPO_ROOT / rel).is_file()})

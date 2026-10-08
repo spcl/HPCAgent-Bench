@@ -4,7 +4,6 @@ import ast
 import copy
 import inspect
 from collections.abc import Callable, Sequence
-from typing import TYPE_CHECKING
 
 from hpcagent_bench.translators.numpyto_common.ast_build import const_int, store_
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
@@ -34,9 +33,6 @@ __all__ = [
     "reduction_misses_target",
     "retarget_scalar_accumulator",
 ]
-
-if TYPE_CHECKING:
-    pass
 
 
 def call_expander(
@@ -217,7 +213,7 @@ def reduction_misses_target(target: ast.Subscript, loop: ast.For, body: ast.expr
             diffs = [
                 sympy.sympify(r, locals={iter_name: it})  # pyright: ignore[reportCallIssue]
                 - sympy.sympify(t, locals={iter_name: it})  # pyright: ignore[reportCallIssue]
-                for r, t in zip(read_axes, axes)
+                for r, t in zip(read_axes, axes, strict=False)
             ]
         except (SyntaxError, TypeError, AttributeError, ValueError, sympy.SympifyError):
             return False

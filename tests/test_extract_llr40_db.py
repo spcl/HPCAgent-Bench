@@ -11,9 +11,8 @@ import pathlib
 
 import pandas as pd
 
-from hpcagent_bench import studies
-
 from hpcagent_bench import observations_extract as extract_llr40
+from hpcagent_bench import studies
 from tests.sqlite_closing import connect
 
 ROWS = [

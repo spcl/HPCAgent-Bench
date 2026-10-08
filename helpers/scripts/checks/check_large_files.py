@@ -92,7 +92,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("files", nargs="*", help="files to check (default: the staged set)")
     args = ap.parse_args(argv)
 
-    candidates = args.files if args.files else staged_files()
+    candidates = args.files or staged_files()
     offenders = sorted(oversized(candidates, args.max_kb * BYTES_PER_KB, args.max_text_kb * BYTES_PER_KB))
 
     if not offenders:

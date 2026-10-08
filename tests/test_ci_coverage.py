@@ -128,7 +128,8 @@ def test_the_combined_total_is_built_from_every_job_not_one_of_them() -> None:
     assert "merge-multiple: true" not in text
     assert "coverage-data/*/.coverage*" in text
     assert "combine accounted for" in text
-    assert "Skipping duplicate data " in text and "Combined (\\d+) files?" in text
+    assert "Skipping duplicate data " in text
+    assert "Combined (\\d+) files?" in text
 
 
 def test_the_corpus_reference_phase_is_not_instrumented() -> None:

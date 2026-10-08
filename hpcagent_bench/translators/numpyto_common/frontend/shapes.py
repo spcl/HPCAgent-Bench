@@ -673,7 +673,7 @@ def resolve_extent_of(
             return tuple(str(s) for s in arr_by[node.id].shape)
         got = shapes.get(node.id)
         return tuple(got) if got is not None else None
-    elif isinstance(node, ast.Subscript) and isinstance(node.value, (ast.Name, ast.Subscript)):
+    if isinstance(node, ast.Subscript) and isinstance(node.value, (ast.Name, ast.Subscript)):
         base = resolve_extent_of(fn, node.value, arr_by, shapes, rebound, tuple_locals)
         if base is not None:
             kept = apply_subscript_axes(list(base), node.slice)

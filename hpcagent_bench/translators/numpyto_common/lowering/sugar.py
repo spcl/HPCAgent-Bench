@@ -65,7 +65,7 @@ class UnrollConstRangeComprehension(ast.NodeTransformer):
             ranges.append(trip)
         elts: list[ast.expr] = []
         for combo in itertools.product(*(range(n) for n in ranges)):
-            bound = dict(zip(names, combo))
+            bound = dict(zip(names, combo, strict=False))
             elts.append(literal_loads(bound).visit(copy.deepcopy(node.elt)))
         return ast.copy_location(ast.List(elts=elts, ctx=ast.Load()), node)
 

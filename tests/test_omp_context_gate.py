@@ -78,7 +78,9 @@ def test_the_gnu_context_maps_libgomp_alone_while_gcc_gfortran_numba_and_blas_ru
     build_contexts(tmp_path, llvm=False)
     done = run_gate(tmp_path, "--context", "gnu", "--require", "gcc", "gfortran", "--any-runtime")
     assert done.returncode == 0, done.stdout + done.stderr
-    assert "gcc: teams" in done.stdout and "gfortran: teams" in done.stdout and "numba prange + BLAS" in done.stdout
+    assert "gcc: teams" in done.stdout
+    assert "gfortran: teams" in done.stdout
+    assert "numba prange + BLAS" in done.stdout
     assert "one OpenMP runtime mapped" in done.stdout
 
 
@@ -97,8 +99,10 @@ def test_the_llvm_context_maps_libomp_alone_while_clang_and_numbas_gomp_abi_pool
         assert "libgomp" in done.stderr and "libomp" in done.stderr, done.stdout + done.stderr
         return
     assert done.returncode == 0, done.stdout + done.stderr
-    assert "clang: teams" in done.stdout and "numba prange + BLAS: layer omp" in done.stdout
-    assert "one OpenMP runtime mapped" in done.stdout and str(real("clang", "libomp.so")) in done.stdout
+    assert "clang: teams" in done.stdout
+    assert "numba prange + BLAS: layer omp" in done.stdout
+    assert "one OpenMP runtime mapped" in done.stdout
+    assert str(real("clang", "libomp.so")) in done.stdout
 
 
 @pytest.mark.integration
@@ -136,7 +140,8 @@ def test_a_missing_required_probe_compiler_fails_the_gate_and_an_absent_optional
         env={**env, "CC": "hpcagent-no-such-gcc", "FC": "hpcagent-no-such-gfortran"},
         check=False,
     )
-    assert absent.returncode != 0 and "required" in absent.stderr + absent.stdout
+    assert absent.returncode != 0
+    assert "required" in absent.stderr + absent.stdout
 
 
 @pytest.mark.integration

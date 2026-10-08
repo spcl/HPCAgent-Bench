@@ -324,7 +324,7 @@ def unary_expr_expander(make: Callable[[ast.expr], ast.expr]) -> Callable:
     the result is an expression of the (scalarised) operand. ``make`` may
     use the operand twice; it is deep-copied per use to avoid sharing a
     single AST node across the tree."""
-    return lambda t, a, s: unary_elementwise(t, a, s, lambda x: make(x))
+    return lambda t, a, s: unary_elementwise(t, a, s, make)
 
 
 #: numpy unary ufuncs that map 1:1 to a libm call. The scalar form is already

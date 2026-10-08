@@ -30,10 +30,14 @@ import pytest
 from hpcagent_bench.frameworks import generate_framework
 from hpcagent_bench.spec import BenchSpec
 from hpcagent_bench.translators.numpyto_c.dace_emit import (
+    AnnotateEmptyDtype,
     BindMethodReceiver,
     BroadcastScalarWhere,
+    CopyScalarAlias,
     DesugarChainedCompare,
     DesugarContractionFreeEinsum,
+    DesugarTernary,
+    DesugarUnreplacedCalls,
     DivisibleStridedSpan,
     DropIdentityAsarray,
     LowerCallsDaceCannotReplace,
@@ -42,37 +46,33 @@ from hpcagent_bench.translators.numpyto_c.dace_emit import (
     PointwiseScatterToLoop,
     ResolveInferredReshape,
     ResolveShapeReads,
-    RewriteBuiltinDtype,
-    SplitTupleAssign,
-    AnnotateEmptyDtype,
-    array_annotation,
-    CopyScalarAlias,
-    dace_dtype,
-    DesugarTernary,
-    DesugarUnreplacedCalls,
-    float_names,
-    inline_symbol_aliases,
-    plan_size_promotion,
     ResolveZeros,
+    RewriteBuiltinDtype,
     RewriteFrameworkDtype,
     SplitReassignedSize,
-    widen_int_seeds,
+    SplitTupleAssign,
+    array_annotation,
     copy_view_bindings,
     dace_chained_assign_split,
+    dace_dtype,
     emit_dace,
+    float_names,
     freeze_pinned_extent_scalars,
     freeze_shape_only_parameters,
     inline_slice_only_extents,
+    inline_symbol_aliases,
     loop_target_ranks,
     mixed_view_names,
     names_logical_sparse,
     negative_step,
+    plan_size_promotion,
     shape_argument,
     uniquify_nested_loop_targets,
     value_binding,
     version_reallocations,
     version_rebound_names,
     version_rebound_views,
+    widen_int_seeds,
 )
 from hpcagent_bench.translators.numpyto_common.frontend import (
     emit_with_inline_fallback,
@@ -258,7 +258,8 @@ def test_a_declared_extent_spells_floor_division_the_way_the_frontend_does() -> 
         "K": dc.symbol("K", dtype=dc.int64, positive=True),
     }
     extent = evaluate(emitted[len("dc_float[") : -1], scope)
-    assert extent.atoms(symbolic.int_floor) and not extent.atoms(sympy.floor)
+    assert extent.atoms(symbolic.int_floor)
+    assert not extent.atoms(sympy.floor)
     # premise: the `//` this replaced is the sympy head the body's spelling never carries
     assert evaluate(text, scope).atoms(sympy.floor)
 
@@ -372,7 +373,7 @@ def test_dace_keeps_every_np_fft_call_for_its_library_node(body: str) -> None:
     from hpcagent_bench.translators.numpyto_common.numpy_desugar import desugar_for_python_backend
 
     src = "def k(x, y, z):\n" + body
-    arrays = {name: (("N",), "complex128") for name in ("x", "y", "z")}
+    arrays = dict.fromkeys(("x", "y", "z"), (("N",), "complex128"))
     kir = SimpleNamespace(
         kernel_name="k",
         input_args=list(arrays),
@@ -510,7 +511,8 @@ def test_bare_empty_dtype_follows_kernel_precision_not_a_hardcoded_float64() -> 
     assert dace_dtype("float32") == dace_dtype("float64") == "dc_float"
     out = transform(AnnotateEmptyDtype(dace_dtype("float32")), "def k():\n    lr = np.empty(Qin.shape[0])\n")
     assert "dtype=dc_float" in out
-    assert "float32" not in out and "float64" not in out  # no concrete width token leaked
+    assert "float32" not in out
+    assert "float64" not in out
 
 
 def test_empty_with_an_explicit_dtype_is_left_alone() -> None:
@@ -574,7 +576,8 @@ def test_framework_dtype_rebinding_is_dropped_not_renamed() -> None:
     tf = RewriteFrameworkDtype()
     out = transform(tf, src)
     assert "framework" not in out
-    assert "dtype=dc_complex_float" in out and "astype(dc_float)" in out
+    assert "dtype=dc_complex_float" in out
+    assert "astype(dc_float)" in out
     assert tf.used_complex  # drives whether the generated module imports the complex global
 
 
@@ -584,7 +587,8 @@ def test_framework_dtype_tuple_rebinding_is_dropped() -> None:
     out = transform(
         tf, "def k():\n    np_float, np_complex = framework.np_float, framework.np_complex\n    return np_float\n"
     )
-    assert "framework" not in out and "return dc_float" in out
+    assert "framework" not in out
+    assert "return dc_float" in out
     assert tf.used_complex
 
 
@@ -592,14 +596,17 @@ def test_an_ordinary_assignment_to_a_dtype_name_is_still_renamed() -> None:
     """Anti-vacuity: only a rebinding READ OFF THE MODULE is dropped. Anything else that mentions
     the precision globals must still be renamed, or a real computation would vanish."""
     out = transform(RewriteFrameworkDtype(), "def k():\n    np_float = np.float32\n    return np_float\n")
-    assert "dc_float = np.float32" in out and "return dc_float" in out
+    assert "dc_float = np.float32" in out
+    assert "return dc_float" in out
 
 
 def test_desugar_ternary_assign_becomes_if_else() -> None:
     """dace rejects a conditional-expression RHS; it lowers to an if/else statement."""
     out = transform(DesugarTernary(), "def k():\n    f = a / b if b != 0.0 else 0.0\n")
-    assert "if b != 0.0:" in out and "else:" in out
-    assert "f = a / b" in out and "f = 0.0" in out
+    assert "if b != 0.0:" in out
+    assert "else:" in out
+    assert "f = a / b" in out
+    assert "f = 0.0" in out
     assert " if " not in out.replace("if b != 0.0:", "")  # no residual conditional expression
 
 
@@ -668,10 +675,11 @@ def test_gmres_emits_promoted_symbols_ternary_and_split() -> None:
     reads its value (100), not a symbol nothing could bind."""
     src = emit_with_inline_fallback(lambda: emit_dace(kir_for("gmres", config="csr", do_lower=True)))
     for sym in ("nnz", "N"):  # n inlined to N
-        assert re.search(rf"^{sym} = dc\.symbol\('{sym}'", src, re.M), f"{sym} not declared: {src}"
+        assert re.search(rf"^{sym} = dc\.symbol\('{sym}'", src, re.MULTILINE), f"{sym} not declared: {src}"
     assert "dc.symbol('max_iter'" not in src  # a pinned knob must not drift back into the symbols
     assert "__hpcagent_bench_symbol_defs__ = [('m', 'min(100, N)')]" in src  # recipe reads the constant
-    assert "kk_iter = m" in src and "kk_iter = k + 1" in src  # runtime count: seeded, then advanced
+    assert "kk_iter = m" in src
+    assert "kk_iter = k + 1" in src
     assert "np.zeros((N, m + 1), dtype=dc_float)" in src  # workspace sized by the never-rebound m
     assert "for k in range(m):" in src  # iteration bound is m, not the runtime count
     assert "y = np.zeros((N,), dtype=dc_float)" in src  # the Arnoldi vector keeps its own length
@@ -975,7 +983,8 @@ def test_an_array_alias_is_not_promoted_to_an_int64_symbol() -> None:
         "    oh = (h.shape[2] + 2) // 1\n    acc = np.zeros((oh, 8), h.dtype)\n"
     )
     order, defs, unused = plan_size_promotion(ast.parse(src).body[0], {"x"}, set())
-    assert "h" not in order and not any(nm == "h" for nm, unused in defs)
+    assert "h" not in order
+    assert not any(nm == "h" for nm, unused in defs)
 
 
 def where_filled(shapes: dict[str, list[str]], body: str) -> list[str]:
@@ -1029,7 +1038,8 @@ def test_a_rename_of_a_promoted_extent_reuses_that_symbol_instead_of_minting_a_s
     fn = ast.parse(src).body[0]
     promotable, unused, unused = plan_size_promotion(fn, {"x", "batch_size", "height"}, {"batch_size", "height"})
     out = ast.unparse(inline_symbol_aliases(fn, {"batch_size", "height"} | set(promotable), {"x"}))
-    assert "__inl9_h" not in out and "__inl1_oh" not in out
+    assert "__inl9_h" not in out
+    assert "__inl1_oh" not in out
     # what matters is not which name wins but that ONE extent is left: both allocations must spell
     # the same thing, or dace is back to proving two names equal.
     shapes = [ast.unparse(shape_argument(node)) for node in ast.walk(ast.parse(out)) if shape_argument(node)]
@@ -1256,7 +1266,8 @@ def test_a_chained_non_literal_still_goes_through_the_temp() -> None:
     only the literal case is free."""
     fn = ast.parse("def k():\n    a[:] = b[:] = np.zeros(N)\n")
     out = ast.unparse(ast.fix_missing_locations(dace_chained_assign_split().visit(fn)))
-    assert out.count("np.zeros(N)") == 1 and "__hpcagent_bench_chain0" in out
+    assert out.count("np.zeros(N)") == 1
+    assert "__hpcagent_bench_chain0" in out
 
 
 def test_unroll_reduction_accumulators_do_not_share_one_container() -> None:
@@ -1320,7 +1331,8 @@ def test_an_int_scalar_nothing_stores_a_float_into_keeps_its_int_seed() -> None:
 def test_channel_flows_convergence_residual_is_seeded_as_a_float() -> None:
     """End to end: the Navier-Stokes channel solver's outer loop residual."""
     unused, src = emit_("channel_flow")
-    assert "udiff = 1.0" in src and "udiff = 1\n" not in src
+    assert "udiff = 1.0" in src
+    assert "udiff = 1\n" not in src
 
 
 def test_a_qualified_math_call_gets_the_module_import_it_names() -> None:
@@ -1381,7 +1393,7 @@ def test_a_renamed_array_argument_keeps_its_shape_symbols() -> None:
     # The SET of declared shape symbols, not their declaration ORDER: the order tracks where each
     # symbol is first seen, so it moves when the kernel takes an extent as an argument instead of
     # reading it off a buffer. What must not move is which symbols exist and how they are spelled.
-    declared = re.findall(r"^(\w+) = dc\.symbol\('(\w+)', dtype=dc\.\w+(?:, \w+=True)?\)$", src, re.M)
+    declared = re.findall(r"^(\w+) = dc\.symbol\('(\w+)', dtype=dc\.\w+(?:, \w+=True)?\)$", src, re.MULTILINE)
     assert declared, src
     assert {lhs for lhs, unused in declared} == {"N", "NS", "NA"}
     # The module-level name a shape annotation reads IS the symbol's own name; a rename that
@@ -1396,7 +1408,8 @@ def test_a_reserved_name_that_is_only_called_is_left_alone() -> None:
     pytest.importorskip("dace")
     from hpcagent_bench.translators.numpyto_c.dace_emit import bound_names, sympy_reserved
 
-    assert sympy_reserved("sqrt") and sympy_reserved("exp")  # premise: they ARE reserved
+    assert sympy_reserved("sqrt")
+    assert sympy_reserved("exp")
     body = ast.parse("y = sqrt(x)\nfor i in range(n):\n    z = exp(i)\n").body
     assert set(bound_names(body)) == {"y", "i", "z"}
 
@@ -1438,7 +1451,8 @@ def test_a_view_name_rebound_to_another_view_gets_a_name_per_binding() -> None:
         "        we = a[jk, :]\n"
         "        out[jk, :] = we * 3.0\n"
     )
-    assert "we__v2 = a[jk, :]" in siblings and "out[jk, :] = we__v2 * 3.0" in siblings
+    assert "we__v2 = a[jk, :]" in siblings
+    assert "out[jk, :] = we__v2 * 3.0" in siblings
 
 
 def test_a_rebinding_that_reads_the_previous_binding_versions_both_sides() -> None:
@@ -1539,7 +1553,8 @@ def test_a_binding_that_needs_a_phi_is_copied_instead_of_versioned() -> None:
     conditional = rebound(
         "def k(a, out, c):\n    if c:\n        col = a[0:2, :]\n    else:\n        col = a[2:4, :]\n    out[:] = col\n"
     )
-    assert conditional.count("np.copy") == 2 and "__v2" not in conditional
+    assert conditional.count("np.copy") == 2
+    assert "__v2" not in conditional
 
 
 def value_versioned(src: str) -> str:
@@ -1602,7 +1617,8 @@ def test_bindings_in_sibling_branch_setups_are_still_versioned() -> None:
         "        out[:] = col\n"
         "    out[:] = col\n"
     )
-    assert nested.count("np.copy") == 2 and "__v2" not in nested
+    assert nested.count("np.copy") == 2
+    assert "__v2" not in nested
 
     # And loop-carried the other way: the read at the top of the body sees the PREVIOUS iteration.
     carried = agrees_with_numpy(
@@ -1613,7 +1629,8 @@ def test_bindings_in_sibling_branch_setups_are_still_versioned() -> None:
         "        col = a[jk:jk + 2, :]\n"
         "        out[:] = out + col\n"
     )
-    assert carried.count("np.copy") == 2 and "__v2" not in carried
+    assert carried.count("np.copy") == 2
+    assert "__v2" not in carried
 
 
 def test_a_binding_nested_in_a_loop_that_alone_reaches_its_reads_gets_its_own_name() -> None:
@@ -1675,7 +1692,8 @@ def test_a_versioned_rebind_computes_what_numpy_computes() -> None:
     straight = agrees_with_numpy(
         "def k(a, out):\n    col = a[0:2, :]\n    out[:] = col * 2.0\n    col = a[2:4, :]\n    out[:] = out + col\n"
     )
-    assert "col__v2 = a[2:4, :]" in straight and "np.copy" not in straight
+    assert "col__v2 = a[2:4, :]" in straight
+    assert "np.copy" not in straight
 
 
 def test_a_scalar_index_binding_is_not_a_view() -> None:
@@ -1689,7 +1707,8 @@ def test_a_scalar_index_binding_is_not_a_view() -> None:
         "        x = a[i, 1]\n"
         "        out[i] = out[i] + x\n"
     )
-    assert "__v2" not in src and "np.copy" not in src
+    assert "__v2" not in src
+    assert "np.copy" not in src
 
 
 def test_cloudsc_emits_one_name_per_za_col_binding() -> None:
@@ -1739,7 +1758,8 @@ def test_asarray_of_an_array_is_dropped_but_a_conversion_is_kept() -> None:
     next method on it reports a type nobody wrote (``Method "reshape" is not registered for object
     type "Scalar"``). On an ndarray it is numpy's own identity."""
     out = transform(DropIdentityAsarray({"g2kin": 2}), "def k(g2kin, n):\n    x = np.asarray(g2kin)[:n, 0]\n")
-    assert "np.asarray" not in out and "x = g2kin[:n, 0]" in out
+    assert "np.asarray" not in out
+    assert "x = g2kin[:n, 0]" in out
     # A dtype argument makes it a CONVERSION, and an operand of unknown rank may not be an array.
     kept = transform(
         DropIdentityAsarray({"g2kin": 2}),
@@ -1753,9 +1773,11 @@ def test_a_reshape_shape_is_spelled_as_a_tuple_and_a_bare_minus_one_is_ravel() -
     a single scalar extent dies as ``'symbol' object is not iterable``. A lone ``-1`` cannot become
     a tuple either -- dace takes the shape literally and allocates a negative extent."""
     out = transform(NormalizeReshape(), "def k(x, n):\n    a = x.reshape(n)\n    b = np.reshape(x, n)\n")
-    assert "x.reshape((n,))" in out and "np.reshape(x, (n,))" in out
+    assert "x.reshape((n,))" in out
+    assert "np.reshape(x, (n,))" in out
     ravel = transform(NormalizeReshape(), "def k(x):\n    a = x.reshape(-1)\n    b = np.reshape(x, -1)\n")
-    assert "x.ravel()" in ravel and ravel.count("reshape") == 0
+    assert "x.ravel()" in ravel
+    assert ravel.count("reshape") == 0
     # A shape that is already a tuple is left byte-for-byte alone.
     kept = "def k(x, n):\n    a = x.reshape((n, 2))\n"
     assert ast.dump(ast.parse(transform(NormalizeReshape(), kept))) == ast.dump(ast.parse(kept))
@@ -1898,7 +1920,8 @@ def test_a_loop_target_is_rank_0_so_a_scattered_scalar_is_not_indexed() -> None:
     reading "unknown" as "array" indexed chebyshev's scalar stencil weight, ``w[i]``."""
     src = "def k(lap, idx):\n    for m, w in enumerate((1.6, -0.2), start=1):\n        lap[idx, idx] += w\n"
     out = scattered(src, {"lap": 2, "idx": 1})
-    assert "+= w" in out and "w[" not in out
+    assert "+= w" in out
+    assert "w[" not in out
 
 
 @pytest.mark.parametrize("short", ["bicgstab", "cg", "gmres", "minres", "spmm"])
@@ -1910,7 +1933,9 @@ def test_a_logical_sparse_matrix_is_lowered_onto_its_own_buffers(short: str) -> 
     prog = next(n for n in ast.parse(src).body if isinstance(n, ast.FunctionDef))
     names = {n.id for n in ast.walk(prog) if isinstance(n, ast.Name)}
     assert "A" not in names, f"{short} still spells the logical matrix"
-    assert "A_indptr" in src and "A_indices" in src and "A_data" in src
+    assert "A_indptr" in src
+    assert "A_indices" in src
+    assert "A_data" in src
 
 
 def test_a_csr_reading_sparse_kernel_is_not_lowered() -> None:
@@ -1946,7 +1971,8 @@ def test_a_builtin_used_as_a_dtype_is_spelled_the_way_dace_accepts() -> None:
         "    ct = np.zeros(n, dtype=int)\n"
         "    v = np.zeros(n, dtype=float)\n",
     )
-    assert "dtype=np.bool_" in out and "dtype=np.int64" in out
+    assert "dtype=np.bool_" in out
+    assert "dtype=np.int64" in out
     assert "dtype=dc_float" in out, "a builtin float must follow the kernel's precision, not pin fp64"
     # A dtype that is already a numpy/dace typeclass is left alone.
     kept = "def k(n):\n    a = np.zeros(n, dtype=np.int32)\n"
@@ -2132,7 +2158,8 @@ def test_a_norm_of_a_complex_operand_keeps_the_conjugate() -> None:
         assert call in lowered(f"def k(v, a):\n    y = {call}\n", {"v": 1, "a": 3})
     z = np.array([3.0 + 4.0j, 0.0 - 5.0j])
     got = run_lowered("def k(z):\n    __probe__ = np.linalg.norm(z)\n", {"z": 1}, {"z"}, z=z)
-    assert np.isclose(got, np.linalg.norm(z)) and np.isclose(got, np.sqrt(50.0))
+    assert np.isclose(got, np.linalg.norm(z))
+    assert np.isclose(got, np.sqrt(50.0))
 
 
 def test_fftfreq_gives_the_second_half_of_the_ladder_its_negative_sign() -> None:
@@ -2155,7 +2182,8 @@ def test_round_sends_a_half_to_the_even_neighbour() -> None:
     gives 0. histogram_equalization feeds the result to a lookup table the oracle compares
     elementwise, so a single mismatched bin is a failing kernel."""
     out = lowered("def k(x):\n    y = np.round(x)\n", {"x": 1})
-    assert "__round_x0 = x" in out and "__round_up1 = np.floor(__round_x0 + 0.5)" in out
+    assert "__round_x0 = x" in out
+    assert "__round_up1 = np.floor(__round_x0 + 0.5)" in out
     assert "np.mod(__round_up1, 2.0) != 0.0" in out, "the half-to-even correction is missing"
     x = np.array([0.5, 1.5, 2.5, 3.5, -0.5, -1.5, -2.5, 2.4, 2.6, 0.0])
     got = run_lowered("def k(x):\n    __probe__ = np.round(x)\n", {"x": 1}, x=x)
@@ -2172,7 +2200,10 @@ def test_a_rank_is_carried_through_the_aliases_the_earlier_desugars_mint() -> No
         "def k(a, b):\n    c = np.ascontiguousarray(a)\n    d = c.reshape((n, m))\n    e = d.ravel()\n    f = -e + b\n"
     ).body[0]
     ranks = rank_table(fn, {"a": 2, "b": 1})
-    assert ranks["c"] == 2 and ranks["d"] == 2 and ranks["e"] == 1 and ranks["f"] == 1
+    assert ranks["c"] == 2
+    assert ranks["d"] == 2
+    assert ranks["e"] == 1
+    assert ranks["f"] == 1
 
 
 def test_a_flatten_is_one_axis_and_a_conjugate_keeps_every_axis_of_its_receiver() -> None:
@@ -2390,7 +2421,7 @@ def test_the_spliced_program_computes_what_the_named_one_did() -> None:
     run_source(tree, before_ns, "<before>")
     run_source(ast.parse(after), after_ns, "<after>")
     for st in range(1, 5):
-        for lo in range(0, 5):
+        for lo in range(5):
             for hi in range(lo, lo + 6):
                 x = np.arange(hi + 1, dtype=np.float64)
                 want = before_ns["f"](np.zeros(64), x, lo, hi, 3, st)
@@ -2413,7 +2444,7 @@ def test_the_respelled_slice_picks_exactly_the_same_elements() -> None:
     parse error."""
     for length in range(1, 40):
         for st in range(1, 6):
-            for a in range(0, 8):
+            for a in range(8):
                 tight = slice(0, a * st + 1, st)
                 wide = slice(0, (a + 1) * st, st)
                 data = np.arange(length)
@@ -2597,7 +2628,8 @@ def test_a_manifest_name_only_a_declared_shape_spells_is_frozen_to_its_value() -
         "a name only a declared shape spells must reach the module as its literal, not a dc.symbol"
     )
     # premise: the stage spellings the body DOES convolve with are still there, as runtime scalars
-    assert "depthwise_dilation: dc.int64" in text and "pointwise_dilation: dc.int64" in text
+    assert "depthwise_dilation: dc.int64" in text
+    assert "pointwise_dilation: dc.int64" in text
 
 
 def test_the_frozen_declared_extent_is_the_one_the_body_computes() -> None:
@@ -2717,7 +2749,8 @@ def parsed_augmented_program(tmp: pathlib.Path, body: str) -> "SDFG":
     path = tmp / "aug_dace.py"
     path.write_text(augmented_program(tmp, body))
     spec = importlib.util.spec_from_file_location(f"aug_dace_{tmp.name}", path)
-    assert spec is not None and spec.loader is not None
+    assert spec is not None
+    assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     try:

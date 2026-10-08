@@ -226,7 +226,8 @@ def test_the_manifest_carries_the_key_and_no_timestamp(tmp_path: pathlib.Path) -
     manifests = [(cpf_cache.entry_path(c, PINNED_KEY) / cpf_cache.MANIFEST_NAME).read_bytes() for c in (first, second)]
     assert manifests[0] == manifests[1]
     manifest = json.loads(manifests[0])
-    assert manifest["key"] == PINNED_KEY and manifest["dace_commit"] == "abc"
+    assert manifest["key"] == PINNED_KEY
+    assert manifest["dace_commit"] == "abc"
 
 
 def test_a_modified_artefact_is_a_miss_naming_the_key(tmp_path: pathlib.Path) -> None:
@@ -290,7 +291,8 @@ def test_a_failed_render_is_a_miss_naming_its_key_and_error(tmp_path: pathlib.Pa
     cpf_cache.record(view, "cloudsc", "c", "fp64", {"form": failed, "dropin": failed})
     with pytest.raises(cpf_cache.CacheMiss) as caught:
         cpf_cache.resolve(view, "cloudsc", "c", "fp64", "form")
-    assert PINNED_KEY in str(caught.value) and "14400s" in str(caught.value)
+    assert PINNED_KEY in str(caught.value)
+    assert "14400s" in str(caught.value)
 
 
 def test_a_kernel_nothing_was_rendered_for_names_the_entry(tmp_path: pathlib.Path) -> None:

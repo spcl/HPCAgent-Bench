@@ -279,7 +279,9 @@ class ScatterAtRewriter(ast.NodeTransformer):
                 value=ast.Call(func=name_(self.FOLD[op]), args=[cell(ast.Load()), val_k], keywords=[]),
             )
         body: list[ast.stmt] = [stmt]
-        for it, ext in zip(reversed(iters + trail_iters), reversed(tuple(bound) + trail)):  # nest deepest-last
+        for it, ext in zip(
+            reversed(iters + trail_iters), reversed(tuple(bound) + trail), strict=False
+        ):  # nest deepest-last
             body = [range_for(it, [const_or_name(ext)], body)]
         return ast.copy_location(body[0], node)
 

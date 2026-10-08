@@ -317,7 +317,7 @@ class ConstEvaluator:
 
     def display_dict(self, node: ast.Dict, scope: dict[str, Value]) -> dict[Value, Value]:
         result: dict[Value, Value] = {}
-        for key, item in zip(node.keys, node.values):
+        for key, item in zip(node.keys, node.values, strict=False):
             if key is None:
                 result.update(self.value(item, scope))
             else:
@@ -335,7 +335,7 @@ class ConstEvaluator:
     def compare(self, node: ast.Compare, scope: dict[str, Value]) -> Value:
         left = self.value(node.left, scope)
         result: Value = True
-        for op, comparator in zip(node.ops, node.comparators):
+        for op, comparator in zip(node.ops, node.comparators, strict=False):
             right = self.value(comparator, scope)
             result = COMPARE_OPS[type(op)](left, right)
             if not result:
@@ -393,7 +393,7 @@ class ConstEvaluator:
         values = list(item)
         if len(values) != len(target.elts):
             raise ValueError("unpack length mismatch")
-        for elt, value in zip(target.elts, values):
+        for elt, value in zip(target.elts, values, strict=False):
             self.bind(elt, value, scope)
 
 

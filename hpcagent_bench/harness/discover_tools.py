@@ -241,7 +241,7 @@ def detect_library(spec: ToolSpec) -> DetectResult:
         for d in lib_dirs():
             hits = glob.glob(os.path.join(d, so)) + glob.glob(os.path.join(d, so + ".*"))
             if hits:
-                return {"found": True, "via": "libdir", "path": sorted(hits)[-1]}
+                return {"found": True, "via": "libdir", "path": max(hits)}
     # 3) header on the include path
     for hdr in _as_list(spec.get("header", [])):
         for d in include_dirs():

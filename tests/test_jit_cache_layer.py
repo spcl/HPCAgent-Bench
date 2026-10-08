@@ -85,7 +85,8 @@ def test_seed_never_replaces_an_entry_already_in_the_local_layer(tmp_path: pathl
 def test_seed_of_a_cache_that_does_not_exist_yet_creates_an_empty_layer(tmp_path: pathlib.Path) -> None:
     local = tmp_path / "local"
     run("seed", str(tmp_path / "never-created"), str(local))
-    assert local.is_dir() and not any(local.iterdir())
+    assert local.is_dir()
+    assert not any(local.iterdir())
 
 
 @pytest.mark.parametrize("variable", ["TRITON_CACHE_DIR", "TORCHINDUCTOR_CACHE_DIR", "VLLM_CACHE_ROOT"])

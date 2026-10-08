@@ -7,7 +7,6 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from types import ModuleType
 from typing import (
-    TYPE_CHECKING,
     NamedTuple,
     Protocol,
     Self,
@@ -74,8 +73,6 @@ __all__ = [
     "stop_cupy_event_timer",
 ]
 
-if TYPE_CHECKING:
-    pass
 
 #: The numpy scalar types a datatype spelling resolves to (ml_dtypes registers bf16/fp8 as numpy types).
 DtypePair = tuple[type[np.generic], type[np.generic]]

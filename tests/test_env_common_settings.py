@@ -80,8 +80,7 @@ BASE_ENVS = [name for name in BASES if name.startswith("experiment:")]
 
 def load_effort() -> types.ModuleType:
     """``agent/hpcagent_agent/driver/effort.py``, loaded by path: it ships in the agent image, not the package."""
-    module = fresh("effort")
-    return module
+    return fresh("effort")
 
 
 effort = load_effort()

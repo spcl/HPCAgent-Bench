@@ -82,13 +82,15 @@ def test_flip_negative_axis_lowers_to_reverse_slice() -> None:
     # (``axis=-1`` is a UnaryOp, not a Constant; left as ``np.flip(a, axis=-1)`` pythran
     # mishandles it).
     out = desugar(" out[:] = np.flip(a, axis=-1)\n", a=("M", "N"), b=("M", "N"), out=("M", "N"))
-    assert "[:, ::-1]" in out and "flip" not in out
+    assert "[:, ::-1]" in out
+    assert "flip" not in out
 
 
 def test_stack_negative_axis_normalized_in_place() -> None:
     # stack has no lowering pass -> it stays ``np.stack`` but with the axis fixed.
     out = desugar(" out[:] = np.stack((a, b), axis=-1)\n", a=("M", "N"), b=("M", "N"), out=("M", "N", "2"))
-    assert "axis=2)" in out and "axis=-1" not in out
+    assert "axis=2)" in out
+    assert "axis=-1" not in out
 
 
 def test_positive_stack_axis_returned_verbatim() -> None:

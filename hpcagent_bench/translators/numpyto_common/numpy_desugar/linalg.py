@@ -59,30 +59,26 @@ def gauss_jordan_lines(aw: str, o: str, n: str, m: str | None, p: str) -> list[s
     k, r = f"{p}_k", f"{p}_r"
     o_swap = [f"        {p}_to = {o}[{k}].copy()"] if m is not None else [f"        {p}_to = {o}[{k}]"]
     o_swap += [f"        {o}[{k}] = {o}[{p}_pv]", f"        {o}[{p}_pv] = {p}_to"]
-    return (
-        [
-            f"for {k} in range({n}):",
-            f"    {p}_pv = {k}",
-            f"    for {r} in range({k} + 1, {n}):",
-            f"        if np.abs({aw}[{r}, {k}]) > np.abs({aw}[{p}_pv, {k}]):",
-            f"            {p}_pv = {r}",
-            f"    if {p}_pv != {k}:",
-            f"        {p}_tr = {aw}[{k}].copy()",
-            f"        {aw}[{k}] = {aw}[{p}_pv]",
-            f"        {aw}[{p}_pv] = {p}_tr",
-        ]
-        + o_swap
-        + [
-            f"    {p}_f = {aw}[{k}, {k}]",
-            f"    {aw}[{k}] = {aw}[{k}] / {p}_f",
-            f"    {o}[{k}] = {o}[{k}] / {p}_f",
-            f"    for {r} in range({n}):",
-            f"        if {r} != {k}:",
-            f"            {p}_g = {aw}[{r}, {k}]",
-            f"            {aw}[{r}] -= {p}_g * {aw}[{k}]",
-            f"            {o}[{r}] -= {p}_g * {o}[{k}]",
-        ]
-    )
+    return [
+        f"for {k} in range({n}):",
+        f"    {p}_pv = {k}",
+        f"    for {r} in range({k} + 1, {n}):",
+        f"        if np.abs({aw}[{r}, {k}]) > np.abs({aw}[{p}_pv, {k}]):",
+        f"            {p}_pv = {r}",
+        f"    if {p}_pv != {k}:",
+        f"        {p}_tr = {aw}[{k}].copy()",
+        f"        {aw}[{k}] = {aw}[{p}_pv]",
+        f"        {aw}[{p}_pv] = {p}_tr",
+        *o_swap,
+        f"    {p}_f = {aw}[{k}, {k}]",
+        f"    {aw}[{k}] = {aw}[{k}] / {p}_f",
+        f"    {o}[{k}] = {o}[{k}] / {p}_f",
+        f"    for {r} in range({n}):",
+        f"        if {r} != {k}:",
+        f"            {p}_g = {aw}[{r}, {k}]",
+        f"            {aw}[{r}] -= {p}_g * {aw}[{k}]",
+        f"            {o}[{r}] -= {p}_g * {o}[{k}]",
+    ]
 
 
 def linalg_operand(node: ast.expr, p: str, tag: str, hoist: ValueHoist) -> str:
@@ -131,8 +127,11 @@ def hoist_solve(node: ast.Call, hoist: ValueHoist) -> ast.expr | None:
     an, bn = linalg_operand(a, p, "a", hoist), linalg_operand(b, p, "b", hoist)
     temp = f"{p}_o"
     hoist.queue(
-        [f"{p}_aw = {an}.copy()", f"{temp} = {bn}.copy()"]
-        + gauss_jordan_lines(f"{p}_aw", temp, f"{an}.shape[0]", (f"{bn}.shape[1]" if rb == 2 else None), p)
+        [
+            f"{p}_aw = {an}.copy()",
+            f"{temp} = {bn}.copy()",
+            *gauss_jordan_lines(f"{p}_aw", temp, f"{an}.shape[0]", f"{bn}.shape[1]" if rb == 2 else None, p),
+        ]
     )
     return name_(temp)
 
@@ -154,8 +153,8 @@ def hoist_inv(node: ast.Call, hoist: ValueHoist) -> ast.expr | None:
             f"{temp} = np.zeros(({n}, {n}), {an}.dtype)",
             f"for {p}_d in range({n}):",
             f"    {temp}[{p}_d, {p}_d] = 1",
+            *gauss_jordan_lines(f"{p}_aw", temp, n, n, p),
         ]
-        + gauss_jordan_lines(f"{p}_aw", temp, n, n, p)
     )
     return name_(temp)
 

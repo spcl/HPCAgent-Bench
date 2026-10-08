@@ -565,7 +565,8 @@ def test_iter_minus_start_copies_shared_start_node() -> None:
     out = lowering.SliceToScalarRewriter.iter_minus_start(iv, start)
     assert unparse_(out) == "si - ip * n"
     embedded = [b for b in ast.walk(out) if isinstance(b, ast.BinOp) and isinstance(b.op, ast.Mult)]
-    assert embedded and embedded[0] is not start  # a copy, not the aliased node
+    assert embedded
+    assert embedded[0] is not start
 
 
 def test_iter_minus_start_zero_start_is_bare_fresh_iter() -> None:

@@ -9,10 +9,10 @@ import logging
 import math
 from collections.abc import Callable
 
-import matplotlib
+import matplotlib as mpl
 import pytest
 
-matplotlib.use("Agg")
+mpl.use("Agg")
 
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
@@ -141,7 +141,8 @@ def test_a_label_above_the_frame_settles_inside_it() -> None:
     settled(fig)
     renderer = fig.canvas.get_renderer()
     box, frame = label.get_window_extent(renderer), ax.get_window_extent(renderer)
-    assert frame.y0 <= box.y0 and box.y1 <= frame.y1
+    assert frame.y0 <= box.y0
+    assert box.y1 <= frame.y1
     plt.close(fig)
 
 
@@ -222,7 +223,8 @@ def test_no_minor_tick_carries_a_label(
     fig, ax = ruled_axis(kind, majors, view)
     fig.canvas.draw()
     texts = [label.get_text() for label in ax.yaxis.get_minorticklabels()]
-    assert texts and not any(texts)
+    assert texts
+    assert not any(texts)
     plt.close(fig)
 
 

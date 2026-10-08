@@ -383,7 +383,8 @@ def test_ppcg_hip_copy_func_stages_to_device(monkeypatch: pytest.MonkeyPatch) ->
     copy = fw.copy_func()
     out = copy(np.zeros(4, dtype=np.float64))
     assert isinstance(out, FakeCupyArray)
-    assert "asarray" in log and "stream-sync" in log
+    assert "asarray" in log
+    assert "stream-sync" in log
 
 
 def test_every_other_pluto_flavor_keeps_the_host_copy() -> None:
@@ -407,7 +408,8 @@ def test_ppcg_hip_timer_uses_device_events(monkeypatch: pytest.MonkeyPatch) -> N
 
     timer = fw.create_timer(program=None)
     assert isinstance(timer, Timer)
-    assert timer.state is not None and len(timer.state) == 2
+    assert timer.state is not None
+    assert len(timer.state) == 2
     fw.start_timer(timer)
     result = fw.stop_timer(timer)
     assert result.native == 1.25

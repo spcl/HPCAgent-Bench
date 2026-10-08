@@ -138,7 +138,7 @@ class ValueHoist:
     the statements computing each temp in front of it. Walks statements only and rewrites just the values holding the
     form's cue. ``ctr`` carries across statements so every temp name is fresh."""
 
-    __slots__ = ("form", "tables", "live", "ctr", "pre", "changed")
+    __slots__ = ("changed", "ctr", "form", "live", "pre", "tables")
 
     def __init__(self, form: HoistForm, tables: HoistTables) -> None:
         self.form = form
@@ -190,4 +190,4 @@ class ValueHoist:
             return [stmt]
         self.changed = True
         hoisted, self.pre = self.pre, []
-        return hoisted + [stmt]
+        return [*hoisted, stmt]

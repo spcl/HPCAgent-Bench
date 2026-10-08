@@ -380,7 +380,7 @@ def emit_body(
             # expression default is rewritten like any other.
             lines.append(f"{indent}def {s.name}({ast.unparse(s.args)}):")
             inner = emit_body(s.body, set(), indent + "    ", {a.arg for a in s.args.args})
-            lines += inner if inner else [indent + "    pass"]
+            lines += inner or [indent + "    pass"]
         elif isinstance(s, ast.Expr):
             # A docstring/constant is a no-op; a bare call like
             # np.multiply(Z, Z, Z) has effects we can't safely drop.
@@ -714,7 +714,7 @@ def emit_while_break(node, carried, lo, hi, i, indent):
         raise EmitError("break loop without an `if cond: ... break` guard")
     on_break = expand_parallel_assigns(on_break)
     after = expand_parallel_assigns(after)
-    full = [i] + carried + ["_done"]
+    full = [i, *carried, "_done"]
     inner = indent + "    "
     st = tuple_expr(full)
     lines = [
@@ -749,8 +749,8 @@ def emit_while_break(node, carried, lo, hi, i, indent):
     # post-guard update (cg/minres's next-iterate maths) is skipped on it.
     frozen(on_break, when_conv=True)
     frozen(after, when_conv=False)
-    ret = "(" + ", ".join([f"{i} + 1"] + carried + ["_conv | _done"]) + ",)"
-    init = "(" + ", ".join([lo] + carried + ["jnp.bool_(False)"]) + ",)"
+    ret = "(" + ", ".join([f"{i} + 1", *carried, "_conv | _done"]) + ",)"
+    init = "(" + ", ".join([lo, *carried, "jnp.bool_(False)"]) + ",)"
     lines += [f"{inner}return {ret}", f"{indent}{st} = lax.while_loop(_cond, _body, {init})"]
     return lines
 

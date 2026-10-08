@@ -16,7 +16,6 @@ import pytest
 
 from hpcagent_bench.translators.numpyto_common.lib_nodes import (
     NP_CALL_EXPANDERS,
-    matmul_result_shape,
     dims_agree,
     expand_cumprod,
     expand_cumsum,
@@ -32,6 +31,7 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes import (
     expand_tril,
     expand_triu,
     expand_vdot,
+    matmul_result_shape,
     parse_einsum_subscripts,
     shape_exprs_differ_numerically,
     shape_exprs_equal,
@@ -64,8 +64,10 @@ def test_matmul_call_normalized_to_binop() -> None:
     tree = ast.parse("c = np.matmul(a, b)")
     MatmulCallRewriter().visit(tree)
     rhs = tree.body[0].value
-    assert isinstance(rhs, ast.BinOp) and isinstance(rhs.op, ast.MatMult)
-    assert rhs.left.id == "a" and rhs.right.id == "b"
+    assert isinstance(rhs, ast.BinOp)
+    assert isinstance(rhs.op, ast.MatMult)
+    assert rhs.left.id == "a"
+    assert rhs.right.id == "b"
 
 
 def test_matmul_call_three_args_left_alone() -> None:
@@ -257,9 +259,11 @@ def test_batched_matmul_desugars_to_gemm_loop() -> None:
     assert loop.iter.args[0].value.attr == "shape"  # range(I.shape[0])
     # Inside: a 2-D ``@`` (both operands dropped to rank 2 by [bv]).
     body_src = unparse_(loop.body)
-    assert "@" in body_src and "[__bm0]" in body_src
+    assert "@" in body_src
+    assert "[__bm0]" in body_src
     # The shared 2-D ``star`` is NOT batch-indexed (broadcast).
-    assert "star[__bm0]" not in body_src and "star" in body_src
+    assert "star[__bm0]" not in body_src
+    assert "star" in body_src
 
 
 def test_2d_matmul_left_verbatim() -> None:
@@ -278,7 +282,9 @@ def test_reshape_wrapped_matmul_lowers_to_contraction() -> None:
     src = "def kernel(NR, NQ, NP, A, C4):\n    A[:] = np.reshape(np.reshape(A, (NR, NQ, 1, NP)) @ C4, (NR, NQ, NP))\n"
     kir = kir_("kernel", A=("NR", "NQ", "NP"), C4=("NP", "NP"))
     out = desugar_for_python_backend(src, kir)
-    assert "@" not in out and "reshape" not in out and "for " in out
+    assert "@" not in out
+    assert "reshape" not in out
+    assert "for " in out
 
 
 def test_no_matmul_returned_bytewise_unchanged() -> None:
@@ -297,7 +303,8 @@ def test_np_pad_edge_inlined_to_loop_nest() -> None:
     kir = kir_("kernel", in_grid=("N", "N", "N"), out_grid=("N", "N", "N"))
     out = desugar_for_python_backend(src, kir)
     assert "np.pad" not in out, "np.pad must be expanded"
-    assert "np.empty" in out and out.count("for ") >= 3  # rank-3 copy nest
+    assert "np.empty" in out
+    assert out.count("for ") >= 3
     assert "min(max(" in out  # edge clamp
 
 
@@ -309,7 +316,8 @@ def test_np_pad_per_axis_tuple_widths() -> None:
     )
     kir = kir_("kernel", in_grid=("N", "N", "N", "C"))
     out = desugar_for_python_backend(src, kir)
-    assert "np.pad" not in out and out.count("for ") >= 4  # rank-4 nest
+    assert "np.pad" not in out
+    assert out.count("for ") >= 4
 
 
 def test_einsum_inlined_to_contraction_loops() -> None:
@@ -318,7 +326,8 @@ def test_einsum_inlined_to_contraction_loops() -> None:
     kir = kir_("kernel", Q=("b", "k", "p"), I=("b", "l", "q"), kDivM=("d", "k", "l"), star=("d", "q", "p"))
     out = desugar_for_python_backend(src, kir)
     assert "einsum" not in out, "einsum must be expanded"
-    assert "+=" in out and out.count("for ") == 6  # 3 output + 3 contracted axes
+    assert "+=" in out
+    assert out.count("for ") == 6
     assert "Q[:] = Q + __es0" in out  # einsum hoisted to a temp, add preserved
 
 
@@ -337,7 +346,8 @@ def test_einsum_trace_is_scalar_accumulation() -> None:
     st = {"a": ("M", "M")}
     out = unparse_(expand_einsum(name_("s"), [ast.Constant("ii->"), name_("a")], st))
     # No output letters -> scalar target, single summed loop over the diagonal.
-    assert "s = 0.0" in out and "s += a[__es_i, __es_i]" in out
+    assert "s = 0.0" in out
+    assert "s += a[__es_i, __es_i]" in out
 
 
 def test_einsum_transpose_no_summation() -> None:
@@ -373,14 +383,16 @@ def test_tensordot_axes1_is_matmul_contraction() -> None:
 def test_inner_rank1_is_dot() -> None:
     st = {"u": ("K",), "v": ("K",)}
     out = unparse_(expand_inner(name_("s"), [name_("u"), name_("v")], st))
-    assert "s = 0.0" in out and "s += u[__r0] * v[__r0]" in out
+    assert "s = 0.0" in out
+    assert "s += u[__r0] * v[__r0]" in out
 
 
 def test_vdot_real_no_conjugate() -> None:
     # Real operands: no conj() call (CONJG/__npb_conj is invalid on a real scalar).
     st = {"u": ("K",), "v": ("K",)}
     out = unparse_(expand_vdot(name_("s"), [name_("u"), name_("v")], st, local_dtypes={}))
-    assert "conj" not in out and "s += u[__vd] * v[__vd]" in out
+    assert "conj" not in out
+    assert "s += u[__vd] * v[__vd]" in out
 
 
 def test_vdot_complex_conjugates_first_operand() -> None:
@@ -394,7 +406,8 @@ def test_vdot_complex_conjugates_first_operand() -> None:
 
 def test_trace_sums_diagonal() -> None:
     out = unparse_(expand_trace(name_("s"), [name_("a")], {"a": ("M", "M")}))
-    assert "s = 0.0" in out and "s += a[__tr, __tr]" in out
+    assert "s = 0.0" in out
+    assert "s += a[__tr, __tr]" in out
 
 
 def test_diagonal_copies_diagonal() -> None:
@@ -456,16 +469,20 @@ def test_reshape_method_varargs_to_func() -> None:
     tree = ast.parse("y = a.reshape(3, 4)")
     ReshapeMethodRewriter().visit(tree)
     call = tree.body[0].value
-    assert isinstance(call.func, ast.Attribute) and call.func.attr == "reshape"
-    assert call.func.value.id == "np" and call.args[0].id == "a"
-    assert isinstance(call.args[1], ast.Tuple) and len(call.args[1].elts) == 2
+    assert isinstance(call.func, ast.Attribute)
+    assert call.func.attr == "reshape"
+    assert call.func.value.id == "np"
+    assert call.args[0].id == "a"
+    assert isinstance(call.args[1], ast.Tuple)
+    assert len(call.args[1].elts) == 2
 
 
 def test_reshape_method_tuple_to_func() -> None:
     tree = ast.parse("y = a.reshape((3, 4))")
     ReshapeMethodRewriter().visit(tree)
     call = tree.body[0].value
-    assert call.func.value.id == "np" and len(call.args[1].elts) == 2
+    assert call.func.value.id == "np"
+    assert len(call.args[1].elts) == 2
 
 
 def test_ellipsis_trailing_expands_to_full_slices() -> None:
@@ -473,16 +490,20 @@ def test_ellipsis_trailing_expands_to_full_slices() -> None:
     EllipsisExpander({"a": ["M", "N", "P"]}).visit(tree)
     sub = tree.body[0].value
     elts = sub.slice.elts
-    assert isinstance(elts[0], ast.Slice) and isinstance(elts[1], ast.Slice)
-    assert isinstance(elts[2], ast.Constant) and elts[2].value == 0
+    assert isinstance(elts[0], ast.Slice)
+    assert isinstance(elts[1], ast.Slice)
+    assert isinstance(elts[2], ast.Constant)
+    assert elts[2].value == 0
 
 
 def test_ellipsis_leading_expands_to_full_slices() -> None:
     tree = ast.parse("y = a[0, ...]")
     EllipsisExpander({"a": ["M", "N", "P"]}).visit(tree)
     elts = tree.body[0].value.slice.elts
-    assert isinstance(elts[0], ast.Constant) and elts[0].value == 0
-    assert isinstance(elts[1], ast.Slice) and isinstance(elts[2], ast.Slice)
+    assert isinstance(elts[0], ast.Constant)
+    assert elts[0].value == 0
+    assert isinstance(elts[1], ast.Slice)
+    assert isinstance(elts[2], ast.Slice)
 
 
 # C.10 np.tril mask (mirror of triu)                                          #
@@ -496,7 +517,8 @@ def test_tril_keeps_lower_triangle() -> None:
     out = unparse_(expand_tril(name_("out"), [name_("a")], {"a": ("M", "M")}))
     # lower triangle keeps ``j <= i`` (the complement of triu's ``j >= i``).
     assert "__j <= __i" in out
-    assert "a[__i, __j]" in out and "else 0.0" in out
+    assert "a[__i, __j]" in out
+    assert "else 0.0" in out
 
 
 def test_triu_keeps_upper_triangle() -> None:
@@ -513,7 +535,8 @@ def test_nested_full_is_spilled_so_triu_sees_a_name() -> None:
     FullCallHoister().visit(tree)
     assert len(tree.body) == 2, "the nested np.full must become its own statement"
     spilled, rest = tree.body
-    assert isinstance(spilled, ast.Assign) and spilled.targets[0].id.startswith("__full")
+    assert isinstance(spilled, ast.Assign)
+    assert spilled.targets[0].id.startswith("__full")
     assert ast.unparse(spilled.value).startswith("np.full(")
     # triu's first argument is the spilled Name, which every expander requires.
     assert f"np.triu({spilled.targets[0].id}, 1)" in ast.unparse(rest)
@@ -524,7 +547,8 @@ def test_direct_full_assign_is_left_for_the_full_rewriter() -> None:
     would interpose a pointless whole-array copy."""
     tree = ast.parse("mask = np.full((n, n), -np.inf)")
     FullCallHoister().visit(tree)
-    assert len(tree.body) == 1 and ast.unparse(tree.body[0]) == "mask = np.full((n, n), -np.inf)"
+    assert len(tree.body) == 1
+    assert ast.unparse(tree.body[0]) == "mask = np.full((n, n), -np.inf)"
 
 
 def test_linalg_norm_ord1_inf_vector_and_matrix() -> None:
@@ -534,12 +558,17 @@ def test_linalg_norm_ord1_inf_vector_and_matrix() -> None:
     unsupported ord or a >2-D operand raises rather than miscompute."""
     vec = {"a": ("N",)}
     l1 = unparse_(expand_linalg_norm(name_("s"), [name_("a"), ast.Constant(value=1)], vec))
-    assert "abs(" in l1 and "sqrt" not in l1  # sum of |v|, not sqrt(sum v^2)
+    assert "abs(" in l1
+    assert "sqrt" not in l1
     # ``np.inf`` reaches the expander as the lowered Name("INFINITY").
     linf = unparse_(expand_linalg_norm(name_("s"), [name_("a"), name_("INFINITY")], vec))
-    assert "abs(" in linf and "sqrt" not in linf and " if " in linf  # running max via IfExp
+    assert "abs(" in linf
+    assert "sqrt" not in linf
+    assert " if " in linf
     mat = unparse_(expand_linalg_norm(name_("s"), [name_("a"), ast.Constant(value=1)], {"a": ("M", "N")}))
-    assert "abs(" in mat and " if " in mat and "sqrt" not in mat  # max over per-column abs-sums
+    assert "abs(" in mat
+    assert " if " in mat
+    assert "sqrt" not in mat
     with pytest.raises(NotImplementedError):  # unsupported ord
         expand_linalg_norm(name_("s"), [name_("a"), ast.Constant(value=3)], vec)
     with pytest.raises(NotImplementedError):  # >2-D operand not supported
@@ -581,7 +610,7 @@ def assert_ok(status: dict[str, str], label: str) -> None:
 #: (id, numpy source, func, input shapes/arrays, output shape, syms, sym-shapes).
 #: Output is read from the kernel's last param (an OUT buffer written in place).
 @pytest.mark.parametrize(
-    "label,src,func,ins,out_shape,syms,shapes",
+    ("label", "src", "func", "ins", "out_shape", "syms", "shapes"),
     [
         (
             "matmul_call",

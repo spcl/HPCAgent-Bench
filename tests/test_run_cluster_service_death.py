@@ -30,6 +30,7 @@ Slurm is not available here): it kills whichever local PIDs the test registers t
 falls back to signalling the whole job -- exercised here as much as the agent-step-specific path.
 """
 
+import contextlib
 import os
 import pathlib
 import re
@@ -225,7 +226,5 @@ def test_the_agent_finishing_first_leaves_the_surviving_service_step_alone(tmp_p
         # block manages it, so the test reaps it itself instead of leaking a 30s sleep per run.
         match = re.search(r"service_pid=(\d+)", result.stdout)
         if match:
-            try:
+            with contextlib.suppress(ProcessLookupError):
                 os.kill(int(match.group(1)), signal.SIGKILL)
-            except ProcessLookupError:
-                pass

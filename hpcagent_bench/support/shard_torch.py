@@ -189,7 +189,8 @@ def layout_index_arrays(
     if len(dist.axes) != len(shape):
         raise ValueError(f"layout has {len(dist.axes)} axes but the array has {len(shape)} dimension(s)")
     return [
-        torch.from_numpy(owned_indices(int(n), ax, grid, coords)).to(device=device) for n, ax in zip(shape, dist.axes)
+        torch.from_numpy(owned_indices(int(n), ax, grid, coords)).to(device=device)
+        for n, ax in zip(shape, dist.axes, strict=False)
     ]
 
 
@@ -323,7 +324,7 @@ def all_gather_axis(local: torch.Tensor, axis: int, group: dist.ProcessGroup | N
     padded = torch.cat((local, local.new_zeros(pad_shape)), dim=axis).contiguous()
     parts = [torch.empty_like(padded) for rank in range(world)]
     dist.all_gather(parts, padded, group=group)
-    return torch.cat([p.narrow(axis, 0, n) for p, n in zip(parts, lengths)], dim=axis)
+    return torch.cat([p.narrow(axis, 0, n) for p, n in zip(parts, lengths, strict=False)], dim=axis)
 
 
 def seed_from(rng: "np.random.Generator | None") -> int:

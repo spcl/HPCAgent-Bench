@@ -163,7 +163,8 @@ def test_the_plot_loader_partitions_machines_instead_of_folding_them(
     assert [label for label, _ in groups] == ["epyc", "xeon", "xeon-A100"]
     assert [len(frame) for _, frame in groups] == [2, 1, 2]
     for _, frame in groups:
-        assert "cpu" not in frame.columns and "gpu" not in frame.columns
+        assert "cpu" not in frame.columns
+        assert "gpu" not in frame.columns
 
     # Every machine gets its own file, so one cannot silently overwrite another.
     names = [results.machine_output("plots/heatmap.pdf", label) for label, _ in groups]

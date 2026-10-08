@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Compiler row labels and the shared point and value marks of the per-kernel compiler figure."""
 
-import matplotlib
+import matplotlib as mpl
 
-matplotlib.use("Agg")
+mpl.use("Agg")
 import matplotlib.pyplot as plt
 import pandas as pd
 import pytest

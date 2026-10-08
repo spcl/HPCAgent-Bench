@@ -98,7 +98,7 @@ class FftGridReshapeRewriter(ast.NodeTransformer):
             return node
         src_name, M, C = mc
         grid_dims = [ast.unparse(e) for e in grid_elts[:-1]]
-        grid_shape = tuple(grid_dims) + (C,)
+        grid_shape = (*tuple(grid_dims), C)
         n = self.counter[0]
         self.counter[0] += 3
         g, f, o = f"__fg{n}", f"__ff{n}", f"__fo{n}"

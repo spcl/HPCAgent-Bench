@@ -36,10 +36,7 @@ class LstsqRcond(ast.NodeTransformer):
         if not is_lstsq(node.func) or not 2 <= len(node.args) <= 3:
             return node
         rcond = next((k for k in node.keywords if k.arg == "rcond"), None)
-        if len(node.args) == 3:
-            default = is_none(node.args[2])
-        else:
-            default = rcond is None or is_none(rcond.value)
+        default = is_none(node.args[2]) if len(node.args) == 3 else rcond is None or is_none(rcond.value)
         if not default:
             return node
         cutoff = ast.parse(CUTOFF.format(a=ast.unparse(node.args[0])), mode="eval").body

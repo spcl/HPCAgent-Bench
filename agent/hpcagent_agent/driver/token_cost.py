@@ -88,6 +88,7 @@ compare two episodes with it, do not budget with it.
 import argparse
 import collections
 import csv
+import itertools
 import json
 import pathlib
 import re
@@ -346,7 +347,7 @@ def delta_total(series: list[int]) -> tuple[int, str]:
     """
     if not series:
         return 0, ""
-    monotone = all(before <= after for before, after in zip(series, series[1:]))
+    monotone = all(before <= after for before, after in itertools.pairwise(series))
     return (max(series), "cumulative") if monotone else (sum(series), "increment")
 
 

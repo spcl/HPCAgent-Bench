@@ -124,7 +124,7 @@ class RepeatCountsInline(RankedRewritePass):
         if not pre:
             return node
         self.changed = True
-        out = pre + [node]
+        out = [*pre, node]
         for stmt in out:
             ast.copy_location(stmt, node)
             ast.fix_missing_locations(stmt)
@@ -172,7 +172,7 @@ class BincountInline(RankedRewritePass):
             call.func = name_("__bincount_result__")
             replace_call_with_name(node, call, name)
         self.changed = True
-        out = pre + [node]
+        out = [*pre, node]
         for stmt in out:
             ast.copy_location(stmt, node)
             ast.fix_missing_locations(stmt)
@@ -294,7 +294,7 @@ class SearchsortedMaterialize(RewritePass):
             )
             call.args[0] = name_(tmp)
         self.changed = True
-        out = pre + [node]
+        out = [*pre, node]
         for stmt in out:
             ast.copy_location(stmt, node)
             ast.fix_missing_locations(stmt)
@@ -409,7 +409,7 @@ def hoist_repeat_axis(node: ast.expr, hoist: ValueHoist) -> ast.expr | None:
     dims = [(f"{xid}.shape[{d}] * {ms}" if d == k else f"{xid}.shape[{d}]") for d in range(rank)]
     iters = [f"{p}_i{d}" for d in range(rank)]
     out = f"{p}_o"
-    lines = pre + [f"{out} = np.empty(({', '.join(dims)},), {xid}.dtype)"]
+    lines = [*pre, f"{out} = np.empty(({', '.join(dims)},), {xid}.dtype)"]
     deep = ""
     for d in range(rank):
         lines.append(f"{deep}for {iters[d]} in range({dims[d]}):")

@@ -10,9 +10,8 @@ the suite reads a REAL ``.db`` rather than a frame built in the test body.
 import pathlib
 import types
 
-from tests.conftest import script_path
-
 from hpcagent_bench import studies
+from tests.conftest import script_path
 from tests.fresh_module import module_at
 
 FIXTURE = pathlib.Path(__file__).with_name("data") / "observations-mini.db"

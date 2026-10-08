@@ -8,16 +8,16 @@ renders the partition's arch for run-time JIT builds. The GPU arch table and the
 tests/test_gpu_arch_table.py.
 """
 
-import tempfile
 import pathlib
 import platform
 import re
 import shutil
 import subprocess
+import tempfile
+import tomllib
 from typing import Any
 
 import pytest
-import tomllib
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 CE = ROOT / "containers" / "images"
@@ -224,10 +224,13 @@ def test_promote_moves_each_candidate_over_its_live_name(tmp_path: pathlib.Path,
     done = run(["bash", str(CE / "registry.sh"), "promote", role], env)
     assert done.returncode == 0, done.stderr
     assert f"{role}: {candidate} -> {LIVE[target]}" in done.stdout
-    assert (ce / LIVE[target]).read_bytes() == b"sqsh" and not (ce / candidate).exists()
-    assert (ce / f"{LIVE[target]}.digest").is_file() and not (ce / f"{candidate}.verified").exists()
+    assert (ce / LIVE[target]).read_bytes() == b"sqsh"
+    assert not (ce / candidate).exists()
+    assert (ce / f"{LIVE[target]}.digest").is_file()
+    assert not (ce / f"{candidate}.verified").exists()
     rendered = {path.name for path in edf_dir.glob("*.toml")}
-    assert rendered and all(str(ce / LIVE[target]) in (edf_dir / name).read_text(encoding="utf-8") for name in rendered)
+    assert rendered
+    assert all(str(ce / LIVE[target]) in (edf_dir / name).read_text(encoding="utf-8") for name in rendered)
 
 
 def test_promote_refuses_a_candidate_rebuilt_after_it_was_verified(tmp_path: pathlib.Path) -> None:
@@ -241,7 +244,8 @@ def test_promote_refuses_a_candidate_rebuilt_after_it_was_verified(tmp_path: pat
     done = run(["bash", str(CE / "registry.sh"), "promote", "judge"], env)
     assert done.returncode == 1
     assert "rebuilt after it was verified" in done.stderr
-    assert (ce / candidate).exists() and not (ce / LIVE["judge"]).exists()
+    assert (ce / candidate).exists()
+    assert not (ce / LIVE["judge"]).exists()
 
 
 def test_verify_only_reverifies_the_candidates_without_building(tmp_path: pathlib.Path) -> None:

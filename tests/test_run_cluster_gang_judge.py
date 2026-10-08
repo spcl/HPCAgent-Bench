@@ -31,7 +31,7 @@ def gang_judge(gang_nodes: str | None, colocate: str | None = None) -> bool:
 
 
 @pytest.mark.parametrize(
-    "gang_nodes, colocate, expected",
+    ("gang_nodes", "colocate", "expected"),
     [(None, None, False), ("0", None, False), ("1", None, True), ("4", None, True), ("1", "1", False)],
 )
 def test_one_node_is_a_gang_and_unset_is_the_ordinary_judge(gang_nodes, colocate, expected) -> None:

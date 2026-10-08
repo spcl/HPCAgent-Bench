@@ -30,7 +30,7 @@ def lower_src(
 
 def regions_(text: str) -> list[str]:
     """The body of every ``#pragma scop`` region in ``text``, in order."""
-    return re.findall(r"#pragma scop(.*?)#pragma endscop", text, re.S)
+    return re.findall(r"#pragma scop(.*?)#pragma endscop", text, re.DOTALL)
 
 
 def sized_zeros_kir() -> KernelIR:

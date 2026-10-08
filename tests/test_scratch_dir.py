@@ -40,7 +40,8 @@ def test_the_site_scratch_is_not_this_directory(monkeypatch: pytest.MonkeyPatch,
     """``$SCRATCH`` names run roots and caches; a native run's submissions stay with the checkout."""
     monkeypatch.delenv(paths.SCRATCH_ENV, raising=False)
     monkeypatch.setenv("SCRATCH", str(tmp_path))
-    assert paths.scratch_dir() != tmp_path and tmp_path not in paths.scratch_dir().parents
+    assert paths.scratch_dir() != tmp_path
+    assert tmp_path not in paths.scratch_dir().parents
 
 
 def test_native_submissions_go_under_the_scratch_directory(
@@ -50,7 +51,7 @@ def test_native_submissions_go_under_the_scratch_directory(
     monkeypatch.setenv(paths.SCRATCH_ENV, str(tmp_path))
     try:
         reloaded = importlib.reload(native)
-        assert reloaded.NATIVE_RUNS == tmp_path / "native_runs"
+        assert tmp_path / "native_runs" == reloaded.NATIVE_RUNS
         assert reloaded.run_dir("r1", "gemm") == tmp_path / "native_runs" / "r1" / "gemm"
     finally:
         monkeypatch.undo()
@@ -63,7 +64,8 @@ def test_the_prompt_names_a_repo_relative_folder_or_the_variable_never_a_host_pa
     assert native.display_run_dir("gemm") == ".scratch/native_runs/<episode_id>/gemm"
     monkeypatch.setattr(native, "NATIVE_RUNS", tmp_path / "far" / "native_runs")
     shown = native.display_run_dir("gemm")
-    assert shown == "$HPCAGENT_BENCH_SCRATCH/native_runs/<episode_id>/gemm" and str(tmp_path) not in shown
+    assert shown == "$HPCAGENT_BENCH_SCRATCH/native_runs/<episode_id>/gemm"
+    assert str(tmp_path) not in shown
 
 
 def test_the_shell_environment_exports_the_same_default() -> None:

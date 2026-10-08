@@ -12,7 +12,6 @@ Exit status is the number of things resolving outside, so a gate can use it dire
 
 import argparse
 import importlib
-import pathlib
 import os
 import shutil
 import subprocess
@@ -111,7 +110,7 @@ def main() -> int:
     bad += check_binaries()
     bad += check_loader()
 
-    print(f"\nresolving outside the image: {bad if bad else 'nothing'}")
+    print(f"\nresolving outside the image: {bad or 'nothing'}")
     return len(bad)
 
 

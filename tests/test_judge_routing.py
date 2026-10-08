@@ -241,7 +241,8 @@ def test_one_judge_down_does_not_reroute_the_other_worker(monkeypatch) -> None:
     assert sorted(rec.hosts()) == ["judge-a:8000", "judge-b:8000"]
     assert len(rec.calls) == 2
     # One task graded, one recorded as an error row -- the sweep survives either way.
-    assert len(rows) == 2 and any(r.status == "ok" for r in rows)
+    assert len(rows) == 2
+    assert any(r.status == "ok" for r in rows)
 
 
 def test_more_workers_than_judges_still_bind_deterministically(monkeypatch, recorder) -> None:
@@ -261,7 +262,8 @@ def test_more_workers_than_judges_still_bind_deterministically(monkeypatch, reco
     )
     hosts = [u.split("/")[2] for u in recorder.urls()]
     assert len(hosts) == 4
-    assert hosts.count("judge-a:8000") == 2 and hosts.count("judge-b:8000") == 2
+    assert hosts.count("judge-a:8000") == 2
+    assert hosts.count("judge-b:8000") == 2
 
 
 def test_no_judge_url_means_no_http_grade(monkeypatch, recorder) -> None:
@@ -315,7 +317,8 @@ def test_the_agent_never_writes_the_rank_itself(recorder) -> None:
     transport. If an endpoint method had to remember it, one of them eventually would not."""
     JudgeClient("http://judge-b:8000", rank=1).submit(Submission(source="int f(){}", language="c"), "gemm")
     body = recorder.calls[0][1]
-    assert body["rank"] == 1 and body["kernel"] == "gemm"
+    assert body["rank"] == 1
+    assert body["kernel"] == "gemm"
 
 
 def test_a_client_without_a_rank_addresses_the_single_judge(recorder) -> None:
@@ -331,7 +334,7 @@ def test_two_clients_carry_two_ranks(recorder) -> None:
     for _ in range(2):
         a.baseline("gemm", "c", "S")
         b.baseline("gemm", "c", "S")
-    pairs = [(u.split("/")[2], r) for u, r in zip(recorder.urls(), recorder.ranks())]
+    pairs = [(u.split("/")[2], r) for u, r in zip(recorder.urls(), recorder.ranks(), strict=False)]
     assert set(pairs) == {("judge-a:8000", 0), ("judge-b:8000", 1)}
 
 
@@ -363,7 +366,8 @@ def test_an_unset_episode_identity_is_omitted_rather_than_sent_empty(monkeypatch
     monkeypatch.setenv("HPCAGENT_BENCH_OPTIMIZER", "  ")
     JudgeClient("http://judge-a:8000").submit(Submission(source="int f(){}", language="c"), "gemm")
     body = recorder.calls[0][1]
-    assert "episode_id" not in body and "optimizer" not in body
+    assert "episode_id" not in body
+    assert "optimizer" not in body
 
 
 def test_the_environment_beats_a_caller_supplied_identity_field(monkeypatch, recorder) -> None:
@@ -404,7 +408,8 @@ def test_a_missing_or_unparsable_rank_is_refused(bad) -> None:
     non-conforming client whose routing cannot be checked -- treating it as "trust me" would be
     the silent misroute again, one indirection later."""
     status, payload = rank_error(0, bad)
-    assert status == 400 and payload["judge_rank"] == 0
+    assert status == 400
+    assert payload["judge_rank"] == 0
     assert "'rank'" in payload["error"]
 
 
@@ -444,7 +449,7 @@ def test_the_round_robin_index_is_the_rank_each_worker_sends(monkeypatch, record
         oracle="auto",
         baseline="auto",
     )
-    seen = sorted(zip([u.split("/")[2] for u in recorder.urls()], recorder.ranks()))
+    seen = sorted(zip([u.split("/")[2] for u in recorder.urls()], recorder.ranks(), strict=False))
     assert seen == [("judge-a:8000", 0), ("judge-a:8000", 0), ("judge-b:8000", 1), ("judge-b:8000", 1)]
 
 

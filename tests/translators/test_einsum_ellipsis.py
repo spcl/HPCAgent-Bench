@@ -90,8 +90,11 @@ def test_const_coerces_numpy_scalar() -> None:
     from hpcagent_bench.translators.numpyto_common.lib_nodes import const_
 
     ci = const_(np.int64(0))
-    assert type(ci.value) is int and ci.value == 0
+    assert type(ci.value) is int
+    assert ci.value == 0
     cf = const_(np.float64(1.5))
-    assert type(cf.value) is float and cf.value == 1.5
+    assert type(cf.value) is float
+    assert cf.value == 1.5
     # plain Python values pass through untouched.
-    assert type(const_(3).value) is int and type(const_(2.0).value) is float
+    assert type(const_(3).value) is int
+    assert type(const_(2.0).value) is float

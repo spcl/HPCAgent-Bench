@@ -800,7 +800,7 @@ def model_legend_marks(models: Sequence[str], config: FigureConfig = DEFAULT_CON
             color=palette.model_color(name),
             markersize=config.legend_marker_pt,
             label=study_tags.model_name(name),
-        )  # fmt: skip
+        )
         for name in palette.in_order(models)
     ]
 
@@ -907,7 +907,7 @@ def legend_tail(symbols: Significance = NO_SIGNIFICANCE) -> list[Line2D]:
             linewidth=1.3,
             color=style.MUTED,
             label=interval_note("Token Cost"),
-        ),  # fmt: skip
+        ),
     ]
     return handles + significance_legend_marks(*symbols)
 
@@ -2199,7 +2199,7 @@ def comparator_rows(comparators: Sequence[Comparator], shapes: dict[str, str]) -
             shape=shapes[study_tags.canonical("frameworks", comparator.name)],
             group=comparator.group,
             comparator=True,
-        )  # fmt: skip
+        )
         for comparator in comparators
         if comparator.speedups
     ]
@@ -2261,7 +2261,7 @@ def comparator_legend_marks(rows: Sequence[SetupRow], config: FigureConfig) -> l
             color=row.colour,
             markersize=config.legend_marker_pt,
             label=label,
-        )  # fmt: skip
+        )
         for label, row in drawn.items()
     ]
 

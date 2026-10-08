@@ -9,9 +9,8 @@ load time, naming the array and the preset.
 """
 
 import copy
-from typing import Any
-
 import ctypes
+from typing import Any
 
 import pytest
 
@@ -77,7 +76,8 @@ def test_int4_declares_range_and_packing_but_no_promote_demote() -> None:
     assert value_range("int4") == (-8, 7)
     assert size_multiple("int4") == 2
     assert info("int4").compute is None
-    assert value_range("int8") is None and size_multiple("int8") == 1
+    assert value_range("int8") is None
+    assert size_multiple("int8") == 1
 
 
 def test_int4_borrows_int8_binding_kinds_without_shadowing_int8() -> None:

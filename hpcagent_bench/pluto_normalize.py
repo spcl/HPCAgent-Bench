@@ -277,8 +277,8 @@ def fold_constant_sign_ternaries(text: str) -> str:
         inner = text[m.end() : close]
         depth, split = 0, -1
         for j, ch in enumerate(inner):
-            depth += ch in "([" and 1 or 0
-            depth -= ch in ")]" and 1 or 0
+            depth += (ch in "([" and 1) or 0
+            depth -= (ch in ")]" and 1) or 0
             if ch == ":" and depth == 0:
                 split = j
                 break

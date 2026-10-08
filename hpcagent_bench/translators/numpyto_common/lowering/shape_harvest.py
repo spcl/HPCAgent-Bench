@@ -101,7 +101,7 @@ def shapes_agree_under(
             substitute_dim_aliases(substitute_ints(a, assume), aliases, shapes),
             substitute_dim_aliases(substitute_ints(b, assume), aliases, shapes),
         )
-        for a, b in zip(known, candidate)
+        for a, b in zip(known, candidate, strict=False)
     )
 
 
@@ -286,7 +286,7 @@ def harvest_np_call(
 UNHANDLED = NotImplemented
 
 
-def counted_constructor_shape(attr: str, args: Sequence[ast.expr]) -> tuple[str, ...] | None | NotImplementedType:
+def counted_constructor_shape(attr: str, args: Sequence[ast.expr]) -> tuple[str, ...] | NotImplementedType | None:
     """The shape a constructor states in its count arguments: ``np.eye(M[, N])`` -> ``(M, M | N)``,
     ``np.linspace(start, stop, n)`` -> ``(n,)`` (numpy's default of 50 is refused by the expander),
     ``np.arange(stop)`` -> ``(stop,)`` (None for the multi-argument form), ``np.identity(n)`` ->

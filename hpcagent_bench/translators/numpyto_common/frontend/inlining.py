@@ -70,11 +70,13 @@ def resolve_call_args(call: ast.Call, helper: ast.FunctionDef) -> list[ast.expr]
     untouched.
     """
     param_names = [a.arg for a in helper.args.args]
-    defaults = dict(zip(param_names[len(param_names) - len(helper.args.defaults) :], helper.args.defaults))
+    defaults = dict(
+        zip(param_names[len(param_names) - len(helper.args.defaults) :], helper.args.defaults, strict=False)
+    )
     call_args = list(call.args)
     if len(call_args) > len(param_names) or any(kw.arg is None for kw in call.keywords):
         return None  # too many positionals, or a **kwargs splat we cannot resolve
-    bound = dict(zip(param_names, call_args))
+    bound = dict(zip(param_names, call_args, strict=False))
     for kw in call.keywords:
         if kw.arg not in param_names or kw.arg in bound:
             return None
@@ -446,7 +448,7 @@ class LoopVarSubst(ast.NodeTransformer):
             and isinstance(elt, (ast.Tuple, ast.List))
             and len(target.elts) == len(elt.elts)
         ):
-            for t, v in zip(target.elts, elt.elts):
+            for t, v in zip(target.elts, elt.elts, strict=False):
                 if isinstance(t, ast.Name):
                     self.map[t.id] = v
         self.single = target.id if isinstance(target, ast.Name) else None
@@ -645,13 +647,7 @@ class HoistMultiStmtHelpers(ast.NodeTransformer):
                 continue
             # Recurse into nested control flow first.
             stmt = self.visit(stmt)
-            if isinstance(stmt, ast.Assign):
-                stmt.value = self.rewrite_expr(stmt.value)
-            elif isinstance(stmt, ast.AugAssign):
-                stmt.value = self.rewrite_expr(stmt.value)
-            elif isinstance(stmt, ast.Expr):
-                stmt.value = self.rewrite_expr(stmt.value)
-            elif isinstance(stmt, ast.Return) and stmt.value is not None:
+            if isinstance(stmt, (ast.Assign, ast.AugAssign, ast.Expr, ast.Return)) and stmt.value is not None:
                 stmt.value = self.rewrite_expr(stmt.value)
             out.extend(self._pending)
             self._pending = []
@@ -747,7 +743,7 @@ class InlineHelpers(ast.NodeTransformer):
                 # Map params to call args; locals (assigned in body) get
                 # the prefix so multiple inlines don't collide.
                 local_names = collect_assigned_names(body[:-1])
-                arg_map = dict(zip(param_names, node.value.args))
+                arg_map = dict(zip(param_names, node.value.args, strict=False))
                 rename: dict[str, ast.expr] = dict(arg_map)
                 # A parameter REASSIGNED in the body (lulesh _phi's ``delvm =
                 # delvm * normd``) becomes a fresh prefixed local, initialised
@@ -790,7 +786,7 @@ class InlineHelpers(ast.NodeTransformer):
                     and isinstance(ret_expr, ast.Tuple)
                     and len(tgt.elts) == len(ret_expr.elts)
                 ):
-                    for t_elt, v_elt in zip(tgt.elts, ret_expr.elts):
+                    for t_elt, v_elt in zip(tgt.elts, ret_expr.elts, strict=False):
                         if isinstance(t_elt, ast.Name) and t_elt.id == "_":
                             continue
                         a = ast.Assign(targets=[t_elt], value=v_elt)
@@ -835,7 +831,7 @@ class InlineHelpers(ast.NodeTransformer):
         self._counter[0] += 1
         prefix = f"__inl{self._counter[0]}_"
         local_names = collect_assigned_names(body)
-        rename: dict[str, ast.expr] = dict(zip(param_names, node.value.args))
+        rename: dict[str, ast.expr] = dict(zip(param_names, node.value.args, strict=False))
         for ln in local_names:
             if ln in param_names:
                 # The helper rebinds a parameter (e.g. ``pn = p.copy()``
@@ -875,7 +871,7 @@ class InlineHelpers(ast.NodeTransformer):
             return node
         node.args = call_args
         node.keywords = []
-        subst = dict(zip(param_names, node.args))
+        subst = dict(zip(param_names, node.args, strict=False))
         body_stmts = strip_docstrings_(helper.body)
         only = body_stmts[0] if len(body_stmts) == 1 else None
         if isinstance(only, ast.Return) and only.value is not None:
@@ -928,9 +924,7 @@ def collect_assigned_names(stmts: Sequence[ast.stmt]) -> OrderedSet[str]:
             if isinstance(sub, ast.Assign):
                 for t in sub.targets:
                     bind(t)
-            elif isinstance(sub, ast.AugAssign):
-                bind(sub.target)
-            elif isinstance(sub, ast.For):
+            elif isinstance(sub, (ast.AugAssign, ast.For)):
                 bind(sub.target)
     return out
 

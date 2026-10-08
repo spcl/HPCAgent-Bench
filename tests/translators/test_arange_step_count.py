@@ -36,7 +36,7 @@ def run_(expr, n) -> None:
 
 
 @pytest.mark.parametrize(
-    "expr,n",
+    ("expr", "n"),
     [
         ("np.arange(10, 0, -1)", 10),
         ("np.arange(0, -10, -2)", 5),
@@ -49,7 +49,7 @@ def test_negative_step_arange_matches_numpy(expr, n) -> None:
 
 
 @pytest.mark.parametrize(
-    "expr,n",
+    ("expr", "n"),
     [
         ("np.arange(0, 10, 2)", 5),
         ("np.arange(1, 10, 3)", 3),

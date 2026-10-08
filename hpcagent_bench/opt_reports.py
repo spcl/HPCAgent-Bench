@@ -98,8 +98,7 @@ class KernelReportManifest:
     opt_report: str | None
 
     def to_json(self) -> dict:
-        payload = dataclasses.asdict(self)
-        return payload
+        return dataclasses.asdict(self)
 
 
 def write_manifest(out_dir: pathlib.Path, manifest: KernelReportManifest) -> pathlib.Path:

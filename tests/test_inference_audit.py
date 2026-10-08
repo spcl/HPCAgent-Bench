@@ -11,7 +11,6 @@ right-tailed, a handful of kernels per setup pair (llr40's skill pairs are n = 2
 """
 
 import math
-import pathlib
 from types import SimpleNamespace
 
 import numpy as np
@@ -19,7 +18,7 @@ import pytest
 
 from hpcagent_bench import cli
 from hpcagent_bench.harness import metric
-from hpcagent_bench.stats import significance, summary
+from hpcagent_bench.stats import significance
 
 #: The real paired set the published C-vs-Fortran claim rests on: ``log(c_best_su / fortran_best_su)``
 #: for every kernel of the llr40 experiment's per-language kernel table that both languages
@@ -85,7 +84,7 @@ def paired_change_false_positive_rate(population: np.ndarray, n: int, trials: in
 
 
 @pytest.mark.parametrize(
-    "n_pairs, max_false_positive_rate",
+    ("n_pairs", "max_false_positive_rate"),
     [
         pytest.param(6, 0.08, id="n=6 -- MIN_PAIRS_FOR_INTERVAL"),
         pytest.param(20, 0.08, id="n=20"),
@@ -105,7 +104,7 @@ def test_the_hodges_lehmann_interval_holds_its_nominal_level_on_skewed_paired_de
 
 
 @pytest.mark.parametrize(
-    "deltas, pseudo_median",
+    ("deltas", "pseudo_median"),
     [
         # mean = (3 * -0.1 + 0.5) / 4 = +0.05, so the ratio of geomeans exp(mean) is ABOVE 1; the 10 Walsh
         # averages are six -0.1, three 0.2 and one 0.5, so their median -- the pseudo-median -- is -0.1.
@@ -152,7 +151,7 @@ def signed_rank_ps(n: int, w_plus: float) -> tuple[float, float]:
     return exact, approximate
 
 
-@pytest.mark.parametrize("n, w_plus, exact, approximate", SIGNED_RANK_SIZES)
+@pytest.mark.parametrize(("n", "w_plus", "exact", "approximate"), SIGNED_RANK_SIZES)
 def test_the_normal_signed_rank_approximation_never_manufactures_a_significant_verdict(
     n: int, w_plus: float, exact: float, approximate: float
 ) -> None:
@@ -169,7 +168,7 @@ def test_the_normal_signed_rank_approximation_never_manufactures_a_significant_v
         )
 
 
-@pytest.mark.parametrize("n, w_plus, exact, approximate", SIGNED_RANK_SIZES)
+@pytest.mark.parametrize(("n", "w_plus", "exact", "approximate"), SIGNED_RANK_SIZES)
 def test_the_normal_signed_rank_approximation_stays_within_a_bounded_gap_of_the_exact_null(
     n: int, w_plus: float, exact: float, approximate: float
 ) -> None:
@@ -183,7 +182,7 @@ def test_the_normal_signed_rank_approximation_stays_within_a_bounded_gap_of_the_
 
 
 @pytest.mark.parametrize(
-    "values, description",
+    ("values", "description"),
     [
         pytest.param([], "no scored kernel at all", id="empty"),
         pytest.param([0.0], "one unscored cell", id="single-zero"),

@@ -63,7 +63,8 @@ def test_a_host_without_contexts_names_the_runtimes_and_the_grade_stands(
     """A login node or CI runner: nothing there gives each toolchain family its own runtime."""
     config.set_override(omp_context.ROOT_KEY, str(tmp_path / "absent"))
     outputs, _samples = run_python_child(str(two_runtimes))
-    assert outputs and "2 runtimes mapped in the grading child" in capfd.readouterr().err
+    assert outputs
+    assert "2 runtimes mapped in the grading child" in capfd.readouterr().err
 
 
 def test_a_native_and_an_nvhpc_runtime_are_let_through_with_a_note(
@@ -72,7 +73,8 @@ def test_a_native_and_an_nvhpc_runtime_are_let_through_with_a_note(
     """``nvc -mp`` code beside a BLAS that maps its own runtime: libnvomp is the only extra one."""
     monkeypatch.setattr(openmp_runtimes, "mapped_runtimes", lambda: ("/img/libgomp.so.1.0.0", "/nvhpc/libnvomp.so"))
     note = native_call.openmp_runtime_gate()
-    assert "libnvomp tolerated" in note and "/nvhpc/libnvomp.so" in note
+    assert "libnvomp tolerated" in note
+    assert "/nvhpc/libnvomp.so" in note
     assert "NVHPC libnvomp tolerated" in capfd.readouterr().err
 
 

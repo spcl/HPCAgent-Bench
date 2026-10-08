@@ -36,7 +36,8 @@ def test_derived_range_when_no_fuzzed_preset() -> None:
     r = fuzz.resolve_ranges({"L": {"N": 1000, "npt": 8}})
     assert fuzz.is_range(r["N"])
     lo, hi = r["N"]
-    assert lo <= 1000 <= hi and hi > lo  # the L size lies in the fuzz range
+    assert lo <= 1000 <= hi
+    assert hi > lo
 
 
 def test_sample_in_range_and_scalar_fixed() -> None:
@@ -129,7 +130,8 @@ def test_apply_size_cap_explicit_arg_overrides_global(monkeypatch) -> None:
     capped = fuzz.resolve_ranges(_BIG, size_cap=256)  # an explicit arg wins over it
     # A range whose both ends exceed the cap keeps a sub-cap SPREAD (not a collapsed [256, 256]),
     # so a distinct-dimension constraint can still be satisfied under the cap.
-    assert capped["NI"] == [128, 256] and capped["NJ"] == [128, 256]
+    assert capped["NI"] == [128, 256]
+    assert capped["NJ"] == [128, 256]
     glob = fuzz.resolve_ranges(_BIG)  # size_cap=None -> falls back to the global 5000
     assert glob["NI"] == [2500, 5000]
 
@@ -147,7 +149,9 @@ def test_size_cap_keeps_distinct_dim_constraint_satisfiable(monkeypatch) -> None
     resolved = fuzz._resolve_against(
         _BIG, {}, seed=1, distribution="log_uniform", constraints=["NI != NJ"], size_cap=256
     )
-    assert resolved["NI"] != resolved["NJ"] and resolved["NI"] <= 256 and resolved["NJ"] <= 256
+    assert resolved["NI"] != resolved["NJ"]
+    assert resolved["NI"] <= 256
+    assert resolved["NJ"] <= 256
 
 
 def test_correctness_size_cap_bounds_only_the_correctness_fuzz(monkeypatch) -> None:
@@ -155,13 +159,16 @@ def test_correctness_size_cap_bounds_only_the_correctness_fuzz(monkeypatch) -> N
     # Stage-1 correctness fuzz shapes are clamped to the cap per dimension...
     for j in range(3):
         s = fuzz.fuzzed_shape(_BIG, j)
-        assert s["NI"] <= 1024 and s["NJ"] <= 1024
+        assert s["NI"] <= 1024
+        assert s["NJ"] <= 1024
     # ...while the TIMED large shapes keep the full (uncapped) GPU-scale range.
     larges = fuzz.large_shapes(_BIG)
-    assert larges and all(s["NI"] > 1024 for _, s in larges)
+    assert larges
+    assert all(s["NI"] > 1024 for _, s in larges)
     # ...and the small structural edge probes are unaffected (already tiny).
     edges = fuzz.edge_shapes(_BIG)
-    assert edges and all(s["NI"] <= 1024 for _, s in edges)
+    assert edges
+    assert all(s["NI"] <= 1024 for _, s in edges)
 
 
 def test_large_shapes_warns_when_all_seeds_dropped(caplog) -> None:
@@ -188,7 +195,8 @@ def test_correctness_cap_respects_a_tighter_global(monkeypatch) -> None:
     monkeypatch.setenv("HPCAGENT_BENCH_FUZZ_CORRECTNESS_SIZE_CAP", "1024")
     monkeypatch.setenv("HPCAGENT_BENCH_FUZZ_SIZE_CAP", "64")  # global is tighter -> bounds correctness too
     s = fuzz.fuzzed_shape(_BIG, 0)
-    assert s["NI"] <= 64 and s["NJ"] <= 64
+    assert s["NI"] <= 64
+    assert s["NJ"] <= 64
 
 
 def test_sample_params_honors_size_cap(monkeypatch) -> None:
@@ -197,7 +205,8 @@ def test_sample_params_honors_size_cap(monkeypatch) -> None:
     default (the general sampler is unchanged)."""
     monkeypatch.setenv("HPCAGENT_BENCH_FUZZ_SIZE_CAP", "0")
     capped = fuzz.sample_params(_BIG, 0, size_cap=256)
-    assert capped["NI"] <= 256 and capped["NJ"] <= 256
+    assert capped["NI"] <= 256
+    assert capped["NJ"] <= 256
     uncapped = fuzz.sample_params(_BIG, 0)  # no cap arg => full range
     assert uncapped["NI"] > 256
 
@@ -223,9 +232,12 @@ def test_fixture_carries_both_a_dimension_and_a_config_knob() -> None:
     # Non-vacuity: if the fixture collapsed to all-fixed or all-ranged, every
     # assertion below would pass trivially without exercising config_names.
     r = fuzz.resolve_ranges(CONFIG_AND_DIM_PARAMS, config_names=CONFIG_NAMES)
-    assert fuzz.is_range(r["N"]) and r["N"][1] > r["N"][0]  # a genuine dimension range
-    assert r["seed"] == 7 and not fuzz.is_range(r["seed"])  # config scalar, untouched
-    assert r["multrec_limit"] == 512 and not fuzz.is_range(r["multrec_limit"])
+    assert fuzz.is_range(r["N"])
+    assert r["N"][1] > r["N"][0]
+    assert r["seed"] == 7
+    assert not fuzz.is_range(r["seed"])
+    assert r["multrec_limit"] == 512
+    assert not fuzz.is_range(r["multrec_limit"])
 
 
 def test_config_names_absent_keeps_legacy_default_branch_behavior() -> None:

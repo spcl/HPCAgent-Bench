@@ -68,7 +68,7 @@ def emit_(body: str, args: str = "a, b, out", shapes=None, syms=None, dtypes=Non
     """
     src = f"import numpy as np\n\n\ndef k({args}, N):\n{body}"
     names = [a.strip() for a in args.split(",")]
-    shapes = shapes or {n: "(N,)" for n in names}
+    shapes = shapes or dict.fromkeys(names, "(N,)")
     kir = lower(parse_source(src, "k", names[:-1], names[-1:], shapes, syms or SYMS, dtypes))
     return (emit_cpp_isopar if isopar else emit_cpp)(kir, fn_name="k")
 
@@ -96,7 +96,7 @@ def stayed_a_loop(text: str) -> bool:
 
 
 @pytest.mark.parametrize(
-    "body,args,shapes",
+    ("body", "args", "shapes"),
     [
         # Output sorts LAST among the pointers ...
         ("    for i in range(N):\n        out[i] = a[i] + b[i]\n", "a, b, out", None),
@@ -122,7 +122,8 @@ def test_signature_is_byte_identical_to_the_plain_cpp_backend(body, args, shapes
 
 def test_c_linkage_block_is_opened_once() -> None:
     text = emit_("    for i in range(N):\n        out[i] = a[i] + b[i]\n")
-    assert text.count('extern "C" {') == 1 and text.count('} // extern "C"') == 1
+    assert text.count('extern "C" {') == 1
+    assert text.count('} // extern "C"') == 1
 
 
 def test_library_headers_precede_the_arithmetic_prelude() -> None:
@@ -549,7 +550,7 @@ def ok_(res):
 @pytest.mark.integration
 @pytest.mark.skipif(not shutil.which("g++"), reason="g++ needed to build the emitted C++")
 @pytest.mark.parametrize(
-    "name,body",
+    ("name", "body"),
     [
         ("transform", "    for i in range(8):\n        out[i] = a[i] * b[i] + 1.0\n"),
         ("copy", "    for i in range(8):\n        out[i] = a[i]\n"),
@@ -610,7 +611,7 @@ def oracle():
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("kernel,shape", CORPUS, ids=[k for k, unused in CORPUS])
+@pytest.mark.parametrize(("kernel", "shape"), CORPUS, ids=[k for k, unused in CORPUS])
 def test_corpus_kernel_matches_numpy(kernel, shape) -> None:
     no = oracle()
     status = no.run_kernel(kernel, preset="S", precision="fp64", only_backends={"cpp", no.ISOPAR})
@@ -631,22 +632,26 @@ NO_IMPLICIT_CONVERSION = (
 CONVERSION_CASES = [
     (
         "transform+reduce",
-        "    s = 0.0\n"
-        "    for i in range(N):\n"
-        "        out[i] = np.sqrt(np.abs(a[i])) * b[i]\n"
-        "    for i in range(N):\n"
-        "        s = s + out[i] * b[i]\n"
-        "    out[0] = s\n",
+        (
+            "    s = 0.0\n"
+            "    for i in range(N):\n"
+            "        out[i] = np.sqrt(np.abs(a[i])) * b[i]\n"
+            "    for i in range(N):\n"
+            "        s = s + out[i] * b[i]\n"
+            "    out[0] = s\n"
+        ),
         None,
     ),
     (
         "scan+fill+copy",
-        "    for i in range(N):\n"
-        "        out[i] = 0.0\n"
-        "    for i in range(1, N):\n"
-        "        out[i] = out[i - 1] + a[i]\n"
-        "    for i in range(N):\n"
-        "        b[i] = out[i]\n",
+        (
+            "    for i in range(N):\n"
+            "        out[i] = 0.0\n"
+            "    for i in range(1, N):\n"
+            "        out[i] = out[i - 1] + a[i]\n"
+            "    for i in range(N):\n"
+            "        b[i] = out[i]\n"
+        ),
         None,
     ),
     (
@@ -659,7 +664,7 @@ CONVERSION_CASES = [
 
 @pytest.mark.integration
 @pytest.mark.skipif(not shutil.which("g++"), reason="g++ needed to build the emitted C++")
-@pytest.mark.parametrize("name,body,dtypes", CONVERSION_CASES, ids=[c[0] for c in CONVERSION_CASES])
+@pytest.mark.parametrize(("name", "body", "dtypes"), CONVERSION_CASES, ids=[c[0] for c in CONVERSION_CASES])
 def test_emitted_source_has_no_implicit_conversion(name, body, dtypes) -> None:
     """Every width or signedness change in the emitted C++ is written as an explicit
     ``static_cast``. Inside a lambda that is load-bearing: the callable's result is converted on the

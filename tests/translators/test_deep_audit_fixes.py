@@ -15,6 +15,7 @@ Pins the correctness / robustness fixes from the whole-repo audit:
 
 import numpy as np
 import pytest
+
 from tests.translators import op_oracle
 
 
@@ -116,7 +117,7 @@ def test_non_finite_in_non_inlinable_helper_matches_numpy() -> None:
 
 
 @pytest.mark.parametrize(
-    "expr,val",
+    ("expr", "val"),
     [
         ("np.inf", np.inf),
         ("-np.inf", -np.inf),

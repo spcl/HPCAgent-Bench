@@ -299,7 +299,7 @@ def panel_title(kernel: str, kernels: Sequence[str]) -> str:
     part that does separate them needs. Stripped only when EVERY name carries it, and only at an
     underscore, so a name is never cut mid-word.
     """
-    head = kernel.split("_")[0] + "_"
+    head = kernel.split("_", maxsplit=1)[0] + "_"
     if len(kernels) > 1 and all(name.startswith(head) for name in kernels):
         return kernel[len(head) :]
     return kernel
@@ -326,7 +326,7 @@ def series_label(packet: str, model: str) -> str:
 def series_keys(pairs: Iterable[tuple[str, str]]) -> list[tuple[str, str]]:
     """``(packet, model)`` pairs in draw order: packets in registry order (control first), then models."""
     pairs = list(dict.fromkeys(pairs))
-    packets = [""] + palette.in_order({packet for packet, _ in pairs if packet}, kind="packets")
+    packets = ["", *palette.in_order({packet for packet, _ in pairs if packet}, kind="packets")]
     models = palette.in_order({model for _, model in pairs})
     return sorted(pairs, key=lambda pair: (packets.index(pair[0]), models.index(pair[1])))
 
@@ -430,7 +430,7 @@ def scaling_rows(frame: pd.DataFrame) -> pd.DataFrame:
         return rows
     setups = [str(setup) for setup in rows["setup"].tolist()]
     stated = rows["scaling_mode"].tolist() if "scaling_mode" in rows.columns else [""] * len(setups)
-    rows["scaling_mode"] = [mode_of(setup, mode) for setup, mode in zip(setups, stated)]
+    rows["scaling_mode"] = [mode_of(setup, mode) for setup, mode in zip(setups, stated, strict=False)]
     rows = rows.loc[rows["scaling_mode"].isin(MODES)]
     if rows.empty or "ts_ms" not in rows.columns:
         return rows
@@ -794,7 +794,7 @@ def mode_label(mode: str) -> str:
 
 def title_panels(axes: Iterable[matplotlib.axes.Axes], names: Sequence[str], type_: plotstyle.TypeScale) -> None:
     """Name each small-multiple panel, in :func:`small_title_pt` ink."""
-    for ax, name in zip(axes, names):
+    for ax, name in zip(axes, names, strict=False):
         ax.set_title(name, fontsize=small_title_pt(type_), color=plotstyle.INK)
 
 
@@ -807,7 +807,7 @@ def panel_kernels(drawn: Sequence[Curve], kernels: Sequence[str]) -> list[str]:
 def kernel_panels(drawn: Sequence[Curve], kernels: Sequence[str], geomean_panel: bool) -> list[list[Curve]]:
     """The curves of each panel: one kernel's per panel, then, with ``geomean_panel``, all of them."""
     panels = [[curve for curve in drawn if curve.kernel == kernel] for kernel in kernels]
-    return panels + [list(drawn)] if geomean_panel else panels
+    return [*panels, list(drawn)] if geomean_panel else panels
 
 
 def small_multiples(
@@ -844,9 +844,9 @@ def figure_modes(
     fig, axes = plt.subplots(1, len(present), figsize=(width, canvas_height(type_)), squeeze=False)
     ideals = [
         panel_curves(ax, drawn[mode], quantity, rank_axis(drawn[mode]), band, type_)
-        for ax, mode in zip(axes[0], present)
+        for ax, mode in zip(axes[0], present, strict=False)
     ]
-    for ax, mode in zip(axes[0], present):
+    for ax, mode in zip(axes[0], present, strict=False):
         ax.set_xlabel("Ranks $P$ (1 GPU per Rank)", fontsize=type_.label_pt)
         ax.set_ylabel(axis_label(quantity, mode), fontsize=type_.label_pt)
         ax.set_title(mode_label(mode), fontsize=type_.title_pt, color=plotstyle.INK)
@@ -903,7 +903,7 @@ def figure_per_kernel(
     # Only the geomean panel carries a band: one kernel's line is one measurement per P.
     ideals = [
         panel_curves(ax, part, quantity, ranks, i >= len(kernels), type_)
-        for i, (ax, part) in enumerate(zip(flat, panels))
+        for i, (ax, part) in enumerate(zip(flat, panels, strict=False))
     ]
     title_panels(
         flat, [panel_title(k, kernels) for k in kernels] + [f"{GEOMEAN_LABEL} (all kernels)"] * geomean_panel, type_
@@ -993,11 +993,11 @@ def figure_mode_grid(
         gridspec_kw={"width_ratios": ratios},
     )  # fmt: skip
     ideals: list[Line2D] = []
-    for row, mode in zip(axes, present):
+    for row, mode in zip(axes, present, strict=False):
         panels = kernel_panels([curve for curve in drawn if curve.mode == mode], kernels, geomean_panel)
         ideals += [
             panel_curves(ax, part, quantity, ranks, i >= len(kernels), type_)
-            for i, (ax, part) in enumerate(zip(row, panels))
+            for i, (ax, part) in enumerate(zip(row, panels, strict=False))
         ]
         row[0].set_ylabel(mode_label(mode), fontsize=type_.label_pt)
     title_panels(
@@ -1111,8 +1111,8 @@ def figure_summary(
     # Series are named by the shared legend, not by X tick labels: two-line (model, packet) labels
     # overprint one another at four or more marks per panel.
     handles = [Line2D([], [], color=plotstyle.REFERENCE, linestyle=(0, (4, 3)), label="Ideal (Efficiency = 1)")]
-    ceiling = max(1.0, max(drawn_ends(row[3])[1] for row in rows)) * 1.15
-    for ax, mode in zip(axes[0], present):
+    ceiling = max(1.0, *(drawn_ends(row[3])[1] for row in rows)) * 1.15
+    for ax, mode in zip(axes[0], present, strict=False):
         summary_panel(ax, [row for row in rows if row[2] == mode], ceiling, type_)
         ax.set_title(mode_label(mode), fontsize=type_.title_pt, color=plotstyle.INK)
     axes[0][0].set_ylabel("Geomean $\\eta$ over Kernels", fontsize=type_.label_pt)

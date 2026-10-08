@@ -24,8 +24,7 @@ from tests.fresh_module import fresh
 
 def load_example_module(name: str) -> ModuleType:
     """``sys.modules`` must carry the module BEFORE exec, matching tests/test_agent_driver_context.py."""
-    module = fresh(name)
-    return module
+    return fresh(name)
 
 
 @pytest.fixture(name="driver")

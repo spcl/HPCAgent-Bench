@@ -21,6 +21,7 @@ accumulates rows run after run and is left exactly as it was.
 """
 
 import argparse
+import contextlib
 import dataclasses
 import fnmatch
 import os
@@ -162,12 +163,12 @@ def summary_line(column: str, rank: int, rows: list[dict[str, object]], hard_fai
     column merely does not support, so a nonzero exit count is not the coverage number."""
     failures = [str(row.get("failure") or "") for row in rows]
     statuses = [str(row.get("status") or "") for row in rows]
-    ok = sum(1 for status, failure in zip(statuses, failures) if status == "ok" and not failure)
+    ok = sum(1 for status, failure in zip(statuses, failures, strict=False) if status == "ok" and not failure)
     unsupported = failures.count("unsupported")
     missing = failures.count("tool_missing")
     crashed = sum(
         1
-        for status, failure in zip(statuses, failures)
+        for status, failure in zip(statuses, failures, strict=False)
         if status != "ok" and failure not in ("unsupported", "tool_missing")
     )
     other = len(rows) - ok - unsupported - missing - crashed
@@ -206,10 +207,8 @@ def kernel_limits(heap_bytes: int) -> Callable[[], None]:
     def apply() -> None:
         resource.setrlimit(resource.RLIMIT_DATA, (heap_bytes, heap_bytes))
         hard = resource.getrlimit(resource.RLIMIT_STACK)[1]
-        try:
+        with contextlib.suppress(OSError, ValueError):
             resource.setrlimit(resource.RLIMIT_STACK, (hard, hard))
-        except (OSError, ValueError):
-            pass
 
     return apply
 

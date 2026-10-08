@@ -65,18 +65,20 @@ def matmul_result_shape(
         return (b_shape[1],)
     if len(a_shape) >= 3 and len(b_shape) >= 3:
         # (*batch, m, k) @ (*batch, k, n) -> (*batch, m, n): identical batch.
-        batch_ok = len(a_shape) == len(b_shape) and all(agree(x, y) for x, y in zip(a_shape[:-2], b_shape[:-2]))
+        batch_ok = len(a_shape) == len(b_shape) and all(
+            agree(x, y) for x, y in zip(a_shape[:-2], b_shape[:-2], strict=False)
+        )
         if batch_ok and agree(a_shape[-1], b_shape[-2]):
-            return tuple(a_shape[:-2]) + (a_shape[-2], b_shape[-1])
+            return (*tuple(a_shape[:-2]), a_shape[-2], b_shape[-1])
         return None
     if len(a_shape) >= 3 and len(b_shape) == 2:
         # (*batch, m, k) @ (k, n) -> (*batch, m, n)
         if agree(a_shape[-1], b_shape[0]):
-            return tuple(a_shape[:-1]) + (b_shape[1],)
+            return (*tuple(a_shape[:-1]), b_shape[1])
     if len(a_shape) == 2 and len(b_shape) >= 3:
         # (m, k) @ (*batch, k, n) -> (*batch, m, n)
         if agree(a_shape[1], b_shape[-2]):
-            return tuple(b_shape[:-2]) + (a_shape[0], b_shape[-1])
+            return (*tuple(b_shape[:-2]), a_shape[0], b_shape[-1])
     return None
 
 
@@ -334,7 +336,7 @@ def named_batched_matmul(
     i_loop = range_for(i_iter, [const_or_name(m)], [j_loop])
     # Wrap with the batch loops, outermost first.
     current: ast.stmt = i_loop
-    for bi, bdim in zip(reversed(batch_iters), reversed(list(batch_shape))):
+    for bi, bdim in zip(reversed(batch_iters), reversed(list(batch_shape)), strict=False):
         current = range_for(bi, [const_or_name(bdim)], [current])
     return temp, [current]
 
@@ -531,9 +533,8 @@ def scalarised_batched_matmul(
     n_extent = r_ext[-1]
     # Declare the temp from STATIC axis tokens where they exist, so the function-scope
     # declaration never names a loop variable (same rule as the branches above).
-    shape = tuple(
-        static_shape_of(batched, axis, shape_table) or ast.unparse(ext) for axis, ext in enumerate(batch_ext)
-    ) + (
+    shape = (
+        *tuple(static_shape_of(batched, axis, shape_table) or ast.unparse(ext) for axis, ext in enumerate(batch_ext)),
         static_shape_of(matmul.left, len(l_ext) - 2, shape_table) or ast.unparse(m_extent),
         static_shape_of(matmul.right, len(r_ext) - 1, shape_table) or ast.unparse(n_extent),
     )
@@ -570,7 +571,7 @@ def scalarised_batched_matmul(
         )
     ]
     body = [range_for(i_iter.id, [m_extent], body)]
-    for iter_node, ext in zip(reversed(batch_iters), reversed(batch_ext)):
+    for iter_node, ext in zip(reversed(batch_iters), reversed(batch_ext), strict=False):
         body = [range_for(iter_node.id, [ext], body)]
     return temp, body
 
@@ -903,7 +904,7 @@ class MatmulHoister(ast.NodeTransformer):
         body: ast.stmt = ast.Assign(
             targets=[ast.Subscript(value=name_(temp), slice=sub_slice, ctx=ast.Store())], value=elem
         )
-        for it, extent in zip(reversed(iters), reversed(list(ext))):
+        for it, extent in zip(reversed(iters), reversed(list(ext)), strict=False):
             body = range_for(it.id, [extent], [body])
         return temp, [body]
 

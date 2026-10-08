@@ -158,14 +158,17 @@ def test_a_prebuilt_library_takes_the_context_of_the_runtime_it_names(
 def test_a_context_this_host_lacks_changes_nothing(root: pathlib.Path) -> None:
     assert omp_context.context_dir("nvhpc") == root / "nvhpc"
     config.set_override(omp_context.ROOT_KEY, str(root / "nowhere"))
-    assert omp_context.context_env("llvm") == {} and omp_context.context_build_env("llvm") == {}
+    assert omp_context.context_env("llvm") == {}
+    assert omp_context.context_build_env("llvm") == {}
     assert not omp_context.spawn_needed("llvm")
 
 
 def test_the_default_context_is_the_parents_own_and_never_needs_a_fresh_interpreter(root: pathlib.Path) -> None:
     (root / "gnu" / "lib").mkdir(parents=True)
-    assert not omp_context.spawn_needed("gnu") and not omp_context.spawn_needed("")
-    assert omp_context.spawn_needed("llvm") and omp_context.spawn_needed("nvhpc")
+    assert not omp_context.spawn_needed("gnu")
+    assert not omp_context.spawn_needed("")
+    assert omp_context.spawn_needed("llvm")
+    assert omp_context.spawn_needed("nvhpc")
 
 
 def test_a_childs_library_path_puts_the_contexts_lib_first_and_keeps_the_rest(root: pathlib.Path) -> None:
@@ -187,10 +190,10 @@ def test_numba_binds_its_threading_layer_to_the_contexts_runtime(root: pathlib.P
 def test_a_build_finds_the_contexts_view_before_the_images_own(root: pathlib.Path) -> None:
     view = root / "llvm" / "view"
     env = omp_context.context_build_env("llvm", {"PKG_CONFIG_PATH": "/opt/view/lib/pkgconfig"})
-    assert env["PKG_CONFIG_PATH"].startswith(f"{view}/lib/pkgconfig:") and env["PKG_CONFIG_PATH"].endswith(
-        "/opt/view/lib/pkgconfig"
-    )
-    assert env["LIBRARY_PATH"].startswith(f"{view}/lib") and env["CPATH"] == f"{view}/include"
+    assert env["PKG_CONFIG_PATH"].startswith(f"{view}/lib/pkgconfig:")
+    assert env["PKG_CONFIG_PATH"].endswith("/opt/view/lib/pkgconfig")
+    assert env["LIBRARY_PATH"].startswith(f"{view}/lib")
+    assert env["CPATH"] == f"{view}/include"
     assert omp_context.context_build_env("nvhpc") == {}, "a context without a view leaves the build alone"
 
 
@@ -234,7 +237,9 @@ def test_an_isolated_call_runs_in_the_submissions_context(root: pathlib.Path, tm
             omp_context_name=context,
         )
         name, path, seen_layer = seen.read_text().split("|")
-        assert name == context and path.startswith(str(root / context / "lib")) and seen_layer == layer
+        assert name == context
+        assert path.startswith(str(root / context / "lib"))
+        assert seen_layer == layer
     native_call._call_isolated(
         kernel,
         binding,
@@ -290,7 +295,8 @@ def test_a_host_with_contexts_and_no_catalog_fails_naming_the_step_that_writes_i
         omp_context.library_refusal("blas", "llvm")
     message = str(raised.value)
     assert str(root / omp_context.CATALOG_FILE) in message
-    assert "omp_catalog --write" in message and omp_context.CATALOG_ENV in message
+    assert "omp_catalog --write" in message
+    assert omp_context.CATALOG_ENV in message
 
 
 def test_the_catalog_is_read_from_the_configured_path(
@@ -356,7 +362,9 @@ def test_a_library_that_maps_another_runtime_than_the_contexts_is_refused_with_b
         },
     )
     both = omp_context.library_refusal("petsc", "gnu")
-    assert "libgomp.so.1.0.0" in both and "libomp.so" in both and "gnu OpenMP context" in both
+    assert "libgomp.so.1.0.0" in both
+    assert "libomp.so" in both
+    assert "gnu OpenMP context" in both
     assert omp_context.library_refusal("petsc", "llvm") == ""
     assert "libomp.so" in omp_context.library_refusal("blas", "gnu"), "a build on the wrong family's runtime alone"
     assert "libgomp.so.1.0.0" in omp_context.library_refusal("blas", "llvm")
@@ -375,7 +383,10 @@ def test_a_catalog_request_the_family_cannot_serve_is_refused_before_any_build(r
     runtimes = runtime_links(root)
     write_record(root, {"nvhpc": {"blas": [runtimes["gnu"]], "gsl": []}})
     refusal = sandbox.catalog_refusal(["blas", "gsl"], "c", "nvhpc")
-    assert refusal is not None and "blas" in refusal and "nvhpc" in refusal and "libgomp.so.1.0.0" in refusal
+    assert refusal is not None
+    assert "blas" in refusal
+    assert "nvhpc" in refusal
+    assert "libgomp.so.1.0.0" in refusal
     assert "gsl" not in refusal
     assert not languages.library_offered("blas", "c", "nvhpc")
     assert languages.library_served("blas", "gnu") == "", "the record has no gnu entry: nothing refused there"
@@ -420,7 +431,8 @@ def test_a_variants_pkg_config_answer_names_the_contexts_own_directory(root: pat
     variant(root, "llvm", "hpcagentprobe")
     assert languages.pkg_config_answer(("hpcagentprobe",), "--libs") is None
     answer = languages.pkg_config_answer(("hpcagentprobe",), "--libs", "llvm")
-    assert answer is not None and f"-L{root / 'llvm' / 'view' / 'lib'}" in answer
+    assert answer is not None
+    assert f"-L{root / 'llvm' / 'view' / 'lib'}" in answer
 
 
 def test_a_pkg_config_less_variant_puts_its_own_directory_on_the_link_line(
@@ -435,7 +447,9 @@ def test_a_pkg_config_less_variant_puts_its_own_directory_on_the_link_line(
     languages.library_tokens.cache_clear()
     assert languages.context_view_lib(entry, "llvm") == str(lib)
     _compile, link = languages.library_tokens("variant", "c", "llvm")
-    assert link[0] == f"-L{lib}" and f"-Wl,-rpath,{lib}" in link and "-lhpcagentvariant" in link
+    assert link[0] == f"-L{lib}"
+    assert f"-Wl,-rpath,{lib}" in link
+    assert "-lhpcagentvariant" in link
     _compile, plain = languages.library_tokens("variant", "c", "")
     assert plain == ("-lhpcagentvariant",), "the default context is untouched"
 

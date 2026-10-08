@@ -16,8 +16,9 @@ and parent-dir creation. No toolchain is involved, so they always run; all write
 confined to ``tmp_path``.
 """
 
-from hpcagent_bench.translators.numpyto_common.emit_io import AUTO_MARKER, is_generated, is_override, write_generated
 import pathlib
+
+from hpcagent_bench.translators.numpyto_common.emit_io import AUTO_MARKER, is_generated, is_override, write_generated
 
 
 def test_writes_to_new_path_and_stamps_marker(tmp_path: pathlib.Path) -> None:
@@ -30,7 +31,8 @@ def test_writes_to_new_path_and_stamps_marker(tmp_path: pathlib.Path) -> None:
     assert first_line.startswith("# " + AUTO_MARKER)
     assert "gemm_numpy.py" in first_line
     assert "print(1)" in out.read_text()
-    assert is_generated(out) and not is_override(out)
+    assert is_generated(out)
+    assert not is_override(out)
 
 
 def test_regenerate_refreshes_a_generated_file(tmp_path: pathlib.Path) -> None:
@@ -39,7 +41,8 @@ def test_regenerate_refreshes_a_generated_file(tmp_path: pathlib.Path) -> None:
     # a marked (generated) file is NOT protected -- a re-run refreshes it in place.
     assert write_generated(out, "print(2)\n", source="gemm_numpy.py") == "ok"
     body = out.read_text()
-    assert "print(2)" in body and "print(1)" not in body
+    assert "print(2)" in body
+    assert "print(1)" not in body
 
 
 def test_hand_override_is_never_clobbered(tmp_path: pathlib.Path) -> None:
@@ -48,7 +51,8 @@ def test_hand_override_is_never_clobbered(tmp_path: pathlib.Path) -> None:
     out = tmp_path / "gemm_numba.py"
     original = "# my own file\nprint('mine')\n"
     out.write_text(original)
-    assert is_override(out) and not is_generated(out)
+    assert is_override(out)
+    assert not is_generated(out)
 
     status = write_generated(out, "print('GENERATED')\n", source="gemm_numpy.py")
     assert status == "override"
@@ -73,7 +77,8 @@ def test_the_dace_marker_is_recognized_as_generated(tmp_path: pathlib.Path) -> N
     refreshed rather than mistaken for a hand override."""
     out = tmp_path / "k_dace.py"
     out.write_text('"""DaCe program auto-generated from the numpy reference by numpyto_c.dace_emit."""\ncode = 1\n')
-    assert is_generated(out) and not is_override(out)
+    assert is_generated(out)
+    assert not is_override(out)
     assert write_generated(out, "code = 2\n") == "ok"
     assert "code = 2" in out.read_text()
 
@@ -102,4 +107,5 @@ def test_parent_directories_are_created(tmp_path: pathlib.Path) -> None:
     nested = tmp_path / "sub" / "deeper" / "gemm_numba.py"
     assert not nested.parent.exists()
     assert write_generated(nested, "x = 1\n") == "ok"
-    assert nested.exists() and is_generated(nested)
+    assert nested.exists()
+    assert is_generated(nested)

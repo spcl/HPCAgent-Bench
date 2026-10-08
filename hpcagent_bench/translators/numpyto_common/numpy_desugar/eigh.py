@@ -414,7 +414,7 @@ class EighCallHoister(ast.NodeTransformer):
         for s in pre:
             ast.copy_location(s, node)
             ast.fix_missing_locations(s)
-        return pre + [node]
+        return [*pre, node]
 
     def visit_stmts(self, node: Sequence[ast.stmt]) -> list[ast.stmt]:
         out: list[ast.stmt] = []

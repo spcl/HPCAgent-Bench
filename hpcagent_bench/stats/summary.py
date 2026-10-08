@@ -66,8 +66,8 @@ __all__ = [
     "SIGN_FLIP_EXACT_MAX_N",
     "FloatArray",
     "Interval",
-    "Signs",
     "Samples",
+    "Signs",
     "Statistic",
     "Unusable",
     "bootstrap_ci",
@@ -80,12 +80,12 @@ __all__ = [
     "mean_ci",
     "mean_interval",
     "median_ci",
-    "signed_change",
-    "signed_rank_test",
-    "signs",
     "sign_flip_interval",
     "sign_flip_pvalue",
     "sign_flips",
+    "signed_change",
+    "signed_rank_test",
+    "signs",
     "usable_ratios",
     "use_exact",
     "walsh_averages",
@@ -231,7 +231,7 @@ class Interval:
 
     def label(self) -> str:
         """One-line figure/table label naming both the statistic and the interval kind."""
-        return f"{int(round(self.confidence * 100))}% {self.method} CI for {self.statistic}"
+        return f"{round(self.confidence * 100)}% {self.method} CI for {self.statistic}"
 
 
 def bootstrap_ci(

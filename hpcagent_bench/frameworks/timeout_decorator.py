@@ -25,9 +25,9 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
 
+import _thread as thread
 import sys
 import threading
-import _thread as thread
 from collections.abc import Callable
 from typing import ParamSpec, TypeVar
 

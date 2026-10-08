@@ -70,7 +70,7 @@ def test_an_identity_test_against_a_literal_is_a_static_flag_test() -> None:
 
 
 @pytest.mark.parametrize(
-    "expr,reason",
+    ("expr", "reason"),
     [
         ("weight is other", "neither side is a literal, so nothing is decided"),
         ("thing is None", "the name is not a parameter every call site pins to a literal"),

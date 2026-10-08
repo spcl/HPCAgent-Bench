@@ -77,7 +77,7 @@ def wrap_for_loops(iters: list[str], bounds: Sequence[str | ast.expr], body: Seq
     or an already-built AST expression (passed through unchanged).
     """
     out: list[ast.stmt] = list(body)
-    for var, bound in zip(reversed(iters), reversed(bounds)):
+    for var, bound in zip(reversed(iters), reversed(bounds), strict=False):
         bound_node = const_or_name(bound) if isinstance(bound, str) else bound
         out = [range_for(var, [bound_node], out)]
     return out

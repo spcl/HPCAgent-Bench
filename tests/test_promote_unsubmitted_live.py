@@ -39,8 +39,7 @@ JUDGE_RANK = 3
 
 @pytest.fixture(name="promoter")
 def promoter_fixture() -> ModuleType:
-    module = fresh("promote_unsubmitted")
-    return module
+    return fresh("promote_unsubmitted")
 
 
 class Judge(http.server.BaseHTTPRequestHandler):
@@ -73,6 +72,7 @@ class Judge(http.server.BaseHTTPRequestHandler):
             return self.reply(*refusal)
         Judge.posted.append(body)
         self.reply(200, dict(GRADE))
+        return None
 
 
 @pytest.fixture(name="judge")

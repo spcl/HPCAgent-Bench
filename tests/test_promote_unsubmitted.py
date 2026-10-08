@@ -29,8 +29,7 @@ from tests.fresh_module import fresh
 
 
 def load_example_module(name: str) -> ModuleType:
-    module = fresh(name)
-    return module
+    return fresh(name)
 
 
 @pytest.fixture(name="promoter")
@@ -72,7 +71,7 @@ def test_a_promotion_names_the_judge_rank(promoter, monkeypatch) -> None:
 
 
 @pytest.mark.parametrize(
-    "health,expected_rank",
+    ("health", "expected_rank"),
     [
         ({"judge_rank": 2}, 2),  # /health is the one route that reports its own, configured ranks go stale
         ({"rank": 1}, 1),  # the router answers `judge_rank`, the judge behind it `rank`; either is authoritative
@@ -180,7 +179,8 @@ def test_the_budget_stops_the_pass_and_names_what_it_cut(promoter, tmp_path, mon
     assert attempted == ["zeta"], "the most valuable kernel must be the one that fits"
     assert "budget exhausted; 2 not attempted" in out
     # Named rather than counted: they still exist in the run dir and can be collected later.
-    assert "mid" in out and "alpha" in out
+    assert "mid" in out
+    assert "alpha" in out
 
 
 def test_a_lone_candidate_gets_the_whole_budget_not_a_fixed_slice(promoter, tmp_path, monkeypatch) -> None:
@@ -332,7 +332,7 @@ def submit_timeouts(promoter: ModuleType, tmp_path: pathlib.Path, monkeypatch: p
 
 
 @pytest.mark.parametrize(
-    "wall_left_s,more_than_s",
+    ("wall_left_s", "more_than_s"),
     [
         # One job had 58 min of allocation left at the kill. The fixed 1800 s gave up first, and the
         # teardown right after it killed the grade the judge was still running.
@@ -532,7 +532,7 @@ def test_the_teardown_sweep_ignores_a_submission_from_before_the_workers_cut(
 
 
 @pytest.mark.parametrize(
-    "verdict,expected",
+    ("verdict", "expected"),
     [
         ({"correct": "yes", "request_id": "ab12"}, "SUBMITTED request_id=ab12"),
         ({"correct": "no", "request_id": "ab12"}, "not a submission -- built but incorrect"),

@@ -62,7 +62,7 @@ def test_negative_literal_ternary_matches_int64_partner() -> None:
 
 
 #: The hoisted ``IfExp`` temp's declaration, whatever the emitter names it (``x_ifexp<N>``).
-IFEXP_DECL = re.compile(r"^\s*integer\((?P<kind>c_int\d+_t)\)\s*::\s*(?P<name>\w*ifexp\w*)\s*$", re.M)
+IFEXP_DECL = re.compile(r"^\s*integer\((?P<kind>c_int\d+_t)\)\s*::\s*(?P<name>\w*ifexp\w*)\s*$", re.MULTILINE)
 
 
 def test_ifexp_temp_declares_the_int64_kind_of_its_partner_branch() -> None:

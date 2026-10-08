@@ -480,7 +480,7 @@ def name_value_pairs(tree: ast.AST) -> Iterator[tuple[str, ast.expr]]:
             and isinstance(node.value, ast.Tuple)
             and len(target.elts) == len(node.value.elts)
         ):
-            for t, v in zip(target.elts, node.value.elts):
+            for t, v in zip(target.elts, node.value.elts, strict=False):
                 if isinstance(t, ast.Name):
                     yield t.id, v
 

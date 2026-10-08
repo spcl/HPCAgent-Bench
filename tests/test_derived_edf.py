@@ -120,7 +120,8 @@ def test_a_missing_edf_exits_2(tmp_path: pathlib.Path) -> None:
     proc, _ = run_derived_edf(tmp_path, "bench", edf_dir)
 
     assert proc.returncode == 2
-    assert "bench.toml" in proc.stderr and "not found" in proc.stderr
+    assert "bench.toml" in proc.stderr
+    assert "not found" in proc.stderr
 
 
 def test_a_single_line_mounts_block_exits_2(tmp_path: pathlib.Path) -> None:
@@ -130,7 +131,8 @@ def test_a_single_line_mounts_block_exits_2(tmp_path: pathlib.Path) -> None:
     proc, _ = run_derived_edf(tmp_path, "bench", edf_dir)
 
     assert proc.returncode == 2
-    assert "/shared" in proc.stderr and "mounts = [" in proc.stderr
+    assert "/shared" in proc.stderr
+    assert "mounts = [" in proc.stderr
 
 
 def test_the_mounts_already_in_the_edf_are_replaced_not_inherited(tmp_path: pathlib.Path) -> None:
@@ -148,11 +150,13 @@ def test_the_mounts_already_in_the_edf_are_replaced_not_inherited(tmp_path: path
     for proc in (judge, agent):
         mounts = tomllib.loads(pathlib.Path(proc.stdout).read_text())["mounts"]
         assert f"{shared_dir}:/shared" == mounts[0], "the shared folder leads every role's block"
-        assert "/scratch:/scratch" not in mounts and "/scratchfs:/scratchfs" not in mounts
+        assert "/scratch:/scratch" not in mounts
+        assert "/scratchfs:/scratchfs" not in mounts
 
     judge_mounts = tomllib.loads(pathlib.Path(judge.stdout).read_text())["mounts"]
     agent_mounts = tomllib.loads(pathlib.Path(agent.stdout).read_text())["mounts"]
-    assert f"{tmp_path}/run/{GENERATED_MOUNT}" in judge_mounts and AGENT_MOUNT not in judge_mounts
+    assert f"{tmp_path}/run/{GENERATED_MOUNT}" in judge_mounts
+    assert AGENT_MOUNT not in judge_mounts
     assert AGENT_MOUNT in agent_mounts
     assert not [m for m in agent_mounts if m.endswith(GENERATED_MOUNT)], "the cache is a judge mount"
 
@@ -208,5 +212,6 @@ def test_edf_with_checkout_refuses_an_edf_with_no_package_mount(tmp_path: pathli
         text=True,
         check=False,
     )
-    assert done.returncode == 2 and "mounts nothing at /opt/hpcagent-bench" in done.stderr
+    assert done.returncode == 2
+    assert "mounts nothing at /opt/hpcagent-bench" in done.stderr
     assert not (tmp_path / "out.toml").exists()

@@ -197,7 +197,7 @@ FFTN_SRC = (
     "    w[:] = np.fft.fftn(a, axes=(0, 1))\n"
     "    t[:] = np.fft.ifft(a)\n"
 )
-FFTN_SHAPES = {n: "(N, M, K)" for n in ("a", "b", "u", "v", "w", "t")}
+FFTN_SHAPES = dict.fromkeys(("a", "b", "u", "v", "w", "t"), "(N, M, K)")
 
 
 def fftn_op_kir(nd: bool) -> KernelIR:
@@ -235,10 +235,10 @@ def test_nd_fft_library_matches_numpy_on_every_axis_placement(sizes: tuple) -> N
         FFTN_SRC,
         "fftn_op",
         {"a": a, "b": b},
-        {name: sizes for name in ("u", "v", "w", "t")},
+        dict.fromkeys(("u", "v", "w", "t"), sizes),
         {"N": n, "M": m, "K": k},
         shapes=FFTN_SHAPES,
-        dtypes={name: "complex128" for name in ("u", "v", "w", "t")},
+        dtypes=dict.fromkeys(("u", "v", "w", "t"), "complex128"),
         rtol=1e-10,
         atol=1e-10,
         backends=("c", "cpp"),

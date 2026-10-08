@@ -7,6 +7,7 @@ import contextlib
 import fcntl
 import functools
 import hashlib
+import itertools
 import json
 import math
 import os
@@ -300,7 +301,6 @@ def as_float(raw: object) -> float:
 
 def fetch_problems() -> list[Problem] | None:
     """Fetch assigned problems from the future task-assignment service."""
-    pass
 
 
 def normalize_problem(item: object, index: int) -> Problem:
@@ -337,7 +337,7 @@ def resolve_problems_path(problem_file: str) -> pathlib.Path:
     # `.rendered/<stem>.jsonl`, relative to experiments/, which no agent container mounts, and the
     # agent step reads that value from the batch step's environment.
     staged = pathlib.Path(os.environ.get("SCRIPT_DIR", ".")) / path.name
-    if path.parent == pathlib.Path(".") or staged.exists():
+    if path.parent == pathlib.Path() or staged.exists():
         return staged
     return path
 
@@ -451,7 +451,7 @@ def server_root(endpoint: str) -> str:
     Stripping it in one place is what keeps those consumers from disagreeing about what the server
     is when run_cluster.sh changes how the URL is composed."""
     trimmed = endpoint.rstrip("/")
-    return trimmed[:-3] if trimmed.endswith("/v1") else trimmed
+    return trimmed.removesuffix("/v1")
 
 
 def wait_for_ready_replicas(replicas: list[str], timeout: float, headers: dict[str, str]) -> list[str]:
@@ -892,7 +892,7 @@ def aggregate_intervals(samples: list[dict[str, float]]) -> tuple[list[dict[str,
     """
     intervals: list[dict[str, float]] = []
     resets = 0
-    for previous, current in zip(samples, samples[1:]):
+    for previous, current in itertools.pairwise(samples):
         generation = current[METRIC_GENERATION] - previous[METRIC_GENERATION]
         prompt = current[METRIC_PROMPT] - previous[METRIC_PROMPT]
         if generation < 0 or prompt < 0:
@@ -1143,9 +1143,7 @@ def env_flag(name: str, default: bool) -> bool:
     if raw is None:
         return default
     text = raw.strip().lower()
-    if text in ("true", "1", "yes", "on"):
-        return True
-    return False
+    return text in ("true", "1", "yes", "on")
 
 
 def build_list_status_text() -> str:
@@ -1689,10 +1687,8 @@ def cancelled_by_the_job(returncode: int, recorded: bool) -> bool:
 
 def mark_cancelled(workdir: pathlib.Path, returncode: int) -> None:
     """Write the cancellation marker. Never raises: the job is already going down."""
-    try:
+    with contextlib.suppress(OSError):
         (workdir / CANCELLED_MARKER).write_text(f"rc={returncode} at {int(time.time())}\n", encoding="utf-8")
-    except OSError:
-        pass
 
 
 #: What a fresh relaunch KEEPS in the worker directory: the task's inputs, the ledger, and (added at
@@ -1851,10 +1847,8 @@ def write_cost_record(
     # The cut every analysis of this task applies (X7): a judge row stamped before it belongs to
     # state that was thrown away. Epoch ms, the judge's own `ts` unit.
     record["final_attempt_start_ms"] = final_attempt_start_ms
-    try:
+    with contextlib.suppress(OSError):
         path.write_text(json.dumps(record, sort_keys=True) + "\n", encoding="utf-8")
-    except OSError:
-        pass
 
 
 def terminate(process: subprocess.Popen[bytes]) -> None:
@@ -2510,7 +2504,7 @@ def claude_command(context: Context) -> list[str]:
     turn_cap = os.environ.get("CLAUDE_MAX_TURNS", "40")
     claude_bin = os.environ.get("CLAUDE_BIN", "claude")
 
-    command = [
+    return [
         claude_bin,
         *(["--bare"] if bare else []),
         # The prompt must precede the variadic tool flags: after --disallowedTools it is consumed
@@ -2559,7 +2553,6 @@ def claude_command(context: Context) -> list[str]:
         "Task",
         "Agent",
     ]
-    return command
 
 
 #: The context an agent may fill is min(served window, this), for every model -- a 1M-token service

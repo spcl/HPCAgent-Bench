@@ -204,7 +204,8 @@ def test_syrk_already_reduced_into_an_array_cell() -> None:
     # The kernel the peephole makes symm/trmm look like -- it must not move.
     c = emit_c(kir_for("syrk", do_lower=True))
     assert "C[(i)*(N) + (si1)] += ((alpha * A[(i)*(M) + (k)]) * A[(si1)*(M) + (k)]);" in c
-    assert "double __mm" not in c and "double __cb" not in c
+    assert "double __mm" not in c
+    assert "double __cb" not in c
 
 
 def test_fortran_carries_the_same_retarget() -> None:

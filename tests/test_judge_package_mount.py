@@ -5,11 +5,10 @@ the judge's launch venv (containers/images/lib/launch_venv.sh) installs it from 
 the agent must not be able to import the package.
 """
 
-import tempfile
 import os
 import pathlib
-import re
 import subprocess
+import tempfile
 import tomllib
 
 import pytest
@@ -48,7 +47,8 @@ def test_the_judge_installs_the_mounted_checkout_at_launch_and_bakes_none_of_it(
     docker = (IMAGES / image / "Dockerfile").read_text(encoding="utf-8")
     judge = docker[docker.index("FROM agent AS judge") :]
     assert "sed -i 's/^--no-install-project //' /opt/launch/sync.args" in judge, "the judge's launch sync installs it"
-    assert "package_hook" not in judge and 'find_spec("hpcagent_bench") is None' in judge
+    assert "package_hook" not in judge
+    assert 'find_spec("hpcagent_bench") is None' in judge
     template = (IMAGES / image / "judge.edf.toml.in").read_text(encoding="utf-8")
     assert f'"<hpcagent_bench_checkout>:{PACKAGE_ROOT}"' in template, image
 

@@ -63,12 +63,12 @@ __all__ = [
     "FlatRow",
     "InstrumentPayload",
     "JsonObject",
+    "MeasuredBuild",
     "MeasurementRequest",
     "ProfilePayload",
     "RisingRow",
     "ScalingRow",
     "ThreadPayload",
-    "MeasuredBuild",
     "ThreadRun",
     "WorkloadResult",
     "as_float",
@@ -786,9 +786,11 @@ def render_counters(counters: CounterPayload) -> list[str]:
     smt = "SMT on, threads pinned to whole cores" if counters["smt"] else "no SMT"
     lines = [
         "",
-        f"hardware counters, group '{counters.get('group', DEFAULT_COUNTER_GROUP)}' "
-        f"({counters['runs']} runs, one per metric; {counters['threads']} thread(s), "
-        f"{counters['threads_counted']} counted; {smt})",
+        (
+            f"hardware counters, group '{counters.get('group', DEFAULT_COUNTER_GROUP)}' "
+            f"({counters['runs']} runs, one per metric; {counters['threads']} thread(s), "
+            f"{counters['threads_counted']} counted; {smt})"
+        ),
         f"  {'metric':<24}  {'count':>15}  {'/1k instr':>9}  expression",
         f"  {'-' * 24}  {'-' * 15}  {'-' * 9}  {'-' * 34}",
     ]

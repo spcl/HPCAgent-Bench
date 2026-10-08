@@ -177,7 +177,8 @@ def test_var_is_scalar_reduction(fn: str) -> None:
     arrays: dict[str, tuple[str, ...]] = {}
     tree = CallHoister({"a": ("N",)}, scalars, arrays, [0]).visit(ast.parse(f"x = a[0] / np.{fn}(a)"))
     assert ast.unparse(tree) == "x = a[0] / __cb1"
-    assert scalars == {"__cb1": True} and not arrays
+    assert scalars == {"__cb1": True}
+    assert not arrays
 
 
 # F. np.permute_dims / np.amax aliases -> canonical names                       #
@@ -632,7 +633,7 @@ E2E = [
 E2E_BACKENDS = {"conv2d": {"c", "cpp", "fortran", "numba", "pythran", "jax"}}
 
 
-@pytest.mark.parametrize("kernel,feature", E2E, ids=[k for k, unused in E2E])
+@pytest.mark.parametrize(("kernel", "feature"), E2E, ids=[k for k, unused in E2E])
 def test_feature_kernels_e2e(kernel, feature) -> None:
     no = oracle()
     status = no.run_kernel(kernel, preset="S", precision="fp64", seed=0, only_backends=E2E_BACKENDS[kernel])
@@ -670,18 +671,21 @@ def pad(src, table):
 def test_pad_trailing_slice_on_3d_partial_index() -> None:
     # ``TN[:, 1:] = T[:, :-1]`` on a 3-D array gains the implicit trailing axis.
     out = pad("TN[:, 1:] = T[:, :-1]", {"TN": ("Z", "Y", "X"), "T": ("Z", "Y", "X")})
-    assert "TN[:, 1:, :]" in out and "T[:, :-1, :]" in out
+    assert "TN[:, 1:, :]" in out
+    assert "T[:, :-1, :]" in out
 
 
 def test_pad_scalar_index_trailing_axis() -> None:
     out = pad("TN[:, 0] = T[:, 0]", {"TN": ("Z", "Y", "X"), "T": ("Z", "Y", "X")})
-    assert "TN[:, 0, :]" in out and "T[:, 0, :]" in out
+    assert "TN[:, 0, :]" in out
+    assert "T[:, 0, :]" in out
 
 
 def test_pad_skips_advanced_index_array() -> None:
     # ``x[src]`` with src an index array (fancy gather) must NOT be padded.
     out = pad("y = x[src]", {"x": ("N", "M"), "src": ("E",), "y": ("E", "M")})
-    assert "x[src]" in out and "x[src, :]" not in out
+    assert "x[src]" in out
+    assert "x[src, :]" not in out
 
 
 def test_pad_noop_when_fully_indexed() -> None:
@@ -714,7 +718,9 @@ def test_expand_copy_accepts_subscript_source() -> None:
     stmts = expand_copy(ast.Name(id="dp", ctx=ast.Store()), [expr_("grid[0]")], {"grid": ("R", "C"), "dp": ("C",)})
     mod = ast.fix_missing_locations(ast.Module(body=stmts, type_ignores=[]))
     body = ast.unparse(mod).replace(" ", "")
-    assert "for" in body and "dp[" in body and "grid[0," in body
+    assert "for" in body
+    assert "dp[" in body
+    assert "grid[0," in body
 
 
 # P. Body-defined dimension alias is not promoted to a parameter (M=a.shape[0]) #
@@ -784,13 +790,15 @@ def test_pad_newaxis_does_not_consume_rank() -> None:
     # still implicit (5-D result); pad it so the broadcast alignment is right.
     out = pad("c = weights[None, :, :, :]", {"weights": ("K", "K", "Ci", "Co"), "c": ("X",)})
     # newaxis kept, and a 4th explicit source slice appended.
-    assert out.count(":") >= 4 and "None" in out
+    assert out.count(":") >= 4
+    assert "None" in out
 
 
 def test_pad_newaxis_full_source_rank_not_padded() -> None:
     # 4 real slices already cover the 4-D source -> no extra pad despite newaxis.
     out = pad("c = inp[:, a:b, c:d, :, None]", {"inp": ("N", "H", "W", "Ci"), "c": ("X",)})
-    assert out.count("None") == 1 and out.count(":") == 4
+    assert out.count("None") == 1
+    assert out.count(":") == 4
 
 
 def test_fortran_abi_param_order_matches_binding() -> None:
@@ -907,7 +915,7 @@ def run_c(compile_cmd, source, ext, tmp):
     exe = tmp / "nan_probe"
     # drop -shared/-fPIC: we want an executable to run, keep the -std flag.
     cc = [compile_cmd[0]] + [a for a in compile_cmd[1:] if a not in ("-shared", "-fPIC")]
-    r = subprocess.run(cc + [str(src), "-o", str(exe), "-lm"], capture_output=True, text=True, check=False)
+    r = subprocess.run([*cc, str(src), "-o", str(exe), "-lm"], capture_output=True, text=True, check=False)
     assert r.returncode == 0, f"compile failed:\n{r.stderr[:800]}"
     out = subprocess.run([str(exe)], capture_output=True, text=True, check=False)
     assert out.returncode == 0, out.stderr
@@ -1035,7 +1043,8 @@ def test_fft_desugar_lowers_npfft_to_dft_loops() -> None:
     arrays = [("x", "complex128", ("N",)), ("y", "complex128", ("N",)), ("z", "complex128", ("N",))]
     out = desugar_for_python_backend(src, py_kir("k", src, arrays, [], ["x", "y", "z"]))
     assert "np.fft" not in out  # intrinsic lowered away
-    assert "np.exp(" in out and "for " in out  # explicit DFT loop nest
+    assert "np.exp(" in out
+    assert "for " in out
     # ifft divides the accumulated output by N (a second statement reading the
     # store-target back) -- the forward transform has no such self-divide.
     assert "] / " in out
@@ -1106,7 +1115,8 @@ def test_mgrid_desugar_to_arange_broadcast() -> None:
     src = "def k(R, out):\n    i, j = np.mgrid[0:R, 0:R]\n    out[:] = i * j\n"
     out = desugar_for_python_backend(src, py_kir("k", src, [("out", "int64", ("R", "R"))], ["R"], ["R", "out"]))
     assert "np.mgrid" not in out
-    assert out.count("np.arange(") == 2 and "reshape(" in out
+    assert out.count("np.arange(") == 2
+    assert "reshape(" in out
 
 
 def test_pythran_export_uses_signature_order_not_abi() -> None:
@@ -1150,8 +1160,10 @@ def test_reduce_axis_desugar_lowers_mean_min() -> None:
     src = "def k(data, mn, mx):\n    mn[:] = np.mean(data, axis=0)\n    mx[:] = np.max(data, axis=0)\n"
     arrays = [("data", "float64", ("M", "N")), ("mn", "float64", ("N",)), ("mx", "float64", ("N",))]
     out = desugar_for_python_backend(src, py_kir("k", src, arrays, [], ["data", "mn", "mx"]))
-    assert "np.mean" not in out and "np.max" not in out
-    assert "for " in out and "/ " in out  # explicit mean loop divides by N
+    assert "np.mean" not in out
+    assert "np.max" not in out
+    assert "for " in out
+    assert "/ " in out
 
 
 def test_masked_assign_lowers_to_guarded_loop_not_where() -> None:
@@ -1165,7 +1177,8 @@ def test_masked_assign_lowers_to_guarded_loop_not_where() -> None:
         src, py_kir("k", src, [("rsq", "float64", ("N", "N")), ("out", "float64", ("N", "N"))], [], ["rsq", "out"])
     )
     assert "np.where" not in out  # a loop, not np.where (overflow-safe)
-    assert "if " in out and "for " in out  # guarded per-element write
+    assert "if " in out
+    assert "for " in out
     assert "out[in_range]" not in out  # mask indexing removed
 
 
@@ -1185,8 +1198,10 @@ def test_ufunc_outer_and_call_fixups() -> None:
             ["a", "tmp", "out"],
         ),
     )
-    assert "np.ndarray(" not in out and "np.empty(" in out  # ndarray -> empty
-    assert "np.add.outer" not in out and "reshape(" in out  # outer -> reshape+broadcast
+    assert "np.ndarray(" not in out
+    assert "np.empty(" in out
+    assert "np.add.outer" not in out
+    assert "reshape(" in out
 
 
 def test_add_at_scatter_and_mixed_gather() -> None:
@@ -1207,8 +1222,11 @@ def test_add_at_scatter_and_mixed_gather() -> None:
     out = desugar_for_python_backend(
         src, py_kir("k", src, arrays, ["jk"], ["A", "i2", "j2", "jk", "out", "Lx", "src", "flux"])
     )
-    assert "A[i2, jk, j2]" not in out and "np.add.at" not in out
-    assert "np.empty(" in out and "+=" in out and "for " in out
+    assert "A[i2, jk, j2]" not in out
+    assert "np.add.at" not in out
+    assert "np.empty(" in out
+    assert "+=" in out
+    assert "for " in out
 
 
 def test_reduce_axis_method_form_and_helper_function() -> None:
@@ -1220,7 +1238,8 @@ def test_reduce_axis_method_form_and_helper_function() -> None:
     out = desugar_for_python_backend(
         src, py_kir("k", src, [("mask", "bool", ("R", "C")), ("out", "bool", ("C",))], [], ["mask", "out"])
     )
-    assert ".any(axis" not in out and "np.any" not in out  # method-form reduction lowered in the helper
+    assert ".any(axis" not in out
+    assert "np.any" not in out
     assert "for " in out
 
 
@@ -1242,7 +1261,9 @@ def test_histogram_desugar_to_binning_loop() -> None:
     ]
     out = desugar_for_python_backend(src, py_kir("k", src, arrays, ["npt"], ["radius", "data", "npt", "hu", "hw"]))
     assert "np.histogram" not in out
-    assert "int(" in out and "np.zeros(" in out and "+= " in out  # binning loop
+    assert "int(" in out
+    assert "np.zeros(" in out
+    assert "+= " in out
 
 
 def test_int_matmul_lowers_but_float_matmul_kept() -> None:
@@ -1261,7 +1282,8 @@ def test_int_matmul_lowers_but_float_matmul_kept() -> None:
             ["frontier", "graph", "reach"],
         ),
     )
-    assert "@" not in iout and "for " in iout  # int matmul -> loop
+    assert "@" not in iout
+    assert "for " in iout
     fsrc = "def k(a, b, c):\n    c[:] = a @ b\n"
     fout = desugar_for_python_backend(
         fsrc,
@@ -1330,7 +1352,9 @@ def test_reshape_batched_matmul_lowers() -> None:
             ["A", "C4"],
         ),
     )
-    assert "@" not in out and "reshape" not in out and "for " in out
+    assert "@" not in out
+    assert "reshape" not in out
+    assert "for " in out
 
 
 # P. Loud failure: a desugar that OWNS a construct but hits a variant it cannot #
@@ -1405,7 +1429,8 @@ def test_issparse_folds_to_false_for_dense_abi() -> None:
             ["A", "B", "out"],
         ),
     )
-    assert "issparse" not in out and "toarray" not in out  # sparse branch folded away and eliminated
+    assert "issparse" not in out
+    assert "toarray" not in out
 
 
 def test_dead_branch_elim_removes_folded_issparse_branch() -> None:
@@ -1430,7 +1455,8 @@ def test_dead_branch_elim_removes_folded_issparse_branch() -> None:
             ["A", "B", "out"],
         ),
     )
-    assert "toarray" not in out and "issparse" not in out
+    assert "toarray" not in out
+    assert "issparse" not in out
 
 
 def test_pythran_clean_strips_imports_and_substitutes_precision() -> None:
@@ -1447,8 +1473,11 @@ def test_pythran_clean_strips_imports_and_substitutes_precision() -> None:
     )
     kir = py_kir("k", src, [("x", "float64", ("N",)), ("out", "complex128", ("N",))], [], ["x", "out"])
     cleaned = clean_for_pythran(src, kir)
-    assert "hpcagent_bench" not in cleaned and "scipy" not in cleaned
-    assert "np_float" not in cleaned and "np_complex" not in cleaned and "np.complex128" in cleaned
+    assert "hpcagent_bench" not in cleaned
+    assert "scipy" not in cleaned
+    assert "np_float" not in cleaned
+    assert "np_complex" not in cleaned
+    assert "np.complex128" in cleaned
 
 
 def test_np_flip_lowers_to_reverse_slice() -> None:
@@ -1460,7 +1489,8 @@ def test_np_flip_lowers_to_reverse_slice() -> None:
     out = desugar_for_python_backend(
         src, py_kir("k", src, [("x", "float64", ("N",)), ("out", "float64", ("N",))], [], ["x", "out"])
     )
-    assert "np.flip" not in out and "::-1" in out
+    assert "np.flip" not in out
+    assert "::-1" in out
 
 
 def test_repeat_axis_lowers_to_gather_loop() -> None:
@@ -1473,7 +1503,9 @@ def test_repeat_axis_lowers_to_gather_loop() -> None:
         src,
         py_kir("k", src, [("x", "float64", ("A", "B", "C")), ("out", "float64", ("A", "B", "D"))], ["M"], ["x", "out"]),
     )
-    assert "np.repeat" not in out and "// " in out and "for " in out
+    assert "np.repeat" not in out
+    assert "// " in out
+    assert "for " in out
 
 
 def test_repeat_axis_outside_the_known_rank_is_left_verbatim() -> None:
@@ -1500,7 +1532,8 @@ def test_repeat_negative_axis_lowers_to_the_numpy_result() -> None:
     run_source(got, namespace, "<desugared>")
     namespace["k"](x, out)
 
-    assert "np.repeat" not in got and "x[__rp0_i0, __rp0_i1 // 3]" in got
+    assert "np.repeat" not in got
+    assert "x[__rp0_i0, __rp0_i1 // 3]" in got
     assert np.array_equal(out, np.repeat(x, 3, axis=-1))
 
 
@@ -1533,7 +1566,9 @@ def test_cholesky_lowers_for_pythran_only() -> None:
     src = "def kernel(A):\n    A[:] = np.linalg.cholesky(A) + np.triu(A, k=1)\n"
     arrays = [("A", "float64", ("N", "N"))]
     py = desugar(src, arrays, [], ["A"], "pythran")
-    assert "np.linalg.cholesky" not in py and "np.sqrt(" in py and "for " in py
+    assert "np.linalg.cholesky" not in py
+    assert "np.sqrt(" in py
+    assert "for " in py
     # The cholesky temp is computed BEFORE A is overwritten (in-place read safe).
     assert py.index("np.sqrt(") < py.index("A[:] =")
     for be in ("numba", "dace", None):
@@ -1546,13 +1581,15 @@ def test_solve_and_inv_lower_for_pythran_only() -> None:
     src = "def kernel(A, b, x):\n    x[:] = np.linalg.solve(A, b)\n"
     arrays = [("A", "float64", ("N", "N")), ("b", "float64", ("N",)), ("x", "float64", ("N",))]
     py = desugar(src, arrays, [], ["A", "b", "x"], "pythran")
-    assert "np.linalg.solve" not in py and "np.abs(" in py  # pivot search
+    assert "np.linalg.solve" not in py
+    assert "np.abs(" in py
     assert "np.linalg.solve" in desugar(src, arrays, [], ["A", "b", "x"], "numba")
 
     isrc = "def kernel(A, o):\n    o[:] = np.linalg.inv(A)\n"
     iarr = [("A", "complex128", ("N", "N")), ("o", "complex128", ("N", "N"))]
     ipy = desugar(isrc, iarr, [], ["A", "o"], "pythran")
-    assert "np.linalg.inv" not in ipy and "np.zeros(" in ipy  # identity RHS
+    assert "np.linalg.inv" not in ipy
+    assert "np.zeros(" in ipy
     assert "np.linalg.inv" in desugar(isrc, iarr, [], ["A", "o"], "dace")
 
 
@@ -1651,14 +1688,16 @@ def test_eigh_gated_native_linalg_per_backend() -> None:
     to the Jacobi loop nest (no backend has a generalized complex-Hermitian eigh)."""
     for be in ("numba", "dace"):
         out = desugar(EIGH_SRC, EIGH_ARRAYS, [], ["a", "b", "w", "v"], be)
-        assert "np.linalg.cholesky" in out and "np.hypot" in out  # native reduce + jacobi
+        assert "np.linalg.cholesky" in out
+        assert "np.hypot" in out
         assert "_sci_eigh(" not in out.split("def kernel")[1]  # the call is lowered
     py = desugar(EIGH_SRC, EIGH_ARRAYS, [], ["a", "b", "w", "v"], "pythran")
-    assert "np.linalg.cholesky" not in py and "np.hypot" in py  # cholesky lowered for pythran
+    assert "np.linalg.cholesky" not in py
+    assert "np.hypot" in py
 
 
 @pytest.mark.parametrize(
-    "src,arrays,args",
+    ("src", "arrays", "args"),
     [
         (
             "def kernel(v, out):\n    out[:] = np.linalg.cholesky(v)\n",
@@ -1704,7 +1743,8 @@ def test_masked_mean_lowers_to_accumulate_loop() -> None:
     out = desugar(AZIMINT_SRC, AZIMINT_ARRAYS, [], ["data", "radius", "npt", "res"], "pythran")
     assert "values_r12" not in out  # dynamic masked select gone
     assert "mask_r12 = np.logical_and" in out  # the bool mask itself is kept
-    assert "+= data[" in out and "np.nan" in out  # accumulate loop + empty guard
+    assert "+= data[" in out
+    assert "np.nan" in out
 
 
 def test_masked_mean_matches_numpy() -> None:
@@ -1772,11 +1812,13 @@ def test_drop_guards_replaces_raise_and_assert_with_pass() -> None:
         py_kir("k", src, [("x", "float64", ("N",)), ("out", "float64", ("N",))], [], ["x", "out"]),
         backend="pythran",
     )
-    assert "raise" not in out and "assert" not in out and "ValueError" not in out
+    assert "raise" not in out
+    assert "assert" not in out
+    assert "ValueError" not in out
 
 
 @pytest.mark.parametrize(
-    "dtype,category,vanishes",
+    ("dtype", "category", "vanishes"),
     [
         ("int64", "integer", True),  # int idx IS integer -> `not True` guard drops
         ("float64", "integer", False),  # float idx is NOT integer -> guard body (raise) runs -> kept-then-dropped
@@ -1800,7 +1842,8 @@ def test_issubdtype_folds_from_known_dtype(dtype, category, vanishes) -> None:
         backend="pythran",
     )
     assert "issubdtype" not in out  # folded away regardless
-    assert "raise" not in out and "TypeError" not in out
+    assert "raise" not in out
+    assert "TypeError" not in out
 
 
 def test_asarray_lowers_like_copy_for_c() -> None:
@@ -2183,7 +2226,7 @@ def test_boolop_preserves_short_circuit_and_evaluation_order() -> None:
 
     for dim, evals in ((0, [1, 0]), (1, [1, 1]), (5, [1, 1])):
         buffers = [[np.zeros(2, np.int64), dim, np.zeros(1)] for unused in range(2)]
-        for source, args in zip((src, out), buffers):
+        for source, args in zip((src, out), buffers, strict=False):
             ns = {"np": np, "bump": bump}
             run_source(source, ns, "<sc>")
             ns["kernel"](*args)
@@ -2193,7 +2236,7 @@ def test_boolop_preserves_short_circuit_and_evaluation_order() -> None:
 
 
 @pytest.mark.parametrize(
-    "test,keep",
+    ("test", "keep"),
     [
         ("dim >= 0 and dim == 1", " and "),
         ("dim >= 0 or dim < -3", " or "),

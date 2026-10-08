@@ -208,9 +208,7 @@ def assigned_names(node: ast.AST) -> OrderedSet[str]:
         targets: list[ast.expr] = []
         if isinstance(sub, ast.Assign):
             targets = list(sub.targets)
-        elif isinstance(sub, (ast.AugAssign, ast.AnnAssign)):
-            targets = [sub.target]
-        elif isinstance(sub, ast.For):
+        elif isinstance(sub, (ast.AugAssign, ast.AnnAssign, ast.For)):
             targets = [sub.target]
         for tgt in targets:
             out |= target_names(tgt)
@@ -581,7 +579,7 @@ class TupleDesugar:
         if {targets[i].id for i in changed} & read:
             return None
         out: list[ast.stmt] = []
-        for target, value in zip(targets, elements):
+        for target, value in zip(targets, elements, strict=False):
             one = ast.copy_location(ast.Assign(targets=[target], value=copy.deepcopy(value)), stmt)
             out.extend(self.assign(one, target, env, linear))
         return out
@@ -870,7 +868,7 @@ def slice_calls_to_slices(index: ast.expr) -> ast.expr:
     converted = [as_slice(e) for e in elts]
     if all(c is None for c in converted):
         return index
-    out = [orig if new is None else new for orig, new in zip(elts, converted)]
+    out = [orig if new is None else new for orig, new in zip(elts, converted, strict=False)]
     return ast.copy_location(ast.Tuple(elts=out, ctx=ast.Load()), index) if isinstance(index, ast.Tuple) else out[0]
 
 
@@ -884,7 +882,7 @@ def as_slice(node: ast.expr) -> ast.Slice | None:
     ):
         return None
     args = [None if isinstance(a, ast.Constant) and a.value is None else a for a in node.args]
-    lower, upper, step = (None, args[0], None) if len(args) == 1 else (args + [None, None])[:3]
+    lower, upper, step = (None, args[0], None) if len(args) == 1 else ([*args, None, None])[:3]
     return ast.copy_location(ast.Slice(lower=lower, upper=upper, step=step), node)
 
 

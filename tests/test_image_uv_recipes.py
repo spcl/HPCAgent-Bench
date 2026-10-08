@@ -125,7 +125,8 @@ def test_every_wheel_gate_runs_in_a_launch_venv_the_image_does_not_keep(image: s
     ):
         assert check in gate.group(1), check
     after = text[gate.end() :]
-    assert 'python3 -c "import torch' not in after and "import dace" not in after
+    assert 'python3 -c "import torch' not in after
+    assert "import dace" not in after
 
 
 @pytest.mark.parametrize("image", JUDGE_AGENT)
@@ -133,7 +134,8 @@ def test_the_package_hook_serves_only_the_harness_venvs(image: str) -> None:
     text = recipe(image)
     assert "ln -s /opt/hpcagent-bench-agent /opt/hpcagent-bench/agent" in text
     hooks = re.findall(r"sh /tmp/package_hook\.sh [^;]*", text)
-    assert hooks and all('"/opt/harness/${venv}"' in hook and '--group "harness-${venv}"' in hook for hook in hooks)
+    assert hooks
+    assert all('"/opt/harness/${venv}"' in hook and '--group "harness-${venv}"' in hook for hook in hooks)
 
 
 @pytest.mark.parametrize("image", JUDGE_AGENT)
@@ -154,20 +156,24 @@ def test_the_amd_image_builds_cupy_from_its_group_after_the_numpy_rebuild() -> N
 def test_the_launch_hook_builds_one_locked_venv_per_pin_beside_the_image_python() -> None:
     hook = (LIB / "launch_venv.sh").read_text(encoding="utf-8")
     assert 'cat "${workspace}/uv.lock" "${launch}/sync.args" "${launch}/image.id" | sha256sum' in hook
-    assert "flock 9" in hook and 'touch "${home}/ready"' in hook
+    assert "flock 9" in hook
+    assert 'touch "${home}/ready"' in hook
     assert "zz-image-site.pth" in hook, "the image's source builds stay visible after the venv's own packages"
     assert "uv sync -q --frozen --inexact --no-install-project" not in hook, "the judge installs the project"
     assert 'one_openmp.sh" --link-only' in hook
-    assert 'HPCAGENT_BENCH_IMAGE_PYTHON="${venv}/bin/python3"' in hook and 'exec "$@"' in hook
+    assert 'HPCAGENT_BENCH_IMAGE_PYTHON="${venv}/bin/python3"' in hook
+    assert 'exec "$@"' in hook
 
 
 def test_the_rocprof_compute_environment_is_a_locked_project_synced_into_its_venv() -> None:
     project = IMAGES / "judge-agent-amd" / "rocprof-compute"
     deps = pyproject(project / "pyproject.toml")["project"]["dependencies"]  # type: ignore[index]
-    assert "pandas==2.2.3" in deps and "astunparse==1.6.2" in deps
+    assert "pandas==2.2.3" in deps
+    assert "astunparse==1.6.2" in deps
     assert (project / "uv.lock").is_file()
     text = recipe("judge-agent-amd")
-    assert "/opt/rocprof-compute/" in text and "UV_PROJECT_ENVIRONMENT=/opt/rocprof-compute-venv" in text
+    assert "/opt/rocprof-compute/" in text
+    assert "UV_PROJECT_ENVIRONMENT=/opt/rocprof-compute-venv" in text
 
 
 def test_the_extras_are_three_exclusive_framework_sets_that_each_carry_dev() -> None:
@@ -224,7 +230,8 @@ def test_the_sglang_image_syncs_its_tiny_locked_project_into_the_vendor_venv() -
     text = recipe("sglang")
     assert "COPY containers/images/sglang/pyproject.toml containers/images/sglang/uv.lock /opt/sglang-extras/" in text
     assert "UV_PROJECT_ENVIRONMENT=/opt/venv" in text
-    assert "uv sync --frozen --inexact" in text and "--no-install-package numpy" in text
+    assert "uv sync --frozen --inexact" in text
+    assert "--no-install-package numpy" in text
     assert "--no-binary-package cupy" in text
 
 

@@ -25,7 +25,7 @@ Every registered kind is documented, with the fields it requires, in ``docs/exte
 """
 
 import dataclasses
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from typing import Any
 
 __all__ = [
@@ -131,6 +131,10 @@ class Kind[Entry]:
     def keys(self) -> tuple[str, ...]:
         """The registered keys in slot order; an entry with no slot comes first."""
         return tuple(sorted(self.entries, key=lambda key: -1 if (order := self.orders[key]) is None else order))
+
+    def __iter__(self) -> Iterator[str]:
+        """The keys, in :meth:`keys` order."""
+        return iter(self.keys())
 
     def canonical(self, tag: str) -> str:
         """``tag`` with an alias resolved to the key it names; an unregistered tag passes through."""

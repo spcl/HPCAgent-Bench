@@ -12,8 +12,7 @@ this; the shapes below are the smallest form that does.
 
 import numpy as np
 
-from tests.translators.op_oracle import run_op
-from tests.translators.op_oracle import parse_source
+from tests.translators.op_oracle import parse_source, run_op
 
 KERNEL = """import numpy as np
 

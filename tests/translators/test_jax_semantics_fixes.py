@@ -45,7 +45,8 @@ def test_scalar_or_kept_python_bool_mask_bitwise() -> None:
     # value ``or`` (truthiness select) stays Python ``or`` -- NOT ``|``.
     val = emit_jax("import numpy as np\ndef f(n, a, out):\n    n = n or a.shape[0]\n    out[0] = float(n)\n", "f")
     assert "n = n or a.shape[0]" in val
-    assert "n | " not in val and "n & " not in val
+    assert "n | " not in val
+    assert "n & " not in val
     # boolean-mask ``and`` (both operands comparisons) still lowers to ``&``.
     msk = emit_jax("import numpy as np\ndef f(a, out):\n    out[:] = np.where((a > 0) and (a < 1), a, 0.0)\n", "f")
     assert "(a > 0) & (a < 1)" in msk

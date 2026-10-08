@@ -152,7 +152,8 @@ def test_setup_tokens_reads_one_tasks_total_never_a_sum() -> None:
     )
     values, low, high = setup_names.setup_tokens(frame, "llr40-qwen38-c")
     assert values == {"k1": 100.0}
-    assert low == {} and high == {}
+    assert low == {}
+    assert high == {}
 
 
 def test_setup_tokens_reads_a_rerun_kernels_latest_task_total_not_the_sum_of_both() -> None:
@@ -168,7 +169,8 @@ def test_setup_tokens_reads_a_rerun_kernels_latest_task_total_not_the_sum_of_bot
     )
     values, low, high = setup_names.setup_tokens(frame, setup)
     assert values == {"k1": 250.0}
-    assert low == {} and high == {}
+    assert low == {}
+    assert high == {}
 
 
 def test_setup_tokens_refuses_a_frame_with_call_rows_and_no_task_records() -> None:

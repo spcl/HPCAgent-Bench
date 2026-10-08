@@ -482,8 +482,8 @@ class SplitTupleUnpack(StatementTransformer):
         changing = OrderedSet(changed)
         kept = [position for position in range(len(targets)) if position not in changing]
         return [
-            *(bind(holder, values[position]) for holder, position in zip(holders, changed)),
-            *(assign(targets[position], load(holder)) for holder, position in zip(holders, changed)),
+            *(bind(holder, values[position]) for holder, position in zip(holders, changed, strict=False)),
+            *(assign(targets[position], load(holder)) for holder, position in zip(holders, changed, strict=False)),
             *(assign(targets[position], values[position]) for position in kept),
         ]
 

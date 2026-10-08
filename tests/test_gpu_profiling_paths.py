@@ -79,7 +79,7 @@ def nsys_records_then_stats_wedge(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.parametrize(
-    "language,stage",
+    ("language", "stage"),
     [
         ("cuda", lambda mp: mp.setattr(gpu_profiling, "run_command", wedge)),
         ("cuda", nsys_records_then_stats_wedge),
@@ -105,7 +105,7 @@ def test_a_wedged_gpu_profiler_is_a_timed_out_refusal_not_a_raw_timeout(tmp_path
 
 def stem(name: str) -> str:
     """A kernel name without its signature, which the two vendors spell differently."""
-    return name.split("(")[0]
+    return name.split("(", maxsplit=1)[0]
 
 
 def test_an_nsys_trace_is_read_into_every_kernel_transfer_and_launch_geometry(
@@ -178,7 +178,7 @@ def test_a_rocprofv3_trace_is_read_into_the_same_run_shape_with_unmeasured_volum
     ]
 
 
-@pytest.mark.parametrize("language,setup", [("cuda", "nvidia"), ("hip", "amd")])
+@pytest.mark.parametrize(("language", "setup"), [("cuda", "nvidia"), ("hip", "amd")])
 def test_the_language_alone_picks_the_vendor_setup(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, language: str, setup: str
 ) -> None:
@@ -220,7 +220,7 @@ def traced_run(*, device_ns: int = 1_200_000, reps: int = 3, elapsed_ns: int = 6
 
 
 @pytest.mark.parametrize(
-    "device_ns,reps,warmup,elapsed_ns,per_rep,pct",
+    ("device_ns", "reps", "warmup", "elapsed_ns", "per_rep", "pct"),
     [
         (1_200_000, 3, 1, 600_000, 300_000.0, 50.0),
         (1_200_000, 3, 0, 400_000, 400_000.0, 100.0),

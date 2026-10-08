@@ -58,7 +58,7 @@ def relu_kir() -> KernelIR:
 
 
 def scop(text: str) -> str:
-    m = re.search(r"#pragma scop(.*?)#pragma endscop", text, re.S)
+    m = re.search(r"#pragma scop(.*?)#pragma endscop", text, re.DOTALL)
     assert m, f"no scop emitted:\n{text}"
     return m.group(1)
 
@@ -95,7 +95,7 @@ def test_a_call_with_no_macro_twin_and_no_hoist_sink_is_left_alone() -> None:
 
 @pytest.mark.skipif(shutil.which("polycc") is None, reason="pluto/polycc not installed")
 @pytest.mark.skipif(shutil.which("gcc") is None, reason="gcc not installed")
-@pytest.mark.parametrize("kir_fn,name", [(gather_kir, "gath"), (relu_kir, "relu")])
+@pytest.mark.parametrize(("kir_fn", "name"), [(gather_kir, "gath"), (relu_kir, "relu")])
 def test_the_transformed_output_compiles(kir_fn: Callable[[], KernelIR], name: str) -> None:
     """The claim that matters: polycc's output has no undeclared ``__pet_ret_0`` left in it."""
     d = pathlib.Path(tempfile.mkdtemp())

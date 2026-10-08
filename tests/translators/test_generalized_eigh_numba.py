@@ -60,7 +60,8 @@ def numba_solvers(tmp_path_factory: pytest.TempPathFactory) -> dict[str, ModuleT
         assert "eigh(" not in emitted.split("def solve_pencil", 1)[1]
         path.write_text(emitted)
         spec = importlib.util.spec_from_file_location(path.stem, path)
-        assert spec is not None and spec.loader is not None
+        assert spec is not None
+        assert spec.loader is not None
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         solvers[kind] = module

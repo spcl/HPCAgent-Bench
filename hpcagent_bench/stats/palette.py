@@ -43,8 +43,8 @@ import logging
 import zlib
 from collections.abc import Iterable
 
-import matplotlib
-import matplotlib.colors
+import matplotlib as mpl
+from matplotlib.colors import to_hex
 from matplotlib.markers import MarkerStyle
 
 from hpcagent_bench import packets
@@ -107,8 +107,8 @@ TAB20B_ORDER: tuple[int, ...] = (0, 4, 8, 12, 16, 2, 6, 10, 14, 18, 1, 5, 9, 13,
 def colormap_slot(name: str, slot: int) -> str:
     """Entry ``slot`` of the colormap ``name`` as ``#rrggbb``. The ONE place a colour value enters
     this repo."""
-    colormap = matplotlib.colormaps[name]
-    return matplotlib.colors.to_hex(colormap(slot % colormap.N))
+    colormap = mpl.colormaps[name]
+    return to_hex(colormap(slot % colormap.N))
 
 
 def tab20_slot(slot: int) -> str:
@@ -188,7 +188,7 @@ def lighten(hex_color: str, steps: int) -> str:
     hue, lightness, saturation = colorsys.rgb_to_hls(r, g, b)
     lightness = min(0.88, lightness + steps * registry().lightness_step)
     r, g, b = colorsys.hls_to_rgb(hue, lightness, saturation)
-    return matplotlib.colors.to_hex((r, g, b))
+    return to_hex((r, g, b))
 
 
 def color(packet: str) -> str:
@@ -265,7 +265,7 @@ def shape_table() -> dict[tuple[str, str], Marker]:
     unfixed = [entity for entity in entities if entity not in fixed]
     if len(unfixed) > len(free):
         raise ValueError(f"registry: {len(entities)} treatments outgrow the {len(reg.shapes)}-shape pool")
-    table = dict(zip(unfixed, free)) | fixed
+    table = dict(zip(unfixed, free, strict=False)) | fixed
     return {entity: table[entity] for entity in entities}
 
 

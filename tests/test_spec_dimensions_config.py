@@ -248,7 +248,8 @@ def test_a_pinned_knob_is_a_compile_time_constant_a_fuzzed_one_is_not() -> None:
     )
     assert spec.pinned_config == {"max_iter": 100}
     # Both still reach every existing consumer through the merged parameters view.
-    assert spec.parameters["S"]["max_iter"] == 100 and spec.parameters["S"]["mode"] == 0
+    assert spec.parameters["S"]["max_iter"] == 100
+    assert spec.parameters["S"]["mode"] == 0
 
 
 def test_a_curated_config_list_pins_nothing() -> None:

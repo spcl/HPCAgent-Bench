@@ -502,7 +502,7 @@ class MgridLowering(ast.NodeTransformer):
         if len(highs) != len(axes):
             return node
         shape_elts: list[ast.expr] = []
-        for ax, hi in zip(axes, highs):
+        for ax, hi in zip(axes, highs, strict=False):
             lo = ax.lower if ax.lower is not None else ast.Constant(value=0)
             shape_elts.append(ast.BinOp(left=hi, op=ast.Sub(), right=lo))
         shape_tuple = ast.Tuple(elts=shape_elts, ctx=ast.Load())
@@ -538,7 +538,7 @@ class MgridLowering(ast.NodeTransformer):
             ]
             # Wrap the body in nested loops, deepest first.
             stmt: list[ast.stmt] = [*body]
-            for it, ax, ax_hi in zip(reversed(iters), reversed(axes), reversed(highs)):
+            for it, ax, ax_hi in zip(reversed(iters), reversed(axes), reversed(highs), strict=False):
                 ax_lo = ax.lower if ax.lower is not None else ast.Constant(value=0)
                 bound = (
                     ax_hi

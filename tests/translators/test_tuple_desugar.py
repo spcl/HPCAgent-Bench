@@ -75,7 +75,7 @@ def test_a_generator_over_a_literal_range_unrolls() -> None:
     assert "out[0] = x.shape[2] * p" in got
 
 
-@pytest.mark.parametrize("rank,want", [(4, "(1, x.shape[1], 1, 1)"), (2, "(1, x.shape[1])")])
+@pytest.mark.parametrize(("rank", "want"), [(4, "(1, x.shape[1], 1, 1)"), (2, "(1, x.shape[1])")])
 def test_a_broadcast_shape_padded_to_an_array_rank_folds(rank: int, want: str) -> None:
     """``(1,) * (x.ndim - 2)``. The rank-2 case repeats ZERO times: the empty tuple is falsy but
     correct, so the fold must test for None rather than truthiness."""
@@ -209,7 +209,8 @@ def test_a_string_comparison_of_two_literals_folds_its_branch() -> None:
             fill = -np.inf if 'mean' == 'max' else 0.0
             out[0] = fill
         """)
-    assert "'mean'" not in got and "0.0" in got
+    assert "'mean'" not in got
+    assert "0.0" in got
 
 
 def test_a_none_default_left_dead_by_the_fold_is_dropped() -> None:
@@ -222,7 +223,8 @@ def test_a_none_default_left_dead_by_the_fold_is_dropped() -> None:
                 s = (p, p)
             out[0] = s[0]
         """)
-    assert "None" not in got and got.endswith("out[0] = p")
+    assert "None" not in got
+    assert got.endswith("out[0] = p")
 
 
 def test_a_none_binding_that_is_still_read_survives() -> None:
@@ -279,7 +281,8 @@ def test_an_unpack_with_no_hazard_still_splits() -> None:
             oh, ow = (p, p + 1)
             out[0] = oh + ow
         """)
-    assert "oh = p" in got and "ow = p + 1" in got
+    assert "oh = p" in got
+    assert "ow = p + 1" in got
     assert "oh, ow = " not in got  # the tuple itself is gone, not just its uses
 
 
@@ -306,7 +309,8 @@ def test_a_list_grown_by_append_becomes_an_array_and_a_fill_loop() -> None:
     # Element i is the i-th literal inside the display and the growth step beyond it, with the
     # loop index standing in for the ``len`` the step counted with.
     assert "centre[__la1] = 1580.0 if __la1 == 0 else 2670.0 if __la1 == 1 else 1200.0 + 200.0 * __la1" in out
-    assert "while" not in out and "append" not in out
+    assert "while" not in out
+    assert "append" not in out
 
 
 def test_an_all_integer_display_folds_to_an_integer_array() -> None:
@@ -333,7 +337,8 @@ def test_a_cut_to_a_different_length_is_left_alone() -> None:
             centre = centre[:m]
             out[:] = centre
         """)
-    assert "centre = [1.0]" in out and "while len(centre) < n:" in out
+    assert "centre = [1.0]" in out
+    assert "while len(centre) < n:" in out
 
 
 def as_written_and_folded(source: str, *args: object) -> tuple[np.ndarray, np.ndarray]:
@@ -404,7 +409,8 @@ def test_a_list_resized_after_its_cut_is_left_alone() -> None:
                 centre.append(3.0)
             out[:] = centre
         """)
-    assert "centre = [1.0]" in out and "while len(centre) < n:" in out
+    assert "centre = [1.0]" in out
+    assert "while len(centre) < n:" in out
 
 
 @pytest.mark.parametrize("n", [2, 5])
@@ -452,8 +458,11 @@ def test_straight_extends_inside_a_loop_body_fold_to_indexed_stores() -> None:
         """
     folded = folded_lists(source)
     assert "guess = np.zeros(4, dtype=np.float64)" in folded
-    assert "guess[0] = lo + t" in folded and "guess[2] = 10.0" in folded and "guess[3] = lo * span" in folded
-    assert "+=" not in folded and "guess + [" not in folded
+    assert "guess[0] = lo + t" in folded
+    assert "guess[2] = 10.0" in folded
+    assert "guess[3] = lo * span" in folded
+    assert "+=" not in folded
+    assert "guess + [" not in folded
     expected, got = as_written_and_folded(source, 1.5, 4.0)
     assert np.array_equal(got, expected)
 
@@ -470,8 +479,10 @@ def test_a_fixed_stride_loop_folds_to_stores_at_a_symbolic_offset(n: int) -> Non
         """
     folded = folded_lists(source)
     assert "params = np.zeros(1 + 2 * n + 1, dtype=np.float64)" in folded
-    assert "params[1 + 2 * j + 1] = width" in folded and "params[1 + 2 * n] = -1.0" in folded
-    assert "+=" not in folded and "append" not in folded
+    assert "params[1 + 2 * j + 1] = width" in folded
+    assert "params[1 + 2 * n] = -1.0" in folded
+    assert "+=" not in folded
+    assert "append" not in folded
     expected, got = as_written_and_folded(source, n, 7.0)
     assert got.shape == expected.shape
     assert np.array_equal(got, expected)
@@ -505,7 +516,8 @@ def test_an_extended_list_mutated_in_a_later_branch_is_left_alone() -> None:
                 guess.append(3.0)
             return guess
         """)
-    assert "guess = [lo]" in out and "guess += [2.0]" in out
+    assert "guess = [lo]" in out
+    assert "guess += [2.0]" in out
 
 
 CURVE_FIT_MODULE = """
@@ -532,13 +544,15 @@ def curve_fit_rewritten(prelude: str) -> str:
 def test_a_grown_p0_becomes_an_array_before_the_fit_indexes_it() -> None:
     out = curve_fit_rewritten("guess = [lo]\n    guess += [0.0]")
     assert "guess = np.zeros(2, dtype=np.float64)" in out
-    assert "guess[0] = lo" in out and "guess[1] = 0.0" in out
+    assert "guess[0] = lo" in out
+    assert "guess[1] = 0.0" in out
     assert "curve_fit" not in out
 
 
 def test_a_bare_p0_display_becomes_an_array_and_other_displays_stay_lists() -> None:
     out = curve_fit_rewritten("scales = [1.0, 2.0]\n    guess = [lo, 0.0]")
     assert "guess = np.zeros(2, dtype=np.float64)" in out
-    assert "guess[0] = lo" in out and "guess[1] = 0.0" in out
+    assert "guess[0] = lo" in out
+    assert "guess[1] = 0.0" in out
     assert "scales = [1.0, 2.0]" in out
     assert "curve_fit" not in out

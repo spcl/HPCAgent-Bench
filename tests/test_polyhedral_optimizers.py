@@ -76,11 +76,14 @@ def test_ppcg_entry_takes_the_canonical_parameters_and_inlines_the_header(monkey
     canonical device-resident parameter list."""
     monkeypatch.setattr(ppcg_transform, "transformed_sources", fake_ppcg)
     sub = PpcgHipOptimizer().solve(Task(KERNEL, "restricted", "hip"))
-    assert sub.source is not None and sub.device_source is not None
+    assert sub.source is not None
+    assert sub.device_source is not None
     for half in (sub.source, sub.device_source):
-        assert "#include" not in half.split("\n", 1)[0] and FAKE_HEADER in half
+        assert "#include" not in half.split("\n", 1)[0]
+        assert FAKE_HEADER in half
     assert "double aa[restrict" not in sub.source
-    assert "const double *__restrict__ aa" in sub.source and "workspace_size" in sub.source
+    assert "const double *__restrict__ aa" in sub.source
+    assert "workspace_size" in sub.source
     assert "double *dev_aa = (double *) aa;" in sub.source
 
 

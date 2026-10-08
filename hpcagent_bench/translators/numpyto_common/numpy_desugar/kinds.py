@@ -368,7 +368,7 @@ def assigned_kinds(
     kinds = tuple_element_kinds(value, dtypes, calls)
     if kinds is None or len(kinds) != len(target.elts):
         return []
-    return [(elt.id, kind) for elt, kind in zip(target.elts, kinds) if isinstance(elt, ast.Name)]
+    return [(elt.id, kind) for elt, kind in zip(target.elts, kinds, strict=False) if isinstance(elt, ast.Name)]
 
 
 def tuple_element_kinds(value: ast.expr, dtypes: dict[str, str], calls: CallKinds) -> list[str | None] | None:
@@ -474,12 +474,12 @@ def argument_kinds(
     starred or ``**`` argument hides which parameter gets what."""
     names = parameter_names(fn)
     if any(isinstance(arg, ast.Starred) for arg in call.args) or any(k.arg is None for k in call.keywords):
-        return {name: None for name in names}
+        return dict.fromkeys(names)
     positional = [p.arg for p in fn.args.posonlyargs + fn.args.args]
-    defaults = list(zip(positional[len(positional) - len(fn.args.defaults) :], fn.args.defaults))
-    defaults += [(p.arg, d) for p, d in zip(fn.args.kwonlyargs, fn.args.kw_defaults) if d is not None]
+    defaults = list(zip(positional[len(positional) - len(fn.args.defaults) :], fn.args.defaults, strict=False))
+    defaults += [(p.arg, d) for p, d in zip(fn.args.kwonlyargs, fn.args.kw_defaults, strict=False) if d is not None]
     kinds: dict[str, str | None] = {name: dtype_kind(default, {}) for name, default in defaults}
-    kinds.update((name, dtype_kind(arg, dtypes, calls)) for name, arg in zip(positional, call.args))
+    kinds.update((name, dtype_kind(arg, dtypes, calls)) for name, arg in zip(positional, call.args, strict=False))
     kinds.update((k.arg, dtype_kind(k.value, dtypes, calls)) for k in call.keywords if k.arg is not None)
     return {name: kinds.get(name) for name in names}
 
@@ -621,7 +621,7 @@ def observe_helper_calls(
         if node.keywords or any(isinstance(a, ast.Starred) for a in node.args):
             continue
         params = [a.arg for a in by_name[node.func.id].args.args]
-        for pname, arg in zip(params, node.args):
+        for pname, arg in zip(params, node.args, strict=False):
             kind = dtype_kind(arg, table)
             if kind is None and isinstance(arg, ast.Call) and isinstance(arg.func, ast.Name):
                 kind = returns.get(arg.func.id)

@@ -91,7 +91,7 @@ def is_float_or_complex(dtype: str) -> bool:
         c = dtypes.canonical(dtype)
     except KeyError:
         return False
-    return c.startswith("float") or c.startswith("complex")
+    return c.startswith(("float", "complex"))
 
 
 #: Bytes of the integer the C ABI passes by value; a dtype narrower than this is narrow.
@@ -123,7 +123,7 @@ def combine(a: Category, b: Category) -> Category:
     """Numpy promotion of two inferred categories."""
     if a is None or b is None:  # UNKNOWN
         return UNKNOWN
-    if a == FLOAT or b == FLOAT:
+    if FLOAT in (a, b):
         return FLOAT
     if a == WEAK_INT and b == WEAK_INT:
         return WEAK_INT
@@ -173,13 +173,13 @@ def wrap_dtype(node: ast.expr, name_dtype: NameDtype) -> str | None:
     unknown -- a shape symbol / loop index should resolve to ``"int64"`` so it is
     the wide, no-wrap operand).
     """
-    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
-        pass
-    elif isinstance(node, ast.BinOp) and isinstance(node.op, WRAP_BINOPS):
+    if (isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub)) or (
+        isinstance(node, ast.BinOp) and isinstance(node.op, WRAP_BINOPS)
+    ):
         pass
     else:
         return None
     cat = infer(node, name_dtype)
-    if cat is None or cat == FLOAT or cat == WEAK_INT:  # None is UNKNOWN
+    if cat is None or cat in (FLOAT, WEAK_INT):  # None is UNKNOWN
         return None
     return cat if narrow_width(cat) is not None else None

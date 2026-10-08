@@ -13,7 +13,7 @@ import pathlib
 from collections.abc import Iterator, Sequence
 from typing import Literal, TypedDict
 
-import matplotlib
+import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.artist import Artist
@@ -271,7 +271,7 @@ def print_type_violations(fig: Figure) -> list[tuple[str, float]]:
 
 def apply() -> None:
     """Set the process-wide rcParams. Idempotent; call it before creating a figure."""
-    matplotlib.rcParams.update(
+    mpl.rcParams.update(
         {
             "figure.facecolor": "white",
             "axes.facecolor": "white",
@@ -560,8 +560,8 @@ def minor_ticks(axis: Axis, kind: MinorKind, color: str = MINOR_RULE, width: flo
     vertical = isinstance(axis, YAxis)
     axis.set_tick_params(
         which="minor",
-        length=MINOR_TICK_LENGTH * float(matplotlib.rcParams["ytick.major.size" if vertical else "xtick.major.size"]),
-        width=MINOR_TICK_WIDTH * float(matplotlib.rcParams["ytick.major.width" if vertical else "xtick.major.width"]),
+        length=MINOR_TICK_LENGTH * float(mpl.rcParams["ytick.major.size" if vertical else "xtick.major.size"]),
+        width=MINOR_TICK_WIDTH * float(mpl.rcParams["ytick.major.width" if vertical else "xtick.major.width"]),
     )
     axis.grid(True, which="minor", color=color, linewidth=width, zorder=0)  # pyright: ignore[reportUnknownMemberType]
 

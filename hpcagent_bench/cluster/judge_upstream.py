@@ -63,7 +63,7 @@ def describe(returncode: int) -> str:
 class Supervisor:
     """Runs ``command`` until it is told to stop, restarting it when it ends on its own."""
 
-    __slots__ = ("command", "label", "min_uptime", "max_quick", "backoff", "child", "stopping")
+    __slots__ = ("backoff", "child", "command", "label", "max_quick", "min_uptime", "stopping")
 
     def __init__(self, command: Sequence[str], label: str, min_uptime: float, max_quick: int, backoff: float) -> None:
         self.command = list(command)

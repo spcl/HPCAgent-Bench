@@ -16,6 +16,6 @@ The headless backend is selected HERE, in the package, so it is in force before 
 pyplot -- the one ordering matplotlib does not let a module fix for itself afterwards.
 """
 
-import matplotlib
+import matplotlib as mpl
 
-matplotlib.use("Agg")
+mpl.use("Agg")

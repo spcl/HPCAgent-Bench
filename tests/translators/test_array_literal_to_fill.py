@@ -33,7 +33,7 @@ def emit_c_for(src: str, func: str, shapes=None, syms=None, inputs=("src",), out
 
 def decl_of(text: str, name: str) -> str:
     """The declaration line for local ``name`` in the emitted C."""
-    hits = re.findall(rf"^\s*(\w[\w ]*?)\s+{name}\[", text, re.M)
+    hits = re.findall(rf"^\s*(\w[\w ]*?)\s+{name}\[", text, re.MULTILINE)
     assert hits, f"no declaration of {name!r} in:\n{text}"
     return hits[0]
 

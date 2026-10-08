@@ -149,17 +149,21 @@ def emit_jax(numpy_src: str, func_name: str, jit: bool = False) -> str:
     head += ["", ""]
     consts = module_constants(tree, func_name)
     if consts:
-        head += consts + [""]
+        head += [*consts, ""]
     eager = not jit
     for h in helpers:
-        head += emit_function(
-            h,
-            decorate=None,
-            helper_mut=helper_mut,
-            eager=eager,
-            mutated=mut_map.get(h.name),
-            static=(sorted(concrete.get(h.name, ())) if jit else None),
-        ) + ["", ""]
+        head += [
+            *emit_function(
+                h,
+                decorate=None,
+                helper_mut=helper_mut,
+                eager=eager,
+                mutated=mut_map.get(h.name),
+                static=sorted(concrete.get(h.name, ())) if jit else None,
+            ),
+            "",
+            "",
+        ]
     deco = kernel_decorator(fn, kernel_static) if jit else None
     return (
         "\n".join(

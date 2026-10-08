@@ -328,7 +328,7 @@ class ScalarTimesMatmulRewriter(ast.NodeTransformer):
                         )
                     ]
                     out: list[ast.stmt] = [*body]
-                    for v, b in zip(reversed(iters), reversed(shape)):
+                    for v, b in zip(reversed(iters), reversed(shape), strict=False):
                         out = [
                             range_for(
                                 v,

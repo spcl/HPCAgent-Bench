@@ -84,7 +84,8 @@ def test_a_gate_must_provide_what_it_catches_and_what_happens_to_the_submission(
 
 
 def test_the_decorator_documents_its_contract() -> None:
-    assert anticheat.anticheat.__doc__ and "must provide" in anticheat.anticheat.__doc__
+    assert anticheat.anticheat.__doc__
+    assert "must provide" in anticheat.anticheat.__doc__
 
 
 def test_a_rerun_label_needs_a_check_and_an_in_place_gate_takes_none() -> None:
@@ -101,7 +102,8 @@ def test_a_rerun_label_needs_a_check_and_an_in_place_gate_takes_none() -> None:
         anticheat.anticheat("probe_check", order=ANTICHEAT.next_order())(
             type("Probe", (), {**fields, "verdict": Verdict.CONSTRUCTION, "check": staticmethod(check)})
         )
-    assert "probe_rerun" not in ANTICHEAT.entries and "probe_check" not in ANTICHEAT.entries
+    assert "probe_rerun" not in ANTICHEAT.entries
+    assert "probe_check" not in ANTICHEAT.entries
 
 
 def graded(**changes: object) -> Score:
@@ -154,7 +156,9 @@ class Reruns:
 def test_a_clean_grade_passes_every_post_run_gate_in_registry_order(monkeypatch: pytest.MonkeyPatch) -> None:
     reruns = Reruns(monkeypatch)
     judgement = reruns.judge()
-    assert judgement.ok and not judgement.suspect and judgement.reason == ""
+    assert judgement.ok
+    assert not judgement.suspect
+    assert judgement.reason == ""
     checked = [key for key, gate in ANTICHEAT.entries.items() if gate.check is not None]
     assert [one.gate for one in judgement.seconds] == checked
     assert reruns.ran == ["independent_verify", "sanitizers"]
@@ -163,14 +167,17 @@ def test_a_clean_grade_passes_every_post_run_gate_in_registry_order(monkeypatch:
 def test_a_reading_only_judge_skips_the_gates_that_re_run(monkeypatch: pytest.MonkeyPatch) -> None:
     reruns = Reruns(monkeypatch)
     judgement = reruns.judge(graded(speedup=1e6, baseline_ns=10**9), rerun=False)
-    assert reruns.ran == [] and judgement.suspect and judgement.ok
+    assert reruns.ran == []
+    assert judgement.suspect
+    assert judgement.ok
 
 
 def test_a_failed_grade_is_never_re_run_but_its_reading_gates_still_report(monkeypatch: pytest.MonkeyPatch) -> None:
     """Public-correct but held-out-failing: the grade is not credited, the reason names the gate."""
     reruns = Reruns(monkeypatch)
     judgement = reruns.judge(graded(correct=False, hidden_correct=False))
-    assert reruns.ran == [] and judgement.reason == "input_sweep: overfit"
+    assert reruns.ran == []
+    assert judgement.reason == "input_sweep: overfit"
 
 
 def test_a_rejection_skips_the_later_re_running_gates_and_flags_stay_out_of_the_reason(
@@ -179,14 +186,16 @@ def test_a_rejection_skips_the_later_re_running_gates_and_flags_stay_out_of_the_
     reruns = Reruns(monkeypatch, verify=VerifyResult(False, True, False, True, True, "fresh-seed-mismatch"))
     judgement = reruns.judge(graded(speedup=1e6, baseline_ns=10**9))
     assert reruns.ran == ["independent_verify"]
-    assert not judgement.ok and judgement.suspect
+    assert not judgement.ok
+    assert judgement.suspect
     assert judgement.reason == "independent_verify: fresh-seed-mismatch"
     assert [finding.gate for finding in judgement.findings] == ["plausibility", "independent_verify"]
 
 
 def test_a_judge_fault_and_the_tolerance_floor_are_their_own_effects(monkeypatch: pytest.MonkeyPatch) -> None:
     fault = Reruns(monkeypatch, verify=VerifyResult(False, False, False, False, False, "ref died", harness_fault=True))
-    assert fault.judge().harness_fault and fault.judge().reason == ""
+    assert fault.judge().harness_fault
+    assert fault.judge().reason == ""
     floor = Reruns(monkeypatch, verify=VerifyResult(False, False, False, False, False, "too wide", ungradeable=True))
     assert floor.judge().ungradeable
 
@@ -198,7 +207,8 @@ def test_a_memory_error_rejects_and_undefined_behaviour_flags(monkeypatch: pytes
     assert memory.judge().reason == "sanitizers: heap-buffer-overflow"
     undefined = Reruns(monkeypatch, sanitized=SanitizerVerdict(True, undefined="signed overflow"))
     judgement = undefined.judge()
-    assert judgement.ok and judgement.suspect
+    assert judgement.ok
+    assert judgement.suspect
 
 
 def test_an_expensive_gate_runs_only_when_the_setup_opts_in(monkeypatch: pytest.MonkeyPatch) -> None:

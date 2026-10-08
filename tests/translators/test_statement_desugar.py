@@ -19,10 +19,10 @@ from hpcagent_bench.translators.numpyto_common.ir import KernelIR
 from hpcagent_bench.translators.numpyto_common.lowering import lower
 from hpcagent_bench.translators.numpyto_common.statement_desugar import DesugarArrayIteration, SplitChainedAssign
 from hpcagent_bench.translators.numpyto_jax.core import emit_jax
-from tests.translators.native_tu import build_run_c
 from tests.optional_imports import import_or_skip
-from tests.translators.source_module import run_source
+from tests.translators.native_tu import build_run_c
 from tests.translators.op_oracle import parse_source
+from tests.translators.source_module import run_source
 
 #: Every array in these kernels is ``(N,)``, and ``N`` is this.
 EXTENT = 4
@@ -151,7 +151,8 @@ def test_dace_walks_an_array_through_an_index_over_its_declared_extent() -> None
     program = kernel_program(emitted(kernel(["a"], "for v in a:", "    out[0] += v"), ["a"], emit_dace))
     (loop,) = [node for node in ast.walk(program) if isinstance(node, ast.For)]
     declared = program.args.args[0].annotation
-    assert declared is not None and isinstance(declared, ast.Subscript)
+    assert declared is not None
+    assert isinstance(declared, ast.Subscript)
     assert ast.unparse(loop.iter) == f"range({ast.unparse(declared.slice)})"
     assert ast.unparse(loop.body[0]) == f"v = a[{ast.unparse(loop.target)}]"
 

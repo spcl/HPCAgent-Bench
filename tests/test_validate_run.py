@@ -32,8 +32,7 @@ GARBAGE_BYTES = b"\xff\xfe" * 100
 
 def load_example_module(name: str) -> ModuleType:
     """Registered in ``sys.modules`` before exec, as a real import does."""
-    module = fresh(name)
-    return module
+    return fresh(name)
 
 
 @pytest.fixture(name="validate_run")
@@ -50,7 +49,7 @@ def seed_shard(path: pathlib.Path, *, episode_id: str, kernel: str = "gemm", ts:
     """One credited grade plus the setup and run it belongs to, in a fresh shard DB -- the same shape
     as test_db_aggregate.py's ``_seed``. The grade carries no ``language``; the identity a figure
     groups by is its run's setup."""
-    setup = episode_id.split(".")[0]
+    setup = episode_id.split(".", maxsplit=1)[0]
     with contextlib.closing(results_db.open_db(path)) as conn:
         results_db.ensure_setup(conn, results_db.Setup(setup, "c", "cpu", study="validate", model="stub-model"))
         run = results_db.ensure_episode(conn, setup, episode_id, None)
@@ -139,13 +138,14 @@ def test_report_prints_a_pass_fail_line_per_check(tmp_path, validate_run, capsys
     run_dir = build_run_dir(tmp_path, drop_log=True)
     validate_run.main([str(run_dir)])
     out = capsys.readouterr().out
-    assert "FAIL" in out and "PASS" in out
+    assert "FAIL" in out
+    assert "PASS" in out
     assert "agent_logs" in out
 
 
 # graceful degradation: a missing subtree is a FAIL, never a traceback
 @pytest.mark.parametrize(
-    "check_name,expected_summary",
+    ("check_name", "expected_summary"),
     [
         ("check_db_shards", "no judge/ dir"),
         ("check_submissions_disk", "no shared/ dir"),
@@ -189,7 +189,8 @@ def test_merge_results_standalone_reports_corrupt_shard_and_fails_cleanly(tmp_pa
 
     assert result.returncode != 0
     assert "Traceback" not in result.stderr
-    assert "rank-1" in result.stderr and "hpcagent_bench.db" in result.stderr
+    assert "rank-1" in result.stderr
+    assert "hpcagent_bench.db" in result.stderr
 
 
 # the per-call trajectory must survive the merge, not just the leaderboard rows
@@ -261,7 +262,8 @@ def test_monitor_report_skips_garbage_csv_and_still_reports_the_rest(
     out, err = capsys.readouterr()
     assert "nid001" in out
     assert "skipped 1/2 CSV files" in out
-    assert "skipped" in err and "nid002" in err
+    assert "skipped" in err
+    assert "nid002" in err
 
 
 def test_monitor_report_exits_nonzero_when_every_csv_is_bad(tmp_path, monitor_report, capsys, monkeypatch) -> None:

@@ -451,7 +451,7 @@ class HelperKirBuilder:
         but every parameter slot stays: the call is left where the caller put it."""
         hfn, pnames = site.hfn, site.pnames
         call_consts: dict[str, ast.expr] = {}
-        for pn, a in zip(pnames, site.call.args):
+        for pn, a in zip(pnames, site.call.args, strict=False):
             if literal_call_arg(a):
                 call_consts[pn] = a
                 continue
@@ -600,11 +600,11 @@ class HelperKirBuilder:
         into a bf16 / fp8 target returns float, and the caller demotes on its copy into the target."""
         hfn, hdef = site.hfn, site.hdef
         hret_dtype = dtypes.compute_dtype(hret_dtype)
-        call_consts = {pn: a for pn, a in zip(site.pnames, site.call.args) if literal_call_arg(a)}
+        call_consts = {pn: a for pn, a in zip(site.pnames, site.call.args, strict=False) if literal_call_arg(a)}
         # Also prunes what the substitution makes dead, so ``used`` below sees no dead reads.
         bind_call_constants(hfn, call_consts)
         used = {n.id for n in ast.walk(hfn) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
-        keep = [(pn, a) for pn, a in zip(site.pnames, site.call.args) if pn in used]
+        keep = [(pn, a) for pn, a in zip(site.pnames, site.call.args, strict=False) if pn in used]
         decl_pnames = list(site.pnames)
         pnames = [pn for pn, unused in keep]
         kept_args = [a for unused, a in keep]
@@ -679,7 +679,9 @@ class HelperKirBuilder:
         if not isinstance(site.lhs, ast.Name):
             return None
         lhs_id = site.lhs.id
-        inout_param = next((pn for pn, a in zip(pnames, kept_args) if isinstance(a, ast.Name) and a.id == lhs_id), None)
+        inout_param = next(
+            (pn for pn, a in zip(pnames, kept_args, strict=False) if isinstance(a, ast.Name) and a.id == lhs_id), None
+        )
         if inout_param is None:
             return None
         desc = next((a for a in arrays if a.name == inout_param), None)
@@ -704,15 +706,17 @@ class HelperKirBuilder:
                 f"helper {name!r} is called with {len(site_args)} args at one "
                 f"site and declares {len(spec.decl_pnames)}; the call sites disagree"
             )
-        site_consts = {pn: literal_key(a) for pn, a in zip(spec.decl_pnames, site_args) if literal_call_arg(a)}
+        site_consts = {
+            pn: literal_key(a) for pn, a in zip(spec.decl_pnames, site_args, strict=False) if literal_call_arg(a)
+        }
         first_consts = {pn: literal_key(a) for pn, a in spec.call_consts.items() if literal_call_arg(a)}
         if site_consts != first_consts:
             raise NotImplementedError(
                 f"helper {name!r} is specialized on {first_consts} but another "
                 f"call site passes {site_consts}; give the two calls their own helper"
             )
-        site_kept = [a for pn, a in zip(spec.decl_pnames, site_args) if pn in spec.pnames]
-        for first_a, site_a in zip(spec.kept_args, site_kept):
+        site_kept = [a for pn, a in zip(spec.decl_pnames, site_args, strict=False) if pn in spec.pnames]
+        for first_a, site_a in zip(spec.kept_args, site_kept, strict=False):
             if not (isinstance(first_a, ast.Name) and isinstance(site_a, ast.Name)):
                 continue
             first_d, site_d = site.oarr_by.get(first_a.id), site.oarr_by.get(site_a.id)

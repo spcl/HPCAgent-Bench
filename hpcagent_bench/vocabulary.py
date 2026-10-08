@@ -145,7 +145,7 @@ def framework_meta(key: str, attrs: dict[str, Any]) -> FrameworkMeta:
         raise RegistryError(f"frameworks {key!r}: precisions is empty, so the column can execute nothing")
     if (attrs["column"] is None) != (attrs["flavor"] is None):
         raise RegistryError(f"frameworks {key!r}: a flavor entry declares both column and flavor, or neither")
-    required = [name for name in FrameworkMeta.__required_keys__]
+    required = list(FrameworkMeta.__required_keys__)
     meta = {name: attrs[name] for name in required}
     meta.update({name: attrs[name] for name in FRAMEWORK_OPTIONAL if attrs[name] is not None})
     return meta  # type: ignore[return-value]

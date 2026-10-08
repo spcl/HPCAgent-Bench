@@ -24,7 +24,6 @@ def launcher_env_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PMIX_RANK", "2")
     monkeypatch.setenv("PMI_RANK", "2")
     monkeypatch.setenv("SLURM_PROCID", "2")
-    return None
 
 
 def test_the_launcher_variables_are_removed(launcher_env: None) -> None:
@@ -75,7 +74,7 @@ def test_the_distributed_residency_keeps_its_launcher_variables(
     deadlocks, and an MPI rank that does not aborts on its first collective with no traceback -- so
     the switch is stated by the caller and defaults to the one that fails safe.
     """
-    import hpcagent_bench.support.collect.sweep as sweep
+    from hpcagent_bench.support.collect import sweep
 
     called = []
     monkeypatch.setattr(sweep, "drop_mpi_launcher_vars", lambda: called.append(True) or [])

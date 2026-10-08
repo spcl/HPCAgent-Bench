@@ -139,7 +139,7 @@ def test_every_slot_of_a_kind_is_the_one_a_published_figure_drew(kind: str) -> N
 
 
 def test_a_retired_framework_keeps_its_slot_and_no_live_column_takes_it() -> None:
-    retired = {key: order for key, order in vocabulary.RETIRED_FRAMEWORKS.orders.items()}
+    retired = dict(vocabulary.RETIRED_FRAMEWORKS.orders.items())
     assert retired == PINNED_RETIRED_FRAMEWORKS
     assert vocabulary.framework_slots() == PINNED_FRAMEWORKS | PINNED_RETIRED_FRAMEWORKS
     assert registry().frameworks["cc_oneapi"] == "oneAPI (retired)"
@@ -163,7 +163,8 @@ def test_a_framework_must_provide_its_descriptor_and_a_valid_one() -> None:
         scratch.register("probe", order=0)(type("Probe", (), {**good, **changes}))
 
     decorated()
-    assert scratch.entries["probe"]["postfix"] == "numpy" and "column" not in scratch.entries["probe"]
+    assert scratch.entries["probe"]["postfix"] == "numpy"
+    assert "column" not in scratch.entries["probe"]
     for changes, message in (
         ({"arch": "tpu"}, "arch must be one of"),
         ({"adapter": "framework.Framework"}, "package.module:Class"),

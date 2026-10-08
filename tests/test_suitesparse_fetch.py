@@ -10,6 +10,7 @@ import io
 import pathlib
 import tarfile
 from concurrent.futures import ThreadPoolExecutor
+from typing import Self
 
 import pytest
 
@@ -29,7 +30,7 @@ def tarball_bytes(name: str) -> bytes:
 
 
 class FakeResponse(io.BytesIO):
-    def __enter__(self) -> "FakeResponse":
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *exc: object) -> None:

@@ -190,7 +190,7 @@ class SpliceNoneGuardedCalls:
                     deferred.targets = unpack.targets
                     ast.fix_missing_locations(deferred)
                 else:
-                    new_stmts = new_stmts + [unpack]
+                    new_stmts = [*new_stmts, unpack]
                 stmts[i : i + consumed] = new_stmts
                 changed = True
                 i += len(new_stmts)
@@ -282,7 +282,7 @@ class SpliceNoneGuardedCalls:
 
         param_names = [a.arg for a in helper.args.args]
         local_names = collect_assigned_names(mid[:guard_idx] + mid[guard_idx + 1 :])
-        arg_map = dict(zip(param_names, call_args))
+        arg_map = dict(zip(param_names, call_args, strict=False))
         rename: dict[str, ast.expr] = dict(arg_map)
         self._counter[0] += 1
         prefix = f"__inl{self._counter[0]}_"

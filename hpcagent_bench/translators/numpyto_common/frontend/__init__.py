@@ -150,7 +150,7 @@ def emit_with_inline_fallback[Emitted](run: Callable[[], Emitted]) -> Emitted:
     the kernel's real refusal and propagates."""
     try:
         return run()
-    except Exception:  # noqa: BLE001 -- retried below; the retry's own failure propagates
+    except Exception:
         if HELPERS_KEPT_DISABLED:
             raise
     with without_kept_helpers():

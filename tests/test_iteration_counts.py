@@ -7,9 +7,9 @@ import json
 import pathlib
 from types import ModuleType
 
-from tests.conftest import script_path
-
 import pytest
+
+from tests.conftest import script_path
 from tests.fresh_module import module_at
 
 

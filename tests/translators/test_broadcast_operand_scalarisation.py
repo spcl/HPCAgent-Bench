@@ -62,7 +62,7 @@ def test_an_equal_rank_subscript_operand_is_unchanged() -> None:
 
 
 @pytest.mark.parametrize(
-    "src,nest,want",
+    ("src", "nest", "want"),
     [
         ("grid[gz[:, None, None], gy[None, :, None], gx[None, None, :]]", 3, "grid[gz[__w0], gy[__w1], gx[__w2]]"),
         # Two vectors and a scalar axis: a rank-2 result, so under a 3-deep nest it right-aligns.

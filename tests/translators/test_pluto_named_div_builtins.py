@@ -16,8 +16,8 @@ from hpcagent_bench.pluto_affine import KNOWN_POLYCC_ISSUES
 from hpcagent_bench.translators.numpyto_c.emit import C_HEADER, emit_c, emit_pluto, pluto_floordiv
 from hpcagent_bench.translators.numpyto_common.ir import KernelIR
 from hpcagent_bench.translators.numpyto_common.lowering import lower
-from tests.translators.native_tu import build_run_c, have_gcc
 from tests.translators import op_oracle
+from tests.translators.native_tu import build_run_c, have_gcc
 
 #: (a, b) with every sign combination, plus exact division and a zero dividend.
 PAIRS = [(7, 2), (-7, 2), (7, -2), (-7, -2), (8, 4), (-8, 4), (0, 5)]
@@ -62,7 +62,7 @@ def float_floordiv_kir() -> KernelIR:
 
 
 def scop_body(text: str) -> str:
-    m = re.search(r"#pragma scop(.*?)#pragma endscop", text, re.S)
+    m = re.search(r"#pragma scop(.*?)#pragma endscop", text, re.DOTALL)
     assert m, f"no scop emitted:\n{text}"
     return m.group(1)
 
@@ -87,7 +87,7 @@ def test_float_floordiv_stays_on_the_generic_macro() -> None:
         assert "floord(" not in body, body
 
 
-@pytest.mark.parametrize("name,helper", [("floord", "__npb_floordiv_i"), ("ceild", "__npb_ceildiv_i")])
+@pytest.mark.parametrize(("name", "helper"), [("floord", "__npb_floordiv_i"), ("ceild", "__npb_ceildiv_i")])
 def test_prelude_defines_the_named_builtins_over_the_existing_helpers(name: str, helper: str) -> None:
     """Guarded, because polycc prepends its own ``#define floord``/``ceild`` (POLYCC-004), and
     delegating rather than restating keeps one definition of the semantics."""
@@ -119,7 +119,7 @@ def test_floord_and_ceild_agree_with_the_helpers_they_alias() -> None:
     expected = []
     for a, b in PAIRS:
         expected += [a // b, -((-a) // b)]
-    for (got, alias), exp in zip(rows, expected):
+    for (got, alias), exp in zip(rows, expected, strict=False):
         assert int(got) == int(alias) == exp, (rows, expected)
 
 

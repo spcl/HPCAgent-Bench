@@ -91,7 +91,8 @@ def test_reports_land_under_reports_root_slash_kernel(
     # The manifest on disk is the SAME data emit_kernel_reports returned, not a second copy that
     # could drift from it.
     on_disk = json.loads((kernel_dir / "manifest.json").read_text())
-    assert on_disk["kernel"] == "probe" and on_disk["framework"] == "fortran"
+    assert on_disk["kernel"] == "probe"
+    assert on_disk["framework"] == "fortran"
 
 
 def test_the_report_compile_uses_the_columns_own_compiler_and_flags(
@@ -125,7 +126,8 @@ def test_the_report_compile_uses_the_columns_own_compiler_and_flags(
         expected_tokens.discard(expected[idx + 1])  # the object path -- ours is a .s path instead
         missing = expected_tokens - set(argv)
         assert not missing, (argv, missing)
-        assert "-S" in argv and "-c" not in argv
+        assert "-S" in argv
+        assert "-c" not in argv
 
 
 def test_the_timed_build_is_unchanged_when_opt_reports_is_on(
@@ -162,7 +164,8 @@ def test_a_compiler_with_no_report_channel_records_a_reason(
     assert "no optimization-report channel" in manifest.reason
     # The assembly channel does not depend on the report channel (-S needs no report flags), so it
     # must still be produced -- "no report" is not "no artifacts at all".
-    assert manifest.sources and all(s.assembly is not None for s in manifest.sources)
+    assert manifest.sources
+    assert all(s.assembly is not None for s in manifest.sources)
 
 
 def test_a_non_native_framework_is_declined_with_a_reason_not_silently_skipped(

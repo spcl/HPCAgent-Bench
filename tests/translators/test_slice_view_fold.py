@@ -190,7 +190,8 @@ def test_chained_index_array_split_by_a_slice_is_not_flattened() -> None:
 
     A = np.arange(3 * 5 * 7).reshape(3, 5, 7)
     idx = np.array([0, 2])
-    assert A[2][:3, idx].shape == (3, 2) and A[2, :3, idx].shape == (2, 3)
+    assert A[2][:3, idx].shape == (3, 2)
+    assert A[2, :3, idx].shape == (2, 3)
     assert np.array_equal(A[2][:3, idx], A[2, :3, idx].T)  # a transpose, not the same array
     assert np.array_equal(A[2][:3, idx], A[2, :3][:, idx])
 

@@ -56,7 +56,7 @@ def test_a_mode_compare_is_a_static_flag_test() -> None:
 
 
 @pytest.mark.parametrize(
-    "expr,reason",
+    ("expr", "reason"),
     [
         ("mode == other", "neither side is a literal, so nothing is decided"),
         ("thing == 'total'", "the name is not a parameter every call site pins to a literal"),

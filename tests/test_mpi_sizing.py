@@ -57,7 +57,7 @@ def test_weak_does_not_mutate_the_caller_dict() -> None:
 
 # At P = m**k every axis symbol is multiplied by the integer m, exactly
 @pytest.mark.parametrize(
-    "ranks,work_exponent,m,expected_n",
+    ("ranks", "work_exponent", "m", "expected_n"),
     [
         (4, 2, 2, 200),  # 4 == 2**2
         (8, 3, 2, 200),  # 8 == 2**3
@@ -74,7 +74,7 @@ def test_weak_at_p_equal_m_to_the_k_multiplies_each_axis_symbol_by_m(ranks, work
 
 
 @pytest.mark.parametrize(
-    "ranks,work_exponent,expected_n",
+    ("ranks", "work_exponent", "expected_n"),
     [
         (8, 2, 283),  # 100 * 8**0.5 = 282.84... -> 283 (8 is not a perfect square)
         (4, 3, 159),  # 100 * 4**(1/3) = 158.74... -> 159 (4 is not a perfect cube)
@@ -348,7 +348,8 @@ def test_the_rounding_note_names_an_alignment_that_moved_an_exact_size() -> None
     grown = mpi_sizing.weak({"N": 100}, ["N"], 4, 1, aligned={"N"})
     assert grown == {"N": 512}  # 400 -> nearest multiple of 256
     note = mpi_sizing.weak_rounding_note({"N": 100}, grown, ["N"], 4, 1)
-    assert note is not None and "aligned to 64 per rank" in note
+    assert note is not None
+    assert "aligned to 64 per rank" in note
     exact = mpi_sizing.weak({"N": 1024}, ["N"], 4, 1, aligned={"N"})
     assert mpi_sizing.weak_rounding_note({"N": 1024}, exact, ["N"], 4, 1) is None
 

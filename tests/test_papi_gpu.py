@@ -24,7 +24,6 @@ import pytest
 
 from hpcagent_bench.harness import papi
 
-
 #: Needs libpapi: the ``papi`` hardware group (tests/conftest.py), deselected unless -m names it.
 requires_papi = pytest.mark.papi
 
@@ -157,14 +156,17 @@ def test_the_unit_is_attached_to_the_event_because_the_vendors_disagree() -> Non
         units = {v: {c.unit for c in cs} for v, cs in papi.GPU_METRICS[metric].candidates.items()}
         assert units["nvidia"] == {"bytes"} and units["amd"] == {"KB"}, f"{metric}: {units}"
     power = {v: {c.unit for c in cs} for v, cs in papi.GPU_METRICS["power"].candidates.items()}
-    assert power["nvidia"] == {"mW"} and power["amd"] == {"uW"}
+    assert power["nvidia"] == {"mW"}
+    assert power["amd"] == {"uW"}
 
 
 def test_a_metric_the_vendors_answer_in_different_units_names_no_unit() -> None:
     """The name is shared by both vendors' rows, so a unit in it mislabels one of them: AMD's DRAM
     traffic is KB of unstated base, and 'dram_read_bytes' called it bytes."""
-    assert "dram_read" in papi.GPU_METRICS and "dram_write" in papi.GPU_METRICS
-    assert "dram_read_bytes" not in papi.GPU_METRICS and "dram_write_bytes" not in papi.GPU_METRICS
+    assert "dram_read" in papi.GPU_METRICS
+    assert "dram_write" in papi.GPU_METRICS
+    assert "dram_read_bytes" not in papi.GPU_METRICS
+    assert "dram_write_bytes" not in papi.GPU_METRICS
     unit_words = {"bytes", "byte", "kb", "kib", "mw", "uw", "mhz", "degc", "millidegc", "pct", "percent"}
     for name, metric in papi.GPU_METRICS.items():
         units = {c.unit for cs in metric.candidates.values() for c in cs}
@@ -185,7 +187,9 @@ def test_each_vendor_resolves_dram_traffic_in_its_own_measured_unit() -> None:
     for (metric, vendor), (event, unit) in expected.items():
         row, why = resolved(metric, vendor, cuda if vendor == "nvidia" else rocm)
         assert why == "" and row is not None, f"{metric}/{vendor}: {why}"
-        assert row["metric"] == metric and row["event"] == event and row["unit"] == unit
+        assert row["metric"] == metric
+        assert row["event"] == event
+        assert row["unit"] == unit
 
 
 def test_gpu_metric_names_do_not_collide_with_cpu_metric_names() -> None:
@@ -198,7 +202,8 @@ def test_an_unknown_gpu_group_is_refused_by_name() -> None:
     """Measuring a different group under the asked-for name is the failure mode."""
     with pytest.raises(ValueError) as excinfo:
         papi.gpu_group_metrics("occupancy_pct")
-    assert "occupancy_pct" in str(excinfo.value) and "occupancy" in str(excinfo.value)
+    assert "occupancy_pct" in str(excinfo.value)
+    assert "occupancy" in str(excinfo.value)
 
 
 def test_the_caveats_state_the_three_constraints_and_ship_with_the_numbers() -> None:
@@ -234,7 +239,9 @@ def test_a_papi_built_without_the_component_says_so_and_names_the_rebuild(monkey
     install(monkeypatch, CPU_ONLY, {})
     reason = papi.component_reason("cuda")
     assert reason is not None
-    assert "not built" in reason and "--with-components=cuda" in reason and "PAPI_CUDA_ROOT" in reason
+    assert "not built" in reason
+    assert "--with-components=cuda" in reason
+    assert "PAPI_CUDA_ROOT" in reason
 
 
 def test_a_component_that_is_built_but_will_not_come_up_is_a_different_answer(monkeypatch) -> None:
@@ -247,7 +254,8 @@ def test_a_component_that_is_built_but_will_not_come_up_is_a_different_answer(mo
     install(monkeypatch, rows, {})
     reason = papi.component_reason("rocm")
     assert reason is not None
-    assert "could not enable" in reason and "libhsa-runtime64.so not found" in reason
+    assert "could not enable" in reason
+    assert "libhsa-runtime64.so not found" in reason
     assert "--with-components" not in reason, "it IS built; telling the reader to rebuild is the wrong fix"
 
 
@@ -292,14 +300,15 @@ def test_the_component_report_covers_every_gpu_component_with_a_verdict(monkeypa
         "purpose": papi.COMPONENT_BUILD["cuda"],
         "events": len(CUDA_EVENTS),
     }
-    assert report["rocm"]["built"] is False and report["rocm"]["events"] == 0
+    assert report["rocm"]["built"] is False
+    assert report["rocm"]["events"] == 0
     assert "--with-components=rocm" in report["rocm"]["reason"]
     for name, row in report.items():
         assert row["purpose"], f"{name}: no statement of what the component even is"
 
 
 # resolution: one surface, two vendors
-def resolved(metric: str, vendor: str, events: dict[str, tuple[str, ...]], blocked: dict[str, str] = None):
+def resolved(metric: str, vendor: str, events: dict[str, tuple[str, ...]], blocked: dict[str, str] | None = None):
     return papi.resolve_gpu(metric, vendor, events, blocked or {})
 
 
@@ -307,7 +316,9 @@ def test_resolution_takes_the_first_candidate_the_machine_actually_enumerates() 
     row, why = resolved("occupancy", "nvidia", {"cuda": CUDA_EVENTS})
     assert why == ""
     assert row["event"] == "cuda:::sm__warps_active.pct_of_peak_sustained_active"
-    assert row["component"] == "cuda" and row["unit"] == "%" and row["vendor"] == "nvidia"
+    assert row["component"] == "cuda"
+    assert row["unit"] == "%"
+    assert row["vendor"] == "nvidia"
 
 
 def test_resolution_never_builds_a_name_from_a_template() -> None:
@@ -325,7 +336,8 @@ def test_resolution_falls_through_to_the_other_spelling_of_the_same_quantity() -
     BECAUSE it is the same quantity -- the ladder never swaps in a different one."""
     legacy = ("cuda:::achieved_occupancy", "cuda:::inst_executed")
     row, _why = resolved("occupancy", "nvidia", {"cuda": legacy})
-    assert row["event"] == "cuda:::achieved_occupancy" and row["unit"] == "fraction"
+    assert row["event"] == "cuda:::achieved_occupancy"
+    assert row["unit"] == "fraction"
 
 
 def test_a_blocked_component_is_skipped_and_the_block_is_the_reason() -> None:
@@ -333,21 +345,26 @@ def test_a_blocked_component_is_skipped_and_the_block_is_the_reason() -> None:
     'no such event' -- the two have different fixes."""
     row, why = resolved("power", "nvidia", {}, {"nvml": "PAPI was not built with the 'nvml' component"})
     assert row is None
-    assert "nvml:::power" in why and "not built" in why
+    assert "nvml:::power" in why
+    assert "not built" in why
 
 
 def test_an_event_the_component_does_not_expose_says_exactly_that() -> None:
     row, why = resolved("l2_hit_rate", "nvidia", {"cuda": ("cuda:::dram__bytes_read",)})
-    assert row is None and "enumerates no such event" in why
+    assert row is None
+    assert "enumerates no such event" in why
 
 
 def test_a_vendor_with_no_equivalent_gets_a_stated_absence_not_the_other_vendor_s_event() -> None:
     """The failure this surface exists to prevent: an AMD number reported under the name of an
     NVIDIA metric. Both directions are checked, because both tables are hand-written."""
     row, why = resolved("l1_hit_rate", "amd", {"rocm": ROCM_EVENTS})
-    assert row is None and "no vector-L1 hit rate" in why and "L2CacheHit" in why
+    assert row is None
+    assert "no vector-L1 hit rate" in why
+    assert "L2CacheHit" in why
     row, why = resolved("wave_utilization", "nvidia", {"cuda": CUDA_EVENTS})
-    assert row is None and "no single CUPTI event" in why
+    assert row is None
+    assert "no single CUPTI event" in why
     # ... and the metric each vendor DOES answer still resolves, so the absence is not a table typo.
     assert resolved("l1_hit_rate", "nvidia", {"cuda": CUDA_EVENTS})[0]["event"].endswith("l1tex__t_sector_hit_rate")
     assert resolved("wave_utilization", "amd", {"rocm": ROCM_EVENTS})[0]["unit"] == "%"
@@ -359,7 +376,8 @@ def test_matching_survives_the_qualifiers_each_component_spells_differently() ->
     assert papi.event_tokens("rocm_smi:::temp_current:device=0:sensor=1") == ("temp_current", "device=0", "sensor=1")
     assert papi.event_tokens("nvml:::NVIDIA_A100-SXM4-40GB:power") == ("NVIDIA_A100-SXM4-40GB", "power")
     row, _why = resolved("temperature", "amd", {"rocm_smi": ROCM_SMI_EVENTS})
-    assert row["event"] == "rocm_smi:::temp_current:device=0:sensor=1" and row["unit"] == "millidegC"
+    assert row["event"] == "rocm_smi:::temp_current:device=0:sensor=1"
+    assert row["unit"] == "millidegC"
     row, _why = resolved("power", "nvidia", {"nvml": ("nvml:::NVIDIA_A100-SXM4-40GB:power",)})
     assert row["event"] == "nvml:::NVIDIA_A100-SXM4-40GB:power"
 
@@ -393,7 +411,8 @@ def test_the_nvidia_restricted_profiling_gate_is_detected_and_named(monkeypatch,
     monkeypatch.setattr(papi.os, "geteuid", lambda: 1000)
     reason = papi.permission_reason("nvidia")
     assert reason is not None
-    assert "ERR_NVGPUCTRPERM" in reason and "NVreg_RestrictProfilingToAdminUsers=0" in reason
+    assert "ERR_NVGPUCTRPERM" in reason
+    assert "NVreg_RestrictProfilingToAdminUsers=0" in reason
 
 
 def test_the_gate_is_found_under_the_name_the_current_driver_publishes(monkeypatch, tmp_path) -> None:
@@ -410,7 +429,8 @@ def test_the_gate_is_found_under_the_name_the_current_driver_publishes(monkeypat
     monkeypatch.setattr(papi, "NVIDIA_PARAMS", params)
     monkeypatch.setattr(papi.os, "geteuid", lambda: 1000)
     reason = papi.permission_reason("nvidia")
-    assert reason is not None and "ERR_NVGPUCTRPERM" in reason
+    assert reason is not None
+    assert "ERR_NVGPUCTRPERM" in reason
     assert "RmProfilingAdminOnly: 1" in reason, "quote the line that matched, or a grep for it finds nothing"
     assert "NVreg_RestrictProfilingToAdminUsers=0" in reason, "the FIX is still spelled the other way"
 
@@ -442,7 +462,9 @@ def test_the_amd_group_gate_is_detected_and_names_the_groups(monkeypatch, tmp_pa
     monkeypatch.setattr(papi.os, "access", lambda *args, **kwargs: False)
     reason = papi.permission_reason("amd")
     assert reason is not None
-    assert "render" in reason and "video" in reason and "keep-groups" in reason
+    assert "render" in reason
+    assert "video" in reason
+    assert "keep-groups" in reason
     monkeypatch.setattr(papi.os, "access", lambda *args, **kwargs: True)
     assert papi.permission_reason("amd") is None
 
@@ -460,7 +482,8 @@ def test_a_host_with_no_gpu_refuses_by_cause_rather_than_measuring_nothing(monke
     assert papi.gpu_vendors() == ()
     with pytest.raises(papi.PapiUnavailable) as excinfo:
         papi.gpu_vendor()
-    assert excinfo.value.cause == "no_gpu" and excinfo.value.cause in papi.CAUSES
+    assert excinfo.value.cause == "no_gpu"
+    assert excinfo.value.cause in papi.CAUSES
     assert "--gpus all" in str(excinfo.value), "the fix for a container without a device is the flag"
 
 
@@ -477,7 +500,8 @@ def test_the_vendor_is_the_one_whose_driver_node_is_here(monkeypatch, tmp_path) 
 def test_an_unknown_vendor_is_refused_rather_than_silently_replaced() -> None:
     with pytest.raises(ValueError) as excinfo:
         papi.gpu_vendor("intel")
-    assert "intel" in str(excinfo.value) and "nvidia" in str(excinfo.value)
+    assert "intel" in str(excinfo.value)
+    assert "nvidia" in str(excinfo.value)
 
 
 # the whole snapshot
@@ -493,7 +517,8 @@ def test_the_feature_set_partitions_every_metric_into_supported_or_a_reason(monk
     assert features["supported"]["l2_hit_rate"]["event"] == "cuda:::lts__t_sector_hit_rate"
     # nvml is not in this build, so the four SMI metrics are unsupported FOR THAT REASON.
     assert "--with-components=nvml" in features["unsupported"]["power"]
-    assert features["vendor"] == "nvidia" and features["caveats"] == list(papi.GPU_CAVEATS)
+    assert features["vendor"] == "nvidia"
+    assert features["caveats"] == list(papi.GPU_CAVEATS)
     assert set(features["components"]) == set(papi.GPU_COMPONENTS)
     assert set(features["permissions"]) == set(papi.VENDOR_DEVICES)
 
@@ -566,7 +591,8 @@ def test_a_device_count_refuses_to_run_without_a_way_to_synchronize(monkeypatch)
     Without the driver call that blocks, the honest answer is no answer."""
     monkeypatch.setattr(papi, "device_barrier", lambda vendor: (None, "libcuda could not be found"))
     row = worker(monkeypatch, supported=RESOLVED)
-    assert row["count"] is None and "libcuda could not be found" in row["missing"]
+    assert row["count"] is None
+    assert "libcuda could not be found" in row["missing"]
 
 
 def test_the_barrier_names_each_vendor_s_own_driver_call(monkeypatch) -> None:
@@ -574,9 +600,13 @@ def test_the_barrier_names_each_vendor_s_own_driver_call(monkeypatch) -> None:
     WHICH runtime to install rather than 'no GPU'."""
     monkeypatch.setattr(papi.ctypes.util, "find_library", lambda name: None)
     call, why = papi.device_barrier("nvidia")
-    assert call is None and "libcuda" in why and "NVIDIA driver" in why
+    assert call is None
+    assert "libcuda" in why
+    assert "NVIDIA driver" in why
     call, why = papi.device_barrier("amd")
-    assert call is None and "libamdhip64" in why and "ROCm" in why
+    assert call is None
+    assert "libamdhip64" in why
+    assert "ROCm" in why
 
 
 def test_a_device_resident_task_needs_cupy_and_says_so(monkeypatch) -> None:
@@ -585,14 +615,17 @@ def test_a_device_resident_task_needs_cupy_and_says_so(monkeypatch) -> None:
     monkeypatch.setattr(papi, "device_barrier", lambda vendor: (lambda: 0, ""))
     monkeypatch.setattr(papi.importlib.util, "find_spec", lambda name: None)
     row = worker(monkeypatch, supported=RESOLVED, device=True)
-    assert row["count"] is None and "device-resident" in row["missing"] and "cupy" in row["missing"]
+    assert row["count"] is None
+    assert "device-resident" in row["missing"]
+    assert "cupy" in row["missing"]
 
 
 def test_an_unsupported_metric_costs_a_fork_and_not_a_measured_run(monkeypatch) -> None:
     """Resolution happens in the child BEFORE the kernel runs, so the reason travels back as data
     and the count is explicitly None -- a caller must never have to tell absence from zero."""
     row = worker(monkeypatch, unsupported={"occupancy": "PAPI was not built with the 'rocm' component"}, vendor="amd")
-    assert row["count"] is None and "not built" in row["missing"]
+    assert row["count"] is None
+    assert "not built" in row["missing"]
 
 
 def test_a_refused_permission_is_reported_instead_of_being_counted_around(monkeypatch) -> None:
@@ -601,7 +634,8 @@ def test_a_refused_permission_is_reported_instead_of_being_counted_around(monkey
     row = worker(
         monkeypatch, supported=RESOLVED, permission="ERR_NVGPUCTRPERM: the driver restricts profiling to admin users"
     )
-    assert row["count"] is None and "ERR_NVGPUCTRPERM" in row["missing"]
+    assert row["count"] is None
+    assert "ERR_NVGPUCTRPERM" in row["missing"]
 
 
 def segfaulting_worker(*args, **kwargs) -> None:
@@ -630,13 +664,15 @@ def test_a_segfaulting_device_count_costs_one_metric_not_the_process(monkeypatch
     signal, and leave the parent alive to run metric k+1."""
     monkeypatch.setattr(papi, "gpu_counting_worker", segfaulting_worker)
     row = papi.count_gpu_metric("/nonexistent.so", None, {}, "cuda", "occupancy", rep_timeout=SCHEDULING_PATIENCE_S)
-    assert row["count"] is None and "SIGSEGV" in row["missing"]
+    assert row["count"] is None
+    assert "SIGSEGV" in row["missing"]
 
 
 def test_a_papi_failure_inside_the_device_child_is_that_metric_s_reason(monkeypatch) -> None:
     monkeypatch.setattr(papi, "gpu_counting_worker", raising_worker)
     row = papi.count_gpu_metric("/nonexistent.so", None, {}, "cuda", "l2_hit_rate", rep_timeout=SCHEDULING_PATIENCE_S)
-    assert row["metric"] == "l2_hit_rate" and row["count"] is None
+    assert row["metric"] == "l2_hit_rate"
+    assert row["count"] is None
     assert "CUPTI_ERROR_INSUFFICIENT_PRIVILEGES" in row["missing"]
 
 
@@ -649,7 +685,8 @@ def test_a_group_costs_one_run_per_metric_and_ships_the_caveats(monkeypatch) -> 
     assert counted["runs"] == len(papi.GPU_GROUPS["cache"]) == 2
     assert [row["metric"] for row in counted["metrics"]] == list(papi.GPU_GROUPS["cache"])
     assert all(row["count"] is None and row["missing"] for row in counted["metrics"])
-    assert counted["vendor"] == "amd" and counted["caveats"] == list(papi.GPU_CAVEATS)
+    assert counted["vendor"] == "amd"
+    assert counted["caveats"] == list(papi.GPU_CAVEATS)
 
 
 # against a real PAPI
@@ -659,7 +696,9 @@ def test_the_component_table_is_read_from_libpapi_not_from_a_list() -> None:
     and it is the assertion that fails first if a future PAPI moves the prefix."""
     rows = papi.components()
     assert rows, "PAPI reported no components at all, which no build does"
-    assert rows[0]["index"] == 0 and rows[0]["name"].isprintable() and rows[0]["name"]
+    assert rows[0]["index"] == 0
+    assert rows[0]["name"].isprintable()
+    assert rows[0]["name"]
     assert all(row["name"] for row in rows), "a nameless component means the struct offsets moved"
 
 

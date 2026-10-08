@@ -483,7 +483,7 @@ def lp_resolve_inlined_shapes(ctx: LoweringContext) -> None:
             return tuple(shape)
         subbed = substitute_inlined_scalar_defs(tuple(shape), ctx.inl_defs)
         resolved = resolve_shape_attr_tokens(subbed, ctx.param_seed)
-        return tuple(new if not INL_RE.search(new) else str(orig) for orig, new in zip(shape, resolved))
+        return tuple(new if not INL_RE.search(new) else str(orig) for orig, new in zip(shape, resolved, strict=False))
 
     def resolve_inl_table_(table: dict[str, tuple[str, ...]]) -> None:
         for nm in list(table):
@@ -1249,7 +1249,7 @@ def tag_complex_locals(
     seed.update({n: "complex" for n, t in kir.local_dtypes.items() if dtype_verdict(t) == "complex"})
     # Names whose constructor stated a real dtype are settled; inference must not reach them.
     pinned_real = {n for n, lit in dtype_literal.items() if dtype_verdict(lit) == "real"}
-    seed.update({n: "float" for n in pinned_real})
+    seed.update(dict.fromkeys(pinned_real, "float"))
 
     stores = [store for store in map(elementwise_store, ast.walk(kir.tree)) if store is not None]
     for unused in range(FIXPOINT_ROUNDS):

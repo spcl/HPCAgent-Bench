@@ -161,10 +161,11 @@ def expand_pad(
         if mode != "edge":
             pre.append(ast.Assign(targets=[store_(sv)], value=raw))
         pre.extend(pad_remap(mode, sv, dim_(k), f"__pm{k}", raw))
-    body = pre + [
+    body = [
+        *pre,
         ast.Assign(
             targets=[store_target([name_(v) for v in out_iters])], value=src_read([name_(v) for v in src_idx_vars])
-        )
+        ),
     ]
     return wrap_for_loops(out_iters, out_bounds, body)
 

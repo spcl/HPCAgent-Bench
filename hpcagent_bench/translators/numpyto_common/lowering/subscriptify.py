@@ -151,7 +151,7 @@ class SubscriptifyNames(ast.NodeTransformer):
         trail_iters = [name_(self.iters[offset + r + i]) for i in range(n_trailing)]
         # The index EXPRESSION scalarised at its own iters; for a bare Name this is ``sl[idx_iters]``.
         gathered = SubscriptifyNames(self.shape_table, idx_iters).visit(copy.deepcopy(sl))
-        full = [gathered] + trail_iters
+        full = [gathered, *trail_iters]
         slot = full[0] if len(full) == 1 else ast.Tuple(elts=full, ctx=ast.Load())
         return ast.Subscript(value=base, slice=slot, ctx=ast.Load())
 

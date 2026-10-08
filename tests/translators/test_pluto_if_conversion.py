@@ -21,8 +21,8 @@ import pytest
 from hpcagent_bench.translators.numpyto_c.emit import emit_pluto
 from hpcagent_bench.translators.numpyto_c.pluto_predicate import FLAG_PREFIX, if_convert
 from hpcagent_bench.translators.numpyto_common.lowering import lower
-from tests.translators.source_module import run_source
 from tests.translators import op_oracle
+from tests.translators.source_module import run_source
 
 
 def pluto_c(src: str, fn: str, inputs: list[str], outputs: list[str], shapes: dict[str, str]) -> str:
@@ -31,7 +31,7 @@ def pluto_c(src: str, fn: str, inputs: list[str], outputs: list[str], shapes: di
 
 
 def regions(text: str) -> list[str]:
-    return re.findall(r"#pragma scop(.*?)#pragma endscop", text, re.S)
+    return re.findall(r"#pragma scop(.*?)#pragma endscop", text, re.DOTALL)
 
 
 ARGMAX = (
@@ -55,7 +55,8 @@ def test_an_argmax_loop_is_inside_a_scop_with_its_test_taken_once_into_a_flag() 
         ARGMAX, "argmax", ["a"], ["out_value", "out_index"], {"a": "(N,)", "out_value": "(1,)", "out_index": "(1,)"}
     )
     body = "".join(regions(text))
-    assert "for (" in body and "if (" not in body
+    assert "for (" in body
+    assert "if (" not in body
     flag = f"{FLAG_PREFIX}0"
     assert re.search(rf"{flag} = \(\(a\[i\] > x\) \? 1 : 0\);", body)
     assert re.search(rf"x = \({flag} \? a\[i\] : x\);", body)
@@ -118,7 +119,8 @@ def test_an_affine_if_stays_an_if() -> None:
         {"a": "(N,)", "b": "(N,)"},
     )
     body = "".join(regions(text))
-    assert "if (" in body and "?" not in body
+    assert "if (" in body
+    assert "?" not in body
 
 
 def subscripted(test: ast.expr) -> bool:
@@ -135,14 +137,15 @@ def run_both(src: str, name: str, args: Callable[[np.random.Generator], tuple]) 
     converted: dict = {}
     run_source(tree, converted, "converted")
     loops = [node for node in ast.walk(tree) if isinstance(node, ast.For)]
-    assert loops and not any(isinstance(node, ast.If) for loop in loops for node in ast.walk(loop))
+    assert loops
+    assert not any(isinstance(node, ast.If) for loop in loops for node in ast.walk(loop))
     rng = np.random.default_rng(0)
     for unused in range(50):
         a_args = args(rng)
         b_args = tuple(x.copy() if isinstance(x, np.ndarray) else x for x in a_args)
         original[name](*a_args)
         converted[name](*b_args)
-        for x, y in zip(a_args, b_args):
+        for x, y in zip(a_args, b_args, strict=False):
             if isinstance(x, np.ndarray):
                 np.testing.assert_array_equal(x, y)
 

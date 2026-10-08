@@ -99,7 +99,9 @@ def test_list_prints_every_registered_key_with_its_label_in_registry_order() -> 
     rows = [line.split("\t", 1) for line in result.stdout.splitlines()]
     keys = [key for key, label in rows]
     assert keys[0] == ""
-    assert "cpf-tool" in keys and "lang-skills" in keys and "autokernel" in keys
+    assert "cpf-tool" in keys
+    assert "lang-skills" in keys
+    assert "autokernel" in keys
     assert keys.index("cpf-tool") < keys.index("lang-skills") < keys.index("autokernel")
     labels = dict(rows)
     assert labels["cpf-tool"] == "Canonical Parallel Form Tool"

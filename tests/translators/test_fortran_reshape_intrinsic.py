@@ -83,7 +83,7 @@ def test_the_dims_are_reversed() -> None:
 
 
 @pytest.mark.parametrize(
-    "newshape,out_shape,sym_shape",
+    ("newshape", "out_shape", "sym_shape"),
     [
         (FLATTEN, (12, 5), "(NA * NB, NC)"),
         ("(a.shape[0], a.shape[1] * a.shape[2])", (3, 20), "(NA, NB * NC)"),

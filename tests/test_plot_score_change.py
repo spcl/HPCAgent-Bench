@@ -10,6 +10,7 @@ itself lives in :mod:`hpcagent_bench.stats.figures.efficacy` -- this script only
 
 import argparse
 import dataclasses
+import itertools
 import math
 import pathlib
 import sys
@@ -588,7 +589,7 @@ def family_csv(pairs: list[tuple[str, str]], score_verdict: str, cost_verdict: s
                 "ci_high": 0.9,
                 "p_adjusted": 0.01,
                 "verdict": score_verdict if leg == plot.SPEEDUP_LEG else cost_verdict,
-            }  # fmt: skip
+            }
             for treated, control in pairs
             for leg in (plot.SPEEDUP_LEG, plot.TOKENS_LEG)
         ]
@@ -608,7 +609,8 @@ def test_a_pairs_leg_never_names_the_intervention_the_two_sides_differ_in() -> N
     say on every row what the figure's own title says once."""
     label = plot.pair_leg_label(SCICOMP_PAIR, "repo")
     assert label == "C"
-    assert "repo" not in label and "kernel" not in label
+    assert "repo" not in label
+    assert "kernel" not in label
 
 
 def test_the_stars_come_off_the_family_csv_and_are_never_recomputed_here() -> None:
@@ -745,7 +747,7 @@ def test_a_measure_row_border_never_opens_an_empty_tick_step(measure: str) -> No
         ticks = sorted(ax.get_yticks())
         log = ax.get_yscale() == "log"
         span = (lambda a, b: math.log(b / a)) if log else (lambda a, b: b - a)
-        step = min(span(a, b) for a, b in zip(ticks, ticks[1:]))
+        step = min(span(a, b) for a, b in itertools.pairwise(ticks))
         reach = efficacy_figures.SNAP_REACH * step + 1e-9
         assert span(low, data_low) <= reach, (low, data_low, step)
         assert span(data_high, high) <= reach, (high, data_high, step)
@@ -903,7 +905,8 @@ def test_by_default_a_wrong_answer_is_no_speedup_and_counts_against_the_success_
     points = efficacy_figures.setup_points(*solved_and_failed_pair())
     assert points is not None
     control, treated = points
-    assert 2.0**control.x == pytest.approx(2.0) and 2.0**treated.x == pytest.approx(4.0)
+    assert 2.0**control.x == pytest.approx(2.0)
+    assert 2.0**treated.x == pytest.approx(4.0)
     assert control.kernels == treated.kernels == 4
     assert (control.solved, control.served, treated.solved, treated.served) == (4, 5, 5, 5)
 
@@ -971,7 +974,8 @@ def test_a_full_tag_mark_on_the_ceiling_is_drawn_whole() -> None:
     row = efficacy_figures.SetupRow("qwen38", "HIP", "#1f77b4", setup(1.0, 2.0, 8, 8), setup(1.0, 2.0, 8, 8))
     efficacy_figures.draw_success_row(ax, [row], "^", efficacy_figures.PAPER_CONFIG, "Solved (%)")
     marks = [collection for collection in ax.collections if isinstance(collection, PathCollection)]
-    assert marks and not any(mark.get_clip_on() for mark in marks)
+    assert marks
+    assert not any(mark.get_clip_on() for mark in marks)
     plt.close(fig)
 
 
@@ -1075,7 +1079,10 @@ def test_a_difference_label_under_the_top_tick_settles_inside_the_frame_and_off_
     renderer = fig.canvas.get_renderer()
     (label,) = [text for text in ax.texts if text.get_gid() == plotstyle.CLEAR_GID]
     box, frame = label.get_window_extent(renderer), ax.get_window_extent(renderer)
-    assert frame.x0 <= box.x0 and box.x1 <= frame.x1 and frame.y0 <= box.y0 and box.y1 <= frame.y1
+    assert frame.x0 <= box.x0
+    assert box.x1 <= frame.x1
+    assert frame.y0 <= box.y0
+    assert box.y1 <= frame.y1
     assert not any(box.overlaps(mark) for mark in plotstyle.mark_boxes(ax))
     plt.close(fig)
 
@@ -1370,7 +1377,8 @@ def test_a_comparators_mark_is_the_geomean_over_its_valid_kernels_and_its_solved
 def test_a_comparator_gets_no_interval_below_min_pairs_for_interval(kernels: int, interval: bool) -> None:
     values = [1.5, 2.0, 3.0, 2.5, 4.0, 1.2][:kernels]
     point = efficacy_figures.comparator_point(efficacy_figures.Comparator("pluto", "C", tuple(values), 40))
-    assert math.isfinite(point.x_low) is interval and math.isfinite(point.x_high) is interval
+    assert math.isfinite(point.x_low) is interval
+    assert math.isfinite(point.x_high) is interval
     if interval:
         want = efficacy_figures.summary.geomean_ci(values)
         assert (2.0**point.x_low, 2.0**point.x_high) == pytest.approx((want.low, want.high))
@@ -1479,7 +1487,8 @@ def test_per_kernel_draws_canon_columns_over_the_baseline(tmp_path: pathlib.Path
         ["--per-kernel", "--canon-db", str(canon_db), "--canon-columns", "pluto,dace_cpu", "--out", str(out)]
     )
     plot.figure_per_kernel(args, cost.resolve())
-    assert out.is_file() and out.with_suffix(".png").is_file()
+    assert out.is_file()
+    assert out.with_suffix(".png").is_file()
     kernels = pd.read_csv(out.with_name("compilers-kernels.csv"))
     pluto = kernels[kernels.framework == "pluto"].set_index("kernel")["speedup"]
     assert pluto.to_dict() == pytest.approx({"k1": 2.0, "k2": 10.0})

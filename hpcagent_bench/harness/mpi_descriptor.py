@@ -3,10 +3,9 @@
 """MPI data-distribution descriptors: how a global array is partitioned across a processor grid."""
 
 import math
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
-from collections.abc import Sequence
 
 import numpy as np
 
@@ -24,6 +23,7 @@ __all__ = [
     "binding_shapes",
     "block_partition_mismatch",
     "blockcyclic_distribution_from_shapes",
+    "declared_array_names",
     "default_distribution",
     "default_layout_refusal",
     "degenerates_to_block",
@@ -37,7 +37,6 @@ __all__ = [
     "hypercube_grid",
     "is_partition",
     "layout_divisibility_refusal",
-    "declared_array_names",
     "layout_flexible_allowlist",
     "local_shape",
     "owned_indices",
@@ -91,7 +90,7 @@ class Grid:
         return tuple((rank // stride) % self.dims[i] for i, stride in enumerate(self._strides()))
 
     def rank_of(self, coords: Sequence[int]) -> int:
-        return int(sum(c * s for c, s in zip(coords, self._strides())))
+        return int(sum(c * s for c, s in zip(coords, self._strides(), strict=False)))
 
     def _strides(self) -> list[int]:
         strides = [1] * len(self.dims)
@@ -135,7 +134,7 @@ def owned_indices(n: int, axis: AxisDist, grid: Grid, coords: Sequence[int]) -> 
 def axis_index_lists(shape: Sequence[int], dist: ArrayDist, grid: Grid, coords: Sequence[int]) -> list[np.ndarray]:
     if len(dist.axes) != len(shape):
         raise ValueError(f"ArrayDist has {len(dist.axes)} axes but the array has {len(shape)} dimension(s)")
-    return [owned_indices(n, ax, grid, coords) for n, ax in zip(shape, dist.axes)]
+    return [owned_indices(n, ax, grid, coords) for n, ax in zip(shape, dist.axes, strict=False)]
 
 
 def local_shape(shape: Sequence[int], dist: ArrayDist, grid: Grid, rank: int) -> tuple[int, ...]:
@@ -556,7 +555,7 @@ class Descriptor:
                 axdist = ad.axes[axis]
                 schemes.add((axdist.grid_dim, effective_block_size(axdist)))
                 if local_val is None:
-                    local_val = int(len(owned_indices(int(global_scalars[sym]), axdist, self.grid, coords)))
+                    local_val = len(owned_indices(int(global_scalars[sym]), axdist, self.grid, coords))
             if len(schemes) > 1:
                 raise ValueError(
                     f"size symbol {sym!r} sizes axes with CONFLICTING decompositions "

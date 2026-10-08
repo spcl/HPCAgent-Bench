@@ -105,7 +105,7 @@ def main(argv=None):
     ap.add_argument("files", nargs="*", help="explicit files to check (default: all tracked in-scope .py)")
     args = ap.parse_args(argv)
 
-    candidates = args.files if args.files else tracked_python()
+    candidates = args.files or tracked_python()
     targets = [rel for rel in sorted(set(candidates)) if in_scope(rel) and (REPO_ROOT / rel).is_file()]
 
     offenders = []

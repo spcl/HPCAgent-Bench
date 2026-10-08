@@ -28,8 +28,7 @@ POLICY = {
 
 
 def load(name: str) -> ModuleType:
-    module = fresh(name)
-    return module
+    return fresh(name)
 
 
 @pytest.fixture(name="driver", scope="module")

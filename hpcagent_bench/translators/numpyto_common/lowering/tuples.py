@@ -67,11 +67,10 @@ def fill_empty_blocks(tree: ast.AST) -> None:
     Python and fails the next parse / compile. An empty ``orelse`` (no ``else``
     clause) is left as-is; only the primary body must be non-empty."""
     for node in ast.walk(tree):
-        if isinstance(node, BLOCK_STMT_TYPES):
-            if not node.body:
-                filler = ast.Pass()
-                ast.copy_location(filler, node)
-                node.body = [filler]
+        if isinstance(node, BLOCK_STMT_TYPES) and not node.body:
+            filler = ast.Pass()
+            ast.copy_location(filler, node)
+            node.body = [filler]
 
 
 class TupleLocalPropagator(ast.NodeTransformer):
@@ -200,7 +199,7 @@ class ShapeTableTupleSplit(SplitTupleUnpack):
         # A self-copy (``H = H``) is promoted to a shape PARAMETER, and ``integer_valued_locals`` pins
         # every ``kir.symbols`` name int anyway. Declaring it would shadow the parameter with an
         # uninitialized local.
-        self.int_locals.extend(name for name, token in zip(names, shape) if name != token)
+        self.int_locals.extend(name for name, token in zip(names, shape, strict=False) if name != token)
         return [], [const_or_name(token) for token in shape]
 
     def temp_name(self, position: int) -> str:

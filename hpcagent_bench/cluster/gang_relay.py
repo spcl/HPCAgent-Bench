@@ -26,6 +26,7 @@ Standard library only and Python 3.6: the batch host's python3 is the site's, no
 The relay exits once its parent (the batch shell) is gone, so it dies with the job.
 """
 
+import contextlib
 import json
 import os
 import signal
@@ -135,10 +136,8 @@ def step_id(ident):
 
 def signal_group(proc, sig):
     """Send ``sig`` to the step's whole process group; a group already gone is not an error."""
-    try:
+    with contextlib.suppress(OSError):
         os.killpg(proc.pid, sig)
-    except OSError:
-        pass
 
 
 def kill(ident, proc):
@@ -148,10 +147,8 @@ def kill(ident, proc):
     already started on the other nodes running; then SIGTERM, :data:`TERM_GRACE_S`, SIGKILL."""
     sid = step_id(ident)
     if sid is not None:
-        try:
+        with contextlib.suppress(OSError, subprocess.TimeoutExpired):
             subprocess.call(["scancel", sid], timeout=SLURM_CALL_S)
-        except (OSError, subprocess.TimeoutExpired):
-            pass
     signal_group(proc, signal.SIGTERM)
     deadline = time.time() + TERM_GRACE_S
     while proc.poll() is None and time.time() < deadline:
@@ -212,10 +209,8 @@ def serve(directory, parent):
         for ident, proc in running.items():
             kill(ident, proc)
         # A judge still waiting must see the relay is gone rather than sit out its launch timeout.
-        try:
+        with contextlib.suppress(OSError):
             os.remove(os.path.join(directory, ALIVE))
-        except OSError:
-            pass
 
 
 def main(argv):

@@ -19,8 +19,8 @@ import pytest
 from hpcagent_agent.driver import agent_driver
 
 from hpcagent_bench import owed, tags
-from hpcagent_bench.recorded_rows import ADHOC_EPISODE_ID
 from hpcagent_bench.harness import recording, results_db
+from hpcagent_bench.recorded_rows import ADHOC_EPISODE_ID
 from hpcagent_bench.stats.population import HARNESS_FAULT_REASON
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
@@ -97,7 +97,8 @@ def test_two_jobs_of_one_setup_are_one_identity_and_coverage_is_the_union(tmp_pa
     make_job(tmp_path, "300", "other-qwen38-c")
     (tmp_path / "400").mkdir()
     by_identity, empty = owed.collect_jobs([tmp_path], excluded={"300"})
-    assert set(by_identity) == {"exp-qwen38-c"} and empty == ["400"]
+    assert set(by_identity) == {"exp-qwen38-c"}
+    assert empty == ["400"]
     assert list(owed.owed(by_identity["exp-qwen38-c"], TAG_RUNS)) == TAG_RUNS[2:]
 
 

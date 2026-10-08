@@ -238,9 +238,7 @@ class MathRewriter(ast.NodeTransformer):
             if isinstance(slc, ast.Slice):
                 return True
             if isinstance(slc, ast.Tuple):
-                if any(isinstance(e, ast.Slice) for e in slc.elts):
-                    return True
-                return False
+                return bool(any(isinstance(e, ast.Slice) for e in slc.elts))
             return False
         if isinstance(expr, (ast.BinOp, ast.UnaryOp)):
             children = [expr.left, expr.right] if isinstance(expr, ast.BinOp) else [expr.operand]

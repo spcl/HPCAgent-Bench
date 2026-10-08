@@ -149,8 +149,7 @@ def base_name(t: ast.expr) -> str:
 
 
 def load(t: ast.expr) -> ast.expr:
-    t2 = ast.fix_missing_locations(ast.parse(ast.unparse(t), mode="eval").body)
-    return t2
+    return ast.fix_missing_locations(ast.parse(ast.unparse(t), mode="eval").body)
 
 
 def reads_before_write(stmts: Sequence[ast.stmt], v: str) -> bool:

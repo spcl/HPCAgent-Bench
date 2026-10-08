@@ -35,7 +35,8 @@ def test_a_failing_step_is_reported_and_the_next_one_still_runs(monkeypatch: pyt
     monkeypatch.setitem(prepare.STEP_FUNCTIONS, "sources", broken)
     monkeypatch.setitem(prepare.STEP_FUNCTIONS, "grade", lambda kernel, plan: ran.append(kernel))
     failed = prepare.run_kernel(KERNEL, Plan("c", "S", "float64", "auto", steps=("sources", "grade")))
-    assert failed == [f"sources: OSError: no scratch for {KERNEL} in c"] and ran == [KERNEL]
+    assert failed == [f"sources: OSError: no scratch for {KERNEL} in c"]
+    assert ran == [KERNEL]
 
 
 def test_an_unknown_step_is_refused(tmp_path: pathlib.Path) -> None:

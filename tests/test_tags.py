@@ -53,8 +53,10 @@ def test_an_unknown_kernel_name_lists_every_miss_with_close_matches(temp_tags: p
         tags.resolve("mytag")
     message = exc.value.args[0]
     assert "mytag.txt" in message
-    assert "'argmax_valu'" in message and "argmax_value" in message
-    assert "'dfaa'" in message and "dfa" in message
+    assert "'argmax_valu'" in message
+    assert "argmax_value" in message
+    assert "'dfaa'" in message
+    assert "dfa" in message
 
 
 def test_a_file_naming_no_kernels_is_refused(temp_tags: pathlib.Path) -> None:

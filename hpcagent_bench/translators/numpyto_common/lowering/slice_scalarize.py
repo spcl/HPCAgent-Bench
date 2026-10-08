@@ -53,7 +53,7 @@ class SliceToScalarRewriter(ast.NodeTransformer):
         self.lhs_dims = lhs_dims
         # Iter vars for slice axes only, in order.
         self._slice_iter_names = [
-            iv.id for iv, dim in zip(iter_vars, lhs_dims) if isinstance(dim, ast.Slice) and iv is not None
+            iv.id for iv, dim in zip(iter_vars, lhs_dims, strict=False) if isinstance(dim, ast.Slice) and iv is not None
         ]
 
     def visit_BinOp(self, node: ast.BinOp) -> ast.AST:
@@ -126,13 +126,13 @@ class SliceToScalarRewriter(ast.NodeTransformer):
         # operands; this is its bare-Name counterpart.
         lhs_slice_starts = [
             rng[0]
-            for iv, dim, rng in zip(self.iter_vars, self.lhs_dims, self.lhs_ranges)
+            for iv, dim, rng in zip(self.iter_vars, self.lhs_dims, self.lhs_ranges, strict=False)
             if isinstance(dim, ast.Slice) and iv is not None
         ]
         iters = self._slice_iter_names[-len(shape) :]
         starts = lhs_slice_starts[-len(shape) :]
         elts: list[ast.expr] = []
-        for dim, iv, start in zip(shape, iters, starts):
+        for dim, iv, start in zip(shape, iters, starts, strict=False):
             # A size-1 axis broadcasts: pin it to index 0 rather than consuming
             # the (larger) result-axis iter. ``w.reshape(1, -1)`` multiplied
             # against an (N, N) array is (1, N) -- dim 0 must read row 0, not the
@@ -216,7 +216,7 @@ class SliceToScalarRewriter(ast.NodeTransformer):
                     src_axis += 1
                 if sh and axes and len(axes) == len(offs) and len(result_axes) <= len(giters):
                     own = giters[len(giters) - len(result_axes) :]
-                    for g, k in zip(own, result_axes):
+                    for g, k in zip(own, result_axes, strict=False):
                         if k in newaxes:
                             continue
                         src = src_axis_of[k]
@@ -236,7 +236,7 @@ class SliceToScalarRewriter(ast.NodeTransformer):
                 if not sh or len(sh) > len(giters):
                     return node
                 own = giters[len(giters) - len(sh) :]
-                elts = [const_(0) if str(x).strip() == "1" else copy.deepcopy(g) for x, g in zip(sh, own)]
+                elts = [const_(0) if str(x).strip() == "1" else copy.deepcopy(g) for x, g in zip(sh, own, strict=False)]
                 slot = elts[0] if len(elts) == 1 else ast.Tuple(elts=elts, ctx=ast.Load())
                 return ast.Subscript(value=node, slice=slot, ctx=ast.Load())
 
@@ -306,7 +306,7 @@ class SliceToScalarRewriter(ast.NodeTransformer):
         if elts0 and all(full_(e) or newax(e) for e in elts0) and any(full_(e) for e in elts0):
             lhs_slice_iters = [
                 (iv, rng[0])
-                for iv, dim, rng in zip(self.iter_vars, self.lhs_dims, self.lhs_ranges)
+                for iv, dim, rng in zip(self.iter_vars, self.lhs_dims, self.lhs_ranges, strict=False)
                 if isinstance(dim, ast.Slice) and iv is not None
             ]
             align = max(0, len(lhs_slice_iters) - len(elts0))
@@ -360,7 +360,7 @@ class SliceToScalarRewriter(ast.NodeTransformer):
         ):
             lhs_pairs = [
                 (iv, rng[0])
-                for iv, dim, rng in zip(self.iter_vars, self.lhs_dims, self.lhs_ranges)
+                for iv, dim, rng in zip(self.iter_vars, self.lhs_dims, self.lhs_ranges, strict=False)
                 if isinstance(dim, ast.Slice) and iv is not None
             ]
             n_trailing = len(source_shape) - len(dims)
@@ -379,7 +379,7 @@ class SliceToScalarRewriter(ast.NodeTransformer):
         # last-weight read inside a slice-fused statement.
         if source_shape is not None and len(dims) == len(source_shape):
             resolved = [self.resolve_scalar_index(d, name, axis) for axis, d in enumerate(dims)]
-            if any(r is not d for r, d in zip(resolved, dims)):
+            if any(r is not d for r, d in zip(resolved, dims, strict=False)):
                 slot = resolved[0] if len(resolved) == 1 else ast.Tuple(elts=resolved, ctx=ast.Load())
                 return ast.Subscript(value=node.value, slice=slot, ctx=node.ctx)
         return node
@@ -396,7 +396,7 @@ class SliceToScalarRewriter(ast.NodeTransformer):
         None when the result does not fit the LHS slice iters."""
         lhs_pairs = [
             (iv, rng[0])
-            for iv, dim, rng in zip(self.iter_vars, self.lhs_dims, self.lhs_ranges)
+            for iv, dim, rng in zip(self.iter_vars, self.lhs_dims, self.lhs_ranges, strict=False)
             if isinstance(dim, ast.Slice) and iv is not None
         ]
         lhs_iters = [iv for iv, unused in lhs_pairs]
@@ -448,7 +448,7 @@ class SliceToScalarRewriter(ast.NodeTransformer):
         # axis 0; both use iter var ``si0``.
         lhs_slice_iters = [
             (iv, rng[0])
-            for iv, dim, rng in zip(self.iter_vars, self.lhs_dims, self.lhs_ranges)
+            for iv, dim, rng in zip(self.iter_vars, self.lhs_dims, self.lhs_ranges, strict=False)
             if isinstance(dim, ast.Slice) and iv is not None
         ]
         # numpy broadcasting aligns operand axes from the RIGHT: a Slice or
@@ -475,7 +475,7 @@ class SliceToScalarRewriter(ast.NodeTransformer):
             source_axes.append(consumed)
             if not (isinstance(d, ast.Constant) and d.value is None):
                 consumed += 1
-        for axis, d in zip(source_axes, dims):
+        for axis, d in zip(source_axes, dims, strict=False):
             if isinstance(d, ast.Constant) and d.value is None:
                 # numpy newaxis -- result-axis inserter; consume one
                 # LHS slice iter but emit no source-axis index. The
@@ -572,17 +572,15 @@ class SliceToScalarRewriter(ast.NodeTransformer):
             scaled = binop(pos, ast.Mult(), step_node(step))
             if isinstance(rhs_start, ast.Constant) and rhs_start.value == 0:
                 return scaled
-            else:
-                return binop(scaled, ast.Add(), rhs_start)
+            return binop(scaled, ast.Add(), rhs_start)
         offset = fold_offset(rhs_start, lhs_start)
         if offset is None:
             return binop(ivar, ast.Add(), binop(rhs_start, ast.Sub(), lhs_start))
-        elif offset == 0:
+        if offset == 0:
             return ivar
-        elif offset > 0:
+        if offset > 0:
             return binop(ivar, ast.Add(), const_(offset))
-        else:
-            return binop(ivar, ast.Sub(), const_(-offset))
+        return binop(ivar, ast.Sub(), const_(-offset))
 
     def merge_view_gather(self, node: ast.Subscript) -> ast.Subscript | None:
         """``A[2, :3][:, idx]`` read as one element of ``A``, or ``None`` when ``node`` is not a gather on a
@@ -681,7 +679,7 @@ class SliceToScalarRewriter(ast.NodeTransformer):
             return None  # adjacent -- owned by the existing in-place handling
         lhs_pairs = [
             (iv, rng[0])
-            for iv, dim, rng in zip(self.iter_vars, self.lhs_dims, self.lhs_ranges)
+            for iv, dim, rng in zip(self.iter_vars, self.lhs_dims, self.lhs_ranges, strict=False)
             if isinstance(dim, ast.Slice) and iv is not None
         ]
         lhs_iters = [iv for iv, unused in lhs_pairs]
@@ -693,7 +691,7 @@ class SliceToScalarRewriter(ast.NodeTransformer):
         front_iters = lhs_iters[:run_rank]
         front_starts = lhs_starts[:run_rank]
         new_dims: list[ast.expr] = []
-        for d, r in zip(dims, ranks):
+        for d, r in zip(dims, ranks, strict=False):
             if r is None or r == 0:
                 # A Slice/newaxis, or a plain scalar sitting in the advanced group
                 # (numpy counts it "advanced" for adjacency, but it is not a

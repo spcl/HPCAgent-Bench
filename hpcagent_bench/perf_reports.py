@@ -265,14 +265,14 @@ def stacks(data: pathlib.Path) -> list[list[tuple[str, str]]]:
     for line in proc.stdout.splitlines():
         if not line.strip():  # blank line ends one sample
             if comm:
-                out.append([(comm, comm)] + list(reversed(frames or [(UNKNOWN, UNKNOWN)])))
+                out.append([(comm, comm), *list(reversed(frames or [(UNKNOWN, UNKNOWN)]))])
             frames, comm = [], ""
         elif line[0].isspace():
             frames.append(parse_frame(line))
         else:
             comm = line.split()[0] if line.split() else UNKNOWN
     if comm:
-        out.append([(comm, comm)] + list(reversed(frames or [(UNKNOWN, UNKNOWN)])))
+        out.append([(comm, comm), *list(reversed(frames or [(UNKNOWN, UNKNOWN)]))])
     return out
 
 

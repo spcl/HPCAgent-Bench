@@ -18,7 +18,7 @@ from hpcagent_bench.translators.numpyto_common.lowering import lower
 from tests.translators.op_oracle import parse_source
 
 #: A whole-statement ``name = name;`` -- the only form the dropper removes.
-SELF_ASSIGN = re.compile(r"^\s*([A-Za-z_]\w*) = ([A-Za-z_]\w*);$", re.M)
+SELF_ASSIGN = re.compile(r"^\s*([A-Za-z_]\w*) = ([A-Za-z_]\w*);$", re.MULTILINE)
 
 
 def lower_shape_unpack_fixture():
@@ -53,4 +53,5 @@ def test_shape_symbols_stay_kernel_parameters() -> None:
     # byte-identical with or without them.
     kir = lower_shape_unpack_fixture()
     assert {"H", "W"} <= set(kir.input_args)
-    assert "H" not in kir.int_locals and "W" not in kir.int_locals
+    assert "H" not in kir.int_locals
+    assert "W" not in kir.int_locals

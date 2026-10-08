@@ -8,13 +8,12 @@ separate/stacked layout.
 import math
 import pathlib
 
-import matplotlib
+import matplotlib as mpl
 import pytest
 
-matplotlib.use("Agg")
+mpl.use("Agg")
 
-import matplotlib.figure
-import matplotlib.lines
+import matplotlib as mpl
 import matplotlib.pyplot as plt
 from matplotlib.collections import PathCollection
 
@@ -42,7 +41,7 @@ def token_metric(cells: list[pk.KernelCell], color: str = "#cc5511") -> pk.Metri
 
 
 @pytest.mark.parametrize(
-    "ratio, label",
+    ("ratio", "label"),
     [
         pytest.param(0.125, "0.125x", id="eighth"),
         pytest.param(0.25, "0.25x", id="quarter"),
@@ -61,20 +60,23 @@ def test_speedup_yticks_always_spans_at_least_a_quarter_to_four_x() -> None:
     enough to read a slow-down and a speedup the same distance from it."""
     cells = [pk.KernelCell("k1", (1.1,)), pk.KernelCell("k2", (1.8,))]
     ticks = pk.speedup_yticks(cells)
-    assert 0.25 in ticks and 4.0 in ticks and 1.0 in ticks
+    assert 0.25 in ticks
+    assert 4.0 in ticks
+    assert 1.0 in ticks
 
 
 def test_speedup_yticks_grows_to_cover_a_wide_range() -> None:
     cells = [pk.KernelCell("k1", (0.1,)), pk.KernelCell("k2", (20.0,))]
     ticks = pk.speedup_yticks(cells)
-    assert min(ticks) <= 0.1 and max(ticks) >= 20.0
+    assert min(ticks) <= 0.1
+    assert max(ticks) >= 20.0
 
 
 # ci vs box drawing.
 
 
 @pytest.mark.parametrize(
-    "n, boxed",
+    ("n", "boxed"),
     [
         pytest.param(1, False, id="one-episode-is-a-point"),
         pytest.param(2, False, id="two-episodes-is-a-point"),
@@ -220,7 +222,7 @@ def test_a_ratio_below_one_prints_as_a_decimal(value: float, want: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "low, high",
+    ("low", "high"),
     [
         pytest.param(1.1, 1.8, id="narrow"),
         pytest.param(0.1, 20.0, id="eight-octaves"),
@@ -265,11 +267,12 @@ def test_kernel_cells_keep_a_present_placeholders_own_value_and_flag() -> None:
     """A ratio one side of which never delivered is a number but not a measurement: it keeps its
     value (the cross goes where the ratio is) and never counts as delivered."""
     (cell,) = pk.kernel_cells({"k1": 4.0}, ["k1"], delivered={"k1": False})
-    assert cell.episodes == (4.0,) and not cell.delivered
+    assert cell.episodes == (4.0,)
+    assert not cell.delivered
 
 
 @pytest.mark.parametrize(
-    "low, high, want",
+    ("low", "high", "want"),
     [
         pytest.param(90.0, 120.0, (90.0, 120.0), id="a-real-range"),
         pytest.param(100.0, 100.0, None, id="one-task-no-range"),
@@ -287,7 +290,9 @@ def test_kernel_cells_turn_a_pending_kernel_into_a_pending_placeholder_whatever_
     """A kernel not attempted yet must not read as a failure, nor as whatever stale value a map
     still holds for it."""
     (cell,) = pk.kernel_cells({"k1": 5.0}, ["k1"], pending=frozenset({"k1"}))
-    assert cell.pending and not cell.delivered and cell.episodes == (population.NOT_DELIVERED,)
+    assert cell.pending
+    assert not cell.delivered
+    assert cell.episodes == (population.NOT_DELIVERED,)
 
 
 def test_an_undelivered_cell_draws_hollow_and_crossed_at_its_own_value() -> None:
@@ -304,7 +309,7 @@ def test_an_undelivered_cell_draws_hollow_and_crossed_at_its_own_value() -> None
 
 
 @pytest.mark.parametrize(
-    "count, want",
+    ("count", "want"),
     [
         pytest.param(0, [], id="no-series-no-offset"),
         pytest.param(1, [0.0], id="one-series-on-the-column"),
@@ -416,7 +421,7 @@ def test_kernel_tick_label_folds_a_long_fallback_name_without_dropping_a_charact
     assert all(len(line) <= study_tags.SHORT_NAME_MAX or " " not in line for line in lines), lines
 
 
-def ink_box_in(fig: matplotlib.figure.Figure, artists: list) -> list:
+def ink_box_in(fig: mpl.figure.Figure, artists: list) -> list:
     renderer = fig.canvas.get_renderer()
     return [a.get_window_extent(renderer).transformed(fig.dpi_scale_trans.inverted()) for a in artists]
 
@@ -426,7 +431,7 @@ def test_a_key_grows_the_canvas_and_never_overprints_the_kernel_names() -> None:
     straight through the key on a narrow page, and a band too short pushed both off the canvas."""
     kernels = [f"k{i}" for i in range(12)]
     metric = speed_metric([pk.KernelCell(k, (2.0,)) for k in kernels])
-    key = [matplotlib.lines.Line2D([], [], marker="o", linestyle="none", label=f"series {i}") for i in range(9)]
+    key = [mpl.lines.Line2D([], [], marker="o", linestyle="none", label=f"series {i}") for i in range(9)]
     bare = pk.figure_panels([metric], kernels, pk.Style.CI, False, "", width_in=3.3)
     keyed = pk.figure_panels([metric], kernels, pk.Style.CI, False, "", width_in=3.3, legend=key)
     try:
@@ -439,7 +444,8 @@ def test_a_key_grows_the_canvas_and_never_overprints_the_kernel_names() -> None:
         plt.close(bare)
         plt.close(keyed)
     assert min(box.y0 for box in names) >= legend.y1, (min(box.y0 for box in names), legend.y1)
-    assert legend.y0 >= 0.0 and all(0.0 <= box.x0 and box.x1 <= width for box in names)
+    assert legend.y0 >= 0.0
+    assert all(box.x0 >= 0.0 and box.x1 <= width for box in names)
 
 
 def test_every_panel_of_a_stack_ends_where_the_widest_summary_does() -> None:

@@ -50,7 +50,7 @@ def expand_einsum_ellipsis(spec: str, ranks: list[int]) -> str:
     if len(ins) != len(ranks):
         raise NotImplementedError("einsum: operand count != subscript count")
     ell_rank, seen = 0, False
-    for sub, r in zip(ins, ranks):
+    for sub, r in zip(ins, ranks, strict=False):
         if "..." in sub:
             er = r - len(sub.replace("...", ""))
             if er < 0:
@@ -183,7 +183,7 @@ def expand_einsum(
 
     # Product of every operand scalarised at its index letters.
     product: ast.expr = subscript_(operand_names[0], inputs[0])
-    for name, spec in zip(operand_names[1:], inputs[1:]):
+    for name, spec in zip(operand_names[1:], inputs[1:], strict=False):
         product = ast.BinOp(left=product, op=ast.Mult(), right=subscript_(name, spec))
 
     # Output write target.
@@ -200,7 +200,7 @@ def expand_einsum(
         body: list[ast.stmt] = [ast.AugAssign(target=out_store, op=ast.Add(), value=product)]
         body = wrap_for_loops([var_of[c] for c in sum_letters], [letter_extent[c] for c in sum_letters], body)
         zero = ast.Assign(targets=[copy.deepcopy(out_store)], value=const_(0.0))
-        inner: list[ast.stmt] = [zero] + body
+        inner: list[ast.stmt] = [zero, *body]
     else:
         inner = [ast.Assign(targets=[copy.deepcopy(out_store)], value=product)]
 
@@ -227,11 +227,11 @@ def einsum_letter_extents(
 ) -> dict[str, str]:
     """Every index letter's extent symbol, from the first operand that uses it."""
     letter_extent: dict[str, str] = {}
-    for spec, name in zip(inputs, operand_names):
+    for spec, name in zip(inputs, operand_names, strict=False):
         shape = shape_table.get(name)
         if shape is None or len(shape) != len(spec):
             raise NotImplementedError(f"einsum: shape of {name!r} unknown / rank mismatch")
-        for letter, dim in zip(spec, shape):
+        for letter, dim in zip(spec, shape, strict=False):
             letter_extent.setdefault(letter, dim)
     return letter_extent
 
@@ -274,7 +274,7 @@ def expand_tensordot(
     b_spec = [""] * rb
     # Shared contraction letters: pair a_ax[i] <-> b_ax[i].
     nxt = ra
-    for ca, cb in zip(a_ax, b_ax):
+    for ca, cb in zip(a_ax, b_ax, strict=False):
         b_spec[cb] = a_spec[ca]
     for i in range(rb):
         if not b_spec[i]:

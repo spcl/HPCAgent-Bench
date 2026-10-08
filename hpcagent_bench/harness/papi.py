@@ -47,15 +47,14 @@ import os
 import pathlib
 import re
 import time
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import NotRequired, TypedDict
-from collections.abc import Callable, Sequence
 
 import numpy as np
 
 from hpcagent_bench import flags, osinfo
 from hpcagent_bench.frameworks.forked import forked_failure_reason, run_forked
-from hpcagent_bench.perf_reports import ProfilerUnavailable
 from hpcagent_bench.harness.native_call import (
     CArgument,
     CKernel,
@@ -66,6 +65,7 @@ from hpcagent_bench.harness.native_call import (
     host_buffer,
     import_device_array_module,
 )
+from hpcagent_bench.perf_reports import ProfilerUnavailable
 from hpcagent_bench.support.bindings.contract import Binding
 from hpcagent_bench.units import BYTES_PER_GIB, NS_PER_MS, NS_PER_S
 
@@ -657,7 +657,7 @@ def hardware_counters() -> int:
 
 def event_name(term: str) -> str:
     """The event a candidate term names, sign stripped."""
-    return term[1:] if term.startswith("-") else term
+    return term.removeprefix("-")
 
 
 def resolve(metric: str, available: Sequence[str]) -> tuple[str, ...] | None:
@@ -678,7 +678,7 @@ def expression(terms: Sequence[str]) -> str:
 
 def combine(terms: Sequence[str], values: Sequence[int]) -> int:
     """Signed sum of one reading, so a derived metric is one number like a direct one."""
-    return sum(-v if t.startswith("-") else v for t, v in zip(terms, values))
+    return sum(-v if t.startswith("-") else v for t, v in zip(terms, values, strict=False))
 
 
 def host_rep(ns: int) -> RepTiming:
@@ -961,7 +961,7 @@ def counted_run(
         resource.setrlimit(resource.RLIMIT_AS, (cap, cap))
 
     codes = [ctypes.c_int(0) for _ in terms]
-    for term, code in zip(terms, codes):
+    for term, code in zip(terms, codes, strict=False):
         demand(lib, lib.PAPI_event_name_to_code(event_name(term).encode(), ctypes.byref(code)), f"lookup {term}")
 
     width = len(terms)
@@ -1003,18 +1003,18 @@ def counted_run(
         # Sampled at every rep boundary, outside the read bracket.
         seen.update(thread_ids())
         # Read-delta per rep: PAPI_start arms once, and two reads isolate one call.
-        for (_tid, eventset), (before, _after) in zip(handles, buffers):
+        for (_tid, eventset), (before, _after) in zip(handles, buffers, strict=False):
             demand(lib, lib.PAPI_read(eventset, before), "PAPI_read")
         t0 = time.perf_counter_ns()
         fn(*c_args)
         settle()  # deferred OpenMP tasks still running after fn() returns must be counted too
         ns = time.perf_counter_ns() - t0
-        for (_tid, eventset), (_before, after) in zip(handles, buffers):
+        for (_tid, eventset), (_before, after) in zip(handles, buffers, strict=False):
             demand(lib, lib.PAPI_read(eventset, after), "PAPI_read")
         seen.update(thread_ids())
         rows = tuple(
             (tid, tuple(int(after[i] - before[i]) for i in range(width)))
-            for (tid, _es), (before, after) in zip(handles, buffers)
+            for (tid, _es), (before, after) in zip(handles, buffers, strict=False)
         )
         readings.append((ns, rows))
         return host_rep(ns)
@@ -1164,17 +1164,21 @@ def perf_event_reason() -> tuple[str, str] | None:
     if not PARANOID_SYSCTL.is_file():
         return (
             "no_perf_events",
-            f"{PARANOID_SYSCTL} is absent: this kernel exposes no perf_event subsystem, "
-            "so PAPI's cpu component has nothing to count with (a container or VM without it "
-            "cannot be counted from inside)",
+            (
+                f"{PARANOID_SYSCTL} is absent: this kernel exposes no perf_event subsystem, "
+                "so PAPI's cpu component has nothing to count with (a container or VM without it "
+                "cannot be counted from inside)"
+            ),
         )
     level = PARANOID_SYSCTL.read_text().strip()
     if level.lstrip("-").isdigit() and int(level) > 2:
         return (
             "perf_event_paranoid",
-            f"kernel.perf_event_paranoid={level} blocks unprivileged perf_event_open, "
-            "which is what PAPI counts with; need <= 2 ('sudo sysctl -w "
-            "kernel.perf_event_paranoid=2', or run the container with --cap-add=CAP_PERFMON)",
+            (
+                f"kernel.perf_event_paranoid={level} blocks unprivileged perf_event_open, "
+                "which is what PAPI counts with; need <= 2 ('sudo sysctl -w "
+                "kernel.perf_event_paranoid=2', or run the container with --cap-add=CAP_PERFMON)"
+            ),
         )
     # An open gate is not a countable machine: a hypervisor may expose perf_event without a PMU.
     # available_events arms what it reports, so that arrives as an empty set.
@@ -1185,10 +1189,12 @@ def perf_event_reason() -> tuple[str, str] | None:
     if not armable:
         return (
             "events_unsupported",
-            "PAPI loaded and the perf_event gate is open, but not one preset event can be ARMED "
-            "here -- PAPI_add_event answers 'Event does not exist' to every one PAPI_query_event "
-            "accepts: this CPU exposes no hardware counter to count with (a VM whose hypervisor "
-            "does not pass the PMU through, which no setting inside the guest fixes)",
+            (
+                "PAPI loaded and the perf_event gate is open, but not one preset event can be ARMED "
+                "here -- PAPI_add_event answers 'Event does not exist' to every one PAPI_query_event "
+                "accepts: this CPU exposes no hardware counter to count with (a VM whose hypervisor "
+                "does not pass the PMU through, which no setting inside the guest fixes)"
+            ),
         )
     return None
 
@@ -1556,9 +1562,11 @@ def render_thread_report(report: PerThreadReport) -> str:
     events = " / ".join(report["expressions"][metric] for metric in PER_THREAD_METRICS)
     idle = f", {report['threads_idle']} idle (excluded)" if report["threads_idle"] else ""
     lines = [
-        f"per-thread counters -- {aggregate['threads']} working thread(s){idle}, {events}, best of "
-        f"{report['reps_counted']} rep(s) at {report['elapsed_ns'] / NS_PER_MS:.4f} ms"
-        f"{' (MULTIPLEXED ESTIMATES)' if report['multiplexed'] else ''}",
+        (
+            f"per-thread counters -- {aggregate['threads']} working thread(s){idle}, {events}, best of "
+            f"{report['reps_counted']} rep(s) at {report['elapsed_ns'] / NS_PER_MS:.4f} ms"
+            f"{' (MULTIPLEXED ESTIMATES)' if report['multiplexed'] else ''}"
+        ),
         "",
         f"  {'tid':>8}  {'core':>10}  {'cycles':>16}  {'instructions':>16}  {'CPI':>7}  {'IPC':>7}  {'share':>7}",
         f"  {'-' * 8}  {'-' * 10}  {'-' * 16}  {'-' * 16}  {'-' * 7}  {'-' * 7}  {'-' * 7}",
@@ -1571,16 +1579,22 @@ def render_thread_report(report: PerThreadReport) -> str:
             f"{fmt(row['cpi']):>7}  {fmt(row['ipc']):>7}  {fmt(row['cycle_share'], 3):>7}{mark}"
         )
     lines += [
-        f"  {'aggregate':>8}  {'':>10}  {aggregate['cycles']:16d}  {aggregate['instructions']:16d}  "
-        f"{fmt(aggregate['cpi']):>7}  {fmt(aggregate['ipc']):>7}",
+        (
+            f"  {'aggregate':>8}  {'':>10}  {aggregate['cycles']:16d}  {aggregate['instructions']:16d}  "
+            f"{fmt(aggregate['cpi']):>7}  {fmt(aggregate['ipc']):>7}"
+        ),
         "",
-        f"  imbalance {spread['max_over_mean']:.3f}x  ({spread['formula']}; * is the critical thread, "
-        f"tid {spread['critical_tid']})",
+        (
+            f"  imbalance {spread['max_over_mean']:.3f}x  ({spread['formula']}; * is the critical thread, "
+            f"tid {spread['critical_tid']})"
+        ),
         f"    {spread['wasted_fraction'] * 100:.1f}% of the region's span is threads already finished, waiting for it",
         f"    {spread['reading']}",
         "",
-        f"  CPI = {PER_THREAD_FORMULAS['cpi']}, IPC = {PER_THREAD_FORMULAS['ipc']} -- reciprocals; both columns "
-        "are labelled so neither is inferred",
+        (
+            f"  CPI = {PER_THREAD_FORMULAS['cpi']}, IPC = {PER_THREAD_FORMULAS['ipc']} -- reciprocals; both columns "
+            "are labelled so neither is inferred"
+        ),
     ]
     return "\n".join(lines + [f"  {note}" for note in report["caveats"]])
 
@@ -1786,17 +1800,23 @@ GPU_GROUPS: dict[str, tuple[str, ...]] = {
 
 #: What a device count is not, shipped with every payload.
 GPU_CAVEATS: tuple[str, ...] = (
-    "counter collection SERIALISES kernels and REPLAYS multi-pass metric sets, so a counted run's "
-    "wall clock is not the plain run's -- read the counts, never the time, and never compare a "
-    "counted run's ms against a timed run's",
-    "CUPTI changed profiling APIs at Volta: pre-Volta parts answer through the CUpti_EventGroup "
-    "names (achieved_occupancy, inst_executed) and Volta+ parts through PerfWorks "
-    "(sm__warps_active..., dram__bytes_read). They are different namespaces, so the event is "
-    "resolved against what this install ENUMERATES rather than built from a template",
-    "one event set counts ONE device through ONE context: the counted kernel must be launched by "
-    "the thread that armed the set, a second GPU needs a second event set, and work on another "
-    "device or in another context is simply not counted -- which looks exactly like a kernel that "
-    "did nothing",
+    (
+        "counter collection SERIALISES kernels and REPLAYS multi-pass metric sets, so a counted run's "
+        "wall clock is not the plain run's -- read the counts, never the time, and never compare a "
+        "counted run's ms against a timed run's"
+    ),
+    (
+        "CUPTI changed profiling APIs at Volta: pre-Volta parts answer through the CUpti_EventGroup "
+        "names (achieved_occupancy, inst_executed) and Volta+ parts through PerfWorks "
+        "(sm__warps_active..., dram__bytes_read). They are different namespaces, so the event is "
+        "resolved against what this install ENUMERATES rather than built from a template"
+    ),
+    (
+        "one event set counts ONE device through ONE context: the counted kernel must be launched by "
+        "the thread that armed the set, a second GPU needs a second event set, and work on another "
+        "device or in another context is simply not counted -- which looks exactly like a kernel that "
+        "did nothing"
+    ),
 )
 
 
@@ -1974,7 +1994,7 @@ def permission_reason(vendor: str) -> str | None:
 def event_tokens(event: str) -> tuple[str, ...]:
     """The colon-separated parts of a PAPI event name, component prefix dropped. Metrics match whole
     tokens (``power`` must not match ``power_management_limit``)."""
-    return tuple(part for part in event.split(":::")[-1].split(":") if part)
+    return tuple(part for part in event.rsplit(":::", maxsplit=1)[-1].split(":") if part)
 
 
 def resolve_gpu(
@@ -2092,8 +2112,10 @@ def gpu_count_plan(
         return (
             None,
             None,
-            "this task is device-resident (its kernel takes device pointers) and cupy is not "
-            "installed, so there is nothing to put the inputs on the device with",
+            (
+                "this task is device-resident (its kernel takes device pointers) and cupy is not "
+                "installed, so there is nothing to put the inputs on the device with"
+            ),
         )
     return resolved, barrier, ""
 

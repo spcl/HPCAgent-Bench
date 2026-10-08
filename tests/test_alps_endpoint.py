@@ -52,7 +52,7 @@ class FakeSglangHandler(http.server.BaseHTTPRequestHandler):
         return
 
     def fake(self) -> FakeSglang:
-        return typing.cast(FakeSglang, self.server)
+        return typing.cast("FakeSglang", self.server)
 
     def reply(self, status: int, payload: dict[str, object]) -> None:
         body = json.dumps(payload).encode()

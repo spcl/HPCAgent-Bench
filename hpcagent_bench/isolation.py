@@ -68,7 +68,8 @@ def pause_openmp_pools(mode: int = OMP_PAUSE_SOFT) -> None:
             warnings.warn(
                 f"{soname}: no omp_pause_resource_all (pre-OpenMP-5.0 runtime); its thread pool "
                 f"was NOT torn down before the fork -- fork safety for this runtime now rests on "
-                f"its own pthread_atfork handler, if it installs one (libgomp installs none)."
+                f"its own pthread_atfork handler, if it installs one (libgomp installs none).",
+                stacklevel=2,
             )
             continue  # best effort; the warning tells the caller the fork was left unhardened
         pause.argtypes = [ctypes.c_int]
@@ -77,5 +78,6 @@ def pause_openmp_pools(mode: int = OMP_PAUSE_SOFT) -> None:
         if pause(mode) != 0 and not exports(lib, KMP_PAUSE_SYMBOL):
             warnings.warn(
                 f"{soname}: omp_pause_resource_all(mode={mode}) returned non-zero; its thread "
-                f"pool was NOT torn down before the fork."
+                f"pool was NOT torn down before the fork.",
+                stacklevel=2,
             )

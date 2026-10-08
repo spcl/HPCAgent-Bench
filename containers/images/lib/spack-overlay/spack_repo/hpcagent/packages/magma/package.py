@@ -11,9 +11,8 @@ sorts (up to double complex). Upstream master still has the per-T declaration.
 
 import os
 
-from spack_repo.builtin.packages.magma.package import Magma as BuiltinMagma
-
 from spack.package import *  # noqa: F403
+from spack_repo.builtin.packages.magma.package import Magma as BuiltinMagma
 
 
 class Magma(BuiltinMagma):

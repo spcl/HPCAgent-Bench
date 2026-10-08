@@ -3,15 +3,17 @@
 """Unit tests for hpcagent_bench.reporting_order: the pure row/group ordering shared by the
 report figures. Exercised against a synthetic benchmark->metadata table -- no matplotlib, no DB."""
 
+import itertools
+
 from hpcagent_bench.reporting_order import (
-    BY_LEVEL,
     BY_DWARF,
-    GroupSpan,
-    RowMeta,
+    BY_LEVEL,
     TRACK_LOOP_LEVEL_REASONING,
-    TRACK_SCIENTIFIC_COMPUTING,
     TRACK_MACHINE_LEARNING,
     TRACK_OTHER,
+    TRACK_SCIENTIFIC_COMPUTING,
+    GroupSpan,
+    RowMeta,
     order_rows,
 )
 
@@ -57,7 +59,7 @@ def test_spans_tile_rows_contiguously() -> None:
     # Boundaries cover [0, len) with no gaps / overlaps.
     assert spans[0].start == 0
     assert spans[-1].end == len(names)
-    for a, b in zip(spans, spans[1:]):
+    for a, b in itertools.pairwise(spans):
         assert a.end == b.start
 
 
@@ -96,7 +98,8 @@ def test_ml_is_never_ordered() -> None:
     for mode in (BY_DWARF, BY_LEVEL):
         names, spans = order_rows(rows, mode)
         assert names == ["zeta", "alpha", "mid"], mode
-        assert len(spans) == 1 and spans[0].label == "machine_learning"
+        assert len(spans) == 1
+        assert spans[0].label == "machine_learning"
 
 
 def test_foundation_placed_after_hpc_before_ml() -> None:
@@ -127,7 +130,9 @@ def test_loop_level_reasoning_tsvc_label_spelling() -> None:
     ]
     _, spans = order_rows(rows, BY_DWARF)
     labels = _labels(spans)
-    assert "tsvc2" in labels and "tsvc2_5" in labels and "canonicalization" in labels
+    assert "tsvc2" in labels
+    assert "tsvc2_5" in labels
+    assert "canonicalization" in labels
 
 
 def test_unlabeled_level_sorts_after_labeled() -> None:

@@ -36,8 +36,8 @@ __all__ = [
     "Cell",
     "Release",
     "Warmer",
-    "tag_cells",
     "start_from_config",
+    "tag_cells",
 ]
 
 #: Takes a device slot at a priority (blocking), and gives it back.

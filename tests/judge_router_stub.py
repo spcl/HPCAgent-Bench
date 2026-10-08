@@ -91,14 +91,13 @@ def closed_port_url() -> str:
 
 def load_router(name: str) -> ModuleType:
     """A fresh copy of the router module, registered before exec like every router test loads it."""
-    module = fresh("hpcagent_bench.cluster.judge_service")
-    return module
+    return fresh("hpcagent_bench.cluster.judge_service")
 
 
 class Answer:
     """The part of ``urlopen``'s response every client in this repo reads."""
 
-    __slots__ = ("status", "content")
+    __slots__ = ("content", "status")
 
     def __init__(self, status: int, content: bytes) -> None:
         self.status = status

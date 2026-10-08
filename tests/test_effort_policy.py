@@ -23,8 +23,7 @@ OPENHANDS_RUNGS = frozenset({"low", "medium", "high", "xhigh", "none"})
 
 @pytest.fixture(name="effort", scope="module")
 def effort_fixture() -> types.ModuleType:
-    module = fresh("effort")
-    return module
+    return fresh("effort")
 
 
 @pytest.mark.parametrize(

@@ -294,7 +294,8 @@ def test_probe_write_mask_cached_runs_once_per_configuration_not_per_seed(monkey
             spec, "p1_kernel_once", "S", "float64", data, {"y": data["y"]}, lambda d: {"y": d["y"]}, drawn={"N": 10}
         )
         assert overrides == {}
-        assert mask is not None and mask["y"].all()
+        assert mask is not None
+        assert mask["y"].all()
     assert len(calls) == 1, "the probe ran again for the second seed of the SAME configuration"
 
 
@@ -327,7 +328,8 @@ def test_probe_write_mask_cached_collapses_a_consistent_reduction_into_one_eleme
         drawn={"N": 50},
     )
     assert overrides == {}
-    assert mask is not None and bool(mask["acc"][0]) is True
+    assert mask is not None
+    assert bool(mask["acc"][0]) is True
     assert contracted_extent(spec, "acc", data["acc"], data, written=mask["acc"]) == (50, "contracted")
 
 
@@ -405,7 +407,8 @@ def test_probe_write_mask_cached_never_crashes_when_the_second_probe_fails(monke
         drawn={"N": 50},
     )
     assert overrides == {}
-    assert mask is not None and bool(mask["acc"][0]) is True
+    assert mask is not None
+    assert bool(mask["acc"][0]) is True
 
 
 # the write probe feeds l, EXCLUSION stays gated (decision item 3)

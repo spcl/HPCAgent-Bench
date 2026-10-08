@@ -44,7 +44,8 @@ import functools
 import math
 import os
 import re
-from collections.abc import Iterator, Mapping, Sequence, Set
+from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, replace
 from typing import TypeGuard, cast
 
@@ -485,7 +486,7 @@ def sparse_bytes(
     spec: BenchSpec,
     namespace: Mapping[str, FuzzValue],
     dense: Mapping[str, int],
-    wanted: Set[str] | None = None,
+    wanted: AbstractSet[str] | None = None,
     layout: ResolvedLayout | None = None,
 ) -> int | None:
     """``dense`` corrected for every array a ``layouts`` block gives a physical format.
@@ -512,7 +513,7 @@ def configuration_bytes(
     arrays: Mapping[str, FuzzValue],
     namespace: Mapping[str, FuzzValue],
     dense: Mapping[str, int],
-    wanted: Set[str] | None,
+    wanted: AbstractSet[str] | None,
 ) -> int | None:
     """``dense`` with each sparse array of one configuration replaced by its format's buffers."""
     total = sum(dense.values())
@@ -849,7 +850,9 @@ def growth_problems(spec: BenchSpec, ladder: Mapping[str, Mapping[str, FuzzValue
     """
     out: list[str] = []
     sizes = [problem_size(spec, ladder[preset]) for preset in PRESETS]
-    for (lo_name, lo), (hi_name, hi) in zip(zip(PRESETS, sizes), zip(PRESETS[1:], sizes[1:])):
+    for (lo_name, lo), (hi_name, hi) in zip(
+        zip(PRESETS, sizes, strict=False), zip(PRESETS[1:], sizes[1:], strict=False), strict=False
+    ):
         if hi < lo:
             out.append(f"the problem shrinks from {lo_name} to {hi_name} ({lo:.3g} -> {hi:.3g})")
         elif hi == lo and lo_name != KEPT:
@@ -884,7 +887,7 @@ def derive_ladder(
     """
     problems: list[str] = []
     declared = set(spec.parameters.get(KEPT, {})) - set(spec.config_names)
-    for label, values in zip(AUTHORED, (small, large)):
+    for label, values in zip(AUTHORED, (small, large), strict=False):
         if set(values) != declared:
             extra, gone = sorted(set(values) - declared), sorted(declared - set(values))
             problems.append(f"{label} symbol set differs from the manifest (extra={extra}, missing={gone})")

@@ -10,6 +10,7 @@ import pathlib
 import types
 
 import pytest
+
 from tests.fresh_module import module_at
 
 MODULE_PATH = pathlib.Path(__file__).resolve().parents[1] / "agent/hpcagent_agent/packets/autokernel/experiment.py"

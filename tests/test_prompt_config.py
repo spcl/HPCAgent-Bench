@@ -44,7 +44,8 @@ def test_from_config_returns_defaults_and_overrides_win() -> None:
     non-None override wins, a None override is ignored."""
     assert PromptConfig.from_config() == PromptConfig()
     over = PromptConfig.from_config(strategy="loopnest", inline_kernel=False)
-    assert over.strategy == "loopnest" and over.inline_kernel is False
+    assert over.strategy == "loopnest"
+    assert over.inline_kernel is False
     # None override leaves the config default alone (how the CLI passes ad-hoc kwargs).
     assert PromptConfig.from_config(strategy=None).strategy == "default"
 
@@ -59,23 +60,29 @@ def test_strategy_changes_the_how_to_text_and_both_profile() -> None:
     prof = build_prompt(TASK, prompt_config=PromptConfig.from_config(strategy="profile_first"))
     loop = build_prompt(TASK, prompt_config=PromptConfig.from_config(strategy="loopnest"))
     assert prof != loop
-    assert "Start by profiling" in prof and "Start loop nest by loop nest" in loop
-    assert "perf stat" in prof and "perf stat" in loop  # both name a profiler
+    assert "Start by profiling" in prof
+    assert "Start loop nest by loop nest" in loop
+    assert "perf stat" in prof
+    assert "perf stat" in loop
 
 
 def test_optimization_guidance_gates_the_how_to_section() -> None:
     on = build_prompt(TASK, prompt_config=PromptConfig.from_config(optimization_guidance=True))
     off = build_prompt(TASK, prompt_config=PromptConfig.from_config(optimization_guidance=False))
-    assert "## How to optimize" in on and "perf stat" in on
-    assert "## How to optimize" not in off and "perf stat" not in off
+    assert "## How to optimize" in on
+    assert "perf stat" in on
+    assert "## How to optimize" not in off
+    assert "perf stat" not in off
     # The always-on rules block survives either way (it is not the how-to guidance).
-    assert "Allowed optimizations" in on and "Allowed optimizations" in off
+    assert "Allowed optimizations" in on
+    assert "Allowed optimizations" in off
 
 
 def test_language_track_adds_emphasis_for_restricted_single_language() -> None:
     lt = build_prompt(TASK, prompt_config=PromptConfig.from_config(language_track=True))
     no = build_prompt(TASK, prompt_config=PromptConfig.from_config(language_track=False))
-    assert "idiomatically in c" in lt and "how far" in lt
+    assert "idiomatically in c" in lt
+    assert "how far" in lt
     assert "idiomatically in" not in no
 
 
@@ -87,9 +94,11 @@ def test_reference_paragraph_gated_on_the_sidecar_and_the_knob() -> None:
     ctx = build_context(TASK, prompt_config=on)
     p_on = build_prompt(TASK, prompt_config=on)
     if ctx["has_reference"]:
-        assert ctx["original_path"] and "ported from" in p_on
+        assert ctx["original_path"]
+        assert "ported from" in p_on
     else:
-        assert ctx["original_path"] == "" and "ported from" not in p_on
+        assert ctx["original_path"] == ""
+        assert "ported from" not in p_on
     # With the knob OFF the offer is never rendered, sidecar or not.
     off = build_prompt(TASK, prompt_config=PromptConfig.from_config(include_reference=False))
     assert "ported from" not in off
@@ -103,7 +112,8 @@ def test_variant_applies_the_preset_overrides() -> None:
     (profile_first sets the strategy; language_native also flips language_track)."""
     assert PromptConfig.variant("profile_first").strategy == "profile_first"
     ln = PromptConfig.variant("language_native")
-    assert ln.strategy == "language_native" and ln.language_track is True
+    assert ln.strategy == "language_native"
+    assert ln.language_track is True
     # "default" is the empty preset -- identical to the plain config default.
     assert PromptConfig.variant("default") == PromptConfig.from_config()
 
@@ -132,7 +142,8 @@ def test_config_declared_variant_resolves_and_overrides_builtin() -> None:
     try:
         assert "my_exp" in available_variants()
         cfg = PromptConfig.variant("my_exp")
-        assert cfg.strategy == "profile_first" and cfg.include_reference is True
+        assert cfg.strategy == "profile_first"
+        assert cfg.include_reference is True
         # The config entry shadows the built-in "minimal" (built-in also flips
         # optimization_guidance off; the override only sets inline_kernel True).
         assert PromptConfig.variant("minimal").inline_kernel is True
@@ -185,15 +196,18 @@ def test_cpp_task_text_carries_the_cpp_signature_spellings_and_tbb_autolink() ->
 
     cpp = build_prompt(Task("gemm", "restricted", "cpp"))
     assert "__restrict__" in cpp
-    assert "oneTBB" in cpp and "std::execution::par" in cpp
+    assert "oneTBB" in cpp
+    assert "std::execution::par" in cpp
     c = build_prompt(TASK)
-    assert "oneTBB" not in c and "std::execution" not in c
+    assert "oneTBB" not in c
+    assert "std::execution" not in c
 
     # The judge-service prompt renders a different top-level template and is the path the
     # experiment setups actually read -- it must carry the same note.
     svc = service_prompt("gemm", "cpp", "http://judge:8000")
     assert "__restrict__" in svc
-    assert "oneTBB" in svc and "std::execution::par" in svc
+    assert "oneTBB" in svc
+    assert "std::execution::par" in svc
     assert "oneTBB" not in service_prompt("gemm", "c", "http://judge:8000")
 
 
@@ -211,7 +225,8 @@ def test_task_text_documents_the_compiler_request_and_its_default() -> None:
         assert "omit it" in text, language  # the default is stated, not implied
 
     svc = service_prompt("gemm", "c", "http://judge:8000")
-    assert '`"compiler"`' in svc and "omit it" in svc
+    assert '`"compiler"`' in svc
+    assert "omit it" in svc
 
 
 def test_build_flags_are_shown_per_compiler_family_from_the_matrix() -> None:
@@ -223,19 +238,24 @@ def test_build_flags_are_shown_per_compiler_family_from_the_matrix() -> None:
     cpp = build_prompt(Task("gemm", "restricted", "cpp"))
     for family in languages.COMPILER_FAMILIES:
         assert f"**{family}**" in cpp, family
-    assert "`g++`" in cpp and "`clang++`" in cpp and "`nvc++`" in cpp
-    assert tbb in cpp and "-stdpar" in cpp
+    assert "`g++`" in cpp
+    assert "`clang++`" in cpp
+    assert "`nvc++`" in cpp
+    assert tbb in cpp
+    assert "-stdpar" in cpp
     # The flag lines are the harness's own, not a copy: the C++ standard the matrix compiles with.
     assert languages.std_flag("cpp") in cpp
 
     c = build_prompt(Task("gemm", "restricted", "c"))
     for family in languages.COMPILER_FAMILIES:
         assert f"**{family}**" in c, family
-    assert tbb not in c and "std::execution" not in c  # C has no <execution> policies to promise
+    assert tbb not in c
+    assert "std::execution" not in c
     assert languages.std_flag("c") in c
 
     fortran = build_prompt(Task("gemm", "restricted", "fortran"))
-    assert "`gfortran`" in fortran and "`flang`" in fortran
+    assert "`gfortran`" in fortran
+    assert "`flang`" in fortran
     # nvfortran belongs to the nvhpc entry and to no other family's row. Scoped to the section, not
     # the whole prompt, because the openacc skill page is inlined for fortran and names things too.
     flags = section_of(fortran, "### Build flags per compiler family")

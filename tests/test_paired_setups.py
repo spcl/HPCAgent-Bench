@@ -275,9 +275,12 @@ def test_the_impact_table_has_one_row_per_setup_with_the_ratio_on_the_treatment_
     assert list(table.index) == ["x-qwen38-c-cpf-tool", "x-qwen38-c"]
     assert list(table.columns) == [c for c in paired_setups.IMPACT_COLUMNS if c != "setup"]
     treated, control = table.loc["x-qwen38-c-cpf-tool"], table.loc["x-qwen38-c"]
-    assert treated.control == "x-qwen38-c" and pd.isna(control.control)
-    assert treated.speedup_ratio == pytest.approx(1.5) and treated.token_ratio == pytest.approx(2.0)
-    assert pd.isna(control.speedup_ratio) and pd.isna(control.token_ratio)
+    assert treated.control == "x-qwen38-c"
+    assert pd.isna(control.control)
+    assert treated.speedup_ratio == pytest.approx(1.5)
+    assert treated.token_ratio == pytest.approx(2.0)
+    assert pd.isna(control.speedup_ratio)
+    assert pd.isna(control.token_ratio)
     assert (treated.model, treated.language, treated.packet) == ("qwen38", "c", "cpf-tool")
 
 
@@ -291,7 +294,8 @@ def test_the_impact_table_carries_usage_and_the_setup_aggregates(
     assert (treated.tasks, treated.n_solved, treated.n_token_kernels) == (8, 8, 8)
     assert (treated.attempts_per_episode, control.attempts_per_episode) == (2.0, 1.0)
     assert treated.accepted_submissions_per_episode == pytest.approx(1.0)
-    assert treated.geomean_speedup == pytest.approx(3.0) and control.gm_tokens == pytest.approx(100.0)
+    assert treated.geomean_speedup == pytest.approx(3.0)
+    assert control.gm_tokens == pytest.approx(100.0)
     assert treated.gm_tokens_ci_low == pytest.approx(50.0) == treated.gm_tokens_ci_high
     assert (treated.mean_tokens, control.mean_tokens) == pytest.approx((50.0, 100.0))
 
@@ -380,7 +384,8 @@ def test_a_leg_below_the_interval_floor_reports_underpowered(paired_setups: Modu
     assert len(KERNELS[:3]) < summary.MIN_PAIRS_FOR_INTERVAL
     for row in reported:
         assert row["verdict"] == "underpowered"
-        assert math.isnan(float(row["ci_low"])) and math.isnan(float(row["ci_high"]))
+        assert math.isnan(float(row["ci_low"]))
+        assert math.isnan(float(row["ci_high"]))
 
 
 def test_the_correction_runs_over_every_leg_of_every_pair(paired_setups: ModuleType, tmp_path: pathlib.Path) -> None:
@@ -616,7 +621,8 @@ def test_the_impact_table_carries_the_relaunch_rate_beside_every_token_ratio(
     table = impact_table(paired_setups, tmp_path).set_index("setup")
     treated, control = table.loc["x-qwen38-c-cpf-tool"], table.loc["x-qwen38-c"]
     assert (treated.relaunched_episodes, control.relaunched_episodes) == (8, 0)
-    assert treated.share_relaunched == pytest.approx(1.0) and control.share_relaunched == pytest.approx(0.0)
+    assert treated.share_relaunched == pytest.approx(1.0)
+    assert control.share_relaunched == pytest.approx(0.0)
 
 
 def test_a_declared_tag_is_read_from_the_file_and_not_from_the_rows(
@@ -756,7 +762,8 @@ def test_a_kernel_the_setup_never_ran_leaves_its_completion_and_its_pairs_while_
     setup = paired_setups.setup_rows(best, paired_setups.graded_rows(obs, ["a"]), table, served, {}, usage)[0]
     assert (setup["n_served"], setup["n_solved"], setup["coverage"]) == (7, 6, pytest.approx(6 / 7))
     tokens = paired_setups.tokens_by_setup_kernel(obs)
-    assert ("a", "k8") not in tokens and ("a", "k7") in tokens
+    assert ("a", "k8") not in tokens
+    assert ("a", "k7") in tokens
     legs = {row["leg"]: row for row in paired_setups.pair_rows([("a", "b")], table, tokens, list(KERNELS), "f", served)}
     assert (legs["speedup"]["n_only_a"], legs["speedup"]["n_only_b"]) == (0, 1)
     assert (legs["speedup"]["n_pairs"], legs["tokens"]["n_pairs"]) == (6, 7)

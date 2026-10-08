@@ -24,6 +24,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import scipy.linalg as sla
+
 from tests.fresh_module import module_at
 
 _HERE = Path(__file__).resolve().parent

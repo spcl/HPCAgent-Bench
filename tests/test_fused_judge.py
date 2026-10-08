@@ -165,10 +165,8 @@ def test_a_request_without_a_token_is_told_where_the_token_is(fused_job: dict[st
     with pytest.raises(fused.FusedRefusal) as refused:
         fused.token_setup("")
     assert refused.value.status == 403
-    assert (
-        http_json.WORKER_TOKEN_HEADER in refused.value.message
-        and f"${http_json.WORKER_TOKEN_ENV}" in refused.value.message
-    )
+    assert http_json.WORKER_TOKEN_HEADER in refused.value.message
+    assert f"${http_json.WORKER_TOKEN_ENV}" in refused.value.message
 
 
 def test_a_episode_id_of_another_setup_is_refused(fused_job: dict[str, str]) -> None:
@@ -268,7 +266,8 @@ def test_a_fused_judge_records_the_row_a_single_setup_judge_records(
         record_all(str(tmp_path / "fused.db"), episode_id)
     single_rows, fused_rows = recorded(str(tmp_path / "single.db")), recorded(str(tmp_path / "fused.db"))
     assert fused_rows == single_rows
-    assert fused_rows["joined"][0][5] == identity and fused_rows["joined"][0][1] == "qwen38"
+    assert fused_rows["joined"][0][5] == identity
+    assert fused_rows["joined"][0][1] == "qwen38"
 
 
 # the upstream judge

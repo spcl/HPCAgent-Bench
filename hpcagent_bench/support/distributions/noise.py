@@ -69,7 +69,7 @@ def perturb(
 
     ``eps`` defaults per format (:data:`DEFAULT_EPS`); an array of a format with none is returned unchanged. The
     result stays inside ``interval`` when one is given, else inside ``+-max|values|``."""
-    step = eps if eps else default_eps(values.dtype)
+    step = eps or default_eps(values.dtype)
     if step is None or values.size == 0:
         return values
     wide = compute_view(values)

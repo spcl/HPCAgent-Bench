@@ -23,7 +23,7 @@ import time
 import urllib.error
 import urllib.request
 from types import ModuleType
-from typing import Any
+from typing import Any, Self
 
 import pytest
 
@@ -49,8 +49,7 @@ VLLM_SERIES = {
 
 def load_example_module(name: str) -> ModuleType:
     """``sys.modules`` must carry the module BEFORE exec, matching tests/test_validate_run.py."""
-    module = fresh(name)
-    return module
+    return fresh(name)
 
 
 @pytest.fixture(name="driver")
@@ -64,7 +63,7 @@ class FakeMetrics:
     def __init__(self, text: str) -> None:
         self.text = text
 
-    def __enter__(self) -> "FakeMetrics":
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *exc: object) -> bool:
@@ -128,18 +127,7 @@ def test_every_label_set_of_a_series_is_summed_and_a_lookalike_name_is_not(drive
     dropped. Matching on the name has to be exact all the same: prometheus_client emits _created
     beside every counter and histogram buckets beside every latency, and a prefix match would fold
     a bucket count into the token total."""
-    text = "\n".join(
-        [
-            "# TYPE vllm:generation_tokens_total counter",
-            'vllm:generation_tokens_total{model_name="kimi"} 1200.0',
-            'vllm:generation_tokens_total{model_name="qwen"} 300.0',
-            'vllm:generation_tokens_total_created{model_name="kimi"} 1.7e9',
-            'vllm:prompt_tokens_total{model_name="kimi"} 50.0',
-            'vllm:num_requests_running{model_name="kimi"} 12.0',
-            'vllm:num_requests_waiting{model_name="kimi"} 3.0',
-            'vllm:time_to_first_token_seconds_bucket{model_name="kimi",le="+Inf"} 999.0',
-        ]
-    )
+    text = '# TYPE vllm:generation_tokens_total counter\nvllm:generation_tokens_total{model_name="kimi"} 1200.0\nvllm:generation_tokens_total{model_name="qwen"} 300.0\nvllm:generation_tokens_total_created{model_name="kimi"} 1.7e9\nvllm:prompt_tokens_total{model_name="kimi"} 50.0\nvllm:num_requests_running{model_name="kimi"} 12.0\nvllm:num_requests_waiting{model_name="kimi"} 3.0\nvllm:time_to_first_token_seconds_bucket{model_name="kimi",le="+Inf"} 999.0'
     parsed = driver.engine_totals(text)
     assert parsed[GENERATION] == pytest.approx(1500.0)  # both label sets, not the _created epoch
     assert parsed[PROMPT] == pytest.approx(50.0)
@@ -154,17 +142,7 @@ def test_an_sglang_exposition_reads_into_the_same_four_keys_a_vllm_one_does(driv
     (one engine's setups had none). Both engines must land under the SAME keys, or the two
     halves of an experiment cannot be read from one series. SGLang also labels its token counters with
     is_streaming, so a name carries more than one label set here as it does on the real server."""
-    text = "\n".join(
-        [
-            "# TYPE sglang:generation_tokens_total counter",
-            'sglang:generation_tokens_total{model_name="qwen",is_streaming="True"} 900.0',
-            'sglang:generation_tokens_total{model_name="qwen",is_streaming="False"} 600.0',
-            'sglang:prompt_tokens_total{model_name="qwen",is_streaming="True"} 50.0',
-            'sglang:num_running_reqs{model_name="qwen"} 12.0',
-            'sglang:num_queue_reqs{model_name="qwen"} 3.0',
-            'sglang:num_grammar_queue_reqs{model_name="qwen"} 77.0',
-        ]
-    )
+    text = '# TYPE sglang:generation_tokens_total counter\nsglang:generation_tokens_total{model_name="qwen",is_streaming="True"} 900.0\nsglang:generation_tokens_total{model_name="qwen",is_streaming="False"} 600.0\nsglang:prompt_tokens_total{model_name="qwen",is_streaming="True"} 50.0\nsglang:num_running_reqs{model_name="qwen"} 12.0\nsglang:num_queue_reqs{model_name="qwen"} 3.0\nsglang:num_grammar_queue_reqs{model_name="qwen"} 77.0'
 
     parsed = driver.engine_totals(text)
 
@@ -177,14 +155,7 @@ def test_an_exposition_from_neither_engine_is_no_reading_at_all(driver: ModuleTy
     next real sample as an enormous burst."""
     assert driver.engine_totals("tgi_request_count 5.0\ntgi_batch_current_size 3.0\n") is None
     # One engine's gauges beside the other's counters is still nobody's exposition.
-    mixed = "\n".join(
-        [
-            'vllm:generation_tokens_total{model_name="m"} 10.0',
-            'vllm:prompt_tokens_total{model_name="m"} 10.0',
-            'sglang:num_running_reqs{model_name="m"} 1.0',
-            'sglang:num_queue_reqs{model_name="m"} 0.0',
-        ]
-    )
+    mixed = 'vllm:generation_tokens_total{model_name="m"} 10.0\nvllm:prompt_tokens_total{model_name="m"} 10.0\nsglang:num_running_reqs{model_name="m"} 1.0\nsglang:num_queue_reqs{model_name="m"} 0.0'
     assert driver.engine_totals(mixed) is None
 
 
@@ -230,7 +201,8 @@ def test_a_partial_scrape_is_dropped_rather_than_read_as_a_counter_going_backwar
     monkeypatch.setattr(driver.urllib.request, "urlopen", fake_urlopen)
 
     both = driver.scrape_aggregate(["http://a:8000/metrics", "http://b:8000/metrics"], {})
-    assert both[GENERATION] == pytest.approx(1500.0) and both[RUNNING] == pytest.approx(30.0)
+    assert both[GENERATION] == pytest.approx(1500.0)
+    assert both[RUNNING] == pytest.approx(30.0)
     assert driver.scrape_aggregate(["http://a:8000/metrics", "http://gone:8000/metrics"], {}) is None
 
 
@@ -318,7 +290,8 @@ def test_the_report_states_the_concurrency_every_figure_was_taken_at(
     assert "missed=2 counter_resets=0" in out
     assert "generation=3000.0 tok/s" in out
     written = json.loads((tmp_path / "aggregate-throughput-node0.json").read_text(encoding="utf-8"))
-    assert len(written["samples"]) == 3 and len(written["intervals"]) == 2
+    assert len(written["samples"]) == 3
+    assert len(written["intervals"]) == 2
     assert written["saturated"]["generation_tok_s"] == pytest.approx(3000.0)
     assert written["missed_scrapes"] == 2
 
@@ -350,7 +323,8 @@ def test_an_unwritable_run_dir_and_a_single_sample_do_not_raise(
 
     driver.report_aggregate_throughput([row(0.0, 5.0)], missed=7)
     out = capsys.readouterr().out
-    assert "1 samples, missed=7" in out and "no interval to measure" in out
+    assert "1 samples, missed=7" in out
+    assert "no interval to measure" in out
 
 
 def test_the_sampler_records_a_series_and_stops_when_the_agents_do(
@@ -388,10 +362,12 @@ def test_the_sampler_records_a_series_and_stops_when_the_agents_do(
     assert not thread.is_alive(), "the sampler must end on the stop event, not outlive the run"
     assert set(scraped) == {"http://vllm:8000/metrics"}
     samples = state["samples"]
-    assert len(samples) >= 3 and state["missed"] == 0
+    assert len(samples) >= 3
+    assert state["missed"] == 0
     assert samples[0]["elapsed_s"] < samples[-1]["elapsed_s"]
     assert samples[-1][GENERATION] > samples[0][GENERATION]
-    assert samples[0][RUNNING] == pytest.approx(40.0) and samples[0][WAITING] == pytest.approx(3.0)
+    assert samples[0][RUNNING] == pytest.approx(40.0)
+    assert samples[0][WAITING] == pytest.approx(3.0)
 
 
 def test_a_dead_endpoint_costs_samples_and_never_the_workload(
@@ -419,7 +395,8 @@ def test_a_dead_endpoint_costs_samples_and_never_the_workload(
     thread.join(timeout=5.0)
 
     assert not thread.is_alive()
-    assert state["missed"] >= 3 and state["samples"] == []
+    assert state["missed"] >= 3
+    assert state["samples"] == []
 
 
 def test_the_probe_is_on_by_default_and_switchable_off_from_the_environment(

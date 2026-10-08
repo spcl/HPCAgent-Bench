@@ -15,6 +15,7 @@ the transformed library computes the right answer.
 """
 
 import concurrent.futures
+import contextlib
 import ctypes
 import os
 import pathlib
@@ -300,8 +301,8 @@ def test_every_ppcg_column_compiles_ppcg_output_for_its_own_vendor(monkeypatch) 
     for framework in cpp_runtime.PPCG_FRAMEWORKS:
         cpp_runtime.native_sources(pathlib.Path("/tmp/cpp_backend"), "mm", framework)
     assert seen == [("mm", cpp_runtime.FRAMEWORK_LANG[f]) for f in cpp_runtime.PPCG_FRAMEWORKS]
-    assert dict(zip(cpp_runtime.PPCG_FRAMEWORKS, (v for _, v in seen)))["ppcg_cuda"] == "cuda"
-    assert dict(zip(cpp_runtime.PPCG_FRAMEWORKS, (v for _, v in seen)))["ppcg_hip"] == "hip"
+    assert dict(zip(cpp_runtime.PPCG_FRAMEWORKS, (v for _, v in seen), strict=False))["ppcg_cuda"] == "cuda"
+    assert dict(zip(cpp_runtime.PPCG_FRAMEWORKS, (v for _, v in seen), strict=False))["ppcg_hip"] == "hip"
 
 
 def test_an_unknown_ppcg_vendor_is_refused_rather_than_guessed() -> None:
@@ -366,7 +367,8 @@ def test_ppcgs_c_output_is_repaired_into_the_cpp_the_gpu_drivers_compile() -> No
     )
     out = ppcg_transform.cxx_compat(source, "mm_fp64")
     assert "#define restrict __restrict__" in out
-    assert "return __builtin_conj(z);" in out and "return conj(z);" not in out
+    assert "return __builtin_conj(z);" in out
+    assert "return conj(z);" not in out
     assert 'extern "C" void mm_fp64(' in out
     assert ppcg_transform.entry_symbol(pathlib.Path("/x/mm_fp64_pluto_input.c")) == "mm_fp64"
 
@@ -430,7 +432,8 @@ def test_a_read_only_input_array_does_not_make_ppcgs_output_unbuildable(tmp_path
     )
     stripped = ppcg_transform.drop_const_params(source, "mm_fp32")
     assert "const" not in stripped.split("\n")[0]
-    assert "float a[restrict N]" in stripped and "float b[restrict N]" in stripped
+    assert "float a[restrict N]" in stripped
+    assert "float b[restrict N]" in stripped
     # An entry it cannot find is left exactly as it was, rather than half-rewritten.
     assert ppcg_transform.drop_const_params(source, "other_fp32") == source
     assert scop.read_text() == original
@@ -893,10 +896,8 @@ def test_no_scratch_survives_a_successful_or_expired_run(tmp_path, monkeypatch, 
     monkeypatch.setattr(pluto_transform, "polycc_exe", lambda: "/usr/bin/polycc")
     monkeypatch.setattr(pluto_transform, "run_bounded", polycc)
 
-    try:
+    with contextlib.suppress(subprocess.TimeoutExpired):
         pluto_transform.run_polycc(scop, out, timeout=1.0)
-    except subprocess.TimeoutExpired:
-        pass
 
     assert polycc_scratch(out.parent) == [], "a polycc scratch file survived the run"
 
@@ -1188,7 +1189,8 @@ def test_a_broken_ppcg_is_walked_past_rather_than_shadowing_a_working_one(tmp_pa
     monkeypatch.setattr(ppcg_transform.shutil, "which", lambda _name: None)
     exe, problem = ppcg_transform.ppcg_lookup()
     assert exe is None
-    assert "does not run" in problem and "isl_id_set_alloc" in problem
+    assert "does not run" in problem
+    assert "isl_id_set_alloc" in problem
     assert "is not installed" not in problem
 
     # And a host with no candidate at all says so, rather than naming a binary it never found.
@@ -1205,7 +1207,8 @@ def test_the_hip_column_declines_when_only_hipify_is_missing(monkeypatch) -> Non
 
     assert ppcg_transform.missing_tool("cuda") == ""
     problem = ppcg_transform.missing_tool("hip")
-    assert ppcg_transform.HIPIFY in problem and "is not installed" in problem
+    assert ppcg_transform.HIPIFY in problem
+    assert "is not installed" in problem
 
 
 def test_hipify_translates_both_ppcg_halves_and_the_shared_header_in_place(tmp_path, monkeypatch) -> None:
@@ -1268,7 +1271,8 @@ def test_preflight_refuses_a_ppcg_column_whose_toolchain_is_absent(monkeypatch) 
     assert preflight.needs_ppcg(["ppcg", "ppcg_hip", "numba", "cc"]) == ["ppcg", "ppcg_hip"]
 
     code, report, env = preflight.run(["ppcg_hip"], tools_only=True)
-    assert code == 1 and env == []
+    assert code == 1
+    assert env == []
     assert any("FATAL" in line and "ppcg is not installed" in line for line in report)
     assert any("ppcg_hip" in line for line in report)
 

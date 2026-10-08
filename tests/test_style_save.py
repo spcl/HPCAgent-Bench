@@ -5,10 +5,10 @@
 import pathlib
 import re
 
-import matplotlib
+import matplotlib as mpl
 import pytest
 
-matplotlib.use("Agg")
+mpl.use("Agg")
 
 import matplotlib.pyplot as plt
 
@@ -66,7 +66,8 @@ def test_a_log_value_axis_labels_no_minor_tick_in_scientific_notation() -> None:
         style.value_axis(ax, "y", log_base=10.0)
         fig.canvas.draw()
         texts = [tick.get_text() for tick in ax.yaxis.get_minorticklabels()]
-        assert texts and not any(texts)
+        assert texts
+        assert not any(texts)
     finally:
         plt.close(fig)
 

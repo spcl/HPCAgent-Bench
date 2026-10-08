@@ -43,7 +43,7 @@ def bcast_tokens(a: list[str], b: list[str]) -> list[str]:
     n = max(len(a), len(b))
     a = [ONE] * (n - len(a)) + list(a)
     b = [ONE] * (n - len(b)) + list(b)
-    return [y if x == ONE else x for x, y in zip(a, b)]
+    return [y if x == ONE else x for x, y in zip(a, b, strict=False)]
 
 
 def slice_extent_token(e: ast.Slice, base: str | None) -> str | None:
@@ -266,7 +266,7 @@ class OuterBroadcastPeel(RankedRewritePass):
                 repl = ast.BinOp(left=copy.deepcopy(e.lower), op=ast.Add(), right=expr_of(idx))
             else:
                 return None
-            entries = entries[:pos] + [repl] + entries[pos + 1 :]
+            entries = [*entries[:pos], repl, *entries[pos + 1 :]]
         return self.tidy(sub.value, entries)
 
     def tidy(self, base: ast.expr, entries: Sequence[ast.expr]) -> ast.expr:

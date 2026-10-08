@@ -89,7 +89,7 @@ def episode_values(record: Mapping[str, object]) -> dict[str, results_db.Value]:
     values["kernel"] = str(kernel).rsplit("/", 1)[-1] if kernel else None
     values["relaunches"] = max((whole(record.get("attempts")) or 1) - 1, 0)
     start = whole(record.get("final_attempt_start_ms"))
-    values["final_attempt_start_ms"] = start if start else None
+    values["final_attempt_start_ms"] = start or None
     return values
 
 

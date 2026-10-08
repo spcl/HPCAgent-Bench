@@ -21,9 +21,9 @@ import sys
 
 import pytest
 
-from hpcagent_bench.translators.numpyto_c.dace_emit import emit_dace  # noqa: E402
-from hpcagent_bench.translators.numpyto_common.frontend import parse_kernel  # noqa: E402
-from hpcagent_bench.translators.numpyto_common.ir import KernelIR  # noqa: E402
+from hpcagent_bench.translators.numpyto_c.dace_emit import emit_dace
+from hpcagent_bench.translators.numpyto_common.frontend import parse_kernel
+from hpcagent_bench.translators.numpyto_common.ir import KernelIR
 
 #: An early ``return`` is what makes a helper non-inlinable, so ``_scale`` stays a real call. It is
 #: called TWICE on differently-shaped arguments, which is the case inlining cannot serve with one
@@ -264,7 +264,8 @@ def parse_through_dace(module: str, stem: str, tmp_path: pathlib.Path) -> None:
     bind_precision()
     # By file: a temp module belongs to no package. Registered before exec, as an import would.
     spec = importlib.util.spec_from_file_location(stem, path)
-    assert spec is not None and spec.loader is not None
+    assert spec is not None
+    assert spec.loader is not None
     loaded = importlib.util.module_from_spec(spec)
     sys.modules[stem] = loaded
     try:

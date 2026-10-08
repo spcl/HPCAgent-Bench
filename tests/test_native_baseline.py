@@ -19,7 +19,6 @@ run reuses the same primitive.
 import pathlib
 import sqlite3
 
-
 from hpcagent_bench import config
 from hpcagent_bench.harness import recording
 

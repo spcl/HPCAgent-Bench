@@ -10,6 +10,7 @@ from collections.abc import Callable, Sequence
 from functools import lru_cache
 from typing import NamedTuple, TypeGuard
 
+from hpcagent_bench.cache_files import write_atomic
 from hpcagent_bench.translators.numpyto_c.pluto_predicate import if_convert
 from hpcagent_bench.translators.numpyto_common import dtypes, operators, parallelism
 from hpcagent_bench.translators.numpyto_common.ast_build import name_
@@ -26,7 +27,6 @@ from hpcagent_bench.translators.numpyto_common.emit_helpers.tokens import (
     mentions_ident,
     mentions_word,
 )
-from hpcagent_bench.cache_files import write_atomic
 from hpcagent_bench.translators.numpyto_common.emitter import (
     BaseEmitter,
     TupleTargetSplitter,
@@ -287,8 +287,8 @@ def is_int_cast(node: ast.AST) -> bool:
     if isinstance(node.func, ast.Name):
         return node.func.id in INT_CAST_NAMES
     if isinstance(node.func, ast.Attribute):
-        key = node.func.attr[:-1] if node.func.attr.endswith("_") else node.func.attr
-        return key.startswith("int") or key.startswith("uint")
+        key = node.func.attr.removesuffix("_")
+        return key.startswith(("int", "uint"))
     return False
 
 
@@ -568,7 +568,7 @@ class ElementSubst(ast.NodeTransformer):
     def __init__(self, by_id: dict[int, str]) -> None:
         self.by_id = by_id
 
-    def visit_Subscript(self, node: ast.Subscript):  # noqa: N802 -- NodeTransformer dispatch name
+    def visit_Subscript(self, node: ast.Subscript):
         name = self.by_id.get(id(node))
         if name is None:
             return node
@@ -915,7 +915,7 @@ class CBodyEmitter(BaseEmitter):
                 text = f"{text} + {total}"
             elif total < 0:
                 text = f"{text} - {-total}"
-            return self.flatten_indices(shape, head + [text])
+            return self.flatten_indices(shape, [*head, text])
 
         flat = flat_(0)
         ptr = name if flat == "0" else f"{name} + ({flat})"
@@ -1803,7 +1803,7 @@ class CBodyEmitter(BaseEmitter):
             return None
         # np.<dtype>(x) scalar constructor is a typecast; emit the C cast via the registry (np.bool_ needs stripping).
         if is_numpy_module(func.value) and len(node.args) == 1:
-            key = attr[:-1] if attr.endswith("_") else attr
+            key = attr.removesuffix("_")
             if key in dtypes.REGISTRY or key in dtypes.SCALAR_KINDS:
                 return f"(({dtypes.c_type(key)})({self.emit_expr(node.args[0])}))"
         # np.flip/copy/transpose on a SCALAR is a no-op -- slice fusion already folded the index
@@ -1904,8 +1904,10 @@ class CBodyEmitter(BaseEmitter):
         lines = [
             f"{indent}{{",
             f"{indent}  int64_t __fft_n = (int64_t)({n});",
-            f"{indent}  {prefix}_plan __fft_plan = {prefix}_plan_dft_1d((int)__fft_n, "
-            f"({prefix}_complex *)({src}), ({prefix}_complex *)({out}), {fft.sign}, FFTW_ESTIMATE);",
+            (
+                f"{indent}  {prefix}_plan __fft_plan = {prefix}_plan_dft_1d((int)__fft_n, "
+                f"({prefix}_complex *)({src}), ({prefix}_complex *)({out}), {fft.sign}, FFTW_ESTIMATE);"
+            ),
             f"{indent}  {prefix}_execute(__fft_plan);",
             f"{indent}  {prefix}_destroy_plan(__fft_plan);",
         ]
@@ -2545,7 +2547,7 @@ def fill_loop_stmt(name: str, dims, size: str, value: str, indent: str) -> str:
     ivs = [f"__zf{k}" for k in range(len(dims))]
     lines = [
         f"{indent}{'  ' * k}for (int64_t {iv} = 0; {iv} < ({c_shape_token(d)}); ++{iv})"
-        for k, (iv, d) in enumerate(zip(ivs, dims))
+        for k, (iv, d) in enumerate(zip(ivs, dims, strict=False))
     ]
     lines.append(f"{indent}{'  ' * len(ivs)}{name}{''.join(f'[{iv}]' for iv in ivs)} = {value};")
     return "\n".join(lines)
@@ -3525,37 +3527,258 @@ def emit_c_helpers(kir: KernelIR, cpp: bool = False, isopar: bool = False) -> st
 #: Identifiers the C standard headers this emitter already includes (``<stdlib.h>``, ``<string.h>``,
 #: ``<math.h>``, ``<complex.h>`` and their C++ spellings) declare at FILE SCOPE. A kernel name spelled
 #: like one of these is respelled before it is emitted -- see :func:`c_spelling`.
-STDLIB_STRING_NAMES = (
-    "abort abs aligned_alloc at_quick_exit atexit atof atoi atol atoll bcmp bcopy bsearch bzero"
-    " calloc div exit free getenv index labs ldiv llabs lldiv malloc mblen mbstowcs mbtowc memchr"
-    " memcmp memcpy memmove memset qsort quick_exit rand random realloc rindex srand strcat strchr"
-    " strcmp strcoll strcpy strcspn strdup strerror strlen strncat strncmp strncpy strndup strpbrk"
-    " strrchr strsep strspn strstr strtod strtof strtok strtol strtold strtoll strtoul strtoull"
-    " strxfrm system wcstombs wctomb"
-).split()
+STDLIB_STRING_NAMES = [
+    "abort",
+    "abs",
+    "aligned_alloc",
+    "at_quick_exit",
+    "atexit",
+    "atof",
+    "atoi",
+    "atol",
+    "atoll",
+    "bcmp",
+    "bcopy",
+    "bsearch",
+    "bzero",
+    "calloc",
+    "div",
+    "exit",
+    "free",
+    "getenv",
+    "index",
+    "labs",
+    "ldiv",
+    "llabs",
+    "lldiv",
+    "malloc",
+    "mblen",
+    "mbstowcs",
+    "mbtowc",
+    "memchr",
+    "memcmp",
+    "memcpy",
+    "memmove",
+    "memset",
+    "qsort",
+    "quick_exit",
+    "rand",
+    "random",
+    "realloc",
+    "rindex",
+    "srand",
+    "strcat",
+    "strchr",
+    "strcmp",
+    "strcoll",
+    "strcpy",
+    "strcspn",
+    "strdup",
+    "strerror",
+    "strlen",
+    "strncat",
+    "strncmp",
+    "strncpy",
+    "strndup",
+    "strpbrk",
+    "strrchr",
+    "strsep",
+    "strspn",
+    "strstr",
+    "strtod",
+    "strtof",
+    "strtok",
+    "strtol",
+    "strtold",
+    "strtoll",
+    "strtoul",
+    "strtoull",
+    "strxfrm",
+    "system",
+    "wcstombs",
+    "wctomb",
+]
 
 #: ``<math.h>`` / ``<complex.h>`` base names; each also exists with a float (``f``) and a long
 #: double (``l``) suffix, so the suffixes are generated rather than spelled out three times.
-LIBM_BASE_NAMES = (
-    "acos acosh asin asinh atan atan2 atanh cabs cacos cacosh carg casin casinh catan catanh cbrt"
-    " ccos ccosh ceil cexp cimag clog conj copysign cos cosh cpow cproj creal csin csinh csqrt ctan"
-    " ctanh drem erf erfc exp exp2 expm1 fabs fdim finite floor fma fmax fmin fmod frexp gamma"
-    " hypot ilogb j0 j1 jn ldexp lgamma llrint llround log log10 log1p log2 logb lrint lround modf"
-    " nan nearbyint nextafter nexttoward pow pow10 remainder remquo rint round scalb scalbln scalbn"
-    " significand sin sinh sqrt tan tanh tgamma trunc y0 y1 yn"
-).split()
+LIBM_BASE_NAMES = [
+    "acos",
+    "acosh",
+    "asin",
+    "asinh",
+    "atan",
+    "atan2",
+    "atanh",
+    "cabs",
+    "cacos",
+    "cacosh",
+    "carg",
+    "casin",
+    "casinh",
+    "catan",
+    "catanh",
+    "cbrt",
+    "ccos",
+    "ccosh",
+    "ceil",
+    "cexp",
+    "cimag",
+    "clog",
+    "conj",
+    "copysign",
+    "cos",
+    "cosh",
+    "cpow",
+    "cproj",
+    "creal",
+    "csin",
+    "csinh",
+    "csqrt",
+    "ctan",
+    "ctanh",
+    "drem",
+    "erf",
+    "erfc",
+    "exp",
+    "exp2",
+    "expm1",
+    "fabs",
+    "fdim",
+    "finite",
+    "floor",
+    "fma",
+    "fmax",
+    "fmin",
+    "fmod",
+    "frexp",
+    "gamma",
+    "hypot",
+    "ilogb",
+    "j0",
+    "j1",
+    "jn",
+    "ldexp",
+    "lgamma",
+    "llrint",
+    "llround",
+    "log",
+    "log10",
+    "log1p",
+    "log2",
+    "logb",
+    "lrint",
+    "lround",
+    "modf",
+    "nan",
+    "nearbyint",
+    "nextafter",
+    "nexttoward",
+    "pow",
+    "pow10",
+    "remainder",
+    "remquo",
+    "rint",
+    "round",
+    "scalb",
+    "scalbln",
+    "scalbn",
+    "significand",
+    "sin",
+    "sinh",
+    "sqrt",
+    "tan",
+    "tanh",
+    "tgamma",
+    "trunc",
+    "y0",
+    "y1",
+    "yn",
+]
 
 #: C23 and C++ keywords a Python identifier can spell. ``I`` from ``<complex.h>`` is not listed: the C
 #: header undefines it.
-C_KEYWORD_NAMES = (
-    "alignas alignof and_eq auto bitand bitor bool case catch char char8_t char16_t char32_t co_await"
-    " co_return co_yield compl concept const const_cast constexpr decltype default delete do double"
-    " dynamic_cast enum explicit export extern false float friend goto inline int long mutable namespace"
-    " new noexcept not_eq nullptr operator or_eq private protected public register reinterpret_cast"
-    " requires restrict short signed sizeof static static_assert static_cast struct switch template this"
-    " thread_local throw true typedef typeid typename typeof typeof_unqual union unsigned using virtual"
-    " void volatile wchar_t xor xor_eq"
-).split()
+C_KEYWORD_NAMES = [
+    "alignas",
+    "alignof",
+    "and_eq",
+    "auto",
+    "bitand",
+    "bitor",
+    "bool",
+    "case",
+    "catch",
+    "char",
+    "char8_t",
+    "char16_t",
+    "char32_t",
+    "co_await",
+    "co_return",
+    "co_yield",
+    "compl",
+    "concept",
+    "const",
+    "const_cast",
+    "constexpr",
+    "decltype",
+    "default",
+    "delete",
+    "do",
+    "double",
+    "dynamic_cast",
+    "enum",
+    "explicit",
+    "export",
+    "extern",
+    "false",
+    "float",
+    "friend",
+    "goto",
+    "inline",
+    "int",
+    "long",
+    "mutable",
+    "namespace",
+    "new",
+    "noexcept",
+    "not_eq",
+    "nullptr",
+    "operator",
+    "or_eq",
+    "private",
+    "protected",
+    "public",
+    "register",
+    "reinterpret_cast",
+    "requires",
+    "restrict",
+    "short",
+    "signed",
+    "sizeof",
+    "static",
+    "static_assert",
+    "static_cast",
+    "struct",
+    "switch",
+    "template",
+    "this",
+    "thread_local",
+    "throw",
+    "true",
+    "typedef",
+    "typeid",
+    "typename",
+    "typeof",
+    "typeof_unqual",
+    "union",
+    "unsigned",
+    "using",
+    "virtual",
+    "void",
+    "volatile",
+    "wchar_t",
+    "xor",
+    "xor_eq",
+]
 
 RESERVED_C_NAMES = frozenset(
     STDLIB_STRING_NAMES + [base + suffix for base in LIBM_BASE_NAMES for suffix in ("", "f", "l")] + C_KEYWORD_NAMES

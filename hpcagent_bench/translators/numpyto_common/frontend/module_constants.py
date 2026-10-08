@@ -57,7 +57,7 @@ def default_const(node: ast.expr) -> ast.expr:
     name = func.id if isinstance(func, ast.Name) else (func.attr if isinstance(func, ast.Attribute) else None)
     if name is None:
         return node
-    key = name[:-1] if name.endswith("_") else name
+    key = name.removesuffix("_")
     if key in ("int", "float", "complex", "bool") or key in dtypes.REGISTRY or key in dtypes.SCALAR_KINDS:
         return ast.copy_location(ast.Constant(value=node.args[0].value), node)
     return node
@@ -76,9 +76,9 @@ def fold_default_args(fn: ast.FunctionDef, input_args: list[str]) -> None:
     args = fn.args.args
     defaults = fn.args.defaults
     kwonlyargs = fn.args.kwonlyargs
-    defaulted = list(zip(args[len(args) - len(defaults) :], defaults))
+    defaulted = list(zip(args[len(args) - len(defaults) :], defaults, strict=False))
     # kw_defaults is positionally aligned with kwonlyargs; None means "no default".
-    kw_defaulted = [(a, d) for a, d in zip(kwonlyargs, fn.args.kw_defaults) if d is not None]
+    kw_defaulted = [(a, d) for a, d in zip(kwonlyargs, fn.args.kw_defaults, strict=False) if d is not None]
     subst: dict[str, ast.expr] = {}
     for a, d in defaulted + kw_defaulted:
         if a.arg not in input_args:
@@ -97,7 +97,7 @@ def fold_default_args(fn: ast.FunctionDef, input_args: list[str]) -> None:
     Sub_().visit(fn)
     fn.args.args = [a for a in args if a.arg not in subst]
     fn.args.defaults = [d for a, d in defaulted if a.arg not in subst]
-    fn.args.kw_defaults = [d for a, d in zip(kwonlyargs, fn.args.kw_defaults) if a.arg not in subst]
+    fn.args.kw_defaults = [d for a, d in zip(kwonlyargs, fn.args.kw_defaults, strict=False) if a.arg not in subst]
     fn.args.kwonlyargs = [a for a in kwonlyargs if a.arg not in subst]
     ast.fix_missing_locations(fn)
 
@@ -225,7 +225,7 @@ def numeric_module_consts(tree: ast.Module, shadowed: set[str]) -> dict[str, Mod
         if isinstance(tgt, ast.Name):
             pairs = [(tgt, stmt.value)]
         elif isinstance(tgt, ast.Tuple) and isinstance(stmt.value, ast.Tuple) and len(tgt.elts) == len(stmt.value.elts):
-            pairs = list(zip(tgt.elts, stmt.value.elts))
+            pairs = list(zip(tgt.elts, stmt.value.elts, strict=False))
         else:
             continue
         for sub, v in pairs:
@@ -374,7 +374,7 @@ def parse_array_literal(call: ast.Call):
             for s in subs:
                 flat.extend(s[1])
                 all_int = all_int and s[2]
-            return ((len(node.elts),) + shp0, flat, all_int)
+            return ((len(node.elts), *shp0), flat, all_int)
         v = numeric_const(node)
         if v is None:
             return None
@@ -440,7 +440,7 @@ def materialize_const_arrays(tree: ast.Module, fn: ast.FunctionDef, input_args: 
             )
         )
         # Row-major element stores ``NAME[i, j, ...] = const``.
-        for idx, val in zip(itertools.product(*[range(d) for d in shape]), flat):
+        for idx, val in zip(itertools.product(*[range(d) for d in shape]), flat, strict=False):
             sl: ast.expr = (
                 ast.Tuple(elts=[ast.Constant(value=i) for i in idx], ctx=ast.Load())
                 if len(idx) > 1

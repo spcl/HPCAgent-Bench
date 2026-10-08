@@ -1025,7 +1025,9 @@ class FortranBodyEmitter(BaseEmitter):
             # the authority, and a predicate actual is LOGICAL(4) against a logical(c_bool) dummy.
             types = self._helper_param_types.get(name)
             if types is not None:
-                call_args = [coerce_to_fortran_type(a, t, self._own_scalar_types) for a, t in zip(call_args, types)]
+                call_args = [
+                    coerce_to_fortran_type(a, t, self._own_scalar_types) for a, t in zip(call_args, types, strict=False)
+                ]
             return f"{indent}call {name}({', '.join(call_args)})"
         return super().emit_stmt(node, indent)
 
@@ -1208,10 +1210,7 @@ class FortranBodyEmitter(BaseEmitter):
         # adjustment has to be chosen at runtime when the sign is not decidable.
         step_node = args[2] if len(args) == 3 else None
         sign = parallelism.range_step_sign(step_node)
-        if sign is None:
-            upper = f"({hi}) + merge(1, -1, ({step}) < 0)"
-        else:
-            upper = f"({hi}) {'+ 1' if sign < 0 else '- 1'}"
+        upper = f"({hi}) + merge(1, -1, ({step}) < 0)" if sign is None else f"({hi}) {'+ 1' if sign < 0 else '- 1'}"
         if step == "1":
             return f"{omp_prefix}{indent}do {var} = {lo}, {upper}\n{body}\n{indent}end do"
         return f"{omp_prefix}{indent}do {var} = {lo}, {upper}, {step}\n{body}\n{indent}end do"
@@ -1432,7 +1431,7 @@ class FortranBodyEmitter(BaseEmitter):
         if types is not None:
             call_args = [
                 a if i == slot else coerce_to_fortran_type(a, t, self._own_scalar_types)
-                for i, (a, t) in enumerate(zip(call_args, types))
+                for i, (a, t) in enumerate(zip(call_args, types, strict=False))
             ]
         return f"{indent}call {name}({', '.join(call_args)})"
 
@@ -2275,7 +2274,7 @@ class FortranBodyEmitter(BaseEmitter):
         dtype's KIND token, both from the registry (np.bool_ loses its trailing underscore). A numeric
         cast of a LOGICAL operand is invalid Fortran, and numpy maps True/False to 1/0, so that is a
         MERGE in the target kind -- the operand judged logical through the backend's own oracle."""
-        key = attr[:-1] if attr.endswith("_") else attr
+        key = attr.removesuffix("_")
         if key not in dtypes.REGISTRY and key not in dtypes.SCALAR_KINDS:
             return None
         base, unused, rest = fortran_type(key).partition("(")
@@ -2645,7 +2644,7 @@ class FortranBodyEmitter(BaseEmitter):
                 if isinstance(dtype_arg, ast.Name)
                 else ""
             )
-            return dtype_name.startswith("int") or dtype_name.startswith("uint")
+            return dtype_name.startswith(("int", "uint"))
         return False
 
 
@@ -3081,10 +3080,7 @@ class FortranRenameTemps(ast.NodeTransformer):
             base = self.safe_(node.target.id)
             # Uniqueify even simple names like 'i' because Fortran rejects nested DO
             # variables with the same identifier in the same subroutine scope.
-            if base.startswith("x_"):
-                uniq = f"{base}_{self._loop_counter}"
-            else:
-                uniq = f"{base}_l{self._loop_counter}"
+            uniq = f"{base}_{self._loop_counter}" if base.startswith("x_") else f"{base}_l{self._loop_counter}"
             self._loop_counter += 1
             self._loop_stack.append((node.target.id, uniq))
             node.target = ast.copy_location(ast.Name(id=uniq, ctx=node.target.ctx), node.target)
@@ -3466,8 +3462,10 @@ def fftw_interface(used_fftw: set[str]) -> str:
         prefix = "fftw" if rk == "c_double" else "fftwf"
         cplx = ck[rk]
         lines += [
-            f"        function {prefix}_plan_dft_1d(n, in, out, sign, flags) "
-            f'bind(C, name="{prefix}_plan_dft_1d") result(plan)',
+            (
+                f"        function {prefix}_plan_dft_1d(n, in, out, sign, flags) "
+                f'bind(C, name="{prefix}_plan_dft_1d") result(plan)'
+            ),
             f"            import :: c_int, c_ptr, {cplx}",
             "            integer(c_int), value :: n",
             f"            complex({cplx}), dimension(*) :: in",
@@ -3691,7 +3689,7 @@ class LocalTyping:
                 and is_numpy_module(node.value.func.value)
             ):
                 key = node.value.func.attr
-                key = key[:-1] if key.endswith("_") else key
+                key = key.removesuffix("_")
                 if (key in dtypes.REGISTRY or key in dtypes.SCALAR_KINDS) and fortran_type(key).startswith("integer"):
                     self.int_uses.add(node.targets[0].id)
                     if fortran_type(key) == self.int64_kind:
@@ -3711,9 +3709,9 @@ class LocalTyping:
             changed = False
             for node in ast.walk(kir.tree):
                 names: list[str] = []
-                if isinstance(node, ast.BinOp) and isinstance(node.op, BITWISE_BINOPS) and not produces_bool(node):
-                    names = [n.id for n in ast.walk(node) if isinstance(n, ast.Name)]
-                elif (
+                if (
+                    isinstance(node, ast.BinOp) and isinstance(node.op, BITWISE_BINOPS) and not produces_bool(node)
+                ) or (
                     isinstance(node, ast.Call)
                     and isinstance(node.func, ast.Name)
                     and node.func.id in BITWISE_INT_CALL_NAMES
@@ -3873,9 +3871,9 @@ def hoist_nested_helper_calls(
         # These two shapes are already the statement call emit_assign/_emit_expr_stmt rewrite;
         # only their ARGUMENTS may still hold a nested call.
         whole_stmt_call = None
-        if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.value, ast.Call):
-            whole_stmt_call = stmt.value
-        elif isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call):
+        if (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.value, ast.Call)) or (
+            isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call)
+        ):
             whole_stmt_call = stmt.value
         hoister = HoistHelperCallVisitor(helper_names, counter)
         if (

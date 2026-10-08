@@ -7,11 +7,11 @@ import subprocess
 import sys
 import tempfile
 
-import matplotlib
+import matplotlib as mpl
 
-matplotlib.use("Agg")
+mpl.use("Agg")
 
-import matplotlib.collections
+import matplotlib as mpl
 import matplotlib.pyplot as plt
 import pytest
 
@@ -35,11 +35,11 @@ def cell_of(*states: RunState) -> pk.KernelCell:
     return pk.KernelCell("k1", graded, runs=runs)
 
 
-def drawn_marks(ax: plt.Axes) -> list[matplotlib.collections.PathCollection]:
+def drawn_marks(ax: plt.Axes) -> list[mpl.collections.PathCollection]:
     """The run marks themselves: the mark layer, without the white discs under them or the crosses over them."""
     return [
         artist for artist in ax.collections
-        if isinstance(artist, matplotlib.collections.PathCollection) and artist.get_zorder() == plotstyle.MARK_Z
+        if isinstance(artist, mpl.collections.PathCollection) and artist.get_zorder() == plotstyle.MARK_Z
     ]  # fmt: skip
 
 
@@ -116,7 +116,8 @@ def test_several_series_box_side_by_side_rather_than_falling_back_to_points() ->
     fig = pk.figure_panels([metric], ["k1"], pk.Style.BOX, False, "")
     try:
         centres = sorted(patch.get_path().get_extents().x0 for patch in fig.axes[0].patches)
-        assert len(centres) == 2 and centres[0] < centres[1]
+        assert len(centres) == 2
+        assert centres[0] < centres[1]
     finally:
         plt.close(fig)
 

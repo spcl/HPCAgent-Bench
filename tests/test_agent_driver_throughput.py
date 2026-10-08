@@ -21,8 +21,7 @@ from tests.fresh_module import fresh
 
 def load_example_module(name: str) -> ModuleType:
     """``sys.modules`` must carry the module BEFORE exec, matching tests/test_validate_run.py."""
-    module = fresh(name)
-    return module
+    return fresh(name)
 
 
 @pytest.fixture(name="driver")
@@ -111,7 +110,8 @@ def test_a_failing_replica_costs_the_sample_and_not_the_run(driver, monkeypatch)
     monkeypatch.setattr(driver.time, "monotonic", iter([0.0, 1.0, 2.0, 3.0, 4.0, 6.0]).__next__)
 
     samples = driver.throughput_probe("http://vllm:8000/v1", {}, 3)
-    assert len(samples) == 1 and samples[0]["completion_tokens"] == 60
+    assert len(samples) == 1
+    assert samples[0]["completion_tokens"] == 60
 
 
 def test_the_report_takes_the_median_and_writes_the_raw_samples(driver, monkeypatch, tmp_path, capsys) -> None:

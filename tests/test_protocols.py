@@ -36,7 +36,8 @@ def test_exactly_one_protocol_is_credited_and_the_config_names_it() -> None:
     )
     credited = [stamp for stamp in PINNED_STAMPS if timing.credited_protocol(stamp)]
     assert credited == ["mw4x5"]
-    assert not timing.credited_protocol(None) and not timing.credited_protocol("")
+    assert not timing.credited_protocol(None)
+    assert not timing.credited_protocol("")
 
 
 def test_a_config_naming_another_protocol_is_refused() -> None:
@@ -76,7 +77,8 @@ def test_a_protocol_must_provide_a_known_role_and_a_meaning() -> None:
     scratch = Kind("grading protocols", PROTOCOLS.fields, build)
     with pytest.raises(RegistryError, match="required attribute 'meaning'"):
         scratch.register("probe", order=0)(type("Probe", (), {"role": "live"}))
-    assert protocols.grading_protocol.__doc__ and "must provide" in protocols.grading_protocol.__doc__
+    assert protocols.grading_protocol.__doc__
+    assert "must provide" in protocols.grading_protocol.__doc__
 
 
 if __name__ == "__main__":

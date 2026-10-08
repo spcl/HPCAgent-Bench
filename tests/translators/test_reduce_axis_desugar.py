@@ -66,7 +66,8 @@ def test_negative_axis_now_reduces() -> None:
     src = "def k(x, out):\n out[:] = np.max(x, axis=-1)\n"
     kir = kir_("k", x=("M", "N"), out=("M",))
     got = desugar_for_python_backend(src, kir, backend="numba")
-    assert "np.max(" not in got and "for " in got
+    assert "np.max(" not in got
+    assert "for " in got
 
 
 def test_keepdims_keeps_a_size_one_dim() -> None:
@@ -74,7 +75,8 @@ def test_keepdims_keeps_a_size_one_dim() -> None:
     kir = kir_("k", x=("M", "N"), out=("M", "N"))
     got = desugar_for_python_backend(src, kir, backend="numba")
     # result allocated with a trailing size-1 axis, written at index [..., 0].
-    assert ", 1)" in got and ", 0]" in got
+    assert ", 1)" in got
+    assert ", 0]" in got
     assert "np.max(" not in got
 
 
@@ -82,7 +84,8 @@ def test_sum_axis_desugars_with_accumulator() -> None:
     src = "def k(x, out):\n out[:] = np.sum(x, axis=1)\n"
     kir = kir_("k", x=("M", "N"), out=("M",))
     got = desugar_for_python_backend(src, kir, backend="numba")
-    assert "np.sum(" not in got and "+=" in got
+    assert "np.sum(" not in got
+    assert "+=" in got
 
 
 def test_tuple_axis_reduces_over_all_named_axes() -> None:
@@ -92,7 +95,8 @@ def test_tuple_axis_reduces_over_all_named_axes() -> None:
     got = desugar_for_python_backend(src, kir, backend="numba")
     assert "np.max(" not in got
     # two nested reduction loops (one per reduced axis).
-    assert got.count("_j1 in range") == 1 and got.count("_j2 in range") == 1
+    assert got.count("_j1 in range") == 1
+    assert got.count("_j2 in range") == 1
 
 
 def test_full_reduction_without_keepdims_left_verbatim() -> None:

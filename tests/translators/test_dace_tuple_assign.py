@@ -48,9 +48,11 @@ def test_a_swap_goes_through_temporaries() -> None:
     """``a, b = b, a`` in source order would assign ``a = b`` and then read the NEW a."""
     out = split("a, b = b, a").splitlines()
     assert len(out) == 4, out
-    assert out[0].endswith("= b") and out[1].endswith("= a")
+    assert out[0].endswith("= b")
+    assert out[1].endswith("= a")
     first, second = out[0].split(" = ")[0], out[1].split(" = ")[0]
-    assert out[2] == f"a = {first}" and out[3] == f"b = {second}"
+    assert out[2] == f"a = {first}"
+    assert out[3] == f"b = {second}"
 
 
 def test_a_rotation_through_a_shared_name_also_latches() -> None:
@@ -86,4 +88,5 @@ def test_a_subscript_target_is_not_a_plain_unpack() -> None:
 def test_a_nested_tuple_assignment_is_split_too() -> None:
     """The inliner emits shape unpacks inside loop bodies as readily as at the top level."""
     out = split("for i in range(4):\n    n, c = x.shape\n")
-    assert "n = x.shape[0]" in out and "c = x.shape[1]" in out
+    assert "n = x.shape[0]" in out
+    assert "c = x.shape[1]" in out

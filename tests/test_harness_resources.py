@@ -9,8 +9,8 @@ branch that matters most: discovery failing must never break prompt assembly. Th
 condensation contract against a synthetic report instead.
 """
 
-from typing import Any
 from collections.abc import Iterator
+from typing import Any
 
 import pytest
 

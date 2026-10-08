@@ -144,9 +144,7 @@ def is_bool_expr(node: ast.expr, local_dtypes: dict[str, str]) -> bool:
         # it. Deliberately narrow -- a chained subscript of a bool ARRAY is left alone, because
         # cloudsc's int-as-bool locals are read back through ``INT()`` and retyping them logical
         # breaks that intrinsic.
-        if isinstance(node.value, (ast.Compare, ast.BoolOp)):
-            return True
-        return False
+        return bool(isinstance(node.value, (ast.Compare, ast.BoolOp)))
     return False
 
 
@@ -192,7 +190,7 @@ UNCHANGED = NotImplemented
 
 #: A lowering step's answer: the replacement statement(s), None to delete the statement, or
 #: :data:`UNCHANGED`.
-type Lowered = ast.AST | list[ast.stmt] | None | NotImplementedType
+type Lowered = ast.AST | list[ast.stmt] | NotImplementedType | None
 
 
 class WholeArrayAssignRewriter(ast.NodeTransformer):
@@ -353,7 +351,7 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
                 ),
             )
             self._reassign_shapes.setdefault(target.id, []).append(tuple(shape))
-            out = [marker] + out
+            out = [marker, *out]
         return out
 
     def expand_partial(self, target: ast.Subscript, value: ast.Name) -> list[ast.stmt]:
@@ -426,8 +424,7 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
         a_load = ast.Subscript(value=name_(name), slice=copy.deepcopy(lhs_slice), ctx=ast.Load())
         gather = loop_(ast.Assign(targets=[g_store], value=a_load))
         store = loop_(ast.Assign(targets=[copy.deepcopy(lhs)], value=ast.BinOp(left=g_load, op=op, right=rhs)))
-        out = [gather, store]
-        return out
+        return [gather, store]
 
     def scatter_plan(
         self,
@@ -605,19 +602,22 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
             return None
         k = len(ops)
         iters = self.ix_iters("__ixg", k)
-        read = [scalarize_at_iters(copy.deepcopy(op), [name_(it)], self.shape_table) for op, it in zip(ops, iters)]
+        read = [
+            scalarize_at_iters(copy.deepcopy(op), [name_(it)], self.shape_table)
+            for op, it in zip(ops, iters, strict=False)
+        ]
         read_slot = read[0] if k == 1 else ast.Tuple(elts=read, ctx=ast.Load())
         src = ast.Subscript(value=name_(arr.id), slice=read_slot, ctx=ast.Load())
         out_slot = name_(iters[0]) if k == 1 else ast.Tuple(elts=[name_(it) for it in iters], ctx=ast.Load())
         store = ast.Subscript(value=name_(target.id), slice=out_slot, ctx=ast.Store())
         body: list[ast.stmt] = [ast.Assign(targets=[store], value=src)]
-        for it, dim in zip(reversed(iters), reversed(dims)):
+        for it, dim in zip(reversed(iters), reversed(dims), strict=False):
             body = [range_for(it, [copy.deepcopy(dim)], body)]
         self.shape_table[target.id] = tuple(ast.unparse(d) for d in dims)
         dt = self.local_dtypes.get(arr.id)
         if dt is not None:
             self.local_dtypes[target.id] = dt
-        out: list[ast.stmt] = [self.empty_alloc(target.id, dims)] + body
+        out: list[ast.stmt] = [self.empty_alloc(target.id, dims), *body]
         for s in out:
             ast.fix_missing_locations(s)
         return out
@@ -635,7 +635,10 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
             return None
         k = len(ops)
         iters = self.ix_iters("__ixs", k)
-        lhs_idx = [scalarize_at_iters(copy.deepcopy(o), [name_(it)], self.shape_table) for o, it in zip(ops, iters)]
+        lhs_idx = [
+            scalarize_at_iters(copy.deepcopy(o), [name_(it)], self.shape_table)
+            for o, it in zip(ops, iters, strict=False)
+        ]
         lhs_slot = lhs_idx[0] if k == 1 else ast.Tuple(elts=lhs_idx, ctx=ast.Load())
         lhs = ast.Subscript(value=name_(arr.id), slice=lhs_slot, ctx=ast.Store())
         rhs = SubscriptifyNames(self.shape_table, iters).visit(copy.deepcopy(value))
@@ -643,7 +646,7 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
             ast.Assign(targets=[lhs], value=rhs) if op is None else ast.AugAssign(target=lhs, op=op, value=rhs)
         )
         body: list[ast.stmt] = [stmt]
-        for it, dim in zip(reversed(iters), reversed(dims)):
+        for it, dim in zip(reversed(iters), reversed(dims), strict=False):
             body = [range_for(it, [copy.deepcopy(dim)], body)]
         for s in body:
             ast.fix_missing_locations(s)
@@ -982,15 +985,14 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
                 if target.id not in self.local_dtypes:
                     if scalar_expr_complex(node.value, self.local_dtypes):
                         self.local_dtypes[target.id] = "complex128"
-                    else:
-                        # Integer-typed whole-array result (``q = j % nx`` where
-                        # j is int64) stays integer -- so an index array derived
-                        # from arange keeps its int dtype through the % / * chain
-                        # (fft_3d's q/r/s gather indices).
-                        if isinstance(node.value, ast.BinOp) and is_integer_expr(
-                            node.value, self.local_dtypes, set(self.shape_table)
-                        ):
-                            self.local_dtypes[target.id] = "int64"
+                    # Integer-typed whole-array result (``q = j % nx`` where
+                    # j is int64) stays integer -- so an index array derived
+                    # from arange keeps its int dtype through the % / * chain
+                    # (fft_3d's q/r/s gather indices).
+                    elif isinstance(node.value, ast.BinOp) and is_integer_expr(
+                        node.value, self.local_dtypes, set(self.shape_table)
+                    ):
+                        self.local_dtypes[target.id] = "int64"
 
     def lower_whole_array_name(self, node: ast.Assign, target: ast.expr) -> Lowered:
         """A Name of known shape assigned a same-shape array expression, lowered per element;
@@ -1142,7 +1144,9 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
         ``R + N + r - (R + r)`` are both ``N``, and only the symbolic compare says so."""
         if extent == target:
             return True
-        if len(extent) == len(target) and all(a == b or shape_exprs_equal(a, b) for a, b in zip(extent, target)):
+        if len(extent) == len(target) and all(
+            a == b or shape_exprs_equal(a, b) for a, b in zip(extent, target, strict=False)
+        ):
             return True
         return self.broadcastable_to(extent, target)
 
@@ -1286,6 +1290,6 @@ class IndexArraysAtIter(ast.NodeTransformer):
 
 def nest_at_iters(body_stmt: ast.stmt, iters: list[str], bounds: Sequence[ast.expr]) -> ast.stmt:
     """``body_stmt`` in ``for iter in range(bound)`` loops, the first iter outermost."""
-    for ivar, bound in zip(reversed(iters), reversed(bounds)):
+    for ivar, bound in zip(reversed(iters), reversed(bounds), strict=False):
         body_stmt = range_for(ivar, [copy.deepcopy(bound)], [body_stmt])
     return body_stmt

@@ -55,7 +55,7 @@ class StmtHoister(ast.NodeTransformer):
         for s in pre:
             ast.copy_location(s, node)
             ast.fix_missing_locations(s)
-        return pre + [node]
+        return [*pre, node]
 
     def visit_Assign(self, node: ast.Assign) -> ast.AST | list[ast.stmt]:
         return self.flush(node)
@@ -139,7 +139,7 @@ class MethodCallRewriter(StmtHoister):
             return node
         return ast.Call(
             func=numpy_attribute(METHOD_TO_NP[func.attr]),
-            args=[recv] + list(node.args),
+            args=[recv, *list(node.args)],
             keywords=node.keywords,
         )
 
@@ -180,9 +180,7 @@ class ComputedIndexCallHoister(StmtHoister):
         if not isinstance(e, ast.Call):
             return False
         f = e.func
-        if isinstance(f, ast.Name) and f.id in self.INLINE_INDEX_BUILTINS:
-            return False
-        return True
+        return not (isinstance(f, ast.Name) and f.id in self.INLINE_INDEX_BUILTINS)
 
     def is_arg_reduction(self, call: ast.Call) -> bool:
         f = call.func

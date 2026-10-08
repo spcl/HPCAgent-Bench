@@ -73,7 +73,7 @@ def marker_constant(node: ast.expr) -> int:
 
 def marker_operands(node: ast.Call) -> tuple[str, str]:
     """``(out, src)``: the marker's first two arguments are always bare array names."""
-    out, src = (cast(ast.Name, arg).id for arg in node.args[:2])
+    out, src = (cast("ast.Name", arg).id for arg in node.args[:2])
     return out, src
 
 

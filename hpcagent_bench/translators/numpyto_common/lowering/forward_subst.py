@@ -302,16 +302,16 @@ class CandidateSearch:
         more) or a loop's body one level deeper; a block nested in a loop re-runs its own prefix on
         the next iteration."""
         stmt = stmts[i]
-        tail = (stmts[i + 1 :],) + after
-        inner_reentry = (reentry + ((stmts, i),)) if depth else reentry
+        tail = (stmts[i + 1 :], *after)
+        inner_reentry = ((*reentry, (stmts, i))) if depth else reentry
         if isinstance(stmt, ast.If):
-            self.scan(stmt.body, depth, (stmt.orelse,) + tail, inner_reentry, loop_vars)
-            self.scan(stmt.orelse, depth, (stmt.body,) + tail, inner_reentry, loop_vars)
+            self.scan(stmt.body, depth, (stmt.orelse, *tail), inner_reentry, loop_vars)
+            self.scan(stmt.orelse, depth, (stmt.body, *tail), inner_reentry, loop_vars)
             return
         if not isinstance(stmt, (ast.For, ast.While)):
             return
         body_vars = loop_vars
         if isinstance(stmt, ast.For):
             body_vars = loop_vars | frozenset(n.id for n in ast.walk(stmt.target) if isinstance(n, ast.Name))
-        self.scan(stmt.body, depth + 1, ((stmt.orelse,) + tail) if stmt.orelse else tail, inner_reentry, body_vars)
+        self.scan(stmt.body, depth + 1, ((stmt.orelse, *tail)) if stmt.orelse else tail, inner_reentry, body_vars)
         self.scan(stmt.orelse, depth, tail, inner_reentry, loop_vars)

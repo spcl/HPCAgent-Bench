@@ -14,7 +14,7 @@ from scipy.stats import wilcoxon
 from hpcagent_bench.stats import summary
 
 
-@pytest.mark.parametrize("n", (8, 15, 26, 40, 80))
+@pytest.mark.parametrize("n", [8, 15, 26, 40, 80])
 def test_a_tied_sample_takes_the_corrected_approximation(n: int) -> None:
     """The exact null counts subsets of the DISTINCT ranks 1..n; with a tie the ranks are midranks and an "exact"
     p is wrong rather than imprecise. ``correction=True`` is explicit because scipy defaults it off."""
@@ -32,7 +32,7 @@ def test_a_tied_sample_takes_the_corrected_approximation(n: int) -> None:
 def test_the_threshold_sits_where_the_exact_null_is_still_affordable() -> None:
     """The cutoff is measured, not inherited from scipy: never under the sizes these tables reach, never past what
     the exact DP pays for."""
-    assert 40 <= summary.EXACT_MAX_N, "the llr focus tag is 40 kernels and must stay exact"
+    assert summary.EXACT_MAX_N >= 40, "the llr focus tag is 40 kernels and must stay exact"
     assert summary.EXACT_MAX_N <= 250
     assert summary.use_exact([float(i) for i in range(1, summary.EXACT_MAX_N + 1)])
     assert not summary.use_exact([float(i) for i in range(1, summary.EXACT_MAX_N + 2)])

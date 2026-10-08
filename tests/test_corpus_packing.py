@@ -25,15 +25,15 @@ from collections.abc import Mapping, Sequence
 import pytest
 
 from hpcagent_bench.sizing import (
-    cost_vector,
+    PRESETS,
+    TIME_UNIT_BYTES,
+    XL_BYTE_CEILING,
     KernelCost,
+    cost_vector,
     node_footprint_violations,
     pack_lpt,
     preset_cost,
-    PRESETS,
     stride_partition,
-    TIME_UNIT_BYTES,
-    XL_BYTE_CEILING,
 )
 from hpcagent_bench.spec import KERNELS
 from hpcagent_bench.support.collect.sweep import shard_names
@@ -162,7 +162,7 @@ def test_an_unknown_cost_cannot_skew_the_packing() -> None:
 def test_a_corpus_with_no_resolvable_cost_falls_back_to_the_stride() -> None:
     """Nothing resolves, so there is nothing to pack: the historic stride comes back unchanged."""
     names = [f"opaque{i:02d}" for i in range(11)]
-    sizes: dict[str, int | None] = {name: None for name in names}
+    sizes: dict[str, int | None] = dict.fromkeys(names)
     assert pack_lpt(names, costs_from(sizes), 3) == stride_partition(names, 3)
 
 
@@ -248,7 +248,8 @@ def test_an_over_budget_packing_is_refused_by_name_and_number() -> None:
         pack_lpt(sorted(sizes), costs_from(sizes), 4, ranks_per_node=4, node_ram_bytes=node)
     message = str(excinfo.value)
     assert "xl0" in message
-    assert f"{XL_BYTE_CEILING / 2**30:.2f} GB" in message and f"{node / 2**30:.2f} GB" in message
+    assert f"{XL_BYTE_CEILING / 2**30:.2f} GB" in message
+    assert f"{node / 2**30:.2f} GB" in message
 
 
 def test_the_same_packing_is_accepted_when_the_node_is_big_enough() -> None:

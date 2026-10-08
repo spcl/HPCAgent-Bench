@@ -42,7 +42,7 @@ def test_the_body_reads_back_whole_on_every_read() -> None:
     assert json.loads(refusal.read())["error"].startswith("min_percent")
 
 
-@pytest.mark.parametrize("amt, expected", [(None, BODY), (-1, BODY), (0, b""), (5, BODY[:5])])
+@pytest.mark.parametrize(("amt", "expected"), [(None, BODY), (-1, BODY), (0, b""), (5, BODY[:5])])
 def test_a_bounded_read_serves_a_prefix_of_the_body(amt: int | None, expected: bytes) -> None:
     assert error_with_body(raw_refusal()).read(amt) == expected
 
@@ -51,7 +51,8 @@ def test_neither_the_original_response_nor_the_refusal_is_left_open() -> None:
     """An open response is collected with a ResourceWarning, and warnings are errors in this suite."""
     original = raw_refusal()
     refusal = error_with_body(original)
-    assert original.closed and refusal.closed
+    assert original.closed
+    assert refusal.closed
 
 
 def test_an_empty_refusal_body_is_kept_empty_not_broken() -> None:
@@ -61,4 +62,5 @@ def test_an_empty_refusal_body_is_kept_empty_not_broken() -> None:
 
 def test_a_refusal_built_directly_is_closed_and_readable() -> None:
     refusal = JudgeRefusal("http://judge/oracle", 421, "Misdirected", email.message.Message(), b"rank")
-    assert refusal.closed and refusal.read() == b"rank"
+    assert refusal.closed
+    assert refusal.read() == b"rank"

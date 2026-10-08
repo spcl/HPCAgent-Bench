@@ -214,7 +214,8 @@ def test_an_include_of_a_missing_partial_stops_the_launch(tmp_path: pathlib.Path
         [str(SCRIPT), str(repo), str(tmp_path / "shared")], capture_output=True, text=True, check=False
     )
     assert done.returncode != 0
-    assert "no partial" in done.stderr and "no-such-partial" in done.stderr
+    assert "no partial" in done.stderr
+    assert "no-such-partial" in done.stderr
 
 
 def test_a_dropped_in_addendum_or_tools_paragraph_is_a_new_prompt_variant(
@@ -233,9 +234,13 @@ def test_a_dropped_in_addendum_or_tools_paragraph_is_a_new_prompt_variant(
     composed = (shared / "prompt-probe.md").read_text()
     assert composed.index("## Probe track") < composed.index("{{HINTS}}")
     tools = (shared / "prompt-probetool.md").read_text()
-    assert "Your tools are a probe." in tools and "`Read`" not in tools and "{{TOOLS}}" in tools
+    assert "Your tools are a probe." in tools
+    assert "`Read`" not in tools
+    assert "{{TOOLS}}" in tools
     cli = (shared / "prompt-cli.md").read_text()
-    assert "Your tools are a shell." in cli and "{{TOOLS_CLI}}" in cli and "`Read`" not in cli
+    assert "Your tools are a shell." in cli
+    assert "{{TOOLS_CLI}}" in cli
+    assert "`Read`" not in cli
 
 
 def test_the_base_prompt_is_untouched_by_the_repo_variant(tmp_path: pathlib.Path, repo: pathlib.Path) -> None:
@@ -310,7 +315,7 @@ SOURCE_SUFFIXES = frozenset({".c", ".cpp", ".cc", ".cxx", ".hip", ".cu", ".f90",
 
 
 @pytest.mark.parametrize(
-    "language, dialect, target",
+    ("language", "dialect", "target"),
     [("c", "c", "cpu"), ("cpp", "c++", "cpu"), ("hip", "hip", "gpu")],
 )
 def test_a_cpf_src_setup_stages_the_dropin_as_the_only_kernel_source(
@@ -383,8 +388,7 @@ def test_the_launcher_materializes_before_it_starts_any_role() -> None:
 
 
 def agent_driver():
-    module = fresh("agent_driver")
-    return module
+    return fresh("agent_driver")
 
 
 def test_every_agent_gets_its_own_write_folder(monkeypatch: pytest.MonkeyPatch) -> None:

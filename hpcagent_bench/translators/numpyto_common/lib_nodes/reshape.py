@@ -93,7 +93,7 @@ def reshape_grouped_copy(
                 index[ax] = "0"
             continue
         if len(src_idxs) == len(tgt_idxs):
-            for s_ax, t_ax in zip(src_idxs, tgt_idxs):
+            for s_ax, t_ax in zip(src_idxs, tgt_idxs, strict=False):
                 it = f"__rs{len(loops)}"
                 loops.append((it, src_shape[s_ax]))
                 src_index[s_ax] = tgt_index[t_ax] = it
@@ -109,7 +109,7 @@ def reshape_grouped_copy(
             it = f"__rs{len(loops)}"
             loops.append((it, fine_shape[ax]))
             its.append(it)
-        for pos, (ax, it) in enumerate(zip(fine_axes, its)):
+        for pos, (ax, it) in enumerate(zip(fine_axes, its, strict=False)):
             stride = product_str([fine_shape[a] for a in fine_axes[pos + 1 :]])
             terms.append(it if stride == "1" else f"({it}) * ({stride})")
             (src_index if fine_is_src else tgt_index)[ax] = it
@@ -187,10 +187,7 @@ def expand_reshape(
         lhs_slice = name_(tgt_iters[0])
     else:
         lhs_slice = ast.Tuple(elts=[name_(it) for it in tgt_iters], ctx=ast.Load())
-    if src_rank == 1:
-        rhs_slice = src_axes[0]
-    else:
-        rhs_slice = ast.Tuple(elts=src_axes, ctx=ast.Load())
+    rhs_slice = src_axes[0] if src_rank == 1 else ast.Tuple(elts=src_axes, ctx=ast.Load())
     inner = ast.Assign(
         targets=[ast.Subscript(value=name_(target.id), slice=lhs_slice, ctx=ast.Store())],
         value=ast.Subscript(value=name_(a.id), slice=rhs_slice, ctx=ast.Load()),
@@ -198,7 +195,7 @@ def expand_reshape(
 
     # Wrap in target-shape loop nest (outermost first).
     current: ast.stmt = inner
-    for it, bound in zip(reversed(tgt_iters), reversed(list(tgt_shape))):
+    for it, bound in zip(reversed(tgt_iters), reversed(list(tgt_shape)), strict=False):
         current = range_for(it, [const_or_name(bound)], [current])
     return [current]
 

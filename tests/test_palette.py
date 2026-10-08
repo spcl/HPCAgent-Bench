@@ -39,7 +39,8 @@ def test_colour_does_not_depend_on_the_other_series():
     """Dropping a series must not repaint the survivors."""
     many = palette.colors(["", "cpf-src", "cpf-tool", "lang-skills"])
     few = palette.colors(["", "cpf-tool"])
-    assert few[""] == many[""] and few["cpf-tool"] == many["cpf-tool"]
+    assert few[""] == many[""]
+    assert few["cpf-tool"] == many["cpf-tool"]
 
 
 def test_a_combination_keeps_its_lead_packets_family():
@@ -58,7 +59,8 @@ def test_each_extra_packet_is_one_step_lighter():
     one = palette.color("cpf-src+lang-skills")
     two = palette.color("cpf-src+lang-skills+profiling")
     assert base != one != two
-    assert palette.lighten(base, 1) == one and palette.lighten(base, 2) == two
+    assert palette.lighten(base, 1) == one
+    assert palette.lighten(base, 2) == two
 
 
 def test_the_ramp_is_tab20_dark_first_and_every_slot_is_distinct():
@@ -158,7 +160,7 @@ PUBLISHED_FRAMEWORK_COLORS = {
 }
 
 
-@pytest.mark.parametrize("packet,expected", sorted(PUBLISHED_PACKET_COLORS.items()))
+@pytest.mark.parametrize(("packet", "expected"), sorted(PUBLISHED_PACKET_COLORS.items()))
 def test_a_published_packet_colour_did_not_move(packet, expected):
     assert palette.color(packet) == expected, (
         f"{packet!r} was {expected} and is now {palette.color(packet)}. An order was changed "
@@ -167,12 +169,12 @@ def test_a_published_packet_colour_did_not_move(packet, expected):
     )
 
 
-@pytest.mark.parametrize("model,expected", sorted(PUBLISHED_MODEL_MARKERS.items()))
+@pytest.mark.parametrize(("model", "expected"), sorted(PUBLISHED_MODEL_MARKERS.items()))
 def test_a_published_model_shape_did_not_move(model, expected):
     assert palette.marker(model) == expected
 
 
-@pytest.mark.parametrize("framework,expected", sorted(PUBLISHED_FRAMEWORK_COLORS.items()))
+@pytest.mark.parametrize(("framework", "expected"), sorted(PUBLISHED_FRAMEWORK_COLORS.items()))
 def test_a_published_framework_colour_did_not_move(framework, expected):
     assert palette.framework_color(framework) == expected
 
@@ -274,7 +276,8 @@ def test_a_control_is_the_hollow_circle_in_a_lighter_shade_of_its_models_colour_
     from hpcagent_bench.stats.figures import scaling
 
     style = scaling.series_style("", "qwen38")
-    assert style["marker"].get_marker() == palette.CONTROL_MARKER and style["markerfacecolor"] == "none"
+    assert style["marker"].get_marker() == palette.CONTROL_MARKER
+    assert style["markerfacecolor"] == "none"
     assert style["color"] == palette.model_shade("qwen38", palette.CONTROL_SHADE)
     assert palette.packet_marker("") == palette.CONTROL_MARKER
 
@@ -289,4 +292,5 @@ def test_repeated_series_of_one_model_are_close_shades_of_its_colour_not_other_h
 
     base, shade = (matplotlib.colors.to_rgb(palette.model_shade("oss120b", s)) for s in (0, step))
     (h0, l0, _), (h1, l1, _) = (colorsys.rgb_to_hls(*rgb) for rgb in (base, shade))
-    assert abs(h0 - h1) < 0.02 and l1 > l0
+    assert abs(h0 - h1) < 0.02
+    assert l1 > l0

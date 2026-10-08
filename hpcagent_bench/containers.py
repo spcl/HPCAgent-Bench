@@ -32,6 +32,7 @@ official unprivileged install into a user prefix, exposed as the ``hpcagent-benc
 entry point.
 """
 
+import contextlib
 import os
 import pathlib
 import shutil
@@ -375,10 +376,8 @@ def clean_partial_install(prefix: str, preexisting: Collection[str]) -> None:
         if os.path.isdir(path) and not os.path.islink(path):
             shutil.rmtree(path, ignore_errors=True)
         else:
-            try:
+            with contextlib.suppress(OSError):
                 os.remove(path)
-            except OSError:
-                pass
 
 
 def install_apptainer_main(argv: Sequence[str] | None = None) -> int:

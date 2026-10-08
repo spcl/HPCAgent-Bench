@@ -56,7 +56,7 @@ BINDING_SITES = [
 ]
 
 
-@pytest.mark.parametrize("source, code", BINDING_SITES)
+@pytest.mark.parametrize(("source", "code"), BINDING_SITES)
 def test_a_leading_underscore_binding_is_flagged_at_its_site(source: str, code: str) -> None:
     assert code in codes_for(source), source
 
@@ -100,7 +100,7 @@ IMPORT_CASES = [
 ]
 
 
-@pytest.mark.parametrize("source, expected_codes", IMPORT_CASES)
+@pytest.mark.parametrize(("source", "expected_codes"), IMPORT_CASES)
 def test_import_alias_patterns_are_judged_by_the_import_specific_codes(source: str, expected_codes: set) -> None:
     assert codes_for(source) == expected_codes, source
 
@@ -114,7 +114,7 @@ MODULE_NAME_CASES = [
 ]
 
 
-@pytest.mark.parametrize("name, forbidden", MODULE_NAME_CASES)
+@pytest.mark.parametrize(("name", "forbidden"), MODULE_NAME_CASES)
 def test_a_module_file_name_starting_with_underscore_is_flagged_unless_dunder(name: str, forbidden: bool) -> None:
     violation = check_names.check_module_name(pathlib.Path(name))
     assert (violation is not None) == forbidden, name

@@ -82,9 +82,11 @@ def test_c_declares_scalar_and_scalarises_size1_read() -> None:
     from hpcagent_bench.translators.numpyto_c.emit import emit_c
 
     c = emit_c(kir_(SRC), fn_name="f")
-    assert "c[1]" not in c and "bool c[" not in c  # ``c`` is a scalar, not a size-1 array
+    assert "c[1]" not in c
+    assert "bool c[" not in c
     assert "a[i] > x[0]" in c  # the bare size-1 array ``x`` is read as its element
-    assert "x[0][0]" not in c and "x[0][" not in c  # ...but an explicit x[0] is NOT double-indexed
+    assert "x[0][0]" not in c
+    assert "x[0][" not in c
 
 
 def test_fortran_declares_scalar_and_scalarises_size1_read() -> None:

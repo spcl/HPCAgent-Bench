@@ -26,7 +26,9 @@ def test_budget_scales() -> None:
     assert (full.trials, full.configs) == SCALES["full"]
     # a bare integer caps both backends explicitly.
     custom = OptimizeBudget.from_env("48")
-    assert custom.scale == "custom" and custom.trials == 48 and custom.configs == 48
+    assert custom.scale == "custom"
+    assert custom.trials == 48
+    assert custom.configs == 48
     # garbage falls back to the default scale.
     assert OptimizeBudget.from_env("nonsense").scale == "small"
 
@@ -48,7 +50,8 @@ def test_backend_caps_delegate_to_budget_fields() -> None:
     assert full.tvm_trials() == SCALES["full"][0]
     assert full.triton_config_cap() == SCALES["full"][1]
     custom = OptimizeBudget(scale="custom", trials=42, configs=9)
-    assert custom.tvm_trials() == 42 and custom.triton_config_cap() == 9
+    assert custom.tvm_trials() == 42
+    assert custom.triton_config_cap() == 9
 
 
 def test_framework_declares_optimizer_status() -> None:

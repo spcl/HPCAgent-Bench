@@ -289,7 +289,7 @@ class SsaRenamer:
         for known_toks, known_name in tuple(versions.items()):
             if len(known_toks) != len(shape_toks):
                 continue
-            if all(a == b or shape_exprs_equal(a, b) for a, b in zip(known_toks, shape_toks)):
+            if all(a == b or shape_exprs_equal(a, b) for a, b in zip(known_toks, shape_toks, strict=False)):
                 return known_name, False
             if pin and shapes_agree_under(known_toks, shape_toks, pin, self.dim_aliases, self.shapes):
                 return known_name, True
@@ -344,13 +344,13 @@ class SsaRenamer:
         its condition and both loop forms may run an ``else`` after the body. The enclosing loops'
         RE-ENTRY POINTS are carried down (not a pre-truncated prefix: the truncation depends on the
         name being minted, known only at the mint site)."""
-        inner_after = (stmts[i + 1 :],) + scope.live_after
+        inner_after = (stmts[i + 1 :], *scope.live_after)
         if isinstance(stmt, ast.While):
             inner_after = ([ast.Expr(value=stmt.test)], *inner_after)
         if stmt.orelse and isinstance(stmt, (ast.For, ast.While)):
             inner_after = (stmt.orelse, *inner_after)
         is_loop = isinstance(stmt, (ast.For, ast.While))
-        inner_reentry = (scope.reentry + ((stmts, i),)) if scope.loop_body else scope.reentry
+        inner_reentry = ((*scope.reentry, (stmts, i))) if scope.loop_body else scope.reentry
         branch_pin, zero_on_taken = branch_pin_(stmt)
         for branch, in_loop, taken in ((stmt.body, is_loop, True), (stmt.orelse, False, False)):
             inner_scope = SsaScope(

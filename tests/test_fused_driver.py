@@ -27,7 +27,6 @@ from typing import NamedTuple
 
 import pytest
 
-from hpcagent_agent.tools import http_json
 from hpcagent_bench import fused
 from tests.fresh_module import fresh
 
@@ -83,8 +82,7 @@ FUSED_ONLY = ("HPCAGENT_BENCH_WORKER_TOKEN", "HPCAGENT_BENCH_MATERIAL_DIR", "HPC
 
 
 def load(name: str) -> ModuleType:
-    module = fresh(name)
-    return module
+    return fresh(name)
 
 
 def overlay_of(setup: str) -> dict[str, str | None]:
@@ -247,7 +245,8 @@ def test_a_fused_worker_is_launched_exactly_as_its_single_setup_job_launches_it(
     assert fused_env == single.env
     argv = [word.replace(fused_root, single_root) for word in without_material(fused_run.argv, material, shared)]
     assert argv == single.argv
-    assert "--material" in fused_run.argv and material in fused_run.argv
+    assert "--material" in fused_run.argv
+    assert material in fused_run.argv
     assert {**fused_run.tokens, "env_file": None, "setup": None} == {**single.tokens, "env_file": None, "setup": None}
     assert (fused_run.tokens["env_file"], fused_run.tokens["setup"]) == (setup, SETUPS[setup]["SETUP"])
 
@@ -338,7 +337,8 @@ def test_a_control_workers_view_holds_nothing_of_another_setup(tmp_path: pathlib
     bound = [op.source for op in plan if op.kind == "bind"]
     other = str(shared / "setups" / "cpf-setup")
     assert not [source for source in bound if source == other or source.startswith(f"{other}/")]
-    assert str(material / "skills") in bound and str(material / "prompt.md") in bound
+    assert str(material / "skills") in bound
+    assert str(material / "prompt.md") in bound
     assert f"{seal.VIEW_DIR}/tasks/{STEM}" in {op.target for op in plan if op.kind == "bind"}
 
 

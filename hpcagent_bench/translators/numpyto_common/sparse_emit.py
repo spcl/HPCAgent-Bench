@@ -1113,8 +1113,8 @@ def dia_entries(bufs: dict[str, str], ext: EntryExtents, inner: list[ast.stmt]) 
         body=[
             assign(ENTRY_ROW, name_("__ei")),
             assign(ENTRY_VALUE, subscript_(bufs["data"], name_("__ed"), name_(ENTRY_COL))),
-        ]
-        + inner,
+            *inner,
+        ],
         orelse=[],
     )
     per_row = range_for("__ei", [expr_of(ext.rows)], [assign(ENTRY_COL, column), guarded])
@@ -1130,8 +1130,8 @@ def ell_entries(bufs: dict[str, str], ext: EntryExtents, inner: list[ast.stmt]) 
         body=[
             assign(ENTRY_ROW, name_("__ei")),
             assign(ENTRY_VALUE, subscript_(bufs["data"], name_("__ei"), name_("__es"))),
-        ]
-        + inner,
+            *inner,
+        ],
         orelse=[],
     )
     slots = range_for(

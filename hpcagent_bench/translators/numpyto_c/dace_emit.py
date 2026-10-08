@@ -570,7 +570,7 @@ def extent_without_dead_symbols(text: str) -> str:
     floor/ceiling: an extent this cannot simplify keeps the exact spelling the rest of the emitter
     matches on, and ``//`` never round-trips through sympy's ``floor``.
     """
-    named = {i for i in IDENT_RE.findall(text)}
+    named = set(IDENT_RE.findall(text))
     if not named:
         return text
     folded = sympify_shape(text)
@@ -743,7 +743,7 @@ class DesugarTernary(ast.NodeTransformer):
             else ast.Call(
                 func=ast.Attribute(value=value, attr="astype", ctx=ast.Load()), args=[expr_of(dtype)], keywords=[]
             )
-            for value, kind in zip((body, orelse), kinds)
+            for value, kind in zip((body, orelse), kinds, strict=False)
         ]
         return cast[0], cast[1]
 
@@ -914,7 +914,7 @@ class DesugarChainedCompare(ast.NodeTransformer):
             return node
         links: list[ast.expr] = [
             ast.Compare(left=copy.deepcopy(left), ops=[op], comparators=[copy.deepcopy(right)])
-            for left, op, right in zip(operands, node.ops, operands[1:])
+            for left, op, right in zip(operands, node.ops, operands[1:], strict=False)
         ]
         return ast.copy_location(ast.BoolOp(op=ast.And(), values=links), node)
 
@@ -1300,7 +1300,7 @@ class DivisibleStridedSpan(ast.NodeTransformer):
         spelled = [ast.unparse(t) for t in terms]
         if lower not in spelled:
             return None
-        rest = [t for t, text in zip(terms, spelled) if text != lower]
+        rest = [t for t, text in zip(terms, spelled, strict=False) if text != lower]
         if len(rest) != len(terms) - 1 or not rest:
             return None  # ``lower`` appearing twice is not this idiom either
         return functools.reduce(lambda left, right: ast.BinOp(left=left, op=ast.Add(), right=right), rest)
@@ -1459,7 +1459,7 @@ def uniquify_nested_loop_targets(fn_ast: ast.FunctionDef) -> None:
     taken = {n.id for n in ast.walk(fn_ast) if isinstance(n, ast.Name)}
 
     def rename(node: ast.For, old: str, new: str) -> None:
-        for stmt in [node.target] + node.body + node.orelse:
+        for stmt in [node.target, *node.body, *node.orelse]:
             for name in ast.walk(stmt):
                 if isinstance(name, ast.Name) and name.id == old:
                     name.id = new
@@ -1561,14 +1561,17 @@ class PointwiseScatterToLoop(ast.NodeTransformer):
             lines.append(f"{tmp} = {ast.unparse(expr)}")
             return tmp
 
-        names = [ast.unparse(e) if r == 0 else bind(e, f"{prefix}_x{k}") for k, (e, r) in enumerate(zip(elts, ranks))]
+        names = [
+            ast.unparse(e) if r == 0 else bind(e, f"{prefix}_x{k}")
+            for k, (e, r) in enumerate(zip(elts, ranks, strict=False))
+        ]
         value_rank = expr_rank(node.value, self.ranks)
         if value_rank is None or value_rank > 1:
             return node  # an unknown or grid-shaped rhs: guessing how it lines up would be a miscompile
         value = ast.unparse(node.value) if value_rank == 0 else bind(node.value, f"{prefix}_v")
         driver = names[ranks.index(1)]
         it = f"{prefix}_i"
-        index = ", ".join(nm if r == 0 else f"{nm}[{it}]" for nm, r in zip(names, ranks))
+        index = ", ".join(nm if r == 0 else f"{nm}[{it}]" for nm, r in zip(names, ranks, strict=False))
         rhs = value if value_rank == 0 else f"{value}[{it}]"
         lines.append(f"for {it} in range({driver}.shape[0]):")
         lines.append(f"    {target.value.id}[{index}] {op} {rhs}")
@@ -1641,10 +1644,10 @@ class DesugarAugAssign(ast.NodeTransformer):
             return None
         at = f"__hpcagent_bench_aug{self.counter}"
         self.counter += 1
-        arrays = [self.bound(part, prelude) if rank == 1 else part for part, rank in zip(parts, ranks)]
+        arrays = [self.bound(part, prelude) if rank == 1 else part for part, rank in zip(parts, ranks, strict=False)]
         element = [
             ast.Subscript(value=part, slice=name_(at), ctx=ast.Load()) if rank == 1 else part
-            for part, rank in zip(arrays, ranks)
+            for part, rank in zip(arrays, ranks, strict=False)
         ]
         write = ast.Subscript(
             value=copy.deepcopy(store.value), slice=ast.Tuple(elts=element, ctx=ast.Load()), ctx=ast.Store()
@@ -1654,7 +1657,7 @@ class DesugarAugAssign(ast.NodeTransformer):
         value = self.bound(node.value, prelude) if value_rank == 1 else self.once(node.value, prelude)
         if value_rank == 1:
             value = ast.Subscript(value=value, slice=name_(at), ctx=ast.Load())
-        first = next(part for part, rank in zip(arrays, ranks) if rank == 1)
+        first = next(part for part, rank in zip(arrays, ranks, strict=False) if rank == 1)
         return ast.For(
             target=store_(at),
             iter=expr_of(f"range({ast.unparse(first)}.shape[0])"),
@@ -2093,7 +2096,7 @@ class ReachingBindings:
     (``try``, ``with``, ``match``, a nested def) that touches the name clears ``sound``.
     """
 
-    __slots__ = ("name", "bindings", "touching", "reached", "breaks", "continues", "sound")
+    __slots__ = ("bindings", "breaks", "continues", "name", "reached", "sound", "touching")
 
     def __init__(self, fn: ast.FunctionDef, name: str, bindings: set[int]) -> None:
         self.name = name
@@ -4293,7 +4296,7 @@ def materialize_strided_helper_args(
                 if flags[index]:
                     post.append(ast.parse(f"{ast.unparse(arg)} = {name}").body[0])
                 call.args[index] = name_(name)
-        return pre + [stmt] + post
+        return [*pre, stmt, *post]
 
     def rewrite(stmts: Sequence[ast.stmt]) -> list[ast.stmt]:
         out: list[ast.stmt] = []
@@ -4361,9 +4364,9 @@ def without_valueless_returns(body: Sequence[ast.stmt]) -> list[ast.stmt]:
         rest = body[index + 1 :]
         guard_exits = isinstance(stmt, ast.If) and not stmt.orelse and exits_with_valueless_return(stmt.body)
         if isinstance(stmt, ast.If) and (not rest or guard_exits):
-            trailing = stmt.orelse if not rest else rest
+            trailing = rest or stmt.orelse
             arm = without_valueless_returns(stmt.body)
-            stmt.body = arm if arm else [ast.copy_location(ast.Pass(), stmt)]
+            stmt.body = arm or [ast.copy_location(ast.Pass(), stmt)]
             stmt.orelse = without_valueless_returns(trailing)
             kept.append(stmt)
             return kept
@@ -4808,7 +4811,9 @@ def renamed_sympy_reserved(
     renames = {n: f"__{n}" for n in candidates if sympy_reserved(n)}
     if renames:
         body = [RenameNames(renames).visit(stmt) for stmt in body]
-        params = [f"{renames.get(n, n)}: {p.split(':', 1)[1].strip()}" for n, p in zip(param_names, params)]
+        params = [
+            f"{renames.get(n, n)}: {p.split(':', 1)[1].strip()}" for n, p in zip(param_names, params, strict=False)
+        ]
         symbol_names = [renames.get(n, n) for n in symbol_names]
         # The recipe is evaluated by the CALLER over the renamed keyword arguments, so its free
         # names have to be renamed with them or the eval below raises NameError on the old spelling.
@@ -4921,7 +4926,7 @@ def captured_parameter_names(hkir: KernelIR, abi: list[str], args: Sequence[ast.
     spelled = {ident for arr in hkir.arrays for dim in arr.shape for ident in IDENT_RE.findall(str(dim))}
     return sorted(
         pname
-        for pname, arg in zip(abi, args)
+        for pname, arg in zip(abi, args, strict=False)
         if pname in extents and pname in spelled and not (isinstance(arg, ast.Name) and arg.id == pname)
     )
 
@@ -4972,7 +4977,7 @@ def helper_call_bindings(owner: ast.FunctionDef, hkir: KernelIR, pinned: dict[st
     scalar_names = {d.name for d in hkir.scalars}
     captured = captured_parameter_names(hkir, abi, node.args)
     binding = HelperBinding(pinned=dict(pinned))
-    arguments = list(zip(abi, node.args))
+    arguments = list(zip(abi, node.args, strict=False))
     bind_symbol_arguments(binding, arguments, own, pinned, captured)
     # A SCALAR parameter handed the very caller symbol one of the helper's own symbols already
     # stands for is that symbol under a second name. ``_conv_transpose2d`` takes ``stride`` by
@@ -5393,7 +5398,7 @@ def bind_helper_call(node: ast.Call, hkir: KernelIR, rendered: RenderedProgram) 
     abi = hkir.abi_param_order()
     if node.keywords or len(node.args) != len(abi):
         raise ValueError(f"call to {hkir.kernel_name!r} passes {len(node.args)} arguments for the ABI order {abi}")
-    arg_of = dict(zip(abi, node.args))
+    arg_of = dict(zip(abi, node.args, strict=False))
     emitted_from = {emitted: original for original, emitted in rendered.renames.items()}
     inferred = inferred_symbols(rendered)
     args: list[ast.expr] = []

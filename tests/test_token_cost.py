@@ -21,15 +21,13 @@ from types import ModuleType
 
 import pytest
 
-from tests.fresh_module import fresh
-from tests.fresh_module import module_at
+from tests.fresh_module import fresh, module_at
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 
 
 def load_token_cost() -> ModuleType:
-    module = fresh("token_cost")
-    return module
+    return fresh("token_cost")
 
 
 @pytest.fixture(name="token_cost")
@@ -243,7 +241,8 @@ def test_the_streamed_thinking_estimate_is_reported_but_never_added_to_the_effec
 
     cost = token_cost.episode_cost(log)
 
-    assert cost["output"] == 300 and cost["thinking_estimate"] == 900
+    assert cost["output"] == 300
+    assert cost["thinking_estimate"] == 900
     assert cost["effective"] == 1000 + 300, "the 900 is the same tokens the 300 already counts"
     assert token_cost.episode_totals(tmp_path).tokens_effective == 1300
 
@@ -319,7 +318,8 @@ def test_per_request_usage_outranks_the_episodes_result_record(token_cost: Modul
 
     cost = token_cost.episode_cost(log)
 
-    assert cost["output"] == 200 and cost["output_source"] == "message_delta"
+    assert cost["output"] == 200
+    assert cost["output_source"] == "message_delta"
     assert cost["output_delta_shape"] == "cumulative"
     assert cost["effective"] == 1500 + 200
 
@@ -405,7 +405,8 @@ def test_a_runner_harnesss_output_counts_its_reasoning_once(token_cost: ModuleTy
 
     cost = token_cost.episode_cost(tmp_path / "usage.jsonl")
 
-    assert cost["output"] == 100 and cost["thinking_estimate"] == 40
+    assert cost["output"] == 100
+    assert cost["thinking_estimate"] == 40
     assert cost["effective"] == 400 + 100
     assert cost["naive_total"] == 400 + 100
 

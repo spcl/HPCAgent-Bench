@@ -25,8 +25,7 @@ WEB_SEARCH_MD = ROOT / "hpcagent_bench" / "tools" / "web-search.md"
 
 def load_search() -> ModuleType:
 
-    module = fresh("search")
-    return module
+    return fresh("search")
 
 
 def test_description_is_imperative_and_trigger_rich_not_the_old_one_liner() -> None:
@@ -41,7 +40,8 @@ def test_description_is_imperative_and_trigger_rich_not_the_old_one_liner() -> N
     # Explains why this tool exists at all (own web access disabled).
     assert "disabled" in search.DESCRIPTION
     # Tells the model how to act on the two distinct refusal shapes (finding 2).
-    assert "503" in search.DESCRIPTION and "502" in search.DESCRIPTION
+    assert "503" in search.DESCRIPTION
+    assert "502" in search.DESCRIPTION
 
 
 def test_prompt_bullet_explains_503_versus_502_not_a_blanket_never_retry() -> None:
@@ -49,7 +49,8 @@ def test_prompt_bullet_explains_503_versus_502_not_a_blanket_never_retry() -> No
     configured, this call failed) along with the 503 (never configured) it is meant for."""
     search = load_search()
     assert "never retry it" not in search.PROMPT
-    assert "503" in search.PROMPT and "502" in search.PROMPT
+    assert "503" in search.PROMPT
+    assert "502" in search.PROMPT
 
 
 def test_search_defaults_off_because_a_run_must_not_have_internet_access(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -76,4 +77,5 @@ def test_web_search_md_does_not_claim_the_agents_own_capability() -> None:
     assert "your own web-search capability" not in text
     assert "MAY use" not in text
     assert "{{ judge_url }}/search" in text
-    assert "503" in text and "502" in text
+    assert "503" in text
+    assert "502" in text

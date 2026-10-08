@@ -68,7 +68,7 @@ def expand_copy(
     sub_src = scalarize_at_iters(src, iter_nodes, shape_table)
     sub_dst = ast.Subscript(value=name_(target.id), slice=idx, ctx=ast.Store())
     body: list[ast.stmt] = [ast.Assign(targets=[sub_dst], value=sub_src)]
-    return [alloc_marker(target.id)] + wrap_for_loops(iters, shape, body)
+    return [alloc_marker(target.id), *wrap_for_loops(iters, shape, body)]
 
 
 def expand_linspace(
@@ -202,7 +202,7 @@ def expand_fromfunction(
     if len(params) != len(shape_elts):
         raise NotImplementedError("np.fromfunction: lambda arity != shape rank")
     iters = [f"__ff{i}" for i in range(len(params))]
-    body_expr = RenameNames(dict(zip(params, iters))).visit(copy.deepcopy(lam.body))
+    body_expr = RenameNames(dict(zip(params, iters, strict=False))).visit(copy.deepcopy(lam.body))
     slot_elts: list[ast.expr] = [name_(v) for v in iters]
     slot = slot_elts[0] if len(iters) == 1 else ast.Tuple(elts=slot_elts, ctx=ast.Load())
     body: list[ast.stmt] = [

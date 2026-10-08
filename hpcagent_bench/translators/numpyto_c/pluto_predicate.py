@@ -171,11 +171,11 @@ class Flagger:
         value = bit if guard is None else ast.IfExp(test=copy.deepcopy(guard), body=bit, orelse=ast.Constant(0))
         taken = name_(flag)
         others = negate(taken) if guard is None else conj(guard, negate(taken))
-        return (
-            [ast.Assign(targets=[store_(flag)], value=value)]
-            + self.branch(node.body, taken)
-            + self.branch(node.orelse, others)
-        )
+        return [
+            ast.Assign(targets=[store_(flag)], value=value),
+            *self.branch(node.body, taken),
+            *self.branch(node.orelse, others),
+        ]
 
 
 def convert(node: ast.If, fresh: Callable[[], str], flags: list[str]) -> list[ast.stmt]:

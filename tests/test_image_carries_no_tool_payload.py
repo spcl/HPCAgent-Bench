@@ -78,7 +78,8 @@ def test_the_launch_gate_stub_never_outlives_its_run(dockerfile: str) -> None:
     """The stub is an empty package, and the RUN that creates it removes it: no layer keeps it."""
     for instruction in re.split(r"\n(?=[A-Z]+ )", recipe(dockerfile)):
         if GATE_STUB_CREATE in instruction:
-            assert "rm -rf" in instruction and GATE_STUB_REMOVE.rstrip(" \\") in instruction.split("rm -rf", 1)[1]
+            assert "rm -rf" in instruction
+            assert GATE_STUB_REMOVE.rstrip(" \\") in instruction.split("rm -rf", 1)[1]
 
 
 @pytest.mark.parametrize("dockerfile", JUDGE_AGENT_DOCKERFILES)
@@ -147,7 +148,5 @@ def test_the_launch_check_fails_naming_the_registry_that_offers_no_tools(tmp_pat
     agent_dir, web_search = fake_checkout(tmp_path, 'import json\nprint(json.dumps({"allowed_tools": []}))\n')
     result = launch_check(agent_dir, web_search)
     assert result.returncode != 0
-    assert (
-        str(agent_dir / "hpcagent_agent" / "tools" / "mcp_server.py") in result.stderr
-        and "offers no tools" in result.stderr
-    )
+    assert str(agent_dir / "hpcagent_agent" / "tools" / "mcp_server.py") in result.stderr
+    assert "offers no tools" in result.stderr

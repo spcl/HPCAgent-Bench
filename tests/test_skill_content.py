@@ -176,7 +176,8 @@ def test_the_profiling_skill_and_the_build_flags_agree_about_frame_pointers() ->
     add the flag to the build and the skill starts arguing against the repo's own behaviour."""
     body = skill_bodies()[PROFILING]
     assert "-fno-omit-frame-pointer" not in " ".join(flags.DEBUG_SYMBOLS)
-    assert "-fno-omit-frame-pointer" in body and "-g" in body
+    assert "-fno-omit-frame-pointer" in body
+    assert "-g" in body
 
 
 def test_the_profiling_skill_quotes_the_perf_flags_the_harness_actually_passes() -> None:
@@ -394,8 +395,10 @@ def test_the_profiling_skill_teaches_the_range_header_the_none_build_includes() 
     assert RANGES_HEADING in sections, "the profiling skill has no Ranges section"
     text = sections[RANGES_HEADING]
     header = flags.PAPI_RANGES_H.read_text()
-    assert f"`{flags.PAPI_RANGES_H.name}`" in text and f"/shared/skills/{flags.PAPI_RANGES_H.name}" in text
-    assert 'tool:"none"' in text and "none" in service.PROFILE_TOOLS
+    assert f"`{flags.PAPI_RANGES_H.name}`" in text
+    assert f"/shared/skills/{flags.PAPI_RANGES_H.name}" in text
+    assert 'tool:"none"' in text
+    assert "none" in service.PROFILE_TOOLS
     assert 'tool:"linuxperf"' in text and 'tool:"papi"' in text, (
         "the section does not send the reader to whole-kernel numbers first"
     )
@@ -461,7 +464,7 @@ def test_the_nsys_skill_sends_counter_questions_to_the_ncu_tool_without_handing_
 
 
 @pytest.mark.parametrize(
-    "page, refusals, own_causes",
+    ("page", "refusals", "own_causes"),
     [
         (NSYS, "NVIDIA_REFUSALS", ("ncu_missing", "timed_out")),
         (ROCPROF, "AMD_REFUSALS", ("rocprof_compute_missing", "no_kernels", "timed_out")),
@@ -612,8 +615,10 @@ def test_the_rocprof_skill_teaches_roctx_ranges_after_the_whole_kernel_rows() ->
     assert headings.index(ROCTX_RANGES_HEADING) > headings.index("## What comes back")
     text = dict(sections)[ROCTX_RANGES_HEADING]
     assert f"#include <{gpu_profiling.ROCTX_HEADER}>" in text
-    assert "roctxRangePush(" in text and "roctxRangePop()" in text
-    assert 'tool:"rocprofv3"' in text and "rocprofv3" in service.PROFILE_TOOLS
+    assert "roctxRangePush(" in text
+    assert "roctxRangePop()" in text
+    assert 'tool:"rocprofv3"' in text
+    assert "rocprofv3" in service.PROFILE_TOOLS
     assert "`ranges: []`" in dict(sections)["## What comes back"]
     for field in gpu_profiling.RangeStat.__annotations__:
         assert f"`{field}`" in text, f"the Ranges section does not name the {field!r} field"
@@ -878,7 +883,7 @@ def test_no_fortran_page_teaches_a_2023_spelling() -> None:
     # Per BULLET, not per line: a page may NAME a 2023 spelling in order to forbid it, and the
     # forbidding usually sits on a different wrapped line than the name does. Naming one without
     # forbidding it in the same breath is what this catches.
-    forbids = re.compile(r"F2023|2023|build error|rejected|not?t? newer|instead", re.I)
+    forbids = re.compile(r"F2023|2023|build error|rejected|not?t? newer|instead", re.IGNORECASE)
     for page in FORTRAN_PAGES:
         path = paths.ROOT / "hpcagent_bench" / "skills" / page / "SKILL.md"
         if not path.exists():
@@ -886,7 +891,7 @@ def test_no_fortran_page_teaches_a_2023_spelling() -> None:
         bullets = re.split(r"\n(?=[-*] |#)", path.read_text())
         for bullet in bullets:
             for pattern, why in F2023_IN_FORTRAN:
-                if re.search(pattern, bullet, re.I) and not forbids.search(bullet):
+                if re.search(pattern, bullet, re.IGNORECASE) and not forbids.search(bullet):
                     raise AssertionError(
                         f"{page} teaches a Fortran 2023 spelling ({why}) without "
                         f"marking it rejected: {' '.join(bullet.split())[:160]}"

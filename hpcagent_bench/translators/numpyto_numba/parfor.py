@@ -64,7 +64,7 @@ def provably_disjoint(lhs: ast.Subscript, rhs: ast.Subscript) -> bool:
     copy every stencil ends with, and it touches disjoint rows. Signs must match -- ``a[0]`` and
     ``a[-1]`` are the SAME element on a length-1 axis, so mixing them decides nothing."""
     left, right = index_exprs(lhs), index_exprs(rhs)
-    for a, b in zip(left, right):
+    for a, b in zip(left, right, strict=False):
         ca, cb = const_int(a), const_int(b)
         if ca is None or cb is None:
             continue

@@ -124,14 +124,12 @@ def is_scalar_dim_rhs(node: ast.expr) -> bool:
     if isinstance(node, ast.BinOp):
         return is_scalar_dim_rhs(node.left) and is_scalar_dim_rhs(node.right)
     # ``arr.shape[i]`` -- Subscript of a ``.shape`` Attribute on a Name.
-    if (
+    return bool(
         isinstance(node, ast.Subscript)
         and isinstance(node.value, ast.Attribute)
         and node.value.attr == "shape"
         and isinstance(node.value.value, ast.Name)
-    ):
-        return True
-    return False
+    )
 
 
 def substitute_inlined_scalar_defs(tokens: tuple[str, ...], defs: dict[str, str]) -> tuple[str, ...]:
@@ -154,7 +152,7 @@ def substitute_inlined_scalar_defs(tokens: tuple[str, ...], defs: dict[str, str]
             ident = m.group(0)
             if ident not in defs or ident in active:
                 return ident
-            return "(" + expand_(defs[ident], active + (ident,)) + ")"
+            return "(" + expand_(defs[ident], (*active, ident)) + ")"
 
         return IDENT_RE.sub(repl_, text)
 

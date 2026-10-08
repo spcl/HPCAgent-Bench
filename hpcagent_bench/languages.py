@@ -1191,7 +1191,7 @@ def resolve_compiler(name: str) -> str | None:
 
     A candidate is skipped when it reports a major below :data:`COMPILER_MIN_MAJOR`, so a too-old
     default driver falls through to a versioned sibling that can actually compile."""
-    candidates = (name,) + COMPILER_ALIASES.get(name, ())
+    candidates = (name, *COMPILER_ALIASES.get(name, ()))
     floor = COMPILER_MIN_MAJOR.get(name, -1)
     for cand in candidates:
         exe = shutil.which(cand)
@@ -2345,7 +2345,7 @@ def build_mpi_executable_commands(
     cc_override = dict(cc_override or {})
     # Compile the driver as `driver_lang` (C on the host path, the GPU family for device
     # residency) alongside the agent kernel source(s).
-    sources: list[tuple[str, pathlib.Path]] = list(kernel_sources) + [(driver_lang, pathlib.Path(driver_src))]
+    sources: list[tuple[str, pathlib.Path]] = [*list(kernel_sources), (driver_lang, pathlib.Path(driver_src))]
 
     cmds: list[list[str]] = []
     objs: list[str] = []
@@ -2481,7 +2481,7 @@ def build_shared_lib_commands(
     subst = subst_map(cc, baseline=baseline, src=src, obj=obj, objs=" ".join(str(o) for o in objs), lib=out_so)
 
     cmds: list[list[str]] = []
-    for unit, unit_obj in zip(units, objs):
+    for unit, unit_obj in zip(units, objs, strict=False):
         step = subst_map(cc, baseline=baseline, src=unit, obj=unit_obj, objs=str(unit_obj), lib=out_so)
         argv = _render_argv(block["compile"], step, cacheable_lang=lang)
         argv.extend(extra_compile)  # every compile step sees the -I/-D set

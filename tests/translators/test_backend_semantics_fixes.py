@@ -35,8 +35,8 @@ import pytest
 from hpcagent_bench.translators.numpyto_cupy.emit import emit_cupy
 from hpcagent_bench.translators.numpyto_numba.emit import emit_numba
 from hpcagent_bench.translators.numpyto_pythran.export import pythran_scalar_type
-from tests.translators.source_module import run_source
 from tests.translators import op_oracle
+from tests.translators.source_module import run_source
 
 
 def assert_ok(status: dict[str, str], backend: str, label: str) -> None:
@@ -86,7 +86,7 @@ def test_numba_parallel_pranges_independent_loop() -> None:
 
 
 @pytest.mark.parametrize(
-    "body,label",
+    ("body", "label"),
     [
         ("        out[0] += x[i]\n", "scalar/same-cell reduction"),
         ("        out[int(perm[i])] = x[i]\n", "data-dependent scatter"),
@@ -211,7 +211,8 @@ def test_cupy_import_form_binds_cp_consistently() -> None:
     # Every numpy ref rebound to ``cp`` -- no undefined ``cupy.`` / ``numpy.`` left.
     assert "cupy." not in out
     assert "numpy." not in out
-    assert "cp.sqrt(a)" in out and "cp.pi" in out
+    assert "cp.sqrt(a)" in out
+    assert "cp.pi" in out
 
 
 def test_cupy_import_form_runs_on_gpu() -> None:

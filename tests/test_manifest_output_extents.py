@@ -42,8 +42,10 @@ EXTENT_KNOBS: list[tuple[str, dict[str, list[int]]]] = [
         {"conv1d_transpose_groups": [1, 2, 3, 4]},
     ),
     (
-        "machine_learning/conv_transposed_1d_asymmetric_input_square_kernel_padded_strided_dilated"
-        "/conv_transposed_1d_asymmetric_input_square_kernel_padded_strided_dilated",
+        (
+            "machine_learning/conv_transposed_1d_asymmetric_input_square_kernel_padded_strided_dilated"
+            "/conv_transposed_1d_asymmetric_input_square_kernel_padded_strided_dilated"
+        ),
         {"conv1d_transpose_groups": [1, 2, 3, 4]},
     ),
 ]
@@ -87,7 +89,7 @@ def binding(key: str, knobs: dict[str, int]) -> dict[str, int]:
 
 
 @pytest.mark.parametrize(
-    "key,knobs",
+    ("key", "knobs"),
     [(key, {name: value}) for key, table in EXTENT_KNOBS for name, values in table.items() for value in values],
     ids=[
         f"{key.rsplit('/', 1)[1]}-{name}={value}"
@@ -101,7 +103,7 @@ def test_a_declared_output_extent_is_the_body_extent_at_every_knob_setting(key: 
     assert pairs, f"{key} performs no whole-array output copy; this table names the wrong kernel"
     names = binding(key, knobs)
     for array, target, source in pairs:
-        for axis, (declared_expr, body_expr) in enumerate(zip(target, source)):
+        for axis, (declared_expr, body_expr) in enumerate(zip(target, source, strict=False)):
             try:
                 want = safe_eval(declared_expr, names)
                 got = safe_eval(body_expr, names)

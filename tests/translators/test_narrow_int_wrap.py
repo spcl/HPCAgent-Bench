@@ -31,12 +31,10 @@ def assert_ok(res) -> None:
 
 
 def run_(src, ins, outs, dtypes, n):
-    shapes = {name: "(N,)" for name in list(ins) + list(outs)}
+    shapes = dict.fromkeys(list(ins) + list(outs), "(N,)")
     # Every case here overflows its element width on purpose: numpy's scalar ops wrap there and say so.
     with np.errstate(over="ignore"):
-        return run_op(
-            src, "f", ins, {name: (n,) for name in outs}, {"N": n}, shapes=shapes, dtypes=dtypes, backends=NATIVE
-        )
+        return run_op(src, "f", ins, dict.fromkeys(outs, (n,)), {"N": n}, shapes=shapes, dtypes=dtypes, backends=NATIVE)
 
 
 def test_int8_intermediate_overflow_wraps() -> None:

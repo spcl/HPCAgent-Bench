@@ -54,7 +54,7 @@ def test_every_lazily_exported_name_actually_resolves() -> None:
     which for a backend can be deep into a sweep."""
     import importlib
 
-    import hpcagent_bench.frameworks as frameworks
+    from hpcagent_bench import frameworks
 
     for name, module in frameworks._LAZY_EXPORTS.items():
         assert name in vars(importlib.import_module(f"hpcagent_bench.frameworks.{module}")), name
@@ -63,7 +63,7 @@ def test_every_lazily_exported_name_actually_resolves() -> None:
 
 def test_an_unknown_attribute_still_raises_attribute_error() -> None:
     """__getattr__ must not turn a typo into an import error or a None."""
-    import hpcagent_bench.frameworks as frameworks
+    from hpcagent_bench import frameworks
 
     with pytest.raises(AttributeError):
         frameworks.NoSuchFramework
@@ -73,7 +73,7 @@ def test_the_rebindable_dtype_globals_are_not_lazily_exported() -> None:
     """``dc_float`` and friends are rebound when a framework configures its precision, and
     __getattr__ caches into globals() -- exporting them here would pin the pre-configuration
     ``None`` for the life of the process. They belong to their defining module only."""
-    import hpcagent_bench.frameworks as frameworks
+    from hpcagent_bench import frameworks
 
     for name in ("dc_float", "dc_complex_float", "tl_float", "tvm_dtype"):
         assert name not in frameworks._LAZY_EXPORTS
@@ -82,7 +82,7 @@ def test_the_rebindable_dtype_globals_are_not_lazily_exported() -> None:
 def test_a_star_import_still_reaches_every_backend() -> None:
     """``import *`` consults __all__, never __getattr__: without it each backend becomes a
     NameError at its USE site, far from here."""
-    import hpcagent_bench.frameworks as frameworks
+    from hpcagent_bench import frameworks
 
     assert set(frameworks._LAZY_EXPORTS) <= set(frameworks.__all__)
     ns: dict = {}
@@ -94,7 +94,7 @@ def test_a_star_import_still_reaches_every_backend() -> None:
 def test_a_map_entry_its_module_does_not_define_raises_attribute_error(monkeypatch) -> None:
     """getattr(..., default) and hasattr() absorb only AttributeError, so a KeyError from a
     stale map entry blows past every caller's fallback."""
-    import hpcagent_bench.frameworks as frameworks
+    from hpcagent_bench import frameworks
 
     monkeypatch.setitem(frameworks._LAZY_EXPORTS, "NotDefinedAnywhere", "errors")
     with pytest.raises(AttributeError):
@@ -421,7 +421,8 @@ def test_a_win_inside_the_noise_is_credited_nothing() -> None:
     a = list(rng.normal(100, 5, 30))
     b = list(rng.normal(100, 5, 30))
     got = timing.reduce_mannwhitney_delta(a, b, p=0.1)
-    assert got.speedup == 1.0 and not got.significant
+    assert got.speedup == 1.0
+    assert not got.significant
 
 
 _BINDING = binding_from_spec(spec.BenchSpec.load("gemm"))

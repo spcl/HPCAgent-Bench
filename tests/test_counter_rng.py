@@ -67,7 +67,7 @@ def test_the_textbook_generator_is_the_published_one() -> None:
     ]
 
 
-@pytest.mark.parametrize("seed,stream", [(0, 0), (7, 0), (7, 3), (2**63 + 5, 1)])
+@pytest.mark.parametrize(("seed", "stream"), [(0, 0), (7, 0), (7, 3), (2**63 + 5, 1)])
 def test_bits_are_the_splitmix64_sequence_of_the_key(seed: int, stream: int) -> None:
     got = rng.bits(np.arange(100), seed, stream)
     assert got.dtype == np.uint64
@@ -133,7 +133,7 @@ def built_field(
 
 @pytest.mark.parametrize("xp", BACKENDS, ids=lambda module: module.__name__)
 @pytest.mark.parametrize(("kind", "dtype"), FIELD_CASES, ids=lambda case: getattr(case, "__name__", str(case)))
-@pytest.mark.parametrize("shape,first", [((1,), 0), ((7, 13), 5), ((3, 4101), 2**40), ((100_003,), 12345)])
+@pytest.mark.parametrize(("shape", "first"), [((1,), 0), ((7, 13), 5), ((3, 4101), 2**40), ((100_003,), 12345)])
 def test_the_fast_field_builders_equal_the_reference_on_every_element(
     xp: ModuleType, kind: str, dtype: DTypeLike, shape: tuple[int, ...], first: int
 ) -> None:
@@ -141,7 +141,8 @@ def test_the_fast_field_builders_equal_the_reference_on_every_element(
     size no block divides, in every dtype the draws offer."""
     got = host(built_field(kind, dtype, shape, first, 17, 3, xp))
     want = reference_field(kind, dtype, math.prod(shape), first, 17, 3).reshape(shape)
-    assert got.dtype == want.dtype and got.shape == want.shape
+    assert got.dtype == want.dtype
+    assert got.shape == want.shape
     assert np.array_equal(got, want)
 
 
@@ -171,10 +172,13 @@ def test_a_forked_child_builds_its_field_after_the_parent_used_the_thread_pool()
 
 def test_uniform_values_lie_in_the_half_open_interval_and_are_exact_53_bit_fractions() -> None:
     values = rng.uniform(np.arange(1 << 20), 3)
-    assert values.min() >= 0.0 and values.max() < 1.0
+    assert values.min() >= 0.0
+    assert values.max() < 1.0
     assert np.array_equal(values * 2.0**53, np.floor(values * 2.0**53))
     single = rng.uniform(np.arange(1 << 16), 3, dtype=np.float32)
-    assert single.dtype == np.float32 and single.min() >= 0.0 and single.max() < 1.0
+    assert single.dtype == np.float32
+    assert single.min() >= 0.0
+    assert single.max() < 1.0
 
 
 def test_the_uniform_draw_has_uniform_moments_and_bins() -> None:
@@ -204,7 +208,8 @@ def test_blocks_equal_the_whole_array_and_the_field_builders_equal_both() -> Non
     blocks = np.concatenate([rng.uniform(np.arange(a, b), 9, 1) for a, b in ((0, 1), (1, 400), (400, 1000))])
     assert np.array_equal(whole, blocks)
     shaped = rng.uniform_field((10, 100), 9, 1)
-    assert shaped.shape == (10, 100) and np.array_equal(shaped.ravel(), whole)
+    assert shaped.shape == (10, 100)
+    assert np.array_equal(shaped.ravel(), whole)
     big = rng.normal_field((3, rng.BLOCK + 17), 9, 1)
     assert np.array_equal(big.ravel(), rng.normal(rng.counter(big.shape).ravel(), 9, 1))
 
@@ -222,14 +227,17 @@ def test_seeds_and_streams_are_independent_draws_and_the_seed_is_reproducible() 
 def test_integers_stay_below_the_bound_and_fill_every_value_evenly() -> None:
     n, bound = 1 << 20, 10
     values = rng.integers(np.arange(n), 4, bound)
-    assert values.dtype == np.int64 and values.min() == 0 and values.max() == bound - 1
+    assert values.dtype == np.int64
+    assert values.min() == 0
+    assert values.max() == bound - 1
     counts = np.bincount(values, minlength=bound)
     assert np.abs(counts - n / bound).max() < 5.0 * math.sqrt(n / bound)
 
 
 def test_counter_is_the_flat_c_order_index() -> None:
     index = rng.counter((3, 4))
-    assert index.dtype == np.uint64 and index.tolist() == [[0, 1, 2, 3], [4, 5, 6, 7], [8, 9, 10, 11]]
+    assert index.dtype == np.uint64
+    assert index.tolist() == [[0, 1, 2, 3], [4, 5, 6, 7], [8, 9, 10, 11]]
 
 
 def best_time(function: Callable[[], object], repeats: int = 3) -> float:

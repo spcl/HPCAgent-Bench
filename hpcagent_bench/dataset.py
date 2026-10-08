@@ -21,7 +21,7 @@ import sys
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, NamedTuple
 
-from hpcagent_bench import experiments, studies, observations_extract, paths
+from hpcagent_bench import experiments, observations_extract, paths, studies
 from hpcagent_bench.observation_columns import OBSERVATION_FIELDS
 from hpcagent_bench.stats import databases
 
@@ -84,8 +84,10 @@ class Provenance:
             f"study     {self.study}",
             f"extracted_at   {self.extracted_at}",
             f"rows           {self.rows}",
-            f"dropped        {self.dropped_retired} retired, {self.dropped_foreign} not this study's, "
-            f"{self.dropped_off_tag} off its tag",
+            (
+                f"dropped        {self.dropped_retired} retired, {self.dropped_foreign} not this study's, "
+                f"{self.dropped_off_tag} off its tag"
+            ),
             f"setups ({len(self.setups)})      {', '.join(self.setups)}",
         ]
         return "\n".join(lines)

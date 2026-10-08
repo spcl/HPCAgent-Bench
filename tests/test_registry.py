@@ -25,7 +25,8 @@ def test_a_decorated_class_becomes_an_entry_with_its_defaults_filled_in() -> Non
     class A:
         label = "Alpha"
 
-    assert kind.entries == {"a": ("Alpha", 1)} and A.label == "Alpha"
+    assert kind.entries == {"a": ("Alpha", 1)}
+    assert A.label == "Alpha"
 
 
 def test_a_missing_required_attribute_a_wrong_type_and_a_typo_are_refused_at_registration() -> None:
@@ -75,27 +76,33 @@ def test_a_taken_key_alias_or_order_is_refused_and_leaves_the_registry_as_it_was
         attempt("b", 1, ("alpha",))
     with pytest.raises(RegistryError, match="non-negative integer"):
         attempt("b", -1)
-    assert list(kind.entries) == ["a"] and kind.aliases == {"alpha": "a"}
+    assert list(kind.entries) == ["a"]
+    assert kind.aliases == {"alpha": "a"}
 
 
 def test_import_order_never_decides_the_slot_order() -> None:
     kind = widget_kind()
     for key, order in (("c", 2), ("a", 0), ("b", 1)):
         kind.add(key, (key.upper(), 1), order=order)
-    assert kind.keys() == ("a", "b", "c") and kind.next_order() == 3 and kind.slot("b") == 1
+    assert kind.keys() == ("a", "b", "c")
+    assert kind.next_order() == 3
+    assert kind.slot("b") == 1
 
 
 def test_an_entry_without_a_slot_comes_first_and_does_not_count_toward_the_next_order() -> None:
     kind = widget_kind()
     kind.add("x", ("X", 1), order=0)
     kind.add("", ("control", 1), order=None)
-    assert kind.keys() == ("", "x") and kind.next_order() == 1 and kind.slot("") is None
+    assert kind.keys() == ("", "x")
+    assert kind.next_order() == 1
+    assert kind.slot("") is None
 
 
 def test_canonical_resolves_an_alias_and_passes_an_unregistered_tag_through() -> None:
     kind: Kind[Any] = widget_kind()
     kind.add("a", ("A", 1), order=0, aliases=("alpha",))
-    assert kind.canonical("alpha") == "a" and kind.canonical("zzz") == "zzz"
+    assert kind.canonical("alpha") == "a"
+    assert kind.canonical("zzz") == "zzz"
 
 
 if __name__ == "__main__":

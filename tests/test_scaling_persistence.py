@@ -101,7 +101,9 @@ def test_a_measured_point_stores_the_graders_own_numbers(tmp_path: pathlib.Path)
     want = metric.scaling_point(ScalingLaw.STRONG, 4, 8000, 2500)
     got = (row["single_rank_ns"], row["ranked_ns"], row["efficiency"])
     assert got == (8000, 2500, want.efficiency), row
-    assert row["mode"] == "strong" and row["work_ratio"] is None and row["note"] == ""
+    assert row["mode"] == "strong"
+    assert row["work_ratio"] is None
+    assert row["note"] == ""
     assert row["status"] == "graded"
 
 
@@ -125,7 +127,8 @@ def test_a_weak_point_keeps_its_work_ratio_and_its_rounding_note(tmp_path: pathl
     db = tmp_path / "r.db"
     record(db, weak_curve(), ScalingLaw.WEAK)
     (row,) = rows(db, "SELECT * FROM scaling_points WHERE ranks = 2")
-    assert row["mode"] == "weak" and row["work_ratio"] == 2.0164
+    assert row["mode"] == "weak"
+    assert row["work_ratio"] == 2.0164
     assert "rounded" in row["note"], row
     assert row["efficiency"] == metric.scaling_point(ScalingLaw.WEAK, 2, 4000, 4400, work_ratio=2.0164).efficiency
 
@@ -265,7 +268,8 @@ def test_an_extracted_scaling_row_has_every_column_the_table_declares(tmp_path: 
     assert set(row) <= set(observations_extract.OBSERVATION_FIELDS), set(row) - set(
         observations_extract.OBSERVATION_FIELDS
     )
-    assert row["ts_ms"] == TS and row["setup"]
+    assert row["ts_ms"] == TS
+    assert row["setup"]
 
 
 def test_the_extracted_efficiency_is_the_one_recomputed_from_the_times(tmp_path: pathlib.Path) -> None:

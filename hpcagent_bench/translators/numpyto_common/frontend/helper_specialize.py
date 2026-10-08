@@ -71,7 +71,7 @@ def specialise_helper_by_call_signature(
                 continue
             if len(node.args) != len(pnames) or node.keywords:
                 return []  # an arity/keyword mismatch is a different failure; leave it be
-            key = tuple((pn, call_arg_key(a, owner_fn, arr_by)) for pn, a in zip(pnames, node.args))
+            key = tuple((pn, call_arg_key(a, owner_fn, arr_by)) for pn, a in zip(pnames, node.args, strict=False))
             by_key.setdefault(key, []).append(node)
     existing = {node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
     clones: list[ast.FunctionDef] = []

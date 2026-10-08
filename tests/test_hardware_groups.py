@@ -34,7 +34,7 @@ def fake_config(markexpr: str, deselected: list[list[FakeItem]]) -> types.Simple
 
 
 @pytest.mark.parametrize(
-    "markexpr, named",
+    ("markexpr", "named"),
     [
         ("", frozenset()),
         ("amd", frozenset({"amd"})),
@@ -55,7 +55,7 @@ HARDWARE_ITEMS = ("papi", "hw_counters", "perf", "amd", "nvidia")
 
 
 @pytest.mark.parametrize(
-    "markexpr, kept",
+    ("markexpr", "kept"),
     [
         ("", ["cpu"]),
         ("papi or not papi", ["cpu", "papi"]),

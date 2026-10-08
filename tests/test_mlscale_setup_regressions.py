@@ -94,7 +94,8 @@ def test_a_distribution_the_grade_cannot_resolve_is_a_400_before_any_build(
     assert code == HTTP_BAD_REQUEST, answer
     error = str(answer["error"])
     assert names in error and "default layout is" in error, error
-    assert launches == [] and baselines == []
+    assert launches == []
+    assert baselines == []
     assert rows("SELECT status, credited_speedup FROM grades") == [("score_error", 0.0)]
 
 
@@ -282,7 +283,8 @@ def test_the_compute_hint_renders_only_when_the_setup_sets_it() -> None:
     torch baseline it is scored against, and hipCUB by its `libraries` name. It names no plausibility
     check. Every other setup's contract is the one it had, without the paragraph."""
     hinted, plain = gemm_contract(True), gemm_contract(False)
-    assert "### Local compute" in hinted and "### Local compute" not in plain
+    assert "### Local compute" in hinted
+    assert "### Local compute" not in plain
     assert plain == hinted.replace(hinted[hinted.index("### Local compute") : hinted.index("### Delivery")], "")
     for needle in (
         "matrix cores",
@@ -323,7 +325,8 @@ def test_the_judge_records_the_link_request_on_the_calls_grade(
     with setup_judge(tmp_path, monkeypatch) as (url, _launches, _baselines):
         body = agent_body("dist_softmax", wrong=True)
         code, graded = post(f"{url}/score", body)
-        assert code == 200 and graded["correct"] is False
+        assert code == 200
+        assert graded["correct"] is False
     assert rows("SELECT kind, status, requested_libraries FROM grades") == [("score", "incorrect", '["mpi", "rccl"]')]
     assert SETUP in str(body["episode_id"])
 
@@ -445,7 +448,8 @@ def test_the_grade_job_fails_a_submission_wrong_at_one_rank_count(
         code, graded = post(f"{url}/submit", agent_body("dist_softmax"))
         assert code == 200 and graded["recorded"] == {"table": "submission", "detail": "clean", "grade": 1}, graded
         items, problems = scaling_worklist([pathlib.Path(recording.db_path())], [env_dir])
-        assert problems == [] and len(items) == 1
+        assert problems == []
+        assert len(items) == 1
         monkeypatch.setenv(scaling_grade.GANG_NODELIST_ENV, "nid001,nid002,nid003,nid004")
         monkeypatch.setenv(scaling_grade.RANK_COUNTS_ENV, "[1,2,4,8,16]")
         monkeypatch.setattr(mpi_call, "launch", launch_by_rank_count(launches, wrong_at=8))

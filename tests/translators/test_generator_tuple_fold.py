@@ -30,8 +30,8 @@ from hpcagent_bench.translators.numpyto_c.emit import emit_c
 from hpcagent_bench.translators.numpyto_common.ir import KernelIR
 from hpcagent_bench.translators.numpyto_common.lowering import lower
 from hpcagent_bench.translators.numpyto_common.tuple_desugar import desugar_tuples
-from tests.translators.op_oracle import run_op
 from tests.translators import op_oracle
+from tests.translators.op_oracle import run_op
 
 AS_TUPLE = (
     "def _as_tuple(value, dims):\n"
@@ -68,7 +68,8 @@ def test_as_tuple_generator_folds_and_helper_vanishes() -> None:
     assert kir.helpers == []
     body = ast.unparse(kir.tree)
     assert "_as_tuple" not in body
-    assert "for _ in range" not in body and "isinstance" not in body
+    assert "for _ in range" not in body
+    assert "isinstance" not in body
     assert "out[i] = x[i] * k + x[i] * k" in body
 
 
@@ -127,7 +128,8 @@ def test_as_tuple_list_comprehension_sibling_form_folds() -> None:
     kir = kir_for(src, "f", ["x", "k", "out"], ["out"], {"x": "(N,)", "out": "(1,)"}, {"N": 4})
     assert kir.helpers == []
     body = ast.unparse(kir.tree)
-    assert "_as_list" not in body and "for _ in range" not in body
+    assert "_as_list" not in body
+    assert "for _ in range" not in body
     assert body.endswith("out[0] = k + k")
 
 
@@ -147,7 +149,7 @@ def test_runtime_dims_declines_the_fold_and_still_refuses() -> None:
             lower(kir_for(src, "f", ["x", "k", "n", "out"], ["out"], {"x": "(N,)", "out": "(1,)"}, {"N": 4})),
             fn_name="f",
         )
-        assert False, "expected the surviving generator to refuse emission"
+        raise AssertionError("expected the surviving generator to refuse emission")
     except NotImplementedError as exc:
         assert "GeneratorExp" in str(exc)
 

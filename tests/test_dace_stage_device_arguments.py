@@ -43,7 +43,8 @@ def test_a_host_buffer_for_a_device_descriptor_is_staged() -> None:
     host = np.arange(8.0)
     kwargs = {"A_data": host}
     dace_framework.stage_device_arguments(device_signature(), kwargs, cupy=None)
-    assert isinstance(kwargs["A_data"], StagedArray) and kwargs["A_data"].host is host
+    assert isinstance(kwargs["A_data"], StagedArray)
+    assert kwargs["A_data"].host is host
 
 
 @pytest.mark.usefixtures("staging")

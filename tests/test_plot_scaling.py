@@ -210,7 +210,8 @@ def test_the_efficiency_panel_draws_the_ideal_at_one_and_the_speedup_panel_at_p(
     assert speedup is not None
     ideal = [line for line in speedup.axes[0].lines if list(line.get_xdata()) == list(line.get_ydata())]
     # The bound runs border to border, not only between the measured P.
-    assert ideal and tuple(ideal[0].get_xdata()) == pytest.approx(speedup.axes[0].get_xlim())
+    assert ideal
+    assert tuple(ideal[0].get_xdata()) == pytest.approx(speedup.axes[0].get_xlim())
 
 
 def test_every_figure_carries_one_legend_on_the_figure_and_none_on_an_axes() -> None:
@@ -238,11 +239,13 @@ def test_the_summary_panel_is_the_geomean_over_kernels_and_withholds_a_two_kerne
     summary_rows = scaling.summary_rows(scaling.curves(frame(rows)))
     assert len(summary_rows) == 1
     setup, model, mode, interval, n_kernels = summary_rows[0]
-    assert setup.endswith("qwen38-hip") and model == "qwen38"
+    assert setup.endswith("qwen38-hip")
+    assert model == "qwen38"
     assert mode == "strong"
     assert n_kernels == 2
     assert interval.point == pytest.approx(math.sqrt(1.0 * 0.5))
-    assert math.isnan(interval.low) and math.isnan(interval.high)
+    assert math.isnan(interval.low)
+    assert math.isnan(interval.high)
 
 
 def test_only_the_latest_grade_of_a_kernel_enters_a_curve() -> None:
@@ -335,7 +338,8 @@ def test_the_mode_grid_is_one_row_per_law_one_column_per_picked_kernel_and_the_g
         assert [ax.get_ylabel() for ax in (top[0], bottom[0])] == ["Weak Scaling", "Strong Scaling"]
         names = [study_tags.kernel_short_display_name(k) for k in ("dist_sdpa", "dist_softmax")]
         assert [ax.get_title() for ax in top] == names + [scaling.GEOMEAN_LABEL] * geomean_panel
-        assert len(fig.legends) == 1 and all(ax.get_legend() is None for ax in fig.axes)
+        assert len(fig.legends) == 1
+        assert all(ax.get_legend() is None for ax in fig.axes)
         assert [text.get_text() for text in fig.texts].count(scaling.SPEEDUP_LABEL) == 1
     finally:
         plt.close(fig)

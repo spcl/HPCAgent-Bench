@@ -71,7 +71,7 @@ def test_a_wrong_working_directory_is_diagnosed_and_not_a_traceback(tmp_path: pa
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("language,ext", [("c", "c"), ("c++", "cpp")])
+@pytest.mark.parametrize(("language", "ext"), [("c", "c"), ("c++", "cpp")])
 def test_emit_cpf_renders_the_same_kernel_to_a_self_contained_unit(
     tmp_path: pathlib.Path, language: str, ext: str
 ) -> None:

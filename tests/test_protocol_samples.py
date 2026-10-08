@@ -28,7 +28,8 @@ def test_the_page_carries_every_sample() -> None:
 
 def test_the_sample_tag_names_existing_kernels() -> None:
     listed = tags.split_names(SAMPLES["tag budget4"])
-    assert len(listed) == 4 and all(KERNELS.path_key(name) for name in listed)
+    assert len(listed) == 4
+    assert all(KERNELS.path_key(name) for name in listed)
     assert "budget4" not in tags.names(), "the sample tag became a real one: pick another sample name"
 
 
@@ -65,9 +66,10 @@ def test_the_sample_grading_protocol_registers() -> None:
     scratch = Kind("grading protocols", PROTOCOLS.fields, protocols.build)
     exec(
         SAMPLES["grading protocol"], {"grading_protocol": lambda stamp, *, order: scratch.register(stamp, order=order)}
-    )  # noqa: S102
+    )
     (stamp,) = scratch.entries
-    assert stamp not in PROTOCOLS.entries and scratch.entries[stamp].role in protocols.ROLES
+    assert stamp not in PROTOCOLS.entries
+    assert scratch.entries[stamp].role in protocols.ROLES
 
 
 if __name__ == "__main__":

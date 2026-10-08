@@ -16,8 +16,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import TYPE_CHECKING, ClassVar
 
 import pytest
-
 from hpcagent_agent.tools import http_json
+
 from hpcagent_bench import fused
 from tests.fresh_module import fresh
 from tests.optional_imports import import_or_skip

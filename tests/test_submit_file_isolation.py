@@ -14,6 +14,7 @@ import subprocess
 import sys
 
 import pytest
+
 from tests.bash_stub import bash_stub
 
 BASH = shutil.which("bash")

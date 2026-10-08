@@ -66,11 +66,11 @@ def expand_bincount(
             target=ast.Subscript(value=name_(target.id), slice=idx_k, ctx=ast.Store()), op=ast.Add(), value=val_k
         )
     ]
-    return (
-        [alloc_marker(target.id)]
-        + wrap_for_loops([zero_it], [const_or_name(out_len)], zero_body)
-        + wrap_for_loops([acc_it], list(ext), acc_body)
-    )
+    return [
+        alloc_marker(target.id),
+        *wrap_for_loops([zero_it], [const_or_name(out_len)], zero_body),
+        *wrap_for_loops([acc_it], list(ext), acc_body),
+    ]
 
 
 def expand_histogram(

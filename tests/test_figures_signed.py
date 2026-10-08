@@ -162,17 +162,22 @@ def llr40_observations_fixture() -> pd.DataFrame:
 def test_canon_row_matches_the_ratio_and_scopes_to_the_tag(llr40_canon: pd.DataFrame) -> None:
     row = signed.canon_kernel_row(llr40_canon, "dace_cpu_canonicalize", TAG40)
     assert row.ratios == {"k1": pytest.approx(10.0), "k2": pytest.approx(10.0), "k3": 1.0}
-    assert row.numerator_ms["k1"] == pytest.approx(100.0) and row.numerator_ms["k2"] == pytest.approx(200.0)
-    assert row.denominator_ms["k1"] == pytest.approx(10.0) and row.denominator_ms["k2"] == pytest.approx(20.0)
+    assert row.numerator_ms["k1"] == pytest.approx(100.0)
+    assert row.numerator_ms["k2"] == pytest.approx(200.0)
+    assert row.denominator_ms["k1"] == pytest.approx(10.0)
+    assert row.denominator_ms["k2"] == pytest.approx(20.0)
     # k3 is FILLED at 1x, not dropped (rule): numba timed it, dace_cpu_canonicalize
     # never did, and that "no result" is flagged rather than made to look like a real measurement.
-    assert row.ratios["k3"] == 1.0 and math.isnan(row.denominator_ms["k3"])
+    assert row.ratios["k3"] == 1.0
+    assert math.isnan(row.denominator_ms["k3"])
     assert row.delivered == {"k1": True, "k2": True, "k3": False}
     assert row.color == palette.framework_color("dace_cpu_canonicalize")
     assert row.marker == palette.marker("cpf")
     assert row.label == "Canonical Parallel Form"
     # No repetition and no agent: nothing to bound, nothing spent.
-    assert row.ratios_low == {} and row.ratios_high == {} and row.tokens == {}
+    assert row.ratios_low == {}
+    assert row.ratios_high == {}
+    assert row.tokens == {}
 
 
 def test_canon_row_ignores_kernels_outside_the_tag(llr40_canon: pd.DataFrame) -> None:
@@ -188,7 +193,8 @@ def test_two_setups_of_one_model_share_shape_and_differ_in_hue(llr40_observation
     cpf_src = signed.agent_kernel_row(llr40_observations, "llr40-qwen38-c-cpf-src", "qwen38", "cpf-src", TAG40)
     assert cpf_tool.marker == cpf_src.marker == palette.marker("qwen38")
     assert cpf_tool.color != cpf_src.color
-    assert cpf_tool.color == palette.color("cpf-tool") and cpf_src.color == palette.color("cpf-src")
+    assert cpf_tool.color == palette.color("cpf-tool")
+    assert cpf_src.color == palette.color("cpf-src")
 
 
 def test_two_models_same_condition_share_hue_and_differ_in_shape(llr40_observations: pd.DataFrame) -> None:
@@ -196,12 +202,14 @@ def test_two_models_same_condition_share_hue_and_differ_in_shape(llr40_observati
     oss = signed.agent_kernel_row(llr40_observations, "llr40-oss120b-c-cpf-src", "oss120b", "cpf-src", TAG40)
     assert qwen.color == oss.color == palette.color("cpf-src")
     assert qwen.marker != oss.marker
-    assert qwen.marker == palette.marker("qwen38") and oss.marker == palette.marker("oss120b")
+    assert qwen.marker == palette.marker("qwen38")
+    assert oss.marker == palette.marker("oss120b")
 
 
 def test_agent_row_carries_rule4_costs_and_a_repeat_interval(llr40_observations: pd.DataFrame) -> None:
     row = signed.agent_kernel_row(llr40_observations, "llr40-qwen38-c-cpf-src", "qwen38", "cpf-src", TAG40)
-    assert row.ratios["k1"] > 0.0 and row.numerator_ms["k1"] == pytest.approx(1.0)
+    assert row.ratios["k1"] > 0.0
+    assert row.numerator_ms["k1"] == pytest.approx(1.0)
     # k1 ran twice (2.5x and 2.7x) and k2 once: a bootstrap needs three runs to resample, so both intervals
     # collapse onto the point (geomean_ci's own contract) rather than being omitted or fabricated.
     assert row.ratios_low["k1"] == pytest.approx(row.ratios_high["k1"])
@@ -254,12 +262,14 @@ def test_adding_compiler_columns_does_not_change_any_agent_rows_ratios(
     assert agent_setups  # the fixture must actually carry agent rows, or this test proves nothing
     for setup in agent_setups:
         assert after[setup] == before[setup], setup
-    assert "pluto" not in before and "ppcg_hip" not in before
-    assert "pluto" in after and "ppcg_hip" in after
+    assert "pluto" not in before
+    assert "ppcg_hip" not in before
+    assert "pluto" in after
+    assert "ppcg_hip" in after
     rows_4 = kernel_rows(llr40_canon, llr40_observations, TAG40, columns_4)
     pluto_row = next(row for row in rows_4 if row.framework == "pluto")
-    assert pluto_row.ratios == {k: 1.0 for k in TAG40}  # no validated pluto row anywhere -> every kernel 1x
-    assert pluto_row.delivered == {k: False for k in TAG40}
+    assert pluto_row.ratios == dict.fromkeys(TAG40, 1.0)  # no validated pluto row anywhere -> every kernel 1x
+    assert pluto_row.delivered == dict.fromkeys(TAG40, False)
 
 
 def test_the_per_kernel_figure_renders_with_missing_marks_and_rule_checked_tables(
@@ -267,12 +277,14 @@ def test_the_per_kernel_figure_renders_with_missing_marks_and_rule_checked_table
 ) -> None:
     out = tmp_path / "llr40"
     stem = kernel_comparison(llr40_canon, llr40_observations, TAG_TOKENS, out, dpi=72.0)
-    assert stem.with_suffix(".pdf").is_file() and stem.with_suffix(".png").is_file()
+    assert stem.with_suffix(".pdf").is_file()
+    assert stem.with_suffix(".png").is_file()
     kernels = pd.read_csv(tmp_path / "llr40-kernels.csv")
     # dace_cpu never timed k3 (test_canon_row_matches_the_ratio_and_scopes_to_the_tag): the
     # emitted table carries it at 1x rather than dropping the row (rule).
     dace_k3 = kernels[(kernels.framework == "dace_cpu") & (kernels.kernel == "k3")]
-    assert len(dace_k3) == 1 and dace_k3["speedup"].iloc[0] == pytest.approx(1.0)
+    assert len(dace_k3) == 1
+    assert dace_k3["speedup"].iloc[0] == pytest.approx(1.0)
     summary = pd.read_csv(tmp_path / "llr40-summary.csv")
     assert (summary["n"] > 0).all()
     assert (summary["geomean_low"] <= summary["geomean"]).all()
@@ -363,7 +375,9 @@ def test_the_speedup_panel_is_log2_geometry_read_back_in_ratios(llr40_canon: pd.
     finally:
         plt.close(fig)
     assert (scale, base) == ("log", 2.0)
-    assert "1x" in labels and "2x" in labels and "4x" in labels
+    assert "1x" in labels
+    assert "2x" in labels
+    assert "4x" in labels
     assert positions[labels.index("2x")] == pytest.approx(2.0)
 
 
@@ -433,8 +447,10 @@ def test_figure_prints_at_text_width_and_names_its_summary_statistic(llr40_canon
         plt.close(fig)
     assert width == pytest.approx(style.DOUBLE_COLUMN_WIDTH)
     assert height < 2.6
-    assert "1x" in labels and fig.axes[0].get_ylabel() == "Speedup over Numba"
-    assert len(kernel_ticks) == len(TAG40) + 1 and kernel_ticks[-1] == "Geomean"
+    assert "1x" in labels
+    assert fig.axes[0].get_ylabel() == "Speedup over Numba"
+    assert len(kernel_ticks) == len(TAG40) + 1
+    assert kernel_ticks[-1] == "Geomean"
     assert "Geomean" not in annotations
     assert tick_length > 0.0
     assert fig.texts == []  # no title unless one is asked for
@@ -475,7 +491,8 @@ def pending_canon_fixture() -> pd.DataFrame:
 def test_by_default_a_kernel_never_attempted_is_a_failure_at_one(pending_canon: pd.DataFrame) -> None:
     row = signed.canon_kernel_row(pending_canon, "dace_cpu_canonicalize", TAG40)
     assert row.ratios == {"k1": pytest.approx(10.0), "k2": 1.0, "k3": 1.0}
-    assert row.pending == frozenset() and row.excluded == "none"
+    assert row.pending == frozenset()
+    assert row.excluded == "none"
 
 
 def test_mark_pending_splits_a_kernel_never_attempted_from_one_that_failed(pending_canon: pd.DataFrame) -> None:
@@ -485,9 +502,11 @@ def test_mark_pending_splits_a_kernel_never_attempted_from_one_that_failed(pendi
     row = signed.canon_kernel_row(pending_canon, "dace_cpu_canonicalize", TAG40, mark_pending=True)
     assert row.ratios == {"k1": pytest.approx(10.0), "k2": 1.0}
     assert row.delivered == {"k1": True, "k2": False}
-    assert row.pending == frozenset({"k3"}) and row.excluded == "1 pending"
+    assert row.pending == frozenset({"k3"})
+    assert row.excluded == "1 pending"
     summary_row = signed.summary_table([row]).iloc[0]
-    assert summary_row["n"] == 1 and summary_row["excluded"] == "1 pending"
+    assert summary_row["n"] == 1
+    assert summary_row["excluded"] == "1 pending"
     assert summary_row["geomean"] == pytest.approx(10.0)
     assert set(signed.table([row])["kernel"]) == {"k1", "k2"}
 
@@ -501,7 +520,8 @@ def test_a_failed_kernel_draws_at_one_and_enters_no_summary(pending_canon: pd.Da
     summary_row = signed.summary_table([row]).iloc[0]
     assert summary_row["n"] == 1
     assert summary_row["geomean"] == pytest.approx(10.0)
-    assert summary_row["wins"] == 1 and summary_row["losses"] == 0
+    assert summary_row["wins"] == 1
+    assert summary_row["losses"] == 0
 
 
 def test_a_kernel_the_baseline_never_ran_is_pending_too(pending_canon: pd.DataFrame) -> None:
@@ -519,7 +539,8 @@ def test_mark_pending_keeps_a_setup_not_yet_served_every_kernel(
     setup = "llr40-oss120b-c-cpf-tool"
     assert setup not in {row.framework for row in kernel_rows(llr40_canon, partial, TAG40)}
     rows = {row.framework: row for row in kernel_rows(llr40_canon, partial, TAG40, mark_pending=True)}
-    assert rows[setup].pending == frozenset({"k3"}) and set(rows[setup].ratios) == {"k1", "k2"}
+    assert rows[setup].pending == frozenset({"k3"})
+    assert set(rows[setup].ratios) == {"k1", "k2"}
     assert rows["llr40-qwen38-c-cpf-tool"].pending == frozenset()
 
 
@@ -550,15 +571,18 @@ def test_a_kernel_numba_did_not_verify_is_timed_against_the_fallback() -> None:
                          ("dace_cpu_canonicalize", "k1", 10.0), ("dace_cpu_canonicalize", "k2", 10.0)])  # fmt: skip
     row = signed.canon_kernel_row(frame, "dace_cpu_canonicalize", ("k1", "k2"), baseline_fallback="cc_autopar")
     assert row.ratios == {"k1": pytest.approx(10.0), "k2": pytest.approx(4.0)}
-    assert row.numerator_ms["k2"] == pytest.approx(40.0) and row.excluded == "1 over cc_autopar"
+    assert row.numerator_ms["k2"] == pytest.approx(40.0)
+    assert row.excluded == "1 over cc_autopar"
     unfilled = signed.canon_kernel_row(frame, "dace_cpu_canonicalize", ("k1", "k2"))
-    assert unfilled.ratios["k2"] == 1.0 and unfilled.delivered["k2"] is False
+    assert unfilled.ratios["k2"] == 1.0
+    assert unfilled.delivered["k2"] is False
 
 
 def test_the_fallback_never_replaces_a_numba_time() -> None:
     times = {"numba": {"k1": 100.0}, "cc_autopar": {"k1": 5.0, "k2": 7.0}}
     merged, filled = canon.with_fallback(times, "numba", "cc_autopar")
-    assert merged["numba"] == {"k1": 100.0, "k2": 7.0} and filled == frozenset({"k2"})
+    assert merged["numba"] == {"k1": 100.0, "k2": 7.0}
+    assert filled == frozenset({"k2"})
     assert canon.with_fallback(times, "numba", "") == (times, frozenset())
 
 

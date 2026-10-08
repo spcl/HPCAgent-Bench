@@ -12,8 +12,8 @@ import dataclasses
 
 import pytest
 
-from hpcagent_bench import study_tags as tags
 from hpcagent_bench import packets
+from hpcagent_bench import study_tags as tags
 from hpcagent_bench.stats import palette
 from tests.test_palette import PUBLISHED_PACKET_COLORS
 
@@ -61,7 +61,9 @@ def test_resolve_lang_has_no_openmp_page_for_cuda() -> None:
     assert resolved.skills == ("lang-cpp", "lang-cuda")
 
 
-@pytest.mark.parametrize("language, companion", [("hip", "lang-cpp"), ("cuda", "lang-cpp"), ("triton", "lang-python")])
+@pytest.mark.parametrize(
+    ("language", "companion"), [("hip", "lang-cpp"), ("cuda", "lang-cpp"), ("triton", "lang-python")]
+)
 def test_resolve_lang_stages_the_page_its_own_page_sends_the_agent_to(language: str, companion: str) -> None:
     """``lang-hip`` opens "read this page first, together with lang-cpp, which governs the host half
     of the same file" -- a trigger naming a page the setup did not stage points at
@@ -103,7 +105,7 @@ def test_resolve_profiling_is_the_bundle() -> None:
 
 
 @pytest.mark.parametrize(
-    "spec, language, tracer",
+    ("spec", "language", "tracer"),
     [
         ("perf-playbook-cpu", "c", ()),
         ("perf-playbook-amd", "hip", ("rocprof",)),
@@ -120,7 +122,7 @@ def test_a_perf_playbook_stages_the_cpu_pages_and_only_its_own_device_tracer(
 
 
 @pytest.mark.parametrize(
-    "spec, language",
+    ("spec", "language"),
     [
         ("perf-playbook-amd", "c"),
         ("perf-playbook-amd", "cuda"),
@@ -137,7 +139,7 @@ def test_a_device_packet_refuses_a_language_its_device_does_not_run(spec: str, l
         packets.resolve(spec, language, environ={"CPF_VIEW": "/views/dropin"})
 
 
-@pytest.mark.parametrize("device, language", [("cpu", "c"), ("amd", "hip"), ("nvidia", "cuda")])
+@pytest.mark.parametrize(("device", "language"), [("cpu", "c"), ("amd", "hip"), ("nvidia", "cuda")])
 def test_all_in_for_a_device_is_cpf_src_its_perf_playbook_and_the_language_pages(device: str, language: str) -> None:
     all_in = packets.resolve(f"all-in-{device}", language, environ={"CPF_VIEW": "/views/dropin"})
     playbook = packets.resolve(f"perf-playbook-{device}", language)
@@ -324,7 +326,7 @@ def test_every_registered_key_is_coloured_by_the_part_this_module_leads_it_with(
     assert palette.color(key) == expected
 
 
-@pytest.mark.parametrize("spec,expected", sorted(PUBLISHED_PACKET_COLORS.items()))
+@pytest.mark.parametrize(("spec", "expected"), sorted(PUBLISHED_PACKET_COLORS.items()))
 def test_a_packet_colour_matches_the_published_colours(spec: str, expected: str) -> None:
     assert palette.color(spec) == expected
 

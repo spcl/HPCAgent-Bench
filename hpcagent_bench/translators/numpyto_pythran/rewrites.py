@@ -406,7 +406,7 @@ def clean_for_pythran(source: str, kir: KernelIR) -> str:
         if isinstance(n, ast.FunctionDef):
             params = [a.arg for a in n.args.args]
             da = n.args.defaults
-            defaults = {p: d for p, d in zip(params[len(params) - len(da) :], da)} if da else {}
+            defaults = dict(zip(params[len(params) - len(da) :], da, strict=False)) if da else {}
             signatures[n.name] = (params, defaults)
     tree = KwargsToPositional(signatures).visit(tree)
     rename_reserved_params(tree, kir.kernel_name)

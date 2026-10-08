@@ -492,7 +492,8 @@ def test_the_launcher_never_writes_the_key_value_into_the_run_tree() -> None:
     assert "api_key: ${VLLM_API_KEY" not in script, "the proxy config would hold the key literally"
     assert "os.environ/VLLM_API_KEY" in script
     assert 'JOB_ENV_FILE="${RUN_DIR}' not in script, "the env slice would persist in the run tree"
-    assert "chmod 600" in script and 'rm -f "${JOB_ENV_FILE:-}"' in script
+    assert "chmod 600" in script
+    assert 'rm -f "${JOB_ENV_FILE:-}"' in script
 
 
 def listing(model: str, *pricings: dict[str, str]) -> dict[str, object]:
@@ -538,9 +539,9 @@ def test_every_model_the_claude_cli_picks_itself_is_pinned_to_the_setup_model(se
     setup = {key: value.strip('"') for key, value in setup.items()}
     setup[setup["INFERENCE_SERVICE_KEY_ENV"]] = SECRET
     exported = service.launcher_env(service.from_environ(setup))
-    assert {name: exported.get(name) for name in service.CLAUDE_MODEL_PINS} == {
-        name: setup["INFERENCE_SERVICE_MODEL"] for name in service.CLAUDE_MODEL_PINS
-    }
+    assert {name: exported.get(name) for name in service.CLAUDE_MODEL_PINS} == dict.fromkeys(
+        service.CLAUDE_MODEL_PINS, setup["INFERENCE_SERVICE_MODEL"]
+    )
 
 
 def test_the_launcher_exports_every_pinned_model_variable_after_the_free_check(service: types.ModuleType) -> None:

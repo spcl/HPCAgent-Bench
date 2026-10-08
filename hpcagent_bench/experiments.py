@@ -23,16 +23,16 @@ from hpcagent_bench.study_tags import BaselineSpec, ExperimentEntry, registry
 __all__ = [
     "RUNS_DIRNAME",
     "Selection",
-    "control_setup",
     "baseline_for",
-    "experiment_of",
+    "control_setup",
     "dropped",
     "dropped_pattern",
-    "studies_available",
+    "experiment_of",
     "prefix_of",
     "prefixes_for",
     "resolve",
     "runs_root",
+    "studies_available",
 ]
 
 #: Where experiment run roots live. One default, overridden by ``$SCRATCH``; never a path literal.

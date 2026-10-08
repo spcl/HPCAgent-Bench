@@ -31,10 +31,7 @@ def expand_hstack(
     """
     if not args:
         raise NotImplementedError("np.hstack needs at least one arg")
-    if len(args) == 1 and isinstance(args[0], ast.Tuple):
-        operands = list(args[0].elts)
-    else:
-        operands = list(args)
+    operands = list(args[0].elts) if len(args) == 1 and isinstance(args[0], ast.Tuple) else list(args)
     names: list[str] = []
     shapes: list[tuple[str, ...]] = []
     for op in operands:
@@ -54,7 +51,7 @@ def expand_hstack(
     col_index: ast.expr
     if rank == 1:
         offset_tok = "0"
-        for nm, s in zip(names, shapes):
+        for nm, s in zip(names, shapes, strict=False):
             k_ast = const_or_name(s[0])
             if offset_tok == "0":
                 col_index = name_("__hsj")
@@ -72,7 +69,7 @@ def expand_hstack(
     # rank == 2
     n_tok = shapes[0][0]
     offset_tok = "0"
-    for nm, s in zip(names, shapes):
+    for nm, s in zip(names, shapes, strict=False):
         k_ast = const_or_name(s[1])
         if offset_tok == "0":
             col_index = name_("__hsj")
@@ -128,14 +125,14 @@ def expand_concatenate(
         prelude, elts = materialize_operands(
             args[0].elts, shape_table, "__cc_", local_dtypes=local_dtypes, fresh_local_allocs=fresh_local_allocs
         )
-        args = [ast.Tuple(elts=list(elts), ctx=ast.Load())] + list(args[1:])
+        args = [ast.Tuple(elts=list(elts), ctx=ast.Load()), *list(args[1:])]
     names, shapes, axis = concat_operands_axis(args, kwargs, shape_table)
     operand_names = named_operands(names, "np.concatenate")  # materialisation above spilled the rest
     rank = len(shapes[0])
     iters = [make_iter_name("__cc", d) for d in range(rank)]
     out: list[ast.stmt] = []
     offset_tok = "0"
-    for nm, s in zip(operand_names, shapes):
+    for nm, s in zip(operand_names, shapes, strict=False):
         tgt_elts: list[ast.expr] = []
         for d in range(rank):
             if d == axis and offset_tok != "0":
@@ -171,7 +168,7 @@ def expand_stack(
     axis = stack_axis(args, kwargs, rank)
     iters = [make_iter_name("__st", d) for d in range(rank)]
     out: list[ast.stmt] = []
-    for s_idx, (nm, s) in enumerate(zip(named_operands(names, "np.stack"), shapes)):
+    for s_idx, (nm, s) in enumerate(zip(named_operands(names, "np.stack"), shapes, strict=False)):
         # A FRESH source slot per operand, never one hoisted out of this loop. Sharing a single
         # Subscript slice object across the operands made every copy loop read the SAME nodes, and
         # the Fortran emitter -- which must uniquify DO variables, Fortran having no block scope --

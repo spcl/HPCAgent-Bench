@@ -12,6 +12,7 @@ import pathlib
 from types import ModuleType
 
 import pytest
+
 from tests.fresh_module import module_at
 
 REPO = pathlib.Path(__file__).resolve().parents[1]

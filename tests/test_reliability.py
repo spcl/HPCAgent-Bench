@@ -38,7 +38,9 @@ def test_the_solve_rate_interval_is_the_exact_clopper_pearson_one(
 
 def test_no_runs_give_no_solve_rate() -> None:
     rate = reliability.clopper_pearson(0, 0)
-    assert math.isnan(rate.point) and math.isnan(rate.low) and math.isnan(rate.high)
+    assert math.isnan(rate.point)
+    assert math.isnan(rate.low)
+    assert math.isnan(rate.high)
 
 
 @pytest.mark.parametrize(

@@ -87,7 +87,8 @@ def test_an_interval_domain_is_honoured_and_drops_the_rescale(variant) -> None:
     distribution, scale = hidden.resolve(variant, variant.base, (low, high))
     assert scale == 1.0, "rescaling would push the sample out of the declared interval"
     got = draw(distribution, [low, high]) * scale
-    assert got.min() >= low and got.max() <= high
+    assert got.min() >= low
+    assert got.max() <= high
 
 
 @pytest.mark.parametrize("precision", PRECISIONS)
@@ -200,7 +201,7 @@ def test_hidden_variant_none_matches_the_omitted_parameter_bit_for_bit() -> None
     spec = hidden_wiring_spec()
     omitted = auto_initialize(spec, "S", Precision.FP64, seed=42)
     explicit_none = auto_initialize(spec, "S", Precision.FP64, seed=42, hidden_variant=None)
-    for a, b in zip(omitted, explicit_none):
+    for a, b in zip(omitted, explicit_none, strict=False):
         assert a.tobytes() == b.tobytes()
 
 

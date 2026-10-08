@@ -10,10 +10,11 @@ which candidate a promotion moves and what the verifier asks of each profile.
 import os
 import pathlib
 import subprocess
+import tomllib
 from types import ModuleType
 
 import pytest
-import tomllib
+
 from tests.fresh_module import module_at
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -142,7 +143,8 @@ def test_the_amd_judge_maps_one_hip_runtime_and_one_rccl(verify: ModuleType, pro
     libamdhip64 and librccl crashed every ML grade, so the AMD judge image is held to one copy of each."""
     one = [check for check in verify.checks(profile) if check.kind == "one-hip"]
     assert [check.required for check in one] == ([True] if gated else []), one
-    assert "libamdhip64" in verify.ONE_HIP_PROBE and "librccl" in verify.ONE_HIP_PROBE
+    assert "libamdhip64" in verify.ONE_HIP_PROBE
+    assert "librccl" in verify.ONE_HIP_PROBE
 
 
 @pytest.mark.parametrize(("profile", "required"), [("judge", True), ("judge-cuda", False), ("judge-cpu", False)])

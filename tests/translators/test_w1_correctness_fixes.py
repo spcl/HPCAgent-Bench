@@ -17,6 +17,7 @@ Each idiom round-trips through the ``run_op`` oracle against numpy:
 """
 
 import numpy as np
+
 from tests.translators import op_oracle
 
 

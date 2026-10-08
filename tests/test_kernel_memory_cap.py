@@ -10,8 +10,8 @@ failure, not a dead runner.
 """
 
 import dataclasses
-import os
 import functools
+import os
 import pathlib
 import resource
 import shutil
@@ -136,7 +136,7 @@ def test_the_cap_pays_for_every_thread_stack_on_top_of_the_kernels_budget(monkey
 
 
 @pytest.mark.parametrize(
-    "text, expected",
+    ("text", "expected"),
     [("512M", 512 << 20), ("2g", 2 << 30), ("1024K", 1 << 20), ("1024", 1 << 20), ("64B", 64), ("", 0), ("big", 0)],
 )
 def test_omp_stacksize_is_read_the_way_the_runtimes_read_it(text: str, expected: int) -> None:
@@ -170,7 +170,8 @@ def test_a_process_launched_without_the_environment_fails_the_check_naming_what_
     monkeypatch.delenv(name)
     with pytest.raises(native_call.OpenMPLaunchEnvError, match=name) as raised:
         native_call.check_launch_env()
-    assert "OMP_STACKSIZE" in str(raised.value) and "ulimit -s unlimited" in str(raised.value)
+    assert "OMP_STACKSIZE" in str(raised.value)
+    assert "ulimit -s unlimited" in str(raised.value)
 
 
 def test_a_stack_below_its_hard_limit_fails_the_check(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -418,7 +419,8 @@ def test_exceeding_the_cap_is_a_scored_failure_not_a_runner_crash(tmp_path) -> N
     outs, samples, _mem, _, _timed = native_call._call_isolated(
         str(hungry_kernel(tmp_path, 0.01)), BINDING, data, "python", memory_gb=1.0, **common
     )
-    assert set(outs) == {"y"} and len(samples) == 1
+    assert set(outs) == {"y"}
+    assert len(samples) == 1
 
 
 @pytest.mark.skipif(not osinfo.IS_LINUX, reason="the RLIMIT_DATA cap is Linux-only (see _native_call_worker)")
@@ -437,7 +439,8 @@ def test_the_derived_cap_admits_the_kernel_it_was_derived_for(tmp_path) -> None:
         memory_gb=memory_gb,
         py_meta=("kern", ("x",), ("y",)),
     )
-    assert set(outs) == {"y"} and len(samples) == 1
+    assert set(outs) == {"y"}
+    assert len(samples) == 1
 
 
 @pytest.mark.skipif(not osinfo.IS_LINUX, reason="the RLIMIT_DATA cap is Linux-only (see _native_call_worker)")
@@ -527,12 +530,14 @@ def test_a_followups_build_and_host_copy_do_not_count_against_the_kernel_cap(tmp
     staging it is harness work, not the kernel's."""
     common = dict(device=False, timeout=60.0, threads=1, py_meta=("kern", ("x",), ("y",)))
     data = {"x": np.zeros(4, dtype=np.float64)}
-    big = int(2 * (1 << 30)) // 8  # 2 GiB -- far over the 0.05 GB cap below
+    big = (2 * (1 << 30)) // 8  # 2 GiB -- far over the 0.05 GB cap below
     followups = [native_call.Followup(build=functools.partial(ones_input, big))]
     outs, samples, _mem, extras, _timed = native_call._call_isolated(
         str(cheap_kernel(tmp_path)), BINDING, data, "python", memory_gb=0.05, followups=followups, **common
     )
-    assert set(outs) == {"y"} and len(samples) == 1 and len(extras) == 1
+    assert set(outs) == {"y"}
+    assert len(samples) == 1
+    assert len(extras) == 1
 
 
 @pytest.mark.skipif(not osinfo.IS_LINUX, reason="the RLIMIT_DATA cap is Linux-only (see _native_call_worker)")
@@ -544,7 +549,7 @@ def test_a_kernel_that_over_allocates_on_a_held_out_case_still_fails_the_cap(tmp
     followup-shaped hole in it."""
     common = dict(device=False, timeout=60.0, threads=1, py_meta=("kern", ("x",), ("y",)))
     data = {"x": np.array([4.0], dtype=np.float64)}  # public: a trivial allocation inside the kernel
-    big = float(int(4 * (1 << 30)) // 8)  # 4 GiB -- only the followup's input asks for this many elements
+    big = float((4 * (1 << 30)) // 8)  # 4 GiB -- only the followup's input asks for this many elements
     followups = [native_call.Followup(build=functools.partial(scalar_input, big))]
     with pytest.raises(RuntimeError, match="MemoryError|Unable to allocate"):
         native_call._call_isolated(
@@ -611,7 +616,8 @@ def test_a_crash_under_an_armed_cap_names_the_cap() -> None:
         "HPCAGENT_BENCH_TIMEOUTS_GUILLOTINE_FACTOR": "0",
     }
     result = fresh_interpreter(score_memhog_gemm, env=env)
-    assert result.build_ok and not result.correct
+    assert result.build_ok
+    assert not result.correct
     assert "SIGSEGV" in result.detail
     assert "RLIMIT_DATA cap" in result.detail
     assert "GiB" in result.detail
@@ -748,7 +754,8 @@ def test_the_thread_creation_hint_needs_the_runtimes_own_words() -> None:
     armed = 128 * (1 << 20)  # 128 MiB
     gomp = "libgomp: Thread creation failed: Resource temporarily unavailable\n"
     kmp = "OMP: Error #34: System unable to allocate necessary resources for OMP thread:\n"
-    assert "harness resource limit" in hint(gomp, armed) and "0.12 GiB" in hint(gomp, armed)
+    assert "harness resource limit" in hint(gomp, armed)
+    assert "0.12 GiB" in hint(gomp, armed)
     assert "Resource temporarily unavailable" in hint(gomp, armed)
     assert "harness resource limit" in hint(kmp, armed)
     assert "harness resource limit" in hint(gomp, 0)  # a limit other than the cap refused it

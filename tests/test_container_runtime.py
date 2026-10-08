@@ -100,7 +100,8 @@ def test_ce_uses_an_absolute_toml_as_it_is(tmp_path: pathlib.Path) -> None:
 
 def test_ce_without_an_edf_name_says_so(tmp_path: pathlib.Path) -> None:
     done = wrap(tmp_path, "ce", ce_env="")
-    assert done.returncode == 2 and "no EDF for judge-node" in done.stderr
+    assert done.returncode == 2
+    assert "no EDF for judge-node" in done.stderr
 
 
 def test_apptainer_binds_the_shared_folder_and_the_roles_mounts(tmp_path: pathlib.Path) -> None:
@@ -110,7 +111,8 @@ def test_apptainer_binds_the_shared_folder_and_the_roles_mounts(tmp_path: pathli
     assert done.wrap[:3] == ["apptainer", "exec", "--rocm"]
     bind = done.wrap[done.wrap.index("--bind") + 1].split(",")
     assert bind[0] == f"{tmp_path}/run/shared:/shared"
-    assert f"{tmp_path}/repo:{tmp_path}/repo" in bind and f"{tmp_path}/run:{tmp_path}/run" in bind
+    assert f"{tmp_path}/repo:{tmp_path}/repo" in bind
+    assert f"{tmp_path}/run:{tmp_path}/run" in bind
     assert done.wrap[-1] == "example/bench:latest"
 
 
@@ -166,7 +168,8 @@ def test_an_extra_bind_source_reaches_every_runtime_at_its_own_path(tmp_path: pa
 @pytest.mark.parametrize("runtime", RUNTIMES)
 def test_a_runtime_that_runs_an_image_refuses_to_run_without_one(tmp_path: pathlib.Path, runtime: str) -> None:
     done = wrap(tmp_path, runtime, image="")
-    assert done.returncode == 2 and f"CONTAINER_RUNTIME={runtime} needs an image for judge-node" in done.stderr
+    assert done.returncode == 2
+    assert f"CONTAINER_RUNTIME={runtime} needs an image for judge-node" in done.stderr
 
 
 def test_an_unknown_runtime_is_refused_with_the_known_ones_named(tmp_path: pathlib.Path) -> None:

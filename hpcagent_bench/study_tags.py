@@ -55,6 +55,7 @@ __all__ = [
     "baselines_of",
     "canonical",
     "control_setups_of",
+    "dash_spellings",
     "display_name",
     "experiments_of",
     "framework_name",
@@ -64,14 +65,12 @@ __all__ = [
     "kernel_names",
     "kernel_short_display_name",
     "language_name",
-    "dash_spellings",
     "language_of",
     "manifest_names",
     "marker_of",
     "model_checkpoint",
     "model_name",
     "model_of",
-    "token_of",
     "names",
     "names_of",
     "order",
@@ -86,6 +85,7 @@ __all__ = [
     "setup_delivery_name",
     "setup_suffix",
     "slot",
+    "token_of",
 ]
 
 #: The pools (neutral colour, marker shapes, lightness step) every figure draws from.
@@ -241,8 +241,7 @@ def registered(kind: str) -> Names:
         slots = framework_slots()
         return {key: shown[key] for key in sorted(shown, key=slots.__getitem__)}
     return {
-        key: block.entries[key] if isinstance(block.entries[key], str) else block.entries[key].name
-        for key in block.keys()
+        key: block.entries[key] if isinstance(block.entries[key], str) else block.entries[key].name for key in block
     }
 
 
@@ -260,10 +259,10 @@ def registry() -> Registry:
         shapes=tuple(marker_of(m) for m in as_list(pools.get("shapes"))),
         lightness_step=float(step) if isinstance(step, (int, float)) else 0.13,
         studies=names_of(doc.get("studies"), "studies"),
-        models={key: MODELS.entries[key] for key in MODELS.keys()},
+        models={key: MODELS.entries[key] for key in MODELS},
         optimizers=registered("optimizers"),
         packets=registered("packets"),
-        packet_defs={key: PACKETS.entries[key] for key in PACKETS.keys()},
+        packet_defs={key: PACKETS.entries[key] for key in PACKETS},
         devices=registered("devices"),
         languages=registered("languages"),
         frameworks=registered("frameworks"),

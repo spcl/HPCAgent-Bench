@@ -103,7 +103,7 @@ def expand_linalg_norm(
         raise NotImplementedError("np.linalg.norm: unsupported ord (only None/2, 1, inf)")
     # Strip ``ord`` (positional arg[1] or keyword) so the shared axis reader
     # sees the reduction layout (operand, axis, keepdims).
-    reduction_args = [a] + list(args[2:])
+    reduction_args = [a, *list(args[2:])]
     reduction_kwargs = [kw for kw in kwargs if kw.arg != "ord"]
     axes, keepdims = read_axis_keepdims(reduction_args, reduction_kwargs)
 
@@ -358,7 +358,7 @@ def expand_lstsq(
         [ast.BinOp(left=a_size, op=ast.Sub(), right=const_(1)), const_(-1), const_(-1)],
         [bs_sum_init, bs_inner_for, bs_y_assign],
     )
-    return pre + [fwd, bs]
+    return [*pre, fwd, bs]
 
 
 def lstsq_first_axis_size(node: ast.expr, shape_table: dict[str, tuple[str, ...]]) -> ast.expr | None:
@@ -1134,7 +1134,7 @@ def expand_linalg_inv(
         ],
     )
     # K-loop body.
-    k_body = [pivot_init, pivot_scan, swap_loop] + pivot_div + [elim_outer]
+    k_body = [pivot_init, pivot_scan, swap_loop, *pivot_div, elim_outer]
     out.append(range_for("__inv_k", [n_ast], k_body))
     return out
 

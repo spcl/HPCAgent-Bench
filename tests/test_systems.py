@@ -45,9 +45,11 @@ def test_the_environment_overrides_the_system_and_a_flag_overrides_the_environme
 
 def test_an_explicit_gpus_per_task_displaces_the_systems_gpus_per_node() -> None:
     values = systems.resolve("beverin", {"gpus_per_task": "1"}, {}).values
-    assert values["gpus_per_task"] == "1" and "gpus_per_node" not in values
+    assert values["gpus_per_task"] == "1"
+    assert "gpus_per_node" not in values
     values = systems.resolve("beverin", {}, {}).values
-    assert "gpus_per_node" in values and "gpus_per_task" not in values
+    assert "gpus_per_node" in values
+    assert "gpus_per_task" not in values
 
 
 def test_the_cluster_name_picks_the_system_and_an_unknown_cluster_picks_none() -> None:
@@ -211,7 +213,8 @@ def test_a_flag_beats_the_header_which_beats_our_variables_but_not_slurms(tmp_pa
     script = job_script(tmp_path, "#SBATCH --partition=hdr", "#SBATCH --cpus-per-task=96")
     assert "--cpus-per-task=8" in dry_run(tmp_path, "--cpus-per-task", "8", script)[1]
     system, command = dry_run(tmp_path, script, HPCAGENT_BENCH_JOB_CPUS_PER_TASK="7")
-    assert system == "beverin" and not [word for word in command if word.startswith(("--cpus", "--partition"))]
+    assert system == "beverin"
+    assert not [word for word in command if word.startswith(("--cpus", "--partition"))]
     assert "--partition=envpart" in dry_run(tmp_path, script, SBATCH_PARTITION="envpart")[1]
 
 

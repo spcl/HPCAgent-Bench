@@ -94,7 +94,7 @@ def module_const_values(tree: ast.Module, func_name: str) -> dict:
             and isinstance(val, tuple)
             and len(val) == len(tgt.elts)
         ):
-            for name, v in zip(tuple_names, val):
+            for name, v in zip(tuple_names, val, strict=False):
                 if isinstance(v, (int, float, complex)):
                     env[name] = v
     env.pop(func_name, None)

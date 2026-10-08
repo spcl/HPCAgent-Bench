@@ -21,9 +21,9 @@ import pathlib
 import pytest
 
 from hpcagent_bench.translators.numpyto_c.emit import (
+    ARITH_HEADER_NAME,
     C_HEADER,
     CPP_ARITH,
-    ARITH_HEADER_NAME,
     arith_header_source,
     write_arith_header,
 )
@@ -66,7 +66,7 @@ def check(result) -> None:
     got = result.stdout.split()
     exp = expected_()
     assert len(got) == len(exp), (got, exp)
-    for g, e in zip(got, exp):
+    for g, e in zip(got, exp, strict=False):
         assert float(g) == float(e), (got, exp)
 
 
@@ -82,7 +82,7 @@ def test_cpp_header_compiles_standalone_and_floors_toward_negative_infinity() ->
     check(build_run_c_include(ARITH_HEADER_NAME["cpp"], src, driver(ARITH_HEADER_NAME["cpp"]), cpp=True))
 
 
-@pytest.mark.parametrize("lang,inlined", [("c", C_HEADER), ("cpp", CPP_ARITH)])
+@pytest.mark.parametrize(("lang", "inlined"), [("c", C_HEADER), ("cpp", CPP_ARITH)])
 def test_header_is_the_text_the_emitter_inlines(lang, inlined) -> None:
     """A drift here means an included kernel and an emitted one compute differently."""
     src = arith_header_source(lang)
@@ -95,7 +95,8 @@ def test_header_is_guarded_and_written_under_its_documented_name(tmp_path) -> No
     path = write_arith_header(tmp_path, "c")
     assert path == pathlib.Path(tmp_path) / "npb_arith.h"
     text = path.read_text()
-    assert "#ifndef NPB_ARITH_H" in text and "#define NPB_ARITH_H" in text
+    assert "#ifndef NPB_ARITH_H" in text
+    assert "#define NPB_ARITH_H" in text
     assert text == arith_header_source("c")
 
 
@@ -123,5 +124,6 @@ def test_cpp_header_keeps_the_complex_extension_deliberately() -> None:
     ``_Complex`` of its own, so ``__real__`` / ``__imag__`` are how it reaches the members at all.
     Pinned so the C-side rule above is never applied here by analogy."""
     src = arith_header_source("cpp")
-    assert "__real__" in src and "__imag__" in src
+    assert "__real__" in src
+    assert "__imag__" in src
     assert "__builtin_complex" not in src, "even in C++ the value is built from creal/cimag"

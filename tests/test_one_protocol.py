@@ -117,7 +117,7 @@ def test_an_owed_submission_is_listed_final_graded_beside_its_older_protocols_fi
 
     (item,) = grade_under.build_owed_worklist([db], [env_dir(tmp_path)])[0]
     assert (item.grade_id, item.final) == (last, True)
-    assert earlier not in {item.grade_id}
+    assert earlier != item.grade_id
 
     out = tmp_path / "final-out"
     out.mkdir()
@@ -129,7 +129,7 @@ def test_an_owed_submission_is_listed_final_graded_beside_its_older_protocols_fi
         linked = conn.execute(
             "SELECT id, of_grade_id, timing_reduction FROM grades WHERE kind = 'final' ORDER BY ts_ms"
         ).fetchall()
-    assert [tuple(row) for row in linked][0] == (older_id, last, "mwd-v3")
+    assert next(tuple(row) for row in linked) == (older_id, last, "mwd-v3")
     assert [tuple(row)[1:] for row in linked][1] == (last, timing.FINAL_GRADE_REDUCTION)
 
 

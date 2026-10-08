@@ -189,7 +189,7 @@ def caller_side_symbol(
             f"helper {hname!r} defines shape symbol {sym!r} through more than "
             f"{EXTRA_SYM_DEPTH} of its own locals; it needs shape-generic parameters"
         )
-    by_param = dict(zip(decl_pnames, site_args))
+    by_param = dict(zip(decl_pnames, site_args, strict=False))
     if sym in by_param:
         return ast.unparse(by_param[sym])
 
@@ -316,7 +316,7 @@ def build_callsite_stmts(
     """
     pre: list[str] = []
     call_srcs: list[str] = []
-    for k, (pn, arg) in enumerate(zip(pnames, kept_args)):
+    for k, (pn, arg) in enumerate(zip(pnames, kept_args, strict=False)):
         info = param_info.get(pn)
         if info is not None and not isinstance(arg, ast.Name):
             shp, dt = info
@@ -341,10 +341,11 @@ def build_callsite_stmts(
             call_srcs.append(lhs.id)
             if lhs.id not in live_buffers and lhs.id not in reads:
                 pre.append(f"{lhs.id} = np.empty(({', '.join(hret_shape)},), dtype=np.{hret_dtype})")
-        return ast.parse("\n".join(pre + [f"{name}({', '.join(call_srcs)})"])).body
+        return ast.parse("\n".join([*pre, f"{name}({', '.join(call_srcs)})"])).body
     tmp = f"__hret_tmp_{hidx}"
     call_srcs.append(tmp)
-    lines = pre + [
+    lines = [
+        *pre,
         f"{tmp} = np.empty(({', '.join(hret_shape)},), dtype=np.{hret_dtype})",
         f"{name}({', '.join(call_srcs)})",
         f"{ast.unparse(lhs)} = {tmp}",

@@ -51,7 +51,8 @@ def test_a_scop_local_scalar_becomes_a_pointer_parameter_cell() -> None:
     scop = out[out.index("#pragma scop") : out.index("#pragma endscop")]
     assert "x[0] = (pluto_pred0[0] ? a[i] : x[0]);" in scop
     assert "result[0] = x[0];" in scop
-    assert " x " not in scop and "(x)" not in scop
+    assert " x " not in scop
+    assert "(x)" not in scop
 
 
 def test_a_scalar_used_as_an_index_or_outside_the_scop_stays_local() -> None:
@@ -293,8 +294,10 @@ def test_literal_induction_scalars_become_closed_forms_of_the_counter() -> None:
     k = "(-1 + (2) * (i - (0)) + (1))"
     assert f"a[i] = (b[{k}] - d[i]);" in out
     assert f"b[{k}] = a[i];" in out
-    assert "j = " not in out and "k = " not in out
-    assert "int64_t j;" not in out and "int64_t k;" not in out
+    assert "j = " not in out
+    assert "k = " not in out
+    assert "int64_t j;" not in out
+    assert "int64_t k;" not in out
 
 
 def test_a_conditional_advance_is_not_an_induction_scalar() -> None:

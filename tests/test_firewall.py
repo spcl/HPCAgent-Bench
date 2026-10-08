@@ -18,6 +18,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
+
 from tests.fresh_module import module_at
 
 REPO_ROOT = Path(__file__).resolve().parent.parent

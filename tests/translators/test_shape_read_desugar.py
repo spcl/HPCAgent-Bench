@@ -106,7 +106,9 @@ def test_a_rebound_scalar_is_not_folded() -> None:
     fn = fn_("def f(x, out):\n k = x.shape[0]\n k = k - 1\n out[:] = k\n")
     resolve_shape_reads(fn, env(x="(n,)", out="(1,)"))
     src = ast.unparse(fn)
-    assert "k = n" in src and "k = k - 1" in src and "out[:] = k" in src
+    assert "k = n" in src
+    assert "k = k - 1" in src
+    assert "out[:] = k" in src
 
 
 def test_a_name_read_inside_a_store_target_is_not_a_rebinding() -> None:

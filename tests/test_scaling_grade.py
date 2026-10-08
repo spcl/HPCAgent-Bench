@@ -255,7 +255,8 @@ def test_a_shard_records_both_laws_once_each_and_resumes(
     assert rows == [("strong", "graded", 5, '{"mode": "strong"}'), ("weak", "no-curve", 5, '{"mode": "weak"}')]
     assert kind == "regrade"
     printed = capsys.readouterr().out
-    assert "strong P=8   nodes=2" in printed and "weak: no curve" in printed
+    assert "strong P=8   nodes=2" in printed
+    assert "weak: no curve" in printed
 
 
 def test_a_shard_skips_a_submission_another_shard_count_already_graded(

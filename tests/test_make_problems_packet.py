@@ -116,7 +116,7 @@ CPFSRC_FACTS = (
 )
 
 
-@pytest.mark.parametrize("language, ext", [("c", "c"), ("cpp", "cpp"), ("", "c")])
+@pytest.mark.parametrize(("language", "ext"), [("c", "c"), ("cpp", "cpp"), ("", "c")])
 def test_cpf_src_announces_the_parallelized_source_it_stages(language: str, ext: str) -> None:
     """The prompt itself says what the file is and what was applied to it, since a skill page may go
     unread, and names the exact file materialize_shared.sh stages (a free-choice setup gets C)."""
@@ -153,7 +153,7 @@ def test_a_cpf_src_setup_in_a_language_with_no_drop_in_is_refused() -> None:
 
 
 @pytest.mark.parametrize(
-    "packet, language, refusal",
+    ("packet", "language", "refusal"),
     [
         ("profiling", "c", "takes no new submissions"),
         ("all-in", "c", "takes no new submissions"),

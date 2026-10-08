@@ -187,7 +187,7 @@ def expand_repeat(
         # Wrap with the source loops and the repetition loop deepest.
         out: list[ast.stmt] = [*body]
         out = [range_for(rep_iter, [k_arg], out)]
-        for var, bound in zip(reversed(iters), reversed(a_shape)):
+        for var, bound in zip(reversed(iters), reversed(a_shape), strict=False):
             out = [range_for(var, [const_or_name(bound)], out)]
         return out
     # Axis-aware repeat: walk every axis; for axis ``N`` the dest
@@ -223,6 +223,6 @@ def expand_repeat(
     # Innermost = repetition loop.
     out = [*body]
     out = [range_for(rep_iter, [k_arg], out)]
-    for var, bound in zip(reversed(iters), reversed(a_shape)):
+    for var, bound in zip(reversed(iters), reversed(a_shape), strict=False):
         out = [range_for(var, [const_or_name(bound)], out)]
     return out

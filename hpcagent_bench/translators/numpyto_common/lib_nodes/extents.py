@@ -196,7 +196,7 @@ def contraction_result_extent(expr: ast.Call, shape_table: ShapeTable) -> tuple[
             a_spec = list(letters[:ra])
             b_spec = [""] * rb
             nxt = ra
-            for ca, cb in zip(a_ax, b_ax):
+            for ca, cb in zip(a_ax, b_ax, strict=False):
                 b_spec[cb] = a_spec[ca]
             for i in range(rb):
                 if not b_spec[i]:
@@ -208,11 +208,11 @@ def contraction_result_extent(expr: ast.Call, shape_table: ShapeTable) -> tuple[
             )
         operand_nodes = [a, b]
     letter_extent: dict[str, str] = {}
-    for spec, node in zip(inputs, operand_nodes):
+    for spec, node in zip(inputs, operand_nodes, strict=False):
         shape = operand_token_shape(node, shape_table)
         if shape is None or len(shape) != len(spec):
             return None
-        for letter, dim in zip(spec, shape):
+        for letter, dim in zip(spec, shape, strict=False):
             letter_extent.setdefault(letter, dim)
     if not output:
         return None  # scalar
@@ -275,7 +275,7 @@ def sum_width_tokens(tokens: Sequence[str]) -> str:
 
 
 #: A call sizer's answer: an extent, None (known to be unsized), or :data:`UNHANDLED`.
-type CallSize = Extent | None | NotImplementedType
+type CallSize = Extent | NotImplementedType | None
 
 #: What an ``np.<attr>`` sizer returns for an argument form it does not cover: the call then falls
 #: through to the broadcasting / first-operand rules in :func:`call_extent`.
@@ -335,11 +335,11 @@ def matmul_extent(expr: ast.BinOp, shape_table: ShapeTable) -> Extent | None:
         return (l_ext[0], r_ext[1])
     if ll >= 2 and rl >= 2:
         batch = broadcast_extents(l_ext[:-2], r_ext[:-2])
-        return tuple(batch) + (l_ext[-2], r_ext[-1])
+        return (*tuple(batch), l_ext[-2], r_ext[-1])
     if ll == 1 and rl > 2:
-        return tuple(r_ext[:-2]) + (r_ext[-1],)
+        return (*tuple(r_ext[:-2]), r_ext[-1])
     if rl == 1 and ll > 2:
-        return tuple(l_ext[:-2]) + (l_ext[-2],)
+        return (*tuple(l_ext[:-2]), l_ext[-2])
     return None
 
 
@@ -512,7 +512,7 @@ def eye_extent(attr: str, expr: ast.Call, shape_table: ShapeTable) -> CallSize:
     n = copy.deepcopy(expr.args[0])
     return (
         (n, copy.deepcopy(expr.args[1]))
-        if attr == "eye" and len(expr.args) >= 2 and not const_int(expr.args[1]) is None
+        if attr == "eye" and len(expr.args) >= 2 and const_int(expr.args[1]) is not None
         else (n, copy.deepcopy(n))
     )
 
@@ -614,7 +614,7 @@ def moveaxis_extent(attr: str, expr: ast.Call, shape_table: ShapeTable) -> CallS
     if src is None or dst is None:
         return None
     rest = [e for n, e in enumerate(base) if n != src]
-    return tuple(rest[:dst] + [base[src]] + rest[dst:])
+    return (*rest[:dst], base[src], *rest[dst:])
 
 
 def expand_dims_extent(attr: str, expr: ast.Call, shape_table: ShapeTable) -> CallSize:
@@ -975,7 +975,7 @@ def broadcast_extents(l_ext: tuple[ast.expr, ...], r_ext: tuple[ast.expr, ...]) 
     l_pad = (const_(1),) * (rank - len(l_ext)) + l_ext
     r_pad = (const_(1),) * (rank - len(r_ext)) + r_ext
     out: list[ast.expr] = []
-    for l, r in zip(l_pad, r_pad):
+    for l, r in zip(l_pad, r_pad, strict=False):
         # A size-1 axis on either side stretches to the other's extent -- a size-1
         # RIGHT axis must yield the LEFT extent, not silently keep the (already
         # equal) left, so ``B(N, M) * a(N, 1)`` broadcasts to ``M`` rather than
@@ -1292,7 +1292,7 @@ def pad_output_extent(src_extent: tuple[ast.expr, ...], pad_arg: ast.expr | None
     if widths is None:
         return None
     out = []
-    for d, (before, after) in zip(src_extent, widths):
+    for d, (before, after) in zip(src_extent, widths, strict=False):
         total = ast.BinOp(left=copy.deepcopy(before), op=ast.Add(), right=copy.deepcopy(after))
         out.append(ast.BinOp(left=d, op=ast.Add(), right=total))
     return tuple(out)

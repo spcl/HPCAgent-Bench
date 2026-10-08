@@ -32,7 +32,7 @@ def problems_file(tmp_path: pathlib.Path, kernels: list[str]) -> pathlib.Path:
 
 def test_the_warm_up_waits_behind_every_request() -> None:
     assert judge_warmup.PRIORITY > service.EXPLORATION_PRIORITY
-    assert judge_warmup.PRIORITY > max(service.SLOT_PRIORITY.values())
+    assert max(service.SLOT_PRIORITY.values()) < judge_warmup.PRIORITY
 
 
 def test_a_waiting_request_takes_the_slot_before_the_warm_up(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -94,7 +94,8 @@ def test_every_cell_is_compiled_once_a_refused_kernel_is_dropped_and_the_end_pub
     for thread in warmer.start(1):
         thread.join(WAIT_S)
     assert compiled == [("a", {"n": 1}), ("b", {"n": 1}), ("a", None)]
-    assert published == ["k"] and len(pool.free) == len(slots)
+    assert published == ["k"]
+    assert len(pool.free) == len(slots)
 
 
 def test_the_tag_is_its_ml_kernels_cells(tmp_path: pathlib.Path) -> None:

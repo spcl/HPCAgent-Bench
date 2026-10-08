@@ -306,7 +306,7 @@ def retype_helper_temporaries(helper: KernelIR, caller: KernelIR) -> None:
             continue
         if len(node.args) != len(order):
             continue
-        for pname, arg in zip(order, node.args):
+        for pname, arg in zip(order, node.args, strict=False):
             if pname in params and isinstance(arg, ast.Name) and arg.id not in caller_arrays:
                 local = caller.local_dtypes.get(arg.id)
                 if local and is_real_float(local):
@@ -343,7 +343,7 @@ def written_through_helpers(tree: ast.AST, helpers: Sequence[KernelIR]) -> set[s
         if len(order) != len(node.args):
             continue
         outputs = {a.name for a in helper.arrays if a.is_output}
-        for pname, arg in zip(order, node.args):
+        for pname, arg in zip(order, node.args, strict=False):
             if pname in outputs and isinstance(arg, ast.Name):
                 written.add(arg.id)
     return written
@@ -457,9 +457,8 @@ class ArrayUseScan:
         sl = node.slice
         elts = sl.elts if isinstance(sl, ast.Tuple) else [sl]
         for e in elts:
-            if isinstance(e, ast.Subscript) and isinstance(e.value, ast.Name):
-                if e.value.id in self.arrays:
-                    self.index_arrays.add(e.value.id)
+            if isinstance(e, ast.Subscript) and isinstance(e.value, ast.Name) and e.value.id in self.arrays:
+                self.index_arrays.add(e.value.id)
             if isinstance(e, ast.Name) and e.id in self.arrays:
                 self.index_arrays.add(e.id)
             for sub in ast.walk(e):

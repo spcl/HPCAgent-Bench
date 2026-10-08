@@ -8,8 +8,8 @@ new file under this package, auto-discovered via pkgutil.iter_modules on import.
 import importlib
 import math
 import pkgutil
-from typing import Any
 from collections.abc import Callable
+from typing import Any
 
 import numpy as np
 

@@ -144,7 +144,7 @@ def scalar_value_names(hfn: ast.FunctionDef, seed: set[str]) -> set[str]:
         values = stmt.value.elts if isinstance(stmt.value, ast.Tuple) else [stmt.value] * len(targets)
         if len(values) != len(targets):
             continue
-        for name_node, value in zip(names, values):
+        for name_node, value in zip(names, values, strict=False):
             if all(n.id in known for n in ast.walk(value) if isinstance(n, ast.Name)):
                 known.add(name_node.id)
     return known
@@ -213,7 +213,7 @@ def call_specialized_body(hfn: ast.FunctionDef, pnames: list[str], args: Sequenc
     rewrites that must see the parameters this substitution would have removed.
     """
     probe = copy.deepcopy(hfn)
-    bind_call_constants(probe, {pn: a for pn, a in zip(pnames, args) if literal_call_arg(a)})
+    bind_call_constants(probe, {pn: a for pn, a in zip(pnames, args, strict=False) if literal_call_arg(a)})
     return probe
 
 
@@ -455,7 +455,7 @@ def helper_call_local(
     pnames = [a.arg for a in hfn.args.args]
     if len(call.args) != len(pnames):
         return None
-    consts = {pn: a for pn, a in zip(pnames, call.args) if literal_call_arg(a)}
+    consts = {pn: a for pn, a in zip(pnames, call.args, strict=False) if literal_call_arg(a)}
     if consts:
         hfn = copy.deepcopy(hfn)
         bind_call_constants(hfn, consts)

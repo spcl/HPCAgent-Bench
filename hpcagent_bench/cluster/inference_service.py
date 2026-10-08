@@ -192,7 +192,7 @@ def launcher_env(service: Service) -> dict[str, str]:
     replica list exists to replace. VLLM_MASTER_HOST is emptied rather than left behind: no node
     serves this setup, and a stale hostname is one a probe would still try to reach.
     """
-    pins = {name: service.model for name in CLAUDE_MODEL_PINS} if service.api == API_ANTHROPIC else {}
+    pins = dict.fromkeys(CLAUDE_MODEL_PINS, service.model) if service.api == API_ANTHROPIC else {}
     return {
         **pins,
         "VLLM_MASTER_HOST": "",

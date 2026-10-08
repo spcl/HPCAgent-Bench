@@ -384,7 +384,7 @@ async def search(request: SearchRequest) -> dict[str, Any]:
         raise HTTPException(
             status_code=SEARCH_NOT_PROVISIONED, detail={"cause": "not_provisioned", "error": str(exc)}
         ) from exc
-    except Exception as exc:  # noqa: BLE001 - return a stable HTTP service error.
+    except Exception as exc:
         raise HTTPException(status_code=HTTPStatus.BAD_GATEWAY, detail=str(exc)) from exc
 
 

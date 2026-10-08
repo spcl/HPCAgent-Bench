@@ -3,11 +3,11 @@
 import ast
 from collections.abc import Callable, Sequence
 from types import NotImplementedType
+from typing import TYPE_CHECKING
 
 from hpcagent_bench.translators.numpyto_common import dtypes
 from hpcagent_bench.translators.numpyto_common.ast_build import const_int, name_, store_
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
-from hpcagent_bench.translators.numpyto_common.ir import SparseArrayDesc
 from hpcagent_bench.translators.numpyto_common.lib_nodes.call_args import const_axis, kwarg_or_pos, read_axis_keepdims
 from hpcagent_bench.translators.numpyto_common.lib_nodes.constructors import arange_count
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import (
@@ -23,6 +23,9 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.matmul_hoist import Mat
 from hpcagent_bench.translators.numpyto_common.lib_nodes.registry import ELEMENTWISE_SHAPE_OPS, NP_CALL_EXPANDERS
 from hpcagent_bench.translators.numpyto_common.lib_nodes.repeat import diff_operand
 from hpcagent_bench.translators.numpyto_common.subscripts import has_slice_subscript
+
+if TYPE_CHECKING:
+    from hpcagent_bench.translators.numpyto_common.ir import SparseArrayDesc
 
 __all__ = [
     "AXIS_REDUCTIONS",
@@ -73,7 +76,7 @@ def numpy_call_key(call: ast.Call) -> tuple[str, str] | None:
 UNHANDLED = NotImplemented
 
 type ShapeTokens = tuple[str, ...]
-type RuleResult = ShapeTokens | None | NotImplementedType
+type RuleResult = ShapeTokens | NotImplementedType | None
 
 
 def routed_extent(
@@ -411,7 +414,7 @@ OUTPUT_SHAPE_RULES: tuple[tuple[frozenset[str] | set[str], Callable[..., RuleRes
 SPILL_FIRST_OPERAND: frozenset[tuple[str, str]] = frozenset(
     {
         ("np", k)
-        for k in {
+        for k in (
             "sum",
             "max",
             "min",
@@ -441,7 +444,7 @@ SPILL_FIRST_OPERAND: frozenset[tuple[str, str]] = frozenset(
             "expand_dims",
             "squeeze",
             "moveaxis",
-        }
+        )
     }
     | {("np", "fft.fftn"), ("np", "fft.ifftn"), ("np", "fft.fft"), ("np", "fft.ifft")}
 )
@@ -669,7 +672,7 @@ class CallHoister(ast.NodeTransformer):
         ``axis``: its ``ord`` is stripped first (mirroring ``expand_linalg_norm``), else a positional
         ord (``norm(a, 1)``) would read as ``axis=1``."""
         if key == ("np", "linalg.norm"):
-            norm_args = [node.args[0]] + list(node.args[2:]) if node.args else []
+            norm_args = [node.args[0], *list(node.args[2:])] if node.args else []
             norm_kwargs = [kw for kw in node.keywords if kw.arg != "ord"]
             self._cur_axis, self._cur_keepdims = read_axis_keepdims(norm_args, norm_kwargs)
         else:

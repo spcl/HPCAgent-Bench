@@ -2,7 +2,6 @@
 
 import ast
 import re
-from collections.abc import Callable
 from functools import lru_cache
 from typing import TYPE_CHECKING
 
@@ -21,6 +20,8 @@ __all__ = [
 ]
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     import sympy
 
 
@@ -101,7 +102,7 @@ def substitute_dim_aliases(
             ident = m.group(0)
             if ident not in aliases or ident in active:
                 return ident
-            return "(" + expand(aliases[ident], active + (ident,)) + ")"
+            return "(" + expand(aliases[ident], (*active, ident)) + ")"
 
         return DIM_IDENT_RE.sub(repl, text)
 
@@ -199,7 +200,7 @@ def shape_exprs_differ_numerically(ea: "sympy.Expr", eb: "sympy.Expr") -> bool:
     if not symbols or len(symbols) > len(DIM_PROBE_POINTS[0]):
         return False
     for values in DIM_PROBE_POINTS:
-        point: dict[sympy.Basic | complex, sympy.Basic | complex] = dict(zip(symbols, values))
+        point: dict[sympy.Basic | complex, sympy.Basic | complex] = dict(zip(symbols, values, strict=False))
         try:
             va, vb = ea.subs(point), eb.subs(point)
         except (TypeError, ValueError, ZeroDivisionError):

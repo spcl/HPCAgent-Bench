@@ -175,8 +175,7 @@ def strip_python_tokenize(src: str) -> str:
             lines[srow - 1] = line[:scol] + line[ecol:]
 
     out = "".join(lines)
-    out = "\n".join(seg.rstrip() for seg in out.split("\n"))
-    return out
+    return "\n".join(seg.rstrip() for seg in out.split("\n"))
 
 
 def strip_python_line_scan(src: str) -> str:
@@ -256,8 +255,7 @@ def strip_c_family(src: str, *, slashes: bool = True, hashes: bool = False, fort
         i += 1
 
     text = "".join(out)
-    text = "\n".join(line.rstrip() for line in text.split("\n"))
-    return text
+    return "\n".join(line.rstrip() for line in text.split("\n"))
 
 
 # License / attribution notices we must preserve verbatim: CC-BY and friends

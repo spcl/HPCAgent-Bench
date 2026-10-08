@@ -142,12 +142,14 @@ def test_every_cpu_baseline_reaches_libmvec(name) -> None:
     baseline = vars(flags)[name]
     if not osinfo.IS_LINUX:
         # Not a skip: on macOS there is no libmvec, so the correct state is that no knob is present.
-        assert "-fveclib" not in baseline and "vecmath.h" not in baseline
+        assert "-fveclib" not in baseline
+        assert "vecmath.h" not in baseline
         return
     if VECLIB_ROUTE[name] == "flag":
         assert "-fveclib=libmvec" in baseline
     else:
-        assert "-include" in baseline and "vecmath.h" in baseline
+        assert "-include" in baseline
+        assert "vecmath.h" in baseline
 
 
 @pytest.mark.parametrize("name", sorted(n for n, route in VECLIB_ROUTE.items() if route == "block"))

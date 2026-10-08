@@ -56,7 +56,8 @@ def test_fast_call_returns_its_value_and_cancels_the_watchdog(monkeypatch) -> No
     assert quick() == 42
     assert len(_FakeTimer.instances) == 1
     timer = _FakeTimer.instances[0]
-    assert timer.started and timer.cancelled
+    assert timer.started
+    assert timer.cancelled
 
 
 def test_exception_from_the_wrapped_call_still_cancels_the_watchdog(monkeypatch) -> None:

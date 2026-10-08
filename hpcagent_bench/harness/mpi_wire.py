@@ -42,8 +42,8 @@ OUTFILE::
 
 import struct
 import sys
-from dataclasses import dataclass
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 
 import numpy as np
 

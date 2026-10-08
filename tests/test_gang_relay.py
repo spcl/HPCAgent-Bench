@@ -27,8 +27,7 @@ FAKE_SRUN = '#!/bin/sh\nfor a in "$@"; do echo "$a"; done\necho "stderr-line" >&
 
 
 def load_relay():
-    module = fresh("hpcagent_bench.cluster.gang_relay")
-    return module
+    return fresh("hpcagent_bench.cluster.gang_relay")
 
 
 def host_python() -> str:
@@ -57,9 +56,11 @@ def test_a_gang_launch_through_the_relay_returns_the_steps_status_and_output(mon
     out, err = capsys.readouterr()
     argv = out.splitlines()
     assert rc == 3
-    assert "--nodelist=nid001,nid002" in argv and "--environment=/run/edf/judge.judge-node.toml" in argv
+    assert "--nodelist=nid001,nid002" in argv
+    assert "--environment=/run/edf/judge.judge-node.toml" in argv
     assert argv[-3:] == ["/run/bench", "in", "out"]
-    assert "/usr/bin/env" in argv and "HWLOC_COMPONENTS=-opencl" in argv
+    assert "/usr/bin/env" in argv
+    assert "HWLOC_COMPONENTS=-opencl" in argv
     # The step is named after the request: scancel needs that name to reap the ranks.
     names = [a.split("=", 1)[1] for a in argv if a.startswith("--job-name=")]
     assert len(names) == 1 and names[0].startswith(f"{os.uname().nodename}-{os.getpid()}-"), names
@@ -79,7 +80,8 @@ def test_the_relay_terminates_a_step_whose_judge_stopped_waiting(monkeypatch, tm
     assert "abc" in running
     time.sleep(0.4)
     relay.step(str(tmp_path), running)
-    assert not running and (tmp_path / "abc.rc").read_text().strip() == "143"
+    assert not running
+    assert (tmp_path / "abc.rc").read_text().strip() == "143"
 
 
 def test_a_step_that_ignores_sigterm_is_killed_after_the_grace(monkeypatch, tmp_path) -> None:
@@ -93,7 +95,8 @@ def test_a_step_that_ignores_sigterm_is_killed_after_the_grace(monkeypatch, tmp_
     relay.step(str(tmp_path), running)
     time.sleep(0.4)
     relay.step(str(tmp_path), running)
-    assert not running and (tmp_path / "abc.rc").read_text().strip() == "137"
+    assert not running
+    assert (tmp_path / "abc.rc").read_text().strip() == "137"
 
 
 def test_an_abandoned_step_is_scancelled_by_its_slurm_step_id(monkeypatch, tmp_path) -> None:
@@ -221,7 +224,8 @@ def test_a_step_the_relay_cancelled_for_a_stale_judge_is_a_relay_fault(
     relay.step(str(tmp_path), running)
     time.sleep(0.4)
     relay.step(str(tmp_path), running)
-    assert (tmp_path / "abc.stale").exists() and (tmp_path / "abc.rc").read_text().strip() == "143"
+    assert (tmp_path / "abc.stale").exists()
+    assert (tmp_path / "abc.rc").read_text().strip() == "143"
     (tmp_path / mpi_gang.RELAY_ALIVE).touch()
     with pytest.raises(mpi_gang.RelayFault, match="cancelled the step"):
         mpi_gang.relay_call(tmp_path, "abc", ["srun", "true"], timeout=30, poll_s=0.05)

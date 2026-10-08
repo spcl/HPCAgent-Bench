@@ -63,7 +63,8 @@ def test_kernel_cache_dir_creates_dir_with_gitkeep(tmp_path) -> None:
     kdir = tmp_path / "kern"
     kdir.mkdir()
     cache = fc.kernel_cache_dir(kdir)
-    assert cache == kdir / ".cache" and cache.is_dir()
+    assert cache == kdir / ".cache"
+    assert cache.is_dir()
     assert (cache / ".gitkeep").exists(), "the .cache/ dir must be kept via a .gitkeep"
 
 
@@ -183,10 +184,10 @@ def test_ensure_removes_a_stale_canonical_whose_emit_failed(tmp_path, monkeypatc
                 "# body\n",
                 source=f"{spec.module_name}_numpy.py",
             )
-        return {t: "ok" for t in targets}
+        return dict.fromkeys(targets, "ok")
 
     def fake_fail(spec, targets):
-        return {t: "fail: RuntimeError: the generator broke" for t in targets}
+        return dict.fromkeys(targets, "fail: RuntimeError: the generator broke")
 
     original_root = paths.BENCHMARKS
     try:
@@ -225,7 +226,7 @@ def test_ensure_never_touches_a_hand_override(tmp_path, monkeypatch) -> None:
 
     def fake_emit_targets(spec, targets):
         called["n"] += 1
-        return {t: "ok" for t in targets}
+        return dict.fromkeys(targets, "ok")
 
     original_root = paths.BENCHMARKS
     monkeypatch.setattr(autogen, "emit_targets", fake_emit_targets)

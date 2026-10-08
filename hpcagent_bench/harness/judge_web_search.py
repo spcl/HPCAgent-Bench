@@ -280,7 +280,7 @@ async def crawl_with_crawl4ai(
         from crawl4ai import AsyncWebCrawler, BrowserConfig, CacheMode, CrawlerRunConfig
         from crawl4ai.content_filter_strategy import BM25ContentFilter
         from crawl4ai.markdown_generation_strategy import DefaultMarkdownGenerator
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         raise RuntimeError(
             "crawl4ai is required for live crawling; uv sync --extra cpu and playwright install chromium"
         ) from exc

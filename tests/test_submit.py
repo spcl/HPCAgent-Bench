@@ -11,15 +11,15 @@ arguments and environment; nothing reaches Slurm.
 import json
 import os
 import pathlib
-import tempfile
 import shutil
 import subprocess
 import sys
+import tempfile
 
 import pytest
 
-from tests.env_render import SPEC_INPUTS
 from tests.bash_stub import bash_stub
+from tests.env_render import SPEC_INPUTS
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 
@@ -60,12 +60,33 @@ SUBSET = ("fuse_diamond", "tsvc_2_s115")
 #: The submitter's knobs, cleared so each run sees only what its test sets.
 KNOBS = frozenset(
     {
-        *"BASE TAG KERNELS_FILE MODELS LANGUAGES PACKETS HARNESSES OFFLOAD OFFLOAD_RESIDENCY EXPERIMENT".split(),
-        *"RECORD_STUDY STAMP REPEAT AGENTS_PER_NODE AGENT_NODES JUDGE_NODES CPF_VIEW".split(),
-        *"BUDGET_SCALE TOKEN_SCALE TIME_SCALE DEADLINE EXTRA_ENV_KV SETUP_SUFFIX SUBMIT".split(),
-        *"DEPEND_ON BEGIN NICE HOLD TIME_LIMIT SBATCH_ACCOUNT SBATCH_PARTITION PYTHONPATH HPCAGENT_BENCH_REPO".split(),
-        *"HPCAGENT_BENCH_SYSTEM HPCAGENT_BENCH_HARDWARE HPCAGENT_BENCH_MAX_TIME_HOURS".split(),
-        *"HPCAGENT_BENCH_SYSTEMS_FILE HPCAGENT_BENCH_ACCOUNT".split(),
+        *[
+            "BASE",
+            "TAG",
+            "KERNELS_FILE",
+            "MODELS",
+            "LANGUAGES",
+            "PACKETS",
+            "HARNESSES",
+            "OFFLOAD",
+            "OFFLOAD_RESIDENCY",
+            "EXPERIMENT",
+        ],
+        *["RECORD_STUDY", "STAMP", "REPEAT", "AGENTS_PER_NODE", "AGENT_NODES", "JUDGE_NODES", "CPF_VIEW"],
+        *["BUDGET_SCALE", "TOKEN_SCALE", "TIME_SCALE", "DEADLINE", "EXTRA_ENV_KV", "SETUP_SUFFIX", "SUBMIT"],
+        *[
+            "DEPEND_ON",
+            "BEGIN",
+            "NICE",
+            "HOLD",
+            "TIME_LIMIT",
+            "SBATCH_ACCOUNT",
+            "SBATCH_PARTITION",
+            "PYTHONPATH",
+            "HPCAGENT_BENCH_REPO",
+        ],
+        *["HPCAGENT_BENCH_SYSTEM", "HPCAGENT_BENCH_HARDWARE", "HPCAGENT_BENCH_MAX_TIME_HOURS"],
+        *["HPCAGENT_BENCH_SYSTEMS_FILE", "HPCAGENT_BENCH_ACCOUNT"],
     }
 )
 
@@ -175,7 +196,8 @@ def test_the_recorded_identity_follows_the_language(wave: pathlib.Path) -> None:
     for env, setup in ((cpu, "wave-qwen38-c"), (gpu, "wave-qwen38-hip")):
         assert env["SETUP"] == env["HPCAGENT_BENCH_RECORD_SETUP"] == setup
         assert env["HPCAGENT_BENCH_RECORD_STUDY"] == "llr40"
-        assert "HPCAGENT_BENCH_RECORD_HARNESS" not in env and "HARNESS" not in env
+        assert "HPCAGENT_BENCH_RECORD_HARNESS" not in env
+        assert "HARNESS" not in env
 
 
 def test_a_kernels_file_setup_owes_exactly_its_kernels_under_its_own_file_names(wave: pathlib.Path) -> None:
@@ -306,7 +328,8 @@ def test_a_submitted_setup_reads_a_snapshot_and_chains_its_finalize_grade(tmp_pa
     args = (root / "sbatch.args").read_text().splitlines()
     (export,) = [arg for arg in args if arg.startswith("--export=ALL,CLUSTER_ENV_FILE=")]
     snapshot = pathlib.Path(export.split("=", 2)[2])
-    assert snapshot.parent.name == ".rendered" and not os.access(snapshot, os.W_OK)
+    assert snapshot.parent.name == ".rendered"
+    assert not os.access(snapshot, os.W_OK)
     frozen = dict(line.split("=", 1) for line in snapshot.read_text().splitlines())
     setup = setup_env(root, "wave-qwen38-c")
     assert {k: v for k, v in frozen.items() if k != "PROBLEMS_FILE"} == {
@@ -330,8 +353,10 @@ def submit_mi200(root: pathlib.Path, model: str, **knobs: str) -> subprocess.Com
 
 
 def assert_on_mi200(root: pathlib.Path, env: dict[str, str]) -> None:
-    assert env["HPCAGENT_BENCH_HARDWARE"] == "mi200" and env["GPUS_PER_NODE"] == "8"
-    assert env["AMD_CE_ENV"].endswith("-mi200-latest") and env["JUDGE_CE_ENV"].endswith("-mi200-latest")
+    assert env["HPCAGENT_BENCH_HARDWARE"] == "mi200"
+    assert env["GPUS_PER_NODE"] == "8"
+    assert env["AMD_CE_ENV"].endswith("-mi200-latest")
+    assert env["JUDGE_CE_ENV"].endswith("-mi200-latest")
     assert {"--partition=mi200", "--gpus-per-node=8"} <= set(sbatch_args(root))
 
 
@@ -355,7 +380,8 @@ def test_a_served_model_setup_on_mi200_takes_its_serving_layer(tmp_path: pathlib
     done = submit_mi200(root, "qwen38")
     assert done.returncode == 0, done.stderr
     env = setup_env(root, "x-mi200-qwen38-c")
-    assert env["INFERENCE_CE_ENV"] == "hpcagent-bench-vllm-mi200-latest" and env["INFERENCE_ENGINE"] == "vllm"
+    assert env["INFERENCE_CE_ENV"] == "hpcagent-bench-vllm-mi200-latest"
+    assert env["INFERENCE_ENGINE"] == "vllm"
     assert_on_mi200(root, env)
 
 

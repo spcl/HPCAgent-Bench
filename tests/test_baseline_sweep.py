@@ -128,7 +128,8 @@ def test_a_rank_with_no_kernels_is_a_no_op_that_needs_no_dace_tree(
     sweep = baseline.Sweep("stubcol", out_root, ("a", "b", "c"), "fuzzed", empty, {})
     assert baseline.run(sweep, jobs.Rank(3, 4)) == 0
     out = capsys.readouterr().out
-    assert "no kernels assigned" in out and "0 rows" in out
+    assert "no kernels assigned" in out
+    assert "0 rows" in out
 
 
 # the per-kernel caps
@@ -291,7 +292,8 @@ def test_a_kernel_an_earlier_run_reached_never_resurrects(tmp_path: pathlib.Path
         assert baseline.run(sweep, jobs.Rank(index, 2)) == 0
     rows = canon_rows(sweep)
     assert set(rows) == {"a", "b"}
-    assert rows["a"]["median_ms"] == 1.5 and rows["b"]["median_ms"] == 1.5
+    assert rows["a"]["median_ms"] == 1.5
+    assert rows["b"]["median_ms"] == 1.5
 
 
 # the tag and phases

@@ -84,7 +84,7 @@ def positive_int(raw: str) -> int:
         value = int(raw.strip())
     except (ValueError, AttributeError):
         return 0
-    return value if value > 0 else 0
+    return max(0, value)
 
 
 def main() -> int:

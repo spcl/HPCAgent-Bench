@@ -30,7 +30,7 @@ def desugared(body: str, dtype: str = "float64", backend: str = "dace") -> str:
 
 
 @pytest.mark.parametrize(
-    "body, kept",
+    ("body", "kept"),
     [
         ("np.sum(a, axis=1)", "np.sum(a, axis=1)"),
         ("np.mean(a, axis=1)", "np.mean(a, axis=1)"),
@@ -46,7 +46,7 @@ def test_a_float_axis_reduction_stays_a_call_for_dace(body: str, kept: str) -> N
 
 
 @pytest.mark.parametrize(
-    "body, dtype, backend",
+    ("body", "dtype", "backend"),
     [
         ("a.sum(axis=1)", "int32", "dace"),
         ("np.sum(a, axis=1, keepdims=True)[:, 0]", "float64", "dace"),

@@ -14,8 +14,8 @@ import types
 
 import pytest
 
-from hpcagent_bench.columns import FRAMEWORKS
 from hpcagent_bench import frameworks
+from hpcagent_bench.columns import FRAMEWORKS
 from hpcagent_bench.frameworks import NativeFramework, PlutoFramework
 from hpcagent_bench.frameworks import framework as framework_module
 from hpcagent_bench.frameworks.framework import (
@@ -38,7 +38,7 @@ def test_native_family_is_the_base_languages_their_autopar_and_polly() -> None:
     # route; flang is LLVM Fortran; llvm/polly are the C++ clang pair and ``cpp`` its gcc half, so
     # a C-vs-C++ reading is within one compiler family instead of across two. All build through
     # the one NativeFramework wrapper.
-    assert framework_flavors("native") == C_FAMILY + ["llvm", "cpp", "fortran", "fortran_autopar", "flang", "polly"]
+    assert framework_flavors("native") == [*C_FAMILY, "llvm", "cpp", "fortran", "fortran_autopar", "flang", "polly"]
     for name in framework_flavors("native"):
         assert type(generate_framework(name)) is NativeFramework
 
@@ -52,7 +52,8 @@ def test_pluto_is_its_own_base_and_a_native_subclass() -> None:
         assert type(fw) is PlutoFramework
         assert isinstance(fw, NativeFramework)  # reuses the C-ABI wrapper machinery
         assert fw.kernel_attr == f"kernel_{name}"
-    assert FRAMEWORKS.entries["pluto"]["arch"] == "cpu" and FRAMEWORKS.entries["ppcg"]["arch"] == "gpu"
+    assert FRAMEWORKS.entries["pluto"]["arch"] == "cpu"
+    assert FRAMEWORKS.entries["ppcg"]["arch"] == "gpu"
     # PPCG emits CUDA and the LOCAL toolchain decides what that compiles as (hipify runs in between
     # on ROCm). Pinned against ``gpu_backend()`` rather than a literal, because a literal here is
     # what left the entry claiming nvcc on an AMD node.
@@ -186,7 +187,8 @@ def test_the_native_tables_are_projections_of_the_registry() -> None:
     from hpcagent_bench.benchmarks.cpp_runtime import FRAMEWORK_LANG
 
     columns = [name for name, meta in FRAMEWORKS.entries.items() if meta["base"] in ("native", "pluto")]
-    assert list(NATIVE_FRAMEWORKS) == columns and list(FRAMEWORK_LANG) == columns
+    assert list(NATIVE_FRAMEWORKS) == columns
+    assert list(FRAMEWORK_LANG) == columns
     for name in columns:
         meta = FRAMEWORKS.entries[name]
         assert FRAMEWORK_LANG[name] == meta.get("language")
@@ -199,7 +201,8 @@ def test_the_polyhedral_columns_emit_c_and_compile_what_their_tool_writes() -> N
     from hpcagent_bench.benchmarks.cpp_runtime import FRAMEWORK_LANG
 
     for name in ("pluto", "ppcg", "ppcg_cuda", "ppcg_hip"):
-        assert NATIVE_FRAMEWORKS[name] == "c" and LANG_TARGET[NATIVE_FRAMEWORKS[name]] == "c"
+        assert NATIVE_FRAMEWORKS[name] == "c"
+        assert LANG_TARGET[NATIVE_FRAMEWORKS[name]] == "c"
     assert FRAMEWORK_LANG["pluto"] == "c"
     assert (FRAMEWORK_LANG["ppcg_cuda"], FRAMEWORK_LANG["ppcg_hip"]) == ("cuda", "hip")
 
@@ -251,7 +254,8 @@ def test_a_new_base_is_one_adapter_module_plus_its_registered_column(
     monkeypatch.setitem(FRAMEWORKS.entries, "probedrop", meta)
     try:
         cls = framework_class("probedrop")
-        assert cls.__name__ == "ProbeDropFramework" and cls.__module__ == module_name
+        assert cls.__name__ == "ProbeDropFramework"
+        assert cls.__module__ == module_name
         assert type(generate_framework("probedrop")) is cls
         assert frameworks.ProbeDropFramework is cls
     finally:

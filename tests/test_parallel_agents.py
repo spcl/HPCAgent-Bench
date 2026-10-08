@@ -82,7 +82,8 @@ def test_parallel_native_runs_use_separate_folders(tmp_path, monkeypatch) -> Non
 
     assert len({path.parent for episode_label, path in out}) == 4  # four distinct run folders, no collision
     for episode_id, path in out:
-        assert path.exists() and f"/* {episode_id} */" in path.read_text()  # each run's file is its own
+        assert path.exists()
+        assert f"/* {episode_id} */" in path.read_text()
 
 
 def test_concurrent_judge_keeps_each_agents_result_separate(make_judge) -> None:

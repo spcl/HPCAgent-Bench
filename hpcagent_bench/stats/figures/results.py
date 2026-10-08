@@ -11,16 +11,16 @@ written by the collection sweeps in :mod:`hpcagent_bench.support.collect`), read
 ``text.usetex`` is set per call (:func:`set_usetex`).
 """
 
+import contextlib
 import dataclasses
 import math
 import pathlib
 import re
-import contextlib
 import sqlite3
 from dataclasses import dataclass
 from typing import cast
 
-import matplotlib
+import matplotlib as mpl
 import pandas as pd  # pyright: ignore[reportMissingTypeStubs] -- pandas ships none
 from matplotlib.figure import Figure
 
@@ -65,7 +65,7 @@ DEFAULT_BASELINE: str = "numba"
 def set_usetex(usetex: bool) -> None:
     """Toggle LaTeX text rendering for the process. ``False`` keeps mathtext (``$...$``)
     working, so the CI superscripts still render without a LaTeX install."""
-    matplotlib.rcParams["text.usetex"] = usetex
+    mpl.rcParams["text.usetex"] = usetex
 
 
 def save_figure(output: str, fig: Figure) -> str:
@@ -106,8 +106,7 @@ def load_results(
 
     data = fold_build_axes(fold_variant(filter_datatype(data, datatype), variant), baseline)
     data = data.loc[data["preset"] == preset]
-    data = data.drop(["preset"], axis=1).reset_index(drop=True)
-    return data
+    return data.drop(["preset"], axis=1).reset_index(drop=True)
 
 
 def read_results_table(db: str | None) -> pd.DataFrame:

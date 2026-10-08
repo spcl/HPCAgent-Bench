@@ -23,8 +23,7 @@ REPO = pathlib.Path(__file__).resolve().parents[1]
 
 @pytest.fixture(name="driver")
 def driver_fixture() -> ModuleType:
-    module = fresh("agent_driver")
-    return module
+    return fresh("agent_driver")
 
 
 @pytest.mark.parametrize("exported", [None, "", "0"])

@@ -69,7 +69,7 @@ class ArrayMethodRewriter(ast.NodeTransformer):
         return ast.copy_location(
             ast.Call(
                 func=numpy_attribute(func.attr),
-                args=[recv] + list(node.args),
+                args=[recv, *list(node.args)],
                 keywords=list(node.keywords),
             ),
             node,

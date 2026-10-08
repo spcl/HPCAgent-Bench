@@ -80,7 +80,8 @@ def test_single_point_interval_collapses() -> None:
     """n=1 has no spread to estimate, so the interval is the point -- and must not raise."""
     interval = summary.geomean_ci([5.0])
     assert interval.point == pytest.approx(5.0)
-    assert interval.low == pytest.approx(5.0) and interval.high == pytest.approx(5.0)
+    assert interval.low == pytest.approx(5.0)
+    assert interval.high == pytest.approx(5.0)
     assert interval.n == 1
 
 
@@ -125,7 +126,8 @@ def test_the_paired_geomean_is_an_exact_sign_flip_test() -> None:
     change = sign_flip([math.log(2.0) * value for value in (0, 1, 2, 0, 1, 2)])
     assert change.method == "sign-flip-exact"
     assert change.pvalue == pytest.approx(8 / 64)
-    assert change.low == pytest.approx(0.0, abs=1e-11) and change.high > 0.0
+    assert change.low == pytest.approx(0.0, abs=1e-11)
+    assert change.high > 0.0
 
 
 def test_a_cost_has_an_arithmetic_mean_with_its_own_interval() -> None:
@@ -154,7 +156,8 @@ def test_paired_change_agrees_with_its_own_test() -> None:
     rng = np.random.default_rng(3)
     result = wilcoxon(rng.normal(0.6, 0.4, 30))
     assert result.pvalue < 0.05
-    assert result.low > 0.0 and result.low < result.estimate < result.high
+    assert result.low > 0.0
+    assert result.low < result.estimate < result.high
     assert result.method == "signed-rank-exact"
 
 
@@ -181,12 +184,16 @@ def test_paired_change_says_underpowered_instead_of_drawing_an_interval() -> Non
     would be decoration."""
     result = wilcoxon([1.0, 2.0, 3.0, 4.0])
     assert result.method == "underpowered"
-    assert math.isnan(result.low) and math.isnan(result.high) and math.isnan(result.pvalue)
+    assert math.isnan(result.low)
+    assert math.isnan(result.high)
+    assert math.isnan(result.pvalue)
 
 
 def test_paired_change_on_nothing_is_not_an_effect() -> None:
     result = wilcoxon([0.0, 0.0, 0.0])
-    assert result.method == "degenerate" and result.estimate == 0.0 and result.pvalue == 1.0
+    assert result.method == "degenerate"
+    assert result.estimate == 0.0
+    assert result.pvalue == 1.0
 
 
 def test_a_tied_sample_falls_back_and_says_so() -> None:
@@ -233,7 +240,8 @@ def test_paired_geomean_keeps_the_kernels_that_did_not_change() -> None:
 def test_paired_geomean_withholds_interval_and_p_below_the_floor() -> None:
     change = sign_flip([0.1] * (summary.MIN_PAIRS_FOR_INTERVAL - 2) + [0.3])
     assert change.method == "underpowered"
-    assert math.isnan(change.low) and math.isnan(change.pvalue)
+    assert math.isnan(change.low)
+    assert math.isnan(change.pvalue)
 
 
 def test_paired_geomean_without_spread_reports_no_test() -> None:
@@ -241,8 +249,10 @@ def test_paired_geomean_without_spread_reports_no_test() -> None:
     enter a correction as a test that never ran."""
     change = sign_flip([0.2] * 8)
     assert change.method == "degenerate"
-    assert change.estimate == pytest.approx(0.2) and math.isnan(change.pvalue)
-    assert math.isnan(change.low) and math.isnan(change.high)
+    assert change.estimate == pytest.approx(0.2)
+    assert math.isnan(change.pvalue)
+    assert math.isnan(change.low)
+    assert math.isnan(change.high)
 
 
 def test_paired_geomean_over_no_pairs_has_no_estimate() -> None:
@@ -272,7 +282,8 @@ def test_a_tied_sample_takes_the_corrected_approximation_not_an_exact_count() ->
 def test_a_cell_below_the_interval_floor_reports_its_median_without_an_interval() -> None:
     median, low, high, dropped = summary.median_ci([1.0, 2.0, 4.0], drop=False, min_n=summary.MIN_INTERVAL_SAMPLES)
     assert (median, dropped) == (2.0, 0)
-    assert math.isnan(low) and math.isnan(high)
+    assert math.isnan(low)
+    assert math.isnan(high)
 
 
 def test_a_bootstrap_over_log_ratios_keeps_the_negative_values() -> None:

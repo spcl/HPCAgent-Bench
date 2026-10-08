@@ -83,7 +83,7 @@ def summary_for(cells) -> pd.DataFrame:
 # the signed transform
 
 
-@pytest.mark.parametrize("ratio,expected", [(1.0, 0.0), (2.0, 1.0), (3.0, 2.0), (0.5, -1.0), (0.25, -3.0)])
+@pytest.mark.parametrize(("ratio", "expected"), [(1.0, 0.0), (2.0, 1.0), (3.0, 2.0), (0.5, -1.0), (0.25, -3.0)])
 def test_the_landmarks_the_spec_names(ratio: float, expected: float) -> None:
     assert summary.signed_change(ratio) == pytest.approx(expected)
 
@@ -109,7 +109,7 @@ def test_an_unusable_ratio_is_nan_never_zero(ratio: float) -> None:
 
 
 @pytest.mark.parametrize(
-    "ratio,band",
+    ("ratio", "band"),
     [
         (1.0, speedup.BAND_LOW),
         (1.999, speedup.BAND_LOW),
@@ -212,7 +212,8 @@ def test_a_crash_is_kept_out_of_the_limits_that_measured_points_set() -> None:
     with pytest.warns(UserWarning):
         points = speedup.speedup_points(frame)
     measured = [point for point in points if not point.crashed]
-    assert len(measured) == 1 and len(points) == 2
+    assert len(measured) == 1
+    assert len(points) == 2
     assert all(not math.isnan(point.change) for point in measured)
 
 
@@ -349,7 +350,8 @@ def test_the_figure_writes_the_costs_and_the_interval_behind_every_ratio(tmp_pat
     assert len(tables) == 1, written
     frame = pd.read_csv(tables[0])
     assert list(frame.columns) == list(speedup.TABLE_COLUMNS)
-    assert (frame["baseline_ms"] > 0).all() and (frame["candidate_ms"] > 0).all()
+    assert (frame["baseline_ms"] > 0).all()
+    assert (frame["candidate_ms"] > 0).all()
     assert (frame["speedup_low"] <= frame["speedup_high"]).all()
 
 
@@ -580,4 +582,5 @@ def test_grid_and_reference_lines_come_from_the_shared_style_module() -> None:
     source = inspect.getsource(speedup)
     assert 'color="0.85"' not in source, "grid colour must come from style.RULE"
     assert 'color="0.35"' not in source, "zero-reference colour must come from style.REFERENCE"
-    assert plotstyle.RULE and plotstyle.REFERENCE  # the constants this module draws with
+    assert plotstyle.RULE
+    assert plotstyle.REFERENCE

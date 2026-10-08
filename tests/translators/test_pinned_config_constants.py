@@ -15,8 +15,8 @@ import json
 import pathlib
 import re
 import tempfile
-from typing import Any
 from collections.abc import Callable
+from typing import Any
 
 import pytest
 
@@ -84,7 +84,8 @@ def test_the_openmp_variants_declare_the_pinned_knobs_their_body_reads(variant: 
     from hpcagent_bench.translators.numpyto_c.emit import emit_c_omp, emit_cpp_omp
 
     src = {"c_omp": emit_c_omp, "cpp_omp": emit_cpp_omp}[variant](kir_(), fn_name="f")
-    assert "_ < max_iter;" in src and "< tol)" in src
+    assert "_ < max_iter;" in src
+    assert "< tol)" in src
     assert "constexpr int64_t max_iter = 100;" in src
     assert "constexpr double tol = 1e-06;" in src
 
@@ -134,7 +135,8 @@ def test_without_the_pinned_declaration_the_same_knobs_stay_parameters() -> None
     # and every legacy manifest keep.
     kir = kir_(pinned=False)
     assert kir.pinned_consts == {}
-    assert "max_iter" in kir.param_order() and "tol" in kir.param_order()
+    assert "max_iter" in kir.param_order()
+    assert "tol" in kir.param_order()
     assert "constexpr int64_t max_iter" not in emit_c(kir, fn_name="f")
 
 
