@@ -570,12 +570,15 @@ def box_cells(
     type_: plotstyle.TypeScale,
     width: float = BOX_WIDTH,
     alpha: float = BOX_ALPHA,
+    whis: float | tuple[float, float] = 1.5,
 ) -> None:
-    """One box per cell over its episodes at ``positions``, filled and outlined in ``color``."""
+    """One box per cell over its episodes at ``positions``, filled and outlined in ``color``; whiskers to
+    ``whis`` (matplotlib's: a multiple of the IQR, or a (low, high) percentile pair)."""
     artists = ax.boxplot(
         [list(cell.episodes) for cell in cells],
         positions=list(positions),
         widths=width,
+        whis=whis,
         patch_artist=True,
         manage_ticks=False,
         showfliers=False,

@@ -62,6 +62,7 @@ __all__ = [
     "COST_SIG_LABEL",
     "COST_SIG_MARK",
     "DEFAULT_CONFIG",
+    "DOT_ROW_HEIGHT_IN",
     "EMPTY_POINT",
     "EXTRA_MARKERS",
     "FEW_KERNELS_NOTE",
@@ -1071,6 +1072,9 @@ MEASURE_LABELS: dict[str, str] = {"speedup": "Speedup", "success": "Solved (%)",
 #: success row 0.45 (15% and 10% below the earlier 0.82 and 0.5); the speedup row
 #: 25% taller, 0.875 (speedup differences were hard to see).
 MEASURE_HEIGHT: dict[str, float] = {"speedup": 0.875, "success": 0.45, "cost": 0.7}
+
+#: The height ``MEASURE_HEIGHT`` is a fraction of, inches: a dot row placed at a paper's text width.
+DOT_ROW_HEIGHT_IN: float = 0.98
 
 #: Headroom above N on the success row, as a fraction of N, so the dashed ceiling at N is not the frame.
 SUCCESS_HEADROOM: float = 0.05
@@ -2400,7 +2404,7 @@ def figure_dot_row(
     config: FigureConfig = PAPER_CONFIG,
     measures: Sequence[str] = MEASURES,
     row_width_in: float = style.ACM_TEXT_WIDTH_IN,
-    row_height_in: float = 0.98,
+    row_height_in: float = DOT_ROW_HEIGHT_IN,
     labels: dict[str, str] | None = None,
     references: Sequence[str] = (),
     control_names: Sequence[str] = (),

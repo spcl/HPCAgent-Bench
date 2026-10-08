@@ -69,6 +69,7 @@ __all__ = [
     "hue_order",
     "hues",
     "in_order",
+    "darken",
     "lighten",
     "marker",
     "marker_style",
@@ -176,6 +177,18 @@ def warn_on_collision(chosen: dict[str, str], kind: str) -> dict[str, str]:
             LOG.warning("palette: %s %r and %r both draw %s; extend hues", kind, seen[hue], name, hue)
         seen[hue] = entity
     return chosen
+
+
+def darken(hex_color: str, steps: int) -> str:
+    """``hex_color`` moved ``steps`` toward black in HLS, floored short of black so its hue still reads:
+    a statistic drawn over its own series' marks (an interval over the runs)."""
+    if steps <= 0:
+        return hex_color
+    r, g, b = (int(hex_color[i : i + 2], 16) / 255 for i in (1, 3, 5))
+    hue, lightness, saturation = colorsys.rgb_to_hls(r, g, b)
+    lightness = max(0.15, lightness - steps * registry().lightness_step)
+    r, g, b = colorsys.hls_to_rgb(hue, lightness, saturation)
+    return to_hex((r, g, b))
 
 
 def lighten(hex_color: str, steps: int) -> str:
