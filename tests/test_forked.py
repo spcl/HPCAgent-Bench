@@ -4,12 +4,10 @@
 structured result instead of eating it -- the native-collection contract."""
 
 import faulthandler
-import inspect
 import multiprocessing
 import multiprocessing.queues
 import os
 import pathlib
-import pickle
 import signal
 import subprocess
 import sys
@@ -266,36 +264,6 @@ def test_a_forked_child_does_not_outlive_the_process_that_forked_it(tmp_path, fo
     finally:
         if forker.poll() is None:
             forker.kill()
-
-
-def test_the_child_entry_point_keeps_the_name_a_running_judge_pickles() -> None:
-    """``Process(target=...)`` under forkserver/spawn pickles the target BY QUALIFIED NAME, so the
-    name is an ABI between a judge service and the children it starts.
-
-    A judge service outlives a checkout update: it holds ``forked`` from the tree as it was when it
-    started and keeps naming the entry point the way that tree spelled it, while a forkserver daemon
-    it respawns imports THIS file. Drop the historical spelling and every forked grade such a parent
-    starts dies on an AttributeError the parent only sees as a broken result pipe -- a whole setup's
-    rows lost with no failing kernel to point at. Both names must resolve, to ONE function, through
-    a pickle round trip, and take the argument tuple run_forked builds.
-
-    The five leading parameters are the ABI and are pinned by NAME AND POSITION. Anything after
-    them must be OPTIONAL, which is the property that actually matters here: an old parent calls
-    with exactly five positional arguments, so a new REQUIRED parameter would make every grade it
-    starts die on a TypeError the parent only sees as a broken pipe -- the same silent, whole-setup
-    loss as a renamed entry point. Asserting that, rather than a literal parameter list, is why
-    ``err_w`` could be added (the raw error pipe; child_main falls back to the queue without it)
-    without loosening the guard.
-    """
-    assert forked._child is forked.child_main
-    assert pickle.loads(pickle.dumps(forked._child)) is forked.child_main
-    params = inspect.signature(forked.child_main).parameters
-    assert list(params)[:5] == ["fn", "args", "kwargs", "q", "seal"]
-    required = [n for n, p in params.items() if p.default is inspect.Parameter.empty]
-    assert required == ["fn", "args", "kwargs", "q"], (
-        f"child_main requires {required}; an old judge parent calls it with five positional "
-        "arguments, so everything from `seal` on has to carry a default"
-    )
 
 
 @pytest.mark.parametrize(

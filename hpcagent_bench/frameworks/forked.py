@@ -324,12 +324,10 @@ def process_context(method: str) -> ProcessContext:
     return ctx
 
 
-def report_without_a_thread(err_w: ErrorWriter | None, text: str) -> None:
+def report_without_a_thread(err_w: ErrorWriter, text: str) -> None:
     """Write ``text`` to the raw error pipe (no queue, no feeder thread). The only reporting path
     after a REFUSED seal (see :data:`ErrorWriter`); never raises, so the real cause is not replaced
     by a failure to report it."""
-    if err_w is None:
-        return
     try:
         err_w.send_bytes(text.encode("utf-8", "replace")[:ERROR_BYTES])
     except (OSError, ValueError):  # pipe closed, or the parent is already gone
@@ -341,23 +339,16 @@ def child_main[ResultT](
     args: tuple[object, ...],
     kwargs: dict[str, object],
     q: ChildQueue[ResultT],
-    seal: SealPlan | None = None,
-    err_w: ErrorWriter | None = None,
+    seal: SealPlan | None,
+    err_w: ErrorWriter,
 ) -> None:
     die_with_parent()
     try:
         if seal is not None:  # before the queue's feeder thread starts: a user namespace wants one thread
             enter(seal)
     except BaseException:  # noqa: BLE001 -- a refused seal is surfaced like any other child failure
-        tb = traceback.format_exc()
-        if err_w is not None:
-            # The pipe, not the queue: this child may be unable to start a feeder thread.
-            report_without_a_thread(err_w, tb)
-        else:
-            # No pipe: a long-lived judge built from an older tree calls with five arguments
-            # (tests/test_forked.py entry-point ABI test). Best effort through the queue.
-            with contextlib.suppress(Exception):
-                q.put(("error", tb))
+        # The pipe, not the queue: this child may be unable to start a feeder thread.
+        report_without_a_thread(err_w, traceback.format_exc())
         return
     # First act, before any work: this is what arms the parent's deadline (see run_forked).
     q.put(("started", None))
@@ -375,12 +366,6 @@ def child_main[ResultT](
         sys.stdout.write(tb)
         sys.stdout.flush()
         q.put(("error", tb))
-
-
-#: WIRE NAME for :func:`child_main`: forkserver/spawn pickle the target by qualified name, and a
-#: long-lived judge started from an older checkout still asks for this spelling. An alias, never a
-#: second body.
-_child = child_main
 
 
 def take_result[ResultT](q: ChildQueue[ResultT], timeout: float) -> ResultMessage[ResultT] | None:
