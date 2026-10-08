@@ -112,8 +112,9 @@ GRADE_CPUS="${GRADE_CPUS:-$(detect_cores_per_socket)}"
 # Judges per NODE. GRADE_CPUS is already cores-per-SOCKET, so one judge per socket is what makes
 # a judge node fully used: at --ntasks-per-node=1 a judge claimed GRADE_CPUS of the node's cores
 # and the other sockets sat idle, which is why a setup needed a dozen judge nodes to keep 40 agents
-# fed. Each task binds one socket (--cpus-per-task=GRADE_CPUS --hint=nomultithread), so the four
-# do not share cores and a grade is timed at the same width whichever judge ran it.
+# fed. Each task binds one socket (--cpus-per-task=GRADE_CPUS --hint=nomultithread) and that socket's NUMA
+# memory (--mem-bind=local), so the four do not share cores or memory and a grade is timed at the same
+# width whichever judge ran it.
 detect_sockets() {
     local n
     n="$(lscpu -p=SOCKET 2>/dev/null | grep -v '^#' | sort -u | wc -l)" || true
@@ -631,9 +632,9 @@ run_judge_node() {
     # Submissions run as children of this process and inherit the variable, so grading happens at
     # the SAME width every time instead of following whatever the allocation handed out. Children
     # spawned through native_call re-derive it from their own affinity mask, which is this.
+    # No OMP_PROC_BIND/OMP_PLACES here: libgomp loads with numpy and would pin this process to ONE core,
+    # which every graded child inherits; native_call binds inside the child instead.
     export OMP_NUM_THREADS="${GRADE_CPUS}"
-    export OMP_PROC_BIND="${OMP_PROC_BIND:-close}"
-    export OMP_PLACES="${OMP_PLACES:-cores}"
     export WEBSEARCH_LLM_BASE_URL="${VLLM_BASE_URL}"
     export WEBSEARCH_LLM_MODEL="${VLLM_SERVED_MODEL:-hpcagent-bench-vllm}"
     export WEBSEARCH_LLM_API_KEY="${VLLM_API_KEY:-EMPTY}"
@@ -1177,7 +1178,7 @@ role_srun() {
         srun_args=(--nodes="${nodes}" --ntasks="$((nodes * JUDGES_PER_NODE))"
             --ntasks-per-node="${JUDGES_PER_NODE}" --nodelist="${nodelist}" --exclusive
             --kill-on-bad-exit=1 --export="${export_spec}"
-            --cpus-per-task="${GRADE_CPUS}" --hint=nomultithread)
+            --cpus-per-task="${GRADE_CPUS}" --hint=nomultithread --mem-bind=local)
     else
         # --exclusive gives the JOB the node; it does not give the STEP the node's CPUs. An srun
         # step without --cpus-per-task claims ONE core (plus SMT sibling) for all workers, and
