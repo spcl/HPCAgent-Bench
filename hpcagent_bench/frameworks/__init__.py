@@ -40,6 +40,7 @@ _LAZY_EXPORTS: dict[str, str] = {
     "tolerance_band": "test",
     "tolerance_datatype": "test",
     "tolerances_for": "test",
+    "kernel_tolerances": "test",
     "DACE_PIPELINES": "dace_framework",
     "DEFAULT_PIPELINES": "dace_framework",
     "PIPELINES_BY_NAME": "dace_framework",
