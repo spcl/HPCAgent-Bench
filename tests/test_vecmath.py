@@ -58,7 +58,7 @@ def compile_object(tmp_path, source: str, suffix: str, exe: str, baseline: str, 
     src.write_text(source)
     obj = tmp_path / f"probe{suffix}.o"
     cmd = [exe, *baseline.split(), *extra, "-c", str(src), "-o", str(obj)]
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
     assert proc.returncode == 0, f"compile failed:\n$ {' '.join(cmd)}\n{proc.stderr}"
     return obj
 
@@ -209,7 +209,8 @@ def test_gcc_vectorizes_libm_at_the_baseline(tmp_path) -> None:
     obj = compile_object(tmp_path, C_LIBM_LOOP, ".c", "gcc", flags.CPU_BASELINE_GCC, languages.std_flag("c"))
     calls = libmvec_calls(obj)
     assert calls, "gcc emitted NO libmvec calls at CPU_BASELINE_GCC -- the vecmath.h -include is not reaching it"
-    assert any("_exp" in s for s in calls) and any("_log" in s for s in calls), f"got {sorted(calls)}"
+    assert any("_exp" in s for s in calls), f"got {sorted(calls)}"
+    assert any("_log" in s for s in calls), f"got {sorted(calls)}"
 
 
 @LINUX_ONLY
@@ -257,7 +258,7 @@ def test_the_fortran_baseline_compiles_without_warnings(tmp_path) -> None:
         "-o",
         str(tmp_path / "warn.o"),
     ]
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
     assert proc.returncode == 0, proc.stderr
     assert "not for Fortran" not in proc.stderr, f"gfortran was handed a C-only flag:\n{proc.stderr}"
 
@@ -280,9 +281,9 @@ def test_the_header_does_not_leak_fast_math_into_libstdcxx(tmp_path) -> None:
         "int main() { return 0; }\n"
     )
     base = ["g++", languages.std_flag("cpp"), "-fopenmp", "-fsyntax-only", str(probe)]
-    clean = subprocess.run(base, capture_output=True, text=True)
+    clean = subprocess.run(base, capture_output=True, text=True, check=False)
     assert clean.returncode == 0, f"vecmath.h leaked __FAST_MATH__ into libstdc++:\n{clean.stderr}"
-    poisoned = subprocess.run([*base, "-ffast-math"], capture_output=True, text=True)
+    poisoned = subprocess.run([*base, "-ffast-math"], capture_output=True, text=True, check=False)
     assert poisoned.returncode != 0, "probe is vacuous: it does not even detect a real -ffast-math"
 
 

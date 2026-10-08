@@ -42,7 +42,8 @@ def desugared(body: str, dtype: str = "float64", backend: str = "dace") -> str:
 def test_a_float_axis_reduction_stays_a_call_for_dace(body: str, kept: str) -> None:
     """Kept as the numpy FUNCTION: DaCe's ``ndarray.max``/``min`` methods take no ``axis`` (vgg16)."""
     out = desugared(body)
-    assert kept in out and "__rdo" not in out, out
+    assert kept in out, out
+    assert "__rdo" not in out, out
 
 
 @pytest.mark.parametrize(

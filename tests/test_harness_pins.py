@@ -202,7 +202,8 @@ def test_the_venv_install_and_firewall_loops_cover_every_python_harness(dockerfi
     assert "COPY pyproject.toml uv.lock /opt/hpcagent-bench/" in text
     assert '--package hpcagent-agent --group "harness-${venv}"' in text
     loops = [loop.split() for loop in re.findall(r"for venv in ([^;]+); do", text)]
-    assert len(loops) >= 2 and all(sorted(loop) == sorted(PYTHON_HARNESSES) for loop in loops), loops
+    assert len(loops) >= 2, loops
+    assert all(sorted(loop) == sorted(PYTHON_HARNESSES) for loop in loops), loops
 
 
 @pytest.mark.parametrize("name", sorted(PYTHON_HARNESSES))
@@ -316,7 +317,8 @@ def test_a_missing_interpreter_fails_the_runtime_check_by_its_path() -> None:
     ok, note = verify.have_harness_runtime("miniswe")
     expected = verify.HARNESS_RUNTIMES["miniswe"][0]
     if not pathlib.Path(expected).is_file():
-        assert not ok and expected in note, note
+        assert not ok, note
+        assert expected in note, note
     else:
         assert ok, note
 

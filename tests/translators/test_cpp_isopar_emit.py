@@ -498,7 +498,8 @@ def test_body_calling_a_kernel_helper_stays_a_loop() -> None:
         kir = lower(parse_kernel(d / "k_numpy.py", d / "bi.json"))
         text = emit_cpp_isopar(kir, fn_name="k")
     # It really did survive as its own function, and it really does allocate.
-    assert "static double scratch(" in text and "malloc(" in text, text[-900:]
+    assert "static double scratch(" in text, text[-900:]
+    assert "malloc(" in text, text[-900:]
     # So the loop that CALLS it stays a loop. (The helper's own body still converts -- a call
     # there is an ordinary call site, not an element access function.)
     kernel = text[text.index("void k(") :]
@@ -689,5 +690,6 @@ def test_emitted_source_has_no_implicit_conversion(name, body, dtypes) -> None:
             ],
             capture_output=True,
             text=True,
+            check=False,
         )
     assert cc.returncode == 0, cc.stderr

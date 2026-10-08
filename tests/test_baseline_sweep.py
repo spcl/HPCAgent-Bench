@@ -343,7 +343,8 @@ def test_one_phase_of_a_multi_task_step_must_be_named(tmp_path: pathlib.Path, mo
         check=False,
         env={**os.environ, "SLURM_NTASKS": "4", "SLURM_PROCID": "1"},
     )
-    assert code.returncode != 0 and "run --phase begin" in code.stderr, code.stderr
+    assert code.returncode != 0, code.stderr
+    assert "run --phase begin" in code.stderr, code.stderr
 
 
 def test_a_device_column_with_no_gpu_behind_it_says_so(

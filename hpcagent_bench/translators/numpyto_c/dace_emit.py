@@ -1038,10 +1038,11 @@ def stored_through(root: ast.AST, name: str) -> bool:
             targets = [target for target in node.targets if isinstance(target, ast.Subscript)]
         else:
             continue
-        for target in targets:
-            while isinstance(target, ast.Subscript):
-                target = target.value
-            if isinstance(target, ast.Name) and target.id == name:
+        for written in targets:
+            base = written
+            while isinstance(base, ast.Subscript):
+                base = base.value
+            if isinstance(base, ast.Name) and base.id == name:
                 return True
     return False
 
@@ -1471,13 +1472,13 @@ def uniquify_nested_loop_targets(fn_ast: ast.FunctionDef) -> None:
                 continue
             inner = set(enclosing)
             for old in for_target_names(child):
+                bound = old
                 if old in enclosing and not read_outside(fn_ast, child, old):
                     stem = old.lstrip("_") or "it"
-                    new = next(f"{stem}_nested{k}" for k in itertools.count(1) if f"{stem}_nested{k}" not in taken)
-                    taken.add(new)
-                    rename(child, old, new)
-                    old = new
-                inner.add(old)
+                    bound = next(f"{stem}_nested{k}" for k in itertools.count(1) if f"{stem}_nested{k}" not in taken)
+                    taken.add(bound)
+                    rename(child, old, bound)
+                inner.add(bound)
             visit(child, inner)
 
     visit(fn_ast, set())
@@ -5104,8 +5105,8 @@ def transitive_rename(mapping: dict[str, str]) -> dict[str, str]:
     fact just retired -- as a free variable no ``dc.symbol`` declares.
     """
     resolved: dict[str, str] = {}
-    for name in mapping:
-        target = mapping[name]
+    for name, first in mapping.items():
+        target = first
         seen = {name}
         while target in mapping and target not in seen:
             seen.add(target)
@@ -5223,7 +5224,7 @@ def declared_extents(rendered: RenderedProgram) -> list[str]:
     """Every per-dimension extent expression in the program's parameter annotations."""
     out: list[str] = []
     for param in rendered.params:
-        unused, unused, annotation = param.partition(":")
+        annotation = param.partition(":")[2]
         opened = annotation.find("[")
         if opened < 0 or not annotation.rstrip().endswith("]"):
             continue  # a scalar parameter declares no extent
@@ -5255,7 +5256,11 @@ def extent_pins(extent: str, symbol: str) -> bool:
     annotation and constrains nothing, so dace has no equation to solve and reports the argument as
     missing. Folded rather than compared verbatim, because the cancellation is what has to be seen.
     """
-    substituted = [IDENT_RE.sub(lambda m: value if m.group() == symbol else m.group(), extent) for value in ("1", "2")]
+
+    def substitute(value: str) -> str:
+        return IDENT_RE.sub(lambda m: value if m.group() == symbol else m.group(), extent)
+
+    substituted = [substitute(value) for value in ("1", "2")]
     return fold_shape_expr(substituted[0]) != fold_shape_expr(substituted[1])
 
 

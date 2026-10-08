@@ -77,7 +77,8 @@ def table() -> dict[str, str]:
         if not line or line.startswith("#"):
             continue
         key, sep, value = line.partition("=")
-        assert sep and (key.startswith("GPU_ARCH_") or key == "AMD_GPU_TARGETS"), f"not a table row: {line!r}"
+        assert sep, f"not a table row: {line!r}"
+        assert key.startswith("GPU_ARCH_") or key == "AMD_GPU_TARGETS", f"not a table row: {line!r}"
         if key == "AMD_GPU_TARGETS":
             continue
         assert key.removeprefix("GPU_ARCH_") not in rows, f"partition named twice: {line!r}"
@@ -136,7 +137,8 @@ def test_every_amd_image_builds_on_exactly_one_partition_the_table_names() -> No
     rows = table()
     for image in AMD_IMAGES:
         partitions = build_partitions(image)
-        assert len(partitions) == 1 and partitions[0] in rows, (image, partitions)
+        assert len(partitions) == 1, (image, partitions)
+        assert partitions[0] in rows, (image, partitions)
     for image in NOT_AMD:
         assert "ROCM_ARCH" not in (CE / image / "Dockerfile").read_text(encoding="utf-8"), image
 
@@ -230,7 +232,8 @@ def test_the_runtime_check_passes_when_the_gpu_is_the_partition_arch_and_one_of_
     assert done.returncode == 0, done.stderr
     assert f"the-edf on mi200: {arch}" in done.stdout
     calls = (tmp_path / "srun.log").read_text(encoding="utf-8").splitlines()
-    assert len(calls) == 2 and all("--overlap" in call and "--environment=the-edf" in call for call in calls), calls
+    assert len(calls) == 2, calls
+    assert all("--overlap" in call and "--environment=the-edf" in call for call in calls), calls
 
 
 @pytest.mark.parametrize("wrong", ["stamp", "gpu"])

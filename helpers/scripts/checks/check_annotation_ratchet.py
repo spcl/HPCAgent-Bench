@@ -40,7 +40,9 @@ def in_scope(rel: str) -> bool:
 def violations(paths: list[str]) -> collections.Counter[str]:
     """``{repo-relative path: ANN violation count}`` from ruff itself, over ``paths``."""
     command = [sys.executable, "-m", "ruff", "check", "--select", "ANN", "--output-format", "json", "--no-cache"]
-    proc = subprocess.run([*command, "--exclude", EXCLUDE, *paths], cwd=REPO, capture_output=True, text=True)
+    proc = subprocess.run(
+        [*command, "--exclude", EXCLUDE, *paths], cwd=REPO, capture_output=True, text=True, check=False
+    )
     if proc.returncode not in (0, 1) or not proc.stdout.strip():  # 1 = findings; "No module named ruff" is 1 too
         raise RuntimeError(f"ruff could not run (rc={proc.returncode}):\n{proc.stderr[-2000:]}")
     return collections.Counter(

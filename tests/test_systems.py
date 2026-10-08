@@ -228,7 +228,8 @@ def test_a_partition_picks_the_system_of_the_cluster_that_serves_it(tmp_path: pa
     )
     assert dry_run(tmp_path, script, SBATCH_PARTITION="mi200")[0] == "beverin-mi200"
     system, command = dry_run(tmp_path, "--system", "beverin", "--partition", "mi200", script)
-    assert system == "beverin" and {"--cpus-per-task=24", "--gpus-per-node=4"} <= set(command), command
+    assert system == "beverin", command
+    assert {"--cpus-per-task=24", "--gpus-per-node=4"} <= set(command), command
 
 
 def test_an_image_job_runs_on_its_roles_partition_unless_a_flag_or_a_system_names_another(
@@ -240,7 +241,9 @@ def test_an_image_job_runs_on_its_roles_partition_unless_a_flag_or_a_system_name
         ["sbatch", "--partition=mi300", "--account=proj", "--gpus-per-node=4", "--nice=100", build, "vllm"],
     )
     system, command = dry_run(tmp_path, "containers/images/verify_image.sbatch", ROLE="judge-mi200")
-    assert system == "beverin-mi200" and {"--partition=mi200", "--gpus-per-node=8"} <= set(command), command
+    assert system == "beverin-mi200", command
+    assert {"--partition=mi200", "--gpus-per-node=8"} <= set(command), command
     assert "--partition=p" in dry_run(tmp_path, "--partition", "p", build, "vllm")[1]
     system, command = dry_run(tmp_path, "--system", "beverin-mi200", build, "judge-agent-amd")
-    assert system == "beverin-mi200" and "--partition=mi200" in command, command
+    assert system == "beverin-mi200", command
+    assert "--partition=mi200" in command, command

@@ -193,7 +193,8 @@ def test_a_gang_runs_under_the_container_engine_only_and_says_why() -> None:
     for runtime in RUNTIMES:
         done = gang_supported(runtime)
         assert done.returncode == 1, runtime
-        assert "needs CONTAINER_RUNTIME=ce" in done.stderr and "fabric hooks" in done.stderr, done.stderr
+        assert "needs CONTAINER_RUNTIME=ce" in done.stderr, done.stderr
+        assert "fabric hooks" in done.stderr, done.stderr
 
 
 def test_the_default_runtime_is_the_container_engine() -> None:

@@ -18,4 +18,5 @@ def test_the_tag_has_a_frozen_version() -> None:
     """``record_tag_version`` stamps this on every mlscale setup, so it must resolve without a
     best-effort fallback."""
     version = tags.version(TAG)
-    assert version and version.strip('"') != "", version
+    assert version, version
+    assert version.strip('"') != "", version

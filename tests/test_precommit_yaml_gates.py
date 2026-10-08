@@ -160,6 +160,7 @@ def test_manifest_hook_imports_the_checkout_through_run_hook() -> None:
         env=env,
         capture_output=True,
         text=True,
+        check=False,
     )
     assert "ModuleNotFoundError" not in proc.stderr, proc.stderr
     assert proc.returncode == 0, proc.stderr

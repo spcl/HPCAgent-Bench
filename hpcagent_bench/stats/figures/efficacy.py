@@ -2418,7 +2418,6 @@ def figure_dot_row(
     below says what they cost. Columns are as wide as they have categories (:func:`dot_row_widths`).
     ``comparators[i]`` are drawn in column ``i`` beside its models (:func:`with_comparators`).
     """
-    n = len(panels)
     columns = dot_columns(
         panels, references, control_names, differences, placeholders, over, pending,
         card,

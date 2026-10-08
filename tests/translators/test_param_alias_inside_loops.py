@@ -36,7 +36,8 @@ def test_an_alias_bound_inside_a_loop_is_folded_onto_the_parameter() -> None:
         """,
         ["q", "nsteps"],
     )
-    assert "f = q" not in got and "f[" not in got, got
+    assert "f = q" not in got, got
+    assert "f[" not in got, got
     assert "q[0, 0] = q[5, 0]" in got, got
 
 
@@ -49,4 +50,5 @@ def test_an_alias_rebound_in_the_loop_is_left_alone() -> None:
                 f[0, 0] = 1.0
         """
     got = folded(src, ["q", "nsteps"])
-    assert "f = q" in got and "f = f * 2.0" in got, got
+    assert "f = q" in got, got
+    assert "f = f * 2.0" in got, got

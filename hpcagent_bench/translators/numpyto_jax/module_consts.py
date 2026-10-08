@@ -82,7 +82,7 @@ def module_const_values(tree: ast.Module, func_name: str) -> dict:
             continue
         tgt = s.targets[0]
         try:
-            val = eval(compile(ast.Expression(body=s.value), "<const>", "eval"), {"__builtins__": {}}, dict(env))
+            val = eval(compile(ast.Expression(body=s.value), "<const>", "eval"), {"__builtins__": {}}, dict(env))  # noqa: S307 -- folds an expression over known constants with no builtins
         except Exception:  # noqa: BLE001, S112 -- references np / an array / an unknown name
             continue
         if isinstance(tgt, ast.Name):

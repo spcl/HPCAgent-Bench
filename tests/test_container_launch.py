@@ -32,7 +32,7 @@ def test_apptainer_runs_unprivileged() -> None:
     if shutil.which("apptainer") is None:
         pytest.skip("apptainer not installed")
     assert os.geteuid() != 0, "this test asserts the SUDOLESS path (run as non-root)"
-    r = subprocess.run(["apptainer", "--version"], capture_output=True, text=True)
+    r = subprocess.run(["apptainer", "--version"], capture_output=True, text=True, check=False)
     assert r.returncode == 0
     assert "version" in r.stdout.lower()
 
@@ -94,7 +94,7 @@ def _exec(sif, *cmd, env=None, background: bool = False, log=None):
             return subprocess.Popen(argv, stdout=sink, stderr=subprocess.STDOUT, start_new_session=True)
         finally:
             sink.close()  # the child holds its own dup; the parent's copy must not leak
-    return subprocess.run(argv, capture_output=True, text=True, timeout=600)
+    return subprocess.run(argv, capture_output=True, text=True, timeout=600, check=False)
 
 
 # The agent container optimizes a reduction kernel to OpenBLAS, then score+submit via the tools client.

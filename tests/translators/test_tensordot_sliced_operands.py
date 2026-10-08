@@ -140,7 +140,8 @@ def test_a_negative_contraction_axis_resolves_against_the_rank() -> None:
     """
     call = ast.parse("np.tensordot(x, w, axes=([-1], [0]))", mode="eval").body
     ext = iter_extent_of(call, {"x": ("N", "C"), "w": ("C", "M")})
-    assert ext is not None and len(ext) == 2, ext
+    assert ext is not None, ext
+    assert len(ext) == 2, ext
     assert [ast.unparse(e) for e in ext] == ["N", "M"], [ast.unparse(e) for e in ext]
 
 

@@ -236,7 +236,8 @@ def test_speedup_yticks_stay_within_the_tick_budget_and_always_carry_1x(low: flo
     ticks = pk.speedup_yticks([pk.KernelCell("a", (low,)), pk.KernelCell("b", (high,))])
     assert len(ticks) <= pk.MAX_SPEEDUP_TICKS, ticks
     assert 1.0 in ticks, ticks
-    assert ticks[0] <= low and ticks[-1] >= high, ticks
+    assert ticks[0] <= low, ticks
+    assert ticks[-1] >= high, ticks
 
 
 def test_kernel_medians_leave_out_undelivered_pending_and_flagged_cells() -> None:
@@ -502,7 +503,8 @@ def test_token_limits_hold_every_value_and_at_least_two_labelled_ticks(values: t
     """The token axis is pinned before any mark is drawn, so its limits have to hold every value;
     and a window labelling one tick (or none) leaves nothing to read a value against."""
     low, high = pk.token_limits([pk.KernelCell(f"k{i}", (v,)) for i, v in enumerate(values)])
-    assert low < min(values) and max(values) < high, (low, high)
+    assert low < min(values), (low, high)
+    assert max(values) < high, (low, high)
     assert len(pk.grid_125(low, high)) >= 2, (low, high)
 
 

@@ -461,7 +461,8 @@ def test_a_library_declared_on_one_runtime_links_in_that_family_only() -> None:
     assert omp_context.declared_refusal("magma", "libomp", omp_context.LLVM) == ""
     for context in (omp_context.GNU, omp_context.NVHPC, ""):
         why = omp_context.declared_refusal("magma", "libomp", context)
-        assert "libomp alone" in why and "llvm OpenMP context only" in why, context
+        assert "libomp alone" in why, context
+        assert "llvm OpenMP context only" in why, context
 
 
 def test_every_declared_runtime_names_a_context_and_a_vendor() -> None:

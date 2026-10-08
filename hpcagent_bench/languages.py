@@ -28,7 +28,6 @@ This module owns the second edit plus the runtime helpers:
 import dataclasses
 import enum
 import functools
-import glob
 import logging
 import os
 import pathlib
@@ -879,11 +878,11 @@ def offload_probe(model: str, vendor: str, arch: str, *, run: bool) -> bool:
         cmd = [driver, *shlex.split(offload_flags(model, vendor, arch=arch)), str(src), "-o", str(exe)]
         env = toolchain_env()
         try:
-            if subprocess.run(cmd, capture_output=True, timeout=300, env=env).returncode != 0:
+            if subprocess.run(cmd, capture_output=True, timeout=300, env=env, check=False).returncode != 0:
                 return False
             if not run:
                 return True
-            done = subprocess.run([str(exe)], capture_output=True, timeout=120, env=env)
+            done = subprocess.run([str(exe)], capture_output=True, timeout=120, env=env, check=False)
         except subprocess.TimeoutExpired:
             return False
         return done.returncode == 0 and done.stdout.strip() == b"1"
@@ -996,8 +995,7 @@ def discover_variants(spec: BenchSpec) -> list[tuple[str, pathlib.Path]]:
     for lang, ext in LANG_EXT.items():
         if allowed is not None and lang not in allowed:
             continue
-        for src in sorted(backend.glob(f"{spec.short_name}_*_auto.{ext}")):
-            found.append((lang, src))
+        found.extend((lang, src) for src in sorted(backend.glob(f"{spec.short_name}_*_auto.{ext}")))
     found.sort(key=lambda t: (t[0], t[1].name))
     return found
 
@@ -1208,7 +1206,7 @@ def resolve_compiler(name: str) -> str | None:
         prefix = f"{cand}-"
         for directory in path_dirs:
             try:
-                entries = os.listdir(directory)
+                entries = [entry.name for entry in pathlib.Path(directory).iterdir()]
             except OSError:  # PATH entry does not exist / not a directory
                 continue
             for entry in entries:
@@ -1217,7 +1215,7 @@ def resolve_compiler(name: str) -> str | None:
                 suffix = entry[len(prefix) :]
                 if not suffix.isdigit():
                     continue
-                path = os.path.join(directory, entry)
+                path = str(pathlib.Path(directory, entry))
                 if not os.access(path, os.X_OK):
                     continue
                 version = int(suffix)
@@ -1240,7 +1238,7 @@ def driver_resolves(soname: str) -> bool:
     cc = resolve_compiler("gcc") or "gcc"
     probe = subprocess.run([cc, f"-print-file-name=lib{soname}.so"], capture_output=True, text=True, check=False)
     echoed = probe.stdout.strip()
-    return echoed not in ("", f"lib{soname}.so") and os.path.exists(echoed)
+    return echoed not in ("", f"lib{soname}.so") and pathlib.Path(echoed).exists()
 
 
 @functools.lru_cache(maxsize=None, typed=True)
@@ -1254,9 +1252,9 @@ def resolve_library_dir(soname: str) -> str | None:
     if driver_resolves(soname):
         return None  # no -L needed
     for pattern in LLVM_LIB_GLOBS:
-        for directory in sorted(glob.glob(pattern)):
-            if os.path.exists(os.path.join(directory, f"lib{soname}.so")):
-                return directory
+        for root in sorted(pathlib.Path("/").glob(pattern.lstrip("/"))):
+            if (root / f"lib{soname}.so").exists():
+                return str(root)
     # ldconfig lives in /sbin, not on every non-root PATH; no ldconfig means no cache to consult.
     for ldconfig in ("ldconfig", "/sbin/ldconfig", "/usr/sbin/ldconfig"):
         try:
@@ -1268,8 +1266,8 @@ def resolve_library_dir(soname: str) -> str | None:
         return None
     for line in cache.splitlines():
         _, _, path = line.partition("=> ")
-        directory = os.path.dirname(path.strip())
-        if directory and os.path.exists(os.path.join(directory, f"lib{soname}.so")):
+        directory = str(pathlib.Path(path.strip()).parent) if path.strip() else ""
+        if directory and pathlib.Path(directory, f"lib{soname}.so").exists():
             return directory
     return None
 
@@ -1380,7 +1378,12 @@ def _stdpar_backend_is_tbb(cc: str) -> bool:
     exe = resolve_compiler(cc) or cc
     try:
         r = subprocess.run(
-            [exe, "-x", "c++", "-E", "-"], input=probe, capture_output=True, text=True, timeout=STDPAR_PROBE_TIMEOUT_S
+            [exe, "-x", "c++", "-E", "-"],
+            input=probe,
+            capture_output=True,
+            text=True,
+            timeout=STDPAR_PROBE_TIMEOUT_S,
+            check=False,
         )
     except (OSError, subprocess.SubprocessError):
         return False
@@ -1448,13 +1451,17 @@ def driver_library_dir(cc: str, sonames: tuple[str, ...]) -> str:
     for soname in sonames:
         try:
             probe = subprocess.run(
-                [exe, f"-print-file-name={soname}"], capture_output=True, text=True, timeout=STDPAR_PROBE_TIMEOUT_S
+                [exe, f"-print-file-name={soname}"],
+                capture_output=True,
+                text=True,
+                timeout=STDPAR_PROBE_TIMEOUT_S,
+                check=False,
             )
         except (OSError, subprocess.TimeoutExpired):
             return ""
         answer = probe.stdout.strip()
         # A driver that cannot place the name echoes it back bare, so only an absolute hit counts.
-        if not answer or not os.path.isabs(answer) or not os.path.exists(answer):
+        if not answer or not pathlib.Path(answer).is_absolute() or not pathlib.Path(answer).exists():
             continue
         parent = str(pathlib.Path(answer).resolve().parent)
         return "" if parent in DEFAULT_LOADER_DIRS else parent
@@ -1466,7 +1473,7 @@ def driver_library_dir(cc: str, sonames: tuple[str, ...]) -> str:
         if not entry or entry in DEFAULT_LOADER_DIRS:
             continue
         for soname in sonames:
-            if os.path.exists(os.path.join(entry, soname)):
+            if pathlib.Path(entry, soname).exists():
                 return str(pathlib.Path(entry).resolve())
     return ""
 
@@ -1534,10 +1541,9 @@ def _veclib_accepted(cc: str, flag: str, lang: str) -> bool:
     suffix, source = probe
     exe = resolve_compiler(cc) or cc
     with tempfile.TemporaryDirectory() as tmp:
-        src = os.path.join(tmp, f"veclib_probe{suffix}")
-        with open(src, "w", encoding="ascii") as handle:
-            handle.write(source)
-        return probe_succeeds([exe, flag, "-c", src, "-o", os.path.join(tmp, "veclib_probe.o")])
+        src = pathlib.Path(tmp, f"veclib_probe{suffix}")
+        src.write_text(source, encoding="ascii")
+        return probe_succeeds([exe, flag, "-c", str(src), "-o", str(pathlib.Path(tmp, "veclib_probe.o"))])
 
 
 @functools.lru_cache(maxsize=None, typed=True)
@@ -1778,7 +1784,12 @@ def pkg_config_answer(pkgs: tuple[str, ...], what: str, context: str = "") -> tu
             env["PKG_CONFIG_PATH"] = search
     try:
         r = subprocess.run(
-            ["pkg-config", what, *pkgs], capture_output=True, text=True, timeout=STDPAR_PROBE_TIMEOUT_S, env=env
+            ["pkg-config", what, *pkgs],
+            capture_output=True,
+            text=True,
+            timeout=STDPAR_PROBE_TIMEOUT_S,
+            env=env,
+            check=False,
         )
     except (OSError, subprocess.SubprocessError):
         return None
@@ -1826,6 +1837,7 @@ def library_compiles(lang: str, compile_tokens: tuple[str, ...], header: str) ->
             stderr=subprocess.PIPE,
             text=True,
             timeout=STDPAR_PROBE_TIMEOUT_S,
+            check=False,
         )
     except (OSError, subprocess.SubprocessError):
         return False
@@ -2190,11 +2202,11 @@ def build_kernel_lib_commands(
     cmds: list[list[str]] = []
     objs: list[str] = []
     langs_present = set()
-    for lang, src in sources:
+    for lang, given in sources:
         if lang not in LANG_EXT:
             raise unknown_language(lang)
         block = forced if forced is not None else _compiler_for_lang(compilers, lang).block
-        src = pathlib.Path(src)
+        src = pathlib.Path(given)
         obj = build_dir / f"{src.name}.o"
         baseline = _resolve_baseline(block, mode)
         # BLAS on the C/C++ sources for the reason build_shared_lib_commands links it: the
@@ -2270,7 +2282,7 @@ def mpi_wrapper_flags(wrapper_cc: str) -> tuple[list[str], list[str]]:
     if exe is None:
         return [], []
     try:
-        proc = subprocess.run([exe, "-show"], capture_output=True, text=True, timeout=20)
+        proc = subprocess.run([exe, "-show"], capture_output=True, text=True, timeout=20, check=False)
     except (OSError, subprocess.SubprocessError):
         return [], []
     if proc.returncode != 0:
@@ -2296,7 +2308,7 @@ def mpich_wrapper_flags(wrappers: Sequence[str]) -> tuple[list[str], list[str]]:
     ``-lmpi`` resolves there; ``([], [])`` when none is."""
     for wrapper in wrappers:
         include, link = mpi_wrapper_flags(wrapper)
-        mpich = [t for t in link if t.startswith("-L") and os.path.exists(os.path.join(t[2:], MPICH_MARKER))]
+        mpich = [t for t in link if t.startswith("-L") and pathlib.Path(t[2:], MPICH_MARKER).exists()]
         if mpich:
             return include, mpich[:1] + [t for t in link if t != mpich[0]]
     return [], []
@@ -2350,9 +2362,9 @@ def build_mpi_executable_commands(
     cmds: list[list[str]] = []
     objs: list[str] = []
     langs_present = set()
-    for lang, src in sources:
+    for lang, given in sources:
         _, block = _compiler_for_lang(compilers, lang, mpi=True)
-        src = pathlib.Path(src)
+        src = pathlib.Path(given)
         obj = build_dir / f"{src.name}.o"
         subst = subst_map(
             cc_override.get(lang, str(block["cc"])),
@@ -2527,7 +2539,9 @@ def run_build_commands(
     for argv in cmds:
         log.append("$ " + " ".join(str(a) for a in argv))
         try:
-            proc = subprocess.run(seal.wrap(seal_plan, argv), cwd=str(cwd), capture_output=True, text=True, env=env)
+            proc = subprocess.run(
+                seal.wrap(seal_plan, argv), cwd=str(cwd), capture_output=True, text=True, env=env, check=False
+            )
         except OSError as e:  # compiler not installed (e.g. no gfortran/mpicc) -> scored failure
             log.append(f"{argv[0]}: {e}")
             return True, "\n".join(log)

@@ -70,7 +70,8 @@ def test_two_different_windows_on_one_name_are_left_alone() -> None:
     see -- so it declines rather than pick one."""
     src = "def f(x, nlev, flag):\n    w = slice(0, nlev)\n    if flag:\n        w = slice(1, nlev)\n    return x[w]\n"
     out = fold_(src)
-    assert "slice(0, nlev)" in out and "slice(1, nlev)" in out, out
+    assert "slice(0, nlev)" in out, out
+    assert "slice(1, nlev)" in out, out
 
 
 def test_a_name_used_outside_an_index_keeps_its_binding() -> None:

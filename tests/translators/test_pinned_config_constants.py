@@ -125,7 +125,9 @@ def test_a_narrowed_pinned_float_still_compiles_as_c23() -> None:
     d = pathlib.Path(tempfile.mkdtemp())
     src = d / "k.c"
     src.write_text(emit_c(apply_precision(kir_(), "float32"), fn_name="f"))
-    r = subprocess.run(["gcc", "-O2", "-std=c23", "-fsyntax-only", str(src)], capture_output=True, text=True)
+    r = subprocess.run(
+        ["gcc", "-O2", "-std=c23", "-fsyntax-only", str(src)], capture_output=True, text=True, check=False
+    )
     assert r.returncode == 0, r.stderr
 
 

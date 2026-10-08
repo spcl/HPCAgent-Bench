@@ -176,7 +176,7 @@ def test_every_leg_of_each_preset_binds_loopback_last_on_the_command_line(tmp_pa
     ]
     tp_flag, fraction_flag = LEG_FLAGS[ENGINE[preset]]
     assert f"{tp_flag} 2 {fraction_flag} 0.85" in argvs[1]
-    assert "0.0.0.0" not in LAUNCHER.read_text(encoding="utf-8")
+    assert "0.0.0.0" not in LAUNCHER.read_text(encoding="utf-8")  # noqa: S104 -- the address under test
 
 
 @pytest.mark.parametrize(

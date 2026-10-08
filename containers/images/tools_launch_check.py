@@ -32,7 +32,9 @@ def load_tool_registry(agent_dir: pathlib.Path) -> tuple[str, ...]:
     if not path.is_file():
         raise ToolLoadError(f"no tool registry {path}")
     environment = {key: value for key, value in os.environ.items() if key != "PYTHONSAFEPATH"}
-    done = subprocess.run([sys.executable, str(path), "--describe"], capture_output=True, text=True, env=environment)
+    done = subprocess.run(
+        [sys.executable, str(path), "--describe"], capture_output=True, text=True, env=environment, check=False
+    )
     if done.returncode != 0:
         raise ToolLoadError(f"{path} does not load in this image: {done.stderr.strip()[-500:]}")
     tools = json.loads(done.stdout).get("allowed_tools")

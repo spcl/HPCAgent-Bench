@@ -143,7 +143,8 @@ def install(monkeypatch: pytest.MonkeyPatch, lib: ScriptedPapi, *, slow_first_re
                 timing = timed_call(lambda: (time.sleep(slow_first_rep_s), lib.kernel()), [], lambda: None)
             else:
                 timing = timed_call(lib.kernel, [], lambda: None)
-            assert timing.ns >= 0 and timing.host_ns == timing.ns, timing
+            assert timing.ns >= 0, timing
+            assert timing.host_ns == timing.ns, timing
 
     monkeypatch.setattr(papi, "initialised", lambda: lib)
     monkeypatch.setattr(papi, "_call_native_impl", native_call)
@@ -186,7 +187,8 @@ def test_a_thread_that_came_and_went_between_the_reps_refuses_the_per_thread_rep
     install(monkeypatch, lib)
     monkeypatch.setattr(papi, "thread_ids", transient_worker(lib))
     report = per_thread()
-    assert report["cause"] == "threads_moved" and report["imbalance"] is None, report
+    assert report["cause"] == "threads_moved", report
+    assert report["imbalance"] is None, report
 
 
 def one_two_three_four(tid: int, calls: int) -> tuple[int, int]:
@@ -233,7 +235,8 @@ def test_every_counted_rep_reaches_the_native_call_as_a_rep_timing(monkeypatch: 
     monkeypatch.setattr(papi, "thread_ids", lambda: (os.getpid(), *WORKERS))
     row = count(reps=2, warmup=1)
     assert row["count"] == 10_000, row
-    assert len(seen) == 3 and all(isinstance(rep, RepTiming) for rep in seen), seen
+    assert len(seen) == 3, seen
+    assert all(isinstance(rep, RepTiming) for rep in seen), seen
 
 
 def test_a_summed_count_is_one_rep_s_delta_on_every_attached_thread(monkeypatch) -> None:
@@ -244,7 +247,8 @@ def test_a_summed_count_is_one_rep_s_delta_on_every_attached_thread(monkeypatch)
     monkeypatch.setattr(papi, "thread_ids", lambda: (os.getpid(), *WORKERS))
     row = count(reps=3)
     assert (row["count"], row["threads_counted"], row["scope"]) == (10_000, 4, "all_threads"), row
-    assert row["reps_counted"] == 3 and "fallback" not in row, row
+    assert row["reps_counted"] == 3, row
+    assert "fallback" not in row, row
 
 
 def test_a_refused_attach_counts_the_calling_thread_alone_and_says_why(monkeypatch) -> None:
@@ -255,7 +259,8 @@ def test_a_refused_attach_counts_the_calling_thread_alone_and_says_why(monkeypat
     monkeypatch.setattr(papi, "thread_ids", lambda: (os.getpid(), *WORKERS))
     row = count()
     assert (row["count"], row["threads_counted"], row["scope"]) == (1000, 1, "calling_thread"), row
-    assert "cannot attach to thread 101" in row["fallback"] and "simulated refusal" in row["fallback"], row
+    assert "cannot attach to thread 101" in row["fallback"], row
+    assert "simulated refusal" in row["fallback"], row
 
 
 def test_a_refused_attach_refuses_the_per_thread_report_by_cause(monkeypatch) -> None:
@@ -264,7 +269,8 @@ def test_a_refused_attach_refuses_the_per_thread_report_by_cause(monkeypatch) ->
     install(monkeypatch, lib)
     monkeypatch.setattr(papi, "thread_ids", lambda: (os.getpid(), *WORKERS))
     report = per_thread()
-    assert report["cause"] == "attach_refused" and report["threads"] == [], report
+    assert report["cause"] == "attach_refused", report
+    assert report["threads"] == [], report
     assert "simulated refusal" in report["missing"], report["missing"]
 
 

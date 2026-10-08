@@ -46,7 +46,7 @@ LOCK_FILES = frozenset({"uv.lock"})
 def staged_files() -> list[str]:
     """Return the repo's currently-staged file paths (added / copied / modified)."""
     out = subprocess.run(
-        ["git", "diff", "--cached", "--name-only", "--diff-filter=ACM"], capture_output=True, text=True
+        ["git", "diff", "--cached", "--name-only", "--diff-filter=ACM"], capture_output=True, text=True, check=False
     )
     if out.returncode != 0:
         return []

@@ -136,7 +136,8 @@ def test_main_unblocks_sigchld_before_dispatching(subcommand, monkeypatch) -> No
         assert main(argv) == 0
     finally:
         signal.pthread_sigmask(signal.SIG_SETMASK, saved)
-    assert seen and signal.SIGCHLD not in seen[0], f"{subcommand} dispatched with SIGCHLD still blocked"
+    assert seen, f"{subcommand} dispatched with SIGCHLD still blocked"
+    assert signal.SIGCHLD not in seen[0], f"{subcommand} dispatched with SIGCHLD still blocked"
 
 
 def test_run_benchmark_resolves_preset_and_forwards_flags(monkeypatch) -> None:

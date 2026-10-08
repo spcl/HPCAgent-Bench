@@ -422,4 +422,5 @@ def test_a_forked_child_starts_its_own_forkserver_when_its_parent_runs_one() -> 
     started.start()
     started.join()
     run = run_forked(run_under_forkserver, mp_context="fork", timeout=120)
-    assert run.ok and run.result is True, run.error
+    assert run.ok, run.error
+    assert run.result is True, run.error

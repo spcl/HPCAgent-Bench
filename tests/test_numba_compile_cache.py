@@ -56,7 +56,8 @@ def write_tree(tmp_path: pathlib.Path, name: str, source: str = MODULE) -> pathl
 def test_two_trees_holding_the_same_reference_share_one_copy(store_dir: pathlib.Path, tmp_path: pathlib.Path) -> None:
     first = disk_cache.shared_source(write_tree(tmp_path, "job1"))
     second = disk_cache.shared_source(write_tree(tmp_path, "job2"))
-    assert first == second and first.is_relative_to(store_dir), (first, second)
+    assert first == second, (first, second)
+    assert first.is_relative_to(store_dir), (first, second)
     assert first.read_text(encoding="utf-8") == MODULE
 
 

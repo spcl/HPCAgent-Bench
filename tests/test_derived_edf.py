@@ -107,7 +107,8 @@ def test_two_roles_get_two_files(tmp_path: pathlib.Path) -> None:
     judge, _ = run_derived_edf(tmp_path, "bench", edf_dir, role="judge")
     agent, _ = run_derived_edf(tmp_path, "bench", edf_dir, role="agent")
 
-    assert judge.returncode == 0 and agent.returncode == 0, judge.stderr + agent.stderr
+    assert judge.returncode == 0, judge.stderr + agent.stderr
+    assert agent.returncode == 0, judge.stderr + agent.stderr
     assert judge.stdout != agent.stdout
     assert pathlib.Path(judge.stdout).name == "bench.judge.toml"
     assert pathlib.Path(agent.stdout).name == "bench.agent.toml"
@@ -146,7 +147,8 @@ def test_the_mounts_already_in_the_edf_are_replaced_not_inherited(tmp_path: path
     judge, shared_dir = run_derived_edf(tmp_path, "bench", edf_dir, role="judge")
     agent, _ = run_derived_edf(tmp_path, "bench", edf_dir, role="agent")
 
-    assert judge.returncode == 0 and agent.returncode == 0, judge.stderr + agent.stderr
+    assert judge.returncode == 0, judge.stderr + agent.stderr
+    assert agent.returncode == 0, judge.stderr + agent.stderr
     for proc in (judge, agent):
         mounts = tomllib.loads(pathlib.Path(proc.stdout).read_text())["mounts"]
         assert f"{shared_dir}:/shared" == mounts[0], "the shared folder leads every role's block"

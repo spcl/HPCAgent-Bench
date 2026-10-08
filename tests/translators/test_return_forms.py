@@ -182,7 +182,8 @@ def test_tuple_return_promotes_both_into_the_abi() -> None:
         {"x": "(M, N)", "y": "(M, N)"},
         {"M": 3, "N": 4},
     )
-    assert "ret_arr0" in ptrs and "ret_arr1" in ptrs, ptrs
+    assert "ret_arr0" in ptrs, ptrs
+    assert "ret_arr1" in ptrs, ptrs
 
 
 def test_scalar_return_promotes_a_buffer_into_the_abi() -> None:

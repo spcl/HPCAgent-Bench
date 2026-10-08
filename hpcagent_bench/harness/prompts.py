@@ -455,7 +455,7 @@ def prompt_env(prompt_config: "PromptConfig | None" = None) -> jinja2.Environmen
     loader = RecordingLoader(loaders, annotate=prompt_config.debug, aliases=prompt_config.aliases())
     env = jinja2.Environment(
         loader=loader,
-        autoescape=False,
+        autoescape=False,  # noqa: S701 -- the prompt is plain text, not HTML
         trim_blocks=True,
         lstrip_blocks=True,
         keep_trailing_newline=True,

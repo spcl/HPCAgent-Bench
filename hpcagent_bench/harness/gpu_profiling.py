@@ -509,7 +509,7 @@ def nsys_stats(report: pathlib.Path, *, language: str, timeout: float) -> dict[s
     cmd = [nsys_check(language), "stats", "--format", "csv", "--force-export=true", "--output", "-"]
     for name in REPORTS:
         cmd += ["--report", name]
-    proc = subprocess.run([*cmd, str(report)], capture_output=True, text=True, timeout=timeout)
+    proc = subprocess.run([*cmd, str(report)], capture_output=True, text=True, timeout=timeout, check=False)
     sections = split_reports(proc.stdout)
     if not sections:
         detail = (proc.stderr or proc.stdout).strip()[-400:]
@@ -569,7 +569,7 @@ def rocm_agents() -> list[str]:
             "binary alone does not bring it). Install rocminfo/rocm-smi and put /opt/rocm/bin on PATH",
         )
     try:
-        proc = subprocess.run([exe], capture_output=True, text=True, timeout=ROCMINFO_TIMEOUT)
+        proc = subprocess.run([exe], capture_output=True, text=True, timeout=ROCMINFO_TIMEOUT, check=False)
     except subprocess.TimeoutExpired as wedged:
         raise GpuProfilerUnavailable(
             "timed_out", f"{ROCM_INFO} wedged past {ROCMINFO_TIMEOUT:g}s and was killed: {wedged.cmd}"

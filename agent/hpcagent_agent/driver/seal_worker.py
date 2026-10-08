@@ -479,7 +479,7 @@ def main(argv: Sequence[str]) -> int:
     environment.pop("IS_SANDBOX", None)
     stage = stage_two(int(args.uid), int(args.gid), command)
     try:
-        os.execvpe(stage[0], stage, environment)
+        os.execvpe(stage[0], stage, environment)  # noqa: S606 -- exec replaces this stage with the worker
     except OSError as exc:
         raise SystemExit(f"seal_worker: cannot exec {stage[0]!r}: {exc}") from exc
     return 0

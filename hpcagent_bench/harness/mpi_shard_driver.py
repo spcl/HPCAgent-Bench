@@ -529,7 +529,8 @@ def run_draw(
         poison_outputs(outputs),
         budget_s=None if budget is None else float(budget),
         slowest=lambda t: float(cart.allreduce(t, op=MPI.MAX)),
-        after_repeat=lambda: runs.append([shard.to("cpu", copy=True) for shard in outputs]),
+        # Runs during time_kernel, before the del below that F821 reads as making these undefined.
+        after_repeat=lambda: runs.append([shard.to("cpu", copy=True) for shard in outputs]),  # noqa: F821
     )
     mark_phase(out_path, rank, JUDGE_PHASE)
     cart.Barrier()

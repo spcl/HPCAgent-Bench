@@ -228,7 +228,8 @@ def test_the_linker_points_every_gnu_copy_at_the_compilers_and_leaves_the_llvm_s
     assert shim.resolve() == libomp
     assert not multilib.is_symlink()
     again = link_only(tmp_path)
-    assert again.returncode == 0 and again.stdout == "", "a second run changes nothing"
+    assert again.returncode == 0, "a second run changes nothing"
+    assert again.stdout == "", "a second run changes nothing"
 
 
 @pytest.mark.integration
@@ -267,7 +268,8 @@ def test_the_linker_refuses_a_copy_that_needs_a_newer_libgomp_than_the_compilers
 
     done = link_only(tmp_path)
 
-    assert done.returncode != 0 and "GOMP_99.0" in done.stderr, done.stdout + done.stderr
+    assert done.returncode != 0, done.stdout + done.stderr
+    assert "GOMP_99.0" in done.stderr, done.stdout + done.stderr
     assert not wheel.is_symlink(), "a copy that would break was replaced anyway"
 
 

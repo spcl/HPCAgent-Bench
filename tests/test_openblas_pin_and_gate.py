@@ -23,7 +23,8 @@ DOCKERFILES = ("judge-agent-amd", "judge-agent-cpu", "judge-agent-cuda")
 def test_the_image_builds_the_pinned_openblas_with_runtime_dispatch(image: str) -> None:
     docker = (IMAGES / image / "Dockerfile").read_text(encoding="utf-8")
     specs = re.findall(r"'  - (openblas[^']*)'", docker)
-    assert specs and specs[0].startswith("openblas@0.3.30"), specs
+    assert specs, specs
+    assert specs[0].startswith("openblas@0.3.30"), specs
     assert all(spec.startswith("openblas@0.3.30") for spec in specs), specs
 
 

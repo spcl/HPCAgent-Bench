@@ -158,11 +158,11 @@ def test_emits_valid_dc_program_with_symbols_dropped(short: str) -> None:
     for s in sym_names:
         if s in pinned:
             assert f"\n{s} = {pinned[s]!r}\n" in src, f"{short}: pinned {s} not emitted as a constant"
-            assert f"dc.symbol('{s}'" not in src and f"'{s}'," not in src, (
-                f"{short}: pinned {s} is also declared a dc.symbol"
-            )
+            assert f"dc.symbol('{s}'" not in src, f"{short}: pinned {s} is also declared a dc.symbol"
+            assert f"'{s}'," not in src, f"{short}: pinned {s} is also declared a dc.symbol"
             continue
-        assert f"'{s}'" in src and "dc.symbol" in src, f"{short}: symbol {s} not declared via dc.symbol"
+        assert f"'{s}'" in src, f"{short}: symbol {s} not declared via dc.symbol"
+        assert "dc.symbol" in src, f"{short}: symbol {s} not declared via dc.symbol"
     # The old spelling must be GONE from the program, or the rename covered the signature only.
     assert not (set(renames) & {n.id for n in ast.walk(fn) if isinstance(n, ast.Name)}), (
         f"{short}: renamed names still read in the body"
@@ -543,7 +543,8 @@ def test_gmres_workspace_allocation_carries_an_explicit_dtype_end_to_end() -> No
     is pinned here: the workspace is allocated at the symbolic shape, with a dtype."""
     unused, src = emit_("gmres")
     line = next(ln for ln in src.splitlines() if ln.strip().startswith("Q = np."))
-    assert "(N, m + 1)" in line and "dtype=" in line, f"allocation lost its shape or dtype: {line.strip()}"
+    assert "(N, m + 1)" in line, f"allocation lost its shape or dtype: {line.strip()}"
+    assert "dtype=" in line, f"allocation lost its shape or dtype: {line.strip()}"
 
 
 # Data-dependent workspace shapes: gmres carries body-computed dimensions       #
@@ -720,9 +721,8 @@ def test_mandelbrot_no_leaked_framework_dtype_token() -> None:
     ``np_complex`` into ``.astype(...)`` / ``dtype=`` args -- dace: 'Use of undefined
     variable np_float'. They must be rewritten to the dace globals the module binds."""
     unused, src = emit_("mandelbrot1")
-    assert "np_float" not in src and "np_complex" not in src, (
-        "mandelbrot1: a framework precision-global dtype token leaked into the dace module"
-    )
+    assert "np_float" not in src, "mandelbrot1: a framework precision-global dtype token leaked into the dace module"
+    assert "np_complex" not in src, "mandelbrot1: a framework precision-global dtype token leaked into the dace module"
     assert "dc_float" in src  # the dace precision global the module actually imports
 
 
@@ -1043,7 +1043,8 @@ def test_a_rename_of_a_promoted_extent_reuses_that_symbol_instead_of_minting_a_s
     # what matters is not which name wins but that ONE extent is left: both allocations must spell
     # the same thing, or dace is back to proving two names equal.
     shapes = [ast.unparse(shape_argument(node)) for node in ast.walk(ast.parse(out)) if shape_argument(node)]
-    assert len(shapes) == 2 and shapes[0] == shapes[1], shapes
+    assert len(shapes) == 2, shapes
+    assert shapes[0] == shapes[1], shapes
 
 
 @pytest.mark.parametrize(
@@ -1079,7 +1080,9 @@ def test_a_size_local_mutated_after_its_definition_is_neither_inlined_nor_promot
     over the counted range."""
     fn = ast.parse(src).body[0]
     out = ast.unparse(inline_symbol_aliases(fn, set(), {"a", "x"}))
-    assert "n = 0" in out and "np.zeros((n, n)" in out and "a[:n]" in out, (rebinding, out)
+    assert "n = 0" in out, (rebinding, out)
+    assert "np.zeros((n, n)" in out, (rebinding, out)
+    assert "a[:n]" in out, (rebinding, out)
     promoted = plan_size_promotion(fn, {"a", "x"})[0]
     assert "n" not in promoted, (rebinding, promoted)
 
@@ -1094,7 +1097,8 @@ def test_an_alias_of_a_size_rebound_after_it_keeps_its_own_name() -> None:
     )
     fn = ast.parse(src).body[0]
     out = ast.unparse(inline_symbol_aliases(fn, {"n0", "m", "nbase"}, {"a", "n0", "m"}))
-    assert "nb1 = nbase" in out and "range(nb1, nbase)" in out, out
+    assert "nb1 = nbase" in out, out
+    assert "range(nb1, nbase)" in out, out
 
 
 def test_a_use_of_a_size_alias_before_its_source_is_rebound_still_gets_spliced() -> None:
@@ -1109,7 +1113,8 @@ def test_a_use_of_a_size_alias_before_its_source_is_rebound_still_gets_spliced()
     fn = ast.parse(src).body[0]
     out = ast.unparse(inline_symbol_aliases(fn, {"n0", "m", "nbase"}, {"a", "n0", "m"}))
     assert "a[nbase:m]" in out, out
-    assert "nb1 = nbase" in out and "range(nb1, nbase)" in out, out
+    assert "nb1 = nbase" in out, out
+    assert "range(nb1, nbase)" in out, out
 
 
 def test_a_bare_alias_rebound_inside_a_loop_is_copied_rather_than_left_a_view() -> None:
@@ -1142,7 +1147,8 @@ def test_a_bare_alias_rebound_inside_a_loop_is_copied_rather_than_left_a_view() 
         outputs.append(out)
     assert np.array_equal(*outputs), rewritten
     bindings = [line.strip() for line in rewritten.splitlines() if line.strip().startswith("x = ")]
-    assert len(bindings) == 2 and all(b.startswith("x = np.copy(") for b in bindings), rewritten
+    assert len(bindings) == 2, rewritten
+    assert all(b.startswith("x = np.copy(") for b in bindings), rewritten
 
 
 def test_a_rebound_alias_of_a_symbol_is_not_copied() -> None:
@@ -1653,8 +1659,10 @@ def test_a_binding_nested_in_a_loop_that_alone_reaches_its_reads_gets_its_own_na
     )
     assert "np.copy" not in src, src
     assert "out[0, :n] = col[0, :]" in src, src
-    assert "col__v2 = a[:, :n]" in src and "out[1, :n] = col__v2[1, :]" in src, src
-    assert "col__v3 = a[:, :n]" in src and "out[1, :n] = out[1, :n] + col__v3[2, :]" in src, src
+    assert "col__v2 = a[:, :n]" in src, src
+    assert "out[1, :n] = col__v2[1, :]" in src, src
+    assert "col__v3 = a[:, :n]" in src, src
+    assert "out[1, :n] = out[1, :n] + col__v3[2, :]" in src, src
 
 
 def test_a_second_allocation_of_one_name_gets_its_own_name() -> None:
@@ -1842,7 +1850,8 @@ def test_a_minus_one_flatten_keeps_its_order_when_it_becomes_ravel() -> None:
     x = np.arange(24.0).reshape(2, 3, 4)
     got_a, got_b = scope["k"](x)
     want = x.reshape((-1,), order="F")
-    assert np.array_equal(got_a, want) and np.array_equal(got_b, want), out
+    assert np.array_equal(got_a, want), out
+    assert np.array_equal(got_b, want), out
 
 
 def test_a_ternary_between_a_real_and_a_complex_array_binds_both_branches_at_their_joined_dtype() -> None:
@@ -1997,10 +2006,12 @@ def test_scalar_used_only_as_a_body_extent_is_promoted_to_a_symbol() -> None:
         if isinstance(n, ast.FunctionDef) and any("program" in ast.unparse(d) for d in n.decorator_list)
     ]
     # The KERNEL program is last; a kept helper gets its own above it.
-    assert progs and progs[-1].name == kir.kernel_name, [p.name for p in progs]
+    assert progs, [p.name for p in progs]
+    assert progs[-1].name == kir.kernel_name, [p.name for p in progs]
     params = {a.arg for a in progs[-1].args.args}
     assert "nlevp1" not in params, "extent-valued scalar is still a program parameter"
-    assert "dc.symbol" in src and "'nlevp1'" in src, "nlevp1 is not declared a dc.symbol"
+    assert "dc.symbol" in src, "nlevp1 is not declared a dc.symbol"
+    assert "'nlevp1'" in src, "nlevp1 is not declared a dc.symbol"
     # It has to be the SAME symbol the body extent reads, not a second name for the extent.
     assert "nlevp1" in src.split("def ", 1)[1], "the promoted symbol is never used in the body"
     # A rebound name must NOT be promoted -- a dc.symbol is immutable, so that would be a program
@@ -2021,7 +2032,8 @@ def kernel_program(src: str, kernel_name: str) -> ast.FunctionDef:
         for n in ast.walk(ast.parse(src))
         if isinstance(n, ast.FunctionDef) and any("program" in ast.unparse(d) for d in n.decorator_list)
     ]
-    assert progs and progs[-1].name == kernel_name, [p.name for p in progs]
+    assert progs, [p.name for p in progs]
+    assert progs[-1].name == kernel_name, [p.name for p in progs]
     return progs[-1]
 
 
@@ -2119,7 +2131,8 @@ def test_scatter_add_accumulates_every_repeat_of_an_index() -> None:
     got = run_lowered(src, {"a": 1, "idx": 2, "v": 2}, a=a, idx=idx, v=v)
     want = np.zeros(3)
     np.add.at(want, idx, v)
-    assert np.array_equal(got, want) and got[0] == 5.0, f"repeats were dropped: {got}"
+    assert np.array_equal(got, want), f"repeats were dropped: {got}"
+    assert got[0] == 5.0, f"repeats were dropped: {got}"
 
 
 def test_searchsorted_is_a_binary_search_and_keeps_the_side_it_was_given() -> None:
@@ -2254,7 +2267,8 @@ def test_an_inlined_einsum_takes_the_result_dtype_of_all_its_operands() -> None:
         arrays=[SimpleNamespace(name=name, shape=shape, dtype=dtype) for name, (shape, dtype) in arrays.items()],
     )
     program = desugar_for_python_backend(src, kir, backend="dace")
-    assert "np.einsum" not in program and "vcb.dtype)" in program, program
+    assert "np.einsum" not in program, program
+    assert "vcb.dtype)" in program, program
     scope = {"np": np}
     run_source(program, scope)
     rng = np.random.default_rng(0)
@@ -2313,7 +2327,8 @@ def test_a_scatter_index_gathered_through_two_index_arrays_loops_over_one_broadc
     got = run_lowered(src, ranks, J=J, ia=ia, ib=ib, w=w, out=np.zeros(4))
     want = np.zeros(4)
     np.add.at(want, J[ia, ib, :], w)
-    assert np.array_equal(got, want) and got[2] == 5.0, f"{got} != {want}"
+    assert np.array_equal(got, want), f"{got} != {want}"
+    assert got[2] == 5.0, f"{got} != {want}"
 
 
 def test_a_scatter_through_an_index_expression_accumulates_every_repeat() -> None:
@@ -2327,7 +2342,8 @@ def test_a_scatter_through_an_index_expression_accumulates_every_repeat() -> Non
     got = run_lowered(src, ranks, a=np.zeros((3, 2)), idx=idx, v=v)
     want = np.zeros((3, 2))
     np.add.at(want[:, 1], idx.reshape((4,)), v.ravel() + 1.0)
-    assert np.array_equal(got, want) and got[0, 1] == 16.0, f"{got} != {want}"
+    assert np.array_equal(got, want), f"{got} != {want}"
+    assert got[0, 1] == 16.0, f"{got} != {want}"
 
 
 def test_a_gather_the_desugar_hoists_into_a_loop_stays_a_vector_so_its_searchsorted_is_lowered() -> None:

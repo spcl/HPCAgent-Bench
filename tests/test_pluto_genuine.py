@@ -396,7 +396,8 @@ def test_a_prelude_helper_the_kernel_calls_is_copied_into_the_device_half() -> N
         "\nstatic inline NPB_HD int64_t __npb_wrap("
     ), helpers
     copied = helpers.removeprefix(NPB_HD_GUARD)
-    assert "__device__" not in copied and "__npb_floordiv_i" not in copied, helpers
+    assert "__device__" not in copied, helpers
+    assert "__npb_floordiv_i" not in copied, helpers
     # The multi-line body is copied whole, to its matching brace.
     multi = ppcg_transform.device_helpers(prelude, "__npb_floordiv_i(a, b)")
     assert multi.rstrip().endswith("? q - 1 : q;\n}"), multi
@@ -1364,7 +1365,8 @@ def test_the_transform_publishes_from_a_scratch_dir_beside_the_scop(tmp_path, mo
 
     assert proc.returncode == 0, proc.stderr
     host, device = ppcg_transform.transformed_paths(scop, "cuda")
-    assert host.is_file() and device.is_file(), "the transform published nothing"
+    assert host.is_file(), "the transform published nothing"
+    assert device.is_file(), "the transform published nothing"
     assert scop.with_name(f"{scop.stem}_kernel.hu").is_file(), "the shared header was not published"
 
     scratch = pathlib.Path(record.read_text().strip())

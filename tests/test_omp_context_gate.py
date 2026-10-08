@@ -96,7 +96,8 @@ def test_the_llvm_context_maps_libomp_alone_while_clang_and_numbas_gomp_abi_pool
     if done.returncode == 3:
         # A synthetic context has no OpenBLAS variant of its own: on a host whose numpy runs on an OpenBLAS
         # that pins libgomp by RPATH (an image's gnu view), the gate must say so, naming both runtimes.
-        assert "libgomp" in done.stderr and "libomp" in done.stderr, done.stdout + done.stderr
+        assert "libgomp" in done.stderr, done.stdout + done.stderr
+        assert "libomp" in done.stderr, done.stdout + done.stderr
         return
     assert done.returncode == 0, done.stdout + done.stderr
     assert "clang: teams" in done.stdout
@@ -111,7 +112,8 @@ def test_the_gate_names_a_runtime_that_is_not_the_contexts_and_exits_3(tmp_path:
     other = tmp_path / "libother.so.1"
     other.write_bytes(b"")
     done = run_gate(tmp_path, "--context", "gnu", "--require", "gcc", "--no-numpy", "--expect-runtime", str(other))
-    assert done.returncode == 3 and "expected" in done.stderr, done.stdout + done.stderr
+    assert done.returncode == 3, done.stdout + done.stderr
+    assert "expected" in done.stderr, done.stdout + done.stderr
 
 
 @pytest.mark.integration

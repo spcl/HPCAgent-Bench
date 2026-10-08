@@ -79,7 +79,8 @@ def test_a_stored_output_set_comes_back_bitwise(store_dir: pathlib.Path) -> None
     hit = disk_cache.load_outputs(CODE, KEY)
     assert hit is not None
     for name, want in outputs().items():
-        assert hit[name].dtype == want.dtype and np.array_equal(hit[name], want), name
+        assert hit[name].dtype == want.dtype, name
+        assert np.array_equal(hit[name], want), name
 
 
 @pytest.mark.parametrize("dtype", ["bfloat16", "float8_e4m3fn", "float8_e5m2"])
@@ -473,7 +474,8 @@ def test_a_probe_entry_round_trips_masks_and_overrides(store_dir: pathlib.Path) 
     assert overrides == probe[1]
     assert masks.keys() == probe[0].keys()
     for name, want in probe[0].items():
-        assert masks[name].dtype == np.bool_ and np.array_equal(masks[name], want), name
+        assert masks[name].dtype == np.bool_, name
+        assert np.array_equal(masks[name], want), name
 
 
 @pytest.fixture(name="probe_scope")

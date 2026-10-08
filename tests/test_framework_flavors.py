@@ -111,7 +111,8 @@ def test_arch_families_share_one_class() -> None:
         if name in parents:
             assert meta.get("flavor") is None, name
         else:
-            assert meta["column"] in parents and len(meta["pipelines"]) == 1, name
+            assert meta["column"] in parents, name
+            assert len(meta["pipelines"]) == 1, name
     assert framework_flavors("tvm") == ["tvm", "tvm_cpu"]
     assert {type(generate_framework(n)).__name__ for n in framework_flavors("dace")} == {"DaceFramework"}
     assert {type(generate_framework(n)).__name__ for n in framework_flavors("tvm")} == {"TVMFramework"}
@@ -144,7 +145,8 @@ def test_every_framework_resolves_to_its_adapter_class_and_package_export() -> N
     assert set(framework_bases()) == set(BASE_CLASS_NAMES)
     for name, meta in FRAMEWORKS.entries.items():
         cls = framework_class(name)
-        assert issubclass(cls, Framework) and cls.__name__ == BASE_CLASS_NAMES[meta["base"]], name
+        assert issubclass(cls, Framework), name
+        assert cls.__name__ == BASE_CLASS_NAMES[meta["base"]], name
         assert getattr(frameworks, cls.__name__) is cls
         assert cls.__name__ in frameworks.__all__
 

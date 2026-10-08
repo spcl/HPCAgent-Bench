@@ -85,7 +85,8 @@ def test_registry_fields_are_populated_and_from_the_declared_vocabularies() -> N
         assert entry.kind in _KINDS, entry
         assert entry.component in _COMPONENTS, entry
         assert entry.severity in _SEVERITIES, entry
-        assert entry.symptom.strip() and entry.repro.strip(), entry
+        assert entry.symptom.strip(), entry
+        assert entry.repro.strip(), entry
         # ``upstream`` is a tracker URL or one of the two placeholders; never blank.
         assert entry.upstream in _UPSTREAMS or entry.upstream.startswith("http"), entry
         if entry.kind == "caveat":

@@ -1019,7 +1019,8 @@ def test_lowerings_size_their_temps_from_the_operands_not_a_fixed_width() -> Non
     hout = desugar_for_python_backend(
         hsrc, py_kir("k", hsrc, [("r", "float64", ("N",)), ("h", "int64", ("B",))], [], ["r", "h"])
     )
-    assert "np.int64" in hout and "np.float64)" not in hout, f"unweighted counts are not int64:\n{hout}"
+    assert "np.int64" in hout, f"unweighted counts are not int64:\n{hout}"
+    assert "np.float64)" not in hout, f"unweighted counts are not int64:\n{hout}"
     wsrc = "def k(r, w, h):\n    h[:] = np.histogram(r, 8, weights=w)[0]\n"
     wout = desugar_for_python_backend(
         wsrc,
@@ -1075,7 +1076,8 @@ def test_fft_desugar_phase_divisor_casts_to_transform_precision() -> None:
         # normalize, `z[k] = z[k] / N`, is a real dace top-level Div that already auto-casts --
         # only the PHASE's divisor, folded into np.exp()'s argument, hits the missing operator).
         exp_lines = [line for line in out.splitlines() if "np.exp(" in line]
-        assert exp_lines and all("/ __ft" not in line for line in exp_lines), (
+        assert exp_lines, f"{complex_dtype} kernel: uncast phase divisor in:\n{out}"
+        assert all("/ __ft" not in line for line in exp_lines), (
             f"{complex_dtype} kernel: uncast phase divisor in:\n{out}"
         )
 
@@ -1096,7 +1098,8 @@ def test_fft_desugar_fires_when_the_transform_is_one_operand_of_the_expression()
     arrays = [("g", "complex128", ("N", "N", "N")), ("out", "complex128", ("N", "N", "N"))]
     lowered = desugar_for_python_backend(src, py_kir("k", src, arrays, ["nnr"], ["g", "out", "nnr"]), "numba")
     assert "np.fft" not in lowered, f"the wrapped transform was left verbatim:\n{lowered}"
-    assert "np.exp(" in lowered and "* nnr" in lowered, f"scaling lost by the hoist:\n{lowered}"
+    assert "np.exp(" in lowered, f"scaling lost by the hoist:\n{lowered}"
+    assert "* nnr" in lowered, f"scaling lost by the hoist:\n{lowered}"
 
     ns = {"np": np}
     run_source(lowered, ns, "<fftwrapped>")
@@ -1334,7 +1337,8 @@ def test_int_matmul_accumulates_in_the_operand_dtype_not_int64() -> None:
             ["mask", "rj", "out"],
         ),
     )
-    assert "rj.dtype" in bout and "mask.dtype" not in bout, f"bool operand decided the dtype:\n{bout}"
+    assert "rj.dtype" in bout, f"bool operand decided the dtype:\n{bout}"
+    assert "mask.dtype" not in bout, f"bool operand decided the dtype:\n{bout}"
 
 
 def test_reshape_batched_matmul_lowers() -> None:
@@ -1975,7 +1979,8 @@ def test_listcomp_over_constant_range_unrolls_a_runtime_body() -> None:
     out = desugar(src, [("x", *VEC), ("out", *VEC)], [], ["x", "out"], None)
     assert "for i in range" not in out, f"comprehension survived the unroll:\n{out}"
     assert out.count("np.sin(") == 3, f"body not copied once per element:\n{out}"
-    assert "np.sin(x[0])" in out and "np.sin(x[2])" in out, out
+    assert "np.sin(x[0])" in out, out
+    assert "np.sin(x[2])" in out, out
 
 
 def test_listcomp_iterable_resolved_through_the_const_name_table() -> None:
@@ -2019,7 +2024,8 @@ def test_ssa_rename_reads_track_the_version_in_scope() -> None:
     src = "def kernel(a, out):\n    t = a * 2.0\n    u = t + 1.0\n    t = np.sum(u)\n    out[0] = t + u[0]\n"
     out = desugar(src, [("a", *VEC), ("out", *VEC)], [], ["a", "out"], None)
     assert "u = t + 1.0" in out, f"a read before the rebinding was re-versioned:\n{out}"
-    assert "t__ssa1 = np.sum(u)" in out and "out[0] = t__ssa1 + u[0]" in out, out
+    assert "t__ssa1 = np.sum(u)" in out, out
+    assert "out[0] = t__ssa1 + u[0]" in out, out
 
 
 def test_ssa_rename_bails_when_a_branch_rebinds_the_name() -> None:
@@ -2145,7 +2151,8 @@ def test_keepdims_left_to_the_loop_lowering_when_the_rank_is_known() -> None:
     same call to its explicit loop nest, and this pass never sees it."""
     src = "def kernel(x, out):\n    m = np.sum(x, axis=1, keepdims=True)\n    out[:] = x - m\n"
     out = desugar(src, D3, [], ["x", "out"], "dace")
-    assert "np.sum(" not in out and "None, ..." not in out, f"the loop lowering was pre-empted:\n{out}"
+    assert "np.sum(" not in out, f"the loop lowering was pre-empted:\n{out}"
+    assert "None, ..." not in out, f"the loop lowering was pre-empted:\n{out}"
     assert "np.empty((__rd0_d0, 1, __rd0_d2)" in out, f"keepdims loop nest missing its length-1 axis:\n{out}"
 
 
@@ -2184,7 +2191,8 @@ def test_boolop_or_test_becomes_an_elif_chain() -> None:
     exclusive, so at most one runs."""
     out = desugar(DISPATCH, D2, [], ["x", "dim", "out"], "dace")
     assert " or " not in out, f"a Compare is still a direct child of a BoolOp:\n{out}"
-    assert "elif dim == -2:" in out and "elif dim == -1:" in out, out
+    assert "elif dim == -2:" in out, out
+    assert "elif dim == -1:" in out, out
 
     x = np.arange(9, dtype=np.float64).reshape(3, 3)
     for dim in (0, -2, 1, -1, 7):
@@ -2199,8 +2207,10 @@ def test_boolop_and_test_nests_without_cloning_the_body() -> None:
     single body -- and short-circuits in the same order."""
     src = "def kernel(x, dim, out):\n    if dim >= 0 and dim == 1:\n        out[:] = x * 2.0\n"
     out = desugar(src, D2, [], ["x", "dim", "out"], "dace")
-    assert " and " not in out and out.count("out[:] = x * 2.0") == 1, f"body cloned for an ``and``:\n{out}"
-    assert "if dim >= 0:" in out and "if dim == 1:" in out, out
+    assert " and " not in out, f"body cloned for an ``and``:\n{out}"
+    assert out.count("out[:] = x * 2.0") == 1, f"body cloned for an ``and``:\n{out}"
+    assert "if dim >= 0:" in out, out
+    assert "if dim == 1:" in out, out
 
     x = np.arange(9, dtype=np.float64).reshape(3, 3)
     for dim in (-1, 0, 1):

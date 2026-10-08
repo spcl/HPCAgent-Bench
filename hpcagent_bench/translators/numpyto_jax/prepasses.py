@@ -68,7 +68,7 @@ def fold_const_branches(fn: ast.FunctionDef) -> None:
             self.generic_visit(node)  # fold inner elif chain first
             if names_loaded(node.test) <= set(usable):
                 try:
-                    truth = eval(
+                    truth = eval(  # noqa: S307 -- folds a test over known constants with no builtins
                         compile(ast.Expression(body=node.test), "<fold>", "eval"), {"__builtins__": {}}, dict(usable)
                     )
                 except Exception:  # noqa: BLE001

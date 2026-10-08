@@ -1310,7 +1310,8 @@ def test_an_interval_past_the_reach_is_cut_at_it_with_an_arrowhead() -> None:
     row = efficacy_figures.SetupRow("qwen38", "HIP", "#1f77b4", setup(1.0, 2.0), wide)
     efficacy_figures.draw_measure_row(ax, [row], "speedup", "^", {})
     low, high = ax.get_ylim()
-    assert high < 12.0 and low > -9.0, (low, high)
+    assert high < 12.0, (low, high)
+    assert low > -9.0, (low, high)
     heads = {line.get_marker() for line in ax.lines if line.get_marker() in ("^", "v")}
     assert heads == {"^", "v"}, heads
     plt.close(fig)

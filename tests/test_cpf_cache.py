@@ -208,7 +208,9 @@ def test_a_valid_canonical_entry_is_kept_when_a_sibling_publishes_the_same_key(t
     cpf_cache.publish_canonical(cache, key, {"verdict": "ok"}, first)
     cpf_cache.publish_canonical(cache, key, {"verdict": "ok"}, second)
     entry = cpf_cache.canonical_entry(cache, key)
-    assert entry is not None and entry[1] is not None and entry[1].read_bytes() == b"first", entry
+    assert entry is not None, entry
+    assert entry[1] is not None, entry
+    assert entry[1].read_bytes() == b"first", entry
     parent = cpf_cache.canonical_path(cache, key).parent
     assert not [p for p in parent.iterdir() if p.name.startswith(".")], "staging left behind"
 
@@ -245,7 +247,9 @@ def test_a_canonical_entry_serves_its_sdfg_until_the_file_is_modified(tmp_path: 
     key = cpf_cache.canonical_key("program", "commit", {"target": "cpu"})
     cpf_cache.publish_canonical(cache, key, {"verdict": "ok"}, sdfg)
     entry = cpf_cache.canonical_entry(cache, key)
-    assert entry is not None and entry[1] is not None and entry[1].read_bytes() == b"sdfg", entry
+    assert entry is not None, entry
+    assert entry[1] is not None, entry
+    assert entry[1].read_bytes() == b"sdfg", entry
     entry[1].write_bytes(b"edited")
     assert cpf_cache.canonical_entry(cache, key) is None
 

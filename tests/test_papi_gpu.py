@@ -131,7 +131,8 @@ def test_every_metric_answers_or_declines_for_every_vendor() -> None:
             declined = vendor in metric.absent
             assert has != declined, f"{name}: {vendor} is {'both' if has else 'neither'} answered and declined"
         assert metric.candidates, f"{name}: no vendor answers it at all"
-        assert metric.question and metric.reading, f"{name}: a number with no question and no reading"
+        assert metric.question, f"{name}: a number with no question and no reading"
+        assert metric.reading, f"{name}: a number with no question and no reading"
 
 
 def test_every_candidate_names_a_component_the_probe_knows_how_to_report() -> None:
@@ -154,7 +155,8 @@ def test_the_unit_is_attached_to_the_event_because_the_vendors_disagree() -> Non
     whose unit lived on the METRIC would relabel one vendor by three orders of magnitude."""
     for metric in ("dram_read", "dram_write"):
         units = {v: {c.unit for c in cs} for v, cs in papi.GPU_METRICS[metric].candidates.items()}
-        assert units["nvidia"] == {"bytes"} and units["amd"] == {"KB"}, f"{metric}: {units}"
+        assert units["nvidia"] == {"bytes"}, f"{metric}: {units}"
+        assert units["amd"] == {"KB"}, f"{metric}: {units}"
     power = {v: {c.unit for c in cs} for v, cs in papi.GPU_METRICS["power"].candidates.items()}
     assert power["nvidia"] == {"mW"}
     assert power["amd"] == {"uW"}
@@ -186,7 +188,8 @@ def test_each_vendor_resolves_dram_traffic_in_its_own_measured_unit() -> None:
     }
     for (metric, vendor), (event, unit) in expected.items():
         row, why = resolved(metric, vendor, cuda if vendor == "nvidia" else rocm)
-        assert why == "" and row is not None, f"{metric}/{vendor}: {why}"
+        assert why == "", f"{metric}/{vendor}: {why}"
+        assert row is not None, f"{metric}/{vendor}: {why}"
         assert row["metric"] == metric
         assert row["event"] == event
         assert row["unit"] == unit
@@ -210,9 +213,12 @@ def test_the_caveats_state_the_three_constraints_and_ship_with_the_numbers() -> 
     """Each one is a wrong conclusion a reader draws by default, so each travels in the payload
     rather than living in a docstring nobody receives."""
     text = " ".join(papi.GPU_CAVEATS).lower()
-    assert "serialis" in text and "wall clock" in text, "a counted run's time is not the plain run's"
-    assert "volta" in text and "perfworks" in text, "CUPTI's API split is why the event is discovered"
-    assert "one device" in text and "context" in text, "uncounted work looks like a kernel that did nothing"
+    assert "serialis" in text, "a counted run's time is not the plain run's"
+    assert "wall clock" in text, "a counted run's time is not the plain run's"
+    assert "volta" in text, "CUPTI's API split is why the event is discovered"
+    assert "perfworks" in text, "CUPTI's API split is why the event is discovered"
+    assert "one device" in text, "uncounted work looks like a kernel that did nothing"
+    assert "context" in text, "uncounted work looks like a kernel that did nothing"
 
 
 # the component probe

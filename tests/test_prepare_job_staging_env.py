@@ -147,6 +147,5 @@ def test_a_setup_that_names_no_image_is_refused_under_the_container_engine(tmp_p
     done, argv = run_prepare(tmp_path, "")
     assert done.returncode == 2
     assert argv == []
-    assert "JUDGE_CE_ENV, AGENT_CE_ENV and AMD_CE_ENV are unset" in done.stderr and "hardware" in done.stderr, (
-        done.stderr
-    )
+    assert "JUDGE_CE_ENV, AGENT_CE_ENV and AMD_CE_ENV are unset" in done.stderr, done.stderr
+    assert "hardware" in done.stderr, done.stderr

@@ -248,14 +248,17 @@ def test_an_unknown_packet_is_refused_and_leaves_no_setup_env(tmp_path: pathlib.
 def test_a_submission_needs_an_account_and_names_its_flag_and_variable(tmp_path: pathlib.Path) -> None:
     root = tree(tmp_path)
     done = submit(root, KERNELS_FILE="subset.txt", SUBMIT="1")
-    assert done.returncode == 2 and "--account" in done.stderr and "$SBATCH_ACCOUNT" in done.stderr, done.stderr
+    assert done.returncode == 2, done.stderr
+    assert "--account" in done.stderr, done.stderr
+    assert "$SBATCH_ACCOUNT" in done.stderr, done.stderr
     assert not (root / "sbatch.calls").exists()
 
 
 def test_the_root_account_is_refused(tmp_path: pathlib.Path) -> None:
     root = tree(tmp_path)
     done = submit(root, "--account", "root", KERNELS_FILE="subset.txt", SUBMIT="1")
-    assert done.returncode == 2 and "root is not a project account" in done.stderr, done.stderr
+    assert done.returncode == 2, done.stderr
+    assert "root is not a project account" in done.stderr, done.stderr
     assert not (root / "sbatch.calls").exists()
 
 
@@ -264,7 +267,8 @@ def test_gpus_per_node_is_required_even_for_a_dry_run(tmp_path: pathlib.Path) ->
     root = tree(tmp_path)
     done = submit(root, KERNELS_FILE="subset.txt", HPCAGENT_BENCH_JOB_GPUS_PER_NODE=None)
     assert done.returncode == 2, done.stderr
-    assert "--gpus-per-node" in done.stderr and "$HPCAGENT_BENCH_JOB_GPUS_PER_NODE" in done.stderr, done.stderr
+    assert "--gpus-per-node" in done.stderr, done.stderr
+    assert "$HPCAGENT_BENCH_JOB_GPUS_PER_NODE" in done.stderr, done.stderr
     assert not list((root / "experiments").glob(".env.*"))
 
 
@@ -273,9 +277,9 @@ def test_an_image_name_carries_the_hardware_so_none_is_refused_under_the_contain
 ) -> None:
     root = tree(tmp_path)
     done = submit(root, KERNELS_FILE="subset.txt", HPCAGENT_BENCH_HARDWARE=None)
-    assert done.returncode == 2 and "--hardware" in done.stderr and "HPCAGENT_BENCH_HARDWARE" in done.stderr, (
-        done.stderr
-    )
+    assert done.returncode == 2, done.stderr
+    assert "--hardware" in done.stderr, done.stderr
+    assert "HPCAGENT_BENCH_HARDWARE" in done.stderr, done.stderr
     assert not list((root / "experiments").glob(".env.*"))
 
 
@@ -397,7 +401,8 @@ def test_a_served_model_with_no_mi200_serving_layer_is_refused(tmp_path: pathlib
     assert bare, "every served model has an mi200 layer: the refusal has nothing to guard"
     root = tree(tmp_path)
     done = submit_mi200(root, bare[0])
-    assert done.returncode == 2 and f"{bare[0]} has no mi200 config" in done.stderr, done.stderr
+    assert done.returncode == 2, done.stderr
+    assert f"{bare[0]} has no mi200 config" in done.stderr, done.stderr
     assert not list((root / "experiments").glob(".env.*"))
     assert not (root / "sbatch.calls").exists()
 
@@ -418,7 +423,8 @@ def test_the_mi200_system_entry_is_the_whole_job_shape(tmp_path: pathlib.Path) -
 def test_an_mi200_setup_needs_a_study_naming_mi200(tmp_path: pathlib.Path) -> None:
     root = tree(tmp_path)
     done = submit_mi200(root, "musespark", EXPERIMENT="wave", RECORD_STUDY="wave", SUBMIT="0")
-    assert done.returncode == 2 and "does not name mi200" in done.stderr, done.stderr
+    assert done.returncode == 2, done.stderr
+    assert "does not name mi200" in done.stderr, done.stderr
     assert not list((root / "experiments").glob(".env.*"))
 
 

@@ -196,4 +196,5 @@ def test_a_last_axis_read_after_a_reshape_to_a_subscripts_shape_is_the_last_axis
         ranks=rank_table(fn, {"p": 4}),
     )
     got = ast.unparse(fn)
-    assert "X.shape[0]" not in got and ("X.shape[-1]" in got or "X.shape[2]" in got), got
+    assert "X.shape[0]" not in got, got
+    assert "X.shape[-1]" in got or "X.shape[2]" in got, got

@@ -181,7 +181,8 @@ def test_a_pages_applies_block_is_a_filter_the_resolver_can_act_on(page: str) ->
         value = rule.get(key)
         if value is None:
             continue
-        assert isinstance(value, list) and value, f"{page}: applies.{key} must be a non-empty list, got {value!r}"
+        assert isinstance(value, list), f"{page}: applies.{key} must be a non-empty list, got {value!r}"
+        assert value, f"{page}: applies.{key} must be a non-empty list, got {value!r}"
         assert not set(value) - allowed, f"{page}: applies.{key} names {sorted(set(value) - allowed)}"
     for key in ("multinode", "explicit"):
         assert isinstance(rule.get(key, False), bool), f"{page}: applies.{key} must be a flag"
@@ -328,4 +329,5 @@ def test_no_packet_puts_skill_content_into_the_main_prompt(spec: str) -> None:
         return
     text = (AGENT / name).read_text()
     named = sorted(page for page in SHIPPED if re.search(rf"\b{re.escape(page)}\b", text))
-    assert "/shared/skills" not in text and not named, f"{spec}: main-prompt file {name} carries skill content: {named}"
+    assert "/shared/skills" not in text, f"{spec}: main-prompt file {name} carries skill content: {named}"
+    assert not named, f"{spec}: main-prompt file {name} carries skill content: {named}"

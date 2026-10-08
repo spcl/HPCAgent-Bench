@@ -174,7 +174,9 @@ def test_none_or_tuple_helper_splices_when_the_unpack_is_two_loops_deeper() -> N
     outer = next(n for n in kir.tree.body if isinstance(n, ast.For))
     guard_at = [i for i, st in enumerate(outer.body) if isinstance(st, ast.If) and st.body[0].__class__ is ast.Continue]
     inner_at = [i for i, st in enumerate(outer.body) if isinstance(st, ast.For)]
-    assert guard_at and inner_at and guard_at[0] < inner_at[0], ast.unparse(outer)
+    assert guard_at, ast.unparse(outer)
+    assert inner_at, ast.unparse(outer)
+    assert guard_at[0] < inner_at[0], ast.unparse(outer)
     inner = outer.body[inner_at[0]]
     assert any(isinstance(st, ast.If) and st.body[0].__class__ is ast.Continue for st in inner.body), ast.unparse(inner)
 

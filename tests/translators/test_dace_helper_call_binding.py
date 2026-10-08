@@ -335,7 +335,8 @@ def test_a_helpers_own_recipe_collapses_through_to_the_caller_symbol() -> None:
     programs = [n.name for n in ast.parse(source).body if isinstance(n, ast.FunctionDef)]
     third_conv = programs[-2]  # the kept helpers precede the kernel; the third conv is the last one
     assert free_names(source, third_conv) == set(), (third_conv, source)
-    assert "sh1" in source and "sw1" in source, source
+    assert "sh1" in source, source
+    assert "sw1" in source, source
 
 
 def kir_of(source: str, bench: dict, stem: str) -> "KernelIR":
@@ -374,7 +375,8 @@ def test_a_body_unread_compound_extent_becomes_one_symbol_dace_can_solve() -> No
     assert shapes["A_data"] == ("sweep_extent0",), shapes
     assert shapes["A_indptr"] == ("sweep_extent1",), shapes
     # ``N`` is a bare extent and the body reads it: untouched, and still what dace solves from diag.
-    assert shapes["diag"] == ("N",) and shapes["y"] == ("N",), shapes
+    assert shapes["diag"] == ("N",), shapes
+    assert shapes["y"] == ("N",), shapes
     assert [s.name for s in settled.symbols] == [], [s.name for s in settled.symbols]
 
 

@@ -202,7 +202,8 @@ def test_a_lone_candidate_gets_the_whole_budget_not_a_fixed_slice(promoter, tmp_
         sys, "argv", ["promote_unsubmitted.py", str(run_dir), "--judge", "http://judge:8800", "--budget-s", "1800"]
     )
     assert promoter.main() == 0
-    assert handed and handed[0] > 900.0, f"a lone candidate must get more than the old fixed slice, got {handed}"
+    assert handed, f"a lone candidate must get more than the old fixed slice, got {handed}"
+    assert handed[0] > 900.0, f"a lone candidate must get more than the old fixed slice, got {handed}"
 
 
 def test_one_workers_submission_does_not_suppress_anothers_on_the_same_kernel(promoter, tmp_path) -> None:

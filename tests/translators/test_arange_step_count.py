@@ -94,7 +94,8 @@ def test_symbolic_bounds_keep_a_sign_correct_expression() -> None:
 
     node = arange_count(ast.parse("np.arange(a, b, s)", mode="eval").body.args)
     text = ast.unparse(node)
-    assert "//" in text and text.startswith("-"), text
+    assert "//" in text, text
+    assert text.startswith("-"), text
     for a, b, s in [(10, 0, -1), (0, 10, 2), (0, 10, 1), (3, 3, 1), (0, 10, -1)]:
         got = evaluate(text, {"a": a, "b": b, "s": s})
         assert got == len(np.arange(a, b, s)) or (got < 0 and len(np.arange(a, b, s)) == 0), (a, b, s, got)

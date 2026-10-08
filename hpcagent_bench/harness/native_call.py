@@ -197,7 +197,7 @@ def capture_child_stderr(spill_root: str) -> None:
     """Point this child's fd 2 at :data:`CHILD_STDERR` in ``spill_root``, so the parent can read why
     a runtime exited (:func:`thread_creation_crash_hint`) instead of only the exit code."""
     sys.stderr.flush()
-    fd = os.open(os.path.join(spill_root, CHILD_STDERR), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    fd = os.open(pathlib.Path(spill_root, CHILD_STDERR), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     os.dup2(fd, 2)
     os.close(fd)
 
@@ -206,7 +206,7 @@ def forward_child_stderr(spill_root: str) -> str:
     """The last :data:`CHILD_STDERR_TAIL` bytes the child wrote to stderr, also copied to this
     process's stderr; ``""`` when it wrote nothing or never started."""
     try:
-        with open(os.path.join(spill_root, CHILD_STDERR), "rb") as fh:
+        with pathlib.Path(spill_root, CHILD_STDERR).open("rb") as fh:
             size = fh.seek(0, os.SEEK_END)
             fh.seek(max(0, size - CHILD_STDERR_TAIL))
             text = fh.read().decode("utf-8", "replace")
@@ -444,8 +444,7 @@ def grading_cpus(slot: int | None) -> set[int]:
     groups: dict[str, int] = {}
     for cpu in affinity:
         try:
-            with open(flags.SIBLINGS.format(cpu=cpu)) as fh:
-                key = fh.read().strip()
+            key = pathlib.Path(flags.SIBLINGS.format(cpu=cpu)).read_text().strip()
         except OSError:
             key = str(cpu)
         if key not in groups or cpu < groups[key]:
@@ -1073,10 +1072,8 @@ def reclaim_memory() -> None:
     long-lived judge and the next child hits its limit. ``gc.collect`` breaks numpy view cycles;
     ``malloc_trim`` (glibc-only, advisory) returns the pages. Best effort."""
     gc.collect()
-    try:
+    with contextlib.suppress(OSError, AttributeError):  # not glibc / no symbol -> gc.collect() alone
         ctypes.CDLL("libc.so.6").malloc_trim(0)
-    except (OSError, AttributeError):  # not glibc / no symbol -> gc.collect() alone
-        pass
 
 
 def is_host_oom[PayloadT](run: "RunResult[PayloadT]") -> bool:
@@ -1334,7 +1331,7 @@ def _call_native_device(
 def proc_status_bytes(field: str) -> int:
     """The ``field`` line (``VmSize:``, ``VmData:``) of Linux ``/proc/self/status`` in bytes, or 0 if unavailable."""
     try:
-        with open("/proc/self/status") as f:
+        with pathlib.Path("/proc/self/status").open() as f:
             for line in f:
                 if line.startswith(field):
                     return int(line.split()[1]) * BYTES_PER_KIB
@@ -1364,10 +1361,9 @@ def sync_loaded_device_frameworks() -> None:
     A python callable may launch asynchronous cupy/torch work and return; without this the sync would
     land outside the bracket. Syncs only frameworks already in ``sys.modules`` (never imports one)."""
     if "cupy" in sys.modules:
-        try:
+        # No device, or the submission's own cupy state is odd.
+        with contextlib.suppress(Exception):
             sys.modules["cupy"].cuda.Stream.null.synchronize()
-        except Exception:  # noqa: BLE001 -- no device, or the submission's own cupy state is odd
-            pass
     if "torch" in sys.modules:
         try:
             torch = sys.modules["torch"]
@@ -1543,8 +1539,7 @@ def mapped_device_runtimes(exclude: Sequence[str] = ()) -> tuple[str, ...]:
     when ``/proc`` is unreadable."""
     ignored = set(exclude)
     try:
-        with open("/proc/self/maps", encoding="utf-8", errors="replace") as handle:
-            lines = handle.readlines()
+        lines = pathlib.Path("/proc/self/maps").read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
     except OSError:
         return ()
     found: set[str] = set()
@@ -1553,7 +1548,7 @@ def mapped_device_runtimes(exclude: Sequence[str] = ()) -> tuple[str, ...]:
         path = line.rstrip("\n").removesuffix(" (deleted)").rpartition(" ")[2]
         if not path.startswith("/"):
             continue
-        name = os.path.basename(path)
+        name = pathlib.PurePath(path).name
         if name not in ignored and name.startswith(DEVICE_RUNTIME_SONAMES):
             found.add(name)
     return tuple(sorted(found))
@@ -1641,10 +1636,8 @@ def _native_call_worker(
     TIMED_REP_S = timed_rep_s
     capture_child_stderr(spill_root)
     # A segfaulting submission would dump a core into the CWD (inode quota); disable core dumps here.
-    try:
+    with contextlib.suppress(OSError, ValueError):  # non-Linux, or a hard limit already at 0
         resource.setrlimit(resource.RLIMIT_CORE, (0, resource.getrlimit(resource.RLIMIT_CORE)[1]))
-    except (OSError, ValueError):  # non-Linux, or a hard limit already at 0
-        pass
     # Multi-core grading contract: confine to the slot's physical cores and size OpenMP/BLAS to them.
     # ``device_id`` doubles as the judge slot (None outside the multi-slot judge).
     cpus = grading_cpus(device_id)
@@ -1888,7 +1881,7 @@ def _call_isolated(
         # Agent code runs sealed (hpcagent_bench.seal): only the library's directory and this call's spill
         # directory are kept. On a CPU-track grade the plan also covers the GPU device nodes. lib_path is
         # None only in tests that stub run_forked.
-        lib_dir = [os.path.dirname(os.path.abspath(lib_path))] if lib_path else []
+        lib_dir = [str(pathlib.Path(os.path.abspath(lib_path)).parent)] if lib_path else []
         sealed = seal.grading_plan([*lib_dir, spill_root], devices=not host_only)
         # A process that mapped a GPU runtime (torch or jax on ROCm) re-creates the runtime's native threads in
         # every fork child, the seal's relay fork included, and the seal's user namespace refuses a

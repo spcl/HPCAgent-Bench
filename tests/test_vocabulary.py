@@ -248,7 +248,8 @@ def test_a_decorator_documents_what_its_class_must_provide() -> None:
         vocabulary.framework,
         vocabulary.retired_framework,
     ):
-        assert decorator.__doc__ and "must provide" in decorator.__doc__, decorator.__name__
+        assert decorator.__doc__, decorator.__name__
+        assert "must provide" in decorator.__doc__, decorator.__name__
 
 
 if __name__ == "__main__":

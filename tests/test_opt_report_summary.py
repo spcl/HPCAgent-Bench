@@ -352,7 +352,8 @@ def test_a_real_compile_reports_the_ground_truth_of_the_source(
     grouped = lr.group(lr.parse_report(raw.split("\n", 1)[1], family, roots=[str(tmp_path)]), SOURCES)
     assert verdict_at(grouped, 4).vectorized, f"{compiler} vectorizes the unit-stride inner loop"
     refused = verdict_at(grouped, 17)
-    assert refused.missed and all(reason for reason in refused.missed), (
+    assert refused.missed, f"{compiler} cannot vectorize a backward dependence and must say why: {refused}"
+    assert all(reason for reason in refused.missed), (
         f"{compiler} cannot vectorize a backward dependence and must say why: {refused}"
     )
     assert "0 unparsed remarks" in printed, f"real {compiler} stderr did not fully parse:\n{printed}"

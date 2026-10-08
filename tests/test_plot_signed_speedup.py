@@ -328,7 +328,8 @@ def test_every_output_is_written_per_machine(tmp_path: pathlib.Path) -> None:
     )
     pdfs = [p for p in written if p.endswith(".pdf")]
     svgs = sorted(p for p in written if p.endswith(".svg"))
-    assert len(pdfs) == 1 and len(svgs) == 2, written
+    assert len(pdfs) == 1, written
+    assert len(svgs) == 2, written
     assert pathlib.Path(pdfs[0]).name.startswith("speedup.")
     assert [pathlib.Path(p).name.split(".")[0] for p in svgs] == ["speedup-mini", "speedup-simple"]
     assert pathlib.Path(pdfs[0]).read_bytes().startswith(b"%PDF-")

@@ -39,6 +39,7 @@ def test_the_generated_source_step_fills_the_cache_for_a_kernel_that_lowers(tmp_
         text=True,
         timeout=300,
         cwd=tmp_path,
+        check=False,
     )
     assert result.returncode == 0, result.stderr
     assert "0 unavailable" in result.stdout, result.stderr

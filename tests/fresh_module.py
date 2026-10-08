@@ -70,7 +70,8 @@ def module_at(path: pathlib.Path, name: str = "") -> ModuleType:
     file no package import reaches. Registered in ``sys.modules`` BEFORE it executes: ``dataclasses``
     resolves a string annotation through ``sys.modules[cls.__module__]``."""
     spec = importlib.util.spec_from_file_location(name or path.stem, path)
-    assert spec is not None and spec.loader is not None, f"{path} is not importable"
+    assert spec is not None, f"{path} is not importable"
+    assert spec.loader is not None, f"{path} is not importable"
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)

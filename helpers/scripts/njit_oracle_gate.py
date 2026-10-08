@@ -25,6 +25,7 @@ import time
 import warnings
 
 warnings.filterwarnings("ignore")
+# ruff: noqa: E402 -- the imports below come after the filter, so numba's import-time warnings stay silent
 
 import numpy as np
 

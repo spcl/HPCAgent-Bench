@@ -528,7 +528,8 @@ def test_a_free_only_setup_refuses_any_listing_that_does_not_prove_the_model_fre
     """A router picks the provider per request, so ONE paid endpoint, one metered unit, or a listing
     that proves nothing is enough to bill a key the user allowed only for a free model."""
     got = service.not_free(body, "m")
-    assert got is not None and reason in got, got
+    assert got is not None, got
+    assert reason in got, got
 
 
 def test_every_model_the_claude_cli_picks_itself_is_pinned_to_the_setup_model(service: types.ModuleType) -> None:

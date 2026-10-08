@@ -97,7 +97,8 @@ def test_carried_future_import_leads_the_emitted_module(src: str, jit: bool) -> 
     in the compiler, not the parser), so the gate here is ``compile``."""
     out = emit_jax(src, "f", jit=jit)
     body = ast.parse(out).body
-    assert isinstance(body[0], ast.ImportFrom) and body[0].module == "__future__", out.splitlines()[:8]
+    assert isinstance(body[0], ast.ImportFrom), out.splitlines()[:8]
+    assert body[0].module == "__future__", out.splitlines()[:8]
     assert sum(isinstance(n, ast.ImportFrom) and n.module == "__future__" for n in body) == 1
     compile(out, "<jax>", "exec")
 
@@ -186,7 +187,8 @@ def test_partial_range_loop_is_not_whole_array_vectorized() -> None:
         "    return a\n"
     )
     js = emit_jax(partial, "f", jit=True)
-    assert "a = b * 2.0" not in js and ".at[" in js, js
+    assert "a = b * 2.0" not in js, js
+    assert ".at[" in js, js
     full = partial.replace("range(1, a.shape[0])", "range(a.shape[0])")
     assert "a = b * 2.0" in emit_jax(full, "f", jit=True)
 

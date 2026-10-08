@@ -747,7 +747,8 @@ def test_a_worklist_skips_a_grade_that_stored_no_source(tmp_path: pathlib.Path) 
         conn.execute("DELETE FROM grade_sources")
     items, problems = grade_under.build_worklist([db], [])
     assert items == []
-    assert len(problems) == 3 and all("no stored source" in line for line in problems), problems
+    assert len(problems) == 3, problems
+    assert all("no stored source" in line for line in problems), problems
 
 
 def test_host_only_splits_cpu_from_gpu_episodes() -> None:
@@ -778,7 +779,8 @@ def test_a_worklist_never_lists_a_grade_stored_under_the_adhoc_episode_id(tmp_pa
     refile_as_adhoc(shard)
     items, problems = grade_under.build_worklist([shard], [])
     assert items == []
-    assert len(problems) == 3 and all("credited to nothing (adhoc)" in line for line in problems), problems
+    assert len(problems) == 3, problems
+    assert all("credited to nothing (adhoc)" in line for line in problems), problems
 
 
 def test_no_promotion_is_owed_to_a_correct_score_stored_under_the_adhoc_episode_id(tmp_path: pathlib.Path) -> None:
@@ -1395,11 +1397,13 @@ def assert_pool_draws(calls: dict[tuple[int, ...], list[int]]) -> None:
     assert calls
     for seeds, indices in calls.items():
         timed, base = seeds[:6], seeds[6]
-        assert len(seeds) == 7 and len(set(timed)) == 4 and base not in timed, seeds
-        assert all(timed[i] == timed[i + 4] for i in range(2)) and all(a != b for a, b in itertools.pairwise(timed)), (
-            seeds
-        )
-        assert {i for i in indices if i < 6} == set(range(6)) and 6 in indices, indices
+        assert len(seeds) == 7, seeds
+        assert len(set(timed)) == 4, seeds
+        assert base not in timed, seeds
+        assert all(timed[i] == timed[i + 4] for i in range(2)), seeds
+        assert all(a != b for a, b in itertools.pairwise(timed)), seeds
+        assert {i for i in indices if i < 6} == set(range(6)), indices
+        assert 6 in indices, indices
 
 
 def test_the_final_grade_times_fresh_draws_five_a_side_and_grades_the_base_untimed(

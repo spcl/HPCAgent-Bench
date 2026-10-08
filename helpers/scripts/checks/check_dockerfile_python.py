@@ -61,6 +61,7 @@ def offenders(paths: list[pathlib.Path]) -> list[str]:
                     ["ruff", "check", "--isolated", "--select", RULES, "--output-format", "concise", str(extracted)],
                     capture_output=True,
                     text=True,
+                    check=False,
                 )
                 if run.returncode == 0:
                     # A clean run still prints "All checks passed!" on stdout, so the exit status is

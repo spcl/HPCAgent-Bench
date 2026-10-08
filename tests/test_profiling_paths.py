@@ -51,7 +51,8 @@ def test_a_wedged_perf_record_is_a_timed_out_refusal_not_a_raw_timeout(tmp_path,
             tmp_path, tmp_path / "request.json", 2, symbol="gemm_fp64", timeout=3.0, frequency=99, min_percent=1.0
         )
     assert caught.value.cause == "timed_out", caught.value.cause
-    assert "2 thread(s)" in str(caught.value) and "3s" in str(caught.value), str(caught.value)
+    assert "2 thread(s)" in str(caught.value), str(caught.value)
+    assert "3s" in str(caught.value), str(caught.value)
 
 
 @pytest.mark.parametrize(
@@ -99,8 +100,10 @@ def test_the_none_route_builds_with_the_range_header_and_papi(monkeypatch: pytes
     assert answer["build_ok"] is False, answer
     *compiles, link = spawned[0]
     include = f"-I{flags.PAPI_RANGES_H.parent}"
-    assert compiles and all(include in argv and "-I/fake/papi/include" in argv for argv in compiles), compiles
-    assert "-L/fake/papi/lib" in link and "-lpapi" in link, link
+    assert compiles, compiles
+    assert all(include in argv and "-I/fake/papi/include" in argv for argv in compiles), compiles
+    assert "-L/fake/papi/lib" in link, link
+    assert "-lpapi" in link, link
 
 
 @pytest.mark.parametrize("debug", [False, True], ids=["graded", "profiled"])
@@ -397,8 +400,10 @@ def test_a_call_graph_past_the_node_limit_keeps_the_hottest_nodes_and_says_it_wa
     root, samples = wide_graph(limit + 50)
     tree = root.to_json(samples, min_percent=0.0)
     symbols = [str(node["symbol"]) for node in graph_nodes(tree)]
-    assert len(symbols) == limit and tree["truncated"] is True, (len(symbols), tree["truncated"])
-    assert f"leaf{limit + 49}" in symbols and "leaf0" not in symbols, symbols[-3:]
+    assert len(symbols) == limit, (len(symbols), tree["truncated"])
+    assert tree["truncated"] is True, (len(symbols), tree["truncated"])
+    assert f"leaf{limit + 49}" in symbols, symbols[-3:]
+    assert "leaf0" not in symbols, symbols[-3:]
     text = perf_reports.render_call_graph(root, samples, min_percent=0.0)
     assert len(text.splitlines()) == limit + 3
     assert f"cut to the {limit} hottest nodes" in text

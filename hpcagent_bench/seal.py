@@ -31,7 +31,6 @@ import argparse
 import ctypes
 import dataclasses
 import functools
-import glob
 import os
 import pathlib
 import resource
@@ -109,8 +108,7 @@ def die_with_parent() -> None:
 
 
 def write_text(path: str, text: str) -> None:
-    with open(path, "w", encoding="ascii") as handle:
-        handle.write(text)
+    pathlib.Path(path).write_text(text, encoding="ascii")
 
 
 def map_ids(inner_uid: int, outer_uid: int, inner_gid: int, outer_gid: int) -> None:
@@ -161,18 +159,22 @@ def fork_and_relay(signals: int = -1, signalled: int = -1, child_end: int = -1) 
 
 
 def existing(paths: Sequence[str]) -> list[str]:
-    return sorted({os.path.abspath(path) for path in paths if path and os.path.isdir(path)})
+    return sorted({os.path.abspath(path) for path in paths if path and pathlib.Path(path).is_dir()})
 
 
 def existing_files(paths: Sequence[str]) -> list[str]:
     """The ``paths`` that exist and are NOT directories -- a device node cannot carry a tmpfs, so
     it is covered by a bind of /dev/null instead (see :func:`build_view`)."""
-    return sorted({os.path.abspath(p) for p in paths if p and os.path.exists(p) and not os.path.isdir(p)})
+    return sorted(
+        {os.path.abspath(p) for p in paths if p and pathlib.Path(p).exists() and not pathlib.Path(p).is_dir()}
+    )
 
 
 def device_nodes() -> tuple[str, ...]:
     """Every device node on this host matching :data:`DEVICE_NODE_GLOBS`, for a plan's ``hide``."""
-    return tuple(sorted({path for pattern in DEVICE_NODE_GLOBS for path in glob.glob(pattern)}))
+    return tuple(
+        sorted({str(path) for pattern in DEVICE_NODE_GLOBS for path in pathlib.Path("/").glob(pattern.lstrip("/"))})
+    )
 
 
 def submounts(path: str) -> list[str]:
@@ -190,7 +192,7 @@ def submounts(path: str) -> list[str]:
     """
     prefix = path.rstrip("/")
     found = set()
-    with open("/proc/self/mountinfo", encoding="ascii") as handle:
+    with pathlib.Path("/proc/self/mountinfo").open(encoding="ascii") as handle:
         for line in handle:
             mount_point = line.split(" ", 5)[4]
             if mount_point == prefix or mount_point.startswith(f"{prefix}/"):
@@ -218,7 +220,7 @@ def build_view(plan: SealPlan) -> None:
         for path in binds:
             if path not in readonly and not any(seal_worker.under(outer, path) for outer in hide):
                 continue  # still visible and writable
-            os.makedirs(path, exist_ok=True)
+            pathlib.Path(path).mkdir(parents=True, exist_ok=True)
             seal_worker.mount(f"/proc/self/fd/{handles[path]}", path, None, seal_worker.MS_BIND | seal_worker.MS_REC)
             if path in readonly:
                 # One remount per mountpoint the recursive bind just brought in, not one call on
@@ -245,7 +247,7 @@ def build_view(plan: SealPlan) -> None:
                         # unrelated node mount under the readonly root would be worse than either.
                         continue
         for path in hide:
-            if any(seal_worker.under(bound, path) and bound != path for bound in binds) and os.path.isdir(path):
+            if any(seal_worker.under(bound, path) and bound != path for bound in binds) and pathlib.Path(path).is_dir():
                 seal_worker.mount("tmpfs", path, "tmpfs", seal_worker.MS_NOSUID | seal_worker.MS_NODEV)
     finally:
         for handle in handles.values():
@@ -257,7 +259,7 @@ def enter(plan: SealPlan) -> None:
 
     Raises :class:`SealError` when a namespace or mount is refused."""
     uid, gid = os.getuid(), os.getgid()
-    if len(os.listdir("/proc/self/task")) > 1:
+    if len(list(pathlib.Path("/proc/self/task").iterdir())) > 1:
         fork_and_relay()
     try:
         os.unshare(NAMESPACES)
@@ -277,7 +279,7 @@ def enter(plan: SealPlan) -> None:
         map_ids(uid, 0, gid, 0)
     except OSError as exc:
         raise seal_worker.SealError(f"seal: cannot drop to a nested user namespace: {exc}") from exc
-    os.chdir(plan.workdir if os.path.isdir(plan.workdir) else "/")
+    os.chdir(plan.workdir if pathlib.Path(plan.workdir).is_dir() else "/")
 
 
 def scrub_environment() -> None:
@@ -484,7 +486,7 @@ def main(argv: Sequence[str]) -> int:
     except seal_worker.SealError as exc:
         raise SystemExit(str(exc)) from exc
     scrub_environment()
-    os.execvp(command[0], command)
+    os.execvp(command[0], command)  # noqa: S606 -- exec replaces the wrapper with the sealed command
     return 0
 
 

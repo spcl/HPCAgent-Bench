@@ -70,7 +70,8 @@ def test_every_run_is_one_dot_spread_across_its_box_in_run_order() -> None:
         xs = [float(mark.get_offsets()[0][0]) for mark in drawn_marks(ax)]
         assert len(xs) == len(cell.runs)
         assert xs == sorted(xs)
-        assert min(xs) >= 0.2 - 0.15 and max(xs) <= 0.2 + 0.15, xs
+        assert min(xs) >= 0.2 - 0.15, xs
+        assert max(xs) <= 0.2 + 0.15, xs
         assert len(ax.patches) == 1, "seven graded runs get a box"
     finally:
         plt.close(fig)

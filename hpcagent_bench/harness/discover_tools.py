@@ -6,7 +6,6 @@
 
 import argparse
 import functools
-import glob
 import json
 import os
 import pathlib
@@ -137,32 +136,27 @@ def linux_distro() -> str:
 
 def accel_roots() -> list[str]:
     """CUDA + ROCm roots (which are usually NOT on the default loader path)."""
-    roots: list[str] = []
-    for env in ("CUDA_HOME", "CUDA_PATH", "CUDA_ROOT"):
-        if os.environ.get(env):
-            roots.append(os.environ[env])
-    roots += sorted(glob.glob("/usr/local/cuda*"), reverse=True)
-    for env in ("ROCM_PATH", "ROCM_HOME", "HIP_PATH"):
-        if os.environ.get(env):
-            roots.append(os.environ[env])
-    roots += sorted(glob.glob("/opt/rocm*"), reverse=True)
-    return [r for r in roots if os.path.isdir(r)]
+    roots = [os.environ[env] for env in ("CUDA_HOME", "CUDA_PATH", "CUDA_ROOT") if os.environ.get(env)]
+    roots += sorted((str(path) for path in pathlib.Path("/usr/local").glob("cuda*")), reverse=True)
+    roots += [os.environ[env] for env in ("ROCM_PATH", "ROCM_HOME", "HIP_PATH") if os.environ.get(env)]
+    roots += sorted((str(path) for path in pathlib.Path("/opt").glob("rocm*")), reverse=True)
+    return [r for r in roots if pathlib.Path(r).is_dir()]
 
 
 @functools.lru_cache(maxsize=1, typed=True)
 def lib_dirs() -> list[str]:
     dirs = ["/usr/lib", "/usr/local/lib", "/lib", "/usr/lib64", "/lib64", "/opt/homebrew/lib", "/usr/local/opt"]
-    dirs += [os.path.join(r, sub) for r in accel_roots() for sub in ("lib", "lib64", "targets/x86_64-linux/lib")]
+    dirs += [str(pathlib.Path(r, sub)) for r in accel_roots() for sub in ("lib", "lib64", "targets/x86_64-linux/lib")]
     dirs += [p for p in os.environ.get("LD_LIBRARY_PATH", "").split(os.pathsep) if p]
-    return [d for d in dirs if os.path.isdir(d)]
+    return [d for d in dirs if pathlib.Path(d).is_dir()]
 
 
 @functools.lru_cache(maxsize=1, typed=True)
 def include_dirs() -> list[str]:
     dirs = ["/usr/include", "/usr/local/include", "/opt/homebrew/include"]
-    dirs += [os.path.join(r, "include") for r in accel_roots()]
+    dirs += [str(pathlib.Path(r, "include")) for r in accel_roots()]
     dirs += [p for p in os.environ.get("CPATH", "").split(os.pathsep) if p]
-    return [d for d in dirs if os.path.isdir(d)]
+    return [d for d in dirs if pathlib.Path(d).is_dir()]
 
 
 @functools.lru_cache(maxsize=1, typed=True)
@@ -171,7 +165,7 @@ def ldconfig_index() -> dict[str, str]:
     if not shutil.which("ldconfig"):
         return {}
     try:
-        out = subprocess.run(["ldconfig", "-p"], capture_output=True, text=True, timeout=10).stdout
+        out = subprocess.run(["ldconfig", "-p"], capture_output=True, text=True, timeout=10, check=False).stdout
     except (OSError, subprocess.SubprocessError):
         return {}
     index: dict[str, str] = {}
@@ -188,7 +182,7 @@ def ldconfig_index() -> dict[str, str]:
 def _run_version(cmd: str, args: list[str] | None) -> str | None:
     for a in args or []:
         try:
-            r = subprocess.run([cmd, a], capture_output=True, text=True, timeout=10)
+            r = subprocess.run([cmd, a], capture_output=True, text=True, timeout=10, check=False)
         except (OSError, subprocess.SubprocessError):
             continue
         text = (r.stdout or "") + (r.stderr or "")
@@ -225,9 +219,9 @@ def detect_library(spec: ToolSpec) -> DetectResult:
     if shutil.which("pkg-config"):
         for pc in _as_list(spec.get("pkgconfig", [])):
             try:
-                if subprocess.run(["pkg-config", "--exists", pc], timeout=10).returncode == 0:
+                if subprocess.run(["pkg-config", "--exists", pc], timeout=10, check=False).returncode == 0:
                     ver = subprocess.run(
-                        ["pkg-config", "--modversion", pc], capture_output=True, text=True, timeout=10
+                        ["pkg-config", "--modversion", pc], capture_output=True, text=True, timeout=10, check=False
                     ).stdout.strip()
                     return {"found": True, "via": f"pkg-config:{pc}", "version": ver or None}
             except (OSError, subprocess.SubprocessError):
@@ -239,14 +233,14 @@ def detect_library(spec: ToolSpec) -> DetectResult:
             if known == so or known.startswith(so + "."):
                 return {"found": True, "via": "ldconfig", "path": path}
         for d in lib_dirs():
-            hits = glob.glob(os.path.join(d, so)) + glob.glob(os.path.join(d, so + ".*"))
+            hits = [str(path) for pattern in (so, so + ".*") for path in pathlib.Path(d).glob(pattern)]
             if hits:
                 return {"found": True, "via": "libdir", "path": max(hits)}
     # 3) header on the include path
     for hdr in _as_list(spec.get("header", [])):
         for d in include_dirs():
-            if os.path.exists(os.path.join(d, hdr)):
-                return {"found": True, "via": "header", "path": os.path.join(d, hdr)}
+            if (header := pathlib.Path(d, hdr)).exists():
+                return {"found": True, "via": "header", "path": str(header)}
     return {"found": False}
 
 

@@ -256,6 +256,7 @@ def stacks(data: pathlib.Path) -> list[list[tuple[str, str]]]:
         [perf_check(), "script", "-i", str(data), "-F", "comm,ip,sym,dso", "--no-inline"],
         capture_output=True,
         text=True,
+        check=False,
     )
     if proc.returncode != 0:
         raise PerfUnavailable("perf_record_failed", f"perf script failed on {data.name}: {proc.stderr.strip()[-400:]}")

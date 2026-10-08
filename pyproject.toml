@@ -343,7 +343,6 @@ external = ["ANN"]
 # type checkers below): a lint rewrite would change what a task says or what a frontend accepts.
 exclude = ["hpcagent_bench/benchmarks/**"]
 ignore = [
-    "F821", "F841",  # DaCe program bodies: symbols and dataflow names the frontend binds
     "ANN", "D",  # annotations and docstrings: the type checkers and the reviewers own these
     "ARG",  # unused arguments: callbacks and protocol signatures
     "C408",  # dict(a=..., b=...) reads better than a literal here
@@ -352,6 +351,7 @@ ignore = [
     "S101",  # assert is the test idiom
     "COM812", "ISC001", "E501",  # the formatter owns commas, string joins and line length
     "N802", "N803", "N806", "N812", "N816",  # mathematical names (A, N, M, LEN_1D) follow the kernels
+    "N815",  # visit_While = visit_For: the names ast.NodeVisitor dispatches on
     "C901", "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR0917",  # size limits
     "PLC0415",  # imports inside functions keep heavy modules (dace, torch, cupy) off the import path
     "INP001",  # tests/ and helpers/ are not packages
@@ -360,11 +360,20 @@ ignore = [
     "FBT001", "FBT002", "FBT003",  # boolean flags in signatures and calls
     "SLF001",  # tests reach into module internals on purpose
     "S603", "S607",  # subprocess calls are the harness's job
+    # HTTP to its own judge, SQL over its own result DBs, temp dirs, test tokens and seeded RNG are the harness's
+    # job too; isolation is enforced by the seal, not by lint.
+    "S105", "S106", "S108", "S110", "S112", "S310", "S311", "S608",
+    "N818", "TRY004",  # exception class names and types are API callers catch
+    "PLW0603",  # module state a process sets once (caches, the configured device)
     "ERA001",  # code-shaped comments are worked examples
     "TD002", "TD003", "FIX002",  # TODO format
     "RUF059", "B007",  # their fix binds a _-prefixed name, which check_names.py forbids
     "E731",  # a named one-line lambda; its fix is an unannotated def the annotation ratchet refuses
+    "PTH100",  # os.path.abspath keeps a symlink where Path.resolve follows it (mount points, the seal's paths)
 ]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["E402"]  # imports after pytest.importorskip, which gates the optional extra they need
 
 # Type-check against the requires-python floor. The benchmark references are task text agents read (original
 # sources and NumPy references), not package code, so neither checker edits them into another task.

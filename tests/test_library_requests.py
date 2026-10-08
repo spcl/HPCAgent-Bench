@@ -98,7 +98,8 @@ def test_toolkit_entries_point_at_the_discovery_table() -> None:
         if not entry.get("toolset"):
             continue
         tokens = languages.toolset_link_tokens(entry["toolset"])
-        assert tokens and all(t.startswith("-l") for t in tokens), (name, tokens)
+        assert tokens, (name, tokens)
+        assert all(t.startswith("-l") for t in tokens), (name, tokens)
         for lang in entry["langs"]:
             _compile, link = languages.library_tokens(name, lang)
             assert not any(t.startswith(("-L", "-Wl,-rpath,")) for t in link), (name, link)
@@ -177,7 +178,7 @@ def test_a_requested_library_actually_builds_links_and_loads(name: str, tmp_path
     # and the timing is of an implementation nobody chose.
     searched = [t[2:] for t in link_tokens if t.startswith("-L")]
     if searched:
-        dynamic = subprocess.run(["readelf", "-d", str(out)], capture_output=True, text=True).stdout
+        dynamic = subprocess.run(["readelf", "-d", str(out)], capture_output=True, text=True, check=False).stdout
         assert any(d in dynamic for d in searched), f"{name}: no RPATH/RUNPATH for {searched} in {out.name}"
 
 
@@ -252,7 +253,11 @@ def test_one_catalog_name_may_resolve_several_pkg_config_modules() -> None:
         assert "fftw" not in languages.available_libraries("c")
         return
     linked = " ".join(link_tokens)
-    assert "-lfftw3" in linked and "-lfftw3f" in linked, (
+    assert "-lfftw3" in linked, (
+        f"fftw resolved to {linked!r}: both precisions have to be on the link line, or the fp32 "
+        "spelling of every FFT kernel is an undefined symbol that only surfaces at dlopen"
+    )
+    assert "-lfftw3f" in linked, (
         f"fftw resolved to {linked!r}: both precisions have to be on the link line, or the fp32 "
         "spelling of every FFT kernel is an undefined symbol that only surfaces at dlopen"
     )
@@ -312,7 +317,7 @@ def test_libraries_yaml_has_no_duplicate_keys() -> None:
         return yaml.SafeLoader.construct_mapping(loader, node, deep=deep)
 
     UniqueKeyLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, construct_mapping)
-    yaml.load(languages.LIBRARIES_YAML.read_text(), Loader=UniqueKeyLoader)
+    yaml.load(languages.LIBRARIES_YAML.read_text(), Loader=UniqueKeyLoader)  # noqa: S506 -- UniqueKeyLoader is a SafeLoader
 
 
 def test_mpi_without_its_wrapper_falls_back_to_pkg_config(monkeypatch) -> None:

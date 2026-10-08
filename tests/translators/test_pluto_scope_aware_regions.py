@@ -215,7 +215,8 @@ def test_polyccs_repeated_scratch_declarations_are_merged_not_dropped() -> None:
     assert "int t3;" in out, "a counter the first declaration lacked must survive"
     assert out.count("register int lbv, ubv;") == 1, out
     assert "double keep, me;" in out, "only polycc's bare-int scratch is touched"
-    assert "if (N >= 1) {" in out and out.count("for (t1=0") == 1, out
+    assert "if (N >= 1) {" in out, out
+    assert out.count("for (t1=0") == 1, out
 
 
 def test_a_declaration_that_went_out_of_scope_is_not_deduped_against() -> None:

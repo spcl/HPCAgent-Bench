@@ -145,8 +145,8 @@ def load_backends(path: pathlib.Path = BACKENDS_PATH) -> Backends:
     byte-identical across the language boundary."""
     rows: dict = {}
     passthrough: tuple[str, ...] = ()
-    for line in path.read_text().splitlines():
-        line = line.strip()
+    for raw in path.read_text().splitlines():
+        line = raw.strip()
         if not line or line.startswith("#"):
             continue
         key, _, value = line.partition("=")
@@ -247,7 +247,7 @@ def default_image(backend: str, hardware: str = "cpu", repo_root: str | None = N
         if override:
             return override
         name = spelling.image_default.format(hw=hardware)
-        return os.path.join(repo_root, name) if repo_root else name
+        return str(pathlib.Path(repo_root, name)) if repo_root else name
     return os.environ.get("HPCAGENT_BENCH_DOCKER_IMAGE") or spelling.image_default.format(hw=hardware)
 
 
@@ -305,7 +305,7 @@ def local_run_command(
     spelling = SPELLINGS[chosen]
     if spelling.kind in ("srun_env", "none"):
         return list(inner)
-    repo = repo_root or os.getcwd()
+    repo = repo_root or str(pathlib.Path.cwd())
     argv: list[str] = [chosen, *spelling.verb, *spelling.gpu.get(hardware, ())]
     for key, value in collect_env(hardware):
         argv += [spelling.env_flag, f"{key}={value}"]
@@ -338,15 +338,15 @@ def install_apptainer(prefix: str = "~/.local", attempts: int = 4) -> int:
     loop never sleeps, and it caches the listing per process, so only a new process can land on a
     different mirror. Each failed attempt's partial tree is removed first
     (:func:`clean_partial_install`), because the installer refuses a non-empty ``<prefix>/<arch>``."""
-    prefix = os.path.expanduser(prefix)
-    preexisting = set(os.listdir(prefix)) if os.path.isdir(prefix) else set()
+    prefix = str(pathlib.Path(prefix).expanduser())
+    preexisting = {entry.name for entry in pathlib.Path(prefix).iterdir()} if pathlib.Path(prefix).is_dir() else set()
     returncode = 1
     for attempt in range(1, attempts + 1):
         try:
             script = subprocess.run(
                 ["curl", "-fsSL", APPTAINER_INSTALLER], check=True, capture_output=True, text=True
             ).stdout
-            returncode = subprocess.run(["bash", "-s", "-", prefix], input=script, text=True).returncode
+            returncode = subprocess.run(["bash", "-s", "-", prefix], input=script, text=True, check=False).returncode
             if returncode == 0:
                 return 0
         except subprocess.CalledProcessError as exc:
@@ -367,17 +367,16 @@ def clean_partial_install(prefix: str, preexisting: Collection[str]) -> None:
 
     ``preexisting`` is the prefix's entries from before the first attempt, left alone: ``prefix``
     defaults to ``~/.local``, and a blanket wipe would delete a user's unrelated installs."""
-    if not os.path.isdir(prefix):
+    if not pathlib.Path(prefix).is_dir():
         return
-    for name in os.listdir(prefix):
-        if name in preexisting:
+    for path in pathlib.Path(prefix).iterdir():
+        if path.name in preexisting:
             continue
-        path = os.path.join(prefix, name)
-        if os.path.isdir(path) and not os.path.islink(path):
+        if path.is_dir() and not path.is_symlink():
             shutil.rmtree(path, ignore_errors=True)
         else:
             with contextlib.suppress(OSError):
-                os.remove(path)
+                path.unlink()
 
 
 def install_apptainer_main(argv: Sequence[str] | None = None) -> int:
