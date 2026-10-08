@@ -80,9 +80,11 @@ def steps(kir) -> list[object | None]:
     """
     out: list[object | None] = []
     for tree in [kir.tree] + [h.tree for h in kir.helpers]:
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Slice) and node.step is not None:
-                out.append(node.step.value if isinstance(node.step, ast.Constant) else None)
+        out.extend(
+            node.step.value if isinstance(node.step, ast.Constant) else None
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Slice) and node.step is not None
+        )
     return out
 
 

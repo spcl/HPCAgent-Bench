@@ -62,8 +62,7 @@ def edge_probes(npt: int) -> np.ndarray:
     ends = np.array([lo, hi])
     edges = np.histogram(ends, npt)[1]
     probes = [ends]
-    for e in edges:
-        probes.append(np.array([e, np.nextafter(e, -np.inf), np.nextafter(e, np.inf)]))
+    probes.extend(np.array([e, np.nextafter(e, -np.inf), np.nextafter(e, np.inf)]) for e in edges)
     return np.clip(np.concatenate(probes), lo, hi)
 
 

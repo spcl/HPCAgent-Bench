@@ -922,11 +922,11 @@ def test_the_speedup_leg_is_over_the_kernels_both_solved_and_the_cost_leg_over_e
     )  # fmt: skip
     assert rc == 0
     legs = pd.read_csv(out).set_index("leg")
-    assert legs.at["speedup", "n_pairs"] == 6
-    assert legs.at["speedup", "rho"] == pytest.approx(2.8284271247461903)
-    assert legs.at["tokens", "n_pairs"] == 7
-    assert legs.at["tokens", "rho"] == pytest.approx(1.4859942891369484)
-    assert legs.at["tokens", "cost_model"] == "billed"
+    assert legs.loc["speedup", "n_pairs"] == 6
+    assert legs.loc["speedup", "rho"] == pytest.approx(2.8284271247461903)
+    assert legs.loc["tokens", "n_pairs"] == 7
+    assert legs.loc["tokens", "rho"] == pytest.approx(1.4859942891369484)
+    assert legs.loc["tokens", "cost_model"] == "billed"
     control = pd.read_csv(setups_out).set_index("setup").loc["x-qwen38-c"]
     # GM billed tokens over K: (200^6 * 100)^(1/7)
     assert control.n_token_kernels == 7

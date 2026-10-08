@@ -470,9 +470,12 @@ class ArrayUseScan:
         expanded into the subscript forms :meth:`note_subscript` keys on."""
         if not (isinstance(node.func, ast.Attribute) and is_numpy_module(node.func.value)):
             return
-        if node.func.attr == "take" and len(node.args) >= 2:
-            if isinstance(node.args[1], ast.Name) and node.args[1].id in self.arrays:
-                self.index_arrays.add(node.args[1].id)
+        if (
+            node.func.attr == "take"
+            and len(node.args) >= 2
+            and (isinstance(node.args[1], ast.Name) and node.args[1].id in self.arrays)
+        ):
+            self.index_arrays.add(node.args[1].id)
         if node.func.attr == "ix_":
             for arg in node.args:
                 if isinstance(arg, ast.Name) and arg.id in self.arrays:

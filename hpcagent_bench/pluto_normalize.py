@@ -95,10 +95,10 @@ def _closing(text: str, open_idx: int, pair: tuple[str, str]) -> int:
 def _index_spans(body: str) -> list[tuple[int, int]]:
     """Spans whose names act as integers polycc must model: subscripts, for headers, if conditions."""
     spans: list[tuple[int, int]] = []
-    for m in re.finditer(r"\[", body):
-        spans.append((m.start(), _closing(body, m.start(), ("[", "]"))))
-    for m in re.finditer(r"\b(?:for|if|while) \(", body):
-        spans.append((m.end() - 1, _closing(body, m.end() - 1, ("(", ")"))))
+    spans.extend((m.start(), _closing(body, m.start(), ("[", "]"))) for m in re.finditer(r"\[", body))
+    spans.extend(
+        (m.end() - 1, _closing(body, m.end() - 1, ("(", ")"))) for m in re.finditer(r"\b(?:for|if|while) \(", body)
+    )
     return spans
 
 

@@ -360,7 +360,7 @@ def child_main[ResultT](
             # payload surfaces in the parent as "child exited 0 with no result" (large payloads
             # spill to disk: native_call.spill_outputs). This except covers put() itself failing.
             q.put(("ok", out))
-        except Exception:  # queue unusable -> success without a payload
+        except Exception:  # noqa: BLE001 -- queue unusable -> success without a payload
             q.put(("ok", None))
     except BaseException:  # noqa: BLE001 -- surface EVERY failure, never swallow it
         tb = traceback.format_exc()

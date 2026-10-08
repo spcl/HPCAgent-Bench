@@ -474,7 +474,7 @@ def floordiv_real_helper(dk: str) -> str:
 def double_kind() -> str:
     # ISO_C_BINDING kind token for a 64-bit real, pulled from the registry (never
     # hardcoded); forces the FloorDiv divide into double regardless of kernel kind.
-    unused, unused, rest = fortran_type("float64").partition("(")
+    rest = fortran_type("float64").partition("(")[2]
     return rest.rstrip(")")
 
 
@@ -1352,10 +1352,9 @@ class FortranBodyEmitter(BaseEmitter):
                 if isinstance(n.op, ast.Invert):
                     return True
                 return is_int_expr(n.operand)
-            if isinstance(n, ast.Call) and isinstance(n.func, ast.Name):
-                # IAND/IOR etc. are emitted from bitwise BinOps; bare int/len calls also return int.
-                if n.func.id in INT_EXTRACTING_CALLS:
-                    return True
+            # IAND/IOR etc. are emitted from bitwise BinOps; bare int/len calls also return int.
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in INT_EXTRACTING_CALLS:
+                return True
             if isinstance(n, ast.Name):
                 return n.id in int_uses
             return False
@@ -1973,9 +1972,12 @@ class FortranBodyEmitter(BaseEmitter):
     def emit_subscript(self, node: ast.Subscript) -> str:
         # Boolean-mask indexing arr[mask] -> Fortran PACK(arr, mask). Detect by
         # looking at the slice slot for a Name resolving to a known-logical local.
-        if isinstance(node.value, ast.Name) and isinstance(node.slice, ast.Name):
-            if node.slice.id in self._logical_array_locals:
-                return f"PACK({node.value.id}, {node.slice.id})"
+        if (
+            isinstance(node.value, ast.Name)
+            and isinstance(node.slice, ast.Name)
+            and node.slice.id in self._logical_array_locals
+        ):
+            return f"PACK({node.value.id}, {node.slice.id})"
         # Tuple subscripted by a constant integer: resolve at emit time (a
         # constant-folded shape indexed by D.shape[-2]).
         if isinstance(node.value, ast.Tuple):
@@ -2711,7 +2713,7 @@ def to_fortran_shape_token(tok: str) -> str:
 
     try:
         return fortran_shape_expr(tree)
-    except Exception:
+    except Exception:  # noqa: BLE001 -- an extent the lowering cannot spell stays as written
         return tok
 
 
@@ -2984,8 +2986,8 @@ def fortran_case_map(kir: KernelIR) -> dict[str, str]:
     """
     reserved: set[str] = set()
     reserved_ordered: list[str] = []
-    for descs in (kir.symbols, kir.arrays, kir.scalars):
-        for d in descs:
+    for group in (kir.symbols, kir.arrays, kir.scalars):
+        for d in group:
             if d.name not in reserved:
                 reserved.add(d.name)
                 reserved_ordered.append(d.name)
@@ -3521,10 +3523,9 @@ def collect_implicit_locals(kir: KernelIR) -> list[tuple[str, str]]:
                 if isinstance(tgt, ast.Name) and tgt.id not in seen:
                     out.append((tgt.id, typing_.classify(tgt.id)))
                     seen.add(tgt.id)
-        elif isinstance(node, ast.AugAssign):
-            if isinstance(node.target, ast.Name) and node.target.id not in seen:
-                out.append((node.target.id, typing_.classify(node.target.id)))
-                seen.add(node.target.id)
+        elif isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name) and node.target.id not in seen:
+            out.append((node.target.id, typing_.classify(node.target.id)))
+            seen.add(node.target.id)
     return out
 
 

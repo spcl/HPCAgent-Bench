@@ -36,7 +36,7 @@ LINE = re.compile(r"^- When (?P<when>.*?) -- read `(?P<path>/shared/skills/(?P<p
 def _lines(index: str) -> list[re.Match]:
     """The index's trigger lines, each unwrapped back to one line (textwrap folds them at 92)."""
     body = re.sub(r"\n  ", " ", index)
-    return [m for m in (LINE.match(l) for l in body.splitlines()) if m]
+    return [m for m in (LINE.match(line) for line in body.splitlines()) if m]
 
 
 def _norm(text: str) -> str:

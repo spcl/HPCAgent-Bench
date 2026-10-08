@@ -2466,10 +2466,9 @@ def collect_implicit_locals(kir: KernelIR) -> list[tuple[str, str]]:
                 if isinstance(tgt, ast.Name) and tgt.id not in seen:
                     out.append((tgt.id, ctype_for(tgt.id, node.value)))
                     seen.add(tgt.id)
-        elif isinstance(node, ast.AugAssign):
-            if isinstance(node.target, ast.Name) and node.target.id not in seen:
-                out.append((node.target.id, ctype_for(node.target.id)))
-                seen.add(node.target.id)
+        elif isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name) and node.target.id not in seen:
+            out.append((node.target.id, ctype_for(node.target.id)))
+            seen.add(node.target.id)
     return out
 
 

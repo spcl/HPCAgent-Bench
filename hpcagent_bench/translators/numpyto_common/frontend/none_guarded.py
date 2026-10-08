@@ -313,16 +313,14 @@ class SpliceNoneGuardedCalls:
             )
             ast.fix_missing_locations(init)
             new_stmts.append(init)
-        for stmt in mid[:guard_idx]:
-            new_stmts.append(clone_rename(stmt))
+        new_stmts.extend(clone_rename(stmt) for stmt in mid[:guard_idx])
         guard_if = mid[guard_idx]
         if not isinstance(guard_if, ast.If):
             return None
         cond = clone_rename_expr(guard_if.test)
         handler = ast.parse(ast.unparse(guard_stmt.body[0])).body[0]
         new_stmts.append(ast.copy_location(ast.If(test=cond, body=[handler], orelse=[]), call_stmt))
-        for stmt in mid[guard_idx + 1 :]:
-            new_stmts.append(clone_rename(stmt))
+        new_stmts.extend(clone_rename(stmt) for stmt in mid[guard_idx + 1 :])
         ret_expr = clone_rename_expr(ret_value)
         ret_elts_renamed = ret_expr.elts if isinstance(ret_expr, (ast.Tuple, ast.List)) else [ret_expr]
         targets_copy = [copy.deepcopy(t) for t in final_targets]

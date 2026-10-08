@@ -122,9 +122,9 @@ def read_raw_rows(results_path: pathlib.Path) -> list[dict[str, str]]:
     if not results_path.is_file():
         return []
     rows: list[dict[str, str]] = []
-    for line in results_path.read_text().splitlines()[1:]:
-        if line:
-            rows.append(dict(zip(HEADER, line.split("\t"), strict=True)))
+    rows.extend(
+        dict(zip(HEADER, line.split("\t"), strict=True)) for line in results_path.read_text().splitlines()[1:] if line
+    )
     return rows
 
 

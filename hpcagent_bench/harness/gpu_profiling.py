@@ -1115,11 +1115,11 @@ def render_report(payload: GpuPayload) -> str:
         f"  {'kernel':<44}  {'calls':>6}  {'mean (us)':>10}  {'total (ms)':>10}  {'share':>7}",
         f"  {'-' * 44}  {'-' * 6}  {'-' * 10}  {'-' * 10}  {'-' * 7}",
     ]
-    for k in payload["kernels"]:
-        lines.append(
-            f"  {k['name'][:44]:<44}  {k['instances']:6d}  {k['mean_ns'] / 1e3:10.2f}  "
-            f"{k['total_ns'] / NS_PER_MS:10.4f}  {k['time_pct']:6.2f}%"
-        )
+    lines.extend(
+        f"  {k['name'][:44]:<44}  {k['instances']:6d}  {k['mean_ns'] / 1e3:10.2f}  "
+        f"{k['total_ns'] / NS_PER_MS:10.4f}  {k['time_pct']:6.2f}%"
+        for k in payload["kernels"]
+    )
     if payload["kernels_omitted"]:
         lines.append(f"  ({payload['kernels_omitted']} kernel(s) below {payload['min_percent']:g}% omitted)")
     if payload["memory"]:

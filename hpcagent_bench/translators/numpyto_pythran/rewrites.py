@@ -312,9 +312,11 @@ class DeadCodePrune(ast.NodeTransformer):
             if name in reachable:
                 continue
             reachable.add(name)
-            for sub in ast.walk(funcs[name]):
-                if isinstance(sub, ast.Name) and sub.id in funcs and sub.id not in reachable:
-                    stack.append(sub.id)
+            stack.extend(
+                sub.id
+                for sub in ast.walk(funcs[name])
+                if isinstance(sub, ast.Name) and sub.id in funcs and sub.id not in reachable
+            )
         node.body = [n for n in node.body if not (isinstance(n, ast.FunctionDef) and n.name not in reachable)]
         return node
 

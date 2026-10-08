@@ -818,8 +818,7 @@ def subscript_extent(expr: ast.Subscript, shape_table: ShapeTable) -> Extent | N
             group = broadcast_extents(group, other)
         ext[idx_group_pos:idx_group_pos] = list(group)
     if shape and src_axis < len(shape):
-        for i in range(src_axis, len(shape)):
-            ext.append(const_or_name(shape[i]))
+        ext.extend(const_or_name(shape[i]) for i in range(src_axis, len(shape)))
     return tuple(ext) if ext else None
 
 
@@ -975,20 +974,20 @@ def broadcast_extents(l_ext: tuple[ast.expr, ...], r_ext: tuple[ast.expr, ...]) 
     l_pad = (const_(1),) * (rank - len(l_ext)) + l_ext
     r_pad = (const_(1),) * (rank - len(r_ext)) + r_ext
     out: list[ast.expr] = []
-    for l, r in zip(l_pad, r_pad, strict=False):
+    for left, right in zip(l_pad, r_pad, strict=False):
         # A size-1 axis on either side stretches to the other's extent -- a size-1
         # RIGHT axis must yield the LEFT extent, not silently keep the (already
         # equal) left, so ``B(N, M) * a(N, 1)`` broadcasts to ``M`` rather than
         # dropping it.
-        if extent_is_one(l):
-            out.append(r)
-        elif extent_is_one(r):
-            out.append(l)
+        if extent_is_one(left):
+            out.append(right)
+        elif extent_is_one(right):
+            out.append(left)
         else:
             # Equal extents keep either; a genuine runtime-1 mismatch can't resolve
             # statically, so take the left (the scalarizer indexes each operand by
             # its own shape, so a per-operand size-1 axis still reads with a 0).
-            out.append(l)
+            out.append(left)
     return tuple(out)
 
 

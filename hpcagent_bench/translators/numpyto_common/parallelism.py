@@ -283,9 +283,13 @@ def loop_is_parallel_safe(node: ast.AST) -> bool:
         return False  # a scalar written for a reader PAST the loop -- only the last iteration's counts.
     written = written_arrays(body)
     for n in ast.walk(body):
-        if isinstance(n, ast.Subscript) and isinstance(n.value, ast.Name) and n.value.id in written:
-            if not subscript_idx_safe(n, idx):
-                return False
+        if (
+            isinstance(n, ast.Subscript)
+            and isinstance(n.value, ast.Name)
+            and n.value.id in written
+            and not subscript_idx_safe(n, idx)
+        ):
+            return False
     return written_partition_consistent(body, idx, written)
 
 
@@ -354,9 +358,13 @@ def loop_reduction(node: ast.AST) -> tuple[str, str] | None:
         return None
     written = written_arrays(body)
     for n in ast.walk(body):
-        if isinstance(n, ast.Subscript) and isinstance(n.value, ast.Name) and n.value.id in written:
-            if not subscript_idx_safe(n, idx):
-                return None
+        if (
+            isinstance(n, ast.Subscript)
+            and isinstance(n.value, ast.Name)
+            and n.value.id in written
+            and not subscript_idx_safe(n, idx)
+        ):
+            return None
     if not written_partition_consistent(body, idx, written):
         return None  # a written array indexed by idx on two axes (in-place transpose) still races.
     return op, acc

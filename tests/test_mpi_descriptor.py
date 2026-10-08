@@ -468,7 +468,7 @@ def test_hypercube_grid_equal_edges(nranks, ndim, dims) -> None:
 
 
 def test_hypercube_grid_rejects_non_perfect_power() -> None:
-    with pytest.raises(ValueError, match="perfect 2-th power|not a perfect"):
+    with pytest.raises(ValueError, match=r"perfect 2-th power|not a perfect"):
         hypercube_grid(8, 2)  # 8 is not a perfect square -> no equal-edge 2-D cube
 
 
@@ -536,7 +536,7 @@ def test_blockcyclic_builder_replicates_low_rank_arrays_and_rejects_bad_ranks() 
     assert "v" not in dist["arrays"]
     assert "A" in dist["arrays"]
     # No equal-edge 2-D cube exists for 8 ranks.
-    with pytest.raises(ValueError, match="not a perfect|perfect 2-th power"):
+    with pytest.raises(ValueError, match=r"not a perfect|perfect 2-th power"):
         blockcyclic_distribution_from_shapes({"A": ("M", "N")}, 8, grid_ndim=2)
 
 

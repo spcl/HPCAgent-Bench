@@ -70,7 +70,7 @@ def test_a_taken_key_alias_or_order_is_refused_and_leaves_the_registry_as_it_was
         attempt("a", 5)
     with pytest.raises(RegistryError, match="registered twice"):
         attempt("alpha", 5)
-    with pytest.raises(RegistryError, match="already 'a'.s slot"):
+    with pytest.raises(RegistryError, match=r"already 'a'.s slot"):
         attempt("b", 0)
     with pytest.raises(RegistryError, match="alias 'alpha'"):
         attempt("b", 1, ("alpha",))

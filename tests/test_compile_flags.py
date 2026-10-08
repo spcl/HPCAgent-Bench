@@ -123,9 +123,11 @@ def test_every_shared_library_block_compiles_position_independent(monkeypatch: p
             f"{name} is not an MPI block yet does not link -shared; "
             f"this test's exemption rule no longer describes the config"
         )
-        for mode in (Mode.SINGLE_CORE, Mode.MULTI_CORE):
-            if "-fPIC" not in f"{line} {_resolve_baseline(block, mode)}":
-                missing.append(f"{name} ({mode})")
+        missing.extend(
+            f"{name} ({mode})"
+            for mode in (Mode.SINGLE_CORE, Mode.MULTI_CORE)
+            if "-fPIC" not in f"{line} {_resolve_baseline(block, mode)}"
+        )
     assert not missing, (
         f"these blocks compile a dlopen-ed shared library without -fPIC, in neither the "
         f"compile line nor the resolved baseline: {missing}"

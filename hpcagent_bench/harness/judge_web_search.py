@@ -318,7 +318,7 @@ async def crawl_with_crawl4ai(
         try:
             with contextlib.redirect_stdout(sys.stderr):
                 crawl_results = await collect_arun_many(crawler, [result.url for result in selected], run_config)
-        except Exception:
+        except Exception:  # noqa: BLE001 -- a failed crawl falls back to the search snippets
             crawl_results = []
             for result in selected:
                 with contextlib.redirect_stdout(sys.stderr):

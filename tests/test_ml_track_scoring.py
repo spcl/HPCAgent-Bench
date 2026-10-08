@@ -10,6 +10,7 @@ import contextlib
 import dataclasses
 import json
 import pathlib
+import re
 import statistics
 import types
 from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -475,7 +476,7 @@ def test_an_ordinary_launch_failure_does_not_end_the_sweep(monkeypatch: pytest.M
 
 def test_the_launcher_timeout_is_a_launch_timeout(tmp_path: pathlib.Path) -> None:
     """:func:`mpi_call.launch` raises :class:`mpi_call.LaunchTimeout` (still a RuntimeError) on expiry."""
-    with pytest.raises(mpi_call.LaunchTimeout, match="exceeded 0.2s"):
+    with pytest.raises(mpi_call.LaunchTimeout, match=re.escape("exceeded 0.2s")):
         mpi_call.launch(["sleep"], 30, [], tmp_path / "out", timeout=0.2)
     assert issubclass(mpi_call.LaunchTimeout, RuntimeError)
 

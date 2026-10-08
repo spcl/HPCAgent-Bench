@@ -374,12 +374,11 @@ def lstsq_first_axis_size(node: ast.expr, shape_table: dict[str, tuple[str, ...]
         first = sl.elts[0] if isinstance(sl, ast.Tuple) else sl
         if isinstance(first, ast.Slice) and first.upper is not None:
             return first.upper
-        if isinstance(first, ast.Slice) and first.upper is None:
-            # Whole axis -- fall back to shape_table of the base.
-            if isinstance(node.value, ast.Name):
-                shape = shape_table.get(node.value.id)
-                if shape:
-                    return const_or_name(shape[0])
+        # Whole axis -- fall back to shape_table of the base.
+        if isinstance(first, ast.Slice) and first.upper is None and isinstance(node.value, ast.Name):
+            shape = shape_table.get(node.value.id)
+            if shape:
+                return const_or_name(shape[0])
         if not isinstance(first, ast.Slice) and isinstance(node.value, ast.Name):
             shape = shape_table.get(node.value.id)
             if shape:

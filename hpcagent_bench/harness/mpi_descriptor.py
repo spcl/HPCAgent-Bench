@@ -406,12 +406,10 @@ def _array_dist_from_layout(layout: dict) -> ArrayDist:
     if layout.get("replicated"):
         return ArrayDist(replicated=True)
     axes: list[AxisDist] = []
-    for ax in layout["axes"]:
-        axes.append(
-            AxisDist(
-                grid_dim=ax.get("grid_dim"), scheme=ax.get("scheme", "block"), block_size=int(ax.get("block_size", 1))
-            )
-        )
+    axes.extend(
+        AxisDist(grid_dim=ax.get("grid_dim"), scheme=ax.get("scheme", "block"), block_size=int(ax.get("block_size", 1)))
+        for ax in layout["axes"]
+    )
     return ArrayDist(axes=tuple(axes))
 
 

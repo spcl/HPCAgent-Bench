@@ -134,9 +134,11 @@ def unregistered_values(env: pathlib.Path) -> list[str]:
 
     # The packet is a '+'-joined SET, and '' is the control rather than a missing value, so it is
     # checked part by part instead of as one string.
-    for part in study_tags.packet_parts(identity.get("PACKET", "")):
-        if part not in study_tags.names("packets"):
-            unknown.append(f"{env.name}: packet {part!r} is not a registered packet")
+    unknown.extend(
+        f"{env.name}: packet {part!r} is not a registered packet"
+        for part in study_tags.packet_parts(identity.get("PACKET", ""))
+        if part not in study_tags.names("packets")
+    )
     return unknown
 
 

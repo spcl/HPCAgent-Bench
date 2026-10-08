@@ -111,8 +111,7 @@ def run(
     dtypes = cart.bcast([p.dtype for p in parsed.ptrs] if parsed is not None else None, root=0)
 
     tiles: list[np.ndarray] = []
-    for i in range(n_ptr):
-        tiles.append(cart.scatter(parsed.ptrs[i].tiles if parsed is not None else None, root=0))
+    tiles.extend(cart.scatter(parsed.ptrs[i].tiles if parsed is not None else None, root=0) for i in range(n_ptr))
     scalars = cart.scatter(parsed.scalar_values if parsed is not None else None, root=0)
     ws_bytes = cart.scatter(parsed.workspace_bytes if parsed is not None else None, root=0)
 

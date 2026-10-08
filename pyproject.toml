@@ -370,10 +370,14 @@ ignore = [
     "RUF059", "B007",  # their fix binds a _-prefixed name, which check_names.py forbids
     "E731",  # a named one-line lambda; its fix is an unannotated def the annotation ratchet refuses
     "PTH100",  # os.path.abspath keeps a symlink where Path.resolve follows it (mount points, the seal's paths)
+    "TRY301",  # a raise its own except clause reports is the point of that try
 ]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["E402"]  # imports after pytest.importorskip, which gates the optional extra they need
+# The ports keep their kernel's own names (SRAD's image I, a vexx O); E741 reads them as ambiguous.
+"tests/ports/**" = ["E402", "E741"]
+"tests/test_seissol_init_vectorized.py" = ["E402", "E741"]
 
 # Type-check against the requires-python floor. The benchmark references are task text agents read (original
 # sources and NumPy references), not package code, so neither checker edits them into another task.

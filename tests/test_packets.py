@@ -156,7 +156,7 @@ def test_canonical_names_a_composite_only_when_the_spec_stages_the_same_pages() 
 
 @pytest.mark.parametrize("spec", ["profiling", "all-in", "divide-and-conquer;profiling", "lang;all-in"])
 def test_a_spec_reaching_a_frozen_packet_takes_no_new_submission(spec: str) -> None:
-    with pytest.raises(ValueError, match="takes no new submissions.*profiling"):
+    with pytest.raises(ValueError, match=r"takes no new submissions.*profiling"):
         packets.refuse_frozen(spec)
 
 

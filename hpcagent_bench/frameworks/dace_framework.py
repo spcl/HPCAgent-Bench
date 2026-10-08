@@ -787,7 +787,7 @@ class DaceFramework(Framework):
                 if self.info["arch"] == "gpu":
                     enforce_gpu_residency(sdfg)
                 produced[pipe.name] = sdfg
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 -- a failed pipeline is recorded and the next one tried
                 print(f"DaCe {pipe.name} pipeline failed: {exc}")
                 self._pipeline_errors.append(f"{pipe.name}: {type(exc).__name__}: {exc}")
         return produced
@@ -866,7 +866,7 @@ class DaceFramework(Framework):
                         dace.config.set_temporary(*key, value=f"{dace.Config.get(*key)} {STRICT_FP_FLAG}")
                     )
                 rebuilt = TimedCompiledSDFG(strict.compile(), strict, f"{name}_strict_fp")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 -- the strict-FP rebuild is optional; the fast build stands
             print(f"DaCe optimize: strict-FP rebuild of {name!r} failed to compile: {exc}")
             return fallback
         if self.verify(rebuilt, reference, bench, bdata):
@@ -887,7 +887,7 @@ class DaceFramework(Framework):
             try:
                 dc_exec = sdfg.compile()
                 compiled[name] = TimedCompiledSDFG(dc_exec, sdfg, name)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 -- a variant that does not compile is skipped
                 print(f"DaCe optimize: failed to compile {self.info['arch']} {name}: {exc}")
                 traceback.print_exc()
         return compiled
@@ -898,7 +898,7 @@ class DaceFramework(Framework):
         """Run ``variant`` and check its output against the NumPy reference via the harness validator."""
         try:
             out = self.collect_outputs(self, variant, bench, bdata)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 -- a variant that raises fails verification
             print(f"DaCe optimize: variant {variant.name!r} raised during verify: {exc}")
             return False
         host = [np.asarray(self.copy_back_output(a)) for a in out]
@@ -918,7 +918,7 @@ class DaceFramework(Framework):
             # The harness's njit oracle wrapper: this runs inside first_execution, whose time counts against
             # the framework's timeout.
             reference = self.collect_outputs(numpy_fw, njit_reference(np_impl, bench, bdata), bench, bdata)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 -- no reference means no verification, not a failed run
             print(f"DaCe optimize: numpy reference unavailable ({exc}); verification skipped")
             return None
         if self.info["arch"] != "gpu":
@@ -963,7 +963,7 @@ class DaceFramework(Framework):
                 durations_us = [float(ev.duration) for ev in events if isinstance(ev, DurationEvent)]
                 if durations_us:
                     native_t = durations_us[-1] / US_PER_MS
-            except Exception:
+            except Exception:  # noqa: BLE001 -- a missing native timing falls back to the Python one
                 native_t = None
         return TimingResult(python=python_t, native=native_t)
 

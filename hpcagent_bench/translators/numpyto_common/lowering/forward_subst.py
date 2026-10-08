@@ -257,9 +257,13 @@ class CandidateSearch:
         for i, stmt in enumerate(stmts):
             if self.found:
                 return
-            if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name):
-                if self.try_candidate(stmt, stmt.targets[0], stmts, i, depth, after, reentry, loop_vars):
-                    return
+            if (
+                isinstance(stmt, ast.Assign)
+                and len(stmt.targets) == 1
+                and isinstance(stmt.targets[0], ast.Name)
+                and self.try_candidate(stmt, stmt.targets[0], stmts, i, depth, after, reentry, loop_vars)
+            ):
+                return
             if isinstance(stmt, (ast.For, ast.While, ast.If)):
                 self.scan_block(stmts, i, depth, after, reentry, loop_vars)
 

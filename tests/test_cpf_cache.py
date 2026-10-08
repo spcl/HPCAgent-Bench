@@ -12,6 +12,7 @@ and a miss that nobody can trace back to what was missing.
 import json
 import os
 import pathlib
+import re
 import subprocess
 import sys
 import threading
@@ -301,7 +302,7 @@ def test_a_failed_render_is_a_miss_naming_its_key_and_error(tmp_path: pathlib.Pa
 
 def test_a_kernel_nothing_was_rendered_for_names_the_entry(tmp_path: pathlib.Path) -> None:
     view = view_with(tmp_path, "k")
-    with pytest.raises(cpf_cache.CacheMiss, match="other_fp64_cpf.c.json"):
+    with pytest.raises(cpf_cache.CacheMiss, match=re.escape("other_fp64_cpf.c.json")):
         cpf_cache.resolve(view, "other", "c", "fp64", "form")
 
 

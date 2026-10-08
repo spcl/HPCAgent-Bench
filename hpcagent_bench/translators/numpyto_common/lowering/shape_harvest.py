@@ -205,11 +205,15 @@ def harvest_assign(
     """Seed the shape (and dtype) of ``target_id = rhs``."""
     # ``nxt = data[partner]`` -- a gather or a slice of an array carries the BASE's dtype, not the
     # sweep's float default (an int64 value round-tripped through a float temp).
-    if isinstance(rhs, ast.Subscript) and isinstance(rhs.value, ast.Name) and dtype_table is not None:
-        if target_id not in dtype_table:
-            src_dtype = dtype_table.get(rhs.value.id)
-            if src_dtype is not None:
-                dtype_table[target_id] = src_dtype
+    if (
+        isinstance(rhs, ast.Subscript)
+        and isinstance(rhs.value, ast.Name)
+        and dtype_table is not None
+        and target_id not in dtype_table
+    ):
+        src_dtype = dtype_table.get(rhs.value.id)
+        if src_dtype is not None:
+            dtype_table[target_id] = src_dtype
     # ``np.linalg.<op>`` is a TWO-level attribute the single-level ``np.<attr>`` gate below never
     # matches: register what the solve / inv / cholesky expanders write -- ``solve`` returns x with
     # b's shape (not the square A's); ``inv`` / ``cholesky`` are shape-preserving.

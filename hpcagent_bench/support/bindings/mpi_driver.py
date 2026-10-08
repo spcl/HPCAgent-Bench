@@ -236,8 +236,7 @@ def gen_mpi_driver(binding: Binding, grid_dims: Sequence[int], *, device_arrays:
         const = "const " if a.is_const else ""
         buf = f"(g_on_device[{i}] ? dwork[{i}] : work[{i}])" if device else f"work[{i}]"
         call_parts.append(f"({const}{c_type(a.dtype)} *){buf}")
-    for a in scalars:
-        call_parts.append(f"s_{a.name}")
+    call_parts.extend(f"s_{a.name}" for a in scalars)
     call_parts.append("comm_f")
     call_parts.append("(uint8_t *)dws" if device else "(uint8_t *)ws")
     call_parts.append("ws_bytes")

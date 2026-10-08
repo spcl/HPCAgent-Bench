@@ -302,7 +302,7 @@ def existing_dirs(paths: Sequence[str]) -> tuple[str, ...]:
     on a read-only image root -- which fails, and would take every worker of the setup down over a
     directory that was never a leak.
     """
-    return tuple(path for path in paths if os.path.isdir(path))
+    return tuple(path for path in paths if pathlib.Path(path).is_dir())
 
 
 def seal_plan(layout: Layout, shared_entries: Sequence[str]) -> list[MountOp]:
@@ -369,12 +369,12 @@ def seal_plan(layout: Layout, shared_entries: Sequence[str]) -> list[MountOp]:
 
 def make_target(source: str, target: str) -> None:
     """Create the mount point: a directory for a directory source, an empty file for a file one."""
-    if source and not os.path.isdir(source):
-        os.makedirs(os.path.dirname(target), exist_ok=True)
-        if not os.path.exists(target):
+    if source and not pathlib.Path(source).is_dir():
+        pathlib.Path(target).parent.mkdir(parents=True, exist_ok=True)
+        if not pathlib.Path(target).exists():
             pathlib.Path(target).touch()
         return
-    os.makedirs(target, exist_ok=True)
+    pathlib.Path(target).mkdir(parents=True, exist_ok=True)
 
 
 def apply_plan(ops: Sequence[MountOp], calls: Syscalls = REAL) -> None:
@@ -461,7 +461,7 @@ def main(argv: Sequence[str]) -> int:
         run_dir=str(args.run_dir),
         hide=existing_dirs([str(path) for path in list(args.hide)]),
         material=str(args.material),
-        hide_files=tuple(str(path) for path in list(args.hide_file) if os.path.isfile(path)),
+        hide_files=tuple(str(path) for path in list(args.hide_file) if pathlib.Path(path).is_file()),
         keep=existing_dirs([str(path) for path in list(args.keep)]),
         private=existing_dirs(list(PRIVATE_DIRS)),
     )

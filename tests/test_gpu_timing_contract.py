@@ -685,9 +685,11 @@ def test_no_module_level_annotation_names_something_defined_later() -> None:
             if node.returns is not None:
                 annotations.append(node.returns)
             for annotation in annotations:
-                for name in (n.id for n in ast.walk(annotation) if isinstance(n, ast.Name)):
-                    if defined.get(name, 0) > node.lineno:
-                        offenders.append(f"{path}:{node.lineno} {node.name}() -> {name} (line {defined[name]})")
+                offenders.extend(
+                    f"{path}:{node.lineno} {node.name}() -> {name} (line {defined[name]})"
+                    for name in (n.id for n in ast.walk(annotation) if isinstance(n, ast.Name))
+                    if defined.get(name, 0) > node.lineno
+                )
     assert not offenders, "annotations naming a later definition (NameError on python < 3.14):\n" + "\n".join(offenders)
 
 

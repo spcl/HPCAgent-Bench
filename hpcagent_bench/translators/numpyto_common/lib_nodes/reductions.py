@@ -212,12 +212,12 @@ def expand_axis_reduction(
 def refuse_unreadable_axis(args: Sequence[ast.expr]) -> None:
     """Here slot 1 REALLY is the axis (``np.sum(a, 1)``), unlike the shared reader's general case, so
     an unreadable one is refused rather than silently becoming a reduction over every axis."""
-    if len(args) >= 2 and not (isinstance(args[1], ast.Constant) and args[1].value is None):
-        if eval_axes(args[1]) is None:
-            raise NotImplementedError(
-                f"axis {ast.unparse(args[1])!r} must be a compile-time integer or tuple "
-                f"of them (it selects the loop nest)"
-            )
+    if (len(args) >= 2 and not (isinstance(args[1], ast.Constant) and args[1].value is None)) and eval_axes(
+        args[1]
+    ) is None:
+        raise NotImplementedError(
+            f"axis {ast.unparse(args[1])!r} must be a compile-time integer or tuple of them (it selects the loop nest)"
+        )
 
 
 def refuse_dropped_reduction_kwargs(kwargs: list[ast.keyword] | None) -> None:

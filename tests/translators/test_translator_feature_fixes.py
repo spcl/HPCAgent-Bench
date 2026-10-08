@@ -1136,7 +1136,7 @@ def test_pythran_export_uses_signature_order_not_abi() -> None:
         ("chk", "complex128", ("niter",)),
     ]
     kir = py_kir("fft_3d", src, arrays, ["niter"], ["u0", "twiddle", "niter", "chk"])
-    export = next(l for l in emit_pythran(src, kir).splitlines() if l.startswith("#pythran export"))
+    export = next(line for line in emit_pythran(src, kir).splitlines() if line.startswith("#pythran export"))
     assert "fft_3d(complex128[:,:,:], float64[:,:,:], int, complex128[:])" in export
 
 

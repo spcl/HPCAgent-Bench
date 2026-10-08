@@ -349,9 +349,11 @@ def statement_blocks(node: ast.AST) -> list[list[ast.stmt]]:
     """Every statement list under ``node``, so a list built inside a loop or a branch folds too."""
     blocks: list[list[ast.stmt]] = []
     for sub in ast.walk(node):
-        for value in vars(sub).values():
-            if isinstance(value, list) and any(isinstance(v, ast.stmt) for v in value):
-                blocks.append(value)
+        blocks.extend(
+            value
+            for value in vars(sub).values()
+            if isinstance(value, list) and any(isinstance(v, ast.stmt) for v in value)
+        )
     return blocks
 
 

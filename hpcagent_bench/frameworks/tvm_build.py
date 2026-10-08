@@ -131,7 +131,7 @@ def default_compile(prim_func: "tvm.tirx.PrimFunc", target: "tvm.target.Target")
     if "cuda" in str(target.kind):
         try:
             return tvm.compile(default_gpu_schedule(prim_func).mod, target=target)
-        except Exception:
+        except Exception:  # noqa: BLE001 -- no spatial structure to bind; compile as-is
             # Can't auto-bind (no spatial structure); may already carry its own binding -- compile
             # as-is, and let a genuinely missing thread environment raise honestly.
             return tvm.compile(prim_func, target=target)

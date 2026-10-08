@@ -11,6 +11,7 @@
 Plus the rank floor the ML correctness cells are raised to, so no rank owns an empty slab.
 """
 
+import re
 from dataclasses import replace
 
 import numpy as np
@@ -149,7 +150,7 @@ def test_the_allowlist_is_read_as_a_list_of_names() -> None:
     listed = replace(spec, mpi={**spec.mpi, "replicatable": ["x", "gate_weight"]})
     assert replicatable_allowlist(listed) == ["gate_weight", "x"]
     for malformed in ({"x": None}, 3, "x"):
-        with pytest.raises(ValueError, match="mpi.replicatable"):
+        with pytest.raises(ValueError, match=re.escape("mpi.replicatable")):
             replicatable_allowlist(replace(spec, mpi={**spec.mpi, "replicatable": malformed}))
 
 

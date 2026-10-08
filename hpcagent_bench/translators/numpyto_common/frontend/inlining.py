@@ -219,14 +219,16 @@ def collect_inlinable_helpers(tree: ast.Module, kernel_fn: ast.FunctionDef) -> d
         # ``np.add.at(fx, nodelist, sfx)`` scatters then ``return determ``).
         if isinstance(body[-1], ast.Return) and body[-1].value is not None:
             mid = body[:-1]
-            if all(isinstance(s, INLINABLE_STMTS) for s in mid):
-                if not any(isinstance(sub, ast.Return) for s in mid for sub in ast.walk(s)):
-                    return True
+            if all(isinstance(s, INLINABLE_STMTS) for s in mid) and not any(
+                isinstance(sub, ast.Return) for s in mid for sub in ast.walk(s)
+            ):
+                return True
         # Form 4: void helper -- simple Assign / AugAssign / For / While / If / Expr
         # statements with NO Return (in-place writes to argument arrays).
-        if all(isinstance(s, INLINABLE_STMTS) for s in body):
-            if not any(isinstance(sub, ast.Return) for s in body for sub in ast.walk(s)):
-                return True
+        if all(isinstance(s, INLINABLE_STMTS) for s in body) and not any(
+            isinstance(sub, ast.Return) for s in body for sub in ast.walk(s)
+        ):
+            return True
         return False
 
     # Top-level helpers defined ABOVE the kernel...
