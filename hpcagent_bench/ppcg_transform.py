@@ -518,10 +518,10 @@ def run_ppcg(
             for produced in transformed_paths(scop, vendor):
                 src = pathlib.Path(scratch) / produced.name
                 if src.is_file():
-                    os.replace(src, produced)
+                    pathlib.Path(src).replace(produced)
             header = pathlib.Path(scratch) / f"{scop.stem}_kernel.hu"
             if header.is_file():
-                os.replace(header, scop.with_name(header.name))
+                header.replace(scop.with_name(header.name))
     return argv, proc
 
 

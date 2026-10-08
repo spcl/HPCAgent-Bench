@@ -32,6 +32,8 @@ class OrderedSet[T]:
     plain ``set`` at the call site."""
 
     __slots__ = ("items",)
+    #: Mutable, so unhashable, like set.
+    __hash__ = None  # type: ignore[assignment]
 
     def __init__(self, iterable: Iterable[T] = ()) -> None:
         self.items: dict[T, None] = dict.fromkeys(iterable)

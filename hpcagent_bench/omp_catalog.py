@@ -86,7 +86,7 @@ def scan_entry(name: str, context: str) -> list[str] | None:
     for line in listing.splitlines():
         _name, arrow, rest = line.strip().partition(" => ")
         real = os.path.realpath(rest.split()[0]) if arrow and rest.startswith("/") else ""
-        if real and openmp_runtimes.RUNTIME_FILE.fullmatch(os.path.basename(real)):
+        if real and openmp_runtimes.RUNTIME_FILE.fullmatch(pathlib.PurePath(real).name):
             found.add(real)
     return sorted(found)
 
@@ -131,7 +131,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             shown = (
                 "cannot link"
                 if runtimes is None
-                else ", ".join(os.path.basename(r) for r in runtimes) or "no OpenMP runtime"
+                else ", ".join(pathlib.PurePath(r).name for r in runtimes) or "no OpenMP runtime"
             )
             print(f"{context:6s} {name:12s} {shown}")
     if args.write is not None:

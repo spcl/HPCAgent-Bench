@@ -225,10 +225,9 @@ def collect_inlinable_helpers(tree: ast.Module, kernel_fn: ast.FunctionDef) -> d
                 return True
         # Form 4: void helper -- simple Assign / AugAssign / For / While / If / Expr
         # statements with NO Return (in-place writes to argument arrays).
-        if all(isinstance(s, INLINABLE_STMTS) for s in body) and not any(
+        return all(isinstance(s, INLINABLE_STMTS) for s in body) and not any(
             isinstance(sub, ast.Return) for s in body for sub in ast.walk(s)
-        ):
-            return True
+        )
         return False
 
     # Top-level helpers defined ABOVE the kernel...

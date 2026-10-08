@@ -334,7 +334,7 @@ def test_a_minted_size_symbol_is_bound_from_its_recorded_recipe(monkeypatch) -> 
     framework = DaceFramework.__new__(DaceFramework)
     monkeypatch.setattr(DaceFramework, "kernel_module", lambda self, bench: recipes)
 
-    class recipes:
+    class recipes:  # noqa: N801 -- stands in for the kernel module
         __hpcagent_bench_symbol_defs__: ClassVar[list[tuple[str, str]]] = [("m", "N // 2")]
 
     got = framework.shape_symbols(impl, Bench(), resolved, {})

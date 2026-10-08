@@ -444,10 +444,10 @@ def call_llm(query: str, pages: list[CrawledPage], timeout: float) -> str:
                 answer = str(response["choices"][0]["message"]["content"] or "")
             if not answer.strip():
                 raise RuntimeError(f"LLM returned an empty answer: {response}")
-        debug(f"LLM returned {len(answer)} characters")
-        return answer
     except (KeyError, IndexError, TypeError) as exc:
         raise RuntimeError(f"unexpected LLM response shape: {response}") from exc
+    debug(f"LLM returned {len(answer)} characters")
+    return answer
 
 
 def result_dict(query: str, answer: str, results: list[SearchResult], pages: list[CrawledPage]) -> dict[str, Any]:

@@ -13,6 +13,7 @@ own function, not a re-statement of it -- and the control case asserts that a bo
 field really is refused, which is what pins this test to the contract rather than to today's code.
 """
 
+import contextlib
 import http.server
 import json
 import pathlib
@@ -256,10 +257,9 @@ class OneSlotJudge(Judge):
     release: ClassVar[threading.Event] = threading.Event()
 
     def reply(self, status: int, payload: dict) -> None:
-        try:
+        # The promotion stopped waiting, which is a case under test.
+        with contextlib.suppress(BrokenPipeError, ConnectionResetError):
             super().reply(status, payload)
-        except (BrokenPipeError, ConnectionResetError):
-            pass  # the promotion stopped waiting, which is a case under test
 
     def do_POST(self) -> None:
         if self.path != "/profile":

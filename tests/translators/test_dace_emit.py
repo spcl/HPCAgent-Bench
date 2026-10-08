@@ -1036,7 +1036,7 @@ def test_a_rename_of_a_promoted_extent_reuses_that_symbol_instead_of_minting_a_s
         "    b = np.zeros((batch_size, 64, __inl9_h, __inl9_h), x.dtype)\n"
     )
     fn = ast.parse(src).body[0]
-    promotable, unused, unused = plan_size_promotion(fn, {"x", "batch_size", "height"}, {"batch_size", "height"})
+    promotable = plan_size_promotion(fn, {"x", "batch_size", "height"}, {"batch_size", "height"})[0]
     out = ast.unparse(inline_symbol_aliases(fn, {"batch_size", "height"} | set(promotable), {"x"}))
     assert "__inl9_h" not in out
     assert "__inl1_oh" not in out

@@ -542,7 +542,7 @@ def cmd_prompt(args: argparse.Namespace) -> int:
                 sections=dict(item.partition("=")[::2] for item in args.section) or None,
             )
         except ValueError as exc:
-            raise SystemExit(str(exc))
+            raise SystemExit(str(exc)) from exc
 
     if args.all_variants:
         for name in sorted(variants):

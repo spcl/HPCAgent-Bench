@@ -48,7 +48,7 @@ class FakeSglang(http.server.ThreadingHTTPServer):
 
 
 class FakeSglangHandler(http.server.BaseHTTPRequestHandler):
-    def log_message(self, format: str, *args: object) -> None:
+    def log_message(self, format: str, *args: object) -> None:  # noqa: A002 -- the overridden method's own signature
         return
 
     def fake(self) -> FakeSglang:

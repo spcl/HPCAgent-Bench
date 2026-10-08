@@ -66,7 +66,7 @@ def test_an_unknown_attribute_still_raises_attribute_error() -> None:
     from hpcagent_bench import frameworks
 
     with pytest.raises(AttributeError):
-        frameworks.NoSuchFramework
+        frameworks.NoSuchFramework  # noqa: B018 -- the access is what raises
 
 
 def test_the_rebindable_dtype_globals_are_not_lazily_exported() -> None:
@@ -98,7 +98,7 @@ def test_a_map_entry_its_module_does_not_define_raises_attribute_error(monkeypat
 
     monkeypatch.setitem(frameworks._LAZY_EXPORTS, "NotDefinedAnywhere", "errors")
     with pytest.raises(AttributeError):
-        frameworks.NotDefinedAnywhere
+        frameworks.NotDefinedAnywhere  # noqa: B018 -- the access is what raises
     assert getattr(frameworks, "NotDefinedAnywhere", "fallback") == "fallback"
 
 

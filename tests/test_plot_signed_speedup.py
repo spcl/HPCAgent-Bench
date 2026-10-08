@@ -209,7 +209,7 @@ def test_a_crash_is_kept_out_of_the_limits_that_measured_points_set() -> None:
             ("jacobi_2d", "dace_cpu", 10.0),
         ]
     )
-    with pytest.warns(UserWarning):
+    with pytest.warns(UserWarning, match="drawn as X at 0"):
         points = speedup.speedup_points(frame)
     measured = [point for point in points if not point.crashed]
     assert len(measured) == 1
@@ -402,9 +402,11 @@ def test_a_db_with_only_the_baseline_fails_loudly(tmp_path: pathlib.Path) -> Non
     failure that reads as a clean run."""
     db = tmp_path / "baseline_only.db"
     baseline_only_db(db)
-    with pytest.warns(UserWarning, match="no kernel has a plottable speedup"):
-        with pytest.raises(RuntimeError, match="no speedup to plot"):
-            speedup.plot_signed_speedup(db=str(db), preset="S", output=str(tmp_path / "speedup.pdf"), usetex=False)
+    with (
+        pytest.warns(UserWarning, match="no kernel has a plottable speedup"),
+        pytest.raises(RuntimeError, match="no speedup to plot"),
+    ):
+        speedup.plot_signed_speedup(db=str(db), preset="S", output=str(tmp_path / "speedup.pdf"), usetex=False)
 
 
 # the boxes

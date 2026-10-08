@@ -186,10 +186,11 @@ def install(staging: pathlib.Path, final: pathlib.Path, valid: Callable[[], bool
     for _ in range(8):
         try:
             staging.rename(final)
-            return
         except OSError:
             if not final.exists():
                 continue  # the entry in the way was just moved aside by a sibling; try again
+        else:
+            return
         if valid():
             break
         aside = final.with_name(f".{final.name}.stale.{os.getpid()}.{os.urandom(4).hex()}")

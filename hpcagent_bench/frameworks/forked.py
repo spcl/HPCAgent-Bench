@@ -329,10 +329,8 @@ def report_without_a_thread(err_w: ErrorWriter, text: str) -> None:
     """Write ``text`` to the raw error pipe (no queue, no feeder thread). The only reporting path
     after a REFUSED seal (see :data:`ErrorWriter`); never raises, so the real cause is not replaced
     by a failure to report it."""
-    try:
+    with contextlib.suppress(OSError, ValueError):  # pipe closed, or the parent is already gone
         err_w.send_bytes(text.encode("utf-8", "replace")[:ERROR_BYTES])
-    except (OSError, ValueError):  # pipe closed, or the parent is already gone
-        pass
 
 
 def child_main[ResultT](

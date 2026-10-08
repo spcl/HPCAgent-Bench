@@ -83,7 +83,7 @@ def module_const_values(tree: ast.Module, func_name: str) -> dict:
         tgt = s.targets[0]
         try:
             val = eval(compile(ast.Expression(body=s.value), "<const>", "eval"), {"__builtins__": {}}, dict(env))  # noqa: S307 -- folds an expression over known constants with no builtins
-        except Exception:  # noqa: BLE001, S112 -- references np / an array / an unknown name
+        except Exception:  # noqa: BLE001 -- references np / an array / an unknown name
             continue
         if isinstance(tgt, ast.Name):
             if isinstance(val, (int, float, complex)):  # bool is an int subclass
@@ -94,8 +94,8 @@ def module_const_values(tree: ast.Module, func_name: str) -> dict:
             and isinstance(val, tuple)
             and len(val) == len(tgt.elts)
         ):
-            for name, v in zip(tuple_names, val, strict=False):
-                if isinstance(v, (int, float, complex)):
-                    env[name] = v
+            env.update(
+                {name: v for name, v in zip(tuple_names, val, strict=False) if isinstance(v, (int, float, complex))}
+            )
     env.pop(func_name, None)
     return env

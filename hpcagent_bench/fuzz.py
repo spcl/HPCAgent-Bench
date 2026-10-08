@@ -854,7 +854,8 @@ def edge_shapes(
     for kind in EDGE_KINDS:
         # Override each interval with a degenerate [v, v] so the resolver returns the
         # edge value, while derive/construct/in still compute off those roots.
-        spec = respec_ranges(parameters, fuzzed, lambda lo, hi: [_edge_value(hi, kind)] * 2)
+        # Called inside this iteration, so the lambda sees this kind.
+        spec = respec_ranges(parameters, fuzzed, lambda lo, hi: [_edge_value(hi, kind)] * 2)  # noqa: B023
         try:
             sample = _resolve_against(spec, fixed, 0, "uniform", constraints, config_names=config_names)
         except ValueError:

@@ -133,10 +133,10 @@ def corrected(rows: Sequence[dict[str, float | str | int]]) -> pd.DataFrame:
     )
 
 
-def load_all(paths: Sequence[pathlib.Path], card: cost.CostModel = cost.resolve()) -> pd.DataFrame:
+def load_all(paths: Sequence[pathlib.Path], card: cost.CostModel | None = None) -> pd.DataFrame:
     """Every observations file as one frame, tokens priced by ``card``."""
     frame = pd.concat([studies.read_observations(path) for path in paths], ignore_index=True)
-    return population.condition_rows(cost.priced(frame, card))
+    return population.condition_rows(cost.priced(frame, card or cost.resolve()))
 
 
 def control_rows(frame_all: pd.DataFrame) -> pd.DataFrame:

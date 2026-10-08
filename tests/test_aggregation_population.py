@@ -110,7 +110,7 @@ def test_a_served_policy_scores_a_non_delivery_at_one_rather_than_dropping_it() 
         "a", "c", {"k1": 4.0, "k2": 4.0}, ["k1", "k2", "k3", "k4"], population.KernelPolicy.SERVED
     )
     assert setup.kernels == ("k1", "k2", "k3", "k4")
-    assert setup.values == (4.0, 4.0, 1.0, 1.0)
+    assert setup.values == (4.0, 4.0, 1.0, 1.0)  # noqa: PD011 -- a dataclass field, not pandas
     assert setup.n_solved == 2
     assert setup.geomean() == pytest.approx(2.0)
 

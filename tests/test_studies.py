@@ -378,7 +378,7 @@ def test_a_column_no_row_in_the_table_ever_recorded_still_fills_from_the_setup_n
     filled = studies.fill_setup_identity(frame)
 
     assert filled.language.tolist() == ["c", "c"]
-    assert [value != value for value in filled.recorded_language.tolist()] == [True, True]
+    assert [math.isnan(value) for value in filled.recorded_language.tolist()] == [True, True]
 
 
 def graded_episode(kernel: str, graded: list[tuple[str, str]]) -> pd.DataFrame:

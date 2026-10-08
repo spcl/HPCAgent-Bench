@@ -16,6 +16,7 @@ There is no ``plutocc``: this Pluto installs ``clan``, ``pet``, ``pluto`` and ``
 and ``polycc`` is the driver.
 """
 
+import contextlib
 import os
 import pathlib
 import re
@@ -210,7 +211,7 @@ def publish_text(dst: pathlib.Path, text: str) -> bool:
     try:
         with os.fdopen(fd, "w") as handle:
             handle.write(text)
-        os.replace(tmp, dst)
+        pathlib.Path(tmp).replace(dst)
     finally:
         tmp.unlink(missing_ok=True)
     return True
@@ -297,16 +298,14 @@ def run_bounded(
         stderr=subprocess.PIPE,
         text=True,
         start_new_session=True,
-        preexec_fn=core_dumps.disable,
+        preexec_fn=core_dumps.disable,  # noqa: PLW1509 -- spawned from one thread; the child only drops its core limit
         env=env,
     )
     try:
         out, err = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
-        try:
+        with contextlib.suppress(ProcessLookupError):
             os.killpg(proc.pid, signal.SIGKILL)  # proc.pid == the new session/group id
-        except ProcessLookupError:
-            pass
         proc.wait()
         raise
     return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
@@ -385,7 +384,7 @@ def run_polycc(
         tmp_out.unlink(missing_ok=True)
     else:
         tmp_out.write_text(dedupe_scratch_declarations(restore_output(tmp_out.read_text())))
-        os.replace(tmp_out, out)
+        pathlib.Path(tmp_out).replace(out)
     return argv, proc
 
 

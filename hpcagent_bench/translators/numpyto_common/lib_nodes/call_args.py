@@ -216,8 +216,8 @@ def tensordot_axes(node: ast.expr, ra: int, rb: int) -> tuple[list[int], list[in
             # out-of-range index below.
             try:
                 value = ast.literal_eval(x)
-            except (ValueError, SyntaxError, TypeError):
-                raise NotImplementedError("tensordot axes entries must be integer literals")
+            except (ValueError, SyntaxError, TypeError) as exc:
+                raise NotImplementedError("tensordot axes entries must be integer literals") from exc
             return value
 
         def axis_list(e: ast.expr) -> list[Any]:

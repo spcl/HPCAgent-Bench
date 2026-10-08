@@ -251,7 +251,7 @@ class OuterBroadcastPeel(RankedRewritePass):
         if pos is None:
             if ext0 == ONE:
                 return None
-            entries = entries + [expr_of(idx)]  # axis 0 is an unindexed trailing base axis
+            entries = [*entries, expr_of(idx)]  # axis 0 is an unindexed trailing base axis
         elif kind == "new":
             entries = entries[:pos] + entries[pos + 1 :]
         else:

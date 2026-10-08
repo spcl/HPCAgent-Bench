@@ -25,6 +25,7 @@ through the real C/C++/Fortran backends via the existing oracle harness.
 import ast
 
 import numpy as np
+import pytest
 
 from hpcagent_bench.translators.numpyto_c.emit import emit_c
 from hpcagent_bench.translators.numpyto_common.ir import KernelIR
@@ -144,14 +145,9 @@ def test_runtime_dims_declines_the_fold_and_still_refuses() -> None:
     # the generator is untouched -- no wrong-length unroll was guessed.
     assert "for _ in range(dims)" in ast.unparse(helper.tree)
 
-    try:
-        emit_c(
-            lower(kir_for(src, "f", ["x", "k", "n", "out"], ["out"], {"x": "(N,)", "out": "(1,)"}, {"N": 4})),
-            fn_name="f",
-        )
-        raise AssertionError("expected the surviving generator to refuse emission")
-    except NotImplementedError as exc:
-        assert "GeneratorExp" in str(exc)
+    kir = lower(kir_for(src, "f", ["x", "k", "n", "out"], ["out"], {"x": "(N,)", "out": "(1,)"}, {"N": 4}))
+    with pytest.raises(NotImplementedError, match="GeneratorExp"):
+        emit_c(kir, fn_name="f")
 
 
 def test_bare_comprehension_over_literal_range_unrolls_in_tuple_desugar() -> None:

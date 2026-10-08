@@ -292,7 +292,7 @@ def impact_rows(pairs: list[tuple[str, str]], setup_frame: pd.DataFrame, pair_fr
             "control": control,
         }
         for column, source in IMPACT_SETUP_COLUMNS.items():
-            row[column] = setups.at[setup, source] if setup in setups.index else math.nan
+            row[column] = setups.loc[setup, source] if setup in setups.index else math.nan
         for leg, prefix in IMPACT_LEGS.items():
             match = pair_frame[
                 (pair_frame.setup_a == setup) & (pair_frame.setup_b == control) & (pair_frame.leg == leg)
@@ -304,7 +304,7 @@ def impact_rows(pairs: list[tuple[str, str]], setup_frame: pd.DataFrame, pair_fr
     return pd.DataFrame(rows).reindex(columns=list(IMPACT_COLUMNS))
 
 
-def load_observations(paths: list[pathlib.Path], card: cost.CostModel = cost.resolve()) -> pd.DataFrame:
+def load_observations(paths: list[pathlib.Path], card: cost.CostModel | None = None) -> pd.DataFrame:
     """The extracted observations, restricted to the setups that recorded an experiment episode id, with every
     task's ``tokens`` priced by ``card``.
 
@@ -313,7 +313,7 @@ def load_observations(paths: list[pathlib.Path], card: cost.CostModel = cost.res
     """
     frames = [studies.read_observations(path) for path in paths]
     combined = pd.concat(frames, ignore_index=True) if len(frames) > 1 else frames[0]
-    return population.condition_rows(cost.priced(combined, card))
+    return population.condition_rows(cost.priced(combined, card or cost.resolve()))
 
 
 def one_baseline(observations: pd.DataFrame, baseline: str) -> pd.DataFrame:

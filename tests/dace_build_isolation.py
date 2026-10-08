@@ -36,7 +36,7 @@ def pin_per_worker_dace_build_folder() -> None:
     worker = os.environ.get("PYTEST_XDIST_WORKER")
     if worker is None:
         return  # a serial run has nothing to race with
-    base = pathlib.Path(os.environ.get("DACE_default_build_folder", ".dacecache"))
+    base = pathlib.Path(os.environ.get("DACE_default_build_folder", ".dacecache"))  # noqa: SIM112 -- dace's own spelling
     if base.name != worker:
         os.environ["DACE_DEFAULT_BUILD_FOLDER"] = str(base / worker)
     # Even when the env var was already pinned: a dace loaded before the pin read the unpinned value.

@@ -317,11 +317,14 @@ def store(kind: str, code: str, key: Hashable, arrays: Mapping[str, npt.ArrayLik
     """Store ``arrays`` for ``key`` atomically. A store that cannot be written is skipped: the
     next grade recomputes, which is all a miss costs."""
     # ValueError: an object array, which only pickle could store.
-    with contextlib.suppress(OSError, ValueError), replacing(entry_path(kind, code, key), parent_mode=0o700) as tmp:
-        with pathlib.Path(tmp).open("wb") as fh:
-            np.savez(fh, allow_pickle=False, **as_stored(arrays))
-            fh.flush()
-            os.fsync(fh.fileno())
+    with (
+        contextlib.suppress(OSError, ValueError),
+        replacing(entry_path(kind, code, key), parent_mode=0o700) as tmp,
+        pathlib.Path(tmp).open("wb") as fh,
+    ):
+        np.savez(fh, allow_pickle=False, **as_stored(arrays))
+        fh.flush()
+        os.fsync(fh.fileno())
 
 
 def load_outputs(code: str, key: Hashable) -> dict[str, np.ndarray] | None:
@@ -403,6 +406,6 @@ def shared_source(path: pathlib.Path) -> pathlib.Path:
             with replacing(target, parent_mode=0o700) as tmp:
                 tmp.write_bytes(data)
                 os.utime(tmp, (SHARED_SOURCE_MTIME, SHARED_SOURCE_MTIME))
-        return target
     except OSError:
         return path
+    return target

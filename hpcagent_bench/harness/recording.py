@@ -425,7 +425,7 @@ class TrajectoryPoint(Protocol):
 
 def table_exists(path: str, table: str) -> bool:
     """Whether ``path`` holds ``table``, without creating an absent file (``sqlite3.connect`` would)."""
-    if not os.path.exists(path):
+    if not pathlib.Path(path).exists():
         return False
     conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
     try:
@@ -457,8 +457,8 @@ def ensure_aggregated(path: str | None = None) -> str:
     shards = shard_paths(target)
     if not shards:
         return target
-    newest_shard = max(os.path.getmtime(s) for s in shards)
-    if not os.path.exists(target) or os.path.getmtime(target) < newest_shard:
+    newest_shard = max(pathlib.Path(s).stat().st_mtime for s in shards)
+    if not pathlib.Path(target).exists() or pathlib.Path(target).stat().st_mtime < newest_shard:
         aggregate(target, shards)
     return target
 

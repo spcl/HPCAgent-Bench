@@ -423,7 +423,7 @@ def have_harness_runtime(name: str) -> tuple[bool, str]:
 
     Asked of the path, never of PATH: the driver execs this interpreter absolutely."""
     executable, module = HARNESS_RUNTIMES[name]
-    if not os.path.isfile(executable):
+    if not pathlib.Path(executable).is_file():
         return False, f"no interpreter at {executable}"
     code, out = run([executable, "-I", "-c", f"import {module}"], timeout=300.0, cwd="/")
     if code == 0:
@@ -617,9 +617,9 @@ def serving_checks(profile: str) -> list[Check]:
     fabric = [Check("fabric", "libfabric", "lib", "libfabric.so"), Check("fabric", "libcxi", "lib", "libcxi.so")]
     if profile == "vllm-cuda":
         return [serve, triton, *fabric]
-    aiter = Check("serving", "aiter", "py", "aiter")
+    aiter_check = Check("serving", "aiter", "py", "aiter")
     flydsl = Check("serving", "flydsl", "py", "flydsl", required=(profile == "sglang"))
-    return [serve, aiter, triton, *fabric, flydsl]
+    return [serve, aiter_check, triton, *fabric, flydsl]
 
 
 def vendor_checks(profile: str) -> list[Check]:

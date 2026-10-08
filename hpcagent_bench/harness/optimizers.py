@@ -64,9 +64,10 @@ def openblas_flags() -> tuple[list[str], list[str]]:
                 [pc, "--cflags", "openblas"], capture_output=True, text=True, check=True
             ).stdout.split()
             libs = subprocess.run([pc, "--libs", "openblas"], capture_output=True, text=True, check=True).stdout.split()
-            return cflags, libs
         except (subprocess.CalledProcessError, OSError):
             pass
+        else:
+            return cflags, libs
     return [], ["-lopenblas"]
 
 
@@ -126,11 +127,11 @@ class LibraryOptimizer(Agent):
                 raise RuntimeError(f"ABI build failed:\n{log}")
             if not lib.exists():
                 raise RuntimeError("ABI build reported success but produced no .so")
-            return lib
         except BaseException:  # incl. KeyboardInterrupt during compile: still clean up
             if self._workdir is None:  # don't leak the throwaway dir on failure
                 shutil.rmtree(root, ignore_errors=True)
             raise
+        return lib
 
     def _library_submission(
         self, task: Task, source: str, *, extra_compile: Sequence[str] = (), extra_link: Sequence[str] = ()

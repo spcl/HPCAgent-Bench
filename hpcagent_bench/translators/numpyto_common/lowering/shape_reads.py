@@ -334,7 +334,7 @@ class ResolveArrShape(ast.NodeTransformer):
         except (SyntaxError, ValueError):
             return tok
 
-        class Sub_(ast.NodeTransformer):
+        class Substitute(ast.NodeTransformer):
             __slots__ = ("current",)
 
             def __init__(self, current: dict[str, tuple[str, ...]]) -> None:
@@ -355,7 +355,7 @@ class ResolveArrShape(ast.NodeTransformer):
                     return node
                 return const_or_name(src[node.slice.value])
 
-        tree = Sub_(self.current).visit(tree)
+        tree = Substitute(self.current).visit(tree)
         ast.fix_missing_locations(tree)
         return ast.unparse(tree)
 

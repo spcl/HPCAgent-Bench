@@ -43,7 +43,7 @@ def replacing(path: pathlib.Path, mode: int | None = None, parent_mode: int = 0o
         yield tmp
         if mode is not None:
             tmp.chmod(mode)
-        os.replace(tmp, path)
+        pathlib.Path(tmp).replace(path)
     except BaseException:
         with contextlib.suppress(OSError):
             tmp.unlink()

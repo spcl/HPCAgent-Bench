@@ -86,7 +86,7 @@ def fold_default_args(fn: ast.FunctionDef, input_args: list[str]) -> None:
     if not subst:
         return
 
-    class Sub_(ast.NodeTransformer):
+    class Substitute(ast.NodeTransformer):
         __slots__ = ()
 
         def visit_Name(self, node: ast.Name) -> ast.expr:
@@ -94,7 +94,7 @@ def fold_default_args(fn: ast.FunctionDef, input_args: list[str]) -> None:
                 return ast.copy_location(copy.deepcopy(subst[node.id]), node)
             return node
 
-    Sub_().visit(fn)
+    Substitute().visit(fn)
     fn.args.args = [a for a in args if a.arg not in subst]
     fn.args.defaults = [d for a, d in defaulted if a.arg not in subst]
     fn.args.kw_defaults = [d for a, d in zip(kwonlyargs, fn.args.kw_defaults, strict=False) if a.arg not in subst]

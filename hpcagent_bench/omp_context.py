@@ -351,15 +351,15 @@ def refusal_from(record: dict[str, dict[str, list[str] | None]] | None, name: st
         return f"{name} has no build the {context} OpenMP context can link"
     expected = context_runtime(context)
     if context == NVHPC:  # one libnvomp and nothing else
-        nvhpc = [r for r in runtimes if openmp_runtimes.NVHPC_RUNTIME.fullmatch(os.path.basename(r))]
+        nvhpc = [r for r in runtimes if openmp_runtimes.NVHPC_RUNTIME.fullmatch(pathlib.PurePath(r).name)]
         foreign = [r for r in runtimes if r not in nvhpc] + nvhpc[1:]
     else:
         foreign = [r for r in runtimes if r != expected]
     if not foreign:
         return ""
-    names = ", ".join(sorted(os.path.basename(r) for r in runtimes))
+    names = ", ".join(sorted(pathlib.PurePath(r).name for r in runtimes))
     return (
         f"{name} maps {names} when linked in the {context} OpenMP context (the toolchain family this "
-        f"submission builds with), which runs on {os.path.basename(expected) if expected else 'libnvomp'} alone; "
+        f"submission builds with), which runs on {pathlib.PurePath(expected).name if expected else 'libnvomp'} alone; "
         "pick another family or another library"
     )

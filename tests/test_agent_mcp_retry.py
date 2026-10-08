@@ -235,7 +235,7 @@ def crashing_popen_class(exit_codes):
             stdout.write(f"ATTEMPT {self.attempt}\n")
             stdout.flush()
 
-        def communicate(self, input: str | None = None, timeout: float | None = None) -> tuple[str, str]:
+        def communicate(self, input: str | None = None, timeout: float | None = None) -> tuple[str, str]:  # noqa: A002 -- the overridden method's own signature
             return self.captured, ""
 
         def __enter__(self) -> Self:

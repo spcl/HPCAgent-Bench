@@ -434,7 +434,7 @@ class RecordingLoader(jinja2.ChoiceLoader):
         self,
         environment: jinja2.Environment,
         name: str,
-        globals: MutableMapping[str, object] | None = None,
+        globals: MutableMapping[str, object] | None = None,  # noqa: A002 -- the overridden method's own signature
     ) -> jinja2.Template:
         # ChoiceLoader.load bypasses get_source; BaseLoader.load does not.
         return jinja2.BaseLoader.load(self, environment, name, globals)

@@ -263,17 +263,19 @@ def test_an_axis_used_as_a_data_index_keeps_the_refusal() -> None:
     Substituting the normalised axis into ``w[dim]`` would silently read a different weight, so the
     dispatch must decline rather than emit a nest that compiles and lies.
     """
-    with tempfile.TemporaryDirectory() as td:
-        with pytest.raises(NotImplementedError, match="axis must be a compile-time integer"):
-            parse_(
-                pathlib.Path(td),
-                AXIS_AND_DATA_INDEX,
-                "scan_scaled",
-                TWO_PRESETS,
-                {"x": "(batch_size, dim1)", "w": "(5,)", "out": "(batch_size, dim1)"},
-                ["x", "w", "dim"],
-                ["out"],
-            )
+    with (
+        tempfile.TemporaryDirectory() as td,
+        pytest.raises(NotImplementedError, match="axis must be a compile-time integer"),
+    ):
+        parse_(
+            pathlib.Path(td),
+            AXIS_AND_DATA_INDEX,
+            "scan_scaled",
+            TWO_PRESETS,
+            {"x": "(batch_size, dim1)", "w": "(5,)", "out": "(batch_size, dim1)"},
+            ["x", "w", "dim"],
+            ["out"],
+        )
 
 
 def test_an_axis_only_use_dispatches_when_the_manifest_does_not_pin_it() -> None:
@@ -297,17 +299,19 @@ def test_a_returned_output_keeps_the_refusal() -> None:
     """A kernel whose output is RETURNED is promoted from the body's trailing statement. A
     dispatch would move that statement inside a branch, leaving a kernel that writes nothing --
     so the refusal stands until the promotion learns to look inside one."""
-    with tempfile.TemporaryDirectory() as td:
-        with pytest.raises(NotImplementedError, match="axis must be a compile-time integer"):
-            parse_(
-                pathlib.Path(td),
-                AXIS_RETURNED,
-                "scan_returned",
-                TWO_PRESETS,
-                {"x": "(batch_size, dim1)"},
-                ["x", "dim"],
-                [],
-            )
+    with (
+        tempfile.TemporaryDirectory() as td,
+        pytest.raises(NotImplementedError, match="axis must be a compile-time integer"),
+    ):
+        parse_(
+            pathlib.Path(td),
+            AXIS_RETURNED,
+            "scan_returned",
+            TWO_PRESETS,
+            {"x": "(batch_size, dim1)"},
+            ["x", "dim"],
+            [],
+        )
 
 
 @pytest.mark.integration

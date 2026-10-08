@@ -9,14 +9,14 @@ previous declaration". One fixed 16-byte alignment covers every T it
 sorts (up to double complex). Upstream master still has the per-T declaration.
 """
 
-import os
+import pathlib
 
-from spack.package import *  # noqa: F403
+from spack.package import *
 from spack_repo.builtin.packages.magma.package import Magma as BuiltinMagma
 
 
 class Magma(BuiltinMagma):
     def patch(self):
-        sort = os.path.join("magmablas", "sort.cu")
-        if self.spec.satisfies("+cuda") and os.path.exists(sort):
+        sort = str(pathlib.Path("magmablas", "sort.cu"))
+        if self.spec.satisfies("+cuda") and pathlib.Path(sort).exists():
             filter_file(r"__align__\(sizeof\(T\)\)", "__align__(16)", sort)

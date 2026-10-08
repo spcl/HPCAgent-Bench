@@ -70,7 +70,7 @@ def branch_pin_(stmt: ast.stmt) -> tuple[dict[str, int], bool]:
 def substitute_ints(token: str, values: dict[str, int]) -> str:
     """``token`` with each named scalar replaced by its assumed integer value."""
 
-    class Sub_(ast.NodeTransformer):
+    class Substitute(ast.NodeTransformer):
         __slots__ = ()
 
         def visit_Name(self, node: ast.Name) -> ast.AST:
@@ -78,7 +78,7 @@ def substitute_ints(token: str, values: dict[str, int]) -> str:
                 return node
             return ast.copy_location(ast.Constant(value=values[node.id]), node)
 
-    return ast.unparse(ast.fix_missing_locations(Sub_().visit(ast.parse(token, mode="eval").body)))
+    return ast.unparse(ast.fix_missing_locations(Substitute().visit(ast.parse(token, mode="eval").body)))
 
 
 def shapes_agree_under(

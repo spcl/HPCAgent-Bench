@@ -364,7 +364,7 @@ def regrade_files(patterns: Iterable[str]) -> list[str]:
     matched file that is not a database (the worklist a wave's directory sits beside) is skipped."""
     files: list[str] = []
     for pattern in patterns:
-        for match in sorted(glob.glob(pattern)):
+        for match in sorted(glob.glob(pattern)):  # noqa: PTH207 -- the caller's pattern, absolute or relative
             path = pathlib.Path(match)
             if path.is_dir():
                 files.extend(str(db) for db in sorted(path.rglob("*.db")))
@@ -576,7 +576,7 @@ def write_db(path: pathlib.Path, fields: Iterable[str], rows: Iterable[dict[str,
 
 def source_roots(args: argparse.Namespace) -> list[pathlib.Path]:
     """Everything the extraction reads: the protected roots, the run roots, the regrade shards."""
-    globbed = [pathlib.Path(p) for pattern in (*args.runs, *args.regrades) for p in glob.glob(pattern)]
+    globbed = [pathlib.Path(p) for pattern in (*args.runs, *args.regrades) for p in glob.glob(pattern)]  # noqa: PTH207 -- the caller's pattern
     return [*data_guard.protected_roots(), *globbed]
 
 
@@ -650,7 +650,7 @@ def discover_databases(run_globs: Iterable[str], skip: Iterable[pathlib.Path] = 
     skipped = [path.resolve() for path in skip]
     found: dict[pathlib.Path, Database] = {}
     for pattern in run_globs:
-        for match in sorted(glob.glob(pattern)):
+        for match in sorted(glob.glob(pattern)):  # noqa: PTH207 -- the caller's pattern, absolute or relative
             root = pathlib.Path(match).resolve()
             paths_found = [root] if root.is_file() and root.suffix == ".db" else sorted(root.rglob("*.db"))
             for db in filter(judge_database, paths_found):

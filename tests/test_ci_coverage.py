@@ -94,9 +94,8 @@ def test_no_workflow_declares_the_same_key_twice() -> None:
 
     NoDuplicates.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, strict_mapping)
     for path in [*sorted((REPO / ".github" / "workflows").glob("*.yml")), *ACTIONS]:
-        yaml.load(
-            path.read_text(), Loader=NoDuplicates
-        )  # raises AssertionError naming the key  # noqa: S506 -- NoDuplicates is a SafeLoader
+        # Raises AssertionError naming the key.
+        yaml.load(path.read_text(), Loader=NoDuplicates)  # noqa: S506 -- NoDuplicates is a SafeLoader
 
 
 def test_every_pytest_plugin_the_workflow_asks_for_is_installed() -> None:

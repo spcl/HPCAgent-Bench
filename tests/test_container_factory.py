@@ -343,13 +343,13 @@ def test_clean_partial_install_never_touches_a_preexisting_path(tmp_path) -> Non
     prefix = tmp_path / "local"
     (prefix / "share").mkdir(parents=True)
     (prefix / "share" / "user_data.txt").write_text("do not delete me")
-    preexisting = set(os.listdir(prefix))
+    preexisting = {entry.name for entry in prefix.iterdir()}
     (prefix / "x86_64").mkdir()
     (prefix / "bin").mkdir()
 
     containers.clean_partial_install(str(prefix), preexisting)
 
-    assert sorted(os.listdir(prefix)) == ["share"]
+    assert sorted(entry.name for entry in prefix.iterdir()) == ["share"]
     assert (prefix / "share" / "user_data.txt").read_text() == "do not delete me"
 
 
