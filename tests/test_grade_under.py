@@ -12,6 +12,7 @@ import contextlib
 import csv
 import dataclasses
 import functools
+import argparse
 import hashlib
 import itertools
 import os
@@ -791,6 +792,18 @@ def test_a_worklist_over_every_timed_submission_keeps_the_stamped_rows_too(tmp_p
     assert [item.reduction for item in everything if item.ts_ms == 30] == ["mwd-v2"]
     digest = hashlib.sha256(HOST.encode()).hexdigest()
     assert [item.source_hash for item in everything if item.ts_ms == 10] == [digest]
+
+
+def test_a_worklist_names_each_database_by_its_absolute_path(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A shard opens an item's database from wherever its job runs (the judge container's working directory): a
+    worklist built with --db ../runs/x.db named a path no shard could open, and every item failed."""
+    seen: list[argparse.Namespace] = []
+    monkeypatch.setattr(grade_under, "write_worklist", lambda args: seen.append(args) or 0)
+    monkeypatch.chdir(tmp_path)
+    assert grade_under.main(["worklist", "--db", "../runs/x.db", "--out", "w.jsonl"]) == 0
+    assert seen[0].db == [(tmp_path / "../runs/x.db").resolve()]
 
 
 def promotion_db(tmp_path: pathlib.Path, rows: list[tuple], cut: int = 0) -> pathlib.Path:

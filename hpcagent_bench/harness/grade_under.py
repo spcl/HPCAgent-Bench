@@ -1400,7 +1400,7 @@ def main(argv: list[str] | None = None) -> int:
         "--db",
         action="append",
         required=True,
-        type=pathlib.Path,
+        type=absolute_path,
         help="a results DB; repeatable: the core database, plus e.g. the CPF archive",
     )
     listing.add_argument(
@@ -1549,6 +1549,11 @@ def scaled_items(items: Iterable[Item], rank_counts: tuple[int, ...]) -> tuple[l
         else:
             kept.append(item)
     return kept, problems
+
+
+def absolute_path(text: str) -> pathlib.Path:
+    """``text`` as an absolute path: an item names its database, and a shard opens it from wherever its job runs."""
+    return pathlib.Path(text).resolve()
 
 
 def write_worklist(args: argparse.Namespace) -> int:
