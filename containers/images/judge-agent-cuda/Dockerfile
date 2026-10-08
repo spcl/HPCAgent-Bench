@@ -1,7 +1,9 @@
 # syntax=docker/dockerfile:1
 #
-# hpcagent-bench-judge-agent-cuda: the judge and agent images for NVIDIA GPUs sm_80..sm_120 on
-# aarch64 hosts (built and first run on CSCS Daint's GH200, Grace + H100). Context is the repository root; build with judge-agent-cuda/build.sh.
+# hpcagent-bench-judge-agent-cuda: the judge and agent images for NVIDIA GPUs, built for the CPU family of
+# the build node: aarch64 (sm_80..sm_120, CSCS Daint's GH200, Grace + H100) or x86_64 (sm_75..sm_120, the
+# x86-64-v3 baseline; Turing to Blackwell workstation GPUs). Context is the repository root; build with
+# `containers/images/build.sh judge-agent-cuda`.
 #
 # Two targets: `agent` is the toolchain without hpcagent_bench, so an agent cannot read the
 # references it is graded against; `judge` is `agent` plus the KernelBench data;
@@ -12,14 +14,13 @@
 #   offload     LLVM OpenMP -> nvptx sm_{${CUDA_ARCHS}}; GCC is built without +nvptx
 #   GPU-aware   mpich/superlu-dist/strumpack/magma/petsc/sundials +cuda cuda_arch=${CUDA_ARCHS}
 #   python      the lock's torch (cu132), the cupy wheel, jax, all for the base's CUDA major
-#   absent      likwid, msr-tools (x86 only), rocprof, PAPI rocm components
+#   absent      likwid, msr-tools, rocprof, PAPI rocm components
 #
 # CUDA 13.4.1: it runs on any driver >= 580 (minor-version compatibility inside CUDA 13), and the CE's
 # NCCL net plugin (com.hooks.aws_ofi_nccl.variant = "cuda13") must match the runtime major. Its
 # supported host compilers (CUDA installation guide, Table 3: GCC 6-16, Clang 7-22 on x86_64 and
 # arm64 sbsa) include the newest gcc and LLVM this image builds, so nvcc runs on them as they are.
-# Pinned by the multi-arch index digest (its arm64 manifest is
-# sha256:307c449df7dabed6b36e017a2b2f2e45bdec9dc203b81507111315f1e971de6e).
+# Pinned by the multi-arch index digest, which serves both amd64 and arm64.
 # Layers are ordered most expensive first.
 ARG BASE_IMAGE=nvcr.io/nvidia/pytorch:26.09-py3@sha256:6e8ccc607fc2a51e3741667b86316a0889418ba8b78ed0ba96e8d282b648a7a6
 
@@ -85,19 +86,20 @@ ARG BASE_IMAGE
 ARG BASE_IMAGE_REF="${BASE_IMAGE}"
 ARG IMAGE_VERSION=dev
 LABEL org.opencontainers.image.title="hpcagent-bench-judge-agent-cuda" \
-      org.opencontainers.image.description="HPCAgent-Bench judge+agent for NVIDIA sm_80-sm_120 (aarch64): gcc 16, llvm 22, NVHPC, GPU-aware MPICH, PETSc/MAGMA, Nsight" \
+      org.opencontainers.image.description="HPCAgent-Bench judge+agent for NVIDIA GPUs (aarch64 or x86_64): gcc 16, llvm 22, NVHPC, GPU-aware MPICH, PETSc/MAGMA, Nsight" \
       org.opencontainers.image.source="https://github.com/spcl/HPCAgent-Bench" \
       org.opencontainers.image.licenses="GPL-3.0-or-later" \
       org.opencontainers.image.version="${IMAGE_VERSION}" \
       org.opencontainers.image.base.name="${BASE_IMAGE_REF}"
 
 ARG DEBIAN_FRONTEND=noninteractive
-# One SASS per GPU generation, sm_80 (Ampere) to sm_120 (Blackwell): a GPU runs the SASS of an older
-# minor of its own major (sm_80 on sm_86/89, sm_120 on sm_121), so four cover the range and the image
-# is not tied to GH200. CUDA 13 dropped offline compilation for Volta (sm_70) and older, and spack's
-# cuda_arch=70 needs cuda@:12.9, so Volta and Turing (sm_75) have no SASS here. Spack's comma
-# spelling; the gates check every one.
+# One SASS per GPU generation: a GPU runs the SASS of an older minor of its own major (sm_80 on sm_86/89,
+# sm_120 on sm_121). image.sh passes the list per CPU family: the x86_64 image adds sm_75 (Turing,
+# RTX 2080 Ti). CUDA 13 dropped offline compilation for Volta (sm_70) and older, and spack's
+# cuda_arch=70 and older need cuda@:12.9, so Pascal and Volta have no SASS in either image. Spack's
+# comma spelling; the gates check every one.
 ARG CUDA_ARCHS=80,90,100,120
+LABEL org.hpcagent-bench.cuda-archs="${CUDA_ARCHS}"
 # CPU tuning. Empty SPACK_TARGET + MARCH=native -- a plain `podman build` from scratch -- tunes spack
 # and every source build to the build host's own CPU, as fast as its machine allows. build.sh passes
 # cpu_target.env's portable baseline (and the matching -march), so a published image runs on every
@@ -116,11 +118,12 @@ ARG SPACK_PACKAGES_REF=3936d6c1796a095cd29f24f3082a5f32f4b5f938
 # llvm's and petsc's link steps clear of the OOM killer (judge-agent-amd step 3); build.sh passes
 # SPACK_BUILD_JOBS to raise it on a node with the memory for it.
 ARG SPACK_BUILD_JOBS=64
-# NVIDIA HPC SDK from the arm64 repo; cuTENSOR and Nsight Compute from the CUDA sbsa repo. NVHPC 26.9
+# NVIDIA HPC SDK, cuTENSOR and Nsight Compute from NVIDIA's repo of the build node's architecture (arm64
+# and sbsa, or amd64 and x86_64). NVHPC 26.9
 # is the newest SDK and bundles CUDA 13.3U1 (13.x, matching the base's major; it also ships 12.9U1
 # in the separate -cuda-multi package, not installed). ncu 2026.3.0 is the one CUDA 13.4.1 ships and
 # the base already carries. Nsight Systems is the base's own (NSIGHT_SYSTEMS_VERSION, 2026.5.1): the
-# sbsa repo's newest, 2026.3.2, is older.
+# CUDA repo's newest, 2026.3.2, is older.
 ARG NVHPC_APT_VERSION=26-9
 ARG CUTENSOR_VERSION=2.7.0.5-1
 ARG NSIGHT_COMPUTE_PKG=nsight-compute-2026.3.0
@@ -144,7 +147,7 @@ COPY containers/images/lib/git_mirror.sh /tmp/git_mirror.sh
 RUN sh /tmp/git_mirror.sh setup && rm -f /tmp/git_mirror.sh
 
 # ---------------------------------------------------------------------------------------------
-# 1. Base system packages. judge-agent-amd step 1, arm64 names.
+# 1. Base system packages. judge-agent-amd step 1.
 #
 # NO distro libpapi (PAPI is rebuilt below with the cuda/nvml components) and NO distro
 # BLAS/LAPACK/solver stack (spack's threads=openmp OpenBLAS is the one generated code links). blis
@@ -153,7 +156,8 @@ RUN sh /tmp/git_mirror.sh setup && rm -f /tmp/git_mirror.sh
 #
 # libfabric1 is the RUNTIME package only: it is the file the CE cxi hook bind-mounts the node's
 # libfabric onto, as the ROCm base's copy is on beverin. Its headers must not exist -- MPICH links
-# the compile-only stub from stage 0. likwid and msr-tools are absent: Ubuntu builds them for amd64 only.
+# the compile-only stub from stage 0. likwid and msr-tools are absent: Ubuntu builds them for amd64 only,
+# and both images install one package list.
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
@@ -187,7 +191,7 @@ RUN set -eux; \
 # 2. The CUDA vendor stack beyond the toolkit the base ships.
 #
 # cuBLAS / cuFFT / cuSOLVER / cuSPARSE / cuRAND / CUB / Thrust come with the toolkit and are
-# asserted by the final gate. cuTENSOR and Nsight Compute come from the sbsa repo; the cuTENSOR package name
+# asserted by the final gate. cuTENSOR and Nsight Compute come from the CUDA repo; the cuTENSOR package name
 # embeds the CUDA major, read off nvcc so a moved base fails instead of installing the wrong one.
 # The package keeps its header and library in a per-CUDA-major directory; both are linked onto the
 # default search paths so a bare `#include <cutensor.h>` / `-lcutensor` resolves, and asserted by a
@@ -203,7 +207,7 @@ RUN set -eux; \
     cuda_major="$(nvcc --version | sed -n 's/.*release \([0-9]*\).*/\1/p')"; \
     test -n "${cuda_major}" || { echo "could not read the CUDA major out of nvcc" >&2; exit 2; }; \
     wget -qO /tmp/cuda-keyring.deb \
-      "https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/sbsa/cuda-keyring_1.1-1_all.deb"; \
+      "https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/$(uname -m | sed 's/aarch64/sbsa/')/cuda-keyring_1.1-1_all.deb"; \
     dpkg -i /tmp/cuda-keyring.deb; \
     rm -f /tmp/cuda-keyring.deb; \
     apt-get update; \
@@ -252,7 +256,7 @@ RUN set -eux; \
       "https://developer.download.nvidia.com/hpc-sdk/ubuntu/DEB-GPG-KEY-NVIDIA-HPC-SDK"; \
     gpg --batch --dearmor < /tmp/nvhpc.key > /etc/apt/trusted.gpg.d/nvhpc.gpg; \
     rm -f /tmp/nvhpc.key; \
-    echo "deb https://developer.download.nvidia.com/hpc-sdk/ubuntu/arm64 /" \
+    echo "deb https://developer.download.nvidia.com/hpc-sdk/ubuntu/$(dpkg --print-architecture) /" \
       > /etc/apt/sources.list.d/nvhpc.list; \
     apt-get update; \
     apt-get install -y --no-install-recommends "nvhpc-${NVHPC_APT_VERSION}"; \
@@ -411,6 +415,7 @@ RUN set -eux; \
 # one concretization, and a lockfile gate on which libfabric won BEFORE anything expensive links it.
 RUN set -eux; \
     spack="${SPACK_ROOT}/bin/spack"; \
+    llvm_host="$(uname -m | sed 's/x86_64/x86/')"; \
     "${spack}" install --fail-fast "gcc@${GCC_VERSION} +graphite +binutils"; \
     "${spack}" compiler find --scope site "$("${spack}" location -i "gcc@${GCC_VERSION}")"; \
     ln -sfn "$("${spack}" location -i "gcc@${GCC_VERSION}")" /opt/gcc; \
@@ -445,7 +450,7 @@ RUN set -eux; \
       '        prefix: /opt/ofi-sdk' \
       '      buildable: false' \
       '  specs:' \
-      "  - llvm@${LLVM_VERSION} +clang +flang +mlir +polly +lld +offload +libomptarget targets=aarch64,nvptx" \
+      "  - llvm@${LLVM_VERSION} +clang +flang +mlir +polly +lld +offload +libomptarget targets=${llvm_host},nvptx" \
       '  # GPU-aware MPICH, no +slurm (its built-in PMI-1/2 client serves any srun); every variant is' \
       '  # judge-agent-amd step 4 with +cuda in place of +rocm. device=ch4 netmod=ofi reaches the' \
       '  # fabric through libfabric: the site supplies the provider (cxi on Alps via the CE hook).' \
@@ -746,7 +751,7 @@ RUN set -eux; \
       '    slepc:' \
       '      require: ["%llvm"]' \
       '  specs:' \
-      '  - openblas@0.3.33' \
+      '  - openblas@0.3.30' \
       '  - netlib-scalapack' \
       '  - fftw +mpi +openmp precision=float,double,long_double' \
       '  - suite-sparse +openmp' \
@@ -766,6 +771,11 @@ RUN set -eux; \
       '      link: roots' \
       '      link_type: symlink' \
       > "${OMP_LLVM_ENV_DIR}/spack.yaml"; \
+    # clang miscompiles 0.3.30's DYNAMIC_ARCH kernels on aarch64 (level-2 routines and potrf fail its
+    # tests); 0.3.33 passes. x86_64 stays on 0.3.30, as in judge-agent-cpu.
+    if [ "$(uname -m)" = aarch64 ]; then \
+      sed -i 's/openblas@0\.3\.30/openblas@0.3.33/' "${OMP_LLVM_ENV_DIR}/spack.yaml"; \
+    fi; \
     # A package's own `require` replaces `all: require`, so the portable target is named on each
     # one: without it sundials is built for the build node's zen4.
     if [ -n "${SPACK_TARGET}" ]; then \

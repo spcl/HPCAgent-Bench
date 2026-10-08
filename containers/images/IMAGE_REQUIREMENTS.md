@@ -10,7 +10,7 @@ into a node-local venv (`lib/launch_venv.sh`, the image's ENTRYPOINT; below). No
 | image | base | serves |
 |---|---|---|
 | `judge-agent-amd` (targets `agent`, `judge`) | `rocm/pytorch` ROCm 7.2, py3.12, x86_64 | judge and agent on MI250X, MI300 and MI355X, one image |
-| `judge-agent-cuda` (targets `agent`, `judge`) | NGC PyTorch 26.09 (CUDA 13.4.1, py3.12), aarch64 | judge and agent on GH200 |
+| `judge-agent-cuda` (targets `agent`, `judge`) | NGC PyTorch 26.09 (CUDA 13.4.1, py3.12), aarch64 or x86_64 | judge and agent on GH200 (aarch64, sm_80-sm_120); on x86-64-v3 hosts with sm_75-sm_120 GPUs (x86_64) |
 | `judge-agent-cpu` (targets `agent`, `judge`) | `ubuntu:24.04`, x86_64 or aarch64 | judge and agent on any CPU node |
 | `sglang` | vendor SGLang ROCm 7.2 (MI300) | qwen38, kimi, GLM-5.3 on beverin mi300 |
 | `vllm` | official vLLM 0.28.0 ROCm | oss120b on mi300, qwen38 on mi200 |

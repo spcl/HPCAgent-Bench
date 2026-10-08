@@ -1300,6 +1300,24 @@ wheels = [
 ]
 
 [[package]]
+name = "cuda-tile"
+version = "1.6.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "typing-extensions" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1f/cc/b4da247f624320c9898c14003e7b809b74c4a447251e1c98e33505f41757/cuda_tile-1.6.0-cp312-cp312-manylinux2014_aarch64.whl", hash = "sha256:77fb2b15c61960514f62fc41eeae3722cf6468c051f7593fd43970691624214b", size = 378564, upload-time = "2026-09-10T00:04:22.067Z" },
+    { url = "https://files.pythonhosted.org/packages/40/21/3dfeafbd3512e94a277a25ce022c10e7bdff5d43e364afffcc0928f7fcaf/cuda_tile-1.6.0-cp312-cp312-manylinux2014_x86_64.whl", hash = "sha256:7e38f97bfedff359c926710387a40fbfc8f36efb7fe9ad2cb759d5a098eedde3", size = 382170, upload-time = "2026-09-10T00:06:48.623Z" },
+    { url = "https://files.pythonhosted.org/packages/58/09/5c3b6c8fc2f03303fe97156082792f2276deb94c974f57691ce86322f91c/cuda_tile-1.6.0-cp313-cp313-manylinux2014_aarch64.whl", hash = "sha256:43c846d903d3ed12680af28acbb936f141c71a306ac9c4b778974f81a6634550", size = 378562, upload-time = "2026-09-10T00:06:10.131Z" },
+    { url = "https://files.pythonhosted.org/packages/9c/70/879ab39f2dab93eca6c9d5caa8b5195ceccf330f95bbd8cb5f35289ee9be/cuda_tile-1.6.0-cp313-cp313-manylinux2014_x86_64.whl", hash = "sha256:ca4858770945aa40677eff4b0bd6b0bdad73ef372d665eae4ec41202aecda830", size = 382172, upload-time = "2026-09-10T00:03:56.146Z" },
+    { url = "https://files.pythonhosted.org/packages/39/3c/02f9fde3751beced12b62fd42b419fdee26e27d18255295cba1dc77f0515/cuda_tile-1.6.0-cp314-cp314-manylinux2014_aarch64.whl", hash = "sha256:4785cbe370186bd3a83e8815bc9907cf186d9c5b8e24b88fd9ba4c3531374db8", size = 378978, upload-time = "2026-09-10T00:05:59.27Z" },
+    { url = "https://files.pythonhosted.org/packages/3c/94/9d174b601cf5e23eaf1590b63b1eb30f21944e91b99f61e6a0908b6f28ab/cuda_tile-1.6.0-cp314-cp314-manylinux2014_x86_64.whl", hash = "sha256:3dde52fd09780f3fd9f5b17d5750a94b4a98e3a18a1660e10a424ed8941fdc8d", size = 383303, upload-time = "2026-09-10T00:06:36.936Z" },
+    { url = "https://files.pythonhosted.org/packages/63/c0/da38a02f6132d600cf67981960b06a823e5d9562da34ed7aea37c24d25e8/cuda_tile-1.6.0-cp314-cp314t-manylinux2014_aarch64.whl", hash = "sha256:99010df35630368e6378b950d2bdafbd6256497b8de3dd0f7ce79d5e8191fa4a", size = 380046, upload-time = "2026-09-10T00:07:01.553Z" },
+    { url = "https://files.pythonhosted.org/packages/6d/f0/2cfd157e85f8364f8797fb4e1ee9f42d7a8667706398fd2896fe2b1d2f7c/cuda_tile-1.6.0-cp314-cp314t-manylinux2014_x86_64.whl", hash = "sha256:330fdfa470740a27f2f718215635c0ea7fa46d57e1246d48df495fdf7afc582c", size = 383750, upload-time = "2026-09-10T00:04:35.678Z" },
+]
+
+[[package]]
 name = "cuda-toolkit"
 version = "13.0.3.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2559,6 +2577,7 @@ docs = [
 nvgpu = [
     { name = "clang-format" },
     { name = "coverage" },
+    { name = "cuda-tile" },
     { name = "cupy-cuda13x" },
     { name = "fprettify" },
     { name = "jax", version = "0.11.2", source = { registry = "https://pypi.org/simple" }, extra = ["cuda13"], marker = "(extra == 'extra-14-hpcagent-bench-amdgpu' and extra == 'extra-14-hpcagent-bench-cpu') or (extra != 'extra-14-hpcagent-bench-cpu' and extra == 'extra-14-hpcagent-bench-nvgpu') or (extra != 'extra-14-hpcagent-bench-amdgpu' and extra == 'extra-14-hpcagent-bench-nvgpu') or (extra != 'extra-14-hpcagent-bench-cpu' and extra == 'group-14-hpcagent-agent-harness-miniswe' and extra == 'group-14-hpcagent-agent-harness-openhands') or (extra != 'extra-14-hpcagent-bench-cpu' and extra == 'group-14-hpcagent-agent-harness-miniswe' and extra == 'group-14-hpcagent-bench-harbor') or (extra != 'extra-14-hpcagent-bench-cpu' and extra == 'group-14-hpcagent-agent-harness-miniswe' and extra == 'group-14-hpcagent-bench-judge-proxy') or (extra != 'extra-14-hpcagent-bench-cpu' and extra == 'group-14-hpcagent-agent-harness-openhands' and extra == 'group-14-hpcagent-bench-harbor') or (extra != 'extra-14-hpcagent-bench-cpu' and extra == 'group-14-hpcagent-agent-harness-openhands' and extra == 'group-14-hpcagent-bench-judge-proxy') or (extra != 'extra-14-hpcagent-bench-cpu' and extra == 'group-14-hpcagent-bench-harbor' and extra == 'group-14-hpcagent-bench-judge-proxy') or (extra != 'extra-14-hpcagent-bench-amdgpu' and extra == 'group-14-hpcagent-agent-harness-miniswe' and extra == 'group-14-hpcagent-agent-harness-openhands') or (extra != 'extra-14-hpcagent-bench-amdgpu' and extra == 'group-14-hpcagent-agent-harness-miniswe' and extra == 'group-14-hpcagent-bench-harbor') or (extra != 'extra-14-hpcagent-bench-amdgpu' and extra == 'group-14-hpcagent-agent-harness-miniswe' and extra == 'group-14-hpcagent-bench-judge-proxy') or (extra != 'extra-14-hpcagent-bench-amdgpu' and extra == 'group-14-hpcagent-agent-harness-openhands' and extra == 'group-14-hpcagent-bench-harbor') or (extra != 'extra-14-hpcagent-bench-amdgpu' and extra == 'group-14-hpcagent-agent-harness-openhands' and extra == 'group-14-hpcagent-bench-judge-proxy') or (extra != 'extra-14-hpcagent-bench-amdgpu' and extra == 'group-14-hpcagent-bench-harbor' and extra == 'group-14-hpcagent-bench-judge-proxy')" },
@@ -2611,6 +2630,7 @@ requires-dist = [
     { name = "clang-format", marker = "extra == 'dev'" },
     { name = "coverage", marker = "extra == 'dev'" },
     { name = "crawl4ai" },
+    { name = "cuda-tile", marker = "extra == 'nvgpu'" },
     { name = "cupy", marker = "platform_machine == 'x86_64' and extra == 'amdgpu'" },
     { name = "cupy-cuda13x", marker = "extra == 'nvgpu'" },
     { name = "dace", git = "https://github.com/spcl/dace.git?rev=21f1ed0009098827eca7a8c1bc894ee03df81f8a" },
