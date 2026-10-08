@@ -75,6 +75,18 @@ def test_the_driver_argv_parses_into_absolute_paths_and_a_bare_base_url(harness,
     )
 
 
+def test_the_agent_folder_is_where_commands_run_and_the_workdir_without_one(
+    harness: types.SimpleNamespace, tmp_path: pathlib.Path
+) -> None:
+    """The runner's records stay in the workdir; the agent's commands run in its folder, which the judge reads."""
+    base = ["--workdir", str(tmp_path), "--prompt", str(tmp_path / "p.txt"), "--base-url", "http://n:8000/v1"]
+    base += ["--model", "m", "--usage", str(tmp_path / "u.jsonl")]
+    folder = tmp_path / "shared" / "agent-7"
+    told = harness.common.parse_args([*base, "--cwd", str(folder)], with_mcp_config=False)
+    assert (told.workdir, told.command_dir) == (tmp_path.resolve(), folder.resolve())
+    assert harness.common.parse_args(base, with_mcp_config=False).command_dir == tmp_path.resolve()
+
+
 def test_a_runner_told_no_effort_or_context_sends_neither(
     harness: types.SimpleNamespace, tmp_path: pathlib.Path
 ) -> None:

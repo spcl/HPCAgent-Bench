@@ -121,7 +121,9 @@ def test_submission_from_body_rejects_a_device_file_named_like_the_host_extensio
     (tmp_path / "gemm.cpp").write_text("__global__ void k(){}\n")
 
     body = RequestBody({"kernel": "gemm", "source": "host", "device_source_file": "gemm.cpp"})
-    with pytest.raises(ValueError, match=r"'device_source_file' must be named 'gemm\.hip' -- the kernel key plus"):
+    with pytest.raises(
+        ValueError, match=r"'device_source_file' must be named 'gemm\.hip' -- the kernel plus a hip extension"
+    ):
         service._submission_from_body(body, "gemm", "hip", hip_config())
 
 
