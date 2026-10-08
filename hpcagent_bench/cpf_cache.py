@@ -35,6 +35,7 @@ import shutil
 import sys
 import tempfile
 from collections.abc import Callable, Generator, Mapping, Sequence
+from typing import NamedTuple
 
 from hpcagent_bench.cache_files import file_sha256, json_digest, sha256_hex, write_atomic
 
@@ -52,9 +53,11 @@ __all__ = [
     "LOCKS_DIR",
     "MANIFEST_NAME",
     "MODES",
+    "ROLES",
     "VERIFIED_NAME",
     "VIEW_NAME",
     "CacheMiss",
+    "Form",
     "adopt",
     "cache_key",
     "canonical_entry",
@@ -96,6 +99,9 @@ DIALECT = {"c": "c", "cpp": "c++", "c++": "c++", "hip": "hip"}
 #: ``form`` is what the canonical_parallel_form tool serves; ``dropin`` is the head-start source.
 MODES = ("form", "dropin")
 
+#: The files of one cache entry: the source, on the gpu target the device unit, and the binding.
+ROLES = ("source", "device", "binding")
+
 #: The config key naming the view a run serves forms from (``HPCAGENT_BENCH_SERVICE_CANONICAL_``
 #: ``PARALLEL_FORM_DIR``), unset on every setup whose packet does not carry the tool. It lives here,
 #: on the module both the service and the prompt builder already import, because both have to agree
@@ -113,7 +119,7 @@ CACHE_ENV = "HPCAGENT_BENCH_CPF_CACHE"
 LOCKS_DIR = ".locks"
 
 #: Bumped when the entry or view layout changes, so an old layout is a miss and never a misread.
-LAYOUT = 1
+LAYOUT = 2
 
 MANIFEST_NAME = "manifest.json"
 VIEW_NAME = "cpf-view.json"
@@ -226,7 +232,7 @@ def verified_manifest(cache_root: pathlib.Path, key: str) -> dict[str, object]:
     if not isinstance(manifest, dict) or manifest.get("key") != key or manifest.get("layout") != LAYOUT:
         raise CacheMiss(f"cache entry {where} does not describe key {key}")
     artefacts = manifest.get("artefacts")
-    if not isinstance(artefacts, dict) or set(artefacts) != {"source", "binding"}:
+    if not isinstance(artefacts, dict) or not {"source", "binding"} <= set(artefacts) <= set(ROLES):
         raise CacheMiss(f"cache entry {where} lists no source and binding")
     for role, artefact in artefacts.items():
         path = where / str(artefact["name"])
@@ -248,17 +254,13 @@ def is_hit(cache_root: pathlib.Path, key: str) -> bool:
 
 
 def publish(
-    cache_root: pathlib.Path,
-    key: str,
-    manifest: Mapping[str, object],
-    source: tuple[str, str],
-    binding: tuple[str, str],
+    cache_root: pathlib.Path, key: str, manifest: Mapping[str, object], files: Sequence[tuple[str, str, str]]
 ) -> bool:
     """Write one entry atomically. Returns False, writing nothing, when the key is already a hit.
 
-    ``source`` and ``binding`` are ``(file name, text)``. The entry is assembled in a sibling
-    directory and renamed into place, so a reader sees a whole entry or none; an entry that fails
-    verification is replaced, since its key promises the same content.
+    ``files`` are ``(role, file name, text)``, one per :data:`ROLES` entry the form has. The entry is
+    assembled in a sibling directory and renamed into place, so a reader sees a whole entry or none;
+    an entry that fails verification is replaced, since its key promises the same content.
     """
     if is_hit(cache_root, key):
         return False
@@ -267,7 +269,7 @@ def publish(
     staging = pathlib.Path(tempfile.mkdtemp(prefix=f".{key}.", dir=final.parent))
     staging.chmod(0o755)
     artefacts: dict[str, dict[str, str]] = {}
-    for role, (name, text) in (("source", source), ("binding", binding)):
+    for role, name, text in files:
         payload = text.encode()
         (staging / name).write_bytes(payload)
         artefacts[role] = {"name": name, "sha256": sha256_hex(payload)}
@@ -395,17 +397,30 @@ def pointer_outcome(
     return name, str(key), header
 
 
-def resolve(
-    view: pathlib.Path, kernel: str, language: str, fptype: str, mode: str
-) -> tuple[pathlib.Path, pathlib.Path]:
-    """``(source, binding)`` in the cache for one exact (kernel, language, precision, mode)."""
+class Form(NamedTuple):
+    """One form's files in the cache: the source, the binding, and on the gpu target the device unit."""
+
+    #: The unit defining the entry; on gpu the host unit (``.cpp``), which only launches.
+    source: pathlib.Path
+    binding: pathlib.Path
+    #: The gpu target's device unit (``.hip``): the kernels and the launchers ``source`` calls.
+    device: pathlib.Path | None = None
+
+
+def resolve(view: pathlib.Path, kernel: str, language: str, fptype: str, mode: str) -> Form:
+    """The :class:`Form` in the cache for one exact (kernel, language, precision, mode)."""
     _, key, header = pointer_outcome(view, kernel, language, fptype, mode)
     cache_root = pathlib.Path(header["cache_root"])
     manifest = verified_manifest(cache_root, key)
     artefacts = manifest["artefacts"]
     assert isinstance(artefacts, dict)
     where = entry_path(cache_root, key)
-    return where / artefacts["source"]["name"], where / artefacts["binding"]["name"]
+    device = artefacts.get("device")
+    return Form(
+        where / artefacts["source"]["name"],
+        where / artefacts["binding"]["name"],
+        where / device["name"] if device else None,
+    )
 
 
 def record_verification(
@@ -521,33 +536,35 @@ def adopt(
 ) -> list[str]:
     """Publish a flat render directory's ``mode`` artefacts into the cache and point ``view`` at them.
 
-    The key hashes the source and binding bytes in place of the SDFG, and the manifest names the file
-    each came from. Pointers keep the other mode, so a form directory and a drop-in directory adopt
-    into one view. Returns one line per (kernel, dialect) the directory has no source and binding for.
+    The key hashes the source (and device unit) and binding bytes in place of the SDFG, and the manifest
+    names the file the source came from. Pointers keep the other mode, so a form directory and a drop-in
+    directory adopt into one view. Returns one line per (kernel, dialect) the directory lacks a file for:
+    a gpu form is ``<stem>.cpp`` with ``<stem>.hip``, a cpu form ``<stem>.c`` or ``<stem>.cpp``.
     """
     open_view(view, cache_root, target, ADOPTED)
     dialects = ("hip",) if target == "gpu" else ("c", "c++")
     misses: list[str] = []
     for kernel in kernels:
         stem = f"{short_name(kernel)}_{fptype}_cpf"
-        binding = flat / f"{stem}_binding.json"
         for dialect in dialects:
-            source = flat / f"{stem}.{LANGUAGE_EXT[dialect]}"
-            if not (source.is_file() and binding.is_file()):
-                misses.append(f"{short_name(kernel)}: {flat} has no {source.name} with {binding.name}")
+            roles = (("source", "c++"), ("device", "hip")) if target == "gpu" else (("source", dialect),)
+            files = [(role, flat / f"{stem}.{LANGUAGE_EXT[spelling]}") for role, spelling in roles]
+            files.append(("binding", flat / f"{stem}_binding.json"))
+            if absent := [path.name for _, path in files if not path.is_file()]:
+                misses.append(f"{short_name(kernel)}: {flat} has no {', '.join(absent)}")
                 continue
-            text, bound = source.read_text(), binding.read_text()
+            texts = [(role, path.name, path.read_text()) for role, path in files]
             options = {
                 "kernel": short_name(kernel),
                 "language": dialect,
                 "precision": fptype,
                 "target": target,
                 "mode": mode,
-                "binding": sha256_hex(bound.encode()),
+                "binding": sha256_hex(texts[-1][2].encode()),
             }
-            key = cache_key(sha256_hex(text.encode()), ADOPTED, options)
-            manifest = {"kernel": short_name(kernel), "entry": stem, "adopted_from": str(source.resolve())}
-            publish(cache_root, key, manifest, (source.name, text), (binding.name, bound))
+            key = cache_key(sha256_hex("".join(text for _, _, text in texts[:-1]).encode()), ADOPTED, options)
+            manifest = {"kernel": short_name(kernel), "entry": stem, "adopted_from": str(files[0][1].resolve())}
+            publish(cache_root, key, manifest, texts)
             try:
                 modes = json.loads((view / ENTRIES_NAME / pointer_name(kernel, fptype, dialect)).read_text())["modes"]
             except (OSError, ValueError, KeyError):
@@ -559,14 +576,16 @@ def adopt(
 def stage(
     view: pathlib.Path, kernel: str, language: str, fptype: str, dest: pathlib.Path, target: str, name: str = ""
 ) -> pathlib.Path:
-    """Copy the drop-in for ``kernel`` to ``dest/<name>.<ext>``; ``name`` defaults to the kernel's short name."""
+    """Copy the drop-in for ``kernel`` to ``dest/<name>.<ext>`` (on gpu its device unit beside it, ``<name>.hip``);
+    ``name`` defaults to the kernel's short name. Returns the staged source."""
     if reason := wrong_target(view, target):
         raise CacheMiss(reason)
-    source, _ = resolve(view, kernel, language, fptype, "dropin")
-    staged = dest / f"{name or short_name(kernel)}{source.suffix}"
+    form = resolve(view, kernel, language, fptype, "dropin")
+    stem = name or short_name(kernel)
     dest.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(source, staged)
-    return staged
+    for path in filter(None, (form.source, form.device)):
+        shutil.copyfile(path, dest / f"{stem}{path.suffix}")
+    return dest / f"{stem}{form.source.suffix}"
 
 
 def main(argv: Sequence[str] | None = None) -> int:

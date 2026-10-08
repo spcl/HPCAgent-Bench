@@ -51,9 +51,8 @@ def test_a_shard_with_a_load_failure_and_a_render_failure_still_exits_zero(
             bad = {"key": "badkey", "verdict": "timeout", "error": "render exceeded budget"}
             return {"results": {"c": {"form": bad, "dropin": bad}, "c++": {"form": bad, "dropin": bad}}}
         key = f"{spec.short_name}key"
-        cpf_cache.publish(
-            cache_root, key, {"kernel": spec.short_name}, (f"{spec.short_name}.c", "// ok\n"), ("binding.json", "{}\n")
-        )
+        files = [("source", f"{spec.short_name}.c", "// ok\n"), ("binding", "binding.json", "{}\n")]
+        cpf_cache.publish(cache_root, key, {"kernel": spec.short_name}, files)
         ok = {"key": key, "verdict": "ok", "cached": False}
         return {"results": {"c": {"form": ok, "dropin": ok}, "c++": {"form": ok, "dropin": ok}}}
 
@@ -115,10 +114,10 @@ def test_a_gpu_prerender_records_hip_entries_the_launch_gates_accept(
             for rendered in cpf_cache.MODES:
                 options = {"kernel": spec.short_name, "language": dialect, "target": target, "mode": rendered}
                 key = cpf_cache.cache_key("sdfg", before, options)
-                source = (f"{stem}.{cpf_cache.LANGUAGE_EXT[dialect]}", f"// {rendered}\n")
-                cpf_cache.publish(
-                    cache_root, key, {"kernel": spec.short_name}, source, (f"{stem}_binding.json", "{}\n")
-                )
+                # A gpu form: the host .cpp and the device .hip.
+                files = [("source", f"{stem}.cpp", f"// {rendered}\n"), ("device", f"{stem}.hip", "// kernels\n")]
+                files.append(("binding", f"{stem}_binding.json", "{}\n"))
+                cpf_cache.publish(cache_root, key, {"kernel": spec.short_name}, files)
                 results[dialect][rendered] = {"key": key, "verdict": "ok", "cached": False}
         return {"results": results}
 

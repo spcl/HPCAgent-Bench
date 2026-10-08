@@ -37,23 +37,26 @@ OPTIONS = {
 
 #: ``cache_key("sdfg", "dace", OPTIONS)``. A change to how keys are derived orphans every entry
 #: every experiment has rendered, so it has to be a deliberate edit of this literal.
-PINNED_KEY = "cced2bb37a9411bfa93129e591208cf79c5a369cf44e834a1556e29860a1279d"
+PINNED_KEY = "9148a192706642d393ba553f2faa4ab6c7c6a33aee2f89d5172ad236de52cae7"
 
 
-def publish(cache: pathlib.Path, key: str, name: str, code: str = "void f(void) {}\n") -> None:
+def publish(cache: pathlib.Path, key: str, name: str, code: str = "void f(void) {}\n", device: bool = False) -> None:
+    """One entry: ``name`` as the source, and with ``device`` a gpu form's ``<stem>.hip`` device unit beside it."""
     stem = name.rsplit(".", 1)[0]
-    cpf_cache.publish(cache, key, {"kernel": stem}, (name, code), (f"{stem}_binding.json", "{}\n"))
+    units = [("source", name, code)] + ([("device", f"{stem}.hip", f"// kernels of {code}")] if device else [])
+    cpf_cache.publish(cache, key, {"kernel": stem}, [*units, ("binding", f"{stem}_binding.json", "{}\n")])
 
 
 def view_with(tmp_path: pathlib.Path, kernel: str, dialect: str = "c", target: str = "cpu") -> pathlib.Path:
     """A view whose ``kernel`` entry points at a published read form and drop-in."""
     cache, view = tmp_path / "cache", tmp_path / "view"
     cpf_cache.open_view(view, cache, target, "dace")
-    ext = cpf_cache.LANGUAGE_EXT[dialect]
+    # A gpu form is a host .cpp and a device .hip.
+    ext = cpf_cache.LANGUAGE_EXT["c++" if target == "gpu" else dialect]
     modes = {}
     for mode in cpf_cache.MODES:
         key = cpf_cache.cache_key("sdfg", "dace", {**OPTIONS, "kernel": kernel, "language": dialect, "mode": mode})
-        publish(cache, key, f"{kernel}_fp64_cpf.{ext}", f"// {kernel} {mode}\n")
+        publish(cache, key, f"{kernel}_fp64_cpf.{ext}", f"// {kernel} {mode}\n", device=target == "gpu")
         modes[mode] = {"key": key, "verdict": "ok", "cached": False}
     cpf_cache.record(view, kernel, dialect, "fp64", modes)
     return view
@@ -98,13 +101,19 @@ def test_a_published_key_is_a_hit_and_publishing_it_again_writes_nothing(tmp_pat
     cache = tmp_path / "cache"
     assert not cpf_cache.is_hit(cache, PINNED_KEY)
     assert cpf_cache.publish(
-        cache, PINNED_KEY, {"kernel": "k"}, ("k_fp64_cpf.c", "one\n"), ("k_fp64_cpf_binding.json", "{}")
+        cache,
+        PINNED_KEY,
+        {"kernel": "k"},
+        [("source", "k_fp64_cpf.c", "one\n"), ("binding", "k_fp64_cpf_binding.json", "{}")],
     )
     entry = cpf_cache.entry_path(cache, PINNED_KEY)
     before = {path.name: path.stat().st_mtime_ns for path in entry.iterdir()}
     assert cpf_cache.is_hit(cache, PINNED_KEY)
     assert not cpf_cache.publish(
-        cache, PINNED_KEY, {"kernel": "k"}, ("k_fp64_cpf.c", "two\n"), ("k_fp64_cpf_binding.json", "{}")
+        cache,
+        PINNED_KEY,
+        {"kernel": "k"},
+        [("source", "k_fp64_cpf.c", "two\n"), ("binding", "k_fp64_cpf_binding.json", "{}")],
     )
     assert {path.name: path.stat().st_mtime_ns for path in entry.iterdir()} == before
     assert (entry / "k_fp64_cpf.c").read_text() == "one\n"
@@ -130,8 +139,10 @@ def test_concurrent_publishes_to_one_key_never_let_a_reader_see_a_mismatched_ent
                     cache,
                     PINNED_KEY,
                     {"kernel": "k"},
-                    ("k_fp64_cpf.c", f"// writer {index} attempt {attempt}\n"),
-                    ("k_fp64_cpf_binding.json", f'{{"writer": {index}}}'),
+                    [
+                        ("source", "k_fp64_cpf.c", f"// writer {index} attempt {attempt}\n"),
+                        ("binding", "k_fp64_cpf_binding.json", f'{{"writer": {index}}}'),
+                    ],
                 )
             except Exception as exc:  # noqa: BLE001 -- publish() must never raise out of a normal race
                 bad.append(f"writer {index}: {type(exc).__name__}: {exc}")
@@ -168,11 +179,19 @@ def test_an_entry_that_fails_verification_is_replaced_by_the_next_publish(tmp_pa
     """Moving a damaged entry aside instead of deleting it in place must still replace it, or a
     corrupted render would be a permanent miss that no rerun repairs."""
     cache = tmp_path / "cache"
-    cpf_cache.publish(cache, PINNED_KEY, {"kernel": "k"}, ("k_fp64_cpf.c", "one\n"), ("k_fp64_cpf_binding.json", "{}"))
+    cpf_cache.publish(
+        cache,
+        PINNED_KEY,
+        {"kernel": "k"},
+        [("source", "k_fp64_cpf.c", "one\n"), ("binding", "k_fp64_cpf_binding.json", "{}")],
+    )
     entry = cpf_cache.entry_path(cache, PINNED_KEY)
     (entry / "k_fp64_cpf.c").write_text("damaged\n")
     assert cpf_cache.publish(
-        cache, PINNED_KEY, {"kernel": "k"}, ("k_fp64_cpf.c", "two\n"), ("k_fp64_cpf_binding.json", "{}")
+        cache,
+        PINNED_KEY,
+        {"kernel": "k"},
+        [("source", "k_fp64_cpf.c", "two\n"), ("binding", "k_fp64_cpf_binding.json", "{}")],
     )
     assert (entry / "k_fp64_cpf.c").read_text() == "two\n"
     assert cpf_cache.is_hit(cache, PINNED_KEY)
@@ -199,7 +218,10 @@ def test_the_manifest_carries_the_key_and_no_timestamp(tmp_path: pathlib.Path) -
     first, second = tmp_path / "a", tmp_path / "b"
     for cache in (first, second):
         cpf_cache.publish(
-            cache, PINNED_KEY, {"dace_commit": "abc"}, ("k_fp64_cpf.c", "x\n"), ("k_fp64_cpf_binding.json", "{}")
+            cache,
+            PINNED_KEY,
+            {"dace_commit": "abc"},
+            [("source", "k_fp64_cpf.c", "x\n"), ("binding", "k_fp64_cpf_binding.json", "{}")],
         )
     manifests = [(cpf_cache.entry_path(c, PINNED_KEY) / cpf_cache.MANIFEST_NAME).read_bytes() for c in (first, second)]
     assert manifests[0] == manifests[1]
@@ -209,7 +231,7 @@ def test_the_manifest_carries_the_key_and_no_timestamp(tmp_path: pathlib.Path) -
 
 def test_a_modified_artefact_is_a_miss_naming_the_key(tmp_path: pathlib.Path) -> None:
     view = view_with(tmp_path, "k")
-    source, _ = cpf_cache.resolve(view, "k", "c", "fp64", "form")
+    source = cpf_cache.resolve(view, "k", "c", "fp64", "form").source
     source.write_text("// edited by hand\n")
     with pytest.raises(cpf_cache.CacheMiss, match=source.parent.name):
         cpf_cache.resolve(view, "k", "c", "fp64", "form")
@@ -252,7 +274,7 @@ def test_every_input_moves_the_canonical_key(program: str, commit: str, options:
 
 def test_a_pointer_to_a_missing_entry_names_the_key(tmp_path: pathlib.Path) -> None:
     view = view_with(tmp_path, "k")
-    source, _ = cpf_cache.resolve(view, "k", "c", "fp64", "dropin")
+    source = cpf_cache.resolve(view, "k", "c", "fp64", "dropin").source
     key = source.parent.name
     for path in source.parent.iterdir():
         path.unlink()
@@ -289,21 +311,30 @@ def test_lookup_is_by_exact_name(tmp_path: pathlib.Path) -> None:
     view = view_with(tmp_path, "cloudsc_init")
     with pytest.raises(cpf_cache.CacheMiss):
         cpf_cache.resolve(view, "cloudsc", "c", "fp64", "form")
-    source, _ = cpf_cache.resolve(view, "cloudsc_init", "c", "fp64", "form")
+    source = cpf_cache.resolve(view, "cloudsc_init", "c", "fp64", "form").source
     assert source.read_text() == "// cloudsc_init form\n"
 
 
 def test_a_registry_key_resolves_like_its_short_name(tmp_path: pathlib.Path) -> None:
     view = view_with(tmp_path, "cloudsc")
-    source, _ = cpf_cache.resolve(view, "scientific_computing/weather/cloudsc/cloudsc", "c", "fp64", "form")
+    source = cpf_cache.resolve(view, "scientific_computing/weather/cloudsc/cloudsc", "c", "fp64", "form").source
     assert source.read_text() == "// cloudsc form\n"
 
 
 def test_a_gpu_view_serves_the_device_form_for_a_host_dialect(tmp_path: pathlib.Path) -> None:
     """The tool asks a hip setup's judge for c++; the device form is the only one a gpu view holds."""
     view = view_with(tmp_path, "k", dialect="hip", target="gpu")
-    source, _ = cpf_cache.resolve(view, "k", "c++", "fp64", "form")
-    assert source.suffix == ".hip"
+    form = cpf_cache.resolve(view, "k", "c++", "fp64", "form")
+    assert (form.source.suffix, form.device and form.device.suffix) == (".cpp", ".hip")
+
+
+def test_a_gpu_dropin_stages_as_the_two_units_a_gpu_submission_is(tmp_path: pathlib.Path) -> None:
+    """agent/gpu-build.md: the host entry as ``<kernel>.cpp``, the kernels as ``<kernel>.hip``."""
+    view = view_with(tmp_path, "k", dialect="hip", target="gpu")
+    dest = tmp_path / "tasks" / "k"
+    stage = ["stage", "--view", str(view), "--kernel", "k", "--language", "hip", "--target", "gpu"]
+    assert cpf_cache.main([*stage, "--dest", str(dest), "--name", "k_reference"]) == 0
+    assert sorted(path.name for path in dest.iterdir()) == ["k_reference.cpp", "k_reference.hip"]
 
 
 def test_a_view_refuses_a_second_renderer(tmp_path: pathlib.Path) -> None:
@@ -361,7 +392,7 @@ def test_an_adopted_flat_render_is_served_byte_for_byte_per_mode(tmp_path: pathl
     assert cpf_cache.main(["adopt", "--flat", str(dropins), "--mode", "dropin", *common]) == 0
     for dialect, ext in (("c", "c"), ("c++", "cpp")):
         for mode, flat in (("form", forms), ("dropin", dropins)):
-            source, binding = cpf_cache.resolve(view, "k", dialect, "fp64", mode)
+            source, binding, _ = cpf_cache.resolve(view, "k", dialect, "fp64", mode)
             assert source.read_bytes() == (flat / f"k_fp64_cpf.{ext}").read_bytes()
             assert binding.read_bytes() == (flat / "k_fp64_cpf_binding.json").read_bytes()
     entries = sorted(path.name for path in cache.glob("*/*"))
@@ -414,8 +445,8 @@ def test_adopt_names_every_source_the_flat_directory_lacks(
     assert cpf_cache.main([*args, "--mode", "form", "--kernels", "k,absent"]) == 1
     out = capsys.readouterr().out
     assert "k_fp64_cpf.cpp" in out
-    assert "absent_fp64_cpf.c " in out
-    source, _ = cpf_cache.resolve(view, "k", "c", "fp64", "form")
+    assert "absent_fp64_cpf.c," in out
+    source = cpf_cache.resolve(view, "k", "c", "fp64", "form").source
     assert source.read_text() == "// k form c\n"
 
 

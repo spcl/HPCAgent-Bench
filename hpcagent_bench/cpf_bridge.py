@@ -503,7 +503,8 @@ def clean_form(code: str, forced: Sequence[str]) -> str:
 class RenderedForm(NamedTuple):
     """Step 4's output for one (language, mode), not yet written anywhere."""
 
-    #: ``<short>_<fptype>_cpf.<ext>`` -- a drop-in keeps the ``_cpf`` FILE name; only its symbol is canonical.
+    #: ``<short>_<fptype>_cpf.<ext>`` -- a drop-in keeps the ``_cpf`` FILE name; only its symbol is canonical. On the
+    #: gpu target the host unit, ``.cpp``: the extern "C" entry, which only launches.
     name: str
     code: str
     #: The entry's binding as JSON text, in the order the rendered signature takes its arguments.
@@ -513,10 +514,21 @@ class RenderedForm(NamedTuple):
     abi_order: tuple[str, ...] | None
     forced: tuple[str, ...]
     lines: int
+    #: The gpu target's device unit (``.hip``): the kernels and the launchers ``code`` calls; empty on cpu.
+    device_code: str = ""
 
     @property
     def binding_name(self) -> str:
         return f"{pathlib.Path(self.name).stem}_binding.json"
+
+    @property
+    def device_name(self) -> str:
+        return f"{pathlib.Path(self.name).stem}.{LANGUAGE_EXT[DEVICE_LANGUAGE]}"
+
+    def artefacts(self) -> tuple[tuple[str, str, str], ...]:
+        """``(role, file name, text)`` of every file this form is: the source, the device unit on gpu, the binding."""
+        device = (("device", self.device_name, self.device_code),) if self.device_code else ()
+        return (("source", self.name, self.code), *device, ("binding", self.binding_name, self.binding))
 
 
 def render_canonical(
@@ -557,8 +569,8 @@ def render_canonical(
         privatize_rebound_arguments(sdfg, [name for name in by_value if name not in outputs])
         forced = force_abi_symbols(sdfg, emitted_args)
         sdfg.name = native.symbol  # pyright: ignore[reportAttributeAccessIssue] -- dace Property descriptor, as above
-    # The device form is one unit holding host code and kernels -- its own dialect; --language only
-    # picks between the two HOST spellings.
+    # The device form is the hip dialect, a host unit and a device unit; --language only picks between the two HOST
+    # spellings of a cpu form.
     emitted = DEVICE_LANGUAGE if target == "gpu" else language
     try:
         rendering = render(sdfg, language=emitted, order=abi_args)
@@ -576,13 +588,15 @@ def render_canonical(
         binding = dataclasses.replace(binding, args=args)
         abi_args = [manifest.get(name, name) for name in abi_args]
     return RenderedForm(
-        name=f"{base}.{LANGUAGE_EXT[emitted]}",
+        # The gpu host unit is the C++ entry the GPU build contract names (agent/gpu-build.md).
+        name=f"{base}.{LANGUAGE_EXT['c++' if target == 'gpu' else emitted]}",
         code=clean_form(rendering.code, forced),
         binding=json.dumps(binding.to_json(), indent=2),
         entry=sdfg.name,
         abi_order=tuple(abi_args) if abi_args is not None else None,
         forced=forced,
-        lines=rendering.code.count("\n") + 1,
+        lines=rendering.code.count("\n") + rendering.device_code.count("\n") + 1,
+        device_code=clean_form(rendering.device_code, forced) if rendering.device_code else "",
     )
 
 
@@ -618,13 +632,10 @@ def render_sdfg(
         if form.forced:
             rec["forced_abi_symbols"] = list(form.forced)
     out_dir.mkdir(parents=True, exist_ok=True)
-    source = out_dir / form.name
-    source.write_text(form.code)
-    binding = out_dir / form.binding_name
-    binding.write_text(form.binding)
+    for role, name, text in form.artefacts():
+        (out_dir / name).write_text(text)
+        rec[role] = str(out_dir / name)
     rec["verdict"] = "ok"
-    rec["source"] = str(source)
-    rec["binding"] = str(binding)
     rec["lines"] = form.lines
     return rec
 
@@ -730,7 +741,7 @@ def prerender_sdfg(
                     "abi_order": list(form.abi_order) if form.abi_order is not None else None,
                     "forced_abi_symbols": list(form.forced),
                 }
-                cpf_cache.publish(cache_root, key, manifest, (form.name, form.code), (form.binding_name, form.binding))
+                cpf_cache.publish(cache_root, key, manifest, form.artefacts())
                 results[language][mode] = {"key": key, "verdict": "ok", "cached": False}
     rec["results"] = results
     return rec

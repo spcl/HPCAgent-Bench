@@ -104,7 +104,9 @@ def publish_view(tmp_path: pathlib.Path, kernel: str, source: str) -> pathlib.Pa
     cpf_cache.open_view(view, cache, "cpu", "dace")
     key = cpf_cache.cache_key("sdfg", "dace", {"kernel": kernel, "mode": "form"})
     name = f"{kernel}_fp64_cpf"
-    cpf_cache.publish(cache, key, {"kernel": kernel}, (f"{name}.c", source), (f"{name}_binding.json", "{}"))
+    cpf_cache.publish(
+        cache, key, {"kernel": kernel}, [("source", f"{name}.c", source), ("binding", f"{name}_binding.json", "{}")]
+    )
     cpf_cache.record(view, kernel, "c", "fp64", {"form": {"key": key, "verdict": "ok"}})
     return view
 
@@ -179,8 +181,8 @@ def dialect_view(tmp_path: pathlib.Path, target: str, dialects: tuple[str, ...])
         options = {"kernel": "example_kernel", "language": dialect, "target": target, "mode": "form"}
         key = cpf_cache.cache_key("sdfg", "dace", options)
         name = "example_kernel_fp64_cpf"
-        source = (f"{name}.{cpf_cache.LANGUAGE_EXT[dialect]}", f"// {dialect} form\n")
-        cpf_cache.publish(cache, key, {"kernel": "example_kernel"}, source, (f"{name}_binding.json", "{}"))
+        source = ("source", f"{name}.{cpf_cache.LANGUAGE_EXT[dialect]}", f"// {dialect} form\n")
+        cpf_cache.publish(cache, key, {"kernel": "example_kernel"}, [source, ("binding", f"{name}_binding.json", "{}")])
         cpf_cache.record(view, "example_kernel", dialect, "fp64", {"form": {"key": key, "verdict": "ok"}})
     return view
 
@@ -238,7 +240,7 @@ def test_a_request_is_never_answered_with_another_kernels_form(tmp_path: pathlib
 
     with pytest.raises(cpf_cache.CacheMiss):
         cpf_cache.resolve(view, "cloudsc", "c", "fp64", "form")
-    source, _ = cpf_cache.resolve(view, "cloudsc_init", "c", "fp64", "form")
+    source = cpf_cache.resolve(view, "cloudsc_init", "c", "fp64", "form").source
     assert source.read_text() == "// cloudsc_init\n"
 
 
@@ -249,5 +251,5 @@ def test_the_kernels_own_form_is_still_found_beside_its_longer_neighbours(tmp_pa
     view = publish_view(tmp_path, "cloudsc", "// cloudsc\n")
     cpf_cache.record(view, "cloudsc_init", "c", "fp64", {"form": {"key": None, "verdict": "fail"}})
 
-    source, _ = cpf_cache.resolve(view, "cloudsc", "c", "fp64", "form")
+    source = cpf_cache.resolve(view, "cloudsc", "c", "fp64", "form").source
     assert source.read_text() == "// cloudsc\n"

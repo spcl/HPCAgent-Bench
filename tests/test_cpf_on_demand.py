@@ -66,8 +66,9 @@ class FakeRenderer:
                     results[dialect][mode] = {"key": key, "verdict": self.verdict, "error": "renderer refused"}
                     continue
                 stem = f"{spec.short_name}_fp64_cpf"
-                source = (f"{stem}.{cpf_cache.LANGUAGE_EXT[dialect]}", f"// {dialect} {mode}\n")
-                cpf_cache.publish(cache_root, key, {"kernel": spec.short_name}, source, (f"{stem}_binding.json", "{}"))
+                source = ("source", f"{stem}.{cpf_cache.LANGUAGE_EXT[dialect]}", f"// {dialect} {mode}\n")
+                files = [source, ("binding", f"{stem}_binding.json", "{}")]
+                cpf_cache.publish(cache_root, key, {"kernel": spec.short_name}, files)
                 results[dialect][mode] = {"key": key, "verdict": "ok", "cached": False}
         return {"results": results}
 

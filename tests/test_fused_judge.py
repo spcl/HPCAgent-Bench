@@ -85,9 +85,8 @@ def publish_view(tmp_path: pathlib.Path) -> pathlib.Path:
     cpf_cache.open_view(view, cache, "cpu", "dace")
     key = cpf_cache.cache_key("sdfg", "dace", {"kernel": "example_kernel", "mode": "form"})
     name = "example_kernel_fp64_cpf"
-    cpf_cache.publish(
-        cache, key, {"kernel": "example_kernel"}, (f"{name}.c", "// form\n"), (f"{name}_binding.json", "{}")
-    )
+    files = [("source", f"{name}.c", "// form\n"), ("binding", f"{name}_binding.json", "{}")]
+    cpf_cache.publish(cache, key, {"kernel": "example_kernel"}, files)
     cpf_cache.record(view, "example_kernel", "c", "fp64", {"form": {"key": key, "verdict": "ok"}})
     return view
 

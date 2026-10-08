@@ -236,7 +236,7 @@ def test_a_prerender_caches_both_modes_and_a_rerun_renders_nothing(spec: BenchSp
     view = tmp_path / "view"
     cpf_cache.open_view(view, cache, "cpu", "test-commit")
     cpf_cache.record(view, spec.short_name, "c", "fp64", second)
-    source, binding_path = cpf_cache.resolve(view, spec.short_name, "c", "fp64", "dropin")
+    source, binding_path, _ = cpf_cache.resolve(view, spec.short_name, "c", "fp64", "dropin")
     manifest = json.loads((source.parent / cpf_cache.MANIFEST_NAME).read_text())
     native = binding_from_spec(spec)
     assert manifest["abi_order"] == [a.name for a in native.args] + ["workspace", "workspace_size"]
@@ -246,7 +246,7 @@ def test_a_prerender_caches_both_modes_and_a_rerun_renders_nothing(spec: BenchSp
     assert [arg["name"] for arg in binding["args"]] == manifest["abi_order"]
     assert binding["symbol"] == native.symbol
 
-    form, _ = cpf_cache.resolve(view, spec.short_name, "c", "fp64", "form")
+    form = cpf_cache.resolve(view, spec.short_name, "c", "fp64", "form").source
     assert "workspace_size" not in form.read_text(), "the read form must not carry the drop-in's scratch pair"
 
 
