@@ -5,21 +5,21 @@ A helper job is one Slurm step whose tasks split a list of work items between th
 `SLURM_PROCID` of `SLURM_NTASKS` takes `items[rank::size]`; without Slurm (a laptop, a login node) the task is
 rank 0 of 1 and takes everything. A rank with no items succeeds. A task launched without the OpenMP environment
 grading needs (`OMP_STACKSIZE`, `OMP_THREAD_LIMIT`, the stack at its hard limit; `flags.openmp_launch_env`) starts
-itself again with libgomp's defaults, the ones `run_cluster.sh` exports; values a launch already set stay. Code: `hpcagent_bench/cluster/jobs.py`;
-tests: `tests/test_jobs.py`, `tests/test_baseline_sweep.py`.
+itself again with libgomp's defaults, the ones `run_cluster.sh` exports; values a launch already set stay. Code:
+`hpcagent_bench/cluster/jobs.py`; tests: `tests/test_jobs.py`, `tests/test_baseline_sweep.py`.
 
-| Action | What it does | Work items | Sample |
+| Action | What it does | Work items | Job script |
 | --- | --- | --- | --- |
-| `grade-under` | grade what no DB holds a grade under the final protocol (mw4x5) of: final submissions, else promotions | worklist lines | [`grade-under.sbatch`](grade-under.sbatch) |
-| `prepare` | fill every cache an experiment reads: sources, base SDFGs, reference grades, torch denominators, CPF forms | problems, tag or list kernels | [`prepare.sbatch`](../../hpcagent_bench/cluster/prepare.sbatch) |
-| `baseline` | one compiler column over a tag (the canon sweep) | tag kernels | [`baseline.sbatch`](baseline.sbatch) |
+| `grade-under` | grade what no DB holds a grade under the final protocol (mw4x5) of: final submissions, else promotions | worklist lines | [`grade-under.sbatch`](../hpcagent_bench/cluster/grade-under.sbatch) |
+| `prepare` | fill every cache an experiment reads: sources, base SDFGs, reference grades, torch denominators, CPF forms | problems, tag or list kernels | [`prepare.sbatch`](../hpcagent_bench/cluster/prepare.sbatch) |
+| `baseline` | one compiler column over a tag (the canon sweep) | tag kernels | [`baseline.sbatch`](../hpcagent_bench/cluster/baseline.sbatch) |
 
-Each sample is the only job script of its action; its `#SBATCH` header pins no node shape, GPUs, partition or
-account. Start it with `hpcagent-bench job submit [--system NAME] [--ntasks-per-node N] [--cpus-per-task N]
-[--gpus-per-node N | --gpus-per-task N] ... <sample> <args>`: each field is its flag, else its environment variable
+Each action has one job script in `hpcagent_bench/cluster/`; its `#SBATCH` header pins no node shape, GPUs,
+partition or account. Start it with `hpcagent-bench job submit [--system NAME] [--ntasks-per-node N] [--cpus-per-task N]
+[--gpus-per-node N | --gpus-per-task N] ... <script> <args>`: each field is its flag, else its environment variable
 or site-layer value, else the system's entry in `hpcagent_bench/cluster/systems.yaml` (one task per GPU with its
 share of the cores; Beverin and Daint.Alps ship, add your own with `HPCAGENT_BENCH_SYSTEMS_FILE`). See
-[configuration.md](../configuration.md#job-shape-per-system). Plain `sbatch` needs them on its command line
+[configuration.md](configuration.md#job-shape-per-system). Plain `sbatch` needs them on its command line
 (`--ntasks-per-node=4 --cpus-per-task=24 --gpus-per-node=4 -p mi300 -A <account>` on Beverin). `grade-under` also
 has a GANG shape (`GANG_NODES`) for the items that ask for a scaling sweep: its unit is a gang of nodes whose ranks
 start through a host-side relay, one worker per gang.
@@ -126,5 +126,5 @@ directory accumulates rows run after run and is left as it is.
 ## Adding an action
 
 An `Action` in `jobs.ACTIONS`: a name, a summary, `configure(parser)` and `run(args, rank)`. Take the share with
-`jobs.share(items, rank)`, never a private rule, so every action deals work the same way; add its sample
-`<name>.sbatch` (`tests/test_jobs.py` requires one per action) and a section here.
+`jobs.share(items, rank)`, never a private rule, so every action deals work the same way; add its job script as
+`hpcagent_bench/cluster/<name>.sbatch` (`tests/test_jobs.py` requires one per action) and a section here.
