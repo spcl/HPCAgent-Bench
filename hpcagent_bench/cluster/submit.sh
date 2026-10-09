@@ -112,14 +112,13 @@ prompt_of() {
 
 # check_view <KEY=view> <language> <device> -- refuses a CPF view that cannot serve every tag kernel
 check_view() {
-    local view="${1#*=}" mode=form dialect="$2" absent
-    [[ "${1%%=*}" == CPF_DROPIN_DIR ]] && mode=dropin
-    [[ "${mode}" == form && "$2" != c ]] && dialect=c++
-    absent=$(forms_missing "${view}" "${dialect}" "${mode}" "$3" "$(tag_csv)")
+    local view="${1#*=}" verified="" dialect="$2" absent
+    if [[ "${1%%=*}" == CPF_DROPIN_DIR ]]; then verified=verified; elif [[ "$2" != c ]]; then dialect=c++; fi
+    absent=$(forms_missing "${view}" "${dialect}" "${verified}" "$3" "$(tag_csv)")
     [[ -n "${absent}" ]] || return 0
-    echo "the view ${view} cannot serve a $3 ${mode} for:" >&2
+    echo "the view ${view} cannot serve a ${verified:+verified }$3 form for:" >&2
     sed 's/^/  /' <<<"${absent}" >&2
-    echo "  render them with: python -m hpcagent_bench.cpf_prerender --view ${view} --target $3 --kernels <tag> --cache <cache>" >&2
+    echo "  prepare them with: hpcagent-bench job submit hpcagent_bench/cluster/prepare.sbatch --tag <tag> $2 --steps cpf" >&2
     return 2
 }
 
