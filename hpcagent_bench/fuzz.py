@@ -918,6 +918,7 @@ def large_shapes(
     secret_seed: int | None = None,
     constraints: Sequence[str] | None = None,
     config_names: frozenset[str] = NO_CONFIG_NAMES,
+    exclude: Sequence[Mapping[str, FuzzValue]] = (),
 ) -> list[tuple[str, dict[str, FuzzValue]]]:
     """TIMED large-shape samples for one config namespace.
 
@@ -935,7 +936,9 @@ def large_shapes(
     their fixed value rather than biased to the interval's upper half -- a knob has
     no "large" half, only a declared value. Input ``i`` draws every free size dimension in
     :data:`SIZE_CLASSES` ``[i % 4]`` (:func:`apply_size_class`), so the timed set doubles as the
-    structural correctness probe: aligned, odd, 8 x odd and even-but-unaligned extents.
+    structural correctness probe: aligned, odd, 8 x odd and even-but-unaligned extents. A draw
+    repeats neither an earlier input nor one in ``exclude`` (another protocol's inputs) while a
+    distinct one exists: first in its class, else unclassed (logged), else the repeat stands.
     """
     draw_mode = str(mode if mode is not None else perf_mode())
     fixed = dict(config or {})
@@ -962,22 +965,22 @@ def large_shapes(
         # integer size with a few values in the upper half (nqueens N in [14, 19]) otherwise hands
         # back the same shape for most seeds, and the geomean over cells double-weights it. Only
         # a domain with fewer legal points than seeds (a pinned matrix) keeps the repeat.
-        drawn = [sample for _, sample in out]
+        taken = [*exclude, *(sample for _, sample in out)]
+        size_class = SIZE_CLASSES[index % len(SIZE_CLASSES)]
         resolve = functools.partial(
-            _resolve_against,
-            big_spec,
-            fixed,
-            sd,
-            "uniform",
-            constraints,
-            config_names=config_names,
-            size_class=SIZE_CLASSES[index % len(SIZE_CLASSES)],
+            _resolve_against, big_spec, fixed, sd, "uniform", constraints, config_names=config_names
         )
         try:
             try:
-                sample = resolve(exclude=drawn)
+                sample = resolve(exclude=taken, size_class=size_class)
             except ValueError:
-                sample = resolve()
+                try:
+                    sample = resolve(exclude=taken)
+                    logging.getLogger(__name__).info(
+                        "large_shapes: %s has no distinct %s draw; timed unclassed", label, size_class.value
+                    )
+                except ValueError:
+                    sample = resolve(size_class=size_class)
         except ValueError:
             continue
         out.append((label, sample))
