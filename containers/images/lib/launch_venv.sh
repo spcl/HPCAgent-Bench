@@ -15,7 +15,7 @@
 # The venv lives in the node's /dev/shm, which every container step of a node shares (a step's /tmp is its own), so
 # one venv per (uv.lock, sync arguments) serves every step and every later job on the node; building it is locked,
 # and venvs of other pins idle for a day are removed. HPCAGENT_BENCH_IMAGE_PYTHON then names the venv's python,
-# which is what every job script runs (run_cluster.sh, docs/jobs/*.sbatch).
+# which is what every job script in hpcagent_bench/cluster/ runs.
 #
 # The CE mounts the container's /dev/shm noexec, so no shared library loads from it: the EDFs bind the host's
 # /dev/shm at /opt/node-shm, which keeps exec, and the venv goes to /opt/node-shm/hpcagent-bench-launch-<judge|agent>
