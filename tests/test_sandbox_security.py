@@ -209,7 +209,13 @@ def test_a_submitted_path_is_confined_to_the_episodes_own_folder(
     for path in foreign:
         with pytest.raises(ValueError, match="your folder"):
             resolve_shared(path, "e.p1")
-    # Outside a run that allocates folders (no log line for the episode) the whole mount stays the root.
+
+    # An episode the log does not know (a made-up id, none at all) gets no root, never the whole mount.
+    for unknown in ("adhoc", "", None):
+        with pytest.raises(ValueError, match="no agent folder"):
+            resolve_shared("agent-0/gemm.c", unknown)
+    # A run without per-agent folders keeps the whole mount as the root.
+    (run / AGENT_FOLDERS_LOG).unlink()
     assert resolve_shared(str(shared / "agent-0" / "gemm.c"), "adhoc") == shared / "agent-0" / "gemm.c"
 
 
