@@ -1100,9 +1100,12 @@ def _coerce_to_dtype(v, dt):
 #: LLVM spends that time on is the kernel's 58 explicit column loops; the body itself
 #: passes at either level.
 #:
+#: cloudsc_monolith (the whole dace-fortran routine over blocks): 1337s at the default, 40s at NUMBA_OPT=0,
+#: identical outputs (tests/ports/cloudsc_monolith).
+#:
 #: Not keyed on body size, which does not predict the cost: fv3_dycore is twice cloudsc's size at
 #: 2606 lines and compiles in 39.9s.
-NUMBA_LOW_OPT: dict[str, str] = {"cloudsc": "0"}
+NUMBA_LOW_OPT: dict[str, str] = {"cloudsc": "0", "cloudsc_monolith": "0"}
 
 #: numba's pool in the oracle's child. A parallel=True kernel turns every small array statement into a
 #: parfor that wakes the whole pool, which numba sizes off the visible cores: on a 128-core node shared
