@@ -93,7 +93,7 @@ python -m pytest --maxfail=10 tests/test_display_names.py tests/test_palette.py 
 | `containers/images/<engine>/` | `Dockerfile`, `image.sh`, `edf.toml.in` (copy `sglang/`) |
 | `containers/images/images.env` | `INFERENCE_<ENGINE>_SQSH`, `_EDF_LATEST`, `_TEMPLATE`, `_REPO`, `_TAG` |
 | `containers/images/install_edfs.sh` | render the new EDF beside the sglang one |
-| `hpcagent_bench/cluster/run_cluster.sh` `run_vllm_node` | interpreter (`engine_python`) and a `command=(...)` branch |
+| `hpcagent_bench/cluster/run_cluster.sh` `run_vllm_node` | a `command=(...)` branch on `INFERENCE_ENGINE`, run with the image's `HPCAGENT_BENCH_IMAGE_PYTHON` |
 
 `edf.toml.in` keeps the `PLACEHOLDER.sqsh` image line, a multi-line `mounts = [` block, absolute
 `PATH` and `LD_LIBRARY_PATH` under `[env]` (the CE drops the image's ENV) and the fabric hook

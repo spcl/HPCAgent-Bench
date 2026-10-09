@@ -19,7 +19,8 @@ cd hpcagent-bench
 cp experiments/layers/site-example.env experiments/layers/site.env   # gitignored
 $EDITOR experiments/layers/site.env                                  # fill in your cluster's values
 export SCRATCH=/path/to/your/scratch                                 # most HPC sites already set it
-. hpcagent_bench/cluster/env.sh                                      # loads the layer, caches, interpreter
+. hpcagent_bench/cluster/env.sh                                      # loads the layer, caches, interpreter, OpenMP env
+ulimit -s unlimited                                                  # once per shell: the main thread stack
 echo "$FAST_SCRATCH $SBATCH_PARTITION $SBATCH_ACCOUNT $HF_HOME"
 ```
 
@@ -41,7 +42,7 @@ of the CSCS Alps MI300A partition, the reference setup of this repository's expe
 | `helpers/scripts/cache_env.sh` | every cache and work directory, from `SCRATCH` and `FAST_SCRATCH` |
 | `helpers/scripts/host_python.sh` | the host-side interpreter (`HPCAGENT_BENCH_HOST_PYTHON`), checked to be Python >= 3.10 |
 | each image's EDF | the interpreter of every step inside it (`HPCAGENT_BENCH_IMAGE_PYTHON`) and `PYTHONHASHSEED=0` |
-| `hpcagent_bench/cluster/env.sh` | the checkout; sources the two scripts above |
+| `hpcagent_bench/cluster/env.sh` | the checkout, `PYTHONHASHSEED=0`, the OpenMP launch environment; sources the two scripts above |
 | `pyproject.toml` (`[tool.uv.sources] dace`) | the dace commit a release installs, bakes and runs ([below](#dace)) |
 | `hpcagent_bench/paths.py` | the Python side of the same roots |
 
@@ -51,32 +52,47 @@ and the model layers ([launch.md](launch.md), [`experiments/LAUNCH.md`](../exper
 ## Job shape per system
 
 Tasks per node, cores per task and GPUs per node or per task differ between machines, so every job script (the
-samples in [`docs/jobs/`](jobs/README.md), the container jobs in `containers/`) is started with
+helper jobs in `hpcagent_bench/cluster/`, [jobs.md](jobs.md); the container jobs in `containers/`) is started with
 `hpcagent-bench job submit`, which passes each field the script does not pin as an `sbatch` option:
 
 ```bash
-hpcagent-bench job submit --system daint.alps docs/jobs/grade-under.sbatch worklist.jsonl out
-hpcagent-bench job submit --ntasks-per-node 2 --cpus-per-task 32 --gpus-per-task 1 docs/jobs/baseline.sbatch ...
+hpcagent-bench job submit --system daint.alps hpcagent_bench/cluster/grade-under.sbatch worklist.jsonl out
+hpcagent-bench job submit --ntasks-per-node 2 --cpus-per-task 32 --gpus-per-task 1 hpcagent_bench/cluster/baseline.sbatch ...
+hpcagent-bench job submit --dry-run hpcagent_bench/cluster/prepare.sbatch --tag llr40 --language c   # print the sbatch line only
 ```
 
-| Field | Flag | Environment variable |
-|---|---|---|
-| partition, account | `--partition`, `--account` | `SBATCH_PARTITION`, `SBATCH_ACCOUNT` |
-| nodes, time, nice | `--nodes`, `--time`, `--nice` | `HPCAGENT_BENCH_JOB_NODES`, `HPCAGENT_BENCH_JOB_TIME`, `HPCAGENT_BENCH_NICE` |
-| tasks, tasks per node, cores per task | `--ntasks`, `--ntasks-per-node`, `--cpus-per-task` | `HPCAGENT_BENCH_JOB_NTASKS`, `HPCAGENT_BENCH_JOB_NTASKS_PER_NODE`, `HPCAGENT_BENCH_JOB_CPUS_PER_TASK` |
-| GPUs | `--gpus-per-node` or `--gpus-per-task` | `HPCAGENT_BENCH_JOB_GPUS_PER_NODE`, `HPCAGENT_BENCH_JOB_GPUS_PER_TASK` |
+Each field is resolved in this order, the first that sets it winning (`hpcagent_bench/cluster/systems.py`):
 
-A field's value is its flag, else Slurm's own `SBATCH_*` variable (which beats an `#SBATCH` line under plain
-`sbatch` too), else the script's leading `#SBATCH` line (long or short form), else its `HPCAGENT_BENCH_*` variable,
-else the system's entry in `hpcagent_bench/cluster/systems.yaml`: `beverin` (MI300A, partition `mi300`),
-`beverin-mi200` and `daint.alps` (GH200) ship. So `build_and_verify.sbatch`'s one task of 96 cores stays one task
-of 96 cores, and a sample that pins no shape gets the system's. The system is `--system`, else
+1. the flag;
+2. Slurm's own variable (`SBATCH_PARTITION`, `SBATCH_ACCOUNT`; partition and account only);
+3. the script's own `#SBATCH` line (long or short form);
+4. the `HPCAGENT_BENCH_*` variable, or the site layer's value of it;
+5. the system's entry in `hpcagent_bench/cluster/systems.yaml`.
+
+| Field | Flag | Variable | `systems.yaml` key |
+|---|---|---|---|
+| partition | `--partition` | `SBATCH_PARTITION` | `partition` |
+| account | `--account` | `SBATCH_ACCOUNT` | -- |
+| nodes | `--nodes` | `HPCAGENT_BENCH_JOB_NODES` | -- |
+| time limit | `--time` | `HPCAGENT_BENCH_JOB_TIME` | -- |
+| nice | `--nice` | `HPCAGENT_BENCH_NICE` (default 100) | -- |
+| tasks | `--ntasks` | `HPCAGENT_BENCH_JOB_NTASKS` | -- |
+| tasks per node | `--ntasks-per-node` | `HPCAGENT_BENCH_JOB_NTASKS_PER_NODE` | `ntasks_per_node` |
+| cores per task | `--cpus-per-task` | `HPCAGENT_BENCH_JOB_CPUS_PER_TASK` | `cpus_per_task` |
+| GPUs per node | `--gpus-per-node` | `HPCAGENT_BENCH_JOB_GPUS_PER_NODE` | `gpus_per_node` |
+| GPUs per task | `--gpus-per-task` | `HPCAGENT_BENCH_JOB_GPUS_PER_TASK` | -- |
+| hardware (`submit.sh` only, not an sbatch option) | `--hardware` | `HPCAGENT_BENCH_HARDWARE` | `hardware` |
+| longest partition time (`submit.sh` only) | -- (`job options --max-time-hours`) | `HPCAGENT_BENCH_MAX_TIME_HOURS` | `max_time_hours` |
+
+The two GPU fields are one choice, and so are the two task fields: each pair comes whole from the highest source
+that sets either. The shipped systems are `beverin` (MI300A, partition `mi300`, 4 tasks x 24 cores, 4 GPUs),
+`beverin-mi200` (partition `mi200`, 4 tasks x 16 cores, 8 GPUs) and `daint.alps` (GH200, partition `normal`,
+4 tasks x 72 cores, 4 GPUs). A script that pins its shape keeps it (`build_and_verify.sbatch` stays one task of
+96 cores); one that pins nothing gets the system's. The system is `--system`, else
 `HPCAGENT_BENCH_SYSTEM`, else the entry whose `cluster` is `SLURM_CLUSTER_NAME`, else none: a cluster with no entry
 runs from flags and the environment alone. Without `--system`, a partition picks the entry of the same cluster that
 serves it (`--partition mi200` on Beverin is `beverin-mi200`: 8 GPUs, 16 cores per task). A new machine is a file of
-the same shape named by `HPCAGENT_BENCH_SYSTEMS_FILE` (its entries add to or replace the shipped ones). The GPU pair
-(`--gpus-per-task`, `--gpus-per-node`) and the task pair (`--ntasks`, `--ntasks-per-node`) each come whole from the
-highest source that sets either one. An image build or verify job runs on its role's `images.env` partition, as if
+the same shape named by `HPCAGENT_BENCH_SYSTEMS_FILE` (its entries add to or replace the shipped ones). An image build or verify job runs on its role's `images.env` partition, as if
 its header named it, unless `--system` names a machine ([containers/README.md](../containers/README.md#amd-beverin)).
 
 The experiment submitter (`hpcagent_bench/cluster/submit.sh`) resolves the same way, through the same code
@@ -125,6 +141,7 @@ the GPU generation whose images and serving layers the experiment uses ([below](
 | `CONTAINER_RUNTIME` | `ce` | how `cluster/services.sbatch` starts containers, through one seam (`cluster/container_runtime.sh`, [runtime.md](runtime.md)): `ce`, `apptainer`, `podman` or `docker` |
 | `HPCAGENT_BENCH_HARDWARE`, `HPCAGENT_BENCH_MAX_TIME_HOURS` | the system's `hardware`, `max_time_hours`; else unset | the hardware, and the longest time limit of the partition, which clamps a scaled wall clock (`TIME_SCALE`, minus `STAGING_HOURS`); unset, nothing is clamped |
 | `HPCAGENT_BENCH_HOST` | `SLURMD_NODENAME`, else the host name | the node name recorded with each result |
+| `OMP_STACKSIZE`, `OMP_THREAD_LIMIT` | `512M`, the cores the shell owns (`nproc`); set by `cluster/env.sh` and `run_cluster.sh` | the OpenMP launch environment every grading process needs; the main thread's stack is the shell step `ulimit -s unlimited` |
 
 Every command runs `<python> -m hpcagent_bench...` (or `-m hpcagent_agent...` in an agent step) with one of the two
 interpreters, never a PATH lookup. Nothing sets `PYTHONPATH` or edits `sys.path` (the `import-path` rule of `helpers/scripts/checks/check_repo_rules.py`): both

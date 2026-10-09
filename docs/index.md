@@ -13,7 +13,8 @@ configuration
 benchmarks
 prompts
 writing_an_agent
-jobs/README
+jobs
+containers
 ```
 
 ```{toctree}
