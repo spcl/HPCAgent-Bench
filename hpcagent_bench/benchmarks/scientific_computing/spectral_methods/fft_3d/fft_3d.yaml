@@ -53,7 +53,6 @@ init:
     chk:
       shape: (niter,)
       dtype: complex128
-  func_name: initialize
 array_args:
 - u0
 - twiddle

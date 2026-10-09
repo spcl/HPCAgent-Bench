@@ -27,9 +27,6 @@ init:
       dtype: int64
       index_array: true
     out_value: (1,)
-  func_name: initialize
 output_args:
 - out_index
 - out_value
-loop_level_reasoning:
-  source: tsvc_2_5

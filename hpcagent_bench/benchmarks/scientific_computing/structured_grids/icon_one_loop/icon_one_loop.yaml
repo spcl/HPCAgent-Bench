@@ -27,7 +27,6 @@ parameters:
     NLEV: 90
     NPROMA: 1024
 init:
-  func_name: initialize
   input_args:
   - NB
   - NLEV

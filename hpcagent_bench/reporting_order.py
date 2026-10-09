@@ -9,8 +9,8 @@ separators / y-axis group text. Two modes, both documented in
 ``docs/measurement_statistics.md``:
 
 * ``by_dwarf`` (default) -- HPC grouped by its structural group, within a group by
-  ``level``, within a level alphabetical; then loop_level_reasoning (the TSVC sets ``tsvc2`` /
-  ``tsvc2_5`` and the other loop_level_reasoning sources), then ML (never ordered).
+  ``level``, within a level alphabetical; then loop_level_reasoning (by level, then name), then ML
+  (never ordered).
 * ``by_level`` -- primary group by ``level``; within a level HPC alphabetical (by group
   then short_name so each ``group`` x ``level`` block is contiguous), the y-axis group
   text being ``"<group> L<level>"``. ML is never ordered.
@@ -18,9 +18,8 @@ separators / y-axis group text. Two modes, both documented in
 The HPC "group" is the kernel's **dwarf** -- the field whose value is the human label the
 methods doc gives as the example ("structured grids"); a kernel's ``subtrack`` is often
 just its own name (``polybench`` for the stencils, ``hotspot`` for hotspot), which would
-scatter the rows into singletons, so ``by_dwarf`` groups HPC by the dwarf instead. The
-loop_level_reasoning group is its ``loop_level_reasoning.source`` (``tsvc_2`` / ``tsvc_2_5`` / ...); ML has no
-group and stays in the order the caller passed it.
+scatter the rows into singletons, so ``by_dwarf`` groups HPC by the dwarf instead.
+loop_level_reasoning and ML have no group; ML stays in the order the caller passed it.
 
 ``order_rows`` is intentionally free of any ``hpcagent_bench`` import so the ordering can be
 unit-tested against a synthetic metadata table; :func:`row_meta_for` is the thin
@@ -47,7 +46,6 @@ __all__ = [
     "TRACK_SCIENTIFIC_COMPUTING",
     "GroupSpan",
     "RowMeta",
-    "foundation_label",
     "group_label",
     "order_rows",
     "row_meta_for",
@@ -88,8 +86,7 @@ class RowMeta:
 
     :ivar short_name: the value in the results ``kernel`` column (the plot's row id).
     :ivar track: ``scientific_computing`` / ``loop_level_reasoning`` / ``machine_learning`` / ``other``.
-    :ivar group: the structural group -- the **dwarf** for HPC, the ``loop_level_reasoning.source``
-        for loop_level_reasoning, ``None`` for machine_learning / other.
+    :ivar group: the structural group -- the **dwarf** for HPC, ``None`` for every other track.
     :ivar level: the KernelBench difficulty (1/2/3) or ``None`` if unlabeled.
     """
 
@@ -114,24 +111,11 @@ class GroupSpan:
     level: int | None
 
 
-def foundation_label(source: str | None) -> str:
-    """Humanize a loop_level_reasoning ``source`` into its figure label: ``tsvc_2`` -> ``tsvc2``,
-    ``tsvc_2_5`` -> ``tsvc2_5`` (the doc's spelling), else underscores -> spaces."""
-    s = source or TRACK_LOOP_LEVEL_REASONING
-    if s.startswith("tsvc_2_5"):
-        return "tsvc2_5"
-    if s.startswith("tsvc_2"):
-        return "tsvc2"
-    return s.replace("_", " ")
-
-
 def group_label(rm: RowMeta) -> str:
-    """The bare (level-free) humanized group label for a row's section + group."""
+    """The bare (level-free) humanized group label: the dwarf for HPC, else the section name."""
     if rm.track == TRACK_SCIENTIFIC_COMPUTING:
         return (rm.group or "").replace("_", " ")
-    if rm.track == TRACK_LOOP_LEVEL_REASONING:
-        return foundation_label(rm.group)
-    return rm.track  # machine_learning / other: the section name is the label
+    return rm.track
 
 
 def _sort_key(rm: RowMeta, order: str) -> tuple:
@@ -220,8 +204,7 @@ def short_name_index() -> dict[str, BenchSpec]:
 def row_meta_for(short_names: Sequence[str]) -> list[RowMeta]:
     """Build :class:`RowMeta` for each DB ``kernel`` short_name from its ``BenchSpec``.
 
-    The HPC group is the kernel's ``dwarf``; the loop_level_reasoning group is its
-    ``loop_level_reasoning.source``; ML has no group. A short_name with no resolvable manifest lands
+    The HPC group is the kernel's ``dwarf``; no other track has one. A short_name with no resolvable manifest lands
     in the ``other`` bucket (kept in input order) so a legacy / renamed DB name never
     crashes a plot.
     """
@@ -238,17 +221,11 @@ def row_meta_for(short_names: Sequence[str]) -> list[RowMeta]:
 
 
 def structural_group(spec, track: str | None = None) -> str | None:
-    """The group a figure bands ``spec``'s row under: the dwarf for HPC, the source for
-    loop_level_reasoning, ``None`` for machine_learning and anything else.
+    """The group a figure bands ``spec``'s row under: the dwarf for HPC, ``None`` for every other track.
 
     One rule, one place: the results table records it per row (see
     :func:`hpcagent_bench.emit_bridge.legacy_bench_info_dict`, which is where a run reads it) and
     the figures band on it, so a second copy of the rule would put the recorded value and the drawn
     one a refactor apart.
     """
-    track = track or spec.track
-    if track == TRACK_SCIENTIFIC_COMPUTING:
-        return spec.dwarf
-    if track == TRACK_LOOP_LEVEL_REASONING:
-        return (spec.loop_level_reasoning or {}).get("source")
-    return None
+    return spec.dwarf if (track or spec.track) == TRACK_SCIENTIFIC_COMPUTING else None

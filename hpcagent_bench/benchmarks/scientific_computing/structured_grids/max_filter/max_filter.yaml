@@ -26,7 +26,6 @@ init:
   output_args:
   - image
   - out
-  func_name: initialize
   arrays:
     image:
       shape: (H, W)

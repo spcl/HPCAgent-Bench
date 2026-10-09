@@ -20,7 +20,6 @@ init:
   - theta_2
   - phi_2
   - distance_matrix
-  func_name: initialize
   arrays:
     theta_1:
       shape: (N,)

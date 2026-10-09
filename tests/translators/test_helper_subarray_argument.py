@@ -61,7 +61,7 @@ BENCH = {
         "short_name": "subarray_demo",
     },
     "track": "loop_level_reasoning",
-    "precisions": ["fp64"],
+    "allowed_precisions": ["fp64"],
 }
 
 

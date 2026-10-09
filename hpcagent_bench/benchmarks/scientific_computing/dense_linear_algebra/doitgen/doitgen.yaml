@@ -27,7 +27,6 @@ init:
   output_args:
   - A
   - C4
-  func_name: initialize
   arrays:
     A:
       shape: (NR, NQ, NP)

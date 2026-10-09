@@ -47,5 +47,3 @@ array_args:
 - y
 output_args:
 - y
-loop_level_reasoning:
-  source: schedule_puzzle

@@ -22,8 +22,5 @@ init:
       shape: (LEN_1D,)
       dtype: int32
       index_array: true
-  func_name: initialize
 output_args:
 - bins
-loop_level_reasoning:
-  source: tsvc_2_5

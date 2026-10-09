@@ -28,7 +28,6 @@ init:
   dtypes:
     dst: int64
     src: int64
-  func_name: initialize
   arrays:
     src:
       shape: (E,)

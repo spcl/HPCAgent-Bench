@@ -27,7 +27,6 @@ init:
     mismatch: -1
   dtypes:
     H: int32
-  func_name: initialize
   arrays:
     a:
       shape: (N,)

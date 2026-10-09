@@ -22,7 +22,6 @@ parameters:
     KLEV: 137
     KLON: 105489
 init:
-  func_name: initialize
   input_args:
   - KLEV
   - KLON

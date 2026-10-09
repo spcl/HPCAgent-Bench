@@ -27,7 +27,6 @@ init:
   output_args:
   - x
   - out
-  func_name: initialize
   arrays:
     x:
       shape: (N, H, SM, SM)

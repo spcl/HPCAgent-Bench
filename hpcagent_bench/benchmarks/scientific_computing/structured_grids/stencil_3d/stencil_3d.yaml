@@ -16,7 +16,6 @@ parameters:
     N: 644
     R: 6
 init:
-  func_name: initialize
   input_args:
   - N
   - R

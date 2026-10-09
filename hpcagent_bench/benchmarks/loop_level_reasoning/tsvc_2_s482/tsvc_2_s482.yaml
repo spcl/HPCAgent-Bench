@@ -18,8 +18,5 @@ init:
     a: (LEN_1D,)
     b: (LEN_1D,)
     c: (LEN_1D,)
-  func_name: initialize
 output_args:
 - a
-loop_level_reasoning:
-  source: tsvc_2

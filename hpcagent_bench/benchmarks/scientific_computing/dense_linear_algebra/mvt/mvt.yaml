@@ -20,7 +20,6 @@ init:
   - y_1
   - y_2
   - A
-  func_name: initialize
   arrays:
     x1:
       shape: (N,)

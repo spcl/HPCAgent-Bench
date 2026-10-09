@@ -48,7 +48,6 @@ init:
   dtypes:
     N_out: int64
     Z_out: complex128
-  func_name: initialize
   arrays:
     Z_out:
       shape: (YN, XN)

@@ -373,7 +373,7 @@ _INT32_BENCH = {
         },
     },
     "track": "loop_level_reasoning",
-    "precisions": ["fp64"],
+    "allowed_precisions": ["fp64"],
 }
 
 

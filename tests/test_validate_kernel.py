@@ -28,8 +28,6 @@ output_args:
 - out
 """
 
-INIT_MANIFEST = GOOD_MANIFEST.replace("init:\n", "init:\n  func_name: initialize\n")
-
 INITIALIZE = "\n\ndef initialize(N):\n    return N\n"
 
 
@@ -73,17 +71,34 @@ def test_a_kernel_without_a_level_is_reported(tmp_path: pathlib.Path, monkeypatc
     [
         (GOOD_NUMPY, "def initialize(N):\n    return N\n", []),
         (GOOD_NUMPY + INITIALIZE, None, ["kern: 'initialize' is defined in kern_numpy.py; move it to kern.py"]),
-        (GOOD_NUMPY, None, ["kern: init.func_name is 'initialize' but kern.py defines no such function"]),
     ],
-    ids=["in_module", "in_reference", "nowhere"],
+    ids=["in_module", "in_reference"],
 )
 def test_the_initializer_must_live_in_the_benchmark_module(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, numpy: str, module: str | None, expected: list[str]
 ) -> None:
     """The ``_numpy.py`` reference is shown to the agent verbatim, so an initializer there leaks."""
-    spec = make_spec(tmp_path, monkeypatch, manifest=INIT_MANIFEST, numpy=numpy, module=module)
+    spec = make_spec(tmp_path, monkeypatch, numpy=numpy, module=module)
     problems = validate_kernel(spec)
     assert problems == expected, problems
+
+
+@pytest.mark.parametrize(
+    ("module", "expected"), [(INITIALIZE, "initialize"), (None, "")], ids=["custom", "declarative"]
+)
+def test_the_initializer_is_derived_from_the_kernel_module(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, module: str | None, expected: str
+) -> None:
+    """``init.func_name`` is ``initialize`` exactly when ``<module>.py`` defines it."""
+    spec = make_spec(tmp_path, monkeypatch, module=module)
+    assert spec.init is not None
+    assert spec.init.func_name == expected
+
+
+def test_a_declared_init_func_name_is_a_load_error(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    manifest = GOOD_MANIFEST.replace("init:\n", "init:\n  func_name: initialize\n")
+    with pytest.raises(ValueError, match="init.func_name is derived"):
+        make_spec(tmp_path, monkeypatch, manifest=manifest, module=INITIALIZE)
 
 
 def test_a_variable_named_like_a_c_keyword_is_reported(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -184,10 +199,7 @@ def test_real_manifests_are_valid(kernel: str) -> None:
     assert problems == [], problems
 
 
-SCENARIO_MANIFEST = INIT_MANIFEST.replace(
-    "  func_name: initialize\n",
-    "  func_name: initialize\n  scenarios:\n    rest: at rest\n    pulse: one pulse\n",
-)
+SCENARIO_MANIFEST = GOOD_MANIFEST.replace("init:\n", "init:\n  scenarios:\n    rest: at rest\n    pulse: one pulse\n")
 
 
 def test_declared_scenarios_load_in_declaration_order(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -214,25 +226,17 @@ def test_scenarios_with_a_perturbation_initializer_are_valid(
 
 
 @pytest.mark.parametrize(
-    ("manifest", "message"),
+    ("manifest", "module", "message"),
     [
-        (GOOD_MANIFEST.replace("init:\n", "init:\n  scenarios:\n    rest: at rest\n"), "fallback initialize"),
-        (INIT_MANIFEST.replace("  func_name: initialize\n", "  func_name: initialize\n  scenarios: {}\n"), "non-empty"),
-        (
-            INIT_MANIFEST.replace("  func_name: initialize\n", "  func_name: initialize\n  scenarios:\n    rest: ''\n"),
-            "description",
-        ),
-        (
-            INIT_MANIFEST.replace(
-                "  func_name: initialize\n", "  func_name: initialize\n  scenarios:\n    not-a-name: x\n"
-            ),
-            "identifier",
-        ),
+        (GOOD_MANIFEST.replace("init:\n", "init:\n  scenarios:\n    rest: at rest\n"), None, "fallback initialize"),
+        (GOOD_MANIFEST.replace("init:\n", "init:\n  scenarios: {}\n"), INITIALIZE, "non-empty"),
+        (GOOD_MANIFEST.replace("init:\n", "init:\n  scenarios:\n    rest: ''\n"), INITIALIZE, "description"),
+        (GOOD_MANIFEST.replace("init:\n", "init:\n  scenarios:\n    not-a-name: x\n"), INITIALIZE, "identifier"),
     ],
     ids=["declarative-init", "empty", "blank-description", "bad-name"],
 )
 def test_a_malformed_scenarios_block_is_a_load_error(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, manifest: str, message: str
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, manifest: str, module: str | None, message: str
 ) -> None:
     with pytest.raises(ValueError, match=message):
-        make_spec(tmp_path, monkeypatch, manifest=manifest, module=INITIALIZE)
+        make_spec(tmp_path, monkeypatch, manifest=manifest, module=module)

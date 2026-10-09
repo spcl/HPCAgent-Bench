@@ -20,5 +20,3 @@ output_args:
 - bb
 chain_length:
   bb: LEN_2D
-loop_level_reasoning:
-  source: tsvc_2

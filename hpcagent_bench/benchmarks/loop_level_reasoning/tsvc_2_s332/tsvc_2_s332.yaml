@@ -23,8 +23,5 @@ init:
   arrays:
     a: (LEN_1D,)
     result: (1,)
-  func_name: initialize
 output_args:
 - result
-loop_level_reasoning:
-  source: tsvc_2

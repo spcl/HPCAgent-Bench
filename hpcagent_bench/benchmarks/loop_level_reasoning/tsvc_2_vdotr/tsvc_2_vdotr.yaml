@@ -18,5 +18,3 @@ init:
     dot_out: (LEN_1D,)
 output_args:
 - dot_out
-loop_level_reasoning:
-  source: tsvc_2

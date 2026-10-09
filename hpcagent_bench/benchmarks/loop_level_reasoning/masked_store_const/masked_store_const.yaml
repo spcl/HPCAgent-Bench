@@ -20,5 +20,3 @@ init:
       dtype: int64
 output_args:
 - a
-loop_level_reasoning:
-  source: tsvc_2_5

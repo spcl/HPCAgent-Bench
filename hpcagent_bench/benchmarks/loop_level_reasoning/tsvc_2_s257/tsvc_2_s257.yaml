@@ -21,5 +21,3 @@ output_args:
 - aa
 chain_length:
   a: LEN_2D
-loop_level_reasoning:
-  source: tsvc_2

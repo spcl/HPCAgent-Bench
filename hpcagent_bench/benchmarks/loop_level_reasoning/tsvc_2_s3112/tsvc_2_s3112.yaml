@@ -26,5 +26,3 @@ output_args:
 # ratio 0.04-0.05); the final regrade failed 23 of the latest s3112 answers the same way.
 chain_length:
   b: LEN_1D
-loop_level_reasoning:
-  source: tsvc_2

@@ -27,7 +27,6 @@ init:
     exc: {shape: "(1,)", dtype: float64}
   scalars:
     dvol: 0.008
-  func_name: initialize
 array_args:
 - rho
 - vxc

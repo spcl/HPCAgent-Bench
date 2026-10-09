@@ -32,7 +32,6 @@ init:
   dtypes:
     seq: int32
     table: int32
-  func_name: initialize
   arrays:
     seq:
       shape: (N,)

@@ -20,7 +20,6 @@ parameters:
     N: 8192
     R: 3
 init:
-  func_name: initialize
   input_args:
   - N
   - R

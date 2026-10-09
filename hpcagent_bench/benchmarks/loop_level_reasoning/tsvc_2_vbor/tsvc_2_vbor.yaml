@@ -36,5 +36,3 @@ init:
     x: (LEN_2D,)
 output_args:
 - x
-loop_level_reasoning:
-  source: tsvc_2

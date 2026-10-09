@@ -17,5 +17,3 @@ init:
     b: (2,)
 output_args:
 - b
-loop_level_reasoning:
-  source: tsvc_2

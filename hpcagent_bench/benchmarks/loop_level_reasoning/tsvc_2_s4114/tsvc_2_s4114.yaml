@@ -31,5 +31,3 @@ init:
       dtype: int32
 output_args:
 - a
-loop_level_reasoning:
-  source: tsvc_2

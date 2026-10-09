@@ -33,7 +33,6 @@ init:
   scalars:
     inv_h2: 25.0
     tol: 1.0e-8
-  func_name: initialize
 array_args:
 - rho
 - V

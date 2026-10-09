@@ -18,5 +18,3 @@ init:
     dot: (1,)
 output_args:
 - dot
-loop_level_reasoning:
-  source: tsvc_2

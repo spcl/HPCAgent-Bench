@@ -17,6 +17,5 @@ init:
   arrays:
     r: (N,)
     y: (N,)
-  func_name: initialize
 output_args:
 - y

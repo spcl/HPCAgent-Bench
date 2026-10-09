@@ -65,7 +65,6 @@ config:
   nhalo:
     value: 3
 init:
-  func_name: initialize
   input_args:
   - ni
   - nj

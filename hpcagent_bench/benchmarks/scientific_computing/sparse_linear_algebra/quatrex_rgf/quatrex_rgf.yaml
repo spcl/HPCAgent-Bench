@@ -70,7 +70,6 @@ init:
     x_retarded_diag:
       shape: (NE, NB, BS, BS)
       dtype: complex128
-  func_name: initialize
 output_args:
 - x_lesser_diag
 - x_lesser_lower

@@ -21,5 +21,3 @@ init:
     b: (N,N)
 output_args:
 - b
-loop_level_reasoning:
-  source: adversarial_unroll

@@ -29,7 +29,6 @@ init:
   scalars:
     damping: 0.85
     max_iterations: 100
-  func_name: initialize
 array_args:
 - trans
 - rank

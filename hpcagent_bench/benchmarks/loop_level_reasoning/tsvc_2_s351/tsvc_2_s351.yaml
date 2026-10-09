@@ -18,5 +18,3 @@ init:
     c: (4 * NBLK,)
 output_args:
 - a
-loop_level_reasoning:
-  source: tsvc_2

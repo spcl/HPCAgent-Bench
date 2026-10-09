@@ -21,5 +21,3 @@ init:
     cc: (LEN_2D,LEN_2D)
 output_args:
 - aa
-loop_level_reasoning:
-  source: tsvc_2

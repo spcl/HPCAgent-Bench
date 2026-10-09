@@ -42,7 +42,6 @@ init:
   - temp
   - power
   - T
-  func_name: initialize
   arrays:
     temp:
       shape: (N, N)

@@ -25,5 +25,3 @@ output_args:
 - e
 chain_length:
   e: LEN_1D
-loop_level_reasoning:
-  source: tsvc_2

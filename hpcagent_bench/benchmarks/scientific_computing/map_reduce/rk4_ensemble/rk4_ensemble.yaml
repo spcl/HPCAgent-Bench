@@ -48,11 +48,10 @@ init:
   output_args:
   - y0
   - y
-  func_name: initialize
 array_args:
 - y0
 - y
 output_args:
 - y
-precisions:
+allowed_precisions:
 - fp64

@@ -29,7 +29,6 @@ init:
   output_args:
   - pos
   - force
-  func_name: initialize
   arrays:
     pos: "(N, 3)"
     force: "(N, 3)"

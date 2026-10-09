@@ -34,7 +34,6 @@ init:
     wcon: (I + 1, J, K)
     u_pos: (I, J, K)
     utens: (I, J, K)
-  func_name: initialize
 output_args:
 - utens_stage
 mpi:

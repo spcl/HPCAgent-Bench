@@ -25,7 +25,6 @@ init:
   - r
   - out0
   - out1
-  func_name: initialize
   arrays:
     A:
       shape: (N, M)

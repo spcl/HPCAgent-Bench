@@ -28,7 +28,6 @@ init:
     count:
       shape: (1,)
       dtype: int64
-  func_name: initialize
 array_args:
 - items
 - target

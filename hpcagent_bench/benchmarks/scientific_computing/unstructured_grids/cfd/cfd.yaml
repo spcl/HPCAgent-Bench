@@ -33,7 +33,6 @@ init:
   - res_energy
   dtypes:
     neigh: int64
-  func_name: initialize
   arrays:
     density:
       shape: (ncells,)

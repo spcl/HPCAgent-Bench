@@ -66,6 +66,5 @@ init:
     Sigma:
       shape: (Nkz, NE, NA, Norb, Norb)
       dtype: complex128
-  func_name: initialize
 output_args:
 - Sigma

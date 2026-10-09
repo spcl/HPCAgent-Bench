@@ -23,5 +23,3 @@ init:
       domain: [-4.0e-5, 4.0e-5]
 output_args:
 - a
-loop_level_reasoning:
-  source: tsvc_2

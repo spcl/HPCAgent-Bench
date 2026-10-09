@@ -55,7 +55,7 @@ parameters:
   fuzzed:
     nproma: [16, 64]
 init:
-  func_name: initialize
+  scalars: {alpha: 1.0}
 """
 
 
@@ -121,7 +121,7 @@ def test_rewriting_keeps_every_comment_and_touches_only_the_scalars() -> None:
     ):
         assert comment in out
     assert "  fuzzed:\n    nproma: [16, 64]\n" in out  # the fuzz block is not a preset; untouched
-    assert "init:\n  func_name: initialize\n" in out
+    assert "init:\n  scalars: {alpha: 1.0}\n" in out
     assert "    nproma: 81920\n" in out
     assert "    nlev: 90\n" in out
 
@@ -135,11 +135,11 @@ def test_rewriting_inserts_a_symbol_a_preset_did_not_have() -> None:
 def test_rewriting_inserts_a_preset_the_manifest_was_missing() -> None:
     """The new rungs land in ladder order between the ones that were there, not appended after
     them: ``4 -> 64`` with both ends powers of two snaps the middle to ``8`` and ``32``."""
-    text = "parameters:\n  S:\n    N: 4\n  XL:\n    N: 64\ninit:\n  func_name: initialize\n"
+    text = "parameters:\n  S:\n    N: 4\n  XL:\n    N: 64\ninit:\n  scalars: {alpha: 1.0}\n"
     out = rewrite_parameters(text, build_ladder({"N": 4}, {"N": 8}, {"N": 64}))
     assert out == (
         "parameters:\n  S:\n    N: 4\n  M:\n    N: 8\n  L:\n    N: 16\n"
-        "  XL:\n    N: 64\ninit:\n  func_name: initialize\n"
+        "  XL:\n    N: 64\ninit:\n  scalars: {alpha: 1.0}\n"
     )
 
 
@@ -152,7 +152,7 @@ def test_an_inserted_preset_lands_before_a_trailing_fuzz_block() -> None:
 
 def test_a_manifest_without_a_parameters_block_is_an_error_not_a_no_op() -> None:
     with pytest.raises(ValueError, match="no top-level 'parameters:'"):
-        rewrite_parameters("name: Example\ninit:\n  func_name: initialize\n", {"S": {"N": 1}})
+        rewrite_parameters("name: Example\ninit:\n  scalars: {alpha: 1.0}\n", {"S": {"N": 1}})
 
 
 def test_parameters_span_stops_at_the_next_top_level_key() -> None:

@@ -51,7 +51,6 @@ config:
 constraints:
 - nb == order * (order + 1) * (order + 2) // 6
 init:
-  func_name: initialize
   input_args:
   - batch
   - order

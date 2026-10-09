@@ -45,7 +45,6 @@ init:
   - weights
   - bias
   - out
-  func_name: initialize
   arrays:
     input:
       shape: (N, H, W, C_in)

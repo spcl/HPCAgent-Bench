@@ -45,7 +45,6 @@ parameters:
     NZ: 386
     nsteps: 45
 init:
-  func_name: initialize
   input_args:
   - NX
   - NY

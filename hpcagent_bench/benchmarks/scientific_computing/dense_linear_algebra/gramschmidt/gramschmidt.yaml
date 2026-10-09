@@ -23,7 +23,6 @@ init:
   - A
   - Q
   - R
-  func_name: initialize
   arrays:
     A:
       shape: (M, N)

@@ -23,7 +23,6 @@ init:
   - float_n
   - data
   - cov
-  func_name: initialize
   arrays:
     data:
       shape: (N, M)
