@@ -11,6 +11,8 @@ import os
 import pathlib
 import sys
 
+BUILD_FOLDER_ENV = "DACE_default_build_folder"  # dace's own spelling: its env lookup is case-sensitive
+
 
 def pin_per_worker_dace_build_folder() -> None:
     """Give every xdist worker its own DaCe build folder.
@@ -27,8 +29,8 @@ def pin_per_worker_dace_build_folder() -> None:
 
     The env var binds a dace imported later (dace folds ``DACE_*`` into its configuration when it
     loads), and a dace already imported gets the same folder through ``Config.set``, so no suite
-    has to import dace to be protected. A pin the caller already made is EXTENDED rather than replaced, so pointing the build at a
-    fast disk keeps working and still splits per worker.
+    has to import dace to be protected. A pin the caller already made is EXTENDED rather than
+    replaced, so pointing the build at a fast disk keeps working and still splits per worker.
 
     ``sdfg.build_folder`` set explicitly on an SDFG still wins over this, which is what the sparse
     oracle relies on -- it isolates per BUILD, which is stricter.
@@ -36,10 +38,10 @@ def pin_per_worker_dace_build_folder() -> None:
     worker = os.environ.get("PYTEST_XDIST_WORKER")
     if worker is None:
         return  # a serial run has nothing to race with
-    base = pathlib.Path(os.environ.get("DACE_default_build_folder", ".dacecache"))  # noqa: SIM112 -- dace's own spelling
+    base = pathlib.Path(os.environ.get(BUILD_FOLDER_ENV, ".dacecache"))
     if base.name != worker:
-        os.environ["DACE_DEFAULT_BUILD_FOLDER"] = str(base / worker)
+        os.environ[BUILD_FOLDER_ENV] = str(base / worker)
     # Even when the env var was already pinned: a dace loaded before the pin read the unpinned value.
     loaded = sys.modules.get("dace.config")
     if loaded is not None:
-        loaded.Config.set("default_build_folder", value=os.environ["DACE_DEFAULT_BUILD_FOLDER"])
+        loaded.Config.set("default_build_folder", value=os.environ[BUILD_FOLDER_ENV])
