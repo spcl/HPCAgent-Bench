@@ -29,9 +29,6 @@ init:
   scalars:
     complement_sum: 3
     pair_bonus: 1
-  dtypes:
-    seq: int32
-    table: int32
   arrays:
     seq:
       shape: (N,)

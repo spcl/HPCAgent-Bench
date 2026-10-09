@@ -31,8 +31,6 @@ init:
   - out
   scalars:
     nbins: 256
-  dtypes:
-    img: uint8
   arrays:
     img:
       shape: (H, W)

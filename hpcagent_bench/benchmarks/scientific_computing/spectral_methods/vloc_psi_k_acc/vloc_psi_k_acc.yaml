@@ -98,7 +98,6 @@ init:
   dtypes:
     lda: int64
     n: int64
-    m: int64
     nnr: int64
     nr1: int64
     nr2: int64

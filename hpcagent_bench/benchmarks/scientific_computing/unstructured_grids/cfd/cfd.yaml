@@ -31,8 +31,6 @@ init:
   - res_density
   - res_momentum
   - res_energy
-  dtypes:
-    neigh: int64
   arrays:
     density:
       shape: (ncells,)

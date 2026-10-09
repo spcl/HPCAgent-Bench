@@ -124,7 +124,6 @@ init:
     nr1: int64
     nr2: int64
     nr3: int64
-    nat: int64
     ntyp: int64
     nkb: int64
     nhm: int64

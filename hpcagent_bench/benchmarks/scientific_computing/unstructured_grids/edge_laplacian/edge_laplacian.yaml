@@ -25,9 +25,6 @@ init:
   - w
   - x
   - Lx
-  dtypes:
-    dst: int64
-    src: int64
   arrays:
     src:
       shape: (E,)

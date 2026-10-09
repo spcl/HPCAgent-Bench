@@ -17,9 +17,6 @@ init:
   output_args:
   - graph
   - level
-  dtypes:
-    graph: int64
-    level: int64
   arrays:
     graph:
       shape: (N, N)
