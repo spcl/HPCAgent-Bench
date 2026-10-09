@@ -302,7 +302,11 @@ def test_large_shapes_keep_every_first_draw_that_was_already_distinct() -> None:
     big_spec = fuzz.respec_ranges(
         _BIG, fuzz.resolve_ranges(_BIG), lambda lo, hi: [int(lo) + (int(hi) - int(lo)) // 2, int(hi)]
     )
-    first = [fuzz._resolve_against(big_spec, {}, sd, "uniform", None) for sd in fuzz._public_large_seeds(4)]
+    seeds = fuzz._public_large_seeds(4)
+    first = [
+        fuzz._resolve_against(big_spec, {}, sd, "uniform", None, size_class=size_class)
+        for sd, size_class in zip(seeds, fuzz.SIZE_CLASSES, strict=True)
+    ]
     assert len({tuple(sorted(s.items())) for s in first}) == 4  # premise: no collision here
     assert [s for _, s in shapes] == first
 
