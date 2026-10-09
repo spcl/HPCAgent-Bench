@@ -114,9 +114,6 @@ PINNED_FRAMEWORKS = {
     "dace_gpu_parallel": 32,
 }
 
-#: Retired columns keep their hue slot: a removal would repaint every entry after it.
-PINNED_RETIRED_FRAMEWORKS = {"cc_oneapi": 19}
-
 PINNED = {
     "models": PINNED_MODELS,
     "optimizers": PINNED_OPTIMIZERS,
@@ -136,13 +133,6 @@ def test_every_slot_of_a_kind_is_the_one_a_published_figure_drew(kind: str) -> N
         f"{kind}: the slots changed. Give a new entity the next free order "
         f"({vocabulary.KINDS[kind].next_order()}); never renumber or reuse one"
     )
-
-
-def test_a_retired_framework_keeps_its_slot_and_no_live_column_takes_it() -> None:
-    retired = dict(vocabulary.RETIRED_FRAMEWORKS.orders.items())
-    assert retired == PINNED_RETIRED_FRAMEWORKS
-    assert vocabulary.framework_slots() == PINNED_FRAMEWORKS | PINNED_RETIRED_FRAMEWORKS
-    assert registry().frameworks["cc_oneapi"] == "oneAPI (retired)"
 
 
 def test_a_framework_must_provide_its_descriptor_and_a_valid_one() -> None:
@@ -246,7 +236,6 @@ def test_a_decorator_documents_what_its_class_must_provide() -> None:
         vocabulary.device,
         vocabulary.packet,
         vocabulary.framework,
-        vocabulary.retired_framework,
     ):
         assert decorator.__doc__, decorator.__name__
         assert "must provide" in decorator.__doc__, decorator.__name__
@@ -257,7 +246,6 @@ if __name__ == "__main__":
         test_the_no_packet_control_is_the_only_entity_without_a_slot,
         test_the_registered_vocabulary_passes_its_own_cross_checks,
         test_an_alias_resolves_to_the_entity_it_names_and_takes_no_slot,
-        test_a_retired_framework_keeps_its_slot_and_no_live_column_takes_it,
         test_a_framework_must_provide_its_descriptor_and_a_valid_one,
         test_a_decorator_documents_what_its_class_must_provide,
     ):

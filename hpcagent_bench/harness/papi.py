@@ -119,7 +119,6 @@ __all__ = [
     "FeatureSet",
     "GpuEvent",
     "GpuFeatureSet",
-    "GpuGroupReport",
     "GpuMetric",
     "Imbalance",
     "MetricRow",
@@ -144,7 +143,6 @@ __all__ = [
     "component_report",
     "components",
     "core_of",
-    "count_gpu_group",
     "count_gpu_metric",
     "count_metric",
     "count_per_thread",
@@ -520,16 +518,6 @@ class GpuFeatureSet(TypedDict):
     permissions: dict[str, str | None]
     supported: dict[str, ResolvedGpuMetric]
     unsupported: dict[str, str]
-    caveats: list[str]
-
-
-class GpuGroupReport(TypedDict):
-    """One measured run per metric of a GPU group, and the caveats every device count carries."""
-
-    group: str
-    vendor: str
-    runs: int
-    metrics: list[MetricRow]
     caveats: list[str]
 
 
@@ -2284,49 +2272,3 @@ def count_gpu_metric(
     if not run.ok or run.result is None:
         return missing(metric, f"counted run failed ({forked_failure_reason(run)})")
     return run.result
-
-
-def count_gpu_group(
-    lib_path: str,
-    binding: Binding,
-    data: KernelData,
-    lang: str,
-    *,
-    group: str = "occupancy",
-    vendor: str | None = None,
-    device: bool = False,
-    device_id: int | None = None,
-    workspace_bytes: str | None = None,
-    reps: int = 1,
-    warmup: int = 0,
-    rep_timeout: float = 0.0,
-    memory_gb: float = 0.0,
-) -> GpuGroupReport:
-    """One measured run per metric of :data:`GPU_GROUPS` ``group``, on this host's vendor. Each run is
-    serialised and replayed (:data:`GPU_CAVEATS`)."""
-    metrics = gpu_group_metrics(group)
-    rows = [
-        count_gpu_metric(
-            lib_path,
-            binding,
-            data,
-            lang,
-            metric,
-            vendor=vendor,
-            device=device,
-            device_id=device_id,
-            workspace_bytes=workspace_bytes,
-            reps=reps,
-            warmup=warmup,
-            rep_timeout=rep_timeout,
-            memory_gb=memory_gb,
-        )
-        for metric in metrics
-    ]
-    return {
-        "group": group,
-        "vendor": gpu_vendor(vendor),
-        "runs": len(rows),
-        "metrics": rows,
-        "caveats": list(GPU_CAVEATS),
-    }
