@@ -20,6 +20,7 @@
 #
 # Sizes: ngrid = cubic FFT-grid edge, nvec = searched low-lying roots.
 name: QE Block-Davidson Eigensolver
+short-name: QE Davidson
 func_name: cegterg
 level: 3
 parameters:
