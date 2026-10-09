@@ -703,7 +703,7 @@ def cloudsc_monolith(
         zfrzmax = np.maximum((RTHOMO - t) * zrldcp, 0.0)
         freeze = (zfrzmax > ZEPSEC) & (zqxfg[:, QL, :] > ZEPSEC)
         zfrz = np.minimum(zqxfg[:, QL, :], zfrzmax)
-        exchange(zsolqa, freeze, QL, imelt[QL], zfrz)
+        exchange(zsolqa, freeze, QL, QI, zfrz)  # IMELT(NCLDQL) = NCLDQI: liquid freezes to ice
 
         # Evaporation of rain in the clear-sky part of the precipitation (Abel-Boutle).
         zzrh = RPRECRHMAX + (1.0 - RPRECRHMAX) * zcovpmax / np.maximum(ZEPSEC, 1.0 - zak)
