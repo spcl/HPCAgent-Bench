@@ -25,7 +25,6 @@ init:
   - imgOut
   scalars:
     alpha: 0.25
-  func_name: initialize
   arrays:
     imgIn:
       shape: (W, H)

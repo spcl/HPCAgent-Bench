@@ -25,5 +25,3 @@ init:
 output_args:
 - div_mass
 - div_theta
-loop_level_reasoning:
-  source: canonicalization

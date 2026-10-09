@@ -17,5 +17,3 @@ init:
     sum_out: (1,)
 output_args:
 - sum_out
-loop_level_reasoning:
-  source: tsvc_2

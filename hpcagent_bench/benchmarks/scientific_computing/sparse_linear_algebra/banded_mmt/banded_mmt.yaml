@@ -42,7 +42,6 @@ init:
     A: (N, a_lbound + a_ubound + 1)
     B: (N, b_lbound + b_ubound + 1)
     ret_out: (N, N)
-  func_name: initialize
 output_args:
 - ret_out
 mpi:

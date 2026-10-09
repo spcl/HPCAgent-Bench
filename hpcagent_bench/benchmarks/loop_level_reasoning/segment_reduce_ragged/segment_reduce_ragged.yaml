@@ -25,8 +25,5 @@ init:
     val: (NSEG * 24,)
     w: (NSEG * 24,)
     out: (NSEG,)
-  func_name: initialize
 output_args:
 - out
-loop_level_reasoning:
-  source: tsvc_2_5

@@ -27,7 +27,6 @@ init:
   - esrc
   - rowptr
   - total
-  func_name: initialize
   arrays:
     colidx:
       shape: (NE,)

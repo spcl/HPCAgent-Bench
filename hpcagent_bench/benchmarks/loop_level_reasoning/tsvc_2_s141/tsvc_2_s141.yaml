@@ -17,5 +17,3 @@ init:
     flat_2d_array: (LEN_2D * LEN_2D,)
 output_args:
 - flat_2d_array
-loop_level_reasoning:
-  source: tsvc_2

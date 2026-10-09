@@ -23,5 +23,3 @@ init:
 output_args:
 - out_value
 - out_index
-loop_level_reasoning:
-  source: tsvc_2_5

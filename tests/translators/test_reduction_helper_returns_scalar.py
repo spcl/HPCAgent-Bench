@@ -52,7 +52,7 @@ BENCH = {
         "short_name": "scale_by_norm",
     },
     "track": "loop_level_reasoning",
-    "precisions": ["fp64"],
+    "allowed_precisions": ["fp64"],
 }
 
 

@@ -24,7 +24,6 @@ init:
   - beta
   - C
   - A
-  func_name: initialize
   arrays:
     C:
       shape: (N, N)

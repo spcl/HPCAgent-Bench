@@ -19,7 +19,7 @@ def xl_rows() -> list[tuple[str, str, str, int]]:
         values = spec.parameters.get("XL")
         if not values:
             continue
-        datatype = str(spec.precisions[0]) if spec.precisions else sizing.DEFAULT_DTYPE
+        datatype = str(spec.allowed_precisions[0]) if spec.allowed_precisions else sizing.DEFAULT_DTYPE
         nbytes = sizing.working_bytes(spec, values, datatype)
         if nbytes is not None:
             rows.append((name, spec.track, spec.short_name, nbytes))

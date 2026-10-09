@@ -16,5 +16,3 @@ init:
     q: (LEN_1D,)
 output_args:
 - q
-loop_level_reasoning:
-  source: tsvc_2

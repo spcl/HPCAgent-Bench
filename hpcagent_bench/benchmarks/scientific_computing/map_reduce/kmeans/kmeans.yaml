@@ -31,7 +31,6 @@ init:
   output_args:
   - X
   - centroids
-  func_name: initialize
   arrays:
     X: "(npoints, dim)"
     centroids: "(nclusters, dim)"

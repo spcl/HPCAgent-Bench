@@ -45,7 +45,6 @@ parameters:
     NSTART: {derive: "C"}
     T: [6471602, 12943204]
 init:
-  func_name: initialize
   input_args:
   - C
   - NS

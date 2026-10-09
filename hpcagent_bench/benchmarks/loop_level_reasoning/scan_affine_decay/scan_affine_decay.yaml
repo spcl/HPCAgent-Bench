@@ -19,10 +19,7 @@ init:
     y: (LEN_1D,)
     c: (LEN_1D,)
     x: (LEN_1D,)
-  func_name: initialize
 output_args:
 - y
 chain_length:
   y: LEN_1D
-loop_level_reasoning:
-  source: tsvc_2_5

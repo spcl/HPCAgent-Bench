@@ -53,7 +53,7 @@ BENCH = {
         "short_name": "lift_relu_sum",
     },
     "track": "loop_level_reasoning",
-    "precisions": ["fp64"],
+    "allowed_precisions": ["fp64"],
 }
 
 

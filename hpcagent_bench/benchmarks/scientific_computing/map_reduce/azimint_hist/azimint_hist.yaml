@@ -28,7 +28,6 @@ init:
   - data
   - radius
   - out
-  func_name: initialize
   arrays:
     data:
       shape: (N,)

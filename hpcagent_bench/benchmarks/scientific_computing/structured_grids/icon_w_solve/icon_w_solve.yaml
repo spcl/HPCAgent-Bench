@@ -27,7 +27,6 @@ parameters:
     NPROMA: 2148960
     nsteps: 4
 init:
-  func_name: initialize
   input_args:
   - NLEV
   - NPROMA

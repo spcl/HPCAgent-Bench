@@ -31,9 +31,6 @@ init:
   - out
   scalars:
     nbins: 256
-  dtypes:
-    img: uint8
-  func_name: initialize
   arrays:
     img:
       shape: (H, W)

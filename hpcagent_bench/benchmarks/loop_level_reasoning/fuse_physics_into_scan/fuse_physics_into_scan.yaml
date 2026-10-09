@@ -56,5 +56,3 @@ output_args:
 - y
 chain_length:
   s: NLEV * nsteps
-loop_level_reasoning:
-  source: schedule_puzzle

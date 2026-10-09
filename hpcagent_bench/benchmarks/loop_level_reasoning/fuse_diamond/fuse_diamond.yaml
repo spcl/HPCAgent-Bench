@@ -21,5 +21,3 @@ init:
     a: (LEN_1D,)
 output_args:
 - out
-loop_level_reasoning:
-  source: tsvc_2_5

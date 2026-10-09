@@ -37,5 +37,3 @@ init:
 output_args:
 - ref
 - trans
-loop_level_reasoning:
-  source: canonicalization

@@ -4,8 +4,8 @@
 """Hand-written parallel numba reference for cloudsc (NumpyToNumba emit is correct but serial and
 compiles for ~735 s cold: one ~1100-line array-expression njit function).
 
-Derived mechanically from the loop form ``cloudsc_reference.py``, which matches
-``cloudsc_numpy.cloudsc`` to <= 1e-14 relative, keeping its per-element arithmetic order:
+Derived mechanically from a per-column loop form of ``cloudsc_numpy.cloudsc`` (matching it to
+<= 1e-14 relative), keeping its per-element arithmetic order:
 
 * Columns (``jl``) are independent, so every ``for jl in range(kidia, kfdia + 1)`` loop is
   dropped and the whole column runs inside one call; ``_run`` pranges over contiguous column
@@ -148,7 +148,7 @@ zepsec = 1e-14
 zrg_r = 1.0 / ydcst_rg
 zrldcp = 1.0 / (ydthf_ralsdcp - ydthf_ralvdcp)
 
-# Per-column workspace rows: each klon-wide temporary of cloudsc_reference is one row of a
+# Per-column workspace rows: each klon-wide temporary of the loop form is one row of a
 # small per-chunk array (its klon axis dropped, the column being fixed).
 I_ZLCOND1 = 0
 I_ZLCOND2 = 1

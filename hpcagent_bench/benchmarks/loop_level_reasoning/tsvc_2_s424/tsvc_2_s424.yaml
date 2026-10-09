@@ -18,5 +18,3 @@ init:
     flat: (LEN_1D,)
 output_args:
 - xx
-loop_level_reasoning:
-  source: tsvc_2

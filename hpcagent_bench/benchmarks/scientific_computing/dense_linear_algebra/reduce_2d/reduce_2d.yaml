@@ -20,7 +20,6 @@ parameters:
     N: 16384
     M: 16384
 init:
-  func_name: initialize
   input_args:
   - N
   - M

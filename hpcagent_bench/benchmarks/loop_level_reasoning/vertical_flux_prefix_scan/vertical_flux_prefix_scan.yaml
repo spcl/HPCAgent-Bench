@@ -21,5 +21,3 @@ init:
     flux: (N,K)
 output_args:
 - flux
-loop_level_reasoning:
-  source: canonicalization

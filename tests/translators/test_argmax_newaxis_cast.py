@@ -143,7 +143,7 @@ CAST_BENCH = {
         "short_name": "cast_demo",
     },
     "track": "loop_level_reasoning",
-    "precisions": ["fp64"],
+    "allowed_precisions": ["fp64"],
 }
 
 

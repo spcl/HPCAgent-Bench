@@ -40,7 +40,6 @@ init:
   - C
   - D
   - out
-  func_name: initialize
   arrays:
     A:
       shape: (NI, NK)

@@ -20,5 +20,3 @@ init:
 output_args:
 - a
 - c
-loop_level_reasoning:
-  source: tsvc_2

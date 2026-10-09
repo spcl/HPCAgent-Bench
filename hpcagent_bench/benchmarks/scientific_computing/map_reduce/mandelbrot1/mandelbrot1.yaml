@@ -54,7 +54,6 @@ init:
   output_args:
   - Z_out
   - N_out
-  func_name: initialize
   arrays:
     Z_out: {shape: "(yn, xn)", dtype: complex128}
     N_out: {shape: "(yn, xn)", dtype: int64}

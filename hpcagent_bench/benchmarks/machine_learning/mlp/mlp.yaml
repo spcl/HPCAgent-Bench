@@ -43,7 +43,6 @@ init:
   - w3
   - b3
   - out
-  func_name: initialize
   arrays:
     input:
       shape: (N, C_in)

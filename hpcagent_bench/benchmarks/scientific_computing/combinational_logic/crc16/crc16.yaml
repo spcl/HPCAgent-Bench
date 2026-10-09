@@ -31,10 +31,6 @@ init:
     poly: 4129
     crc_init: 65535
     xorout: 65535
-  dtypes:
-    crc: int64
-    data: int64
-  func_name: initialize
   arrays:
     data:
       shape: (N,)

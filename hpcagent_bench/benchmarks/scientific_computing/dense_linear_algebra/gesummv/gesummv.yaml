@@ -21,7 +21,6 @@ init:
   - B
   - x
   - out
-  func_name: initialize
   arrays:
     A:
       shape: (N, N)

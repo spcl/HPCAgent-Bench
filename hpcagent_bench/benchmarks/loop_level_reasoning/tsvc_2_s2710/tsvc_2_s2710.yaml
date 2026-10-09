@@ -23,5 +23,3 @@ output_args:
 - a
 - b
 - c
-loop_level_reasoning:
-  source: tsvc_2

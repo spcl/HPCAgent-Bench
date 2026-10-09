@@ -51,7 +51,6 @@ init:
       shape: (N, N)
     work:
       shape: (N, N)
-  func_name: initialize
 array_args:
 - temp
 - power

@@ -90,7 +90,6 @@ init:
     half_inv_h2: 12.5
     tol: 1.0e-6
     mix: 0.3
-  func_name: initialize
 array_args:
 - offsets
 - alpha

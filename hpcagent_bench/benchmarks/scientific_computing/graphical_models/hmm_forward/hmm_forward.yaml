@@ -47,7 +47,6 @@ init:
     loglik:
       shape: (1,)
       dtype: float64
-  func_name: initialize
 array_args:
 - init
 - trans

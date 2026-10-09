@@ -17,5 +17,3 @@ init:
     b: (LEN_2D,LEN_2D)
 output_args:
 - b
-loop_level_reasoning:
-  source: tsvc_2_5

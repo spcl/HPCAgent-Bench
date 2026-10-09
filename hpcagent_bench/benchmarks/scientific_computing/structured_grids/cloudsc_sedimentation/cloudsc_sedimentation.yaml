@@ -30,7 +30,6 @@ parameters:
 init:
   constants:
     NSPEC: 3
-  func_name: initialize
   input_args:
   - KLEV
   - KLON

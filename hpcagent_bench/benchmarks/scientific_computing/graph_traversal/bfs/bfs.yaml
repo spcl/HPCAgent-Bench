@@ -17,10 +17,6 @@ init:
   output_args:
   - graph
   - level
-  dtypes:
-    graph: int64
-    level: int64
-  func_name: initialize
   arrays:
     graph:
       shape: (N, N)

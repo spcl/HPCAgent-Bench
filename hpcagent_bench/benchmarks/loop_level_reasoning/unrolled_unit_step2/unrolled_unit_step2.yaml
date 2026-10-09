@@ -20,5 +20,3 @@ init:
     b: (2 * NBLK,)
 output_args:
 - a
-loop_level_reasoning:
-  source: canonicalization

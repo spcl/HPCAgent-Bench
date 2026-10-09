@@ -17,5 +17,3 @@ init:
     out: (1,)
 output_args:
 - out
-loop_level_reasoning:
-  source: adversarial_unroll

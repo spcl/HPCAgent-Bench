@@ -22,5 +22,3 @@ init:
 output_args:
 - A
 - B
-loop_level_reasoning:
-  source: adversarial_tile

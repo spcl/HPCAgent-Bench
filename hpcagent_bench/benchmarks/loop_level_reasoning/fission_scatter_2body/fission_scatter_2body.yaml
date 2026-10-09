@@ -24,5 +24,3 @@ init:
 output_args:
 - b
 - e
-loop_level_reasoning:
-  source: tsvc_2_5

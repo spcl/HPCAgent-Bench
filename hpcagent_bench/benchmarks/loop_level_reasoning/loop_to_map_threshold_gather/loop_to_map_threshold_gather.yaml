@@ -23,5 +23,3 @@ init:
       index_array: true
 output_args:
 - out
-loop_level_reasoning:
-  source: tsvc_2_5
