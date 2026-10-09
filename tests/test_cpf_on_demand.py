@@ -57,20 +57,18 @@ class FakeRenderer:
         with self.lock:
             self.calls += 1
         time.sleep(self.delay)
-        results: dict[str, dict[str, dict[str, object]]] = {}
+        results: dict[str, dict[str, object]] = {}
         for dialect in languages:
-            results[dialect] = {}
-            for mode in cpf_cache.MODES:
-                options = {"kernel": spec.short_name, "language": dialect, "target": target, "mode": mode}
-                key = cpf_cache.cache_key("sdfg", dace_commit, options)
-                if self.verdict != "ok":
-                    results[dialect][mode] = {"key": key, "verdict": self.verdict, "error": "renderer refused"}
-                    continue
-                stem = f"{spec.short_name}_fp64_cpf"
-                source = ("source", f"{stem}.{cpf_cache.LANGUAGE_EXT[dialect]}", f"// {dialect} {mode}\n")
-                files = [source, ("binding", f"{stem}_binding.json", "{}")]
-                cpf_cache.publish(cache_root, key, {"kernel": spec.short_name}, files)
-                results[dialect][mode] = {"key": key, "verdict": "ok", "cached": False}
+            options = {"kernel": spec.short_name, "language": dialect, "target": target}
+            key = cpf_cache.cache_key("sdfg", dace_commit, options)
+            if self.verdict != "ok":
+                results[dialect] = {"key": key, "verdict": self.verdict, "error": "renderer refused"}
+                continue
+            stem = f"{spec.short_name}_fp64_cpf"
+            source = ("source", f"{stem}.{cpf_cache.LANGUAGE_EXT[dialect]}", f"// {dialect} form\n")
+            files = [source, ("binding", f"{stem}_binding.json", "{}")]
+            cpf_cache.publish(cache_root, key, {"kernel": spec.short_name, "entry": f"{spec.short_name}_fp64"}, files)
+            results[dialect] = {"key": key, "verdict": "ok", "cached": False}
         return {"results": results}
 
 
@@ -222,7 +220,7 @@ def test_a_recorded_failure_is_answered_and_never_rendered_again(
     assert renderer.calls == 1
     pointer = cpf_cache.recorded(view, KERNEL, "c", "fp64")
     assert pointer is not None
-    assert pointer["modes"]["form"]["verdict"] == "fail"
+    assert pointer["verdict"] == "fail"
 
 
 def test_an_unknown_kernel_is_answered_without_rendering_or_recording(
@@ -263,9 +261,9 @@ def check(*argv: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def on_demand(view: pathlib.Path, cache: pathlib.Path, commit: str, mode: str = "form") -> list[str]:
+def on_demand(view: pathlib.Path, cache: pathlib.Path, commit: str) -> list[str]:
     base = ["--view", str(view), "--kernels", f"{KERNEL},atax", "--language", "c", "--target", "cpu"]
-    return [*base, "--mode", mode, "--on-demand", "--cache", str(cache), "--dace-commit", commit]
+    return [*base, "--on-demand", "--cache", str(cache), "--dace-commit", commit]
 
 
 def test_the_gate_check_lets_a_missing_view_through_and_names_what_the_judge_renders(tmp_path: pathlib.Path) -> None:
@@ -290,11 +288,11 @@ def test_the_gate_check_refuses_a_view_pinned_elsewhere(
     assert done.returncode == 2, done.stdout + done.stderr
 
 
-def test_on_demand_is_refused_for_a_dropin_check(tmp_path: pathlib.Path) -> None:
-    """A drop-in is staged before any request, so it cannot be rendered on one."""
-    done = check(*on_demand(tmp_path / "absent", tmp_path / "cache", "c0ffee", mode="dropin"))
+def test_on_demand_is_refused_for_a_verified_check(tmp_path: pathlib.Path) -> None:
+    """A cpf-src form is staged and graded before any request, so it cannot be rendered on one."""
+    done = check(*on_demand(tmp_path / "absent", tmp_path / "cache", "c0ffee"), "--verified")
     assert done.returncode == 2
-    assert "--mode form only" in done.stderr
+    assert "exclude each other" in done.stderr
 
 
 def form_gate(tmp_path: pathlib.Path, view: pathlib.Path, commit: str) -> subprocess.CompletedProcess[str]:
