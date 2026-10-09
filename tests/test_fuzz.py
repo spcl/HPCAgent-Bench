@@ -165,10 +165,6 @@ def test_correctness_size_cap_bounds_only_the_correctness_fuzz(monkeypatch) -> N
     larges = fuzz.large_shapes(_BIG)
     assert larges
     assert all(s["NI"] > 1024 for _, s in larges)
-    # ...and the small structural edge probes are unaffected (already tiny).
-    edges = fuzz.edge_shapes(_BIG)
-    assert edges
-    assert all(s["NI"] <= 1024 for _, s in edges)
 
 
 def test_large_shapes_warns_when_all_seeds_dropped(caplog) -> None:
@@ -267,24 +263,12 @@ def test_config_names_keep_the_declared_value_across_fuzz_iterations() -> None:
         assert lo <= p["N"] <= hi
 
 
-def test_edge_shapes_never_perturbs_a_declared_config_knob() -> None:
-    edges = fuzz.edge_shapes(CONFIG_AND_DIM_PARAMS, config_names=CONFIG_NAMES)
-    kinds_seen = set()
-    for kind, sample in edges:
+def test_classed_large_shapes_never_perturb_a_declared_config_knob() -> None:
+    shapes = fuzz.large_shapes(CONFIG_AND_DIM_PARAMS, n=4, config_names=CONFIG_NAMES)
+    assert len(shapes) == 4
+    for _, sample in shapes:
         assert sample["seed"] == 7
         assert sample["multrec_limit"] == 512
-        kinds_seen.add(kind)
-    assert len(kinds_seen) > 1  # more than one structural edge actually probed
-
-
-def test_edge_shapes_without_config_names_corrupts_the_knob() -> None:
-    # Why config_names exists: absent it, a degenerate
-    # [512, 512] "range" reads as fuzzable to edge_shapes, so the structural size
-    # edge probe (1/3/5/6/7) overrides multrec_limit -- an algorithm-changing
-    # perturbation during a CORRECTNESS check, not a size probe.
-    edges = fuzz.edge_shapes(CONFIG_AND_DIM_PARAMS)
-    assert edges
-    assert all(sample["multrec_limit"] != 512 for _, sample in edges)
 
 
 def test_size_cap_does_not_clamp_a_declared_config_knob(monkeypatch) -> None:
@@ -318,7 +302,11 @@ def test_large_shapes_keep_every_first_draw_that_was_already_distinct() -> None:
     big_spec = fuzz.respec_ranges(
         _BIG, fuzz.resolve_ranges(_BIG), lambda lo, hi: [int(lo) + (int(hi) - int(lo)) // 2, int(hi)]
     )
-    first = [fuzz._resolve_against(big_spec, {}, sd, "uniform", None) for sd in fuzz._public_large_seeds(4)]
+    seeds = fuzz._public_large_seeds(4)
+    first = [
+        fuzz._resolve_against(big_spec, {}, sd, "uniform", None, size_class=size_class)
+        for sd, size_class in zip(seeds, fuzz.SIZE_CLASSES, strict=True)
+    ]
     assert len({tuple(sorted(s.items())) for s in first}) == 4  # premise: no collision here
     assert [s for _, s in shapes] == first
 

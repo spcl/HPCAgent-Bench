@@ -2,6 +2,7 @@
 # provenance: {kind: original}
 # Schema: npbench/schemas/bench_spec.schema.yaml
 name: 49-point 2D Stencil
+short-name: Conv 2D 49pt
 level: 1
 parameters:
   S:

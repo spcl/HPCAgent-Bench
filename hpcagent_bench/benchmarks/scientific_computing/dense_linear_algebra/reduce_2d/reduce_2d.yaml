@@ -2,6 +2,7 @@
 # provenance: {kind: original}
 # Schema: npbench/schemas/bench_spec.schema.yaml
 name: 2D Matrix Row-Major Reduction
+short-name: 2D Row Reduce
 level: 1
 parameters:
   S:
