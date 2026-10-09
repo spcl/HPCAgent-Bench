@@ -291,8 +291,8 @@ def test_the_claude_setup_environment_and_files_carry_nothing_of_the_runners(dri
 
 
 def agent_folder(workdir: pathlib.Path) -> pathlib.Path:
-    """Problem 7's folder in the shared mount: the agent's working directory."""
-    return workdir.parents[1] / "shared" / "agent-7"
+    """The folder the first run claims in a fresh shared mount: the agent's working directory."""
+    return workdir.parents[1] / "shared" / "agent-0"
 
 
 def expected_runner_argv(harness: str, workdir: pathlib.Path) -> list[str]:
@@ -386,7 +386,8 @@ def test_a_runner_gets_the_claude_environment_minus_claudes_own_plus_the_runner_
     assert runner_env == expected
     assert runner_env["JUDGE_RANK"] == "1"
     assert runner_env["HPCAGENT_BENCH_EPISODE_ID"] == "harness-setup.n1.p7.w2"
-    assert (workdir / "prompt.txt").read_bytes() == claude_prompt
+    # The same text but the folder: the second run claims the next one.
+    assert (workdir / "prompt.txt").read_bytes() == claude_prompt.replace(b"agent-0", b"agent-1")
     assert (workdir / "mcp.json").read_bytes() == claude_mcp
 
 

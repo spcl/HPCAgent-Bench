@@ -22,6 +22,7 @@ import time
 from types import ModuleType
 
 import pytest
+from hpcagent_agent.driver.promote_unsubmitted import AGENT_FOLDERS_LOG
 
 from hpcagent_bench.harness import results_db
 from tests import results_seed
@@ -255,11 +256,23 @@ def test_a_submission_under_either_spelling_suppresses_promotion(promoter, tmp_p
 # the clock and every one of them was holding a finished kernel that reached no table at all.
 
 
+#: The folder the driver gave episode ``setup.n0.p7.w*`` in :func:`workspace_run`'s run.
+WORKSPACE_FOLDER = "agent-12"
+
+
 def workspace_run(tmp_path: pathlib.Path, name: str, body: str) -> pathlib.Path:
-    """A run tree holding one agent's write folder, keyed the way agent_driver keys it."""
-    folder = tmp_path / "shared" / "agent-7"
+    """A run tree holding one agent's folder and the driver's record of which episode worked in it: an earlier
+    crashed attempt of the same episode in agent-2, its last attempt in agent-12."""
+    folder = tmp_path / "shared" / WORKSPACE_FOLDER
     folder.mkdir(parents=True)
     (folder / name).write_text(body)
+    lines = [
+        {"episode_id": "setup.n0.p7.w7", "folder": "agent-2"},
+        {"episode_id": "setup.n0.p3.w7", "folder": "agent-3"},
+        {"episode_id": "setup.n0.p7.w7", "folder": WORKSPACE_FOLDER},
+        {"episode_id": "llrblind-oss120b-c.n0.p7.w7", "folder": WORKSPACE_FOLDER},
+    ]
+    (tmp_path / AGENT_FOLDERS_LOG).write_text("".join(json.dumps(line) + "\n" for line in lines))
     return tmp_path
 
 
@@ -274,28 +287,30 @@ def test_workspace_candidate_reads_the_file_the_agent_left(promoter, tmp_path) -
     assert promoter.HARVESTED_TAG != promoter.PROMOTED_TAG
 
 
-def test_workspace_candidate_keys_on_the_problem_index_not_the_worker(promoter, tmp_path) -> None:
-    """agent_driver names the folder agent-<problem index>. On a setup running several agents per
-    task the worker index differs, and a folder picked by it is another agent's answer."""
+def test_workspace_candidate_reads_the_folder_of_the_episodes_last_attempt(promoter, tmp_path) -> None:
+    """Every attempt gets a fresh folder, so the driver's record names it: the episode's LAST line wins, and an
+    episode with no line has no folder."""
     run = workspace_run(tmp_path, "kernel.f90", "subroutine k\nend subroutine\n")
-    assert promoter.workspace_dir(run, "setup.n0.p7.w3") == run / "shared" / "agent-7"
-    assert promoter.workspace_candidate(run, "setup.n0.p7.w3", "track/kernel")["language"] == "fortran"
+    assert promoter.workspace_dir(run, "setup.n0.p7.w7") == run / "shared" / WORKSPACE_FOLDER
+    assert promoter.workspace_candidate(run, "setup.n0.p7.w7", "track/kernel")["language"] == "fortran"
     assert promoter.workspace_candidate(run, "setup.n0.p3.w7", "track/kernel") is None
+    assert promoter.workspace_dir(run, "setup.n0.p9.w9") is None
 
 
 def test_workspace_candidate_pairs_the_device_unit(promoter, tmp_path) -> None:
     """A hip delivery is two translation units and the host half alone does not build, so a harvest
     that sent only `source` would be refused for a reason that looks like the agent's fault."""
     run = workspace_run(tmp_path, "stencil.cpp", "// host\n")
-    (run / "shared" / "agent-7" / "stencil.hip").write_text("// device\n")
+    (run / "shared" / WORKSPACE_FOLDER / "stencil.hip").write_text("// device\n")
     item = promoter.workspace_candidate(run, "setup.n0.p7.w7", "track/stencil")
     assert item["language"] == "hip"
     assert item["device_source"] == "// device\n"
 
 
 def test_workspace_candidate_is_absent_when_the_agent_wrote_nothing(promoter, tmp_path) -> None:
-    (tmp_path / "shared" / "agent-7").mkdir(parents=True)
-    assert promoter.workspace_candidate(tmp_path, "setup.n0.p7.w7", "track/kernel") is None
+    run = workspace_run(tmp_path, "unrelated.txt", "")
+    (run / "shared" / WORKSPACE_FOLDER / "unrelated.txt").unlink()
+    assert promoter.workspace_candidate(run, "setup.n0.p7.w7", "track/kernel") is None
 
 
 @pytest.mark.parametrize(("mode", "harvests"), [("", False), ("multi", False), ("single", False), ("blind", True)])

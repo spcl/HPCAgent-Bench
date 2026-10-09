@@ -391,19 +391,31 @@ def agent_driver():
     return fresh("agent_driver")
 
 
-def test_every_agent_gets_its_own_write_folder(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("HPCAGENT_BENCH_SHARED_DIR", "/shared")
-    folders = {agent_driver().shared_paths(KERNEL, index)[0] for index in range(10)}
-    assert len(folders) == 10  # ten agents on ONE kernel must not share a submission path
+def test_every_attempt_claims_the_next_folder_with_a_copy_of_its_kernels_material(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> None:
+    """Folders are numbered by attempt across the run: ten agents on ONE kernel never share a submission path,
+    each starts with the kernel's reference material, and the run records which episode used which folder."""
+    shared, run_dir = tmp_path / "shared", tmp_path / "run"
+    (shared / "tasks" / "argmax_value").mkdir(parents=True)
+    (shared / "tasks" / "argmax_value" / "signature.json").write_text("{}\n", encoding="utf-8")
+    (shared / "agent-4").mkdir()  # a folder an earlier attempt of the run already holds
+    run_dir.mkdir()
+    monkeypatch.setenv("HPCAGENT_BENCH_SHARED_DIR", str(shared))
+    monkeypatch.setenv("RUN_DIR", str(run_dir))
+    driver = agent_driver()
+    folders = [driver.allocate_agent_folder(KERNEL, f"setup.n0.p{index}.w0") for index in range(10)]
+    assert [folder.name for folder in folders] == [f"agent-{n}" for n in range(5, 15)]
+    assert all((folder / "signature.json").is_file() for folder in folders)
+    log = [json.loads(line) for line in (run_dir / driver.AGENT_FOLDERS_LOG).read_text().splitlines()]
+    assert log[0] == {"episode_id": "setup.n0.p0.w0", "folder": "agent-5"}
 
 
-def test_the_task_line_names_the_write_folder_and_the_materials(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("HPCAGENT_BENCH_SHARED_DIR", "/shared")
-    agent_dir, note = agent_driver().shared_paths(KERNEL, 3)
-    assert str(agent_dir) == "/shared/agent-3"
-    assert "Your folder (your working directory): /shared/agent-3;" in note
+def test_the_task_line_names_the_folder_and_the_kernels_file_name() -> None:
+    note = agent_driver().folder_note(pathlib.Path("/shared/agent-3"), KERNEL)
+    assert "/shared/agent-3" in note
     assert "argmax_value.<ext>" in note  # the basename the judge name-checks
-    assert "/shared/tasks/argmax_value/" in note
+    assert "/shared/tasks" not in note, "the material is in the folder"
     assert "argmax_value/argmax_value" not in note, "the short key only: the tools name the kernel"
 
 

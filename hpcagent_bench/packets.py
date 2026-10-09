@@ -162,7 +162,7 @@ def companion_language_pages(language: str, image: str | None = None, multinode:
     ``.hip`` is ordinary C++ and ``lang-cpp`` governs it, a Triton module is delivered through the
     Python ABI ``lang-python`` owns. Both pages say so in their triggers ("read this page first,
     together with lang-cpp") -- so a setup that stages ``lang-hip`` without ``lang-cpp`` publishes a
-    trigger pointing at ``/shared/skills/lang-cpp.md``, which is not there. ``*`` already picked the
+    trigger pointing at ``/skills/lang-cpp.md``, which is not there. ``*`` already picked the
     companion up, because the companion's ``applies`` names the language; the ``lang`` token did
     not, so ``lang``, ``all-in-amd`` and ``all-in-nvidia`` shipped the half packet.
 

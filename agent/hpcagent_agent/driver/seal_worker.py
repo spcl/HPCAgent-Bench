@@ -6,7 +6,7 @@
 Stage 1 is this module, started by ``agent_driver.py`` as root-in-a-user-namespace::
 
     unshare -r -m -p -f --mount-proc --propagation private --kill-child \\
-        python3 seal_worker.py --workdir W --agent-dir A --task-dir T --shared S \\
+        python3 seal_worker.py --workdir W --agent-dir A --shared S \\
         --run-dir R --hide L --uid U --gid G -- <worker argv>
 
 It builds the view with the mount(2) syscall through ctypes: the image carries no bwrap, and
@@ -16,8 +16,9 @@ on the worker -- every file it writes is owned by the submitting user, as before
 capabilities at exec, so nothing the agent runs can remount what stage 1 built.
 
 What the worker keeps: its own workdir at its own absolute path (the MCP tool server reads
-``$CLAUDE_LOG_PATH`` there), a private HOME inside it, its shared write folder, its own kernel's
-task folder and the experiment-wide shared files read-only, the image's own filesystem, a private
+``$CLAUDE_LOG_PATH`` there), a private HOME inside it, its own shared folder (which the driver filled with
+its kernel's task material), the experiment-wide shared files read-only, its setup's skill pages read-only
+at /skills where the container mounts that point, the image's own filesystem, a private
 /tmp, /dev/shm and /opt/node-shm (with the driver's launch venv kept read-only: the MCP server runs on
 that interpreter) and the /proc of its own PID namespace. What it loses: the rest of the run directory
 (judge databases, edf, monitor, vllm, every other worker's dir), the launch directory (the setup's .env
@@ -61,6 +62,8 @@ __all__ = [
     "PRIVATE_TMP",
     "REAL",
     "SEAL_ROOT",
+    "SKILLS_ENTRY",
+    "SKILLS_MOUNT",
     "STASH_DIR",
     "VIEW_DIR",
     "HoldCall",
@@ -85,6 +88,7 @@ __all__ = [
     "seal_plan",
     "set_affinity",
     "shared_root_entries",
+    "skills_mount",
     "stage_two",
     "umount",
     "under",
@@ -133,6 +137,12 @@ VIEW_DIR = f"{SEAL_ROOT}/shared"
 #: The workdir is bound aside before the run directory is covered, then bound back at its own path.
 STASH_DIR = f"{SEAL_ROOT}/workdir"
 
+#: Where the skill pages appear, read-only: the agent EDF mounts the job's at this point, and the seal binds the
+#: worker's own setup's over it (a fused wave stages one set per setup).
+SKILLS_MOUNT = "/skills"
+#: The staged skill pages, a top-level entry of the shared material.
+SKILLS_ENTRY = "skills"
+
 #: The private home inside the workdir. The driver creates it and wipes it between attempts;
 #: stage 1 only exports it.
 HOME_NAME = "home"
@@ -162,10 +172,8 @@ class Layout(NamedTuple):
 
     #: RUN_DIR/agents/node-N/problem-p-worker-w, the worker's own directory. Writable.
     workdir: str
-    #: SHARED/agent-p, the folder the judge reads submissions from. Writable.
+    #: SHARED/agent-n, the folder the judge reads submissions from. Writable.
     agent_dir: str
-    #: SHARED/tasks/<kernel stem>, this kernel's staged material. Read-only.
-    task_dir: str
     #: The shared mount itself (/shared in the container).
     shared: str
     #: The run directory, of which only ``workdir`` survives.
@@ -183,6 +191,8 @@ class Layout(NamedTuple):
     keep: tuple[str, ...] = ()
     #: The :data:`PRIVATE_DIRS` this image has, each covered with a fresh tmpfs.
     private: tuple[str, ...] = (PRIVATE_TMP,)
+    #: :data:`SKILLS_MOUNT` where the container has it and the material stages skills; "" binds none.
+    skills: str = ""
 
 
 MountCall = Callable[[str | None, str, str | None, int], None]
@@ -273,17 +283,17 @@ def under(parent: str, child: str) -> bool:
     return not parent or child == parent or child.startswith(f"{parent}/")
 
 
-#: Shared-root names never passed through whole: ``tasks`` is bound per kernel, and ``setups`` holds
-#: every setup of a fused owed wave -- a worker sees only its own, as its material root.
-PER_WORKER_ENTRIES = frozenset({"tasks", "setups"})
+#: Shared-root names never passed through whole: ``tasks`` reaches a worker as the copy in its own folder,
+#: ``setups`` holds every setup of a fused owed wave (a worker sees only its own, as its material root), and
+#: the skill pages appear at :data:`SKILLS_MOUNT` instead.
+PER_WORKER_ENTRIES = frozenset({"tasks", "setups", SKILLS_ENTRY})
 
 
 def shared_root_entries(shared: pathlib.Path) -> tuple[str, ...]:
     """The shared mount's top-level names EVERY agent of the setup may read.
 
-    ``tasks`` and the per-agent write folders are excluded because they are per-worker: the
-    worker's own two are bound in by name, and the rest are other kernels' material and other
-    workers' submissions. Everything else materialize_shared.sh stages -- the prompt variants, the
+    :data:`PER_WORKER_ENTRIES` and the per-agent folders are excluded: the worker's own folder is bound in by
+    name, and the rest are other kernels' material and other workers' submissions. Everything else materialize_shared.sh stages -- the prompt variants, the
     hints file, the build fragments, the submission policies, the skill pages -- is experiment-wide
     and passes through read-only, so a file a future setup stages needs no change here.
     """
@@ -318,7 +328,6 @@ def seal_plan(layout: Layout, shared_entries: Sequence[str]) -> list[MountOp]:
     for path in (
         layout.workdir,
         layout.agent_dir,
-        layout.task_dir,
         layout.shared,
         material,
         layout.run_dir,
@@ -351,9 +360,8 @@ def seal_plan(layout: Layout, shared_entries: Sequence[str]) -> list[MountOp]:
         target = f"{VIEW_DIR}/{name}"
         ops.append(MountOp("bind", f"{material}/{name}", target))
         ops.append(MountOp("ro", "", target))
-    task_target = f"{VIEW_DIR}/tasks/{layout.task_dir.rsplit('/', 1)[-1]}"
-    ops.append(MountOp("bind", layout.task_dir, task_target))
-    ops.append(MountOp("ro", "", task_target))
+    if layout.skills:
+        ops += [MountOp("bind", f"{material}/{SKILLS_ENTRY}", layout.skills), MountOp("ro", "", layout.skills)]
     ops.append(MountOp("bind", layout.agent_dir, f"{VIEW_DIR}/{layout.agent_dir.rsplit('/', 1)[-1]}"))
     ops.append(MountOp("ro", "", VIEW_DIR))
     ops.append(MountOp("bind", VIEW_DIR, layout.shared))
@@ -404,7 +412,6 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Seal one agent worker into its own view and run it.")
     parser.add_argument("--workdir", required=True)
     parser.add_argument("--agent-dir", required=True)
-    parser.add_argument("--task-dir", required=True)
     parser.add_argument("--shared", required=True)
     parser.add_argument("--run-dir", required=True)
     parser.add_argument("--material", default="", help="the staged-material root (default: --shared)")
@@ -418,6 +425,11 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--cpus", default="", help="comma-separated CPU list for the worker's affinity")
     parser.add_argument("command", nargs=argparse.REMAINDER, help="-- followed by the worker's argv")
     return parser.parse_args(list(argv))
+
+
+def skills_mount(material: pathlib.Path) -> str:
+    """:data:`SKILLS_MOUNT` when the container provides that mount point and ``material`` stages skill pages."""
+    return SKILLS_MOUNT if pathlib.Path(SKILLS_MOUNT).is_dir() and (material / SKILLS_ENTRY).is_dir() else ""
 
 
 def worker_argv(command: Sequence[str]) -> list[str]:
@@ -456,7 +468,6 @@ def main(argv: Sequence[str]) -> int:
     layout = Layout(
         workdir=workdir,
         agent_dir=str(args.agent_dir),
-        task_dir=str(args.task_dir),
         shared=str(args.shared),
         run_dir=str(args.run_dir),
         hide=existing_dirs([str(path) for path in list(args.hide)]),
@@ -464,6 +475,7 @@ def main(argv: Sequence[str]) -> int:
         hide_files=tuple(str(path) for path in list(args.hide_file) if pathlib.Path(path).is_file()),
         keep=existing_dirs([str(path) for path in list(args.keep)]),
         private=existing_dirs(list(PRIVATE_DIRS)),
+        skills=skills_mount(pathlib.Path(str(args.material) or str(args.shared))),
     )
     command = worker_argv(list(args.command))
     try:

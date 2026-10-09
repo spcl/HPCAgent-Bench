@@ -29,7 +29,7 @@ applies: {images: [amd], multinode: true, languages: [c, cpp, hip]}
 # rccl
 ```
 
-- The prompt carries only `when`, as `` - When <when> -- read `/shared/skills/<name>.md`. ``, so write
+- The prompt carries only `when`, as `` - When <when> -- read `/skills/<name>.md`. ``, so write
   it as the condition for opening the page.
 - `applies:` narrows which setups stage the page (language, image, multinode).
 - Tests require a non-empty body, `description` under 200 characters, a `when` trigger, ASCII
