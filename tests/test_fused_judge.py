@@ -80,14 +80,14 @@ def setup_lines(setup: str, view: pathlib.Path | None) -> list[str]:
 
 
 def publish_view(tmp_path: pathlib.Path) -> pathlib.Path:
-    """A CPF view serving ``example_kernel``'s C read form (as tests/test_canonical_parallel_form.py)."""
+    """A CPF view serving ``example_kernel``'s C form (as tests/test_canonical_parallel_form.py)."""
     cache, view = tmp_path / "cache", tmp_path / "view"
     cpf_cache.open_view(view, cache, "cpu", "dace")
-    key = cpf_cache.cache_key("sdfg", "dace", {"kernel": "example_kernel", "mode": "form"})
+    key = cpf_cache.cache_key("sdfg", "dace", {"kernel": "example_kernel"})
     name = "example_kernel_fp64_cpf"
     files = [("source", f"{name}.c", "// form\n"), ("binding", f"{name}_binding.json", "{}")]
-    cpf_cache.publish(cache, key, {"kernel": "example_kernel"}, files)
-    cpf_cache.record(view, "example_kernel", "c", "fp64", {"form": {"key": key, "verdict": "ok"}})
+    cpf_cache.publish(cache, key, {"kernel": "example_kernel", "entry": "example_kernel_fp64"}, files)
+    cpf_cache.record(view, "example_kernel", "c", "fp64", {"key": key, "verdict": "ok"})
     return view
 
 

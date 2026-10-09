@@ -9,14 +9,14 @@ The pipeline is four steps, and each already exists somewhere else:
 2. that module's ``@dace.program`` is parsed to an SDFG,
 3. ``canonicalize`` + ``finalize_for_target`` turn it into the canonical parallel CPU form,
 4. ``dace.codegen.cpf.render`` emits a translation unit that a bare host compiler accepts -- no
-   ``-I``, no ``libdace``, no BLAS -- together with the PREPARED SDFG whose ``arglist()`` is the
-   entry point's real signature.
+   ``-I``, no ``libdace``, no BLAS.
 
-The rendered entry is named ``<short>_<fptype>_cpf`` and NOT the canonical native symbol
-(``numpyto_common.naming.entry_symbol``) on purpose: CPF's argument list is the SDFG's, which
-orders differently from the C ABI and carries free symbols the C emitter never passes. Sharing the
-symbol would let the native loader bind this text and call it with the wrong arguments; a distinct
-name plus its own ``*_cpf_binding.json`` keeps the two legs from ever being mistaken for one.
+Every rendered unit is a DROP-IN: its entry is the canonical native symbol
+(``numpyto_common.naming.entry_symbol``) and its signature is the C ABI's, spelled exactly as the
+prompt's "Required signature" stub (:func:`hpcagent_bench.support.bindings.stubs.gen_call_stub`):
+array pointers by name, then scalars and size symbols by name, then ``workspace`` and
+``workspace_size``, with the stub's ``const`` and ``restrict``. The judge links it in place of a
+submission, and its binding is the native one (:func:`binding_from_spec`).
 
 Rendering runs in a CHILD PROCESS with a timeout. The DaCe python frontend is the part that wedges
 on a large kernel, and a sweep must lose that kernel rather than the sweep -- the same reason
@@ -27,7 +27,6 @@ the child (``python -m hpcagent_bench.cpf_bridge``).
 import argparse
 import ast
 import contextlib
-import dataclasses
 import functools
 import hashlib
 import json
@@ -39,7 +38,6 @@ import sys
 import time
 import traceback
 from collections.abc import Mapping, Sequence
-from types import ModuleType
 from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 from hpcagent_bench import config, cpf_canonical, paths
@@ -54,32 +52,30 @@ from hpcagent_bench.spec import BenchSpec
 from hpcagent_bench.support.bindings.contract import (
     WORKSPACE_NAME,
     WORKSPACE_SIZE_NAME,
-    Arg,
     Binding,
     binding_from_spec,
+    c_param,
+    workspace_c_params,
 )
 from hpcagent_bench.translators.numpyto_common.naming import fptype_tag, short_for
 
 __all__ = [
     "ABI_SYMBOL_LOCAL",
-    "CPF_ABI",
     "DACE_BANNER",
     "DEVICE_LANGUAGE",
     "RENDER_TIMEOUT_DEFAULT_S",
     "RENDER_TIMEOUT_KEY",
     "ChildRun",
     "RenderedForm",
-    "add_workspace",
+    "abi_parameters",
     "bind_pinned_config",
-    "binding_for",
     "bridge_digest",
     "clean_form",
     "copies_whole_argument",
     "dace_int64",
     "dace_root",
-    "dace_symbolic",
-    "dace_uint8",
     "drop_returned_arguments",
+    "exact_abi_signature",
     "force_abi_symbols",
     "generated_renames",
     "json_lines",
@@ -103,7 +99,6 @@ __all__ = [
 if TYPE_CHECKING:
     from dace import SDFG, Memlet
     from dace import dtypes as dace_dtypes
-    from dace.codegen.cpf import Rendering
     from dace.data import Data
     from dace.sdfg.graph import MultiConnectorEdge
 
@@ -133,11 +128,6 @@ def render_timeout_s() -> float:
     and its job is only to stop a wedged render from taking the sweep with it.
     """
     return float(cast("float", config.get(RENDER_TIMEOUT_KEY, RENDER_TIMEOUT_DEFAULT_S)))
-
-
-#: ``abi`` tag on a CPF binding, deliberately not the native ``ABI_TAG``: the argument list is the
-#: SDFG's own, so a consumer must not assume the native contract (ordering, workspace pair, 1-based rebasing).
-CPF_ABI = "cpf/1"
 
 
 def generated_renames(path: pathlib.Path) -> dict[str, str]:
@@ -183,42 +173,39 @@ def returned_slots(path: pathlib.Path, entry: str) -> tuple[str | None, ...]:
     return tuple(value.id if isinstance(value, ast.Name) else None for value in values)
 
 
-def binding_for(rendering: "Rendering", kernel: str, symbol: str) -> Binding:
-    """The CPF entry point's own binding, read off the PREPARED SDFG in the RENDERED order.
+#: CPF dialect -> the stub language whose ``restrict`` spelling the entry takes: the gpu host unit is the hip stub's.
+ABI_LANGUAGE = {"c": "c", "c++": "cpp", DEVICE_LANGUAGE: "hip"}
 
-    ``rendering.sdfg`` rather than the SDFG handed to the renderer: preparation expands library
-    nodes through their pure implementations, and an expansion can introduce an extent symbol the
-    library node had kept to itself. Reading the original's ``arglist()`` would drop that symbol and
-    the caller would run the kernel on an uninitialized extent.
 
-    ``rendering.arguments`` rather than that arglist's own iteration order: a drop-in is rendered
-    in the ABI's order, and a binding that published the arglist order instead would describe a
-    signature the file does not have.
+def abi_parameters(binding: Binding, dialect: str) -> tuple[str, ...]:
+    """The entry's parameter declarations exactly as the prompt's stub spells them for ``dialect``."""
+    lang = ABI_LANGUAGE[dialect]
+    return (*(c_param(arg, lang) for arg in binding.args), *workspace_c_params(lang))
+
+
+def exact_abi_signature(code: str, entry: str, parameters: Sequence[str], renames: Mapping[str, str]) -> str:
+    """Respell every declaration of ``entry`` in ``code`` as ``parameters``, one per line like the stub.
+
+    CPF's ``EntrySignature`` already put the parameters in ABI order; this pass changes only their spelling:
+    the stub's ``const`` on scalars, a writable ``workspace`` and its ``restrict`` keyword. Every
+    emitted name in ``renames`` (``__field``) is respelled to its manifest name (``field``) throughout,
+    so the signature names what the stub names. A declared name list that is not the ABI's is refused.
     """
-    from dace import data as dace_data
-    from dace.codegen.cpf import readonly_entry_arrays
+    for emitted, name in renames.items():
+        code = re.sub(rf"\b{re.escape(emitted)}\b", name, code)
+    wanted = [declared.split()[-1] for declared in parameters]
+    pattern = re.compile(rf"\bvoid\s+{re.escape(entry)}\s*\(([^()]*)\)")
 
-    sdfg = rendering.sdfg
-    # The renderer's OWN answer, not a second derivation: CPF qualifies these params ``const`` in
-    # the signature it emits, so asking it keeps the two from disagreeing (cppcheck once reported
-    # ``constParameterPointer`` on every read-only pointer when they did).
-    readonly = readonly_entry_arrays(sdfg)
-    arglist = sdfg.arglist()
-    args: list[Arg] = []
-    for name in rendering.arguments:
-        desc = arglist[name]
-        dtype = desc.dtype.as_numpy_dtype().name
-        if isinstance(desc, dace_data.Array):
-            shape = tuple(str(dim) for dim in desc.shape)
-            args.append(Arg(name=name, kind="ptr", dtype=dtype, is_const=name in readonly, shape=shape))
-        else:
-            # A scalar here is a symbol or read-only param; CPF already promoted every WRITTEN one to length-1.
-            role = "symbol" if name not in sdfg.arrays else None
-            args.append(Arg(name=name, kind="scalar", dtype=dtype, is_const=True, role=role))
-    # Keyed ``c``: that is the slot ``Binding.symbol`` reads, and this entry IS a C symbol (CPF's,
-    # not the native emitter's) -- any other key falls back to ``<kernel>_fp64``, the NATIVE symbol
-    # this file exists to not claim. ``abi`` says the argument list follows the SDFG's own order.
-    return Binding(kernel=kernel, config="dense", args=tuple(args), symbols={"c": symbol}, abi=CPF_ABI)
+    def respell(match: re.Match[str]) -> str:
+        declared = [param.split()[-1].lstrip("*") for param in match.group(1).split(",")]
+        if declared != wanted:
+            raise ValueError(f"the rendered entry takes {declared}, the ABI {wanted}")
+        return f"void {entry}(\n    " + ",\n    ".join(parameters) + ")"
+
+    respelled, found = pattern.subn(respell, code)
+    if not found:
+        raise ValueError(f"the rendered unit declares no entry {entry}")
+    return respelled
 
 
 #: DaCe stamps this on every generated unit -- correct for a file nobody edits, wrong for the one
@@ -234,53 +221,6 @@ def dace_int64() -> "dace_dtypes.typeclass":
     import dace
 
     return dace.int64  # pyright: ignore[reportReturnType] -- dace declares int64 as an array class under TYPE_CHECKING; it is a typeclass at runtime
-
-
-def dace_uint8() -> "dace_dtypes.typeclass":
-    """``dace.uint8``, imported late for the same reason."""
-    import dace
-
-    return dace.uint8  # pyright: ignore[reportReturnType] -- same dace TYPE_CHECKING declaration as int64
-
-
-def dace_symbolic() -> ModuleType:
-    """``dace.symbolic``, imported late for the same reason."""
-    from dace import symbolic
-
-    return symbolic
-
-
-def add_workspace(sdfg: "SDFG") -> None:
-    """Give the SDFG the reserved scratch pair, so the rendered entry is callable through the ABI.
-
-    ``workspace`` / ``workspace_size`` are not in ``binding.args``: the stub and the host glue
-    APPEND them after the kernel's own arguments (support/bindings/stubs.py, glue.py), so a form
-    that stops at the last real argument is called by the judge with two arguments it never
-    declared. On SysV that does not crash -- it is ignored -- which is the worst way for it to be
-    wrong.
-
-    Nothing has to USE either one. A non-transient array is in ``arglist`` by definition, and
-    shaping it by ``workspace_size`` makes that symbol an INTERFACE symbol, which dace keeps in the
-    signature whether or not the body still mentions it (SDFG.interface_symbols). So this needs no
-    forcing at all -- unlike a size parameter such as ``K``, which is in no shape and would
-    otherwise vanish.
-
-    Nothing reading it is also why CPF renders it ``const uint8_t *`` where the ABI declares it
-    non-const, and CPF renders every by-value scalar without the ``const`` the ABI gives it. Both
-    are qualifiers C linkage ignores: the drop-in links and runs either way, and re-spelling them
-    would change nothing a compiler can see.
-    """
-    from dace import data as dace_data
-
-    if WORKSPACE_NAME in sdfg.arrays:
-        return
-    if WORKSPACE_SIZE_NAME not in sdfg.symbols:
-        sdfg.add_symbol(WORKSPACE_SIZE_NAME, dace_int64())
-    size = dace_symbolic().symbol(WORKSPACE_SIZE_NAME, dace_int64())
-    sdfg.add_array(WORKSPACE_NAME, [size], dace_uint8(), transient=False)
-    # A non-transient array nothing reads is still an argument, but dace validation wants every
-    # descriptor reachable -- the entry takes it, the body ignores it, exactly what the ABI wants.
-    assert isinstance(sdfg.arrays[WORKSPACE_NAME], dace_data.Array)
 
 
 def force_abi_symbols(sdfg: "SDFG", wanted: Sequence[str]) -> tuple[str, ...]:
@@ -500,17 +440,16 @@ def clean_form(code: str, forced: Sequence[str]) -> str:
 
 
 class RenderedForm(NamedTuple):
-    """Step 4's output for one (language, mode), not yet written anywhere."""
+    """Step 4's output for one language, not yet written anywhere."""
 
-    #: ``<short>_<fptype>_cpf.<ext>`` -- a drop-in keeps the ``_cpf`` FILE name; only its symbol is canonical. On the
-    #: gpu target the host unit, ``.cpp``: the extern "C" entry, which only launches.
+    #: ``<short>_<fptype>_cpf.<ext>``; on the gpu target the host unit, ``.cpp``: the extern "C" entry, which only
+    #: launches.
     name: str
     code: str
-    #: The entry's binding as JSON text, in the order the rendered signature takes its arguments.
+    #: The native binding as JSON text: the C ABI the entry takes.
     binding: str
-    #: The symbol the unit defines.
+    #: The canonical native symbol the unit defines.
     entry: str
-    abi_order: tuple[str, ...] | None
     forced: tuple[str, ...]
     lines: int
     #: The gpu target's device unit (``.hip``): the kernels and the launchers ``code`` calls; empty on cpu.
@@ -531,70 +470,61 @@ class RenderedForm(NamedTuple):
 
 
 def render_canonical(
-    spec: BenchSpec, short: str, canonical: "SDFG", language: str, precision: str, target: str, dropin: bool
+    spec: BenchSpec, short: str, canonical: "SDFG", language: str, precision: str, target: str
 ) -> RenderedForm:
-    """Step 4 on a canonical SDFG, which is copied first so one parse serves every language and mode.
+    """Step 4 on a canonical SDFG, which is copied first so one parse serves every language.
 
-    ``sdfg.name = base`` is CPF's OWN symbol, what the read form defines; a drop-in instead takes the
-    canonical native symbol, so the judge can link it as ``<kernel>_fp64``, and is rendered in the ABI
-    order: the kernel's args THEN the reserved scratch pair (a pointer behind the scalars), which
-    differs from CPF's own ``arglist()`` order. The order is handed to the renderer rather than
-    applied after, and force_abi_symbols / add_workspace fill any gap while drop_returned_arguments
-    and bind_pinned_config remove the return slot and pinned knobs the ABI does not have, so a
-    mismatch surfaces as a refusal and never as shifted arguments.
+    The entry takes the canonical native symbol, so the judge links it as ``<kernel>_fp64``, and is
+    rendered in the ABI order: the kernel's args THEN the reserved scratch pair (a pointer behind the
+    scalars). The order and the workspace pair are handed to the renderer (``EntrySignature``);
+    force_abi_symbols fills any gap and drop_returned_arguments / bind_pinned_config remove the return
+    slot and pinned knobs the ABI does not have, so a mismatch surfaces as a refusal and never as
+    shifted arguments. :func:`exact_abi_signature` then spells each parameter as the stub does (CPF keeps
+    its own qualifiers: no ``const`` on scalars, a read-only workspace) and the unit is compiled.
     """
     import copy
 
-    from dace.codegen.cpf import render
+    from dace.codegen.cpf import EntrySignature, compile_check, dialect_for, render
 
     sdfg = copy.deepcopy(canonical)
-    base = f"{short}_{fptype_tag(precision)}_cpf"
-    sdfg.name = base  # pyright: ignore[reportAttributeAccessIssue] -- dace's SDFG.name is a Property descriptor the checker sees as read-only
-    forced: tuple[str, ...] = ()
-    abi_args: list[str] | None = None
-    renames: dict[str, str] = {}
-    if dropin:
-        native = binding_from_spec(spec)
-        impl = paths.BENCHMARKS / spec.relative_path / f"{spec.module_name}_dace.py"
-        # The SDFG speaks the emitted spelling; the ABI order and the published binding speak the manifest's.
-        renames = generated_renames(impl)
-        emitted_args = [renames.get(arg.name, arg.name) for arg in native.args]
-        abi_args = [*emitted_args, WORKSPACE_NAME, WORKSPACE_SIZE_NAME]
-        bind_pinned_config(sdfg, spec.pinned_config)
-        add_workspace(sdfg)
-        outputs = [renames.get(name, name) for name in spec.output_args]
-        drop_returned_arguments(sdfg, abi_args, outputs, returned_slots(impl, spec.func_name))
-        by_value = [renames.get(arg.name, arg.name) for arg in native.args if arg.kind == "scalar"]
-        privatize_rebound_arguments(sdfg, [name for name in by_value if name not in outputs])
-        forced = force_abi_symbols(sdfg, emitted_args)
-        sdfg.name = native.symbol  # pyright: ignore[reportAttributeAccessIssue] -- dace Property descriptor, as above
+    native = binding_from_spec(spec)
+    impl = paths.BENCHMARKS / spec.relative_path / f"{spec.module_name}_dace.py"
+    # The SDFG speaks the emitted spelling; the ABI order and the published binding speak the manifest's.
+    renames = generated_renames(impl)
+    emitted_args = [renames.get(arg.name, arg.name) for arg in native.args]
+    abi_args = [*emitted_args, WORKSPACE_NAME, WORKSPACE_SIZE_NAME]
+    bind_pinned_config(sdfg, spec.pinned_config)
+    outputs = [renames.get(name, name) for name in spec.output_args]
+    drop_returned_arguments(sdfg, abi_args, outputs, returned_slots(impl, spec.func_name))
+    by_value = [renames.get(arg.name, arg.name) for arg in native.args if arg.kind == "scalar"]
+    privatize_rebound_arguments(sdfg, [name for name in by_value if name not in outputs])
+    forced = force_abi_symbols(sdfg, emitted_args)
+    sdfg.name = native.symbol  # pyright: ignore[reportAttributeAccessIssue] -- dace's SDFG.name is a Property descriptor the checker sees as read-only
     # The device form is the hip dialect, a host unit and a device unit; --language only picks between the two HOST
     # spellings of a cpu form.
     emitted = DEVICE_LANGUAGE if target == "gpu" else language
     try:
-        rendering = render(sdfg, language=emitted, order=abi_args)
+        signature = EntrySignature(abi_args, workspace=WORKSPACE_NAME, workspace_size=WORKSPACE_SIZE_NAME)
+        rendering = render(sdfg, language=emitted, signature=signature, check_compiles=False)
+        code = exact_abi_signature(
+            rendering.code, native.symbol, abi_parameters(native, emitted), {v: k for k, v in renames.items()}
+        )
     except ValueError as exc:
-        if abi_args is None:
-            raise
         raise ValueError(
-            f"{spec.short_name}: cannot publish a drop-in -- {exc} The judge links this symbol "
+            f"{spec.short_name}: cannot render the C ABI -- {exc} The judge links this symbol "
             f"and would call it with its arguments shifted."
         ) from exc
-    binding = binding_for(rendering, spec.short_name, sdfg.name)
-    if renames and abi_args is not None:
-        manifest = {emitted_name: name for name, emitted_name in renames.items()}
-        args = tuple(dataclasses.replace(arg, name=manifest.get(arg.name, arg.name)) for arg in binding.args)
-        binding = dataclasses.replace(binding, args=args)
-        abi_args = [manifest.get(name, name) for name in abi_args]
+    # Compiled once, after the respelling: the stub's ``const`` on a scalar refuses a body that writes it.
+    for unit in filter(None, (code, rendering.device_code)):
+        compile_check(unit, native.symbol, dialect_for(emitted))
     return RenderedForm(
         # The gpu host unit is the C++ entry the GPU build contract names (agent/gpu-build.md).
-        name=f"{base}.{LANGUAGE_EXT['c++' if target == 'gpu' else emitted]}",
-        code=clean_form(rendering.code, forced),
-        binding=json.dumps(binding.to_json(), indent=2),
-        entry=sdfg.name,
-        abi_order=tuple(abi_args) if abi_args is not None else None,
+        name=f"{short}_{fptype_tag(precision)}_cpf.{LANGUAGE_EXT['c++' if target == 'gpu' else emitted]}",
+        code=clean_form(code, forced),
+        binding=json.dumps(native.to_json(), indent=2),
+        entry=native.symbol,
         forced=forced,
-        lines=rendering.code.count("\n") + rendering.device_code.count("\n") + 1,
+        lines=code.count("\n") + rendering.device_code.count("\n") + 1,
         device_code=clean_form(rendering.device_code, forced) if rendering.device_code else "",
     )
 
@@ -606,7 +536,6 @@ def render_sdfg(
     language: str,
     precision: str,
     target: str = "cpu",
-    dropin: bool = False,
 ) -> dict[str, Any]:
     """Steps 1-4 for one kernel, in THIS process, written straight to ``out_dir``. Returns the verdict record.
 
@@ -624,12 +553,10 @@ def render_sdfg(
         rec.update(parsed)
         return rec
     canonicalize_for(parsed, target)
-    form = render_canonical(spec, short_for(numpy_py), parsed, language, precision, target, dropin)
-    if form.abi_order is not None:
-        rec["canonical_entry"] = form.entry
-        rec["abi_order"] = list(form.abi_order)
-        if form.forced:
-            rec["forced_abi_symbols"] = list(form.forced)
+    form = render_canonical(spec, short_for(numpy_py), parsed, language, precision, target)
+    rec["entry"] = form.entry
+    if form.forced:
+        rec["forced_abi_symbols"] = list(form.forced)
     out_dir.mkdir(parents=True, exist_ok=True)
     for role, name, text in form.artefacts():
         (out_dir / name).write_text(text)
@@ -649,22 +576,20 @@ def bridge_digest() -> str:
     ).hexdigest()
 
 
-def render_options(spec: BenchSpec, language: str, precision: str, target: str, mode: str) -> dict[str, object]:
+def render_options(spec: BenchSpec, language: str, precision: str, target: str) -> dict[str, object]:
     """Every input besides the SDFG and dace that decides one artefact's text, for its cache key."""
-    options: dict[str, object] = {
+    dialect = DEVICE_LANGUAGE if target == "gpu" else language
+    native = binding_from_spec(spec)
+    return {
         "kernel": spec.short_name,
-        "language": DEVICE_LANGUAGE if target == "gpu" else language,
+        "language": dialect,
         "precision": fptype_tag(precision),
         "target": target,
-        "mode": mode,
         "bridge": bridge_digest(),
         "dace_env": cpf_canonical.dace_environment(),
+        "entry": native.symbol,
+        "signature": list(abi_parameters(native, dialect)),
     }
-    if mode == "dropin":
-        native = binding_from_spec(spec)
-        options["entry"] = native.symbol
-        options["abi_order"] = [arg.name for arg in native.args] + [WORKSPACE_NAME, WORKSPACE_SIZE_NAME]
-    return options
 
 
 def dace_root() -> pathlib.Path:
@@ -684,7 +609,7 @@ def prerender_sdfg(
     dace_commit: str,
     expected_root: pathlib.Path,
 ) -> dict[str, Any]:
-    """Render every (language, mode) of one kernel whose key is not already a hit, into the cache.
+    """Render every language of one kernel whose key is not already a hit, into the cache.
 
     Every key is known before any parse: a form keys on its canonical SDFG's entry, which keys on the
     generated program and the dace commit. A kernel whose forms all hit is neither parsed nor
@@ -703,45 +628,41 @@ def prerender_sdfg(
     canonical = cpf_canonical.canonical_key(impl, dace_commit, precision, target)
     canonical_rec: dict[str, object] = {"key": canonical}
     rec["canonical"] = canonical_rec
-    plan: dict[tuple[str, str], tuple[str, dict[str, object]]] = {}
+    plan: dict[str, tuple[str, dict[str, object]]] = {}
     for language in languages:
-        for mode in cpf_cache.MODES:
-            options = render_options(spec, language, precision, target, mode)
-            plan[(language, mode)] = (cpf_cache.cache_key(canonical, dace_commit, options), options)
-    print(json.dumps({"plan": {f"{lang}/{mode}": key for (lang, mode), (key, _) in plan.items()}}), flush=True)
+        options = render_options(spec, language, precision, target)
+        plan[language] = (cpf_cache.cache_key(canonical, dace_commit, options), options)
+    print(json.dumps({"plan": {language: key for language, (key, _) in plan.items()}}), flush=True)
 
-    results: dict[str, dict[str, dict[str, object]]] = {language: {} for language in languages}
-    todo: list[tuple[str, str]] = []
-    for (language, mode), (key, _) in plan.items():
+    results: dict[str, dict[str, object]] = {}
+    todo: list[str] = []
+    for language, (key, _) in plan.items():
         if cpf_cache.is_hit(cache_root, key):
-            results[language][mode] = {"key": key, "verdict": "ok", "cached": True}
+            results[language] = {"key": key, "verdict": "ok", "cached": True}
         else:
-            todo.append((language, mode))
+            todo.append(language)
     if todo:
         sdfg, cached = cpf_canonical.canonical_sdfg(spec, impl, canonical, cache_root, precision, target)
         canonical_rec["cached"] = cached
         if isinstance(sdfg, dict):
-            for language, mode in todo:
-                results[language][mode] = {"key": plan[(language, mode)][0], **sdfg}
+            for language in todo:
+                results[language] = {"key": plan[language][0], **sdfg}
         else:
-            for language, mode in todo:
-                key, options = plan[(language, mode)]
+            for language in todo:
+                key, options = plan[language]
                 try:
-                    form = render_canonical(
-                        spec, short_for(numpy_py), sdfg, language, precision, target, mode == "dropin"
-                    )
-                except Exception as exc:  # noqa: BLE001 -- a refusal of one mode must not lose the others
-                    results[language][mode] = {"key": key, **failure(exc)}
+                    form = render_canonical(spec, short_for(numpy_py), sdfg, language, precision, target)
+                except Exception as exc:  # noqa: BLE001 -- a refusal of one language must not lose the others
+                    results[language] = {"key": key, **failure(exc)}
                     continue
                 manifest = {
                     "inputs": {"canonical": canonical, "dace_commit": dace_commit, "options": options},
                     "kernel": spec.short_name,
                     "entry": form.entry,
-                    "abi_order": list(form.abi_order) if form.abi_order is not None else None,
                     "forced_abi_symbols": list(form.forced),
                 }
                 cpf_cache.publish(cache_root, key, manifest, form.artefacts())
-                results[language][mode] = {"key": key, "verdict": "ok", "cached": False}
+                results[language] = {"key": key, "verdict": "ok", "cached": False}
     rec["results"] = results
     return rec
 
@@ -803,7 +724,6 @@ def render_kernel(
     precision: str = "",
     target: str = "cpu",
     timeout: float | None = None,
-    dropin: bool = False,
     extra_env: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Render ``spec``'s kernel to a self-contained TU in ``out_dir``; returns the verdict record.
@@ -825,8 +745,6 @@ def render_kernel(
         cmd += ["--precision", precision]
     if target != "cpu":
         cmd += ["--target", target]
-    if dropin:
-        cmd += ["--dropin"]
     run = run_child(cmd, target, timeout, extra_env)
     if run.timed_out:
         return {
@@ -861,14 +779,12 @@ def prerender_kernel(
     timeout: float | None = None,
     extra_env: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Pre-render one kernel into the cache in a child; returns ``results[language][mode]``.
+    """Pre-render one kernel into the cache in a child; returns ``results[language]``.
 
-    Every (language, mode) gets an outcome, a child that died or timed out included, with the key it
+    Every language gets an outcome, a child that died or timed out included, with the key it
     was rendering whenever the child got as far as printing its plan. ``extra_env`` is added to the
     child's environment only (its temp and build directories), never to this process's.
     """
-    from hpcagent_bench import cpf_cache
-
     cmd = [sys.executable, "-m", __spec__.name, "--kernel", spec.short_name, "--cache", str(cache_root)]
     cmd += ["--dace-commit", dace_commit, "--dace-root", str(dace_package_root), "--target", target]
     for language in languages:
@@ -888,11 +804,7 @@ def prerender_kernel(
         verdict = str(last.get("verdict", "fail"))
         error = str(last.get("error") or f"child exited {run.returncode} with no verdict: {run.tail}")
     results = {
-        language: {
-            mode: {"key": plan.get(f"{language}/{mode}"), "verdict": verdict, "error": error[:400]}
-            for mode in cpf_cache.MODES
-        }
-        for language in languages
+        language: {"key": plan.get(language), "verdict": verdict, "error": error[:400]} for language in languages
     }
     return {
         "kernel": spec.short_name,
@@ -930,7 +842,6 @@ def render_track(
     precision: str = "",
     target: str = "cpu",
     timeout: float | None = None,
-    dropin: bool = False,
     jsonl: os.PathLike[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Render every kernel on ``track``, appending one verdict per line to ``jsonl``.
@@ -942,9 +853,7 @@ def render_track(
     with contextlib.ExitStack() as stack:
         sink = stack.enter_context(pathlib.Path(jsonl).open("a")) if jsonl is not None else None
         for index, spec in enumerate(track_specs(track), start=1):
-            rec = render_kernel(
-                spec, out_dir, language=language, precision=precision, target=target, timeout=timeout, dropin=dropin
-            )
+            rec = render_kernel(spec, out_dir, language=language, precision=precision, target=target, timeout=timeout)
             records.append(rec)
             print(f"[{index}] {rec['kernel']}: {rec['verdict']}", flush=True)
             if sink is not None:
@@ -956,8 +865,7 @@ def render_track(
 def main(argv: list[str] | None = None) -> int:
     """The child: render ONE kernel and print its verdict as a single JSON line.
 
-    ``--out`` renders one language inline; ``--cache`` pre-renders every ``--language`` in both
-    modes into the cache. Every failure mode is a verdict rather than a traceback to stderr, so a
+    ``--out`` renders one language inline; ``--cache`` pre-renders every ``--language`` into the cache. Every failure mode is a verdict rather than a traceback to stderr, so a
     sweep reading stdout learns WHY a kernel did not render without re-running it.
     """
     p = argparse.ArgumentParser(description="render one kernel's SDFG as a self-contained TU")
@@ -969,11 +877,6 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--language", action="append", choices=sorted(LANGUAGE_EXT), help="repeatable with --cache")
     p.add_argument("--precision", default="", help="fp64 (default) / fp32 / fp16")
     p.add_argument("--target", default="cpu", choices=("cpu", "gpu"), help="which specialization to render")
-    p.add_argument(
-        "--dropin",
-        action="store_true",
-        help="render a DROP-IN for the kernel: canonical symbol and ABI, workspace pair, no banner",
-    )
     args = p.parse_args(argv)
     if (args.out is None) == (args.cache is None):
         p.error("give exactly one of --out and --cache")
@@ -1001,9 +904,7 @@ def main(argv: list[str] | None = None) -> int:
                     pathlib.Path(args.dace_root),
                 )
             else:
-                rec = render_sdfg(
-                    spec, numpy_py, pathlib.Path(args.out), languages[0], args.precision, args.target, args.dropin
-                )
+                rec = render_sdfg(spec, numpy_py, pathlib.Path(args.out), languages[0], args.precision, args.target)
         except NotImplementedError as exc:  # CPF names the construct it cannot render
             rec["verdict"] = "refused"
             rec["error"] = str(exc)[:400]
