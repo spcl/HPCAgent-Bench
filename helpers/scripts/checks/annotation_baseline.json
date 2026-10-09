@@ -237,7 +237,7 @@
  "tests/test_promote_unsubmitted.py": 61,
  "tests/test_promote_unsubmitted_live.py": 26,
  "tests/test_prompt_config.py": 3,
- "tests/test_prompt_contract_consistency.py": 9,
+ "tests/test_prompt_contract_consistency.py": 8,
  "tests/test_prompt_hints.py": 13,
  "tests/test_prompt_skills.py": 19,
  "tests/test_prompt_variants.py": 12,
