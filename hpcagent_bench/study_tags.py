@@ -30,11 +30,9 @@ from hpcagent_bench.vocabulary import (
     KINDS,
     MODELS,
     PACKETS,
-    RETIRED_FRAMEWORKS,
     ModelEntry,
     PacketDef,
     check_vocabulary,
-    framework_slots,
 )
 
 __all__ = [
@@ -54,7 +52,6 @@ __all__ = [
     "Registry",
     "baselines_of",
     "canonical",
-    "control_setups_of",
     "dash_spellings",
     "display_name",
     "experiments_of",
@@ -163,9 +160,6 @@ class Registry:
     study_baselines: dict[str, "BaselineSpec"]
     #: kind -> {spelling: the tag it names}, so an alias never takes its own colour slot.
     aliases: dict[str, Names]
-    #: ``track/device/language`` -> {"setup": template on ``{model}``, <model>: that model's own setup}:
-    #: the one control setup a treatment on such a kernel pairs against (:func:`control_setups_of`).
-    control_setups: dict[str, dict[str, str]] = dataclasses.field(default_factory=dict[str, dict[str, str]])
     #: study -> the run-root prefixes its fused owed waves write (:func:`owed_run_roots_of`).
     owed_run_roots: dict[str, tuple[str, ...]] = dataclasses.field(default_factory=dict[str, tuple[str, ...]])
 
@@ -206,11 +200,6 @@ def baselines_of(raw: object) -> dict[str, BaselineSpec]:
     return out
 
 
-def control_setups_of(raw: object) -> dict[str, dict[str, str]]:
-    """The ``track/device/language`` -> baseline-setup block, every key and value forced to text."""
-    return {str(key): {str(k): str(v) for k, v in as_block(entry).items()} for key, entry in as_block(raw).items()}
-
-
 def owed_run_roots_of(raw: object) -> dict[str, tuple[str, ...]]:
     """The study -> owed run-root prefixes block, every value forced to text."""
     return {str(key): tuple(str(p) for p in as_list(entry)) for key, entry in as_block(raw).items()}
@@ -237,9 +226,7 @@ def registered(kind: str) -> Names:
     """``{key: display name}`` of a vocabulary kind, in slot order (the no-packet control first)."""
     block = KINDS[kind]
     if kind == "frameworks":
-        shown = {key: meta["display"] for key, meta in block.entries.items()} | RETIRED_FRAMEWORKS.entries
-        slots = framework_slots()
-        return {key: shown[key] for key in sorted(shown, key=slots.__getitem__)}
+        return {key: block.entries[key]["display"] for key in block}
     return {
         key: block.entries[key] if isinstance(block.entries[key], str) else block.entries[key].name for key in block
     }
@@ -271,7 +258,6 @@ def registry() -> Registry:
         dropped_setups=str(doc.get("dropped_setups", "")),
         study_baselines=baselines_of(doc.get("study_baselines")),
         aliases={kind: dict(block.aliases) for kind, block in KINDS.items()},
-        control_setups=control_setups_of(doc.get("control_setups")),
         owed_run_roots=owed_run_roots_of(doc.get("owed_run_roots")),
     )
 
@@ -280,8 +266,6 @@ def slot(kind: str, tag: str) -> int | None:
     """The slot ``tag`` takes within ``kind``: the explicit ``order`` of a vocabulary kind, else (the yaml
     kinds) its position; ``None`` for an unregistered tag and for the no-packet control."""
     resolved = canonical(kind, tag)
-    if kind == "frameworks":
-        return framework_slots().get(resolved)
     block = KINDS.get(kind)
     if block is not None:
         return block.orders.get(resolved)

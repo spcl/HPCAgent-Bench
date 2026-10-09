@@ -38,7 +38,6 @@ __all__ = [
     "OPTIMIZERS",
     "PACKETS",
     "PACKET_DEVICES",
-    "RETIRED_FRAMEWORKS",
     "FrameworkMeta",
     "ModelEntry",
     "PacketDef",
@@ -46,7 +45,6 @@ __all__ = [
     "device",
     "framework",
     "framework_meta",
-    "framework_slots",
     "harness",
     "language",
     "llm",
@@ -54,7 +52,6 @@ __all__ = [
     "optimizer",
     "packet",
     "packet_def",
-    "retired_framework",
 ]
 
 
@@ -203,14 +200,6 @@ FRAMEWORKS = Kind(
     },
     framework_meta,
 )
-#: A column no setup builds any more, kept so a recorded row still resolves to a name and its hue slot is
-#: never reused (a removal would repaint every figure already drawn). It shares the slot namespace of
-#: :data:`FRAMEWORKS`; see :func:`framework_slots`.
-RETIRED_FRAMEWORKS = Kind(
-    "retired frameworks",
-    {"display": Field(str, doc="the name a figure prints"), "reason": Field(str, doc="why it was retired")},
-    lambda key, attrs: attrs["display"],
-)
 OPTIMIZERS = Kind("optimizers", {"name": NAME}, named)
 HARNESSES = Kind("harnesses", {"name": NAME}, named)
 LANGUAGES = Kind("languages", {"name": NAME}, named)
@@ -310,19 +299,6 @@ def framework(key: str, *, order: int | None, aliases: Iterable[str] = ()) -> Ca
     return FRAMEWORKS.register(key, order=order, aliases=aliases)
 
 
-def retired_framework(key: str, *, order: int) -> Callable[[type], type]:
-    """Register a framework column no setup builds any more. The class must provide ``display`` and ``reason`` (str).
-    The key keeps its hue slot and resolves to its name for rows already recorded."""
-    return RETIRED_FRAMEWORKS.register(key, order=order)
-
-
-def framework_slots() -> dict[str, int]:
-    """Every framework key, live and retired, with its hue slot."""
-    slots = {key: order for key, order in RETIRED_FRAMEWORKS.orders.items() if order is not None}
-    slots.update({key: order for key, order in FRAMEWORKS.orders.items() if order is not None})
-    return slots
-
-
 #: The devices a packet's ``device`` may name: whose tools its pages teach.
 PACKET_DEVICES = frozenset({"", "cpu", "amd", "nvidia"})
 
@@ -335,9 +311,6 @@ def check_vocabulary() -> None:
         slotless = sorted(key for key, order in kind.orders.items() if order is None and (kind is not PACKETS or key))
         if slotless:
             raise RegistryError(f"{kind.name}: {slotless} have no order, so no colour or marker slot")
-    taken = [order for kind in (FRAMEWORKS, RETIRED_FRAMEWORKS) for order in kind.orders.values()]
-    if len(taken) != len(set(taken)) or set(FRAMEWORKS.entries) & set(RETIRED_FRAMEWORKS.entries):
-        raise RegistryError("frameworks: a live and a retired column share a name or a hue slot")
     for base in {meta["base"] for meta in FRAMEWORKS.entries.values()}:
         adapters = {meta["adapter"] for meta in FRAMEWORKS.entries.values() if meta["base"] == base}
         if len(adapters) != 1:
