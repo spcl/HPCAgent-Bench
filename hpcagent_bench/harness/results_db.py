@@ -8,7 +8,7 @@ number of results files into one by those keys, remapping the ids and filling a 
 another copy of the same row (a final grade's file carries a copy of the grade it re-timed).
 
 A file holding tables of no schema version (the framework sweep's ``results`` table) is merged by
-copying those rows; a legacy results database (``calls``, ``submissions``, ``attempts``) is refused.
+copying those rows.
 """
 
 import contextlib
@@ -18,7 +18,7 @@ import functools
 import hashlib
 import pathlib
 import sqlite3
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Collection, Iterator, Mapping, Sequence
 
 from hpcagent_bench import paths
 
@@ -28,7 +28,6 @@ __all__ = [
     "DEFAULT_HARNESS",
     "GRADE_CHILDREN",
     "GRADE_KEY",
-    "LEGACY_TABLES",
     "NATURAL_KEYS",
     "SCHEMA_PATH",
     "SCHEMA_VERSION",
@@ -72,7 +71,7 @@ SCHEMA_PATH = paths.ROOT / "hpcagent_bench" / "harness" / "schema.sql"
 SCHEMA_VERSION = 6
 #: A judge is threaded and a job's final-grade children write beside it: wait, never fail, on a lock.
 BUSY_TIMEOUT_S = 30.0
-#: The harness a setup that named none ran under: Claude Code, the only harness before the column.
+#: The harness of a setup that names none: Claude Code.
 DEFAULT_HARNESS = "claude"
 #: The tables, parents before children (the order :func:`merge` copies them in).
 TABLES = (
@@ -87,8 +86,6 @@ TABLES = (
     "disqualifications",
     "reference_scaling_points",
 )
-#: Tables only the legacy layout had; a file holding one is refused.
-LEGACY_TABLES = frozenset({"calls", "submissions", "attempts", "submission_cells", "regrade_tasks", "regrades"})
 #: Grade kinds an agent's request produced (the call trajectory), and those that answer a /submit.
 CALL_KINDS = ("score", "submit")
 SUBMIT_KINDS = ("submit", "promoted", "harvested", "probe")
@@ -111,7 +108,7 @@ def column_defaults(table: str) -> dict[str, str]:
 
 
 class SchemaVersionError(ValueError):
-    """A file that is not a results database of the current schema (a legacy one, or another schema version)."""
+    """A results database of another schema version."""
 
 
 def schema_version(conn: sqlite3.Connection) -> int:
@@ -126,14 +123,11 @@ def table_names(conn: sqlite3.Connection, schema: str = "main") -> set[str]:
 
 def check_schema(conn: sqlite3.Connection, where: str) -> bool:
     """Whether ``conn`` holds the current schema; ``False`` for a file with no results tables at all.
-    Raises :class:`SchemaVersionError` for a legacy or foreign-version results database."""
-    names = table_names(conn)
-    if names & LEGACY_TABLES:
-        raise SchemaVersionError(f"{where} is a legacy results database (only the current schema is read)")
+    Raises :class:`SchemaVersionError` for a results database of another schema version."""
     version = schema_version(conn)
     if version == SCHEMA_VERSION:
         return True
-    if version or names & set(TABLES):
+    if version or table_names(conn) & set(TABLES):
         raise SchemaVersionError(f"{where} has results schema version {version}, not {SCHEMA_VERSION}")
     return False
 
@@ -389,8 +383,6 @@ def merge_one(conn: sqlite3.Connection, path: pathlib.Path) -> dict[str, int]:
     conn.execute("ATTACH DATABASE ? AS src", (f"{path.as_uri()}?mode=ro",))
     try:
         names = table_names(conn, "src")
-        if names & LEGACY_TABLES:
-            raise SchemaVersionError(f"{path} is a legacy results database (only the current schema is read)")
         version = int(conn.execute("PRAGMA src.user_version").fetchone()[0])
         copied: dict[str, int] = {}
         ids = IdMap()
@@ -495,18 +487,20 @@ def final_row_groups(rows: Sequence[tuple[int, str, int]], on_change: ProtocolCh
     return list(groups.values())
 
 
-def collapse_finals(conn: sqlite3.Connection, apart: str, on_change: ProtocolChange = ProtocolChange.NEW_ROW) -> int:
+def collapse_finals(
+    conn: sqlite3.Connection, apart: Collection[str], on_change: ProtocolChange = ProtocolChange.NEW_ROW
+) -> int:
     """Rewrite each submission's ``final`` rows into one row per protocol (:func:`final_row_groups`).
 
     A group's winner's values (cells and every child included) move into its oldest row id; the group's other
-    rows and their children go. Rows stamped ``apart`` (the A/A calibration, never a grade) are left alone.
-    Returns the rows removed; the caller commits."""
+    rows and their children go. Rows stamped one of ``apart`` (the A/A calibrations, never a grade) are left
+    alone. Returns the rows removed; the caller commits."""
     by_submission: dict[int, list[tuple[int, str, int]]] = {}
     for row_id, of_grade, stamp, ts in conn.execute(
-        "SELECT id, of_grade_id, timing_reduction, ts_ms FROM grades WHERE kind = 'final' "
-        "AND of_grade_id IS NOT NULL AND timing_reduction IS NOT ?",
-        (apart,),
+        "SELECT id, of_grade_id, timing_reduction, ts_ms FROM grades WHERE kind = 'final' AND of_grade_id IS NOT NULL"
     ):
+        if stamp in apart:
+            continue
         by_submission.setdefault(int(of_grade), []).append((int(row_id), str(stamp or ""), int(ts)))
     columns = [str(row[1]) for row in conn.execute("PRAGMA table_info(grades)") if row[1] != "id"]
     removed = 0

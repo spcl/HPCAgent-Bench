@@ -16,8 +16,9 @@ import sqlite3
 
 import pytest
 
+from hpcagent_bench import protocols
 from hpcagent_bench.anticheat import Judgement
-from hpcagent_bench.harness import grade_under, metric, recording, scaling_grade
+from hpcagent_bench.harness import grade_under, metric, recording, scaling_grade, scoring
 from hpcagent_bench.harness.envelope import Submission
 from hpcagent_bench.harness.mpi_sizing import ScalingLaw
 from hpcagent_bench.harness.scoring import Score
@@ -342,3 +343,74 @@ def test_a_layout_the_live_route_refuses_is_refused_on_replay_before_any_build(j
     graded = scaling_grade.grade(item)
     assert (graded.status, graded.curves) == (scaling_grade.GradeStatus.REFUSED, ())
     assert "replicates 'x'" in graded.detail, graded.detail
+
+
+def test_grade_under_run_grades_strong_and_weak_scaling_under_the_named_protocol(
+    judge_db: pathlib.Path, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``grade-under run --protocol mw1x10`` in a gang: the sweep times mw1x10's one input with 10 runs a side,
+    records both laws' curves with each P's efficiency (strong T1/(P*TP), weak T1/TP at exact growth) and a
+    ``final`` grade stamped mw1x10; ``apply`` lands both in the DB the worklist came from, after which mw1x10
+    owes nothing there while the credited protocol still does."""
+    monkeypatch.setenv(scaling_grade.GANG_NODELIST_ENV, GANG)
+    monkeypatch.setattr(scaling_grade, "distribution_refusal", lambda *args: None)
+    item = stored_item(judge_db, hip_submission())
+    item = dataclasses.replace(item, scaling=SWEEP._replace(rank_counts=(1, 2, 4)))
+    measured = {
+        ScalingLaw.STRONG: {1: 100_000, 2: 62_500, 4: 40_000},
+        ScalingLaw.WEAK: {1: 100_000, 2: 125_000, 4: 160_000},
+    }
+    asked: list[tuple[int, int]] = []
+
+    def swept(
+        submission: Submission, task: Task, *, repeat: int, inputs: list, **kwargs: object
+    ) -> tuple[Score, tuple[metric.LawCurve, ...]]:
+        asked.append((len(inputs), repeat))
+        cells = tuple(
+            scoring.TimedCell(
+                str(cell["label"]), "{}", 2000.0, 1000.0, 2.0, baseline="torch-autotune", timing_reduction="mwd-v2"
+            )
+            for cell in inputs
+        )
+        score = dataclasses.replace(verified_score(), cells=cells, baseline_policy="single-v1:torch-autotune")
+        curves = tuple(
+            metric.LawCurve(
+                law,
+                metric.scaling_score(KERNEL, law, 100_000, times, work_exponent=1),
+                (),
+                (),
+                {"mode": law.value},
+                str(inputs[0]["label"]),
+            )
+            for law, times in measured.items()
+        )
+        return score, curves
+
+    monkeypatch.setattr(metric, "score_ml_distributed", swept)
+    worklist, out = tmp_path / "worklist.jsonl", tmp_path / "out"
+    grade_under.write_items(worklist, [item])
+    run = ["run", "--worklist", str(worklist), "--shard", "0", "--shards", "1", "--out-dir", str(out)]
+    assert grade_under.main([*run, "--protocol", "mw1x10", "--no-torch-dist"]) == 0
+    assert asked == [(1, 10)]
+    assert grade_under.main(["apply", "--into", str(judge_db), str(out)]) == 0
+
+    with contextlib.closing(sqlite3.connect(judge_db)) as conn:
+        laws = conn.execute(
+            "SELECT s.mode, s.status, p.ranks, round(p.efficiency, 6) FROM scaling_grades s "
+            "JOIN scaling_points p USING (grade_id, mode, input) ORDER BY s.mode, p.ranks"
+        ).fetchall()
+        finals = conn.execute(
+            "SELECT g.timing_reduction, g.credited_speedup, count(c.cell) FROM grades g "
+            "JOIN grade_cells c ON c.grade_id = g.id WHERE g.kind = 'final' GROUP BY g.id"
+        ).fetchall()
+    assert laws == [
+        ("strong", "graded", 1, 1.0),
+        ("strong", "graded", 2, 0.8),
+        ("strong", "graded", 4, 0.625),
+        ("weak", "graded", 1, 1.0),
+        ("weak", "graded", 2, 0.8),
+        ("weak", "graded", 4, 0.625),
+    ]
+    assert finals == [("mw1x10", 2.0, 1)]
+    graded_by = {stamp: grade_under.final_graded(judge_db, protocols.PROTOCOLS[stamp]) for stamp in ("mw1x10", "mw4x5")}
+    assert graded_by == {"mw1x10": {item.grade_id}, "mw4x5": frozenset()}

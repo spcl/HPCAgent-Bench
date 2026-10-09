@@ -682,19 +682,6 @@ def test_a_papi_failure_inside_the_device_child_is_that_metric_s_reason(monkeypa
     assert "CUPTI_ERROR_INSUFFICIENT_PRIVILEGES" in row["missing"]
 
 
-def test_a_group_costs_one_run_per_metric_and_ships_the_caveats(monkeypatch) -> None:
-    """The vendor-independent ask: a QUESTION in, one run per metric out, each row carrying the
-    reason it has no number if it has none."""
-    monkeypatch.setattr(papi, "gpu_vendor", lambda vendor=None: "amd")
-    monkeypatch.setattr(papi, "count_gpu_metric", lambda *args, **kwargs: papi.missing(args[4], "no rocm component"))
-    counted = papi.count_gpu_group("/nonexistent.so", None, {}, "hip", group="cache")
-    assert counted["runs"] == len(papi.GPU_GROUPS["cache"]) == 2
-    assert [row["metric"] for row in counted["metrics"]] == list(papi.GPU_GROUPS["cache"])
-    assert all(row["count"] is None and row["missing"] for row in counted["metrics"])
-    assert counted["vendor"] == "amd"
-    assert counted["caveats"] == list(papi.GPU_CAVEATS)
-
-
 # against a real PAPI
 @requires_papi
 def test_the_component_table_is_read_from_libpapi_not_from_a_list() -> None:

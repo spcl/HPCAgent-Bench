@@ -44,16 +44,11 @@ KEY = ("run", "column", "kernel", "preset", "datatype")
 
 
 def connect(path: pathlib.Path) -> sqlite3.Connection:
-    """``path`` with the table present, every :data:`SCHEMA` column an older table lacks added (each is
-    nullable, so ``ALTER TABLE ADD COLUMN`` needs no default), and the key index."""
+    """``path`` with the table and its key index present."""
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path, timeout=60.0)
     conn.row_factory = sqlite3.Row
     conn.execute(f"CREATE TABLE IF NOT EXISTS {TABLE} ({', '.join(f'{n} {t}' for n, t in SCHEMA)})")
-    present = {row[1] for row in conn.execute(f"PRAGMA table_info({TABLE})")}
-    for name, sqltype in SCHEMA:
-        if name not in present:
-            conn.execute(f"ALTER TABLE {TABLE} ADD COLUMN {name} {sqltype}")
     conn.execute(f"CREATE UNIQUE INDEX IF NOT EXISTS ux_{TABLE}_row ON {TABLE}({', '.join(KEY)})")
     return conn
 
