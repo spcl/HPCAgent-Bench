@@ -1,0 +1,4 @@
+# The hpcagent spack overlay: package subclasses the images register ahead of builtin (repos.yaml).
+repo:
+  namespace: hpcagent
+  api: v2.2

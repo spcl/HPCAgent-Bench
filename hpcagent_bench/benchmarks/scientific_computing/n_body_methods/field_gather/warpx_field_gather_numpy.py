@@ -37,9 +37,8 @@ parallel and bit-identical at any schedule. That is exactly the batching axis
 NumPy vectorizes over here -- the whole particle set is gathered in one call,
 geometry/order/Galerkin/mode-count dispatched ONCE (they are single scalars for
 the whole call, not per particle), with the (order+1)-wide stencil taps still
-walked as Python loops -- now each tap is one array op over every particle, in
-the same iz/ix/iy accumulation order the scalar version used, so the per-particle
-sum is unchanged bit for bit.
+walked as Python loops -- each tap is one array op over every particle, in the
+scalar iz/ix/iy accumulation order, so the per-particle sum matches it bit for bit.
 """
 
 import numpy as np

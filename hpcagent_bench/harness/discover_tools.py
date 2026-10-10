@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """Probe the host for the compilers + libraries hpcagent_bench/agent-bench can use; stdlib-only detection."""
 
 import argparse
 import functools
-import glob
 import json
 import os
 import pathlib
@@ -16,18 +15,48 @@ import shutil
 import subprocess
 import sys
 from collections.abc import Callable
-from typing import TypeAlias, TypedDict, cast
+from typing import TypedDict, cast
 
 import yaml
 
-_PKG = pathlib.Path(__file__).resolve().parent.parent  # the hpcagent_bench/ package dir
-TOOLSET = _PKG / "envs" / "toolset.yaml"
+from hpcagent_bench.spec import as_block
+
+__all__ = [
+    "DETECTORS",
+    "PKG",
+    "TARGETS",
+    "TOOLSET",
+    "VERSION_RE",
+    "DetectResult",
+    "Evidence",
+    "PlatformInfo",
+    "Report",
+    "ToolEntry",
+    "ToolSpec",
+    "accel_roots",
+    "as_block",
+    "detect_binary",
+    "detect_header",
+    "detect_library",
+    "detect_platform",
+    "discover",
+    "include_dirs",
+    "ldconfig_index",
+    "lib_dirs",
+    "linux_distro",
+    "main",
+    "missing_for_target",
+    "print_human",
+]
+
+PKG = pathlib.Path(__file__).resolve().parent.parent  # the hpcagent_bench/ package dir
+TOOLSET = PKG / "envs" / "toolset.yaml"
 TARGETS = ("cpu", "nvidia", "amd")
-_VERSION_RE = re.compile(r"\d+(?:\.\d+)+")
+VERSION_RE = re.compile(r"\d+(?:\.\d+)+")
 
 #: One ``toolset.yaml`` tool entry as the loader hands it over. A YAML mapping proves nothing about
 #: its values, so they stay ``object`` until :func:`_as_list` converts the one being read.
-ToolSpec: TypeAlias = "dict[str, object]"
+type ToolSpec = dict[str, object]
 
 
 class PlatformInfo(TypedDict):
@@ -72,15 +101,6 @@ class Report(TypedDict):
     categories: dict[str, dict[str, ToolEntry]]
 
 
-def as_block(raw: object) -> dict[str, object]:
-    """One YAML mapping, keyed by text, with the weakest TRUE statement about its values.
-
-    ``isinstance(raw, dict)`` proves it is a mapping and nothing about what is in it, so every
-    value stays ``object`` until it is converted. A node that is not a mapping reads as empty.
-    """
-    return {str(k): v for k, v in cast("dict[object, object]", raw).items()} if isinstance(raw, dict) else {}
-
-
 def detect_platform() -> PlatformInfo:
     sysname = platform.system()  # Linux / Darwin / Windows
     info: PlatformInfo = {"system": sysname.lower(), "machine": platform.machine(), "wsl": False, "distro": ""}
@@ -93,13 +113,13 @@ def detect_platform() -> PlatformInfo:
             info["wsl"] = "microsoft" in rel
         except OSError:
             pass
-        info["distro"] = _linux_distro()
+        info["distro"] = linux_distro()
     else:
         info["distro"] = sysname.lower()
     return info
 
 
-def _linux_distro() -> str:
+def linux_distro() -> str:
     try:
         release = pathlib.Path("/etc/os-release").read_text()
     except OSError:
@@ -114,43 +134,38 @@ def _linux_distro() -> str:
     return f"{name} {ver}".strip()
 
 
-def _accel_roots() -> list[str]:
+def accel_roots() -> list[str]:
     """CUDA + ROCm roots (which are usually NOT on the default loader path)."""
-    roots: list[str] = []
-    for env in ("CUDA_HOME", "CUDA_PATH", "CUDA_ROOT"):
-        if os.environ.get(env):
-            roots.append(os.environ[env])
-    roots += sorted(glob.glob("/usr/local/cuda*"), reverse=True)
-    for env in ("ROCM_PATH", "ROCM_HOME", "HIP_PATH"):
-        if os.environ.get(env):
-            roots.append(os.environ[env])
-    roots += sorted(glob.glob("/opt/rocm*"), reverse=True)
-    return [r for r in roots if os.path.isdir(r)]
+    roots = [os.environ[env] for env in ("CUDA_HOME", "CUDA_PATH", "CUDA_ROOT") if os.environ.get(env)]
+    roots += sorted((str(path) for path in pathlib.Path("/usr/local").glob("cuda*")), reverse=True)
+    roots += [os.environ[env] for env in ("ROCM_PATH", "ROCM_HOME", "HIP_PATH") if os.environ.get(env)]
+    roots += sorted((str(path) for path in pathlib.Path("/opt").glob("rocm*")), reverse=True)
+    return [r for r in roots if pathlib.Path(r).is_dir()]
 
 
 @functools.lru_cache(maxsize=1, typed=True)
-def _lib_dirs() -> list[str]:
+def lib_dirs() -> list[str]:
     dirs = ["/usr/lib", "/usr/local/lib", "/lib", "/usr/lib64", "/lib64", "/opt/homebrew/lib", "/usr/local/opt"]
-    dirs += [os.path.join(r, sub) for r in _accel_roots() for sub in ("lib", "lib64", "targets/x86_64-linux/lib")]
+    dirs += [str(pathlib.Path(r, sub)) for r in accel_roots() for sub in ("lib", "lib64", "targets/x86_64-linux/lib")]
     dirs += [p for p in os.environ.get("LD_LIBRARY_PATH", "").split(os.pathsep) if p]
-    return [d for d in dirs if os.path.isdir(d)]
+    return [d for d in dirs if pathlib.Path(d).is_dir()]
 
 
 @functools.lru_cache(maxsize=1, typed=True)
-def _include_dirs() -> list[str]:
+def include_dirs() -> list[str]:
     dirs = ["/usr/include", "/usr/local/include", "/opt/homebrew/include"]
-    dirs += [os.path.join(r, "include") for r in _accel_roots()]
+    dirs += [str(pathlib.Path(r, "include")) for r in accel_roots()]
     dirs += [p for p in os.environ.get("CPATH", "").split(os.pathsep) if p]
-    return [d for d in dirs if os.path.isdir(d)]
+    return [d for d in dirs if pathlib.Path(d).is_dir()]
 
 
 @functools.lru_cache(maxsize=1, typed=True)
-def _ldconfig_index() -> dict[str, str]:
+def ldconfig_index() -> dict[str, str]:
     """soname -> path map from `ldconfig -p` (Linux glibc only; empty elsewhere)."""
     if not shutil.which("ldconfig"):
         return {}
     try:
-        out = subprocess.run(["ldconfig", "-p"], capture_output=True, text=True, timeout=10).stdout
+        out = subprocess.run(["ldconfig", "-p"], capture_output=True, text=True, timeout=10, check=False).stdout
     except (OSError, subprocess.SubprocessError):
         return {}
     index: dict[str, str] = {}
@@ -167,11 +182,11 @@ def _ldconfig_index() -> dict[str, str]:
 def _run_version(cmd: str, args: list[str] | None) -> str | None:
     for a in args or []:
         try:
-            r = subprocess.run([cmd, a], capture_output=True, text=True, timeout=10)
+            r = subprocess.run([cmd, a], capture_output=True, text=True, timeout=10, check=False)
         except (OSError, subprocess.SubprocessError):
             continue
         text = (r.stdout or "") + (r.stderr or "")
-        m = _VERSION_RE.search(text)
+        m = VERSION_RE.search(text)
         if m:
             return m.group(0)
     return None
@@ -204,28 +219,28 @@ def detect_library(spec: ToolSpec) -> DetectResult:
     if shutil.which("pkg-config"):
         for pc in _as_list(spec.get("pkgconfig", [])):
             try:
-                if subprocess.run(["pkg-config", "--exists", pc], timeout=10).returncode == 0:
+                if subprocess.run(["pkg-config", "--exists", pc], timeout=10, check=False).returncode == 0:
                     ver = subprocess.run(
-                        ["pkg-config", "--modversion", pc], capture_output=True, text=True, timeout=10
+                        ["pkg-config", "--modversion", pc], capture_output=True, text=True, timeout=10, check=False
                     ).stdout.strip()
                     return {"found": True, "via": f"pkg-config:{pc}", "version": ver or None}
             except (OSError, subprocess.SubprocessError):
                 pass
     # 2) shared object on the loader path / accel lib dirs
-    ld = _ldconfig_index()
+    ld = ldconfig_index()
     for so in _as_list(spec.get("soname", [])):
         for known, path in ld.items():
             if known == so or known.startswith(so + "."):
                 return {"found": True, "via": "ldconfig", "path": path}
-        for d in _lib_dirs():
-            hits = glob.glob(os.path.join(d, so)) + glob.glob(os.path.join(d, so + ".*"))
+        for d in lib_dirs():
+            hits = [str(path) for pattern in (so, so + ".*") for path in pathlib.Path(d).glob(pattern)]
             if hits:
-                return {"found": True, "via": "libdir", "path": sorted(hits)[-1]}
+                return {"found": True, "via": "libdir", "path": max(hits)}
     # 3) header on the include path
     for hdr in _as_list(spec.get("header", [])):
-        for d in _include_dirs():
-            if os.path.exists(os.path.join(d, hdr)):
-                return {"found": True, "via": "header", "path": os.path.join(d, hdr)}
+        for d in include_dirs():
+            if (header := pathlib.Path(d, hdr)).exists():
+                return {"found": True, "via": "header", "path": str(header)}
     return {"found": False}
 
 

@@ -21,10 +21,10 @@ different build on different inputs.
   `tool:"opt-report"` (no run, compiler report) are also served.
   `linuxperf`, `papi`, `nsys`, `ncu` and `none` are a 400 naming `rocprofv3`; an unknown value is a 400
   listing the valid tools. No 400 carries a `cause`. `threads` is ignored.
-- An OpenMP-offload submission is `c`/`cpp`/`fortran`, not `hip`. On an offload arm `tool`
+- An OpenMP-offload submission is `c`/`cpp`/`fortran`, not `hip`. On an offload setup `tool`
   defaults to `rocprofv3`, which traces it built with the offload toolchain that grades it.
   `rocprof-compute`, `linuxperf`, `papi`, `none` and `tool:"opt-report"` also serve it; `nsys` and `ncu`
-  are 400s. On a non-offload arm `rocprofv3` and `rocprof-compute` on `c`/`cpp`/`fortran` are 400s.
+  are 400s. On a non-offload setup `rocprofv3` and `rocprof-compute` on `c`/`cpp`/`fortran` are 400s.
 - `reps` omitted is the judge's measured repeat count. Warmup reps are added, every rep is traced,
   and the kill timeout grows with the total, so send a small `reps`.
 - `min_percent` (0-100, tool default 1; outside that range is a 400): kernels below it are dropped
@@ -33,7 +33,7 @@ different build on different inputs.
   Send `0` for complete totals.
 - `residency`: leave it out. On `hip`, `"host"` is read as `device` and `"distributed"` traces
   host-resident pointers. An offload submission is traced the way it is graded: host pointers on
-  a host-pointer offload arm, device pointers on a device-resident (`c-openmp-device`) one. Any other value is a 400.
+  a host-pointer offload setup, device pointers on a device-resident (`c-openmp-device`) one. Any other value is a 400.
 - `counters:true` is refused with `counters_unsupported`.
 
 ## What comes back
@@ -61,9 +61,6 @@ different build on different inputs.
 Null means "not recorded", never 0:
 
 - `total` / `unit`: ALWAYS null on AMD. Copies come back counted and timed, never sized.
-- `min_ns` / `max_ns`: null only under the legacy `rocprof` fallback (`tool` names it), which the
-  route takes only when `rocprofv3` is absent. Under it `memory[]` and `launches[]` come back as
-  EMPTY arrays, not rows of nulls.
 - `warps_per_block`: null when the trace has no GPU agent row with a non-zero `Wave_Front_Size`. The
   width is read, not assumed: NVIDIA's warp is 32, an AMD CDNA wavefront 64, RDNA 32.
 - `shared_memory` and `shared_memory_unit`: null when neither LDS column is present;
@@ -79,7 +76,7 @@ Add ranges only when those rows cannot say which stage of YOUR code a cost belon
 stages dispatch the same kernel, or host work sits between launches.
 
 - Only a `tool:"rocprofv3"` profile build puts ROCTX on the include and link path (`hip`, and
-  `c`/`cpp`/`fortran` on an OpenMP-offload arm). `score` and `submit` builds do not: a source that
+  `c`/`cpp`/`fortran` on an OpenMP-offload setup). `score` and `submit` builds do not: a source that
   still includes the header or calls ROCTX fails to build there. Remove every range before `score`.
 - C/C++: `#include <rocprofiler-sdk-roctx/roctx.h>`, then `roctxRangePush("stage");` before the
   stage and `roctxRangePop();` after it. A pop closes the latest push on that thread.
@@ -127,7 +124,7 @@ inside it: utilization, wavefront occupancy, launch geometry statistics, stalls,
   passes on MI300A) with dispatches serialised, so no number is a time: its nanoseconds never go
   next to `elapsed_ns` or a score. Trace first, then count the kernel the trace named.
 - **Body:** the `score` body plus `"tool":"rocprof-compute"`. `reps` defaults to 1, because every
-  pass repeats every rep. Served for `hip` and, on an offload arm, `c`/`cpp`/`fortran`.
+  pass repeats every rep. Served for `hip` and, on an offload setup, `c`/`cpp`/`fortran`.
 - `kernels[]`, hottest first: `name`, `count`, `total_ns`, `mean_ns`, `median_ns`, `time_pct`, all
   of the replayed run. Compare kernels by `time_pct`, not by the durations.
 - `metrics[]`: `section`, `metric`, `value` (the table's average), `unit`, `min`, `max`, `peak`,
@@ -151,7 +148,6 @@ inside it: utilization, wavefront occupancy, launch geometry statistics, stalls,
 | tool | what it is | NVIDIA analogue |
 | --- | --- | --- |
 | `rocprofv3` | rocprofiler-sdk trace and counter CLI, the one behind this route | CUPTI, ncu's counters |
-| `rocprof` | v1 CLI, deprecated; this route's fallback when `rocprofv3` is absent | -- |
 | `rocprofv2` | older CLI: different flags, different output | -- |
 | `rocprof-sys` (was Omnitrace) | timeline and host sampling | `nsys` |
 | `rocprof-compute` (was Omniperf) | per-kernel counters, roofline | `ncu` |
@@ -175,11 +171,11 @@ temperature millidegC (NVML: degC).
   GPU in one package, host memory device-addressable. An `h2d` / `d2h` row is then a copy within one
   memory, not a link transfer.
 - An OpenMP-offload build's map-clause data movement comes back as `d2d` rows
-  (`MEMORY_COPY_DEVICE_TO_DEVICE`), not `h2d` / `d2h`: measured on an explicit-memory arm, a matrix
+  (`MEMORY_COPY_DEVICE_TO_DEVICE`), not `h2d` / `d2h`: measured on an explicit-memory setup, a matrix
   multiply with three maps and two launches showed 11 `d2d` copies per trace.
 - Under `HSA_XNACK=1` data moves by page migration, which the copy trace does not record: zero copy
   rows beside unexplained kernel time can be migration. The harness sets `HSA_XNACK` only on offload
-  arms (`1` unified memory, `0` explicit); a `hip` trace runs under the judge's own value.
+  setups (`1` unified memory, `0` explicit); a `hip` trace runs under the judge's own value.
 - MI300X is the discrete part with several XCDs, where an `h2d` row is a link transfer; nothing on
   this page was measured on one.
 

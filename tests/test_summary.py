@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The one definition of each statistic every figure in this repo reports.
 
@@ -12,9 +12,19 @@ import math
 
 import numpy as np
 import pytest
-from scipy.stats import wilcoxon
+from scipy import stats
 
-from hpcagent_bench.stats import summary
+from hpcagent_bench.stats import significance, summary
+
+
+def sign_flip(log_ratios: list[float] | np.ndarray) -> significance.Result:
+    """The registered sign-flip paired test, named rather than configured."""
+    return significance.paired(log_ratios, test="sign-flip")
+
+
+def wilcoxon(differences: list[float] | np.ndarray) -> significance.Result:
+    """The registered Wilcoxon paired test (Hodges-Lehmann estimate, signed-rank p), named rather than configured."""
+    return significance.paired(differences, test="wilcoxon")
 
 
 @pytest.mark.parametrize(
@@ -70,7 +80,8 @@ def test_single_point_interval_collapses() -> None:
     """n=1 has no spread to estimate, so the interval is the point -- and must not raise."""
     interval = summary.geomean_ci([5.0])
     assert interval.point == pytest.approx(5.0)
-    assert interval.low == pytest.approx(5.0) and interval.high == pytest.approx(5.0)
+    assert interval.low == pytest.approx(5.0)
+    assert interval.high == pytest.approx(5.0)
     assert interval.n == 1
 
 
@@ -80,43 +91,56 @@ def test_geomean_interval_brackets_the_centre() -> None:
     assert interval.low < interval.point < interval.high
 
 
-def test_the_geomean_interval_is_asymmetric_on_the_ratio_scale() -> None:
-    """exp is not linear, so a symmetric +/- half-width would be wrong on a ratio axis. The ends
-    are equidistant in LOG space and therefore not in ratio space."""
-    interval = summary.geomean_ci([1.5, 3.0, 0.25, 8.0])
-    assert interval.point - interval.low != pytest.approx(interval.high - interval.point)
-    assert math.log(interval.point) - math.log(interval.low) == pytest.approx(
-        math.log(interval.high) - math.log(interval.point)
-    )
+def test_the_geomean_interval_is_the_bootstrap_of_the_mean_log_mapped_back() -> None:
+    """The interval is resampled in LOG space and its ends exponentiated: the bootstrap interval of the mean
+    log, never a +/- half-width on the ratio axis (exp is not linear)."""
+    values = [1.5, 3.0, 0.25, 8.0]
+    interval = summary.geomean_ci(values)
+    logs = summary.bootstrap_ci(np.log(values), np.mean)
+    assert (math.log(interval.low), math.log(interval.high)) == pytest.approx((logs.low, logs.high))
+    assert interval.low < interval.point < interval.high
 
 
-def test_the_geomean_interval_is_the_95_percent_log_t_interval() -> None:
-    """Ratios 1,2,4,1,2,4: log2 values 0,1,2,0,1,2, mean 1, sd sqrt(0.8), t(0.975, 5) = 2.5706.
-    The ends are 2^(1 -/+ 2.5706 * sqrt(0.8/6)) = 1.04345 and 3.83345, by hand."""
-    interval = summary.geomean_ci([1.0, 2.0, 4.0, 1.0, 2.0, 4.0])
-    assert (interval.point, interval.low, interval.high) == pytest.approx((2.0, 1.0434462081689584, 3.833451086107456))
+def test_the_geomean_interval_is_the_95_percent_bca_bootstrap_and_reproducible() -> None:
+    """Ratios 1,2,4,1,2,4: log2 values 0,1,2,0,1,2. Every BCa resample mean is a multiple of 1/6 in log2,
+    and the ends land on 2^(1/3) and 2^(5/3); the fixed seed makes a second call identical."""
+    first = summary.geomean_ci([1.0, 2.0, 4.0, 1.0, 2.0, 4.0])
+    assert (first.point, first.low, first.high) == pytest.approx((2.0, 2.0 ** (1 / 3), 2.0 ** (5 / 3)))
+    assert first.method == "bootstrap-BCa"
+    assert summary.geomean_ci([1.0, 2.0, 4.0, 1.0, 2.0, 4.0]) == first
 
 
 @pytest.mark.parametrize(("n", "has_interval"), [(5, False), (6, True)])
-def test_a_figure_geomean_draws_its_log_t_interval_only_from_six_values(n: int, has_interval: bool) -> None:
-    """Below 6 values the point stays and the interval is withheld; from 6 it is the log-t interval."""
+def test_a_figure_geomean_draws_its_interval_only_from_six_values(n: int, has_interval: bool) -> None:
+    """Below 6 values the point stays and the interval is withheld; from 6 it is the bootstrap interval."""
     interval = summary.geomean_interval([1.0, 2.0, 4.0, 1.0, 2.0, 4.0][:n])
-    assert interval.method == ("log-t" if has_interval else "underpowered")
+    assert interval.method == ("bootstrap-BCa" if has_interval else "underpowered")
     assert math.isfinite(interval.low) == has_interval == math.isfinite(interval.high)
 
 
-def test_the_paired_geomean_is_a_paired_t_test_with_a_log_t_interval() -> None:
-    """The same six log ratios as a paired leg: the same interval, and the paired t p at
-    t = 1 / sqrt(0.8/6) = 2.7386 on 5 degrees of freedom, 0.04086."""
-    change = summary.paired_geomean([math.log(2.0) * value for value in (0, 1, 2, 0, 1, 2)])
-    assert change.method == "paired-t"
-    assert math.exp(change.low) == pytest.approx(1.0434462081689584)
-    assert math.exp(change.high) == pytest.approx(3.833451086107456)
-    assert change.pvalue == pytest.approx(0.040859403859295894)
+def test_the_paired_geomean_is_an_exact_sign_flip_test() -> None:
+    """Six log ratios 0, 1, 2, 0, 1, 2 (x ln 2), mean ln 2. Of the 64 sign vectors, a flipped mean as far from
+    0 as the observed one needs the four nonzero ratios to share a sign: 2 x 4 vectors (the two zeros flip
+    freely), so p = 8/64 = 0.125 by hand. The interval inverts the test, so it holds no change (1x) exactly
+    because p is above 0.05."""
+    change = sign_flip([math.log(2.0) * value for value in (0, 1, 2, 0, 1, 2)])
+    assert change.method == "sign-flip-exact"
+    assert change.pvalue == pytest.approx(8 / 64)
+    assert change.low == pytest.approx(0.0, abs=1e-11)
+    assert change.high > 0.0
+
+
+def test_a_cost_has_an_arithmetic_mean_with_its_own_interval() -> None:
+    """Hoefler and Belli Rule 3: a cost is summarized by its arithmetic mean. One expensive kernel moves it
+    as it moves the bill; the interval is withheld below six values like every other."""
+    interval = summary.mean_interval([100.0, 200.0, 300.0, 400.0, 500.0, 10000.0])
+    assert interval.point == pytest.approx(1916.6666666666667)
+    assert interval.low < interval.point < interval.high
+    assert summary.mean_interval([1.0, 2.0]).method == "underpowered"
 
 
 def test_the_interval_names_what_it_is_for() -> None:
-    assert summary.geomean_ci([2.0, 4.0]).label() == "95% log-t CI for geomean"
+    assert summary.geomean_ci([2.0, 4.0]).label() == "95% bootstrap-BCa CI for geomean"
 
 
 def test_hodges_lehmann_is_the_median_of_the_walsh_averages() -> None:
@@ -130,46 +154,52 @@ def test_paired_change_agrees_with_its_own_test() -> None:
     """The point, the interval and the p value describe ONE quantity, so a significant result
     cannot have an interval covering zero."""
     rng = np.random.default_rng(3)
-    result = summary.paired_change(rng.normal(0.6, 0.4, 30))
+    result = wilcoxon(rng.normal(0.6, 0.4, 30))
     assert result.pvalue < 0.05
-    assert result.low > 0.0 and result.low < result.estimate < result.high
+    assert result.low > 0.0
+    assert result.low < result.estimate < result.high
     assert result.method == "signed-rank-exact"
 
 
 def test_paired_change_uses_the_exact_null_where_one_exists() -> None:
-    """A normal approximation above n=25 was one copy's cutoff and scipy's exact test disagreed
-    with it by 4e-3 in p at n=40. The exact distribution is computed wherever it is available."""
+    """The exact distribution is computed wherever it is available: at n=40 a normal approximation
+    differs from scipy's exact test by 4e-3 in p."""
     rng = np.random.default_rng(7)
     rng.normal(0.2, 1.0, 12)
     rng.normal(0.15, 0.8, 25)
-    result = summary.paired_change(rng.normal(0.15, 0.8, 40))
+    result = wilcoxon(rng.normal(0.15, 0.8, 40))
     assert result.method == "signed-rank-exact"
     assert result.pvalue == pytest.approx(0.18761708125202858)
 
 
 def test_paired_change_drops_zero_differences_from_n() -> None:
     """A zero supports neither direction; keeping it would inflate n and shrink p for free."""
-    result = summary.paired_change([0.0, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
-    assert result.n == 6 and result.ties == 2 and result.wins == 6 and result.losses == 0
+    differences = [0.0, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+    assert wilcoxon(differences).n == 6
+    assert summary.signs(differences) == summary.Signs(wins=6, losses=0, ties=2)
 
 
 def test_paired_change_says_underpowered_instead_of_drawing_an_interval() -> None:
     """Below six pairs the two-sided test cannot reach 0.05 whatever the data says, so an interval
     would be decoration."""
-    result = summary.paired_change([1.0, 2.0, 3.0, 4.0])
+    result = wilcoxon([1.0, 2.0, 3.0, 4.0])
     assert result.method == "underpowered"
-    assert math.isnan(result.low) and math.isnan(result.high) and math.isnan(result.pvalue)
+    assert math.isnan(result.low)
+    assert math.isnan(result.high)
+    assert math.isnan(result.pvalue)
 
 
 def test_paired_change_on_nothing_is_not_an_effect() -> None:
-    result = summary.paired_change([0.0, 0.0, 0.0])
-    assert result.method == "degenerate" and result.estimate == 0.0 and result.pvalue == 1.0
+    result = wilcoxon([0.0, 0.0, 0.0])
+    assert result.method == "degenerate"
+    assert result.estimate == 0.0
+    assert result.pvalue == 1.0
 
 
 def test_a_tied_sample_falls_back_and_says_so() -> None:
     """scipy has no exact null with ties, so the method string has to record the approximation
     rather than let a reader assume the exact test ran."""
-    result = summary.paired_change([0.5] * 8 + [-0.5] * 3)
+    result = wilcoxon([0.5] * 8 + [-0.5] * 3)
     assert result.method == "signed-rank-approx"
 
 
@@ -178,15 +208,15 @@ def test_the_estimator_does_not_change_with_n() -> None:
     beside it. Reporting a plain median there and a Hodges-Lehmann estimate elsewhere puts two
     statistics on one axis, distinguishable only by counting each row's kernels."""
     few = [0.1, 0.9, -0.4]
-    assert summary.paired_change(few).estimate == pytest.approx(summary.hodges_lehmann(few))
-    assert summary.paired_change(few).estimate != pytest.approx(float(np.median(few)))
+    assert wilcoxon(few).estimate == pytest.approx(summary.hodges_lehmann(few))
+    assert wilcoxon(few).estimate != pytest.approx(float(np.median(few)))
 
 
 def test_paired_geomean_is_the_geometric_mean_of_the_paired_ratios() -> None:
-    """An arm comparison is reported as the geomean of its per-kernel ratios, so one kernel at 40x
+    """A setup comparison is reported as the geomean of its per-kernel ratios, so one kernel at 40x
     moves the estimate exactly as it moves that geomean."""
     ratios = [1.05, 1.1, 0.95, 1.2, 0.9, 1.15, 1.02, 40.0]
-    change = summary.paired_geomean([math.log(ratio) for ratio in ratios])
+    change = sign_flip([math.log(ratio) for ratio in ratios])
     assert math.exp(change.estimate) == pytest.approx(summary.geomean(ratios))
 
 
@@ -194,36 +224,40 @@ def test_paired_geomean_is_the_geometric_mean_of_the_paired_ratios() -> None:
 def test_paired_geomean_interval_excludes_no_change_exactly_when_its_test_rejects(shift: float) -> None:
     """The interval and the p value are on the same mean log, so a reader cannot get a starred point
     whose interval crosses 1x, or an interval clear of 1x without a star."""
-    change = summary.paired_geomean(np.random.default_rng(11).normal(shift, 0.5, 25))
+    change = sign_flip(np.random.default_rng(11).normal(shift, 0.5, 25))
     clear_of_zero = change.low > 0.0 or change.high < 0.0
     assert clear_of_zero == (change.pvalue < summary.DEFAULT_ALPHA), (change.low, change.high, change.pvalue)
 
 
 def test_paired_geomean_keeps_the_kernels_that_did_not_change() -> None:
-    """Dropping the zero logs would report the change of the kernels that moved as the arm's change."""
-    change = summary.paired_geomean([0.0, 0.0, 0.0, 0.0, 1.0, 1.0])
-    assert (change.n, change.ties) == (6, 4)
+    """Dropping the zero logs would report the change of the kernels that moved as the setup's change."""
+    logs = [0.0, 0.0, 0.0, 0.0, 1.0, 1.0]
+    change = sign_flip(logs)
+    assert (change.n, summary.signs(logs).ties) == (6, 4)
     assert change.estimate == pytest.approx(1.0 / 3.0)
 
 
 def test_paired_geomean_withholds_interval_and_p_below_the_floor() -> None:
-    change = summary.paired_geomean([0.1] * (summary.MIN_PAIRS_FOR_INTERVAL - 2) + [0.3])
+    change = sign_flip([0.1] * (summary.MIN_PAIRS_FOR_INTERVAL - 2) + [0.3])
     assert change.method == "underpowered"
-    assert math.isnan(change.low) and math.isnan(change.pvalue)
+    assert math.isnan(change.low)
+    assert math.isnan(change.pvalue)
 
 
 def test_paired_geomean_without_spread_reports_no_test() -> None:
     """Every kernel changing by exactly the same ratio has no t statistic; a p of 0 or 1 there would
     enter a correction as a test that never ran."""
-    change = summary.paired_geomean([0.2] * 8)
+    change = sign_flip([0.2] * 8)
     assert change.method == "degenerate"
-    assert change.estimate == pytest.approx(0.2) and math.isnan(change.pvalue)
-    assert math.isnan(change.low) and math.isnan(change.high)
+    assert change.estimate == pytest.approx(0.2)
+    assert math.isnan(change.pvalue)
+    assert math.isnan(change.low)
+    assert math.isnan(change.high)
 
 
 def test_paired_geomean_over_no_pairs_has_no_estimate() -> None:
     """An empty leg is not a 1x ratio: exp(0) would plot as no change."""
-    change = summary.paired_geomean([])
+    change = sign_flip([])
     assert (change.n, change.method) == (0, "degenerate")
     assert math.isnan(change.estimate)
 
@@ -233,34 +267,30 @@ def test_a_paired_change_reports_the_shared_signed_rank_p() -> None:
     before = np.array([10.0, 12.0, 9.0, 14.0, 11.0, 13.0, 10.5, 12.5, 9.5, 15.0])
     after = np.array([9.0, 11.0, 9.5, 12.0, 10.0, 12.0, 9.5, 12.0, 9.0, 13.0])
     expected = summary.signed_rank_test(after - before)[1]
-    assert summary.paired_change(after - before).pvalue == expected
+    assert wilcoxon(after - before).pvalue == expected
 
 
 def test_a_tied_sample_takes_the_corrected_approximation_not_an_exact_count() -> None:
     """The exact null counts subsets of DISTINCT ranks, so on tied differences it is wrong rather than
-    precise. scipy's automatic choice counted exactly there: llr40v11-oss120b-c read p = 0.38052
-    instead of 0.38708."""
+    precise; the tie- and continuity-corrected approximation is the right null there."""
     differences = [0.1, 0.1, 0.2, -0.3, 0.4, 0.4, 0.5, -0.1, 0.6, 0.7]
     _, pvalue, method, n = summary.signed_rank_test(differences)
     assert (method, n) == ("signed-rank-approx", 10)
-    assert pvalue == pytest.approx(float(wilcoxon(differences, method="approx", correction=True).pvalue))
+    assert pvalue == pytest.approx(float(stats.wilcoxon(differences, method="approx", correction=True).pvalue))
 
 
 def test_a_cell_below_the_interval_floor_reports_its_median_without_an_interval() -> None:
     median, low, high, dropped = summary.median_ci([1.0, 2.0, 4.0], drop=False, min_n=summary.MIN_INTERVAL_SAMPLES)
     assert (median, dropped) == (2.0, 0)
-    assert math.isnan(low) and math.isnan(high)
+    assert math.isnan(low)
+    assert math.isnan(high)
 
 
 def test_a_bootstrap_over_log_ratios_keeps_the_negative_values() -> None:
     """A log speedup below zero is a slow-down, not a broken timer reading; cleaning it away would move
-    every interval of a regressing arm toward zero."""
+    every interval of a regressing setup toward zero."""
     logs = [-1.0, -0.8, -0.6, -0.5, -0.4, -0.2, 0.1, 0.3]
     interval = summary.bootstrap_ci(logs, np.median, "median", n_resamples=999, method="percentile")
     assert interval.n == len(logs)
     assert interval.point == pytest.approx(-0.45)
     assert interval.low < interval.point < interval.high
-
-
-def test_a_rank_sum_over_two_identical_samples_finds_no_difference() -> None:
-    assert summary.rank_sum_test([3.0, 3.0, 3.0], [3.0, 3.0, 3.0])[1] == pytest.approx(1.0)

@@ -4,7 +4,7 @@ import numpy as np
 def _as_tuple(value, dims):
     if isinstance(value, tuple):
         return value
-    return tuple((value for _ in range(dims)))
+    return tuple(value for _ in range(dims))
 
 
 def _tap_range(in_size, out_size, stride, padding, dilation, k):

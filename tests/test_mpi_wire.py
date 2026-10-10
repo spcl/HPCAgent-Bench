@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The MPI driver wire format (``hpcagent_bench/harness/mpi_wire.py``).
 
@@ -19,7 +19,7 @@ from hpcagent_bench.support.bindings.stubs import LANGS
 
 
 def _binding(*args) -> Binding:
-    return Binding(kernel="k", config="dense", args=tuple(args), symbols={lang: "k_fp64" for lang in LANGS})
+    return Binding(kernel="k", config="dense", args=tuple(args), symbols=dict.fromkeys(LANGS, "k_fp64"))
 
 
 def _yax_binding() -> Binding:
@@ -34,7 +34,7 @@ def _yax_binding() -> Binding:
 
 def _block0(nranks: int, arrays) -> Descriptor:
     ad = ArrayDist(axes=(AxisDist(grid_dim=0, scheme="block"),))
-    return Descriptor(grid=Grid((nranks,)), arrays={n: ad for n in arrays}, symbol_axes={"N": [("x", 0)]})
+    return Descriptor(grid=Grid((nranks,)), arrays=dict.fromkeys(arrays, ad), symbol_axes={"N": [("x", 0)]})
 
 
 # Infile: tiles, localised scalars, per-rank workspace
@@ -45,7 +45,8 @@ def test_infile_roundtrip_localises_symbol_and_workspace() -> None:
     raw = pack_infile(b, desc, {"x": x, "y": np.zeros(N)}, {"N": N, "a": 2.5}, k_repeats=3, workspace_expr="8*N")
     p = unpack_infile(raw)
 
-    assert p.nranks == R and p.k_repeats == 3
+    assert p.nranks == R
+    assert p.k_repeats == 3
     localNs = [3, 3, 2, 2]
     for r in range(R):
         local_n, a = p.scalar_values[r]
@@ -96,7 +97,8 @@ def test_infile_2d_block_rows() -> None:
     )
     A = np.arange(20.0).reshape(5, 4)
     p = unpack_infile(pack_infile(b, desc, {"A": A}, {"N": 5}, k_repeats=1))
-    assert p.ptrs[0].tiles[0].shape == (3, 4) and p.ptrs[0].tiles[1].shape == (2, 4)
+    assert p.ptrs[0].tiles[0].shape == (3, 4)
+    assert p.ptrs[0].tiles[1].shape == (2, 4)
     assert np.array_equal(np.concatenate(p.ptrs[0].tiles, axis=0), A)
 
 
@@ -114,7 +116,8 @@ def test_infile_dtypes_roundtrip(dtype) -> None:
     A = np.arange(9, dtype=dtype)
     p = unpack_infile(pack_infile(b, desc, {"A": A}, {"N": 9}, k_repeats=1))
     rebuilt = np.concatenate([p.ptrs[0].tiles[r] for r in range(4)])
-    assert rebuilt.dtype == np.dtype(dtype) and np.array_equal(rebuilt, A)
+    assert rebuilt.dtype == np.dtype(dtype)
+    assert np.array_equal(rebuilt, A)
 
 
 def test_infile_rejects_unserialisable_dtype() -> None:
@@ -137,7 +140,8 @@ def test_outfile_roundtrip() -> None:
     assert samples == [0.1, 0.2, 0.3, 0.05]
     dtype, got = outputs[0]
     assert dtype == "float64"
-    assert np.array_equal(got[0], tiles[0]) and np.array_equal(got[1], tiles[1])
+    assert np.array_equal(got[0], tiles[0])
+    assert np.array_equal(got[1], tiles[1])
 
 
 def _full_roundtrip(b, desc, data, scalars, N, kernel, expected, dtype=np.float64) -> None:
@@ -155,7 +159,7 @@ def _full_roundtrip(b, desc, data, scalars, N, kernel, expected, dtype=np.float6
     outputs = [(b.pointers[i].name, b.pointers[i].dtype, per_rank_out[b.pointers[i].name]) for i in out_idx]
     _samples, decoded = unpack_outfile(pack_outfile(desc.grid.nranks, 2, [1.0, 2.0], outputs))
     result = {}
-    for (odtype, tiles), i in zip(decoded, out_idx):
+    for (odtype, tiles), i in zip(decoded, out_idx, strict=False):
         name = b.pointers[i].name
         shaped = [t.reshape(desc.local_shape(name, np.shape(data[name]), r)) for r, t in enumerate(tiles)]
         result[name] = desc.gather(name, shaped, np.shape(data[name]), np.dtype(odtype))

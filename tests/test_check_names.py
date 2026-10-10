@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The leading-underscore guard must catch every binding site the underscore convention covers,
 leave read-only uses and dunders alone, and -- in its default diff mode -- never punish legacy
@@ -14,7 +14,9 @@ import pytest
 
 from hpcagent_bench import paths
 
-SPEC = importlib.util.spec_from_file_location("check_names", paths.ROOT / "tools" / "check_names.py")
+SPEC = importlib.util.spec_from_file_location(
+    "check_names", paths.ROOT / "helpers" / "scripts" / "checks" / "check_names.py"
+)
 check_names = importlib.util.module_from_spec(SPEC)
 sys.modules["check_names"] = check_names
 SPEC.loader.exec_module(check_names)
@@ -54,7 +56,7 @@ BINDING_SITES = [
 ]
 
 
-@pytest.mark.parametrize("source, code", BINDING_SITES)
+@pytest.mark.parametrize(("source", "code"), BINDING_SITES)
 def test_a_leading_underscore_binding_is_flagged_at_its_site(source: str, code: str) -> None:
     assert code in codes_for(source), source
 
@@ -98,7 +100,7 @@ IMPORT_CASES = [
 ]
 
 
-@pytest.mark.parametrize("source, expected_codes", IMPORT_CASES)
+@pytest.mark.parametrize(("source", "expected_codes"), IMPORT_CASES)
 def test_import_alias_patterns_are_judged_by_the_import_specific_codes(source: str, expected_codes: set) -> None:
     assert codes_for(source) == expected_codes, source
 
@@ -112,7 +114,7 @@ MODULE_NAME_CASES = [
 ]
 
 
-@pytest.mark.parametrize("name, forbidden", MODULE_NAME_CASES)
+@pytest.mark.parametrize(("name", "forbidden"), MODULE_NAME_CASES)
 def test_a_module_file_name_starting_with_underscore_is_flagged_unless_dunder(name: str, forbidden: bool) -> None:
     violation = check_names.check_module_name(pathlib.Path(name))
     assert (violation is not None) == forbidden, name
@@ -140,7 +142,7 @@ def test_diff_mode_flags_only_the_newly_added_leading_underscore_line(git_repo: 
     )
     run_git(["add", "mod.py"], git_repo)
     result = subprocess.run(
-        [sys.executable, str(paths.ROOT / "tools" / "check_names.py"), "mod.py"],
+        [sys.executable, str(paths.ROOT / "helpers" / "scripts" / "checks" / "check_names.py"), "mod.py"],
         cwd=git_repo,
         capture_output=True,
         text=True,
@@ -155,7 +157,7 @@ def test_diff_mode_flags_the_module_name_only_for_a_newly_added_file(git_repo: p
     (git_repo / "_brand_new.py").write_text("x = 1\n")
     run_git(["add", "_brand_new.py"], git_repo)
     result = subprocess.run(
-        [sys.executable, str(paths.ROOT / "tools" / "check_names.py"), "_brand_new.py"],
+        [sys.executable, str(paths.ROOT / "helpers" / "scripts" / "checks" / "check_names.py"), "_brand_new.py"],
         cwd=git_repo,
         capture_output=True,
         text=True,
@@ -167,7 +169,7 @@ def test_diff_mode_flags_the_module_name_only_for_a_newly_added_file(git_repo: p
 
 def test_diff_mode_passes_on_a_no_op_commit(git_repo: pathlib.Path) -> None:
     result = subprocess.run(
-        [sys.executable, str(paths.ROOT / "tools" / "check_names.py"), "mod.py"],
+        [sys.executable, str(paths.ROOT / "helpers" / "scripts" / "checks" / "check_names.py"), "mod.py"],
         cwd=git_repo,
         capture_output=True,
         text=True,
@@ -179,7 +181,7 @@ def test_diff_mode_passes_on_a_no_op_commit(git_repo: pathlib.Path) -> None:
 
 def test_all_mode_catches_the_preexisting_leading_underscore_name(git_repo: pathlib.Path) -> None:
     result = subprocess.run(
-        [sys.executable, str(paths.ROOT / "tools" / "check_names.py"), "--all", "mod.py"],
+        [sys.executable, str(paths.ROOT / "helpers" / "scripts" / "checks" / "check_names.py"), "--all", "mod.py"],
         cwd=git_repo,
         capture_output=True,
         text=True,

@@ -6,8 +6,7 @@ import triton.language as tl
 from triton import knobs
 from triton.language.extra import libdevice
 
-from hpcagent_bench.frameworks.triton_framework import tl_float
-from hpcagent_bench.frameworks.triton_utilities import (
+from hpcagent_bench.support.helpers.triton_utilities import (
     derive_launch_arguments,
     use_grid,
     complex_div,
@@ -42,7 +41,8 @@ def generate_config_1d():
         "N": M_real.shape[0],
     }
 )
-@triton.autotune(configs=generate_config_1d(), key=["N"], cache_results=True)
+# restore_value: the factorization overwrites M in place, so the autotuner must restore it between trials.
+@triton.autotune(configs=generate_config_1d(), key=["N"], cache_results=True, restore_value=["M_real", "M_imag"])
 @triton.jit
 def _kernel_lu_div_column(
     M_real,
@@ -76,7 +76,8 @@ def _kernel_lu_div_column(
         "N": M_real.shape[0],
     }
 )
-@triton.autotune(configs=generate_config_2d(), key=["N"], cache_results=True)
+# restore_value: the factorization overwrites M in place, so the autotuner must restore it between trials.
+@triton.autotune(configs=generate_config_2d(), key=["N"], cache_results=True, restore_value=["M_real", "M_imag"])
 @triton.jit
 def _kernel_lu_trailing_update(
     M_real,
@@ -321,21 +322,23 @@ def _linalg_solve(
         "NM": X_real.shape[1],
     }
 )
-@triton.autotune(configs=generate_config_2d(), key=["NR", "NM"], cache_results=True)
-@triton.jit(do_not_specialize=["z_real", "z_imag", "contour_radius_sq"])
+# restore_value: P0 and P1 are accumulated into, so the autotuner must restore them between trials.
+@triton.autotune(configs=generate_config_2d(), key=["NR", "NM"], cache_results=True, restore_value=["P0", "P1"])
+@triton.jit
 def _post_process(
     X_real,  # (NR, NM)
     X_imag,  # (NR, NM)
     P0,  # (NR, NM, 2)
     P1,  # (NR, NM, 2)
-    z_real: tl_float,
-    z_imag: tl_float,
-    contour_radius_sq: tl_float,
+    z_ptr,  # (3,): z_real, z_imag, contour_radius_sq; a pointer, since a scalar argument would be passed as fp32
     NR: tl.constexpr,
     NM: tl.constexpr,
     BLOCK_SIZE_N: tl.constexpr,
     BLOCK_SIZE_M: tl.constexpr,
 ):
+    z_real = tl.load(z_ptr)
+    z_imag = tl.load(z_ptr + 1)
+    contour_radius_sq = tl.load(z_ptr + 2)
     n = tl.program_id(axis=0)
     m = tl.program_id(axis=1)
 
@@ -392,13 +395,14 @@ def _calculate_tz(
     Tz_imag,  # (NR, NR)
     Ham_real,  # (slab_per_bc + 1, NR, NR)
     Ham_imag,  # (slab_per_bc + 1, NR, NR)
-    z_real: tl_float,
-    z_imag: tl_float,
+    z_ptr,  # (3,): z_real, z_imag, contour_radius_sq; a pointer, since a scalar argument would be passed as fp32
     NR: tl.constexpr,
     slab_per_bc: tl.constexpr,
     BLOCK_SIZE: tl.constexpr,
 ):
     """Tz = sum_n z**(slab_per_bc/2 - n) * Ham[n], split into (Tz_real, Tz_imag)."""
+    z_real = tl.load(z_ptr)
+    z_imag = tl.load(z_ptr + 1)
     x = tl.program_id(axis=0)
     y = tl.program_id(axis=1)
 
@@ -409,7 +413,8 @@ def _calculate_tz(
     acc_real = tl.zeros((BLOCK_SIZE, BLOCK_SIZE), dtype=Tz_real.dtype.element_ty)
     acc_imag = tl.zeros((BLOCK_SIZE, BLOCK_SIZE), dtype=Tz_real.dtype.element_ty)
     for n in range(slab_per_bc + 1):
-        power = slab_per_bc / 2 - n
+        # Half-integers are exact in fp32; the cast keeps the pow below in the data type.
+        power = (slab_per_bc / 2 - n).to(Tz_real.dtype.element_ty)
         r = tl.sqrt(z_real * z_real + z_imag * z_imag)
         delta = libdevice.atan2(z_imag, z_real)
         r = libdevice.pow(r, power)
@@ -433,17 +438,17 @@ def _calculate_tz(
 def contour_integral(
     NR,
     NM,
-    _,
+    slab_per_bc,
     Ham,  # (slab_per_bc + 1, NR, NR)[complex128]
     int_pts: torch.Tensor,  # (num_int_ptsm, )[complex128]
     Y,  # (NR, NM)[complex128]
+    P0,  # (NR, NM)[complex128], accumulated into
+    P1,  # (NR, NM)[complex128], accumulated into
     contour_radius=1.0,
 ):
     dtype = Ham.dtype
     sdtype = torch.float32 if dtype == torch.complex64 else torch.float64
-    P0 = torch.zeros_like(Y)
     P0_real = torch.view_as_real(P0)
-    P1 = torch.zeros_like(Y)
     P1_real = torch.view_as_real(P1)
     tmp_y_real = torch.empty((NR, NM), dtype=sdtype, device=Y.device)
     tmp_y_imag = torch.empty((NR, NM), dtype=sdtype, device=Y.device)
@@ -461,13 +466,14 @@ def contour_integral(
     ints = int_pts.tolist()
     contour_radius_sq = float(contour_radius) * float(contour_radius)
     for z in ints:
-        _calculate_tz(Tz_real, Tz_imag, Ham_real, Ham_imag, float(z.real), float(z.imag))
+        z_values = torch.tensor([z.real, z.imag, contour_radius_sq], dtype=sdtype, device=Y.device)
+        _calculate_tz(Tz_real, Tz_imag, Ham_real, Ham_imag, z_values)
 
         X_real.zero_()
         X_imag.zero_()
         _linalg_solve(Tz_real, Tz_imag, Y_real, Y_imag, X_real, X_imag, tmp_y_real, tmp_y_imag)
 
         # TODO: Consider fusing into backward row to save the X loads in '_post_process'; profile first.
-        _post_process(X_real, X_imag, P0_real, P1_real, float(z.real), float(z.imag), contour_radius_sq)
+        _post_process(X_real, X_imag, P0_real, P1_real, z_values)
 
     return P0, P1

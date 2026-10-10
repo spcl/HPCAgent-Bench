@@ -1,9 +1,9 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Per-kernel figures: one column per kernel, one mark per series, one summary slot per series.
 
 The one per-kernel drawing API: the compiler figure
-(:func:`hpcagent_bench.stats.figures.signed.llr40_figure`) and the paper's per-kernel figures both
+(:func:`hpcagent_bench.stats.figures.signed.kernel_figure`) and the paper's per-kernel figures both
 draw through this module, so a column, a mark, a summary slot and a margin mean the same thing
 everywhere. A caller turns its data into :class:`KernelCell` s (:func:`kernel_cells`), groups them
 into :class:`Series`, picks one :class:`Metric` per panel and calls :func:`figure_panels`.
@@ -12,6 +12,10 @@ A cell's status decides its mark: measured (a point with an interval), undeliver
 crossed, at the value the failure left, 1x when it delivered nothing), pending ("?" at 1x) or
 flagged (a disowned answer's cross with a ``*``). Undelivered and pending cells enter no summary.
 
+A cell of a designed repeat carries its RUNS (:func:`run_cells`): ``box`` draws the box over its graded
+runs and every run on top as a small dot -- solved filled at its speedup, unsolved hollow and crossed at
+1x, owed a "?" at 1x -- with "solved/graded" over the cell (:func:`runs_figure`).
+
 The value axis is log2 for a speedup (:func:`style_speedup_axis`) and log10 for a token count
 (:func:`style_token_axis`), both sized from the cells before a mark is drawn. The summary column
 sits past a dashed separator, one slot per series (:func:`summary_slot_x`), each showing the
@@ -19,25 +23,124 @@ geometric mean over the solved kernels (:func:`summary_geomean`). The canvas is 
 fixed (:func:`fit_canvas`): margins come from what the chrome actually prints.
 """
 
-import enum
 import dataclasses
+import enum
 import logging
 import math
 import pathlib
 import textwrap
 from collections.abc import Callable, Mapping, Sequence
+from typing import NamedTuple
 
 import matplotlib.artist
 import matplotlib.axes
 import matplotlib.figure
 import matplotlib.lines
+import matplotlib.patches
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from hpcagent_bench import experiment_tags
-from hpcagent_bench.stats import population, summary
+from hpcagent_bench import study_tags
+from hpcagent_bench.stats import palette, population, reliability, summary
 from hpcagent_bench.stats import style as plotstyle
+from hpcagent_bench.stats.figures.helpers import series as series_look
+
+__all__ = [
+    "AUTHOR_TYPE",
+    "BOX_LINE_WIDTH",
+    "BOX_STEP_SHARE",
+    "BOX_WIDTH",
+    "CHROME_PAD_IN",
+    "CROSS_EDGE_WIDTH",
+    "DODGE_SPAN",
+    "FLAGGED_ANNOTATION",
+    "FLAGGED_EDGE_WIDTH",
+    "FLAGGED_MARKER",
+    "FLAGGED_MARK_PT",
+    "GRID_LINE_WIDTH",
+    "INTERVAL_Z",
+    "LEGEND_MARK_PT",
+    "LOG",
+    "MARK_GAP_RATIO",
+    "MARK_PT",
+    "MAX_SPEEDUP_TICKS",
+    "MIN_EPISODES_FOR_SPREAD",
+    "MIN_MARK_PT",
+    "MIN_NAME_SCALE",
+    "OWED_LABEL",
+    "OWED_SCALE",
+    "PANEL_HEIGHT_IN",
+    "PRINT_PANEL_HEIGHT_IN",
+    "PROBE_BAND_IN",
+    "REFERENCE_LINE_WIDTH",
+    "RUNS_BOX_LABEL",
+    "RUN_BOX_ALPHA",
+    "RUN_MARK_PT",
+    "RUN_SPREAD",
+    "STACK_GAP_IN",
+    "SUMMARY_GAP",
+    "SUMMARY_LINE_WIDTH",
+    "SUMMARY_SLOT",
+    "TOKEN_PAD_DECADES",
+    "VALUE_PAD_OCTAVES",
+    "KernelCell",
+    "Metric",
+    "Run",
+    "Series",
+    "Style",
+    "SummaryReducer",
+    "bootstrap_point",
+    "box_cells",
+    "box_width",
+    "cell_point",
+    "column_pitch_in",
+    "compact_tick_label",
+    "dodge_offsets",
+    "draw_box",
+    "draw_ci",
+    "draw_flagged",
+    "draw_marks",
+    "draw_runs",
+    "draw_status",
+    "draw_summary_column",
+    "draw_summary_mark",
+    "drawn_values",
+    "exp2_or_nan",
+    "figure_panels",
+    "fit_canvas",
+    "fit_ylabels",
+    "grid_125",
+    "kernel_cells",
+    "kernel_interval",
+    "kernel_medians",
+    "kernel_tick_label",
+    "label_kernel_ticks",
+    "mark_size",
+    "min_text_pt",
+    "run_cells",
+    "run_count_label",
+    "runs_figure",
+    "runs_series",
+    "save",
+    "setup_label",
+    "size_defaults",
+    "speedup_series_metric",
+    "speedup_yticks",
+    "split_in_two",
+    "status_handles",
+    "style_panel",
+    "style_speedup_axis",
+    "style_token_axis",
+    "style_value_axis",
+    "summary_centre_x",
+    "summary_geomean",
+    "summary_separator_x",
+    "summary_slot_x",
+    "token_limits",
+    "token_series_metric",
+    "usable",
+]
 
 LOG = logging.getLogger(__name__)
 
@@ -89,6 +192,15 @@ FLAGGED_EDGE_WIDTH: float = 1.4
 CHROME_PAD_IN: float = 0.04
 
 
+class Run(NamedTuple):
+    """One run of a designed repeat (:func:`population.designed_runs`): its number, its value (S_i when
+    solved, :data:`population.NOT_DELIVERED` when unsolved or owed) and its state."""
+
+    number: int
+    value: float
+    state: population.RunState
+
+
 @dataclasses.dataclass(frozen=True, slots=True)
 class KernelCell:
     """One kernel's values for one series, sorted, and the status that decides its mark."""
@@ -103,6 +215,8 @@ class KernelCell:
     interval: tuple[float, float] | None = None
     #: Served but not attempted yet: drawn as a "?" at 1x. Also undelivered, so no summary either.
     pending: bool = False
+    #: Every run of a designed repeat, in run order; ``episodes`` then holds the GRADED runs' values.
+    runs: tuple[Run, ...] = ()
 
     @property
     def n(self) -> int:
@@ -151,30 +265,6 @@ def kernel_cells(
         elif fill:
             cells.append(KernelCell(kernel, (population.NOT_DELIVERED,), delivered=False))
     return tuple(cells)
-
-
-def ordered_kernels(cells: Sequence[KernelCell]) -> list[str]:
-    """Kernels ascending by median, each named once (a panel may carry several series over one
-    kernel axis, so a kernel appears in ``cells`` once per series)."""
-    grouped: dict[str, list[float]] = {}
-    for cell in cells:
-        value = cell.median()
-        if math.isfinite(value):
-            grouped.setdefault(cell.kernel, []).append(value)
-    for cell in cells:
-        grouped.setdefault(cell.kernel, [])
-    return sorted(grouped, key=lambda kernel: float(np.median(grouped[kernel])) if grouped[kernel] else math.inf)
-
-
-def answer_cells(
-    frame: pd.DataFrame, repeats: population.RepeatPolicy = population.RepeatPolicy.LATEST
-) -> list[KernelCell]:
-    """One single-value cell per SOLVED kernel: its final answer under ``repeats``
-    (:func:`population.kernel_answers`), the policy the tables score a kernel by."""
-    answers = population.kernel_answers(frame, repeats=repeats, policy=population.KernelPolicy.SOLVED)
-    if "speedup" not in answers.columns:
-        return []
-    return [KernelCell(str(kernel), (float(value),)) for kernel, value in answers["speedup"].items() if value > 0]
 
 
 def exp2_or_nan(value: float) -> float:
@@ -300,7 +390,7 @@ def style_token_axis(
     """A log10 value axis over the plotted values (:func:`token_limits`), majors at 1-2-5."""
     ax.set_yscale("log")
     ax.set_ylim(*token_limits(cells))
-    plotstyle.value_axis(ax, "y", log_base=10.0)
+    plotstyle.value_axis(ax, "y", log_base=plotstyle.LOG_BASE)
     ax.tick_params(axis="y", labelsize=tick_pt)
 
 
@@ -316,7 +406,7 @@ class Series:
     label: str
     cells: tuple[KernelCell, ...]
     color: str
-    marker: str = "o"
+    marker: study_tags.Marker = "o"
     filled: bool = True
 
 
@@ -344,7 +434,7 @@ def mark_size(pitch_in: float, n_series: int, span: float = DODGE_SPAN) -> float
     """A mark's area in points squared: :data:`MARK_PT` across where the marks have room, shrinking
     with the gap to the nearest neighbour down to :data:`MIN_MARK_PT` where they do not."""
     dodged = n_series > 1 and span > 0.0
-    gap_pt = 72.0 * pitch_in * (span / (n_series - 1) if dodged else 1.0)
+    gap_pt = plotstyle.POINTS_PER_INCH * pitch_in * (span / (n_series - 1) if dodged else 1.0)
     return max(MIN_MARK_PT, min(MARK_PT, MARK_GAP_RATIO * gap_pt)) ** 2
 
 
@@ -418,47 +508,113 @@ def draw_ci(
         plotstyle.point_mark(ax, x, point, one.color, one.marker, one.filled, size=size)
 
 
+#: A lone series' box width, in kernel columns.
+BOX_WIDTH: float = 0.5
+#: How much of a series' dodge step its box takes when several share a column.
+BOX_STEP_SHARE: float = 0.8
+#: A box's fill opacity, and the lighter one under a cell's run dots so the dots read on top of it.
+BOX_ALPHA: float = 0.55
+RUN_BOX_ALPHA: float = 0.22
+#: A run dot's diameter in points, and the share of its box width the runs are spread over.
+RUN_MARK_PT: float = 2.4
+RUN_SPREAD: float = 0.8
+#: An owed run's "?" area against a run dot's: a glyph inks less of its box than a disc.
+OWED_SCALE: float = 2.5
+
+#: Key entries of the runs mode: the box statistic, and an owed run (a final grade or a rerun to come).
+RUNS_BOX_LABEL: str = "Box: Median and Quartiles of the Graded Runs, Whiskers to 1.5 IQR"
+OWED_LABEL: str = "Owed a Final Grade or a Rerun (Drawn at 1x)"
+
+
+def box_width(n_series: int, span: float = DODGE_SPAN) -> float:
+    """One series' box width: :data:`BOX_WIDTH` alone, else :data:`BOX_STEP_SHARE` of the dodge step."""
+    if n_series < 2 or span <= 0.0:
+        return BOX_WIDTH
+    return min(BOX_WIDTH, BOX_STEP_SHARE * span / (n_series - 1))
+
+
 def draw_box(
     ax: matplotlib.axes.Axes,
     one: Series,
     x_of: Mapping[str, int],
     size: float = MARK_PT**2,
     type_: plotstyle.TypeScale = AUTHOR_TYPE,
+    offset: float = 0.0,
+    width: float = BOX_WIDTH,
 ) -> None:
-    """A real box for a kernel with :data:`MIN_EPISODES_FOR_SPREAD`+ episodes; a point otherwise."""
+    """A real box for a kernel with :data:`MIN_EPISODES_FOR_SPREAD`+ episodes, a point otherwise, at
+    ``offset`` from its column; a cell with runs also gets every run on top (:func:`draw_runs`)."""
     boxed: list[KernelCell] = []
     for cell in one.cells:
-        if cell.kernel not in x_of or draw_status(ax, cell, x_of[cell.kernel], one, size, type_):
+        if cell.kernel not in x_of:
+            continue
+        x = x_of[cell.kernel] + offset
+        if cell.runs:
+            draw_runs(ax, cell, x, one.color, width, type_)
+        elif draw_status(ax, cell, x, one, size, type_):
             continue
         if cell.n >= MIN_EPISODES_FOR_SPREAD:
             boxed.append(cell)
-        else:
-            plotstyle.point_mark(ax, x_of[cell.kernel], cell.median(), one.color, one.marker, one.filled, size=size)
+        elif cell.n and not cell.runs:
+            plotstyle.point_mark(ax, x, cell.median(), one.color, one.marker, one.filled, size=size)
     if boxed:
-        box_cells(ax, boxed, [x_of[cell.kernel] for cell in boxed], one.color, type_)
+        alpha = RUN_BOX_ALPHA if any(cell.runs for cell in boxed) else BOX_ALPHA
+        box_cells(ax, boxed, [x_of[cell.kernel] + offset for cell in boxed], one.color, type_, width, alpha)
 
 
 def box_cells(
     ax: matplotlib.axes.Axes,
     cells: Sequence[KernelCell],
-    positions: Sequence[int],
+    positions: Sequence[float],
     color: str,
     type_: plotstyle.TypeScale,
+    width: float = BOX_WIDTH,
+    alpha: float = BOX_ALPHA,
+    whis: float | tuple[float, float] = 1.5,
 ) -> None:
-    """One box per cell over its episodes at ``positions``, filled and outlined in ``color``."""
+    """One box per cell over its episodes at ``positions``, filled and outlined in ``color``; whiskers to
+    ``whis`` (matplotlib's: a multiple of the IQR, or a (low, high) percentile pair)."""
     artists = ax.boxplot(
         [list(cell.episodes) for cell in cells],
         positions=list(positions),
-        widths=0.5,
+        widths=width,
+        whis=whis,
         patch_artist=True,
         manage_ticks=False,
         showfliers=False,
         medianprops={"color": "0.1", "linewidth": type_.line_width},
     )
     for box in artists["boxes"]:
-        box.set(facecolor=color, edgecolor=color, alpha=0.55, linewidth=BOX_LINE_WIDTH)
+        box.set(facecolor=color, edgecolor=color, alpha=alpha, linewidth=BOX_LINE_WIDTH)
     for line in [*artists["whiskers"], *artists["caps"]]:
         line.set(color=color, linewidth=BOX_LINE_WIDTH)
+
+
+def run_count_label(runs: Sequence[Run]) -> str:
+    """``solved/graded``, then ``+N?`` for the owed runs."""
+    solved = sum(run.state == population.RunState.SOLVED for run in runs)
+    owed = sum(run.state == population.RunState.OWED for run in runs)
+    label = f"{solved}/{len(runs) - owed}"
+    return f"{label} +{owed}?" if owed else label
+
+
+def draw_runs(
+    ax: matplotlib.axes.Axes, cell: KernelCell, x: float, color: str, width: float, type_: plotstyle.TypeScale
+) -> None:
+    """Every run of ``cell`` as a small dot spread across its box in run order -- solved filled at its
+    value, unsolved hollow and crossed at 1x, owed a "?" at 1x -- and :func:`run_count_label` above."""
+    size = RUN_MARK_PT**2
+    for run, dx in zip(cell.runs, dodge_offsets(len(cell.runs), RUN_SPREAD * width), strict=True):
+        if run.state == population.RunState.OWED:
+            plotstyle.pending_mark(ax, x + dx, population.NOT_DELIVERED, plotstyle.MUTED, size=OWED_SCALE * size)
+        else:
+            solved = run.state == population.RunState.SOLVED
+            plotstyle.point_mark(ax, x + dx, run.value, color, "o", True, size=size, delivered=solved)
+    top = max(run.value for run in cell.runs if usable(run.value))
+    ax.annotate(
+        run_count_label(cell.runs), xy=(x, top), xytext=(0, 3), textcoords="offset points", ha="center",
+        va="bottom", fontsize=type_.annotation_pt, color=color, gid=plotstyle.CLEAR_GID, annotation_clip=False,
+    )  # fmt: skip
 
 
 #: Gap (in x-axis units) between the last kernel column and the dashed separator, and between the
@@ -545,17 +701,17 @@ def draw_summary_mark(
 
 
 def kernel_tick_label(kernel: str) -> str:
-    """The kernel's short manifest name (:func:`experiment_tags.kernel_short_display_name`), folded
+    """The kernel's short manifest name (:func:`study_tags.kernel_short_display_name`), folded
     at the short-name limit onto as many lines as it needs, never cut."""
-    name = experiment_tags.kernel_short_display_name(kernel)
-    return "\n".join(textwrap.wrap(name, experiment_tags.SHORT_NAME_MAX, break_long_words=False))
+    name = study_tags.kernel_short_display_name(kernel)
+    return "\n".join(textwrap.wrap(name, study_tags.SHORT_NAME_MAX, break_long_words=False))
 
 
 def compact_tick_label(kernel: str) -> str:
     """:func:`kernel_tick_label` at print size: the compact name
-    (:func:`experiment_tags.kernel_compact_display_name`), folded like it, never cut."""
-    name = experiment_tags.kernel_compact_display_name(kernel)
-    return "\n".join(textwrap.wrap(name, experiment_tags.COMPACT_NAME_MAX, break_long_words=False))
+    (:func:`study_tags.kernel_compact_display_name`), folded like it, never cut."""
+    name = study_tags.kernel_compact_display_name(kernel)
+    return "\n".join(textwrap.wrap(name, study_tags.COMPACT_NAME_MAX, break_long_words=False))
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -664,9 +820,10 @@ def draw_marks(
     """Every series' cells over ``kernels``, spread by :func:`dodge_offsets`, plus each series'
     summary in its own slot, sized no smaller than the kernel marks."""
     x_of = {kernel: i for i, kernel in enumerate(kernels)}
+    width = box_width(len(metric.series), span)
     for one, offset in zip(metric.series, dodge_offsets(len(metric.series), span), strict=True):
-        if style_ == Style.BOX and len(metric.series) == 1:
-            draw_box(ax, one, x_of, size, type_)
+        if style_ == Style.BOX:
+            draw_box(ax, one, x_of, size, type_, offset, width)
         else:
             draw_ci(ax, one, x_of, metric.log2_space, offset, size, type_)
     if not summary_column:
@@ -683,11 +840,12 @@ LEGEND_MARK_PT: float = 5.0
 
 
 def status_handles(metrics: Sequence[Metric]) -> list[matplotlib.artist.Artist]:
-    """The key entries for the status marks ``metrics`` actually draw: the undelivered cross and the
-    pending "?", each only when some cell draws one."""
+    """The key entries for the status marks ``metrics`` actually draw: the undelivered cross, the
+    pending "?" and the owed run's "?", each only when some cell (or run) draws one."""
     cells = [cell for metric in metrics for cell in metric.cells]
+    states = {run.state for cell in cells for run in cell.runs}
     handles: list[matplotlib.artist.Artist] = []
-    if any(not cell.delivered and not cell.pending for cell in cells):
+    if any(not cell.delivered and not cell.pending for cell in cells) or population.RunState.UNSOLVED in states:
         handles.append(
             matplotlib.lines.Line2D(
                 [],
@@ -702,26 +860,11 @@ def status_handles(metrics: Sequence[Metric]) -> list[matplotlib.artist.Artist]:
         )
     if any(cell.pending for cell in cells):
         handles.append(plotstyle.pending_legend_mark(LEGEND_MARK_PT))
+    if population.RunState.OWED in states:
+        owed = plotstyle.pending_legend_mark(LEGEND_MARK_PT)
+        owed.set_label(OWED_LABEL)
+        handles.append(owed)
     return handles
-
-
-def figure_one(
-    metric: Metric,
-    kernels: Sequence[str],
-    style_: Style,
-    summary_column: bool,
-    title: str,
-    width_in: float | None = None,
-    legend: Sequence[matplotlib.artist.Artist] = (),
-    panel_height_in: float | None = None,
-    tick_label: Callable[[str], str] | None = None,
-    summary_values: bool = True,
-) -> matplotlib.figure.Figure:
-    """A single metric's panel as its own figure (:func:`figure_panels` with one panel)."""
-    return figure_panels(
-        [metric], kernels, style_, summary_column, title, width_in, legend, panel_height_in=panel_height_in,
-        tick_label=tick_label, summary_values=summary_values,
-    )  # fmt: skip
 
 
 def figure_panels(
@@ -796,7 +939,7 @@ def fit_ylabels(
     """Keep every Y label within its own panel's height: broken onto two lines, then stepped down
     to its floor (:func:`min_text_pt`). A label still too tall at the floor is logged; the caller
     has to shorten it."""
-    renderer = fig.canvas.get_renderer()
+    renderer = plotstyle.renderer_of(fig)
     for ax in axes:
         label = ax.yaxis.label
         if not label.get_text() or label.get_window_extent(renderer).height / fig.dpi <= panel_height_in:
@@ -870,6 +1013,84 @@ def fit_canvas(
     fig.subplots_adjust(top=1.0 - top / height, bottom=bottom / height, hspace=gap / panel_height_in)
     if title:
         plotstyle.title(fig, title)
+
+
+def run_cells(runs: pd.DataFrame, kernels: Sequence[str]) -> tuple[KernelCell, ...]:
+    """One cell per kernel of ``kernels`` that ONE setup's :func:`population.designed_runs` rows ran: its
+    runs in run order, and its graded runs' values (unsolved at 1x) as the episodes its box is over."""
+    cells: list[KernelCell] = []
+    for kernel in kernels:
+        mine = runs.loc[runs["kernel"] == kernel].sort_values(
+            ["run_root", "job", population.SLOT_COLUMN], kind="stable"
+        )
+        if mine.empty:
+            continue
+        made = tuple(
+            Run(
+                int(index),
+                float(value) if state == population.RunState.SOLVED else population.NOT_DELIVERED,
+                state,
+            )
+            for index, value, state in zip(
+                mine[population.SLOT_COLUMN].tolist(),
+                mine["speedup"].tolist(),
+                mine[population.RUN_STATE_COLUMN].tolist(),
+                strict=True,
+            )
+        )
+        graded = tuple(sorted(run.value for run in made if run.state != population.RunState.OWED))
+        cells.append(KernelCell(kernel, graded, runs=made))
+    return tuple(cells)
+
+
+def setup_label(setup: str) -> str:
+    """A setup's key entry: its model's display name, then its packet's when it has one."""
+    model, packet = study_tags.model_of(setup), study_tags.packet_of(setup)
+    name = study_tags.model_name(model)
+    return f"{name} + {study_tags.packet_short_name(packet)}" if packet else name
+
+
+def runs_series(runs: pd.DataFrame, kernels: Sequence[str]) -> tuple[Series, ...]:
+    """One :class:`Series` per setup of ``runs``, in registry model order then by name: colour the model,
+    shape the packet (:func:`series_look.series_style`), cells :func:`run_cells`."""
+    models = study_tags.order("models")
+
+    def rank(setup: str) -> tuple[int, str]:
+        model = study_tags.model_of(setup)
+        return (models.index(model) if model in models else len(models), setup)
+
+    made: list[Series] = []
+    for setup in sorted({str(name) for name in runs["setup"].tolist()}, key=rank):
+        packet = study_tags.packet_of(setup)
+        look = series_look.series_style(packet, study_tags.model_of(setup))
+        cells = run_cells(runs.loc[runs["setup"] == setup], kernels)
+        made.append(Series(setup_label(setup), cells, look["color"], palette.packet_marker(packet), bool(packet)))
+    return tuple(made)
+
+
+def runs_figure(
+    runs: pd.DataFrame,
+    kernels: Sequence[str],
+    title: str = "",
+    width_in: float | None = None,
+    allow_owed: bool = False,
+) -> matplotlib.figure.Figure:
+    """Every designed run (:func:`population.designed_runs`) per kernel of ``kernels``: per setup a box
+    over the graded runs, each run a dot on top, "solved/graded" above. Refuses owed runs (a final grade
+    or a rerun still to come, :class:`reliability.OwedRunsError`) unless ``allow_owed``, which draws them as "?"."""
+    if not allow_owed:
+        reliability.cell_runs(runs)
+    series = runs_series(runs, kernels)
+    metric = speedup_series_metric(series, "Final-Grade Speedup per Run")
+    legend: list[matplotlib.artist.Artist] = [
+        matplotlib.lines.Line2D(
+            [], [], marker="o", linestyle="none", color=one.color, markersize=LEGEND_MARK_PT, label=one.label
+        )
+        for one in series
+    ]
+    legend.append(matplotlib.patches.Patch(facecolor=plotstyle.MUTED, alpha=RUN_BOX_ALPHA, label=RUNS_BOX_LABEL))
+    legend.extend(status_handles([metric]))
+    return figure_panels([metric], kernels, Style.BOX, False, title, width_in, legend)
 
 
 def save(fig: matplotlib.figure.Figure, out: pathlib.Path, print_size: bool = False) -> pathlib.Path:

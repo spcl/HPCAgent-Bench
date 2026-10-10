@@ -1,29 +1,26 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """agent_driver.py: the context-window death, the one budget the CLI spends without saying so.
 
-Campaign 594529 lost agents at ~60 turns to vLLM refusing a prompt longer than the served window.
+Experiment 594529 lost agents at ~60 turns to vLLM refusing a prompt longer than the served window.
 The CLI closes such a run with subtype ``success`` and exit 0 (2.1.197: exit 1) -- the refusal appears only as
 ``is_error`` plus the served text in ``result`` -- so without this check the driver records the
-death as a finished run and the arm reads as complete.
+death as a finished run and the setup reads as complete.
 """
 
-import importlib.util
-import pathlib
-import sys
 from types import ModuleType
 
 import pytest
 
-EXAMPLE = pathlib.Path(__file__).resolve().parents[1] / "experiments"
+from tests.fresh_module import fresh
 
 #: The closing event of a killed agent, verbatim in shape from a 594529 claude.log (vLLM).
 OVERFLOW = (
     '{"type":"result","subtype":"success","is_error":true,"num_turns":61,'
     '"result":"API Error: 500 Input length (66001) exceeds model\'s maximum context length (65536)"}\n'
 )
-#: The same death on SGLang, verbatim in shape from 643179/problem-0-worker-0 (autokernel): "the
-#: model's", which the old "exceeds model's maximum context length" mark did not match.
+#: The same death on SGLang, verbatim in shape from an autokernel worker: "the model's", which an
+#: "exceeds model's maximum context length" mark does not match.
 SGLANG_OVERFLOW = (
     '{"type":"result","subtype":"success","is_error":true,"num_turns":61,'
     '"result":"API Error: 400 Requested token count exceeds the model\'s maximum context length of 262144 '
@@ -34,11 +31,7 @@ SGLANG_OVERFLOW = (
 
 def load_example_module(name: str) -> ModuleType:
     """``sys.modules`` must carry the module BEFORE exec, matching tests/test_validate_run.py."""
-    spec = importlib.util.spec_from_file_location(name, EXAMPLE / f"{name}.py")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
+    return fresh(name)
 
 
 @pytest.fixture(name="driver")

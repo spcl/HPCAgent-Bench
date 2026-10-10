@@ -10,13 +10,10 @@ it explicitly (ABI/default compat); (3) ``lower`` is LIVE -- it decides which
 triangle of ``a``/``b`` is read, so on a matrix whose two triangles hold DIFFERENT
 data the two settings give different eigenvalues outright.
 
-That third claim used to be made on the exactly-Hermitian ``initialize()`` data,
-where both triangles agree and the only difference scipy left was the rounding
-path it happened to take. That is a property of one LAPACK build, not of the knob:
-the reference now mirrors the requested triangle itself and is bit-identical
-either way on Hermitian input, which is the correct answer and used to read as a
-dead knob. Feeding triangles that actually differ proves the same thing about any
-implementation."""
+Not on the exactly-Hermitian ``initialize()`` data: there both triangles agree,
+the reference mirrors the requested triangle itself and is bit-identical either
+way, which is the correct answer but reads as a dead knob. Feeding triangles that
+actually differ proves the claim about any implementation."""
 
 import sys
 import importlib.util
@@ -101,9 +98,8 @@ def test_the_two_triangles_agree_on_hermitian_input():
     half reproduces the stored half bit for bit), so both branches feed ``np.linalg.eigh`` the exact
     same bytes. What is NOT part of LAPACK's contract is that two SEPARATE calls on bit-identical
     input reduce in the same order -- a dispatched/threaded BLAS build is free to sum in a different
-    sequence call to call, and did: a captured CI failure (run 33555162782) showed the two spectra
-    printing identically at numpy's default precision while ``np.array_equal`` still read False, i.e.
-    a difference below display precision, not a wrong triangle or a degenerate/misordered spectrum.
+    sequence call to call: the two spectra can print identically at numpy's default precision while
+    ``np.array_equal`` reads False, a difference below display precision, not a wrong triangle.
     Compare to the same float tolerance the rest of this file already uses for eigh output (see
     ``_BASELINE_SUM`` above), not to exact equality.
     """

@@ -1,6 +1,6 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""``experiments/run_cluster.sh``'s OWN cache-root derivation, inside ``run_vllm_node``.
+"""``hpcagent_bench/cluster/run_cluster.sh``'s OWN cache-root derivation, inside ``run_vllm_node``.
 
 ``run_vllm_node`` cannot be invoked end to end in a unit test: it snapshots a huggingface_hub
 repo over the network, backgrounds a monitor process and ends by exec-ing an inference engine, none
@@ -15,7 +15,7 @@ import re
 import subprocess
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-SCRIPT = REPO / "experiments" / "run_cluster.sh"
+SCRIPT = REPO / "hpcagent_bench" / "cluster" / "run_cluster.sh"
 TEXT = SCRIPT.read_text()
 BODY = TEXT[TEXT.index("run_vllm_node() {") : TEXT.index('case "${1:-}" in')]
 
@@ -29,7 +29,7 @@ def _assignment(var: str) -> str:
 
 def run(script: str, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
     full_env = {"PATH": "/usr/bin:/bin", **env}
-    return subprocess.run(["bash", "-c", script], env=full_env, capture_output=True, text=True)
+    return subprocess.run(["bash", "-c", script], env=full_env, capture_output=True, text=True, check=False)
 
 
 def test_the_cache_root_derivation_still_reads_jit_cache_root_then_scratch() -> None:
@@ -39,7 +39,7 @@ def test_the_cache_root_derivation_still_reads_jit_cache_root_then_scratch() -> 
 
 
 def test_cache_root_fails_loudly_when_neither_jit_cache_root_nor_scratch_is_set() -> None:
-    """Same contract as scripts/cache_env.sh's own JIT_CACHE_ROOT: an inference node with no SCRATCH
+    """Same contract as helpers/scripts/cache_env.sh's own JIT_CACHE_ROOT: an inference node with no SCRATCH
     must refuse to pick a cache root rather than silently compiling into $HOME or an ephemeral /tmp
     that vanishes with the container."""
     expr = _assignment("cache_root")
@@ -58,7 +58,7 @@ def test_cache_root_resolves_under_scratch_when_jit_cache_root_is_unset(tmp_path
 
 def test_the_node_local_jit_root_is_keyed_by_both_job_and_node_rank() -> None:
     """The node-local write layer (jit_cache_layer.sh) exists because several engines compiling into
-    the SAME directory at once corrupted each other's reads (640074/640075/640090). That guarantee
+    the SAME directory at once corrupt each other's reads. That guarantee
     depends on no two node ranks -- of the same job or of two jobs running at once -- ever computing
     the same local_root; both the job id and the node rank must appear in it."""
     expr = _assignment("local_root")

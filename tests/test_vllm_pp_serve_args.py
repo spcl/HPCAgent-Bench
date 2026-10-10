@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Pipeline-parallel serve arguments in run_cluster.sh.
 
@@ -6,8 +6,8 @@ Async scheduling is vLLM's default and is the only caller that runs a collective
 ``pp.device_group``; every other use of that group is P2P, which torch serves from per-pair
 2-rank communicators. Under lazy init the first decode therefore bootstraps a 4-rank and a
 2-rank communicator concurrently, the bootstrap exchanges collide, and rccl reports
-"Message truncated : received 1024 bytes instead of 512" (nranks x 256). That killed the
-four-node kimi endpoint in 600262, 604463 and 604479 within a minute of the first request.
+"Message truncated : received 1024 bytes instead of 512" (nranks x 256), killing a four-node
+endpoint within a minute of the first request.
 
 ``run_vllm_node`` cannot be sourced -- it needs Slurm variables, downloads a snapshot and ends
 in ``exec`` -- so the argv is pinned against the shipped text.
@@ -16,7 +16,7 @@ in ``exec`` -- so the argv is pinned against the shipped text.
 import pathlib
 import re
 
-SCRIPT = pathlib.Path(__file__).resolve().parents[1] / "experiments/run_cluster.sh"
+SCRIPT = pathlib.Path(__file__).resolve().parents[1] / "hpcagent_bench/cluster/run_cluster.sh"
 # Indentation-agnostic: the branch already moved one level deeper once when run_vllm_node was
 # wrapped, and pinning a literal four spaces made three tests fail over a change that touched none
 # of the argv they assert. The backreference keeps the closing `else` matched at the branch's own

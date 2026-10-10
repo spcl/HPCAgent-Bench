@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The figure builders. Every script that draws something calls one of these.
 
@@ -9,13 +9,13 @@ colour and the shape, :mod:`hpcagent_bench.stats.style` for the ink, and
 computes its own statistic on the way to a figure has made a second definition of that number.
 
 Submodules include :mod:`results` (the DB figures -- speedup heatmap, distribution grid,
-per-sample diagnostics) and :mod:`signed` (the signed-change axis: one row per arm, and the paired
+per-sample diagnostics) and :mod:`signed` (the signed-change axis: one row per setup, and the paired
 control-to-treatment comparison).
 
 The headless backend is selected HERE, in the package, so it is in force before any submodule binds
 pyplot -- the one ordering matplotlib does not let a module fix for itself afterwards.
 """
 
-import matplotlib
+import matplotlib as mpl
 
-matplotlib.use("Agg")
+mpl.use("Agg")

@@ -1,11 +1,10 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The Pluto column times what polycc wrote, or it times nothing.
 
-The bug these pin is one the column shipped with: ``pluto`` built the same ``<base>_fpNN.cpp`` as
-``llvm``, with the same clang, and never ran polycc -- so every pluto-vs-llvm number in the results
-DB was llvm-vs-llvm under a polyhedral label. What makes that hard to keep fixed is that each way of
-reintroducing it is silent. A fallback to the untransformed source compiles and runs. A positional
+The failure these pin: ``pluto`` building the same ``<base>_fpNN.cpp`` as ``llvm``, with the same
+clang, and never running polycc -- every pluto-vs-llvm number is then llvm-vs-llvm under a
+polyhedral label. Each way of getting there is silent. A fallback to the untransformed source compiles and runs. A positional
 call in the canonical ABI order against polycc's symbols-first VLA signature returns numbers. A
 cached ``.so`` from before the column was rebuilt loads. None of them raise.
 
@@ -16,6 +15,7 @@ the transformed library computes the right answer.
 """
 
 import concurrent.futures
+import contextlib
 import ctypes
 import os
 import pathlib
@@ -24,19 +24,19 @@ import shutil
 import subprocess
 import time
 import types
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import numpy as np
 import pytest
 
 from hpcagent_bench import flags, pluto_transform, ppcg_transform
-from hpcagent_bench.benchmarks import cpp_runtime
+from hpcagent_bench.frameworks import native_runtime
 from hpcagent_bench.frameworks.benchmark import Benchmark
 from hpcagent_bench.frameworks.errors import NotSupportedByFramework
 from hpcagent_bench.frameworks.framework import Timer
 from hpcagent_bench.frameworks.pluto_framework import PlutoFramework
 from hpcagent_bench.harness import preflight
-from tests.numerical_oracle import _CONFIG_DEFAULTS
+from tests.own_process import isolated
 
 #: An affine matmul in the shape the translator emits for polycc: ``int64_t`` counters (which is why
 #: the invocation needs ``--pet``; the default clan extractor rejects them) and rank-2 arrays as VLA
@@ -54,14 +54,14 @@ void mm_fp64(const int64_t N, double (*restrict A)[N], double (*restrict B)[N], 
 }
 """
 
-#: The Pluto column gates on this exactly as ``cpp_runtime.assert_autopar_capable`` does: polycc has
+#: The Pluto column gates on this exactly as ``native_runtime.assert_autopar_capable`` does: polycc has
 #: already written ``#pragma omp parallel for`` into the source, so a clang that generates no OpenMP
 #: for it would time Pluto's parallel output single-threaded (see ``flags.PLUTO_PAR``).
 PLUTO_CAPABILITY = flags.pluto_capability()
 
 #: Why an absent polycc is a genuine environment gap rather than a weakened test: Pluto has no wheel
 #: and no distro package here, it is built from source by CI and by the container recipe.
-NO_POLYCC = "polycc absent: the Pluto toolchain is built from source, see containers/pluto.Dockerfile"
+NO_POLYCC = "polycc absent: the Pluto toolchain is built from source, see containers/images/lib/build-pluto.sh"
 
 
 def write_scop(cpp_backend: pathlib.Path, base: str = "mm", fptype: str = "fp64", text: str = SCOP) -> pathlib.Path:
@@ -82,9 +82,9 @@ class ManifestFreeBench(Benchmark):
 
     def __init__(self, bname: str = "mm") -> None:
         self.bname = bname
-        self.bdata: Dict[Any, Any] = {}
+        self.bdata: dict[Any, Any] = {}
         #: The three keys ``CallPlan`` reads; a manifest-free bench has no arguments to marshal.
-        self.info: Dict[str, Any] = {"input_args": [], "array_args": [], "output_args": []}
+        self.info: dict[str, Any] = {"input_args": [], "array_args": [], "output_args": []}
 
 
 def no_impl(*args: Any, **kwargs: Any) -> None:
@@ -149,16 +149,14 @@ def test_polycc_rejection_declines_and_surfaces_its_own_diagnostic(tmp_path, mon
 def test_a_failed_polycc_never_writes_out_directly(tmp_path, monkeypatch) -> None:
     """polycc is pointed at a private scratch name, never ``out``, so a failed (or killed mid-emit)
     run cannot leave a truncated ``out`` behind -- there is nothing at ``out`` for it to truncate.
-    Pinned after a real race: ``out`` is a FIXED, shared path (a tracked override's ``cpp_backend``
-    sibling, not a caller's private temp dir), so two overlapping callers handing polycc the same
-    ``-o`` argument used to be able to truncate each other's output -- measured, six concurrent runs
-    of one scop through the old direct-write path came back with five different byte counts,
-    including a 0-byte file, from identical inputs and an otherwise-deterministic polycc (a serial
-    repeat of the same run is always byte-identical). A failed run must therefore leave a
-    PRE-EXISTING ``out`` -- e.g. a stale-but-complete transform from an earlier successful run --
-    untouched rather than deleted: with polycc never writing to ``out`` directly, there is no
-    truncated content there for the old "delete on failure" cleanup to be protecting against, and
-    deleting a good cached transform on a transient failure would only be waste."""
+    ``out`` is a FIXED, shared path (a tracked override's ``cpp_backend`` sibling, not a caller's
+    private temp dir), so two overlapping callers handing polycc the same ``-o`` argument truncate
+    each other's output: six concurrent direct-write runs of one scop give five different byte
+    counts, a 0-byte file among them, from identical inputs and an otherwise-deterministic polycc.
+    A failed run therefore leaves a PRE-EXISTING ``out`` -- e.g. a stale-but-complete transform from
+    an earlier successful run -- untouched rather than deleted: with polycc never writing to ``out``
+    directly, there is no truncated content there for a "delete on failure" cleanup to protect
+    against, and deleting a good cached transform on a transient failure would only be waste."""
     scop = write_scop(tmp_path)
     out = pluto_transform.transformed_path(scop)
     out.write_text("/* stale but complete, from an earlier good run */\n")
@@ -229,7 +227,7 @@ def test_the_build_selects_polyccs_output_over_the_emitted_cpp(tmp_path, monkeyp
 
     monkeypatch.setattr(pluto_transform, "run_bounded", fake_polycc)
 
-    sources = cpp_runtime._native_sources(tmp_path, "mm", "pluto")
+    sources = native_runtime.native_sources(tmp_path, "mm", "pluto")
 
     assert [p.name for p in sources] == ["mm_fp64_pluto.c"]
     assert sources[0] != scop, "the column compiled polycc's INPUT rather than its output"
@@ -239,9 +237,9 @@ def test_the_column_compiles_c_with_a_c_driver() -> None:
     """polycc's output is C and only C: VLA parameters, the ``restrict`` keyword and ``register``,
     none of which survive C++ -- and it prepends its own ``#define min(x,y)``, which detonates inside
     libstdc++. A ``clangpp`` here would not be a style choice, it would not compile."""
-    assert cpp_runtime.FRAMEWORK_LANG["pluto"] == "c"
-    assert cpp_runtime.FRAMEWORK_COMPILER["pluto"] != "clangpp"
-    assert cpp_runtime.FRAMEWORK_LANG["pluto"] != cpp_runtime.FRAMEWORK_LANG["llvm"]
+    assert native_runtime.FRAMEWORK_LANG["pluto"] == "c"
+    assert native_runtime.FRAMEWORK_COMPILER["pluto"] != "clangpp"
+    assert native_runtime.FRAMEWORK_LANG["pluto"] != native_runtime.FRAMEWORK_LANG["llvm"]
 
 
 def test_the_ppcg_column_follows_the_local_gpu_toolchain(monkeypatch) -> None:
@@ -290,21 +288,21 @@ def test_every_ppcg_column_compiles_ppcg_output_for_its_own_vendor(monkeypatch) 
 
     Two failures this catches, both silent: a new flavor missing from the dispatch falls through to
     ``cpp_backend/<short>_fpNN.<ext>`` and compiles the UNTRANSFORMED translator output -- an nvcc
-    column wearing PPCG's label, exactly the bug ``pluto`` shipped with -- and a flavor that reaches
+    column wearing PPCG's label, the failure the module docstring describes -- and a flavor that reaches
     the transform with the wrong vendor generates ``.cu`` for a column that then asks hipcc for
     ``.hip``, which fails as a missing file rather than as a wrong answer.
     """
     from hpcagent_bench import ppcg_transform
 
-    seen: List[tuple] = []
+    seen: list[tuple] = []
     monkeypatch.setattr(
         ppcg_transform, "transformed_sources", lambda cpp_backend, short, backend: seen.append((short, backend)) or []
     )
-    for framework in cpp_runtime.PPCG_FRAMEWORKS:
-        cpp_runtime._native_sources(pathlib.Path("/tmp/cpp_backend"), "mm", framework)
-    assert seen == [("mm", cpp_runtime.FRAMEWORK_LANG[f]) for f in cpp_runtime.PPCG_FRAMEWORKS]
-    assert dict(zip(cpp_runtime.PPCG_FRAMEWORKS, (v for _, v in seen)))["ppcg_cuda"] == "cuda"
-    assert dict(zip(cpp_runtime.PPCG_FRAMEWORKS, (v for _, v in seen)))["ppcg_hip"] == "hip"
+    for framework in native_runtime.PPCG_FRAMEWORKS:
+        native_runtime.native_sources(pathlib.Path("/tmp/cpp_backend"), "mm", framework)
+    assert seen == [("mm", native_runtime.FRAMEWORK_LANG[f]) for f in native_runtime.PPCG_FRAMEWORKS]
+    assert dict(zip(native_runtime.PPCG_FRAMEWORKS, (v for _, v in seen), strict=False))["ppcg_cuda"] == "cuda"
+    assert dict(zip(native_runtime.PPCG_FRAMEWORKS, (v for _, v in seen), strict=False))["ppcg_hip"] == "hip"
 
 
 def test_an_unknown_ppcg_vendor_is_refused_rather_than_guessed() -> None:
@@ -321,9 +319,9 @@ def test_a_scop_ppcg_passed_through_is_declined_rather_than_timed(tmp_path, monk
 
     Handed a scop outside its model, ppcg exits 0, writes both output files, says nothing on stderr,
     and copies the loop nest into the host half with ``#pragma scop`` still in it -- the ``_kernel``
-    half holds only its own ``#include``. The old "returncode == 0 and both files exist" check
-    accepted that, so the column compiled the ORIGINAL serial loop, ran it on the CPU, and reported
-    it as a polyhedral GPU number.
+    half holds only its own ``#include``. A "returncode == 0 and both files exist" check accepts
+    that, so the column compiles the ORIGINAL serial loop, runs it on the CPU, and reports it as a
+    polyhedral GPU number.
 
     The gate is checked on the PUBLISHED files rather than on the run, because the second call for
     the same kernel finds them fresh and never runs ppcg at all; a gate wired into ``run_ppcg``
@@ -369,7 +367,8 @@ def test_ppcgs_c_output_is_repaired_into_the_cpp_the_gpu_drivers_compile() -> No
     )
     out = ppcg_transform.cxx_compat(source, "mm_fp64")
     assert "#define restrict __restrict__" in out
-    assert "return __builtin_conj(z);" in out and "return conj(z);" not in out
+    assert "return __builtin_conj(z);" in out
+    assert "return conj(z);" not in out
     assert 'extern "C" void mm_fp64(' in out
     assert ppcg_transform.entry_symbol(pathlib.Path("/x/mm_fp64_pluto_input.c")) == "mm_fp64"
 
@@ -380,9 +379,8 @@ def test_a_prelude_helper_the_kernel_calls_is_copied_into_the_device_half() -> N
     ``quasi_affine_mod_k_stripe`` ("use of undeclared identifier '__npb_mod_i'"). The translator
     declares it host+device already, so the definition is copied VERBATIM, behind the ``NPB_HD``
     guard, with its own callees first, and nothing else."""
-    from numpyto_c.emit import NPB_HD_GUARD
-
     from hpcagent_bench import ppcg_transform
+    from hpcagent_bench.translators.numpyto_c.emit import NPB_HD_GUARD
 
     prelude = (
         "static inline NPB_HD int64_t __npb_mod_i(int64_t a, int64_t b) { return (a % b + b) % b; }\n"
@@ -398,7 +396,8 @@ def test_a_prelude_helper_the_kernel_calls_is_copied_into_the_device_half() -> N
         "\nstatic inline NPB_HD int64_t __npb_wrap("
     ), helpers
     copied = helpers.removeprefix(NPB_HD_GUARD)
-    assert "__device__" not in copied and "__npb_floordiv_i" not in copied, helpers
+    assert "__device__" not in copied, helpers
+    assert "__npb_floordiv_i" not in copied, helpers
     # The multi-line body is copied whole, to its matching brace.
     multi = ppcg_transform.device_helpers(prelude, "__npb_floordiv_i(a, b)")
     assert multi.rstrip().endswith("? q - 1 : q;\n}"), multi
@@ -434,7 +433,8 @@ def test_a_read_only_input_array_does_not_make_ppcgs_output_unbuildable(tmp_path
     )
     stripped = ppcg_transform.drop_const_params(source, "mm_fp32")
     assert "const" not in stripped.split("\n")[0]
-    assert "float a[restrict N]" in stripped and "float b[restrict N]" in stripped
+    assert "float a[restrict N]" in stripped
+    assert "float b[restrict N]" in stripped
     # An entry it cannot find is left exactly as it was, rather than half-rewritten.
     assert ppcg_transform.drop_const_params(source, "other_fp32") == source
     assert scop.read_text() == original
@@ -449,55 +449,19 @@ def test_ppcg_only_ever_asks_for_cuda() -> None:
     assert "--target=cuda" in ppcg_transform.PPCG_ARGS
 
 
-def test_polycc_is_invoked_with_pet_and_the_report_only_adds_verbosity() -> None:
+def test_polycc_is_invoked_with_pet() -> None:
     """``--pet`` because the emitted scop uses ``int64_t`` counters the default clan extractor
-    rejects. The report's args are defined as an EXTENSION of the build's so the two are structurally
-    incapable of describing different transforms."""
+    rejects."""
     assert "--pet" in pluto_transform.POLYCC_ARGS
-    assert pluto_transform.POLYCC_REPORT_ARGS[: len(pluto_transform.POLYCC_ARGS)] == pluto_transform.POLYCC_ARGS
-    assert set(pluto_transform.POLYCC_REPORT_ARGS) - set(pluto_transform.POLYCC_ARGS) == {"--debug"}
-
-
-def test_the_report_timeout_reuses_the_oracles_polycc_knob() -> None:
-    """The report path must not invent a second timeout constant: it reads the SAME
-    ``oracle.polycc_timeout_s`` the numerical oracle bounds its own ``run_polycc`` call with
-    (``tests.numerical_oracle._run_pluto``), so a ``config.yaml`` or per-kernel override change
-    moves both paths together instead of drifting apart."""
-    assert pluto_transform.polycc_report_timeout_s() == _CONFIG_DEFAULTS["polycc_timeout_s"]
-
-
-def test_a_wedged_polycc_times_out_the_report_instead_of_hanging_it(tmp_path, monkeypatch) -> None:
-    """An unbounded report-path polycc call would hang the perf column forever on a wedge; it must
-    instead degrade to a skip chunk for that scop, the same way a rejection does, and never crash
-    or propagate ``TimeoutExpired`` out of :meth:`PlutoFramework.polycc_report`. The override keeps
-    the test itself from waiting anywhere near the real 360s bound."""
-    scop = write_scop(tmp_path)
-    monkeypatch.setattr(pluto_transform, "polycc_exe", lambda: "/usr/bin/polycc")
-    monkeypatch.setattr(pluto_transform, "polycc_report_timeout_s", lambda: 0.01)
-
-    def sleeping_polycc(cmd: Any, timeout: Any = None, **kwargs: Any) -> subprocess.CompletedProcess:
-        time.sleep(timeout + 0.05)
-        raise subprocess.TimeoutExpired(cmd, timeout)
-
-    monkeypatch.setattr(pluto_transform, "run_bounded", sleeping_polycc)
-    framework = PlutoFramework.__new__(PlutoFramework)
-    monkeypatch.setattr(PlutoFramework, "_cpp_backend", lambda self, bench: tmp_path)
-    monkeypatch.setattr(PlutoFramework, "_native_base", lambda self, bench: "mm")
-
-    report = framework.polycc_report(ManifestFreeBench())
-
-    assert report is not None
-    assert scop.name in report
-    assert "timed out" in report
 
 
 def test_polycc_runs_under_the_pet_parse_shim(tmp_path, monkeypatch) -> None:
     """pet extracts the scop with a flag-less libclang. On aarch64 its default target has no ``neon``
     feature, so glibc's ``<bits/math-vector.h>`` -- reached through the preamble's ``<math.h>`` --
     rejects the whole translation unit before any scop is seen. Wired into ``run_polycc`` so the
-    timed build and the transformation report parse the scop identically."""
+    timed build and the oracle parse the scop identically."""
     scop = write_scop(tmp_path)
-    seen: Dict[str, Any] = {}
+    seen: dict[str, Any] = {}
     monkeypatch.setattr(pluto_transform, "polycc_exe", lambda: "/usr/bin/polycc")
 
     def capture(cmd: Any, **kwargs: Any) -> subprocess.CompletedProcess:
@@ -576,10 +540,10 @@ def test_the_oracle_transforms_with_the_columns_own_flags(tmp_path, monkeypatch)
     """PLUTO-4: the oracle ran ``--pet`` alone while the column ran ``--pet --tile --parallel``, so
     an ``ok`` verdict was a verdict on a binary nothing measured. Asserted on the ARGV the oracle's
     transform step actually reaches the process layer with, not on the constant it was built from."""
-    import tests.numerical_oracle as oracle
+    from hpcagent_bench import numerical_oracle as oracle
 
     write_scop(tmp_path)
-    seen: Dict[str, Any] = {}
+    seen: dict[str, Any] = {}
 
     def capture(cmd: Any, **kwargs: Any) -> subprocess.CompletedProcess:
         seen["cmd"] = list(cmd)
@@ -636,7 +600,7 @@ def test_the_gate_declines_every_verdict_that_is_not_ok(monkeypatch) -> None:
     assert "FAIL:compile" in str(excinfo.value)
 
 
-def fake_device_module(log: List[str]) -> types.SimpleNamespace:
+def fake_device_module(log: list[str]) -> types.SimpleNamespace:
     """The shape ``import_device_array_module()`` returns, down to the attribute path the timers walk."""
     stream = types.SimpleNamespace(synchronize=lambda: log.append("synchronize"))
     return types.SimpleNamespace(
@@ -649,19 +613,19 @@ def test_the_ppcg_columns_are_not_gated_on_polyccs_verdict(monkeypatch) -> None:
     a PPCG column asking anyway declines on kernels polycc merely happens not to be graded for -- and
     says "not supported by pluto" while doing it, naming a tool it never runs. It keeps the
     validation every other column gets; what it must not do is inherit this one."""
-    for fname in cpp_runtime.PPCG_FRAMEWORKS:
+    for fname in native_runtime.PPCG_FRAMEWORKS:
         # The real constructor, not ``__new__``: these columns declare ``arch: gpu``, so the timers
         # around ``measure`` wait on the device, and a half-built object has no ``info`` to read.
         framework = PlutoFramework(fname)
         framework.gate_kernel = "pagerank"
-        synced: List[str] = []
+        synced: list[str] = []
         monkeypatch.setattr(
             "hpcagent_bench.harness.native_call.import_device_array_module",
             lambda: fake_device_module(synced),
         )
         monkeypatch.setattr(pluto_transform, "oracle_pluto_status", lambda kernel: MISCOMPILE_VERDICT)
         monkeypatch.setattr(PlutoFramework, "create_timer", lambda self, program: Timer(program))
-        ran: List[int] = []
+        ran: list[int] = []
         framework.measure(impl=no_impl, runner=lambda: ran.append(1), repeat=1, warmup=0)
         assert ran, f"{fname} declined on polycc's verdict"
         assert synced, f"{fname} read its clock without waiting for the device"
@@ -672,7 +636,7 @@ def test_a_kernel_the_oracle_grades_ok_is_still_timed(monkeypatch) -> None:
     and the verdict is fetched BEFORE the timer so its cost cannot land in a kept sample."""
     framework = PlutoFramework("pluto")
     framework.gate_kernel = "gemm"
-    order: List[str] = []
+    order: list[str] = []
 
     def verdict(kernel: str) -> str:
         order.append("gate")
@@ -735,7 +699,7 @@ def test_the_transformed_library_computes_the_right_answer(tmp_path) -> None:
     be built from the untransformed input could not pass this by computing the right answer."""
     write_scop(tmp_path)
 
-    so_path = cpp_runtime._ensure_built(tmp_path, "mm", "pluto")
+    so_path = native_runtime._ensure_built(tmp_path, "mm", "pluto")
 
     assert so_path.name == "libmm_pluto.so"
     transformed = (tmp_path / "mm_fp64_pluto.c").read_text()
@@ -764,10 +728,10 @@ def test_a_miscompiled_kernel_is_declined_and_an_affine_matmul_kernel_is_not() -
     """The gate on the real toolchain. tsvc_2_s341 packs through an index scalar that only the data
     advances; every subscript passes ``scop_nonaffine_reason``, polycc transforms it clean, and the
     answer is wrong -- so the only thing standing between it and a graded Pluto number is this
-    verdict. pagerank, the kernel that motivated the gate, lost its accumulator until its scalars
-    reached polycc as pointer cells (POLYCC-014), and tsvc_2_s128 lost its induction scalars until
-    they became closed forms (POLYCC-017); pagerank now joins the affine controls: a gate that
-    declines everything measures nothing and would pass the first half."""
+    verdict. pagerank keeps its accumulator because its scalars reach polycc as pointer cells
+    (POLYCC-014), and tsvc_2_s128 its induction scalars as closed forms (POLYCC-017), so pagerank is
+    an affine control: a gate that declines everything measures nothing and would pass the first
+    half."""
     assert "pluto-miscompile" in pluto_transform.oracle_pluto_status("tsvc_2_s341")
     with pytest.raises(NotSupportedByFramework):
         pluto_transform.assert_numeric_agreement("tsvc_2_s341")
@@ -793,7 +757,7 @@ def test_a_stale_library_is_rebuilt_rather_than_timed(tmp_path) -> None:
     stale.write_bytes(b"not a library")
     os.utime(stale, (0, 0))  # unambiguously older than the transform, whatever the mtime granularity
 
-    so_path = cpp_runtime._ensure_built(tmp_path, "mm", "pluto")
+    so_path = native_runtime._ensure_built(tmp_path, "mm", "pluto")
 
     assert so_path == stale
     assert stale.read_bytes()[:4] == b"\x7fELF", "a stale .so was returned instead of rebuilt"
@@ -807,7 +771,7 @@ def test_a_stale_library_is_rebuilt_rather_than_timed(tmp_path) -> None:
 # concurrency test above skips.
 
 
-def emitted_to(cmd: List[str]) -> pathlib.Path:
+def emitted_to(cmd: list[str]) -> pathlib.Path:
     """Where the polycc invocation ``cmd`` was told to write -- the operand of its ``-o``.
 
     The stand-ins below honour it instead of assuming the destination, which is the whole point:
@@ -816,7 +780,7 @@ def emitted_to(cmd: List[str]) -> pathlib.Path:
     return pathlib.Path(cmd[cmd.index("-o") + 1])
 
 
-def timing_out_polycc(cmd: List[str], **kwargs: Any) -> subprocess.CompletedProcess:
+def timing_out_polycc(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
     """A polycc wedged mid-emit: partial output on disk, then killed by the bound."""
     emitted_to(cmd).write_text("void mm_fp64(const int64_t N) {\n  int t1, t2;\n  for (t1")
     raise subprocess.TimeoutExpired(cmd, 1.0)
@@ -839,7 +803,7 @@ PUBLISHED = pluto_transform.dedupe_scratch_declarations(TRANSFORMED)
 
 
 def writing_polycc(
-    text: str = TRANSFORMED, watch: Optional[pathlib.Path] = None, seen: Optional[List[Optional[str]]] = None
+    text: str = TRANSFORMED, watch: pathlib.Path | None = None, seen: list[str | None] | None = None
 ) -> Any:
     """A polycc that emits ``text`` in two steps, sampling ``watch`` between them.
 
@@ -847,7 +811,7 @@ def writing_polycc(
     the one instant a half-written translation unit exists on disk.
     """
 
-    def run(cmd: List[str], **kwargs: Any) -> subprocess.CompletedProcess:
+    def run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
         dst = emitted_to(cmd)
         head, tail = text[: len(text) // 2], text[len(text) // 2 :]
         dst.write_text(head)
@@ -859,7 +823,7 @@ def writing_polycc(
     return run
 
 
-def polycc_scratch(directory: pathlib.Path) -> List[pathlib.Path]:
+def polycc_scratch(directory: pathlib.Path) -> list[pathlib.Path]:
     """Every scratch file ``run_polycc`` could have left in ``directory``.
 
     Matches the name ``run_polycc`` reserves -- ``.<out name>.<random>.tmp`` -- so this tracks that
@@ -875,7 +839,7 @@ def test_the_destination_is_never_exposed_mid_transform(tmp_path, monkeypatch) -
     scop = write_scop(tmp_path)
     out = pluto_transform.transformed_path(scop)
     out.write_text(PUBLISHED)
-    seen: List[Optional[str]] = []
+    seen: list[str | None] = []
     monkeypatch.setattr(pluto_transform, "polycc_exe", lambda: "/usr/bin/polycc")
     monkeypatch.setattr(pluto_transform, "run_bounded", writing_polycc(watch=out, seen=seen))
 
@@ -890,9 +854,9 @@ def test_a_successful_transform_publishes_the_whole_post_processed_result(tmp_pa
     as the command a reader can re-run, while polycc was actually pointed at the scratch name."""
     scop = write_scop(tmp_path)
     out = pluto_transform.transformed_path(scop)
-    executed: List[List[str]] = []
+    executed: list[list[str]] = []
 
-    def recording(cmd: List[str], **kwargs: Any) -> subprocess.CompletedProcess:
+    def recording(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
         executed.append(list(cmd))
         return writing_polycc()(cmd, **kwargs)
 
@@ -933,10 +897,8 @@ def test_no_scratch_survives_a_successful_or_expired_run(tmp_path, monkeypatch, 
     monkeypatch.setattr(pluto_transform, "polycc_exe", lambda: "/usr/bin/polycc")
     monkeypatch.setattr(pluto_transform, "run_bounded", polycc)
 
-    try:
+    with contextlib.suppress(subprocess.TimeoutExpired):
         pluto_transform.run_polycc(scop, out, timeout=1.0)
-    except subprocess.TimeoutExpired:
-        pass
 
     assert polycc_scratch(out.parent) == [], "a polycc scratch file survived the run"
 
@@ -945,21 +907,18 @@ def test_no_scratch_survives_a_successful_or_expired_run(tmp_path, monkeypatch, 
 
 
 def test_run_pluto_takes_the_index_array_set(tmp_path) -> None:
-    """``_run_pluto`` passes ``index_names`` to the invoke but never took it as a parameter, so the
-    name was undefined and EVERY pluto grade in the corpus raised ``NameError`` before polycc's
-    output was ever run. Broken from 28bf3c477c until it was caught in CI as
-    ``skip:unsupported:pluto-miscompile:NameError`` on gemm -- a verdict that blamed polycc.
+    """``_run_pluto`` passes ``index_names`` to the invoke, so it must take it as a parameter, or
+    EVERY pluto grade raises ``NameError`` before polycc's output runs and reads as
+    ``skip:unsupported:pluto-miscompile:NameError`` -- a verdict that blames polycc.
 
-    Asserted on the signature, because the failure needs a full polycc toolchain to reproduce and
-    the parameter is what the bug was."""
+    Asserted on the signature, because the failure needs a full polycc toolchain to show."""
     import inspect
 
-    import tests.numerical_oracle as oracle
+    from hpcagent_bench import numerical_oracle as oracle
 
     params = list(inspect.signature(oracle._run_pluto).parameters)
     assert "index_names" in params, params
     # The call site must supply it too -- an unfilled default would reintroduce the silence.
-    source = inspect.getsource(oracle.run_kernel) if hasattr(oracle, "run_kernel") else ""
     assert oracle._run_pluto.__defaults__ in (None, ()), "index_names must be required, not defaulted"
 
 
@@ -968,7 +927,7 @@ def test_an_exception_out_of_the_invoke_is_not_blamed_on_polycc(tmp_path, monkey
     escaping ``_invoke_isolated`` is a defect in this harness -- the invoke reports a run failure as
     a status string -- so it must keep its own prefix instead of being laundered into
     ``pluto-miscompile``, which is exactly what hid the undefined ``index_names`` above."""
-    import tests.numerical_oracle as oracle
+    from hpcagent_bench import numerical_oracle as oracle
 
     write_scop(tmp_path)
 
@@ -1029,7 +988,7 @@ def test_ppcg_exe_falls_back_from_the_shared_tools_dir_to_path(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Without :data:`ppcg_transform.PPCG_HOME_ENV`, a ppcg built into the shared tools cache (a
-    build script's ``ppcg`` symlink -- ``scripts/cache_env.sh``) is found next; with NEITHER env
+    build script's ``ppcg`` symlink -- ``helpers/scripts/cache_env.sh``) is found next; with NEITHER env
     var pointing at a real build, this falls back to PATH -- the only lookup a host without a cache
     build ever had, and it must keep working exactly as before."""
     from hpcagent_bench import ppcg_transform
@@ -1100,7 +1059,7 @@ def test_ppcg_run_env_puts_its_own_lib_dir_ahead_of_ld_library_path(
     include ``/usr/lib/x86_64-linux-gnu``, where Ubuntu packages an OLDER ``libisl23`` (a gcc
     build dependency) under the SAME soname as the isl ppcg was built against. Left alone, that
     shadows the correct isl and ppcg dies at startup with ``undefined symbol: isl_id_set_alloc``
-    (job 640113) -- so ``_ppcg_run_env`` has to WIN the race by prepending ppcg's own lib dir,
+    -- so ``_ppcg_run_env`` has to WIN the race by prepending ppcg's own lib dir,
     not merely appending it or leaving RPATH to sort it out."""
     from hpcagent_bench import ppcg_transform
 
@@ -1160,11 +1119,10 @@ def test_ppcg_run_env_is_a_noop_with_no_lib_dir_beside_the_exe(
     assert ppcg_transform._ppcg_run_env(str(lone)) is None
 
 
-# A MISSING TOOL IS NOT A KERNEL VERDICT. Job 640520 shipped 248 ppcg rows and no ppcg: 193 of them
-# read "ppcg is not installed on this host" and 55 read "the translator emitted no #pragma scop",
-# and every one of them reached the results DB as the same `unsupported` decline a kernel outside
-# the polyhedral model gets. The tests below pin the three things that stop that repeating: the
-# recorded WORD differs, the tool is asked about BEFORE the kernel, and the job refuses to start.
+# A MISSING TOOL IS NOT A KERNEL VERDICT. A sweep on a host without ppcg must not record its rows as
+# the `unsupported` decline a kernel outside the polyhedral model gets, nor blame a kernel's missing
+# scop. The tests below pin the three things that keep them apart: the recorded WORD differs, the
+# tool is asked about BEFORE the kernel, and the job refuses to start.
 
 
 def test_a_missing_ppcg_is_recorded_as_tool_missing_and_a_real_decline_is_not(tmp_path, monkeypatch) -> None:
@@ -1174,7 +1132,7 @@ def test_a_missing_ppcg_is_recorded_as_tool_missing_and_a_real_decline_is_not(tm
     existing handler keeps working; what changes is that ``errors.decline_kind`` gives the host
     problem its own word. A reader who cannot tell them apart reads an empty image as a statement
     about the corpus."""
-    from hpcagent_bench.frameworks.errors import decline_kind, ToolMissing
+    from hpcagent_bench.frameworks.errors import ToolMissing, decline_kind
 
     cpp_backend = tmp_path / "cpp_backend"
     write_scop(cpp_backend)
@@ -1197,10 +1155,8 @@ def test_the_ppcg_column_asks_about_its_tool_before_it_asks_about_the_kernel(tmp
     """With no ppcg on the host, EVERY kernel's reason is the missing tool -- including the ones
     that also have no scop.
 
-    This is the exact conflation job 640520 published: 55 of its rows blamed the kernels ("the
-    translator emitted no #pragma scop") on a node where the one true answer, which the other 193
-    rows gave, was that the image shipped no ppcg. A host without the compiler has nothing to say
-    about any kernel, so the tool question comes first."""
+    A host without the compiler has nothing to say about any kernel, so the tool question comes first:
+    "the translator emitted no #pragma scop" on such a host blames the kernel for the image's gap."""
     from hpcagent_bench.frameworks.errors import ToolMissing
 
     monkeypatch.setattr(ppcg_transform, "ppcg_lookup", lambda: (None, "ppcg is not installed on this host: nowhere"))
@@ -1214,9 +1170,9 @@ def test_a_broken_ppcg_is_walked_past_rather_than_shadowing_a_working_one(tmp_pa
     The shared tools cache outranks the image on purpose -- a host pinning a build to test it has
     to win -- so an executable there that dies at startup would otherwise shadow the pinned ppcg the
     image carries and take the whole column down. Measured, and not hypothetical: the cache build
-    left over from the /ritom scratch migration still has its executable bit and still fails with
+    left over from a scratch migration still has its executable bit and still fails with
     ``libLLVM-17.so.1: cannot open shared object file``, and ppcg has a standing reason to die this
-    way anyway (job 640113's ``undefined symbol: isl_id_set_alloc``, an isl the EDF's
+    way anyway (``undefined symbol: isl_id_set_alloc``, an isl the EDF's
     LD_LIBRARY_PATH wins). So the lookup runs each candidate and takes the first that answers."""
     broken = tmp_path / "tools" / "ppcg" / "bin" / "ppcg"
     broken.parent.mkdir(parents=True)
@@ -1234,7 +1190,8 @@ def test_a_broken_ppcg_is_walked_past_rather_than_shadowing_a_working_one(tmp_pa
     monkeypatch.setattr(ppcg_transform.shutil, "which", lambda _name: None)
     exe, problem = ppcg_transform.ppcg_lookup()
     assert exe is None
-    assert "does not run" in problem and "isl_id_set_alloc" in problem
+    assert "does not run" in problem
+    assert "isl_id_set_alloc" in problem
     assert "is not installed" not in problem
 
     # And a host with no candidate at all says so, rather than naming a binary it never found.
@@ -1251,7 +1208,8 @@ def test_the_hip_column_declines_when_only_hipify_is_missing(monkeypatch) -> Non
 
     assert ppcg_transform.missing_tool("cuda") == ""
     problem = ppcg_transform.missing_tool("hip")
-    assert ppcg_transform.HIPIFY in problem and "is not installed" in problem
+    assert ppcg_transform.HIPIFY in problem
+    assert "is not installed" in problem
 
 
 def test_hipify_translates_both_ppcg_halves_and_the_shared_header_in_place(tmp_path, monkeypatch) -> None:
@@ -1295,7 +1253,7 @@ def test_hipify_absent_makes_the_translation_step_a_tool_problem(tmp_path, monke
     """:func:`ppcg_transform.hipify` is reachable from ``run_ppcg`` as well as from the column's
     own gate, and its refusal has to carry the same word: a host with no hipify is a host problem,
     never a kernel that ppcg could not transform."""
-    from hpcagent_bench.frameworks.errors import decline_kind, ToolMissing
+    from hpcagent_bench.frameworks.errors import ToolMissing, decline_kind
 
     monkeypatch.setattr(ppcg_transform, "hipify_exe", lambda: None)
     with pytest.raises(ToolMissing) as absent:
@@ -1306,15 +1264,16 @@ def test_hipify_absent_makes_the_translation_step_a_tool_problem(tmp_path, monke
 def test_preflight_refuses_a_ppcg_column_whose_toolchain_is_absent(monkeypatch) -> None:
     """The startup gate: one loud FATAL line instead of one silent row per kernel.
 
-    ``--tools-only`` is what ``experiments/canon_column.sh`` runs inside the container before its
-    first kernel, and it must check ONLY the toolchain: the canon campaign runs columns
+    ``--tools-only`` is what ``hpcagent_bench/cluster/canon_column.sh`` runs inside the container before its
+    first kernel, and it must check ONLY the toolchain: the canon experiment runs columns
     (numba, the ppcg family) that :data:`preflight.DETERMINISTIC_FRAMEWORKS` does not list, so the
-    full preflight would refuse a campaign over a label rather than over a missing compiler."""
+    full preflight would refuse an experiment over a label rather than over a missing compiler."""
     monkeypatch.setattr(ppcg_transform, "ppcg_lookup", lambda: (None, "ppcg is not installed on this host: nowhere"))
     assert preflight.needs_ppcg(["ppcg", "ppcg_hip", "numba", "cc"]) == ["ppcg", "ppcg_hip"]
 
     code, report, env = preflight.run(["ppcg_hip"], tools_only=True)
-    assert code == 1 and env == []
+    assert code == 1
+    assert env == []
     assert any("FATAL" in line and "ppcg is not installed" in line for line in report)
     assert any("ppcg_hip" in line for line in report)
 
@@ -1328,23 +1287,29 @@ def test_preflight_refuses_a_ppcg_column_whose_toolchain_is_absent(monkeypatch) 
 @pytest.mark.ppcg
 def test_the_ppcg_hip_column_times_and_validates_one_kernel(tmp_path) -> None:
     """The whole chain with nothing faked: ppcg transforms the scop to CUDA, hipify-perl rewrites it
-    as HIP, hipcc builds it for this GPU, it RUNS, it agrees with numpy, and it produces a time.
+    as HIP, hipcc builds it for this GPU, it RUNS on device-resident arrays, it agrees with numpy,
+    and it produces a time.
 
-    The transformed source is checked for both marks before the arithmetic is: a ``__global__`` (so
-    ppcg really offloaded, rather than copying the serial nest through -- its silent refusal) and
+    The transformed source is checked for its marks before the arithmetic is: a ``__global__`` (so
+    ppcg really offloaded, rather than copying the serial nest through -- its silent refusal),
     ``hip``-prefixed runtime calls with no ``cuda`` ones left (so the file hipcc compiled is the
-    translated one). Without those, a library that happened to answer correctly on the host would
-    pass this as a GPU measurement."""
+    translated one), and none of ppcg's device mirrors (the column's contract: the caller's arrays
+    are already on the device, ``device_resident_host``). Without those, a library that happened to
+    answer correctly on the host would pass this as a GPU measurement. The arrays are staged the way
+    the column's ``copy_func`` stages them."""
+    from hpcagent_bench.harness.native_call import import_device_array_module
+
     write_scop(tmp_path)
 
-    so_path = cpp_runtime._ensure_built(tmp_path, "mm", "ppcg_hip")
+    so_path = native_runtime._ensure_built(tmp_path, "mm", "ppcg_hip")
 
     assert so_path.name == "libmm_ppcg_hip.so"
     device = (tmp_path / "mm_fp64_pluto_input_kernel.hip").read_text()
     host = (tmp_path / "mm_fp64_pluto_input_host.hip").read_text()
     assert "__global__" in device, "ppcg offloaded nothing: it copied the scop through unchanged"
-    assert re.search(r"hip(Malloc|Memcpy|Free)", host), "the host half was not translated to HIP"
-    assert not re.search(r"cuda(Malloc|Memcpy|Free)", host), "CUDA runtime calls survived hipify"
+    assert re.search(r"\bhip(GetLastError|Success)\b", host), "the host half was not translated to HIP"
+    assert not re.search(r"\bcuda(Malloc|Memcpy|Free|GetLastError)\b", host), "CUDA runtime calls survived hipify"
+    assert not re.search(r"\bhip(Malloc|Memcpy|Free)\b", host), "a device mirror of a parameter survived"
 
     lib = ctypes.CDLL(str(so_path))
     kernel = lib["mm_fp64"]
@@ -1356,12 +1321,15 @@ def test_the_ppcg_hip_column_times_and_validates_one_kernel(tmp_path) -> None:
     rng = np.random.default_rng(0)
     a = np.ascontiguousarray(rng.random((n, n)))
     b = np.ascontiguousarray(rng.random((n, n)))
-    c = np.zeros((n, n))
+    cupy = import_device_array_module()
+    staged = [cupy.asarray(arr) for arr in (a, b, np.zeros((n, n)))]
+    cupy.cuda.runtime.deviceSynchronize()
     start = time.perf_counter()
-    kernel(n, *(arr.ctypes.data_as(ptr) for arr in (a, b, c)))
+    kernel(n, *(ctypes.cast(arr.data.ptr, ptr) for arr in staged))
+    cupy.cuda.runtime.deviceSynchronize()
     elapsed_ms = (time.perf_counter() - start) * 1e3
 
-    np.testing.assert_allclose(c, a @ b, rtol=1e-12, atol=1e-12)
+    np.testing.assert_allclose(cupy.asnumpy(staged[2]), a @ b, rtol=1e-12, atol=1e-12)
     assert elapsed_ms > 0.0, "the column produced no time for a kernel it just ran"
 
 
@@ -1372,8 +1340,8 @@ def test_the_transform_publishes_from_a_scratch_dir_beside_the_scop(tmp_path, mo
     ppcg has no ``-o`` for the pair it writes, so it runs in a throwaway cwd and the results are
     moved next to the scop. ``os.replace`` is atomic and therefore cannot cross a filesystem
     boundary, and ``$TMPDIR`` on a cluster node is node-local while the checkout is on Lustre: with
-    the default temporary directory every kernel died with ``Invalid cross-device link`` (job
-    644285, eight affine kernels, eight ``runtime_error`` rows). Pinned on the MECHANISM -- the cwd
+    the default temporary directory every kernel died with ``Invalid cross-device link`` (eight
+    affine kernels, eight ``runtime_error`` rows). Pinned on the MECHANISM -- the cwd
     is a sibling of the scop -- because a tmp_path test has only one filesystem and could not
     reproduce the EXDEV itself.
     """
@@ -1397,7 +1365,8 @@ def test_the_transform_publishes_from_a_scratch_dir_beside_the_scop(tmp_path, mo
 
     assert proc.returncode == 0, proc.stderr
     host, device = ppcg_transform.transformed_paths(scop, "cuda")
-    assert host.is_file() and device.is_file(), "the transform published nothing"
+    assert host.is_file(), "the transform published nothing"
+    assert device.is_file(), "the transform published nothing"
     assert scop.with_name(f"{scop.stem}_kernel.hu").is_file(), "the shared header was not published"
 
     scratch = pathlib.Path(record.read_text().strip())
@@ -1406,27 +1375,27 @@ def test_the_transform_publishes_from_a_scratch_dir_beside_the_scop(tmp_path, mo
 
 
 @pytest.mark.integration
+@isolated
 def test_a_validation_that_could_not_run_is_not_recorded_as_validated(tmp_path, monkeypatch) -> None:
     """A comparison that raised is not a comparison that passed.
 
     ``valid`` starts optimistic so an unvalidated run still produces timings, and under
-    ``ignore_errors`` -- which every canon column runs with -- the except branch used to leave it
-    that way: the row said ``validated=True`` about a comparison that never completed. Measured on
-    job 644305, where two ``ppcg_hip`` kernels whose own ``np.allclose`` raised
-    ``ArrayMemoryError`` (the per-kernel RLIMIT_AS cap, on arrays that size) came out of the sweep
-    marked validated -- a compiler column publishing agreement with NumPy that was never checked.
+    ``ignore_errors`` -- which every canon column runs with -- the except branch must not leave it
+    that way: a ``ppcg_hip`` kernel whose own ``np.allclose`` raises ``ArrayMemoryError`` (the
+    per-kernel RLIMIT_AS cap, on arrays that size) would be recorded ``validated=True`` -- a compiler
+    column publishing agreement with NumPy that was never checked.
 
     Driven through NUMBA with the numpy oracle handed in as the third constructor argument --
     the shape ``collect.sweep`` uses. Both halves are load-bearing and both were measured: numpy
-    alone IS the reference and never reaches the comparison (job 644317), and a Test built without
-    the oracle sets ``validate = False`` outright (job 644325), so either one passes this vacuously.
+    alone IS the reference and never reaches the comparison, and a Test built without
+    the oracle sets ``validate = False`` outright, so either one passes this vacuously.
     The ``called`` flag is what refuses to let it. The DB override is the pair
     ``test_framework_datatype_resync`` uses, so the run's rows land in ``tmp_path`` instead of the
     checkout's results DB."""
     from hpcagent_bench import config
     from hpcagent_bench.frameworks import Benchmark, Test, generate_framework, utilities
 
-    called: List[bool] = []
+    called: list[bool] = []
 
     def boom(*_args: Any, **_kwargs: Any) -> bool:
         called.append(True)

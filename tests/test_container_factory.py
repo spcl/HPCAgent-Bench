@@ -1,9 +1,8 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Unit tests for the container-launch factory: argv assembly, backend resolution, Harbor provider name."""
 
 import os
-import pathlib
 import subprocess
 
 import pytest
@@ -15,9 +14,8 @@ from hpcagent_bench import containers
 def clean_backend_env(monkeypatch):
     """Drop every ambient container/runtime var so a developer's shell cannot skew the argv assertions."""
     for key in list(os.environ):
-        if key.startswith("HPCAGENT_BENCH_") or key in ("OLLAMA_HOST", "ANTHROPIC_API_KEY"):
+        if key.startswith("HPCAGENT_BENCH_") or key == "ANTHROPIC_API_KEY":
             monkeypatch.delenv(key, raising=False)
-    yield
 
 
 def test_load_backends_lists_every_backend() -> None:
@@ -51,7 +49,8 @@ def test_oci_is_a_standard_not_a_program() -> None:
     )
     assert podman.image_form == docker.image_form == "tag"
     assert podman.gpu["nvidia"] != docker.gpu["nvidia"]  # the one flag spelling that differs
-    assert podman.rootless and not docker.rootless  # and the one property that decides defaults
+    assert podman.rootless
+    assert not docker.rootless
 
 
 def test_a_family_name_resolves_to_whichever_flavour_is_installed(monkeypatch) -> None:
@@ -79,7 +78,6 @@ def test_the_default_backend_is_rootless_and_daemonless() -> None:
     running daemon and a root-equivalent group, which no HPC login node grants; apptainer and ce
     need the OCI image converted first. Only podman is both OCI-native and rootless."""
     spellings, _ = containers.load_backends()
-    assert containers.DEFAULT_BACKEND == "podman"
     assert spellings[containers.DEFAULT_BACKEND].image_form == "tag"  # consumes OCI unconverted
     assert spellings["apptainer"].image_form == "sif"  # a conversion, so never the default
     assert spellings["ce"].image_form == "edf"
@@ -91,7 +89,8 @@ def test_ce_is_a_different_shape_of_backend_not_just_different_flags() -> None:
     that cannot run, so local_run_command must hand the command back untouched."""
     spellings, _ = containers.load_backends()
     assert spellings["ce"].kind == "srun_env"
-    assert spellings["ce"].verb == () and spellings["ce"].bind_flag == ""
+    assert spellings["ce"].verb == ()
+    assert spellings["ce"].bind_flag == ""
     assert containers.local_run_command(["hpcagent-bench", "run"], backend="ce") == ["hpcagent-bench", "run"]
     assert all(spellings[name].kind == "exec" for name in containers.EXEC_BACKENDS)
 
@@ -103,7 +102,6 @@ def test_native_is_a_supported_backend_not_a_missing_one() -> None:
     assert spellings["native"].kind == "none"
     assert spellings["native"].image_form == ""
     assert containers.local_run_command(["hpcagent-bench", "run"], backend="native") == ["hpcagent-bench", "run"]
-    assert containers.srun_container_flags("native") == []
     with pytest.raises(ValueError, match="consumes no image"):
         containers.default_image("native")
 
@@ -117,17 +115,6 @@ def test_a_sif_is_never_the_distributed_artifact() -> None:
     assert unconverted == {"docker", "podman"}
     assert spellings["apptainer"].image_form == "sif"
     assert spellings["ce"].image_form == "edf"
-
-
-def test_ce_contributes_an_srun_flag_and_refuses_to_be_silent_without_one() -> None:
-    """On Alps a step without --environment runs OUTSIDE the image, on the bare node, which
-    looks like a broken environment rather than a missing flag. So a missing EDF raises."""
-    assert containers.srun_container_flags("ce", edf="/scratch/loop_level_reasoning.toml") == [
-        "--environment=/scratch/loop_level_reasoning.toml"
-    ]
-    assert containers.srun_container_flags("podman") == []  # an exec wrapper needs no srun flag
-    with pytest.raises(ValueError, match="HPCAGENT_BENCH_EDF"):
-        containers.srun_container_flags("ce")
 
 
 def test_ce_has_no_image_reference_of_its_own() -> None:
@@ -198,13 +185,16 @@ def test_local_run_command_podman_nvidia_gpu_tokens() -> None:
     argv = containers.local_run_command(["run"], backend="podman", hardware="nvidia", repo_root="/r")
     # podman run --rm --network host --device nvidia.com/gpu=all ...
     assert argv[:5] == ["podman", "run", "--rm", "--network", "host"]
-    assert "--device" in argv and "nvidia.com/gpu=all" in argv
+    assert "--device" in argv
+    assert "nvidia.com/gpu=all" in argv
     assert argv[-2:] == ["hpcagent_bench:nvidia", "run"]
 
 
 def test_local_run_command_podman_amd_gpu_tokens() -> None:
     argv = containers.local_run_command(["x"], backend="podman", hardware="amd", repo_root="/r")
-    assert "/dev/kfd" in argv and "--group-add" in argv and "keep-groups" in argv
+    assert "/dev/kfd" in argv
+    assert "--group-add" in argv
+    assert "keep-groups" in argv
 
 
 def test_local_run_command_rejects_dropped_backend() -> None:
@@ -217,19 +207,20 @@ def test_local_run_command_docker_nvidia_uses_the_docker_gpu_spelling() -> None:
     """docker and podman differ on exactly one thing that matters here: the NVIDIA flag."""
     argv = containers.local_run_command(["run"], backend="docker", hardware="nvidia", repo_root="/r")
     assert argv[:5] == ["docker", "run", "--rm", "--network", "host"]
-    assert "--gpus" in argv and "all" in argv
+    assert "--gpus" in argv
+    assert "all" in argv
     assert "nvidia.com/gpu=all" not in argv  # that is podman's spelling, not docker's
     assert argv[-2:] == ["hpcagent_bench:nvidia", "run"]
 
 
-def test_harbor_provider_names_docker_and_singularity() -> None:
-    """Harbor drives docker and singularity. podman and ce have no provider, so they must raise
+def test_harbor_provider_names_docker_podman_and_singularity() -> None:
+    """Harbor (>= 0.23) drives docker, podman and singularity. ce has no provider, so it must raise
     rather than emit one Harbor would reject."""
     assert containers.harbor_env_for("docker") == "docker"
+    assert containers.harbor_env_for("podman") == "podman"
     assert containers.harbor_env_for("apptainer") == "singularity"
-    for without in ("podman", "ce"):
-        with pytest.raises(ValueError, match="Harbor"):
-            containers.harbor_env_for(without)
+    with pytest.raises(ValueError, match="Harbor"):
+        containers.harbor_env_for("ce")
 
 
 def test_default_image_sif_tag_and_overrides(monkeypatch) -> None:
@@ -262,7 +253,7 @@ def test_collect_env_rejects_a_newline_value(monkeypatch) -> None:
 def test_harbor_env_for_maps_and_raises() -> None:
     assert containers.harbor_env_for("apptainer") == "singularity"
     with pytest.raises(ValueError):
-        containers.harbor_env_for("podman")  # podman is launched directly, not via Harbor
+        containers.harbor_env_for("ce")  # the CSCS container engine is launched directly, not via Harbor
 
 
 # install_apptainer retry: both fetches are live-network; subprocess/sleep stubbed, stays pure-unit
@@ -289,7 +280,7 @@ def _stub_installer(monkeypatch, bash_returncodes, curl_error=None):
         return subprocess.CompletedProcess(argv, returncode, stdout=stdout)
 
     monkeypatch.setattr(containers.subprocess, "run", fake_run)
-    monkeypatch.setattr(containers.time, "sleep", lambda s: sleeps.append(s))
+    monkeypatch.setattr(containers.time, "sleep", sleeps.append)
     return calls, sleeps
 
 
@@ -352,13 +343,13 @@ def test_clean_partial_install_never_touches_a_preexisting_path(tmp_path) -> Non
     prefix = tmp_path / "local"
     (prefix / "share").mkdir(parents=True)
     (prefix / "share" / "user_data.txt").write_text("do not delete me")
-    preexisting = set(os.listdir(prefix))
+    preexisting = {entry.name for entry in prefix.iterdir()}
     (prefix / "x86_64").mkdir()
     (prefix / "bin").mkdir()
 
     containers.clean_partial_install(str(prefix), preexisting)
 
-    assert sorted(os.listdir(prefix)) == ["share"]
+    assert sorted(entry.name for entry in prefix.iterdir()) == ["share"]
     assert (prefix / "share" / "user_data.txt").read_text() == "do not delete me"
 
 
@@ -380,17 +371,3 @@ def test_ce_stays_its_own_family_even_though_it_is_podman_underneath() -> None:
     assert all(spellings[name].kind == "exec" for name in containers.family_members("oci"))
     # The safety property itself: asking for the OCI family never lands on the Slurm-only one.
     assert containers.resolve_backend("oci") in containers.family_members("oci")
-
-
-def test_the_alps_script_reads_the_ce_flag_from_the_spelling_file() -> None:
-    """``--environment`` is declared once, in container_backends.txt. The Alps submission script
-    derives it from there rather than spelling it again, so a change to how CE is invoked cannot
-    leave the cluster path behind."""
-    script = pathlib.Path(__file__).resolve().parents[1] / "scripts/cscs/submit_loop_level_reasoning_alps.sbatch"
-    text = script.read_text()
-    assert "ce.srun_flag" in text, "the Alps script must derive the flag from the spelling file"
-    launches = [line for line in text.splitlines() if line.lstrip().startswith(("srun ", 'eval "$(srun '))]
-    assert launches, "no srun steps found"
-    for line in launches:
-        assert '"${CE[@]}"' in line, f"srun step does not carry the derived CE flag: {line.strip()}"
-        assert "--environment=" not in line, f"CE flag hardcoded instead of derived: {line.strip()}"

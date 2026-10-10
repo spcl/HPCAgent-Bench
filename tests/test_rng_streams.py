@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The per-array RNG stream policy.
 
@@ -41,8 +41,8 @@ def test_spawn_is_reproducible_and_distinct() -> None:
     a = [g.random(8) for g in streams.spawn_streams(42, 6)]
     b = [g.random(8) for g in streams.spawn_streams(42, 6)]
     c = [g.random(8) for g in streams.spawn_streams(43, 6)]
-    assert all(np.array_equal(x, y) for x, y in zip(a, b)), "same seed must replay"
-    assert not any(np.array_equal(x, y) for x, y in zip(a, c)), "different seed must diverge"
+    assert all(np.array_equal(x, y) for x, y in zip(a, b, strict=False)), "same seed must replay"
+    assert not any(np.array_equal(x, y) for x, y in zip(a, c, strict=False)), "different seed must diverge"
     for i in range(len(a)):
         for j in range(i + 1, len(a)):
             assert not np.array_equal(a[i], a[j]), f"streams {i} and {j} collided"
@@ -52,7 +52,7 @@ def test_stream_k_does_not_depend_on_how_many_were_spawned() -> None:
     """The whole point: asking for more arrays must not move the ones already there."""
     short = [g.random(8) for g in streams.spawn_streams(7, 3)]
     long = [g.random(8) for g in streams.spawn_streams(7, 9)]
-    assert all(np.array_equal(x, y) for x, y in zip(short, long))
+    assert all(np.array_equal(x, y) for x, y in zip(short, long, strict=False))
 
 
 def test_stream_k_does_not_depend_on_draw_order() -> None:
@@ -62,7 +62,7 @@ def test_stream_k_does_not_depend_on_draw_order() -> None:
     backward = [None] * 6
     for k in (5, 0, 3, 1, 4, 2):
         backward[k] = generators[k].random(8)
-    assert all(np.array_equal(x, y) for x, y in zip(forward, backward))
+    assert all(np.array_equal(x, y) for x, y in zip(forward, backward, strict=False))
 
 
 def test_bit_generators_are_round_robined() -> None:
@@ -78,7 +78,7 @@ def test_threaded_fill_matches_sequential(monkeypatch) -> None:
     tasks = [(lambda g=g: g.uniform(-1000, 1000, 1 << 16)) for g in streams.spawn_streams(11, 8)]
     monkeypatch.setattr(streams, "THREAD_MIN_ELEMENTS", 0)
     threaded = streams.fill(tasks, elements=1 << 20)
-    assert all(np.array_equal(x, y) for x, y in zip(sequential, threaded))
+    assert all(np.array_equal(x, y) for x, y in zip(sequential, threaded, strict=False))
 
 
 #: A spec far outside anything a real manifest asks for. The point of the ceiling is that it holds
@@ -123,7 +123,7 @@ def test_auto_initialize_is_reproducible(stem_spec) -> None:
     _, spec = stem_spec
     a = auto_initialize(spec, "S", Precision.FP64, seed=42)
     b = auto_initialize(spec, "S", Precision.FP64, seed=42)
-    assert all(np.array_equal(x, y) for x, y in zip(a, b))
+    assert all(np.array_equal(x, y) for x, y in zip(a, b, strict=False))
 
 
 @pytest.mark.parametrize("stem_spec", auto_init_specs(), ids=lambda s: s[0])
@@ -133,4 +133,4 @@ def test_auto_initialize_threading_does_not_change_the_data(stem_spec, monkeypat
     sequential = auto_initialize(spec, "S", Precision.FP64, seed=42)
     monkeypatch.setattr(streams, "THREAD_MIN_ELEMENTS", 0)
     threaded = auto_initialize(spec, "S", Precision.FP64, seed=42)
-    assert all(np.array_equal(x, y) for x, y in zip(sequential, threaded))
+    assert all(np.array_equal(x, y) for x, y in zip(sequential, threaded, strict=False))

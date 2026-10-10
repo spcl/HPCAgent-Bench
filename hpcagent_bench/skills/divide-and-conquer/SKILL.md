@@ -1,7 +1,7 @@
 ---
 name: divide-and-conquer
 description: "Split a large multi-phase kernel into named stages so a profile ranks them and a wrong answer bisects to one. Use when phases hide under one profile symbol or a rejected run needs localizing."
-when: "a kernel has many loops or phases and you cannot hold it whole in your head at once, one profile symbol covers them all, or a wrong answer you cannot localize to one phase: ALWAYS split it into named stages before you guess at the whole"
+when: "the kernel has many phases and you cannot tell which one is slow or wrong: ALWAYS split it into named stages before you guess at the whole"
 ---
 
 A kernel of several hundred lines and a dozen stages does not fail the way a loop nest does. The

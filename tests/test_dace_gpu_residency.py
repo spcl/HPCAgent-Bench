@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The GPU residency contract, as the DaCe columns have to satisfy it.
 
@@ -13,7 +13,6 @@ decided by the passes rather than by a device being present.
 
 import dace
 import pytest
-
 from dace import data as dace_data
 from dace import dtypes as dace_dtypes
 

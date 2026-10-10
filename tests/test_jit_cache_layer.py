@@ -1,9 +1,9 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""experiments/jit_cache_layer.sh: engines compile node-locally and publish add-only to the shared cache.
+"""hpcagent_bench/cluster/jit_cache_layer.sh: engines compile node-locally and publish add-only to the shared cache.
 
-The shared cache is NFS; engines writing it concurrently turned each other's rewrites into ESTALE
-(640074/640075/640090). These tests pin the contract that makes the layer safe to share.
+The shared cache is NFS; engines writing it concurrently turn each other's rewrites into ESTALE.
+These tests pin the contract that makes the layer safe to share.
 """
 
 import pathlib
@@ -12,7 +12,7 @@ import subprocess
 import pytest
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-LAYER = REPO / "experiments" / "jit_cache_layer.sh"
+LAYER = REPO / "hpcagent_bench" / "cluster" / "jit_cache_layer.sh"
 STAGE_PREFIX = ".jit-layer-staging"
 
 
@@ -85,14 +85,15 @@ def test_seed_never_replaces_an_entry_already_in_the_local_layer(tmp_path: pathl
 def test_seed_of_a_cache_that_does_not_exist_yet_creates_an_empty_layer(tmp_path: pathlib.Path) -> None:
     local = tmp_path / "local"
     run("seed", str(tmp_path / "never-created"), str(local))
-    assert local.is_dir() and not any(local.iterdir())
+    assert local.is_dir()
+    assert not any(local.iterdir())
 
 
 @pytest.mark.parametrize("variable", ["TRITON_CACHE_DIR", "TORCHINDUCTOR_CACHE_DIR", "VLLM_CACHE_ROOT"])
 def test_the_engine_is_pointed_at_the_local_layer_before_it_starts(variable: str) -> None:
     """Static: the redirect has to happen in run_vllm_node before its exec, or the engine writes
     NFS directly again."""
-    text = (REPO / "experiments" / "run_cluster.sh").read_text()
+    text = (REPO / "hpcagent_bench" / "cluster" / "run_cluster.sh").read_text()
     body = text[text.index("run_vllm_node() {") :]
     body = body[: body.index('exec "${command[@]}"')]
     redirect = body.index('export TRITON_CACHE_DIR="${local_dirs[0]}"')
@@ -107,7 +108,7 @@ def compile_cache(artifacts: list[pathlib.Path]) -> str:
 
 def test_seeding_drops_an_entry_whose_recorded_artifact_path_is_gone(tmp_path: pathlib.Path) -> None:
     """A vLLM entry compiled under another job's node-local root is a TRAP, not a miss: the engine
-    opens the recorded path and dies with FileNotFoundError (640572 -> 640611/640613/640638-640640).
+    opens the recorded path and dies with FileNotFoundError.
     """
     local, shared = tmp_path / "local", tmp_path / "shared"
     entry = shared / "95ea305896" / "rank_0_0" / "backbone"

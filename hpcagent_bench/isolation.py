@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """Make a fork safe to take while an OpenMP thread pool is live.
@@ -12,6 +12,15 @@ import ctypes
 import os
 import warnings
 
+__all__ = [
+    "KMP_PAUSE_SYMBOL",
+    "OMP_PAUSE_HARD",
+    "OMP_PAUSE_SOFT",
+    "OMP_RUNTIME_SONAMES",
+    "exports",
+    "pause_openmp_pools",
+]
+
 #: OpenMP runtimes whose thread pool must be torn down before a fork (see
 #: :func:`pause_openmp_pools`). Probed by the sonames a linked node library actually records
 #: in DT_NEEDED.
@@ -22,8 +31,6 @@ OMP_RUNTIME_SONAMES = ("libgomp.so.1", "libomp.so.5", "libomp.so", "libiomp5.so"
 OMP_PAUSE_SOFT = 1
 OMP_PAUSE_HARD = 2
 
-#: name -> ``omp_pause_resource_t`` value, for a config/CLI knob.
-OMP_PAUSE_MODES = {"soft": OMP_PAUSE_SOFT, "hard": OMP_PAUSE_HARD}
 
 #: Exported by LLVM's libomp and Intel's libiomp5, never by libgomp. That family returns 1 from
 #: omp_pause_resource_all when the runtime was never initialised or is already paused, and it
@@ -61,7 +68,8 @@ def pause_openmp_pools(mode: int = OMP_PAUSE_SOFT) -> None:
             warnings.warn(
                 f"{soname}: no omp_pause_resource_all (pre-OpenMP-5.0 runtime); its thread pool "
                 f"was NOT torn down before the fork -- fork safety for this runtime now rests on "
-                f"its own pthread_atfork handler, if it installs one (libgomp installs none)."
+                f"its own pthread_atfork handler, if it installs one (libgomp installs none).",
+                stacklevel=2,
             )
             continue  # best effort; the warning tells the caller the fork was left unhardened
         pause.argtypes = [ctypes.c_int]
@@ -70,5 +78,6 @@ def pause_openmp_pools(mode: int = OMP_PAUSE_SOFT) -> None:
         if pause(mode) != 0 and not exports(lib, KMP_PAUSE_SYMBOL):
             warnings.warn(
                 f"{soname}: omp_pause_resource_all(mode={mode}) returned non-zero; its thread "
-                f"pool was NOT torn down before the fork."
+                f"pool was NOT torn down before the fork.",
+                stacklevel=2,
             )

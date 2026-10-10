@@ -1,11 +1,10 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """agent_driver.py: what a vLLM replica that is not ready yet costs the run.
 
-The driver used to wait on replicas one after another with a hard failure, which made the slowest
-replica the deadline for all of them and turned one laggard into a dead arm: on llr4, oss
-589511/512/513/516 lost all 242 agents and wrote zero judge rows because a replica was still
-capturing CUDA graphs when its wait expired. A replica that misses the deadline is usually late
+Waiting on replicas one after another with a hard failure makes the slowest replica the deadline
+for all of them and turns one laggard (e.g. still capturing CUDA graphs) into a dead setup with
+zero judge rows. A replica that misses the deadline is usually late
 rather than dead, and LiteLLM keeps every upstream in rotation regardless of what the driver saw,
 so the run must proceed on whatever answered -- while still refusing to start with nothing.
 
@@ -15,9 +14,6 @@ should not differ between two identical runs.
 
 import gc
 import http.server
-import importlib.util
-import pathlib
-import sys
 import threading
 import time
 import warnings
@@ -26,16 +22,12 @@ from typing import ClassVar
 
 import pytest
 
-EXAMPLE = pathlib.Path(__file__).resolve().parents[1] / "experiments"
+from tests.fresh_module import fresh
 
 
 def load_example_module(name: str) -> ModuleType:
     """``sys.modules`` must carry the module BEFORE exec, matching tests/test_validate_run.py."""
-    spec = importlib.util.spec_from_file_location(name, EXAMPLE / f"{name}.py")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
+    return fresh(name)
 
 
 @pytest.fixture(name="driver")
@@ -99,7 +91,7 @@ class FakeEngineHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def log_message(self, format: str, *args: object) -> None:
+    def log_message(self, format: str, *args: object) -> None:  # noqa: A002 -- the overridden method's own signature
         return
 
 
@@ -112,9 +104,8 @@ def start_fake_engine(health_status: int) -> tuple[http.server.ThreadingHTTPServ
 
 
 def test_a_replica_stuck_before_health_is_not_returned_as_ready(driver: ModuleType) -> None:
-    """A replica that answers /v1/models but whose /health still 503s (mid warmup, the failure mode
-    behind the qwen38 2026-09-17 23:00 incident) must not be handed agents, even though /v1/models
-    alone would have looked ready under the old single-phase gate."""
+    """A replica that answers /v1/models but whose /health still 503s (mid warmup) must not be
+    handed agents, even though /v1/models alone looks ready."""
     ready_server, ready_url = start_fake_engine(200)
     stuck_server, stuck_url = start_fake_engine(503)
     try:

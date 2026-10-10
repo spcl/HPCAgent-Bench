@@ -62,6 +62,50 @@ or a shorter context, the configured value is the effective one.
   `python3 -m sglang.launch_server --help` inside the image first (an unknown value kills every rank),
   and read `attention_backend=` back from the server log.
 
+## aiter: correctness first, fallbacks accepted
+
+AMD serving runs aiter where it is exact: `SGLANG_USE_AITER=1` and `--attention-backend aiter` (GLM-5.3
+keeps its own `dsa` attention with aiter ops on). A shape aiter has no kernel for runs the engine's
+default path, which is correct, and that is accepted: a fallback costs speed, a wrong kernel costs the
+experiment.
+
+- aiter's bf16 GEMM dispatch (`aiter/tuned_gemm.py`) runs a shape without a row in its
+  `bf16_tuned_gemm.csv` through torch (hipBLASLt) and logs `not found tuned config ... using torch
+  solution`. aiter ships rows for gfx950 and gfx1250 only, so on MI300A qwen38's Gated-DeltaNet `ba`
+  projection, GLM-5.3's MoE router and its DSA indexer run hipBLASLt. Don't add our own tuned rows: a
+  tuned table chosen for speed picked split-K kernels with bf16 accumulation (up to 3.75% of elements
+  out of tolerance), and qwen38 agents served under it end in degenerate reasoning loops.
+- qwen38's 48 Gated-DeltaNet layers run SGLang's Triton GDN kernels; SGLang 0.5.20 has no aiter GDN
+  backend (`--linear-attn-backend` offers triton and NVIDIA/Intel-only choices).
+
+**Kernel cache.** aiter compiles a module the first time a shape needs it, behind a lock file, and a
+build inside the container dies with it. `run_cluster.sh` keeps one cache per aiter build and GPU
+arch on scratch, `$JIT_CACHE_ROOT/.aiter/aiter-<version>-<gfx>` (`AITER_JIT_DIR`, and `AITER_ROOT_DIR`
+for template ops such as `pa_ragged`), seeded once from the image prebuild of the same arch. The first
+server compiles, every later server and node loads the `.so`: aiter installs a module by atomic copy
+and serialises builders on the lock. A lock older than an hour is removed at launch, because aiter
+never breaks a lock held by another host. `GPU_ARCHS` is the node's arch, so a serve-time build
+compiles one arch.
+
+**Cold boot.** The warmup request can now take 1800 s (`SGLANG_WARMUP_TIMEOUT`, 600 s unset), inside
+every model layer's readiness wait. To pay the compile once, outside an experiment:
+
+```bash
+PREWARM=1 MODEL=qwen38 hpcagent_bench/cluster/serve-only.sbatch
+```
+
+boots the server, runs the tool, reasoning and long-context gates plus a 48-request burst, prints how
+many aiter builds that boot ran and the cache size, and ends the job. On a warm cache it builds nothing.
+
+**mi200 (MI250X, gfx90a) is the one exception: aiter attention cannot run there.**
+- aiter's hand-written asm kernels ship for gfx942, gfx950 and gfx1250 only (`/sgl-workspace/aiter/hsa/`),
+  and `aiter.jit.utils.chip_info.get_device_name()` raises `Unsupported gfx` for gfx90a.
+- vLLM refuses it too: `is_aiter_found_and_supported()` requires `get_cdna_version() > 2`
+  (`vllm/_aiter_ops.py`), and MI250X is CDNA2.
+
+mi200 serves SGLang with `--attention-backend triton`; aiter JIT ops that build for gfx90a (the
+all-reduce) still load from the cache.
+
 ## HiCache: never
 
 Do not set `--enable-hierarchical-cache` or `--hicache-ratio`. On an APU the "host" tier is the pool
@@ -73,7 +117,7 @@ dies to the OOM killer with no traceback. No `experiments/` env sets it.
 Name `--reasoning-parser` **and** `--tool-call-parser`. With one missing the server starts normally,
 then the first request using the other feature fails: a 400 the client logs as success, or a tool
 call returned as prose instead of `tool_calls`. Nothing in the log says "parser". Verify with
-`containers/cluster/ce-images/inference/verify-tools-reasoning.py`, which asserts
+`containers/inference/verify-tools-reasoning.py`, which asserts
 `choices[0].message.tool_calls[0]` and non-empty reasoning. Parser names are on each model page.
 
 ## Topology
@@ -101,9 +145,10 @@ call returned as prose instead of `tool_calls`. Nothing in the log says "parser"
 |---|---|---|
 | `SGLANG_USE_AITER` | `1` | aiter ops; does not pick the attention backend |
 | `SGLANG_SET_CPU_AFFINITY` | `0` | SGLang's own pinning is rejected by the Slurm cgroup; dies on a `psutil` error |
-| `AITER_JIT_DIR` | the image's `/opt/aiter-jit` (set by the EDF) | aiter JIT-builds on first use behind a lock; cold, the build can outrun the engine watchdog. Some aiter ops ignore it and use `$HOME/.aiter`; `run_cluster.sh` points `HOME` at a persistent cache |
+| `AITER_JIT_DIR`, `AITER_ROOT_DIR`, `GPU_ARCHS` | set by `run_cluster.sh` | the persistent aiter kernel cache and the arch it compiles for; see [aiter](#aiter-correctness-first-fallbacks-accepted) |
+| `SGLANG_WARMUP_TIMEOUT` | `1800` (`run_cluster.sh`) | the warmup request's read timeout, 600 s unset; a cold aiter cache compiles on that request |
 | `TRITON_CACHE_DIR` | persistent (`run_cluster.sh` derives it from `JIT_CACHE_ROOT`) | unset, every job re-JITs kernels during inference and generation stalls in bursts |
-| `HF_HOME` | on `iopsstor` (`$FAST_SCRATCH`, default from `scripts/cache_env.sh`) | 11x faster than general scratch at 16 concurrent readers; `run_cluster.sh` stripes `$HF_HOME/hub` wide |
+| `HF_HOME` | on `iopsstor` (`$FAST_SCRATCH`, default from `helpers/scripts/cache_env.sh`) | 11x faster than general scratch at 16 concurrent readers; `run_cluster.sh` stripes `$HF_HOME/hub` wide |
 | `NCCL_NET_GDR_LEVEL` | `0` | multi-node only |
 | `TOKENIZERS_PARALLELISM` | `false` | silences a fork warning |
 

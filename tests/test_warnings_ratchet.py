@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Ratchet: the -Wall -Wextra warning count on the native (C / C++ / Fortran) corpus
 must never grow. See ``hpcagent_bench/flags.py:WARNINGS_BASIC`` and the ``warnings_ref``
@@ -6,7 +6,7 @@ wiring in ``hpcagent_bench/envs/compilers.yaml`` -- deliberately no ``-Werror``,
 regression here is a number moving, not a build breaking.
 
 Builds a small, fast loop_level_reasoning sample through the SAME path the real native corpus
-build uses (``hpcagent_bench.benchmarks.cpp_runtime._ensure_built`` calls
+build uses (``hpcagent_bench.frameworks.native_runtime._ensure_built`` calls
 :func:`hpcagent_bench.languages.build_kernel_lib_commands`), but into an isolated
 ``tmp_path`` build dir instead of the tracked ``cpp_backend/build/`` directories.
 """
@@ -15,7 +15,6 @@ import pathlib
 import re
 import shutil
 import subprocess
-from typing import List, Optional, Tuple
 
 import pytest
 
@@ -32,7 +31,7 @@ from hpcagent_bench.spec import BenchSpec
 #: kernels were retired.) Keys, not paths: ``BenchSpec`` owns both the kernel directory and the artifact
 #: stem, so the sample cannot drift onto the pre-flatten ``loop_level_reasoning/cpp_backend/``
 #: leftovers that no emit refreshes -- which is how the first count came out too high.
-_KERNELS: Tuple[str, ...] = (
+_KERNELS: tuple[str, ...] = (
     "disjoint_halves_gather",
     "halo_broadcast",
     "safety_column_stencil",
@@ -46,23 +45,22 @@ _KERNELS: Tuple[str, ...] = (
 )
 
 #: (framework, lang, source ext, forced compilers.yaml block) mirroring
-#: cpp_runtime.FRAMEWORK_LANG / FRAMEWORK_COMPILER for the 3 native flavors a real sweep
+#: native_runtime.FRAMEWORK_LANG / FRAMEWORK_COMPILER for the 3 native flavors a real sweep
 #: builds: cc -> gcc (first "c" block, unforced), llvm -> clangpp (forced, matches the
 #: real "llvm" flavor), fortran -> gfortran (first "fortran" block, unforced).
-_FLAVORS: Tuple[Tuple[str, str, str, Optional[str]], ...] = (
+_FLAVORS: tuple[tuple[str, str, str, str | None], ...] = (
     ("cc", "c", "c", None),
     ("llvm", "cpp", "cpp", "clangpp"),
     ("fortran", "fortran", "f90", None),
 )
 
-#: KNOWN-BAD COUNT -- measured 2026-07-25 on this dev box (gcc 15.2.0, clang 21.1.8,
+#: KNOWN-BAD COUNT -- measured on this dev box (gcc 15.2.0, clang 21.1.8,
 #: gfortran) with:
 #:   OMP_NUM_THREADS=1 OMPI_MCA_pml=ob1 OMPI_MCA_btl=self,vader,tcp PMIX_MCA_gds=hash \
 #:   UCX_VFS_ENABLE=n HWLOC_COMPONENTS=-gl python3 -m pytest tests/test_warnings_ratchet.py
-#: ZERO, and it starts at zero deliberately -- the first measurement was 40, every one of
-#: them clang++'s -Wunused-const-variable on the C++ prelude's file-scope M_PI/M_E, which
-#: numpyto_c/emit.py now marks [[maybe_unused]]. Starting a ratchet at a number that a
-#: one-line emitter fix removes would have frozen that warning in as acceptable.
+#: ZERO, deliberately: numpyto_c/emit.py marks the C++ prelude's file-scope M_PI/M_E
+#: [[maybe_unused]] (clang++'s -Wunused-const-variable), and starting a ratchet at a number a
+#: one-line emitter change removes would freeze that warning in as acceptable.
 #: MAY ONLY BE LOWERED: a change needing a higher number is a regression to fix, never a
 #: ratchet bump.
 _KNOWN_BAD_COUNT = 0
@@ -73,7 +71,7 @@ _MIN_BUILDS = 20
 
 _WARNING_RE = re.compile(r"warning:", re.IGNORECASE)
 
-_REQUIRED_COMPILERS: Tuple[str, ...] = ("gcc", "g++", "clang", "clang++", "gfortran")
+_REQUIRED_COMPILERS: tuple[str, ...] = ("gcc", "g++", "clang", "clang++", "gfortran")
 
 
 def toolchain_versions() -> str:
@@ -83,21 +81,21 @@ def toolchain_versions() -> str:
     same tree measures 0 here and 20 on a CI runner. Naming the compilers in the failure is what
     makes the two numbers comparable instead of contradictory.
     """
-    out: List[str] = []
+    out: list[str] = []
     for name in _REQUIRED_COMPILERS:
         path = shutil.which(name)
         if path is None:
             continue
-        proc = subprocess.run([path, "--version"], capture_output=True, text=True)
+        proc = subprocess.run([path, "--version"], capture_output=True, text=True, check=False)
         first = proc.stdout.splitlines()[0] if proc.stdout else "?"
         out.append(f"{name}={first}")
     return "; ".join(out)
 
 
-def _run_build(cmds: List[List[str]], cwd: pathlib.Path) -> Tuple[Optional[str], int, List[str]]:
+def _run_build(cmds: list[list[str]], cwd: pathlib.Path) -> tuple[str | None, int, list[str]]:
     """Run a compile/link argv sequence, returning ``(failure, warning_count, warning_lines)``
     summed over every step's stderr. ``failure`` is None when every step exited zero, else the
-    failing command and its stderr -- the new -Wall -Wextra flags being REJECTED is a build break,
+    failing command and its stderr -- the -Wall -Wextra flags being REJECTED is a build break,
     not a warning to count, and must fail loudly.
 
     The lines come back alongside the count because the count alone is unactionable: this ratchet
@@ -105,17 +103,15 @@ def _run_build(cmds: List[List[str]], cwd: pathlib.Path) -> Tuple[Optional[str],
     has), so it can be zero on a dev box and nonzero on a CI runner. A failure that reports only
     a number leaves the CI log with nothing to fix -- the text is the whole diagnostic.
 
-    That reasoning applies to a BROKEN build at least as strongly, and this returned a bare
-    ``False`` for one until 2026-08-17: clang selecting a GCC install with no libstdc++ headers
-    reached CI as "the new -Wall -Wextra flags broke the build" and nothing else, when clang had
-    said exactly what was wrong ("fatal error: 'cstdint' file not found", plus a
-    -Wgcc-install-dir-libstdcxx note naming the directory it picked). Diagnosing it took a log
-    from a different job that happened to print its stderr. Carry the text.
+    That reasoning applies to a BROKEN build at least as strongly: clang selecting a GCC install
+    with no libstdc++ headers says exactly what is wrong ("fatal error: 'cstdint' file not found",
+    plus a -Wgcc-install-dir-libstdcxx note naming the directory it picked), and a bare ``False``
+    would reduce that to "the build broke". Carry the text.
     """
     warnings = 0
-    lines: List[str] = []
+    lines: list[str] = []
     for argv in cmds:
-        proc = subprocess.run(argv, cwd=str(cwd), capture_output=True, text=True)
+        proc = subprocess.run(argv, cwd=str(cwd), capture_output=True, text=True, check=False)
         if proc.returncode != 0:
             return f"{' '.join(argv)}\nrc={proc.returncode}\n{proc.stderr.strip()}", warnings, lines
         warnings += len(_WARNING_RE.findall(proc.stderr))
@@ -133,7 +129,7 @@ def test_warnings_ratchet(tmp_path: pathlib.Path) -> None:
 
     total_warnings = 0
     total_builds = 0
-    seen: List[str] = []
+    seen: list[str] = []
     for key in _KERNELS:
         spec = BenchSpec.load(key)
         backend = paths.BENCHMARKS / spec.relative_path / "cpp_backend"

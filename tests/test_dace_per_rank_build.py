@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Every rank of a multi-rank job builds into its OWN folder and its own PCH cache.
 
@@ -48,7 +48,7 @@ def fake_config(monkeypatch, *, native: bool, folder: str = ".dacecache") -> dic
 @pytest.fixture(autouse=True)
 def no_inherited_rank(monkeypatch) -> None:
     """The test process may itself have been launched by mpirun; start from a clean slate."""
-    for name in LAUNCHERS + ("DACE_BUILD_CACHE_DIR",):
+    for name in (*dace_framework.RANK_ENV, "DACE_BUILD_CACHE_DIR"):
         monkeypatch.delenv(name, raising=False)
 
 
@@ -95,7 +95,7 @@ def test_dace_s_own_per_rank_folders_are_pinned_on(monkeypatch) -> None:
     assert values["default_build_folder"] == ".dacecache"
 
 
-@pytest.mark.parametrize("native", (False, True))
+@pytest.mark.parametrize("native", [False, True])
 def test_a_rank_gets_its_own_precompiled_header_cache(monkeypatch, native) -> None:
     """The PCH is ~110 MB per entry and keyed by compiler+flags, so two ranks share one entry unless
     the ROOT differs -- and that entry is written, not just read. #2466 partitions the build folder
@@ -108,7 +108,7 @@ def test_a_rank_gets_its_own_precompiled_header_cache(monkeypatch, native) -> No
     assert getpass.getuser() in str(root) or ".cache/dace" in str(root)
 
 
-@pytest.mark.parametrize("native", (False, True))
+@pytest.mark.parametrize("native", [False, True])
 def test_a_cache_dir_already_naming_a_rank_is_left_alone(monkeypatch, tmp_path, native) -> None:
     """A job that already PARTITIONED the cache itself must not have that decision re-taken.
 
@@ -123,7 +123,7 @@ def test_a_cache_dir_already_naming_a_rank_is_left_alone(monkeypatch, tmp_path, 
     assert dace_framework.os.environ["DACE_BUILD_CACHE_DIR"] == str(mine)
 
 
-@pytest.mark.parametrize("native", (False, True))
+@pytest.mark.parametrize("native", [False, True])
 def test_an_explicit_cache_dir_is_a_root_and_is_still_partitioned(monkeypatch, tmp_path, native) -> None:
     """Naming a root RELOCATES the cache; it does not partition it, and the two are not the same
     decision. Leaving a relocated root alone put four ranks in one PCH cache while their build
@@ -138,7 +138,7 @@ def test_an_explicit_cache_dir_is_a_root_and_is_still_partitioned(monkeypatch, t
     assert dace_framework.os.environ["DACE_BUILD_CACHE_DIR"] == str(tmp_path / "rank1")
 
 
-@pytest.mark.parametrize("native", (False, True))
+@pytest.mark.parametrize("native", [False, True])
 def test_two_ranks_never_share_an_explicit_cache_root(monkeypatch, tmp_path, native) -> None:
     """The invariant the PCH partition exists for, stated over the operands that actually race."""
     roots = []
@@ -151,7 +151,7 @@ def test_two_ranks_never_share_an_explicit_cache_root(monkeypatch, tmp_path, nat
     assert roots[0] != roots[1], f"both ranks write one PCH cache: {roots[0]}"
 
 
-@pytest.mark.parametrize("native", (False, True))
+@pytest.mark.parametrize("native", [False, True])
 def test_pinning_twice_does_not_nest_the_rank_folder(monkeypatch, native) -> None:
     """optimize() runs per kernel; appending each time would give kernel 2 ``rank1/rank1``, a fresh
     empty cache that rebuilds everything and never hits."""

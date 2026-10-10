@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Direct tests for :func:`exit_after`, the wall-clock watchdog decorator.
 
@@ -11,6 +11,7 @@ overruns really does raise ``KeyboardInterrupt``.
 
 import time
 import types
+from typing import ClassVar
 
 import pytest
 
@@ -20,7 +21,7 @@ from hpcagent_bench.frameworks import timeout_decorator
 class _FakeTimer:
     """Records start()/cancel() instead of scheduling a real background alarm."""
 
-    instances = []
+    instances: ClassVar[list["_FakeTimer"]] = []
 
     def __init__(self, interval, function, args=None) -> None:
         self.interval = interval
@@ -56,7 +57,8 @@ def test_fast_call_returns_its_value_and_cancels_the_watchdog(monkeypatch) -> No
     assert quick() == 42
     assert len(_FakeTimer.instances) == 1
     timer = _FakeTimer.instances[0]
-    assert timer.started and timer.cancelled
+    assert timer.started
+    assert timer.cancelled
 
 
 def test_exception_from_the_wrapped_call_still_cancels_the_watchdog(monkeypatch) -> None:

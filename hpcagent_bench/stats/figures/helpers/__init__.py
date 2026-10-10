@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Steps several figure modules share, split out of their drawing functions: one module per topic
 (``series``: a series' colour and shape from the registry; ``layout``: canvas and chrome; ``axes``:

@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """A failure must name its reason before the session ends, because the session often does not end.
 
@@ -20,10 +20,10 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 MARKER = "the reason this test failed"
 
-FAILING_TEST = f'''
+FAILING_TEST = f"""
 def test_that_fails():
     assert 1 == 2, "{MARKER}"
-'''
+"""
 
 
 def run_probe(tmp_path: pathlib.Path, *extra: str) -> str:
@@ -32,8 +32,8 @@ def run_probe(tmp_path: pathlib.Path, *extra: str) -> str:
     PYTEST_ADDOPTS is dropped rather than inherited. CI sets it to ``--cov=hpcagent_bench
     --cov-append`` at the job level, and a nested run that appends to the SAME coverage database as
     the run that spawned it dies in coverage's own sqlite (``no such table: other_db.file``,
-    INTERNALERROR, run 34271219562) before pytest reaches the summary -- which is exactly the
-    ending this test measures, so the probe stopped measuring anything and said so.
+    INTERNALERROR) before pytest reaches the summary -- exactly the ending this test measures, so
+    the probe would measure nothing.
     """
     probe = tmp_path / "test_probe.py"
     probe.write_text(FAILING_TEST)
@@ -45,6 +45,7 @@ def run_probe(tmp_path: pathlib.Path, *extra: str) -> str:
         capture_output=True,
         text=True,
         timeout=300,
+        check=False,
     )
     return finished.stdout + finished.stderr
 
@@ -53,10 +54,9 @@ def run_probe(tmp_path: pathlib.Path, *extra: str) -> str:
 def test_a_failure_names_its_reason_before_the_summary_section(tmp_path: pathlib.Path, extra: tuple[str, ...]) -> None:
     """Cut the log where a SIGKILL or an INTERNALERROR would cut it; the reason must already be there.
 
-    Asserting only that the reason appears somewhere is the assertion that passed all along --
-    pytest's own FAILURES section satisfies it, and that section is exactly what a killed session
-    never prints. The `xdist` case is the one that matters most: both reds in run 34221523664 were
-    reported by a worker to a controller that then died.
+    Asserting only that the reason appears somewhere proves nothing -- pytest's own FAILURES
+    section satisfies it, and that section is exactly what a killed session never prints. The
+    `xdist` case matters most: a worker reports to a controller that then dies.
     """
     output = run_probe(tmp_path, *extra)
     assert MARKER in output, f"the probe did not fail as intended:\n{output}"

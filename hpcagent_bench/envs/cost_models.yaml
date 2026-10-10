@@ -8,7 +8,7 @@
 # The components come from the transcript under a perfect-prefix model, NEVER from the serving
 # engine's reported cache hits, so no card depends on the KV cache size, eviction or engine.
 #
-# The paper reports `effective`, `billed` and `total` side by side as cost proxies (user, 2026-09-16). `api-priced` is the list-price
+# The paper reports `effective`, `billed` and `total` side by side as cost proxies. `api-priced` is the list-price
 # shape (Anthropic and OpenAI flagship tiers: output 5x input, cache read 0.1x input) for readers who
 # want a bill-like number. A user adds a card here, passes its own file with --cost-models, or
 # gives weights inline: --cost-model fresh_input=1,cached_input=0.25,output=4
@@ -32,9 +32,9 @@ total:
   fresh_input: 1.0
   cached_input: 1.0
   output: 1.0
-# Approximate list prices in USD per 1M tokens (checked 2026-09-24), one card per model: a USD cost
+# Approximate list prices in USD per 1M tokens (checked), one card per model: a USD cost
 # weighs the three components by that model's own vendor rates, so a pair is priced with the card of
-# its model (`stats.figures.cost_weighting.USD_CARD`). Qwen3.8-27B: Alibaba Cloud Model Studio,
+# its model (`--cost-card usd-<model>`). Qwen3.8-27B: Alibaba Cloud Model Studio,
 # implicit-cache hits at 20% of input. Kimi-K2.7-Code: Moonshot platform. GPT-OSS-120B: AWS Bedrock
 # on-demand (us-east), which lists no cache discount for it, so cached input is billed as input.
 usd-qwen38:

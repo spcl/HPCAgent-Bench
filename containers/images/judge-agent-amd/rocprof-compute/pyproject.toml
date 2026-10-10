@@ -1,0 +1,37 @@
+# The environment of rocprof-compute, which ROCm installs without its Python dependencies. A frozen copy of
+# the tool's requirements.txt (ROCm/rocm-systems, projects/rocprofiler-compute at tag rocm-7.2.0, the version
+# the image's ROCm ships) with the two pins the tool needs on top: pandas 2, because rocprof-compute 3.4.0's
+# v3->v2 CSV converter dies on pandas 3 ("merge on str and int64 for key 'Agent_Id'") and drops every counter
+# row, and numpy below 2.3 for that pandas. Synced into /opt/rocprof-compute-venv, apart from the image
+# environment: its astunparse==1.6.2 pin would downgrade the astunparse that dace and every CPU reference use.
+# Not a package: nothing here is built or installed.
+[project]
+name = "rocprof-compute-environment"
+version = "0"
+requires-python = "==3.12.*"
+dependencies = [
+    "astunparse==1.6.2",
+    "colorlover",
+    "dash-bootstrap-components",
+    "dash-svg",
+    "dash>=3.0.0",
+    "kaleido==0.2.1",
+    "matplotlib",
+    "numpy>=1.17.5,<2.3",  # requirements.txt says numpy>=1.17.5; pandas 2.2.3 needs the cap
+    "pandas==2.2.3",  # requirements.txt says pandas>=1.4.3
+    "plotext",
+    "plotille",
+    "pymongo",
+    "pyyaml",
+    "setuptools",
+    "sqlalchemy>=2.0.42",
+    "tabulate",
+    "textual",
+    "textual_plotext",
+    "textual-fspicker>=0.4.3",
+    "tqdm",
+]
+
+[tool.uv]
+package = false
+environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]

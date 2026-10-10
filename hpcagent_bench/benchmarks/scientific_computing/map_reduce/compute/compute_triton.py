@@ -8,7 +8,9 @@ import numpy as np
 def get_configs():
     return [
         triton.Config({"BLOCK_SIZE_N": block_size}, num_warps=num_warps)
-        for block_size, num_warps in itertools.product([8, 16, 32, 64, 128], [1, 2, 4, 8])
+        # Largest blocks first: the optimizer budget keeps only the first few configs, and a block of 8 over the 87M
+        # elements of the M preset needs more programs than the grid dimension allows.
+        for block_size, num_warps in itertools.product([128, 64, 32, 16, 8], [1, 2, 4, 8])
     ]
 
 

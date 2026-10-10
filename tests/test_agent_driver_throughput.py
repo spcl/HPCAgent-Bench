@@ -1,4 +1,4 @@
-# Copyright 2021 ETH Zurich and the HPCAgent-Bench authors.
+# Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """agent_driver.py: the single-stream generation-throughput probe.
 
@@ -10,25 +10,18 @@ It is measurement, so it must never be able to end a run: a replica that errors,
 usage block, an unwritable run dir all cost the sample and nothing else.
 """
 
-import importlib.util
 import json
-import pathlib
-import sys
 import urllib.error
 from types import ModuleType
 
 import pytest
 
-EXAMPLE = pathlib.Path(__file__).resolve().parents[1] / "experiments"
+from tests.fresh_module import fresh
 
 
 def load_example_module(name: str) -> ModuleType:
     """``sys.modules`` must carry the module BEFORE exec, matching tests/test_validate_run.py."""
-    spec = importlib.util.spec_from_file_location(name, EXAMPLE / f"{name}.py")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
+    return fresh(name)
 
 
 @pytest.fixture(name="driver")
@@ -117,7 +110,8 @@ def test_a_failing_replica_costs_the_sample_and_not_the_run(driver, monkeypatch)
     monkeypatch.setattr(driver.time, "monotonic", iter([0.0, 1.0, 2.0, 3.0, 4.0, 6.0]).__next__)
 
     samples = driver.throughput_probe("http://vllm:8000/v1", {}, 3)
-    assert len(samples) == 1 and samples[0]["completion_tokens"] == 60
+    assert len(samples) == 1
+    assert samples[0]["completion_tokens"] == 60
 
 
 def test_the_report_takes_the_median_and_writes_the_raw_samples(driver, monkeypatch, tmp_path, capsys) -> None:
