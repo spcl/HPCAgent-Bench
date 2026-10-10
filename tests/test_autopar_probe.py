@@ -4,7 +4,7 @@
 "working": it compiles a real SCoP and inspects the object with ``nm``, never trusting mere
 flag ACCEPTANCE (see ``flags.POLLY_PAR`` for the measured bug this guards against: Ubuntu clang
 accepts ``-mllvm -polly-parallel`` and outlines nothing). These tests exercise the probe itself
-plus the ``cpp_runtime`` gate built on it -- not the polly/gcc_autopar frameworks end to end
+plus the ``native_runtime`` gate built on it -- not the polly/gcc_autopar frameworks end to end
 (``tests/test_frameworks.py`` covers those)."""
 
 import shutil
@@ -12,7 +12,7 @@ import shutil
 import pytest
 
 from hpcagent_bench import flags, languages, osinfo
-from hpcagent_bench.benchmarks import cpp_runtime
+from hpcagent_bench.frameworks import native_runtime
 from hpcagent_bench.frameworks.errors import NotSupportedByFramework
 from hpcagent_bench.harness import preflight
 
@@ -74,7 +74,7 @@ def test_probe_is_lru_cached() -> None:
 
 
 def test_gate_declines_polly_when_the_probe_is_vacuous(monkeypatch) -> None:
-    """``cpp_runtime.assert_autopar_capable`` must raise :class:`NotSupportedByFramework` --
+    """``native_runtime.assert_autopar_capable`` must raise :class:`NotSupportedByFramework` --
     the framework's existing "deliberate, correct decline" mechanism -- when the probe is not OK.
 
     Forced via monkeypatch rather than relying on THIS host's clang: the point is the gate's
@@ -85,31 +85,31 @@ def test_gate_declines_polly_when_the_probe_is_vacuous(monkeypatch) -> None:
         flags, "polly_capability", lambda: flags.AutoparProbe(flags.AutoparVerdict.VACUOUS, "forced for test")
     )
     with pytest.raises(NotSupportedByFramework, match="vacuous"):
-        cpp_runtime.assert_autopar_capable("polly", "gemm")
+        native_runtime.assert_autopar_capable("polly", "gemm")
 
 
 def test_gate_allows_polly_when_the_probe_is_ok(monkeypatch) -> None:
     """Symmetric case: an OK verdict must not raise."""
     monkeypatch.setattr(flags, "polly_capability", lambda: flags.AutoparProbe(flags.AutoparVerdict.OK, "forced"))
-    cpp_runtime.assert_autopar_capable("polly", "gemm")  # must not raise
+    native_runtime.assert_autopar_capable("polly", "gemm")  # must not raise
 
 
 @pytest.mark.parametrize("framework", ["cc", "llvm", "fortran", "cc_autopar", "fortran_autopar"])
 def test_gate_is_a_no_op_for_ungated_frameworks(framework) -> None:
-    """A flavor absent from :data:`cpp_runtime.AUTOPAR_GATED` must pass through regardless of any
+    """A flavor absent from :data:`native_runtime.AUTOPAR_GATED` must pass through regardless of any
     probe's verdict.
 
     ``pluto`` is deliberately NOT in this list: it joined AUTOPAR_GATED when the column started
     compiling polycc's output (see flags.PLUTO_PAR), so asserting it passes through would assert
     the opposite of what the tree does -- and would pass or fail by accident, according to whether
     THIS host's clang happens to honour the pragma."""
-    cpp_runtime.assert_autopar_capable(framework, "gemm")  # must not raise
+    native_runtime.assert_autopar_capable(framework, "gemm")  # must not raise
 
 
 def test_every_gated_framework_names_a_real_probe() -> None:
-    """:data:`cpp_runtime.AUTOPAR_GATED` maps to constant NAMES in :mod:`flags`, so a typo or a
+    """:data:`native_runtime.AUTOPAR_GATED` maps to constant NAMES in :mod:`flags`, so a typo or a
     renamed probe is a KeyError at build time -- deep inside a timed job -- rather than here."""
-    for framework, probe_name in cpp_runtime.AUTOPAR_GATED.items():
+    for framework, probe_name in native_runtime.AUTOPAR_GATED.items():
         assert probe_name in vars(flags), f"{framework} names flags.{probe_name}, which does not exist"
 
 

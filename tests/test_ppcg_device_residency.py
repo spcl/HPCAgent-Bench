@@ -19,7 +19,7 @@ Residency has two independently-testable halves:
    hardware group), so this is proven against strings in ppcg's own output shape -- the first two
    hand-written, ``PPCG_VLA_TRANSIENT_HOST`` trimmed from a real ppcg 0.09.3 + ``hipify-perl`` run.
 2. The .so that rewritten code compiles to needs a DEVICE pointer, not a host array --
-   :func:`hpcagent_bench.benchmarks.cpp_runtime._is_device_array` / ``_to_ctypes`` recognize a
+   :func:`hpcagent_bench.frameworks.native_runtime._is_device_array` / ``_to_ctypes`` recognize a
    cupy argument and hand the .so its raw ``.data.ptr`` instead of ``.ctypes.data_as``. Proven with
    a duck-typed stand-in for ``cupy.ndarray`` first (no cupy needed), then end to end against a
    REAL hand-written HIP kernel ``.so`` and real cupy where both are installed -- this repo's own
@@ -38,8 +38,7 @@ import numpy as np
 import pytest
 
 from hpcagent_bench import ppcg_transform
-from hpcagent_bench.benchmarks import cpp_runtime
-from hpcagent_bench.frameworks import pluto_framework
+from hpcagent_bench.frameworks import native_runtime, pluto_framework
 from hpcagent_bench.frameworks.errors import NotSupportedByFramework
 from hpcagent_bench.ppcg_transform import device_resident_host
 
@@ -287,10 +286,10 @@ class FakeCupyArray:
 
 def test_is_device_array_accepts_a_cupy_shaped_object_and_rejects_numpy() -> None:
     host = np.zeros(4, dtype=np.float64)
-    assert cpp_runtime._is_device_array(FakeCupyArray(host)) is True
-    assert cpp_runtime._is_device_array(host) is False
-    assert cpp_runtime._is_device_array(1.5) is False
-    assert cpp_runtime._is_device_array(3) is False
+    assert native_runtime._is_device_array(FakeCupyArray(host)) is True
+    assert native_runtime._is_device_array(host) is False
+    assert native_runtime._is_device_array(1.5) is False
+    assert native_runtime._is_device_array(3) is False
 
 
 def test_to_ctypes_reads_the_device_arrays_own_pointer() -> None:
@@ -298,7 +297,7 @@ def test_to_ctypes_reads_the_device_arrays_own_pointer() -> None:
     -- proof this does not fall back to copying anything."""
     host = np.arange(4, dtype=np.float64)
     fake = FakeCupyArray(host)
-    ptr = cpp_runtime._to_ctypes(fake, ctypes.c_double, ctypes.c_int64)
+    ptr = native_runtime._to_ctypes(fake, ctypes.c_double, ctypes.c_int64)
     # ctypes.cast gives a POINTER(c_double); reading through it must see the backing array's data.
     values = [ptr[i] for i in range(4)]
     assert values == list(host), values
@@ -307,7 +306,7 @@ def test_to_ctypes_reads_the_device_arrays_own_pointer() -> None:
 
 def test_ctype_arg_picks_a_pointer_type_for_a_device_array() -> None:
     fake = FakeCupyArray(np.zeros(1, dtype=np.float32))
-    argtype = cpp_runtime._ctype_arg(fake, ctypes.c_float, ctypes.c_int64)
+    argtype = native_runtime._ctype_arg(fake, ctypes.c_float, ctypes.c_int64)
     assert argtype is ctypes.POINTER(ctypes.c_float)
 
 
@@ -317,7 +316,7 @@ def test_call_selects_fp64_off_a_device_array_too() -> None:
     ARRAY argument was a device (cupy) one -- which for ppcg_hip is every call."""
     fake = FakeCupyArray(np.zeros(1, dtype=np.float64))
     is_double = any(
-        (isinstance(a, np.ndarray) or cpp_runtime._is_device_array(a))
+        (isinstance(a, np.ndarray) or native_runtime._is_device_array(a))
         and a.dtype in (np.dtype(np.float64), np.dtype(np.complex128))
         for a in (fake, 1, 2.0)
     )
@@ -449,7 +448,7 @@ HIP_KERNEL_SRC = textwrap.dedent("""\
 
 def test_a_device_pointer_call_runs_a_real_hip_so(tmp_path: pathlib.Path) -> None:
     """End to end, with real hardware: a hand-written HIP .so (standing in for what
-    ``device_resident_host`` would leave ppcg's build), called through ``cpp_runtime``'s device
+    ``device_resident_host`` would leave ppcg's build), called through ``native_runtime``'s device
     pointer path with a REAL cupy array. Proves the whole chain -- stage to device outside a
     bracket, call with a raw device pointer, read the output back -- produces the right numbers,
     not just that the plumbing type-checks.
@@ -490,8 +489,8 @@ def test_a_device_pointer_call_runs_a_real_hip_so(tmp_path: pathlib.Path) -> Non
         ctypes.c_int,
     ]
     lib.axpy.restype = None
-    c_a = cpp_runtime._to_ctypes(dev_a, ctypes.c_double, ctypes.c_int64)
-    c_b = cpp_runtime._to_ctypes(dev_b, ctypes.c_double, ctypes.c_int64)
+    c_a = native_runtime._to_ctypes(dev_a, ctypes.c_double, ctypes.c_int64)
+    c_b = native_runtime._to_ctypes(dev_b, ctypes.c_double, ctypes.c_int64)
 
     start, stop = cupy.cuda.Event(), cupy.cuda.Event()
     start.record()

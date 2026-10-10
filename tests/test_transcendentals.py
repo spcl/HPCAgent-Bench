@@ -158,7 +158,7 @@ def _run_backend(backend: str, fn: str, nargs: int) -> None:
             nm, kind = arg["name"], arg["kind"]
             if kind in _CT:
                 # Scalars are passed BY VALUE: the emitted Fortran is C-bound
-                # (``value`` attribute), same as C/C++ -- matching cpp_runtime.
+                # (``value`` attribute), same as C/C++ -- matching native_runtime.
                 v = int(data[nm]) if kind.startswith("int") else float(data[nm])
                 cargs.append(_CT[kind](v))
             else:

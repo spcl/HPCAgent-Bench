@@ -30,7 +30,7 @@ import numpy as np
 import pytest
 
 from hpcagent_bench import flags, pluto_transform, ppcg_transform
-from hpcagent_bench.benchmarks import cpp_runtime
+from hpcagent_bench.frameworks import native_runtime
 from hpcagent_bench.frameworks.benchmark import Benchmark
 from hpcagent_bench.frameworks.errors import NotSupportedByFramework
 from hpcagent_bench.frameworks.framework import Timer
@@ -54,7 +54,7 @@ void mm_fp64(const int64_t N, double (*restrict A)[N], double (*restrict B)[N], 
 }
 """
 
-#: The Pluto column gates on this exactly as ``cpp_runtime.assert_autopar_capable`` does: polycc has
+#: The Pluto column gates on this exactly as ``native_runtime.assert_autopar_capable`` does: polycc has
 #: already written ``#pragma omp parallel for`` into the source, so a clang that generates no OpenMP
 #: for it would time Pluto's parallel output single-threaded (see ``flags.PLUTO_PAR``).
 PLUTO_CAPABILITY = flags.pluto_capability()
@@ -227,7 +227,7 @@ def test_the_build_selects_polyccs_output_over_the_emitted_cpp(tmp_path, monkeyp
 
     monkeypatch.setattr(pluto_transform, "run_bounded", fake_polycc)
 
-    sources = cpp_runtime.native_sources(tmp_path, "mm", "pluto")
+    sources = native_runtime.native_sources(tmp_path, "mm", "pluto")
 
     assert [p.name for p in sources] == ["mm_fp64_pluto.c"]
     assert sources[0] != scop, "the column compiled polycc's INPUT rather than its output"
@@ -237,9 +237,9 @@ def test_the_column_compiles_c_with_a_c_driver() -> None:
     """polycc's output is C and only C: VLA parameters, the ``restrict`` keyword and ``register``,
     none of which survive C++ -- and it prepends its own ``#define min(x,y)``, which detonates inside
     libstdc++. A ``clangpp`` here would not be a style choice, it would not compile."""
-    assert cpp_runtime.FRAMEWORK_LANG["pluto"] == "c"
-    assert cpp_runtime.FRAMEWORK_COMPILER["pluto"] != "clangpp"
-    assert cpp_runtime.FRAMEWORK_LANG["pluto"] != cpp_runtime.FRAMEWORK_LANG["llvm"]
+    assert native_runtime.FRAMEWORK_LANG["pluto"] == "c"
+    assert native_runtime.FRAMEWORK_COMPILER["pluto"] != "clangpp"
+    assert native_runtime.FRAMEWORK_LANG["pluto"] != native_runtime.FRAMEWORK_LANG["llvm"]
 
 
 def test_the_ppcg_column_follows_the_local_gpu_toolchain(monkeypatch) -> None:
@@ -298,11 +298,11 @@ def test_every_ppcg_column_compiles_ppcg_output_for_its_own_vendor(monkeypatch) 
     monkeypatch.setattr(
         ppcg_transform, "transformed_sources", lambda cpp_backend, short, backend: seen.append((short, backend)) or []
     )
-    for framework in cpp_runtime.PPCG_FRAMEWORKS:
-        cpp_runtime.native_sources(pathlib.Path("/tmp/cpp_backend"), "mm", framework)
-    assert seen == [("mm", cpp_runtime.FRAMEWORK_LANG[f]) for f in cpp_runtime.PPCG_FRAMEWORKS]
-    assert dict(zip(cpp_runtime.PPCG_FRAMEWORKS, (v for _, v in seen), strict=False))["ppcg_cuda"] == "cuda"
-    assert dict(zip(cpp_runtime.PPCG_FRAMEWORKS, (v for _, v in seen), strict=False))["ppcg_hip"] == "hip"
+    for framework in native_runtime.PPCG_FRAMEWORKS:
+        native_runtime.native_sources(pathlib.Path("/tmp/cpp_backend"), "mm", framework)
+    assert seen == [("mm", native_runtime.FRAMEWORK_LANG[f]) for f in native_runtime.PPCG_FRAMEWORKS]
+    assert dict(zip(native_runtime.PPCG_FRAMEWORKS, (v for _, v in seen), strict=False))["ppcg_cuda"] == "cuda"
+    assert dict(zip(native_runtime.PPCG_FRAMEWORKS, (v for _, v in seen), strict=False))["ppcg_hip"] == "hip"
 
 
 def test_an_unknown_ppcg_vendor_is_refused_rather_than_guessed() -> None:
@@ -613,7 +613,7 @@ def test_the_ppcg_columns_are_not_gated_on_polyccs_verdict(monkeypatch) -> None:
     a PPCG column asking anyway declines on kernels polycc merely happens not to be graded for -- and
     says "not supported by pluto" while doing it, naming a tool it never runs. It keeps the
     validation every other column gets; what it must not do is inherit this one."""
-    for fname in cpp_runtime.PPCG_FRAMEWORKS:
+    for fname in native_runtime.PPCG_FRAMEWORKS:
         # The real constructor, not ``__new__``: these columns declare ``arch: gpu``, so the timers
         # around ``measure`` wait on the device, and a half-built object has no ``info`` to read.
         framework = PlutoFramework(fname)
@@ -699,7 +699,7 @@ def test_the_transformed_library_computes_the_right_answer(tmp_path) -> None:
     be built from the untransformed input could not pass this by computing the right answer."""
     write_scop(tmp_path)
 
-    so_path = cpp_runtime._ensure_built(tmp_path, "mm", "pluto")
+    so_path = native_runtime._ensure_built(tmp_path, "mm", "pluto")
 
     assert so_path.name == "libmm_pluto.so"
     transformed = (tmp_path / "mm_fp64_pluto.c").read_text()
@@ -757,7 +757,7 @@ def test_a_stale_library_is_rebuilt_rather_than_timed(tmp_path) -> None:
     stale.write_bytes(b"not a library")
     os.utime(stale, (0, 0))  # unambiguously older than the transform, whatever the mtime granularity
 
-    so_path = cpp_runtime._ensure_built(tmp_path, "mm", "pluto")
+    so_path = native_runtime._ensure_built(tmp_path, "mm", "pluto")
 
     assert so_path == stale
     assert stale.read_bytes()[:4] == b"\x7fELF", "a stale .so was returned instead of rebuilt"
@@ -1301,7 +1301,7 @@ def test_the_ppcg_hip_column_times_and_validates_one_kernel(tmp_path) -> None:
 
     write_scop(tmp_path)
 
-    so_path = cpp_runtime._ensure_built(tmp_path, "mm", "ppcg_hip")
+    so_path = native_runtime._ensure_built(tmp_path, "mm", "ppcg_hip")
 
     assert so_path.name == "libmm_ppcg_hip.so"
     device = (tmp_path / "mm_fp64_pluto_input_kernel.hip").read_text()

@@ -13,7 +13,7 @@ import numpy as np
 import pytest
 
 from hpcagent_bench import flags, paths, pluto_transform
-from hpcagent_bench.benchmarks import cpp_runtime
+from hpcagent_bench.frameworks import native_runtime
 
 #: A tracked override in the shape PolyBench/C ships and Yakup's 23 files follow: one fixed
 #: ``DATA_TYPE``, the libm macro preamble, and an fp64-suffixed symbol whose float parameters are
@@ -180,7 +180,7 @@ def test_oracle_pluto_leg_transforms_the_override_path_not_a_generated_copy(
 # fp32. PolyBench/C ships one DATA_TYPE per kernel and the tracked overrides fix it to `double`,
 # while the benchmarks they back call `initialize(..., datatype=np.float32)`. So the timed column
 # asks for `<base>_fp32`, the library exports only `<base>_fp64`, and the measurement dies inside
-# `cpp_runtime.call` with "no symbol for fp32" -- four of four override-backed lvl1
+# `native_runtime.call` with "no symbol for fp32" -- four of four override-backed lvl1
 # kernels (gemm, seidel_2d, syrk, trmm), none of them a Pluto transformation failure.
 
 
@@ -203,7 +203,7 @@ def test_the_fp32_specialization_retypes_and_renames_nothing_else(tmp_path) -> N
 
 
 def test_an_unknown_precision_is_refused_rather_than_silently_fp64(tmp_path) -> None:
-    """`cpp_runtime` dispatches fp64/fp32 only. A request for anything else is a caller bug, and
+    """`native_runtime` dispatches fp64/fp32 only. A request for anything else is a caller bug, and
     answering it with the fp64 text would build a library whose symbol nobody asked for."""
     with pytest.raises(ValueError):
         pluto_transform.specialize_override(OVERRIDE, "mm", "fp16")
@@ -298,7 +298,7 @@ def test_an_override_backed_library_exports_and_computes_both_precisions(
     write_override(bench_dir, "mm")
     cpp_backend = bench_dir / "cpp_backend"
 
-    so_path = cpp_runtime._ensure_built(cpp_backend, "mm", "pluto")
+    so_path = native_runtime._ensure_built(cpp_backend, "mm", "pluto")
 
     transformed = (cpp_backend / f"mm_{fptype}_pluto_override.c").read_text()
     assert "#pragma omp parallel for" in transformed, "polycc marked no loop parallel"
@@ -330,7 +330,7 @@ for _mark in needs_toolchain:
 def test_the_production_dispatch_path_resolves_both_precisions(tmp_path, npdtype, rtol) -> None:
     """The fp32 override, on the production dispatch path.
 
-    `cpp_runtime.wrap_kernel` is what the generated wrapper modules call, and its closure picks the
+    `native_runtime.wrap_kernel` is what the generated wrapper modules call, and its closure picks the
     symbol from the DTYPE OF THE BUFFERS it is handed -- which is why an fp64-only library dies on a
     float32 benchmark with `RuntimeError: mm (pluto): no symbol for fp32`; the assertion below is
     the one that has to hold instead.
@@ -339,7 +339,7 @@ def test_the_production_dispatch_path_resolves_both_precisions(tmp_path, npdtype
     write_override(bench_dir, "mm")
     (bench_dir / "kern_wrapper.py").write_text("")
 
-    call = cpp_runtime.wrap_kernel(str(bench_dir / "kern_wrapper.py"), "mm", "pluto", "mm")
+    call = native_runtime.wrap_kernel(str(bench_dir / "kern_wrapper.py"), "mm", "pluto", "mm")
 
     n = 48
     rng = np.random.default_rng(1)
