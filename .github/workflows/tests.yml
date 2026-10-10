@@ -156,6 +156,37 @@ jobs:
         with:
           coverage: unit-${{ matrix.python }}-${{ matrix.shard }}
 
+  # Speed, separate from correctness: canon (dace_cpu_canonicalize) within 2x of the faster compiled baseline (numba,
+  # cc) on the curated kernels canon has been slow on (tests/test_canon_perf_gate.py). One kernel per runner and one
+  # test per step (no xdist), OMP threads = the runner's cores, preset M, median of 3.
+  perf:
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
+    name: perf[${{ matrix.kernel }}] (canon <= 2x the compiled baseline)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        # tests/test_canon_perf_gate.py::CURATED, one entry per kernel (test_the_perf_job_runs_every_curated_kernel).
+        kernel: [azimint_hist, cloudsc, cloudsc_monolith, contour_integral, needleman_wunsch, nussinov,
+                 scattering_self_energies, seidel_2d, velocity_tendencies, wf_diff_skew, wf_triangular]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+      - uses: ./.github/actions/setup
+        with:
+          ccache: perf
+      - name: Perf gate
+        run: |
+          export OMP_NUM_THREADS=$(nproc)
+          python -m pytest -p no:cacheprovider -p no:xdist -rfEs --timeout=2400 -m perf \
+            "tests/test_canon_perf_gate.py::test_canon_is_within_2x_of_the_compiled_baseline[${{ matrix.kernel }}]"
+      - uses: ./.github/actions/finish
+        if: always()
+        with:
+          coverage: perf-${{ matrix.kernel }}
+
   e2e:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
     # One leg per backend: numba+jax measured 26.6 min together and pythran 18.1, so one runner

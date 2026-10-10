@@ -268,6 +268,11 @@ def pytest_configure(config: pytest.Config) -> None:
     )
     config.addinivalue_line(
         "markers",
+        "perf: times canon against the compiled baseline (tests/test_canon_perf_gate.py); run only by the perf CI "
+        "job, one test at a time at the runner's full core count.",
+    )
+    config.addinivalue_line(
+        "markers",
         "integration: end-to-end test that builds/runs a real artifact (native compile, "
         "heavier + slower than a unit test); still collected and run by default, not skipped.",
     )
