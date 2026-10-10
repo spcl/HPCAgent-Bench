@@ -25,20 +25,18 @@ The authoring guide is ``docs/extending/registry.md``; ``tests/test_vocabulary.p
 
 from hpcagent_bench.languages import gpu_backend
 from hpcagent_bench.precision import Precision
-from hpcagent_bench.vocabulary import FRAMEWORKS, RETIRED_FRAMEWORKS, framework, retired_framework
+from hpcagent_bench.vocabulary import FRAMEWORKS, framework
 
 __all__ = [
     "ALL_PRECISIONS",
     "FRAMEWORKS",
     "IEEE_PRECISIONS",
-    "RETIRED_FRAMEWORKS",
     "Cc",
     "CcAutopar",
     "CcLlvm",
     "CcLlvmAutopar",
     "CcNvhpc",
     "CcNvhpcAutopar",
-    "CcOneapi",
     "Cpp",
     "Cupy",
     "DaceCpu",
@@ -635,15 +633,3 @@ class TvmCpu:
     arch = "cpu"
     sweep_deterministic = False
     precisions = ALL_PRECISIONS
-
-
-@retired_framework("cc_oneapi", order=19)
-class CcOneapi:
-    """No oneAPI setup exists any more (the Intel compilers are in no image and no compilers.yaml block), but
-    the key keeps its hue slot: a removal would repaint every entry after it in every figure already drawn
-    (tests/test_vocabulary.py), and it keeps a recorded ``cc_oneapi`` row resolvable to a name."""
-
-    __slots__ = ()
-
-    display = "oneAPI (retired)"
-    reason = "the Intel compilers are in no image"
