@@ -67,8 +67,11 @@ def test_a_runtime_the_loader_already_finds_earns_none(tmp_path: pathlib.Path, m
     assert languages.driver_library_dir(cc, ("libgomp.so",)) == ""
 
 
-def test_a_driver_that_cannot_place_the_name_earns_none(tmp_path: pathlib.Path) -> None:
+def test_a_driver_that_cannot_place_the_name_earns_none(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # What gcc answers for libomp.so: the name straight back, with no path in front of it.
+    monkeypatch.delenv("LIBRARY_PATH", raising=False)
     cc = stub_driver(tmp_path, "libomp.so")
     languages.driver_library_dir.cache_clear()
     assert languages.driver_library_dir(cc, ("libomp.so",)) == ""
