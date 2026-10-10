@@ -430,14 +430,6 @@ class MissingThreadReport(TypedDict):
 PerThreadReport = ThreadReport | MissingThreadReport
 
 
-
-
-
-
-
-
-
-
 class PapiUnavailable(ProfilerUnavailable):
     """PAPI cannot count here. ``cause`` is ``not_linux`` / ``papi_missing`` / ``papi_init_failed`` /
     ``not_native``."""
