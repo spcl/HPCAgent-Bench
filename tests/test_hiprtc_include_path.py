@@ -9,8 +9,6 @@ inside ``<initializer_list>``; without it cupy works on the image's own gcc 16 +
 
 The rule is MEASURED, not derived (reordering the list does not help, only removal does), so what
 is locked here is the rule itself and the guard that fires when the cupy hook it hangs on moves.
-The GPU half -- that the repaired list actually compiles -- cannot run on a CPU box and lives in
-``tests/test_papi_gpu.py``'s device markers.
 """
 
 import pytest

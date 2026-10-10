@@ -24,14 +24,16 @@ The checks run when the decorator is applied, at import, never at first use:
 The cross-entry rules a single decorator cannot check run once everything is registered
 (`vocabulary.check_vocabulary()`, called by `study_tags.registry()`): every kind but the packets gives
 every entry a slot, the control is the only packet without one, a composed packet exists and a packet's
-`device` is `cpu`, `amd` or `nvidia`, a live and a retired framework share no name or hue slot, every column of one framework `base` names one adapter, exactly one grading protocol is registered for each of the roles `final`, `preview` and `calibration`, and `measurement.credited_protocol` names the `final` one (`protocols.check_protocols()`).
+`device` is `cpu`, `amd` or `nvidia`, every column of one framework `base` names one adapter, exactly one
+grading protocol has the role `preview`, and `measurement.credited_protocol` names a grade protocol
+(`protocols.check_protocols()`).
 
 ## The slot
 
 `order` is an explicit integer, unique within the kind, and it is the entry's slot. Import order never
 matters. An existing entry's order never changes; a new entry takes the next free one
-(`Kind.next_order()`). Never reuse the slot of a retired entry: keep the entry (a retired one stays
-registered, and a packet marks it `frozen`) so the colours and shapes after it do not move.
+(`Kind.next_order()`). Never reuse the slot of a deleted entry, so the colours and shapes after it do not
+move; a packet that recorded rows still name stays registered and marked `frozen`.
 
 What a slot decides (`hpcagent_bench/stats/palette.py` reads it; nothing else carries a colour):
 
@@ -42,7 +44,7 @@ What a slot decides (`hpcagent_bench/stats/palette.py` reads it; nothing else ca
 | harness | the clearest shapes of the treatment pool, in slot order, ahead of every packet; hue `order` |
 | packet | hue `order` (a combination wears its lead part's hue, lightened one step per extra part, and the lead is the part with the lowest slot) and the shape: the next free one of the treatment pool unless the class names a `marker` |
 | language, device | hue `order` |
-| framework | hue `order`, shared by live and retired columns (`vocabulary.framework_slots()`) |
+| framework | hue `order` |
 
 The colour ramp, the marker pools and the lightness step are the only data left in
 `hpcagent_bench/envs/registry.yaml`. `tests/test_vocabulary.py` pins every slot by value and
@@ -60,9 +62,8 @@ fails naming the entity.
 | `@device(key, order=, aliases=)` | `hpcagent_bench/models.py` | `name` | the `device` column value |
 | `@packet(key, order=, aliases=)` | `hpcagent_bench/skill_packets.py` | `name`; optionally `skills`, `packets`, `tools`, `env`, `method`, `device`, `frozen`, `marker`, `short` | the `packet` column value; see [packets.md](packets.md) |
 | `@framework(key, order=, aliases=)` | `hpcagent_bench/columns.py` | `display`, `adapter` (`package.module:Class`), `base`, `full_name`, `postfix`, `arch` (`cpu`/`gpu`), `sweep_deterministic`, `precisions`; optionally `pipelines`, `column` + `flavor`, `language`, `emit_language`, `compiler`, `flags`, `autopar_gate`, `transform` | a framework column: the CLI name and the `framework` column value; see [optimizer.md](optimizer.md) |
-| `@retired_framework(key, order=)` | `hpcagent_bench/columns.py` | `display`, `reason` | a column no setup builds any more; keeps its hue slot and its name for recorded rows |
 | `@anticheat(key, order=)` | `hpcagent_bench/anticheat.py` | `title`, `catches`, `verdict` (an `anticheat.Verdict`: `CONSTRUCTION`, `REJECT`, `FLAG`, `REJECT_OR_FLAG`, `FINAL`), `where` (repo-relative paths); optionally `symbol` (`package.module[:attr]`), a `check` staticmethod returning `anticheat.Found(effect, text)` per finding (a post-run gate, run by `anticheat.judge`), `reruns` and `expensive` (bool) | an anti-cheat gate; `order` is the position a submission meets it, and the table of [anti_cheat.md](../anti_cheat.md) lists the same gates in the same order (`tests/test_anticheat.py`). A gate without a `check` is enforced in the module `where` names; one that `reruns` the submission is skipped once the grade is rejected, an `expensive` one runs only when the setup opts in (`record.expensive_gates`) |
-| `@grading_protocol(stamp, order=, aliases=)` | `hpcagent_bench/protocols.py` | `role` (`final`, `preview`, `calibration`, `live`, `retired`), `meaning`, `timing_test` (a registered `@timing_test` gating each credit, or `None`) | a `timing_reduction` stamp; exactly one `final` protocol is credited, the one `measurement.credited_protocol` names in `config.yaml` |
+| `grading_protocol(stamp, role, statistic, inputs=, repeat=)` (a call, not a decorator) | `hpcagent_bench/protocols.py` | nothing: one line per stamp, see [protocol.md](protocol.md#defining-a-grading-protocol) | a `timing_reduction` stamp; the one grade protocol `measurement.credited_protocol` names is credited |
 | `@paired_test(name, version=)`, `@proportion_test`, `@paired_proportion_test`, `@correction`, `@timing_test` | `hpcagent_bench/stats/significance.py` | a FUNCTION, not a class, returning a `significance.Result` (a correction: the adjusted p values); no slot | a statistical test: a reporting one `config.yaml` picks by name (`statistics.*`), a timing test a grading protocol names (`timing_test`); see [the test registry](../measurement_statistics.md#the-test-registry) |
 
 An alias resolves to the entity it names, takes no slot, and shares the key namespace: a spelling never

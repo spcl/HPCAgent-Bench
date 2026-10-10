@@ -108,9 +108,8 @@ and prints the locked numpy/scipy/pandas/astunparse versions.
   that `requirements.txt`; `/opt/rocm/bin/rocprof-compute` is a wrapper exec'ing it. The build fails
   if the venv cannot import its stack.
 * **`rocprof-sys-sample`, never `rocprof-sys-run`:** `-run` exits 0 and writes nothing.
-* **PAPI initializes components lazily.** An untouched component reports "Not initialized"; check it
-  by enumerating its events (`papi.component_reason()`), never by reading the status flag. AMD device
-  counters come from `rocprofv3`, not PAPI's `rocm_smi`, which fails to initialize device tables.
+* **Device counters come from `rocprofv3` / `nsys`, never PAPI.** PAPI counts host CPU events only; its
+  `rocm_smi` component fails to initialize device tables.
 * **libomp is one symlink**, `/usr/local/lib/libomp.so`, never the LLVM libdir: that libdir also
   holds LLVM's `libgomp.so.1` shim, which would replace GNU libgomp under every gcc OpenMP binary.
   The `llvm` context's `libgomp.so.1` link to libomp lives in `/opt/omp/llvm/lib` and is put on the
