@@ -15,6 +15,7 @@ from hpcagent_bench.initialize import auto_initialize
 from hpcagent_bench.precision import Precision, numpy_dtype, safe_max
 from hpcagent_bench.spec import KERNELS, BenchSpec
 from hpcagent_bench.support import distributions
+from hpcagent_bench.support.counter_generator import CounterGenerator
 from hpcagent_bench.support.distributions import streams
 
 #: The six samplers rewritten off scipy, plus the plain uniform.
@@ -37,48 +38,32 @@ def auto_init_specs(minimum_arrays: int = 2, limit: int = 4):
     return found
 
 
-def test_spawn_is_reproducible_and_distinct() -> None:
-    a = [g.random(8) for g in streams.spawn_streams(42, 6)]
-    b = [g.random(8) for g in streams.spawn_streams(42, 6)]
-    c = [g.random(8) for g in streams.spawn_streams(43, 6)]
-    assert all(np.array_equal(x, y) for x, y in zip(a, b, strict=False)), "same seed must replay"
-    assert not any(np.array_equal(x, y) for x, y in zip(a, c, strict=False)), "different seed must diverge"
+def test_generators_are_reproducible_and_distinct() -> None:
+    a = [g.random(8) for g in streams.array_generators(42, 6)]
+    b = [g.random(8) for g in streams.array_generators(42, 6)]
+    c = [g.random(8) for g in streams.array_generators(43, 6)]
+    assert all(np.array_equal(x, y) for x, y in zip(a, b, strict=True)), "same seed must replay"
+    assert not any(np.array_equal(x, y) for x, y in zip(a, c, strict=True)), "different seed must diverge"
     for i in range(len(a)):
         for j in range(i + 1, len(a)):
-            assert not np.array_equal(a[i], a[j]), f"streams {i} and {j} collided"
+            assert not np.array_equal(a[i], a[j]), f"generators {i} and {j} collided"
 
 
-def test_stream_k_does_not_depend_on_how_many_were_spawned() -> None:
+def test_generator_k_does_not_depend_on_how_many_were_made() -> None:
     """The whole point: asking for more arrays must not move the ones already there."""
-    short = [g.random(8) for g in streams.spawn_streams(7, 3)]
-    long = [g.random(8) for g in streams.spawn_streams(7, 9)]
-    assert all(np.array_equal(x, y) for x, y in zip(short, long, strict=False))
+    short = [g.random(8) for g in streams.array_generators(7, 3)]
+    long = [g.random(8) for g in streams.array_generators(7, 9)]
+    assert all(np.array_equal(x, y) for x, y in zip(short, long[:3], strict=True))
 
 
-def test_stream_k_does_not_depend_on_draw_order() -> None:
+def test_generator_k_does_not_depend_on_draw_order() -> None:
     """Drawing array 5 first must give array 5 the same values -- a shared stream cannot do this."""
-    forward = [g.random(8) for g in streams.spawn_streams(7, 6)]
-    generators = streams.spawn_streams(7, 6)
-    backward = [None] * 6
+    forward = [g.random(8) for g in streams.array_generators(7, 6)]
+    generators = streams.array_generators(7, 6)
+    backward = [np.empty(0)] * 6
     for k in (5, 0, 3, 1, 4, 2):
         backward[k] = generators[k].random(8)
-    assert all(np.array_equal(x, y) for x, y in zip(forward, backward, strict=False))
-
-
-def test_bit_generators_are_round_robined() -> None:
-    got = [type(g.bit_generator) for g in streams.spawn_streams(1, 2 * len(streams.ROUND_ROBIN))]
-    assert got[: len(streams.ROUND_ROBIN)] == list(streams.ROUND_ROBIN)
-    assert got[len(streams.ROUND_ROBIN) :] == list(streams.ROUND_ROBIN), "rotation must repeat"
-
-
-def test_threaded_fill_matches_sequential(monkeypatch) -> None:
-    tasks = [(lambda g=g: g.uniform(-1000, 1000, 1 << 16)) for g in streams.spawn_streams(11, 8)]
-    monkeypatch.setattr(streams, "THREAD_MIN_ELEMENTS", 1 << 62)
-    sequential = streams.fill(tasks, elements=1 << 20)
-    tasks = [(lambda g=g: g.uniform(-1000, 1000, 1 << 16)) for g in streams.spawn_streams(11, 8)]
-    monkeypatch.setattr(streams, "THREAD_MIN_ELEMENTS", 0)
-    threaded = streams.fill(tasks, elements=1 << 20)
-    assert all(np.array_equal(x, y) for x, y in zip(sequential, threaded, strict=False))
+    assert all(np.array_equal(x, y) for x, y in zip(forward, backward, strict=True))
 
 
 #: A spec far outside anything a real manifest asks for. The point of the ceiling is that it holds
@@ -94,7 +79,7 @@ EXTREME = {"sigma": 90.0, "scale": 1e30, "loc": 1e30}
 def test_standard_distributions_stay_in_the_safe_range(name, precision, spec) -> None:
     """EVERY precision, not just the two wide ones: the narrow formats are where the clip does the
     work, and the wide ones are where its absence went unnoticed."""
-    got = distributions.generate(name, (2048,), precision, {"rng": np.random.default_rng(5), **spec})
+    got = distributions.generate(name, (2048,), precision, {"rng": CounterGenerator(5), **spec})
     assert got.dtype == numpy_dtype(precision)
     as_f64 = np.asarray(got, dtype=np.float64)
     assert np.isfinite(as_f64).all(), f"{name} produced a non-finite value at {precision} ({spec})"
@@ -110,10 +95,10 @@ def test_no_precision_has_an_unbounded_ceiling() -> None:
 
 @pytest.mark.parametrize("name", STANDARD)
 def test_standard_distributions_follow_their_stream(name) -> None:
-    kwargs = {"rng": np.random.default_rng(3)}
+    kwargs = {"rng": CounterGenerator(3)}
     a = distributions.generate(name, (64,), Precision.FP64, kwargs)
-    b = distributions.generate(name, (64,), Precision.FP64, {"rng": np.random.default_rng(3)})
-    c = distributions.generate(name, (64,), Precision.FP64, {"rng": np.random.default_rng(4)})
+    b = distributions.generate(name, (64,), Precision.FP64, {"rng": CounterGenerator(3)})
+    c = distributions.generate(name, (64,), Precision.FP64, {"rng": CounterGenerator(4)})
     assert np.array_equal(a, b)
     assert not np.array_equal(a, c)
 
@@ -124,13 +109,3 @@ def test_auto_initialize_is_reproducible(stem_spec) -> None:
     a = auto_initialize(spec, "S", Precision.FP64, seed=42)
     b = auto_initialize(spec, "S", Precision.FP64, seed=42)
     assert all(np.array_equal(x, y) for x, y in zip(a, b, strict=False))
-
-
-@pytest.mark.parametrize("stem_spec", auto_init_specs(), ids=lambda s: s[0])
-def test_auto_initialize_threading_does_not_change_the_data(stem_spec, monkeypatch) -> None:
-    _, spec = stem_spec
-    monkeypatch.setattr(streams, "THREAD_MIN_ELEMENTS", 1 << 62)
-    sequential = auto_initialize(spec, "S", Precision.FP64, seed=42)
-    monkeypatch.setattr(streams, "THREAD_MIN_ELEMENTS", 0)
-    threaded = auto_initialize(spec, "S", Precision.FP64, seed=42)
-    assert all(np.array_equal(x, y) for x, y in zip(sequential, threaded, strict=False))

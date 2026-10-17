@@ -30,7 +30,7 @@ if [[ -n "${SLURM_JOB_ID:-}" ]]; then
     SCRIPT_DIR="${CLUSTER_SCRIPT_DIR:-${HPCAGENT_BENCH_REPO:-${SLURM_SUBMIT_DIR}}/hpcagent_bench/cluster}"
 fi
 export SCRIPT_DIR
-REPO_DIR="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
+REPO_DIR="${HPCAGENT_BENCH_REPO:-$(cd -- "${SCRIPT_DIR}/../.." && pwd)}"
 
 MODEL="${MODEL:-qwen38}"
 # <base>:<model> (setups.yaml) or an env file
@@ -164,7 +164,7 @@ if [[ "${PREWARM:-0}" == 1 ]]; then
         "${BASE_URL}/v1/chat/completions" || rc=1
     printf 'prewarm: %s aiter builds this boot; cache %s\n' \
         "$(grep -ah 'start build' "${RUN_DIR}"/server-*.log | wc -l)" \
-        "$(du -sh "${JIT_CACHE_ROOT:-${SCRATCH:?}/.hpcagentbench-cache}"/.aiter/aiter-* 2>/dev/null | tr '\n' ' ')"
+        "$(du -sh "${JIT_CACHE_ROOT:?helpers/scripts/cache_env.sh exports it}"/.aiter/aiter-* 2>/dev/null | tr '\n' ' ')"
     kill "${SERVER_PID}" 2>/dev/null || true
     wait "${SERVER_PID}" 2>/dev/null || true
     exit "${rc}"

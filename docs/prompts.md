@@ -42,7 +42,7 @@ A setup picks its variant with `AGENT_PROMPT_FILE` (default `prompt.md`, set in
 | `{{TOOLS}}` / `{{TOOLS_CLI}}` | each served tool's `PROMPT` bullet, via `prompt_tool_list()` in `agent/hpcagent_agent/tools/mcp_server.py` |
 | `{{MODE:<section>}}` | the section of that name in the submission mode's template (below); the `submit` bullet's `{{MODE:tool}}` arrives inside `{{TOOLS}}` |
 | `{{BUILD_COMMAND}}` | `build-<language>.md`, regenerated at launch by `helpers/scripts/gen_build_fragments.py`; `AGENT_BUILD_FILE` pins one file |
-| `{{BUILD_LIST_STATUS}}` | whether `HPCAGENT_BENCH_GRADING_ALLOW_AGENT_BUILD_TOKENS` lets `build`/`libraries` reach the compiler |
+| `{{BUILD_LIST_STATUS}}` | whether `HPCAGENT_BENCH_GRADING_ALLOW_AGENT_BUILD_TOKENS` lets `build` reach the compiler, and whether the problem's `request_actions` offers `requests.startup.load` |
 | `{{HINTS}}` | the packet's `packet.md` when `AGENT_PACKET` is set, else nothing |
 | `{{TASK}}` | the problem text from `hpcagent_bench/cluster/make_problems.py`, then the folder note and the skill reminder |
 | `{{GRADING}}` | the problem's `prompt_facts`: the mode's `grading` section, the correctness band, the final grade (inputs, runs a side, alpha, baseline) and the timed sizes; for a distributed task, a pointer to its contract |
@@ -65,8 +65,8 @@ folder and an absolute path names your own file. `tests/test_cluster_prompt_sour
 slot a page declares is filled, and `tests/test_prompt_render_matrix.py` renders every variant.
 
 The problem text is where a packet speaks. `make_problems.py` appends one trigger line per staged
-skill page (`skill_index`) and, for packets that set `CPF_DROPIN_DIR` (cpf-src and packets
-composing it), a note naming the CPF drop-in in the agent's folder (`packet_note`,
+skill page (`skill_index`) and, for packets that set `CPF_DROPIN_DIR` (`cpf-cpu-src`, `cpf-gpu-src` and
+packets composing them), a note naming the CPF drop-in in the agent's folder (`packet_note`,
 `CPFSRC_NOTE`).
 
 ### Submission modes
@@ -131,8 +131,9 @@ hpcagent_bench/tools/<tool>.md          per-tool fragments for service_task.j2
 
 `service_task.j2` reuses `api`, `sparse`, `requests`, `correctness`, `fuzzing`, `scoring`, `optimizations`
 and `build_flags`, so each of those texts has one source for both prompts. `requests` explains the
-envelope's `requests` block (catalog libraries, per-array precision and its C types;
-[requests_api.md](requests_api.md)); the MPI layout ops live in `mpi`.
+envelope's `requests` block (catalog libraries, per-array precision and its C types, single-node
+layouts; [requests_api.md](requests_api.md)), naming only what the setup's `requests.allow` allows; the MPI
+layout ops live in `mpi`. `sparse` offers the format choice only under `requests.allow` `sparse_format`.
 
 Every section starts at its heading and ends with one blank line of its own. A section that renders
 nothing therefore leaves no gap, which is what lets one be turned off. `tests/test_prompt_sections.py`
@@ -161,7 +162,7 @@ Rules the fragments keep:
 
 `build_run_prompt` renders the body once and returns a `RunPrompt`. `RunPrompt.attempt` appends
 `feedback.j2` for each repair round: the failure and the previous source, or "make it faster"
-with the best speedup so far. A run has one `prompt_hash`.
+with the best speedup so far.
 
 ### Overriding
 
@@ -185,7 +186,7 @@ From finest to coarsest:
        tools_baseline: off         # drop one tool fragment from the service prompt
    ```
 
-   The environment sets the same keys and wins over `config.yaml`: `HPCAGENT_BENCH_PROMPT_SECTIONS_<KEY>`
+   The environment sets the same keys and wins over the configuration default: `HPCAGENT_BENCH_PROMPT_SECTIONS_<KEY>`
    with the key upper-cased, for example `HPCAGENT_BENCH_PROMPT_SECTIONS_TIMING=off`, or `=on` to undo what
    the file turned off. `--section KEY=VALUE` on `hpcagent-bench prompt` does it for one render, and
    `PromptConfig.from_config(sections={...})` for one call. An unknown key is an error that lists the known
@@ -195,7 +196,7 @@ From finest to coarsest:
    order, and the built-in `prompts/` directory is the last one. The same roots can shadow skills. With
    `prompt.debug: true`, each fragment is preceded by the path it was loaded from, and the header lists
    the sections that are off or replaced.
-3. **A knob.** The `prompt:` block in `hpcagent_bench/config.yaml` maps one-to-one onto `PromptConfig`:
+3. **A knob.** The `prompt:` block in `hpcagent_bench/config.py` maps one-to-one onto `PromptConfig`:
    `template`, `template_dir`, `template_dirs`, `generator`, `debug`, `inline_kernel`,
    `container_workdir`, `include_translation`, `include_reference`, `strategy`,
    `optimization_guidance`, `profiling_guidance`, `language_track`, `native`, `sections`. Each also
@@ -213,7 +214,7 @@ first:
 1. built-in `PROMPT_VARIANTS` (`default`, `loopnest`, `profile_first`, `language_native`,
    `with_reference`, `with_translation`, `minimal`, `native`)
 2. discovered `task_var<N>.j2` templates on the search path (variant `var<N>`)
-3. `prompt.variants` in `config.yaml`
+3. `prompt.variants` in the configuration
 
 ```yaml
 prompt:
@@ -232,12 +233,11 @@ hpcagent-bench agent stub --kernels gemm --prompt-variant all               # al
 ```
 
 `strategy` picks one of the `STRATEGIES` presets for the how-to section: `default`, `loopnest`,
-`profile_first`, `language_native`. The variant name is stored in the `prompts` table (joined
-by `prompt_hash` under `--record`) and in saved-submission filenames (`__<variant>`).
+`profile_first`, `language_native`.
 
 ### Attempt budget
 
-`attempts.max_rounds` and `attempts.time_budget_s` in `config.yaml` bound the repair loop. The loop
+`attempts.max_rounds` and `attempts.time_budget_s` in the configuration bound the repair loop. The loop
 stops at whichever limit it reaches first; `null` turns that limit off.
 `hpcagent-bench agent --repair-rounds N` overrides `max_rounds`. The clock is checked only before
 an attempt starts, never during one.

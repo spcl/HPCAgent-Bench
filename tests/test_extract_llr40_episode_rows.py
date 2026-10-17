@@ -27,7 +27,7 @@ LABEL = "setup-a.n0.p0.w0"
 START_MS = 1_789_000_000_000
 
 
-def write_record(job_dir: pathlib.Path, worker: int, fold: int | None = 3, **fields: object) -> pathlib.Path:
+def write_record(job_dir: pathlib.Path, worker: int, **fields: object) -> pathlib.Path:
     """The ``tokens.json`` the driver leaves in ``agents/node-0/problem-<w>-worker-<w>/``."""
     worker_dir = job_dir / "agents" / "node-0" / f"problem-{worker}-worker-{worker}"
     worker_dir.mkdir(parents=True)
@@ -44,8 +44,6 @@ def write_record(job_dir: pathlib.Path, worker: int, fold: int | None = 3, **fie
         "final_attempt_start_ms": START_MS,
         **fields,
     }
-    if fold is not None:
-        record["token_fold"] = fold
     path = worker_dir / "tokens.json"
     path.write_text(json.dumps(record, sort_keys=True) + "\n", encoding="utf-8")
     return path
@@ -120,23 +118,9 @@ def test_an_episode_that_never_reached_the_judge_still_yields_its_episode_row(tm
     assert (rows["setup-a.n0.p3.w3"]["setup"], rows["setup-a.n0.p3.w3"]["tokens"]) == ("setup-a", 5_000)
 
 
-def test_a_record_from_the_double_counting_fold_keeps_its_row_without_a_total(tmp_path: pathlib.Path) -> None:
-    """Fold 1 double-counted reasoning and a record without a fold predates the rule: their numbers
-    are never read, but the episode happened and keeps its row."""
+def test_a_records_tokens_are_read(tmp_path: pathlib.Path) -> None:
     job_dir = job(tmp_path)
-    write_record(job_dir, 0, fold=1)
-    write_record(job_dir, 1, fold=None)
-
-    rows = episode_rows(merged(job_dir))
-
-    assert len(rows) == 2
-    assert {row["tokens"] for row in rows} == {""}
-    assert {row["tokens_output"] for row in rows} == {""}
-
-
-def test_a_fold_2_record_is_trusted(tmp_path: pathlib.Path) -> None:
-    job_dir = job(tmp_path)
-    write_record(job_dir, 0, fold=episodes.MIN_TOKEN_FOLD)
+    write_record(job_dir, 0)
 
     (row,) = episode_rows(merged(job_dir))
 

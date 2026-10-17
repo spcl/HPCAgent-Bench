@@ -41,11 +41,13 @@ import types
 from collections.abc import Mapping, Sequence
 from typing import Any, NamedTuple
 
+import pydantic
 import yaml
 
 from hpcagent_bench import config, flags, omp_context, osinfo, paths, seal
 from hpcagent_bench.flags import Mode
-from hpcagent_bench.spec import BenchSpec, as_list
+from hpcagent_bench.harness import discover_tools
+from hpcagent_bench.spec import BenchSpec
 
 __all__ = [
     "ALWAYS_LINKED_LANGS",
@@ -63,6 +65,7 @@ __all__ = [
     "GPU_HOST_LANG",
     "LANG_EXT",
     "LANG_TARGET",
+    "LIBRARIES_ADAPTER",
     "LIBRARIES_YAML",
     "LIBRARY_COMPILE_PREFIXES",
     "LIBRARY_LINK_PREFIXES",
@@ -97,13 +100,14 @@ __all__ = [
     "REPORT_REFS",
     "ROCM_LLVM_BIN",
     "STDPAR_PROBE_TIMEOUT_S",
-    "TOOLSET_YAML",
     "VECLIB_PROBE",
-    "VECT_COST_MODELS",
     "VECT_UNLIMITED_REFS",
     "XNACK_SUFFIX",
+    "CompilerBlock",
     "CompilerChoice",
+    "CompilerInstall",
     "Language",
+    "LibraryEntry",
     "StrPath",
     "Toolchain",
     "agent_offload_flags",
@@ -134,6 +138,7 @@ __all__ = [
     "driver_resolves",
     "executable_version",
     "family_names",
+    "family_pin",
     "family_report_flags",
     "gpu_backend",
     "grading_ncores",
@@ -170,7 +175,6 @@ __all__ = [
     "offload_vendor",
     "openmp_link_for_block",
     "pkg_config_answer",
-    "pkg_modules",
     "probe_succeeds",
     "python_device_refusal",
     "python_device_setup",
@@ -263,14 +267,55 @@ def source_units(language: str, stem: str) -> tuple[tuple[str, str], ...]:
 LANG_TARGET: dict[str, str] = {Language.C.value: "c", Language.CPP.value: "c", Language.FORTRAN.value: "fortran"}
 
 
+class CompilerInstall(pydantic.BaseModel):
+    """How a container tier provisions a compiler: its apt package (``None``: not an apt package, e.g. NVHPC and
+    CUDA) and its spack spec name."""
+
+    model_config = pydantic.ConfigDict(extra="forbid", frozen=True)
+
+    apt: str | None
+    spack: str
+
+
+class CompilerBlock(pydantic.BaseModel):
+    """One ``compilers.yaml`` block: the compiler that builds ``lang``, its command templates, and the names of the
+    :mod:`hpcagent_bench.flags` constants its flags resolve from (``None`` = the block declares none)."""
+
+    model_config = pydantic.ConfigDict(extra="forbid", frozen=True)
+
+    lang: str
+    install: CompilerInstall
+    #: The driver command (``gcc``, ``hipcc``, ``mpicc``, ...).
+    cc: str
+    #: The compile and link command templates (``{cc}``, ``{src}``, ``{obj}``, ``{objs}``, ``{lib}``, ``{baseline}``).
+    compile: tuple[str, ...]
+    link: tuple[str, ...]
+    #: Libraries appended after the link template's own arguments.
+    link_extra: tuple[str, ...] = ()
+    baseline_ref: str | None = None
+    autopar_ref: str | None = None
+    warnings_ref: str | None = None
+    mimalloc_link_ref: str | None = None
+    stdpar_link_ref: str | None = None
+    doconcurrent_ref: str | None = None
+    veclib_ref: str | None = None
+    #: A device compiler (nvcc, hipcc) or an MPI wrapper, selected by those build paths alone.
+    cuda: bool = False
+    hip: bool = False
+    mpi: bool = False
+
+
+#: ``compilers.yaml`` as a whole: block name -> block, in file order.
+CompilerTable = pydantic.TypeAdapter(dict[str, CompilerBlock])
+
+
 @functools.lru_cache(maxsize=1, typed=True)
-def _load_compilers() -> dict[str, dict]:
+def _load_compilers() -> dict[str, CompilerBlock]:
     """Parse ``compilers.yaml`` into ``{compiler_name: block}``.
 
     Memoized: the table is a static process-wide config (never written at runtime)
-    that every build call reads, so it is parsed once. Callers treat the result as
-    read-only (they only look blocks up, never mutate them)."""
-    return yaml.safe_load(COMPILERS_YAML.read_text())
+    that every build call reads, so it is parsed once; the blocks are frozen."""
+    return CompilerTable.validate_python(yaml.safe_load(COMPILERS_YAML.read_text()))
 
 
 #: The toolchain families a submission may request (its ``compiler`` field), family -> the
@@ -282,8 +327,13 @@ COMPILER_FAMILIES = {
     "nvhpc": "nvhpc",
 }
 
-#: ``config.yaml`` key a setup pins a language's toolchain family with.
+#: Config key a setup pins a language's toolchain family with (``build.compiler`` has c, cpp and fortran).
 FAMILY_PIN_KEY = "build.compiler.{lang}"
+
+
+def family_pin(lang: str) -> str | None:
+    """``build.compiler.<lang>``; None when unset or when ``lang`` has no pin key."""
+    return getattr(config.current().build.compiler, lang, None)
 
 
 def family_names() -> tuple[str, ...]:
@@ -299,7 +349,7 @@ def default_family() -> str:
 def resolve_family(lang: str, requested: str | None = None) -> str:
     """The toolchain family for ``lang``: setup pin (``build.compiler.<lang>``) beats submission's
     ``requested``, which beats :func:`default_family`."""
-    pin = config.get_str(FAMILY_PIN_KEY.format(lang=lang))
+    pin = family_pin(lang)
     for value, origin in ((pin, FAMILY_PIN_KEY.format(lang=lang)), (requested or "", "submission 'compiler'")):
         if value and value not in COMPILER_FAMILIES:
             raise KeyError(f"unknown compiler {value!r} from {origin}; expected one of {family_names()}")
@@ -323,14 +373,14 @@ def compiler_for_family(lang: str, family: str) -> str | None:
     if spack is None:
         raise KeyError(f"unknown compiler family {family!r}; expected one of {family_names()}")
     for name, block in _load_compilers().items():
-        if block.get("lang") != lang or block.get("mpi"):
+        if block.lang != lang or block.mpi:
             continue
-        if (block.get("install") or {}).get("spack") == spack:
+        if block.install.spack == spack:
             return name
     return None
 
 
-def compiler_block(name: str) -> dict[str, Any]:
+def compiler_block(name: str) -> CompilerBlock:
     """One ``compilers.yaml`` block, by name: the public read of the table the build runs from, so
     ``containers/images/lib/parallelizer-gate.sh`` and ``tests/test_parallelizer_gate.py`` walk that table and
     no second list. :raises KeyError: for an unknown block name."""
@@ -339,14 +389,14 @@ def compiler_block(name: str) -> dict[str, Any]:
 
 def compiler_driver(name: str) -> str:
     """The driver command a ``compilers.yaml`` block invokes (``g++``, ``clang++``, ...)."""
-    return _load_compilers()[name].get("cc", "")
+    return _load_compilers()[name].cc
 
 
 class CompilerChoice(NamedTuple):
     """A ``compilers.yaml`` block and its name."""
 
     name: str
-    block: dict[str, Any]
+    block: CompilerBlock
 
 
 def resolved_compiler_for(lang: str, compiler: str | None = None) -> CompilerChoice:
@@ -841,7 +891,7 @@ def rocm_driver(name: str) -> str:
     that would shadow the one every other build uses. Resolved by its canonical location so the leg
     works on a ROCm box without an env pin and without putting ROCm on anyone's ``PATH``.
     """
-    root = pathlib.Path(os.environ.get("ROCM_PATH") or "/opt/rocm")
+    root = paths.rocm_root()
     for rel in ROCM_LLVM_BIN:
         candidate = root / rel / name
         if os.access(candidate, os.X_OK):
@@ -1007,16 +1057,18 @@ def grading_ncores() -> int:
     physical core while the child that runs the .so sees a quarter of them, and a compile-time
     ``-ftree-parallelize-loops={n}`` sized from the former oversubscribes the cpuset 4x.
 
-    The slot count comes from the same ``judge.gpus_per_node`` key ``grading_cpus`` divides by,
-    so the two cannot disagree about how the node is split.
+    The slot count comes from :func:`~hpcagent_bench.harness.judge_scheduler.judge_gpu_slots`, the resolver
+    ``grading_cpus`` divides by, so the two cannot disagree about how the node is split.
     """
-    nslots = config.get_int("judge.gpus_per_node", 0)
+    from hpcagent_bench.harness.judge_scheduler import judge_gpu_slots  # cycle: harness imports languages
+
+    nslots = judge_gpu_slots()
     if nslots < 2:
         return flags.ncores()
     return max(1, flags.ncores() // nslots)
 
 
-def _resolve_baseline(block: dict, mode: Mode) -> str:
+def _resolve_baseline(block: CompilerBlock, mode: Mode) -> str:
     """Resolve a compiler block's flag string for ``mode``.
 
     ``baseline_ref`` names a constant in :mod:`hpcagent_bench.flags`; we look it up via
@@ -1027,11 +1079,11 @@ def _resolve_baseline(block: dict, mode: Mode) -> str:
     appended last, unconditionally of ``mode`` -- warnings are diagnostic, not an
     autopar-style delta, so every mode of a block that declares one gets them.
     """
-    if block.get("cuda"):
+    if block.cuda:
         return flags.compose_cuda()
-    if block.get("hip"):
+    if block.hip:
         return flags.compose_hip()
-    ref = block.get("baseline_ref")
+    ref = block.baseline_ref
     if ref is None:
         return ""
     flag_vars = vars(flags)
@@ -1041,13 +1093,13 @@ def _resolve_baseline(block: dict, mode: Mode) -> str:
     # Vector libm, for a block whose baseline cannot carry it as a constant. gcc/clang get it
     # inside their baseline and gfortran from the driver spec; flang has neither, and a column
     # building libm scalar while its neighbours vectorize measures the library, not the compiler.
-    veclib_ref = block.get("veclib_ref")
+    veclib_ref = block.veclib_ref
     if veclib_ref is not None:
         if veclib_ref not in flag_vars:
             raise KeyError(f"veclib_ref {veclib_ref!r} is not a constant in hpcagent_bench.flags")
-        if _veclib_accepted(block["cc"], flag_vars[veclib_ref], block.get("lang", "c")):
+        if _veclib_accepted(block.cc, flag_vars[veclib_ref], block.lang):
             baseline = f"{baseline} {flag_vars[veclib_ref]}"
-    autopar_ref = block.get("autopar_ref")
+    autopar_ref = block.autopar_ref
     if autopar_ref is not None and autopar_ref not in flag_vars:
         raise KeyError(f"autopar_ref {autopar_ref!r} is not a constant in hpcagent_bench.flags")
     autopar = flag_vars[autopar_ref] if autopar_ref else None
@@ -1055,12 +1107,12 @@ def _resolve_baseline(block: dict, mode: Mode) -> str:
     # Unconditional of mode, unlike autopar: the run environment is always multi-core
     # (native_call.grading_cpus) and the opt-in is the construct in the source -- code
     # without `do concurrent` compiles byte-identically. See flags.DO_CONCURRENT_*.
-    doconcurrent_ref = block.get("doconcurrent_ref")
+    doconcurrent_ref = block.doconcurrent_ref
     if doconcurrent_ref is not None:
         if doconcurrent_ref not in flag_vars:
             raise KeyError(f"doconcurrent_ref {doconcurrent_ref!r} is not a constant in hpcagent_bench.flags")
         composed = f"{composed} {flag_vars[doconcurrent_ref].format(n=grading_ncores())}"
-    warnings_ref = block.get("warnings_ref")
+    warnings_ref = block.warnings_ref
     if warnings_ref is None:
         return composed
     if warnings_ref not in flag_vars:
@@ -1068,7 +1120,7 @@ def _resolve_baseline(block: dict, mode: Mode) -> str:
     return f"{composed} {flag_vars[warnings_ref]}"
 
 
-def _compiler_for_lang(compilers: dict[str, dict], lang: str, *, mpi: bool = False) -> CompilerChoice:
+def _compiler_for_lang(compilers: Mapping[str, CompilerBlock], lang: str, *, mpi: bool = False) -> CompilerChoice:
     """Pick the compiler block for ``lang``: :func:`resolve_family`'s family, else the first matching
     block; ``mpi=True`` picks the ``mpi: true`` wrapper block instead of the single-node one."""
     if not mpi:
@@ -1076,10 +1128,10 @@ def _compiler_for_lang(compilers: dict[str, dict], lang: str, *, mpi: bool = Fal
         name = compiler_for_family(lang, family)
         if name is not None:
             return CompilerChoice(name, compilers[name])
-        if config.get(FAMILY_PIN_KEY.format(lang=lang)):
+        if family_pin(lang):
             raise KeyError(f"compiler family {family!r} builds no {lang!r} in this image")
     for cname, block in compilers.items():
-        if block.get("lang") == lang and bool(block.get("mpi")) == mpi:
+        if block.lang == lang and bool(block.mpi) == mpi:
             return CompilerChoice(cname, block)
     raise KeyError(f"no {'MPI ' if mpi else ''}compiler in compilers.yaml for lang {lang!r}")
 
@@ -1105,7 +1157,7 @@ def compiler_launcher() -> tuple[str, ...]:
     wrong microarchitecture -- a silently mistuned kernel in a benchmark that exists to
     measure tuning.
     """
-    if not config.get("build.ccache", True):
+    if not config.current().build.ccache:
         return ()
     exe = shutil.which("ccache")
     if exe is None:
@@ -1114,7 +1166,7 @@ def compiler_launcher() -> tuple[str, ...]:
     return (exe,)
 
 
-def _render_argv(tokens: list[str], subst: dict[str, str], *, cacheable_lang: str | None = None) -> list[str]:
+def _render_argv(tokens: Sequence[str], subst: dict[str, str], *, cacheable_lang: str | None = None) -> list[str]:
     """Substitute a compile/link template into an argv. ``{baseline}`` and ``{objs}`` each
     expand to a space-joined string that must become several argv items (shell-split, keeping
     quoted groups); every other token stays a single item.
@@ -1362,7 +1414,7 @@ def std_flag(lang: str) -> str:
     standard than the harness itself builds submissions with.
     """
     _, block = _compiler_for_lang(_load_compilers(), lang)
-    for token in block["compile"]:
+    for token in block.compile:
         if token.startswith("-std="):
             return token
     return ""
@@ -1392,10 +1444,10 @@ def _stdpar_backend_is_tbb(cc: str) -> bool:
 STDPAR_PROBE_TIMEOUT_S = 30
 
 
-def _stdpar_link_for_block(block: dict[str, Any]) -> tuple[str, ...]:
+def _stdpar_link_for_block(block: CompilerBlock) -> tuple[str, ...]:
     """The ``<execution>``-policy link arguments for one compiler block; ``()`` when the block
     declares none, or it names TBB and this toolchain does not route through TBB."""
-    ref = block.get("stdpar_link_ref")
+    ref = block.stdpar_link_ref
     if not ref:
         return ()
     flag_vars = vars(flags)
@@ -1405,7 +1457,7 @@ def _stdpar_link_for_block(block: dict[str, Any]) -> tuple[str, ...]:
     # The probe asks a TBB-specific question, so it may only gate a TBB link. nvhpc routes
     # <execution> through its own runtime: -stdpar is in that block's baseline unconditionally, and
     # dropping it from the LINK leaves a .so that builds and then fails to dlopen on __acc_compiled.
-    if "-ltbb" in resolved and not _stdpar_backend_is_tbb(block["cc"]):
+    if "-ltbb" in resolved and not _stdpar_backend_is_tbb(block.cc):
         return ()
     return resolved
 
@@ -1476,7 +1528,7 @@ def driver_library_dir(cc: str, sonames: tuple[str, ...]) -> str:
     return ""
 
 
-def openmp_link_for_block(block: dict[str, Any], mode: Mode, cc: str | None = None) -> tuple[str, ...]:
+def openmp_link_for_block(block: CompilerBlock, mode: Mode, cc: str | None = None) -> tuple[str, ...]:
     """The OpenMP flag this block's link driver needs, or ``()`` when its baseline carries none.
 
     The link line never sees the compile baseline. gfortran turns a plain ``do concurrent`` into
@@ -1492,9 +1544,7 @@ def openmp_link_for_block(block: dict[str, Any], mode: Mode, cc: str | None = No
     tokens = shlex.split(baseline)
     for flag in OPENMP_BASELINE_FLAGS:
         if flag in tokens:
-            runtime = driver_library_dir(
-                cc or block["cc"], OPENMP_RUNTIME_SONAMES.get(flag, ("libomp.so", "libgomp.so"))
-            )
+            runtime = driver_library_dir(cc or block.cc, OPENMP_RUNTIME_SONAMES.get(flag, ("libomp.so", "libgomp.so")))
             return (flag, f"-Wl,-rpath,{runtime}") if runtime else (flag,)
     return ()
 
@@ -1557,20 +1607,20 @@ def _mimalloc_links(cc: str, tokens: tuple[str, ...], offload: bool) -> bool:
     return probe_succeeds(argv, "int main(void){return 0;}\n", toolchain_env() if offload else None)
 
 
-def _mimalloc_link_for_block(block: dict[str, Any], cc: str | None = None) -> tuple[str, ...]:
+def _mimalloc_link_for_block(block: CompilerBlock, cc: str | None = None) -> tuple[str, ...]:
     """The allocator link arguments for one compiler block; ``()`` when the block declares none or
     this toolchain cannot resolve it.
 
     An OFFLOAD build names the allocator's directory as well: it runs under :func:`toolchain_env`,
     which drops ``LIBRARY_PATH`` and with it the spack view that holds ``libmimalloc.so``.
     """
-    ref = block.get("mimalloc_link_ref")
+    ref = block.mimalloc_link_ref
     if not ref:
         return ()
     flag_vars = vars(flags)
     if ref not in flag_vars:
         raise KeyError(f"mimalloc_link_ref {ref!r} is not a constant in hpcagent_bench.flags")
-    driver = cc or block["cc"]
+    driver = cc or block.cc
     tokens = tuple(shlex.split(flag_vars[ref]))
     # The directory is named from THIS environment, because ``LIBRARY_PATH`` is where a spack view
     # is reached from and it is exactly what the build is about to lose.
@@ -1626,10 +1676,8 @@ LIBRARY_LINK_PREFIXES = ("-L", "-l")
 #: (gfortran included) all accept ``c``; nvcc names its input language ``cu``, and rejects ``c``.
 PROBE_INPUT_LANG: dict[str, str] = {Language.CPP.value: "c++", Language.HIP.value: "c++", Language.CUDA.value: "cu"}
 
+
 #: Where the GPU math libraries are already described (soname + header): the discovery table.
-TOOLSET_YAML: pathlib.Path = paths.ROOT / "hpcagent_bench" / "envs" / "toolset.yaml"
-
-
 @functools.lru_cache(maxsize=None, typed=True)
 def toolset_link_tokens(dotted: str) -> tuple[str, ...]:
     """``-l`` tokens for a ``<section>.<name>`` entry of ``toolset.yaml``, from its soname.
@@ -1639,20 +1687,42 @@ def toolset_link_tokens(dotted: str) -> tuple[str, ...]:
     correctly yields ``()``.
     """
     section, _, name = dotted.partition(".")
-    table = yaml.safe_load(TOOLSET_YAML.read_text()) or {}
-    entry = (table.get(section) or {}).get(name) or {}
-    sonames = entry.get("soname")
-    if not sonames:
+    entry = discover_tools.toolset().get(section, {}).get(name)
+    if entry is None:
         return ()
-    if isinstance(sonames, str):
-        sonames = [sonames]
-    return tuple(f"-l{re.sub(r'^lib|[.]so$', '', s)}" for s in sonames)
+    return tuple(f"-l{re.sub(r'^lib|[.]so$', '', s)}" for s in entry.soname)
+
+
+class LibraryEntry(pydantic.BaseModel):
+    """One requestable library of ``libraries.yaml``: what the agent is told, the languages that may link it,
+    and how it resolves -- ``pkg`` (pkg-config modules; one name or a list, and a list means ALL of them),
+    ``toolset`` (a ``<section>.<name>`` of ``toolset.yaml``), a bare ``link`` line, or ``header_only``
+    (its ``headers``, the first of which a compile probe includes). ``mpi_wrapper`` names the compiler
+    wrappers an MPI is interrogated through, ``include`` extra ``-I`` directories of a header-only entry,
+    and ``openmp`` the OpenMP runtime the entry runs on alone (one runtime, or one per GPU vendor)."""
+
+    model_config = pydantic.ConfigDict(extra="forbid", frozen=True)
+
+    summary: str
+    langs: tuple[str, ...]
+    headers: tuple[str, ...] = ()
+    header_only: pydantic.StrictBool = False
+    pkg: discover_tools.NameList = ()
+    toolset: str = ""
+    link: tuple[str, ...] = ()
+    include: tuple[str, ...] = ()
+    mpi_wrapper: tuple[str, ...] = ()
+    openmp: str | dict[str, str] = ""
+
+
+#: ``libraries.yaml``'s schema: library name -> its entry.
+LIBRARIES_ADAPTER: pydantic.TypeAdapter[dict[str, LibraryEntry]] = pydantic.TypeAdapter(dict[str, LibraryEntry])
 
 
 @functools.lru_cache(maxsize=None, typed=True)
-def load_libraries() -> dict[str, dict]:
+def load_libraries() -> dict[str, LibraryEntry]:
     """Parse ``libraries.yaml`` into ``{library_name: entry}``. Memoized like the compiler table."""
-    return yaml.safe_load(LIBRARIES_YAML.read_text()) or {}
+    return LIBRARIES_ADAPTER.validate_python(yaml.safe_load(LIBRARIES_YAML.read_text()) or {})
 
 
 @functools.lru_cache(maxsize=None, typed=True)
@@ -1684,43 +1754,43 @@ def library_tokens(name: str, lang: str, context: str = "") -> tuple[tuple[str, 
     if lang not in LANG_EXT:
         return (), ()
     entry = load_libraries().get(name)
-    if not entry or lang not in entry.get("langs", ()):
+    if entry is None or lang not in entry.langs:
         return (), ()
-    if entry.get("header_only"):
+    if entry.header_only:
         # No link tokens exist to return, and none is wanted: the whole library is its headers. The
         # -I still matters and is the reason this route exists -- eigen's headers are under
         # /usr/include/eigen3, so a bare `#include <Eigen/Dense>` does not compile without it. When
         # the headers are on the default include path this correctly yields no tokens at all;
         # library_offered, not emptiness, is what says whether the library is available.
-        cflags = pkg_config_answer(pkg_modules(entry), "--cflags", context)
-        include = tuple(f"-I{d}" for d in entry.get("include") or ())
+        cflags = pkg_config_answer(entry.pkg, "--cflags", context)
+        include = tuple(f"-I{d}" for d in entry.include)
         if cflags is None:
             return include, ()
         return tuple(t for t in cflags if t.startswith(LIBRARY_COMPILE_PREFIXES)) + include, ()
-    wrapped = mpich_wrapper_flags(tuple(entry.get("mpi_wrapper") or ()))
+    wrapped = mpich_wrapper_flags(entry.mpi_wrapper)
     if wrapped[1]:
         # An MPI, asked the way CMake's FindMPI asks: interrogate the compiler wrapper (`-show`) for
         # its include and link line, so hipcc/nvcc/clang compile MPI code without BEING the wrapper.
         # A host without the wrapper falls through to the entry's pkg-config module below.
         compile_tokens, link_tokens = tuple(wrapped[0]), tuple(wrapped[1]) + rpath_tokens(wrapped[1])
-    elif entry.get("toolset"):
+    elif entry.toolset:
         # Toolkit-resident: CUDA and ROCm ship no pkg-config files, but their own compiler already
         # searches the toolkit's lib and include directories, so a bare -l is the whole answer and
         # no -L or rpath is wanted. The trial link below is what decides whether it is really here.
         compile_tokens = ()
-        link_tokens = toolset_link_tokens(str(entry["toolset"]))
+        link_tokens = toolset_link_tokens(entry.toolset)
         if not link_tokens:
             return (), ()
     else:
-        cflags = pkg_config_answer(pkg_modules(entry), "--cflags", context)
-        libs = pkg_config_answer(pkg_modules(entry), "--libs", context)
+        cflags = pkg_config_answer(entry.pkg, "--cflags", context)
+        libs = pkg_config_answer(entry.pkg, "--libs", context)
         if libs is None or cflags is None:
             # No .pc file: a library built into the image's own prefix (hptt, tblis) is on the
             # compiler's default search path already, so a bare -l is the whole answer. The trial
             # link below still decides whether it is really here.
-            if not entry.get("link"):
+            if not entry.link:
                 return (), ()
-            compile_tokens, link_tokens = (), tuple(entry["link"])
+            compile_tokens, link_tokens = (), entry.link
             view_lib = context_view_lib(entry, context)
             if view_lib:  # the context's own variant: named by -L and rpath, not left to the search path
                 link_tokens = (f"-L{view_lib}", *link_tokens)
@@ -1742,31 +1812,13 @@ def rpath_tokens(link_tokens: Sequence[str]) -> tuple[str, ...]:
     return tuple(f"-Wl,-rpath,{t[2:]}" for t in link_tokens if t.startswith("-L") and t[2:])
 
 
-def pkg_modules(entry: dict[str, object]) -> tuple[str, ...]:
-    """The pkg-config module names one catalog entry resolves through.
-
-    ``pkg:`` is one name or a LIST of them, and a list means ALL of them: fftw's emitter picks
-    ``fftw_plan_dft_1d`` or ``fftwf_plan_dft_1d`` from the run's precision, and those live in
-    different libraries (``fftw3`` / ``fftw3f``) behind one catalog name. A shared object links
-    clean with undefined symbols, so resolving only one module would fail at ``dlopen``.
-    """
-    pkg = entry.get("pkg")
-    if not pkg:
-        return ()
-    if isinstance(pkg, str):
-        return (pkg,)
-    if isinstance(pkg, list):
-        return tuple(str(name) for name in pkg)
-    raise TypeError(f"catalog 'pkg' must be a name or a list of names, got {pkg!r}")
-
-
 @functools.lru_cache(maxsize=None, typed=True)
 def pkg_config_answer(pkgs: tuple[str, ...], what: str, context: str = "") -> tuple[str, ...] | None:
     """``pkg-config <what> <pkgs...>`` split into tokens, or None when pkg-config cannot answer.
 
     Every module is asked in ONE invocation, so pkg-config merges and de-duplicates the flags
     itself; a single missing module fails the whole answer, which is the intended reading (see
-    :func:`pkg_modules`). ``context``'s view leads ``PKG_CONFIG_PATH``
+    :class:`LibraryEntry`'s ``pkg``). ``context``'s view leads ``PKG_CONFIG_PATH``
     (:func:`hpcagent_bench.omp_context.context_build_env`)."""
     if not pkgs:
         return None
@@ -1809,7 +1861,7 @@ def library_links(lang: str, link_tokens: tuple[str, ...]) -> bool:
     resolve different things and neither replaces the other.
     """
     _cname, block = _compiler_for_lang(_load_compilers(), lang)
-    exe = resolve_compiler(block["cc"]) or block["cc"]
+    exe = resolve_compiler(block.cc) or block.cc
     argv = [exe, "-x", PROBE_INPUT_LANG.get(lang, "c"), "-", "-o", os.devnull, *link_tokens]
     return probe_succeeds(argv, "int main(void){return 0;}\n")
 
@@ -1826,7 +1878,7 @@ def library_compiles(lang: str, compile_tokens: tuple[str, ...], header: str) ->
     missing include is already a hard error at preprocessing.
     """
     _cname, block = _compiler_for_lang(_load_compilers(), lang)
-    exe = resolve_compiler(block["cc"]) or block["cc"]
+    exe = resolve_compiler(block.cc) or block.cc
     try:
         r = subprocess.run(
             [exe, "-x", PROBE_INPUT_LANG.get(lang, "c"), "-E", "-", *compile_tokens],
@@ -1842,14 +1894,14 @@ def library_compiles(lang: str, compile_tokens: tuple[str, ...], header: str) ->
     return r.returncode == 0
 
 
-def context_view_lib(entry: dict[str, object], context: str) -> str:
+def context_view_lib(entry: LibraryEntry, context: str) -> str:
     """The context view's library directory holding every ``-l`` library of a pkg-config-less catalog
     ``entry`` (an OpenMP-linking one built into ``<context>/view``), or ``""``: no context, no view, or
     a library the view does not hold."""
     view = omp_context.context_view(context) if context else None
     if view is None:
         return ""
-    wanted = [str(t)[2:] for t in as_list(entry.get("link")) if str(t).startswith("-l")]
+    wanted = [token[2:] for token in entry.link if token.startswith("-l")]
     for libdir in (view / "lib", view / "lib64"):
         if wanted and all(any(libdir.glob(f"lib{name}.so*")) for name in wanted):
             return str(libdir)
@@ -1869,7 +1921,8 @@ def library_served(name: str, context: str = "") -> str:
 def declared_runtime(name: str) -> str:
     """The OpenMP runtime catalog library ``name`` declares it runs on alone here (``openmp:`` in libraries.yaml,
     per :func:`offload_vendor` when it is a map), ``""`` when it declares none."""
-    openmp = (load_libraries().get(name) or {}).get("openmp") or ""
+    entry = load_libraries().get(name)
+    openmp = entry.openmp if entry is not None else ""
     return openmp.get(offload_vendor(), "") if isinstance(openmp, dict) else openmp
 
 
@@ -1898,15 +1951,14 @@ def library_offered(name: str, lang: str, context: str = "") -> bool:
     the ``context``'s (:func:`library_served`) is not on offer there.
     """
     entry = load_libraries().get(name)
-    if not entry or lang not in entry.get("langs", ()):
+    if entry is None or lang not in entry.langs:
         return False
     if library_served(name, context):
         return False
-    if not entry.get("header_only"):
+    if not entry.header_only:
         return any(library_tokens(name, lang, context))
     compile_tokens, _link = library_tokens(name, lang, context)
-    headers = as_list(entry.get("headers"))
-    return bool(headers) and library_compiles(lang, compile_tokens, str(headers[0]))
+    return bool(entry.headers) and library_compiles(lang, compile_tokens, entry.headers[0])
 
 
 def available_libraries(lang: str, context: str = "") -> tuple[str, ...]:
@@ -1948,7 +2000,7 @@ def isopar_capability() -> flags.AutoparProbe:
     block = _compiler_for_lang(_load_compilers(), Language.CPP.value).block
     composed = f"{baseline_flags('cpp')} {std_flag('cpp')}"
     return flags.probe_autopar(
-        block["cc"],
+        block.cc,
         composed,
         flags.NO_OUTLINE_PATTERN,
         flags.STDPAR_PROBE_SOURCE,
@@ -1974,16 +2026,16 @@ REPORT_REFS: Mapping[str, str] = types.MappingProxyType(
 DEVICE_DRIVER_FAMILY: Mapping[str, str] = types.MappingProxyType({"hipcc": "llvm"})
 
 
-def block_family(block: dict[str, Any]) -> str:
+def block_family(block: CompilerBlock) -> str:
     """The toolchain family of a ``compilers.yaml`` block, or ``""`` (nvcc, the MPI wrappers)."""
-    spack = (block.get("install") or {}).get("spack")
+    spack = block.install.spack
     for family, name in COMPILER_FAMILIES.items():
         if name == spack:
             return family
-    return DEVICE_DRIVER_FAMILY.get(block.get("cc", ""), "")
+    return DEVICE_DRIVER_FAMILY.get(block.cc, "")
 
 
-def block_omp_context(block: dict[str, Any]) -> str:
+def block_omp_context(block: CompilerBlock) -> str:
     """The OpenMP context (:mod:`hpcagent_bench.omp_context`) of a ``compilers.yaml`` block: its
     driver's family (``hipcc`` is ROCm's clang), the default context for a driver outside every family."""
     family = block_family(block)
@@ -1995,16 +2047,10 @@ VECT_UNLIMITED_REFS: Mapping[str, str] = types.MappingProxyType(
     {"gcc": "GCC_VECT_UNLIMITED", "llvm": "CLANG_VECT_UNLIMITED"}
 )
 
-#: The values ``perf_reports.vect_cost_model`` accepts.
-VECT_COST_MODELS: tuple[str, ...] = ("default", "unlimited")
-
 
 def vect_cost_model() -> str:
-    """``perf_reports.vect_cost_model``, read on every call; an unknown value raises by name."""
-    value = config.get_str("perf_reports.vect_cost_model", "default")
-    if value not in VECT_COST_MODELS:
-        raise ValueError(f"perf_reports.vect_cost_model={value!r}; expected one of {VECT_COST_MODELS}")
-    return value
+    """``perf_reports.vect_cost_model``, read on every call."""
+    return config.current().perf_reports.vect_cost_model
 
 
 @functools.lru_cache(maxsize=None, typed=True)
@@ -2079,7 +2125,7 @@ def submission_toolchain(lang: str, requested: str | None = None, *, vendor: str
     return Toolchain(
         language=lang,
         compiler=name,
-        driver=leg_driver or block["cc"],
+        driver=leg_driver or block.cc,
         family=family,
         report_flags=family_report_flags(family),
     )
@@ -2148,9 +2194,9 @@ def compile_variant(
     obj = src.with_suffix(".o")
     lib = backend_dir(spec) / f"lib{spec.short_name}.so"
 
-    subst = subst_map(block["cc"], baseline=baseline, src=src, obj=obj, objs=obj, lib=lib)
+    subst = subst_map(block.cc, baseline=baseline, src=src, obj=obj, objs=obj, lib=lib)
 
-    return _render_argv(block["compile"], subst, cacheable_lang=lang)
+    return _render_argv(block.compile, subst, cacheable_lang=lang)
 
 
 def build_kernel_lib_commands(
@@ -2216,14 +2262,14 @@ def build_kernel_lib_commands(
         if lang in FFT_LINKED_LANGS:
             flags.extend(library_build_flags(lang, FFT_LINKED_LIBRARIES)[0])
         subst = subst_map(
-            block["cc"],
+            block.cc,
             baseline=" ".join([baseline, *flags]) if flags else baseline,
             src=src,
             obj=obj,
             objs=obj,
             lib=out_so,
         )
-        cmds.append(_render_argv(block["compile"], subst, cacheable_lang=lang))
+        cmds.append(_render_argv(block.compile, subst, cacheable_lang=lang))
         objs.append(str(obj))
         langs_present.add(lang)
 
@@ -2233,9 +2279,9 @@ def build_kernel_lib_commands(
         link_block = forced
     else:
         _, link_block = _compiler_for_lang(compilers, link_lang_for(langs_present))
-    link_subst = subst_map(link_block["cc"], objs=" ".join(objs), lib=out_so)
-    link_argv = _render_argv(link_block["link"], link_subst)
-    link_argv.extend(link_block.get("link_extra") or [])
+    link_subst = subst_map(link_block.cc, objs=" ".join(objs), lib=out_so)
+    link_argv = _render_argv(link_block.link, link_subst)
+    link_argv.extend(link_block.link_extra or [])
     link_argv.extend(f for f in _stdpar_link_for_block(link_block) if f not in link_argv)
     link_argv.extend(f for f in openmp_link_for_block(link_block, mode) if f not in link_argv)
     # The allocator, on the BASELINE link line for the same reason it is on the submission's
@@ -2365,27 +2411,27 @@ def build_mpi_executable_commands(
         src = pathlib.Path(given)
         obj = build_dir / f"{src.name}.o"
         subst = subst_map(
-            cc_override.get(lang, str(block["cc"])),
+            cc_override.get(lang, str(block.cc)),
             baseline=_resolve_baseline(block, mode),
             src=src,
             obj=obj,
             objs=obj,
             exe=out_exe,
         )
-        argv = _render_argv(block["compile"], subst)
+        argv = _render_argv(block.compile, subst)
         argv.extend(extra_compile)  # -I/-D dependency tokens on the compile step
         if kernel_lib is not None:
-            argv.append(PIC_FLAG_CUDA if block.get("cuda") else PIC_FLAG)
+            argv.append(PIC_FLAG_CUDA if block.cuda else PIC_FLAG)
         cmds.append(argv)
         objs.append(str(obj))
         langs_present.add(lang)
 
     link_lang = link_lang_for(langs_present)
     _, link_block = _compiler_for_lang(compilers, link_lang, mpi=True)
-    link_cc = cc_override.get(link_lang, str(link_block["cc"]))
+    link_cc = cc_override.get(link_lang, str(link_block.cc))
     link_subst = subst_map(link_cc, objs=" ".join(objs), exe=out_exe)
-    link_argv = _render_argv(link_block["link"], link_subst)
-    link_argv.extend(link_block.get("link_extra") or [])
+    link_argv = _render_argv(link_block.link, link_subst)
+    link_argv.extend(link_block.link_extra or [])
     link_argv.extend(f for f in openmp_link_for_block(link_block, mode, link_cc) if f not in link_argv)
     link_argv.extend(extra_link)  # -l/-L dependency tokens on the link step
     cmds.append(link_argv)
@@ -2393,9 +2439,9 @@ def build_mpi_executable_commands(
         # The same link line over the kernel objects only (the driver object is the last one), as
         # a shared library: -shared right after the compiler, which every driver here accepts.
         lib_subst = subst_map(link_cc, objs=" ".join(objs[:-1]), exe=pathlib.Path(kernel_lib))
-        lib_argv = _render_argv(link_block["link"], lib_subst)
+        lib_argv = _render_argv(link_block.link, lib_subst)
         lib_argv.insert(1, "-shared")
-        lib_argv.extend(link_block.get("link_extra") or [])
+        lib_argv.extend(link_block.link_extra or [])
         lib_argv.extend(extra_link)
         cmds.append(lib_argv)
     return cmds
@@ -2487,19 +2533,19 @@ def build_shared_lib_commands(
     objs = [u.with_name(u.name + ".o") for u in units]
     # An offload build must run the leg's OWN driver, not the block's: upstream clang++ and
     # amdclang++ are different builds and only one carries the amdgpu device runtime.
-    cc = cc_override or block["cc"]
+    cc = cc_override or block.cc
     subst = subst_map(cc, baseline=baseline, src=src, obj=obj, objs=" ".join(str(o) for o in objs), lib=out_so)
 
     cmds: list[list[str]] = []
     for unit, unit_obj in zip(units, objs, strict=False):
         step = subst_map(cc, baseline=baseline, src=unit, obj=unit_obj, objs=str(unit_obj), lib=out_so)
-        argv = _render_argv(block["compile"], step, cacheable_lang=lang)
+        argv = _render_argv(block.compile, step, cacheable_lang=lang)
         argv.extend(extra_compile)  # every compile step sees the -I/-D set
         cmds.append(argv)
-    link = block.get("link")
+    link = block.link
     if link:
         link_argv = _render_argv(link, subst)
-        link_argv.extend(block.get("link_extra") or [])
+        link_argv.extend(block.link_extra or [])
         link_argv.extend(f for f in openmp_link_for_block(block, mode, cc) if f not in link_argv)
         # The C++ <execution> policies (std::execution::par / par_unseq) dispatch into oneTBB in
         # libstdc++, and an unresolved TBB symbol is a link failure the agent cannot fix from the

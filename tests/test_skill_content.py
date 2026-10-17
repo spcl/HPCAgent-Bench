@@ -68,9 +68,9 @@ def skill_sections(path: pathlib.Path) -> list[tuple[str, str]]:
     return sections
 
 
-def compiler_blocks() -> dict[str, dict]:
+def compiler_blocks() -> dict[str, languages.CompilerBlock]:
     """Every block of ``compilers.yaml``, keyed by compiler name."""
-    return yaml.safe_load(COMPILERS.read_text())
+    return languages.CompilerTable.validate_python(yaml.safe_load(COMPILERS.read_text()))
 
 
 PROFILING = "profiling"
@@ -332,7 +332,7 @@ def test_the_opt_report_skill_quotes_every_report_flag_the_harness_can_pass() ->
     """The skill prints the flags an agent is meant to type. A flag that changes in ``flags.py`` and
     not here leaves the reader running a command that produces a different report, or none."""
     body = skill_bodies()[OPT_REPORTS]
-    wired = {languages.report_flags(block["lang"], compiler=name) for name, block in compiler_blocks().items()}
+    wired = {languages.report_flags(block.lang, compiler=name) for name, block in compiler_blocks().items()}
     for flag_string in sorted(f for f in wired if f):
         assert flag_string in body, f"the opt-report skill no longer quotes {flag_string!r}"
     # Pinned directly too: a compilers.yaml that lost every report_ref would satisfy the loop above.
@@ -345,11 +345,11 @@ def test_the_opt_report_skill_names_the_compilers_with_no_report_channel() -> No
     must be named as one, or its silence reads as 'nothing was vectorized'."""
     body = skill_bodies()[OPT_REPORTS]
     for name, block in sorted(compiler_blocks().items()):
-        if block.get("mpi") or languages.report_flags(block["lang"], compiler=name):
+        if block.mpi or languages.report_flags(block.lang, compiler=name):
             continue
-        assert block["cc"] in body, (
+        assert block.cc in body, (
             f"{name}: the skill never tells the reader that no report flag reaches "
-            f"{block['cc']!r}, so an empty report there looks like a clean one"
+            f"{block.cc!r}, so an empty report there looks like a clean one"
         )
 
 

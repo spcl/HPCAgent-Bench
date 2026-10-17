@@ -119,10 +119,8 @@ Pricing a compaction:
   `AGENT_MAX_TOKENS` enforces) and the component fold (`events_cost`) share this code, so a compaction
   counts once in both.
 
-A `tokens.json` record reaches the results DB (its episode's `episodes` row, `episodes.ingest`) with its
-token counts only when it was folded by the current rule (`token_fold` of at least
-`episodes.MIN_TOKEN_FOLD`); an older record, which double-counted reasoning, keeps its episode row
-without them.
+A `tokens.json` record reaches the results DB as the token columns of its episode's `episodes` row
+(`episodes.ingest`); the record's `token_fold` names the fold rule it was counted by.
 
 ## Reading a run
 

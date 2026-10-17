@@ -11,9 +11,12 @@
 # that same directory, came down with all 141 blobs at stripe_count 1 / 1 MiB. Inheritance is not
 # a property of hf download. RESTRIPE EVERY NEW MODEL AND VERIFY; never assume.
 #
-#   hpcagent-bench job submit containers/inference/fetch_weights.sbatch   # the system's partition and account
-#   sbatch fetch_weights.sbatch                     # the four models the experiment serves
-#   MODELS="zai-org/GLM-5.3" sbatch fetch_weights.sbatch
+# The download's image is EDF (an EDF name or .toml path), else ${INFERENCE_CE_ENV}.toml in the first EDF_PATH
+# directory (helpers/scripts/site_env.sh); AUDIT_ONLY=1 needs neither:
+#   INFERENCE_CE_ENV=hpcagent-bench-sglang-mi300-latest \
+#     hpcagent-bench job submit containers/inference/fetch_weights.sbatch   # the system's partition and account
+#   INFERENCE_CE_ENV=hpcagent-bench-sglang-mi300-latest sbatch fetch_weights.sbatch   # the four served models
+#   MODELS="zai-org/GLM-5.3" INFERENCE_CE_ENV=... sbatch fetch_weights.sbatch
 #   AUDIT_ONLY=1 sbatch fetch_weights.sbatch        # check layout, change nothing
 #
 # Under plain sbatch the partition is SBATCH_PARTITION (site layer). On Daint (GH200) the partition and the
@@ -39,7 +42,6 @@ SCRATCH="${SCRATCH:?set SCRATCH}"
 REPO="${REPO:-$(git -C "${SLURM_SUBMIT_DIR:-${PWD}}" rev-parse --show-toplevel 2>/dev/null || true)}"
 [[ -n "${REPO}" && -f "${REPO}/helpers/scripts/cache_env.sh" ]] || { echo "FAIL: no checkout: set REPO or submit from inside one" >&2; exit 1; }
 . "${REPO}/helpers/scripts/cache_env.sh"
-EDF="${EDF:-${HOME}/.edf/hpcagent-bench-sglang-mi300-latest.toml}"
 AUDIT_ONLY="${AUDIT_ONLY:-0}"
 
 # Every model the experiment serves. Weights are ~1.5 TB in total, so the default is the full set
@@ -70,6 +72,7 @@ echo
 
 # ---- 1. download, inside the container, where huggingface_hub lives ---------------------------
 if [ "${AUDIT_ONLY}" != 1 ]; then
+    EDF="${EDF:-${EDF_PATH%%:*}/${INFERENCE_CE_ENV:?set EDF (an EDF name or .toml path) or INFERENCE_CE_ENV (an EDF name)}.toml}"
     for repo in ${MODELS}; do
         echo "=== downloading ${repo}"
         MODEL_REPO="${repo}" srun --environment="${EDF}" --cpus-per-task="${SLURM_CPUS_ON_NODE:-96}" \

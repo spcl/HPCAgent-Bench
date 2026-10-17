@@ -5,6 +5,8 @@ import dataclasses
 import pathlib
 import re
 
+from hpcagent_bench.emit_bridge import BenchDocument
+from hpcagent_bench.fuzz import FuzzValue
 from hpcagent_bench.translators.numpyto_common import dtypes
 from hpcagent_bench.translators.numpyto_common.frontend.axes import (
     AxisReshapeToIndexing,
@@ -38,10 +40,7 @@ from hpcagent_bench.translators.numpyto_common.frontend.inlining import (
 )
 from hpcagent_bench.translators.numpyto_common.frontend.int_usage import names_used_as_int
 from hpcagent_bench.translators.numpyto_common.frontend.manifest import (
-    JsonBlock,
     PinnedValue,
-    as_block,
-    as_list,
     collect_bool_preset_names,
     collect_float_preset_names,
     collect_symbols,
@@ -126,45 +125,43 @@ __all__ = [
 class Signature:
     """The bench_info view of the kernel: argument lists, declarations, presets and bindings."""
 
-    info: JsonBlock
-    init_block: JsonBlock
+    #: The document as read; the fields below are the views of it :meth:`align_to` renames.
+    bench: BenchDocument
     func_name: str
     input_args: list[str]
     array_args: list[str]
     output_args: list[str]
     shapes_raw: dict[str, str]
     dtypes_raw: dict[str, str]
-    parameters: dict[str, object]
+    parameters: dict[str, dict[str, FuzzValue]]
     preset_symbols: list[str]
     #: Preset names with a float value are float scalars, not integer symbols.
     float_presets: set[str]
     #: Preset names with a boolean value are config flags (``logical`` in Fortran).
     bool_presets: set[str]
     #: ``init.scalars``: fixed scalar bindings (conv knobs) and scalar defaults.
-    scalars: JsonBlock
+    scalars: dict[str, FuzzValue]
     #: Every value each config knob takes; ``parameters`` holds one representative.
-    config_values: JsonBlock
+    config_values: dict[str, list[FuzzValue]]
 
     @classmethod
     def read(cls, bench_info: pathlib.Path) -> "Signature":
-        info = load_bench_info(bench_info)
-        init_block = as_block(info.get("init"))
-        parameters: dict[str, object] = as_block(info.get("parameters", {}))
+        bench = load_bench_info(bench_info)
+        parameters = dict(bench.parameters)
         return cls(
-            info=info,
-            init_block=init_block,
-            func_name=str(info["func_name"]),
-            array_args=[str(a) for a in as_list(info["array_args"])],
-            input_args=[str(a) for a in as_list(info["input_args"])],
-            output_args=[str(a) for a in as_list(info.get("output_args", []))],
-            shapes_raw=declared_shapes(init_block),
-            dtypes_raw=declared_dtypes(init_block),
+            bench=bench,
+            func_name=bench.func_name,
+            array_args=list(bench.array_args),
+            input_args=list(bench.input_args),
+            output_args=list(bench.output_args),
+            shapes_raw=declared_shapes(bench.init),
+            dtypes_raw=declared_dtypes(bench.init),
             parameters=parameters,
             preset_symbols=collect_symbols(parameters),
-            float_presets=collect_float_preset_names(parameters, as_block(init_block.get("scalars"))),
+            float_presets=collect_float_preset_names(parameters, bench.init.scalars),
             bool_presets=collect_bool_preset_names(parameters),
-            scalars=as_block(init_block.get("scalars")),
-            config_values=as_block(info.get("config_values")),
+            scalars=bench.init.scalars,
+            config_values=bench.config_values,
         )
 
     def align_to(self, fn: ast.FunctionDef) -> None:
@@ -178,7 +175,7 @@ class Signature:
         self.array_args = [rename.get(a, a) for a in self.array_args]
         self.output_args = [rename.get(a, a) for a in self.output_args]
         self.parameters = {
-            preset: {rename.get(k, k): v for k, v in as_block(vals).items()} for preset, vals in self.parameters.items()
+            preset: {rename.get(k, k): v for k, v in vals.items()} for preset, vals in self.parameters.items()
         }
         self.preset_symbols = collect_symbols(self.parameters)
         self.shapes_raw = {rename.get(k, k): v for k, v in self.shapes_raw.items()}
@@ -210,7 +207,7 @@ def build_kernel_ir(
     sig = Signature.read(bench_info)
     tree, fn = parse_module(numpy_py, sig, open_mesh_grids)
     # First: the rebuilt CSR loops then go through every pass below like the body's own code.
-    rebuild_pattern_arrays(fn, sig.info)
+    rebuild_pattern_arrays(fn, sig.bench.rebuild)
     strip_framework_dtype_rebinding(fn)
     sig.align_to(fn)
     inlined_consts = prepare_body(tree, fn, sig.input_args, precision)
@@ -224,11 +221,11 @@ def build_kernel_ir(
     fold_tuples.collect(fn)
     fold_tuples.visit(fn)
     ast.fix_missing_locations(fn)
-    legacy_shapes = shapes_from_initialize(numpy_py, sig.info)
+    legacy_shapes = shapes_from_initialize(numpy_py, sig.bench)
     input_array_shapes = input_array_shapes_(sig, legacy_shapes)
     resolve_shape_reads_(fn, sig, input_array_shapes)
     returned_shapes, returned_dtypes = promote_returns(fn, sig, input_array_shapes)
-    sparse_descs, sparse_buffer_arrays, logical_to_physical = expand_sparse_arrays(sig.info, config)
+    sparse_descs, sparse_buffer_arrays, logical_to_physical = expand_sparse_arrays(sig.bench, config)
     symbols, arrays, scalars = declare_arguments(
         ArgumentSources(
             fn=fn,
@@ -236,7 +233,7 @@ def build_kernel_ir(
             bench_info=bench_info,
             sparse=frozenset(sparse_descs),
             legacy_shapes=legacy_shapes,
-            legacy_dtypes=dtypes_from_initialize(numpy_py, sig.info) | sig.dtypes_raw,
+            legacy_dtypes=dtypes_from_initialize(numpy_py, sig.bench) | sig.dtypes_raw,
             returned_shapes=returned_shapes,
             returned_dtypes=returned_dtypes,
         )
@@ -248,11 +245,11 @@ def build_kernel_ir(
         input_args = [phys for arg in input_args for phys in logical_to_physical.get(arg, [arg])]
     # Manifest shapes still spell inlined module constants; fold them before symbols are derived.
     fold_consts_into_shapes(arrays, inlined_consts)
-    pinned: dict[str, PinnedValue] = pinned_values(sig.info.get("pinned_config"))
+    pinned: dict[str, PinnedValue] = pinned_values(sig.bench.pinned_config)
     kir = KernelIR(
         tree=fn,
         kernel_name=sig.func_name,
-        short_name=str(sig.info.get("short_name", sig.func_name)),
+        short_name=sig.func_name if sig.bench.short_name is None else sig.bench.short_name,
         input_args=input_args,
         symbols=symbols,
         arrays=arrays,
@@ -271,7 +268,7 @@ def build_kernel_ir(
     for helper in kir.helpers:
         stamp_symbol_assumptions(helper)
     # The sign evidence for every bound name, for scalars the emitter promotes to symbols.
-    bound = set(sig.scalars) | {n for preset in sig.parameters.values() for n in as_block(preset)}
+    bound = set(sig.scalars) | {n for preset in sig.parameters.values() for n in preset}
     kir.symbol_signs = {n: sign for n in sorted(bound) if (sign := sig.sign_of(n))}
     for helper in kir.helpers:
         helper.symbol_signs = kir.symbol_signs
@@ -516,7 +513,7 @@ def declare_arguments(src: ArgumentSources) -> tuple[list[SymbolDesc], list[Arra
     arrays: list[ArrayDesc] = []
     scalars: list[ScalarDesc] = []
     fallback_shape = fallback_shape_for_legacy(sig.preset_symbols)
-    index_names = declared_index_arrays(sig.init_block)
+    index_names = declared_index_arrays(sig.bench.init)
     int_names = names_used_as_int(src.fn)
     for arg in sig.input_args:
         if arg in src.sparse:

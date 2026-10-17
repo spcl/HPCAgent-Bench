@@ -8,7 +8,6 @@ a request, and a Python call naming a route the service dropped fails at runtime
 looks like a judge fault. Both drifts are silent, so they are pinned here rather than remembered.
 """
 
-import dataclasses
 import inspect
 import re
 
@@ -66,7 +65,7 @@ def test_every_submission_field_the_judge_reads_is_one_the_client_can_send() -> 
     # mapping / present), so the key is the accessor's first argument whichever accessor is used.
     read = set(re.findall(r"body\.[a-z_]+\(\"([a-z_]+)\"", source))
     assert "source_file" in read, "the body reader no longer parses source_file -- update this test"
-    unsendable = sorted(read - {f.name for f in dataclasses.fields(Submission)})
+    unsendable = sorted(read - set(Submission.model_fields))
     assert not unsendable, (
         f"request body keys the judge reads but Submission cannot carry: {unsendable}. "
         "An agent copying the Python snippet would submit without them."

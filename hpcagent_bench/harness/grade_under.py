@@ -61,6 +61,8 @@ import tempfile
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from typing import Any, NamedTuple
 
+import pydantic
+import pydantic.dataclasses
 import yaml
 
 from hpcagent_bench import anticheat, config, experiments, owed, paths, protocols, recorded_rows
@@ -82,13 +84,12 @@ from hpcagent_bench.harness.recording import (
     record_scaling,
     snapshot_commit,
 )
-from hpcagent_bench.harness.requests_api import Requests
+from hpcagent_bench.harness.requests_api import Requests, RequestsField
 from hpcagent_bench.harness.scoring import ML_LAWS, Score, TimedCell, VerifyResult, score
 from hpcagent_bench.harness.service import delivery_language, from_config, scales
 from hpcagent_bench.harness.task import RECORD_DEVICE_ENV, Task, grading_residency
-from hpcagent_bench.harness.torch_reference import int_tuple
 from hpcagent_bench.protocols import Protocol, Role
-from hpcagent_bench.spec import BenchSpec, as_list
+from hpcagent_bench.spec import BenchSpec, task_fingerprint
 from hpcagent_bench.stats import databases, score_rule
 from hpcagent_bench.support.helpers.sparse.request import UNCOVERED
 
@@ -102,6 +103,7 @@ __all__ = [
     "FINAL",
     "FINAL_GRADES",
     "FINAL_KIND",
+    "FINGERPRINT_SHOWN",
     "GRADING_CUTS",
     "LATER_SUBMITS",
     "LAUNCH_HARNESSES",
@@ -110,9 +112,9 @@ __all__ = [
     "LAUNCH_SCRUB",
     "N_INPUTS_ENV",
     "PROMOTION_KIND",
+    "REASON_CAP",
     "REPEAT_ENV",
     "REPEAT_FLOOR_ENV",
-    "REQUEST_COLUMNS",
     "SCORE",
     "SUBMIT_SH",
     "TIMING_BACKEND_ENV",
@@ -122,7 +124,9 @@ __all__ = [
     "WARMUP_ENV",
     "FinalGrade",
     "FinalInput",
+    "Cut",
     "GradingCuts",
+    "GradingCutsFile",
     "Item",
     "Launch",
     "Scaling",
@@ -146,6 +150,8 @@ __all__ = [
     "env_names",
     "environment_scope",
     "epoch_ms",
+    "failed_every_input",
+    "failure_reason",
     "final_denominator",
     "final_env",
     "final_grade",
@@ -169,7 +175,6 @@ __all__ = [
     "protocol_inputs",
     "read_worklist",
     "recorded_setup",
-    "requests_select",
     "run_cells_shard",
     "run_shard",
     "scaled",
@@ -186,6 +191,8 @@ __all__ = [
     "submission_of",
     "submit_grade",
     "superseded",
+    "task_changed",
+    "task_changed_reason",
     "task_of",
     "unmeasured_right",
     "unsolved_final",
@@ -222,6 +229,10 @@ WARMUP_ENV: str = "HPCAGENT_BENCH_MEASUREMENT_WARMUP"
 
 #: ``grades.status`` of a pass the judge faulted: it decided nothing about the submission.
 ERROR_STATUS: str = "error"
+#: Characters a final grade's ``reason`` keeps.
+REASON_CAP: int = 400
+#: Leading hex digits of a task fingerprint a ``task: `` reason shows (:func:`task_changed_reason`).
+FINGERPRINT_SHOWN: int = 12
 
 #: Setup-env keys that describe the experiment rather than how a submission is built and timed.
 ENV_SKIP_PREFIXES: tuple[str, ...] = (
@@ -241,7 +252,8 @@ Scorer = Callable[..., Score]
 Verifier = Callable[..., VerifyResult]
 
 
-class Scaling(NamedTuple):
+@pydantic.dataclasses.dataclass(frozen=True, slots=True)
+class Scaling:
     """An item's scaling request: the laws to sweep and the rank counts P of the sweep. A job places the
     sweep only when its launch spans max(``rank_counts``) ranks (:func:`scaling_grade.placeable_ranks`); a
     one-node sweep is the same grade stopping at one node's ranks."""
@@ -249,15 +261,8 @@ class Scaling(NamedTuple):
     laws: tuple[ScalingLaw, ...]
     rank_counts: tuple[int, ...]
 
-    def as_json(self) -> dict[str, list[Any]]:
-        return {"laws": [law.value for law in self.laws], "rank_counts": list(self.rank_counts)}
 
-    @classmethod
-    def of_json(cls, raw: Mapping[str, Sequence[Any]]) -> "Scaling":
-        return cls(tuple(ScalingLaw(law) for law in raw["laws"]), tuple(int(p) for p in raw["rank_counts"]))
-
-
-@dataclasses.dataclass(frozen=True, slots=True)
+@pydantic.dataclasses.dataclass(frozen=True, slots=True)
 class Item:
     """One recorded grade to grade again, and everything grading it needs: the results DB holding it
     and its id there (its stored sources are what is graded)."""
@@ -278,26 +283,29 @@ class Item:
     reduction: str = ""  # the stamp it was credited under, for the shift check
     promoted: bool = False  # grades an unsubmitted episode's last correct source, not a submission
     workspace_bytes: str | None = None  # the agent's scratch request, when recorded; None = unknown
-    # The recorded ``requests`` as JSON (startup + operations); {} = none.
-    requests: dict[str, Any] = dataclasses.field(default_factory=dict)
+    # The recorded ``requests`` (startup + operations), its JSON in a worklist line; {} = none.
+    requests: RequestsField = dataclasses.field(default_factory=Requests)
     # The recorded ``build`` tokens (``grades.requested_build``); [] = none asked for.
     build: list[str] = dataclasses.field(default_factory=list)
     # How many submission rows the item's (setup, kernel) held; above 1 is a multi-submission group.
     submissions: int = 1
     # The scaling sweep this item is graded over (:func:`scaling_of`); None = the single-node final grade.
     scaling: Scaling | None = None
+    # The spec.task_fingerprint the graded grade recorded (grades.task_hash); "" = not recorded.
+    task_hash: str = ""
 
     def as_json(self) -> str:
         """One worklist line."""
-        raw = dataclasses.asdict(self)
-        raw["scaling"] = None if self.scaling is None else self.scaling.as_json()
-        return json.dumps(raw)
+        return ITEM_ADAPTER.dump_json(self).decode()
 
     @classmethod
     def of_json(cls, line: str) -> "Item":
-        raw = json.loads(line)
-        scaling = raw.pop("scaling", None)
-        return cls(**raw, scaling=None if scaling is None else Scaling.of_json(scaling))
+        """One worklist line as an :class:`Item` (``pydantic.ValidationError`` when it is not one)."""
+        return ITEM_ADAPTER.validate_json(line)
+
+
+#: Validator and serializer of a worklist line.
+ITEM_ADAPTER: pydantic.TypeAdapter[Item] = pydantic.TypeAdapter(Item)
 
 
 #: The scratch handed to a submission whose ``workspace_bytes`` request was not recorded
@@ -526,7 +534,7 @@ CREDITED_SUBMISSIONS = f"""
 SELECT g.id AS grade_id, r.label AS episode_id, r.job, r.setup, r.slot, g.kernel, g.ts_ms, g.source_mode,
        coalesce(nullif(g.credited_speedup, 0), p.credited_speedup) AS speedup,
        coalesce(p.timing_reduction, g.timing_reduction) AS timing_reduction,
-       g.workspace_bytes, {{requests}}, p.id IS NOT NULL AS promoted,
+       g.workspace_bytes, g.requests, g.requested_build, g.task_hash, p.id IS NOT NULL AS promoted,
        gs.language, gs.hash, a.study
 FROM grades g
 JOIN episodes r ON r.id = g.episode_id
@@ -544,15 +552,14 @@ ORDER BY r.job, r.label, g.kernel, g.ts_ms
 def credited_rows(db: pathlib.Path) -> list[dict[str, Any]]:
     """:data:`CREDITED_SUBMISSIONS` of ``db``, one dict per row, ``db`` included."""
     with results_db.reading(db) as conn:
-        query = CREDITED_SUBMISSIONS.format(requests=requests_select(conn))
-        return [{**dict(row), "db": str(db)} for row in conn.execute(query)]
+        return [{**dict(row), "db": str(db)} for row in conn.execute(CREDITED_SUBMISSIONS)]
 
 
 #: The submissions :data:`CREDITED_SUBMISSIONS` leaves out (no live credit) of the kernels named by
 #: ``{kernels}``, in its columns; :func:`stale_rows` keeps those graded before their kernel's cut.
 UNCREDITED_SUBMISSIONS = f"""
 SELECT g.id AS grade_id, r.label AS episode_id, r.job, r.setup, r.slot, g.kernel, g.ts_ms, g.source_mode,
-       g.credited_speedup AS speedup, g.timing_reduction, g.workspace_bytes, {{requests}},
+       g.credited_speedup AS speedup, g.timing_reduction, g.workspace_bytes, g.requests, g.requested_build, g.task_hash,
        0 AS promoted, gs.language, gs.hash, a.study
 FROM grades g
 JOIN episodes r ON r.id = g.episode_id
@@ -574,19 +581,9 @@ def stale_rows(db: pathlib.Path) -> list[dict[str, Any]]:
     if not cuts:
         return []
     with results_db.reading(db) as conn:
-        query = UNCREDITED_SUBMISSIONS.format(kernels=", ".join("?" * len(cuts)), requests=requests_select(conn))
+        query = UNCREDITED_SUBMISSIONS.format(kernels=", ".join("?" * len(cuts)))
         rows = conn.execute(query, tuple(cuts)).fetchall()
     return [{**dict(row), "db": str(db)} for row in rows if int(row["ts_ms"]) < cuts[str(row["kernel"])]]
-
-
-#: The ``grades`` columns a grade's requests are read from: v7's ``requests``, the v6 columns it folded,
-#: and the ``build`` tokens the submission asked for.
-REQUEST_COLUMNS = ("requests", "requested_libraries", "distribution", "layout_request", "requested_build")
-
-
-def requests_select(conn: sqlite3.Connection) -> str:
-    """The SELECT list of :data:`REQUEST_COLUMNS` for ``conn``'s schema version (a missing one reads '')."""
-    return results_db.grade_columns(conn, "g", REQUEST_COLUMNS)
 
 
 def item_of(row: Mapping[str, Any], env: dict[str, str], final: bool) -> Item:
@@ -602,14 +599,15 @@ def item_of(row: Mapping[str, Any], env: dict[str, str], final: bool) -> Item:
         str(row["source_mode"] or "restricted"),
         final,
         env,
-        job="" if row.get("job") is None else str(row["job"]),
+        job="" if row.get("job") in (None, results_db.LOCAL_JOB) else str(row["job"]),
         source_hash=str(row.get("hash") or ""),
         speedup=as_float(row.get("speedup")),
         reduction=str(row.get("timing_reduction") or ""),
         promoted=bool(row.get("promoted")),
         workspace_bytes=str(row["workspace_bytes"]) if row.get("workspace_bytes") else None,
-        requests=results_db.requests_of_row(row).to_json(),
+        requests=results_db.requests_of_row(row),
         build=json.loads(str(row["requested_build"])) if row.get("requested_build") else [],
+        task_hash=str(row.get("task_hash") or ""),
     )
 
 
@@ -655,7 +653,7 @@ def build_worklist(dbs: Iterable[pathlib.Path], env_dirs: list[pathlib.Path]) ->
 #: fault, or a promotion already credited.
 UNPROMOTED_EPISODES = f"""
 SELECT g.id AS grade_id, r.id AS run, r.label AS episode_id, r.job, r.setup, r.slot, g.kernel, g.ts_ms, g.source_mode,
-       coalesce(r.final_attempt_start_ms, 0) AS cut, g.workspace_bytes, {{requests}}, gs.language, gs.hash,
+       coalesce(r.final_attempt_start_ms, 0) AS cut, g.workspace_bytes, g.requests, g.requested_build, g.task_hash, gs.language, gs.hash,
        (SELECT max(c.speedup) FROM grades c WHERE c.episode_id = g.episode_id AND c.kernel = g.kernel
             AND c.kind = 'score' AND c.correct = 1 AND c.ts_ms >= coalesce(r.final_attempt_start_ms, 0)) AS speedup
 FROM grades g
@@ -728,18 +726,34 @@ class GradingCuts(NamedTuple):
     references: dict[str, int]
 
 
-def epoch_ms(table: Mapping[str, Mapping[str, str]]) -> dict[str, int]:
+class Cut(pydantic.BaseModel):
+    """One entry of :data:`GRADING_CUTS`: since when a grade counts, and the change that moved it."""
+
+    model_config = pydantic.ConfigDict(extra="forbid", frozen=True)
+
+    since: datetime.datetime
+    why: str
+
+
+class GradingCutsFile(pydantic.BaseModel):
+    """:data:`GRADING_CUTS`: the cut per kernel and per reference kind."""
+
+    model_config = pydantic.ConfigDict(extra="forbid", frozen=True)
+
+    kernels: dict[str, Cut] = pydantic.Field(default_factory=dict[str, Cut])
+    references: dict[str, Cut] = pydantic.Field(default_factory=dict[str, Cut])
+
+
+def epoch_ms(table: Mapping[str, Cut]) -> dict[str, int]:
     """``{name: epoch ms}`` of a cut table's ``since`` stamps."""
-    return {
-        name: int(datetime.datetime.fromisoformat(entry["since"]).timestamp() * 1000) for name, entry in table.items()
-    }
+    return {name: int(cut.since.timestamp() * 1000) for name, cut in table.items()}
 
 
 @functools.lru_cache(maxsize=None, typed=True)
 def grading_cuts() -> GradingCuts:
     """The cuts of :data:`GRADING_CUTS`."""
-    table = yaml.safe_load(GRADING_CUTS.read_text(encoding="utf-8")) or {}
-    return GradingCuts(epoch_ms(table.get("kernels") or {}), epoch_ms(table.get("references") or {}))
+    table = GradingCutsFile.model_validate(yaml.safe_load(GRADING_CUTS.read_text(encoding="utf-8")) or {})
+    return GradingCuts(epoch_ms(table.kernels), epoch_ms(table.references))
 
 
 def stale_final(kernel: str, ts_ms: int) -> bool:
@@ -787,7 +801,7 @@ def build_promotion_worklist(dbs: Iterable[pathlib.Path], env_dirs: list[pathlib
     for db in dbs:
         with results_db.reading(db) as conn:
             newest: dict[tuple[str, str, int], dict[str, Any]] = {}
-            for row in conn.execute(UNPROMOTED_EPISODES.format(requests=requests_select(conn))):
+            for row in conn.execute(UNPROMOTED_EPISODES):
                 newest[(str(row["setup"]), str(row["kernel"]), int(row["slot"]))] = {**dict(row), "db": str(db)}
             owed = [
                 row
@@ -861,7 +875,7 @@ def submission_of(item: Item) -> Submission:
         device_source=device[1] if device is not None else None,
         build=list(item.build),
         workspace_bytes=item.workspace_bytes or UNKNOWN_WORKSPACE,
-        requests=Requests.from_obj(item.requests or None),
+        requests=item.requests,
     )
 
 
@@ -933,13 +947,14 @@ def protocol_inputs(protocol: Protocol, kernel: str, anchored: bool) -> list[Any
 
 
 def final_settings(base: Mapping[str, str], protocol: Protocol | None = None) -> dict[str, str]:
-    """``base`` with ``protocol``'s settings on top (default :data:`FINAL`): 1 warmup + its runs per side on
-    the cell's pooled draws, the base seed run once untimed for correctness (:func:`rep_variation.timed_seeds`),
-    its input count, statistic and alpha. The Harbor verifier grades under exactly the credited grade's."""
+    """``base`` with ``protocol``'s settings on top (default :data:`FINAL`): :data:`protocols.WARMUP` warmup
+    calls + its runs per side on the cell's pooled draws, the base seed run once untimed for correctness
+    (:func:`rep_variation.timed_seeds`), its input count, statistic and alpha. The Harbor verifier grades under
+    exactly the credited grade's."""
     protocol = protocol or FINAL
     env = dict(base)
     env[VARY_INPUTS_ENV] = "1"
-    env[WARMUP_ENV] = "1"
+    env[WARMUP_ENV] = str(protocols.WARMUP)
     env[TIMING_BACKEND_ENV] = protocol.backend
     env[N_INPUTS_ENV] = str(protocol.inputs)
     env[REPEAT_ENV] = str(protocol.repeat)
@@ -1123,7 +1138,45 @@ def grade_cells(
     task = task_of(item)
     protocol = protocol or FINAL
     graded = final_grade(submission_of(item), task, scorer, aa, protocol=protocol)
-    return final_rows(graded, task, item.kernel, stamp=protocol.aa if aa else protocol.stamp)
+    rows, values = final_rows(graded, task, item.kernel, stamp=protocol.aa if aa else protocol.stamp)
+    if failed_every_input(graded) and task_changed(item):
+        values["reason"] = task_changed_reason(item, str(values["reason"]))
+    return rows, values
+
+
+def failed_every_input(graded: FinalGrade) -> bool:
+    """Whether the submission itself failed every input of ``graded``: no input measured (a build failure, a
+    crash, a timeout) and none failed for the judge's fault (:func:`input_fault`)."""
+    return bool(graded.inputs) and not graded.measured and not any(map(input_fault, graded.inputs))
+
+
+def task_changed(item: Item) -> bool:
+    """Whether ``item``'s kernel task differs from the one its grade was graded against: the current
+    :func:`~hpcagent_bench.spec.task_fingerprint` differs from :attr:`Item.task_hash` (an unrecorded ``""``
+    differs too)."""
+    return item.task_hash != task_fingerprint(item.kernel)
+
+
+def task_changed_reason(item: Item, failure: str) -> str:
+    """The ``reason`` of a final grade whose submission failed every input after its task changed:
+    :data:`recorded_rows.TASK_CHANGED_PREFIX`, the recorded and current fingerprints (first
+    :data:`FINGERPRINT_SHOWN` hex digits), then ``failure``; capped at :data:`REASON_CAP` characters."""
+    recorded = item.task_hash[:FINGERPRINT_SHOWN] or "not recorded"
+    current = task_fingerprint(item.kernel)[:FINGERPRINT_SHOWN]
+    reason = f"{recorded_rows.TASK_CHANGED_PREFIX}changed since the run ({recorded} -> {current}): {failure}"
+    return reason[:REASON_CAP]
+
+
+def failure_reason(graded: FinalGrade) -> str:
+    """Why the submission failed the first input of ``graded`` it failed (:func:`input_failed`): ``input
+    <label>: <the grade's detail>``, the detail's tail kept within :data:`REASON_CAP` characters; ``""``
+    when no input failed."""
+    failed = next((one for one in graded.inputs if input_failed(one)), None)
+    if failed is None:
+        return ""
+    head = f"input {failed.label}: "
+    detail = (failed.result.detail or "no detail").strip()
+    return head + detail[-(REASON_CAP - len(head)) :]
 
 
 def final_rows(
@@ -1165,7 +1218,8 @@ def final_rows(
         # measured ran under the kernel's configured one, which its unsolved or faulted verdict answers.
         "denominator": final_denominator(denominators, kernel),
         "status": ERROR_STATUS if faulted else "graded",
-        "reason": "; ".join(faults)[:400] if faults else None if measured else "no cell produced a measurement",
+        # No input measured and none faulted: the submission failed every input, which names why.
+        "reason": "; ".join(faults)[:REASON_CAP] if faults else None if measured else failure_reason(graded),
     }
     if graded.inputs:
         values |= layout_values(graded.inputs[0].result)
@@ -1258,7 +1312,7 @@ def scaling_protocol_grade(
     spec = BenchSpec.load(task.kernel)
     with config.scoped_environment(final_settings({}, protocol)):
         # Near XL: the manifest's ``fuzzed`` preset is the scaling kernel's small correctness range.
-        inputs = metric.ml_aligned(spec, protocol_inputs(protocol, task.kernel, True), config.get_int("mpi.ranks", 4))
+        inputs = metric.ml_aligned(spec, protocol_inputs(protocol, task.kernel, True), config.current().mpi.ranks)
         result, curves = metric.score_ml_distributed(
             submission,
             task,
@@ -1356,13 +1410,15 @@ def write_regrade(
 
 
 def add_regrade(conn: sqlite3.Connection, item: Item, kind: str, values: Mapping[str, Any]) -> int:
-    """:func:`write_regrade` into an open results DB, without cells."""
+    """:func:`write_regrade` into an open results DB, without cells. The grade records the kernel's task
+    fingerprint now (:func:`~hpcagent_bench.spec.task_fingerprint`), the task it was graded against."""
     node, commit = shard_provenance()
     original = results_db.copy_grade(pathlib.Path(item.db), item.grade_id, conn)
     base = conn.execute(
         "SELECT episode_id, kernel, preset, datatype, source_mode FROM grades WHERE id = ?", (original,)
     ).fetchone()
     stamp = {"preset": base[2], "datatype": base[3], "source_mode": base[4], "node": node, "commit_sha": commit}
+    stamp["task_hash"] = task_fingerprint(str(base[1]))
     return results_db.add_grade(
         conn, int(base[0]), str(base[1]), kind, ts_ms=now_ms(), values={**values, **stamp, "of_grade_id": original}
     )[0]
@@ -1460,10 +1516,9 @@ def hide_experiment_data(out_dir: pathlib.Path, items: Sequence[Item]) -> None:
     (extended, never replaced)."""
     os.environ["RUN_ROOT"] = str(experiments.runs_root())
     os.environ["RUN_DIR"] = str(out_dir.resolve())
-    extra = config.get("grading.seal_hide", []) or []
-    extra = extra if isinstance(extra, list) else [extra]
+    extra = config.current().grading.seal_hide
     item_dirs = (str(pathlib.Path(item.db).resolve().parent) for item in items)
-    config.set_override("grading.seal_hide", list(dict.fromkeys([*extra, *item_dirs])))
+    config.set_override("grading.seal_hide", tuple(dict.fromkeys([*extra, *item_dirs])))
 
 
 def build_grade_under_worklist(
@@ -1627,7 +1682,7 @@ def host_only(item: Item) -> bool:
 
 def grade_rank_counts() -> tuple[int, ...]:
     """The sweep a worklist asks of a scaling item: ``ml.grade_rank_counts``."""
-    return int_tuple(as_list(config.get("ml.grade_rank_counts", [])))
+    return config.current().ml.grade_rank_counts
 
 
 def task_of(item: Item) -> Task:
@@ -1655,7 +1710,7 @@ def scaled_items(items: Iterable[Item], rank_counts: tuple[int, ...]) -> tuple[l
     kept: list[Item] = []
     problems: list[str] = []
     for item in (scaled(one, rank_counts) for one in items):
-        if item.scaling is not None and "grid" not in item.requests.get("startup", {}):
+        if item.scaling is not None and not item.requests.distributed:
             problems.append(f"no recorded startup.grid: {item.db} {item.episode_id} {item.kernel} {item.ts_ms}")
         else:
             kept.append(item)

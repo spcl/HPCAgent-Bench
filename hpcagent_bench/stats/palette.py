@@ -10,7 +10,7 @@ dropping a series must not repaint the survivors.
 panels, which invert this.** There are a few models and there will be many packets, and colour
 separates more values than shape does, so the model takes the shape and keeps it everywhere, EXCEPT
 in :mod:`hpcagent_bench.stats.figures.efficacy` and
-:mod:`hpcagent_bench.stats.figures.signed`: those panels already split one packet per
+:mod:`hpcagent_bench.stats.figures.kernel_speedups`: those panels already split one packet per
 panel (or per pair), so colour is spent there for nothing, while the few models sharing that one
 panel need telling apart at a glance when their summary marks overlap -- checked by rendering both
 orders on the same llr40 figure; a shared hue with only a circle-vs-square edge to tell two
@@ -64,7 +64,6 @@ __all__ = [
     "control_color",
     "fixed_packet_markers",
     "framework_color",
-    "framework_colors",
     "harness_marker",
     "hue_order",
     "hues",
@@ -345,11 +344,6 @@ def model_markers(models: Iterable[str]) -> dict[str, str]:
 def framework_color(name: str) -> str:
     """The one colour a framework wears. Frameworks never share a figure with a packet."""
     return ordered_color("frameworks", name)
-
-
-def framework_colors(names: Iterable[str]) -> dict[str, str]:
-    """``{framework: colour}`` for one figure."""
-    return warn_on_collision({n: framework_color(n) for n in dict.fromkeys(names)}, "framework")
 
 
 def model_color(name: str) -> str:

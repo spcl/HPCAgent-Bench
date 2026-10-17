@@ -13,15 +13,15 @@ from hpcagent_bench import languages
 
 def test_every_entry_declares_what_the_tool_needs() -> None:
     for name, entry in languages.load_libraries().items():
-        route = entry.get("pkg") or entry.get("toolset") or entry.get("link") or entry.get("header_only")
+        route = entry.pkg or entry.toolset or entry.link or entry.header_only
         assert route, f"{name} names no resolution route"
-        if entry.get("header_only"):
+        if entry.header_only:
             # The compile probe is the only gate a header-only library has, and it needs a header
             # to include. Without one library_offered can never say yes, so the entry is dead.
-            assert entry.get("headers"), f"{name} is header_only and names no header to probe"
-        assert entry.get("langs"), f"{name} declares no languages"
-        assert entry.get("summary", "").strip(), f"{name} has no agent-facing summary"
-        assert set(entry["langs"]) <= set(languages.LANG_EXT), f"{name} names an unknown language"
+            assert entry.headers, f"{name} is header_only and names no header to probe"
+        assert entry.langs, f"{name} declares no languages"
+        assert entry.summary.strip(), f"{name} has no agent-facing summary"
+        assert set(entry.langs) <= set(languages.LANG_EXT), f"{name} names an unknown language"
 
 
 def test_openmp_never_leaks_in_through_cflags() -> None:
@@ -95,12 +95,12 @@ def test_toolkit_entries_point_at_the_discovery_table() -> None:
     """ROCm and CUDA ship no pkg-config files; their compilers search their own toolkit instead.
     The link name is derived from toolset.yaml so one library is spelled once in the tree."""
     for name, entry in languages.load_libraries().items():
-        if not entry.get("toolset"):
+        if not entry.toolset:
             continue
-        tokens = languages.toolset_link_tokens(entry["toolset"])
+        tokens = languages.toolset_link_tokens(entry.toolset)
         assert tokens, (name, tokens)
         assert all(t.startswith("-l") for t in tokens), (name, tokens)
-        for lang in entry["langs"]:
+        for lang in entry.langs:
             _compile, link = languages.library_tokens(name, lang)
             assert not any(t.startswith(("-L", "-Wl,-rpath,")) for t in link), (name, link)
 
@@ -190,7 +190,8 @@ def test_an_entry_offers_a_pkg_config_name_a_toolset_entry_or_a_bare_link() -> N
     packages the same library without one. A header-only entry may carry pkg too -- that is where
     its -I comes from -- but never link, because there is nothing to link."""
     for name, entry in languages.load_libraries().items():
-        routes = [k for k in ("pkg", "toolset", "link", "header_only") if entry.get(k)]
+        fields = entry.model_dump()
+        routes = [k for k in ("pkg", "toolset", "link", "header_only") if fields[k]]
         assert routes, f"{name} names no resolution route"
         assert not ("toolset" in routes and len(routes) > 1), f"{name} mixes a toolset entry with another route"
         assert not ("header_only" in routes and "link" in routes), f"{name} is header_only and names a link route"
@@ -199,9 +200,9 @@ def test_an_entry_offers_a_pkg_config_name_a_toolset_entry_or_a_bare_link() -> N
 def test_a_bare_link_route_never_invents_a_search_path() -> None:
     """A library on the compiler's own default path needs no -L, and so no rpath either."""
     for name, entry in languages.load_libraries().items():
-        if entry.get("pkg") or not entry.get("link"):
+        if entry.pkg or not entry.link:
             continue
-        for lang in entry["langs"]:
+        for lang in entry.langs:
             compile_tokens, link = languages.library_tokens(name, lang)
             assert not compile_tokens, (name, compile_tokens)
             assert all(t.startswith("-l") for t in link), (name, link)
@@ -212,7 +213,7 @@ def test_a_header_only_library_is_offered_without_link_tokens() -> None:
     fail is whether the header resolves. Its -I is the point -- the headers are under
     /usr/include/eigen3, so advertising eigen without it promises a build that does not compile."""
     entry = languages.load_libraries()["eigen"]
-    assert entry["header_only"] is True
+    assert entry.header_only is True
     compile_tokens, link_tokens = languages.library_tokens("eigen", "cpp")
     assert link_tokens == ()
     assert all(t.startswith("-I") for t in compile_tokens), compile_tokens
@@ -225,9 +226,9 @@ def test_header_only_availability_is_not_token_emptiness() -> None:
     """A header on the default include path yields no tokens and is still usable, so emptiness
     cannot be the signal."""
     for name, entry in languages.load_libraries().items():
-        if not entry.get("header_only"):
+        if not entry.header_only:
             continue
-        for lang in entry["langs"]:
+        for lang in entry.langs:
             offered = languages.library_offered(name, lang)
             if offered and languages.library_tokens(name, lang) == ((), ()):
                 return  # a header-only library offered with no tokens is reachable here
@@ -245,9 +246,9 @@ def test_one_catalog_name_may_resolve_several_pkg_config_modules() -> None:
     Asserted as a PAIR: the entry names both modules, and the resolver asks for both together.
     """
     entry = languages.load_libraries()["fftw"]
-    assert languages.pkg_modules(entry) == ("fftw3", "fftw3f")
+    assert entry.pkg == ("fftw3", "fftw3f")
     # A plain string entry still resolves to exactly one module -- the list form is additive.
-    assert languages.pkg_modules(languages.load_libraries()["blas"]) == ("openblas",)
+    assert languages.load_libraries()["blas"].pkg == ("openblas",)
     link_tokens = languages.library_tokens("fftw", "c")[1]
     if not link_tokens:
         assert "fftw" not in languages.available_libraries("c")
@@ -337,6 +338,6 @@ def test_mpi_without_its_wrapper_falls_back_to_pkg_config(monkeypatch) -> None:
 
 def test_mpi_and_rccl_are_requestable_by_a_hip_submission() -> None:
     libraries = languages.load_libraries()
-    assert "hip" in libraries["mpi"]["langs"]
-    assert "hip" in libraries["rccl"]["langs"]
-    assert languages.toolset_link_tokens(libraries["rccl"]["toolset"]) == ("-lrccl",)
+    assert "hip" in libraries["mpi"].langs
+    assert "hip" in libraries["rccl"].langs
+    assert languages.toolset_link_tokens(libraries["rccl"].toolset) == ("-lrccl",)

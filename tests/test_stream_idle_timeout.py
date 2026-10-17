@@ -8,16 +8,16 @@ ceiling -- so raising it further is not possible, only checking that the ceiling
 installed CLI enforces, and that the arithmetic which justifies sitting at it is right.
 """
 
-import pathlib
 import subprocess
 import sys
 import types
 
 import pytest
 
+from hpcagent_bench import paths
 from tests.fresh_module import fresh
 
-SCRIPT = pathlib.Path(__file__).resolve().parents[1] / "agent" / "hpcagent_agent" / "driver" / "stream_idle_timeout.py"
+SCRIPT = paths.ROOT / "agent" / "hpcagent_agent" / "driver" / "stream_idle_timeout.py"
 
 
 @pytest.fixture(name="module", scope="module")

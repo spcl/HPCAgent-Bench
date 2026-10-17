@@ -36,6 +36,7 @@ from hpcagent_bench.frameworks.errors import NotSupportedByFramework
 from hpcagent_bench.frameworks.framework import Timer
 from hpcagent_bench.frameworks.pluto_framework import PlutoFramework
 from hpcagent_bench.harness import preflight
+from hpcagent_bench.translators.numpyto_c.bindings import BindingArg, BindingFile, write_binding
 from tests.own_process import isolated
 
 #: An affine matmul in the shape the translator emits for polycc: ``int64_t`` counters (which is why
@@ -62,6 +63,16 @@ PLUTO_CAPABILITY = flags.pluto_capability()
 #: Why an absent polycc is a genuine environment gap rather than a weakened test: Pluto has no wheel
 #: and no distro package here, it is built from source by CI and by the container recipe.
 NO_POLYCC = "polycc absent: the Pluto toolchain is built from source, see containers/images/lib/build-pluto.sh"
+
+
+def pluto_binding(path: pathlib.Path, *args: tuple[str, str]) -> None:
+    """A ``_pluto_binding.json`` at ``path`` with ``args`` as (name, kind) in call order."""
+    write_binding(
+        BindingFile(
+            kernel="k", abi="pluto", args=[BindingArg(name=n, kind=k) for n, k in args], symbols={}, sources={}
+        ),
+        path,
+    )
 
 
 def write_scop(cpp_backend: pathlib.Path, base: str = "mm", fptype: str = "fp64", text: str = SCOP) -> pathlib.Path:
@@ -440,6 +451,27 @@ def test_a_read_only_input_array_does_not_make_ppcgs_output_unbuildable(tmp_path
     assert scop.read_text() == original
 
 
+def test_an_override_scop_names_the_same_entry_as_a_generated_one() -> None:
+    """An override's stem carries its own tag; left on, ppcg_hip looked for device mirrors of a function that
+    does not exist and failed every override-backed kernel (gemm, jacobi_2d, heat_3d, ...)."""
+    assert ppcg_transform.entry_symbol(pathlib.Path("gemm_fp32_pluto_override_input.c")) == "gemm_fp32"
+    assert ppcg_transform.entry_symbol(pathlib.Path("gemm_fp32_pluto_input.c")) == "gemm_fp32"
+
+
+def test_a_transients_vla_cast_is_respelled_as_the_variables_own_type() -> None:
+    """C++ gives each spelling of a VLA type its own type, so hipcc refused every rank>=2 transient's
+    ``(T (*)[E])malloc(...)``; a plain pointer cast is not a VLA cast and stays as it is."""
+    host = (
+        "void k_fp32(int64_t NI, int64_t NJ) {\n"
+        "  float (*__mm1)[NJ] = (float (*)[NJ])malloc((size_t)((NI) * (NJ)) * sizeof(float));\n"
+        "  float *x = (float *)malloc(8);\n"
+        "}\n"
+    )
+    out = ppcg_transform.cxx_compat(host, "k_fp32")
+    assert "float (*__mm1)[NJ] = (__typeof__(__mm1))malloc((size_t)((NI) * (NJ)) * sizeof(float));" in out
+    assert "float *x = (float *)malloc(8);" in out
+
+
 def test_ppcg_only_ever_asks_for_cuda() -> None:
     """The ``--target`` is not vendor-derived and must not become so: ppcg takes c/cuda/opencl and
     has no AMD target at all, so ``cuda`` is what it is asked for on every host and the translation
@@ -494,8 +526,12 @@ def test_call_args_marshals_in_polyccs_order_not_the_canonical_abis(tmp_path, mo
     """The transformed function takes each size SYMBOL before the VLA array it dimensions, so the
     canonical order would hand a pointer to an ``int64_t`` parameter -- measured elsewhere in this
     tree as an immediate SIGSEGV, which is the good outcome; the bad one is plausible numbers."""
-    (tmp_path / "mm_fp64_pluto_binding.json").write_text(
-        '{"args": [{"name": "N"}, {"name": "A"}, {"name": "B"}, {"name": "C"}]}'
+    pluto_binding(
+        tmp_path / "mm_fp64_pluto_binding.json",
+        ("N", "int"),
+        ("A", "ptr_double"),
+        ("B", "ptr_double"),
+        ("C", "ptr_double"),
     )
     # Canonical C ABI order: sorted pointers, then sorted scalars. Deliberately NOT polycc's.
     canonical = [fake_arg("A", "ptr"), fake_arg("B", "ptr"), fake_arg("C", "ptr"), fake_arg("N", "scalar")]
@@ -515,7 +551,7 @@ def test_call_args_marshals_in_polyccs_order_not_the_canonical_abis(tmp_path, mo
 def test_call_args_still_allocates_declared_outputs_after_reordering(tmp_path, monkeypatch) -> None:
     """Reordering must not drop the base class's output allocation: a kernel whose numpy reference
     RETURNS a buffer has no init-provided value, and the C signature still declares the pointer."""
-    (tmp_path / "mm_fp64_pluto_binding.json").write_text('{"args": [{"name": "N"}, {"name": "C"}]}')
+    pluto_binding(tmp_path / "mm_fp64_pluto_binding.json", ("N", "int"), ("C", "ptr_double"))
     declared = [fake_arg("C", "ptr"), fake_arg("N", "scalar")]
     monkeypatch.setattr(PlutoFramework, "_cpp_backend", lambda self, bench: tmp_path)
     monkeypatch.setattr(PlutoFramework, "_native_base", lambda self, bench: "mm")

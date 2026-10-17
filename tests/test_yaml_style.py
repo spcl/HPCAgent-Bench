@@ -8,11 +8,10 @@ single final newline). Third-party-schema YAML (GitHub Actions, docker-compose,
 Continue.dev) is excluded by the checker itself.
 """
 
-import pathlib
-
+from hpcagent_bench import paths
 from tests.check_yaml_style import owned_yaml, violations
 
-REPO = pathlib.Path(__file__).resolve().parent.parent
+REPO = paths.ROOT
 
 
 def test_all_owned_yaml_conforms() -> None:

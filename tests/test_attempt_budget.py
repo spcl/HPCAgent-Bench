@@ -137,7 +137,7 @@ def test_overridden_restores_what_was_there() -> None:
     config.clear_override("runtime.mp_context")
     with config.overridden("runtime.mp_context", "forkserver"):
         assert config.get("runtime.mp_context") == "forkserver"
-    assert "runtime.mp_context" not in config._OVERRIDES
+    assert "runtime.mp_context" not in config.override_snapshot()
     config.set_override("runtime.mp_context", "fork")
     try:
         with config.overridden("runtime.mp_context", "forkserver"):
@@ -189,16 +189,13 @@ def test_explicit_token_override_beats_config() -> None:
 
 def test_the_token_budget_is_resolved_per_level() -> None:
     """L1 (one primitive op) must not get the same allowance as L3 (a whole microapp)."""
-    by_level = config.get("attempts.token_budget_by_level", {}) or {}
+    by_level = config.current().attempts.token_budget_by_level
     resolved = {lvl: resolve_token_budget(BenchSpec.load(kernel_at_level(lvl))) for lvl in (1, 2, 3)}
     assert resolved == {lvl: int(by_level[lvl]) for lvl in (1, 2, 3)}
     assert resolved[1] < resolved[2] < resolved[3], f"the ladder must increase with difficulty: {resolved}"
 
 
-def test_the_global_token_override_wins_over_the_level(monkeypatch) -> None:
+def test_the_global_token_override_wins_over_the_level() -> None:
     spec = BenchSpec.load(kernel_at_level(3))
-    real = config.get
-    monkeypatch.setattr(
-        config, "get", lambda key, default=None: 77 if key == "attempts.token_budget_override" else real(key, default)
-    )
-    assert resolve_token_budget(spec) == 77
+    with config.overridden("attempts.token_budget_override", 77):
+        assert resolve_token_budget(spec) == 77

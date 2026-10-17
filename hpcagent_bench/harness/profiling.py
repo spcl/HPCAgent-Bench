@@ -28,6 +28,8 @@ from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from typing import NotRequired, TypedDict, cast
 
+import pydantic
+
 from hpcagent_bench import flags, perf_reports, seal, sizing
 from hpcagent_bench.flags import Mode
 from hpcagent_bench.frameworks.forked import run_command
@@ -154,6 +156,10 @@ class MeasurementRequest(TypedDict):
     threads: NotRequired[int | None]
     #: The OpenMP context of the profiled code (:mod:`hpcagent_bench.omp_context`); absent = the default.
     omp_context: NotRequired[str]
+
+
+#: Validator of a request file (:class:`MeasurementRequest`).
+REQUEST_ADAPTER: "pydantic.TypeAdapter[MeasurementRequest]" = pydantic.TypeAdapter(MeasurementRequest)
 
 
 class WorkloadResult(TypedDict):
@@ -450,9 +456,12 @@ def request_plan(request_file: pathlib.Path) -> seal.SealPlan | None:
     ``devices`` mirrors native_call.host_only_grade off the request's ``device`` field, so a host
     profile sees no GPU; a missing or malformed request file keeps ``devices=True``."""
     try:
-        device = bool(json.loads(request_file.read_text())["device"])
-    except (OSError, ValueError, KeyError):
-        device = True
+        # Only the residency decides the seal: read that field, not the whole request, so a request that
+        # differs elsewhere still hides the devices of a host run.
+        stated = json.loads(request_file.read_text()).get("device", True)
+    except (OSError, ValueError, AttributeError):
+        stated = True
+    device = stated if isinstance(stated, bool) else True
     return seal.grading_plan([str(request_file.parent)], devices=not host_only_grade(device))
 
 
@@ -491,17 +500,18 @@ def as_float(value: object, field: str = "") -> float:
 
 def counted_result(raw: JsonObject) -> papi.MetricRow:
     """The counting child's result line, as :func:`~hpcagent_bench.harness.papi.count_metric` produced it."""
-    return cast("papi.MetricRow", raw)
+    return pydantic.TypeAdapter(papi.MetricRow).validate_python(raw)
 
 
 def thread_result(raw: JsonObject) -> papi.PerThreadReport:
     """The per-thread child's result line, on the contract :func:`counted_result` reads."""
-    return cast("papi.PerThreadReport", raw)
+    return pydantic.TypeAdapter(papi.PerThreadReport).validate_python(raw)
 
 
 def child_request(text: str) -> MeasurementRequest:
-    """The request file as the child reads it (:func:`measurement_request`'s schema)."""
-    return cast("MeasurementRequest", json.loads(text))
+    """The request file as the child reads it (:func:`measurement_request`'s schema; ``pydantic.ValidationError``
+    when it is not one)."""
+    return REQUEST_ADAPTER.validate_json(text)
 
 
 def flat_rows(rows: Sequence[perf_reports.Hotspot]) -> list[FlatRow]:

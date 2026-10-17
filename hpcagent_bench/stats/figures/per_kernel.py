@@ -3,7 +3,7 @@
 """Per-kernel figures: one column per kernel, one mark per series, one summary slot per series.
 
 The one per-kernel drawing API: the compiler figure
-(:func:`hpcagent_bench.stats.figures.signed.kernel_figure`) and the paper's per-kernel figures both
+(:func:`hpcagent_bench.stats.figures.kernel_speedups.kernel_figure`) and the paper's per-kernel figures both
 draw through this module, so a column, a mark, a summary slot and a margin mean the same thing
 everywhere. A caller turns its data into :class:`KernelCell` s (:func:`kernel_cells`), groups them
 into :class:`Series`, picks one :class:`Metric` per panel and calls :func:`figure_panels`.
@@ -14,7 +14,7 @@ flagged (a disowned answer's cross with a ``*``). Undelivered and pending cells 
 
 A cell of a designed repeat carries its RUNS (:func:`run_cells`): ``box`` draws the box over its graded
 runs and every run on top as a small dot -- solved filled at its speedup, unsolved hollow and crossed at
-1x, owed a "?" at 1x -- with "solved/graded" over the cell (:func:`runs_figure`).
+1x, owed a "?" at 1x -- with "solved/graded" over the cell (:mod:`hpcagent_bench.stats.figures.kernel_runs`).
 
 The value axis is log2 for a speedup (:func:`style_speedup_axis`) and log10 for a token count
 (:func:`style_token_axis`), both sized from the cells before a mark is drawn. The summary column
@@ -42,9 +42,8 @@ import numpy as np
 import pandas as pd
 
 from hpcagent_bench import study_tags
-from hpcagent_bench.stats import palette, population, reliability, summary
+from hpcagent_bench.stats import population, summary
 from hpcagent_bench.stats import style as plotstyle
-from hpcagent_bench.stats.figures.helpers import series as series_look
 
 __all__ = [
     "AUTHOR_TYPE",
@@ -74,7 +73,6 @@ __all__ = [
     "PRINT_PANEL_HEIGHT_IN",
     "PROBE_BAND_IN",
     "REFERENCE_LINE_WIDTH",
-    "RUNS_BOX_LABEL",
     "RUN_BOX_ALPHA",
     "RUN_MARK_PT",
     "RUN_SPREAD",
@@ -120,10 +118,7 @@ __all__ = [
     "min_text_pt",
     "run_cells",
     "run_count_label",
-    "runs_figure",
-    "runs_series",
     "save",
-    "setup_label",
     "size_defaults",
     "speedup_series_metric",
     "speedup_yticks",
@@ -521,8 +516,6 @@ RUN_SPREAD: float = 0.8
 #: An owed run's "?" area against a run dot's: a glyph inks less of its box than a disc.
 OWED_SCALE: float = 2.5
 
-#: Key entries of the runs mode: the box statistic, and an owed run (a final grade or a rerun to come).
-RUNS_BOX_LABEL: str = "Box: Median and Quartiles of the Graded Runs, Whiskers to 1.5 IQR"
 OWED_LABEL: str = "Owed a Final Grade or a Rerun (Drawn at 1x)"
 
 
@@ -573,7 +566,10 @@ def box_cells(
     whis: float | tuple[float, float] = 1.5,
 ) -> None:
     """One box per cell over its episodes at ``positions``, filled and outlined in ``color``; whiskers to
-    ``whis`` (matplotlib's: a multiple of the IQR, or a (low, high) percentile pair)."""
+    ``whis`` (matplotlib's: a multiple of the IQR, or a (low, high) percentile pair). No cells draw nothing
+    (matplotlib reads an empty list as one dataset)."""
+    if not cells:
+        return
     artists = ax.boxplot(
         [list(cell.episodes) for cell in cells],
         positions=list(positions),
@@ -1045,56 +1041,6 @@ def run_cells(runs: pd.DataFrame, kernels: Sequence[str]) -> tuple[KernelCell, .
         graded = tuple(sorted(run.value for run in made if run.state != population.RunState.OWED))
         cells.append(KernelCell(kernel, graded, runs=made))
     return tuple(cells)
-
-
-def setup_label(setup: str) -> str:
-    """A setup's key entry: its model's display name, then its packet's when it has one."""
-    model, packet = study_tags.model_of(setup), study_tags.packet_of(setup)
-    name = study_tags.model_name(model)
-    return f"{name} + {study_tags.packet_short_name(packet)}" if packet else name
-
-
-def runs_series(runs: pd.DataFrame, kernels: Sequence[str]) -> tuple[Series, ...]:
-    """One :class:`Series` per setup of ``runs``, in registry model order then by name: colour the model,
-    shape the packet (:func:`series_look.series_style`), cells :func:`run_cells`."""
-    models = study_tags.order("models")
-
-    def rank(setup: str) -> tuple[int, str]:
-        model = study_tags.model_of(setup)
-        return (models.index(model) if model in models else len(models), setup)
-
-    made: list[Series] = []
-    for setup in sorted({str(name) for name in runs["setup"].tolist()}, key=rank):
-        packet = study_tags.packet_of(setup)
-        look = series_look.series_style(packet, study_tags.model_of(setup))
-        cells = run_cells(runs.loc[runs["setup"] == setup], kernels)
-        made.append(Series(setup_label(setup), cells, look["color"], palette.packet_marker(packet), bool(packet)))
-    return tuple(made)
-
-
-def runs_figure(
-    runs: pd.DataFrame,
-    kernels: Sequence[str],
-    title: str = "",
-    width_in: float | None = None,
-    allow_owed: bool = False,
-) -> matplotlib.figure.Figure:
-    """Every designed run (:func:`population.designed_runs`) per kernel of ``kernels``: per setup a box
-    over the graded runs, each run a dot on top, "solved/graded" above. Refuses owed runs (a final grade
-    or a rerun still to come, :class:`reliability.OwedRunsError`) unless ``allow_owed``, which draws them as "?"."""
-    if not allow_owed:
-        reliability.cell_runs(runs)
-    series = runs_series(runs, kernels)
-    metric = speedup_series_metric(series, "Final-Grade Speedup per Run")
-    legend: list[matplotlib.artist.Artist] = [
-        matplotlib.lines.Line2D(
-            [], [], marker="o", linestyle="none", color=one.color, markersize=LEGEND_MARK_PT, label=one.label
-        )
-        for one in series
-    ]
-    legend.append(matplotlib.patches.Patch(facecolor=plotstyle.MUTED, alpha=RUN_BOX_ALPHA, label=RUNS_BOX_LABEL))
-    legend.extend(status_handles([metric]))
-    return figure_panels([metric], kernels, Style.BOX, False, title, width_in, legend)
 
 
 def save(fig: matplotlib.figure.Figure, out: pathlib.Path, print_size: bool = False) -> pathlib.Path:

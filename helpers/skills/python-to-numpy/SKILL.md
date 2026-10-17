@@ -211,8 +211,7 @@ for kz in range(kernel):
             zs = kz + out_d * stride
             ys = ky + out_h * stride
             xs = kx + out_w * stride
-            out[:, :, :, :, :] = np.maximum(out[:, :, :, :, :],
-                                            padded[:, :, kz:zs:stride, ky:ys:stride, kx:xs:stride])
+            out[:, :, :, :, :] = np.maximum(out[:, :, :, :, :], padded[:, :, kz:zs:stride, ky:ys:stride, kx:xs:stride])
 ```
 
 The strided slice `kz:kz + out_d * stride:stride` is the tap's view of the input: exactly `out_d`
@@ -247,8 +246,11 @@ for oc in range(conv_weight.shape[0]):
         for kz in range(kd):
             for ky in range(kh):
                 for kx in range(kw):
-                    conv[:, oc, :, :, :] = conv[:, oc, :, :, :] + conv_weight[oc, ic, kz, ky, kx] * x[
-                        :, ic, kz:kz + conv_d, ky:ky + conv_h, kx:kx + conv_w]
+                    conv[:, oc, :, :, :] = (
+                        conv[:, oc, :, :, :]
+                        + conv_weight[oc, ic, kz, ky, kx]
+                        * x[:, ic, kz : kz + conv_d, ky : ky + conv_h, kx : kx + conv_w]
+                    )
     conv[:, oc, :, :, :] = conv[:, oc, :, :, :] + conv_bias[oc]
 ```
 
@@ -261,7 +263,7 @@ Padding stays a declared buffer, because a tap that reaches past the edge must r
 
 ```python
 padded = np.full((n, c, d + 2 * pad, h + 2 * pad, w + 2 * pad), -np.inf, dtype=x.dtype)
-padded[:, :, pad:pad + d, pad:pad + h, pad:pad + w] = x
+padded[:, :, pad : pad + d, pad : pad + h, pad : pad + w] = x
 ```
 
 `-inf` for a max pool, `0.0` for a sum or an average. An average pool that divides by the full
@@ -290,8 +292,8 @@ regression with extra steps.
 which looks like the worst kernel in the corpus, around
 
 ```python
-dHG = G[k, E - w, neigh_idx[a, b]] @ dH[a, b, i]      # (Norb, Norb) @ (Norb, Norb)
-Sigma[k, E, a] += dHG @ dHD                            # accumulating a MATRIX
+dHG = G[k, E - w, neigh_idx[a, b]] @ dH[a, b, i]  # (Norb, Norb) @ (Norb, Norb)
+Sigma[k, E, a] += dHG @ dHD  # accumulating a MATRIX
 ```
 
 Every operand is a `Norb x Norb` block. The nest is a batched GEMM written as a batch loop, which is
@@ -351,8 +353,8 @@ Two SC-specific facts:
 
 - **No torch model behind it**, so rung 1b does not exist. Equivalence against the pre-port version
   is your ONLY functional check, which makes exactness matter more, not less.
-- **These kernels are GATED.** The KernelBench subtrack is excluded from `test_e2e_numerical`
-  (`UNGATED_SUBTRACKS`); `scientific_computing` is not. A break here is a CI red, not a quiet
+- **These kernels are GATED.** The `kernelbench` tag is excluded from `test_e2e_numerical`
+  (`UNGATED_TAGS`); `scientific_computing` is not. A break here is a CI red, not a quiet
   corpus regression.
 
 ## Landmines worth knowing before you hit them
@@ -396,7 +398,7 @@ mechanical:
 ```python
 # Before -- one name, two shapes
 if tail:
-    padded = np.pad(padded, pad_width, ...)   # (H, W + tail)
+    padded = np.pad(padded, pad_width, ...)  # (H, W + tail)
 moved = np.moveaxis(padded, axis, -1)
 
 # After -- one name per shape, and the guard is gone: a zero-width pad is a copy
@@ -408,7 +410,7 @@ moved = padded_full if axis == 1 else np.transpose(padded_full, (1, 0))
 ```python
 x_new = np.zeros(p, dtype=xp.dtype)
 ...
-x_new[:] = (rp_new - xmin) * dinvx     # NOT ``x_new = ...`` inside the branch
+x_new[:] = (rp_new - xmin) * dinvx  # NOT ``x_new = ...`` inside the branch
 ```
 
 The `[:]` form is the one to reach for whenever a buffer is already allocated at the right shape;

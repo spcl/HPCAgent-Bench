@@ -8,7 +8,8 @@
     env_spec.py render layers/model-qwen38.env  # an env file and its "# extends:" parents
     env_spec.py list                            # every experiment:model a submitter can render
 
-An experiment:model renders, lowest precedence first: ``layers/common.env``, the experiment's ``env``,
+An experiment:model renders, lowest precedence first: ``layers/common.env``, the requests preset the experiment
+chain names (``requests:``, ``layers/requests-<preset>.env``; ``default`` when none does), the experiment's ``env``,
 the rest of ``layers/model-<model>.env``'s chain, the experiment's ``models.<model>``. An experiment that
 ``extends`` another applies the parent's ``env`` (and ``models`` entry) before its own. A later key
 keeps its first position. Values are copied verbatim, so ``${SCRATCH:?}`` resolves where the job
@@ -25,18 +26,29 @@ from typing import Annotated
 import yaml
 from pydantic import BaseModel, ConfigDict, StrictInt, StrictStr, StringConstraints, TypeAdapter
 
+from hpcagent_bench import paths
+
 #: The checkout's ``experiments/``: the setup specification and its env layers.
-EXPERIMENTS = pathlib.Path(__file__).resolve().parents[2] / "experiments"
+EXPERIMENTS = paths.EXPERIMENTS_DIR
 SPEC = EXPERIMENTS / "setups.yaml"
 LAYERS = EXPERIMENTS / "layers"
 COMMON = LAYERS / "common.env"
 ASSIGNMENT = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$")
 EXTENDS = re.compile(r"^# extends: (.+)$", re.MULTILINE)
 MODEL_LAYER = re.compile(r"^model-([a-z0-9]+)\.env$")
+REQUESTS_LAYER = re.compile(r"^requests-([a-z0-9-]+)\.env$")
+#: The requests preset a setup gets when no experiment of its chain names one.
+DEFAULT_REQUESTS = "default"
 
 #: One member per ``layers/model-<model>.env``: adding a model is adding its layer.
 Model = enum.Enum(  # type: ignore[misc]  # members come from the layer files, so mypy cannot list them
     "Model", sorted((m[1], m[1]) for path in LAYERS.glob("model-*.env") if (m := MODEL_LAYER.match(path.name)))
+)
+
+#: One member per ``layers/requests-<preset>.env``: the ``requests.*`` allowance an experiment names.
+RequestsPreset = enum.Enum(  # type: ignore[misc]  # members come from the layer files, so mypy cannot list them
+    "RequestsPreset",
+    sorted((m[1], m[1]) for path in LAYERS.glob("requests-*.env") if (m := REQUESTS_LAYER.match(path.name))),
 )
 
 type EnvKey = Annotated[str, StringConstraints(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")]
@@ -50,6 +62,8 @@ class Experiment(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     extends: ExperimentName | None = None
+    #: The requests preset (``layers/requests-<preset>.env``); None inherits the parent's, else ``default``.
+    requests: RequestsPreset | None = None
     env: Env = {}
     models: dict[Model, Env] = {}
 
@@ -107,6 +121,18 @@ def experiment_chain(name: str, spec: dict[str, Experiment]) -> list[Experiment]
     return [spec[n] for n in names]
 
 
+def requests_env(lineage: list[Experiment]) -> dict[str, str]:
+    """The keys of the requests preset the last experiment of ``lineage`` (root first) to name one names, else
+    of :data:`DEFAULT_REQUESTS`. Only a preset sets ``HPCAGENT_BENCH_REQUESTS_*``: an experiment's ``env`` that
+    sets one is refused."""
+    for experiment in lineage:
+        named = sorted(key for key in experiment.env if key.startswith("HPCAGENT_BENCH_REQUESTS_"))
+        if named:
+            raise SystemExit(f"env_spec: {', '.join(named)} belong in a requests preset (setups.yaml `requests:`)")
+    presets = [experiment.requests.value for experiment in lineage if experiment.requests is not None]
+    return assignments(LAYERS / f"requests-{presets[-1] if presets else DEFAULT_REQUESTS}.env")
+
+
 def render_experiment(name: str, model: str, spec: dict[str, Experiment]) -> dict[str, str]:
     """Experiment ``name`` for ``model`` flattened (precedence in the module docstring)."""
     try:
@@ -121,6 +147,7 @@ def render_experiment(name: str, model: str, spec: dict[str, Experiment]) -> dic
     for layer in chain:
         env.update(assignments(layer))
         if layer == COMMON.resolve():
+            env.update(requests_env(lineage))
             for experiment in lineage:
                 env.update((key, str(value)) for key, value in experiment.env.items())
     for experiment in lineage:
@@ -133,7 +160,9 @@ def render_track(name: str, spec: dict[str, Experiment]) -> dict[str, str]:
 
     Budgets are per track, never per model, so this is where a submitter reads them."""
     env = assignments(COMMON)
-    for experiment in experiment_chain(name, spec):
+    lineage = experiment_chain(name, spec)
+    env.update(requests_env(lineage))
+    for experiment in lineage:
         env.update((key, str(value)) for key, value in experiment.env.items())
     return env
 

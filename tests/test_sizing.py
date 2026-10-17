@@ -26,9 +26,7 @@ def test_working_bytes_is_unknown_not_zero_for_a_hand_written_initializer() -> N
 
     Every shipped initializer declares its shapes, so the rule is asserted against a spec built
     here."""
-    spec = dataclasses.replace(
-        spec_for("argmax_value"), init=dataclasses.replace(spec_for("argmax_value").init, shapes={})
-    )
+    spec = spec_for("argmax_value").replace(init=dataclasses.replace(spec_for("argmax_value").init, shapes={}))
     assert not spec.init.shapes
     assert working_bytes(spec, spec.parameters["S"]) is None
 
@@ -103,7 +101,7 @@ def test_a_sparse_layout_with_no_configuration_is_unknown_not_dense() -> None:
     """No ``configurations:`` block names no graded format, and a format is what sets the buffer
     sizes. Falling back to the dense declaration would report a number that is wrong by orders of
     magnitude in whichever direction the manifest happened to declare."""
-    spec = dataclasses.replace(spec_for("bicg_solvers"), configurations={})
+    spec = spec_for("bicg_solvers").replace(configurations={})
     assert spec.sparse_layouts
     assert not spec.configurations
     assert working_bytes(spec, spec.parameters["XL"]) is None

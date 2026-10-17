@@ -69,8 +69,7 @@ def derive_ms(
     """The idle timeout covering a full-context prefill at this setup's worst-case concurrency.
 
     ``context_tokens`` and ``agents_per_node`` at or below zero mean the setup names neither (or
-    is misconfigured) -- there is nothing to derive from, so this returns the CLI's ceiling, the
-    same default every setup ran with before this module existed.
+    is misconfigured); this then returns :data:`CEILING_MS`.
     """
     if context_tokens <= 0 or agents_per_node <= 0:
         return CEILING_MS

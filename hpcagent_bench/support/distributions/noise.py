@@ -27,6 +27,8 @@ import numpy as np
 from hpcagent_bench.dtypes import compute_view, is_float_dtype
 from hpcagent_bench.precision import Precision
 from hpcagent_bench.support import counter_rng
+from hpcagent_bench.support.array_module import is_array, module_of
+from hpcagent_bench.support.counter_generator import CounterGenerator
 from hpcagent_bench.support.distributions import domain as domain_mod
 from hpcagent_bench.support.distributions import register_distribution
 
@@ -73,13 +75,15 @@ def perturb(
     if step is None or values.size == 0:
         return values
     wide = compute_view(values)
+    xp = module_of(wide) or np
     draw = counter_rng.uniform_field(
-        wide.shape, seed, stream, dtype=wide.dtype if wide.dtype == np.float32 else np.float64
+        wide.shape, seed, stream, xp, dtype=wide.dtype if wide.dtype == np.float32 else np.float64
     )
     factor = 1.0 + wide.dtype.type(step) * (draw * 2.0 - 1.0).astype(wide.dtype, copy=False)
     result = wide * factor
-    low, high = interval if interval is not None else (-float(np.max(np.abs(wide))), float(np.max(np.abs(wide))))
-    return np.clip(result, low, high).astype(values.dtype, copy=False)
+    peak = float(abs(wide).max())
+    low, high = interval if interval is not None else (-peak, peak)
+    return result.clip(low, high).astype(values.dtype, copy=False)
 
 
 @register_distribution("noise")
@@ -93,8 +97,8 @@ def noise(shape: tuple[int, ...], precision: Precision, spec: dict[str, Any] | N
     eps = float(spec.pop("eps", 0.0))
     values = distributions.get(base)(shape, precision, spec)
     rng = spec.get("rng")
-    seed = int(rng.integers(0, SEED_LIMIT)) if rng is not None else int(np.random.default_rng().integers(0, SEED_LIMIT))
-    if not isinstance(values, np.ndarray) or not is_float_dtype(values.dtype):
+    seed = int((rng or CounterGenerator.fresh()).integers(0, SEED_LIMIT))
+    if not is_array(values) or not is_float_dtype(values.dtype):
         return values
     interval = domain_mod.of(spec)
     return perturb(values, seed, 0, eps or None, interval if isinstance(interval, tuple) else None)
@@ -111,7 +115,7 @@ def apply_to_inputs(
     touched: list[str] = []
     for stream, name in enumerate(init.output_args):
         value = data.get(name)
-        if not isinstance(value, np.ndarray) or not is_float_dtype(value.dtype):
+        if not is_array(value) or not is_float_dtype(value.dtype):
             continue
         if init.dists.get(name) in domain_mod.STRUCTURAL:
             continue

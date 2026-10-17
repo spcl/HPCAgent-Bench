@@ -27,3 +27,6 @@ args:
   scaling_factor: 0.5
   hardtanh_min: -2.0
   hardtanh_max: 2.0
+public:
+  negative:
+    hardtanh_min: "the lower hardtanh bound"

@@ -29,7 +29,7 @@ def variant_root(tmp_path):
     """A template root holding two variant templates."""
     (tmp_path / "task_var1.j2").write_text("VARIANT ONE for {{ kernel }}\n")
     (tmp_path / "task_var2.j2").write_text("VARIANT TWO for {{ kernel }}\n")
-    config.settings().prompt.template_dirs = [str(tmp_path)]
+    config.set_override("prompt.template_dirs", (str(tmp_path),))
     return tmp_path
 
 
@@ -58,7 +58,7 @@ def test_no_variants_present_is_fine() -> None:
 def test_a_user_root_shadows_a_variant_of_the_same_name(tmp_path, variant_root) -> None:
     """First root wins, the rule templates and skills already follow."""
     (tmp_path / "task_var1.j2").write_text("SHADOWED\n")
-    config.settings().prompt.template_dir = str(tmp_path)
+    config.set_override("prompt.template_dir", str(tmp_path))
     assert "SHADOWED" in build_prompt(TASK, prompt_config=PromptConfig.variant("var1"))
 
 

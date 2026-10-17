@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """PACKETS: resolving a spec into skills/env/method, the canonical identity, the label, the colour.
 
-Covers every predefined packet (cpf, cpf-src, lang, lang-skills, profiling bundle, repo,
+Covers every predefined packet (the four CPF keys, lang, lang-skills, profiling bundle, repo,
 no-score-tool, autokernel, all-in, the perf-playbook and all-in device variants), an implicit
 single-skill packet, an ad-hoc ``;``-separated list, the device and frozen refusals, the error paths,
 and the identity/colour round trips that ``setups.packet`` already depends on.
@@ -28,22 +28,41 @@ def test_resolve_control_is_empty() -> None:
     assert resolved.parts == ()
 
 
-def test_resolve_cpf_stages_the_page_and_the_dir_env() -> None:
-    resolved = packets.resolve("cpf-tool", "c", environ={"CPF_VIEW": "/views/cpf"})
-    assert resolved.key == "cpf-tool"
-    assert resolved.label == "Canonical Parallel Form Tool"
-    assert resolved.skills == ("cpf-tool",)
+@pytest.mark.parametrize(
+    ("spec", "language", "key", "label"),
+    [
+        ("cpf-tool-cpu", "c", "cpf-tool-cpu", "Canonical Parallel Form Tool, CPU"),
+        ("cpf-tool-gpu", "hip", "cpf-tool-gpu", "Canonical Parallel Form Tool, GPU"),
+        ("cpf-tool", "c", "cpf-tool-cpu", "Canonical Parallel Form Tool, CPU"),
+        ("cpf-tool", "hip", "cpf-tool-gpu", "Canonical Parallel Form Tool, GPU"),
+    ],
+)
+def test_resolve_cpf_stages_the_page_and_the_dir_env(spec: str, language: str, key: str, label: str) -> None:
+    """The device-neutral ``cpf-tool`` of the first setups names the packet of the run's device."""
+    resolved = packets.resolve(spec, language, environ={"CPF_VIEW": "/views/cpf"})
+    assert resolved.key == key
+    assert resolved.label == label
+    assert resolved.skills == (key,)
     assert resolved.env == (("HPCAGENT_BENCH_SERVICE_CANONICAL_PARALLEL_FORM_DIR", "/views/cpf"),)
     assert resolved.method == ""
 
 
-def test_resolve_cpf_src_stages_its_own_page_and_sets_the_dropin_env() -> None:
-    """cpf-src stages exactly the ``cpf-src`` page -- the drop-in's own comment reference -- alongside
+@pytest.mark.parametrize(
+    ("spec", "language", "key"),
+    [
+        ("cpf-cpu-src", "c", "cpf-cpu-src"),
+        ("cpf-gpu-src", "hip", "cpf-gpu-src"),
+        ("cpf-src", "c", "cpf-cpu-src"),
+        ("cpf-src", "hip", "cpf-gpu-src"),
+    ],
+)
+def test_resolve_cpf_src_stages_its_own_page_and_sets_the_dropin_env(spec: str, language: str, key: str) -> None:
+    """A CPF-as-source packet stages exactly its own page -- the drop-in's comment reference -- alongside
     the drop-in directory env; the drop-in file itself is staged by materialize_shared.sh, not by a
     skill page, so the packet's only page is the one explaining what sits in that file."""
-    resolved = packets.resolve("cpf-src", "c", environ={"CPF_VIEW": "/views/dropin"})
-    assert resolved.key == "cpf-src"
-    assert resolved.skills == ("cpf-src",)
+    resolved = packets.resolve(spec, language, environ={"CPF_VIEW": "/views/dropin"})
+    assert resolved.key == key
+    assert resolved.skills == (key,)
     assert resolved.env == (("CPF_DROPIN_DIR", "/views/dropin"),)
 
 
@@ -84,7 +103,7 @@ def test_resolve_lang_for_a_host_language_stages_no_companion() -> None:
 def test_resolve_lang_skills_stages_every_shipped_page_but_a_packet_tools_own_or_an_explicit_one() -> None:
     """``*`` is every page except the manual for a tool only one packet's setups are served (staging
     that page here would hand the skills setup instructions for a tool it does not have) and except a
-    page marked ``explicit: true`` (caveman, cpf-src): those are treatments of their own, reachable
+    page marked ``explicit: true`` (caveman, the CPF-as-source pages): those are treatments of their own, reachable
     only by naming them, never picked up as part of the whole-library packet. With no language,
     image or topology named, nothing else narrows it (packets.applies_to)."""
     resolved = packets.resolve("lang-skills", "", multinode=True)
@@ -93,7 +112,7 @@ def test_resolve_lang_skills_stages_every_shipped_page_but_a_packet_tools_own_or
     shipped = sorted(p.name for p in packets.SKILLS_DIR.iterdir() if p.is_dir())
     applicable = [page for page in shipped if packets.applies_to(page, "", None, True)]
     assert list(resolved.skills) == [page for page in applicable if page not in packets.tool_pages()]
-    assert set(shipped) - set(resolved.skills) == packets.tool_pages() | {"caveman", "cpf-src"}
+    assert set(shipped) - set(resolved.skills) == packets.tool_pages() | {"caveman", "cpf-cpu-src", "cpf-gpu-src"}
     assert resolved.env == (), "no skill content may ride in the main prompt: the packet sets no hints file"
 
 
@@ -139,13 +158,18 @@ def test_a_device_packet_refuses_a_language_its_device_does_not_run(spec: str, l
         packets.resolve(spec, language, environ={"CPF_VIEW": "/views/dropin"})
 
 
-@pytest.mark.parametrize(("device", "language"), [("cpu", "c"), ("amd", "hip"), ("nvidia", "cuda")])
-def test_all_in_for_a_device_is_cpf_src_its_perf_playbook_and_the_language_pages(device: str, language: str) -> None:
+@pytest.mark.parametrize(
+    ("device", "language", "cpf"),
+    [("cpu", "c", "cpf-cpu-src"), ("amd", "hip", "cpf-gpu-src"), ("nvidia", "cuda", "cpf-gpu-src")],
+)
+def test_all_in_for_a_device_is_cpf_src_its_perf_playbook_and_the_language_pages(
+    device: str, language: str, cpf: str
+) -> None:
     all_in = packets.resolve(f"all-in-{device}", language, environ={"CPF_VIEW": "/views/dropin"})
     playbook = packets.resolve(f"perf-playbook-{device}", language)
-    assert set(all_in.skills) == (set(playbook.skills) | set(packets.resolve("lang", language).skills) | {"cpf-src"})
+    assert set(all_in.skills) == (set(playbook.skills) | set(packets.resolve("lang", language).skills) | {cpf})
     assert all_in.env == (("CPF_DROPIN_DIR", "/views/dropin"),)
-    assert packets.canonical(f"lang;perf-playbook-{device};cpf-src") == f"all-in-{device}"
+    assert packets.canonical(f"lang;perf-playbook-{device};{cpf}") == f"all-in-{device}"
 
 
 def test_canonical_names_a_composite_only_when_the_spec_stages_the_same_pages() -> None:
@@ -197,7 +221,7 @@ def test_resolve_all_in_composes_cpf_src_dc_profiling_and_lang() -> None:
     assert resolved.key == "all-in"
     assert resolved.label == "All-in"
     assert resolved.skills == (
-        "cpf-src",
+        "cpf-cpu-src",
         "divide-and-conquer",
         "lang-c",
         "nsys",
@@ -259,10 +283,17 @@ def test_canonical_of_control_is_empty() -> None:
 
 @pytest.mark.parametrize(
     "spec",
-    ["lang-skills", "no-score-tool", "cpf-tool", "cpf-src", "repo", "lang", "perf-playbook-cpu", "all-in-amd"],
+    ["lang-skills", "no-score-tool", "cpf-tool-cpu", "cpf-gpu-src", "repo", "lang", "perf-playbook-cpu", "all-in-amd"],
 )
 def test_canonical_of_a_registered_key_is_itself(spec: str) -> None:
     assert packets.canonical(spec) == spec
+
+
+@pytest.mark.parametrize(("alias", "key"), [("cpf-src", "cpf-cpu-src"), ("cpf-tool", "cpf-tool-cpu")])
+def test_a_recorded_device_neutral_cpf_key_reads_as_the_cpu_packet(alias: str, key: str) -> None:
+    """Every setup recorded under the first CPF keys ran a CPU form, so a database row keeps its series."""
+    assert packets.canonical(alias) == key
+    assert packets.canonical(f"{alias}+lang-skills") == packets.canonical(f"{key}+lang-skills")
 
 
 def test_canonical_of_an_already_canonical_combination_round_trips() -> None:
@@ -308,7 +339,7 @@ def test_has_part_matches_a_composite_carrying_it() -> None:
 
 
 def test_label_of_a_registered_key_is_its_display_name() -> None:
-    assert packets.label("cpf-tool") == "Canonical Parallel Form Tool"
+    assert packets.label("cpf-tool") == "Canonical Parallel Form Tool, CPU"
     assert packets.label("all-in") == "All-in"
     assert packets.label("lang") == "Language Pages"
 

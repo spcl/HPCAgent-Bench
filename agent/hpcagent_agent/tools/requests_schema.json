@@ -1,21 +1,19 @@
 {
- "additionalProperties": false,
  "properties": {
   "operations": {
    "items": {
     "oneOf": [
      {
-      "additionalProperties": false,
       "description": "Change array ``array``'s element type to ``to``; the judge converts it in before the call and out after it.",
       "properties": {
        "action": {
         "const": "cast"
        },
        "array": {
-        "minLength": 1,
         "type": "string"
        },
        "to": {
+        "description": "The element types a ``cast`` may ask for.",
         "enum": [
          "fp64",
          "fp32",
@@ -23,7 +21,8 @@
          "bf16",
          "fp8_e4m3",
          "fp8_e5m2"
-        ]
+        ],
+        "type": "string"
        }
       },
       "required": [
@@ -34,18 +33,15 @@
       "type": "object"
      },
      {
-      "additionalProperties": false,
       "description": "Store sparse array ``array`` in format ``to``.",
       "properties": {
        "action": {
         "const": "format"
        },
        "array": {
-        "minLength": 1,
         "type": "string"
        },
        "to": {
-        "minLength": 1,
         "type": "string"
        }
       },
@@ -57,7 +53,6 @@
       "type": "object"
      },
      {
-      "additionalProperties": false,
       "description": "Fuse whole arrays ``arrays`` of one shape into one array ``into``, the inverse of :class:`Unzip`. Arrays of one element type (:attr:`ArrayState.element_type`) are stacked along a new dimension, the field, at position ``dim`` (None: last; ``into[..., k]`` is ``arrays[k]``), which the digit operations then place like any other (field-outer is SoA, field-inner AoS, blocked between AoSoA); arrays of different element types become one array of structs, one member per array in order, each keeping its precision (and take no ``dim``).",
       "properties": {
        "action": {
@@ -65,18 +60,22 @@
        },
        "arrays": {
         "items": {
-         "minLength": 1,
          "type": "string"
         },
-        "minItems": 2,
         "type": "array"
        },
        "dim": {
-        "minimum": 0,
-        "type": "integer"
+        "anyOf": [
+         {
+          "type": "integer"
+         },
+         {
+          "type": "null"
+         }
+        ],
+        "default": null
        },
        "into": {
-        "minLength": 1,
         "type": "string"
        }
       },
@@ -88,26 +87,29 @@
       "type": "object"
      },
      {
-      "additionalProperties": false,
       "description": "Split the whole array ``array`` into the arrays ``into``, the inverse of :class:`Zip`: a struct into one array per member (a complex array is the struct ``(re, im)``), a zipped array along its field, or, with ``dim``, any array along dimension ``dim``, one array per index (its extent must be ``len(into)``: ``A[N, M, 4]`` into four ``[N, M]`` arrays). Each keeps the precision and placement it had.",
       "properties": {
        "action": {
         "const": "unzip"
        },
        "array": {
-        "minLength": 1,
         "type": "string"
        },
        "dim": {
-        "minimum": 0,
-        "type": "integer"
+        "anyOf": [
+         {
+          "type": "integer"
+         },
+         {
+          "type": "null"
+         }
+        ],
+        "default": null
        },
        "into": {
         "items": {
-         "minLength": 1,
          "type": "string"
         },
-        "minItems": 2,
         "type": "array"
        }
       },
@@ -119,18 +121,15 @@
       "type": "object"
      },
      {
-      "additionalProperties": false,
       "description": "Cut digit ``digit`` ``(d, s, e)`` into ``into``: coarse ``(d, s*b, ceil(e/b))`` and fine ``(d, s, b)``.",
       "properties": {
        "action": {
         "const": "block"
        },
        "array": {
-        "minLength": 1,
         "type": "string"
        },
        "digit": {
-        "minLength": 1,
         "type": "string"
        },
        "factor": {
@@ -141,11 +140,8 @@
        },
        "into": {
         "items": {
-         "minLength": 1,
          "type": "string"
         },
-        "maxItems": 2,
-        "minItems": 2,
         "type": "array"
        }
       },
@@ -159,23 +155,18 @@
       "type": "object"
      },
      {
-      "additionalProperties": false,
       "description": "Merge the coarse and fine digits ``digits`` of a ``block`` by ``factor`` back into one digit ``into``.",
       "properties": {
        "action": {
         "const": "unblock"
        },
        "array": {
-        "minLength": 1,
         "type": "string"
        },
        "digits": {
         "items": {
-         "minLength": 1,
          "type": "string"
         },
-        "maxItems": 2,
-        "minItems": 2,
         "type": "array"
        },
        "factor": {
@@ -185,7 +176,6 @@
         ]
        },
        "into": {
-        "minLength": 1,
         "type": "string"
        }
       },
@@ -199,27 +189,21 @@
       "type": "object"
      },
      {
-      "additionalProperties": false,
       "description": "Cut a whole dimension's digit ``digit`` into ``parts`` contiguous load-balanced bands (sizes differ by at most one): ``into`` names the band index (extent ``parts``) and the index within the band.",
       "properties": {
        "action": {
         "const": "split"
        },
        "array": {
-        "minLength": 1,
         "type": "string"
        },
        "digit": {
-        "minLength": 1,
         "type": "string"
        },
        "into": {
         "items": {
-         "minLength": 1,
          "type": "string"
         },
-        "maxItems": 2,
-        "minItems": 2,
         "type": "array"
        },
        "parts": {
@@ -239,27 +223,21 @@
       "type": "object"
      },
      {
-      "additionalProperties": false,
       "description": "Merge the band index and the index within the band ``digits`` of a ``split`` back into one digit.",
       "properties": {
        "action": {
         "const": "unsplit"
        },
        "array": {
-        "minLength": 1,
         "type": "string"
        },
        "digits": {
         "items": {
-         "minLength": 1,
          "type": "string"
         },
-        "maxItems": 2,
-        "minItems": 2,
         "type": "array"
        },
        "into": {
-        "minLength": 1,
         "type": "string"
        },
        "parts": {
@@ -279,22 +257,18 @@
       "type": "object"
      },
      {
-      "additionalProperties": false,
       "description": "Reorder array ``array``'s digit tuple to ``order``, every current digit named once.",
       "properties": {
        "action": {
         "const": "permute"
        },
        "array": {
-        "minLength": 1,
         "type": "string"
        },
        "order": {
         "items": {
-         "minLength": 1,
          "type": "string"
         },
-        "minItems": 1,
         "type": "array"
        }
       },
@@ -306,7 +280,6 @@
       "type": "object"
      },
      {
-      "additionalProperties": false,
       "description": "Grow digit ``digit`` by ``amount`` dead cells.",
       "properties": {
        "action": {
@@ -319,11 +292,9 @@
         ]
        },
        "array": {
-        "minLength": 1,
         "type": "string"
        },
        "digit": {
-        "minLength": 1,
         "type": "string"
        }
       },
@@ -336,7 +307,6 @@
       "type": "object"
      },
      {
-      "additionalProperties": false,
       "description": "Drop ``amount`` dead cells from digit ``digit``.",
       "properties": {
        "action": {
@@ -349,11 +319,9 @@
         ]
        },
        "array": {
-        "minLength": 1,
         "type": "string"
        },
        "digit": {
-        "minLength": 1,
         "type": "string"
        }
       },
@@ -366,22 +334,18 @@
       "type": "object"
      },
      {
-      "additionalProperties": false,
       "description": "Renumber the digits ``digits`` by the bijection ``f`` (one expression per digit, over their names); the caller supplies its inverse ``f_inv``, checked exhaustively where the digits' extents are known (otherwise the kernels bound every value ``f_inv`` gives back, so a wrong one cannot leave the buffer).",
       "properties": {
        "action": {
         "const": "shuffle"
        },
        "array": {
-        "minLength": 1,
         "type": "string"
        },
        "digits": {
         "items": {
-         "minLength": 1,
          "type": "string"
         },
-        "minItems": 1,
         "type": "array"
        },
        "f": {
@@ -407,29 +371,24 @@
       "type": "object"
      },
      {
-      "additionalProperties": false,
       "description": "Renumber the digits ``digits`` (extents ``2**bits``) by an invertible linear map over GF(2) on their bits (Linear Layouts, arXiv:2505.23819): the input bit vector is each digit's bits, least significant first, in ``digits`` order. XOR swizzles are this form; the inverse is the inverse matrix.",
       "properties": {
        "action": {
         "const": "linear_shuffle"
        },
        "array": {
-        "minLength": 1,
         "type": "string"
        },
        "bits": {
         "items": {
-         "minimum": 0,
          "type": "integer"
         },
         "type": "array"
        },
        "digits": {
         "items": {
-         "minLength": 1,
          "type": "string"
         },
-        "minItems": 1,
         "type": "array"
        },
        "matrix": {
@@ -438,7 +397,8 @@
           "enum": [
            0,
            1
-          ]
+          ],
+          "type": "integer"
          },
          "type": "array"
         },
@@ -455,38 +415,66 @@
       "type": "object"
      },
      {
-      "additionalProperties": false,
       "description": "Hand a digit of extent ``P_g`` to grid dimension ``grid_dim``: it becomes the rank coordinate and leaves the local tuple. Name the ``digit``, or use the short form ``dim`` + ``scheme`` (+ ``block_size`` for ``block_cyclic``), which cuts dimension ``dim``'s whole digit and distributes the rank digit ``r<dim>``: ``block`` = contiguous balanced bands, ``cyclic`` = round robin, ``block_cyclic`` = round robin of blocks of ``block_size``.",
       "properties": {
        "action": {
         "const": "distribute"
        },
        "array": {
-        "minLength": 1,
         "type": "string"
        },
        "block_size": {
-        "minimum": 1,
-        "type": "integer"
+        "anyOf": [
+         {
+          "type": "integer"
+         },
+         {
+          "type": "null"
+         }
+        ],
+        "default": null
        },
        "digit": {
-        "minLength": 1,
-        "type": "string"
+        "anyOf": [
+         {
+          "type": "string"
+         },
+         {
+          "type": "null"
+         }
+        ],
+        "default": null
        },
        "dim": {
-        "minimum": 0,
-        "type": "integer"
+        "anyOf": [
+         {
+          "type": "integer"
+         },
+         {
+          "type": "null"
+         }
+        ],
+        "default": null
        },
        "grid_dim": {
-        "minimum": 0,
         "type": "integer"
        },
        "scheme": {
-        "enum": [
-         "block",
-         "block_cyclic",
-         "cyclic"
-        ]
+        "anyOf": [
+         {
+          "description": "How a distributed dimension is dealt to its grid dimension.",
+          "enum": [
+           "block",
+           "block_cyclic",
+           "cyclic"
+          ],
+          "type": "string"
+         },
+         {
+          "type": "null"
+         }
+        ],
+        "default": null
        }
       },
       "required": [
@@ -497,14 +485,12 @@
       "type": "object"
      },
      {
-      "additionalProperties": false,
       "description": "Hold array ``array`` whole on every rank.",
       "properties": {
        "action": {
         "const": "replicate"
        },
        "array": {
-        "minLength": 1,
         "type": "string"
        }
       },
@@ -515,21 +501,21 @@
       "type": "object"
      },
      {
-      "additionalProperties": false,
       "description": "Keep array ``array`` in ``on`` memory (``host`` or ``device``) during the call.",
       "properties": {
        "action": {
         "const": "place"
        },
        "array": {
-        "minLength": 1,
         "type": "string"
        },
        "on": {
+        "description": "Where an array lives during the call.",
         "enum": [
          "host",
          "device"
-        ]
+        ],
+        "type": "string"
        }
       },
       "required": [
@@ -544,21 +530,28 @@
    "type": "array"
   },
   "startup": {
-   "additionalProperties": false,
+   "description": "What a request settles before any array is touched: the libraries to ``load`` and the processor\n``grid``'s extents over the rank count ``P`` (None = not a distributed run).",
    "properties": {
     "grid": {
-     "items": {
-      "type": [
-       "integer",
-       "string"
-      ]
-     },
-     "minItems": 1,
-     "type": "array"
+     "anyOf": [
+      {
+       "items": {
+        "type": [
+         "integer",
+         "string"
+        ]
+       },
+       "type": "array"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null
     },
     "load": {
+     "default": [],
      "items": {
-      "minLength": 1,
       "type": "string"
      },
      "type": "array"

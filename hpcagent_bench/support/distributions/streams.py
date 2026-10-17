@@ -1,70 +1,37 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""One RNG stream per array, instead of one stream per kernel.
+"""One generator per array, instead of one stream per kernel.
 
-A single ``default_rng(seed)`` threaded through every array makes array *N*'s values depend on how
-many draws arrays *0..N-1* happened to make. That couples the arrays three ways: materialising one
-array alone gives different data than materialising all of them, adding an array shifts every array
-after it, and the fill cannot be parallelised at all.
-
-``SeedSequence.spawn`` breaks the coupling: child *i* is a function of the seed and *i* only.
-Measured on 8 arrays of 1e7 doubles -- 708ms sequential, 181ms on 8 threads (3.91x), values
-bit-identical either way, because NumPy releases the GIL inside the fill.
-
-The bit generators are round-robined over the spawned children. MT19937 is deliberately absent:
-1.9x slower than PCG64 for the same fill and 2.5KB of state per stream, in exchange for nothing.
+A single generator threaded through every array makes array *N*'s values depend on how many draws arrays
+*0..N-1* happened to make: materialising one array alone gives different data than materialising all of them,
+and adding an array shifts every array after it. :func:`array_generators` gives array *k* a
+:class:`~hpcagent_bench.support.counter_generator.CounterGenerator` keyed by ``(seed, k)`` alone. Each of its
+draws is one parallel fill (numba threads on the host, an elementwise kernel on the device), with the same bits
+on numpy and cupy.
 """
 
-import concurrent.futures
-from collections.abc import Callable, Sequence
-from typing import Any
+from types import ModuleType
 
 import numpy as np
-from numpy.random import PCG64, PCG64DXSM, SFC64, Generator, Philox, SeedSequence
+
+from hpcagent_bench.support import counter_rng
+from hpcagent_bench.support.counter_generator import SEED_BITS, CounterGenerator
 
 __all__ = [
-    "DEFAULT_FILL_WORKERS",
-    "ROUND_ROBIN",
-    "THREAD_MIN_ELEMENTS",
+    "array_generators",
     "clip_to_precision",
-    "fill",
-    "spawn_streams",
 ]
 
-#: Threads :func:`fill` runs the per-array fills on when the caller gives no count.
-DEFAULT_FILL_WORKERS: int = 8
 
-#: Cycled over the spawned children, so consecutive arrays draw from different algorithms.
-#: Philox is the slow one (+38%) but it is the counter-based member of the set, and it is the only
-#: one of the four with a GPU counterpart at all -- keep it in the rotation.
-ROUND_ROBIN = (PCG64, PCG64DXSM, SFC64, Philox)
+def array_generators(seed: int | None, count: int, xp: ModuleType = np) -> list[CounterGenerator]:
+    """``count`` independent generators on ``xp``, generator ``k`` keyed by ``(seed, k)``.
 
-#: Below this many elements the fill is not worth a thread; pool startup dominates.
-THREAD_MIN_ELEMENTS = 1 << 22
-
-
-def spawn_streams(seed: int | None, count: int) -> list[Generator]:
-    """``count`` independent generators, round-robined over :data:`ROUND_ROBIN`.
-
-    ``seed`` of ``None`` still spawns -- the children are independent of each other, just not
-    reproducible across runs.
-    """
-    return [
-        Generator(ROUND_ROBIN[i % len(ROUND_ROBIN)](child)) for i, child in enumerate(SeedSequence(seed).spawn(count))
-    ]
-
-
-def fill(tasks: Sequence[Callable[[], Any]], elements: int, workers: int = DEFAULT_FILL_WORKERS) -> list[Any]:
-    """Run the per-array fills, on threads once there is enough work to pay for them.
-
-    Order-preserving, and identical to calling each task in turn: the tasks draw from streams that
-    are independent by construction, so concurrency cannot perturb the values.
-    """
-    if elements < THREAD_MIN_ELEMENTS or len(tasks) < 2:
-        return [t() for t in tasks]
-    with concurrent.futures.ThreadPoolExecutor(max_workers=min(workers, len(tasks))) as pool:
-        return list(pool.map(lambda t: t(), tasks))
+    ``seed`` of ``None`` draws one of fresh entropy: the generators are independent of each other, just not
+    reproducible across runs."""
+    base = seed if seed is not None else CounterGenerator.fresh().seed
+    mask = (1 << SEED_BITS) - 1
+    return [CounterGenerator(counter_rng.key(base, index) & mask, xp) for index in range(count)]
 
 
 def clip_to_precision(raw: np.ndarray, cap: float) -> np.ndarray:
@@ -73,5 +40,5 @@ def clip_to_precision(raw: np.ndarray, cap: float) -> np.ndarray:
     Clamping the distribution's BOUNDS instead can invert a range lying entirely above the cap into
     ``low > high``; clamping the samples cannot.
     """
-    np.clip(raw, -cap, cap, out=raw)
+    raw.clip(-cap, cap, out=raw)
     return raw

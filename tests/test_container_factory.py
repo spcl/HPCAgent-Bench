@@ -73,13 +73,11 @@ def test_every_family_has_at_least_one_runtime() -> None:
         assert containers.family_members(family), family
 
 
-def test_the_default_backend_is_rootless_and_daemonless() -> None:
-    """The fallback has to be something an unprivileged user can actually invoke. docker needs a
-    running daemon and a root-equivalent group, which no HPC login node grants; apptainer and ce
-    need the OCI image converted first. Only podman is both OCI-native and rootless."""
+def test_backend_image_forms() -> None:
+    """podman runs the OCI tag unconverted; apptainer needs a SIF and ce an EDF."""
     spellings, _ = containers.load_backends()
-    assert spellings[containers.DEFAULT_BACKEND].image_form == "tag"  # consumes OCI unconverted
-    assert spellings["apptainer"].image_form == "sif"  # a conversion, so never the default
+    assert spellings["podman"].image_form == "tag"
+    assert spellings["apptainer"].image_form == "sif"
     assert spellings["ce"].image_form == "edf"
 
 
@@ -155,7 +153,7 @@ def test_resolve_backend_ignores_the_legacy_bash_var(monkeypatch) -> None:
 def test_resolve_backend_rejects_unknown() -> None:
     # "singularity" is a Harbor PROVIDER name, not a backend this factory spells (apptainer is);
     # neither it nor an unsupported runtime may silently resolve to a neighbouring one.
-    for dropped in ("singularity", "udocker", "enroot", "shifter"):
+    for dropped in ("singularity", "udocker", "shifter"):
         with pytest.raises(ValueError):
             containers.resolve_backend(dropped)
 
@@ -198,7 +196,7 @@ def test_local_run_command_podman_amd_gpu_tokens() -> None:
 
 
 def test_local_run_command_rejects_dropped_backend() -> None:
-    for dropped in ("singularity", "udocker", "enroot", "shifter"):
+    for dropped in ("singularity", "udocker", "shifter"):
         with pytest.raises(ValueError):
             containers.local_run_command(["x"], backend=dropped)
 

@@ -15,26 +15,29 @@ import shutil
 import subprocess
 import sys
 from collections.abc import Callable
-from typing import TypedDict, cast
+from typing import Annotated, Literal, TypedDict
 
+import pydantic
 import yaml
 
-from hpcagent_bench.spec import as_block
+from hpcagent_bench import paths
 
 __all__ = [
     "DETECTORS",
-    "PKG",
     "TARGETS",
     "TOOLSET",
+    "TOOLSET_ADAPTER",
+    "Target",
     "VERSION_RE",
     "DetectResult",
     "Evidence",
+    "NameList",
     "PlatformInfo",
     "Report",
     "ToolEntry",
     "ToolSpec",
     "accel_roots",
-    "as_block",
+    "as_names",
     "detect_binary",
     "detect_header",
     "detect_library",
@@ -47,16 +50,52 @@ __all__ = [
     "main",
     "missing_for_target",
     "print_human",
+    "toolset",
 ]
 
-PKG = pathlib.Path(__file__).resolve().parent.parent  # the hpcagent_bench/ package dir
-TOOLSET = PKG / "envs" / "toolset.yaml"
-TARGETS = ("cpu", "nvidia", "amd")
+TOOLSET = paths.ENVS_DIR / "toolset.yaml"
+#: The platforms a tool can be required on.
+type Target = Literal["cpu", "nvidia", "amd"]
+TARGETS: tuple[Target, ...] = ("cpu", "nvidia", "amd")
 VERSION_RE = re.compile(r"\d+(?:\.\d+)+")
 
-#: One ``toolset.yaml`` tool entry as the loader hands it over. A YAML mapping proves nothing about
-#: its values, so they stay ``object`` until :func:`_as_list` converts the one being read.
-type ToolSpec = dict[str, object]
+
+def as_names(raw: object) -> object:
+    """A toolset field spelled as one name, as the one-name list; a list unchanged."""
+    return [raw] if isinstance(raw, str) else raw
+
+
+#: A toolset field that may be spelled as a single name or a list of them, always read as the list.
+NameList = Annotated[tuple[str, ...], pydantic.BeforeValidator(as_names)]
+
+
+class ToolSpec(pydantic.BaseModel):
+    """One tool of :data:`TOOLSET`: how it is detected, the names a detector looks for, and the targets
+    that require it."""
+
+    model_config = pydantic.ConfigDict(extra="forbid", frozen=True)
+
+    detect: Literal["binary", "library", "header"]
+    #: Binary names in prefer-latest order, and the flags tried for a version.
+    names: NameList = ()
+    version_arg: NameList = ()
+    #: Library lookups: pkg-config modules, shared objects, headers.
+    pkgconfig: NameList = ()
+    soname: NameList = ()
+    header: NameList = ()
+    required_on: tuple[Target, ...] = ()
+
+
+#: :data:`TOOLSET`'s schema: category -> tool -> its spec.
+TOOLSET_ADAPTER: pydantic.TypeAdapter[dict[str, dict[str, ToolSpec]]] = pydantic.TypeAdapter(
+    dict[str, dict[str, ToolSpec]]
+)
+
+
+@functools.lru_cache(maxsize=1, typed=True)
+def toolset() -> dict[str, dict[str, ToolSpec]]:
+    """:data:`TOOLSET`, parsed once."""
+    return TOOLSET_ADAPTER.validate_python(yaml.safe_load(TOOLSET.read_text()) or {})
 
 
 class PlatformInfo(TypedDict):
@@ -194,7 +233,7 @@ def _run_version(cmd: str, args: list[str] | None) -> str | None:
 
 def detect_binary(spec: ToolSpec) -> DetectResult:
     found: list[tuple[str, str]] = []
-    for name in _as_list(spec["names"]):
+    for name in spec.names:
         path = shutil.which(name)
         if path:
             found.append((name, path))
@@ -204,20 +243,15 @@ def detect_binary(spec: ToolSpec) -> DetectResult:
     return {
         "found": True,
         "path": chosen_path,
-        "version": _run_version(chosen_path, _as_list(spec.get("version_arg", []))),
+        "version": _run_version(chosen_path, list(spec.version_arg)),
         "variants": [name for name, _ in found],
     }
-
-
-def _as_list(v: object) -> list[str]:
-    """One toolset field that may be spelled as a single name or a list of them, always as a list."""
-    return [str(item) for item in cast("list[object]", v)] if isinstance(v, list) else [str(v)]
 
 
 def detect_library(spec: ToolSpec) -> DetectResult:
     # 1) pkg-config (authoritative; gives a version)
     if shutil.which("pkg-config"):
-        for pc in _as_list(spec.get("pkgconfig", [])):
+        for pc in spec.pkgconfig:
             try:
                 if subprocess.run(["pkg-config", "--exists", pc], timeout=10, check=False).returncode == 0:
                     ver = subprocess.run(
@@ -228,7 +262,7 @@ def detect_library(spec: ToolSpec) -> DetectResult:
                 pass
     # 2) shared object on the loader path / accel lib dirs
     ld = ldconfig_index()
-    for so in _as_list(spec.get("soname", [])):
+    for so in spec.soname:
         for known, path in ld.items():
             if known == so or known.startswith(so + "."):
                 return {"found": True, "via": "ldconfig", "path": path}
@@ -237,7 +271,7 @@ def detect_library(spec: ToolSpec) -> DetectResult:
             if hits:
                 return {"found": True, "via": "libdir", "path": max(hits)}
     # 3) header on the include path
-    for hdr in _as_list(spec.get("header", [])):
+    for hdr in spec.header:
         for d in include_dirs():
             if (header := pathlib.Path(d, hdr)).exists():
                 return {"found": True, "via": "header", "path": str(header)}
@@ -245,7 +279,8 @@ def detect_library(spec: ToolSpec) -> DetectResult:
 
 
 def detect_header(spec: ToolSpec) -> DetectResult:
-    return detect_library({"header": spec["header"]})
+    """A header-only tool: found by its header alone, whatever else the entry names."""
+    return detect_library(ToolSpec(detect="header", header=spec.header))
 
 
 DETECTORS: dict[str, Callable[[ToolSpec], DetectResult]] = {
@@ -256,14 +291,12 @@ DETECTORS: dict[str, Callable[[ToolSpec], DetectResult]] = {
 
 
 def discover() -> Report:
-    toolset = as_block(yaml.safe_load(TOOLSET.read_text()))
     report: Report = {"platform": detect_platform(), "categories": {}}
-    for cat, tools in toolset.items():
+    for cat, tools in toolset().items():
         out: dict[str, ToolEntry] = {}
-        for tool, raw in as_block(tools).items():
-            spec = as_block(raw)
-            res = DETECTORS[str(spec["detect"])](spec)
-            req_on = _as_list(spec.get("required_on", []))
+        for tool, spec in tools.items():
+            res = DETECTORS[spec.detect](spec)
+            req_on: list[str] = list(spec.required_on)
             entry: ToolEntry = {**res, "required_on": req_on, "optional": not req_on}
             out[tool] = entry
         report["categories"][cat] = out

@@ -13,14 +13,11 @@ was named -- which leaves no room for the reply the server reserves; SGLang's "m
 refusal is not one the SDK recognises as a context error (openhands-sdk 1.47.0 ``LONG_PROMPT_PATTERNS``),
 so it never condenses reactively either -- the request fails and the episode ends.
 
-Two SDK waits are set from the driver's numbers, not left at the SDK's 300 s. ``LLM.timeout`` is the
-request timeout every harness is handed (``API_TIMEOUT_MS``, claude's whole-request cap): at 300 s a
-request queued behind a loaded server's prefills timed out, was retried from scratch five times and
-ended the attempt. Each MCP tool's executor waits
-``runner_common.judge_call_timeout``: 1.47.0 fixes it at ``MCP_TOOL_TIMEOUT_SECONDS`` = 300 with no
-config field (upstream PR OpenHands/software-agent-sdk#3254, unmerged), below the judge's own 1800 s,
-so a slow grade came back as an error while it kept running on the judge, and the stdio server stayed
-busy with it, so every later call timed out behind it too.
+Two SDK waits are set from the driver's numbers instead of the SDK's 300 s. ``LLM.timeout`` =
+``API_TIMEOUT_MS``, the whole-request timeout every harness is handed. Each MCP tool's executor waits
+``runner_common.judge_call_timeout``, patched over openhands-sdk 1.47.0's fixed
+``MCP_TOOL_TIMEOUT_SECONDS`` = 300 (no config field); with 300 s a grade longer than 300 s returns an error to
+the agent while it continues on the judge, and later calls queue behind it on the stdio server.
 
 Writes ``usage.jsonl`` (one line per model call, condenser calls included), ``openhands.events.jsonl``
 (one event per line) and ``harness-end.json``; see ``runner_common``. Prints ``harness: tools ready: ...``

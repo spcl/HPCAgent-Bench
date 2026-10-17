@@ -225,7 +225,7 @@ def cpp_blocks():
     return [
         (name, block)
         for name, block in sorted(languages._load_compilers().items())
-        if block.get("lang") == "cpp" and not block.get("mpi")
+        if block.lang == "cpp" and not block.mpi
     ]
 
 
@@ -233,14 +233,14 @@ def resolved_cc(block) -> str:
     """The driver ``block`` really invokes -- through :func:`languages.resolve_compiler`, the same
     resolution :func:`languages.subst_map` applies, so a toolchain installed only as ``g++-14`` is
     probed under the name it will actually be built with."""
-    return languages.resolve_compiler(block["cc"]) or block["cc"]
+    return languages.resolve_compiler(block.cc) or block.cc
 
 
 def require_compiler(block) -> str:
     """Case 1: no such driver on this host -> DEFERRED."""
-    exe = languages.resolve_compiler(block["cc"])
+    exe = languages.resolve_compiler(block.cc)
     if exe is None:
-        pytest.skip(f"toolchain absent: {block['cc']} is not on PATH")
+        pytest.skip(f"toolchain absent: {block.cc} is not on PATH")
     return exe
 
 
@@ -248,7 +248,7 @@ def require_compiles(block, source: str, suffix: str, extra: str = "") -> None:
     """Case 2: the driver exists but cannot build ``source`` at the harness's own standard ->
     DEFERRED, quoting the compiler and its version so the log says WHICH environment declined."""
     exe = require_compiler(block)
-    lang = block["lang"]
+    lang = block.lang
     argv = [exe, *languages.baseline_flags(lang).split(), *languages.std_flag(lang).split(), *extra.split()]
     complaint = compile_complaint(argv, source, suffix)
     if complaint is not None:
@@ -509,7 +509,7 @@ def test_autopar_delta_is_reachable_and_mode_gated(lang) -> None:
     other. A delta that silently stopped resolving would turn an autopar column into a relabelled
     ``-O3`` run, which is the failure :func:`flags.probe_autopar` exists for."""
     _cname, block = languages._compiler_for_lang(languages._load_compilers(), lang)
-    autopar_ref = block.get("autopar_ref")
+    autopar_ref = block.autopar_ref
     assert autopar_ref, f"{lang}'s compiler block declares no autopar_ref"
     delta = vars(flags)[autopar_ref].format(n=flags.ncores())
     first = delta.split()[0]
@@ -566,7 +566,7 @@ def test_autopar_thread_count_matches_the_grading_slot() -> None:
     """The autopar ``{n}`` is baked in the same UNPINNED compile, so it takes the same slot count."""
     want = f"-ftree-parallelize-loops={languages.grading_ncores()}"
     for name, block in sorted(languages._load_compilers().items()):
-        if block.get("autopar_ref") is None:
+        if block.autopar_ref is None:
             continue
         baked = [
             tok
@@ -763,10 +763,10 @@ def autopar_pool_size(exe: str, graded: str, n: int, workdir: pathlib.Path, omp_
 def test_gcc_autopar_thread_count_has_no_ceiling(tmp_path) -> None:
     """Every rung of the ladder must produce a pool of exactly that many threads."""
     _cname, block = languages._compiler_for_lang(languages._load_compilers(), "fortran")
-    if "gfortran" not in block["cc"]:
+    if "gfortran" not in block.cc:
         pytest.skip(
             f"environment cannot build this construct: this tree's fortran driver is "
-            f"{block['cc']}, and parloops is a gcc flag"
+            f"{block.cc}, and parloops is a gcc flag"
         )
     exe = require_compiler(block)
     if not pathlib.Path("/proc/self/status").is_file():
@@ -787,10 +787,10 @@ def test_gcc_autopar_thread_count_has_no_ceiling(tmp_path) -> None:
 def test_omp_num_threads_cannot_widen_a_baked_autopar_count(tmp_path) -> None:
     """The environment must not move the baked count -- grading_ncores() is only sound if it holds."""
     _cname, block = languages._compiler_for_lang(languages._load_compilers(), "fortran")
-    if "gfortran" not in block["cc"]:
+    if "gfortran" not in block.cc:
         pytest.skip(
             f"environment cannot build this construct: this tree's fortran driver is "
-            f"{block['cc']}, and parloops is a gcc flag"
+            f"{block.cc}, and parloops is a gcc flag"
         )
     exe = require_compiler(block)
     if not pathlib.Path("/proc/self/status").is_file():

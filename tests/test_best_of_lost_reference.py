@@ -238,9 +238,10 @@ def test_the_best_of_rules_have_distinct_stamps() -> None:
 
 
 def test_an_unknown_denominator_is_refused() -> None:
+    # The config validates the denominator vocabulary, so the override itself refuses the unknown name.
     with (
-        config.overridden("measurement.denominator.scientific_computing", "best-of-v9"),
         pytest.raises(ValueError, match="best-of-v9"),
+        config.overridden("measurement.denominator.scientific_computing", "best-of-v9"),
     ):
         grading.track_baseline_set("scientific_computing")
 

@@ -55,8 +55,8 @@ def test_a_blank_or_adhoc_setup_is_not_a_condition() -> None:
 
 def test_an_aggregate_refuses_a_slice_that_mixes_denominators() -> None:
     """A speedup over a single-core reference and one over a parallel reference are ratios of
-    different quantities, so their mean has no denominator. ``figures/results.baseline_of`` takes
-    the majority and warns, which an aggregate may not do: the same agent work can read 95.3x under one
+    different quantities, so their mean has no denominator. Taking the majority and warning is what
+    an aggregate may not do: the same agent work can read 95.3x under one
     reference and 1.82x under the other."""
     with pytest.raises(population.MixedPopulationError, match="mixes baseline denominators"):
         population.one_denominator(["c", "numba"])

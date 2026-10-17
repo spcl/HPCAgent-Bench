@@ -82,11 +82,10 @@ the geometric mean over its served kernels, with the arithmetic mean beside it
 | Script | Output |
 | --- | --- |
 | `paired_setups.py` | Pair table (both legs, corrected over `--family`) and per-setup table. |
-| `plot_score_change.py` | Efficacy figure (speedup, solved and cost rows per model and delivery); `--per-kernel`: every kernel of a tag, compilers and setups over one baseline. |
-| `plot_setup_summary.py` | Per-setup views. |
+| `plot_score_change.py` | Efficacy figure (speedup, solved and cost rows per model and delivery). |
+| `plot_kernel_speedups.py` | Speedup per kernel: every kernel of a tag, compilers and setups over one baseline. |
 | `plot_scaling.py` | Scaling curves. |
-| `plot_speedup.py` | Framework speedups from the results table. |
-| `plot_repeats.py` | Designed-repeat studies (`repeat5`, `temperature3`). |
+| `plot_kernel_runs.py` | Every run per kernel and model, conditions (temperatures, packets) stacked: designed repeats (`repeat5`, `temperature3`). |
 | `iteration_counts.py` | Turns and tool calls per episode. |
 | `check_paper_figures.py` | Figure rule checks. |
 
@@ -131,7 +130,7 @@ python3 statistics/plot_score_change.py "$OBS" --experiment llr40 --setups 'llr4
 ![compilers](../docs/figures/example-compilers-per-kernel.png)
 
 ```bash
-python3 statistics/plot_score_change.py "$OBS" --per-kernel \
+python3 statistics/plot_kernel_speedups.py "$OBS" \
   --canon-db "$CANON_DB" --canon-columns pluto,dace_cpu_canon,dace_gpu_canon,ppcg_hip \
   --experiment llr40 --setups 'llr40-(qwen38|oss120b)-c.*' --conditions ,lang-skills --tag-file tag-llr40.txt \
   --offset 0.6 --out figures/compilers-per-kernel.pdf

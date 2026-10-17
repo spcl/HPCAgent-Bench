@@ -84,7 +84,7 @@ def test_an_unknown_or_repeated_offered_format_is_refused(offered: list[str]) ->
 def test_a_layout_needs_its_count_symbol() -> None:
     raw = spmv_manifest()
     del raw["layouts"]["A"]["nnz"]
-    with pytest.raises(ValueError, match="nnz must name"):
+    with pytest.raises(ValueError, match=r"layouts\.A\.nnz: Field required"):
         load(raw)
 
 
@@ -98,7 +98,7 @@ def test_a_logical_shape_is_a_matrix() -> None:
 def test_an_unknown_key_in_a_layout_is_refused() -> None:
     raw = spmv_manifest()
     raw["layouts"]["A"]["variants"] = {"csr": {}}
-    with pytest.raises(ValueError, match="unknown key"):
+    with pytest.raises(ValueError, match=r"layouts\.A\.variants: unknown manifest field"):
         load(raw)
 
 
@@ -151,7 +151,7 @@ def test_a_retired_sparse_block_is_refused_at_load(retired: str) -> None:
 def test_a_configurations_block_is_refused() -> None:
     raw = spmv_manifest()
     raw["configurations"] = {"csr": {"A": "csr"}}
-    with pytest.raises(ValueError, match="unknown manifest field.*'configurations'"):
+    with pytest.raises(ValueError, match="configurations: unknown manifest field"):
         load(raw)
 
 

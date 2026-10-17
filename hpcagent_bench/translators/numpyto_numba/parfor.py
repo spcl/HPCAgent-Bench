@@ -130,8 +130,10 @@ def overlapping_slice_store(stmt: ast.AST) -> bool:
         if lhs_name is None:
             continue
         whole_target = all(is_full_slice(d) for d in index_exprs(target))
+        # A Name that is a Subscript's base is that subscript's read, which the subscript rules below decide.
+        subscript_bases = {id(node.value) for node in ast.walk(stmt.value) if isinstance(node, ast.Subscript)}
         for rhs in ast.walk(stmt.value):
-            if isinstance(rhs, ast.Name) and rhs.id == lhs_name and not whole_target:
+            if isinstance(rhs, ast.Name) and rhs.id == lhs_name and not whole_target and id(rhs) not in subscript_bases:
                 return True
             if not isinstance(rhs, ast.Subscript) or base_name(rhs) != lhs_name:
                 continue

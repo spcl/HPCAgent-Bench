@@ -1,9 +1,8 @@
 """Sparse layouts: pick the configuration and expand a logical sparse array into its buffers."""
 
 import ast
-from collections.abc import Mapping
 
-from hpcagent_bench.spec import as_block, as_list
+from hpcagent_bench.emit_bridge import BenchDocument
 from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc, SparseArrayDesc
 
 __all__ = [
@@ -14,13 +13,13 @@ __all__ = [
 ]
 
 
-def choose_sparse_config(info: Mapping[str, object], config: str | None = None) -> str | None:
-    """Pick which configuration to emit from ``info['configurations']``: an **explicit** ``config``
+def choose_sparse_config(bench: BenchDocument, config: str | None = None) -> str | None:
+    """Pick which configuration to emit from ``bench.configurations``: an **explicit** ``config``
     (the harness passes the requested layout), else the FIRST configuration -- the kernel's default
     layout, which ``emit_bridge`` writes first (``BenchSpec.default_layout``, the one authority).
     Returns None when no configurations block exists.
     """
-    configs = as_block(info.get("configurations"))
+    configs = bench.configurations
     if not configs:
         return None
     if config is not None:
@@ -31,7 +30,7 @@ def choose_sparse_config(info: Mapping[str, object], config: str | None = None) 
 
 
 def expand_sparse_arrays(
-    info: Mapping[str, object], config: str | None = None
+    bench: BenchDocument, config: str | None = None
 ) -> tuple[dict[str, SparseArrayDesc], list[ArrayDesc], dict[str, list[str]]]:
     """Expand logical sparse arrays into physical buffer ArrayDescs.
 
@@ -48,52 +47,34 @@ def expand_sparse_arrays(
     Dense entries in the configuration are left for the normal dense
     array path. Returns empty maps when no sparse_layouts block exists.
     """
-    sparse_layouts = as_block(info.get("sparse_layouts"))
-    if not sparse_layouts:
+    if not bench.sparse_layouts:
         return {}, [], {}
-    config_key = choose_sparse_config(info, config)
-    configs = as_block(info.get("configurations"))
-    cfg: dict[str, object] = as_block(as_block(configs.get(config_key)).get("arrays")) if config_key else {}
-    # configurations may be stored as {key: {array: fmt}} (raw JSON) --
-    # handle both the BenchSpec-parsed and raw-dict shapes.
-    if config_key and config_key in configs and not cfg:
-        cfg = as_block(configs[config_key])
+    config_key = choose_sparse_config(bench, config)
+    cfg = bench.configurations[config_key] if config_key else {}
 
     sparse_descs: dict[str, SparseArrayDesc] = {}
     buffer_arrays: list[ArrayDesc] = []
     logical_to_physical: dict[str, list[str]] = {}
 
-    for logical, raw_layout in sparse_layouts.items():
-        layout = as_block(raw_layout)
-        variants = as_block(layout.get("variants"))
+    for logical, layout in bench.sparse_layouts.items():
+        variants = layout.variants
         # No config entry; fall back to the array's first declared
         # variant (single-variant kernels need no configurations).
-        raw_fmt = cfg.get(logical)
-        chosen: object = raw_fmt if raw_fmt is not None else (next(iter(variants)) if variants else None)
-        if not isinstance(chosen, str) or chosen == "dense":
+        fmt = cfg.get(logical)
+        if fmt is None:
+            fmt = next(iter(variants), None)
+        if fmt is None or fmt == "dense" or fmt not in variants:
             continue
-        fmt = chosen
-        if variants.get(fmt) is None:
-            continue
-        variant = as_block(variants[fmt])
         roles_to_names: dict[str, str] = {}
         phys_order: list[str] = []
-        for raw_buf in as_list(variant.get("buffers")):
-            buf = as_block(raw_buf)
-            name, role = str(buf["name"]), str(buf["role"])
-            adesc = ArrayDesc(
-                name=name,
-                dtype=str(buf["dtype"]),
-                shape=tuple(str(s) for s in as_list(buf["shape"])),
-                is_output=False,
-            )
-            buffer_arrays.append(adesc)
-            roles_to_names[role] = name
-            phys_order.append(name)
+        for buf in variants[fmt].buffers:
+            buffer_arrays.append(ArrayDesc(name=buf.name, dtype=buf.dtype, shape=tuple(buf.shape), is_output=False))
+            roles_to_names[buf.role] = buf.name
+            phys_order.append(buf.name)
         sparse_descs[logical] = SparseArrayDesc(
             name=logical,
             format=fmt,
-            logical_shape=tuple(str(s) for s in as_list(layout.get("logical_shape"))),
+            logical_shape=tuple(layout.logical_shape),
             buffers=roles_to_names,
         )
         logical_to_physical[logical] = phys_order

@@ -69,8 +69,9 @@ One command, from wherever you are. It runs on the serving node over ssh, so not
 
 ```bash
 containers/inference/ping-endpoint.sh <node> mi200                                  # Beverin login node
-JUMP=beverin.alps.cscs.ch containers/inference/ping-endpoint.sh <node> mi200        # ela, Daint login
-JUMP=ela.cscs.ch,beverin.alps.cscs.ch containers/inference/ping-endpoint.sh <node> mi200   # laptop
+HPCAGENT_BENCH_LOGIN_HOST=<login host> containers/inference/ping-endpoint.sh <node> mi200   # another cluster host
+HPCAGENT_BENCH_SSH_JUMP=<jump> HPCAGENT_BENCH_LOGIN_HOST=<login host> \
+    containers/inference/ping-endpoint.sh <node> mi200                                  # laptop
 ```
 
 It checks that `/health` answers 200, that a request without the key answers 401, and that a chat

@@ -56,6 +56,11 @@ other:
     citation: 'T. A. Davis and Y. Hu, "The University of Florida Sparse Matrix Collection", ACM TOMS 38(1), 2011.'
     note: Each matrix carries its contributor's terms; the matrices are not part of this repository.
 upstreams:
+  aho_corasick_1975:
+    name: 'Aho and Corasick, "Efficient String Matching: An Aid to Bibliographic Search"'
+    url: https://doi.org/10.1145/360825.360855
+    license: NOASSERTION
+    citation: 'A. V. Aho and M. J. Corasick, "Efficient String Matching: An Aid to Bibliographic Search", CACM 18(6), 1975.'
   anmlzoo_vasim:
     name: VASim (Virtual Automata Simulator) and the ANMLZoo benchmark suite
     url: https://github.com/jackwadden/VASim
@@ -171,6 +176,12 @@ upstreams:
     url: https://github.com/hmmlearn/hmmlearn
     license: BSD-3-Clause
     copyright: Copyright (c) 2014, hmmlearn authors and contributors
+  hoehrmann_utf8_dfa:
+    name: 'Bjoern Hoehrmann, "Flexible and Economical UTF-8 Decoder"'
+    url: https://bjoern.hoehrmann.de/utf-8/decoder/dfa/
+    license: MIT
+    copyright: Copyright (c) 2008-2009 Bjoern Hoehrmann
+    note: 'the byte-class and state scheme only; the kernel''s tables are derived from RFC 3629, no code is included.'
   hpcg:
     name: HPCG benchmark
     url: https://github.com/hpcg-benchmark/hpcg
@@ -181,6 +192,11 @@ upstreams:
     url: https://github.com/hpgmg/hpgmg
     license: BSD-2-Clause
     citation: W. L. Briggs, V. E. Henson and S. F. McCormick, "A Multigrid Tutorial", 2nd ed., SIAM 2000.
+  huffman_1952:
+    name: 'David A. Huffman, "A Method for the Construction of Minimum-Redundancy Codes"'
+    url: https://doi.org/10.1109/JRPROC.1952.273898
+    license: NOASSERTION
+    citation: 'D. A. Huffman, "A Method for the Construction of Minimum-Redundancy Codes", Proc. IRE 40(9), 1952.'
   icon:
     name: ICON dynamical core and AES physics
     url: https://gitlab.dkrz.de/icon/icon-model
@@ -233,6 +249,11 @@ upstreams:
     url: https://doi.org/10.1137/1.9780898719505
     license: NOASSERTION
     citation: W. L. Briggs, V. E. Henson and S. F. McCormick, "A Multigrid Tutorial", 2nd ed., SIAM 2000; D. M. Young's SOR theory.
+  mytkowicz_dpfsm:
+    name: 'Mytkowicz, Musuvathi and Schulte, "Data-Parallel Finite-State Machines"'
+    url: https://doi.org/10.1145/2541940.2541988
+    license: NOASSERTION
+    citation: 'T. Mytkowicz, M. Musuvathi and W. Schulte, "Data-Parallel Finite-State Machines", ASPLOS ''14, doi:10.1145/2541940.2541988.'
   nbody_python:
     name: nbody-python (Philip Mocz)
     url: https://github.com/pmocz/nbody-python
@@ -330,6 +351,21 @@ upstreams:
     license: MIT
     copyright: Copyright (c) 2024 MIT HAN Lab
     citation: QUEST, arXiv:2406.10774.
+  relayout:
+    name: relayout (data-layout transformation plugin and kernel corpus)
+    url: https://github.com/ThrudPrimrose/relayout
+    license: NOASSERTION
+    note: The cloudsc_* corpus kernels were ported through relayout's Fortran corpus.
+  rfc3629:
+    name: 'RFC 3629, "UTF-8, a transformation format of ISO 10646"'
+    url: https://www.rfc-editor.org/rfc/rfc3629
+    license: NOASSERTION
+    citation: 'F. Yergeau, "UTF-8, a transformation format of ISO 10646", RFC 3629, 2003.'
+  rfc4180:
+    name: 'RFC 4180, "Common Format and MIME Type for Comma-Separated Values (CSV) Files"'
+    url: https://www.rfc-editor.org/rfc/rfc4180
+    license: NOASSERTION
+    citation: 'Y. Shafranovich, "Common Format and MIME Type for Comma-Separated Values (CSV) Files", RFC 4180, 2005.'
   rodinia:
     name: Rodinia benchmark suite
     url: https://github.com/yuhc/gpu-rodinia

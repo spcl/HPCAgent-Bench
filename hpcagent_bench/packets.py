@@ -30,9 +30,14 @@ import re
 from collections.abc import Iterable, Mapping
 from types import MappingProxyType
 
+import pydantic
+import yaml
+
 from hpcagent_bench import study_tags as tags
 
 __all__ = [
+    "CPF_ENV_KEYS",
+    "CPF_REQUEST_CAPABILITY",
     "DEVICE_LANGUAGES",
     "DEVICE_ONLY_LANGUAGES",
     "LIBRARY_ENABLED_PACKETS",
@@ -40,9 +45,11 @@ __all__ = [
     "SKILLS_DIR",
     "SKILL_LANGUAGE",
     "SKILL_TREATMENTS",
+    "Applies",
     "Packet",
+    "SkillFrontmatter",
     "applies_to",
-    "applies_values",
+    "by_device",
     "canonical",
     "companion_language_pages",
     "control_label",
@@ -53,10 +60,12 @@ __all__ = [
     "has_part",
     "hue_order",
     "label",
+    "request_allowance",
     "lead",
     "leaves",
     "libraries_enabled",
     "page_applies",
+    "split_frontmatter",
     "reached_keys",
     "refuse_frozen",
     "resolve",
@@ -83,6 +92,18 @@ def spec_parts(spec: str) -> tuple[str, ...]:
     aliases resolved, empties dropped, duplicates removed keeping first occurrence."""
     resolved = (tags.canonical("packets", token.strip()) for token in re.split(r"[+;]+", spec))
     return tuple(dict.fromkeys(token for token in resolved if token))
+
+
+#: The device-neutral CPF keys a GPU language names differently: the registry aliases them to their CPU packets,
+#: and a ``hip`` or ``cuda`` run gets the form the renderer hands it (the HIP units, ``CPF_TARGET=gpu``).
+GPU_ALIASES: Mapping[str, str] = MappingProxyType({"cpf-src": "cpf-gpu-src", "cpf-tool": "cpf-tool-gpu"})
+
+
+def by_device(spec: str, language: str) -> str:
+    """``spec`` with each device-neutral CPF key renamed to the GPU packet when ``language`` is a device language."""
+    if language not in DEVICE_ONLY_LANGUAGES:
+        return spec
+    return "+".join(GPU_ALIASES.get(token.strip(), token) for token in re.split(r"[+;]+", spec))
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -114,25 +135,49 @@ def tool_pages() -> frozenset[str]:
     )
 
 
-@functools.lru_cache(maxsize=None, typed=True)
-def page_applies(page: str) -> Mapping[str, object]:
-    """``page``'s ``applies:`` frontmatter block: which setups the page can be of use to at all.
+class Applies(pydantic.BaseModel):
+    """A skill page's ``applies:`` frontmatter block: which setups the page can be of use to at all.
 
     ``languages`` (the run's language), ``images`` (cpu, amd, nvidia), ``multinode`` (true when
     the page only matters to a task spanning nodes) and ``explicit`` (true when the page IS a
     treatment of its own -- caveman -- reachable only by naming it, never through ``*``). A key that
-    is absent does not restrict."""
-    import yaml
+    is absent does not restrict; a key this block does not name is refused, since nothing would read it."""
 
-    text = (SKILLS_DIR / page / "SKILL.md").read_text(encoding="utf-8")
-    meta = yaml.safe_load(text.split("---", 2)[1]) if text.startswith("---") else {}
-    return MappingProxyType(dict((meta or {}).get("applies") or {}))
+    model_config = pydantic.ConfigDict(extra="forbid", frozen=True)
+
+    #: A page spelling a key in the singular (``language:``) is refused rather than read by nobody, and a
+    #: list that is present names at least one value.
+    languages: tuple[str, ...] = pydantic.Field(default=(), min_length=1)
+    images: tuple[str, ...] = pydantic.Field(default=(), min_length=1)
+    multinode: pydantic.StrictBool = False
+    explicit: pydantic.StrictBool = False
 
 
-def applies_values(rule: Mapping[str, object], key: str) -> tuple[object, ...]:
-    """The members of the ``applies:`` list ``key`` (empty when the key is absent)."""
-    value = rule.get(key)
-    return tuple(value) if isinstance(value, (list, tuple)) else ()
+class SkillFrontmatter(pydantic.BaseModel):
+    """A ``SKILL.md``'s leading ``---`` block: its name, what it is for, when to open it, and where it applies."""
+
+    model_config = pydantic.ConfigDict(extra="forbid", frozen=True)
+
+    name: str = ""
+    description: str = ""
+    when: str = ""
+    applies: Applies = Applies()
+
+
+def split_frontmatter(text: str) -> tuple[SkillFrontmatter, str]:
+    """``text`` (a ``SKILL.md``) as its frontmatter and its body; a file without frontmatter is all body."""
+    if text.startswith("---"):
+        _, _, rest = text.partition("\n")
+        raw, sep, body = rest.partition("\n---")
+        if sep:
+            return SkillFrontmatter.model_validate(yaml.safe_load(raw) or {}), body.partition("\n")[2]
+    return SkillFrontmatter(), text
+
+
+@functools.lru_cache(maxsize=None, typed=True)
+def page_applies(page: str) -> Applies:
+    """``page``'s ``applies:`` frontmatter block (:class:`Applies`)."""
+    return split_frontmatter((SKILLS_DIR / page / "SKILL.md").read_text(encoding="utf-8"))[0].applies
 
 
 def applies_to(page: str, language: str, image: str | None, multinode: bool) -> bool:
@@ -143,15 +188,13 @@ def applies_to(page: str, language: str, image: str | None, multinode: bool) -> 
     free-choice ``language`` ("", "any") and an unknown ``image`` (None) do not restrict, so a
     caller that cannot name them still gets the whole library rather than a guessed subset."""
     rule = page_applies(page)
-    if rule.get("explicit"):
+    if rule.explicit:
         return False
-    languages = applies_values(rule, "languages")
-    if languages and language not in ("", "any") and language not in languages:
+    if rule.languages and language not in ("", "any") and language not in rule.languages:
         return False
-    images = applies_values(rule, "images")
-    if images and image is not None and image not in images:
+    if rule.images and image is not None and image not in rule.images:
         return False
-    return not rule.get("multinode") or multinode
+    return not rule.multinode or multinode
 
 
 @functools.lru_cache(maxsize=None, typed=True)
@@ -176,7 +219,7 @@ def companion_language_pages(language: str, image: str | None = None, multinode:
         if entry.is_dir()
         and entry.name.startswith("lang-")
         and entry.name != own
-        and language in applies_values(page_applies(entry.name), "languages")
+        and language in page_applies(entry.name).languages
         and applies_to(entry.name, language, image, multinode)
     )
 
@@ -359,6 +402,7 @@ def resolve(
     Unknown tokens, a missing ``${VAR}`` (when filling), or two packets disagreeing on one env key all
     raise a ``ValueError`` naming what is wrong."""
     env_source = environ if environ is not None else os.environ
+    spec = by_device(spec, language)
     tokens = spec_parts(spec)
     definitions = tags.registry().packet_defs
     for token in tokens:
@@ -437,6 +481,24 @@ def libraries_enabled(spec: str) -> bool:
     """
     definitions = tags.registry().packet_defs
     return any(key in LIBRARY_ENABLED_PACKETS for part in spec_parts(spec) for key in reached_keys(part, definitions))
+
+
+#: The env keys of a packet that serves a canonical parallel form: the cpf-src drop-in and the cpf-tool view.
+CPF_ENV_KEYS: frozenset[str] = frozenset({"CPF_DROPIN_DIR", "HPCAGENT_BENCH_SERVICE_CANONICAL_PARALLEL_FORM_DIR"})
+#: The ``requests.allow`` capability a CPF packet adds: CPF lowers BLAS, LAPACK and FFT nodes to the
+#: architecture's vendor libraries, and a form calling one builds only with it loaded.
+CPF_REQUEST_CAPABILITY = "load"
+
+
+def request_allowance(spec: str, language: str, allow: str) -> str:
+    """``allow`` (a setup's ``requests.allow``, the preset's comma list) with what ``spec`` needs: a packet serving a
+    canonical parallel form (:data:`CPF_ENV_KEYS`) adds :data:`CPF_REQUEST_CAPABILITY`, so the form an agent starts
+    from, or asks the tool for, can be submitted with the libraries it calls. Every other spec leaves it as is."""
+    allowed = [name for name in allow.split(",") if name.strip()]
+    env = dict(resolve(spec, language, fill=False).env) if spec else {}
+    if CPF_ENV_KEYS & env.keys() and CPF_REQUEST_CAPABILITY not in allowed:
+        allowed.append(CPF_REQUEST_CAPABILITY)
+    return ",".join(allowed)
 
 
 #: Treatment packets that ARE skill pages. A comparison whose every treatment falls in here reads

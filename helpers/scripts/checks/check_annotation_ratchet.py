@@ -22,8 +22,12 @@ import pathlib
 import subprocess
 import sys
 
+import pydantic
+
 REPO = pathlib.Path(__file__).resolve().parents[3]
 BASELINE = pathlib.Path(__file__).with_name("annotation_baseline.json")
+#: :data:`BASELINE`'s schema: repo-relative path -> the ANN violations it may still have.
+BASELINE_ADAPTER: pydantic.TypeAdapter[dict[str, int]] = pydantic.TypeAdapter(dict[str, pydantic.NonNegativeInt])
 ROOTS = ("hpcagent_bench", "tests", "scripts", "experiments", "tools")
 EXCLUDE = "hpcagent_bench/benchmarks"
 
@@ -58,7 +62,7 @@ def main(argv: list[str]) -> int:
     if named and not files:
         return 0
     found = violations(files or list(ROOTS))
-    baseline: dict[str, int] = json.loads(BASELINE.read_text())
+    baseline = BASELINE_ADAPTER.validate_json(BASELINE.read_bytes())
     scope = set(files) if files else {rel for rel in known if in_scope(rel)} | set(baseline)
     if write:
         for rel in scope:
@@ -66,7 +70,7 @@ def main(argv: list[str]) -> int:
                 baseline[rel] = found[rel]
             else:
                 baseline.pop(rel, None)
-        BASELINE.write_text(json.dumps(dict(sorted(baseline.items())), indent=1) + "\n")
+        BASELINE.write_bytes(BASELINE_ADAPTER.dump_json(dict(sorted(baseline.items())), indent=1) + b"\n")
         return 0
     faults = [
         f"{rel}: {baseline.get(rel, 0)} -> {found.get(rel, 0)} unannotated functions"

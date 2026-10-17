@@ -296,6 +296,79 @@ def test_the_guillotine_bounds_the_kernel_not_its_argument_copies(tmp_path: path
     assert len(timed) == 3
 
 
+#: A kernel whose first call in a process sleeps 1.5 s and every later one 0.01 s: a cold first call.
+SLOW_FIRST_KERNEL = (
+    "import time\n"
+    "CALLS = []\n"
+    "def kern(x):\n"
+    "    time.sleep(1.5 if not CALLS else 0.01)\n"
+    "    CALLS.append(1)\n"
+    "    return x + 1.0\n"
+)
+
+
+@pytest.mark.skipif(not osinfo.IS_LINUX, reason="the per-rep guard uses SIGALRM, which is POSIX-only")
+def test_the_cold_first_call_gets_its_own_alarm(tmp_path: pathlib.Path) -> None:
+    """``cold_rep_s`` bounds the first call in place of the per-rep ``timeout``: a reference whose first
+    call pays 1.5 s of one-time cost survives a 0.5 s per-rep bound (an early-stop cut) under a 5 s cold
+    alarm, and is killed on that first call without it."""
+    kernel = tmp_path / "cold.py"
+    kernel.write_text(SLOW_FIRST_KERNEL)
+    call = functools.partial(
+        native_call._call_isolated,
+        str(kernel),
+        _BINDING,
+        {"x": np.zeros(4)},
+        "python",
+        device=False,
+        timeout=0.5,
+        py_meta=("kern", ("x",), ("y",)),
+        reps=3,
+        warmup=1,
+    )
+    _, samples, _, _, _timed = call(cold_rep_s=5.0)
+    assert len(samples) == 3
+    with pytest.raises(RuntimeError, match="single rep"):
+        call()
+
+
+#: A python kernel whose first call in a process sleeps ``COLD_S`` seconds and every later call none.
+COLD_KERNEL = (
+    "import time\nCALLS = []\ndef kern(x):\n    if not CALLS:\n        time.sleep({cold})\n"
+    "    CALLS.append(1)\n    return x + 1.0\n"
+)
+#: The cold call's sleep, and the per-rep alarm it outlasts.
+COLD_S = 1.0
+REP_S = 0.5
+
+
+def cold_call(tmp_path: pathlib.Path, cold_rep_s: float) -> list[int]:
+    """The samples of 3 timed reps after 1 warmup of :data:`COLD_KERNEL` under a ``REP_S`` per-rep alarm."""
+    kernel = tmp_path / "cold.py"
+    kernel.write_text(COLD_KERNEL.format(cold=COLD_S))
+    return native_call._call_isolated(
+        str(kernel),
+        _BINDING,
+        {"x": np.zeros(4)},
+        "python",
+        device=False,
+        timeout=REP_S,
+        py_meta=("kern", ("x",), ("y",)),
+        reps=3,
+        warmup=1,
+        cold_rep_s=cold_rep_s,
+    )[1]
+
+
+@pytest.mark.skipif(not osinfo.IS_LINUX, reason="the per-rep guard uses SIGALRM, which is POSIX-only")
+def test_the_cold_first_call_runs_under_its_own_alarm(tmp_path: pathlib.Path) -> None:
+    """An early-stop cut is the per-rep alarm of a compiled reference; its first call pays one-time costs and
+    gets ``cold_rep_s`` instead, the later calls the cut."""
+    assert len(cold_call(tmp_path, cold_rep_s=4 * COLD_S)) == 3
+    with pytest.raises(RuntimeError, match="single rep"):
+        cold_call(tmp_path, cold_rep_s=0.0)
+
+
 def slow_draw(seconds: float, rep: int) -> dict[str, np.ndarray]:
     """A rep's inputs from an initializer that takes ``seconds``."""
     time.sleep(seconds)
@@ -419,10 +492,7 @@ def test_ccache_is_namespaced_by_cpu(pretend_ccache) -> None:
 def test_the_config_gate_turns_ccache_off(tmp_path, pretend_ccache, monkeypatch) -> None:
     """``build.ccache: false`` must beat detection -- the escape hatch for a host where a
     cache hit would be wrong."""
-    real_get = languages.config.get
-    monkeypatch.setattr(
-        languages.config, "get", lambda key, default=None: False if key == "build.ccache" else real_get(key, default)
-    )
+    languages.config.set_override("build.ccache", False)
     languages.compiler_launcher.cache_clear()
     assert languages.compiler_launcher() == ()
     argv = languages.build_shared_lib_commands("c", tmp_path / "k.c", tmp_path / "libk.so", mode=Mode.SINGLE_CORE)[0]

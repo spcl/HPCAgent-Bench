@@ -59,12 +59,12 @@ def scan_entry(name: str, context: str) -> list[str] | None:
     """The OpenMP runtime realpaths ``name``'s closure maps in ``context``: ``[]`` when it maps none or has
     nothing to link, ``None`` when this context cannot link it (no compiler for it, or the link fails)."""
     entry = languages.load_libraries()[name]
-    lang = next((lang for lang in TRIAL_LANGUAGES if lang in entry.get("langs", ())), "")
+    lang = next((lang for lang in TRIAL_LANGUAGES if lang in entry.langs), "")
     if not lang:
         return []
     compile_tokens, link_tokens = languages.library_tokens(name, lang, context)
     if not link_tokens:
-        return [] if entry.get("header_only") else None
+        return [] if entry.header_only else None
     block_name = languages.compiler_for_family(lang, CONTEXT_FAMILY[context])
     if block_name is None:
         return None

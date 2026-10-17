@@ -16,8 +16,7 @@ vocabularies, the env/compiler config, the global config):
 
 Third-party-schema YAML is NOT ours to restyle and is skipped: GitHub Actions
 workflows (``.github/``) and docker-compose (``*compose*``). Benchmark manifests
-additionally have their SCHEMA checked by ``helpers/scripts/checks/check_manifest_structure.py``
-(which loads each one through ``BenchSpec.from_yaml``); this gate is the repo-wide
+additionally have their schema checked by ``BenchSpec.load`` in ``tests/test_tree_structure.py``; this gate is the repo-wide
 style layer on top, and knows nothing about any file's schema.
 
     python tests/check_yaml_style.py            # CI / standalone: every tracked owned YAML

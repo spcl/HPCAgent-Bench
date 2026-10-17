@@ -43,12 +43,11 @@ from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from typing import NamedTuple
 
-from hpcagent_bench import config
+from hpcagent_bench import config, paths
 
 __all__ = [
     "APPTAINER_INSTALLER",
     "BACKENDS_PATH",
-    "DEFAULT_BACKEND",
     "EXEC_BACKENDS",
     "FAMILIES",
     "KNOWN_BACKENDS",
@@ -91,11 +90,6 @@ KNOWN_BACKENDS = ("docker", "podman", "apptainer", "ce", "native")
 #: whichever of its implementations is installed. Selecting ``oci`` is the honest way to say
 #: "any OCI runtime" -- it names a standard, and the resolution names the program.
 SELECTABLE = KNOWN_BACKENDS + FAMILIES
-#: What a run falls back to when nothing selects a backend and nothing is detectable on PATH.
-#: Rootless and daemonless, so it is the one an unprivileged user can always invoke -- docker
-#: leads the ``oci`` family but cannot be the last resort, because it needs a daemon and a
-#: root-equivalent group that a login node does not grant.
-DEFAULT_BACKEND = "podman"
 #: Backends launched by WRAPPING the command (``docker run ... image cmd``). Everything outside
 #: this set selects its image by another mechanism and contributes no wrapper prefix.
 EXEC_BACKENDS = ("docker", "podman", "apptainer")
@@ -184,24 +178,18 @@ SPELLINGS, PASSTHROUGH_ENV = load_backends()
 
 
 def resolve_backend(explicit: str | None = None) -> str:
-    """The active container RUNTIME: ``explicit`` arg > ``$HPCAGENT_BENCH_RUNTIME_BACKEND`` >
-    ``config.get("runtime.backend")`` > :data:`DEFAULT_BACKEND`.
+    """The active container RUNTIME: ``explicit`` arg, else ``runtime.backend`` (its env name is
+    ``$HPCAGENT_BENCH_RUNTIME_BACKEND``).
 
     Accepts a family name as well as a runtime name. ``"oci"`` means "whichever OCI runtime this
     machine has", and resolves by probing PATH -- which is what a user selecting an interface
     rather than a program actually wants. The return is always a concrete runtime, so every
     caller downstream keeps working with one.
 
-    The fallback is the ROOTLESS OCI runtime: the shipped artifact is an OCI image, docker needs a
-    daemon and a root-equivalent group, and apptainer/ce need the image converted first. Use
-    :func:`detect_backend` to pick from what is installed. The shell launcher's own
-    ``$HPCAGENT_BENCH_CONTAINER_RUNTIME`` is deliberately not read here."""
-    backend = (
-        explicit
-        or os.environ.get("HPCAGENT_BENCH_RUNTIME_BACKEND")
-        or config.get_str("runtime.backend", DEFAULT_BACKEND)
-        or DEFAULT_BACKEND
-    ).strip()
+    A family resolves to its first member :func:`detect_backend` finds on PATH, else to its first member.
+    The shell launcher's ``$HPCAGENT_BENCH_CONTAINER_RUNTIME`` is not read here. Raises ``ValueError`` for an
+    ``explicit`` name outside :data:`SELECTABLE`."""
+    backend = (explicit or config.current().runtime.backend).strip()
     if backend in FAMILIES:
         members = family_members(backend)
         # A family names the interface, so resolving it must ask the machine which flavour is
@@ -305,7 +293,7 @@ def local_run_command(
     spelling = SPELLINGS[chosen]
     if spelling.kind in ("srun_env", "none"):
         return list(inner)
-    repo = repo_root or str(pathlib.Path.cwd())
+    repo = repo_root or str(paths.repo_root())
     argv: list[str] = [chosen, *spelling.verb, *spelling.gpu.get(hardware, ())]
     for key, value in collect_env(hardware):
         argv += [spelling.env_flag, f"{key}={value}"]

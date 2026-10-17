@@ -43,6 +43,7 @@ __all__ = [
     "credited_protocol",
     "kernel_timeout_s",
     "local_repeat",
+    "mannwhitney_alpha",
     "measurement_baseline",
     "measurement_repeat",
     "parse_cpu_list",
@@ -139,9 +140,8 @@ def quiescence_residual_limit(sample_ns: float) -> float:
     """The largest post-clock re-synchronization that still means "the device was idle": over both the
     floor (``measurement.quiescence.residual_ns``, the sync call's own cost) and the factor
     (``measurement.quiescence.residual_factor``, scaled by the sample) means hidden work."""
-    floor = config.get_float("measurement.quiescence.residual_ns", 0.0)
-    factor = config.get_float("measurement.quiescence.residual_factor", 0.0)
-    return max(floor, factor * max(0.0, float(sample_ns)))
+    gate = config.current().measurement.quiescence
+    return max(gate.residual_ns, gate.residual_factor * max(0.0, float(sample_ns)))
 
 
 def quiescent(residual_ns: float, sample_ns: float) -> bool:
@@ -155,8 +155,8 @@ def clocks_agree(event_ns: float, host_ns: float) -> bool:
     than the events means work escaped the event window. ``measurement.quiescence.divergence_factor``
     is the allowed ratio and ``...divergence_slack_ns`` the constant below which ratios mean nothing.
     Off (always True) at factor 0."""
-    factor = config.get_float("measurement.quiescence.divergence_factor", 0.0)
-    slack = config.get_float("measurement.quiescence.divergence_slack_ns", 0.0)
+    gate = config.current().measurement.quiescence
+    factor, slack = gate.divergence_factor, gate.divergence_slack_ns
     if factor <= 0 or event_ns <= 0:
         return True
     return float(host_ns) <= factor * float(event_ns) + slack
@@ -201,7 +201,7 @@ def pin_threads() -> None:
 
     Turbo and the frequency governor need root, so they are not controlled here (the same-machine ratio
     and the dispersion gate absorb that noise)."""
-    if not config.get("measurement.pin_threads", True):
+    if not config.current().measurement.pin_threads:
         return
     # sched_setaffinity is absent on win32 and darwin; every other platform has it.
     if sys.platform != "win32" and sys.platform != "darwin":
@@ -230,21 +230,21 @@ class ReducedTiming:
 
 
 def kernel_timeout_s() -> float:
-    """The per-kernel run budget in seconds when nothing narrower applies (``timeouts.kernel_s``,
-    default 300; :func:`~hpcagent_bench.harness.scoring.resolve_kernel_timeout` resolves the narrower layers)."""
-    return config.get_float("timeouts.kernel_s", 300)
+    """``timeouts.kernel_s`` (s): the per-kernel run budget when nothing narrower applies
+    (:func:`~hpcagent_bench.harness.scoring.resolve_kernel_timeout` resolves the narrower layers)."""
+    return config.current().timeouts.kernel_s
 
 
 def warmup_count() -> int:
     """Untimed warmup iterations run and discarded before the timed repeats (``measurement.warmup``,
-    default 1; 0 disables), applied to the submission and every baseline alike."""
-    return max(0, config.get_int("measurement.warmup", 1))
+    0 disables), applied to the submission and every baseline alike."""
+    return config.current().measurement.warmup
 
 
 def measurement_repeat() -> int:
-    """Timed repeats per ranked measurement (``measurement.repeat``, default 50), read by every scoring
-    path. Distinct from ``mpi.k_repeats``."""
-    return max(1, config.get_int("measurement.repeat", 50))
+    """``measurement.repeat`` (int >= 1): timed reps per measurement of /profile, /baseline and a promotion's
+    first grade. /submit, /score and grade-under use their protocol's run count instead."""
+    return config.current().measurement.repeat
 
 
 def local_repeat() -> int:
@@ -252,13 +252,13 @@ def local_repeat() -> int:
     (``measurement.local_repeat``), which reduces with :data:`LOCAL_BACKEND` (median of k); a single-node
     ``/score`` is the mw2x5 preview of the final grade (:data:`SCORE_REDUCTION`).
     ``/profile`` and ``/baseline`` keep the ranked count (``/baseline`` advertises the target to beat)."""
-    return max(1, config.get_int("measurement.local_repeat", 5))
+    return config.current().measurement.local_repeat
 
 
 def measurement_baseline() -> str:
-    """The speedup denominator (``measurement.baseline``, default ``"auto"`` = the per-track resolver),
-    read by every scoring path; callers forcing another baseline pass it explicitly."""
-    return config.get_str("measurement.baseline", "auto")
+    """The speedup denominator (``measurement.baseline``; ``"auto"`` = the per-track resolver), read by every
+    scoring path; callers forcing another baseline pass it explicitly."""
+    return config.current().measurement.baseline
 
 
 def sampled_reps[PayloadT](
@@ -368,7 +368,7 @@ def reduce(
         reduced = reduce_mannwhitney_delta(
             candidate_ns,
             baseline_ns,
-            p=config.get_float("measurement.mannwhitney.p", protocols.credited().alpha),
+            p=mannwhitney_alpha(),
         )
     elif chosen == "median_of_k":
         reduced = reduce_median_of_k(candidate_ns, baseline_ns)
@@ -379,28 +379,37 @@ def reduce(
     return reduced
 
 
-def physical_floor_ns(bytes_touched: int, bandwidth_gbps: float | None = None) -> float:
-    """The minimum time (ns) to touch ``bytes_touched`` bytes at ``bandwidth_gbps`` (default
-    ``record.physical_bandwidth_gbps``, a generous upper bound). A faster ``native_ns`` means the kernel
-    did not touch its declared data: the backstop behind :mod:`rep_variation`.
-    ``bytes_touched / bandwidth_gbps`` is already in ns (the 1e9 factors cancel)."""
-    bw = bandwidth_gbps if bandwidth_gbps is not None else config.get_float("record.physical_bandwidth_gbps", 900.0)
-    if bw <= 0 or bytes_touched <= 0:
+def physical_floor_ns(bytes_touched: int, bandwidth_gbps: float) -> float:
+    """Minimum time in ns to touch ``bytes_touched`` bytes at ``bandwidth_gbps`` GB/s; 0.0 when either is <= 0.
+    A faster ``native_ns`` means the kernel did not touch its declared data (the backstop behind
+    :mod:`rep_variation`). ``bytes_touched / bandwidth_gbps`` is already in ns (the 1e9 factors cancel)."""
+    if bandwidth_gbps <= 0 or bytes_touched <= 0:
         return 0.0
-    return bytes_touched / bw
+    return bytes_touched / bandwidth_gbps
 
 
 def active_backend(backend: str | None = None) -> str:
-    """The configured timing backend (``measurement.timing_backend``), or ``backend``. The code default is
-    ``mannwhitney_delta``, matching ``config.yaml`` (``tests/test_config_resolvers.py`` pins both)."""
-    return backend if backend is not None else config.get_str("measurement.timing_backend", "mannwhitney_delta")
+    """``backend``, else ``measurement.timing_backend``. Raises ``ValueError`` when ``backend`` is no key of
+    :data:`REDUCTIONS`."""
+    chosen = backend if backend is not None else config.current().measurement.timing_backend
+    if chosen not in REDUCTIONS:
+        raise ValueError(f"timing backend {chosen!r} is unknown; known: {', '.join(REDUCTIONS)}")
+    return chosen
+
+
+def mannwhitney_alpha() -> float:
+    """Significance level of the Mann-Whitney timing test: ``measurement.mannwhitney.p``, set by a grading
+    scope, else the credited protocol's alpha."""
+    configured = config.current().measurement.mannwhitney.p
+    return configured if configured is not None else protocols.credited().alpha
 
 
 def required_repeat(backend: str | None = None) -> int:
     """Minimum ``repeat`` a backend needs: the protocol's runs a side for ``mannwhitney_delta`` (a grading
     scope sets ``measurement.mannwhitney.repeats``; else the credited protocol's), one for ``min_of_k``."""
     if active_backend(backend) == "mannwhitney_delta":
-        return config.get_int("measurement.mannwhitney.repeats", protocols.credited().repeat or 1)
+        configured = config.current().measurement.mannwhitney.repeats
+        return configured if configured is not None else protocols.credited().repeat or 1
     return 1
 
 

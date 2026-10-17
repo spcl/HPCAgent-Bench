@@ -15,7 +15,6 @@ import re
 import pytest
 
 from hpcagent_bench import cli, config
-from hpcagent_bench.config import AttemptSettings, PromptSettings
 from hpcagent_bench.harness.prompts import PROMPT_VARIANTS, PromptConfig
 
 PROMPTS_DIR = pathlib.Path("hpcagent_bench/harness/prompts")
@@ -42,14 +41,10 @@ def doc_text() -> list[tuple[pathlib.Path, str]]:
     return [(p, p.read_text()) for p in DOCS if p.exists()]
 
 
-def test_every_prompt_config_field_has_a_config_key() -> None:
-    """A field with no config.yaml key cannot be set by a user editing the file."""
-    missing = [f.name for f in dataclasses.fields(PromptConfig) if config.get(f"prompt.{f.name}", "?") == "?"]
-    assert not missing, f"PromptConfig fields absent from config.yaml: {missing}"
-
-
-def test_prompt_config_and_settings_stay_in_lockstep() -> None:
-    assert {f.name for f in dataclasses.fields(PromptConfig)} == {f.name for f in dataclasses.fields(PromptSettings)}
+def test_prompt_config_fields_are_the_prompt_keys() -> None:
+    """A PromptConfig field with no ``prompt.*`` key cannot be configured, and a key with no field is never read."""
+    fields = {f.name for f in dataclasses.fields(PromptConfig)}
+    assert fields | NON_FIELD_PROMPT_KEYS == set(config.Prompt.model_fields)
 
 
 def test_docs_name_no_prompt_key_that_does_not_exist() -> None:
@@ -67,7 +62,7 @@ def test_docs_name_no_prompt_key_that_does_not_exist() -> None:
 
 
 def test_docs_name_no_attempts_key_that_does_not_exist() -> None:
-    fields = {f.name for f in dataclasses.fields(AttemptSettings)}
+    fields = set(config.Attempts.model_fields)
     stale = []
     for path, text in doc_text():
         stale.extend(

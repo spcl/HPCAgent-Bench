@@ -328,7 +328,16 @@ def test_a_lost_candidate_is_named_with_its_reason_on_one_line() -> None:
 def test_a_long_reason_is_cut_to_the_bound() -> None:
     reason = scoring.one_line(RuntimeError("x" * 5000))
     assert len(reason) == scoring.LOST_REASON_CHARS
-    assert reason.endswith("...")
+    assert " ... " in reason
+
+
+def test_a_cut_traceback_keeps_the_exception_that_ends_it() -> None:
+    """A sealed child's traceback is long; its cause is its last line, which the cut must keep."""
+    frames = "".join(f'  File "/opt/hb/seal.py", line {n}, in enter\n    fork_and_relay()\n' for n in range(40))
+    reason = scoring.one_line(RuntimeError(f"Traceback (most recent call last):\n{frames}OSError: [Errno 12] ENOMEM\n"))
+    assert len(reason) == scoring.LOST_REASON_CHARS
+    assert reason.startswith("Traceback (most recent call last):")
+    assert reason.endswith("OSError: [Errno 12] ENOMEM")
 
 
 def test_a_shrunken_race_names_every_lost_candidate_and_why() -> None:
@@ -353,7 +362,12 @@ def test_a_shrunken_race_names_every_lost_candidate_and_why() -> None:
             "c reference build failed: | $ gcc -c k.c | k.c:1: fatal error: fftw3.h",
         ),
         ("", "RuntimeError"),
-        ("x" * 500, "x" * (scoring.LOST_REASON_CHARS - 3) + "..."),
+        (
+            "x" * 500,
+            "x" * scoring.LOST_REASON_HEAD_CHARS
+            + " ... "
+            + "x" * (scoring.LOST_REASON_CHARS - scoring.LOST_REASON_HEAD_CHARS - 5),
+        ),
     ],
 )
 def test_a_lost_candidates_reason_is_one_bounded_line(text: str, want: str) -> None:

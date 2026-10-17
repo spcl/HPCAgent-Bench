@@ -9,10 +9,11 @@ SGLang hands ``--dist-timeout`` to every model-parallel subgroup it creates (par
 tests/test_vllm_pp_serve_args.py does for the vLLM branch.
 """
 
-import pathlib
 import re
 
-SCRIPT = pathlib.Path(__file__).resolve().parents[1] / "hpcagent_bench/cluster/run_cluster.sh"
+from hpcagent_bench import paths
+
+SCRIPT = paths.ROOT / "hpcagent_bench/cluster/run_cluster.sh"
 # The SGLang pipeline branch: the multi-node, non-replica `if` inside the sglang engine branch.
 PP_BRANCH = re.compile(
     r'^(\s*)if \[\[ "\$\{INFERENCE_MODE\}" != "replicas" \]\] && \(\( INFERENCE_NODES > 1 \)\); then$(.*?)^\1fi$',

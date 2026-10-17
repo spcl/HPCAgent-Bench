@@ -23,6 +23,7 @@ from urllib.parse import urlparse
 
 import pytest
 
+from hpcagent_bench import paths
 from tests.fresh_module import fresh
 from tests.optional_imports import import_or_skip
 
@@ -380,7 +381,7 @@ def test_the_read_relay_leaves_other_methods_answered_by_the_router(
 #: static prefix up to the first path parameter or the whole literal for a route with none. This is
 #: the class of bug ``/canonical_parallel_form`` was: a tool calling a path this router never
 #: declared a handler for, forwarded to a 404 the agent cannot recover from.
-TOOLS_DIR = pathlib.Path(__file__).resolve().parents[1] / "agent" / "hpcagent_agent" / "tools"
+TOOLS_DIR = paths.ROOT / "agent" / "hpcagent_agent" / "tools"
 JUDGE_CALL_PATTERN = re.compile(r'(get|post)_judge\(\s*\n?\s*f?"(/[^"{]*)')
 
 

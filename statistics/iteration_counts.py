@@ -12,8 +12,7 @@ profile before optimizing? how many scores before a submit?).
 
 A TURN is a distinct ``message.id``, not an assistant EVENT: the CLI emits one assistant event per
 content BLOCK, so a turn that thinks and then calls a tool arrives as two events sharing one id
-(measured on run 586713: 80 assistant events, 40 ids, and the run's own ``result`` event reports 41
-turns). Counting events would roughly double every number in the CSV.
+(one recorded run: 80 assistant events, 40 ids, and the run's own ``result`` event reports 41 turns). Counting events would roughly double every number in the CSV.
 
 The terminal ``result`` event carries the CLI's own verdict, recorded as ``num_turns_reported`` and
 ``outcome`` (``success`` / ``error_max_turns`` / ...). Both are EMPTY when the log has no result
@@ -86,7 +85,7 @@ def fold_events(lines: Iterable[str]) -> dict[str, object] | None:
     """Fold a transcript's lines into its counts, or ``None`` when it is not stream-json at all.
 
     Folded as the lines arrive: a transcript is megabytes of ``system`` events (2.3 MB and 11k lines
-    for one 55-minute agent on run 586713) and there are hundreds of them per run, so neither the
+    for one 55-minute agent) and there are hundreds of them per run, so neither the
     text nor the event list is ever held.
 
     A file is text mode only when NO line in it parses as a JSON object carrying a ``type`` key.

@@ -82,9 +82,18 @@ runs:
           fi
           sleep $((attempt * 10))
         done
-        sudo apt-get update
-        sudo apt-get install -y "gcc-${GCC_MAJOR}" "g++-${GCC_MAJOR}" "gfortran-${GCC_MAJOR}" \
-          "libstdc++-${GCC_MAJOR}-dev"
+        # The PPA intermittently answers 503 or times out; apt keeps the debs it already fetched,
+        # so a retry only downloads the missing ones.
+        for attempt in 1 2 3 4 5; do
+          sudo apt-get update
+          sudo apt-get install -y -o Acquire::Retries=5 "gcc-${GCC_MAJOR}" "g++-${GCC_MAJOR}" \
+            "gfortran-${GCC_MAJOR}" "libstdc++-${GCC_MAJOR}-dev" && break
+          if [ "$attempt" = 5 ]; then
+            echo "::error::installing GCC ${GCC_MAJOR} from the PPA failed 5 times"
+            exit 1
+          fi
+          sleep $((attempt * 30))
+        done
         # compilers.yaml, dace and CMake all name the drivers unversioned (dace falls back to `c++`).
         for driver in gcc g++ gfortran; do
           sudo ln -sf "/usr/bin/${driver}-${GCC_MAJOR}" "/usr/local/bin/${driver}"
@@ -115,8 +124,16 @@ runs:
         codename=$(lsb_release -cs)
         echo "deb http://apt.llvm.org/${codename}/ llvm-toolchain-${codename}-${LLVM_MAJOR} main" \
           | sudo tee /etc/apt/sources.list.d/llvm.list > /dev/null
-        sudo apt-get update
-        sudo apt-get install -y "clang-${LLVM_MAJOR}" "flang-${LLVM_MAJOR}" "libomp-${LLVM_MAJOR}-dev"
+        for attempt in 1 2 3; do
+          sudo apt-get update
+          sudo apt-get install -y -o Acquire::Retries=5 "clang-${LLVM_MAJOR}" "flang-${LLVM_MAJOR}" \
+            "libomp-${LLVM_MAJOR}-dev" && break
+          if [ "$attempt" = 3 ]; then
+            echo "::error::installing LLVM ${LLVM_MAJOR} from apt.llvm.org failed 3 times"
+            exit 1
+          fi
+          sleep $((attempt * 30))
+        done
         for driver in clang clang++ flang; do
           sudo ln -sf "/usr/bin/${driver}-${LLVM_MAJOR}" "/usr/local/bin/${driver}"
         done

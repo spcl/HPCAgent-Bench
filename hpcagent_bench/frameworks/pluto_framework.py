@@ -15,11 +15,12 @@ A third: this is the only column whose tool can accept a kernel and silently ret
 for it, so it is the only one that asks the numerical oracle for a verdict before it will be timed
 (:meth:`PlutoFramework.measure`)."""
 
-import json
+import os
 from collections.abc import Callable, Sequence
 
-from hpcagent_bench import pluto_transform
-from hpcagent_bench.frameworks import Benchmark, native_runtime
+from hpcagent_bench import pluto_transform, polygeist_transform
+from hpcagent_bench.columns import FRAMEWORKS
+from hpcagent_bench.frameworks import Benchmark
 from hpcagent_bench.frameworks.errors import NotSupportedByFramework
 from hpcagent_bench.frameworks.framework import (
     AnyArray,
@@ -36,7 +37,8 @@ from hpcagent_bench.frameworks.framework import (
     stop_cupy_event_timer,
 )
 from hpcagent_bench.frameworks.native_framework import NativeFramework
-from hpcagent_bench.spec import as_block, as_list
+from hpcagent_bench.translators.numpyto_c.bindings import read_binding
+
 
 __all__ = ["DEVICE_RESIDENT_COLUMN", "PlutoFramework"]
 
@@ -56,6 +58,10 @@ class PlutoFramework(NativeFramework):
         #: Kernel :meth:`measure` gates on, stamped by :meth:`build_call` -- ``measure``'s signature
         #: carries no benchmark and the gate needs a name to ask the oracle about.
         self.gate_kernel: str = ""
+        meta = FRAMEWORKS.entries[fname]
+        if meta.get("transform") == "polygeist" and meta["arch"] == "gpu":
+            # Read once, when HSA initializes: set before anything in this process touches the GPU.
+            os.environ.update(polygeist_transform.run_env())
 
     def build_call(self, bench: Benchmark, impl: KernelImpl, bdata: BenchData) -> CallPlan:
         """The base plan, plus the kernel name :meth:`measure` needs; the last hook before timing
@@ -123,10 +129,10 @@ class PlutoFramework(NativeFramework):
         ``assert_affine`` cannot.
 
         The verdict is POLYCC's, so only the column that compiles polycc's output asks for it. The
-        PPCG columns share this class but not that toolchain; they keep the harness's own
+        PPCG and Polygeist columns share this class but not that toolchain; they keep the harness's own
         ``--validate`` against the NumPy reference.
         """
-        if self.fname not in native_runtime.PPCG_FRAMEWORKS:
+        if FRAMEWORKS.entries[self.fname].get("transform") == "pluto":
             pluto_transform.assert_numeric_agreement(self.gate_kernel)
         return super().measure(impl, runner, repeat, before_each=before_each, warmup=warmup)
 
@@ -184,7 +190,7 @@ class PlutoFramework(NativeFramework):
         """
         paths = sorted(self._cpp_backend(bench).glob(f"{self._native_base(bench)}_fp*_pluto_binding.json"))
         for path in paths:
-            args = as_list(as_block(json.loads(path.read_text())).get("args"))
+            args = read_binding(path).args
             if args:
-                return [str(as_block(a)["name"]) for a in args]
+                return [arg.name for arg in args]
         return None

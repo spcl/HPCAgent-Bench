@@ -11,22 +11,26 @@ task rows and every statistic downstream (:mod:`hpcagent_bench.stats.population`
 import argparse
 import dataclasses
 import functools
-import math
 import pathlib
+from typing import Annotated
 
 import pandas as pd  # pyright: ignore[reportMissingTypeStubs] -- pandas ships none
+import pydantic
 import yaml
 
+from hpcagent_bench import paths
 from hpcagent_bench.stats.population import EPISODE_RECORD
 
 __all__ = [
     "COMPONENT_COLUMNS",
     "COST_MODELS",
     "DEFAULT_COST_MODEL",
-    "WEIGHTS",
+    "CARDS_ADAPTER",
+    "CostCard",
     "CostModel",
+    "Weight",
     "add_arguments",
-    "card_of",
+    "cost_model",
     "components",
     "inline_card",
     "load_cards",
@@ -36,16 +40,13 @@ __all__ = [
 ]
 
 #: The shipped cards.
-COST_MODELS = pathlib.Path(__file__).resolve().parents[1] / "envs" / "cost_models.yaml"
+COST_MODELS = paths.ENVS_DIR / "cost_models.yaml"
 
 #: The card a figure prices with when none is named: the paper's default reading, cache reads at 0.1.
 DEFAULT_COST_MODEL: str = "billed"
 
-#: The weight names a card declares, in the order an inline spec may give them.
-WEIGHTS: tuple[str, ...] = ("fresh_input", "cached_input", "output")
-
 #: The observations columns holding each weighted component of a task's final attempt, in
-#: :data:`WEIGHTS` order. Recorded as components, not recovered by subtraction: ``tokens_billed``
+#: :class:`CostCard` weight order. Recorded as components, not recovered by subtraction: ``tokens_billed``
 #: sums per-turn usage and does not equal fresh + cached + output.
 COMPONENT_COLUMNS: tuple[str, ...] = ("tokens_fresh_input", "tokens_cached_input", "tokens_output")
 
@@ -61,29 +62,37 @@ class CostModel:
     output: float
 
 
-def card_of(key: str, block: object, source: str) -> CostModel:
-    """One YAML block as a :class:`CostModel`; every weight is required and finite and >= 0."""
-    if not isinstance(block, dict):
-        raise ValueError(f"{source}: cost model {key!r} is not a mapping")
-    weights: dict[str, float] = {}
-    for weight in WEIGHTS:
-        value = block.get(weight)
-        if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value) or value < 0:
-            raise ValueError(f"{source}: cost model {key!r} needs a finite, non-negative {weight}, got {value!r}")
-        weights[weight] = float(value)
-    unknown = sorted(set(block) - {"name", *WEIGHTS})
-    if unknown:
-        raise ValueError(f"{source}: cost model {key!r} has unknown field(s) {unknown}")
-    name = block.get("name", key)
-    return CostModel(key, str(name), weights["fresh_input"], weights["cached_input"], weights["output"])
+#: One weight: a finite, non-negative number (a YAML ``true`` is not one).
+Weight = Annotated[float, pydantic.Strict(), pydantic.Field(ge=0, allow_inf_nan=False)]
+
+
+class CostCard(pydantic.BaseModel):
+    """One card as a cost-model file writes it: an optional display name and every weight."""
+
+    model_config = pydantic.ConfigDict(extra="forbid", frozen=True)
+
+    name: str = ""
+    fresh_input: Weight
+    cached_input: Weight
+    output: Weight
+
+
+#: A cost-model file: card name -> card.
+CARDS_ADAPTER: pydantic.TypeAdapter[dict[str, CostCard]] = pydantic.TypeAdapter(dict[str, CostCard])
+
+
+def cost_model(key: str, card: CostCard) -> CostModel:
+    """``card`` under ``key``, named by its key when it carries no name."""
+    return CostModel(key, card.name or key, card.fresh_input, card.cached_input, card.output)
 
 
 def load_cards(path: pathlib.Path) -> dict[str, CostModel]:
     """Every card in one YAML file, keyed as written."""
-    raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    if not isinstance(raw, dict):
-        raise ValueError(f"{path}: a cost-model file is a mapping of card name to weights")
-    return {str(key): card_of(str(key), block, str(path)) for key, block in raw.items()}
+    try:
+        cards = CARDS_ADAPTER.validate_python(yaml.safe_load(path.read_text(encoding="utf-8")) or {})
+    except pydantic.ValidationError as exc:
+        raise ValueError(f"{path}: {exc}") from exc
+    return {key: cost_model(key, card) for key, card in cards.items()}
 
 
 @functools.lru_cache(maxsize=1, typed=True)
@@ -103,7 +112,10 @@ def inline_card(spec: str) -> CostModel:
             block[name.strip()] = float(value)
         except ValueError as exc:
             raise ValueError(f"inline cost model {spec!r}: {value!r} is not a number") from exc
-    return card_of(spec, block, "inline")
+    try:
+        return cost_model(spec, CostCard.model_validate(block))
+    except pydantic.ValidationError as exc:
+        raise ValueError(f"inline cost model {spec!r}: {exc}") from exc
 
 
 def resolve(spec: str = DEFAULT_COST_MODEL, extra: pathlib.Path | None = None) -> CostModel:
@@ -140,18 +152,20 @@ def components(frame: pd.DataFrame) -> tuple[pd.Series, pd.Series, pd.Series]:
 def priced(frame: pd.DataFrame, model: CostModel) -> pd.DataFrame:
     """``frame`` with every task row's ``tokens`` replaced by ``model``'s cost of its components.
 
-    The shipped ``effective`` card, or a frame with no ``tokens`` column, is returned unchanged. A
+    The shipped ``effective`` card, a frame with no ``tokens`` column, or one with no task row, is returned unchanged. A
     card that weights a component the frame does not carry raises rather than pricing at a wrong
     number. A non-task row (a judge call's running count) keeps its own ``tokens``.
     """
     if (model.fresh_input, model.cached_input, model.output) == (1.0, 0.0, 1.0) or "tokens" not in frame.columns:
+        return frame
+    task = (
+        frame["row_kind"].astype(str) == EPISODE_RECORD if "row_kind" in frame.columns else pd.Series(True, frame.index)
+    )
+    if not task.any():  # no task row to price (a frame of judge calls only)
         return frame
     needed = [column for column in COMPONENT_COLUMNS if column not in frame.columns]
     if needed:
         raise ValueError(f"cost model {model.key!r} needs column(s) {needed}; re-extract the observations")
     fresh, cached, output = components(frame)
     cost = model.fresh_input * fresh + model.cached_input * cached + model.output * output
-    task = (
-        frame["row_kind"].astype(str) == EPISODE_RECORD if "row_kind" in frame.columns else pd.Series(True, frame.index)
-    )
     return frame.assign(tokens=cost.where(task, frame["tokens"]))

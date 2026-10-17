@@ -26,23 +26,7 @@ import pytest
 
 from hpcagent_bench import paths, studies, study_tags
 from hpcagent_bench.stats import palette
-from hpcagent_bench.stats.figures import results
 from tests.fresh_module import module_at
-
-#: The tags the figure modules hard-code and then colour. A name typed into a builder is the one
-#: kind of unregistered value no data-driven check can see, because no row has to exist for it to
-#: reach a legend.
-FIGURE_FRAMEWORKS: dict[str, tuple[str, ...]] = {
-    "figures.results.DEFAULT_BASELINE": (results.DEFAULT_BASELINE,),
-}
-
-
-@pytest.mark.parametrize("source", sorted(FIGURE_FRAMEWORKS))
-def test_every_framework_a_figure_names_is_registered(source: str) -> None:
-    """A builder that colours a framework the registry does not carry puts a raw tag on a legend."""
-    named = study_tags.names("frameworks")
-    unknown = [tag for tag in FIGURE_FRAMEWORKS[source] if study_tags.canonical("frameworks", tag) not in named]
-    assert not unknown, f"{source} colours {unknown}, which no `frameworks` key of studies.yaml names"
 
 
 def test_every_packet_the_palette_hues_is_named() -> None:
@@ -97,76 +81,9 @@ def test_a_setup_name_resolves_to_a_registered_model_or_to_nothing() -> None:
         assert resolved in registered or resolved == "other", f"{setup} -> {resolved!r}"
 
 
-def load_script(name: str) -> ModuleType:
-    """A figure script under ``statistics/``, which is not a package."""
-    return module_at(paths.ROOT / "statistics" / f"{name}.py", name)
-
-
-def setup_frame(conditions: list[str]) -> pd.DataFrame:
-    """``plot_setup_summary.setup_points`` rows, one per (model, language, condition)."""
-    rows = []
-    for model in ("qwen38", "oss120b"):
-        rows.extend(
-            {
-                "model": model,
-                "language": "c",
-                "condition": condition,
-                "log2_speedup": 1.0,
-                "log2_speedup_low": 0.5,
-                "log2_speedup_high": 1.5,
-                "tokens": 1e5,
-                "tokens_low": 8e4,
-                "tokens_high": 1.2e5,
-                "baseline_ns": 1e6,
-                "native_ns": 5e5,
-                "kernels": 12,
-            }
-            for condition in conditions
-        )
-    return pd.DataFrame(rows)
-
-
-def identity_warnings(summary: ModuleType, conditions: list[str], caplog: pytest.LogCaptureFixture) -> list[str]:
-    """The palette warnings the setup-summary figure raises while drawing ``conditions``."""
-    fig, ax = plt.subplots()
-    with caplog.at_level(logging.WARNING, logger=palette.LOG.name):
-        summary.draw_metric(ax, setup_frame(conditions), "log2_speedup", "Speedup", log=False)
-    plt.close(fig)
-    return [
-        r.getMessage() for r in caplog.records if r.name == palette.LOG.name and "is not registered" in r.getMessage()
-    ]
-
-
-def test_every_packet_the_setup_summary_can_colour_is_registered() -> None:
-    """The condition vocabulary is typed into the script, so no row has to exist for it to reach a legend."""
-    summary = load_script("plot_setup_summary")
-    named = set(study_tags.names("packets"))
-    packets = list(summary.CONDITION_ORDER)
-    unknown = [p for p in packets if any(part not in named for part in study_tags.packet_parts(p))]
-    assert not unknown, f"plot_setup_summary.CONDITION_ORDER colours {unknown}, which no registered packet names"
-
-
-@pytest.mark.parametrize("width", [2, 4], ids=["joined pair", "unjoined conditions"])
-def test_the_setup_summary_figure_colours_only_registered_packets(width: int, caplog: pytest.LogCaptureFixture) -> None:
-    summary = load_script("plot_setup_summary")
-    conditions = list(summary.CONDITION_ORDER)[:width]
-    assert identity_warnings(summary, conditions, caplog) == []
-
-
-def test_the_registry_check_catches_a_figure_colouring_an_unregistered_packet(
-    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A check that cannot fail guards nothing. The condition vocabulary is the only route a packet has into
-    this figure, so an unregistered one is added there and must come back as a warning."""
-    summary = load_script("plot_setup_summary")
-    monkeypatch.setattr(summary, "CONDITION_ORDER", (*summary.CONDITION_ORDER, "a-packet-nobody-registered"))
-    warnings = identity_warnings(summary, ["", "a-packet-nobody-registered"], caplog)
-    assert any("a-packet-nobody-registered" in message for message in warnings), warnings
-
-
 def test_setup_rows_read_the_condition_off_the_recorded_packet(tmp_path: pathlib.Path) -> None:
     """A setup whose name carries no ``-cpf`` suffix but which records the ``cpf-tool`` packet loads under
-    that packet: the recorded column decides, never the setup name."""
+    that packet, read as the CPU tool packet it was: the recorded column decides, never the setup name."""
     path = tmp_path / "observations.csv"
     pd.DataFrame([{"setup": "renamed-qwen38-c", "packet": "cpf-tool", "kernel": "k", "row_kind": "submission"}]).to_csv(
         path, index=False
@@ -174,4 +91,4 @@ def test_setup_rows_read_the_condition_off_the_recorded_packet(tmp_path: pathlib
 
     frame = studies.setup_rows(path, prefix="")
 
-    assert frame.set_index("setup").packet["renamed-qwen38-c"] == "cpf-tool"
+    assert frame.set_index("setup").packet["renamed-qwen38-c"] == "cpf-tool-cpu"

@@ -1,0 +1,1 @@
+{"reward": 1.0, "solved": false, "error": "ValueError: anchor takes source OR library, not both", "kernel": "jacobi_2d"}

@@ -60,9 +60,9 @@ helpers/scripts/do_dataset_release.sh [--out DIR] [--selector SEL] [--push ORG/N
 ```
 
 The validated folder written to `--out` is exactly what `--push` uploads. `tests/test_hf_export.py`
-fails CI when a kernel stops exporting. The `hf-export` step in `.github/workflows/tests.yml` uploads the parquet
-file on every run and pushes to `vars.HF_DATASET_REPO` on a push to `main` once unit and
-integration jobs are green.
+fails CI when a kernel stops exporting. The `coverage` job of `.github/workflows/tests.yml` builds the dataset on
+every run, uploads it as a workflow artifact, and pushes it to `vars.HF_DATASET_REPO` on a push to `main` once the
+unit, integration and translators jobs are green.
 
 ## Harbor adapter
 
@@ -72,7 +72,13 @@ wrapper. Commands, flags, the task directory layout, `--group dir` and `--layout
 [adapters/hpcagent_bench/README.md](../adapters/hpcagent_bench/README.md). Harbor needs its own
 environment (the `harbor` dependency group), never the judge's.
 
-`--hardware` selects `config.yaml` `images.<hw>`, fully qualified references into the release
+The grader writes two files: `reward.json`, the flat numbers Harbor reads, and `grade.json` beside it, the
+full grade. `hpcagent_bench/harbor_grade.py` models `grade.json`: one record per shape (a single-node grade, a
+distributed grade with its scaling curve, a failed item, a multi-kernel bundle), each with the repo task's PR
+verdict where it applies. External tooling reads the file, so its bytes are fixed
+(`tests/test_harbor_grade.py`).
+
+`--hardware` selects config `images.<hw>`, fully qualified references into the release
 registry, the one place they are written (`containers/images/images.env` must publish the same
 tags; `tests/test_harbor_images.py`):
 

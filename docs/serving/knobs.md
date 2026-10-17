@@ -87,8 +87,8 @@ and serialises builders on the lock. A lock older than an hour is removed at lau
 never breaks a lock held by another host. `GPU_ARCHS` is the node's arch, so a serve-time build
 compiles one arch.
 
-**Cold boot.** The warmup request can now take 1800 s (`SGLANG_WARMUP_TIMEOUT`, 600 s unset), inside
-every model layer's readiness wait. To pay the compile once, outside an experiment:
+**Cold boot.** `run_cluster.sh` sets `SGLANG_WARMUP_TIMEOUT=1800` (SGLang default 600 s); the warmup request
+compiles a cold aiter cache inside every model layer's readiness wait. To pay the compile once, outside an experiment:
 
 ```bash
 PREWARM=1 MODEL=qwen38 hpcagent_bench/cluster/serve-only.sbatch

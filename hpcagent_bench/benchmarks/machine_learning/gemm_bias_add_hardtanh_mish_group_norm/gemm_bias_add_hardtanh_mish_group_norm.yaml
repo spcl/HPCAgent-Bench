@@ -38,3 +38,6 @@ args:
   hardtanh_min_val: -1.0
   hardtanh_max_val: 1.0
   groupnorm_eps: 1.0e-05
+public:
+  negative:
+    hardtanh_min_val: "the lower hardtanh bound"

@@ -36,7 +36,7 @@ on:
   push:
     branches: [ main, extended, ci-fix ]
   pull_request:
-    branches: [ main, extended, ci-fix ]
+    branches: [ main, extended, ci-fix, "release-*" ]
   merge_group:
     branches: [ main, extended, ci-fix ]
   workflow_dispatch:
@@ -55,8 +55,9 @@ on:
         type: string
         default: amd or rocm or judge_image or ppcg
 
+# Keyed by branch: a push to a release branch and its PR to main share one group, so only the newest run survives.
 concurrency:
-  group: ${{github.workflow}}-${{github.ref}}
+  group: ${{github.workflow}}-${{github.head_ref || github.ref_name}}
   cancel-in-progress: true
 
 jobs:

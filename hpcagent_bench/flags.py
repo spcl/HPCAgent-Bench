@@ -72,6 +72,7 @@ __all__ = [
     "OPT_LEVEL",
     "PAPI_RANGES_H",
     "PLUTO_PAR",
+    "POLYGEIST_PAR",
     "POLLY_OUTLINE_PATTERN",
     "POLLY_PAR",
     "PYTHRAN_BASELINE",
@@ -137,9 +138,9 @@ _FP_RELAX = "-fno-math-errno -fno-trapping-math -fno-signed-zeros"
 #: the oracle already does) and nothing else of -ffast-math. Pinned because gfortran reassociates at
 #: _FP_RELAX alone while gcc (C), clang and flang do not; GCC ignores it without _FP_RELAX beside it.
 #: OFF by default (``flags.fp_associative``): it moves the baseline every speedup is a ratio against,
-#: so an experiment sets it for all of its waves or none. Read at import through :func:`config.get` or
-#: ``$HPCAGENT_BENCH_FLAGS_FP_ASSOCIATIVE=1``; ``config.set_override`` comes too late to change it.
-_FP_ASSOC = "-fassociative-math" if config.get("flags.fp_associative", False) else ""
+#: so an experiment sets it for all of its waves or none. Read once, at import of this module: a later
+#: ``config.set_override`` or ``config.scoped_environment`` does not change the flag strings below.
+_FP_ASSOC = "-fassociative-math" if config.current().flags.fp_associative else ""
 
 #: FP contraction pinned to ``fast``: gcc defaults to it, clang to ``on`` (one expression only),
 #: so unpinned compiler columns, and a DaCe kernel that splits an expression across statements, would
@@ -224,7 +225,10 @@ DEBUG_SYMBOLS: list[str] = ["-g"]
 #: matrix so no framework string-literals them. ``-DUSE_XSIMD`` selects pythran's xsimd vector
 #: backend; the rest match the CPU baseline, with NO ``-ffast-math``. ``_VECLIB_GCC`` rather than
 #: ``_VECLIB_CLANG``: the decl header is accepted by gcc AND clang, ``-fveclib`` by clang only.
-PYTHRAN_BASELINE = f"-DUSE_XSIMD -fopenmp {ARCH_NATIVE} {_FP_RELAX} {_FP_ASSOC} {_FP_CONTRACT} -fPIC{_VECLIB_GCC}"
+#: The pythran CLI takes the header after a bare ``-include`` for a second input file and dies ("Unsupported file
+#: extension: '.h'", pythran 0.18), so it travels as one ``-Wp,`` token: the same -include, given to the preprocessor.
+_VECLIB_PYTHRAN = f" -Wp,-include,{VECMATH_H}" if osinfo.IS_LINUX else ""
+PYTHRAN_BASELINE = f"-DUSE_XSIMD -fopenmp {ARCH_NATIVE} {_FP_RELAX} {_FP_ASSOC} {_FP_CONTRACT} -fPIC{_VECLIB_PYTHRAN}"
 
 #: LLVM Fortran (``flang`` / ``flang-new``) baseline, the Fortran companion to ``CPU_BASELINE_CLANG``
 #: (no fast-math). flang rejects ``-fno-math-errno`` (a no-op for Fortran intrinsics) and has no
@@ -318,6 +322,10 @@ PLUTO_PAR = "-fopenmp"
 #: swapped for the one that works (see :data:`PLUTO_PAR`). Written as a substitution rather than
 #: a second literal so the two baselines cannot drift in any flag EXCEPT the one that must differ.
 CPU_BASELINE_CLANG_PLUTO = CPU_BASELINE_CLANG.replace(_OPENMP_CLANG, PLUTO_PAR)
+
+#: The Polygeist CPU column's OpenMP: its LLVM IR already calls LLVM's OpenMP runtime (``__kmpc_*``), so only the
+#: link needs it. See hpcagent_bench/polygeist_transform.py.
+POLYGEIST_PAR = _OPENMP_CLANG
 
 #: NVHPC pure-source CPU auto-parallelization (analogue of GCC ``-ftree-parallelize-loops``).
 NVHPC_CONCUR = "-Mconcur"
@@ -770,7 +778,7 @@ def detect_gfx() -> str:
 
 def thread_stack_bytes() -> int:
     """Stack each OpenMP thread of a timed run gets: ``limits.thread_stack_mb``."""
-    return config.get_int("limits.thread_stack_mb", 512) * BYTES_PER_MIB
+    return config.current().limits.thread_stack_mb * BYTES_PER_MIB
 
 
 def cpus_owned() -> int:

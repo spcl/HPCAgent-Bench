@@ -14,6 +14,8 @@
 # No core dumps: they land in the CWD on an inode-quota filesystem.
 ulimit -c 0
 CE_IMAGES_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# The checkout root (the build context); every repo path below is relative to it.
+CE_REPO_DIR="$(cd -- "${CE_IMAGES_DIR}/../.." && pwd)"
 # shellcheck source=images.env
 [[ -n "${CE_IMAGE_TABLE:-}" ]] || source "${CE_IMAGES_DIR}/images.env"
 CE_BUILD_CACHE="${CE_BUILD_CACHE:-1}"
@@ -56,13 +58,15 @@ ce_podman_env() {
 }
 
 # CE_LAYER_CACHE=1: a registry (distribution v3) on 127.0.0.1:CE_LAYER_PORT over
-# ${SCRATCH}/.hpcagentbench-cache/container-layers, which ce_build passes as --cache-from/--cache-to. The node's
+# ${JIT_CACHE_ROOT}/container-layers (helpers/scripts/cache_env.sh), which ce_build passes as --cache-from/--cache-to. The node's
 # layer store under CE_TMPFS is wiped when the job ends (daint /dev/shm), so without it every build redoes every
 # step. Sets CE_LAYER_REPO; the registry binary is fetched once into the cache's tools/, checksum-pinned.
 ce_layer_registry() {
     CE_LAYER_REPO=""
     [[ "${CE_LAYER_CACHE}" == 1 && "${CE_BUILD_CACHE}" == 1 ]] || return 0
-    local root="${JIT_CACHE_ROOT:-${SCRATCH:?}/.hpcagentbench-cache}" arch sum staging
+    # shellcheck source=../../helpers/scripts/cache_env.sh
+    [[ -n "${JIT_CACHE_ROOT:-}" ]] || . "${CE_REPO_DIR}/helpers/scripts/cache_env.sh"
+    local root="${JIT_CACHE_ROOT}" arch sum staging
     local tools="${root}/tools/registry-3.0.0" store="${root}/container-layers" conf="${CE_TMPFS}/layer-registry.yml"
     case "$(uname -m)" in
         aarch64) arch=arm64 sum=6c2ee1d135626fa42e0d6fb66a0e0f42e22439e5050087d04f4c5ff53655892e ;;
@@ -282,7 +286,7 @@ ce_cache_base_image() {
 ce_build_fingerprint() {
     local dockerfile="$1" target="$2" context prefix
     shift 2
-    context="$(cd -- "${CE_IMAGES_DIR}/../.." && pwd)"
+    context="${CE_REPO_DIR}"
     # Instructions are matched uppercase at the line start: heredoc Python has `from` lines too.
     prefix="$(awk -v t="${target}" '/^FROM[[:space:]]/ && done {exit}
         {print}
@@ -420,24 +424,28 @@ ce_build() {
                    --cache-to "${CE_LAYER_REPO}/$(basename "$(dirname "${dockerfile}")")")
     printf '\n===== building %s -> %s =====\n' "${target:-${tag}}" "${out}"
     # cgroupfs: with the systemd manager a dying logind session reaps podman mid-pull (silent rc=1).
-    (cd -- "${CE_IMAGES_DIR}/../.." && podman --cgroup-manager=cgroupfs build "${CE_BUILD_FLAGS[@]}" "$@" \
+    (cd -- "${CE_REPO_DIR}" && podman --cgroup-manager=cgroupfs build "${CE_BUILD_FLAGS[@]}" "$@" \
         --build-arg "BASE_IMAGE=${BASE_IMAGE}" \
         --build-arg "BASE_IMAGE_REF=${BASE_IMAGE_REF:-${BASE_IMAGE}}" \
         "${extra[@]}" -f "${dockerfile}" -t "${tag}" .)
     ce_export_image "${tag}" "${out}"
 }
 
-# ce_refuse_mounted <sqsh>...: return 2 when an EDF in ~/.edf mounts one of the paths. Overwriting a
+# ce_refuse_mounted <sqsh>...: return 2 when an EDF in the first EDF_PATH directory (helpers/scripts/site_env.sh)
+# mounts one of the paths. Overwriting a
 # mounted squashfs is how a running job starts reading a half-written inode table; the EDFs, not a
 # hard-coded name, are what a job resolves. Build to a candidate name and promote by rename.
 ce_refuse_mounted() {
-    local mounted sqsh
-    mounted="$(grep -hoE '^[[:space:]]*image[[:space:]]*=[[:space:]]*"[^"]+"' "${HOME}/.edf"/*.toml 2>/dev/null \
+    local mounted sqsh edf_dir
+    # shellcheck source=../../helpers/scripts/site_env.sh
+    [[ -n "${EDF_PATH:-}" ]] || . "${CE_REPO_DIR}/helpers/scripts/site_env.sh"
+    edf_dir="${EDF_PATH%%:*}"
+    mounted="$(grep -hoE '^[[:space:]]*image[[:space:]]*=[[:space:]]*"[^"]+"' "${edf_dir}"/*.toml 2>/dev/null \
         | sed -E 's/.*"(.*)"/\1/' | sed -E "s|\\\$\\{SCRATCH\\}|${SCRATCH:-}|g; s|\\\$SCRATCH|${SCRATCH:-}|g")" || true
     for sqsh in "$@"; do
         [[ -n "${sqsh}" ]] || continue
         if grep -qxF -- "${sqsh}" <<<"${mounted}"; then
-            echo "refusing to overwrite ${sqsh}: an EDF in ${HOME}/.edf mounts it, so a running job" >&2
+            echo "refusing to overwrite ${sqsh}: an EDF in ${edf_dir} mounts it, so a running job" >&2
             echo "would read a half-written squashfs. Build to a candidate name and promote by rename." >&2
             return 2
         fi
@@ -535,8 +543,8 @@ ce_build_args() {
 # mirror must hold for the build's launch gate (the image carries neither; a job installs them,
 # containers/images/lib/launch_venv.sh).
 ce_pin_commits() {
-    DACE_COMMIT="$("${CE_IMAGES_DIR}/../../helpers/scripts/pins.sh" dace)"
-    RELAYOUT_COMMIT="$("${CE_IMAGES_DIR}/../../helpers/scripts/pins.sh" relayout)"
+    DACE_COMMIT="$("${CE_REPO_DIR}/helpers/scripts/pins.sh" dace)"
+    RELAYOUT_COMMIT="$("${CE_REPO_DIR}/helpers/scripts/pins.sh" relayout)"
     [[ "${DACE_COMMIT}" =~ ^[0-9a-f]{40}$ ]] || { echo "could not resolve spcl/dace@${DACE_COMMIT}" >&2; return 2; }
     [[ "${RELAYOUT_COMMIT}" =~ ^[0-9a-f]{40}$ ]] || { echo "could not resolve relayout@${RELAYOUT_COMMIT}" >&2; return 2; }
     export DACE_COMMIT RELAYOUT_COMMIT
@@ -573,7 +581,7 @@ ce_march() {
 # Fails fast when the KernelBench submodule is not checked out: the judge stage COPYs it, which would
 # otherwise fail only after the agent stage's hours.
 ce_require_kernelbench() {
-    [[ -d "${CE_IMAGES_DIR}/../../third_party/KernelBench/KernelBench" ]] && return 0
+    [[ -d "${CE_REPO_DIR}/third_party/KernelBench/KernelBench" ]] && return 0
     echo "third_party/KernelBench is empty; run: git submodule update --init third_party/KernelBench" >&2
     return 2
 }
@@ -593,7 +601,7 @@ ce_render_edf() {
     shift 3
     [[ $# -eq 0 ]] || shift
     # shellcheck source=../../helpers/scripts/cache_env.sh
-    . "${CE_IMAGES_DIR}/../../helpers/scripts/cache_env.sh"
+    . "${CE_REPO_DIR}/helpers/scripts/cache_env.sh"
     mounts="$(hpcagent_bench_edf_mounts)"
     local mount
     for mount in "$@"; do mounts+=", \"${mount}\""; done
@@ -609,7 +617,7 @@ ce_render_edf() {
         preload_edit=(-e "s|^LD_PRELOAD = \"\(.*\)\"$|LD_PRELOAD = \"\1:${preload}\"|")
     fi
     sed -e "s|\${SCRATCH}|${SCRATCH:?}|g" \
-        -e "s|<hpcagent_bench_checkout>|$(cd -- "${CE_IMAGES_DIR}/../.." && pwd)|g" \
+        -e "s|<hpcagent_bench_checkout>|${CE_REPO_DIR}|g" \
         -e "s|\"<hpcagent_bench_edf_mounts>\"|${mounts}|" \
         -e "s|\${GPU_ARCH}|${arch}|g" \
         -e "s|\${MULTIARCH}|$(uname -m)-linux-gnu|g" \

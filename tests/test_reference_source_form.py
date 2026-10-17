@@ -38,6 +38,9 @@ _DEFN = re.compile(r"([A-Za-z_]\w*)\s*\(([^()]*(?:\([^()]*\)[^()]*)*)\)\s*\{", r
 _CTOR_INIT = re.compile(r"\)\s*:\s*[^{;]*\{", re.DOTALL)
 #: Control-flow keywords take parenthesised expressions, not parameter lists.
 _NOT_A_FUNCTION = frozenset({"if", "for", "while", "switch", "do", "catch", "return", "sizeof"})
+#: The prefix of the C/C++ emitter's runtime helpers (``__npb_alloc_check(const void *p, ..., const char *name)``):
+#: they check an allocation and name it in a message, and touch no kernel buffer a compiler could vectorize over.
+_EMITTER_HELPER = "__npb_"
 
 
 def pointer_params(source: str) -> Iterator[tuple[str, str]]:
@@ -49,7 +52,7 @@ def pointer_params(source: str) -> Iterator[tuple[str, str]]:
     """
     for match in _DEFN.finditer(_CTOR_INIT.sub(") {", _COMMENT.sub(" ", source))):
         name, params = match.group(1), match.group(2)
-        if name in _NOT_A_FUNCTION:
+        if name in _NOT_A_FUNCTION or name.startswith(_EMITTER_HELPER):
             continue
         for raw_param in params.split(","):
             param = " ".join(raw_param.split())

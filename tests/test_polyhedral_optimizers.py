@@ -20,6 +20,7 @@ from hpcagent_bench.harness.envelope import Submission
 from hpcagent_bench.harness.optimizers import PlutoOptimizer, PpcgHipOptimizer
 from hpcagent_bench.harness.service import ServiceConfig
 from hpcagent_bench.harness.task import Task
+from hpcagent_bench.translators.numpyto_c.bindings import BindingArg, BindingFile, write_binding
 
 KERNEL = "tsvc_2_s115"
 SYMBOL = f"{KERNEL}_fp64"
@@ -35,6 +36,16 @@ FAKE_HOST = (
 )
 FAKE_KERNEL = '#include "HEADER"\n__global__ void kernel0(double *a, double *aa, int LEN_2D, int c0) {}\n'
 FAKE_HEADER = "__global__ void kernel0(double *a, double *aa, int LEN_2D, int c0);\n"
+
+
+def pluto_binding(path: pathlib.Path, *args: tuple[str, str]) -> None:
+    """A ``_pluto_binding.json`` at ``path`` with ``args`` as (name, kind) in call order."""
+    write_binding(
+        BindingFile(
+            kernel="k", abi="pluto", args=[BindingArg(name=n, kind=k) for n, k in args], symbols={}, sources={}
+        ),
+        path,
+    )
 
 
 def fake_pluto(cpp_backend: pathlib.Path, base: str) -> list[pathlib.Path]:
@@ -93,7 +104,7 @@ def test_a_parameter_outside_the_abi_is_declined(monkeypatch: pytest.MonkeyPatch
     def stray(cpp_backend: pathlib.Path, base: str) -> list[pathlib.Path]:
         out = cpp_backend / f"{SYMBOL}_pluto.c"
         out.write_text(f"void {SYMBOL}(int64_t STRAY, double *restrict a) {{}}\n")
-        (cpp_backend / f"{SYMBOL}_pluto_binding.json").write_text('{"args": [{"name": "STRAY"}, {"name": "a"}]}')
+        pluto_binding(cpp_backend / f"{SYMBOL}_pluto_binding.json", ("STRAY", "int"), ("a", "ptr_double"))
         return [out]
 
     monkeypatch.setattr(pluto_transform, "transformed_sources", stray)

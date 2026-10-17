@@ -51,8 +51,8 @@ def test_a_grade_protocol_is_one_line_and_its_stamp_says_what_it_times() -> None
 
 def test_exactly_one_protocol_is_credited_and_the_config_names_it() -> None:
     protocols.check_protocols()
-    assert config.get_str(protocols.CREDITED_KEY) == protocols.credited_name() == timing.FINAL_GRADE_REDUCTION
-    assert protocols.CREDITED_DEFAULT == "mw4x5" == grade_under.FINAL.stamp
+    assert config.get(protocols.CREDITED_KEY) == protocols.credited_name() == timing.FINAL_GRADE_REDUCTION
+    assert config.default_value(protocols.CREDITED_KEY) == "mw4x5" == grade_under.FINAL.stamp
     assert [stamp for stamp in PINNED_STAMPS if timing.credited_protocol(stamp)] == ["mw4x5"]
     assert not timing.credited_protocol(None)
     assert not timing.credited_protocol("")

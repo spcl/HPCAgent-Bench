@@ -17,11 +17,11 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 from matplotlib.collections import PathCollection
 
-from hpcagent_bench import study_tags
+from hpcagent_bench import paths, study_tags
 from hpcagent_bench.stats import population, style
 from hpcagent_bench.stats.figures import per_kernel as pk
 
-REPO = pathlib.Path(__file__).resolve().parents[1]
+REPO = paths.ROOT
 
 
 def speed_metric(cells: list[pk.KernelCell], color: str = "#1155cc") -> pk.Metric:
@@ -43,9 +43,9 @@ def token_metric(cells: list[pk.KernelCell], color: str = "#cc5511") -> pk.Metri
 @pytest.mark.parametrize(
     ("ratio", "label"),
     [
-        pytest.param(0.125, "0.125x", id="eighth"),
-        pytest.param(0.25, "0.25x", id="quarter"),
-        pytest.param(0.5, "0.5x", id="half"),
+        pytest.param(0.125, "1/8x", id="eighth"),
+        pytest.param(0.25, "1/4x", id="quarter"),
+        pytest.param(0.5, "1/2x", id="half"),
         pytest.param(1.0, "1x", id="unity"),
         pytest.param(2.0, "2x", id="double"),
         pytest.param(4.0, "4x", id="quadruple"),
@@ -204,17 +204,16 @@ def test_the_token_panel_puts_its_measured_value_on_a_log_y_axis_with_a_major_an
 @pytest.mark.parametrize(
     ("value", "want"),
     [
-        (0.125, "0.125x"),
-        (0.5, "0.5x"),
+        (0.125, "1/8x"),
+        (0.5, "1/2x"),
         (1.0, "1x"),
         (2.0, "2x"),
-        # Not a power of two, and not a whole reciprocal: a 1/n spelling would round this to
-        # "1/1x", a ratio of one marking a point 30% below it.
-        (0.5**0.5, "0.707x"),
-        (0.35, "0.35x"),
+        # Not a whole reciprocal: three significant figures, never rounded to "1/1x".
+        (0.5**0.5, "1/1.41x"),
+        (0.35, "1/2.86x"),
     ],
 )
-def test_a_ratio_below_one_prints_as_a_decimal(value: float, want: str) -> None:
+def test_a_ratio_below_one_prints_as_its_reciprocal(value: float, want: str) -> None:
     assert style.ratio_tick_label(value) == want
 
 

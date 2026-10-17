@@ -36,8 +36,8 @@ def test_the_site_scan_catches_every_kind_of_hit() -> None:
             "#!/usr/bin/env bash\n"
             "#SBATCH --partition=gpu1\n"
             "#SBATCH -A proj\n"
-            "# this comment mentions /users/ybudanaz and must NOT be flagged as a home directory\n"
-            'CE_EDF="/users/ybudanaz/x86_64/.edf/agent.toml"\n'
+            "# this comment mentions /users/jdoe and must NOT be flagged as a home directory\n"
+            'CE_EDF="/users/jdoe/x86_64/.edf/agent.toml"\n'
             'FAST_SCRATCH="/iopsstor/scratch/cscs/${USER}"\n'
             'SCRATCH="/ritom/scratch/cscs/$(id -un)"\n'
             'STORE="/capstor/store/cscs/project"\n'
@@ -78,7 +78,7 @@ def test_the_site_scan_catches_every_kind_of_hit() -> None:
         return any(text in matched for matched in hits[name])
 
     for text in (
-        "/users/ybudanaz",
+        "/users/jdoe",
         "/iopsstor",
         "/ritom",
         "/capstor/",
@@ -125,7 +125,81 @@ def test_the_storage_pattern_matches_only_real_mounts() -> None:
         assert not pattern.search(text), text
 
 
+def test_the_user_pattern_matches_a_name_only_as_a_path_component_or_address() -> None:
+    """``user_name_pattern("jdoe")`` fires on ``/…/jdoe``, ``~jdoe`` and ``jdoe@``; quiet on the bare word and on
+    longer names."""
+    pattern = rules().user_name_pattern("jdoe")
+    for text in ("/scratch/cscs/jdoe/x", "cd /users/jdoe", "~jdoe/.edf", "ssh jdoe@login"):
+        assert pattern.search(text), text
+    for text in ("ask jdoe about it", "/scratch/jdoex/y", "/scratch/jdoe.old", "xjdoe@login"):
+        assert not pattern.search(text), text
+
+
+def test_the_running_user_pattern_is_off_under_a_generic_account() -> None:
+    """Under ``root``/``runner`` a ``/root/`` or ``/home/runner`` path is generic: no running-user pattern."""
+    module = rules()
+    assert module.GENERIC_ACCOUNTS >= {"root", "runner"}
+    labels = list(module.USER_PATTERNS)
+    assert labels == ([] if module.RUNNING_USER in module.GENERIC_ACCOUNTS else [labels[0]])
+
+
+def test_the_private_address_and_prose_node_patterns() -> None:
+    """A private IPv4 host address is flagged outside tests; a CIDR block, a dashed or assigned version and a
+    documentation address (RFC 5737) are not; a lockfile is not scanned for them. Markdown naming a node is
+    flagged; a placeholder is not."""
+    module = rules()
+    (pattern,) = module.NON_TEST_PATTERNS.values()
+    for text in ("http://172.28.9.16:30000/v1", "host 10.1.2.3 up", "192.168.0.7"):
+        assert pattern.search(text), text
+    for text in ("172.28.0.0/16", "pkg-10.4.0.35", "v=10.4.0.35", "http://192.0.2.16:30000"):
+        assert not pattern.search(text), text
+    md = "base URL: http://nid002968:8000/v1\nbase URL: http://<node>:8000/v1\n"
+    assert [hit[1] for hit in module.site_hits("docs/x.md", md)] == ["nid002968"]
+    assert module.site_hits("tests/x.md", md) == []
+    assert module.site_hits("uv.lock", 'version = "10.4.0.35"\n') == []
+
+
+def test_the_package_literal_scan_names_layout_joins_and_absolute_prefixes() -> None:
+    """``x / "judge"``, a whole ``"results.db"`` and a ``"/opt/rocm"``/``"/dev/shm/…"`` string are hits in a
+    package file; a docstring, a message naming them mid-sentence and an unrelated join are not."""
+    module = rules()
+    text = (
+        '"""Writes judge/ and results.db under /dev/shm/x."""\n'
+        'a = run / "judge"\n'
+        'b = "results.db"\n'
+        'c = "/opt/rocm"\n'
+        'd = f"/dev/shm/{user}"\n'
+        'e = run / "logs"\n'
+        'f = "put /opt/rocm/bin on PATH"\n'
+    )
+    hits = module.package_literals("hpcagent_bench/x.py", text)
+    assert [hit.split(":")[1] for hit in hits] == ["2", "3", "4", "5"], hits
+
+
+def test_the_root_climb_and_shell_patterns() -> None:
+    """``Path(__file__)`` climbing above its directory, a shell ``/../..`` and a spelled EDF directory match; a
+    sibling file, ``parent`` alone and ``EDF_PATH`` do not."""
+    module = rules()
+    for text in (
+        "ROOT = pathlib.Path(__file__).resolve().parents[1]",
+        "ROOT = Path(__file__).parent.parent",
+        "x = pathlib.Path(__file__).parents[2]",
+    ):
+        assert module.FILE_ROOT_CLIMB.search(text), text
+    for text in ('pathlib.Path(__file__).with_name("a.yaml")', 'pathlib.Path(__file__).parent / "x"'):
+        assert not module.FILE_ROOT_CLIMB.search(text), text
+    assert module.SHELL_ROOT_CLIMB.search('"$(dirname "$0")/../.."')
+    for text in ('"${HOME}/.edf/x.toml"', "$HOME/.edf", "~/.edf/a.toml"):
+        assert module.EDF_HOME.search(text), text
+    assert not module.EDF_HOME.search('"${EDF_PATH%%:*}/x.toml"')
+
+
 if __name__ == "__main__":
     test_the_import_path_pattern_tells_an_edit_from_a_read()
     test_the_site_scan_catches_every_kind_of_hit()
     test_the_storage_pattern_matches_only_real_mounts()
+    test_the_user_pattern_matches_a_name_only_as_a_path_component_or_address()
+    test_the_running_user_pattern_is_off_under_a_generic_account()
+    test_the_private_address_and_prose_node_patterns()
+    test_the_package_literal_scan_names_layout_joins_and_absolute_prefixes()
+    test_the_root_climb_and_shell_patterns()

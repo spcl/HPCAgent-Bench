@@ -49,27 +49,27 @@ All in `numpyto_common` unless noted. Each keeps the NumPy result.
 
 | Pattern | Rewrite | Where |
 |---|---|---|
-| module-level numeric tuple (`_CW = (...)`) | folded to a literal so `enumerate` unrolls | `frontend._inline_module_constants` |
+| module-level numeric tuple (`_CW = (...)`) | folded to a literal so `enumerate` unrolls | `module_constants.inline_module_constants` |
 | module-level `np.array` lookup table read in the kernel or in a kept helper | a local of that function, filled from literals | `module_constants.materialize_const_arrays` |
 | kept helper called with different literal arguments, from the kernel or from another helper | one clone per set of literals | `helper_specialize.specialise_helper_by_call_signature` |
 | kept scalar helper called inside an expression of the kernel or of another helper (Fortran) | the call lifted into its own statement | `numpyto_fortran.emit.hoist_nested_helper_calls` |
-| `enumerate(seq, start=s)` over a literal | unrolled | `lowering._EnumerateZipRewriter` |
-| `.ravel()`, `.flatten()` | `np.reshape(x, (-1,))` | `lowering._MethodCallRewriter` |
-| chained, ellipsis or trailing subscript, `A[f][..., 0]` | one full index, `A[f, ..., 0]` | `lowering._lp_normalize_index_access` |
+| `enumerate(seq, start=s)` over a literal | unrolled | `lowering.EnumerateZipRewriter` |
+| `.ravel()`, `.flatten()` | `np.reshape(x, (-1,))` | `lowering.MethodCallRewriter` |
+| chained, ellipsis or trailing subscript, `A[f][..., 0]` | one full index, `A[f, ..., 0]` | `lowering.lp_normalize_index_access` |
 | call in an index or a reduction operand, `U[np.argmax(v), j]` | hoisted into a temporary | `lowering`, `lib_nodes.LibNodeRewriter` |
 | simultaneous rebind, `X, Y = Y, Ynew` | copy through temporaries | `lowering.ShapeTableTupleSplit` |
 | `np.diag`, `np.fft.fftfreq`, `np.meshgrid`, `np.einsum` with a subscript operand | loop nests | `lib_nodes.expand_diag`, `expand_fftfreq`, `expand_meshgrid`, `expand_einsum` |
 | `np.linalg.eigvalsh` | eigenvalue-only cyclic Jacobi | `numpy_desugar` |
 | `A[np.ix_(i, j, k)] = / += rhs` | loop nest over the index vectors | `numpy_desugar` |
-| `np.pad(mode="edge")` | one clamped index expression, no guard `if` | `lib_nodes` (`_remap`) |
-| `s = 0; for k: s += f(k); T[idx] (+)= s` | reduce into `T[idx]` directly | `lib_nodes._retarget_scalar_accumulator` |
+| `np.pad(mode="edge")` | one clamped index expression, no guard `if` | `lib_nodes.pad` (`edge_clamp`) |
+| `s = 0; for k: s += f(k); T[idx] (+)= s` | reduce into `T[idx]` directly | `lib_nodes.retarget_scalar_accumulator` |
 | keyword-only flags the harness never passes | defaults folded | `numpy_desugar.fold_kernel_defaults` |
 | helper flag every caller passes as one literal | substituted, dead branch dropped | `numpy_desugar.fold_constant_helper_arguments` |
 | `x.reshape(..., order="F")` | `np.ascontiguousarray(x.T).reshape(reversed).T` | `numpy_desugar.ReshapeFortranOrderInline` |
 | `dtype=bool`; real `@` complex (numba) | `np.bool_`; real operand cast to complex | `numpy_desugar.NumbaDtypeFixups` |
 | `b = slice(lo, hi)`; `x if x.ndim == 2 else ...` (numba) | inlined slice; branch folded by rank | `numpy_desugar.SliceObjectInline`, `NdimFold` |
-| `(n, 1)` against `(n, m)` broadcast into a partial slice (numba) | fill a temporary, then store | `numpy_desugar._OuterBroadcastPeel` |
-| `.real` / `.imag` of a complex array | array dtype narrowed to real | `lowering._fix_real_scalar_dtypes` |
+| `(n, 1)` against `(n, m)` broadcast into a partial slice (numba) | fill a temporary, then store | `numpy_desugar.OuterBroadcastPeel` |
+| `.real` / `.imag` of a complex array | array dtype narrowed to real | `lowering.fix_real_scalar_dtypes` |
 
 ## Pluto input
 

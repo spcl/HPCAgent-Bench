@@ -473,7 +473,7 @@ def test_score_scaling_strong_times_anchor_once_and_notes_failures(monkeypatch) 
         "from_submission",
         classmethod(described),
     )
-    monkeypatch.setattr(S.config, "get", lambda key, default=None: "strong" if key == "mpi.mode" else default)
+    S.config.set_override("mpi.mode", "strong")
     # warmup_count() is a separate config from S.config; zero it so anchor calls == 1, not warmup+1.
     monkeypatch.setattr(S.timing, "warmup_count", lambda: 0)
 
@@ -544,7 +544,8 @@ def gang_strong_sweep(
         return described(cls, submission, binding, ranks)
 
     monkeypatch.setattr(S.Descriptor, "from_submission", classmethod(refusing))
-    monkeypatch.setattr(S.config, "get", lambda key, default=None: overrides.get(key, default))
+    for key, value in overrides.items():
+        S.config.set_override(key, value)
     monkeypatch.setattr(S.timing, "warmup_count", lambda: 0)
     block = {"axes": [{"grid_dim": 0, "scheme": "block"}]}
     return S.score_scaling(
@@ -644,7 +645,7 @@ def weak_jacobi_2d_sweep(monkeypatch: pytest.MonkeyPatch, rank_counts: tuple[int
         "from_submission",
         classmethod(described),
     )
-    monkeypatch.setattr(S.config, "get", lambda key, default=None: "weak" if key == "mpi.mode" else default)
+    S.config.set_override("mpi.mode", "weak")
     monkeypatch.setattr(S.timing, "warmup_count", lambda: 0)
 
     grid1 = {"axes": [{"grid_dim": 0, "scheme": "block"}]}
@@ -664,8 +665,6 @@ def patch_work_exponent(monkeypatch: pytest.MonkeyPatch, exponent: int | None) -
     """Load every manifest as if its ``mpi.decomposition`` declared ``work_exponent = exponent``;
     ``None`` removes the key -- the strong-only marker, which no shipped MPI manifest carries (the
     manifest audit in test_mpi_sizing.py pins that), so the refusal path needs a stand-in."""
-    import dataclasses
-
     load = BenchSpec.load
 
     def patched(key: str) -> BenchSpec:
@@ -673,7 +672,7 @@ def patch_work_exponent(monkeypatch: pytest.MonkeyPatch, exponent: int | None) -
         decomp = {k: v for k, v in spec.mpi["decomposition"].items() if k != "work_exponent"}
         if exponent is not None:
             decomp["work_exponent"] = exponent
-        return dataclasses.replace(spec, mpi={**spec.mpi, "decomposition": decomp})
+        return spec.replace(mpi={**spec.mpi, "decomposition": decomp})
 
     monkeypatch.setattr(scoring.BenchSpec, "load", staticmethod(patched))
 

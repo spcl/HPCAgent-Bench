@@ -34,7 +34,7 @@ from collections.abc import Callable, Sequence
 from hpcagent_bench.frameworks.errors import NotSupportedByFramework, ToolMissing
 from hpcagent_bench.languages import LANG_EXT, gpu_backend
 from hpcagent_bench.pluto_normalize import normalize_ppcg_input
-from hpcagent_bench.pluto_transform import assert_affine, scop_inputs
+from hpcagent_bench.pluto_transform import OVERRIDE_INPUT_SUFFIX, assert_affine, scop_inputs
 from hpcagent_bench.translators.numpyto_c.emit import NPB_HD_GUARD
 
 __all__ = [
@@ -48,6 +48,7 @@ __all__ = [
     "PPCG_HOME_ENV",
     "PRELUDE_HELPER_RE",
     "TOOLS_DIR_ENV",
+    "VLA_CAST_RE",
     "cxx_compat",
     "device_helpers",
     "device_resident_host",
@@ -354,18 +355,27 @@ CXX_COMPAT_PROLOGUE: str = (
 #: declarations ``<complex.h>`` itself pulls in.
 CONJ_CALL_RE = re.compile(r"(__npb_conj\(double _Complex z\)\s*\{\s*return\s+)conj(\s*\(z\);)")
 
+#: A translator transient's allocation, ``T (*X)[E] = (T (*)[E])malloc(...)``. In C++ every spelling of a
+#: variably-modified type is a type of its own, so hipcc and nvcc refuse to initialize ``X`` from the cast ("cannot
+#: initialize a variable of type 'float (*)[NJ]' with an rvalue of type 'float (*)[NJ]'"). The cast is respelled
+#: as ``X``'s own type. Group 1 is the declaration through ``=``, group 2 the variable.
+VLA_CAST_RE = re.compile(
+    r"^(\s*[\w ]+\(\*\s*(\w+)\)(?:\[[^\]\n]*\])+\s*=\s*)\([\w ]+\(\*\)(?:\[[^\]\n]*\])+\)", re.MULTILINE
+)
+
 
 def cxx_compat(host: str, entry: str) -> str:
     """ppcg's host output, rewritten into the C++ subset nvcc and hipcc actually accept.
 
-    Three edits, all forced by the same fact -- ppcg's input is C and its output is compiled as C++:
-    the ``restrict`` qualifier, the ``conj`` call in the prelude, and the entry point's LINKAGE. That
+    Four edits, all forced by the same fact -- ppcg's input is C and its output is compiled as C++:
+    the ``restrict`` qualifier, the ``conj`` call in the prelude, a transient's VLA cast
+    (:data:`VLA_CAST_RE`), and the entry point's LINKAGE. That
     last one is not cosmetic: the harness resolves this symbol by name through ctypes, so a C++
     -mangled definition builds and links fine and is then simply not found at call time.
     ``extern "C"`` is also what the translator's own C++ emitter wraps the entry in, so this makes
     ppcg's output agree with the sibling column rather than inventing a convention.
     """
-    host = CXX_COMPAT_PROLOGUE + CONJ_CALL_RE.sub(r"\1__builtin_conj\2", host)
+    host = CXX_COMPAT_PROLOGUE + VLA_CAST_RE.sub(r"\1(__typeof__(\2))", CONJ_CALL_RE.sub(r"\1__builtin_conj\2", host))
     return re.sub(rf"^(void\s+{re.escape(entry)}\s*\()", r'extern "C" \1', host, count=1, flags=re.MULTILINE)
 
 
@@ -424,8 +434,9 @@ def with_device_helpers(prelude: str, kernel_src: str) -> str:
 
 
 def entry_symbol(scop: pathlib.Path) -> str:
-    """The exported kernel symbol in ``scop``: its stem without the translator's ``_pluto_input`` tag."""
-    return scop.stem.removesuffix("_pluto_input")
+    """The exported kernel symbol in ``scop``: its stem without the translator's ``_pluto_input`` tag, or an
+    override's (:data:`hpcagent_bench.pluto_transform.OVERRIDE_INPUT_SUFFIX`), which names the same symbol."""
+    return scop.stem.removesuffix(pathlib.Path(OVERRIDE_INPUT_SUFFIX).stem).removesuffix("_pluto_input")
 
 
 def drop_const_params(scop_src: str, entry: str) -> str:

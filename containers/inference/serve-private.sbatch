@@ -14,7 +14,7 @@
 #
 # ACCESS picks the bind address; the key is required either way:
 #   tunnel (default): --host 127.0.0.1. Only an ssh -L through ela reaches it: your laptop.
-#   alps (SGLang presets only): --host <this node's hsn0 address>, no --enable-metrics. Your own jobs on
+#   alps (SGLang presets only): --host <this node's HPCAGENT_BENCH_BIND_IFACE address>, no --enable-metrics. Your own jobs on
 #     other Alps clusters (Daint) connect with the key; MODE=serve writes endpoint.json for
 #     alps-endpoint.sh. vLLM checks the key only under /v1, /v2, /inference and /cohere and serves
 #     /metrics and its other routes open, so a vLLM preset stays on the loopback.
@@ -158,8 +158,10 @@ use_access() {  # sets BIND_HOST and METRICS_FLAGS
     METRICS_FLAGS=()
     [[ "${SERVED_MODEL}${KEY_FILE}${NODE}" != *[\"\\]* ]] \
         || refuse "ACCESS=alps: SERVED_MODEL, KEY_FILE and the node name may not contain a quote or a backslash"
-    BIND_HOST="$(ip -4 -o addr show dev hsn0 2>/dev/null | awk '{ split($4, a, "/"); print a[1]; exit }')"
-    [[ "${BIND_HOST}" =~ ^[0-9]+(\.[0-9]+){3}$ ]] || refuse "ACCESS=alps: ${NODE} has no hsn0 IPv4 address"
+    local iface="${HPCAGENT_BENCH_BIND_IFACE:-}"
+    [[ -n "${iface}" ]] || refuse "ACCESS=alps: set HPCAGENT_BENCH_BIND_IFACE (site layer) to the interface to bind"
+    BIND_HOST="$(ip -4 -o addr show dev "${iface}" 2>/dev/null | awk '{ split($4, a, "/"); print a[1]; exit }')"
+    [[ "${BIND_HOST}" =~ ^[0-9]+(\.[0-9]+){3}$ ]] || refuse "ACCESS=alps: ${NODE} has no ${iface} IPv4 address"
 }
 
 make_private_dir() {

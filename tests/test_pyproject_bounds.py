@@ -10,7 +10,6 @@ the file is read, nothing is resolved.
 """
 
 import functools
-import pathlib
 import tomllib
 from collections.abc import Iterator
 from typing import NamedTuple
@@ -19,7 +18,9 @@ import pytest
 from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name
 
-REPO = pathlib.Path(__file__).resolve().parents[1]
+from hpcagent_bench import paths
+
+REPO = paths.ROOT
 PYPROJECT = REPO / "pyproject.toml"
 
 #: Operators that cap a version from above or fix it outright.

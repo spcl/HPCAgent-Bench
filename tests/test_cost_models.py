@@ -4,6 +4,7 @@
 
 import math
 import pathlib
+import tempfile
 
 import pandas as pd
 import pytest
@@ -70,7 +71,7 @@ def test_a_user_file_adds_cards_and_a_bad_weight_is_refused(tmp_path: pathlib.Pa
     assert cost.resolve("kimi", good).output == pytest.approx(4.2)
     bad = tmp_path / "bad.yaml"
     bad.write_text("broken:\n  fresh_input: 1\n  cached_input: -1\n  output: 1\n")
-    with pytest.raises(ValueError, match="non-negative cached_input"):
+    with pytest.raises(ValueError, match=r"broken\.cached_input\n.*greater than or equal to 0"):
         cost.resolve("broken", bad)
     with pytest.raises(ValueError, match="unknown cost model"):
         cost.resolve("no-such-card")
@@ -107,3 +108,16 @@ def test_the_fold_and_the_cards_agree_on_every_proxy(tmp_path: pathlib.Path) -> 
     assert row["effective"] == pytest.approx(card_price("effective", *parts))
     assert row["effective_provider"] == pytest.approx(card_price("billed", *parts))
     assert row["naive_total"] == pytest.approx(card_price("total", *parts))
+
+
+if __name__ == "__main__":
+    test_the_paper_cards_weight_cache_reads_and_output_as_stated()
+    test_billed_card_charges_a_tenth_of_every_re_sent_prefix()
+    test_api_priced_card_weights_output_five_times()
+    test_a_judge_row_keeps_its_own_tokens()
+    test_effective_card_leaves_the_frame_untouched_even_without_components()
+    test_a_card_that_needs_missing_components_refuses_instead_of_mispricing()
+    test_inline_weights_are_a_card()
+    test_a_user_file_adds_cards_and_a_bad_weight_is_refused(pathlib.Path(tempfile.mkdtemp()))
+    test_a_missing_component_prices_the_task_as_no_measurement()
+    test_the_fold_and_the_cards_agree_on_every_proxy(pathlib.Path(tempfile.mkdtemp()))

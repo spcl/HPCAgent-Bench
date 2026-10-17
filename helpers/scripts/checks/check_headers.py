@@ -31,11 +31,9 @@ file is missing the header (the offenders and the fix command are printed).
 import argparse
 import re
 import sys
-from pathlib import Path
 
+from hpcagent_bench import paths
 from hpcagent_bench.precommit_support import git_tracked
-
-REPO_ROOT = Path(__file__).resolve().parents[3]
 
 SPDX_LINE = "# SPDX-License-Identifier: GPL-3.0-or-later"
 # What --fix writes into a headerless file (the canonical year).
@@ -66,7 +64,7 @@ def in_scope(rel):
 
 
 def tracked_python():
-    return git_tracked(cwd=REPO_ROOT)
+    return git_tracked(cwd=paths.ROOT)
 
 
 def prefix_len(lines):
@@ -106,11 +104,11 @@ def main(argv=None):
     args = ap.parse_args(argv)
 
     candidates = args.files or tracked_python()
-    targets = [rel for rel in sorted(set(candidates)) if in_scope(rel) and (REPO_ROOT / rel).is_file()]
+    targets = [rel for rel in sorted(set(candidates)) if in_scope(rel) and (paths.ROOT / rel).is_file()]
 
     offenders = []
     for rel in targets:
-        path = REPO_ROOT / rel
+        path = paths.ROOT / rel
         if args.fix:
             if insert_header(path):
                 offenders.append(rel)

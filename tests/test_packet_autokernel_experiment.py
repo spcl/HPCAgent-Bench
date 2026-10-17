@@ -11,9 +11,10 @@ import types
 
 import pytest
 
+from hpcagent_bench import paths
 from tests.fresh_module import module_at
 
-MODULE_PATH = pathlib.Path(__file__).resolve().parents[1] / "agent/hpcagent_agent/packets/autokernel/experiment.py"
+MODULE_PATH = paths.ROOT / "agent/hpcagent_agent/packets/autokernel/experiment.py"
 
 
 def load_experiment_module() -> types.ModuleType:

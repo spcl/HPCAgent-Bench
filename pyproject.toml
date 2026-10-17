@@ -49,6 +49,8 @@ dependencies = [
     "matplotlib",
     "ml_dtypes",
     "pyyaml",
+    # Validated models: config, request allowances, manifests, the Harbor grade (2.12: Field(exclude_if=...)).
+    "pydantic>=2.12",
     "sqlmodel",
     "jinja2",
     "cffi",
@@ -202,11 +204,11 @@ members = ["agent", "adapters/hpcagent_bench"]
 [tool.uv.sources]
 # The spcl/dace@extended and relayout@main commits this release is tested with, and the ONE place each is
 # written: uv.lock records them, and the image builds and jobs read them through helpers/scripts/pins.sh.
-dace = { git = "https://github.com/spcl/dace.git", rev = "0f445383e4d32a6016997a03decbbd50c8ba7f18" }
-relayout = { git = "https://github.com/ThrudPrimrose/relayout.git", rev = "15925bff731d5a90f5dd90a842bc29e5533d0dac" }
+dace = { git = "https://github.com/spcl/dace.git", rev = "79b28cc263ca9880c5853ed7b9b199e17d4bc721" }
+relayout = { git = "https://github.com/ThrudPrimrose/relayout.git", rev = "675621e3e18aa2f8d07587d29c658a3cf583fd56" }
 hpcagent-agent = { workspace = true }
 # Moves with the dace pin above: Alloy's own dace pin must be the same commit.
-alloy = { git = "https://github.com/ThrudPrimrose/alloy.git", rev = "439663658a932c3f2ff017a66b0a3d0fbac1d1d8" }
+alloy = { git = "https://github.com/ThrudPrimrose/alloy.git", rev = "404d9ee2163adc1627faa59ebcf9d4ecd1c7141e" }
 torch = [
     { index = "pytorch-cpu", extra = "cpu" },
     { index = "rocm-radeon", extra = "amdgpu" },
@@ -263,6 +265,7 @@ include = ["hpcagent_bench*"]
 # (no MANIFEST.in, no VCS file finder).
 [tool.setuptools.package-data]
 hpcagent_bench = [
+    # Every setting's default (hpcagent_bench.config reads it at first use).
     "config.yaml",
     "container_backends.txt",
     # The experiment launchers and the sample sbatch a job's steps re-enter (hpcagent_bench.cluster).
@@ -304,6 +307,9 @@ hpcagent_bench = [
 
 # Third-party warnings only (zero-warning policy for our own code).
 [tool.pytest.ini_options]
+markers = [
+    "smoke: the release smoke suite (`pytest -m smoke`): an end-to-end path on a CPU host without a GPU or SLURM; the whole selection runs in under 5 minutes.",
+]
 filterwarnings = [
     # starlette's TestClient portal teardown, inside anyio/starlette.
     "ignore:.*BlockingPortal.*:DeprecationWarning:anyio",

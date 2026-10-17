@@ -87,8 +87,7 @@ def test_every_compilers_yaml_ref_resolves() -> None:
     flag_vars = vars(flags)
     bad = []
     for name, block in _compiler_blocks().items():
-        for key in ("baseline_ref", "autopar_ref"):
-            ref = block.get(key)
+        for key, ref in (("baseline_ref", block.baseline_ref), ("autopar_ref", block.autopar_ref)):
             if ref is not None and ref not in flag_vars:
                 bad.append(f"{name}.{key} -> {ref!r}")
     assert not bad, f"compilers.yaml names constants that do not exist in hpcagent_bench.flags: {bad}"
@@ -115,10 +114,10 @@ def test_every_shared_library_block_compiles_position_independent(monkeypatch: p
     monkeypatch.setenv("HPCAGENT_BENCH_GFX", "gfx942")
     missing = []
     for name, block in _compiler_blocks().items():
-        if block.get("mpi"):
+        if block.mpi:
             continue
-        line = " ".join(block["compile"])
-        assert "-shared" in " ".join(block["link"]), (
+        line = " ".join(block.compile)
+        assert "-shared" in " ".join(block.link), (
             f"{name} is not an MPI block yet does not link -shared; "
             f"this test's exemption rule no longer describes the config"
         )
@@ -136,8 +135,8 @@ def test_every_shared_library_block_compiles_position_independent(monkeypatch: p
 def test_flang_uses_the_flang_baseline_not_the_clang_one() -> None:
     """flang must not inherit the C/C++ clang baseline; pinned by name since the toolchain may be absent."""
     block = _compiler_blocks()["flang"]
-    assert block["baseline_ref"] == "FLANG_BASELINE", (
-        f"flang resolves {block['baseline_ref']}; FLANG_BASELINE exists for this compiler and is otherwise unreferenced"
+    assert block.baseline_ref == "FLANG_BASELINE", (
+        f"flang resolves {block.baseline_ref}; FLANG_BASELINE exists for this compiler and is otherwise unreferenced"
     )
 
 
@@ -287,6 +286,9 @@ _NO_STD_BY_DESIGN = {
     # test enforces does not apply to them.
     "flang",
     "nvfortran",
+    # The Polygeist columns compile LLVM IR (and a generated C shim); clang refuses -std= on IR input.
+    "clang-polygeist",
+    "clang-polygeist-gpu",
 }
 
 #: ONE C++ standard, host and device alike. nvcc tops out at c++20 (`nvcc -std=c++23` is "Value
@@ -312,10 +314,10 @@ def test_every_c_family_block_pins_a_language_standard() -> None:
 
     missing = []
     for name, block in _load_compilers().items():
-        if name in _NO_STD_BY_DESIGN or block.get("lang") not in ("c", "cpp", "hip", "cuda"):
+        if name in _NO_STD_BY_DESIGN or block.lang not in ("c", "cpp", "hip", "cuda"):
             continue
-        if not any(token.startswith(("-std=", "-c23")) for token in block["compile"]):
-            missing.append(f"{name} (lang={block.get('lang')})")
+        if not any(token.startswith(("-std=", "-c23")) for token in block.compile):
+            missing.append(f"{name} (lang={block.lang})")
     assert not missing, f"C-family blocks pinning no language standard: {sorted(missing)}"
 
 
@@ -329,9 +331,9 @@ def test_the_cpp_standard_is_the_same_everywhere_it_is_not_vendor_capped() -> No
 
     disagree = {}
     for name, block in _load_compilers().items():
-        if block.get("lang") not in ("cpp", "hip", "cuda") or name in _NO_STD_BY_DESIGN:
+        if block.lang not in ("cpp", "hip", "cuda") or name in _NO_STD_BY_DESIGN:
             continue
-        pinned = next((t for t in block["compile"] if t.startswith("-std=")), "")
+        pinned = next((t for t in block.compile if t.startswith("-std=")), "")
         expected = _VENDOR_CAPPED.get(name, _CPP_STD)
         if pinned != expected:
             disagree[name] = f"{pinned or '<none>'} != {expected}"

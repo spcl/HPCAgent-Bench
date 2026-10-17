@@ -1516,7 +1516,10 @@ class FortranBodyEmitter(BaseEmitter):
         """Every read of an index array inside ``node``, outermost-first.
 
         A read's own axes are NOT searched: ``nbr_idx[i, j, n]`` gathers with ``i``/``j``/``n``,
-        which are ordinary 0-based expressions and get the ordinary ``+ 1``.
+        which are ordinary 0-based expressions and get the ordinary ``+ 1``. Nor are the axes of a read
+        of any other array: ``char_class[text[i]]`` is an element of ``char_class``, a 0-based value, and
+        the ``text[i]`` that gathers it is checked when that subscript is emitted (csv_tokenize's
+        ``trans[state, char_class[text[i]]]``).
         """
         hits: list[ast.expr] = []
         stack: list[ast.AST] = [node]
@@ -1527,6 +1530,9 @@ class FortranBodyEmitter(BaseEmitter):
                 continue
             if isinstance(cur, ast.Name) and cur.id in self.index_arrays:
                 hits.append(cur)
+                continue
+            if isinstance(cur, ast.Subscript):
+                stack.append(cur.value)
                 continue
             stack.extend(ast.iter_child_nodes(cur))
         return hits

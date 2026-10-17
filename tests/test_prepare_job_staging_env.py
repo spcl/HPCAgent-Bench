@@ -103,7 +103,7 @@ def run_prepare(
     env_file = tmp_path / ".env.setup"
     env_file.write_text(f"SETUP=setup\nPROBLEMS_FILE={problems}\nLANGUAGE=c\n{env_text}")
     edf_dir = tmp_path / ".edf"
-    edf_dir.mkdir()
+    edf_dir.mkdir(exist_ok=True)
     for name in (
         "hpcagent-bench-agent-mi300-latest",
         "hpcagent-bench-agent-mi200-latest",
@@ -149,3 +149,19 @@ def test_a_setup_that_names_no_image_is_refused_under_the_container_engine(tmp_p
     assert argv == []
     assert "JUDGE_CE_ENV, AGENT_CE_ENV and AMD_CE_ENV are unset" in done.stderr, done.stderr
     assert "hardware" in done.stderr, done.stderr
+
+
+def test_the_container_step_mounts_this_checkout_as_the_package(tmp_path: pathlib.Path) -> None:
+    """A registered judge EDF mounts the checkout install_edfs.sh ran from at /opt/hpcagent-bench; the steps run a
+    copy mounting the job's own checkout there, or the pack is built by another commit's code and dace."""
+    (tmp_path / ".edf").mkdir()
+    registered = tmp_path / ".edf" / "hpcagent-bench-judge-mi300-latest.toml"
+    registered.write_text('mounts = [\n    "/elsewhere/hpcagent-bench:/opt/hpcagent-bench",\n]\n')
+    run_dir = tmp_path / "run"
+    done, argv = run_prepare(
+        tmp_path, "JUDGE_CE_ENV=hpcagent-bench-judge-mi300-latest\n", RUN_DIR=str(run_dir), SLURM_JOB_ID="7"
+    )
+    copy = run_dir / "edf" / "prepare-7.toml"
+    assert f"--environment={copy}" in argv, (argv, done.stderr)
+    assert f'"{paths.ROOT}:/opt/hpcagent-bench"' in copy.read_text()
+    assert "/elsewhere/" in registered.read_text()

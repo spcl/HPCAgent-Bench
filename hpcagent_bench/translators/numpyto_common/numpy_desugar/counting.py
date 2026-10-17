@@ -370,7 +370,10 @@ def hoist_histogram(node: ast.expr, hoist: ValueHoist) -> ast.expr | None:
         f"        if {p}_b < 0: {p}_b = 0",
         f"        if {p}_b > {bins} - 1: {p}_b = {bins} - 1",
         f"        if {a}[{p}_i] < {edges}[{p}_b]: {p}_b = {p}_b - 1",
-        f"        if {p}_b < {bins} - 1 and {a}[{p}_i] >= {edges}[{p}_b + 1]: {p}_b = {p}_b + 1",
+        # Nested, not ``and``: the DaCe frontend evaluates both operands of a condition, so ``b < bins - 1
+        # and a[i] >= e[b + 1]`` read e[bins] past the edges for a sample in the last bin (azimint_hist, ASan).
+        f"        if {p}_b < {bins} - 1:",
+        f"            if {a}[{p}_i] >= {edges}[{p}_b + 1]: {p}_b = {p}_b + 1",
         f"        {temp}[{p}_b] += {add}",
     ]
     hoist.queue(lines)

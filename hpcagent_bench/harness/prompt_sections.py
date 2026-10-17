@@ -6,24 +6,20 @@ Each template under ``harness/prompts/`` (and each ``tools/<tool>.md`` fragment)
 the path without its extension, ``sections/`` dropped and every other separator turned into ``_``
 (``sections/build_flags.j2`` is ``build_flags``, ``lang/cpp.j2`` is ``lang_cpp``, ``tools/web-search.md``
 is ``tools_web_search``). A section's value is ``off`` to render nothing, or a template name on the
-search path, or a file path, to render that instead. ``prompt.sections.<key>`` in ``config.yaml`` and
+search path, or a file path, to render that instead. The ``prompt.sections`` config key (a map) and
 ``HPCAGENT_BENCH_PROMPT_SECTIONS_<KEY>`` in the environment set it, the environment winning."""
 
 import functools
-import pathlib
 import re
 from collections.abc import Mapping
 from types import MappingProxyType
 
-from hpcagent_bench import config
-from hpcagent_bench.spec import as_block
+from hpcagent_bench import config, paths
 
 __all__ = [
     "ENV_PREFIX",
     "OFF_WORDS",
     "ON_WORDS",
-    "PACKAGE_DIR",
-    "PROMPTS_DIR",
     "TOP_LEVEL",
     "SectionValue",
     "aliases",
@@ -34,16 +30,13 @@ __all__ = [
     "section_templates",
 ]
 
-PROMPTS_DIR = pathlib.Path(__file__).parent / "prompts"
-#: Where ``tools/<tool>.md`` ships; the loader's last root, so an include of ``tools/x.md`` resolves here.
-PACKAGE_DIR = pathlib.Path(__file__).parent.parent
 
 #: The two top-level templates are chosen by ``prompt.template``, not one of the sections they include.
 TOP_LEVEL = frozenset({"task.j2", "service_task.j2"})
 
 #: ``off`` for a section: nothing renders and no blank line is left behind.
 OFF_WORDS = frozenset({"off", "false", "no", "none", "disabled", "0"})
-#: Spellings that keep the built-in section, so an environment can undo what ``config.yaml`` set.
+#: Spellings that keep the built-in section, so an environment can undo what ``prompt.sections`` set.
 ON_WORDS = frozenset({"on", "true", "yes", "default", "1", ""})
 
 ENV_PREFIX = "HPCAGENT_BENCH_PROMPT_SECTIONS_"
@@ -61,9 +54,9 @@ def key_of(template: str) -> str:
 @functools.lru_cache(maxsize=1, typed=True)
 def section_templates() -> Mapping[str, str]:
     """Section key -> the template name its ``{% include %}`` uses, for every built-in section."""
-    names = [path.relative_to(PROMPTS_DIR).as_posix() for path in sorted(PROMPTS_DIR.rglob("*.j2"))]
+    names = [path.relative_to(paths.PROMPTS_DIR).as_posix() for path in sorted(paths.PROMPTS_DIR.rglob("*.j2"))]
     names = [name for name in names if name not in TOP_LEVEL]
-    names += [f"tools/{path.name}" for path in sorted((PACKAGE_DIR / "tools").glob("*.md"))]
+    names += [f"tools/{path.name}" for path in sorted((paths.PACKAGE / "tools").glob("*.md"))]
     return MappingProxyType({key_of(name): name for name in names})
 
 
@@ -93,7 +86,7 @@ def pick_sections(given: Mapping[str, SectionValue] | None = None) -> tuple[tupl
     then ``prompt.sections`` (the config block, which a ``HPCAGENT_BENCH_PROMPT_SECTIONS`` JSON object or
     a runtime override replaces whole). An unknown key is an error that lists the known ones."""
     known = section_templates()
-    block = as_block(config.get("prompt.sections", {}))
+    block = config.current().prompt.sections
     chosen: dict[str, SectionValue] = {}
     names: set[str] = {*known, *block, *(given or {})}
     for name in sorted(names):
@@ -101,7 +94,7 @@ def pick_sections(given: Mapping[str, SectionValue] | None = None) -> tuple[tupl
             raw: object = given[name]
         else:
             env = config.env_value(env_name(name))
-            raw = config.coerce(env) if env is not None else block.get(name)
+            raw = env if env is not None else block.get(name)
         value = parse_value(raw)
         if value is not None:
             chosen[name] = value

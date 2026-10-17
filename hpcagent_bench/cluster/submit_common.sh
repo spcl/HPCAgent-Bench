@@ -11,9 +11,10 @@ ulimit -c 0
 # render_env (a <base>:<model> base, flattened) and snapshot_env (the per-submission copy a job reads).
 CLUSTER_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # The setup configs (setups.yaml, layers/) and the operator's generated files (.env.<setup>, .rendered/).
-EXPERIMENTS_DIR="$(cd -- "${CLUSTER_DIR}/../../experiments" && pwd)"
+SUBMIT_REPO_DIR="$(cd -- "${CLUSTER_DIR}/../.." && pwd)"
+EXPERIMENTS_DIR="${SUBMIT_REPO_DIR}/experiments"
 # Slurm output of the jobs this file submits: <scratch>/logs (hpcagent_bench.paths.scratch_dir).
-HPCAGENT_BENCH_SCRATCH="${HPCAGENT_BENCH_SCRATCH:-$(cd -- "${CLUSTER_DIR}/../.." && pwd)/.scratch}"
+HPCAGENT_BENCH_SCRATCH="${HPCAGENT_BENCH_SCRATCH:-${SUBMIT_REPO_DIR}/.scratch}"
 . "${CLUSTER_DIR}/env_layers.sh"
 
 # symbolic_path <root-var-name> <resolved-absolute-path> -- the path with the CURRENT value of
@@ -183,13 +184,26 @@ agent_seconds() {
     printf '%s\n' "${configured}"
 }
 
-# forms_missing <view> <language> <verified|""> <target> <kernel,...> -- one line per kernel the
-# CPF cache view cannot serve (a missing form reads as HTTP 200 "unavailable", not an error), or one
-# line for a view of the other target or a failed check, so the caller refuses on any output.
+# forms_missing <view> <language> <verified|on-demand> <target> <kernel,...> -- empty when the CPF cache view serves
+# the setup, else what it cannot serve, so the caller refuses on any output. A cpf-src view (verified) needs a
+# judge-verified form of every kernel: one line per kernel it lacks, or one for a view of the other target or a failed
+# check. A cpf-tool view (on-demand) needs only to take the judge's renders of what it lacks, as prepare_job.sh's
+# cpf_form_gate asks: the reason when it is pinned to another target, cache or dace commit.
 forms_missing() {
-    local verified=(); [[ "$3" == verified ]] && verified=(--verified)
-    "${HPCAGENT_BENCH_HOST_PYTHON}" -m hpcagent_bench.cpf_cache check --view "$1" --language "$2" --target "$4" \
-        --kernels "$5" "${verified[@]}" || [[ $? == 1 ]] || echo "cpf_cache check failed for view $1"
+    if [[ "$3" == verified ]]; then
+        "${HPCAGENT_BENCH_HOST_PYTHON}" -m hpcagent_bench.cpf_cache check --view "$1" --language "$2" --target "$4" \
+            --kernels "$5" --verified || [[ $? == 1 ]] || echo "cpf_cache check failed for view $1"
+        return 0
+    fi
+    local dace_commit plan
+    dace_commit="$("${HPCAGENT_BENCH_REPO:?env.sh exports it}/helpers/scripts/pins.sh")" || {
+        echo "no dace pin to check view $1 against"
+        return 0
+    }
+    plan="$("${HPCAGENT_BENCH_HOST_PYTHON}" -m hpcagent_bench.cpf_cache check --view "$1" --language "$2" --target "$4" \
+        --kernels "$5" --on-demand --cache "${HPCAGENT_BENCH_CPF_CACHE:?cache_env.sh exports it}" \
+        --dace-commit "${dace_commit}" 2>&1)" && return 0
+    printf '%s\n' "${plan:-cpf_cache check failed for view $1}"
 }
 
 # stage_base_env <base> <setup> <study> <stamp> <staged-out> [extra sed -e expr...]
@@ -276,12 +290,14 @@ finalize_staged_env() {
 
 # submit_setup_job <env> <setup> <walltime> [dep-ids] [begin] [detail]
 # SUBMIT=1 submits a read-only snapshot of <env> and its problems file (snapshot_env) as
-# services.sbatch's CLUSTER_ENV_FILE, chained afterany on <dep-ids>, held until <begin>, at --nice=NICE
-# (default the site layer's HPCAGENT_BENCH_NICE), held with HOLD=1; anything else only reports.
+# services.sbatch's CLUSTER_ENV_FILE, chained afterany on <dep-ids> (colon-separated job ids), held until <begin>,
+# at --nice=NICE (default the site layer's HPCAGENT_BENCH_NICE), held with HOLD=1, and sets SUBMITTED_JOB_ID to the
+# job id; anything else only reports and sets SUBMITTED_JOB_ID empty.
 # --no-requeue: a NODE_FAIL requeue reruns the job in the SAME run directory, stacking two runs' rows.
 submit_setup_job() {
     local env="$1" setup="$2" walltime="$3" dep_ids="${4:-}" begin="${5:-}" detail="${6:-}" nodes snapshot jid resolved
     local -a options
+    SUBMITTED_JOB_ID=""
     nodes=$(setup_nodes "${env}")
     if [[ "${SUBMIT:-0}" != 1 ]]; then
         echo "prepared ${setup} (${nodes} nodes${detail})${begin:+ begin ${begin}}${dep_ids:+ after ${dep_ids}} -- not submitted"
@@ -305,5 +321,62 @@ submit_setup_job() {
     jid=$(env -u CPF_DROPIN_DIR -u CPF_FORMS_DIR -u HPCAGENT_BENCH_SERVICE_CANONICAL_PARALLEL_FORM_DIR \
         CLUSTER_SCRIPT_DIR="${CLUSTER_DIR}" \
         sbatch "${args[@]}" --export=ALL,CLUSTER_ENV_FILE="${PWD}/${snapshot}" "${CLUSTER_DIR}/services.sbatch") || return 2
+    # --parsable prints <id> or <id>;<cluster>; a dependency names the id alone.
+    SUBMITTED_JOB_ID="${jid%%;*}"
     echo "submitted ${setup} -> ${jid} (${nodes} nodes${detail}) env ${snapshot}"
+}
+
+# plan_waves <max-nodes> <nodes>... -- sets WAVE_NUMBERS to one 1-based wave number per node count, in order: a
+# count joins the current wave while the wave's summed node count stays <= <max-nodes>, else it opens the next wave.
+# An empty <max-nodes> puts every count in wave 1. Refuses a <max-nodes> that is not a positive integer and a count
+# above it (that setup fits no wave).
+plan_waves() {
+    local max="$1" wave=1 used=0 nodes
+    shift
+    WAVE_NUMBERS=()
+    [[ -z "${max}" || "${max}" =~ ^[1-9][0-9]*$ ]] || { echo "MAX_NODES is a positive integer, got '${max}'" >&2; return 2; }
+    for nodes in "$@"; do
+        if [[ -n "${max}" ]]; then
+            (( nodes <= max )) || { echo "a setup of ${nodes} nodes exceeds MAX_NODES=${max}" >&2; return 2; }
+            (( used + nodes <= max )) || { wave=$(( wave + 1 )); used=0; }
+        fi
+        used=$(( used + nodes ))
+        WAVE_NUMBERS+=("${wave}")
+    done
+}
+
+# submit_waves <max-nodes> <dep-ids> <begin> -- submit_setup_job for every staged setup (the arrays WAVE_ENVS,
+# WAVE_SETUPS, WAVE_WALLTIMES, one entry per setup), split into waves by plan_waves over their setup_nodes counts.
+# Prints one line per wave (its number, summed nodes, dependency) before its setups. Wave 1 depends on <dep-ids>;
+# every later wave on all job ids of the previous wave (afterany), so at most <max-nodes> nodes of this call run or
+# wait at once. Under a dry run a later wave's dependency is named, not submitted.
+submit_waves() {
+    local max="$1" dep_ids="$2" begin="$3" index wave last total after nodes
+    local -a counts=() previous=()
+    for index in "${!WAVE_ENVS[@]}"; do
+        nodes=$(setup_nodes "${WAVE_ENVS[index]}") || return 2
+        counts+=("${nodes}")
+    done
+    plan_waves "${max}" "${counts[@]}" || return 2
+    last=${WAVE_NUMBERS[${#WAVE_NUMBERS[@]} - 1]:-0}
+    for (( wave = 1; wave <= last; wave++ )); do
+        total=0
+        for index in "${!counts[@]}"; do
+            (( WAVE_NUMBERS[index] != wave )) || total=$(( total + counts[index] ))
+        done
+        if (( wave > 1 )); then
+            dep_ids=$(IFS=:; echo "${previous[*]}")
+            after="wave $(( wave - 1 ))${dep_ids:+ (${dep_ids})}"
+        else
+            after="${dep_ids}"
+        fi
+        echo "wave ${wave}/${last}: ${total} nodes${max:+ (MAX_NODES=${max})}${after:+, after ${after}}"
+        previous=()
+        for index in "${!counts[@]}"; do
+            (( WAVE_NUMBERS[index] == wave )) || continue
+            submit_setup_job "${WAVE_ENVS[index]}" "${WAVE_SETUPS[index]}" "${WAVE_WALLTIMES[index]}" "${dep_ids}" \
+                "${begin}" ", ${WAVE_WALLTIMES[index]}" || return 2
+            [[ -z "${SUBMITTED_JOB_ID}" ]] || previous+=("${SUBMITTED_JOB_ID}")
+        done
+    done
 }

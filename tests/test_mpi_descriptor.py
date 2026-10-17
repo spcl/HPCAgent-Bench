@@ -28,7 +28,7 @@ from hpcagent_bench.harness.mpi_descriptor import (
     scatter,
 )
 from hpcagent_bench.harness.mpi_sizing import ScalingLaw
-from hpcagent_bench.harness.requests_api import Location, Requests
+from hpcagent_bench.harness.requests_api import DistributionPlan, Location, Requests
 from hpcagent_bench.spec import BenchSpec
 from hpcagent_bench.support.bindings.contract import Arg, Binding, binding_from_spec
 
@@ -121,9 +121,15 @@ def binding_2d() -> Binding:
     return Binding(kernel="k2d", config="dense", args=args, symbols={})
 
 
-def submitted(plan) -> Submission:
-    """A submission whose requests lower to ``plan`` (:meth:`Requests.from_plan` writes the op lists)."""
-    return Submission(language="c", source="x", requests=Requests.from_plan(plan))
+def plan_of(raw: dict | DistributionPlan) -> DistributionPlan:
+    """The plan whose JSON is ``raw`` (a plan as is)."""
+    return DistributionPlan.model_validate(raw)
+
+
+def submitted(plan: dict | DistributionPlan) -> Submission:
+    """A submission whose requests lower to ``plan``, or the plan of that JSON (:meth:`Requests.from_plan`
+    writes the op lists)."""
+    return Submission(language="c", source="x", requests=Requests.from_plan(plan_of(plan)))
 
 
 def requested(grid: list[int], operations: list[dict]) -> Submission:
@@ -388,7 +394,7 @@ def test_local_size_scalars_allows_symbol_on_count_equivalent_schemes() -> None:
 # A real v2 no-halo kernel: CLOUDSC column physics decomposed over `klon`
 
 
-def split_over_klon(binding: Binding, ranks: int) -> dict:
+def split_over_klon(binding: Binding, ranks: int) -> DistributionPlan:
     """Block-split every array over its own `klon` axis on a 1-D grid of `ranks`."""
     return distribution_over_symbol(binding, ["klon"], ranks)
 
@@ -400,22 +406,22 @@ def cloudsc_binding() -> Binding:
 def test_distribution_over_symbol_scaled_add_1d() -> None:
     b = binding_from_spec(BenchSpec.load("scaled_add"))
     block0 = {"axes": [{"grid_dim": 0, "scheme": "block"}]}
-    assert distribution_over_symbol(b, ["LEN_1D"], 4) == {"grid": [4], "arrays": {"x": block0, "y": block0}}
+    plan = distribution_over_symbol(b, ["LEN_1D"], 4)
+    assert plan == plan_of({"grid": [4], "arrays": {"x": block0, "y": block0}})
+    # The JSON leaves the defaults (scheme block, block_size 1) out and always names grid_dim.
+    assert plan.to_json() == {
+        "grid": [4],
+        "arrays": {"x": {"axes": [{"grid_dim": 0}]}, "y": {"axes": [{"grid_dim": 0}]}},
+    }
 
 
 def test_distribution_over_symbol_splits_klon_at_its_per_array_axis() -> None:
     """`klon` splits at its own per-array axis (0/1/2 by field rank); default_distribution can't do this."""
-    dist = distribution_over_symbol(cloudsc_binding(), ["klon"], 4)
+    dist = distribution_over_symbol(cloudsc_binding(), ["klon"], 4).to_json()
     assert dist["grid"] == [4]
-    assert dist["arrays"]["ktype"]["axes"] == [{"grid_dim": 0, "scheme": "block"}]  # 1-D: axis 0
-    assert dist["arrays"]["pt"]["axes"] == [{"grid_dim": None}, {"grid_dim": 0, "scheme": "block"}]  # 2-D: axis 1
-    assert dist["arrays"]["pclv"]["axes"] == [
-        {  # 3-D: axis 2
-            "grid_dim": None
-        },
-        {"grid_dim": None},
-        {"grid_dim": 0, "scheme": "block"},
-    ]
+    assert dist["arrays"]["ktype"]["axes"] == [{"grid_dim": 0}]  # 1-D: axis 0
+    assert dist["arrays"]["pt"]["axes"] == [{"grid_dim": None}, {"grid_dim": 0}]  # 2-D: axis 1
+    assert dist["arrays"]["pclv"]["axes"] == [{"grid_dim": None}, {"grid_dim": None}, {"grid_dim": 0}]  # 3-D: axis 2
 
 
 def test_distribution_over_symbol_no_matching_axis_raises() -> None:
@@ -497,18 +503,18 @@ def test_block_cyclic_roundtrips_on_equal_hypercube() -> None:
 def test_plan_rejects_block_cyclic_on_unequal_grid() -> None:
     # a [2, 4] grid has unequal edges, so a block-cyclic layout on it is rejected.
     cyclic = [(0, Scheme.BLOCK_CYCLIC, 2), (1, Scheme.BLOCK_CYCLIC, 2)]
-    bad = Requests.from_plan({"grid": [2, 2], "arrays": {"A": {"axes": [axis_entry(a) for a in cyclic]}}})
+    bad = Requests.from_plan(plan_of({"grid": [2, 2], "arrays": {"A": {"axes": [axis_entry(a) for a in cyclic]}}}))
     with pytest.raises(ValueError, match="needs an equal-edge grid"):
         replace(bad, startup=Startup(grid=("2", "4"))).plan({"A": 2}, 8)
 
 
 def test_plan_allows_block_cyclic_on_equal_hypercube() -> None:
     cyclic = [(0, Scheme.BLOCK_CYCLIC, 2), (1, Scheme.BLOCK_CYCLIC, 2)]
-    ok = Requests.from_plan({"grid": [2, 2], "arrays": {"A": {"axes": [axis_entry(a) for a in cyclic]}}})
+    ok = Requests.from_plan(plan_of({"grid": [2, 2], "arrays": {"A": {"axes": [axis_entry(a) for a in cyclic]}}}))
     ok.plan({"A": 2}, 4)  # no raise
     # a 1-D block-cyclic grid is trivially equal-edge (one dimension).
     one_d = {"grid": [4], "arrays": {"A": {"axes": [axis_entry((0, Scheme.BLOCK_CYCLIC, 2))]}}}
-    Requests.from_plan(one_d).plan({"A": 1}, 4)
+    Requests.from_plan(plan_of(one_d)).plan({"A": 1}, 4)
 
 
 def axis_entry(axis: tuple[int, Scheme, int]) -> dict:
@@ -520,7 +526,9 @@ def axis_entry(axis: tuple[int, Scheme, int]) -> dict:
 
 
 def test_blockcyclic_builder_deals_leading_axes_over_hypercube() -> None:
-    dist = blockcyclic_distribution_from_shapes({"A": ("M", "N"), "B": ("M", "N")}, 4, grid_ndim=2, block_size=2)
+    dist = blockcyclic_distribution_from_shapes(
+        {"A": ("M", "N"), "B": ("M", "N")}, 4, grid_ndim=2, block_size=2
+    ).to_json()
     assert dist["grid"] == [2, 2]  # equal-edge 2-D hypercube for 4 ranks
     for name in ("A", "B"):
         axes = dist["arrays"][name]["axes"]
@@ -530,7 +538,12 @@ def test_blockcyclic_builder_deals_leading_axes_over_hypercube() -> None:
         ]
     # The emitted layout must scatter/gather bit-exact through the descriptor math (a real partition).
     grid = Grid(tuple(dist["grid"]))
-    ad = ArrayDist(axes=(AxisDist(0, Scheme.BLOCK_CYCLIC, 2), AxisDist(1, Scheme.BLOCK_CYCLIC, 2)))
+    ad = ArrayDist(
+        axes=(
+            AxisDist(grid_dim=0, scheme=Scheme.BLOCK_CYCLIC, block_size=2),
+            AxisDist(grid_dim=1, scheme=Scheme.BLOCK_CYCLIC, block_size=2),
+        )
+    )
     a = arange((10, 7), np.float64)  # ragged (not P*block-divisible) to stress NUMROC
     assert is_partition(a.shape, ad, grid)
     assert np.array_equal(gather(scatter(a, ad, grid), ad, grid, a.shape, np.dtype(np.float64)), a)
@@ -539,8 +552,8 @@ def test_blockcyclic_builder_deals_leading_axes_over_hypercube() -> None:
 def test_blockcyclic_builder_replicates_low_rank_arrays_and_rejects_bad_ranks() -> None:
     # An array with fewer axes than grid_ndim cannot carry the whole grid -> omitted (replicated).
     dist = blockcyclic_distribution_from_shapes({"A": ("M", "N"), "v": ("M",)}, 4, grid_ndim=2)
-    assert "v" not in dist["arrays"]
-    assert "A" in dist["arrays"]
+    assert "v" not in dist.arrays
+    assert "A" in dist.arrays
     # No equal-edge 2-D cube exists for 8 ranks.
     with pytest.raises(ValueError, match=r"not a perfect|perfect 2-th power"):
         blockcyclic_distribution_from_shapes({"A": ("M", "N")}, 8, grid_ndim=2)
@@ -550,12 +563,12 @@ def test_distribution_for_kernel_dispatches_blockcyclic_2d() -> None:
     # scheme=block_cyclic, grid_ndim=2 routes to the hypercube builder; default stays 1-D.
     binding = binding_from_spec(BenchSpec.load("mat_scaled_add"))
     mpi = {"decomposition": {"axis": ["M", "N"], "scheme": "block_cyclic", "grid_ndim": 2, "block_size": 2}}
-    dist = distribution_for_kernel(mpi, binding, 4)
+    dist = distribution_for_kernel(mpi, binding, 4).to_json()
     assert dist["grid"] == [2, 2]
     assert dist["arrays"]["A"]["axes"][1] == {"grid_dim": 1, "scheme": "block_cyclic", "block_size": 2}
     # Default (no scheme / grid_ndim) is the 1-D block split over a size-ranks line.
     dist1d = distribution_for_kernel({"decomposition": {"axis": ["M"]}}, binding, 4)
-    assert dist1d["grid"] == [4]
+    assert dist1d.grid == (4,)
 
 
 def test_distribution_for_kernel_1d_block_cyclic_keeps_block_size() -> None:
@@ -563,20 +576,20 @@ def test_distribution_for_kernel_1d_block_cyclic_keeps_block_size() -> None:
     binding = binding_from_spec(BenchSpec.load("mat_scaled_add"))
     bc = distribution_for_kernel(
         {"decomposition": {"axis": ["M"], "scheme": "block_cyclic", "block_size": 4}}, binding, 4
-    )
+    ).to_json()
     assert bc["grid"] == [4]
     assert bc["arrays"]["A"]["axes"][0] == {"grid_dim": 0, "scheme": "block_cyclic", "block_size": 4}
-    # block scheme: no block_size key (the contiguous builder never emitted one).
-    blk = distribution_for_kernel({"decomposition": {"axis": ["M"], "scheme": "block"}}, binding, 4)
-    assert blk["arrays"]["A"]["axes"][0] == {"grid_dim": 0, "scheme": "block"}
+    # block scheme: neither the default scheme nor a block_size is written.
+    blk = distribution_for_kernel({"decomposition": {"axis": ["M"], "scheme": "block"}}, binding, 4).to_json()
+    assert blk["arrays"]["A"]["axes"][0] == {"grid_dim": 0}
 
 
 def test_distribution_from_shapes_emits_block_cyclic_width() -> None:
     # The shape-map builder carries the wrap width for block_cyclic only.
     bc = distribution_from_shapes({"A": ("M", "N")}, ["M"], 4, scheme=Scheme.BLOCK_CYCLIC, block_size=3)
-    assert bc["arrays"]["A"]["axes"][0] == {"grid_dim": 0, "scheme": "block_cyclic", "block_size": 3}
-    cyc = distribution_from_shapes({"A": ("M", "N")}, ["M"], 4, scheme=Scheme.CYCLIC)
-    assert cyc["arrays"]["A"]["axes"][0] == {"grid_dim": 0, "scheme": "cyclic"}
+    assert bc.arrays["A"].axes[0] == AxisDist(grid_dim=0, scheme=Scheme.BLOCK_CYCLIC, block_size=3)
+    cyc = distribution_from_shapes({"A": ("M", "N")}, ["M"], 4, scheme=Scheme.CYCLIC, block_size=3)
+    assert cyc.to_json()["arrays"]["A"]["axes"][0] == {"grid_dim": 0, "scheme": "cyclic"}
 
 
 # Per-array residency: any array on host or device, independently
@@ -610,7 +623,7 @@ def test_from_submission_default_location_applies() -> None:
 
 def test_envelope_rejects_bad_location() -> None:
     place = {"action": "place", "array": "A", "on": "gpu"}
-    with pytest.raises(ValueError, match=r"on must be one of \['host', 'device'\]"):
+    with pytest.raises(ValueError, match=r"\non\n  Input should be 'host' or 'device'"):
         Submission.from_obj({"language": "c", "source": "x", "requests": {"operations": [place]}})
 
 

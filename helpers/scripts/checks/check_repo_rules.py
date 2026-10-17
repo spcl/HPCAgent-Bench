@@ -10,8 +10,6 @@ entry carries its reason and must still name a tracked file:
   (hpcagent_bench/cluster/env.sh) and CI's workflow env, because dace hashes iteration order into
   generated code.
 * ``import-path``: no file edits ``sys.path`` or ``PYTHONPATH``; the packages are installed.
-* ``enroot``: no file names enroot; the one container seam is the CE mounting a podman-built
-  squashfs.
 * ``no-requeue``: every submittable batch script carries ``#SBATCH --no-requeue``: a NODE_FAIL
   requeue reruns the job id into the same run directory and stacks duplicate rows.
 * ``scratch``: ``.scratch/`` tracks only its ``.gitkeep``.
@@ -21,8 +19,14 @@ entry carries its reason and must still name a tracked file:
   launchers, scripts or the harness.
 * ``opt-flags``: ``-O3`` / ``-march=native`` / ``-ffast-math`` come from hpcagent_bench/flags.py.
 * ``site-values``: no site or user value (home directory, storage mount, account, partition,
-  node, registry, run directory) is hardcoded; they come from the environment
-  (docs/configuration.md).
+  node, private IPv4 address, registry, run directory, the running user's name) is hardcoded; they come
+  from the environment (docs/configuration.md).
+* ``hardcoded-paths``: a repo root is computed once per file. Python finds it through
+  ``hpcagent_bench.paths`` (``Path(__file__)`` climbing above its own directory only in
+  :data:`FILE_ROOT_ALLOW`); a shell file climbs ``/../..`` at most once and spells the EDF directory only
+  through ``EDF_PATH`` (helpers/scripts/site_env.sh); the package joins run-directory names only through
+  ``hpcagent_bench/run_layout.py`` and spells ``/opt/rocm`` and ``/dev/shm/...`` only in
+  ``hpcagent_bench/paths.py``.
 
 Python files are read as live text: string literals that are not docstrings, never comments.
 
@@ -31,6 +35,7 @@ Python files are read as live text: string literals that are not docstrings, nev
 
 import ast
 import functools
+import getpass
 import pathlib
 import re
 import subprocess
@@ -145,23 +150,6 @@ def import_path(files: list[str]) -> list[str]:
                 f"{hit}: edits the import path" for hit in line_hits(rel, text, IMPORT_PATH_EDIT, skip_comments=True)
             ]
     return out
-
-
-# enroot
-
-ENROOT = re.compile(r"enroot", re.IGNORECASE)
-ENROOT_ALLOW = {"tests/test_container_factory.py": "asserts that enroot is not a backend the factory resolves"}
-
-
-def enroot(files: list[str]) -> list[str]:
-    out = stale(ENROOT_ALLOW, "enroot")
-    for rel in files:
-        text = text_of(rel)
-        if rel != SELF and rel not in ENROOT_ALLOW and text is not None:
-            out += [f"{hit}: names enroot" for hit in line_hits(rel, text, ENROOT)]
-    return out + [
-        f"{rel}: allowlisted but names no enroot" for rel in ENROOT_ALLOW if not ENROOT.search(text_of(rel) or "")
-    ]
 
 
 # no-requeue
@@ -338,15 +326,46 @@ SITE_PATTERNS: Patterns = {
         r"\b[\w-]+\.svc\.cscs\.ch\b|jfrog\.[\w.-]+"
     ),
 }
+
+
+def user_name_pattern(user: str) -> re.Pattern[str]:
+    """``user`` as a path component (``/<user>/``, ``/<user>`` at a word end, ``~<user>``) or an address
+    (``<user>@``): the shapes a pasted home, scratch path or login leaves. Not a bare word, so a
+    user named like an English word (CI's ``runner``) does not flag prose."""
+    name = re.escape(user)
+    return re.compile(rf"(?:(?<=/)|(?<=~)){name}(?![\w.-])|(?<![\w.-]){name}@")
+
+
+#: The account running this check (:func:`getpass.getuser`).
+RUNNING_USER = getpass.getuser()
+#: Accounts whose name is also a generic path component (``/root``, ``/home/runner``, the images' ``agent``):
+#: the running-user pattern is off under them.
+GENERIC_ACCOUNTS = frozenset({"root", "runner", "agent", "someone"})
+#: The running user's pattern, or none under a :data:`GENERIC_ACCOUNTS` name.
+USER_PATTERNS: Patterns = (
+    {}
+    if RUNNING_USER in GENERIC_ACCOUNTS
+    else {"the running user's name (use ${USER} / $(id -un))": user_name_pattern(RUNNING_USER)}
+)
+
 #: Applied everywhere, comments and docstrings included: Slurm executes ``#SBATCH`` lines.
 RAW_PATTERNS: Patterns = {
-    "user name (use ${USER} / $(id -un))": re.compile(r"\bybudanaz\b"),
+    **USER_PATTERNS,
     "site email": re.compile(r"[A-Za-z0-9._%+-]+@(?:[A-Za-z0-9-]+\.)*(?:ethz|cscs)\.ch\b"),
     "hardcoded Slurm account (SBATCH_ACCOUNT)": re.compile(r"(?<![\w-])(?:a-g34|a-g200|g34|g200)(?![\w-])"),
     "site value in an #SBATCH directive (SBATCH_PARTITION / SBATCH_ACCOUNT)": re.compile(
         r"(?m)^[ \t]*#SBATCH[ \t]+(?:--(?:partition|account|reservation|nodelist|exclude)=\S+|-[Apw][ \t]+\S+)"
     ),
 }
+#: Applied to the live text of every file outside tests (a test fixture may name a synthetic host) and lockfiles.
+NON_TEST_PATTERNS: Patterns = {
+    "private IPv4 host address (a placeholder or the site layer)": re.compile(
+        r"(?<![\w.=-])(?:10(?:\.\d{1,3}){3}|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2}|192\.168(?:\.\d{1,3}){2})"
+        r"(?![\w/]|\.\d)"
+    ),
+}
+#: Applied to prose (files with no comment syntax, e.g. Markdown) outside tests; code gets CODE_PATTERNS.
+PROSE_PATTERNS: Patterns = {"node name (a placeholder such as <node>)": re.compile(r"\bnid\d{4,6}\b")}
 #: Node, host and partition literals in executable code outside tests.
 CODE_PATTERNS: Patterns = {
     "node name (the site layer)": re.compile(r"\bnid(?:\d{4,6}|\[[^\]\s]*\]?)|(?<![\w-])beverin(?![\w.-])"),
@@ -409,7 +428,11 @@ def matches(text: str, rel: str, patterns: Patterns, line_of: int | None = None)
 def site_hits(rel: str, text: str) -> list[tuple[str, str]]:
     """Every site-value hit in one file's live text."""
     style = comment_style(rel, text)
-    patterns = SITE_PATTERNS | (CODE_PATTERNS if not rel.startswith("tests/") and style != "verbatim" else {})
+    test = rel.startswith("tests/")
+    lockfile = rel.endswith(".lock")  # resolver output: dotted version strings read as addresses
+    patterns = SITE_PATTERNS | ({} if test or lockfile else NON_TEST_PATTERNS)
+    if not test:
+        patterns |= PROSE_PATTERNS if style == "verbatim" else CODE_PATTERNS
     hits = matches(text, rel, RAW_PATTERNS)
     if style == "py":
         strings = live_strings(text)
@@ -436,16 +459,116 @@ def site_values(files: list[str], allow: dict[str, str] = SITE_ALLOW) -> list[st
     return out + [f"{key}: allowlisted but matches nothing" for key in unused]
 
 
+# hardcoded-paths
+
+#: ``Path(__file__)`` climbing above its own directory: a second repo-root computation.
+FILE_ROOT_CLIMB = re.compile(r"Path\(__file__\)(?:\.resolve\(\))?\.(?:parents\[\d+\]|parent\.parent)")
+#: Files that compute a root from ``__file__`` on purpose, one reason each.
+FILE_ROOT_ALLOW = {
+    "hpcagent_bench/paths.py": "THE repo root",
+    "helpers/scripts/checks/check_repo_rules.py": "pre-commit runs it without the package installed",
+    "helpers/scripts/checks/check_no_corpus_leak.py": "pre-commit runs it without the package installed",
+    "helpers/scripts/checks/check_core_dumps.py": "pre-commit runs it without the package installed",
+    "helpers/scripts/checks/check_interpreter_floor.py": "pre-commit runs it without the package installed",
+    "helpers/scripts/checks/check_format.py": "pre-commit runs it without the package installed",
+    "helpers/scripts/checks/check_dockerfile_python.py": "pre-commit runs it without the package installed",
+    "helpers/scripts/checks/check_no_hidden_in_image.py": "pre-commit runs it without the package installed",
+    "helpers/scripts/checks/check_doc_links.py": "pre-commit runs it without the package installed",
+    "helpers/scripts/checks/check_annotation_ratchet.py": "pre-commit runs it without the package installed",
+    "tests/check_yaml_style.py": "pre-commit runs it without the package installed",
+    "hpcagent_bench/harness/judge_web_search.py": "loaded by file path (containers/images/tools_launch_check.py)",
+    "containers/images/verify_image.py": "runs inside an image, where hpcagent_bench may be absent",
+    "tests/test_check_repo_rules.py": "synthetic offenders for this rule",
+}
+#: The agent package ships into images without ``hpcagent_bench``; its own roots are its own.
+FILE_ROOT_EXEMPT_PREFIXES = ("agent/", "hpcagent_bench/benchmarks/")
+
+#: A shell climb to the checkout root; a file computes it once and reuses the variable.
+SHELL_ROOT_CLIMB = re.compile(r"/\.\./\.\.")
+#: The EDF directory spelled outside helpers/scripts/site_env.sh (which exports ``EDF_PATH``).
+EDF_HOME = re.compile(r"(?:\$\{HOME\}|\$HOME|~)/\.edf\b")
+EDF_HOME_ALLOW = {"helpers/scripts/site_env.sh": "THE default of EDF_PATH"}
+
+#: Run-directory names whose literal belongs to hpcagent_bench/run_layout.py.
+LAYOUT_DIR_NAMES = frozenset({"judge", "agents", "shared", "tasks"})
+LAYOUT_FILE_NAMES = frozenset({"results.db", "MERGE_FAILED", "tokens.json", "claude.log", "hpcagent_bench.db"})
+#: Absolute prefixes whose literal belongs to hpcagent_bench/paths.py.
+ABSOLUTE_PREFIXES = ("/opt/rocm", "/dev/shm/")
+#: Package files where a layout literal or an absolute prefix is another thing, one reason each.
+PACKAGE_LITERAL_ALLOW = {
+    "hpcagent_bench/paths.py": "THE absolute defaults",
+    "hpcagent_bench/run_layout.py": "THE run-directory names",
+    "hpcagent_bench/harbor.py": "a Harbor task's own tasks/ output directory, not a run directory",
+}
+
+
+def in_package(rel: str) -> bool:
+    """A harness source file: ``hpcagent_bench/**/*.py`` outside the kernel tree."""
+    return (
+        rel.startswith("hpcagent_bench/") and rel.endswith(".py") and not rel.startswith("hpcagent_bench/benchmarks/")
+    )
+
+
+def package_literals(rel: str, text: str) -> list[str]:
+    """Run-directory joins (``x / "judge"``), whole layout file names and absolute-prefix strings in a
+    package file's live text."""
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return []
+    skip = docstring_constant_ids(tree)
+    out = []
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.BinOp)
+            and isinstance(node.op, ast.Div)
+            and isinstance(node.right, ast.Constant)
+            and node.right.value in LAYOUT_DIR_NAMES
+        ):
+            out.append(f"{rel}:{node.lineno}: joins {node.right.value!r} (hpcagent_bench/run_layout.py)")
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in skip:
+            if node.value in LAYOUT_FILE_NAMES:
+                out.append(f"{rel}:{node.lineno}: names {node.value!r} (hpcagent_bench/run_layout.py)")
+            elif node.value.startswith(ABSOLUTE_PREFIXES):
+                out.append(f"{rel}:{node.lineno}: absolute {node.value!r} (hpcagent_bench/paths.py)")
+    return out
+
+
+def hardcoded_paths(files: list[str]) -> list[str]:
+    out = stale(FILE_ROOT_ALLOW, "hardcoded-paths") + stale(EDF_HOME_ALLOW, "hardcoded-paths")
+    out += stale(PACKAGE_LITERAL_ALLOW, "hardcoded-paths")
+    for rel in files:
+        text = None if rel == SELF else text_of(rel)
+        if text is None:
+            continue
+        style = comment_style(rel, text)
+        if style == "py" and rel not in FILE_ROOT_ALLOW and not rel.startswith(FILE_ROOT_EXEMPT_PREFIXES):
+            out += [
+                f"{hit}: repo root from __file__ (hpcagent_bench.paths)"
+                for hit in line_hits(rel, text, FILE_ROOT_CLIMB)
+            ]
+        if in_package(rel) and rel not in PACKAGE_LITERAL_ALLOW:
+            out += package_literals(rel, text)
+        if style == "hash" and not rel.endswith((".md", ".yaml", ".yml", ".toml")):
+            live = "\n".join(line.split("#", 1)[0] for line in text.splitlines())
+            climbs = line_hits(rel, live, SHELL_ROOT_CLIMB)
+            if len(climbs) > 1:
+                out += [f"{hit}: second /../.. climb (reuse the first)" for hit in climbs[1:]]
+            if rel not in EDF_HOME_ALLOW:
+                out += [f"{hit}: EDF directory (use EDF_PATH)" for hit in line_hits(rel, live, EDF_HOME)]
+    return out
+
+
 RULES: dict[str, Callable[[list[str]], list[str]]] = {
     "hash-seed": hash_seed,
     "import-path": import_path,
-    "enroot": enroot,
     "no-requeue": no_requeue,
     "scratch": scratch,
     "gitignore": gitignore,
     "gfx-literal": gfx_literal,
     "opt-flags": opt_flags,
     "site-values": site_values,
+    "hardcoded-paths": hardcoded_paths,
 }
 
 

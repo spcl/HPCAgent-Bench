@@ -115,8 +115,8 @@ def canon_frame(rows: list[tuple[str, str, float, str]]) -> pd.DataFrame:
     ("setup", "expected"),
     [
         ("llr40-qwen38-c", ("qwen38", "")),
-        ("llr40-qwen38-c-cpf-tool", ("qwen38", "cpf-tool")),
-        ("llr40-oss120b-c-cpf-src", ("oss120b", "cpf-src")),
+        ("llr40-qwen38-c-cpf-tool", ("qwen38", "cpf-tool-cpu")),
+        ("llr40-oss120b-c-cpf-src", ("oss120b", "cpf-cpu-src")),
         ("llr40-qwen38-fortran", None),
         ("llr40-qwen38-c-lang-skills", ("qwen38", "lang-skills")),
         ("gitscicomp10-qwen38-c", None),
@@ -194,10 +194,12 @@ def test_the_control_condition_reads_no_packet_not_the_registry_skill_wording() 
 
 
 def test_cpf_src_reads_as_source_and_cpf_tool_reads_as_the_tool() -> None:
-    """The two treatments the paper contrasts must read as two different THINGS, not two
-    abbreviations of the same phrase."""
-    assert setup_names.condition_label("cpf-src", []) == "Canonical Parallel Form as Source"
-    assert setup_names.condition_label("cpf-tool", []) == "Canonical Parallel Form Tool"
+    """The treatments the paper contrasts must read as different THINGS, not abbreviations of the same
+    phrase, and each names its device; a recorded device-neutral key reads as the CPU packet it ran."""
+    assert setup_names.condition_label("cpf-cpu-src", []) == "Canonical Parallel Form as Source, CPU"
+    assert setup_names.condition_label("cpf-gpu-src", []) == "Canonical Parallel Form as Source, GPU"
+    assert setup_names.condition_label("cpf-tool-gpu", []) == "Canonical Parallel Form Tool, GPU"
+    assert setup_names.condition_label("cpf-tool", []) == "Canonical Parallel Form Tool, CPU"
 
 
 def test_git_scicomps_two_conditions_both_read_as_proper_names() -> None:
@@ -216,13 +218,13 @@ def test_tag_of_reads_every_kernel_the_canon_frame_names() -> None:
 
 def test_rank_condition_puts_the_control_first_then_registry_order_then_unknowns() -> None:
     """gitscicomp10's ``kernel``/``repo`` and an unregistered name never raise; unknowns sort last."""
-    ranked = sorted(("zz-unknown", "cpf-tool", "", "cpf-src"), key=setup_names.rank_condition)
-    assert ranked == ["", "cpf-src", "cpf-tool", "zz-unknown"]
+    ranked = sorted(("zz-unknown", "cpf-tool-cpu", "", "cpf-cpu-src"), key=setup_names.rank_condition)
+    assert ranked == ["", "cpf-cpu-src", "cpf-tool-cpu", "zz-unknown"]
 
 
 def test_a_pattern_selects_one_experiment_and_language() -> None:
-    assert setup_names.parse_setup("llr40-qwen38-c-cpf-src", LLR40) == ("qwen38", "cpf-src")
+    assert setup_names.parse_setup("llr40-qwen38-c-cpf-src", LLR40) == ("qwen38", "cpf-cpu-src")
     assert setup_names.parse_setup("llr40-qwen38-fortran-cpf-src", setup_names.setup_pattern("llr40", "fortran")) == (
         "qwen38",
-        "cpf-src",
+        "cpf-cpu-src",
     )

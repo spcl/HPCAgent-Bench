@@ -9,8 +9,8 @@ an order that leaves every row's columns ascending. The body then runs unchanged
 arrays (renamed, since csc / bsr / ell reuse the buffer names with another meaning). A padded
 slot is skipped: an unused ell slot, a pattern mask's 0, a valued bsr / dia slot holding 0.
 
-``emit_bridge`` writes one :class:`RebuildSpec` per such array into the bench_info
-(``rebuild``); :func:`rebuild_pattern_arrays` applies them to the kernel function before any other
+``emit_bridge`` writes one :class:`~hpcagent_bench.emit_bridge.RebuildDocument` per such array into the
+bench_info (``rebuild``); :func:`rebuild_pattern_arrays` applies them to the kernel function before any other
 frontend pass, so the prepended loops go through the ordinary pipeline.
 """
 
@@ -18,10 +18,9 @@ import ast
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from hpcagent_bench.spec import as_block
+from hpcagent_bench.emit_bridge import RebuildDocument
 
 __all__ = [
-    "REBUILD_KEY",
     "REBUILT_SUFFIX",
     "RebuildSpec",
     "RenameNames",
@@ -29,9 +28,6 @@ __all__ = [
     "rebuild_source",
     "stored_entries",
 ]
-
-#: The bench_info key carrying ``{logical: RebuildSpec fields}``.
-REBUILD_KEY = "rebuild"
 
 #: Suffix of the local a rebuilt CSR buffer is renamed to in the body.
 REBUILT_SUFFIX = "_csr"
@@ -53,17 +49,17 @@ class RebuildSpec:
     scalars: Mapping[str, str]
 
     @classmethod
-    def from_raw(cls, logical: str, raw: object) -> "RebuildSpec":
-        block = as_block(raw)
+    def of(cls, logical: str, document: RebuildDocument) -> "RebuildSpec":
+        """``logical``'s entry of the bench_info ``rebuild`` block."""
         return cls(
             logical=logical,
-            format=str(block["format"]),
-            buffers={str(k): str(v) for k, v in as_block(block["buffers"]).items()},
-            target={str(k): str(v) for k, v in as_block(block["target"]).items()},
-            rows=str(block["rows"]),
-            cols=str(block["cols"]),
-            nnz=str(block["nnz"]),
-            scalars={str(k): str(v) for k, v in as_block(block["scalars"]).items()},
+            format=document.format,
+            buffers=dict(document.buffers),
+            target=dict(document.target),
+            rows=document.rows,
+            cols=document.cols,
+            nnz=document.nnz,
+            scalars=dict(document.scalars),
         )
 
     def local(self, role: str) -> str:
@@ -200,11 +196,11 @@ class RenameNames(ast.NodeTransformer):
         return node
 
 
-def rebuild_pattern_arrays(fn: ast.FunctionDef, info: Mapping[str, object]) -> None:
-    """In place: for each array in ``info['rebuild']``, replace ``fn``'s CSR buffer parameters with
+def rebuild_pattern_arrays(fn: ast.FunctionDef, rebuild: Mapping[str, RebuildDocument]) -> None:
+    """In place: for each array in the bench_info ``rebuild`` block, replace ``fn``'s CSR buffer parameters with
     the requested format's buffers, rename the body's reads to the rebuilt locals and prepend the
     rebuild (:func:`rebuild_source`)."""
-    specs = [RebuildSpec.from_raw(str(k), v) for k, v in as_block(info.get(REBUILD_KEY)).items()]
+    specs = [RebuildSpec.of(logical, document) for logical, document in rebuild.items()]
     if not specs:
         return
     renames = {spec.target[role]: spec.local(role) for spec in specs for role in spec.target}

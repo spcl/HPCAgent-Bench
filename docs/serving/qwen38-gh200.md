@@ -84,14 +84,16 @@ import json
 from openai import OpenAI
 
 client = OpenAI(base_url="http://localhost:8000/v1", api_key="unused")
-tools = [{
-    "type": "function",
-    "function": {
-        "name": "get_weather",
-        "description": "Current weather for a city.",
-        "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
-    },
-}]
+tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "Current weather for a city.",
+            "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+        },
+    }
+]
 messages = [{"role": "user", "content": "What is the weather in Lugano?"}]
 
 reply = client.chat.completions.create(model="q38", messages=messages, tools=tools, max_tokens=2048)

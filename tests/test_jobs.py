@@ -11,10 +11,11 @@ import sys
 
 import pytest
 
+from hpcagent_bench import paths
 from hpcagent_bench.cluster import jobs
 from hpcagent_bench.harness import grade_under, prepare
 
-REPO = pathlib.Path(__file__).resolve().parents[1]
+REPO = paths.ROOT
 
 # the rank
 
@@ -179,8 +180,12 @@ def test_a_job_script_parses_and_runs_its_action_under_srun(action: str) -> None
     path = JOB_SCRIPTS / f"{action}.sbatch"
     text = path.read_text(encoding="utf-8")
     assert subprocess.run(["bash", "-n", str(path)], capture_output=True, text=True, check=False).returncode == 0
-    # Directly under srun, or one srun step per shard through job_step.sh.
-    assert f"hpcagent_bench job {path.stem}" in text or f"run_job_shards {path.stem}" in text
+    # Directly under srun, one srun step per shard through job_step.sh, or job_step's own verb array.
+    assert (
+        f"hpcagent_bench job {path.stem}" in text
+        or f"run_job_shards {path.stem}" in text
+        or (f"(job {path.stem} " in text and "job_step " in text)
+    )
     assert "srun" in text or "job_step.sh" in text
     assert "ulimit -c 0" in text
     assert os.access(path, os.R_OK)

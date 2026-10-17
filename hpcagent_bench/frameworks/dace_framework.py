@@ -7,7 +7,6 @@ NumPy reference and returns it as a compiled SDFG (see DaceFramework.optimize)."
 
 import contextlib
 import copy
-import getpass
 import importlib
 import os
 import pathlib
@@ -32,8 +31,9 @@ from dace.codegen.instrumentation.report import DurationEvent
 from dace.frontend.python.parser import DaceProgram
 from dace.transformation.dataflow import MapCollapse
 
+from hpcagent_bench import cpf_canonical, languages, paths
 from hpcagent_bench import flags as bench_flags
-from hpcagent_bench import languages
+from hpcagent_bench.cpf_cache import CACHE_ENV as CPF_CACHE_ENV
 from hpcagent_bench.frameworks import Benchmark, Framework
 from hpcagent_bench.frameworks import utilities as util
 from hpcagent_bench.frameworks.errors import NotSupportedByFramework
@@ -56,6 +56,7 @@ from hpcagent_bench.frameworks.framework import (
 )
 from hpcagent_bench.frameworks.test import njit_reference, tolerance_datatype, tolerances_for
 from hpcagent_bench.fuzz import FuzzValue, safe_eval
+from hpcagent_bench.spec import BenchSpec
 
 if TYPE_CHECKING:
     from dace.frontend.python.common import SDFGClosure
@@ -69,6 +70,7 @@ __all__ = [
     "DACE_SUPPLIED_FLAGS",
     "GPU_RESIDENT_STORAGE",
     "NEW_GPU_OFFLOADING",
+    "PARALLEL_CODEGEN",
     "PARALLEL_FUSION_ROUNDS",
     "PIPELINES_BY_NAME",
     "PROBE_TIMEOUT_S",
@@ -100,6 +102,7 @@ __all__ = [
     "pipeline_canonicalize",
     "pipeline_named",
     "pipeline_parallel",
+    "pool_gpu_transients",
     "row_major_copy",
     "stage_device_arguments",
     "stage_to_device",
@@ -207,16 +210,18 @@ def pin_cpp_standard(arch: str = "cpu") -> None:
         dace.Config.set("compiler", "cpp_standard", value=std)
 
 
-#: One GPU stream: concurrent streams overlap kernels, which breaks per-kernel counter brackets and
-#: timeline attribution, and adds timing variance.
-SINGLE_STREAM = 1
+#: The default (null) stream only: ``-1`` makes every DaCe GPU stream ``nullptr`` (``0`` would mean
+#: unbounded streams, ``1`` one created stream). Concurrent streams overlap kernels, which breaks
+#: per-kernel counter brackets and timeline attribution and adds timing variance, and canon's offload
+#: assumes the default stream for its copies (``offload_to_gpu`` sets the same value).
+SINGLE_STREAM = -1
 
 #: Seconds the compiler-family probe binary may run.
 PROBE_TIMEOUT_S: int = 30
 
 
 def pin_single_stream() -> None:
-    """Serialise the GPU variant onto one stream, so a profile of it means what it looks like."""
+    """Serialise every GPU variant onto the default stream, so a profile of it means what it looks like."""
     if dace.Config.get("compiler", "cuda", "max_concurrent_streams") != SINGLE_STREAM:
         dace.Config.set("compiler", "cuda", "max_concurrent_streams", value=SINGLE_STREAM)
 
@@ -232,6 +237,10 @@ BUILD_CACHE_PINS = (
     ("compiler", "configure_cache", True),
     ("compiler", "command_cache", True),
 )
+
+#: The DaCe build-cache directory name under :func:`hpcagent_bench.paths.node_tmpfs_root` (or ``~/.cache/dace``
+#: when the node tmpfs is not writable), used when ``DACE_BUILD_CACHE_DIR`` is unset.
+DACE_BUILD_CACHE_NAME = "dace_build_cache"
 
 #: Pins already reported absent (one notice per process).
 ABSENT_PINS_REPORTED: set[tuple[str, ...]] = set()
@@ -254,7 +263,7 @@ def pin_gpu_toolchain() -> None:
     """Point DaCe's GPU build at this host's ROCm install (``find_package(HIP)`` needs
     ``CMAKE_PREFIX_PATH`` / ``HIP_DIR``, and ROCm's bin is kept off ``PATH``). Only adds: operator
     values stay, and a host without ROCm is untouched."""
-    root = pathlib.Path(os.environ.get("ROCM_PATH") or "/opt/rocm")
+    root = paths.rocm_root()
     if not (root / "lib" / "cmake" / "hip").is_dir():
         return  # no ROCm here: a CUDA box, or a node without the SDK
     os.environ.setdefault("ROCM_PATH", str(root))
@@ -315,12 +324,12 @@ def pin_per_rank_build_dirs() -> None:
         dace.Config.set("cache_distaware", value=True)
     cache_root = os.environ.get("DACE_BUILD_CACHE_DIR")
     if cache_root is None:
-        shm = pathlib.Path("/dev/shm")
-        cache_root = str(
-            shm / f"dace_build_cache_{getpass.getuser()}"
-            if shm.is_dir() and os.access(shm, os.W_OK)
-            else pathlib.Path.home() / ".cache/dace/build_cache"
-        )
+        tmpfs = paths.node_tmpfs_root(DACE_BUILD_CACHE_NAME)
+        try:
+            tmpfs.mkdir(parents=True, exist_ok=True)
+            cache_root = str(tmpfs)
+        except OSError:
+            cache_root = str(pathlib.Path.home() / ".cache" / "dace" / DACE_BUILD_CACHE_NAME)
     # An operator-set root is partitioned per rank too, like the build folder.
     root = pathlib.Path(cache_root)
     if root.name != f"rank{rank}":
@@ -371,6 +380,8 @@ class PipelineContext:
 
     device: dace_dtypes.DeviceType
     symbols: dict[str, int] = field(default_factory=dict[str, int])
+    #: The size symbols the manifest declares small (``public.scales``), declared before ``canonicalize``.
+    small: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True, slots=True)
@@ -446,11 +457,35 @@ def pipeline_canonicalize(sdfg: dace.SDFG, ctx: PipelineContext) -> None:
     from dace.transformation.passes.canonicalize.pipeline import canonicalize
 
     target = "gpu" if ctx.device is dace_dtypes.DeviceType.GPU else "cpu"
+    cpf_canonical.declare_small(sdfg, ctx.small)
     # validate_all re-validates after every stage (a bisect aid); the final validate still runs.
     canonicalize(sdfg, target=target, validate_all=False)
     if target == "gpu":
         offload_to_gpu(sdfg)
     finalize_for_target(sdfg, target=target)
+
+
+def pool_gpu_transients(sdfg: dace.SDFG) -> int:
+    """Allocate every device transient from the stream-ordered memory pool (``MallocAsync`` /
+    ``FreeAsync``): a transient allocated per call or per state then reuses the pool's memory instead
+    of paying a device ``malloc`` and ``free`` each time. Views alias their container and are left
+    alone. Returns how many containers were marked."""
+    from dace import data as dace_data
+
+    marked = 0
+    for nested in sdfg.all_sdfgs_recursive():
+        for desc in nested.arrays.values():
+            if (
+                desc.transient
+                and not isinstance(desc, dace_data.View)
+                and isinstance(desc, dace_data.Array)  # a Scalar has no pool to draw from
+                and desc.storage == dace_dtypes.StorageType.GPU_Global
+                and desc.lifetime != dace_dtypes.AllocationLifetime.External
+                and not desc.pool
+            ):
+                desc.pool = True
+                marked += 1
+    return marked
 
 
 #: Storage classes that put the bytes in device memory (pinned host memory is still host).
@@ -498,15 +533,25 @@ def enforce_gpu_residency(sdfg: dace.SDFG) -> None:
 #: structure moved to the device. Each pipeline is scored on every kernel (no search reporting a
 #: winner). ``autoopt`` is upstream's own optimizer.
 #:
-#: ``parallel`` and ``autoopt`` use the classic generators with tree reductions and the
-#: explicit-copy lift off (byte-identical to upstream); ``canon`` uses the experimental generators.
-#: Both tuples set the same keys, because ``apply_pipeline_config`` writes process-global config and
-#: an omitted key would be inherited. ``optimizer.new_gpu_offloading_pass`` is true for all.
+#: ``autoopt`` uses the classic generators with tree reductions and the explicit-copy lift off
+#: (byte-identical to upstream); ``parallel`` keeps the classic CPU generator but takes the new GPU
+#: one; ``canon`` uses the new generators on both. Every tuple sets the same keys, because
+#: ``apply_pipeline_config`` writes process-global config and an omitted key would be inherited.
+#: ``optimizer.new_gpu_offloading_pass`` is true for all.
 NEW_GPU_OFFLOADING: tuple[tuple[str, ...], bool] = (("optimizer", "new_gpu_offloading_pass"), True)
 
 CLASSIC_CODEGEN: tuple[tuple[tuple[str, ...], str | bool], ...] = (
     (("compiler", "cpu", "implementation"), "legacy"),
     (("compiler", "cuda", "implementation"), "legacy"),
+    (("compiler", "emit_tree_reductions"), False),
+    (("compiler", "cpu", "explicit_copy"), False),
+    NEW_GPU_OFFLOADING,
+)
+#: The classic CPU generator and the new GPU one: the knobs the classic CPU generator reads keep
+#: their classic values (the new GPU generator ignores them).
+PARALLEL_CODEGEN: tuple[tuple[tuple[str, ...], str | bool], ...] = (
+    (("compiler", "cpu", "implementation"), "legacy"),
+    (("compiler", "cuda", "implementation"), "experimental"),
     (("compiler", "emit_tree_reductions"), False),
     (("compiler", "cpu", "explicit_copy"), False),
     NEW_GPU_OFFLOADING,
@@ -531,8 +576,8 @@ def apply_pipeline_config(pipe: SdfgPipeline) -> None:
 
 
 DACE_PIPELINES: tuple[SdfgPipeline, ...] = (
-    SdfgPipeline("parallel_cpu", pipeline_parallel, config=CLASSIC_CODEGEN),
-    SdfgPipeline("parallel_gpu", pipeline_parallel, config=CLASSIC_CODEGEN),
+    SdfgPipeline("parallel_cpu", pipeline_parallel, config=PARALLEL_CODEGEN),
+    SdfgPipeline("parallel_gpu", pipeline_parallel, config=PARALLEL_CODEGEN),
     SdfgPipeline("canon_cpu", pipeline_canonicalize, config=READABLE_CODEGEN),
     SdfgPipeline("canon_gpu", pipeline_canonicalize, config=READABLE_CODEGEN),
     SdfgPipeline("autoopt_cpu", pipeline_auto_opt, config=CLASSIC_CODEGEN),
@@ -687,10 +732,10 @@ class DaceFramework(Framework):
         program: DaceProgram = vars(self.kernel_module(bench))[bench.info["func_name"]]
         return program
 
-    def _build_context(self) -> PipelineContext:
-        """Bundle the module-level DaCe handles the pipelines refer to into one record."""
+    def _build_context(self, small: frozenset[str] = frozenset()) -> PipelineContext:
+        """Bundle the module-level DaCe handles the pipelines refer to, and the kernel's ``small`` symbols, into one record."""
         device = dace_dtypes.DeviceType.GPU if self.info["arch"] == "gpu" else dace_dtypes.DeviceType.CPU
-        return PipelineContext(device=device)
+        return PipelineContext(device=device, small=small)
 
     def _device_tag(self) -> str:
         """The cache filename discriminator for the target device (``cpu`` / ``gpu``)."""
@@ -731,21 +776,47 @@ class DaceFramework(Framework):
         framework_cache.save_sdfg(cache_dir, module, tag, fingerprint, sdfg)
         return sdfg
 
+    def cached_canonical(self, bench: Benchmark, cache_root: pathlib.Path) -> dace.SDFG:
+        """The kernel's canonical SDFG for this device from the CPF cache under ``cache_root``
+        (:func:`hpcagent_bench.cpf_canonical.canonical_sdfg`, the entry the CPF prerender renders its forms
+        from), canonicalized and published there on a miss. A cached canonicalize failure raises its error."""
+        spec = BenchSpec.load(bench.info["short_name"])
+        precision = self.datatype or ""
+        target = self._device_tag()
+        impl = cpf_canonical.emit_program(spec)
+        if isinstance(impl, dict):
+            raise RuntimeError(f"cached canonicalize: {impl['verdict']}: {impl.get('error', '')}")
+        key = cpf_canonical.canonical_key(
+            impl, cpf_canonical.dace_commit(), precision, target, cpf_canonical.small_symbols(spec)
+        )
+        sdfg, cached = cpf_canonical.canonical_sdfg(spec, impl, key, cache_root, precision, target)
+        if isinstance(sdfg, dict):
+            raise RuntimeError(f"cached canonicalize {key}: {sdfg['verdict']}: {sdfg.get('error', '')}")
+        print(f"DaCe optimize: canonical SDFG {'loaded from' if cached else 'published to'} the CPF cache ({key})")
+        return sdfg
+
     def _build_sdfgs(self, ct_impl: DaceProgram, ctx: PipelineContext, bench: Benchmark) -> dict[str, dace.SDFG]:
         """Run the pipeline this flavor scores on a copy of the base SDFG (:meth:`build_with_cache`); a
-        failing pipeline is logged and skipped."""
+        failing pipeline is logged and skipped. A canon pipeline reads the canonical SDFG the CPF prerender
+        cached (:meth:`cached_canonical`) when ``$HPCAGENT_BENCH_CPF_CACHE`` names a cache root."""
         base_sdfg = self.build_with_cache(bench, self._device_tag(), lambda: ct_impl.to_sdfg(simplify=False))
+        canonical_root = os.environ.get(CPF_CACHE_ENV, "")
         produced: dict[str, dace.SDFG] = {}
         for name in self.scored_pipelines():
             pipe = pipeline_named(name)
             try:
                 apply_pipeline_config(pipe)
-                sdfg = copy.deepcopy(base_sdfg)
-                sdfg.name = pipe.name  # pyright: ignore[reportAttributeAccessIssue]  # dace types Property, not its str
-                pipe.transform(sdfg, ctx)
+                if pipe.transform is pipeline_canonicalize and canonical_root:
+                    sdfg = self.cached_canonical(bench, pathlib.Path(canonical_root))
+                    sdfg.name = pipe.name  # pyright: ignore[reportAttributeAccessIssue]  # dace types Property, not its str
+                else:
+                    sdfg = copy.deepcopy(base_sdfg)
+                    sdfg.name = pipe.name  # pyright: ignore[reportAttributeAccessIssue]  # dace types Property, not its str
+                    pipe.transform(sdfg, ctx)
                 # The residency contract, once, after every GPU pipeline.
                 if self.info["arch"] == "gpu":
                     enforce_gpu_residency(sdfg)
+                    pool_gpu_transients(sdfg)
                 produced[pipe.name] = sdfg
             except Exception as exc:  # noqa: BLE001 -- a failed pipeline is recorded and the next one tried
                 print(f"DaCe {pipe.name} pipeline failed: {exc}")
@@ -771,7 +842,7 @@ class DaceFramework(Framework):
         # The parsed ``@dace.program`` from :meth:`implementations`, whose SDFG the pipelines deepcopy.
         if not isinstance(program, DaceProgram):
             raise TypeError(f"{self.fname}: optimize needs a parsed @dace.program, got {type(program).__name__}")
-        ctx = self._build_context()
+        ctx = self._build_context(cpf_canonical.small_symbols(BenchSpec.load(bench.info["short_name"])))
         pin_cpp_standard(self.info["arch"])
         pin_host_compiler()
         pin_per_rank_build_dirs()
@@ -867,7 +938,10 @@ class DaceFramework(Framework):
         band = tolerance_datatype(self.datatype, present.pop() if len(present) == 1 else None)
         rtol, atol = tolerances_for(band)
         label = f"{self.info['full_name']} - {variant.name}"
-        return util.validate(reference, host, label, rtol=rtol, atol=atol)
+        spec = BenchSpec.load(bench.info["short_name"])
+        return util.validate(
+            reference, host, label, rtol=rtol, atol=atol, mismatch_fraction=spec.mismatch_fraction or 0.0
+        )
 
     def reference_outputs(self, bench: Benchmark, bdata: BenchData) -> list[OutputValue] | None:
         """The NumPy reference outputs for ``bdata``, or ``None`` (skips the gate). On a GPU flavor they are
@@ -988,7 +1062,7 @@ class DaceFramework(Framework):
             return {}
         recipes: Sequence[tuple[str, str]] = vars(self.kernel_module(bench)).get("__hpcagent_bench_symbol_defs__", ())
         renames = self.arg_renames(bench)
-        args = [renames.get(a, a) for a in bench.info["input_args"]]
+        args = [renames.get(name, name) for name in map(str, bench.info["input_args"])]
         # ``sdfg.arrays`` is keyed by the emitted name.
         values = {renames.get(k, k): v for k, v in resolved.items()} if renames else resolved
         return bind_free_symbols(impl.sdfg, recipes, args, values, bound)

@@ -131,34 +131,34 @@ def test_a_nested_scoped_environment_layers_over_the_outer_one(monkeypatch: pyte
     """A protocol's scope inside a fused request's setup scope (grade_under.protocol_grade under
     JudgeHandler.setup_scope) adds its keys; the setup's own keys still resolve from the setup."""
     monkeypatch.setenv("HPCAGENT_BENCH_RECORD_SETUP", "job-level")
-    monkeypatch.setenv("HPCAGENT_BENCH_FUSED_TEST_ONLY_KEY", "job-level")
+    monkeypatch.setenv("HPCAGENT_BENCH_RECORD_STUDY", "job-level")
     monkeypatch.delenv("HPCAGENT_BENCH_MEASUREMENT_REPEAT", raising=False)
-    setup = {"HPCAGENT_BENCH_RECORD_SETUP": "setup-setup", "HPCAGENT_BENCH_FUSED_TEST_ONLY_KEY": None}
+    setup = {"HPCAGENT_BENCH_RECORD_SETUP": "setup-setup", "HPCAGENT_BENCH_RECORD_STUDY": None}
     with config.scoped_environment(setup):
         with config.scoped_environment({"HPCAGENT_BENCH_MEASUREMENT_REPEAT": "5"}):
-            assert config.get_str("record.setup") == "setup-setup"
-            assert config.get("fused.test_only_key", "default") == "default"
+            assert config.current().record.setup == "setup-setup"
+            assert config.current().record.study == ""
             assert config.env_value("HPCAGENT_BENCH_MEASUREMENT_REPEAT") == "5"
             with config.scoped_environment({"HPCAGENT_BENCH_RECORD_SETUP": "inner"}):
-                assert config.get_str("record.setup") == "inner"  # the inner scope still wins its own keys
+                assert config.current().record.setup == "inner"  # the inner scope still wins its own keys
         assert config.env_value("HPCAGENT_BENCH_MEASUREMENT_REPEAT") is None
-        assert config.get_str("record.setup") == "setup-setup"
+        assert config.current().record.setup == "setup-setup"
 
 
 def test_a_scoped_environment_overrides_and_unsets_only_inside_its_context(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HPCAGENT_BENCH_RECORD_SETUP", "job-level")
-    monkeypatch.setenv("HPCAGENT_BENCH_FUSED_TEST_ONLY_KEY", "job-level")
-    scope = {"HPCAGENT_BENCH_RECORD_SETUP": "setup-setup", "HPCAGENT_BENCH_FUSED_TEST_ONLY_KEY": None}
+    monkeypatch.setenv("HPCAGENT_BENCH_RECORD_STUDY", "job-level")
+    scope = {"HPCAGENT_BENCH_RECORD_SETUP": "setup-setup", "HPCAGENT_BENCH_RECORD_STUDY": None}
     with config.scoped_environment(scope):
-        assert config.get_str("record.setup") == "setup-setup"
-        # None means UNSET for the scope: the default, never the process env's value.
-        assert config.get("fused.test_only_key", "default") == "default"
+        assert config.current().record.setup == "setup-setup"
+        # None means UNSET for the scope: the model default, never the process env's value.
+        assert config.current().record.study == ""
         seen: list[str] = []
-        other = threading.Thread(target=lambda: seen.append(config.get_str("record.setup")))
+        other = threading.Thread(target=lambda: seen.append(config.current().record.setup))
         other.start()
         other.join()
         assert seen == ["job-level"], "a scope leaked into another request's thread"
-    assert config.get_str("record.setup") == "job-level"
+    assert config.current().record.setup == "job-level"
 
 
 def test_a_resolved_overlay_parses_sets_and_unsets() -> None:

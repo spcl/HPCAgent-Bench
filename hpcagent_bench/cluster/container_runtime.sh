@@ -69,15 +69,15 @@ role_mounts() {
         #
         # ONLY THE SEVEN JIT CATEGORY SUBDIRS run_vllm_node exports (<cache_root>/.<category>/<key>),
         # never the whole JIT_CACHE_ROOT: the root also holds .cpf-prerender and results/canon.db,
-        # which a third-party serving stack (trust_remote_code) must not be able to rewrite. The
-        # default must match cache_env.sh's JIT_CACHE_ROOT exactly.
+        # which a third-party serving stack (trust_remote_code) must not be able to rewrite. The root is
+        # cache_env.sh's JIT_CACHE_ROOT.
         #
         # mkdir -p PER CATEGORY, printing a path only when its own mkdir succeeded: a bind source
         # that does not exist stops the container from starting, so a category that cannot be
         # created is dropped (ephemeral inside the container) instead. `mkdir ... && printf ...`
         # does not trip `set -e`.
         vllm*|inference*)
-            local jit_root="${JIT_CACHE_ROOT:-${SCRATCH:?set SCRATCH}/.hpcagentbench-cache}"
+            local jit_root="${JIT_CACHE_ROOT:?helpers/scripts/cache_env.sh exports it}"
             local jit_category
             for jit_category in .home .xdg .aiter .vllm .triton .inductor .torch-ext; do
                 mkdir -p "${jit_root}/${jit_category}" 2>/dev/null &&
@@ -175,7 +175,7 @@ derived_edf() {
     [[ "${role}" == agent* ]] && read_only=1
     local -a edf_dirs
     EDF_FILE="${RUN_DIR}/edf/${name}.${role}.toml"
-    IFS=: read -r -a edf_dirs <<<"${EDF_PATH:-${HOME}/.edf}"
+    IFS=: read -r -a edf_dirs <<<"${EDF_PATH:?helpers/scripts/site_env.sh exports it}"
     for dir in "${edf_dirs[@]}"; do
         if [[ -f "${dir}/${name}.toml" ]]; then
             src="${dir}/${name}.toml"
@@ -183,7 +183,7 @@ derived_edf() {
         fi
     done
     if [[ -z "${src}" ]]; then
-        echo "EDF '${name}.toml' not found in ${EDF_PATH:-${HOME}/.edf}" >&2
+        echo "EDF '${name}.toml' not found in ${EDF_PATH}" >&2
         exit 2
     fi
     mkdir -p "${RUN_DIR}/edf"

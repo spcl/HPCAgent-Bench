@@ -234,37 +234,11 @@ ENVELOPE_FIELDS = ("requests", "workspace_bytes", "build")
 #: A worker's passing /score grades on one kernel with their stored units, newest first: the grade id,
 #: kernel, stamp, request envelope, and each unit's part, language and text.
 PASSING_GRADES = (
-    "select g.id, g.kernel, g.ts_ms, {requests}, g.workspace_bytes, g.requested_build, "
+    "select g.id, g.kernel, g.ts_ms, g.requests, g.workspace_bytes, g.requested_build, "
     "gs.part, gs.language, s.text from grades g "
     "join episodes r on r.id = g.episode_id join grade_sources gs on gs.grade_id = g.id join sources s on s.hash = gs.hash "
     "where r.label = ? and g.kind = 'score' and g.correct = 1 and g.ts_ms >= ? order by g.ts_ms desc, g.id desc"
 )
-
-#: The ``requests`` column of a shard, or for a shard written before it (schema 6) the per-request columns
-#: it folded, as one JSON text :func:`legacy_requests` reads.
-REQUESTS_COLUMN = "g.requests"
-LEGACY_REQUESTS = "json_array(g.requested_libraries, g.distribution, g.layout_request)"
-
-
-def grade_requests_column(db: str) -> str:
-    """The request expression for ``db``'s grades: its ``requests`` column, or the legacy columns."""
-    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
-    try:
-        columns = {str(row[1]) for row in con.execute("PRAGMA table_info(grades)")}
-    finally:
-        con.close()
-    return REQUESTS_COLUMN if "requests" in columns or not columns else LEGACY_REQUESTS
-
-
-def legacy_requests(text: str) -> str | None:
-    """A schema-6 grade's request as ``requests`` JSON: its libraries as ``startup.load``. None when it also
-    recorded a distribution or a sparse layout, which only the judge can fold (resubmitting the grade
-    without them would be refused or run another layout)."""
-    libraries, distribution, sparse = json.loads(text)
-    if distribution or sparse:
-        return None
-    load = json.loads(libraries or "[]")
-    return json.dumps({"startup": {"load": load}}, sort_keys=True) if load else ""
 
 
 def last_passing(run_dir: pathlib.Path, bench: str, episode_id: str, since_ms: int = 0) -> dict[str, str] | None:
@@ -284,15 +258,9 @@ def last_passing(run_dir: pathlib.Path, bench: str, episode_id: str, since_ms: i
     """
     graded: dict[tuple[int, int, str], tuple[tuple, dict[str, tuple[str, str]]]] = {}
     for db in db_files(run_dir):
-        column = grade_requests_column(db)
         for grade, stored_bench, ts, *envelope, part, language, text in shard_rows(
-            db, PASSING_GRADES.format(requests=column), (episode_id, since_ms)
+            db, PASSING_GRADES, (episode_id, since_ms)
         ):
-            if column == LEGACY_REQUESTS:
-                folded = legacy_requests(envelope[0])
-                if folded is None:
-                    continue
-                envelope[0] = folded
             # Matched on the short name, not the stored string (see short_name).
             if short_name(stored_bench) == short_name(bench):
                 graded.setdefault((int(ts), int(grade), db), (tuple(envelope), {}))[1][part] = (language, text)
@@ -415,17 +383,14 @@ def workspace_dir(run_dir: pathlib.Path, episode_id: str) -> pathlib.Path | None
 
 
 def workspace_candidate(run_dir: pathlib.Path, episode_id: str, kernel: str) -> dict[str, str] | None:
-    """The deliverable the agent LEFT behind, for a setup where nothing it did was ever scored.
+    """The kernel source the agent left in its write folder (:func:`workspace_dir`), as a promotion item, or
+    None when the folder holds no ``<kernel><ext>`` of :data:`WORKSPACE_LANGUAGES`. A ``<kernel>``
+    :data:`DEVICE_EXT` file beside it makes the item a hip item with ``device_source``.
 
-    :func:`candidates` cannot see a blind worker at all: its evidence is the source the judge keeps
-    with every PASSING score grade, and a blind setup answers /score with 403 -- so no grade holds one
-    and the loop above has nothing to iterate. The agent did write a kernel, to
-    the folder the prompt named, and on llrblind every one of the 47 agents killed on the clock had
-    left one. Grading it is the difference between recording that work and erasing it.
-
-    This is the blind mode's alone (:attr:`~hpcagent_agent.submission_mode.SubmissionMode.harvests_workspace`) and must stay that way. Every other experiment's
-    promotion path only ever offers the judge an answer the agent VERIFIED; harvesting unverified
-    files by default would quietly add rows to setups whose numbers are already published.
+    For the blind submission mode only
+    (:attr:`~hpcagent_agent.submission_mode.SubmissionMode.harvests_workspace`): a blind setup answers
+    /score with 403, so :func:`candidates` finds no scored source. Other modes promote only sources the
+    agent scored.
     """
     folder = workspace_dir(run_dir, episode_id)
     if folder is None or not folder.is_dir():

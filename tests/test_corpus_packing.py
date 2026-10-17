@@ -18,7 +18,6 @@ the one thing it cannot do is skew a packing built out of real numbers -- and wh
 resolves there is no packing to build and the stride comes back untouched.
 """
 
-import dataclasses
 import json
 from collections.abc import Mapping, Sequence
 
@@ -174,7 +173,7 @@ def test_a_zero_byte_footprint_is_an_unknown_not_a_free_kernel(corpus) -> None:
     decided costs nothing.
     """
     spec = next(s for s in corpus.values() if s.short_name == "lulesh")
-    zeroed = dataclasses.replace(spec, parameters={**spec.parameters, "M": dict.fromkeys(spec.parameters["M"], 0)})
+    zeroed = spec.replace(parameters={**spec.parameters, "M": dict.fromkeys(spec.parameters["M"], 0)})
     cost = preset_cost(zeroed, "scientific_computing/unstructured_grids/lulesh/lulesh", "M")
     assert not cost.resolved, "a 0-byte footprint was accepted as a prediction"
     assert "0 bytes" in cost.reason

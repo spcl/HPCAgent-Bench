@@ -647,7 +647,7 @@ class Framework:
         """Run ``runner`` ``warmup + repeat`` times, drop the first ``warmup``, and return both timing series.
         ``warmup=None`` reads ``measurement.warmup``."""
         if warmup is None:
-            warmup = max(0, config.get_int("measurement.warmup", 1))
+            warmup = config.current().measurement.warmup
         timer = self.create_timer(impl)
         try:
             samples: list[TimingResult] = []

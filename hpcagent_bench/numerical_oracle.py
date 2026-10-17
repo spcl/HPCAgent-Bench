@@ -5,7 +5,6 @@
 import contextlib
 import ctypes
 import inspect
-import json
 import os
 import pathlib
 import pickle
@@ -18,9 +17,10 @@ import sys
 import tempfile
 import time
 import warnings
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
+import pydantic
 
 __all__ = [
     "BACKENDS",
@@ -51,6 +51,8 @@ __all__ = [
     "PYTHRAN_BASE_TO_NP",
     "PY_BACKENDS",
     "PY_FORK_TIMEOUT_S",
+    "ProbeRecord",
+    "ProbeVerdict",
     "all_backend_status",
     "binding_shape",
     "call_by_name",
@@ -105,8 +107,11 @@ PY_FORK_TIMEOUT_S = int(os.environ.get("HPCAGENT_BENCH_PY_FORK_TIMEOUT_S", "600"
 #: m > N outright, and clamping m = min(m, N//2) gives 4, too few to check against the analytic
 #: Poisson spectrum or to reach the iteration 20-30 range where the ghost eigenvalues appear;
 #: bdf_newton_krylov's step count, order history and Jacobian-reuse count are all data-dependent.
+#: cloudsc_subsidence_forcing runs at the one model level its config knob ``jk`` names (100 of 137,
+#: below CLOUDSC's cloud top): scaled, KLEV falls to 13 and the level lies outside the column.
 NO_SCALE = (
     "bdf_newton_krylov",
+    "cloudsc_subsidence_forcing",
     "distribution_search",
     "ilu0",
     "jfnk_bratu",
@@ -208,8 +213,9 @@ from hpcagent_bench.frameworks.forked import die_with_parent, run_forked  # noqa
 from hpcagent_bench.initialize import auto_initialize  # noqa: E402
 from hpcagent_bench.pluto_affine import scop_nonaffine_reason  # noqa: E402
 from hpcagent_bench.precision import Precision  # noqa: E402
-from hpcagent_bench.spec import BenchSpec, as_block  # noqa: E402
+from hpcagent_bench.spec import BenchSpec  # noqa: E402
 from hpcagent_bench.support.bindings.contract import index_base  # noqa: E402
+from hpcagent_bench.translators.numpyto_c.bindings import read_binding  # noqa: E402
 from hpcagent_bench.translators.numpyto_common.dtypes import canonical, compute_dtype  # noqa: E402
 
 # The emitter's own fp-tag helper, so this file's globs match what it names emitted files.
@@ -398,26 +404,14 @@ def all_backend_status(reason: str) -> dict[str, str]:
     return dict.fromkeys((*BACKENDS, *PY_BACKENDS, "jax"), reason)
 
 
-#: Defaults for ``hpcagent_bench/config.yaml``'s ``oracle:`` block when a key is absent.
-_CONFIG_DEFAULTS: dict[str, int | bool | dict[str, object]] = {
-    "compile_timeout_s": 75,
-    # polycc gets its own, longer bound: pluto's schedule search is not a compiler hang, and adi
-    # legitimately needs minutes where 75 s only ever caught wedged builds.
-    "polycc_timeout_s": 360,
-    "numba_fastmath": False,
-    "overrides": {},
-}
-
-
-def _cfg(key: str, short: str = "") -> Any:
-    """Config value for ``key`` from ``oracle:``, honouring per-kernel ``oracle.overrides.<short>``."""
+def _cfg(key: Literal["compile_timeout_s", "polycc_timeout_s", "numba_fastmath"], short: str = "") -> Any:
+    """``oracle.<key>``, replaced by ``oracle.overrides[short].<key>`` when that entry sets it."""
     from hpcagent_bench import config
 
-    if short:
-        ov = as_block(as_block(config.get("oracle.overrides")).get(short))
-        if key in ov:
-            return ov[key]
-    return config.get(f"oracle.{key}", _CONFIG_DEFAULTS.get(key))
+    oracle = config.current().oracle
+    override = oracle.overrides.get(short)
+    value = getattr(override, key) if override is not None else None
+    return value if value is not None else getattr(oracle, key)
 
 
 #: Precision sweep config: name -> (numpy float dtype, Precision enum, emit ``--precision``, rtol, atol).
@@ -818,7 +812,7 @@ def run_kernel(
             if not bindings:
                 native_emit_error = "FAIL:no-binding"
             else:
-                binding = json.loads(bindings[0].read_text())
+                binding = read_binding(bindings[0]).model_dump(exclude_none=True)
         # Derive shape symbols from actual input-array dims (a scalar symbol can name an array's
         # extent rather than a preset param, e.g. needleman_wunsch's M = a.shape[0]). Falls back to
         # the spec's symbolic init shapes without a binding. Bare identifiers only.
@@ -1529,7 +1523,7 @@ def _run_pluto(
         # override's src lives in bench_dir while the binding the translator wrote for this
         # precision -- the ABI src's signature was copied from verbatim -- is still in tdp.
         pb = tdp / f"{base}_{fptype}_pluto_binding.json"
-        pluto_binding = json.loads(pb.read_text()) if pb.exists() else binding
+        pluto_binding = read_binding(pb).model_dump(exclude_none=True) if pb.exists() else binding
         try:
             result = _invoke_isolated("c", pluto_binding, so, by, syms, expected, compare, rtol, atol, index_names)
         except Exception as exc:  # noqa: BLE001
@@ -1542,6 +1536,30 @@ def _run_pluto(
     if result.startswith("FAIL:") and c_status == "ok":
         return f"skip:unsupported:pluto-miscompile:{result.removeprefix('FAIL:')}"
     return result
+
+
+#: What one ``dace_numeric_probe`` child concluded about its kernel.
+ProbeVerdict = Literal["ok", "mismatch", "parse_fail", "noprogram", "compile_fail", "run_fail", "unbound_symbols"]
+
+
+class ProbeRecord(pydantic.BaseModel):
+    """The JSON line a :mod:`hpcagent_bench.dace_numeric_probe` child prints: its verdict, the detail behind it,
+    the seconds each phase took, and per output ``ok`` or why not. Filled in as the child goes; only the
+    fields it set are printed."""
+
+    model_config = pydantic.ConfigDict(extra="forbid")
+
+    kernel: str
+    timing: dict[str, float] = pydantic.Field(default_factory=dict[str, float])
+    verdict: ProbeVerdict | None = None
+    detail: str = ""
+    errtype: str = ""
+    frame: str = ""
+    outputs: dict[str, str] = pydantic.Field(default_factory=dict[str, str])
+
+    def line(self) -> str:
+        """The record as the one line the child prints."""
+        return self.model_dump_json(exclude_unset=True)
 
 
 def run_dace_backend(short, info, by, syms, expected, compare, rtol, atol) -> str:
@@ -1592,12 +1610,12 @@ def run_dace_backend(short, info, by, syms, expected, compare, rtol, atol) -> st
             return f"FAIL:timeout:{DACE_TIMEOUT_S:.0f}s"
     for line in reversed(proc.stdout.splitlines()):
         if line.startswith("{"):
-            rec = json.loads(line)
+            rec = ProbeRecord.model_validate_json(line)
             # The verdict NAME is what the ratchet keys on, so it stays the second field verbatim.
             # The detail arrives already filtered to its decisive lines and bounded by the probe
             # (dace_numeric_probe.DETAIL_CHARS); clipping it to 160 here threw the compiler's own
             # error away and left "CompilationError: Compiler failure:" as the whole diagnosis.
-            return "ok" if rec["verdict"] == "ok" else f"FAIL:{rec['verdict']}:{rec.get('detail', '')[:3200]}"
+            return "ok" if rec.verdict == "ok" else f"FAIL:{rec.verdict}:{rec.detail[:3200]}"
     return "FAIL:crash:" + (proc.stderr or proc.stdout)[-160:].replace("\n", " ")
 
 

@@ -7,8 +7,7 @@ an empty set or a zero ratio give two plots of the same data that do not match.
 
 WHAT LIVES HERE. Robust outlier rejection, the median and its bootstrap interval, the geometric
 mean and its bootstrap interval, the arithmetic mean and its bootstrap interval, the signed-change axis
-transform, the one-value-per-kernel reduction, and the building blocks of the paired tests (sign flips, Walsh
-averages, the Hodges-Lehmann estimate, the signed-rank call). Which test a comparison runs is
+transform, the one-value-per-kernel reduction, and the building blocks of the paired test (sign flips). Which test a comparison runs is
 the test registry's choice (:mod:`hpcagent_bench.stats.significance`), which builds on these and is never
 imported from here.
 
@@ -36,9 +35,7 @@ Reported defaults (so a run's rigor is documented, not implicit):
 * interval over kernels -- BCa bootstrap of the statistic (:func:`geomean_ci`, :func:`mean_ci`), 9999
   resamples, seed 0, withheld below :data:`MIN_PAIRS_FOR_INTERVAL` values;
 * sign flips -- exact up to :data:`SIGN_FLIP_EXACT_MAX_N` pairs, else :data:`SIGN_FLIP_DRAWS` seeded sign
-  vectors; :func:`sign_flip_interval` is the set of shifts the test does not reject;
-* signed rank -- Wilcoxon, exact or approximate by :func:`use_exact` (:data:`EXACT_MAX_N`);
-  the method is passed to scipy explicitly rather than left to its ``auto`` heuristic.
+  vectors; :func:`sign_flip_interval` is the set of shifts the test does not reject.
 """
 
 import enum
@@ -57,7 +54,6 @@ __all__ = [
     "DEFAULT_CONFIDENCE",
     "DEFAULT_MAD_Z",
     "DEFAULT_RESAMPLES",
-    "EXACT_MAX_N",
     "MAD_TO_SIGMA",
     "MEANAD_TO_SIGMA",
     "MIN_INTERVAL_SAMPLES",
@@ -75,7 +71,6 @@ __all__ = [
     "geomean",
     "geomean_ci",
     "geomean_interval",
-    "hodges_lehmann",
     "log2_change",
     "mean_ci",
     "mean_interval",
@@ -84,11 +79,8 @@ __all__ = [
     "sign_flip_pvalue",
     "sign_flips",
     "signed_change",
-    "signed_rank_test",
     "signs",
     "usable_ratios",
-    "use_exact",
-    "walsh_averages",
 ]
 
 # scipy is imported INSIDE the functions that need it: the grading path takes its geometric mean from
@@ -210,7 +202,7 @@ def median_ci(
 #: Two-sided error rate every interval and test here defaults to.
 DEFAULT_ALPHA: float = 0.05
 
-#: Below this a two-sided signed-rank test cannot reach ``DEFAULT_ALPHA`` whatever the data says
+#: Below this a two-sided sign-flip test cannot reach ``DEFAULT_ALPHA`` whatever the data says
 #: (its smallest attainable p at n = 5 is 0.0625), so an interval would be decoration.
 MIN_PAIRS_FOR_INTERVAL: int = 6
 
@@ -279,46 +271,6 @@ def bootstrap_ci(
         if math.isfinite(low) and math.isfinite(high):
             return Interval(name, point, low, high, confidence, f"bootstrap-{attempt}", n)
     return Interval(name, point, point, point, confidence, "bootstrap-degenerate", n)
-
-
-#: Sample sizes up to this get the exact signed-rank null; above it the tie- and continuity-corrected normal
-#: approximation. 200 covers every paired-kernel count these tables reach while the exact DP stays fast.
-EXACT_MAX_N: int = 200
-
-
-def use_exact(absolute: Sequence[float]) -> bool:
-    """Whether the exact null is affordable (``n <= EXACT_MAX_N``) and valid (no ties in ``absolute``): a tie breaks
-    the rank lattice the exact count assumes."""
-    n = len(absolute)
-    return 0 < n <= EXACT_MAX_N and len(set(absolute)) == n
-
-
-def signed_rank_test(differences: Samples, alternative: str = "two-sided") -> tuple[float, float, str, int]:
-    """``(statistic, p, method, n)`` of the Wilcoxon signed-rank test, the one signed-rank call here.
-
-    Non-finite and zero differences are dropped (Wilcoxon's original treatment). Exact or approximate
-    is decided by :func:`use_exact` and passed to scipy EXPLICITLY, never left to scipy's ``auto``: a
-    library default is not a published method. ``correction=True``: the approximation takes the half-step continuity
-    correction. Nothing left to test returns ``(nan, 1.0, "degenerate", 0)``.
-    """
-    x: FloatArray = np.asarray(differences, dtype=np.float64)
-    nonzero: FloatArray = x[np.isfinite(x) & (x != 0.0)]
-    n = int(nonzero.size)
-    if n == 0:
-        return math.nan, 1.0, "degenerate", 0
-    from scipy.stats import wilcoxon  # pyright: ignore[reportMissingTypeStubs, reportUnknownVariableType]
-
-    exact = use_exact(np.abs(nonzero).tolist())
-    result = wilcoxon(
-        nonzero,
-        method="exact" if exact else "approx",
-        zero_method="wilcox",
-        correction=True,
-        alternative=alternative,
-    )
-    method = "signed-rank-exact" if exact else "signed-rank-approx"
-    # scipy's result classes are typed `_` in its stubs
-    return float(result.statistic), float(result.pvalue), method, n  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownArgumentType]
 
 
 def usable_ratios(values: Samples, label: str = "", warn: bool = True) -> FloatArray:
@@ -448,23 +400,6 @@ def log2_change(ratio: float) -> float:
     if not math.isfinite(ratio) or ratio <= 0.0:
         return math.nan
     return math.log2(ratio)
-
-
-def walsh_averages(values: Samples) -> FloatArray:
-    """Sorted ``(v_i + v_j) / 2`` for ``i <= j`` -- what the Hodges-Lehmann estimate is a median of."""
-    x: FloatArray = np.asarray(values, dtype=np.float64)
-    i, j = np.triu_indices(x.size, k=0)
-    return np.sort((x[i] + x[j]) / 2.0)
-
-
-def hodges_lehmann(values: Samples) -> float:
-    """The Hodges-Lehmann point estimate: the median of every Walsh average ``(v_i + v_j) / 2``.
-
-    The location estimate the signed-rank test is consistent with, and robust where a mean is not:
-    a per-kernel change is heavy-tailed (one kernel at 40x against a median near 2x), and a mean --
-    even a mean in log space -- still lets that kernel carry the estimate.
-    """
-    return float(np.median(walsh_averages(values)))
 
 
 class Signs(NamedTuple):

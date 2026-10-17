@@ -74,8 +74,8 @@ def test_fft_1d_draws_keep_their_range() -> None:
     assert fuzz.resolve_ranges(params)["N"] == {"smooth": 7, "range": list(FFT_1D_RANGE)}
     xl = params["XL"]["N"]  # the declared range is the XL-anchored default, not a stale copy of it
     assert (
-        int(xl * config.get_float("fuzz.xl_lo_mult")),
-        int(xl * config.get_float("fuzz.xl_hi_mult")),
+        int(xl * config.current().fuzz.xl_lo_mult),
+        int(xl * config.current().fuzz.xl_hi_mult),
     ) == FFT_1D_RANGE
     drawn = [int(fuzz.sample_params(params, i)["N"]) for i in range(300)]  # type: ignore[arg-type]
     lo, hi = FFT_1D_RANGE

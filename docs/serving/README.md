@@ -44,7 +44,7 @@ that `--nodes`, starts the server, polls `/v1/models`, then prints:
 
 ```
 ===== endpoint is live =====
-base URL:   http://nid002968:8000/v1
+base URL:   http://<node>:8000/v1
 model name: hpcagent-bench-vllm
 ...
 The endpoint takes no API key. It stays up until this job ends; scancel <jobid> to stop it.
@@ -101,7 +101,7 @@ every Alps user can reach it. For a private server use [`private-endpoint.md`](p
 
 ```bash
 squeue -u "$USER" -n serve-only -o '%i %T %N'
-BASE=http://nid002968:8000
+BASE=http://<node>:8000
 curl -s "$BASE/v1/models"
 curl -s "$BASE/v1/chat/completions" -H 'Content-Type: application/json' \
   -d '{"model":"hpcagent-bench-vllm","max_tokens":128,"messages":[{"role":"user","content":"Say hi."}]}'
@@ -129,9 +129,10 @@ kernels, and Qwen3.8 serves on the AMD vLLM image (`layers/hardware-mi200-qwen38
 ## 5. Healthy or sick
 
 **Readiness.** `serve-only.sbatch` waits `AGENT_READY_TIMEOUT_SECONDS`, else
-`VLLM_READY_TIMEOUT_SECONDS`, else 7200 s, the precedence the experiment's agent driver uses. Each model layer sets one high enough for that model
-(GLM-5.3: 10800 s). Both keys are set inside the model file, so a value on the command line is
-overwritten when the file is sourced. To override, copy `experiments/serve-only.env`, add the key,
+`VLLM_READY_TIMEOUT_SECONDS`, else 7200 s, the precedence the experiment's agent driver uses. Each model's layer
+chain sets `AGENT_READY_TIMEOUT_SECONDS` (`layers/replicas.env`: 2400 s, with `VLLM_READY_TIMEOUT_SECONDS` 2400 s;
+`model-kimi27sglang.env`: 7200 s; `model-glm53.env`: 10800 s). The rendered layers are sourced after the command
+line, so a value on the command line is overwritten. To override, copy `experiments/serve-only.env`, add the key,
 and pass `SERVE_ENV_FILE=<copy>` (sourced last, so it wins). The same applies to
 `VLLM_SERVED_MODEL`.
 

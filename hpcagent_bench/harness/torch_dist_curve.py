@@ -47,6 +47,8 @@ import traceback
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
+import pydantic
+
 from hpcagent_bench import config, flags
 from hpcagent_bench.harness import (
     mpi_call,
@@ -223,33 +225,57 @@ class Timing:
     note: str
 
 
-def plan_of(point: Point, where: Stack, repeat: int, compile_mode: str | None) -> dict[str, Any]:
-    """The rank driver's plan: the Inductor cache is keyed per (image, arch, kernel, P, shape)."""
+class DistPlan(pydantic.BaseModel):
+    """The rank driver's plan file: which kernel at which shape, how many timed repeats, and how to compile."""
+
+    model_config = pydantic.ConfigDict(extra="forbid", frozen=True)
+
+    kernel: str
+    params: dict[str, int | float]
+    seed: int
+    repeat: int
+    #: ``torch.compile`` mode; None = eager.
+    compile_mode: str | None
+    #: The Inductor cache, keyed per (image, arch, kernel, P, shape).
+    cache_dir: str
+
+
+class DistResult(pydantic.BaseModel):
+    """Rank 0's result file: the per-repeat seconds and the compile mode they ran under."""
+
+    model_config = pydantic.ConfigDict(extra="forbid", frozen=True)
+
+    samples: list[float]
+    compile_mode: str | None
+
+
+def plan_of(point: Point, where: Stack, repeat: int, compile_mode: str | None) -> DistPlan:
+    """The rank driver's plan for ``point``."""
     cache = torch_reference.cache_dir(
         f"{point.kernel}.dist{point.ranks}", dict(point.params), arch=where.arch, image=where.image
     )
-    return {
-        "kernel": point.kernel,
-        "params": dict(point.params),
-        "seed": SEED,
-        "repeat": int(repeat),
-        "compile_mode": compile_mode,
-        "cache_dir": str(cache),
-    }
+    return DistPlan(
+        kernel=point.kernel,
+        params=dict(point.params),
+        seed=SEED,
+        repeat=int(repeat),
+        compile_mode=compile_mode,
+        cache_dir=str(cache),
+    )
 
 
-def launch_once(point: Point, plan: Mapping[str, Any], cfg: scoring.MpiLaunch) -> list[int]:
+def launch_once(point: Point, plan: DistPlan, cfg: scoring.MpiLaunch) -> list[int]:
     """One launch of the rank driver at ``point.ranks``; the per-repeat ns. Raises RuntimeError
     (:func:`mpi_call.launch`) when it fails, times out or writes no result."""
     with tempfile.TemporaryDirectory(prefix=f"torchdist_{point.kernel}_", dir=sandbox_parent_dir()) as tmp:
         plan_file, outfile = pathlib.Path(tmp) / "plan.json", pathlib.Path(tmp) / "result.json"
-        plan_file.write_text(json.dumps(plan), encoding="utf-8")
+        plan_file.write_text(plan.model_dump_json(), encoding="utf-8")
         program = [sys.executable, "-m", mpi_call.ENTRY_MODULE, DRIVER_MODULE, str(plan_file), str(outfile)]
         mpi_call.launch(cfg.launcher, point.ranks, program, outfile, timeout=cfg.timeout, env=cfg.env)
-        result = json.loads(outfile.read_text(encoding="utf-8"))
-    samples = [round(float(s) * NS_PER_S) for s in result["samples"]]
+        result = DistResult.model_validate_json(outfile.read_bytes())
+    samples = [round(s * NS_PER_S) for s in result.samples]
     if not samples or any(s <= 0 for s in samples):
-        raise RuntimeError(f"the rank driver returned no positive samples: {result['samples']}")
+        raise RuntimeError(f"the rank driver returned no positive samples: {result.samples}")
     return samples
 
 
@@ -341,7 +367,7 @@ def run(plan_path: str, out_path: str) -> None:
     if not MPI.Is_initialized():
         MPI.Init()
     world = MPI.COMM_WORLD
-    plan = json.loads(pathlib.Path(plan_path).read_text(encoding="utf-8"))
+    plan = DistPlan.model_validate_json(pathlib.Path(plan_path).read_bytes())
     local = world.Split_type(MPI.COMM_TYPE_SHARED).rank
 
     import torch
@@ -356,26 +382,28 @@ def run(plan_path: str, out_path: str) -> None:
         device = torch.device("cpu")
     else:
         raise ValueError(f"{mpi_shard_driver.MPI_DEVICE_ENV}={device_kind!r} must be 'cuda' or 'cpu'")
-    mode = plan["compile_mode"]
+    mode = plan.compile_mode
     if mode is not None:
-        torch_reference.configure_inductor(pathlib.Path(plan["cache_dir"]))
+        torch_reference.configure_inductor(pathlib.Path(plan.cache_dir))
     mpi_shard_driver.init_torch_distributed(dist, world, device)
-    module = torch_reference.load_torch_module(BenchSpec.load(str(plan["kernel"])))
+    module = torch_reference.load_torch_module(BenchSpec.load(plan.kernel))
     samples = torch_reference.time_reference_dist(
         module,
-        dict(plan["params"]),
-        int(plan["seed"]),
+        dict(plan.params),
+        plan.seed,
         world.rank,
         world.size,
         device,
         dist.group.WORLD,
-        int(plan["repeat"]),
+        plan.repeat,
         torch=torch,
         dist=dist,
         compile_mode=mode,
     )
     if world.rank == 0:
-        pathlib.Path(out_path).write_text(json.dumps({"samples": samples, "compile_mode": mode}), encoding="utf-8")
+        pathlib.Path(out_path).write_text(
+            DistResult(samples=samples, compile_mode=mode).model_dump_json(), encoding="utf-8"
+        )
     dist.destroy_process_group()
     MPI.Finalize()
 

@@ -49,12 +49,3 @@ class TokenUsage:
             self.cached_tokens + other.cached_tokens,
             self.cache_creation_tokens + other.cache_creation_tokens,
         )
-
-    def to_dict(self) -> dict[str, int]:
-        return {
-            "input": self.input_tokens,
-            "output": self.output_tokens,
-            "cached": self.cached_tokens,
-            "cache_creation": self.cache_creation_tokens,
-            "total": self.total,
-        }

@@ -15,9 +15,10 @@ import subprocess
 
 import pytest
 
+from hpcagent_bench import paths
 from tests.env_render import rendered
 
-ROOT = pathlib.Path(__file__).resolve().parents[1]
+ROOT = paths.ROOT
 LAUNCHER = ROOT / "containers" / "inference" / "serve-private.sbatch"
 #: The qwen38 experiment base whose serving flags the mi300 preset mirrors.
 EXPERIMENT_BASE = "llrbase-c:qwen38"
@@ -37,8 +38,8 @@ LEG_FLAGS = {
     "vllm": ("--tensor-parallel-size", "--gpu-memory-utilization"),
 }
 SECRETS = {"sglang-auth.yaml", "api.key", "auth.header"}
-HSN0_ADDRESS = "172.28.9.16"
-#: `ip -4 -o addr show dev hsn0` on a beverin node, verbatim.
+HSN0_ADDRESS = "192.0.2.16"
+#: The shape of `ip -4 -o addr show dev hsn0` output, at a documentation address (RFC 5737).
 HSN0_LINE = f"3: hsn0    inet {HSN0_ADDRESS}/16 scope global hsn0\\       valid_lft forever preferred_lft forever"
 
 
@@ -69,6 +70,7 @@ def launch(
         "RUN_ROOT": str(tmp_path / "runs"),
         "DRY_RUN": "1",
         "HSN0_LINE": HSN0_LINE,
+        "HPCAGENT_BENCH_BIND_IFACE": "hsn0",
         **({} if preset is None else {"PRESET": preset}),
         **extra,
     }
@@ -310,6 +312,14 @@ def test_alps_access_serves_no_metrics(tmp_path: pathlib.Path, preset: str) -> N
     argvs = argv_lines(done.stdout)
     assert len(argvs) == 2
     assert [argv for argv in argvs if "--enable-metrics" in argv.split()] == []
+
+
+def test_alps_access_refuses_without_a_site_bind_interface_before_touching_anything(tmp_path: pathlib.Path) -> None:
+    """``HPCAGENT_BENCH_BIND_IFACE`` empty: ACCESS=alps names no interface to bind, so the launcher refuses."""
+    done = launch(tmp_path, "mi300", ACCESS="alps", HPCAGENT_BENCH_BIND_IFACE="")
+    assert done.returncode == 2
+    assert "ACCESS=alps: set HPCAGENT_BENCH_BIND_IFACE" in done.stderr
+    assert_untouched(tmp_path, done)
 
 
 def test_alps_access_refuses_a_node_without_an_hsn0_address_before_touching_anything(tmp_path: pathlib.Path) -> None:

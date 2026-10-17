@@ -105,7 +105,7 @@ def bench_info_(
     is declared with the right element type -- the front end reads it directly."""
     all_args = inputs + outputs
     array_args = [a for a in all_args if a in shapes]
-    init = {"shapes": shapes}
+    init = {"arrays": shapes}
     if dtypes:
         init["dtypes"] = dict(dtypes)
     return {
@@ -735,7 +735,7 @@ def run_return_op(
             "input_args": list(inputs),
             "array_args": array_args,
             "output_args": [],
-            "init": {"shapes": shapes},
+            "init": {"arrays": shapes},
         }
     }
     by = {**inputs}

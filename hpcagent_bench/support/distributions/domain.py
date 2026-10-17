@@ -22,6 +22,7 @@ from collections.abc import Sequence
 import numpy as np
 
 from hpcagent_bench.precision import Precision, smallest_normal
+from hpcagent_bench.support.array_module import module_of
 
 __all__ = ["SIGN_DOMAINS", "STRUCTURAL", "Domain", "RawDomain", "apply", "check_compatible", "of", "parse"]
 
@@ -76,16 +77,19 @@ def apply(raw: np.ndarray, domain: Domain, precision: Precision) -> np.ndarray:
         return raw  # an empty array (a zero-layer stack) has no value to fold
     if isinstance(domain, tuple):
         low, high = domain
-        span = np.ptp(raw)
+        span = float(raw.max() - raw.min())
         if span == 0:  # a constant sample has no spread to rescale; centre it
             raw[...] = 0.5 * (low + high)
             return raw
         # Affine, so the sample's SHAPE inside the interval is preserved; clipping would instead
         # pile mass on both endpoints and quietly change the distribution.
-        return np.multiply(np.subtract(raw, raw.min(), out=raw), (high - low) / span, out=raw) + low
-    np.abs(raw, out=raw)
+        raw -= raw.min()
+        raw *= (high - low) / span
+        return raw + low
+    xp = module_of(raw) or np
+    xp.abs(raw, out=raw)
     if domain in ("negative", "nonpos"):
-        np.negative(raw, out=raw)
+        xp.negative(raw, out=raw)
     if domain in ("positive", "negative"):
         tiny = smallest_normal(precision)
         zero = raw == 0

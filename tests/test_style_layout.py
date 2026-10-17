@@ -27,20 +27,20 @@ from hpcagent_bench.stats import style
     [
         pytest.param(6.34919, "6.3x", id="one-decimal"),
         pytest.param(32.45, "32.5x", id="one-decimal-past-ten"),
-        pytest.param(0.928, "0.9x", id="below-one"),
+        pytest.param(0.928, "1/1.1x", id="below-one-as-a-reciprocal"),
         pytest.param(1.0, "1.0x", id="unity"),
-        pytest.param(0.04, "0.04x", id="below-a-tenth-keeps-a-figure"),
+        pytest.param(0.04, "1/25.0x", id="a-deep-slowdown-never-prints-0x"),
         pytest.param(0.0, "", id="no-ratio"),
     ],
 )
 def test_a_ratio_beside_its_mark_prints_one_decimal(value: float, want: str) -> None:
-    """One decimal is what a reader quotes; below 0.1x one decimal would print a real slowdown as
-    0.0x, so those keep a significant figure."""
+    """One decimal is what a reader quotes; a slowdown prints as its reciprocal, ``1/Yx``, so it never
+    rounds to 0.0x and reads at the same scale as the speedup it mirrors."""
     assert style.ratio_label(value) == want
 
 
 def test_a_log2_axis_tick_reads_back_as_the_ratio() -> None:
-    assert (style.log2_ratio_tick(2.0), style.log2_ratio_tick(-1.0)) == ("4x", "0.5x")
+    assert (style.log2_ratio_tick(2.0), style.log2_ratio_tick(-1.0)) == ("4x", "1/2x")
 
 
 def test_a_longer_y_label_widens_the_measured_left_protrusion() -> None:

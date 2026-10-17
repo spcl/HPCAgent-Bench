@@ -4,7 +4,7 @@ How to size, submit, watch and cancel an experiment setup on Beverin (AMD MI300A
 regrade and extract its results, and which serving configurations complete. Beverin is the worked example: the
 submitter takes the same flags on any Slurm cluster ([`docs/configuration.md`](../docs/configuration.md#job-shape-per-system)). Every command runs from
 `experiments/` on a login node. A job snapshots the checkout when it STARTS, not when it is submitted
-(README "Frozen tree"). Jobs never resubmit themselves. Setups and the role split:
+([README.md](README.md#isolation)). Jobs never resubmit themselves. Setups and the role split:
 [README.md](README.md); Slurm flags per serving role: [`docs/serving/`](../docs/serving/README.md).
 
 A node is 4 MI300A APUs (96 Zen 4 cores, 192 hardware threads, 4 GPUs), about 513 GB.
@@ -20,10 +20,13 @@ cd $HB/experiments
 `layers/site-cscs.env` (copy it to `layers/site.env`) names the system `beverin`, whose entry in
 `hpcagent_bench/cluster/systems.yaml` supplies partition `mi300`, 4 GPUs per node and the `mi300` hardware.
 Every `SUBMIT=1` refuses to call `sbatch` without an account (`--account <project>` or `SBATCH_ACCOUNT`, never `root`).
+Before a launch, run the release smoke suite on the login node from the checkout the jobs will snapshot:
+`"$HPCAGENT_BENCH_HOST_PYTHON" -m pytest -q -m smoke "$HB/tests/test_smoke.py"` ([CONTRIBUTING.md](../CONTRIBUTING.md#tests)).
 
 ## Binding rules
 
-- **At most 36 nodes in flight**, shared with the other team on the machine.
+- **At most 36 nodes in flight**, shared with the other team on the machine. `MAX_NODES=<n>` caps one `submit.sh`
+  call at `n` nodes (section 0).
 - **Partition `mi300`.** The `beverin` entry names it; `--partition <p>` or `SBATCH_PARTITION` overrides it. The
   hardware (`--hardware`, `HPCAGENT_BENCH_HARDWARE`, or the system's) is separate: another hardware needs a
   `layers/hardware-<hardware>.env` layer (mi200: section 0, `--system beverin-mi200`).
@@ -61,6 +64,16 @@ BASE=solver14 TAG=solvers EXPERIMENT=solver14 RECORD_STUDY=solver14 MODELS="oss1
 with age, so submit the families that must finish first first. `--time` replaces the time limit computed from the
 tag.
 
+`MAX_NODES=<n>` splits the setups of one call, in staging order, into waves whose node counts (`setup_nodes`) sum to at
+most `n`; every job of a wave depends `afterany` on every job of the previous wave, and the first wave on `DEPEND_ON`.
+A setup of more than `n` nodes is refused. The dry run prints each wave (`wave <i>/<count>: <nodes> nodes`) before its
+setups. `REPEAT=<k>` runs `k` agents per kernel in each setup's job (default the base's `SUBMIT_REPEAT`, else 1).
+
+```bash
+BASE=git-scicomp TAG=gitscicomp10 MODELS="qwen38 oss120b" LANGUAGES=c PACKETS="none repo" REPEAT=5 MAX_NODES=32 \
+    ../hpcagent_bench/cluster/submit.sh $J                                       # dry run: prints the waves
+```
+
 One existing env file, no wrapper:
 
 ```bash
@@ -90,11 +103,11 @@ EXPERIMENT=harness20-mi200 BASE=harness TAG=harness20 HARNESSES=claude SUBMIT=1 
 is `passes x AGENT_TIMEOUT_SECONDS` plus serving start-up and the judge drain. Give a setup its floor
 plus half again.
 
-| Model | `AGENTS_PER_NODE` | `AGENT_TIMEOUT_SECONDS` (LLR base) | 40 kernels |
+| Model | `AGENTS_PER_NODE` | `AGENT_TIMEOUT_SECONDS` | passes for 40 kernels on 1 agent node |
 | --- | --- | --- | --- |
-| oss120b | 40 | 21600 | 1 pass |
-| qwen38 | 40 | 21600 | 1 pass |
-| kimi27sglang | 20 | 43200 | 2 passes |
+| oss120b | 40 (`layers/replicas.env`) | 72000 | 1 |
+| qwen38 | 40 (`layers/replicas.env`) | 72000 | 1 |
+| kimi27sglang | 20 (`layers/model-kimi27sglang.env`) | 72000 | 2 |
 
 Agents stop at `AGENT_TIMEOUT_SECONDS`, not at the job's wall clock. One inference server does not
 carry 120 qwen38 agents (decode slows until the setup records almost nothing); split a long list with

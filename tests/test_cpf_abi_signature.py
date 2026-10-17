@@ -59,9 +59,9 @@ def test_the_form_takes_the_required_signature_and_grades_correct(
 ) -> None:
     spec = BenchSpec.load(kernel)
     record = cpf_bridge.render_kernel(spec, tmp_path, language=dialect)
-    assert record["verdict"] == "ok", record
+    assert record.verdict == "ok", record
     native = binding_from_spec(spec)
-    code = pathlib.Path(record["source"]).read_text()
+    code = pathlib.Path(record.source).read_text()
     stub = gen_call_stub(native, STUB_LANGUAGE[dialect])
     assert entry_prototype(code, native.symbol) == entry_prototype(stub, native.symbol)
 

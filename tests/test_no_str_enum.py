@@ -6,10 +6,11 @@ A ``StrEnum`` member compares equal to its string, so a caller passing ``"latest
 ``str(member)`` both keep working by accident; with a plain enum the conversion is explicit.
 """
 
-import pathlib
 import subprocess
 
-ROOT = pathlib.Path(__file__).resolve().parents[1]
+from hpcagent_bench import paths
+
+ROOT = paths.ROOT
 
 
 def test_no_python_file_uses_str_enum() -> None:

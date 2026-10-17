@@ -101,7 +101,7 @@ def test_the_identity_lives_on_setups_and_nowhere_else(tmp_path: pathlib.Path) -
     try:
         setups = {r[1] for r in conn.execute("PRAGMA table_info(setups)")}
         assert set(IDENTITY) | {"language"} <= setups
-        assert "rep" in {r[1] for r in conn.execute("PRAGMA table_info(episodes)")}
+        assert {"job", "label"} <= {r[1] for r in conn.execute("PRAGMA table_info(episodes)")}
         have = {r[1] for r in conn.execute("PRAGMA table_info(grades)")}
         assert have & (set(IDENTITY) | {"language"}) == set(), f"grades repeat the identity: {have & set(IDENTITY)}"
         assert "episode_id" in have
@@ -168,12 +168,8 @@ def test_device_defaults_to_cpu(tmp_path: pathlib.Path) -> None:
 
 def test_an_unknown_device_is_refused(tmp_path: pathlib.Path) -> None:
     """A typo must not become a silent fifth device that no figure plots."""
-    config.set_override("record.device", "apu")
-    try:
-        with pytest.raises(ValueError, match="apu"):
-            recording.device_tag()
-    finally:
-        config.clear_override("record.device")
+    with pytest.raises(ValueError, match="apu"):
+        config.set_override("record.device", "apu")
 
 
 def test_an_untagged_run_stores_the_empty_default(tmp_path: pathlib.Path) -> None:
@@ -283,32 +279,20 @@ def test_a_setup_that_declares_no_language_records_none_rather_than_the_request(
     assert _runs(db, ("language",)) == [("",)]
 
 
-def test_a_live_episode_is_the_first_under_its_label(tmp_path: pathlib.Path) -> None:
-    """The judge records one episode per (job, label); ``rep`` above 1 is only ever a merge's."""
-    db = str(tmp_path / "r.db")
-    recording.record_call(_score(), Task(KERNEL, "restricted", "c"), status="ok", route="score", path=db)
-    assert _runs(db, ("rep",)) == [(1,)]
-
-
-def test_episodes_of_one_label_with_no_job_stay_apart_by_rep(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Episodes recovered from merged databases lost their job, and several share a label: ``rep`` is
-    the only column that keeps them two episodes rather than one. Recorded outside any Slurm job, so
-    the first episode carries no job either (inside one it takes ``SLURM_JOB_ID``)."""
+def test_a_local_episode_records_the_local_job(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Outside Slurm an episode's job is :data:`results_db.LOCAL_JOB`, never NULL: ``(job, label)`` is its
+    whole identity, and a second episode of that label is the same one."""
     monkeypatch.delenv(recording.JOB_ENV, raising=False)
     db = str(tmp_path / "r.db")
     recording.record_call(_score(), Task(KERNEL, "restricted", "c"), status="ok", route="score", path=db)
-    insert = "INSERT INTO episodes (setup, job, label, rep) VALUES (?, NULL, ?, ?)"
+    assert _runs(db, ("job",)) == [(results_db.LOCAL_JOB,)]
+    insert = "INSERT INTO episodes (setup, job, label) VALUES (?, ?, ?)"
     with contextlib.closing(results_db.open_db(pathlib.Path(db))) as conn:
-        setup, label = conn.execute("SELECT setup, label FROM episodes WHERE job IS NULL").fetchone()
-        conn.execute(insert, (setup, label, 2))
-        with pytest.raises(sqlite3.IntegrityError, match="episodes_key"):
-            conn.execute(insert, (setup, label, 1))
-        assert conn.execute("SELECT rep FROM episodes WHERE label = ? ORDER BY rep", (label,)).fetchall() == [
-            (1,),
-            (2,),
-        ]
+        setup, label = conn.execute("SELECT setup, label FROM episodes").fetchone()
+        with pytest.raises(sqlite3.IntegrityError, match="UNIQUE"):
+            conn.execute(insert, (setup, results_db.LOCAL_JOB, label))
+        with pytest.raises(sqlite3.IntegrityError, match="NOT NULL"):
+            conn.execute(insert, (setup, None, label))
 
 
 def test_one_run_writing_many_rows_keeps_one_identity(tmp_path: pathlib.Path, tagged: tuple[str, ...]) -> None:
@@ -443,9 +427,8 @@ if __name__ == "__main__":
     test_an_untagged_run_stores_the_empty_default(scratch())
     test_two_setups_in_one_db_stay_separable(scratch())
     test_a_setup_that_declares_no_language_records_none_rather_than_the_request(scratch())
-    test_a_live_episode_is_the_first_under_its_label(scratch())
-    test_episodes_of_one_label_with_no_job_stay_apart_by_rep(scratch())
     for env_test in (
+        test_a_local_episode_records_the_local_job,
         test_the_harness_comes_from_the_launcher_env,
         test_the_submitting_commit_comes_from_the_launcher_env,
         test_the_job_commit_wins_over_the_planned_one,

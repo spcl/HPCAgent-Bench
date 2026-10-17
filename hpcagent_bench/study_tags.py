@@ -19,13 +19,13 @@ that fallback from going unnoticed.
 
 import dataclasses
 import functools
-import pathlib
 import re
+from typing import Annotated
 
+import pydantic
 import yaml
 
-from hpcagent_bench import columns, models, skill_packets, spec
-from hpcagent_bench.spec import as_block, as_list, is_list, is_mapping
+from hpcagent_bench import columns, models, paths, skill_packets, spec
 from hpcagent_bench.vocabulary import (
     KINDS,
     MODELS,
@@ -47,14 +47,16 @@ __all__ = [
     "VOCABULARY_MODULES",
     "BaselineSpec",
     "ExperimentEntry",
+    "KEYED_FIELDS",
     "Marker",
     "Names",
     "Registry",
-    "baselines_of",
+    "RegistryFile",
+    "StudiesFile",
+    "Text",
     "canonical",
     "dash_spellings",
     "display_name",
-    "experiments_of",
     "framework_name",
     "harness_name",
     "kernel_compact_display_name",
@@ -64,14 +66,11 @@ __all__ = [
     "language_name",
     "language_of",
     "manifest_names",
-    "marker_of",
     "model_checkpoint",
     "model_name",
     "model_of",
     "names",
-    "names_of",
     "order",
-    "owed_run_roots_of",
     "packet_name",
     "packet_of",
     "packet_parts",
@@ -86,9 +85,9 @@ __all__ = [
 ]
 
 #: The pools (neutral colour, marker shapes, lightness step) every figure draws from.
-REGISTRY = pathlib.Path(__file__).resolve().parent / "envs" / "registry.yaml"
+REGISTRY = paths.ENVS_DIR / "registry.yaml"
 #: Run-level data: studies, experiments, baselines and the spellings older setups recorded under.
-STUDIES = pathlib.Path(__file__).resolve().parent / "envs" / "studies.yaml"
+STUDIES = paths.ENVS_DIR / "studies.yaml"
 #: The modules whose import registers the vocabulary; importing this module is what loads them.
 VOCABULARY_MODULES = (models, skill_packets, columns)
 
@@ -96,8 +95,12 @@ VOCABULARY_MODULES = (models, skill_packets, columns)
 Names = dict[str, str]
 
 
-@dataclasses.dataclass(frozen=True, slots=True)
-class BaselineSpec:
+#: A YAML key or value forced to text: YAML reads an unquoted ``on`` as True and a bare version as a
+#: float, so a tag can arrive as a non-string and then never match the string a figure looks up.
+Text = Annotated[str, pydantic.BeforeValidator(str)]
+
+
+class BaselineSpec(pydantic.BaseModel):
     """The canon-sweep columns a study is drawn against.
 
     ``denominator`` is the column every speedup ratio is divided by -- one per study, so two
@@ -105,26 +108,70 @@ class BaselineSpec:
     other toolchain columns drawn as their own series beside the agents; they are never the
     denominator."""
 
-    denominator: str
-    comparators: tuple[str, ...]
+    model_config = pydantic.ConfigDict(extra="forbid", frozen=True)
+
+    denominator: Text
+    comparators: tuple[Text, ...] = ()
 
 
-@dataclasses.dataclass(frozen=True, slots=True)
-class ExperimentEntry:
+class ExperimentEntry(pydantic.BaseModel):
     """One launcher's job-name prefix: which study its setups belong to, on which device, served
     which tag. ``name`` is the experiment's own label, finer than the study's -- llr40's
-    CPU and GPU halves are one study under two experiment names. An empty ``tag`` means no tag."""
+    CPU and GPU halves are one study under two experiment names. An empty ``tag`` means no tag.
+    ``study``, ``name`` and ``prefix`` fall back to the entry's key (:class:`StudiesFile`), never to a guess."""
 
-    study: str
-    name: str
-    device: str
-    tag: str
+    model_config = pydantic.ConfigDict(extra="forbid", frozen=True)
+
+    study: Text = ""
+    name: Text = ""
+    device: Text = ""
+    tag: Text = ""
     #: The setup-name prefix it owns (the key, unless set) and, when set, the one name token its setups
     #: carry (``llr40-<model>-<lang>-blind``): such an experiment takes those setups from its prefix's.
-    prefix: str = ""
-    suffix: str = ""
+    prefix: Text = ""
+    suffix: Text = ""
     #: The ``experiments/setups.yaml`` experiment its setups were staged from (``submit.sh`` ``BASE``).
-    base: str = ""
+    base: Text = ""
+
+
+#: The :class:`ExperimentEntry` fields an experiment that leaves them out takes from its key.
+KEYED_FIELDS = ("study", "name", "prefix")
+
+#: A matplotlib marker: a code such as ``"s"``, or ``(sides, style, angle)``.
+Marker = str | tuple[int, int, float]
+
+
+class RegistryFile(pydantic.BaseModel):
+    """:data:`REGISTRY`: the pools every figure draws from."""
+
+    model_config = pydantic.ConfigDict(extra="forbid", frozen=True)
+
+    control_color: str = "#4d4d4d"
+    markers: tuple[str, ...] = ()
+    #: The treatments' shape pool: a marker code or a ``[sides, style, angle]`` list.
+    shapes: tuple[Marker, ...] = ()
+    lightness_step: float = 0.13
+
+
+class StudiesFile(pydantic.BaseModel):
+    """:data:`STUDIES`: the studies, the experiments that run them, their baselines and owed run roots."""
+
+    model_config = pydantic.ConfigDict(extra="forbid", frozen=True)
+
+    studies: dict[Text, Text] = pydantic.Field(default_factory=dict[str, str])
+    experiments: dict[Text, ExperimentEntry] = pydantic.Field(default_factory=dict[str, ExperimentEntry])
+    owed_run_roots: dict[Text, tuple[Text, ...]] = pydantic.Field(default_factory=dict[str, tuple[str, ...]])
+    dropped_setups: str = ""
+    study_baselines: dict[Text, BaselineSpec] = pydantic.Field(default_factory=dict[str, BaselineSpec])
+
+    @pydantic.field_validator("experiments")
+    @classmethod
+    def keyed_defaults(cls, experiments: dict[str, ExperimentEntry]) -> dict[str, ExperimentEntry]:
+        """Each entry's :data:`KEYED_FIELDS` that the file leaves out, from its key."""
+        return {
+            key: entry.model_copy(update={field: key for field in KEYED_FIELDS if field not in entry.model_fields_set})
+            for key, entry in experiments.items()
+        }
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -163,64 +210,6 @@ class Registry:
     owed_run_roots: dict[str, tuple[str, ...]] = dataclasses.field(default_factory=dict[str, tuple[str, ...]])
 
 
-#: A matplotlib marker: a code such as ``"s"``, or ``(sides, style, angle)``.
-Marker = str | tuple[int, int, float]
-
-
-def marker_of(raw: object) -> Marker:
-    """One shape-pool entry: a list ``[sides, style, angle]`` becomes the tuple matplotlib reads."""
-    if is_list(raw):
-        sides, kind, angle = [v for v in raw if isinstance(v, (int, float))]
-        return (int(sides), int(kind), float(angle))
-    return str(raw)
-
-
-def names_of(raw: object, key: str) -> Names:
-    """One ``kind -> {tag: name}`` block, with every key and value forced to text.
-
-    YAML reads an unquoted ``on`` as True and a bare version as a float, so a tag can arrive as a
-    non-string and then never match the string a figure looks up. An entry may also be a mapping
-    (a packet's definition), in which case its ``name`` field is the display name."""
-    out: Names = {}
-    for tag, entry in as_block(raw).items():
-        out[str(tag)] = str(as_block(entry).get("name", tag)) if is_mapping(entry) else str(entry)
-    return out
-
-
-def baselines_of(raw: object) -> dict[str, BaselineSpec]:
-    """The study -> canon-column block."""
-    out: dict[str, BaselineSpec] = {}
-    for key, entry in as_block(raw).items():
-        fields = as_block(entry)
-        out[str(key)] = BaselineSpec(
-            denominator=str(fields.get("denominator", "")),
-            comparators=tuple(str(c) for c in as_list(fields.get("comparators"))),
-        )
-    return out
-
-
-def owed_run_roots_of(raw: object) -> dict[str, tuple[str, ...]]:
-    """The study -> owed run-root prefixes block, every value forced to text."""
-    return {str(key): tuple(str(p) for p in as_list(entry)) for key, entry in as_block(raw).items()}
-
-
-def experiments_of(raw: object) -> dict[str, ExperimentEntry]:
-    """The experiments block. A missing field falls back to the prefix itself, never to a guess."""
-    out: dict[str, ExperimentEntry] = {}
-    for prefix, entry in as_block(raw).items():
-        fields = as_block(entry)
-        out[str(prefix)] = ExperimentEntry(
-            study=str(fields.get("study", prefix)),
-            name=str(fields.get("name", prefix)),
-            device=str(fields.get("device", "")),
-            tag=str(fields.get("tag", "")),
-            prefix=str(fields.get("prefix", prefix)),
-            suffix=str(fields.get("suffix", "")),
-            base=str(fields.get("base", "")),
-        )
-    return out
-
-
 def registered(kind: str) -> Names:
     """``{key: display name}`` of a vocabulary kind, in slot order (the no-packet control first)."""
     block = KINDS[kind]
@@ -236,15 +225,14 @@ def registry() -> Registry:
     """The vocabulary registered in code plus the pools and run-level data of the two yaml files. Cached:
     every label and every colour on every figure goes through here."""
     check_vocabulary()
-    pools = as_block(yaml.safe_load(REGISTRY.read_text(encoding="utf-8")))
-    doc = as_block(yaml.safe_load(STUDIES.read_text(encoding="utf-8")))
-    step = pools.get("lightness_step")
+    pools = RegistryFile.model_validate(yaml.safe_load(REGISTRY.read_text(encoding="utf-8")) or {})
+    doc = StudiesFile.model_validate(yaml.safe_load(STUDIES.read_text(encoding="utf-8")) or {})
     return Registry(
-        control_color=str(pools.get("control_color", "#4d4d4d")),
-        markers=tuple(str(m) for m in as_list(pools.get("markers"))),
-        shapes=tuple(marker_of(m) for m in as_list(pools.get("shapes"))),
-        lightness_step=float(step) if isinstance(step, (int, float)) else 0.13,
-        studies=names_of(doc.get("studies"), "studies"),
+        control_color=pools.control_color,
+        markers=pools.markers,
+        shapes=pools.shapes,
+        lightness_step=pools.lightness_step,
+        studies=dict(doc.studies),
         models={key: MODELS.entries[key] for key in MODELS},
         optimizers=registered("optimizers"),
         packets=registered("packets"),
@@ -253,11 +241,11 @@ def registry() -> Registry:
         languages=registered("languages"),
         frameworks=registered("frameworks"),
         harnesses=registered("harnesses"),
-        experiments=experiments_of(doc.get("experiments")),
-        dropped_setups=str(doc.get("dropped_setups", "")),
-        study_baselines=baselines_of(doc.get("study_baselines")),
+        experiments=dict(doc.experiments),
+        dropped_setups=doc.dropped_setups,
+        study_baselines=dict(doc.study_baselines),
         aliases={kind: dict(block.aliases) for kind, block in KINDS.items()},
-        owed_run_roots=owed_run_roots_of(doc.get("owed_run_roots")),
+        owed_run_roots=dict(doc.owed_run_roots),
     )
 
 

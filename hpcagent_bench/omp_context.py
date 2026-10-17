@@ -28,7 +28,6 @@ Nothing here reads the image: a host without ``<root>/<context>/`` (a login node
 """
 
 import functools
-import json
 import os
 import pathlib
 import re
@@ -37,6 +36,8 @@ import sys
 from collections.abc import Iterable, Mapping
 from collections.abc import Set as AbstractSet
 from typing import Protocol
+
+import pydantic
 
 from hpcagent_bench import config, openmp_runtimes
 
@@ -100,14 +101,14 @@ RUNTIME_CONTEXT: Mapping[str, str] = {"libgomp": GNU, "libomp": LLVM, "libnvomp"
 #: GOMP interface to bind, so numba there runs its own ``workqueue`` pool.
 NUMBA_LAYER: Mapping[str, str] = {GNU: "omp", LLVM: "omp", NVHPC: "workqueue"}
 
-#: ``config.yaml`` key naming the directory that holds the context directories.
+#: Config key naming the directory that holds the context directories.
 ROOT_KEY = "runtime.omp_context_root"
 
-#: ``config.yaml`` key naming the catalog file (:data:`CATALOG_FILE` in the context root when empty).
+#: Config key naming the catalog file (:data:`CATALOG_FILE` in the context root when empty).
 CATALOG_KEY = "runtime.omp_catalog"
 
-#: The environment variable that sets :data:`CATALOG_KEY` (config.py's ``HPCAGENT_BENCH_<DOTTED_KEY>`` rule).
-CATALOG_ENV = "HPCAGENT_BENCH_RUNTIME_OMP_CATALOG"
+#: The environment variable of :data:`CATALOG_KEY`.
+CATALOG_ENV = config.env_name(CATALOG_KEY)
 
 #: Environment variable a child carries so its own gate and log lines name the context it runs in.
 CONTEXT_ENV = "HPCAGENT_BENCH_OMP_CONTEXT"
@@ -178,7 +179,7 @@ def context_for_library(path: pathlib.Path) -> str:
 
 def context_root() -> pathlib.Path:
     """The directory holding the context directories (``runtime.omp_context_root``)."""
-    return pathlib.Path(config.get_str(ROOT_KEY, "/opt/omp"))
+    return pathlib.Path(config.current().runtime.omp_context_root)
 
 
 def context_dir(context: str) -> pathlib.Path | None:
@@ -283,11 +284,18 @@ def context_runtime(context: str) -> str | None:
     return os.path.realpath(link) if link.exists() else None
 
 
+#: Validator of a catalog record: OpenMP context -> {field: values, or null}.
+CATALOG_ADAPTER: "pydantic.TypeAdapter[dict[str, dict[str, list[str] | None]]]" = pydantic.TypeAdapter(
+    dict[str, dict[str, list[str] | None]]
+)
+
+
 @functools.lru_cache(maxsize=8, typed=True)
 def read_catalog(path: str, mtime_ns: int) -> dict[str, dict[str, list[str] | None]]:
-    """The parsed catalog record at ``path`` (re-read when the file changes)."""
+    """The parsed catalog record at ``path`` (re-read when the file changes; ``pydantic.ValidationError`` when it
+    is not a catalog)."""
     del mtime_ns  # the cache key only
-    return json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+    return CATALOG_ADAPTER.validate_json(pathlib.Path(path).read_bytes())
 
 
 class CatalogMissing(RuntimeError):
@@ -296,7 +304,7 @@ class CatalogMissing(RuntimeError):
 
 def catalog_path() -> pathlib.Path:
     """Where the catalog is read and written: ``runtime.omp_catalog``, else ``catalog.json`` in the context root."""
-    named = config.get_str(CATALOG_KEY, "")
+    named = config.current().runtime.omp_catalog
     return pathlib.Path(named) if named else context_root() / CATALOG_FILE
 
 

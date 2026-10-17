@@ -10,7 +10,7 @@ import pandas as pd
 import pytest
 
 from hpcagent_bench.stats import style
-from hpcagent_bench.stats.figures import signed
+from hpcagent_bench.stats.figures import kernel_speedups
 
 TAG_KERNELS: tuple[str, ...] = ("k1", "k2", "k3")
 
@@ -39,23 +39,22 @@ def canon_fixture() -> pd.DataFrame:
 def test_two_device_variants_of_one_optimizer_get_distinct_row_labels(canon: pd.DataFrame) -> None:
     """The compiler per-kernel figure labels a canon row by its optimizer, and the registry aliases
     both DaCe device variants to one. Drawn together they printed one name twice in the legend."""
-    rows = signed.kernel_rows(canon, None, TAG_KERNELS, ("dace_cpu_canon", "dace_gpu_canon"))
+    rows = kernel_speedups.kernel_rows(canon, None, TAG_KERNELS, ("dace_cpu_canon", "dace_gpu_canon"))
     labels = [row.label for row in rows]
     assert len(set(labels)) == 2, labels
 
 
 def test_one_device_variant_keeps_its_optimizer_name(canon: pd.DataFrame) -> None:
     """The fallback fires only on a collision; a figure drawing one variant is unchanged."""
-    (row,) = signed.kernel_rows(canon, None, TAG_KERNELS, ("dace_cpu_canon",))
+    (row,) = kernel_speedups.kernel_rows(canon, None, TAG_KERNELS, ("dace_cpu_canon",))
     assert row.label == "Canonical Parallel Form"
 
 
 @pytest.mark.parametrize(
-    ("value", "want"), [(6.27, "6.3x"), (32.45, "32.5x"), (0.928, "0.9x"), (1.0, "1.0x"), (0.04, "0.04x")]
+    ("value", "want"), [(6.27, "6.3x"), (32.45, "32.5x"), (0.928, "1/1.1x"), (1.0, "1.0x"), (0.04, "1/25.0x")]
 )
 def test_a_speedup_value_is_printed_to_one_decimal(value: float, want: str) -> None:
-    """One decimal is what a reader quotes; below 0.1x one decimal would print a real slowdown as
-    0.0x, so those keep a significant figure."""
+    """One decimal is what a reader quotes; a slowdown prints as its reciprocal, never as 0.0x."""
     assert style.ratio_label(value) == want
 
 

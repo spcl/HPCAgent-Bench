@@ -14,6 +14,7 @@ import pytest
 import scipy.sparse as sp
 from relayout.sparse import SparseFormat
 
+from hpcagent_bench.emit_bridge import RebuildDocument
 from hpcagent_bench.support.helpers.sparse.abi import FORMAT_SPECS, FORMATS, scalar_name
 from hpcagent_bench.support.helpers.sparse.materialize import canonical_csr, convert
 from hpcagent_bench.translators.numpyto_common.frontend.sparse_rebuild import (
@@ -98,6 +99,6 @@ def test_the_reference_takes_the_requested_buffers_where_its_csr_stood() -> None
         "nnz": "nnz_A",
         "scalars": {},
     }
-    rebuild_pattern_arrays(fn, {"rebuild": {"A": spec}})
+    rebuild_pattern_arrays(fn, {"A": RebuildDocument.model_validate(spec)})
     assert [a.arg for a in fn.args.args] == ["A_row", "A_col", "x", "y"]
     assert "y[0] = A_indptr_csr[1] + A_indices_csr[0] + x[0]" in ast.unparse(fn)

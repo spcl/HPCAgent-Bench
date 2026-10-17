@@ -1,17 +1,14 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""The results database, schema version 7 (``schema.sql``): open, write, read and merge.
+"""The results database, schema hb-results-v1.0 (``schema.sql``): open, write, read and merge.
 
 One schema serves a judge rank's shard, a job's database, a regrade's output and the whole dataset.
 Rows are written with surrogate ids; every table also has a natural key, and :func:`merge` folds any
-number of results files into one by those keys, remapping the ids and filling a row's unrecorded columns from
-another copy of the same row (a final grade's file carries a copy of the grade it re-timed).
+number of results files into one by those keys, remapping the ids. The first copy of a row wins; only an
+episode's columns still at their default are filled from a later copy (its token counts arrive after it
+opened). A file of any other schema is refused: there is one schema, and no migration.
 
-A version-6 file is still read, merged and copied: its per-request columns (``requested_libraries``,
-``distribution``, ``layout_request``, ``layout_prep_ns``) fold into v7's ``requests`` and
-``convert_in_ns`` (:func:`fold_legacy_grade`), and opening one for writing upgrades it in place.
-
-A file holding tables of no schema version (the framework sweep's ``results`` table) is merged by
+A file holding tables of no results schema (the framework sweep's ``results`` table) is merged by
 copying those rows.
 """
 
@@ -35,14 +32,14 @@ __all__ = [
     "DEFAULT_HARNESS",
     "GRADE_CHILDREN",
     "GRADE_KEY",
-    "LEGACY_GRADE_COLUMNS",
-    "LEGACY_VERSIONS",
     "NATURAL_KEYS",
     "SCHEMA_PATH",
+    "SCHEMA_NAME",
     "SCHEMA_VERSION",
     "SIDECAR_SUFFIXES",
     "SUBMIT_KINDS",
     "TABLES",
+    "LOCAL_JOB",
     "IdMap",
     "NoResultsError",
     "ProtocolChange",
@@ -64,8 +61,6 @@ __all__ = [
     "ensure_episode",
     "ensure_setup",
     "final_row_groups",
-    "fold_legacy_grade",
-    "grade_columns",
     "grade_sources",
     "insert",
     "merge",
@@ -83,17 +78,16 @@ __all__ = [
     "source_rows",
     "store_source",
     "table_names",
-    "upgrade_legacy",
     "upsert",
 ]
 
 #: The schema every writer creates and every reader expects.
 SCHEMA_PATH = paths.ROOT / "hpcagent_bench" / "harness" / "schema.sql"
-SCHEMA_VERSION = 7
-#: Older versions a reader still opens and a merge still folds in (:func:`fold_legacy_grade`).
-LEGACY_VERSIONS = frozenset({6})
-#: v6's per-request ``grades`` columns, folded into ``requests`` / ``convert_in_ns`` in v7.
-LEGACY_GRADE_COLUMNS = ("requested_libraries", "distribution", "layout_request", "layout_prep_ns")
+#: The schema's name, and its ``PRAGMA user_version`` (the name's 1.0, above every pre-release schema).
+SCHEMA_NAME = "hb-results-v1.0"
+SCHEMA_VERSION = 10
+#: ``episodes.job`` of a run outside Slurm.
+LOCAL_JOB = 0
 #: A judge is threaded and a job's final-grade children write beside it: wait, never fail, on a lock.
 BUSY_TIMEOUT_S = 30.0
 #: The harness of a setup that names none: Claude Code.
@@ -133,7 +127,7 @@ def column_defaults(table: str) -> dict[str, str]:
 
 
 class SchemaVersionError(ValueError):
-    """A results database of another schema version."""
+    """A results database of another schema than hb-results-v1.0."""
 
 
 class NoResultsError(SchemaVersionError):
@@ -152,13 +146,13 @@ def table_names(conn: sqlite3.Connection, schema: str = "main") -> set[str]:
 
 
 def check_schema(conn: sqlite3.Connection, where: str) -> bool:
-    """Whether ``conn`` holds the current or a legacy (:data:`LEGACY_VERSIONS`) schema; ``False`` for a
-    file with no results tables at all. Raises :class:`SchemaVersionError` for any other version."""
+    """Whether ``conn`` holds the current schema; ``False`` for a file with no results tables at all.
+    Raises :class:`SchemaVersionError` for any other version."""
     version = schema_version(conn)
-    if version == SCHEMA_VERSION or version in LEGACY_VERSIONS:
+    if version == SCHEMA_VERSION:
         return True
     if version or table_names(conn) & set(TABLES):
-        raise SchemaVersionError(f"{where} has results schema version {version}, not {SCHEMA_VERSION}")
+        raise SchemaVersionError(f"{where} is not an {SCHEMA_NAME} results database (user_version {version})")
     return False
 
 
@@ -173,8 +167,6 @@ def open_db(path: str | pathlib.Path) -> sqlite3.Connection:
         conn.execute("PRAGMA journal_mode = WAL")
         if not check_schema(conn, str(target)):
             conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
-        elif schema_version(conn) in LEGACY_VERSIONS:
-            upgrade_legacy(conn)
         conn.execute("PRAGMA foreign_keys = ON")
     except BaseException:
         conn.close()
@@ -182,82 +174,9 @@ def open_db(path: str | pathlib.Path) -> sqlite3.Connection:
     return conn
 
 
-def fold_legacy_grade(row: dict[str, Value]) -> dict[str, Value]:
-    """``row`` (a ``grades`` row as a column dict) with v6's per-request columns folded into v7's
-    ``requests`` and ``convert_in_ns``; a v7 row is returned unchanged. An MPI distribution becomes
-    its ``distribute`` / ``replicate`` operations (:meth:`Requests.from_plan`), a sparse request its
-    ``format`` operations; a recorded distribution that is no plan (a refused call's) is left out."""
-    if not any(name in row for name in LEGACY_GRADE_COLUMNS):
-        return row
-    libraries = json.loads(str(row.pop("requested_libraries", "") or "[]"))
-    distribution = str(row.pop("distribution", "") or "")
-    sparse = str(row.pop("layout_request", "") or "")
-    prep = int(row.pop("layout_prep_ns", 0) or 0)
-    formats = Requests.of(sparse=json.loads(sparse)).operations if sparse else ()
-    requests = Requests.of(libraries=libraries)
-    if distribution:
-        try:
-            requests = Requests.from_plan(json.loads(distribution), libraries)
-        except (KeyError, TypeError, ValueError):
-            # v6 also recorded the distribution a refused call sent, which need not be a plan: such a call
-            # graded nothing, and its request keeps what does fold.
-            pass
-    block = Requests(requests.startup, requests.operations + formats).to_json()
-    row["requests"] = json.dumps(block, sort_keys=True) if block else ""
-    row["convert_in_ns"] = prep
-    return row
-
-
-def upgrade_legacy(conn: sqlite3.Connection) -> None:
-    """Upgrade an open v6 file to the current schema in place: add v7's columns, fold every grade's
-    per-request columns into them (:func:`fold_legacy_grade`), drop the folded columns; one transaction, so
-    a failure leaves the file at version 6."""
-    conn.execute("BEGIN")
-    try:
-        upgrade_legacy_columns(conn)
-    except BaseException:
-        conn.rollback()
-        raise
-    conn.commit()
-
-
-def upgrade_legacy_columns(conn: sqlite3.Connection) -> None:
-    for name, ddl in (
-        ("requests", "TEXT NOT NULL DEFAULT ''"),
-        ("convert_in_ns", "INTEGER NOT NULL DEFAULT 0"),
-        ("convert_out_ns", "INTEGER NOT NULL DEFAULT 0"),
-    ):
-        conn.execute(f"ALTER TABLE grades ADD COLUMN {name} {ddl}")
-    legacy = ", ".join(LEGACY_GRADE_COLUMNS)
-    for row in conn.execute(f"SELECT id, {legacy} FROM grades").fetchall():
-        folded = fold_legacy_grade(dict(zip(("id", *LEGACY_GRADE_COLUMNS), row, strict=True)))
-        conn.execute(
-            "UPDATE grades SET requests = ?, convert_in_ns = ? WHERE id = ?",
-            (folded["requests"], folded["convert_in_ns"], folded["id"]),
-        )
-    for name in LEGACY_GRADE_COLUMNS:
-        conn.execute(f"ALTER TABLE grades DROP COLUMN {name}")
-    conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
-
-
-def grade_columns(conn: sqlite3.Connection, alias: str, names: Sequence[str]) -> str:
-    """A SELECT list of ``names`` from ``grades`` (as ``alias``) that reads a column the file does not
-    have as its current-schema default (``''`` for a legacy one), so one query serves v6 and v7 files."""
-    present = {str(row[1]) for row in conn.execute("PRAGMA table_info(grades)")}
-    defaults = column_defaults("grades")
-    columns: list[str] = []
-    for name in names:
-        default = defaults.get(name, "''")
-        columns.append(f"{alias}.{name}" if name in present else f"{default} AS {name}")
-    return ", ".join(columns)
-
-
-def requests_of_row(row: Mapping[str, Value]) -> Requests:
-    """The :class:`Requests` a grade row recorded: v7's ``requests``, else v6's per-request columns."""
-    if row.get("requests"):
-        return Requests.from_obj(json.loads(str(row["requests"])))
-    folded = fold_legacy_grade({name: row[name] for name in LEGACY_GRADE_COLUMNS if name in row})
-    return Requests.from_obj(json.loads(str(folded.get("requests") or "{}")))
+def requests_of_row(row: Mapping[str, Value] | sqlite3.Row) -> Requests:
+    """The :class:`Requests` a grade row (a column dict or a :class:`sqlite3.Row`) recorded."""
+    return Requests.from_obj(json.loads(str(row["requests"] or "{}")))
 
 
 def connect_ro(path: str | pathlib.Path, *, timeout: float = BUSY_TIMEOUT_S) -> sqlite3.Connection:
@@ -302,11 +221,20 @@ def insert(conn: sqlite3.Connection, table: str, values: Mapping[str, Value]) ->
     return int(cursor.lastrowid or 0)
 
 
-def upsert(conn: sqlite3.Connection, table: str, target: str, key: Sequence[str], values: Mapping[str, Value]) -> int:
-    """Insert ``values``, or fill the columns of the row already holding its natural key that still hold
-    their default; return that row's rowid. A ``None`` value is left out (the column keeps its default).
-    ``target`` is the conflict target (the UNIQUE index's columns or expressions) and ``key`` the columns
-    in it, never updated."""
+def upsert(
+    conn: sqlite3.Connection,
+    table: str,
+    target: str,
+    key: Sequence[str],
+    values: Mapping[str, Value],
+    *,
+    fill: bool = False,
+) -> int:
+    """Insert ``values`` unless a row already holds its natural key; return that row's rowid. With
+    ``fill``, the existing row's columns still at their default take ``values``' (a counter recorded
+    later); without, the existing row is kept as it is. A ``None`` value is left out (the column keeps its
+    default). ``target`` is the conflict target (the UNIQUE index's columns) and ``key`` the columns in
+    it, never updated."""
     values = {name: value for name, value in values.items() if value is not None}
     columns = list(values)
     marks = ", ".join("?" * len(columns))
@@ -314,7 +242,7 @@ def upsert(conn: sqlite3.Connection, table: str, target: str, key: Sequence[str]
     filled = [
         f"{name} = CASE WHEN {table}.{name} IS {defaults[name]} THEN excluded.{name} ELSE {table}.{name} END"
         for name in columns
-        if name not in key
+        if fill and name not in key
     ]
     action = ", ".join(filled) or f"{columns[0]} = {table}.{columns[0]}"
     sql = (
@@ -342,16 +270,15 @@ class Setup:
 
 
 def ensure_setup(conn: sqlite3.Connection, setup: Setup) -> None:
-    """Record ``setup``; the first writer fixes its identity, a later one only fills what it left NULL."""
+    """Record ``setup``; the first writer fixes it."""
     upsert(conn, "setups", "setup", ("setup",), dataclasses.asdict(setup))
 
 
-def ensure_episode(conn: sqlite3.Connection, setup: str, label: str, job: int | None, slot: int = 1) -> int:
-    """The id of the episode ``(job, label)`` of ``setup``, created on first sight. A live episode is
-    ``rep`` 1; only a merge of episodes with no recorded job numbers further ones under one label.
-    ``slot`` is the designed agent it is (1 outside a designed repeat)."""
-    values: dict[str, Value] = {"setup": setup, "job": job, "label": label, "rep": 1, "slot": slot}
-    return upsert(conn, "episodes", "coalesce(job, -1), label, rep", ("job", "label", "rep"), values)
+def ensure_episode(conn: sqlite3.Connection, setup: str, label: str, job: int, slot: int = 1) -> int:
+    """The id of the episode ``(job, label)`` of ``setup``, created on first sight (``job``
+    :data:`LOCAL_JOB` outside Slurm). ``slot`` is the designed agent it is (1 outside a designed repeat)."""
+    values: dict[str, Value] = {"setup": setup, "job": job, "label": label, "slot": slot}
+    return upsert(conn, "episodes", *NATURAL_KEYS["episodes"], values)
 
 
 def call_index(conn: sqlite3.Connection, episode_id: int, kernel: str) -> int:
@@ -439,7 +366,7 @@ def grade_sources(conn: sqlite3.Connection, grade_id: int) -> dict[str, tuple[st
 #: ``table -> (conflict target, natural-key columns)`` of every table merged row by row.
 NATURAL_KEYS: dict[str, tuple[str, tuple[str, ...]]] = {
     "setups": ("setup", ("setup",)),
-    "episodes": ("coalesce(job, -1), label, rep", ("job", "label", "rep")),
+    "episodes": ("job, label", ("job", "label")),
     "sources": ("hash", ("hash",)),
     "grades": (", ".join(GRADE_KEY), GRADE_KEY),
     "grade_sources": ("grade_id, part", ("grade_id", "part")),
@@ -478,13 +405,12 @@ def merge_rows(conn: sqlite3.Connection, table: str, ids: IdMap) -> int:
     for row in source_rows(conn, table, order):
         old = row.pop("id", None)
         if table == "grades":
-            fold_legacy_grade(row)  # in place
             row["episode_id"] = ids.episodes[int(row["episode_id"])]  # type: ignore[arg-type]
             of = row.get("of_grade_id")
             row["of_grade_id"] = None if of is None else ids.grades[int(of)]
         elif "grade_id" in row:
             row["grade_id"] = ids.grades[int(row["grade_id"])]  # type: ignore[arg-type]
-        new = upsert(conn, table, target, key, row)
+        new = upsert(conn, table, target, key, row, fill=table == "episodes")
         if table == "episodes":
             ids.episodes[int(old)] = new  # type: ignore[arg-type]
         elif table == "grades":
@@ -495,13 +421,15 @@ def merge_rows(conn: sqlite3.Connection, table: str, ids: IdMap) -> int:
 
 def copy_foreign(conn: sqlite3.Connection, table: str, ddl: str) -> int:
     """Append the attached source's non-results ``table`` (the framework sweep's ``results``),
-    created from its own DDL; its synthetic ``id`` is reassigned. It has no natural key, so merging one
-    source twice appends its rows twice."""
+    created from its own DDL; its synthetic ``id`` is reassigned. It has no natural key, so a row whose
+    every other column equals a row the destination holds is skipped: merging one source twice, or two
+    files carrying one sweep, copies each sample once."""
     conn.execute(ddl.replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", 1))
     dest = [str(row[1]) for row in conn.execute(f"PRAGMA main.table_info({table})")]
     src = {str(row[1]) for row in conn.execute(f"PRAGMA src.table_info({table})")}
     columns = ", ".join(column for column in dest if column in src and column != "id")
-    return int(conn.execute(f"INSERT INTO main.{table} ({columns}) SELECT {columns} FROM src.{table}").rowcount)
+    sql = f"INSERT INTO main.{table} ({columns}) SELECT {columns} FROM src.{table} EXCEPT SELECT {columns} FROM main.{table}"
+    return int(conn.execute(sql).rowcount)
 
 
 def adopt_names_scheme(conn: sqlite3.Connection, path: pathlib.Path, foreign: Collection[str]) -> None:
@@ -529,10 +457,10 @@ def merge_one(conn: sqlite3.Connection, path: pathlib.Path) -> dict[str, int]:
         version = int(conn.execute("PRAGMA src.user_version").fetchone()[0])
         copied: dict[str, int] = {}
         ids = IdMap()
-        if version == SCHEMA_VERSION or version in LEGACY_VERSIONS:
+        if version == SCHEMA_VERSION:
             copied = {table: merge_rows(conn, table, ids) for table in TABLES}
         elif version or names & set(TABLES):
-            raise SchemaVersionError(f"{path} has results schema version {version}, not {SCHEMA_VERSION}")
+            raise SchemaVersionError(f"{path} is not an {SCHEMA_NAME} results database (user_version {version})")
         foreign = [
             (str(name), str(ddl))
             for name, ddl in conn.execute(
@@ -561,7 +489,6 @@ def merge(dest: str | pathlib.Path, sources: Sequence[str | pathlib.Path]) -> di
     target = pathlib.Path(dest).resolve()
     totals: dict[str, int] = {}
     with contextlib.closing(open_db(target)) as conn:
-        conn.execute("PRAGMA journal_mode = DELETE")
         for source in sources:
             path = pathlib.Path(source).resolve()
             if path == target:
@@ -608,6 +535,10 @@ def copy_grade(src: pathlib.Path, grade_id: int, dest: sqlite3.Connection) -> in
         if of is None:
             raise KeyError(f"{src} holds no grade {grade_id}")
         if of[0] is not None:
+            # A final grade or regrade re-times a submission, never another re-time: one hop reaches it.
+            kind = conn.execute("SELECT kind FROM grades WHERE id = ?", (of[0],)).fetchone()[0]
+            if kind in ("final", "regrade"):
+                raise ValueError(f"{src}: grade {grade_id} re-times grade {of[0]}, itself a {kind}")
             chain.insert(0, int(of[0]))
         copied: dict[int, int] = {}
         for one in chain:
@@ -617,13 +548,13 @@ def copy_grade(src: pathlib.Path, grade_id: int, dest: sqlite3.Connection) -> in
 
 def copy_one_grade(conn: sqlite3.Connection, grade_id: int, dest: sqlite3.Connection, copied: dict[int, int]) -> int:
     """:func:`copy_grade` of one grade whose original, if any, ``copied`` already maps."""
-    grade = fold_legacy_grade(dict(conn.execute("SELECT * FROM grades WHERE id = ?", (grade_id,)).fetchone()))
+    grade = dict(conn.execute("SELECT * FROM grades WHERE id = ?", (grade_id,)).fetchone())
     run = dict(conn.execute("SELECT * FROM episodes WHERE id = ?", (grade["episode_id"],)).fetchone())
     setup = dict(conn.execute("SELECT * FROM setups WHERE setup = ?", (run["setup"],)).fetchone())
     upsert(dest, "setups", *NATURAL_KEYS["setups"], setup)
     run.pop("id")
     grade.pop("id")
-    grade["episode_id"] = upsert(dest, "episodes", *NATURAL_KEYS["episodes"], run)
+    grade["episode_id"] = upsert(dest, "episodes", *NATURAL_KEYS["episodes"], run, fill=True)
     of = grade.get("of_grade_id")
     grade["of_grade_id"] = None if of is None else copied[int(of)]
     new = upsert(dest, "grades", *NATURAL_KEYS["grades"], grade)

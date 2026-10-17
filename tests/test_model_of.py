@@ -6,11 +6,10 @@ moves it knows who pays.
 """
 
 import importlib
-import pathlib
 
 import pytest
 
-from hpcagent_bench import study_tags
+from hpcagent_bench import paths, study_tags
 
 #: The scripts that call it. A figure that cannot resolve its model draws every setup as one series.
 CALLERS = (
@@ -28,7 +27,7 @@ def test_model_of_exists_and_is_importable() -> None:
 @pytest.mark.parametrize("script", CALLERS)
 def test_every_caller_still_reaches_it(script: str) -> None:
     """Whoever moves this next finds out here, with the caller named, instead of in a figure run."""
-    source = (pathlib.Path(__file__).resolve().parents[1] / script).read_text(encoding="utf-8")
+    source = (paths.ROOT / script).read_text(encoding="utf-8")
     assert "model_of" in source, f"{script} no longer calls model_of; drop it from CALLERS"
     assert "study_tags.model_of" in source, (
         f"{script} calls model_of through something other than study_tags, which is how the "

@@ -8,16 +8,14 @@ that default; each one names the mode it runs. Blind is a treatment (no oracle),
 experiment sets it.
 """
 
-import pathlib
-
 import pytest
 from hpcagent_agent import submission_mode
 
-from hpcagent_bench import packets
+from hpcagent_bench import packets, paths
 from tests.env_render import env_spec
 
 SPEC = env_spec.load_spec()
-COMMON_ENV = pathlib.Path(__file__).resolve().parents[1] / "experiments/layers/common.env"
+COMMON_ENV = paths.ROOT / "experiments/layers/common.env"
 
 
 def test_the_default_mode_is_single() -> None:

@@ -1,86 +1,27 @@
 #!/usr/bin/env python3
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""What one episode COST, under assumptions that are stated rather than implied.
+"""Token cost of one agent episode: the perfect-prefix fold of a transcript into fresh input, cached input
+and output (definitions and cards: ``docs/token_accounting.md``).
 
-Standard library only, and imports nothing from ``hpcagent_bench``: the agent step runs where that
-package is not importable. One module, ``hpcagent_agent.driver.token_cost``, imported by the driver
-and by the analysis (``docs/token_accounting.md``) alike.
+Standard library only and imports nothing from ``hpcagent_bench``: the agent step runs where that package is
+not importable. Imported by the driver and by the analysis.
 
-The single ``tokens`` number the harness records is the sum of every usage field over every turn,
-and it is wrong twice, in opposite directions:
+Per turn N, with ``input_N`` the turn's prompt tokens (every field of :data:`INPUT_FIELDS`):
 
-* It EXCLUDES everything the model GENERATED. These endpoints report ``output_tokens: 0`` on every
-  per-turn ``assistant`` event and fill the real count in once, on the final ``result`` record, so a
-  sum over turns counts input and nothing else: every per-turn usage block reads
-  ``output_tokens: 0`` while the result record reports the real count.
-* It OVERSTATES re-sent context. Each turn re-sends the whole transcript and each turn's
-  ``input_tokens`` counts all of it again, so a 40-turn episode pays for its prompt 40 times. The
-  server does not: the measured prefix cache hit rate on these runs is 99.3 percent.
+    fresh_N  = max(0, input_N - input_{N-1})        cached_N = min(input_N, input_{N-1})
 
-Neither error is a constant factor. The first grows with how much a model thinks, the second with
-how many turns it takes -- so both distort a comparison BETWEEN models, which is the only thing
-these numbers are used for.
+Output is every generated token (reasoning, answer text and tool-call arguments), read from the first tier
+that reports it: the per-request ``message_delta`` usage, else the final ``result`` record; per-turn
+``assistant`` events report ``output_tokens: 0`` on these endpoints. The client's streamed
+``estimated_tokens_delta`` is kept as ``thinking_estimate`` and added to nothing (docs/scoring.md 13/F8).
 
-THE MODEL, and its three assumptions:
+* ``billed`` = sum over turns of ``input_N + output_N`` (every request's prompt in full).
+* ``effective`` = sum of ``fresh_N + output_N`` (:data:`CACHE_DISCOUNT` = 0: each context token counted
+  once). ``effective`` is an upper bound on cache reuse: an evicted prefix costs more than it is charged.
 
-1. PERFECT PREFIX CACHE. Everything turn N shares with turn N-1 is a cache hit. Since the
-   transcript only grows, that shared part is turn N-1's whole input, giving per turn
-
-       fresh_N  = max(0, input_N - input_{N-1})        cached_N = min(input_N, input_{N-1})
-
-   The measured hit rate is 99.3 percent, so this is an approximation of something real rather
-   than a convenient fiction -- but it IS an upper bound, and an episode whose context was evicted
-   is charged less here than it truly cost.
-2. A CACHE READ COSTS NOTHING (``CACHE_DISCOUNT`` = 0), so every token is counted ONCE, in the
-   turn it first appeared. Not a published cache-read rate (vendors bill 0.1x), for a reason worth
-   stating: ``cached`` is a sum over TURNS, and the thing it sums exists only once. An episode can
-   sum ~10M cached tokens against a context that reaches ~100k -- the KV cache holds one copy and
-   the rest is that copy re-counted per turn. Any nonzero
-   fraction of it prices a phantom, and prices it in proportion to turn count, which differs by
-   model.
-
-   What zero omits is the KV re-read on each decode step. That is real, but it is memory traffic
-   rather than a forward pass, and it is second-order beside a ~100x double count.
-3. REASONING IS OUTPUT, AND THE SERVER ALREADY COUNTED IT. SGLang and vLLM both serve
-   ``/v1/messages`` with an ``output_tokens`` that is every generated token -- reasoning, answer
-   text and tool-call arguments alike -- so reasoning is billed at the output rate by construction
-   and nothing is added on top. The client's streamed ``estimated_tokens_delta`` is kept as
-   ``thinking_estimate``, informational and never summed: it is a client-side character estimate
-   that does not agree with the server and already counted in its output, so adding it is a DOUBLE
-   COUNT -- see 13/F8 of docs/scoring.md.
-
-TWO NUMBERS, AND BOTH ARE RIGHT -- for different questions. This matters because the published
-convention is the OPPOSITE of the model above, and not by mistake:
-
-* ``billed`` (the per-turn sum) is what the literature reports. An API bills per REQUEST, so a
-  40-turn episode really is charged for its prompt 40 times, and agent benchmarks price open-weight
-  models at a hosting provider's list price (HAL, arXiv:2510.11977, prices DeepSeek-R1 from Together.ai) so their numbers
-  compare with API-based work. It is why published agentic-coding input:output ratios exceed 150:1
-  -- ours is 10,427,977:68,757, or 152:1, right on it. Quote this when comparing against other
-  papers.
-* ``effective`` (every token once) is what our hardware actually computed. Nobody bills us per
-  request; we own the GPUs, and a cached prefix costs no forward pass. Quote this when comparing
-  SETUPS WITHIN this work, because ``billed`` scales with turn count and turn count differs by model
-  -- measured over 28 episodes that reached a result record,
-  ``effective/billed`` runs 0.019 to 0.211 and tracks turns almost monotonically, so the convention
-  silently penalises models that take more steps.
-
-The field also reports an EFFECTIVENESS-AWARE cost: total cost divided by instances RESOLVED, not
-attempted. Worth pairing with either number here, since a setup that spends little and lands nothing
-is not cheap.
-
-THE UNIT THIS SETTING ACTUALLY PAYS IN is node-seconds, not tokens. Tokens are a borrowed
-currency: we rent nodes by the second and the token count is only a proxy for how hard we worked
-them. ``api_ms`` per episode is the share of the shared inference node that episode occupied, so an
-episode's true cost is the job's ``nodes x wall`` apportioned by it -- no discount assumption
-anywhere. Prefer it when the question is what a setup COST; prefer ``effective`` when the question
-is what an agent CONSUMED, which is what a per-agent budget bounds.
-
-What this deliberately does NOT do is convert to money. A price needs an output-to-input multiplier
-(published ratios run 4x to 8x) and a per-model rate, and inventing either would bury an assumption
-in a number that looks measured. ``effective`` is a TOKEN count on one axis, not a cost in dollars;
-compare two episodes with it, do not budget with it.
+``billed`` scales with turn count; ``effective`` does not. Use ``effective`` to compare setups within one
+study and ``billed`` to compare with per-request API pricing. Neither is converted to money here.
 """
 
 import argparse

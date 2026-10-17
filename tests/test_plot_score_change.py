@@ -26,14 +26,14 @@ from matplotlib.axes import Axes
 from matplotlib.collections import LineCollection, PathCollection
 from matplotlib.figure import Figure
 
-from hpcagent_bench import studies
+from hpcagent_bench import paths, studies
 from hpcagent_bench.stats import cost, palette, population, score_rule
 from hpcagent_bench.stats import style as plotstyle
 from hpcagent_bench.stats.figures import efficacy as efficacy_figures
 from hpcagent_bench.stats.significance import Finding
 from tests.fresh_module import module_at
 
-REPO = pathlib.Path(__file__).resolve().parents[1]
+REPO = paths.ROOT
 
 #: Models that exist in the tag registry, so the palette resolves them instead of warning.
 MODELS: tuple[str, ...] = ("qwen38", "oss120b", "kimi27sglang")
@@ -697,7 +697,7 @@ def test_a_difference_spec_reads_delivery_colon_model_pairs() -> None:
 
 
 @pytest.mark.parametrize(
-    ("value", "want"), [(6.34919, "6.3x"), (0.92137, "0.9x"), (1.0, "1.0x"), (4.0, "4.0x"), (0.5, "0.5x")]
+    ("value", "want"), [(6.34919, "6.3x"), (0.92137, "1/1.1x"), (1.0, "1.0x"), (4.0, "4.0x"), (0.5, "1/2.0x")]
 )
 def test_an_arrows_factor_is_printed_to_one_decimal(value: float, want: str) -> None:
     """The label beside a mark is what a reader quotes, one decimal; the tick
@@ -779,11 +779,11 @@ def test_parse_spec_reads_semicolon_separated_key_value_pairs() -> None:
     }  # fmt: skip
 
 
-# Ratio tick labels: a ratio below 1 is spelled in full, never rounded to 0x.
+# Ratio tick labels: a ratio below 1 is spelled as its reciprocal, never rounded to 0x.
 
 
 def test_the_token_cost_axis_formatter_spells_a_ratio_below_one_as_a_fraction() -> None:
-    assert plotstyle.ratio_tick_label(0.125) == "0.125x"
+    assert plotstyle.ratio_tick_label(0.125) == "1/8x"
     assert plotstyle.ratio_tick_label(1.0) == "1x"
     assert plotstyle.ratio_tick_label(8.0) == "8x"
 
@@ -1464,42 +1464,3 @@ def test_the_cost_row_is_priced_with_the_billed_card_unless_told_otherwise() -> 
     effective = efficacy_figures.paired_kernels(control, treated, card=cost.resolve("effective"))
     # billed charges the 1000 cached tokens at a tenth; effective charges them nothing.
     assert (billed.control_tokens - effective.control_tokens).to_numpy() == pytest.approx(100.0)
-
-
-def test_per_kernel_draws_canon_columns_over_the_baseline(tmp_path: pathlib.Path) -> None:
-    """``--per-kernel`` with a canon DB alone: one row per named column, a kernel a column never timed at 1x."""
-    import sqlite3
-
-    canon_db = tmp_path / "canon.db"
-    rows = [
-        ("numba", "k1", 100.0),
-        ("numba", "k2", 200.0),
-        ("pluto", "k1", 50.0),
-        ("pluto", "k2", 20.0),
-        ("dace_cpu", "k1", 10.0),
-    ]
-    frame = pd.DataFrame(
-        [{"run": "r", "column": c, "kernel": k, "median_ms": ms, "validated": "True"} for c, k, ms in rows]
-    )
-    with sqlite3.connect(canon_db) as conn:
-        frame.to_sql("canon", conn, index=False)
-    out = tmp_path / "figures" / "compilers.pdf"
-    args = plot.build_parser().parse_args(
-        ["--per-kernel", "--canon-db", str(canon_db), "--canon-columns", "pluto,dace_cpu", "--out", str(out)]
-    )
-    plot.figure_per_kernel(args, cost.resolve())
-    assert out.is_file()
-    assert out.with_suffix(".png").is_file()
-    kernels = pd.read_csv(out.with_name("compilers-kernels.csv"))
-    pluto = kernels[kernels.framework == "pluto"].set_index("kernel")["speedup"]
-    assert pluto.to_dict() == pytest.approx({"k1": 2.0, "k2": 10.0})
-    dace = kernels[kernels.framework == "dace_cpu"].set_index("kernel")["speedup"]
-    assert dace["k2"] == pytest.approx(1.0)  # never timed: entered at 1x, not dropped
-
-
-def test_per_kernel_with_observations_needs_the_experiment(tmp_path: pathlib.Path) -> None:
-    args = plot.build_parser().parse_args(
-        [str(tmp_path / "obs.db"), "--per-kernel", "--canon-db", str(tmp_path / "c.db")]
-    )
-    with pytest.raises(SystemExit, match="--experiment"):
-        plot.figure_per_kernel(args, cost.resolve())

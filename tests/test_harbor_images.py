@@ -16,10 +16,10 @@ import tomllib
 import pytest
 import yaml
 
-from hpcagent_bench import config
+from hpcagent_bench import config, paths
 from hpcagent_bench import harbor as A
 
-REPO = pathlib.Path(__file__).resolve().parents[1]
+REPO = paths.ROOT
 IMAGES_ENV = REPO / "containers" / "images" / "images.env"
 
 #: images.env role prefix -> the config.yaml image it publishes. cpu has no row: its images are
@@ -56,7 +56,7 @@ def test_every_hardware_names_fully_qualified_registry_images(hardware: str) -> 
 def test_the_registry_table_publishes_the_tags_config_names() -> None:
     env = images_env()
     for prefix, key in PUBLISHED.items():
-        assert f"{env['REGISTRY_REPO']}:{env[f'{prefix}_TAG']}" == config.get_str(key), prefix
+        assert f"{env['REGISTRY_REPO']}:{env[f'{prefix}_TAG']}" == config.get(key), prefix
 
 
 def generated(tmp_path: pathlib.Path, hardware: str) -> pathlib.Path:

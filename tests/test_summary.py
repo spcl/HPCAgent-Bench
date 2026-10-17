@@ -12,7 +12,6 @@ import math
 
 import numpy as np
 import pytest
-from scipy import stats
 
 from hpcagent_bench.stats import significance, summary
 
@@ -20,11 +19,6 @@ from hpcagent_bench.stats import significance, summary
 def sign_flip(log_ratios: list[float] | np.ndarray) -> significance.Result:
     """The registered sign-flip paired test, named rather than configured."""
     return significance.paired(log_ratios, test="sign-flip")
-
-
-def wilcoxon(differences: list[float] | np.ndarray) -> significance.Result:
-    """The registered Wilcoxon paired test (Hodges-Lehmann estimate, signed-rank p), named rather than configured."""
-    return significance.paired(differences, test="wilcoxon")
 
 
 @pytest.mark.parametrize(
@@ -143,73 +137,14 @@ def test_the_interval_names_what_it_is_for() -> None:
     assert summary.geomean_ci([2.0, 4.0]).label() == "95% bootstrap-BCa CI for geomean"
 
 
-def test_hodges_lehmann_is_the_median_of_the_walsh_averages() -> None:
-    """The six Walsh averages of [1, 2, 4] are 1, 1.5, 2, 2.5, 3, 4 -- their median is 2.25, which
-    is not the sample median (2) and is the point the signed-rank test inverts to."""
-    assert summary.walsh_averages([1.0, 2.0, 4.0]).tolist() == [1.0, 1.5, 2.0, 2.5, 3.0, 4.0]
-    assert summary.hodges_lehmann([1.0, 2.0, 4.0]) == pytest.approx(2.25)
-
-
-def test_paired_change_agrees_with_its_own_test() -> None:
-    """The point, the interval and the p value describe ONE quantity, so a significant result
-    cannot have an interval covering zero."""
-    rng = np.random.default_rng(3)
-    result = wilcoxon(rng.normal(0.6, 0.4, 30))
-    assert result.pvalue < 0.05
-    assert result.low > 0.0
-    assert result.low < result.estimate < result.high
-    assert result.method == "signed-rank-exact"
-
-
-def test_paired_change_uses_the_exact_null_where_one_exists() -> None:
-    """The exact distribution is computed wherever it is available: at n=40 a normal approximation
-    differs from scipy's exact test by 4e-3 in p."""
-    rng = np.random.default_rng(7)
-    rng.normal(0.2, 1.0, 12)
-    rng.normal(0.15, 0.8, 25)
-    result = wilcoxon(rng.normal(0.15, 0.8, 40))
-    assert result.method == "signed-rank-exact"
-    assert result.pvalue == pytest.approx(0.18761708125202858)
-
-
-def test_paired_change_drops_zero_differences_from_n() -> None:
-    """A zero supports neither direction; keeping it would inflate n and shrink p for free."""
-    differences = [0.0, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
-    assert wilcoxon(differences).n == 6
-    assert summary.signs(differences) == summary.Signs(wins=6, losses=0, ties=2)
-
-
 def test_paired_change_says_underpowered_instead_of_drawing_an_interval() -> None:
     """Below six pairs the two-sided test cannot reach 0.05 whatever the data says, so an interval
     would be decoration."""
-    result = wilcoxon([1.0, 2.0, 3.0, 4.0])
+    result = sign_flip([1.0, 2.0, 3.0, 4.0])
     assert result.method == "underpowered"
     assert math.isnan(result.low)
     assert math.isnan(result.high)
     assert math.isnan(result.pvalue)
-
-
-def test_paired_change_on_nothing_is_not_an_effect() -> None:
-    result = wilcoxon([0.0, 0.0, 0.0])
-    assert result.method == "degenerate"
-    assert result.estimate == 0.0
-    assert result.pvalue == 1.0
-
-
-def test_a_tied_sample_falls_back_and_says_so() -> None:
-    """scipy has no exact null with ties, so the method string has to record the approximation
-    rather than let a reader assume the exact test ran."""
-    result = wilcoxon([0.5] * 8 + [-0.5] * 3)
-    assert result.method == "signed-rank-approx"
-
-
-def test_the_estimator_does_not_change_with_n() -> None:
-    """A row with too few kernels for an interval still reports the SAME statistic as the rows
-    beside it. Reporting a plain median there and a Hodges-Lehmann estimate elsewhere puts two
-    statistics on one axis, distinguishable only by counting each row's kernels."""
-    few = [0.1, 0.9, -0.4]
-    assert wilcoxon(few).estimate == pytest.approx(summary.hodges_lehmann(few))
-    assert wilcoxon(few).estimate != pytest.approx(float(np.median(few)))
 
 
 def test_paired_geomean_is_the_geometric_mean_of_the_paired_ratios() -> None:
@@ -260,23 +195,6 @@ def test_paired_geomean_over_no_pairs_has_no_estimate() -> None:
     change = sign_flip([])
     assert (change.n, change.method) == (0, "degenerate")
     assert math.isnan(change.estimate)
-
-
-def test_a_paired_change_reports_the_shared_signed_rank_p() -> None:
-    """On tied data the paired change reads the one signed-rank test, not its own scipy call."""
-    before = np.array([10.0, 12.0, 9.0, 14.0, 11.0, 13.0, 10.5, 12.5, 9.5, 15.0])
-    after = np.array([9.0, 11.0, 9.5, 12.0, 10.0, 12.0, 9.5, 12.0, 9.0, 13.0])
-    expected = summary.signed_rank_test(after - before)[1]
-    assert wilcoxon(after - before).pvalue == expected
-
-
-def test_a_tied_sample_takes_the_corrected_approximation_not_an_exact_count() -> None:
-    """The exact null counts subsets of DISTINCT ranks, so on tied differences it is wrong rather than
-    precise; the tie- and continuity-corrected approximation is the right null there."""
-    differences = [0.1, 0.1, 0.2, -0.3, 0.4, 0.4, 0.5, -0.1, 0.6, 0.7]
-    _, pvalue, method, n = summary.signed_rank_test(differences)
-    assert (method, n) == ("signed-rank-approx", 10)
-    assert pvalue == pytest.approx(float(stats.wilcoxon(differences, method="approx", correction=True).pvalue))
 
 
 def test_a_cell_below_the_interval_floor_reports_its_median_without_an_interval() -> None:

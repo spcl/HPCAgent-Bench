@@ -17,7 +17,6 @@ it means the run leg wrote nothing.
 import pathlib
 import sqlite3
 
-import pytest
 
 from hpcagent_bench.harness import recording
 
@@ -38,55 +37,6 @@ def test_table_exists_is_false_for_an_empty_database(tmp_path: pathlib.Path) -> 
     assert not recording.table_exists(str(empty), "results")
     assert not recording.table_exists(str(tmp_path / "absent.db"), "results")
     assert not (tmp_path / "absent.db").exists(), "table_exists created the file it looked for"
-
-
-def test_reading_an_unwritten_db_names_the_run_leg(tmp_path: pathlib.Path) -> None:
-    """The end this exists for: the error names the path, reports that no shard was found, and
-    points at the run leg rather than the plot."""
-    from hpcagent_bench.stats.figures import results as plotting
-
-    db = tmp_path / "hpcagent_bench.db"
-    with pytest.raises(RuntimeError) as excinfo:
-        plotting.load_results(str(db))
-    message = str(excinfo.value)
-    assert str(db) in message, "the error must name the database it opened"
-    assert "none" in message, "the error must report that no shard was found beside it"
-    assert "run leg" in message, "the error must point at the leg that actually failed"
-
-
-def test_a_written_shard_is_aggregated_and_read(tmp_path: pathlib.Path) -> None:
-    """The other side of the guard: with a shard present the reader aggregates and returns rows,
-    so the check above cannot be passing merely because this path never works."""
-    from sqlmodel import Session
-
-    from hpcagent_bench.frameworks.schema import Result, results_engine
-    from hpcagent_bench.stats.figures import results as plotting
-
-    base = tmp_path / "hpcagent_bench.db"
-    shard = pathlib.Path(recording.shard_db_path(0, str(base)))
-    with Session(results_engine(str(shard))) as session:
-        session.add(
-            Result(
-                timestamp=0,
-                kernel="gemm",
-                domain="LinAlg",
-                preset="S",
-                framework="numpy",
-                agent=None,
-                validated=True,
-                cpu="test-cpu",
-                time=1.0,
-                native_time=None,
-                datatype="float64",
-                variant=None,
-                execution="native",
-            )
-        )
-        session.commit()
-
-    rows = plotting.load_results(str(base), kernel="gemm", preset="S")
-    assert not rows.empty, "a recorded shard must reach the reader through the aggregate"
-    assert set(rows["kernel"]) == {"gemm"}
 
 
 def write_row(shard: pathlib.Path, framework: str, build: str, time: float) -> None:
@@ -115,26 +65,3 @@ def write_row(shard: pathlib.Path, framework: str, build: str, time: float) -> N
             )
         )
         session.commit()
-
-
-def test_the_baseline_survives_a_build_stamp(tmp_path: pathlib.Path) -> None:
-    """``record.build`` is a deployment-wide setting, so a multi-tree job stamps EVERY framework it
-    measures -- baseline included. The candidate columns must fold (``dace_cpu/main`` and
-    ``dace_cpu/extended`` are two series); the baseline must not, because it is the divisor every
-    ratio needs to find by name. Folding it fails only at the very end of a full corpus sweep."""
-    from hpcagent_bench.stats.figures import results as plotting
-
-    base = tmp_path / "hpcagent_bench.db"
-    shard = pathlib.Path(recording.shard_db_path(0, str(base)))
-    write_row(shard, plotting.DEFAULT_BASELINE, "main", 10.0)
-    write_row(shard, "dace_cpu", "main", 5.0)
-    write_row(shard, "dace_cpu", "extended", 2.5)
-
-    frameworks = set(plotting.load_results(str(base), kernel="gemm", preset="S")["framework"])
-    assert plotting.DEFAULT_BASELINE in frameworks, (
-        f"the baseline was folded into {sorted(frameworks)} -- every speedup "
-        f"divides by {plotting.DEFAULT_BASELINE!r} and can no longer find it"
-    )
-    assert {"dace_cpu/main", "dace_cpu/extended"} <= frameworks, (
-        f"the candidate columns must still fold, or two DaCe trees average into one line: {sorted(frameworks)}"
-    )

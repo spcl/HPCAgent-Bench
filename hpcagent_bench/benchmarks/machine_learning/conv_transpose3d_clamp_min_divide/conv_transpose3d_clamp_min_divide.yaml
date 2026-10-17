@@ -56,3 +56,6 @@ args:
     out: true
   min_value: -1.0
   divisor: 2.0
+public:
+  negative:
+    min_value: "the lower clamp bound"

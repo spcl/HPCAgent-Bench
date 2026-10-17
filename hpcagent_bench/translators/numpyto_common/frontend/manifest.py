@@ -1,12 +1,13 @@
 """bench_info JSON readers: declared shapes, dtypes, presets, pinned knobs and symbol signs."""
 
 import ast
-import json
 import pathlib
 import re
 from collections.abc import Mapping
 from typing import cast
 
+from hpcagent_bench.emit_bridge import BenchDocument, BenchInfoDocument, InitDocument
+from hpcagent_bench.fuzz import FuzzValue
 from hpcagent_bench.spec import as_block, as_list
 from hpcagent_bench.translators.numpyto_common.emit_helpers.tokens import IDENT_RE
 from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc
@@ -14,9 +15,7 @@ from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc
 __all__ = [
     "PRESET_FALLBACK",
     "SHAPE_TUPLE_RE",
-    "JsonBlock",
     "PinnedValue",
-    "as_text_block",
     "collect_bool_preset_names",
     "collect_float_preset_names",
     "collect_symbols",
@@ -56,28 +55,17 @@ def declared_ranks(shapes_raw: dict[str, str]) -> dict[str, int]:
 PinnedValue = int | float | str
 
 
-#: One bench_info JSON block. ``isinstance`` proves a mapping and nothing about what is in it,
-#: so every value stays ``object`` until :func:`as_block` / :func:`as_list` / a type test converts
-#: it. ``hpcagent_bench.emit_bridge`` writes the schema these blocks follow.
-JsonBlock = dict[str, object]
-
-
 def field_nodes(raw: object) -> list[object]:
     """One ast field's members. ``isinstance`` proves a sequence and nothing about what is in it,
     so each member is type-tested where it is read."""
     return cast("list[object]", raw) if isinstance(raw, list) else []
 
 
-def as_text_block(raw: object) -> dict[str, str]:
-    """One JSON mapping whose values are all text -- the ``shapes`` / ``dtypes`` blocks."""
-    return {name: str(value) for name, value in as_block(raw).items()}
-
-
-def pinned_values(raw: object) -> dict[str, PinnedValue]:
+def pinned_values(pinned: Mapping[str, FuzzValue]) -> dict[str, PinnedValue]:
     """The ``pinned_config`` block: every knob bound to ONE scalar for every preset and every fuzz
     draw, which is what makes it a compile-time constant. A manifest pins nothing else, so the type
     test keeps every entry."""
-    return {name: value for name, value in as_block(raw).items() if isinstance(value, (int, float, str))}
+    return {name: value for name, value in pinned.items() if isinstance(value, (int, float, str))}
 
 
 def pinned_config_in_use(
@@ -143,70 +131,44 @@ def shape_only_constants(
     }
 
 
-def load_bench_info(path: pathlib.Path) -> JsonBlock:
-    raw = as_block(json.loads(path.read_text()))
-    return as_block(raw["benchmark"]) if "benchmark" in raw else raw
+def load_bench_info(path: pathlib.Path) -> BenchDocument:
+    """The ``benchmark`` block of the bench_info JSON at ``path`` (:class:`~hpcagent_bench.emit_bridge.BenchInfoDocument`)."""
+    return BenchInfoDocument.model_validate_json(path.read_text()).benchmark
 
 
-def declared_shapes(init: Mapping[str, object]) -> dict[str, str]:
-    """``{array: shape expression}`` from an ``init`` block, whichever spelling it carries.
-
-    An array is declared under ``init.arrays``, either as a bare shape string or as a mapping
-    with a ``shape`` key. Reading ``init["shapes"]`` directly -- the retired spelling -- is what
-    silently reduced this emitter to ONE translating port out of 200: the key stopped being
-    exported, ``shapes_raw`` came back empty, and every kernel with a declaratively-initialised
-    >=2-D array was emitted against shapes the emitter had to guess instead of the ones its
-    manifest declared. Kernels initialising through ``init.func_name`` were unaffected, which is
-    why the polybench corpus looked fine throughout.
-
-    ``shapes`` is still accepted here, because a bench_info JSON on disk may predate the change
-    and this reader must not be a second place that decides what a manifest may say."""
-    arrays = as_block(init.get("arrays"))
-    out: dict[str, str] = {
-        name: entry if isinstance(entry, str) else str(as_block(entry)["shape"]) for name, entry in arrays.items()
-    }
-    for name, shape in as_text_block(init.get("shapes")).items():
-        out.setdefault(name, shape)
-    return out
+def declared_shapes(init: InitDocument) -> dict[str, str]:
+    """``{array: shape expression}`` from an ``init`` block: each ``init.arrays`` entry, a bare shape string or a
+    mapping with a ``shape`` key."""
+    return {name: entry if isinstance(entry, str) else entry.shape for name, entry in init.arrays.items()}
 
 
-def declared_index_arrays(init: Mapping[str, object]) -> set[str]:
+def declared_index_arrays(init: InitDocument) -> set[str]:
     """Names an ``init`` block declares as index arrays (``init.arrays[name].index_array: true``).
 
     Read the same way as :func:`declared_shapes` and for the same reason: the declaration lives on
     the array's own entry, so a reader that goes looking anywhere else silently sees none of them
     -- and "no index arrays" is not an error here, it is a 1-based backend quietly adding its
     ``+ 1`` on top of an already-1-based value."""
-    arrays = as_block(init.get("arrays"))
-    return {
-        name
-        for name, entry in arrays.items()
-        if not isinstance(entry, str) and bool(as_block(entry).get("index_array"))
-    }
+    return {name for name, entry in init.arrays.items() if not isinstance(entry, str) and entry.index_array}
 
 
-def declared_dtypes(init: Mapping[str, object]) -> dict[str, str]:
+def declared_dtypes(init: InitDocument) -> dict[str, str]:
     """``{name: dtype}`` from an ``init`` block, whichever spelling it carries.
 
     The dtype half of :func:`declared_shapes`, and it has to be read the same way for the same
     reason: an ARRAY's element type is declared on its ``init.arrays`` entry, while ``init.dtypes``
     types the names that are not arrays (size symbols and plain scalars). Reading only
-    ``init["dtypes"]`` would drop every declared array dtype, so a complex128 buffer would emit as
+    ``init.dtypes`` would drop every declared array dtype, so a complex128 buffer would emit as
     a real one (silently discarding the imaginary part) and an int32 index array as a double (an
     unemittable subscript).
 
     One merged map, because every caller asks the same question -- "what was <name> declared as" --
-    and an array name cannot also be a scalar name. The array entry wins over a same-named
-    ``init.dtypes`` entry: it is the current spelling.
-
-    ``dtypes`` is still accepted here, because a bench_info JSON on disk may predate the change and
-    this reader must not be a second place that decides what a manifest may say."""
+    and an array name cannot also be a scalar name."""
     out: dict[str, str] = {}
-    for name, entry in as_block(init.get("arrays")).items():
-        block = as_block(entry)
-        if not isinstance(entry, str) and "dtype" in block:
-            out[name] = str(block["dtype"])
-    for name, dtype in as_text_block(init.get("dtypes")).items():
+    for name, entry in init.arrays.items():
+        if not isinstance(entry, str) and entry.dtype is not None:
+            out[name] = entry.dtype
+    for name, dtype in init.dtypes.items():
         out.setdefault(name, dtype)
     return out
 

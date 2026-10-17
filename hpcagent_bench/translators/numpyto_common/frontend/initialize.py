@@ -2,9 +2,8 @@
 
 import ast
 import pathlib
-from collections.abc import Mapping
 
-from hpcagent_bench.spec import as_block, as_list
+from hpcagent_bench.emit_bridge import BenchDocument
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.frontend.module_constants import (
     inline_module_constants,
@@ -124,11 +123,9 @@ def dtype_from_dtype_arg(node: ast.expr) -> str | None:
     return None
 
 
-def initialize_function(
-    numpy_py: pathlib.Path, info: Mapping[str, object]
-) -> tuple[ast.Module, ast.FunctionDef] | None:
+def initialize_function(numpy_py: pathlib.Path, bench: BenchDocument) -> tuple[ast.Module, ast.FunctionDef] | None:
     """The companion ``<module>.py``'s ``init.func_name`` function, parsed, or ``None``."""
-    func_name = as_block(info.get("init")).get("func_name")
+    func_name = bench.init.func_name
     if func_name is None:
         return None
     path = numpy_py.with_name(numpy_py.stem.removesuffix("_numpy") + ".py")
@@ -156,17 +153,17 @@ def return_targets_(init_fn: ast.FunctionDef) -> list[str]:
     return []
 
 
-def kernel_array_args_(info: Mapping[str, object]) -> list[str]:
+def kernel_array_args_(bench: BenchDocument) -> list[str]:
     """``input_args`` that are arrays, in order: what an ``initialize()`` return lines up with."""
-    array_args = {str(a) for a in as_list(info.get("array_args"))}
-    return [a for a in (str(a) for a in as_list(info.get("input_args"))) if a in array_args]
+    array_args = set(bench.array_args)
+    return [a for a in bench.input_args if a in array_args]
 
 
-def dtypes_from_initialize(numpy_py: pathlib.Path, info: Mapping[str, object]) -> dict[str, str]:
+def dtypes_from_initialize(numpy_py: pathlib.Path, bench: BenchDocument) -> dict[str, str]:
     """dtype tags of the arrays ``initialize()`` builds, keyed by its locals and, when its return
     lines up one-to-one with the kernel's array arguments, by those argument names too (a
     misaligned return is skipped: the manifest's ``init.dtypes`` is authoritative there)."""
-    loaded = initialize_function(numpy_py, info)
+    loaded = initialize_function(numpy_py, bench)
     if loaded is None:
         return {}
     tree_, init_fn = loaded
@@ -176,7 +173,7 @@ def dtypes_from_initialize(numpy_py: pathlib.Path, info: Mapping[str, object]) -
         if dt is not None:
             dtypes[name] = dt
     return_targets = return_targets_(init_fn)
-    kernel_array_args = kernel_array_args_(info)
+    kernel_array_args = kernel_array_args_(bench)
     if return_targets and len(kernel_array_args) == len(return_targets):
         for kernel_name, ret_name in zip(kernel_array_args, return_targets, strict=False):
             if ret_name in dtypes and kernel_name not in dtypes:
@@ -184,11 +181,11 @@ def dtypes_from_initialize(numpy_py: pathlib.Path, info: Mapping[str, object]) -
     return dtypes
 
 
-def shapes_from_initialize(numpy_py: pathlib.Path, info: Mapping[str, object]) -> dict[str, str]:
+def shapes_from_initialize(numpy_py: pathlib.Path, bench: BenchDocument) -> dict[str, str]:
     """Shape expressions of the arrays the companion ``initialize()`` builds (see
     :func:`shape_from_constructor` for the recognised constructors), keyed by its locals and by the
     kernel array arguments its return lines up with positionally."""
-    loaded = initialize_function(numpy_py, info)
+    loaded = initialize_function(numpy_py, bench)
     if loaded is None:
         return {}
     tree, init_fn = loaded
@@ -213,7 +210,7 @@ def shapes_from_initialize(numpy_py: pathlib.Path, info: Mapping[str, object]) -
         if init_scalar_defs:
             shape = substitute_inlined_scalar_defs((shape,), init_scalar_defs)[0]
         shapes[name] = shape
-    for kernel_name, ret_name in zip(kernel_array_args_(info), return_targets_(init_fn), strict=False):
+    for kernel_name, ret_name in zip(kernel_array_args_(bench), return_targets_(init_fn), strict=False):
         if ret_name in shapes and kernel_name not in shapes:
             shapes[kernel_name] = shapes[ret_name]
     return shapes

@@ -9,6 +9,8 @@ paid again for nothing or a way a stale SDFG is served under a key that no longe
 import pathlib
 import subprocess
 
+import dace
+import numpy as np
 import pytest
 
 from hpcagent_bench import cpf_cache, cpf_canonical
@@ -103,3 +105,21 @@ def test_a_canonicalize_ended_by_a_signal_is_not_cached(
     with pytest.raises(SystemExit):
         cpf_canonical.canonical_sdfg(FakeSpec("k"), impl, key, cache, "fp64", "cpu")
     assert cpf_cache.canonical_entry(cache, key) is None
+
+
+@dace.program
+def shifted_columns(a: dace.float64[4, 3], out: dace.float64[4, 3]) -> None:
+    out[:] = a + np.arange(3, dtype=np.int64)[None, :]
+
+
+def test_a_constant_numpy_expression_is_folded_out_of_the_entry() -> None:
+    """``np.arange(3, ...)`` is evaluated at parse time into a closure array, which the parse lifts into the
+    signature; the C ABI has no such parameter (cp2k_density_matrix_trs4). It becomes a compile-time constant."""
+    sdfg = shifted_columns.to_sdfg(simplify=True)
+    lifted = [name for name in sdfg.arglist() if name not in ("a", "out")]
+    assert lifted, "the parse no longer lifts the closure array; the fold has nothing to test"
+    assert cpf_canonical.fold_closure_arrays(shifted_columns, sdfg) == tuple(lifted)
+    assert list(sdfg.arglist()) == ["a", "out"]
+    for name in lifted:
+        assert sdfg.arrays[name].transient
+        assert np.array_equal(sdfg.constants_prop[name][1], np.arange(3)[None, :])

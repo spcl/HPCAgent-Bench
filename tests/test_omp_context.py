@@ -404,12 +404,14 @@ def test_the_scan_names_the_runtimes_a_librarys_closure_maps(
     monkeypatch.setattr(
         languages,
         "load_libraries",
-        lambda: {
-            "omplib": {"langs": ["c"], "link": ["-lgomp"]},
-            "plain": {"langs": ["c"], "link": ["-lm"]},
-            "absent": {"langs": ["c"], "link": ["-lhpcagent_no_such_library"]},
-            "fortran_only": {"langs": ["fortran"], "link": ["-lm"]},
-        },
+        lambda: languages.LIBRARIES_ADAPTER.validate_python(
+            {
+                "omplib": {"summary": "links libgomp", "langs": ["c"], "link": ["-lgomp"]},
+                "plain": {"summary": "links libm", "langs": ["c"], "link": ["-lm"]},
+                "absent": {"summary": "links nothing", "langs": ["c"], "link": ["-lhpcagent_no_such_library"]},
+                "fortran_only": {"summary": "fortran", "langs": ["fortran"], "link": ["-lm"]},
+            }
+        ),
     )
     languages.library_tokens.cache_clear()
     assert omp_catalog.scan_entry("omplib", "gnu") == [str(libgomp)]
@@ -441,7 +443,7 @@ def test_a_pkg_config_less_variant_puts_its_own_directory_on_the_link_line(
     lib = root / "llvm" / "view" / "lib"
     (lib / "libhpcagentvariant.so.1").write_bytes(b"")
     (lib / "libhpcagentvariant.so").symlink_to("libhpcagentvariant.so.1")
-    entry = {"langs": ["c"], "link": ["-lhpcagentvariant"]}
+    entry = languages.LibraryEntry(summary="a variant", langs=("c",), link=("-lhpcagentvariant",))
     monkeypatch.setattr(languages, "load_libraries", lambda: {"variant": entry})
     monkeypatch.setattr(languages, "library_links", lambda _lang, _tokens: True)
     languages.library_tokens.cache_clear()
@@ -468,7 +470,7 @@ def test_a_library_declared_on_one_runtime_links_in_that_family_only() -> None:
 def test_every_declared_runtime_names_a_context_and_a_vendor() -> None:
     runtimes: set[str] = set()
     for entry in languages.load_libraries().values():
-        openmp = entry.get("openmp", {})
+        openmp = entry.openmp or {}
         by_vendor = openmp if isinstance(openmp, dict) else dict.fromkeys(languages.OFFLOAD_VENDORS, openmp)
         assert set(by_vendor) <= set(languages.OFFLOAD_VENDORS)
         runtimes |= set(by_vendor.values())

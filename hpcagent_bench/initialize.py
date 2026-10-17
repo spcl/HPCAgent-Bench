@@ -27,8 +27,8 @@ matrices, well-conditioned solvers, ...) define ``initialize`` there.
 """
 
 import ast
-import functools
 import math
+from types import ModuleType
 from typing import TYPE_CHECKING, cast
 
 import numpy as np
@@ -40,6 +40,8 @@ from hpcagent_bench.precision import Precision, numpy_dtype
 from hpcagent_bench.spec import as_block
 from hpcagent_bench.support import distributions
 from hpcagent_bench.support.distributions import domain as domain_mod
+from hpcagent_bench.support.array_module import is_array, module_of
+from hpcagent_bench.support.counter_generator import CounterGenerator
 from hpcagent_bench.support.distributions import hidden, streams
 from hpcagent_bench.support.helpers.sparse.abi import SPARSE_BUFFERS_KEY
 
@@ -65,8 +67,6 @@ __all__ = [
 ]
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from hpcagent_bench.spec import BenchSpec
 
 #: One materialised kernel input: a dense buffer, a numpy scalar, or the structural payload (a
@@ -93,8 +93,8 @@ def as_scalar_map(raw: object) -> dict[str, float]:
 
 
 def as_array(raw: object) -> npt.NDArray[np.generic] | None:
-    """``raw`` as a dense buffer, or ``None`` when it is a scalar or a structural payload."""
-    return cast("npt.NDArray[np.generic]", raw) if isinstance(raw, np.ndarray) else None
+    """``raw`` as a dense buffer (numpy or cupy), or ``None`` when it is a scalar or a structural payload."""
+    return cast("npt.NDArray[np.generic]", raw) if is_array(raw) else None
 
 
 def shape_dims(value: FuzzValue) -> tuple[int, ...] | None:
@@ -111,9 +111,7 @@ def shape_dims(value: FuzzValue) -> tuple[int, ...] | None:
     return tuple(dims)
 
 
-def fill_index_array(
-    shape: tuple[int, ...], dtype_str: str, rng: np.random.Generator | None = None
-) -> npt.NDArray[np.generic]:
+def fill_index_array(shape: tuple[int, ...], dtype_str: str, rng: CounterGenerator) -> npt.NDArray[np.generic]:
     """Materialize an integer array whose values are valid array
     subscripts -- the canonical form for a gather/scatter index array
     (``k = ip[i]; c[... k ...]``).
@@ -127,8 +125,6 @@ def fill_index_array(
     materialised at its STORAGE width (numpy has no sub-byte integer).
     """
     npdt = np.dtype(storage_dtype(dtype_str))
-    if rng is None:
-        rng = np.random.default_rng()
     if len(shape) == 1:
         return rng.permutation(shape[0]).astype(npdt)
     hi = max(2, min(shape))
@@ -195,9 +191,9 @@ def generate_scaled(
     triple has no magnitude to rescale and is returned as-is regardless of ``scale``.
     """
     value: InitValue = distributions.generate(name, shape, precision, spec)
-    if scale == 1.0 or not isinstance(value, np.ndarray) or not is_float_dtype(value.dtype):
+    if scale == 1.0 or not is_array(value) or not is_float_dtype(value.dtype):
         return value
-    scaled: npt.NDArray[np.generic] = np.multiply(compute_view(value), scale)
+    scaled: npt.NDArray[np.generic] = compute_view(value) * scale
     return scaled.astype(value.dtype, copy=False)
 
 
@@ -228,8 +224,10 @@ def auto_initialize(
     seed: int | None = None,
     params_override: dict[str, int] | None = None,
     hidden_variant: str | None = None,
+    xp: ModuleType = np,
 ) -> tuple[InitValue, ...]:
-    """Materialize all kernel inputs from the JSON's declarative blocks.
+    """Materialize all kernel inputs from the JSON's declarative blocks, as arrays of ``xp`` (numpy, or cupy
+    for a device-resident grade: the same bits either way).
 
     :param spec: A :class:`~hpcagent_bench.spec.BenchSpec`.
     :param preset: One of the kernel's preset names (``S``, ``M``, ...).
@@ -239,9 +237,9 @@ def auto_initialize(
     :param seed: Reproducibility seed. ``None`` fuzzes (fresh entropy
         per call); an int makes the WHOLE materialisation deterministic
         so every backend / precision / re-run sees identical inputs.
-        Each array gets its OWN spawned stream, so its values depend on
-        the seed and the array's position only -- not on how many draws
-        the arrays before it made. Supports seed-fuzzing and pinned runs.
+        Each array gets its OWN generator (:func:`streams.array_generators`),
+        so its values depend on the seed and the array's position only --
+        not on how many draws the arrays before it made.
     :param hidden_variant: A :data:`hidden.VARIANTS` name, or ``None`` (the default) for the
         un-rotated data path -- reproduces today's arrays bit-for-bit, since no array's
         distribution or scale is touched. When set, every FLOAT array's distribution and scale
@@ -267,9 +265,9 @@ def auto_initialize(
     # Resolved ONCE (not per array): the variant itself never changes mid-materialisation.
     variant = hidden.variant_by_name(hidden_variant) if hidden_variant else None
     scalars = spec.init.shapes  # name -> shape-expr str
-    # One stream per array, handed to the distribution via ``spec["rng"]``. Round-robined over the
-    # bit generators and spawned from a single SeedSequence, so array k depends on (seed, k) alone.
-    rngs = streams.spawn_streams(seed, len(scalars))
+    # One generator per array, handed to the distribution via ``spec["rng"]``: array k depends on (seed, k)
+    # alone, and each draw is one parallel fill on ``xp``.
+    rngs = streams.array_generators(seed, len(scalars), xp)
     init_dtypes = spec.init.dtypes
     declared_scalars = as_scalar_map(base_spec.get("scalars")) or spec.init.scalars
 
@@ -288,21 +286,17 @@ def auto_initialize(
             materialized[name] = np.int64(default)
         else:
             materialized[name] = dtype.type(default)
-    pending: list[str] = []
-    tasks: list[Callable[[], InitValue]] = []
-    elements = 0
     activation_drawn = False  # the first float array drawn is the activation (ml_default_domain)
     for index, (name, shape_expr) in enumerate(scalars.items()):
         if name in materialized:
             continue  # name collision: scalar declared wins
         shape = parse_shape(shape_expr, symbols)
-        elements += int(np.prod(shape)) if shape else 1
         # Per-array dtype override (e.g. an int index array) takes a
         # FIXED dtype, ignoring the run precision. Integer overrides get
         # valid-subscript fills; everything else uses the distribution.
         override = init_dtypes.get(name)
         if override is not None and np.dtype(storage_dtype(override)).kind in "iu":
-            tasks.append(functools.partial(fill_index_array, shape, override, rng=rngs[index]))
+            materialized[name] = fill_index_array(shape, override, rngs[index])
         else:
             # Per-array distribution from the unified ``init.arrays`` surface
             # wins over the run-wide default (e.g. an ``spd`` matrix beside a
@@ -324,9 +318,7 @@ def auto_initialize(
                 # Structural distributions and interval domains override the rotation inside
                 # resolve(); everything else rotates onto the variant's base + scale.
                 arr_dist, scale = hidden.resolve(variant, arr_dist, domain_mod.of(array_spec))
-            tasks.append(functools.partial(generate_scaled, arr_dist, shape, precision, array_spec, scale))
-        pending.append(name)
-    materialized.update(zip(pending, streams.fill(tasks, elements), strict=False))
+            materialized[name] = generate_scaled(arr_dist, shape, precision, array_spec, scale)
 
     # Emit in the order declared by output_args.
     missing = [name for name in spec.init.output_args if name not in materialized]
@@ -444,6 +436,7 @@ def allocate_declared_buffers(spec: "BenchSpec", data: dict[str, object], precis
         if buffer is not None and (buffer.dtype.kind == "c" or is_float_dtype(buffer.dtype)):
             undeclared = buffer.dtype
             break
+    xp = next((module for module in map(module_of, data.values()) if module is not None), np)
     allocated: list[str] = []
     for name in spec.array_args:
         if name in data or name not in spec.init.shapes:
@@ -456,6 +449,6 @@ def allocate_declared_buffers(spec: "BenchSpec", data: dict[str, object], precis
         if dims is None:
             continue
         declared = spec.init.dtypes.get(name)
-        data[name] = np.zeros(dims, dtype=np.dtype(storage_dtype(declared) if declared else undeclared))
+        data[name] = xp.zeros(dims, dtype=np.dtype(storage_dtype(declared) if declared else undeclared))
         allocated.append(name)
     return allocated

@@ -152,7 +152,7 @@ def test_the_secrets_file_supplies_every_seed(tmp_path: pathlib.Path, monkeypatc
     assert "second" in str(seeds.public_seeds_refusal()), "one seed left public is still public"
     seeds.read_seeds.cache_clear()
     secrets_file.write_text(json.dumps({"first": 11, "second": "22"}))
-    with pytest.raises(ValueError, match="needs an integer"):
+    with pytest.raises(ValueError, match="Input should be a valid integer|Field required"):
         seeds.secret_seed_first()
     seeds.read_seeds.cache_clear()
 

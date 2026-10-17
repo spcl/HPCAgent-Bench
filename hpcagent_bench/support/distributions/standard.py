@@ -5,17 +5,14 @@
 beta, laplace. Each respects the seeded ``spec['rng']`` stream and clips to the target precision's
 safe range so a downcast never yields inf.
 
-Every sampler is a ``numpy.random.Generator`` method: ``scipy.stats.<dist>.rvs`` adds 1.2-1.8x and a
-scipy import on the data path for no added capability.
-
-Each sampler is a function of ``(rng, spec, shape)`` over a deliberately small primitive set --
-uniform, normal, exponential, gamma, beta -- because that set is what a GPU generator can also
-supply. See :mod:`hpcagent_bench.support.distributions.streams` for the per-array stream policy.
+Every sampler is a :class:`~hpcagent_bench.support.counter_generator.CounterGenerator` method, so the
+array is built where ``rng.xp`` lives (numpy or cupy) with the same bits on both.
 """
 
-import numpy as np
+import math
 
 from hpcagent_bench.precision import Precision, numpy_dtype, safe_max
+from hpcagent_bench.support.counter_generator import CounterGenerator
 from hpcagent_bench.support.distributions import register_distribution
 from hpcagent_bench.support.distributions.streams import clip_to_precision
 
@@ -29,9 +26,7 @@ def normal(rng, spec, shape):
 def lognormal(rng, spec, shape):
     """``sigma`` is the underlying normal's sigma and ``scale`` is ``exp(mu)`` -- the parameterisation
     the kernels already declare, which is scipy's, not NumPy's."""
-    return rng.lognormal(
-        mean=float(np.log(float(spec.get("scale", 1.0)))), sigma=float(spec.get("sigma", 0.5)), size=shape
-    )
+    return rng.lognormal(mean=math.log(float(spec.get("scale", 1.0))), sigma=float(spec.get("sigma", 0.5)), size=shape)
 
 
 def exponential(rng, spec, shape):
@@ -62,10 +57,8 @@ def register(sampler):
     @register_distribution(sampler.__name__)
     def gen(shape, precision: Precision, spec):
         spec = spec or {}
-        rng = spec.get("rng")
-        if rng is None:
-            rng = np.random.default_rng()
-        raw = np.asarray(sampler(rng, spec, shape), dtype=np.float64)
+        rng = spec.get("rng") or CounterGenerator.fresh()
+        raw = rng.xp.asarray(sampler(rng, spec, shape), dtype=rng.xp.float64)
         return clip_to_precision(raw, safe_max(precision)).astype(numpy_dtype(precision))
 
     return gen

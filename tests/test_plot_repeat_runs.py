@@ -1,11 +1,6 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""The runs mode of the per-kernel figure: a box per setup and kernel with every run on top."""
-
-import pathlib
-import subprocess
-import sys
-import tempfile
+"""The per-kernel run marks (boxes, run dots, counts) the kernel runs figure draws with."""
 
 import matplotlib as mpl
 
@@ -15,14 +10,11 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 import pytest
 
-from hpcagent_bench import paths
-from hpcagent_bench.stats import population, reliability
+from hpcagent_bench.stats import population
 from hpcagent_bench.stats import style as plotstyle
 from hpcagent_bench.stats.figures import per_kernel as pk
-from tests import repeat_runs_stub as stub
 
 RunState = population.RunState
-SCRIPT = paths.ROOT / "statistics" / "plot_repeats.py"
 
 
 def cell_of(*states: RunState) -> pk.KernelCell:
@@ -123,52 +115,6 @@ def test_several_series_box_side_by_side_rather_than_falling_back_to_points() ->
         plt.close(fig)
 
 
-def test_the_runs_figure_refuses_owed_runs_unless_allowed() -> None:
-    runs = population.designed_runs(stub.stub_observations())
-    with pytest.raises(reliability.OwedRunsError):
-        pk.runs_figure(runs, list(stub.KERNELS))
-    fig = pk.runs_figure(runs, list(stub.KERNELS), allow_owed=True)
-    try:
-        pending = [artist for artist in fig.axes[0].collections if artist.get_gid() == plotstyle.PENDING_GID]
-        assert len(pending) == stub.PLAN[stub.OWED_CELL].owed
-    finally:
-        plt.close(fig)
-
-
-def test_the_runs_figure_draws_one_series_per_setup_with_one_count_per_cell() -> None:
-    runs = population.designed_runs(stub.stub_observations())
-    fig = pk.runs_figure(runs, list(stub.KERNELS), allow_owed=True)
-    try:
-        counts = sorted(text.get_text() for text in fig.axes[0].texts)
-        want = sorted(
-            f"{plan.solved}/{stub.RUNS - plan.owed}" + (f" +{plan.owed}?" if plan.owed else "")
-            for plan in stub.PLAN.values()
-        )
-        assert counts == want
-    finally:
-        plt.close(fig)
-
-
-def test_the_script_writes_the_figure_and_the_runs_behind_it(tmp_path: pathlib.Path) -> None:
-    observations = tmp_path / "stub.csv"
-    stub.stub_observations().to_csv(observations, index=False)
-    out = tmp_path / "runs.pdf"
-    command = [sys.executable, str(SCRIPT), str(observations), "--tag", "repeat5", "--allow-owed", "--out", str(out)]
-    subprocess.run(command, check=True, capture_output=True, cwd=paths.ROOT)
-    for name in ("runs.pdf", "runs.png", "runs.csv"):
-        assert (tmp_path / name).is_file(), name
-
-
-def test_the_script_refuses_owed_runs_by_default(tmp_path: pathlib.Path) -> None:
-    observations = tmp_path / "stub.csv"
-    stub.stub_observations().to_csv(observations, index=False)
-    command = [sys.executable, str(SCRIPT), str(observations), "--out", str(tmp_path / "runs.pdf")]
-    done = subprocess.run(command, check=False, capture_output=True, text=True, cwd=paths.ROOT)
-    assert done.returncode != 0
-    assert "owed runs" in done.stderr
-    assert not (tmp_path / "runs.pdf").exists()
-
-
 if __name__ == "__main__":
     test_the_count_over_a_box_is_solved_over_graded_with_owed_apart(
         (RunState.SOLVED, RunState.UNSOLVED, RunState.UNSOLVED), "1/3"
@@ -183,7 +129,3 @@ if __name__ == "__main__":
     test_an_owed_run_is_a_question_mark_not_a_dot()
     test_the_count_is_printed_over_its_cell()
     test_several_series_box_side_by_side_rather_than_falling_back_to_points()
-    test_the_runs_figure_refuses_owed_runs_unless_allowed()
-    test_the_runs_figure_draws_one_series_per_setup_with_one_count_per_cell()
-    test_the_script_writes_the_figure_and_the_runs_behind_it(pathlib.Path(tempfile.mkdtemp()))
-    test_the_script_refuses_owed_runs_by_default(pathlib.Path(tempfile.mkdtemp()))

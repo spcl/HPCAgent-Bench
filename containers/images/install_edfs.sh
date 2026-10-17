@@ -18,7 +18,9 @@ source "${SCRIPT_DIR}/images.env"
 
 : "${SCRATCH:?set SCRATCH -- an EDF is absolute paths and there is nothing sane to guess}"
 : "${CE_IMAGES:?set SCRATCH or CE_IMAGES}"
-EDF_DIR="${EDF_DIR:-${HOME}/.edf}"
+# shellcheck source=../../helpers/scripts/site_env.sh
+. "${SCRIPT_DIR}/../../helpers/scripts/site_env.sh"
+EDF_DIR="${EDF_DIR:-${EDF_PATH%%:*}}"
 mkdir -p "${EDF_DIR}"
 
 # shellcheck source=build_common.sh

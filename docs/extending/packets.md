@@ -16,25 +16,25 @@ The mechanism every registered kind shares is in [registry.md](registry.md).
 ## Examples (from `skill_packets.py`)
 
 ```python
-@packet("perf-playbook-cpu", order=13)   # skill bundle, CPU languages only
+@packet("perf-playbook-cpu", order=13)  # skill bundle, CPU languages only
 class PerfPlaybookCpu:
     name = "Performance Toolkit (CPU)"
     device = "cpu"
     skills = ("divide-and-conquer", "profiling", "opt-reports")
 
 
-@packet("cpf-tool", order=1)             # page + packet-only tool, switched on by env
-class CpfTool:
-    name = "Canonical Parallel Form Tool"
-    skills = ("cpf-tool",)
+@packet("cpf-tool-cpu", order=1, aliases=("cpf-tool",))  # page + packet-only tool, switched on by env
+class CpfToolCpu:
+    name = "Canonical Parallel Form Tool, CPU"
+    skills = ("cpf-tool-cpu",)
     tools = ("canonical_parallel_form",)
     env = {"HPCAGENT_BENCH_SERVICE_CANONICAL_PARALLEL_FORM_DIR": "${CPF_VIEW}"}
 
 
-@packet("all-in-cpu", order=16)           # composition
+@packet("all-in-cpu", order=16)  # composition
 class AllInCpu:
     name = "All-in (CPU)"
-    packets = ("cpf-src", "perf-playbook-cpu", "lang")
+    packets = ("cpf-cpu-src", "perf-playbook-cpu", "lang")
 ```
 
 ## What a packet class provides
@@ -60,6 +60,12 @@ is the no-packet control: it takes `order=None`.
 
 A packet that stages a file rather than a page announces it in the task text through `packet_note`
 in `hpcagent_bench/cluster/make_problems.py`.
+
+The canonical parallel form (CPF) packets are four keys: `cpf-cpu-src` and `cpf-gpu-src` stage the form as the
+agent's starting source (`CPF_DROPIN_DIR`), `cpf-tool-cpu` and `cpf-tool-gpu` serve it through the
+`canonical_parallel_form` tool. `cpf-src` and `cpf-tool` are the device-neutral spellings a `PACKETS` knob takes:
+aliases of the CPU keys, which `packets.by_device` renames to the GPU keys for a device language
+(`packets.DEVICE_ONLY_LANGUAGES`). The setup records the device key it resolved to.
 
 ## Rules
 

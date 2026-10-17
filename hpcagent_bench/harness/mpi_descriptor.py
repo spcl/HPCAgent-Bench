@@ -5,23 +5,31 @@
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from relayout.ops import Scheme
 
-from hpcagent_bench.harness.requests_api import Location, Requests
+from hpcagent_bench.harness.requests_api import (
+    ArrayDist,
+    AxisDist,
+    DistributionPlan,
+    Location,
+    PlannedArray,
+    Requests,
+)
 
 __all__ = [
     "MAX_CHECKED_RANKS",
     "ArrayDist",
     "AxisDist",
     "Descriptor",
+    "DistributionPlan",
     "Grid",
+    "PlannedArray",
     "array_dist_from_dict",
     "array_dist_to_dict",
     "axis_index_lists",
-    "axis_to_dict",
     "binding_ndims",
     "binding_shapes",
     "block_partition_mismatch",
@@ -48,7 +56,8 @@ __all__ = [
     "replicatable_allowlist",
     "replication_refusal",
     "scatter",
-    "split_axis_entry",
+    "split_along",
+    "split_axis",
     "symbol_axes_from_binding",
 ]
 
@@ -59,23 +68,6 @@ if TYPE_CHECKING:  # hints only; the math core stays free of binding/envelope im
 
 #: The largest graded rank count the even-split check covers.
 MAX_CHECKED_RANKS = 16
-
-
-@dataclass(frozen=True, slots=True)
-class AxisDist:
-    """How ONE array axis is laid out: replicated (grid_dim=None) or split by scheme; no ghost cells."""
-
-    grid_dim: int | None = None
-    scheme: Scheme = Scheme.BLOCK
-    block_size: int = 1
-
-
-@dataclass(frozen=True, slots=True)
-class ArrayDist:
-    """One logical array's distribution: one AxisDist per dimension, or replicated=True for the whole array."""
-
-    axes: tuple[AxisDist, ...] = ()
-    replicated: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -226,13 +218,15 @@ def default_distribution(shape: Sequence[int], grid: Grid, block_size: int = 1) 
     return ArrayDist(axes=tuple(axes))
 
 
-def split_axis_entry(scheme: Scheme, block_size: int) -> dict:
-    """One split axis of a submission-style ``axes[]`` list over grid dim 0 (a fresh dict per call);
-    ``block_size`` is meaningful (and included) only for block_cyclic."""
-    ax: dict[str, object] = {"grid_dim": 0, "scheme": scheme.value}
-    if scheme is Scheme.BLOCK_CYCLIC:
-        ax["block_size"] = int(block_size)
-    return ax
+def split_axis(scheme: Scheme, block_size: int) -> AxisDist:
+    """One dimension split over grid dim 0 by ``scheme``; ``block_size`` applies (and is kept) only for
+    block_cyclic."""
+    return AxisDist(grid_dim=0, scheme=scheme, block_size=int(block_size) if scheme is Scheme.BLOCK_CYCLIC else 1)
+
+
+def split_along(ndim: int, dim: int, axis: AxisDist) -> PlannedArray:
+    """An ``ndim``-dimensional array split along ``dim`` as ``axis``, every other dimension whole."""
+    return PlannedArray(axes=tuple(axis if d == dim else AxisDist(grid_dim=None) for d in range(ndim)))
 
 
 def distribution_from_split(
@@ -242,31 +236,25 @@ def distribution_from_split(
     *,
     scheme: Scheme = Scheme.BLOCK,
     block_size: int = 1,
-) -> dict:
-    """A submission-style distribution dict from a manifest ``mpi.split`` map: over a 1-D grid,
-    split each named array along the axis its symbol names (``None`` = replicated, listed
-    explicitly as ``{"replicated": true}``). Unlike
-    :func:`distribution_from_shapes` the symbol is per array, so ``out`` of a K-split matmul can be
+) -> DistributionPlan:
+    """A distribution plan from a manifest ``mpi.split`` map: over a 1-D grid, split each named array
+    along the axis its symbol names (``None`` = replicated, listed explicitly as ``{"replicated": true}``).
+    Unlike :func:`distribution_from_shapes` the symbol is per array, so ``out`` of a K-split matmul can be
     split on ``M`` (a reduce-scatter's row blocks) while ``A``/``B`` split on ``K``."""
-    arrays: dict[str, dict] = {}
+    arrays: dict[str, PlannedArray] = {}
     for name, sym in split.items():
         if sym is None:
             # Listed, not omitted: every array of the kernel appears in the layout, the replicated
             # ones by name, so a reader never has to know that omission means replication.
-            arrays[name] = {"replicated": True}
+            arrays[name] = PlannedArray(replicated=True)
             continue
         shape = list(array_shapes[name])
         if sym not in shape:
             raise ValueError(f"mpi.split[{name!r}] = {sym!r} is not an axis of {name}{tuple(shape)}")
-        split_at = shape.index(sym)
-        arrays[name] = {
-            "axes": [
-                split_axis_entry(scheme, block_size) if d == split_at else {"grid_dim": None} for d in range(len(shape))
-            ]
-        }
-    if all(layout.get("replicated") for layout in arrays.values()):
+        arrays[name] = split_along(len(shape), shape.index(sym), split_axis(scheme, block_size))
+    if all(layout.replicated for layout in arrays.values()):
         raise ValueError("mpi.split names no split array; nothing to distribute")
-    return {"grid": [int(ranks)], "arrays": arrays}
+    return DistributionPlan(grid=(int(ranks),), arrays=arrays)
 
 
 def distribution_from_shapes(
@@ -276,63 +264,50 @@ def distribution_from_shapes(
     *,
     scheme: Scheme = Scheme.BLOCK,
     block_size: int = 1,
-) -> dict:
-    """A submission-style distribution dict: over a 1-D grid, split the first axis named by axis_symbols."""
+) -> DistributionPlan:
+    """A distribution plan: over a 1-D grid, split the first axis named by axis_symbols."""
     wanted = set(axis_symbols)
-    arrays: dict[str, dict] = {}
+    arrays: dict[str, PlannedArray] = {}
     for name, shape in array_shapes.items():
         split = next((d for d, tok in enumerate(shape) if tok in wanted), None)
         if split is None:
             continue
-        arrays[name] = {
-            "axes": [
-                split_axis_entry(scheme, block_size) if d == split else {"grid_dim": None} for d in range(len(shape))
-            ]
-        }
+        arrays[name] = split_along(len(shape), split, split_axis(scheme, block_size))
     if not arrays:
         raise ValueError(f"no array has an axis named by {sorted(wanted)}; nothing to distribute")
-    return {"grid": [int(ranks)], "arrays": arrays}
+    return DistributionPlan(grid=(int(ranks),), arrays=arrays)
 
 
-def axis_to_dict(ax: AxisDist) -> dict:
-    """Serialize one AxisDist back to a submission-style axes[] entry (inverse of _array_dist_from_layout)."""
-    if ax.grid_dim is None:
-        return {"grid_dim": None}
-    return {"grid_dim": ax.grid_dim, "scheme": ax.scheme.value, "block_size": ax.block_size}
+def array_dist_to_dict(ad: ArrayDist) -> dict[str, Any]:
+    """One array's ``{"replicated": true}`` / ``{"axes": [...]}`` JSON (:class:`ArrayDist`, defaults left
+    out): what a shard plan carries so a rank driver reconstructs the exact :class:`ArrayDist` the judge
+    resolved (:func:`array_dist_from_dict`), without re-deriving it from the manifest."""
+    return ad.model_dump(mode="json", exclude_defaults=True)
 
 
-def array_dist_to_dict(ad: ArrayDist) -> dict:
-    """One array's ``{replicated | axes:[...]}`` layout dict (public inverse of
-    :func:`_array_dist_from_layout`): what a plan JSON carries so a rank driver can reconstruct
-    the exact :class:`ArrayDist` the judge resolved, without re-deriving it from the manifest."""
-    if ad.replicated:
-        return {"replicated": True}
-    return {"axes": [axis_to_dict(ax) for ax in ad.axes]}
-
-
-def array_dist_from_dict(layout: dict) -> ArrayDist:
-    """Public alias of :func:`_array_dist_from_layout`, for a plan JSON reader outside this module."""
-    return _array_dist_from_layout(layout)
+def array_dist_from_dict(layout: Mapping[str, Any]) -> ArrayDist:
+    """One array's JSON (:func:`array_dist_to_dict`) read back; a malformed one raises ValueError."""
+    return ArrayDist.model_validate(layout)
 
 
 def blockcyclic_distribution_from_shapes(
     array_shapes: dict[str, Sequence[str]], ranks: int, *, grid_ndim: int, block_size: int = 1
-) -> dict:
-    """A submission-style distribution dict: leading grid_ndim axes block-cyclic over an equal-edge hypercube."""
+) -> DistributionPlan:
+    """A distribution plan: leading grid_ndim axes block-cyclic over an equal-edge hypercube."""
     grid = hypercube_grid(int(ranks), int(grid_ndim))
-    arrays: dict[str, dict] = {}
+    arrays: dict[str, PlannedArray] = {}
     for name, shape in array_shapes.items():
         if len(shape) < grid_ndim:
             continue  # too few axes to bind every split grid dim; the descriptor replicates it
         # default_distribution reads only the axis count, so a placeholder shape of the right rank works
         dist = default_distribution([2] * len(shape), grid, block_size=block_size)
-        arrays[name] = {"axes": [axis_to_dict(ax) for ax in dist.axes]}
+        arrays[name] = PlannedArray(axes=dist.axes)
     if not arrays:
         raise ValueError(
             f"no array has >= {grid_ndim} axes to carry an equal-edge {grid_ndim}-D "
             f"block-cyclic grid; nothing to distribute"
         )
-    return {"grid": list(grid.dims), "arrays": arrays}
+    return DistributionPlan(grid=grid.dims, arrays=arrays)
 
 
 def binding_ndims(binding: "Binding") -> dict[str, int]:
@@ -355,8 +330,8 @@ def binding_shapes(binding: "Binding") -> dict[str, Sequence[str]]:
 
 def distribution_over_symbol(
     binding: "Binding", axis_symbols: Sequence[str], ranks: int, *, scheme: Scheme = Scheme.BLOCK, block_size: int = 1
-) -> dict:
-    """A submission-style distribution dict splitting, over a 1-D grid, each array axis named by axis_symbols."""
+) -> DistributionPlan:
+    """A distribution plan splitting, over a 1-D grid, each array axis named by axis_symbols."""
     return distribution_from_shapes(binding_shapes(binding), axis_symbols, ranks, scheme=scheme, block_size=block_size)
 
 
@@ -381,7 +356,7 @@ def replicatable_allowlist(spec: "BenchSpec") -> list[str] | None:
     return declared_array_names(spec, "replicatable")
 
 
-def distribution_for_kernel(mpi_block: dict | None, binding: "Binding", ranks: int) -> dict:
+def distribution_for_kernel(mpi_block: dict | None, binding: "Binding", ranks: int) -> DistributionPlan:
     """The kernel's default distribution from its mpi: decomposition block; the ONE builder every caller shares."""
     mpi = mpi_block or {}
     decomp = mpi.get("decomposition", {})
@@ -413,22 +388,6 @@ def default_requests(mpi_block: dict | None, binding: "Binding", ranks: int) -> 
 
 
 # Descriptor: the semantic layer over a lowered requests plan; replicates whatever wasn't named.
-
-
-def _array_dist_from_layout(layout: dict) -> ArrayDist:
-    """Resolve one array's {replicated | axes:[...]} layout dict into an ArrayDist."""
-    if layout.get("replicated"):
-        return ArrayDist(replicated=True)
-    axes: list[AxisDist] = []
-    axes.extend(
-        AxisDist(
-            grid_dim=ax.get("grid_dim"),
-            scheme=Scheme(ax.get("scheme", Scheme.BLOCK.value)),
-            block_size=int(ax.get("block_size", 1)),
-        )
-        for ax in layout["axes"]
-    )
-    return ArrayDist(axes=tuple(axes))
 
 
 def symbol_axes_from_binding(binding: "Binding") -> dict[str, list[tuple[str, int]]]:
@@ -487,7 +446,7 @@ class Descriptor:
     @classmethod
     def from_plan(
         cls,
-        dist: dict,
+        plan: DistributionPlan,
         binding: "Binding",
         ranks: int,
         *,
@@ -495,7 +454,7 @@ class Descriptor:
         default_location: Location = Location.HOST,
     ) -> "Descriptor":
         """Resolve + semantically validate a lowered plan (:meth:`Requests.plan`) against binding and the fixed ranks."""
-        grid = Grid(tuple(dist["grid"]))
+        grid = Grid(plan.grid)
         if grid.nranks != ranks:
             raise ValueError(
                 f"startup.grid is {list(grid.dims)}, spanning {grid.nranks} rank(s) but the run is configured for {ranks}"
@@ -506,7 +465,7 @@ class Descriptor:
         ndims = {name: len(a.shape) for name, a in ptrs.items() if a.shape is not None}
 
         resolved: dict[str, ArrayDist] = {}
-        for name, layout in dist["arrays"].items():
+        for name, entry in plan.arrays.items():
             if name in scalar_names:
                 raise ValueError(
                     f"the operations name scalar {name!r}; scalars are broadcast by value "
@@ -514,22 +473,18 @@ class Descriptor:
                 )
             if name not in ptrs:
                 raise ValueError(f"the operations name unknown array {name!r}; binding arrays are {sorted(ptrs)}")
-            ad = _array_dist_from_layout(layout)
-            if not ad.replicated and name in ndims and len(ad.axes) != ndims[name]:
+            if not entry.replicated and name in ndims and len(entry.axes) != ndims[name]:
                 raise ValueError(
-                    f"the layout of {name!r} lowers to {len(ad.axes)} axis/axes but "
+                    f"the layout of {name!r} lowers to {len(entry.axes)} axis/axes but "
                     f"the array has {ndims[name]} dimension(s)"
                 )
-            resolved[name] = ad
+            resolved[name] = entry.dist()
         # everything the agent did not distribute (and every scalar / length-1 array) replicates
         for name in ptrs:
             resolved.setdefault(name, ArrayDist(replicated=True))
 
         # per-array residency: each declared array's `location`, else the run-wide default
-        locations = {
-            name: Location(layout["location"]) if "location" in layout else default_location
-            for name, layout in dist["arrays"].items()
-        }
+        locations = {name: entry.location or default_location for name, entry in plan.arrays.items()}
         for name in ptrs:
             locations.setdefault(name, default_location)
 

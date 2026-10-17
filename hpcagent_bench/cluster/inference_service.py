@@ -6,16 +6,13 @@
 Standard library only, and loaded by path, like ``effort.py``: the launcher shells out to this file
 on the batch host, and the tests import it from the checkout.
 
-A setup selects the SOURCE the same way it selects a model, with one key in its ``.env``.
-``INFERENCE_SOURCE=node`` (the default, and what every setup written before this mode says by saying
-nothing) keeps the vLLM/SGLang server the job starts on a GPU node. ``INFERENCE_SOURCE=service``
-takes the tokens from a hosted endpoint over the network instead: no inference node, no engine, no
-readiness wait, and the ``INFERENCE_SERVICE_*`` block below says which service.
+A setup selects the source with one key in its ``.env``. ``INFERENCE_SOURCE=node`` (default when unset):
+the job starts a vLLM/SGLang server on a GPU node. ``INFERENCE_SOURCE=service``: a hosted endpoint over the
+network, configured by the ``INFERENCE_SERVICE_*`` block below; no inference node, engine or readiness wait.
 
-The block resolves into the THREE values every consumer downstream already reads -- the base URL,
-the served model name and the key -- so the agent driver's replica striping, the runners'
-``--base-url``/``--model`` and the claude CLI's ``ANTHROPIC_BASE_URL`` all keep working unchanged.
-Adding a fourth path for hosted inference would have meant teaching each of them separately.
+Both resolve into the three values every consumer reads -- the base URL, the served model name and the key
+(:func:`launcher_env`) -- which the agent driver's replica striping, the runners' ``--base-url``/``--model``
+and the claude CLI's ``ANTHROPIC_BASE_URL`` consume.
 
 THE KEY TRAVELS BY NAME. A setup names the variable its key lives in
 (``INFERENCE_SERVICE_KEY_ENV``), never the key, so a committed setup env holds no secret and a

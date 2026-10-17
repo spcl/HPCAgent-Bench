@@ -843,7 +843,7 @@ import torch
 if torch.cuda.is_available():
     torch.zeros(1, device="cuda")
 for name in ("libamdhip64.so", "librccl.so.1", "libhsa-runtime64.so"):
-    ctypes.CDLL(os.path.join("/opt/rocm/lib", name), mode=ctypes.RTLD_GLOBAL)
+    ctypes.CDLL(os.path.join(os.environ.get("ROCM_PATH") or "/opt/rocm", "lib", name), mode=ctypes.RTLD_GLOBAL)
 mapped = {}
 with open("/proc/self/maps") as maps:
     for line in maps:

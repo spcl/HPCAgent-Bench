@@ -230,7 +230,7 @@ def test_the_column_kernels_vary_the_sequential_length_at_a_constant_number_of_c
     assert len({int(d["NLEV"]) for d in draws}) > 1
     assert all(sizing.working_bytes(spec, d) <= xl for d in draws)
     capped = [fuzz.fuzzed_shape(params, i) for i in range(20)]
-    cap = config.get_int("fuzz.size_cap", 0)
+    cap = config.current().fuzz.size_cap
     assert not cap or all(int(d["NPROMA"]) * int(d["NLEV"]) <= cap * 90 for d in capped)
 
 

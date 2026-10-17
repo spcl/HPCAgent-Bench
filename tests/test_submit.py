@@ -18,10 +18,11 @@ import tempfile
 
 import pytest
 
+from hpcagent_bench import paths
 from tests.bash_stub import bash_stub
 from tests.env_render import SPEC_INPUTS
 
-REPO = pathlib.Path(__file__).resolve().parents[1]
+REPO = paths.ROOT
 
 #: What submit.sh reads from the checkout, relative to it.
 INPUTS = (
@@ -76,6 +77,7 @@ KNOBS = frozenset(
         *["BUDGET_SCALE", "TOKEN_SCALE", "TIME_SCALE", "DEADLINE", "EXTRA_ENV_KV", "SETUP_SUFFIX", "SUBMIT"],
         *[
             "DEPEND_ON",
+            "MAX_NODES",
             "BEGIN",
             "NICE",
             "HOLD",
@@ -454,3 +456,14 @@ if __name__ == "__main__":
     test_a_served_model_with_no_mi200_serving_layer_is_refused(scratch())
     test_the_mi200_system_entry_is_the_whole_job_shape(scratch())
     test_an_mi200_setup_needs_a_study_naming_mi200(scratch())
+
+
+def test_each_cpf_setup_reads_the_view_of_its_own_device(tmp_path: pathlib.Path) -> None:
+    """One call staging a cpu and a gpu CPF setup: the default view is each setup's own device's. A default kept
+    from the first setup pointed every later hip setup at the cpu view, which its job refuses at start."""
+    tree(tmp_path)
+    done = submit(tmp_path, KERNELS_FILE="subset.txt", LANGUAGES="c hip", PACKETS="cpf-tool")
+    assert done.returncode == 0, done.stderr
+    key = "HPCAGENT_BENCH_SERVICE_CANONICAL_PARALLEL_FORM_DIR"
+    assert setup_env(tmp_path, "wave-qwen38-c-cpf-tool")[key].endswith("/views/llr40-cpu")
+    assert setup_env(tmp_path, "wave-qwen38-hip-cpf-tool")[key].endswith("/views/llr40-gpu")

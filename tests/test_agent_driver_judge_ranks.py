@@ -9,16 +9,16 @@ judge count, while the other judges idled.
 
 import collections
 import json
-import pathlib
 import subprocess
 import sys
 from types import ModuleType
 
 import pytest
 
+from hpcagent_bench import paths
 from tests.fresh_module import fresh
 
-EXAMPLE = pathlib.Path(__file__).resolve().parents[1] / "hpcagent_bench" / "cluster"
+EXAMPLE = paths.ROOT / "hpcagent_bench" / "cluster"
 
 
 @pytest.fixture(name="driver")

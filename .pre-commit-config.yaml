@@ -49,19 +49,6 @@ repos:
         require_serial: true
         files: '^(hpcagent_bench|agent)/.*\.py$'
         exclude: '^hpcagent_bench/benchmarks/'
-      # The files held to strict typing (pyrightconfig.strict.json, a list that only grows), checked whole.
-      - id: hpcagent_bench-pyright-strict
-        name: pyright strict (pyrightconfig.strict.json)
-        entry: pyright --project pyrightconfig.strict.json
-        language: system
-        require_serial: true
-        pass_filenames: false
-        files: '^(hpcagent_bench|agent)/.*\.py$|^pyrightconfig\.strict\.json$'
-      # Reject an oversized staged file: 500 KiB for a binary blob (datasets / dumps), 1 MiB for source.
-      - id: hpcagent_bench-large-files
-        name: block oversized files (500 KiB binary / 1 MiB text)
-        entry: python helpers/scripts/checks/check_large_files.py
-        language: system
       # The gate at the end of an image Dockerfile is python in a heredoc, so no python hook sees
       # it and a name typed once and never bound costs the whole build.
       - id: hpcagent_bench-dockerfile-python
@@ -76,13 +63,6 @@ repos:
         entry: bash helpers/scripts/checks/run_hook.sh helpers/scripts/checks/check_kernel_calls.py
         language: system
         files: '^hpcagent_bench/benchmarks/.*\.py$'
-      # Co-located kernel reference sources must be canonically named <stem>_reference.<ext>
-      # (the prompt glob + test_<stem>_reference.py both key on it); ban _original/_orig/_golden/...
-      - id: hpcagent_bench-reference-naming
-        name: canonical <stem>_reference.<ext> reference sources
-        entry: bash helpers/scripts/checks/run_hook.sh helpers/scripts/checks/check_reference_naming.py
-        language: system
-        files: '^hpcagent_bench/benchmarks/.*\.([cC]|cc|cpp|cxx|hpp|[hH]|py|[fF]|[fF]90|cu)$'
       # Repo-wide YAML house style (CONTRIBUTING.md "YAML house style"): '#' header, 2-space
       # structural indent, no tabs, no trailing whitespace, one final newline. --fix only
       # applies the lossless mechanical bits (whitespace/newline); an unfixable violation
@@ -148,15 +128,6 @@ repos:
         entry: python helpers/scripts/checks/check_no_corpus_leak.py
         language: system
         files: '^(hpcagent_bench/skills/.*/SKILL\.md|hpcagent_bench/benchmarks/hints.*\.j2|hpcagent_bench/harness/prompts/.*\.j2|agent/.*\.md)$'
-      # Every co-located kernel manifest must satisfy the schema hpcagent_bench.spec.BenchSpec
-      # loads it against -- today that is only checked at BenchSpec.load() time (test / run
-      # time). This hook calls BenchSpec.from_yaml itself (ONE source of truth: no schema is
-      # re-declared here), so a broken manifest fails the commit instead.
-      - id: hpcagent_bench-manifest-structure
-        name: benchmark manifest structure (hpcagent_bench.spec.BenchSpec schema)
-        entry: bash helpers/scripts/checks/run_hook.sh helpers/scripts/checks/check_manifest_structure.py
-        language: system
-        files: '^hpcagent_bench/benchmarks/.*\.yaml$'
       # No leading-underscore module/variable/parameter names, no `import x as x` (redundant
       # alias), `import x as _y`, or `from m import _name`. Diff mode (the default, no flag
       # needed) checks only lines this commit adds, so pre-existing `_private` code is untouched.

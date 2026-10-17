@@ -140,7 +140,7 @@ def resolve(tag: str) -> list[str]:
 
 def default_seed() -> int:
     """The seed a sample uses when the CLI names none."""
-    return config.get_int("seeds.kernel_sample", 0)
+    return config.current().seeds.kernel_sample
 
 
 def selected(selector: str) -> list[str]:

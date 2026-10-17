@@ -31,7 +31,9 @@ applies: {images: [amd], multinode: true, languages: [c, cpp, hip]}
 
 - The prompt carries only `when`, as `` - When <when> -- read `/skills/<name>.md`. ``, so write
   it as the condition for opening the page.
-- `applies:` narrows which setups stage the page (language, image, multinode).
+- `applies:` narrows which setups stage the page (`languages`, `images`, `multinode`); `explicit: true` keeps
+  the page out of `*`, so only a packet naming it stages it. The frontmatter is read by the pydantic
+  `packets.SkillFrontmatter` / `packets.Applies`: an unknown key (a singular `language:` included) is refused.
 - Tests require a non-empty body, `description` under 200 characters, a `when` trigger, ASCII
   without trailing whitespace, and a shipped page for every backticked page name.
 

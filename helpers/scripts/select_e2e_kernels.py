@@ -19,14 +19,27 @@ full sweep, which is why the remainder moves to a schedule instead of being dele
 """
 
 import argparse
-import json
 import multiprocessing as mp
 import pathlib
 import sys
 import traceback
 
+import pydantic
+
 CHUNK = 20
 TIMEOUT_S = 180.0
+
+
+class CoverageRecord(pydantic.BaseModel):
+    """One line of the ``--out`` JSONL: a kernel, the translator lines its emit executed, and how the emit ended
+    (``frame``: the last traceback line of a crashed one)."""
+
+    model_config = pydantic.ConfigDict(extra="forbid", frozen=True)
+
+    kernel: str
+    lines: list[tuple[str, int]]
+    status: str
+    frame: str = ""
 
 
 def emit_under_coverage(key: str) -> tuple[str, list[tuple[str, int]], str]:
@@ -73,18 +86,20 @@ def emit_under_coverage(key: str) -> tuple[str, list[tuple[str, int]], str]:
 
 
 def worker(keys: list[str], out: "mp.Queue") -> None:
+    """Emit each of ``keys`` and put its :class:`CoverageRecord` on ``out`` as a plain dict (a spawned child's
+    class is ``__mp_main__``'s, which the parent cannot unpickle), then ``None``."""
     for key in keys:
         try:
             name, lines, status = emit_under_coverage(key)
-            out.put({"kernel": name, "lines": lines, "status": status})
+            out.put(CoverageRecord(kernel=name, lines=lines, status=status).model_dump())
         except BaseException as exc:  # noqa: BLE001
             out.put(
-                {
-                    "kernel": key,
-                    "lines": [],
-                    "status": f"crash: {type(exc).__name__}",
-                    "frame": traceback.format_exc().strip().splitlines()[-1][:160],
-                }
+                CoverageRecord(
+                    kernel=key,
+                    lines=[],
+                    status=f"crash: {type(exc).__name__}",
+                    frame=traceback.format_exc().strip().splitlines()[-1][:160],
+                ).model_dump()
             )
     out.put(None)
 
@@ -105,7 +120,7 @@ def measure(keys: list[str], destination: pathlib.Path) -> None:
                     break
                 if record is None:
                     break
-                handle.write(json.dumps(record) + "\n")
+                handle.write(CoverageRecord.model_validate(record).model_dump_json(exclude_defaults=True) + "\n")
                 handle.flush()
                 seen += 1
             proc.terminate()
@@ -113,11 +128,9 @@ def measure(keys: list[str], destination: pathlib.Path) -> None:
             print(f"{start + seen}/{len(keys)}", flush=True)
 
 
-def select(records: list[dict]) -> tuple[list[str], int, int]:
+def select(records: list[CoverageRecord]) -> tuple[list[str], int, int]:
     """Greedy set cover: repeatedly take the kernel adding the most uncovered lines."""
-    coverage_by_kernel: dict[str, set[tuple[str, int]]] = {
-        r["kernel"]: {tuple(line) for line in r["lines"]} for r in records if r["lines"]
-    }
+    coverage_by_kernel: dict[str, set[tuple[str, int]]] = {r.kernel: set(r.lines) for r in records if r.lines}
     universe: set[tuple[str, int]] = set().union(*coverage_by_kernel.values()) if coverage_by_kernel else set()
     remaining = set(universe)
     chosen: list[str] = []
@@ -147,7 +160,7 @@ def main() -> int:
         print(f"measuring {len(keys)} kernels", flush=True)
         measure(keys, args.out)
 
-    records = [json.loads(line) for line in args.out.read_text().splitlines() if line.strip()]
+    records = [CoverageRecord.model_validate_json(line) for line in args.out.read_text().splitlines() if line.strip()]
     chosen, total, covered = select(records)
     print(f"\nkernels measured : {len(records)}")
     print(f"emit lines total : {total}")

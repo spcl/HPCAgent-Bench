@@ -45,7 +45,7 @@ def round_trip(shape: tuple[int, ...], split_axis: int, scheme: Scheme, block_si
 
     grid = Grid((ranks,))
     axes = tuple(
-        AxisDist(grid_dim=0, scheme=scheme, block_size=block_size) if d == split_axis else AxisDist()
+        AxisDist(grid_dim=0, scheme=scheme, block_size=block_size) if d == split_axis else AxisDist(grid_dim=None)
         for d in range(len(shape))
     )
     dist = {"x": ArrayDist(axes=axes)}
@@ -78,7 +78,7 @@ def test_legacy_default_path_is_byte_identical_to_the_general_layout_path() -> N
     spec = {"x": st.ArraySpec((17, 9), st.uniform_range(-1.0, 1.0))}
     seed, dtype, device = 7, torch.float32, "cpu"
     grid = Grid((3,))
-    dist = {"x": ArrayDist(axes=(AxisDist(grid_dim=0, scheme=Scheme.BLOCK), AxisDist()))}
+    dist = {"x": ArrayDist(axes=(AxisDist(grid_dim=0, scheme=Scheme.BLOCK), AxisDist(grid_dim=None)))}
     for rank in range(3):
         legacy = st.make_tiles(spec, {"x": 0}, seed, device, dtype, (rank, 3))[0]
         general = st.make_tiles(spec, {"x": 0}, seed, device, dtype, (rank, 3), layout=dist, grid=grid)[0]
@@ -99,8 +99,8 @@ def test_softmax_is_layout_flexible_on_its_default_axis_only() -> None:
     same_axis_cyclic = Descriptor(
         grid=Grid((ranks,)),
         arrays={
-            "x": ArrayDist(axes=(AxisDist(), AxisDist(grid_dim=0, scheme=Scheme.CYCLIC))),
-            "out": ArrayDist(axes=(AxisDist(), AxisDist(grid_dim=0, scheme=Scheme.CYCLIC))),
+            "x": ArrayDist(axes=(AxisDist(grid_dim=None), AxisDist(grid_dim=0, scheme=Scheme.CYCLIC))),
+            "out": ArrayDist(axes=(AxisDist(grid_dim=None), AxisDist(grid_dim=0, scheme=Scheme.CYCLIC))),
         },
     )
     assert default_layout_refusal(same_axis_cyclic, default, shapes, flexible=flexible, graded_ranks=(1, 2, 4)) is None
@@ -108,8 +108,8 @@ def test_softmax_is_layout_flexible_on_its_default_axis_only() -> None:
     different_axis = Descriptor(
         grid=Grid((ranks,)),
         arrays={
-            "x": ArrayDist(axes=(AxisDist(grid_dim=0, scheme=Scheme.BLOCK), AxisDist())),
-            "out": ArrayDist(axes=(AxisDist(grid_dim=0, scheme=Scheme.BLOCK), AxisDist())),
+            "x": ArrayDist(axes=(AxisDist(grid_dim=0, scheme=Scheme.BLOCK), AxisDist(grid_dim=None))),
+            "out": ArrayDist(axes=(AxisDist(grid_dim=0, scheme=Scheme.BLOCK), AxisDist(grid_dim=None))),
         },
     )
     refused = default_layout_refusal(different_axis, default, shapes, flexible=flexible, graded_ranks=(1, 2, 4))
@@ -130,7 +130,7 @@ def test_cross_entropy_stays_default_only_predictions_is_position_sensitive() ->
     cyclic = Descriptor(
         grid=Grid((ranks,)),
         arrays={
-            "predictions": ArrayDist(axes=(AxisDist(), AxisDist(grid_dim=0, scheme=Scheme.CYCLIC))),
+            "predictions": ArrayDist(axes=(AxisDist(grid_dim=None), AxisDist(grid_dim=0, scheme=Scheme.CYCLIC))),
             "targets": ArrayDist(replicated=True),
             "out": ArrayDist(replicated=True),
         },
@@ -150,7 +150,11 @@ def test_the_64_rule_refuses_an_indivisible_non_default_layout_before_any_build(
     grid = Grid((3,))
     descriptor = Descriptor(
         grid=grid,
-        arrays={"x": ArrayDist(axes=(AxisDist(), AxisDist(grid_dim=0, scheme=Scheme.BLOCK_CYCLIC, block_size=5)))},
+        arrays={
+            "x": ArrayDist(
+                axes=(AxisDist(grid_dim=None), AxisDist(grid_dim=0, scheme=Scheme.BLOCK_CYCLIC, block_size=5))
+            )
+        },
     )
     shapes = {"x": (8, 101)}  # 101 is prime: no P>1 nor block_size=5 divides it evenly
     refused = layout_divisibility_refusal(descriptor, ["x"], shapes, graded_ranks=(1, 2, 4, 8, 16))
