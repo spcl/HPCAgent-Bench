@@ -626,10 +626,8 @@ E2E = [
     ("conv2d", "Fortran ABI param-order (stencil family: subsumes fdtd_2d)"),
 ]
 
-#: conv2d is not in the gate's per-push slice, so its numba / pythran / jax legs run only here on a push
-#: (numba and pythran self-skip; jax is verified ok -- conv2d is a counted conv loop, not a data-dependent
-#: while, so it lowers and runs, it does not hang).
-E2E_BACKENDS = {"conv2d": {"c", "cpp", "fortran", "numba", "pythran", "jax"}}
+#: conv2d is not in the gate's per-push slice, so its numba leg runs only here on a push.
+E2E_BACKENDS = {"conv2d": {"c", "cpp", "fortran", "numba"}}
 
 
 @pytest.mark.parametrize(("kernel", "feature"), E2E, ids=[k for k, unused in E2E])
@@ -970,7 +968,7 @@ def test_max_min_propagate_nan_like_numpy(backend: str) -> None:
     )
 
 
-# N. numba/pythran desugar of np.fft.* / np.mgrid + the pythran export order.   #
+# N. numba desugar of np.fft.* / np.mgrid + the pythran export order.   #
 #    numba has no np.fft at all; pythran has 1-D fft/ifft but not fftn/ifftn    #
 #    nor np.mgrid. ``desugar_for_python_backend`` lowers these to plain loops/  #
 #    broadcasts both backends compile; the #pythran export must list types in   #
@@ -1119,36 +1117,15 @@ def test_mgrid_desugar_to_arange_broadcast() -> None:
     assert "reshape(" in out
 
 
-def test_pythran_export_uses_signature_order_not_abi() -> None:
-    """#pythran export types follow the def signature (``input_args``), NOT the
-    alphabetical-then-scalars ABI ``param_order`` -- otherwise fft_3d's scalar
-    ``niter`` is typed as a complex array (the arg-order scramble that made
-    ``range(1, niter + 1)`` a complex-array expression)."""
-    from hpcagent_bench.translators.numpyto_pythran.emit import emit_pythran
-
-    src = "def fft_3d(u0, twiddle, niter, chk):\n    chk[0] = u0[0, 0, 0] + niter\n"
-    arrays = [
-        ("u0", "complex128", ("nx", "ny", "nz")),
-        ("twiddle", "float64", ("nx", "ny", "nz")),
-        ("chk", "complex128", ("niter",)),
-    ]
-    kir = py_kir("fft_3d", src, arrays, ["niter"], ["u0", "twiddle", "niter", "chk"])
-    export = next(line for line in emit_pythran(src, kir).splitlines() if line.startswith("#pythran export"))
-    assert "fft_3d(complex128[:,:,:], float64[:,:,:], int, complex128[:])" in export
-
-
 @pytest.mark.parametrize("kernel", ["fft_1d", "fft_3d"])
-def test_fft_numba_pythran_e2e(kernel: str) -> None:
-    """fft_1d/fft_3d run bit-close to numpy on numba (np.fft lowered) AND pythran
-    (fftn lowered + export in signature order); fft_3d also exercises the
-    multi-array fancy gather ``u2[q, r, s]``."""
+def test_fft_numba_e2e(kernel: str) -> None:
+    """fft_1d/fft_3d run bit-close to numpy on numba (np.fft lowered); fft_3d also exercises the multi-array fancy
+    gather ``u2[q, r, s]``."""
     no = oracle()
     status = no.run_kernel(kernel, preset=Preset.S, precision="fp64", seed=0)
-    for b in ("numba", "pythran"):
-        s = status.get(b)
-        if s == "skip:not-installed":
-            continue
-        assert s == "ok", f"{kernel} {b}: {s}"
+    s = status.get("numba")
+    if s != "skip:not-installed":
+        assert s == "ok", f"{kernel} numba: {s}"
 
 
 # O. numba desugars: axis reductions, masked assignment, ufunc.outer, call     #
@@ -1408,7 +1385,7 @@ def test_add_at_mismatched_value_rank_raises() -> None:
 
 
 def test_issparse_folds_to_false_for_dense_abi() -> None:
-    """``sp.issparse(x)`` -> ``False`` (the dense-only ABI): numba/pythran cannot
+    """``sp.issparse(x)`` -> ``False`` (the dense-only ABI): numba cannot
     type scipy.sparse, and the sparse branch is dead -- exactly as C/Fortran prune
     it statically (banded_mmt). Dead-branch elimination then drops it entirely."""
     from hpcagent_bench.translators.numpyto_common.numpy_desugar import desugar_for_python_backend
@@ -1458,27 +1435,6 @@ def test_dead_branch_elim_removes_folded_issparse_branch() -> None:
     )
     assert "toarray" not in out
     assert "issparse" not in out
-
-
-def test_pythran_clean_strips_imports_and_substitutes_precision() -> None:
-    """The pythran module drops imports it cannot resolve (hpcagent_bench framework,
-    scipy) and substitutes the np_float / np_complex precision globals."""
-    from hpcagent_bench.translators.numpyto_pythran.rewrites import clean_for_pythran
-
-    src = (
-        "from hpcagent_bench.frameworks.framework import np_float, np_complex\n"
-        "import scipy.sparse as sp\n"
-        "import numpy as np\n"
-        "def k(x, out):\n"
-        "    out[:] = np.zeros(x.shape, dtype=np_complex)\n"
-    )
-    kir = py_kir("k", src, [("x", "float64", ("N",)), ("out", "complex128", ("N",))], [], ["x", "out"])
-    cleaned = clean_for_pythran(src, kir)
-    assert "hpcagent_bench" not in cleaned
-    assert "scipy" not in cleaned
-    assert "np_float" not in cleaned
-    assert "np_complex" not in cleaned
-    assert "np.complex128" in cleaned
 
 
 def test_np_flip_lowers_to_reverse_slice() -> None:
@@ -1567,45 +1523,12 @@ def desugar(
     return desugar_for_python_backend(src, py_kir("kernel", src, arrays, syms, input_args), backend=backend)
 
 
-def test_cholesky_lowers_for_pythran_only() -> None:
-    """``np.linalg.cholesky(A)`` -> a Cholesky-Banachiewicz loop nest for pythran;
-    numba / dace keep the native intrinsic (backend-capability gated)."""
-    src = "def kernel(A):\n    A[:] = np.linalg.cholesky(A) + np.triu(A, k=1)\n"
-    arrays = [("A", "float64", ("N", "N"))]
-    py = desugar(src, arrays, [], ["A"], "pythran")
-    assert "np.linalg.cholesky" not in py
-    assert "np.sqrt(" in py
-    assert "for " in py
-    # The cholesky temp is computed BEFORE A is overwritten (in-place read safe).
-    assert py.index("np.sqrt(") < py.index("A[:] =")
-    for be in ("numba", "dace", None):
-        assert "np.linalg.cholesky" in desugar(src, arrays, [], ["A"], be)
-
-
-def test_solve_and_inv_lower_for_pythran_only() -> None:
-    """``np.linalg.solve`` / ``np.linalg.inv`` -> Gauss-Jordan with partial
-    pivoting for pythran; numba / dace keep the intrinsics."""
-    src = "def kernel(A, b, x):\n    x[:] = np.linalg.solve(A, b)\n"
-    arrays = [("A", "float64", ("N", "N")), ("b", "float64", ("N",)), ("x", "float64", ("N",))]
-    py = desugar(src, arrays, [], ["A", "b", "x"], "pythran")
-    assert "np.linalg.solve" not in py
-    assert "np.abs(" in py
-    assert "np.linalg.solve" in desugar(src, arrays, [], ["A", "b", "x"], "numba")
-
-    isrc = "def kernel(A, o):\n    o[:] = np.linalg.inv(A)\n"
-    iarr = [("A", "complex128", ("N", "N")), ("o", "complex128", ("N", "N"))]
-    ipy = desugar(isrc, iarr, [], ["A", "o"], "pythran")
-    assert "np.linalg.inv" not in ipy
-    assert "np.zeros(" in ipy
-    assert "np.linalg.inv" in desugar(isrc, iarr, [], ["A", "o"], "dace")
-
-
 def exec_desugared(
     src: str,
     arrays: list[tuple[str, str, tuple[str, ...]]],
     input_args: list[str],
     scope: dict[str, int | np.ndarray],
-    backend: str = "pythran",
+    backend: str = "numba",
 ) -> dict[str, int | np.ndarray]:
     """Desugar ``src`` for ``backend`` and exec it against numpy ``scope`` buffers
     -- the strongest correctness check (matches numpy, no tolerance games)."""
@@ -1704,35 +1627,6 @@ def test_eigh_gated_native_linalg_per_backend() -> None:
         assert "np.linalg.cholesky" in out
         assert "np.hypot" in out
         assert "_sci_eigh(" not in out.split("def kernel")[1]  # the call is lowered
-    py = desugar(EIGH_SRC, EIGH_ARRAYS, [], ["a", "b", "w", "v"], "pythran")
-    assert "np.linalg.cholesky" not in py
-    assert "np.hypot" in py
-
-
-@pytest.mark.parametrize(
-    ("src", "arrays", "args"),
-    [
-        (
-            "def kernel(v, out):\n    out[:] = np.linalg.cholesky(v)\n",
-            [("v", "float64", ("N",)), ("out", "float64", ("N",))],
-            ["v", "out"],
-        ),  # 1-D cholesky
-        (
-            "def kernel(A, b, x):\n    x[:] = np.linalg.solve(A, b)\n",
-            [("A", "float64", ("N", "N")), ("b", "float64", ("N", "K", "L")), ("x", "float64", ("N", "K", "L"))],
-            ["A", "b", "x"],
-        ),  # 3-D rhs
-    ],
-)
-def test_linalg_desugar_raises_on_unsupported_shape(
-    src: str, arrays: list[tuple[str, str, tuple[str]]], args: list[str]
-) -> None:
-    """An owned-but-unhandled operand shape raises DesugarError (never a silent
-    miscompile); an unknown-rank operand instead stays verbatim (a clean skip)."""
-    from hpcagent_bench.translators.numpyto_common.numpy_desugar import DesugarError
-
-    with pytest.raises(DesugarError):
-        desugar(src, arrays, [], args, "pythran")
 
 
 # Q. masked-gather reduction: ``v = data[mask]; res[i] = v.mean()`` -- the      #
@@ -1755,7 +1649,7 @@ AZIMINT_ARRAYS = [("data", "float64", ("N",)), ("radius", "float64", ("N",)), ("
 def test_masked_mean_lowers_to_accumulate_loop() -> None:
     """The dynamic ``data[mask]`` select is dropped; its ``.mean()`` becomes a
     mask-guarded accumulate loop with numpy's empty -> nan semantics."""
-    out = desugar(AZIMINT_SRC, AZIMINT_ARRAYS, [], ["data", "radius", "npt", "res"], "pythran")
+    out = desugar(AZIMINT_SRC, AZIMINT_ARRAYS, [], ["data", "radius", "npt", "res"], "numba")
     assert "values_r12" not in out  # dynamic masked select gone
     assert "mask_r12 = np.logical_and" in out  # the bool mask itself is kept
     assert "+= data[" in out
@@ -1791,22 +1685,9 @@ def test_masked_gather_used_non_reduction_stays_verbatim() -> None:
         [("data", "float64", ("N",)), ("mask", "bool", ("N",)), ("out", "float64", ("N",))],
         [],
         ["data", "mask", "out"],
-        "pythran",
+        "numba",
     )
     assert "v = data[mask]" in out  # not dropped
-
-
-def test_pythran_renames_res_parameter() -> None:
-    """A kernel parameter named ``res`` collides with pythran's return-capture
-    variable, so the pythran emit renames it (signature + body)."""
-    from hpcagent_bench.translators.numpyto_pythran.emit import emit_pythran
-
-    src = "def k(data, res):\n    res[0] = data[0] + data[1]\n"
-    kir = py_kir("k", src, [("data", "float64", ("N",)), ("res", "float64", ("N",))], [], ["data", "res"])
-    out = emit_pythran(src, kir)
-    fn = next(n for n in ast.parse(out).body if isinstance(n, ast.FunctionDef))
-    assert "res" not in {a.arg for a in fn.args.args}  # reserved param renamed
-    assert "res_[0] = data[0] + data[1]" in out  # body reference renamed consistently
 
 
 def test_drop_guards_replaces_raise_and_assert_with_pass() -> None:
@@ -1825,7 +1706,7 @@ def test_drop_guards_replaces_raise_and_assert_with_pass() -> None:
     out = desugar_for_python_backend(
         src,
         py_kir("k", src, [("x", "float64", ("N",)), ("out", "float64", ("N",))], [], ["x", "out"]),
-        backend="pythran",
+        backend="numba",
     )
     assert "raise" not in out
     assert "assert" not in out
@@ -1842,7 +1723,7 @@ def test_drop_guards_replaces_raise_and_assert_with_pass() -> None:
 def test_issubdtype_folds_from_known_dtype(dtype: str, category: str, vanishes: bool) -> None:
     """``np.issubdtype(x.dtype, np.<category>)`` folds to a compile-time bool from
     x's known dtype kind (the isinstance-style check); the validation guard it
-    feeds then resolves and disappears. numba/pythran/dace cannot evaluate it."""
+    feeds then resolves and disappears. numba/dace cannot evaluate it."""
     from hpcagent_bench.translators.numpyto_common.numpy_desugar import desugar_for_python_backend
 
     src = (
@@ -1854,7 +1735,7 @@ def test_issubdtype_folds_from_known_dtype(dtype: str, category: str, vanishes: 
     out = desugar_for_python_backend(
         src,
         py_kir("k", src, [("idx", dtype, ("N",)), ("out", "float64", ("N",))], [], ["idx", "out"]),
-        backend="pythran",
+        backend="numba",
     )
     assert "issubdtype" not in out  # folded away regardless
     assert "raise" not in out
@@ -1868,32 +1749,6 @@ def test_asarray_lowers_like_copy_for_c() -> None:
 
     assert NP_CALL_EXPANDERS[("np", "asarray")] is expand_copy
     assert NP_CALL_EXPANDERS[("np", "ascontiguousarray")] is expand_copy
-
-
-def test_pythran_export_dtypes_parses_2d_types() -> None:
-    """The oracle marshals pythran args to the export's declared dtypes; the
-    export parser must split on top-level commas only -- a 2-D ``int64[:,:]`` type
-    carries an inner comma (compute's TypeError was a mis-split here)."""
-    no = oracle()
-    sig = "#pythran export f(int64[:,:], int64[:,:], float64, float64, float64, int64[:,:])\n"
-    dts = no.pythran_export_dtypes(sig)
-    assert dts == [np.int64, np.int64, np.float64, np.float64, np.float64, np.int64]
-    assert no.coerce_to_dtype(np.int64(4), np.float64).dtype == np.float64  # scalar cast
-    assert no.coerce_to_dtype(np.zeros(3, np.uint8), np.int64).dtype == np.int64  # array cast
-
-
-@pytest.mark.parametrize("kernel", ["cholesky2", "contour_integral", "azimint_naive", "crc16", "compute"])
-def test_cholesky2_contour_pythran_e2e(kernel: str) -> None:
-    """Kernels reclaimed for pythran: cholesky2 (np.linalg.cholesky),
-    contour_integral (np.linalg.solve + dead-but-typed np.linalg.inv), azimint_naive
-    (masked-mean loop + 'res' param rename), crc16 (uint8-vs-int64 export marshal),
-    compute (int64-scalar-vs-float64 export marshal). All bit-close to numpy."""
-    no = oracle()
-    status = no.run_kernel(kernel, preset=Preset.S, precision="fp64", seed=0)
-    s = status.get("pythran")
-    if s == "skip:not-installed":
-        pytest.skip("pythran not installed")
-    assert s == "ok", f"{kernel} pythran: {s}"
 
 
 # J. the precision pass must reach EVERY IR it owns                            #

@@ -13,7 +13,8 @@ mpl.use("Agg")
 import pandas as pd
 import pytest
 
-from hpcagent_bench import studies, study_tags
+from hpcagent_bench import study_tags
+from hpcagent_bench.results import studies
 from hpcagent_bench.stats import palette
 
 

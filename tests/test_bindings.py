@@ -15,6 +15,7 @@ from hpcagent_bench.support.bindings import (
 from hpcagent_bench.support.bindings.stubs import LANGS, STUB_BODY
 
 # Dense kernel: gemm
+from tests.bench_specs import hermetic_site
 
 
 def test_gemm_canonical_order_and_constness() -> None:
@@ -201,19 +202,10 @@ def test_spmv_host_glue_unpacks_handle() -> None:
 
 
 def test_phantom_np_arg_filtered() -> None:
-    # A synthetic spec carrying a captured np numpy module param: it must never reach the binding (Sec. 2).
-    raw = {
-        "short_name": "phantom",
-        "name": "phantom",
-        "relative_path": "phantom",
-        "module_name": "phantom",
-        "func_name": "kernel",
-        "parameters": {"S": {"N": 16}},
-        "input_args": ["x", "y", "N", "np"],
-        "array_args": ["x", "y"],
-        "output_args": ["y"],
-    }
-    spec = BenchSpec.from_dict(raw, source="<test>")
+    # A spec carrying a captured np numpy module param: it must never reach the binding (Sec. 2).
+    raw = {"parameters": {"S": {"N": 16}}, "args": {"x": "(N,)", "y": {"shape": "(N,)", "out": True}}}
+    loaded = BenchSpec.from_dict(raw, hermetic_site("phantom", "x", "y", "N"), source="<test>")
+    spec = loaded.replace(input_args=(*loaded.input_args, "np"))
     b = binding_from_spec(spec)
     names = [a.name for a in b.args]
     assert "np" not in names

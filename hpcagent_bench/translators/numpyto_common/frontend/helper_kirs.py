@@ -7,7 +7,7 @@ import dataclasses
 from collections.abc import Sequence
 
 from hpcagent_bench.translators.numpyto_common import dtypes
-from hpcagent_bench.translators.numpyto_common.ast_build import name_
+from hpcagent_bench.translators.numpyto_common.ast_build import name_, walk_nodes
 from hpcagent_bench.translators.numpyto_common.frontend.axes import reject_symbolic_axis, reject_unsupported_slices
 from hpcagent_bench.translators.numpyto_common.frontend.body_rewrites import native_desugar
 from hpcagent_bench.translators.numpyto_common.frontend.callsite import (
@@ -86,7 +86,7 @@ def collect_called_helper_defs(tree: ast.Module, kernel_fn: ast.FunctionDef) -> 
     frontier: list[ast.AST] = [kernel_fn]
     while frontier:
         node = frontier.pop()
-        for sub in ast.walk(node):
+        for sub in walk_nodes(node):
             if (
                 isinstance(sub, ast.Call)
                 and isinstance(sub.func, ast.Name)
@@ -115,7 +115,7 @@ def helper_call_sites(
     call_of: dict[str, ast.Call] = {}
     assign_of: dict[str, ast.Assign] = {}
     assigns_of: dict[str, list[ast.Assign]] = {}
-    for node in ast.walk(fn):
+    for node in walk_nodes(fn):
         if (
             isinstance(node, ast.Assign)
             and len(node.targets) == 1
@@ -126,7 +126,7 @@ def helper_call_sites(
             if node.value.func.id not in call_of:
                 call_of[node.value.func.id] = node.value
                 assign_of[node.value.func.id] = node
-    for node in ast.walk(fn):  # plain-call fallback (scalar helper in an expression)
+    for node in walk_nodes(fn):  # plain-call fallback (scalar helper in an expression)
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id not in call_of:
             call_of[node.func.id] = node
     return call_of, assign_of, assigns_of
@@ -145,7 +145,7 @@ def helpers_callers_first(helper_defs: list[ast.FunctionDef], kernel_fn: ast.Fun
         h.name: sorted(
             {
                 n.func.id
-                for n in ast.walk(h)
+                for n in walk_nodes(h)
                 if isinstance(n, ast.Call)
                 and isinstance(n.func, ast.Name)
                 and n.func.id in names
@@ -169,7 +169,7 @@ def helpers_callers_first(helper_defs: list[ast.FunctionDef], kernel_fn: ast.Fun
     # written callee-above-caller, so walking definition order visits a sibling-only callee before
     # the caller whose tables resolve it, and it is skipped for having no reachable call site --
     # which is the very refusal this ordering exists to remove.
-    for node in ast.walk(kernel_fn):
+    for node in walk_nodes(kernel_fn):
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in names:
             visit(names[node.func.id])
     for h in helper_defs:
@@ -198,7 +198,7 @@ def abi_hostile_arguments(tree: ast.Module, hname: str) -> list[str]:
     parameter the caller cannot pass.
     """
     seen: list[str] = []
-    for node in ast.walk(tree):
+    for node in walk_nodes(tree):
         if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == hname):
             continue
         for arg in list(node.args) + [kw.value for kw in node.keywords]:
@@ -479,7 +479,7 @@ class HelperKirBuilder:
         if extra_syms:
             self.thread_extra_symbols(site, calls, extra_syms)
             symbols.extend(SymbolDesc(name=s) for s in extra_syms)
-        returns_value = any(isinstance(n, ast.Return) and n.value is not None for n in ast.walk(hfn))
+        returns_value = any(isinstance(n, ast.Return) and n.value is not None for n in walk_nodes(hfn))
         self.out.append(
             KernelIR(
                 tree=hfn,
@@ -505,7 +505,7 @@ class HelperKirBuilder:
         return [
             (owner, n)
             for owner in owners
-            for n in ast.walk(owner)
+            for n in walk_nodes(owner)
             if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == hdef.name
         ]
 
@@ -556,14 +556,14 @@ class HelperKirBuilder:
         of its own allocation (the value belongs in an out-param the call site does not have)."""
         hfn, name = site.hfn, site.hdef.name
         if isinstance(site.lhs, ast.Tuple) or any(
-            isinstance(n, ast.Return) and isinstance(n.value, ast.Tuple) for n in ast.walk(hfn)
+            isinstance(n, ast.Return) and isinstance(n.value, ast.Tuple) for n in walk_nodes(hfn)
         ):
             raise NotImplementedError(
                 f"helper {name!r} returns a tuple; it has no standalone ABI and must be inlined into its caller"
             )
         # The helper's own params are the scope its local allocations resolve against.
         harr_by = {a.name: a for a in arrays}
-        for n in ast.walk(hfn):
+        for n in walk_nodes(hfn):
             if (
                 isinstance(n, ast.Return)
                 and isinstance(n.value, ast.Name)
@@ -603,7 +603,7 @@ class HelperKirBuilder:
         call_consts = {pn: a for pn, a in zip(site.pnames, site.call.args, strict=False) if literal_call_arg(a)}
         # Also prunes what the substitution makes dead, so ``used`` below sees no dead reads.
         bind_call_constants(hfn, call_consts)
-        used = {n.id for n in ast.walk(hfn) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
+        used = {n.id for n in walk_nodes(hfn) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
         keep = [(pn, a) for pn, a in zip(site.pnames, site.call.args, strict=False) if pn in used]
         decl_pnames = list(site.pnames)
         pnames = [pn for pn, unused in keep]
@@ -759,7 +759,7 @@ class HelperKirBuilder:
             missing = sorted(
                 {
                     n.func.id
-                    for n in ast.walk(h.tree)
+                    for n in walk_nodes(h.tree)
                     if isinstance(n, ast.Call)
                     and isinstance(n.func, ast.Name)
                     and n.func.id in known

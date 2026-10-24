@@ -17,6 +17,7 @@ from hpcagent_bench.translators.numpyto_common.ast_build import (
     name_,
     set_field,
     store_,
+    walk_nodes,
 )
 from hpcagent_bench.translators.numpyto_common.emit_helpers import fftw
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import (
@@ -626,7 +627,7 @@ def symbol_decl(name: str, assigned: bool = False) -> str:
 def assigned_bool_literal(tree: ast.AST) -> set[str]:
     """Array names assigned a bare True/False (whole-array or element) -- Fortran needs these declared logical."""
     out: set[str] = set()
-    for node in ast.walk(tree):
+    for node in walk_nodes(tree):
         if not (isinstance(node, ast.Assign) and len(node.targets) == 1):
             continue
         tgt = node.targets[0]
@@ -683,7 +684,7 @@ def logical_locals_(kir: KernelIR) -> set[str]:
     # (target, RHS) of the assigns whose RHS is logical only through a name it reads: a copy
     # ``X[..] = Y[..]`` / ``X = Y`` or a combine ``X = Y & Z``.
     pending: list[tuple[str, ast.expr]] = []
-    for node in ast.walk(kir.tree):
+    for node in walk_nodes(kir.tree):
         if not (isinstance(node, ast.Assign) and len(node.targets) == 1):
             continue
         tgt = node.targets[0]
@@ -815,7 +816,7 @@ def value_assignments(tree: ast.AST) -> dict[str, list[ast.AST]]:
         if not supplies_no_values(value):
             assigns.setdefault(name, []).append(value)
 
-    for node in ast.walk(tree):
+    for node in walk_nodes(tree):
         if isinstance(node, ast.Assign) and len(node.targets) == 1:
             target = node.targets[0]
             if isinstance(target, ast.Name):
@@ -1132,12 +1133,6 @@ class FortranBodyEmitter(BaseEmitter):
         #: name -> int-kind tag ("int32"/"int64") for implicit-local bitwise propagation;
         #: populated by the caller.
         self._int_kinds: dict[str, str] = {}
-
-    def omp_private_clause(self, node: ast.For, arrays: set[str], reduction_acc: str | None = None) -> str:
-        """`` private(t, u)`` naming the body scalars of a parallel loop as declared (see
-        :func:`parallelism.omp_private_scalars`), or ``""`` when the body binds none."""
-        names = parallelism.omp_private_scalars(node, arrays, reduction_acc)
-        return f" private({', '.join(self.emit_expr(name_(n)) for n in names)})" if names else ""
 
     def emit_for(self, node: ast.For, indent: str) -> str:
         target = node.target
@@ -1833,7 +1828,7 @@ class FortranBodyEmitter(BaseEmitter):
                 return False
             if isinstance(n.slice, ast.Slice):
                 return True
-            for sub in ast.walk(n.slice):
+            for sub in walk_nodes(n.slice):
                 if isinstance(sub, ast.Name):
                     slot_shape = self.declared_shape(sub.id)
                     if slot_shape is not None and len(slot_shape) == 1:
@@ -2453,7 +2448,7 @@ class FortranBodyEmitter(BaseEmitter):
         # the operand's own kind is not reported.
         if isinstance(expr, ast.Call) and isinstance(expr.func, ast.Name) and expr.func.id == "int":
             return SYMBOL_INT_TAG
-        for sub in ast.walk(expr):
+        for sub in walk_nodes(expr):
             # A NESTED int(..) cast (max(0, int(..))) resets the same way.
             if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name) and sub.func.id == "int":
                 return SYMBOL_INT_TAG
@@ -2462,7 +2457,7 @@ class FortranBodyEmitter(BaseEmitter):
             # SECTION read is not promoted, so it keeps the declared tag.
             if isinstance(sub, ast.Subscript) and isinstance(sub.value, ast.Name):
                 scalar_read = isinstance(sub.ctx, ast.Load) and not any(
-                    isinstance(n, ast.Slice) for n in ast.walk(sub.slice)
+                    isinstance(n, ast.Slice) for n in walk_nodes(sub.slice)
                 )
                 if scalar_read and self.is_narrow_int_array(sub.value.id):
                     return SYMBOL_INT_TAG
@@ -2762,7 +2757,7 @@ def kinded_shape_operand(node: ast.expr) -> str:
         value, sign = value.operand, "-"
     if isinstance(value, ast.Constant) and isinstance(value.value, int) and not isinstance(value.value, bool):
         return f"({sign}{value.value}_c_int64_t)"
-    if not any(isinstance(sub, ast.Name) for sub in ast.walk(node)):
+    if not any(isinstance(sub, ast.Name) for sub in walk_nodes(node)):
         return f"INT({fortran_shape_expr(node)}, c_int64_t)"
     return fortran_shape_expr(node)
 
@@ -2986,7 +2981,7 @@ def fortran_case_map(kir: KernelIR) -> dict[str, str]:
     # ALSO scan the AST body for local-vs-local case clashes (a loop iterator i and a boolean
     # local I collapse to the same identifier). Keep the first occurrence reserved, route the rest.
     locals_by_lc: dict[str, list[str]] = {}
-    for node in ast.walk(kir.tree):
+    for node in walk_nodes(kir.tree):
         n = None
         if isinstance(node, ast.Name):
             n = node.id
@@ -3248,7 +3243,7 @@ def signature_decls(kir: KernelIR, param_names: list[str], safe_with_case: Calla
     arr_by_name = {a.name: a for a in kir.arrays}
     sca_by_name = {s.name: s for s in kir.scalars}
     assigned_names: set = set()
-    for n in ast.walk(kir.tree):
+    for n in walk_nodes(kir.tree):
         if isinstance(n, ast.Assign):
             for t in n.targets:
                 if isinstance(t, ast.Name):
@@ -3341,7 +3336,7 @@ class LocalArrayDecls:
         array_local_names = set(body_emitter.local_arrays.keys())
         self.computed_scalars = {
             node.targets[0].id
-            for node in ast.walk(kir.tree)
+            for node in walk_nodes(kir.tree)
             if isinstance(node, ast.Assign)
             and len(node.targets) == 1
             and isinstance(node.targets[0], ast.Name)
@@ -3410,7 +3405,7 @@ def copied_element_dtypes(kir: KernelIR) -> dict[str, str]:
     """``X[i] = Y[j]`` with ``Y`` a typed parameter array: ``X`` inherits ``Y``'s element dtype."""
     array_dtype_map = {a.name: a.dtype for a in kir.arrays}
     inferred: dict[str, str] = {}
-    for node in ast.walk(kir.tree):
+    for node in walk_nodes(kir.tree):
         if (
             isinstance(node, ast.Assign)
             and len(node.targets) == 1
@@ -3505,7 +3500,7 @@ def collect_implicit_locals(kir: KernelIR) -> list[tuple[str, str]]:
     declared.update(loop_target_names(kir.tree))
     seen: set[str] = set(declared)
     out: list[tuple[str, str]] = []
-    for node in ast.walk(kir.tree):
+    for node in walk_nodes(kir.tree):
         if isinstance(node, ast.Assign):
             for tgt in node.targets:
                 if isinstance(tgt, ast.Name) and tgt.id not in seen:
@@ -3530,11 +3525,11 @@ def add_bitwise_operands(rhs: ast.expr, int_uses: set[str], logical_names: Colle
         for sub in (rhs.left, rhs.right):
             if produces_logical(sub, logical_names):
                 continue
-            int_uses.update(n.id for n in ast.walk(sub) if isinstance(n, ast.Name))
+            int_uses.update(n.id for n in walk_nodes(sub) if isinstance(n, ast.Name))
             add_bitwise_operands(sub, int_uses, logical_names)
     elif isinstance(rhs, ast.UnaryOp) and isinstance(rhs.op, ast.Invert):
         if not produces_logical(rhs.operand, logical_names):  # ``~mask`` stays logical
-            int_uses.update(n.id for n in ast.walk(rhs.operand) if isinstance(n, ast.Name))
+            int_uses.update(n.id for n in walk_nodes(rhs.operand) if isinstance(n, ast.Name))
             add_bitwise_operands(rhs.operand, int_uses, logical_names)
     elif isinstance(rhs, ast.BinOp):
         add_bitwise_operands(rhs.left, int_uses, logical_names)
@@ -3622,7 +3617,7 @@ class LocalTyping:
     def collect_bitwise_int_uses(self, tree: ast.AST) -> None:
         """A top-level bitwise RHS makes its target integer (unless it is a logical mask combine), and
         every bitwise operand is integer."""
-        for node in ast.walk(tree):
+        for node in walk_nodes(tree):
             if not isinstance(node, (ast.Assign, ast.AugAssign)):
                 continue
             rhs = node.value
@@ -3648,7 +3643,7 @@ class LocalTyping:
         names |= {a.name for a in kir.arrays if fortran_type(a.dtype) == self.int64_kind}
         names |= {s.name for s in kir.scalars if fortran_type(s.dtype) == self.int64_kind}
         names |= self.recorded_int64_local
-        for node in ast.walk(kir.tree):
+        for node in walk_nodes(kir.tree):
             if (
                 isinstance(node, ast.Assign)
                 and len(node.targets) == 1
@@ -3663,7 +3658,7 @@ class LocalTyping:
                     self.int_uses.add(node.targets[0].id)
                     if fortran_type(key) == self.int64_kind:
                         names.add(node.targets[0].id)
-        for node in ast.walk(kir.tree):
+        for node in walk_nodes(kir.tree):
             if isinstance(node, ast.For) and isinstance(node.target, ast.Name):
                 names.add(node.target.id)
         return names
@@ -3676,7 +3671,7 @@ class LocalTyping:
         changed = True
         while changed:
             changed = False
-            for node in ast.walk(kir.tree):
+            for node in walk_nodes(kir.tree):
                 names: list[str] = []
                 if (
                     isinstance(node, ast.BinOp)
@@ -3687,14 +3682,14 @@ class LocalTyping:
                     and isinstance(node.func, ast.Name)
                     and node.func.id in BITWISE_INT_CALL_NAMES
                 ):
-                    names = [n.id for n in ast.walk(node) if isinstance(n, ast.Name)]
+                    names = [n.id for n in walk_nodes(node) if isinstance(n, ast.Name)]
                 if any(n in int64_uses for n in names):
                     for n in names:
                         if n not in int64_uses:
                             int64_uses.add(n)
                             changed = True
                 if isinstance(node, (ast.Assign, ast.AugAssign)):
-                    rhs_names = [n.id for n in ast.walk(node.value) if isinstance(n, ast.Name)]
+                    rhs_names = [n.id for n in walk_nodes(node.value) if isinstance(n, ast.Name)]
                     if any(n in int64_uses for n in rhs_names):
                         tgts = node.targets if isinstance(node, ast.Assign) else [node.target]
                         for tgt in tgts:
@@ -3710,7 +3705,7 @@ class LocalTyping:
         real_array_names |= self.recorded_real_local
         return {
             node.targets[0].id
-            for node in ast.walk(kir.tree)
+            for node in walk_nodes(kir.tree)
             if isinstance(node, ast.Assign)
             and len(node.targets) == 1
             and isinstance(node.targets[0], ast.Name)
@@ -3836,7 +3831,7 @@ def hoist_nested_helper_calls(
         # A while TEST re-runs every iteration; priming a temp once before the loop would leave
         # every later check reading a stale value, so refuse rather than silently loop forever.
         if isinstance(stmt, ast.While):
-            for node in ast.walk(stmt.test):
+            for node in walk_nodes(stmt.test):
                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in helper_names:
                     raise NotImplementedError(f"helper {node.func.id!r} is called in a while condition")
         # These two shapes are already the statement call emit_assign/_emit_expr_stmt rewrite;
@@ -3997,7 +3992,7 @@ def helper_dummy_decls(hkir: KernelIR) -> list[str]:
     arr_by = {a.name: a for a in hkir.arrays}
     sca_by = {s.name: s for s in hkir.scalars}
     hassigned: set = set()
-    for n in ast.walk(hkir.tree):
+    for n in walk_nodes(hkir.tree):
         if isinstance(n, ast.Assign):
             hassigned.update(t.id for t in n.targets if isinstance(t, ast.Name))
         elif isinstance(n, ast.AugAssign) and isinstance(n.target, ast.Name):

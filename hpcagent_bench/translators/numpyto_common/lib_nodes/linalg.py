@@ -4,7 +4,7 @@ import ast
 import copy
 from collections.abc import Sequence
 
-from hpcagent_bench.translators.numpyto_common.ast_build import name_, range_for, store_
+from hpcagent_bench.translators.numpyto_common.ast_build import name_, range_for, store_, walk_nodes
 from hpcagent_bench.translators.numpyto_common.lib_nodes.call_args import read_axis_keepdims
 from hpcagent_bench.translators.numpyto_common.lib_nodes.contractions import OP_SPILL_TEMP
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of
@@ -774,7 +774,7 @@ def solve_operand_dtype(expr: ast.expr, local_dtypes: dict[str, str] | None) -> 
         return None
     if reads_complex(expr, local_dtypes):
         return "complex128"
-    for node in ast.walk(expr):
+    for node in walk_nodes(expr):
         if isinstance(node, ast.Name):
             dt = local_dtypes.get(node.id)
             if dt:

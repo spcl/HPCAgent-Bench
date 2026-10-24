@@ -5,7 +5,7 @@ import copy
 from collections.abc import Sequence
 from typing import overload
 
-from hpcagent_bench.translators.numpyto_common.ast_build import SubstituteLoads, map_blocks, name_, store_
+from hpcagent_bench.translators.numpyto_common.ast_build import SubstituteLoads, map_blocks, name_, store_, walk_nodes
 from hpcagent_bench.translators.numpyto_common.frontend.helper_params import ConstArg
 from hpcagent_bench.translators.numpyto_common.frontend.inlining import collect_assigned_names, fold_constant_branches
 from hpcagent_bench.translators.numpyto_common.frontend.none_folding import FoldStaticNoneBranches
@@ -66,14 +66,14 @@ def specialise_helper_by_call_signature(
     pnames = [a.arg for a in hdef.args.args]
     by_key: dict[tuple[tuple[str, ConstArg | tuple[str, ...]], ...], list[ast.Call]] = {}
     for owner_fn, arr_by in owners:
-        for node in ast.walk(owner_fn):
+        for node in walk_nodes(owner_fn):
             if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == hdef.name):
                 continue
             if len(node.args) != len(pnames) or node.keywords:
                 return []  # an arity/keyword mismatch is a different failure; leave it be
             key = tuple((pn, call_arg_key(a, owner_fn, arr_by)) for pn, a in zip(pnames, node.args, strict=False))
             by_key.setdefault(key, []).append(node)
-    existing = {node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
+    existing = {node.name for node in walk_nodes(tree) if isinstance(node, ast.FunctionDef)}
     clones: list[ast.FunctionDef] = []
     # The first key keeps the original name, so a helper called one way is untouched.
     for first, key in enumerate(list(by_key)[1:], start=2):

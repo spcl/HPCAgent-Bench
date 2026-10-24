@@ -5,7 +5,7 @@ import copy
 from collections.abc import Sequence
 from types import NotImplementedType
 
-from hpcagent_bench.translators.numpyto_common.ast_build import name_
+from hpcagent_bench.translators.numpyto_common.ast_build import name_, walk_nodes
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import extent_is_scalar, iter_extent_of
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
     const_or_name,
@@ -331,4 +331,4 @@ class SubscriptifyNames(ast.NodeTransformer):
 
     def reads_index_array(self, e: ast.expr) -> bool:
         """An advanced-index axis references an index ARRAY (a Name whose own shape is known)."""
-        return any(isinstance(s, ast.Name) and self.shape_table.get(s.id) for s in ast.walk(e))
+        return any(isinstance(s, ast.Name) and self.shape_table.get(s.id) for s in walk_nodes(e))

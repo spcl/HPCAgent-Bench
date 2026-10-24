@@ -8,11 +8,14 @@ import pathlib
 
 import pytest
 
-from hpcagent_bench import cpf_bridge, cpf_cache, cpf_canonical, cpf_prerender
-from hpcagent_bench.cpf_cache import HintDetail
-from hpcagent_bench.cpf_cache import RenderVerdict
-from hpcagent_bench.cpf_cache import Role
-from hpcagent_bench.cpf_cache import Target
+from hpcagent_bench.cpf import bridge as cpf_bridge
+from hpcagent_bench.cpf import cache as cpf_cache
+from hpcagent_bench.cpf import canonical as cpf_canonical
+from hpcagent_bench.cpf import prerender as cpf_prerender
+from hpcagent_bench.cpf.cache import HintDetail
+from hpcagent_bench.cpf.cache import RenderVerdict
+from hpcagent_bench.cpf.cache import Role
+from hpcagent_bench.cpf.cache import Target
 
 
 class FakeSpec:
@@ -25,26 +28,17 @@ class FakeSpec:
         self.track = ""
 
 
-def args_for(cache: pathlib.Path, view: pathlib.Path, kernels: str) -> argparse.Namespace:
-    return argparse.Namespace(
-        cache=cache,
-        view=view,
-        kernels=kernels,
-        precision="",
-        rank=0,
-        ranks=1,
-        timeout=None,
-    )
+def args_for(cache: pathlib.Path, kernels: str) -> argparse.Namespace:
+    return argparse.Namespace(cache=cache, kernels=kernels, precision="", rank=0, ranks=1, timeout=None)
 
 
 def test_a_shard_with_a_load_failure_and_a_render_failure_still_exits_zero(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Every kernel in the shard gets a verdict; the rank hands back 0 whatever those verdicts are."""
-    package, before = tmp_path / "dace", "digest"
+    """Every kernel in the shard gets a verdict and the rank hands back 0 whatever they are; a child that died is
+    filed as a failure, a timeout is not (it is retried)."""
+    package, before, cache = tmp_path / "dace", "digest", tmp_path / "cache"
     package.mkdir()
-    view, cache = tmp_path / "view", tmp_path / "cache"
-    cpf_cache.open_view(view, cache, Target.CPU, before)
     monkeypatch.setattr(cpf_canonical, "dace_commit", lambda: before)
 
     def fake_load(short_name: str) -> FakeSpec:
@@ -53,88 +47,54 @@ def test_a_shard_with_a_load_failure_and_a_render_failure_still_exits_zero(
         return FakeSpec(short_name)
 
     monkeypatch.setattr(cpf_prerender.BenchSpec, "load", classmethod(lambda cls, short_name: fake_load(short_name)))
+    monkeypatch.setattr(cpf_prerender, "graded_datatype", lambda spec, precision: precision)
 
     def fake_prerender_kernel(spec: FakeSpec, cache_root: pathlib.Path, **kwargs: object) -> cpf_bridge.RenderRecord:
-        if spec.short_name == "broken_render":
-            bad = cpf_bridge.RenderOutcome(key="badkey", verdict=RenderVerdict.TIMEOUT, error="render exceeded budget")
+        if spec.short_name == "slow_render":
+            bad = cpf_bridge.RenderOutcome(key="slowkey", verdict=RenderVerdict.TIMEOUT, error="render exceeded budget")
             return cpf_bridge.RenderRecord(kernel=spec.short_name, results={"c": bad, "c++": bad})
+        if spec.short_name == "crashed_render":
+            dead = cpf_bridge.RenderOutcome(key="deadkey", verdict=RenderVerdict.FAIL, error="child exited -9")
+            return cpf_bridge.RenderRecord(kernel=spec.short_name, results={"c": dead, "c++": dead})
         key = f"{spec.short_name}key"
-        files = [(Role.SOURCE, f"{spec.short_name}.c", "// ok\n"), (Role.BINDING, "binding.json", "{}\n")]
-        cpf_cache.publish(cache_root, key, {"kernel": spec.short_name, "entry": spec.short_name}, files)
+        files = [(Role.SOURCE, f"{spec.short_name}.c", b"// ok\n"), (Role.BINDING, "binding.json", b"{}\n")]
+        fields = {"verdict": RenderVerdict.OK, "kernel": spec.short_name, "entry": spec.short_name}
+        cpf_cache.publish(cache_root, key, fields, files)
         ok = cpf_bridge.RenderOutcome(key=key, verdict=RenderVerdict.OK, cached=False)
         return cpf_bridge.RenderRecord(kernel=spec.short_name, results={"c": ok, "c++": ok})
 
     monkeypatch.setattr(cpf_bridge, "prerender_kernel", fake_prerender_kernel)
 
-    args = args_for(cache, view, "missing_kernel,broken_render,ok_kernel")
+    args = args_for(cache, "missing_kernel,slow_render,crashed_render,ok_kernel")
     assert cpf_prerender.prerender(args, package, before, tmp_path / "scratch", Target.CPU, HintDetail.PROOFS) == 0
-
-    assert cpf_cache.missing(view, ["ok_kernel"], "c", "fp64", Target.CPU, HintDetail.PROOFS) == []
-    assert cpf_cache.missing(view, ["missing_kernel"], "c", "fp64", Target.CPU, HintDetail.PROOFS) != []
-    assert cpf_cache.missing(view, ["broken_render"], "c", "fp64", Target.CPU, HintDetail.PROOFS) != []
+    assert cpf_cache.form(cache, "ok_kernelkey").entry == "ok_kernel"
+    assert cpf_cache.read_entry(cache, "slowkey") is None, "a timeout is retried, not filed"
+    dead = cpf_cache.read_entry(cache, "deadkey")
+    assert dead is not None and (dead.verdict, dead.error) == (RenderVerdict.FAIL, "child exited -9")
 
 
 def test_a_dace_commit_that_moves_mid_run_withdraws_and_fails_the_rank(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A moved dace commit is a real internal error, unlike a per-kernel render failure: it stays nonzero."""
-    package, before = tmp_path / "dace", "before"
+    """A moved dace commit is a real internal error, unlike a per-kernel render failure: it stays nonzero, and
+    what the rank published is withdrawn."""
+    package, before, cache = tmp_path / "dace", "before", tmp_path / "cache"
     package.mkdir()
-    view, cache = tmp_path / "view", tmp_path / "cache"
-    cpf_cache.open_view(view, cache, Target.CPU, before)
     monkeypatch.setattr(cpf_canonical, "dace_commit", lambda: "after")
     monkeypatch.setattr(cpf_prerender.BenchSpec, "load", classmethod(lambda cls, short_name: FakeSpec(short_name)))
+    monkeypatch.setattr(cpf_prerender, "graded_datatype", lambda spec, precision: precision)
 
     def fake_prerender_kernel(spec: FakeSpec, cache_root: pathlib.Path, **kwargs: object) -> cpf_bridge.RenderRecord:
+        files = [(Role.SOURCE, "ok.c", b"// ok\n"), (Role.BINDING, "binding.json", b"{}\n")]
+        cpf_cache.publish(cache_root, "okkey", {"verdict": RenderVerdict.OK, "kernel": "ok_kernel"}, files)
         ok = cpf_bridge.RenderOutcome(key="okkey", verdict=RenderVerdict.OK, cached=False)
         return cpf_bridge.RenderRecord(kernel=spec.short_name, results={"c": ok, "c++": ok})
 
     monkeypatch.setattr(cpf_bridge, "prerender_kernel", fake_prerender_kernel)
 
-    args = args_for(cache, view, "ok_kernel")
+    args = args_for(cache, "ok_kernel")
     assert cpf_prerender.prerender(args, package, before, tmp_path / "scratch", Target.CPU, HintDetail.PROOFS) == 3
-
-
-@pytest.mark.parametrize("language", ["c++", "hip"])
-def test_a_gpu_prerender_records_hip_entries_the_launch_gates_accept(
-    tmp_path: pathlib.Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-    language: str,
-) -> None:
-    """A hip cpf-tool setup's gate asks for c++ and a hip cpf-src setup's for hip; a gpu view that answered
-    either with a miss would refuse every device setup of the wave."""
-    package, before = tmp_path / "dace", "digest"
-    package.mkdir()
-    view, cache = tmp_path / "view", tmp_path / "cache"
-    cpf_cache.open_view(view, cache, Target.GPU, before)
-    monkeypatch.setattr(cpf_canonical, "dace_commit", lambda: before)
-    monkeypatch.setattr(cpf_prerender.BenchSpec, "load", classmethod(lambda cls, short_name: FakeSpec(short_name)))
-
-    def fake_prerender_kernel(
-        spec: FakeSpec, cache_root: pathlib.Path, *, languages: tuple[str, ...], target: Target, **kwargs: object
-    ) -> cpf_bridge.RenderRecord:
-        results: dict[str, cpf_bridge.RenderOutcome] = {}
-        for dialect in languages:
-            stem = f"{spec.short_name}_fp64_cpf"
-            key = cpf_cache.cache_key(
-                "sdfg", before, {"kernel": spec.short_name, "language": dialect, "target": target.text}
-            )
-            # A gpu form: the host .cpp and the device .hip.
-            files = [(Role.SOURCE, f"{stem}.cpp", "// host\n"), (Role.DEVICE, f"{stem}.hip", "// kernels\n")]
-            files.append((Role.BINDING, f"{stem}_binding.json", "{}\n"))
-            cpf_cache.publish(cache_root, key, {"kernel": spec.short_name, "entry": spec.short_name}, files)
-            results[dialect] = cpf_bridge.RenderOutcome(key=key, verdict=RenderVerdict.OK, cached=False)
-        return cpf_bridge.RenderRecord(kernel=spec.short_name, results=results)
-
-    monkeypatch.setattr(cpf_bridge, "prerender_kernel", fake_prerender_kernel)
-    args = args_for(cache, view, "gpu_kernel")
-    assert cpf_prerender.prerender(args, package, before, tmp_path / "scratch", Target.GPU, HintDetail.PROOFS) == 0
-    assert sorted(path.name for path in (view / cpf_cache.ENTRIES_NAME).iterdir()) == ["gpu_kernel_fp64_cpf.hip.json"]
-    capsys.readouterr()
-    check = ["check", "--view", str(view), "--kernels", "gpu_kernel", "--language", language]
-    check += ["--target", "gpu"]
-    assert cpf_cache.main(check) == 0, capsys.readouterr().out
+    assert cpf_cache.read_entry(cache, "okkey") is None
 
 
 def _fake_compiler(tmp_path: pathlib.Path, name: str = "cc") -> str:

@@ -8,7 +8,7 @@ from collections.abc import Callable, Iterator, Sequence
 from typing import Any
 
 from hpcagent_bench.translators.numpyto_common import dtypes
-from hpcagent_bench.translators.numpyto_common.ast_build import SubstituteLoads, const_int, literal_loads
+from hpcagent_bench.translators.numpyto_common.ast_build import SubstituteLoads, const_int, literal_loads, walk_nodes
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import name_store_counts
 
@@ -135,7 +135,7 @@ def const_name_values(fn: ast.AST) -> dict[str, object]:
     if isinstance(fn, ast.FunctionDef):
         for a in fn.args.posonlyargs + fn.args.args + fn.args.kwonlyargs:
             stores[a.arg] = stores.get(a.arg, 0) + 1
-    for node in ast.walk(fn):
+    for node in walk_nodes(fn):
         if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
             stores[node.id] = stores.get(node.id, 0) + 1
         if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
@@ -193,8 +193,8 @@ class ConstComprehensionFold(ast.NodeTransformer):
         self.changed = False
 
     def foldable(self, node: ast.ListComp | ast.SetComp | ast.DictComp | ast.GeneratorExp) -> bool:
-        bound = {n.id for g in node.generators for n in ast.walk(g.target) if isinstance(n, ast.Name)}
-        for n in ast.walk(node):
+        bound = {n.id for g in node.generators for n in walk_nodes(g.target) if isinstance(n, ast.Name)}
+        for n in walk_nodes(node):
             if isinstance(
                 n,
                 (
@@ -459,7 +459,7 @@ class ListCompUnroll(ast.NodeTransformer):
         name = gen.target.id
         shadowed = any(
             isinstance(n, ast.Lambda) or (isinstance(n, ast.Name) and n.id == name and not isinstance(n.ctx, ast.Load))
-            for n in ast.walk(node.elt)
+            for n in walk_nodes(node.elt)
         )
         if shadowed:
             return node
@@ -475,7 +475,7 @@ class ListCompUnroll(ast.NodeTransformer):
 
 #: Backends whose kernel is called positionally through ``kir.input_args`` and nothing else, so a
 #: defaulted parameter outside that list is a constant -- the fold the native frontend already does.
-DEFAULT_FOLDING_BACKENDS = frozenset({"numba", "pythran"})
+DEFAULT_FOLDING_BACKENDS = frozenset({"numba"})
 
 
 def has_defaulted_parameters(fn: ast.FunctionDef) -> bool:
@@ -521,12 +521,12 @@ def helper_call_sites(
     """Every call of a helper by name, and the helpers whose name is read any other way."""
     sites: dict[str, list[ast.Call]] = {}
     callee_names: set[int] = set()
-    for node in ast.walk(tree):
+    for node in walk_nodes(tree):
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in helpers:
             sites.setdefault(node.func.id, []).append(node)
             callee_names.add(id(node.func))
     escaped = {
-        n.id for n in ast.walk(tree) if isinstance(n, ast.Name) and n.id in helpers and id(n) not in callee_names
+        n.id for n in walk_nodes(tree) if isinstance(n, ast.Name) and n.id in helpers and id(n) not in callee_names
     }
     return sites, escaped
 
@@ -537,7 +537,7 @@ def substitutable_helper(fn: ast.FunctionDef, calls: list[ast.Call]) -> bool:
         return False
     if any(c.keywords or any(isinstance(a, ast.Starred) for a in c.args) for c in calls):
         return False
-    return not any(isinstance(n, (ast.Lambda, ast.FunctionDef)) and n is not fn for n in ast.walk(fn))
+    return not any(isinstance(n, (ast.Lambda, ast.FunctionDef)) and n is not fn for n in walk_nodes(fn))
 
 
 def constant_parameters(fn: ast.FunctionDef, calls: list[ast.Call]) -> dict[str, object]:
@@ -546,7 +546,7 @@ def constant_parameters(fn: ast.FunctionDef, calls: list[ast.Call]) -> dict[str,
     # A literal spelled as a subscript base, attribute owner or callee (``None[:, 0]``) is a
     # SyntaxWarning at compile time even under a dead arm, so such a parameter stays a name.
     structural: set[str] = set()
-    for n in ast.walk(fn):
+    for n in walk_nodes(fn):
         if isinstance(n, (ast.Subscript, ast.Attribute)) and isinstance(n.value, ast.Name):
             structural.add(n.value.id)
         elif isinstance(n, ast.Call) and isinstance(n.func, ast.Name):
@@ -566,6 +566,6 @@ def constant_parameters(fn: ast.FunctionDef, calls: list[ast.Call]) -> dict[str,
 
 def substitute_loads(fn: ast.FunctionDef, subst: dict[str, Value]) -> bool:
     """Replace every load of a name in ``subst`` inside ``fn`` by its literal. True when one was replaced."""
-    changed = any(isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load) and n.id in subst for n in ast.walk(fn))
+    changed = any(isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load) and n.id in subst for n in walk_nodes(fn))
     literal_loads(subst).visit(fn)
     return changed

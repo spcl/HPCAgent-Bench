@@ -18,7 +18,7 @@ from matplotlib.lines import Line2D
 
 from hpcagent_bench import packets, study_tags
 from hpcagent_bench.harness import denominator
-from hpcagent_bench.observation_columns import RowKind
+from hpcagent_bench.results.observation_columns import RowKind
 from hpcagent_bench.stats import canon, palette, population, rules, style
 from hpcagent_bench.stats.figures import per_kernel, setup_names
 from hpcagent_bench.stats.summary import geomean_ci, signed_change, usable_ratios
@@ -202,7 +202,8 @@ def canon_kernel_row(
     """One canon-sweep column's row against ``baseline``, restricted to ``tag``: a kernel without a validated result
     is filled at 1x and flagged undelivered (never dropped); ``mark_pending`` sets aside kernels without a canon row;
     ``baseline_fallback`` times a kernel the baseline did not verify against that column instead."""
-    times, substituted = canon.with_fallback(canon.read_times(canon_frame), baseline, baseline_fallback)
+    raced = canon.with_best_of(canon.read_times(canon_frame), baseline, baseline_references(baseline))
+    times, substituted = canon.with_fallback(raced, baseline, baseline_fallback)
     substituted = substituted & set(tag_kernels)
     base, cur = times.get(baseline, {}), times.get(column, {})
     kernels = sorted(tag_kernels)
@@ -225,7 +226,8 @@ def unattempted_kernels(
 ) -> frozenset[str]:
     """The ``kernels`` with no canon row yet for ``column`` or for ``baseline`` (or its fallback)."""
     status = canon.read_status(canon_frame)
-    base_run = status.get(baseline, {}).keys() | (
+    references = [canon.REFERENCE_COLUMNS.get(name, name) for name in baseline_references(baseline)]
+    base_run = set[str]().union(*(status.get(name, {}).keys() for name in (baseline, *references))) | (
         status.get(baseline_fallback, {}).keys() if baseline_fallback else set()
     )
     attempted = status.get(column, {}).keys() & base_run

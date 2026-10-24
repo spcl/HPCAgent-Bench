@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Negative CONSTANT index ``a[-k]`` -> explicit ``a[N-k]`` for the C / C++ ABI.
 
-numpy (and fortran / numba / pythran / jax) wrap a negative index from the end
+numpy (and fortran / numba) wrap a negative index from the end
 (``a[-1]`` is the last element), but C has no negative indexing -- ``a[-1]``
 underflows the pointer and reads garbage. The C emitter therefore normalizes a
 negative constant index against the array's known dimension size, at both read
@@ -14,39 +14,33 @@ import ast
 
 import numpy as np
 
-from hpcagent_bench.translators.numpyto_c.emit import negative_const_k
+from hpcagent_bench.translators.numpyto_common.ast_build import const_int
+from hpcagent_bench.translators.numpyto_common.lowering.shape_reads import negative_literal_offset
 from tests.translators.op_oracle import all_ok, parse_source, run_op
 
-ALL = ("c", "cpp", "fortran", "numba", "pythran", "jax")
+ALL = ("c", "cpp", "fortran", "numba")
 
 
-# negative_const_k: -1 is a UnaryOp, not a Constant                          #
+# negative_literal_offset: -1 is a UnaryOp, not a Constant                   #
 
 
-def test_negative_const_k_recognizes_forms() -> None:
-    assert negative_const_k(ast.parse("-1", mode="eval").body) == 1
-    assert negative_const_k(ast.parse("-3", mode="eval").body) == 3
-    assert negative_const_k(ast.parse("2", mode="eval").body) is None  # non-negative
-    assert negative_const_k(ast.parse("i", mode="eval").body) is None  # not constant
-    assert negative_const_k(ast.parse("True", mode="eval").body) is None  # bool is not an index
+def test_negative_literal_offset_recognizes_forms() -> None:
+    assert negative_literal_offset(ast.parse("-1", mode="eval").body) == 1
+    assert negative_literal_offset(ast.parse("-3", mode="eval").body) == 3
+    assert negative_literal_offset(ast.parse("2", mode="eval").body) is None  # non-negative
+    assert negative_literal_offset(ast.parse("i", mode="eval").body) is None  # not constant
+    assert negative_literal_offset(ast.parse("True", mode="eval").body) is None  # bool is not an index
 
 
 def test_minus_zero_is_index_zero_not_an_offset_from_the_end() -> None:
-    """``a[-0]`` is ``a[0]``; read as "0 from the end" it became ``a[N - 0]``, one past the end.
-    Both negative-literal decoders (C emit and the shared lowering) answer the same way."""
-    from hpcagent_bench.translators.numpyto_common.lowering.shape_reads import (
-        const_int_index,
-        negative_literal_offset,
-    )
-
+    """``a[-0]`` is ``a[0]``; read as "0 from the end" it became ``a[N - 0]``, one past the end."""
     minus_zero = ast.parse("-0", mode="eval").body
-    assert negative_const_k(minus_zero) is None
     assert negative_literal_offset(minus_zero) is None
     assert negative_literal_offset(ast.parse("-2", mode="eval").body) == 2
     assert negative_literal_offset(ast.parse("-True", mode="eval").body) is None
-    assert const_int_index(ast.parse("-4", mode="eval").body) == -4
+    assert const_int(ast.parse("-4", mode="eval").body) == -4
     # numpy reads ``a[True]`` as a boolean mask (a new axis), never as index 1.
-    assert const_int_index(ast.parse("True", mode="eval").body) is None
+    assert const_int(ast.parse("True", mode="eval").body) is None
 
 
 # the C emit turns ``a[-1]`` into ``a[N - 1]`` (no literal ``[-1]``)          #

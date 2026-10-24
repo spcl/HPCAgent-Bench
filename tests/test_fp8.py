@@ -1,23 +1,18 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""fp8 (E4M3 / E5M2), the ML-mode precisions: both round-trip with the exact dtype identity on the ML/JIT
-frameworks; native backends are excluded as for fp16."""
+"""fp8 (E4M3 / E5M2), the ML-mode precisions: both round-trip with the exact dtype identity; native backends are
+excluded as for fp16."""
 
 import numpy as np
 import pytest
 
-from hpcagent_bench.categories import Preset
 from hpcagent_bench.precision import DATATYPE_CHOICES, DTYPES, Precision, numpy_dtype, precision_from_datatype
-from tests.optional_imports import import_or_skip
 
-#: Frameworks that can express fp8. numpy carries it through ml_dtypes; jax is the JIT
-#: reference. The native/static backends are absent ON PURPOSE -- no native fp8 type.
-FP8_FRAMEWORKS = ("numpy", "jax")
+#: Frameworks that can express fp8: numpy carries it through ml_dtypes. The native/static backends are absent ON
+#: PURPOSE -- no native fp8 type.
+FP8_FRAMEWORKS = ("numpy",)
 #: The static backends fp8 must NOT claim to support (mirrors NON_FP16_FRAMEWORKS).
-NON_FP8_FRAMEWORKS = ("cc", "llvm", "polly", "pluto", "fortran", "numba", "pythran")
-#: fp8-safe kernels: bounded values, no long accumulation (fp8 has 3-4 mantissa bits, so a
-#: big reduction would drown the signal). arc_distance is the same choice test_fp16 makes.
-FP8_KERNELS = ("arc_distance",)
+NON_FP8_FRAMEWORKS = ("cc", "llvm", "polly", "pluto", "fortran", "numba")
 
 _FP8 = (Precision.FP8_E4M3, Precision.FP8_E5M2)
 
@@ -51,22 +46,3 @@ def test_fp8_excludes_the_native_backends() -> None:
     """fp8 is ML-mode only: the static C/C++/Fortran backends have no native fp8, so they must
     not appear among the fp8 frameworks. Locks the deliberate boundary."""
     assert not set(FP8_FRAMEWORKS) & set(NON_FP8_FRAMEWORKS)
-
-
-@pytest.mark.parametrize("datatype", ["fp8_e4m3", "fp8_e5m2"])
-@pytest.mark.parametrize("kernel", FP8_KERNELS)
-def test_fp8_kernel_executes_via_jax(kernel: str, datatype: str) -> None:
-    """An fp8-safe kernel runs at fp8 through JAX and validates against the compiled reference."""
-    import_or_skip("jax")
-    from hpcagent_bench.frameworks import Benchmark, Test, generate_framework
-
-    try:
-        res = Test(Benchmark(kernel), generate_framework("jax")).run(
-            preset=Preset.S, validate=True, repeat=1, timeout=180.0, datatype=datatype, ignore_errors=True
-        )
-    except ModuleNotFoundError as e:
-        pytest.skip(f"{kernel}: no jax implementation ({e})")
-    assert res, f"{kernel}: no jax implementation ran at {datatype}"
-    for impl, d in res.items():
-        assert not d.get("failure"), f"{kernel}/{impl} @ {datatype}: {d.get('failure')}"
-        assert d.get("validated"), f"{kernel}/{impl}: did not validate at {datatype}"

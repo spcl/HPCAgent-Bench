@@ -22,6 +22,7 @@ SERVED = {
     "glm53": 262144,
     "oss120b": 131072,
     "musespark": 1048576,
+    "apertus15": 262144,
 }
 
 #: What claude is given for each served window at the launcher's 32768-token reply cap:

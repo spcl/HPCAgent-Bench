@@ -4,6 +4,7 @@ import ast
 import copy
 from collections.abc import Iterable, Iterator, Sequence
 
+from hpcagent_bench.translators.numpyto_common.ast_build import walk_nodes
 from hpcagent_bench.translators.numpyto_common.emit_helpers.tokens import IDENT_RE
 from hpcagent_bench.translators.numpyto_common.frontend.helper_specialize import substitute_names
 from hpcagent_bench.translators.numpyto_common.frontend.inlining import collect_assigned_names
@@ -50,7 +51,7 @@ def held_before_table(owner_fn: ast.FunctionDef) -> dict[int | None, set[str]]:
     table: dict[int | None, set[str]] = {}
     held: set[str] = set()
     for stmt in owner_fn.body:
-        for node in ast.walk(stmt):
+        for node in walk_nodes(stmt):
             table.setdefault(id(node), held)
         held = held | set(collect_assigned_names([stmt]))
     table[None] = held
@@ -64,7 +65,7 @@ def shape_symbols(arrays: Iterable[ArrayDesc]) -> set[str]:
     for a in arrays:
         for tok in a.shape:
             try:
-                for node in ast.walk(ast.parse(str(tok), mode="eval")):
+                for node in walk_nodes(ast.parse(str(tok), mode="eval")):
                     if isinstance(node, ast.Name):
                         syms.add(node.id)
             except SyntaxError:
@@ -204,7 +205,7 @@ def caller_side_symbol(
     # Whatever is still a helper-local after that substitution is another link in the same chain.
     locals_bound = collect_assigned_names(hfn.body)
     leftover = sorted(
-        {n.id for n in ast.walk(expr) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)} & set(locals_bound)
+        {n.id for n in walk_nodes(expr) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)} & set(locals_bound)
     )
     if leftover:
         nested = {
@@ -267,7 +268,7 @@ def caller_side_shape(
             n.id: ast.parse(
                 caller_side_symbol(n.id, held, decl_pnames, site_args, hfn, hname, 0, arr_by), mode="eval"
             ).body
-            for n in ast.walk(expr)
+            for n in walk_nodes(expr)
             if isinstance(n, ast.Name) and n.id not in held and n.id in operands
         }
         respelled = ast.unparse(substitute_names(ast.Expression(body=expr), subst).body) if subst else str(token)
@@ -378,7 +379,7 @@ def reorder_helper_call_args(trees: list[ast.AST], helpers: list[KernelIR]) -> N
     if not perms:
         return
     for tree in trees:
-        for node in ast.walk(tree):
+        for node in walk_nodes(tree):
             if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)):
                 continue
             perm = perms.get(node.func.id)

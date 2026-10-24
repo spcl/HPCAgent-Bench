@@ -6,7 +6,15 @@ import copy
 from collections.abc import Sequence
 from typing import TypeGuard
 
-from hpcagent_bench.translators.numpyto_common.ast_build import const_int, expr_of, name_, range_for, set_field, store_
+from hpcagent_bench.translators.numpyto_common.ast_build import (
+    const_int,
+    expr_of,
+    name_,
+    range_for,
+    set_field,
+    store_,
+    walk_nodes,
+)
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module, numpy_call_attr
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import (
     RankedRewritePass,
@@ -67,7 +75,7 @@ def bcast_tokens(a: list[str], b: list[str]) -> list[str]:
 
 def token_reads(token: str, names: Sequence[str]) -> bool:
     """Whether the extent token ``token`` reads a name of ``names``."""
-    return any(isinstance(n, ast.Name) and n.id in names for n in ast.walk(ast.parse(token, mode="eval")))
+    return any(isinstance(n, ast.Name) and n.id in names for n in walk_nodes(ast.parse(token, mode="eval")))
 
 
 def slice_extent_token(e: ast.Slice, base: str | None) -> str | None:
@@ -247,7 +255,7 @@ class OuterBroadcastPeel(RankedRewritePass):
         peeling axis 0 dissolves: non-1 extents in different axes with one on axis 0 (an outer
         product), or two full-rank operands sharing a non-1 axis 0 that split on a later axis
         (``g[:, None] * X``)."""
-        for node in ast.walk(value):
+        for node in walk_nodes(value):
             ops = self.operands_(node)
             if ops is None:
                 continue
@@ -386,7 +394,7 @@ class OuterBroadcastPeel(RankedRewritePass):
                 repl = e.lower if e.lower is not None else ast.Constant(value=0)
             elif e.lower is None or const_int(e.lower) == 0:
                 repl = expr_of(idx)
-            elif all(isinstance(n, ARITHMETIC_NODES) for n in ast.walk(e.lower)):
+            elif all(isinstance(n, ARITHMETIC_NODES) for n in walk_nodes(e.lower)):
                 repl = ast.BinOp(left=copy.deepcopy(e.lower), op=ast.Add(), right=expr_of(idx))
             else:
                 return None
@@ -429,7 +437,7 @@ class OuterBroadcastPeel(RankedRewritePass):
 
         numba's analysis equates a (1, n) operand with an (m, n) one instead of broadcasting it;
         ``x[None, :]`` -> ``x`` is exact only while the node's rank does not change."""
-        for node in ast.walk(value):
+        for node in walk_nodes(value):
             ops = self.operands_(node)
             if ops is None:
                 continue
@@ -513,7 +521,7 @@ class OuterBroadcastPeel(RankedRewritePass):
             self.ranks[temp] = rank
             temps.append(temp)
             binds.append(ast.copy_location(ast.Assign(targets=[store_(temp)], value=product), node))
-            for parent in ast.walk(value):
+            for parent in walk_nodes(value):
                 for field, child in ast.iter_fields(parent):
                     if isinstance(child, ast.AST) and ast.dump(child) == ast.dump(product):
                         set_field(parent, field, name_(temp))
@@ -546,7 +554,7 @@ class OuterBroadcastPeel(RankedRewritePass):
         base = target.id if isinstance(target, ast.Name) else self.store_base(target, rank)
         # A target the value also reads would see rows the loop already rewrote; it, and a store that
         # is not a whole-array slice (``H[lo:hi, :]``), fills a fresh temp assigned afterwards.
-        direct = base is not None and not any(isinstance(n, ast.Name) and n.id == base for n in ast.walk(node.value))
+        direct = base is not None and not any(isinstance(n, ast.Name) and n.id == base for n in walk_nodes(node.value))
         if not direct and not isinstance(target, (ast.Name, ast.Subscript)):
             return node
         temp, ivar = f"__ob{self._ctr}", f"__ob{self._ctr}_i"
@@ -597,10 +605,10 @@ class SliceObjectInline(ast.NodeTransformer):
     def __init__(self, fn: ast.FunctionDef) -> None:
         self.changed = False
         self.slices: dict[str, ast.Slice] = {}
-        if any(isinstance(n, (ast.Lambda, ast.FunctionDef)) and n is not fn for n in ast.walk(fn)):
+        if any(isinstance(n, (ast.Lambda, ast.FunctionDef)) and n is not fn for n in walk_nodes(fn)):
             return
         stores = name_store_counts(fn)
-        for node in ast.walk(fn):
+        for node in walk_nodes(fn):
             if not (
                 isinstance(node, ast.Assign)
                 and len(node.targets) == 1
@@ -615,7 +623,7 @@ class SliceObjectInline(ast.NodeTransformer):
             args = node.value.args
             if any(isinstance(a, ast.Starred) for a in args) or stores.get(node.targets[0].id, 0) != 1:
                 continue
-            read = {n.id for a in args for n in ast.walk(a) if isinstance(n, ast.Name)}
+            read = {n.id for a in args for n in walk_nodes(a) if isinstance(n, ast.Name)}
             if any(stores.get(r, 0) > 1 for r in read):
                 continue
             bounds = [None, args[0], None] if len(args) == 1 else [*args, None][:3]
@@ -646,14 +654,14 @@ def is_none_assign(node: ast.AST) -> TypeGuard[ast.Assign]:
 
 def none_targets(node: ast.AST) -> set[str]:
     """Every name some ``a = None`` under ``node`` binds."""
-    return {t.id for n in ast.walk(node) if is_none_assign(n) for t in n.targets if isinstance(t, ast.Name)}
+    return {t.id for n in walk_nodes(node) if is_none_assign(n) for t in n.targets if isinstance(t, ast.Name)}
 
 
 def bare_reads(node: ast.AST) -> set[str]:
     """The names ``node`` reads other than as the base of a subscript or an attribute."""
     return {
         child.id
-        for parent in ast.walk(node)
+        for parent in walk_nodes(node)
         for child in ast.iter_child_nodes(parent)
         if isinstance(child, ast.Name)
         and isinstance(child.ctx, ast.Load)
@@ -730,14 +738,14 @@ class NonePlaceholderDrop(ast.NodeTransformer):
     def __init__(self, fn: ast.FunctionDef) -> None:
         self.changed = False
         self.names: set[str] = set()
-        if any(isinstance(n, (ast.Lambda, ast.Global, ast.Nonlocal)) for n in ast.walk(fn)):
+        if any(isinstance(n, (ast.Lambda, ast.Global, ast.Nonlocal)) for n in walk_nodes(fn)):
             return
         placeholders = none_targets(fn)
         if not placeholders:
             return
         args = fn.args
         params = {a.arg for a in [*args.posonlyargs, *args.args, *args.kwonlyargs, args.vararg, args.kwarg] if a}
-        placeholder_stores = {id(t) for n in ast.walk(fn) if is_none_assign(n) for t in n.targets}
+        placeholder_stores = {id(t) for n in walk_nodes(fn) if is_none_assign(n) for t in n.targets}
         rebound = {n.id for n in name_stores(fn) if id(n) not in placeholder_stores}
         unsafe: set[str] = set()
         uncovered_reads(fn.body, set(), placeholders, unsafe)
@@ -807,7 +815,8 @@ class BroadcastAugAssignSpellOut(RankedRewritePass):
         if rank is None or rank < 2 or value_rank is None or value_rank < 1:
             return node
         newaxis = any(
-            isinstance(n, ast.Subscript) and any(is_newaxis(e) for e in ast.walk(n.slice)) for n in ast.walk(node.value)
+            isinstance(n, ast.Subscript) and any(is_newaxis(e) for e in walk_nodes(n.slice))
+            for n in walk_nodes(node.value)
         )
         if value_rank >= rank and not newaxis:
             return node
@@ -847,7 +856,7 @@ class RollInline(RankedRewritePass):
         pure = isinstance(x, ast.Name) or (
             isinstance(x, ast.Subscript)
             and isinstance(x.value, ast.Name)
-            and all(isinstance(n, ARITHMETIC_NODES + (ast.Slice, ast.Tuple)) for n in ast.walk(x.slice))
+            and all(isinstance(n, ARITHMETIC_NODES + (ast.Slice, ast.Tuple)) for n in walk_nodes(x.slice))
         )
         if axis is None or rank is None or not pure or not 0 <= (axis % rank if rank else -1) < rank:
             return node

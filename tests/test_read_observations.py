@@ -3,7 +3,7 @@
 """A study's observations read the same from its CSV and from its extracted ``.db``.
 
 The reproducibility artifact ships one database per study and every figure reads it through
-:func:`hpcagent_bench.studies.read_observations`, so a row, a number or the row order moving
+:func:`hpcagent_bench.results.studies.read_observations`, so a row, a number or the row order moving
 between the two files would change a published figure without anyone touching the data.
 """
 
@@ -14,8 +14,8 @@ import pandas as pd
 #: The pair is written by the extractor that writes every shipped artifact, not by a hand-rolled
 #: CREATE TABLE here: the two files have to agree on the COLUMN TYPES as well as on the rows, and a
 #: writer invented in the test body agrees with nothing.
-from hpcagent_bench import observations_extract as extract_llr40
-from hpcagent_bench import studies
+from hpcagent_bench.results import extract as extract_llr40
+from hpcagent_bench.results import studies
 
 FIELDS = ("run_root", "job", "row_kind", "setup", "kernel", "speedup", "tokens", "tokens_crashed", "packet")
 ROWS = [

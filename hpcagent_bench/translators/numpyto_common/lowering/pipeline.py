@@ -8,6 +8,7 @@ import re
 from collections.abc import Callable, Sequence
 
 from hpcagent_bench.translators.numpyto_common import dtypes
+from hpcagent_bench.translators.numpyto_common.ast_build import walk_nodes
 from hpcagent_bench.translators.numpyto_common.frontend import (
     collect_inlined_scalar_defs,
     resolve_shape_attr_tokens,
@@ -247,7 +248,7 @@ def signature_float_dtype(kir: KernelIR) -> str:
 def user_functions(ctx: LoweringContext) -> set[str]:
     """Names of the functions the kernel module defines: its emitted helpers and any def left in the tree."""
     names = {h.kernel_name for h in ctx.kir.helpers}
-    names |= {n.name for n in ast.walk(ctx.tree) if isinstance(n, ast.FunctionDef)}
+    names |= {n.name for n in walk_nodes(ctx.tree) if isinstance(n, ast.FunctionDef)}
     return names
 
 
@@ -436,7 +437,7 @@ def lp_seed_dtypes_and_harvest(ctx: LoweringContext) -> None:
     # dtype=np.bool_)`` constructors (ICON cfl_clip / levmask) so a derived
     # ``mask = cfl_clip & owner`` is recognised as boolean (and declared bool /
     # logical) before the whole-array rewriter runs.
-    for s_ in ast.walk(tree):
+    for s_ in walk_nodes(tree):
         if (
             isinstance(s_, ast.Assign)
             and len(s_.targets) == 1
@@ -716,7 +717,7 @@ def fix_real_scalar_dtypes(ctx: LoweringContext) -> None:
     # library call's output is complex by construction, never a narrowing candidate.
     candidates -= {
         call.args[0].id
-        for call in ast.walk(tree)
+        for call in walk_nodes(tree)
         if isinstance(call, ast.Call)
         and isinstance(call.func, ast.Name)
         and call.func.id in (FFT_LIBRARY_MARKER, FFTN_LIBRARY_MARKER)
@@ -727,7 +728,7 @@ def fix_real_scalar_dtypes(ctx: LoweringContext) -> None:
     # a per-element ``x[i] = e`` / ``x[i] += e`` (an array is written elementwise).
     # A candidate is real only if EVERY write is real.
     writes: dict[str, list[ast.expr]] = {}
-    for stmt in ast.walk(tree):
+    for stmt in walk_nodes(tree):
         if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1:
             tgt: ast.expr = stmt.targets[0]
         elif isinstance(stmt, ast.AugAssign):
@@ -792,7 +793,7 @@ def lp_scatter_at(ctx: LoweringContext) -> None:
     # collect them so ``ScatterAtRewriter`` can look through the alias to the
     # wrapped operand exactly as it does for a wrapper call spelled inline.
     wrapper_defs: dict[str, ast.expr] = {}
-    for stmt in ast.walk(ctx.tree):
+    for stmt in walk_nodes(ctx.tree):
         if (
             isinstance(stmt, ast.Assign)
             and len(stmt.targets) == 1
@@ -807,7 +808,7 @@ def lp_scatter_at(ctx: LoweringContext) -> None:
     # ``np.broadcast_to``/``.reshape(-1)`` definition is now dead code the
     # emitter has no lowering for (nothing left reads the wrapped result).
     # Drop it rather than leave an orphaned unsupported call.
-    still_read = {n.id for n in ast.walk(ctx.tree) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
+    still_read = {n.id for n in walk_nodes(ctx.tree) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
     dead = set(wrapper_defs) - still_read
     if dead:
 
@@ -1047,7 +1048,7 @@ def lp_slice_fusion_and_resolve(ctx: LoweringContext) -> None:
     # Ordered: the loop below inserts into ``ctx.local_dtypes``, and that dict's order is what
     # the fp8 prelude and the Fortran declaration block iterate.
     idx_locals: OrderedSet[str] = OrderedSet()
-    for node in ast.walk(tree):
+    for node in walk_nodes(tree):
         if isinstance(node, ast.Subscript):
             sl = node.slice
             elts = sl.elts if isinstance(sl, ast.Tuple) else [sl]
@@ -1286,7 +1287,7 @@ def tag_complex_locals(
     pinned_real = {n for n, lit in dtype_literal.items() if dtype_verdict(lit) == "real"}
     seed.update(dict.fromkeys(pinned_real, "float"))
 
-    stores = [store for store in map(elementwise_store, ast.walk(kir.tree)) if store is not None]
+    stores = [store for store in map(elementwise_store, walk_nodes(kir.tree)) if store is not None]
     for unused in range(FIXPOINT_ROUNDS):
         # The WHOLE mapping, not its size: after the first pass propagation stops adding names and
         # only flips a name real -> complex, so a size comparison calls a fixpoint that has not been

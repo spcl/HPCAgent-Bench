@@ -34,7 +34,7 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes import (
 from hpcagent_bench.translators.numpyto_common.numpy_desugar import expr_rank, reduce_axis_stmts
 from tests.translators.op_oracle import all_ok, run_op
 
-ALL = ("c", "cpp", "fortran", "numba", "pythran", "jax")
+ALL = ("c", "cpp", "fortran", "numba")
 
 
 def call_args(src: str) -> tuple[list[ast.Name], list[ast.keyword]]:
@@ -131,7 +131,6 @@ def test_max_min_nan_propagation_all_backends() -> None:
         {"N": 4},
         shapes={"a": "(N,)", "mx": "(1,)", "mn": "(1,)"},
         backends=ALL,
-        skip_backends={"pythran": "pythran np.max/np.min suppress NaN (runtime limitation)"},
     )
     ok, unused = all_ok(res)
     assert ok, res
@@ -151,10 +150,6 @@ def test_argmax_argmin_first_nan_index_all_backends() -> None:
         shapes={"a": "(N,)", "i": "(1,)", "j": "(1,)"},
         dtypes={"i": "int64", "j": "int64"},
         backends=ALL,
-        skip_backends={
-            "pythran": "pythran np.argmax/argmin ignore NaN (return the extremum "
-            "index, not the first-NaN index numpy gives) -- runtime limitation"
-        },
     )
     ok, unused = all_ok(res)
     assert ok, res

@@ -5,7 +5,7 @@ import copy
 import inspect
 from collections.abc import Callable, Sequence
 
-from hpcagent_bench.translators.numpyto_common.ast_build import const_int, store_
+from hpcagent_bench.translators.numpyto_common.ast_build import const_int, store_, walk_nodes
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.ir import SparseArrayDesc, tag_numpy_origin
 from hpcagent_bench.translators.numpyto_common.lib_nodes.blas import BLAS_LOWERING_FLOAT
@@ -181,10 +181,10 @@ def reduction_misses_target(target: ast.Subscript, loop: ast.For, body: ast.expr
     if not isinstance(target.value, ast.Name):
         return False
     base = target.value.id
-    mentions = [n for n in ast.walk(body) if isinstance(n, ast.Name) and n.id == base]
+    mentions = [n for n in walk_nodes(body) if isinstance(n, ast.Name) and n.id == base]
     if not mentions:
         return True
-    reads = [n for n in ast.walk(body) if isinstance(n, ast.Subscript) and n.value in mentions]
+    reads = [n for n in walk_nodes(body) if isinstance(n, ast.Subscript) and n.value in mentions]
     if len(reads) != len(mentions):
         return False  # a bare-Name (whole-array) mention -- no cell to compare
     axes = index_axes(target)
@@ -302,7 +302,7 @@ def retarget_scalar_accumulator(node: ast.stmt, prelude: Sequence[ast.stmt]) -> 
     addend = accumulation_addend(loop.body[0], scalar)
     if addend is None:
         return None
-    if any(isinstance(n, ast.Name) and n.id == scalar for n in ast.walk(addend)):
+    if any(isinstance(n, ast.Name) and n.id == scalar for n in walk_nodes(addend)):
         return None  # self-referential accumulation -- not a plain reduction
     if not reduction_misses_target(target, loop, addend):
         return None

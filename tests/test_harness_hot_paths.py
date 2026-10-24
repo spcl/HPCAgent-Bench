@@ -113,7 +113,7 @@ def test_a_whole_measurement_runs_in_one_child(monkeypatch: pytest.MonkeyPatch) 
 
     monkeypatch.setattr(native_call, "run_forked", counting)
     kernel = _python_kernel()
-    _, samples, _, _, _timed = native_call._call_isolated(
+    _, samples, _, _, _timed = native_call.call_isolated(
         kernel,
         _BINDING,
         {"x": np.zeros(4)},
@@ -140,7 +140,7 @@ def test_a_warmup_rep_skips_the_output_marshalling(monkeypatch: pytest.MonkeyPat
         return real(*args, **kwargs)
 
     monkeypatch.setattr(grading, "bind_kernel_outputs", counting)
-    _, samples, _, _ = native_call._call_python(
+    _, samples, _, _ = native_call.call_python(
         _python_kernel(), ("kern", ("x",), ("y",)), {"x": np.zeros(4)}, reps=3, warmup=2
     )
     assert len(samples) == 3
@@ -153,7 +153,7 @@ def test_the_warmup_reps_are_discarded_not_returned(monkeypatch: pytest.MonkeyPa
     toward its cold first-touch time."""
     kernel = _python_kernel()
     for warmup in (0, 1, 5):
-        _, samples, _, _, _timed = native_call._call_isolated(
+        _, samples, _, _, _timed = native_call.call_isolated(
             kernel,
             _BINDING,
             {"x": np.zeros(4)},
@@ -173,7 +173,7 @@ def test_every_rep_sees_the_reference_inputs(tmp_path: pathlib.Path) -> None:
     the same one."""
     kernel = tmp_path / "accumulate.py"
     kernel.write_text("def kern(x):\n    x += 1.0\n    return x\n")
-    _, samples, _, _, _timed = native_call._call_isolated(
+    _, samples, _, _, _timed = native_call.call_isolated(
         str(kernel),
         _BINDING,
         {"x": np.zeros(4)},
@@ -184,7 +184,7 @@ def test_every_rep_sees_the_reference_inputs(tmp_path: pathlib.Path) -> None:
         reps=5,
         warmup=0,
     )
-    outputs, _, _, _, _timed = native_call._call_isolated(
+    outputs, _, _, _, _timed = native_call.call_isolated(
         str(kernel),
         _BINDING,
         {"x": np.zeros(4)},
@@ -212,7 +212,7 @@ def test_the_timeout_reaches_the_child_as_a_per_rep_bound(monkeypatch: pytest.Mo
 
     monkeypatch.setattr(native_call, "run_forked", capture)
     kernel = _python_kernel()
-    native_call._call_isolated(
+    native_call.call_isolated(
         kernel,
         _BINDING,
         {"x": np.zeros(4)},
@@ -235,7 +235,7 @@ def test_one_hung_rep_dies_at_the_per_rep_bound_not_the_batch_budget(tmp_path: p
     kernel.write_text("def kern(x):\n    while True:\n        pass\n")
     start = time.perf_counter()
     with pytest.raises(RuntimeError, match="single rep"):
-        native_call._call_isolated(
+        native_call.call_isolated(
             str(kernel),
             _BINDING,
             {"x": np.zeros(4)},
@@ -256,7 +256,7 @@ def test_a_slow_but_finite_run_is_not_killed_by_the_per_rep_guard(tmp_path: path
     survive, or every slow kernel is a false timeout."""
     kernel = tmp_path / "slow.py"
     kernel.write_text("import time\ndef kern(x):\n    time.sleep(0.05)\n    return x + 1.0\n")
-    _, samples, _, _, _timed = native_call._call_isolated(
+    _, samples, _, _, _timed = native_call.call_isolated(
         str(kernel),
         _BINDING,
         {"x": np.zeros(4)},
@@ -278,7 +278,7 @@ def test_the_guillotine_bounds_the_kernel_not_its_argument_copies(tmp_path: path
     arrays must finish all its reps under a guillotine far below its copy time."""
     kernel = tmp_path / "copy_only.py"
     kernel.write_text("def kern(x):\n    return x\n")
-    _, samples, _, _, timed = native_call._call_isolated(
+    _, samples, _, _, timed = native_call.call_isolated(
         str(kernel),
         _BINDING,
         {"x": np.zeros(40_000_000)},
@@ -313,7 +313,7 @@ def test_the_cold_first_call_gets_its_own_alarm(tmp_path: pathlib.Path) -> None:
     kernel = tmp_path / "cold.py"
     kernel.write_text(SLOW_FIRST_KERNEL)
     call = functools.partial(
-        native_call._call_isolated,
+        native_call.call_isolated,
         str(kernel),
         _BINDING,
         {"x": np.zeros(4)},
@@ -344,7 +344,7 @@ def cold_call(tmp_path: pathlib.Path, cold_rep_s: float) -> list[int]:
     """The samples of 3 timed reps after 1 warmup of :data:`COLD_KERNEL` under a ``REP_S`` per-rep alarm."""
     kernel = tmp_path / "cold.py"
     kernel.write_text(COLD_KERNEL.format(cold=COLD_S))
-    return native_call._call_isolated(
+    return native_call.call_isolated(
         str(kernel),
         _BINDING,
         {"x": np.zeros(4)},
@@ -382,7 +382,7 @@ def test_a_slow_input_draw_is_not_charged_to_the_rep_it_feeds(tmp_path: pathlib.
     kernel.write_text("def kern(x):\n    return x + 1.0\n")
     with native_call.rep_draw_scope():
         native_call.REP_DRAW_S.set(0.6)
-        measured = native_call._call_isolated(
+        measured = native_call.call_isolated(
             str(kernel),
             _BINDING,
             {"x": np.zeros(4)},

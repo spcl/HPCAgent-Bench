@@ -1,6 +1,13 @@
 # Plugins: extending the benchmark without editing it
 
-A plugin brings agent tools, judge routes, skill pages, packets and methods from a folder of its own. The plugins
+Every plugin adds optimizers, of two kinds:
+
+- a **method** an LLM agent runs: a packet with its skill pages, method text, agent tools and judge routes
+  (`plugins/autokernel`, the NestForge example below);
+- a **flavor** that runs without an LLM: a `FlavorOptimizer` run over shipped columns, each pairing a framework
+  column run as `hpcagent-bench agent <column>` ([Flavors](#flavors); Alloy ships one).
+
+A plugin lives in a folder of its own. The plugins
 shipped with the repository live in `plugins/`; a plugin of your own can be dropped in beside them, kept anywhere
 else and named in `HPCAGENT_BENCH_USER_PLUGIN_DIRS`, or shipped inside an installed package.
 
@@ -8,12 +15,13 @@ else and named in `HPCAGENT_BENCH_USER_PLUGIN_DIRS`, or shipped inside an instal
 
 ```
 my_plugin/
-  plugin.toml              # the manifest: name, description, packets
+  plugin.toml              # the manifest: name, description, packets, flavors
   __init__.py              # optional; the folder is imported as a package either way
   tools/<tool>.py          # agent-side @tool modules
   routes/<route>.py        # judge-side @route modules
   skills/<page>/SKILL.md   # skill pages; a packet: frontmatter block makes one a packet
   methods/<method>/method.md   # a method's prompt text (the prompt's {{HINTS}})
+  agents/<name>.md         # subagents a packet offers (Claude Code subagent files)
 ```
 
 The folder is imported as the package `hpcagent_bench_plugins.<name>`, so a route imports a helper next to it as
@@ -90,6 +98,44 @@ def my_tool(judge: Judge, request: RouteRequest) -> None:
 The router relays every request it does not answer itself. A `POST` reaches the handler only from an episode the
 run started, carrying that episode's token, as on `/score`; the judge has already checked the rank.
 
+## Subagents
+
+A packet offers subagents by name (`agents = ["reviewer"]` in its block); each is a plugin's `agents/<name>.md`, a
+Claude Code subagent file:
+
+```markdown
+---
+name: reviewer
+description: checks one candidate kernel for races and out-of-bounds accesses
+tools: bash, score
+---
+You review one kernel. ...
+```
+
+The driver stages the named files into the worker's `~/.claude/agents/`. The claude CLI runs them itself; the
+`anthropic` and `openai` harnesses offer a `task` tool (`subagent_type`, `prompt`) that runs one as a nested
+conversation with the file's body as its system prompt and only the `tools` it lists (all of its parent's when it
+lists none; never `task` itself). A subagent's calls go to the episode's `usage.jsonl`, so its tokens count against
+the same budget; its transcript is `<harness>.subagent-<n>-<name>.jsonl`. Other harnesses refuse a packet with
+subagents.
+
+## Flavors
+
+A `[flavors.<key>]` block adds one column `<extended>_<key>` per shipped column it `extends`:
+
+```toml
+[flavors.alloy_profile]
+name = "Alloy profile"                    # printed after the extended column's name on a figure
+full_name = "Alloy (profiled)"            # printed by a table
+optimizer = "alloy.hb_plugin.tuners:AlloyProfileOptimizer"
+extends = ["dace_cpu_canon", "dace_cpu_parallel", "dace_cpu_autoopt"]
+```
+
+`optimizer` names a subclass of `hpcagent_bench.harness.optimizers.FlavorOptimizer`. It implements
+`tune(task, pipeline)`: optimize what the extended column's pipeline (`canon_cpu`, ...) produces and return
+`self.deliver(task, code, link)`, the library the judge grades. A folder plugin's module imports as
+`hpcagent_bench_plugins.<name>.<module>`. The columns register after every shipped one.
+
 ## Where plugins come from
 
 | Source | How |
@@ -108,4 +154,4 @@ finds.
 [NestForge](https://github.com/spcl/NestForge) ships as a plugin in its own repository (`plugin/nestforge`): one
 agent-side module registers a tool per optimization phase, each a thin `POST /nestforge/<tool>`, and one judge route
 serves each episode's kernel from a session process of its own, answering with whole-program, offloading and
-per-kernel performance. Tools of a phase it does not serve yet answer 501.
+per-kernel performance. Its packet lists only the tools the session serves; a later phase's tool answers 501.

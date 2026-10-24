@@ -5,7 +5,7 @@ import re
 from collections.abc import Callable
 from functools import lru_cache
 
-from hpcagent_bench.translators.numpyto_common.ast_build import const_int
+from hpcagent_bench.translators.numpyto_common.ast_build import const_int, walk_nodes
 from hpcagent_bench.translators.numpyto_common.emit_helpers.tokens import expand_definitions
 
 __all__ = [
@@ -59,7 +59,7 @@ def binding_counts(fn: ast.FunctionDef) -> dict[str, int]:
             for e in tgt.elts:
                 count(e, inc)
 
-    for stmt in ast.walk(fn):
+    for stmt in walk_nodes(fn):
         if isinstance(stmt, ast.AugAssign):
             count(stmt.target, 2)
         elif isinstance(stmt, ast.Assign):
@@ -92,7 +92,7 @@ def collect_inlined_scalar_defs(fn: ast.FunctionDef, prefix: str | None = "__inl
     # A rebound name is a runtime value (a step counter), not a fixed dimension.
     rebind_counts = binding_counts(fn)
     defs: dict[str, str] = {}
-    for stmt in ast.walk(fn):
+    for stmt in walk_nodes(fn):
         if not (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)):
             continue
         name = stmt.targets[0].id

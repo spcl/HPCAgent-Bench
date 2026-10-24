@@ -233,13 +233,13 @@ def test_guillotine_is_off_without_a_baseline_or_a_factor(pinned_guillotine: Non
     assert guillotine_seconds(2_000_000_000, 300.0) == 0.0
 
 
-#: All a stubbed ``_call_isolated`` reads off its binding before ``run_forked``: the kernel name
+#: All a stubbed ``call_isolated`` reads off its binding before ``run_forked``: the kernel name
 #: that prefixes the call's spill directory.
 STUB_BINDING = types.SimpleNamespace(kernel="gemm")
 
 
 def _captured_batch_timeout(monkeypatch: pytest.MonkeyPatch, **kwargs: object) -> float:
-    """The wall-clock budget _call_isolated hands run_forked, with the fork itself stubbed out."""
+    """The wall-clock budget call_isolated hands run_forked, with the fork itself stubbed out."""
     seen = {}
 
     def fake_run_forked(*_a: object, **kw: object) -> None:
@@ -248,7 +248,7 @@ def _captured_batch_timeout(monkeypatch: pytest.MonkeyPatch, **kwargs: object) -
 
     monkeypatch.setattr(native_call, "run_forked", fake_run_forked)
     with pytest.raises(AssertionError):
-        native_call._call_isolated(None, STUB_BINDING, {}, Language.C, device=False, timeout=300.0, **kwargs)
+        native_call.call_isolated(None, STUB_BINDING, {}, Language.C, device=False, timeout=300.0, **kwargs)
     return seen["timeout"]
 
 
@@ -264,14 +264,14 @@ def test_guillotine_bounds_the_batch_but_exempts_followups(monkeypatch: pytest.M
 
 
 def _timeout_kill(monkeypatch: pytest.MonkeyPatch, **kwargs: object) -> native_call.NativeCallTimeout:
-    """Raise whatever ``_call_isolated`` raises when run_forked reports a wall-clock kill."""
+    """Raise whatever ``call_isolated`` raises when run_forked reports a wall-clock kill."""
 
     def fake_run_forked(*_a: object, **_kw: object) -> types.SimpleNamespace:
         return types.SimpleNamespace(ok=False, signal="TIMEOUT", exit_code=None, error="", result=None)
 
     monkeypatch.setattr(native_call, "run_forked", fake_run_forked)
     with pytest.raises(native_call.NativeCallTimeout) as caught:
-        native_call._call_isolated(None, STUB_BINDING, {}, Language.C, device=False, timeout=300.0, **kwargs)
+        native_call.call_isolated(None, STUB_BINDING, {}, Language.C, device=False, timeout=300.0, **kwargs)
     return caught.value
 
 
@@ -294,13 +294,13 @@ def test_a_batch_timeout_after_the_timed_section_is_not_a_guillotine(monkeypatch
     a spill: the candidate was not slower than its baseline, so it must not be credited as too slow."""
 
     def fake_run_forked(*args: object, **_kw: object) -> types.SimpleNamespace:
-        spill_root = args[8]  # _native_call_worker's ninth argument
+        spill_root = args[8]  # native_call_worker's ninth argument
         pathlib.Path(str(spill_root), native_call.TIMED_DONE_MARKER).touch()
         return types.SimpleNamespace(ok=False, signal="TIMEOUT", exit_code=None, error="", result=None)
 
     monkeypatch.setattr(native_call, "run_forked", fake_run_forked)
     with pytest.raises(native_call.NativeCallTimeout) as caught:
-        native_call._call_isolated(
+        native_call.call_isolated(
             None, STUB_BINDING, {}, Language.C, device=False, timeout=300.0, reps=20, guillotine_s=10.0
         )
     assert not isinstance(caught.value, native_call.NativeCallTooSlow)
@@ -337,10 +337,10 @@ SLOW_FOLLOWUP_SRC = "import time\ndef kern(x):\n    if x[0] > 5:\n        time.s
 
 
 def _slow_call(tmp_path: pathlib.Path, source: str, *, timeout: float, guillotine_s: float, followups: int = 0) -> None:
-    """Grade ``source`` through the real forked child, as ``_call_isolated`` runs every submission."""
+    """Grade ``source`` through the real forked child, as ``call_isolated`` runs every submission."""
     kernel = tmp_path / "kern.py"
     kernel.write_text(source)
-    native_call._call_isolated(
+    native_call.call_isolated(
         str(kernel),
         STUB_BINDING,
         {"x": np.full(4, 1.0)},
@@ -378,7 +378,7 @@ def test_a_slow_first_call_is_absorbed_by_the_warmup_rep(tmp_path: pathlib.Path)
     guillotine with 6 timed reps."""
     kernel = tmp_path / "kern.py"
     kernel.write_text(SLOW_FIRST_SRC)
-    outputs, samples, _probes, _extras, _timed = native_call._call_isolated(
+    outputs, samples, _probes, _extras, _timed = native_call.call_isolated(
         str(kernel),
         STUB_BINDING,
         {"x": np.full(4, 1.0)},

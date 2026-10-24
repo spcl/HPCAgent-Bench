@@ -132,7 +132,7 @@ def look(kind: str, name: str) -> Look:
     without a slot. An unregistered name takes a stable CRC slot (never ``hash()``, which PYTHONHASHSEED salts)."""
     entries = KINDS.get(kind)
     key = canonical(kind, name)
-    if entries is not None and key in entries.keys():
+    if entries is not None and key in entries.orders:
         index = entries.slot(key)
         return slot_look(index) if index is not None else Look(control_color(), CONTROL_MARKER)
     return slot_look(zlib.crc32(str(name).encode()) % (len(hues()) * len(markers())))
@@ -147,7 +147,7 @@ def slot_color(kind: str, name: str) -> str:
 def ordered_color(kind: str, name: str) -> str:
     """``name``'s tab20 slot within one entity ``kind``, warning when the registry does not name it."""
     entries = KINDS.get(kind)
-    if entries is None or canonical(kind, name) not in entries.keys():
+    if entries is None or canonical(kind, name) not in entries.orders:
         LOG.warning("palette: %s %r is not registered; using a hash colour", kind, name)
     return slot_color(kind, name)
 

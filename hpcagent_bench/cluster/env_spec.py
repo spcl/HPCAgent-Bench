@@ -64,6 +64,9 @@ class Experiment(BaseModel):
     extends: ExperimentName | None = None
     #: The requests preset (``layers/requests-<preset>.env``); None inherits the parent's, else ``default``.
     requests: RequestsPreset | None = None
+    #: ``cpf.array_facts`` (the prompt states the kernel's array facts and dace gets them); None inherits the
+    #: parent's, else off.
+    array_facts: bool | None = None
     env: Env = {}
     models: dict[Model, Env] = {}
 
@@ -132,6 +135,20 @@ def requests_env(lineage: list[Experiment]) -> dict[str, str]:
     return assignments(LAYERS / f"requests-{presets[-1] if presets else DEFAULT_REQUESTS}.env")
 
 
+#: The environment key :attr:`Experiment.array_facts` renders.
+ARRAY_FACTS_ENV = "HPCAGENT_BENCH_CPF_ARRAY_FACTS"
+
+
+def array_facts_env(lineage: list[Experiment]) -> dict[str, str]:
+    """``cpf.array_facts`` as the last experiment of ``lineage`` naming it sets it (nothing when none does: config's
+    off); an experiment ``env`` setting it directly is refused."""
+    for experiment in lineage:
+        if ARRAY_FACTS_ENV in experiment.env:
+            raise SystemExit(f"env_spec: {ARRAY_FACTS_ENV} belongs in setups.yaml `array_facts:`")
+    named = [experiment.array_facts for experiment in lineage if experiment.array_facts is not None]
+    return {ARRAY_FACTS_ENV: "true" if named[-1] else "false"} if named else {}
+
+
 def tuner_names() -> frozenset[str]:
     """Every non-LLM tuner a setup can name in place of a model (``hpcagent-bench agent <name>``)."""
     # Deferred: the optimizers import the judge's machinery, which rendering a model setup never needs.
@@ -157,6 +174,7 @@ def render_experiment(name: str, model: str, spec: dict[str, Experiment]) -> dic
         env.update(assignments(layer))
         if layer == COMMON.resolve():
             env.update(requests_env(lineage))
+            env.update(array_facts_env(lineage))
             for experiment in lineage:
                 env.update((key, str(value)) for key, value in experiment.env.items())
     if member is None:
@@ -174,6 +192,7 @@ def render_track(name: str, spec: dict[str, Experiment]) -> dict[str, str]:
     env = assignments(COMMON)
     lineage = experiment_chain(name, spec)
     env.update(requests_env(lineage))
+    env.update(array_facts_env(lineage))
     for experiment in lineage:
         env.update((key, str(value)) for key, value in experiment.env.items())
     return env

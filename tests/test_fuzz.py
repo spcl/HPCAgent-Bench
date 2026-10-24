@@ -147,7 +147,7 @@ def test_size_cap_keeps_distinct_dim_constraint_satisfiable(monkeypatch: pytest.
     out = fuzz.sample_params(_BIG, 0)  # sanity: uncapped path still resolves
     assert out["NI"] > 0
     # under the cap, a resample against a != constraint must find a draw (not exhaust + ValueError).
-    resolved = fuzz._resolve_against(
+    resolved = fuzz.resolve_against(
         _BIG, {}, seed=1, distribution=SizeDistribution.LOG_UNIFORM, constraints=["NI != NJ"], size_cap=256
     )
     assert resolved["NI"] != resolved["NJ"]
@@ -302,9 +302,9 @@ def test_large_shapes_keep_every_first_draw_that_was_already_distinct() -> None:
     big_spec = fuzz.respec_ranges(
         _BIG, fuzz.resolve_ranges(_BIG), lambda lo, hi: [int(lo) + (int(hi) - int(lo)) // 2, int(hi)]
     )
-    seeds = fuzz._public_large_seeds(4)
+    seeds = fuzz.public_large_seeds(4)
     first = [
-        fuzz._resolve_against(big_spec, {}, sd, SizeDistribution.UNIFORM, None, size_class=size_class)
+        fuzz.resolve_against(big_spec, {}, sd, SizeDistribution.UNIFORM, None, size_class=size_class)
         for sd, size_class in zip(seeds, fuzz.SIZE_CLASSES, strict=True)
     ]
     assert len({tuple(sorted(s.items())) for s in first}) == 4  # premise: no collision here

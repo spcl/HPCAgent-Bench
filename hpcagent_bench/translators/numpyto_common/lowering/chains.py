@@ -5,7 +5,7 @@ import copy
 import dataclasses
 from collections.abc import Mapping, Sequence
 
-from hpcagent_bench.translators.numpyto_common.ast_build import set_field
+from hpcagent_bench.translators.numpyto_common.ast_build import set_field, walk_nodes
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of
 from hpcagent_bench.translators.numpyto_common.lowering.indexing import (
     compose_kept_axis,
@@ -82,7 +82,7 @@ def result_axes(entries: Sequence[IndexEntry]) -> list[AxisLabel] | None:
 def index_rank(elt: ast.expr, shape_table: Mapping[str, Sequence[str]]) -> int | None:
     """Rank of what a subscript entry selects with: 0 for one position, ``k`` for an index array of
     rank ``k``, ``None`` when a sized array feeds the entry but its result cannot be sized."""
-    if not any(isinstance(n, ast.Name) and shape_table.get(n.id) for n in ast.walk(elt)):
+    if not any(isinstance(n, ast.Name) and shape_table.get(n.id) for n in walk_nodes(elt)):
         return 0
     extent = iter_extent_of(elt, shape_table)
     if extent:
@@ -104,7 +104,7 @@ def reads_a_mask(elt: ast.expr, bool_names: frozenset[str] | set[str]) -> bool:
     """Whether an index entry may be a boolean mask, which selects by value rather than position."""
     return any(
         isinstance(n, (ast.Compare, ast.BoolOp)) or (isinstance(n, ast.Name) and n.id in bool_names)
-        for n in ast.walk(elt)
+        for n in walk_nodes(elt)
     )
 
 

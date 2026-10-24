@@ -4,9 +4,11 @@
 named ``<column>[_<flavor>]``. Registration order is each column's slot (colour and marker): a new column is added
 last (``docs/extending/registry.md``)."""
 
+import dataclasses
+
 from hpcagent_bench.languages import gpu_backend
 from hpcagent_bench.precision import Precision
-from hpcagent_bench.vocabulary import FRAMEWORKS, TUNERS, Arch, Column, DaceStage, Transform, TunerEntry
+from hpcagent_bench.vocabulary import FRAMEWORKS, Arch, Column, DaceStage, Transform
 
 __all__ = [
     "ALL_PRECISIONS",
@@ -15,10 +17,12 @@ __all__ = [
     "FRAMEWORKS",
     "IEEE_PRECISIONS",
     "add_dace",
+    "add_flavor",
     "dace_column",
+    "flavored",
 ]
 
-#: The IEEE pair every non-ml_dtypes-aware framework can execute (C/C++/Fortran, Numba, Pythran).
+#: The IEEE pair every non-ml_dtypes-aware framework can execute (C/C++/Fortran, Numba).
 IEEE_PRECISIONS = frozenset({Precision.FP32, Precision.FP64})
 
 #: The full precision matrix (IEEE + fp16/bf16/fp8), for frameworks carrying low precision end to end.
@@ -34,26 +38,17 @@ ALL_PRECISIONS = frozenset(
 )
 
 
-#: A DaCe stage -> its label alone, its label beside a tuner, and its full-name word.
-DACE_STAGES: dict[DaceStage, tuple[str, str, str]] = {
-    DaceStage.CANON: ("canonicalized", "canon", "canonicalize"),
-    DaceStage.PARALLEL: ("parallel", "parallel", "parallel"),
-    DaceStage.AUTOOPT: ("auto-opt", "auto-opt", "auto_optimize"),
+#: A DaCe stage -> its label and its full-name word.
+DACE_STAGES: dict[DaceStage, tuple[str, str]] = {
+    DaceStage.CANON: ("canonicalized", "canonicalize"),
+    DaceStage.PARALLEL: ("parallel", "parallel"),
+    DaceStage.AUTOOPT: ("auto-opt", "auto_optimize"),
 }
-TUNERS.add(
-    "alloy_profile",
-    TunerEntry("Alloy profile", "Alloy (profiled)", "hpcagent_bench.harness.optimizers:AlloyProfileOptimizer"),
-)
-TUNERS.add(
-    "alloy_heuristic",
-    TunerEntry("Alloy heuristic", "Alloy (heuristic)", "hpcagent_bench.harness.optimizers:AlloyHeuristicOptimizer"),
-)
 DACE_PRECISIONS = frozenset({Precision.FP64, Precision.FP32, Precision.FP16})
 
 
-def dace_column(arch: Arch, stage: DaceStage | None = None, tuner: str | None = None) -> Column:
-    """The DaCe family's entry on ``arch``: the grouping DB column (no ``stage``), a pipeline ``stage``, or a stage
-    followed by an autotuning ``tuner`` (run as an Agent)."""
+def dace_column(arch: Arch, stage: DaceStage | None = None) -> Column:
+    """The DaCe family's entry on ``arch``: the grouping DB column (no ``stage``) or a pipeline ``stage``."""
     device = arch.text.upper()
     if stage is None:
         return Column(
@@ -66,34 +61,50 @@ def dace_column(arch: Arch, stage: DaceStage | None = None, tuner: str | None = 
             sweep_deterministic=False,
             precisions=DACE_PRECISIONS,
         )
-    alone, beside, word = DACE_STAGES[stage]
-    display, full_name, flavor = f"DaCe ({device}, {alone})", f"DaCe {device} {word}", stage.text
-    if tuner is not None:
-        tuned = TUNERS[tuner]
-        display = f"DaCe ({device}, {beside}) + {tuned.display}"
-        full_name = f"DaCe {device} {beside} + {tuned.full_name}"
-        flavor = f"{stage.text}_{tuner}"
+    label, word = DACE_STAGES[stage]
     return Column(
-        display=display,
-        adapter="hpcagent_bench.frameworks.dace_framework:DaceFramework" if tuner is None else TUNERS[tuner].adapter,
+        display=f"DaCe ({device}, {label})",
+        adapter="hpcagent_bench.frameworks.dace_framework:DaceFramework",
         base="dace",
-        full_name=full_name,
+        full_name=f"DaCe {device} {word}",
         postfix="dace",
         arch=arch,
-        sweep_deterministic=tuner is None,
-        precisions=DACE_PRECISIONS if tuner is None else IEEE_PRECISIONS,
+        sweep_deterministic=True,
+        precisions=DACE_PRECISIONS,
         pipelines=(f"{stage.text}_{arch.text}",),
         stage=stage,
-        tuner=tuner,
         column=f"dace_{arch.text}",
-        flavor=flavor,
+        flavor=stage.text,
     )
 
 
-def add_dace(arch: Arch, stage: DaceStage | None = None, tuner: str | None = None) -> None:
-    """Register the DaCe entry :func:`dace_column` builds, under ``dace_<arch>[_<stage>[_<tuner>]]``."""
-    key = "_".join(part for part in (arch.text, stage.text if stage else None, tuner) if part is not None)
-    FRAMEWORKS.add(f"dace_{key}", dace_column(arch, stage, tuner))
+def add_dace(arch: Arch, stage: DaceStage | None = None) -> None:
+    """Register the DaCe entry :func:`dace_column` builds, under ``dace_<arch>[_<stage>]``."""
+    FRAMEWORKS.add("_".join(("dace", arch.text, *((stage.text,) if stage else ()))), dace_column(arch, stage))
+
+
+def flavored(base_key: str, key: str, display: str, full_name: str, optimizer: str) -> Column:
+    """``base_key``'s column run by the optimizer ``optimizer`` (``package.module:Class``): the flavor
+    ``<base_key>_<key>`` a plugin's ``[flavors.<key>]`` adds."""
+    base = FRAMEWORKS[base_key]
+    return dataclasses.replace(
+        base,
+        display=f"{base.display} + {display}",
+        adapter=optimizer,
+        full_name=f"{base.full_name} + {full_name}",
+        sweep_deterministic=False,
+        precisions=base.precisions & IEEE_PRECISIONS,
+        optimizer=True,
+        column=base.column or base_key,
+        flavor=f"{base.flavor}_{key}" if base.flavor else key,
+    )
+
+
+def add_flavor(base_key: str, key: str, display: str, full_name: str, optimizer: str) -> str:
+    """Register :func:`flavored` under ``<base_key>_<key>``; returns that name."""
+    name = f"{base_key}_{key}"
+    FRAMEWORKS.add(name, flavored(base_key, key, display, full_name, optimizer))
+    return name
 
 
 FRAMEWORKS.add(
@@ -181,21 +192,6 @@ FRAMEWORKS.add(
 )
 
 
-FRAMEWORKS.add(
-    "pythran",
-    Column(
-        display="Pythran",
-        adapter="hpcagent_bench.frameworks.pythran_framework:PythranFramework",
-        base="pythran",
-        full_name="Pythran",
-        postfix="pythran",
-        arch=Arch.CPU,
-        sweep_deterministic=False,
-        precisions=IEEE_PRECISIONS,
-    ),
-)
-
-
 # gcc's auto-parallelizer, the GCC half of the autopar axis.
 FRAMEWORKS.add(
     "cc_autopar",
@@ -276,6 +272,7 @@ FRAMEWORKS.add(
 )
 
 
+# Hand-written *_jax.py baselines only, like triton: nothing generates a JAX kernel.
 FRAMEWORKS.add(
     "jax",
     Column(
@@ -533,14 +530,6 @@ FRAMEWORKS.add(
 
 add_dace(Arch.CPU, DaceStage.PARALLEL)
 add_dace(Arch.GPU, DaceStage.PARALLEL)
-add_dace(Arch.CPU, DaceStage.CANON, "alloy_profile")
-add_dace(Arch.CPU, DaceStage.CANON, "alloy_heuristic")
-add_dace(Arch.CPU, DaceStage.PARALLEL, "alloy_profile")
-add_dace(Arch.CPU, DaceStage.PARALLEL, "alloy_heuristic")
-add_dace(Arch.GPU, DaceStage.CANON, "alloy_profile")
-add_dace(Arch.GPU, DaceStage.CANON, "alloy_heuristic")
-add_dace(Arch.GPU, DaceStage.PARALLEL, "alloy_profile")
-add_dace(Arch.GPU, DaceStage.PARALLEL, "alloy_heuristic")
 
 
 # Polygeist lowers the C target to affine MLIR, Polymer reschedules it with Pluto, MLIR parallelizes it to OpenMP.
@@ -582,7 +571,29 @@ FRAMEWORKS.add(
 )
 
 
-add_dace(Arch.CPU, DaceStage.AUTOOPT, "alloy_profile")
-add_dace(Arch.CPU, DaceStage.AUTOOPT, "alloy_heuristic")
-add_dace(Arch.GPU, DaceStage.AUTOOPT, "alloy_profile")
-add_dace(Arch.GPU, DaceStage.AUTOOPT, "alloy_heuristic")
+# numba with LLVM's fast-math flags on every njit function of the reference (reassociation, no NaN/Inf guarantees).
+FRAMEWORKS.add(
+    "numba_fastmath",
+    Column(
+        display="Numba (fastmath)",
+        adapter="hpcagent_bench.frameworks.numba_framework:NumbaFramework",
+        base="numba",
+        full_name="Numba (fastmath)",
+        postfix="numba",
+        arch=Arch.CPU,
+        sweep_deterministic=False,
+        precisions=IEEE_PRECISIONS,
+        column="numba",
+        flavor="fastmath",
+    ),
+)
+
+
+def register_plugin_flavors() -> None:
+    """The plugins' optimizer flavors, after every shipped column (:func:`plugins.register_flavors`)."""
+    from hpcagent_bench import plugins  # noqa: PLC0415 -- plugins.register_flavors imports add_flavor from here
+
+    plugins.register_flavors()
+
+
+register_plugin_flavors()

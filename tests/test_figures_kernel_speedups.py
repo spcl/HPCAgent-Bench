@@ -187,6 +187,25 @@ def test_canon_row_ignores_kernels_outside_the_tag(llr40_canon: pd.DataFrame) ->
     assert set(row.ratios) == {"k1"}
 
 
+def test_a_best_of_denominator_races_gcc_and_numba_per_kernel() -> None:
+    """The figure says "Best of GCC and Numba", so a compiler column divides the faster of the two. It divided
+    GCC's autopar time alone: examinimd's fastmath Numba read 5271x over a 2911 ms GCC run that Numba itself
+    beat at 0.50 ms."""
+    frame = canon_table(
+        [
+            ("cc_autopar", "k1", 2911.0),
+            ("numba", "k1", 0.50),
+            ("numba_fastmath", "k1", 0.55),
+            ("cc_autopar", "k2", 10.0),
+            ("numba", "k2", 40.0),
+            ("numba_fastmath", "k2", 5.0),
+        ]
+    )
+    row = kernel_speedups.canon_kernel_row(frame, "numba_fastmath", ("k1", "k2"), baseline="best-of(numba,c)")
+    assert row.ratios == pytest.approx({"k1": 0.50 / 0.55, "k2": 10.0 / 5.0})
+    assert row.numerator_ms == pytest.approx({"k1": 0.50, "k2": 10.0})
+
+
 def test_two_setups_of_one_model_share_colour_and_differ_in_shape(llr40_observations: pd.DataFrame) -> None:
     """Channel rule of every model x packet figure: COLOUR is the model, SHAPE is the packet."""
     cpf_tool = kernel_speedups.agent_kernel_row(

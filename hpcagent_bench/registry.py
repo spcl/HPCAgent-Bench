@@ -29,7 +29,7 @@ class Kind[Entry]:
             raise RegistryError(f"{self.name}: {key!r} is registered twice")
         names = tuple(aliases)
         for alias in names:
-            if alias in self.entries or alias in self.aliases or alias == key or names.count(alias) > 1:
+            if alias in self.entries or self.aliases.get(alias, key) != key or alias == key or names.count(alias) > 1:
                 raise RegistryError(f"{self.name} {key!r}: alias {alias!r} is already a name or an alias")
         self.entries[key] = entry
         self.orders[key] = sum(order is not None for order in self.orders.values()) if slotted else None

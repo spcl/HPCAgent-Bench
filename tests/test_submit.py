@@ -33,7 +33,6 @@ INPUTS = (
             "submit.sh",
             "submit_common.sh",
             "make_problems.py",
-            "packet_env.py",
             "setup_nodes.sh",
             "pin_env_kv.sh",
             "record_identity.sh",
@@ -73,7 +72,8 @@ KNOBS = frozenset(
             "OFFLOAD_RESIDENCY",
             "EXPERIMENT",
         ],
-        *["RECORD_STUDY", "STAMP", "REPEAT", "AGENTS_PER_NODE", "AGENT_NODES", "JUDGE_NODES", "CPF_VIEW"],
+        *["RECORD_STUDY", "STAMP", "REPEAT", "AGENTS_PER_NODE", "AGENT_NODES", "JUDGE_NODES"],
+        *["PREPARE", "RENDERS", "EDF_PATH"],
         *["BUDGET_SCALE", "TOKEN_SCALE", "TIME_SCALE", "DEADLINE", "EXTRA_ENV_KV", "SETUP_SUFFIX", "SUBMIT"],
         *[
             "DEPEND_ON",
@@ -128,7 +128,8 @@ def submit(root: pathlib.Path, *flags: str, **knobs: str | None) -> subprocess.C
         SCRATCH=str(root / "scratch"),
         STAMP="20260926",
     )
-    env.update({"MODELS": "qwen38", "TAG": "llr40", "EXPERIMENT": "wave", **JOB_ENV, **knobs})
+    # PREPARE=0 unless a test names it: the wave prepare job has a test of its own (test_submit_waves.py).
+    env.update({"MODELS": "qwen38", "TAG": "llr40", "EXPERIMENT": "wave", "PREPARE": "0", **JOB_ENV, **knobs})
     env = {key: value for key, value in env.items() if value is not None}
     return subprocess.run(
         ["bash", str(root / "hpcagent_bench" / "cluster" / "submit.sh"), *flags],
@@ -470,12 +471,12 @@ if __name__ == "__main__":
     test_an_mi200_setup_needs_a_study_naming_mi200(scratch())
 
 
-def test_each_cpf_setup_reads_the_view_of_its_own_device(tmp_path: pathlib.Path) -> None:
-    """One call staging a cpu and a gpu CPF setup: the default view is each setup's own device's. A default kept
-    from the first setup pointed every later hip setup at the cpu view, which its job refuses at start."""
+def test_every_cpf_setup_reads_the_one_cpf_cache(tmp_path: pathlib.Path) -> None:
+    """One call staging a cpu and a gpu CPF setup: both read the run's CPF cache, spelled through its variable so the
+    .env names no scratch path; the form a setup is served follows from its own device."""
     tree(tmp_path)
     done = submit(tmp_path, KERNELS_FILE="subset.txt", LANGUAGES="c hip", PACKETS="cpf-tool")
     assert done.returncode == 0, done.stderr
     key = "HPCAGENT_BENCH_SERVICE_CANONICAL_PARALLEL_FORM_DIR"
-    assert setup_env(tmp_path, "wave-qwen38-c-cpf-tool")[key].endswith("/views/llr40-cpu")
-    assert setup_env(tmp_path, "wave-qwen38-hip-cpf-tool")[key].endswith("/views/llr40-gpu")
+    served = {setup_env(tmp_path, setup)[key] for setup in ("wave-qwen38-c-cpf-tool", "wave-qwen38-hip-cpf-tool")}
+    assert served == {"${HPCAGENT_BENCH_CPF_CACHE}"}, served

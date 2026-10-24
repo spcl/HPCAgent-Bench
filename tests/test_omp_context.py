@@ -11,7 +11,9 @@ import subprocess
 import numpy as np
 import pytest
 
-from hpcagent_bench import config, languages, omp_catalog, omp_context, spec
+from hpcagent_bench import config, languages, spec
+from hpcagent_bench.openmp import catalog as omp_catalog
+from hpcagent_bench.openmp import context as omp_context
 from hpcagent_bench.categories import Language
 from hpcagent_bench.frameworks import forked
 from hpcagent_bench.harness import native_call, sandbox
@@ -212,7 +214,7 @@ def read_env(*names: str) -> tuple[str | None, ...]:
 
 
 def test_an_isolated_call_runs_in_the_submissions_context(root: pathlib.Path, tmp_path: pathlib.Path) -> None:
-    """``_call_isolated`` starts an llvm-context child with that context's environment, and a default one
+    """``call_isolated`` starts an llvm-context child with that context's environment, and a default one
     without: the kernel reports what its own process saw."""
     config.set_override("grading.seal", False)
     seen = tmp_path / "seen.txt"
@@ -225,7 +227,7 @@ def test_an_isolated_call_runs_in_the_submissions_context(root: pathlib.Path, tm
     )
     binding = binding_from_spec(spec.BenchSpec.load("gemm"))
     for context, layer in (("llvm", "omp"), ("nvhpc", "workqueue")):
-        native_call._call_isolated(
+        native_call.call_isolated(
             kernel,
             binding,
             {"x": np.zeros(1)},
@@ -239,7 +241,7 @@ def test_an_isolated_call_runs_in_the_submissions_context(root: pathlib.Path, tm
         assert name == context
         assert path.startswith(str(root / context / "lib"))
         assert seen_layer == layer
-    native_call._call_isolated(
+    native_call.call_isolated(
         kernel,
         binding,
         {"x": np.zeros(1)},
@@ -294,7 +296,7 @@ def test_a_host_with_contexts_and_no_catalog_fails_naming_the_step_that_writes_i
         omp_context.library_refusal("blas", "llvm")
     message = str(raised.value)
     assert str(root / omp_context.CATALOG_FILE) in message
-    assert "omp_catalog --write" in message
+    assert "hpcagent_bench.openmp.catalog --write" in message
     assert omp_context.CATALOG_ENV in message
 
 
@@ -315,10 +317,11 @@ def test_the_catalog_env_variable_is_the_configured_path(root: pathlib.Path, mon
     assert omp_context.catalog_path() == pathlib.Path("/run/dir/omp-catalog.json")
 
 
-def test_the_job_start_write_stores_the_scan_where_it_is_read(
+def test_the_image_build_write_stores_the_scan_where_it_is_read(
     root: pathlib.Path, tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """``omp_catalog --write PATH`` makes the run directory (atomically) and what it writes is what grading reads."""
+    """``omp_catalog --write PATH`` (the image build's step) makes the directory, writes atomically, and what it
+    writes is what grading reads."""
     runtimes = runtime_links(root)
     record = {"llvm": {"blas": [runtimes["gnu"]]}, "nvhpc": {"blas": []}}
     monkeypatch.setattr(omp_catalog, "scan", lambda: record)

@@ -1,10 +1,11 @@
-"""Desugar numpy forms the verbatim Python backends (numba / pythran / dace) cannot compile.
+"""Desugar numpy forms the verbatim Python backends (numba / dace) cannot compile.
 
 Entry point: :func:`desugar_for_python_backend`. Each submodule owns one family of rewrites.
 """
 
 import ast
 
+from hpcagent_bench.translators.numpyto_common.ast_build import walk_nodes
 from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc, KernelIR, ScalarDesc
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import (
     AUG_OP_SRC,
@@ -29,6 +30,7 @@ from hpcagent_bench.translators.numpyto_common.numpy_desugar.counting import (
     REPEAT_AXIS_HOIST,
     AddAtInline,
     BincountInline,
+    SegmentSumInline,
     DiffToSliceDifference,
     RepeatCountsInline,
     SearchsortedMaterialize,
@@ -72,9 +74,7 @@ from hpcagent_bench.translators.numpyto_common.numpy_desugar.kinds import (
 )
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.linalg import (
     LINALG_HOIST,
-    LINALG_LOWERABLE,
     LOWER_SOLVE_RHS_RANKS,
-    NATIVE_LINALG,
 )
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.lists import fold_list_accumulators
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.matmul import (
@@ -136,6 +136,7 @@ __all__ = [
     "REDUCE_FNS",
     "AddAtInline",
     "BincountInline",
+    "SegmentSumInline",
     "CallKinds",
     "ComplexAccessorToFunc",
     "DecomposeRollSlice",
@@ -179,7 +180,7 @@ __all__ = [
 
 
 def desugar_for_python_backend(source: str, kir: KernelIR, backend: str | None = None) -> str:
-    """Rewrite ``source`` so numba/pythran/dace can compile it.
+    """Rewrite ``source`` so numba/dace can compile it.
 
     Expands numpy ops they don't support (batched ``@``/``np.matmul``, ``np.pad``, ``np.einsum``,
     ``np.fft.*``, ``np.mgrid``, axis reductions, ufunc.outer, multi-array fancy gather, ``np.ix_``
@@ -190,18 +191,17 @@ def desugar_for_python_backend(source: str, kir: KernelIR, backend: str | None =
     when none fire.
 
     ``backend`` selects the target's native-``np.linalg`` capability: an op it implements natively
-    (numba/dace do cholesky/solve/inv) is left verbatim; one it lacks (pythran has no np.linalg) is
+    (numba/dace do cholesky/solve/inv) is left verbatim; one it lacks is
     lowered to explicit loops. ``None`` lowers no linalg. A capability can be partial:
     :data:`LOWER_SOLVE_RHS_RANKS` lowers the ``solve`` right-hand-side ranks a nominally-native
     backend cannot expand."""
-    lower_linalg = LINALG_LOWERABLE - NATIVE_LINALG.get(backend, LINALG_LOWERABLE)
     lower_solve_rhs_ranks = LOWER_SOLVE_RHS_RANKS.get(backend, frozenset())
     tree = ast.parse(source)
     changed = False
     kernel = next((n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == kir.kernel_name), None)
     if backend in DEFAULT_FOLDING_BACKENDS and kernel is not None and has_defaulted_parameters(kernel):
         changed = fold_kernel_defaults(kernel, kir.input_args)
-    all_funcs = [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]
+    all_funcs = [n for n in walk_nodes(tree) if isinstance(n, ast.FunctionDef)]
     if backend == "numba":
         changed = fold_constant_helper_arguments(tree, kir.kernel_name) or changed
         for func in all_funcs:
@@ -250,7 +250,7 @@ def desugar_for_python_backend(source: str, kir: KernelIR, backend: str | None =
         noncontig = noncontig_names(fn)
         masked_gathers = masked_reduce_map(fn, ranks, dtypes)
         consts = const_name_values(fn)
-        tables = HoistTables(ranks, dtypes, masked_gathers, lower_linalg, lower_solve_rhs_ranks)
+        tables = HoistTables(ranks, dtypes, masked_gathers, lower_solve_rhs_ranks)
         numba_reshape_passes: list[DesugarPass] = (
             [ReshapeFortranOrderInline(), NumbaDtypeFixups(dtype_table_(fn, param_kinds.get(fn_name or "", {})))]
             if backend == "numba"
@@ -270,12 +270,12 @@ def desugar_for_python_backend(source: str, kir: KernelIR, backend: str | None =
             NormalizeNegativeAxis(ranks),
             IxWriteToLoop(ranks, dtypes, fn),
             FancySliceStoreToLoop(ranks, dtypes),
-            EighInline(ranks, eigh_aliases, dtypes, kir_array_dtypes),
+            EighInline(ranks, eigh_aliases, dtypes, kir_array_dtypes, keep_library=backend == "dace"),
             ValueHoist(LINALG_HOIST, tables),
-            ReshapeMatmulInline(ranks),
-            BatchedMatmulToLoop(ranks),
+            # dace lowers batched and reshape-wrapped matmul and einsum itself, to library nodes.
+            *([] if backend == "dace" else [ReshapeMatmulInline(ranks), BatchedMatmulToLoop(ranks)]),
             PadInline(ranks, lower_symbolic_constant=backend == "dace"),
-            ValueHoist(EINSUM_HOIST, tables),
+            *([] if backend == "dace" else [ValueHoist(EINSUM_HOIST, tables)]),
             *([] if backend in NATIVE_FFT_BACKENDS else [FftInline(ranks, kir_array_dtypes)]),
             MgridInline(),
             ValueHoist(FANCY_GATHER_HOIST, tables),
@@ -291,6 +291,7 @@ def desugar_for_python_backend(source: str, kir: KernelIR, backend: str | None =
             AddAtInline(ranks),
             SearchsortedMaterialize(),
             StripAstypeCopyKwarg(),
+            SegmentSumInline(fn, ranks),
             RepeatCountsInline(ranks),
             BincountInline(ranks),
             # After RepeatCountsInline, which reads ``np.diff(p)`` structurally to prove its length telescopes.

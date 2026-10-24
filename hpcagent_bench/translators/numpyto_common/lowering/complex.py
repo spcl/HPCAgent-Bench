@@ -3,6 +3,7 @@
 import ast
 from typing import TYPE_CHECKING
 
+from hpcagent_bench.translators.numpyto_common.ast_build import walk_nodes
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.frontend import dtype_from_constructor
 from hpcagent_bench.translators.numpyto_common.ir import COMPLEX_FOR_FLOAT
@@ -115,7 +116,7 @@ def walk_complex(node: ast.AST, name_dtype: "Callable[[str], str | None]") -> st
     if isinstance(node, ast.Call):
         return call_complex(node, name_dtype)
     # Unhandled node type -- fall back to a conservative whole-subtree scan.
-    for sub in ast.walk(node):
+    for sub in walk_nodes(node):
         if isinstance(sub, ast.Constant) and isinstance(sub.value, complex):
             return "complex128"
         if isinstance(sub, ast.Name):
@@ -290,7 +291,7 @@ def seed_complex_work_dtypes(
     <- ``apq`` <- ``Cm``'s constructor)."""
     assigns = [
         (s.targets[0].id, s.value)
-        for s in ast.walk(tree)
+        for s in walk_nodes(tree)
         if isinstance(s, ast.Assign) and len(s.targets) == 1 and isinstance(s.targets[0], ast.Name)
     ]
     seed = ComplexWorkSeed(local_dtypes, array_dtypes or {})
@@ -367,7 +368,7 @@ class ComplexWorkSeed:
             else None
         )
         if fn in REAL_FROM_COMPLEX:
-            for sub in ast.walk(value):
+            for sub in walk_nodes(value):
                 if isinstance(sub, ast.Name):
                     bdt = self.known_complex(sub.id)
                     if bdt:

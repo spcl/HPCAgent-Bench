@@ -4,7 +4,7 @@ import ast
 import copy
 from collections.abc import Callable
 
-from hpcagent_bench.translators.numpyto_common.ast_build import name_, numpy_attribute, range_for, store_
+from hpcagent_bench.translators.numpyto_common.ast_build import name_, numpy_attribute, range_for, store_, walk_nodes
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.statement_desugar import bind, element_read, indexed_loop, pair_names
 
@@ -217,7 +217,7 @@ class ConditionalNoneAllocRewriter(ast.NodeTransformer):
         # Names whose None-ness is observed (``x is None`` / ``x is not None``): a
         # conditional alloc into one of these must NOT be forced, so record them first.
         checked = set()
-        for cmp in ast.walk(node):
+        for cmp in walk_nodes(node):
             if (
                 isinstance(cmp, ast.Compare)
                 and isinstance(cmp.left, ast.Name)

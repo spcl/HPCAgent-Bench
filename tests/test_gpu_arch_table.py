@@ -289,6 +289,15 @@ def test_every_gpu_launcher_checks_the_arch_before_its_first_gpu_step(
     assert text.find(first_gpu_step) > text.find(check), f"{launcher} starts a GPU step before checking the arch"
 
 
+def test_the_job_checks_the_arch_under_the_edfs_its_steps_run_under() -> None:
+    """A registered judge EDF mounts the checkout that last rendered it (install_edfs.sh): the scicomp40 jobs of
+    10-23 failed checking the arch under one whose checkout had been deleted, before any step of their own ran."""
+    text = (ROOT / "hpcagent_bench/cluster/run_cluster.sh").read_text(encoding="utf-8")
+    body = text[text.index("check_gpu_arch() {") : text.index("\ncheck_gpu_arch\n")]
+    assert body.count('bash "${checker}" "${EDF_FILE}"') == 2, body
+    assert '"${checker}" "${JUDGE_CE_ENV}"' not in body and '"${checker}" "${INFERENCE_CE_ENV}"' not in body, body
+
+
 def fake_so(path: pathlib.Path, *strings: str) -> pathlib.Path:
     """A stand-in shared object: an ELF magic and NUL-separated strings, the way `strings -a` sees them."""
     path.parent.mkdir(parents=True, exist_ok=True)

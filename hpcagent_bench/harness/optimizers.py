@@ -1,21 +1,23 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Non-AI optimizers (NoOp, BLAS, Pluto, PPCG, Alloy flavors) behind the agent contract, so the harness runs them
+"""Non-AI optimizers (NoOp, BLAS, Pluto, PPCG, plugin flavors) behind the agent contract, so the harness runs them
 exactly like an LLM agent; :func:`optimizer_registry` names them for ``hpcagent-bench agent``."""
 
 import functools
+import importlib
 import pathlib
 import re
 import shutil
 import subprocess
-import sys
 import tempfile
 import weakref
 from collections.abc import Callable, Sequence
 from typing import ClassVar
 
-from hpcagent_bench import config, languages, modules, paths, pluto_transform, ppcg_transform
+from hpcagent_bench import config, languages, modules, paths
+from hpcagent_bench.polyhedral import pluto as pluto_transform
+from hpcagent_bench.polyhedral import ppcg as ppcg_transform
 from hpcagent_bench.categories import Language, Residency, SourceMode
 from hpcagent_bench.columns import FRAMEWORKS
 from hpcagent_bench.emit_bridge import emit_kernel
@@ -31,63 +33,23 @@ from hpcagent_bench.translators.numpyto_c.bindings import read_binding
 from hpcagent_bench.vocabulary import Arch
 
 __all__ = [
-    "AlloyHeuristicOptimizer",
-    "AlloyOptimizer",
-    "AlloyProfileOptimizer",
-    "BlasReductionOptimizer",
     "LibraryOptimizer",
     "NoOpMPIOptimizer",
     "NoOpOptimizer",
     "PlutoOptimizer",
     "PpcgHipOptimizer",
+    "FlavorOptimizer",
     "agent_class",
     "call_argument",
     "emit_scops",
-    "have_openblas",
     "inline_header",
-    "openblas_flags",
     "optimizer_registry",
     "own_sources",
     "pluto_source",
     "polyhedral_binding",
     "ppcg_hip_sources",
+    "flavor_agent",
 ]
-
-
-def openblas_flags() -> tuple[list[str], list[str]]:
-    """``(cflags, libs)`` for OpenBLAS: ``pkg-config openblas`` when available, else ``-lopenblas``."""
-    pc = shutil.which("pkg-config")
-    if pc:
-        try:
-            cflags = subprocess.run(
-                [pc, "--cflags", "openblas"], capture_output=True, text=True, check=True
-            ).stdout.split()
-            libs = subprocess.run([pc, "--libs", "openblas"], capture_output=True, text=True, check=True).stdout.split()
-        except (subprocess.CalledProcessError, OSError):
-            pass
-        else:
-            return cflags, libs
-    return [], ["-lopenblas"]
-
-
-def have_openblas() -> bool:
-    """True when OpenBLAS links with :func:`openblas_flags` (a linker probe, for test guards)."""
-    cc = shutil.which("cc") or shutil.which("gcc")
-    if not cc:
-        return False
-    _cflags, libs = openblas_flags()
-    with tempfile.TemporaryDirectory() as d:
-        out = pathlib.Path(d) / "probe"
-        return (
-            subprocess.run(
-                [cc, "-xc", "-", *libs, "-o", str(out)],
-                input="int main(void){return 0;}",
-                text=True,
-                capture_output=True,
-                check=False,
-            ).returncode
-            == 0
-        )
 
 
 #: The non-AI optimizers by name, filled by :func:`optimizer`.
@@ -111,7 +73,7 @@ class LibraryOptimizer(Agent):
     def __init__(self, workdir: pathlib.Path | None = None) -> None:
         self._workdir = pathlib.Path(workdir) if workdir is not None else None
 
-    def _build_so(
+    def build_so(
         self, task: Task, source: str, *, extra_compile: Sequence[str] = (), extra_link: Sequence[str] = ()
     ) -> pathlib.Path:
         """Compile and link ``source`` into a ``.so`` in ``workdir`` or a fresh temp dir (removed on failure)."""
@@ -141,11 +103,11 @@ class LibraryOptimizer(Agent):
             raise
         return lib
 
-    def _library_submission(
+    def library_submission(
         self, task: Task, source: str, *, extra_compile: Sequence[str] = (), extra_link: Sequence[str] = ()
     ) -> Submission:
         """Build ``source`` to a ``.so`` and wrap it in a :class:`Submission` that owns the throwaway build dir."""
-        lib = self._build_so(task, source, extra_compile=extra_compile, extra_link=extra_link)
+        lib = self.build_so(task, source, extra_compile=extra_compile, extra_link=extra_link)
         if self._workdir is not None:
             return Submission(language=task.language, library=str(lib))
         # Tie a throwaway dir's cleanup to the submission, and remove it if wrapping throws.
@@ -161,7 +123,7 @@ class LibraryOptimizer(Agent):
         """Return ``source`` as a source submission, or (``any`` mode) build and submit the ``.so``."""
         if task.source_mode is SourceMode.RESTRICTED:
             return Submission(language=task.language, source=source)
-        return self._library_submission(task, source)
+        return self.library_submission(task, source)
 
 
 @optimizer
@@ -202,41 +164,6 @@ class NoOpMPIOptimizer(Agent):
         # The default 1-D block layout from the kernel's ``mpi:`` block.
         requests = default_requests(spec.mpi, binding, ranks)
         return Submission(language=task.language, source=reference_mpi_source(task), requests=requests)
-
-
-@optimizer
-class BlasReductionOptimizer(LibraryOptimizer):
-    """Lower a reduction kernel to OpenBLAS (``vdotr`` -> ``cblas_ddot``, ``gesummv`` -> ``cblas_dgemv``)."""
-
-    __slots__ = ()
-
-    name = "blas-reduction"
-
-    #: kernel short-name -> the BLAS body computing each declared output (canonical C-ABI names).
-    _BODIES: ClassVar[dict[str, str]] = {
-        "tsvc_2_vdotr": "    dot_out[0] = cblas_ddot((int)LEN_1D, a, 1, b, 1);",
-        "gesummv": (
-            "    cblas_dgemv(CblasRowMajor, CblasNoTrans, (int)N, (int)N, alpha, A, (int)N, x, 1, 0.0, out, 1);\n"
-            "    cblas_dgemv(CblasRowMajor, CblasNoTrans, (int)N, (int)N, beta,  B, (int)N, x, 1, 1.0, out, 1);"
-        ),
-    }
-
-    def _emit_source(self, task: Task) -> str:
-        """Render the C-ABI signature from the binding, fill in the BLAS body."""
-        binding = binding_from_spec(BenchSpec.load(task.kernel))
-        header = gen_call_stub(binding, Language.C).split(") {", 1)[0] + ") {"
-        return f"#include <stdint.h>\n#include <cblas.h>\n{header}\n{self._BODIES[task.kernel]}\n}}\n"
-
-    def solve(self, task: Task, prompt: str = "", budget: object | None = None) -> Submission:
-        if task.kernel not in self._BODIES:
-            raise NotImplementedError(f"{self.name} only optimizes {sorted(self._BODIES)}; got {task.kernel!r}")
-        if task.language is not Language.C:
-            raise NotImplementedError(f"{self.name} emits C only; got language {task.language.text!r}")
-        source = self._emit_source(task)
-        cflags, libs = openblas_flags()
-        if task.source_mode is SourceMode.RESTRICTED:
-            return Submission(language=Language.C, source=source, build=cflags + libs)
-        return self._library_submission(task, source, extra_compile=cflags, extra_link=libs)
 
 
 def emit_scops(spec: BenchSpec, work: pathlib.Path) -> pathlib.Path:
@@ -360,8 +287,9 @@ class PpcgHipOptimizer(Agent):
         return Submission(language=Language.HIP, source=host, device_source=device)
 
 
-class AlloyOptimizer(LibraryOptimizer):
-    """An autotuning DaCe flavor: Alloy on the SDFG of the flavor's pipeline, constructed with the flavor's name."""
+class FlavorOptimizer(LibraryOptimizer):
+    """An optimizer flavor a plugin registers (``[flavors.<key>]``): it optimizes the output of the extended column's
+    pipeline and delivers a library; constructed with the flavor's name, which its rows carry."""
 
     __slots__ = ("fname",)
 
@@ -377,36 +305,16 @@ class AlloyOptimizer(LibraryOptimizer):
             raise NotImplementedError(f"{self.fname} runs on {column.arch.text}; got a {task.image} task")
         pipelines = column.pipelines
         if len(pipelines) != 1:
-            raise ValueError(f"{self.fname} names pipelines {pipelines}; an Alloy flavor tunes exactly one")
+            raise ValueError(f"{self.fname} names pipelines {pipelines}; an optimizer flavor extends exactly one")
         return self.tune(task, pipelines[0])
 
     def tune(self, task: Task, pipeline: str) -> Submission:
-        """The library this mode picks for ``task`` from ``pipeline``'s output."""
+        """The library this flavor picks for ``task`` from ``pipeline``'s output."""
         raise NotImplementedError
 
-
-class AlloyProfileOptimizer(AlloyOptimizer):
-    """Alloy's profile mode: candidates verified and timed by the judge via ``/profile``, the chosen one scored."""
-
-    __slots__ = ()
-
-    def tune(self, task: Task, pipeline: str) -> Submission:
-        # Deferred: Alloy is an optional install.
-        from hpcagent_bench.harness import alloy_adapter
-
-        def deliver(code: str, link: Sequence[str]) -> Submission:
-            return self._library_submission(task, code, extra_link=link)
-
-        return alloy_adapter.optimize(task, pipeline, deliver)
-
-
-class AlloyHeuristicOptimizer(AlloyOptimizer):
-    """Alloy's heuristic mode: one candidate per region picked from build signals, verified, then scored."""
-
-    __slots__ = ()
-
-    def tune(self, task: Task, pipeline: str) -> Submission:
-        raise NotImplementedError("Alloy's heuristic mode is not built yet")
+    def deliver(self, task: Task, code: str, link: Sequence[str]) -> Submission:
+        """``code`` built into the episode's library, linked against ``link``, as the submission."""
+        return self.library_submission(task, code, extra_link=link)
 
 
 def agent_class(factory: Callable[..., Agent]) -> type[Agent]:
@@ -417,20 +325,21 @@ def agent_class(factory: Callable[..., Agent]) -> type[Agent]:
     return target
 
 
-def tuner_agent(adapter: str) -> type[AlloyOptimizer]:
-    """The autotuning :class:`Agent` a tuner's ``adapter`` (``package.module:Class``) names."""
-    value = modules.optional(sys.modules[__name__], adapter.partition(":")[2], type)
-    if not (isinstance(value, type) and issubclass(value, AlloyOptimizer)):
-        raise TypeError(f"tuner adapter {adapter!r} names no autotuning Agent of {__name__}")
+def flavor_agent(adapter: str) -> type[FlavorOptimizer]:
+    """The :class:`FlavorOptimizer` a flavor's ``adapter`` (``package.module:Class``, the plugin's) names."""
+    module_name, class_name = adapter.split(":", 1)
+    value = modules.optional(importlib.import_module(module_name), class_name, type)
+    if not (isinstance(value, type) and issubclass(value, FlavorOptimizer)):
+        raise TypeError(f"flavor adapter {adapter!r} names no FlavorOptimizer")
     return value
 
 
 def optimizer_registry() -> dict[str, Callable[..., Agent]]:
-    """Name -> non-AI optimizer factory: every registered :class:`Agent` and every autotuning flavor's adapter."""
+    """Name -> non-AI optimizer factory: every registered :class:`Agent` and every optimizer flavor's adapter."""
     classes: dict[str, Callable[..., Agent]] = dict(OPTIMIZERS)
     flavors: dict[str, Callable[..., Agent]] = {
-        name: functools.partial(tuner_agent(column.adapter), name)
+        name: functools.partial(flavor_agent(column.adapter), name)
         for name, column in FRAMEWORKS.entries.items()
-        if column.tuner is not None
+        if column.optimizer
     }
     return {**classes, **flavors}

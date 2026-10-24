@@ -1,25 +1,20 @@
-"""``np.linalg`` cholesky / solve / inv lowered to loops for backends without them."""
+"""``np.linalg.solve`` lowered to a Gauss-Jordan loop nest for the right-hand-side ranks a backend cannot expand; the
+Cholesky and Gauss-Jordan line builders the eigh lowering reuses."""
 
 import ast
-from collections.abc import Callable
 
 from hpcagent_bench.translators.numpyto_common.ast_build import name_
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import numpy_submodule_attr
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import DesugarError
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.hoist import HoistForm, HoistTables, ValueHoist
-from hpcagent_bench.translators.numpyto_common.numpy_desugar.kinds import dtype_kind
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.ranks import expr_rank
 
 __all__ = [
     "LINALG_HOIST",
     "LINALG_LOWERABLE",
-    "LINALG_LOWERINGS",
     "LOWER_SOLVE_RHS_RANKS",
-    "NATIVE_LINALG",
     "cholesky_lines",
     "gauss_jordan_lines",
-    "hoist_cholesky",
-    "hoist_inv",
     "hoist_linalg",
     "hoist_solve",
     "linalg_operand",
@@ -90,22 +85,6 @@ def linalg_operand(node: ast.expr, p: str, tag: str, hoist: ValueHoist) -> str:
     return nm
 
 
-def hoist_cholesky(node: ast.Call, hoist: ValueHoist) -> ast.expr | None:
-    a = node.args[0]
-    ra = expr_rank(a, hoist.tables.ranks)
-    if ra is None:
-        return None
-    if ra != 2:
-        raise DesugarError(f"np.linalg.cholesky: only a 2-D operand is lowered (got ndim {ra})")
-    p = f"__chol{hoist.ctr}"
-    hoist.ctr += 1
-    an = linalg_operand(a, p, "a", hoist)
-    temp = f"{p}_o"
-    hermitian = dtype_kind(a, hoist.tables.dtypes) == "complex"
-    hoist.queue(cholesky_lines(temp, an, f"{an}.shape[0]", p, hermitian=hermitian))
-    return name_(temp)
-
-
 def hoist_solve(node: ast.Call, hoist: ValueHoist) -> ast.expr | None:
     if len(node.args) < 2:
         return None
@@ -116,7 +95,7 @@ def hoist_solve(node: ast.Call, hoist: ValueHoist) -> ast.expr | None:
         return None
     # Gated here, not in ``hoist_linalg``: ownership depends on the rhs rank, and the raises
     # below must not fire for a call the backend handles natively.
-    if "solve" not in tables.lower_ops and rb not in tables.solve_rhs_ranks:
+    if rb not in tables.solve_rhs_ranks:
         return None
     if ra != 2:
         raise DesugarError(f"np.linalg.solve: A must be 2-D (got ndim {ra})")
@@ -136,72 +115,29 @@ def hoist_solve(node: ast.Call, hoist: ValueHoist) -> ast.expr | None:
     return name_(temp)
 
 
-def hoist_inv(node: ast.Call, hoist: ValueHoist) -> ast.expr | None:
-    a = node.args[0]
-    ra = expr_rank(a, hoist.tables.ranks)
-    if ra is None:
-        return None
-    if ra != 2:
-        raise DesugarError(f"np.linalg.inv: only a 2-D operand is lowered (got ndim {ra})")
-    p = f"__inv{hoist.ctr}"
-    hoist.ctr += 1
-    an = linalg_operand(a, p, "a", hoist)
-    temp, n = f"{p}_o", f"{an}.shape[0]"
-    hoist.queue(
-        [
-            f"{p}_aw = {an}.copy()",
-            f"{temp} = np.zeros(({n}, {n}), {an}.dtype)",
-            f"for {p}_d in range({n}):",
-            f"    {temp}[{p}_d, {p}_d] = 1",
-            *gauss_jordan_lines(f"{p}_aw", temp, n, n, p),
-        ]
-    )
-    return name_(temp)
-
-
-LINALG_LOWERINGS: dict[str, Callable[[ast.Call, ValueHoist], ast.expr | None]] = {
-    "cholesky": hoist_cholesky,
-    "inv": hoist_inv,
-}
-
-
 def hoist_linalg(node: ast.expr, hoist: ValueHoist) -> ast.expr | None:
-    """A lowerable ``np.linalg.cholesky/solve/inv(...)`` -> the temp its loop nest fills.
+    """A ``np.linalg.solve(...)`` whose rhs rank is in ``solve_rhs_ranks`` -> the temp its loop nest fills.
 
-    The temp is filled before the statement runs, so ``A[:] = np.linalg.cholesky(A) + ...`` stays safe.
-    Only ops in ``lower_ops`` and ``solve`` rhs ranks in ``solve_rhs_ranks`` are touched. A >2-D operand
-    raises :class:`DesugarError`; an unknown-rank operand is left verbatim."""
+    The temp is filled before the statement runs, so ``x[:] = np.linalg.solve(A, x) + ...`` stays safe. A >2-D
+    operand raises :class:`DesugarError`; an unknown-rank operand is left verbatim."""
     if not isinstance(node, ast.Call) or not node.args:
         return None
-    op = numpy_submodule_attr(node, "linalg")
-    if op == "solve":
-        return hoist_solve(node, hoist)
-    if op is None or op not in hoist.tables.lower_ops:
-        return None
-    return LINALG_LOWERINGS[op](node, hoist)
+    return hoist_solve(node, hoist) if numpy_submodule_attr(node, "linalg") == "solve" else None
 
 
 #: numpy.linalg ops the desugar can lower to loops.
-LINALG_LOWERABLE = {"cholesky", "solve", "inv"}
+LINALG_LOWERABLE = {"solve"}
 
 
-#: numpy.linalg ops each backend compiles natively (left in place); pythran has no numpy.linalg.
-NATIVE_LINALG: dict[str | None, set] = {
-    "numba": {"cholesky", "solve", "inv"},
-    "dace": {"cholesky", "solve", "inv"},
-    "pythran": set(),
-}
-
-
-#: ``solve`` right-hand-side ranks lowered per backend even though :data:`NATIVE_LINALG` lists ``solve``.
+#: ``solve`` right-hand-side ranks lowered per backend (every backend expands the others natively).
 #: DaCe's ``Solve`` library node reads ``shape_out[1]`` unconditionally, so a 1-D ``b`` fails at expansion
 #: (after the frontend accepted it); the 2-D rhs keeps the native node.
 LOWER_SOLVE_RHS_RANKS: dict[str | None, frozenset] = {"dace": frozenset({1})}
 
 
 def lowers_linalg(tables: HoistTables) -> bool:
-    """Whether the backend lowers any ``np.linalg`` call at all (pythran every op, dace a ``solve`` rhs rank)."""
-    return bool(tables.lower_ops or tables.solve_rhs_ranks)
+    """Whether the backend lowers any ``np.linalg`` call at all (dace: a ``solve`` rhs rank)."""
+    return bool(tables.solve_rhs_ranks)
 
 
 LINALG_HOIST = HoistForm(frozenset(LINALG_LOWERABLE), (), hoist_linalg, lowers_linalg)

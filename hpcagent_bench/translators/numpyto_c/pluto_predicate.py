@@ -27,7 +27,7 @@ import copy
 import itertools
 from collections.abc import Callable, Iterable
 
-from hpcagent_bench.translators.numpyto_common.ast_build import name_, store_
+from hpcagent_bench.translators.numpyto_common.ast_build import name_, store_, walk_nodes
 from hpcagent_bench.translators.numpyto_common.subscripts import base_name
 
 __all__ = [
@@ -57,7 +57,7 @@ CONTEXT_NODES = (ast.Name, ast.Attribute, ast.Subscript, ast.Starred, ast.List, 
 
 def names_read(expr: ast.expr) -> set[str]:
     """Every variable ``expr`` reads, arrays by name."""
-    return {node.id for node in ast.walk(expr) if isinstance(node, ast.Name)}
+    return {node.id for node in walk_nodes(expr) if isinstance(node, ast.Name)}
 
 
 def written(stmts: Iterable[ast.stmt]) -> set[str]:
@@ -105,7 +105,7 @@ def convertible(stmts: Iterable[ast.stmt]) -> bool:
 def load(target: ast.expr) -> ast.expr:
     """``target`` as a read: the value an unselected predicated assignment keeps."""
     node = copy.deepcopy(target)
-    for sub in ast.walk(node):
+    for sub in walk_nodes(node):
         if isinstance(sub, CONTEXT_NODES):
             sub.ctx = ast.Load()
     return node
@@ -215,7 +215,7 @@ class IfConverter(ast.NodeTransformer):
 
 def if_convert(tree: ast.AST, value_dependent: Callable[[ast.expr], bool]) -> list[str]:
     """Rewrite ``tree`` in place; returns the flag locals introduced, each an integer."""
-    taken = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+    taken = {node.id for node in walk_nodes(tree) if isinstance(node, ast.Name)}
     converter = IfConverter(value_dependent, taken)
     converter.visit(tree)
     ast.fix_missing_locations(tree)

@@ -8,7 +8,9 @@ initializer that calls them builds different inputs on the host and on the devic
 operations IEEE 754 rounds exactly the same everywhere -- ``+ - * /``, ``sqrt``, ``rint``, ``ldexp``,
 comparisons and ``where`` -- each as its own array operation, so no compiler fuses two of them into an FMA.
 They are accurate to a few ulp of float64, which is all an input distribution needs. Arguments are converted to
-float64 first; a float32 result is the float64 one rounded once.
+float64 first; a float32 result is the float64 one rounded once. On the host a large argument takes a numba loop
+doing the same operations in the same order (no fast-math, so no FMA): the same bits without one temporary array
+per operation.
 
 A floating reduction is summed in an order the array library chooses (numpy's pairwise blocks, a GPU's tree), so
 :func:`sum`, :func:`cumsum`, :func:`matvec` and :func:`norm` fix the order themselves: a binary tree of whole-array
@@ -17,9 +19,11 @@ reduction is exact in any order and runs as the library's own.
 """
 
 import math
+from collections.abc import Callable
 from types import ModuleType
 from typing import Any
 
+import numba as nb
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
@@ -78,6 +82,107 @@ TRIG_TERMS = 11
 ATANH_TERMS = 12
 
 
+#: Host arguments of at least this many elements take the numba loop (:func:`on_host_loop`).
+HOST_LOOP_MIN = 1 << 16
+EXP_COEFFICIENTS = tuple(1.0 / math.factorial(n) for n in range(EXP_TERMS))
+SIN_COEFFICIENTS = tuple((-1.0) ** n / math.factorial(2 * n + 1) for n in range(TRIG_TERMS))
+COS_COEFFICIENTS = tuple((-1.0) ** n / math.factorial(2 * n) for n in range(TRIG_TERMS))
+ATANH_COEFFICIENTS = tuple(1.0 / (2 * n + 1) for n in range(ATANH_TERMS))
+
+
+@nb.njit(cache=True)
+def horner_scalar(r: float, coefficients: tuple[float, ...]) -> float:
+    total = coefficients[-1]
+    for i in range(len(coefficients) - 2, -1, -1):
+        total = total * r
+        total = total + coefficients[i]
+    return total
+
+
+@nb.njit(cache=True)
+def trig_loop(x: Array, cosine: bool) -> Array:
+    """:func:`sin` (``cosine`` false) or :func:`cos` of every element, operation for operation."""
+    out = np.empty_like(x)
+    for i in range(x.size):
+        k = np.rint(x[i] * INV_HALF_PI)
+        r = x[i] - k * HALF_PI_1
+        r = r - k * HALF_PI_2
+        r = r - k * HALF_PI_3
+        quadrant = k - 4.0 * np.floor(k * 0.25)
+        r2 = r * r
+        s = r * horner_scalar(r2, SIN_COEFFICIENTS)
+        c = horner_scalar(r2, COS_COEFFICIENTS)
+        if cosine:
+            out[i] = c if quadrant == 0.0 else (-s if quadrant == 1.0 else (-c if quadrant == 2.0 else s))
+        else:
+            out[i] = s if quadrant == 0.0 else (c if quadrant == 1.0 else (-s if quadrant == 2.0 else -c))
+    return out
+
+
+@nb.njit(cache=True)
+def exp_loop(x: Array) -> Array:
+    """:func:`exp` of every real element, operation for operation."""
+    out = np.empty_like(x)
+    for i in range(x.size):
+        value = min(max(x[i], -EXP_LIMIT), EXP_LIMIT)
+        k = np.rint(value * INV_LN2)
+        r = value - k * LN2_HI
+        r = r - k * LN2_LO
+        out[i] = math.ldexp(horner_scalar(r, EXP_COEFFICIENTS), int(k))
+    return out
+
+
+@nb.njit(cache=True)
+def log_loop(x: Array) -> Array:
+    """:func:`log` of every element, operation for operation."""
+    out = np.empty_like(x)
+    for i in range(x.size):
+        value = x[i]
+        mantissa, exponent = math.frexp(value if value > 0.0 else 1.0)
+        if mantissa < math.sqrt(0.5):
+            mantissa = mantissa * 2.0
+            exponent = exponent - 1
+        e = np.float64(exponent)
+        s = (mantissa - 1.0) / (mantissa + 1.0)
+        result = 2.0 * s * horner_scalar(s * s, ATANH_COEFFICIENTS)
+        result = result + e * LN2_LO
+        result = result + e * LN2_HI
+        out[i] = -np.inf if value == 0.0 else (np.nan if value < 0.0 else result)
+    return out
+
+
+@nb.njit(cache=True)
+def tree_sum_loop(rows: Array) -> Array:
+    """:func:`sum` over the first axis of a 2-D ``rows``, per column, in its halving order."""
+    length, width = rows.shape
+    out = np.empty(width, dtype=rows.dtype)
+    buf = np.empty(length, dtype=rows.dtype)
+    for j in range(width):
+        for k in range(length):
+            buf[k] = rows[k, j]
+        n = length
+        while n > 1:
+            half = n // 2
+            for k in range(half):
+                buf[k] = buf[k] + buf[half + k]
+            if n % 2:
+                buf[half] = buf[2 * half]
+            n = half + n % 2
+        out[j] = buf[0]
+    return out
+
+
+def on_host_loop(value: Array, xp: ModuleType) -> bool:
+    """Whether a float64 argument is a host array large enough for the numba loop to beat the array operations."""
+    return xp is np and value.size >= HOST_LOOP_MIN
+
+
+def host_loop(loop: Callable[..., Array], value: Array, *args: object) -> Array:
+    """``loop`` over ``value``'s elements, in ``value``'s shape."""
+    flat = np.ascontiguousarray(value).reshape(-1)
+    return loop(flat, *args).reshape(value.shape)
+
+
 def array_module(*values: object, xp: ModuleType | None = None) -> ModuleType:
     """``xp`` when given, else the array module of the first array among ``values`` (numpy for scalars), so a call on
     a device array stays on the device without being told."""
@@ -115,7 +220,10 @@ def exp(x: ArrayLike, xp: ModuleType | None = None) -> Array:
     if value.dtype.kind == "c":
         magnitude = exp(value.real, xp)
         return magnitude * cos(value.imag, xp) + 1j * (magnitude * sin(value.imag, xp))
-    value = xp.clip(as_f64(value, xp), -EXP_LIMIT, EXP_LIMIT)
+    value = as_f64(value, xp)
+    if on_host_loop(value, xp):
+        return host_loop(exp_loop, value)
+    value = xp.clip(value, -EXP_LIMIT, EXP_LIMIT)
     k = xp.rint(value * INV_LN2)
     r = value - k * LN2_HI
     r = r - k * LN2_LO
@@ -180,6 +288,8 @@ def log(x: ArrayLike, xp: ModuleType | None = None) -> Array:
     ``log m = 2 atanh((m - 1) / (m + 1))``. ``0`` gives ``-inf``; a negative ``x`` gives ``nan``."""
     xp = array_module(x, xp=xp)
     value = as_f64(x, xp)
+    if on_host_loop(value, xp):
+        return host_loop(log_loop, value)
     # A non-positive x takes the series at 1.0, whose result the last two lines replace.
     mantissa, exponent = frexp(xp.where(value > 0.0, value, 1.0), xp)
     low = mantissa < math.sqrt(0.5)
@@ -216,6 +326,8 @@ def sin_cos_series(r: Array, xp: ModuleType) -> tuple[Array, Array]:
 def sin(x: ArrayLike, xp: ModuleType | None = None) -> Array:
     """``sin x``, for ``|x| < 2**20`` (larger arguments lose the reduction's exactness)."""
     xp = array_module(x, xp=xp)
+    if on_host_loop(value := as_f64(x, xp), xp):
+        return host_loop(trig_loop, value, False)
     r, quadrant = reduce_half_pi(x, xp)
     s, c = sin_cos_series(r, xp)
     return xp.where(quadrant == 0.0, s, xp.where(quadrant == 1.0, c, xp.where(quadrant == 2.0, -s, -c)))
@@ -224,6 +336,8 @@ def sin(x: ArrayLike, xp: ModuleType | None = None) -> Array:
 def cos(x: ArrayLike, xp: ModuleType | None = None) -> Array:
     """``cos x``, for ``|x| < 2**20``."""
     xp = array_module(x, xp=xp)
+    if on_host_loop(value := as_f64(x, xp), xp):
+        return host_loop(trig_loop, value, True)
     r, quadrant = reduce_half_pi(x, xp)
     s, c = sin_cos_series(r, xp)
     return xp.where(quadrant == 0.0, c, xp.where(quadrant == 1.0, -s, xp.where(quadrant == 2.0, -c, s)))
@@ -294,6 +408,9 @@ def sum(x: ArrayLike, axis: int | None = None, keepdims: bool = False, xp: Modul
         return flat.reshape((1,) * values.ndim) if keepdims else flat
     axis = axis % values.ndim
     rows = xp.moveaxis(values, axis, 0)
+    if rows.shape[0] > 0 and values.dtype in (np.float32, np.float64) and on_host_loop(values, xp):
+        total = tree_sum_loop(np.ascontiguousarray(rows.reshape(rows.shape[0], -1))).reshape(rows.shape[1:])
+        return xp.expand_dims(total, axis) if keepdims else total
     if rows.shape[0] == 0:
         total = xp.zeros(rows.shape[1:], dtype=values.dtype)
     else:

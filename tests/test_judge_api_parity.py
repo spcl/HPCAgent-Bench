@@ -50,12 +50,12 @@ def test_every_python_call_names_a_live_route() -> None:
 
 
 def test_every_submission_field_the_judge_reads_is_one_the_client_can_send() -> None:
-    """Same parity one level down: the judge's request BODY. ``_submission_from_body`` is the wire
+    """Same parity one level down: the judge's request BODY. ``submission_from_body`` is the wire
     authority, and every key it parses must be a :class:`Submission` field -- a key only a
     hand-rolled ``curl`` can carry (``source_file`` was one) makes the two documented paths unequal
     in the direction that matters: the Python snippet cannot express the delivery the prompt taught.
     """
-    source = inspect.getsource(service._submission_from_body)
+    source = inspect.getsource(service.submission_from_body)
     # The body is read through a RequestBody accessor named for the field's TYPE (text / strings /
     # mapping / present), so the key is the accessor's first argument whichever accessor is used.
     read = set(re.findall(r"body\.[a-z_]+\(\"([a-z_]+)\"", source))

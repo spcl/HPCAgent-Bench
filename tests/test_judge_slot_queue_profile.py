@@ -36,7 +36,7 @@ def test_a_queued_profile_waits_for_the_slot_and_is_never_run_once_its_client_is
         return {"build_ok": True}
 
     monkeypatch.setattr(service, "score", grades)
-    monkeypatch.setattr(service, "_submission_from_body", grades.count_arrival(service._submission_from_body))
+    monkeypatch.setattr(service, "submission_from_body", grades.count_arrival(service.submission_from_body))
     monkeypatch.setattr(profiling, "profile_submission", profiled)
     service.config.set_override("record.enabled", False)
     cfg = dataclasses.replace(service.from_config(), input_mode=InputMode.ANY)

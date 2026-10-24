@@ -2,6 +2,7 @@
 
 import ast
 
+from hpcagent_bench.translators.numpyto_common.ast_build import walk_nodes
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 
 __all__ = [
@@ -135,14 +136,12 @@ def names_used_as_int(tree: ast.AST) -> set[str]:
     computed from, but never across a float divide or an ``int(...)`` truncation.
     """
     uses = IntUses()
-    for node in ast.walk(tree):
+    assigns: list[tuple[str, ast.expr]] = []
+    for node in walk_nodes(tree):
         for e in integer_positions(node):
             uses.collect(e)
-    assigns = [
-        (node.targets[0].id, node.value)
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
-    ]
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            assigns.append((node.targets[0].id, node.value))
     changed = True
     while changed:
         changed = False

@@ -3,13 +3,13 @@
 A *source-form* judgement (not a dependence analysis): a ``for t in
 range(TSTEPS)`` loop steps time -- each iteration depends on the last -- so it
 must stay rolled (never unrolled or vectorized). The imperative backends
-(C / Fortran) emit loops regardless; JAX consults this so a timestep loop lowers
-to ``lax.fori_loop`` / ``while_loop`` and never unrolls.
+(C / Fortran) emit loops regardless.
 """
 
 import ast
 from collections.abc import Sequence
 
+from hpcagent_bench.translators.numpyto_common.ast_build import walk_nodes
 from hpcagent_bench.translators.numpyto_common.ir import KernelIR
 
 __all__ = [
@@ -77,7 +77,7 @@ def range_bound_names(node: ast.For) -> set[str] | None:
         return None
     names = set()
     for arg in it.args:
-        for sub in ast.walk(arg):
+        for sub in walk_nodes(arg):
             if isinstance(sub, ast.Name):
                 names.add(sub.id)
     return names
@@ -120,7 +120,7 @@ def index_exprs(sub: ast.Subscript) -> list[ast.expr]:
 
 def reads_name(node: ast.AST, name: str) -> bool:
     """True when ``name`` is referenced anywhere in ``node``."""
-    return any(isinstance(n, ast.Name) and n.id == name for n in ast.walk(node))
+    return any(isinstance(n, ast.Name) and n.id == name for n in walk_nodes(node))
 
 
 def is_range_for(node: ast.AST) -> bool:
@@ -172,7 +172,7 @@ def subscript_idx_safe(sub: ast.Subscript, idx: str) -> bool:
 def written_arrays(body: ast.AST) -> set[str]:
     """Names of arrays written (via a subscript store or aug-store) anywhere in ``body``."""
     out: set[str] = set()
-    for n in ast.walk(body):
+    for n in walk_nodes(body):
         targets = n.targets if isinstance(n, ast.Assign) else ([n.target] if isinstance(n, ast.AugAssign) else [])
         for t in targets:
             if isinstance(t, ast.Subscript) and isinstance(t.value, ast.Name):
@@ -182,13 +182,13 @@ def written_arrays(body: ast.AST) -> set[str]:
 
 def load_names(node: ast.AST) -> set[str]:
     """Bare names READ (Load context) anywhere in ``node``."""
-    return {n.id for n in ast.walk(node) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
+    return {n.id for n in walk_nodes(node) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
 
 
 def bare_store_names(node: ast.AST) -> set[str]:
     """Names bound by a bare-Name store (assignment / loop target) in ``node`` --
     scalar variables, not subscript element stores."""
-    return {n.id for n in ast.walk(node) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)}
+    return {n.id for n in walk_nodes(node) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)}
 
 
 def reads_before_write(stmts: Sequence[ast.stmt], scalars: set[str], defined: set[str]) -> bool:
@@ -241,7 +241,7 @@ def assigns_a_live_out_scalar(node: ast.For) -> bool:
     """
     body = ast.Module(body=list(node.body), type_ignores=[])
     iterators = {node.target.id} if isinstance(node.target, ast.Name) else bare_store_names(node.target)
-    for n in ast.walk(body):
+    for n in walk_nodes(body):
         if isinstance(n, (ast.For, ast.AsyncFor, ast.comprehension)):
             iterators |= bare_store_names(n.target)
     return bool(bare_store_names(body) - iterators - load_names(body))
@@ -251,7 +251,7 @@ def body_scalars(node: ast.For) -> set[str]:
     """Bare names the loop body binds, less every loop iterator inside it (rebound by its own range)."""
     body = ast.Module(body=list(node.body), type_ignores=[])
     iterators = {node.target.id} if isinstance(node.target, ast.Name) else bare_store_names(node.target)
-    for n in ast.walk(body):
+    for n in walk_nodes(body):
         if isinstance(n, (ast.For, ast.AsyncFor, ast.comprehension)):
             iterators |= bare_store_names(n.target)
     return bare_store_names(body) - iterators
@@ -317,7 +317,7 @@ def written_partition_consistent(body: ast.AST, idx: str, written: set[str]) -> 
     (``A[i, j]`` written but ``A[j, i]`` read -- an in-place transpose), the
     per-iteration regions overlap and the iterations are not independent."""
     axes: dict = {}
-    for n in ast.walk(body):
+    for n in walk_nodes(body):
         if isinstance(n, ast.Subscript) and isinstance(n.value, ast.Name) and n.value.id in written:
             axes.setdefault(n.value.id, set()).update(bare_axes(n, idx))
     return all(len(seen) <= 1 for seen in axes.values())
@@ -337,7 +337,7 @@ def loop_is_parallel_safe(node: ast.AST, root: ast.AST | None = None) -> bool:
         return False
     idx = loop_index(node)
     body = ast.Module(body=list(node.body), type_ignores=[])
-    for n in ast.walk(body):
+    for n in walk_nodes(body):
         if isinstance(n, ast.Assign):
             for t in n.targets:
                 if isinstance(t, ast.Name) and reads_name(n.value, t.id):
@@ -351,7 +351,7 @@ def loop_is_parallel_safe(node: ast.AST, root: ast.AST | None = None) -> bool:
     if root is not None and scalars_live_after(root, node):
         return False  # the same, for a scalar the body ALSO reads.
     written = written_arrays(body)
-    for n in ast.walk(body):
+    for n in walk_nodes(body):
         if (
             isinstance(n, ast.Subscript)
             and isinstance(n.value, ast.Name)
@@ -426,7 +426,7 @@ def loop_reduction(node: ast.AST) -> tuple[str, str] | None:
     if accumulator_observed(body, acc):
         return None
     written = written_arrays(body)
-    for n in ast.walk(body):
+    for n in walk_nodes(body):
         if (
             isinstance(n, ast.Subscript)
             and isinstance(n.value, ast.Name)
@@ -444,7 +444,7 @@ def scalar_accumulators(body: ast.AST) -> dict[str, str] | None:
     aug-op has no reduction form, a name is accumulated under two different ops, or a scalar is
     self-referential without being a known reduction."""
     accs: dict = {}
-    for n in ast.walk(body):
+    for n in walk_nodes(body):
         if isinstance(n, ast.AugAssign) and isinstance(n.target, ast.Name):
             op = AUG_REDUCTION_OP.get(type(n.op))
             if op is None or accs.get(n.target.id, op) != op:
@@ -469,29 +469,29 @@ def accumulator_observed(body: ast.AST, acc: str) -> bool:
     (``s = s + a[i]; out[i] = s`` -- a prefix scan) or otherwise read, a ``reduction(op:acc)`` clause
     would hand out racy per-thread partials, not the running value."""
     combine_loads: set[int] = set()
-    for n in ast.walk(body):
+    for n in walk_nodes(body):
         combines = (isinstance(n, ast.AugAssign) and isinstance(n.target, ast.Name) and n.target.id == acc) or (
             isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id == acc for t in n.targets)
         )
         if combines and isinstance(n, (ast.AugAssign, ast.Assign)):
-            combine_loads |= {id(x) for x in ast.walk(n.value) if isinstance(x, ast.Name) and x.id == acc}
+            combine_loads |= {id(x) for x in walk_nodes(n.value) if isinstance(x, ast.Name) and x.id == acc}
     return any(
         isinstance(n, ast.Name) and n.id == acc and isinstance(n.ctx, ast.Load) and id(n) not in combine_loads
-        for n in ast.walk(body)
+        for n in walk_nodes(body)
     )
 
 
 def index_is_indirect(sub: ast.Subscript) -> bool:
     """True if any axis index of ``sub`` is data-dependent -- contains a nested
     subscript (``A[perm[i]]``), i.e. a gathered index that may collide on write."""
-    return any(any(isinstance(x, ast.Subscript) for x in ast.walk(e)) for e in index_exprs(sub))
+    return any(any(isinstance(x, ast.Subscript) for x in walk_nodes(e)) for e in index_exprs(sub))
 
 
 def has_indirect_scatter(tree: ast.AST) -> bool:
     """True if ``tree`` contains a store whose target index is data-dependent (a
     colliding scatter, ``A[perm[i]] = ...`` / ``+=``). The parallel emitter
     refuses such a kernel rather than emit an atomic."""
-    for n in ast.walk(tree):
+    for n in walk_nodes(tree):
         targets = n.targets if isinstance(n, ast.Assign) else ([n.target] if isinstance(n, ast.AugAssign) else [])
         for t in targets:
             if isinstance(t, ast.Subscript) and index_is_indirect(t):
@@ -505,7 +505,7 @@ def any_parallelizable_loop(tree: ast.AST) -> bool:
     variant would emit at least one ``#pragma omp parallel for``."""
     return any(
         not is_timestep_loop(n) and (loop_is_parallel_safe(n, tree) or loop_reduction(n) is not None)
-        for n in ast.walk(tree)
+        for n in walk_nodes(tree)
         if isinstance(n, ast.For)
     )
 

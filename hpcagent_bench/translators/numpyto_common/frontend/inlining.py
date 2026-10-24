@@ -4,7 +4,7 @@ import ast
 import copy
 from collections.abc import Sequence
 
-from hpcagent_bench.translators.numpyto_common.ast_build import name_, nested_blocks, store_
+from hpcagent_bench.translators.numpyto_common.ast_build import name_, nested_blocks, store_, walk_nodes
 from hpcagent_bench.translators.numpyto_common.limits import HELPER_NESTING_ROUNDS
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
 
@@ -220,13 +220,13 @@ def collect_inlinable_helpers(tree: ast.Module, kernel_fn: ast.FunctionDef) -> d
         if isinstance(body[-1], ast.Return) and body[-1].value is not None:
             mid = body[:-1]
             if all(isinstance(s, INLINABLE_STMTS) for s in mid) and not any(
-                isinstance(sub, ast.Return) for s in mid for sub in ast.walk(s)
+                isinstance(sub, ast.Return) for s in mid for sub in walk_nodes(s)
             ):
                 return True
         # Form 4: void helper -- simple Assign / AugAssign / For / While / If / Expr
         # statements with NO Return (in-place writes to argument arrays).
         return all(isinstance(s, INLINABLE_STMTS) for s in body) and not any(
-            isinstance(sub, ast.Return) for s in body for sub in ast.walk(s)
+            isinstance(sub, ast.Return) for s in body for sub in walk_nodes(s)
         )
 
     # Top-level helpers defined ABOVE the kernel...
@@ -238,7 +238,7 @@ def collect_inlinable_helpers(tree: ast.Module, kernel_fn: ast.FunctionDef) -> d
     # shorthand). These are stripped from the body after their calls are inlined
     # (see InlineHelpers.visit_FunctionDef) -- a backend can't emit a Python
     # ``def``, so the only correct lowering is full inlining.
-    for nested in ast.walk(kernel_fn):
+    for nested in walk_nodes(kernel_fn):
         if isinstance(nested, ast.FunctionDef) and nested is not kernel_fn and classify(nested):
             out[nested.name] = nested
     return out
@@ -253,7 +253,7 @@ def static_flag_params(tree: ast.Module) -> dict[str, frozenset[str]]:
     """
     defs = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
     literal: dict[str, dict[str, bool]] = {name: {} for name in defs}
-    for call in (n for n in ast.walk(tree) if isinstance(n, ast.Call)):
+    for call in (n for n in walk_nodes(tree) if isinstance(n, ast.Call)):
         if not (isinstance(call.func, ast.Name) and call.func.id in defs):
             continue
         hdef = defs[call.func.id]
@@ -292,7 +292,7 @@ def fuse_guarded_returns(tree: ast.Module) -> None:
     subscript would run on the values the guard exists to exclude).
     """
     flags_by_helper = static_flag_params(tree)
-    for fn in (n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)):
+    for fn in (n for n in walk_nodes(tree) if isinstance(n, ast.FunctionDef)):
         flags = flags_by_helper.get(fn.name, frozenset())
         body = fn.body
         while True:
@@ -327,7 +327,7 @@ def is_pure_expression(node: ast.expr) -> bool:
     which is what a shape or index expression is made of.
     """
     impure = (ast.Call, ast.Await, ast.Yield, ast.YieldFrom, ast.NamedExpr)
-    return not any(isinstance(sub, impure) for sub in ast.walk(node))
+    return not any(isinstance(sub, impure) for sub in walk_nodes(node))
 
 
 def lift_pure_assignment_over_guard(body: list[ast.stmt], flags: frozenset[str]) -> None:
@@ -364,7 +364,7 @@ def lift_pure_assignment_over_guard(body: list[ast.stmt], flags: frozenset[str])
         ):
             return
         target = assign.targets[0].id
-        if any(isinstance(sub, ast.Name) and sub.id == target for sub in ast.walk(guard)):
+        if any(isinstance(sub, ast.Name) and sub.id == target for sub in walk_nodes(guard)):
             return  # the guard reads it, so the value it sees would change
         body[-3:] = [assign, guard, body[-1]]
 
@@ -479,13 +479,13 @@ class LoopVarSubst(ast.NodeTransformer):
 def single_list_bindings(fn: ast.FunctionDef) -> dict[str, list[ast.expr]]:
     """Locals bound exactly once, to a list or tuple literal: ``name -> elements``."""
     binds_count: dict[str, int] = {}
-    for s in ast.walk(fn):
+    for s in walk_nodes(fn):
         if isinstance(s, ast.Assign):
             for t in s.targets:
                 if isinstance(t, ast.Name):
                     binds_count[t.id] = binds_count.get(t.id, 0) + 1
     list_binds: dict[str, list[ast.expr]] = {}
-    for s in ast.walk(fn):
+    for s in walk_nodes(fn):
         if (
             isinstance(s, ast.Assign)
             and len(s.targets) == 1
@@ -591,7 +591,7 @@ class HoistMultiStmtHelpers(ast.NodeTransformer):
         self._taken: set[str] = set()
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.AST:
-        self._taken |= {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
+        self._taken |= {n.id for n in walk_nodes(node) if isinstance(n, ast.Name)}
         node.body = self.rewrite_stmt_list(node.body)
         return node
 
@@ -817,7 +817,7 @@ class InlineHelpers(ast.NodeTransformer):
         # a bare ``(ux, uy, uz)`` statement, which no backend can render. An early return elsewhere
         # in the body IS control flow, so that form still declines.
         if body and isinstance(body[-1], ast.Return):
-            if any(isinstance(n, ast.Return) for s in body[:-1] for n in ast.walk(s)):
+            if any(isinstance(n, ast.Return) for s in body[:-1] for n in walk_nodes(s)):
                 return node
             body = body[:-1]
             if not body:
@@ -920,7 +920,7 @@ def collect_assigned_names(stmts: Sequence[ast.stmt]) -> OrderedSet[str]:
                 bind(elt)
 
     for s in stmts:
-        for sub in ast.walk(s):
+        for sub in walk_nodes(s):
             if isinstance(sub, ast.Assign):
                 for t in sub.targets:
                     bind(t)

@@ -183,6 +183,7 @@ class Recorded:
 
     def __init__(self) -> None:
         self.returncode: int | None = None
+        self.pid = 0
 
     def poll(self) -> int | None:
         return self.returncode

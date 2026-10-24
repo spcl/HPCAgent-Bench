@@ -11,6 +11,7 @@ from hpcagent_bench.translators.numpyto_common.ast_build import (
     name_ids,
     nested_blocks,
     store_,
+    walk_nodes,
 )
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module, numpy_call_attr
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import AUG_OP_SRC, RewritePass
@@ -315,7 +316,7 @@ def ix_unpack_scatters(fn: ast.AST) -> dict[int, list[ast.expr]]:
     a vector reads is rebound, so the first statement storing one ends the search.
     """
     found: dict[int, list[ast.expr]] = {}
-    for parent in ast.walk(fn):
+    for parent in walk_nodes(fn):
         for block in nested_blocks(parent):
             for index, stmt in enumerate(block):
                 if not (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1):
@@ -327,14 +328,14 @@ def ix_unpack_scatters(fn: ast.AST) -> dict[int, list[ast.expr]]:
                 grids = [e.id for e in unpack.elts if isinstance(e, ast.Name)]
                 if len(grids) != len(vecs):
                     continue
-                watched = set(grids) | {n.id for v in vecs for n in ast.walk(v) if isinstance(n, ast.Name)}
+                watched = set(grids) | {n.id for v in vecs for n in walk_nodes(v) if isinstance(n, ast.Name)}
                 for later in block[index + 1 :]:
                     if any(
                         isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store) and n.id in watched
-                        for n in ast.walk(later)
+                        for n in walk_nodes(later)
                     ):
                         break
-                    for node in ast.walk(later):
+                    for node in walk_nodes(later):
                         stores = node.targets if isinstance(node, ast.Assign) else []
                         stores = [node.target] if isinstance(node, ast.AugAssign) else stores
                         for target in stores:
@@ -374,7 +375,7 @@ class FancySliceStoreToLoop(ast.NodeTransformer):
         for k, e in enumerate(lead):
             if isinstance(e, ast.Slice):
                 continue
-            names = [n.id for n in ast.walk(e) if isinstance(n, ast.Name)]
+            names = [n.id for n in walk_nodes(e) if isinstance(n, ast.Name)]
             arrs = [n for n in names if self.ranks.get(n) == 1 and dtype_kind(ast.Name(id=n), self.dtypes) != "bool"]
             if not arrs:
                 continue
@@ -395,7 +396,7 @@ class FancySliceStoreToLoop(ast.NodeTransformer):
         p = f"__fs{self._ctr}"
         self._ctr += 1
         it = f"{p}_i"
-        idx_name = next(n.id for n in ast.walk(lead[k]) if isinstance(n, ast.Name) and self.ranks.get(n.id) == 1)
+        idx_name = next(n.id for n in walk_nodes(lead[k]) if isinstance(n, ast.Name) and self.ranks.get(n.id) == 1)
         at_iter = SubstituteLoads({idx_name: expr_of(f"{idx_name}[{it}]")}).visit(copy.deepcopy(lead[k]))
         new_lead = [ast.unparse(e) if j != k else ast.unparse(at_iter) for j, e in enumerate(lead)]
         lines = [

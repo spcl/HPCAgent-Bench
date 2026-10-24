@@ -128,7 +128,7 @@ class ScriptedPapi:
 def install(monkeypatch: pytest.MonkeyPatch, lib: ScriptedPapi, *, slow_first_rep_s: float = 0.0) -> None:
     """Point papi at ``lib`` and replace the native call with ``warmup + reps`` runs of its kernel.
 
-    The fake keeps the real seam's contract: ``_call_native_impl`` reads ``.ns`` off every timed
+    The fake keeps the real seam's contract: ``call_native_impl`` reads ``.ns`` off every timed
     call, so a counter that answered a bare int fails here exactly as it failed every /profile."""
 
     def native_call(
@@ -143,7 +143,7 @@ def install(monkeypatch: pytest.MonkeyPatch, lib: ScriptedPapi, *, slow_first_re
             assert timing.host_ns == timing.ns, timing
 
     monkeypatch.setattr(papi, "initialised", lambda: lib)
-    monkeypatch.setattr(papi, "_call_native_impl", native_call)
+    monkeypatch.setattr(papi, "call_native_impl", native_call)
     monkeypatch.setattr(papi, "available_events", lambda: ("PAPI_TOT_CYC", "PAPI_TOT_INS"))
     monkeypatch.setattr(papi, "hardware_counters", lambda: 5)
 
@@ -219,7 +219,7 @@ def test_a_known_one_two_three_four_split_comes_back_as_its_rows_and_its_imbalan
 
 
 def test_every_counted_rep_reaches_the_native_call_as_a_rep_timing(monkeypatch: pytest.MonkeyPatch) -> None:
-    """``_call_native_impl`` reads ``rep.ns`` off each timed call, so a counter that answers a bare
+    """``call_native_impl`` reads ``rep.ns`` off each timed call, so a counter that answers a bare
     int fails every /profile PAPI metric with ``counted run failed (AttributeError: 'int' object
     has no attribute 'ns')``."""
     lib = ScriptedPapi(one_two_three_four)
@@ -231,7 +231,7 @@ def test_every_counted_rep_reaches_the_native_call_as_a_rep_timing(monkeypatch: 
         seen.extend(timed_call(lib.kernel, [], lambda: None) for _ in range(warmup + reps))
 
     install(monkeypatch, lib)
-    monkeypatch.setattr(papi, "_call_native_impl", native_call)
+    monkeypatch.setattr(papi, "call_native_impl", native_call)
     monkeypatch.setattr(papi, "thread_ids", lambda: (os.getpid(), *WORKERS))
     row = count(reps=2, warmup=1)
     assert row["count"] == 10_000, row

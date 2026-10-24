@@ -11,11 +11,11 @@ reader of an older layout and no backwards compatibility; a dataset is recorded 
 
 ## Who writes it
 
-- **A baseline sweep** (`hpcagent-bench job baseline`, `run-framework`, `run-benchmark`) records one `canon`
+- **A baseline sweep** (`hpcagent-bench job baseline`, `run-framework`) records one `canon`
   row per (run, column, kernel, preset, datatype) as each kernel finishes (`support/collect/canon_db.py`): the
   median time, the validation verdict, the status and failure, the dace build, and the hardware that measured
   it (`node`, `cpu`, `gpu`, `execution`). `job baseline` writes `$HPCAGENT_BENCH_RESULTS_DIR/canon.db`, an
-  hb-results file every column of every experiment shares; `run-framework` and `run-benchmark` write this
+  hb-results file every column of every experiment shares; `run-framework` writes this
   process's results shard unless `--canon-db` names another file. The baseline figures (`stats/canon.py`) and
   the canon perf gate read it.
 
@@ -178,7 +178,7 @@ is someone else's. There is one current shape of each, no older one is read and 
 | a gang rank's launch request (`harness/mpi_gang`'s `<id>.req`, read by `cluster/gang_relay.py`) | `mpi_gang.GangRequest` |
 | a sharded MPI launch's plan and result; the torch.distributed curve's | `mpi_shard_driver.ShardPlan` / `ShardResult`; `torch_dist_curve.DistPlan` / `DistResult` |
 | a profiled child's request and result line | `profiling.REQUEST_ADAPTER` (`MeasurementRequest`), `WORKLOAD_ADAPTER`, `papi.MetricRow` / `PerThreadReport` |
-| the CPF cache manifests and view files; the render child's lines | `cpf_cache.CanonicalManifest`, `EntryManifest`, `ViewHeader`, `Pointer`, `Verification`; `cpf_bridge.CHILD_LINE_ADAPTER` |
+| the CPF cache manifests and grades; the render child's lines | `cpf_cache.Entry`, `Verification`; `cpf_bridge.CHILD_LINE_ADAPTER` |
 | the OpenMP catalog (`catalog.json`) | `omp_context.CATALOG_ADAPTER` |
 | the binding document (`signature.json`, the prompt's binding) | `support.bindings.contract.BindingDocument` |
 | the HF export rows; Harbor's `grade.json` | `hf_export.ExportRow`; `harbor_grade.GRADE_ADAPTER` |

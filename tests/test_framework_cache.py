@@ -37,7 +37,7 @@ def test_source_fingerprint_folds_in_the_translator_tree(tmp_path: pathlib.Path)
     key = fc.source_fingerprint(numpy_py, b"bench-info-1")
     reference_only = sha256_hex(numpy_py.read_bytes() + b"\x00" + b"bench-info-1")
     assert key != reference_only, "the translator sources are not part of the freshness key"
-    assert fc.translator_fingerprint() == fc.translator_fingerprint()  # memoized, one walk per process
+    assert fc.bench_tree_fingerprint() == fc.bench_tree_fingerprint()  # memoized, one walk per process
 
 
 def test_dace_tree_fingerprint_is_memoized_and_well_defined() -> None:

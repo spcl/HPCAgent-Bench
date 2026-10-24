@@ -24,7 +24,7 @@ HPCAGENT_BENCH_SCRATCH="${HPCAGENT_BENCH_SCRATCH:-${SUBMIT_REPO_DIR}/.scratch}"
 # prefix is returned unchanged.
 symbolic_path() {
     local root_name="$1" path="$2" root_value="${!1:-}"
-    if [[ -n "${root_value}" && "${path}" == "${root_value}"/* ]]; then
+    if [[ -n "${root_value}" && ("${path}" == "${root_value}" || "${path}" == "${root_value}"/*) ]]; then
         printf '%s\n' "\${${root_name}}${path#"${root_value}"}"
     else
         printf '%s\n' "${path}"
@@ -184,29 +184,17 @@ agent_seconds() {
     printf '%s\n' "${configured}"
 }
 
-# forms_missing <view> <language> <verified|on-demand> <target> <kernel,...> <hint detail> -- empty when the CPF cache view serves
-# the setup, else what it cannot serve, so the caller refuses on any output. A cpf-src view (verified) needs a
-# judge-verified form of every kernel: one line per kernel it lacks, or one for a view of the other target or a failed
-# check. A cpf-tool view (on-demand) needs only to take the judge's renders of what it lacks, as prepare_job.sh's
-# cpf_form_gate asks: the reason when it is pinned to another target, cache or dace commit. The forms are read at the
-# setup's hint detail (its HPCAGENT_BENCH_CPF_HINTS; empty = the default).
+# forms_missing <cache> <language> <verified|on-demand> <target> <kernel,...> <hint detail> -- empty when the CPF cache
+# serves the setup, else what it cannot serve, so the caller refuses on any output. A cpf-src setup (verified) needs a
+# judge-verified form of every kernel: one line per kernel it lacks, or one for a failed check. A cpf-tool setup
+# (on-demand) needs nothing more: the judge renders what the cache lacks on its first request. The forms are read at
+# the setup's hint detail (its HPCAGENT_BENCH_CPF_HINTS; empty = the default).
 forms_missing() {
     local -a hints=()
     [[ -z "${6:-}" ]] || hints=(--hints "$6")
-    if [[ "$3" == verified ]]; then
-        "${HPCAGENT_BENCH_HOST_PYTHON}" -m hpcagent_bench.cpf_cache check --view "$1" --language "$2" --target "$4" \
-            --kernels "$5" "${hints[@]}" --verified || [[ $? == 1 ]] || echo "cpf_cache check failed for view $1"
-        return 0
-    fi
-    local dace_commit plan
-    dace_commit="$("${HPCAGENT_BENCH_REPO:?env.sh exports it}/helpers/scripts/pins.sh")" || {
-        echo "no dace pin to check view $1 against"
-        return 0
-    }
-    plan="$("${HPCAGENT_BENCH_HOST_PYTHON}" -m hpcagent_bench.cpf_cache check --view "$1" --language "$2" --target "$4" \
-        --kernels "$5" "${hints[@]}" --on-demand --cache "${HPCAGENT_BENCH_CPF_CACHE:?cache_env.sh exports it}" \
-        --dace-commit "${dace_commit}" 2>&1)" && return 0
-    printf '%s\n' "${plan:-cpf_cache check failed for view $1}"
+    [[ "$3" == verified ]] || return 0
+    "${HPCAGENT_BENCH_HOST_PYTHON}" -m hpcagent_bench.cpf.prerender check --cache "$1" --language "$2" --target "$4" \
+        --kernels "$5" "${hints[@]}" --verified || [[ $? == 1 ]] || echo "cpf check failed for cache $1"
 }
 
 # stage_base_env <base> <setup> <study> <stamp> <staged-out> [extra sed -e expr...]
@@ -321,7 +309,7 @@ submit_setup_job() {
     [[ "${HOLD:-0}" != 1 ]] || args+=(--hold)
     # The env file pins any CPF view a setup's packet asks for; the caller's own must not leak into others.
     # CLUSTER_SCRIPT_DIR: under sbatch BASH_SOURCE is a spooled copy, so the job finds run_cluster.sh through this.
-    jid=$(env -u CPF_DROPIN_DIR -u CPF_FORMS_DIR -u HPCAGENT_BENCH_SERVICE_CANONICAL_PARALLEL_FORM_DIR -u HPCAGENT_BENCH_CPF_HINTS \
+    jid=$(env -u CPF_DROPIN_DIR -u HPCAGENT_BENCH_SERVICE_CANONICAL_PARALLEL_FORM_DIR -u HPCAGENT_BENCH_CPF_HINTS \
         CLUSTER_SCRIPT_DIR="${CLUSTER_DIR}" \
         sbatch "${args[@]}" --export=ALL,CLUSTER_ENV_FILE="${PWD}/${snapshot}" "${CLUSTER_DIR}/services.sbatch") || return 2
     # --parsable prints <id> or <id>;<cluster>; a dependency names the id alone.

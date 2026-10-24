@@ -29,7 +29,9 @@ LAUNCH_CHECK: pathlib.Path = CE_IMAGES / "tools_launch_check.py"
 TOOL_MOUNTS: tuple[str, ...] = ("/opt/hpcagent-bench-agent", "/opt/hpcagent-bench-judge")
 #: The launch gate's editable install of hpcagent-agent needs a module root under the agent mount: an empty
 #: package the same RUN creates and removes (:func:`test_the_launch_gate_stub_never_outlives_its_run`).
-GATE_STUB_CREATE = "RUN mkdir -p /opt/hpcagent-bench-agent/hpcagent_agent && touch /opt/hpcagent-bench-agent/hpcagent_agent/__init__.py"
+GATE_STUB_CREATE = (
+    "mkdir -p /opt/hpcagent-bench-agent/hpcagent_agent && touch /opt/hpcagent-bench-agent/hpcagent_agent/__init__.py"
+)
 GATE_STUB_REMOVE = "/opt/hpcagent-bench-agent/hpcagent_agent \\"
 #: The kinds of recipe line that may name a tool mount: the hook's pyproject, the workspace link to it, the
 #: hook call and the launch gate's stub.
@@ -78,10 +80,19 @@ def test_no_judge_agent_image_creates_or_reads_a_tool_mount(dockerfile: str) -> 
 @pytest.mark.parametrize("dockerfile", JUDGE_AGENT_DOCKERFILES)
 def test_the_launch_gate_stub_never_outlives_its_run(dockerfile: str) -> None:
     """The stub is an empty package, and the RUN that creates it removes it: no layer keeps it."""
-    for instruction in re.split(r"\n(?=[A-Z]+ )", recipe(dockerfile)):
-        if GATE_STUB_CREATE in instruction:
-            assert "rm -rf" in instruction
-            assert GATE_STUB_REMOVE.rstrip(" \\") in instruction.split("rm -rf", 1)[1]
+    stubbed = [i for i in re.split(r"\n(?=[A-Z]+ )", recipe(dockerfile)) if GATE_STUB_CREATE in i]
+    assert len(stubbed) == 1, dockerfile
+    assert "rm -rf" in stubbed[0]
+    assert GATE_STUB_REMOVE.rstrip(" \\") in stubbed[0].split("rm -rf", 1)[1]
+
+
+@pytest.mark.parametrize("dockerfile", JUDGE_AGENT_DOCKERFILES)
+def test_the_omp_catalog_step_binds_the_checkout_and_no_layer_copies_it(dockerfile: str) -> None:
+    """The image build measures the OpenMP catalog with hpcagent_bench bind-mounted for that RUN only."""
+    text = recipe(dockerfile)
+    assert "--mount=type=bind,source=hpcagent_bench,target=/hb-src/hpcagent_bench" in text
+    assert "hpcagent_bench.openmp.catalog --write /opt/omp/catalog.json --check" in text
+    assert [source for source in copy_sources(text) if source.startswith("hpcagent_bench")] == []
 
 
 @pytest.mark.parametrize("dockerfile", JUDGE_AGENT_DOCKERFILES)

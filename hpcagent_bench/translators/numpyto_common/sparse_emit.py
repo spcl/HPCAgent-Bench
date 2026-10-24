@@ -44,6 +44,7 @@ __all__ = [
     "ell_entries",
     "entry_loops",
     "entry_matmat",
+    "entry_matvec",
     "entry_matvec_t",
     "expand_matmul_bcoo_dense_vec",
     "expand_matmul_bcsr_dense_vec",
@@ -1171,6 +1172,16 @@ def zero_fill(target_id: str, rows: str, cols: str | None = None) -> ast.For:
         )
     cell = ast.Assign(targets=[subscript_(target_id, name_("__zi"), name_("__zc"), ctx=ast.Store())], value=const_(0.0))
     return range_for("__zi", [expr_of(rows)], [range_for("__zc", [expr_of(cols)], [cell])])
+
+
+def entry_matvec(target_id: str, fmt: str, bufs: dict[str, str], ext: EntryExtents, rhs_name: str) -> list[ast.stmt]:
+    """``y = A @ x`` for any format: each stored ``(r, c, v)`` adds ``v * x[c]`` into ``y[r]``."""
+    accum = ast.AugAssign(
+        target=subscript_(target_id, name_(ENTRY_ROW), ctx=ast.Store()),
+        op=ast.Add(),
+        value=mul(name_(ENTRY_VALUE), subscript_(rhs_name, name_(ENTRY_COL))),
+    )
+    return [zero_fill(target_id, ext.rows), *entry_loops(fmt, bufs, ext, [accum])]
 
 
 def entry_matvec_t(target_id: str, fmt: str, bufs: dict[str, str], ext: EntryExtents, rhs_name: str) -> list[ast.stmt]:

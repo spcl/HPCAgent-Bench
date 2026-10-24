@@ -73,7 +73,7 @@ for mod in (numpy, scipy):
     bundled = list(pathlib.Path(mod.__file__).parent.parent.glob(f"{mod.__name__}*libs/*openblas*"))
     assert not bundled, (mod.__name__, "bundles its own BLAS", bundled)
 # numpy and scipy resolve libopenblas.so.0 BY SONAME and must stay movable between OpenMP contexts
-# (hpcagent_bench/omp_context.py): a child of the llvm family puts its own libopenblas.so.0 first on
+# (hpcagent_bench/openmp/context.py): a child of the llvm family puts its own libopenblas.so.0 first on
 # LD_LIBRARY_PATH, which only works while nothing here carries an absolute DT_RPATH (searched BEFORE it).
 # A DT_RUNPATH or $ORIGIN entry is fine.
 import subprocess

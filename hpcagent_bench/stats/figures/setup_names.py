@@ -28,9 +28,9 @@ __all__ = [
 
 def setup_pattern(experiment: str, language: str = "c") -> re.Pattern[str]:
     """The setups of ``experiment`` in ``language``: ``<experiment>-<model>-<language>`` is the
-    control (condition ``""``), ``...-<language>-<condition>`` a treatment."""
+    control (condition ``""``), ``...-<language>-<condition>`` a treatment; ``a+b`` combines two packets."""
     return re.compile(
-        rf"^{re.escape(experiment)}-(?P<model>[a-z0-9]+)-{re.escape(language)}(?:-(?P<condition>[a-z0-9-]+))?$"
+        rf"^{re.escape(experiment)}-(?P<model>[a-z0-9]+)-{re.escape(language)}(?:-(?P<condition>[a-z0-9+-]+))?$"
     )
 
 
@@ -81,7 +81,8 @@ def condition_label(condition: str, treatments: Sequence[str]) -> str:
     (:func:`hpcagent_bench.packets.control_label`), a treatment its registry display name."""
     if condition == "":
         return packets.control_label(treatments)
-    return study_tags.names("packets").get(study_tags.canonical("packets", condition), condition)
+    named = study_tags.names("packets")
+    return " + ".join(named.get(study_tags.canonical("packets", part), part) for part in condition.split("+"))
 
 
 def rank_condition(condition: str) -> tuple[int, str]:

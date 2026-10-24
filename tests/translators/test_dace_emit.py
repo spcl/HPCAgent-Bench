@@ -280,7 +280,7 @@ def test_known_kernels_discovered() -> None:
 
 
 # dace feature lowering: the @dc.program body is desugared by the SAME pass    #
-# numba / pythran use, so dace gains feature parity -- np.fft, fancy multi-    #
+# numba use, so dace gains feature parity -- np.fft, fancy multi-    #
 # index gather, np.add.at scatter, np.histogram, np.mgrid, ufunc.outer and     #
 # reshape-batched @ all lower to the plain loops a @dc.program traces. dace's   #
 # JIT is too slow to run per-kernel here (see the module docstring), so this    #
@@ -328,7 +328,7 @@ def test_dace_keeps_native_linalg() -> None:
 def test_dace_feature_kernels_desugared(kernel: str) -> None:
     """Each desugar-requiring kernel emits parseable ``@dc.program``s with size symbols module-level
     (not parameters) and NO residual construct dace cannot trace -- the same np.add.at / np.mgrid /
-    np.histogram / ufunc.outer lowering numba and pythran get. ``np.fft`` is the exception: dace
+    np.histogram / ufunc.outer lowering numba get. ``np.fft`` is the exception: dace
     compiles it natively, to its FFT library nodes, so the fft kernels must KEEP the call.
 
     The kernel program is LAST: a kept helper is emitted as its own ``@dc.program`` above it rather
@@ -857,6 +857,15 @@ def test_a_reshapes_minus_one_is_its_inferred_extent_never_the_literal() -> None
     shapes = {"x3": ["b", "c", "d", "h", "w"]}
     lines = resolved(shapes, "x4 = np.reshape(x3, (b, c, -1)); d2 = x4.shape[2]; d0 = x4.shape[0]")
     assert lines[-2:] == ["    d2 = b * c * d * h * w // (b * c)", "    d0 = b"]
+
+
+def test_an_allocation_like_an_array_keeps_its_descriptor_shape() -> None:
+    """cp2k_grid_integrate: ``np.empty(b.shape, ...)`` of a gather grid whose extents dace derives from an
+    ``np.arange(-s, s + 1)``. Spelled as the inferred ``2 * s + 1`` it no longer broadcast against the grid's other
+    readers; the descriptor's own shape always does. A whole ``x.shape`` elsewhere is still its tuple."""
+    shapes = {"b": ["2 * s + 1"]}
+    lines = resolved(shapes, "o = np.empty(b.shape, np.float64); r = x.reshape(b.shape)")
+    assert lines == ["    o = np.empty(b.shape, np.float64)", "    r = x.reshape((2 * s + 1,))"]
 
 
 def test_a_reshapes_minus_one_over_an_unsized_source_leaves_the_read_intact() -> None:
@@ -1757,6 +1766,22 @@ def scattered(src: str, ranks: dict) -> str:
     return ast.unparse(out)
 
 
+def test_an_arange_row_index_scatters_one_row_per_point() -> None:
+    """warpx's shape factors: ``sx[rows, c] = v`` with ``rows = np.arange(p)`` writes row ``t`` at point ``t``. Read
+    as ``rows[t]`` the row was data, and no loop over the particles could map; a rebound arange stays a load."""
+    src = (
+        "def k(sx, c, v, p):\n"
+        "    rows = np.arange(p)\n"
+        "    sx[rows, c] = v\n"
+        "    other = np.arange(p)\n"
+        "    other = other + 1\n"
+        "    sx[other, c] = v\n"
+    )
+    out = scattered(src, {"sx": 2, "c": 1, "v": 1, "rows": 1, "other": 1, "p": 0})
+    assert "sx[__hpcagent_bench_scatter0_i, c[__hpcagent_bench_scatter0_i]]" in out
+    assert "sx[other[__hpcagent_bench_scatter1_i], c[__hpcagent_bench_scatter1_i]]" in out
+
+
 def test_a_method_call_receiver_that_is_not_a_name_is_bound_first() -> None:
     """dace resolves a method call by walking the attribute chain down to a Name
     (``astutils.rname``); a call or a subscript receiver raises "Unsupported AST <node> nested
@@ -2270,7 +2295,8 @@ def test_a_minus_one_reshape_is_one_axis_so_a_gather_through_it_keeps_its_axis()
 def test_an_inlined_einsum_takes_the_result_dtype_of_all_its_operands() -> None:
     """vexx_k's ``np.einsum('abij,ab->aij', qr, vc_box)`` contracts a real table with a complex
     vector reached through a reshape. Its loop nest was allocated at the first operand's dtype, so
-    every complex product landed in a double and the generated C++ refused to compile."""
+    every complex product landed in a double and the generated C++ refused to compile. DaCe keeps the
+    einsum as a library call; the backends that inline it allocate at the result dtype."""
     from types import SimpleNamespace
 
     from hpcagent_bench.translators.numpyto_common.numpy_desugar import desugar_for_python_backend
@@ -2283,7 +2309,8 @@ def test_an_inlined_einsum_takes_the_result_dtype_of_all_its_operands() -> None:
         arrays=[SimpleNamespace(name=name, shape=shape, dtype=dtype) for name, (shape, dtype) in arrays.items()],
         scalars=[],
     )
-    program = desugar_for_python_backend(src, kir, backend="dace")
+    assert "np.einsum('abi,ab->ai', qr, vcb)" in desugar_for_python_backend(src, kir, backend="dace")
+    program = desugar_for_python_backend(src, kir, backend="numba")
     assert "np.einsum" not in program, program
     assert "vcb.dtype)" in program, program
     scope = {"np": np}
@@ -2298,11 +2325,11 @@ def test_an_inlined_einsum_takes_the_result_dtype_of_all_its_operands() -> None:
         "def k(qr, v, out):\n    vcb = np.fft.fft(v).reshape((2, 3))\n    out[:] = np.einsum('abi,ab->ai', qr, vcb)\n"
     )
     kir.arrays[1].dtype = "float64"
-    fft_program = desugar_for_python_backend(fft_src, kir, backend="dace")
+    fft_program = desugar_for_python_backend(fft_src, kir, backend="numba")
     assert "vcb.dtype)" in fft_program, fft_program
     # An operand of unknown kind may be the complex one, so a known real operand never decides.
     kir.arrays[1].dtype = None
-    unknown = desugar_for_python_backend(src, kir, backend="dace")
+    unknown = desugar_for_python_backend(src, kir, backend="numba")
     assert "qr.dtype)" in unknown, unknown
 
 

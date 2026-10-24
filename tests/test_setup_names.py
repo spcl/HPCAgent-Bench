@@ -204,6 +204,15 @@ def test_cpf_src_reads_as_source_and_cpf_tool_reads_as_the_tool() -> None:
     assert setup_names.condition_label("cpf-tool", []) == "Canonical Parallel Form Tool, CPU"
 
 
+def test_a_combined_packet_setup_is_drawn_and_names_both_packets() -> None:
+    """``cpf-src+cpf-tool`` setups carry a ``+``; the pattern once rejected it and the arm vanished."""
+    assert setup_names.parse_setup("llr40-qwen38-c-cpf-src+cpf-tool", LLR40) == ("qwen38", "cpf-src+cpf-tool")
+    assert (
+        setup_names.condition_label("cpf-src+cpf-tool", [])
+        == "Canonical Parallel Form as Source, CPU + Canonical Parallel Form Tool, CPU"
+    )
+
+
 def test_git_scicomps_two_conditions_both_read_as_proper_names() -> None:
     """git-scicomp's own condition axis (no packet, no CPF): ``repo`` already read "Whole
     Repository" off the registry, but ``kernel`` fell through to the bare setup-name token because

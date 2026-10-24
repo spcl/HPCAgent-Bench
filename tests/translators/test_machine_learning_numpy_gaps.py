@@ -3,7 +3,7 @@
 """Numpy-op gaps surfaced auditing the KernelBench ML corpus (PR#5).
 
 Three fixes, each validated numerically vs numpy across the full backend matrix (C / C++ /
-Fortran + numba / pythran / jax, skip-tolerant):
+Fortran + numba, skip-tolerant):
 
 * ``np.inf`` / ``np.nan`` on FORTRAN -- lowered to the C ``INFINITY`` / ``NAN`` names, which
   Fortran expresses via ``ieee_value`` (masked-softmax / pooling init use ``-inf``);
@@ -16,7 +16,7 @@ import numpy as np
 
 from tests.translators.op_oracle import all_ok, run_op
 
-ALL = ("c", "cpp", "fortran", "numba", "pythran", "jax")
+ALL = ("c", "cpp", "fortran", "numba")
 
 
 def run_(

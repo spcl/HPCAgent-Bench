@@ -29,7 +29,7 @@ def kir_(kernel_name: str, **arrays: tuple[str, ...]) -> SimpleNamespace:
 
 def desugar(body: str, **arrays: tuple[str, ...]) -> str:
     src = "import numpy as np\ndef f(a, b, out):\n" + body
-    return desugar_for_python_backend(src, kir_("f", **arrays), backend="pythran")
+    return desugar_for_python_backend(src, kir_("f", **arrays), backend="numba")
 
 
 def norm_axis(expr: str, ranks: dict[str, int]) -> int | ast.expr:
@@ -97,44 +97,9 @@ def test_positive_stack_axis_returned_verbatim() -> None:
     # nothing lowers a positive-axis stack -> source is returned byte-for-byte.
     src = "import numpy as np\ndef f(a, b, out):\n out[:] = np.stack((a, b), axis=1)\n"
     assert (
-        desugar_for_python_backend(src, kir_("f", a=("M", "N"), b=("M", "N"), out=("M", "N", "2")), backend="pythran")
+        desugar_for_python_backend(src, kir_("f", a=("M", "N"), b=("M", "N"), out=("M", "N", "2")), backend="numba")
         == src
     )
 
 
 # numerical: pythran matches numpy for negative-axis flip / stack              #
-
-
-def test_flip_negative_axis_pythran_bit_exact() -> None:
-    a = np.arange(24, dtype=np.float64).reshape(4, 6)
-    res = run_op(
-        "import numpy as np\ndef f(a, out):\n out[:] = np.flip(a, axis=-1)\n",
-        "f",
-        {"a": a},
-        {"out": (4, 6)},
-        {"M": 4, "N": 6},
-        shapes={"a": "(M, N)", "out": "(M, N)"},
-        backends=("pythran",),
-    )
-    assert res["pythran"] == "ok", res
-
-
-def test_stack_negative_axis_pythran_bit_exact() -> None:
-    a = np.arange(6, dtype=np.float64).reshape(2, 3)
-    b = np.arange(6, 12, dtype=np.float64).reshape(2, 3)
-    res = run_op(
-        "import numpy as np\n"
-        "def k(a, b, out):\n"
-        "    c = np.stack((a, b), axis=-1)\n"
-        "    for i in range(out.shape[0]):\n"
-        "        for j in range(out.shape[1]):\n"
-        "            for l in range(out.shape[2]):\n"
-        "                out[i, j, l] = c[i, j, l]\n",
-        "k",
-        {"a": a, "b": b},
-        {"out": (2, 3, 2)},
-        {"M": 2, "N": 3},
-        shapes={"a": "(M, N)", "b": "(M, N)", "out": "(M, N, 2)"},
-        backends=("pythran",),
-    )
-    assert res["pythran"] == "ok", res

@@ -79,9 +79,9 @@ def test_fortran_baseline_compiles_and_runs(name: str, baseline: str) -> None:
 
 
 def compiler_blocks() -> dict[str, Any]:
-    from hpcagent_bench.languages import _load_compilers
+    from hpcagent_bench.languages import load_compilers
 
-    return _load_compilers()
+    return load_compilers()
 
 
 def test_every_compilers_yaml_ref_resolves() -> None:
@@ -110,7 +110,7 @@ def test_every_shared_library_block_compiles_position_independent(monkeypatch: p
     nvcc counts through ``-Xcompiler``: the flag is for the host compiler, and there is no
     device-side equivalent -- relocatable device code is ``-dc``, a different thing.
     """
-    from hpcagent_bench.languages import Mode, _resolve_baseline
+    from hpcagent_bench.languages import Mode, resolve_baseline
 
     # A hip block appends the GPU's arch, which a GPU-less host does not guess; PIC does not depend on it.
     monkeypatch.setenv("HPCAGENT_BENCH_GFX", "gfx942")
@@ -126,7 +126,7 @@ def test_every_shared_library_block_compiles_position_independent(monkeypatch: p
         missing.extend(
             f"{name} ({mode})"
             for mode in (Mode.SINGLE_CORE, Mode.MULTI_CORE)
-            if "-fPIC" not in f"{line} {_resolve_baseline(block, mode)}"
+            if "-fPIC" not in f"{line} {resolve_baseline(block, mode)}"
         )
     assert not missing, (
         f"these blocks compile a dlopen-ed shared library without -fPIC, in neither the "
@@ -312,10 +312,10 @@ def test_every_c_family_block_pins_a_language_standard() -> None:
     pins a standard, so a kernel using a C++20 feature compiled on the CPU setups and failed on the
     GPU setup for a reason no diagnostic named.
     """
-    from hpcagent_bench.languages import _load_compilers
+    from hpcagent_bench.languages import load_compilers
 
     missing = []
-    for name, block in _load_compilers().items():
+    for name, block in load_compilers().items():
         if name in _NO_STD_BY_DESIGN or block.lang not in ("c", "cpp", "hip", "cuda"):
             continue
         if not any(token.startswith(("-std=", "-c23")) for token in block.compile):
@@ -329,10 +329,10 @@ def test_the_cpp_standard_is_the_same_everywhere_it_is_not_vendor_capped() -> No
     Different host and device standards would make `lang-cpp` describe a standard the host half
     of a device file is never built with. One value means a C++ rule is true wherever it is written.
     """
-    from hpcagent_bench.languages import _load_compilers
+    from hpcagent_bench.languages import load_compilers
 
     disagree = {}
-    for name, block in _load_compilers().items():
+    for name, block in load_compilers().items():
         if block.lang not in ("cpp", "hip", "cuda") or name in _NO_STD_BY_DESIGN:
             continue
         pinned = next((t for t in block.compile if t.startswith("-std=")), "")

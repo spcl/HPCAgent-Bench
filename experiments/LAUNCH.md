@@ -182,50 +182,21 @@ names its pages.
 
 ## 1. Grade under the final protocol
 
-`hpcagent-bench grade-under` finds what no results DB holds a credited grade under the final protocol (mw4x5) of
-and grades it: an episode's final submission, or -- when it made none -- its last correct `/score` source (the
-no-submission promotion, graded as a `/submit` first and owed its final grade by the next scan).
-`hpcagent_bench/cluster/grade-under.sbatch <worklist> <out-dir> [aa]` runs one shard per task; each node runs four graders,
-`--nodes=N` makes `4N` shards, each skipping what it already holds, so resubmitting the same call resumes.
-`aa` is the A/A calibration. Pin the code with a detached worktree:
+`hpcagent-bench grade-under worklist | run | apply` grades every episode no credited final grade answers
+([measurement_statistics.md](../docs/measurement_statistics.md#final-grades-outside-the-judge)). On the cluster,
+pin the code with a detached worktree and run one shard per task; resubmitting the same call (same `--nodes`)
+resumes, and a second `worklist` after `apply` picks up promotions now owed their final grade:
 
 ```bash
-git -C $HB worktree add --detach $SCRATCH/hpcagent-bench-wt/regrade <sha>
-WT=$SCRATCH/hpcagent-bench-wt/regrade
-
-cd $WT
+git -C $HB worktree add --detach $SCRATCH/hpcagent-bench-wt/regrade <sha>; cd $SCRATCH/hpcagent-bench-wt/regrade
 hpcagent-bench grade-under worklist --db results.db --system beverin --out worklist.jsonl
-HPCAGENT_BENCH_REPO=$WT hpcagent-bench job submit --nodes 3 --time 04:00:00 hpcagent_bench/cluster/grade-under.sbatch worklist.jsonl out
-# resubmit the same call (same --nodes) until every shard is done; then
+HPCAGENT_BENCH_REPO=$PWD hpcagent-bench job submit --nodes 3 --time 04:00:00 hpcagent_bench/cluster/grade-under.sbatch worklist.jsonl out
 hpcagent-bench grade-under apply --into results.db out
 ```
 
-Only a final grade is credited: `worklist` lists every episode still without one, and `apply` writes the
-pass's grades back beside the submissions they re-timed. Scan again after `apply`: a promotion's first grade
-makes it a submission that is now owed its final grade.
-
-`--db` names a results DB (repeatable: a job's `results.db`, a dataset merged from many, or the core
-database plus the CPF archive; a setup two of them hold with different rows is refused). `--track` narrows to
-one track. Each setup's grading keys are what `submit.sh` stages for it today (`ENV_ONLY=<dir>`): its
-name read back into `submit.sh`'s knobs, its studies.yaml experiment's `base` the setups.yaml experiment, staged
-for `--system`'s job shape; a name `submit.sh` never writes is listed as a problem, not graded. `--env-dir`
-files, when given, override the staging. The extraction applies the promotions it is handed with `--regrades 'out/regrade-*.db'`.
-
-`hpcagent-bench grade-under <subcommand>` is the same entry point.
-
 ## 2. Extract observations
 
-`hpcagent_bench.observations_extract` turns results
-DBs into the observations CSV and SQLite every figure reads. Opening is read-only; unchanged inputs
-give byte-identical output.
-
-```bash
-"$HPCAGENT_BENCH_HOST_PYTHON" -m hpcagent_bench.observations_extract \
-    --runs "$SCRATCH/hpcagent-bench-runs/llr40-<date>/*" \
-    --runs "$SCRATCH/hpcagent-bench-runs/owed-llr40-<date>/*" \
-    --setup-prefix llr40-qwen38 --benchmarks $HB/hpcagent_bench/benchmarks \
-    --regrades 'final-out/regrade-*.db' --out obs --db obs/observations.sqlite
-```
+`hpcagent-bench extract` / `python -m hpcagent_bench.export.dataset` ([plotting.md](../docs/plotting.md#extract-once)).
 
 A job that ends with exit 75, or leaves `MERGE_FAILED` in its run dir, ran its agents but did not
 fold its shards and episode records into `results.db`. Recover on the login node, then remove the
@@ -348,7 +319,7 @@ GANG_NODES=4 JUDGE_EDF=~/.edf/<judge>.toml hpcagent-bench job submit --nodes 16 
   `SKILL.md`.
 - **Never edit an env file or launcher while its jobs run**; roles re-source them.
 - **Never export `CPF_*` in the submitting shell.** `sbatch --export=ALL` would stage the CPF
-  drop-in into a control setup; `submit_setup_job` strips `CPF_DROPIN_DIR`, `CPF_FORMS_DIR`,
+  drop-in into a control setup; `submit_setup_job` strips `CPF_DROPIN_DIR`,
   `HPCAGENT_BENCH_SERVICE_CANONICAL_PARALLEL_FORM_DIR` and `HPCAGENT_BENCH_CPF_HINTS`.
 - **Walltime can be lowered, never raised.** Submit with slack. A dependency can be added only while
   the job is PENDING. `launch failed requeued held` does not restart: `scontrol release <id>`.

@@ -34,13 +34,13 @@ except ImportError:
     sys.modules[spec_.name] = oo
     spec_.loader.exec_module(oo)
 
-ALL = ("c", "cpp", "fortran", "numba", "pythran", "jax")
+ALL = ("c", "cpp", "fortran", "numba")
 
 # Backends that mis-lower a given edge, keyed to the deep-review finding so the gap is documented,
 # not hidden. C / C++ route np.maximum/minimum through the NaN-propagating __npb_fmax/__npb_fmin
 # helpers (numpyto_c/emit.py) and Fortran emits the NaN-propagating MERGE form (numpyto_fortran/
-# emit.py), so only pythran (max/min drop NaN) is skipped.
-NAN_SUPPRESS = {"pythran": "pythran max/min do not propagate NaN"}
+# emit.py), so none is skipped.
+NAN_SUPPRESS: dict[str, str] = {}
 
 
 def skip_(status: dict[str, str], label: str) -> None:
@@ -161,7 +161,7 @@ CASES = [
         (4,),
         {"N": 4},
         {"a": "(N,)", "out": "(N,)"},
-        {"pythran": "sign gives 0 for NaN"},
+        {},
     ),
     # -- np.argmax: 0-based index. The Fortran emitter DOES adjust MAXLOC to 0-based (the review's
     #    off-by-one, emit.py:1148, does not reproduce here); first-max tie goes to the lowest index.

@@ -5,7 +5,7 @@ import re
 from collections.abc import Sequence
 
 from hpcagent_bench.translators.numpyto_common import dtypes
-from hpcagent_bench.translators.numpyto_common.ast_build import InlineDefinitions, name_
+from hpcagent_bench.translators.numpyto_common.ast_build import InlineDefinitions, name_, walk_nodes
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.emit_helpers.tokens import IDENT_RE
 from hpcagent_bench.translators.numpyto_common.frontend import names_used_as_int
@@ -147,7 +147,7 @@ def integer_candidates(kir: KernelIR) -> tuple[dict[str, bool], dict[str, list[a
     for sym in kir.symbols:
         pinned[sym.name] = True
     assigns: dict[str, list[ast.expr]] = {}
-    for node in ast.walk(kir.tree):
+    for node in walk_nodes(kir.tree):
         if isinstance(node, ast.For) and isinstance(node.target, ast.Name):
             pinned[node.target.id] = True
         elif isinstance(node, ast.Assign):
@@ -200,7 +200,7 @@ def integer_bindings(fn: ast.FunctionDef, name: str) -> list[ast.expr]:
     """Every expression ``name`` takes its value from in ``fn``, with a ``range`` loop
     variable spelled as the integer literal it always is."""
     bound: list[ast.expr] = []
-    for node in ast.walk(fn):
+    for node in walk_nodes(fn):
         if isinstance(node, ast.Assign):
             if any(isinstance(t, ast.Name) and t.id == name for t in node.targets):
                 bound.append(node.value)
@@ -256,7 +256,7 @@ def helper_returns_int(hkir: KernelIR) -> bool:
     Fortran dummy REAL(8) while the caller's actual is the INTEGER(8) it indexes bins with --
     gfortran rejects the call, and the C leg returned a double used as a subscript.
     """
-    rets = [n.value for n in ast.walk(hkir.tree) if isinstance(n, ast.Return) and n.value is not None]
+    rets = [n.value for n in walk_nodes(hkir.tree) if isinstance(n, ast.Return) and n.value is not None]
     return bool(rets) and all(integer_valued_expression(v, hkir.tree) for v in rets)
 
 
@@ -300,7 +300,7 @@ def retype_helper_temporaries(helper: KernelIR, caller: KernelIR) -> None:
     params = {a.name: a for a in helper.arrays}
     caller_arrays = {a.name for a in caller.arrays}
     seen: dict[str, set[str]] = {}
-    for node in ast.walk(caller.tree):
+    for node in walk_nodes(caller.tree):
         if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == helper.kernel_name):
             continue
         if len(node.args) != len(order):
@@ -332,7 +332,7 @@ def written_through_helpers(tree: ast.AST, helpers: Sequence[KernelIR]) -> set[s
     """
     by_name = {h.kernel_name: h for h in helpers}
     written: set[str] = set()
-    for node in ast.walk(tree):
+    for node in walk_nodes(tree):
         if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)):
             continue
         helper = by_name.get(node.func.id)
@@ -460,7 +460,7 @@ class ArrayUseScan:
                 self.index_arrays.add(e.value.id)
             if isinstance(e, ast.Name) and e.id in self.arrays:
                 self.index_arrays.add(e.id)
-            for sub in ast.walk(e):
+            for sub in walk_nodes(e):
                 if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Load):
                     self.scalars_used_as_index.add(sub.id)
 
@@ -502,7 +502,7 @@ def promote_free_names_to_params(kir: KernelIR) -> None:
     # appear as CALL funcs (``classify(x[i])``), never as scalar parameters.
     declared.update(h.kernel_name for h in kir.helpers)
     # A Name used as a call function is never a scalar parameter either.
-    for node in ast.walk(kir.tree):
+    for node in walk_nodes(kir.tree):
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
             declared.add(node.func.id)
 
@@ -510,7 +510,7 @@ def promote_free_names_to_params(kir: KernelIR) -> None:
 
     free: list[str] = []
     seen: set[str] = set()
-    for node in ast.walk(kir.tree):
+    for node in walk_nodes(kir.tree):
         if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
             n = node.id
             if n in declared or n in seen:
@@ -591,7 +591,7 @@ def foldable_shape_aliases(kir: KernelIR) -> dict[str, ast.expr]:
     # Count assignments per name so only single-definition aliases qualify.
     assign_count = assignment_counts(kir.tree)
     aliases: dict[str, ast.expr] = {}
-    for node in ast.walk(kir.tree):
+    for node in walk_nodes(kir.tree):
         if not isinstance(node, ast.Assign) or len(node.targets) != 1:
             continue
         tgt = node.targets[0]
@@ -602,7 +602,7 @@ def foldable_shape_aliases(kir: KernelIR) -> dict[str, ast.expr]:
             or assign_count.get(tgt.id, 0) != 1
         ):
             continue
-        rhs_names = {n.id for n in ast.walk(node.value) if isinstance(n, ast.Name)}
+        rhs_names = {n.id for n in walk_nodes(node.value) if isinstance(n, ast.Name)}
         if tgt.id in rhs_names or not rhs_names <= in_scope:
             continue
         aliases[tgt.id] = node.value
@@ -612,7 +612,7 @@ def foldable_shape_aliases(kir: KernelIR) -> dict[str, ast.expr]:
 def assignment_counts(tree: ast.AST) -> dict[str, int]:
     """How many assignments (plain, augmented, annotated) bind each Name."""
     assign_count: dict[str, int] = {}
-    for node in ast.walk(tree):
+    for node in walk_nodes(tree):
         tgts = (
             node.targets
             if isinstance(node, ast.Assign)
@@ -621,7 +621,7 @@ def assignment_counts(tree: ast.AST) -> dict[str, int]:
             else []
         )
         for t in tgts:
-            for nm in (n.id for n in ast.walk(t) if isinstance(n, ast.Name)):
+            for nm in (n.id for n in walk_nodes(t) if isinstance(n, ast.Name)):
                 assign_count[nm] = assign_count.get(nm, 0) + 1
     return assign_count
 
@@ -637,13 +637,13 @@ def body_defined_locals(tree: ast.AST) -> set[str]:
     definitions. Used to keep computed dimension aliases (smith_waterman's
     ``M = a.shape[0]``) out of the parameter list."""
     defined: set[str] = set()
-    for node in ast.walk(tree):
+    for node in walk_nodes(tree):
         if not isinstance(node, ast.Assign) or len(node.targets) != 1:
             continue
         tgt = node.targets[0]
         if not isinstance(tgt, ast.Name):
             continue
-        rhs_names = {n.id for n in ast.walk(node.value) if isinstance(n, ast.Name)}
+        rhs_names = {n.id for n in walk_nodes(node.value) if isinstance(n, ast.Name)}
         if tgt.id not in rhs_names:
             defined.add(tgt.id)
     return defined
@@ -727,7 +727,7 @@ def bound_names(tree: ast.AST) -> set[str]:
     """Names the body binds anywhere -- assignment / for / comprehension / walrus targets, lambda
     parameters, exception names: local variables, never free parameters."""
     bound: set[str] = set()
-    for node in ast.walk(tree):
+    for node in walk_nodes(tree):
         if isinstance(node, ast.Assign):
             for tgt in node.targets:
                 bound.update(target_names(tgt))

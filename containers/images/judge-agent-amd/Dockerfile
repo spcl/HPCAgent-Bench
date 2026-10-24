@@ -299,7 +299,13 @@ RUN set -eux; \
     command -v hipcc; \
     command -v amdclang; \
     command -v rocprofv3; \
-    command -v rocprof-sys-sample
+    command -v rocprof-sys-sample; \
+    # ROCm's libgomp compat links point at LLVM libomp. mpich +rocm puts /opt/rocm/llvm/lib on the link
+    # path of every MPI dependent, so a gcc `-fopenmp` (-lgomp) there linked libomp: fftw's _omp
+    # libraries, sundials and superlu-dist then mapped libomp beside libgomp in gnu-context processes.
+    rm -f /opt/rocm/llvm/lib/libgomp.so /opt/rocm/llvm/lib/libgomp.so.1; \
+    ! ls /opt/rocm/llvm/lib/libgomp.so* 2>/dev/null \
+      || { echo "ROCm still ships a libgomp link in /opt/rocm/llvm/lib" >&2; exit 1; }
 
 # ---------------------------------------------------------------------------------------------
 # 3. spack: bootstrap, configuration, and the externals that keep ROCm out of the build graph.
@@ -481,8 +487,10 @@ RUN set -eux; \
       '    # fftw: ONE build with every precision. petsc +fftw names no precision, and under' \
       '    # unify:when_possible it concretized a second, double-only fftw that the view linked, so' \
       '    # /opt/view had no libfftw3f and the fp32 fftwf_* symbols of the fftw library request failed.' \
+      '    # fftw, superlu-dist, sundials: ldflags=-L/opt/gcc/lib64 puts gcc libgomp ahead of the ROCm link dirs' \
+      '    # mpich +rocm adds; their -lgomp linked libomp there, and the flag keeps such a cached binary from matching.' \
       '    fftw:' \
-      '      require: ["precision=float,double,long_double +mpi +openmp"]' \
+      '      require: ["precision=float,double,long_double +mpi +openmp ldflags=-L/opt/gcc/lib64"]' \
       '    yaksa:' \
       "      require: [\"amdgpu_target=$(echo "${ROCM_ARCH}" | tr ";" ",")\"]" \
       '    # libfabric: OURS. Two separate mechanisms had to be closed to make that stick, and' \
@@ -542,9 +550,10 @@ RUN set -eux; \
       '  - scotch +mpi +esmumps' \
       '  - suite-sparse +openmp' \
       '  - superlu' \
-      '  - superlu-dist +openmp +parmetis ~rocm' \
+      '  - superlu-dist +openmp +parmetis ~rocm ldflags=-L/opt/gcc/lib64' \
       '  - mumps +mpi +metis +parmetis +scotch +ptscotch +openmp +shared' \
-      '  - strumpack +mpi +openmp +parmetis +scotch ~cuda ~rocm' \
+      '  # strumpack: slate +rocm and butterflypack link libomp, and an unpinned compiler is rocmcc.' \
+      "  - strumpack +mpi +openmp +parmetis +scotch ~cuda ~rocm ~slate ~butterflypack %gcc@${GCC_VERSION}" \
       '  # hypre is the ONE library here without a GPU build, and the box it is in is closed on' \
       '  # three sides. hypre@3 carries requires("+umpire") with depends_on("umpire+c+rocm");' \
       '  # umpire@2026.07 accepts only cxxstd=20 or 23, and its HIP units are compiled by ROCm' \
@@ -566,8 +575,9 @@ RUN set -eux; \
       "  - petsc +mpi +metis +hypre +mumps ~superlu-dist ~strumpack +suite-sparse +scalapack +hdf5 +fftw ~rocm +shared %gcc@${GCC_VERSION}" \
       "  - slepc +arpack %gcc@${GCC_VERSION}" \
       '  # sundials had no provider at all: its entry declares -lsundials_core, which exists only' \
-      '  # from SUNDIALS 7, so a distro 6.x fails on that token alone. Spack ships 7.x, with rocm.' \
-      "  - sundials +openmp ~cuda +rocm amdgpu_target=$(echo "${ROCM_ARCH}" | tr ";" ",")" \
+      '  # from SUNDIALS 7, so a distro 6.x fails on that token alone. Spack ships 7.x. HB links the serial' \
+      '  # CVODE only, and +rocm or an unpinned compiler builds nvecopenmp on libomp.' \
+      "  - sundials +openmp ~cuda ~rocm ldflags=-L/opt/gcc/lib64 %gcc@${GCC_VERSION}" \
       '  view:' \
       '    default:' \
       '      root: /opt/view' \
@@ -641,12 +651,10 @@ ENV PATH=/opt/gcc/bin:/opt/view/bin:/opt/papi/bin:/opt/rocm/bin:${PATH} \
 #   * OpenMP offload really reaches amdgcn, checked on the emitted offload bundle rather than on
 #     the exit code.
 #
-# Polly is deliberately NOT probed here: parallelizer-gate.sh below already asks the question, and
-# asks it correctly. A bare `-mllvm -polly -mllvm -polly-parallel` outlines nothing even on an
-# LLVM whose Polly works -- measured on llvm 22.1.7, where the same source outlines 1 polly_subfn
-# and 4 libgomp calls once `-polly-parallel-force -polly-process-unprofitable` are added, which is
-# what the gate passes and what flags.POLLY_PAR contains. A second, weaker copy of a gate is how a
-# working toolchain gets rejected.
+# Polly is deliberately NOT probed here: parallelizer-gate.sh below already asks the question with
+# flags.POLLY_PAR on flags._AUTOPAR_PROBE_SOURCE (1 polly_subfn, 4 runtime calls on llvm 22.1.7). A
+# lone trivial loop outlines nothing under Polly's profitability model, so a second, smaller probe
+# here would reject a working toolchain.
 #
 # RECORDED, not enforced: GCC's OpenACC offload target. spack's gcc package exposes `+nvptx` and
 # NOTHING for amdgcn, so an amdgcn-amdhsa offload GCC is not reachable from any spack spec -- it
@@ -730,7 +738,11 @@ RUN set -eux; \
     test -f /opt/view/lib/libfftw3f.so; \
     test -f /opt/view/include/tbb/tbb.h; \
     test -f /opt/view/include/blaze/Blaze.h; \
-    mpicc -show
+    mpicc -show; \
+    # gcc builds run on libgomp alone: a view library that NEEDS libomp maps a second runtime.
+    bad="$(for f in /opt/view/lib/*.so*; do if readelf -d "$(readlink -f "${f}")" 2>/dev/null \
+      | grep -qE 'NEEDED.*\[(libomp|libiomp5)'; then echo "${f}"; fi; done)"; \
+    [ -z "${bad}" ] || { echo "gnu view libraries NEED LLVM libomp: ${bad}" >&2; exit 1; }
 
 # GPU-aware MPI gate. HARD, and it exists because the failure mode is silence.
 #
@@ -828,7 +840,7 @@ RUN set -eux; \
     true
 
 # ---------------------------------------------------------------------------------------------
-# 7b. The llvm OpenMP context's library variants (hpcagent_bench/omp_context.py), built by the one script
+# 7b. The llvm OpenMP context's library variants (hpcagent_bench/openmp/context.py), built by the one script
 # every judge-agent image runs (containers/images/lib/omp_llvm_env.sh, which documents the environment and its
 # rocm package list).
 ENV OMP_LLVM_ENV_DIR=/opt/omp/llvm/env
@@ -932,7 +944,7 @@ RUN PLUTO_CLANG_MAJOR="${PLUTO_CLANG_MAJOR}" sh /build-pluto.sh && rm -rf /build
 
 # ---------------------------------------------------------------------------------------------
 # 10b. PPCG -- the `ppcg` binary the ppcg/ppcg_cuda/ppcg_hip columns shell out to
-# (hpcagent_bench/ppcg_transform.py). Same polyhedral pair as Pluto above (pet + isl, the
+# (hpcagent_bench/polyhedral/ppcg.py). Same polyhedral pair as Pluto above (pet + isl, the
 # ``#pragma scop`` front end), CUDA out instead of tiled OpenMP C, so it is built with the exact
 # same recipe and the exact same distro clang already installed for step 10 -- no new apt package.
 #
@@ -951,7 +963,7 @@ RUN PLUTO_CLANG_MAJOR="${PLUTO_CLANG_MAJOR}" sh /build-pluto.sh && rm -rf /build
 # Ubuntu packages `libisl23` as a build dependency of gcc's Graphite pass. That copy shares ppcg's
 # isl's SONAME but predates `isl_id_set_alloc`, so at RUN time ppcg would die with a symbol lookup
 # error unless something puts /opt/ppcg-install/lib ahead of LD_LIBRARY_PATH. That "something" is
-# hpcagent_bench.ppcg_transform._ppcg_run_env, which every ppcg invocation goes through -- the
+# hpcagent_bench.ppcg_transform.ppcg_run_env, which every ppcg invocation goes through -- the
 # smoke test below exercises the SAME fix, not a build-time-only workaround, so a green image
 # build is actually evidence the run-time path works too.
 #
@@ -1085,6 +1097,7 @@ RUN set -eux; \
 # a dependency, from the agent/ a step binds); the judge stage drops that flag, so a judge job also installs
 # hpcagent_bench editable from its mounted checkout. The packages this image built are never reinstalled.
 COPY containers/images/lib/launch_venv.sh containers/images/lib/one_openmp.sh containers/images/lib/openmp_gate.py /opt/launch/
+COPY containers/images/lib/tilelang/pyproject.toml containers/images/lib/tilelang/uv.lock /opt/launch/tilelang/
 RUN set -eux; \
     command -v python3 > /opt/launch/python; \
     echo "--no-install-project --extra amdgpu --group judge-proxy --no-install-package numpy --no-install-package scipy \
@@ -1247,7 +1260,7 @@ RUN set -eux; \
 
 # ---------------------------------------------------------------------------------------------
 # 13d. Polygeist -- cgeist + polygeist-opt (+ Polymer's Pluto scheduler, + MLIR's ROCm runtime) for the
-# polygeist_cpu / polygeist_gpu columns (hpcagent_bench/polygeist_transform.py), from the hpcagent overlay's
+# polygeist_cpu / polygeist_gpu columns (hpcagent_bench/polyhedral/polygeist.py), from the hpcagent overlay's
 # `polygeist` package (which says why that source and that patch).
 #
 # Built against the environment's llvm by HASH, not by version: a standalone root concretized by version alone
@@ -1393,7 +1406,12 @@ COPY containers/images/lib/openmp_gate.py containers/images/lib/omp_contexts.sh 
      containers/images/lib/openmp_probe.c containers/images/lib/openmp_probe.f90 /tmp/one-openmp/
 # The gate's venv installs hpcagent-agent editable, and uv_build needs its module root; an agent step binds the
 # real agent/ over /opt/hpcagent-bench-agent, so the stub lives only for this step.
-RUN mkdir -p /opt/hpcagent-bench-agent/hpcagent_agent && touch /opt/hpcagent-bench-agent/hpcagent_agent/__init__.py \
+# The OpenMP catalog (hpcagent_bench/openmp/catalog.py) is measured here, once per image, into /opt/omp/catalog.json
+# where every job reads it. hpcagent_bench and the agent package are bind-mounted for this step only: no layer
+# carries them.
+RUN --mount=type=bind,source=hpcagent_bench,target=/hb-src/hpcagent_bench \
+    --mount=type=bind,source=agent/hpcagent_agent,target=/hb-src/hpcagent_agent \
+    mkdir -p /opt/hpcagent-bench-agent/hpcagent_agent && touch /opt/hpcagent-bench-agent/hpcagent_agent/__init__.py \
     && HPCAGENT_BENCH_LAUNCH_ROOT=/opt/launch-gate UV_CACHE_DIR=/uv-cache /opt/launch/launch_venv.sh sh -eux -c '\
     python3 -c "import torch, glob, os; assert torch.version.hip, \"torch lost its HIP build\"; \
       lib = os.path.join(os.path.dirname(torch.__file__), \"lib\"); \
@@ -1432,9 +1450,21 @@ RUN mkdir -p /opt/hpcagent-bench-agent/hpcagent_agent && touch /opt/hpcagent-ben
     sh /tmp/one-openmp/omp_contexts.sh /opt/view /opt/omp/llvm/view; \
     python3 /tmp/one-openmp/openmp_gate.py scan; \
     python3 /tmp/one-openmp/openmp_gate.py context --context gnu --wheels --torch; \
-    python3 /tmp/one-openmp/openmp_gate.py context --context llvm --blas-in-context' \
+    python3 /tmp/one-openmp/openmp_gate.py context --context llvm --blas-in-context; \
+    cd /hb-src && PYTHONDONTWRITEBYTECODE=1 python3 -m hpcagent_bench.openmp.catalog --write /opt/omp/catalog.json --check' \
     && rm -rf /opt/launch-gate /tmp/one-openmp /opt/hpcagent-bench-agent/hpcagent_agent \
     && { mountpoint -q /uv-cache || rm -rf /uv-cache; }
+
+# LIBXSMM (dace's small-GEMM lowering; agents link -lxsmm): the last build step, so a change to it rebuilds
+# this layer and none of the toolchain above. Before the mirror drop: it clones through the mirror.
+COPY containers/images/lib/build-libxsmm.sh /build-libxsmm.sh
+RUN set -eux; \
+    sh /build-libxsmm.sh; \
+    rm -f /build-libxsmm.sh; \
+    ldconfig; \
+    test -f /usr/local/include/libxsmm/libxsmm.h; \
+    test -f /usr/local/lib/libxsmm.so
+ENV LIBXSMM_ROOT=/usr/local
 
 # Drop the build-time mirror rewrite from the SHIPPED image.
 COPY containers/images/lib/git_mirror.sh /tmp/git_mirror.sh

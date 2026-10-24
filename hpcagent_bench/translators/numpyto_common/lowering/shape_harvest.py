@@ -4,6 +4,7 @@ import ast
 from collections.abc import Sequence
 from types import NotImplementedType
 
+from hpcagent_bench.translators.numpyto_common.ast_build import walk_nodes
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module, numpy_submodule_attr
 from hpcagent_bench.translators.numpyto_common.frontend import collect_inlined_scalar_defs, dtype_from_constructor
 from hpcagent_bench.translators.numpyto_common.lib_nodes.dims import (
@@ -161,10 +162,13 @@ def harvest_local_shapes(
     # it (conv_standard_1d's zero-padded buffer). ast.walk is not source order, so aliases are
     # deferred and applied only to targets no allocation claimed.
     aliases: list[tuple[str, str]] = []
-    for stmt in ast.walk(tree):
+    for stmt in walk_nodes(tree):
         if not isinstance(stmt, ast.Assign) or len(stmt.targets) != 1:
             continue
         target = stmt.targets[0]
+        if numpy_submodule_attr(stmt.value, "linalg") in ("eigh", "eigvalsh"):
+            harvest_eigh(target, stmt.value, shape_table)
+            continue
         if not isinstance(target, ast.Name):
             continue
         rhs = optional_constructor(stmt.value)
@@ -181,6 +185,26 @@ def harvest_local_shapes(
             src_dt = dtype_table.get(src)
             if src_dt is not None and name not in dtype_table:
                 dtype_table[name] = src_dt
+
+
+def harvest_eigh(target: ast.expr, call: ast.expr, shape_table: dict[str, tuple[str, ...]]) -> None:
+    """``w, U = np.linalg.eigh(A)`` / ``w = np.linalg.eigvalsh(A)`` kept as a call: ``w`` is ``(n,)`` and ``U`` is
+    ``(n, n)`` for the square ``(n, n)`` operand."""
+    if not isinstance(call, ast.Call) or not call.args:
+        return
+    ext = iter_extent_of(call.args[0], shape_table)
+    if ext is not None and len(ext) == 2:
+        n = ast.unparse(ext[0])
+    elif isinstance(call.args[0], ast.Name):
+        n = f"{call.args[0].id}.shape[0]"
+    else:
+        return
+    names = [e.id for e in target.elts if isinstance(e, ast.Name)] if isinstance(target, ast.Tuple) else []
+    if isinstance(target, ast.Name):
+        names = [target.id]
+    shapes = [(n,), (n, n)]
+    for name, shape in zip(names, shapes, strict=False):
+        shape_table.setdefault(name, shape)
 
 
 def optional_constructor(rhs: ast.expr) -> ast.expr:

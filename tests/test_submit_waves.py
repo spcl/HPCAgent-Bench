@@ -123,6 +123,33 @@ def test_a_dry_run_prints_the_waves_and_submits_nothing(tmp_path: pathlib.Path) 
     assert not (tmp_path / "sbatch.chain").exists()
 
 
+def test_the_wave_waits_on_one_prepare_job_rendering_what_its_setups_read(tmp_path: pathlib.Path) -> None:
+    """One prepare job renders numba and each setup's reference language (C for hip, which has no CPU reference of
+    its own) in the judge image the setups name, and the first wave waits on it beside DEPEND_ON."""
+    root = tree(tmp_path)
+    bash_stub(root / "bin", "sbatch", CHAIN_SBATCH)
+    edf = root / "edf"
+    edf.mkdir()
+    (edf / "hpcagent-bench-judge-mi300-latest.toml").write_text('image = "judge.sqsh"\n')
+    knobs = {"KERNELS_FILE": "subset.txt", "LANGUAGES": "c hip", "PREPARE": "1", "EDF_PATH": str(edf)}
+    done = submit(root, "--account", "project", **knobs, DEPEND_ON="77", SUBMIT="1")
+    assert done.returncode == 0, done.stderr
+    calls = (root / "sbatch.calls").read_text().splitlines() if (root / "sbatch.calls").exists() else []
+    prepare = [line for line in done.stdout.splitlines() if line.startswith("submitted prepare-")]
+    assert prepare == ["submitted prepare-wave -> 101;cluster: renders numba,c"], (prepare, calls)
+    chain = [line.split() for line in (root / "sbatch.chain").read_text().splitlines()]
+    assert [dependency for _, _, dependency in chain] == ["afterany:77:101", "afterany:77:101"]
+
+
+def test_the_root_account_submits_no_prepare_job_either(tmp_path: pathlib.Path) -> None:
+    root = tree(tmp_path)
+    bash_stub(root / "bin", "sbatch", CHAIN_SBATCH)
+    done = submit(root, "--account", "root", KERNELS_FILE="subset.txt", PREPARE="1", SUBMIT="1")
+    assert done.returncode == 2, done.stderr
+    assert "root is not a project account" in done.stderr, done.stderr
+    assert not (root / "sbatch.last").exists()
+
+
 @pytest.mark.smoke
 def test_submit_sh_splits_a_study_into_chained_waves(tmp_path: pathlib.Path) -> None:
     """submit.sh with MAX_NODES at two setups' nodes: four setups go out as two waves of two, the second wave

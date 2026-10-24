@@ -5,7 +5,7 @@ import copy
 from collections.abc import Callable
 
 from hpcagent_bench.translators.numpyto_common import dtypes
-from hpcagent_bench.translators.numpyto_common.ast_build import name_, store_
+from hpcagent_bench.translators.numpyto_common.ast_build import name_, store_, walk_nodes
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import numpy_submodule_attr
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.ranks import expr_rank
 
@@ -189,7 +189,7 @@ class FftInline(ast.NodeTransformer):
         """``return <expr with np.fft.X(a)>`` -> bind the value, lower the binding, return the name.
 
         Left untouched when the lowering leaves any ``np.fft`` call in the binding."""
-        if node.value is None or not any(numpy_submodule_attr(n, "fft") is not None for n in ast.walk(node.value)):
+        if node.value is None or not any(numpy_submodule_attr(n, "fft") is not None for n in walk_nodes(node.value)):
             return node
         name = f"__fret{self._ctr}"
         binding = ast.Assign(targets=[store_(name)], value=copy.deepcopy(node.value))
@@ -197,7 +197,7 @@ class FftInline(ast.NodeTransformer):
         ast.fix_missing_locations(binding)
         lowered = self.visit_Assign(binding)
         stmts = lowered if isinstance(lowered, list) else [lowered]
-        if any(numpy_submodule_attr(n, "fft") is not None for s in stmts for n in ast.walk(s)):
+        if any(numpy_submodule_attr(n, "fft") is not None for s in stmts for n in walk_nodes(s)):
             return node
         return [*stmts, ast.copy_location(ast.Return(value=name_(name)), node)]
 

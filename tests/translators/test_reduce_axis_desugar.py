@@ -1,6 +1,6 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Axis-reduction desugar for the numba / pythran (and dace) Python backends.
+"""Axis-reduction desugar for the numba (and dace) Python backends.
 
 These backends run the numpy body (near-)verbatim, so a reduction they cannot
 type -- ``keepdims=True`` (neither supports it), a tuple ``axis=(1, 2, 3)`` over
@@ -9,7 +9,7 @@ a >4-D array (numba cannot lower it), a negative ``axis=-1`` literal, or a
 surfaced auditing the KernelBench ML kernels: softmax's stable form is
 ``x - max(x, axis=-1, keepdims=True)`` and conv/pool reduce a broadcast product
 over a tuple axis. The AST-level tests pin the rewrite; the two numerical tests
-confirm bit-exact agreement with numpy on numba + pythran.
+confirm bit-exact agreement with numpy on numba.
 """
 
 import ast
@@ -62,7 +62,7 @@ def test_axis_list_normalizes_negative_and_tuple() -> None:
 
 
 def test_negative_axis_now_reduces() -> None:
-    # ``axis=-1`` parses as a UnaryOp, not a constant; left verbatim, numba/pythran
+    # ``axis=-1`` parses as a UnaryOp, not a constant; left verbatim, numba
     # see the unsupported axis form.
     src = "def k(x, out):\n out[:] = np.max(x, axis=-1)\n"
     kir = kir_("k", x=("M", "N"), out=("M",))

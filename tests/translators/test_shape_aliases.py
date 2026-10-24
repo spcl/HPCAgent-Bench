@@ -3,11 +3,11 @@
 """Shape-manipulation aliases -> the transpose / reshape loop-lowering.
 
 ``np.swapaxes`` / ``np.expand_dims`` / ``np.squeeze`` are NumPy sugar over transpose and
-reshape; the C / Fortran backends (which emit explicit loops, unlike numba / pythran / jax
+reshape; the C / Fortran backends (which emit explicit loops, unlike numba
 that run the numpy verbatim) get them for free by delegating to the existing transpose /
 reshape expanders, once ``iter_extent_of`` learns their output shape. These validate the
 emitted code numerically against numpy for param AND intermediate-local operands (the
-ML-reshape case), across the full backend matrix (C / C++ / Fortran + numba / pythran / jax,
+ML-reshape case), across the full backend matrix (C / C++ / Fortran + numba,
 skip-tolerant). The kept ``swapaxes`` negative-axes and ``expand_dims`` middle-axis (keyword
 form) cases subsume the positive-axis and trailing-axis variants.
 
@@ -23,7 +23,7 @@ import numpy as np
 from hpcagent_bench.translators.numpyto_common.lowering import is_newaxis_result_axis
 from tests.translators.op_oracle import all_ok, run_op
 
-ALL = ("c", "cpp", "fortran", "numba", "pythran", "jax")
+ALL = ("c", "cpp", "fortran", "numba")
 
 
 def test_swapaxes_negative_axes() -> None:

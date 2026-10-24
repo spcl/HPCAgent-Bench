@@ -2,8 +2,7 @@
 
 Authored once here so the AST-operator -> target-syntax mapping is not
 duplicated across the C and Fortran emitters (and, in Phase 4, so the shared
-``BaseEmitter`` can look up its column by target). JAX does not use these -- it
-unparses Python operators directly.
+``BaseEmitter`` can look up its column by target).
 """
 
 import ast

@@ -142,7 +142,10 @@ IMPORT_PATH_EDIT = re.compile(
 )
 
 
-IMPORT_PATH_ALLOW = {"tests/test_check_repo_rules.py": "spells the edits the pattern must catch"}
+IMPORT_PATH_ALLOW = {
+    "tests/test_check_repo_rules.py": "spells the edits the pattern must catch",
+    "hpcagent_bench/harness/python_envs.py": "puts a submission's named python_env first, in the one process grading it",
+}
 
 
 def import_path(files: list[str]) -> list[str]:
@@ -273,7 +276,7 @@ def gfx_literal(files: list[str]) -> list[str]:
 OPT_FLAG = re.compile(r"-O3|-march=native|-ffast-math")
 OPT_FLAG_ALLOW = {
     "hpcagent_bench/flags.py": "the matrix itself",
-    "hpcagent_bench/harbor.py": "agent-facing prose naming the flags the harness applies, not a build command",
+    "hpcagent_bench/export/harbor.py": "agent-facing prose naming the flags the harness applies, not a build command",
     "hpcagent_bench/benchmarks/scientific_computing/n_body_methods/gromacs/nbnxm/tests/test_gromacs_nbnxm.py": (
         "builds a reference-C correctness oracle, not the graded matrix"
     ),
@@ -396,7 +399,7 @@ SITE_ALLOW = {
     "docs/configuration.md": "shows the CSCS site layer's values next to the generic ones",
     "pyproject.toml": "package author contact (PyPI metadata), not a runtime value",
     "agent/pyproject.toml": "package author contact (metadata), not a runtime value",
-    "hpcagent_bench/observations_extract.py": "reads the recorded MCP server/env keys of existing rows",
+    "hpcagent_bench/results/extract.py": "reads the recorded MCP server/env keys of existing rows",
     "tests/test_extract_llr40_episode_rows.py": "fixtures of recorded keys",
     "tests/test_iteration_counts.py": "fixtures of recorded keys",
     "tests/test_harbor_images.py": "asserts a generated Harbor task names no storage mount",
@@ -512,7 +515,7 @@ ABSOLUTE_PREFIXES = ("/opt/rocm", "/dev/shm/")
 PACKAGE_LITERAL_ALLOW = {
     "hpcagent_bench/paths.py": "THE absolute defaults",
     "hpcagent_bench/run_layout.py": "THE run-directory names",
-    "hpcagent_bench/harbor.py": "a Harbor task's own tasks/ output directory, not a run directory",
+    "hpcagent_bench/export/harbor.py": "a Harbor task's own tasks/ output directory, not a run directory",
 }
 
 

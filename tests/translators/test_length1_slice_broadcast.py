@@ -18,7 +18,7 @@ import numpy as np
 
 from tests.translators.op_oracle import run_op
 
-BACKENDS = ("c", "cpp", "fortran", "numba", "pythran")
+BACKENDS = ("c", "cpp", "fortran", "numba")
 M, N = 4, 6
 SHAPES_2D = {"a": "(M, N)", "b": "(M, N)", "out": "(M, N)"}
 
@@ -147,7 +147,6 @@ def test_a_newaxis_BEFORE_the_size_1_axis_still_pins_the_right_one() -> None:
         {"M": M, "K": K},
         shapes={"p": "(1, 3)", "n": "(M, K, 3)", "out": "(M, K, 3)"},
         backends=BACKENDS,
-        skip_backends={"pythran": "pythran miscompiles a LEADING-newaxis broadcast"},
     )
     bad = {k: v for k, v in result.items() if v != "ok" and not v.startswith("skip")}
     assert any(v == "ok" for v in result.values()), f"every backend skipped; the comparison never ran: {result}"

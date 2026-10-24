@@ -3,7 +3,7 @@
 import ast
 import copy
 
-from hpcagent_bench.translators.numpyto_common.ast_build import const_int, map_statement_lists
+from hpcagent_bench.translators.numpyto_common.ast_build import const_int, map_statement_lists, walk_nodes
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.emit_helpers.tokens import IDENT_RE
 from hpcagent_bench.translators.numpyto_common.frontend.body_rewrites import FoldTupleLocals
@@ -330,7 +330,7 @@ def assigns_to(fn: ast.FunctionDef, name: str) -> list[ast.Assign]:
     """
     return [
         node
-        for node in ast.walk(fn)
+        for node in walk_nodes(fn)
         if isinstance(node, ast.Assign)
         and len(node.targets) == 1
         and isinstance(node.targets[0], ast.Name)
@@ -390,7 +390,7 @@ def expr_array_dtype(node: ast.expr, arr_by: dict[str, ArrayDesc]) -> str | None
     Guessing here is not safe -- the dtype decides the buffer's width, so an expression built only
     from locals stays unresolved rather than defaulting to a float.
     """
-    for sub in ast.walk(node):
+    for sub in walk_nodes(node):
         if isinstance(sub, ast.Name) and sub.id in arr_by:
             return arr_by[sub.id].dtype
     return None
@@ -422,7 +422,7 @@ def shape_from_expression(
     # that fills it read the matmul buffer BARE (``__mm2 + b2[i]``, a pointer plus a double).
     # Resolved through the same chase the caller used, ``seen`` threaded so an operand naming the
     # local being resolved terminates instead of recursing.
-    for operand in ast.walk(node):
+    for operand in walk_nodes(node):
         if isinstance(operand, ast.Name) and operand.id not in declared:
             local = resolve_array_ref(fn, operand, arr_by, seen)
             if local is not None:
@@ -493,7 +493,7 @@ def fold_dtype_aliases(fn: ast.FunctionDef) -> None:
     the refusal that comes with it.
     """
     stores: dict[str, int] = {}
-    for node in ast.walk(fn):
+    for node in walk_nodes(fn):
         if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
             stores[node.id] = stores.get(node.id, 0) + 1
 
@@ -506,7 +506,7 @@ def fold_dtype_aliases(fn: ast.FunctionDef) -> None:
         name = stmt.targets[0].id
         return (name, value) if stores.get(name) == 1 else None
 
-    aliases = dict(b for b in (bind_of(s) for s in ast.walk(fn) if isinstance(s, ast.stmt)) if b is not None)
+    aliases = dict(b for b in (bind_of(s) for s in walk_nodes(fn) if isinstance(s, ast.stmt)) if b is not None)
     if not aliases:
         return
 
@@ -546,7 +546,7 @@ def resolve_shape_reads(fn: ast.FunctionDef, arr_by: dict[str, ArrayDesc]) -> li
     # ``X, Y, sigma = Y, Ynew, sigma_new`` rebinds all three through a TUPLE target, and counting
     # only Name targets reported every one of them as bound exactly once.
     binds: dict[str, int] = {}
-    for stmt in ast.walk(fn):
+    for stmt in walk_nodes(fn):
         if isinstance(stmt, ast.Name) and isinstance(stmt.ctx, (ast.Store, ast.Del)):
             binds[stmt.id] = binds.get(stmt.id, 0) + 1
     rebound = frozenset(n for n, c in binds.items() if c > 1)
@@ -706,12 +706,12 @@ def fold_extent_locals(fn: ast.FunctionDef, arr_by: dict[str, ArrayDesc]) -> Non
     # Store context, not "a name somewhere in a target": ``row[i % nb0] += w`` writes ``row`` and
     # only READS ``nb0``, so counting the whole target subtree makes an index look rebound.
     bound: dict[str, int] = {}
-    for node in ast.walk(fn):
+    for node in walk_nodes(fn):
         if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
             bound[node.id] = bound.get(node.id, 0) + 1
     params = {a.arg for a in fn.args.args}
     defs: dict[str, ast.expr] = {}
-    for node in ast.walk(fn):
+    for node in walk_nodes(fn):
         if not (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)):
             continue
         name = node.targets[0].id
@@ -765,7 +765,7 @@ def conflicting_rebind_shapes(
     if not isinstance(node, ast.Name) or node.id in arr_by:
         return None
     shapes: list[tuple[str, ...] | None] = []
-    for stmt in ast.walk(fn):
+    for stmt in walk_nodes(fn):
         if stmt is ignore:
             # The site under construction. ``X = h(X, ...)`` always rebinds X, and its own result
             # is exactly what is not resolvable yet -- counting it would make every in-place call

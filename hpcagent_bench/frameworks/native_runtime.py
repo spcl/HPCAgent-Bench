@@ -43,7 +43,7 @@ FRAMEWORK_LANG: dict[str, Language] = {
 }
 
 #: The columns that compile PPCG's output (``transform: ppcg``). Their FRAMEWORK_LANG entry doubles as
-#: the vendor handed to :func:`hpcagent_bench.ppcg_transform.transformed_sources`.
+#: the vendor handed to :func:`hpcagent_bench.polyhedral.ppcg.transformed_sources`.
 PPCG_FRAMEWORKS: tuple[str, ...] = tuple(n for n, c in FRAMEWORKS.entries.items() if c.transform is Transform.PPCG)
 
 #: framework -> forced ``compilers.yaml`` block (each column's ``compiler``); an absent column takes
@@ -64,15 +64,15 @@ def native_sources(cpp_backend: pathlib.Path, short: str, framework: str) -> lis
     language)."""
     column = FRAMEWORKS.entries[framework]
     if column.transform is Transform.PLUTO:
-        from hpcagent_bench import pluto_transform
+        from hpcagent_bench.polyhedral import pluto as pluto_transform
 
         return pluto_transform.transformed_sources(cpp_backend, short)
     if column.transform is Transform.PPCG:
-        from hpcagent_bench import ppcg_transform
+        from hpcagent_bench.polyhedral import ppcg as ppcg_transform
 
         return ppcg_transform.transformed_sources(cpp_backend, short, FRAMEWORK_LANG[framework])
     if column.transform is Transform.POLYGEIST:
-        from hpcagent_bench import polygeist_transform
+        from hpcagent_bench.polyhedral import polygeist as polygeist_transform
 
         return polygeist_transform.transformed_sources(cpp_backend, short, column.arch.text)
     ext = LANG_EXT[FRAMEWORK_LANG[framework]]
@@ -112,7 +112,7 @@ def assert_autopar_capable(framework: str, short: str) -> None:
         )
 
 
-def _ensure_built(cpp_backend: pathlib.Path, short: str, framework: str) -> pathlib.Path:
+def ensure_built(cpp_backend: pathlib.Path, short: str, framework: str) -> pathlib.Path:
     """Lazily compile + link ``lib<short>_<framework>.so`` from the framework's per-precision sources; a cached
     ``.so`` is reused only while NEWER than every source (its name does not say which sources built it)."""
     assert_autopar_capable(framework, short)
@@ -153,7 +153,7 @@ def _ensure_built(cpp_backend: pathlib.Path, short: str, framework: str) -> path
 def load_backend_so(wrapper_file: str, short: str, framework: str) -> ctypes.CDLL:
     """Build + dlopen the kernel's ``lib<short>_<framework>.so``."""
     cpp_backend = pathlib.Path(wrapper_file).with_name("cpp_backend")
-    so = _ensure_built(cpp_backend, short, framework)
+    so = ensure_built(cpp_backend, short, framework)
     if so in SO_CACHE:
         return SO_CACHE[so]
     import numpy as np  # noqa: F401 -- ensures ctypes.data_as works
@@ -176,7 +176,7 @@ def _ctype_for(dtype: "DTypeLike") -> type:
     return ctype_for(name)
 
 
-def _is_device_array(a: object) -> bool:
+def is_device_array(a: object) -> bool:
     """Whether ``a`` is a cupy array (by its type's package, so a CPU-only run never imports cupy); its device
     pointer is what :func:`to_ctypes` hands the .so."""
     return type(a).__module__.partition(".")[0] == "cupy"
@@ -187,7 +187,7 @@ def ctype_arg(a: Any, fcty: type, int_ctype: type) -> type:  # noqa: ANN401
     integer, ``fcty`` (the symbol's float width) for a bare float."""
     import numpy as np
 
-    if isinstance(a, np.ndarray) or _is_device_array(a):
+    if isinstance(a, np.ndarray) or is_device_array(a):
         return ctypes.POINTER(_ctype_for(a.dtype))
     if isinstance(a, (int, np.integer)):
         return int_ctype
@@ -203,7 +203,7 @@ def to_ctypes(arg: Any, fcty: type, int_ctype: type) -> object:  # noqa: ANN401
     if isinstance(arg, np.ndarray):
         return arg.ctypes.data_as(ctypes.POINTER(_ctype_for(arg.dtype)))
     # A cupy array (ppcg_hip's device-resident copy_func): the .so gets its DEVICE pointer (abi_contract.md Sec. 10).
-    if _is_device_array(arg):
+    if is_device_array(arg):
         return ctypes.cast(arg.data.ptr, ctypes.POINTER(_ctype_for(arg.dtype)))
     if isinstance(arg, (int, np.integer)):
         return int_ctype(int(arg))
@@ -231,7 +231,7 @@ def index_rebase(kernel: str, framework: str) -> tuple[int, ...]:
 
 def wrap_kernel(wrapper_file: str, short: str, framework: str, kernel: str) -> Callable:
     """Build a Python callable for a native ``framework`` build of ``short``: ``wrapper_file`` locates the build
-    directory, ``short`` names the artifact stem, ``kernel`` the manifest (all three from ``autogen._wrapper_src``)."""
+    directory, ``short`` names the artifact stem, ``kernel`` the manifest (all three from ``autogen.wrapper_src``)."""
     import numpy as np
 
     if framework not in FRAMEWORK_LANG:
@@ -264,7 +264,7 @@ def wrap_kernel(wrapper_file: str, short: str, framework: str, kernel: str) -> C
         _ensure_loaded()
         # complex128 is the fp64 rung: without it a complex-only kernel binds the fp32 symbol.
         is_double = any(
-            (isinstance(a, np.ndarray) or _is_device_array(a))
+            (isinstance(a, np.ndarray) or is_device_array(a))
             and a.dtype in (np.dtype(np.float64), np.dtype(np.complex128))
             for a in args
         )

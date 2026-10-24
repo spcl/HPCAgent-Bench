@@ -3,7 +3,8 @@
 
 import ast
 import copy
-from collections.abc import Callable, Mapping, Sequence
+from collections import deque
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from types import EllipsisType
 
 __all__ = [
@@ -30,7 +31,24 @@ __all__ = [
     "range_for",
     "set_field",
     "store_",
+    "walk_nodes",
 ]
+
+
+def walk_nodes(node: ast.AST) -> Iterator[ast.AST]:
+    """:func:`ast.walk`, same nodes in the same order (children queued before the parent is yielded), reading
+    ``_fields`` straight from the node instead of through ``ast.iter_child_nodes``."""
+    todo: deque[ast.AST] = deque((node,))
+    while todo:
+        node = todo.popleft()
+        fields = vars(node)
+        for name in node._fields:
+            value = fields.get(name)
+            if isinstance(value, ast.AST):
+                todo.append(value)
+            elif isinstance(value, list):
+                todo.extend(item for item in value if isinstance(item, ast.AST))
+        yield node
 
 
 def name_(name: str) -> ast.Name:
@@ -201,7 +219,7 @@ def map_blocks(
 
 def map_statement_lists(root: ast.AST, rewrite: Callable[[list[ast.stmt]], list[ast.stmt]]) -> None:
     """Replace every statement list anywhere under ``root`` (bodies, branches, handlers) by ``rewrite`` of it."""
-    for node in ast.walk(root):
+    for node in walk_nodes(root):
         for field, value in ast.iter_fields(node):
             if isinstance(value, list) and any(isinstance(v, ast.stmt) for v in value):
                 set_field(node, field, rewrite(value))

@@ -61,7 +61,6 @@ __all__ = [
     "POLLY_OUTLINE_PATTERN",
     "POLLY_PAR",
     "POLYGEIST_PAR",
-    "PYTHRAN_BASELINE",
     "ROCMINFO_GFX_NAME",
     "ROCMINFO_TIMEOUT",
     "SIBLINGS",
@@ -172,9 +171,6 @@ NVHPC_OPT_REPORT = "-Minfo=all"
 #: Appended to a PROFILED build so perf can name symbols: ``-g`` only (codegen-neutral; perf unwinds with DWARF).
 DEBUG_SYMBOLS: list[str] = ["-g"]
 
-#: Pythran's libmvec route: the decl header as one ``-Wp,`` token (pythran's CLI misreads a bare ``-include``).
-_VECLIB_PYTHRAN = f" -Wp,-include,{VECMATH_H}" if osinfo.IS_LINUX else ""
-PYTHRAN_BASELINE = f"-DUSE_XSIMD -fopenmp {ARCH_NATIVE} {_FP_RELAX} {_FP_ASSOC} {_FP_CONTRACT} -fPIC{_VECLIB_PYTHRAN}"
 
 #: flang's reassociation licence needs ``-fno-signed-zeros`` beside it (LLVM vectorizes a reduction only with both).
 FP_ASSOC_FLANG = f"{_FP_ASSOC} -fno-signed-zeros" if _FP_ASSOC else ""
@@ -200,11 +196,10 @@ LINK_MIMALLOC = "-lmimalloc"
 # Multi-core autopar deltas, appended to the baseline; ``{n}`` becomes the core count (compose_autopar).
 
 #: LLVM Polly + OpenMP; both Polly options are required (either alone outlines nothing). Accepted flags prove
-#: nothing, so :func:`polly_capability` checks the object and a VACUOUS column is declined.
-POLLY_PAR = (
-    f"-mllvm -polly -mllvm -polly-parallel -mllvm -polly-parallel-force "
-    f"-mllvm -polly-process-unprofitable {_OPENMP_CLANG}"
-)
+#: nothing, so :func:`polly_capability` checks the object and a VACUOUS column is declined. Polly's own
+#: profitability model stays on: ``-polly-parallel-force`` and ``-polly-process-unprofitable`` parallelized loops
+#: too small to pay for a fork (llr40 geomean 1.38x vs 1.45x over clang -O3, worst kernel 0.004x vs 0.24x).
+POLLY_PAR = f"-mllvm -polly -mllvm -polly-parallel {_OPENMP_CLANG}"
 
 #: GCC autopar + Graphite: ``{n}`` bakes the thread count in at BUILD time. ``graphite-allow-codegen-errors`` is
 #: never set (it forces INCORRECT codegen).

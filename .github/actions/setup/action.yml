@@ -83,31 +83,43 @@ runs:
         command -v add-apt-repository >/dev/null 2>&1 || {
           echo "::error::add-apt-repository is absent after installing software-properties-common"
           exit 1; }
+        # The cached debs are one consistent set: when the PPA is down (503 for hours on 2026-10-21), they
+        # install on their own, every other dependency coming from the Ubuntu archive.
+        from_cache() {
+          compgen -G "$HOME/gcc-ppa-debs/*.deb" > /dev/null || return 1
+          echo "::warning::the PPA is unreachable; installing GCC ${GCC_MAJOR} from the cached debs"
+          sudo apt-get update -qq || true
+          sudo apt-get install -y "$HOME"/gcc-ppa-debs/*.deb
+        }
+        installed=0
         for attempt in 1 2 3 4 5; do
           sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test && break
           if [ "$attempt" = 5 ]; then
+            from_cache && installed=1 && break
             echo "::error::add-apt-repository failed 5 times; the PPA is unreachable"
             exit 1
           fi
           sleep $((attempt * 10))
         done
-        if compgen -G "$HOME/gcc-ppa-debs/*.deb" > /dev/null; then
+        if [ "$installed" = 0 ] && compgen -G "$HOME/gcc-ppa-debs/*.deb" > /dev/null; then
           sudo cp "$HOME"/gcc-ppa-debs/*.deb /var/cache/apt/archives/
         fi
         # The PPA intermittently answers 503 or times out; apt keeps the debs it already fetched,
         # so a retry only downloads the missing ones.
         for attempt in 1 2 3 4 5; do
+          [ "$installed" = 1 ] && break
           sudo apt-get update
           sudo apt-get install -y -o Acquire::Retries=5 -o APT::Keep-Downloaded-Packages=true "gcc-${GCC_MAJOR}" "g++-${GCC_MAJOR}" \
-            "gfortran-${GCC_MAJOR}" "libstdc++-${GCC_MAJOR}-dev" && break
+            "gfortran-${GCC_MAJOR}" "libstdc++-${GCC_MAJOR}-dev" && installed=1 && break
           if [ "$attempt" = 5 ]; then
+            from_cache && installed=1 && break
             echo "::error::installing GCC ${GCC_MAJOR} from the PPA failed 5 times"
             exit 1
           fi
           sleep $((attempt * 30))
         done
         mkdir -p "$HOME/gcc-ppa-debs"
-        cp /var/cache/apt/archives/*ppa*.deb "$HOME/gcc-ppa-debs/"
+        cp /var/cache/apt/archives/*ppa*.deb "$HOME/gcc-ppa-debs/" 2>/dev/null || true
         # compilers.yaml, dace and CMake all name the drivers unversioned (dace falls back to `c++`).
         for driver in gcc g++ gfortran; do
           sudo ln -sf "/usr/bin/${driver}-${GCC_MAJOR}" "/usr/local/bin/${driver}"
@@ -235,7 +247,7 @@ runs:
         # dace must be the pinned commit: a dependency that caps dace would otherwise swap in a PyPI release.
         .venv/bin/python - "$(helpers/scripts/pins.sh)" <<'PY'
         import sys
-        from hpcagent_bench import cpf_canonical
+        from hpcagent_bench.cpf import canonical as cpf_canonical
         got = cpf_canonical.dace_commit()
         if got != sys.argv[1]:
             sys.exit(f"dace is {got}, not the pin {sys.argv[1]}")

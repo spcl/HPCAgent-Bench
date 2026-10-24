@@ -4,7 +4,7 @@ import ast
 import copy
 from collections.abc import Iterator, Sequence
 
-from hpcagent_bench.translators.numpyto_common.ast_build import name_
+from hpcagent_bench.translators.numpyto_common.ast_build import name_, walk_nodes
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of
 from hpcagent_bench.translators.numpyto_common.lowering.indexing import (
     compose_kept_axis,
@@ -132,7 +132,7 @@ class PadImplicitTrailingSlices(ast.NodeTransformer):
             if isinstance(e, ast.Slice) or is_newaxis(e):
                 continue
             if is_scalar_index(e) and not any(
-                isinstance(n, ast.Name) and n.id in self.array_shapes for n in ast.walk(e)
+                isinstance(n, ast.Name) and n.id in self.array_shapes for n in walk_nodes(e)
             ):
                 continue
             return node  # advanced / unknown index -> skip
@@ -159,7 +159,7 @@ def fold_subarray_aliases(tree: ast.AST, array_shapes: dict[str, tuple[str, ...]
     assigns: dict[str, int] = {}
     sub_value_ids: set = set()
     load_ids: dict[str, list[int]] = {}
-    for node in ast.walk(tree):
+    for node in walk_nodes(tree):
         if isinstance(node, ast.Assign):
             for t in node.targets:
                 if isinstance(t, ast.Name) and t.id in aliases:
@@ -185,7 +185,7 @@ def subarray_alias_candidates(tree: ast.AST, array_shapes: dict[str, tuple[str, 
     indices (trailing ``:`` axes dropped -- they are what ``alias[k]`` fills) that leave at least one
     trailing source axis (a genuine sub-array, not a full element index)."""
     aliases: dict[str, tuple] = {}
-    for stmt in ast.walk(tree):
+    for stmt in walk_nodes(tree):
         if not (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)):
             continue
         val = stmt.value
@@ -220,7 +220,7 @@ def aliases_with_rebound_base(tree: ast.AST, aliases: dict[str, tuple]) -> set[s
                 and s.targets[0].id in aliases
             ):
                 unused, base = aliases[s.targets[0].id]
-                base_names = {n.id for b in base for n in ast.walk(b) if isinstance(n, ast.Name)}
+                base_names = {n.id for b in base for n in walk_nodes(b) if isinstance(n, ast.Name)}
                 if base_names & names_stored_in(stmts[i + 1 :]):
                     unsafe.add(s.targets[0].id)
             for cb in child_blocks_of(s):
@@ -237,7 +237,7 @@ def names_stored_in(stmts: Sequence[ast.stmt]) -> set[str]:
     """Names rebound anywhere in ``stmts``: Store-context Names and for-loop targets."""
     out: set = set()
     for s in stmts:
-        for n in ast.walk(s):
+        for n in walk_nodes(s):
             if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store):
                 out.add(n.id)
             elif isinstance(n, ast.For) and isinstance(n.target, ast.Name):
@@ -295,7 +295,7 @@ def names_written_in(stmts: Sequence[ast.stmt]) -> OrderedSet[str]:
     Name-rebind scan misses)."""
     out: OrderedSet[str] = OrderedSet()
     for s in stmts:
-        for n in ast.walk(s):
+        for n in walk_nodes(s):
             if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store):
                 out.add(n.id)
             elif isinstance(n, ast.For) and isinstance(n.target, ast.Name):
@@ -316,7 +316,7 @@ def reject_view_writes_between_bind_and_use(
     for name, (base_name, elts) in candidates.items():
         names = OrderedSet((base_name,))
         for e in elts:
-            for n in ast.walk(e):
+            for n in walk_nodes(e):
                 if isinstance(n, ast.Name):
                     names.add(n.id)
         free_names[name] = names
@@ -456,7 +456,7 @@ def fold_slice_view_aliases(tree: ast.AST, array_shapes: dict[str, tuple[str, ..
     good = flatten_view_chains(good)
     SliceViewFold(good).visit(tree)
     ast.fix_missing_locations(tree)
-    live = OrderedSet(n.id for n in ast.walk(tree) if isinstance(n, ast.Name))
+    live = OrderedSet(n.id for n in walk_nodes(tree) if isinstance(n, ast.Name))
     return OrderedSet(name for name in good if name not in live)
 
 
@@ -476,7 +476,7 @@ def refuse_scalarising_a_contraction(value: ast.expr) -> None:
     Reaching this means the matmul hoister declined -- normally a shape it could not resolve. That is
     a gap to fix, and a refusal names it; the silent product does not.
     """
-    for sub in ast.walk(value):
+    for sub in walk_nodes(value):
         if isinstance(sub, ast.BinOp) and isinstance(sub.op, ast.MatMult):
             raise NotImplementedError(
                 f"matmul '{ast.unparse(sub)}' was not lowered before slice fusion; "
@@ -515,7 +515,7 @@ def view_alias_candidates(
     is a basic-indexed VIEW: at least one Slice (a fully scalar index is an element read), no index
     array, no negative step (the offset algebra assumes a positive stride)."""
     aliases: dict[str, tuple[str, list[ast.expr]]] = {}
-    for stmt in ast.walk(tree):
+    for stmt in walk_nodes(tree):
         if not (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)):
             continue
         val = stmt.value
@@ -544,7 +544,7 @@ def composable_view_aliases(
     uses_composable: dict[str, bool] = {}
     sub_value_ids: OrderedSet = OrderedSet()
     load_ids: dict[str, list[int]] = {}
-    for node in ast.walk(tree):
+    for node in walk_nodes(tree):
         if isinstance(node, ast.Assign):
             for t in node.targets:
                 if isinstance(t, ast.Name) and t.id in aliases:

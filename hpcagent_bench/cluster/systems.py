@@ -50,6 +50,7 @@ __all__ = [
     "GPU_FIELDS",
     "JOB_FIELDS",
     "JOB_REQUIRED",
+    "LAYOUT_FIELDS",
     "PACKAGED",
     "PAIRS",
     "SHORT",
@@ -95,6 +96,8 @@ PAIRS = (GPU_FIELDS, TASK_FIELDS)
 JOB_FIELDS = ("partition", "account", "gpus_per_node")
 #: Without these the job cannot run: the account bills it, the GPUs are what its roles share.
 JOB_REQUIRED = ("account", "gpus_per_node")
+#: A helper job's task layout, printable for a shell submitter that runs one step per task (prepare.sbatch).
+LAYOUT_FIELDS = ("ntasks", "ntasks_per_node", "cpus_per_task")
 #: Values a job needs that are no ``sbatch`` option: name -> (flag, environment variable).
 EXTRAS: dict[str, tuple[str, str]] = {
     "hardware": ("--hardware", "HPCAGENT_BENCH_HARDWARE"),
@@ -334,7 +337,9 @@ def options_main(argv: Sequence[str]) -> int:
     for extra, (option, variable) in EXTRAS.items():
         parser.add_argument(option, dest=extra, metavar="VALUE", help=f"overrides ${variable} and the system's value")
     parser.add_argument(
-        "--print", choices=(*JOB_FIELDS, *EXTRAS), help="print this value alone (empty when nothing sets it)"
+        "--print",
+        choices=(*JOB_FIELDS, *LAYOUT_FIELDS, *EXTRAS),
+        help="print this value alone (empty when nothing sets it)",
     )
     parser.add_argument(
         "--require",
@@ -346,9 +351,8 @@ def options_main(argv: Sequence[str]) -> int:
     )
     args = parser.parse_args(list(argv))
     environ = site_environment(os.environ)
-    resolved = resolve(
-        args.system, vars(args), environ, JOB_FIELDS, tuple(args.require) if args.print else JOB_REQUIRED
-    )
+    fields = (*JOB_FIELDS, *LAYOUT_FIELDS) if args.print in LAYOUT_FIELDS else JOB_FIELDS
+    resolved = resolve(args.system, vars(args), environ, fields, tuple(args.require) if args.print else JOB_REQUIRED)
     if args.print:
         print({**resolved.values, **resolved.extras}.get(args.print, ""))
     else:

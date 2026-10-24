@@ -10,7 +10,7 @@ in ``select()``.
 libgomp deadlocks exactly this way and installs no ``pthread_atfork`` handler; LLVM's libomp
 installs one and recovers. Since the OpenMP runtime is a configurable axis -- libgomp is a
 valid gnu-only choice -- ``run_forked`` must not be safe merely because the default runtime
-happens to be the forgiving one. :func:`hpcagent_bench.isolation.pause_openmp_pools` is what
+happens to be the forgiving one. :func:`hpcagent_bench.openmp.isolation.pause_openmp_pools` is what
 makes that true, so these tests poison the parent on purpose and assert the child still runs.
 """
 
@@ -30,7 +30,7 @@ import pytest
 
 from hpcagent_bench import languages
 from hpcagent_bench.frameworks.forked import forked_failure_reason, run_forked
-from hpcagent_bench.isolation import (
+from hpcagent_bench.openmp.isolation import (
     KMP_PAUSE_SYMBOL,
     OMP_PAUSE_HARD,
     OMP_PAUSE_SOFT,
@@ -306,7 +306,7 @@ def test_a_mapped_but_never_started_libomp_is_not_reported_as_a_live_pool(tmp_pa
     so = build(tmp_path, "omp")
     script = (
         "import ctypes, pathlib, sys, warnings\n"
-        "from hpcagent_bench.isolation import pause_openmp_pools\n"
+        "from hpcagent_bench.openmp.isolation import pause_openmp_pools\n"
         "ctypes.CDLL(sys.argv[1])\n"
         "warnings.simplefilter('error')\n"
         "pause_openmp_pools()\n"

@@ -62,6 +62,7 @@ LADDERS = {
     "kimi27sglang": "",
     "glm53": "",
     "musespark": "low medium high xhigh max",
+    "apertus15": "",
 }
 
 #: What the policy resolves each ladder to: xhigh where the ladder has it, else its top rung, else
@@ -72,6 +73,7 @@ RESOLVED = {
     "kimi27sglang": "",
     "glm53": "",
     "musespark": "xhigh",
+    "apertus15": "",
 }
 
 #: The experiment base of every model (setups.yaml ``experiment:<model>``).

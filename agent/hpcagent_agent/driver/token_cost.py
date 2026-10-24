@@ -43,6 +43,7 @@ __all__ = [
     "COMPACTION_SEEN_KEY",
     "COMPACT_BOUNDARY_SUBTYPE",
     "INPUT_FIELDS",
+    "OPEN_MESSAGE_KEY",
     "PROVIDER_CACHE_DISCOUNT",
     "SYNTHETIC_MODEL",
     "USAGE_EVENT_MARKERS",
@@ -54,6 +55,7 @@ __all__ = [
     "EpisodeTotals",
     "PromptFold",
     "ResolvedOutput",
+    "accumulate_output_tokens",
     "accumulate_total_tokens",
     "as_block",
     "attempt_ledger",
@@ -382,6 +384,45 @@ def accumulate_total_tokens(lines: list[str], total_by_message: dict[str, int]) 
         fold_compaction_recovery(event, total_by_message)
         fold_billed_event(event, total_by_message)
     return billed_total(total_by_message)
+
+
+#: The key an output fold files the message its following ``message_delta`` readings belong to under, as
+#: ``OPEN_MESSAGE_KEY + id``; excluded from every total.
+OPEN_MESSAGE_KEY = "open-message:"
+
+
+def accumulate_output_tokens(lines: list[str], output_by_message: dict[str, int]) -> int:
+    """Fold stream-json lines into {message id: generated tokens}; return the running total.
+
+    A message's output is the largest of its ``message_delta`` readings (cumulative; the only count an
+    OpenAI-compatible server fills) and its ``assistant`` usage. A delta names its message through the CLI's
+    ``api_message_id`` envelope, else through the ``message_start`` before it, which may have arrived in an earlier
+    batch (the live budget watcher folds one batch per poll)."""
+    for line in lines:
+        event = usage_event(line)
+        if event is None:
+            continue
+        opened = stream_message_id(event)
+        if opened is not None:
+            for key in [key for key in output_by_message if key.startswith(OPEN_MESSAGE_KEY)]:
+                del output_by_message[key]
+            output_by_message[OPEN_MESSAGE_KEY + opened] = 0
+            continue
+        reading = delta_usage(event)
+        if reading is not None:
+            named = event.get("api_message_id")
+            open_ids = [key[len(OPEN_MESSAGE_KEY) :] for key in output_by_message if key.startswith(OPEN_MESSAGE_KEY)]
+            message_id = named if isinstance(named, str) and named else (open_ids[0] if open_ids else "")
+            if message_id:
+                output_by_message[message_id] = max(reading[1], output_by_message.get(message_id, 0))
+            continue
+        if event.get("type") == "assistant":
+            message = as_block(event.get("message"))
+            assistant_id = message.get("id")
+            value = as_block(message.get("usage")).get("output_tokens")
+            if isinstance(assistant_id, str) and isinstance(value, int) and not isinstance(value, bool):
+                output_by_message[assistant_id] = max(value, output_by_message.get(assistant_id, 0))
+    return sum(value for key, value in output_by_message.items() if not key.startswith(OPEN_MESSAGE_KEY))
 
 
 def usage_prompt_tokens(record: dict[str, object]) -> int:

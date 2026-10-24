@@ -2,7 +2,7 @@
 
 import ast
 
-from hpcagent_bench.translators.numpyto_common.ast_build import name_ids
+from hpcagent_bench.translators.numpyto_common.ast_build import name_ids, walk_nodes
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import DesugarError, as_stmts
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.constants import fd_step, working_float_dtype
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.lists import fold_list_accumulators
@@ -176,7 +176,7 @@ class CurveFitRewriter(ast.NodeTransformer):
 
     def find_model(self, name: str) -> ast.FunctionDef | None:
         for scope in (self.kernel, self.tree):
-            for node in ast.walk(scope):
+            for node in walk_nodes(scope):
                 if isinstance(node, ast.FunctionDef) and node.name == name and node is not self.kernel:
                     return node
         return None
@@ -189,7 +189,7 @@ class CurveFitRewriter(ast.NodeTransformer):
             return
         fdef.args.args.append(ast.arg(arg=vp.arg))
         fdef.args.vararg = None
-        for sub in ast.walk(fdef):
+        for sub in walk_nodes(fdef):
             if (
                 isinstance(sub, ast.Subscript)
                 and isinstance(sub.value, ast.Name)
@@ -285,7 +285,7 @@ def rewrite_curve_fit(tree: ast.Module, kernel: ast.FunctionDef, precision: str 
     ``precision`` is the working float type, needed here because the step is a
     literal in the emitted body (see :func:`fd_step`); ``None`` keeps fp64.
     """
-    fits = [n for n in ast.walk(kernel) if isinstance(n, ast.Call) and curve_fit_call(n) is not None]
+    fits = [n for n in walk_nodes(kernel) if isinstance(n, ast.Call) and curve_fit_call(n) is not None]
     if not fits:
         return
     # The LM lines index the p0 vector, so it must be an array first -- even a bare display.

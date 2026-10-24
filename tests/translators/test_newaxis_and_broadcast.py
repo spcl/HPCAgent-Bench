@@ -129,13 +129,6 @@ def test_binop_broadcast_equal_rank() -> None:
     assert unparse_ext(ext) == ("N", "M")
 
 
-def test_binop_broadcast_short_against_2d() -> None:
-    """``A + b`` with A:(N, M) and b:(M,) -> (N, M)
-    (rank-aligned broadcast pads b's leading axis)."""
-    ext = iter_extent_of(expr_("A + b"), {"A": ("N", "M"), "b": ("M",)})
-    assert unparse_ext(ext) == ("N", "M")
-
-
 # E. Scalarisation -- iter consumption                                         #
 
 
@@ -196,19 +189,6 @@ def test_scalarize_conv2d_pattern_simplified() -> None:
         {"input": ("N", "H", "W"), "weights": ("H", "W", "C")},
     )
     assert ast.unparse(out) == "input[n, h, w] * weights[h, w, c]"
-
-
-# G. Reduction extents -- existing ``np.sum`` etc.                             #
-# Full reduction-call extent is handled in ``expand_axis_reduction``;
-# the extent helper itself only sees the array argument.
-
-
-def test_extent_of_reduction_argument_drops_axis() -> None:
-    """``np.sum(A, axis=0)`` is handled by the reduction expander;
-    here we just verify that ``A`` is still pickable as a 2-D
-    extent so the expander can compute the result rank."""
-    ext = iter_extent_of(expr_("A"), {"A": ("N", "M")})
-    assert unparse_ext(ext) == ("N", "M")
 
 
 # F. Advanced (gather) indexing under a newaxis                                #

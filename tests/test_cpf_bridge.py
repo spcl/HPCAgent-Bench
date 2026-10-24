@@ -1,6 +1,6 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""A kernel renders through :mod:`hpcagent_bench.cpf_bridge` into a drop-in (``arc_distance``): canonical
+"""A kernel renders through :mod:`hpcagent_bench.cpf.bridge` into a drop-in (``arc_distance``): canonical
 symbol and signature, native binding, a bare warning-clean compile, an OpenMP region, and numpy-equal numbers."""
 
 import importlib
@@ -16,16 +16,19 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pytest
 
-from hpcagent_bench import cpf_bridge, cpf_cache, cpf_canonical, languages, paths
+from hpcagent_bench import languages, paths
+from hpcagent_bench.cpf import bridge as cpf_bridge
+from hpcagent_bench.cpf import cache as cpf_cache
+from hpcagent_bench.cpf import canonical as cpf_canonical
 from hpcagent_bench.categories import Language
-from hpcagent_bench.harness.native_call import _call_native
+from hpcagent_bench.harness.native_call import call_native
 from hpcagent_bench.spec import BenchSpec, ConfigKnob
 from hpcagent_bench.support.bindings.contract import binding_from_spec
 from hpcagent_bench.support.bindings.stubs import gen_call_stub
-from hpcagent_bench.cpf_cache import HintDetail
-from hpcagent_bench.cpf_cache import RenderVerdict
-from hpcagent_bench.cpf_cache import Role
-from hpcagent_bench.cpf_cache import Target
+from hpcagent_bench.cpf.cache import HintDetail
+from hpcagent_bench.cpf.cache import RenderVerdict
+from hpcagent_bench.cpf.cache import Role
+from hpcagent_bench.cpf.cache import Target
 from tests.reference_outputs import compiled_outputs
 
 if TYPE_CHECKING:
@@ -94,7 +97,7 @@ def test_a_kernel_renders_to_a_dropin_that_takes_the_stub_signature_and_reproduc
     _kind, expected = compiled_outputs(
         KERNEL, {name: (value.copy() if isinstance(value, np.ndarray) else value) for name, value in data.items()}
     )
-    (outs,), _, _, _ = _call_native(library, native, data, Language.C, workspace_bytes="8*N")
+    (outs,), _, _, _ = call_native(library, native, data, Language.C, workspace_bytes="8*N")
     assert outs, "the kernel declared no outputs"
     for name, got in outs.items():
         np.testing.assert_allclose(got, expected[name], rtol=1e-12, atol=0.0)
@@ -130,15 +133,17 @@ def test_a_prerender_caches_the_form_and_a_rerun_renders_nothing(spec: BenchSpec
     second = second_record.results["c"]
     assert (second.key, second.cached) == (first.key, True)
 
-    view = tmp_path / "view"
-    cpf_cache.open_view(view, cache, Target.CPU, "test-commit")
-    cpf_cache.record(view, spec.short_name, "c", "fp64", HintDetail.PROOFS, second.model_dump())
-    form = cpf_cache.resolve(view, spec.short_name, "c", "fp64", HintDetail.PROOFS)
+    form = cpf_cache.form(cache, str(second.key))
     native = binding_from_spec(spec)
     assert form.entry == native.symbol
     abi = [a.name for a in native.args] + ["workspace", "workspace_size"]
     assert declared_parameters(form.source.read_text(), form.entry) == abi
     assert json.loads(form.binding.read_text()) == native.document().model_dump(exclude_unset=True)
+    # The form keeps the SDFG its code was generated from, named for the entry the code defines.
+    assert form.sdfg is not None, form
+    import dace  # deferred like every dace use here: only integration tests load it
+
+    assert dace.SDFG.from_file(str(form.sdfg)).name == form.entry
 
 
 def prerender_kwargs() -> dict[str, object]:
@@ -180,7 +185,7 @@ def test_a_form_rendered_again_from_the_stored_sdfg_is_the_first_render_byte_for
     assert rendered.results is not None, rendered
     first = rendered.results["c"]
     entry = cpf_cache.entry_path(cache, str(first.key))
-    manifest = cpf_cache.EntryManifest.model_validate_json((entry / cpf_cache.MANIFEST_NAME).read_bytes())
+    manifest = cpf_cache.Entry.model_validate_json((entry / cpf_cache.MANIFEST_NAME).read_bytes())
     text = (entry / manifest.artefacts[Role.SOURCE].name).read_text()
     shutil.rmtree(entry)
     again = cpf_bridge.prerender_kernel(spec, cache, languages=["c"], **prerender_kwargs())
@@ -394,7 +399,7 @@ def test_a_dropin_of_a_kernel_that_returns_its_output_takes_the_abi_and_runs(tmp
     source.write_text(form.code)
     library = build_dropin(source, tmp_path)
     a = np.random.default_rng(0).random(EXTENT)
-    (outs,), _, _, _ = _call_native(
+    (outs,), _, _, _ = call_native(
         library, native, {"a": a, "b": np.zeros(EXTENT), "N": EXTENT}, Language.C, workspace_bytes="8*N"
     )
     np.testing.assert_allclose(outs["b"], 2.0 * a, rtol=1e-12, atol=0.0)
@@ -579,7 +584,7 @@ def test_a_dropin_of_a_kernel_that_returns_an_ungraded_count_takes_the_abi_and_r
     source.write_text(form.code)
     library = build_dropin(source, tmp_path)
     a = np.random.default_rng(0).random(EXTENT)
-    (outs,), _, _, _ = _call_native(
+    (outs,), _, _, _ = call_native(
         library, native, {"a": a, "b": np.zeros(EXTENT), "N": EXTENT}, Language.C, workspace_bytes="8*N"
     )
     np.testing.assert_allclose(outs["b"], 2.0 * a, rtol=1e-12, atol=0.0)
@@ -678,7 +683,7 @@ def test_a_dropin_binds_a_pinned_config_knob_and_takes_the_abi(
     a = np.random.default_rng(0).random(EXTENT)
     expected = np.zeros(EXTENT)
     reference(a, expected, PINNED_KNOB)
-    outs = _call_native(
+    outs = call_native(
         library, native, {"a": a, "b": np.zeros(EXTENT), "N": EXTENT}, Language.C, workspace_bytes="8*N"
     )[0][0]
     np.testing.assert_allclose(outs["b"], expected, rtol=1e-12, atol=0.0)
@@ -724,7 +729,7 @@ def test_a_dropin_takes_a_rebound_scalar_parameter_by_value(tmp_path: pathlib.Pa
     library = build_dropin(source, tmp_path)
     a = np.random.default_rng(0).random(EXTENT)
     inputs = {"a": a, "b": np.zeros(EXTENT), "N": EXTENT, "k": 1.5}
-    outs = _call_native(library, native, inputs, Language.C, workspace_bytes="8*N")[0][0]
+    outs = call_native(library, native, inputs, Language.C, workspace_bytes="8*N")[0][0]
     np.testing.assert_allclose(outs["b"], 3.0 * a, rtol=1e-12, atol=0.0)
 
 

@@ -6,6 +6,7 @@ import types
 from collections.abc import Sequence
 
 from hpcagent_bench.translators.numpyto_common import dtypes
+from hpcagent_bench.translators.numpyto_common.ast_build import walk_nodes
 from hpcagent_bench.translators.numpyto_common.frontend.shapes import resolve_array_ref
 from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc, ScalarDesc, SymbolDesc, descs
 from hpcagent_bench.translators.numpyto_common.lib_nodes.dims import DIM_IDENT_RE
@@ -162,7 +163,7 @@ def boolean_valued_argument(
         # rule the integer probe uses -- more than one and the value is not decided here.
         bound = [
             st.value
-            for st in ast.walk(fn)
+            for st in walk_nodes(fn)
             if isinstance(st, ast.Assign) and any(isinstance(t, ast.Name) and t.id == arg.id for t in st.targets)
         ]
         return len(bound) == 1 and boolean_valued_argument(bound[0], fn, sca_by, depth + 1)
@@ -200,7 +201,7 @@ def integer_valued_argument(
         # A local bound once to an integer expression: resolve through that binding.
         bound = [
             s.value
-            for s in ast.walk(fn)
+            for s in walk_nodes(fn)
             if isinstance(s, ast.Assign) and any(isinstance(t, ast.Name) and t.id == arg.id for t in s.targets)
         ]
         return len(bound) == 1 and integer_valued_argument(bound[0], fn, sca_by, sym_by, depth + 1)
@@ -292,7 +293,7 @@ def reject_subscripted_scalar_params(hfn: ast.FunctionDef, scalars: list[ScalarD
     indexed = sorted(
         {
             n.value.id
-            for n in ast.walk(hfn)
+            for n in walk_nodes(hfn)
             if isinstance(n, ast.Subscript) and isinstance(n.value, ast.Name) and n.value.id in by_name
         }
     )
@@ -322,14 +323,14 @@ def widen_counting_scalar_params(hfn: ast.FunctionDef, scalars: list[ScalarDesc]
     if not floats:
         return
     counted: set[str] = set()
-    for node in ast.walk(hfn):
+    for node in walk_nodes(hfn):
         positions: list[ast.expr] = []
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "range":
             positions.extend(node.args)
         elif isinstance(node, ast.Subscript):
             positions.append(node.slice)
         for position in positions:
-            counted |= {n.id for n in ast.walk(position) if isinstance(n, ast.Name) and n.id in floats}
+            counted |= {n.id for n in walk_nodes(position) if isinstance(n, ast.Name) and n.id in floats}
     for index, desc in enumerate(scalars):
         if desc.name in counted:
             scalars[index] = dataclasses.replace(desc, dtype="int64")
@@ -339,7 +340,7 @@ def mark_written_outputs(hfn: ast.FunctionDef, arrays: list[ArrayDesc]) -> None:
     """Mark every array param the helper WRITES to (``p[i] = ...``) as an output
     (drops ``const`` on the pointer)."""
     written: set[str] = set()
-    for n in ast.walk(hfn):
+    for n in walk_nodes(hfn):
         targets = n.targets if isinstance(n, ast.Assign) else [n.target] if isinstance(n, ast.AugAssign) else []
         for t in targets:
             if isinstance(t, ast.Name):

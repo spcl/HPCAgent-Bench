@@ -4,7 +4,7 @@ import ast
 import copy
 from collections.abc import Callable, Sequence
 
-from hpcagent_bench.translators.numpyto_common.ast_build import name_, range_for, store_
+from hpcagent_bench.translators.numpyto_common.ast_build import name_, range_for, store_, walk_nodes
 from hpcagent_bench.translators.numpyto_common.lib_nodes.dims import shape_exprs_equal
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of, span_multiple_of
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
@@ -24,13 +24,13 @@ from hpcagent_bench.translators.numpyto_common.lowering.indexing import (
 )
 from hpcagent_bench.translators.numpyto_common.lowering.overlap import (
     OVERLAP_TEMP_PREFIX,
-    index_list,
     reads_a_stored_cell,
     staged_through_temp,
     temp_extents,
 )
 from hpcagent_bench.translators.numpyto_common.lowering.shape_harvest import is_scalar_helper_call
 from hpcagent_bench.translators.numpyto_common.lowering.shape_reads import is_newaxis, negative_literal_offset
+from hpcagent_bench.translators.numpyto_common.parallelism import index_exprs
 from hpcagent_bench.translators.numpyto_common.lowering.slice_scalarize import SliceToScalarRewriter
 from hpcagent_bench.translators.numpyto_common.lowering.views import refuse_scalarising_a_contraction
 from hpcagent_bench.translators.numpyto_common.subscripts import has_slice_subscript
@@ -212,7 +212,7 @@ class SliceFusion(ast.NodeTransformer):
         # nest has already stored (``a[1:] = a[:-1] + 1``, ``x[:] = x[::-1]``, ``x[:] = x[perm]``)
         # goes through a temp the RHS is evaluated into first.
         nest = [(ivar.id, ranges[axis][0], ranges[axis][1]) for axis, ivar in enumerate(iter_vars) if ivar is not None]
-        if reads_a_stored_cell(lhs_name, index_list(new_lhs), new_rhs, nest):
+        if reads_a_stored_cell(lhs_name, index_exprs(new_lhs), new_rhs, nest):
             temp = f"{OVERLAP_TEMP_PREFIX}{len(self.overlap_temps) + 1}"
             self.overlap_temps[temp] = (temp_extents(nest), lhs_name)
             return [*hoister.staged, *staged_through_temp(new_lhs, new_rhs, aug_op, nest, temp)]
@@ -376,7 +376,7 @@ class HoistInvariantSelfReads(ast.NodeTransformer):
             if isinstance(dim, ast.Attribute) and dim.attr == "newaxis":
                 return False
             # An index ARRAY makes the read a gather, whose result is not one element.
-            if any(isinstance(n, ast.Name) and n.id in self.array_shapes for n in ast.walk(dim)):
+            if any(isinstance(n, ast.Name) and n.id in self.array_shapes for n in walk_nodes(dim)):
                 return False
         return True
 
@@ -470,7 +470,7 @@ class LiftFreshArrayFromSlices(ast.NodeTransformer):
         # a deferred-malloc emitter from reallocating a buffer the RHS still reads.
         marker_args: list[ast.expr] = []
         if rebind:
-            self_ref = any(isinstance(n, ast.Name) and n.id == target.id for n in ast.walk(node.value))
+            self_ref = any(isinstance(n, ast.Name) and n.id == target.id for n in walk_nodes(node.value))
             marker_args = [ast.Constant(value="__reassign__"), ast.Constant(value=self_ref)]
         marker = ast.Assign(
             targets=[store_(target.id)],
@@ -501,7 +501,7 @@ class LiftFreshArrayFromSlices(ast.NodeTransformer):
         """
         if not isinstance(expr, (ast.BinOp, ast.UnaryOp)):
             return False
-        for sub in ast.walk(expr):
+        for sub in walk_nodes(expr):
             if isinstance(sub, ast.Name):
                 s = self.shapes.get(sub.id)
                 if s:

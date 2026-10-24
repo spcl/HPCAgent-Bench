@@ -16,7 +16,7 @@ import pathlib
 import re
 from collections.abc import Callable, Iterator, KeysView, Mapping
 from dataclasses import dataclass, field
-from typing import Any, NamedTuple, TypeGuard, cast
+from typing import Any, NamedTuple, cast
 
 import yaml
 from hpcagent_agent.coded import Coded
@@ -53,7 +53,6 @@ __all__ = [
     "ARRAY_ONLY_KEYS",
     "BARE_LEVEL",
     "COMPREHENSION_NODES",
-    "CONFIG_KNOB_KEYS",
     "CONFIG_SELECTS",
     "CPP_KEYWORDS",
     "C_KEYWORDS",
@@ -64,27 +63,22 @@ __all__ = [
     "HARNESS_KWARGS",
     "INITIALIZER",
     "KERNELS",
-    "KNOWN_MANIFEST_KEYS",
-    "LAYOUT_KEYS",
     "LEVELS",
     "MANIFEST_DERIVED_CACHES",
-    "MANIFEST_INIT_KEYS",
     "RESERVED_BACKEND_NAMES",
     "RUNGS",
-    "SCENARIO_KEYS",
     "SCOPE_NODES",
     "SPARSE_RANK",
     "SUPPORTED_DWARFS",
-    "SUPPORTED_SCALES",
     "TRACK_DATATYPE_TRACK",
     "ArgFlag",
     "ArgsBlock",
-    "ArrayEntry",
     "BenchSpec",
     "ConfigKnob",
     "ConfigRow",
     "InitSpec",
     "KernelRegistry",
+    "KernelSite",
     "LayoutChoice",
     "MpiDecomposition",
     "PresetTable",
@@ -95,12 +89,11 @@ __all__ = [
     "SparseLayout",
     "SparseLayoutVariant",
     "as_block",
-    "as_domain",
     "as_list",
     "as_tuple",
     "as_value",
-    "block_of",
     "bound_names",
+    "bounded",
     "bsr_block_sizes",
     "buffer_dtype",
     "collect_loop_var_reads",
@@ -110,16 +103,11 @@ __all__ = [
     "derive_array_args",
     "derive_func_name",
     "derive_input_args",
-    "expand_args",
     "function_parameters",
+    "index_array_dtype",
     "init_arrays_raw",
     "initializer_inputs",
-    "int_of",
-    "is_list",
-    "is_mapping",
     "layout_configurations",
-    "layout_tokens",
-    "list_block_of",
     "load_spec",
     "load_yaml",
     "loop_vars_read_outside_loop",
@@ -127,26 +115,20 @@ __all__ = [
     "missing_level",
     "module_level_constants",
     "normalized_ast",
-    "number_of",
     "numpy_reference_path",
     "outside_nested_scopes",
     "parse_args",
-    "parse_array_entries",
     "parse_config_list",
     "parse_config_space",
-    "parse_init",
     "parse_layouts",
     "parse_mpi",
     "parse_one_layout",
-    "parse_parameters",
     "parse_preset",
     "parse_scenarios",
-    "parse_workspace_bytes",
     "partition_axes",
     "preset_arg",
     "register_manifest_cache",
     "resolve_array_args",
-    "resolve_input_args",
     "resolve_preset",
     "scale_axes_of",
     "scenarios_without_perturbation",
@@ -165,7 +147,6 @@ __all__ = [
     "validate_init_kinds",
     "validate_kernel",
     "validate_level",
-    "validate_scale",
     "validate_scenario_layouts",
     "validate_sparse_layouts",
     "value_of",
@@ -184,19 +165,9 @@ ArrayEntry = str | dict[str, str | bool | domain_mod.RawDomain]
 LayoutChoice = str
 
 
-def is_mapping(raw: object) -> TypeGuard[dict[object, object]]:
-    """Whether ``raw`` is a YAML mapping, narrowed to the weakest true type of its members."""
-    return isinstance(raw, dict)
-
-
-def is_list(raw: object) -> TypeGuard[list[object]]:
-    """Whether ``raw`` is a YAML sequence, narrowed to the weakest true type of its members."""
-    return isinstance(raw, list)
-
-
 def as_block(raw: object) -> dict[str, object]:
     """One YAML mapping keyed by text, its values still ``object`` (YAML 1.1 reads ``on`` as a bool, so keys are
-    forced to text); a non-mapping reads as empty, and callers that must reject one use :func:`block_of`."""
+    forced to text); a non-mapping reads as empty (the manifest schema rejects one)."""
     return {str(k): v for k, v in cast("dict[object, object]", raw).items()} if isinstance(raw, dict) else {}
 
 
@@ -208,24 +179,6 @@ def as_list(raw: object) -> list[object]:
 def as_tuple(result: object) -> tuple[Any, ...]:
     """A reference or ``make_inputs`` return value as a tuple of outputs (a single tensor is one output)."""
     return tuple(cast("list[Any]", result)) if isinstance(result, (tuple, list)) else (result,)
-
-
-def block_of(raw: object, field_name: str, source: str) -> dict[str, object]:
-    """One manifest block that MUST be a mapping: absent is empty, anything else a load error naming the field."""
-    block = as_block(raw)
-    if raw is not None and not isinstance(raw, dict):
-        raise ValueError(f"{source}: {field_name}: expected a mapping (got {type(raw).__name__})")
-    return block
-
-
-def list_block_of(raw: object, field_name: str, source: str) -> dict[str, list[str]]:
-    """One manifest block whose values are all lists of strings."""
-    out: dict[str, list[str]] = {}
-    for key, value in block_of(raw, field_name, source).items():
-        if not isinstance(value, list):
-            raise ValueError(f"{source}: {field_name}.{key}: expected a list (got {type(value).__name__})")
-        out[key] = [str(item) for item in cast("list[object]", value)]
-    return out
 
 
 def as_value(raw: object) -> "FuzzValue | None":
@@ -244,27 +197,6 @@ def value_of(raw: object, field_name: str, source: str) -> FuzzValue:
     if value is None:
         raise ValueError(f"{source}: {field_name}: expected a scalar, a list, or a mapping (got {type(raw).__name__})")
     return value
-
-
-def number_of(raw: object, field_name: str, source: str) -> float:
-    """One declared number, keeping the manifest's own spelling (an int stays an int for the ABI)."""
-    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
-        raise ValueError(f"{source}: {field_name}: expected a number (got {type(raw).__name__})")
-    return raw
-
-
-def int_of(raw: object, field_name: str, source: str) -> int:
-    """One declared integer. ``True`` is not one, however much Python says it is."""
-    if isinstance(raw, bool) or not isinstance(raw, int):
-        raise ValueError(f"{source}: {field_name}: expected an integer (got {type(raw).__name__})")
-    return raw
-
-
-def as_domain(raw: object, field_name: str, source: str) -> domain_mod.RawDomain:
-    """One array's ``domain`` as the manifest states it (validated by ``distributions.domain.parse``)."""
-    if isinstance(raw, str):
-        return raw
-    return [number_of(v, field_name, source) for v in as_list(raw)]
 
 
 def load_yaml(text: str) -> dict[str, object]:
@@ -351,41 +283,30 @@ def resolve_preset(preset: str) -> Preset:
     return base
 
 
-def layout_tokens(raw: object) -> tuple[str, ...]:
-    """A list of symbol names in a ``layouts`` entry."""
-    return tuple(str(token) for token in as_list(raw) or ())
-
-
-def parse_one_layout(arr_name: str, raw: object, source: str) -> "SparseLayout":
+def parse_one_layout(arr_name: str, entry: manifest_schema.LayoutEntry, source: str) -> "SparseLayout":
     """One ``layouts.<A>`` entry: the logical extents, the count symbol, the offered formats."""
     base = f"layouts.{arr_name}"
-    lay = block_of(raw, base, source)
-    unknown = sorted(set(lay) - LAYOUT_KEYS)
-    if unknown:
-        raise ValueError(f"{source}: {base} has unknown key(s) {unknown}; expected {sorted(LAYOUT_KEYS)}")
-    logical_shape = layout_tokens(lay.get("logical_shape"))
+    logical_shape = tuple(entry.logical_shape)
     if len(logical_shape) != SPARSE_RANK:
         raise ValueError(f"{source}: {base}.logical_shape must name {SPARSE_RANK} extents (rows, cols)")
-    nnz = lay.get("nnz")
-    if not isinstance(nnz, str) or not nnz:
+    nnz = entry.nnz
+    if not nnz:
         raise ValueError(
             f"{source}: {base}.nnz must name the size symbol counting {arr_name}'s stored entries "
             f"(or spell that count as an expression of the sizes)"
         )
-    offered = layout_tokens(lay.get("offered")) or FORMATS
+    offered = tuple(entry.offered or ()) or FORMATS
     bad = sorted(set(offered) - set(FORMATS))
     if bad or len(set(offered)) != len(offered):
         raise ValueError(f"{source}: {base}.offered must list distinct formats from {list(FORMATS)}; got {offered}")
-    default = str(lay.get("default", DEFAULT_FORMAT))
+    default = entry.default or DEFAULT_FORMAT
     if default not in offered or default == BLOCK_FORMAT or default in PADDED_FORMATS:
         raise ValueError(
             f"{source}: {base}.default {default!r} must be an offered format that needs no block size "
             f"and stores no padding (csr, csc or coo); offered: {list(offered)}"
         )
-    dtype = str(lay.get("dtype", "float64"))
-    pattern = lay.get("pattern", False)
-    if not isinstance(pattern, bool):
-        raise ValueError(f"{source}: {base}.pattern must be true (a boolean matrix, no values) or false")
+    dtype = entry.dtype or "float64"
+    pattern = bool(entry.pattern)
     rows, cols = logical_shape
     variants = {
         fmt: SparseLayoutVariant(
@@ -416,10 +337,10 @@ def buffer_dtype(buf: LayoutBuffer, dtype: str) -> str:
     return MASK_DTYPE if buf.mask else dtype
 
 
-def parse_layouts(raw: dict[str, object], source: str) -> dict[str, "SparseLayout"]:
+def parse_layouts(entries: Mapping[str, manifest_schema.LayoutEntry], source: str) -> dict[str, "SparseLayout"]:
     """Parse the ``layouts`` block: every logical sparse array (``logical_shape``, ``nnz``, ``offered``,
     ``default``); buffers derive from ``FORMAT_SPECS``, and all arrays must agree on the default."""
-    layouts = {str(name): parse_one_layout(str(name), entry, source) for name, entry in raw.items()}
+    layouts = {name: parse_one_layout(name, entry, source) for name, entry in entries.items()}
     defaults = sorted({lay.default for lay in layouts.values()})
     if len(defaults) > 1:
         raise ValueError(f"{source}: the sparse arrays of one kernel share one default format; got {defaults}")
@@ -492,12 +413,6 @@ class InitSpec:
     revalue: str = ""
 
 
-#: The keys a ``layouts.<A>`` entry may carry (:func:`parse_one_layout`).
-LAYOUT_KEYS = manifest_schema.field_keys(manifest_schema.LayoutEntry)
-
-#: The keys an ``init.scenarios`` entry in mapping form may carry (:func:`parse_scenarios`).
-SCENARIO_KEYS = manifest_schema.field_keys(manifest_schema.ScenarioEntry)
-
 #: A logical sparse array is a matrix: rows and columns.
 SPARSE_RANK = 2
 
@@ -545,9 +460,6 @@ def init_arrays_raw(init: "InitSpec") -> dict[str, ArrayEntry]:
 #: What kind of execution-path decision a ``config:`` knob makes (descriptive; a closed set catches typos).
 CONFIG_SELECTS = frozenset({"branch", "tile", "iteration", "tolerance", "seed", "physical"})
 
-#: Keys a single ``config:`` entry may declare (see :func:`_parse_config_knob`).
-CONFIG_KNOB_KEYS = manifest_schema.field_keys(manifest_schema.ConfigKnobEntry)
-
 
 class ConfigKnob(BaseModel):
     """One execution-path selector under ``config:`` (branch flag, tile size, iteration cap); NEVER scaled by a size
@@ -569,20 +481,10 @@ class ConfigKnob(BaseModel):
         return self.value
 
 
-def _parse_config_knob(raw: object, kernel: str, sym: str, source: str) -> ConfigKnob:
-    """Parse + validate one ``config:`` entry: exactly one of ``domain:`` and ``value:``, known keys, a known
-    ``selects:``."""
-    blk = as_block(raw)
-    if not isinstance(raw, dict):
-        raise ValueError(f"{source}: {kernel}: config.{sym} must be a mapping (got {type(raw).__name__})")
-    unknown = sorted(set(blk) - CONFIG_KNOB_KEYS)
-    if unknown:
-        raise ValueError(
-            f"{source}: {kernel}: config.{sym} has unknown key(s) {unknown}; allowed: {sorted(CONFIG_KNOB_KEYS)}"
-        )
-    domain_raw = as_list(blk.get("domain"))
-    has_domain = len(domain_raw) > 0
-    has_value = "value" in blk
+def parse_config_knob(entry: manifest_schema.ConfigKnobEntry, kernel: str, sym: str, source: str) -> ConfigKnob:
+    """Validate one ``config:`` entry: exactly one of ``domain:`` and ``value:``, a known ``selects:``."""
+    has_domain = bool(entry.domain)
+    has_value = entry.value is not None
     if has_domain and has_value:
         raise ValueError(
             f"{source}: {kernel}: config.{sym} declares both 'domain' and 'value' -- exactly "
@@ -593,42 +495,22 @@ def _parse_config_knob(raw: object, kernel: str, sym: str, source: str) -> Confi
             f"{source}: {kernel}: config.{sym} declares neither 'domain' (non-empty list) nor "
             f"'value' (scalar) -- exactly one is required"
         )
-    if has_value and not isinstance(blk["value"], (bool, int, float, str)):
-        raise ValueError(f"{source}: {kernel}: config.{sym}.value must be a scalar (got {type(blk['value']).__name__})")
-    selects = blk.get("selects")
-    if selects is not None and selects not in CONFIG_SELECTS:
-        raise ValueError(f"{source}: {kernel}: config.{sym}.selects {selects!r} is not one of {sorted(CONFIG_SELECTS)}")
-    domain_field = f"config.{sym}.domain"
-    return ConfigKnob(
-        domain=tuple(value_of(v, domain_field, source) for v in domain_raw) if has_domain else None,
-        value=value_of(blk["value"], f"config.{sym}.value", source) if has_value else None,
-        selects=None if selects is None else str(selects),
-    )
+    if entry.selects is not None and entry.selects not in CONFIG_SELECTS:
+        raise ValueError(
+            f"{source}: {kernel}: config.{sym}.selects {entry.selects!r} is not one of {sorted(CONFIG_SELECTS)}"
+        )
+    return ConfigKnob(domain=tuple(entry.domain) if entry.domain else None, value=entry.value, selects=entry.selects)
 
 
-def parse_config_list(raw: list[object], kernel: str, source: str) -> tuple[ConfigRow, ...]:
-    """Parse + validate the CURATED ``config:`` list of complete configs; every row declares the SAME key set."""
-    if not raw:
+def parse_config_list(rows: list[dict[str, manifest_schema.Scalar]], kernel: str, source: str) -> tuple[ConfigRow, ...]:
+    """Validate the CURATED ``config:`` list of complete configs; every row declares the SAME key set."""
+    if not rows:
         raise ValueError(
             f"{source}: {kernel}: 'config' is an empty list; declare at least one config, or drop the block"
         )
-    rows: list[ConfigRow] = []
-    for i, entry in enumerate(raw):
-        row = as_block(entry)
+    for i, row in enumerate(rows):
         if not row:
-            raise ValueError(
-                f"{source}: {kernel}: config[{i}] must be a non-empty mapping of "
-                f"symbol -> scalar (got {type(entry).__name__})"
-            )
-        bad = sorted(sym for sym, val in row.items() if isinstance(val, (list, dict)))
-        if bad:
-            raise ValueError(
-                f"{source}: {kernel}: config[{i}] value(s) for {bad} must be scalars; the "
-                f"curated composition lists COMPLETE configs, so a nested list/mapping has "
-                f"no meaning here (use the mapping composition for per-knob axes)"
-            )
-        row_field = f"config[{i}]"
-        rows.append({sym: value_of(val, row_field, source) for sym, val in row.items()})
+            raise ValueError(f"{source}: {kernel}: config[{i}] must be a non-empty mapping of symbol -> scalar")
     keys = frozenset(rows[0])
     diverged = [i for i, row in enumerate(rows) if frozenset(row) != keys]
     if diverged:
@@ -637,10 +519,10 @@ def parse_config_list(raw: list[object], kernel: str, source: str) -> tuple[Conf
             f"config[0] declares {sorted(keys)} but config[{diverged[0]}] declares "
             f"{sorted(rows[diverged[0]])}"
         )
-    return tuple(rows)
+    return tuple(dict[str, FuzzValue](row) for row in rows)
 
 
-def _config_product(knobs: dict[str, ConfigKnob], constraints: tuple[str, ...]) -> tuple[ConfigRow, ...]:
+def config_product(knobs: dict[str, ConfigKnob], constraints: tuple[str, ...]) -> tuple[ConfigRow, ...]:
     """Enumerate the mapping composition: ``domain:`` axes crossed, ``value:`` knobs pinned, ``constraints:``
     filtering rows."""
     axes = [(sym, knob.domain) for sym, knob in knobs.items() if knob.domain is not None]
@@ -651,7 +533,7 @@ def _config_product(knobs: dict[str, ConfigKnob], constraints: tuple[str, ...]) 
     rows: list[ConfigRow] = [
         {**pinned, **dict(zip(names, combo, strict=False))} for combo in itertools.product(*(dom for _, dom in axes))
     ]
-    # A constraint naming an unbound symbol (a size) is a cross-preset invariant, checked by _validate_constraints.
+    # A constraint naming an unbound symbol (a size) is a cross-preset invariant, checked by validate_constraints.
     return tuple(row for row in rows if all(constraint_holds(expr, row) for expr in constraints))
 
 
@@ -663,9 +545,10 @@ def constraint_holds(expr: str, row: ConfigRow) -> bool:
         return True
 
 
-def scale_axes_of(raw: object, parameters: PresetTable, config_syms: set[str], source: str) -> tuple[str, ...]:
+def scale_axes_of(
+    axes: tuple[str, ...], parameters: PresetTable, config_syms: set[str], source: str
+) -> tuple[str, ...]:
     """The manifest's ``scale_axes``: size symbols the XL rung declares, never ``config:`` knobs."""
-    axes = tuple(str(name) for name in as_list(raw))
     xl = parameters.get(Preset.XL.text, {})
     bad = [name for name in axes if name in config_syms or not isinstance(xl.get(name), int)]
     if bad:
@@ -673,7 +556,7 @@ def scale_axes_of(raw: object, parameters: PresetTable, config_syms: set[str], s
     return axes
 
 
-def _validate_constraints(constraints: tuple[str, ...], parameters_view: PresetTable, kernel: str, source: str) -> None:
+def validate_constraints(constraints: tuple[str, ...], parameters_view: PresetTable, kernel: str, source: str) -> None:
     """Reject at LOAD any ``constraints:`` expression false at, or naming a symbol undeclared in, a CONCRETE preset
     (``fuzz.safe_eval``); ``fuzzed`` is checked per draw by the fuzzer instead."""
     for preset, names in parameters_view.items():
@@ -727,7 +610,7 @@ def module_level_constants(relative_path: str, module_name: str) -> "dict[str, F
     return out
 
 
-def _validate_shape_identifiers(
+def validate_shape_identifiers(
     init_spec: InitSpec | None,
     param_syms: set[str],
     input_args: tuple[str, ...],
@@ -782,13 +665,13 @@ def shape_identifiers(shape_expr: str) -> frozenset[str]:
     return frozenset(_SHAPE_IDENT_RE.findall(str(shape_expr)))
 
 
-def _innermost_dim_expr(shape_expr: str) -> str | None:
+def innermost_dim_expr(shape_expr: str) -> str | None:
     """The source of ``shape_expr``'s LAST (row-major contiguous) dimension; ``None`` when it does not parse."""
     dims = shape_dims(shape_expr)
     return dims[-1] if dims else None
 
 
-def _validate_packed_shapes(
+def validate_packed_shapes(
     init_spec: InitSpec | None,
     parameters_view: PresetTable,
     relative_path: str,
@@ -812,7 +695,7 @@ def _validate_packed_shapes(
     for name, dtype in sorted(packed.items()):
         mult = dtype_registry.size_multiple(dtype)
         shape_expr = str(init_spec.shapes[name])
-        inner_expr = _innermost_dim_expr(shape_expr)
+        inner_expr = innermost_dim_expr(shape_expr)
         if inner_expr is None:
             continue
         idents = _SHAPE_IDENT_RE.findall(inner_expr)
@@ -852,7 +735,7 @@ def _validate_packed_shapes(
                     )
 
 
-def _validate_chain_length(
+def validate_chain_length(
     chain_length: dict[str, str],
     output_args: tuple[str, ...],
     init_spec: InitSpec | None,
@@ -907,7 +790,6 @@ def _validate_chain_length(
 
 
 #: Top-level keys of an authored manifest (:class:`hpcagent_bench.manifest_schema.Manifest`).
-KNOWN_MANIFEST_KEYS = manifest_schema.field_keys(manifest_schema.Manifest)
 
 
 def validate_dwarf(dwarf: str | None, source: str = "<spec>") -> None:
@@ -919,8 +801,6 @@ def validate_dwarf(dwarf: str | None, source: str = "<spec>") -> None:
 
 
 #: HPC scale classes: ``micro`` (single kernel, the default) or ``proxy`` (mini-app, tagged explicitly).
-SUPPORTED_SCALES = frozenset({"micro", "proxy"})
-
 #: The difficulty levels a kernel may declare, and the only ones an ``@lvl<n>`` selector accepts.
 LEVELS = (1, 2, 3)
 
@@ -1003,19 +883,6 @@ def derive_func_name(relative_path: str, module_name: str) -> str | None:
     return module_name if module_name in defs else None
 
 
-def validate_scale(scale: str | None, track: Track, source: str = "<spec>") -> None:
-    """Raise ``ValueError`` if ``scale`` is off-vocabulary or set on a non-HPC track (``None`` allowed)."""
-    if scale is None:
-        return
-    if scale not in SUPPORTED_SCALES:
-        raise ValueError(
-            f"{source}: scale {scale!r} is not a valid HPC scale; valid values: {sorted(SUPPORTED_SCALES)}"
-        )
-    if track is not Track.SCIENTIFIC_COMPUTING:
-        raise ValueError(f"{source}: scale is only valid on the scientific_computing track; got track {track.text!r}")
-
-
-#: A ``small`` size symbol stays below this everywhere; a ``big`` one's fuzz range starts at or above it.
 SMALL_LIMIT = 64
 
 
@@ -1204,129 +1071,6 @@ class ResolvedBench:
     arrays: dict[str, LayoutChoice] = field(default_factory=dict[str, LayoutChoice])
 
 
-def parse_array_entries(
-    init_raw: dict[str, object], dtypes: dict[str, str], dists: dict[str, str], source: str
-) -> tuple[dict[str, str], dict[str, domain_mod.RawDomain], list[str]]:
-    """``init.arrays`` -> ``(shapes, domains, index_arrays)``, dtypes/dists into ``dtypes``/``dists``."""
-    shapes: dict[str, str] = {}
-    domains: dict[str, domain_mod.RawDomain] = {}
-    index_arrays: list[str] = []
-    for name, raw_entry in block_of(init_raw.get("arrays"), "init.arrays", source).items():
-        if isinstance(raw_entry, str):
-            shapes[name] = raw_entry
-            continue
-        entry = block_of(raw_entry, f"init.arrays[{name!r}]", source)
-        if "shape" not in entry:
-            raise ValueError(f"{source}: init.arrays[{name!r}] needs a 'shape' (got keys {sorted(entry)})")
-        # Closed key set, so a misspelt key cannot leave a declared domain unhonoured.
-        unknown_keys = sorted(set(entry) - ARRAY_ENTRY_KEYS)
-        if unknown_keys:
-            raise ValueError(
-                f"{source}: init.arrays[{name!r}] has unknown key(s) {unknown_keys}; "
-                f"expected {sorted(ARRAY_ENTRY_KEYS)}"
-            )
-        shapes[name] = str(entry["shape"])
-        if entry.get("dtype"):
-            dtypes[name] = str(entry["dtype"])
-        if entry.get("dist"):
-            dists[name] = str(entry["dist"])
-        flag = entry.get("index_array")
-        if flag is not None:
-            if not isinstance(flag, bool):
-                raise ValueError(f"{source}: args.{name}.index_array must be true or false, got {flag!r}")
-            if flag:
-                index_arrays.append(name)
-        if entry.get("domain") is not None:
-            declared_domain = as_domain(entry["domain"], f"args.{name}.domain", source)
-            domain_mod.parse(declared_domain)
-            domains[name] = declared_domain
-    # An index array must pin an integer dtype, or it would follow the precision sweep.
-    for name in index_arrays:
-        declared = dtypes.get(name)
-        if declared is None or not declared.lstrip("u").startswith("int"):
-            raise ValueError(
-                f"{source}: args.{name} is index_array but declares "
-                f"dtype {declared!r}; an index array must pin an integer dtype "
-                f"(e.g. 'int64'), because a subscript cannot follow the float "
-                f"precision sweep"
-            )
-    return shapes, domains, index_arrays
-
-
-def parse_workspace_bytes(init_raw: dict[str, object], source: str) -> int | None:
-    """``init.workspace.bytes``: an optional scratch-memory floor, a non-negative int when declared."""
-    workspace_raw = init_raw.get("workspace")
-    if workspace_raw is None:
-        return None
-    workspace = as_block(workspace_raw)
-    if not isinstance(workspace_raw, dict) or "bytes" not in workspace:
-        raise ValueError(f"{source}: init.workspace must be a mapping with a 'bytes' key (got {workspace_raw!r})")
-    declared_bytes = workspace["bytes"]
-    if isinstance(declared_bytes, bool) or not isinstance(declared_bytes, int) or declared_bytes < 0:
-        raise ValueError(f"{source}: init.workspace.bytes must be a non-negative integer (got {declared_bytes!r})")
-    return declared_bytes
-
-
-#: The keys of an expanded ``init`` block (the dict :meth:`BenchSpec.from_dict` reads).
-RAW_INIT_KEYS = frozenset(
-    {
-        "func_name",
-        "input_args",
-        "output_args",
-        "arrays",
-        "scalars",
-        "dtypes",
-        "scenarios",
-        "revalue",
-        "constants",
-        "workspace",
-    }
-)
-
-
-def parse_init(raw: object, source: str) -> InitSpec:
-    """The ``init:`` block -> :class:`InitSpec` (``init.output_args`` defaults to every declared array and scalar)."""
-    init_raw = block_of(raw, "init", source)
-    unknown = sorted(set(init_raw) - RAW_INIT_KEYS)
-    if unknown:
-        raise ValueError(f"{source}: init carries unknown key(s) {unknown}; it may carry {sorted(RAW_INIT_KEYS)}")
-    dtypes = {sym: str(dt) for sym, dt in block_of(init_raw.get("dtypes"), "init.dtypes", source).items()}
-    arrays_named = sorted(set(dtypes) & set(block_of(init_raw.get("arrays"), "init.arrays", source)))
-    if arrays_named:
-        raise ValueError(
-            f"{source}: init.dtypes names array(s) {arrays_named}; an array's dtype goes on its init.arrays entry"
-        )
-    dists: dict[str, str] = {}  # filled from init.arrays below
-    shapes, domains, index_arrays = parse_array_entries(init_raw, dtypes, dists, source)
-    scalars = {
-        sym: number_of(v, f"init.scalars.{sym}", source)
-        for sym, v in block_of(init_raw.get("scalars"), "init.scalars", source).items()
-    }
-    declared_out = init_raw.get("output_args")
-    init_out = list(shapes) + list(scalars) if declared_out is None else [str(a) for a in as_list(declared_out)]
-    workspace_bytes = parse_workspace_bytes(init_raw, source)
-    scenarios, scenario_layouts = parse_scenarios(init_raw, source)
-    return InitSpec(
-        func_name=str(init_raw.get("func_name", "")),
-        input_args=tuple(str(a) for a in as_list(init_raw.get("input_args"))),
-        output_args=tuple(init_out),
-        shapes=shapes,
-        scalars=scalars,
-        constants={
-            sym: int_of(v, f"init.constants.{sym}", source)
-            for sym, v in block_of(init_raw.get("constants"), "init.constants", source).items()
-        },
-        dtypes=dtypes,
-        dists=dists,
-        domains=domains,
-        index_arrays=frozenset(index_arrays),
-        workspace_bytes=workspace_bytes,
-        scenarios=scenarios,
-        scenario_layouts=scenario_layouts,
-        revalue=str(init_raw.get("revalue", "")),
-    )
-
-
 class ArgFlag(Coded):
     """A boolean role one ``args`` entry may carry; the member's spelling is its manifest key."""
 
@@ -1344,20 +1088,13 @@ ARG_ENTRY_KEYS = manifest_schema.field_keys(manifest_schema.ArgEntry)
 #: The entry keys only an array (an entry with a ``shape``) may carry.
 ARRAY_ONLY_KEYS = (ARRAY_ENTRY_KEYS - {"shape", "dtype"}) | {ArgFlag.PARTITIONED.text}
 
-#: The keys a manifest's ``init`` block may carry (what the fallback initializer needs beyond ``args``).
-MANIFEST_INIT_KEYS = manifest_schema.field_keys(manifest_schema.InitBlock)
 
+@dataclass(frozen=True, slots=True)
+class ArgsBlock:
+    """A manifest's ``args:`` and ``init:`` blocks resolved: the input recipe, the graded outputs and the
+    block-partitioned arrays; ``args`` order is the data order (draw streams, initializer returns, graded outputs)."""
 
-class ArgsBlock(BaseModel):
-    """A manifest's ``args:`` block expanded into the declarations :meth:`BenchSpec.from_dict` reads; ``args`` order
-    is the data order (draw streams, initializer returns, graded outputs)."""
-
-    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
-
-    arrays: dict[str, str | dict[str, str | bool | list[Number]]]
-    scalars: dict[str, Number]
-    dtypes: dict[str, str]
-    returned: tuple[str, ...]
+    init: InitSpec
     outputs: tuple[str, ...]
     partitioned: dict[str, list[str | int]]
 
@@ -1367,13 +1104,61 @@ def partition_axes(shape: str) -> list[str | int]:
     return [int(dim) if dim.isdigit() else dim for dim in shape_dims(shape)]
 
 
-def parse_args(entries: Mapping[str, manifest_schema.ArgEntry], fallback: bool, source: str) -> ArgsBlock:
-    """The validated ``args:`` block -> :class:`ArgsBlock`; ``fallback`` allows undeclared or unreturned entries."""
+def index_array_dtype(name: str, dtype: str | None, source: str) -> None:
+    """An index array pins an integer dtype; a subscript cannot follow the float precision sweep."""
+    if dtype is None or not dtype.lstrip("u").startswith("int"):
+        raise ValueError(
+            f"{source}: args.{name} is index_array but declares "
+            f"dtype {dtype!r}; an index array must pin an integer dtype "
+            f"(e.g. 'int64'), because a subscript cannot follow the float "
+            f"precision sweep"
+        )
+
+
+def parse_scenarios(
+    entries: Mapping[str, manifest_schema.ScenarioEntry] | None, fallback: bool, source: str
+) -> tuple[dict[str, str], dict[str, tuple[str, ...]]]:
+    """``init.scenarios`` (fallback initializer only) -> ``(descriptions, layouts)``."""
+    if entries is None:
+        return {}, {}
+    if not entries:
+        raise ValueError(f"{source}: init.scenarios must be a non-empty mapping of name -> description")
+    if not fallback:
+        raise ValueError(
+            f"{source}: init.scenarios is read by a fallback {INITIALIZER}() only; "
+            f"define {INITIALIZER}() in the kernel module or drop the scenarios"
+        )
+    scenarios: dict[str, str] = {}
+    layouts: dict[str, tuple[str, ...]] = {}
+    for name, entry in entries.items():
+        if not name.isidentifier() or not entry.description.strip():
+            raise ValueError(
+                f"{source}: init.scenarios[{name!r}] must be an identifier mapped to a one-line description, "
+                f"or to {{description: ..., layouts: [...]}}"
+            )
+        scenarios[name] = entry.description.strip()
+        if entry.layouts is not None:
+            layouts[name] = tuple(entry.layouts)
+    return scenarios, layouts
+
+
+def parse_args(
+    entries: Mapping[str, manifest_schema.ArgEntry],
+    init: manifest_schema.InitBlock | None,
+    initializer_inputs: tuple[str, ...] | None,
+    source: str,
+) -> ArgsBlock:
+    """The validated ``args:`` and ``init:`` blocks -> :class:`ArgsBlock`; ``initializer_inputs`` (the fallback
+    ``initialize()``'s inputs, ``None`` without one) allows undeclared or unreturned entries."""
     if not entries:
         raise ValueError(f"{source}: 'args' must map each argument to its shape, its value or a declaration")
-    arrays: dict[str, str | dict[str, Any]] = {}
-    scalars: dict[str, int | float] = {}
+    fallback = initializer_inputs is not None
+    shapes: dict[str, str] = {}
+    scalars: dict[str, float] = {}
     dtypes: dict[str, str] = {}
+    dists: dict[str, str] = {}
+    domains: dict[str, domain_mod.RawDomain] = {}
+    index_arrays: list[str] = []
     returned: list[str] = []
     outputs: list[str] = []
     partitioned: dict[str, list[str | int]] = {}
@@ -1394,13 +1179,19 @@ def parse_args(entries: Mapping[str, manifest_schema.ArgEntry], fallback: bool, 
         if entry.shape is None and entry.value is None and not is_returned:
             raise ValueError(f"{source}: {where} declares nothing and is not returned, so nothing binds it")
         if entry.shape is not None:
-            array_keys = entry.model_dump(include=set(ARRAY_ENTRY_KEYS), exclude_unset=True)
-            arrays[name] = entry.shape if declared == {"shape"} else array_keys
-        else:
-            if entry.value is not None:
-                scalars[name] = entry.value
-            if entry.dtype is not None:
-                dtypes[name] = entry.dtype
+            shapes[name] = entry.shape
+            if entry.dist:
+                dists[name] = entry.dist
+            if entry.domain is not None:
+                domain_mod.parse(entry.domain)
+                domains[name] = entry.domain
+            if entry.index_array:
+                index_array_dtype(name, entry.dtype, source)
+                index_arrays.append(name)
+        elif entry.value is not None:
+            scalars[name] = entry.value
+        if entry.dtype:
+            dtypes[name] = entry.dtype
         if is_returned:
             returned.append(name)
         if entry.out:
@@ -1409,68 +1200,28 @@ def parse_args(entries: Mapping[str, manifest_schema.ArgEntry], fallback: bool, 
             partitioned[name] = partition_axes(str(entry.shape))
     if not outputs:
         raise ValueError(f"{source}: no 'args' entry is marked out: true; a kernel grades at least one output")
-    return ArgsBlock(
-        arrays=arrays,
+    block = init or manifest_schema.InitBlock()
+    workspace_bytes = None if block.workspace is None else block.workspace.bytes
+    if workspace_bytes is not None and workspace_bytes < 0:
+        raise ValueError(f"{source}: init.workspace.bytes must be a non-negative integer (got {workspace_bytes!r})")
+    scenarios, scenario_layouts = parse_scenarios(block.scenarios, fallback, source)
+    spec = InitSpec(
+        func_name=INITIALIZER if fallback else "",
+        input_args=initializer_inputs or (),
+        output_args=tuple(returned),
+        shapes=shapes,
         scalars=scalars,
+        constants=dict(block.constants or {}),
         dtypes=dtypes,
-        returned=tuple(returned),
-        outputs=tuple(outputs),
-        partitioned=partitioned,
+        dists=dists,
+        domains=domains,
+        index_arrays=frozenset(index_arrays),
+        workspace_bytes=workspace_bytes,
+        scenarios=scenarios,
+        scenario_layouts=scenario_layouts,
+        revalue=block.revalue or "",
     )
-
-
-def expand_args(
-    raw: dict[str, object], entries: Mapping[str, manifest_schema.ArgEntry], module: pathlib.Path | None, source: str
-) -> None:
-    """Rewrite a validated manifest's ``args:`` block, in place, into the declarations :meth:`BenchSpec.from_dict`
-    reads (``module`` gives ``init.input_args`` when it defines the initializer)."""
-    init_raw = block_of(raw.get("init"), "init", source)
-    mpi_raw = block_of(raw.get("mpi"), "mpi", source)
-    raw.pop("args", None)
-    args = parse_args(entries, module is not None, source)
-    raw["output_args"] = list(args.outputs)
-    init: dict[str, object] = {**init_raw, "arrays": args.arrays, "output_args": list(args.returned)}
-    if args.scalars:
-        init["scalars"] = args.scalars
-    if args.dtypes:
-        init["dtypes"] = args.dtypes
-    if module is not None:
-        init["func_name"] = INITIALIZER
-        init["input_args"] = list(initializer_inputs(module))
-    raw["init"] = init
-    if args.partitioned:
-        head = {key: mpi_raw.pop(key) for key in ("decomposition",) if key in mpi_raw}
-        raw["mpi"] = {**head, "arrays": args.partitioned, **mpi_raw}
-
-
-def parse_scenarios(init_raw: dict[str, object], source: str) -> tuple[dict[str, str], dict[str, tuple[str, ...]]]:
-    """``init.scenarios`` (fallback initializer only) -> ``(descriptions, layouts)``; the mapping form names each
-    scenario's sparse layouts."""
-    raw = init_raw.get("scenarios")
-    if raw is None:
-        return {}, {}
-    if not is_mapping(raw) or not raw:
-        raise ValueError(f"{source}: init.scenarios must be a non-empty mapping of name -> description")
-    if not init_raw.get("func_name"):
-        raise ValueError(
-            f"{source}: init.scenarios is read by a fallback {INITIALIZER}() only; "
-            f"define {INITIALIZER}() in the kernel module or drop the scenarios"
-        )
-    scenarios: dict[str, str] = {}
-    layouts: dict[str, tuple[str, ...]] = {}
-    for name, entry in as_block(raw).items():
-        described = as_block(entry) if is_mapping(entry) else {"description": entry}
-        description = described.get("description")
-        unknown = sorted(set(described) - SCENARIO_KEYS)
-        if not name.isidentifier() or not isinstance(description, str) or not description.strip() or unknown:
-            raise ValueError(
-                f"{source}: init.scenarios[{name!r}] must be an identifier mapped to a one-line description, "
-                f"or to {{description: ..., layouts: [...]}}"
-            )
-        scenarios[name] = description.strip()
-        if "layouts" in described:
-            layouts[name] = tuple(str(label) for label in as_list(described["layouts"]))
-    return scenarios, layouts
+    return ArgsBlock(init=spec, outputs=tuple(outputs), partitioned=partitioned)
 
 
 def validate_scenario_layouts(init: "InitSpec | None", layouts: dict[str, "SparseLayout"], source: str) -> None:
@@ -1502,64 +1253,27 @@ def validate_scenario_layouts(init: "InitSpec | None", layouts: dict[str, "Spars
         )
 
 
-def parse_parameters(params_raw: object, source: str) -> PresetTable:
-    """The ``parameters:`` block -> ``{preset: {symbol: value}}``."""
-    if not is_mapping(params_raw) or not params_raw:
-        raise ValueError(f"{source}: 'parameters' must be a non-empty mapping of preset -> {{symbol: value}}")
-    return {
-        preset: {
-            sym: value_of(v, f"parameters.{preset}.{sym}", source)
-            for sym, v in block_of(raw_values, f"parameters.{preset}", source).items()
-        }
-        for preset, raw_values in as_block(params_raw).items()
-    }
-
-
 def parse_config_space(
-    config_raw: object, short_name: str, source: str
+    block: "manifest_schema.ConfigBlock | None", short_name: str, source: str
 ) -> tuple[dict[str, ConfigKnob], tuple[ConfigRow, ...]]:
     """The ``config:`` block -> ``(knobs, curated rows)``: a mapping is per-knob axes, a list curated configs."""
-    if is_list(config_raw):
-        return {}, parse_config_list(as_list(config_raw), short_name, source)
-    if is_mapping(config_raw):
-        knobs = {sym: _parse_config_knob(entry, short_name, sym, source) for sym, entry in as_block(config_raw).items()}
-        return knobs, ()
-    raise ValueError(
-        f"{source}: 'config' must be a mapping of symbol -> {{domain|value, selects?}} "
-        f"(per-knob axes) or a list of complete configs (a curated space); got "
-        f"{type(config_raw).__name__}"
-    )
-
-
-def resolve_input_args(
-    bench: dict[str, object], relative_path: str, module_name: str, func_name: str, bound: frozenset[str], source: str
-) -> tuple[str, ...]:
-    """``input_args`` as declared, else from the reference function's signature."""
-    declared_inputs = bench.get("input_args")
-    if declared_inputs is not None:
-        return tuple(str(a) for a in as_list(declared_inputs))
-    derived_inputs = derive_input_args(relative_path, module_name, func_name, bound)
-    if derived_inputs is None:
-        raise ValueError(
-            f"{source}: the reference '{func_name}' could not be read from "
-            f"{relative_path}/{module_name}_numpy.py to infer the kernel's signature."
-        )
-    return derived_inputs
+    if block is None:
+        return {}, ()
+    if isinstance(block, list):
+        return {}, parse_config_list(block, short_name, source)
+    return {sym: parse_config_knob(entry, short_name, sym, source) for sym, entry in block.items()}, ()
 
 
 def resolve_array_args(
-    declared_arrays: object,
     input_args: tuple[str, ...],
     output_args: tuple[str, ...],
-    init_spec: InitSpec | None,
+    init_spec: InitSpec,
     sparse_layouts: dict[str, SparseLayout],
     known: frozenset[str],
     source: str,
 ) -> tuple[str, ...]:
-    """``array_args`` as declared, else derived; derived inputs must be names the manifest defines (so a forgotten
-    shape cannot demote an array to a scalar)."""
-    if declared_arrays is not None:
-        return tuple(str(a) for a in as_list(declared_arrays))
+    """The array arguments, derived; every input must be a name the manifest defines (so a forgotten shape cannot
+    demote an array to a scalar)."""
     derived_arrays = derive_array_args(input_args, output_args, init_spec, sparse_layouts)
     if derived_arrays is None:
         raise ValueError(f"{source}: no argument has a shape, so the kernel's arrays cannot be derived.")
@@ -1617,16 +1331,84 @@ def validate_sparse_layouts(
     validate_sparse_config(sparse_layouts, array_args, input_args, output_args, source=source)
 
 
-def parse_mpi(raw: object, sparse: bool, source: str) -> dict[str, object]:
-    """The opt-in ``mpi:`` block (absent: arrays replicate); a sparse kernel cannot declare one."""
-    mpi_blk = block_of(raw, "mpi", source)
-    if mpi_blk and sparse:
+def parse_mpi(
+    block: manifest_schema.MpiBlock | None, partitioned: Mapping[str, list[str | int]], sparse: bool, source: str
+) -> dict[str, object]:
+    """The opt-in ``mpi:`` block with ``arrays`` from the ``partitioned`` args (absent: arrays replicate); a sparse
+    kernel cannot declare one."""
+    declared = {} if block is None else block.model_dump(exclude_unset=True)
+    if declared and sparse:
         raise ValueError(
             f"{source}: a kernel with 'layouts' cannot declare an 'mpi:' block -- "
             f"distributed sparse layouts (D-CSR partition + reconstruction) are unsupported; "
             f"a sparse kernel runs multi-node only replicated, so omit 'mpi:'."
         )
-    return mpi_blk
+    if not partitioned:
+        return declared
+    head = {key: declared.pop(key) for key in ("decomposition",) if key in declared}
+    return {**head, "arrays": dict(partitioned), **declared}
+
+
+def bounded(
+    value: float | None, key: str, source: str, *, upper: float = math.inf, closed: bool = False
+) -> float | None:
+    """``value`` when in ``(0, upper)`` (``(0, upper]`` when ``closed``), ``None`` when absent."""
+    if value is None:
+        return None
+    if not (0 < value <= upper if closed else 0 < value < upper):
+        raise ValueError(f"{source}: {key} must be in (0, {upper}{']' if closed else ')'} (got {value!r})")
+    return value
+
+
+@dataclass(frozen=True, slots=True)
+class KernelSite:
+    """What a manifest's location determines: the kernel's identity, its reference entry and its initializer.
+
+    :ivar short_name: The manifest stem, the kernel's unique name.
+    :ivar relative_path: The kernel folder under ``benchmarks/``.
+    :ivar module_name: The kernel module stem.
+    :ivar func_name: The reference's entry function.
+    :ivar track: The track, the first directory of ``relative_path``.
+    :ivar dwarf: The dwarf, the second directory of a three-deep ``relative_path``; ``None`` otherwise.
+    :ivar signature: The reference's call signature; ``None`` reads it from the reference.
+    :ivar initializer_inputs: The fallback ``initialize()``'s positional inputs; ``None`` without one.
+    """
+
+    short_name: str
+    relative_path: str
+    module_name: str
+    func_name: str
+    track: Track = Track.LOOP_LEVEL_REASONING
+    dwarf: str | None = None
+    signature: tuple[str, ...] | None = None
+    initializer_inputs: tuple[str, ...] | None = None
+
+    @classmethod
+    def of_manifest(cls, path: pathlib.Path, manifest: manifest_schema.Manifest) -> "KernelSite":
+        """The site of the manifest at ``path``; ``relative_path`` and ``module_name`` are honoured when given."""
+        corpus, here = paths.BENCHMARKS.resolve(), path.resolve().parent
+        relative_path = manifest.relative_path
+        if relative_path is None:
+            # Anchored on the corpus root, never on a path component spelling "benchmarks".
+            if not here.is_relative_to(corpus):
+                raise ValueError(f"{path}: a manifest outside {corpus} must declare its relative_path")
+            relative_path = here.relative_to(corpus).as_posix()
+        # The stem, unless the manifest names another module (variants may share one reference).
+        module_name = manifest.module_name or path.stem
+        func_name = derive_func_name(relative_path, module_name)
+        if func_name is None:
+            raise ValueError(f"{path}: no entry function found in the reference of {relative_path}/{module_name}")
+        module = path.parent / f"{module_name}.py"
+        parts = pathlib.PurePosixPath(relative_path).parts
+        return cls(
+            short_name=path.stem,
+            relative_path=relative_path,
+            module_name=module_name,
+            func_name=func_name,
+            track=Track.validate(parts[0]),
+            dwarf=parts[1] if len(parts) >= 3 else None,
+            initializer_inputs=initializer_inputs(module) if defines_function(module, INITIALIZER) else None,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1663,8 +1445,6 @@ class BenchSpec(BaseModel):
     #: Berkeley dwarf, DERIVED from the manifest's location (the directory under the track); ``None`` for a flat
     #: track.
     dwarf: str | None = None
-    #: HPC scale class; ``None`` for non-HPC and unset HPC kernels (which resolve to ``micro``).
-    scale: str | None = None
     #: KernelBench difficulty level (1/2/3); ``None`` => unlabeled (excluded from ``@lvl`` filters).
     level: int | None = None
     #: Per-kernel agent wall-clock budget (s) overriding the level default.
@@ -1708,6 +1488,8 @@ class BenchSpec(BaseModel):
     constraints: tuple[str, ...] = ()
     #: The ``public`` block (what the agent is told); ``None`` when the manifest declares none.
     public: manifest_schema.PublicBlock | None = None
+    #: The ``array_facts`` block (what the input arrays satisfy on every call); ``None`` when the manifest has none.
+    array_facts: manifest_schema.ArrayFactsBlock | None = None
 
     def replace(self, **changes: object) -> "BenchSpec":
         """A copy with ``changes`` applied, validated; :raises pydantic.ValidationError: on a bad value or field."""
@@ -1726,51 +1508,28 @@ class BenchSpec(BaseModel):
         Preset-independent."""
         if self.config_valid:
             return self.config_valid
-        return _config_product(self.config, self.constraints)
+        return config_product(self.config, self.constraints)
 
     @classmethod
-    def from_dict(cls, raw: dict[str, object], source: str = "<dict>") -> "BenchSpec":
-        """Validate ``raw`` (a flat mapping) and construct a :class:`BenchSpec`.
+    def from_manifest(cls, manifest: manifest_schema.Manifest, site: KernelSite, source: str) -> "BenchSpec":
+        """Construct a :class:`BenchSpec` from a schema-validated manifest at ``site``.
 
-        :raises ValueError: a missing or unknown field, a malformed ``config`` entry, a dimension/knob clash, or a
-            violated ``constraints`` expression.
+        :raises ValueError: a missing or unknown symbol, a malformed ``config`` entry, a dimension/knob clash, a
+            violated ``constraints`` expression, or a bad dwarf or level.
         """
-        if "benchmark" in raw:
-            raise ValueError(
-                f"{source}: a manifest is a flat mapping; the bench_info document is the emitter's, not a spec"
-            )
-        bench = raw
-
-        # Only ``output_args`` is required; ``input_args`` and ``array_args`` are derived when omitted.
-        declared_path = bench.get("relative_path")
-        if "short_name" not in bench and declared_path:
-            bench["short_name"] = pathlib.PurePosixPath(str(declared_path)).name
-        required = ("short_name", "name", "relative_path", "module_name", "func_name", "output_args")
-        missing = [k for k in required if k not in bench]
-        if "parameters" not in bench:
-            missing.append("parameters")
-        if missing:
-            raise ValueError(f"{source}: missing required field(s) {missing}")
-        short_name = str(bench["short_name"])
-        relative_path = str(bench["relative_path"])
-        module_name = str(bench["module_name"])
-        func_name = str(bench["func_name"])
-
-        init_spec = parse_init(bench["init"], source) if bench.get("init") else None
+        short_name = site.short_name
+        args = parse_args(manifest.args, manifest.init, site.initializer_inputs, source)
+        init_spec = args.init
 
         # The configurations are derived from ``layouts``, never declared.
-        sparse_layouts = parse_layouts(block_of(bench.get("layouts"), "layouts", source), source)
+        sparse_layouts = parse_layouts(manifest.layouts or {}, source)
         configurations = layout_configurations(sparse_layouts) if sparse_layouts else {}
 
         # 'parameters' keeps {preset: {symbol: value}}, each config knob's representative value merged in.
-        dimensions_map = parse_parameters(bench["parameters"], source)
-        # Track loop_level_reasoning when a from_dict caller has no path to derive it from.
-        track = Track.validate(bench.get("track", Track.LOOP_LEVEL_REASONING))
-        declared_precisions = bench.get("allowed_precisions")
-        allowed_precisions = (
-            ("fp64", "fp32") if declared_precisions is None else tuple(str(p) for p in as_list(declared_precisions))
-        )
-        config_knobs, config_valid = parse_config_space(bench.get("config") or {}, short_name, source)
+        if not manifest.parameters:
+            raise ValueError(f"{source}: 'parameters' must be a non-empty mapping of preset -> {{symbol: value}}")
+        dimensions_map: PresetTable = {preset: dict(values) for preset, values in manifest.parameters.items()}
+        config_knobs, config_valid = parse_config_space(manifest.config, short_name, source)
         config_syms = set(config_knobs) | (set(config_valid[0]) if config_valid else set[str]())
         all_dim_syms = {sym for symbols in dimensions_map.values() for sym in symbols}
         dim_config_overlap = sorted(all_dim_syms & config_syms)
@@ -1786,52 +1545,51 @@ class BenchSpec(BaseModel):
             if not config_valid
             else dict(config_valid[0])
         )
-        constraints = tuple(str(c) for c in as_list(bench.get("constraints")))
+        constraints = tuple(manifest.constraints or ())
         constraints += tuple(c for c in sparse_alignment_constraints(sparse_layouts) if c not in constraints)
         parameters_view: PresetTable = {preset: {**values, **config_reps} for preset, values in dimensions_map.items()}
         if constraints:
-            _validate_constraints(constraints, parameters_view, short_name, source)
+            validate_constraints(constraints, parameters_view, short_name, source)
             # A curated row violating a constraint is an authoring bug, not a row to drop.
             for i, row in enumerate(config_valid):
                 bad = [e for e in constraints if not constraint_holds(e, row)]
                 if bad:
                     raise ValueError(f"{source}: {short_name}: config[{i}] {row} violates constraint(s) {bad}")
         param_syms = {sym for values in parameters_view.values() for sym in values}
-        output_args = tuple(str(a) for a in as_list(bench["output_args"]))
-        init_names = (
-            set[str]() if init_spec is None else {*init_spec.shapes, *init_spec.scalars, *init_spec.output_args}
-        )
+        output_args = args.outputs
+        init_names = {*init_spec.shapes, *init_spec.scalars, *init_spec.output_args}
         buffers = {buf.name for lay in sparse_layouts.values() for var in lay.variants.values() for buf in var.buffers}
         known = frozenset(param_syms | config_syms | init_names | buffers)
-        input_args = resolve_input_args(bench, relative_path, module_name, func_name, known, source)
-        array_args = resolve_array_args(
-            bench.get("array_args"), input_args, output_args, init_spec, sparse_layouts, known, source
-        )
+        input_args = site.signature
+        if input_args is None:
+            input_args = derive_input_args(site.relative_path, site.module_name, site.func_name, known)
+        if input_args is None:
+            raise ValueError(
+                f"{source}: the reference '{site.func_name}' could not be read from "
+                f"{site.relative_path}/{site.module_name}_numpy.py to infer the kernel's signature."
+            )
+        array_args = resolve_array_args(input_args, output_args, init_spec, sparse_layouts, known, source)
         validate_init_kinds(init_spec, param_syms, source)
         # Keys and values must both name graded outputs, or the extent silently resolves to nothing.
-        output_extent = {
-            out: str(bound) for out, bound in block_of(bench.get("output_extent"), "output_extent", source).items()
-        }
+        output_extent = dict(manifest.output_extent or {})
         unknown = sorted((set(output_extent) | set(output_extent.values())) - set(output_args))
         if unknown:
             raise ValueError(f"{short_name}: output_extent names non-outputs {unknown}")
-        chain_length = {
-            out: str(expr) for out, expr in block_of(bench.get("chain_length"), "chain_length", source).items()
-        }
+        chain_length = {out: str(expr) for out, expr in (manifest.chain_length or {}).items()}
 
-        _validate_shape_identifiers(
+        validate_shape_identifiers(
             init_spec,
             param_syms,
             input_args,
             array_args,
-            relative_path,
-            module_name,
+            site.relative_path,
+            site.module_name,
             short_name,
             source,
         )
-        _validate_packed_shapes(init_spec, parameters_view, relative_path, module_name, short_name, source)
-        _validate_chain_length(
-            chain_length, output_args, init_spec, parameters_view, relative_path, module_name, source
+        validate_packed_shapes(init_spec, parameters_view, site.relative_path, site.module_name, short_name, source)
+        validate_chain_length(
+            chain_length, output_args, init_spec, parameters_view, site.relative_path, site.module_name, source
         )
 
         # workspace / workspace_size belong to the harness (abi_contract.md Sec. 11).
@@ -1844,12 +1602,12 @@ class BenchSpec(BaseModel):
                 f"(workspace / workspace_size); rename them in the manifest."
             )
 
-        validate_sparse_layouts(sparse_layouts, array_args, tuple(input_args), tuple(output_args), source)
+        validate_sparse_layouts(sparse_layouts, array_args, input_args, output_args, source)
         validate_scenario_layouts(init_spec, sparse_layouts, source)
-        mpi_blk = parse_mpi(bench.get("mpi"), bool(sparse_layouts), source)
+        mpi_blk = parse_mpi(manifest.mpi, args.partitioned, bool(sparse_layouts), source)
 
         # fuzz = DEFAULT_FUZZ when the manifest names none.
-        fuzz_blk: dict[str, list[str]] = list_block_of(bench.get("fuzz"), "fuzz", source) or dict(DEFAULT_FUZZ)
+        fuzz_blk: dict[str, list[str]] = dict(manifest.fuzz or DEFAULT_FUZZ)
         if "configs" in fuzz_blk:
             raise ValueError(
                 f"{source}: 'fuzz.configs' has been replaced by the TOP-LEVEL 'config:' block, "
@@ -1866,31 +1624,16 @@ class BenchSpec(BaseModel):
                 f"re-sampled as a size (it overwrites the chosen config). "
                 f"Declare {clash} in 'config' only."
             )
-        dwarf, scale = bench.get("dwarf"), bench.get("scale")
-        level, timeout_s = bench.get("level"), bench.get("timeout_s")
-        memory_cap_gb = bench.get("memory_cap_gb")
-        if memory_cap_gb is not None and number_of(memory_cap_gb, "memory_cap_gb", source) <= 0:
-            raise ValueError(f"{source}: memory_cap_gb must be positive (got {memory_cap_gb!r})")
-        floor_fraction = bench.get("floor_bytes_fraction", 1.0)
-        if not 0 < number_of(floor_fraction, "floor_bytes_fraction", source) <= 1:
-            raise ValueError(f"{source}: floor_bytes_fraction must be in (0, 1] (got {floor_fraction!r})")
-        conditioning_rtol = bench.get("conditioning_rtol")
-        if conditioning_rtol is not None and not 0 < number_of(conditioning_rtol, "conditioning_rtol", source) < 1:
-            raise ValueError(f"{source}: conditioning_rtol must be in (0, 1) (got {conditioning_rtol!r})")
-        conditioning_atol = bench.get("conditioning_atol")
-        if conditioning_atol is not None and not 0 < number_of(conditioning_atol, "conditioning_atol", source) < 1:
-            raise ValueError(f"{source}: conditioning_atol must be in (0, 1) (got {conditioning_atol!r})")
-        mismatch_fraction = bench.get("mismatch_fraction")
-        if mismatch_fraction is not None and not 0 < number_of(mismatch_fraction, "mismatch_fraction", source) < 1:
-            raise ValueError(f"{source}: mismatch_fraction must be in (0, 1) (got {mismatch_fraction!r})")
-        public_raw = bench.get("public")
-        public = None if public_raw is None else manifest_schema.PublicBlock.model_validate(public_raw)
+        validate_dwarf(site.dwarf, source)
+        validate_level(manifest.level, site.track, source)
+        declared_precisions = manifest.allowed_precisions
+        floor_fraction = bounded(manifest.floor_bytes_fraction, "floor_bytes_fraction", source, upper=1, closed=True)
         spec = cls(
             short_name=short_name,
-            name=str(bench["name"]),
-            relative_path=relative_path,
-            module_name=module_name,
-            func_name=func_name,
+            name=manifest.name or short_name,
+            relative_path=site.relative_path,
+            module_name=site.module_name,
+            func_name=site.func_name,
             parameters=dict(parameters_view),
             input_args=input_args,
             array_args=array_args,
@@ -1898,46 +1641,47 @@ class BenchSpec(BaseModel):
             output_extent=output_extent,
             chain_length=chain_length,
             init=init_spec,
-            dwarf=None if dwarf is None else str(dwarf),
-            scale=None if scale is None else str(scale),
-            level=None if level is None else int_of(level, "level", source),
-            timeout_s=None if timeout_s is None else number_of(timeout_s, "timeout_s", source),
-            memory_cap_gb=None if memory_cap_gb is None else number_of(memory_cap_gb, "memory_cap_gb", source),
-            floor_bytes_fraction=number_of(floor_fraction, "floor_bytes_fraction", source),
-            scale_axes=scale_axes_of(bench.get("scale_axes"), parameters_view, config_syms, source),
-            conditioning_rtol=(
-                None if conditioning_rtol is None else number_of(conditioning_rtol, "conditioning_rtol", source)
-            ),
-            conditioning_atol=(
-                None if conditioning_atol is None else number_of(conditioning_atol, "conditioning_atol", source)
-            ),
-            mismatch_fraction=(
-                None if mismatch_fraction is None else number_of(mismatch_fraction, "mismatch_fraction", source)
-            ),
-            track=track,
-            allowed_precisions=allowed_precisions,
+            dwarf=site.dwarf,
+            level=manifest.level,
+            timeout_s=manifest.timeout_s,
+            memory_cap_gb=bounded(manifest.memory_cap_gb, "memory_cap_gb", source),
+            floor_bytes_fraction=1.0 if floor_fraction is None else floor_fraction,
+            scale_axes=scale_axes_of(tuple(manifest.scale_axes or ()), parameters_view, config_syms, source),
+            conditioning_rtol=bounded(manifest.conditioning_rtol, "conditioning_rtol", source, upper=1),
+            conditioning_atol=bounded(manifest.conditioning_atol, "conditioning_atol", source, upper=1),
+            mismatch_fraction=bounded(manifest.mismatch_fraction, "mismatch_fraction", source, upper=1),
+            track=site.track,
+            allowed_precisions=("fp64", "fp32") if declared_precisions is None else tuple(declared_precisions),
             sparse_layouts=sparse_layouts,
             configurations=configurations,
-            languages=tuple(Language.validate(lang) for lang in as_list(bench.get("languages"))),
+            languages=tuple(manifest.languages or ()),
             fuzz=fuzz_blk,
             mpi=mpi_blk,
             config=config_knobs,
             config_valid=config_valid,
             constraints=constraints,
-            public=public,
+            public=manifest.public,
+            array_facts=manifest.array_facts,
         )
         validate_public(spec, source)
         validate_negative(spec, source)
         return spec
 
     @classmethod
-    def from_yaml(cls, raw: dict[str, object], source: str = "<yaml>") -> "BenchSpec":
-        """Construct a :class:`BenchSpec` from a co-located ``<stem>.yaml`` (no envelope), schema-checked first;
-        ``track`` and ``dwarf`` derive from its location.
+    def from_dict(cls, raw: Mapping[str, object], site: KernelSite, source: str = "<dict>") -> "BenchSpec":
+        """Construct a :class:`BenchSpec` from an in-memory manifest at ``site`` (schema-checked first).
 
-        :raises ValueError: a schema violation (``<key path>: <message>``) or a :meth:`from_dict` check.
+        :raises ValueError: a schema violation (``<key path>: <message>``) or a :meth:`from_manifest` check.
         """
-        raw = dict(raw)
+        return cls.from_manifest(manifest_schema.validate_manifest(raw, source), site, source)
+
+    @classmethod
+    def from_yaml(cls, raw: Mapping[str, object], source: str) -> "BenchSpec":
+        """Construct a :class:`BenchSpec` from the co-located ``<stem>.yaml`` at path ``source`` (no envelope),
+        schema-checked first; the identity, track and dwarf derive from its location.
+
+        :raises ValueError: a schema violation (``<key path>: <message>``) or a :meth:`from_manifest` check.
+        """
         for banned in ("rtol", "atol"):
             if banned in raw:
                 raise ValueError(
@@ -1950,36 +1694,7 @@ class BenchSpec(BaseModel):
                 f"initializer when it exists; drop the key"
             )
         manifest = manifest_schema.validate_manifest(raw, source)
-        # ``relative_path`` and ``module_name`` derive from the manifest's location, still honoured when given.
-        p = pathlib.Path(source)
-        initializer: pathlib.Path | None = None
-        if p.suffix in (".yaml", ".yml"):
-            # Anchored on the corpus root, never on a path component spelling "benchmarks".
-            corpus, here = paths.BENCHMARKS.resolve(), p.resolve().parent
-            if "relative_path" not in raw and here.is_relative_to(corpus):
-                raw["relative_path"] = here.relative_to(corpus).as_posix()
-            # The stem, unless the manifest names another module (variants may share one reference).
-            raw.setdefault("module_name", p.stem)
-            # The stem IS the name (unique, not declarable); a too-long name is shortened at emission only.
-            raw["short_name"] = p.stem
-            fn = derive_func_name(str(raw.get("relative_path", "")), str(raw["module_name"]))
-            if fn is not None:
-                raw["func_name"] = fn
-            module = p.parent / f"{raw['module_name']}.py"
-            initializer = module if defines_function(module, INITIALIZER) else None
-            raw.setdefault("name", raw["short_name"])  # human title, free-form; NOT an identity
-        expand_args(raw, manifest.args, initializer, source)
-        # Track and dwarf come from the manifest's LOCATION; a two-deep path has no dwarf.
-        parts = pathlib.PurePosixPath(str(raw.get("relative_path", ""))).parts
-        if parts:
-            raw.setdefault("track", parts[0])
-            if len(parts) >= 3:
-                raw.setdefault("dwarf", parts[1])
-        spec = cls.from_dict(raw, source)
-        validate_dwarf(spec.dwarf, source)
-        validate_scale(spec.scale, spec.track, source)
-        validate_level(spec.level, spec.track, source)
-        return spec
+        return cls.from_manifest(manifest, KernelSite.of_manifest(pathlib.Path(source), manifest), source)
 
     @property
     def study_tags(self) -> tuple[str, ...]:
@@ -1990,9 +1705,7 @@ class BenchSpec(BaseModel):
 
     @property
     def scale_class(self) -> str | None:
-        """Resolved HPC scale: ``scale``, else ``micro`` for an HPC kernel, else ``None``."""
-        if self.scale is not None:
-            return self.scale
+        """The HPC scale class: ``micro`` for a scientific-computing kernel, else ``None``."""
         return "micro" if self.track is Track.SCIENTIFIC_COMPUTING else None
 
     @property
@@ -2051,7 +1764,7 @@ class BenchSpec(BaseModel):
 
 
 @functools.lru_cache(maxsize=1, typed=True)
-def _scan_kernels() -> dict[str, pathlib.Path]:
+def scan_kernels() -> dict[str, pathlib.Path]:
     """Path-key -> manifest path for every kernel; raises ValueError naming both paths when two share a stem."""
     out: dict[str, pathlib.Path] = {}
     base = paths.BENCHMARKS
@@ -2072,7 +1785,7 @@ def selector_slug(selector: str) -> str:
     return selector.strip("/").replace("/", "_").replace("@", "_") or "all"
 
 
-def _split_suffix(selector: str) -> tuple[str, int | None, str | None]:
+def split_suffix(selector: str) -> tuple[str, int | None, str | None]:
     """Split ``<selector>[@lvl<n>|@<tag>]`` into ``(selector, level, tag)``; a ``lvl``-prefixed suffix is always
     validated as a level."""
     at = selector.rfind("@")
@@ -2091,7 +1804,7 @@ def _split_suffix(selector: str) -> tuple[str, int | None, str | None]:
     return base, None, suffix
 
 
-def _safe_level(path_key: str) -> int | None:
+def safe_level(path_key: str) -> int | None:
     """A kernel's resolved level, or ``None`` when its manifest fails to load (level bugs still raise)."""
     try:
         spec = BenchSpec.load(path_key)
@@ -2103,7 +1816,7 @@ def _safe_level(path_key: str) -> int | None:
 @functools.lru_cache(maxsize=1, typed=True)
 def stem_aliases() -> dict[str, str]:
     """Kernel name (manifest stem) -> its path-key."""
-    return {kernel_stem(key): key for key in _scan_kernels()}
+    return {kernel_stem(key): key for key in scan_kernels()}
 
 
 class KernelRegistry:
@@ -2121,7 +1834,7 @@ class KernelRegistry:
 
     def path_key(self, name: str) -> str | None:
         """Canonical path-key for ``name`` (path-key, stem, or dir), or None."""
-        scan = _scan_kernels()
+        scan = scan_kernels()
         if name in scan:
             return name
         alias = stem_aliases().get(name)
@@ -2133,41 +1846,41 @@ class KernelRegistry:
     def get(self, name: str, default: pathlib.Path | None = None) -> pathlib.Path | None:
         """The manifest path for ``name`` (path-key, stem, or dir), or ``default``."""
         key = self.path_key(name)
-        return _scan_kernels()[key] if key is not None else default
+        return scan_kernels()[key] if key is not None else default
 
     def __getitem__(self, name: str) -> pathlib.Path:
         key = self.path_key(name)
         if key is None:
             raise KeyError(name)
-        return _scan_kernels()[key]
+        return scan_kernels()[key]
 
     def __contains__(self, name: str) -> bool:
         return self.path_key(name) is not None
 
     def __iter__(self) -> Iterator[str]:
-        return iter(_scan_kernels())
+        return iter(scan_kernels())
 
     def __len__(self) -> int:
-        return len(_scan_kernels())
+        return len(scan_kernels())
 
     def keys(self) -> KeysView[str]:
         """The canonical path-keys, in scan order."""
-        return _scan_kernels().keys()
+        return scan_kernels().keys()
 
     def specs(self) -> dict[str, "BenchSpec"]:
         """Parse every manifest into a :class:`BenchSpec`, keyed by path-key."""
-        return {k: BenchSpec.from_yaml(load_yaml(p.read_text()), str(p)) for k, p in _scan_kernels().items()}
+        return {k: BenchSpec.from_yaml(load_yaml(p.read_text()), str(p)) for k, p in scan_kernels().items()}
 
     def select_keys(self, selector: str) -> list[str]:
         """Resolve a selection token into a sorted list of PATH-KEYS; ``KeyError`` when nothing matches.
 
         A token is ``all``, a track, a dwarf, a directory prefix or one kernel, optionally filtered by ``@lvl<n>`` or
         ``@<tag>`` (a study tag)."""
-        selector, level, tag = _split_suffix(selector)
-        scan = _scan_kernels()
-        base = sorted(scan) if selector == "all" else self._select_group_or_kernel(selector, scan)
+        selector, level, tag = split_suffix(selector)
+        scan = scan_kernels()
+        base = sorted(scan) if selector == "all" else self.select_group_or_kernel(selector, scan)
         if level is not None:
-            keep = [k for k in base if _safe_level(k) == level]
+            keep = [k for k in base if safe_level(k) == level]
             if not keep:
                 raise KeyError(f"no kernel in {selector!r} has level {level}")
             return keep
@@ -2182,7 +1895,7 @@ class KernelRegistry:
             return keep
         return base
 
-    def _select_group_or_kernel(self, selector: str, scan: dict[str, pathlib.Path]) -> list[str]:
+    def select_group_or_kernel(self, selector: str, scan: dict[str, pathlib.Path]) -> list[str]:
         """The pre-level resolution of a selector to path-keys (track/dwarf/dir/kernel)."""
         s = selector.strip("/")
         # Group selection; a bare dwarf name also resolves as ``scientific_computing/<token>``.
@@ -2204,7 +1917,7 @@ class KernelRegistry:
     def resolved(self) -> list["ResolvedBench"]:
         """Every sub-benchmark across the corpus: one :class:`ResolvedBench` per data layout."""
         out: list[ResolvedBench] = []
-        for key in _scan_kernels():
+        for key in scan_kernels():
             try:
                 out.extend(BenchSpec.load(key).expand_layouts())
             except Exception:  # noqa: BLE001 -- a malformed manifest is skipped
@@ -2213,7 +1926,7 @@ class KernelRegistry:
 
     def refresh(self) -> None:
         """Drop every manifest-derived cache (after manifests change on disk)."""
-        _scan_kernels.cache_clear()
+        scan_kernels.cache_clear()
         stem_aliases.cache_clear()
         load_spec.cache_clear()
         for clear in MANIFEST_DERIVED_CACHES:

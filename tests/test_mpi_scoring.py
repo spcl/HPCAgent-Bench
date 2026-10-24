@@ -108,11 +108,11 @@ def test_distributed_independent_verify_passes_for_reference(mpi_c: tuple[str, l
 
 
 def test_verify_distributed_ungradeable_tolerance_is_flagged_not_a_crash(monkeypatch: pytest.MonkeyPatch) -> None:
-    """``_verify_distributed``'s ``except (RuntimeError, ValueError)`` must not fold
+    """``verify_distributed``'s ``except (RuntimeError, ValueError)`` must not fold
     ``UngradeableTolerance`` -- a ``RuntimeError`` subclass -- into an ordinary "harden: ..."
     re-verify failure with no field a caller can branch on, the same gap
     ``independent_verify``'s own (non-distributed) except clause already guards against
-    (``ungradeable=isinstance(exc, UngradeableTolerance)``). Drives ``_verify_distributed``
+    (``ungradeable=isinstance(exc, UngradeableTolerance)``). Drives ``verify_distributed``
     directly: the build and the MPI launch are faked (this is about the CATCH, not compilation or
     a real cluster), and the re-run itself is forced to refuse."""
     from hpcagent_bench.precision import UngradeableTolerance
@@ -134,14 +134,14 @@ def test_verify_distributed_ungradeable_tolerance_is_flagged_not_a_crash(monkeyp
         raise UngradeableTolerance("eps_acc*sqrt(l) already consumes the whole rtol band")
 
     monkeypatch.setattr(scoring, "Sandbox", FakeSandbox)
-    monkeypatch.setattr(scoring, "_data_seeded", lambda *a, **k: {})
+    monkeypatch.setattr(scoring, "data_seeded", lambda *a, **k: {})
     stub_oracle(monkeypatch)
     monkeypatch.setattr(scoring.mpi_call, "run", refuse)
 
     task = Task(kernel="scaled_add", language=Language.C, residency=Residency.DISTRIBUTED)
     spec = BenchSpec.load(task.kernel)
     binding = binding_from_spec(spec)
-    verdict = scoring._verify_distributed(
+    verdict = scoring.verify_distributed(
         _noop_submission(),
         task,
         spec,
@@ -488,9 +488,9 @@ def test_score_scaling_strong_times_anchor_once_and_notes_failures(monkeypatch: 
         return launched([1000 * p])  # T_i(P) grows with P here (irrelevant; we assert wiring, not eta)
 
     monkeypatch.setattr(S, "Sandbox", _fake_sandbox)
-    monkeypatch.setattr(S, "_call_isolated", fake_call_isolated)
-    monkeypatch.setattr(S, "_build_run_mpi", fake_build_run)
-    monkeypatch.setattr(S, "_data_seeded", lambda *a, **k: {})
+    monkeypatch.setattr(S, "call_isolated", fake_call_isolated)
+    monkeypatch.setattr(S, "build_run_mpi", fake_build_run)
+    monkeypatch.setattr(S, "data_seeded", lambda *a, **k: {})
     stub_oracle(monkeypatch)
     # **kw, not the five positionals alone: score_scaling passes initial=cand_data so the grader can
     # tell an untouched output region from a wrong one, and a double that pins the old arity turns
@@ -569,11 +569,11 @@ def gang_strong_sweep(
     monkeypatch.setattr(S, "Sandbox", fake_sandbox)
     monkeypatch.setattr(
         S,
-        "_call_isolated",
+        "call_isolated",
         lambda *a, reps=1, followups=(), **k: native_call.IsolatedCall({}, [4000] * reps, None, [], ({},) * reps),
     )
-    monkeypatch.setattr(S, "_build_run_mpi", fake_build_run)
-    monkeypatch.setattr(S, "_data_seeded", lambda *a, **k: {})
+    monkeypatch.setattr(S, "build_run_mpi", fake_build_run)
+    monkeypatch.setattr(S, "data_seeded", lambda *a, **k: {})
     stub_oracle(monkeypatch)
     monkeypatch.setattr(S, "_grade", lambda spec, oracle, out, rtol, atol, **kw: (True, 0.0, ""))
 
@@ -693,9 +693,9 @@ def weak_jacobi_2d_sweep(monkeypatch: pytest.MonkeyPatch, rank_counts: tuple[int
         return launched([1000 * p])
 
     monkeypatch.setattr(S, "Sandbox", _fake_sandbox)
-    monkeypatch.setattr(S, "_call_isolated", fake_call_isolated)
-    monkeypatch.setattr(S, "_build_run_mpi", fake_build_run)
-    monkeypatch.setattr(S, "_data_seeded", lambda *a, **k: {})
+    monkeypatch.setattr(S, "call_isolated", fake_call_isolated)
+    monkeypatch.setattr(S, "build_run_mpi", fake_build_run)
+    monkeypatch.setattr(S, "data_seeded", lambda *a, **k: {})
     stub_oracle(monkeypatch)
     monkeypatch.setattr(S, "_grade", lambda spec, oracle, out, rtol, atol, **kw: (True, 0.0, ""))
     monkeypatch.setattr(
@@ -846,7 +846,7 @@ def test_grading_residency_routes_mpi_kernels_when_enabled() -> None:
 
 
 def mock_mpi_runners(monkeypatch: pytest.MonkeyPatch, *, native: list[int], baseline: list[int]) -> None:
-    """Route _build_run_mpi and single_node_samples to fixed per-repeat samples (ns), so
+    """Route build_run_mpi and single_node_samples to fixed per-repeat samples (ns), so
     timing.reduce() sees a deterministic, fully-separated pair of groups.
 
     These are HOST-resident C runs, so they pin that residency rather than inherit whatever
@@ -869,13 +869,13 @@ def mock_mpi_runners(monkeypatch: pytest.MonkeyPatch, *, native: list[int], base
         n = k_repeats if k_repeats is not None else cfg.k_repeats
         return launched((native * n)[:n] if native else [])
 
-    monkeypatch.setattr(S, "_build_run_mpi", fake_build_run_mpi)
+    monkeypatch.setattr(S, "build_run_mpi", fake_build_run_mpi)
     monkeypatch.setattr(
         S,
         "single_node_samples",
         lambda kinds, spec, task, binding, data, repeat, **kw: (Baseline.NUMBA, (baseline * repeat)[:repeat]),
     )
-    monkeypatch.setattr(S, "_data_seeded", lambda *a, **k: {})
+    monkeypatch.setattr(S, "data_seeded", lambda *a, **k: {})
     stub_oracle(monkeypatch)
     monkeypatch.setattr(S, "_grade", lambda spec, oracle, out, rtol, atol, **kw: (True, 0.0, ""))
 

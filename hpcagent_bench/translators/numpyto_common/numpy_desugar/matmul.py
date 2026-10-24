@@ -3,7 +3,7 @@
 import ast
 import copy
 
-from hpcagent_bench.translators.numpyto_common.ast_build import name_, numpy_attribute, range_for
+from hpcagent_bench.translators.numpyto_common.ast_build import name_, numpy_attribute, range_for, walk_nodes
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import numpy_call_attr
 from hpcagent_bench.translators.numpyto_common.limits import CALL_GRAPH_ROUNDS
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import DesugarError, RankedRewritePass
@@ -35,7 +35,7 @@ def matmul_pairs(node: ast.expr) -> list[ast.expr]:
     out: list[ast.expr] = []
     out.extend(
         n
-        for n in ast.walk(node)
+        for n in walk_nodes(node)
         if (isinstance(n, ast.BinOp) and isinstance(n.op, ast.MatMult))
         or (isinstance(n, ast.Call) and numpy_call_attr(n) == "matmul" and len(n.args) == 2)
     )
@@ -83,7 +83,7 @@ class BatchedMatmulToLoop(RankedRewritePass):
         """First rank > 2 Name feeding a batched matmul; its leading axis is the batch extent."""
         for mm in matmul_pairs(value):
             for op in matmul_operands(mm):
-                for n in ast.walk(op):
+                for n in walk_nodes(op):
                     if isinstance(n, ast.Name) and (self.ranks.get(n.id, 0) or 0) > 2:
                         return n
         return None
@@ -258,7 +258,7 @@ def noncontig_names(tree: ast.AST) -> set:
     nc: set = set()
     for unused in range(CALL_GRAPH_ROUNDS):
         grew = False
-        for node in ast.walk(tree):
+        for node in walk_nodes(tree):
             if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
                 v = node.value
                 bad = is_transpose_expr(v) or (isinstance(v, ast.Name) and v.id in nc)

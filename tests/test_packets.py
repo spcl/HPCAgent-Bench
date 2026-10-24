@@ -34,7 +34,7 @@ def test_resolve_control_is_empty() -> None:
 )
 def test_resolve_cpf_stages_the_page_and_the_dir_env(spec: str, language: str, key: str, label: str) -> None:
     """The device-neutral ``cpf-tool`` of the first setups names the packet of the run's device."""
-    resolved = packets.resolve(spec, language, environ={"CPF_VIEW": "/views/cpf"})
+    resolved = packets.resolve(spec, language, environ={"HPCAGENT_BENCH_CPF_CACHE": "/views/cpf"})
     assert resolved.key == key
     assert resolved.label == label
     assert resolved.skills == (key,)
@@ -55,7 +55,7 @@ def test_resolve_cpf_src_stages_its_own_page_and_sets_the_dropin_env(spec: str, 
     """A CPF-as-source packet stages exactly its own page -- the drop-in's comment reference -- alongside
     the drop-in directory env; the drop-in file itself is staged by materialize_shared.sh, not by a
     skill page, so the packet's only page is the one explaining what sits in that file."""
-    resolved = packets.resolve(spec, language, environ={"CPF_VIEW": "/views/dropin"})
+    resolved = packets.resolve(spec, language, environ={"HPCAGENT_BENCH_CPF_CACHE": "/views/dropin"})
     assert resolved.key == key
     assert resolved.skills == (key,)
     assert resolved.env == (("CPF_DROPIN_DIR", "/views/dropin"),)
@@ -156,7 +156,7 @@ def test_a_perf_playbook_stages_the_cpu_pages_and_only_its_own_device_tracer(
 )
 def test_a_device_packet_refuses_a_language_its_device_does_not_run(spec: str, language: str) -> None:
     with pytest.raises(ValueError, match="packet 'perf-playbook-"):
-        packets.resolve(spec, language, environ={"CPF_VIEW": "/views/dropin"})
+        packets.resolve(spec, language, environ={"HPCAGENT_BENCH_CPF_CACHE": "/views/dropin"})
 
 
 @pytest.mark.parametrize(
@@ -166,7 +166,7 @@ def test_a_device_packet_refuses_a_language_its_device_does_not_run(spec: str, l
 def test_all_in_for_a_device_is_cpf_src_its_perf_playbook_and_the_language_pages(
     device: str, language: str, cpf: str
 ) -> None:
-    all_in = packets.resolve(f"all-in-{device}", language, environ={"CPF_VIEW": "/views/dropin"})
+    all_in = packets.resolve(f"all-in-{device}", language, environ={"HPCAGENT_BENCH_CPF_CACHE": "/views/dropin"})
     playbook = packets.resolve(f"perf-playbook-{device}", language)
     assert set(all_in.skills) == (set(playbook.skills) | set(packets.resolve("lang", language).skills) | {cpf})
     assert all_in.env == (("CPF_DROPIN_DIR", "/views/dropin"),)
@@ -218,7 +218,7 @@ def test_resolve_autokernel_is_a_method_packet() -> None:
 
 
 def test_resolve_all_in_composes_cpf_src_dc_profiling_and_lang() -> None:
-    resolved = packets.resolve("all-in", "c", environ={"CPF_VIEW": "/views/dropin"})
+    resolved = packets.resolve("all-in", "c", environ={"HPCAGENT_BENCH_CPF_CACHE": "/views/dropin"})
     assert resolved.key == "all-in"
     assert resolved.label == "All-in"
     assert resolved.skills == (
@@ -263,7 +263,7 @@ def test_resolve_an_unknown_token_raises_naming_it() -> None:
 
 
 def test_resolve_a_missing_placeholder_raises_naming_the_var() -> None:
-    with pytest.raises(ValueError, match="CPF_VIEW"):
+    with pytest.raises(ValueError, match="HPCAGENT_BENCH_CPF_CACHE"):
         packets.resolve("cpf-tool", "c", environ={})
 
 
@@ -372,9 +372,11 @@ def test_the_colour_of_an_ad_hoc_combination_is_deterministic() -> None:
 def test_an_unfilled_resolve_keeps_the_placeholder_templates_the_db_records() -> None:
     """fill=False is the packet's definition, not one launch: no environment is needed and every
     ${VAR} survives verbatim, including through a composition."""
-    assert packets.resolve("cpf-src", "c", environ={}, fill=False).env == (("CPF_DROPIN_DIR", "${CPF_VIEW}"),)
+    assert packets.resolve("cpf-src", "c", environ={}, fill=False).env == (
+        ("CPF_DROPIN_DIR", "${HPCAGENT_BENCH_CPF_CACHE}"),
+    )
     all_in = packets.resolve("all-in", "c", environ={}, fill=False)
-    assert dict(all_in.env) == {"CPF_DROPIN_DIR": "${CPF_VIEW}"}
+    assert dict(all_in.env) == {"CPF_DROPIN_DIR": "${HPCAGENT_BENCH_CPF_CACHE}"}
     assert {"lang-c", "openmp-c", "divide-and-conquer", "profiling", "rocprof", "nsys", "opt-reports"} <= set(
         all_in.skills
     )

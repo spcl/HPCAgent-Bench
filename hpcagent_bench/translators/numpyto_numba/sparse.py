@@ -3,9 +3,18 @@
 import ast
 from collections.abc import Sequence
 
-from hpcagent_bench.translators.numpyto_common.ast_build import name_, set_field, store_
+from hpcagent_bench.translators.numpyto_common.ast_build import name_, set_field, store_, walk_nodes
 from hpcagent_bench.translators.numpyto_common.ir import KernelIR, SparseArrayDesc
 from hpcagent_bench.translators.numpyto_common.numpy_desugar import expr_rank, rank_table
+from hpcagent_bench.translators.numpyto_common.sparse_emit import (
+    ENTRY_WALKERS,
+    SPARSE_MATMUL_DISPATCH,
+    EntryExtents,
+    densify,
+    entry_matmat,
+    entry_matvec,
+    entry_matvec_t,
+)
 
 __all__ = [
     "RANK_RAISING_CALLS",
@@ -83,6 +92,38 @@ def symbol_readbacks(kir: KernelIR, params: set[str]) -> dict[str, str]:
         for axis, token in enumerate(arr.shape):
             if str(token).isidentifier():
                 exprs.setdefault(str(token), f"{arr.name}.shape[{axis}]")
+    # A logical extent a format's own buffers fix (csc's column count is its indptr length - 1); coo fixes none.
+    for desc in kir.sparse.values():
+        bufs = desc.buffers
+        if not set(bufs.values()) <= params or len(desc.logical_shape) != 2:
+            continue
+        rows, cols = (str(token) for token in desc.logical_shape)
+        match desc.format:
+            case "csr":
+                known = (rows, f"{bufs['indptr']}.shape[0] - 1")
+            case "csc":
+                known = (cols, f"{bufs['indptr']}.shape[0] - 1")
+            case "bcsr":
+                known = (rows, f"({bufs['indptr']}.shape[0] - 1) * {bufs['data']}.shape[1]")
+            case "ell":
+                known = (rows, f"{bufs['data']}.shape[0]")
+            case "dia":
+                known = (cols, f"{bufs['data']}.shape[1]")
+            case _:
+                continue
+        if known[0].isidentifier():
+            exprs.setdefault(*known)
+    # coo stores no extent, but its largest stored index plus one covers every entry: an index past it is a row or
+    # column of zeros, so a product over that extent is exact.
+    covering: dict[str, list[str]] = {}
+    for desc in kir.sparse.values():
+        if desc.format == "coo" and set(desc.buffers.values()) <= params and len(desc.logical_shape) == 2:
+            for token, role in zip(desc.logical_shape, ("row", "col"), strict=True):
+                covering.setdefault(str(token), []).append(desc.buffers[role])
+    for token, indices in covering.items():
+        bounds = [f"({index}.max() + 1 if {index}.size > 0 else 0)" for index in indices]
+        if token.isidentifier():
+            exprs.setdefault(token, bounds[0] if len(bounds) == 1 else f"max({', '.join(bounds)})")
     return exprs
 
 
@@ -92,7 +133,7 @@ def dense_operands_are_vectors(fn: ast.FunctionDef, kir: KernelIR, buffers: set[
     for arr in kir.arrays:
         if arr.name not in buffers and len(arr.shape) != 1:
             return False
-    for node in ast.walk(fn):
+    for node in walk_nodes(fn):
         if not isinstance(node, ast.Call):
             continue
         leaf = call_leaf(node.func)
@@ -151,7 +192,7 @@ class SparseMatmulRewriter(ast.NodeTransformer):
     def visit_While(self, node: ast.While) -> ast.AST:
         # A while TEST is re-evaluated per iteration; splicing its matvec above the loop would
         # compute it once and then spin on a stale value.
-        for sub in ast.walk(node.test):
+        for sub in walk_nodes(node.test):
             if not (isinstance(sub, ast.BinOp) and isinstance(sub.op, ast.MatMult)):
                 continue
             if sparse_operand(sub.left, self.sparse) or sparse_operand(sub.right, self.sparse):
@@ -168,11 +209,11 @@ class SparseMatmulRewriter(ast.NodeTransformer):
                 raise SparseLoweringRefused("dense @ sparse has no lowering here")
             return node
         desc, transposed = operand
-        if transposed:
-            desc = transposed_desc(desc)
+        if transposed and desc.format in TRANSPOSE_DUAL_FORMAT:
+            desc, transposed = transposed_desc(desc), False
         self.counter += 1
         temp = f"__sp{self.counter}"
-        self.pre.extend(self.lower(temp, desc, node.right))
+        self.pre.extend(self.lower(temp, desc, node.right, transposed))
         return name_(temp)
 
     def bound(self, token: object) -> str:
@@ -188,22 +229,49 @@ class SparseMatmulRewriter(ast.NodeTransformer):
         shape = extents[0] if len(extents) == 1 else "({})".format(", ".join(extents))
         return ast.parse(f"{temp} = np.zeros({shape}, dtype={data_buffer}.dtype)").body[0]
 
-    def lower(self, temp: str, desc: SparseArrayDesc, rhs: ast.expr) -> list[ast.stmt]:
-        from hpcagent_bench.translators.numpyto_common.sparse_emit import SPARSE_MATMUL_DISPATCH
+    def extents(self, desc: SparseArrayDesc) -> EntryExtents:
+        """The extents the stored-entry walk of ``desc`` needs, read at run time off its buffers."""
+        rows, cols = self.bound(desc.logical_shape[0]), self.bound(desc.logical_shape[1])
+        data = desc.buffers["data"]
+        if desc.format == "bcsr":
+            return EntryExtents(
+                rows, cols, f"{desc.buffers['indptr']}.shape[0] - 1", f"{data}.shape[1]", f"{data}.shape[2]"
+            )
+        count = {"coo": f"{data}.shape[0]", "dia": f"{data}.shape[0]", "ell": f"{data}.shape[1]"}.get(desc.format, "0")
+        return EntryExtents(rows, cols, count)
 
+    def lower(self, temp: str, desc: SparseArrayDesc, rhs: ast.expr, transposed: bool = False) -> list[ast.stmt]:
+        """``temp = desc @ rhs`` (``desc.T @ rhs`` when ``transposed``) as a dense temp and its loop nest."""
         if len(desc.logical_shape) != 2:
             raise SparseLoweringRefused(f"sparse operand {desc.name!r} is not 2-D")
         rows = self.bound(desc.logical_shape[0])
         rhs_sparse = sparse_operand(rhs, self.sparse)
         if rhs_sparse is not None:
+            if transposed:
+                raise SparseLoweringRefused(f"no sparse x sparse lowering for {desc.format}.T")
             rhs_desc, rhs_transposed = rhs_sparse
             if rhs_transposed:
                 rhs_desc = transposed_desc(rhs_desc)
-            expand = SPARSE_MATMUL_DISPATCH.get((desc.format, rhs_desc.format, "matmul_dense"))
-            if expand is None:
-                raise SparseLoweringRefused(f"no sparse x sparse lowering for {desc.format}/{rhs_desc.format}")
             out_cols = self.bound(rhs_desc.logical_shape[1])
-            stmts = expand(temp, desc.buffers, rhs_desc.buffers, rows, out_cols)
+            out = self.alloc(temp, desc.buffers["data"], (rows, out_cols))
+            expand = SPARSE_MATMUL_DISPATCH.get((desc.format, rhs_desc.format, "matmul_dense"))
+            if expand is not None:
+                return [out, *expand(temp, desc.buffers, rhs_desc.buffers, rows, out_cols)]
+            if desc.format not in ENTRY_WALKERS or rhs_desc.format not in ENTRY_WALKERS:
+                raise SparseLoweringRefused(f"no sparse x sparse lowering for {desc.format}/{rhs_desc.format}")
+            # The C path's product outside csr: the right operand densified, then the stored-entry matmat.
+            dense, rhs_ext = f"{temp}_rhs", self.extents(rhs_desc)
+            return [
+                self.alloc(dense, rhs_desc.buffers["data"], (rhs_ext.rows, out_cols)),
+                *densify(dense, rhs_desc.format, rhs_desc.buffers, rhs_ext),
+                out,
+                *entry_matmat(temp, desc.format, desc.buffers, self.extents(desc), dense, out_cols),
+            ]
+        if isinstance(rhs, ast.Name) and expr_rank(rhs, self.ranks) == 2:
+            if transposed or desc.format not in ENTRY_WALKERS:
+                raise SparseLoweringRefused(f"no sparse x dense-matrix lowering for {desc.format!r}")
+            out_cols = f"{rhs.id}.shape[1]"
+            stmts = entry_matmat(temp, desc.format, desc.buffers, self.extents(desc), rhs.id, out_cols)
             return [self.alloc(temp, desc.buffers["data"], (rows, out_cols)), *stmts]
         # An integer-indexed axis of a matrix (``Q[:, k]``) is a rank-1 VIEW: numpy drops the axis an
         # integer index selects and keeps the one a slice spans. The rank table proves it; the view is
@@ -222,11 +290,19 @@ class SparseMatmulRewriter(ast.NodeTransformer):
                 "sparse @ <expression>: the dense operand is not a name or a proven vector slice"
             )
         target = name_(temp)
+        if transposed:
+            if desc.format not in ENTRY_WALKERS:
+                raise SparseLoweringRefused(f"no transposed matvec lowering for format {desc.format!r}")
+            out_rows = self.bound(desc.logical_shape[1])
+            stmts = entry_matvec_t(temp, desc.format, desc.buffers, self.extents(desc), rhs_name)
+            return [*view, self.alloc(temp, desc.buffers["data"], (out_rows,)), *stmts]
         if desc.format == "csr":
             stmts = SPARSE_MATMUL_DISPATCH[("csr", "dense", "matmul_vec")](target, desc.buffers, rhs_name, rows)
         elif desc.format == "csc":
             cols = self.bound(desc.logical_shape[1])
             stmts = SPARSE_MATMUL_DISPATCH[("csc", "dense", "matmul_vec")](target, desc.buffers, rhs_name, rows, cols)
+        elif desc.format in ENTRY_WALKERS:
+            stmts = entry_matvec(temp, desc.format, desc.buffers, self.extents(desc), rhs_name)
         else:
             raise SparseLoweringRefused(f"no matvec lowering wired for format {desc.format!r}")
         return [*view, self.alloc(temp, desc.buffers["data"], (rows,)), *stmts]
@@ -276,7 +352,7 @@ def rewrite_sparse_matmuls(numpy_source: str, kir: KernelIR) -> str | None:
         rewriter.visit(fn)
     except SparseLoweringRefused:
         return None
-    if any(isinstance(n, ast.Name) and n.id in kir.sparse for n in ast.walk(fn)):
+    if any(isinstance(n, ast.Name) and n.id in kir.sparse for n in walk_nodes(fn)):
         return None  # a logical sparse name survived; it would still reach numba as a scipy object
     lead = 1 if fn.body and isinstance(fn.body[0], ast.Expr) and isinstance(fn.body[0].value, ast.Constant) else 0
     prologue = [ast.parse(f"{name} = {expr}").body[0] for name, expr in rewriter.bounds.items()]

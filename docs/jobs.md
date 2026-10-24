@@ -74,30 +74,38 @@ is stamped with are the checkout's (`--repo`, default `$HPCAGENT_BENCH_REPO`).
 ## `prepare`
 
     hpcagent-bench job prepare (--problems FILE | --tag TAG | --kernels-file FILE) --language LANG
-        [--steps sources,frameworks,grade,torch,cpf] [--frameworks a,b] [--cpf-view DIR] [--cpf-cache DIR]
+        [--steps sources,frameworks,grade,torch,cpf] [--frameworks a,b] [--cpf] [--cpf-cache DIR]
 
 - **Input.** The arguments of `hpcagent_bench.harness.prepare`: the kernels (a setup's problems file, a tag, or one
   name per line) and the language they are graded in.
 - **Steps.** Per kernel: `sources` (the generated reference), `frameworks` (each `--frameworks` sibling and DaCe's
   parsed base SDFG), `grade` (the reference graded as `/score` grades it: golden outputs and baseline timings into
   the judge's disk store), `torch` (every timed cell of an ML kernel's `torch.compile` denominator). Then `cpf` over
-  the task's share: the canonical parallel forms rendered into `--cpf-view` (`hpcagent_bench.cpf_prerender`; the cache
-  is `--cpf-cache`, default `$HPCAGENT_BENCH_CPF_CACHE`), the target following `--language` (hip and cuda render the
-  device form), then each form graded once in `--language` as `/submit` would (`hpcagent_bench.cpf_verify`). The
-  default is every per-kernel step, plus `cpf` when `--cpf-view` is given.
+  the task's share: the canonical parallel forms rendered into the cache (`hpcagent_bench.cpf.prerender`; `--cpf-cache`,
+  default `$HPCAGENT_BENCH_CPF_CACHE`), the target following `--language` (hip and cuda render the device form), then
+  each form graded once in `--language` as `/submit` would (`hpcagent_bench.cpf.verify`). The default is every
+  per-kernel step, plus `cpf` with `--cpf`.
 - **Rank distribution.** Task `r` of `n` takes `kernels[r::n]` (`--rank`/`--ranks` are set from the environment);
   `cpf` splits the same way, so a task verifies only what it rendered.
-- **Output.** No file of its own: the caches each step's consumer reads, and for `cpf` the forms in the cache, the
-  view pointing at them and each form's verdict in the view, which `cpf_cache check --verified` reads before a
-  cpf-src setup is submitted. A failing step is reported per kernel and the job goes on; a form that does not verify
+- **Output.** No file of its own: the caches each step's consumer reads, and for `cpf` the forms in the cache with
+  each form's verdict beside it, which `cpf.prerender check --verified` reads before a cpf-src setup is submitted. A failing step is reported per kernel and the job goes on; a form that does not verify
   fails nothing but its verdict.
 - **Where it runs.** With `JUDGE_EDF` set, `prepare.sbatch` runs every task in the judge image with the checkout
   mounted (a render and a grade need its compilers and BLAS); without it, on `$HPCAGENT_BENCH_PYTHON`.
 
-The CPF view of a tag, for the cpf-tool and cpf-src setups on CPU (C drop-ins graded):
+- **Renders only** (`--renders numba,c,cpp,fortran,dace-sdfg,cpf-cpu,cpf-gpu`, in place of the steps): per kernel the
+  numba sibling, the C/C++/Fortran reference and, for `dace-sdfg`, DaCe's base SDFG after `simplify` for cpu and gpu
+  (`.cache/<module>_<device>_simplified.sdfgz`); per `cpf-<target>` the task's share of CPF forms, each form's code
+  with the SDFG it was generated from and the canonical SDFG. Nothing is timed or graded. `submit.sh` submits one such
+  job per wave (`PREPARE=0` skips it): numba, each setup's reference language (C for a language without a CPU
+  reference of its own), `cpf-<device>` for a CPF packet and the words of `RENDERS`; the first wave waits on it.
+- **Cache keys.** Every render is keyed by the HPCAgent-Bench commit (plus its uncommitted changes, so a local edit
+  re-renders), and an SDFG or CPF render also by the DaCe commit: a new commit of either re-renders.
+
+The CPF forms of a tag, for the cpf-tool and cpf-src setups on CPU (C drop-ins graded):
 
     JUDGE_EDF=~/.edf/<judge>.toml hpcagent-bench job submit --nodes 2 hpcagent_bench/cluster/prepare.sbatch \
-        --tag llr40 --language c --steps cpf --cpf-view $HPCAGENT_BENCH_CPF_PRERENDER_DIR/views/llr40-cpu
+        --tag llr40 --language c --steps cpf
 
 ## `baseline`
 
@@ -116,12 +124,9 @@ against the registry, and so is the column, before a node is held.
 | `finish` | one | deletes the column's DaCe build tree and shard DB |
 | `all` | one (default) | the three in order; refused with more than one task, where there is no barrier between them |
 
-The Alloy flavors (`dace_<arch>_<canon|parallel>_alloy_<profile|heuristic>`) autotune, so they are no baseline
-column: they run as `hpcagent-bench agent <flavor> --native`, Alloy building, verifying and timing every region
-candidate of the flavor's DaCe pipeline on the node and ranking the best few on the judge's `/score`. They need the
-`alloy` extra (`uv sync --extra cpu --extra alloy`) and its compilers on `PATH`; run one task per node, since Alloy
-times on every physical core. The GPU and heuristic flavors are registered and refuse with `NotImplementedError`
-until Alloy builds them. The sample job script
+A plugin's optimizer flavors (`<column>_<flavor>`, e.g. Alloy's) search, so they are no baseline column: they
+run as `hpcagent-bench agent <flavor> --native` with the plugin installed ([extending/plugins.md](extending/plugins.md#flavors)).
+The sample job script
 [`optimizer.sbatch`](../hpcagent_bench/cluster/optimizer.sbatch) runs any optimizer this way
 ([extending/optimizer.md](extending/optimizer.md#on-a-cluster-node)).
 

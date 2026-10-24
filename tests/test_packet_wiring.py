@@ -156,7 +156,9 @@ def test_a_packet_tool_page_is_staged_by_that_packet_and_by_no_other() -> None:
     staged = set(packets.resolve("lang-skills", "c").pages)
     assert not staged & packets.tool_pages()
     assert staged, "the skills packet must still stage the language and method pages"
-    assert set(packets.resolve("cpf-tool", "c", environ={"CPF_VIEW": "/views/cpf"}).pages) == {"cpf-tool-cpu"}
+    assert set(packets.resolve("cpf-tool", "c", environ={"HPCAGENT_BENCH_CPF_CACHE": "/views/cpf"}).pages) == {
+        "cpf-tool-cpu"
+    }
 
 
 def test_an_unknown_packet_tool_stops_the_server() -> None:

@@ -10,15 +10,14 @@ name: CI
 # the finish step still runs. The whole run fits one wave of hosted runners (13 jobs, then `coverage`),
 # each filled to about 35-40 minutes: short work rides as extra steps on a runner with room (one step
 # per corpus slice where a sweep is split), rather than as its own job that pays a setup and a runner.
-# A rider is a matrix-leg field (`pythran`, `perf`, `alloy`, `native_fp64`, `floor`) its steps test.
+# A rider is a matrix-leg field (`perf`, `native_fp64`, `floor`) its steps test.
 #
 # The unit sweep DISCOVERS its files: `ls tests/test_*.py` minus .github/dedicated_tests.txt, which
 # lists the files a dedicated phase below runs instead. tests/test_ci_coverage.py fails when a file
 # runs nowhere.
 #
-# tests/test_e2e_numerical.py is split by HPCAGENT_BENCH_E2E_BACKENDS: numba/jax/pythran on `e2e`
-# (pythran quarters also on integration[0]), pluto and c/cpp/fortran fp32 on `native`, c/cpp/fortran
-# fp64 on integration[1]. Its runs use --dist loadgroup because a stem's backends share one
+# tests/test_e2e_numerical.py is split by HPCAGENT_BENCH_E2E_BACKENDS: numba on `e2e`, pluto and
+# c/cpp/fortran fp32 on `native`, c/cpp/fortran fp64 on integration[1]. Its runs use --dist loadgroup because a stem's backends share one
 # per-process build.
 #
 # --timeout-method=thread on sweeps that fork: SIGALRM never lands in a process blocked on a child.
@@ -74,13 +73,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The full sweep on the latest release, in three shards (one of two ran past 33 min: the round-robin deals
+        # The full sweep on the latest release, in four shards (one of three ran past 33 min: the round-robin deals
         # files, not minutes). Shard 0 also runs the requires-python floor (the images' interpreter, a second
         # environment, 4 min: lint, import every module, collect) and the docs build.
         include:
           - { shard: 0, floor: true }
           - { shard: 1 }
           - { shard: 2 }
+          - { shard: 3 }
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
@@ -99,7 +99,7 @@ jobs:
           excl=$(mktemp)
           grep -vE '^\s*(#|$)' .github/dedicated_tests.txt > "$excl"
           # Round-robin over the sorted list, so the shards partition it.
-          files=$(ls tests/test_*.py | grep -vxF -f "$excl" | awk 'NR % 3 == ${{ matrix.shard }}' | tr '\n' ' ')
+          files=$(ls tests/test_*.py | grep -vxF -f "$excl" | awk 'NR % 4 == ${{ matrix.shard }}' | tr '\n' ' ')
           test -n "$files" || { echo 'unit sweep selected no files'; exit 1; }
           echo "files=$files" >> "$GITHUB_OUTPUT"
           case " $files " in
@@ -139,9 +139,9 @@ jobs:
           floor = tuple(int(part) for part in os.environ["FLOOR_PYTHON"].split("."))
           assert sys.version_info[:2] == floor, f"the floor environment runs {sys.version}, not {floor}"
           # Packages of extras this leg does not install: the GPU ones (the amd/nvidia extras and the
-          # ROCm base image ship them) and alloy (its own step installs it). A module that needs one is
+          # ROCm base image ship them). A module that needs one is
           # skipped by name, never silently: any other missing module still fails the leg.
-          NOT_INSTALLED = {"triton", "cupy", "alloy"}
+          NOT_INSTALLED = {"triton", "cupy"}
           names = [m.name for m in pkgutil.walk_packages(hpcagent_bench.__path__, "hpcagent_bench.")
                    if ".benchmarks." not in m.name]
           names += [m.name for m in pkgutil.walk_packages(hpcagent_agent.__path__, "hpcagent_agent.")]
@@ -235,30 +235,24 @@ jobs:
         with:
           coverage: perf-cloudsc
 
-  # The numerical sweep @ S on the Python backends, one leg per backend (numba in two), each carrying riders that fill
-  # its runner to about 35-38 minutes: Alloy and perf[kernels] on the numba halves, a quarter of the pythran stems on a jax half, the second
-  # quarter and perf[cloudsc_monolith] on the pythran leg (the last quarter rides on integration[0]). One pythran
-  # compile peaks at ~7 GB, so pythran runs one worker: 46 min for the whole sweep, in quarters
-  # (HPCAGENT_BENCH_E2E_SHARD; test_ci_coverage.py::test_every_sliced_sweep_runs_each_slice_exactly_once).
+  # The numerical sweep @ S on numba, in halves (HPCAGENT_BENCH_E2E_SHARD;
+  # test_ci_coverage.py::test_every_sliced_sweep_runs_each_slice_exactly_once), each carrying a perf rider:
+  # perf[cloudsc_monolith] on one half, perf[kernels] on the other.
   # A leg's `minutes` caps its own sweep so a hang still leaves the finish step its time.
   # Coverage artifacts are named by matrix position (e2e-<job-index>), unique per leg.
   e2e:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
-    name: e2e[${{ matrix.leg.backend }}${{ matrix.leg.shard && format(' {0}', matrix.leg.shard) || '' }}]${{ matrix.leg.alloy && ' + alloy' || '' }}${{ matrix.leg.pythran && format(' + pythran {0}', matrix.leg.pythran) || '' }}${{ matrix.leg.perf && format(' + perf[{0}]', matrix.leg.perf) || '' }} (numerical sweep @ S)
+    name: e2e[${{ matrix.leg.backend }}${{ matrix.leg.shard && format(' {0}', matrix.leg.shard) || '' }}]${{ matrix.leg.perf && format(' + perf[{0}]', matrix.leg.perf) || '' }} (numerical sweep @ S)
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
         leg:
           # numba in halves (every generated build is parallel=True; cloudsc and cloudsc_monolith each compile for
-          # minutes and sort next to each other, so each half takes one): half + Alloy 5 / half + perf[kernels] 12.5
-          - { backend: numba, workers: auto, minutes: 25, shard: "0/2", alloy: true }
+          # minutes and sort next to each other, so each half takes one): half + perf[cloudsc_monolith] 11.5 /
+          # half + perf[kernels] 12.5
+          - { backend: numba, workers: auto, minutes: 25, shard: "0/2", perf: cloudsc_monolith }
           - { backend: numba, workers: auto, minutes: 25, shard: "1/2", perf: kernels }
-          # jax in halves (the whole sweep took 22-38 min): half + pythran 3/4 (about 10) / half
-          - { backend: jax, workers: auto, minutes: 25, shard: "0/2", pythran: "3/4" }
-          - { backend: jax, workers: auto, minutes: 25, shard: "1/2" }
-          # pythran 0/4 + 1/4 (the old 0/2 half took 27 min, 1/2 19) + perf[cloudsc_monolith] 11.5
-          - { backend: pythran, workers: 1, minutes: 17, shard: "0/4", pythran: "1/4", perf: cloudsc_monolith }
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
@@ -266,7 +260,6 @@ jobs:
           submodules: recursive
       - uses: ./.github/actions/setup
         with:
-          sync-args: ${{ matrix.leg.alloy && '--extra alloy' || '' }}
           ccache: e2e-${{ matrix.leg.backend }}
       # --timeout stays above numerical_oracle.PY_FORK_TIMEOUT_S (600) so the oracle's own
       # SIGKILL reports skip:too-long first.
@@ -280,26 +273,6 @@ jobs:
         run: |
           python -m pytest -p no:cacheprovider -rfEs -n ${{ matrix.leg.workers }} --dist loadgroup --durations=25 \
             --timeout=900 tests/test_e2e_numerical.py
-      - name: Phase 5 -- e2e numerical sweep [pythran ${{ matrix.leg.pythran }}] @ S
-        if: ${{ matrix.leg.pythran && !cancelled() }}
-        timeout-minutes: 17
-        env:
-          HPCAGENT_BENCH_E2E_BACKENDS: pythran
-          HPCAGENT_BENCH_E2E_SHARD: ${{ matrix.leg.pythran }}
-          HPCAGENT_BENCH_E2E_SUBSET: ${{ github.event_name == 'workflow_dispatch' && '0' || '1' }}
-        run: |
-          python -m pytest -p no:cacheprovider -rfEs -n 1 --dist loadgroup --durations=25 \
-            --timeout=900 tests/test_e2e_numerical.py
-      # Alloy (the optional `alloy` extra): one kernel's region variants built, verified and screened, and both
-      # CPU profile flavors' libraries graded by an in-process judge. gcc and the setup's LLVM clang are its
-      # compilers. About 5 minutes.
-      - name: Alloy variants and profile flavors @ S
-        if: ${{ matrix.leg.alloy && !cancelled() }}
-        timeout-minutes: 12
-        env:
-          HPCAGENT_BENCH_SERVICE_PRESET: S
-        run: |
-          python -m pytest -v -p no:cacheprovider -rfEs --maxfail=10 --timeout=2000 tests/test_alloy_optimizer.py tests/test_alloy_adapter.py
       # The perf gate's other groups (see `perf`): reports, does not block.
       - name: Perf gate [${{ matrix.leg.perf }}]
         if: ${{ matrix.leg.perf && !cancelled() }}
@@ -323,12 +296,12 @@ jobs:
   # tree's half of the marker runs in `translators`. Two shards: the one Phase 6 step measured
   # 30m05s (kernelbench_translation 904 s, the from-source OpenBLAS test 556 s, the rest < 40 s
   # each). Shard 0 names test_kernelbench_translation.py and carries the container launch and
-  # packaging steps, plus pythran 2/4 (see `e2e`); shard 1 sweeps tests/ with that file --ignore'd,
+  # packaging steps; shard 1 sweeps tests/ with that file --ignore'd,
   # builds OpenBLAS, and carries the c/cpp/fortran fp64 e2e sweep in two halves (about 9 min each)
   # (test_ci_coverage.py::test_the_integration_shards_partition_tests_dir).
   integration:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
-    name: integration[${{ matrix.shard.id }}]${{ matrix.shard.pythran && format(' + pythran {0}', matrix.shard.pythran) || '' }}${{ matrix.shard.native_fp64 && ' + e2e[c,cpp,fortran] fp64' || '' }} (build/run real artifacts)
+    name: integration[${{ matrix.shard.id }}]${{ matrix.shard.native_fp64 && ' + e2e[c,cpp,fortran] fp64' || '' }} (build/run real artifacts)
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -336,7 +309,6 @@ jobs:
         shard:
           - id: 0
             openblas: false
-            pythran: "2/4"
             select: >-
               tests/test_kernelbench_translation.py
           - id: 1
@@ -409,17 +381,6 @@ jobs:
         run: |
           python -m pytest -q -p no:cacheprovider -rfEs --timeout=900 --durations=0 tests/test_packaging.py
 
-      - name: Phase 5 -- e2e numerical sweep [pythran ${{ matrix.shard.pythran }}] @ S
-        if: ${{ matrix.shard.pythran && !cancelled() }}
-        timeout-minutes: 17
-        env:
-          HPCAGENT_BENCH_E2E_BACKENDS: pythran
-          HPCAGENT_BENCH_E2E_SHARD: ${{ matrix.shard.pythran }}
-          HPCAGENT_BENCH_E2E_SUBSET: ${{ github.event_name == 'workflow_dispatch' && '0' || '1' }}
-        run: |
-          python -m pytest -p no:cacheprovider -rfEs -n 1 --dist loadgroup --durations=25 \
-            --timeout=900 tests/test_e2e_numerical.py
-
       - name: Phase 5 -- e2e numerical sweep [c, cpp, fortran] @ S, fp64, WHOLE gated corpus [shard 0/2]
         if: ${{ matrix.shard.native_fp64 && !cancelled() }}
         timeout-minutes: 15
@@ -491,7 +452,6 @@ jobs:
           python -m pytest -q -p no:cacheprovider -rfEs --timeout=600 \
             tests/test_agent_tools.py \
             tests/test_noop_optimizer.py \
-            tests/test_blas_optimizer.py \
             tests/test_agent_service.py \
             tests/test_token_usage.py \
             tests/test_harbor.py \
@@ -511,13 +471,14 @@ jobs:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
     name: dace-frontend[${{ matrix.index }}] (parse + lower the generated DaCe corpus)
     runs-on: ubuntu-24.04
-    # One runner per half of the corpus: both halves on one runner ran past its 45 minutes.
+    # One runner per third of the corpus: halves ran the lowering step past its 18 minutes.
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { index: 0, shard: "0/2" }
-          - { index: 1, shard: "1/2" }
+          - { index: 0, shard: "0/3" }
+          - { index: 1, shard: "1/3" }
+          - { index: 2, shard: "2/3" }
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
@@ -580,7 +541,7 @@ jobs:
       - name: Setup -- build Pluto against LLVM/clang 17
         # The judge-agent images' recipe. clang 17 cannot read GCC 15+ libstdc++ headers, so it is
         # pinned to the runner's GCC 14; kernels are compiled by the normal toolchain.
-        timeout-minutes: 10
+        timeout-minutes: 14
         run: |
           set -euo pipefail
           sudo apt-get install -y --no-install-recommends libstdc++-14-dev
@@ -615,8 +576,11 @@ jobs:
         env:
           HPCAGENT_BENCH_E2E_BACKENDS: "pluto"
           HPCAGENT_BENCH_E2E_SUBSET: ${{ github.event_name == 'workflow_dispatch' && '0' || '1' }}
+        # Two workers: four polycc/isl runs at once exhausted the 16 GB runner (it is shut down mid-step).
+        # The memory line names the largest process when it happens again.
         run: |
-          python -m pytest -q -p no:cacheprovider -rfEs -n auto --dist loadgroup tests/test_e2e_numerical.py
+          (while sleep 10; do echo "[mem] $(free -m | awk '/^Mem/{print $3 "/" $2 " MB"}') $(ps -eo rss=,comm= --sort=-rss | head -1)"; done) &
+          python -m pytest -v -p no:cacheprovider -rfEs -n 2 --dist loadgroup tests/test_e2e_numerical.py
 
       # test_multi_unit_submission.py is the only CI check of a submission built from TWO
       # translation units (the GPU host + device shape); a dropped unit still links as a .so.
@@ -757,6 +721,15 @@ jobs:
         run: |
           python -m pytest -q -p no:cacheprovider -rfEs --timeout=600 tests/test_mlscale_part2_real_launch.py
 
+      # The SuiteSparse archives never change; a mirror outage (403/503) must not turn the ports red.
+      - name: Setup -- restore the SuiteSparse matrices
+        id: suitesparse
+        if: ${{ !cancelled() }}
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ github.workspace }}/.hpcagent_bench_cache/suitesparse
+          key: suitesparse-v1
+
       # --forked: a port oracle is native code behind ctypes, and a bad index aborts the
       # interpreter; forked, it is one red test. cegterg is its own step. Two xdist workers with two BLAS
       # threads each fill the runner's 4 cores: serial took 15.6 min of this step's 16, and the largest
@@ -796,6 +769,13 @@ jobs:
         run: |
           python -m pytest -q -p no:cacheprovider -p tests.openmp_launch_plugin -rfEs --import-mode=importlib \
             -n auto --timeout=600 hpcagent_bench/benchmarks/
+
+      - name: Save the SuiteSparse matrices
+        if: ${{ always() && steps.suitesparse.outputs.cache-hit != 'true' && hashFiles('.hpcagent_bench_cache/suitesparse/**/*.mtx') != '' }}
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ github.workspace }}/.hpcagent_bench_cache/suitesparse
+          key: suitesparse-v1
 
       # The ML ports still compute what their PyTorch models compute; UNALIGNED is a ratchet. Every ML
       # kernel resolves to a torch reference that agrees with its numpy oracle.

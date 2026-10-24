@@ -42,6 +42,7 @@ class PacketBlock(pydantic.BaseModel):
     skills: tuple[str, ...] = ()
     packets: tuple[str, ...] = ()
     tools: tuple[str, ...] = ()
+    agents: tuple[str, ...] = ()
     env: dict[str, str] = pydantic.Field(default_factory=dict)
     method: str = ""
     device: PacketDevice | None = None

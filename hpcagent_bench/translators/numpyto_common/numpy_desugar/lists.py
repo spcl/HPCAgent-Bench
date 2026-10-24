@@ -5,7 +5,7 @@ import copy
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from hpcagent_bench.translators.numpyto_common.ast_build import const_int, name_
+from hpcagent_bench.translators.numpyto_common.ast_build import const_int, name_, walk_nodes
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import DesugarError
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
 
@@ -163,7 +163,7 @@ def cut_target(stmt: ast.stmt | None, name: str, bound: ast.expr) -> str | None:
 def mutation_count(node: ast.AST, name: str) -> int:
     """Stores to ``name`` plus ``name.append`` calls -- every mutation the fold has to account for."""
     total = 0
-    for sub in ast.walk(node):
+    for sub in walk_nodes(node):
         if (isinstance(sub, ast.Name) and isinstance(sub.ctx, (ast.Store, ast.Del)) and sub.id == name) or (
             isinstance(sub, ast.Call)
             and isinstance(sub.func, ast.Attribute)
@@ -176,7 +176,7 @@ def mutation_count(node: ast.AST, name: str) -> int:
 
 
 def name_count(node: ast.AST, name: str) -> int:
-    return sum(1 for sub in ast.walk(node) if isinstance(sub, ast.Name) and sub.id == name)
+    return sum(1 for sub in walk_nodes(node) if isinstance(sub, ast.Name) and sub.id == name)
 
 
 def offset_add(offset: str, delta: str) -> str:
@@ -348,7 +348,7 @@ def list_build_statements(name: str, segments: list[ListSegment], length: str, p
 def statement_blocks(node: ast.AST) -> list[list[ast.stmt]]:
     """Every statement list under ``node``, so a list built inside a loop or a branch folds too."""
     blocks: list[list[ast.stmt]] = []
-    for sub in ast.walk(node):
+    for sub in walk_nodes(node):
         blocks.extend(
             value
             for _field, value in ast.iter_fields(sub)
@@ -365,7 +365,7 @@ def fold_list_accumulators(fn: ast.FunctionDef, vectors: frozenset[str] = frozen
     the build does not account for is left alone, and so is a bare display unless the caller names it
     in ``vectors`` (``curve_fit``'s ``p0``, which the LM lowering indexes).
     """
-    taken = OrderedSet(sub.id for sub in ast.walk(fn) if isinstance(sub, ast.Name))
+    taken = OrderedSet(sub.id for sub in walk_nodes(fn) if isinstance(sub, ast.Name))
     for block in statement_blocks(fn):
         start = 0
         while start < len(block):

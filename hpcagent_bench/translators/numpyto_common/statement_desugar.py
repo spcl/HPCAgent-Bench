@@ -16,7 +16,7 @@ import copy
 from collections.abc import Callable, Collection, Mapping, Sequence
 from typing import TypeGuard
 
-from hpcagent_bench.translators.numpyto_common.ast_build import name_, store_
+from hpcagent_bench.translators.numpyto_common.ast_build import name_, store_, walk_nodes
 from hpcagent_bench.translators.numpyto_common.numpy_desugar import expr_rank, rank_table
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
 from hpcagent_bench.translators.numpyto_common.subscripts import base_name
@@ -151,7 +151,7 @@ def placed(origin: ast.stmt, stmts: Sequence[ast.stmt]) -> list[ast.stmt]:
 
 def rename_names(node: ast.AST, names: Collection[str], holder: str, keep: Collection[int] = ()) -> None:
     """Respell every ``Name`` in ``node`` found in ``names`` as ``holder``, except the node ids in ``keep``."""
-    for sub in ast.walk(node):
+    for sub in walk_nodes(node):
         if isinstance(sub, ast.Name) and sub.id in names and id(sub) not in keep:
             sub.id = holder
 
@@ -174,7 +174,7 @@ def rebound_names(stmt: ast.stmt, watched: Collection[str], in_place: bool) -> O
     """
     augmented: OrderedSet[int] = OrderedSet()
     rebound: OrderedSet[str] = OrderedSet()
-    for sub in ast.walk(stmt):  # breadth-first: an AugAssign is met before its target
+    for sub in walk_nodes(stmt):  # breadth-first: an AugAssign is met before its target
         if in_place and isinstance(sub, ast.AugAssign):
             augmented.add(id(sub.target))
         elif isinstance(sub, ast.Name) and isinstance(sub.ctx, (ast.Store, ast.Del)):
@@ -203,7 +203,7 @@ def is_plain_rebinding(stmt: ast.stmt, rebound: Collection[str]) -> TypeGuard[as
     bound = [name for target in stmt.targets for name in binding_names(target) if name.id in rebound]
     stores = [
         sub
-        for sub in ast.walk(stmt)
+        for sub in walk_nodes(stmt)
         if isinstance(sub, ast.Name) and isinstance(sub.ctx, (ast.Store, ast.Del)) and sub.id in rebound
     ]
     return len(stores) == len(bound) and all(any(name.id == wanted for name in bound) for wanted in rebound)
@@ -393,7 +393,7 @@ def races(targets: Sequence[ast.expr], values: Sequence[ast.expr], changed: list
     """A changed value reads a name a changed target writes, so a sequential split could read it updated."""
     written = OrderedSet(base_name(targets[position]) for position in changed)
     return any(
-        isinstance(sub, ast.Name) and sub.id in written for position in changed for sub in ast.walk(values[position])
+        isinstance(sub, ast.Name) and sub.id in written for position in changed for sub in walk_nodes(values[position])
     )
 
 

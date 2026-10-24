@@ -223,7 +223,7 @@ def ldconfig_index() -> dict[str, str]:
     return index
 
 
-def _run_version(cmd: str, args: list[str] | None) -> str | None:
+def run_version(cmd: str, args: list[str] | None) -> str | None:
     for a in args or []:
         try:
             r = subprocess.run([cmd, a], capture_output=True, text=True, timeout=10, check=False)
@@ -248,7 +248,7 @@ def detect_binary(spec: ToolSpec) -> DetectResult:
     return {
         "found": True,
         "path": chosen_path,
-        "version": _run_version(chosen_path, list(spec.version_arg)),
+        "version": run_version(chosen_path, list(spec.version_arg)),
         "variants": [name for name, _ in found],
     }
 

@@ -37,6 +37,7 @@ from hpcagent_bench.translators.numpyto_common.ast_build import (
     name_,
     set_field,
     store_,
+    walk_nodes,
 )
 from hpcagent_bench.translators.numpyto_common.numpy_desugar import expr_rank
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
@@ -208,7 +209,7 @@ def target_names(target: ast.expr) -> OrderedSet[str]:
 def assigned_names(node: ast.AST) -> OrderedSet[str]:
     """Every name the subtree can rebind -- the conservative kill set for a branch or loop body."""
     out: OrderedSet[str] = OrderedSet()
-    for sub in ast.walk(node):
+    for sub in walk_nodes(node):
         targets: list[ast.expr] = []
         if isinstance(sub, ast.Assign):
             targets = list(sub.targets)
@@ -545,7 +546,7 @@ class TupleDesugar:
         reads_itself = any(
             isinstance(n, ast.Name) and n.id == name and isinstance(n.ctx, ast.Load)
             for e in elements
-            for n in ast.walk(e)
+            for n in walk_nodes(e)
         )
         if not reads_itself:
             return elements, []
@@ -583,7 +584,7 @@ class TupleDesugar:
             return None
         # Positional self-copies never race: they write back what they read.
         changed = [i for i, e in enumerate(elements) if not (isinstance(e, ast.Name) and e.id == targets[i].id)]
-        read = {n.id for i in changed for n in ast.walk(elements[i]) if isinstance(n, ast.Name)}
+        read = {n.id for i in changed for n in walk_nodes(elements[i]) if isinstance(n, ast.Name)}
         if {targets[i].id for i in changed} & read:
             return None
         out: list[ast.stmt] = []
@@ -939,7 +940,7 @@ def collapse_capture_aliases(fn: ast.FunctionDef, captured: list[tuple[str, str]
         if minted[name] != 1 or written_after_capture(fn, alias, name):
             continue
         map_statement_lists(fn, functools.partial(without_capture_binds, alias=alias, name=name))
-        for node in ast.walk(fn):
+        for node in walk_nodes(fn):
             if isinstance(node, ast.Name) and node.id == alias:
                 node.id = name
 
@@ -1003,7 +1004,7 @@ def drop_dead_none_bindings(fn: ast.FunctionDef) -> None:
     ahead of the per-geometry branches that fill them). A name still tested against ``None`` is left
     alone: there the sentinel IS the value being read.
     """
-    read = OrderedSet(n.id for n in ast.walk(fn) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load))
+    read = OrderedSet(n.id for n in walk_nodes(fn) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load))
     tested, rebound = none_sentinel_uses(fn)
 
     def dead(name: str, i: int, stmts: Sequence[ast.stmt]) -> bool:
@@ -1029,13 +1030,13 @@ def none_sentinel_uses(fn: ast.FunctionDef) -> tuple[OrderedSet[str], OrderedSet
     """``(tested, rebound)``: the names some comparison tests against ``None``, and the names some
     assignment binds to a value other than ``None``."""
     tested: OrderedSet[str] = OrderedSet()
-    for cmp in ast.walk(fn):
+    for cmp in walk_nodes(fn):
         if isinstance(cmp, ast.Compare) and any(
             isinstance(c, ast.Constant) and c.value is None for c in cmp.comparators
         ):
-            tested.update(n.id for n in ast.walk(cmp) if isinstance(n, ast.Name))
+            tested.update(n.id for n in walk_nodes(cmp) if isinstance(n, ast.Name))
     rebound: OrderedSet[str] = OrderedSet()
-    for node in ast.walk(fn):
+    for node in walk_nodes(fn):
         if not isinstance(node, ast.Assign) or (isinstance(node.value, ast.Constant) and node.value.value is None):
             continue
         for tgt in node.targets:

@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from typing import Literal, Protocol, cast
 
 from hpcagent_bench import osinfo
-from hpcagent_bench.isolation import pause_openmp_pools
+from hpcagent_bench.openmp.isolation import pause_openmp_pools
 from hpcagent_bench.seal import SealPlan, enter
 
 __all__ = [
@@ -54,6 +54,7 @@ __all__ = [
     "ResultMessage",
     "RunResult",
     "abandoned_by",
+    "not_abandoned",
     "child_environment",
     "child_main",
     "die_with_parent",
@@ -146,6 +147,17 @@ ABANDON_POLL_S = 0.1
 def abandoned_by(event: threading.Event) -> Iterator[None]:
     """Kill every child this thread waits on inside the block once ``event`` is set."""
     token = ABANDONED.set(event)
+    try:
+        yield
+    finally:
+        ABANDONED.reset(token)
+
+
+@contextlib.contextmanager
+def not_abandoned() -> Iterator[None]:
+    """Run every child inside the block to its end even after the caller is abandoned: a reference timing it
+    yields is cached for the next request."""
+    token = ABANDONED.set(None)
     try:
         yield
     finally:
@@ -278,8 +290,8 @@ def die_with_parent() -> None:
         os._exit(0)
 
 
-#: Serializes :func:`child_environment`: the spawned child copies ``os.environ`` at ``p.start()``, and the
-#: judge runs grades on several threads, so two children's environments must not interleave.
+#: Serializes every child start in :func:`run_forked` with :func:`child_environment`: a child (and a forkserver
+#: started on first use) copies ``os.environ`` at ``p.start()``, and the judge runs grades on several threads.
 CHILD_ENV_LOCK = threading.Lock()
 
 
@@ -288,7 +300,7 @@ def child_environment(env: Mapping[str, str]) -> Iterator[None]:
     """``env`` in ``os.environ`` for the span of one child START, then the previous values again.
 
     A spawned child execs a fresh interpreter, and the dynamic loader reads ``LD_LIBRARY_PATH`` at exec:
-    this is how a child gets an OpenMP context (:mod:`hpcagent_bench.omp_context`) without changing the
+    this is how a child gets an OpenMP context (:mod:`hpcagent_bench.openmp.context`) without changing the
     parent, whose own libraries are already mapped. ``Process.start`` returns only after the child has
     exec'd, so the environment is restored before anything else can see it; the lock keeps another
     thread's start from inheriting it."""
@@ -322,7 +334,14 @@ def forget_inherited_forkserver() -> None:
     server._forkserver_alive_fd = None
 
 
+def release_inherited_child_env_lock() -> None:
+    """A fresh :data:`CHILD_ENV_LOCK` in a forked child: the parent forks while holding it."""
+    global CHILD_ENV_LOCK  # noqa: PLW0603 -- the inherited copy stays locked forever
+    CHILD_ENV_LOCK = threading.Lock()
+
+
 os.register_at_fork(after_in_child=forget_inherited_forkserver)
+os.register_at_fork(after_in_child=release_inherited_child_env_lock)
 
 
 def process_context(method: str) -> ProcessContext:
@@ -510,7 +529,9 @@ def run_forked[ResultT](
         call_kwargs["progress"] = progress_q
     err_r, err_w = ctx.Pipe(duplex=False)
     p = ctx.Process(target=child_main, args=(fn, args, call_kwargs, q, seal, err_w))
-    with child_environment(env) if env else contextlib.nullcontext():
+    # Every start holds the lock: a fork, or a forkserver started on first use, copies ``os.environ`` too, and
+    # another thread's context environment (an llvm ``LD_LIBRARY_PATH``) would otherwise stick to it.
+    with child_environment(env) if env else CHILD_ENV_LOCK:
         p.start()
     # The parent's copy of the write end goes NOW, so the read end sees EOF as soon as the child is
     # gone rather than blocking on a writer that only this process still holds.

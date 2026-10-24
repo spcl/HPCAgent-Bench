@@ -3,7 +3,13 @@
 import ast
 import copy
 
-from hpcagent_bench.translators.numpyto_common.ast_build import name_, numpy_attribute, numpy_call, range_for
+from hpcagent_bench.translators.numpyto_common.ast_build import (
+    name_,
+    numpy_attribute,
+    numpy_call,
+    range_for,
+    walk_nodes,
+)
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module, numpy_call_attr
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import RankedRewritePass, RewritePass
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.hoist import HoistForm, ValueHoist
@@ -257,7 +263,7 @@ class UfuncOutInline(ast.NodeTransformer):
         if out is None:
             return None
         target = copy.deepcopy(out)
-        for n in ast.walk(target):
+        for n in walk_nodes(target):
             if isinstance(n, (ast.Name, ast.Subscript, ast.Attribute)):
                 n.ctx = ast.Store()
         if op is not None:

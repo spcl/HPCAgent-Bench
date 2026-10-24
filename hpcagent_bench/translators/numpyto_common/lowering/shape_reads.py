@@ -13,7 +13,6 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import const_or
 __all__ = [
     "ResolveArrShape",
     "ShapeMidExpressionRewriter",
-    "const_int_index",
     "fold_shape_reads_in_table",
     "is_newaxis",
     "is_newaxis_result_axis",
@@ -28,13 +27,6 @@ def negative_literal_offset(node: ast.expr) -> int | None:
     form numpy source parses to -- else None. Numpy counts such an index from the end of its axis."""
     k = const_int(node)
     return -k if k is not None and k < 0 else None
-
-
-def const_int_index(node: ast.expr) -> int | None:
-    """Return the integer value of a constant subscript index (``arr[3]`` /
-    ``arr[-1]``), or ``None`` for a non-constant one. Numpy spells a negative
-    literal index as ``UnaryOp(USub, Constant)``, not a signed ``Constant``."""
-    return const_int(node)
 
 
 def is_newaxis_result_axis(sub: ast.Subscript, k: int) -> bool:
@@ -108,7 +100,7 @@ class ShapeMidExpressionRewriter(ast.NodeTransformer):
             and node.value.attr == "shape"
             and isinstance(node.value.value, (ast.Subscript, ast.Call))
         ):
-            k = const_int_index(node.slice)
+            k = const_int(node.slice)
             if k is not None:
                 ext = iter_extent_of(node.value.value, self.arrays_shapes)
                 if ext is not None and -len(ext) <= k < len(ext):

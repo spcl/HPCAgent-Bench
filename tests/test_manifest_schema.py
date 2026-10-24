@@ -128,33 +128,35 @@ def test_a_scalar_args_value_keeps_its_int_type() -> None:
         "n": manifest_schema.ArgEntry.model_validate(2),
         "x": manifest_schema.ArgEntry.model_validate({"shape": "(n,)", "out": True}),
     }
-    block = spec.parse_args(entries, fallback=False, source="<test>")
-    assert block.scalars == {"n": 2}
-    assert type(block.scalars["n"]) is int
+    block = spec.parse_args(entries, None, None, "<test>")
+    assert block.init.scalars == {"n": 2}
+    assert type(block.init.scalars["n"]) is int
 
 
 @pytest.mark.parametrize(
     ("constant", "keys"),
     [
         (
-            spec.KNOWN_MANIFEST_KEYS,
+            manifest_schema.field_keys(manifest_schema.Manifest),
             {
                 "name", "short-name", "relative_path", "module_name", "parameters", "config", "constraints",
                 "args", "output_extent", "chain_length", "init", "languages", "allowed_precisions", "fuzz",
                 "layouts", "mpi", "level", "timeout_s", "memory_cap_gb", "floor_bytes_fraction",
-                "conditioning_rtol", "conditioning_atol", "mismatch_fraction", "scale_axes", "public",
+                "conditioning_rtol", "conditioning_atol", "mismatch_fraction", "scale_axes", "public", "array_facts",
             },
         ),
         (spec.ARG_ENTRY_KEYS, spec.ARRAY_ENTRY_KEYS | {"value"} | set(spec.ArgFlag.texts())),
-        (spec.MANIFEST_INIT_KEYS, {"scenarios", "revalue", "constants", "workspace"}),
-        (spec.LAYOUT_KEYS, {"logical_shape", "nnz", "offered", "default", "dtype", "pattern"}),
-        (spec.SCENARIO_KEYS, {"description", "layouts"}),
-        (spec.CONFIG_KNOB_KEYS, {"domain", "value", "selects"}),
+        (manifest_schema.field_keys(manifest_schema.InitBlock), {"scenarios", "revalue", "constants", "workspace"}),
+        (
+            manifest_schema.field_keys(manifest_schema.LayoutEntry),
+            {"logical_shape", "nnz", "offered", "default", "dtype", "pattern"},
+        ),
+        (manifest_schema.field_keys(manifest_schema.ScenarioEntry), {"description", "layouts"}),
+        (manifest_schema.field_keys(manifest_schema.ConfigKnobEntry), {"domain", "value", "selects"}),
     ],
 )  # fmt: skip
 def test_the_key_sets_are_the_schema_fields(constant: frozenset[str], keys: set[str]) -> None:
-    """The key-set constants name the manifest keys in error messages; a schema field missing from
-    one would be accepted at load and reported as unknown elsewhere."""
+    """The schema's key sets are exactly the manifest keys the docs and the loader name."""
     assert constant == keys
 
 

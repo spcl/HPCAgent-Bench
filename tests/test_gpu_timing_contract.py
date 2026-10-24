@@ -610,7 +610,7 @@ def test_a_python_device_bracket_opens_after_the_harness_staging_drained(
     path = tmp_path / "double.py"
     path.write_text("def double(x, n):\n    x *= 2.0\n")
     data = {"x": np.arange(4, dtype=np.float64), "n": 4}
-    outputs, _samples, _extras, _reps = native_call._call_python(
+    outputs, _samples, _extras, _reps = native_call.call_python(
         path, ("double", ("x", "n"), ("x",)), data, reps=2, warmup=1, device=True
     )
     for rep in outputs:
@@ -636,9 +636,9 @@ def test_a_host_only_python_grade_never_synchronizes_a_device_framework(
     path.write_text("def double(x, n):\n    x *= 2.0\n")
     data = {"x": np.arange(4, dtype=np.float64), "n": 4}
     meta = ("double", ("x", "n"), ("x",))
-    native_call._call_python(path, meta, data, host_only=True)
+    native_call.call_python(path, meta, data, host_only=True)
     assert synced == []
-    native_call._call_python(path, meta, data)
+    native_call.call_python(path, meta, data)
     assert synced == ["cupy"]
 
 
@@ -669,7 +669,7 @@ def test_a_python_delivery_that_defers_its_work_to_the_output_conversion_is_refu
     path = tmp_path / "deferred.py"
     path.write_text(DEFERRED_SUBMISSION)
     with pytest.raises(TypeError, match="Deferred"):
-        native_call._call_python(path, ("kern", ("x",), ("y",)), {"x": np.arange(4, dtype=np.float64)})
+        native_call.call_python(path, ("kern", ("x",), ("y",)), {"x": np.arange(4, dtype=np.float64)})
 
 
 def test_a_python_delivery_returning_arrays_and_scalars_is_graded(
@@ -680,7 +680,7 @@ def test_a_python_delivery_returning_arrays_and_scalars_is_graded(
     path = tmp_path / "concrete.py"
     path.write_text("def kern(x):\n    return 2.0 * x, x.sum(), float(x[0])\n")
     data = {"x": np.arange(4, dtype=np.float64)}
-    (outputs,), _samples, _extras, _reps = native_call._call_python(path, ("kern", ("x",), ("y", "s", "f")), data)
+    (outputs,), _samples, _extras, _reps = native_call.call_python(path, ("kern", ("x",), ("y", "s", "f")), data)
     np.testing.assert_array_equal(outputs["y"], 2.0 * data["x"])
     np.testing.assert_array_equal(outputs["s"], 6.0)
     np.testing.assert_array_equal(outputs["f"], 0.0)
@@ -715,7 +715,7 @@ def test_a_native_device_bracket_opens_after_the_harness_staging_drained(
     )
     binding = Binding(kernel="staged", config="dense", args=args, symbols={Language.C: "staged_fp64"})
     data = {"x": np.arange(8, dtype=np.float64), "y": np.zeros(8), "N": 8}
-    outputs, _samples, _extras, _reps = native_call._call_native_device(
+    outputs, _samples, _extras, _reps = native_call.call_native_device(
         str(lib), binding, data, Language.C, reps=2, warmup=1
     )
     for rep in outputs:

@@ -244,12 +244,12 @@ def test_two_families_in_one_setup_do_not_share_a_cached_baseline(
 
 
 def test_the_pin_moves_the_resolved_compiler_block(reset_pin: None) -> None:
-    compilers = languages._load_compilers()
-    default_name, unused = languages._compiler_for_lang(compilers, Language.C)
+    compilers = languages.load_compilers()
+    default_name, unused = languages.compiler_for_lang(compilers, Language.C)
     assert default_name == languages.compiler_for_family(Language.C, "gcc")
 
     config.set_override("build.compiler.c", "llvm")
-    pinned_name, unused = languages._compiler_for_lang(compilers, Language.C)
+    pinned_name, unused = languages.compiler_for_lang(compilers, Language.C)
     assert pinned_name == languages.compiler_for_family(Language.C, "llvm")
     assert pinned_name != default_name
 
@@ -267,12 +267,12 @@ def test_a_pin_naming_a_family_this_image_lacks_is_an_error(reset_pin: None, mon
     assert languages.compiler_for_family(Language.FORTRAN, "unbuilt") is None
     config.set_override("build.compiler.fortran", "unbuilt")
     with pytest.raises(KeyError, match="unbuilt"):
-        languages._compiler_for_lang(languages._load_compilers(), Language.FORTRAN)
+        languages.compiler_for_lang(languages.load_compilers(), Language.FORTRAN)
 
 
 def test_the_mpi_lookup_ignores_the_pin(reset_pin: None) -> None:
     config.set_override("build.compiler.c", "llvm")
-    name, block = languages._compiler_for_lang(languages._load_compilers(), Language.C, mpi=True)
+    name, block = languages.compiler_for_lang(languages.load_compilers(), Language.C, mpi=True)
     assert block.mpi
     assert name
 
@@ -555,7 +555,7 @@ def test_offload_is_not_active_in_the_default_cpu_builds() -> None:
 def tbb_backend(monkeypatch: pytest.MonkeyPatch) -> None:
     """Pretend this host's libstdc++ dispatches <execution> into TBB, so the link-side assertion
     is about the BUILD PATH rather than about what happens to be installed on the runner."""
-    monkeypatch.setattr(languages, "_stdpar_backend_is_tbb", lambda cc: True)
+    monkeypatch.setattr(languages, "stdpar_backend_is_tbb", lambda cc: True)
 
 
 def test_the_multi_source_kernel_link_carries_the_stdpar_runtime(tbb_backend: None, tmp_path: pathlib.Path) -> None:
@@ -576,20 +576,20 @@ def test_a_non_tbb_stdpar_runtime_is_linked_without_asking_the_tbb_probe(monkeyp
     """The probe asks `__has_include(<tbb/tbb.h>)`, which says nothing about nvhpc. nvc++ compiles
     with `-stdpar` unconditionally, so gating its LINK on that answer produced a .so that built
     clean and then failed to dlopen on `__acc_compiled`."""
-    monkeypatch.setattr(languages, "_stdpar_backend_is_tbb", lambda cc: False)
-    blocks = languages._load_compilers()
+    monkeypatch.setattr(languages, "stdpar_backend_is_tbb", lambda cc: False)
+    blocks = languages.load_compilers()
     nvhpc = [b for b in blocks.values() if b.stdpar_link_ref == "STDPAR_LINK_NVHPC"]
     assert nvhpc, "no compilers.yaml block declares STDPAR_LINK_NVHPC"
     for block in nvhpc:
-        assert languages._stdpar_link_for_block(block) == ("-stdpar=multicore",)
+        assert languages.stdpar_link_for_block(block) == ("-stdpar=multicore",)
     tbb = [b for b in blocks.values() if b.stdpar_link_ref == "STDPAR_LINK_TBB"]
     assert tbb, "no compilers.yaml block declares STDPAR_LINK_TBB"
     for block in tbb:
-        assert languages._stdpar_link_for_block(block) == ()
+        assert languages.stdpar_link_for_block(block) == ()
 
 
 def test_the_stdpar_probe_resolves_the_driver_first(monkeypatch: pytest.MonkeyPatch) -> None:
-    languages._stdpar_backend_is_tbb.cache_clear()
+    languages.stdpar_backend_is_tbb.cache_clear()
     spawned = []
 
     def fake_run(argv: list[str], **kwargs: int | str) -> None:
@@ -598,9 +598,9 @@ def test_the_stdpar_probe_resolves_the_driver_first(monkeypatch: pytest.MonkeyPa
 
     monkeypatch.setattr(languages.subprocess, "run", fake_run)
     monkeypatch.setattr(languages, "resolve_compiler", lambda name: f"/opt/bin/{name}-13")
-    languages._stdpar_backend_is_tbb("g++")
+    languages.stdpar_backend_is_tbb("g++")
     assert spawned == ["/opt/bin/g++-13"]
-    languages._stdpar_backend_is_tbb.cache_clear()
+    languages.stdpar_backend_is_tbb.cache_clear()
 
 
 # FP policy: the baselines relax and reassociate, and rewrite nothing else
@@ -691,8 +691,8 @@ def test_the_licensed_copy_leaves_the_shared_flags_module_alone(licensed_flags: 
     """
     assert licensed_flags is not flags, "the licensed copy must not be the shared module"
     assert flags.Mode is Mode, "reloading flags rebinds Mode and breaks every `is` comparison on it"
-    cname, block = languages._compiler_for_lang(languages._load_compilers(), Language.C)
-    assert "-ftree-parallelize-loops" in languages._resolve_baseline(block, Mode.MULTI_CORE)
+    cname, block = languages.compiler_for_lang(languages.load_compilers(), Language.C)
+    assert "-ftree-parallelize-loops" in languages.resolve_baseline(block, Mode.MULTI_CORE)
 
 
 @pytest.mark.parametrize("name", _GRADED_BASELINES)
@@ -743,7 +743,7 @@ def test_every_cpu_baseline_lets_libm_calls_vectorize() -> None:
 def mimalloc_links_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
     """Pretend this host resolves ``-lmimalloc``, so the assertion is about the BUILD PATH rather
     than about what happens to be installed on the runner."""
-    monkeypatch.setattr(languages, "_mimalloc_links", lambda cc, tokens, offload: True)
+    monkeypatch.setattr(languages, "mimalloc_links", lambda cc, tokens, offload: True)
 
 
 def test_the_baseline_link_carries_the_allocator_the_submission_links(
@@ -773,7 +773,7 @@ def test_a_host_without_the_library_links_it_on_neither_side(
 ) -> None:
     """Probe-gated both sides: an unresolvable -lmimalloc fails EVERY build, so a host without the
     library must produce a clean link line on the baseline exactly as it does on the submission."""
-    monkeypatch.setattr(languages, "_mimalloc_links", lambda cc, tokens, offload: False)
+    monkeypatch.setattr(languages, "mimalloc_links", lambda cc, tokens, offload: False)
     src = tmp_path / "k.cpp"
     src.write_text("int main() { return 0; }")
     baseline = languages.build_kernel_lib_commands([(Language.CPP, src)], tmp_path / "libk.so")[-1]
@@ -807,9 +807,9 @@ def test_the_allocator_probe_asks_in_the_environment_the_build_uses(
         seen["offload"] = offload
         return True
 
-    monkeypatch.setattr(languages, "_mimalloc_links", record)
+    monkeypatch.setattr(languages, "mimalloc_links", record)
     block = languages.compiler_block("gcc").model_copy(update={"cc": "cc", "mimalloc_link_ref": "LINK_MIMALLOC"})
-    emitted = languages._mimalloc_link_for_block(block)
+    emitted = languages.mimalloc_link_for_block(block)
 
     assert seen["tokens"] == emitted, "probed tokens must be the emitted tokens"
     assert f"-L{tmp_path}" in emitted, "the view directory the build loses must be named"
@@ -828,9 +828,9 @@ def test_an_offload_link_that_cannot_resolve_the_allocator_drops_it(
     build that cannot link it still runs under it, while an unresolvable -lmimalloc fails the
     build outright -- and on the REFERENCE side that scores every call score_error."""
     monkeypatch.setenv(languages.OFFLOAD_MODEL_ENV, "openmp")
-    monkeypatch.setattr(languages, "_mimalloc_links", lambda cc, tokens, offload: False)
+    monkeypatch.setattr(languages, "mimalloc_links", lambda cc, tokens, offload: False)
     block = languages.compiler_block("gcc").model_copy(update={"cc": "cc", "mimalloc_link_ref": "LINK_MIMALLOC"})
-    assert languages._mimalloc_link_for_block(block) == ()
+    assert languages.mimalloc_link_for_block(block) == ()
 
 
 def test_no_fortran_compiler_declares_the_allocator(mimalloc_links: None) -> None:
@@ -840,7 +840,7 @@ def test_no_fortran_compiler_declares_the_allocator(mimalloc_links: None) -> Non
     enforced -- one ref copied off a C block would silently put it back on the link line and put a
     paragraph about an unusable knob into every Fortran prompt.
     """
-    blocks = languages._load_compilers()
+    blocks = languages.load_compilers()
     fortran = {name: b for name, b in blocks.items() if b.lang is Language.FORTRAN}
     assert fortran, "fixture guard: no fortran blocks found, the assertion below would be vacuous"
     assert [n for n, b in fortran.items() if b.mimalloc_link_ref] == []

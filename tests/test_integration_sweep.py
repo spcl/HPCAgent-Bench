@@ -94,8 +94,20 @@ def sweep(tmp_path_factory: pytest.TempPathFactory) -> pathlib.Path:
     """Drive the whole pipeline once: both sweeps, in one tmp cwd. Module-scoped since the
     two legs must land in the same ``hpcagent_bench.db`` for a speedup to exist."""
     cwd = tmp_path_factory.mktemp("integration_sweep")
-    run_cli(cwd, "run-benchmark", "-b", NUMPY_SELECTOR, "-f", "numpy", "-p", PRESET, "-r", "1")
-    run_cli(cwd, "run-benchmark", "-b", NATIVE_SELECTOR, "-f", NATIVE_FRAMEWORK, "-p", PRESET, "-r", "1")
+    run_cli(cwd, "run-framework", "-b", NUMPY_SELECTOR, "-f", "numpy", "-p", PRESET, "-r", "1", "--no-ignore-errors")
+    run_cli(
+        cwd,
+        "run-framework",
+        "-b",
+        NATIVE_SELECTOR,
+        "-f",
+        NATIVE_FRAMEWORK,
+        "-p",
+        PRESET,
+        "-r",
+        "1",
+        "--no-ignore-errors",
+    )
     # The legs wrote shard 0; the base DB the assertions open is rebuilt from the shards.
     recording.ensure_aggregated(str(cwd / "hpcagent_bench.db"))
     return cwd
@@ -152,7 +164,7 @@ AUTOPAR_FRAMEWORKS = [
 def test_native_leg_requests_autopar(framework: str, want_flag: bool, monkeypatch: pytest.MonkeyPatch) -> None:
     """The autopar delta reaches the REAL compile, observed where the build path composes it (asserted
     on the compile command, not a runtime speedup, since clang accepts ``-mllvm -polly`` with only a
-    warning when its LLVM has no Polly). Spies on ``_ensure_built`` for real rather than re-deriving
+    warning when its LLVM has no Polly). Spies on ``ensure_built`` for real rather than re-deriving
     the command, which would be a tautology that never touches the build."""
     assert framework in native_runtime.FRAMEWORK_FLAGS, f"{framework} has no autopar flag preset"
     key = min(KERNELS.select_keys(NATIVE_SELECTOR))
@@ -166,20 +178,20 @@ def test_native_leg_requests_autopar(framework: str, want_flag: bool, monkeypatc
         seen.append(dict(kwargs))
         return build_kernel_lib_commands(sources, out_so, **kwargs)
 
-    # _ensure_built imports the composer INSIDE the function, so patch it at its source module.
+    # ensure_built imports the composer INSIDE the function, so patch it at its source module.
     monkeypatch.setattr("hpcagent_bench.languages.build_kernel_lib_commands", spy)
     so = cpp_backend / "build" / f"lib{spec.native_base()}_{framework}.so"
     if so.exists():
         so.unlink()  # force a real compile; a cached .so would skip the composer entirely
-    native_runtime._ensure_built(cpp_backend, spec.native_base(), framework)
+    native_runtime.ensure_built(cpp_backend, spec.native_base(), framework)
 
     assert seen, (
-        "_ensure_built never composed a compile command -- it cannot have built anything, "
+        "ensure_built never composed a compile command -- it cannot have built anything, "
         "so this test would have been vacuous"
     )
     extra = " ".join(str(k.get("extra_flags", "")) for k in seen)
     assert want_flag in extra, (
-        f"the {framework} build did NOT request autopar; _ensure_built passed extra_flags={extra!r}"
+        f"the {framework} build did NOT request autopar; ensure_built passed extra_flags={extra!r}"
     )
     # An unsubstituted field would be passed to the compiler verbatim and rejected.
     assert "{n}" not in extra, f"{framework}: the core-count field was never substituted: {extra!r}"

@@ -25,7 +25,7 @@ control_color: "#4d4d4d"
 
 # A filled circle, square, triangle and diamond stay apart at 4pt where a pentagon and a hexagon do
 # not, so identity survives a column-width figure and a greyscale print.
-markers: ["o", "s", "^", "D", "v", "P", "X", "*"]
+markers: ["o", "s", "^", "D", "v", "h", "P", "X", "*"]
 
 # The SHAPE POOL of treatments. Its free shapes split in two: the first `harness_shapes` are the harnesses',
 # the rest the packets', each kind taking its part in slot order unless a packet names its own `marker`, so

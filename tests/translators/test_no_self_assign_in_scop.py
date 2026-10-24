@@ -6,7 +6,7 @@ Shape resolution can mint one per unpacked dimension: ``H, W = a.shape`` becomes
 ``H = H; W = W`` when the shape symbols resolve to the parameter names. In the pluto input
 those statements WRITE a signature parameter inside ``#pragma scop``, which
 pet reads as a data-dependent condition and turns into an isl assert -- polycc core
-dumps instead of refusing (POLYCC-003 in ``hpcagent_bench.pluto_affine``). Dropping them
+dumps instead of refusing (POLYCC-003 in ``hpcagent_bench.polyhedral.pluto_affine``). Dropping them
 in the shared lowering is what keeps the scop schedulable, so the property is asserted
 on the emitted text rather than on the AST.
 """

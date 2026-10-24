@@ -4,7 +4,7 @@ import ast
 import copy
 from collections.abc import Callable, Sequence
 
-from hpcagent_bench.translators.numpyto_common.ast_build import map_blocks, name_, range_for, store_
+from hpcagent_bench.translators.numpyto_common.ast_build import map_blocks, name_, range_for, store_, walk_nodes
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of
@@ -190,7 +190,7 @@ def mask_names_(mask_expr: ast.expr) -> set[str]:
     if isinstance(mask_expr, ast.Name):
         out.add(mask_expr.id)
     else:
-        for sub in ast.walk(mask_expr):
+        for sub in walk_nodes(mask_expr):
             if isinstance(sub, ast.Name):
                 out.add(sub.id)
     return out
@@ -237,7 +237,7 @@ def collect_bool_names(tree: ast.AST, arrays: list[ArrayDesc]) -> set[str]:
     mask. A single forward pass over the body suffices because a mask is
     defined before it is used (``m = a > c``; later ``m2 = m & other``)."""
     bn: set[str] = {a.name for a in arrays if a.dtype in ("bool", "bool_")}
-    for node in ast.walk(tree):
+    for node in walk_nodes(tree):
         if (
             isinstance(node, ast.Assign)
             and len(node.targets) == 1
@@ -330,7 +330,7 @@ def reads_before_rebind(stmts: Sequence[ast.stmt], name: str) -> bool:
     A read after the rebind sees a different value, so it does not keep the old binding alive.
     """
     for s in stmts:
-        if any(isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load) and n.id == name for n in ast.walk(s)):
+        if any(isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load) and n.id == name for n in walk_nodes(s)):
             return True
         if isinstance(s, ast.Assign) and any(isinstance(t, ast.Name) and t.id == name for t in s.targets):
             return False

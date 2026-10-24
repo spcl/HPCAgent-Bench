@@ -33,7 +33,7 @@ def sub_(src: str) -> ast.Subscript:
     return ast.parse(src).body[0].value
 
 
-# timestep detection (JAX consumer)
+# timestep detection
 def test_timestep_for_is_flagged() -> None:
     assert is_timestep_loop(stmt_("for t in range(TSTEPS):\n    step(t)\n"))
 

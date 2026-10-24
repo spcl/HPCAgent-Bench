@@ -5,7 +5,7 @@ import copy
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
-from hpcagent_bench.translators.numpyto_common.ast_build import name_, range_for, store_
+from hpcagent_bench.translators.numpyto_common.ast_build import name_, range_for, store_, walk_nodes
 from hpcagent_bench.translators.numpyto_common.ir import SparseArrayDesc
 from hpcagent_bench.translators.numpyto_common.lib_nodes.blas import (
     BLAS_GEMM_MARKER,
@@ -647,7 +647,7 @@ class MatmulHoister(ast.NodeTransformer):
                 # either operand carries a complex tag (or a complex
                 # Constant somewhere in the subtree), tag the matmul
                 # temp ``__mm<n>`` so its decl is the right C type.
-                for sub in ast.walk(node):
+                for sub in walk_nodes(node):
                     if isinstance(sub, ast.Constant) and isinstance(sub.value, complex):
                         self.local_dtypes[temp] = "complex128"
                         break
@@ -666,7 +666,7 @@ class MatmulHoister(ast.NodeTransformer):
         Integer, boolean and complex matmuls have no real-BLAS equivalent and keep the loop nest.
         A complex literal anywhere in the subtree counts, matching how the caller tags the temp.
         """
-        for sub_node in ast.walk(node):
+        for sub_node in walk_nodes(node):
             if isinstance(sub_node, ast.Constant) and isinstance(sub_node.value, complex):
                 return False
             if isinstance(sub_node, ast.Name):
@@ -723,7 +723,7 @@ class MatmulHoister(ast.NodeTransformer):
         """
         seen: list[str] = []
         for s in stmts:
-            for sub in ast.walk(s):
+            for sub in walk_nodes(s):
                 tgt = None
                 if isinstance(sub, ast.Assign) and sub.targets:
                     tgt = sub.targets[0]
@@ -898,7 +898,7 @@ class MatmulHoister(ast.NodeTransformer):
         temp = f"__spv{n}"
         # Carry a complex dtype tag from any complex base array so the
         # temp's C decl matches (real default otherwise).
-        for sub in ast.walk(expr):
+        for sub in walk_nodes(expr):
             if isinstance(sub, ast.Name):
                 dt = self.local_dtypes.get(sub.id)
                 if dt and dt.startswith("complex"):

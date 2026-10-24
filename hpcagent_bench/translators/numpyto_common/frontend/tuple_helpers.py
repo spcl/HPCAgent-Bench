@@ -5,6 +5,7 @@ import copy
 from collections.abc import Sequence
 
 from hpcagent_bench.translators.numpyto_common import dtypes
+from hpcagent_bench.translators.numpyto_common.ast_build import walk_nodes
 from hpcagent_bench.translators.numpyto_common.frontend.axes import AxisReshapeToIndexing
 from hpcagent_bench.translators.numpyto_common.frontend.body_rewrites import native_desugar
 from hpcagent_bench.translators.numpyto_common.frontend.helper_params import infer_helper_params
@@ -113,7 +114,8 @@ def folded_straight_line(body: Sequence[ast.stmt]) -> list[ast.stmt] | None:
         # bails, computes ``iz_hi``, bails again, then computes the bounds it returns. A guard that
         # rebound a folded name would make one substitution stand for two values, so decline.
         if any(
-            isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Store) and sub.id in folded for sub in ast.walk(stmt)
+            isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Store) and sub.id in folded
+            for sub in walk_nodes(stmt)
         ):
             return None
         kept = copy.deepcopy(stmt)

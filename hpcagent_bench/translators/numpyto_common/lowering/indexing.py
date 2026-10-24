@@ -8,7 +8,7 @@ from hpcagent_bench.translators.numpyto_common.ast_build import const_int
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import const_, slice_step_any, step_is_negative
 from hpcagent_bench.translators.numpyto_common.lowering.mathfuncs import MATH_BUILTINS
-from hpcagent_bench.translators.numpyto_common.lowering.shape_reads import const_int_index, is_newaxis
+from hpcagent_bench.translators.numpyto_common.lowering.shape_reads import is_newaxis
 
 __all__ = [
     "LOWERED_ELEMENTWISE",
@@ -166,7 +166,7 @@ def rebases_onto_view_axis(view_slice: ast.Slice, use_slice: ast.Slice) -> bool:
     if has_negative_step([view_slice, use_slice]):
         return False
     for bound in (use_slice.lower, use_slice.upper, use_slice.step):
-        k = None if bound is None else const_int_index(bound)
+        k = None if bound is None else const_int(bound)
         if k is not None and k < 0:
             return False
     return view_slice.upper is None or use_slice.upper is None

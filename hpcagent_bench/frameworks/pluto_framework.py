@@ -2,13 +2,14 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """Framework binding for the Pluto polyhedral backend: a NativeFramework subclass that compiles polycc's OUTPUT
-(:func:`hpcagent_bench.pluto_transform.transformed_sources`), calls it in polycc's own argument order, and is
+(:func:`hpcagent_bench.polyhedral.pluto.transformed_sources`), calls it in polycc's own argument order, and is
 timed only after the numerical oracle grades the transformed binary ``ok``."""
 
 import os
 from collections.abc import Callable, Sequence
 
-from hpcagent_bench import pluto_transform, polygeist_transform
+from hpcagent_bench.polyhedral import pluto as pluto_transform
+from hpcagent_bench.polyhedral import polygeist as polygeist_transform
 from hpcagent_bench.columns import FRAMEWORKS
 from hpcagent_bench.frameworks import Benchmark
 from hpcagent_bench.frameworks.errors import NotSupportedByFramework
@@ -54,7 +55,7 @@ class PlutoFramework(NativeFramework):
     def build_call(self, bench: Benchmark, impl: KernelImpl, bdata: BenchData) -> CallPlan:
         """The base plan, plus the kernel name :meth:`measure` needs; the last hook before timing
         that still sees the benchmark."""
-        self.gate_kernel = self._native_base(bench)
+        self.gate_kernel = self.native_base(bench)
         return super().build_call(bench, impl, bdata)
 
     def copy_func(self) -> CopyFunc:
@@ -116,7 +117,7 @@ class PlutoFramework(NativeFramework):
         ``<base>_fpNN_pluto_binding.json``; every VALUE comes from :meth:`NativeFramework._abi_args`.
 
         A positional ctypes call cannot detect a permutation, so a missing binding declines."""
-        order = self._pluto_arg_names(bench)
+        order = self.pluto_arg_names(bench)
         if order is None:
             raise NotSupportedByFramework(
                 pluto_transform.FRAMEWORK,
@@ -139,13 +140,13 @@ class PlutoFramework(NativeFramework):
                         f"{bench.bname}: pluto ABI argument {name!r} has no value in resolved/bdata "
                         f"and no output declaration to allocate from"
                     )
-                out.append(self._alloc_output(arg, bdata))
+                out.append(self.alloc_output(arg, bdata))
         return out, {}
 
-    def _pluto_arg_names(self, bench: Benchmark) -> list[str] | None:
+    def pluto_arg_names(self, bench: Benchmark) -> list[str] | None:
         """polycc's argument ORDER from any ``<base>_fpNN_pluto_binding.json`` (precision-independent); ``None``
         when none was emitted."""
-        paths = sorted(self._cpp_backend(bench).glob(f"{self._native_base(bench)}_fp*_pluto_binding.json"))
+        paths = sorted(self._cpp_backend(bench).glob(f"{self.native_base(bench)}_fp*_pluto_binding.json"))
         for path in paths:
             args = read_binding(path).args
             if args:

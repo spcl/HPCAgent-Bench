@@ -9,14 +9,13 @@ import contextlib
 import json
 import os
 import pathlib
-import subprocess
 import sys
 import tempfile
 from collections.abc import Generator
 
 import pydantic
 
-from hpcagent_bench import reporting_order
+from hpcagent_bench.results import order as reporting_order
 from hpcagent_bench.fuzz import FuzzValue
 from hpcagent_bench.manifest_schema import Value
 from hpcagent_bench.spec import (
@@ -30,7 +29,6 @@ from hpcagent_bench.spec import (
 from hpcagent_bench.support.helpers.sparse.abi import FORMAT_SPECS, scalar_name
 
 __all__ = [
-    "DRIVER",
     "TRANSLATOR_FORMAT_NAMES",
     "ArrayDocument",
     "BenchDocument",
@@ -245,7 +243,7 @@ def sparse_layout_documents(layouts: dict[str, SparseLayout]) -> dict[str, Spars
 
 
 def layout_documents(layouts: dict[str, SparseLayout]) -> dict[str, LayoutDocument]:
-    """The ``layouts`` block as a manifest spells it, so :meth:`BenchSpec.from_dict` reads it back."""
+    """The ``layouts`` block as a manifest spells it, so :meth:`BenchSpec.from_manifest` reads it back."""
     return {
         name: LayoutDocument(
             logical_shape=list(lay.logical_shape),
@@ -468,10 +466,6 @@ def bench_info_tempfile(
         p.unlink(missing_ok=True)
 
 
-#: Driver module of the unified ``numpyto --target <t>`` front door.
-DRIVER = "hpcagent_bench.translators.numpyto_common.cli"
-
-
 def emit_kernel(
     spec: BenchSpec,
     kernel_py: str | os.PathLike[str],
@@ -480,32 +474,29 @@ def emit_kernel(
     target: str = "c",
     config: str | None = None,
     precision: str = "",
-    extra_env: dict[str, str] | None = None,
     abi: bool = False,
+    scop: bool = True,
 ) -> int:
-    """Emit ``spec``'s kernel to translators ``target`` via the unified ``numpyto`` driver; returns its exit code.
+    """Emit ``spec``'s kernel to translators ``target`` in-process; 0, or 1 with the refusal on stderr.
 
-    The C target writes the whole C family (``.c``, ``.cpp``, Pluto input). Outputs are named
+    The C target writes the whole C family (``.c``, ``.cpp``, and with ``scop`` the Pluto/PPCG inputs). Outputs are named
     ``<short>[_<sparse>]_<fptype>`` with ``<short>`` = ``naming.short_for(kernel_py)`` (the reference's stem, not
     ``spec.short_name``): find them through that function. ``abi``: see :func:`bench_info_tempfile`."""
+    from hpcagent_bench.translators.numpyto_common.targets import EmitRequest, emit  # noqa: PLC0415 -- heavy
+
     resolved_config = emitter_config(spec, config)
     with bench_info_tempfile(spec, config=resolved_config, abi=abi) as bi:
-        cmd = [
-            sys.executable,
-            "-m",
-            DRIVER,
-            "--target",
-            target,
-            "--kernel",
-            str(kernel_py),
-            "--bench-info",
-            str(bi),
-            "--out",
-            str(out_dir),
-        ]
-        if resolved_config:
-            cmd += ["--config", resolved_config]
-        if precision:
-            cmd += ["--precision", precision]
-        env = {**os.environ, **extra_env} if extra_env else None
-        return subprocess.run(cmd, env=env, check=False).returncode
+        request = EmitRequest(
+            kernel=pathlib.Path(kernel_py),
+            out=pathlib.Path(out_dir),
+            bench_info=bi,
+            config=resolved_config,
+            precision=precision,
+            scop=scop,
+        )
+        try:
+            emit(target, request)
+        except Exception as exc:  # noqa: BLE001 -- a refusal is reported, the caller reads the code
+            print(f"emit {target} {spec.short_name}: {type(exc).__name__}: {exc}", file=sys.stderr)
+            return 1
+    return 0
