@@ -23,7 +23,7 @@ import numpy as np
 from relayout.convert import Conversion, Group, device_source, host_source
 from relayout.layout import IndexMap
 
-from hpcagent_bench import languages
+from hpcagent_bench import languages, osinfo
 from hpcagent_bench.openmp import context as omp_context
 from hpcagent_bench.categories import Language
 from hpcagent_bench.dtypes import is_storage_only
@@ -157,9 +157,10 @@ def host_functions(dtypes: Iterable[str]) -> str:
 
 @functools.lru_cache(maxsize=16, typed=True)
 def built_library(context: str, layouts: tuple[Conversion, ...] = (), groups: tuple[Group, ...] = ()) -> pathlib.Path:
-    """The host library of OpenMP ``context`` with one request's kernels; built once per source and context."""
+    """The host library of OpenMP ``context`` with one request's kernels; built once per source, context and CPU
+    model (``-march=native``: the store is shared by nodes of different CPUs)."""
     source = host_source([*pairs(CAST_DTYPES), *layouts], groups=groups)
-    digest = hashlib.sha256(f"{context}\0{source}".encode()).hexdigest()[:16]
+    digest = hashlib.sha256(f"{context}\0{osinfo.cpu_model()}\0{source}".encode()).hexdigest()[:16]
     cached = disk_cache.root() / "precision_casts" / f"hb_casts_{context or 'default'}_{digest}.so"
     if cached.is_file():
         return cached
