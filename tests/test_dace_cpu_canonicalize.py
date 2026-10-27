@@ -4,6 +4,7 @@
 ``SDFG.openmp_array_reductions`` is set, and ``auto_optimize`` (the control) never sets it."""
 
 import copy
+import dataclasses
 import pathlib
 import types
 from typing import cast
@@ -81,3 +82,33 @@ def test_the_canon_column_reads_the_canonical_sdfg_the_cpf_prerender_caches(
     assert loaded.to_json() == produced.to_json()
     # finalize expands library nodes into nested SDFGs of their own, so the marker is the top-level graph's.
     assert loaded.openmp_array_reductions, "the cached graph is not canonical"
+
+
+@dace.program
+def scaled_grid(a: dace.float64[64, 64], out: dace.float64[64, 64]) -> None:
+    out[:] = a * 2.0
+
+
+def test_a_block_set_on_the_offloaded_program_is_the_block_its_kernel_is_tiled_by() -> None:
+    sdfg = scaled_grid.to_sdfg(simplify=False)
+    offloaded: list[list[int] | None] = []
+
+    def set_block(program: dace.SDFG) -> None:
+        for node, state in program.all_nodes_recursive():
+            if isinstance(node, dace.nodes.MapEntry) and node.map.schedule is dace.ScheduleType.GPU_Device:
+                offloaded.append(node.map.gpu_block_size)
+                node.map.gpu_block_size = [8, 8, 1]
+
+    ctx = dataclasses.replace(DaceFramework("dace_gpu_canon").build_context(), offloaded=set_block)
+
+    pipeline_canonicalize(sdfg, ctx)
+
+    assert offloaded and all(block is not None for block in offloaded), "the hook ran before the block was chosen"
+    kernels = [
+        node.map
+        for node, state in sdfg.all_nodes_recursive()
+        if isinstance(node, dace.nodes.MapEntry) and node.map.schedule is dace.ScheduleType.GPU_Device
+    ]
+    assert kernels and all(kernel.gpu_block_size == [8, 8, 1] for kernel in kernels)
+    # the innermost dimension is tiled by the block's x, the pipeline's own pick would take 64
+    assert all(kernel.range[-1][2] == 8 for kernel in kernels)

@@ -1,0 +1,15 @@
+# The first-class user plugins the user-plugins CI job installs and runs (tests/test_user_plugin_episodes.py): a
+# repository, the branch it follows, the commit checked, and the plugin folder inside it. Only CI reads this file;
+# `python helpers/scripts/user_plugins.py bump` moves the commits to their branch tips.
+
+[plugins.nestforge]
+repository = "https://github.com/spcl/NestForge.git"
+branch = "main"
+commit = "c7a64393a26c4604529ed2b2b2c110fc28735b4f"
+folder = "plugin/nestforge"
+
+[plugins.alloy]
+repository = "https://github.com/ThrudPrimrose/alloy.git"
+branch = "main"
+commit = "704000262f61e5feaddd55311be567b60bc35ded"
+folder = "alloy/hb_plugin"

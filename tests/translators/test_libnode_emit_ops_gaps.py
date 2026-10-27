@@ -1,7 +1,7 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Numerical checks for four numpy ops recently added to the native translators
-so a DaCe loop-nest extractor (nest-forge) can round-trip its ``dace -> numpy``
+so a DaCe loop-nest extractor can round-trip its ``dace -> numpy``
 emit through ``numpy -> C/C++/Fortran``:
 
 * ``np.sort`` (1-D, ascending) -- ``expand_sort`` (copy + insertion sort);
@@ -81,7 +81,7 @@ def test_cummax_cummin() -> None:
 
 # np.<ufunc>.reduce (axis=None full reduction)
 #
-# nest-forge emits an explicit ``axis=None`` (or a tuple axis) form. A bare
+# a nest extractor emits an explicit ``axis=None`` (or a tuple axis) form. A bare
 # ``np.add.reduce(a)`` on a 1-D array would lower to ``np.sum(a, axis=0)`` and hit
 # a PRE-EXISTING 1-D ``axis=0`` reducer bug -- so this covers only the axis=None
 # full-reduction form, which leaves the backend's own full reduction and works.
@@ -119,11 +119,11 @@ def test_ufunc_reduce() -> None:
 # Complex in/out; native-only because the python-backend fft loop hardcodes the
 # 'backward' convention (ignores norm), which would silently mis-scale.
 # ``expand_dftn`` scales: 'forward' divides the forward, 'backward' the inverse,
-# 'ortho' both by sqrt(N). nest-forge emits ``np.fft.ifft(x, norm='forward')``.
+# 'ortho' both by sqrt(N). a nest extractor emits ``np.fft.ifft(x, norm='forward')``.
 
 
 def test_fft_ifft_norm() -> None:
-    """``np.fft.ifft(x, norm='forward')`` (the nest-forge form) and the
+    """``np.fft.ifft(x, norm='forward')`` (a nest extractor's form) and the
     ``'forward'``-scaled forward transform -- both use a plain ``/ N`` and work on
     every native backend."""
     rng = np.random.default_rng(3)
@@ -176,7 +176,7 @@ def test_fft_ifft_norm_ortho() -> None:
 
 # ScatterConflictCheck TAGCOUNT round-trip (int-array reduction)
 #
-# nest-forge's emit_scatter_conflict_check emits `int(np.max(idx))` over an int64
+# a nest extractor's scatter-conflict check emits `int(np.max(idx))` over an int64
 # index array to size the ownership buffer. This guards that the whole TAGCOUNT
 # kernel round-trips numpy -> C/C++/Fortran. Regression guard for the Fortran
 # int-reduction dtype fix: a value-preserving reduction (np.max/min/sum/prod) over

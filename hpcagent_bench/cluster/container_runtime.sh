@@ -150,13 +150,14 @@ agent_ro_binds() {
     esac
 }
 
-# plugin_binds -- every plugin folder (hpcagent_agent/plugins.py) as host:container, one per line: each one in the
-# repository's plugins/ and in the ``:``-separated HPCAGENT_BENCH_USER_PLUGIN_DIRS (a plugin, or a folder of them),
-# bound at PLUGIN_MOUNT/<folder name> in every role but the engines, so the agent serves the tools and the judge the
-# routes of the same plugins. Two plugins in folders of one name are refused.
+# plugin_entries -- every plugin (hpcagent_agent/plugins.py) as host:container:plugin, one per line: each one in the
+# repository's plugins/ and in the ``:``-separated HPCAGENT_BENCH_USER_PLUGIN_DIRS (a plugin, or a folder of them).
+# The folder bound at PLUGIN_MOUNT/<folder name> is the plugin's own, or the folder its ``[install] root`` names (the
+# repository its package is built from, which the judge's launch venv installs: launch_venv.sh); ``plugin`` is where
+# the plugin is inside the container. Two plugins in folders of one name are refused.
 PLUGIN_MOUNT="/opt/hpcagent-bench-plugins"
-plugin_binds() {
-    local folder candidate name
+plugin_entries() {
+    local folder candidate name root
     local -A seen=()
     local -a folders=("${HPCAGENT_BENCH_REPO}/plugins")
     IFS=: read -r -a user_folders <<<"${HPCAGENT_BENCH_USER_PLUGIN_DIRS:-}"
@@ -177,14 +178,36 @@ plugin_binds() {
                 return 2
             fi
             seen[${name}]="${candidate}"
-            printf '%s:%s/%s\n' "$(realpath "${candidate}")" "${PLUGIN_MOUNT}" "${name}"
+            root="$(install_root "${candidate}")" || return 2
+            if [[ -n "${root}" ]]; then
+                printf '%s:%s/%s:%s/%s/%s\n' "${root}" "${PLUGIN_MOUNT}" "${name}" "${PLUGIN_MOUNT}" "${name}" \
+                    "$(realpath --relative-to="${root}" "${candidate}")"
+            else
+                printf '%s:%s/%s:%s/%s\n' "$(realpath "${candidate}")" "${PLUGIN_MOUNT}" "${name}" "${PLUGIN_MOUNT}" "${name}"
+            fi
         done
     done
 }
 
-# plugin_dirs -- the container side of plugin_binds, ``:``-joined: what every role reads as HPCAGENT_BENCH_PLUGIN_DIRS.
+# install_root <plugin folder> -- the resolved ``[install] root`` of its plugin.toml, or nothing without one.
+install_root() {
+    "${HPCAGENT_BENCH_HOST_PYTHON:-python3}" - "$1" <<'PY'
+import pathlib, sys, tomllib
+folder = pathlib.Path(sys.argv[1])
+block = tomllib.loads((folder / "plugin.toml").read_text(encoding="utf-8")).get("install")
+print((folder / block.get("root", ".")).resolve() if block else "")
+PY
+}
+
+# plugin_binds -- what every role but the engines binds for the plugins, host:container, one per line, so the agent
+# serves the tools and the judge the routes of the same plugins.
+plugin_binds() {
+    plugin_entries | cut -d: -f1,2
+}
+
+# plugin_dirs -- the plugins' container paths, ``:``-joined: what every role reads as HPCAGENT_BENCH_PLUGIN_DIRS.
 plugin_dirs() {
-    plugin_binds | cut -d: -f2 | paste -sd:
+    plugin_entries | cut -d: -f3 | paste -sd:
 }
 
 derived_edf() {

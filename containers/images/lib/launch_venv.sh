@@ -37,10 +37,16 @@ if [ "${HPCAGENT_BENCH_LAUNCH_VENV:-1}" = 0 ] || [ ! -f "${launch}/sync.args" ];
 fi
 image_python="$(cat "${launch}/python")"
 sync_args="$(cat "${launch}/sync.args")"
-key="$(cat "${workspace}/uv.lock" "${launch}/sync.args" "${launch}/image.id" | sha256sum | cut -c1-16)"
 # A judge's venvs and an agent's live apart: the agent's sealed tool calls hide the judge's (agent_driver.seal_argv).
 role=judge
 case " ${sync_args} " in *" --no-install-project "*) role=agent ;; esac
+# A judge's venv also carries the user plugins' packages (their [install] commands): their sources key it too.
+plugins=/opt/hpcagent-bench-plugins
+sources=""
+if [ "${role}" = judge ] && [ -d "${plugins}" ]; then
+    sources="$(find "${plugins}" -type f -not -path '*/.git/*' -not -path '*/__pycache__/*' -printf '%P %s %T@\n' | sort)"
+fi
+key="$({ cat "${workspace}/uv.lock" "${launch}/sync.args" "${launch}/image.id"; printf '%s' "${sources}"; } | sha256sum | cut -c1-16)"
 root="${HPCAGENT_BENCH_LAUNCH_ROOT:-}"
 if [ -z "${root}" ]; then
     root="/tmp/hpcagent-bench-launch-${role}"
@@ -61,6 +67,10 @@ if [ ! -f "${home}/ready" ]; then
             site "${image_python}" > "$(site "${venv}/bin/python")/zz-image-site.pth"
             # shellcheck disable=SC2086
             (cd "${workspace}" && UV_PROJECT_ENVIRONMENT="${venv}" uv sync -q --frozen --inexact ${sync_args})
+            # The user plugins' packages, over the synced venv (python -m hpcagent_bench.plugins install).
+            if [ -n "${sources}" ]; then
+                "${venv}/bin/python" -m hpcagent_bench.plugins install --python "${venv}/bin/python" >&2
+            fi
             ONE_OPENMP_ROOTS="${venv}" sh "${launch}/one_openmp.sh" --link-only /opt/view >/dev/null
             # TileLang gets its own venv over this one (tilelang/pyproject.toml says why), run through `tilelang-python`:
             # its .pth lists the framework venv and then the image, so only tilelang, z3 4.15 and tvm-ffi are its own.

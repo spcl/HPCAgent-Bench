@@ -3,9 +3,9 @@
 Every plugin adds optimizers, of two kinds:
 
 - a **method** an LLM agent runs: a packet with its skill pages, method text, agent tools and judge routes
-  (`plugins/autokernel`, the NestForge example below);
+  (`plugins/autokernel`);
 - a **flavor** that runs without an LLM: a `FlavorOptimizer` run over shipped columns, each pairing a framework
-  column run as `hpcagent-bench agent <column>` ([Flavors](#flavors); Alloy ships one).
+  column run as `hpcagent-bench agent <column>` ([Flavors](#flavors)).
 
 A plugin lives in a folder of its own. The plugins
 shipped with the repository live in `plugins/`; a plugin of your own can be dropped in beside them, kept anywhere
@@ -140,10 +140,10 @@ subagents.
 A `[flavors.<key>]` block adds one column `<extended>_<key>` per shipped column it `extends`:
 
 ```toml
-[flavors.alloy_profile]
-name = "Alloy profile"                    # printed after the extended column's name on a figure
-full_name = "Alloy (profiled)"            # printed by a table
-optimizer = "alloy.hb_plugin.tuners:AlloyProfileOptimizer"
+[flavors.my_tuner]
+name = "My tuner"                         # printed after the extended column's name on a figure
+full_name = "My tuner (searched)"         # printed by a table
+optimizer = "my_package.tuners:MyTuner"
 extends = ["dace_cpu_canon", "dace_cpu_parallel", "dace_cpu_autoopt"]
 ```
 
@@ -165,20 +165,37 @@ The cluster launcher binds every plugin folder read-only into every role's conta
 tools and the judge the routes of the same plugins. `python -m hpcagent_bench.plugins roots` prints what a process
 finds.
 
-## Community plugins
+## Installing a plugin's package
 
-The benchmark depends on DaCe and nothing else of these; each plugin lives in its own repository and registers
-through the `hpcagent_bench.plugins` entry point (or a folder in `HPCAGENT_BENCH_USER_PLUGIN_DIRS`). A plugin pins
-the benchmark's DaCe commit, which the benchmark owns.
+A plugin whose routes or optimizers import a package of its own says how
+that package is installed into the interpreter the judge and the optimizers run in:
 
-| Plugin | Adds |
-|---|---|
-| [Alloy](https://github.com/ThrudPrimrose/alloy) | optimizer flavors over the DaCe columns (`<column>_alloy_profile`); DaCe's build plugin through `pip install "dace[alloy]"` |
-| [NestForge](https://github.com/spcl/NestForge) | the `nestforge` packet: an agent applies legal loop-nest moves, the rest runs on defaults |
+```toml
+[install]
+root = "../.."                                                    # the repository, relative to the plugin folder
+command = ["uv", "pip", "install", "--python", "{python}", "--no-deps", "{root}"]
+```
 
-## Example: NestForge
+`python -m hpcagent_bench.plugins install [--python PATH]` runs every plugin's command in a writable copy of its
+`root` (`{root}`; the cluster binds plugins read-only and a build writes into its tree), `{python}` being that
+interpreter (default: the running one). `--no-deps`: the benchmark's environment already holds what a plugin needs at
+the pins the benchmark owns, and a plugin's own pin of `hpcagent_bench` must not replace the judge's.
 
-[NestForge](https://github.com/spcl/NestForge) ships as a plugin in its own repository (`plugin/nestforge`): one
-agent-side module registers a tool per optimization phase, each a thin `POST /nestforge/<tool>`, and one judge route
-serves each episode's kernel from a session process of its own, answering with whole-program, offloading and
-per-kernel performance. Its packet lists only the tools the session serves; a later phase's tool answers 501.
+On the cluster the launcher binds a plugin's `root` (not only its folder), and the judge image's entrypoint
+(`containers/images/lib/launch_venv.sh`) runs the install into the launch venv right after its `uv sync`; the plugins'
+sources are part of that venv's cache key, so a changed plugin gets a fresh venv.
+
+## Checked in CI
+
+A plugin's `[ci]` block names what the benchmark's `user-plugins` CI job runs for it: each optimizer (an
+`hpcagent-bench agent` name, typically a stub agent the plugin ships as a flavor that drives its packet's tools with a
+seeded choice) runs one tuner episode per kernel against a judge, and the judge must grade the submission correct
+(`tests/test_user_plugin_episodes.py`, `-m user_plugins`). The job installs the plugins `.github/user-plugins.toml`
+pins (repository, commit, plugin folder) and nothing else of them enters the benchmark.
+
+```toml
+[ci]
+optimizers = ["dace_cpu_canon_my_stub"]
+kernels = ["jacobi_1d"]
+language = "cpp"
+```

@@ -398,6 +398,9 @@ class PipelineContext:
     nonnegative: frozenset[str] = frozenset()
     #: The size symbols ``canonicalize`` may treat as positive (:func:`cpf_canonical.positive_symbols`).
     positive: frozenset[str] = frozenset()
+    #: Run on the offloaded program before ``finalize_for_target`` tiles its device maps by their blocks: a tuner
+    #: sets each map's ``gpu_block_size`` here. GPU pipelines only.
+    offloaded: Callable[[dace.SDFG], None] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -469,6 +472,8 @@ def pipeline_canonicalize(sdfg: dace.SDFG, ctx: PipelineContext) -> None:
     canonicalize(sdfg, target=target, validate_all=False, nonnegative_symbols=sorted(ctx.nonnegative))
     if target == "gpu":
         offload_to_gpu(sdfg)
+        if ctx.offloaded is not None:
+            ctx.offloaded(sdfg)
     finalize_for_target(sdfg, target=target)
 
 
