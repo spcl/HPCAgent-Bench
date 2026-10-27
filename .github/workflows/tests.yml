@@ -174,13 +174,15 @@ jobs:
 
       # The papi group (test_papi_counters.py) needs libpapi; a hosted runner may still expose no
       # PMU, so the tests can skip for that reason alone.
+      # A hung apt mirror once held this step until the job's 45 min ran out: bounded, with per-request timeouts.
       - name: Setup -- PAPI
         if: ${{ !cancelled() }}
+        timeout-minutes: 8
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends libpapi-dev
+          apt=(-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30)
+          sudo apt-get "${apt[@]}" update -qq
+          sudo apt-get "${apt[@]}" install -y --no-install-recommends libpapi-dev
           sudo sysctl -w kernel.perf_event_paranoid=1 >/dev/null 2>&1 || true
-          echo "HPCAGENT_BENCH_CI_PAPI_INSTALLED=1" >> "$GITHUB_ENV"
 
       - name: Phase 1 -- unit sweep (every test file no other phase claims)
         if: ${{ !cancelled() }}
