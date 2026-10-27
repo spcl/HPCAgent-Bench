@@ -6,9 +6,11 @@ concurrency from."""
 
 import functools
 import os
+import pathlib
 from dataclasses import dataclass
 
 from hpcagent_bench import config, osinfo
+from hpcagent_bench.harness import timing
 
 __all__ = [
     "DeviceSlot",
@@ -17,7 +19,55 @@ __all__ = [
     "judge_gpu_slots",
     "judge_slots",
     "local_gpu_count",
+    "node_numa_domains",
+    "numa_domains",
+    "slot_cores",
+    "slot_shares",
 ]
+
+#: Where Linux lists each NUMA node's CPUs (``node<N>/cpulist``).
+NUMA_NODE_ROOT = pathlib.Path("/sys/devices/system/node")
+
+
+def numa_domains(cpus: set[int]) -> list[list[int]]:
+    """``cpus`` grouped by NUMA node, in node order, each sorted; one group when the topology is unreadable or does
+    not cover ``cpus``."""
+    groups: list[list[int]] = []
+    nodes = sorted(NUMA_NODE_ROOT.glob("node[0-9]*"), key=lambda node: int(node.name.removeprefix("node")))
+    for node in nodes:
+        try:
+            listed = timing.parse_cpu_list((node / "cpulist").read_text())
+        except OSError:
+            continue
+        if mine := listed & cpus:
+            groups.append(sorted(mine))
+    if sum(len(group) for group in groups) != len(cpus):
+        return [sorted(cpus)] if cpus else []
+    return groups
+
+
+def node_numa_domains() -> int:
+    """The NUMA domains this process's affinity spans; 1 when it cannot be read."""
+    try:
+        return max(1, len(numa_domains(os.sched_getaffinity(0))))
+    except (AttributeError, OSError):
+        return 1
+
+
+def slot_shares(nslots: int, domains: int) -> int:
+    """The equal core shares ``nslots`` NUMA-aligned slots split ``domains`` domains into: every domain holds
+    ``ceil(nslots / domains)`` slots, so no slot spans two domains (a domain past the last slot idles)."""
+    return -(-nslots // max(1, domains)) * max(1, domains)
+
+
+def slot_cores(domains: list[list[int]], nslots: int, slot: int) -> list[int]:
+    """The cores of slot ``slot`` of ``nslots``: its share of ONE NUMA domain (:func:`slot_shares`)."""
+    per = -(-nslots // len(domains))
+    domain = domains[slot // per]
+    share = len(domain) // per
+    if share == 0:
+        return domain
+    return domain[(slot % per) * share : (slot % per + 1) * share]
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,11 +120,11 @@ class JudgeConfig:
 
     @classmethod
     def from_config(cls) -> "JudgeConfig":
-        """GPU slots from :func:`judge_gpu_slots`; CPU slots ``judge.cpu_slots_per_node``, null = 1 without a
-        GPU slot, else 0."""
+        """GPU slots from :func:`judge_gpu_slots`; CPU slots ``judge.cpu_slots_per_node``, null = one per NUMA
+        domain without a GPU slot (a kernel never spans two sockets), else 0."""
         gpus = judge_gpu_slots()
         configured_slots = config.current().judge.cpu_slots_per_node
-        cpu_slots = configured_slots if configured_slots is not None else (0 if gpus else 1)
+        cpu_slots = configured_slots if configured_slots is not None else (0 if gpus else node_numa_domains())
         return cls(gpus_per_node=gpus, cpu_slots_per_node=cpu_slots)
 
 
