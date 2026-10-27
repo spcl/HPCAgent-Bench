@@ -13,10 +13,13 @@ import re
 import sys
 from collections.abc import Iterable, Mapping
 from types import MappingProxyType
+from typing import NamedTuple
 
+from hpcagent_agent import plugins as agent_plugins
+from hpcagent_agent import prompt_sections as agent_sections
 from hpcagent_agent.plugins import METHOD_ENV, PACKET_AGENTS_ENV
 
-from hpcagent_bench import external_skills, plugins
+from hpcagent_bench import external_skills, paths, plugins
 from hpcagent_bench import study_tags as tags
 from hpcagent_bench.config import RequestCapability
 from hpcagent_bench.skill_frontmatter import Applies, SkillFrontmatter, split_frontmatter
@@ -24,6 +27,7 @@ from hpcagent_bench.vocabulary import PacketDevice
 
 __all__ = [
     "main",
+    "AGENT_PROMPT",
     "print_packet_list",
     "CPF_ENV_KEYS",
     "CPF_REQUEST_CAPABILITY",
@@ -38,7 +42,9 @@ __all__ = [
     "SKILL_TREATMENTS",
     "Applies",
     "Packet",
+    "PromptOverrides",
     "SkillFrontmatter",
+    "agent_prompt_env",
     "applies_to",
     "by_device",
     "canonical",
@@ -49,6 +55,7 @@ __all__ = [
     "expand_token",
     "fill_placeholder",
     "has_part",
+    "is_agent_key",
     "hue_order",
     "label",
     "lead",
@@ -56,6 +63,8 @@ __all__ = [
     "libraries_enabled",
     "page_applies",
     "page_file",
+    "plugin_reference",
+    "prompt_overrides",
     "reached_keys",
     "refuse_frozen",
     "request_allowance",
@@ -67,6 +76,8 @@ __all__ = [
 ]
 
 SKILLS_DIR = pathlib.Path(__file__).resolve().parent / "skills"
+#: The cluster prompt, whose ``@@section`` names a packet's ``agent_*`` keys address.
+AGENT_PROMPT = paths.ROOT / "agent" / "prompt.md"
 
 PLACEHOLDER_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
@@ -294,13 +305,26 @@ def reached_keys(token: str, definitions: Mapping[str, tags.PacketDef]) -> tuple
     return (token, *(key for sub in definition.packets for key in reached_keys(sub, definitions)))
 
 
-def prompt_overrides(spec: str) -> tuple[dict[str, str | bool], tuple[str, ...]]:
-    """The prompt sections and template roots of every packet ``spec`` reaches, in spec and composition order.
+class PromptOverrides(NamedTuple):
+    """What the packets of one spec change in its prompts (:class:`~hpcagent_bench.skill_frontmatter.PacketPrompt`)."""
+
+    #: Section key -> off (False) or its replacement.
+    sections: dict[str, str | bool]
+    #: Section key -> the templates added after it, in spec order.
+    appends: dict[str, tuple[str, ...]]
+    #: Template roots, in spec order.
+    roots: tuple[str, ...]
+
+
+def prompt_overrides(spec: str) -> PromptOverrides:
+    """The prompt sections, appended templates and template roots of every packet ``spec`` reaches, in spec and
+    composition order.
 
     :raises ValueError: two packets set one section to different values.
     """
     definitions = tags.registry().packet_defs
     sections: dict[str, str | bool] = {}
+    appends: dict[str, tuple[str, ...]] = {}
     roots: dict[str, None] = {}
     for token in spec_parts(spec):
         for key in reached_keys(token, definitions):
@@ -310,8 +334,54 @@ def prompt_overrides(spec: str) -> tuple[dict[str, str | bool], tuple[str, ...]]
                     raise ValueError(
                         f"packet {key!r} sets prompt section {name}={value!r} but it is already {sections[name]!r}"
                     )
+            for name, template in definition.prompt_appends:
+                appends[name] = (*appends.get(name, ()), template)
             roots.update(dict.fromkeys(definition.template_dirs))
-    return sections, tuple(roots)
+    return PromptOverrides(sections, appends, tuple(roots))
+
+
+def plugin_reference(template: str, roots: Iterable[str]) -> str:
+    """``template``, found on ``roots``, as the ``<plugin>:<path>`` the agent resolves in its own plugin folders."""
+    found = agent_plugins.find(plugins.roots())
+    for root in roots:
+        path = (pathlib.Path(root) / template).resolve()
+        if not path.is_file():
+            continue
+        for plugin in found:
+            if path.is_relative_to(plugin.root):
+                return f"{plugin.name}:{path.relative_to(plugin.root).as_posix()}"
+        raise ValueError(f"cluster prompt text {path} is in no plugin folder")
+    raise ValueError(f"cluster prompt text {template!r} is on no template root {list(roots)}")
+
+
+def agent_prompt_env(spec: str) -> dict[str, str]:
+    """The cluster prompt's overrides of ``spec`` (its ``agent_*`` keys) as the env the agent driver reads
+    (:mod:`hpcagent_agent.prompt_sections`); a key the repository's ``agent/prompt.md`` lacks is refused."""
+    overrides = prompt_overrides(spec)
+    sections = {key: value for key, value in overrides.sections.items() if is_agent_key(key)}
+    appends = {key: value for key, value in overrides.appends.items() if is_agent_key(key)}
+    known = set(agent_sections.names(AGENT_PROMPT.read_text(encoding="utf-8")))
+    unknown = sorted({*sections, *appends} - known)
+    if unknown:
+        raise ValueError(f"packet {spec!r}: the cluster prompt has no sections {unknown}; known: {sorted(known)}")
+    env: dict[str, str] = {}
+    if sections:
+        env[agent_sections.SECTIONS_ENV] = agent_sections.encode(
+            (key, agent_sections.OFF if value is False else plugin_reference(str(value), overrides.roots))
+            for key, value in sorted(sections.items())
+        )
+    if appends:
+        env[agent_sections.APPEND_ENV] = agent_sections.encode(
+            (key, plugin_reference(template, overrides.roots))
+            for key, templates in sorted(appends.items())
+            for template in templates
+        )
+    return env
+
+
+def is_agent_key(key: str) -> bool:
+    """``key`` names a section of the cluster prompt, not of the in-process one."""
+    return key.startswith(agent_sections.KEY_PREFIX)
 
 
 def refuse_frozen(spec: str) -> None:
@@ -517,6 +587,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         refuse_frozen(args.packet)
         resolved = resolve(args.packet, args.language)
+        prompt_env = agent_prompt_env(args.packet)
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -527,6 +598,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{PACKET_TOOLS_ENV}={','.join(resolved.tools)}")
     if resolved.agents:
         print(f"{PACKET_AGENTS_ENV}={','.join(resolved.agents)}")
+    for key, value in prompt_env.items():
+        print(f"{key}={value}")
     if args.requests_allow is not None:
         allow = request_allowance(args.packet, args.language, args.requests_allow)
         if allow != args.requests_allow:

@@ -98,6 +98,7 @@ __all__ = [
     "RecordingLoader",
     "RunPrompt",
     "ScoreSampling",
+    "AppendOverrides",
     "SectionOverrides",
     "SizeChoice",
     "SizeRange",
@@ -148,9 +149,10 @@ PRECISION_CTYPES = tuple({"precision": p.value, "ctype": c_type(np.dtype(numpy_d
 
 #: What ``prompt.sections`` holds: section key -> ``off`` (False) or the template that replaces it.
 SectionOverrides = dict[str, str | bool]
+AppendOverrides = dict[str, str]
 
 #: One value a ``prompt.*`` knob can hold: the union of every :class:`PromptConfig` field type.
-PromptField = str | bool | tuple[str, ...] | SectionOverrides | PromptStrategy | None
+PromptField = str | bool | tuple[str, ...] | SectionOverrides | AppendOverrides | PromptStrategy | None
 
 #: One prompt variant: :class:`PromptConfig` field name -> override value.
 VariantFields = dict[str, str | bool | SectionOverrides | PromptStrategy]
@@ -315,6 +317,8 @@ class PromptConfig:
     native: bool = False  # the agent runs on the host, no /app container
     # Sections replaced or turned off, as sorted (key, value) pairs.
     sections: tuple[tuple[str, str | bool], ...] = ()
+    # Templates added after a section (the packet's, then ``prompt.append``'s), as sorted (key, templates) pairs.
+    append: tuple[tuple[str, tuple[str, ...]], ...] = ()
     # No rtol/atol knob: build_context states the band the scorer grades with.
 
     @classmethod
@@ -331,11 +335,12 @@ class PromptConfig:
         if unknown:
             raise TypeError(f"unknown prompt config field(s): {', '.join(sorted(unknown))}")
         configured = config.current().prompt
-        packet_sections, packet_dirs = packets.prompt_overrides(config.current().record.packet)
+        packet = packets.prompt_overrides(config.current().record.packet)
+        packet_sections = {key: value for key, value in packet.sections.items() if not packets.is_agent_key(key)}
         return cls(
             template=pick_str(given, "template", configured.template),
             template_dir=pick_path(given, "template_dir", configured.template_dir),
-            template_dirs=(*pick_dirs(given, "template_dirs", configured.template_dirs), *packet_dirs),
+            template_dirs=(*pick_dirs(given, "template_dirs", configured.template_dirs), *packet.roots),
             generator=pick_path(given, "generator", configured.generator),
             debug=pick_bool(given, "debug", configured.debug),
             inline_kernel=pick_bool(given, "inline_kernel", configured.inline_kernel),
@@ -350,11 +355,18 @@ class PromptConfig:
             sections=prompt_sections.pick_sections(
                 cast("SectionOverrides | None", given.get("sections")), packet_sections
             ),
+            append=prompt_sections.pick_append(
+                cast("AppendOverrides | None", given.get("append")), configured.append, packet.appends
+            ),
         )
 
     def aliases(self) -> dict[str, str | None]:
         """Template name -> its replacement file or template, or None when the section is off."""
         return prompt_sections.aliases(self.sections)
+
+    def appended(self) -> dict[str, tuple[str, ...]]:
+        """Template name -> the templates rendered after it."""
+        return prompt_sections.appended(self.append)
 
     def search_dirs(self) -> list[str]:
         """User template roots in search order; the built-in ``prompts/`` dir is the loader's final fallback."""
@@ -467,24 +479,29 @@ class RecordingLoader(jinja2.ChoiceLoader):
     """A ChoiceLoader that records which file each template resolved to and, with ``annotate``, prefixes each
     source with :data:`SOURCE_MARKER`.
 
-    ``aliases`` maps a template name to its stand-in (None renders nothing, a string is a template name or path);
-    every include goes through :meth:`get_source`, so a section is replaced wherever it is included."""
+    ``aliases`` maps a template name to its stand-in (None renders nothing, a string is a template name or path) and
+    ``appended`` to the templates added after it; every include goes through :meth:`get_source`, so a section is
+    replaced or extended wherever it is included."""
 
     def __init__(
         self,
         loaders: Sequence[jinja2.BaseLoader],
         annotate: bool = False,
         aliases: Mapping[str, str | None] | None = None,
+        appended: Mapping[str, tuple[str, ...]] | None = None,
     ) -> None:
         super().__init__(list(loaders))
         self.resolved: dict[str, str] = {}
         self.annotate = annotate
         self.aliases: Mapping[str, str | None] = aliases or {}
+        self.appended: Mapping[str, tuple[str, ...]] = appended or {}
 
     def get_source(
         self, environment: jinja2.Environment, template: str
     ) -> tuple[str, str | None, Callable[[], bool] | None]:
         source, filename, uptodate = self.aliased_source(environment, template)
+        for extra in self.appended.get(template, ()):
+            source += self.target_source(environment, extra)[0]
         if filename is not None:
             self.resolved[template] = filename
             if self.annotate:
@@ -500,6 +517,12 @@ class RecordingLoader(jinja2.ChoiceLoader):
         target = self.aliases[template]
         if target is None:
             return "", None, None
+        return self.target_source(environment, target)
+
+    def target_source(
+        self, environment: jinja2.Environment, target: str
+    ) -> tuple[str, str | None, Callable[[], bool] | None]:
+        """The source of ``target``: a file path, else a template name on the search path."""
         path = pathlib.Path(target)
         if path.is_file():
             return path.read_text(encoding="utf-8"), str(path), None
@@ -524,7 +547,9 @@ def prompt_env(prompt_config: "PromptConfig | None" = None) -> jinja2.Environmen
     loaders.append(jinja2.FileSystemLoader(str(paths.PROMPTS_DIR)))
     loaders.append(jinja2.FileSystemLoader(str(paths.PACKAGE)))
     loaders += [jinja2.FileSystemLoader(str(root)) for root in plugins.roots()]
-    loader = RecordingLoader(loaders, annotate=prompt_config.debug, aliases=prompt_config.aliases())
+    loader = RecordingLoader(
+        loaders, annotate=prompt_config.debug, aliases=prompt_config.aliases(), appended=prompt_config.appended()
+    )
     env = jinja2.Environment(
         loader=loader,
         autoescape=False,  # noqa: S701 -- the prompt is plain text, not HTML

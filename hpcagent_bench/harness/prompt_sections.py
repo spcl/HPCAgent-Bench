@@ -18,9 +18,11 @@ __all__ = [
     "TOP_LEVEL",
     "SectionValue",
     "aliases",
+    "appended",
     "env_name",
     "key_of",
     "parse_value",
+    "pick_append",
     "pick_sections",
     "section_templates",
 ]
@@ -35,6 +37,8 @@ OFF_WORDS = frozenset({"off", "false", "no", "none", "disabled", "0"})
 ON_WORDS = frozenset({"on", "true", "yes", "default", "1", ""})
 
 ENV_PREFIX = "HPCAGENT_BENCH_PROMPT_SECTIONS_"
+#: A packet key with this prefix names a section of the cluster prompt (``hpcagent_agent.prompt_sections``).
+AGENT_KEY_PREFIX = "agent_"
 
 #: ``False`` turns the section off, a string replaces it with that template (a name or a file path).
 SectionValue = str | bool
@@ -103,3 +107,25 @@ def aliases(sections: tuple[tuple[str, SectionValue], ...]) -> dict[str, str | N
     """Template name -> its replacement (a template name or a file path), or None where it is off."""
     templates = section_templates()
     return {templates[key]: None if value is False else str(value) for key, value in sections}
+
+
+def appended(appends: tuple[tuple[str, tuple[str, ...]], ...]) -> dict[str, tuple[str, ...]]:
+    """Template name -> the templates added after it; an unknown key is an error listing the known ones."""
+    templates = section_templates()
+    unknown = sorted(key for key in dict(appends) if key not in templates)
+    if unknown:
+        raise ValueError(f"unknown prompt section(s) {unknown} to append to; known: {', '.join(sorted(templates))}")
+    return {templates[key]: targets for key, targets in appends}
+
+
+def pick_append(
+    given: Mapping[str, str] | None, configured: Mapping[str, str], packet: Mapping[str, tuple[str, ...]]
+) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    """The templates added after each in-process section, sorted by key: the ``packet``'s (its ``agent_*`` keys are
+    the cluster prompt's), then ``given``, else ``prompt.append``."""
+    chosen: dict[str, tuple[str, ...]] = {
+        key: templates for key, templates in packet.items() if not key.startswith(AGENT_KEY_PREFIX)
+    }
+    for key, template in (configured if given is None else given).items():
+        chosen[key] = (*chosen.get(key, ()), template)
+    return tuple(sorted(chosen.items()))

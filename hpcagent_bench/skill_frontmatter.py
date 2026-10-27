@@ -31,12 +31,15 @@ class Applies(pydantic.BaseModel):
 
 class PacketPrompt(pydantic.BaseModel):
     """A packet's ``prompt`` block: what its setups' prompts change. ``sections`` turns sections off or replaces them
-    (``docs/prompts.md``); ``template_dirs`` are template roots searched after the user's own, before the built-in
-    ``prompts/`` (a plugin manifest's relative to the plugin folder). The user's ``prompt.*`` keys still win."""
+    (``docs/prompts.md``) and ``append`` adds a template after one; ``template_dirs`` are template roots searched after
+    the user's own, before the built-in ``prompts/`` (a plugin manifest's relative to the plugin folder). An
+    ``agent_<name>`` key names a section of the cluster prompt (``agent/prompt.md``), whose texts come from a plugin.
+    The user's ``prompt.*`` keys still win."""
 
     model_config = pydantic.ConfigDict(extra="forbid", frozen=True)
 
     sections: dict[str, str | bool] = pydantic.Field(default_factory=dict)
+    append: dict[str, str] = pydantic.Field(default_factory=dict)
     template_dirs: tuple[str, ...] = ()
 
 
