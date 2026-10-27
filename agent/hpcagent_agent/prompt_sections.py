@@ -3,7 +3,7 @@
 """The cluster prompt's sections: ``agent/prompt.md`` is a run of ``@@section <name>@@`` blocks, each keyed
 ``agent_<name>``. A packet turns one off, replaces it, or adds text after it (``prompt.sections`` and
 ``prompt.append`` in its block); the launcher exports those choices as :data:`SECTIONS_ENV` and :data:`APPEND_ENV`,
-``;``-joined ``key=value`` pairs whose value is ``off`` or ``<plugin>:<file under the plugin folder>``."""
+``,``-joined ``key=value`` pairs (a setup ``.env`` is sourced unquoted) whose value is ``off`` or ``<plugin>:<file under the plugin folder>``."""
 
 import os
 from collections.abc import Iterable, Mapping
@@ -29,7 +29,7 @@ def names(template: str) -> tuple[str, ...]:
 def parse(raw: str) -> tuple[tuple[str, str], ...]:
     """The ``key=value`` pairs of one exported variable, in order."""
     pairs: list[tuple[str, str]] = []
-    for item in raw.split(";"):
+    for item in raw.split(","):
         if not item.strip():
             continue
         key, sep, value = item.partition("=")
@@ -41,7 +41,7 @@ def parse(raw: str) -> tuple[tuple[str, str], ...]:
 
 def encode(pairs: Iterable[tuple[str, str]]) -> str:
     """``pairs`` as one exported variable (:func:`parse` reads it back)."""
-    return ";".join(f"{key}={value}" for key, value in pairs)
+    return ",".join(f"{key}={value}" for key, value in pairs)
 
 
 def compose(template: str, replaced: Mapping[str, str | None], appended: Mapping[str, tuple[str, ...]]) -> str:
