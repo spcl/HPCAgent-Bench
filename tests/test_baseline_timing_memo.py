@@ -102,9 +102,13 @@ def test_another_thread_count_measures_again(monkeypatch: pytest.MonkeyPatch) ->
     assert timed == ["c", "numba"]
 
 
-def test_a_race_in_the_results_db_serves_a_fresh_process(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_race_in_the_results_db_serves_a_fresh_process(
+    monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
+) -> None:
     """Another judge process starts with an empty memo; the race its results DB holds answers it."""
     monkeypatch.setenv(disk_cache.COMMIT_ENV, "abc1234")
+    # An empty store: a race an earlier test stored there would answer first, and the results DB would stay empty.
+    monkeypatch.setenv("HPCAGENT_BENCH_CACHE_DISK_RESULTS_DIR", str(tmp_path_factory.mktemp("store")))
     grade(monkeypatch)
     with contextlib.closing(results_db.connect_ro(recording.db_path())) as conn:
         assert conn.execute("SELECT count(*) FROM baseline_timings").fetchone()[0] == 1

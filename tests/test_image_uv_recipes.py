@@ -160,7 +160,11 @@ def test_the_amd_image_builds_cupy_from_its_group_after_the_numpy_rebuild() -> N
 
 def test_the_launch_hook_builds_one_locked_venv_per_pin_beside_the_image_python() -> None:
     hook = (LIB / "launch_venv.sh").read_text(encoding="utf-8")
-    assert 'cat "${workspace}/uv.lock" "${launch}/sync.args" "${launch}/image.id" | sha256sum' in hook
+    # The key: the lock, the image's sync arguments and id, and the plugins' install sources.
+    assert (
+        'cat "${workspace}/uv.lock" "${launch}/sync.args" "${launch}/image.id"; printf \'%s\' "${sources}"; } | sha256sum'
+        in hook
+    )
     assert "flock 9" in hook
     assert 'touch "${home}/ready"' in hook
     assert "zz-image-site.pth" in hook, "the image's source builds stay visible after the venv's own packages"
