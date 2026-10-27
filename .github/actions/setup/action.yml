@@ -161,14 +161,15 @@ runs:
         for attempt in 1 2 3; do
           sudo apt-get update
           sudo apt-get install -y -o Acquire::Retries=5 "clang-${LLVM_MAJOR}" "flang-${LLVM_MAJOR}" \
-            "libomp-${LLVM_MAJOR}-dev" && break
+            "libomp-${LLVM_MAJOR}-dev" "llvm-${LLVM_MAJOR}" && break
           if [ "$attempt" = 3 ]; then
             echo "::error::installing LLVM ${LLVM_MAJOR} from apt.llvm.org failed 3 times"
             exit 1
           fi
           sleep $((attempt * 30))
         done
-        for driver in clang clang++ flang; do
+        # llvm-objdump: the alloy plugin's tools (alloy_speculative) call it.
+        for driver in clang clang++ flang llvm-objdump; do
           sudo ln -sf "/usr/bin/${driver}-${LLVM_MAJOR}" "/usr/local/bin/${driver}"
         done
         clang --version | head -1
