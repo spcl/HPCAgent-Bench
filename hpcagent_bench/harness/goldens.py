@@ -103,8 +103,6 @@ SUFFIX = ".golden"
 BLOCK = 4096
 #: One thread's transfer unit.
 IO_CHUNK = 64 << 20
-#: ``O_DIRECT``, 0 where the platform has none.
-O_DIRECT = vars(os).get("O_DIRECT", 0)
 #: The store directory's Lustre layout: a file's first 64 MiB on one OST (small files stay cheap), the rest striped
 #: over every OST in 4 MiB stripes (a large golden is read from all of them at once).
 STRIPE_LAYOUT = ("-E", "64M", "-c", "1", "-S", "4M", "-E", "-1", "-c", "-1", "-S", "4M")
@@ -267,7 +265,7 @@ def io_threads(nbytes: int) -> int:
 
 
 #: Anonymous, pre-faulted memory: a direct read into untouched pages faults them one by one (measured 1.5 vs 4 GiB/s).
-BUFFER_FLAGS = mmap.MAP_PRIVATE | mmap.MAP_ANONYMOUS | vars(mmap).get("MAP_POPULATE", 0)
+BUFFER_FLAGS = mmap.MAP_PRIVATE | mmap.MAP_ANONYMOUS | mmap.MAP_POPULATE
 
 
 def aligned(nbytes: int) -> np.ndarray:
@@ -277,12 +275,11 @@ def aligned(nbytes: int) -> np.ndarray:
 
 def open_direct(path: str, flags: int) -> int:
     """``path`` opened with ``O_DIRECT``, or buffered where the filesystem refuses it (tmpfs)."""
-    if O_DIRECT:
-        try:
-            return os.open(path, flags | O_DIRECT, 0o600)
-        except OSError as exc:
-            if exc.errno != errno.EINVAL:
-                raise
+    try:
+        return os.open(path, flags | os.O_DIRECT, 0o600)
+    except OSError as exc:
+        if exc.errno != errno.EINVAL:
+            raise
     return os.open(path, flags, 0o600)
 
 
@@ -427,8 +424,7 @@ def read(pair: Pair, marker: str, prefixes: tuple[str, ...]) -> dict[str, np.nda
     lacks ``marker``."""
     try:
         with pair.path.open("rb") as fh:
-            with contextlib.suppress(OSError):  # a filesystem without locks is read unlocked
-                fcntl.flock(fh, fcntl.LOCK_SH)
+            fcntl.flock(fh, fcntl.LOCK_SH)
             found = members(fh.fileno())
             if found is None or marker not in found or validity_of(fh.fileno(), found) != pair.validity:
                 return None
@@ -453,8 +449,7 @@ def held(pair: Pair) -> frozenset[str]:
     """The members ``pair``'s file holds, read off its headers alone; empty when absent, unreadable or stale."""
     try:
         with pair.path.open("rb") as fh:
-            with contextlib.suppress(OSError):  # a filesystem without locks is read unlocked
-                fcntl.flock(fh, fcntl.LOCK_SH)
+            fcntl.flock(fh, fcntl.LOCK_SH)
             return held_members(fh, pair) or frozenset()
     except (OSError, ValueError):
         return frozenset()
@@ -530,8 +525,6 @@ def add_to(pair: Pair, stored: Mapping[str, np.ndarray]) -> bool:
             os.link(tmp, pair.path)  # atomic and never over another writer's new file
         except FileExistsError:
             return False
-        except OSError:  # a filesystem without hard links: replaced, a racing creator's entry is lost
-            os.replace(tmp, pair.path)
         finally:
             tmp.unlink(missing_ok=True)
         return True
@@ -551,7 +544,7 @@ def add_to(pair: Pair, stored: Mapping[str, np.ndarray]) -> bool:
 
 def write(pair: Pair, arrays: Mapping[str, npt.ArrayLike]) -> None:
     """Add ``arrays`` to ``pair``'s file, its last member the entry's marker; a store that cannot be written (an
-    object array, a filesystem error, no lock support) is skipped."""
+    object array, a filesystem error) is skipped."""
     with contextlib.suppress(OSError, ValueError):
         stored = as_stored(arrays)
         for _attempt in range(WRITE_ATTEMPTS):
