@@ -33,6 +33,7 @@ __all__ = [
     "Plugin",
     "digest",
     "find",
+    "plugin_file",
     "import_package",
     "import_tools",
     "plugin_dirs",
@@ -161,6 +162,20 @@ def find(dirs: Iterable[pathlib.Path]) -> tuple[Plugin, ...]:
             raise ValueError(f"plugin {plugin.name!r} is both {found[plugin.name].root} and {plugin.root}")
         found[plugin.name] = plugin
     return tuple(found.values())
+
+
+def plugin_file(reference: str, environ: Mapping[str, str] = os.environ) -> pathlib.Path:
+    """The file ``<plugin>:<path under the plugin folder>`` names, among the plugins this process sees."""
+    name, sep, relative = reference.partition(":")
+    if not sep:
+        raise ValueError(f"{reference!r} is not <plugin>:<path>")
+    for plugin in find(plugin_dirs(environ)):
+        if plugin.name == name:
+            path = plugin.root / relative
+            if not path.is_file():
+                raise ValueError(f"plugin {name!r} ships no {relative}")
+            return path
+    raise ValueError(f"{reference!r}: no plugin {name!r}")
 
 
 def import_package(plugin: Plugin) -> ModuleType:
