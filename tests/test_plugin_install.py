@@ -69,3 +69,48 @@ def test_an_install_block_without_a_command_is_refused_by_its_file(tmp_path: pat
 
     with pytest.raises(ValueError, match="plugin.toml"):
         agent_plugins.find([folder])
+
+
+def test_a_subpackage_named_build_is_installed_but_a_top_level_build_folder_is_not(tmp_path: pathlib.Path) -> None:
+    folder = plugin_folder(tmp_path, "probe", "")
+    (tmp_path / "pkg" / "build").mkdir(parents=True)
+    (tmp_path / "pkg" / "build" / "arena.py").write_text("")
+    (tmp_path / "build").mkdir()
+    (tmp_path / "build" / "stale.o").write_text("")
+    listing = tmp_path / "listing.txt"
+    record = "import pathlib, sys; pathlib.Path(sys.argv[2]).write_text(' '.join(sorted(str(p.relative_to(sys.argv[1])) for p in pathlib.Path(sys.argv[1]).rglob('*'))))"
+    folder.joinpath("plugin.toml").write_text(
+        f'name = "probe"\n[install]\nroot = "../.."\ncommand = ["{{python}}", "-c", "{record}", "{{root}}", "{listing}"]\n'
+    )
+
+    plugins.install(agent_plugins.find([folder]))
+
+    copied = listing.read_text().split()
+    assert "pkg/build/arena.py" in copied and "build/stale.o" not in copied
+
+
+def visible_as(monkeypatch: pytest.MonkeyPatch, folder: pathlib.Path, installed: pathlib.Path) -> None:
+    """``folder`` through the user plugin variable, and ``installed`` as an installed package's entry point."""
+    monkeypatch.delenv(agent_plugins.PLUGIN_DIRS_ENV, raising=False)
+    monkeypatch.setenv(agent_plugins.USER_PLUGIN_DIRS_ENV, str(folder))
+    monkeypatch.setattr(plugins, "entry_point_dirs", lambda: (installed,))
+
+
+def test_a_plugin_that_installs_itself_is_found_once(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    install = '\n[install]\nroot = "../.."\ncommand = ["{python}", "-V"]\n'
+    folder = plugin_folder(tmp_path / "checkout", "selfie", install)
+    visible_as(monkeypatch, folder, plugin_folder(tmp_path / "site-packages", "selfie", install))
+
+    sut = agent_plugins.find(plugins.roots())
+
+    assert [(plugin.name, plugin.root) for plugin in sut if plugin.name == "selfie"] == [("selfie", folder)]
+
+
+def test_an_installed_plugin_of_a_folders_name_is_refused_when_the_folder_installs_nothing(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    folder = plugin_folder(tmp_path / "checkout", "twin", "")
+    visible_as(monkeypatch, folder, plugin_folder(tmp_path / "site-packages", "twin", ""))
+
+    with pytest.raises(ValueError, match="plugin 'twin' is both"):
+        agent_plugins.find(plugins.roots())

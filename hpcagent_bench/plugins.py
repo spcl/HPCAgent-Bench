@@ -18,7 +18,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 
 import pydantic
 
@@ -62,8 +62,12 @@ def entry_point_dirs() -> tuple[pathlib.Path, ...]:
 
 
 def roots(environ: Mapping[str, str] = os.environ) -> tuple[pathlib.Path, ...]:
-    """Every plugin directory: the folders, then the installed ones, each once."""
-    return tuple(dict.fromkeys((*agent_plugins.plugin_dirs(environ), *entry_point_dirs())))
+    """Every plugin directory: the folders, then the installed ones, each once. A folder plugin with an
+    ``[install]`` block installs itself, so the installed package of its name is that plugin again, not a second one."""
+    folders = agent_plugins.plugin_dirs(environ)
+    installing = {plugin.name for plugin in map(agent_plugins.read, folders) if plugin.manifest.install is not None}
+    installed = (root for root in entry_point_dirs() if agent_plugins.read(root).name not in installing)
+    return tuple(dict.fromkeys((*folders, *installed)))
 
 
 class FlavorBlock(pydantic.BaseModel):
@@ -171,8 +175,25 @@ def page_path(page: str) -> pathlib.Path | None:
     return None
 
 
-#: What a plugin's install root is copied without: version control, environments and caches.
-NOT_INSTALLED = shutil.ignore_patterns(".git", ".venv", "__pycache__", "*.egg-info", "build", "dist")
+#: What a plugin's install root is copied without, at any depth: version control, environments, caches.
+NOT_COPIED = frozenset({".git", ".venv", "__pycache__"})
+#: And at its top level only: a previous build's outputs (a package may well have a subpackage named ``build``).
+NOT_COPIED_AT_ROOT = frozenset({"build", "dist"})
+
+
+def copied_without(root: pathlib.Path) -> Callable[[str, list[str]], set[str]]:
+    """The ``shutil.copytree`` ignore callback copying ``root`` without :data:`NOT_COPIED` and, at its top level,
+    :data:`NOT_COPIED_AT_ROOT` and ``*.egg-info``."""
+
+    def ignore(folder: str, names: list[str]) -> set[str]:
+        top = pathlib.Path(folder) == root
+        return {
+            name
+            for name in names
+            if name in NOT_COPIED or (top and (name in NOT_COPIED_AT_ROOT or name.endswith(".egg-info")))
+        }
+
+    return ignore
 
 
 def install_root(plugin: Plugin) -> pathlib.Path | None:
@@ -196,7 +217,7 @@ def install(found: tuple[Plugin, ...], python: str = sys.executable) -> list[str
             continue
         with tempfile.TemporaryDirectory(prefix=f"plugin-{plugin.name}-") as stage:
             copy = pathlib.Path(stage) / root.name
-            shutil.copytree(root, copy, ignore=NOT_INSTALLED, symlinks=True)
+            shutil.copytree(root, copy, ignore=copied_without(root), symlinks=True)
             argv = [arg.replace("{python}", python).replace("{root}", str(copy)) for arg in block.command]
             done = subprocess.run(argv, cwd=copy, capture_output=True, text=True, check=False)
         if done.returncode:
@@ -214,14 +235,21 @@ def fingerprint(found: tuple[Plugin, ...]) -> str:
         if root is None:
             continue
         digest.update(f"{plugin.name}:{plugin.manifest.install}\n".encode())
-        for path in sorted(p for p in root.rglob("*") if p.is_file() and not set(p.relative_to(root).parts) & SKIPPED):
+        ignored = copied_without(root)
+        for path in sorted(p for p in root.rglob("*") if p.is_file() and not skipped(root, p, ignored)):
             stat = path.stat()
             digest.update(f"{path.relative_to(root)}:{stat.st_size}:{stat.st_mtime_ns}\n".encode())
     return digest.hexdigest()[:16]
 
 
-#: Parts of a path the fingerprint skips (what :data:`NOT_INSTALLED` leaves out).
-SKIPPED = frozenset({".git", ".venv", "__pycache__", "build", "dist"})
+def skipped(root: pathlib.Path, path: pathlib.Path, ignored: Callable[[str, list[str]], set[str]]) -> bool:
+    """Whether the install's copy of ``root`` leaves ``path`` out (any folder on its way ``ignored``)."""
+    parent = root
+    for part in path.relative_to(root).parts:
+        if ignored(str(parent), [part]):
+            return True
+        parent = parent / part
+    return False
 
 
 def main(argv: list[str]) -> int:
