@@ -235,7 +235,7 @@ def test_a_flag_beats_the_header_which_beats_our_variables_but_not_slurms(tmp_pa
 def test_a_partition_picks_the_system_of_the_cluster_that_serves_it(tmp_path: pathlib.Path) -> None:
     """Without --system, mi200 on Beverin is beverin-mi200's shape; an explicit --system keeps its own."""
     script = job_script(tmp_path)
-    mi200 = ["--partition=mi200", "--account=proj", "--ntasks-per-node=4", "--cpus-per-task=16", "--gpus-per-node=8"]
+    mi200 = ["--partition=mi200", "--account=proj", "--ntasks-per-node=1", "--cpus-per-task=64", "--gpus-per-node=8"]
     assert dry_run(tmp_path, "--partition", "mi200", script) == (
         "beverin-mi200",
         ["sbatch", *mi200, "--nice=100", script],
@@ -243,7 +243,7 @@ def test_a_partition_picks_the_system_of_the_cluster_that_serves_it(tmp_path: pa
     assert dry_run(tmp_path, script, SBATCH_PARTITION="mi200")[0] == "beverin-mi200"
     system, command = dry_run(tmp_path, "--system", "beverin", "--partition", "mi200", script)
     assert system == "beverin", command
-    assert {"--cpus-per-task=24", "--gpus-per-node=4"} <= set(command), command
+    assert {"--cpus-per-task=96", "--gpus-per-node=4"} <= set(command), command
 
 
 def test_an_image_job_runs_on_its_roles_partition_unless_a_flag_or_a_system_names_another(

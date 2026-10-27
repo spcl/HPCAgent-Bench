@@ -13,19 +13,19 @@ import pytest
 from hpcagent_bench import cli, config, modules, paths
 from hpcagent_bench.harness.prompts import PROMPT_VARIANTS, PromptConfig
 
-PROMPTS_DIR = pathlib.Path("hpcagent_bench/harness/prompts")
+PROMPTS_DIR = paths.ROOT / "hpcagent_bench/harness/prompts"
 #: Every contributor doc: the README, docs/, experiments/, containers/ and the package's own docs. Skill pages
 #: and kernel notes are agent prompt data, not docs.
 DOCS = sorted(
     {
-        pathlib.Path("README.md"),
-        pathlib.Path("CONTRIBUTING.md"),
-        pathlib.Path("hpcagent_bench/harness/README.md"),
-        *pathlib.Path("docs").rglob("*.md"),
-        *pathlib.Path("experiments").rglob("*.md"),
-        *pathlib.Path("containers").rglob("*.md"),
-        *pathlib.Path("hpcagent_bench/docs").glob("*.md"),
-        *pathlib.Path("statistics").glob("*.md"),
+        paths.ROOT / "README.md",
+        paths.ROOT / "CONTRIBUTING.md",
+        paths.ROOT / "hpcagent_bench/harness/README.md",
+        *(paths.ROOT / "docs").rglob("*.md"),
+        *(paths.ROOT / "experiments").rglob("*.md"),
+        *(paths.ROOT / "containers").rglob("*.md"),
+        *(paths.ROOT / "hpcagent_bench/docs").glob("*.md"),
+        *(paths.ROOT / "statistics").glob("*.md"),
     }
 )
 
@@ -142,7 +142,9 @@ def test_every_docs_page_has_an_inbound_link() -> None:
         for m in re.finditer(r"\]\(([^)#\s]+)(?:#[^)]*)?\)", text)
         if (path.parent / m.group(1)).resolve() != path.resolve()
     }
-    orphans = [str(p) for p in pathlib.Path("docs").rglob("*.md") if p.name != "index.md" and p.resolve() not in linked]
+    orphans = [
+        str(p) for p in (paths.ROOT / "docs").rglob("*.md") if p.name != "index.md" and p.resolve() not in linked
+    ]
     assert not orphans, f"docs pages no other doc links to: {orphans}"
 
 
@@ -151,7 +153,7 @@ def test_the_readme_has_a_students_section_naming_every_shipped_optimizer() -> N
     from hpcagent_bench.columns import FRAMEWORKS
     from hpcagent_bench.harness.optimizers import optimizer_registry
 
-    readme = pathlib.Path("README.md").read_text()
+    readme = (paths.ROOT / "README.md").read_text()
     section = readme.partition("\n## Getting started\n")[2].partition("\n## ")[0]
     assert section, "README.md has no '## Getting started' section"
     assert readme.index("## Getting started") < readme.index("## Concepts")
@@ -165,7 +167,7 @@ def test_the_readme_has_a_students_section_naming_every_shipped_optimizer() -> N
 def test_no_doc_raises_the_stack_to_unlimited() -> None:
     """`check_launch_env` wants the soft stack limit AT the hard one; `ulimit -s unlimited` fails for a non-root
     shell whose hard limit is finite, and aborts a `set -e` job script copied from the docs."""
-    sources = [*doc_text(), *((p, p.read_text()) for p in pathlib.Path("hpcagent_bench/cluster").glob("*.sh"))]
+    sources = [*doc_text(), *((p, p.read_text()) for p in (paths.ROOT / "hpcagent_bench/cluster").glob("*.sh"))]
     stale = [str(path) for path, text in sources if "ulimit -s unlimited" in text]
     assert not stale, f"`ulimit -s unlimited` instead of the hard limit in: {stale}"
 
@@ -174,7 +176,7 @@ def test_docs_never_pass_the_agent_name_as_an_option() -> None:
     """`agent` takes the optimizer as a positional; `--agent <name>` is no option of it."""
     with pytest.raises(SystemExit):
         cli.build_parser().parse_args(["agent", "--agent", "noop"])
-    python = [*pathlib.Path("hpcagent_bench").rglob("*.py"), *pathlib.Path("tests").glob("*.py")]
+    python = [*(paths.ROOT / "hpcagent_bench").rglob("*.py"), *(paths.ROOT / "tests").glob("*.py")]
     sources = [*doc_text(), *((p, p.read_text()) for p in python if p.resolve() != pathlib.Path(__file__).resolve())]
     stale = [str(path) for path, text in sources if "hpcagent-bench agent --agent" in text]
     assert not stale, f"`hpcagent-bench agent --agent` in: {stale}"
@@ -210,7 +212,7 @@ def test_docs_name_only_autogen_registries_that_exist() -> None:
 def test_no_doc_promises_a_skip_row_for_an_unsupported_precision() -> None:
     """`run-framework` never reads a column's `precisions`, so nothing writes a `skip` row for one (a `skip:<why>`
     status of another cause is not this claim)."""
-    sources = [*doc_text(), *((p, p.read_text()) for p in pathlib.Path("hpcagent_bench").glob("*.py"))]
+    sources = [*doc_text(), *((p, p.read_text()) for p in (paths.ROOT / "hpcagent_bench").glob("*.py"))]
     stale = [str(path) for path, text in sources if re.search(r"records `?skip`?(?![:\w])|status=\"skip\"", text)]
     assert not stale, f"a `skip` row for an unsupported precision is promised in: {stale}"
 

@@ -163,6 +163,33 @@ def test_the_numba_pool_follows_the_slot_team() -> None:
     )
 
 
+def sizing_after_a_launched_pool(team: int) -> tuple[int, int, int]:
+    """In a child that launched numba's pool: (its pool size, then a forked grandchild's started threads and
+    numba team after sizing to ``team``)."""
+    from numba.np.ufunc import parallel
+
+    from hpcagent_bench.frameworks.forked import run_forked
+
+    os.environ["NUMBA_NUM_THREADS"] = "4"  # read only if numba was not imported yet
+    parallel._launch_threads()
+    inner = run_forked(numba_threads_after_sizing, team, label="numba pool")
+    assert inner.ok and inner.result is not None, inner.error
+    return int(parallel.NUM_THREADS), *inner.result
+
+
+def test_a_pool_the_parent_launched_is_masked_to_the_slot_team() -> None:
+    """A pool launched before the fork cannot be resized; left alone, the child ran the parent's whole pool on its
+    slot's cores."""
+    from hpcagent_bench.frameworks.forked import run_forked
+
+    run = run_forked(sizing_after_a_launched_pool, 1, label="launched numba pool")
+    assert run.ok and run.result is not None, run.error
+    launched, started, team = run.result
+    if launched < 2:
+        pytest.skip("needs a pool wider than the slot team")
+    assert (started, team) == (0, 1), run.result
+
+
 def test_cpu_env_sizes_multi_core_from_ncores() -> None:
     """The consumer contract: MULTI_CORE pins OMP knobs to the physical core count; SINGLE_CORE pins to 1."""
     multi = flags.cpu_env(flags.Mode.MULTI_CORE)

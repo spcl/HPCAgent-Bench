@@ -426,12 +426,11 @@ def judge_urls() -> list[str]:
 
     Falls back to ``JUDGE_BASE_URL`` for a single-judge deployment."""
     nodes = [node.strip() for node in os.environ.get("JUDGE_NODELIST", "").split(",") if node.strip()]
-    per_node = max(1, int(os.environ.get("JUDGES_PER_NODE", "1")))
-    if not nodes or (len(nodes) == 1 and per_node == 1):
+    if len(nodes) <= 1:
         return [os.environ["JUDGE_BASE_URL"].rstrip("/")]
-    base = int(os.environ.get("JUDGE_PORT", str(http_json.DEFAULT_JUDGE_PORT)))
-    # Node-major, slot-minor (SLURM_PROCID order); slot s on a node owns port base + 2s.
-    return [f"http://{node}:{base + 2 * slot}" for node in nodes for slot in range(per_node)]
+    port = int(os.environ.get("JUDGE_PORT", str(http_json.DEFAULT_JUDGE_PORT)))
+    # One judge per node, in SLURM_PROCID (node) order.
+    return [f"http://{node}:{port}" for node in nodes]
 
 
 def vllm_urls() -> list[str]:
