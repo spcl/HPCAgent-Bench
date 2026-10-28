@@ -43,8 +43,8 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
 """
 
 
-def write_plugin(root: pathlib.Path, name: str, *, method: bool = True) -> pathlib.Path:
-    """A plugin folder with a tool, a skill page, a method and a packet carrying all three."""
+def write_plugin(root: pathlib.Path, name: str, *, workflow: bool = True) -> pathlib.Path:
+    """A plugin folder with a tool, a skill page, a workflow text and a packet carrying all three."""
     folder = root / name
     (folder / "tools").mkdir(parents=True)
     (folder / "tools" / "echo.py").write_text(TOOL, encoding="utf-8")
@@ -52,12 +52,12 @@ def write_plugin(root: pathlib.Path, name: str, *, method: bool = True) -> pathl
     (folder / "skills" / f"{name}-page" / "SKILL.md").write_text(
         f"---\nname: {name}-page\ndescription: probe\nwhen: never\n---\n\n# probe\n", encoding="utf-8"
     )
-    if method:
-        (folder / "methods" / name).mkdir(parents=True)
-        (folder / "methods" / name / "method.md").write_text("Probe the method.\n", encoding="utf-8")
+    if workflow:
+        (folder / "prompt").mkdir(parents=True)
+        (folder / "prompt" / "workflow.md").write_text("Probe the workflow.\n", encoding="utf-8")
     (folder / "plugin.toml").write_text(
-        f'name = "{name}"\n\n[packets.{name}]\nname = "Probe"\nskills = ["{name}-page"]\nmethod = "{name}"\n'
-        'tools = ["probe_echo"]\n',
+        f'name = "{name}"\n\n[packets.{name}]\nname = "Probe"\nskills = ["{name}-page"]\ntools = ["probe_echo"]\n'
+        'prompt.workflow = "prompt/workflow.md"\n',
         encoding="utf-8",
     )
     return folder
@@ -77,7 +77,6 @@ def test_a_user_plugin_is_found_beside_the_shipped_ones(probe: pathlib.Path) -> 
     found = agent_plugins.find(agent_plugins.plugin_dirs())
     assert [plugin.name for plugin in found] == ["autokernel", "probeplugin"]
     assert found[1].root == probe.resolve()
-    assert found[1].method("probeplugin") == probe.resolve() / "methods" / "probeplugin" / "method.md"
     assert found[1].modules("tools") == ("echo",)
 
 
@@ -96,7 +95,7 @@ def test_a_plugin_tool_is_served_only_where_its_packet_carries_it(probe: pathlib
     assert served.run({})["ok"] is False
 
 
-def test_a_plugin_packet_takes_the_next_slot_and_names_its_method(
+def test_a_plugin_packet_takes_the_next_slot_and_names_its_compiled_prompt(
     probe: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     kind: Kind[PacketDef] = Kind("packets")
@@ -105,16 +104,19 @@ def test_a_plugin_packet_takes_the_next_slot_and_names_its_method(
     plugins.register_packets(agent_plugins.find([probe]))
     assert kind.slot("probeplugin") == 1
     assert kind["probeplugin"] == PacketDef(
-        name="Probe", skills=("probeplugin-page",), method="probeplugin", tools=("probe_echo",)
+        name="Probe",
+        skills=("probeplugin-page",),
+        tools=("probe_echo",),
+        prompt_overlays=("plugin:probeplugin/probeplugin",),
     )
 
 
-def test_a_packet_naming_a_method_no_plugin_ships_is_refused(
+def test_a_packet_naming_a_workflow_text_its_plugin_does_not_ship_is_refused(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    folder = write_plugin(tmp_path, "nomethod", method=False)
+    folder = write_plugin(tmp_path, "noworkflow", workflow=False)
     monkeypatch.setattr(plugins, "PACKETS", Kind[PacketDef]("packets"))
-    with pytest.raises(ValueError, match="runs method 'nomethod', which no plugin ships"):
+    with pytest.raises(ValueError, match=r"names prompt/workflow\.md, which is not a file of the plugin"):
         plugins.register_packets(agent_plugins.find([folder]))
 
 
@@ -122,16 +124,6 @@ def test_two_plugins_of_one_name_are_refused(tmp_path: pathlib.Path) -> None:
     first = write_plugin(tmp_path / "a", "twin")
     second = write_plugin(tmp_path / "b", "twin")
     with pytest.raises(ValueError, match="plugin 'twin' is both"):
-        agent_plugins.find([first, second])
-
-
-def test_two_plugins_shipping_one_method_are_refused(tmp_path: pathlib.Path) -> None:
-    """Otherwise the first plugin's method text would fill a packet of the second."""
-    first = write_plugin(tmp_path / "a", "one")
-    second = write_plugin(tmp_path / "b", "two")
-    (second / "methods" / "one").mkdir(parents=True)
-    (second / "methods" / "one" / "method.md").write_text("Another text.\n", encoding="utf-8")
-    with pytest.raises(ValueError, match="both ship the method 'one'"):
         agent_plugins.find([first, second])
 
 
@@ -221,7 +213,8 @@ def post(url: str, body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
         with urllib.request.urlopen(request, timeout=30) as response:
             return response.status, json.loads(response.read())
     except urllib.error.HTTPError as exc:
-        return exc.code, json.loads(exc.read())
+        with exc:
+            return exc.code, json.loads(exc.read())
 
 
 def test_a_post_route_answers_its_own_episode_only(
@@ -308,8 +301,8 @@ if __name__ == "__main__":
         patch.setenv(agent_plugins.USER_PLUGIN_DIRS_ENV, str(root / "user"))
         test_a_user_plugin_is_found_beside_the_shipped_ones(folder)
         test_a_plugin_tool_is_served_only_where_its_packet_carries_it(folder)
-        test_a_plugin_packet_takes_the_next_slot_and_names_its_method(folder, patch)
-        test_a_packet_naming_a_method_no_plugin_ships_is_refused(root / "nomethod", patch)
+        test_a_plugin_packet_takes_the_next_slot_and_names_its_compiled_prompt(folder, patch)
+        test_a_packet_naming_a_workflow_text_its_plugin_does_not_ship_is_refused(root / "noworkflow", patch)
         test_two_plugins_of_one_name_are_refused(root / "twins")
         (root / "bad").mkdir()
         test_a_malformed_manifest_names_its_file(root / "bad")

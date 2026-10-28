@@ -50,6 +50,12 @@ Pins: dace extended `b737e5050`; user plugins NestForge `f1ea7f1`, Alloy `3badea
   submit when done" and "stop once nothing improves".
 
 ### Plugins and agents
+- **One `plugin.toml`.** A plugin packet's prompt is a table in its manifest, compiled into its one prompt overlay:
+  `about` (after the intro of both prompts), `workflow`, `off.agent`/`off.task` and `replace.agent`/`replace.task`,
+  each a Markdown file of the plugin. A plugin declares its work as `[phases.<id>]` (title, summary, text, tools,
+  mode); a packet lists its `phases`, sets `modes`, and its tools and workflow follow from them. `extends` starts a
+  packet from another of the same plugin. A text bound for the agent prompt that holds a task-prompt value, a missing
+  text and a block both switched off and replaced are refused at load (`docs/extending/plugins.md`).
 - **Per-agent libraries.** An agent installs libraries into `lib/` and `include/` of its own folder; the judge
   searches that folder, then the read-only shared root. A build sees no other agent's folder (the seal hides them),
   and a library symlinked out of the agent's folder is not its own. A grade records the folder and a digest of its
@@ -57,13 +63,17 @@ Pins: dace extended `b737e5050`; user plugins NestForge `f1ea7f1`, Alloy `3badea
 - Judge and agent find plugins the same way (entry points included, without importing them); two plugins shipping
   one skill page, method or subagent, or a packet named like a shipped page, are refused before anything registers.
   `setups.plugins` records each plugin's folder digest and its install checkout's commit (`-dirty` when modified).
-  Plugins declare an install command; the judge's launch venv installs them.
+  Plugins declare an install command and the `roles` it serves (judge by default, agent too when its tools import
+  the package); each role's launch venv installs them.
 - Crashed agents resume in place (claude sessions, runner checkpoints); a relaunch gets a fresh folder and leaves
   the crashed one intact. MCP tool calls send a progress heartbeat; `submit` waits for its grade.
 
 ### Removed
 - The `baselines` job (`baselines.sbatch`): golden prep is `prepare --steps grade`.
-- The OpenHands harness; the driver's `AGENT_METHOD` hints fill (the method overlay fills `{{HINTS}}`).
+- The OpenHands harness.
+- Method pages (`methods/<name>/method.md`, a packet's `method`, `AGENT_METHOD`) and a plugin packet's YAML
+  `overlays` and `template_dirs`: a packet's workflow is its `workflow` text or its phases, filling the agent prompt's
+  `workflow` block (`{{WORKFLOW}}`, was `method`/`{{HINTS}}`). AutoKernel's agent prompt is byte-identical.
 
 ## 0.3.1 (2026-10)
 

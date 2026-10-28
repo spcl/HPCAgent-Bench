@@ -110,8 +110,8 @@ the route names the tool):
 
 {{GRADING}}
 
-@@section method@@
-{{HINTS}}
+@@section workflow@@
+{{WORKFLOW}}
 
 @@section keep_improving@@
 ## Keep improving

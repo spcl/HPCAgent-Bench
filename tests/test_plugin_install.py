@@ -121,3 +121,18 @@ def test_an_installed_plugin_of_a_folders_name_is_refused_when_the_folder_instal
 
     with pytest.raises(ValueError, match="plugin 'twin' is both"):
         agent_plugins.find(plugins.roots())
+
+
+@pytest.mark.parametrize(
+    ("roles", "judge", "agent"),
+    [("", True, False), ('roles = ["agent"]', False, True), ('roles = ["judge", "agent"]', True, True)],
+)
+def test_a_plugin_installs_into_the_roles_it_names_the_judge_by_default(
+    tmp_path: pathlib.Path, roles: str, judge: bool, agent: bool
+) -> None:
+    folder = plugin_folder(tmp_path, "probe", f'\n[install]\nroot = "."\ncommand = ["{{python}}", "-V"]\n{roles}\n')
+    found = agent_plugins.find([folder])
+
+    sut = {role: agent_plugins.install(found, sys.executable, role) == ["probe"] for role in ("judge", "agent")}
+
+    assert sut == {"judge": judge, "agent": agent}

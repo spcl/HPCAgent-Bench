@@ -6,7 +6,8 @@ then the launcher's layers (:data:`LAYERS_ENV`: the track or harness overlay), t
 ``materialize_shared.sh`` stages the result as ``prompt.json``; ``--show`` prints each block and the overlays that
 changed it.
 
-An overlay is ``agent/prompt_overlays/<name>.yaml`` or a YAML file path, with a half per prompt: ``agent`` for this
+An overlay is ``agent/prompt_overlays/<name>.yaml``, a YAML file path or a plugin packet's prompt table
+(``plugin:<plugin>/<packet>``, :func:`hpcagent_bench.plugins.compiled_overlay`), with a half per prompt: ``agent`` for this
 one, ``task`` for the task prompt the benchmark renders (:mod:`hpcagent_bench.harness.prompt_sections`)::
 
     agent:
@@ -30,9 +31,8 @@ from typing import Any
 
 import pydantic
 import yaml
-from hpcagent_agent import plugins as agent_plugins
 from hpcagent_agent import prompt_blocks
-from hpcagent_agent.prompt_blocks import Edit, Overlay, Prompt, PromptOverlay
+from hpcagent_agent.prompt_blocks import Overlay, Prompt, PromptOverlay
 
 from hpcagent_bench import config, packets, paths, plugins
 
@@ -40,15 +40,12 @@ __all__ = [
     "AGENT",
     "HALVES",
     "LAYERS_ENV",
-    "METHOD_BLOCK",
     "OVERLAYS_ENV",
     "builtin_overlays",
     "env_layers",
     "expand_includes",
     "load_overlay",
     "main",
-    "method_overlays",
-    "method_page",
     "overlays_for",
     "provenance",
     "resolve_layers",
@@ -161,7 +158,14 @@ def builtin_overlays(agent: pathlib.Path = AGENT) -> dict[str, str]:
 
 
 def load_overlay(ref: str, agent: pathlib.Path = AGENT) -> PromptOverlay:
-    """The built-in overlay ``ref`` names (``<agent>/prompt_overlays/<ref>.yaml``), or the YAML file at path ``ref``."""
+    """The built-in overlay ``ref`` names (``<agent>/prompt_overlays/<ref>.yaml``), the YAML file at path ``ref``, or
+    the prompt table a plugin packet compiled to (``plugin:<plugin>/<packet>``, :func:`plugins.compiled_overlay`)."""
+    if ref.startswith(plugins.OVERLAY_PREFIX):
+        raw, folder = plugins.compiled_overlay(ref)
+        try:
+            return overlay_from(raw, ref, folder, agent)
+        except (pydantic.ValidationError, TypeError) as exc:
+            raise ValueError(f"prompt overlay {ref!r}: {exc}") from exc
     path = pathlib.Path(ref) if ref.endswith((".yaml", ".yml")) else agent / "prompt_overlays" / f"{ref}.yaml"
     if not path.is_file():
         known = sorted(item.stem for item in (agent / "prompt_overlays").glob("*.yaml"))
@@ -180,38 +184,13 @@ def split(raw: str) -> list[str]:
     return [item.strip() for item in raw.split(",") if item.strip()]
 
 
-#: The agent-prompt block whose ``{{HINTS}}`` slot a packet's method page fills.
-METHOD_BLOCK = "method"
-
-
-def method_page(name: str) -> pathlib.Path:
-    """``methods/<name>/method.md`` of the plugin that ships method ``name``.
-
-    :raises ValueError: no plugin ships it.
-    """
-    for plugin in agent_plugins.find(plugins.roots()):
-        if (page := plugin.method(name)) is not None:
-            return page
-    raise ValueError(f"method {name!r}: no plugin ships methods/{name}/method.md")
-
-
-def method_overlays(packet: str) -> list[PromptOverlay]:
-    """The packet's method page as an overlay filling the method block's ``{{HINTS}}``; none without a method."""
-    name = packets.prompt_method(packet) if packet else ""
-    if not name:
-        return []
-    text = method_page(name).read_text(encoding="utf-8").strip()
-    fill = Overlay(name=f"method {name}", set=((METHOD_BLOCK, Edit(vars=(("HINTS", text),))),))
-    return [PromptOverlay(name=f"method {name}", agent=fill)]
-
-
 def overlays_for(
     names: Iterable[str], packet: str = "", agent: pathlib.Path = AGENT, user: Iterable[str] = ()
 ) -> list[PromptOverlay]:
-    """The overlays ``names`` (the launcher's layers, in order), then those packet ``packet`` reaches and its method
-    page, then the user's ``user``."""
-    layers = [load_overlay(name, agent) for name in [*names, *(packets.prompt_layers(packet) if packet else ())]]
-    return [*layers, *method_overlays(packet), *(load_overlay(name, agent) for name in user)]
+    """The overlays ``names`` (the launcher's layers, in order), then those packet ``packet`` reaches, then the user's
+    ``user``."""
+    layers = [*names, *(packets.prompt_layers(packet) if packet else ()), *user]
+    return [load_overlay(name, agent) for name in layers]
 
 
 def resolve_layers(
