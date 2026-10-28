@@ -162,23 +162,22 @@ def export_slots(environ: MutableMapping[str, str], slots: int) -> None:
 
 def bind_task(environ: MutableMapping[str, str], repo: pathlib.Path) -> None:
     """Give this task its grading slots: a node-shape task (``--ntasks-per-node=1``, every GPU and core) owns one slot
-    per NUMA domain, slot i its domain's cores and GPU i (``judge.gpus_per_node``); local task k of several such
-    tasks on a node owns GPUs ``k * slots ..``; a one-domain task owns its GPU (``SLURM_LOCALID``) and its whole
-    cpuset.
+    per NUMA domain, slot i its domain's cores and GPU i (``judge.gpus_per_node``); local task k (``SLURM_LOCALID``)
+    owns GPUs ``k * slots ..`` of the inherited device list (of the node when none is inherited), or the inherited
+    list itself when it is too short to hold every task's GPUs (Slurm already gave the task its own); a one-domain
+    task owns its whole cpuset. A node without GPUs gets no device list.
 
     The hidden seeds are the checkout's, and every graded row is stamped with the checkout's HEAD; a value the caller
     already set stays."""
     slots = task_slots()
-    local = environ.get("SLURM_LOCALID")
-    if slots == 1 and local is not None:
-        environ["ROCR_VISIBLE_DEVICES"] = local
-    elif local is not None and local.isdigit() and int(local) > 0:
-        # Several multi-domain tasks on one node: task k's slots take GPUs k*slots.. of the node, not 0.. again.
-        node_gpus = osinfo.inherited_visible(environ).split(",") if osinfo.inherited_visible(environ) else []
+    local = environ.get("SLURM_LOCALID", "")
+    if local.isdigit() and node_has_gpus():
         own = range(int(local) * slots, (int(local) + 1) * slots)
-        environ["ROCR_VISIBLE_DEVICES"] = ",".join(
-            node_gpus[index] if index < len(node_gpus) else str(index) for index in own
-        )
+        inherited = [device.strip() for device in osinfo.inherited_visible(environ).split(",") if device.strip()]
+        if len(inherited) >= own.stop:
+            environ["ROCR_VISIBLE_DEVICES"] = ",".join(inherited[index] for index in own)
+        elif not inherited:
+            environ["ROCR_VISIBLE_DEVICES"] = ",".join(str(index) for index in own)
     export_slots(environ, slots if slots > 1 else 0)
     cores = environ.get("SLURM_CPUS_PER_TASK")
     if cores:

@@ -503,6 +503,32 @@ def test_a_large_argument_reaches_a_started_child_without_a_copy_in_the_parent(
     assert not list(tmp_path.glob("hb-arg-*"))
 
 
+def bump_and_sum_kw(
+    *, data: dict[str, np.ndarray], progress: forked.ProgressQueue[tuple[float, bool]]
+) -> tuple[float, bool]:
+    out = bump_and_sum(data)
+    progress.put(out)
+    return out
+
+
+def test_a_large_keyword_argument_is_staged_beside_a_streamed_progress_queue(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A large array passed as a kwarg is staged like a positional one (no pickled copy in the parent), while the
+    progress queue, picklable only inside ``Process.start``, still reaches the child."""
+    monkeypatch.setattr(forked, "shm_root", lambda: str(tmp_path))
+    array = np.asfortranarray(np.ones((forked.SHM_ARG_BYTES // 8 // 1024 + 1, 1024)))
+    tracemalloc.start()
+    try:
+        r = run_forked(bump_and_sum_kw, data={"a": array}, mp_context="spawn", stream_progress=True, timeout=120)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert r.ok and r.result == (float(array.size) + 1.0, True), r
+    assert peak < array.nbytes // 4, f"the parent allocated {peak} bytes for a {array.nbytes}-byte kwarg"
+    assert not list(tmp_path.glob("hb-arg-*"))
+
+
 def test_a_start_that_fails_after_staging_an_argument_leaves_no_file(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

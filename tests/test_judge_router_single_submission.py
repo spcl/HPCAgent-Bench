@@ -262,7 +262,7 @@ def test_a_single_submission_submit_is_deferred_only_under_deferred_grading(
     """The router asks the judge to queue a single-submission /submit (``service.submit_grading``), never a
     multi-submission one, and never under inline grading."""
     module, _ = router
-    assert module.deferred(("episode", "kernel"))
-    assert not module.deferred(None)
-    with config.overridden("service.submit_grading", "inline"):
-        assert not module.deferred(("episode", "kernel"))
+    assert not module.deferred(("episode", "kernel")), "inline is the default; an experiment opts in"
+    with config.overridden("service.submit_grading", "deferred"):
+        assert module.deferred(("episode", "kernel"))
+        assert not module.deferred(None)

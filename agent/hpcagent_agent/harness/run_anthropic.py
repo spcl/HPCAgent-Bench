@@ -95,9 +95,10 @@ class Transcript:
 
 
 async def open_tools(
-    stack: contextlib.AsyncExitStack, servers: Mapping[str, Mapping[str, Any]], cwd: pathlib.Path, wait: float
+    stack: contextlib.AsyncExitStack, servers: Mapping[str, Mapping[str, Any]], cwd: pathlib.Path
 ) -> dict[str, Any]:
-    """Every tool the model is offered (each stdio server's tools, then the shell), each waited ``wait`` seconds."""
+    """Every tool the model is offered (each stdio server's tools, then the shell): an MCP call waited
+    :func:`runner_common.mcp_call_timeout` seconds, a shell command :func:`runner_common.shell_call_timeout`."""
     from anthropic.lib.tools import beta_async_tool
     from anthropic.lib.tools.mcp import async_mcp_tool
     from mcp import ClientSession, StdioServerParameters
@@ -106,13 +107,16 @@ async def open_tools(
     tools: dict[str, Any] = {}
     for server in servers.values():
         read, write = await stack.enter_async_context(stdio_client(StdioServerParameters(**server)))
-        session = await stack.enter_async_context(ClientSession(read, write, read_timeout_seconds=wait))
+        session = await stack.enter_async_context(
+            ClientSession(read, write, read_timeout_seconds=runner_common.mcp_call_timeout(os.environ))
+        )
         await session.initialize()
         for tool in (await session.list_tools()).tools:
             runnable = async_mcp_tool(tool, session)
             tools[runnable.name] = runnable
 
     async def shell(command: str) -> str:
+        wait = runner_common.shell_call_timeout(command, os.environ)
         return await asyncio.to_thread(runner_common.run_shell, {"command": command}, cwd, wait)
 
     tools[runner_common.SHELL_TOOL] = beta_async_tool(
@@ -245,7 +249,6 @@ async def run_episode_async(
 
     if args.mcp_config is None:
         raise ValueError("--mcp-config is required")
-    wait = runner_common.judge_call_timeout(os.environ)
     window = (
         runner_common.HistoryWindow(args.compaction_trigger, HEAD_MESSAGES)
         if args.compaction_trigger is not None
@@ -258,7 +261,7 @@ async def run_episode_async(
     client = anthropic.AsyncAnthropic(**client_options)
     async with contextlib.AsyncExitStack() as stack:
         runnable = await open_tools(
-            stack, runner_common.mcp_servers(args.mcp_config, os.environ, args.workdir), args.command_dir, wait
+            stack, runner_common.mcp_servers(args.mcp_config, os.environ, args.workdir), args.command_dir
         )
         staged = subagents.load(pathlib.Path(os.environ.get("HOME", args.workdir)), os.environ)
         if staged:

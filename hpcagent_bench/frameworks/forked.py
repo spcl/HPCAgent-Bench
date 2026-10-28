@@ -140,30 +140,36 @@ class ShmPickler(multiprocessing.reduction.ForkingPickler):
 
 
 def restore_call(
-    fn: Callable[..., object], args_pickle: bytes, kwargs: dict[str, object]
+    fn: Callable[..., object], call_pickle: bytes, start_kwargs: dict[str, object]
 ) -> tuple[Callable[..., object], object, dict[str, object]]:
-    """The child's ``(fn, args, kwargs)`` with ``args`` unpickled (its staged arrays mapped)."""
-    return fn, pickle.loads(args_pickle), kwargs
+    """The child's ``(fn, args, kwargs)``: ``call_pickle`` unpickled (its staged arrays mapped) to ``(args, kwargs)``,
+    ``start_kwargs`` merged into the kwargs."""
+    args, kwargs = pickle.loads(call_pickle)
+    return fn, args, {**kwargs, **start_kwargs}
 
 
 class ShmArgs:
-    """A child's ``(fn, args, kwargs)``: ``args`` pickled on construction with large arrays staged by
-    :class:`ShmPickler` (before any start lock is held), the rest when the process starts; :meth:`release`
-    removes what the child did not attach."""
+    """A child's ``(fn, args, kwargs)``: ``args`` and every kwarg but the multiprocessing queues pickled on
+    construction with large arrays staged by :class:`ShmPickler` (before any start lock is held); the queues, which
+    pickle only inside ``Process.start``, when the process starts. :meth:`release` removes what the child did not
+    attach."""
 
-    __slots__ = ("args_pickle", "fn", "kwargs", "staged")
+    __slots__ = ("call_pickle", "fn", "staged", "start_kwargs")
 
     def __init__(self, fn: Callable[..., object], args: object, kwargs: dict[str, object]) -> None:
         self.fn = fn
-        self.kwargs = kwargs
+        self.start_kwargs: dict[str, object] = {
+            k: v for k, v in kwargs.items() if isinstance(v, multiprocessing.queues.Queue)
+        }
+        eager = {k: v for k, v in kwargs.items() if k not in self.start_kwargs}
         self.staged: list[str] = []
         buffer = io.BytesIO()
         try:
-            ShmPickler(buffer, self.staged).dump(args)
+            ShmPickler(buffer, self.staged).dump((args, eager))
         except BaseException:
             self.release()
             raise
-        self.args_pickle = buffer.getvalue()
+        self.call_pickle = buffer.getvalue()
 
     def __reduce__(
         self,
@@ -171,8 +177,7 @@ class ShmArgs:
         Callable[..., tuple[Callable[..., object], object, dict[str, object]]],
         tuple[Callable[..., object], bytes, dict[str, object]],
     ]:
-        # Runs inside Process.start, so the queues among the kwargs may be pickled.
-        return restore_call, (self.fn, self.args_pickle, self.kwargs)
+        return restore_call, (self.fn, self.call_pickle, self.start_kwargs)
 
     def release(self) -> None:
         for path in self.staged:

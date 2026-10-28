@@ -11,10 +11,10 @@ import pytest
 from hpcagent_agent import plugins as agent_plugins
 from hpcagent_agent import prompt_blocks
 
-from hpcagent_bench import config, plugins, prompt_build
+from hpcagent_bench import config, packets, plugins, prompt_build
 from hpcagent_bench import study_tags as tags
 from hpcagent_bench.categories import Language, SourceMode
-from hpcagent_bench.harness.prompts import build_prompt
+from hpcagent_bench.harness.prompts import PromptConfig, build_prompt
 from hpcagent_bench.harness.task import Task
 from hpcagent_bench.vocabulary import PACKETS
 from tests.fresh_module import fresh
@@ -106,6 +106,26 @@ def test_two_packets_apply_their_overlays_in_spec_order(plugin_root: pathlib.Pat
         sut = build_prompt(TASK)
 
     assert "The plugin times gemm itself." in sut
+
+
+def test_a_gpu_setup_takes_the_device_form_of_its_packet_in_both_prompts(
+    plugin_root: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A device-language setup applies the packet's GPU form (packets.by_device) to the task prompt, the same layers
+    the agent prompt takes (prompt_build.env_layers)."""
+    registered_plugin(plugin_root, "promptprobe", TIMING_OFF_SCORING)
+    registered_plugin(plugin_root, "promptprobegpu", AFTER_TIMING)
+    monkeypatch.setattr(packets, "GPU_ALIASES", {"promptprobe": "promptprobegpu"})
+    environ = {"HPCAGENT_BENCH_RECORD_PACKET": "promptprobe", "LANGUAGE": "hip"}
+
+    with config.overridden("record.packet", "promptprobe"), config.overridden("record.language", "hip"):
+        sut = build_prompt(TASK)
+        overlays = PromptConfig.resolve().overlays
+        agent_packet = prompt_build.env_layers(environ)[1]
+
+    assert overlays == packets.prompt_layers(agent_packet) == packets.prompt_layers("promptprobegpu")
+    assert "The plugin also counts gemm's calls." in sut
+    assert "The plugin times gemm itself." not in sut
 
 
 def test_a_packet_adds_text_after_a_section_only_in_its_own_setups(plugin_root: pathlib.Path) -> None:
