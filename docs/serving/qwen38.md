@@ -15,7 +15,7 @@ EDF `hpcagent-bench-sglang-mi300-latest`; env `SGLANG_USE_AITER=1`, `SGLANG_SET_
 
 ```
 --chat-template containers/inference/chat-template-qwen38.jinja --trust-remote-code
---attention-backend aiter --language-only --watchdog-timeout 1800
+--attention-backend aiter --kv-cache-dtype fp8_e4m3 --language-only --watchdog-timeout 1800
 --context-length 262144 --mem-fraction-static 0.306 --mamba-full-memory-ratio 0.25
 --max-running-requests 128 --enable-metrics
 --reasoning-parser qwen3 --tool-call-parser qwen3_coder --enable-cache-report
@@ -47,7 +47,8 @@ log lines), which is the shipped configuration ([knobs.md](knobs.md#aiter-correc
 | `--kv-cache-dtype fp8_e4m3` | 284.9, 283.5 | 7.84, 7.72 | 1.2 / 8.6-10 | 123-125 | pass |
 
 - **fp8 KV: +11% aggregate, +18% per agent** against the same node's base and base2 (257.5/256.6,
-  drift under 1%), reproduced on a second node; gates pass. Candidate for the shipped line.
+  drift under 1%), reproduced on a second node; gates pass. Shipped: it doubles the KV pool, which the
+  prompt study's ~115k-token conversations need (40 x 115k is past the 4.03 M bf16 pool).
 - Rejected: MTP/NEXTN 3-4 (-36%), `--mamba-full-memory-ratio 0.5` (233 vs 241-255), `--schedule-policy
   lpm` (inside the 6% same-node drift), `--tp-size 2 --dp-size 2` (78 tok/s: DP round-robin splits a
   conversation, hit 0.48), `--mamba-radix-cache-strategy no_buffer --disable-overlap-schedule` (132 tok/s,
