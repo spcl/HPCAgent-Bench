@@ -257,12 +257,20 @@ def test_a_run_without_episode_tokens_checks_none(router: tuple[ModuleType, "Tes
 
 
 def test_a_single_submission_submit_is_deferred_only_under_deferred_grading(
-    router: tuple[ModuleType, "TestClient"],
+    router: tuple[ModuleType, "TestClient"], monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
 ) -> None:
     """The router asks the judge to queue a single-submission /submit (``service.submit_grading``), never a
-    multi-submission one, and never under inline grading."""
+    multi-submission one, and never under inline grading; in a fused job the caller's own setup decides."""
     module, _ = router
-    assert not module.deferred(("episode", "kernel")), "inline is the default; an experiment opts in"
+    assert not module.deferred(("episode", "kernel"), ""), "inline is the default; an experiment opts in"
     with config.overridden("service.submit_grading", "deferred"):
-        assert module.deferred(("episode", "kernel"))
-        assert not module.deferred(None)
+        assert module.deferred(("episode", "kernel"), "")
+        assert not module.deferred(None, "")
+    setups = tmp_path / "setups"
+    setups.mkdir()
+    (setups / "late.resolved").write_text(f"SETUP=late\n{module.SUBMIT_GRADING_KEY}=deferred\n", encoding="utf-8")
+    (setups / "now.resolved").write_text("SETUP=now\n", encoding="utf-8")
+    monkeypatch.setenv(fused.SETUPS_DIR_ENV, str(setups))
+    fused.read_overlay.cache_clear()
+    assert [module.deferred(("episode", "kernel"), setup) for setup in ("late", "now")] == [True, False]
+    fused.read_overlay.cache_clear()

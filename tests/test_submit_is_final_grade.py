@@ -390,6 +390,12 @@ def test_a_deferred_entry_is_synced_to_disk_before_it_is_answered(
     deferred.append(queue, entry)
     assert len(synced) == 1
     assert deferred.read(queue) == [entry]
+    # A judge killed mid-write leaves a torn line: the next entry still lands on a line of its own.
+    with queue.open("a", encoding="utf-8") as handle:
+        handle.write('{"ts_ms": 2, "set')
+    later = deferred.DeferredSubmit(ts_ms=3, setup="", request_id="r3", body="{}", folder="/shared/agent-0")
+    deferred.append(queue, later)
+    assert deferred.read(queue) == [entry, later]
 
 
 def test_a_deferred_library_is_replayed_from_the_judges_own_copy(
@@ -437,8 +443,8 @@ def test_freezing_an_agents_folder_makes_every_file_and_folder_read_only(tmp_pat
     for path in (folder, folder / "lib", folder / "lib" / "libx.so", folder / "kernel.c"):
         assert not os.stat(path).st_mode & deferred.WRITE_BITS, path
     assert os.stat(outside).st_mode & deferred.WRITE_BITS, "a symlink's target is not the agent's to freeze"
-    for path in (folder, folder / "lib"):  # leave tmp_path removable
-        path.chmod(0o755)
+    deferred.thaw(folder)  # after the replay: the run's cleanup can remove the folder again
+    shutil.rmtree(folder)
 
 
 def test_a_library_whose_path_changed_while_opened_is_refused(

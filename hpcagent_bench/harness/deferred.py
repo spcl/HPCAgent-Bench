@@ -19,7 +19,7 @@ import stat
 import sys
 import threading
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from http import HTTPStatus
 
@@ -36,6 +36,7 @@ __all__ = [
     "ReplayReport",
     "append",
     "freeze",
+    "thaw",
     "now_ms",
     "pending",
     "queue_path",
@@ -60,12 +61,14 @@ QUEUE_LOCK = threading.Lock()
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class DeferredSubmit:
-    """One queued ``/submit``: its time, the router's setup header, the id its answer named, and the raw body."""
+    """One queued ``/submit``: its time, the router's setup header, the id its answer named, the raw body, and the
+    agent folder :func:`freeze` froze for it ('' = none), thawed once the replay recorded its grade."""
 
     ts_ms: int
     setup: str
     request_id: str
     body: str
+    folder: str = ""
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -91,12 +94,15 @@ def queue_path() -> pathlib.Path:
 
 
 def append(path: pathlib.Path, entry: DeferredSubmit) -> None:
-    """Append ``entry`` to ``path`` as one JSON line, flushed to disk before the answer goes out."""
+    """Append ``entry`` to ``path`` as one JSON line, flushed to disk before the answer goes out; a torn last line
+    (a judge killed mid-write) is ended first, so the new entry stays readable."""
     line = json.dumps(dataclasses.asdict(entry), sort_keys=True) + "\n"
     with QUEUE_LOCK:
         path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a", encoding="utf-8") as handle:
-            handle.write(line)
+        with path.open("a+b") as handle:
+            size = handle.seek(0, os.SEEK_END)
+            torn = size > 0 and os.pread(handle.fileno(), 1, size - 1) != b"\n"
+            handle.write((b"\n" if torn else b"") + line.encode("utf-8"))
             handle.flush()
             os.fsync(handle.fileno())
 
@@ -106,17 +112,28 @@ WRITE_BITS = stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH
 
 
 def freeze(folder: pathlib.Path) -> None:
-    """Make every file and directory under ``folder`` read-only (symlinks untouched), so an agent's later edits
-    cannot change what its queued /submit's replay builds against. Best effort: an entry that refuses is left."""
-    for root, dirs, files in os.walk(folder, topdown=False):
-        for name in (*files, *dirs):
+    """Make every file and directory under ``folder`` read-only (symlinks untouched), so the agent's tools, still
+    running until the driver ends the episode, cannot change what its queued /submit's replay builds against. Not
+    a defence against a hostile agent (same uid). Best effort: an entry that refuses is left; :func:`thaw` undoes."""
+    chmod_tree(folder, lambda mode: mode & ~WRITE_BITS)
+
+
+def thaw(folder: pathlib.Path) -> None:
+    """Give the owner write access under ``folder`` again (after the replay), so the run's cleanup can remove it."""
+    chmod_tree(folder, lambda mode: mode | stat.S_IWUSR)
+
+
+def chmod_tree(folder: pathlib.Path, change: Callable[[int], int]) -> None:
+    """Apply ``change`` to the permission bits of ``folder`` and everything under it (symlinks untouched)."""
+    with contextlib.suppress(OSError):
+        os.chmod(folder, change(stat.S_IMODE(os.stat(folder).st_mode)))  # first: a thaw must enter the tree
+    for root, dirs, files in os.walk(folder):
+        for name in (*dirs, *files):
             path = os.path.join(root, name)
             with contextlib.suppress(OSError):
                 mode = os.lstat(path).st_mode
                 if not stat.S_ISLNK(mode):
-                    os.chmod(path, stat.S_IMODE(mode) & ~WRITE_BITS)
-    with contextlib.suppress(OSError):
-        os.chmod(folder, stat.S_IMODE(os.stat(folder).st_mode) & ~WRITE_BITS)
+                    os.chmod(path, change(stat.S_IMODE(mode)))
 
 
 def spool_dir(queue: pathlib.Path) -> pathlib.Path:
@@ -228,6 +245,8 @@ def replay(queues: Sequence[pathlib.Path], judge_url: str, workers: int) -> Repl
             return False
         with lock, queue.with_name(queue.name + DONE_SUFFIX).open("a", encoding="utf-8") as handle:
             handle.write(entry.request_id + "\n")
+        if entry.folder:
+            thaw(pathlib.Path(entry.folder))
         return True
 
     with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
