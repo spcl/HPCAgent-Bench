@@ -26,6 +26,7 @@ __all__ = [
     "PACKET_TOOLS_ENV",
     "REGISTRY",
     "SKILL_DIR_ENV",
+    "Hints",
     "InputSchema",
     "Run",
     "Served",
@@ -91,12 +92,38 @@ class Setup:
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
+class Hints:
+    """MCP tool annotations: what calling the tool does, for the client to show or gate (``None``: unsaid)."""
+
+    #: Changes nothing the tool's other calls read.
+    read_only: bool | None = None
+    #: May undo or overwrite earlier work (a mutating tool that only adds says ``False``).
+    destructive: bool | None = None
+    #: A second identical call changes nothing more.
+    idempotent: bool | None = None
+    #: Reaches outside the benchmark's own services.
+    open_world: bool | None = None
+
+    def annotations(self) -> dict[str, bool]:
+        """The ``annotations`` of an MCP ``Tool``: the hints that are said."""
+        said = {
+            "readOnlyHint": self.read_only,
+            "destructiveHint": self.destructive,
+            "idempotentHint": self.idempotent,
+            "openWorldHint": self.open_world,
+        }
+        return {key: value for key, value in said.items() if value is not None}
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
 class Spec:
-    """What a tool shows the model: its description, its input model and its prompt bullet (``""``: none)."""
+    """What a tool shows the model: its description, its input model, its prompt bullet (``""``: none) and its MCP
+    annotations."""
 
     description: str
     input: type[pydantic.BaseModel]
     prompt: str = ""
+    hints: Hints = Hints()
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -123,6 +150,7 @@ class Served:
     input_schema: dict[str, Any]
     prompt: str
     run: Run
+    hints: Hints = Hints()
 
 
 #: Every tool that exists, by name, in registration (import) order.
@@ -224,6 +252,6 @@ def served(setup: Setup, order: tuple[str, ...] = ()) -> dict[str, Served]:
             continue
         spec = entry.spec_for(setup)
         tools[name] = Served(
-            name, spec.description, schema_of(spec.input), spec.prompt, validated(spec.input, entry.run)
+            name, spec.description, schema_of(spec.input), spec.prompt, validated(spec.input, entry.run), spec.hints
         )
     return tools

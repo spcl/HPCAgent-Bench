@@ -43,6 +43,7 @@ __all__ = [
     "with_heartbeat",
     "prompt_tool_list",
     "server_instructions",
+    "tool_definition",
     "tool_definitions",
     "tools",
 ]
@@ -111,10 +112,16 @@ def server_instructions(offered: Mapping[str, Served], environ: Mapping[str, str
 
 def tool_definitions(offered: Mapping[str, Served]) -> list[types.Tool]:
     """What ``tools/list`` answers."""
-    return [
-        types.Tool.model_validate({"name": name, "description": entry.description, "inputSchema": entry.input_schema})
-        for name, entry in offered.items()
-    ]
+    return [tool_definition(name, entry) for name, entry in offered.items()]
+
+
+def tool_definition(name: str, entry: Served) -> types.Tool:
+    """One tool as ``tools/list`` shows it: name, description, input schema and the annotations its hints say."""
+    fields: dict[str, Any] = {"name": name, "description": entry.description, "inputSchema": entry.input_schema}
+    annotations = entry.hints.annotations()
+    if annotations:
+        fields["annotations"] = annotations
+    return types.Tool.model_validate(fields)
 
 
 def call(entry: Served, arguments: dict[str, Any]) -> dict[str, Any]:
