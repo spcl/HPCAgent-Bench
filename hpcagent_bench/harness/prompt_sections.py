@@ -140,7 +140,7 @@ def blocks_for_loader(
             sides.setdefault(state.anchor, []).append(key)
     # as the agent prompt orders them: one overlay's inserts in their listed order; a later overlay's insert before
     # a block sits just before it, after a block just after it
-    for (_, side), keys in sides.items():
+    for (anchor, side), keys in sides.items():
         keys.sort(key=lambda k: blocks[k].rank if side == "before" else (-blocks[k].rank[0], blocks[k].rank[1]))
 
     def text_of(key: str) -> str:

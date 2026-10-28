@@ -299,14 +299,27 @@ jobs:
   # cloned at its pinned commit, its package installed into this environment by the plugin's own [install] command,
   # and every episode its [ci] block names run through the tuner harness against a judge, which must grade the
   # submission correct (tests/test_user_plugin_episodes.py; a stub agent drives a packet's tools like an agent).
+  user-plugin-names:
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
+    runs-on: ubuntu-24.04
+    outputs:
+      plugins: ${{ steps.names.outputs.plugins }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: names
+        run: |
+          echo "plugins=$(python3 -c 'import json, tomllib; print(json.dumps(sorted(tomllib.load(open(".github/user-plugins.toml", "rb"))["plugins"])))')" >> "$GITHUB_OUTPUT"
+
   user-plugins:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
+    needs: user-plugin-names
     name: user-plugins[${{ matrix.plugin }}] (pinned, stub episodes)
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
-        plugin: [nestforge, alloy]
+        # one job per plugin .github/user-plugins.toml pins; the benchmark names none of them
+        plugin: ${{ fromJSON(needs.user-plugin-names.outputs.plugins) }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
