@@ -12,6 +12,7 @@ from hpcagent_bench.translators.numpyto_common.numpy_desugar.common import (
     replace_call_with_name,
 )
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.hoist import HoistForm, ValueHoist
+from hpcagent_bench.translators.numpyto_common.numpy_desugar.kinds import dtype_kind
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.ranks import expr_rank
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.ufuncs import ufunc_method_op
 
@@ -545,12 +546,15 @@ def hoist_histogram(node: ast.expr, hoist: ValueHoist) -> ast.expr | None:
         wdtype, add = f"{wname}.dtype", f"{wname}[{p}_i]"
     # numpy's bin is defined by its edge array, not the closed form: it truncates the same
     # index, then walks it one step against linspace's edges, and the two round apart. The
-    # edges are rebuilt with linspace's arithmetic in the sample dtype, one rounding per
-    # statement, since half an ulp of edge already misbins samples. Only edges 0..bins-1 are
-    # read (the walk up stops at bins-1), hence ``bins`` entries and no top edge.
+    # edges are rebuilt with linspace's arithmetic in numpy's edge dtype, one rounding per
+    # statement, since half an ulp of edge already misbins samples: the sample dtype for float
+    # samples, float64 for any other (an integer sample's edges are float). Only edges 0..bins-1
+    # are read (the walk up stops at bins-1), hence ``bins`` entries and no top edge.
     edges = f"{p}_e"
+    float_sample = dtype_kind(call.args[0], hoist.tables.dtypes) in ("float", "complex")
+    edge_dtype = f"{a}.dtype" if float_sample else "np.float64"
     lines += [
-        f"{edges} = np.zeros({bins}, {a}.dtype)",
+        f"{edges} = np.zeros({bins}, {edge_dtype})",
         f"{edges}[0] = ({hi_s} - {lo_s}) / {bins}",
         f"{p}_st = {edges}[0]",
         f"for {p}_j in range({bins}):",
@@ -559,11 +563,13 @@ def hoist_histogram(node: ast.expr, hoist: ValueHoist) -> ast.expr | None:
     ]
     # numpy drops samples outside [lo, hi] (only the last bin is closed); the clamp alone would
     # fold them into the end bins. The guard is a no-op for the auto range.
+    # numpy's own index, ``(a - lo) * norm`` with ``norm = bins / (hi - lo)``: one multiply per sample.
     lines += [
         f"{temp} = np.zeros({bins}, {wdtype})",
+        f"{p}_norm = {bins} / ({hi_s} - {lo_s})",
         f"for {p}_i in range({a}.shape[0]):",
         f"    if {lo_s} <= {a}[{p}_i] and {a}[{p}_i] <= {hi_s}:",
-        f"        {p}_b = int(({a}[{p}_i] - {lo_s}) * {bins} / ({hi_s} - {lo_s}))",
+        f"        {p}_b = int(({a}[{p}_i] - {lo_s}) * {p}_norm)",
         f"        if {p}_b < 0: {p}_b = 0",
         f"        if {p}_b > {bins} - 1: {p}_b = {bins} - 1",
         f"        if {a}[{p}_i] < {edges}[{p}_b]: {p}_b = {p}_b - 1",
