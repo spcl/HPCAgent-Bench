@@ -168,8 +168,8 @@ runs:
           fi
           sleep $((attempt * 30))
         done
-        # llvm-objdump: the alloy plugin's tools (alloy_speculative) call it.
-        for driver in clang clang++ flang llvm-objdump; do
+        # llvm-objdump, llvm-mca: the alloy plugin's tools (alloy_speculative) call them.
+        for driver in clang clang++ flang llvm-objdump llvm-mca; do
           sudo ln -sf "/usr/bin/${driver}-${LLVM_MAJOR}" "/usr/local/bin/${driver}"
         done
         clang --version | head -1

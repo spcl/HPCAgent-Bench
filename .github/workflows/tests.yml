@@ -624,7 +624,7 @@ jobs:
 
       - name: Phase 5 -- e2e numerical sweep [pluto] @ S
         if: ${{ !cancelled() }}
-        timeout-minutes: 16
+        timeout-minutes: 20  # took 12-16 min
         env:
           HPCAGENT_BENCH_E2E_BACKENDS: "pluto"
         # Two workers: four polycc/isl runs at once exhausted the 16 GB runner (it is shut down mid-step).
