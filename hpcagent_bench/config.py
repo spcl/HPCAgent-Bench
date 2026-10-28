@@ -458,6 +458,7 @@ class Grading(Section):
     seal_hide: tuple[str, ...]
     allow_agent_build_flags: bool
     allow_agent_build_tokens: bool
+    fill_goldens: bool
 
 
 class Record(Section):

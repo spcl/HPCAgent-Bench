@@ -122,13 +122,26 @@ class ClaimQueue:
         """Whether ``key`` needs no shard of this job: graded, or given up on."""
         return self.done(key).exists() or self.closed(key).exists()
 
+    def live_elsewhere(self, key: str) -> list[str]:
+        """The other jobs holding a live claim on ``key`` (two jobs may grade one ``--out-dir`` at once)."""
+        return sorted(
+            path.parent.name
+            for path in self.root.glob(f"*/{key}.*")
+            if path.parent.name != self.job and path.suffix != ".closed" and not stale(path)
+        )
+
     def take(self, key: str) -> pathlib.Path | None:
-        """The claim on ``key`` this shard just won; None while a live shard holds it. An item whose every claim
-        went stale is closed instead."""
+        """The claim on ``key`` this shard just won; None while a live shard of any job holds it. An item whose every
+        claim in this job went stale is closed instead. Two jobs that claim at once both see it: the later job name
+        backs off."""
+        if self.live_elsewhere(key):
+            return None
         for attempt in range(MAX_CLAIMS):
             path = self.claim(key, attempt)
             if create_exclusive(path):
-                if self.done(key).exists():  # its holder finished, renaming this claim away, since the caller looked
+                rivals = self.live_elsewhere(key)
+                # Its holder finished, renaming this claim away, since the caller looked; or another job won the race.
+                if self.done(key).exists() or any(rival < self.job for rival in rivals):
                     path.unlink()
                     return None
                 return path

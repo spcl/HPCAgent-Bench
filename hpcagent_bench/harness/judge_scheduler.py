@@ -20,6 +20,7 @@ __all__ = [
     "judge_slots",
     "local_gpu_count",
     "node_numa_domains",
+    "node_cpus",
     "numa_domains",
     "slot_cores",
     "slot_shares",
@@ -29,18 +30,21 @@ __all__ = [
 NUMA_NODE_ROOT = pathlib.Path("/sys/devices/system/node")
 
 
+def node_cpus() -> dict[int, set[int]]:
+    """Each readable NUMA node's CPUs, in node order (the one parser of ``node*/cpulist``)."""
+    found: dict[int, set[int]] = {}
+    for node in sorted(NUMA_NODE_ROOT.glob("node[0-9]*"), key=lambda node: int(node.name.removeprefix("node"))):
+        try:
+            found[int(node.name.removeprefix("node"))] = timing.parse_cpu_list((node / "cpulist").read_text())
+        except OSError:
+            continue
+    return found
+
+
 def numa_domains(cpus: set[int]) -> list[list[int]]:
     """``cpus`` grouped by NUMA node, in node order, each sorted; one group when the topology is unreadable or does
     not cover ``cpus``."""
-    groups: list[list[int]] = []
-    nodes = sorted(NUMA_NODE_ROOT.glob("node[0-9]*"), key=lambda node: int(node.name.removeprefix("node")))
-    for node in nodes:
-        try:
-            listed = timing.parse_cpu_list((node / "cpulist").read_text())
-        except OSError:
-            continue
-        if mine := listed & cpus:
-            groups.append(sorted(mine))
+    groups = [sorted(mine) for listed in node_cpus().values() if (mine := listed & cpus)]
     if sum(len(group) for group in groups) != len(cpus):
         return [sorted(cpus)] if cpus else []
     return groups

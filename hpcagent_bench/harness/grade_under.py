@@ -39,6 +39,7 @@ from hpcagent_bench.harness import (
     metric,
     native_call,
     results_db,
+    sandbox,
     timing,
 )
 from hpcagent_bench.harness.envelope import Submission
@@ -268,6 +269,8 @@ class Item:
     task_hash: str = ""
     # The agent folder the live grade linked lib/ from; "" = the shared root.
     agent_root: str = ""
+    # sandbox.library_digest of that folder at the live grade; "" = none recorded.
+    agent_libs: str = ""
 
     def as_json(self) -> str:
         """One worklist line."""
@@ -496,7 +499,7 @@ CREDITED_SUBMISSIONS = f"""
 SELECT g.id AS grade_id, r.label AS episode_id, r.job, r.setup, r.slot, g.kernel, g.ts_ms, g.source_mode,
        coalesce(nullif(g.credited_speedup, 0), p.credited_speedup) AS speedup,
        coalesce(p.timing_reduction, g.timing_reduction) AS timing_reduction,
-       g.workspace_bytes, g.requests, g.requested_build, g.task_hash, g.agent_root, p.id IS NOT NULL AS promoted,
+       g.workspace_bytes, g.requests, g.requested_build, g.task_hash, g.agent_root, g.agent_libs, p.id IS NOT NULL AS promoted,
        gs.language, gs.hash, a.study
 FROM grades g
 JOIN episodes r ON r.id = g.episode_id
@@ -521,7 +524,7 @@ def credited_rows(db: pathlib.Path) -> list[dict[str, Any]]:
 UNCREDITED_SUBMISSIONS = f"""
 SELECT g.id AS grade_id, r.label AS episode_id, r.job, r.setup, r.slot, g.kernel, g.ts_ms, g.source_mode,
        g.credited_speedup AS speedup, g.timing_reduction, g.workspace_bytes, g.requests, g.requested_build, g.task_hash,
-       g.agent_root,
+       g.agent_root, g.agent_libs,
        0 AS promoted, gs.language, gs.hash, a.study
 FROM grades g
 JOIN episodes r ON r.id = g.episode_id
@@ -569,6 +572,7 @@ def item_of(row: Mapping[str, Any], env: dict[str, str], final: bool) -> Item:
         build=list(db_json.STRINGS.loads(row["requested_build"])),
         task_hash=str(row.get("task_hash") or ""),
         agent_root=str(row.get("agent_root") or ""),
+        agent_libs=str(row.get("agent_libs") or ""),
     )
 
 
@@ -611,7 +615,7 @@ def build_worklist(dbs: Iterable[pathlib.Path], env_dirs: list[pathlib.Path]) ->
 UNPROMOTED_EPISODES = f"""
 SELECT g.id AS grade_id, r.id AS run, r.label AS episode_id, r.job, r.setup, r.slot, g.kernel, g.ts_ms, g.source_mode,
        coalesce(r.final_attempt_start_ms, 0) AS cut, g.workspace_bytes, g.requests, g.requested_build, g.task_hash,
-       g.agent_root, gs.language, gs.hash,
+       g.agent_root, g.agent_libs, gs.language, gs.hash,
        (SELECT max(c.speedup) FROM grades c WHERE c.episode_id = g.episode_id AND c.kernel = g.kernel
             AND c.kind = 'score' AND c.correct = 1 AND c.ts_ms >= coalesce(r.final_attempt_start_ms, 0)) AS speedup
 FROM grades g
@@ -804,13 +808,16 @@ def delivered_language(language: str) -> Language:
 def submission_of(item: Item) -> Submission:
     """The envelope ``item`` recorded, rebuilt for a re-grade (:data:`UNKNOWN_WORKSPACE` when none was recorded).
 
-    Raises LookupError when no source was stored, or its hash is not ``source_hash`` (the id was reused)."""
+    Raises LookupError when no source was stored, its hash is not ``source_hash`` (the id was reused), or the
+    agent's ``lib``/``include`` changed since the grade (a regrade would link other code)."""
     with results_db.reading(item.db) as conn:
         units = results_db.grade_sources(conn, item.grade_id)
     if "host" not in units:
         raise LookupError(f"{item.db}: grade {item.grade_id} stored no source")
     if item.source_hash and units["host"][2] != item.source_hash:
         raise LookupError(f"{item.db}: grade {item.grade_id} is no longer the source the worklist listed")
+    if item.agent_libs and sandbox.library_digest(pathlib.Path(item.agent_root)) != item.agent_libs:
+        raise LookupError(f"{item.db}: grade {item.grade_id}'s agent libraries changed since it was graded")
     device = units.get("device")
     language = delivered_language(item.language)
     if device is None and language in languages.GPU_HOST_LANG:

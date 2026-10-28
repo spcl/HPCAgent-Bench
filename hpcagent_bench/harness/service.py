@@ -953,6 +953,7 @@ def submission_from_body(
         python_env=body.optional_text("python_env"),
         requests=requests,
         agent_root=str(root),
+        agent_libs=sandbox.library_digest(root) if root != pathlib.Path(sandbox.shared_dir()) else "",
     )
 
 
