@@ -819,6 +819,19 @@ def test_a_rerun_per_cell_shard_re_times_nothing_it_already_recorded(
     assert all(row["node"] and row["commit_sha"] for row in finals), finals  # each names the machine it ran on
 
 
+def test_a_final_grade_whose_cells_disagree_is_done_under_each_of_its_stamps(tmp_path: pathlib.Path) -> None:
+    """``final_rows`` '+'-joins the stamps of cells that disagree: a rerun shard of either stamp skips the grade,
+    one of a third stamp does not."""
+    db = shard_db(tmp_path)
+    (submit,) = [row["id"] for row in grades(db, "kind = 'submit' AND ts_ms = 10")]
+    add_grade(
+        db, "k1", 40, "final", (), of_grade_id=submit, score_rule=score_rule.SCORE_RULE, timing_reduction="mw2x3+mw4x5"
+    )
+    for stamp in ("mw4x5", "mw2x3", ""):
+        assert grade_under.done_keys(db, grade_under.FINAL_KIND, (score_rule.SCORE_RULE,), stamp) == {(RUN, "k1", 10)}
+    assert grade_under.done_keys(db, grade_under.FINAL_KIND, (score_rule.SCORE_RULE,), "mw4x10") == set()
+
+
 @pytest.mark.parametrize("recorded", ["mwd-v2", "mwd-v3", ""])  # "" = unstamped legacy row
 @pytest.mark.parametrize("promoted", [False, True])
 def test_the_final_grade_draws_fresh_inputs_whatever_the_row_recorded(recorded: str, promoted: bool) -> None:

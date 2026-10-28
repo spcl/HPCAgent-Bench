@@ -104,6 +104,31 @@ def test_a_slot_child_prefers_its_cores_node_for_its_memory(
     assert outs["y"].tolist() == [native_call.MPOL_PREFERRED_MANY, sum(1 << node for node in nodes)], outs["y"]
 
 
+class RefusingLibc:
+    """A libc whose ``set_mempolicy`` refuses MPOL_PREFERRED_MANY, as a kernel before 5.15 does."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[int, int]] = []
+
+    def syscall(self, number: object, mode: object, mask: object, maxnode: object) -> int:
+        del number, maxnode
+        mode_value = int(mode.value)  # type: ignore[attr-defined]
+        self.calls.append((mode_value, int(mask[0])))  # type: ignore[index]
+        return -1 if mode_value == native_call.MPOL_PREFERRED_MANY else 0
+
+
+@pytest.mark.skipif(
+    not osinfo.IS_LINUX or osinfo.machine() not in native_call.SET_MEMPOLICY_SYSCALL, reason="set_mempolicy is Linux"
+)
+def test_a_kernel_without_preferred_many_still_places_memory_on_the_slots_lowest_node(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    libc = RefusingLibc()
+    monkeypatch.setattr(native_call.ctypes, "CDLL", lambda *args, **kwargs: libc)
+    assert native_call.bind_memory({2, 3})
+    assert libc.calls == [(native_call.MPOL_PREFERRED_MANY, 0b1100), (native_call.MPOL_PREFERRED, 0b100)]
+
+
 @pytest.mark.parametrize(
     ("domains", "nslots", "expected"),
     [

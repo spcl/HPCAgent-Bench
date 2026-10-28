@@ -64,6 +64,7 @@ __all__ = [
     "ShmArgs",
     "abandoned_by",
     "attach_shm_array",
+    "restore_call",
     "not_abandoned",
     "child_environment",
     "child_main",
@@ -138,21 +139,40 @@ class ShmPickler(multiprocessing.reduction.ForkingPickler):
         return attach_shm_array, (path, array.dtype, array.shape, "F" if fortran else "C")
 
 
+def restore_call(
+    fn: Callable[..., object], args_pickle: bytes, kwargs: dict[str, object]
+) -> tuple[Callable[..., object], object, dict[str, object]]:
+    """The child's ``(fn, args, kwargs)`` with ``args`` unpickled (its staged arrays mapped)."""
+    return fn, pickle.loads(args_pickle), kwargs
+
+
 class ShmArgs:
-    """A child's ``(fn, args, kwargs)``, pickled when the process starts with large arrays staged by
-    :class:`ShmPickler`; :meth:`release` removes what the child did not attach."""
+    """A child's ``(fn, args, kwargs)``: ``args`` pickled on construction with large arrays staged by
+    :class:`ShmPickler` (before any start lock is held), the rest when the process starts; :meth:`release`
+    removes what the child did not attach."""
 
-    __slots__ = ("payload", "staged")
+    __slots__ = ("args_pickle", "fn", "kwargs", "staged")
 
-    def __init__(self, payload: tuple[object, ...]) -> None:
-        self.payload = payload
+    def __init__(self, fn: Callable[..., object], args: object, kwargs: dict[str, object]) -> None:
+        self.fn = fn
+        self.kwargs = kwargs
         self.staged: list[str] = []
-
-    def __reduce__(self) -> tuple[Callable[[bytes], tuple[object, ...]], tuple[bytes]]:
-        # Runs inside Process.start, so the queues among the payload may be pickled.
         buffer = io.BytesIO()
-        ShmPickler(buffer, self.staged).dump(self.payload)
-        return pickle.loads, (buffer.getvalue(),)
+        try:
+            ShmPickler(buffer, self.staged).dump(args)
+        except BaseException:
+            self.release()
+            raise
+        self.args_pickle = buffer.getvalue()
+
+    def __reduce__(
+        self,
+    ) -> tuple[
+        Callable[..., tuple[Callable[..., object], object, dict[str, object]]],
+        tuple[Callable[..., object], bytes, dict[str, object]],
+    ]:
+        # Runs inside Process.start, so the queues among the kwargs may be pickled.
+        return restore_call, (self.fn, self.args_pickle, self.kwargs)
 
     def release(self) -> None:
         for path in self.staged:
@@ -611,17 +631,28 @@ def run_forked[ResultT](
     if progress_q is not None:
         call_kwargs["progress"] = progress_q
     err_r, err_w = ctx.Pipe(duplex=False)
-    payload = (fn, args, call_kwargs)
-    # Large arrays reach a spawned or forkserver child as files, not through the start pipe.
-    call = payload if isinstance(ctx, multiprocessing.context.ForkContext) else ShmArgs(payload)
-    p = ctx.Process(target=child_main, args=(call, q, seal, err_w, tag))
-    # Every start holds the lock: a fork, or a forkserver started on first use, copies ``os.environ`` too, and
-    # another thread's context environment (an llvm ``LD_LIBRARY_PATH``) would otherwise stick to it.
+    call: tuple[object, ...] | ShmArgs = (fn, args, call_kwargs)
     try:
-        # Inside the try: a failed start (a payload member that will not pickle, EMFILE) still unlinks the
-        # arrays already staged in /dev/shm.
+        # Large arrays reach a spawned or forkserver child as files, not through the start pipe; staged here, so
+        # another slot's start never waits on this write under the lock below.
+        if not isinstance(ctx, multiprocessing.context.ForkContext):
+            call = ShmArgs(fn, args, call_kwargs)
+        p = ctx.Process(target=child_main, args=(call, q, seal, err_w, tag))
+        # Every start holds the lock: a fork, or a forkserver started on first use, copies ``os.environ`` too, and
+        # another thread's context environment (an llvm ``LD_LIBRARY_PATH``) would otherwise stick to it.
         with child_environment(env) if env else CHILD_ENV_LOCK:
             p.start()
+    except BaseException:
+        # No child: its pipe and queues go now (the finally below unlinks staged arrays only after a start).
+        err_r.close()
+        err_w.close()
+        for queue in (q, progress_q):
+            if queue is not None:
+                queue.close()
+        if isinstance(call, ShmArgs):
+            call.release()
+        raise
+    try:
         # The parent's copy of the write end goes NOW, so the read end sees EOF as soon as the child is
         # gone rather than blocking on a writer that only this process still holds.
         err_w.close()
