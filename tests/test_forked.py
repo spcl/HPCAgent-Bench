@@ -483,12 +483,14 @@ def bump_and_sum(data: dict[str, np.ndarray]) -> tuple[float, bool]:
 
 
 @pytest.mark.parametrize("method", ["spawn", "forkserver"])
-def test_a_large_argument_reaches_a_started_child_without_a_copy_in_the_parent(method: str) -> None:
+def test_a_large_argument_reaches_a_started_child_without_a_copy_in_the_parent(
+    method: str, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A spawn/forkserver start stages an array of SHM_ARG_BYTES or more as a file the child maps copy-on-write: the
     parent allocates no pickled copy, the child sees the values and layout, its writes stay its own, and no file is
     left behind."""
+    monkeypatch.setattr(forked, "shm_root", lambda: str(tmp_path))  # this test's own: workers share /dev/shm
     array = np.asfortranarray(np.ones((forked.SHM_ARG_BYTES // 8 // 1024 + 1, 1024)))
-    before = set(pathlib.Path(forked.shm_root()).glob("hb-arg-*"))
     tracemalloc.start()
     try:
         r = run_forked(bump_and_sum, {"a": array}, mp_context=method, timeout=120)
@@ -498,4 +500,16 @@ def test_a_large_argument_reaches_a_started_child_without_a_copy_in_the_parent(m
     assert r.ok and r.result == (float(array.size) + 1.0, True), r
     assert peak < array.nbytes // 4, f"the parent allocated {peak} bytes for a {array.nbytes}-byte argument"
     assert array[0, 0] == 1.0
-    assert set(pathlib.Path(forked.shm_root()).glob("hb-arg-*")) == before
+    assert not list(tmp_path.glob("hb-arg-*"))
+
+
+def dtype_name(data: dict[str, np.ndarray]) -> str:
+    return str(data["a"].dtype)
+
+
+def test_a_large_extension_typed_argument_keeps_its_dtype() -> None:
+    """A staged bfloat16 array (ml_dtypes: its dtype spells "<V2") reaches the child as bfloat16, not raw void."""
+    ml_dtypes = pytest.importorskip("ml_dtypes")
+    array = np.zeros(forked.SHM_ARG_BYTES // 2 + 1, dtype=ml_dtypes.bfloat16)
+    r = run_forked(dtype_name, {"a": array}, mp_context="spawn", timeout=120)
+    assert r.ok and r.result == "bfloat16", r

@@ -97,14 +97,14 @@ def shm_root() -> str:
     return "/dev/shm" if os.access("/dev/shm", os.W_OK) else tempfile.gettempdir()
 
 
-def attach_shm_array(path: str, dtype: str, shape: tuple[int, ...], order: Literal["C", "F"]) -> "np.ndarray":
+def attach_shm_array(path: str, dtype: "np.dtype", shape: tuple[int, ...], order: Literal["C", "F"]) -> "np.ndarray":
     """The staged array at ``path``, mapped copy-on-write (writes stay in this process); the file is unlinked, the
     mapping keeps its pages."""
     # Deferred: numpy loads an OpenMP runtime, which a spawned child must load only after its context is set (the
     # pickled arguments import it at this same point).
     import numpy as np  # noqa: PLC0415
 
-    mapped = np.memmap(path, dtype=np.dtype(dtype), mode="c", shape=shape, order=order)
+    mapped = np.memmap(path, dtype=dtype, mode="c", shape=shape, order=order)
     os.unlink(path)
     return mapped.view(np.ndarray)
 
@@ -118,7 +118,7 @@ class ShmPickler(multiprocessing.reduction.ForkingPickler):
 
     def reducer_override(
         self, obj: object
-    ) -> tuple[Callable[[str, str, tuple[int, ...], Literal["C", "F"]], "np.ndarray"], tuple[object, ...]]:
+    ) -> tuple[Callable[[str, "np.dtype", tuple[int, ...], Literal["C", "F"]], "np.ndarray"], tuple[object, ...]]:
         numpy_module = sys.modules.get("numpy")  # an array means numpy is loaded; this module never imports it
         if numpy_module is None or type(obj) not in (numpy_module.ndarray, numpy_module.memmap):
             return NotImplemented
@@ -134,7 +134,8 @@ class ShmPickler(multiprocessing.reduction.ForkingPickler):
                 (array.T if fortran else array).tofile(fh)
         except OSError:  # no room: the pipe carries it
             return NotImplemented
-        return attach_shm_array, (path, array.dtype.str, array.shape, "F" if fortran else "C")
+        # The dtype itself: an extension type (ml_dtypes bfloat16) spells "<V2" and would arrive as raw void.
+        return attach_shm_array, (path, array.dtype, array.shape, "F" if fortran else "C")
 
 
 class ShmArgs:
