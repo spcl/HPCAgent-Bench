@@ -11,6 +11,7 @@ import re
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 
+from hpcagent_agent import plugins as agent_plugins
 from hpcagent_agent.prompt_blocks import Block, Overlay, Prompt, apply, normalized
 
 from hpcagent_bench import paths
@@ -44,11 +45,13 @@ def key_of(template: str) -> str:
 
 @functools.lru_cache(maxsize=1, typed=True)
 def section_templates() -> Mapping[str, str]:
-    """Section key -> the template name its ``{% include %}`` uses, for every built-in section."""
+    """Section key -> the template name its ``{% include %}`` uses, for every built-in section and every tool fragment
+    a plugin adds (``prompts.tool_fragments``), so an overlay can set or remove those too."""
     names = [path.relative_to(paths.PROMPTS_DIR).as_posix() for path in sorted(paths.PROMPTS_DIR.rglob("*.j2"))]
     names = [name for name in names if name not in TOP_LEVEL]
     names += [f"tools/{path.name}" for path in sorted((paths.PACKAGE / "tools").glob("*.md"))]
-    return MappingProxyType({key_of(name): name for name in names})
+    names += [f"tools/{path.name}" for root in agent_plugins.roots() for path in sorted(root.glob("tools/*.md"))]
+    return MappingProxyType({key_of(name): name for name in dict.fromkeys(names)})
 
 
 @dataclasses.dataclass(frozen=True, slots=True)

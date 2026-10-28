@@ -950,7 +950,7 @@ def method_text(environ: Mapping[str, str] = os.environ) -> pathlib.Path | None:
     name = environ.get(plugins.METHOD_ENV, "").strip()
     if not name:
         return None
-    for plugin in plugins.find(plugins.plugin_dirs(environ)):
+    for plugin in plugins.find(plugins.roots(environ)):
         if (text := plugin.method(name)) is not None:
             return text
     raise SystemExit(f"{plugins.METHOD_ENV}={name}: no plugin ships methods/{name}/method.md")

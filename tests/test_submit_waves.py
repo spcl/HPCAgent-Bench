@@ -125,7 +125,8 @@ def test_a_dry_run_prints_the_waves_and_submits_nothing(tmp_path: pathlib.Path) 
 
 def test_the_wave_waits_on_one_prepare_job_rendering_what_its_setups_read(tmp_path: pathlib.Path) -> None:
     """One prepare job renders numba and each setup's reference language (C for hip, which has no CPU reference of
-    its own) in the judge image the setups name, and the first wave waits on it beside DEPEND_ON."""
+    its own) in the judge image the setups name; one golden job per language grades the references after it; the
+    first wave waits on all of them beside DEPEND_ON."""
     root = tree(tmp_path)
     bash_stub(root / "bin", "sbatch", CHAIN_SBATCH)
     edf = root / "edf"
@@ -137,8 +138,10 @@ def test_the_wave_waits_on_one_prepare_job_rendering_what_its_setups_read(tmp_pa
     calls = (root / "sbatch.calls").read_text().splitlines() if (root / "sbatch.calls").exists() else []
     prepare = [line for line in done.stdout.splitlines() if line.startswith("submitted prepare-")]
     assert prepare == ["submitted prepare-wave -> 101;cluster: renders numba,c"], (prepare, calls)
+    goldens = [line for line in done.stdout.splitlines() if line.startswith("submitted goldens-")]
+    assert goldens == ["submitted goldens-wave-c -> 102;cluster", "submitted goldens-wave-hip -> 103;cluster"]
     chain = [line.split() for line in (root / "sbatch.chain").read_text().splitlines()]
-    assert [dependency for _, _, dependency in chain] == ["afterany:77:101", "afterany:77:101"]
+    assert [dependency for _, _, dependency in chain] == ["afterany:77:101:102:103", "afterany:77:101:102:103"]
 
 
 def test_the_root_account_submits_no_prepare_job_either(tmp_path: pathlib.Path) -> None:

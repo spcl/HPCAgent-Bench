@@ -583,11 +583,17 @@ def tool_fragment_offered(stem: str, language: Language = Language.C) -> bool:
 def tool_fragments(
     search_dirs: Sequence[str] = (), off: Collection[str] = (), language: Language = Language.C
 ) -> list[str]:
-    """Template names of the offered per-tool fragments: :data:`_TOOL_ORDER` first, then alphabetical, minus ``off``."""
-    roots = (*search_dirs, *(str(root) for root in plugins.roots()))
+    """Template names of the offered per-tool fragments: :data:`_TOOL_ORDER` first, then alphabetical, minus ``off``.
+
+    Found in :func:`prompt_env`'s loader order (search path, built-in, plugins), so a listed name renders the file it
+    was found as: a plugin adds fragments, it never replaces a built-in one."""
+    found = discover(search_dirs, "tools/*.md", lambda p: p.stem, builtin_root=paths.PACKAGE)
+    for root in plugins.roots():
+        for path in sorted(root.glob("tools/*.md")):
+            found.setdefault(path.stem, path)
     by_stem = {
         name: f"tools/{path.name}"
-        for name, path in discover(roots, "tools/*.md", lambda p: p.stem, builtin_root=paths.PACKAGE).items()
+        for name, path in found.items()
         if tool_fragment_offered(name, language) and f"tools/{path.name}" not in off
     }
     ordered = [by_stem.pop(t) for t in _TOOL_ORDER if t in by_stem]

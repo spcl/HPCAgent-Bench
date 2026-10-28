@@ -353,11 +353,20 @@ def refuse_frozen(spec: str) -> None:
 
 
 def leaves(token: str, definitions: Mapping[str, tags.PacketDef]) -> frozenset[str]:
-    """What ``token`` stages: its page tokens, plus the key when it switches env, a method or a tool on."""
+    """What ``token`` stages: its page tokens, plus the key when it changes anything beyond its pages (env, a
+    method, a tool, a subagent, the prompt's overlays or template roots)."""
     definition = definitions.get(token)
     if definition is None:
         return frozenset({token})
-    own = frozenset({token}) if definition.env or definition.method or definition.tools else frozenset[str]()
+    acts = (
+        definition.env
+        or definition.method
+        or definition.tools
+        or definition.agents
+        or definition.prompt_overlays
+        or definition.template_dirs
+    )
+    own = frozenset({token}) if acts else frozenset[str]()
     return own.union(definition.skills, *(leaves(sub, definitions) for sub in definition.packets))
 
 

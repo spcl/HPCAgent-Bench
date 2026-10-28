@@ -3,6 +3,7 @@
 """A plugin's ``[install]`` command installs its package into the interpreter the judge runs in: ``{python}`` and
 ``{root}`` are filled in, it runs in ``root``, a plugin without one is left alone, and a failure names the plugin."""
 
+import functools
 import pathlib
 import sys
 
@@ -93,7 +94,9 @@ def visible_as(monkeypatch: pytest.MonkeyPatch, folder: pathlib.Path, installed:
     """``folder`` through the user plugin variable, and ``installed`` as an installed package's entry point."""
     monkeypatch.delenv(agent_plugins.PLUGIN_DIRS_ENV, raising=False)
     monkeypatch.setenv(agent_plugins.USER_PLUGIN_DIRS_ENV, str(folder))
-    monkeypatch.setattr(plugins, "entry_point_dirs", lambda: (installed,))
+    monkeypatch.setattr(agent_plugins, "entry_point_dirs", lambda: (installed,))
+    # A fresh cache for this test only: the module's own stays as other tests left it.
+    monkeypatch.setattr(agent_plugins, "roots_of", functools.lru_cache(maxsize=8)(agent_plugins.roots_of.__wrapped__))
 
 
 def test_a_plugin_that_installs_itself_is_found_once(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:

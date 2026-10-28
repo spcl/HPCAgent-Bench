@@ -10,21 +10,19 @@ import argparse
 import functools
 import hashlib
 import importlib
-import importlib.metadata
-import os
 import pathlib
 import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 
 import pydantic
-
 from hpcagent_agent import plugins as agent_plugins
 from hpcagent_agent.plugins import Plugin
 
+from hpcagent_bench import paths
 from hpcagent_bench.skill_frontmatter import PacketBlock
 from hpcagent_bench.vocabulary import PACKETS, PacketDef
 
@@ -39,35 +37,17 @@ __all__ = [
     "main",
     "packet_definition",
     "page_path",
+    "provenance",
     "recorded",
     "register",
-    "register_packets",
     "register_flavors",
+    "register_packets",
     "roots",
 ]
 
-ENTRY_POINT_GROUP = "hpcagent_bench.plugins"
-
-
-def entry_point_dirs() -> tuple[pathlib.Path, ...]:
-    """The plugin directories installed packages register (:data:`ENTRY_POINT_GROUP`), by entry point name."""
-    found: list[pathlib.Path] = []
-    for entry in sorted(importlib.metadata.entry_points(group=ENTRY_POINT_GROUP), key=lambda point: point.name):
-        package = importlib.import_module(entry.value)
-        locations = list(package.__spec__.submodule_search_locations or []) if package.__spec__ else []
-        if not locations:
-            raise ValueError(f"plugin entry point {entry.name!r}: {entry.value} is not a package")
-        found.append(pathlib.Path(locations[0]).resolve())
-    return tuple(found)
-
-
-def roots(environ: Mapping[str, str] = os.environ) -> tuple[pathlib.Path, ...]:
-    """Every plugin directory: the folders, then the installed ones, each once. A folder plugin with an
-    ``[install]`` block installs itself, so the installed package of its name is that plugin again, not a second one."""
-    folders = agent_plugins.plugin_dirs(environ)
-    installing = {plugin.name for plugin in map(agent_plugins.read, folders) if plugin.manifest.install is not None}
-    installed = (root for root in entry_point_dirs() if agent_plugins.read(root).name not in installing)
-    return tuple(dict.fromkeys((*folders, *installed)))
+ENTRY_POINT_GROUP = agent_plugins.ENTRY_POINT_GROUP
+entry_point_dirs = agent_plugins.entry_point_dirs
+roots = agent_plugins.roots
 
 
 class FlavorBlock(pydantic.BaseModel):
@@ -90,14 +70,20 @@ def register_flavors() -> None:
     """Add every plugin's flavor columns, once per process, after the shipped columns."""
     from hpcagent_bench.columns import add_flavor  # deferred: columns calls this at its end
 
-    for plugin in agent_plugins.find(roots()):
+    found = agent_plugins.find(roots())
+    # Every block validates before any column is added, so a refused plugin adds nothing.
+    blocks = [
+        (plugin, key, FlavorBlock.model_validate(raw))
+        for plugin in found
+        for key, raw in sorted(plugin.manifest.flavors.items())
+    ]
+    for plugin in found:
         if plugin.manifest.flavors:
             # A folder plugin's optimizer imports as hpcagent_bench_plugins.<name>.<module>.
             agent_plugins.import_package(plugin)
-        for key, raw in sorted(plugin.manifest.flavors.items()):
-            block = FlavorBlock.model_validate(raw)
-            for base in block.extends:
-                add_flavor(base, key, block.name, block.full_name, block.optimizer)
+    for _plugin, key, block in blocks:
+        for base in block.extends:
+            add_flavor(base, key, block.name, block.full_name, block.optimizer)
 
 
 def packet_definition(plugin: Plugin, key: str, block: PacketBlock) -> PacketDef:
@@ -124,18 +110,35 @@ def packet_definition(plugin: Plugin, key: str, block: PacketBlock) -> PacketDef
 
 
 def register_packets(found: tuple[Plugin, ...]) -> None:
-    """Add every plugin's packets to the vocabulary in plugin and key order; a packet's method must be shipped."""
+    """Add every plugin's packets to the vocabulary in plugin and key order, after checking all of them, so a refused
+    plugin adds nothing. Refused: a method no plugin ships, a key or alias already registered or naming a shipped
+    skill page, and a plugin page a shipped page of the same name would hide."""
+    from hpcagent_bench.external_skills import shipped_page_names  # deferred: it imports the packet vocabulary
+
+    shipped_pages = shipped_page_names()
     blocks = [
         (plugin, key, PacketBlock.model_validate(raw))
         for plugin in found
         for key, raw in sorted(plugin.manifest.packets.items())
     ]
     methods = {name.parent.name for plugin in found for name in (plugin.root / "methods").glob("*/method.md")}
+    for plugin in found:
+        hidden = sorted({path.parent.name for path in (plugin.root / "skills").glob("*/SKILL.md")} & shipped_pages)
+        if hidden:
+            raise ValueError(f"plugin {plugin.name!r}: skill pages {hidden} are shipped pages' names")
+    claimed: set[str] = set()
     for plugin, key, block in blocks:
         if block.method and block.method not in methods:
             raise ValueError(
                 f"plugin {plugin.name!r}: packet {key!r} runs method {block.method!r}, which no plugin ships"
             )
+        for name in (key, *block.aliases):
+            if name in shipped_pages:
+                raise ValueError(f"plugin {plugin.name!r}: packet name {name!r} is a shipped skill page's name")
+            if name in PACKETS.entries or name in claimed:
+                raise ValueError(f"plugin {plugin.name!r}: packet name {name!r} is already registered")
+            claimed.add(name)
+    for plugin, key, block in blocks:
         PACKETS.add(key, packet_definition(plugin, key, block), aliases=block.aliases)
 
 
@@ -165,8 +168,17 @@ def load() -> tuple[Plugin, ...]:
 
 @functools.lru_cache(maxsize=1, typed=True)
 def recorded() -> str:
-    """The loaded plugins as a results row records them: sorted ``name:sha256`` joined by ``,``; ``""`` if none."""
-    return ",".join(sorted(f"{plugin.name}:{agent_plugins.digest(plugin.root)}" for plugin in register()))
+    """The loaded plugins as a results row records them: sorted ``name:sha256`` joined by ``,``, the digest over the
+    plugin folder and, with an ``[install]`` root in git, that checkout's commit (its optimizer and route code);
+    ``""`` if none."""
+    return ",".join(sorted(f"{plugin.name}:{provenance(plugin)}" for plugin in register()))
+
+
+def provenance(plugin: Plugin) -> str:
+    """``plugin``'s folder digest, ``+<commit>`` of its install root's checkout when it has one in git."""
+    root = install_root(plugin)
+    commit = paths.git_head(root) if root is not None and (root / ".git").exists() else ""
+    return agent_plugins.digest(plugin.root) + (f"+{commit}" if commit else "")
 
 
 def page_path(page: str) -> pathlib.Path | None:
