@@ -130,7 +130,7 @@ members = [
     "hpcagent-bench",
     "hpcagent-bench-harbor-adapter",
 ]
-overrides = [{ name = "dace", git = "https://github.com/spcl/dace.git?rev=7683e14380e3cb53a13a4dad2651a52dd81cb799" }]
+overrides = [{ name = "dace", git = "https://github.com/spcl/dace.git?rev=0f8ac02271cf5e0952bb591f402e8a47971348bd" }]
 
 [[package]]
 name = "accelerate"
@@ -1417,7 +1417,7 @@ wheels = [
 [[package]]
 name = "dace"
 version = "2.0.0b1"
-source = { git = "https://github.com/spcl/dace.git?rev=7683e14380e3cb53a13a4dad2651a52dd81cb799#7683e14380e3cb53a13a4dad2651a52dd81cb799" }
+source = { git = "https://github.com/spcl/dace.git?rev=0f8ac02271cf5e0952bb591f402e8a47971348bd#0f8ac02271cf5e0952bb591f402e8a47971348bd" }
 dependencies = [
     { name = "astunparse" },
     { name = "click" },
@@ -2558,7 +2558,7 @@ requires-dist = [
     { name = "cuda-tile", marker = "extra == 'nvgpu'" },
     { name = "cupy", marker = "platform_machine == 'x86_64' and extra == 'amdgpu'" },
     { name = "cupy-cuda13x", marker = "extra == 'nvgpu'" },
-    { name = "dace", git = "https://github.com/spcl/dace.git?rev=7683e14380e3cb53a13a4dad2651a52dd81cb799" },
+    { name = "dace", git = "https://github.com/spcl/dace.git?rev=0f8ac02271cf5e0952bb591f402e8a47971348bd" },
     { name = "datasets", specifier = ">=2.17" },
     { name = "einops" },
     { name = "fastapi" },
