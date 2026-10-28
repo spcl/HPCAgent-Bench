@@ -91,12 +91,15 @@ def resolve(overlays: Sequence[Overlay]) -> TaskBlocks:
     context: dict[str, str] = {}
     for overlay in overlays:
         try:
-            prompt = apply(prompt, overlay)
+            # A task block's vars are render context for its template, not {{KEY}} slots of its text.
+            prompt = apply(prompt, overlay, check_slots=False)
         except ValueError as exc:
             raise ValueError(f"task prompt: {exc}") from None
-        for key, edit in overlay.set.items():
-            if edit.text is not None:  # a replacement keeps its own ending (the last section ends without a blank line)
-                texts[key] = edit.text.rstrip("\n") + "\n"
+        for key, edit in overlay.set:
+            if edit.text is not None:
+                # A replaced section keeps its own ending (the last one ends without a blank line); an inserted
+                # block's replacement ends like the insert did, in one blank line.
+                texts[key] = normalized(edit.text) if key in roots else edit.text.rstrip("\n") + "\n"
             context.update(edit.vars)
         for insert in overlay.insert:
             anchor = insert.before or insert.after
@@ -119,7 +122,8 @@ def blocks_for_loader(
     aliases: dict[str, str | None] = {}
     for key, template in templates.items():
         block = present.get(key)
-        if block is None or not block.enabled:
+        # A section removed and inserted again under its id renders beside its new anchor only.
+        if block is None or not block.enabled or key in roots:
             aliases[template] = None
         elif key in texts:
             aliases[template] = INLINE_PREFIX + key

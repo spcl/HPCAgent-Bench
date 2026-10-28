@@ -213,6 +213,20 @@ def test_removing_an_inserted_block_keeps_the_blocks_anchored_to_it(tmp_path: pa
     assert task_markers([first, second, gone], markers) == ["## Timing", "TWO"]
 
 
+def test_a_section_removed_and_inserted_again_renders_once(tmp_path: pathlib.Path) -> None:
+    """Under its id the new block renders beside its anchor only, never again inside the old section's include."""
+    gone = task_overlay(tmp_path, "gone", "remove: [timing]")
+    back = task_overlay(tmp_path, "back", "insert:\n  - {after: intro, block: {id: timing, text: TIMED ONCE}}")
+    assert build_prompt(TASK, prompt_config=with_overlays(gone, back)).count("TIMED ONCE") == 1
+
+
+def test_a_replaced_inserted_block_ends_in_a_blank_line_as_in_the_agent_prompt(tmp_path: pathlib.Path) -> None:
+    first = task_overlay(tmp_path, "first", "insert:\n  - {after: timing, block: {id: note, text: NOTE}}")
+    second = task_overlay(tmp_path, "second", "set:\n  note: {text: BYE}")
+    sources = prompt_sections.resolve([prompt_build.load_overlay(str(path)).task for path in (first, second)]).sources
+    assert sources[prompt_sections.INLINE_PREFIX + "note"] == "BYE\n\n"
+
+
 def test_a_removed_block_is_gone_for_later_overlays(tmp_path: pathlib.Path) -> None:
     gone = task_overlay(tmp_path, "gone", "remove: [timing]")
     back = task_overlay(tmp_path, "back", "set:\n  timing: {enabled: true}")

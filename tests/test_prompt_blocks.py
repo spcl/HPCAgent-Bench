@@ -136,6 +136,50 @@ def test_inserts_after_one_anchor_render_in_their_listed_order() -> None:
     assert prompt_blocks.apply(prompt, Overlay(insert=inserts)).ids() == ("a", "a+0", "a+1", "a+2", "b")
 
 
+def test_a_filled_value_is_never_filled_again() -> None:
+    """One pass: a method page that mentions another slot keeps the mention."""
+    block = Block(id="a", text="{{A}} {{B}}", vars={"A": "{{B}}", "B": "b"})
+    assert prompt_blocks.render(prompt_blocks.Prompt(blocks=(block,))) == "{{B}} b"
+
+
+def test_the_models_are_immutable_and_hashable() -> None:
+    block = Block(id="a", text="x {{K}}", vars={"K": "v"})
+    assert hash(block) == hash(Block(id="a", text="x {{K}}", vars={"K": "v"}))
+    assert block.model_dump()["vars"] == {"K": "v"}
+    with pytest.raises(TypeError):
+        block.vars[0] = ("K", "w")  # type: ignore[index]
+
+
+def test_a_var_for_a_slot_the_block_lacks_and_an_empty_edit_are_refused() -> None:
+    """An overlay naming the wrong block would otherwise leave the slot it meant empty."""
+    prompt = prompt_blocks.parse("@@section a@@\nno slots here\n")
+    with pytest.raises(ValueError, match="no slots \\['ADDENDUM'\\]"):
+        prompt_blocks.apply(prompt, Overlay(set={"a": Edit(vars={"ADDENDUM": "x"})}))
+    with pytest.raises(pydantic.ValidationError, match="sets text, vars or enabled"):
+        Edit()
+
+
+def test_a_malformed_or_untyped_overlay_file_is_a_value_error(tmp_path: pathlib.Path) -> None:
+    """The launcher prints these as one line, never a traceback."""
+    cases = {
+        "no-block.yaml": "agent:\n  insert:\n    - {after: intro}\n",
+        "empty-edit.yaml": "agent:\n  set:\n    intro:\n",
+        "a-list.yaml": "- agent\n",
+        "null-var.yaml": "agent:\n  set:\n    intro: {vars: {TOOLS: null}}\n",
+        "bad-yaml.yaml": "agent: [\n",
+    }
+    for name, text in cases.items():
+        (tmp_path / name).write_text(text)
+        with pytest.raises(ValueError):
+            prompt_build.load_overlay(str(tmp_path / name))
+
+
+def test_an_include_names_a_partial_in_its_folder_only(tmp_path: pathlib.Path) -> None:
+    (tmp_path / "ok.md").write_text("fine\n")
+    assert prompt_build.expand_includes("1. @@include ../ok@@\n", tmp_path) == "1. @@include ../ok@@\n"
+    assert prompt_build.expand_includes("`@@include a@@` or `@@include b@@`\n", tmp_path).startswith("`@@include a")
+
+
 def test_a_disabled_block_does_not_render_and_a_removed_one_is_gone() -> None:
     prompt = prompt_blocks.parse("@@section a@@\nA\n@@section b@@\nB\n")
     off = prompt_blocks.apply(prompt, Overlay(set={"a": Edit(enabled=False)}))
@@ -176,6 +220,9 @@ if __name__ == "__main__":
     test_a_later_overlay_wins_over_an_earlier_one_and_vars_merge()
     test_an_overlay_naming_an_unknown_block_or_an_existing_id_is_refused()
     test_an_insert_names_exactly_one_anchor()
+    test_a_filled_value_is_never_filled_again()
+    test_the_models_are_immutable_and_hashable()
+    test_a_var_for_a_slot_the_block_lacks_and_an_empty_edit_are_refused()
     test_inserts_after_one_anchor_render_in_their_listed_order()
     test_a_disabled_block_does_not_render_and_a_removed_one_is_gone()
     test_show_names_the_overlay_behind_every_changed_block()

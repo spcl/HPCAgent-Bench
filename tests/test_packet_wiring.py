@@ -199,7 +199,7 @@ def test_an_unknown_packet_stops_the_driver(monkeypatch: pytest.MonkeyPatch) -> 
 def method_vars(packet: str) -> dict[str, str]:
     """The slots the resolved agent prompt of ``packet`` fills in its method block."""
     prompt = prompt_build.resolve_layers([], packet)
-    return next(block.vars for block in prompt.blocks if block.id == prompt_build.METHOD_BLOCK)
+    return next(dict(block.vars) for block in prompt.blocks if block.id == prompt_build.METHOD_BLOCK)
 
 
 def test_without_a_packet_the_resolved_prompt_fills_no_hints() -> None:
