@@ -13,7 +13,9 @@ import subprocess
 import sys
 import threading
 import time
+import tracemalloc
 
+import numpy as np
 import pytest
 
 from hpcagent_bench import osinfo
@@ -472,3 +474,28 @@ def test_a_reference_run_finishes_after_its_request_is_abandoned() -> None:
     with forked.abandoned_by(abandoned), forked.not_abandoned():
         r = run_forked(sleep_then_answer, timeout=30)
     assert r.ok and r.result == 7, r
+
+
+def bump_and_sum(data: dict[str, np.ndarray]) -> tuple[float, bool]:
+    array = data["a"]
+    array[0, 0] += 1.0
+    return float(array.sum()), bool(array.flags.f_contiguous)
+
+
+@pytest.mark.parametrize("method", ["spawn", "forkserver"])
+def test_a_large_argument_reaches_a_started_child_without_a_copy_in_the_parent(method: str) -> None:
+    """A spawn/forkserver start stages an array of SHM_ARG_BYTES or more as a file the child maps copy-on-write: the
+    parent allocates no pickled copy, the child sees the values and layout, its writes stay its own, and no file is
+    left behind."""
+    array = np.asfortranarray(np.ones((forked.SHM_ARG_BYTES // 8 // 1024 + 1, 1024)))
+    before = set(pathlib.Path(forked.shm_root()).glob("hb-arg-*"))
+    tracemalloc.start()
+    try:
+        r = run_forked(bump_and_sum, {"a": array}, mp_context=method, timeout=120)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert r.ok and r.result == (float(array.size) + 1.0, True), r
+    assert peak < array.nbytes // 4, f"the parent allocated {peak} bytes for a {array.nbytes}-byte argument"
+    assert array[0, 0] == 1.0
+    assert set(pathlib.Path(forked.shm_root()).glob("hb-arg-*")) == before
