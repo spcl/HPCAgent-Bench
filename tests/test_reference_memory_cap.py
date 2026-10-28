@@ -67,6 +67,16 @@ def test_a_reference_takes_its_fraction_of_the_rank_share_not_the_array_budget(
         assert sizing.reference_memory_gb(20.0) == pytest.approx(96.0)
 
 
+def test_a_judge_owning_the_node_caps_a_reference_by_its_slots_cores(monkeypatch: pytest.MonkeyPatch) -> None:
+    """One judge holds all four NUMA slots and grades on them at once: each reference gets its slot's share, never
+    the whole node's (four references at 0.75 of the node would ask for three nodes)."""
+    mi300_rank(monkeypatch)
+    monkeypatch.setattr(sizing.os, "sched_getaffinity", lambda _pid: set(range(NODE_CORES)))
+    with config.overridden("limits.reference_node_fraction", 0.75):
+        assert sizing.reference_memory_gb(20.0, set(range(RANK_CORES))) == pytest.approx(96.0)
+        assert sizing.reference_memory_gb(20.0) == pytest.approx(384.0)
+
+
 def test_the_kernel_budget_is_the_floor_of_a_reference_cap(monkeypatch: pytest.MonkeyPatch) -> None:
     """A kernel whose declared arrays already exceed the rank share keeps its own budget."""
     mi300_rank(monkeypatch)
@@ -92,7 +102,7 @@ def capture_caps(monkeypatch: pytest.MonkeyPatch) -> list[float]:
         return native_call.IsolatedCall({}, [1000, 1001], 0, [], ({}, {}))
 
     monkeypatch.setattr(grading, "call_isolated", fake_call)
-    monkeypatch.setattr(sizing, "rank_memory_share_bytes", lambda: 128 * GIB)
+    monkeypatch.setattr(sizing, "rank_memory_share_bytes", lambda _cpus=frozenset(): 128 * GIB)
     return caps
 
 

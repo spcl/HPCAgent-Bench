@@ -128,7 +128,7 @@ class Warmer:
     def warm(self, cell: Cell) -> None:
         """Run ``cell`` on a slot taken at :data:`PRIORITY`; publish every few torch cells of its kind."""
         slot = self.acquire(PRIORITY)
-        native_call.set_assigned_device(slot.index if slot.kind == "gpu" else None)
+        native_call.set_assigned_device(slot.index)  # a GPU ordinal, or a CPU slot (its NUMA cores)
         try:
             if cell.kind is None:
                 plan = prepare.Plan(self.language, self.preset, self.datatype, None)
