@@ -62,10 +62,10 @@ SETUP_FOR_KEY: dict[str, tuple[str, str | None]] = {
 CPF_SRC_KEYS = ("cpf-cpu-src", "cpf-gpu-src", "cpf-cpu-src-kinds", "cpf-gpu-src-kinds")
 CPF_TOOL_KEYS = ("cpf-tool-cpu", "cpf-tool-gpu", "cpf-tool-cpu-kinds", "cpf-tool-gpu-kinds")
 
-#: cpf_cache.DIALECT names c, c++/cpp and hip; a CPF-composing key resolved for any other language
-#: (only all-in-nvidia, pinned to cuda by its device) cannot render a drop-in at all and every
-#: consumer of it (packet_note, materialize_shared.sh) must refuse rather than serve nothing.
-DIALECT_LANGUAGES = frozenset({"c", "cpp", "hip"})
+#: cpf_cache.DIALECT names c, c++/cpp, hip and cuda; a CPF-composing key resolved for any other language
+#: cannot render a drop-in at all and every consumer of it (packet_note, materialize_shared.sh) must
+#: refuse rather than serve nothing.
+DIALECT_LANGUAGES = frozenset({"c", "cpp", "hip", "cuda"})
 
 
 def resolved(key: str) -> packets.Packet:
