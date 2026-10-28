@@ -23,6 +23,7 @@ __all__ = [
     "ROOT",
     "SCRATCH_ENV",
     "fast_scratch_root",
+    "git_dirty",
     "git_head",
     "node_tmpfs_root",
     "repo_root",
@@ -95,6 +96,16 @@ def git_head(root: pathlib.Path = ROOT, *, short: bool = False) -> str:
     except (OSError, subprocess.SubprocessError):
         return ""
     return done.stdout.strip() if done.returncode == 0 else ""
+
+
+def git_dirty(root: pathlib.Path) -> bool:
+    """Whether the git checkout at ``root`` has uncommitted changes to tracked files; False when git cannot tell."""
+    argv = ["git", "-C", str(root), "status", "--porcelain", "--untracked-files=no"]
+    try:
+        done = subprocess.run(argv, capture_output=True, text=True, timeout=10, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return done.returncode == 0 and bool(done.stdout.strip())
 
 
 def scratch_dir() -> pathlib.Path:

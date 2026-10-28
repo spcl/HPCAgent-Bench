@@ -168,32 +168,20 @@ def test_an_unknown_packet_tool_stops_the_server() -> None:
     assert "nosuchtool" in result.stderr
 
 
-def test_without_a_packet_the_driver_adds_no_tools_and_no_text(monkeypatch: pytest.MonkeyPatch) -> None:
-    """No method: no packet tool is allowed, and the hints slot is empty."""
+def test_without_a_packet_the_driver_adds_no_tools(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No method: no packet tool is allowed."""
     monkeypatch.delenv("AGENT_METHOD", raising=False)
     monkeypatch.delenv(TOOLS_ENV, raising=False)
     driver = load_driver()
     assert "experiment" not in driver.agent_tools()
-    assert driver.hints_text() == ""
 
 
-def test_the_driver_fills_the_hints_slot_with_the_packet_text_and_allows_its_tools(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The autokernel packet: the hints slot holds its method.md, and claude's allow-list gains its tool."""
+def test_the_driver_allows_the_packet_tools(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The autokernel packet: claude's allow-list gains its tool."""
     for name, value in AUTOKERNEL.items():
         monkeypatch.setenv(name, value)
     driver = load_driver()
     assert driver.agent_tools().count("experiment") == 1, "allowed once, as the server serves it"
-    assert driver.hints_text() == METHOD.read_text(encoding="utf-8").strip()
-
-
-def test_an_unknown_packet_stops_the_driver(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The driver refuses a method no plugin ships rather than launching agents without it."""
-    monkeypatch.setenv("AGENT_METHOD", "nosuchpacket")
-    driver = load_driver()
-    with pytest.raises(SystemExit, match="nosuchpacket"):
-        driver.hints_text()
 
 
 def method_vars(packet: str) -> dict[str, str]:

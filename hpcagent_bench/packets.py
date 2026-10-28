@@ -16,14 +16,13 @@ from types import MappingProxyType
 
 from hpcagent_agent.plugins import METHOD_ENV, PACKET_AGENTS_ENV
 
-from hpcagent_bench import external_skills, paths, plugins
+from hpcagent_bench import external_skills, plugins
 from hpcagent_bench import study_tags as tags
 from hpcagent_bench.config import RequestCapability
 from hpcagent_bench.skill_frontmatter import Applies, SkillFrontmatter, split_frontmatter
 from hpcagent_bench.vocabulary import PacketDevice
 
 __all__ = [
-    "AGENT_PROMPT",
     "CPF_ENV_KEYS",
     "CPF_REQUEST_CAPABILITY",
     "DEVICE_LANGUAGES",
@@ -71,8 +70,6 @@ __all__ = [
 ]
 
 SKILLS_DIR = pathlib.Path(__file__).resolve().parent / "skills"
-#: The cluster prompt, whose ``@@section`` names a packet's ``agent_*`` keys address.
-AGENT_PROMPT = paths.ROOT / "agent" / "prompt.md"
 
 PLACEHOLDER_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
@@ -300,19 +297,19 @@ def reached_keys(token: str, definitions: Mapping[str, tags.PacketDef]) -> tuple
     return (token, *(key for sub in definition.packets for key in reached_keys(sub, definitions)))
 
 
+def reached(spec: str) -> list[tuple[str, tags.PacketDef]]:
+    """The ``(key, definition)`` of every packet ``spec`` reaches, in spec and composition order."""
+    definitions = tags.registry().packet_defs
+    return [(key, definitions[key]) for token in spec_parts(spec) for key in reached_keys(token, definitions)]
+
+
 def prompt_method(spec: str) -> str:
     """The method every packet ``spec`` reaches runs (its ``method.md`` fills the agent prompt's ``{{HINTS}}``), or
     "" without one.
 
     :raises ValueError: the spec combines two methods.
     """
-    definitions = tags.registry().packet_defs
-    methods = {
-        definitions[key].method
-        for token in spec_parts(spec)
-        for key in reached_keys(token, definitions)
-        if definitions[key].method
-    }
+    methods = {definition.method for _, definition in reached(spec) if definition.method}
     if len(methods) > 1:
         raise ValueError(f"packet spec {spec!r} combines methods {sorted(methods)}; at most one is allowed")
     return next(iter(methods), "")
@@ -320,33 +317,17 @@ def prompt_method(spec: str) -> str:
 
 def prompt_roots(spec: str) -> tuple[str, ...]:
     """The template roots every packet ``spec`` reaches names, in spec and composition order, once each."""
-    definitions = tags.registry().packet_defs
-    roots: dict[str, None] = {}
-    for token in spec_parts(spec):
-        for key in reached_keys(token, definitions):
-            roots.update(dict.fromkeys(definitions[key].template_dirs))
-    return tuple(roots)
+    return tuple(dict.fromkeys(root for _, definition in reached(spec) for root in definition.template_dirs))
 
 
 def prompt_layers(spec: str) -> tuple[str, ...]:
     """The agent-prompt overlays every packet ``spec`` reaches names, in spec and composition order, once each."""
-    definitions = tags.registry().packet_defs
-    names: dict[str, None] = {}
-    for token in spec_parts(spec):
-        for key in reached_keys(token, definitions):
-            names.update(dict.fromkeys(definitions[key].prompt_overlays))
-    return tuple(names)
+    return tuple(dict.fromkeys(name for _, definition in reached(spec) for name in definition.prompt_overlays))
 
 
 def refuse_frozen(spec: str) -> None:
     """Raise ``ValueError`` when ``spec`` reaches a frozen key (launchers call it; :func:`resolve` does not)."""
-    definitions = tags.registry().packet_defs
-    frozen = {
-        key: definitions[key].frozen
-        for part in spec_parts(spec)
-        for key in reached_keys(part, definitions)
-        if definitions[key].frozen
-    }
+    frozen = {key: definition.frozen for key, definition in reached(spec) if definition.frozen}
     if frozen:
         reasons = "; ".join(f"{key}: {reason}" for key, reason in frozen.items())
         raise ValueError(f"packet spec {spec!r} takes no new submissions ({reasons})")

@@ -47,6 +47,10 @@ def test_the_fingerprint_follows_the_plugin_sources(tmp_path: pathlib.Path) -> N
     (tmp_path / "module.py").write_text("changed = True\n")
 
     assert plugins.fingerprint(found) != before
+    changed = plugins.fingerprint(found)
+    (tmp_path / ".venv").mkdir()
+    (tmp_path / ".venv" / "lib.py").write_text("ignored = True\n")
+    assert plugins.fingerprint(found) == changed, "what the install copy leaves out is not fingerprinted"
     assert plugins.fingerprint(
         agent_plugins.find([plugin_folder(tmp_path / "other", "plain", "")])
     ) == plugins.fingerprint(())

@@ -35,7 +35,7 @@ __all__ = [
 PROMPT_JSON = "prompt.json"
 
 #: The line that opens one block; it is never rendered.
-SECTION = re.compile(r"^@@section ([a-z_]+)@@\n", re.MULTILINE)
+SECTION = re.compile(r"^@@section ([a-z_][a-z0-9_+]*)@@\n", re.MULTILINE)
 
 
 #: A ``{{KEY}}`` slot.

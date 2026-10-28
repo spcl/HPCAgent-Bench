@@ -1125,7 +1125,11 @@ def build_context(
         if is_mpi and allowances.grid is GridChooser.TASK
         else ""
     )
-    # an overlay's vars fill the slots of the texts it brings; they never shadow what the benchmark states
+    # An overlay's vars fill the slots of the texts it brings; one named like a stated value is refused, not dropped.
+    # ``strategy`` is the one var the context is built from (read above), so it is not a shadow.
+    shadowing = sorted(set(blocks.vars) & set(context) - {"strategy"})
+    if shadowing:
+        raise ValueError(f"task prompt: overlay vars {shadowing} shadow values the benchmark states")
     return {**blocks.vars, **context}
 
 

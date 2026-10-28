@@ -79,7 +79,7 @@ def resolve(overlays: Sequence[Overlay]) -> TaskBlocks:
     """The task halves ``overlays`` applied in order to the built-in sections by
     :func:`hpcagent_agent.prompt_blocks.apply`, the agent prompt's own rule: the same refusals, the same order of the
     blocks inserted beside one section, and a removed or disabled block's inserts kept. Each inserted block renders
-    beside the section its anchor chain starts from.
+    beside the section its anchor chain starts from; a block's vars apply only while it is enabled.
 
     :raises ValueError: an overlay names a block the prompt does not have, or inserts one it already has.
     """
@@ -88,7 +88,8 @@ def resolve(overlays: Sequence[Overlay]) -> TaskBlocks:
     texts: dict[str, str] = {}
     #: Inserted id -> the section its anchor chain starts from, and on which side of it.
     roots: dict[str, tuple[str, str]] = {}
-    context: dict[str, str] = {}
+    #: Block id -> the render vars its edits and insert brought, applied only while the block stays enabled.
+    block_vars: dict[str, dict[str, str]] = {}
     for overlay in overlays:
         try:
             # A task block's vars are render context for its template, not {{KEY}} slots of its text.
@@ -100,12 +101,14 @@ def resolve(overlays: Sequence[Overlay]) -> TaskBlocks:
                 # A replaced section keeps its own ending (the last one ends without a blank line); an inserted
                 # block's replacement ends like the insert did, in one blank line.
                 texts[key] = normalized(edit.text) if key in roots else edit.text.rstrip("\n") + "\n"
-            context.update(edit.vars)
+            block_vars.setdefault(key, {}).update(edit.vars)
         for insert in overlay.insert:
             anchor = insert.before or insert.after
             roots[insert.block.id] = roots.get(anchor, (anchor, "before" if insert.before else "after"))
             texts[insert.block.id] = normalized(insert.block.text)
-            context.update(insert.block.vars)
+            block_vars[insert.block.id] = dict(insert.block.vars)
+    enabled = {block.id for block in prompt.blocks if block.enabled}
+    context = {name: value for key, values in block_vars.items() if key in enabled for name, value in values.items()}
     return blocks_for_loader(prompt, roots, templates, texts, context)
 
 

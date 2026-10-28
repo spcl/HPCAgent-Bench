@@ -10,6 +10,7 @@ import argparse
 import functools
 import hashlib
 import importlib
+import os
 import pathlib
 import shlex
 import shutil
@@ -175,10 +176,12 @@ def recorded() -> str:
 
 
 def provenance(plugin: Plugin) -> str:
-    """``plugin``'s folder digest, ``+<commit>`` of its install root's checkout when it has one in git."""
+    """``plugin``'s folder digest, ``+<commit>`` of its install root's checkout when it has one in git, and
+    ``-dirty`` when that checkout has uncommitted changes (the commit alone would name code that never ran)."""
     root = install_root(plugin)
     commit = paths.git_head(root) if root is not None and (root / ".git").exists() else ""
-    return agent_plugins.digest(plugin.root) + (f"+{commit}" if commit else "")
+    dirty = "-dirty" if commit and root is not None and paths.git_dirty(root) else ""
+    return agent_plugins.digest(plugin.root) + (f"+{commit}{dirty}" if commit else "")
 
 
 def page_path(page: str) -> pathlib.Path | None:
@@ -251,20 +254,20 @@ def fingerprint(found: tuple[Plugin, ...]) -> str:
             continue
         digest.update(f"{plugin.name}:{plugin.manifest.install}\n".encode())
         ignored = copied_without(root)
-        for path in sorted(p for p in root.rglob("*") if p.is_file() and not skipped(root, p, ignored)):
+        for path in sorted(installed_files(root, ignored)):
             stat = path.stat()
             digest.update(f"{path.relative_to(root)}:{stat.st_size}:{stat.st_mtime_ns}\n".encode())
     return digest.hexdigest()[:16]
 
 
-def skipped(root: pathlib.Path, path: pathlib.Path, ignored: Callable[[str, list[str]], set[str]]) -> bool:
-    """Whether the install's copy of ``root`` leaves ``path`` out (any folder on its way ``ignored``)."""
-    parent = root
-    for part in path.relative_to(root).parts:
-        if ignored(str(parent), [part]):
-            return True
-        parent = parent / part
-    return False
+def installed_files(root: pathlib.Path, ignored: Callable[[str, list[str]], set[str]]) -> list[pathlib.Path]:
+    """The files the install's copy of ``root`` takes, pruning ``ignored`` folders without walking them."""
+    files: list[pathlib.Path] = []
+    for folder, dirnames, filenames in os.walk(root):
+        dropped = ignored(folder, [*dirnames, *filenames])
+        dirnames[:] = [name for name in dirnames if name not in dropped]
+        files.extend(pathlib.Path(folder) / name for name in filenames if name not in dropped)
+    return files
 
 
 def main(argv: list[str]) -> int:

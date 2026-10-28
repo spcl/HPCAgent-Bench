@@ -107,6 +107,13 @@ def test_a_study_variant_changes_only_the_persona_and_the_stop_policy(variant: s
     assert (prompt.blocks[0].id == "persona") == (variant != "study-v1")
 
 
+def test_a_section_id_may_hold_digits_as_a_block_id_may() -> None:
+    assert [block.id for block in prompt_blocks.parse("@@section a@@\nA\n@@section step2@@\nB\n").blocks] == [
+        "a",
+        "step2",
+    ]
+
+
 def test_a_later_overlay_wins_over_an_earlier_one_and_vars_merge() -> None:
     prompt = prompt_blocks.parse("@@section a@@\n{{X}} {{Y}}\n")
     first = Overlay(name="one", set={"a": Edit(vars={"X": "1", "Y": "1"})})
@@ -217,6 +224,7 @@ if __name__ == "__main__":
     test_the_harness_cli_overlay_swaps_tools_and_fills_the_http_api()
     for _variant in ("study-v1", "study-v2", "study-v3"):
         test_a_study_variant_changes_only_the_persona_and_the_stop_policy(_variant)
+    test_a_section_id_may_hold_digits_as_a_block_id_may()
     test_a_later_overlay_wins_over_an_earlier_one_and_vars_merge()
     test_an_overlay_naming_an_unknown_block_or_an_existing_id_is_refused()
     test_an_insert_names_exactly_one_anchor()
