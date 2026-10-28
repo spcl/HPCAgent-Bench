@@ -1,0 +1,3 @@
+# The gpu track: its build contract fills the build block's {{ADDENDUM}} slot.
+set:
+  build: {vars: {ADDENDUM: "file:../gpu-build.md"}}

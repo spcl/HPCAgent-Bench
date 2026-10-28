@@ -111,6 +111,10 @@ def packet_definition(plugin: Plugin, key: str, block: PacketBlock) -> PacketDef
         prompt_sections=tuple(sorted(block.prompt.sections.items())),
         prompt_appends=tuple(sorted(block.prompt.append.items())),
         template_dirs=tuple(str((plugin.root / folder).resolve()) for folder in block.prompt.template_dirs),
+        prompt_overlays=tuple(
+            str((plugin.root / ref).resolve()) if ref.endswith((".yaml", ".yml")) else ref
+            for ref in block.prompt.overlays
+        ),
         method=block.method,
         tools=block.tools,
         agents=block.agents,

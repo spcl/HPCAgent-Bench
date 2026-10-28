@@ -17,7 +17,9 @@ from collections.abc import Callable
 
 import pytest
 
-from hpcagent_bench import paths
+from hpcagent_agent import prompt_blocks
+
+from hpcagent_bench import paths, prompt_build
 from tests.fresh_module import DRIVER_DIR, module_at
 from tests.problem_facts import problem as problem_line
 
@@ -80,7 +82,6 @@ def driver_fixture(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> t
         "VLLM_SERVED_MODEL": "qwen38",
         "CLAUDE_MODEL": "qwen38",
         "CLAUDE_MAX_TURNS": "400",
-        "AGENT_PROMPT_FILE": str(AGENT / "prompt.md"),
         "AGENT_SUBMISSION_MODE": "multi",
         "AGENT_BUILD_FILE": str(AGENT / "build-c.md"),
         "AGENT_START_STAGGER_SECONDS": "0",
@@ -727,27 +728,27 @@ def test_a_stale_usage_file_from_an_earlier_run_is_not_billed_to_this_one(
     assert tokens_record(workdir)["tokens"] == 280
 
 
-def materialize_prompts(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, prompt: pathlib.Path = AGENT / "prompt.md"
-) -> pathlib.Path:
+def materialize_prompts(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> pathlib.Path:
     monkeypatch.delenv("KERNELS", raising=False)
     repo = tmp_path / "repo"
     (repo / "agent").mkdir(parents=True)
-    shutil.copy(prompt, repo / "agent" / "prompt.md")
-    for name in ("tools-cli.md", "tools-native.md", "http-api.md"):
-        shutil.copy(AGENT / name, repo / "agent" / name)
+    shutil.copy(AGENT / "prompt.md", repo / "agent" / "prompt.md")
     shared = tmp_path / "shared"
     monkeypatch.setenv("HPCAGENT_BENCH_IMAGE_PYTHON", sys.executable)
-    proc = subprocess.run(
+    subprocess.run(
         [str(EXAMPLE / "materialize_shared.sh"), str(repo), str(shared), ""], capture_output=True, text=True, check=True
     )
-    shared.joinpath("stderr.txt").write_text(proc.stderr, encoding="utf-8")
     return shared
 
 
+def harness_prompt(overlay: str) -> str:
+    """The agent prompt a harness setup reads: prompt.md with the harness overlay applied, as the driver renders it."""
+    return prompt_blocks.render(prompt_build.resolve_layers([overlay]))
+
+
 def swapped_prompt(fragment: str, cli: bool) -> str:
-    """prompt.md with the file-tools paragraph replaced by ``fragment``, built independently of awk."""
-    base = (AGENT / "prompt.md").read_text(encoding="utf-8")
+    """prompt.md (section lines dropped) with the file-tools paragraph replaced by ``fragment``, built by hand."""
+    base = prompt_blocks.SECTION.sub("", (AGENT / "prompt.md").read_text(encoding="utf-8"))
     start = base.index("Your file tools are `Read` and `Edit`")
     stop = base.index("\n\n", start) + 1
     head, tail = base[:start], base[stop:]
@@ -762,37 +763,31 @@ def test_the_claude_setup_still_reads_prompt_md_byte_for_byte(
 ) -> None:
     shared = materialize_prompts(tmp_path, monkeypatch)
     assert (shared / "prompt.md").read_bytes() == (AGENT / "prompt.md").read_bytes()
+    staged = prompt_blocks.render(prompt_blocks.load(shared / prompt_blocks.PROMPT_JSON))
+    assert staged == prompt_blocks.SECTION.sub("", (AGENT / "prompt.md").read_text(encoding="utf-8"))
 
 
 @pytest.mark.parametrize(
-    ("variant", "fragment", "cli"),
+    ("overlay", "fragment", "cli"),
     [
-        ("prompt-cli.md", "tools-cli.md", True),
-        ("prompt-native.md", "tools-native.md", False),
+        ("harness-cli", "tools-cli.md", True),
+        ("harness-native", "tools-native.md", False),
     ],
 )
-def test_a_harness_prompt_is_prompt_md_with_only_the_file_tools_swapped(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, variant: str, fragment: str, cli: bool
-) -> None:
+def test_a_harness_prompt_is_prompt_md_with_only_the_file_tools_swapped(overlay: str, fragment: str, cli: bool) -> None:
     """Everything but the tool access stays single-sourced in prompt.md, so the setups read one text."""
-    shared = materialize_prompts(tmp_path, monkeypatch)
-    assert (shared / variant).read_text(encoding="utf-8") == swapped_prompt(fragment, cli)
+    assert harness_prompt(overlay) == swapped_prompt(fragment, cli)
 
 
-@pytest.mark.parametrize("variant", ["prompt-cli.md", "prompt-native.md"])
-def test_a_harness_prompt_names_no_claude_file_tool(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, variant: str
-) -> None:
+@pytest.mark.parametrize("overlay", ["harness-cli", "harness-native"])
+def test_a_harness_prompt_names_no_claude_file_tool(overlay: str) -> None:
     """Told its file tools are Read and Edit, a harness that has neither spends turns calling them."""
-    text = (materialize_prompts(tmp_path, monkeypatch) / variant).read_text(encoding="utf-8")
-    offenders = [line for line in text.splitlines() if "`Read`" in line or "`Edit`" in line]
+    offenders = [line for line in harness_prompt(overlay).splitlines() if "`Read`" in line or "`Edit`" in line]
     assert not offenders, offenders
 
 
-def test_the_cli_prompt_names_every_tool_bullet_as_its_shell_command(
-    driver: types.ModuleType, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    text = (materialize_prompts(tmp_path, monkeypatch) / "prompt-cli.md").read_text(encoding="utf-8")
+def test_the_cli_prompt_names_every_tool_bullet_as_its_shell_command(driver: types.ModuleType) -> None:
+    text = harness_prompt("harness-cli")
     assert "{{TOOLS_CLI}}" in text
     assert "{{TOOLS}}" not in text
     assert not re.findall(r"^- `[a-z_]+` --", text, re.MULTILINE)
@@ -801,15 +796,15 @@ def test_the_cli_prompt_names_every_tool_bullet_as_its_shell_command(
     assert "- `hpcagent-bench-tool score '<json>'` --" in bullets
 
 
-def test_a_prompt_without_the_file_tools_paragraph_writes_no_variant(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_a_prompt_without_the_file_tools_block_refuses_a_harness_overlay(tmp_path: pathlib.Path) -> None:
     """Better a setup that fails resolving its prompt at launch than one that reads claude's tools."""
-    bare = tmp_path / "bare-prompt.md"
-    bare.write_text("base rules\n{{HINTS}}\n\nTask:\n\n{{TASK}}\n", encoding="utf-8")
-    shared = materialize_prompts(tmp_path, monkeypatch, bare)
-    assert not any((shared / name).exists() for name in ("prompt-cli.md", "prompt-native.md"))
-    assert "no file-tools paragraph" in (shared / "stderr.txt").read_text(encoding="utf-8")
+    agent = tmp_path / "agent"
+    shutil.copytree(AGENT / "prompt_overlays", agent / "prompt_overlays")
+    for name in ("tools-cli.md", "tools-native.md", "http-api.md"):
+        shutil.copy(AGENT / name, agent / name)
+    (agent / "prompt.md").write_text("@@section intro@@\nbase rules\n{{TOOLS}}\n\n@@section task@@\n{{TASK}}\n")
+    with pytest.raises(ValueError, match="no blocks"):
+        prompt_build.resolve_layers(["harness-native"], agent=agent)
 
 
 def usage_file(path: pathlib.Path) -> pathlib.Path:

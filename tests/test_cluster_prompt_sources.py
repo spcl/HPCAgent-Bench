@@ -28,7 +28,6 @@ REPO = paths.ROOT
 AGENT_DIR = REPO / "agent"
 SCRIPTS = REPO / "hpcagent_bench" / "cluster"
 DRIVER = DRIVER_DIR / "agent_driver.py"
-MATERIALIZE = SCRIPTS / "materialize_shared.sh"
 
 SLOT_RE = re.compile(r"\{\{[A-Z_]+\}\}")
 
@@ -51,36 +50,27 @@ def test_every_slot_a_cluster_prompt_declares_is_one_the_driver_fills() -> None:
         )
 
 
-def materialized_prompt_files() -> set[str]:
-    """The prompt files ``materialize_shared.sh`` writes: the literal names, plus one computed variant
-    per ``agent/<variant>-build.md`` and per ``agent/tools-<variant>.md``."""
-    script = MATERIALIZE.read_text(encoding="utf-8")
-    produced = set(re.findall(r"shared\}/(prompt[a-z0-9-]*\.md)", script))
-    computed = {"*-build.md": "-build.md", "tools-*.md": ".md"}
-    assert '"${shared}/prompt-${variant}.md"' in script, "materialize_shared.sh no longer computes variants"
-    for pattern, suffix in computed.items():
-        assert f"agent/{pattern}" in script, f"materialize_shared.sh no longer globs {pattern}"
-        for page in AGENT_DIR.glob(pattern):
-            variant = page.name.removesuffix(suffix).removeprefix("tools-")
-            produced.add(f"prompt-{variant}.md")
-    return produced
-
-
-def test_every_prompt_file_a_setup_names_is_one_materialize_produces() -> None:
-    """``AGENT_PROMPT_FILE`` is resolved out of the SHARED MOUNT at run time.
-
-    So the name has to be something ``materialize_shared.sh`` copied or composed. A typo, or a new
-    track addendum wired into an ``.env`` but not into the composer, is a run that dies resolving
-    its own prompt after the allocation is already up.
-    """
-    produced = materialized_prompt_files()
+def test_every_prompt_overlay_a_setup_names_is_a_built_in_overlay() -> None:
+    """``AGENT_PROMPT_LAYERS`` / ``AGENT_PROMPT_OVERLAYS`` name ``agent/prompt_overlays/<name>.yaml``, and the launcher
+    picks a track or harness layer by name. A typo, or a new track wired into submit.sh but given no overlay, is a run
+    that dies resolving its own prompt after the allocation is already up."""
+    built_in = {path.stem for path in (AGENT_DIR / "prompt_overlays").glob("*.yaml")}
+    submit = (SCRIPTS / "submit.sh").read_text(encoding="utf-8")
+    body = submit[submit.index("prompt_layers_of() {") : submit.index("\n}\n", submit.index("prompt_layers_of() {"))]
+    named = set(re.findall(r"echo ([a-z][a-z0-9-]*)\b", body))
+    named |= set(
+        re.findall(r"\]=([a-z][a-z0-9-]*)", submit[submit.index("declare -A HARNESS_LAYER") :].splitlines()[0])
+    )
     texts = [rendered(base) for base in BASES]
-    texts += [path.read_text(encoding="utf-8") for path in SCRIPTS.glob("submit-*.sh")]
     texts += [path.read_text(encoding="utf-8") for path in (REPO / "experiments").glob(".env.*")]
-    named = {name for text in texts for name in re.findall(r"AGENT_PROMPT_FILE=(prompt[a-z0-9-]*\.md)\b", text)}
-    missing = {n for n in named if n and n not in produced}
+    texts.append((REPO / "experiments" / "setups.yaml").read_text(encoding="utf-8"))
+    for text in texts:
+        for value in re.findall(r"AGENT_PROMPT_(?:LAYERS|OVERLAYS)[=:] *([a-z0-9,-]*)", text):
+            named |= {name for name in value.split(",") if name}
+    assert named, "no overlay names found: the patterns above no longer match submit.sh"
+    missing = sorted(named - built_in)
     assert not missing, (
-        f"setups name prompt files materialize_shared.sh never writes: {sorted(missing)}. It produces {sorted(produced)}."
+        f"setups name prompt overlays agent/prompt_overlays/ lacks: {missing}; it has {sorted(built_in)}"
     )
 
 

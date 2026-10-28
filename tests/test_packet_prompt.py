@@ -2,15 +2,16 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """A plugin packet's ``prompt`` block shapes the prompts of the setups that run it: its sections are turned off,
 replaced or extended and its template roots are searched, while the user's own ``prompt.*`` keys still win. Its
-``agent_*`` keys reach the cluster prompt through the env the launcher exports."""
+``agent_*`` keys reach the agent prompt through the ``prompt.json`` the launcher stages."""
 
 import pathlib
 from collections.abc import Iterator
 
 import pytest
 from hpcagent_agent import plugins as agent_plugins
+from hpcagent_agent import prompt_blocks
 
-from hpcagent_bench import config, packets, plugins
+from hpcagent_bench import config, packets, plugins, prompt_build
 from hpcagent_bench import study_tags as tags
 from hpcagent_bench.categories import Language, SourceMode
 from hpcagent_bench.harness.prompts import build_prompt
@@ -102,19 +103,23 @@ def test_a_packet_adds_text_after_a_section_only_in_its_own_setups(plugin_root: 
 
 
 def test_a_packet_reshapes_the_cluster_prompt_of_its_setups(
-    plugin_root: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+    plugin_root: pathlib.Path, tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    folder = registered_plugin(
+    registered_plugin(
         plugin_root,
         "promptprobe",
         'agent_build = false, agent_keep_improving = "house/keep.md"',
         append='agent_end_to_end = "house/after.md"',
     )
-    monkeypatch.setenv(agent_plugins.PLUGIN_DIRS_ENV, str(folder))
-    for key, value in packets.agent_prompt_env("promptprobe").items():
-        monkeypatch.setenv(key, value)
+    material = tmp_path / "material"
+    material.mkdir()
+    (material / prompt_blocks.PROMPT_JSON).write_text(
+        prompt_build.resolve_layers([], "promptprobe").model_dump_json(), encoding="utf-8"
+    )
+    driver = fresh("agent_driver")
+    monkeypatch.setenv(driver.MATERIAL_DIR_ENV, str(material))
 
-    sut = rendered(fresh("agent_driver"), "gemm")
+    sut = rendered(driver, "gemm")
 
     assert "The `compiler` field" not in sut
     assert "## Keep going\nApply one more move." in sut
@@ -133,8 +138,8 @@ def test_the_cluster_prompt_without_a_packet_keeps_every_section_and_no_section_
 def test_a_cluster_section_the_prompt_lacks_is_refused(plugin_root: pathlib.Path) -> None:
     registered_plugin(plugin_root, "promptprobe", "agent_nosuch = false")
 
-    with pytest.raises(ValueError, match="agent_nosuch"):
-        packets.agent_prompt_env("promptprobe")
+    with pytest.raises(ValueError, match="nosuch"):
+        prompt_build.resolve_layers([], "promptprobe")
 
 
 def test_the_users_own_appended_text_follows_the_packets(plugin_root: pathlib.Path) -> None:

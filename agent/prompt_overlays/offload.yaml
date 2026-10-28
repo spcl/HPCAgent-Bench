@@ -1,0 +1,3 @@
+# The offload track: its build contract fills the build block's {{ADDENDUM}} slot.
+set:
+  build: {vars: {ADDENDUM: "file:../offload-build.md"}}

@@ -16,12 +16,12 @@ from types import MappingProxyType
 from typing import NamedTuple
 
 from hpcagent_agent import plugins as agent_plugins
-from hpcagent_agent import prompt_sections as agent_sections
 from hpcagent_agent.plugins import METHOD_ENV, PACKET_AGENTS_ENV
 
 from hpcagent_bench import external_skills, paths, plugins
 from hpcagent_bench import study_tags as tags
 from hpcagent_bench.config import RequestCapability
+from hpcagent_bench.harness import prompt_sections
 from hpcagent_bench.skill_frontmatter import Applies, SkillFrontmatter, split_frontmatter
 from hpcagent_bench.vocabulary import PacketDevice
 
@@ -44,7 +44,6 @@ __all__ = [
     "Packet",
     "PromptOverrides",
     "SkillFrontmatter",
-    "agent_prompt_env",
     "applies_to",
     "by_device",
     "canonical",
@@ -55,7 +54,6 @@ __all__ = [
     "expand_token",
     "fill_placeholder",
     "has_part",
-    "is_agent_key",
     "hue_order",
     "label",
     "lead",
@@ -64,6 +62,8 @@ __all__ = [
     "page_applies",
     "page_file",
     "plugin_reference",
+    "is_agent_key",
+    "prompt_layers",
     "prompt_overrides",
     "reached_keys",
     "refuse_frozen",
@@ -354,34 +354,19 @@ def plugin_reference(template: str, roots: Iterable[str]) -> str:
     raise ValueError(f"cluster prompt text {template!r} is on no template root {list(roots)}")
 
 
-def agent_prompt_env(spec: str) -> dict[str, str]:
-    """The cluster prompt's overrides of ``spec`` (its ``agent_*`` keys) as the env the agent driver reads
-    (:mod:`hpcagent_agent.prompt_sections`); a key the repository's ``agent/prompt.md`` lacks is refused."""
-    overrides = prompt_overrides(spec)
-    sections = {key: value for key, value in overrides.sections.items() if is_agent_key(key)}
-    appends = {key: value for key, value in overrides.appends.items() if is_agent_key(key)}
-    known = set(agent_sections.names(AGENT_PROMPT.read_text(encoding="utf-8")))
-    unknown = sorted({*sections, *appends} - known)
-    if unknown:
-        raise ValueError(f"packet {spec!r}: the cluster prompt has no sections {unknown}; known: {sorted(known)}")
-    env: dict[str, str] = {}
-    if sections:
-        env[agent_sections.SECTIONS_ENV] = agent_sections.encode(
-            (key, agent_sections.OFF if value is False else plugin_reference(str(value), overrides.roots))
-            for key, value in sorted(sections.items())
-        )
-    if appends:
-        env[agent_sections.APPEND_ENV] = agent_sections.encode(
-            (key, plugin_reference(template, overrides.roots))
-            for key, templates in sorted(appends.items())
-            for template in templates
-        )
-    return env
+def prompt_layers(spec: str) -> tuple[str, ...]:
+    """The agent-prompt overlays every packet ``spec`` reaches names, in spec and composition order, once each."""
+    definitions = tags.registry().packet_defs
+    names: dict[str, None] = {}
+    for token in spec_parts(spec):
+        for key in reached_keys(token, definitions):
+            names.update(dict.fromkeys(definitions[key].prompt_overlays))
+    return tuple(names)
 
 
 def is_agent_key(key: str) -> bool:
-    """``key`` names a section of the cluster prompt, not of the in-process one."""
-    return key.startswith(agent_sections.KEY_PREFIX)
+    """``key`` names a block of the agent prompt (``agent_<block>``), not a section of the in-process one."""
+    return key.startswith(prompt_sections.AGENT_KEY_PREFIX)
 
 
 def refuse_frozen(spec: str) -> None:
@@ -587,7 +572,6 @@ def main(argv: list[str] | None = None) -> int:
     try:
         refuse_frozen(args.packet)
         resolved = resolve(args.packet, args.language)
-        prompt_env = agent_prompt_env(args.packet)
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -598,8 +582,6 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{PACKET_TOOLS_ENV}={','.join(resolved.tools)}")
     if resolved.agents:
         print(f"{PACKET_AGENTS_ENV}={','.join(resolved.agents)}")
-    for key, value in prompt_env.items():
-        print(f"{key}={value}")
     if args.requests_allow is not None:
         allow = request_allowance(args.packet, args.language, args.requests_allow)
         if allow != args.requests_allow:
