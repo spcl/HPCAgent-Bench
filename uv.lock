@@ -2342,7 +2342,7 @@ wheels = [
 
 [[package]]
 name = "hpcagent-agent"
-version = "0.3.0"
+version = "0.4.0"
 source = { editable = "agent" }
 dependencies = [
     { name = "mcp" },
@@ -2381,7 +2381,7 @@ harness-optimas = [
 
 [[package]]
 name = "hpcagent-bench"
-version = "0.3.0"
+version = "0.4.0"
 source = { editable = "." }
 dependencies = [
     { name = "accelerate" },
@@ -2660,7 +2660,7 @@ openblas-build = [
 
 [[package]]
 name = "hpcagent-bench-harbor-adapter"
-version = "0.3.0"
+version = "0.4.0"
 source = { editable = "adapters/hpcagent_bench" }
 dependencies = [
     { name = "hpcagent-bench" },
