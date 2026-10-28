@@ -2732,6 +2732,7 @@ def call_isolated(
                     followups=tuple(followups),
                     threads=threads,
                     timeout=batch_timeout,
+                    label=f"{binding.kernel} {lang.text}",
                     mp_context=start_method,
                     rep_data=rep_data if inputs is None or not device else None,
                     inputs=inputs if device else None,

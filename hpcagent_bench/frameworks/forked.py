@@ -449,6 +449,7 @@ def child_main[ResultT](
     q: ChildQueue[ResultT],
     seal: SealPlan | None,
     err_w: ErrorWriter,
+    tag: str = "",
 ) -> None:
     fn, args, kwargs = call
     die_with_parent()
@@ -472,7 +473,7 @@ def child_main[ResultT](
             q.put((Message.OK, None))
     except BaseException:  # noqa: BLE001 -- surface EVERY failure, never swallow it
         tb = traceback.format_exc()
-        sys.stdout.write(tb)
+        sys.stdout.write(f"{tag}{tb}")  # the label names which call failed in a shared log
         sys.stdout.flush()
         q.put((Message.ERROR, tb))
 
@@ -613,7 +614,7 @@ def run_forked[ResultT](
     payload = (fn, args, call_kwargs)
     # Large arrays reach a spawned or forkserver child as files, not through the start pipe.
     call = payload if isinstance(ctx, multiprocessing.context.ForkContext) else ShmArgs(payload)
-    p = ctx.Process(target=child_main, args=(call, q, seal, err_w))
+    p = ctx.Process(target=child_main, args=(call, q, seal, err_w, tag))
     # Every start holds the lock: a fork, or a forkserver started on first use, copies ``os.environ`` too, and
     # another thread's context environment (an llvm ``LD_LIBRARY_PATH``) would otherwise stick to it.
     with child_environment(env) if env else CHILD_ENV_LOCK:
