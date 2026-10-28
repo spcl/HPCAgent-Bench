@@ -52,6 +52,7 @@ __all__ = [
     "overlays_for",
     "provenance",
     "resolve_layers",
+    "traced_layers",
 ]
 
 #: The checkout's agent folder: ``prompt.md``, ``prompt_overlays/``, ``partials/`` and the texts overlays name.
@@ -217,10 +218,22 @@ def resolve_layers(
     names: Iterable[str], packet: str = "", agent: pathlib.Path = AGENT, user: Iterable[str] = ()
 ) -> Prompt:
     """``<agent>/prompt.md`` with :func:`overlays_for` applied."""
+    return traced_layers(names, packet, agent, user)[0]
+
+
+def traced_layers(
+    names: Iterable[str], packet: str = "", agent: pathlib.Path = AGENT, user: Iterable[str] = ()
+) -> tuple[Prompt, dict[str, list[str]]]:
+    """:func:`resolve_layers`, and per block the overlays that set or inserted it."""
     prompt = prompt_blocks.parse((agent / "prompt.md").read_text(encoding="utf-8"))
+    touched: dict[str, list[str]] = {block.id: [] for block in prompt.blocks}
     for overlay in overlays_for(names, packet, agent, user):
         prompt = prompt_blocks.apply(prompt, overlay.agent)
-    return prompt
+        for key, _ in overlay.agent.set:
+            touched[key].append(overlay.name)
+        for insert in overlay.agent.insert:
+            touched[insert.block.id] = [f"{overlay.name} (inserted)"]
+    return prompt, touched
 
 
 def env_layers(environ: Mapping[str, str]) -> tuple[list[str], str, list[str]]:
@@ -243,17 +256,9 @@ def refuse_task_halves(names: Iterable[str], agent: pathlib.Path = AGENT) -> Non
         )
 
 
-def provenance(names: list[str], packet: str = "", agent: pathlib.Path = AGENT, user: Iterable[str] = ()) -> str:
-    """One line per block of the resolved prompt: its id, ``[off]`` when it does not render, and the overlays that
-    set or inserted it (``base`` when none)."""
-    prompt = prompt_blocks.parse((agent / "prompt.md").read_text(encoding="utf-8"))
-    touched: dict[str, list[str]] = {block.id: [] for block in prompt.blocks}
-    for overlay in overlays_for(names, packet, agent, user):
-        prompt = prompt_blocks.apply(prompt, overlay.agent)
-        for key, _ in overlay.agent.set:
-            touched[key].append(overlay.name)
-        for insert in overlay.agent.insert:
-            touched[insert.block.id] = [f"{overlay.name} (inserted)"]
+def provenance(prompt: Prompt, touched: Mapping[str, list[str]]) -> str:
+    """One line per block of a :func:`traced_layers` prompt: its id, ``[off]`` when it does not render, and the
+    overlays that set or inserted it (``base`` when none)."""
     return "\n".join(
         f"{block.id:<20}{'' if block.enabled else ' [off]'} {', '.join(touched[block.id]) or 'base'}"
         for block in prompt.blocks
@@ -280,9 +285,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.env:
             refuse_task_halves(split(os.environ.get(OVERLAYS_ENV, "")), args.agent_dir)
-        prompt = resolve_layers(names, packet, args.agent_dir, user)
+        prompt, touched = traced_layers(names, packet, args.agent_dir, user)
         if args.show:
-            print(provenance(names, packet, args.agent_dir, user))
+            print(provenance(prompt, touched))
     except ValueError as exc:
         print(f"prompt_build: {exc}", file=sys.stderr)
         return 2

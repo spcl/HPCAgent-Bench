@@ -18,7 +18,6 @@ import pathlib
 import stat
 import sys
 import threading
-import time
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from http import HTTPStatus
@@ -37,7 +36,6 @@ __all__ = [
     "append",
     "freeze",
     "thaw",
-    "now_ms",
     "pending",
     "queue_path",
     "read",
@@ -78,11 +76,6 @@ class ReplayReport:
     graded: int
     skipped: int
     failed: tuple[str, ...]
-
-
-def now_ms() -> int:
-    """Wall-clock time in ms, the unit of ``grades.ts_ms``."""
-    return int(time.time() * 1000)
 
 
 def queue_path() -> pathlib.Path:

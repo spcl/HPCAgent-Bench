@@ -723,7 +723,7 @@ def final_graded(db: pathlib.Path, protocol: Protocol | None = None) -> frozense
         return frozenset(
             int(row["of_grade_id"])
             for row in conn.execute(FINAL_GRADES)
-            if stamp in str(row["timing_reduction"] or "").strip().split("+")
+            if stamped(row["timing_reduction"], stamp)
             and denominator.of_stored(row["denominator"]) is denominator.for_kernel(row["kernel"])
             and row["status"] != ERROR_STATUS
             and not stale_final(row["kernel"], int(row["ts_ms"]))
@@ -1291,8 +1291,13 @@ def done_keys(path: pathlib.Path, kind: str, score_rules: Sequence[str], stamp: 
     return {
         (str(label), str(kernel), int(ts))
         for label, kernel, ts, rule, reduction in rows
-        if rule in score_rules and (not stamp or stamp in str(reduction or "").split("+"))
+        if rule in score_rules and (not stamp or stamped(reduction, stamp))
     }
+
+
+def stamped(reduction: object, stamp: str) -> bool:
+    """Whether a recorded ``timing_reduction`` (``+``-joined when cells carry several stamps) names ``stamp``."""
+    return stamp in str(reduction or "").strip().split("+")
 
 
 def write_regrade(
@@ -1528,8 +1533,7 @@ def main(argv: list[str] | None = None) -> int:
         "run", help="grade one shard of a worklist under a grade protocol: it claims items until none is left"
     )
     running.add_argument("--worklist", required=True, type=pathlib.Path)
-    running.add_argument("--shard", required=True, type=int)
-    running.add_argument("--shards", required=True, type=int)
+    running.add_argument("--shard", required=True, type=int, help="this worker's index: names its shard DB")
     running.add_argument("--out-dir", required=True, type=pathlib.Path)
     running.add_argument(
         "--out-name",
@@ -1580,9 +1584,9 @@ def main(argv: list[str] | None = None) -> int:
         recorder = None if args.no_record else record_scaling
         sweep = functools.partial(scaling_grade.grade, protocol=args.protocol)
         swept = scaling_grade.run_shard(
-            sweeps, args.shard, args.shards, args.out_dir, sweep, recorder, not args.no_torch_dist
+            sweeps, args.shard, args.out_dir, sweep, recorder, not args.no_torch_dist, job=claims.job_tag()
         )
-        print(f"shard {args.shard}/{args.shards}: scaling-graded {swept} of {len(sweeps)} submissions")
+        print(f"shard {args.shard}: scaling-graded {swept} of {len(sweeps)} submissions")
         return 0
     # A one-device task grades on its device; a slot worker (jobs.run_slots) keeps the slot it was given.
     if os.environ.get("ROCR_VISIBLE_DEVICES") and native_call.assigned_device() is None:
@@ -1609,7 +1613,7 @@ def main(argv: list[str] | None = None) -> int:
             wait=wait,
         )
     print(
-        f"shard {args.shard}/{args.shards}: final-graded {timed} submissions, promoted {promoted}; "
+        f"shard {args.shard}: final-graded {timed} submissions, promoted {promoted}; "
         f"{len(sweeps)} scaling submissions left to a gang"
     )
     return 0

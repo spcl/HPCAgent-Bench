@@ -179,12 +179,7 @@ plugin_entries() {
 
 # install_root <plugin folder> -- the resolved ``[install] root`` of its plugin.toml, or nothing without one.
 install_root() {
-    "${HPCAGENT_BENCH_HOST_PYTHON:-python3}" - "$1" <<'PY'
-import pathlib, sys, tomllib
-folder = pathlib.Path(sys.argv[1])
-block = tomllib.loads((folder / "plugin.toml").read_text(encoding="utf-8")).get("install")
-print((folder / block.get("root", ".")).resolve() if block else "")
-PY
+    "${HPCAGENT_BENCH_HOST_PYTHON:-python3}" -m hpcagent_bench.plugins install-root "$1"
 }
 
 # plugin_binds -- what every role but the engines binds for the plugins, host:container, one per line, so the agent
@@ -442,7 +437,7 @@ edf_with_checkout() {
         echo "edf_with_checkout: ${edf} mounts nothing at ${JUDGE_PACKAGE_MOUNT} (install_edfs.sh renders one that does)" >&2
         return 2
     }
-    # The extra too: a step importing hpcagent_bench loads them from HPCAGENT_BENCH_PLUGIN_DIRS.
+    # The plugins too: a step importing hpcagent_bench loads them from HPCAGENT_BENCH_PLUGIN_DIRS.
     while IFS= read -r bind; do
         extra+="\\n\\1\"${bind}:ro\","
     done < <(plugin_binds)

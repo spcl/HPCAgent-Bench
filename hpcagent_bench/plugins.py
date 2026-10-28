@@ -273,14 +273,20 @@ def installed_files(root: pathlib.Path, ignored: Callable[[str, list[str]], set[
 def main(argv: list[str]) -> int:
     """``python -m hpcagent_bench.plugins roots``: the plugin directories, one per line, for a launcher to bind.
     ``... install [--python PATH]``: run every plugin's install command for this (or that) interpreter;
-    ``... fingerprint``: a digest of those plugins' sources (a launch venv's cache key)."""
+    ``... fingerprint``: a digest of those plugins' sources (a launch venv's cache key);
+    ``... install-root FOLDER``: the resolved ``[install] root`` of the plugin in FOLDER, empty without one."""
     parser = argparse.ArgumentParser(prog="python -m hpcagent_bench.plugins", description=main.__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("roots", help="print the plugin directories, one per line")
     installing = commands.add_parser("install", help="run every plugin's [install] command")
     installing.add_argument("--python", default=sys.executable, help="the interpreter to install into")
     commands.add_parser("fingerprint", help="print a digest of the installed plugins' sources")
+    rooted = commands.add_parser("install-root", help="print the [install] root of the plugin in FOLDER")
+    rooted.add_argument("folder", type=pathlib.Path)
     args = parser.parse_args(argv)
+    if args.command == "install-root":
+        print(install_root(agent_plugins.read(args.folder)) or "")
+        return 0
     if args.command == "roots":
         print("\n".join(str(root) for root in roots()))
         return 0

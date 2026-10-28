@@ -233,8 +233,8 @@ def test_a_shard_records_both_laws_once_each_and_resumes(
         replays.append(item.episode_id)
         return graded
 
-    scaling_grade.run_shard(shard_items(tmp_path), 0, 1, out, grader, recorder, baseline=False)
-    scaling_grade.run_shard(shard_items(tmp_path), 0, 1, out, grader, recorder, baseline=False)
+    scaling_grade.run_shard(shard_items(tmp_path), 0, out, grader, recorder, baseline=False)
+    scaling_grade.run_shard(shard_items(tmp_path), 0, out, grader, recorder, baseline=False)
     assert replays == ["r0"]
     strong, weak = graded.curves
     grade = calls[0]["grade"]
@@ -255,11 +255,11 @@ def test_a_shard_records_both_laws_once_each_and_resumes(
     assert "weak: no curve" in printed
 
 
-def test_a_shard_skips_a_submission_another_shard_count_already_graded(
+def test_a_gang_skips_a_submission_another_gang_already_graded(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """An early 1-gang grade writes scaling-grade-0.db; the final 4-gang job must not regrade its
-    items into shards 1-3 (the extractor would then read two curves per submission)."""
+    """An early job's gang 0 writes scaling-grade-0.db; a later job's gang 1 must not regrade its items into its own
+    DB (the extractor would then read two curves per submission)."""
     monkeypatch.setenv(scaling_grade.GANG_NODELIST_ENV, GANG)
     out = tmp_path / "out"
     replays: list[str] = []
@@ -268,10 +268,8 @@ def test_a_shard_skips_a_submission_another_shard_count_already_graded(
         replays.append(item.episode_id)
         return fake_graded()
 
-    scaling_grade.run_shard(shard_items(tmp_path), 0, 1, out, grader, None, baseline=False)
-    # Shard 1 of 4 over a list whose second item is the one shard 0 of 1 already graded.
-    moved = [stored_item(tmp_path / "other.db", hip_submission(), episode_id="rx"), *shard_items(tmp_path)]
-    assert scaling_grade.run_shard(moved, 1, 4, out, grader, None, baseline=False) == 0
+    scaling_grade.run_shard(shard_items(tmp_path), 0, out, grader, None, baseline=False)
+    assert scaling_grade.run_shard(shard_items(tmp_path), 1, out, grader, None, baseline=False) == 0
     assert replays == ["r0"]
 
 
@@ -281,7 +279,7 @@ def test_a_real_recorder_keeps_both_laws_of_one_grade(tmp_path: pathlib.Path, mo
     monkeypatch.setenv(scaling_grade.GANG_NODELIST_ENV, GANG)
     out = tmp_path / "out"
     scaling_grade.run_shard(
-        shard_items(tmp_path), 0, 1, out, lambda item: fake_graded(), recording.record_scaling, baseline=False
+        shard_items(tmp_path), 0, out, lambda item: fake_graded(), recording.record_scaling, baseline=False
     )
     with contextlib.closing(sqlite3.connect(out / "scaling-grade-0.db")) as conn:
         points = conn.execute("SELECT mode, COUNT(*) FROM scaling_points GROUP BY mode").fetchall()
@@ -296,7 +294,7 @@ def test_a_replay_that_raises_is_an_error_row_not_a_dead_gang(
     def broken(item: grade_under.Item) -> scaling_grade.Graded:
         raise RuntimeError("relay gone")
 
-    graded = scaling_grade.run_shard(shard_items(tmp_path), 0, 1, tmp_path / "out", broken, None, baseline=False)
+    graded = scaling_grade.run_shard(shard_items(tmp_path), 0, tmp_path / "out", broken, None, baseline=False)
     with contextlib.closing(sqlite3.connect(tmp_path / "out" / "scaling-grade-0.db")) as conn:
         rows = conn.execute(
             "SELECT s.mode, s.status, g.detail FROM scaling_grades s JOIN grades g ON g.id = s.grade_id ORDER BY s.mode"
@@ -314,12 +312,10 @@ def test_a_replay_that_raised_stays_owed_on_resume(tmp_path: pathlib.Path, monke
     def broken(item: grade_under.Item) -> scaling_grade.Graded:
         raise RuntimeError("relay gone")
 
-    assert scaling_grade.run_shard(shard_items(tmp_path), 0, 1, out, broken, None, baseline=False) == 1
+    assert scaling_grade.run_shard(shard_items(tmp_path), 0, out, broken, None, baseline=False) == 1
     assert scaling_grade.graded_keys(out) == set()
-    assert (
-        scaling_grade.run_shard(shard_items(tmp_path), 0, 1, out, lambda item: fake_graded(), None, baseline=False) == 1
-    )
-    assert scaling_grade.run_shard(shard_items(tmp_path), 0, 1, out, broken, None, baseline=False) == 0
+    assert scaling_grade.run_shard(shard_items(tmp_path), 0, out, lambda item: fake_graded(), None, baseline=False) == 1
+    assert scaling_grade.run_shard(shard_items(tmp_path), 0, out, broken, None, baseline=False) == 0
 
 
 def test_a_sweep_beyond_the_gang_stays_owed(
@@ -335,13 +331,13 @@ def test_a_sweep_beyond_the_gang_stays_owed(
         return fake_graded()
 
     out = tmp_path / "out"
-    assert scaling_grade.run_shard(shard_items(tmp_path), 0, 1, out, grader, None, baseline=False) == 0
+    assert scaling_grade.run_shard(shard_items(tmp_path), 0, out, grader, None, baseline=False) == 0
     assert "beyond 4 ranks; owed" in capsys.readouterr().out
     one_node = [
         dataclasses.replace(item, scaling=dataclasses.replace(SWEEP, rank_counts=(1, 2, 4)))
         for item in shard_items(tmp_path)
     ]
-    assert scaling_grade.run_shard(one_node, 0, 1, out, grader, None, baseline=False) == 1
+    assert scaling_grade.run_shard(one_node, 0, out, grader, None, baseline=False) == 1
     assert seen == ["[1, 2, 4]"]
 
 
@@ -412,7 +408,7 @@ def test_grade_under_run_grades_strong_and_weak_scaling_under_the_named_protocol
     monkeypatch.setattr(metric, "score_ml_distributed", swept)
     worklist, out = tmp_path / "worklist.jsonl", tmp_path / "out"
     grade_under.write_items(worklist, [item])
-    run = ["run", "--worklist", str(worklist), "--shard", "0", "--shards", "1", "--out-dir", str(out)]
+    run = ["run", "--worklist", str(worklist), "--shard", "0", "--out-dir", str(out)]
     assert grade_under.main([*run, "--protocol", "mw1x10", "--no-torch-dist"]) == 0
     assert asked == [(1, 10)]
     assert grade_under.main(["apply", "--into", str(judge_db), str(out)]) == 0

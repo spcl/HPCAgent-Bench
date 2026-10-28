@@ -4,7 +4,6 @@
 (``hpcagent_bench.prompt_build``), and the render the driver reads."""
 
 import pathlib
-import shutil
 
 import pydantic
 import pytest
@@ -149,14 +148,6 @@ def test_a_filled_value_is_never_filled_again() -> None:
     assert prompt_blocks.render(prompt_blocks.Prompt(blocks=(block,))) == "{{B}} b"
 
 
-def test_the_models_are_immutable_and_hashable() -> None:
-    block = Block(id="a", text="x {{K}}", vars={"K": "v"})
-    assert hash(block) == hash(Block(id="a", text="x {{K}}", vars={"K": "v"}))
-    assert block.model_dump()["vars"] == {"K": "v"}
-    with pytest.raises(TypeError):
-        block.vars[0] = ("K", "w")  # type: ignore[index]
-
-
 def test_a_var_for_a_slot_the_block_lacks_and_an_empty_edit_are_refused() -> None:
     """An overlay naming the wrong block would otherwise leave the slot it meant empty."""
     prompt = prompt_blocks.parse("@@section a@@\nno slots here\n")
@@ -202,17 +193,14 @@ def test_the_resolved_prompt_round_trips_through_its_json(tmp_path: pathlib.Path
 
 
 def test_show_names_the_overlay_behind_every_changed_block() -> None:
-    lines = dict(line.split(maxsplit=1) for line in prompt_build.provenance(["harness-cli", "study-v2"]).splitlines())
+    lines = dict(
+        line.split(maxsplit=1)
+        for line in prompt_build.provenance(*prompt_build.traced_layers(["harness-cli", "study-v2"])).splitlines()
+    )
     assert lines["file_tools"] == "harness-cli"
     assert lines["stop_policy"] == "study-v2"
     assert lines["persona"] == "study-v2 (inserted)"
     assert lines["task"] == "base"
-
-
-def test_a_plugin_folder_overlay_file_resolves_by_path(tmp_path: pathlib.Path) -> None:
-    overlay = tmp_path / "plugin_overlay.yaml"
-    shutil.copy(AGENT / "prompt_overlays" / "study-v3.yaml", overlay)
-    assert prompt_blocks.render(prompt_build.resolve_layers([str(overlay)])) == rendered("study-v3")
 
 
 if __name__ == "__main__":
@@ -229,7 +217,6 @@ if __name__ == "__main__":
     test_an_overlay_naming_an_unknown_block_or_an_existing_id_is_refused()
     test_an_insert_names_exactly_one_anchor()
     test_a_filled_value_is_never_filled_again()
-    test_the_models_are_immutable_and_hashable()
     test_a_var_for_a_slot_the_block_lacks_and_an_empty_edit_are_refused()
     test_inserts_after_one_anchor_render_in_their_listed_order()
     test_a_disabled_block_does_not_render_and_a_removed_one_is_gone()

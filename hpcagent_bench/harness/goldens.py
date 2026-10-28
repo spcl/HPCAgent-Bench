@@ -55,6 +55,7 @@ __all__ = [
     "INIT_SOURCES",
     "KERNEL_DATA_GLOBS",
     "MASK_PREFIX",
+    "NO_MASK",
     "PROBE_MARKER",
     "REFERENCE_SUFFIXES",
     "RULE_PREFIX",
@@ -96,7 +97,7 @@ __all__ = [
 ]
 
 #: The layout and oracle-semantics version; part of every validity key.
-FORMAT = 2
+FORMAT = 3
 #: Sub-directory of :func:`disk_cache.root` the golden files live in.
 DIRNAME = "goldens"
 #: A golden file's suffix.
@@ -116,6 +117,8 @@ DTYPE_PREFIX = "dtype/"
 PROBE_MARKER = "has/probe"
 MASK_PREFIX = "mask/"
 RULE_PREFIX = "rule/"
+#: A probe that failed (its reference raised on perturbed state): kept so no later grade reruns it.
+NO_MASK = "probe/none"
 #: The longest sizes part of a file name before it is replaced by a digest (:func:`sizes_stem`).
 SIZES_STEM_MAX = 96
 #: How often :func:`write` retries a file another writer replaced or created under it.
@@ -141,7 +144,7 @@ KERNEL_DATA_GLOBS = ("*.yaml", "*.npz", "*.npy")
 REFERENCE_SUFFIXES = (".py", "_numpy.py", "_numba.py", "_reference.c", "_reference.cpp", "_reference.f90")
 
 #: A write-probe value: (output -> written mask, output -> l-rule override).
-Probe = tuple[dict[str, np.ndarray], dict[str, str]]
+Probe = tuple[dict[str, np.ndarray] | None, dict[str, str]]
 
 
 def code_files(relative_path: str, module_name: str) -> list[pathlib.Path]:
@@ -591,16 +594,21 @@ def store_outputs(entry: Entry, outputs: Mapping[str, npt.ArrayLike]) -> None:
 
 
 def load_probe(pair: Pair) -> Probe | None:
-    """``pair``'s stored write probe."""
-    arrays = read(pair, PROBE_MARKER, (MASK_PREFIX, RULE_PREFIX))
+    """``pair``'s stored write probe (its mask None when the probe failed), or None when none is stored."""
+    arrays = read(pair, PROBE_MARKER, (MASK_PREFIX, RULE_PREFIX, NO_MASK))
     if arrays is None:
         return None
-    return under(arrays, MASK_PREFIX), {name: str(value[()]) for name, value in under(arrays, RULE_PREFIX).items()}
+    rules = {name: str(value[()]) for name, value in under(arrays, RULE_PREFIX).items()}
+    masks = under(arrays, MASK_PREFIX)
+    # Two writers may both have stored: a mask beats a failure.
+    return (masks if masks or NO_MASK not in arrays else None), rules
 
 
 def store_probe(pair: Pair, probe: Probe) -> None:
     masks, overrides = probe
-    arrays: dict[str, npt.ArrayLike] = {MASK_PREFIX + name: mask for name, mask in masks.items()}
+    arrays: dict[str, npt.ArrayLike] = (
+        {NO_MASK: np.asarray(True)} if masks is None else {MASK_PREFIX + name: mask for name, mask in masks.items()}
+    )
     arrays.update({RULE_PREFIX + name: np.asarray(rule) for name, rule in overrides.items()})
     arrays[PROBE_MARKER] = np.asarray(True)
     write(pair, arrays)

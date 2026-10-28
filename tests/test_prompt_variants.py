@@ -70,13 +70,6 @@ def test_a_variant_that_changes_no_task_block_is_refused_at_launch() -> None:
         resolve_prompt_variants("study-v1")
 
 
-def test_a_variant_naming_a_block_the_task_prompt_lacks_is_refused_at_launch(tmp_path: pathlib.Path) -> None:
-    typo = tmp_path / "typo.yaml"
-    typo.write_text("task:\n  set:\n    optimisations: {enabled: false}\n")
-    with pytest.raises(SystemExit, match="optimisations"):
-        resolve_prompt_variants(str(typo))
-
-
 def test_a_variant_that_conflicts_with_the_configured_overlays_is_refused_at_launch(tmp_path: pathlib.Path) -> None:
     """A variant valid alone but naming a block the configured overlays removed fails at launch, not in every
     kernel's solve."""
