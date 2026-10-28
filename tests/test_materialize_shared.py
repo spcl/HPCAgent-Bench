@@ -177,7 +177,7 @@ def test_the_setups_resolved_prompt_is_staged_from_its_overlays(
 ) -> None:
     """The driver renders ``prompt.json``: the repo's prompt.md with the setup's overlays (here a user's YAML file)."""
     overlay = tmp_path / "mine.yaml"
-    overlay.write_text("set:\n  rules: {text: 'my rules'}\n")
+    overlay.write_text("agent:\n  set:\n    rules: {text: 'my rules'}\n")
     (repo / "agent" / "prompt.md").write_text("@@section rules@@\nbase rules\n\n@@section task@@\n{{TASK}}\n")
     monkeypatch.setenv("AGENT_PROMPT_OVERLAYS", str(overlay))
     shared = tmp_path / "shared"

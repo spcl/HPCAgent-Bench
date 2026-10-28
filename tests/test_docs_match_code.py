@@ -10,8 +10,8 @@ import subprocess
 
 import pytest
 
-from hpcagent_bench import cli, config, modules, paths
-from hpcagent_bench.harness.prompts import PROMPT_VARIANTS, PromptConfig
+from hpcagent_bench import cli, config, modules, paths, prompt_build
+from hpcagent_bench.harness.prompts import PromptConfig
 
 PROMPTS_DIR = paths.ROOT / "hpcagent_bench/harness/prompts"
 #: Every contributor doc: the README, docs/, experiments/, containers/ and the package's own docs. Skill pages
@@ -30,7 +30,7 @@ DOCS = sorted(
 )
 
 #: `prompt.*` names that are config keys but NOT PromptConfig fields.
-NON_FIELD_PROMPT_KEYS = {"variants", "variant"}
+NON_FIELD_PROMPT_KEYS: set[str] = set()
 
 
 def doc_text() -> list[tuple[pathlib.Path, str]]:
@@ -69,18 +69,18 @@ def test_docs_name_no_attempts_key_that_does_not_exist() -> None:
     assert not stale, f"documented attempts.* keys that no longer exist: {stale}"
 
 
-def test_docs_name_no_variant_that_is_not_registered() -> None:
-    """A `--variant X` in the docs must resolve: a built-in, a `task_var<N>.j2` discovery, or
-    one the same doc declares in its own `prompt.variants` example."""
+def test_docs_name_no_overlay_that_is_not_built_in() -> None:
+    """An `--overlays X` or `--prompt-variant X` in the docs must name a built-in overlay (or a YAML file)."""
+    known = set(prompt_build.builtin_overlays()) | {"all"}
     stale = []
     for path, text in doc_text():
-        # Names the doc itself declares under `variants:` are legitimate examples.
-        declared = set(re.findall(r"^\s{4}([a-z_]\w*):\s*\{", text, re.MULTILINE))
-        for m in re.finditer(r"--variant\s+([a-z_]+)", text):
-            name = m.group(1)
-            if name not in PROMPT_VARIANTS and name not in declared and not name.startswith("var"):
-                stale.append(f"{path}: --variant {name}")
-    assert not stale, f"documented variants that are not registered: {stale}"
+        stale.extend(
+            f"{path}: {m.group(0)}"
+            for m in re.finditer(r"--(?:overlays|prompt-variant)[ =]([\w,+.-]+)", text)
+            for name in re.split(r"[,+]", m.group(1))
+            if name and name not in known and not name.endswith((".yaml", ".yml"))
+        )
+    assert not stale, f"documented prompt overlays that are not built in: {stale}"
 
 
 def test_docs_name_no_template_that_does_not_exist() -> None:

@@ -45,32 +45,42 @@ refused.
 
 ### A packet's prompt
 
-A packet can change both prompts of the setups that run it ([prompts.md](../prompts.md)): turn sections off,
-replace them or add text after them, and add template roots whose files shadow the built-in ones by path. A key
-`agent_<id>` is a block of the cluster prompt (`agent/prompt.md`, the one Claude Code and the other cluster
-harnesses read); every other key is one of the in-process prompt. `overlays` applies whole cluster-prompt overlays
-(a built-in name, or a YAML file in the plugin folder; format in [prompts.md](../prompts.md#cluster-prompt)) before
-the `agent_*` keys. A packet whose agent works differently from the
-default one (no hand-written code, its own tools) says so in both.
+A packet can change both prompts of the setups that run it ([prompts.md](../prompts.md)) with prompt overlays: each
+has an `agent` half for the cluster prompt (`agent/prompt.md`, the one Claude Code and the other cluster harnesses
+read) and a `task` half for the in-process one, and turns blocks off or on, replaces their text, fills their slots,
+or inserts blocks beside them. `template_dirs` adds roots whose templates a `task` text may include, or which shadow
+the built-in ones by path. A packet whose agent works differently from the default one (no hand-written code, its
+own tools) says so in both.
 
 ```toml
 [packets.my_packet.prompt]
 template_dirs = ["prompts"]                         # relative to the plugin folder
-# off, or a template on the search path / a file
-sections = { build_flags = false, timing = "house/timing.j2", agent_build = false,
-    agent_keep_improving = "house/keep_improving.md" }
-# a template added after the section
-append = { tools = "house/tools.j2", agent_end_to_end = "house/first_steps.md" }
-# whole overlays of the cluster prompt, in order
-overlays = ["study-v3", "overlays/no_persona.yaml"]
+overlays = ["study-v3", "prompts/my_packet.yaml"]   # built-in names, or YAML files in the plugin folder, in order
 ```
 
-A cluster text is plain Markdown that may use the prompt's slots (`{{GRADING}}`, `{{TOOLS}}`); the launcher resolves
-it into the setup's `prompt.json`, so an unknown block or a missing file stops the launch.
+```yaml
+# prompts/my_packet.yaml; a file: path is relative to this file
+agent:
+  set:
+    build: {enabled: false}
+    keep_improving: {text: "file:house/keep_improving.md"}
+  insert:
+    - {after: intro, block: {id: my_packet, text: "file:house/what_it_does.md"}}
+task:
+  set:
+    build_flags: {enabled: false}
+    timing: {text: "file:house/timing.j2"}
+  insert:
+    - {after: intro, block: {id: my_packet, text: "file:house/what_it_does.md"}}
+```
 
-The packet's roots are searched after the user's own `prompt.template_dir(s)` and before the built-in `prompts/`,
-and its sections sit below the user's `prompt.sections` and `HPCAGENT_BENCH_PROMPT_SECTIONS_<KEY>`, so the user
-still has the last word. Two packets of one spec that set one section differently are refused.
+A cluster text is plain Markdown that may use the prompt's slots (`{{GRADING}}`, `{{TOOLS}}`); a task text is a
+template that may use the render context (`{{ kernel }}`). The launcher resolves the agent half into the setup's
+`prompt.json`, so an unknown block or a missing file stops the launch.
+
+The packet's roots are searched after the user's own `prompt.template_dirs` and before the built-in `prompts/`, and
+its overlays apply before the user's `prompt.overlays` (`AGENT_PROMPT_OVERLAYS` on the cluster), so the user still
+has the last word. The packets of one spec apply in spec order.
 
 ## Agent tools
 

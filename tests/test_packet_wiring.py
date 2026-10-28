@@ -10,7 +10,7 @@ from types import ModuleType
 
 import pytest
 
-from hpcagent_bench import paths
+from hpcagent_bench import paths, prompt_build
 from tests.fresh_module import fresh
 from tests.mcp_stdio import served_tools, server_env, tool_names
 
@@ -194,3 +194,24 @@ def test_an_unknown_packet_stops_the_driver(monkeypatch: pytest.MonkeyPatch) -> 
     driver = load_driver()
     with pytest.raises(SystemExit, match="nosuchpacket"):
         driver.hints_text()
+
+
+def method_vars(packet: str) -> dict[str, str]:
+    """The slots the resolved agent prompt of ``packet`` fills in its method block."""
+    prompt = prompt_build.resolve_layers([], packet)
+    return next(block.vars for block in prompt.blocks if block.id == prompt_build.METHOD_BLOCK)
+
+
+def test_without_a_packet_the_resolved_prompt_fills_no_hints() -> None:
+    assert method_vars("") == {}
+
+
+def test_the_packets_method_page_fills_the_hints_slot_of_the_resolved_prompt() -> None:
+    """prompt.json carries the method page, so the driver has no slot left to fill."""
+    assert method_vars("autokernel") == {"HINTS": METHOD.read_text(encoding="utf-8").strip()}
+
+
+def test_a_method_no_plugin_ships_is_refused() -> None:
+    """A method no plugin ships stops the prompt's resolution rather than launching agents without it."""
+    with pytest.raises(ValueError, match="nosuchpacket"):
+        prompt_build.method_page("nosuchpacket")

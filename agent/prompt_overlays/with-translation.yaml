@@ -1,0 +1,4 @@
+# Embed the NumpyToX translation of the reference as a starting point.
+task:
+  set:
+    translation: {enabled: true}

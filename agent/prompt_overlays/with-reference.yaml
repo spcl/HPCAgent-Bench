@@ -1,0 +1,4 @@
+# Offer the original ported source (<kernel>_reference.<ext>) next to the NumPy reference when it exists.
+task:
+  set:
+    original_sources: {enabled: true}

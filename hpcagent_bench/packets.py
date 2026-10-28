@@ -13,22 +13,17 @@ import re
 import sys
 from collections.abc import Iterable, Mapping
 from types import MappingProxyType
-from typing import NamedTuple
 
-from hpcagent_agent import plugins as agent_plugins
 from hpcagent_agent.plugins import METHOD_ENV, PACKET_AGENTS_ENV
 
 from hpcagent_bench import external_skills, paths, plugins
 from hpcagent_bench import study_tags as tags
 from hpcagent_bench.config import RequestCapability
-from hpcagent_bench.harness import prompt_sections
 from hpcagent_bench.skill_frontmatter import Applies, SkillFrontmatter, split_frontmatter
 from hpcagent_bench.vocabulary import PacketDevice
 
 __all__ = [
-    "main",
     "AGENT_PROMPT",
-    "print_packet_list",
     "CPF_ENV_KEYS",
     "CPF_REQUEST_CAPABILITY",
     "DEVICE_LANGUAGES",
@@ -42,7 +37,6 @@ __all__ = [
     "SKILL_TREATMENTS",
     "Applies",
     "Packet",
-    "PromptOverrides",
     "SkillFrontmatter",
     "applies_to",
     "by_device",
@@ -59,12 +53,13 @@ __all__ = [
     "lead",
     "leaves",
     "libraries_enabled",
+    "main",
     "page_applies",
     "page_file",
-    "plugin_reference",
-    "is_agent_key",
+    "print_packet_list",
     "prompt_layers",
-    "prompt_overrides",
+    "prompt_method",
+    "prompt_roots",
     "reached_keys",
     "refuse_frozen",
     "request_allowance",
@@ -305,53 +300,32 @@ def reached_keys(token: str, definitions: Mapping[str, tags.PacketDef]) -> tuple
     return (token, *(key for sub in definition.packets for key in reached_keys(sub, definitions)))
 
 
-class PromptOverrides(NamedTuple):
-    """What the packets of one spec change in its prompts (:class:`~hpcagent_bench.skill_frontmatter.PacketPrompt`)."""
+def prompt_method(spec: str) -> str:
+    """The method every packet ``spec`` reaches runs (its ``method.md`` fills the agent prompt's ``{{HINTS}}``), or
+    "" without one.
 
-    #: Section key -> off (False) or its replacement.
-    sections: dict[str, str | bool]
-    #: Section key -> the templates added after it, in spec order.
-    appends: dict[str, tuple[str, ...]]
-    #: Template roots, in spec order.
-    roots: tuple[str, ...]
-
-
-def prompt_overrides(spec: str) -> PromptOverrides:
-    """The prompt sections, appended templates and template roots of every packet ``spec`` reaches, in spec and
-    composition order.
-
-    :raises ValueError: two packets set one section to different values.
+    :raises ValueError: the spec combines two methods.
     """
     definitions = tags.registry().packet_defs
-    sections: dict[str, str | bool] = {}
-    appends: dict[str, tuple[str, ...]] = {}
+    methods = {
+        definitions[key].method
+        for token in spec_parts(spec)
+        for key in reached_keys(token, definitions)
+        if definitions[key].method
+    }
+    if len(methods) > 1:
+        raise ValueError(f"packet spec {spec!r} combines methods {sorted(methods)}; at most one is allowed")
+    return next(iter(methods), "")
+
+
+def prompt_roots(spec: str) -> tuple[str, ...]:
+    """The template roots every packet ``spec`` reaches names, in spec and composition order, once each."""
+    definitions = tags.registry().packet_defs
     roots: dict[str, None] = {}
     for token in spec_parts(spec):
         for key in reached_keys(token, definitions):
-            definition = definitions[key]
-            for name, value in definition.prompt_sections:
-                if sections.setdefault(name, value) != value:
-                    raise ValueError(
-                        f"packet {key!r} sets prompt section {name}={value!r} but it is already {sections[name]!r}"
-                    )
-            for name, template in definition.prompt_appends:
-                appends[name] = (*appends.get(name, ()), template)
-            roots.update(dict.fromkeys(definition.template_dirs))
-    return PromptOverrides(sections, appends, tuple(roots))
-
-
-def plugin_reference(template: str, roots: Iterable[str]) -> str:
-    """``template``, found on ``roots``, as the ``<plugin>:<path>`` the agent resolves in its own plugin folders."""
-    found = agent_plugins.find(plugins.roots())
-    for root in roots:
-        path = (pathlib.Path(root) / template).resolve()
-        if not path.is_file():
-            continue
-        for plugin in found:
-            if path.is_relative_to(plugin.root):
-                return f"{plugin.name}:{path.relative_to(plugin.root).as_posix()}"
-        raise ValueError(f"cluster prompt text {path} is in no plugin folder")
-    raise ValueError(f"cluster prompt text {template!r} is on no template root {list(roots)}")
+            roots.update(dict.fromkeys(definitions[key].template_dirs))
+    return tuple(roots)
 
 
 def prompt_layers(spec: str) -> tuple[str, ...]:
@@ -362,11 +336,6 @@ def prompt_layers(spec: str) -> tuple[str, ...]:
         for key in reached_keys(token, definitions):
             names.update(dict.fromkeys(definitions[key].prompt_overlays))
     return tuple(names)
-
-
-def is_agent_key(key: str) -> bool:
-    """``key`` names a block of the agent prompt (``agent_<block>``), not a section of the in-process one."""
-    return key.startswith(prompt_sections.AGENT_KEY_PREFIX)
 
 
 def refuse_frozen(spec: str) -> None:

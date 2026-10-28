@@ -11,7 +11,20 @@ import re
 
 import pydantic
 
-__all__ = ["PROMPT_JSON", "SECTION", "Block", "Edit", "Insert", "Overlay", "Prompt", "apply", "load", "parse", "render"]
+__all__ = [
+    "PROMPT_JSON",
+    "SECTION",
+    "Block",
+    "Edit",
+    "Insert",
+    "Overlay",
+    "Prompt",
+    "PromptOverlay",
+    "apply",
+    "load",
+    "parse",
+    "render",
+]
 
 #: The resolved prompt of a setup, staged in the shared material.
 PROMPT_JSON = "prompt.json"
@@ -83,6 +96,21 @@ class Overlay(pydantic.BaseModel):
     set: dict[str, Edit] = pydantic.Field(default_factory=dict)
     insert: tuple[Insert, ...] = ()
     remove: tuple[str, ...] = ()
+
+    def changes(self) -> bool:
+        """Whether applying this overlay changes anything."""
+        return bool(self.set or self.insert or self.remove)
+
+
+class PromptOverlay(pydantic.BaseModel):
+    """One named overlay of both prompts: ``agent`` changes the agent's prompt (``agent/prompt.md`` blocks), ``task``
+    the task prompt the benchmark renders (its ``prompts/sections`` templates, a block's text a template)."""
+
+    model_config = pydantic.ConfigDict(extra="forbid", frozen=True)
+
+    name: str = ""
+    agent: Overlay = Overlay()
+    task: Overlay = Overlay()
 
 
 def parse(template: str) -> Prompt:
