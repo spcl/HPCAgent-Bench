@@ -59,7 +59,7 @@ own tools) says so in both.
 ```toml
 [packets.my_packet.prompt]
 template_dirs = ["prompts"]                         # relative to the plugin folder
-overlays = ["study-v3", "prompts/my_packet.yaml"]   # built-in names, or YAML files in the plugin folder, in order
+overlays = ["strategy-loopnest", "prompts/my_packet.yaml"]   # built-in names, or YAML files in the plugin folder, in order
 ```
 
 ```yaml
