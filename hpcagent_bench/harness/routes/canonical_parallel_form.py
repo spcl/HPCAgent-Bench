@@ -103,12 +103,9 @@ def serve(judge: Judge, request: RouteRequest) -> None:
                     "nothing about whether the kernel can be parallelized",
                 ),
             )
-    # A gpu form is the hip dialect: the host unit (.cpp) in ``source``, the kernels in ``device_source``.
-    dialect = (
-        "hip"
-        if form.device
-        else next(name for name, ext in cpf_cache.LANGUAGE_EXT.items() if f".{ext}" == form.source.suffix)
-    )
+    # A gpu form's dialect is its device unit's (``device_source``); the host unit (.cpp) is in ``source``.
+    unit = form.device or form.source
+    dialect = next(name for name, ext in cpf_cache.LANGUAGE_EXT.items() if f".{ext}" == unit.suffix)
     answer = CanonicalFormAnswer(
         kernel=kernel,
         verdict=FormVerdict.OK,

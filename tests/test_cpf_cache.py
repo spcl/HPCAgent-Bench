@@ -15,6 +15,8 @@ import threading
 
 import pytest
 
+from hpcagent_bench import languages
+from hpcagent_bench.categories import Language
 from hpcagent_bench.cpf import cache as cpf_cache
 from hpcagent_bench.cpf import prerender as cpf_prerender
 from hpcagent_bench.cpf.cache import HintDetail, RenderVerdict, Role, Target
@@ -225,12 +227,16 @@ def test_an_unknown_kernel_is_a_miss_naming_it(tmp_path: pathlib.Path) -> None:
         cpf_prerender.lookup(tmp_path, "no_such_kernel", "c", "", HintDetail.PROOFS, Target.CPU)
 
 
-def test_a_gpu_setup_is_served_the_device_form_for_a_host_dialect(tmp_path: pathlib.Path) -> None:
-    """The tool asks a hip setup's judge for c++; the device form is the only one a gpu setup is served."""
+@pytest.mark.parametrize(("backend", "device_suffix"), [("hip", ".hip"), ("cuda", ".cu")])
+def test_a_gpu_setup_is_served_the_device_form_of_its_hosts_backend_for_a_host_dialect(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, backend: str, device_suffix: str
+) -> None:
+    """The tool asks a gpu setup's judge for c++; it is served the device form, in the host GPU backend's dialect."""
+    monkeypatch.setattr(languages, "gpu_backend", lambda: Language.parse(backend))
     cache = tmp_path / "cache"
-    publish_form(cache, "gemm", "hip", target=Target.GPU, device="// kernels\n")
+    publish_form(cache, "gemm", backend, target=Target.GPU, device="// kernels\n")
     form = cpf_prerender.lookup(cache, "gemm", "c++", "", HintDetail.PROOFS, Target.GPU)
-    assert (form.source.suffix, form.device and form.device.suffix) == (".cpp", ".hip")
+    assert (form.source.suffix, form.device and form.device.suffix) == (".cpp", device_suffix)
 
 
 def run_main(argv: list[str]) -> tuple[int, str]:

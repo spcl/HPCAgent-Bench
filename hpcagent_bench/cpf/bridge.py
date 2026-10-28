@@ -50,7 +50,6 @@ __all__ = [
     "CHILD_LINE_ADAPTER",
     "DACE_BANNER",
     "DACE_INTEGER_HELPERS",
-    "DEVICE_LANGUAGE",
     "GPU_CODEGEN",
     "RENDER_TIMEOUT_KEY",
     "CanonicalOutcome",
@@ -98,8 +97,6 @@ if TYPE_CHECKING:
     from dace.data import Data
     from dace.sdfg.graph import MultiConnectorEdge
 
-#: The dialect a device render takes regardless of ``--language`` (which picks between the HOST spellings only).
-DEVICE_LANGUAGE = "hip"
 #: The DaCe GPU code generator (``compiler.cuda.implementation``) a ``gpu`` form renders through, pinned per render
 #: because the dace framework sets the process-wide value per pipeline.
 GPU_CODEGEN = "experimental"
@@ -151,13 +148,19 @@ def returned_slots(path: pathlib.Path, entry: str) -> tuple[str | None, ...]:
     return tuple(value.id if isinstance(value, ast.Name) else None for value in values)
 
 
-#: CPF dialect -> the stub language whose ``restrict`` spelling the entry takes: the gpu host unit is the hip stub's.
-ABI_LANGUAGE: dict[str, Language] = {"c": Language.C, "c++": Language.CPP, DEVICE_LANGUAGE: Language.HIP}
+#: CPF dialect -> the stub language whose ``restrict`` spelling the entry takes: the gpu host unit is its device
+#: dialect's stub's.
+ABI_LANGUAGE: dict[str, Language] = {
+    "c": Language.C,
+    "c++": Language.CPP,
+    "hip": Language.HIP,
+    "cuda": Language.CUDA,
+}
 
 #: The native 16-bit float a CPF unit computes a storage-only element in, per dialect, typedef'd to the stub's
 #: storage type (same bit layout). C has none: CPF refuses a bf16 kernel in the C dialect.
 NATIVE_STORAGE_TYPES: dict[str, dict[str, str]] = {
-    "bfloat16": {DEVICE_LANGUAGE: "__hip_bfloat16", "cuda": "__nv_bfloat16", "c++": "__bf16"},
+    "bfloat16": {"hip": "__hip_bfloat16", "cuda": "__nv_bfloat16", "c++": "__bf16"},
 }
 
 
@@ -493,7 +496,7 @@ class RenderedForm(NamedTuple):
     entry: str
     forced: tuple[str, ...]
     lines: int
-    #: The gpu target's device unit (``.hip``): the kernels and the launchers ``code`` calls; empty on cpu.
+    #: The gpu target's device unit (``.cu`` or ``.hip``): the kernels and the launchers ``code`` calls; empty on cpu.
     device_code: str = ""
     #: What the units link against beyond the system's, in order (CPF's ``Rendering.link``).
     link: tuple[str, ...] = ()
@@ -510,7 +513,7 @@ class RenderedForm(NamedTuple):
 
     @property
     def device_name(self) -> str:
-        return f"{pathlib.Path(self.name).stem}.{LANGUAGE_EXT[DEVICE_LANGUAGE]}"
+        return f"{pathlib.Path(self.name).stem}.{LANGUAGE_EXT[cpf_cache.device_dialect()]}"
 
     @property
     def sdfg_name(self) -> str:
@@ -555,8 +558,8 @@ def render_canonical(
     privatize_rebound_arguments(sdfg, [name for name in by_value if name not in outputs])
     forced = force_abi_symbols(sdfg, emitted_args)
     sdfg.name = native.symbol  # pyright: ignore[reportAttributeAccessIssue] -- dace's SDFG.name is a Property descriptor the checker sees as read-only
-    # The device form is the hip dialect (a host and a device unit).
-    emitted = DEVICE_LANGUAGE if target is Target.GPU else language
+    # The device form is in this host's GPU backend's dialect (a host and a device unit).
+    emitted = cpf_cache.served_dialect(target, language)
     try:
         signature = EntrySignature(abi_args, workspace=WORKSPACE_NAME, workspace_size=WORKSPACE_SIZE_NAME)
         with gpu_codegen_pinned(target):
@@ -785,7 +788,7 @@ def render_options(
 ) -> dict[str, object]:
     """Every input besides the SDFG and dace that decides one artefact's text, for its cache key (hint detail
     included)."""
-    dialect = DEVICE_LANGUAGE if target is Target.GPU else language
+    dialect = cpf_cache.served_dialect(target, language)
     native = binding_from_spec(spec)
     return {
         "kernel": spec.short_name,

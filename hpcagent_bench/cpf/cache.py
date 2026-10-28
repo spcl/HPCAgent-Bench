@@ -27,6 +27,7 @@ __all__ = [
     "CACHE_ENV",
     "CANONICAL_SDFG_NAME",
     "DEFAULT_HINTS",
+    "DEVICE_DIALECTS",
     "DIALECT",
     "HINTS_CONFIG_KEY",
     "HINTS_ENV",
@@ -47,6 +48,7 @@ __all__ = [
     "Verification",
     "Verified",
     "cache_key",
+    "device_dialect",
     "entry_path",
     "form",
     "install",
@@ -60,10 +62,13 @@ __all__ = [
 ]
 
 #: CPF dialect -> the source extension its text is written with.
-LANGUAGE_EXT = {"c++": "cpp", "c": "c", "hip": "hip"}
+LANGUAGE_EXT = {"c++": "cpp", "c": "c", "hip": "hip", "cuda": "cu"}
 
 #: A language as a setup or a request spells it -> the CPF dialect.
-DIALECT = {"c": "c", "cpp": "c++", "c++": "c++", "hip": "hip"}
+DIALECT = {"c": "c", "cpp": "c++", "c++": "c++", "hip": "hip", "cuda": "cuda"}
+
+#: The device dialects: a gpu form's device unit is in the one of this host's GPU backend (:func:`device_dialect`).
+DEVICE_DIALECTS = frozenset({"hip", "cuda"})
 
 
 class HintDetail(Coded):
@@ -309,9 +314,19 @@ def render_lock(cache_root: pathlib.Path, name: str) -> Generator[None]:
             fcntl.flock(handle, fcntl.LOCK_UN)
 
 
+def device_dialect() -> str:
+    """The dialect of a gpu form's device unit: this host's GPU backend, ``cuda`` or ``hip``."""
+    from hpcagent_bench import languages  # languages loads the toolchain tables; only a gpu form needs them
+
+    return languages.gpu_backend().text
+
+
 def served_dialect(target: Target, language: str) -> str:
-    """The device form is the only dialect a gpu setup is served, whatever host dialect it asked for."""
-    return "hip" if target is Target.GPU else DIALECT[language]
+    """A gpu setup is served the device form: in the device dialect it asked for, else in this host's."""
+    if target is not Target.GPU:
+        return DIALECT[language]
+    asked = DIALECT.get(language, "")
+    return asked if asked in DEVICE_DIALECTS else device_dialect()
 
 
 class Form(NamedTuple):
@@ -325,7 +340,7 @@ class Form(NamedTuple):
     #: The unit defining the entry; on gpu the host unit (``.cpp``), which only launches.
     source: pathlib.Path
     binding: pathlib.Path
-    #: The gpu target's device unit (``.hip``): the kernels and the launchers ``source`` calls.
+    #: The gpu target's device unit (``.cu`` or ``.hip``): the kernels and the launchers ``source`` calls.
     device: pathlib.Path | None = None
     #: The catalog libraries the form calls (``requests.startup.load``).
     libraries: tuple[str, ...] = ()

@@ -37,7 +37,7 @@ def test_a_bf16_program_is_parsed_in_bfloat16() -> None:
 
 @pytest.mark.parametrize(
     ("dialect", "native"),
-    [(cpf_bridge.DEVICE_LANGUAGE, "__hip_bfloat16"), ("cuda", "__nv_bfloat16"), ("c++", "__bf16")],
+    [("hip", "__hip_bfloat16"), ("cuda", "__nv_bfloat16"), ("c++", "__bf16")],
 )
 def test_the_stub_storage_type_names_the_dialects_own_bfloat16(dialect: str, native: str) -> None:
     binding = binding_from_spec(BenchSpec.load(BF16_KERNEL))
