@@ -13,19 +13,26 @@ import multiprocessing.context
 import multiprocessing.forkserver
 import multiprocessing.process
 import multiprocessing.queues
+import multiprocessing.reduction
+import io
 import os
 import pathlib
+import pickle
 import queue
 import re
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import traceback
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Literal, Protocol, cast
+from typing import TYPE_CHECKING, Literal, Protocol, cast
+
+if TYPE_CHECKING:
+    import numpy as np
 
 from hpcagent_bench import osinfo
 from hpcagent_bench.openmp.isolation import pause_openmp_pools
@@ -43,6 +50,7 @@ __all__ = [
     "EXCEPTION_HEADER",
     "PR_SET_PDEATHSIG",
     "RESULT_POLL_S",
+    "SHM_ARG_BYTES",
     "TERM_GRACE_S",
     "ChildMessage",
     "ChildQueue",
@@ -53,7 +61,9 @@ __all__ = [
     "ProgressQueue",
     "ResultMessage",
     "RunResult",
+    "ShmArgs",
     "abandoned_by",
+    "attach_shm_array",
     "not_abandoned",
     "child_environment",
     "child_main",
@@ -75,6 +85,78 @@ __all__ = [
     "take_error",
     "take_result",
 ]
+
+
+#: An argument array at or above this size reaches a spawned or forkserver child as a file in :func:`shm_root`, mapped
+#: copy-on-write, instead of through the start pipe (a pickled copy in the parent, then another in the child).
+SHM_ARG_BYTES = 64 * 1024 * 1024
+
+
+def shm_root() -> str:
+    """Where argument arrays are staged: ``/dev/shm`` (memory-backed) when writable, else the temp directory."""
+    return "/dev/shm" if os.access("/dev/shm", os.W_OK) else tempfile.gettempdir()
+
+
+def attach_shm_array(path: str, dtype: str, shape: tuple[int, ...], order: Literal["C", "F"]) -> "np.ndarray":
+    """The staged array at ``path``, mapped copy-on-write (writes stay in this process); the file is unlinked, the
+    mapping keeps its pages."""
+    # Deferred: numpy loads an OpenMP runtime, which a spawned child must load only after its context is set (the
+    # pickled arguments import it at this same point).
+    import numpy as np  # noqa: PLC0415
+
+    mapped = np.memmap(path, dtype=np.dtype(dtype), mode="c", shape=shape, order=order)
+    os.unlink(path)
+    return mapped.view(np.ndarray)
+
+
+class ShmPickler(multiprocessing.reduction.ForkingPickler):
+    """The start pickler, with every large plain array written to a :func:`shm_root` file (its path in ``staged``)."""
+
+    def __init__(self, file: io.BytesIO, staged: list[str]) -> None:
+        super().__init__(file, pickle.HIGHEST_PROTOCOL)
+        self.staged = staged
+
+    def reducer_override(
+        self, obj: object
+    ) -> tuple[Callable[[str, str, tuple[int, ...], Literal["C", "F"]], "np.ndarray"], tuple[object, ...]]:
+        numpy_module = sys.modules.get("numpy")  # an array means numpy is loaded; this module never imports it
+        if numpy_module is None or type(obj) not in (numpy_module.ndarray, numpy_module.memmap):
+            return NotImplemented
+        array = cast("np.ndarray", obj)
+        if array.nbytes < SHM_ARG_BYTES or array.dtype.hasobject:
+            return NotImplemented
+        # Fortran order is kept as the C order of the transpose; any other layout is written C-ordered.
+        fortran = bool(array.flags.f_contiguous and not array.flags.c_contiguous)
+        try:
+            handle, path = tempfile.mkstemp(prefix="hb-arg-", suffix=".bin", dir=shm_root())
+            self.staged.append(path)
+            with os.fdopen(handle, "wb") as fh:
+                (array.T if fortran else array).tofile(fh)
+        except OSError:  # no room: the pipe carries it
+            return NotImplemented
+        return attach_shm_array, (path, array.dtype.str, array.shape, "F" if fortran else "C")
+
+
+class ShmArgs:
+    """A child's ``(fn, args, kwargs)``, pickled when the process starts with large arrays staged by
+    :class:`ShmPickler`; :meth:`release` removes what the child did not attach."""
+
+    __slots__ = ("payload", "staged")
+
+    def __init__(self, payload: tuple[object, ...]) -> None:
+        self.payload = payload
+        self.staged: list[str] = []
+
+    def __reduce__(self) -> tuple[Callable[[bytes], tuple[object, ...]], tuple[bytes]]:
+        # Runs inside Process.start, so the queues among the payload may be pickled.
+        buffer = io.BytesIO()
+        ShmPickler(buffer, self.staged).dump(self.payload)
+        return pickle.loads, (buffer.getvalue(),)
+
+    def release(self) -> None:
+        for path in self.staged:
+            with contextlib.suppress(OSError):
+                os.unlink(path)
 
 
 class Message(enum.Enum):
@@ -362,13 +444,12 @@ def report_without_a_thread(err_w: ErrorWriter, text: str) -> None:
 
 
 def child_main[ResultT](
-    fn: Callable[..., ResultT],
-    args: tuple[object, ...],
-    kwargs: dict[str, object],
+    call: tuple[Callable[..., ResultT], tuple[object, ...], dict[str, object]],  # a ShmArgs arrives as this
     q: ChildQueue[ResultT],
     seal: SealPlan | None,
     err_w: ErrorWriter,
 ) -> None:
+    fn, args, kwargs = call
     die_with_parent()
     try:
         if seal is not None:  # before the queue's feeder thread starts: a user namespace wants one thread
@@ -528,56 +609,63 @@ def run_forked[ResultT](
     if progress_q is not None:
         call_kwargs["progress"] = progress_q
     err_r, err_w = ctx.Pipe(duplex=False)
-    p = ctx.Process(target=child_main, args=(fn, args, call_kwargs, q, seal, err_w))
+    payload = (fn, args, call_kwargs)
+    # Large arrays reach a spawned or forkserver child as files, not through the start pipe.
+    call = payload if isinstance(ctx, multiprocessing.context.ForkContext) else ShmArgs(payload)
+    p = ctx.Process(target=child_main, args=(call, q, seal, err_w))
     # Every start holds the lock: a fork, or a forkserver started on first use, copies ``os.environ`` too, and
     # another thread's context environment (an llvm ``LD_LIBRARY_PATH``) would otherwise stick to it.
     with child_environment(env) if env else CHILD_ENV_LOCK:
         p.start()
-    # The parent's copy of the write end goes NOW, so the read end sees EOF as soon as the child is
-    # gone rather than blocking on a writer that only this process still holds.
-    err_w.close()
-    if on_start is not None and p.pid is not None:
-        on_start(p.pid)
-    last_progress: ResultT | None = None
-    # The deadline measures the CHILD'S runtime: the child arms it by reporting that it started,
-    # so fork/spawn latency is not billed to the callee. Until it reports in, the ceiling is its own
-    # timeout plus the arming grace, so a child that never runs at all still ends.
-    limit = None if timeout is None else time.monotonic() + timeout + ARM_GRACE_S
-    # Poll so the result queue drains while the child is alive -- a payload bigger than the OS
-    # pipe buffer would otherwise block the child's feeder thread forever (join-then-read deadlocks).
-    poll = RESULT_POLL_S
-    #: The child's single result message, once received.
-    result_item: ResultMessage[ResultT] | None = None
-    while p.is_alive():
-        if abandoned is not None and abandoned.is_set():
-            p.kill()
-            p.join()
-            return RunResult(ok=False, signal="ABANDONED", error=f"{tag}abandoned: nobody reads its result")
-        if progress_q is not None:
-            last_progress = drain_progress(progress_q, last_progress)
-        if limit is not None and time.monotonic() >= limit + (held_s() if held_s is not None else 0.0):
-            if result_item is not None:
-                break  # child actually finished (payload already drained) -- not a timeout
-            stop_child(p)
+    try:
+        # The parent's copy of the write end goes NOW, so the read end sees EOF as soon as the child is
+        # gone rather than blocking on a writer that only this process still holds.
+        err_w.close()
+        if on_start is not None and p.pid is not None:
+            on_start(p.pid)
+        last_progress: ResultT | None = None
+        # The deadline measures the CHILD'S runtime: the child arms it by reporting that it started,
+        # so fork/spawn latency is not billed to the callee. Until it reports in, the ceiling is its own
+        # timeout plus the arming grace, so a child that never runs at all still ends.
+        limit = None if timeout is None else time.monotonic() + timeout + ARM_GRACE_S
+        # Poll so the result queue drains while the child is alive -- a payload bigger than the OS
+        # pipe buffer would otherwise block the child's feeder thread forever (join-then-read deadlocks).
+        poll = RESULT_POLL_S
+        #: The child's single result message, once received.
+        result_item: ResultMessage[ResultT] | None = None
+        while p.is_alive():
+            if abandoned is not None and abandoned.is_set():
+                p.kill()
+                p.join()
+                return RunResult(ok=False, signal="ABANDONED", error=f"{tag}abandoned: nobody reads its result")
             if progress_q is not None:
                 last_progress = drain_progress(progress_q, last_progress)
-            # The child can die of its OWN fatal signal between the deadline check and terminate();
-            # the exit code decides: any signal other than the one just sent is the child's own.
-            ec = p.exitcode
-            if ec is not None and ec < 0 and -ec not in (signal.SIGTERM, signal.SIGKILL):
-                break
-            msg = f"{tag}timed out after {timeout}s"
-            sys.stdout.write(msg + "\n")
-            sys.stdout.flush()
-            return RunResult(ok=False, signal="TIMEOUT", error=msg, result=last_progress)
-        if result_item is not None:
-            p.join(poll)
-            continue
-        item = poll_queue(q, poll)
-        if item is not None and item[0] is Message.STARTED:
-            limit = None if timeout is None else time.monotonic() + timeout
-        elif item is not None:
-            result_item = item
-    if progress_q is not None:
-        last_progress = drain_progress(progress_q, last_progress)
-    return finished_result(p.exitcode, q, err_r, tag, result_item, last_progress)
+            if limit is not None and time.monotonic() >= limit + (held_s() if held_s is not None else 0.0):
+                if result_item is not None:
+                    break  # child actually finished (payload already drained) -- not a timeout
+                stop_child(p)
+                if progress_q is not None:
+                    last_progress = drain_progress(progress_q, last_progress)
+                # The child can die of its OWN fatal signal between the deadline check and terminate();
+                # the exit code decides: any signal other than the one just sent is the child's own.
+                ec = p.exitcode
+                if ec is not None and ec < 0 and -ec not in (signal.SIGTERM, signal.SIGKILL):
+                    break
+                msg = f"{tag}timed out after {timeout}s"
+                sys.stdout.write(msg + "\n")
+                sys.stdout.flush()
+                return RunResult(ok=False, signal="TIMEOUT", error=msg, result=last_progress)
+            if result_item is not None:
+                p.join(poll)
+                continue
+            item = poll_queue(q, poll)
+            if item is not None and item[0] is Message.STARTED:
+                limit = None if timeout is None else time.monotonic() + timeout
+            elif item is not None:
+                result_item = item
+        if progress_q is not None:
+            last_progress = drain_progress(progress_q, last_progress)
+        return finished_result(p.exitcode, q, err_r, tag, result_item, last_progress)
+    finally:
+        if isinstance(call, ShmArgs):
+            call.release()

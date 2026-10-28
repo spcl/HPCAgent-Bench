@@ -19,7 +19,7 @@ parameters:
     particles_per_box: 86
     alpha: 0.5
   XL:
-    n_boxes: 660070
+    n_boxes: 110000
     max_neighbors: 19
     particles_per_box: 74
     alpha: 0.5
