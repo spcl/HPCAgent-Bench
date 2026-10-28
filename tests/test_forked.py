@@ -503,6 +503,18 @@ def test_a_large_argument_reaches_a_started_child_without_a_copy_in_the_parent(
     assert not list(tmp_path.glob("hb-arg-*"))
 
 
+def test_a_start_that_fails_after_staging_an_argument_leaves_no_file(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An argument that will not pickle fails the start after an earlier array was staged in /dev/shm (node RAM): the
+    staged file goes with the failure."""
+    monkeypatch.setattr(forked, "shm_root", lambda: str(tmp_path))
+    array = np.ones(forked.SHM_ARG_BYTES // 8 + 1)
+    with pytest.raises(Exception):  # noqa: B017 -- pickle's error type depends on the start method
+        run_forked(bump_and_sum, {"a": array, "b": lambda: 0}, mp_context="spawn", timeout=120)
+    assert not list(tmp_path.glob("hb-arg-*"))
+
+
 def dtype_name(data: dict[str, np.ndarray]) -> str:
     return str(data["a"].dtype)
 

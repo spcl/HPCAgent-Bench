@@ -617,9 +617,11 @@ def run_forked[ResultT](
     p = ctx.Process(target=child_main, args=(call, q, seal, err_w, tag))
     # Every start holds the lock: a fork, or a forkserver started on first use, copies ``os.environ`` too, and
     # another thread's context environment (an llvm ``LD_LIBRARY_PATH``) would otherwise stick to it.
-    with child_environment(env) if env else CHILD_ENV_LOCK:
-        p.start()
     try:
+        # Inside the try: a failed start (a payload member that will not pickle, EMFILE) still unlinks the
+        # arrays already staged in /dev/shm.
+        with child_environment(env) if env else CHILD_ENV_LOCK:
+            p.start()
         # The parent's copy of the write end goes NOW, so the read end sees EOF as soon as the child is
         # gone rather than blocking on a writer that only this process still holds.
         err_w.close()

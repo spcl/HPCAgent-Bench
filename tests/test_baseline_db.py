@@ -113,7 +113,8 @@ def test_a_race_a_baselines_job_stored_seeds_a_judge_through_the_store(
 def test_a_race_read_from_another_db_is_published_to_the_store(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A job whose own DB already held a race times nothing and stores nothing; the read copies it to the store."""
+    """A job whose own DB already held a race times nothing and stores nothing; the read copies it to the store,
+    with how it ran (leader, its source, winner)."""
     other = stored(tmp_path / "other.db", TIMING, 1_000)
     monkeypatch.setenv("HPCAGENT_BENCH_SNAPSHOT_COMMIT", "c" * 40)
     monkeypatch.setenv("HPCAGENT_BENCH_CACHE_DISK_RESULTS_DIR", str(tmp_path / "store"))
@@ -121,7 +122,10 @@ def test_a_race_read_from_another_db_is_published_to_the_store(
     assert baseline_db.load(KEY) == TIMING
     shared = baseline_db.shared_db()
     assert shared is not None
-    assert baseline_db.row_in(shared, KEY) == baseline_db.row_in(other, KEY)
+    published = baseline_db.row_in(shared, KEY)
+    assert published == baseline_db.row_in(other, KEY)
+    assert published is not None
+    assert (published.leader, published.leader_source, published.winner) == ("numba", "default", "c")
 
 
 def without_table(path: pathlib.Path) -> pathlib.Path:
@@ -142,12 +146,15 @@ def test_a_db_from_before_the_table_reads_merges_and_gains_it_when_written(tmp_p
 
 
 def stored(path: pathlib.Path, timing: baseline_db.Timing, ts_ms: int, key: baseline_db.RaceKey = KEY) -> pathlib.Path:
-    """``path`` holding one race row of ``key`` measured at ``ts_ms``."""
+    """``path`` holding one race row of ``key`` measured at ``ts_ms``, led by numba and won by c."""
     best, samples = timing
     row = {
         **dataclasses.asdict(key),
         "best": json.dumps(best),
         "samples": json.dumps(samples, sort_keys=True),
+        "leader": "numba",
+        "leader_source": "default",
+        "winner": "c",
         "ts_ms": ts_ms,
     }
     with contextlib.closing(results_db.open_db(path)) as conn, conn:

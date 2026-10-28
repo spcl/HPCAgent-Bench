@@ -77,7 +77,7 @@ def kern(x):
 @pytest.mark.skipif(
     not osinfo.IS_LINUX or osinfo.machine() not in native_call.SET_MEMPOLICY_SYSCALL, reason="set_mempolicy is Linux"
 )
-def test_a_slot_child_binds_its_memory_to_its_cores_node(
+def test_a_slot_child_prefers_its_cores_node_for_its_memory(
     monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
 ) -> None:
     """The child is forked from the one judge, so its inputs and pools sat on the judge's node: three of four slots
@@ -101,7 +101,7 @@ def test_a_slot_child_binds_its_memory_to_its_cores_node(
         device_id=1,
         py_meta=("kern", ("x",), ("y",)),
     )
-    assert outs["y"].tolist() == [native_call.MPOL_BIND, sum(1 << node for node in nodes)], outs["y"]
+    assert outs["y"].tolist() == [native_call.MPOL_PREFERRED_MANY, sum(1 << node for node in nodes)], outs["y"]
 
 
 @pytest.mark.parametrize(

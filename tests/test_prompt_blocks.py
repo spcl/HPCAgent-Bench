@@ -113,6 +113,13 @@ def test_an_insert_names_exactly_one_anchor() -> None:
         Insert(before="a", after="a", block=Block(id="x", text="x"))
 
 
+def test_inserts_after_one_anchor_render_in_their_listed_order() -> None:
+    """A packet appending two templates to one section lists them in spec order."""
+    prompt = prompt_blocks.parse("@@section a@@\nA\n@@section b@@\nB\n")
+    inserts = tuple(Insert(after="a", block=Block(id=f"a+{index}", text=str(index))) for index in range(3))
+    assert prompt_blocks.apply(prompt, Overlay(insert=inserts)).ids() == ("a", "a+0", "a+1", "a+2", "b")
+
+
 def test_a_disabled_block_does_not_render_and_a_removed_one_is_gone() -> None:
     prompt = prompt_blocks.parse("@@section a@@\nA\n@@section b@@\nB\n")
     off = prompt_blocks.apply(prompt, Overlay(set={"a": Edit(enabled=False)}))
@@ -153,5 +160,6 @@ if __name__ == "__main__":
     test_a_later_overlay_wins_over_an_earlier_one_and_vars_merge()
     test_an_overlay_naming_an_unknown_block_or_an_existing_id_is_refused()
     test_an_insert_names_exactly_one_anchor()
+    test_inserts_after_one_anchor_render_in_their_listed_order()
     test_a_disabled_block_does_not_render_and_a_removed_one_is_gone()
     test_show_names_the_overlay_behind_every_changed_block()

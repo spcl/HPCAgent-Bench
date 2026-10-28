@@ -10,6 +10,7 @@ runs through the same handler and its row reads as if graded inline. A replayed 
 
 import dataclasses
 import json
+import os
 import pathlib
 import sys
 import threading
@@ -85,6 +86,7 @@ def append(path: pathlib.Path, entry: DeferredSubmit) -> None:
         with path.open("a", encoding="utf-8") as handle:
             handle.write(line)
             handle.flush()
+            os.fsync(handle.fileno())
 
 
 def read(path: pathlib.Path) -> list[DeferredSubmit]:

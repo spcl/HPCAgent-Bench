@@ -40,6 +40,7 @@ __all__ = [
     "COMPILER_MIN_MAJOR",
     "DEFAULT_LOADER_DIRS",
     "DEVICE_DRIVER_FAMILY",
+    "DEVICE_TOOL_TIMEOUT_S",
     "FAMILY_PIN_KEY",
     "FFT_LINKED_LANGS",
     "FFT_LINKED_LIBRARIES",
@@ -112,6 +113,7 @@ __all__ = [
     "context_view_lib",
     "declared_runtime",
     "default_family",
+    "device_tool_answers",
     "discover_variants",
     "driver_library_dir",
     "driver_major",
@@ -708,6 +710,18 @@ def rocm_driver(name: str) -> str:
     return ""
 
 
+#: Seconds a device tool gets to answer: a wedged driver can hang ``nvidia-smi`` for good.
+DEVICE_TOOL_TIMEOUT_S = 30.0
+
+
+def device_tool_answers(tool: str) -> bool:
+    """Whether ``tool`` exits 0 within :data:`DEVICE_TOOL_TIMEOUT_S`."""
+    try:
+        return subprocess.run([tool], capture_output=True, timeout=DEVICE_TOOL_TIMEOUT_S, check=False).returncode == 0
+    except subprocess.TimeoutExpired:
+        return False
+
+
 @functools.lru_cache(maxsize=1, typed=True)
 def gpu_backend() -> Language:
     """``cuda`` on an NVIDIA host, ``hip`` on an AMD one, as DaCe's ``get_gpu_backend`` decides it: its
@@ -717,7 +731,7 @@ def gpu_backend() -> Language:
     if configured in ("cuda", "hip"):
         return Language.parse(configured)
     for tool, backend in (("nvidia-smi", Language.CUDA), ("rocm-smi", Language.HIP)):
-        if shutil.which(tool) and subprocess.run([tool], capture_output=True, check=False).returncode == 0:
+        if shutil.which(tool) and device_tool_answers(tool):
             return backend
     return Language.HIP if shutil.which("hipcc") and not shutil.which("nvcc") else Language.CUDA
 

@@ -115,12 +115,17 @@ def apply(prompt: Prompt, overlay: Overlay) -> Prompt:
                 }
             )
         blocks.append(block)
+    # Inserts after one anchor keep their listed order: each goes after the last block placed there.
+    last_after: dict[str, str] = {}
     for insert in overlay.insert:
         if insert.block.id in {block.id for block in blocks}:
             raise ValueError(f"{where}the prompt already has a block {insert.block.id!r}")
         added = insert.block.model_copy(update={"text": normalized(insert.block.text)})
-        index = next(i for i, block in enumerate(blocks) if block.id == (insert.before or insert.after))
+        anchor = insert.before or last_after.get(insert.after, insert.after)
+        index = next(i for i, block in enumerate(blocks) if block.id == anchor)
         blocks.insert(index if insert.before else index + 1, added)
+        if insert.after:
+            last_after[insert.after] = added.id
     return Prompt(head=prompt.head, blocks=tuple(block for block in blocks if block.id not in overlay.remove))
 
 

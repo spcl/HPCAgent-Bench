@@ -20,6 +20,7 @@ __all__ = [
     "Race",
     "RaceKey",
     "SHARED_DB",
+    "StoredRace",
     "Timing",
     "load",
     "open_shared",
@@ -72,6 +73,22 @@ class Race:
     winner: str = ""
 
 
+@dataclasses.dataclass(frozen=True, slots=True)
+class StoredRace:
+    """One ``baseline_timings`` row past its key: when it was measured, its JSON times, and how the race ran."""
+
+    ts_ms: int
+    best: str
+    samples: str
+    leader: str
+    leader_source: str
+    winner: str
+
+
+#: The non-key columns of a ``baseline_timings`` row, in :class:`StoredRace` order.
+STORED_COLUMNS: tuple[str, ...] = tuple(field.name for field in dataclasses.fields(StoredRace))
+
+
 def own_db() -> pathlib.Path | None:
     """This process's results DB (:func:`recording.db_path`, whether or not it records grades); None where that
     path is refused (a memory-backed filesystem)."""
@@ -95,8 +112,8 @@ def source_dbs() -> list[pathlib.Path]:
     return list(dict.fromkeys(path for path in found if path is not None))
 
 
-def row_in(path: pathlib.Path, key: RaceKey) -> tuple[int, str, str] | None:
-    """``(ts_ms, best, samples)`` of ``key``'s row in the DB ``path``; None when absent, tableless or unreadable."""
+def row_in(path: pathlib.Path, key: RaceKey) -> StoredRace | None:
+    """``key``'s row in the DB ``path``; None when absent, tableless or unreadable."""
     if not path.is_file():
         return None
     where = " AND ".join(f'"{name}" = ?' for name in KEY_COLUMNS)
@@ -105,11 +122,14 @@ def row_in(path: pathlib.Path, key: RaceKey) -> tuple[int, str, str] | None:
             if TABLE not in results_db.table_names(conn):
                 return None
             row = conn.execute(
-                f"SELECT ts_ms, best, samples FROM {TABLE} WHERE {where}", dataclasses.astuple(key)
+                f"SELECT {', '.join(STORED_COLUMNS)} FROM {TABLE} WHERE {where}", dataclasses.astuple(key)
             ).fetchone()
     except sqlite3.Error:
         return None
-    return None if row is None else (int(row[0]), str(row[1]), str(row[2]))
+    if row is None:
+        return None
+    ts_ms, *texts = row
+    return StoredRace(int(ts_ms), *(str(text) for text in texts))
 
 
 def load(key: RaceKey) -> Timing | None:
@@ -118,13 +138,13 @@ def load(key: RaceKey) -> Timing | None:
     rows = [(row, path) for path in source_dbs() if (row := row_in(path, key)) is not None]
     if not rows:
         return None
-    (ts_ms, best, samples), source = max(rows, key=lambda found: found[0][0])
+    newest, source = max(rows, key=lambda found: found[0].ts_ms)
     shared = shared_db()
     if shared is not None and source != shared:
-        publish(shared, key, ts_ms, best, samples)
+        publish(shared, key, newest)
     try:
-        return dict(db_json.RACE_BEST.loads(best)), {
-            name: list(ns) for name, ns in db_json.RACE_SAMPLES.loads(samples).items()
+        return dict(db_json.RACE_BEST.loads(newest.best)), {
+            name: list(ns) for name, ns in db_json.RACE_SAMPLES.loads(newest.samples).items()
         }
     except ValueError:  # pydantic.ValidationError: a row this reader cannot read is a miss
         return None
@@ -156,9 +176,10 @@ def store(key: RaceKey, race: Race) -> None:
             conn.execute(insert, tuple(row.values()))
 
 
-def publish(shared: pathlib.Path, key: RaceKey, ts_ms: int, best: str, samples: str) -> None:
-    """Copy one stored race into :func:`shared_db` at its own time; a store that cannot be written costs the reuse."""
-    row = {**dataclasses.asdict(key), "best": best, "samples": samples, "ts_ms": ts_ms}
+def publish(shared: pathlib.Path, key: RaceKey, race: StoredRace) -> None:
+    """Copy one stored race, every column, into :func:`shared_db` at its own time; a store that cannot be written
+    costs the reuse."""
+    row = {**dataclasses.asdict(key), **dataclasses.asdict(race)}
     columns = ", ".join(f'"{name}"' for name in row)
     insert = f"INSERT OR REPLACE INTO {TABLE} ({columns}) VALUES ({', '.join('?' * len(row))})"
     with contextlib.suppress(sqlite3.Error, OSError), contextlib.closing(open_shared(shared)) as conn, conn:
