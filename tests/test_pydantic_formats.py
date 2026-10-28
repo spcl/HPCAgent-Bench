@@ -210,8 +210,9 @@ def test_an_opt_report_manifest_and_a_pr_status_dump_their_fields() -> None:
     }
 
 
-def test_the_agent_folder_log_names_the_latest_folder_and_refuses_a_malformed_line(tmp_path: pathlib.Path) -> None:
-    """The judge opens exactly the folder the driver last gave an episode; a line it cannot read stops it."""
+def test_the_agent_folder_log_names_the_latest_folder_and_skips_a_malformed_line(tmp_path: pathlib.Path) -> None:
+    """The judge opens exactly the folder the driver last gave an episode; a line it cannot read (one another node is
+    still appending) names no folder, so an episode with only such a line has none."""
     shared, run = tmp_path / "shared", tmp_path / "run"
     (shared / "w2").mkdir(parents=True)
     run.mkdir()
@@ -222,7 +223,7 @@ def test_the_agent_folder_log_names_the_latest_folder_and_refuses_a_malformed_li
         patch.setattr(sandbox, "shared_dir", lambda: str(shared))
         assert sandbox.episode_folder("e") == shared / "w2"
         log.write_text('{"episode": "e", "folder": "w2"}\n', encoding="utf-8")
-        with pytest.raises(pydantic.ValidationError):
+        with pytest.raises(ValueError, match="has no agent folder"):
             sandbox.episode_folder("e")
 
 
