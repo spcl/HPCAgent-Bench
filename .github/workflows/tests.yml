@@ -302,6 +302,7 @@ jobs:
   user-plugin-names:
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-ci') }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     outputs:
       plugins: ${{ steps.names.outputs.plugins }}
     steps:

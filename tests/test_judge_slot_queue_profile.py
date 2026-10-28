@@ -33,7 +33,8 @@ def test_a_queued_profile_waits_for_the_slot_and_is_never_run_once_its_client_is
         with grades.changed:
             grades.order.append("profile")
             grades.changed.notify_all()
-        return {"build_ok": True}
+        # the smallest answer /profile accepts: a build failure report
+        return {"build_ok": False, "kernel": "faked", "language": "c", "detail": "faked"}
 
     monkeypatch.setattr(service, "score", grades)
     monkeypatch.setattr(service, "submission_from_body", grades.count_arrival(service.submission_from_body))
