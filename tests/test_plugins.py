@@ -218,6 +218,24 @@ def test_a_plugins_children_start_in_the_openmp_context_of_the_runtime_it_names(
     assert os.environ.get("LD_LIBRARY_PATH") == before
 
 
+def test_a_flavor_optimizer_names_the_plugin_that_declares_it(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    folder = tmp_path / "ompprobe"
+    folder.mkdir()
+    (folder / "plugin.toml").write_text(
+        'name = "ompprobe"\n\n[flavors.probeflavor]\nname = "P"\nfull_name = "Probe"\n'
+        'optimizer = "x.y:Z"\nextends = ["dace_cpu_canon"]\n',
+        encoding="utf-8",
+    )
+    monkeypatch.delenv(agent_plugins.PLUGIN_DIRS_ENV, raising=False)
+    monkeypatch.setenv(agent_plugins.USER_PLUGIN_DIRS_ENV, str(tmp_path))
+
+    assert plugins.flavor_plugin("dace_cpu_canon_probeflavor") == "ompprobe"
+    assert plugins.flavor_plugin("dace_gpu_canon_probeflavor") == ""
+    assert plugins.flavor_plugin("noop") == ""
+
+
 def test_an_openmp_runtime_the_bench_does_not_serve_is_refused(tmp_path: pathlib.Path) -> None:
     (tmp_path / "plugin.toml").write_text('name = "ompprobe"\nopenmp = "libiomp5"\n', encoding="utf-8")
     with pytest.raises(ValueError, match=r"plugin\.toml"):
