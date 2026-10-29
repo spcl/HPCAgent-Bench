@@ -518,6 +518,7 @@ class CallHoister(ast.NodeTransformer):
         "_cur_keepdims",
         "array_temps",
         "blas",
+        "blas_complex",
         "blas_float",
         "counter",
         "dim_aliases",
@@ -538,6 +539,7 @@ class CallHoister(ast.NodeTransformer):
         dim_aliases: dict[str, str] | None = None,
         blas: bool = False,
         blas_float: str = BLAS_LOWERING_FLOAT,
+        blas_complex: bool = False,
     ) -> None:
         self.shape_table = shape_table
         self.scalar_temps = scalar_temps
@@ -547,6 +549,7 @@ class CallHoister(ast.NodeTransformer):
         self.dim_aliases: dict[str, str] = dim_aliases or {}
         self.blas = blas
         self.blas_float = blas_float
+        self.blas_complex = blas_complex
         # Side-effect dtype table (shared with the lowering pipeline)
         # so a ``__cb<n>`` whose RHS contains complex literals or
         # complex-typed Name references is tagged ``complex128``.
@@ -626,6 +629,7 @@ class CallHoister(ast.NodeTransformer):
             dim_aliases=self.dim_aliases,
             blas=self.blas,
             blas_float=self.blas_float,
+            blas_complex=self.blas_complex,
         )
         node.args = [mm.visit(a) for a in node.args]
         self.pre_stmts.extend(mm.pre_stmts)

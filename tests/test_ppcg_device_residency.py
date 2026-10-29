@@ -302,13 +302,15 @@ def test_call_selects_fp64_off_a_device_array_too() -> None:
     """The fp64-vs-fp32 symbol choice reads ``a.dtype`` off every arg; a plain
     ``isinstance(a, np.ndarray)`` gate would have silently bound the fp32 symbol whenever every
     ARRAY argument was a device (cupy) one -- which for ppcg_hip is every call."""
-    fake = FakeCupyArray(np.zeros(1, dtype=np.float64))
-    is_double = any(
-        (isinstance(a, np.ndarray) or native_runtime.is_device_array(a))
-        and a.dtype in (np.dtype(np.float64), np.dtype(np.complex128))
-        for a in (fake, 1, 2.0)
-    )
-    assert is_double
+    assert native_runtime.binds_double((FakeCupyArray(np.zeros(1, dtype=np.float64)), 1, 2.0))
+    assert not native_runtime.binds_double((FakeCupyArray(np.zeros(1, dtype=np.float32)), 1, 2.0))
+
+
+def test_an_integer_only_call_binds_fp64() -> None:
+    """CoMet and spgemm pass integer arrays only; the fp32 symbol turned their float temporaries and gemm single."""
+    assert native_runtime.binds_double((np.zeros(4, dtype=np.int64), np.zeros(4, dtype=np.int32), 3))
+    assert native_runtime.binds_double((np.zeros(4, dtype=np.complex128),))
+    assert not native_runtime.binds_double((np.zeros(4, dtype=np.int64), np.zeros(4, dtype=np.complex64)))
 
 
 # PlutoFramework wiring (fake)

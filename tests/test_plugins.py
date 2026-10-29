@@ -141,6 +141,38 @@ def test_a_plugin_packet_named_like_a_shipped_page_is_refused_and_adds_nothing(
     assert "aaa" not in kind.entries
 
 
+def test_a_plugin_packet_named_like_a_registered_alias_is_refused_and_adds_nothing(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The registry's own check would raise only once earlier packets of the plugin had landed."""
+    folder = write_plugin(tmp_path, "aaa")
+    manifest = folder / "plugin.toml"
+    manifest.write_text(manifest.read_text() + '\n[packets.short]\nname = "Shadow"\n')
+    kind = Kind[PacketDef]("packets")
+    kind.add("shipped", PacketDef(name="Shipped"), aliases=("short",))
+    monkeypatch.setattr(plugins, "PACKETS", kind)
+    with pytest.raises(ValueError, match="'short' is already registered"):
+        plugins.register_packets(agent_plugins.find([folder]))
+    assert "aaa" not in kind.entries
+
+
+def test_packets_composing_each_other_are_refused_and_add_nothing(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A loop would recurse without end wherever a spec naming either is resolved."""
+    folder = write_plugin(tmp_path, "aaa")
+    manifest = folder / "plugin.toml"
+    manifest.write_text(
+        manifest.read_text() + '\n[packets.ping]\nname = "Ping"\npackets = ["pong"]\n'
+        '\n[packets.pong]\nname = "Pong"\npackets = ["ping"]\n'
+    )
+    kind = Kind[PacketDef]("packets")
+    monkeypatch.setattr(plugins, "PACKETS", kind)
+    with pytest.raises(ValueError, match="composes itself"):
+        plugins.register_packets(agent_plugins.find([folder]))
+    assert not kind.entries
+
+
 def test_a_packet_that_only_changes_the_prompt_keeps_its_key_in_a_spec(monkeypatch: pytest.MonkeyPatch) -> None:
     """Its key is what the prompt is rebuilt from and what a row records."""
     from hpcagent_bench import packets
@@ -305,6 +337,8 @@ if __name__ == "__main__":
         test_a_plugin_packet_takes_the_next_slot_and_names_its_compiled_prompt(folder, patch)
         test_a_packet_naming_a_workflow_text_its_plugin_does_not_ship_is_refused(root / "noworkflow", patch)
         test_two_plugins_of_one_name_are_refused(root / "twins")
+        test_a_plugin_packet_named_like_a_registered_alias_is_refused_and_adds_nothing(root / "alias", patch)
+        test_packets_composing_each_other_are_refused_and_add_nothing(root / "loop", patch)
         (root / "bad").mkdir()
         test_a_malformed_manifest_names_its_file(root / "bad")
         test_the_digest_follows_the_content(folder)

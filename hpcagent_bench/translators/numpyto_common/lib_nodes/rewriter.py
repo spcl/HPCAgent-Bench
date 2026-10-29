@@ -47,6 +47,9 @@ def call_expander(
     dim_aliases: dict[str, str] | None = None,
     library: bool = False,
     library_nd: bool = False,
+    blas_float: str | None = None,
+    extent_values: dict[str, int] | None = None,
+    blas_complex: bool = False,
 ) -> list[ast.stmt]:
     """Adapter: pass ``keywords``/``local_dtypes``/``fresh_local_allocs``/``library`` to
     expanders that accept them, else call with the legacy signature. The two
@@ -54,7 +57,9 @@ def call_expander(
     dtype) so the emit declares them correctly. ``library`` is the same "prefer a real library
     over a loop nest" signal :data:`BLAS_GEMM_MARKER` uses for matmul (``expand_fft``/
     ``expand_ifft``/``expand_fftn``/``expand_ifftn`` are its other consumer, see
-    FFT_LIBRARY_MARKER).
+    FFT_LIBRARY_MARKER). ``blas_float`` is the float of the gemm a BLAS target renders (None: no BLAS),
+    ``extent_values`` the compile-time integer behind a shape token (a pinned knob), ``blas_complex`` whether
+    that gemm also takes complex operands.
     """
     sig = inspect.signature(expander)
     params = sig.parameters
@@ -71,6 +76,12 @@ def call_expander(
         extras["library"] = library
     if "library_nd" in params:
         extras["library_nd"] = library_nd
+    if "blas_float" in params:
+        extras["blas_float"] = blas_float
+    if "blas_complex" in params:
+        extras["blas_complex"] = blas_complex
+    if "extent_values" in params and extent_values is not None:
+        extras["extent_values"] = extent_values
     return expander(target, args, shape_table, **extras)
 
 
@@ -333,8 +344,10 @@ class LibNodeRewriter(ast.NodeTransformer):
     __slots__ = (
         "_counter",
         "blas",
+        "blas_complex",
         "blas_float",
         "dim_aliases",
+        "extent_values",
         "fft_library",
         "fft_library_nd",
         "fresh_local_allocs",
@@ -363,6 +376,8 @@ class LibNodeRewriter(ast.NodeTransformer):
         scalar_helpers: set[str] | None = None,
         fft_library_nd: bool = False,
         blas_float: str = BLAS_LOWERING_FLOAT,
+        extent_values: dict[str, int] | None = None,
+        blas_complex: bool = False,
     ) -> None:
         self.shape_table = shape_table
         #: Kernel helpers emitted as by-value SCALAR functions. A call to one is rank 0 whatever
@@ -374,6 +389,10 @@ class LibNodeRewriter(ast.NodeTransformer):
         self.blas = blas
         #: The kernel's float: a gemm operand of another width keeps the loop nest (BLAS_LOWERING_FLOAT).
         self.blas_float = blas_float
+        #: The target's gemm also takes complex operands (Fortran's MATMUL).
+        self.blas_complex = blas_complex
+        #: Compile-time integer behind a shape token (a pinned knob), which an einsum path plans with.
+        self.extent_values: dict[str, int] = extent_values or {}
         #: Target renders a whole-array 1-D np.fft.fft/ifft/fftn/ifftn as FFT_LIBRARY_MARKER
         #: instead of the naive O(N^2) loop. SEPARATE from ``blas`` (not reused): a target that
         #: cannot render BLAS_GEMM_MARKER (numpyto_fortran/numpyto_numba's emitters have no
@@ -419,6 +438,11 @@ class LibNodeRewriter(ast.NodeTransformer):
         self.fresh_local_allocs: dict[str, tuple[str, ...]] = {}
         self._counter = [0]
 
+    @property
+    def gemm_float(self) -> str | None:
+        """The float of the gemm this target renders, None when it renders none."""
+        return self.blas_float if self.blas else None
+
     def hoist_value(self, value: ast.expr) -> tuple[ast.expr, list[ast.stmt]]:
         # First hoist registered library-node calls, so e.g. ``A[i, j] -=
         # np.dot(A[i, :j], A[j, :j])`` becomes ``__cb1 = np.dot(...); A[i, j]
@@ -433,6 +457,7 @@ class LibNodeRewriter(ast.NodeTransformer):
             dim_aliases=self.dim_aliases,
             blas=self.blas,
             blas_float=self.blas_float,
+            blas_complex=self.blas_complex,
         )
         call_hoister.sparse = self.sparse
         value = call_hoister.visit(value)
@@ -447,6 +472,7 @@ class LibNodeRewriter(ast.NodeTransformer):
             dim_aliases=self.dim_aliases,
             blas=self.blas,
             blas_float=self.blas_float,
+            blas_complex=self.blas_complex,
         )
         new_value = mm_hoister.visit(value)
         pre.extend(mm_hoister.pre_stmts)
@@ -611,6 +637,9 @@ class LibNodeRewriter(ast.NodeTransformer):
                 dim_aliases=self.dim_aliases,
                 library=self.fft_library,
                 library_nd=self.fft_library_nd,
+                blas_float=self.gemm_float,
+                extent_values=self.extent_values,
+                blas_complex=self.blas_complex,
             )
         except NotImplementedError:
             return None
@@ -660,6 +689,9 @@ class LibNodeRewriter(ast.NodeTransformer):
                 fresh_local_allocs=self.fresh_local_allocs,
                 library=self.fft_library,
                 library_nd=self.fft_library_nd,
+                blas_float=self.gemm_float,
+                extent_values=self.extent_values,
+                blas_complex=self.blas_complex,
             )
         except NotImplementedError:
             return None
@@ -707,6 +739,9 @@ class LibNodeRewriter(ast.NodeTransformer):
                             dim_aliases=self.dim_aliases,
                             library=self.fft_library,
                             library_nd=self.fft_library_nd,
+                            blas_float=self.gemm_float,
+                            extent_values=self.extent_values,
+                            blas_complex=self.blas_complex,
                         )
                         # Same note as the direct path: the hoister split ``out = f(np.sum(a))`` into
                         # a temp assign, and it is THIS statement that becomes the loop nest.

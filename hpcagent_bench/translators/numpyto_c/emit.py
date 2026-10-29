@@ -37,6 +37,7 @@ from hpcagent_bench.translators.numpyto_common.frontend import names_used_as_int
 from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc, KernelIR, descs
 from hpcagent_bench.translators.numpyto_common.lib_nodes import (
     BLAS_GEMM_MARKER,
+    BLAS_GEMM_STRIDED_MARKER,
     FFT_LIBRARY_MARKER,
     FFTN_LIBRARY_MARKER,
 )
@@ -1058,6 +1059,9 @@ class CBodyEmitter(BaseEmitter):
         if isinstance(node.op, ast.FloorDiv):
             return self.emit_floordiv(node.left, node.right)
         if isinstance(node.op, ast.Mod):
+            if (shift := self.power_of_two_divisor(node.left, node.right)) is not None:
+                # a % 2**k takes the divisor's sign (>= 0): the low k bits of a two's-complement integer
+                return f"(({self.emit_expr(node.left)}) & {(1 << shift) - 1})"
             return f"python_mod({self.emit_expr(node.left)}, {self.emit_expr(node.right)})"
         if isinstance(node.op, ast.Div):
             return self.emit_true_divide(node)
@@ -1289,6 +1293,8 @@ class CBodyEmitter(BaseEmitter):
             return ""
         if fn == BLAS_GEMM_MARKER:
             return self.emit_blas_gemm(node)
+        if fn == BLAS_GEMM_STRIDED_MARKER:
+            return self.emit_blas_gemm_strided(node)
         rendered = self.emit_builtin_call(node, fn)
         if rendered is None:
             rendered = self.emit_extremum_or_rounding_call(node, fn)
@@ -1451,6 +1457,26 @@ class CBodyEmitter(BaseEmitter):
             f"{one}, {a}, (blasint)({k}), {b}, (blasint)({n}), {zero}, {out}, (blasint)({n}))"
         )
 
+    def emit_blas_gemm_strided(self, node: ast.Call) -> str:
+        """Render the strided gemm marker (see BLAS_GEMM_STRIDED_MARKER) as one CBLAS call, each operand the
+        buffer advanced by its offset."""
+        buffers = [arg.id for arg in node.args[:3] if isinstance(arg, ast.Name)]
+        trans = [arg.value for arg in node.args[6:8] if isinstance(arg, ast.Constant)]
+        if len(buffers) != 3 or len(trans) != 2 or len(node.args) != 14:
+            raise NotImplementedError("the strided gemm marker takes three array names and two 0/1 literals")
+        m, n, k, lda, ldb, ldc, *offsets = (self.emit_expr(arg) for arg in (*node.args[3:6], *node.args[8:]))
+        f32 = self.is_float32_kernel()
+        gemm = "cblas_sgemm" if f32 else "cblas_dgemm"
+        one, zero = ("1.0f", "0.0f") if f32 else ("1.0", "0.0")
+        ta, tb = ("CblasTrans" if t else "CblasNoTrans" for t in trans)
+        a, b, out = (f"({buf} + ({off}))" for buf, off in zip(buffers, offsets, strict=True))
+        # (blasint) casts as in emit_blas_gemm: every extent and leading dimension is one int64_t.
+        dims = ", ".join(f"(blasint)({e})" for e in (m, n, k))
+        return (
+            f"{gemm}(CblasRowMajor, {ta}, {tb}, {dims}, {one}, {a}, (blasint)({lda}), {b}, (blasint)({ldb}), "
+            f"{zero}, {out}, (blasint)({ldc}))"
+        )
+
     def emit_fft_library(self, node: ast.Call, indent: str) -> str:
         """Render the 1-D FFT marker as an FFTW3 plan/execute/destroy sequence -- O(N log N).
 
@@ -1611,6 +1637,11 @@ class CBodyEmitter(BaseEmitter):
         """Integer division rounded one way: pluto's ``scop_call`` form in a scop over provably
         signed ints, else the numpy-semantics ``helper``."""
         lhs, rhs = self.emit_expr(left), self.emit_expr(right)
+        shift = self.power_of_two_divisor(left, right)
+        if shift is not None and helper == "int_floor" and not self.pluto:
+            # floor(a / 2**k) is the arithmetic shift on a two's-complement integer, negative a included; a scop keeps
+            # pet's quasi-affine floord, which polycc tiles through and a shift would hide
+            return f"(({lhs}) >> {shift})"
         if self.pluto and self.is_signed_int_operand(left) and self.is_signed_int_operand(right):
             # pet name-matches floord/ceild in a loop BOUND, but outlines it in an INDEX (POLYCC-010);
             # a symbol-only divisor is scop-invariant, so hoisting it keeps the index affine.
@@ -1618,6 +1649,17 @@ class CBodyEmitter(BaseEmitter):
                 return pluto_call_free(scop_call, f"{lhs}, {rhs}", self.pluto_hoisted)
             return scop_form(lhs, rhs)
         return f"{helper}({lhs}, {rhs})"
+
+    def power_of_two_divisor(self, left: ast.expr, right: ast.expr) -> int | None:
+        """``k`` when ``left // right`` / ``left % right`` divides an integer by the literal ``2**k`` (k >= 1): a shift
+        and a mask then give numpy's floor division and modulo without the helpers' division."""
+        if not (isinstance(right, ast.Constant) and type(right.value) is int and right.value > 1):
+            return None
+        if right.value & (right.value - 1) or not self.is_int_operand(left):
+            return None
+        if any(isinstance(sub, ast.BinOp) and isinstance(sub.op, ast.Div) for sub in walk_nodes(left)):
+            return None
+        return right.value.bit_length() - 1
 
     def reads_symbols_only(self, node: ast.expr) -> bool:
         """Every Name read by ``node`` is a kernel SYMBOL -- so the expression is scop-invariant."""

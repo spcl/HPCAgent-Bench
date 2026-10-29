@@ -17,6 +17,7 @@ from hpcagent_bench.translators.numpyto_common.frontend import (
 from hpcagent_bench.translators.numpyto_common.ir import KernelIR, descs, stamp_symbol_assumptions
 from hpcagent_bench.translators.numpyto_common.lib_nodes.array_methods import ArrayMethodRewriter
 from hpcagent_bench.translators.numpyto_common.lib_nodes.dims import DIM_IDENT_RE
+from hpcagent_bench.translators.numpyto_common.lib_nodes.blas import BLAS_GEMM_MARKER, BLAS_GEMM_STRIDED_MARKER
 from hpcagent_bench.translators.numpyto_common.lib_nodes.fft import FFT_LIBRARY_MARKER, FFTN_LIBRARY_MARKER
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import const_or_name
 from hpcagent_bench.translators.numpyto_common.lib_nodes.linalg import reset_temp_counters
@@ -155,6 +156,7 @@ class LoweringContext:
     __slots__ = (
         "arrays_shapes",
         "blas",
+        "blas_complex",
         "bool_names",
         "dim_aliases",
         "fft_library",
@@ -187,6 +189,8 @@ class LoweringContext:
         ) = None
         #: Target renders a dense 2-D float GEMM as a BLAS call; see :func:`lower`.
         self.blas: bool = False
+        #: The target's gemm also takes complex operands; see :func:`lower`.
+        self.blas_complex: bool = False
         #: Target renders a whole-array 1-D np.fft.* as an FFT_LIBRARY_MARKER call; see :func:`lower`.
         self.fft_library: bool = False
         #: Target renders a batched / N-D np.fft.* as FFTN_LIBRARY_MARKER; see :func:`lower`.
@@ -643,8 +647,14 @@ def lp_libnode_expand(ctx: LoweringContext) -> None:
         native_dtypes={**{arr.name: arr.dtype for arr in ctx.kir.arrays}, **ctx.local_dtypes},
         blas=ctx.blas,
         blas_float=signature_float_dtype(ctx.kir),
+        blas_complex=ctx.blas_complex,
         fft_library=ctx.fft_library,
         fft_library_nd=ctx.fft_library_nd,
+        extent_values={
+            name: value
+            for name, value in {**ctx.kir.pinned_consts, **ctx.kir.shape_only_consts}.items()
+            if isinstance(value, int) and not isinstance(value, bool)
+        },
     )
     ctx.lib_rewriter.visit(tree)
     # Second math rename: an intrinsic whose argument only becomes a SCALAR once the library
@@ -723,6 +733,16 @@ def fix_real_scalar_dtypes(ctx: LoweringContext) -> None:
         and call.func.id in (FFT_LIBRARY_MARKER, FFTN_LIBRARY_MARKER)
         and call.args
         and isinstance(call.args[0], ast.Name)
+    }
+    # Same for a gemm marker's output (its third argument): MATMUL of complex operands is complex.
+    candidates -= {
+        call.args[2].id
+        for call in walk_nodes(tree)
+        if isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Name)
+        and call.func.id in (BLAS_GEMM_MARKER, BLAS_GEMM_STRIDED_MARKER)
+        and len(call.args) > 2
+        and isinstance(call.args[2], ast.Name)
     }
     # Every value WRITTEN to a candidate -- a whole-name ``x = e`` / ``x += e`` or
     # a per-element ``x[i] = e`` / ``x[i] += e`` (an array is written elementwise).
@@ -1320,6 +1340,7 @@ def lower(
     fft_library: bool = False,
     scalar_helpers: set[str] | None = None,
     fft_library_nd: bool = False,
+    blas_complex: bool = False,
 ) -> KernelIR:
     """Return a lowered copy of ``kir`` ready for backend emission.
 
@@ -1341,8 +1362,10 @@ def lower(
     :class:`MatmulCallRewriter`) is loop-lowered for every target EXCEPT a dense 2-D float
     contraction under ``blas``, which becomes a :data:`lib_nodes.BLAS_GEMM_MARKER` call the
     target's emitter renders as its own gemm. Every other shape -- batched, transposed, matvec,
-    sparse, non-float -- keeps the loop nest on every target. The Fortran ``MATMUL`` intrinsic is
-    reserved for the rare unresolved-shape case the loop hoister cannot lower (Fortran emitter).
+    sparse, non-float -- keeps the loop nest on every target. A pairwise einsum contraction becomes
+    the strided :data:`lib_nodes.BLAS_GEMM_STRIDED_MARKER` under ``blas`` (``lib_nodes.contractions``).
+    ``blas_complex``: the target's gemm also takes complex operands (Fortran's ``MATMUL``; CBLAS here
+    is real only).
 
     ``fft_library`` is the same "render a real library call instead of a loop nest" signal, for a
     whole-array 1-D ``np.fft.fft``/``ifft``/``fftn``/``ifftn`` (rank == 1 only -- a batched/N-D
@@ -1363,6 +1386,7 @@ def lower(
     ctx = LoweringContext(kir, copy.deepcopy(kir))
     ctx.native_call = native_call
     ctx.blas = blas
+    ctx.blas_complex = blas_complex
     ctx.fft_library = fft_library
     ctx.fft_library_nd = fft_library_nd
     ctx.sibling_scalar_helpers = set(scalar_helpers or ())

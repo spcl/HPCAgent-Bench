@@ -5,6 +5,7 @@ import copy
 import dataclasses
 import functools
 import math
+import re
 from collections.abc import Callable, Collection, Sequence
 from typing import ClassVar, Optional
 
@@ -41,7 +42,11 @@ from hpcagent_bench.translators.numpyto_common.emitter import (
 )
 from hpcagent_bench.translators.numpyto_common.frontend import names_used_as_int
 from hpcagent_bench.translators.numpyto_common.ir import ArrayDesc, KernelIR, descs, is_alloc_marker
-from hpcagent_bench.translators.numpyto_common.lib_nodes import FFT_LIBRARY_MARKER
+from hpcagent_bench.translators.numpyto_common.lib_nodes import (
+    BLAS_GEMM_MARKER,
+    BLAS_GEMM_STRIDED_MARKER,
+    FFT_LIBRARY_MARKER,
+)
 from hpcagent_bench.translators.numpyto_common.lowering import (
     MATH_INTRINSIC_NAMES,
     helper_returns_int,
@@ -151,6 +156,7 @@ __all__ = [
     "supplies_no_values",
     "symbol_decl",
     "to_fortran_shape_token",
+    "unprotected",
     "value_assignments",
     "wrap_fortran_line",
     "wrap_fortran_text",
@@ -477,6 +483,44 @@ def floordiv_real_helper(dk: str) -> str:
 """
 
 
+def gemm_helper_name(ftype: str) -> str:
+    """``npb_gemm_<type>`` for a Fortran type spec (``real(c_double)`` -> ``npb_gemm_real_c_double``)."""
+    return "npb_gemm_" + "_".join(re.findall(r"[a-z0-9]+", ftype.lower()))
+
+
+def gemm_helper(ftype: str) -> str:
+    """Contained strided gemm over ``ftype`` buffers: row-major ``C (m x n) = op(A) op(B)`` with ``op`` a transpose
+    where ``ta`` / ``tb`` is 1, each operand ``lda`` / ``ldb`` / ``ldc`` wide from its 0-based element offset. The
+    outer routine takes each buffer whole (assumed size) and hands the element at its offset to the inner one,
+    whose explicit leading dimension views it as a column-major matrix, the transpose of the row-major one:
+    ``C^T = op(B)^T op(A)^T`` is one MATMUL."""
+    name = gemm_helper_name(ftype)
+    ik = fortran_type("int64")
+    return f"""
+    subroutine {name}(ta, tb, m, n, k, a, lda, oa, b, ldb, ob, c, ldc, oc)
+        {ik}, intent(in) :: ta, tb, m, n, k, lda, oa, ldb, ob, ldc, oc
+        {ftype}, intent(in) :: a(*), b(*)
+        {ftype}, intent(inout) :: c(*)
+        call {name}_view(ta, tb, m, n, k, a(oa + 1), lda, b(ob + 1), ldb, c(oc + 1), ldc)
+    end subroutine {name}
+
+    subroutine {name}_view(ta, tb, m, n, k, a, lda, b, ldb, c, ldc)
+        {ik}, intent(in) :: ta, tb, m, n, k, lda, ldb, ldc
+        {ftype}, intent(in) :: a(lda, *), b(ldb, *)
+        {ftype}, intent(inout) :: c(ldc, *)
+        if (ta == 0 .and. tb == 0) then
+            c(1:n, 1:m) = matmul(b(1:n, 1:k), a(1:k, 1:m))
+        else if (ta == 0) then
+            c(1:n, 1:m) = matmul(transpose(b(1:k, 1:n)), a(1:k, 1:m))
+        else if (tb == 0) then
+            c(1:n, 1:m) = matmul(b(1:n, 1:k), transpose(a(1:m, 1:k)))
+        else
+            c(1:n, 1:m) = matmul(transpose(b(1:k, 1:n)), transpose(a(1:m, 1:k)))
+        end if
+    end subroutine {name}_view
+"""
+
+
 def double_kind() -> str:
     # ISO_C_BINDING kind token for a 64-bit real, pulled from the registry (never
     # hardcoded); forces the FloorDiv divide into double regardless of kernel kind.
@@ -531,6 +575,10 @@ ZEROS_MARKER_NAMES = frozenset({"__hpcagent_bench_zeros__", "x_hpcagent_bench_ze
 #: (visit_Name) strips a marker call's OWN func name like any other identifier before
 #: emit_stmt's marker check runs, so the raw spelling never survives to be matched.
 FFT_MARKER_NAMES = frozenset({FFT_LIBRARY_MARKER, "x_" + FFT_LIBRARY_MARKER.lstrip("_")})
+
+#: BLAS_GEMM_MARKER / BLAS_GEMM_STRIDED_MARKER, each with its renamed alias (as FFT_MARKER_NAMES).
+GEMM_MARKER_NAMES = frozenset({BLAS_GEMM_MARKER, "x_" + BLAS_GEMM_MARKER.lstrip("_")})
+GEMM_STRIDED_MARKER_NAMES = frozenset({BLAS_GEMM_STRIDED_MARKER, "x_" + BLAS_GEMM_STRIDED_MARKER.lstrip("_")})
 
 #: numpy min/max family that needs int-literal-vs-real promotion before renaming to MAX/MIN.
 #: Fortran caps an identifier at 63 characters (F2003 onward, and what -std=f2018 enforces).
@@ -604,6 +652,26 @@ def pinned_const_decls(kir: KernelIR, safe: Callable[[str], str]) -> list[str]:
         f"{ftype}, parameter :: {safe(name)} = {fortran_literal(value)}"
         for name, ftype, value in pinned_knobs(kir, fortran_type)
     ]
+
+
+def unprotected(expr: str) -> str:
+    """``expr`` without one pair of parentheses enclosing all of it (a complex literal ``(re, im)`` keeps its pair).
+
+    gfortran must honour every parenthesis, so ``s = (s + a(i))`` can neither vectorize the sum nor contract an FMA,
+    while ``s = s + a(i)`` can. Only the outermost pair goes: the groupings inside it stay protected."""
+    if not (expr.startswith("(") and expr.endswith(")")):
+        return expr
+    depth = 0
+    for position, char in enumerate(expr):
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth == 0 and position != len(expr) - 1:
+                return expr
+        elif char == "," and depth == 1:
+            return expr
+    return expr[1:-1]
 
 
 def fortran_literal(value: float) -> str:
@@ -944,6 +1012,7 @@ class FortranBodyEmitter(BaseEmitter):
         "_rk",
         "_size1_arrays",
         "_used_fftw",
+        "_used_gemm",
         "_used_floordiv_int",
         "_used_floordiv_real",
         "_used_ieee",
@@ -981,6 +1050,11 @@ class FortranBodyEmitter(BaseEmitter):
             and node.value.func.id in FFT_MARKER_NAMES
         ):
             return self.emit_fftw(node.value, indent)
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name):
+            if node.value.func.id in GEMM_MARKER_NAMES:
+                return self.emit_gemm(node.value, indent)
+            if node.value.func.id in GEMM_STRIDED_MARKER_NAMES:
+                return self.emit_gemm_strided(node.value, indent)
         if (
             isinstance(node, ast.Expr)
             and isinstance(node.value, ast.Call)
@@ -998,6 +1072,31 @@ class FortranBodyEmitter(BaseEmitter):
                 ]
             return f"{indent}call {name}({', '.join(call_args)})"
         return super().emit_stmt(node, indent)
+
+    def emit_gemm(self, node: ast.Call, indent: str) -> str:
+        """The dense 2-D gemm marker ``(a, b, out, m, n, k)`` as one MATMUL. Arrays are declared with reversed
+        dims, so each stored array is the transpose of its numpy view: ``out = a @ b`` is stored
+        ``out^T = MATMUL(b^T, a^T)``. MATMUL takes real and complex operands alike."""
+        names = [fortran_safe(arg.id) for arg in node.args[:3] if isinstance(arg, ast.Name)]
+        if len(names) != 3:
+            raise NotImplementedError("the gemm marker takes three array names")
+        a, b, out = names
+        return f"{indent}{out} = MATMUL({b}, {a})"
+
+    def emit_gemm_strided(self, node: ast.Call, indent: str) -> str:
+        """The strided gemm marker (see BLAS_GEMM_STRIDED_MARKER) as a call to the contained ``npb_gemm_<type>``
+        (:func:`gemm_helper`), which views each buffer from its offset and computes the product with one
+        MATMUL. Every operand is of the output's element type (the lowering gemms only uniform operands)."""
+        names = [fortran_safe(arg.id) for arg in node.args[:3] if isinstance(arg, ast.Name)]
+        if len(names) != 3 or len(node.args) != 14:
+            raise NotImplementedError("the strided gemm marker takes three array names")
+        a, b, out = names
+        ftype = fortran_type(self._local_elem_dtypes.get(out) or self.name_dtype(out) or "float64")
+        self._used_gemm.add(ftype)
+        ik = fortran_type("int64").partition("(")[2].rstrip(")")
+        m, n, k, ta, tb, lda, ldb, ldc, oa, ob, oc = (f"int({self.emit_expr(e)}, {ik})" for e in node.args[3:])
+        args = [ta, tb, m, n, k, a, lda, oa, b, ldb, ob, out, ldc, oc]
+        return f"{indent}call {gemm_helper_name(ftype)}({', '.join(args)})"
 
     def emit_return(self, node: ast.Return, indent: str) -> str:
         # In a HELPER subroutine the returned value is written to the out-param
@@ -1103,6 +1202,8 @@ class FortranBodyEmitter(BaseEmitter):
         # FFTW C-interop kind(s) FFT_LIBRARY_MARKER used ("c_double"/"c_float"; see
         # :meth:`emit_fftw`), so the caller emits ONLY the bind(C) interfaces this body needs.
         self._used_fftw: set[str] = set()
+        # Element types (Fortran type specs) of the strided gemms the body calls (see :meth:`emit_gemm_strided`).
+        self._used_gemm: set[str] = set()
         # Whether the body calls np.round/np.rint -- lowered to a contained npb_round_even helper
         # (not inline, which repeats the argument six times).
         self._used_round_even = False
@@ -1376,7 +1477,7 @@ class FortranBodyEmitter(BaseEmitter):
         # (``path[t] = perm[k]`` is already one-based) -- that is the one shape that would double.
         if self.writes_index_array(target) and not self.is_index_value(node.value):
             rhs = f"({rhs}) + 1"
-        return f"{indent}{lhs} = {rhs}"
+        return f"{indent}{lhs} = {unprotected(rhs)}"
 
     def emit_helper_call_assign(self, node: ast.Assign, target: ast.expr, indent: str) -> str:
         """``X = helper(args)`` with helper emitted as a subroutine taking its result through an
@@ -1758,8 +1859,7 @@ class FortranBodyEmitter(BaseEmitter):
             # ISHFT is logical (zero-fill); SHIFTA replicates the sign bit.
             left, right = self.emit_bitwise_pair(node.left, node.right)
             return f"SHIFTA({left}, {right})"
-        # MatMult: A @ B should have been hoisted upstream into an explicit
-        # matmul loop; if it appears here the lowering missed it.
+        # MatMult: A @ B is hoisted upstream (a gemm marker or a loop nest); one that survives is a MATMUL.
         if isinstance(node.op, ast.MatMult):
             return self.emit_matmult(node)
         op = BINOP_.get(type(node.op))
@@ -3473,8 +3573,8 @@ def fftw_interface(used_fftw: set[str]) -> str:
 
 
 def contained_procedures(kir: KernelIR, body_emitter: "FortranBodyEmitter", helpers_src: str) -> str:
-    """The CONTAINS section: fp8 helpers, the kept kernel helpers, and each numpy-semantics helper the
-    body used (round half-to-even, NaN-propagating min / max, sign, floor division)."""
+    """The CONTAINS section: fp8 helpers, the kept kernel helpers, each numpy-semantics helper the
+    body used (round half-to-even, NaN-propagating min / max, sign, floor division) and its strided gemms."""
     contained = fp8_contained(kir) + helpers_src
     if body_emitter._used_round_even:
         contained += round_even_helper(body_emitter._rk)
@@ -3486,6 +3586,8 @@ def contained_procedures(kir: KernelIR, body_emitter: "FortranBodyEmitter", help
         contained += floordiv_int_helper(ik)
     if body_emitter._used_floordiv_real:
         contained += floordiv_real_helper(double_kind())
+    for ftype in sorted(body_emitter._used_gemm):
+        contained += gemm_helper(ftype)
     return contained
 
 
@@ -4065,6 +4167,7 @@ def merge_used_procedures(parent: "FortranBodyEmitter", be: "FortranBodyEmitter"
     parent._used_round_even |= be._used_round_even
     parent._used_sign |= be._used_sign
     parent._used_floordiv_real |= be._used_floordiv_real
+    parent._used_gemm |= be._used_gemm
 
 
 #: Physical-line budget for emitted Fortran. gfortran free-form rejects any

@@ -586,6 +586,7 @@ class MatmulHoister(ast.NodeTransformer):
 
     __slots__ = (
         "blas",
+        "blas_complex",
         "blas_float",
         "dim_aliases",
         "local_dtypes",
@@ -606,12 +607,15 @@ class MatmulHoister(ast.NodeTransformer):
         dim_aliases: dict[str, str] | None = None,
         blas: bool = False,
         blas_float: str = BLAS_LOWERING_FLOAT,
+        blas_complex: bool = False,
     ) -> None:
         self.shape_table = shape_table
         #: Target renders a dense 2-D float GEMM as a BLAS call rather than a loop nest.
         self.blas = blas
         #: The kernel's float, the one width the emitter's gemm takes (see BLAS_LOWERING_FLOAT).
         self.blas_float = blas_float
+        #: The target's gemm also takes complex operands (Fortran's MATMUL; CBLAS here is real only).
+        self.blas_complex = blas_complex
         self.temp_arrays = temp_arrays
         self.temp_counter = temp_counter
         self.local_dtypes: dict[str, str] = local_dtypes if local_dtypes is not None else {}
@@ -663,14 +667,17 @@ class MatmulHoister(ast.NodeTransformer):
         """True when both operands are real floats of the kernel's own width, so a BLAS gemm computes
         the same contraction.
 
-        Integer, boolean and complex matmuls have no real-BLAS equivalent and keep the loop nest.
-        A complex literal anywhere in the subtree counts, matching how the caller tags the temp.
+        Integer, boolean and complex matmuls have no real-BLAS equivalent and keep the loop nest; complex
+        ones reach the gemm of a ``blas_complex`` target. A complex literal anywhere in the subtree counts,
+        matching how the caller tags the temp.
         """
         for sub_node in walk_nodes(node):
-            if isinstance(sub_node, ast.Constant) and isinstance(sub_node.value, complex):
+            if isinstance(sub_node, ast.Constant) and isinstance(sub_node.value, complex) and not self.blas_complex:
                 return False
             if isinstance(sub_node, ast.Name):
                 dt = self.local_dtypes.get(sub_node.id, "")
+                if self.blas_complex and dt.startswith("complex"):
+                    continue
                 if dt.startswith(BLAS_INELIGIBLE_DTYPES):
                     return False
                 if dt.startswith("float") and dt != self.blas_float:
