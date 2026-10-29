@@ -7,7 +7,7 @@ Grading and prompt release. The results database is schema 19 (`PRAGMA user_vers
 when opened for writing. Golden files are format 3 and keyed by the judge image and CPU model: older ones are recomputed, never
 mixed in.
 
-Pins: dace extended `b737e5050`; user plugins NestForge `1d269c5` and Alloy `2b71362`, both with their prompt as
+Pins: dace extended `3ef7de40e`; user plugins NestForge `1d269c5` and Alloy `2b71362`, both with their prompt as
 overlay YAML.
 
 ### Grading
@@ -152,6 +152,17 @@ overlay YAML.
   `AGENT_PROMPT_OVERLAYS` (now `prompt.overlays`; `AGENT_PROMPT_LAYERS` is derived by the launcher, never set);
   `prompt.template_dirs` and `prompt.generator` / `--prompt-generator` (an overlay sets, inserts or removes any
   block).
+
+### dace extended `4c7aa4e64` -> `3ef7de40e`
+TransientReuse shares buffers across states and control flow by region liveness and promotes entry-sized root buffers
+to Persistent; MoveArrayOutOfKernel lifts per-kernel arrays (extents folded to their maximum over the kernel) and
+TileKernelsCoalesced clamps a tile to an axis' constant extent. GPU tree reductions cover a contiguous row of a
+multi-dimensional accumulator and a sequential map that is a thread block's whole body; CPU OpenMP reductions into a
+persistent array go through a local pointer. SubgraphFusion fuses maps with the same dynamic range inputs and keeps
+ordering edges; TrivialMapElimination, DeadDataflowElimination and RouteOrderingThroughData keep the order a removed
+scope imposed. RangePrivatizeScatterReductions privatizes a persistent accumulator through its local alias;
+NormalizeWCR keeps a multi-element WCR tasklet writing its target directly. Fractional powers lower to
+`dace::math::pow(a, p, q)`; MoveIfIntoMap is added.
 
 ## 0.3.1 (2026-10)
 
