@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-# submit.sh's plumbing: stage a setup's env from its setups.yaml base, then either report what would run
+# submit.sh's plumbing: stage a setup's env from its experiments.toml base, then either report what would run
 # (SUBMIT=0) or submit it as services.sbatch's CLUSTER_ENV_FILE. Sourced, not executed; the caller has
 # sourced setup_nodes.sh and pin_env_kv.sh.
 
@@ -10,7 +10,7 @@
 ulimit -c 0
 # render_env (a <base>:<model> base, flattened) and snapshot_env (the per-submission copy a job reads).
 CLUSTER_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-# The setup configs (setups.yaml, layers/) and the operator's generated files (.env.<setup>, .rendered/).
+# The setup config (experiments.toml) and the operator's generated files (.env.<setup>, .rendered/).
 SUBMIT_REPO_DIR="$(cd -- "${CLUSTER_DIR}/../.." && pwd)"
 EXPERIMENTS_DIR="${SUBMIT_REPO_DIR}/experiments"
 # Slurm output of the jobs this file submits: <scratch>/logs (hpcagent_bench.paths.scratch_dir).
@@ -94,7 +94,7 @@ scale_time() {
 }
 scale_tokens() { printf '%s\n' "$(( $1 * TOKEN_SCALE ))"; }
 
-# scaled_budget_from <base> <KEY> -> <KEY>'s value in <base> (setups.yaml), scaled. Refuses a base that
+# scaled_budget_from <base> <KEY> -> <KEY>'s value in <base> (experiments.toml), scaled. Refuses a base that
 # sets none: a scaled rerun would otherwise apply no scale at all.
 scaled_budget_from() {
     local base="$1" key="$2" configured
@@ -198,7 +198,7 @@ forms_missing() {
 }
 
 # stage_base_env <base> <setup> <study> <stamp> <staged-out> [extra sed -e expr...]
-# The setup's base (<base>:<model>, setups.yaml) rendered flat, with SETUP and RUN_ROOT
+# The setup's base (<base>:<model>, experiments.toml) rendered flat, with SETUP and RUN_ROOT
 # rewritten. Written to <staged-out>, never the final setup env: a later gate that bails leaves no file
 # that looks complete.
 stage_base_env() {
@@ -211,13 +211,13 @@ stage_base_env() {
 }
 
 # The hardware (--hardware, HPCAGENT_BENCH_HARDWARE, the system's `hardware`) names the GPU generation whose
-# images and serving layers a setup uses: `hpcagent-bench-agent-<hardware>-latest`, layers/hardware-<hardware>.env.
-# It is not a Slurm partition (--partition is). layers/common.env names the hardware its EDF names and model layers
+# images and serving layers a setup uses: `hpcagent-bench-agent-<hardware>-latest`, [hardware.<hardware>].
+# It is not a Slurm partition (--partition is). [common] names the hardware its EDF names and model layers
 # carry (HPCAGENT_BENCH_BASE_HARDWARE); any other hardware renames them and pins its own layers.
 
 # apply_hardware <env> <model> -- pins the job's GPUS_PER_NODE (the resolved --gpus-per-node, which every role's GPU
 # split divides) and HPCAGENT_BENCH_HARDWARE into <env>. A hardware other than the base renames every *_CE_ENV from its
-# -<base>- EDF to the -<hardware>- one, then pins layers/hardware-<hardware>.env and, for a model served on our nodes, layers/hardware-<hardware>-<model>.env over
+# -<base>- EDF to the -<hardware>- one, then pins [hardware.<hardware>] and, for a model served on our nodes, [hardware.<hardware>.models.<model>] over
 # it. A hosted model (INFERENCE_SOURCE=service) runs no engine here, so it needs no serving layer. Refuses:
 # no hardware under the Container Engine (the EDF names carry it), a hardware with no layer, a served model with no
 # serving config on it, and a given RECORD_STUDY that does not name it (the default study gets -<hardware> appended), so its rows never pool with the base's.
@@ -237,16 +237,13 @@ apply_hardware() {
     fi
     pin_env_kv "${env}" "HPCAGENT_BENCH_HARDWARE=${hardware}" || return 2
     [[ "${hardware}" != "${base}" ]] || return 0
-    local dir="${EXPERIMENTS_DIR}/layers"
-    local layers=("${dir}/hardware-${hardware}.env")
-    grep -qx 'INFERENCE_SOURCE=service' "${env}" || layers+=("${dir}/hardware-${hardware}-${model}.env")
+    local served=(--model "${model}") pins
+    ! grep -qx 'INFERENCE_SOURCE=service' "${env}" || served=()
+    pins="$(env_spec hardware "${hardware}" "${served[@]}")" || { echo "apply_hardware: ${model} has no ${hardware} config" >&2; return 2; }
     sed -i -E "s/^([A-Z_]*CE_ENV=.*)-${base}-/\1-${hardware}-/" "${env}"
-    for layer in "${layers[@]}"; do
-        [[ -f "${layer}" ]] || { echo "apply_hardware: no ${layer##*/}: ${model} has no ${hardware} config" >&2; return 2; }
-        while IFS= read -r kv; do
-            pin_env_kv "${env}" "${kv}" || return 2
-        done < <(grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "${layer}")
-    done
+    while IFS= read -r kv; do
+        [[ -z "${kv}" ]] || pin_env_kv "${env}" "${kv}" || return 2
+    done <<<"${pins}"
     study="$(sed -n 's/^HPCAGENT_BENCH_RECORD_STUDY=//p' "${env}" | tail -1)"
     if [[ "${study}" != *"${hardware}"* ]]; then
         [[ -z "${RECORD_STUDY_GIVEN:-}" ]] || {

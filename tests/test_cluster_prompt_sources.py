@@ -63,7 +63,7 @@ def test_every_prompt_overlay_a_setup_names_is_a_built_in_overlay() -> None:
     )
     texts = [rendered(base) for base in BASES]
     texts += [path.read_text(encoding="utf-8") for path in (REPO / "experiments").glob(".env.*")]
-    texts.append((REPO / "experiments" / "setups.yaml").read_text(encoding="utf-8"))
+    texts.append((REPO / "experiments" / "experiments.toml").read_text(encoding="utf-8"))
     for text in texts:
         for value in re.findall(r"AGENT_PROMPT_(?:LAYERS|OVERLAYS)[=:] *([a-z0-9,-]*)", text):
             named |= {name for name in value.split(",") if name}

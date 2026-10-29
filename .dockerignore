@@ -13,7 +13,7 @@ hpcagent_bench/harness/hidden_tests/
 .env
 **/.env
 experiments/.env.*
-experiments/layers/site.env
+experiments/site.env
 helpers/scripts/cscs/env.toml
 .claude/
 **/.ssh/

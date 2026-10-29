@@ -1,7 +1,7 @@
 # Serving Kimi K2.7 on MI300A
 
 `moonshotai/Kimi-K2.7-Code` on SGLang, four nodes, `tp=4` per node and `pp=4` across them (it does
-not fit fewer). Source of truth: `experiments/layers/model-kimi27sglang.env` (render:
+not fit fewer). Source of truth: `[model.kimi27sglang]` (render:
 `experiment:kimi27sglang`). Background: [`knobs.md`](knobs.md).
 
 ```bash

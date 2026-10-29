@@ -18,7 +18,7 @@ __all__ = ["KEY", "SECTION", "SLOT", "TEMPLATES", "SubmissionMode", "current", "
 #: The mode templates, shipped inside the package so an installed ``hpcagent-agent`` serves its tools.
 TEMPLATES = pathlib.Path(__file__).resolve().parent / "templates"
 
-#: The setup key that names the mode (``experiments/layers/common.env`` sets single).
+#: The setup key that names the mode (``[common]`` sets single).
 KEY = "AGENT_SUBMISSION_MODE"
 
 #: A ``{{MODE:<section>}}`` slot in a prompt text, filled from the mode's template.

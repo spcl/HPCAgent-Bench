@@ -1,7 +1,7 @@
 # Experiments
 
-This directory is configuration only: `setups.yaml` (the setups of every experiment), `layers/*.env` (what each
-model, hardware and site sets) and `serve-only.env`. What runs an experiment on a Slurm cluster (CSCS Beverin, AMD MI300A, partition `mi300`, is the worked example) is code, in
+This directory is configuration only: `experiments.toml` (every experiment, model, hardware and serve-only table)
+and the site layers `site-*.env`. What runs an experiment on a Slurm cluster (CSCS Beverin, AMD MI300A, partition `mi300`, is the worked example) is code, in
 [`hpcagent_bench/cluster/`](../hpcagent_bench/cluster/); the helper jobs (regrade, final grade, prepare,
 baseline sweep) are `hpcagent-bench job <name>` actions, one sample `sbatch` each in
 [`docs/jobs.md`](../docs/jobs.md). Submitting, sizing, watching, regrades and traps: [LAUNCH.md](LAUNCH.md).
@@ -126,11 +126,11 @@ A base is `<experiment>:<model>`, rendered by `env_spec.py`; later keys win:
 
 | Layer | Holds |
 | --- | --- |
-| `layers/common.env` | judge sizing and ports, EDF names, run paths, judge config overrides |
-| `layers/{served,replicas,sglang,pp,service}.env` | serving shape a model layer extends (`# extends:`) |
-| `setups.yaml` `<experiment>.env` | the experiment's keys (budget, submission mode, grading) |
-| `layers/model-<m>.env` | one model's serving config (layers name their parent on `# extends:`) |
-| `setups.yaml` `<experiment>.models.<m>` | what differs for that model in that experiment (effort ladder, engine args) |
+| `[common]` | judge sizing and ports, EDF names, run paths, judge config overrides |
+| `[layer.{served,replicas,sglang,pp,service}]` | serving shape a model extends (`extends = [...]`) |
+| `experiments.toml` `<experiment>.env` | the experiment's keys (budget, submission mode, grading) |
+| `[model.<m>]` | one model's serving config (`extends` names its layers) |
+| `experiments.toml` `<experiment>.models.<m>` | what differs for that model in that experiment (effort ladder, engine args) |
 
 ```bash
 hpcagent_bench/cluster/env_layers.sh render experiment:qwen38 > experiments/.env.my-setup   # flat KEY=VALUE
@@ -141,17 +141,17 @@ A submitter renders a base, applies the setup's keys and writes `.env.<setup>`. 
 problems file and submits the snapshot as `CLUSTER_ENV_FILE`, so a later render cannot reach a
 queued job.
 
-Key variables (full lists: `layers/common.env`, `run_cluster.sh`):
+Key variables (full lists: `[common]`, `run_cluster.sh`):
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `INFERENCE_NODES`, `AGENT_NODES`, `JUDGE_NODES` | 2, 1, 1 | Role sizes; their sum is the allocation. |
 | `GPUS_PER_NODE` | none | GPUs per node: pinned by `submit.sh` from `--gpus-per-node`, and required. |
-| `INFERENCE_CE_ENV`, `AMD_CE_ENV`, `JUDGE_CE_ENV` | none; the layers name `hpcagent-bench-*-mi300-latest` | Registered EDF names per role. Their names carry the hardware: `HPCAGENT_BENCH_BASE_HARDWARE` (`layers/common.env`) is the hardware the layers name, and `--hardware` renames them for another. A hardware other than the base's is also named by the setup's experiment segment (`<experiment>-<hardware>-<model>-<variant>`, unless the experiment already names it), as it is by the recorded study, so two machines never share a setup. |
+| `INFERENCE_CE_ENV`, `AMD_CE_ENV`, `JUDGE_CE_ENV` | none; the layers name `hpcagent-bench-*-mi300-latest` | Registered EDF names per role. Their names carry the hardware: `HPCAGENT_BENCH_BASE_HARDWARE` (`[common]`) is the hardware the layers name, and `--hardware` renames them for another. A hardware other than the base's is also named by the setup's experiment segment (`<experiment>-<hardware>-<model>-<variant>`, unless the experiment already names it), as it is by the recorded study, so two machines never share a setup. |
 | `PROBLEMS_FILE` / `KERNELS` | empty | JSON/JSONL problems, or a comma list of kernels. |
 | `AGENTS_PER_NODE` | 4 | Concurrent workers per agent node. |
-| `AGENT_MAX_OUTPUT_TOKENS` | 20M (`setups.yaml`, every track) | Generated tokens per attempt: the only budget the prompt states, with "no time limit". |
-| `AGENT_TIMEOUT_SECONDS`, `AGENT_MAX_TOKENS` | 72000 s, 120M (`setups.yaml`, every track and model) | Unstated backstops: the episode's wall clock and consumed tokens per attempt. |
+| `AGENT_MAX_OUTPUT_TOKENS` | 20M (`experiments.toml`, every track) | Generated tokens per attempt: the only budget the prompt states, with "no time limit". |
+| `AGENT_TIMEOUT_SECONDS`, `AGENT_MAX_TOKENS` | 72000 s, 120M (`experiments.toml`, every track and model) | Unstated backstops: the episode's wall clock and consumed tokens per attempt. |
 | `AGENT_SUBMISSION_MODE` | `single` | `multi`, `single` or `blind`: the prompt template and the submission rules ([docs/prompts.md](../docs/prompts.md#submission-modes)). |
 | `AGENT_LLM_MODE` | `direct` | `direct` speaks vLLM's native `/v1/messages` straight (the driver stripes each agent's `ANTHROPIC_BASE_URL` over `VLLM_REPLICA_URLS` by global index, forcing `CLAUDE_MODEL` to `VLLM_SERVED_MODEL`); `litellm` runs a per-node gateway instead and is a fallback, not the default, since upstream litellm proxy wheels are broken across releases. |
 | `JUDGE_INPUT_MODE` | judge config | `source`, `py-binding`, `library` or `any`; `source` enforces the language track. |
@@ -174,7 +174,7 @@ served setup uses.
 | `INFERENCE_SERVICE_AUTH` | `bearer` or `x-api-key`. |
 | `INFERENCE_SERVICE_KEY_ENV` | NAME of the variable holding the key, never the key. |
 
-Example: `layers/model-musespark.env` (its block is pinned by a test). The launcher refuses a harness whose wire format the service does not
+Example: `[model.musespark]` (its block is pinned by a test). The launcher refuses a harness whose wire format the service does not
 speak, an unset key variable, and a service setup that still asks for inference nodes. Export the key
 in the submitting shell; `sbatch` propagates it, and it never lands in the setup env, the run tree,
 `inference.json` or `usage.jsonl` (`tests/test_inference_service.py`). Contributor tiers train on

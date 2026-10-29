@@ -274,7 +274,7 @@ def test_serve_mode_starts_one_server_and_prints_a_loopback_tunnel_but_never_the
     )
     assert done.returncode == 0, done.stderr
     assert len(argv_lines(done.stdout)) == 1
-    # The hosts come from the site layer (experiments/layers/site-*.env), never from the script.
+    # The hosts come from the site layer (experiments/site-*.env), never from the script.
     tunnels = [line.strip() for line in done.stdout.splitlines() if "ssh -N -J jumphost,loginhost" in line]
     assert len(tunnels) == 1
     assert "-L 127.0.0.1:30123:127.0.0.1:30123 serve-private-test-user@" in tunnels[0]

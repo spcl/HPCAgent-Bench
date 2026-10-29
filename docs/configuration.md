@@ -6,7 +6,7 @@ values resolve in one order, for every script:
 1. a command-line flag (`hpcagent-bench job submit --cpus-per-task 72`, `NICE=10 submit.sh`);
 2. an environment variable (`export SBATCH_PARTITION=gpu`); a job script's own `#SBATCH` line beats every one but
    Slurm's `SBATCH_*` ([below](#job-shape-per-system));
-3. the site layer, `experiments/layers/site.env`, which holds this cluster's values;
+3. the site layer, `experiments/site.env`, which holds this cluster's values;
 4. a generic default (for a job's node shape: the named system's entry, [below](#job-shape-per-system)).
 
 The site layer keeps the `VAR="${VAR:-value}"` form, so a value already exported beats the file
@@ -16,8 +16,8 @@ and sourcing it twice changes nothing.
 
 ```bash
 cd hpcagent-bench
-cp experiments/layers/site-example.env experiments/layers/site.env   # gitignored
-$EDITOR experiments/layers/site.env                                  # fill in your cluster's values
+cp experiments/site-example.env experiments/site.env   # gitignored
+$EDITOR experiments/site.env                                  # fill in your cluster's values
 export SCRATCH=/path/to/your/scratch                                 # most HPC sites already set it
 . hpcagent_bench/cluster/env.sh                                      # loads the layer, caches, interpreter, OpenMP env
 ulimit -s "$(ulimit -H -s)"                                          # once per shell: the main thread stack, to its hard limit
@@ -33,12 +33,12 @@ SALLOC_PARTITION="${SALLOC_PARTITION:-${SBATCH_PARTITION}}"
 ```
 
 To keep the layer outside the checkout, point `HPCAGENT_BENCH_SITE_ENV` at it. With no layer every variable
-takes its generic default, which runs wherever `SCRATCH` is set. `experiments/layers/site-cscs.env` is the layer
+takes its generic default, which runs wherever `SCRATCH` is set. `experiments/site-cscs.env` is the layer
 of the CSCS Alps MI300A partition, the reference setup of this repository's experiments.
 
 | Where | What it resolves |
 |---|---|
-| `experiments/layers/site-<name>.env`, loaded by `helpers/scripts/site_env.sh` | this cluster's values: account, partition, fast storage, node exclusions, the host interpreter |
+| `experiments/site-<name>.env`, loaded by `helpers/scripts/site_env.sh` | this cluster's values: account, partition, fast storage, node exclusions, the host interpreter |
 | `helpers/scripts/cache_env.sh` | every cache and work directory, from `SCRATCH` and `FAST_SCRATCH` |
 | `helpers/scripts/host_python.sh` | the host-side interpreter (`HPCAGENT_BENCH_HOST_PYTHON`), checked to be Python >= 3.10 |
 | each image's EDF | the interpreter of every step inside it (`HPCAGENT_BENCH_IMAGE_PYTHON`) and `PYTHONHASHSEED=0` |
@@ -46,8 +46,8 @@ of the CSCS Alps MI300A partition, the reference setup of this repository's expe
 | `pyproject.toml` (`[tool.uv.sources] dace`) | the dace commit a release installs, bakes and runs ([below](#dace)) |
 | `hpcagent_bench/paths.py` | the Python side of the same roots |
 
-Experiment knobs (models, agents, judges, budgets) are not site values: they are set in `experiments/setups.yaml`,
-`experiments/layers/common.env` and the model layers ([launch.md](launch.md),
+Experiment knobs (models, agents, judges, budgets) are not site values: they are set in `experiments/experiments.toml`,
+`[common]` and the model layers ([launch.md](launch.md),
 [`experiments/LAUNCH.md`](../experiments/LAUNCH.md)). Benchmark settings are keys of `hpcagent_bench/config.yaml`
 ([below](#benchmark-settings)).
 
@@ -112,7 +112,7 @@ the GPU generation whose images and serving layers the experiment uses ([below](
 
 | Variable | Default | Controls |
 |---|---|---|
-| `HPCAGENT_BENCH_SITE_ENV` | `experiments/layers/site.env` when it exists | which layer `helpers/scripts/site_env.sh` loads; a named file that does not exist is an error |
+| `HPCAGENT_BENCH_SITE_ENV` | `experiments/site.env` when it exists | which layer `helpers/scripts/site_env.sh` loads; a named file that does not exist is an error |
 | `SBATCH_PARTITION`, `SALLOC_PARTITION` | unset (the cluster's default) | the partition of every `sbatch` / `salloc`; Slurm reads it and it overrides a script's `#SBATCH --partition`, and `--partition=` on the command line overrides it (the submitters resolve it with their `--partition` flag, over this variable, over the system's entry) |
 | `SBATCH_ACCOUNT` | empty | the account every `sbatch` bills. `hpcagent_bench/cluster/submit.sh` refuses an empty account and the account `root`. `site_env.sh` exports `SLURM_ACCOUNT` and `SALLOC_ACCOUNT` from it. No script passes `-A` |
 | `HPCAGENT_BENCH_LOGIN_HOST`, `HPCAGENT_BENCH_SSH_JUMP` | empty: a placeholder | the login host and ssh jump chain in the laptop tunnel commands `containers/inference/serve-private.sbatch` prints, and the ssh hops of `containers/inference/ping-endpoint.sh` |
@@ -177,15 +177,15 @@ canon columns stamp `dace <sha>` into `record.build` and `canon.db`'s `build` co
 ## Hardware is not a site value
 
 `mi300` and `mi200` in image and EDF names (`hpcagent-bench-agent-mi300-latest`), in `--hardware mi200` and in
-`experiments/layers/hardware-mi200.env` name a GPU generation, not a site's Slurm partition: they select the image
+`[hardware.mi200]` name a GPU generation, not a site's Slurm partition: they select the image
 built for that architecture and its serving layers. The partition that hardware sits in (`--partition`) and the
 GPUs per node (`--gpus-per-node`) are job-shape values, so a cluster whose MI250X partition is called `gpu` runs
 `submit.sh --hardware mi200 --partition gpu --gpus-per-node 8`, or names the three in a `systems.yaml` entry.
 
-The Container Engine names its images by EDF, and the EDF name carries the hardware. `layers/common.env` names the
+The Container Engine names its images by EDF, and the EDF name carries the hardware. `[common]` names the
 EDFs of its base hardware (`HPCAGENT_BENCH_BASE_HARDWARE=mi300`); `submit.sh` pins `HPCAGENT_BENCH_HARDWARE` and, for
-any other hardware, renames every `*_CE_ENV` to the `-<hardware>-` EDF and pins `layers/hardware-<hardware>.env`
-(and `hardware-<hardware>-<model>.env` for a model served on our nodes). A recorded experiment on another hardware
+any other hardware, renames every `*_CE_ENV` to the `-<hardware>-` EDF and pins `[hardware.<hardware>]`
+(and `[hardware.<hardware>.models.<model>]` for a model served on our nodes). A recorded experiment on another hardware
 must name it, so its rows never pool with the base hardware's; the setup's name names it too
 (`<experiment>-<hardware>-<model>-<variant>`, unless the experiment already does), because setups are keyed by
 name alone. Under the Container Engine no hardware is an error;
@@ -234,4 +234,4 @@ prefix (`HPCAGENT_BENCH_JUDGE_URLS`, `HPCAGENT_BENCH_MPI_GANG_*`, ...) are liste
 Two cross-key rules are part of the model: `requests.precisions` is non-empty exactly when `requests.allow` has
 `cast`, and `mpi.grade_distributed` true puts `distribute` into the resolved `requests.allow`
 ([requests_api.md](requests_api.md), section 0). An experiment sets the `requests.*` keys only through a
-requests preset (`experiments/setups.yaml` `requests:`, `experiments/layers/requests-<preset>.env`).
+requests preset (`experiments/experiments.toml` `requests:`, `[requests.<preset>]`).

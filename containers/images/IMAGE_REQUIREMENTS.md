@@ -190,7 +190,7 @@ it got.
 ## Serving images
 
 Each rebuilt inference image is smoked against the experiment's serving arguments (the
-`experiments/layers/model-*.env` layers) before promotion, not just "the server started".
+`[model.*]` tables of `experiments/experiments.toml`) before promotion, not just "the server started".
 
 * **SGLang (beverin):** `/opt/venv/bin/python3` (named by the EDF's `HPCAGENT_BENCH_IMAGE_PYTHON`), aiter with its JIT
   prebuilt into `/opt/aiter-jit` (each op called, not imported), the ROCm triton attention backend,

@@ -7,7 +7,7 @@ With thinking on, Apertus-v1.5 opens ``<|inner_prefix|>`` and emits its tool cal
 whole output reasoning, the tool parser never sees the call, and an agent ends after one turn. This
 parser treats ``<|tools_prefix|>`` as an end of reasoning that stays in the content, where the
 ``apertus`` tool parser reads it. Loaded with ``--reasoning-parser-plugin <this file>
---reasoning-parser apertus_tools`` (experiments/layers/hardware-gh200-apertus15.env).
+--reasoning-parser apertus_tools`` ([hardware.gh200.models.apertus15]).
 """
 
 from collections.abc import Sequence

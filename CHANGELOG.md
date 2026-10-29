@@ -74,6 +74,14 @@ Pins: dace extended `b737e5050`; user plugins NestForge `64c6835`, Alloy `97b9af
 - Crashed agents resume in place (claude sessions, runner checkpoints); a relaunch gets a fresh folder and leaves
   the crashed one intact. MCP tool calls send a progress heartbeat; `submit` waits for its grade.
 
+### Configuration
+- **One experiment file.** `experiments/experiments.toml` replaces `experiments/setups.yaml`, the 24
+  `experiments/layers/*.env` and `experiments/serve-only.env`: `[common]`, `[requests.<preset>]`, `[layer.<name>]`,
+  `[model.<name>]`, `[tuner]`, `[hardware.<hw>]` (with `models.<m>`), `[serve]` and `[experiment.<name>]`. Every
+  `<experiment>:<model>` renders byte-identical to 0.3.x. The site layers move to `experiments/site-*.env`; copy
+  yours from `experiments/layers/site.env` to `experiments/site.env`. `serve-only.sbatch` takes an optional
+  `SERVE_ENV_FILE` of extra overrides.
+
 ### Serving and figures
 - **qwen3.8 decodes 3.5x faster.** MI300A serves the BF16 weights (`Qwen/Qwen3.8-27B`): the FP8 checkpoint's
   block-scaled GEMMs run an untuned Triton kernel on gfx942 that left the GPU mostly idle (20 streams: 403 -> 1426
@@ -81,6 +89,8 @@ Pins: dace extended `b737e5050`; user plugins NestForge `64c6835`, Alloy `97b9af
   node keeps to its own, so a conversation never splits across two prefix caches (`docs/serving/qwen38.md`).
 - `plot kernel-speedups`: a one-model figure colours its conditions (the control grey), `--series-label` text is set
   in Title Case (`style.title_case`), and a study still running plots without token totals.
+- `fetch_weights.sbatch` audits blobs linked into a shared content store (a complete download no longer reads
+  as missing).
 - Golden prep grades `/score` and `/submit` even when the first finds the reference incorrect; cp2k TRS4 gains a
   conditioning band (1e-7) for its purification; the lulesh numba reference divides by zero as numpy does.
 

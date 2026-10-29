@@ -1,8 +1,8 @@
 # Serving GLM-5.3 on MI300A
 
 `zai-org/GLM-5.3`, fp8, about 755 GB of weights, on SGLang across four nodes (`tp=4`, `pp=4`).
-Source of truth: `experiments/layers/model-glm53.env` plus the `glm53` entries of
-`experiments/setups.yaml`; render with `hpcagent_bench/cluster/env_layers.sh render experiment:glm53`.
+Source of truth: `[model.glm53]` plus the `glm53` entries of
+`experiments/experiments.toml`; render with `hpcagent_bench/cluster/env_layers.sh render experiment:glm53`.
 Background: [`knobs.md`](knobs.md).
 
 ```bash

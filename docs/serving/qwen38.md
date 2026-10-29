@@ -1,7 +1,7 @@
 # Serving Qwen3.8 on MI300A
 
 `Qwen/Qwen3.8-27B` (BF16) on SGLang, one node, `tp=4`; the FP8 checkpoint decodes slower on gfx942 (below). The cheapest useful endpoint here. Source of
-truth: `experiment:qwen38` in `experiments/setups.yaml` over `layers/model-qwen38.env`. Background:
+truth: `experiment:qwen38` in `experiments/experiments.toml` over `[model.qwen38]`. Background:
 [`knobs.md`](knobs.md).
 
 ```bash
@@ -83,7 +83,7 @@ Distinct random prompts, steady-state decode while every stream decodes (`jobs/q
 
 - Serve on SGLang on MI300A. vLLM with `ROCM_AITER_FA` garbled qwen3.8 under agent load (random tokens
   in the reasoning, invented tool names), so qwen3.8 has no MI300A vLLM line. MI250X serves it on
-  vLLM with `TRITON_ATTN` (`layers/hardware-mi200-qwen38.env`).
+  vLLM with `TRITON_ATTN` (`[hardware.mi200.models.qwen38]`).
 - Move `--mem-fraction-static` together with `--mamba-full-memory-ratio` (with ratio `r` the budget
   `R` splits mamba `R*r/(1+r)`, KV `R/(1+r)`) and with `--attention-backend aiter` (aiter derates by
   0.85, so 0.306 is an effective 0.26). Never above 0.306: the OOM killer takes the process without a

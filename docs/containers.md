@@ -44,10 +44,10 @@ ls ~/.edf/
 | the Harbor adapter | -- | `images:` in the configuration (`HPCAGENT_BENCH_IMAGES_<HW>_AGENT` / `_VERIFIER`) |
 | the CLI's container launch (`hpcagent_bench/containers.py`, `helpers/scripts/run_agent_in_container.sh`) | -- | `HPCAGENT_BENCH_DOCKER_IMAGE` or `HPCAGENT_BENCH_SIF`, else `container_backends.txt` (`hpcagent_bench:<hw>`, or a `.sif` in the checkout) |
 
-The `*_CE_ENV` values are EDF names (no path, no `.toml`). `experiments/layers/common.env` sets the MI300 pair,
+The `*_CE_ENV` values are EDF names (no path, no `.toml`). `[common]` sets the MI300 pair,
 `AMD_CE_ENV=hpcagent-bench-agent-mi300-latest` and `JUDGE_CE_ENV=hpcagent-bench-judge-mi300-latest`; a setup's
 `.env` or the shell overrides them. `submit.sh --hardware <hardware>` renames every `*_CE_ENV` from `-mi300-` to
-`-<hardware>-` and pins `experiments/layers/hardware-<hardware>.env` ([configuration.md](configuration.md#hardware-is-not-a-site-value)),
+`-<hardware>-` and pins `[hardware.<hardware>]` ([configuration.md](configuration.md#hardware-is-not-a-site-value)),
 so a hardware with a layer needs no EDF edit:
 
 ```bash
@@ -59,6 +59,6 @@ JUDGE_EDF=~/.edf/hpcagent-bench-judge-cpu-x86_64-latest.toml \
 
 Experiments (`submit.sh`) run on the hardware that has layers, `mi300` (the base) and `mi200`; under the
 Container Engine `submit.sh` refuses a run with no hardware or with a hardware that has no
-`experiments/layers/hardware-<hardware>.env`. GH200 and x86 NVIDIA nodes run the helper jobs and the CLI with their
+`[hardware.<hardware>]`. GH200 and x86 NVIDIA nodes run the helper jobs and the CLI with their
 own EDFs; [containers/README.md](../containers/README.md#nvidia-gh200-daint) shows a Daint job using a Beverin
 inference endpoint.

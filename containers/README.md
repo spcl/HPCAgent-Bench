@@ -167,7 +167,7 @@ Build gates prove that an engine imports, not that it serves, so a serving candi
 before promotion with `hpcagent_bench/cluster/serve-only.sbatch` (SGLang and vLLM alike),
 which serves what an experiment serves: copy `~/.edf/hpcagent-bench-vllm-mi300-latest.toml` to
 `~/.edf/candidate-vllm.toml` with `image` pointing at the vllm role's candidate squashfs, then
-run `SERVE_ENV_FILE=<copy of serve-only.env plus INFERENCE_CE_ENV=candidate-vllm> MODEL=oss120b
+run `SERVE_ENV_FILE=<an env file with INFERENCE_CE_ENV=candidate-vllm> MODEL=oss120b
 hpcagent_bench/cluster/serve-only.sbatch` and query the endpoint it prints.
 
 One vLLM release everywhere: `vllm` and `vllm-cuda` both pin v0.28.0 by base-image digest.
@@ -216,7 +216,7 @@ From a Daint job, a Beverin endpoint served with `serve-private.sbatch` (`ACCESS
 checks the endpoint and exports `VLLM_BASE_URL`, `VLLM_API_KEY` and `VLLM_MODEL`. For an experiment the
 endpoint is a service setup (`hpcagent_bench/cluster/inference_service.py`) with
 `AMD_CE_ENV=hpcagent-bench-agent-gh200-latest` and `JUDGE_CE_ENV=hpcagent-bench-judge-gh200-latest`.
-`hpcagent_bench/cluster/run_cluster.sh` and the `experiments/layers/*.env` model layers are beverin-shaped.
+`hpcagent_bench/cluster/run_cluster.sh` and the `[model.*]` tables of `experiments/experiments.toml` are beverin-shaped.
 
 ### CPU only (any node, x86_64 or aarch64)
 

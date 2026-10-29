@@ -41,8 +41,8 @@ gets a row here in the same commit.
 | system | a machine's job shape in `systems.yaml`: cluster, partition, GPUs per node, time limit | `system` (`--system`, `HPCAGENT_BENCH_SYSTEM`) |
 | cluster | the Slurm cluster name (`SLURM_CLUSTER_NAME`) a system is matched on | `cluster` |
 | partition | the Slurm partition | `partition` |
-| hardware | the GPU generation whose images and serving layers a setup uses (`mi300`, `mi200`); the agent's `/profile` route is the profiler and is unrelated | `hardware` (`--hardware`, `HPCAGENT_BENCH_HARDWARE`, `layers/hardware-<hardware>.env`) |
-| site | the per-user layer of paths and accounts (`experiments/layers/site.env`) | `site` |
+| hardware | the GPU generation whose images and serving layers a setup uses (`mi300`, `mi200`); the agent's `/profile` route is the profiler and is unrelated | `hardware` (`--hardware`, `HPCAGENT_BENCH_HARDWARE`, `[hardware.<hardware>]`) |
+| site | the per-user layer of paths and accounts (`experiments/site.env`) | `site` |
 | platform | the machine a recorded row was timed on (`mi300a`); a column, not a launch input | `platform` |
 | role | one service of a job: `inference`, `judge`, `agent` | `role` |
 | job | one Slurm job | `job` (`job_id`) |
@@ -50,7 +50,7 @@ gets a row here in the same commit.
 | shard | one judge rank's database inside a job (`judge/rank-N/*.db`) | `shard` |
 | setup | one launcher configuration: model x language x packet x harness (x device); named `<experiment>-<model>-<language>[-<packet>]` | `setup` (table `setups`, env `SETUP`) |
 | control | the setup an intervention setup is paired against: same model and language without the intervention (`statistics/paired_setups.py --pair TREATMENT,CONTROL`); `baseline` stays the timing reference | `control` |
-| experiment | a batch of setups launched to answer one question; owns a job-name prefix and a run root `<runs>/<experiment>-<stamp>/<job>/`; a top-level key of `experiments/setups.yaml`; `EXPERIMENT` is the `submit.sh` knob that sets it | `experiment` |
+| experiment | a batch of setups launched to answer one question; owns a job-name prefix and a run root `<runs>/<experiment>-<stamp>/<job>/`; a top-level key of `experiments/experiments.toml`; `EXPERIMENT` is the `submit.sh` knob that sets it | `experiment` |
 | study | the question and figure grouping: the experiments whose setups are scored and drawn together, with one tag; a key of `envs/studies.yaml`, the `study` column of `setups` | `study` |
 
 Containment: a study has a tag and is fed by one or more experiments; an experiment launches setups; a setup

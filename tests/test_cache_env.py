@@ -148,7 +148,7 @@ def test_the_cpf_prerender_dir_default_matches_the_cache_readme(tmp_path: pathli
     assert proc.stdout.strip() == f"{scratch}/.hpcagentbench-cache{documented}"
 
 
-@pytest.mark.parametrize("layer", sorted((REPO / "experiments" / "layers").glob("site-*.env")), ids=lambda p: p.stem)
+@pytest.mark.parametrize("layer", sorted((REPO / "experiments").glob("site-*.env")), ids=lambda p: p.stem)
 def test_two_users_on_the_same_host_resolve_to_distinct_fast_scratch_roots(layer: pathlib.Path) -> None:
     """Every shipped site layer keys FAST_SCRATCH by user (directly or through $SCRATCH); two
     accounts must never be handed the same weights directory, which would let one user's job load
@@ -182,7 +182,7 @@ def test_edf_mounts_follow_scratch_and_fast_scratch_instead_of_naming_a_filesyst
 
 
 def site_layer(tmp_path: pathlib.Path, text: str) -> str:
-    """A site layer file (experiments/layers/site-*.env shape) for HPCAGENT_BENCH_SITE_ENV."""
+    """A site layer file (experiments/site-*.env shape) for HPCAGENT_BENCH_SITE_ENV."""
     layer = tmp_path / "site.env"
     layer.write_text(text)
     return str(layer)

@@ -62,13 +62,13 @@ refuse() {
 
 use_preset() {  # sets the PRESET_* values; key file, triton cache and run root derive from the name
     case "${PRESET:-}" in
-        mi300)  # the qwen38 experiment line (llrbase-c:qwen38, experiments/setups.yaml); 0.306 is node-wide on the APU
+        mi300)  # the qwen38 experiment line (llrbase-c:qwen38, experiments/experiments.toml); 0.306 is node-wide on the APU
             PRESET_PARTITION=mi300 PRESET_GPUS=4 PRESET_ENGINE=sglang PRESET_MODEL=Qwen/Qwen3.8-27B
             PRESET_EDF=hpcagent-bench-sglang-mi300-latest PRESET_LEGS="tp4:0.306"
             PRESET_FLAGS=(--attention-backend aiter)
             PRESET_ENV=(SGLANG_USE_AITER=1 SGLANG_SET_CPU_AFFINITY=0 SGLANG_WARMUP_TIMEOUT=1800)
             ;;
-        mi200)  # MI250X: no aiter gfx90a kernels, no FP8; the AMD vLLM image (layers/hardware-mi200-qwen38.env).
+        mi200)  # MI250X: no aiter gfx90a kernels, no FP8; the AMD vLLM image ([hardware.mi200.models.qwen38]).
             # TRITON_ATTN: 3.4x the default backend at 40 agents, both gates pass (docs/serving/mi200-endpoint.md)
             PRESET_PARTITION=mi200 PRESET_GPUS=8 PRESET_ENGINE=vllm PRESET_MODEL=Qwen/Qwen3.8-27B
             PRESET_EDF=hpcagent-bench-vllm-mi200-latest PRESET_LEGS="tp8:0.85"
