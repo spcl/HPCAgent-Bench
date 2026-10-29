@@ -22,13 +22,15 @@ from hpcagent_agent import plugins as agent_plugins
 from hpcagent_agent.plugins import Plugin
 
 from hpcagent_bench import paths
-from hpcagent_bench.vocabulary import PACKETS, PacketDef, PacketDevice
+from hpcagent_bench.vocabulary import PACKETS, PacketDef, PacketDevice, PacketPhase
 
 __all__ = [
     "ENTRY_POINT_GROUP",
+    "NEXT_PHASE",
     "OVERLAY_PREFIX",
     "FlavorBlock",
     "PhaseBlock",
+    "PhaseCall",
     "PluginPacketBlock",
     "PluginPrompt",
     "compiled_overlay",
@@ -39,6 +41,7 @@ __all__ = [
     "load",
     "main",
     "packet_definition",
+    "packet_phase",
     "page_path",
     "provenance",
     "recorded",
@@ -48,6 +51,8 @@ __all__ = [
     "roots",
 ]
 
+#: The tool every packet with an agent phase carries: it ends the agent's phase and runs the default ones after it.
+NEXT_PHASE = "next_phase"
 #: Who runs a phase: the agent with the phase's tools, or the plugin's default heuristic.
 Mode = Literal["agent", "default"]
 #: A block id of either prompt (``@@section`` ids of ``agent/prompt.md``, section keys of the task prompt).
@@ -56,10 +61,21 @@ BlockId = Annotated[str, pydantic.Field(pattern=r"^[a-z][a-z0-9_]*$")]
 TextPath = Annotated[str, pydantic.Field(pattern=r"^[^/][\w./-]*\.md$")]
 
 
+class PhaseCall(pydantic.BaseModel):
+    """The call that runs a phase on the plugin's default: its tool (``POST /<plugin>/<tool>``) with ``args``."""
+
+    model_config = pydantic.ConfigDict(extra="forbid", frozen=True)
+
+    tool: str = pydantic.Field(min_length=1)
+    args: dict[str, Any] = pydantic.Field(default_factory=dict[str, Any])
+
+
 class PhaseBlock(pydantic.BaseModel):
     """A plugin's ``[phases.<id>]``: one step of its packets' workflow. ``summary`` says in one line what the plugin
     does in it by default, ``text`` (a Markdown file, needed once a packet lets the agent run it) how the agent works
-    it with ``tools``; ``mode`` is who runs it unless a packet says otherwise."""
+    it with ``tools``; ``mode`` is who runs it unless a packet says otherwise. ``default`` is the call ``next_phase``
+    makes for a default phase (none: the plugin finishes it on its own), ``budget`` the tokens the agent may spend in
+    it before its tools are refused."""
 
     model_config = pydantic.ConfigDict(extra="forbid", frozen=True)
 
@@ -68,6 +84,8 @@ class PhaseBlock(pydantic.BaseModel):
     text: TextPath | None = None
     tools: tuple[str, ...] = ()
     mode: Mode = "agent"
+    default: PhaseCall | None = None
+    budget: int | None = pydantic.Field(None, gt=0)
 
 
 class PromptBlocks(pydantic.BaseModel):
@@ -345,18 +363,35 @@ def packet_definition(plugin: Plugin, key: str, block: PluginPacketBlock) -> Pac
             raise ValueError(f"plugin {plugin.name!r}: {block.prompt.workflow} holds template syntax")
     ref = f"{OVERLAY_PREFIX}{plugin.name}/{key}"
     COMPILED[ref] = (compile_overlay(plugin, key, block.prompt, workflow), plugin.root)
+    run = tuple(packet_phase(plugin.name, name, mode, phases[name]) for name, mode in modes.items())
+    stepped = (NEXT_PHASE,) if "agent" in modes.values() else ()
     return PacketDef(
         name=block.name,
         skills=skills,
         packets=block.packets,
         env=tuple(block.env.items()),
         prompt_overlays=(ref,),
-        tools=tuple(dict.fromkeys((*phase_tools, *block.tools))),
+        tools=tuple(dict.fromkeys((*phase_tools, *block.tools, *stepped))),
         agents=block.agents,
         device=block.device,
         frozen=block.frozen,
         marker=block.marker,
         short=block.short,
+        phases=run,
+    )
+
+
+def packet_phase(route: str, name: str, mode: Mode, phase: PhaseBlock) -> PacketPhase:
+    """Phase ``name`` of a packet as the judge runs it, its tools served at ``POST /<route>/<tool>``."""
+    call = phase.default
+    return PacketPhase(
+        name=name,
+        mode=mode,
+        tools=phase.tools,
+        route=route,
+        default_tool=call.tool if call is not None else "",
+        default_args=tuple(sorted(call.args.items())) if call is not None else (),
+        budget=phase.budget,
     )
 
 
