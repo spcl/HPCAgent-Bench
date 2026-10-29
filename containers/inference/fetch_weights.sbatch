@@ -123,7 +123,9 @@ for repo in ${MODELS}; do
         sc2="$(lfs getstripe -c "${blob}" </dev/null 2>/dev/null | head -1)"
         case "${sc2}" in ''|*[!0-9]*) sc2=0 ;; esac
         if [ "${sc2}" -ge "${STRIPE_COUNT}" ]; then fixed=$((fixed + 1)); else still=$((still + 1)); fi
-    done < <(find "${dir}" -type f -size +"${MIN_BLOB_BYTES}"c 2>/dev/null)
+    # -L + readlink -f: a blob may be a link into a shared content store (hub/blobs/<xx>/), which
+    # -type f alone never lists; the store file is what gets audited and restriped.
+    done < <(find -L "${dir}/snapshots" -type f -size +"${MIN_BLOB_BYTES}"c -exec readlink -f {} + 2>/dev/null | sort -u)
 
     printf '  blobs>1G=%s  narrow=%s  restriped=%s  STILL NARROW=%s\n' \
            "${total}" "${narrow}" "${fixed}" "${still}"
