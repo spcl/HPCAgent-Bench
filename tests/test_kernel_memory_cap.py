@@ -889,6 +889,25 @@ def test_the_crash_hint_needs_both_an_armed_cap_and_a_suspect_signal() -> None:
     assert hint(0, None, openblas) == ""
 
 
+def test_only_an_abort_or_an_allocator_failure_under_the_cap_is_a_memory_cap_outcome() -> None:
+    """A race cuts a :class:`native_call.NativeCallMemoryCap`; SIGSEGV under the cap stays a crash, since an
+    out-of-bounds access gives the same signal."""
+    from hpcagent_bench.frameworks.forked import RunResult
+
+    budget = native_call.CallBudget(300.0, 0.0, 1, 0, 300.0)
+    armed = 128 * (1 << 20)
+
+    def failure(sig: str | None, stderr: str = "", exit_code: int = -6, cap: int = armed) -> Exception:
+        run = RunResult[None](ok=False, exit_code=exit_code, signal=sig)
+        return native_call.call_failure(run, budget, guillotined=False, stderr=stderr, memory_bytes=cap)
+
+    assert isinstance(failure("SIGABRT"), native_call.NativeCallMemoryCap)
+    openblas = "OpenBLAS error: Memory allocation still failed after 10 retries, giving up.\n"
+    assert isinstance(failure(None, openblas, exit_code=1), native_call.NativeCallMemoryCap)
+    for crash in (failure("SIGSEGV"), failure("SIGABRT", cap=0)):
+        assert type(crash) is RuntimeError, crash
+
+
 def test_the_thread_creation_hint_needs_the_runtimes_own_words() -> None:
     """:func:`native_call.thread_creation_crash_hint` reads the child's stderr: libgomp's exit-1
     line and libomp's Error #34 both name the harness limit and the cap; anything else stays a
