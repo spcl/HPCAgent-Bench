@@ -46,7 +46,7 @@ AUDIT_ONLY="${AUDIT_ONLY:-0}"
 
 # Every model the experiment serves. Weights are ~1.5 TB in total, so the default is the full set
 # only because a partial one is the thing that bites six hours into an experiment.
-MODELS="${MODELS:-moonshotai/Kimi-K2.7-Code zai-org/GLM-5.3 Qwen/Qwen3.8-27B-FP8 openai/gpt-oss-120b}"
+MODELS="${MODELS:-moonshotai/Kimi-K2.7-Code zai-org/GLM-5.3 Qwen/Qwen3.8-27B openai/gpt-oss-120b}"
 
 STRIPE_COUNT="${STRIPE_COUNT:-16}"
 STRIPE_SIZE="${STRIPE_SIZE:-4M}"

@@ -2,7 +2,7 @@
 # Private serving of Qwen3.8-27B on one beverin node. PRESET picks the hardware and the engine:
 #
 #   PRESET  partition  GPUs       engine  EDF                                 weights             default LEGS
-#   mi300   mi300      4x MI300A  SGLang  hpcagent-bench-sglang-mi300-latest  Qwen3.8-27B-FP8     tp4:0.306
+#   mi300   mi300      4x MI300A  SGLang  hpcagent-bench-sglang-mi300-latest  Qwen3.8-27B         tp4:0.306
 #   mi200   mi200      8x MI250X  vLLM    hpcagent-bench-vllm-mi200-latest    Qwen3.8-27B (BF16)  tp8:0.85
 #
 # MODE=smoke (default): one fresh server per LEGS spec "tp<N>:<memory fraction>" (SGLang
@@ -63,7 +63,7 @@ refuse() {
 use_preset() {  # sets the PRESET_* values; key file, triton cache and run root derive from the name
     case "${PRESET:-}" in
         mi300)  # the qwen38 experiment line (llrbase-c:qwen38, experiments/setups.yaml); 0.306 is node-wide on the APU
-            PRESET_PARTITION=mi300 PRESET_GPUS=4 PRESET_ENGINE=sglang PRESET_MODEL=Qwen/Qwen3.8-27B-FP8
+            PRESET_PARTITION=mi300 PRESET_GPUS=4 PRESET_ENGINE=sglang PRESET_MODEL=Qwen/Qwen3.8-27B
             PRESET_EDF=hpcagent-bench-sglang-mi300-latest PRESET_LEGS="tp4:0.306"
             PRESET_FLAGS=(--attention-backend aiter)
             PRESET_ENV=(SGLANG_USE_AITER=1 SGLANG_SET_CPU_AFFINITY=0 SGLANG_WARMUP_TIMEOUT=1800)
@@ -189,7 +189,7 @@ sglang_argv() {  # sglang_argv <tp> <fraction> <port>: sets SERVER_ARGV
         --config "${RUN_DIR}/sglang-auth.yaml"
         --model-path "${MODEL_REPO}" --served-model-name "${SERVED_MODEL}"
         --tp-size "$1" --mem-fraction-static "$2" "${PRESET_FLAGS[@]}"
-        --chat-template "${REPO}/containers/inference/chat-template-qwen38.jinja" --trust-remote-code --language-only --kv-cache-dtype fp8_e4m3 --fp8-gemm-backend triton
+        --chat-template "${REPO}/containers/inference/chat-template-qwen38.jinja" --trust-remote-code --language-only --kv-cache-dtype fp8_e4m3
         --watchdog-timeout 1800 --context-length 262144 --mamba-full-memory-ratio 0.5 --max-running-requests 128
         "${METRICS_FLAGS[@]}" --reasoning-parser qwen3 --tool-call-parser qwen3_coder --enable-cache-report
         ${EXTRA_ARGS}

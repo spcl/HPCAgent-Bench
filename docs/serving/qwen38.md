@@ -1,6 +1,6 @@
 # Serving Qwen3.8 on MI300A
 
-`Qwen/Qwen3.8-27B-FP8` on SGLang, one node, `tp=4`. The cheapest useful endpoint here. Source of
+`Qwen/Qwen3.8-27B` (BF16) on SGLang, one node, `tp=4`; the FP8 checkpoint decodes slower on gfx942 (below). The cheapest useful endpoint here. Source of
 truth: `experiment:qwen38` in `experiments/setups.yaml` over `layers/model-qwen38.env`. Background:
 [`knobs.md`](knobs.md).
 
@@ -15,7 +15,7 @@ EDF `hpcagent-bench-sglang-mi300-latest`; env `SGLANG_USE_AITER=1`, `SGLANG_SET_
 
 ```
 --chat-template containers/inference/chat-template-qwen38.jinja --trust-remote-code
---attention-backend aiter --kv-cache-dtype fp8_e4m3 --fp8-gemm-backend triton --language-only
+--attention-backend aiter --kv-cache-dtype fp8_e4m3 --language-only
 --watchdog-timeout 1800
 --context-length 262144 --mem-fraction-static 0.306 --mamba-full-memory-ratio 0.25
 --max-running-requests 128 --enable-metrics
@@ -64,14 +64,18 @@ Distinct random prompts, steady-state decode while every stream decodes (`jobs/q
 | bf16 KV, aiter FP8 GEMM | | | | 297 |
 | fp8 KV, aiter FP8 GEMM | 41 | 169 | 403 | 341 |
 | fp8 KV, `--fp8-gemm-backend triton` | 66 | 410 | 1078 | 725 |
+| fp8 KV, BF16 weights (`Qwen/Qwen3.8-27B`) | 97 | 663 | 1426 | 912 |
 
 - On gfx942 SGLang sends every block-scaled FP8 linear to aiter's Triton `gemm_a8w8_blockscale` (the CK path is
   gfx950 only); a decode step was ~44 ms of GPU time with the GPU otherwise idle. SGLang's own Triton block GEMM
-  is 2.7x at 20 streams (2.1x at 100k context). Shipped.
+  is 2.7x at 20 streams (2.1x at 100k context). The BF16 weights are faster still (1.3x over that): their
+  GEMMs take aiter's tuned small-M BF16 kernels and need no per-layer activation quantization. Shipped: BF16
+  weights, fp8 KV (5.5M-token pool, 20 x 262k fits).
 - Context length barely moves the step (1k and 100k within 15%): attention is not the decode cost.
 - No gain: `--enable-aiter-allreduce-fusion`, triton attention with 16 KV splits. Worse: MTP (EAGLE 3/1/4, -60% at
   8-20 streams), TP2.
-- Gates (serve-only PREWARM=1, job 704847): tool-call, reasoning and ACCURACY 9/9 pass with the Triton GEMM.
+- Gates (serve-only PREWARM=1): tool-call, reasoning and ACCURACY 9/9 pass with the Triton FP8 GEMM (704847) and
+  with the BF16 weights (704917).
 - An experiment with two replicas pins each agent node to its own replica (`run_cluster.sh`), so a conversation
   never splits across prefix caches.
 
