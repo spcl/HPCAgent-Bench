@@ -32,6 +32,7 @@ __all__ = [
     "PhaseBlock",
     "PhaseCall",
     "PluginPacketBlock",
+    "block_halves",
     "compiled_overlay",
     "entry_point_dirs",
     "fingerprint",
@@ -271,17 +272,29 @@ def workflow_text(plugin: Plugin, modes: Mapping[str, Mode], phases: Mapping[str
 
 
 @functools.lru_cache(maxsize=1, typed=True)
-def prompt_block_ids() -> dict[str, frozenset[str]]:
-    """The block ids each prompt has: ``agent`` (``agent/prompt.md``'s sections) and ``task`` (its section keys)."""
-    from hpcagent_agent import prompt_blocks  # deferred: only a packet with a prompt table reads them
+def prompt_block_ids() -> dict[str, frozenset[str] | None]:
+    """The block ids each prompt has: ``agent`` (``agent/prompt.md``'s sections; None where the prompt is not shipped,
+    as in an installed package, which never renders it) and ``task`` (its section keys)."""
+    from hpcagent_agent import prompt_blocks  # deferred: only a packet with prompt keys reads them
 
     from hpcagent_bench.harness import prompt_sections
 
-    agent = prompt_blocks.parse((paths.ROOT / "agent" / "prompt.md").read_text(encoding="utf-8"))
-    return {
-        "agent": frozenset(block.id for block in agent.blocks),
-        "task": frozenset(prompt_sections.section_templates()),
-    }
+    source = paths.ROOT / "agent" / "prompt.md"
+    agent = (
+        frozenset(block.id for block in prompt_blocks.parse(source.read_text(encoding="utf-8")).blocks)
+        if source.is_file()
+        else None
+    )
+    return {"agent": agent, "task": frozenset(prompt_sections.section_templates())}
+
+
+def block_halves(block_id: str, ids: Mapping[str, frozenset[str] | None]) -> tuple[str, ...]:
+    """The prompts whose block ``block_id`` is; without the agent prompt, every id the task prompt lacks is its (the
+    agent prompt refuses an unknown one where it renders)."""
+    task = ids["task"] or frozenset()
+    agent = ids["agent"]
+    in_agent = block_id not in task if agent is None else block_id in agent
+    return tuple(half for half, has in (("agent", in_agent), ("task", block_id in task)) if has)
 
 
 def compile_overlay(plugin: Plugin, key: str, block: PluginPacketBlock, workflow: str) -> dict[str, Any]:
@@ -301,17 +314,15 @@ def compile_overlay(plugin: Plugin, key: str, block: PluginPacketBlock, workflow
         if TEMPLATE_SYNTAX.search(plain_text(plugin, path, f"packet {key!r} {what}")):
             raise ValueError(f"plugin {plugin.name!r}: {path} holds template syntax the agent prompt never renders")
 
-    if unknown := sorted(name for name in (*block.off, *block.replace) if not any(name in ids[h] for h in HALVES)):
+    if unknown := sorted(name for name in (*block.off, *block.replace) if not block_halves(name, ids)):
         raise ValueError(f"plugin {plugin.name!r}: packet {key!r} names blocks {unknown} that no prompt has")
     if clash := sorted(set(block.off) & set(block.replace)):
         raise ValueError(f"plugin {plugin.name!r}: packet {key!r} switches blocks {clash} off and replaces them")
-    for half in HALVES:
-        for block_id in block.off:
-            if block_id in ids[half]:
-                edit(half, block_id)["enabled"] = False
-        for block_id, path in block.replace.items():
-            if block_id not in ids[half]:
-                continue
+    for block_id in block.off:
+        for half in block_halves(block_id, ids):
+            edit(half, block_id)["enabled"] = False
+    for block_id, path in block.replace.items():
+        for half in block_halves(block_id, ids):
             if half == "agent":
                 agent_text(path, f"replace.{block_id}")
             plain_text(plugin, path, f"packet {key!r} replace.{block_id}")
