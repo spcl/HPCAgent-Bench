@@ -121,14 +121,15 @@ def test_every_tool_a_packet_declares_is_a_gated_tool_of_the_server() -> None:
     """The agent image carries no ``hpcagent_bench``, so the packets' ``tools`` and the server's ``core=False`` tools
     are held together by this test only. A drift here is a tool served to every setup although a packet carries
     it, a packet tool the server has no module for, or a gated tool no packet can switch on."""
-    from hpcagent_bench import study_tags
+    from hpcagent_bench import plugins, study_tags
 
     declared = {tool for definition in study_tags.registry().packet_defs.values() for tool in definition.tools}
     from hpcagent_agent.tools import registry
 
     fresh("mcp_server").load_tools()
     gated = {name for name, entry in registry.REGISTRY.items() if not entry.core}
-    assert declared == gated
+    # next_phase is switched on by a plugin packet with an agent phase (tests/test_plugin_phases.py)
+    assert declared | {plugins.NEXT_PHASE} == gated
 
 
 def test_the_http_loop_prompt_documents_the_packet_tool_only_where_the_run_serves_it(
