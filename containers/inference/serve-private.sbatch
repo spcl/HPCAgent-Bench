@@ -189,7 +189,7 @@ sglang_argv() {  # sglang_argv <tp> <fraction> <port>: sets SERVER_ARGV
         --config "${RUN_DIR}/sglang-auth.yaml"
         --model-path "${MODEL_REPO}" --served-model-name "${SERVED_MODEL}"
         --tp-size "$1" --mem-fraction-static "$2" "${PRESET_FLAGS[@]}"
-        --chat-template "${REPO}/containers/inference/chat-template-qwen38.jinja" --trust-remote-code --language-only --kv-cache-dtype fp8_e4m3
+        --chat-template "${REPO}/containers/inference/chat-template-qwen38.jinja" --trust-remote-code --language-only --kv-cache-dtype fp8_e4m3 --fp8-gemm-backend triton
         --watchdog-timeout 1800 --context-length 262144 --mamba-full-memory-ratio 0.5 --max-running-requests 128
         "${METRICS_FLAGS[@]}" --reasoning-parser qwen3 --tool-call-parser qwen3_coder --enable-cache-report
         ${EXTRA_ARGS}

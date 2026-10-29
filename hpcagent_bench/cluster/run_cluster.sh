@@ -767,6 +767,11 @@ run_agent_node() {
     # names as a deployment group and round-robins over them, so the proxy is the load balancer and
     # the agents keep asking for one model. A single replica writes the single-entry config verbatim.
     IFS=, read -r -a replicas <<<"${VLLM_REPLICA_URLS:-${VLLM_BASE_URL}}"
+    # Round-robin sends one conversation's turns to different replicas, so each re-prefills what the other cached
+    # (prefix hit 0.48, docs/serving/qwen38.md). With an agent node per replica, each node keeps to its own.
+    if (( ${#replicas[@]} > 1 && AGENT_NODES >= ${#replicas[@]} )); then
+        replicas=("${replicas[agent_rank % ${#replicas[@]}]}")
+    fi
 
     # A real key never lands in the file: LiteLLM reads it from the proxy's environment. The
     # fleet-wide no-auth sentinel stays literal so a keyless vLLM keeps its documented reading.

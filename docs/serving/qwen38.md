@@ -15,7 +15,8 @@ EDF `hpcagent-bench-sglang-mi300-latest`; env `SGLANG_USE_AITER=1`, `SGLANG_SET_
 
 ```
 --chat-template containers/inference/chat-template-qwen38.jinja --trust-remote-code
---attention-backend aiter --kv-cache-dtype fp8_e4m3 --language-only --watchdog-timeout 1800
+--attention-backend aiter --kv-cache-dtype fp8_e4m3 --fp8-gemm-backend triton --language-only
+--watchdog-timeout 1800
 --context-length 262144 --mem-fraction-static 0.306 --mamba-full-memory-ratio 0.25
 --max-running-requests 128 --enable-metrics
 --reasoning-parser qwen3 --tool-call-parser qwen3_coder --enable-cache-report
@@ -53,6 +54,26 @@ log lines), which is the shipped configuration ([knobs.md](knobs.md#aiter-correc
   lpm` (inside the 6% same-node drift), `--tp-size 2 --dp-size 2` (78 tok/s: DP round-robin splits a
   conversation, hit 0.48), `--mamba-radix-cache-strategy no_buffer --disable-overlap-schedule` (132 tok/s,
   hit 0.79; ReplaySSM needs it), `--mamba-ssm-dtype bfloat16` (263, within noise).
+
+## Measured: decode, one replica (10-29)
+
+Distinct random prompts, steady-state decode while every stream decodes (`jobs/qwen-serve-bench/decode_bench.py`).
+
+| Leg (aggregate tok/s) | 1 stream, 1k | 8 streams, 1k | 20 streams, 1k | 20 streams, 100k |
+|---|---|---|---|---|
+| bf16 KV, aiter FP8 GEMM | | | | 297 |
+| fp8 KV, aiter FP8 GEMM | 41 | 169 | 403 | 341 |
+| fp8 KV, `--fp8-gemm-backend triton` | 66 | 410 | 1078 | 725 |
+
+- On gfx942 SGLang sends every block-scaled FP8 linear to aiter's Triton `gemm_a8w8_blockscale` (the CK path is
+  gfx950 only); a decode step was ~44 ms of GPU time with the GPU otherwise idle. SGLang's own Triton block GEMM
+  is 2.7x at 20 streams (2.1x at 100k context). Shipped.
+- Context length barely moves the step (1k and 100k within 15%): attention is not the decode cost.
+- No gain: `--enable-aiter-allreduce-fusion`, triton attention with 16 KV splits. Worse: MTP (EAGLE 3/1/4, -60% at
+  8-20 streams), TP2.
+- Gates (serve-only PREWARM=1, job 704847): tool-call, reasoning and ACCURACY 9/9 pass with the Triton GEMM.
+- An experiment with two replicas pins each agent node to its own replica (`run_cluster.sh`), so a conversation
+  never splits across prefix caches.
 
 ## Rules
 
