@@ -2,6 +2,9 @@
 
 import ast
 import copy
+from typing import cast
+
+import sympy
 
 from hpcagent_bench.translators.numpyto_common.ast_build import const_int, name_, store_, walk_nodes
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import numpy_call_attr
@@ -497,6 +500,21 @@ class SearchsortedMaterialize(RewritePass):
         return out
 
 
+def unit_integer_bins(lo: ast.expr | None, hi: ast.expr | None, bins: str) -> int | None:
+    """``lo`` as an int when it is an integral constant and ``hi - lo`` is ``bins`` exactly, else ``None``."""
+    if lo is None or hi is None:
+        return None
+    try:
+        low, high, count = (
+            cast(sympy.Expr, sympy.sympify(ast.unparse(e) if isinstance(e, ast.expr) else e)) for e in (lo, hi, bins)
+        )
+    except (sympy.SympifyError, SyntaxError, TypeError):
+        return None
+    if not low.is_number or float(low) != int(float(low)) or sympy.simplify(high - low - count) != 0:
+        return None
+    return int(float(low))
+
+
 def hoist_histogram(node: ast.expr, hoist: ValueHoist) -> ast.expr | None:
     """``np.histogram(a, bins[, lo, hi][, weights=w])[0]`` -> the temp its binning loop fills.
 
@@ -550,8 +568,23 @@ def hoist_histogram(node: ast.expr, hoist: ValueHoist) -> ast.expr | None:
     # statement, since half an ulp of edge already misbins samples: the sample dtype for float
     # samples, float64 for any other (an integer sample's edges are float). Only edges 0..bins-1
     # are read (the walk up stops at bins-1), hence ``bins`` entries and no top edge.
+    kind = dtype_kind(call.args[0], hoist.tables.dtypes)
+    unit = unit_integer_bins(lo, hi, bins) if kind == "int" else None
+    if unit is not None:
+        # An integer sample over an integral lo with unit-width bins: every edge is the integer lo + j, so numpy's
+        # bin is the sample's offset and the edge walk never moves it (histogram_equalization's range=(0, nbins)).
+        lines += [
+            f"{temp} = np.zeros({bins}, {wdtype})",
+            f"for {p}_i in range({a}.shape[0]):",
+            f"    if {lo_s} <= {a}[{p}_i] and {a}[{p}_i] <= {hi_s}:",
+            f"        {p}_b = {a}[{p}_i] - {unit}",
+            f"        if {p}_b > {bins} - 1: {p}_b = {bins} - 1",
+            f"        {temp}[{p}_b] += {add}",
+        ]
+        hoist.queue(lines)
+        return name_(temp)
     edges = f"{p}_e"
-    float_sample = dtype_kind(call.args[0], hoist.tables.dtypes) in ("float", "complex")
+    float_sample = kind in ("float", "complex")
     edge_dtype = f"{a}.dtype" if float_sample else "np.float64"
     lines += [
         f"{edges} = np.zeros({bins}, {edge_dtype})",
