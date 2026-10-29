@@ -2,11 +2,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The agent prompt as building blocks. ``agent/prompt.md`` is a run of ``@@section <id>@@`` blocks; a setup's prompt
 is that base with :class:`Overlay` s applied in order (built-in variants, then the packet's), resolved host-side by
-:mod:`hpcagent_bench.prompt_build` and staged as :data:`PROMPT_JSON`, which the driver renders. Stdlib and pydantic
-only (the agent image)."""
+:mod:`hpcagent_bench.prompt_build` and staged as the setup's own ``prompt.md`` (:func:`resolved`), which the driver
+renders. Stdlib and pydantic only (the agent image)."""
 
-import json
-import pathlib
 import re
 from collections.abc import Mapping
 from typing import Annotated
@@ -14,7 +12,6 @@ from typing import Annotated
 import pydantic
 
 __all__ = [
-    "PROMPT_JSON",
     "SECTION",
     "SLOT",
     "Block",
@@ -26,13 +23,10 @@ __all__ = [
     "apply",
     "normalized",
     "pairs",
-    "load",
     "parse",
     "render",
+    "resolved",
 ]
-
-#: The resolved prompt of a setup, staged in the shared material.
-PROMPT_JSON = "prompt.json"
 
 #: The line that opens one block; it is never rendered.
 SECTION = re.compile(r"^@@section ([a-z_][a-z0-9_+]*)@@\n", re.MULTILINE)
@@ -225,6 +219,16 @@ def render(prompt: Prompt) -> str:
     return "".join(out)
 
 
-def load(path: pathlib.Path) -> Prompt:
-    """The resolved prompt staged at ``path``."""
-    return Prompt.model_validate(json.loads(path.read_text(encoding="utf-8")))
+def resolved(prompt: Prompt) -> str:
+    """``prompt`` as a template :func:`parse` reads back: ``head``, then every enabled block under its ``@@section``
+    line with its ``vars`` filled; :func:`render` of the result is :func:`render` of ``prompt``. Refused: a filled
+    text holding a ``@@section`` line, which would split its block on the way back."""
+    out = [prompt.head]
+    for block in prompt.blocks:
+        if not block.enabled:
+            continue
+        text = render(Prompt(blocks=(block,)))
+        if SECTION.search(text):
+            raise ValueError(f"block {block.id!r} renders a @@section line")
+        out.append(f"@@section {block.id}@@\n{text}")
+    return "".join(out)

@@ -3,7 +3,7 @@
 """A setup's agent prompt, resolved from building blocks (:mod:`hpcagent_agent.prompt_blocks`): ``agent/prompt.md``,
 then the launcher's layers (:data:`LAYERS_ENV`: the track or harness overlay), then the packet's (its
 ``prompt.overlays``), then the user's (:data:`OVERLAYS_ENV`: names or YAML files), so the user's word is last.
-``materialize_shared.sh`` stages the result as ``prompt.json``; ``--show`` prints each block and the overlays that
+``materialize_shared.sh`` stages the result as the setup's ``prompt.md`` (:func:`~hpcagent_agent.prompt_blocks.resolved`); ``--show`` prints each block and the overlays that
 changed it.
 
 An overlay is ``agent/prompt_overlays/<name>.yaml``, a YAML file path or a plugin packet's prompt table
@@ -256,7 +256,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--agent-dir", type=pathlib.Path, default=AGENT, help="the agent folder (default: this checkout's)"
     )
-    parser.add_argument("--out", type=pathlib.Path, help="write the resolved prompt as JSON here")
+    parser.add_argument(
+        "--out", type=pathlib.Path, help="write the resolved prompt here, a @@section template the driver renders"
+    )
     parser.add_argument("--show", action="store_true", help="print each block and the overlays that changed it")
     parser.add_argument("--render", action="store_true", help="print the rendered prompt")
     args = parser.parse_args(argv)
@@ -271,7 +273,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"prompt_build: {exc}", file=sys.stderr)
         return 2
     if args.out is not None:
-        args.out.write_text(prompt.model_dump_json(indent=1), encoding="utf-8")
+        args.out.write_text(prompt_blocks.resolved(prompt), encoding="utf-8")
     if args.render:
         sys.stdout.write(prompt_blocks.render(prompt))
     return 0

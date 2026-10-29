@@ -175,11 +175,22 @@ def test_a_disabled_block_does_not_render_and_a_removed_one_is_gone() -> None:
     assert prompt_blocks.apply(prompt, Overlay(remove=("a",))).ids() == ("b",)
 
 
-def test_the_resolved_prompt_round_trips_through_its_json(tmp_path: pathlib.Path) -> None:
+def test_a_staged_prompt_md_renders_as_the_resolved_prompt_it_was_written_from() -> None:
     prompt = prompt_build.resolve_layers(["harness-cli", "gpu"])
-    path = tmp_path / prompt_blocks.PROMPT_JSON
-    path.write_text(prompt.model_dump_json(), encoding="utf-8")
-    assert prompt_blocks.load(path) == prompt
+
+    sut = prompt_blocks.parse(prompt_blocks.resolved(prompt))
+
+    assert prompt_blocks.render(sut) == prompt_blocks.render(prompt)
+    assert sut.ids() == tuple(block.id for block in prompt.blocks if block.enabled)
+
+
+def test_a_staged_prompt_md_leaves_out_a_block_an_overlay_turned_off() -> None:
+    prompt = prompt_blocks.apply(
+        prompt_blocks.parse("@@section a@@\nA {{X}}\n@@section b@@\nB\n"),
+        Overlay(set={"a": Edit(vars={"X": "x"}), "b": Edit(enabled=False)}),
+    )
+
+    assert prompt_blocks.resolved(prompt) == "@@section a@@\nA x\n"
 
 
 def test_show_names_the_overlay_behind_every_changed_block() -> None:

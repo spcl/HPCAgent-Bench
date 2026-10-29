@@ -763,7 +763,7 @@ def test_the_claude_setup_still_reads_prompt_md_byte_for_byte(
 ) -> None:
     shared = materialize_prompts(tmp_path, monkeypatch)
     assert (shared / "prompt.md").read_bytes() == (AGENT / "prompt.md").read_bytes()
-    staged = prompt_blocks.render(prompt_blocks.load(shared / prompt_blocks.PROMPT_JSON))
+    staged = prompt_blocks.render(prompt_blocks.parse((shared / "prompt.md").read_text(encoding="utf-8")))
     assert staged == prompt_blocks.SECTION.sub("", (AGENT / "prompt.md").read_text(encoding="utf-8"))
 
 

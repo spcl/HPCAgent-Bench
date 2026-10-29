@@ -13,7 +13,6 @@ import types
 
 import pytest
 
-from hpcagent_agent import prompt_blocks
 
 from hpcagent_bench import paths
 from hpcagent_bench.cpf import cache as cpf_cache
@@ -175,15 +174,15 @@ def test_the_prompt_template_is_recorded(tmp_path: pathlib.Path, repo: pathlib.P
 def test_the_setups_resolved_prompt_is_staged_from_its_overlays(
     tmp_path: pathlib.Path, repo: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The driver renders ``prompt.json``: the repo's prompt.md with the setup's overlays (here a user's YAML file)."""
+    """The driver renders the staged ``prompt.md``: the repo's with the setup's overlays (here a user's YAML file)."""
     overlay = tmp_path / "mine.yaml"
     overlay.write_text("agent:\n  set:\n    rules: {text: 'my rules'}\n")
     (repo / "agent" / "prompt.md").write_text("@@section rules@@\nbase rules\n\n@@section task@@\n{{TASK}}\n")
     monkeypatch.setenv("AGENT_PROMPT_OVERLAYS", str(overlay))
     shared = tmp_path / "shared"
     materialize(repo, shared)
-    staged = prompt_blocks.load(shared / prompt_blocks.PROMPT_JSON)
-    assert prompt_blocks.render(staged) == "my rules\n\n{{TASK}}\n"
+    staged = (shared / "prompt.md").read_text(encoding="utf-8")
+    assert staged == "@@section rules@@\nmy rules\n\n@@section task@@\n{{TASK}}\n"
 
 
 def test_an_overlay_that_does_not_resolve_stops_the_launch(

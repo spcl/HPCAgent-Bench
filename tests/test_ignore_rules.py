@@ -57,7 +57,6 @@ GIT_IGNORED = [
     "core_nid002536_17693",
     "judge-agent-amd.sqsh",
     "agent/skills/opt-reports/SKILL.md",
-    "shared/prompt.json",
     ".env",
     "id_ed25519",
     "experiments/.env.llr40-qwen38-c",

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """A plugin packet's prompt table (``plugin.toml``) shapes the prompts of the setups that run it: the task prompt's
 sections are turned off or replaced, its ``about`` text follows the intro of both prompts, and the user's own overlays
-still win. The agent prompt takes it through the ``prompt.json`` the launcher stages."""
+still win. The agent prompt takes it through the ``prompt.md`` the launcher stages."""
 
 import pathlib
 from collections.abc import Iterator
@@ -146,8 +146,8 @@ def test_a_packet_reshapes_the_cluster_prompt_of_its_setups(
     )
     material = tmp_path / "material"
     material.mkdir()
-    (material / prompt_blocks.PROMPT_JSON).write_text(
-        prompt_build.resolve_layers([], "promptprobe").model_dump_json(), encoding="utf-8"
+    (material / "prompt.md").write_text(
+        prompt_blocks.resolved(prompt_build.resolve_layers([], "promptprobe")), encoding="utf-8"
     )
     driver = fresh("agent_driver")
     monkeypatch.setenv(driver.MATERIAL_DIR_ENV, str(material))

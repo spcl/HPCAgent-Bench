@@ -195,7 +195,7 @@ def test_without_a_packet_the_resolved_prompt_fills_no_workflow() -> None:
 
 
 def test_the_packets_workflow_fills_the_workflow_slot_of_the_resolved_prompt() -> None:
-    """prompt.json carries the workflow, so the driver has no slot left to fill."""
+    """The staged prompt.md carries the workflow, so the driver has no slot left to fill."""
     assert workflow_vars("autokernel") == {"WORKFLOW": WORKFLOW.read_text(encoding="utf-8").rstrip("\n")}
 
 
