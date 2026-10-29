@@ -76,6 +76,7 @@ __all__ = [
     "graded_nothing",
     "health",
     "judge_failed",
+    "next_phase",
     "preview_refusal",
     "profile",
     "read_route",
@@ -592,6 +593,16 @@ async def score(request: Request) -> Response:
     if refused is not None:
         return refused
     return relay(await forward(request, "/score", setup))
+
+
+@app.post("/next_phase")
+async def next_phase(request: Request) -> Response:
+    """End the caller's phase of its phased packet; the judge runs the default phases after it."""
+    body = await request.body()
+    refused = episode_id_refusal(body)
+    if refused is not None:
+        return refused
+    return relay(await forward(request, "/next_phase", caller_setup(request, body)))
 
 
 @app.post("/profile")
