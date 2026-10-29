@@ -188,6 +188,12 @@ def test_setup_tokens_refuses_a_frame_with_call_rows_and_no_task_records() -> No
         setup_names.setup_tokens(frame, "llr40-qwen38-c")
 
 
+def test_setup_tokens_of_a_setup_with_submissions_and_no_task_record_is_empty() -> None:
+    """A running study's setup has graded submissions but no task record yet: no kernel has a total."""
+    frame = observations(submission_rows("llr40-qwen38-c", {"k1": 2.0}))
+    assert setup_names.setup_tokens(frame, "llr40-qwen38-c") == ({}, {}, {})
+
+
 def test_the_control_condition_reads_no_packet_not_the_registry_skill_wording() -> None:
     """Beside CPF treatments (not skills) the control does not borrow the skills studies' "No Skill
     Packet" wording (``hpcagent_bench.packets.control_label``)."""

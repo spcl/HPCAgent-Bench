@@ -62,6 +62,8 @@ def setup_tokens(frame: pd.DataFrame, setup: str) -> tuple[dict[str, float], dic
     """
     subset = frame.loc[frame["setup"].astype(str) == setup]
     totals = population.kernel_tokens(subset, ("setup", "kernel"))
+    if totals.empty:  # no task row yet (a running study): no kernel has a total
+        return {}, {}, {}
     values = {str(kernel): float(value) for kernel, value in totals.droplevel(0).items() if value > 0}
     episodes = population.episode_tokens(population.latest_episodes(subset), ("setup", "kernel"))
     grouped = episodes.groupby("kernel").tokens
