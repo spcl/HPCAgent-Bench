@@ -1,14 +1,12 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""A skill page's frontmatter: the leading ``---`` YAML block every page (shipped ``skills/<name>/SKILL.md`` or an
-external one, :mod:`hpcagent_bench.external_skills`) opens with."""
+"""A skill page's frontmatter: the leading ``---`` YAML block every page (shipped ``skills/<name>/SKILL.md`` or a
+plugin's) opens with."""
 
 import pydantic
 import yaml
 
-from hpcagent_bench.vocabulary import PacketDevice
-
-__all__ = ["Applies", "PacketBlock", "SkillFrontmatter", "split_frontmatter", "without_packet_block"]
+__all__ = ["Applies", "SkillFrontmatter", "split_frontmatter"]
 
 
 class Applies(pydantic.BaseModel):
@@ -29,38 +27,6 @@ class Applies(pydantic.BaseModel):
     explicit: pydantic.StrictBool = False
 
 
-class PacketPrompt(pydantic.BaseModel):
-    """A packet's ``prompt`` block: what its setups' prompts change. ``overlays`` are prompt overlays applied before the
-    user's, in order (``docs/prompts.md``: built-in names, or YAML files, a plugin manifest's relative to the plugin
-    folder), each with an ``agent`` and a ``task`` half."""
-
-    model_config = pydantic.ConfigDict(extra="forbid", frozen=True)
-
-    overlays: tuple[str, ...] = ()
-
-
-class PacketBlock(pydantic.BaseModel):
-    """A page's ``packet:`` frontmatter block: the page registers itself as the packet of its directory's name
-    (:mod:`hpcagent_bench.skill_packets`), staging the page plus what the block adds. The fields are the packet
-    registry's (``docs/extending/registry.md``)."""
-
-    model_config = pydantic.ConfigDict(extra="forbid", frozen=True)
-
-    name: str
-    aliases: tuple[str, ...] = ()
-    #: A plugin manifest's packet: the pages it stages (a page's own block always stages the page itself).
-    skills: tuple[str, ...] = ()
-    packets: tuple[str, ...] = ()
-    tools: tuple[str, ...] = ()
-    agents: tuple[str, ...] = ()
-    env: dict[str, str] = pydantic.Field(default_factory=dict)
-    prompt: PacketPrompt = PacketPrompt()
-    device: PacketDevice | None = None
-    frozen: str = ""
-    marker: str = ""
-    short: str = ""
-
-
 class SkillFrontmatter(pydantic.BaseModel):
     """A ``SKILL.md``'s leading ``---`` block: its name, what it is for, when to open it, and where it applies."""
 
@@ -70,8 +36,6 @@ class SkillFrontmatter(pydantic.BaseModel):
     description: str = ""
     when: str = ""
     applies: Applies = Applies()
-    #: The packet this page registers as, or None for a page that is a skill only.
-    packet: PacketBlock | None = None
 
 
 def split_frontmatter(text: str) -> tuple[SkillFrontmatter, str]:
@@ -82,23 +46,3 @@ def split_frontmatter(text: str) -> tuple[SkillFrontmatter, str]:
         if sep:
             return SkillFrontmatter.model_validate(yaml.safe_load(raw) or {}), body.partition("\n")[2]
     return SkillFrontmatter(), text
-
-
-def without_packet_block(text: str) -> str:
-    """``text`` (a ``SKILL.md``) without its frontmatter's ``packet:`` block: the copy an agent is staged. The block
-    is the registry's (env switches, hue slot), not the agent's, and every other byte of the page stays as written."""
-    if not text.startswith("---\n"):
-        return text
-    end = text.index("\n---", 3)
-    head, rest = text[:end].split("\n"), text[end:]
-    kept: list[str] = []
-    inside = False
-    for line in head:
-        if line.startswith("packet:"):
-            inside = True
-            continue
-        if inside and (line.startswith((" ", "\t")) or not line):
-            continue
-        inside = False
-        kept.append(line)
-    return "\n".join(kept) + rest

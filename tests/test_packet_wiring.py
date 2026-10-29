@@ -187,7 +187,7 @@ def test_the_driver_allows_the_packet_tools(monkeypatch: pytest.MonkeyPatch) -> 
 def workflow_vars(packet: str) -> dict[str, str]:
     """The slots the resolved agent prompt of ``packet`` fills in its workflow block."""
     prompt = prompt_build.resolve_layers([], packet)
-    return next(dict(block.vars) for block in prompt.blocks if block.id == plugins.WORKFLOW_BLOCK)
+    return next(dict(block.vars) for block in prompt.blocks if block.id == prompt_build.WORKFLOW_BLOCK)
 
 
 def test_without_a_packet_the_resolved_prompt_fills_no_workflow() -> None:
@@ -199,7 +199,7 @@ def test_the_packets_workflow_fills_the_workflow_slot_of_the_resolved_prompt() -
     assert workflow_vars("autokernel") == {"WORKFLOW": WORKFLOW.read_text(encoding="utf-8").rstrip("\n")}
 
 
-def test_a_compiled_prompt_no_packet_registered_is_refused() -> None:
-    """An unknown packet prompt stops the prompt's resolution rather than launching agents without it."""
-    with pytest.raises(ValueError, match="nosuchpacket"):
-        prompt_build.load_overlay("plugin:autokernel/nosuchpacket")
+def test_an_overlay_its_plugin_does_not_ship_is_refused() -> None:
+    """An unknown overlay stops the prompt's resolution rather than launching agents without it."""
+    with pytest.raises(ValueError, match="ships no prompt/nosuch.yaml"):
+        prompt_build.load_overlay("autokernel:prompt/nosuch.yaml")

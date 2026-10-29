@@ -43,8 +43,8 @@ def run(payload: dict[str, Any]) -> dict[str, Any]:
 """
 
 
-def write_plugin(root: pathlib.Path, name: str, *, workflow: bool = True) -> pathlib.Path:
-    """A plugin folder with a tool, a skill page, a workflow text and a packet carrying all three."""
+def write_plugin(root: pathlib.Path, name: str, *, overlay: bool = True) -> pathlib.Path:
+    """A plugin folder with a tool, a skill page, a prompt overlay and a packet carrying all three."""
     folder = root / name
     (folder / "tools").mkdir(parents=True)
     (folder / "tools" / "echo.py").write_text(TOOL, encoding="utf-8")
@@ -52,12 +52,14 @@ def write_plugin(root: pathlib.Path, name: str, *, workflow: bool = True) -> pat
     (folder / "skills" / f"{name}-page" / "SKILL.md").write_text(
         f"---\nname: {name}-page\ndescription: probe\nwhen: never\n---\n\n# probe\n", encoding="utf-8"
     )
-    if workflow:
+    if overlay:
         (folder / "prompt").mkdir(parents=True)
-        (folder / "prompt" / "workflow.md").write_text("Probe the workflow.\n", encoding="utf-8")
+        (folder / "prompt" / "overlay.yaml").write_text(
+            "agent:\n  set:\n    workflow: {vars: {WORKFLOW: Probe the workflow.}}\n", encoding="utf-8"
+        )
     (folder / "plugin.toml").write_text(
         f'name = "{name}"\n\n[packets.{name}]\nname = "Probe"\nskills = ["{name}-page"]\ntools = ["probe_echo"]\n'
-        'workflow = "prompt/workflow.md"\n',
+        f'overlays = ["{name}:prompt/overlay.yaml"]\n',
         encoding="utf-8",
     )
     return folder
@@ -95,7 +97,7 @@ def test_a_plugin_tool_is_served_only_where_its_packet_carries_it(probe: pathlib
     assert served.run({})["ok"] is False
 
 
-def test_a_plugin_packet_takes_the_next_slot_and_names_its_compiled_prompt(
+def test_a_plugin_packet_takes_the_next_slot_and_names_its_overlay(
     probe: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     kind: Kind[PacketDef] = Kind("packets")
@@ -107,16 +109,16 @@ def test_a_plugin_packet_takes_the_next_slot_and_names_its_compiled_prompt(
         name="Probe",
         skills=("probeplugin-page",),
         tools=("probe_echo",),
-        prompt_overlays=("plugin:probeplugin/probeplugin",),
+        prompt_overlays=("probeplugin:prompt/overlay.yaml",),
     )
 
 
-def test_a_packet_naming_a_workflow_text_its_plugin_does_not_ship_is_refused(
+def test_a_packet_naming_an_overlay_its_plugin_does_not_ship_is_refused(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    folder = write_plugin(tmp_path, "noworkflow", workflow=False)
+    folder = write_plugin(tmp_path, "nooverlay", overlay=False)
     monkeypatch.setattr(plugins, "PACKETS", Kind[PacketDef]("packets"))
-    with pytest.raises(ValueError, match=r"names prompt/workflow\.md, which is not a file of the plugin"):
+    with pytest.raises(ValueError, match=r"names prompt/overlay\.yaml, which is not a file of the plugin"):
         plugins.register_packets(agent_plugins.find([folder]))
 
 
@@ -334,8 +336,8 @@ if __name__ == "__main__":
         patch.setenv(agent_plugins.USER_PLUGIN_DIRS_ENV, str(root / "user"))
         test_a_user_plugin_is_found_beside_the_shipped_ones(folder)
         test_a_plugin_tool_is_served_only_where_its_packet_carries_it(folder)
-        test_a_plugin_packet_takes_the_next_slot_and_names_its_compiled_prompt(folder, patch)
-        test_a_packet_naming_a_workflow_text_its_plugin_does_not_ship_is_refused(root / "noworkflow", patch)
+        test_a_plugin_packet_takes_the_next_slot_and_names_its_overlay(folder, patch)
+        test_a_packet_naming_an_overlay_its_plugin_does_not_ship_is_refused(root / "nooverlay", patch)
         test_two_plugins_of_one_name_are_refused(root / "twins")
         test_a_plugin_packet_named_like_a_registered_alias_is_refused_and_adds_nothing(root / "alias", patch)
         test_packets_composing_each_other_are_refused_and_add_nothing(root / "loop", patch)

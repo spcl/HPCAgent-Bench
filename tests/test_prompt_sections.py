@@ -116,19 +116,6 @@ def test_a_section_replaced_by_a_file_renders_that_file_as_a_template(tmp_path: 
     assert "monotonic wall clock" not in text
 
 
-def test_a_replacement_may_include_a_template_from_the_user_template_dir(tmp_path: pathlib.Path) -> None:
-    write(tmp_path, "house/response.j2", "## Response\nAnswer in JSON, language {{ language }}.\n")
-    mine = task_overlay(tmp_path, "house", "set:\n  response: {text: '{% include \"house/response.j2\" %}'}")
-    prompt_config = with_overlays(mine, template_dirs=(str(tmp_path),))
-    assert build_prompt(TASK, prompt_config=prompt_config).endswith("## Response\nAnswer in JSON, language c.\n")
-
-
-def test_a_user_template_dir_shadows_a_section_by_path(tmp_path: pathlib.Path) -> None:
-    write(tmp_path, "sections/correctness.j2", "## Correctness\nShadowed for {{ kernel }}.\n\n")
-    text = build_prompt(TASK, prompt_config=PromptConfig.from_config(template_dirs=(str(tmp_path),)))
-    assert "Shadowed for gemm." in text
-
-
 def test_a_replacement_reaches_every_include_of_the_section(tmp_path: pathlib.Path) -> None:
     """``build_flags`` is included by delivery.j2 and by service_task.j2, so one overlay changes both prompts."""
     mine = task_overlay(tmp_path, "flags", 'set:\n  build_flags: {text: "### Flags\\nSee the house build page.\\n\\n"}')
@@ -340,8 +327,6 @@ if __name__ == "__main__":
         test_a_section_an_overlay_turns_off_renders_nothing_and_leaves_no_gap,
         test_later_overlays_win_in_both_directions,
         test_a_section_replaced_by_a_file_renders_that_file_as_a_template,
-        test_a_replacement_may_include_a_template_from_the_user_template_dir,
-        test_a_user_template_dir_shadows_a_section_by_path,
         test_a_replacement_reaches_every_include_of_the_section,
         test_a_block_is_inserted_before_and_after_a_section_with_its_slots_filled,
         test_an_inserted_text_without_a_trailing_newline_still_ends_in_one_blank_line,

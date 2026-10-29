@@ -14,6 +14,7 @@ import pydantic
 __all__ = [
     "SECTION",
     "SLOT",
+    "TEMPLATE_SYNTAX",
     "Block",
     "Edit",
     "Insert",
@@ -34,6 +35,10 @@ SECTION = re.compile(r"^@@section ([a-z_][a-z0-9_+]*)@@\n", re.MULTILINE)
 
 #: A ``{{KEY}}`` slot.
 SLOT = re.compile(r"\{\{([A-Za-z_][A-Za-z0-9_:]*)\}\}")
+
+#: A task-prompt value (``{{ lib_name }}``) or template statement (``{% if %}``): Jinja syntax only the task prompt
+#: renders. The agent prompt fills ``{{UPPER}}`` slots alone, so its texts may hold neither.
+TEMPLATE_SYNTAX = re.compile(r"\{\{\s*[a-z_]|\{%")
 
 
 def normalized(text: str) -> str:

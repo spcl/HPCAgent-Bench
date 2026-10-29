@@ -1,8 +1,8 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""A plugin packet's prompt table (``plugin.toml``) shapes the prompts of the setups that run it: the task prompt's
-sections are turned off or replaced, its ``about`` text follows the intro of both prompts, and the user's own overlays
-still win. The agent prompt takes it through the ``prompt.md`` the launcher stages."""
+"""A plugin packet's prompt overlays (``overlays = ["<plugin>:<path>"]``) shape the prompts of the setups that run it:
+the task prompt's sections are turned off or replaced, an inserted text follows the intro of both prompts, and the
+user's own overlays still win. The agent prompt takes it through the ``prompt.md`` the launcher stages."""
 
 import pathlib
 from collections.abc import Iterator
@@ -32,15 +32,16 @@ TEXTS = {
 }
 
 
-def registered_plugin(root: pathlib.Path, name: str, table: str) -> pathlib.Path:
-    """Register a plugin whose packet ``name`` has the prompt keys ``table`` (TOML lines of ``[packets.<name>]``) and
+def registered_plugin(root: pathlib.Path, name: str, overlay: str) -> pathlib.Path:
+    """Register a plugin whose packet ``name`` applies ``overlay`` (``prompt/overlay.yaml``, ``{name}`` filled) and
     ships :data:`TEXTS` under ``prompt/``."""
     folder = root / name
     (folder / "prompt").mkdir(parents=True)
     for file, text in TEXTS.items():
         (folder / "prompt" / file).write_text(text, encoding="utf-8")
+    (folder / "prompt" / "overlay.yaml").write_text(overlay.replace("{name}", name), encoding="utf-8")
     (folder / "plugin.toml").write_text(
-        f'name = "{name}"\n\n[packets.{name}]\nname = "{name}"\n{table}\n',
+        f'name = "{name}"\n\n[packets.{name}]\nname = "{name}"\noverlays = ["{name}:prompt/overlay.yaml"]\n',
         encoding="utf-8",
     )
     plugins.register_packets(agent_plugins.find([folder]))
@@ -51,15 +52,19 @@ def registered_plugin(root: pathlib.Path, name: str, table: str) -> pathlib.Path
 
 
 #: A packet that replaces the task prompt's timing and drops its scoring.
-TIMING_OFF_SCORING = 'replace = { timing = "prompt/timing.md" }\noff = ["scoring"]'
-#: A packet that says what it does after the intro.
-ABOUT = 'about = "prompt/about.md"'
+TIMING_OFF_SCORING = 'task:\n  set:\n    timing: {text: "file:timing.md"}\n    scoring: {enabled: false}\n'
+#: A packet that says what it does after the intro of both prompts.
+ABOUT = "".join(
+    f'{half}:\n  insert:\n    - {{after: intro, block: {{id: "{{name}}", text: "file:about.md"}}}}\n'
+    for half in ("agent", "task")
+)
 
 
 @pytest.fixture
-def plugin_root(tmp_path: pathlib.Path) -> Iterator[pathlib.Path]:
-    """A folder for plugins registered into the packet vocabulary, which is left as it was found."""
+def plugin_root(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[pathlib.Path]:
+    """A folder for user plugins registered into the packet vocabulary, which is left as it was found."""
     tags.registry()  # the shipped and installed plugins register first, once
+    monkeypatch.setenv(agent_plugins.USER_PLUGIN_DIRS_ENV, str(tmp_path))
     entries, orders = dict(PACKETS.entries), dict(PACKETS.orders)
     yield tmp_path
     PACKETS.entries.clear()
@@ -94,9 +99,9 @@ def test_the_users_own_overlays_win_over_the_packet(plugin_root: pathlib.Path, t
     assert "The plugin times gemm itself." in sut
 
 
-def test_two_packets_apply_their_tables_in_spec_order(plugin_root: pathlib.Path) -> None:
-    registered_plugin(plugin_root, "promptone", 'replace = { timing = "prompt/timing.md" }')
-    registered_plugin(plugin_root, "prompttwo", 'replace = { timing = "prompt/timing_two.md" }')
+def test_two_packets_apply_their_overlays_in_spec_order(plugin_root: pathlib.Path) -> None:
+    registered_plugin(plugin_root, "promptone", 'task:\n  set:\n    timing: {text: "file:timing.md"}\n')
+    registered_plugin(plugin_root, "prompttwo", 'task:\n  set:\n    timing: {text: "file:timing_two.md"}\n')
 
     with config.overridden("record.packet", "promptone+prompttwo"):
         sut = build_prompt(TASK)
@@ -117,10 +122,10 @@ def test_a_gpu_setup_takes_the_device_form_of_its_packet_in_both_prompts(
 
     with config.overridden("record.packet", "promptprobe"), config.overridden("record.language", "hip"):
         sut = build_prompt(TASK)
-        overlays = PromptConfig.resolve().overlays
+        task_packet = PromptConfig.resolve().packet
         agent_packet = prompt_build.env_layers(environ)[1]
 
-    assert overlays == packets.prompt_layers(agent_packet) == packets.prompt_layers("promptprobegpu")
+    assert task_packet == agent_packet == "promptprobegpu"
     assert "The plugin also counts the kernel's calls." in sut
     assert "The plugin times gemm itself." not in sut
 
@@ -142,7 +147,8 @@ def test_a_packet_reshapes_the_cluster_prompt_of_its_setups(
     registered_plugin(
         plugin_root,
         "promptprobe",
-        'off = ["build"]\nreplace = { keep_improving = "prompt/keep.md" }\nabout = "prompt/about.md"',
+        'agent:\n  set:\n    build: {enabled: false}\n    keep_improving: {text: "file:keep.md"}\n'
+        '  insert:\n    - {after: intro, block: {id: promptprobe, text: "file:about.md"}}\n',
     )
     material = tmp_path / "material"
     material.mkdir()
@@ -169,8 +175,10 @@ def test_the_cluster_prompt_without_a_packet_keeps_every_section_and_no_section_
 
 
 def test_a_block_no_prompt_has_is_refused(plugin_root: pathlib.Path) -> None:
-    with pytest.raises(ValueError, match=r"names blocks \['nosuch'\] that no prompt has"):
-        registered_plugin(plugin_root, "promptprobe", 'off = ["nosuch"]')
+    registered_plugin(plugin_root, "promptprobe", "task:\n  set:\n    nosuch: {enabled: false}\n")
+
+    with config.overridden("record.packet", "promptprobe"), pytest.raises(ValueError, match="nosuch"):
+        build_prompt(TASK)
 
 
 def test_the_users_own_inserted_text_follows_the_packets(plugin_root: pathlib.Path, tmp_path: pathlib.Path) -> None:

@@ -178,7 +178,7 @@ def test_the_setups_resolved_prompt_is_staged_from_its_overlays(
     overlay = tmp_path / "mine.yaml"
     overlay.write_text("agent:\n  set:\n    rules: {text: 'my rules'}\n")
     (repo / "agent" / "prompt.md").write_text("@@section rules@@\nbase rules\n\n@@section task@@\n{{TASK}}\n")
-    monkeypatch.setenv("AGENT_PROMPT_OVERLAYS", str(overlay))
+    monkeypatch.setenv("HPCAGENT_BENCH_PROMPT_OVERLAYS", str(overlay))
     shared = tmp_path / "shared"
     materialize(repo, shared)
     staged = (shared / "prompt.md").read_text(encoding="utf-8")
@@ -189,7 +189,7 @@ def test_an_overlay_that_does_not_resolve_stops_the_launch(
     tmp_path: pathlib.Path, repo: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A typo in an overlay name would otherwise ship the base prompt to every agent of the setup."""
-    monkeypatch.setenv("AGENT_PROMPT_OVERLAYS", "no-such-overlay")
+    monkeypatch.setenv("HPCAGENT_BENCH_PROMPT_OVERLAYS", "no-such-overlay")
     done = subprocess.run(
         [str(SCRIPT), str(repo), str(tmp_path / "shared")], capture_output=True, text=True, check=False
     )

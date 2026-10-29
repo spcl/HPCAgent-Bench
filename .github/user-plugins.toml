@@ -4,12 +4,6 @@
 
 [plugins.nestforge]
 repository = "https://github.com/spcl/NestForge.git"
-branch = "main"
-commit = "a74b14692d0b469a29dcc0643397aced8efa8061"
+branch = "hb-v040-overlays"
+commit = "540bda4c961221eb403e959f0f886e441d2caf10"
 folder = "plugin/nestforge"
-
-[plugins.alloy]
-repository = "https://github.com/ThrudPrimrose/alloy.git"
-branch = "main"
-commit = "35f656d01439d73c5b625d838570427b0c3fd3f9"
-folder = "alloy/hb_plugin"

@@ -38,6 +38,8 @@ __all__ = [
     "USER_PLUGIN_DIRS_ENV",
     "Manifest",
     "Plugin",
+    "copied_files",
+    "copied_without",
     "digest",
     "entry_point_dirs",
     "find",
@@ -50,6 +52,7 @@ __all__ = [
     "read",
     "roots",
     "stage_agents",
+    "tree_digest",
 ]
 
 MANIFEST = "plugin.toml"
@@ -99,7 +102,7 @@ class Checks(pydantic.BaseModel):
 
 class Manifest(pydantic.BaseModel):
     """A plugin's ``plugin.toml``: the optimizers it adds. ``packets`` maps a packet key (what an LLM agent runs)
-    to its ``packet:`` block fields; ``flavors`` maps a flavor key (an optimizer that runs without an LLM over shipped
+    to its ``[packets.<key>]`` table (``hpcagent_bench.skill_packets.PacketTable``); ``flavors`` maps a flavor key (an optimizer that runs without an LLM over shipped
     columns) to its ``flavors.<key>`` block (``hpcagent_bench.plugins.FlavorBlock``); ``phases`` maps a phase id to
     its ``phases.<id>`` block (``hpcagent_bench.plugins.PhaseBlock``), the steps its packets order."""
 
@@ -272,16 +275,18 @@ def import_tools(environ: Mapping[str, str] = os.environ) -> tuple[Plugin, ...]:
     return found
 
 
-@functools.lru_cache(maxsize=None, typed=True)
-def digest(root: pathlib.Path) -> str:
-    """The sha256 of every file under ``root`` (path and content, caches excluded), recorded with each row."""
+def tree_digest(root: pathlib.Path) -> str:
+    """The sha256 of the files under ``root`` an install copies (:func:`copied_files`): path and content."""
     sha = hashlib.sha256()
-    for path in sorted(root.rglob("*")):
-        if path.is_file() and "__pycache__" not in path.parts:
-            sha.update(path.relative_to(root).as_posix().encode())
-            sha.update(b"\0")
-            sha.update(path.read_bytes())
+    for path in sorted(copied_files(root)):
+        sha.update(path.relative_to(root).as_posix().encode())
+        sha.update(b"\0")
+        sha.update(path.read_bytes())
     return sha.hexdigest()
+
+
+#: :func:`tree_digest` once per folder and process: what a results row records for a plugin.
+digest = functools.lru_cache(maxsize=None, typed=True)(tree_digest)
 
 
 def stage_agents(home: pathlib.Path, environ: Mapping[str, str] = os.environ) -> tuple[str, ...]:
@@ -320,6 +325,18 @@ def copied_without(root: pathlib.Path) -> Callable[[str, list[str]], set[str]]:
         }
 
     return ignore
+
+
+def copied_files(root: pathlib.Path) -> list[pathlib.Path]:
+    """The files a copy of ``root`` takes (:func:`copied_without`), pruning the folders it leaves without walking
+    them."""
+    ignored = copied_without(root)
+    files: list[pathlib.Path] = []
+    for folder, dirnames, filenames in os.walk(root):
+        dropped = ignored(folder, [*dirnames, *filenames])
+        dirnames[:] = [name for name in dirnames if name not in dropped]
+        files.extend(pathlib.Path(folder) / name for name in filenames if name not in dropped)
+    return files
 
 
 def install_root(plugin: Plugin) -> pathlib.Path | None:

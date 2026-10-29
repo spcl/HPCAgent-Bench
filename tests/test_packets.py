@@ -207,13 +207,13 @@ def test_resolve_no_score_tool_sets_the_blind_mode() -> None:
     assert resolved.env == (("AGENT_SUBMISSION_MODE", "blind"),)
 
 
-def test_resolve_autokernel_carries_its_tool_and_its_prompt_table() -> None:
+def test_resolve_autokernel_carries_its_tool_and_its_prompt_overlay() -> None:
     resolved = packets.resolve("autokernel", "c")
     assert resolved.key == "autokernel"
     assert resolved.tools == ("experiment",)
     assert resolved.env == ()
     assert resolved.skills == ()
-    assert packets.prompt_layers("autokernel") == ("plugin:autokernel/autokernel",)
+    assert packets.prompt_layers("autokernel") == ("autokernel:prompt/overlay.yaml",)
 
 
 def test_resolve_all_in_composes_cpf_src_dc_profiling_and_lang() -> None:
