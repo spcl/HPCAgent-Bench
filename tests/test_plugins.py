@@ -57,7 +57,7 @@ def write_plugin(root: pathlib.Path, name: str, *, workflow: bool = True) -> pat
         (folder / "prompt" / "workflow.md").write_text("Probe the workflow.\n", encoding="utf-8")
     (folder / "plugin.toml").write_text(
         f'name = "{name}"\n\n[packets.{name}]\nname = "Probe"\nskills = ["{name}-page"]\ntools = ["probe_echo"]\n'
-        'prompt.workflow = "prompt/workflow.md"\n',
+        'workflow = "prompt/workflow.md"\n',
         encoding="utf-8",
     )
     return folder

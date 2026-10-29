@@ -36,11 +36,10 @@ description = "One line on what the plugin adds."
 [packets.my_packet]             # a packet key; it takes the next colour slot
 name = "My Packet"
 tools = ["my_tool"]
-prompt.workflow = "prompt/workflow.md"
+workflow = "prompt/workflow.md"
 ```
 
-A packet takes the registry's fields ([packets.md](packets.md)), plus `extends`, `phases`, `modes` and its `prompt`
-table below. A plugin's packets take the next slots when it is loaded. Names are one namespace, checked before
+A packet takes the registry's fields ([packets.md](packets.md)), plus `extends`, `agent` and the prompt keys below. A plugin's packets take the next slots when it is loaded. Names are one namespace, checked before
 anything of the plugin is registered: a packet key or alias that is already registered or names a shipped skill page,
 a skill page with a shipped page's name, and a page or subagent another plugin also ships are refused. A plugin's
 `tools/<tool>.md` prompt fragment adds a tool's documentation; one named like a built-in fragment is never rendered.
@@ -50,34 +49,35 @@ git, that checkout's commit.
 
 ### A packet's prompt
 
-The `[packets.<key>.prompt]` table changes both prompts of the setups that run the packet ([prompts.md](../prompts.md)):
-the cluster prompt (`agent`, `agent/prompt.md`, the one Claude Code and the other cluster harnesses read) and the
-in-process one (`task`). The benchmark compiles the table into the packet's prompt overlay, applied before the user's
+Four keys of `[packets.<key>]` change both prompts of the setups that run the packet ([prompts.md](../prompts.md)):
+the cluster prompt (`agent/prompt.md`, the one Claude Code and the other cluster harnesses read) and the in-process
+task prompt. The benchmark compiles them into the packet's prompt overlay, applied before the user's
 `prompt.overlays` (`AGENT_PROMPT_OVERLAYS` on the cluster), so the user still has the last word.
 
 ```toml
-[packets.my_packet.prompt]
+[packets.my_packet]
+name = "My Packet"
 about = "prompt/about.md"                   # inserted after the intro of both prompts: what the plugin does
-workflow = "prompt/workflow.md"             # the workflow both prompts show (a packet with phases spells its own)
-off.agent = ["build", "syntax_check"]       # agent-prompt blocks switched off
-off.task = ["build_flags"]                  # task-prompt sections switched off
-replace.agent = { end_to_end = "prompt/agent/end_to_end.md" }
-replace.task = { delivery = "prompt/task/delivery.md" }
+workflow = "prompt/workflow.md"             # the workflow both prompts show (a plugin with phases spells its own)
+off = ["build", "syntax_check", "build_flags"]
+replace = { end_to_end = "prompt/end_to_end.md", delivery = "prompt/delivery.md" }
 ```
 
-Every text is a Markdown file inside the plugin folder. A text reaching the agent prompt is plain Markdown that may
-use the agent prompt's slots (`{{MODE:closing}}`, `{{BUDGET}}`); a text replacing a task-prompt section may use the
-task prompt's values (`{{ lib_name }}`, `{{ symbol }}`). A text bound for the agent prompt that holds a task value is
-refused, since the agent prompt never renders one; so is a missing file, a block both switched off and replaced, and
-an unknown block. `hpcagent-bench prompt <kernel> --blocks` lists the task prompt's sections and
-`python -m hpcagent_bench.prompt_build --packet <key> --show` the agent prompt's blocks, with what changed each.
+`off` switches blocks off and `replace` gives a block a new text. A block id names a block of whichever prompt has it
+(`intro` is in both): `build` is a cluster-prompt block, `build_flags` and `delivery` task-prompt sections. An id in
+neither prompt is refused, so is a missing file and a block both switched off and replaced. Every text is a Markdown
+file inside the plugin folder. A text reaching the cluster prompt is plain Markdown that may use its slots
+(`{{MODE:closing}}`, `{{BUDGET}}`) and is refused when it holds a task value; a text replacing a task-prompt section
+may use the task prompt's values (`{{ lib_name }}`, `{{ symbol }}`). `hpcagent-bench prompt <kernel> --blocks` lists
+the task prompt's sections and `python -m hpcagent_bench.prompt_build --packet <key> --show` the cluster prompt's
+blocks, with what changed each.
 
 ### Phases
 
-A plugin whose work comes in steps declares them once as phases; a packet lists the phases it runs, in order, and
-who runs each: the agent, with the phase's tools, or the plugin's default. The packet's tools are those of the phases
-the agent runs plus its own `tools`, and its workflow names every phase with who runs it: the phase's `text` for the
-agent, its one-line `summary` for a default.
+A plugin may split its work into `[phases.<id>]`, in file order. Every packet of the plugin runs them all; its `agent`
+names the phases the agent works with the phase's tools, and every other phase runs on the plugin's default. The
+packet's tools are those of its agent phases plus its own `tools`, and its workflow names every phase with who runs
+it: the phase's `text` for the agent, its one-line `summary` for a default.
 
 ```toml
 [phases.moves]
@@ -85,34 +85,31 @@ title = "Moves"
 summary = "The default fusion is applied."
 text = "prompt/phases/moves.md"            # needed once a packet lets the agent run the phase
 tools = ["list_moves", "apply_move"]
-budget = 200000                             # tokens the agent may spend in it; then its tools are refused
+default = { tool = "run_defaults", args = { stage = "moves" } }  # what next_phase calls when it is not the agent's
 
 [phases.kernels]
 title = "Kernel code"
 summary = "Each kernel is built from its rendered source."
 text = "prompt/phases/kernels.md"
 tools = ["read_kernel", "write_kernel"]
-mode = "default"                           # who runs it unless a packet says otherwise (default: "agent")
-default = { tool = "run_defaults", args = { stage = "kernels" } }  # what next_phase calls to run it
 
 [packets.my_packet]
 name = "My Packet"
-phases = ["moves", "kernels"]
+agent = ["moves"]                           # kernels runs on its default
 tools = ["finalize"]
 
 [packets.my_packet-full]
-extends = "my_packet"                      # starts from my_packet: tables merge key by key, lists replace
+extends = "my_packet"                       # starts from my_packet: tables merge key by key, lists replace
 name = "My Packet (all phases)"
-modes = { kernels = "agent" }
+agent = ["moves", "kernels"]
 ```
 
-A packet with phases takes no `workflow` text: its phases are its workflow.
+A plugin with phases takes no `workflow` text: its phases are its workflow.
 
 At run time each kernel of an episode is in one agent phase, the first at its first call. A packet with an agent phase
 carries the `next_phase` tool: it ends that phase, the judge calls each following default phase's `default` (`POST
 /<plugin>/<tool>` with `args`, as the agent's own call would), answers with what each returned, and moves the kernel to
-the next agent phase, the first again after the last. A tool of a later agent phase is refused until then, and the
-current phase's tools once it spent its `budget` (counted from the token total every tool call reports). Every grade
+the next agent phase, the first again after the last. A tool of a later agent phase is refused until then. Every grade
 row records its phase (`grades.phase`). The plugin's tools must be served at `/<plugin name>/<tool>`.
 
 ### Installing the plugin's package

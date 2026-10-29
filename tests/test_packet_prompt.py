@@ -33,14 +33,14 @@ TEXTS = {
 
 
 def registered_plugin(root: pathlib.Path, name: str, table: str) -> pathlib.Path:
-    """Register a plugin whose packet ``name`` has the prompt table ``table`` (TOML lines of
-    ``[packets.<name>.prompt]``) and ships :data:`TEXTS` under ``prompt/``."""
+    """Register a plugin whose packet ``name`` has the prompt keys ``table`` (TOML lines of ``[packets.<name>]``) and
+    ships :data:`TEXTS` under ``prompt/``."""
     folder = root / name
     (folder / "prompt").mkdir(parents=True)
     for file, text in TEXTS.items():
         (folder / "prompt" / file).write_text(text, encoding="utf-8")
     (folder / "plugin.toml").write_text(
-        f'name = "{name}"\n\n[packets.{name}]\nname = "{name}"\n\n[packets.{name}.prompt]\n{table}\n',
+        f'name = "{name}"\n\n[packets.{name}]\nname = "{name}"\n{table}\n',
         encoding="utf-8",
     )
     plugins.register_packets(agent_plugins.find([folder]))
@@ -51,7 +51,7 @@ def registered_plugin(root: pathlib.Path, name: str, table: str) -> pathlib.Path
 
 
 #: A packet that replaces the task prompt's timing and drops its scoring.
-TIMING_OFF_SCORING = 'replace.task = { timing = "prompt/timing.md" }\noff.task = ["scoring"]'
+TIMING_OFF_SCORING = 'replace = { timing = "prompt/timing.md" }\noff = ["scoring"]'
 #: A packet that says what it does after the intro.
 ABOUT = 'about = "prompt/about.md"'
 
@@ -95,8 +95,8 @@ def test_the_users_own_overlays_win_over_the_packet(plugin_root: pathlib.Path, t
 
 
 def test_two_packets_apply_their_tables_in_spec_order(plugin_root: pathlib.Path) -> None:
-    registered_plugin(plugin_root, "promptone", 'replace.task = { timing = "prompt/timing.md" }')
-    registered_plugin(plugin_root, "prompttwo", 'replace.task = { timing = "prompt/timing_two.md" }')
+    registered_plugin(plugin_root, "promptone", 'replace = { timing = "prompt/timing.md" }')
+    registered_plugin(plugin_root, "prompttwo", 'replace = { timing = "prompt/timing_two.md" }')
 
     with config.overridden("record.packet", "promptone+prompttwo"):
         sut = build_prompt(TASK)
@@ -142,7 +142,7 @@ def test_a_packet_reshapes_the_cluster_prompt_of_its_setups(
     registered_plugin(
         plugin_root,
         "promptprobe",
-        'off.agent = ["build"]\nreplace.agent = { keep_improving = "prompt/keep.md" }\nabout = "prompt/about.md"',
+        'off = ["build"]\nreplace = { keep_improving = "prompt/keep.md" }\nabout = "prompt/about.md"',
     )
     material = tmp_path / "material"
     material.mkdir()
@@ -168,11 +168,9 @@ def test_the_cluster_prompt_without_a_packet_keeps_every_section_and_no_section_
     assert "Parallelize first" in sut
 
 
-def test_a_cluster_block_the_prompt_lacks_is_refused(plugin_root: pathlib.Path) -> None:
-    registered_plugin(plugin_root, "promptprobe", 'off.agent = ["nosuch"]')
-
-    with pytest.raises(ValueError, match="nosuch"):
-        prompt_build.resolve_layers([], "promptprobe")
+def test_a_block_no_prompt_has_is_refused(plugin_root: pathlib.Path) -> None:
+    with pytest.raises(ValueError, match=r"names blocks \['nosuch'\] that no prompt has"):
+        registered_plugin(plugin_root, "promptprobe", 'off = ["nosuch"]')
 
 
 def test_the_users_own_inserted_text_follows_the_packets(plugin_root: pathlib.Path, tmp_path: pathlib.Path) -> None:

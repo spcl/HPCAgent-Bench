@@ -32,7 +32,6 @@ __all__ = [
     "PhaseBlock",
     "PhaseCall",
     "PluginPacketBlock",
-    "PluginPrompt",
     "compiled_overlay",
     "entry_point_dirs",
     "fingerprint",
@@ -42,6 +41,7 @@ __all__ = [
     "main",
     "packet_definition",
     "packet_phase",
+    "prompt_block_ids",
     "page_path",
     "provenance",
     "recorded",
@@ -71,11 +71,10 @@ class PhaseCall(pydantic.BaseModel):
 
 
 class PhaseBlock(pydantic.BaseModel):
-    """A plugin's ``[phases.<id>]``: one step of its packets' workflow. ``summary`` says in one line what the plugin
-    does in it by default, ``text`` (a Markdown file, needed once a packet lets the agent run it) how the agent works
-    it with ``tools``; ``mode`` is who runs it unless a packet says otherwise. ``default`` is the call ``next_phase``
-    makes for a default phase (none: the plugin finishes it on its own), ``budget`` the tokens the agent may spend in
-    it before its tools are refused."""
+    """A plugin's ``[phases.<id>]``: one step of its packets' workflow, in file order. ``summary`` says in one line what
+    the plugin does in it by default, ``text`` (a Markdown file, needed once a packet lets the agent run it) how the
+    agent works it with ``tools``; ``default`` is the call ``next_phase`` makes when the phase is not the agent's
+    (none: the plugin finishes it on its own)."""
 
     model_config = pydantic.ConfigDict(extra="forbid", frozen=True)
 
@@ -83,48 +82,16 @@ class PhaseBlock(pydantic.BaseModel):
     summary: str = pydantic.Field(min_length=1)
     text: TextPath | None = None
     tools: tuple[str, ...] = ()
-    mode: Mode = "agent"
     default: PhaseCall | None = None
-    budget: int | None = pydantic.Field(None, gt=0)
-
-
-class PromptBlocks(pydantic.BaseModel):
-    """Block ids per prompt: ``agent`` (the cluster prompt) and ``task`` (the in-process prompt)."""
-
-    model_config = pydantic.ConfigDict(extra="forbid", frozen=True)
-
-    agent: tuple[BlockId, ...] = ()
-    task: tuple[BlockId, ...] = ()
-
-
-class PromptTexts(pydantic.BaseModel):
-    """Block id -> the Markdown file replacing its text, per prompt."""
-
-    model_config = pydantic.ConfigDict(extra="forbid", frozen=True)
-
-    agent: dict[BlockId, TextPath] = pydantic.Field(default_factory=dict[str, str])
-    task: dict[BlockId, TextPath] = pydantic.Field(default_factory=dict[str, str])
-
-
-class PluginPrompt(pydantic.BaseModel):
-    """A plugin packet's ``[packets.<key>.prompt]`` table, compiled into the packet's prompt overlay
-    (:func:`compile_overlay`): ``about`` is inserted after the intro of both prompts, ``workflow`` (a packet without
-    phases) is the workflow both prompts show, ``off`` switches blocks off and ``replace`` replaces a block's text, per
-    prompt. Every path is relative to the plugin folder; a text reaching the agent prompt is plain Markdown, one
-    reaching the task prompt may use the task prompt's values (``{{ lib_name }}``)."""
-
-    model_config = pydantic.ConfigDict(extra="forbid", frozen=True)
-
-    about: TextPath | None = None
-    workflow: TextPath | None = None
-    off: PromptBlocks = PromptBlocks()
-    replace: PromptTexts = PromptTexts()
 
 
 class PluginPacketBlock(pydantic.BaseModel):
     """A plugin manifest's ``[packets.<key>]``: the packet registry's fields (``docs/extending/registry.md``) plus
-    ``extends`` (a packet of the same plugin whose fields this one starts from), ``phases`` (the plugin's phases, in
-    order), ``modes`` (who runs a phase in this packet, over the phase's own ``mode``) and its ``prompt`` table."""
+    ``extends`` (a packet of the same plugin whose fields this one starts from), ``agent`` (the plugin's phases the
+    agent runs; every other phase runs on its default) and the prompt keys (:func:`compile_overlay`): ``about`` is
+    inserted after the intro of both prompts, ``workflow`` (a plugin without phases) is the workflow both prompts show,
+    ``off`` switches blocks off and ``replace`` replaces a block's text, each block id in whichever prompt has it.
+    Every path is relative to the plugin folder."""
 
     model_config = pydantic.ConfigDict(extra="forbid", frozen=True)
 
@@ -133,12 +100,14 @@ class PluginPacketBlock(pydantic.BaseModel):
     extends: str = ""
     skills: tuple[str, ...] = ()
     packets: tuple[str, ...] = ()
-    phases: tuple[str, ...] = ()
-    modes: dict[str, Mode] = pydantic.Field(default_factory=dict[str, Mode])
+    agent: tuple[str, ...] = ()
     tools: tuple[str, ...] = ()
     agents: tuple[str, ...] = ()
     env: dict[str, str] = pydantic.Field(default_factory=dict[str, str])
-    prompt: PluginPrompt = PluginPrompt()
+    about: TextPath | None = None
+    workflow: TextPath | None = None
+    off: tuple[BlockId, ...] = ()
+    replace: dict[BlockId, TextPath] = pydantic.Field(default_factory=dict[str, str])
     device: PacketDevice | None = None
     frozen: str = ""
     marker: str = ""
@@ -247,8 +216,6 @@ def plugin_phases(plugin: Plugin) -> dict[str, PhaseBlock]:
             phase = PhaseBlock.model_validate(raw)
         except pydantic.ValidationError as exc:
             raise ValueError(f"plugin {plugin.name!r}: phase {name!r}: {exc}") from exc
-        if phase.mode == "agent" and phase.text is None:
-            raise ValueError(f"plugin {plugin.name!r}: phase {name!r} is run by the agent but has no text")
         if phase.text is not None and TEMPLATE_SYNTAX.search(plain_text(plugin, phase.text, f"phase {name!r}")):
             raise ValueError(f"plugin {plugin.name!r}: phase {name!r} text {phase.text} holds template syntax")
         phases[name] = phase
@@ -269,26 +236,22 @@ def plain_text(plugin: Plugin, relative: str, what: str) -> str:
 def packet_modes(
     plugin: Plugin, key: str, block: PluginPacketBlock, phases: Mapping[str, PhaseBlock]
 ) -> dict[str, Mode]:
-    """Who runs each phase of packet ``key``, in its order: the packet's ``modes`` over each phase's own.
+    """Who runs each of the plugin's phases in packet ``key``, in file order: the agent those ``agent`` names.
 
-    :raises ValueError: a phase or mode names a phase the plugin or packet does not have, or a packet has both
-        phases and a ``workflow`` text (each is its workflow).
+    :raises ValueError: ``agent`` names a phase the plugin does not declare or one without a text, or the plugin has
+        phases and the packet a ``workflow`` text (its phases are its workflow).
     """
-    if unknown := [name for name in block.phases if name not in phases]:
+    if unknown := [name for name in block.agent if name not in phases]:
         raise ValueError(f"plugin {plugin.name!r}: packet {key!r} names phases {unknown} the plugin does not declare")
-    if stray := sorted(set(block.modes) - set(block.phases)):
-        raise ValueError(f"plugin {plugin.name!r}: packet {key!r} sets modes of phases {stray} it does not run")
-    if block.phases and block.prompt.workflow:
+    if phases and block.workflow:
         raise ValueError(
             f"plugin {plugin.name!r}: packet {key!r} has phases and a workflow; its phases are its workflow"
         )
-    modes: dict[str, Mode] = {name: block.modes.get(name, phases[name].mode) for name in block.phases}
-    for name, mode in modes.items():
-        if mode == "agent" and phases[name].text is None:
-            raise ValueError(
-                f"plugin {plugin.name!r}: packet {key!r} lets the agent run phase {name!r}, which has no text"
-            )
-    return modes
+    if untold := [name for name in block.agent if phases[name].text is None]:
+        raise ValueError(
+            f"plugin {plugin.name!r}: packet {key!r} lets the agent run phases {untold}, which have no text"
+        )
+    return {name: "agent" if name in block.agent else "default" for name in phases}
 
 
 def workflow_text(plugin: Plugin, modes: Mapping[str, Mode], phases: Mapping[str, PhaseBlock]) -> str:
@@ -307,41 +270,56 @@ def workflow_text(plugin: Plugin, modes: Mapping[str, Mode], phases: Mapping[str
     return "\n".join(parts) + "\n"
 
 
-def compile_overlay(plugin: Plugin, key: str, prompt: PluginPrompt, workflow: str) -> dict[str, Any]:
-    """The overlay mapping (``agent`` and ``task`` halves, as a YAML overlay holds) packet ``key``'s prompt table and
-    workflow compile to.
+@functools.lru_cache(maxsize=1, typed=True)
+def prompt_block_ids() -> dict[str, frozenset[str]]:
+    """The block ids each prompt has: ``agent`` (``agent/prompt.md``'s sections) and ``task`` (its section keys)."""
+    from hpcagent_agent import prompt_blocks  # deferred: only a packet with a prompt table reads them
 
-    :raises ValueError: a block is switched off and given a text, or a text bound for the agent prompt holds template
-        syntax.
+    from hpcagent_bench.harness import prompt_sections
+
+    agent = prompt_blocks.parse((paths.ROOT / "agent" / "prompt.md").read_text(encoding="utf-8"))
+    return {
+        "agent": frozenset(block.id for block in agent.blocks),
+        "task": frozenset(prompt_sections.section_templates()),
+    }
+
+
+def compile_overlay(plugin: Plugin, key: str, block: PluginPacketBlock, workflow: str) -> dict[str, Any]:
+    """The overlay mapping (``agent`` and ``task`` halves, as a YAML overlay holds) packet ``key``'s prompt keys and
+    workflow compile to; a block id of ``off`` or ``replace`` edits each prompt that has it.
+
+    :raises ValueError: a block id is in neither prompt, a block is switched off and given a text, or a text bound for
+        the agent prompt holds template syntax.
     """
     halves: dict[str, dict[str, Any]] = {half: {"set": {}, "insert": []} for half in HALVES}
+    ids = prompt_block_ids()
 
-    def edit(half: str, block: str) -> dict[str, Any]:
-        return halves[half]["set"].setdefault(block, {})
+    def edit(half: str, block_id: str) -> dict[str, Any]:
+        return halves[half]["set"].setdefault(block_id, {})
 
     def agent_text(path: str, what: str) -> None:
         if TEMPLATE_SYNTAX.search(plain_text(plugin, path, f"packet {key!r} {what}")):
             raise ValueError(f"plugin {plugin.name!r}: {path} holds template syntax the agent prompt never renders")
 
+    if unknown := sorted(name for name in (*block.off, *block.replace) if not any(name in ids[h] for h in HALVES)):
+        raise ValueError(f"plugin {plugin.name!r}: packet {key!r} names blocks {unknown} that no prompt has")
+    if clash := sorted(set(block.off) & set(block.replace)):
+        raise ValueError(f"plugin {plugin.name!r}: packet {key!r} switches blocks {clash} off and replaces them")
     for half in HALVES:
-        off, texts = getattr(prompt.off, half), getattr(prompt.replace, half)
-        if clash := sorted(set(off) & set(texts)):
-            raise ValueError(
-                f"plugin {plugin.name!r}: packet {key!r} switches {half} blocks {clash} off and replaces them"
-            )
-        for block in off:
-            edit(half, block)["enabled"] = False
-        for block, path in texts.items():
+        for block_id in block.off:
+            if block_id in ids[half]:
+                edit(half, block_id)["enabled"] = False
+        for block_id, path in block.replace.items():
+            if block_id not in ids[half]:
+                continue
             if half == "agent":
-                agent_text(path, f"agent.{block}")
-            plain_text(plugin, path, f"packet {key!r} {half}.{block}")
-            edit(half, block)["text"] = f"file:{path}"
-    if prompt.about:
-        agent_text(prompt.about, "about")
+                agent_text(path, f"replace.{block_id}")
+            plain_text(plugin, path, f"packet {key!r} replace.{block_id}")
+            edit(half, block_id)["text"] = f"file:{path}"
+    if block.about:
+        agent_text(block.about, "about")
         for half in HALVES:
-            halves[half]["insert"].append(
-                {"after": INTRO, "block": {"id": plugin.name, "text": f"file:{prompt.about}"}}
-            )
+            halves[half]["insert"].append({"after": INTRO, "block": {"id": plugin.name, "text": f"file:{block.about}"}})
     if workflow:
         edit("agent", WORKFLOW_BLOCK)["vars"] = {"WORKFLOW": workflow}
         halves["task"]["insert"].append({"after": INTRO, "block": {"id": f"{plugin.name}_workflow", "text": workflow}})
@@ -357,12 +335,12 @@ def packet_definition(plugin: Plugin, key: str, block: PluginPacketBlock) -> Pac
     modes = packet_modes(plugin, key, block, phases)
     phase_tools = (tool for name, mode in modes.items() if mode == "agent" for tool in phases[name].tools)
     workflow = workflow_text(plugin, modes, phases)
-    if block.prompt.workflow:
-        workflow = plain_text(plugin, block.prompt.workflow, f"packet {key!r} workflow")
+    if block.workflow:
+        workflow = plain_text(plugin, block.workflow, f"packet {key!r} workflow")
         if TEMPLATE_SYNTAX.search(workflow):
-            raise ValueError(f"plugin {plugin.name!r}: {block.prompt.workflow} holds template syntax")
+            raise ValueError(f"plugin {plugin.name!r}: {block.workflow} holds template syntax")
     ref = f"{OVERLAY_PREFIX}{plugin.name}/{key}"
-    COMPILED[ref] = (compile_overlay(plugin, key, block.prompt, workflow), plugin.root)
+    COMPILED[ref] = (compile_overlay(plugin, key, block, workflow), plugin.root)
     run = tuple(packet_phase(plugin.name, name, mode, phases[name]) for name, mode in modes.items())
     stepped = (NEXT_PHASE,) if "agent" in modes.values() else ()
     return PacketDef(
@@ -391,7 +369,6 @@ def packet_phase(route: str, name: str, mode: Mode, phase: PhaseBlock) -> Packet
         route=route,
         default_tool=call.tool if call is not None else "",
         default_args=tuple(sorted(call.args.items())) if call is not None else (),
-        budget=phase.budget,
     )
 
 

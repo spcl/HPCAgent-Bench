@@ -31,35 +31,27 @@ title = "Shape"
 summary = "The default shape."
 text = "prompt/shape.md"
 tools = ["shape_tool"]
-budget = 100
 
 [phases.build]
 title = "Build"
 summary = "The default build."
 text = "prompt/build.md"
 tools = ["build_tool"]
-mode = "default"
 default = { tool = "build_tool", args = { level = 2 } }
 
 [packets.phased]
 name = "Phased"
-phases = ["shape", "build"]
+agent = ["shape"]
 tools = ["measure"]
-
-[packets.phased.prompt]
 about = "prompt/about.md"
-off.agent = ["build", "syntax_check"]
-off.task = ["build_flags"]
-replace.agent = { end_to_end = "prompt/agent/end_to_end.md" }
-replace.task = { delivery = "prompt/task/delivery.md" }
+off = ["build", "syntax_check", "build_flags"]
+replace = { end_to_end = "prompt/agent/end_to_end.md", delivery = "prompt/task/delivery.md" }
 
 [packets.phased-full]
 extends = "phased"
 name = "Phased (all phases)"
-modes = { build = "agent" }
-
-[packets.phased-full.prompt]
-off.task = ["build_flags", "optimizations"]
+agent = ["shape", "build"]
+off = ["build", "syntax_check", "build_flags", "optimizations"]
 """
 
 TEXTS = {
@@ -160,16 +152,16 @@ def test_the_compiled_table_changes_the_task_prompt_like_an_overlay(
 @pytest.mark.parametrize(
     ("change", "message"),
     [
-        (
-            ("[packets.phased.prompt]\n", '[packets.phased.prompt]\nworkflow = "prompt/shape.md"\n'),
-            "has phases and a workflow",
-        ),
-        (('phases = ["shape", "build"]', 'phases = ["shape", "nope"]'), r"names phases \['nope'\]"),
-        (('modes = { build = "agent" }', 'modes = { nope = "agent" }'), r"sets modes of phases \['nope'\]"),
+        (('tools = ["measure"]', 'tools = ["measure"]\nworkflow = "prompt/shape.md"'), "has phases and a workflow"),
+        (('agent = ["shape", "build"]', 'agent = ["shape", "nope"]'), r"names phases \['nope'\]"),
         (('extends = "phased"', 'extends = "phased-full"'), "extends itself"),
         (
-            ('off.task = ["build_flags"]', 'off.task = ["build_flags", "delivery"]'),
-            r"switches task blocks \['delivery'\] off and replaces them",
+            ('"build_flags"]\nreplace', '"build_flags", "delivery"]\nreplace'),
+            r"switches blocks \['delivery'\] off and replaces them",
+        ),
+        (
+            ('"build_flags"]\nreplace', '"build_flags", "nosuch"]\nreplace'),
+            r"names blocks \['nosuch'\] that no prompt has",
         ),
     ],
 )
@@ -196,7 +188,7 @@ def test_template_syntax_in_a_text_bound_for_the_agent_prompt_is_refused(
 def test_a_phase_the_agent_runs_needs_a_text(tmp_path: pathlib.Path, packets: Kind[PacketDef]) -> None:
     manifest = MANIFEST.replace('text = "prompt/build.md"\n', "")
 
-    with pytest.raises(ValueError, match="lets the agent run phase 'build', which has no text"):
+    with pytest.raises(ValueError, match=r"lets the agent run phases \['build'\], which have no text"):
         registered(tmp_path, packets, manifest)
 
 
@@ -265,16 +257,14 @@ def step(episode: str = "episode", tokens: int = 0) -> FakeJudge:
     return judge
 
 
-def test_a_phase_carries_its_default_call_and_budget_to_the_judge(
-    tmp_path: pathlib.Path, packets: Kind[PacketDef]
-) -> None:
+def test_a_phase_carries_its_default_call_to_the_judge(tmp_path: pathlib.Path, packets: Kind[PacketDef]) -> None:
     sut = registered(tmp_path, packets)["phased"].phases
 
     assert [(phase.name, phase.mode, phase.route) for phase in sut] == [
         ("shape", "agent", "phased"),
         ("build", "default", "phased"),
     ]
-    assert (sut[0].budget, sut[1].default_tool, sut[1].default_args) == (100, "build_tool", (("level", 2),))
+    assert (sut[0].default_tool, sut[1].default_tool, sut[1].default_args) == ("", "build_tool", (("level", 2),))
 
 
 def test_next_phase_runs_the_default_phases_after_the_agents_and_starts_a_new_round(
@@ -320,21 +310,6 @@ def test_a_tool_of_a_later_agent_phase_is_refused_until_next_phase_reaches_it(
     assert refused == "build_tool is a tool of phase 'build' and this kernel is in phase 'shape': call next_phase"
     assert sut is None
     assert next_phase.refusal(["phased", "shape_tool"], body, "episode") is None, "an earlier phase's tool runs"
-
-
-def test_a_phase_that_spent_its_token_budget_refuses_its_tools_until_the_next_round(
-    tmp_path: pathlib.Path, packets: Kind[PacketDef], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    phased_run(tmp_path, packets, monkeypatch)
-    next_phase.refusal(["phased", "shape_tool"], {"kernel": "gemm", "tokens": 50}, "episode")
-
-    within = next_phase.refusal(["phased", "shape_tool"], {"kernel": "gemm", "tokens": 150}, "episode")
-    spent = next_phase.refusal(["phased", "shape_tool"], {"kernel": "gemm", "tokens": 151}, "episode")
-    step(tokens=160)
-    renewed = next_phase.refusal(["phased", "shape_tool"], {"kernel": "gemm", "tokens": 260}, "episode")
-
-    assert (within, renewed) == (None, None)
-    assert spent == "phase 'shape' spent 101 tokens of its budget of 100: call next_phase"
 
 
 def test_a_tool_no_phase_owns_and_a_run_without_phases_are_never_gated(
