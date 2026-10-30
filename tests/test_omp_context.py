@@ -172,6 +172,17 @@ def test_the_default_context_is_the_parents_own_and_never_needs_a_fresh_interpre
     assert omp_context.spawn_needed("nvhpc")
 
 
+def test_a_parent_in_a_plugins_context_forks_no_child(root: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A NestForge tuner runs on libomp; the gnu C reference it asks for must not fork into that process."""
+    (root / "gnu" / "lib").mkdir(parents=True)
+    monkeypatch.setenv(omp_context.CONTEXT_ENV, "llvm")
+    assert omp_context.spawn_needed("gnu")
+    assert omp_context.spawn_needed("")
+    assert omp_context.spawn_needed("llvm")
+    env = omp_context.context_env("gnu", {"LD_LIBRARY_PATH": f"{root / 'llvm' / 'lib'}:/opt/view/lib"})
+    assert env["LD_LIBRARY_PATH"] == f"{root / 'gnu' / 'lib'}:/opt/view/lib"
+
+
 def test_a_childs_library_path_puts_the_contexts_lib_first_and_keeps_the_rest(root: pathlib.Path) -> None:
     env = omp_context.context_env("llvm", {"LD_LIBRARY_PATH": "/opt/view/lib:/opt/rocm/lib"})
     assert env["LD_LIBRARY_PATH"] == f"{root / 'llvm' / 'lib'}:/opt/view/lib:/opt/rocm/lib"
