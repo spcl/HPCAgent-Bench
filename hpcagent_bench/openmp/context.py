@@ -200,9 +200,10 @@ def context_view(context: str) -> pathlib.Path | None:
 
 def spawn_needed(context: str) -> bool:
     """Whether a child of ``context`` needs a fresh interpreter: the loader fixed the parent's runtime
-    at exec, so only a context other than the parent's own (the default) and present here changes
-    anything."""
-    return bool(context) and context != DEFAULT_CONTEXT and context_dir(context) is not None
+    at exec, so a parent in the default context forks only default children, and a parent a plugin's
+    context started (a NestForge tuner, on libomp) forks none: a libgomp reference would join its libomp."""
+    contexts = {context or DEFAULT_CONTEXT, os.environ.get(CONTEXT_ENV) or DEFAULT_CONTEXT}
+    return contexts != {DEFAULT_CONTEXT} and context_dir(context) is not None
 
 
 def numba_omp_pool_launched() -> bool:
@@ -232,7 +233,7 @@ def prepend_path(entries: Iterable[str], current: str) -> str:
 
 def context_env(context: str, base: Mapping[str, str] | None = None) -> dict[str, str]:
     """The environment ENTRIES that put a child in ``context``: ``LD_LIBRARY_PATH`` with the context's
-    ``lib/`` first, numba's threading layer, and the context name. Empty when the host has no such
+    ``lib/`` first and no other context's, numba's threading layer, and the context name. Empty when the host has no such
     context, so the caller's child is exactly what it was."""
     root = context_dir(context)
     if root is None:
@@ -240,8 +241,11 @@ def context_env(context: str, base: Mapping[str, str] | None = None) -> dict[str
     env = base if base is not None else os.environ
     lib = root / "lib"
     context = context or DEFAULT_CONTEXT
+    # A child of a plugin's context inherits that context's directory, whose libraries would come first.
+    others = {str(context_root() / other / "lib") for other in CONTEXTS if other != context}
+    inherited = [item for item in env.get("LD_LIBRARY_PATH", "").split(os.pathsep) if item not in others]
     return {
-        "LD_LIBRARY_PATH": prepend_path([str(lib)] if lib.is_dir() else [], env.get("LD_LIBRARY_PATH", "")),
+        "LD_LIBRARY_PATH": prepend_path([str(lib)] if lib.is_dir() else [], os.pathsep.join(inherited)),
         "NUMBA_THREADING_LAYER": NUMBA_LAYER[context],
         CONTEXT_ENV: context,
     }
