@@ -5,8 +5,8 @@
 
 [plugins.nestforge]
 repository = "https://github.com/spcl/NestForge.git"
-branch = "main"
-commit = "ff8b05e95cd97aa1c2a489e897bdf3f53e15ae04"
+branch = "fix/preset-rung-on-reference"
+commit = "b89f8b37df53aba910bdfaf3582a088014098af1"
 folder = "plugin/nestforge"
 
 [plugins.alloy]
