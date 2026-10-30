@@ -6,8 +6,8 @@
 #   registry.sh push <role>... | --all        publish each role's live OCI archive as REGISTRY_REPO:<tag>
 #   registry.sh pull <role> [sha256:<digest>] import the role's tag (or a pinned digest) as its squashfs
 #
-# Roles, tags and file names come from images.env; --all means every role of CE_PLATFORM (amd, gh200,
-# cpu; default amd) that has what the action needs. A push reads the OCI archive the build saved beside
+# Roles, tags and file names come from images.env; --all means every role of this host's platform
+# (build_common.sh ce_platform) that has what the action needs. A push reads the OCI archive the build saved beside
 # the squashfs (ce_export_image): a squashfs is flattened and cannot stand in for one. Credentials come
 # only from the environment (REGISTRY_USER, REGISTRY_TOKEN), never a file. Only the portable latest
 # flavor is published: a native build or a tag not ending in -latest is refused. registry.sbatch runs
@@ -27,7 +27,7 @@ roles_for() {
     local column="$1" role
     shift
     if [[ "${1:-}" == --all ]]; then
-        for role in $(ce_roles "${CE_PLATFORM:-amd}"); do
+        for role in $(ce_roles "$(ce_platform)"); do
             ce_image "${role}" "${column}" >/dev/null 2>&1 && printf '%s\n' "${role}"
         done
     else

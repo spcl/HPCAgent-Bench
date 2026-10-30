@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
-# Render ~/.edf/<edf>.toml for every images.env row of CE_PLATFORM (amd, gh200 or cpu) from its
+# Render ~/.edf/<edf>.toml for every images.env row of CE_PLATFORM from its
 # template, with this account's ${SCRATCH}, mount list, GPU arch and live squashfs filled in.
 #
-#   containers/images/install_edfs.sh                     # beverin (amd)
-#   CE_PLATFORM=gh200 containers/images/install_edfs.sh   # daint
-#   CE_PLATFORM=cpu   containers/images/install_edfs.sh   # any host, CPU only
+#   containers/images/install_edfs.sh                     # this host's platform (build_common.sh ce_platform)
+#   CE_PLATFORM=gh200 containers/images/install_edfs.sh   # or name it: amd, gh200, nvidia-x86, cpu
 #   containers/images/install_edfs.sh <role>...           # only these rows (registry.sh promote)
 #
 # Refuses to point an existing EDF at a different image unless ALLOW_REPOINT=1: every job that
@@ -52,10 +51,10 @@ render() {
     printf '  %-40s -> %s\n' "${name}" "${image}"
 }
 
-CE_PLATFORM="${CE_PLATFORM:-amd}"
+CE_PLATFORM="$(ce_platform)"
 case "${CE_PLATFORM}" in
-    amd|gh200|cpu) ;;
-    *) echo "CE_PLATFORM must be amd, gh200 or cpu, got '${CE_PLATFORM}'" >&2; exit 2 ;;
+    amd|gh200|nvidia-x86|cpu) ;;
+    *) echo "CE_PLATFORM must be amd, gh200, nvidia-x86 or cpu, got '${CE_PLATFORM}'" >&2; exit 2 ;;
 esac
 echo "installing ${CE_PLATFORM} EDFs into ${EDF_DIR}"
 
