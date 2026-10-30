@@ -7,7 +7,7 @@ Grading and prompt release. The results database is schema 19 (`PRAGMA user_vers
 when opened for writing. Golden files are format 3 and keyed by the judge image and CPU model: older ones are recomputed, never
 mixed in.
 
-Pins: dace extended `3ef7de40e`; user plugins NestForge `8cf9ded` and Alloy `0820a1f`, both with their prompt as
+Pins: dace extended `3ef7de40e`; user plugins NestForge `ff8b05e` and Alloy `6176f24`, both with their prompt as
 overlay YAML.
 
 ### Upgrading from 0.3.x
@@ -169,6 +169,12 @@ overlay YAML.
   `AGENT_PROMPT_OVERLAYS` (now `prompt.overlays`; `AGENT_PROMPT_LAYERS` is derived by the launcher, never set);
   `prompt.template_dirs` and `prompt.generator` / `--prompt-generator` (an overlay sets, inserts or removes any
   block).
+
+### Known issues
+- NestForge cannot start a session on `aes_graupel` with dace extended `3ef7de40e` (memlet propagation rejects a nested
+  connector; first bad commit `9c9a6a7a4`). Its reference replay is skipped in NestForge's CI until the fix is pinned.
+- NestForge's kernel libraries take host pointers, so the `hip` arms of the NestForge study wait for device-resident
+  inputs.
 
 ### dace extended `4c7aa4e64` -> `3ef7de40e`
 TransientReuse shares buffers across states and control flow by region liveness and promotes entry-sized root buffers
