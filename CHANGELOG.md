@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### dace extended `3ef7de40e` -> `71529ea62`
+- Alloy's codegen sweep reads the `scalar_decl` knob of this dace; the index-width and access-form knobs are gone.
+
 ### Fixed
 - A second `submit.sh` call for the same experiment waits on the prepare and golden jobs the first one queued (same
   renders, same language) instead of queuing them again.
