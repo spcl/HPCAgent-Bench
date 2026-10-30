@@ -255,13 +255,15 @@ derived_edf() {
             *) printf '    "%s:%s",\n' "${HPCAGENT_BENCH_REPO}" "${JUDGE_PACKAGE_MOUNT}" ;;
         esac
         # The plugins, read-only for every role that runs benchmark code (an agent able to write a tool would change
-        # what the rest of its own job runs).
+        # what the rest of its own job runs), and the checkout's launch hook over the image's ENTRYPOINT: an image
+        # built before a change to it (the plugins' installs) runs this job's.
         case "${role}" in
             vllm* | inference*) ;;
             *)
                 plugin_binds | while IFS= read -r plugin_bind; do
                     printf '    "%s:ro",\n' "${plugin_bind}"
                 done
+                printf '    "%s/containers/images/lib/launch_venv.sh:/opt/launch/launch_venv.sh:ro",\n' "${HPCAGENT_BENCH_REPO}"
                 ;;
         esac
         case "${role}" in
