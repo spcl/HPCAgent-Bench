@@ -7,14 +7,15 @@ import os
 import pathlib
 import subprocess
 import tempfile
-from collections.abc import Callable
+import time
+from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING, Any
 
 from hpcagent_bench import modules, phase_clock
 from hpcagent_bench.categories import Language
 from hpcagent_bench.columns import FRAMEWORKS
 from hpcagent_bench.frameworks.errors import NotSupportedByFramework
-from hpcagent_bench.frameworks.framework import native_column_languages
+from hpcagent_bench.frameworks.framework import MS_PER_S, native_column_languages
 from hpcagent_bench.languages import LANG_EXT
 from hpcagent_bench.vocabulary import Transform
 
@@ -27,8 +28,10 @@ __all__ = [
     "FRAMEWORK_FLAGS",
     "FRAMEWORK_LANG",
     "PPCG_FRAMEWORKS",
+    "NativeKernel",
     "SO_CACHE",
     "assert_autopar_capable",
+    "binds_double",
     "framework_extra_flags",
     "index_rebase",
     "load_backend_so",
@@ -229,7 +232,30 @@ def index_rebase(kernel: str, framework: str) -> tuple[int, ...]:
     return deltas if any(deltas) else ()
 
 
-def wrap_kernel(wrapper_file: str, short: str, framework: str, kernel: str) -> Callable:
+def binds_double(args: Sequence[Any]) -> bool:
+    """The ``_fp64`` symbol unless a single-precision array (float32, complex64) is passed: an integer-only kernel
+    (CoMet, spgemm) computes its float temporaries and its gemm in double, as numpy does."""
+    import numpy as np
+
+    single = (np.dtype(np.float32), np.dtype(np.complex64))
+    return not any((isinstance(a, np.ndarray) or is_device_array(a)) and a.dtype in single for a in args)
+
+
+class NativeKernel:
+    """A native build's Python entry: ``ms`` is the last call's ctypes call alone, in ms (argument marshalling and
+    the index rebase excluded), None until a call completes; :meth:`NativeFramework.stop_timer` reports it."""
+
+    __slots__ = ("call", "ms")
+
+    def __init__(self, call: Callable[..., None]) -> None:
+        self.call = call
+        self.ms: float | None = None
+
+    def __call__(self, *args: Any) -> None:  # noqa: ANN401
+        self.call(*args)
+
+
+def wrap_kernel(wrapper_file: str, short: str, framework: str, kernel: str) -> NativeKernel:
     """Build a Python callable for a native ``framework`` build of ``short``: ``wrapper_file`` locates the build
     directory, ``short`` names the artifact stem, ``kernel`` the manifest (all three from ``autogen.wrapper_src``)."""
     import numpy as np
@@ -262,12 +288,7 @@ def wrap_kernel(wrapper_file: str, short: str, framework: str, kernel: str) -> C
 
     def call(*args: Any) -> None:  # noqa: ANN401
         _ensure_loaded()
-        # complex128 is the fp64 rung: without it a complex-only kernel binds the fp32 symbol.
-        is_double = any(
-            (isinstance(a, np.ndarray) or is_device_array(a))
-            and a.dtype in (np.dtype(np.float64), np.dtype(np.complex128))
-            for a in args
-        )
+        is_double = binds_double(args)
         fptype = "fp64" if is_double else "fp32"
         fcty = ctypes.c_double if is_double else ctypes.c_float
         sym = state["syms"].get(fptype)
@@ -285,10 +306,13 @@ def wrap_kernel(wrapper_file: str, short: str, framework: str, kernel: str) -> C
             if delta:
                 arg += delta
         try:
+            start = time.perf_counter()
             sym(*c_args)
+            kernel_entry.ms = (time.perf_counter() - start) * MS_PER_S
         finally:
             for arg, delta in zip(args, deltas):
                 if delta:
                     arg -= delta
 
-    return call
+    kernel_entry = NativeKernel(call)
+    return kernel_entry

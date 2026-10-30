@@ -4,10 +4,10 @@
 # Inference only: one OpenAI-compatible endpoint and nothing else. The payload is run_cluster.sh's
 # own --vllm-node role, so this serves what an experiment serves, without the judge and agent roles.
 #   hpcagent_bench/cluster/serve-only.sbatch                      qwen38 on the nodes its env file asks for
-#   MODEL=kimi27sglang hpcagent_bench/cluster/serve-only.sbatch   another model (any experiments/layers/model-<MODEL>.env)
+#   MODEL=kimi27sglang hpcagent_bench/cluster/serve-only.sbatch   another model (any [model.<MODEL>] of experiments/experiments.toml)
 #   SUBMIT=0 hpcagent_bench/cluster/serve-only.sbatch             print what would be submitted, submit nothing
 #   PREWARM=1 MODEL=glm53 hpcagent_bench/cluster/serve-only.sbatch  boot, run every served shape once, exit: fills the kernel caches
-# It derives --nodes from the env file, so never pass --nodes yourself. Account, partition and GPUs per node resolve as
+# It derives --nodes from the rendered env, so never pass --nodes yourself. Account, partition and GPUs per node resolve as
 # for an experiment job (`hpcagent-bench job options`: $SBATCH_ACCOUNT, $SBATCH_PARTITION,
 # $HPCAGENT_BENCH_JOB_GPUS_PER_NODE or the system's systems.yaml entry); the time limit is SERVE_TIME (default 04:00:00).
 #SBATCH --job-name=serve-only
@@ -33,20 +33,24 @@ export SCRIPT_DIR
 REPO_DIR="${HPCAGENT_BENCH_REPO:-$(cd -- "${SCRIPT_DIR}/../.." && pwd)}"
 
 MODEL="${MODEL:-qwen38}"
-# <base>:<model> (setups.yaml) or an env file
+# <experiment>:<model> (experiments/experiments.toml) or an env file
 BASE_ENV="${SERVE_BASE_ENV:-experiment:${MODEL}}"
-SERVE_ENV="${SERVE_ENV_FILE:-${REPO_DIR}/experiments/serve-only.env}"
-[[ -f "${SERVE_ENV}" ]] || { echo "missing env file ${SERVE_ENV}" >&2; exit 2; }
+# Optional: an env file of extra overrides, sourced last.
+SERVE_ENV="${SERVE_ENV_FILE:-}"
+[[ -z "${SERVE_ENV}" || -f "${SERVE_ENV}" ]] || { echo "missing env file ${SERVE_ENV}" >&2; exit 2; }
 
-# Experiment values first, role split second: last assignment wins, as the submit scripts do it.
-# Flatten the base once, source and record the flat form.
+# Experiment values first, the role split ([serve]) second, SERVE_ENV_FILE last: last assignment wins, as the
+# submit scripts do it. Flatten the base once, source and record the flat form.
 . "${SCRIPT_DIR}/env_layers.sh"
 BASE_FLAT="$(render_env "${BASE_ENV}")" || exit 2
+SERVE_FLAT="$(env_spec serve)" || exit 2
 set -a
 # shellcheck disable=SC1090
 . <(printf '%s\n' "${BASE_FLAT}")
 # shellcheck disable=SC1090
-. "${SERVE_ENV}"
+. <(printf '%s\n' "${SERVE_FLAT}")
+# shellcheck disable=SC1090
+[[ -z "${SERVE_ENV}" ]] || . "${SERVE_ENV}"
 set +a
 
 INFERENCE_NODES="${INFERENCE_NODES:-1}"
@@ -70,7 +74,7 @@ if [[ -z "${SLURM_JOB_ID:-}" ]]; then
         "${SCRIPT_DIR}/serve-only.sbatch")
     if [[ "${SUBMIT:-1}" != 1 ]]; then
         printf 'would serve %s on %s node(s)\n' "${MODEL}" "${INFERENCE_NODES}"
-        printf '  env      %s + %s\n' "${BASE_ENV##*/}" "${SERVE_ENV##*/}"
+        printf '  env      %s + [serve]%s\n' "${BASE_ENV##*/}" "${SERVE_ENV:+ + ${SERVE_ENV##*/}}"
         printf '  image    %s\n' "${INFERENCE_CE_ENV:-unset}"
         printf '  engine   %s (%s), port %s, model name %s\n' \
             "${INFERENCE_ENGINE:-vllm}" "${INFERENCE_MODE}" "${VLLM_PORT}" "${SERVED_MODEL}"
@@ -85,7 +89,7 @@ fi
 mapfile -t nodes < <(scontrol show hostnames "${SLURM_JOB_NODELIST}")
 if (( ${#nodes[@]} != INFERENCE_NODES )); then
     echo "allocation has ${#nodes[@]} nodes; ${BASE_ENV##*/} asks for ${INFERENCE_NODES}" >&2
-    echo "submit with hpcagent_bench/cluster/serve-only.sbatch, which derives --nodes from that file" >&2
+    echo "submit with hpcagent_bench/cluster/serve-only.sbatch, which derives --nodes from that env" >&2
     exit 2
 fi
 
@@ -95,7 +99,8 @@ fi
 RUN_DIR="${RUN_ROOT}/${SLURM_JOB_ID}"
 mkdir -p "${RUN_DIR}"
 # The one file run_cluster.sh re-reads in the container, and the record of what this job served.
-{ printf '%s\n' "${BASE_FLAT}"; cat -- "${SERVE_ENV}"; printf 'GPUS_PER_NODE=%s\n' "${GPUS_PER_NODE:?}"; } >"${RUN_DIR}/serve.env"
+{ printf '%s\n' "${BASE_FLAT}" "${SERVE_FLAT}"; [[ -z "${SERVE_ENV}" ]] || cat -- "${SERVE_ENV}"
+  printf 'GPUS_PER_NODE=%s\n' "${GPUS_PER_NODE:?}"; } >"${RUN_DIR}/serve.env"
 
 export CLUSTER_ENV_FILE="${RUN_DIR}/serve.env"
 export HPCAGENT_BENCH_REPO="${HPCAGENT_BENCH_REPO:-${REPO_DIR}}"

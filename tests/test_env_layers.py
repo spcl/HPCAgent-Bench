@@ -1,8 +1,8 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Base envs render flat from layers + setups.yaml, and every submission gets its own read-only snapshot.
+"""Base envs render flat from experiments/experiments.toml, and every submission gets its own read-only snapshot.
 
-A base is ``layers/*.env`` plus one ``experiments/setups.yaml`` entry (env_spec.py). A job reads a
+A base is ``[common]``, a model's layers and one ``[experiment.*]`` entry (env_spec.py). A job reads a
 snapshot under ``.rendered/``, never the setup's re-stageable ``.env.<setup>``, so a later submission or
 ``SUBMIT=0`` dry run of the same setup cannot rewrite what a PENDING job is about to read.
 """
@@ -13,6 +13,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tomllib
 
 import pydantic
 import pytest
@@ -25,7 +26,6 @@ REPO = paths.ROOT
 CLUSTER = REPO / "hpcagent_bench" / "cluster"
 EXPERIMENTS = REPO / "experiments"
 LAYERS = CLUSTER / "env_layers.sh"
-LAYERS_DIR = EXPERIMENTS / "layers"
 KEY = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$")
 
 
@@ -54,33 +54,27 @@ def flat(text: str) -> dict[str, str]:
     return out
 
 
-def test_a_child_key_wins_in_its_parents_position(tmp_path: pathlib.Path) -> None:
-    (tmp_path / "sub").mkdir()
-    (tmp_path / "sub" / "root.env").write_text("# note\nA=1\nB=${SCRATCH:?}/x\n")
-    (tmp_path / "mid.env").write_text("# extends: sub/root.env\nA=2\nC=3\n")
-    (tmp_path / "leaf.env").write_text("# extends: mid.env\n\nC=4\nD=\n")
-    assert layers("render", "leaf.env", cwd=tmp_path).splitlines() == ["A=2", "B=${SCRATCH:?}/x", "C=4", "D="]
+def test_an_env_file_renders_as_written(tmp_path: pathlib.Path) -> None:
+    (tmp_path / "my.env").write_text("# note\nA=1\nB=${SCRATCH:?}/x\nA=2\nD=\n")
+    assert layers("render", "my.env", cwd=tmp_path).splitlines() == ["A=2", "B=${SCRATCH:?}/x", "D="]
 
 
-def test_a_missing_parent_fails_loudly(tmp_path: pathlib.Path) -> None:
-    (tmp_path / "leaf.env").write_text("# extends: gone.env\nA=1\n")
-    run = subprocess.run(
-        [bash(), str(LAYERS), "render", "leaf.env"],
-        cwd=tmp_path,
-        env={**os.environ, "HPCAGENT_BENCH_HOST_PYTHON": sys.executable},
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert run.returncode != 0
-    assert "no such layer" in run.stderr
+def test_a_model_layer_chain_lists_each_parent_once_before_its_child() -> None:
+    """qwen38 extends replicas and sglang, both of which extend served: served comes once, first."""
+    chain = env_spec.layer_chain(env_spec.TABLES["model"]["qwen38"], "model.qwen38")
+    assert [where for where, _ in chain] == ["layer.served", "layer.replicas", "layer.sglang", "model.qwen38"]
+
+
+def test_a_missing_parent_fails_loudly() -> None:
+    with pytest.raises(SystemExit, match="extends unknown layer gone"):
+        env_spec.layer_chain({"extends": ["gone"], "A": 1}, "model.x")
 
 
 def test_an_unknown_model_or_experiment_fails_loudly() -> None:
     for target, message in (
-        ("experiment:nosuchmodel", "no layers/model-nosuchmodel.env"),
+        ("experiment:nosuchmodel", "no [model.nosuchmodel]"),
         ("nosuchexperiment:qwen38", "no experiment nosuchexperiment"),
-        ("base-qwen38", "neither <experiment>:<model> nor an env file"),
+        ("base-qwen38", "neither <experiment>:<model>, an experiment nor an env file"),
     ):
         run = subprocess.run(
             [sys.executable, str(CLUSTER / "env_spec.py"), "render", target],
@@ -117,8 +111,8 @@ def test_rendering_is_deterministic() -> None:
 
 
 def test_every_model_layer_is_listed_in_every_experiment() -> None:
-    """Adding a model is adding its layer: it renders in every experiment with no setups.yaml edit."""
-    models = sorted(path.name.removeprefix("model-").removesuffix(".env") for path in LAYERS_DIR.glob("model-*.env"))
+    """Adding a model is adding its layer: it renders in every experiment with no experiments.toml edit."""
+    models = sorted(env_spec.TABLES["model"])
     spec = env_spec.load_spec()
     assert sorted(BASES) == sorted(f"{experiment}:{model}" for experiment in spec for model in models)
 
@@ -133,7 +127,7 @@ def test_a_fortran_base_extends_its_c_base_and_keeps_every_key() -> None:
 
 
 def test_a_model_layer_wins_over_the_experiment_and_a_models_entry_over_both() -> None:
-    """kimi27sglang's layer (via pp.env) beats an experiment's env; a models entry beats the layer, and
+    """kimi27sglang's layer (via [layer.pp]) beats an experiment's env; a models entry beats the layer, and
     a child experiment's models entry beats its parent's (glm53 fortran)."""
     spec = env_spec.SPEC_ADAPTER.validate_python(
         {
@@ -171,8 +165,9 @@ def test_an_experiments_budget_is_the_same_for_every_model(experiment: str) -> N
 
 def test_no_model_layer_or_models_entry_sets_a_budget() -> None:
     """The budget lives on the experiment only; a model-level one would split a track by model."""
-    for path in LAYERS_DIR.glob("*.env"):
-        assert not set(env_spec.assignments(path)) & set(BUDGET_KEYS), path.name
+    for kind in ("layer", "model"):
+        for name, table in env_spec.TABLES[kind].items():
+            assert not set(table) & set(BUDGET_KEYS), f"{kind}.{name}"
     for name, experiment in env_spec.load_spec().items():
         for model, entry in experiment.models.items():
             assert not set(entry) & set(BUDGET_KEYS), f"{name}.models.{model}"
@@ -181,27 +176,23 @@ def test_no_model_layer_or_models_entry_sets_a_budget() -> None:
 @pytest.mark.parametrize(
     "text",
     [
-        "experiment:\n  typo: 1\n",
-        "experiment:\n  env:\n    not-a-key: 1\n",
-        "experiment:\n  env:\n    FLAG: true\n",
-        "experiment:\n  models:\n    nosuchmodel: {}\n",
-        "Experiment_X:\n  env: {}\n",
+        "[experiment.experiment]\ntypo = 1\n",
+        "[experiment.experiment.env]\nnot-a-key = 1\n",
+        "[experiment.experiment.env]\nFLAG = true\n",
+        "[experiment.experiment.models.nosuchmodel]\n",
+        "[experiment.Experiment_X.env]\n",
     ],
     ids=["unknown-field", "bad-key", "bool-value", "unknown-model", "bad-name"],
 )
-def test_the_spec_refuses_what_it_cannot_render_verbatim(tmp_path: pathlib.Path, text: str) -> None:
-    """A YAML bool would render as True, not the true a job reads: the spec takes str and int only."""
-    spec = tmp_path / "setups.yaml"
-    spec.write_text(text)
+def test_the_spec_refuses_what_it_cannot_render_verbatim(text: str) -> None:
+    """A TOML bool would render as True, not the true a job reads: the spec takes str and int only."""
     with pytest.raises(pydantic.ValidationError):
-        env_spec.load_spec(spec)
+        env_spec.load_spec(tomllib.loads(text))
 
 
-def test_an_experiment_extending_an_unknown_experiment_fails_loudly(tmp_path: pathlib.Path) -> None:
-    spec = tmp_path / "setups.yaml"
-    spec.write_text("a:\n  extends: gone\n")
+def test_an_experiment_extending_an_unknown_experiment_fails_loudly() -> None:
     with pytest.raises(SystemExit, match="unknown experiment gone"):
-        env_spec.load_spec(spec)
+        env_spec.load_spec(tomllib.loads('[experiment.a]\nextends = "gone"\n'))
 
 
 def test_an_extends_cycle_fails_loudly() -> None:
@@ -288,13 +279,16 @@ def test_the_job_gets_the_snapshot_not_the_setup_env(tmp_path: pathlib.Path) -> 
 VLLM_ONLY_KNOBS = ("VLLM_ENGINE_READY_TIMEOUT_S",)
 
 
-@pytest.mark.parametrize("layer", sorted(LAYERS_DIR.glob("model-*.env")), ids=lambda path: path.stem)
-def test_a_model_layer_sets_no_knob_its_engine_or_readers_ignore(layer: pathlib.Path) -> None:
+@pytest.mark.parametrize("model", sorted(env_spec.TABLES["model"]))
+def test_a_model_layer_sets_no_knob_its_engine_or_readers_ignore(model: str) -> None:
     """A knob nothing reads implies a deadline that does not exist: a vLLM-only variable on an SGLang model, or a
     VLLM_READY_TIMEOUT_SECONDS beside the AGENT_READY_TIMEOUT_SECONDS every reader takes first (serve-only.sbatch,
     the agent driver)."""
-    own = env_spec.assignments(layer)
-    if env_spec.render_file(layer).get("INFERENCE_ENGINE") == "sglang":
+    own = env_spec.TABLES["model"][model]
+    rendered_layers: dict[str, str] = {}
+    for where, table in env_spec.layer_chain(own, f"model.{model}"):
+        rendered_layers.update(env_spec.env_of(table, where))
+    if rendered_layers.get("INFERENCE_ENGINE") == "sglang":
         assert not set(VLLM_ONLY_KNOBS) & own.keys()
     if "AGENT_READY_TIMEOUT_SECONDS" in own:
         assert "VLLM_READY_TIMEOUT_SECONDS" not in own

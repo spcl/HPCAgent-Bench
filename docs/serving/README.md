@@ -35,7 +35,7 @@ Then:
 S=hpcagent_bench/cluster/serve-only.sbatch
 SUBMIT=0 $S                  # print what would be submitted
 $S                           # Qwen3.8 (default MODEL)
-MODEL=kimi27sglang $S        # any experiments/layers/model-<MODEL>.env: qwen38, kimi27sglang, glm53, oss120b
+MODEL=kimi27sglang $S        # any [model.<MODEL>]: qwen38, kimi27sglang, glm53, oss120b
 SERVE_TIME=08:00:00 $S       # longer than the 4 h default (SBATCH_TIMELIMIT is overridden)
 ```
 
@@ -123,16 +123,16 @@ The served name is `hpcagent-bench-vllm` for every model, not the HuggingFace id
 
 The engine is per model and partition: on mi300, Qwen3.8 on vLLM (`ROCM_AITER_FA`) garbles its output under
 agent load and Kimi K2.7 on vLLM collapses above concurrency 1. On mi200 (MI250X, BF16) the SGLang base has no
-kernels, and Qwen3.8 serves on the AMD vLLM image (`layers/hardware-mi200-qwen38.env`, 421 tok/s at
+kernels, and Qwen3.8 serves on the AMD vLLM image (`[hardware.mi200.models.qwen38]`, 421 tok/s at
 16 concurrent requests).
 
 ## 5. Healthy or sick
 
 **Readiness.** `serve-only.sbatch` waits `AGENT_READY_TIMEOUT_SECONDS`, else
 `VLLM_READY_TIMEOUT_SECONDS`, else 7200 s, the precedence the experiment's agent driver uses. Each model's layer
-chain sets `AGENT_READY_TIMEOUT_SECONDS` (`layers/replicas.env`: 2400 s, with `VLLM_READY_TIMEOUT_SECONDS` 2400 s;
+chain sets `AGENT_READY_TIMEOUT_SECONDS` (`[layer.replicas]`: 2400 s, with `VLLM_READY_TIMEOUT_SECONDS` 2400 s;
 `model-kimi27sglang.env`: 7200 s; `model-glm53.env`: 10800 s). The rendered layers are sourced after the command
-line, so a value on the command line is overwritten. To override, copy `experiments/serve-only.env`, add the key,
+line, so a value on the command line is overwritten. To override, copy `[serve] of experiments/experiments.toml`, add the key,
 and pass `SERVE_ENV_FILE=<copy>` (sourced last, so it wins). The same applies to
 `VLLM_SERVED_MODEL`.
 
@@ -179,10 +179,10 @@ colon-dash):
 Deleting a key turns the default **on**. To omit a flag, assign it empty (GLM-5.3 does this). When
 templating a flag, use the dash form.
 
-**Layers, last assignment wins.** `layers/common.env` < `setups.yaml` experiment < `layers/model-<m>.env` < `setups.yaml` `models.<m>`
+**Layers, last assignment wins.** `[common]` < `experiments.toml` experiment < `[model.<m>]` < `experiments.toml` `models.<m>`
 ([Env layers](../../experiments/README.md#env-layers)); a layer can override a key, never unset it.
 Render one with `hpcagent_bench/cluster/env_layers.sh render experiment:<m>`. `serve-only.sbatch` sources the render, then
-`serve-only.env` (zero judge and agent nodes, `RUN_ROOT`), under `set -a`.
+`[serve]` (zero judge and agent nodes, `RUN_ROOT`) and an optional `SERVE_ENV_FILE`, under `set -a`.
 
 **Setup `.env.<setup>` files are renders.** Fix the layer that owns a key, never the render.
 
@@ -191,8 +191,8 @@ registered EDF as-is. A model that serves here and fails in an experiment run: s
 
 ## 7. Where the numbers live
 
-- `hpcagent_bench/cluster/serve-only.sbatch`, `experiments/serve-only.env`: the launcher on this page.
-- `experiments/layers/model-<m>.env`, `experiments/setups.yaml`: per-model launch lines with inline reasons.
+- `hpcagent_bench/cluster/serve-only.sbatch`, `[serve] of experiments/experiments.toml`: the launcher on this page.
+- `[model.<m>]`, `experiments/experiments.toml`: per-model launch lines with inline reasons.
 - `containers/inference/`: `accuracy-gate.py`, `verify-tools-reasoning.py` (gates against a live server).
 
 Node-to-node spread is about 30%. Re-measure a flag change **on one node, back to back**.

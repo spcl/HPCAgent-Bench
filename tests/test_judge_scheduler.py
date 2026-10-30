@@ -48,8 +48,9 @@ def test_a_blinded_process_counts_no_gpu_without_importing_cupy(monkeypatch: pyt
 
 
 def test_judge_config_defaults_from_config(monkeypatch: pytest.MonkeyPatch) -> None:
-    # No configured GPUs and none detected -> a single CPU slot (cpu box default).
+    # No configured GPUs and none detected -> one CPU slot per NUMA domain (one here).
     monkeypatch.setattr(js, "local_gpu_count", lambda: 0)
+    monkeypatch.setattr(js, "node_numa_domains", lambda: 1)
     config.set_override("judge.gpus_per_node", None)
     config.set_override("judge.cpu_slots_per_node", None)
     try:

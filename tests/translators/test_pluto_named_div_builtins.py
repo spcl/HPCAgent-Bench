@@ -72,10 +72,11 @@ def test_integer_floordiv_in_a_scop_is_spelled_floord() -> None:
     assert "int_floor" not in body, body
 
 
-def test_the_c_leg_keeps_int_floor() -> None:
-    """Only the pluto reader cares about the name; the C emit is unchanged."""
-    body = emit_c(int_bound_kir(), fn_name="blk_op")
-    assert "int_floor(N, 8)" in body.split("void blk_op", 1)[1], body
+def test_the_c_leg_shifts_by_the_power_of_two() -> None:
+    """Only the pluto reader needs the name; plain C floors ``N // 8`` with the arithmetic shift."""
+    body = emit_c(int_bound_kir(), fn_name="blk_op").split("void blk_op", 1)[1]
+    assert "((N) >> 3)" in body, body
+    assert "floord(" not in body, body
 
 
 def test_float_floordiv_stays_on_the_generic_macro() -> None:

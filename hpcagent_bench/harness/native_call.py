@@ -48,6 +48,7 @@ from hpcagent_bench.harness import nested_blas, precision_casts, python_envs, ti
 from hpcagent_bench.harness.judge_scheduler import (
     NUMA_NODE_ROOT,
     judge_slots,
+    node_cpus,
     node_numa_domains,
     numa_domains,
     slot_cores,
@@ -117,6 +118,7 @@ __all__ = [
     "NativeCallOOM",
     "NativeCallOpenMPConflict",
     "NativeCallSealFailed",
+    "NativeCallMemoryCap",
     "NativeCallTimeout",
     "NativeCallTooSlow",
     "OpenMPLaunchEnvError",
@@ -352,6 +354,13 @@ class NativeCallTimeout(RuntimeError):
 
 class NativeCallTooSlow(NativeCallTimeout):
     """The guillotine fired: the candidate ran past its baseline by more than the factor (reason ``too_slow``)."""
+
+    __slots__ = ()
+
+
+class NativeCallMemoryCap(RuntimeError):
+    """The call aborted on an allocation the armed ``RLIMIT_DATA`` cap refused (``SIGABRT`` or an allocator's own
+    failure message): the kernel needs more memory than its budget, a resource outcome like a timeout."""
 
     __slots__ = ()
 
@@ -639,15 +648,7 @@ SET_MEMPOLICY_SYSCALL: Mapping[str, int] = {"x86_64": 238, "aarch64": 237}
 
 def numa_nodes(cpus: set[int]) -> set[int]:
     """The NUMA nodes holding any of ``cpus``; empty when the topology is unreadable."""
-    nodes: set[int] = set()
-    for node in NUMA_NODE_ROOT.glob("node[0-9]*"):
-        try:
-            listed = timing.parse_cpu_list((node / "cpulist").read_text())
-        except OSError:
-            continue
-        if listed & cpus:
-            nodes.add(int(node.name.removeprefix("node")))
-    return nodes
+    return {node for node, listed in node_cpus().items() if listed & cpus}
 
 
 def bind_memory(nodes: set[int]) -> bool:
@@ -2624,10 +2625,14 @@ def call_failure[PayloadT](
     reported = bool(run.error and exception_header(run.error))
     if run.signal or ((run.exit_code or 0) != 0 and not reported):
         sig = f", signal {run.signal}" if run.signal else ""
-        hint = thread_creation_crash_hint(stderr, memory_bytes) or memory_cap_crash_hint(
-            memory_bytes, run.signal, stderr
-        )
-        return RuntimeError(f"native call crashed (exit {run.exit_code}{sig}){hint}")
+        thread_hint = thread_creation_crash_hint(stderr, memory_bytes)
+        hint = thread_hint or memory_cap_crash_hint(memory_bytes, run.signal, stderr)
+        message = f"native call crashed (exit {run.exit_code}{sig}){hint}"
+        # SIGSEGV/SIGBUS stay crashes: they are as likely an out-of-bounds access as a refused allocation.
+        refused = run.signal == signal.SIGABRT.name or any(marker in stderr for marker in ALLOCATION_FAILURES)
+        if hint and not thread_hint and refused:
+            return NativeCallMemoryCap(message)
+        return RuntimeError(message)
     if is_host_oom(run):  # contention past every retry: the judge's fault
         return NativeCallOOM(run.error)
     if run.error and seal.SealError.__name__ in run.error:

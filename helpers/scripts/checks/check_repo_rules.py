@@ -393,8 +393,8 @@ CODE_PATTERNS: Patterns = {
 }
 #: Files (or ``path::matched text``) that legitimately carry a flagged string, one reason each.
 SITE_ALLOW = {
-    "experiments/layers/site-cscs.env": "THE site layer for one real site: its values live here",
-    "experiments/layers/hardware-mi200.env": "names the MI250X hardware (docs/configuration.md)",
+    "experiments/site-cscs.env": "THE site layer for one real site: its values live here",
+    "experiments/experiments.toml": "[hardware.mi200] names the MI250X hardware (docs/configuration.md)",
     "hpcagent_bench/cluster/systems.yaml": "the job shape of each named system (docs/configuration.md)",
     "docs/configuration.md": "shows the CSCS site layer's values next to the generic ones",
     "pyproject.toml": "package author contact (PyPI metadata), not a runtime value",

@@ -2,9 +2,9 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Env rendering and per-submission snapshots. Source for the functions, or run:
-#   ./env_layers.sh render <setups.yaml entry | env file>
+#   ./env_layers.sh render <experiments.toml entry | env file>
 #   ./env_layers.sh snapshot <env> <setup> [dir]
-# A base is layers/common.env -> layers/model-<m>.env -> one setups.yaml entry (env_spec.py). A
+# A base is [common] -> [model.<m>] -> one experiments.toml entry (env_spec.py). A
 # submitter renders one base, applies the setup's keys, and snapshots the result per submission.
 # Jobs only ever source a flat snapshot, never a layer.
 
@@ -16,7 +16,7 @@ env_spec() {
     "${HPCAGENT_BENCH_HOST_PYTHON:?source helpers/scripts/host_python.sh}" "$(dirname -- "${BASH_SOURCE[0]}")/env_spec.py" "$@"
 }
 
-# render_env <entry|file> -- the flat KEY=VALUE env an setups.yaml entry or a layered env file stands for.
+# render_env <entry|file> -- the flat KEY=VALUE env an experiments.toml entry or an env file stands for.
 render_env() { env_spec render "$1"; }
 
 # publish_readonly <tmp> <dest> -- makes <tmp> read-only and hard-links it to <dest>, which must not

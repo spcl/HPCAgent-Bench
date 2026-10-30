@@ -2,11 +2,24 @@
 
 ## 0.4.0 (2026-10)
 
-Grading and prompt release. The results database is schema 17 (`PRAGMA user_version = 17`): 16 adds
-`grades.library_hash`, 17 `grades.agent_root`; a 0.3.x file gains both columns when opened for writing. Golden
-files are format 3: older ones are recomputed, never mixed in.
+Grading and prompt release. The results database is schema 19 (`PRAGMA user_version = 19`): 16 adds
+`grades.library_hash`, 17 `grades.agent_root`, 18 `grades.agent_libs`, 19 `grades.phase`; a 0.3.x file gains them
+when opened for writing. Golden files are format 3 and keyed by the judge image and CPU model: older ones are recomputed, never
+mixed in.
 
-Pins: dace extended `3dc9b980e`; user plugins NestForge `034f61d`, Alloy `c35d359`.
+Pins: dace extended `3ef7de40e`; user plugins NestForge `ff8b05e` and Alloy `6176f24`, both with their prompt as
+overlay YAML.
+
+### Upgrading from 0.3.x
+- **Experiments:** `experiments/experiments.toml` is the one experiment file (`setups.yaml`, `layers/*.env` and
+  `serve-only.env` are gone); copy your site layer to `experiments/site.env`.
+- **Prompt variants:** set `prompt.overlays` (`HPCAGENT_BENCH_PROMPT_OVERLAYS`) instead of `AGENT_PROMPT_OVERLAYS`,
+  `AGENT_PROMPT_LAYERS`, `prompt.template_dirs` or `--prompt-generator`; a variant is an overlay YAML file.
+- **Plugins:** a packet's `about`, `workflow`, `off` and `replace` keys become one overlay file it lists
+  (`overlays = ["<plugin>:prompt/overlay.yaml"]`); a skill page loses its `packet:` frontmatter; a study's own pages
+  (`skills.external`) move into a user plugin. A plugin that links LLVM's OpenMP declares `openmp = "libomp"`.
+- **Before a run:** let `submit.sh` queue golden prep (the default); `GOLDENS=0` skips it and the first grades pay
+  the cold reference cost.
 
 ### Grading
 - **The oracle's own timed run writes the expected outputs.** A grade no longer runs the reference a second time:
@@ -17,7 +30,8 @@ Pins: dace extended `3dc9b980e`; user plugins NestForge `034f61d`, Alloy `c35d35
 - **Golden prep before every experiment.** `submit.sh` queues one `prepare --steps grade` job per wave language
   (`GOLDEN_NODES`, `GOLDENS=0` skips it) that every wave waits on; it fills the judge store's goldens (expected
   outputs per pool seed, write probe, baseline race) so a run's grades time only the candidate (warm `/submit`
-  72 s, `/score` 25 s).
+  72 s, `/score` 25 s). Only golden prep (`grading.fill_goldens`) computes the pool seeds a grade did not draw; a
+  live grade never waits for them.
 - **Fixed input sets.** `/submit` grades one fixed secret set of 4 (size, config) pairs per kernel, `/score` 2 of
   them picked by a judge-only seed (`mw2x3`); goldens are per pair, baseline races are stored in the results DB.
 - **Leader-first race (best-of-v3/v4).** The expected winner is timed first and the others under an early stop
@@ -32,33 +46,146 @@ Pins: dace extended `3dc9b980e`; user plugins NestForge `034f61d`, Alloy `c35d35
   and NaN/Inf checks run chunked on the thread pool; a stopped candidate runs once.
 - **Grade-under claims its work.** Final grades, promotions and scaling sweeps (with their torch.distributed
   baseline points) claim items from a shared queue under `--out-dir`; a dead worker's claims go stale and another
-  takes them. `grade-under run --shards` is gone.
+  takes them, also across two jobs grading one `--out-dir` at once. `grade-under run --shards` is gone.
 - The seal binds a kept folder inside a hidden one under a read-only root back (numba references in the judge store).
+- **Golden prep grades the numba reference** as its candidate (a track without numba keeps the compiled one): the
+  outputs, probes and baseline race it fills do not depend on the candidate, and a generated C reference over the
+  per-rep cap (ls3df, warpx) no longer fails the prep. ls3df's race leader is numba.
+- Golden prep grades `/score` and `/submit` even when the first finds the reference incorrect; cp2k TRS4 gains a
+  conditioning band (1e-7) for its purification; the lulesh numba reference divides by zero as numpy does.
+- **A baseline the memory cap aborts is cut, not lost.** A compiled reference that aborts on an allocation the
+  cap refused (SIGABRT or the allocator's own failure) is cut like one killed at the timeout once another finished
+  (warpx's generated C); SIGSEGV stays a crash.
+- Sizes: nfa_frontier's stream is halved (XL and fuzz `T` up to 5.7M) and ls3df's fuzz stays near XL (`Lb = N // 5`,
+  `nfrag` up to 52; the largest draw was ~9x XL), so their serial C references fit the 300 s per-rep cap.
 
 ### Prompts
 - **The prompt is a model.** `agent/prompt.md` is a list of blocks; a `PromptOverlay` (`agent/prompt_overlays/*.yaml`,
   pydantic `Block`/`Prompt`/`Edit`/`Insert`/`Overlay`, immutable) sets, inserts, disables or removes blocks of the
   agent prompt and the task prompt's sections. The launcher resolves the setup's layers, packet and overlays into
-  `prompt.json`; the driver refuses to start on the base prompt when overlays are set and nothing was staged. The
-  default prompt renders byte-identical to 0.3.0; the prompt study's three variants are overlays (`study-v1/2/3`).
+  the setup's own `prompt.md` (the same `@@section` format, overlays and vars applied, readable as staged); the
+  driver refuses to start on the base prompt when overlays are set and nothing was staged. The
+  model rendered the 0.3.0 prompt byte-identically when it landed; the base text has changed since (next bullet).
+- **One way to change a prompt: an overlay.** The user names overlays in `prompt.overlays`
+  (`HPCAGENT_BENCH_PROMPT_OVERLAYS` in a setup's env), applied to both prompts after the launcher's derived layer and
+  the packet's; a packet lists them in its table's `overlays`. An overlay is a built-in name, `<plugin>:<path>` (a
+  YAML file a plugin ships) or a YAML path. An agent-half text holding Jinja (`{{ name }}`, `{% %}`) is refused with
+  the reason: the agent prompt fills only `{{UPPER}}` slots.
 - Slots fill in one pass; an edit that changes nothing, a var for a slot a block lacks, an unknown block, a malformed
   overlay file and an overlay var shadowing a stated value are refused; `@@include` stays inside `agent/partials`.
-- The agent prompt asks to parallelize first, try several approaches and stop when none improves the score.
+- The agent prompt opens with an expert persona, asks to parallelize first, and never to give up: keep trying other
+  approaches, then submit the best. In the prompt study (qwen3.8, 10 kernels, one agent each) it tied "no persona,
+  submit when done" (4.1x geomean of final submissions, 5.8M vs 5.9M tokens a kernel) and beat "stop once nothing
+  improves" (2.4x, 6.5M); agents ended at the same rate under all three.
 
 ### Plugins and agents
+- **One way to declare a packet: a `[packets.<key>]` table.** The shipped packets are `hpcagent_bench/packets.toml`
+  (was `PACKETS.add` calls and 14 skill pages' `packet:` frontmatter); a plugin declares its own in its `plugin.toml`
+  with the same table (`skill_packets.PacketTable`). A packet named like a page stages it unless it lists `skills`;
+  its prompt changes are the overlays it lists. Pages are staged exactly as written.
+- **One `plugin.toml`.** A plugin declares its work as `[phases.<id>]` (title, summary, text, tools, default), in file
+  order; a packet's `agent` names the phases the agent runs, the others run on their defaults, and its tools and
+  workflow (filling the agent prompt's `{{WORKFLOW}}`, after the task prompt's intro) follow. `extends` starts a packet
+  from another of the same plugin. A missing overlay file is refused at load (`docs/extending/plugins.md`).
+- **A plugin names its OpenMP runtime.** `openmp = "libomp"` in `plugin.toml` (default `libgomp`), and
+  `plugins.openmp_environment(<name>)` starts a plugin's own processes in that runtime's OpenMP context, the one the
+  judge grades its library in, so no process maps two runtimes; a tuner episode of the plugin's flavor re-executes
+  itself in it. NestForge and Alloy link libomp and declare it.
+- **No token warning without an agent.** A tuner or direct client (no `CLAUDE_LOG_PATH`, no
+  `HPCAGENT_BENCH_USAGE_PATH`) sends 0 tokens without warning on every tool call.
+- **Flavors tuned in parallel.** `hpcagent-bench tune <flavors> <kernels> --out DIR --jobs N` runs flavor columns on
+  one machine: N tuner episodes at once against one local judge, each bound to its own run of physical cores
+  (`run_tuner --cpus`), their `/submit`s queued (`--defer`); the queue is then graded one submit at a time. Each
+  episode, and the judge, run one OpenMP thread per core they own (`OMP_NUM_THREADS`, as `run_cluster.sh` exports).
+- **Phases at run time.** A packet with an agent phase carries `next_phase`: it ends the kernel's phase, the judge runs
+  every following default phase's `default` call through the plugin's route and answers with their results, then the
+  kernel is in the next agent phase (the first again after the last). A later phase's tool is refused until then;
+  `grades.phase` records the phase of every grade.
+- **Plugin tools on the cluster router.** The router declares a `POST /<route>/<tool>` relay for every tool of a
+  phased plugin packet, checked for the caller's episode like `/next_phase`.
 - **Per-agent libraries.** An agent installs libraries into `lib/` and `include/` of its own folder; the judge
-  searches that folder, then the read-only shared root, and records which folder a grade linked from, so a regrade
-  links the same libraries. No agent can replace or link another's library.
+  searches that folder, then the read-only shared root. A build sees no other agent's folder (the seal hides them),
+  and a library symlinked out of the agent's folder is not its own. A grade records the folder and a digest of its
+  `lib/` and `include/`; a regrade whose libraries changed since is refused, never graded against other code.
 - Judge and agent find plugins the same way (entry points included, without importing them); two plugins shipping
-  one skill page, method or subagent, or a packet named like a shipped page, are refused before anything registers.
-  `setups.plugins` records each plugin's folder digest and its install checkout's commit (`-dirty` when modified).
-  Plugins declare an install command; the judge's launch venv installs them.
+  one skill page, method or subagent, a packet named like a shipped page or a registered alias, and packets that compose
+  each other, are refused before anything registers.
+  `setups.plugins` records each plugin's folder digest and its install checkout's commit (`-dirty` when modified); the
+  digest, like the launch venv's key, covers the files an install copies (no `.git`, `.venv`, caches or build output).
+  Plugins declare an install command and the `roles` it serves (judge by default, agent too when its tools import
+  the package); each role's launch venv installs them.
 - Crashed agents resume in place (claude sessions, runner checkpoints); a relaunch gets a fresh folder and leaves
   the crashed one intact. MCP tool calls send a progress heartbeat; `submit` waits for its grade.
 
+### Configuration
+- **One experiment file.** `experiments/experiments.toml` replaces `experiments/setups.yaml`, the 24
+  `experiments/layers/*.env` and `experiments/serve-only.env`: `[common]`, `[requests.<preset>]`, `[layer.<name>]`,
+  `[model.<name>]`, `[tuner]`, `[hardware.<hw>]` (with `models.<m>`), `[serve]` and `[experiment.<name>]`. Every
+  `<experiment>:<model>` renders byte-identical to 0.3.x. The site layers move to `experiments/site-*.env`; copy
+  yours from `experiments/layers/site.env` to `experiments/site.env`. `serve-only.sbatch` takes an optional
+  `SERVE_ENV_FILE` of extra overrides.
+- **User plugins follow the submit.** `submit.sh` pins the exported `HPCAGENT_BENCH_USER_PLUGIN_DIRS` into every
+  setup it stages, so a job loads the plugins its packets and tuners were resolved against.
+- **NestForge study (`nestforge12`).** A tag of the 12 kernels NestForge has reference moves for and an experiment
+  comparing the model writing `cpp`/`hip` source, NestForge's reference moves without a model, and the model driving
+  NestForge (`experiments/LAUNCH.md`, section 7).
+
+### Serving and figures
+- **qwen3.8 decodes 3.5x faster.** MI300A serves the BF16 weights (`Qwen/Qwen3.8-27B`): the FP8 checkpoint's
+  block-scaled GEMMs run an untuned Triton kernel on gfx942 that left the GPU mostly idle (20 streams: 403 -> 1426
+  tok/s at 1k context, 341 -> 912 at 100k), and the KV cache is fp8. scicomp serves qwen3.8 on two replicas of 20 agents each; with an agent node per replica a
+  node keeps to its own, so a conversation never splits across two prefix caches (`docs/serving/qwen38.md`).
+- `plot kernel-speedups`: a one-model figure colours its conditions (the control grey), `--series-label` text is set
+  in Title Case (`style.title_case`), and a study still running plots without token totals.
+- `fetch_weights.sbatch` audits blobs linked into a shared content store (a complete download no longer reads
+  as missing).
+
+### Translators and frameworks
+- **Native sweep columns time the ctypes call alone** (CPU columns, the `native` series): the 1-based index rebase
+  of a Fortran build and the argument marshalling left the sample (4-6% on three Fortran kernels), as in the judge.
+- **einsum and tensordot contract pairwise as gemms.** Three or more operands follow numpy's `optimize='optimal'`
+  path; each gemm-shaped pair becomes a strided `cblas_dgemm` (C, C++) or `MATMUL` (Fortran, real and complex), the
+  rest keep loop nests (seissol M: 54 s -> 0.9 s in C, 56 s -> 2.8 s in Fortran; ls3df XL 42 s -> 20 s). Fortran
+  renders 2-D `@`, `np.matmul` and `np.dot` with `MATMUL` too (CoMet was 5.3x slower than C).
+- Fortran drops the outermost parentheses of an assignment's right-hand side, so gfortran vectorizes and contracts
+  accumulations (`s = s + a(i)`, `s3111` was 5.8x slower than C); inner groupings stay protected.
+- C and C++ emit integer `// 2**k` as `>> k` and `% 2**k` as `& (2**k - 1)` (numpy's floor semantics); a Pluto scop
+  keeps `floord`.
+- A native call binds the fp64 symbol unless a float32 or complex64 array is passed (integer-only CoMet ran
+  `cblas_sgemm`).
+- Known gap: generated C and Fortran allocate their temporaries on every call (WarpX's Boris push, eight arrays);
+  glibc returns the large blocks to the OS, so each call refaults them. Not changed in 0.4.0: keeping them is an
+  allocator policy for every candidate, agents' code included.
+
 ### Removed
 - The `baselines` job (`baselines.sbatch`): golden prep is `prepare --steps grade`.
-- The OpenHands harness; the driver's `AGENT_METHOD` hints fill (the method overlay fills `{{HINTS}}`).
+- The OpenHands harness.
+- Method pages (`methods/<name>/method.md`, a packet's `method`, `AGENT_METHOD`): a packet's workflow is its phases or
+  an overlay filling the agent prompt's `workflow` block (`{{WORKFLOW}}`, was `method`/`{{HINTS}}`). AutoKernel's
+  agent prompt is byte-identical.
+- Every second way to define one thing: a skill page's `packet:` frontmatter and `PACKETS.add` (now `packets.toml`
+  tables); a plugin packet's `about`/`workflow`/`off`/`replace` keys (now an overlay file it lists); `skills.external`
+  folders with their `skills.yaml` (a study's own pages and packets are a user plugin);
+  `AGENT_PROMPT_OVERLAYS` (now `prompt.overlays`; `AGENT_PROMPT_LAYERS` is derived by the launcher, never set);
+  `prompt.template_dirs` and `prompt.generator` / `--prompt-generator` (an overlay sets, inserts or removes any
+  block).
+
+### Known issues
+- NestForge cannot start a session on `aes_graupel` with dace extended `3ef7de40e` (memlet propagation rejects a nested
+  connector; first bad commit `9c9a6a7a4`). Its reference replay is skipped in NestForge's CI until the fix is pinned.
+- NestForge's kernel libraries take host pointers, so the `hip` arms of the NestForge study wait for device-resident
+  inputs.
+
+### dace extended `4c7aa4e64` -> `3ef7de40e`
+TransientReuse shares buffers across states and control flow by region liveness and promotes entry-sized root buffers
+to Persistent; MoveArrayOutOfKernel lifts per-kernel arrays (extents folded to their maximum over the kernel) and
+TileKernelsCoalesced clamps a tile to an axis' constant extent. GPU tree reductions cover a contiguous row of a
+multi-dimensional accumulator and a sequential map that is a thread block's whole body; CPU OpenMP reductions into a
+persistent array go through a local pointer. SubgraphFusion fuses maps with the same dynamic range inputs and keeps
+ordering edges; TrivialMapElimination, DeadDataflowElimination and RouteOrderingThroughData keep the order a removed
+scope imposed. RangePrivatizeScatterReductions privatizes a persistent accumulator through its local alias;
+NormalizeWCR keeps a multi-element WCR tasklet writing its target directly. Fractional powers lower to
+`dace::math::pow(a, p, q)`; MoveIfIntoMap is added.
 
 ## 0.3.1 (2026-10)
 

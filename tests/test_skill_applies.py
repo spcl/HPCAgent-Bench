@@ -11,9 +11,9 @@ import re
 import pytest
 import yaml
 
-from hpcagent_bench.categories import Language
 from hpcagent_bench import packets, paths
 from hpcagent_bench import study_tags as tags
+from hpcagent_bench.categories import Language
 
 SKILLS = paths.ROOT / "hpcagent_bench" / "skills"
 
@@ -109,15 +109,13 @@ def test_every_registered_packet_resolves_or_refuses_by_device(key: str) -> None
 
 
 @pytest.mark.parametrize("key", sorted(tags.registry().packet_defs))
-def test_a_method_packet_names_a_method_a_plugin_ships(key: str) -> None:
-    """A method no plugin ships is a packet whose whole treatment is absent at runtime."""
-    from hpcagent_agent import plugins as agent_plugins
+def test_every_prompt_overlay_a_packet_names_loads(key: str) -> None:
+    """An overlay that does not load (a missing file, a plugin text gone) is a packet whose treatment is absent at
+    runtime."""
+    from hpcagent_bench import prompt_build
 
-    method = tags.registry().packet_defs[key].method
-    if not method:
-        return
-    found = agent_plugins.find(agent_plugins.plugin_dirs())
-    assert any(plugin.method(method) for plugin in found), f"{key}: no plugin ships methods/{method}/method.md"
+    for name in tags.registry().packet_defs[key].prompt_overlays:
+        prompt_build.load_overlay(name)
 
 
 def test_the_pages_a_packet_tool_owns_are_the_ones_kept_out_of_the_wildcard() -> None:

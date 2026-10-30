@@ -13,7 +13,7 @@ order of precedence:
    under plain ``sbatch`` too;
 3. the job script's leading ``#SBATCH`` line (``job submit`` only): a field the script pins stays as it is. An image
    build or verify job pins its role's ``images.env`` partition the same way, unless ``--system`` names a machine;
-4. its other environment variable (:data:`FIELDS`), which the site layer (``experiments/layers/site.env``) also
+4. its other environment variable (:data:`FIELDS`), which the site layer (``experiments/site.env``) also
    provides, since a layer keeps a value the environment already holds;
 5. the system's entry in ``systems.yaml`` (``$HPCAGENT_BENCH_SYSTEMS_FILE`` adds or replaces entries). The system is
    ``--system``, else ``$HPCAGENT_BENCH_SYSTEM``, else the entry whose ``cluster`` is ``$SLURM_CLUSTER_NAME``, else

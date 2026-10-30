@@ -96,16 +96,6 @@ def test_the_harness_cli_overlay_swaps_tools_and_fills_the_http_api() -> None:
     assert (AGENT / "http-api.md").read_text(encoding="utf-8").strip().splitlines()[0] in text
 
 
-@pytest.mark.parametrize("variant", ["study-v1", "study-v2", "study-v3"])
-def test_a_study_variant_changes_only_the_persona_and_the_stop_policy(variant: str) -> None:
-    prompt = prompt_build.resolve_layers([variant])
-    base = prompt_build.resolve_layers([])
-    changed = {block.id for block in prompt.blocks} ^ {block.id for block in base.blocks}
-    changed |= {a.id for a, b in zip(prompt.blocks[-len(base.blocks) :], base.blocks, strict=True) if a != b}
-    assert changed == ({"stop_policy"} if variant == "study-v1" else {"persona", "stop_policy"})
-    assert (prompt.blocks[0].id == "persona") == (variant != "study-v1")
-
-
 def test_a_section_id_may_hold_digits_as_a_block_id_may() -> None:
     assert [block.id for block in prompt_blocks.parse("@@section a@@\nA\n@@section step2@@\nB\n").blocks] == [
         "a",
@@ -185,21 +175,31 @@ def test_a_disabled_block_does_not_render_and_a_removed_one_is_gone() -> None:
     assert prompt_blocks.apply(prompt, Overlay(remove=("a",))).ids() == ("b",)
 
 
-def test_the_resolved_prompt_round_trips_through_its_json(tmp_path: pathlib.Path) -> None:
-    prompt = prompt_build.resolve_layers(["harness-cli", "study-v3"])
-    path = tmp_path / prompt_blocks.PROMPT_JSON
-    path.write_text(prompt.model_dump_json(), encoding="utf-8")
-    assert prompt_blocks.load(path) == prompt
+def test_a_staged_prompt_md_renders_as_the_resolved_prompt_it_was_written_from() -> None:
+    prompt = prompt_build.resolve_layers(["harness-cli", "gpu"])
+
+    sut = prompt_blocks.parse(prompt_blocks.resolved(prompt))
+
+    assert prompt_blocks.render(sut) == prompt_blocks.render(prompt)
+    assert sut.ids() == tuple(block.id for block in prompt.blocks if block.enabled)
+
+
+def test_a_staged_prompt_md_leaves_out_a_block_an_overlay_turned_off() -> None:
+    prompt = prompt_blocks.apply(
+        prompt_blocks.parse("@@section a@@\nA {{X}}\n@@section b@@\nB\n"),
+        Overlay(set={"a": Edit(vars={"X": "x"}), "b": Edit(enabled=False)}),
+    )
+
+    assert prompt_blocks.resolved(prompt) == "@@section a@@\nA x\n"
 
 
 def test_show_names_the_overlay_behind_every_changed_block() -> None:
     lines = dict(
         line.split(maxsplit=1)
-        for line in prompt_build.provenance(*prompt_build.traced_layers(["harness-cli", "study-v2"])).splitlines()
+        for line in prompt_build.provenance(*prompt_build.traced_layers(["harness-cli", "gpu"])).splitlines()
     )
     assert lines["file_tools"] == "harness-cli"
-    assert lines["stop_policy"] == "study-v2"
-    assert lines["persona"] == "study-v2 (inserted)"
+    assert lines["build"] == "gpu"
     assert lines["task"] == "base"
 
 
@@ -210,8 +210,6 @@ if __name__ == "__main__":
     for _track in TRACKS:
         test_a_track_prompt_is_the_base_prompt_plus_its_contract_at_the_addendum_slot(_track)
     test_the_harness_cli_overlay_swaps_tools_and_fills_the_http_api()
-    for _variant in ("study-v1", "study-v2", "study-v3"):
-        test_a_study_variant_changes_only_the_persona_and_the_stop_policy(_variant)
     test_a_section_id_may_hold_digits_as_a_block_id_may()
     test_a_later_overlay_wins_over_an_earlier_one_and_vars_merge()
     test_an_overlay_naming_an_unknown_block_or_an_existing_id_is_refused()

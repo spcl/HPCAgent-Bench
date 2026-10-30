@@ -103,7 +103,7 @@ many aiter builds that boot ran and the cache size, and ends the job. On a warm 
 - vLLM refuses it too: `is_aiter_found_and_supported()` requires `get_cdna_version() > 2`
   (`vllm/_aiter_ops.py`), and MI250X is CDNA2.
 
-mi200 serves Qwen3.8 on the AMD vLLM image (`layers/hardware-mi200-qwen38.env`): BF16,
+mi200 serves Qwen3.8 on the AMD vLLM image (`[hardware.mi200.models.qwen38]`): BF16,
 `--attention-backend TRITON_ATTN`, `VLLM_ROCM_USE_AITER=0`. The SGLang image carries gfx942 kernels only
 and does not run there.
 

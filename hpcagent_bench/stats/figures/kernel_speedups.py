@@ -371,12 +371,23 @@ def kernel_rows(
     by_model: dict[str, list[str]] = {}
     for setup in kept:
         by_model.setdefault(candidates[setup][0], []).append(setup)
+    # One model drawn under several conditions: colour carries the condition too (the control's neutral colour, each
+    # treatment its packet colour), since one model colour would leave shape alone to tell them apart.
+    by_condition = len(by_model) == 1 and len(kept) > 1
+    conditions_drawn = sorted({candidates[setup][1] for setup in kept}, key=setup_names.rank_condition)
+    treatment_hues = iter(palette.hues())
+    condition_colors = (
+        {c: palette.control_color() if c == "" else next(treatment_hues) for c in conditions_drawn}
+        if by_condition
+        else {}
+    )
     for model in palette.in_order(by_model.keys(), "models"):
         for setup in sorted(by_model[model], key=lambda a: setup_names.rank_condition(candidates[a][1])):
             served = set(frame.loc[frame["setup"].astype(str) == setup, "kernel"].astype(str))
             pending = frozenset(k for k in tag_kernels if k not in served)
             condition = candidates[setup][1]
-            rows.append(agent_kernel_row(frame, setup, model, condition, tag_kernels, pending, treatments))
+            row = agent_kernel_row(frame, setup, model, condition, tag_kernels, pending, treatments)
+            rows.append(dataclasses.replace(row, color=condition_colors[condition]) if by_condition else row)
     return rows
 
 

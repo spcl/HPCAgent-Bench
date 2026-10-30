@@ -9,12 +9,10 @@ from hpcagent_bench.translators.numpyto_common.emit_helpers.request import EmitR
 from hpcagent_bench.translators.numpyto_common.emit_io import write_generated
 from hpcagent_bench.translators.numpyto_common.frontend import parse_kernel, without_kept_helpers
 from hpcagent_bench.translators.numpyto_common.ir import KernelIR
+from hpcagent_bench.translators.numpyto_common.lib_nodes.blas import BLAS_PRECISIONS
 from hpcagent_bench.translators.numpyto_common.lowering import lower
 
-__all__ = ["BLAS_PRECISIONS", "pluto_lowered", "write_c_family"]
-
-#: Precisions real BLAS has a gemm for; any other keeps the loop nest.
-BLAS_PRECISIONS = ("", "float32", "float64")
+__all__ = ["pluto_lowered", "write_c_family"]
 
 
 def pluto_lowered(request: EmitRequest, bench_info: pathlib.Path) -> KernelIR:

@@ -6,7 +6,7 @@ from collections.abc import Sequence
 
 from hpcagent_bench.translators.numpyto_common.ast_build import name_, range_for, store_, walk_nodes
 from hpcagent_bench.translators.numpyto_common.lib_nodes.call_args import read_axis_keepdims
-from hpcagent_bench.translators.numpyto_common.lib_nodes.contractions import OP_SPILL_TEMP
+from hpcagent_bench.translators.numpyto_common.lib_nodes.contractions import EINSUM_TEMP, OP_SPILL_TEMP
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of
 from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
     attr_call,
@@ -933,6 +933,7 @@ def reset_temp_counters() -> None:
     re-emitting the same kernel twice yields two different sources. Called by
     :func:`numpyto_common.lowering.lower`, the single entry point of a translation unit."""
     OP_SPILL_TEMP[0] = 0
+    EINSUM_TEMP[0] = 0
     LINALG_AW[0] = 0
 
 

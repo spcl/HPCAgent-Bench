@@ -1,7 +1,7 @@
 # Serving Qwen3.8 on MI300A
 
-`Qwen/Qwen3.8-27B-FP8` on SGLang, one node, `tp=4`. The cheapest useful endpoint here. Source of
-truth: `experiment:qwen38` in `experiments/setups.yaml` over `layers/model-qwen38.env`. Background:
+`Qwen/Qwen3.8-27B` (BF16) on SGLang, one node, `tp=4`; the FP8 checkpoint decodes slower on gfx942 (below). The cheapest useful endpoint here. Source of
+truth: `experiment:qwen38` in `experiments/experiments.toml` over `[model.qwen38]`. Background:
 [`knobs.md`](knobs.md).
 
 ```bash
@@ -15,7 +15,8 @@ EDF `hpcagent-bench-sglang-mi300-latest`; env `SGLANG_USE_AITER=1`, `SGLANG_SET_
 
 ```
 --chat-template containers/inference/chat-template-qwen38.jinja --trust-remote-code
---attention-backend aiter --language-only --watchdog-timeout 1800
+--attention-backend aiter --kv-cache-dtype fp8_e4m3 --language-only
+--watchdog-timeout 1800
 --context-length 262144 --mem-fraction-static 0.306 --mamba-full-memory-ratio 0.25
 --max-running-requests 128 --enable-metrics
 --reasoning-parser qwen3 --tool-call-parser qwen3_coder --enable-cache-report
@@ -47,17 +48,42 @@ log lines), which is the shipped configuration ([knobs.md](knobs.md#aiter-correc
 | `--kv-cache-dtype fp8_e4m3` | 284.9, 283.5 | 7.84, 7.72 | 1.2 / 8.6-10 | 123-125 | pass |
 
 - **fp8 KV: +11% aggregate, +18% per agent** against the same node's base and base2 (257.5/256.6,
-  drift under 1%), reproduced on a second node; gates pass. Candidate for the shipped line.
+  drift under 1%), reproduced on a second node; gates pass. Shipped: it doubles the KV pool, which the
+  prompt study's ~115k-token conversations need (40 x 115k is past the 4.03 M bf16 pool).
 - Rejected: MTP/NEXTN 3-4 (-36%), `--mamba-full-memory-ratio 0.5` (233 vs 241-255), `--schedule-policy
   lpm` (inside the 6% same-node drift), `--tp-size 2 --dp-size 2` (78 tok/s: DP round-robin splits a
   conversation, hit 0.48), `--mamba-radix-cache-strategy no_buffer --disable-overlap-schedule` (132 tok/s,
   hit 0.79; ReplaySSM needs it), `--mamba-ssm-dtype bfloat16` (263, within noise).
 
+## Measured: decode, one replica (10-29)
+
+Distinct random prompts, steady-state decode while every stream decodes (`jobs/qwen-serve-bench/decode_bench.py`).
+
+| Leg (aggregate tok/s) | 1 stream, 1k | 8 streams, 1k | 20 streams, 1k | 20 streams, 100k |
+|---|---|---|---|---|
+| bf16 KV, aiter FP8 GEMM | | | | 297 |
+| fp8 KV, aiter FP8 GEMM | 41 | 169 | 403 | 341 |
+| fp8 KV, `--fp8-gemm-backend triton` | 66 | 410 | 1078 | 725 |
+| fp8 KV, BF16 weights (`Qwen/Qwen3.8-27B`) | 97 | 663 | 1426 | 912 |
+
+- On gfx942 SGLang sends every block-scaled FP8 linear to aiter's Triton `gemm_a8w8_blockscale` (the CK path is
+  gfx950 only); a decode step was ~44 ms of GPU time with the GPU otherwise idle. SGLang's own Triton block GEMM
+  is 2.7x at 20 streams (2.1x at 100k context). The BF16 weights are faster still (1.3x over that): their
+  GEMMs take aiter's tuned small-M BF16 kernels and need no per-layer activation quantization. Shipped: BF16
+  weights, fp8 KV (5.5M-token pool, 20 x 262k fits).
+- Context length barely moves the step (1k and 100k within 15%): attention is not the decode cost.
+- No gain: `--enable-aiter-allreduce-fusion`, triton attention with 16 KV splits. Worse: MTP (EAGLE 3/1/4, -60% at
+  8-20 streams), TP2.
+- Gates (serve-only PREWARM=1): tool-call, reasoning and ACCURACY 9/9 pass with the Triton FP8 GEMM (704847) and
+  with the BF16 weights (704917).
+- An experiment with two replicas pins each agent node to its own replica (`run_cluster.sh`), so a conversation
+  never splits across prefix caches.
+
 ## Rules
 
 - Serve on SGLang on MI300A. vLLM with `ROCM_AITER_FA` garbled qwen3.8 under agent load (random tokens
   in the reasoning, invented tool names), so qwen3.8 has no MI300A vLLM line. MI250X serves it on
-  vLLM with `TRITON_ATTN` (`layers/hardware-mi200-qwen38.env`).
+  vLLM with `TRITON_ATTN` (`[hardware.mi200.models.qwen38]`).
 - Move `--mem-fraction-static` together with `--mamba-full-memory-ratio` (with ratio `r` the budget
   `R` splits mamba `R*r/(1+r)`, KV `R/(1+r)`) and with `--attention-backend aiter` (aiter derates by
   0.85, so 0.306 is an effective 0.26). Never above 0.306: the OOM killer takes the process without a

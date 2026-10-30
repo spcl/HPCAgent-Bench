@@ -5,13 +5,20 @@ from collections.abc import Sequence
 
 from hpcagent_bench.translators.numpyto_common.ast_build import name_, range_for, store_
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import iter_extent_of
-from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import const_, const_or_name, wrap_for_loops
+from hpcagent_bench.translators.numpyto_common.lib_nodes.helpers import (
+    alloc_marker,
+    const_,
+    const_or_name,
+    wrap_for_loops,
+)
 from hpcagent_bench.translators.numpyto_common.lib_nodes.scalarize import scalarize_at_iters
 
 __all__ = [
     "BLAS_GEMM_MARKER",
+    "BLAS_GEMM_STRIDED_MARKER",
     "BLAS_INELIGIBLE_DTYPES",
     "BLAS_LOWERING_FLOAT",
+    "BLAS_PRECISIONS",
     "expand_add_outer",
     "expand_dot",
     "expand_dot_2d",
@@ -24,6 +31,11 @@ __all__ = [
 #: Args are ``(a, b, out, m, n, k)`` on row-major C-contiguous operands.
 BLAS_GEMM_MARKER = "__blas_gemm"
 
+#: The strided form of :data:`BLAS_GEMM_MARKER`: one gemm of a contraction (``lib_nodes.contractions``), args
+#: ``(a, b, out, m, n, k, trans_a, trans_b, lda, ldb, ldc, a_offset, b_offset, out_offset)`` on row-major
+#: buffers; ``trans_*`` is a 0/1 literal and each offset an element index into its buffer.
+BLAS_GEMM_STRIDED_MARKER = "__blas_gemm_strided"
+
 #: Element dtypes a real BLAS gemm cannot take, so they keep the loop nest: CBLAS's real gemms take
 #: float32 / float64 only, so half and the storage-only formats (bfloat16, fp8) compute in the
 #: loop nest, where every read promotes and every write demotes.
@@ -35,6 +47,10 @@ BLAS_INELIGIBLE_DTYPES = ("complex", "int", "uint", "bool", "float16", "bfloat16
 #: (``A.astype(np.float32)`` in an fp64 kernel) would reach ``dgemm`` as a ``float *``, and keeps the
 #: loop nest instead.
 BLAS_LOWERING_FLOAT = "float64"
+
+#: Requested precisions a target's gemm is emitted at; any other (half, the storage-only formats) keeps the
+#: loop nest.
+BLAS_PRECISIONS = ("", "float32", "float64")
 
 
 def expand_matmul(
@@ -174,13 +190,20 @@ def expand_add_outer(
 
 
 def expand_dot_2d(
-    target: ast.Name, args: Sequence[ast.expr], shape_table: dict[str, tuple[str, ...]]
+    target: ast.Name,
+    args: Sequence[ast.expr],
+    shape_table: dict[str, tuple[str, ...]],
+    local_dtypes: dict[str, str] | None = None,
+    fresh_local_allocs: dict[str, tuple[str, ...]] | None = None,
+    blas_float: str | None = None,
+    blas_complex: bool = False,
 ) -> list[ast.stmt]:
     """``out = np.dot(A, b)`` -> matrix-vector / matrix-matrix. Routes 1-D x 1-D
     (both operands with 1-D iteration extent -- bare Names or slices like
     ``A[i, :j]``) to :func:`expand_dot`; the remaining branches handle
     matrix-vector/vector-matrix, requiring both operands to be bare Names with
-    declared 2-D shape.
+    declared 2-D shape. On a BLAS target (``blas_float``) a 2-D x 2-D product is the einsum
+    ``ij,jk->ik``, which becomes the target's gemm.
     """
     if len(args) != 2:
         raise NotImplementedError("np.dot needs 2 args")
@@ -262,5 +285,24 @@ def expand_dot_2d(
                 ],
             )
         ]
-    # 2-D x 2-D: delegate to matmul.
+    # 2-D x 2-D: the target's gemm, else the matmul loop nest.
+    if blas_float is not None:
+        from hpcagent_bench.translators.numpyto_common.lib_nodes.contractions import expand_einsum  # noqa: PLC0415
+
+        alloc: list[ast.stmt] = []
+        if target.id not in shape_table and fresh_local_allocs is not None:
+            # A hoisted result nothing sized yet: the gemm writes it through a call, so it needs its
+            # allocation (and the declaration the loop nest's element stores would have implied).
+            result = (a_shape[0], b_shape[1])
+            shape_table[target.id] = fresh_local_allocs[target.id] = result
+            alloc.append(alloc_marker(target.id))
+        return alloc + expand_einsum(
+            target,
+            [const_("ij,jk->ik"), a, b],
+            shape_table,
+            local_dtypes=local_dtypes,
+            fresh_local_allocs=fresh_local_allocs,
+            blas_float=blas_float,
+            blas_complex=blas_complex,
+        )
     return expand_matmul(target, a, b, shape_table)

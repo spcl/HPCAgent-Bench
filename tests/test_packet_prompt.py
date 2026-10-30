@@ -1,8 +1,8 @@
 # Copyright 2026 ETH Zurich and the HPCAgent-Bench authors.
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""A plugin packet's ``prompt.overlays`` shape the prompts of the setups that run it: the ``task`` half turns the task
-prompt's sections off, replaces or extends them, its template roots are searched, and the user's own overlays still
-win. The ``agent`` half reaches the agent prompt through the ``prompt.json`` the launcher stages."""
+"""A plugin packet's prompt overlays (``overlays = ["<plugin>:<path>"]``) shape the prompts of the setups that run it:
+the task prompt's sections are turned off or replaced, an inserted text follows the intro of both prompts, and the
+user's own overlays still win. The agent prompt takes it through the ``prompt.md`` the launcher stages."""
 
 import pathlib
 from collections.abc import Iterator
@@ -14,7 +14,8 @@ from hpcagent_agent import prompt_blocks
 from hpcagent_bench import config, packets, plugins, prompt_build
 from hpcagent_bench import study_tags as tags
 from hpcagent_bench.categories import Language, SourceMode
-from hpcagent_bench.harness.prompts import PromptConfig, build_prompt
+from hpcagent_bench.harness import prompts
+from hpcagent_bench.harness.prompts import build_prompt
 from hpcagent_bench.harness.task import Task
 from hpcagent_bench.vocabulary import PACKETS
 from tests.fresh_module import fresh
@@ -22,46 +23,48 @@ from tests.problem_facts import rendered
 
 TASK = Task("gemm", SourceMode.RESTRICTED, Language.C)
 
+#: The texts every probe plugin ships under ``prompt/``.
+TEXTS = {
+    "timing.md": "## Timing\nThe plugin times {{ kernel }} itself.\n",
+    "timing_two.md": "## Timing\nThe second plugin times {{ kernel }}.\n",
+    "about.md": "## Probe\nThe plugin also counts the kernel's calls.\n",
+    "keep.md": "## Keep going\nApply one more move.\n",
+}
+
 
 def registered_plugin(root: pathlib.Path, name: str, overlay: str) -> pathlib.Path:
-    """Register a plugin whose packet ``name`` applies the prompt overlay ``overlay`` (YAML) and ships its texts
-    under its ``prompts`` root: ``house/timing.j2`` and ``house/after_timing.j2`` for the task prompt,
-    ``house/keep.md`` and ``house/after.md`` for the agent prompt."""
+    """Register a plugin whose packet ``name`` applies ``overlay`` (``prompt/overlay.yaml``, ``{name}`` filled) and
+    ships :data:`TEXTS` under ``prompt/``."""
     folder = root / name
-    house = folder / "prompts" / "house"
-    house.mkdir(parents=True)
-    (house / "timing.j2").write_text("## Timing\nThe plugin times {{ kernel }} itself.\n\n", encoding="utf-8")
-    (house / "after_timing.j2").write_text("The plugin also counts {{ kernel }}'s calls.\n\n", encoding="utf-8")
-    (house / "keep.md").write_text("## Keep going\nApply one more move.\n", encoding="utf-8")
-    (house / "after.md").write_text("Call the plugin's tool first.\n", encoding="utf-8")
-    (folder / "prompts" / f"{name}.yaml").write_text(overlay, encoding="utf-8")
+    (folder / "prompt").mkdir(parents=True)
+    for file, text in TEXTS.items():
+        (folder / "prompt" / file).write_text(text, encoding="utf-8")
+    (folder / "prompt" / "overlay.yaml").write_text(overlay.replace("{name}", name), encoding="utf-8")
     (folder / "plugin.toml").write_text(
-        f'name = "{name}"\n\n[packets.{name}]\nname = "{name}"\n\n'
-        f'[packets.{name}.prompt]\noverlays = ["prompts/{name}.yaml"]\ntemplate_dirs = ["prompts"]\n',
+        f'name = "{name}"\n\n[packets.{name}]\nname = "{name}"\noverlays = ["{name}:prompt/overlay.yaml"]\n',
         encoding="utf-8",
     )
     plugins.register_packets(agent_plugins.find([folder]))
     tags.registry.cache_clear()
+    # Each test registers its own table under the same reference, which keys the task prompt's cache.
+    prompts.task_blocks.cache_clear()
     return folder
 
 
-#: A packet overlay that replaces the task prompt's timing and drops its scoring.
-TIMING_OFF_SCORING = """task:
-  set:
-    timing: {text: "file:house/timing.j2"}
-    scoring: {enabled: false}
-"""
-#: A packet overlay that adds a block after the task prompt's timing.
-AFTER_TIMING = """task:
-  insert:
-    - {after: timing, block: {id: plugin_after_timing, text: "file:house/after_timing.j2"}}
-"""
+#: A packet that replaces the task prompt's timing and drops its scoring.
+TIMING_OFF_SCORING = 'task:\n  set:\n    timing: {text: "file:timing.md"}\n    scoring: {enabled: false}\n'
+#: A packet that says what it does after the intro of both prompts.
+ABOUT = "".join(
+    f'{half}:\n  insert:\n    - {{after: intro, block: {{id: "{{name}}", text: "file:about.md"}}}}\n'
+    for half in ("agent", "task")
+)
 
 
 @pytest.fixture
-def plugin_root(tmp_path: pathlib.Path) -> Iterator[pathlib.Path]:
-    """A folder for plugins registered into the packet vocabulary, which is left as it was found."""
+def plugin_root(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[pathlib.Path]:
+    """A folder for user plugins registered into the packet vocabulary, which is left as it was found."""
     tags.registry()  # the shipped and installed plugins register first, once
+    monkeypatch.setenv(agent_plugins.USER_PLUGIN_DIRS_ENV, str(tmp_path))
     entries, orders = dict(PACKETS.entries), dict(PACKETS.orders)
     yield tmp_path
     PACKETS.entries.clear()
@@ -97,15 +100,14 @@ def test_the_users_own_overlays_win_over_the_packet(plugin_root: pathlib.Path, t
 
 
 def test_two_packets_apply_their_overlays_in_spec_order(plugin_root: pathlib.Path) -> None:
-    registered_plugin(plugin_root, "promptone", "task:\n  set:\n    timing: {enabled: false}\n")
-    registered_plugin(
-        plugin_root, "prompttwo", 'task:\n  set:\n    timing: {text: "file:house/timing.j2", enabled: true}\n'
-    )
+    registered_plugin(plugin_root, "promptone", 'task:\n  set:\n    timing: {text: "file:timing.md"}\n')
+    registered_plugin(plugin_root, "prompttwo", 'task:\n  set:\n    timing: {text: "file:timing_two.md"}\n')
 
     with config.overridden("record.packet", "promptone+prompttwo"):
         sut = build_prompt(TASK)
 
-    assert "The plugin times gemm itself." in sut
+    assert "The second plugin times gemm." in sut
+    assert "The plugin times gemm itself." not in sut
 
 
 def test_a_gpu_setup_takes_the_device_form_of_its_packet_in_both_prompts(
@@ -114,28 +116,28 @@ def test_a_gpu_setup_takes_the_device_form_of_its_packet_in_both_prompts(
     """A device-language setup applies the packet's GPU form (packets.by_device) to the task prompt, the same layers
     the agent prompt takes (prompt_build.env_layers)."""
     registered_plugin(plugin_root, "promptprobe", TIMING_OFF_SCORING)
-    registered_plugin(plugin_root, "promptprobegpu", AFTER_TIMING)
+    registered_plugin(plugin_root, "promptprobegpu", ABOUT)
     monkeypatch.setattr(packets, "GPU_ALIASES", {"promptprobe": "promptprobegpu"})
     environ = {"HPCAGENT_BENCH_RECORD_PACKET": "promptprobe", "LANGUAGE": "hip"}
 
     with config.overridden("record.packet", "promptprobe"), config.overridden("record.language", "hip"):
         sut = build_prompt(TASK)
-        overlays = PromptConfig.resolve().overlays
+        task_packet = prompts.setup_packet()
         agent_packet = prompt_build.env_layers(environ)[1]
 
-    assert overlays == packets.prompt_layers(agent_packet) == packets.prompt_layers("promptprobegpu")
-    assert "The plugin also counts gemm's calls." in sut
+    assert task_packet == agent_packet == "promptprobegpu"
+    assert "The plugin also counts the kernel's calls." in sut
     assert "The plugin times gemm itself." not in sut
 
 
-def test_a_packet_adds_text_after_a_section_only_in_its_own_setups(plugin_root: pathlib.Path) -> None:
-    registered_plugin(plugin_root, "promptprobe", AFTER_TIMING)
+def test_a_packets_about_text_follows_the_intro_only_in_its_own_setups(plugin_root: pathlib.Path) -> None:
+    registered_plugin(plugin_root, "promptprobe", ABOUT)
     without = build_prompt(TASK)
 
     with config.overridden("record.packet", "promptprobe"):
         sut = build_prompt(TASK)
 
-    assert sut.index("## Timing") < sut.index("The plugin also counts gemm's calls.") < sut.index("## Correctness")
+    assert sut.index("The plugin also counts the kernel's calls.") < sut.index("## Timing")
     assert "The plugin also counts" not in without
 
 
@@ -145,18 +147,13 @@ def test_a_packet_reshapes_the_cluster_prompt_of_its_setups(
     registered_plugin(
         plugin_root,
         "promptprobe",
-        """agent:
-  set:
-    build: {enabled: false}
-    keep_improving: {text: "file:house/keep.md"}
-  insert:
-    - {after: end_to_end, block: {id: plugin_after, text: "file:house/after.md"}}
-""",
+        'agent:\n  set:\n    build: {enabled: false}\n    keep_improving: {text: "file:keep.md"}\n'
+        '  insert:\n    - {after: intro, block: {id: promptprobe, text: "file:about.md"}}\n',
     )
     material = tmp_path / "material"
     material.mkdir()
-    (material / prompt_blocks.PROMPT_JSON).write_text(
-        prompt_build.resolve_layers([], "promptprobe").model_dump_json(), encoding="utf-8"
+    (material / "prompt.md").write_text(
+        prompt_blocks.resolved(prompt_build.resolve_layers([], "promptprobe")), encoding="utf-8"
     )
     driver = fresh("agent_driver")
     monkeypatch.setenv(driver.MATERIAL_DIR_ENV, str(material))
@@ -166,7 +163,7 @@ def test_a_packet_reshapes_the_cluster_prompt_of_its_setups(
     assert "The `compiler` field" not in sut
     assert "## Keep going\nApply one more move." in sut
     assert "Parallelize first" not in sut
-    assert sut.index("## End to end") < sut.index("Call the plugin's tool first.") < sut.index("## How you are graded")
+    assert sut.index("The plugin also counts the kernel's calls.") < sut.index("## End to end")
 
 
 def test_the_cluster_prompt_without_a_packet_keeps_every_section_and_no_section_line() -> None:
@@ -177,25 +174,25 @@ def test_the_cluster_prompt_without_a_packet_keeps_every_section_and_no_section_
     assert "Parallelize first" in sut
 
 
-def test_a_cluster_block_the_prompt_lacks_is_refused(plugin_root: pathlib.Path) -> None:
-    registered_plugin(plugin_root, "promptprobe", "agent:\n  set:\n    nosuch: {enabled: false}\n")
+def test_a_block_no_prompt_has_is_refused(plugin_root: pathlib.Path) -> None:
+    registered_plugin(plugin_root, "promptprobe", "task:\n  set:\n    nosuch: {enabled: false}\n")
 
-    with pytest.raises(ValueError, match="nosuch"):
-        prompt_build.resolve_layers([], "promptprobe")
+    with config.overridden("record.packet", "promptprobe"), pytest.raises(ValueError, match="nosuch"):
+        build_prompt(TASK)
 
 
 def test_the_users_own_inserted_text_follows_the_packets(plugin_root: pathlib.Path, tmp_path: pathlib.Path) -> None:
-    registered_plugin(plugin_root, "promptprobe", AFTER_TIMING)
+    registered_plugin(plugin_root, "promptprobe", ABOUT)
     mine = tmp_path / "mine.yaml"
     mine.write_text(
-        'task:\n  insert:\n    - {after: plugin_after_timing, block: {id: own, text: "The user reads {{ kernel }}\'s log.\\n\\n"}}\n',
+        'task:\n  insert:\n    - {after: promptprobe, block: {id: own, text: "The user reads {{ kernel }}\'s log.\\n\\n"}}\n',
         encoding="utf-8",
     )
 
     with config.overridden("prompt.overlays", (str(mine),)), config.overridden("record.packet", "promptprobe"):
         sut = build_prompt(TASK)
 
-    assert sut.index("The plugin also counts gemm's calls.") < sut.index("The user reads gemm's log.")
+    assert sut.index("The plugin also counts the kernel's calls.") < sut.index("The user reads gemm's log.")
 
 
 def test_a_plugin_packets_skill_page_is_indexed_in_the_task_prompt(
@@ -209,7 +206,7 @@ def test_a_plugin_packets_skill_page_is_indexed_in_the_task_prompt(
         "---\nname: promptprobe\ndescription: Probe page of the plugin.\nwhen: you drive the probe.\n---\n\nBody.\n",
         encoding="utf-8",
     )
-    registered_plugin(plugin_root, "promptprobe", "task:\n  set:\n    timing: {enabled: true}\n")
+    registered_plugin(plugin_root, "promptprobe", ABOUT)
 
     with config.overridden("record.packet", "promptprobe"):
         sut = build_prompt(TASK)

@@ -51,8 +51,8 @@ def test_every_slot_a_cluster_prompt_declares_is_one_the_driver_fills() -> None:
 
 
 def test_every_prompt_overlay_a_setup_names_is_a_built_in_overlay() -> None:
-    """``AGENT_PROMPT_LAYERS`` / ``AGENT_PROMPT_OVERLAYS`` name ``agent/prompt_overlays/<name>.yaml``, and the launcher
-    picks a track or harness layer by name. A typo, or a new track wired into submit.sh but given no overlay, is a run
+    """``AGENT_PROMPT_LAYERS`` names ``agent/prompt_overlays/<name>.yaml``: the launcher picks a track or harness layer
+    by name. A typo, or a new track wired into submit.sh but given no overlay, is a run
     that dies resolving its own prompt after the allocation is already up."""
     built_in = {path.stem for path in (AGENT_DIR / "prompt_overlays").glob("*.yaml")}
     submit = (SCRIPTS / "submit.sh").read_text(encoding="utf-8")
@@ -63,7 +63,7 @@ def test_every_prompt_overlay_a_setup_names_is_a_built_in_overlay() -> None:
     )
     texts = [rendered(base) for base in BASES]
     texts += [path.read_text(encoding="utf-8") for path in (REPO / "experiments").glob(".env.*")]
-    texts.append((REPO / "experiments" / "setups.yaml").read_text(encoding="utf-8"))
+    texts.append((REPO / "experiments" / "experiments.toml").read_text(encoding="utf-8"))
     for text in texts:
         for value in re.findall(r"AGENT_PROMPT_(?:LAYERS|OVERLAYS)[=:] *([a-z0-9,-]*)", text):
             named |= {name for name in value.split(",") if name}

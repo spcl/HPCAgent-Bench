@@ -1,6 +1,6 @@
 You are optimizing one kernel for speed without changing its results.
 
-{{HINTS}}
+{{WORKFLOW}}
 
 ## Task
 

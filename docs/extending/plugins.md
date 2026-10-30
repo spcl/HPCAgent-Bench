@@ -2,89 +2,123 @@
 
 Every plugin adds optimizers, of two kinds:
 
-- a **method** an LLM agent runs: a packet with its skill pages, method text, agent tools and judge routes
+- a **packet** an LLM agent runs: its skill pages, agent tools, judge routes and the prompt overlays it applies
   (`plugins/autokernel`);
 - a **flavor** that runs without an LLM: a `FlavorOptimizer` run over shipped columns, each pairing a framework
   column run as `hpcagent-bench agent <column>` ([Flavors](#flavors)).
 
-A plugin lives in a folder of its own. The plugins
-shipped with the repository live in `plugins/`; a plugin of your own can be dropped in beside them, kept anywhere
-else and named in `HPCAGENT_BENCH_USER_PLUGIN_DIRS`, or shipped inside an installed package.
+A plugin lives in a folder of its own, described by one `plugin.toml`. The plugins shipped with the repository live
+in `plugins/`; a plugin of your own can be dropped in beside them, kept anywhere else and named in
+`HPCAGENT_BENCH_USER_PLUGIN_DIRS`, or shipped inside an installed package.
 
 ## Layout
 
 ```
 my_plugin/
-  plugin.toml              # the manifest: name, description, packets, flavors
+  plugin.toml              # everything the plugin declares: phases, packets, flavors, install, ci
   __init__.py              # optional; the folder is imported as a package either way
   tools/<tool>.py          # agent-side @tool modules
   routes/<route>.py        # judge-side @route modules
-  skills/<page>/SKILL.md   # skill pages (packets are declared in plugin.toml only)
-  methods/<method>/method.md   # a method's prompt text (the prompt's {{HINTS}})
+  skills/<page>/SKILL.md   # skill pages, read by the agent on demand
+  prompt/*.yaml, *.md      # prompt overlays its packets list, and the texts they read (any path inside the folder)
   agents/<name>.md         # subagents a packet offers (Claude Code subagent files)
 ```
 
 The folder is imported as the package `hpcagent_bench_plugins.<name>`, so a route imports a helper next to it as
 `hpcagent_bench_plugins.<name>.routes.helper` (or relatively). `plugins/autokernel` is the shipped example: a
-method, its ledger tool and the packet that runs both.
+workflow overlay, its ledger tool and the packet that serves both.
 
 ```toml
 # plugin.toml
 name = "my_plugin"
 description = "One line on what the plugin adds."
 
-[packets.my_packet]             # a packet key; it takes the next colour slot
+[packets.my_packet]             # the same table as a shipped packet's; it takes the next slot
 name = "My Packet"
-method = "my_method"            # methods/my_method/method.md
 tools = ["my_tool"]
+overlays = ["my_plugin:prompt/overlay.yaml"]
 ```
 
-A packet's fields are those of [packets.md](packets.md). A plugin's packets take the next slots when it is
-loaded. Names are one namespace, checked before anything of the plugin is registered: a packet key or alias that is
-already registered or names a shipped skill page, a skill page with a shipped page's name, and a page, method or
-subagent another plugin also ships are refused. A plugin's `tools/<tool>.md` prompt fragment adds a tool's
-documentation; one named like a built-in fragment is never rendered. A plugin is found from its folder or, installed,
-from its entry point (group `hpcagent_bench.plugins`), the same way by the judge and by the agent; a results row
-records each plugin's folder digest plus, for an `[install]` root in git, that checkout's commit.
+A packet is a `[packets.<key>]` table, the one packet format ([packets.md](packets.md)), with `extends` and `agent`
+for a plugin's phases. A plugin's packets take the next slots when it is loaded. Names are one namespace, checked before
+anything of the plugin is registered: a packet key or alias that is already registered or names a shipped skill page,
+a skill page with a shipped page's name, and a page or subagent another plugin also ships are refused. A plugin's
+`tools/<tool>.md` prompt fragment adds a tool's documentation; one named like a built-in fragment is never rendered.
+A plugin is found from its folder or, installed, from its entry point (group `hpcagent_bench.plugins`), the same way
+by the judge and by the agent; a results row records each plugin's digest ([below](#installing-a-plugins-package)).
 
 ### A packet's prompt
 
-A packet can change both prompts of the setups that run it ([prompts.md](../prompts.md)) with prompt overlays: each
-has an `agent` half for the cluster prompt (`agent/prompt.md`, the one Claude Code and the other cluster harnesses
-read) and a `task` half for the in-process one, and turns blocks off or on, replaces their text, fills their slots,
-or inserts blocks beside them. `template_dirs` adds roots whose templates a `task` text may include, or which shadow
-the built-in ones by path. A packet whose agent works differently from the default one (no hand-written code, its
-own tools) says so in both.
-
-```toml
-[packets.my_packet.prompt]
-template_dirs = ["prompts"]                         # relative to the plugin folder
-overlays = ["study-v3", "prompts/my_packet.yaml"]   # built-in names, or YAML files in the plugin folder, in order
-```
+A packet changes the prompts of its setups the one way every prompt is changed: by the overlays it lists
+([prompts.md](../prompts.md)), each a YAML file with an `agent` half (the cluster prompt, `agent/prompt.md`, the one
+Claude Code and the other cluster harnesses read) and a `task` half (the in-process task prompt). A file the plugin
+ships is named `<plugin>:<path>`; a built-in overlay by its name. They apply after the launcher's track or harness layer
+and before the user's `prompt.overlays`, so the user still has the last word.
 
 ```yaml
-# prompts/my_packet.yaml; a file: path is relative to this file
+# prompt/overlay.yaml: what the plugin does follows the intro of both prompts; it writes no code
 agent:
   set:
     build: {enabled: false}
-    keep_improving: {text: "file:house/keep_improving.md"}
+    end_to_end: {text: "file:agent/end_to_end.md"}
+    workflow: {vars: {WORKFLOW: "file:workflow.md"}}
   insert:
-    - {after: intro, block: {id: my_packet, text: "file:house/what_it_does.md"}}
+    - {after: intro, block: {id: my_plugin, text: "file:about.md"}}
 task:
   set:
     build_flags: {enabled: false}
-    timing: {text: "file:house/timing.j2"}
+    delivery: {text: "file:task/delivery.md"}
   insert:
-    - {after: intro, block: {id: my_packet, text: "file:house/what_it_does.md"}}
+    - {after: intro, block: {id: my_plugin, text: "file:about.md"}}
 ```
 
-A cluster text is plain Markdown that may use the prompt's slots (`{{GRADING}}`, `{{TOOLS}}`); a task text is a
-template that may use the render context (`{{ kernel }}`). The launcher resolves the agent half into the setup's
-`prompt.json`, so an unknown block or a missing file stops the launch.
+`set` switches a block off (`enabled: false`), gives it a new text or fills its slots; `insert` adds a block before
+or after one; `remove` drops one. A `file:` value is relative to the overlay's folder. A block id a prompt does not
+have is refused, and so is a missing file. The agent half is plain Markdown that may use its `{{UPPER}}` slots
+(`{{MODE:closing}}`, `{{BUDGET}}`); Jinja syntax there (`{{ lib_name }}`, `{% if %}`) is refused, since only the task
+prompt renders it. A task-half text may use the task prompt's values (`{{ lib_name }}`, `{{ symbol }}`).
+`hpcagent-bench prompt <kernel> --blocks` lists the task prompt's sections and
+`python -m hpcagent_bench.prompt_build --packet <key> --show` the cluster prompt's blocks, with what changed each.
 
-The packet's roots are searched after the user's own `prompt.template_dirs` and before the built-in `prompts/`, and
-its overlays apply before the user's `prompt.overlays` (`AGENT_PROMPT_OVERLAYS` on the cluster), so the user still
-has the last word. The packets of one spec apply in spec order.
+### Phases
+
+A plugin may split its work into `[phases.<id>]`, in file order. Every packet of the plugin runs them all; its `agent`
+names the phases the agent works with the phase's tools, and every other phase runs on the plugin's default. The
+packet's tools are those of its agent phases plus its own `tools`, and the benchmark writes its workflow from the
+phases, naming each with who runs it (the phase's `text` for the agent, its one-line `summary` for a default): it
+fills the agent prompt's `{{WORKFLOW}}` slot and follows the task prompt's intro, after an inserted block of the
+packet's own overlays.
+
+```toml
+[phases.moves]
+title = "Moves"
+summary = "The default fusion is applied."
+text = "prompt/phases/moves.md"            # needed once a packet lets the agent run the phase
+tools = ["list_moves", "apply_move"]
+default = { tool = "run_defaults", args = { stage = "moves" } }  # what next_phase calls when it is not the agent's
+
+[phases.kernels]
+title = "Kernel code"
+summary = "Each kernel is built from its rendered source."
+text = "prompt/phases/kernels.md"
+tools = ["read_kernel", "write_kernel"]
+
+[packets.my_packet]
+name = "My Packet"
+agent = ["moves"]                           # kernels runs on its default
+tools = ["finalize"]
+
+[packets.my_packet-full]
+extends = "my_packet"                       # starts from my_packet: tables merge key by key, lists replace
+name = "My Packet (all phases)"
+agent = ["moves", "kernels"]
+```
+
+At run time each kernel of an episode is in one agent phase, the first at its first call. A packet with an agent phase
+carries the `next_phase` tool: it ends that phase, the judge calls each following default phase's `default` (`POST
+/<plugin>/<tool>` with `args`, as the agent's own call would), answers with what each returned, and moves the kernel to
+the next agent phase, the first again after the last. A tool of a later agent phase is refused until then. Every grade
+row records its phase (`grades.phase`). The plugin's tools must be served at `/<plugin name>/<tool>`.
 
 ## Agent tools
 
@@ -182,6 +216,12 @@ extends = ["dace_cpu_canon", "dace_cpu_parallel", "dace_cpu_autoopt"]
 `self.deliver(task, code, link)`, the library the judge grades. A folder plugin's module imports as
 `hpcagent_bench_plugins.<name>.<module>`. The columns register after every shipped one.
 
+`hpcagent-bench tune <flavors> <kernels> --out DIR --jobs N` runs flavor columns over kernels on one machine:
+N episodes at once against one local judge, each a tuner run bound to its own run of physical cores, their `/submit`s
+queued; once every episode ended, the queue is graded one submit at a time on the quiet machine, into
+`DIR/results.db`. Kernels and flavors are comma-separated. A recorded grade needs the secret seeds
+(`HPCAGENT_BENCH_SEEDS_PUBLIC_OK=1` for a local trial on the public ones).
+
 ## Where plugins come from
 
 | Source | How |
@@ -197,13 +237,15 @@ finds.
 
 ## Installing a plugin's package
 
-A plugin whose routes or optimizers import a package of its own says how
-that package is installed into the interpreter the judge and the optimizers run in:
+A plugin whose routes, optimizers or tools import a package of its own says how that package is installed into the
+interpreters of `roles`: the judge's (its routes and optimizers) by default, and the agent's too when its tools import
+the package.
 
 ```toml
 [install]
-root = "../.."                                                    # the repository, relative to the plugin folder
+root = "../.."                              # the repository the plugin folder lives in
 command = ["uv", "pip", "install", "--python", "{python}", "--no-deps", "{root}"]
+roles = ["judge", "agent"]                  # default: ["judge"]
 ```
 
 `python -m hpcagent_bench.plugins install [--python PATH]` runs every plugin's command in a writable copy of its
@@ -211,9 +253,29 @@ command = ["uv", "pip", "install", "--python", "{python}", "--no-deps", "{root}"
 interpreter (default: the running one). `--no-deps`: the benchmark's environment already holds what a plugin needs at
 the pins the benchmark owns, and a plugin's own pin of `hpcagent_bench` must not replace the judge's.
 
-On the cluster the launcher binds a plugin's `root` (not only its folder), and the judge image's entrypoint
-(`containers/images/lib/launch_venv.sh`) runs the install into the launch venv right after its `uv sync`; the plugins'
-sources are part of that venv's cache key, so a changed plugin gets a fresh venv.
+On the cluster the launcher binds a plugin's `root` (not only its folder), and each image's launch venv runs the
+install per role (`python -m hpcagent_agent.plugins install --role <role>`, from
+`containers/images/lib/launch_venv.sh`) right after its `uv sync`. The plugins' sources are part of that venv's cache
+key (`python -m hpcagent_bench.plugins fingerprint`), so a changed plugin gets a fresh venv.
+
+A results row records each plugin as `name:<digest>`: the sha256 of its folder's files, without what an install copy
+leaves out (`.git`, `.venv`, `__pycache__`, and a top-level `build`, `dist` and `*.egg-info`), plus `+<commit>` of an
+`[install]` root in git (`-dirty` with uncommitted changes). The launch venv's key is the same digest over the
+install roots.
+
+## OpenMP runtime
+
+A process maps one OpenMP runtime. A plugin whose code links LLVM's says so in its `plugin.toml`:
+
+```toml
+openmp = "libomp"                           # default: "libgomp"
+```
+
+and starts its own processes under `hpcagent_bench.plugins.openmp_environment("<name>")`. Where the image has OpenMP
+contexts (`hpcagent_bench/openmp/context.py`), that process starts in the context of the runtime: `libomp`, and
+OpenBLAS, FFTW and the other OpenMP-linking libraries rebuilt against it, the same context the judge grades the
+plugin's library in. A tuner episode of the plugin's flavor re-executes itself in that context before it starts.
+Where there are none (a login node, CI), nothing changes.
 
 ## Checked in CI
 

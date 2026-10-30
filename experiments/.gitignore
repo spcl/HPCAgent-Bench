@@ -1,9 +1,9 @@
-# Setup envs are rendered by the submit-*.sh scripts from layers/ + setups.yaml (env_spec.py), and every
+# Setup envs are rendered by the submit-*.sh scripts from experiments.toml (env_spec.py), and every
 # job reads its own read-only snapshot under .rendered/. None of them is a source.
 /.env.*
 /.rendered/
-# The per-user site layer, copied from layers/site-*.env.
-/layers/site.env
+# The per-user site layer, copied from experiments/site-*.env.
+/site.env
 
 # Problem lists and kernel tags the submit scripts resolve for one submission (make_problems).
 /problems-*.jsonl

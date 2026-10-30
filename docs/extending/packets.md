@@ -1,66 +1,59 @@
 # Adding a packet
 
-A packet is a registered bundle of skill pages, MCP tools and env switches, plus an optional method
-(its own loop text and tools). It is a `PacketDef` entry of `vocabulary.PACKETS`, added in
-`hpcagent_bench/skill_packets.py`, in a page's frontmatter or by a plugin; `hpcagent_bench/packets.py` resolves it. A
-single skill is its own packet and needs no entry; a `;`-separated list (`rocprof;nsys`) is an ad-hoc packet. Run commands from the repo root
-with the package installed (`uv sync`) and `. hpcagent_bench/cluster/env.sh` (`PYTHONHASHSEED=0`).
-The mechanism every registered kind shares is in [registry.md](registry.md).
+A packet is a registered bundle of skill pages, MCP tools, env switches and prompt overlays. There is one way to
+declare it: a `[packets.<key>]` table. The shipped packets are the tables of `hpcagent_bench/packets.toml`; a plugin
+declares its own in its `plugin.toml` with the same table ([plugins.md](plugins.md)). `hpcagent_bench/skill_packets.py`
+reads them (`PacketTable`) into `PacketDef` entries of `vocabulary.PACKETS`, and `hpcagent_bench/packets.py` resolves a
+spec. A single skill page is its own packet and needs no table; a `;`-separated list (`rocprof;nsys`) is an ad-hoc
+packet. Run commands from the repo root with the package installed (`uv sync`) and `. hpcagent_bench/cluster/env.sh`
+(`PYTHONHASHSEED=0`). The mechanism every registered kind shares is in [registry.md](registry.md).
 
-| Kind | Files |
-|---|---|
-| skill bundle | one class in `skill_packets.py` |
-| env or tool switch | the class (or the page's `packet:` block) with `env` and `tools`; a listed tool is a `@tool(core=False)`, served only where `HPCAGENT_BENCH_PACKET_TOOLS` names it |
-| method | a plugin ([plugins.md](plugins.md)): `methods/<name>/method.md`, its tools under `tools/`, and the packet in `plugin.toml` naming both |
+## Examples (from `packets.toml`)
 
-## Examples (from `skill_packets.py`)
+```toml
+[packets.cpf-tool-cpu]       # one page plus a tool and a switch: the page named like the key is staged
+name = "Canonical Parallel Form Tool, CPU"
+aliases = ["cpf-tool"]
+tools = ["canonical_parallel_form"]
+env = { HPCAGENT_BENCH_SERVICE_CANONICAL_PARALLEL_FORM_DIR = "${HPCAGENT_BENCH_CPF_CACHE}" }
 
-```python
-PACKETS.add(  # skill bundle, CPU languages only
-    "perf-playbook-cpu",
-    PacketDef(
-        name="Performance Toolkit (CPU)",
-        skills=("divide-and-conquer", "profiling", "opt-reports"),
-        device=PacketDevice.CPU,
-    ),
-)
-PACKETS.add(  # composition
-    "all-in-cpu",
-    PacketDef(name="All-in (CPU)", packets=("cpf-cpu-src", "perf-playbook-cpu", "lang")),
-)
+[packets.perf-playbook-cpu]  # skill bundle, CPU languages only
+name = "Performance Toolkit (CPU)"
+skills = ["divide-and-conquer", "profiling", "opt-reports"]
+device = "cpu"
+
+[packets.all-in-cpu]         # composition
+name = "All-in (CPU)"
+packets = ["cpf-cpu-src", "perf-playbook-cpu", "lang"]
+
+[packets.repo]               # env switches and a prompt overlay
+name = "Git Reformulation"
+env = { REPO_LAYOUT = "1", REPO_LAYOUT_LANGUAGE = "c" }
+overlays = ["repo"]
 ```
 
-A packet that is one page plus a name, tools or env switches declares itself in that page's frontmatter instead
-(the CPF and tracer pages), so a new skill with its packet is one file:
-
-```yaml
-packet:
-  order: 1            # a plugin's page leaves it out and takes the next free slot
-  name: Canonical Parallel Form Tool, CPU
-  aliases: [cpf-tool]
-  tools: [canonical_parallel_form]
-  env: {HPCAGENT_BENCH_SERVICE_CANONICAL_PARALLEL_FORM_DIR: "${HPCAGENT_BENCH_CPF_CACHE}"}
-```
-
-## What a packet holds
-
-`PACKETS.add(key, PacketDef(...), aliases=(...))`. The fields are:
+## What a table holds
 
 | Field | Meaning |
 |---|---|
 | `name` | display name (required) |
-| `skills` | page directories to stage; `lang` expands to the language pages for the setup, `*` to every shipped page except packet-tool manuals |
-| `packets` | registered keys to compose, resolved recursively; each must exist |
-| `env` | `(KEY, value)` switches; `${VAR}` is filled from the caller's environment |
-| `method` | a method a plugin ships (its `method.md` is the prompt's `{{HINTS}}`), at most one per resolved packet |
+| `aliases` | other spellings of the key (a rename keeps its meaning) |
+| `skills` | page directories to stage; `lang` expands to the language pages for the setup, `*` to every shipped page except packet-tool manuals. Default: the page named like the key, when its source (the package, or the plugin) ships one |
+| `packets` | registered keys to compose, resolved recursively; each must exist and none may reach itself |
+| `env` | `KEY = value` switches; `${VAR}` is filled from the caller's environment |
+| `overlays` | prompt overlays its setups apply, in order ([prompts.md](../prompts.md)): a built-in name (`agent/prompt_overlays/<name>.yaml`) or `<plugin>:<path>` |
 | `tools` | MCP tools served only in this packet's setups; its `skills` pages become their manual |
-| `device` | `PacketDevice.CPU`, `.AMD` or `.NVIDIA`; resolving for a language that device does not run is refused |
+| `agents` | subagents it offers (a plugin's `agents/<name>.md`) |
+| `device` | `cpu`, `amd` or `nvidia`; resolving for a language that device does not run is refused |
 | `frozen` | reason a recorded key takes no new submissions; it still resolves for old records |
 | `marker` | the shape the packet wears instead of the shape pool's next free one |
 | `short` | a figure's short spelling |
+| `extends` | a table of the same file this one starts from: tables merge key by key, lists replace, `aliases` are not inherited |
+| `agent` | a plugin's phases the agent runs ([plugins.md](plugins.md#phases)); only a plugin declares phases |
 
-Anything else is refused at import, and so is a wrong type, a missing `name`, a taken key or alias, a composed key that is not registered and a `device` that is not one of the three. The key `""`
-is the no-packet control: it takes `slotted=False`.
+Anything else is refused, and so is a wrong type, a missing `name`, a taken key or alias, a composed key that is not
+registered and a `device` that is not one of the three. The key `""` is the no-packet control, registered by
+`skill_packets.py` before the tables.
 
 A packet that stages a file rather than a page announces it in the task text through `packet_note`
 in `hpcagent_bench/cluster/make_problems.py`.
@@ -83,13 +76,16 @@ setup does not serve.
 
 ## Rules
 
-- The registration position is the slot. It sets the packet's hue and, unless it names a `marker`, its shape,
-  and the packet with the lowest slot is a composition's lead. Add a new packet last; `tests/test_vocabulary.py`
-  pins the order, so append yours there.
-- A recorded key is immutable: changing its skills, env or method needs a new key. A rename with the
-  same meaning is an alias (`aliases=("old-name",)`).
+- The file order is the slot: the shipped tables first, then each plugin's in plugin and key order. The slot sets
+  the packet's hue and, unless it names a `marker`, its shape, and the packet with the lowest slot is a
+  composition's lead. Add a new shipped packet last; `tests/test_vocabulary.py` pins the order, so append yours
+  there.
+- A recorded key is immutable: changing its skills, env, tools or overlays needs a new key. A rename with the
+  same meaning is an alias.
 - `packets.canonical` names a registered composite only when the staged pages and switches match it
   exactly.
+- A study's own pages and packets live in a user plugin (`HPCAGENT_BENCH_USER_PLUGIN_DIRS`), never in the
+  repository.
 - A running job sources its env once; a registry edit reaches only newly submitted setups.
 
 ## Validate
@@ -104,32 +100,3 @@ python -m pytest --maxfail=10 tests/test_packets.py tests/test_packet_env.py \
 
 `python -m hpcagent_bench.packets` prints the resolved env and a final `HPCAGENT_BENCH_RECORD_PACKET=<canonical key>`
 line, which `record_identity` writes into the setup's `.env` and the DB stores as `setups.packet`.
-
-## External packets (pages kept outside the repository)
-
-A study can bring its own skill pages without committing them. `skills.external`
-(`HPCAGENT_BENCH_SKILLS_EXTERNAL`, a list of folders) names folders that each hold a `skills.yaml`:
-
-```yaml
-packets:
-  preconditioner-v4-single:
-    name: Solver Preconditioners v4, One Page
-    pages: [single/solver-preconditioners.md]
-  preconditioner-v4-split:
-    name: Solver Preconditioners v4, Five Pages
-    pages: [split/solver-preconditioners-verdict.md, split/solver-preconditioners-frozen.md]
-```
-
-- A page is a markdown file inside the folder with the shipped pages' frontmatter (`name`, `description`,
-  `when`). Its `name` is its identity: the task lists it as `/skills/<name>.md` and it is staged under that name.
-- An external packet stages pages and nothing else. `tools`, `env` and `method` are refused: a tool runs beside
-  the judge, and an external one could read what grading hides. `packets` may name shipped packets or pages
-  to stage with it.
-- No external page or packet reuses a shipped name or another folder's.
-- External packets join the vocabulary after the shipped ones, in key order, so each gets a slot of its own.
-- A setup names one in `record.packet` (`PACKETS`) like a shipped packet, with `HPCAGENT_BENCH_SKILLS_EXTERNAL`
-  in its env. `make_problems.py` records each page's file in the problems line, so staging needs no external
-  folder; plotting a study's rows needs `skills.external` set again so the packet's display name resolves.
-- The registry is read once per process: a running job does not see an edit to the folder.
-
-`hpcagent_bench/external_skills.py` reads the folders; `tests/test_external_skills.py` pins the rules.

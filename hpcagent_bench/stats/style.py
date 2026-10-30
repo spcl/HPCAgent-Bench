@@ -170,7 +170,50 @@ MINOR_TICK_WIDTH: float = 0.6
 
 
 # Every label uses Title Case, except articles/conjunctions/prepositions inside it; identifiers
-# and mathtext keep their own spelling. Not enforced in code.
+# and mathtext keep their own spelling (:func:`title_case`).
+
+#: Articles, conjunctions and short prepositions a Title Case label keeps lower case inside it.
+MINOR_WORDS: frozenset[str] = frozenset(
+    {
+        "a",
+        "an",
+        "and",
+        "as",
+        "at",
+        "but",
+        "by",
+        "for",
+        "in",
+        "nor",
+        "of",
+        "on",
+        "or",
+        "per",
+        "the",
+        "to",
+        "vs",
+        "via",
+        "with",
+    }
+)
+
+
+def title_case(text: str) -> str:
+    """``text`` in Title Case: each word capitalized, a minor word lower case unless it opens the label or follows a
+    colon; a word already holding a capital, a digit, ``_``, ``$`` or ``.`` (an identifier, a size, mathtext) keeps
+    its spelling."""
+    words = text.split(" ")
+    out: list[str] = []
+    for index, word in enumerate(words):
+        starts = index == 0 or out[-1].endswith(":")
+        if not word or any(c.isupper() or c.isdigit() or c in "_$." for c in word):
+            out.append(word)
+        elif word.lower() in MINOR_WORDS and not starts:
+            out.append(word.lower())
+        else:
+            out.append(word[0].upper() + word[1:])
+    return " ".join(out)
+
 
 #: Type scale, in points, sized for print: a paper reproduces a figure at about half width, so
 #: 13pt ticks reach the page around 6.5pt.

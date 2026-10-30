@@ -8,8 +8,8 @@ and in `docs/serving/<tag>.md`; copy them from there.
 
 | File | Change |
 |---|---|
-| `experiments/layers/model-<tag>.env` | serving block (extends `layers/common.env`) |
-| `experiments/setups.yaml` `<experiment>.models.<tag>` | effort ladder, context and engine args (a model with a layer renders in any experiment; add an entry only for what differs) |
+| `[model.<tag>]` | serving block (extends `[common]`) |
+| `experiments/experiments.toml` `<experiment>.models.<tag>` | effort ladder, context and engine args (a model with a layer renders in any experiment; add an entry only for what differs) |
 | `hpcagent_bench/models.py` | `MODELS.add("<tag>", ModelEntry("<display name>", "org/Name"))`, after the existing models; see [registry.md](registry.md) |
 | `docs/serving/<tag>.md` | the measurements behind the recipe |
 
@@ -24,11 +24,11 @@ MODELS="org/Name" sbatch containers/inference/fetch_weights.sbatch
 ```
 
 **2. Write the env files.** Copy the pair with the same engine and node shape (`qwen38`, `oss120b`:
-one node; `kimi27sglang`, `glm53`: four nodes in `pp` mode). From `layers/model-qwen38.env` and
-`setups.yaml` `experiment.models.qwen38`, trimmed:
+one node; `kimi27sglang`, `glm53`: four nodes in `pp` mode). From `[model.qwen38]` and
+`experiments.toml` `experiment.models.qwen38`, trimmed:
 
 ```bash
-# layers/model-qwen38.env
+# [model.qwen38]
 INFERENCE_NODES=1
 INFERENCE_MODE=replicas
 INFERENCE_CE_ENV=hpcagent-bench-sglang-mi300-latest
@@ -39,7 +39,7 @@ HPCAGENT_BENCH_OPTIMIZER=Qwen/Qwen3.8-27B-FP8
 ```
 
 ```yaml
-# setups.yaml
+# experiments.toml
 experiment:
   models:
     qwen38:
