@@ -144,6 +144,34 @@ def test_the_wave_waits_on_one_prepare_job_rendering_what_its_setups_read(tmp_pa
     assert [dependency for _, _, dependency in chain] == ["afterany:77:101:102:103", "afterany:77:101:102:103"]
 
 
+#: A stub squeue: this user's queued prep jobs of the experiment ``wave`` -- the prepare job (renders numba,c) and the
+#: c golden job -- as ``<id> <comment>``, for the job name after ``-n``.
+QUEUED_SQUEUE = """name=""
+while [ $# -gt 0 ]; do [ "$1" = -n ] && name="$2"; shift; done
+case "${name}" in prepare-wave) echo "55 renders=numba,c" ;; goldens-wave-c) echo "56 goldens" ;; esac
+"""
+
+
+def test_a_second_submit_waits_on_the_prep_jobs_the_first_queued(tmp_path: pathlib.Path) -> None:
+    root = tree(tmp_path)
+    bash_stub(root / "bin", "sbatch", CHAIN_SBATCH)
+    bash_stub(root / "bin", "squeue", QUEUED_SQUEUE)
+    edf = root / "edf"
+    edf.mkdir()
+    (edf / "hpcagent-bench-judge-mi300-latest.toml").write_text('image = "judge.sqsh"\n')
+    knobs = {"KERNELS_FILE": "subset.txt", "LANGUAGES": "c hip", "PREPARE": "1", "EDF_PATH": str(edf)}
+    done = submit(root, "--account", "project", **knobs, DEPEND_ON="77", SUBMIT="1")
+    assert done.returncode == 0, done.stderr
+    lines = done.stdout.splitlines()
+    assert "queued prepare-wave -> 55: renders numba,c (reused)" in lines
+    assert "queued goldens-wave-c -> 56 (reused)" in lines
+    assert [line for line in lines if line.startswith("submitted goldens-")] == [
+        "submitted goldens-wave-hip -> 101;cluster"
+    ]
+    chain = [line.split() for line in (root / "sbatch.chain").read_text().splitlines()]
+    assert {dependency for _, _, dependency in chain} == {"afterany:77:55:56:101"}
+
+
 def test_the_root_account_submits_no_prepare_job_either(tmp_path: pathlib.Path) -> None:
     root = tree(tmp_path)
     bash_stub(root / "bin", "sbatch", CHAIN_SBATCH)
