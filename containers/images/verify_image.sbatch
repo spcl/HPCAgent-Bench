@@ -88,9 +88,20 @@ if [[ "${PLATFORM}" == amd && ${#agent_mount[@]} -gt 0 ]]; then
     srun --environment="${EDF}" "${REPO}/containers/images/mpi_gpu_check.sh" || mpi_rc=$?
 fi
 
-# What a driverless build cannot show on GH200: devices visible to cupy/jax/torch and PAPI's cuda
-# component enumerating events.
-if [[ "${PLATFORM}" == gh200 && ${#agent_mount[@]} -gt 0 ]]; then
+# What a driverless build cannot show: devices visible to cupy/jax/torch and PAPI's cuda component enumerating
+# events. An x86_64 NVIDIA image is built wherever there is room, so a node without its GPUs says it proved nothing.
+nvidia_probe=0
+case "${PLATFORM}" in
+    gh200) nvidia_probe=1 ;;
+    nvidia-x86)
+        if [[ -e /dev/nvidiactl ]]; then
+            nvidia_probe=1
+        else
+            echo "=== GPU probe SKIPPED: no NVIDIA device on $(hostname), the image's CUDA stack is unproven ==="
+        fi
+        ;;
+esac
+if [[ "${nvidia_probe}" == 1 && ${#agent_mount[@]} -gt 0 ]]; then
     echo "=== GPU probe: cupy/jax/torch devices, PAPI cuda events, Nsight ==="
     srun --ntasks=1 --environment="${EDF}" bash -c '
         set -eu

@@ -47,7 +47,8 @@ sources=""
 if [ -d "${plugins}" ]; then
     sources="$(find "${plugins}" -type f -not -path '*/.git/*' -not -path '*/__pycache__/*' -printf '%P %s %T@\n' | sort)"
 fi
-key="$({ cat "${workspace}/uv.lock" "${launch}/sync.args" "${launch}/image.id"; printf '%s' "${sources}"; } | sha256sum | cut -c1-16)"
+# This hook keys it too: a venv an older hook built (the image's own) lacks what this one installs.
+key="$({ cat "${workspace}/uv.lock" "${launch}/sync.args" "${launch}/image.id" "$0"; printf '%s' "${sources}"; } | sha256sum | cut -c1-16)"
 root="${HPCAGENT_BENCH_LAUNCH_ROOT:-}"
 if [ -z "${root}" ]; then
     root="/tmp/hpcagent-bench-launch-${role}"
@@ -70,8 +71,21 @@ if [ ! -f "${home}/ready" ]; then
             (cd "${workspace}" && UV_PROJECT_ENVIRONMENT="${venv}" uv sync -q --frozen --inexact ${sync_args})
             # The user plugins' packages for this role, over the synced venv. hpcagent_agent runs it, being in both
             # roles' venvs (an agent's has no hpcagent_bench).
+            # The ENTRYPOINT sees the image's environment only, never the step's HPCAGENT_BENCH_PLUGIN_DIRS: the plugin
+            # folders come from the mounts. ${plugins}/<name> is a plugin folder, or its [install] root holding the
+            # plugin folder named <name> (container_runtime.sh plugin_entries).
             if [ -n "${sources}" ]; then
-                "${venv}/bin/python" -m hpcagent_agent.plugins install --role "${role}" --python "${venv}/bin/python" >&2
+                dirs=""
+                for mounted in "${plugins}"/*/; do
+                    mounted="${mounted%/}"
+                    name="$(basename "${mounted}")"
+                    folder="${mounted}"
+                    [ -f "${folder}/plugin.toml" ] || folder="$(find "${mounted}" -path "*/${name}/plugin.toml" \
+                        -not -path '*/.git/*' -printf '%d %h\n' | sort -n | head -n 1 | cut -d' ' -f2-)"
+                    [ -n "${folder}" ] && dirs="${dirs:+${dirs}:}${folder}"
+                done
+                HPCAGENT_BENCH_PLUGIN_DIRS="${dirs}" "${venv}/bin/python" -m hpcagent_agent.plugins install \
+                    --role "${role}" --python "${venv}/bin/python" >&2
             fi
             ONE_OPENMP_ROOTS="${venv}" sh "${launch}/one_openmp.sh" --link-only /opt/view >/dev/null
             # TileLang gets its own venv over this one (tilelang/pyproject.toml says why), run through `tilelang-python`:

@@ -1,16 +1,14 @@
 # The first-class user plugins the user-plugins CI job installs and runs (tests/test_user_plugin_episodes.py): a
-# repository, the branch it follows, the commit checked, and the plugin folder inside it. CI and a study's launch
+# repository's main at a commit, and the plugin folder inside it. CI and a study's launch
 # (`python helpers/scripts/user_plugins.py checkout DEST NAME`) check out these commits;
-# `python helpers/scripts/user_plugins.py bump` moves the commits to their branch tips.
+# `python helpers/scripts/user_plugins.py bump` moves the commits to the tip of main.
 
 [plugins.nestforge]
 repository = "https://github.com/spcl/NestForge.git"
-branch = "main"
-commit = "ff8b05e95cd97aa1c2a489e897bdf3f53e15ae04"
+commit = "c963dbcd20c68f2998bc137d6cacb9f075efb6e8"
 folder = "plugin/nestforge"
 
 [plugins.alloy]
 repository = "https://github.com/ThrudPrimrose/alloy.git"
-branch = "main"
 commit = "6176f2475e5c1646430554288159147c73cf3d81"
 folder = "alloy/hb_plugin"
