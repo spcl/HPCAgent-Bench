@@ -23,6 +23,7 @@ from hpcagent_agent.tools import http_json
 __all__ = [
     "KEY_ORDER",
     "NAMED_SCHEMAS",
+    "OVERRIDES",
     "PACKET_TOOLS_ENV",
     "REGISTRY",
     "SKILL_DIR_ENV",
@@ -155,6 +156,8 @@ class Served:
 
 #: Every tool that exists, by name, in registration (import) order.
 REGISTRY: dict[str, Tool] = {}
+#: Plugin tools replacing the core tool of their name, for a packet that carries that name.
+OVERRIDES: dict[str, Tool] = {}
 
 #: The key order of a tool's input schema as ``tools/list`` shows it.
 KEY_ORDER = ("type", "description", "enum", "properties", "required")
@@ -216,12 +219,21 @@ def validated(model: type[pydantic.BaseModel], run: Run) -> Run:
 
 
 def tool(
-    *, spec: Spec | Callable[[Setup], Spec], core: bool = True, preview: bool = False, name: str = ""
+    *,
+    spec: Spec | Callable[[Setup], Spec],
+    core: bool = True,
+    preview: bool = False,
+    name: str = "",
+    overrides: bool = False,
 ) -> Callable[[Run], Run]:
-    """Register the decorated ``run`` as tool ``name`` (default: its module's stem); a taken name is refused."""
+    """Register the decorated ``run`` as tool ``name`` (default: its module's stem); a taken name is refused unless
+    ``overrides`` declares this tool the replacement of that core tool."""
 
     def register(run: Run) -> Run:
         tool_name = name or run.__module__.rpartition(".")[2]
+        if overrides:
+            OVERRIDES[tool_name] = Tool(tool_name, spec, run, core=False, preview=preview)
+            return run
         existing = REGISTRY.get(tool_name)
         if existing is not None and existing.run.__module__ != run.__module__:
             raise ValueError(
@@ -235,8 +247,8 @@ def tool(
 
 def offered(entry: Tool, setup: Setup) -> bool:
     """Whether ``setup`` is served ``entry`` at all (see the module docstring)."""
-    if not entry.core:
-        return entry.name in setup.packet_tools
+    if not entry.core and entry.name not in setup.packet_tools:
+        return False
     return not entry.preview or setup.preview_served
 
 
@@ -247,7 +259,7 @@ def served(setup: Setup, order: tuple[str, ...] = ()) -> dict[str, Served]:
     names = (*(name for name in order if name in REGISTRY), *(name for name in REGISTRY if name not in order))
     tools: dict[str, Served] = {}
     for name in names:
-        entry = REGISTRY[name]
+        entry = OVERRIDES[name] if name in OVERRIDES and name in setup.packet_tools else REGISTRY[name]
         if not offered(entry, setup):
             continue
         spec = entry.spec_for(setup)
