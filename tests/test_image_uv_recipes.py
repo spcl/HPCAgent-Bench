@@ -162,7 +162,7 @@ def test_the_launch_hook_builds_one_locked_venv_per_pin_beside_the_image_python(
     hook = (LIB / "launch_venv.sh").read_text(encoding="utf-8")
     # The key: the lock, the image's sync arguments and id, and the plugins' install sources.
     assert (
-        'cat "${workspace}/uv.lock" "${launch}/sync.args" "${launch}/image.id"; printf \'%s\' "${sources}"; } | sha256sum'
+        'cat "${workspace}/uv.lock" "${launch}/sync.args" "${launch}/image.id" "$0"; printf \'%s\' "${sources}"; } | sha256sum'
         in hook
     )
     assert "flock 9" in hook

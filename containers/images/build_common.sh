@@ -177,6 +177,36 @@ ce_gpu_args() {
     fi
 }
 
+# Prints this host's images.env platform: amd, gh200, nvidia-x86 or cpu. CE_PLATFORM wins; otherwise the GPU devices
+# of a compute node, or on a login node what Slurm schedules here (gpu_arch.env names the AMD partitions), with the CPU
+# family telling the two NVIDIA images apart.
+ce_platform() {
+    local vendor=cpu partitions amd_partitions
+    if [[ -n "${CE_PLATFORM:-}" ]]; then
+        printf '%s\n' "${CE_PLATFORM}"
+        return 0
+    fi
+    if [[ -e /dev/kfd ]]; then
+        vendor=amd
+    elif [[ -e /dev/nvidiactl ]]; then
+        vendor=nvidia
+    elif command -v sinfo >/dev/null; then
+        partitions="$(sinfo -h -o %P 2>/dev/null | tr -d '*')"
+        amd_partitions="$(sed -n 's/^GPU_ARCH_\([A-Za-z0-9_]*\)=.*/\1/p' "${CE_IMAGES_DIR}/gpu_arch.env")"
+        if grep -qxFf <(printf '%s\n' "${amd_partitions}") <<<"${partitions}"; then
+            vendor=amd
+        elif sinfo -h -o %G 2>/dev/null | grep -q gpu; then
+            vendor=nvidia
+        fi
+    fi
+    case "${vendor}:$(uname -m)" in
+        amd:*) printf 'amd\n' ;;
+        nvidia:aarch64) printf 'gh200\n' ;;
+        nvidia:x86_64) printf 'nvidia-x86\n' ;;
+        *) printf 'cpu\n' ;;
+    esac
+}
+
 # Prints the AMD GPU arch gpu_arch.env names for partition $1; an unknown partition is refused.
 ce_partition_arch() {
     local arch

@@ -395,7 +395,7 @@ RUN set -eux; \
     done
 
 # 6a. The isolated venvs for the Python harnesses (mini-SWE-agent, Optimas, the anthropic and openai
-# SDK runners), kept off /opt/venv so their deps cannot displace litellm[proxy]==1.94.0. Each venv is `uv sync
+# SDK runners), kept off /opt/venv so their deps cannot displace the judge-proxy group's litellm. Each venv is `uv sync
 # --package hpcagent-agent --group harness-<name>` from uv.lock: the group's harness plus hpcagent-agent's own
 # dependencies (mcp, pydantic), none of hpcagent-bench's, and the same hook. An agent step binds the submitting
 # checkout's agent/ at /opt/hpcagent-bench-agent, and that is the whole setup
@@ -543,7 +543,7 @@ RUN set -eux; \
 # (islpy, z3: both fail closed and silent), DaCe's OpenBLAS environment maps only the spack OpenBLAS, the pinned
 # judge proxy, playwright's chromium for crawl4ai; then one OpenMP runtime file and the OpenMP contexts.
 COPY containers/images/lib/openmp_gate.py containers/images/lib/omp_contexts.sh \
-     containers/images/lib/openmp_probe.c containers/images/lib/openmp_probe.f90 /tmp/one-openmp/
+     containers/images/lib/openmp_probe.c containers/images/lib/openmp_probe.f90 containers/images/lib/judge_proxy_gate.py /tmp/one-openmp/
 # The gate's venv installs hpcagent-agent editable, and uv_build needs its module root; an agent step binds the
 # real agent/ over /opt/hpcagent-bench-agent, so the stub lives only for this step.
 # The OpenMP catalog (hpcagent_bench/openmp/catalog.py) is measured here, once per image, into /opt/omp/catalog.json
@@ -573,9 +573,7 @@ RUN --mount=type=bind,source=hpcagent_bench,target=/hb-src/hpcagent_bench \
       bad = [m for m in mapped if \"openblas\" not in m and \"liblapacke\" not in os.path.basename(m)]; \
       sys.exit(\"DaCe would link a BLAS that is not OpenBLAS: %s\" % (bad or \"nothing at all\")) \
         if (bad or not libs or not any(\"openblas\" in m for m in mapped)) else None"; \
-    python3 -c "import importlib.metadata as m; \
-      want = {\"litellm\": \"1.94.0\", \"httpx2\": \"2.12.0\", \"anyio\": \"4.14.2\"}; \
-      got = {name: m.version(name) for name in want}; assert got == want, got"; \
+    python3 /tmp/one-openmp/judge_proxy_gate.py; \
     python3 -W error -c "import httpx2, starlette.testclient as tc; assert tc.httpx is httpx2, tc.httpx"; \
     python3 -c "import crawl4ai, crawl4ai.content_filter_strategy, crawl4ai.markdown_generation_strategy, fastapi, httpx, pydantic, uvicorn"; \
     command -v litellm; \

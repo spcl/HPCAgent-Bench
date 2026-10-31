@@ -18,6 +18,8 @@ import subprocess
 import tempfile
 import textwrap
 
+import pytest
+
 from hpcagent_bench import paths
 from hpcagent_bench.cpf import cache as cpf_cache
 
@@ -93,10 +95,22 @@ def test_agent_edf_does_not_mount_the_repo(tmp_path: pathlib.Path) -> None:
     repo = str(tmp_path / "repo")
     # The tools subtree and the launch venv's pins (containers/images/lib/launch_venv.sh) are allowed; the tree that
     # holds the references is not.
-    allowed = (f"{repo}/agent:", f"{repo}/uv.lock:", f"{repo}/pyproject.toml:")
+    allowed = (
+        f"{repo}/agent:",
+        f"{repo}/uv.lock:",
+        f"{repo}/pyproject.toml:",
+        f"{repo}/containers/images/lib/launch_venv.sh:",
+    )
     leaks = [mount for mount in mounts(rendered) if repo in mount and not mount.startswith(allowed)]
     assert not leaks, f"agent EDF mounts the checkout: {leaks}"
     assert "/scratchfs/:/scratchfs/" not in rendered, "agent EDF still inherits the judge's wholesale mount"
+
+
+@pytest.mark.parametrize("role", ["agent-node", "judge-node"])
+def test_every_benchmark_role_runs_the_checkouts_launch_hook(tmp_path: pathlib.Path, role: str) -> None:
+    """An image built before a change to its ENTRYPOINT (the plugins' installs) runs this job's hook."""
+    hook = f"{tmp_path / 'repo'}/containers/images/lib/launch_venv.sh:/opt/launch/launch_venv.sh:ro"
+    assert hook in mounts(render(tmp_path, role))
 
 
 def test_the_agent_never_mounts_studies(tmp_path: pathlib.Path) -> None:

@@ -182,6 +182,12 @@ install_root() {
     "${HPCAGENT_BENCH_HOST_PYTHON:-python3}" -m hpcagent_bench.plugins install-root "$1"
 }
 
+# launch_hook_bind <checkout> -- the checkout's launch hook over the image's ENTRYPOINT, host:container: an image
+# built before a change to it (the plugins' installs) runs the checkout's.
+launch_hook_bind() {
+    printf '%s/containers/images/lib/launch_venv.sh:/opt/launch/launch_venv.sh\n' "$1"
+}
+
 # plugin_binds -- what every role but the engines binds for the plugins, host:container, one per line, so the agent
 # serves the tools and the judge the routes of the same plugins.
 plugin_binds() {
@@ -254,14 +260,15 @@ derived_edf() {
             agent* | vllm* | inference*) ;;
             *) printf '    "%s:%s",\n' "${HPCAGENT_BENCH_REPO}" "${JUDGE_PACKAGE_MOUNT}" ;;
         esac
-        # The plugins, read-only for every role that runs benchmark code (an agent able to write a tool would change
-        # what the rest of its own job runs).
+        # The plugins and the checkout's launch hook, read-only for every role that runs benchmark code (an agent able
+        # to write a tool would change what the rest of its own job runs).
         case "${role}" in
             vllm* | inference*) ;;
             *)
                 plugin_binds | while IFS= read -r plugin_bind; do
                     printf '    "%s:ro",\n' "${plugin_bind}"
                 done
+                printf '    "%s:ro",\n' "$(launch_hook_bind "${HPCAGENT_BENCH_REPO}")"
                 ;;
         esac
         case "${role}" in
@@ -437,10 +444,11 @@ edf_with_checkout() {
         echo "edf_with_checkout: ${edf} mounts nothing at ${JUDGE_PACKAGE_MOUNT} (install_edfs.sh renders one that does)" >&2
         return 2
     }
-    # The plugins too: a step importing hpcagent_bench loads them from HPCAGENT_BENCH_PLUGIN_DIRS.
+    # The plugins too (a step importing hpcagent_bench loads them from HPCAGENT_BENCH_PLUGIN_DIRS), and the launch hook
+    # that installs their packages.
     while IFS= read -r bind; do
         extra+="\\n\\1\"${bind}:ro\","
-    done < <(plugin_binds)
+    done < <(plugin_binds; launch_hook_bind "${checkout}")
     for fs in ${HPCAGENT_BENCH_DATA_ROOTS:-}; do
         grep -qF "\"${fs}/:${fs}/\"" "${edf}" || extra+="\\n\\1\"${fs}/:${fs}/\","
     done

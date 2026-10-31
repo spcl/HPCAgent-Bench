@@ -191,7 +191,7 @@ cd <checkout under $SCRATCH>/containers/images
 sbatch build_and_verify.sbatch vllm-cuda          # < 1 h
 sbatch build_and_verify.sbatch judge-agent-cuda   # up to 24 h cold
 
-CE_PLATFORM=gh200 ./registry.sh promote --all     # renders the gh200 EDFs
+./registry.sh promote --all                       # renders this host's EDFs (ce_platform)
 ```
 
 `judge-agent-cuda` carries the CUDA counterparts of `judge-agent-amd`: nvcc, cuBLAS/cuFFT/cuSOLVER/
@@ -227,7 +227,7 @@ HPTT, Pluto, numba, dace and the harnesses; no GPU stack, about an hour to build
 ```bash
 export SBATCH_ACCOUNT=<project> SBATCH_PARTITION=<partition of the target architecture>
 sbatch build_and_verify.sbatch judge-agent-cpu
-CE_PLATFORM=cpu ./registry.sh promote --all
+./registry.sh promote --all
 srun -N1 --environment=hpcagent-bench-judge-cpu-$(uname -m)-latest python3 -c 'import hpcagent_bench, dace'
 ```
 

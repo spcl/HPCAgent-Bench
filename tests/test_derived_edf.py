@@ -205,10 +205,12 @@ def test_edf_with_checkout_points_the_package_mount_at_the_tree_under_test(tmp_p
         check=False,
     )
     assert done.returncode == 0, done.stderr
-    # The checkout also at its own path: a step runs its scripts there, and it may lie outside /data.
+    # The checkout also at its own path: a step runs its scripts there, and it may lie outside /data; its launch hook
+    # over the image's, which installs the plugins' packages.
     assert tomllib.loads(out.read_text())["mounts"] == [
         "/under/test:/opt/hpcagent-bench",
         "/under/test:/under/test",
+        "/under/test/containers/images/lib/launch_venv.sh:/opt/launch/launch_venv.sh:ro",
         "/data:/data",
     ]
 
