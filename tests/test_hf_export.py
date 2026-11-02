@@ -6,10 +6,13 @@ than letting the dataset silently fall behind. The rest pins the flat schema, pe
 and parquet/jsonl round-trips."""
 
 import contextlib
+import inspect
 import io
 import json
 import pathlib
 import tempfile
+import types
+from collections.abc import Callable, Sequence
 
 import pydantic
 import pytest
@@ -196,6 +199,72 @@ def export_args(tmp_path: pathlib.Path, *extra: str) -> "object":
     return cli.build_parser().parse_args(
         ["export-hf", "--selector", "loop_level_reasoning/tsvc_2_s212", "--out", str(tmp_path / "ds"), *extra]
     )
+
+
+def fake_hub(monkeypatch: pytest.MonkeyPatch, tags: Sequence[str] = ()) -> list[tuple[str, dict[str, object]]]:
+    """``huggingface_hub.HfApi`` recording each call, its arguments bound against the real method."""
+    from huggingface_hub import HfApi
+
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    def method(name: str, result: object = None) -> Callable[..., object]:
+        def record(_self: object, *args: object, **kwargs: object) -> object:
+            inspect.signature(getattr(HfApi, name)).bind(_self, *args, **kwargs)
+            calls.append((name, kwargs))
+            return result
+
+        return record
+
+    methods = {
+        "__init__": lambda _self, *, token: None,
+        "create_repo": method("create_repo"),
+        "create_branch": method("create_branch"),
+        "create_tag": method("create_tag"),
+        "upload_folder": method("upload_folder", types.SimpleNamespace(oid="hub-sha")),
+        "list_repo_refs": method(
+            "list_repo_refs", types.SimpleNamespace(tags=[types.SimpleNamespace(name=tag) for tag in tags])
+        ),
+    }
+    monkeypatch.setattr("huggingface_hub.HfApi", type("FakeHfApi", (), methods))
+    return calls
+
+
+def test_a_release_uploads_to_its_own_branch_and_tags_that_exact_commit(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = fake_hub(monkeypatch)
+    sha = hf_export.push_folder(tmp_path, "org/d", token="t", release_tag="v0.5.0", source_commit="abc")
+    assert sha == "hub-sha"
+    assert [name for name, _ in calls] == [
+        "create_repo",
+        "list_repo_refs",
+        "create_branch",
+        "upload_folder",
+        "create_tag",
+    ]
+    upload, tag = calls[3][1], calls[4][1]
+    assert (upload["revision"], upload["delete_patterns"]) == ("release/v0.5.0", "*")
+    assert (tag["tag"], tag["revision"]) == ("v0.5.0", "hub-sha")
+    assert "abc" in str(tag["tag_message"])
+    assert "exist_ok" not in tag  # the Hub itself refuses a second tag of this name
+
+
+def test_a_release_tag_that_exists_is_refused_before_any_upload(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = fake_hub(monkeypatch, tags=["v0.5.0"])
+    with pytest.raises(ValueError, match="immutable"):
+        hf_export.push_folder(tmp_path, "org/d", token="t", release_tag="v0.5.0")
+    assert "upload_folder" not in [name for name, _ in calls]
+
+
+def test_a_rolling_push_touches_only_the_default_branch(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = fake_hub(monkeypatch)
+    assert hf_export.push_folder(tmp_path, "org/d", token="t") == "hub-sha"
+    assert [name for name, _ in calls] == ["create_repo", "upload_folder"]
+    assert "revision" not in calls[1][1]
 
 
 def test_export_builds_once_and_pushes_the_validated_folder(
