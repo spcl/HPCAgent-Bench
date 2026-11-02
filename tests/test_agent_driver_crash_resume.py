@@ -30,7 +30,7 @@ SESSION = "5e55a0c1-0000-4000-8000-000000000001"
 
 def load_capture() -> ModuleType:
     """The golden capture harness beside the fixtures: a recorded claude process, one run_agent."""
-    return module_at(FIXTURES / "regen.py", "crash_resume_capture")
+    return module_at(FIXTURES / "capture.py", "crash_resume_capture")
 
 
 capture = load_capture()
