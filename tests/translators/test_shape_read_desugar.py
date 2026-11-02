@@ -34,7 +34,7 @@ def env(**shapes: str) -> dict[str, ArrayDesc]:
 
 def axes_(dims: tuple[str, ...], expr: str) -> list[str]:
     """Result dims of subscripting ``dims`` with the subscript written in ``expr``."""
-    return apply_subscript_axes(list(dims), ast.parse(expr, mode="eval").body.slice)
+    return apply_subscript_axes(list(dims), ast.parse(expr, mode="eval").body.slice, set())
 
 
 def test_a_chain_of_subscripts_resolves_like_one() -> None:

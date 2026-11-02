@@ -127,7 +127,8 @@ def emit_numba(numpy_source: str, fastmath: bool = False, kir: KernelIR | None =
         if unpacked is not None:
             numpy_source, sparse = unpacked, True
     numpy_source = rewrite_lstsq_rcond(numpy_source)
-    numpy_source, uses_objmode = rewrite_fft_to_objmode(numpy_source)
+    ranks = {} if kir is None else {array.name: len(array.shape) for array in kir.arrays}
+    numpy_source, uses_objmode = rewrite_fft_to_objmode(numpy_source, ranks)
     numpy_source = spell_out_overlapping_augassigns(numpy_source)
     parallel = emits_parallel(numpy_source)
     copier = None

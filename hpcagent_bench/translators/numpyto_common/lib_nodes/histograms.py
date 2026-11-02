@@ -81,7 +81,7 @@ def expand_histogram(
     local_dtypes: dict[str, str] | None = None,
     fresh_local_allocs: dict[str, tuple[str, ...]] | None = None,
 ) -> list[ast.stmt]:
-    """``hist = np.histogram(a, bins[, range=(lo, hi)][, weights=w])[0]``.
+    """``hist = np.histogram(a, bins[, range=(lo, hi)][, weights=w])[0]``; ``density=`` is refused.
     Implements the numpy histogram contract: if ``range`` is None, lo/hi come
     from an inline min/max pass; if ``weights=w`` is given, each element
     contributes ``w[i]`` instead of 1.0. Bin index: ``min(bins - 1, max(0, (a[i]
@@ -96,6 +96,8 @@ def expand_histogram(
     ``np.histogram(a, bins, lo, hi, weights=w)``.
     """
     kwargs = kwargs or []
+    if any(k.arg == "density" for k in kwargs):
+        raise NotImplementedError("np.histogram: density= is not lowered")
     a = first_name(args)
     if len(args) < 2 or a is None:
         raise NotImplementedError("np.histogram needs (a, bins[, lo, hi])")

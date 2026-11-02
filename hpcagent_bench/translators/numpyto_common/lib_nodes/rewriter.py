@@ -791,7 +791,12 @@ class LibNodeRewriter(ast.NodeTransformer):
         return self.hoist_test_call(node)
 
     def visit_While(self, node: ast.While) -> ast.AST | list[ast.stmt]:
-        return self.hoist_test_call(node)
+        hoisted = self.hoist_test_call(node)
+        if isinstance(hoisted, list):
+            raise NotImplementedError(
+                f"while test {ast.unparse(node.test)}: a call hoisted above the loop would not re-run per trip"
+            )
+        return hoisted
 
     def hoist_test_call(self, node: ast.If | ast.While) -> ast.AST | list[ast.stmt]:
         """Hoist any registered ``np.X(...)`` call inside the ``if`` test

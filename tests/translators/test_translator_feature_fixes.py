@@ -48,6 +48,17 @@ def test_rand_separate_axes_still_supported() -> None:
     assert shape_from_constructor(expr_("np.random.rand(M, N)"), {}) == "(M, N)"
 
 
+def test_exponential_and_poisson_take_size_second() -> None:
+    """``np.random.exponential(scale, size)`` / ``poisson(lam, size)`` have no loc/low parameter
+    in front of ``size`` -- read as a third-positional distribution, a two-argument call found
+    no shape at all."""
+    assert shape_from_constructor(expr_("np.random.exponential(1.0, (N,))"), {}) == "(N)"
+    assert shape_from_constructor(expr_("np.random.poisson(5.0, (N,))"), {}) == "(N)"
+    assert shape_from_constructor(expr_("rng.exponential(1.0, size=(N,))"), {}) == "(N)"
+    # The (loc, scale, size) distributions keep reading their third positional.
+    assert shape_from_constructor(expr_("np.random.normal(0.0, 1.0, (N,))"), {}) == "(N)"
+
+
 # B. np.arange value emission                                                  #
 
 

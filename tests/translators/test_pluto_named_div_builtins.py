@@ -97,7 +97,7 @@ def test_prelude_defines_the_named_builtins_over_the_existing_helpers(name: str,
     )
 
 
-@pytest.mark.skipif(not have_gcc(), reason="gcc not installed")
+@have_gcc
 def test_floord_and_ceild_agree_with_the_helpers_they_alias() -> None:
     """The spelling claim, executed: same values for both signs, and the guarded block compiles."""
     lines = ["#include <stdio.h>", "int main(void) {"]

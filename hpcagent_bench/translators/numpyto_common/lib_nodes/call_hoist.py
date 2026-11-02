@@ -9,7 +9,12 @@ from hpcagent_bench.translators.numpyto_common import dtypes
 from hpcagent_bench.translators.numpyto_common.ast_build import const_int, name_, store_
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
 from hpcagent_bench.translators.numpyto_common.lib_nodes.blas import BLAS_LOWERING_FLOAT
-from hpcagent_bench.translators.numpyto_common.lib_nodes.call_args import const_axis, kwarg_or_pos, read_axis_keepdims
+from hpcagent_bench.translators.numpyto_common.lib_nodes.call_args import (
+    const_axis,
+    const_permutation,
+    kwarg_or_pos,
+    read_axis_keepdims,
+)
 from hpcagent_bench.translators.numpyto_common.lib_nodes.constructors import arange_count
 from hpcagent_bench.translators.numpyto_common.lib_nodes.extents import (
     INT_PRESERVING_ELEMENTWISE,
@@ -285,12 +290,8 @@ def permuted_shape(
         return None
     if op != "transpose":
         return tuple(shape)
-    perm_arg = kwarg_or_pos(args, keywords, 1, "axes")
-    if isinstance(perm_arg, (ast.Tuple, ast.List)):
-        perm = [e.value for e in perm_arg.elts if isinstance(e, ast.Constant) and isinstance(e.value, int)]
-        if len(perm) == len(shape):
-            return tuple(shape[p] for p in perm)
-    return tuple(reversed(shape))
+    perm = const_permutation(kwarg_or_pos(args, keywords, 1, "axes"), len(shape))
+    return tuple(shape[p] for p in perm) if perm is not None else tuple(reversed(shape))
 
 
 def reduction_shape(

@@ -116,6 +116,19 @@ def expand_linspace(
     ]
 
 
+def literal_arange_is_empty(args: Sequence[ast.expr]) -> bool:
+    """Whether ``np.arange(*args)`` with float literals has no elements; a symbolic bound never does here."""
+    if len(args) < 2 or not all(is_numeric_literal(a) for a in args):
+        return False
+    start, stop, *rest = [float(ast.literal_eval(a)) for a in args]
+    return (stop - start) / (rest[0] if rest else 1.0) <= 0
+
+
+def is_numeric_literal(node: ast.expr) -> bool:
+    operand = node.operand if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)) else node
+    return isinstance(operand, ast.Constant) and isinstance(operand.value, (int, float))
+
+
 def arange_count(args: Sequence[ast.expr]) -> ast.expr:
     """Element count of ``np.arange(*args)``: ``ceil(span / step)``, clamped at zero.
 
@@ -147,6 +160,8 @@ def arange_count(args: Sequence[ast.expr]) -> ast.expr:
         if istep == 0:
             raise NotImplementedError("np.arange step must be nonzero")
         return const_(max(0, -((start - stop) // istep)))
+    if literal_arange_is_empty(args):
+        return const_(0)
     # Unit step (the 1- and 2-arg forms, or an explicit step of 1): the count IS the span, so keep
     # the plain expression rather than wrapping it in the ceil form.
     if step is None or const_int(step) == 1:

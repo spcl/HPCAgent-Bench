@@ -172,3 +172,34 @@ def test_surviving_helper_ndim_tuple_axis_folds() -> None:
         )
     )
     assert ok, res
+
+
+# A kept helper called WITHOUT a defaulted parameter: the default is a compile-time constant of the
+# helper's body, exactly as a kernel's own defaulted params are (``fold_default_args``). Left in the
+# signature the parameter kept an ABI slot the call never filled -- the call site passed the extent
+# symbol into the ``k`` slot and nothing into the one after it -- and the C emitter died with
+# "unknown parameter 'k'" (a ValueError, so parse_kernel's inlined retry never ran).
+DEFAULT_ARG_HELPER_SRC = (
+    "import numpy as np\n"
+    "def fill_constant(x, k=2.0):\n"
+    " x[:] = k\n"
+    "def f(x, out):\n"
+    " fill_constant(out)\n"
+    " out[:] = out + x\n"
+)
+
+
+def test_void_helper_default_argument_is_folded() -> None:
+    x = np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float64)
+    ok, res = all_ok(
+        run_op(
+            DEFAULT_ARG_HELPER_SRC,
+            "f",
+            {"x": x},
+            {"out": (4,)},
+            {"N": 4},
+            shapes={"x": "(N,)", "out": "(N,)"},
+            backends=ALL,
+        )
+    )
+    assert ok, res

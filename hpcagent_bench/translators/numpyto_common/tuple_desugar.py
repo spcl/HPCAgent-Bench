@@ -33,12 +33,14 @@ from collections.abc import Sequence
 
 from hpcagent_bench.translators.numpyto_common.ast_build import (
     SubstituteLoads,
+    const_int,
     map_statement_lists,
     name_,
     set_field,
     store_,
     walk_nodes,
 )
+from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import NUMPY_MODULE_NAMES
 from hpcagent_bench.translators.numpyto_common.numpy_desugar import expr_rank
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
 
@@ -78,8 +80,8 @@ __all__ = [
     "written_after_capture",
 ]
 
-#: Module aliases a kernel may spell numpy as.
-NUMPY_MODULES = frozenset({"np", "numpy"})
+#: Module aliases a kernel may spell numpy as (the one table in emit_helpers.numpy_names).
+NUMPY_MODULES = frozenset(NUMPY_MODULE_NAMES)
 
 #: Type name as written in an ``isinstance`` -> the concrete runtime types it accepts. Provenance is
 #: tracked because ``isinstance(np.int64(3), int)`` is FALSE: a fold that ignored that would emit a
@@ -170,6 +172,14 @@ class Env:
             self.tuples.pop(name, None)
             self.kinds.pop(name, None)
             self.bound.discard(name)
+        # A recorded element reading a rebound name no longer means what it meant.
+        stale = [key for key, elts in self.tuples.items() if reads_any(elts, names)]
+        for key in stale:
+            del self.tuples[key]
+
+
+def reads_any(elements: list[ast.expr], names: OrderedSet | list[str]) -> bool:
+    return any(isinstance(n, ast.Name) and n.id in names for e in elements for n in walk_nodes(e))
 
 
 def is_index_element(node: ast.expr) -> bool:
@@ -244,11 +254,6 @@ def const_value(node: ast.expr) -> object:
 
 #: Distinct from ``None``, which is itself a foldable literal.
 NO_VALUE = object()
-
-
-def const_int(node: ast.expr) -> int | None:
-    v = const_value(node)
-    return v if isinstance(v, int) and not isinstance(v, bool) else None
 
 
 def static_bool(node: ast.expr) -> bool | None:
@@ -583,7 +588,12 @@ class TupleDesugar:
         if elements is None or len(elements) != len(targets):
             return None
         # Positional self-copies never race: they write back what they read.
-        changed = [i for i, e in enumerate(elements) if not (isinstance(e, ast.Name) and e.id == targets[i].id)]
+        names = [target.id for target in targets]
+        changed = [
+            i
+            for i, e in enumerate(elements)
+            if not (isinstance(e, ast.Name) and e.id == names[i]) or names.count(names[i]) > 1
+        ]
         read = {n.id for i in changed for n in walk_nodes(elements[i]) if isinstance(n, ast.Name)}
         if {targets[i].id for i in changed} & read:
             return None

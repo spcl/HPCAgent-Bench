@@ -4,7 +4,7 @@ import ast
 import math
 
 from hpcagent_bench.translators.numpyto_common.ast_build import name_
-from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
+from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import NUMPY_MODULE_NAMES, is_numpy_module
 from hpcagent_bench.translators.numpyto_common.lib_nodes.elementwise import (
     UNARY_C_MATH,
     decimals_of,
@@ -177,7 +177,7 @@ class MathRewriter(ast.NodeTransformer):
         if isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name):
             mod = node.func.value.id
             name = node.func.attr
-            if mod in ("np", "numpy") and name == "clip" and len(node.args) == 3:
+            if mod in NUMPY_MODULE_NAMES and name == "clip" and len(node.args) == 3:
                 clipped = self.scalar_clip(node)
                 if clipped is not None:
                     return clipped
@@ -185,7 +185,7 @@ class MathRewriter(ast.NodeTransformer):
                 return node
             new_name = MATH_BUILTINS.get((mod, name))
             if (
-                mod in ("np", "numpy")
+                mod in NUMPY_MODULE_NAMES
                 and name in ("round", "around")
                 and (len(node.args) > 1 or node.keywords)
                 and not any(self.refers_to_array(a) for a in node.args)

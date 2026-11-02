@@ -1020,25 +1020,15 @@ class MatmulHoister(ast.NodeTransformer):
         n_rows = sp_desc.logical_shape[0] if sp_desc.logical_shape else "0"
         n_cols = sp_desc.logical_shape[1] if len(sp_desc.logical_shape) > 1 else "0"
 
-        def buf_shape(role: str, axis: int) -> str | None:
-            """Shape token of the physical buffer for ``role`` at ``axis``,
-            looked up from the shape table (physical buffers are declared
-            arrays)."""
-            phys = bufs.get(role)
-            sh = self.shape_table.get(phys) if phys else None
-            if sh and axis < len(sh):
-                return sh[axis]
-            return None
-
         if fmt == "csr":
             return se.expand_matmul_csr_dense_vec(tgt, bufs, dense_name, n_rows)
         if fmt == "csc":
             return se.expand_matmul_csc_dense_vec(tgt, bufs, dense_name, n_rows, n_cols)
         if fmt == "coo":
-            nnz = buf_shape("data", 0) or "0"
+            nnz = self.buffer_extent(bufs, "data", 0) or "0"
             return se.expand_matmul_coo_dense_vec(tgt, bufs, dense_name, n_rows, nnz)
         if fmt == "dia":
-            ndiag = buf_shape("data", 0) or "0"
+            ndiag = self.buffer_extent(bufs, "data", 0) or "0"
             # Transposed: the descriptor's shape is reversed, so A's own (rows, cols) are
             # (n_cols, n_rows) here -- the expanders take A's dims, not A.T's, to stay
             # readable side by side.
@@ -1050,26 +1040,28 @@ class MatmulHoister(ast.NodeTransformer):
                 # The descriptor's shape is reversed: A's own extents are (n_cols, n_rows) here.
                 own = SparseArrayDesc(name=sp_desc.name, format=fmt, logical_shape=(n_cols, n_rows), buffers=bufs)
                 return se.entry_matvec_t(temp, fmt, bufs, self.entry_extents(own), dense_name)
-            maxnz = buf_shape("data", 1) or "0"
+            maxnz = self.buffer_extent(bufs, "data", 1) or "0"
             return se.expand_matmul_ell_dense_vec(tgt, bufs, dense_name, n_rows, maxnz)
         if fmt == "jds":
             # njd = len(jd_ptr) - 1
-            jdlen = buf_shape("jd_ptr", 0)
+            jdlen = self.buffer_extent(bufs, "jd_ptr", 0)
             njd = f"({jdlen}) - 1" if jdlen else "0"
             # The dispatcher uses a sorted-order scratch accumulator but relies
             # on the caller to declare it (see expand_matmul_jds_* docstring):
             # register it as a fresh (n_rows,) local so the emitter allocates
             # it -- the dispatcher zeroes it itself.
+            if self.temp_arrays.get("__jds_y_perm", (n_rows,)) != (n_rows,):
+                raise NotImplementedError("JDS matvecs of different row counts share one sorted-order scratch")
             self.temp_arrays["__jds_y_perm"] = (n_rows,)
             self.shape_table["__jds_y_perm"] = (n_rows,)
             return se.expand_matmul_jds_dense_vec(tgt, bufs, dense_name, n_rows, njd)
         if fmt == "bcsr":
             # block dims live on the descriptor's logical shape vs buffer
             # data shape [nnz_blk, R, C]; n_block_rows = len(indptr) - 1.
-            iplen = buf_shape("indptr", 0)
+            iplen = self.buffer_extent(bufs, "indptr", 0)
             nbr = f"({iplen}) - 1" if iplen else "0"
-            R = buf_shape("data", 1) or "1"
-            C = buf_shape("data", 2) or "1"
+            R = self.buffer_extent(bufs, "data", 1) or "1"
+            C = self.buffer_extent(bufs, "data", 2) or "1"
             if transposed:
                 # ``n_rows`` is A.T's row count, i.e. A's COLUMN count -- exactly the length
                 # the transposed matvec writes.
@@ -1079,12 +1071,12 @@ class MatmulHoister(ast.NodeTransformer):
             # block-COO: row[k]/col[k] hold block coords, data is
             # [n_blocks, R, C]; n_blocks = len(row); the total scalar
             # row count is n_rows (the descriptor's logical row dim).
-            nblk = buf_shape("row", 0) or buf_shape("data", 0) or "0"
-            R = buf_shape("data", 1) or "1"
-            C = buf_shape("data", 2) or "1"
+            nblk = self.buffer_extent(bufs, "row", 0) or self.buffer_extent(bufs, "data", 0) or "0"
+            R = self.buffer_extent(bufs, "data", 1) or "1"
+            C = self.buffer_extent(bufs, "data", 2) or "1"
             return se.expand_matmul_bcoo_dense_vec(tgt, bufs, dense_name, n_rows, nblk, R, C)
         if fmt == "sell_c_sigma":
-            nsl = buf_shape("slice_ptr", 0)
+            nsl = self.buffer_extent(bufs, "slice_ptr", 0)
             nslices = f"({nsl}) - 1" if nsl else "0"
             # slice height C is a kernel parameter; default symbol "C".
             return se.expand_matmul_sell_c_sigma_dense_vec(tgt, bufs, dense_name, n_rows, nslices, "C")

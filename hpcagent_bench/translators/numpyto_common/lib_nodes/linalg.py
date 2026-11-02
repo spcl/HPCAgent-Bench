@@ -79,6 +79,7 @@ def expand_linalg_norm(
     args: Sequence[ast.expr],
     shape_table: dict[str, tuple[str, ...]],
     kwargs: list[ast.keyword] | None = None,
+    local_dtypes: dict[str, str] | None = None,
 ) -> list[ast.stmt]:
     """``s = np.linalg.norm(v[, ord, axis=None, keepdims=False])``. numpy puts
     ``ord`` SECOND (positional) -- unlike a reduction, whose second positional
@@ -116,6 +117,9 @@ def expand_linalg_norm(
             iters = [make_iter_name("__nr", i) for i in range(len(extent))]
             sa = scalarize_at_iters(a, [name_(it) for it in iters], shape_table)
             acc_init = ast.Assign(targets=[store_(target.id)], value=const_(0.0))
+            # A complex element squares through its modulus: ``z * z`` is not ``|z|**2``.
+            if reads_complex(a, local_dtypes or {}):
+                sa = ast.Call(func=name_("abs"), args=[sa], keywords=[])
             inner: list[ast.stmt] = [
                 ast.AugAssign(target=store_(target.id), op=ast.Add(), value=ast.BinOp(left=sa, op=ast.Mult(), right=sa))
             ]

@@ -458,7 +458,13 @@ class SplitTupleUnpack(StatementTransformer):
         if unpacked is None:
             return [node]
         targets, (prelude, values) = unpacked
-        changed = [position for position, value in enumerate(values) if not is_self_copy(targets[position], value)]
+        spellings = [ast.unparse(target) for target in targets]
+        # A self-copy of a repeated target rebinds it: ``a, a = b, a`` leaves ``a``.
+        changed = [
+            position
+            for position, value in enumerate(values)
+            if not is_self_copy(targets[position], value) or spellings.count(spellings[position]) > 1
+        ]
         if not races(targets, values, changed):
             return placed(node, [*prelude, *map(assign, targets, values)])
         latched = self.latched(targets, values, changed)

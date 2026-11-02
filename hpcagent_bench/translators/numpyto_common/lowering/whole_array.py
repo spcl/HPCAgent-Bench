@@ -44,6 +44,7 @@ from hpcagent_bench.translators.numpyto_common.lowering.views import (
     refuse_scalarising_a_contraction,
 )
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
+from hpcagent_bench.translators.numpyto_common.subscripts import is_full_slice
 
 __all__ = [
     "UNCHANGED",
@@ -820,9 +821,7 @@ class WholeArrayAssignRewriter(ast.NodeTransformer):
             isinstance(target, ast.Subscript)
             and isinstance(target.value, ast.Name)
             and target.value.id in self.shape_table
-            and isinstance(target.slice, ast.Slice)
-            and target.slice.lower is None
-            and target.slice.upper is None
+            and is_full_slice(target.slice)
         ):
             # Skip constructor-style calls (np.repeat / reshape /
             # transpose / mgrid / zeros etc.) -- they are NOT

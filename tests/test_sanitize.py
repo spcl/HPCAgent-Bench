@@ -7,8 +7,7 @@ Covers comment-stripping for a small C snippet and a small Python snippet:
 * all comments removed;
 * stripped C still compiles (``gcc -fsyntax-only``; skipped if gcc absent).
 
-tree-sitter-only assertions are guarded behind ``find_spec`` so the suite
-passes on the stdlib fallback (tree-sitter is not installed in CI here).
+The suite exercises the stdlib fallback; tree-sitter is not installed.
 """
 
 import shutil
@@ -17,9 +16,8 @@ import tempfile
 
 import pytest
 
-from hpcagent_bench.support.sanitize import strip_comments, tree_sitter_available
+from hpcagent_bench.support.sanitize import strip_comments
 
-TREE_SITTER = tree_sitter_available()
 
 # Sample snippets
 
@@ -183,9 +181,6 @@ def test_stripped_c_still_compiles() -> None:
         fh.flush()
         proc = subprocess.run(["gcc", "-fsyntax-only", fh.name], capture_output=True, text=True, check=False)
     assert proc.returncode == 0, f"gcc rejected stripped C:\n{proc.stderr}"
-
-
-# tree-sitter parity (only when installed)
 
 
 def test_unsupported_lang_rejected() -> None:

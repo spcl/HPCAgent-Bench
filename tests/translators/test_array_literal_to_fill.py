@@ -22,7 +22,7 @@ import pytest
 
 from hpcagent_bench.translators.numpyto_c.emit import emit_c
 from hpcagent_bench.translators.numpyto_common.lowering import lower
-from tests.translators.op_oracle import parse_source, run_op
+from tests.translators.op_oracle import native, parse_source, run_op
 
 
 def emit_c_for(
@@ -48,6 +48,7 @@ def decl_of(text: str, name: str) -> str:
 def test_symbolic_index_vector_runs() -> None:
     """The fv3 form end to end: elements are arithmetic over scalars, and the array is only
     ever a subscript index."""
+    native()
     src = (
         "import numpy as np\n"
         "def pick(src, out):\n"
@@ -92,6 +93,7 @@ def test_elements_stored_in_order() -> None:
         "pick",
     )
     assert re.search(r"ia\[0\] = 0;", text), text
+    assert re.search(r"ia\[1\] = 2;", text), text
     assert re.search(r"ia\[2\] = 3;", text), text
 
 

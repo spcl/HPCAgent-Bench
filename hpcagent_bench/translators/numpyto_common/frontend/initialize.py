@@ -2,6 +2,7 @@
 
 import ast
 import pathlib
+import re
 
 from hpcagent_bench.emit_bridge import BenchDocument
 from hpcagent_bench.translators.numpyto_common.ast_build import walk_nodes
@@ -23,6 +24,7 @@ __all__ = [
     "SHAPE_FIRST_ARG",
     "SHAPE_SECOND_ARG",
     "SHARE_SHAPE_OF_FIRST",
+    "SIZE_SECOND_ARG",
     "call_name",
     "dtype_from_constructor",
     "dtype_from_dtype_arg",
@@ -206,8 +208,16 @@ def shapes_from_initialize(numpy_py: pathlib.Path, bench: BenchDocument) -> dict
         if shape is None:
             continue
         for lst_name, elts in list_locals.items():
-            for i, elt in enumerate(elts):
-                shape = shape.replace(f"{lst_name}[{i}]", elt)
+            # Whole-token substitution: str.replace would take ``dims[0]`` out of another local's
+            # ``block_dims[0]`` -- any name the list local's name ends -- and splice the wrong
+            # element into the shape.
+            pattern = rf"(?<![\w.]){re.escape(lst_name)}\[(\d+)\]"
+
+            def sub_list_index(m: re.Match[str], elts: list[str] = elts) -> str:
+                i = int(m.group(1))
+                return elts[i] if i < len(elts) else m.group(0)
+
+            shape = re.sub(pattern, sub_list_index, shape)
         if init_scalar_defs:
             shape = substitute_inlined_scalar_defs((shape,), init_scalar_defs)[0]
         shapes[name] = shape
@@ -259,6 +269,12 @@ DIST_FUNCS = {
 SHAPE_SECOND_ARG = {"fromfunction"}
 
 
+#: Distribution generators whose ``size`` is the SECOND positional: they take no loc/low parameter
+#: in front of it (``np.random.exponential(scale, size)``, ``np.random.poisson(lam, size)``). Read
+#: as a third-positional distribution, a two-argument call found no shape at all.
+SIZE_SECOND_ARG = frozenset(("exponential", "poisson"))
+
+
 #: Constructors that spread axis lengths across SEPARATE positional args
 #: (``np.random.rand(M, N)``); every other shape-first ctor takes one shape arg.
 AXES_AS_ARGS = {"rand", "randn"}
@@ -293,13 +309,16 @@ def call_name(func: ast.expr) -> str | None:
 
 
 def shape_first_arg(node: ast.Call, attr: str) -> str | None:
-    """Shape of a shape-first constructor or random generator: ``size=`` wins, a distribution
-    (``uniform(low, high, size)``) takes its third positional, ``rand``/``randn`` spread one axis per
+    """Shape of a shape-first constructor or random generator: ``size=`` wins, a distribution takes
+    the positional ``size`` (third for ``uniform(low, high, size)``, second for the loc-less
+    ``exponential(scale, size)`` / ``poisson(lam, size)``), ``rand``/``randn`` spread one axis per
     argument, every other constructor takes its first argument."""
     size = next((kw.value for kw in node.keywords if kw.arg == "size"), None)
     if size is not None:
         return unparse_shape_arg(size)
     if attr in DIST_FUNCS:
+        if attr in SIZE_SECOND_ARG:
+            return unparse_shape_arg(node.args[1]) if len(node.args) >= 2 else None
         return unparse_shape_arg(node.args[2]) if len(node.args) >= 3 else None
     if (
         attr in AXES_AS_ARGS
@@ -340,7 +359,7 @@ def shape_from_constructor(node: ast.expr, so_far: dict[str, str]) -> str | None
         return None
     if (attr.endswith("_like") or attr in SHARE_SHAPE_OF_FIRST) and node.args and isinstance(node.args[0], ast.Name):
         return so_far.get(node.args[0].id)
-    if attr in SHAPE_FIRST_ARG and (node.args or any(kw.arg == "size" for kw in node.keywords) or attr in DIST_FUNCS):
+    if (attr in SHAPE_FIRST_ARG or attr in DIST_FUNCS) and (node.args or any(kw.arg == "size" for kw in node.keywords)):
         return shape_first_arg(node, attr)
     if attr in SHAPE_SECOND_ARG and len(node.args) >= 2:
         return unparse_shape_arg(node.args[1])

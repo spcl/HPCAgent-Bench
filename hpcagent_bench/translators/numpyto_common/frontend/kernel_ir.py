@@ -458,7 +458,8 @@ def resolve_shape_reads_(fn: ast.FunctionDef, sig: Signature, input_array_shapes
         for n, s in input_array_shapes.items()
     }
     fold_dtype_aliases(fn)
-    fold_list_accumulators(fn)
+    complex_inputs = frozenset(name for name, dtype in sig.dtypes_raw.items() if dtype.startswith("complex"))
+    fold_list_accumulators(fn, complex_names=complex_inputs)
     resolve_shape_reads(fn, shape_env)
 
 

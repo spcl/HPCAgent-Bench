@@ -509,6 +509,8 @@ def hoist_histogram(node: ast.expr, hoist: ValueHoist) -> ast.expr | None:
         return None
     a, bins = ast.unparse(call.args[0]), ast.unparse(call.args[1])
     kw = {k.arg: k.value for k in call.keywords}
+    if "density" in kw or isinstance(call.args[1], (ast.List, ast.Tuple)):
+        return None  # edge-array bins / density= are not what this inline computes
     lo: ast.expr | None = None
     hi: ast.expr | None = None
     if len(call.args) >= 4:

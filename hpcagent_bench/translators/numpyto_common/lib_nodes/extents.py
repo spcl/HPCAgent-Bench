@@ -14,6 +14,7 @@ from hpcagent_bench.translators.numpyto_common.lib_nodes.call_args import (
     axes_kwarg,
     axis_literal_or_refuse,
     const_axis,
+    const_permutation,
     kwarg_or_pos,
     np_call_attr,
     pad_widths,
@@ -580,11 +581,8 @@ def transpose_extent(attr: str, expr: ast.Call, shape_table: ShapeTable) -> Call
     base = iter_extent_of(expr.args[0], shape_table)
     if base is None:
         return None
-    if len(expr.args) >= 2 and isinstance(expr.args[1], (ast.Tuple, ast.List)):
-        perm = [e.value for e in expr.args[1].elts if isinstance(e, ast.Constant) and isinstance(e.value, int)]
-        if len(perm) == len(base):
-            return tuple(base[p] for p in perm)
-    return tuple(reversed(base))
+    perm = const_permutation(expr.args[1], len(base)) if len(expr.args) >= 2 else None
+    return tuple(base[p] for p in perm) if perm is not None else tuple(reversed(base))
 
 
 def swapaxes_extent(attr: str, expr: ast.Call, shape_table: ShapeTable) -> CallSize:
@@ -708,7 +706,11 @@ def diagonal_extent(attr: str, expr: ast.Call, shape_table: ShapeTable) -> CallS
     if not expr.args:
         return UNHANDLED
     base = iter_extent_of(expr.args[0], shape_table)
-    return (base[0],) if base else None
+    if not base:
+        return None
+    # numpy's diagonal length is min(rows, cols); returning rows for a non-square operand
+    # over-allocates and the expander reads past the columns axis.
+    return (base[0],) if len(base) >= 2 and base[0] == base[1] else UNHANDLED
 
 
 def diag_extent(attr: str, expr: ast.Call, shape_table: ShapeTable) -> CallSize:

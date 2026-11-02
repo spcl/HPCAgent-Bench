@@ -509,6 +509,12 @@ def sequence_length(value: ast.expr, ranks: dict[str, int]) -> int | None:
 #: inserts one. Reading their axis against the operand's rank would size the dispatch one short.
 AXIS_INSERTS = frozenset({"expand_dims", "stack"})
 
+#: Structural calls whose first argument is a SEQUENCE of arrays, not one array (``np.stack([a, b])``,
+#: ``np.concatenate([a, b])``). ``expr_rank`` of a list literal already counts the container itself
+#: as one axis over its elements, so for these the dispatch reads the ELEMENTS' rank -- one lower --
+#: before :data:`AXIS_INSERTS` adds the axis ``stack`` inserts back.
+SEQUENCE_OPERAND_FNS = frozenset({"stack", "concatenate"})
+
 
 def axis_index_spaces(fn: ast.FunctionDef, ranks: dict[str, int]) -> dict[int, int]:
     """``id(index node) -> how many AXES that index selects among``, for the two sequences an axis
@@ -581,8 +587,11 @@ def runtime_axis_dispatch(fn: ast.FunctionDef, scalars: frozenset[str], ranks: d
         axis = axis_argument(node)
         if axis is None:
             continue
+        name = np_attr_name(node)
         operand = expr_rank(node.args[0], ranks) if node.args else None
-        insert = 1 if np_attr_name(node) in AXIS_INSERTS else 0
+        if operand is not None and isinstance(node.args[0], (ast.List, ast.Tuple)) and name in SEQUENCE_OPERAND_FNS:
+            operand -= 1  # the list literal counts itself as an axis; the elements are the operand
+        insert = 1 if name in AXIS_INSERTS else 0
         axis_spaces[id(axis)] = None if operand is None else operand + insert
         if isinstance(axis, ast.Name) and axis.id in scalars:
             axis_names.add(axis.id)

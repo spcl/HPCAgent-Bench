@@ -87,6 +87,8 @@ def expand_trace(target: ast.Name, args: Sequence[ast.expr], shape_table: dict[s
         value=name_(args[0].id), slice=ast.Tuple(elts=[name_(it), name_(it)], ctx=ast.Load()), ctx=ast.Load()
     )
     body: list[ast.stmt] = [ast.AugAssign(target=store_(target.id), op=ast.Add(), value=diag)]
+    if shape[0] != shape[1]:
+        raise NotImplementedError("np.trace: only a square operand is lowered (the diagonal is min(m, n) long)")
     return [ast.Assign(targets=[store_(target.id)], value=const_(0.0)), *wrap_for_loops([it], [shape[0]], body)]
 
 
@@ -106,6 +108,8 @@ def expand_diagonal(
     body: list[ast.stmt] = [
         ast.Assign(targets=[ast.Subscript(value=name_(target.id), slice=name_(it), ctx=ast.Store())], value=diag)
     ]
+    if shape[0] != shape[1]:
+        raise NotImplementedError("np.diagonal: only a square operand is lowered (the diagonal is min(m, n) long)")
     return wrap_for_loops([it], [shape[0]], body)
 
 
