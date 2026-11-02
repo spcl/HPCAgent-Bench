@@ -48,7 +48,7 @@ def _packet_setup_triples() -> list[tuple[str, str, str]]:
                 try:
                     packets.refuse_frozen(spec)
                     pages = packets.resolve(spec, language, fill=False, image=image).pages
-                except (ValueError, SystemExit):
+                except ValueError:
                     continue
                 if pages:
                     triples.append((spec, language, image))
@@ -184,10 +184,9 @@ def test_a_trigger_never_sends_the_agent_to_a_page_the_setup_did_not_stage(
     # packet", another setup's setup, and sends the agent to no file.
     staged = set(packets.resolve(spec, language, fill=False, image=image).pages)
     for page in staged:
+        trigger = SHIPPED[page].when or SHIPPED[page].description  # what the index renders
         named = {
-            other
-            for other in SHIPPED
-            if other != page and re.search(rf"\b{re.escape(other)}\b(?!`? packet)", SHIPPED[page].when)
+            other for other in SHIPPED if other != page and re.search(rf"\b{re.escape(other)}\b(?!`? packet)", trigger)
         }
         assert named <= staged, (
             f"{spec}/{language}/{image}: {page}'s trigger sends the agent to {sorted(named - staged)}, "
