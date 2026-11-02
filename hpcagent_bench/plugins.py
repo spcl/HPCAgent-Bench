@@ -23,7 +23,7 @@ from hpcagent_agent.prompt_blocks import TEMPLATE_SYNTAX
 
 from hpcagent_bench import paths, skill_packets
 from hpcagent_bench.skill_packets import PacketTable
-from hpcagent_bench.vocabulary import PACKETS, PacketDef, PacketPhase
+from hpcagent_bench.vocabulary import FRAMEWORKS, PACKETS, PacketDef, PacketPhase
 
 __all__ = [
     "ENTRY_POINT_GROUP",
@@ -31,6 +31,7 @@ __all__ = [
     "FlavorBlock",
     "PhaseBlock",
     "PhaseCall",
+    "check",
     "entry_point_dirs",
     "fingerprint",
     "flavor_plugin",
@@ -121,8 +122,10 @@ def register_flavors() -> None:
         if plugin.manifest.flavors:
             # A folder plugin's optimizer imports as hpcagent_bench_plugins.<name>.<module>.
             agent_plugins.import_package(plugin)
-    for _plugin, key, block in blocks:
+    for plugin, key, block in blocks:
         for base in block.extends:
+            if base not in FRAMEWORKS:
+                raise ValueError(f"plugin {plugin.name!r}: flavor {key!r} extends {base!r}, which is no column")
             add_flavor(base, key, block.name, block.full_name, block.optimizer)
 
 
@@ -367,12 +370,95 @@ def fingerprint(found: tuple[Plugin, ...]) -> str:
     return digest.hexdigest()[:16]
 
 
+def import_failure(plugin: Plugin) -> str:
+    """Why ``plugin``'s package or its ``tools`` and ``routes`` modules do not import; ``""`` when they do."""
+    try:
+        agent_plugins.import_package(plugin)
+        for part in ("tools", "routes"):
+            for stem in plugin.modules(part):
+                importlib.import_module(f"{plugin.package}.{part}.{stem}")
+    except Exception as exc:  # noqa: BLE001 -- a plugin's module may raise anything at import; the report names it
+        return (
+            f"plugin {plugin.name!r}: {exc!r}; run `python -m hpcagent_bench.plugins install` if it needs its package"
+        )
+    return ""
+
+
+def flavor_failure(key: str, block: FlavorBlock) -> str:
+    """Why flavor ``key``'s optimizer is no ``FlavorOptimizer``; ``""`` when it is."""
+    from hpcagent_bench.harness.optimizers import FlavorOptimizer  # deferred: only the check needs the harness
+
+    module, _, name = block.optimizer.partition(":")
+    try:
+        found = vars(importlib.import_module(module)).get(name)
+    except ImportError as exc:
+        return f"flavor {key!r}: optimizer {block.optimizer!r} does not import: {exc}"
+    if isinstance(found, type) and issubclass(found, FlavorOptimizer):
+        return ""
+    return f"flavor {key!r}: optimizer {block.optimizer!r} is no FlavorOptimizer"
+
+
+def name_failures(plugin: Plugin, pages: frozenset[str]) -> list[str]:
+    """Every name ``plugin``'s manifest gives that nothing answers to: packet tools, skill pages, composed packets and
+    overlays, flavor optimizers and ``[ci]`` optimizers."""
+    from hpcagent_agent.tools import registry  # deferred: only the check reads the tools
+    from hpcagent_bench import prompt_build  # noqa: PLC0415 -- prompt_build loads plugins at its own import
+
+    failures: list[str] = []
+    for key in plugin.manifest.packets:
+        packet = PACKETS[key]
+        failures += [f"packet {key!r}: no tool {name!r}" for name in packet.tools if name not in registry.REGISTRY]
+        failures += [
+            f"packet {key!r}: no skill page {name!r}" for name in packet.skills if name not in {*pages, "lang", "*"}
+        ]
+        failures += [
+            f"packet {key!r}: {name!r} is no packet or skill page"
+            for name in packet.packets
+            if name not in PACKETS and name not in pages
+        ]
+        for ref in packet.prompt_overlays:
+            try:
+                prompt_build.load_overlay(ref)
+            except ValueError as exc:
+                failures.append(f"packet {key!r}: overlay {ref!r}: {exc}")
+    for key, raw in plugin.manifest.flavors.items():
+        failures.append(flavor_failure(key, flavor_block(plugin, key, raw)))
+    if plugin.manifest.ci is not None:
+        failures += [f"[ci]: no column {name!r}" for name in plugin.manifest.ci.optimizers if name not in FRAMEWORKS]
+    return [f"plugin {plugin.name!r}: {failure}" for failure in failures if failure]
+
+
+def check() -> int:
+    """Load every plugin the way a run does and report what would fail later: a bad manifest, a collision or an unknown
+    column stops at the first; a module that does not import stops at its plugin; every wrong name is reported.
+    Returns the exit status."""
+    from hpcagent_agent.tools import mcp_server  # deferred: only the check serves tools
+
+    try:
+        found = register()
+        importlib.import_module("hpcagent_bench.columns")
+    except (ValueError, KeyError, ImportError) as exc:
+        print(exc)
+        return 1
+    if failed := next(filter(None, map(import_failure, found)), ""):
+        print(failed)
+        return 1
+    mcp_server.load_tools()
+    pages = skill_packets.shipped_pages() | {
+        path.parent.name for plugin in found for path in (plugin.root / "skills").glob("*/SKILL.md")
+    }
+    failures = [failure for plugin in found for failure in name_failures(plugin, pages)]
+    print("\n".join(failures) or f"{len(found)} plugins are fine")
+    return 1 if failures else 0
+
+
 def main(argv: list[str]) -> int:
     """``python -m hpcagent_bench.plugins roots``: the plugin directories, one per line, for a launcher to bind.
     ``... install [--role judge|agent] [--python PATH]``: run the install command of every plugin installing into that
     role (default judge) for this (or that) interpreter;
     ``... fingerprint``: a digest of those plugins' sources (a launch venv's cache key);
-    ``... install-root FOLDER``: the resolved ``[install] root`` of the plugin in FOLDER, empty without one."""
+    ``... install-root FOLDER``: the resolved ``[install] root`` of the plugin in FOLDER, empty without one;
+    ``... check``: load every plugin and report what would fail in a run (:func:`check`)."""
     parser = argparse.ArgumentParser(prog="python -m hpcagent_bench.plugins", description=main.__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("roots", help="print the plugin directories, one per line")
@@ -382,7 +468,13 @@ def main(argv: list[str]) -> int:
     commands.add_parser("fingerprint", help="print a digest of the installed plugins' sources")
     rooted = commands.add_parser("install-root", help="print the [install] root of the plugin in FOLDER")
     rooted.add_argument("folder", type=pathlib.Path)
+    commands.add_parser("check", help="load every plugin and report what would fail in a run")
     args = parser.parse_args(argv)
+    if args.command == "check":
+        # Under -m this file is __main__, a second copy of the module with its own register() cache: use the imported one.
+        from hpcagent_bench import plugins as imported  # noqa: PLC0415
+
+        return imported.check()
     if args.command == "install-root":
         print(install_root(agent_plugins.read(args.folder)) or "")
         return 0
