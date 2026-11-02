@@ -13,6 +13,7 @@ __all__ = [
     "axis_kwarg",
     "axis_literal_or_refuse",
     "const_axis",
+    "const_permutation",
     "eval_axes",
     "kwarg_or_pos",
     "np_call_attr",
@@ -120,6 +121,14 @@ def kwarg_or_pos(args: Sequence[ast.expr], kwargs: list[ast.keyword] | None, pos
         if kw.arg == name:
             return kw.value
     return None
+
+
+def const_permutation(node: ast.expr | None, rank: int) -> list[int] | None:
+    """The constant axes of a ``np.transpose`` tuple, each normalized, or ``None`` unless there is one per axis."""
+    if not isinstance(node, (ast.Tuple, ast.List)) or len(node.elts) != rank:
+        return None
+    axes = [const_axis(element, rank) for element in node.elts]
+    return None if None in axes else [axis for axis in axes if axis is not None]
 
 
 def const_axis(node: ast.expr | None, rank: int) -> int | None:

@@ -47,6 +47,7 @@ from hpcagent_bench.translators.numpyto_common.numpy_desugar import (
 from hpcagent_bench.translators.numpyto_common.numpy_desugar.reductions import DACE_NATIVE_REDUCE_FNS, reduce_call_parts
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
 from hpcagent_bench.translators.numpyto_common.parallelism import load_names
+from hpcagent_bench.translators.numpyto_common.subscripts import is_full_slice
 from hpcagent_bench.translators.numpyto_common.statement_desugar import (
     DesugarArrayIteration,
     Spelled,
@@ -170,7 +171,7 @@ __all__ = [
     "inplace_update_targets",
     "inserts_axis",
     "is_float_expr",
-    "is_full_slice",
+    "selects_everything",
     "is_literal_one",
     "is_negative_one",
     "is_shape_subscript",
@@ -1814,11 +1815,11 @@ def settled_ranks(fn: ast.AST, ranks: dict[str, int]) -> dict[str, int]:
     return settled
 
 
-def is_full_slice(node: ast.expr) -> bool:
+def selects_everything(node: ast.expr) -> bool:
     """True iff a subscript index selects everything -- ``[:]``, or a tuple of ``:``."""
-    if isinstance(node, ast.Slice):
-        return node.lower is None and node.upper is None and node.step is None
-    return isinstance(node, ast.Tuple) and bool(node.elts) and all(is_full_slice(e) for e in node.elts)
+    return is_full_slice(node) or (
+        isinstance(node, ast.Tuple) and bool(node.elts) and all(map(is_full_slice, node.elts))
+    )
 
 
 class DropRedundantSliceStore(ast.NodeTransformer):
@@ -1836,7 +1837,7 @@ class DropRedundantSliceStore(ast.NodeTransformer):
         while (
             isinstance(target, ast.Subscript)
             and isinstance(target.value, ast.Subscript)
-            and is_full_slice(target.slice)
+            and selects_everything(target.slice)
         ):
             target = target.value
             target.ctx = ast.Store()

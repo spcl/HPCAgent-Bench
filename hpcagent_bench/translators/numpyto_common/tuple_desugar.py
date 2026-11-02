@@ -33,6 +33,7 @@ from collections.abc import Sequence
 
 from hpcagent_bench.translators.numpyto_common.ast_build import (
     SubstituteLoads,
+    const_int,
     map_statement_lists,
     name_,
     set_field,
@@ -253,11 +254,6 @@ def const_value(node: ast.expr) -> object:
 
 #: Distinct from ``None``, which is itself a foldable literal.
 NO_VALUE = object()
-
-
-def const_int(node: ast.expr) -> int | None:
-    v = const_value(node)
-    return v if isinstance(v, int) and not isinstance(v, bool) else None
 
 
 def static_bool(node: ast.expr) -> bool | None:

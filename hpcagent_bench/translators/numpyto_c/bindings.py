@@ -55,19 +55,16 @@ def write_binding(binding: BindingFile, out_path: pathlib.Path) -> None:
 
 
 def ptr_kind_(dtype: str) -> str:
-    """binding pointer ``kind`` for ``dtype`` from the single dtype registry."""
-    try:
-        return dtypes.ptr_kind(dtype)
-    except KeyError:
-        return "ptr_double"
+    """binding pointer ``kind`` for ``dtype`` from the single dtype registry.
+
+    An unknown dtype is a defect (typo'd manifest, unmapped type): raising beats marshalling
+    the buffer as float64."""
+    return dtypes.ptr_kind(dtype)
 
 
 def scalar_kind_(dtype: str) -> str:
     """binding scalar ``kind`` for ``dtype`` from the single dtype registry."""
-    try:
-        return dtypes.scalar_kind(dtype)
-    except KeyError:
-        return "double"
+    return dtypes.scalar_kind(dtype)
 
 
 def arg_entry(
