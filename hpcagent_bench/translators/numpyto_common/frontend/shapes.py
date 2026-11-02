@@ -2,6 +2,7 @@
 
 import ast
 import copy
+from collections.abc import Callable
 
 from hpcagent_bench.translators.numpyto_common.ast_build import const_int, map_statement_lists, walk_nodes
 from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import is_numpy_module
@@ -213,10 +214,18 @@ def shape_from_dot_shape(node: ast.expr, known: dict[str, str]) -> str | None:
     return None
 
 
-def apply_subscript_axes(dims: list[str], sub_slice: ast.expr) -> list[str]:
+def index_array_names(sub_slice: ast.expr, shape_of: Callable[[ast.Name], tuple | None]) -> set[str]:
+    """The bare names indexing ``sub_slice`` that ``shape_of`` sizes as arrays, not scalars."""
+    axes = sub_slice.elts if isinstance(sub_slice, ast.Tuple) else [sub_slice]
+    return {ax.id for ax in axes if isinstance(ax, ast.Name) and shape_of(ax)}
+
+
+def apply_subscript_axes(dims: list[str], sub_slice: ast.expr, index_arrays: set[str]) -> list[str]:
     """Result shape of subscripting a ``dims``-shaped array with ``sub_slice``:
     a full-``Slice`` axis keeps its dimension, an integer/scalar index drops it,
     and any trailing un-indexed axes are kept. A kept dimension is passed through untouched.
+    No answer (``[]``) for an axis indexed by a mask or by a name in ``index_arrays``: that axis takes
+    the index's extent, not the source dimension.
 
     ``...`` stands for as many whole axes as are left unindexed, so it is expanded to them first.
     Read positionally it lands on the wrong end of the array: ls3df_scf's ``psi_frag[f][..., 0]``
@@ -246,6 +255,8 @@ def apply_subscript_axes(dims: list[str], sub_slice: ast.expr) -> list[str]:
         dim = dims[source]
         source += 1
         if not isinstance(ax, ast.Slice):
+            if isinstance(ax, ast.Compare) or (isinstance(ax, ast.Name) and ax.id in index_arrays):
+                return []
             continue
         extent = sliced_extent(dim, ax)
         # A slice this cannot size is a whole shape this cannot answer. Returning the SOURCE dim for
@@ -456,7 +467,8 @@ def resolve_array_ref(
         if base is None:
             return None
         shape, dtype = base
-        kept = apply_subscript_axes(list(shape), node.slice)
+        indices = index_array_names(node.slice, lambda n: (resolve_array_ref(fn, n, arr_by, seen) or ((),))[0])
+        kept = apply_subscript_axes(list(shape), node.slice, indices)
         return (tuple(kept), dtype) if kept else None
     if not isinstance(node, ast.Name):
         return shape_from_expression(fn, node, arr_by, seen)
@@ -676,7 +688,10 @@ def resolve_extent_of(
     if isinstance(node, ast.Subscript) and isinstance(node.value, (ast.Name, ast.Subscript)):
         base = resolve_extent_of(fn, node.value, arr_by, shapes, rebound, tuple_locals)
         if base is not None:
-            kept = apply_subscript_axes(list(base), node.slice)
+            indices = index_array_names(
+                node.slice, lambda n: resolve_extent_of(fn, n, arr_by, shapes, rebound, tuple_locals)
+            )
+            kept = apply_subscript_axes(list(base), node.slice, indices)
             if kept:
                 return tuple(kept)
     else:

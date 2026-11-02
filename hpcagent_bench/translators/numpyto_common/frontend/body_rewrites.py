@@ -177,10 +177,15 @@ class FoldSliceLocals:
         return folded
 
     def rewrite_uses(self, stmt: ast.stmt, live: dict[str, ast.Slice]) -> set[str]:
-        """Substitute every live window into this statement's own index slots."""
+        """Substitute every live window into this statement's own index slots.
+
+        Nested blocks are skipped: walk_() revisits them with their own live map, and a window
+        rebound inside an if/for body must not be folded with THIS statement's binding (a folded
+        use is deep-copied, leaving no Name for the inner pass to correct)."""
         folded: set[str] = set()
+        nested = {id(n) for blk in nested_blocks(stmt) for st in blk for n in walk_nodes(st)}
         for node in walk_nodes(stmt):
-            if not isinstance(node, ast.Subscript):
+            if id(node) in nested or not isinstance(node, ast.Subscript):
                 continue
             slots = node.slice.elts if isinstance(node.slice, ast.Tuple) else [node.slice]
             new_slots: list[ast.expr] = []
