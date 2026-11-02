@@ -32,6 +32,15 @@ fi
 export SCRIPT_DIR
 REPO_DIR="${HPCAGENT_BENCH_REPO:-$(cd -- "${SCRIPT_DIR}/../.." && pwd)}"
 
+# The site layer and the host interpreter BEFORE the first env_spec call below: env_layers.sh's
+# render_env/env_spec run "${HPCAGENT_BENCH_HOST_PYTHON:?...}", so a submit-side invocation that has
+# not already sourced env.sh would abort there -- after this script meant to be self-contained
+# (the sourcing below used to sit inside the no-Slurm branch, AFTER the renders it feeds). Both
+# files are idempotent (every value is "${VAR:-...}"), and the job phase re-derives them through
+# env.sh anyway, so sourcing them unconditionally here changes no resolved value.
+. "${REPO_DIR}/helpers/scripts/site_env.sh"
+. "${REPO_DIR}/helpers/scripts/host_python.sh"
+
 MODEL="${MODEL:-qwen38}"
 # <experiment>:<model> (experiments/experiments.toml) or an env file
 BASE_ENV="${SERVE_BASE_ENV:-experiment:${MODEL}}"
@@ -63,8 +72,6 @@ READY_TIMEOUT="${AGENT_READY_TIMEOUT_SECONDS:-${VLLM_READY_TIMEOUT_SECONDS:-7200
 RUN_ROOT="${RUN_ROOT:?RUN_ROOT must name a writable directory}"
 
 if [[ -z "${SLURM_JOB_ID:-}" ]]; then
-    . "${REPO_DIR}/helpers/scripts/site_env.sh"
-    . "${REPO_DIR}/helpers/scripts/host_python.sh"
     shape="$("${HPCAGENT_BENCH_HOST_PYTHON}" -m hpcagent_bench job options)" || exit 2
     mapfile -t shape <<<"${shape}"
     gpus_per_node="$("${HPCAGENT_BENCH_HOST_PYTHON}" -m hpcagent_bench job options --print gpus_per_node)" || exit 2
