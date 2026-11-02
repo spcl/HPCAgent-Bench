@@ -259,7 +259,7 @@ def desugar_for_python_backend(source: str, kir: KernelIR, backend: str | None =
             else []
         )
         passes: list[DesugarPass] = [
-            DropGuards(),
+            DropGuards(keep_data=backend == "numba"),
             # First: splices statements out of a ``with`` body; every pass below walks only top-level statements.
             SpliceErrstate(),
             ConstComprehensionFold(consts),
