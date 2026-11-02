@@ -39,6 +39,7 @@ from hpcagent_bench.translators.numpyto_common.ast_build import (
     store_,
     walk_nodes,
 )
+from hpcagent_bench.translators.numpyto_common.emit_helpers.numpy_names import NUMPY_MODULE_NAMES
 from hpcagent_bench.translators.numpyto_common.numpy_desugar import expr_rank
 from hpcagent_bench.translators.numpyto_common.ordered import OrderedSet
 
@@ -78,8 +79,8 @@ __all__ = [
     "written_after_capture",
 ]
 
-#: Module aliases a kernel may spell numpy as.
-NUMPY_MODULES = frozenset({"np", "numpy"})
+#: Module aliases a kernel may spell numpy as (the one table in emit_helpers.numpy_names).
+NUMPY_MODULES = frozenset(NUMPY_MODULE_NAMES)
 
 #: Type name as written in an ``isinstance`` -> the concrete runtime types it accepts. Provenance is
 #: tracked because ``isinstance(np.int64(3), int)`` is FALSE: a fold that ignored that would emit a

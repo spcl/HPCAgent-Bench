@@ -171,8 +171,6 @@ REGISTRY: dict[str, DTypeInfo] = {
     "bool": row_("bool", "bool", "logical(c_bool)", "int", "ptr_bool", ctypes.c_bool),
 }
 
-#: dtype-name aliases -> canonical key. ``"int"`` is the platform/un-widened int
-#: the legacy specs use for shape symbols; the canonical ABI treats it as int64.
 #: Bits in one byte, for converting between an itemsize and a bit width.
 BITS_PER_BYTE: int = 8
 
@@ -182,6 +180,8 @@ MAX_SIGNED_BYTES: int = 8
 #: Distinct dtype spellings :func:`info` memoises.
 DTYPE_CACHE_SIZE: int = 256
 
+#: dtype-name aliases -> canonical key. ``"int"`` is the platform/un-widened int
+#: the legacy specs use for shape symbols; the canonical ABI treats it as int64.
 ALIASES = {
     "int": "int64",
     "bool_": "bool",
