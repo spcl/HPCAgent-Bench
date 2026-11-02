@@ -16,10 +16,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from hpcagent_bench import fused
 from tests.fresh_module import fresh
-from tests.judge_router_stub import StubJudge, load_router, stub_judge, through_router
-from tests.optional_imports import import_or_skip
+from tests.judge_router_stub import StubJudge, router_client, through_router
 from tests.test_submit import staged, submit, tree
 
 if TYPE_CHECKING:
@@ -40,21 +38,10 @@ def blind_env_fixture(tmp_path_factory: pytest.TempPathFactory) -> dict[str, str
 @pytest.fixture(name="router")
 def router_fixture(blind_env: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> Iterator["TestClient"]:
     """The judge router with the job env's two keys it reads, exactly as the setup stages them."""
-    import_or_skip("fastapi")
-    import_or_skip("httpx")
-    from fastapi.testclient import TestClient
-
     assert blind_env["AGENT_SUBMISSION_MODE"] == "blind"
-    monkeypatch.delenv(fused.SETUPS_DIR_ENV, raising=False)
-    monkeypatch.setenv("HPCAGENT_BENCH_RECORD_ENABLED", "false")
-    for key in ("AGENT_SUBMISSION_MODE", "SETUP"):
-        monkeypatch.setenv(key, blind_env[key])
-    with stub_judge() as url:
-        module = load_router()
-        monkeypatch.setattr(module, "UPSTREAM_URL", url)
-        with TestClient(module.app) as client:
-            monkeypatch.setattr(urllib.request, "urlopen", through_router(client))
-            yield client
+    with router_client(monkeypatch, blind_env["SETUP"], blind_env["AGENT_SUBMISSION_MODE"]) as (unused, client):
+        monkeypatch.setattr(urllib.request, "urlopen", through_router(client))
+        yield client
 
 
 def test_a_blind_episode_submits_once_and_a_silent_one_is_promoted(
