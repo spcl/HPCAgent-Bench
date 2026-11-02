@@ -83,8 +83,9 @@ def test_emitted_c_never_truncates_the_divide_feeding_floor() -> None:
     text = emit_c(lower(parse_kernel(npy, bi)), fn_name="f")
     # The int/int divide feeding floor() must route through int_floor (exact, non-truncating),
     # never a bare C64 ``/`` between the two INT() casts BuiltinCastRewriter left behind.
-    assert "int_floor(" in text, text
-    assert ") / (" not in text.split("int_floor(", 1)[0].rsplit("floor(", 1)[-1], text
+    body = text[text.rindex("void f(") :]
+    assert "int_floor(" in body, body
+    assert ") / (" not in body, body
 
 
 #: N, K as plain shape symbols, so the emitter's own ``kir.symbols`` (no lowering pass involved)

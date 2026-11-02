@@ -71,13 +71,13 @@ def check(result: CompletedProcess[str]) -> None:
         assert float(g) == float(e), (got, exp)
 
 
-@pytest.mark.skipif(not have_gcc(), reason="gcc not installed")
+@have_gcc
 def test_c_header_compiles_standalone_and_floors_toward_negative_infinity() -> None:
     src = arith_header_source("c")
     check(build_run_c_include(ARITH_HEADER_NAME["c"], src, driver(ARITH_HEADER_NAME["c"])))
 
 
-@pytest.mark.skipif(not have_gpp(), reason="g++ not installed")
+@have_gpp
 def test_cpp_header_compiles_standalone_and_floors_toward_negative_infinity() -> None:
     src = arith_header_source("cpp")
     check(build_run_c_include(ARITH_HEADER_NAME["cpp"], src, driver(ARITH_HEADER_NAME["cpp"]), cpp=True))
