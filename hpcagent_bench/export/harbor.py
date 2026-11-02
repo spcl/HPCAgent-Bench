@@ -1550,7 +1550,6 @@ def run_argv(task_root: str | pathlib.Path, *, job_name: str, jobs_dir: str | pa
         provider,
         "-k",
         "1",
-        "--yes",
     ]
 
 
