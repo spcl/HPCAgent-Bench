@@ -17,6 +17,8 @@ import sys
 from collections.abc import Callable, Mapping
 from unittest import mock
 
+import pytest
+
 from hpcagent_bench import paths
 
 __all__ = ["fresh_interpreter", "isolated"]
@@ -25,6 +27,8 @@ REPO = paths.ROOT
 
 #: Set in the fresh interpreter that runs an :func:`isolated` test body.
 ISOLATED_ENV = "HPCAGENT_BENCH_OPENMP_ISOLATED"
+#: Ceiling on one isolated run: the child gets no ``--timeout``, because ``PYTEST_ADDOPTS`` is cleared for it.
+ISOLATED_TIMEOUT_S = 1800
 
 
 def isolated(test: Callable[..., None]) -> Callable[..., None]:
@@ -44,8 +48,11 @@ def isolated(test: Callable[..., None]) -> Callable[..., None]:
             env=env,
             cwd=REPO,
             check=False,
+            timeout=ISOLATED_TIMEOUT_S,
         )
         assert proc.returncode == 0, proc.stdout[-2000:] + proc.stderr[-800:]
+        if " passed" not in proc.stdout:  # an inner skip exits 0 and must not read as a pass
+            pytest.skip(proc.stdout[-500:])
 
     return run
 
