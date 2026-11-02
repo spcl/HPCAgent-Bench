@@ -61,7 +61,13 @@ while [ "${i}" -lt "${NGPU}" ]; do
     HEADER="${HEADER},gpu${i}_pct"
     i=$((i + 1))
 done
-[ -s "${CSV}" ] || echo "${HEADER}" > "${CSV}"
+# A relaunch appends to the file it finds, whose header stays: its width decides every row's.
+if [ -s "${CSV}" ]; then
+    IFS= read -r kept_header < "${CSV}"
+    NGPU=$(printf '%s' "${kept_header}" | tr ',' '\n' | grep -cE '^gpu[0-9]+_pct$')
+else
+    echo "${HEADER}" > "${CSV}"
+fi
 
 cpu_fields() {
     # prints the numeric fields of the "cpu " line from /proc/stat, space separated

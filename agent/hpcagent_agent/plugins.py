@@ -239,7 +239,7 @@ def plugin_file(reference: str, environ: Mapping[str, str] = os.environ) -> path
     for plugin in find(roots(environ)):
         if plugin.name == name:
             path = plugin.root / relative
-            if not path.is_file():
+            if not path.is_file() or not path.resolve().is_relative_to(plugin.root.resolve()):
                 raise ValueError(f"plugin {name!r} ships no {relative}")
             return path
     raise ValueError(f"{reference!r}: no plugin {name!r}")
@@ -278,12 +278,16 @@ def import_tools(environ: Mapping[str, str] = os.environ) -> tuple[Plugin, ...]:
 
 
 def tree_digest(root: pathlib.Path) -> str:
-    """The sha256 of the files under ``root`` an install copies (:func:`copied_files`): path and content."""
+    """The sha256 of the files under ``root`` an install copies (:func:`copied_files`): path, content and a
+    symlink's target."""
     sha = hashlib.sha256()
     for path in sorted(copied_files(root)):
         sha.update(path.relative_to(root).as_posix().encode())
         sha.update(b"\0")
-        sha.update(path.read_bytes())
+        if path.is_symlink():
+            sha.update(b"symlink\0" + os.readlink(path).encode() + b"\0")
+        if path.is_file():
+            sha.update(path.read_bytes())
     return sha.hexdigest()
 
 
@@ -330,13 +334,14 @@ def copied_without(root: pathlib.Path) -> Callable[[str, list[str]], set[str]]:
 
 
 def copied_files(root: pathlib.Path) -> list[pathlib.Path]:
-    """The files a copy of ``root`` takes (:func:`copied_without`), pruning the folders it leaves without walking
-    them."""
+    """The files and links a copy of ``root`` takes (:func:`copied_without`), pruning the folders it leaves without
+    walking them."""
     ignored = copied_without(root)
     files: list[pathlib.Path] = []
     for folder, dirnames, filenames in os.walk(root):
         dropped = ignored(folder, [*dirnames, *filenames])
         dirnames[:] = [name for name in dirnames if name not in dropped]
+        files.extend(pathlib.Path(folder) / name for name in dirnames if (pathlib.Path(folder) / name).is_symlink())
         files.extend(pathlib.Path(folder) / name for name in filenames if name not in dropped)
     return files
 

@@ -150,8 +150,8 @@ def kill(ident: str, proc: subprocess.Popen[bytes]) -> int:
         with contextlib.suppress(OSError, subprocess.TimeoutExpired):
             subprocess.call(["scancel", sid], timeout=SLURM_CALL_S)
     signal_group(proc, signal.SIGTERM)
-    deadline = time.time() + TERM_GRACE_S
-    while proc.poll() is None and time.time() < deadline:
+    deadline = time.monotonic() + TERM_GRACE_S
+    while proc.poll() is None and time.monotonic() < deadline:
         time.sleep(POLL_S)
     if proc.poll() is None:
         signal_group(proc, signal.SIGKILL)

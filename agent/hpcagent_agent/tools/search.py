@@ -29,9 +29,9 @@ DESCRIPTION = (
 
 
 class SearchInput(pydantic.BaseModel):
-    query: str = pydantic.Field(description="Question or search query.")
+    query: str = pydantic.Field(min_length=1, description="Question or search query.")
     context: str | None = pydantic.Field(None, description="Optional task context to guide the search.")
-    limit: int | None = pydantic.Field(None, description="Optional requested number of results.")
+    limit: int | None = pydantic.Field(None, ge=1, le=20, description="Optional requested number of results.")
 
 
 PROMPT = (

@@ -479,7 +479,8 @@ PROBE_MAX_TOKENS = 512
 
 
 def throughput_probe(replica: str, headers: dict[str, str], requests: int) -> list[dict[str, float]]:
-    """Measure per-request generation throughput against ``replica``, one request at a time; never raises.
+    """Measure per-request throughput over the whole request (queueing to response) against ``replica``, one request
+    at a time; never raises.
 
     Sequential, so a single-stream slowdown is not hidden in the aggregate; tokens come from the server's ``usage``."""
     model = harnesses.served_model()
@@ -515,11 +516,11 @@ def throughput_probe(replica: str, headers: dict[str, str], requests: int) -> li
             "elapsed_s": elapsed,
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion,
-            "decode_tok_s": completion / elapsed,
+            "completion_tok_s": completion / elapsed,
         }
         samples.append(sample)
         print(
-            f"throughput probe {index}: {completion:.0f} tok in {elapsed:.1f}s = {sample['decode_tok_s']:.2f} tok/s",
+            f"throughput probe {index}: {completion:.0f} tok in {elapsed:.1f}s = {sample['completion_tok_s']:.2f} tok/s",
             flush=True,
         )
     return samples
@@ -530,7 +531,7 @@ def report_throughput(samples: list[dict[str, float]]) -> None:
     if not samples:
         print("throughput probe: no samples", flush=True)
         return
-    rates = sorted(sample["decode_tok_s"] for sample in samples)
+    rates = sorted(sample["completion_tok_s"] for sample in samples)
     median = statistics.median(rates)
     print(
         f"throughput probe: n={len(rates)} median={median:.2f} tok/s min={rates[0]:.2f} max={rates[-1]:.2f}", flush=True
@@ -540,7 +541,7 @@ def report_throughput(samples: list[dict[str, float]]) -> None:
         return
     out = pathlib.Path(run_dir) / f"throughput-node{node_rank()}.json"
     try:
-        out.write_text(json.dumps({"median_decode_tok_s": median, "samples": samples}, indent=2), encoding="utf-8")
+        out.write_text(json.dumps({"median_completion_tok_s": median, "samples": samples}, indent=2), encoding="utf-8")
         print(f"throughput probe: wrote {out}", flush=True)
     except OSError as exc:  # a missing/read-only run dir must not end the run
         print(f"throughput probe: could not write {out}: {exc}", flush=True)
@@ -586,6 +587,8 @@ AGENT_START_STAGGER_MAX_SECONDS = float(os.environ.get("AGENT_START_STAGGER_MAX_
 
 #: How many agents may be INSIDE MCP startup at once (a semaphore, so it drains at the real startup rate).
 AGENT_START_CONCURRENCY = int(os.environ.get("AGENT_START_CONCURRENCY", "8"))
+if AGENT_START_CONCURRENCY < 1:
+    raise SystemExit(f"AGENT_START_CONCURRENCY={AGENT_START_CONCURRENCY} would never start an agent: it must be >= 1")
 
 #: Attempts to launch an agent that CRASHES (died without our caps and without a closing result event). A timeout is
 #: not a crash: relaunching it would grant a second budget its peers never had. A claude agent resumes its own session
@@ -645,7 +648,7 @@ def acquire_start_slot(directory: pathlib.Path, slots: int) -> int:
     """An open descriptor holding one of ``slots`` exclusive locks under ``directory``; blocks."""
     directory.mkdir(parents=True, exist_ok=True)
     while True:
-        for index in range(max(1, slots)):
+        for index in range(slots):
             descriptor = os.open(directory / f"slot-{index}", os.O_CREAT | os.O_RDWR, 0o600)
             try:
                 fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -3024,6 +3027,8 @@ def main() -> int:
         ready_replicas = wait_for_ready_replicas(replicas, vllm_timeout, vllm_headers)
     if len(ready_replicas) < len(replicas):
         print(f"proceeding with {len(ready_replicas)}/{len(replicas)} vLLM replicas", flush=True)
+        # run_agent and every fused child read the list from here: a replica that failed readiness gets no worker.
+        os.environ["VLLM_REPLICA_URLS"] = ",".join(ready_replicas)
     # Single-stream throughput, measured BEFORE the agents saturate the endpoint; node 0 only. 0/unset = off.
     probe_requests = int(os.environ.get("THROUGHPUT_PROBE_REQUESTS", "0") or 0)
     if probe_requests > 0 and node_rank() == 0 and ready_replicas:
