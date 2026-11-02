@@ -10,11 +10,12 @@
 # Roles, tags and file names come from images.env; --all means every role of this host's platform
 # (build_common.sh ce_platform) that has what the action needs. A push reads the OCI archive the build saved beside
 # the squashfs (ce_export_image): a squashfs is flattened and cannot stand in for one, and a push that
-# succeeded replaces the archive with a .pushed marker naming the tag and digest. Credentials come
-# only from the environment (REGISTRY_USER, REGISTRY_TOKEN), never a file. Only the portable latest
-# flavor is published: a native build or a tag not ending in -latest is refused. The preflight writes a
-# CVE report beside the archive when trivy is on PATH (.scan.txt, its first line the digest); it informs
-# and never refuses. registry.sbatch runs this on a compute node.
+# succeeded replaces the archive with a .pushed marker naming the tag and digest; a role whose marker names
+# its target counts as done, with or without --check. Credentials come only from the environment
+# (REGISTRY_USER, REGISTRY_TOKEN), never a file. Only the portable latest flavor is published: a native build
+# or a tag not ending in -latest is refused. The preflight writes a CVE report beside the archive when trivy
+# is on PATH (.scan.txt, its first line the digest); it informs and never refuses. registry.sbatch runs this
+# on a compute node.
 set -Eeuo pipefail
 ulimit -c 0
 HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -56,13 +57,21 @@ scan_archive() {
 
 # push_one <role> <check 0|1>: load the role's archive into a private store, check it, push it.
 push_one() {
-    local role="$1" check="$2" tag archive root local_tag total biggest target digest
+    local role="$1" check="$2" tag archive marker root local_tag total biggest target digest
     : "${CE_IMAGES:?set SCRATCH or CE_IMAGES}"
     tag="$(ce_image "${role}" tag)" || { echo "${role}: images.env gives it no registry tag" >&2; return 1; }
     [[ "${tag}" == *-latest ]] || { echo "${role}: a published tag is <thing>-latest, got ${tag}" >&2; return 1; }
     archive="${CE_IMAGES}/$(ce_image "${role}" sqsh)"
     archive="${archive%.sqsh}.oci.tar"
-    [[ -f "${archive}" ]] || { echo "${role}: no ${archive}; build and promote the role first" >&2; return 1; }
+    if [[ ! -f "${archive}" ]]; then
+        marker="${archive%.oci.tar}.pushed"
+        [[ "$(cut -d' ' -f1 "${marker}" 2>/dev/null)" == "${REGISTRY_REPO}:${tag}" ]] || {
+            echo "${role}: no ${archive}; build and promote the role first" >&2
+            return 1
+        }
+        echo "${role}: already pushed as $(<"${marker}")"
+        return 0
+    fi
     root="${CE_TMPFS}/registry-$$-${role}"
     # podman's events and pause state go under XDG_RUNTIME_DIR; the login node's /run/user/<uid> does not
     # exist on a compute node, and the first podman call there fails (0 GB, no digest) instead of pushing.

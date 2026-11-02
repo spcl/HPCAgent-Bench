@@ -374,6 +374,28 @@ def test_pull_refuses_the_native_flavor() -> None:
     assert "latest images only" in done.stderr
 
 
+@pytest.mark.parametrize("flags", [[], ["--check"]])
+def test_a_role_already_pushed_to_this_target_counts_as_done(tmp_path: pathlib.Path, flags: list[str]) -> None:
+    """A push leaves a marker and no archive; a marker naming another target says nothing about this one."""
+    published = {
+        LIVE["agent"]: "agent-amd-latest",
+        LIVE["judge"]: "judge-amd-latest",
+        "hpcagent-bench-sglang-mi300-latest.sqsh": "sglang-mi300-latest",
+        "hpcagent-bench-vllm-amd-latest.sqsh": "vllm-amd-latest",
+    }
+    for sqsh, tag in published.items():
+        marker = tmp_path / sqsh.replace(".sqsh", ".pushed")
+        marker.write_text(f"docker.io/x/y:{tag} sha256:abc\n", encoding="utf-8")
+    env = {"CE_IMAGES": str(tmp_path), "CE_PLATFORM": "amd", "REGISTRY_REPO": "docker.io/x/y", "USER": "someone"}
+    push = ["bash", str(CE / "registry.sh"), "push", *flags, "--all"]
+    done = run(push, env)
+    assert done.returncode == 0, done.stderr
+    assert "judge: already pushed as docker.io/x/y:judge-amd-latest" in done.stdout
+    done = run(push, {**env, "REGISTRY_REPO": "docker.io/x/other"})
+    assert done.returncode == 1
+    assert "4 failure(s)" in done.stderr
+
+
 @pytest.mark.parametrize("recipe", ["judge-agent-amd", "judge-agent-cpu"])
 def test_every_spack_image_labels_its_cpu_target_after_declaring_it(recipe: str) -> None:
     docker = (CE / recipe / "Dockerfile").read_text(encoding="utf-8")
@@ -416,6 +438,8 @@ if __name__ == "__main__":
         test_the_flavor_names_agent_and_judge_images_and_edfs_but_not_the_serving_ones(flavor)
     test_every_registry_tag_is_a_latest_tag()
     test_pull_refuses_the_native_flavor()
+    for push_flags in [[], ["--check"]]:
+        test_a_role_already_pushed_to_this_target_counts_as_done(pathlib.Path(tempfile.mkdtemp()), push_flags)
     for recipe in ["judge-agent-amd", "judge-agent-cpu"]:
         test_every_spack_image_labels_its_cpu_target_after_declaring_it(recipe)
     test_push_refuses_a_native_build()

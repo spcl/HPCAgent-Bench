@@ -314,7 +314,8 @@ xGMI regardless.
 `--check` runs every registry gate (10 GB per layer, 100 GB per image, portable flavor, `-latest`
 tag) and sends nothing. Credentials come only from the environment. With `trivy` on `PATH` the preflight also writes a
 CVE report beside the archive (`.scan.txt`, its first line the digest); it informs and never refuses. A push that
-succeeded replaces the archive with a `.pushed` marker naming the tag and digest.
+succeeded replaces the archive with a `.pushed` marker naming the tag and digest, and a role whose marker names its
+target counts as done, so `push --all` resumes after a partial failure.
 
 There is one tag per CPU family (`agent-nvidia-latest`, `agent-nvidia-x86_64-latest`, `agent-cpu-<arch>-latest`), not
 one multi-arch manifest: the families differ in more than the architecture (their `CUDA_ARCHS` lists), and a manifest
