@@ -313,7 +313,17 @@ xGMI regardless.
 `registry.sh push` publishes a role's live `<sqsh>.oci.tar` under its one tag in `REGISTRY_REPO`
 (`docker.io/spcleth/hpcagent-bench`); a push replaces the tag, and the digest pins a version.
 `--check` runs every registry gate (10 GB per layer, 100 GB per image, portable flavor, `-latest`
-tag) and sends nothing. Credentials come only from the environment.
+tag) and sends nothing. Credentials come only from the environment. With `trivy` on `PATH` the preflight also writes a
+CVE report beside the archive (`.scan.txt`, its first line the digest); it informs and never refuses. A push that
+succeeded replaces the archive with a `.pushed` marker naming the tag and digest.
+
+There is one tag per CPU family (`agent-nvidia-latest`, `agent-nvidia-x86_64-latest`, `agent-cpu-<arch>-latest`), not
+one multi-arch manifest: the families differ in more than the architecture (their `CUDA_ARCHS` lists), and a manifest
+list would hand a host whichever image its architecture names.
+
+`registry.sh prune [--days N] <role>... | --all` removes unverified candidates and the base-image copies no Dockerfile
+names any more, once idle N days (7). `build.sh <image> --drift` compares a checkout's fingerprints with the published
+labels; CI reports it on every push to `main` (x86_64 targets: the runner's family decides the roles).
 
 ```bash
 sbatch registry.sbatch push --check --all

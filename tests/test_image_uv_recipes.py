@@ -79,8 +79,6 @@ def test_a_judge_agent_image_installs_only_what_it_builds_from_source(image: str
     """Every other locked package is installed when a job starts. An image sync names its groups with --only-group:
     --no-install-project alone still installs the project's dependencies (dace and torch were baked that way)."""
     text = recipe(image)
-    assert "COPY pyproject.toml uv.lock /opt/hpcagent-bench/" in text
-    assert "COPY agent/pyproject.toml /opt/hpcagent-bench-agent/pyproject.toml" in text
     sync = re.search(
         r"uv sync --frozen --(?:exact|inexact)[^;]*--only-group image-python "
         r"--no-binary-package mpi4py;",
@@ -98,9 +96,7 @@ def test_the_launch_venv_installs_the_extra_and_the_proxy_and_never_an_image_bui
     text = recipe(image)
     args = launch_args(text)
     assert args.startswith(f"--no-install-project --extra {EXTRA_OF[image]} --group judge-proxy"), args
-    assert {f"--no-install-package {name}" for name in IMAGE_BUILT[image]} <= {
-        f"--no-install-package {word}" for word in args.split("--no-install-package ")[1:] for word in [word.strip()]
-    }, args
+    assert set(IMAGE_BUILT[image]) <= set(re.findall(r"--no-install-package (\S+)", args)), args
     assert 'ENTRYPOINT ["/opt/launch/launch_venv.sh"]' in text
     assert re.search(r"^COPY .*containers/images/lib/launch_venv.sh.* /opt/launch/$", text, re.MULTILINE)
     judge = text[text.index("FROM agent AS judge") :]

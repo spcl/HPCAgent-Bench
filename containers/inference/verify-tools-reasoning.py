@@ -18,6 +18,7 @@ Exit code is 0 only when every requested check passed.
 import argparse
 import json
 import pathlib
+import re
 import sys
 import urllib.error
 import urllib.request
@@ -126,7 +127,7 @@ def check_reasoning(base: str, model: str, effort: str, timeout: int, api_key: s
     content = message.get("content") or ""
     if not reasoning:
         return False, f"no reasoning_content or reasoning returned (effort={effort!r}); content={content[:200]!r}"
-    if "10" not in content:
+    if not re.search(r"(?<![\d.])10(?!\.?\d)", content):
         return False, f"wrong answer; expected 10, content={content[:200]!r}"
     return True, f"reasoning={len(reasoning)} chars, answer ok (effort={effort!r})"
 

@@ -13,8 +13,9 @@ ce_image_args() {
     ce_spack_target
     ce_march
     ce_pin_commits
+    ce_lock_keys
     IMAGE_VERSION="${IMAGE_VERSION:-dev}"
-    ce_build_args IMAGE_VERSION SPACK_TARGET MARCH
+    ce_build_args IMAGE_VERSION IMAGE_PYTHON_LOCK HARNESS_LOCK SPACK_TARGET MARCH
 }
 
 # Base cache, spack buildcache and uv cache per CPU family: an x86_64 layer is no use to aarch64.

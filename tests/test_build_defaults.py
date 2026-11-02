@@ -8,6 +8,7 @@ must really build cold when it is off. IMAGE_REQUIREMENTS.md "Build defaults" do
 """
 
 import pathlib
+import re
 import shutil
 import subprocess
 
@@ -140,6 +141,61 @@ def test_an_uncommitted_edit_to_a_copied_file_makes_the_inputs_unknown(repo: pat
     assert "no pull" in done.stderr
 
 
+def move_locked(lock: pathlib.Path, package: str) -> None:
+    """Change one hash of the package's lock entry, which is what any new release of it does."""
+    text, moved = re.subn(
+        rf'(name = "{package}"\n.*?hash = "sha256:)(.)',
+        lambda found: found[1] + ("1" if found[2] == "0" else "0"),
+        lock.read_text(encoding="utf-8"),
+        count=1,
+        flags=re.DOTALL,
+    )
+    assert moved, package
+    lock.write_text(text, encoding="utf-8")
+
+
+@pytest.mark.parametrize("image", ["judge-agent-amd", "judge-agent-cpu", "judge-agent-cuda"])
+def test_only_a_package_the_image_installs_moves_its_fingerprint_with_the_lock(
+    tmp_path: pathlib.Path, image: str
+) -> None:
+    """A wheel the launch venv installs must not rebuild the agent target, whose source builds take hours."""
+    images = tmp_path / "containers" / "images"
+    images.mkdir(parents=True)
+    for name in ("build_common.sh", "images.env", f"{image}/Dockerfile"):
+        (images / name).parent.mkdir(exist_ok=True)
+        shutil.copy2(CE / name, images / name)
+    for name in ("pyproject.toml", "uv.lock", "agent/pyproject.toml", "adapters/hpcagent_bench/pyproject.toml"):
+        (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / name, tmp_path / name)
+    git(tmp_path, "init", "-q")
+    git(tmp_path, "add", "-A")
+    git(tmp_path, "commit", "-qm", "fixture")
+    uv = pathlib.Path(str(shutil.which("uv"))).parent
+
+    def agent_fingerprint() -> str:
+        snippet = (
+            "BUILD_ARGS=(); ce_lock_keys >/dev/null && ce_build_args IMAGE_PYTHON_LOCK HARNESS_LOCK && "
+            f'ce_build_fingerprint {images / image / "Dockerfile"} agent "${{BUILD_ARGS[@]}}"'
+        )
+        done = bash(snippet, tmp_path, {"PATH": f"{uv}:{SHELL_PATH}", "BASE_IMAGE": "x@sha256:1"})
+        assert done.returncode == 0, done.stderr
+        return done.stdout.strip()
+
+    before = agent_fingerprint()
+    lock = tmp_path / "uv.lock"
+    move_locked(lock, "jaxlib")
+    project = tmp_path / "pyproject.toml"
+    project.write_text(project.read_text(encoding="utf-8").replace('version = "', 'version = "9', 1), encoding="utf-8")
+    git(tmp_path, "commit", "-qam", "a wheel and the release move")
+    assert agent_fingerprint() == before
+    for package in ("numpy", "mpi4py", "meson-python", "litellm", "playwright"):
+        move_locked(lock, package)
+        git(tmp_path, "commit", "-qam", package)
+        moved = agent_fingerprint()
+        assert moved != before, package
+        before = moved
+
+
 @pytest.mark.parametrize(
     ("mode", "registry_label", "role", "want_rc"),
     [
@@ -178,12 +234,33 @@ def test_the_layer_store_survives_only_with_the_cache_on(
     done = bash(
         'ce_podman_env >/dev/null; printf "%s" "${CE_BUILD_FLAGS[*]}"',
         repo,
-        {"CE_BUILD_CACHE": knob, "CE_TMPFS": str(tmpfs), "PATH": f"{stubs}:{SHELL_PATH}"},
+        {"CE_BUILD_CACHE": knob, "CE_LAYER_CACHE": "0", "CE_TMPFS": str(tmpfs), "PATH": f"{stubs}:{SHELL_PATH}"},
     )
     assert done.returncode == 0, done.stderr
     assert done.stdout == want_flags
     assert (tmpfs / "root" / "layers").is_dir() == store_kept
     assert not (tmpfs / "runroot").exists(), "runtime state must never outlive its job"
+
+
+def test_a_layer_registry_that_cannot_start_costs_the_resume_not_the_build(
+    repo: pathlib.Path, tmp_path: pathlib.Path
+) -> None:
+    """On by default, so a machine without its download must still build."""
+    tmpfs = tmp_path / "tmpfs"
+    tmpfs.mkdir()
+    stubs = tmp_path / "bin"
+    stubs.mkdir()
+    for name, body in (("podman", '[ "$1" = unshare ] && { shift; exec "$@"; }\nexit 0'), ("curl", "exit 22")):
+        (stubs / name).write_text(f"#!/bin/sh\n{body}\n", encoding="ascii")
+        (stubs / name).chmod(0o755)
+    done = bash(
+        'ce_podman_env; printf "repo=[%s] flags=%s" "${CE_LAYER_REPO}" "${CE_BUILD_FLAGS[*]}"',
+        repo,
+        {"JIT_CACHE_ROOT": str(tmp_path / "jit"), "CE_TMPFS": str(tmpfs), "PATH": f"{stubs}:{SHELL_PATH}"},
+    )
+    assert done.returncode == 0, done.stderr
+    assert "repo=[] flags=--layers=true" in done.stdout
+    assert "only on this node" in done.stdout
 
 
 def test_the_cache_knob_off_mounts_no_build_cache(repo: pathlib.Path) -> None:
