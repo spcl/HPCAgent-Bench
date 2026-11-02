@@ -57,5 +57,4 @@ if __name__ == "__main__":
         test_native_baseline_stamps_execution_native_by_default,
         test_baseline_stamps_container_when_configured,
     ):
-        with tempfile.TemporaryDirectory() as root:
-            test(pathlib.Path(root))
+        test(pathlib.Path(tempfile.mkdtemp()))
