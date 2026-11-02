@@ -14,11 +14,14 @@ ROOT = paths.ROOT
 
 
 def test_no_python_file_uses_str_enum() -> None:
-    found = subprocess.run(
+    probed = subprocess.run(
         ["git", "grep", "-n", "-E", r"\bStrEnum\b", "--", "*.py", ":!tests/test_no_str_enum.py"],
         cwd=ROOT,
         capture_output=True,
         text=True,
         check=False,
-    ).stdout
-    assert not found, f"use enum.Enum, not StrEnum:\n{found}"
+    )
+    # rc 1 = "no matches" (the good case); anything else means the scan never ran -- a tarball
+    # checkout or a locked index must fail loudly, not report success over an empty stdout.
+    assert probed.returncode in (0, 1), f"git grep failed rc={probed.returncode}:\n{probed.stderr}"
+    assert not probed.stdout, f"use enum.Enum, not StrEnum:\n{probed.stdout}"
