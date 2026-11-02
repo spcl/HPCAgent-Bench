@@ -45,6 +45,7 @@ def wrap(
     image: str = "example/bench:latest",
     extra: tuple[str, ...] = (),
     gpu_flags: str = "",
+    backends_file: pathlib.Path | None = None,
 ) -> Wrapped:
     """Source the seam under ``runtime`` and run ``container_wrap role ce_env image extra...``."""
     edf_dir = tmp_path / "edf"
@@ -67,6 +68,8 @@ def wrap(
         "EDF_PATH": edf_dir,
         "SCRATCH": tmp_path,
     }
+    if backends_file is not None:
+        environment["HPCAGENT_BENCH_BACKENDS_FILE"] = backends_file
     script = "\n".join(
         [
             "set -euo pipefail",
@@ -109,7 +112,7 @@ def test_apptainer_binds_the_shared_folder_and_the_roles_mounts(tmp_path: pathli
     assert done.returncode == 0, done.stderr
     assert done.srun == []
     assert done.wrap[:3] == ["apptainer", "exec", "--rocm"]
-    bind = done.wrap[done.wrap.index("--bind") + 1].split(",")
+    bind = [done.wrap[i + 1] for i, word in enumerate(done.wrap) if word == "--bind"]
     assert bind[0] == f"{tmp_path}/run/shared:/shared"
     assert f"{tmp_path}/repo:{tmp_path}/repo" in bind
     assert f"{tmp_path}/run:{tmp_path}/run" in bind
@@ -177,7 +180,7 @@ def test_a_runtime_that_runs_an_image_refuses_to_run_without_one(tmp_path: pathl
 def test_an_unknown_runtime_is_refused_with_the_known_ones_named(tmp_path: pathlib.Path) -> None:
     done = wrap(tmp_path, "lxc")
     assert done.returncode == 2
-    assert "unknown CONTAINER_RUNTIME 'lxc' (ce|apptainer|podman|docker)" in done.stderr
+    assert "unknown CONTAINER_RUNTIME 'lxc' (ce|docker|podman|apptainer)" in done.stderr
 
 
 def test_a_job_variable_passes_and_no_judge_image_env_is_replaced_by_the_host() -> None:
@@ -199,6 +202,61 @@ def test_a_job_variable_passes_and_no_judge_image_env_is_replaced_by_the_host() 
     )
     assert (set(done.stdout.split()) & image_env) | job == job
     assert job <= set(done.stdout.split())
+
+
+TOY_ROW = """
+toy.family=oci
+toy.kind=exec
+toy.verb=start --host
+toy.bind=--mnt
+toy.workdir=--cd
+toy.env=--var
+toy.gpu.nvidia=--toy-gpu
+toy.image_form=tag
+toy.image_default=toy:{hw}
+global.passthrough=ANTHROPIC_API_KEY
+"""
+
+
+def test_a_new_backend_is_one_table_row_for_both_launchers(tmp_path: pathlib.Path) -> None:
+    """A row gives the cluster seam and the local launcher a whole backend: nothing in the shell names it. The local
+    launcher forwards names, so a key stays out of argv and a newline in a value cannot split it."""
+    table = tmp_path / "backends.txt"
+    table.write_text(TOY_ROW)
+    done = wrap(tmp_path, "toy", backends_file=table)
+    assert done.returncode == 0, done.stderr
+    assert done.wrap[:3] == ["toy", "start", "--host"]
+    assert "RUN_DIR" in [done.wrap[i + 1] for i, word in enumerate(done.wrap) if word == "--var"]
+    assert f"{tmp_path}/run/shared:/shared" == done.wrap[done.wrap.index("--mnt") + 1]
+    assert done.wrap[-1] == "example/bench:latest"
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    stub = bin_dir / "toy"
+    stub.write_text('#!/usr/bin/env bash\n[[ "$1" == image ]] && exit 0\nprintf "%s\\n" "$@" > "${ARGV_OUT}"\n')
+    stub.chmod(0o755)
+    out = tmp_path / "argv"
+    launcher = REPO / "helpers" / "scripts" / "run_agent_in_container.sh"
+    env = {
+        "PATH": f"{bin_dir}:/usr/bin:/bin",
+        "ARGV_OUT": str(out),
+        "HPCAGENT_BENCH_BACKENDS_FILE": str(table),
+        "HPCAGENT_BENCH_RUNTIME_BACKEND": "toy",
+        "ANTHROPIC_API_KEY": "secret-value",
+        "HPCAGENT_BENCH_SPLIT": "one\n--var\nJUNK=1",
+    }
+    run = subprocess.run([launcher, "--", "stub"], env=env, capture_output=True, text=True, check=False)
+    assert run.returncode == 0, run.stderr
+    argv = out.read_text().split("\n")[:-1]
+    assert argv[:2] == ["start", "--host"]
+    named = [argv[i + 1] for i, word in enumerate(argv) if word == "--var"]
+    assert {"ANTHROPIC_API_KEY", "HPCAGENT_BENCH_IMAGE", "HPCAGENT_BENCH_SPLIT"} <= set(named)
+    assert "secret-value" not in argv and "JUNK=1" not in argv
+    assert argv[-6:] == ["toy:cpu", "python", "-m", "hpcagent_bench.cli", "agent", "stub"]
+
+    gpu = subprocess.run([launcher, "amd", "--", "stub"], env=env, capture_output=True, text=True, check=False)
+    assert gpu.returncode == 2
+    assert "no amd GPU flags" in gpu.stderr
 
 
 def gang_supported(runtime: str) -> subprocess.CompletedProcess[str]:

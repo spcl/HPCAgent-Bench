@@ -14,7 +14,7 @@ A run reaches a cluster in one of three shapes:
 
 Invariants: every assignment is a pure function of `(work list, ranks, nodes)`, computed identically
 by every rank; one container per rank, and every `srun` step carries the container selector
-(`--environment=$EDF` on Alps, row `ce.srun_flag` in `hpcagent_bench/container_backends.txt`; a step
+(`--environment=$EDF` on Alps, the `ce` row in `hpcagent_bench/container_backends.txt`; a step
 without it runs on the bare node); results outlive the allocation as per-rank shards, merged
 afterwards.
 

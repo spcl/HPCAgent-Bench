@@ -297,7 +297,7 @@ def test_the_seal_hides_the_configured_generated_reference_cache(tmp_path: pathl
         ("agent.execution", set(Execution)),
         ("mpi.mode", set(ScalingLaw)),
         ("mpi.residency", {Residency.parse(member.value) for member in Location}),
-        ("runtime.backend", set(containers.SELECTABLE)),
+        ("runtime.backend", set(ContainerRuntime)),
     ],
 )
 def test_a_choice_key_offers_exactly_what_its_reader_accepts(dotted: str, values: set[object]) -> None:
