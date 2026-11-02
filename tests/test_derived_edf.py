@@ -250,6 +250,7 @@ def test_only_the_agent_container_is_read_only_and_it_gets_the_nodes_tmp(tmp_pat
     assert "/tmp:/tmp" in agent_edf["mounts"]
     assert judge_edf["writable"] is True
     assert "/tmp:/tmp" not in judge_edf["mounts"]
+    assert "/dev/shm:/opt/node-shm" in agent_edf["mounts"] and "/dev/shm:/opt/node-shm" in judge_edf["mounts"]
 
 
 if __name__ == "__main__":
