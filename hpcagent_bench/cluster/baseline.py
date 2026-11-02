@@ -8,6 +8,7 @@ import argparse
 import contextlib
 import dataclasses
 import enum
+import importlib.metadata
 import os
 import pathlib
 import resource
@@ -182,8 +183,15 @@ def summary_line(column: str, rank: int, rows: list[dict[str, object]], hard_fai
 
 
 def dace_sha() -> str:
-    """The installed dace's short commit: keys the PCH cache and is stamped into every row's build record."""
-    return cpf_canonical.dace_commit()[:9]
+    """The installed dace's short commit: keys the PCH cache and is stamped into every row's build record.
+
+    A dace whose install records no commit (a PyPI wheel, or no dace at all) refuses the rank by name: the
+    commit keys the PCH cache and every row's build record, so the rank must not die on a bare traceback
+    from the CPF's commit lookup in ``rank_environment``, before the preflight gate even runs."""
+    try:
+        return cpf_canonical.dace_commit()[:9]
+    except (importlib.metadata.PackageNotFoundError, RuntimeError) as exc:
+        raise SystemExit(f"baseline: cannot read the installed dace's commit ({exc}); the caches key on it") from exc
 
 
 def hip_device(environ: Mapping[str, str], rank: int) -> str | None:
@@ -374,6 +382,8 @@ def finish(sweep: Sweep) -> int:
 
 
 def configure(parser: argparse.ArgumentParser) -> None:
+    from hpcagent_bench.spec import preset_arg
+
     parser.add_argument(
         "--column",
         required=True,
@@ -383,7 +393,9 @@ def configure(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--tag", default="", help="the tag: a study tag (hpcagent_bench/tags/<tag>.txt) or track")
     parser.add_argument("--kernels", default="", help="the tag as comma-separated kernel names")
     parser.add_argument("--kernels-file", type=pathlib.Path, default=None, help="the tag as one name per line")
-    parser.add_argument("--preset", default="fuzzed", help="the size preset the column is timed at")
+    # Validate like every other verb's --preset (preset_arg): an unknown preset must die in argparse, BEFORE
+    # `begin` drops the run's earlier rows and every kernel's run-framework fails it afresh inside the job.
+    parser.add_argument("--preset", default="fuzzed", type=preset_arg, help="the size preset the column is timed at")
     parser.add_argument(
         "--phase",
         choices=Phase.texts(),
@@ -415,7 +427,10 @@ def resolve_kernels(tag: str, kernels: str, kernels_file: pathlib.Path | None) -
         if not names:
             raise SystemExit(f"baseline: --kernels {kernels!r} names no kernel")
     elif tag:
-        names = list(tags.kernels_of(tag))
+        try:
+            names = list(tags.kernels_of(tag))
+        except (KeyError, ValueError) as exc:  # unknown tag, or a tag file naming no kernel
+            raise SystemExit(f"baseline: {exc}") from exc
     else:
         raise SystemExit("baseline: name the tag with --tag, --kernels or --kernels-file")
     unknown = []
@@ -430,10 +445,9 @@ def resolve_kernels(tag: str, kernels: str, kernels_file: pathlib.Path | None) -
 
 
 def check_column(column: str) -> None:
-    """A column must be a framework the registry knows: an unknown name crashes on every kernel of every rank."""
-    from hpcagent_bench.columns import FRAMEWORKS
-
-    if column not in FRAMEWORKS.entries:
+    """A column must be a framework the registry knows: an unknown name crashes on every kernel of every rank.
+    An alias (``c`` for ``cc``) names its column, which is what the sweep's steps resolve it to."""
+    if column not in FRAMEWORKS:  # __contains__ resolves an alias, as run_framework_sweep and is_device_column do
         raise SystemExit(f"baseline: unknown column {column!r}; known: {sorted(FRAMEWORKS.entries)}")
 
 
@@ -445,7 +459,10 @@ def cache_environment(opt: pathlib.Path, environ: Mapping[str, str]) -> dict[str
 def run_action(args: argparse.Namespace, rank: jobs.Rank) -> int:
     """``hpcagent-bench job baseline``: this task's part of the sweep phase named by ``--phase``."""
     opt = (args.opt or paths.ROOT).resolve()
-    check_column(args.column)
+    # One spelling for the whole sweep: begin deletes, run-framework records and finish reads the canonical
+    # key (run-framework canonicalizes at record time), so an alias must resolve here, before ``begin``.
+    column = FRAMEWORKS.canonical(args.column)
+    check_column(column)
     phase = Phase.parse(args.phase)
     if phase is Phase.ALL and rank.size != 1:
         raise SystemExit(
@@ -454,7 +471,7 @@ def run_action(args: argparse.Namespace, rank: jobs.Rank) -> int:
         )
     environ = cache_environment(opt, os.environ) if phase is not Phase.RUN else dict(os.environ)
     kernels = resolve_kernels(args.tag, args.kernels, args.kernels_file) if phase is not Phase.FINISH else ()
-    sweep = Sweep(args.column, args.out_root.resolve(), kernels, args.preset, opt, environ)
+    sweep = Sweep(column, args.out_root.resolve(), kernels, args.preset, opt, environ)
     if phase in (Phase.BEGIN, Phase.ALL) and rank.index == 0:
         begin(sweep)
     if phase in (Phase.RUN, Phase.ALL):

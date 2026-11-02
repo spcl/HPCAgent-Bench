@@ -324,6 +324,16 @@ def test_a_caller_supplied_build_label_is_left_alone(tmp_path: pathlib.Path) -> 
     assert canon_rows(sweep)["fakekernel"]["build"] == "extended-fork"
 
 
+def test_a_dace_without_a_recorded_commit_is_refused_by_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``dace_commit`` raises for a dace whose install records no commit (a PyPI wheel, or none at all):
+    the sweep's rank must exit naming the problem, not on a bare traceback from the CPF's lookup."""
+    monkeypatch.setattr(
+        baseline.cpf_canonical, "dace_commit", lambda: (_ for _ in ()).throw(RuntimeError("no commit recorded"))
+    )
+    with pytest.raises(SystemExit, match="dace's commit"):
+        baseline.dace_sha()
+
+
 def test_a_kernel_an_earlier_run_reached_never_resurrects(tmp_path: pathlib.Path) -> None:
     """A re-run into one work dir with a narrower tag must not keep the earlier run's row for a kernel it never
     reaches, and a kernel it does reach carries only this run's row: ``begin`` drops the earlier rows."""
@@ -380,6 +390,41 @@ def test_a_comma_list_strips_its_names_and_refuses_naming_none() -> None:
 def test_an_unknown_column_is_refused_before_a_node_is_held() -> None:
     with pytest.raises(SystemExit, match="unknown column"):
         baseline.check_column("nosuchcolumn")
+
+
+def test_a_column_alias_is_the_column_its_rows_record_under() -> None:
+    """``run-framework`` runs ``-f c`` as ``cc`` and records its rows under ``cc``; the sweep must speak that
+    spelling too, so ``begin`` drops and ``finish`` reads the rows an aliased column actually wrote (a ``begin``
+    that deleted ``c`` rows would have left every stale ``cc`` row of an earlier run standing)."""
+    from hpcagent_bench.columns import FRAMEWORKS
+
+    assert FRAMEWORKS.canonical("c") == "cc"
+    baseline.check_column("c")  # an alias is a known column: the sweep can run it
+    with pytest.raises(SystemExit, match="unknown column"):
+        baseline.check_column("nosuchcolumn")
+
+
+def test_a_column_alias_sweeps_under_the_spelling_its_rows_record(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``--column c`` builds the sweep with the alias's column, so every phase of the job sees one key."""
+    import argparse
+
+    seen: list[baseline.Sweep] = []
+    monkeypatch.setattr(baseline, "cache_environment", lambda opt, environ: {"JIT_CACHE_ROOT": str(tmp_path)})
+    monkeypatch.setattr(baseline, "begin", seen.append)
+    args = argparse.Namespace(
+        column="c",
+        out_root=tmp_path / "out",
+        tag="",
+        kernels="gemm",
+        kernels_file=None,
+        preset="S",
+        phase="begin",
+        opt=None,
+    )
+    assert baseline.run_action(args, jobs.Rank(0, 1)) == 0
+    assert seen[0].column == "cc"
 
 
 def test_one_phase_of_a_multi_task_step_must_be_named(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
