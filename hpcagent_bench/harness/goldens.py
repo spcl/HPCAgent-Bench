@@ -401,7 +401,8 @@ def write_records(path: str, start: int, arrays: Mapping[str, np.ndarray]) -> in
                 real = max(0, min(size, member.nbytes - begin))
                 bounce[:real] = data[begin : begin + real]
                 bounce[real:size] = 0
-                os.pwrite(fd, memoryview(bounce)[:size], member.offset + begin)
+                if os.pwrite(fd, memoryview(bounce)[:size], member.offset + begin) != size:
+                    raise OSError(errno.EIO, f"{path}: short write of {member.name}")
             os.fsync(fd)
         finally:
             os.close(fd)
@@ -419,7 +420,8 @@ def write_records(path: str, start: int, arrays: Mapping[str, np.ndarray]) -> in
                 raise ValueError(f"{member.name}: a record header over {BLOCK} bytes")
             head[:] = 0
             head[: len(encoded)] = np.frombuffer(encoded, dtype=np.uint8)
-            os.pwrite(fd, memoryview(head), member.offset - BLOCK)
+            if os.pwrite(fd, memoryview(head), member.offset - BLOCK) != BLOCK:
+                raise OSError(errno.EIO, f"{path}: short write of {member.name}'s header")
         os.fsync(fd)
         os.ftruncate(fd, offset)
     finally:
