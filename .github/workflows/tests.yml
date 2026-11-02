@@ -963,6 +963,33 @@ jobs:
 
   # The one combined coverage total, then the HuggingFace dataset export (published only from a
   # green push to main).
+  # A report, never a gate: which published images this push leaves behind (build.sh --drift, the label against the
+  # checkout's fingerprint; no image is built). Credentials only spare the runner's shared anonymous pull limit.
+  image-drift:
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    name: image drift (report only)
+    needs: [ unit ]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    continue-on-error: true
+    env:
+      REGISTRY_USER: ${{ secrets.REGISTRY_USER }}
+      REGISTRY_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: uv (the release pinned in agent/harness/pins.env)
+        run: |
+          sh agent/harness/install_tools.sh "$HOME/.local" uv
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Compare each image's fingerprint with its published label
+        shell: bash
+        run: |
+          status=0
+          for image in judge-agent-amd judge-agent-cpu judge-agent-cuda sglang vllm; do
+            containers/images/build.sh "${image}" --drift | tee -a "$GITHUB_STEP_SUMMARY" || status=1
+          done
+          exit "${status}"
+
   coverage:
     if: ${{!cancelled()}}
     name: coverage (combined total)
