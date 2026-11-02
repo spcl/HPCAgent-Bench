@@ -15,6 +15,7 @@ from hpcagent_bench.translators.numpyto_common import frontend as common_fronten
 from hpcagent_bench.translators.numpyto_common.ast_build import (
     RenameNames,
     SubstituteLoads,
+    const_int,
     expr_of,
     literal_loads,
     name_,
@@ -1123,15 +1124,23 @@ class DesugarUnreplacedCalls(ast.NodeTransformer):
     """Rewrite a numpy call dace has no replacement for; unrewritten it becomes an untyped callback
     ("KeyError: pyobject"). outer -> broadcast product, ascontiguousarray -> copy (also contiguous)."""
 
-    __slots__ = ()
+    __slots__ = ("ranks",)
+
+    def __init__(self, ranks: dict[str, int]) -> None:
+        self.ranks = ranks
+
+    def outer_operand(self, node: ast.expr) -> str:
+        """``node`` as a vector: ``np.outer`` ravels whatever is not one already."""
+        text = ast.unparse(node)
+        return f"({text})" if expr_rank(node, self.ranks) == 1 else f"({text}).ravel()"
 
     def visit_Call(self, node: ast.Call) -> ast.expr:
         self.generic_visit(node)
         if not (isinstance(node.func, ast.Attribute) and is_numpy_module(node.func.value) and not node.keywords):
             return node
         if node.func.attr == "outer" and len(node.args) == 2:
-            a, b = ast.unparse(node.args[0]), ast.unparse(node.args[1])
-            return ast.copy_location(ast.parse(f"({a})[:, None] * ({b})[None, :]", mode="eval").body, node)
+            a, b = self.outer_operand(node.args[0]), self.outer_operand(node.args[1])
+            return ast.copy_location(ast.parse(f"{a}[:, None] * {b}[None, :]", mode="eval").body, node)
         if node.func.attr == "ascontiguousarray" and len(node.args) == 1:
             return ast.copy_location(ast.parse(f"({ast.unparse(node.args[0])}).copy()", mode="eval").body, node)
         return node
@@ -2857,12 +2866,7 @@ class ResolveShapeReads(ast.NodeTransformer):
         bounds = [b for b in (element.lower, element.upper) if b is not None]
         if any(not is_symbol_expr(b, rank0) for b in bounds):
             return None
-        if element.upper is None:
-            return extent if element.lower is None else f"{extent} - ({ast.unparse(element.lower)})"
-        upper = ast.unparse(element.upper)
-        if element.lower is None or (isinstance(element.lower, ast.Constant) and element.lower.value == 0):
-            return upper
-        return f"{upper} - ({ast.unparse(element.lower)})"
+        return slice_extent(extent, element)
 
     def tensordotted(self, node: ast.Call) -> list[str] | None:
         """``np.tensordot(a, b, axes=([i...], [j...]))``: ``a``'s free axes, then ``b``'s, both in order."""
@@ -3719,14 +3723,16 @@ class LowerCallsDaceCannotReplace(ast.NodeTransformer):
             return None
         target, index, value = call.args
         rank = expr_rank(index, self.ranks)
-        if rank is None or rank < 1:
+        value_rank = expr_rank(value, self.ranks)
+        if rank is None or rank < 1 or value_rank is None:
             return None
         stem = self.temp("scatter")
         index_name = self.operand_name(f"{stem}_idx", index)
         value_name = self.operand_name(f"{stem}_val", value)
         iters = [f"{stem}_{k}" for k in range(rank)]
         at = ", ".join(iters)
-        body = f"{ast.unparse(target)}[{index_name}[{at}]] += {value_name}[{at}]"
+        element = value_name if value_rank == 0 else f"{value_name}[{at}]"
+        body = f"{ast.unparse(target)}[{index_name}[{at}]] += {element}"
         for depth in reversed(range(rank)):
             body = f"for {iters[depth]} in range({index_name}.shape[{depth}]):\n" + indent_block(body)
         self.changed = True
@@ -4441,6 +4447,24 @@ def contiguous_subscript(node: ast.Subscript) -> bool:
     return True
 
 
+def slice_bound(extent: str, bound: ast.expr) -> str | None:
+    """``bound`` as an offset from the start of an axis of ``extent``; None for a negated symbol, which counts
+    from the end only when the symbol is positive."""
+    literal = const_int(bound)
+    if literal is not None and literal < 0:
+        return f"{extent} - {-literal}"
+    return None if isinstance(bound, ast.UnaryOp) and literal is None else ast.unparse(bound)
+
+
+def slice_extent(extent: str, element: ast.Slice) -> str | None:
+    """The extent a stepless slice of an axis of ``extent`` leaves behind, or None if a bound has no known side."""
+    upper = extent if element.upper is None else slice_bound(extent, element.upper)
+    if element.lower is None or const_int(element.lower) == 0:
+        return upper
+    lower = slice_bound(extent, element.lower)
+    return None if upper is None or lower is None else f"{upper} - ({lower})"
+
+
 def sliced_extents(node: ast.Subscript, shapes: dict[str, list[str]], known: set[str]) -> list[str] | None:
     """The extents a subscript leaves behind, by numpy's rank rules: a slice KEEPS an axis, an
     index DROPS it. ``None`` when the base or a bound is not one this can spell.
@@ -4461,17 +4485,13 @@ def sliced_extents(node: ast.Subscript, shapes: dict[str, list[str]], known: set
             continue
         if element.step is not None:
             return None
-        if element.lower is None and element.upper is None:
-            tokens.append(base[axis])
-            continue
         bounds = [b for b in (element.lower, element.upper) if b is not None]
         if any(not is_symbol_expr(b, known) for b in bounds):
             return None
-        upper = ast.unparse(element.upper) if element.upper is not None else base[axis]
-        if element.lower is None or (isinstance(element.lower, ast.Constant) and element.lower.value == 0):
-            tokens.append(upper)
-        else:
-            tokens.append(f"{upper} - ({ast.unparse(element.lower)})")
+        extent = slice_extent(base[axis], element)
+        if extent is None:
+            return None
+        tokens.append(extent)
     return tokens + base[len(elements) :]
 
 
@@ -4676,7 +4696,7 @@ def render_program(
     # dace refuses a store through a reshape it had to materialize; spell the copy numpy makes.
     fn_ast = MaterializeWrittenReshape().visit(fn_ast)
     # dace has no np.outer and rejects negative-stride subscripts; rewrite both to forms dace accepts.
-    fn_ast = DesugarUnreplacedCalls().visit(fn_ast)
+    fn_ast = DesugarUnreplacedCalls(rank_table(fn_ast, {a.name: len(a.shape) for a in kir.arrays})).visit(fn_ast)
     # An einsum that contracts nothing is a broadcast product; dace's GEMM path mints a K=1 MatMul
     # whose views collapse to shapes its dispatch refuses. Say the product directly.
     fn_ast = DesugarContractionFreeEinsum().visit(fn_ast)
