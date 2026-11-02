@@ -33,6 +33,7 @@ args=()
 while (($#)); do
     case "$1" in
         --output | --save-submissions) args+=("$1" "$(realpath -m "${2:?$1 needs a path}")"); shift 2 ;;
+        --output=* | --save-submissions=*) args+=("${1%%=*}" "$(realpath -m "${1#*=}")"); shift ;;
         *) args+=("$1"); shift ;;
     esac
 done

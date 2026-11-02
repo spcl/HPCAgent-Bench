@@ -272,3 +272,21 @@ def test_a_stall_of_the_watcher_itself_is_not_a_stale_heartbeat(
     os.utime(tmp_path / mpi_gang.RELAY_ALIVE, (now - 10 * mpi_gang.HEARTBEAT_S,) * 2)
     assert mpi_gang.relay_is_stale(tmp_path, now, since=now - 10 * mpi_gang.HEARTBEAT_S)
     assert not mpi_gang.relay_is_stale(tmp_path, now, since=now - 1)
+
+
+def test_a_pass_that_loses_the_directory_does_not_end_the_relay(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    relay = load_relay()
+    passes = []
+
+    def flaky(directory: str, running: dict, watching_since: float = 0.0) -> None:
+        passes.append(directory)
+        raise OSError(116, "Stale file handle")
+
+    monkeypatch.setattr(relay, "step", flaky)
+    real_getppid = os.getppid
+    monkeypatch.setattr(relay.os, "getppid", lambda: 1 if len(passes) > 2 else real_getppid())
+    relay.serve(str(tmp_path), real_getppid())
+    assert len(passes) == 3
+    assert capsys.readouterr().err.count("Stale file handle") == 1

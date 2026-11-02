@@ -19,7 +19,7 @@ from collections.abc import Callable, Mapping, Sequence
 
 from hpcagent_agent.coded import Coded
 
-from hpcagent_bench import flags, paths, run_layout
+from hpcagent_bench import flags, paths, run_layout, tags
 from hpcagent_bench.cpf import canonical as cpf_canonical
 from hpcagent_bench.cluster import jobs
 from hpcagent_bench.columns import FRAMEWORKS
@@ -76,6 +76,10 @@ DEFAULT_KERNEL_MEM_KB = 125829120
 KILL_GRACE_SECONDS = 30
 TIMEOUT_CODES = (124, 137)
 
+#: What ``run-framework``'s own ``--timeout`` trails the wall cap by: it records its timeout rows itself, and the cap
+#: is the backstop for a child that never returned.
+CHILD_TIMEOUT_HEADROOM_SECONDS = 120
+
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class Sweep:
@@ -90,9 +94,13 @@ class Sweep:
 
     @property
     def managed(self) -> bool:
-        """Whether ``out_root`` is a work dir under ``$HPCAGENT_BENCH_RUNS_ROOT`` (see the module docstring)."""
+        """Whether ``out_root`` is a work dir under ``$HPCAGENT_BENCH_RUNS_ROOT`` (see the module docstring). The root
+        is resolved as ``out_root`` is: cache_env.sh spells it as the site's ``$SCRATCH``, which may hold a symlink."""
         runs_root = self.environ.get("HPCAGENT_BENCH_RUNS_ROOT", "")
-        return bool(runs_root) and self.out_root != pathlib.Path(runs_root) and self.out_root.is_relative_to(runs_root)
+        if not runs_root:
+            return False
+        root = pathlib.Path(runs_root).resolve()
+        return self.out_root != root and self.out_root.is_relative_to(root)
 
     @property
     def run_label(self) -> str:
@@ -121,8 +129,11 @@ def shell_environment(script: pathlib.Path, base: Mapping[str, str]) -> dict[str
         env=dict(base),
         capture_output=True,
         text=True,
-        check=True,
+        check=False,
     )
+    if done.returncode != 0:
+        detail = done.stderr.strip().splitlines()[-1] if done.stderr.strip() else f"exit {done.returncode}"
+        raise SystemExit(f"baseline: sourcing {script} failed: {detail}")
     return dict(item.split("=", 1) for item in done.stdout.split("\0") if "=" in item)
 
 
@@ -239,6 +250,14 @@ def record_timeout(sweep: Sweep, kernel: str, wall: int) -> None:
     )  # fmt: skip
 
 
+def positive_knob(environ: Mapping[str, str], name: str, default: int) -> int:
+    """The positive integer ``name`` of ``environ``, refused by name before a kernel runs."""
+    value = environ.get(name, str(default))
+    if not value.isdecimal() or int(value) < 1:
+        raise SystemExit(f"baseline: {name}={value!r} is not a positive integer")
+    return int(value)
+
+
 def rank_environment(sweep: Sweep, rank: jobs.Rank) -> dict[str, str]:
     """The environment of this rank's kernels: the cache roots, DaCe's two caches keyed by column and commit, the
     graded thread count, a device, and the build label every row carries."""
@@ -310,14 +329,19 @@ def run(sweep: Sweep, rank: jobs.Rank) -> int:
             if env.get("CANON_OPT_REPORTS") == "1"
             else []
         )
-        wall = int(env.get("CANON_KERNEL_TIMEOUT_SEC", "7200"))
+        wall = positive_knob(env, "CANON_KERNEL_TIMEOUT_SEC", 7200)
+        if wall <= CHILD_TIMEOUT_HEADROOM_SECONDS:
+            raise SystemExit(
+                f"baseline: CANON_KERNEL_TIMEOUT_SEC={wall} leaves run-framework no time: its own --timeout is "
+                f"{CHILD_TIMEOUT_HEADROOM_SECONDS} s shorter"
+            )
         # The stack every CPU run gets (limits.thread_stack_mb), the canonical baseline included.
         env["OMP_STACKSIZE"] = env.get("CANON_OMP_STACKSIZE", f"{flags.thread_stack_bytes() // BYTES_PER_MIB}M")
-        limits = kernel_limits(int(env.get("CANON_KERNEL_MEM_KB", DEFAULT_KERNEL_MEM_KB)) * BYTES_PER_KIB)
+        limits = kernel_limits(positive_knob(env, "CANON_KERNEL_MEM_KB", DEFAULT_KERNEL_MEM_KB) * BYTES_PER_KIB)
         for kernel in mine:
             command = [
                 python, "-m", "hpcagent_bench.cli", "run-framework", "-b", kernel, "-f", sweep.column,
-                "-p", sweep.preset, "--timeout", str(wall - 120), *reports,
+                "-p", sweep.preset, "--timeout", str(wall - CHILD_TIMEOUT_HEADROOM_SECONDS), *reports,
                 "--canon-db", str(ranked.canon()), "--canon-run", sweep.run_label,
             ]  # fmt: skip
             code = run_capped(command, env, sweep.opt, wall, limits)
@@ -373,28 +397,23 @@ def configure(parser: argparse.ArgumentParser) -> None:
 
 def read_kernels_file(path: pathlib.Path) -> list[str]:
     """One kernel name per line, ``#`` comments and blanks dropped."""
-    if not path.is_file() or not path.read_text(encoding="utf-8").strip():
-        raise SystemExit(f"baseline: --kernels-file {path} is missing or empty")
-    names = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        name = line.split("#", 1)[0].strip()
-        if name:
-            names.append(name)
+    names = tags.split_names(path.read_text(encoding="utf-8")) if path.is_file() else []
     if not names:
-        raise SystemExit(f"baseline: --kernels-file {path} names no kernels")
+        raise SystemExit(f"baseline: --kernels-file {path} is missing or names no kernels")
     return names
 
 
 def resolve_kernels(tag: str, kernels: str, kernels_file: pathlib.Path | None) -> tuple[str, ...]:
     """The sorted, unique tag (``--kernels-file`` > ``--kernels`` > ``--tag``), checked against the registry before
     a node is held."""
-    from hpcagent_bench import tags
     from hpcagent_bench.spec import KERNELS
 
     if kernels_file is not None:
         names = read_kernels_file(kernels_file)
     elif kernels:
-        names = [name for name in kernels.split(",") if name.strip()]
+        names = tags.split_names(kernels)
+        if not names:
+            raise SystemExit(f"baseline: --kernels {kernels!r} names no kernel")
     elif tag:
         names = list(tags.kernels_of(tag))
     else:

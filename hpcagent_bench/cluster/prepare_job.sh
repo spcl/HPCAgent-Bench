@@ -152,6 +152,16 @@ if [[ "${CONTAINER_RUNTIME}" == ce ]]; then
         CE_EDF="${prepare_edf_copy}"
     fi
 fi
+# podman/docker take their environment from a file. run_cluster.sh writes the job's after this step (it needs the
+# endpoint's URLs); the steps here get one of their own, on tmpfs and owner-only, gone when this script exits.
+if [[ "${CONTAINER_RUNTIME}" == podman || "${CONTAINER_RUNTIME}" == docker ]]; then
+    job_env_dir="${XDG_RUNTIME_DIR:-}"
+    [[ -d "${job_env_dir}" ]] || job_env_dir=/dev/shm
+    JOB_ENV_FILE="$(mktemp -p "${job_env_dir}" prepare.env.XXXXXX)"
+    export JOB_ENV_FILE
+    trap 'rm -f "${JOB_ENV_FILE}"' EXIT
+    job_env_slice >"${JOB_ENV_FILE}"
+fi
 # One spelling of "run this in the container", used by every step below that needs the image.
 # CE_STEP_EDF (an absolute .toml path) / CE_STEP_TIME pick another image or wall-time for one step (the torch warm below).
 container_step() {

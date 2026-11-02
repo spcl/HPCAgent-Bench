@@ -75,7 +75,7 @@ job_step_core_mask() {
     # <cores-per-slot> physical cores, the cores in socket-major order; fails when the node has too few.
     lscpu -p=CPU,CORE,SOCKET | grep -v '^#' | sort -t, -k3,3n -k2,2n -k1,1n | awk -F, -v slot="$1" -v per="$2" '
         BEGIN { top = 0 }
-        seen[$2]++ { next }
+        seen[$3 "," $2]++ { next }
         { n++ }
         n > slot * per && n <= (slot + 1) * per {
             cpu = $1 + 0
@@ -95,7 +95,8 @@ run_job_shards() {
     local cpus="${SLURM_CPUS_PER_TASK:?run_job_shards: no --cpus-per-task: name the cores a shard grades on}"
     local -a nodes masks pids
     mapfile -t nodes < <(scontrol show hostnames "${SLURM_JOB_NODELIST:?run_job_shards: no SLURM_JOB_NODELIST}")
-    if (( ntasks % ${#nodes[@]} != 0 )); then
+    # mapfile cannot carry a scontrol failure out of the substitution: the list is empty instead.
+    if (( ${#nodes[@]} == 0 || ntasks % ${#nodes[@]} != 0 )); then
         echo "run_job_shards: ${ntasks} tasks do not split evenly over ${#nodes[@]} nodes" >&2
         return 2
     fi

@@ -117,6 +117,19 @@ def scalar_text(raw: object) -> object:
 Value = Annotated[str, pydantic.BeforeValidator(scalar_text)]
 
 
+class SystemsLoader(yaml.SafeLoader):
+    """``yaml.SafeLoader`` reading numbers as the text they are passed on as. YAML 1.1 has one int pattern, sexagesimal
+    included: with it ``time: 2:00:00`` is the int 7200, which ``sbatch`` reads as minutes."""
+
+
+SystemsLoader.yaml_implicit_resolvers = {
+    first: [
+        (tag, regexp) for tag, regexp in resolvers if tag not in ("tag:yaml.org,2002:int", "tag:yaml.org,2002:float")
+    ]
+    for first, resolvers in yaml.SafeLoader.yaml_implicit_resolvers.items()
+}
+
+
 class SystemEntry(pydantic.BaseModel):
     """One system of ``systems.yaml``: the cluster it is on, its :data:`FIELDS` and its :data:`EXTRAS`."""
 
@@ -147,11 +160,11 @@ SYSTEMS_ADAPTER: pydantic.TypeAdapter[dict[str, SystemEntry]] = pydantic.TypeAda
 
 def load_systems(environ: Mapping[str, str]) -> dict[str, SystemEntry]:
     """The packaged systems, then the file named by ``$HPCAGENT_BENCH_SYSTEMS_FILE`` over them."""
-    systems = SYSTEMS_ADAPTER.validate_python(yaml.safe_load(PACKAGED.read_text(encoding="utf-8")) or {})
+    systems = SYSTEMS_ADAPTER.validate_python(yaml.load(PACKAGED.read_text(encoding="utf-8"), SystemsLoader) or {})
     extra = environ.get(SYSTEMS_FILE)
     if extra:
         systems |= SYSTEMS_ADAPTER.validate_python(
-            yaml.safe_load(pathlib.Path(extra).read_text(encoding="utf-8")) or {}
+            yaml.load(pathlib.Path(extra).read_text(encoding="utf-8"), SystemsLoader) or {}
         )
     return systems
 

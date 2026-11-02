@@ -80,6 +80,7 @@ def test_an_env_file_with_no_problem_is_refused(tmp_path: pathlib.Path) -> None:
     )
     with pytest.raises(SystemExit, match="setup b has no problem"):
         run(tmp_path, out)
+    assert not list(tmp_path.glob("**/a.env")), "a refused wave wrote the setup before the refused one"
 
 
 if __name__ == "__main__":

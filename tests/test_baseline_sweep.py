@@ -139,12 +139,13 @@ def test_a_rank_with_no_kernels_is_a_no_op_that_needs_no_dace_tree(
 
 
 def test_a_hung_kernel_is_killed_and_recorded_as_a_timeout_row_not_a_silent_gap(
-    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A stalled ``run-framework`` would hold a rank until the job's own limit killed it, and every kernel after it
     would get no row on any rank."""
     opt = stub_checkout(tmp_path, HANGING_CLI)
     sweep = sweep_of(tmp_path, opt, ("onlykernel",), managed=False, CANON_KERNEL_TIMEOUT_SEC="2")
+    monkeypatch.setattr(baseline, "CHILD_TIMEOUT_HEADROOM_SECONDS", 1)  # the stub ignores --timeout
     assert baseline.run(sweep, jobs.Rank(0, 1)) == 0
     out = capsys.readouterr().out
     assert "FAILED onlykernel (wall timeout after 2s" in out
@@ -152,6 +153,26 @@ def test_a_hung_kernel_is_killed_and_recorded_as_a_timeout_row_not_a_silent_gap(
     assert (row["run"], row["status"], row["failure"]) == (sweep.run_label, "timeout", "timeout")
     # status != ok, so the row is tallied as crashed, and the nonzero-exit counter agrees with it.
     assert "1 rows -- 0 ok, 0 unsupported, 0 tool-missing, 1 crashed, 0 failed-in-column, 1 nonzero-exit" in out
+
+
+@pytest.mark.parametrize(
+    "knobs",
+    [
+        {"CANON_KERNEL_TIMEOUT_SEC": "120"},
+        {"CANON_KERNEL_TIMEOUT_SEC": "0"},
+        {"CANON_KERNEL_TIMEOUT_SEC": "7200s"},
+        {"CANON_KERNEL_MEM_KB": "120 GiB"},
+        {"CANON_KERNEL_MEM_KB": "0"},
+    ],
+)
+def test_an_unusable_cap_is_refused_before_a_kernel_records_a_row(
+    tmp_path: pathlib.Path, knobs: dict[str, str]
+) -> None:
+    """A wall cap at or under the child's headroom would hand it a non-positive ``--timeout``: a column of timeouts."""
+    sweep = sweep_of(tmp_path, stub_checkout(tmp_path, WRITING_CLI), ("onlykernel",), managed=False, **knobs)
+    with pytest.raises(SystemExit, match=next(iter(knobs))):
+        baseline.run(sweep, jobs.Rank(0, 1))
+    assert canon_rows(sweep) == {}
 
 
 def rlimits_of(out: str) -> dict[str, tuple[int, int]]:
@@ -218,6 +239,26 @@ def test_a_managed_work_dir_is_derived_from_the_cache_root_never_from_scratch(tm
     assert sweep.environ["HPCAGENT_BENCH_RUNS_ROOT"] == str(tmp_path / "jitcache" / "runs")
     assert sweep.managed
     assert not baseline.Sweep("c", tmp_path / "elsewhere", (), "S", opt, sweep.environ).managed
+
+
+def test_a_managed_work_dir_survives_a_symlinked_scratch(tmp_path: pathlib.Path) -> None:
+    """``run_action`` resolves the work dir; a runs root spelled through a symlink must still contain it."""
+    opt = stub_checkout(tmp_path, WRITING_CLI)
+    link = tmp_path / "link"
+    link.symlink_to(tmp_path, target_is_directory=True)
+    env = baseline.cache_environment(
+        opt, environment(tmp_path, JIT_CACHE_ROOT=str(link / "scratch" / ".hpcagentbench-cache" / "jit"))
+    )
+    out_root = pathlib.Path(env["HPCAGENT_BENCH_RUNS_ROOT"]) / "canon" / "unit"
+    out_root.mkdir(parents=True)
+    assert baseline.Sweep("fakecol", out_root.resolve(), ("fakekernel",), "fuzzed", opt, env).managed
+
+
+def test_a_sourced_script_that_refuses_names_itself_and_its_words(tmp_path: pathlib.Path) -> None:
+    refusing = tmp_path / "refusing.sh"
+    refusing.write_text("echo set SCRATCH >&2\nexit 1\n")
+    with pytest.raises(SystemExit, match="refusing.sh failed: set SCRATCH"):
+        baseline.shell_environment(refusing, {})
 
 
 def test_the_per_rank_db_lands_under_the_work_dir_not_the_cwd(
@@ -318,16 +359,22 @@ def test_an_unknown_kernel_name_is_refused_not_silently_dropped(tmp_path: pathli
 
 
 def test_a_missing_or_empty_kernels_file_is_refused(tmp_path: pathlib.Path) -> None:
-    with pytest.raises(SystemExit, match="missing or empty"):
+    with pytest.raises(SystemExit, match="missing or names no kernels"):
         baseline.resolve_kernels("", "", tmp_path / "does-not-exist.txt")
     blank = tmp_path / "blank.txt"
     blank.write_text("# nothing\n")
-    with pytest.raises(SystemExit, match="names no kernels"):
+    with pytest.raises(SystemExit, match="missing or names no kernels"):
         baseline.resolve_kernels("", "", blank)
 
 
 def test_the_whole_tag_is_the_tag_when_nothing_narrows_it() -> None:
     assert len(baseline.resolve_kernels("llr40", "", None)) == 40
+
+
+def test_a_comma_list_strips_its_names_and_refuses_naming_none() -> None:
+    assert baseline.resolve_kernels("", " dfa , kmp ", None) == ("dfa", "kmp")
+    with pytest.raises(SystemExit, match="names no kernel"):
+        baseline.resolve_kernels("", " , ", None)
 
 
 def test_an_unknown_column_is_refused_before_a_node_is_held() -> None:

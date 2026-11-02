@@ -196,12 +196,19 @@ def serve(directory: str, parent: int) -> None:
     pathlib.Path(directory).mkdir(parents=True, exist_ok=True)
     running: dict[str, subprocess.Popen[bytes]] = {}
     watching_since = last = time.time()
+    last_fault = ""
     try:
         while os.getppid() == parent:
             now = time.time()
             if now - last > STALL_S:
                 watching_since = now
-            step(directory, running, watching_since)
+            try:
+                step(directory, running, watching_since)
+            except OSError as exc:
+                # A stale handle on the shared directory loses one pass; ending the relay would cancel every launch.
+                if str(exc) != last_fault:
+                    sys.stderr.write(f"gang_relay: a pass over {directory} failed: {exc!r}\n")
+                    last_fault = str(exc)
             last = time.time()
             time.sleep(POLL_S)
     finally:

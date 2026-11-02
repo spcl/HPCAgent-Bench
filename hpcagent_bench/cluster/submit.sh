@@ -44,15 +44,17 @@
 #   MAX_NODES         the most nodes the jobs of one wave hold together (positive integer; default empty: one
 #                     wave). The setups are split, in staging order, into waves whose node counts sum to at most
 #                     MAX_NODES; each wave's jobs depend afterany on every job of the previous wave, the first wave's
-#                     on DEPEND_ON. A setup of more than MAX_NODES nodes is refused. The dry run prints the waves.
+#                     on DEPEND_ON. A setup of more than MAX_NODES nodes is refused. The dry run prints the waves and
+#                     each job's dependency, with job names in place of ids.
 #   PREPARE=0         submit no wave prepare job. By default one prepare job (prepare.sbatch --renders) renders what
 #                     the staged setups read -- numba, each setup's reference language (C for a language without a
 #                     CPU reference of its own), cpf-<device> for a CPF packet, plus the words of RENDERS (dace-sdfg)
-#                     -- and the first wave waits on it (afterany).
+#                     -- and every wave waits on it (afterok): a prepare job that fails, one kernel's failed render
+#                     included, cancels the waves. The job says which kernels failed in its log.
 #   GOLDENS=0         submit no golden prep jobs. By default (with PREPARE) one job per staged language
 #                     (prepare.sbatch --steps grade on GOLDEN_NODES nodes, default 2) grades each kernel's reference
 #                     as /score and /submit grade it, after the render job, so no agent's grade pays the cold
-#                     reference cost; the first wave waits on them (afterany). A prepare job of the same experiment
+#                     reference cost; every wave waits on them (afterok). A prepare job of the same experiment
 #                     and renders, or a golden job of the same experiment and language, that is still queued or
 #                     running is waited on instead of queued again. Both load no user plugin: they grade references,
 #                     whose caches no plugin keys, and no plugin package is installed into their image.
@@ -268,11 +270,10 @@ setup_renders() {
 }
 
 # submit_prepare <renders...> -- one prepare job over the tag rendering <renders> (plus RENDERS) into the caches the
-# setups' judges read, in the judge image the first staged setup names; sets PREPARE_JOB_ID (empty on a dry run).
+# setups' judges read, in the judge image the first staged setup names; sets PREPARE_JOB_ID (on a dry run its name).
 submit_prepare() {
     local renders judge cache jid resolved edf tasks cpus
     local -a options args
-    PREPARE_JOB_ID=""
     # shellcheck disable=SC2086  # RENDERS is a word list
     renders=$(printf '%s\n' "$@" ${RENDERS:-} | awk 'NF && !seen[$0]++' | paste -sd,)
     judge=$(sed -n 's/^JUDGE_CE_ENV=//p' "${WAVE_ENVS[0]}" | tail -n 1)
@@ -280,6 +281,7 @@ submit_prepare() {
     if [[ -n "${KERNELS_FILE}" ]]; then args=(--kernels-file "${KERNELS_FILE}"); else args=(--tag "${TAG}"); fi
     if [[ "${SUBMIT:-0}" != 1 ]]; then
         echo "prepare: renders ${renders} over ${TAG:-${KERNELS_FILE}} in ${judge} -- not submitted"
+        PREPARE_JOB_ID="prepare-${EXPERIMENT}"
         return 0
     fi
     [[ -n "${judge}" ]] || { echo "submit_prepare: ${WAVE_ENVS[0]} names no JUDGE_CE_ENV" >&2; return 2; }
@@ -300,7 +302,7 @@ submit_prepare() {
         return 0
     fi
     mkdir -p -- "${cache}" "${HPCAGENT_BENCH_SCRATCH}/logs"
-    jid=$(sbatch --parsable --no-requeue --nodes=1 --job-name="prepare-${EXPERIMENT}" --comment="renders=${renders}" \
+    jid=$(sbatch_retry --parsable --no-requeue --nodes=1 --job-name="prepare-${EXPERIMENT}" --comment="renders=${renders}" \
         --output="${HPCAGENT_BENCH_SCRATCH}/logs/prepare-%j.out" --nice="${NICE:-${HPCAGENT_BENCH_NICE:-0}}" \
         "${options[@]}" \
         --export=ALL,HPCAGENT_BENCH_REPO="${OPT}",JUDGE_EDF="${edf}",HPCAGENT_BENCH_REFERENCES_GENERATED_CACHE_DIR="${cache}",HPCAGENT_BENCH_USER_PLUGIN_DIRS= \
@@ -319,7 +321,8 @@ queued_job() {
 # submit_goldens <after-job> <langs...> -- one golden prep job per language (prepare.sbatch --steps grade, GOLDEN_NODES
 # nodes, default 2): the reference graded as /score and /submit grade it, filling the baselines, expected outputs and
 # write probes the judges read (harness/disk_cache.py, keyed by content, node shape and image, so a later experiment
-# on the same code reuses them). Runs after <after-job> (the render job; "" = none). Appends to GOLDEN_JOB_IDS.
+# on the same code reuses them). Runs after <after-job> succeeds (the render job; "" = none): a failure cancels it, or
+# a next submit would wait on a job pending forever (queued_job). Appends to GOLDEN_JOB_IDS (on a dry run its name).
 submit_goldens() {
     local after="$1" lang judge jid edf tasks cpus resolved
     local -a options args
@@ -327,7 +330,8 @@ submit_goldens() {
     if [[ -n "${KERNELS_FILE}" ]]; then args=(--kernels-file "${KERNELS_FILE}"); else args=(--tag "${TAG}"); fi
     for lang in "$@"; do
         if [[ "${SUBMIT:-0}" != 1 ]]; then
-            echo "goldens: ${lang} over ${TAG:-${KERNELS_FILE}} on ${GOLDEN_NODES:-2} nodes -- not submitted"
+            echo "goldens: ${lang} over ${TAG:-${KERNELS_FILE}} on ${GOLDEN_NODES:-2} nodes${after:+ after afterok:${after}} -- not submitted"
+            GOLDEN_JOB_IDS+=("goldens-${EXPERIMENT}-${lang}")
             continue
         fi
         jid=$(queued_job "goldens-${EXPERIMENT}-${lang}" "goldens")
@@ -344,9 +348,9 @@ submit_goldens() {
         # shellcheck source=../../helpers/scripts/site_env.sh
         [[ -n "${EDF_PATH:-}" ]] || . "${OPT}/helpers/scripts/site_env.sh"
         edf="${EDF_PATH%%:*}/${judge}.toml"
-        jid=$(sbatch --parsable --no-requeue --nodes="${GOLDEN_NODES:-2}" --job-name="goldens-${EXPERIMENT}-${lang}" --comment=goldens \
+        jid=$(sbatch_retry --parsable --no-requeue --nodes="${GOLDEN_NODES:-2}" --job-name="goldens-${EXPERIMENT}-${lang}" --comment=goldens \
             --output="${HPCAGENT_BENCH_SCRATCH}/logs/goldens-%j.out" --nice="${NICE:-${HPCAGENT_BENCH_NICE:-0}}" \
-            ${after:+--dependency="afterany:${after}"} "${options[@]}" \
+            ${after:+--dependency="afterok:${after}"} ${after:+--kill-on-invalid-dep=yes} "${options[@]}" \
             --export=ALL,HPCAGENT_BENCH_REPO="${OPT}",JUDGE_EDF="${edf}",HPCAGENT_BENCH_USER_PLUGIN_DIRS= \
             "${CLUSTER_DIR}/prepare.sbatch" "${args[@]}" --language "${lang}" --steps grade) || return 2
         GOLDEN_JOB_IDS+=("${jid%%;*}")
@@ -377,14 +381,14 @@ if [[ "${SUBMIT:-0}" == 1 ]] && grep -qsx "HPCAGENT_BENCH_RECORD_ENABLED=true" "
         'from hpcagent_bench.harness import hidden_seeds; print(hidden_seeds.public_seeds_refusal() or "")') || exit 2
     [[ -z "${public}" ]] || { echo "submit.sh: refusing to submit recording setups: ${public}" >&2; exit 2; }
 fi
-WAVE_DEPEND_ON=${DEPEND_ON:-}
+PREP_JOB_IDS=""
 if [[ "${PREPARE:-1}" != 0 ]]; then
     submit_prepare "${WAVE_RENDERS[@]}" || exit 2
-    [[ -z "${PREPARE_JOB_ID}" ]] || WAVE_DEPEND_ON=${WAVE_DEPEND_ON:+${WAVE_DEPEND_ON}:}${PREPARE_JOB_ID}
+    PREP_JOB_IDS=${PREPARE_JOB_ID}
     if [[ "${GOLDENS:-1}" != 0 ]]; then
         mapfile -t golden_langs < <(printf '%s\n' "${WAVE_LANGS[@]}" | awk '!seen[$0]++')
         submit_goldens "${PREPARE_JOB_ID}" "${golden_langs[@]}" || exit 2
-        for jid in "${GOLDEN_JOB_IDS[@]}"; do WAVE_DEPEND_ON=${WAVE_DEPEND_ON:+${WAVE_DEPEND_ON}:}${jid}; done
+        for jid in "${GOLDEN_JOB_IDS[@]}"; do PREP_JOB_IDS+=":${jid}"; done
     fi
 fi
-submit_waves "${MAX_NODES:-}" "${WAVE_DEPEND_ON}" "${BEGIN}" || exit 2
+submit_waves "${MAX_NODES:-}" "${DEPEND_ON:-}" "${BEGIN}" "${PREP_JOB_IDS}" || exit 2
