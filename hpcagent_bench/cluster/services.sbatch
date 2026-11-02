@@ -22,8 +22,9 @@
 set -euo pipefail
 
 # A core dump lands in the crashing process's CWD (the checkout) and Slurm propagates the
-# SUBMITTER's core limit, so the floor has to be set here.
-ulimit -c 0
+# SUBMITTER's core limit, so the floor has to be set here. The soft limit only: run_cluster.sh, which this script
+# execs, knows whether the setup keeps a judge core and floors the hard limit otherwise.
+ulimit -S -c 0
 
 # Under sbatch BASH_SOURCE is the spooled copy in /var/spool/slurmd, not this file.
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
