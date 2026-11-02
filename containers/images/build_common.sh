@@ -334,8 +334,9 @@ ce_build_fingerprint() {
         {print}
         /^FROM[[:space:]]/ && t != "" && toupper($(NF-1)) == "AS" && $NF == t {done = 1}' "${dockerfile}")"
     local -a srcs
-    mapfile -t srcs < <(awk '/^COPY[[:space:]]/ && $0 !~ /--from=/ {
-        for (i = 2; i < NF; i++) if ($i !~ /^--/) print $i }' <<<"${prefix}")
+    mapfile -t srcs < <(awk '/^COPY[[:space:]]/ {
+        while (/\\[[:space:]]*$/ && (getline more) > 0) { sub(/\\[[:space:]]*$/, ""); $0 = $0 " " more }
+        if ($0 !~ /--from=/) for (i = 2; i < NF; i++) if ($i !~ /^--/) print $i }' <<<"${prefix}")
     if (( ${#srcs[@]} )) && ! git -C "${context}" diff --quiet HEAD -- "${srcs[@]}" 2>/dev/null; then
         echo "build inputs differ from git (uncommitted edits under: ${srcs[*]}); no pull" >&2
         return 1
