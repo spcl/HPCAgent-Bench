@@ -17,7 +17,7 @@ requires-python = ">=3.12"
 license = "GPL-3.0-or-later"
 authors = [{ name = "SPCL @ ETH Zurich", email = "yakupkoray.budanaz@inf.ethz.ch" }]
 dependencies = [
-    "mcp>=2.3",
+    "mcp>=2.3,<3",  # the benchmark MCP server is written against the mcp 2.x API
     "pydantic>=2.12",
 ]
 

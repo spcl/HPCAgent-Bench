@@ -2368,7 +2368,7 @@ harness-optimas = [
 
 [package.metadata]
 requires-dist = [
-    { name = "mcp", specifier = ">=2.3" },
+    { name = "mcp", specifier = ">=2.3,<3" },
     { name = "pydantic", specifier = ">=2.12" },
 ]
 
@@ -2609,7 +2609,7 @@ requires-dist = [
     { name = "pytest-mpi", marker = "extra == 'dev'" },
     { name = "pytest-timeout", marker = "extra == 'dev'" },
     { name = "pytest-xdist", marker = "extra == 'dev'" },
-    { name = "pythran", specifier = ">=0.18.1" },
+    { name = "pythran", specifier = "<0.19" },
     { name = "pyyaml" },
     { name = "relayout", git = "https://github.com/ThrudPrimrose/relayout.git?rev=2718b2fee48a0a60b0ed1b65f281d9636e75f0f8" },
     { name = "rich" },
@@ -2657,7 +2657,7 @@ openblas-build = [
     { name = "meson-python" },
     { name = "patchelf" },
     { name = "pybind11" },
-    { name = "pythran", specifier = ">=0.18.1" },
+    { name = "pythran", specifier = "<0.19" },
 ]
 
 [[package]]
