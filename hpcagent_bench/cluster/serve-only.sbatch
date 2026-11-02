@@ -138,7 +138,8 @@ SERVER_PID=$!
 
 echo "waiting for the API (up to ${READY_TIMEOUT}s); weight load dominates this"
 deadline=$(( $(date +%s) + READY_TIMEOUT ))
-until curl -sf "${BASE_URL}/v1/models" -o "${RUN_DIR}/models.json"; do
+# The deadline is checked between attempts, so each attempt is bounded: a wedged server accepts and never answers.
+until curl -sf --connect-timeout 10 --max-time 60 "${BASE_URL}/v1/models" -o "${RUN_DIR}/models.json"; do
     if ! kill -0 "${SERVER_PID}" 2>/dev/null; then
         echo "FAIL: the serving step exited before the API came up" >&2
         tail -n 40 "${RUN_DIR}"/server-*.log >&2 || true
