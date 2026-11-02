@@ -382,6 +382,7 @@ def test_a_role_already_pushed_to_this_target_counts_as_done(tmp_path: pathlib.P
         LIVE["judge"]: "judge-amd-latest",
         "hpcagent-bench-sglang-mi300-latest.sqsh": "sglang-mi300-latest",
         "hpcagent-bench-vllm-amd-latest.sqsh": "vllm-amd-latest",
+        "hpcagent-bench-verifier-amd-latest.sqsh": "verifier-amd-latest",
     }
     for sqsh, tag in published.items():
         marker = tmp_path / sqsh.replace(".sqsh", ".pushed")
@@ -393,7 +394,7 @@ def test_a_role_already_pushed_to_this_target_counts_as_done(tmp_path: pathlib.P
     assert "judge: already pushed as docker.io/x/y:judge-amd-latest" in done.stdout
     done = run(push, {**env, "REGISTRY_REPO": "docker.io/x/other"})
     assert done.returncode == 1
-    assert "4 failure(s)" in done.stderr
+    assert "5 failure(s)" in done.stderr
 
 
 @pytest.mark.parametrize("recipe", ["judge-agent-amd", "judge-agent-cpu"])

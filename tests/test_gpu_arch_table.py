@@ -38,6 +38,7 @@ NOT_AMD = {
     "judge-agent-cuda": "GH200 image built on another Alps cluster; its arch is a CUDA capability",
     "vllm-cuda": "GH200 inference image built on another Alps cluster; its arch is a CUDA capability",
     "judge-agent-cpu": "CPU-only image with no GPU code at all, built on whichever host architecture",
+    "verifier": "a judge image of any platform plus the package; it compiles no device code",
 }
 #: AMD images that compile no device code: the vendor base's fat binary must CONTAIN the arch.
 VENDOR_DEVICE_CODE = frozenset({"vllm"})
@@ -180,10 +181,11 @@ def test_no_dockerfile_gives_rocm_arch_a_default() -> None:
 
 
 def amd_rows() -> list[list[str]]:
-    """images.env's AMD rows, as their whitespace-split columns."""
+    """images.env's AMD rows with an EDF, as their whitespace-split columns."""
     done = run(["bash", "-c", 'source "$1"; printf "%s\\n" "${CE_IMAGE_TABLE}"', "bash", str(CE / "images.env")], {})
     assert done.returncode == 0, done.stderr
-    return [row for row in (line.split() for line in done.stdout.splitlines()) if row and row[2] == "amd"]
+    rows = (line.split() for line in done.stdout.splitlines())
+    return [row for row in rows if row and row[2] == "amd" and row[8] != "-"]
 
 
 def test_rendered_edf_arch_variables_equal_the_table_arch_of_their_partition(tmp_path: pathlib.Path) -> None:

@@ -6,9 +6,10 @@ Each rule maps the files to check (the ones pre-commit passes; every tracked fil
 arguments or under ``--all-files``, which is what CI runs) to offender lines. Every allowlist
 entry carries its reason and must still name a tracked file:
 
-* ``hash-seed``: PYTHONHASHSEED=0 is set in exactly three places, the job environment
-  (hpcagent_bench/cluster/env.sh), CI's workflow env and the images' entrypoint
-  (containers/images/lib/launch_venv.sh), because dace hashes iteration order into generated code.
+* ``hash-seed``: PYTHONHASHSEED=0 is set in exactly four places, the job environment
+  (hpcagent_bench/cluster/env.sh), CI's workflow env, the images' entrypoint
+  (containers/images/lib/launch_venv.sh) and the verifier image, whose grader never passes that entrypoint, because
+  dace hashes iteration order into generated code.
 * ``import-path``: no file edits ``sys.path`` or ``PYTHONPATH``; the packages are installed.
 * ``no-requeue``: every submittable batch script carries ``#SBATCH --no-requeue``: a NODE_FAIL
   requeue reruns the job id into the same run directory and stacks duplicate rows.
@@ -112,6 +113,7 @@ HASH_SEED_HOMES = {
     "hpcagent_bench/cluster/env.sh",
     ".github/workflows/tests.yml",
     "containers/images/lib/launch_venv.sh",
+    "containers/images/verifier/Dockerfile",
 }
 
 
