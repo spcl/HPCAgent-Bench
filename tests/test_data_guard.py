@@ -90,6 +90,17 @@ def test_removal_refused_for_a_tree_holding_a_database(scratch: pathlib.Path) ->
     assert (tree / "db" / "cc" / "hpcagent_bench0.db").is_file()
 
 
+def test_removal_of_a_symlink_leaves_its_target(scratch: pathlib.Path) -> None:
+    """The guard checks the resolved path, so removing through the resolved path would delete the referent."""
+    target = scratch / "elsewhere"
+    target.mkdir()
+    link = scratch / "link"
+    link.symlink_to(target)
+    with pytest.raises(OSError, match="symbolic link"):
+        data_guard.safe_rmtree(link)
+    assert target.is_dir()
+
+
 def test_removal_of_a_plain_tree(scratch: pathlib.Path) -> None:
     """A tree outside every root with no DB is removed."""
     tree = scratch / "build"

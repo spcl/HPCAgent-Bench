@@ -132,6 +132,7 @@ __all__ = [
     "rederived_episode",
     "rederived_row_suspect",
     "regrade_files",
+    "regrade_shard",
     "regraded",
     "results_database",
     "row_key",
@@ -443,8 +444,10 @@ def floor_override(kernel: str) -> BenchSpec | None:
 
 
 def clocks_agree_on_delta(host_minus_event_ns: object) -> bool:
-    """:func:`timing.clocks_agree` from a ``regrade_cells`` row's ``host_event_delta_ns``: delta <= (factor - 1) *
-    event + slack. An undecidable delta (or ``None``) disagrees; a disabled gate (factor 0) agrees."""
+    """A conservative stand-in for :func:`timing.clocks_agree`, from a ``regrade_cells`` row's stored
+    ``host_event_delta_ns``: the row keeps no event time, so the gate is delta <= slack -- stricter than the live
+    gate's delta <= (factor - 1) * event + slack whenever divergence_factor > 1, so it only ever keeps a flag. An
+    undecidable delta (or ``None``) disagrees; a disabled gate (factor 0) agrees."""
     if host_minus_event_ns is not None and not isinstance(host_minus_event_ns, (int, float, str)):
         raise TypeError(f"host_event_delta_ns is {host_minus_event_ns!r}, not a number")
     gate = config.current().measurement.quiescence
@@ -934,11 +937,21 @@ ORDER BY p.ts_ms, p.id
 """
 
 
+@contextlib.contextmanager
+def regrade_shard(path: str) -> Iterator[sqlite3.Connection]:
+    """``path`` open for reading; a truncated or corrupt shard fails as a :class:`ValueError` naming it."""
+    try:
+        with results_db.reading(path) as conn:
+            yield conn
+    except sqlite3.Error as exc:
+        raise ValueError(f"{path}: {exc}") from exc
+
+
 def load_regrades(files: Iterable[str]) -> dict[RegradeKey, dict[str, Any]]:
     """Every graded promotion or re-verify in ``files``, keyed by the grade re-graded; the later row wins."""
     found: dict[RegradeKey, dict[str, Any]] = {}
     for path in files:
-        with results_db.reading(path) as conn:
+        with regrade_shard(path) as conn:
             for row in conn.execute(REGRADE_ROWS):
                 key = (job_of(row["episode_job"]), str(row["label"]), str(row["original_benchmark"]))
                 verified = row["credited_speedup"] != 0
@@ -1011,7 +1024,7 @@ def load_final_regrades(files: Iterable[str]) -> dict[FinalKey, dict[str, Any]]:
     ONE is kept: graded beats error, then the newest wins."""
     found: dict[FinalKey, dict[str, Any]] = {}
     for path in files:
-        with results_db.reading(path) as conn:
+        with regrade_shard(path) as conn:
             tasks = list(final_episodes(conn, path))
         for graded, task, tally in tasks:
             key = (*graded, str(task.get("denominator") or ""))

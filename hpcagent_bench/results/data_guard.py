@@ -116,5 +116,7 @@ def check_removable(path: PathLike, *, allow: Iterable[PathLike] = ()) -> pathli
 
 
 def safe_rmtree(path: PathLike, *, allow: Iterable[PathLike] = ()) -> None:
-    """``shutil.rmtree`` behind :func:`check_removable`; ``allow`` names scratch dirs inside protected roots."""
-    shutil.rmtree(check_removable(path, allow=allow))
+    """``shutil.rmtree`` behind :func:`check_removable`; ``allow`` names scratch dirs inside protected roots. The
+    check reads the resolved path, the removal the path as given: ``rmtree`` refuses a symlink, never its target."""
+    check_removable(path, allow=allow)
+    shutil.rmtree(path)

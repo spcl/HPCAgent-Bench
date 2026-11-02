@@ -212,9 +212,11 @@ def verify(out: pathlib.Path, *, threads: int = 8) -> list[str]:
     sums = out / SUMS
     if not sums.is_file():
         return [f"{sums} missing"]
-    expected = {rel: digest for digest, rel in (line.split("  ", 1) for line in sums.read_text().splitlines() if line)}
+    lines = [line.partition("  ") for line in sums.read_text().splitlines() if line]
+    expected = {rel: digest for digest, sep, rel in lines if sep}
     present = {p.relative_to(out).as_posix(): p for p in files_of(out)}
-    problems = [f"missing {rel}" for rel in sorted(expected.keys() - present.keys())]
+    problems = [f"malformed {SUMS} line: {digest}" for digest, sep, _ in lines if not sep]
+    problems += [f"missing {rel}" for rel in sorted(expected.keys() - present.keys())]
     problems += [f"not in {SUMS}: {rel}" for rel in sorted(present.keys() - expected.keys())]
     common = sorted(expected.keys() & present.keys())
     with concurrent.futures.ThreadPoolExecutor(threads) as pool:
