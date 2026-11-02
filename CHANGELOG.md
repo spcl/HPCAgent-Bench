@@ -127,7 +127,7 @@ Filled in when the release is cut; nothing below is claimed until its row says s
 | Source commit, tag | pending |
 | Release CI | pending: the `release-v0.5.0` pull request run on the final commit |
 | Review findings | at `bc77d6eaa`: 912 of 930 closed, 18 open: 15 awaiting a maintainer decision, 3 needing a GPU |
-| Pins: dace, NestForge, Alloy | at `bc77d6eaa`: `f5cb32eaf`, `714e599`, `6176f24`; pending: the final commits |
+| Pins: dace, NestForge, Alloy | `f5cb32eaf`, `1e2a034`, `6176f24`; pending: the final commits |
 | Images, GH200 NVIDIA | pending: rebuild, verify, promote, digest |
 | Images, AMD | pending: rebuild, verify, promote, digest |
 | Images, x86-64 CPU and NVIDIA | pending: rebuild, verify, promote, digest |
