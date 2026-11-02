@@ -989,6 +989,9 @@ class CBodyEmitter(BaseEmitter):
         # fp8 re-rounding) -- otherwise ``//=`` raises and ``%=`` emits raw C dividend-sign modulo.
         if isinstance(node.op, (ast.FloorDiv, ast.Mod)):
             rhs = self.emit_expr(ast.BinOp(left=node.target, op=node.op, right=node.value))
+            fns = self.store_fns(node.target)
+            if fns is not None:  # storage-only target: demote the computed RHS like the plain ops do
+                return f"{indent}{self.emit_expr(node.target)} = {fns.demote}({rhs});"
             return f"{indent}{self.emit_expr(node.target)} = {rhs};"
         op = BINOP_.get(type(node.op))
         if op is None:

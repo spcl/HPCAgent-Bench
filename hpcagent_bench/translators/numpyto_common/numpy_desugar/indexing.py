@@ -220,8 +220,8 @@ class MaskedAssignToLoop(ast.NodeTransformer):
             or (isinstance(idx, ast.UnaryOp) and isinstance(idx.op, ast.Invert))
         )
         if isinstance(idx, ast.Name):
-            # A numeric-kind index array is not a mask (an integer one is a fancy index).
-            if self.ranks.get(idx.id) != arank or dtype_kind(idx, self.dtypes) in ("int", "float", "complex"):
+            # Only a bool-kind array is a mask (an integer one is a fancy index).
+            if self.ranks.get(idx.id) != arank or dtype_kind(idx, self.dtypes) != "bool":
                 return node
         elif struct_mask:
             if expr_rank(idx, self.ranks) != arank:

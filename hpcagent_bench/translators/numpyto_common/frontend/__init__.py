@@ -154,5 +154,5 @@ def emit_with_inline_fallback[Emitted](run: Callable[[], Emitted]) -> Emitted:
     except Exception:
         if HELPERS_KEPT_DISABLED:
             raise
-    with without_kept_helpers():
-        return run()
+        with without_kept_helpers():
+            return run()

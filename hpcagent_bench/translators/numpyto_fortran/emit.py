@@ -940,8 +940,6 @@ ONE_OPERAND_CALLS: dict[str, str] = {
     "mean": "(SUM({0}) / SIZE({0}))",
     "sum": "SUM({0})",
     "prod": "PRODUCT({0})",
-    "max": "MAXVAL({0})",
-    "min": "MINVAL({0})",
     "argmax": "(MAXLOC({0}, 1) - 1)",
     "argmin": "(MINLOC({0}, 1) - 1)",
     "abs": "ABS({0})",
@@ -1474,9 +1472,9 @@ class FortranBodyEmitter(BaseEmitter):
         fns = self.store_fns(target)
         if fns is not None:  # fp8 target: demote the real(c_float) RHS to the byte
             rhs = f"{fns.demote}({rhs})"
-        # Rebase a value entering an index array. Skipped when the RHS is itself an index read
-        # (``path[t] = perm[k]`` is already one-based) -- that is the one shape that would double.
-        if self.writes_index_array(target) and not self.is_index_value(node.value):
+        # Rebase a value entering an index array. Skipped when the RHS is an index read plus integers
+        # (``path[t] = perm[k] + 1`` is already one-based); that shape would double.
+        if self.writes_index_array(target) and not self.reads_index_array(node.value):
             rhs = f"({rhs}) + 1"
         return f"{indent}{lhs} = {unprotected(rhs)}"
 
@@ -1686,21 +1684,6 @@ class FortranBodyEmitter(BaseEmitter):
             f"read. A buffer whose values are also COMPARED against 0-based quantities has no "
             f"single base and must not carry index_array in its manifest at all."
         )
-
-    def is_index_value(self, node: ast.expr) -> bool:
-        """``node`` AS A WHOLE evaluates to an index-array element, so it already carries the base.
-
-        Distinct from :meth:`reads_index_array`, which asks the same of a SUBSCRIPT AXIS and
-        refuses a mix. A right-hand side is allowed to contain an index read without being one --
-        ``back[t + 1, path[t + 1]]`` gathers WITH ``path`` and yields an element of ``back`` -- so
-        this looks at the node itself and never walks into it.
-        """
-        if not self.index_arrays:
-            return False
-        node = peel_int_casts(node)
-        if isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name):
-            return node.value.id in self.index_arrays
-        return isinstance(node, ast.Name) and node.id in self.index_arrays
 
     def writes_index_array(self, target: ast.expr) -> bool:
         """``target`` STORES into a buffer whose elements are subscripts (Sec. 7 ``index_array``).

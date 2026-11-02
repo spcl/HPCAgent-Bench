@@ -2,10 +2,16 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Small kernels whose numbers the frontend and lowering must keep equal to numpy, or refuse to emit."""
 
+import json
+import pathlib
+
 import numpy as np
 import pytest
 
-from tests.translators.op_oracle import native, run_op
+from hpcagent_bench.translators.numpyto_common.frontend import parse_kernel
+from hpcagent_bench.translators.numpyto_common.lowering import lower
+from hpcagent_bench.translators.numpyto_fortran.emit import emit_fortran
+from tests.translators.op_oracle import bench_info_, native, run_op
 
 BACKENDS = ("c", "fortran")
 INPUT = np.array([0.5, 0.25, 0.125, 2.0, 4.0, 8.0])
@@ -120,6 +126,20 @@ def test_list_of_complex_input_elements_stays_complex() -> None:
     dtypes = {"z": "complex128", "out": "complex128"}
     status = run_op(src, "f", {"z": z}, {"out": (2,)}, {"N": 2}, shapes=shapes, dtypes=dtypes, backends=BACKENDS)
     assert all(status[b] == "ok" for b in BACKENDS), status
+
+
+def test_index_read_plus_an_integer_is_stored_without_a_second_rebase(tmp_path: pathlib.Path) -> None:
+    src = "import numpy as np\ndef f(perm, out):\n    for i in range(3):\n        out[i] = perm[i] + 1\n"
+    info = bench_info_("f", ["perm"], ["out"], {"perm": "(N,)", "out": "(N,)"}, {"N": 4})
+    for name, shape in list(info["benchmark"]["init"]["arrays"].items()):
+        info["benchmark"]["init"]["arrays"][name] = {"shape": shape, "dtype": "int64", "index_array": True}
+    numpy_py = tmp_path / "f_numpy.py"
+    numpy_py.write_text(src)
+    manifest = tmp_path / "f.json"
+    manifest.write_text(json.dumps(info))
+    emitted = emit_fortran(lower(parse_kernel(numpy_py, manifest)), fn_name="f")
+    store = next(line.strip() for line in emitted.splitlines() if line.strip().startswith("out("))
+    assert store.endswith("= perm((i_l0) + 1) + 1"), store
 
 
 def test_batched_fft_matches_numpy() -> None:

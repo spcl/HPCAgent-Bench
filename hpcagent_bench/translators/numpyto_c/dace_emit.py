@@ -3775,6 +3775,8 @@ class LowerCallsDaceCannotReplace(ast.NodeTransformer):
         """
         if len(node.args) < 2:
             return None
+        if any(k.arg not in (None, "axis") for k in node.keywords):
+            return None  # out=/mode= change semantics this rewrite does not reproduce
         source, index = node.args[0], node.args[1]
         axis = kwarg_value(node, "axis", 2)
         if axis is None:

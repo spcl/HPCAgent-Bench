@@ -1060,6 +1060,8 @@ class MatmulHoister(ast.NodeTransformer):
             # on the caller to declare it (see expand_matmul_jds_* docstring):
             # register it as a fresh (n_rows,) local so the emitter allocates
             # it -- the dispatcher zeroes it itself.
+            if self.temp_arrays.get("__jds_y_perm", (n_rows,)) != (n_rows,):
+                raise NotImplementedError("JDS matvecs of different row counts share one sorted-order scratch")
             self.temp_arrays["__jds_y_perm"] = (n_rows,)
             self.shape_table["__jds_y_perm"] = (n_rows,)
             return se.expand_matmul_jds_dense_vec(tgt, bufs, dense_name, n_rows, njd)

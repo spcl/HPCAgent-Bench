@@ -423,7 +423,7 @@ def loop_reduction(node: ast.AST) -> tuple[str, str] | None:
     if accs is None or len(accs) != 1:
         return None  # 0 -> not a reduction; >1 -> too complex to clause soundly
     acc, op = next(iter(accs.items()))
-    if accumulator_observed(body, acc):
+    if accumulator_observed(body, acc) or accumulator_reset(body, acc):
         return None
     written = written_arrays(body)
     for n in walk_nodes(body):
@@ -462,6 +462,17 @@ def scalar_accumulators(body: ast.AST) -> dict[str, str] | None:
                 elif reads_name(n.value, t.id):
                     return None
     return accs
+
+
+def accumulator_reset(body: ast.AST, acc: str) -> bool:
+    """Whether a store rebinds the accumulator without reading it: the sequential result is then the
+    last partial value, which a ``reduction(op:acc)`` clause does not produce."""
+    return any(
+        isinstance(n, ast.Assign)
+        and any(isinstance(t, ast.Name) and t.id == acc for t in n.targets)
+        and not any(isinstance(x, ast.Name) and x.id == acc for x in walk_nodes(n.value))
+        for n in walk_nodes(body)
+    )
 
 
 def accumulator_observed(body: ast.AST, acc: str) -> bool:
