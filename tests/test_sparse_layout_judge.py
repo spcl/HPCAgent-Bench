@@ -209,6 +209,7 @@ def stored_by_a_grade(fmt: str, inputs: list[dict]) -> tuple[list[dict], dict[st
     return list(inputs), outputs
 
 
+@pytest.mark.usefixtures("fresh_baseline_memo")
 def test_a_layout_never_reaches_a_stored_input_or_output(monkeypatch: pytest.MonkeyPatch) -> None:
     """Every stored or shared sparse matrix stays CSR (docs/sparse_abi.md, "Storage"): a grade in
     another layout hands the reference, and caches, byte for byte what the CSR grade does. The
