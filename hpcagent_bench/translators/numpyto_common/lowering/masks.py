@@ -234,17 +234,18 @@ def collect_bool_names(tree: ast.AST, arrays: list[ArrayDesc]) -> set[str]:
     The conservative criterion that separates ``arr[bool_mask]`` (a masked
     select) from ``arr[int_idx]`` (an integer gather): only unambiguously
     boolean producers count, so an integer index array is never misread as a
-    mask. A single forward pass over the body suffices because a mask is
-    defined before it is used (``m = a > c``; later ``m2 = m & other``)."""
+    mask. Iterated to a fixed point: the walk is breadth-first, so ``m2 = m & other`` can be met before
+    a nested ``m = a > c``."""
     bn: set[str] = {a.name for a in arrays if a.dtype in ("bool", "bool_")}
-    for node in walk_nodes(tree):
-        if (
-            isinstance(node, ast.Assign)
-            and len(node.targets) == 1
-            and isinstance(node.targets[0], ast.Name)
-            and is_bool_value(node.value, bn)
-        ):
-            bn.add(node.targets[0].id)
+    bindings = [
+        (node.targets[0].id, node.value)
+        for node in walk_nodes(tree)
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
+    ]
+    size = -1
+    while size != len(bn):
+        size = len(bn)
+        bn.update(name for name, value in bindings if is_bool_value(value, bn))
     return bn
 
 
@@ -288,10 +289,13 @@ def is_bool_value(e: ast.expr, bn: set[str]) -> bool:
 
 
 def is_bool_call(e: ast.Call, bn: set[str]) -> bool:
-    """``any`` / ``all`` in either spelling; a boolean ``np`` function; ``np.where`` exactly when
-    BOTH branches are boolean (it selects between them); an ``np`` constructor with ``dtype=bool``."""
+    """``any`` / ``all`` in either spelling; a copy of a boolean; a boolean ``np`` function; ``np.where``
+    exactly when BOTH branches are boolean (it selects between them); an ``np`` constructor with
+    ``dtype=bool``."""
     if isinstance(e.func, ast.Attribute) and e.func.attr in ("any", "all"):
         return True
+    if isinstance(e.func, ast.Attribute) and e.func.attr == "copy":
+        return is_bool_value(e.args[0] if e.args else e.func.value, bn)
     if not (isinstance(e.func, ast.Attribute) and is_numpy_module(e.func.value)):
         return False
     if e.func.attr in BOOLEAN_NP_FUNCS:
