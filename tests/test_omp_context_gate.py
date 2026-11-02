@@ -73,6 +73,19 @@ def run_gate(root: pathlib.Path, *args: str) -> subprocess.CompletedProcess[str]
     )
 
 
+def numpy_pins_libgomp(root: pathlib.Path) -> bool:
+    """Whether numpy maps libgomp itself in the llvm context at ``root``, where the name ``libgomp.so.1`` is libomp."""
+    env = {**os.environ, **load_gate().context_environment(root, "llvm")}
+    done = subprocess.run(
+        [sys.executable, str(GATE_PATH), "runtimes", "--import", "numpy"],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+    return "libgomp" in done.stdout
+
+
 @pytest.mark.integration
 def test_the_gnu_context_maps_libgomp_alone_while_gcc_gfortran_numba_and_blas_run_multithreaded(
     tmp_path: pathlib.Path,
@@ -95,12 +108,14 @@ def test_the_llvm_context_maps_libomp_alone_while_clang_and_numbas_gomp_abi_pool
     context's ``libgomp.so.1`` link) share one runtime file, both multi-threaded."""
     build_contexts(tmp_path, llvm=True)
     done = run_gate(tmp_path, "--context", "llvm", "--require", "clang", "--any-runtime")
-    if done.returncode == 3:
+    if numpy_pins_libgomp(tmp_path):
         # A synthetic context has no OpenBLAS variant of its own: on a host whose numpy runs on an OpenBLAS
-        # that pins libgomp by RPATH (an image's gnu view), the gate must say so, naming both runtimes.
+        # that pins libgomp by RPATH (an image's gnu view), the gate must refuse, naming both runtimes. The
+        # image's real llvm context carries the variant, and verify_image.py runs the gate on it.
+        assert done.returncode == 3, done.stdout + done.stderr
         assert "libgomp" in done.stderr, done.stdout + done.stderr
         assert "libomp" in done.stderr, done.stdout + done.stderr
-        pytest.skip("numpy's OpenBLAS pins libgomp by RPATH here: one runtime cannot hold in a synthetic context")
+        return
     assert done.returncode == 0, done.stdout + done.stderr
     assert "clang: teams" in done.stdout
     assert "numba prange + BLAS: layer omp" in done.stdout
